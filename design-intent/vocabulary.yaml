@@ -1,0 +1,278 @@
+# scribe2 canonical vocabulary (P-5: 1 entity = 1 canonical name)
+#
+# edit-SSoT: 本 file (Layer 1 consumer は flip しないため vocabulary.yaml が編集の正本、 folio ADR-0051 §2.3)。
+# 出所: input/SPEC-excerpt.md §5 (OSS 依存) の用語を全件、 加えて §2 憲法 / §4 技術選定が使う概念を登録する。
+#   §5 の owning spec (依存一覧の design-intent 文書) は未作成のため、 §5 由来の語は本 file が唯一の登録箇所。
+# schema (folio rules §3): terms[] = { canonical (MUST), domain, definition (1 行), forbidden[], relationships[], flagged_ambiguities[] }
+#   - domain: consumer = scribe2 所有の語 (folio が解説しない)。
+#   - definition は「語が何を指すか」の指示的定義 + 条 id の参照に限る。 義務文と数値は書かない (正本は憲法の条と §3 rules 行)。
+#   - definition は単一行で、 生の < > を書かない (矢印は → で表現)。
+#   - forbidden は folio validate の vocabulary gate (substring 検出) に使うため、 本文に正当に現れ得る語は載せない。
+#   - canonical 表記は SPEC の日本語表記を正とし、 型名そのものが概念の場合は型名 (大文字始まり) を canonical にする。
+#   - 「面」の family は 提示面 / 対話面 / drift の面 を個別に登録する (構成要素「面」は語彙にしない)。
+terms:
+  # ---------------------------------------------------------------- §5 見出し (manifest / doctor)
+  - canonical: manifest
+    domain: consumer
+    definition: repo 内 1 file (TOML) に置く、 規則の値・設定・依存の版の唯一の置き場。 形式と読み方の規範は C1、 照合は doctor。
+    forbidden: [マニフェスト]
+    relationships: [rules 行, doctor, 裁定 id]
+  - canonical: doctor
+    domain: consumer
+    definition: 全 host の版・口座・退役・rules 行を照合する 1 コマンド (C3.2)。 selfdev sub-command は成熟条件を Measured で出す (C8.3)。
+    relationships: [manifest, fleet, 自己開発, 成熟条件]
+  # ---------------------------------------------------------------- §5 core 依存
+  - canonical: tailscale
+    domain: consumer
+    definition: core 依存。 提示面を tailnet 越しに配信する基盤。 tailnet serve の skill は v1 から移植する。
+    relationships: [tailnet serve, 提示面]
+  - canonical: tailnet serve
+    domain: consumer
+    definition: tailscale の tailnet 上で HTML を配信する提示手段。 提示面の既定の配信経路。
+    relationships: [tailscale, 提示面]
+  - canonical: 提示面
+    domain: consumer
+    definition: 人間へ成果物 (HTML) を見せる面。 配信は tailnet serve。
+    relationships: [tailnet serve]
+  - canonical: beads
+    domain: consumer
+    definition: issue と裁定を dolt backed の DB に持つ外部 OSS の issue tracker。 v2 の台帳の実体で、 bd 経由 (adapter) でのみ触る。
+    relationships: [bd, adapter, 台帳, dolt push]
+  - canonical: bd
+    domain: consumer
+    definition: beads の CLI。 v2 が台帳を読む唯一の口で、 JSON 出力を adapter で包んで使う。
+    relationships: [beads, adapter]
+  - canonical: 台帳
+    domain: consumer
+    definition: 作業 (issue) と裁定の記録。 実体は beads で、 v2 は自前の台帳を持たない。
+    forbidden: [レジャー]
+    relationships: [beads, bd]
+  - canonical: dolt push
+    domain: consumer
+    definition: beads の共有 DB (dolt) を remote へ同期する操作。 admin lane だけが行う。
+    relationships: [beads, admin lane]
+  - canonical: git
+    domain: consumer
+    definition: core 依存。 成果の保存と統合の基盤。 v2 からは glue の 1 つとして adapter 経由で叩く。
+    relationships: [glue, adapter]
+  - canonical: tmux
+    domain: consumer
+    definition: core 依存。 席 (session) を載せる terminal multiplexer。 server 名の導出規則は C2.2。
+    relationships: [席, NAME 定数, glue]
+  - canonical: ssh
+    domain: consumer
+    definition: glue の 1 つ。 他 host の席や状態へ到達する経路で、 adapter 経由で叩く。
+    relationships: [glue, adapter]
+  - canonical: claude CLI
+    domain: consumer
+    definition: core 依存。 Claude Code の CLI。 席の実体 (AI session) を起動する glue の 1 つ。
+    relationships: [席, glue]
+  # ---------------------------------------------------------------- §5 day-1 optional adapter
+  - canonical: day-1 optional adapter
+    domain: consumer
+    definition: seam だけを最初から用意し、 採否を K 指標で決める外部依存の枠。 rtk と graphify が該当する。 依存の追加は A3 の対象。
+    relationships: [rtk, graphify, seam, K 指標]
+  - canonical: rtk
+    domain: consumer
+    definition: tool 出力を圧縮する hook policy の 1 項目 (day-1 optional adapter)。 v1 実測「一律 arm しない」(sc-ol6t9 §8) を継承し、 機械経路には挟まない。
+    relationships: [day-1 optional adapter]
+  - canonical: graphify
+    domain: consumer
+    definition: land ごとに知識グラフを生成して context を供給する候補 (day-1 optional adapter)。 v1 では micro-bench のみ (sc-a1nex)。
+    relationships: [day-1 optional adapter, land]
+  - canonical: K 指標
+    domain: consumer
+    definition: 器の成熟と運用の健全さを測る指標群 (K1〜K3)。 閾値は rules 行。 成熟条件と day-1 optional adapter の採否判断に使う。
+    relationships: [rules 行, 成熟条件, day-1 optional adapter]
+  - canonical: land
+    domain: consumer
+    definition: worker の成果を統合して着地させる操作 (merge)。 graphify は land ごとに走る。 crate の land module が担う。
+    relationships: [graphify, 便, gate]
+  # ---------------------------------------------------------------- §4 技術選定が使う概念
+  - canonical: glue
+    domain: consumer
+    definition: 外部 process (tmux / ssh / git / claude CLI) を叩く責務の領域。 core の外側にあり、 adapter が閉じ込める側。
+    relationships: [adapter, tmux, ssh, git, claude CLI]
+  - canonical: adapter
+    domain: consumer
+    definition: 外部 OSS や glue を閉じ込める実装層 (薄い wrapper)。 台帳は bd の wrapper 1 本、 glue は std::process の adapter、 day-1 optional adapter も同じ seam に置く。
+    relationships: [bd, glue, seam, day-1 optional adapter]
+  - canonical: seam
+    domain: consumer
+    definition: 外部要素 (依存・設定) を差し込む接合点。 adapter の seam は day-1 に用意し、 env seam は新設しない (C2.2)。
+    relationships: [adapter, day-1 optional adapter, manifest]
+  - canonical: 単一 static binary
+    domain: consumer
+    definition: 依存を静的 link した実行 file 1 つ。 閉じた toolchain で drift の面を構造から消す (ADR-0001)。
+    relationships: [drift の面]
+  - canonical: drift の面
+    domain: consumer
+    definition: v1 で場当たり修正を招いた env 層 (venv / mypy-baseline / bats / host 差) の総称。 v2 は構造から消す (ADR-0001)。
+    relationships: [単一 static binary]
+  - canonical: 境界 crate
+    domain: consumer
+    definition: 外部形式 (serde 等の derive) を扱う crate。 derive macro はここに閉じる (C13.2)。
+    relationships: [adapter]
+  - canonical: docs-only
+    domain: consumer
+    definition: PR の分類の 1 つで、 変更が文書のみのもの。 flip check の test 差分要件から除外される (C12.3)。 分類は CI が行う。
+    relationships: [flip check]
+  # ---------------------------------------------------------------- §2 憲法が使う概念
+  - canonical: 順位
+    domain: consumer
+    definition: 憲法の線どうしがぶつかったときの決め方 (場当たり修正の禁止 → 膨張防止 → compile 速度)。 条ではなく全条に先立ち、 条 id の連番を持たない (憲法 §1)。
+  - canonical: rules 行
+    domain: consumer
+    definition: manifest に置く規則の値 1 行 (閾値・有効/無効・裁定 id・裁定時刻・逐語)。 数値の置き場 (C1) で、 変更の手続きは C5。
+    forbidden: [規則行]
+    relationships: [manifest, 裁定 id, 検出線]
+  - canonical: 裁定 id
+    domain: consumer
+    definition: user 裁定を一意に指す id (transcript の ts)。 rules 行の変更 (C5)、 成熟の宣言 (C8)、 閾値変更 (A2) が要求する。
+    relationships: [rules 行, planner]
+  - canonical: RuleKind
+    domain: consumer
+    definition: 規則の種類を閉じた列挙で表す enum。 網羅 match 必須で、 未実装は compile error (C1)。
+    relationships: [rules 行, Verdict]
+  - canonical: Verdict
+    domain: consumer
+    definition: 規則の検査 (Rule::check) や gate が返す判定の型 (C1)。 成熟条件の一致率はこの判定を単位に数える。
+    relationships: [RuleKind, gate, 便]
+  - canonical: 席
+    domain: consumer
+    definition: 1 つの Claude Code session が占める作業単位。 役割は worker / admin (管理席) / planner。 状態は SeatState で運ぶ (C3.3)。
+    forbidden: [シート]
+    relationships: [fleet, 口座, lease, 管理席, planner]
+  - canonical: 口座
+    domain: consumer
+    definition: Claude の利用枠 (subscription account)。 使い方の規範は C9、 状態は fleet の DB に host 列付きで持つ。
+    forbidden: [アカウント]
+    relationships: [fleet, lane, 席]
+  - canonical: fleet
+    domain: consumer
+    definition: 複数 host にまたがる席・口座・lease・退役の全体。 状態の持ち方は C3。
+    relationships: [席, 口座, lease, doctor]
+  - canonical: lease
+    domain: consumer
+    definition: 席が口座や host を占有する期限付きの割当。 fleet の状態の一部。
+    relationships: [席, 口座, fleet]
+  - canonical: 退役
+    domain: consumer
+    definition: host / 席 / 口座を運用から外す操作。 可逆 move で行う (N1)。
+    relationships: [fleet, doctor]
+  - canonical: lane
+    domain: consumer
+    definition: 口座 1 つの消費枠の中で並走させる作業の流れ (席の列)。 lane 数の決め方は rules 行 (§3 R-C9-1)。
+    forbidden: [レーン]
+    relationships: [口座, admin lane]
+  - canonical: admin lane
+    domain: consumer
+    definition: 管理席が担う実行経路。 dolt push・land など gate 通過後の操作を担う。
+    relationships: [lane, 管理席, dolt push, gate]
+  - canonical: 管理席
+    domain: consumer
+    definition: admin の役割を持つ席。 停止の検知と再起動の規範は C9。
+    relationships: [席, admin lane]
+  - canonical: planner
+    domain: consumer
+    definition: user との唯一の対話面 (C7)。 席の役割の 1 つでもある。 user 承認は planner 経由の relay 印だけを機械が受理する。
+    forbidden: [プランナー]
+    relationships: [relay 印, 裁定 id, 対話面, 席]
+  - canonical: 対話面
+    domain: consumer
+    definition: user と機械が承認や裁定をやり取りする面。 planner が唯一の対話面 (C7)。
+    relationships: [planner]
+  - canonical: relay 印
+    domain: consumer
+    definition: planner が user の承認を機械へ伝える印。 これ以外の承認経路を機械は受理しない (C7)。
+    relationships: [planner]
+  - canonical: 3 クラス
+    domain: consumer
+    definition: user 確認を要する操作の 3 分類 (消す / 出す / 使う)。 A1 の対象。
+    relationships: [planner]
+  - canonical: Budget
+    domain: consumer
+    definition: 起動に必要な予算の型。 Precheck の実測を消費してしか作れず、 唯一の起動口 spawn が要求する (C6)。
+    relationships: [Precheck, 検出線]
+  - canonical: Precheck
+    domain: consumer
+    definition: 起動前の見積 (token 上限・検出線との照合) の実測。 Budget の唯一の生成元 (C6)。
+    relationships: [Budget]
+  - canonical: 検出線
+    domain: consumer
+    definition: 超えたら機械が検知して記録・起票する線。 PR は止めない。 CI が落とす deny 閾値とは区別する。
+    relationships: [rules 行]
+  - canonical: 歯
+    domain: consumer
+    definition: 違反を機械が止める仕組みのうち test / lint / CI gate を指す。 Rust の 1 framework だけで持つ (C12)。
+    relationships: [flip check, KNOWN-RED 台帳]
+  - canonical: gate
+    domain: consumer
+    definition: worker cell の成果物を独立に敵対 review して Verdict を返す機構。 crate の gate module が担う。 歯 (test / lint / CI) とは別の entity。
+    relationships: [Verdict, 便, land]
+  - canonical: flip check
+    domain: consumer
+    definition: CI が PR の test 差分だけを base に当てて RED、 HEAD で GREEN であることを確かめる検査 (C12.2)。
+    relationships: [歯, docs-only]
+  - canonical: KNOWN-RED 台帳
+    domain: consumer
+    definition: 落ちている test を許容するための一覧。 持たない (C12.6)。
+    relationships: [歯]
+  - canonical: 器
+    domain: consumer
+    definition: scribe の実行基盤 (plugin + binary + 席の運用) の 1 世代。 版の作り方の規範は C8。
+    relationships: [版 N+1, 自己開発]
+  - canonical: 自己開発
+    domain: consumer
+    definition: 器が自身の repo を開発すること。 許可の規範は C8、 解禁は A4。 機構は enum SelfDev (Disabled / Enabled { ruling_id })。
+    relationships: [器, 版 N+1, SelfDev, 成熟条件, doctor]
+  - canonical: SelfDev
+    domain: consumer
+    definition: 自己開発の許可状態を表す enum (Disabled / Enabled { ruling_id })。 dispatch の deny 判定に使う (C8.2)。
+    relationships: [自己開発, 裁定 id]
+  - canonical: 成熟条件
+    domain: consumer
+    definition: 版が成熟したと宣言するために同時に成り立つ条件の集合。 値は rules 行 (§3 R-C8-1)、 測定は doctor selfdev (C8.3)。
+    relationships: [自己開発, K 指標, doctor, 便]
+  - canonical: 版 N+1
+    domain: consumer
+    definition: 現行版 (N) の下で別 repo に作る次世代の器。 憲法改訂・schema 非互換・C4 超えの着地先 (N4)。
+    relationships: [器, 自己開発]
+  - canonical: 便
+    domain: consumer
+    definition: worker cell の 1 往復 (dispatch → gate の Verdict)。 成熟条件の連続数はこれを単位に数える。
+    relationships: [Verdict, land, gate]
+  - canonical: NAME 定数
+    domain: consumer
+    definition: plugin 名 / crate / skill 名前空間 / state dir / env 接頭辞 / tmux server 名を導出する 1 定数 (C2.2)。
+    relationships: [tmux]
+  - canonical: Stage
+    domain: consumer
+    definition: 選定・除外・routing の適用順を列挙順で定める enum (C2)。
+  - canonical: SeatState
+    domain: consumer
+    definition: 席の状態を運ぶ typed enum (C3.3 / C9)。
+    relationships: [席, Completion]
+  - canonical: Completion
+    domain: consumer
+    definition: 完了条件を表す唯一の enum。 待機 API の引数型 (C3.4)。
+    relationships: [SeatState]
+  - canonical: 極性
+    domain: consumer
+    definition: 失敗時に開く (FailOpen) か閉じる (FailClosed) かの性質。 型で持ち、 一覧は build 時に生成する (C11.2)。
+  - canonical: Declared
+    domain: consumer
+    definition: 人が書いた宣言値の型 (C10)。
+    relationships: [Measured, Effective]
+  - canonical: Measured
+    domain: consumer
+    definition: 実測値の型。 値と出所 (Provenance) を持つ (C10)。
+    relationships: [Declared, Derived]
+  - canonical: Derived
+    domain: consumer
+    definition: 他の値から導出した値の型。 Independent を名乗れない (C10)。
+    relationships: [Measured]
+  - canonical: Effective
+    domain: consumer
+    definition: 効力を持つ値の型。 Declared から実測を経てのみ作られる (C10)。
+    relationships: [Declared]

@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="folio-doc-type" content="cluster-readme">
+<meta name="folio-layer" content="project">
+<meta name="folio-version" content="0.1.0">
+<meta name="folio-status" content="active">
+<meta name="folio-stakeholders" content="Developer, AI Agent">
+<title>design-intent/spec/ — spec index</title>
+<link rel="stylesheet" href="../../common.css">
+<script type="application/ld+json">
+{
+  "@context": {
+    "dc": "http://purl.org/dc/terms/",
+    "schema": "https://schema.org/",
+    "folio": "https://folio.dev/spec/v1/"
+  },
+  "@id": "./README.html",
+  "@type": "schema:TechArticle",
+  "dc:title": "spec cluster index",
+  "folio:version": "0.1.0",
+  "dc:hasPart": [
+    { "@id": "./constitution.html" }
+  ]
+}
+</script>
+</head>
+<body>
+<!-- folio:chrome-top -->
+<a class="skip-link" href="#s1-purpose">本文へスキップ</a>
+<nav class="breadcrumb" aria-label="パンくず"><ol>
+  <li><a href="../index.html">design-intent</a></li>
+  <li aria-current="page">spec</li>
+</ol></nav>
+<!-- /folio:chrome-top -->
+
+<header class="doc-header">
+  <h1>design-intent/spec/ — spec index</h1>
+  <div class="meta">v0.1.0 &middot; status: active &middot; project design-intent (WHAT) cluster の entry point</div>
+</header>
+<!-- folio:chrome-toc -->
+<nav class="cluster-nav" aria-label="関連 cluster"><a href="../decisions/README.html">decisions/</a> &middot; <a href="../research/README.html">research/</a> &middot; <a href="../glossary.html">glossary</a></nav>
+<nav class="toc" aria-label="ページ内目次">
+<ol>
+  <li><a href="#s1-purpose">§1. Purpose</a></li>
+  <li><a href="#s2-contents">§2. Contents</a></li>
+</ol>
+</nav>
+<!-- /folio:chrome-toc -->
+
+
+<aside class="informative">
+<p>本 dir (<code>design-intent/spec/</code>) はこの project の <strong>design-intent spec</strong> (構造・不変条件・WHAT) を集約する cluster です。 spec file は <a href="https://folio.dev/">folio</a> framework の rules に従い HTML + JSON-LD で記述します。 共通 stylesheet (<code>common.css</code>) は project root に任意で配置してください。</p>
+</aside>
+
+<section id="s1-purpose" class="informative">
+<h2>§1. Purpose</h2>
+<p class="section-essence" data-audience="human">spec/ に置かれた design-intent 文書 (WHAT) の入口です。 scribe2 の折れない線は constitution に、 設計判断の理由は decisions/ に分かれています。</p>
+<p data-audience="machine">本 README は <strong>spec/ cluster の index</strong> (entry point) です。 cluster 内の spec を一望し、 reader (人間 / AI agent) のナビゲーションを支えます。 主な人間読者は<strong>仕様・要件を参照する導入済みの開発者</strong>です — project 全体の俯瞰や他 cluster への入口は <code>design-intent/index.html</code> (landing) が担います。</p>
+</section>
+
+<section id="s2-contents" class="informative">
+<h2>§2. Contents</h2>
+<p class="section-essence" data-audience="human">現在の spec は constitution 1 本です。 file を足したら本表と JSON-LD の hasPart に実在 file だけを追記します。</p>
+<table>
+  <thead><tr><th>file</th><th>doc-type</th><th>内容</th><th>版 / 状態</th></tr></thead>
+  <tbody>
+    <tr><td><a href="./constitution.html">constitution.html</a></td><td>constitution</td><td>scribe2 の折れない線 (Always / Ask-first / Never の 3 段と rules 行の初期値)</td><td>active</td></tr>
+  </tbody>
+</table>
+<p data-audience="machine">本 cluster は実在 file のみを本表と JSON-LD の <code>dc:hasPart</code> に載せる。 空の placeholder は置かない (hollow-spec 防止)。 条数と版の正本は constitution.html 自身。</p>
+</section>
+
+<!-- folio:chrome-bottom -->
+<script>
+(function () {
+  var openedForPrint = [];
+  window.addEventListener('beforeprint', function () {
+    openedForPrint = [];
+    var ds = document.querySelectorAll('details:not([open])');
+    for (var i = 0; i < ds.length; i++) { ds[i].setAttribute('open', ''); openedForPrint.push(ds[i]); }
+  });
+  window.addEventListener('afterprint', function () {
+    for (var i = 0; i < openedForPrint.length; i++) openedForPrint[i].removeAttribute('open');
+    openedForPrint = [];
+  });
+  if (!document.querySelector('[data-audience]')) return;
+  /* 既定 = 人間プレゼン型 (ADR-0040 / rules §11.3): script 経由で初期 class を付与するため
+     no-JS では付かず全文可視に graceful degrade する。 static DOM は全文を保持 (AI/検索/印刷は不変)。 */
+  document.body.classList.add('audience-human');
+  var bar = document.createElement('nav');
+  bar.className = 'audience-toggle';
+  bar.setAttribute('aria-label', '表示対象の切替');
+  var states = [['both', '両方'], ['human', '人間向け'], ['machine', '機械向け']];
+  for (var s = 0; s < states.length; s++) {
+    (function (mode, label) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      b.setAttribute('aria-pressed', mode === 'human' ? 'true' : 'false');
+      b.addEventListener('click', function () {
+        document.body.classList.remove('audience-human', 'audience-machine');
+        if (mode !== 'both') document.body.classList.add('audience-' + mode);
+        var bs = bar.querySelectorAll('button');
+        for (var j = 0; j < bs.length; j++) bs[j].setAttribute('aria-pressed', bs[j] === b ? 'true' : 'false');
+      });
+      bar.appendChild(b);
+    })(states[s][0], states[s][1]);
+  }
+  var bc = document.querySelector('nav.breadcrumb');
+  if (bc && bc.parentNode) { bc.parentNode.insertBefore(bar, bc.nextSibling); }
+  else { document.body.insertBefore(bar, document.body.firstChild); }
+})();
+</script>
+<!-- /folio:chrome-bottom -->
+</body>
+</html>

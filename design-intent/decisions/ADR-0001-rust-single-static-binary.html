@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="folio-doc-type" content="adr">
+<meta name="folio-layer" content="project">
+<meta name="folio-version" content="0.3.0">
+<meta name="folio-status" content="accepted">
+<meta name="folio-stakeholders" content="Developer, AI Agent, External Reviewer">
+<meta name="folio-adr-id" content="0001">
+<meta name="folio-adr-date" content="2026-09-07">
+<title>ADR-0001 — 実装言語と構成 = Rust 単一 static binary (Go / typed Python / TypeScript 却下)</title>
+<link rel="stylesheet" href="../../common.css">
+<script type="application/ld+json">
+{
+  "@context": {
+    "dc": "http://purl.org/dc/terms/",
+    "schema": "https://schema.org/",
+    "folio": "https://folio.dev/spec/v1/"
+  },
+  "@id": "./ADR-0001-rust-single-static-binary.html",
+  "@type": "schema:TechArticle",
+  "dc:isPartOf": [
+    { "@id": "./README.html" }
+  ],
+  "dc:title": "ADR-0001 — 実装言語と構成 = Rust 単一 static binary (Go / typed Python / TypeScript 却下)",
+  "folio:version": "0.3.0",
+  "folio:stakeholders": ["Developer", "AI Agent", "External Reviewer"],
+  "dc:references": [
+    { "@id": "../spec/constitution.html#c1" },
+    { "@id": "../spec/constitution.html#c2" },
+    { "@id": "../spec/constitution.html#c3" },
+    { "@id": "../spec/constitution.html#c4" },
+    { "@id": "../spec/constitution.html#c6" },
+    { "@id": "../spec/constitution.html#c10" },
+    { "@id": "../spec/constitution.html#c11" },
+    { "@id": "../spec/constitution.html#c12" },
+    { "@id": "../spec/constitution.html#c13" },
+    { "@id": "../spec/constitution.html#a2" },
+    { "@id": "../spec/constitution.html#a3" },
+    { "@id": "../spec/constitution.html#n4" }
+  ]
+}
+</script>
+</head>
+<body>
+<!-- folio:chrome-top -->
+<a class="skip-link" href="#s1-context">本文へスキップ</a>
+<nav class="breadcrumb" aria-label="パンくず"><ol>
+  <li><a href="../index.html">design-intent</a></li>
+  <li><a href="./README.html">decisions</a></li>
+  <li aria-current="page">ADR-0001</li>
+</ol></nav>
+<!-- /folio:chrome-top -->
+
+<header class="doc-header">
+  <h1>ADR-0001 — 実装言語と構成 = Rust 単一 static binary (Go / typed Python / TypeScript 却下)</h1>
+  <div class="meta">Status: accepted &middot; Date: 2026-09-07 &middot; version 0.3.0 (拘束条件である constitution の版の写し・決定時点で固定) &middot; AI 可決 (SPEC §4)・constitution v0.3 (user 承認済) を拘束条件として継承</div>
+</header>
+<!-- folio:chrome-toc -->
+<nav class="toc" aria-label="ページ内目次">
+<ol>
+  <li><a href="#s1-context">§1. Context</a></li>
+  <li><a href="#s2-decision">§2. Decision</a></li>
+  <li class="toc--sub"><a href="#s2-1-rust">§2.1 Rust を採用する</a></li>
+  <li class="toc--sub"><a href="#s2-2-cost">§2.2 費用と緩和</a></li>
+  <li class="toc--sub"><a href="#s2-3-structure">§2.3 構成</a></li>
+  <li class="toc--sub"><a href="#s2-4-fallback">§2.4 退避先</a></li>
+  <li class="toc--sub"><a href="#s2-5-verification">§2.5 決定の遵守をどう確かめるか</a></li>
+  <li><a href="#s3-consequences">§3. Consequences</a></li>
+  <li><a href="#s4-alternatives">§4. Alternatives Considered</a></li>
+  <li><a href="#s5-trace">§5. Trace</a></li>
+</ol>
+</nav>
+<!-- /folio:chrome-toc -->
+
+<aside class="informative">
+<p>本 ADR は IETF <strong>RFC 2119</strong> および <strong>RFC 8174 / BCP 14</strong> に定義される MUST / SHALL / SHOULD / MAY のキーワード解釈規約に従う。 ADR は決定時点の記録 (frozen) であり、 改訂は本 ADR を supersede する新 ADR で行う。</p>
+</aside>
+
+<aside class="machine-readable" aria-hidden="true">
+  <dl>
+    <dt>id</dt><dd>ADR-0001</dd>
+    <dt>doc-type</dt><dd>adr</dd>
+    <dt>status</dt><dd>accepted</dd>
+    <dt>date</dt><dd>2026-09-07</dd>
+    <dt>version</dt><dd>0.3.0 (copy of the constraining constitution version, frozen at decision time)</dd>
+    <dt>decided-by</dt><dd>AI (SPEC §4「AI 可決」) — constitution v0.3 (user approved) constrains the decision</dd>
+    <dt>stakeholders</dt><dd>Developer, AI Agent, External Reviewer</dd>
+    <dt>supersedes</dt><dd>(none)</dd>
+    <dt>related</dt><dd>constitution C1 / C2 / C3 / C4 / C6 / C10 / C11 / C12 / C13 / A2 / A3 / N4, SPEC §4, ruling 論点 1・3・4</dd>
+  </dl>
+</aside>
+
+<section id="s1-context" class="informative">
+<h2>§1. Context</h2>
+<p class="section-essence" data-audience="human">v1 (現行 scribe) は環境層 (venv / 型検査の baseline / bash test / host 差) が場当たり修正を招く「drift の面」になっていました。 v2 は、 その面を構造から消せる「閉じた単一バイナリ」を第一条件に実装言語と構成を選びます。 判断の順位は憲法 §1 に従います。</p>
+<p data-audience="machine">v1 は Python + bash の混成で、 venv・mypy-baseline・bats・host 差の 4 面が <span class="term" data-term="drift の面">drift の面</span>として働き、 環境ごとの場当たり修正を招いた。 v2「次の器」は <a href="../spec/constitution.html">constitution</a> で (a) 規則・経路・状態を 1 つに閉じ (<a href="../spec/constitution.html#c1">C1</a>〜<a href="../spec/constitution.html#c3">C3</a>)、 (b) 大きさ・消費・依存に予算を置き (<a href="../spec/constitution.html#c4">C4</a> / <a href="../spec/constitution.html#c6">C6</a> / <a href="../spec/constitution.html#c13">C13</a>)、 (c) 失敗と値の出所を型で扱い (<a href="../spec/constitution.html#c10">C10</a> / <a href="../spec/constitution.html#c11">C11</a>)、 (d) 歯を 1 framework に限る (<a href="../spec/constitution.html#c12">C12</a>) と決めた。 C4 の上限が存在する理由 (書き手が AI で、 OSS が緩める前提 = 人間の節度が無い・論点 2) は、 上限を人の規律でなく compiler と CI で成立させられる言語を求める。 実装言語と構成はこれらを型と toolchain で成立させられるものでなければならない。 判断の順位は <a href="../spec/constitution.html#s1-purpose">憲法 §1 の順位</a> (論点 1) に従い、 「往復の速さ」は第三の基準に置く。</p>
+</section>
+
+<section id="s2-decision" class="normative">
+<h2>§2. Decision</h2>
+<p class="section-essence" data-audience="human">Rust を採用し、 単一の static binary として配ります。 core は async を持たず、 状態は SQLite 1 file、 設定は TOML 1 file、 Claude Code plugin は薄い manifest と hook が binary を叩く形にします。</p>
+
+<h3 id="s2-1-rust">§2.1 Rust を採用する</h3>
+<p>scribe2 の実装言語は <strong>Rust</strong> とし、 配布物は <span class="term" data-term="単一 static binary">単一 static binary</span> 1 つとする (MUST)。 採用理由の主は「閉じた単一バイナリ」— cargo の閉じた toolchain で v1 の drift の面 (venv / mypy-baseline / bats / host 差) を構造から消すこと — であって、 言語の厳しさではない。 付随して (a) clippy / deny lint を歯にでき (<a href="../spec/constitution.html#c11">C11</a>)、 (b) 除外理由を 1 enum + 1 match に閉じ込めることを compiler が強制できる (<a href="../spec/constitution.html#c2">C2</a>)。</p>
+
+<h3 id="s2-2-cost">§2.2 費用と緩和</h3>
+<p class="section-essence" data-audience="human">費用は「編集→compile の往復」と「外部 process を扱う borrow checker の負担」の 2 つです。 往復の緩和は憲法 (C4 / C13) に、 glue の緩和は SPEC §4 の方針 (薄い adapter) にあり、 C2 がそれを支えます。 非同期 runtime は憲法の裁定により core に持ちません。</p>
+<p data-audience="machine">費用は 2 つ (表の 2 行): 編集→compile の往復と、 glue (tmux / ssh / git / claude CLI) を扱う borrow checker の負担。 往復の緩和は憲法 (C4 / C13) に、 glue の緩和は SPEC §4 の方針 (<code>std::process</code> の薄い adapter) にあり、 C2 (経路 1 本) がそれを支える。</p>
+<table>
+  <thead><tr><th>費用</th><th>緩和</th><th>根拠</th></tr></thead>
+  <tbody>
+    <tr><td>編集→compile の往復</td><td>core を小さく保つ (総行数の上限は rules 行 R-C4-1)・compile の決定論的な形は CI deny、 秒数は検出線として記録</td><td><a href="../spec/constitution.html#c4">C4</a> / <a href="../spec/constitution.html#c13">C13</a></td></tr>
+    <tr><td>glue の borrow checker</td><td><span class="term" data-term="glue">glue</span> は <code>std::process</code> の薄い <span class="term" data-term="adapter">adapter</span> に閉じ、 core に持ち込まない</td><td>SPEC §4・<a href="../spec/constitution.html#c2">C2</a></td></tr>
+  </tbody>
+</table>
+<p data-audience="machine">非同期 runtime について: SPEC §4 は緩和として「async は 1 runtime (tokio) に固定」を置いていたが、 本 ADR の拘束条件は user 承認済の constitution v0.3 であり、 <a href="../spec/constitution.html#c13">C13.3</a> (core は async を持たない・<code>std::thread</code> + channel・tokio 却下・論点 3・4) が正である。 SPEC §4 の当該句は本 ADR の拘束条件ではない。 帰結として core の並行性は <code>std::thread</code> + channel の範囲に限られる (§3 Negative)。</p>
+
+<h3 id="s2-3-structure">§2.3 構成</h3>
+<p class="section-essence" data-audience="human">1 つの crate に bin と lib module をまとめ、 状態は SQLite 1 file、 設定は TOML 1 file、 plugin 側は薄い manifest と hook だけです。 lib module の一覧と plugin の形は本 ADR にだけあり、 spec 層 (overview) への昇格は版 N+1 で行います。</p>
+<dl data-audience="machine">
+  <dt>crate</dt><dd>1 crate = <code>scribe2</code> (bin) + lib modules (<code>ledger_adapter</code> / <code>accounts</code> / <code>seats</code> / <code>spawn</code> / <code>gate</code> / <code>land</code> / <code>rules</code> / <code>doctor</code>)。 module 名は canonical entity (台帳 / 口座 / 席 / 起動 / gate / land / rules 行 / doctor) から導出した識別子。 名前の導出規則は <a href="../spec/constitution.html#c2">C2</a>。</dd>
+  <dt>state</dt><dd>SQLite 1 file (host 列)。 置き場は state dir (NAME 定数から導出) 配下の <code>fleet.db</code>。 単一 DB の規範は <a href="../spec/constitution.html#c3">C3</a>。</dd>
+  <dt>設定</dt><dd>TOML 1 file = <span class="term" data-term="manifest">manifest</span>。 規範は <a href="../spec/constitution.html#c1">C1</a> / <a href="../spec/constitution.html#c10">C10</a>、 照合は <span class="term" data-term="doctor">doctor</span>。</dd>
+  <dt>Claude Code plugin</dt><dd><code>.claude-plugin/</code> の薄い manifest + hooks が binary を叩く。 plugin 側にロジックを持たない。</dd>
+  <dt>暫定性</dt><dd>lib module 一覧と plugin の形は本 ADR にのみ存在する構造の記述であり、 spec 層 (overview) への昇格は版 N+1 で行う (N4)。</dd>
+</dl>
+
+<h3 id="s2-4-fallback">§2.4 退避先</h3>
+<p><strong>Go</strong> を退避先候補として記録する。 原本 SPEC §4 の表現では「Rust が重すぎると Phase 3 で判明したとき」が契機であり、 その判断材料は (導出) <a href="../spec/constitution.html#c13">C13</a> の検出線 (rules 行 R-C13-3) の実測である。 実装言語の変更は <a href="../spec/constitution.html#a2">A2</a> (利益の grill 検証を前置した user 裁定) を要し、 <a href="../spec/constitution.html#c12">C12</a> (歯は Rust だけ) の改訂を伴うため <a href="../spec/constitution.html#n4">N4</a> により版 N+1 として別 repo で行い、 本 ADR を supersede する新 ADR はその版で書く。</p>
+
+<h3 id="s2-5-verification">§2.5 決定の遵守をどう確かめるか</h3>
+<p class="section-essence" data-audience="human">配布物が 1 file か、 lint と依存監査が効いているか、 行数の上限を CI が測っているか、 bash の test が残っていないかで確かめます。 このうち本 ADR 固有の検査は「配布物が 1 file」だけで、 残りは憲法の機構そのものです。</p>
+<ul data-audience="machine">
+  <li>単一 static binary: release artifact が 1 file であることを CI が確認する (本 ADR 固有)。</li>
+  <li>残りの検査は憲法の機構そのもの: lint deny 群 (<a href="../spec/constitution.html#c11">C11</a>)・依存監査 (<a href="../spec/constitution.html#c13">C13.2</a>)・大きさの上限 (<a href="../spec/constitution.html#c4">C4</a>)・歯は Rust だけ + flip check (<a href="../spec/constitution.html#c12">C12</a>)。</li>
+</ul>
+</section>
+
+<section id="s3-consequences" class="informative">
+<h2>§3. Consequences</h2>
+<p class="section-essence" data-audience="human">良い点は drift の面が構造から消え、 規則を型で閉じ込められることです。 悪い点は往復が遅くなり glue が書きにくいことで、 憲法の予算と薄い adapter で抑えます。 Go への退避路は残ります。</p>
+<h3>Positive</h3>
+<ul>
+  <li>drift の面 (venv / mypy-baseline / bats / host 差) が構造から消える — 単一 static binary + 閉じた toolchain。</li>
+  <li>規則・経路・除外理由を compiler が閉じ込める (enum の網羅 match・deny lint) — C1 / C2 / C11 を「歯」でなく型で成立させられる。</li>
+  <li>歯が 1 framework に収まる (C12) — bash / bats の全廃が現実的になる。</li>
+</ul>
+<h3>Negative</h3>
+<ul>
+  <li>編集→compile の往復が typed Python より遅い — C4 の大きさ上限と C13 の compile 予算で抑える。</li>
+  <li>glue (tmux / ssh / git / claude CLI) の borrow checker 負担 — <code>std::process</code> の薄い adapter に閉じる。</li>
+  <li>async を持たないため、 並行性は <code>std::thread</code> + channel の範囲に限られる (論点 3・4 の裁定)。</li>
+</ul>
+<h3>Neutral</h3>
+<ul>
+  <li>Go は却下だが退避先候補として残す (§2.4)。 切替は版 N+1 の新 ADR で supersede する。</li>
+  <li>本 ADR は AI 可決 (SPEC §4)。 拘束条件である constitution v0.3 は user 承認済であり、 本 ADR の変更は A2 / A3 を通る。</li>
+</ul>
+</section>
+
+<section id="s4-alternatives" class="informative">
+<h2>§4. Alternatives Considered</h2>
+<p class="section-essence" data-audience="human">4 案を「単一バイナリになるか」「型で規則を閉じ込められるか」「往復が速いか」「drift の面 (環境層・host 差) を消せるか」で比べました。 Rust だけが「単一バイナリになるか」と「型で規則を閉じ込められるか」を両方満たします。 原本が評価を述べていない軸は空欄 (—) にしています。</p>
+<table>
+  <thead><tr><th>案</th><th>単一バイナリ</th><th>型で規則を閉じ込める力</th><th>編集→実行の往復</th><th>drift の面 (env 層 / host 差)</th><th>採否</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Rust</strong></td><td>○ static binary・閉じた toolchain</td><td>○ enum 網羅 match・deny lint を compiler が強制</td><td>△ compile 往復 (C4 / C13 で予算化)</td><td>○ 構造から消える</td><td><strong>採用</strong></td></tr>
+    <tr><td>Go</td><td>○ 同じく単一バイナリ</td><td>△ 弱い (規則を型で閉じ込める力が Rust に劣る)</td><td>○ 速い</td><td>—</td><td>却下 — 退避先候補として保持 (§2.4)</td></tr>
+    <tr><td>typed Python</td><td>× env 層が残る</td><td>—</td><td>◎ 最速</td><td>× env 層が drift の面 = v1 の再演</td><td>却下</td></tr>
+    <tr><td>TypeScript</td><td>× node 依存</td><td>—</td><td>—</td><td>× node 依存が host 差になる</td><td>却下</td></tr>
+  </tbody>
+</table>
+<p data-audience="machine">空欄 (—) = 原本 (SPEC §4) が評価を述べていない軸。 比較の順位は <a href="../spec/constitution.html#s1-purpose">憲法 §1 の順位</a>に従う: 「drift の面を消す」と「型で閉じ込める」が上位で、 「往復の速さ」は下位。 typed Python の往復の速さは第三基準のため採用理由にならない。</p>
+</section>
+
+<section id="s5-trace" class="informative">
+<h2>§5. Trace</h2>
+<p class="section-essence" data-audience="human">出所は SPEC §4 と憲法 C1〜C4 / C6 / C10〜C13 / A3、 裁定は論点 1・3・4 です。</p>
+<ul data-audience="machine">
+  <li>原本: <code>SPEC-scribe-v2-vessel-v0.1-20260907.md</code> §4 (技術・AI 可決・却下案を残す)。 抜粋 = <code>input/SPEC-excerpt.md</code>。</li>
+  <li>拘束条件: <a href="../spec/constitution.html#c1">C1</a> (規則はデータ)、 <a href="../spec/constitution.html#c2">C2</a> (経路 1 本・NAME 定数)、 <a href="../spec/constitution.html#c3">C3</a> (fleet の状態は 1 つ)、 <a href="../spec/constitution.html#c4">C4</a> (大きさの上限)、 <a href="../spec/constitution.html#c6">C6</a> (消費は害)、 <a href="../spec/constitution.html#c10">C10</a> (値の出所を型で)、 <a href="../spec/constitution.html#c11">C11</a> (lint deny・極性)、 <a href="../spec/constitution.html#c12">C12</a> (歯は Rust だけ)、 <a href="../spec/constitution.html#c13">C13</a> (compile と依存に予算・async なし)、 <a href="../spec/constitution.html#a2">A2</a> (閾値と条文の改訂手続き・§2.4 の退避判断)、 <a href="../spec/constitution.html#a3">A3</a> (依存の追加は Ask-first)、 <a href="../spec/constitution.html#n4">N4</a> (言語切替は版 N+1)。</li>
+  <li>裁定: 論点 1 (順位)、 論点 3・4 (compile 予算・async 却下)。 SPEC §4 の tokio 句は本 ADR の拘束条件ではない (§2.2)。</li>
+  <li>用語: 単一 static binary / drift の面 / adapter / glue / manifest / doctor は <code>design-intent/vocabulary.yaml</code> で定義する。</li>
+</ul>
+</section>
+
+<!-- folio:chrome-bottom -->
+<script>
+(function () {
+  var openedForPrint = [];
+  window.addEventListener('beforeprint', function () {
+    openedForPrint = [];
+    var ds = document.querySelectorAll('details:not([open])');
+    for (var i = 0; i < ds.length; i++) { ds[i].setAttribute('open', ''); openedForPrint.push(ds[i]); }
+  });
+  window.addEventListener('afterprint', function () {
+    for (var i = 0; i < openedForPrint.length; i++) openedForPrint[i].removeAttribute('open');
+    openedForPrint = [];
+  });
+  if (!document.querySelector('[data-audience]')) return;
+  /* 既定 = 人間プレゼン型 (ADR-0040 / rules §11.3): script 経由で初期 class を付与するため
+     no-JS では付かず全文可視に graceful degrade する。 static DOM は全文を保持 (AI/検索/印刷は不変)。 */
+  document.body.classList.add('audience-human');
+  var bar = document.createElement('nav');
+  bar.className = 'audience-toggle';
+  bar.setAttribute('aria-label', '表示対象の切替');
+  var states = [['both', '両方'], ['human', '人間向け'], ['machine', '機械向け']];
+  for (var s = 0; s < states.length; s++) {
+    (function (mode, label) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      b.setAttribute('aria-pressed', mode === 'human' ? 'true' : 'false');
+      b.addEventListener('click', function () {
+        document.body.classList.remove('audience-human', 'audience-machine');
+        if (mode !== 'both') document.body.classList.add('audience-' + mode);
+        var bs = bar.querySelectorAll('button');
+        for (var j = 0; j < bs.length; j++) bs[j].setAttribute('aria-pressed', bs[j] === b ? 'true' : 'false');
+      });
+      bar.appendChild(b);
+    })(states[s][0], states[s][1]);
+  }
+  var bc = document.querySelector('nav.breadcrumb');
+  if (bc && bc.parentNode) { bc.parentNode.insertBefore(bar, bc.nextSibling); }
+  else { document.body.insertBefore(bar, document.body.firstChild); }
+})();
+</script>
+<!-- /folio:chrome-bottom -->
+</body>
+</html>

@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="folio-doc-type" content="cluster-readme">
+<meta name="folio-layer" content="project">
+<meta name="folio-version" content="0.1.0">
+<meta name="folio-status" content="active">
+<meta name="folio-stakeholders" content="Developer, AI Agent">
+<title>design-intent/research/ — exploration index</title>
+<link rel="stylesheet" href="../../common.css">
+<script type="application/ld+json">
+{
+  "@context": {
+    "dc": "http://purl.org/dc/terms/",
+    "schema": "https://schema.org/",
+    "folio": "https://folio.dev/spec/v1/"
+  },
+  "@id": "./README.html",
+  "@type": "schema:TechArticle",
+  "dc:title": "research cluster index",
+  "folio:version": "0.1.0"
+}
+</script>
+</head>
+<body>
+<!-- folio:chrome-top -->
+<a class="skip-link" href="#s1-purpose">本文へスキップ</a>
+<nav class="breadcrumb" aria-label="パンくず"><ol>
+  <li><a href="../index.html">design-intent</a></li>
+  <li aria-current="page">research</li>
+</ol></nav>
+<!-- /folio:chrome-top -->
+
+<header class="doc-header">
+  <h1>design-intent/research/ — exploration</h1>
+  <div class="meta">v0.1.0 &middot; status: active &middot; exploration cluster の entry point</div>
+</header>
+<!-- folio:chrome-toc -->
+<nav class="cluster-nav" aria-label="関連 cluster"><a href="../spec/README.html">spec/</a> &middot; <a href="../decisions/README.html">decisions/</a> &middot; <a href="../glossary.html">glossary</a></nav>
+<nav class="toc" aria-label="ページ内目次">
+<ol>
+  <li><a href="#s1-purpose">§1. Purpose</a></li>
+</ol>
+</nav>
+<!-- /folio:chrome-toc -->
+
+
+<aside class="informative">
+<p>本 dir (<code>design-intent/research/</code>) は spec に反映する前の <strong>探索・調査資料</strong>を集約する cluster です。 自由形式で memo / 調査結果 / 設計案を蓄積し、 確定した内容を spec/ や decisions/ に昇格させます。</p>
+</aside>
+
+<section id="s1-purpose" class="informative">
+<h2>§1. Purpose</h2>
+<p>research/ は exploration 領域です。 厳密な markup 規約に縛られず、 design intent が固まる前の思考を自由に記録します。 確定した内容は spec/ (WHAT) または decisions/ (WHY) へ昇格させ、 本 cluster には探索の足跡を残します。</p>
+</section>
+
+<!-- folio:chrome-bottom -->
+<script>
+(function () {
+  var openedForPrint = [];
+  window.addEventListener('beforeprint', function () {
+    openedForPrint = [];
+    var ds = document.querySelectorAll('details:not([open])');
+    for (var i = 0; i < ds.length; i++) { ds[i].setAttribute('open', ''); openedForPrint.push(ds[i]); }
+  });
+  window.addEventListener('afterprint', function () {
+    for (var i = 0; i < openedForPrint.length; i++) openedForPrint[i].removeAttribute('open');
+    openedForPrint = [];
+  });
+  if (!document.querySelector('[data-audience]')) return;
+  /* 既定 = 人間プレゼン型 (ADR-0040 / rules §11.3): script 経由で初期 class を付与するため
+     no-JS では付かず全文可視に graceful degrade する。 static DOM は全文を保持 (AI/検索/印刷は不変)。 */
+  document.body.classList.add('audience-human');
+  var bar = document.createElement('nav');
+  bar.className = 'audience-toggle';
+  bar.setAttribute('aria-label', '表示対象の切替');
+  var states = [['both', '両方'], ['human', '人間向け'], ['machine', '機械向け']];
+  for (var s = 0; s < states.length; s++) {
+    (function (mode, label) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      b.setAttribute('aria-pressed', mode === 'human' ? 'true' : 'false');
+      b.addEventListener('click', function () {
+        document.body.classList.remove('audience-human', 'audience-machine');
+        if (mode !== 'both') document.body.classList.add('audience-' + mode);
+        var bs = bar.querySelectorAll('button');
+        for (var j = 0; j < bs.length; j++) bs[j].setAttribute('aria-pressed', bs[j] === b ? 'true' : 'false');
+      });
+      bar.appendChild(b);
+    })(states[s][0], states[s][1]);
+  }
+  var bc = document.querySelector('nav.breadcrumb');
+  if (bc && bc.parentNode) { bc.parentNode.insertBefore(bar, bc.nextSibling); }
+  else { document.body.insertBefore(bar, document.body.firstChild); }
+})();
+</script>
+<!-- /folio:chrome-bottom -->
+</body>
+</html>

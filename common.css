@@ -1,0 +1,1356 @@
+/* folio — common stylesheet (v0.2.0 draft)
+ *
+ * Design tokens inspired by note (https://note.com/) via
+ * https://github.com/kzhrknt/awesome-design-md-jp/blob/main/design-md/note/DESIGN.md
+ *
+ * note の特徴:
+ *   - 純粋な黒 (#000) を避け、 ほぼ黒 (#08131a) で柔らかい読書体験
+ *   - 記事本文 18px / line-height 2.0 のゆったりした行間
+ *   - 見出しのみ palt + letter-spacing 0.04em (本文には適用しない)
+ *   - 620px 記事幅 (可読性最適)
+ *   - dual shadow elevation (ambient + key light)
+ *   - ダークモード対応 (prefers-color-scheme + CSS Custom Properties)
+ *
+ * folio 拡張:
+ *   - delta markers (ins/del.delta)
+ *   - EARS notation (p.ears + .ears-* spans)
+ *   - reader-persona aside (Stakeholder Perspectives)
+ *   - machine-readable aside (dl.mri 後継)
+ *   - section.normative / section.informative (RFC 2119 ReSpec 風)
+ */
+
+/* ========================================================================
+ * CSS Custom Properties (light mode default)
+ * ====================================================================== */
+
+:root {
+  /* --- color: text ---------------------------------------------------- */
+  --folio-text-primary:     #08131a;             /* ほぼ黒 (note Gray 900) */
+  --folio-text-secondary:   rgba(8, 19, 26, 0.66);
+  --folio-text-tertiary:    rgba(8, 19, 26, 0.50);
+  --folio-text-disabled:    rgba(8, 19, 26, 0.50);
+  --folio-text-invert:      #ffffff;
+  --folio-text-placeholder: #888;
+
+  /* --- color: surface & background ----------------------------------- */
+  --folio-bg-primary:       #ffffff;
+  --folio-bg-secondary:     #f5f8fa;             /* note Gray 50 */
+  --folio-surface-normal:   #ffffff;
+  --folio-surface-invert:   #08131a;
+
+  /* --- color: borders ------------------------------------------------- */
+  --folio-border-default:   rgba(8, 19, 26, 0.14);
+  --folio-border-strong:    rgba(8, 19, 26, 0.22);
+  --folio-border-weak:      #f5f8fa;
+  --folio-border-focus:     #292d9e;             /* note darkblue-600 */
+
+  /* --- color: brand & semantic --------------------------------------- */
+  --folio-brand:            #2a4d6e;             /* folio anchor blue (note green の置換) */
+  --folio-success:          #1e7b65;             /* note success */
+  --folio-success-subdued:  #e6f6f2;
+  --folio-danger:           #b22323;             /* note danger */
+  --folio-danger-subdued:   #fdf3f3;
+  --folio-caution:          #916626;             /* note caution */
+  --folio-caution-subdued:  #fefbea;
+
+  /* --- color: folio-specific semantic -------------------------------- */
+  --folio-normative:        #b22323;             /* MUST/SHALL (danger と同色) */
+  --folio-informative:      #1e7b65;             /* informative (success と同色) */
+  --folio-delta-add-bg:     #e6f6f2;             /* success-subdued */
+  --folio-delta-add-border: #1e7b65;
+  --folio-delta-del-bg:     #fdf3f3;             /* danger-subdued */
+  --folio-delta-del-border: #b22323;
+  --folio-ears-bg:          #fefbea;             /* caution-subdued */
+  --folio-ears-border:      #916626;
+
+  /* --- typography: font-family --------------------------------------- */
+  --folio-font-sans:  "Helvetica Neue", "Hiragino Sans",
+                      "Hiragino Kaku Gothic ProN", Arial,
+                      "Noto Sans JP", Meiryo, sans-serif;
+  --folio-font-serif: "Hiragino Mincho ProN", "Hiragino Mincho Pro",
+                      HGSMinchoE, "Yu Mincho", YuMincho,
+                      "MS PMincho", serif;
+  --folio-font-mono:  SFMono-Regular, Consolas, Menlo, Courier, monospace;
+
+  /* --- typography: size & line-height -------------------------------- */
+  --folio-text-base:       16px;                 /* body (top page) */
+  --folio-text-article:    18px;                 /* article body (note 推奨) */
+  --folio-text-h1:         32px;
+  --folio-text-h2:         28px;
+  --folio-text-h3:         20px;
+  --folio-text-small:      14px;
+  --folio-text-caption:    12px;
+
+  --folio-lh-base:         1.5;                  /* body / UI */
+  --folio-lh-article:      2.0;                  /* article body (note 推奨、 ゆったり) */
+  --folio-lh-heading:      1.286;                /* h2 (28 → 36px) */
+  --folio-lh-h1:           1.5;                  /* h1 (32 → 48px) */
+
+  --folio-letter-heading:  0.04em;               /* 見出し専用 palt 相当 */
+
+  /* --- layout --------------------------------------------------------- *
+   * note DESIGN.md には 2 種類記載:
+   *   - Main Content 940px (メインコンテンツ幅、 table + code 中心の技術文書向け)
+   *   - Article (Small) 620px (note 記事本文、 散文中心、 1 行可読性最適)
+   * folio の constitution / rules / folio-self-spec は table + code 中心の仕様書のため Main Content (940px) を採用。
+   * 純粋な散文 narrative section は内部で max-width 620px (var(--folio-width-narrative)) に制限可能。
+   */
+  --folio-width-main:        940px;              /* default body 幅 (技術文書) */
+  --folio-width-narrative:   620px;              /* 散文 inner container 用 (optional) */
+  --folio-radius-card:       12px;               /* note card */
+  --folio-radius-inline:     3px;                /* code / badge */
+
+  /* --- elevation (dual shadow: ambient + key) ------------------------ */
+  --folio-elev-1: 0 1px 3px 1px rgba(0, 0, 0, 0.14),
+                  0 1px 2px 0   rgba(0, 0, 0, 0.22);
+  --folio-elev-4: 0 4px 8px 3px rgba(0, 0, 0, 0.14),
+                  0 1px 3px 0   rgba(0, 0, 0, 0.22);
+  --folio-elev-6: 0 6px 10px 4px rgba(0, 0, 0, 0.14),
+                  0 2px 3px 0    rgba(0, 0, 0, 0.22);
+}
+
+/* ========================================================================
+ * Dark mode (prefers-color-scheme + CSS Custom Properties swap)
+ * ====================================================================== */
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --folio-text-primary:     hsla(0, 0%, 100%, 0.90);
+    --folio-text-secondary:   hsla(0, 0%, 100%, 0.66);
+    --folio-text-tertiary:    hsla(0, 0%, 100%, 0.50);
+    --folio-text-disabled:    hsla(0, 0%, 100%, 0.50);
+    --folio-text-invert:      #08131a;
+
+    --folio-bg-primary:       #08131a;
+    --folio-bg-secondary:     #202a30;
+    --folio-surface-normal:   #202a30;
+    --folio-surface-invert:   #ffffff;
+
+    --folio-border-default:   hsla(0, 0%, 100%, 0.14);
+    --folio-border-strong:    hsla(0, 0%, 100%, 0.22);
+    --folio-border-weak:      #202a30;
+
+    --folio-delta-add-bg:     rgba(30, 123, 101, 0.20);
+    --folio-delta-del-bg:     rgba(178, 35, 35, 0.20);
+    --folio-ears-bg:          rgba(145, 102, 38, 0.20);
+
+    /* --- semantic colors: dark 背景で contrast を確保するため明度を上げる
+     *     (link / badge / callout ラベル / EARS / normative マーカーの可読性。
+     *      WCAG 2.2 SC 1.4.3、 rules.html §4.6。 light mode の brand/danger 等は
+     *      dark 背景で 4.5:1 を満たさないため dark 専用に swap する) --- */
+    --folio-brand:            #7db8e8;             /* light sky blue (links / req badge) */
+    --folio-border-focus:     #7db8e8;
+    --folio-success:          #5ac8b8;             /* light teal */
+    --folio-success-subdued:  rgba(90, 200, 184, 0.18);
+    --folio-danger:           #ef7a7a;             /* light red */
+    --folio-danger-subdued:   rgba(239, 122, 122, 0.18);
+    --folio-caution:          #d6a94e;             /* light gold */
+    --folio-caution-subdued:  rgba(214, 169, 78, 0.18);
+    --folio-normative:        #ef7a7a;             /* = danger (MUST/SHALL) */
+    --folio-informative:      #5ac8b8;             /* = success */
+    --folio-ears-border:      #d6a94e;             /* = caution (EARS id / pattern) */
+  }
+}
+
+/* ========================================================================
+ * Base reset + typography
+ * ====================================================================== */
+
+* { box-sizing: border-box; }
+
+html {
+  font-size: var(--folio-text-base);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-kerning: auto;
+}
+
+body {
+  max-width: var(--folio-width-main);                /* 940px、 技術文書向け (table + code 中心) */
+  margin: 2.5rem auto;
+  padding: 0 1.5rem;
+  font-family: var(--folio-font-sans);
+  font-size: var(--folio-text-article);              /* 18px、 note 推奨 */
+  line-height: var(--folio-lh-article);              /* 2.0、 ゆったり */
+  letter-spacing: normal;                            /* 本文は normal (palt 適用しない) */
+  color: var(--folio-text-primary);
+  background: var(--folio-bg-primary);
+  word-wrap: break-word;
+  font-feature-settings: normal;                     /* 本文には palt 適用しない */
+}
+
+/* 散文 inner container (optional): 純粋な long-form narrative section は
+ * <div class="narrative"> で wrap すれば 620px に制限可能 */
+.narrative { max-width: var(--folio-width-narrative); margin: 0 auto; }
+
+p { margin: 0 0 1.25rem; }
+
+/* ========================================================================
+ * Headings (palt + letter-spacing は見出し専用)
+ * ====================================================================== */
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--folio-font-sans);
+  font-weight: 700;
+  letter-spacing: var(--folio-letter-heading);
+  font-feature-settings: "palt";
+  color: var(--folio-text-primary);
+}
+
+h1 { font-size: var(--folio-text-h1); line-height: var(--folio-lh-h1);      margin: 0 0 1rem; }
+h2 { font-size: var(--folio-text-h2); line-height: var(--folio-lh-heading); margin: 2rem 0 1rem; }
+h3 { font-size: var(--folio-text-h3); line-height: 1.5;                     margin: 1.5rem 0 0.75rem; }
+h4 { font-size: 1rem; line-height: 1.5; font-weight: 600; margin: 1rem 0 0.5rem; }
+
+/* ========================================================================
+ * Links
+ * ====================================================================== */
+
+a {
+  color: var(--folio-brand);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-thickness: 1px;
+  letter-spacing: normal;
+  font-feature-settings: normal;
+}
+a:hover { text-decoration-thickness: 2px; }
+a:focus-visible {
+  outline: 2px solid var(--folio-border-focus);
+  outline-offset: 2px;
+  border-radius: var(--folio-radius-inline);
+}
+
+/* ========================================================================
+ * Document header (各 file 冒頭)
+ * ====================================================================== */
+
+header.doc-header {
+  border-bottom: 1px solid var(--folio-border-default);
+  margin-bottom: 2rem;
+  padding-bottom: 1rem;
+}
+header.doc-header h1 {
+  margin: 0 0 0.5rem;
+  color: var(--folio-text-primary);
+}
+header.doc-header .meta {
+  color: var(--folio-text-secondary);
+  font-size: var(--folio-text-small);
+  line-height: 1.5;
+  letter-spacing: normal;
+  font-feature-settings: normal;
+}
+
+/* ========================================================================
+ * Normative / Informative section wrappers (RFC 2119)
+ * ====================================================================== */
+
+section.normative {
+  border-left: 3px solid var(--folio-normative);
+  background: var(--folio-surface-normal);
+  padding: 0.25rem 1.25rem;
+  margin: 1.5rem 0;
+}
+section.informative {
+  border-left: 3px solid var(--folio-informative);
+  background: var(--folio-surface-normal);
+  padding: 0.25rem 1.25rem;
+  margin: 1.5rem 0;
+}
+
+/* ========================================================================
+ * Delta markers (ins.delta / del.delta)
+ * ====================================================================== */
+
+ins.delta, del.delta {
+  display: inline;
+  padding: 1px 6px;
+  border-radius: var(--folio-radius-inline);
+  text-decoration: none;
+  letter-spacing: normal;
+  font-feature-settings: normal;
+}
+ins.delta {
+  background: var(--folio-delta-add-bg);
+  border-left: 2px solid var(--folio-delta-add-border);
+}
+del.delta {
+  background: var(--folio-delta-del-bg);
+  border-left: 2px solid var(--folio-delta-del-border);
+  text-decoration: line-through;
+}
+ins.delta::before {
+  content: "+" attr(data-delta-id) " ";
+  font-family: var(--folio-font-mono);
+  font-size: 0.78em;
+  color: var(--folio-success);
+  margin-right: 0.25rem;
+}
+del.delta::before {
+  content: "-" attr(data-delta-id) " ";
+  font-family: var(--folio-font-mono);
+  font-size: 0.78em;
+  color: var(--folio-danger);
+  margin-right: 0.25rem;
+}
+
+/* ========================================================================
+ * EARS notation (p.ears + .ears-* spans)
+ * ====================================================================== */
+
+.ears {
+  background: var(--folio-ears-bg);
+  border-left: 3px solid var(--folio-ears-border);
+  padding: 0.75rem 1rem;
+  margin: 1rem 0;
+  border-radius: var(--folio-radius-inline);
+  letter-spacing: normal;
+  font-feature-settings: normal;
+}
+.ears-id {
+  font-family: var(--folio-font-mono);
+  font-size: 0.85em;
+  font-weight: 600;
+  color: var(--folio-ears-border);
+  margin-right: 0.5rem;
+}
+.ears-when { font-style: italic; color: var(--folio-text-secondary); }
+.ears-shall {
+  font-weight: 600;
+  color: var(--folio-normative);
+  text-transform: uppercase;
+}
+
+/* ========================================================================
+ * Stakeholder Perspective aside (reader-persona)
+ * ====================================================================== */
+
+aside.reader-persona {
+  background: var(--folio-surface-normal);
+  border: 1px solid var(--folio-border-default);
+  border-radius: var(--folio-radius-card);
+  padding: 1rem 1.25rem;
+  margin: 1.5rem 0;
+  box-shadow: var(--folio-elev-1);
+}
+aside.reader-persona::before {
+  content: "👁 Reader: " attr(data-persona);
+  display: block;
+  font-size: var(--folio-text-caption);
+  color: var(--folio-text-secondary);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  font-feature-settings: "palt";
+  text-transform: uppercase;
+  margin-bottom: 0.5rem;
+}
+aside.reader-persona p:last-child { margin-bottom: 0; }
+
+/* ========================================================================
+ * Machine-readable aside (twill dl.mri 後継)
+ * ====================================================================== */
+
+aside.machine-readable {
+  background: var(--folio-bg-secondary);
+  border: 1px dashed var(--folio-border-default);
+  border-radius: var(--folio-radius-inline);
+  padding: 0.5rem 1rem;
+  margin: 1.25rem 0;
+  font-family: var(--folio-font-mono);
+  font-size: var(--folio-text-small);
+  line-height: 1.6;
+  letter-spacing: normal;
+}
+aside.machine-readable dl { margin: 0; }
+aside.machine-readable dt {
+  font-weight: 600;
+  display: inline;
+  color: var(--folio-brand);
+}
+aside.machine-readable dt::after { content: ": "; color: var(--folio-text-secondary); }
+aside.machine-readable dd { display: inline; margin: 0; color: var(--folio-text-primary); }
+aside.machine-readable dd::after {
+  content: " | ";
+  color: var(--folio-text-tertiary);
+  margin: 0 0.25rem;
+}
+aside.machine-readable dd:last-child::after { content: ""; }
+
+/* ========================================================================
+ * RFC 2119 keyword highlight
+ * ====================================================================== */
+
+.rfc2119 {
+  font-weight: 700;
+  text-transform: uppercase;
+  font-size: 0.95em;
+  color: var(--folio-normative);
+  letter-spacing: 0.04em;
+}
+
+/* ========================================================================
+ * Tables
+ * ====================================================================== */
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1.5rem 0;
+  font-size: var(--folio-text-base);                 /* 16px、 本文より小さく */
+  line-height: var(--folio-lh-base);                 /* 1.5、 本文より tight */
+  background: var(--folio-surface-normal);
+  border-radius: var(--folio-radius-inline);
+  overflow: hidden;
+  box-shadow: var(--folio-elev-1);
+}
+
+/* wide table の page 横スクロール防止 (render-gate chrome 幾何 arm が検出した実欠陥の fix):
+ * display:table は自身を scroll container 化できず、 min-content 幅が column を超えると box ごと
+ * viewport を溢れて document 全体に横スクロール (= chrome 崩れ) を生む。 body は max-width 940px
+ * (border-box、 横 padding 48px 内包) で頭打ち = 本文域は最大 892px。 988px (= 940 + 余裕 48px)
+ * 以下では viewport 縮小に伴い本文域が 892px から狭まっていくため、 figure.diagram pre と同じ
+ * width:max-content + max-width:100% idiom (#121) で table を block scroll container 化する —
+ * 小 table は tight に shrink-wrap、 wide table は column 幅で頭打ち + 内部横スクロール。
+ * desktop (>988px) は本文域 892px 固定で現 corpus の全 table が収まり (render-gate@1280 実測
+ * clean)、 従来の display:table のまま = 視覚不変。 print は下の @media print が本 rule を解除。 */
+@media (max-width: 988px) {
+  table {
+    display: block;
+    width: max-content;
+    max-width: 100%;
+    overflow-x: auto;
+  }
+}
+th, td {
+  border-bottom: 1px solid var(--folio-border-default);
+  padding: 0.625rem 0.875rem;
+  text-align: left;
+  vertical-align: top;
+  letter-spacing: normal;
+  font-feature-settings: normal;
+}
+th {
+  background: var(--folio-bg-secondary);
+  font-weight: 600;
+  color: var(--folio-text-primary);
+}
+tr:last-child td { border-bottom: none; }
+tbody tr:hover { background: rgba(8, 19, 26, 0.03); }
+
+/* ========================================================================
+ * Code (inline + block)
+ * ====================================================================== */
+
+code {
+  font-family: var(--folio-font-mono);
+  font-size: 0.875em;
+  background: var(--folio-bg-secondary);
+  padding: 2px 6px;
+  border-radius: var(--folio-radius-inline);
+  color: var(--folio-text-primary);
+  letter-spacing: normal;
+}
+pre {
+  background: var(--folio-bg-secondary);
+  border: 1px solid var(--folio-border-default);
+  border-radius: var(--folio-radius-card);
+  padding: 1rem 1.25rem;
+  overflow-x: auto;
+  line-height: 1.6;
+  font-size: var(--folio-text-small);                /* 14px */
+  margin: 1.25rem 0;
+}
+pre code {
+  background: none;
+  padding: 0;
+  font-size: 1em;
+}
+
+/* ========================================================================
+ * Lists
+ * ====================================================================== */
+
+ul, ol { margin: 0 0 1.25rem; padding-left: 1.5rem; }
+li { margin-bottom: 0.5rem; }
+li:last-child { margin-bottom: 0; }
+
+dl { margin: 0 0 1.25rem; }
+dt { font-weight: 600; margin-top: 1rem; }
+dd { margin: 0 0 0.75rem 1.5rem; }
+
+/* ========================================================================
+ * Definitions (dfn)
+ * ====================================================================== */
+
+dfn {
+  font-style: normal;
+  font-weight: 600;
+  color: var(--folio-text-primary);
+  border-bottom: 1px dotted var(--folio-text-secondary);
+}
+
+/* ========================================================================
+ * Strong / emphasis
+ * ====================================================================== */
+
+strong { font-weight: 700; color: var(--folio-text-primary); }
+em     { font-style: italic; color: var(--folio-text-primary); }
+
+/* ========================================================================
+ * AI rationale aside (hidden from browser, source-readable for AI editing)
+ * - hidden attribute MUST be present (HTML standard, browser non-render)
+ * - CSS reinforces with display: none to prevent accidental show via DOM
+ * - AI agent reads via Read tool or grep "ai-rationale"
+ * ====================================================================== */
+
+aside.ai-rationale,
+aside.ai-rationale[hidden] {
+  display: none !important;
+}
+
+/* ========================================================================
+ * Normative cross-reference (highlight links to rules MUST sections)
+ * - 使い方: <a href="rules.html#s10-1" class="normative-ref">rules.html §10.1</a>
+ * - folio-self-spec.html の informative section から rules.html §10 MUST への
+ *   cross-ref を視覚的に強調する (reader が normative 参照と気づけるように)
+ * ====================================================================== */
+
+a.normative-ref {
+  font-weight: 700;
+  color: var(--folio-danger, #b22323);
+  text-decoration-color: var(--folio-danger, #b22323);
+}
+
+a.normative-ref:hover {
+  text-decoration-thickness: 2px;
+}
+
+/* ========================================================================
+ * Visual-first component library (ADR-0033 prototype, CSS-only)
+ *   北極星 = scannable reference doc。 既存 design token のみ使用、 dark mode は
+ *   低 alpha tint で両対応 (text は token swap、 tint は accent hue を薄く重ねる)。
+ *   - callout / admonition (note / important / warning / example / tip)
+ *   - visible document metadata card (dl.doc-meta)
+ *   - badges (req / pattern / normative / informative / draft / active)
+ *   - in-page TOC card (nav.toc) + :target highlight
+ *   - .ears requirement card 強化 (data-ears-pattern を corner badge 化)
+ *   - section.normative / .informative tint + corner label
+ *   - table zebra striping
+ * ====================================================================== */
+
+/* --- mermaid diagram figure (横長 LR 対策 + SSoT 一元化、 #121) -------- */
+/* 図 styling の SSoT。 旧来 4 spec の inline <style> に分散していた figure.diagram /
+ * figcaption / pre.mermaid を本 block に集約し、 living spec 側 inline は撤去した。
+ * constitution.html も #122 で inline <style> を撤去し本 block に追従 — 全 spec が本 SSoT を
+ * 共有する (旧 pre.mermaid { visibility:hidden } の §8 graceful 違反を解消、 frozen ゆえ
+ * user 承認の上で例外編集)。 設計:
+ * figure.diagram は card chrome のみ。 横スクロールは内側の
+ * render 済 pre.mermaid が担う (下記 block + rules §4.6) — figure を scroll 容器にすると
+ * figcaption (xref tooltip 等で横に伸びうる) が spurious overflow を起こすため、 scroll/
+ * focusable 対象は図そのもの = pre に限定する。 ★graceful degradation: 旧 inline の
+ * pre.mermaid { visibility:hidden } は JS off 時に図 source を不可視化し §8 SHALL に反する
+ * ため 全 spec から廃止 (constitution は #122 で追従) — 未 render の raw <pre class="mermaid"> は generic pre (code
+ * block) のまま可視に保つ。 */
+figure.diagram {
+  margin: 1.5rem 0;
+  padding: 1rem 1.25rem;
+  background: var(--folio-surface-normal);
+  border: 1px solid var(--folio-border-default);
+  border-radius: var(--folio-radius-card);
+}
+figure.diagram figcaption {
+  font-size: var(--folio-text-small);
+  color: var(--folio-text-secondary);
+  margin-top: 0.75rem;
+  line-height: 1.5;
+  letter-spacing: normal;
+}
+/* スクロール容器は figure でなく render 済 pre = 図そのもの。 figcaption (xref tooltip 等で
+ * 横に伸びうる) を scroll 判定から除外し、 図が body 幅を超えた時だけ pre を横スクロールさせる。
+ * width:max-content + max-width:100% = 小図は tight に shrink-wrap、 wide 図は figure 幅で頭打ち
+ * にして内側の自然幅 SVG を overflow-x:auto で scroll。 generic pre の code-block chrome は除去
+ * (未 render の raw pre は触らず code 表示のまま = JS off fallback 可読、 §8)。 */
+figure.diagram > pre.mermaid[data-processed="true"] {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  width: max-content;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+figure.diagram > pre.mermaid[data-processed="true"]:focus-visible {
+  outline: 2px solid var(--folio-brand);
+  outline-offset: 2px;
+}
+
+/* --- callout / admonition ------------------------------------------- */
+.callout {
+  border-left: 4px solid var(--folio-border-strong);
+  background: var(--folio-bg-secondary);
+  border-radius: var(--folio-radius-inline);
+  padding: 0.875rem 1.125rem;
+  margin: 1.5rem 0;
+  letter-spacing: normal;
+  font-feature-settings: normal;
+}
+.callout > :first-child { margin-top: 0; }
+.callout > :last-child  { margin-bottom: 0; }
+.callout::before {
+  display: block;
+  font-size: var(--folio-text-caption);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  margin-bottom: 0.5rem;
+  font-feature-settings: "palt";
+}
+.callout--note      { border-left-color: var(--folio-brand);   background: rgba(42, 77, 110, 0.07); }
+.callout--note::before      { content: "ℹ  NOTE";      color: var(--folio-brand); }
+.callout--important { border-left-color: var(--folio-danger);  background: rgba(178, 35, 35, 0.07); }
+.callout--important::before { content: "❗  IMPORTANT"; color: var(--folio-danger); }
+.callout--warning   { border-left-color: var(--folio-caution); background: rgba(145, 102, 38, 0.10); }
+.callout--warning::before   { content: "⚠  WARNING";   color: var(--folio-caution); }
+.callout--example   { border-left-color: var(--folio-success); background: rgba(30, 123, 101, 0.07); }
+.callout--example::before   { content: "▸  EXAMPLE";   color: var(--folio-success); }
+.callout--tip       { border-left-color: var(--folio-success); background: rgba(30, 123, 101, 0.07); }
+.callout--tip::before       { content: "✦  TIP";       color: var(--folio-success); }
+
+/* --- visible document metadata card --------------------------------- */
+dl.doc-meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0.6rem 1.25rem;
+  margin: 0 0 2rem;
+  padding: 1rem 1.25rem;
+  background: var(--folio-surface-normal);
+  border: 1px solid var(--folio-border-default);
+  border-radius: var(--folio-radius-card);
+  box-shadow: var(--folio-elev-1);
+  font-size: var(--folio-text-small);
+  line-height: 1.5;
+}
+dl.doc-meta > div { display: flex; flex-direction: column; gap: 0.3rem; }
+dl.doc-meta dt {
+  margin: 0;
+  font-size: var(--folio-text-caption);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--folio-text-tertiary);
+  font-weight: 600;
+}
+dl.doc-meta dd { margin: 0; color: var(--folio-text-primary); }
+
+/* --- badges --------------------------------------------------------- */
+.badge {
+  display: inline-block;
+  padding: 1px 9px;
+  border-radius: 999px;
+  font-family: var(--folio-font-mono);
+  font-size: 0.72em;
+  font-weight: 600;
+  line-height: 1.7;
+  letter-spacing: 0.02em;
+  vertical-align: middle;
+  border: 1px solid transparent;
+}
+.badge--req         { background: rgba(42, 77, 110, 0.12);  color: var(--folio-brand);       border-color: rgba(42, 77, 110, 0.25); }
+.badge--pattern     { background: var(--folio-bg-secondary); color: var(--folio-text-secondary); border-color: var(--folio-border-default); }
+.badge--normative   { background: rgba(178, 35, 35, 0.12);  color: var(--folio-normative);   border-color: rgba(178, 35, 35, 0.25); }
+.badge--informative { background: rgba(30, 123, 101, 0.12); color: var(--folio-informative); border-color: rgba(30, 123, 101, 0.25); }
+.badge--draft       { background: rgba(145, 102, 38, 0.14); color: var(--folio-caution);     border-color: rgba(145, 102, 38, 0.30); }
+.badge--active      { background: rgba(30, 123, 101, 0.14); color: var(--folio-success);     border-color: rgba(30, 123, 101, 0.30); }
+
+/* --- in-page TOC card (on-this-page 目次) ----------------------------
+ * 単一 SSoT: folio build の chrome-toc 注入 (ol + .toc--sub、 ADR-0039 §2.3) と
+ * 手書き legacy (ul、 constitution 等の frozen) の両 markup を同じ box で支える。
+ * タイトルは ::before 一本 (emit 側に title 要素を持たない = 二重 label 防止)。 */
+nav.toc {
+  background: var(--folio-surface-normal);
+  border: 1px solid var(--folio-border-default);
+  border-radius: var(--folio-radius-card);
+  padding: 1rem 1.25rem;
+  margin: 0 0 2rem;
+  box-shadow: var(--folio-elev-1);
+  font-size: var(--folio-text-small);
+}
+nav.toc::before {
+  content: "このページ";
+  display: block;
+  font-size: var(--folio-text-caption);
+  letter-spacing: 0.04em;
+  color: var(--folio-text-tertiary);
+  font-weight: 600;
+  margin-bottom: 0.6rem;
+}
+nav.toc ul { margin: 0; padding-left: 1.1rem; columns: 2; column-gap: 1.5rem; }
+nav.toc ol {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  column-width: 280px;
+  column-gap: 2rem;
+}
+nav.toc li { margin-bottom: 0.3rem; break-inside: avoid; }
+nav.toc li.toc--sub { padding-left: 1rem; }
+nav.toc a { text-decoration: none; }
+nav.toc a:hover { text-decoration: underline; }
+
+/* --- :target highlight (jump-to anchor flash) ----------------------- */
+:target { scroll-margin-top: 1rem; animation: folio-target-flash 1.4s ease-out; }
+@keyframes folio-target-flash {
+  0%   { background: var(--folio-ears-bg); }
+  100% { background: transparent; }
+}
+
+/* --- .ears requirement card 強化 (pattern を corner badge 化) -------- */
+.ears { position: relative; padding-top: 1.6rem; border-radius: var(--folio-radius-card); }
+.ears::before {
+  content: attr(data-ears-pattern);
+  position: absolute;
+  top: 0.45rem; right: 0.85rem;
+  font-family: var(--folio-font-mono);
+  font-size: 0.66em;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--folio-ears-border);
+  opacity: 0.85;
+}
+
+/* --- section.normative / .informative tint + corner label ----------- */
+section.normative   { position: relative; background: linear-gradient(rgba(178, 35, 35, 0.03), rgba(178, 35, 35, 0.03)), var(--folio-surface-normal); }
+section.informative { position: relative; background: linear-gradient(rgba(30, 123, 101, 0.03), rgba(30, 123, 101, 0.03)), var(--folio-surface-normal); }
+section.normative   > h2:first-of-type::after,
+section.informative > h2:first-of-type::after {
+  font-size: var(--folio-text-caption);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 1px 8px;
+  border-radius: 999px;
+  margin-left: 0.6rem;
+  vertical-align: middle;
+  font-feature-settings: "palt";
+}
+section.normative   > h2:first-of-type::after { content: "Normative";   color: var(--folio-normative);   background: rgba(178, 35, 35, 0.10); }
+section.informative > h2:first-of-type::after { content: "Informative"; color: var(--folio-informative); background: rgba(30, 123, 101, 0.10); }
+
+/* --- generated nav clusters (ADR-0035 folio build): informative 枠の見た目を流用しつつ
+   RFC corner label は出さない中立 nav 枠 (cluster は normative/informative の content でなく navigation)。
+   ADR-0039 / P-14 humanize: 下線リンクの羅列をやめ、 行 hover + doc-type badge の行カードで
+   視覚スキャンを支える (landing 目視 feedback 反映)。 --- */
+section.nav-cluster {
+  position: relative;
+  border-left: 3px solid var(--folio-informative);
+  background: linear-gradient(rgba(30, 123, 101, 0.03), rgba(30, 123, 101, 0.03)), var(--folio-surface-normal);
+  padding: 0.5rem 1.25rem 0.75rem;
+  margin: 1.5rem 0;
+  border-radius: 0 var(--folio-radius-card) var(--folio-radius-card) 0;
+}
+section.nav-cluster > h2 {
+  font-size: var(--folio-text-h3);
+  margin: 0.6rem 0 0.4rem;
+}
+section.nav-cluster > details { margin: 0.4rem 0; }
+section.nav-cluster > details > summary {
+  cursor: pointer;
+  font-weight: 600;
+  padding: 0.3rem 0.5rem;
+  border-radius: 6px;
+}
+section.nav-cluster > details > summary:hover { background: rgba(127, 127, 127, 0.08); }
+.nav-count { color: var(--folio-text-secondary); font-weight: 400; font-size: var(--folio-text-caption); }
+.nav-meta  {
+  color: var(--folio-text-secondary);
+  font-size: var(--folio-text-caption);
+  background: rgba(127, 127, 127, 0.12);
+  border-radius: 999px;
+  padding: 1px 8px;
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+
+/* nav 行 (generated cluster 一覧): タイトル + doc-type badge の行。 hover で行背景、
+   link 下線は hover 時のみ (「かろうじてハイパーリンク」な裸リスト見えの解消) */
+section.nav-cluster ul {
+  list-style: none;
+  padding: 0;
+  margin: 0.25rem 0 0.5rem;
+}
+section.nav-cluster li {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.75rem;
+  padding: 0.4rem 0.6rem;
+  border-radius: 6px;
+}
+section.nav-cluster li:hover { background: rgba(127, 127, 127, 0.07); }
+section.nav-cluster li a { text-decoration: none; flex: 1 1 auto; }
+section.nav-cluster li a:hover { text-decoration: underline; }
+
+/* curated Key documents (landing): タイトル行 + 一行説明の stacked 行カード。
+   見出しは nav-cluster の h2 と同サイズに揃える (同階層 section の視覚整合) */
+section.curated > h2 { font-size: var(--folio-text-h3); margin: 1.5rem 0 0.4rem; }
+ul.doc-list {
+  list-style: none;
+  padding: 0;
+  margin: 0.25rem 0 0.5rem;
+}
+ul.doc-list li {
+  padding: 0.45rem 0.6rem;
+  border-radius: 6px;
+}
+ul.doc-list li:hover { background: rgba(127, 127, 127, 0.07); }
+ul.doc-list li a {
+  display: block;
+  text-decoration: none;
+  font-weight: 600;
+}
+ul.doc-list li a:hover { text-decoration: underline; }
+ul.doc-list .doc-desc {
+  display: block;
+  color: var(--folio-text-secondary);
+  font-size: var(--folio-text-small);
+  line-height: 1.5;
+}
+
+/* 保守者向け generated-note の caption 減衰は landing 末尾 (.landing-foot) 限定。
+   glossary.html 等の冒頭バナーは本文サイズを維持する (class 単独 selector だと
+   cross-page bleed して glossary の警告が本文より読みにくくなる、 ceiling 実測) */
+.landing-foot .generated-note { font-size: var(--folio-text-caption); color: var(--folio-text-tertiary); }
+
+/* cluster README の cross-cluster nav bar (folio build/init 生成、 ADR-0035。 generated index 側の nav と視覚整合) */
+nav.cluster-nav { font-size: var(--folio-text-small); margin: 0.5rem 0 1rem; color: var(--folio-text-secondary); }
+nav.cluster-nav a { white-space: nowrap; }
+
+/* --- table zebra striping (neutral, dark mode 両対応) --------------- */
+tbody tr:nth-child(even) { background: rgba(127, 127, 127, 0.045); }
+
+/* ========================================================================
+ * dual-audience requirement unit (ADR-0033 Option B prototype)
+ *   human essence (可視・派生 view) + machine normative (folded・canonical SSoT)
+ *   を 1 unit に co-author。 aria-hidden は使わない (accessibility-tree AI 可読性、
+ *   research M3)。 fold は <details> による視覚 progressive disclosure のみ。
+ * ====================================================================== */
+
+section.req {
+  border: 1px solid var(--folio-border-default);
+  border-left: 4px solid var(--folio-brand);
+  border-radius: var(--folio-radius-card);
+  background: var(--folio-surface-normal);
+  padding: 0.875rem 1.25rem;
+  margin: 1.25rem 0;
+  box-shadow: var(--folio-elev-1);
+}
+.req__card {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  letter-spacing: normal;
+  font-feature-settings: normal;
+}
+.req__essence {
+  margin: 0.6rem 0 0;
+  font-size: var(--folio-text-article);
+  line-height: 1.7;
+  letter-spacing: normal;
+}
+
+/* EARS keyword badge (human card、 pattern を一目で色識別。 ReSpec rfc2119 強調手法を
+ * EARS に適用、 色割当は folio 独自設計 = ADR-0033 明示) */
+.req__ears {
+  display: inline-block;
+  padding: 1px 9px;
+  border-radius: 999px;
+  font-size: 0.7em;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  border: 1px solid transparent;
+  font-feature-settings: "palt";
+}
+.req__ears--ubiquitous { background: rgba(127, 127, 127, 0.12); color: var(--folio-text-secondary); border-color: var(--folio-border-default); }
+.req__ears--event      { background: rgba(42, 77, 110, 0.12);  color: var(--folio-brand);   border-color: rgba(42, 77, 110, 0.30); }
+.req__ears--state      { background: rgba(30, 123, 101, 0.12); color: var(--folio-success); border-color: rgba(30, 123, 101, 0.30); }
+.req__ears--unwanted   { background: rgba(145, 102, 38, 0.14); color: var(--folio-caution); border-color: rgba(145, 102, 38, 0.30); }
+.req__ears--optional   { background: rgba(120, 60, 140, 0.14); color: #8c4ba6;               border-color: rgba(120, 60, 140, 0.30); }
+
+/* machine-normative fold (canonical SSoT、 視覚的に de-emphasize) */
+details.req__machine {
+  margin-top: 0.75rem;
+  border-top: 1px dashed var(--folio-border-default);
+  padding-top: 0.5rem;
+}
+details.req__machine > summary {
+  cursor: pointer;
+  font-size: var(--folio-text-caption);
+  font-family: var(--folio-font-mono);
+  color: var(--folio-text-tertiary);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+details.req__machine > summary::before { content: "\2699  "; }            /* ⚙ */
+details.req__machine[open] > summary { color: var(--folio-text-secondary); margin-bottom: 0.5rem; }
+.req__normative { font-size: var(--folio-text-base); }
+.req__normative .ears { margin: 0.5rem 0 0; }
+
+/* --- requirement dashboard (at-a-glance human overview) ------------- */
+.req-dashboard {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 1rem 1.5rem;
+  margin: 1.5rem 0;
+  padding: 1rem 1.25rem;
+  background: var(--folio-surface-normal);
+  border: 1px solid var(--folio-border-default);
+  border-radius: var(--folio-radius-card);
+  box-shadow: var(--folio-elev-1);
+}
+.req-dashboard__group h4 {
+  margin: 0 0 0.5rem;
+  font-size: var(--folio-text-caption);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--folio-text-tertiary);
+}
+.req-dashboard__chips { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+.req-chip {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: var(--folio-radius-inline);
+  font-family: var(--folio-font-mono);
+  font-size: 0.72em;
+  font-weight: 600;
+  border: 1px solid var(--folio-border-default);
+  border-left: 3px solid var(--folio-text-tertiary);
+  background: var(--folio-bg-secondary);
+  color: var(--folio-text-primary);
+  text-decoration: none;
+  letter-spacing: normal;
+}
+a.req-chip:hover { border-color: var(--folio-border-strong); text-decoration: none; }
+.req-chip--ubiquitous { border-left-color: var(--folio-text-tertiary); }
+.req-chip--event      { border-left-color: var(--folio-brand); }
+.req-chip--unwanted   { border-left-color: var(--folio-caution); }
+.req-chip--state      { border-left-color: var(--folio-success); }
+.req-dashboard__legend {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+  align-items: center;
+  border-top: 1px solid var(--folio-border-default);
+  padding-top: 0.6rem;
+}
+
+/* --- compact spec list (linter/checklist 風 dual-audience、 1 行 1 REQ、
+ *     最小読量 = 視覚密度最高の human view)。 summary = badge + EARS pattern badge
+ *     + essence (human 要約、 常時可視)、 クリック展開で .spec-normative (machine
+ *     canonical SSoT、 data-audience="machine")。 verbose な section.req card の
+ *     compact 第 2 form (rules §7.2 form 2、 ADR-0033 §2.5 Hybrid の ② compact list)。
+ *     純 CSS (JS 非依存、 §8 progressive enhancement)、 token のみで dark mode 自動対応。 */
+.spec-list {
+  border: 1px solid var(--folio-border-default);
+  border-radius: var(--folio-radius-card);
+  overflow: hidden;
+  background: var(--folio-surface-normal);
+  box-shadow: var(--folio-elev-1);
+  margin: 1.25rem 0;
+}
+.spec-row { border-bottom: 1px solid var(--folio-border-default); padding: 0; }
+.spec-row:last-child { border-bottom: none; }
+.spec-row > summary {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+  flex-wrap: wrap;
+  padding: 0.6rem 1rem;
+  cursor: pointer;
+  list-style: none;
+  letter-spacing: normal;
+}
+.spec-row > summary::-webkit-details-marker { display: none; }
+.spec-row > summary::before { content: "\25B8"; color: var(--folio-text-tertiary); font-size: 0.8em; }   /* ▸ */
+.spec-row[open] > summary::before { content: "\25BE"; }                                                  /* ▾ */
+.spec-row > summary .essence { flex: 1 1 18rem; letter-spacing: normal; }
+.spec-row .spec-normative { padding: 0 1rem 0.75rem 2.4rem; font-size: var(--folio-text-base); }
+.spec-row .spec-normative .ears { margin: 0; }
+.spec-row[open] { background: var(--folio-bg-secondary); }
+
+/* --- coverage RTM (requirement traceability matrix) の gap マーカー。
+ *     scenario / verified 列が空 = link は valid だが未検証 = validate が捕らない
+ *     gap を danger 色で一目可視化する (ADR-0033 §2.5 の ③ coverage RTM の効用)。
+ *     base の <table> styling を継承し、 gap cell のみ本 class で強調。 inline style
+ *     を使わず token 経由ゆえ dark mode で contrast 維持 (--folio-danger swap)。 */
+td.cov-gap { color: var(--folio-danger); font-weight: 700; }
+
+/* --- coverage RTM の REQ → 該当 spec-row への deep-link。 RTM の REQ badge を anchor で
+ *     wrap し、 click で compact list の該当 REQ へ jump する (既存 :target flash が着地点を
+ *     強調、 essence が即可視・詳細 fold は 1-click)。 下線を消し badge の見た目を保持、
+ *     hover/focus で clickable を示唆 (token 経由ゆえ dark mode contrast 維持)。 */
+a.cov-req { text-decoration: none; }
+a.cov-req:hover .badge--req,
+a.cov-req:focus-visible .badge--req { outline: 2px solid var(--folio-brand); outline-offset: 1px; filter: brightness(1.08); }
+
+/* ========================================================================
+ * Object cross-reference (ADR-0034、 in-band untyped xref + no-JS hover tooltip)
+ *   defined-object (principle P-N / requirement REQ-* / decision ADR-NNNN) への
+ *   inline 参照。 baseline は常に動く link (click → 定義 + 既存 :target flash)、
+ *   その上に CSS-only tooltip を載せる (JS 非依存、 §8 progressive enhancement、
+ *   text は data-tooltip 属性から供給 = folio fix が定義 essence を materialize)。
+ *   token (P-5 等) は本文に馴染ませ dotted underline で「定義へのリンク」を示唆、
+ *   既存 link 色 token を再利用ゆえ dark mode は token swap で自動両対応。
+ *   viewport 端の clip は no-JS の限界として許容 (essence 1 行で実害小、 smart
+ *   positioning は JS roadmap、 rules §9 tooltip CSS governance に明記)。
+ * ====================================================================== */
+a.xref {
+  color: var(--folio-brand);
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+  text-decoration-thickness: 1px;
+  letter-spacing: normal;
+  font-feature-settings: normal;
+}
+a.xref:hover { text-decoration-style: solid; text-decoration-thickness: 2px; }
+
+/* CSS-only tooltip: :hover + :focus-visible で擬似要素 box を表示 (data-tooltip 属性供給)。
+ * 既存 surface/border/text/elevation token のみ使用 = light/dark 両対応。 */
+/* Glossary term (ADR-0034 §2.8 + ADR-0036、 <span class="term" data-term> = explicit REQ-GLOSS-001 +
+ * auto-mark REQ-GLOSS-002 双方、 span 統一・hover-only)。 Class A xref と同じ no-JS tooltip box を共用する
+ * (data-tooltip = vocabulary.yaml definition、 folio fix が materialize)。 term は「定義へのリンク」でなく
+ * 用語マーカーゆえ help cursor + 控えめな dotted underline (secondary)、 glossary.html へは link しない
+ * (doc 名と被る用語の routing 衝突を回避、 folio-ovi 2026-06-03)。 */
+.term {
+  border-bottom: 1px dotted var(--folio-text-secondary);
+  cursor: help;
+}
+a.xref[data-tooltip], .term[data-tooltip] { position: relative; }
+a.xref[data-tooltip]::after,
+.term[data-tooltip]::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 0.5rem);
+  z-index: 50;
+  width: max-content;
+  max-width: min(28rem, 80vw);
+  padding: 0.5rem 0.75rem;
+  background: var(--folio-surface-normal);
+  color: var(--folio-text-primary);
+  border: 1px solid var(--folio-border-strong);
+  border-radius: var(--folio-radius-card);
+  box-shadow: var(--folio-elev-4);
+  font-family: var(--folio-font-sans);
+  font-size: var(--folio-text-small);
+  font-weight: 400;
+  line-height: 1.5;
+  letter-spacing: normal;
+  font-feature-settings: normal;
+  text-align: left;
+  text-decoration: none;
+  white-space: normal;
+  /* 非 hover 時は display:none — visibility:hidden だと非描画でも layout に残り、 右端付近の
+   * term から viewport 外へ伸びた tooltip box が document の scrollable overflow に寄与して
+   * page 全体に常時横スクロールを生む (render-gate chrome 幾何 arm が検出した実欠陥)。 */
+  display: none;
+  opacity: 0;
+  transition: opacity 0.12s ease-out;
+  pointer-events: none;
+}
+a.xref[data-tooltip]:hover::after,
+a.xref[data-tooltip]:focus-visible::after,
+.term[data-tooltip]:hover::after,
+.term[data-tooltip]:focus-visible::after {
+  display: block;
+  opacity: 1;
+}
+/* display:none からの遷移は opacity transition が始点を持たない — @starting-style で fade-in を
+ * 温存する (未対応 browser は即時表示に degrade、 従来も fade-in のみで fade-out は無かった)。 */
+@starting-style {
+  a.xref[data-tooltip]:hover::after,
+  a.xref[data-tooltip]:focus-visible::after,
+  .term[data-tooltip]:hover::after,
+  .term[data-tooltip]:focus-visible::after {
+    opacity: 0;
+  }
+}
+
+/* ========================================================================
+ * Glossary page (ADR-0036、 folio build が vocabulary.yaml から生成する glossary.html)。
+ *   各 term を <dt id="term-<slug>"> anchor + definition <dd> で列挙する definition list。
+ *   spec 本文の用語 hover tooltip (.term) と同じ vocabulary.yaml SSoT から derive (single-SoT)。
+ *   glossary.html は nav/index から到達する独立辞書 (spec 本文からは hover-only で deep-link しない、 folio-ovi)。
+ *   直 URL / in-page index から #term-<slug> へ来た場合は :target で該当 dt + 隣接 dd を強調する
+ *   (既存 xref :target flash と同系の navigational feedback)。
+ * ====================================================================== */
+dl.glossary { margin: 1.5rem 0; }
+dl.glossary dt {
+  scroll-margin-top: 1rem;
+  margin-top: 1.1rem;
+  font-weight: 700;
+  padding: 0.15rem 0.5rem;
+}
+dl.glossary dt .term-name {
+  font-family: var(--folio-font-mono, ui-monospace, monospace);
+  color: var(--folio-brand);
+}
+dl.glossary dd {
+  margin: 0.15rem 0 0 0;
+  padding: 0 0.5rem 0.15rem 1.25rem;
+  color: var(--folio-text-secondary);
+  line-height: 1.6;
+}
+dl.glossary dt:target,
+dl.glossary dt:target + dd {
+  background: var(--folio-surface-raised, rgba(127, 127, 127, 0.1));
+}
+dl.glossary dt:target {
+  box-shadow: inset 3px 0 0 var(--folio-brand);
+  border-radius: var(--folio-radius-card, 6px) var(--folio-radius-card, 6px) 0 0;
+}
+.nav-back {
+  margin-top: 2rem;
+  font-size: var(--folio-text-small, 0.875rem);
+}
+
+/* ========================================================================
+ * Landing hero 層 (ADR-0039 §2.2、 folio build が生成する design-intent/index.html)。
+ *   4 層 template の (1) hero 一文 (2) 単一 CTA (3) 読者別 3 カード を様式化する。
+ *   型 (構造 = grid/card) は build が所有し、 文言は curated region folio:landing-hero に
+ *   人間が author する。 JS なし・CSS grid のみ・狭幅では auto-fit が 1 カラムに収束する。
+ *   CTA/card の文字色は --folio-text-invert を使う (dark mode は brand が明色に swap する
+ *   ため #fff 固定だと contrast 破綻、 rules §4.6 / WCAG 1.4.3)。
+ * ====================================================================== */
+.landing-hero { margin: 0 0 2.5rem; }
+.landing-tagline {
+  font-size: 1.2rem;
+  line-height: 1.8;
+}
+.landing-cta-row { margin: 1.25rem 0; }
+a.landing-cta {
+  display: inline-block;
+  background: var(--folio-brand);
+  color: var(--folio-text-invert);
+  padding: 0.65rem 1.4rem;
+  border-radius: var(--folio-radius-card);
+  text-decoration: none;
+  font-weight: 600;
+}
+a.landing-cta:hover {
+  box-shadow: var(--folio-elev-1);
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+}
+a.landing-cta:focus-visible {
+  outline: 2px solid var(--folio-border-focus);
+  outline-offset: 2px;
+}
+.reader-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 0.9rem;
+  margin: 1.25rem 0 0;
+  padding: 0;
+}
+a.reader-card {
+  display: block;
+  border: 1px solid var(--folio-border-default);
+  border-radius: var(--folio-radius-card);
+  padding: 1rem 1.1rem;
+  text-decoration: none;
+  background: var(--folio-surface-normal);
+}
+a.reader-card:hover {
+  border-color: var(--folio-brand);
+  box-shadow: var(--folio-elev-1);
+}
+a.reader-card:focus-visible {
+  outline: 2px solid var(--folio-border-focus);
+  outline-offset: 2px;
+}
+.reader-card__act {
+  display: block;
+  font-weight: 700;
+  color: var(--folio-brand);
+  margin-bottom: 0.3rem;
+}
+.reader-card__desc {
+  display: block;
+  color: var(--folio-text-secondary);
+  font-size: var(--folio-text-small);
+  line-height: 1.55;
+}
+
+/* ========================================================================
+ * Chrome (ADR-0039 §2.3、 folio build が全ページに注入する marker 領域)。
+ *   chrome-top = skip-link + breadcrumb / chrome-toc = cluster-nav (README) +
+ *   on-this-page 目次 / chrome-bottom = 所属 locator + prev-next。 領域内は build 所有。
+ *   ★生成 spec ページ (pack assembler 産物) では nav.toc / breadcrumb / audience-toggle を
+ *   注入しない (ADR-0054 §2.1) — skip-link (focus 時のみ可視) と prev-next は存続し、
+ *   所属と一覧への導線は下部 locator (.doc-locator) が担う。
+ * ====================================================================== */
+
+/* skip-link: 視覚非表示 → keyboard focus で出現 (W3C APG)。 */
+a.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  z-index: 100;
+  background: var(--folio-brand);
+  color: var(--folio-text-invert);
+  padding: 0.5rem 1rem;
+  border-radius: 0 0 6px 6px;
+  text-decoration: none;
+  font-weight: 600;
+}
+a.skip-link:focus { left: 0; }
+
+/* breadcrumb: 小さく secondary、 現在地は強調 (aria-current)。 */
+nav.breadcrumb { font-size: var(--folio-text-small); margin: 0.25rem 0 1rem; }
+nav.breadcrumb ol {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  padding: 0;
+  margin: 0;
+}
+nav.breadcrumb li { color: var(--folio-text-secondary); }
+nav.breadcrumb li + li::before {
+  content: "\203A";        /* › (alt-text 構文非対応 browser 向け fallback) */
+  content: "\203A" / "";   /* 装飾 separator を a11y tree から除外 (SR の読み上げ抑止、 ceiling 実測) */
+  margin: 0 0.5rem;
+  color: var(--folio-text-tertiary);
+}
+nav.breadcrumb a { text-decoration: none; }
+nav.breadcrumb a:hover { text-decoration: underline; }
+nav.breadcrumb [aria-current="page"] { font-weight: 600; color: var(--folio-text-primary); }
+
+/* on-this-page 目次の box/title/list 様式は visual-first component library の
+   nav.toc block (上方) が SSoT (chrome 注入 ol と legacy ul の両対応をそちらで定義)。 */
+
+/* prev-next: 末尾の前後導線。 長 title は単行 ellipsis。 */
+nav.prevnext {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  border-top: 1px solid var(--folio-border-default);
+  margin-top: 2.5rem;
+  padding-top: 1rem;
+}
+nav.prevnext a {
+  display: block;
+  max-width: 48%;
+  min-width: 0;
+  text-decoration: none;
+}
+nav.prevnext .prevnext__dir {
+  display: block;
+  font-size: var(--folio-text-caption);
+  color: var(--folio-text-secondary);
+}
+nav.prevnext .prevnext__title {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+nav.prevnext a:hover .prevnext__title { text-decoration: underline; }
+nav.prevnext a.prevnext__next { margin-left: auto; text-align: right; }
+
+/* 所属 locator (ADR-0054 §2.1): 生成 spec ページで上部 breadcrumb の代わりに下部
+ * (prev-next 直上) が担う「所属 + 一覧へ」の導線。 小さく secondary (mockup A v2 準拠)。 */
+p.doc-locator {
+  margin: 2.5rem 0 0;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--folio-border-default);
+  font-size: var(--folio-text-small);
+  color: var(--folio-text-secondary);
+}
+
+/* ========================================================================
+ * Audience toggle (ADR-0039 §2.5 / rules §11.3) — chrome の inline script が
+ * JS 有効時のみ生成する 3 状態 UI (両方 / 人間向け / 機械向け)。 body class
+ * 切替のみ・永続なし。 no-JS では UI 自体が存在しない (progressive enhancement)。
+ * ====================================================================== */
+nav.audience-toggle {
+  display: flex;
+  width: max-content;
+  margin: 0.6rem 0 0;
+  border: 1px solid var(--folio-border-default);
+  border-radius: 999px;
+  overflow: hidden;
+  font-size: 0.78rem;
+}
+nav.audience-toggle button {
+  font: inherit;
+  font-size: 0.78rem;
+  padding: 0.18rem 0.7rem;
+  background: transparent;
+  color: var(--folio-text-secondary);
+  border: 0;
+  cursor: pointer;
+}
+nav.audience-toggle button + button { border-left: 1px solid var(--folio-border-default); }
+nav.audience-toggle button[aria-pressed="true"] {
+  background: var(--folio-brand);
+  color: var(--folio-text-invert);
+}
+
+/* 人間向け: machine 精密部 (EARS 全文・降格された informative 地の文) を隠し
+ * 章要旨/essence/表/図に集中 (既定 mode、 ADR-0040 / rules §11.3 人間プレゼン型)。 */
+body.audience-human [data-audience="machine"] { display: none; }
+
+/* 人間向けでは spec-row の中身 (machine 部) が隠れるため、 開いても何も出ない —
+ * 「▸ なのに空」の壊れた見えを防ぐ: fold marker を抑止して開閉 affordance を出さず、
+ * それでも開かれた場合は全文への経路を hint で案内する (CSS content による presentational
+ * guidance — content の SSoT ではない。 callout label (§4.5) と同系の既存 idiom。
+ * readability-walk lens 2026-06-12 が「空展開 = 機構の恒久特性」と判定した major の緩和)。 */
+body.audience-human .spec-row > summary::before { content: ""; }
+body.audience-human .spec-row[open]::after {
+  content: "EARS 全文は上部の表示切替 (両方 / 機械向け) で表示されます — 人間向け表示は要旨のみ。";
+  display: block;
+  font-size: var(--folio-text-small);
+  color: var(--folio-text-tertiary);
+  padding: 0.1rem 0.75rem 0.5rem;
+}
+
+/* 章要旨 (section-level essence、 rules §11.5 / ADR-0040): 章冒頭の 1〜3 文プレゼン要約。
+ * REQ essence (spec-row) より一段上の粒度。 lead として僅かに立て、 余白で図/本文と区切る。 */
+p.section-essence {
+  font-weight: 500;
+  margin: 0.75rem 0 1.25rem;
+}
+
+/* 機械向け: human 派生 view (essence/badge/章要旨) を減光し normative を主役に。
+ * closed details の中身は UA の rendering skip ゆえ author CSS では開けない —
+ * 開閉は読者操作のまま (ADR-0039 §2.5 = body class 切替のみの設計境界)。 */
+body.audience-machine .essence,
+body.audience-machine .req__essence,
+body.audience-machine .section-essence,
+body.audience-machine .req__ears { opacity: 0.45; }
+
+/* 印刷: toggle 状態に関わらず全 audience を可視化し toggle UI は出さない。
+ * details の print 全展開 (rules §11.3) は chrome script の beforeprint handler が担う。 */
+@media print {
+  nav.audience-toggle { display: none; }
+  body.audience-human [data-audience="machine"] { display: revert; }
+  /* print では machine 部が復帰する (上) ため、 空展開ガードの hint と marker 抑止も解除 */
+  body.audience-human .spec-row[open]::after { content: none; }
+  body.audience-human .spec-row > summary::before { content: "\25B8"; }
+  body.audience-human .spec-row[open] > summary::before { content: "\25BE"; }
+  body.audience-machine .essence,
+  body.audience-machine .req__essence,
+  body.audience-machine .section-essence,
+  body.audience-machine .req__ears { opacity: 1; }
+  /* print 時は table の block scroll-container 化 (上の max-width:988px rule) を解除する。
+   * print の media query 評価は用紙 page box 幅 (A4 縦 ≈ 794 CSS px) で行われ 988px が TRUE に
+   * なるが、 紙は scroll できない — block + width:max-content のままだと wide table が紙面右端で
+   * 切り落とされる (off-page content lost、 A4 PDF 実 render で実証)。 display:table + width:100%
+   * に戻せば auto-layout が column を用紙幅に shrink させ fit-to-page で全列が印刷される。 */
+  table { display: table; width: 100%; overflow: visible; }
+}

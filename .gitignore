@@ -26,3 +26,7 @@ embeddeddolt/
 /.beads/bdw-timing.log*
 /.beads/dispatch-log.jsonl*
 .beads/events.jsonl
+
+# folio の caller-marker（session-local）と review の playwright 生成物
+.folio/
+.playwright-mcp/

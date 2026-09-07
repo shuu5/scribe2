@@ -1,0 +1,638 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="folio-doc-type" content="constitution">
+<meta name="folio-layer" content="project">
+<meta name="folio-version" content="0.3.0">
+<meta name="folio-status" content="active">
+<meta name="folio-stakeholders" content="Developer, AI Agent, External Reviewer">
+<title>scribe2 constitution — 折れない線 (Always 13 / Ask-first 4 / Never 4)</title>
+<link rel="stylesheet" href="../../common.css">
+<script src="../assets/mermaid.min.js" defer></script>
+<script type="application/ld+json">
+{
+  "@context": {
+    "dc": "http://purl.org/dc/terms/",
+    "schema": "https://schema.org/",
+    "folio": "https://folio.dev/spec/v1/"
+  },
+  "@id": "./constitution.html",
+  "@type": "schema:TechArticle",
+  "dc:isPartOf": [
+    { "@id": "./README.html" }
+  ],
+  "dc:isReferencedBy": [
+    { "@id": "../decisions/ADR-0001-rust-single-static-binary.html" }
+  ],
+  "dc:title": "scribe2 constitution — 折れない線 (Always 13 / Ask-first 4 / Never 4)",
+  "folio:version": "0.3.0",
+  "folio:stakeholders": ["Developer", "AI Agent", "External Reviewer"]
+}
+</script>
+</head>
+<body>
+<!-- folio:chrome-top -->
+<a class="skip-link" href="#s1-purpose">本文へスキップ</a>
+<nav class="breadcrumb" aria-label="パンくず"><ol>
+  <li><a href="../index.html">design-intent</a></li>
+  <li><a href="./README.html">spec</a></li>
+  <li aria-current="page">constitution</li>
+</ol></nav>
+<!-- /folio:chrome-top -->
+
+<header class="doc-header">
+  <h1>scribe2 constitution — 折れない線</h1>
+  <div class="meta">v0.3.0 &middot; status: active &middot; scribe v2「次の器」が守る 21 条 (Always 13 / Ask-first 4 / Never 4)。 各条は要旨 + 規範文 (EARS・正本) + 機構 (型 / lint / CI) + 出所を併せ持ち、 数値は条文でなく manifest の rules 行に置く (初期値は §3)</div>
+</header>
+<!-- folio:chrome-toc -->
+<nav class="toc" aria-label="ページ内目次">
+<ol>
+  <li><a href="#s1-purpose">§1. Purpose — この憲法が何を決め、 どう読むか</a></li>
+  <li><a href="#s2-tiers">§2. 3 段の構造 — 21 条の一覧</a></li>
+  <li class="toc--sub"><a href="#s2-1-always">§2.1 Always — いつも守る (C1〜C13)</a></li>
+  <li class="toc--sub"><a href="#s2-2-askfirst">§2.2 Ask-first — 変える前に user に確認 (A1〜A4)</a></li>
+  <li class="toc--sub"><a href="#s2-3-never">§2.3 Never — 絶対にやらない (N1〜N4)</a></li>
+  <li><a href="#s3-rules-rows">§3. rules 行の初期値 — 条文から外した数値 (裁定 id 付き)</a></li>
+  <li><a href="#s4-amendment">§4. 改訂の手続き — どう変えると何が起きるか</a></li>
+  <li><a href="#s5-trace">§5. Trace — 出所と対応</a></li>
+</ol>
+</nav>
+<!-- /folio:chrome-toc -->
+
+<aside class="machine-readable" aria-hidden="true">
+  <dl>
+    <dt>id</dt><dd>constitution</dd>
+    <dt>doc-type</dt><dd>constitution</dd>
+    <dt>version</dt><dd>0.3.0 (follows the SPEC version)</dd>
+    <dt>status</dt><dd>active</dd>
+    <dt>stakeholders</dt><dd>Developer, AI Agent, External Reviewer</dd>
+    <dt>tiers</dt><dd>Always C1-C13 (13) / Ask-first A1-A4 (4) / Never N1-N4 (4)</dd>
+    <dt>edit-ssot</dt><dd>this file (canonical WHAT; folio ADR-0051 §3: non-flipped doc = HTML is the only layer)</dd>
+    <dt>source</dt><dd>SPEC-scribe-v2-vessel-v0.1-20260907.md §2 (v0.3, user approved 2026-09-07) / RULING-v2-p1-exit-bundle-20260907.md</dd>
+    <dt>amendment</dt><dd>A2 (grill verification first, then user ruling) + C5 (rules row diff with ruling id) + N4 (constitution amendments only as version N+1)</dd>
+  </dl>
+</aside>
+
+<aside class="informative">
+<p>本 constitution は IETF <strong>RFC 2119</strong> および <strong>RFC 8174 / BCP 14</strong> に定義される MUST / SHALL / SHALL NOT のキーワード解釈規約に従う。 規範文 (EARS) は機械層 (<code>data-audience="machine"</code>) が正で、 人間向け要旨はその正確な要約である。</p>
+</aside>
+
+<section id="s1-purpose" class="normative">
+<h2>§1. Purpose — この憲法が何を決め、 どう読むか</h2>
+<p class="section-essence" data-audience="human">scribe2 が版をまたいで守る「折れない線」を、 守り方の強さで Always / Ask-first / Never の 3 段に分けて置きます。 各条は「人が読む要旨」「機械が読む規範文 (正本)」「機械が検査できる形 (型 / lint / CI)」「出所 (どの裁定から来たか)」の 4 つを必ず併せ持ち、 数値は条文に書かず manifest の rules 行に置き、 その初期値を §3 に写します。 線どうしがぶつかったら、 場当たり修正の禁止 → 膨張防止 → compile 速度 の順位で決めます。</p>
+<p data-audience="machine">本 constitution は scribe v2「次の器」の design-intent の最上位文書であり、 条文の canonical WHAT かつ edit-SSoT である (folio ADR-0051 §3: flip しない doc は HTML が唯一の層)。 21 条の各条は (a) human 要旨、 (b) EARS 規範文 (canonical)、 (c) 機構 = 条を成立させる型 / lint / CI の形、 (d) 出所 = 裁定論点 id、 の 4 要素を持つ。 (c) を欠く条を置かない (散文だけの規則を残さない = N2)。 1 つの条は複数の規範文を持ちうる: 最初の規範文は条 id (例 C12)、 以降は条 id に連番を付す (例 C12.2)。 EARS pattern は各規範文の論理構造で決まり、 段 (Always / Ask-first / Never) とは独立である。 card の badge は最初の規範文の pattern を表し、 2 つ目以降の規範文の pattern は machine 層の各 block が持つ。 原本が執行主体を特定しない条は主語を scribe2 (system of interest) とし、 CI 等の執行機構は機構 dd に (導出) と明示する。 原本が CI を名指す条は scribe2 CI を主語にする。 数値 (閾値・件数・秒数) は条文に置かず <span class="term" data-term="rules 行">rules 行</span> (<span class="term" data-term="manifest">manifest</span> 内の値 1 行・<span class="term" data-term="裁定 id">裁定 id</span> 付き) に置き、 本文書ではその初期値を §3 に写す。 改訂は A2 (利益の grill 検証を前置した user 裁定) のみで、 条文の改訂は同じ版の中では行わない (N4)。</p>
+<div data-audience="machine">
+<p class="ears" data-ears-pattern="event-driven"><span class="ears-id">順位</span>: <span class="ears-when">WHEN two lines of this constitution conflict in a decision</span>, scribe2 <span class="ears-shall">SHALL</span> resolve the conflict in this order: prohibition of ad-hoc fixes first, prevention of growth second, compile speed third.</p>
+<p>出所: 論点 1。 <span class="term" data-term="順位">順位</span>は条ではなく全条に先立つ決め方であり、 条 id の連番を持たない (§2 の一覧表にも含めない)。</p>
+</div>
+</section>
+
+<section id="s2-tiers" class="normative">
+<h2>§2. 3 段の構造 — 21 条の一覧</h2>
+<p class="section-essence" data-audience="human">Always は例外なく常に守る 13 条、 Ask-first は変える前に user に確認する 4 条、 Never は絶対にやらない 4 条です。 下の図と表が全体の地図で、 各条の本文は §2.1〜§2.3 にあります。 §1 の順位は段に属さず、 表には含めません。</p>
+<figure class="diagram">
+<pre class="mermaid">flowchart TB
+  accTitle: scribe2 憲法の 3 段構造
+  accDescr: 折れない線 21 条を守り方の強さで 3 段に分ける。 Always は C1 から C13 の 13 条で常に守る。 Ask-first は A1 から A4 の 4 条で変える前に user に確認する。 Never は N1 から N4 の 4 条で絶対に行わない。
+  T["折れない線 (21 条)"]
+  A["Always — いつも守る&#10;C1〜C13 (13 条)"]
+  B["Ask-first — 変える前に user に確認&#10;A1〜A4 (4 条)"]
+  C["Never — 絶対にやらない&#10;N1〜N4 (4 条)"]
+  T --&gt; A
+  T --&gt; B
+  T --&gt; C
+  style T fill:#e8f0f7,stroke:#2a4d6e,color:#08131a
+  style A fill:#e6f6f2,stroke:#1e7b65,color:#08131a
+  style B fill:#fefbea,stroke:#916626,color:#08131a
+  style C fill:#fdf3f3,stroke:#b22323,color:#08131a</pre>
+<figcaption>図 1. 21 条の 3 段構造。 段は「守り方の強さ」で分かれる。 線どうしがぶつかったときの決め方は §1 の順位だけが定める。</figcaption>
+</figure>
+<p data-audience="machine">本表は索引である。 機構と出所の正本は各条の card (§2.1〜§2.3) にある。 「出所」は card と逐語一致させ、 「機構の要点」は card の機構 dd の要約である。</p>
+<table>
+  <thead><tr><th>id</th><th>名</th><th>段</th><th>機構の要点 (正本は各条)</th><th>出所</th></tr></thead>
+  <tbody>
+    <tr><td><a href="#c1">C1</a></td><td>規則はデータ</td><td>Always</td><td>閉じた enum + trait の網羅 match / manifest 1 file / CI が手書き規範文の行数を数える</td><td>論点 5</td></tr>
+    <tr><td><a href="#c2">C2</a></td><td>経路は 1 本・語彙は 1 つ・名前は 1 定数</td><td>Always</td><td>1 関数・1 enum / 列挙順 = 適用順 / manifest 1 struct / NAME 1 定数</td><td>論点 8・SPEC §7</td></tr>
+    <tr><td><a href="#c3">C3</a></td><td>fleet の状態は 1 つ</td><td>Always</td><td>SQLite 1 file (host 列) / doctor / typed 状態 / Completion 1 enum</td><td>論点 8</td></tr>
+    <tr><td><a href="#c4">C4</a></td><td>大きさに上限</td><td>Always</td><td>行数・比率・関数粒度の lint deny / CI 実測 (§3)</td><td>論点 2</td></tr>
+    <tr><td><a href="#c5">C5</a></td><td>規則変更 = manifest diff + 裁定 id</td><td>Always</td><td>CI が裁定 id の無い rules 行 diff を落とす</td><td>論点 5</td></tr>
+    <tr><td><a href="#c6">C6</a></td><td>消費は害</td><td>Always</td><td>Budget は Precheck 経由でのみ生成 / 起動口 1 つ / append-only store</td><td>論点 11</td></tr>
+    <tr><td><a href="#c7">C7</a></td><td>planner が唯一の対話面</td><td>Always</td><td>relay 印だけを受理</td><td>SPEC §2 (裁定 id なし)</td></tr>
+    <tr><td><a href="#c8">C8</a></td><td>版 N+1 は版 N の下で作られる</td><td>Always</td><td>SelfDev enum / dispatch deny / doctor selfdev / bootstrap 4 状態</td><td>論点 9・SPEC §12</td></tr>
+    <tr><td><a href="#c9">C9</a></td><td>口座の連続性</td><td>Always</td><td>SeatState / Completion / migrate 1 本 / 型の前提条件</td><td>論点 8・U5</td></tr>
+    <tr><td><a href="#c10">C10</a></td><td>値の出所と効力は型で弁別する</td><td>Always</td><td>Declared / Measured / Derived / Effective の 4 型 / CI</td><td>論点 11・T11 / T13 / T15</td></tr>
+    <tr><td><a href="#c11">C11</a></td><td>失敗と極性は型で</td><td>Always</td><td>workspace lint deny / 境界 enum + 極性型 / build 時生成</td><td>論点 6</td></tr>
+    <tr><td><a href="#c12">C12</a></td><td>歯は Rust だけ・TDD</td><td>Always</td><td>1 framework / flip check / 変異検出線 / snapshot / property test</td><td>論点 7</td></tr>
+    <tr><td><a href="#c13">C13</a></td><td>compile と依存に予算</td><td>Always</td><td>許可リスト + 予算 / cargo deny / async なし / CI deny + 検出線 (§3)</td><td>論点 3・4</td></tr>
+    <tr><td><a href="#a1">A1</a></td><td>3 クラスの操作</td><td>Ask-first</td><td>relay 印 (C7)</td><td>SPEC §2 (裁定 id なし)</td></tr>
+    <tr><td><a href="#a2">A2</a></td><td>憲法条文の改訂と C4 / C13 の閾値変更</td><td>Ask-first</td><td>利益の grill 検証を前置 → user 裁定 (裁定 id)</td><td>論点 2</td></tr>
+    <tr><td><a href="#a3">A3</a></td><td>依存 OSS の追加・削除</td><td>Ask-first</td><td>C13 の手続き</td><td>SPEC §2 (裁定 id なし)・論点 3・4</td></tr>
+    <tr><td><a href="#a4">A4</a></td><td>自己開発の解禁</td><td>Ask-first</td><td>C8 の成熟条件の成立後に planner が 1 問 / user の go = relay 印</td><td>論点 9</td></tr>
+    <tr><td><a href="#n1">N1</a></td><td>rm による削除</td><td>Never</td><td>退役は可逆 move のみ</td><td>SPEC §2 (裁定 id なし)</td></tr>
+    <tr><td><a href="#n2">N2</a></td><td>規則を散文・memory・chat にだけ置く</td><td>Never</td><td>C1.2 の CI (手書き規範文 0 行) + C5</td><td>SPEC §2 (裁定 id なし)・論点 5</td></tr>
+    <tr><td><a href="#n3">N3</a></td><td>host 固有の分岐を code に焼く</td><td>Never</td><td>値は manifest (C10.2)</td><td>SPEC §2 (裁定 id なし)・論点 11</td></tr>
+    <tr><td><a href="#n4">N4</a></td><td>同じ版の中で憲法改訂・schema 非互換・C4 超え</td><td>Never</td><td>版 N+1 として別 repo へ (C8)</td><td>論点 9・SPEC §12.0</td></tr>
+  </tbody>
+</table>
+
+<section id="s2-1-always">
+<h3>§2.1 Always — いつも守る (C1〜C13)</h3>
+<p class="section-essence" data-audience="human">例外なく常に守る 13 条です。 規則・経路・状態を「1 つ」に閉じ、 大きさと消費と依存に予算を置き、 失敗と値の出所を型で扱い、 歯は Rust の test だけにします。</p>
+
+<section class="req" id="c1" data-audience="human">
+  <div class="req__card"><span class="badge badge--req">C1</span> <span class="req__ears req__ears--ubiquitous">Ubiquitous</span> <strong>規則はデータ</strong></div>
+  <p class="req__essence">規則の「種類」は閉じた型で、 「値」は repo 内の manifest 1 file に置きます。 人が読む説明は型と manifest から生成し、 手書きの規範文は 0 行です。 機械が実行時に読む規則はこの manifest 1 file だけです。</p>
+  <details class="req__machine" data-audience="machine">
+    <summary>normative (machine)</summary>
+    <div class="req__normative">
+      <p class="ears" data-ears-pattern="ubiquitous"><span class="ears-id">C1</span>: scribe2 <span class="ears-shall">SHALL</span> represent every rule kind as a variant of one closed type with a mandatory exhaustive check implementation, <span class="ears-shall">SHALL</span> keep every rule value (threshold, enabled flag, ruling id, ruling time, verbatim text) in exactly one manifest file inside the repository, <span class="ears-shall">SHALL</span> keep only runtime state in the database, and <span class="ears-shall">SHALL</span> read rules at run time only from that manifest.</p>
+      <p class="ears" data-ears-pattern="ubiquitous"><span class="ears-id">C1.2</span>: scribe2 <span class="ears-shall">SHALL</span> derive human-readable rule documentation from the rule type and the manifest, and <span class="ears-shall">SHALL</span> contain zero hand-written normative lines in that generated rule documentation.</p>
+      <dl>
+        <dt>機構 (型 / lint / CI)</dt>
+        <dd><code>enum RuleKind</code> + <code>trait Rule { fn check(&amp;self, ctx) -&gt; Verdict }</code> を網羅 match で実装必須 (未実装 = compile error)。 値は manifest 1 file (TOML・<code>schema_version</code>・未知 key 拒否・起動時 1 回読み)。 DB は実行時状態だけを持つ。 人間向け doc は enum の doc コメント + manifest からの <code>build.rs</code> 生成物。 CI は生成 doc 中の手書き規範文の行数を数え、 0 行でなければ落とす。</dd>
+        <dt>出所</dt><dd>論点 5</dd>
+      </dl>
+    </div>
+  </details>
+</section>
+
+<section class="req" id="c2" data-audience="human">
+  <div class="req__card"><span class="badge badge--req">C2</span> <span class="req__ears req__ears--ubiquitous">Ubiquitous</span> <strong>経路は 1 本・語彙は 1 つ・名前は 1 定数</strong></div>
+  <p class="req__essence">選定・除外・routing はそれぞれ 1 関数・1 enum で、 適用順は enum の並び順だけが決めます。 理由を足すときは enum に 1 値足すだけです。 設定は manifest 1 struct から読み、 env を直接読まず、 新しい env の口も作りません。 名前はすべて 1 つの定数から導きます。</p>
+  <details class="req__machine" data-audience="machine">
+    <summary>normative (machine)</summary>
+    <div class="req__normative">
+      <p class="ears" data-ears-pattern="ubiquitous"><span class="ears-id">C2</span>: scribe2 <span class="ears-shall">SHALL</span> implement selection, exclusion and routing each as exactly one function over exactly one enumeration, <span class="ears-shall">SHALL</span> take the application order solely from the declaration order of the stage enumeration, <span class="ears-shall">SHALL NOT</span> carry a prose note on ordering, and <span class="ears-shall">SHALL</span> express a new reason only as one new variant.</p>
+      <p class="ears" data-ears-pattern="ubiquitous"><span class="ears-id">C2.2</span>: scribe2 <span class="ears-shall">SHALL</span> read configuration only from the manifest structure, <span class="ears-shall">SHALL NOT</span> read environment variables directly, <span class="ears-shall">SHALL NOT</span> introduce a new environment seam, and <span class="ears-shall">SHALL</span> derive the plugin name, crate name, skill namespace, state directory, environment prefix and terminal-multiplexer server name from one NAME constant.</p>
+      <dl>
+        <dt>機構 (型 / lint / CI)</dt>
+        <dd>選定 / 除外 / routing = 各 1 関数 + 1 enum。 除外と適用順は宣言的で <code>enum Stage</code> の列挙順が唯一の適用順 (「適用点は X の後」の散文注記を持たない)。 設定 = manifest 1 struct・env 直読禁止・env seam を新設しない。 plugin 名 / crate / skill 名前空間 / state dir / env 接頭辞 / tmux server 名は <code>NAME</code> 1 定数から導出。</dd>
+        <dt>出所</dt><dd>論点 8・SPEC §7</dd>
+      </dl>
+    </div>
+  </details>
+</section>
+
+<section class="req" id="c3" data-audience="human">
+  <div class="req__card"><span class="badge badge--req">C3</span> <span class="req__ears req__ears--ubiquitous">Ubiquitous</span> <strong>fleet の状態は 1 つ</strong></div>
+  <p class="req__essence">host / 口座 / 席 / lease / 退役は 1 つの DB file (host 列付き) に置き、 host ごとの dir や TSV や cache に真実を置きません。 doctor 1 コマンドが全 host の版・口座・退役を照合します。 状態は型で運び、 端末の見た目や自由文を判定に使いません。 完了条件は 1 つの enum だけで表し、 待つ処理も 1 実装だけで、 その場限りの判定条件を書ける口は作りません。</p>
+  <details class="req__machine" data-audience="machine">
+    <summary>normative (machine)</summary>
+    <div class="req__normative">
+      <p class="ears" data-ears-pattern="ubiquitous"><span class="ears-id">C3</span>: scribe2 <span class="ears-shall">SHALL</span> keep the state of hosts, accounts, seats, leases and retirements in exactly one database file carrying a host column, and <span class="ears-shall">SHALL NOT</span> place truth in per-host directories, TSV files or caches.</p>
+      <p class="ears" data-ears-pattern="ubiquitous"><span class="ears-id">C3.2</span>: scribe2 <span class="ears-shall">SHALL</span> provide one doctor command that reconciles version, accounts and retirements across all hosts.</p>
+      <p class="ears" data-ears-pattern="ubiquitous"><span class="ears-id">C3.3</span>: scribe2 <span class="ears-shall">SHALL</span> carry seat state as a typed enumeration, and <span class="ears-shall">SHALL NOT</span> use terminal rendering or free text as judgment input.</p>
+      <p class="ears" data-ears-pattern="ubiquitous"><span class="ears-id">C3.4</span>: scribe2 <span class="ears-shall">SHALL</span> express completion conditions only as values of one completion enumeration, and <span class="ears-shall">SHALL</span> provide exactly one wait implementation that accepts only those values, and <span class="ears-shall">SHALL NOT</span> expose a wait entry point that takes an arbitrary predicate.</p>
+      <dl>
+        <dt>機構 (型 / lint / CI)</dt>
+        <dd>SQLite 1 file (host 列)。 <code>doctor</code> 1 コマンドが全 host の版・口座・退役を照合。 状態は <code>enum SeatState</code> で運ぶ。 完了条件は <code>enum Completion</code> の値でのみ表現でき、 待機 API は 1 実装 (引数型が <code>Completion</code> に閉じており、 その場で述語を書ける口を作らない)。</dd>
+        <dt>出所</dt><dd>論点 8</dd>
+      </dl>
+    </div>
+  </details>
+</section>
+
+<section class="req" id="c4" data-audience="human">
+  <div class="req__card"><span class="badge badge--req">C4</span> <span class="req__ears req__ears--ubiquitous">Ubiquitous</span> <strong>大きさに上限</strong></div>
+  <p class="req__essence">core・module・test の大きさと関数の粒度に上限を置き、 CI が実測します。 粒度の lint は <code>#[allow]</code> で黙らせられません。 上限の変更は A2 (利益の grill 検証を前置した user 裁定) でだけ行います。 判断に迷うときは「歯を足す」より「compiler に検査させる」を先に選びます。</p>
+  <details class="req__machine" data-audience="machine">
+    <summary>normative (machine)</summary>
+    <div class="req__normative">
+      <p class="ears" data-ears-pattern="ubiquitous"><span class="ears-id">C4</span>: scribe2 <span class="ears-shall">SHALL</span> enforce upper bounds on core size (<a href="#r-c4-1">R-C4-1</a>), module size (<a href="#r-c4-2">R-C4-2</a>), the test-to-source line ratio (<a href="#r-c4-3">R-C4-3</a>) and function granularity (<a href="#r-c4-4">R-C4-4</a>) as CI-measured deny gates, <span class="ears-shall">SHALL NOT</span> silence a granularity lint with an allow attribute, and <span class="ears-shall">SHALL</span> change any such bound only through A2.</p>
+      <dl>
+        <dt>機構 (型 / lint / CI)</dt>
+        <dd>閾値 = §3 <a href="#r-c4-1">R-C4-1</a> (core 総行数) / <a href="#r-c4-2">R-C4-2</a> (1 module 行数) / <a href="#r-c4-3">R-C4-3</a> (test:src 行数比) / <a href="#r-c4-4">R-C4-4</a> (関数粒度 lint = 関数行数・複雑度・引数数)。 関数粒度 lint は deny で <code>#[allow]</code> による黙殺禁止。 CI が実測する。 判断規則 (A2 の審査観点): 「歯を足す」より「compiler に検査させる」を先に選ぶ。</dd>
+        <dt>出所</dt><dd>論点 2</dd>
+      </dl>
+    </div>
+  </details>
+</section>
+
+<section class="req" id="c5" data-audience="human">
+  <div class="req__card"><span class="badge badge--req">C5</span> <span class="req__ears req__ears--unwanted">Unwanted</span> <strong>規則変更 = manifest diff + 裁定 id</strong></div>
+  <p class="req__essence">rules 行の追加や変更は、 user の裁定 id が付いていなければ merge できません。 CI が「裁定 id の無い rules 行の diff」を落とします。</p>
+  <details class="req__machine" data-audience="machine">
+    <summary>normative (machine)</summary>
+    <div class="req__normative">
+      <p class="ears" data-ears-pattern="unwanted"><span class="ears-id">C5</span>: <span class="ears-if">IF a change adds or modifies a rules row without an accompanying user ruling id</span>, THEN scribe2 CI <span class="ears-shall">SHALL</span> reject the change.</p>
+      <dl>
+        <dt>機構 (型 / lint / CI)</dt>
+        <dd>rules 行の diff を CI が検査し、 裁定 id (ts) の無い diff を落とす。 裁定 id と裁定時刻は rules 行の値の一部 (C1)。 帰結として AI が場当たりで規則を生やすことはできない。</dd>
+        <dt>出所</dt><dd>論点 5</dd>
+      </dl>
+    </div>
+  </details>
+</section>
+
+<section class="req" id="c6" data-audience="human">
+  <div class="req__card"><span class="badge badge--req">C6</span> <span class="req__ears req__ears--ubiquitous">Ubiquitous</span> <strong>消費は害</strong></div>
+  <p class="req__essence">Budget は Precheck の実測を使ってしか作れず、 起動口は Budget を受け取る 1 関数だけなので、 見積なしの起動は型の上で不可能です。 1 run の token 上限と検出線は rules 行に置き、 上限を超えたら人手を介さず止めます。 計測は 1 つの追記専用 store に残します。</p>
+  <details class="req__machine" data-audience="machine">
+    <summary>normative (machine)</summary>
+    <div class="req__normative">
+      <p class="ears" data-ears-pattern="ubiquitous"><span class="ears-id">C6</span>: scribe2 <span class="ears-shall">SHALL</span> make a Budget constructible only by consuming a Precheck measurement, and <span class="ears-shall">SHALL</span> expose exactly one spawn entry point, which requires a Budget.</p>
+      <p class="ears" data-ears-pattern="unwanted"><span class="ears-id">C6.2</span>: <span class="ears-if">IF a run exceeds the per-run token ceiling (<a href="#r-c6-1">R-C6-1</a>)</span>, THEN scribe2 <span class="ears-shall">SHALL</span> stop the run without manual intervention.</p>
+      <p class="ears" data-ears-pattern="ubiquitous"><span class="ears-id">C6.3</span>: scribe2 <span class="ears-shall">SHALL</span> record consumption in exactly one append-only store.</p>
+      <dl>
+        <dt>機構 (型 / lint / CI)</dt>
+        <dd><code>Budget</code> は <code>Precheck</code> の実測を消費してしか作れず、 <code>fn spawn(budget: Budget)</code> が唯一の起動口 (帰結: 見積なしの起動は型で不能)。 計測は append-only store 1 つ。 上限と検出線の値は §3 <a href="#r-c6-1">R-C6-1</a>。 C10 (値の出所を型で弁別) の応用。</dd>
+        <dt>出所</dt><dd>論点 11</dd>
+      </dl>
+    </div>
+  </details>
+</section>
+
+<section class="req" id="c7" data-audience="human">
+  <div class="req__card"><span class="badge badge--req">C7</span> <span class="req__ears req__ears--ubiquitous">Ubiquitous</span> <strong>planner が唯一の対話面</strong></div>
+  <p class="req__essence">user の承認は planner を通った relay 印だけを機械が受け取ります。 他の経路で来た「承認」は承認として扱いません。</p>
+  <details class="req__machine" data-audience="machine">
+    <summary>normative (machine)</summary>
+    <div class="req__normative">
+      <p class="ears" data-ears-pattern="ubiquitous"><span class="ears-id">C7</span>: scribe2 <span class="ears-shall">SHALL</span> accept a user approval only as a relay stamp issued through the planner.</p>
+      <dl>
+        <dt>機構 (型 / lint / CI)</dt>
+        <dd>承認 = planner 発行の relay 印のみを機械が受理する。 A1 / A2 / A3 / A4 の承認はすべてこの経路を通る。</dd>
+        <dt>出所</dt><dd>SPEC §2 (裁定 id なし)</dd>
+      </dl>
+    </div>
+  </details>
+</section>
+
+<section class="req" id="c8" data-audience="human">
+  <div class="req__card"><span class="badge badge--req">C8</span> <span class="req__ears req__ears--ubiquitous">Ubiquitous</span> <strong>版 N+1 は版 N の下で作られる</strong></div>
+  <p class="req__essence">器が自分自身を開発できるのは「成熟した版」だけです。 成熟の宣言は §3 の成熟条件がすべて成り立つことを機械が測り、 裁定 id を付けて行います。 自己開発が解禁されていない間は、 自分の repo への dispatch を拒みます。 立ち上げは 4 つの状態 (段 0 / 段 1 / 段 1-test / 段 2) を持ち、 機械が塞ぐのは最後の段 2 だけです。</p>
+  <details class="req__machine" data-audience="machine">
+    <summary>normative (machine)</summary>
+    <div class="req__normative">
+      <p class="ears" data-ears-pattern="ubiquitous"><span class="ears-id">C8</span>: scribe2 <span class="ears-shall">SHALL</span> permit self-development only for a version declared mature.</p>
+      <p class="ears" data-ears-pattern="state-driven"><span class="ears-id">C8.2</span>: <span class="ears-while">WHILE self-development is not enabled with a ruling id</span>, scribe2 <span class="ears-shall">SHALL</span> deny a dispatch onto its own repository anchor.</p>
+      <p class="ears" data-ears-pattern="ubiquitous"><span class="ears-id">C8.3</span>: scribe2 <span class="ears-shall">SHALL</span> expose the maturity conditions as measured values through the doctor command.</p>
+      <p class="ears" data-ears-pattern="ubiquitous"><span class="ears-id">C8.4</span>: scribe2 <span class="ears-shall">SHALL</span> attach a ruling id to every maturity declaration, and <span class="ears-shall">SHALL</span> base every maturity declaration on all maturity conditions defined in <a href="#r-c8-1">R-C8-1</a> holding at once.</p>
+      <dl>
+        <dt>機構 (型 / lint / CI)</dt>
+        <dd><code>enum SelfDev { Disabled, Enabled { ruling_id } }</code>。 dispatch は自 repo anchor を <code>Enabled</code> 以外で deny。 <code>doctor selfdev</code> が成熟条件を <code>Measured&lt;T&gt;</code> で出す。 bootstrap は 4 つの状態を持つ: 段 0 = v1 が v1 を自己開発 ／ 段 1 = v2 repo に v1 plugin の planner / admin を置いて v2 を開発 ／ 段 1-test = v2 repo 外の test project に v2 plugin を置いて試運転 ／ 段 2 = 成熟 + go の後に v2 repo 内の席を v2 plugin へ替えて自己開発。 deny が塞ぐのは段 2 だけ。 成熟条件の値は §3 <a href="#r-c8-1">R-C8-1</a>。</dd>
+        <dt>出所</dt><dd>論点 9・SPEC §12</dd>
+      </dl>
+    </div>
+  </details>
+</section>
+
+<section class="req" id="c9" data-audience="human">
+  <div class="req__card"><span class="badge badge--req">C9</span> <span class="req__ears req__ears--event">Event-Driven</span> <strong>口座の連続性</strong></div>
+  <p class="req__essence">不変量は 2 本だけです: 「席の停止は人手を介さず検知し、 作業は resume され、 成果は失われない」 「口座は枠の終わりまで使い切る」。 数値と選定規則は rules 行に置きます。</p>
+  <details class="req__machine" data-audience="machine">
+    <summary>normative (machine)</summary>
+    <div class="req__normative">
+      <p class="ears" data-ears-pattern="event-driven"><span class="ears-id">C9</span>: <span class="ears-when">WHEN a seat stops</span>, scribe2 <span class="ears-shall">SHALL</span> detect the stop without manual intervention, <span class="ears-shall">SHALL</span> resume the seat's work, and <span class="ears-shall">SHALL</span> preserve its results.</p>
+      <p class="ears" data-ears-pattern="ubiquitous"><span class="ears-id">C9.2</span>: scribe2 <span class="ears-shall">SHALL</span> consume each account until the end of its allowance window, following the selection rules of <a href="#r-c9-1">R-C9-1</a>.</p>
+      <dl>
+        <dt>機構 (型 / lint / CI)</dt>
+        <dd><code>enum SeatState</code> (T8)・<code>enum Completion</code> の 1 実装 (T7)・<code>fn migrate(seat, budget) -&gt; Outcome</code> 1 本。 管理席の再起動は「記憶退避済み」を型の前提条件に持つ。 数値と選定規則 (新規投入の線・移住 lane の扱い・消費計画・管理席 watchdog の検知条件と再起動先) は §3 <a href="#r-c9-1">R-C9-1</a> の rules 行に持たせる。</dd>
+        <dt>出所</dt><dd>論点 8・U5</dd>
+      </dl>
+    </div>
+  </details>
+</section>
+
+<section class="req" id="c10" data-audience="human">
+  <div class="req__card"><span class="badge badge--req">C10</span> <span class="req__ears req__ears--ubiquitous">Ubiquitous</span> <strong>値の出所と効力は型で弁別する</strong></div>
+  <p class="req__essence">人が書いた宣言値・出所付きの実測値・導出値・効力を持つ値を、 別々の型で運びます。 宣言値は実測を経てはじめて効力を持ち、 配線されていない設定は CI が落とします。 host 固有の値は manifest 以外に置けず、 report は生成物だけで、 手書きの「verified」は書けません。</p>
+  <details class="req__machine" data-audience="machine">
+    <summary>normative (machine)</summary>
+    <div class="req__normative">
+      <p class="ears" data-ears-pattern="ubiquitous"><span class="ears-id">C10</span>: scribe2 <span class="ears-shall">SHALL</span> distinguish declared values, measured values with provenance, derived values and effective values by type, and <span class="ears-shall">SHALL</span> promote a declared value to effective only through a measurement.</p>
+      <p class="ears" data-ears-pattern="ubiquitous"><span class="ears-id">C10.2</span>: scribe2 <span class="ears-shall">SHALL</span> keep host-specific values only in the manifest, <span class="ears-shall">SHALL</span> produce reports and listings only as generated artifacts, and <span class="ears-shall">SHALL NOT</span> accept a hand-written verified status.</p>
+      <p class="ears" data-ears-pattern="ubiquitous"><span class="ears-id">C10.3</span>: scribe2 CI <span class="ears-shall">SHALL</span> reject unwired configuration.</p>
+      <dl>
+        <dt>機構 (型 / lint / CI)</dt>
+        <dd><code>Declared&lt;T&gt;</code> (人が書いた宣言値) ／ <code>Measured&lt;T&gt;{value, source: Provenance}</code> (実測・出所付き) ／ <code>Derived&lt;T&gt;</code> (導出値・<code>Independent</code> を名乗れない型) ／ <code>Effective&lt;T&gt;</code> (<code>Declared</code> から実測を経てのみ格上げ)。 未 wire の設定は CI が落とす。 host 固有値は manifest 1 file 以外に置けない。</dd>
+        <dt>出所</dt><dd>論点 11・T11 / T13 / T15</dd>
+      </dl>
+    </div>
+  </details>
+</section>
+
+<section class="req" id="c11" data-audience="human">
+  <div class="req__card"><span class="badge badge--req">C11</span> <span class="req__ears req__ears--ubiquitous">Ubiquitous</span> <strong>失敗と極性は型で</strong></div>
+  <p class="req__essence">panic 系や unwrap 系、 標準出力への直書きなどを lint で deny し、 unsafe は forbid します。 例外は理由を書いた <code>#[expect]</code> のときだけ認めます。 失敗は境界ごとの enum で表し、 開く (FailOpen) か閉じる (FailClosed) かの極性を型に持たせ、 全 guard の極性一覧を build 時に生成します。 timeout は Result にして呼び出し側に分岐を強制し、 core では型の無い error を使いません。</p>
+  <details class="req__machine" data-audience="machine">
+    <summary>normative (machine)</summary>
+    <div class="req__normative">
+      <p class="ears" data-ears-pattern="ubiquitous"><span class="ears-id">C11</span>: scribe2 <span class="ears-shall">SHALL</span> deny by workspace lint the use of unwrap, expect, panic, todo, unimplemented, unreachable, process exit, slice indexing, debug macros and direct stdout / stderr printing, <span class="ears-shall">SHALL</span> deny unused must-use values, <span class="ears-shall">SHALL</span> forbid unsafe code, and <span class="ears-shall">SHALL</span> allow a lint exception only through an expect attribute carrying a written reason, apart from the test-scope exceptions declared in the lint configuration.</p>
+      <p class="ears" data-ears-pattern="ubiquitous"><span class="ears-id">C11.2</span>: scribe2 <span class="ears-shall">SHALL</span> model failures as one enumeration per boundary carrying a FailOpen / FailClosed polarity type, and <span class="ears-shall">SHALL</span> generate the polarity list of all guards at build time.</p>
+      <p class="ears" data-ears-pattern="ubiquitous"><span class="ears-id">C11.3</span>: scribe2 <span class="ears-shall">SHALL</span> model a timeout as a Result that forces the caller to branch, and <span class="ears-shall">SHALL NOT</span> use an untyped error type in core.</p>
+      <dl>
+        <dt>機構 (型 / lint / CI)</dt>
+        <dd><code>[workspace.lints]</code> で <code>unwrap_used / expect_used / panic / todo / unimplemented / unreachable / exit / indexing_slicing / dbg_macro / print_stdout / print_stderr</code> を deny・<code>unused_must_use</code> deny・<code>unsafe_code = forbid</code> (test の例外は <code>clippy.toml</code> の <code>allow-*-in-tests</code>)。 失敗は境界ごとの enum (<code>thiserror</code>・許可リスト内) で極性 <code>FailOpen / FailClosed</code> を型に持ち、 全 guard の極性一覧を build 時に生成 (T12)。 timeout は <code>Result&lt;Verdict, Timeout&gt;</code>。 core での <code>anyhow</code> 禁止。 例外は <code>#[expect(lint, reason = "…")]</code> のみ。</dd>
+        <dt>出所</dt><dd>論点 6</dd>
+      </dl>
+    </div>
+  </details>
+</section>
+
+<section class="req" id="c12" data-audience="human">
+  <div class="req__card"><span class="badge badge--req">C12</span> <span class="req__ears req__ears--ubiquitous">Ubiquitous</span> <strong>歯は Rust だけ・TDD</strong></div>
+  <p class="req__essence">test は Rust の 1 framework だけで、 bash / bats は全廃します。 すべての変更は先に落ちる test から始まり、 CI の flip check がそれを機械で確かめます (test 差分の無い PR は docs-only を除いて拒みます)。 変異検査は検出線、 外形は snapshot、 case 量産は property test で担い、 KNOWN-RED 台帳は持たず main は常に GREEN です。</p>
+  <details class="req__machine" data-audience="machine">
+    <summary>normative (machine)</summary>
+    <div class="req__normative">
+      <p class="ears" data-ears-pattern="ubiquitous"><span class="ears-id">C12</span>: scribe2 <span class="ears-shall">SHALL</span> use exactly one test framework (Rust native tests), and <span class="ears-shall">SHALL NOT</span> keep shell-based tests.</p>
+      <p class="ears" data-ears-pattern="ubiquitous"><span class="ears-id">C12.2</span>: scribe2 CI <span class="ears-shall">SHALL</span> verify by a flip check that every change starts from a failing test: the test diff of the PR applied alone to base fails at least one new or changed test, and HEAD passes.</p>
+      <p class="ears" data-ears-pattern="unwanted"><span class="ears-id">C12.3</span>: <span class="ears-if">IF a PR carries no test diff and is not classified docs-only</span>, THEN scribe2 CI <span class="ears-shall">SHALL</span> reject the PR.</p>
+      <p class="ears" data-ears-pattern="ubiquitous"><span class="ears-id">C12.4</span>: scribe2 <span class="ears-shall">SHALL</span> record mutation survival as a detection line (<a href="#r-c12-1">R-C12-1</a>), <span class="ears-shall">SHALL NOT</span> hand-write mutation controls, and <span class="ears-shall">SHALL</span> promote that detection line to a deny gate only through a user ruling carrying a ruling id (C5).</p>
+      <p class="ears" data-ears-pattern="ubiquitous"><span class="ears-id">C12.5</span>: scribe2 <span class="ears-shall">SHALL</span> snapshot external form (CLI output, generated documentation, polarity list), and <span class="ears-shall">SHALL</span> reject unreferenced snapshots.</p>
+      <p class="ears" data-ears-pattern="ubiquitous"><span class="ears-id">C12.6</span>: scribe2 <span class="ears-shall">SHALL NOT</span> keep a known-red ledger, and <span class="ears-shall">SHALL</span> keep the main branch green at all times.</p>
+      <p class="ears" data-ears-pattern="ubiquitous"><span class="ears-id">C12.7</span>: scribe2 <span class="ears-shall">SHALL</span> mass-produce test cases by property testing.</p>
+      <dl>
+        <dt>機構 (型 / lint / CI)</dt>
+        <dd><code>#[test]</code> + nextest の 1 framework・bash / bats 全廃。 flip check = CI が PR の test 差分だけを base に当てて RED (新規・変更 test が 1 本以上落ちる) ∧ HEAD で GREEN。 test 差分の無い PR は reject (docs-only は分類で除外)。 非空虚性は cargo-mutants の検出線 (§3 <a href="#r-c12-1">R-C12-1</a>)・変異対照を手書きしない。 外形 (CLI 出力・生成 doc・極性一覧) は insta snapshot + <code>--unreferenced reject</code>。 KNOWN-RED 台帳を持たない (RED は同じ PR で直すか test を消す)。 case 量産は proptest。</dd>
+        <dt>出所</dt><dd>論点 7</dd>
+      </dl>
+    </div>
+  </details>
+</section>
+
+<section class="req" id="c13" data-audience="human">
+  <div class="req__card"><span class="badge badge--req">C13</span> <span class="req__ears req__ears--ubiquitous">Ubiquitous</span> <strong>compile と依存に予算</strong></div>
+  <p class="req__essence">依存は許可リストと予算で管理し、 追加は予算の範囲で user 確認つき・compile 時間の実測差を添えます。 derive は境界 crate に閉じ、 full feature は使わず、 重複版・脆弱性・license は cargo deny が CI で見ます。 core は async を持ちません。 compile 時間のうち決定論的に決まる形は CI が deny し、 秒数は検出線として記録して悪化時に自動起票します。</p>
+  <details class="req__machine" data-audience="machine">
+    <summary>normative (machine)</summary>
+    <div class="req__normative">
+      <p class="ears" data-ears-pattern="ubiquitous"><span class="ears-id">C13</span>: scribe2 <span class="ears-shall">SHALL</span> manage dependencies by an allow-list with a budget (<a href="#r-c13-1">R-C13-1</a>), and <span class="ears-shall">SHALL</span> add dependencies only within the per-PR budget of R-C13-1, with user approval (A3) and a recorded incremental compile-time delta.</p>
+      <p class="ears" data-ears-pattern="ubiquitous"><span class="ears-id">C13.2</span>: scribe2 <span class="ears-shall">SHALL</span> confine derive macros to boundary crates, <span class="ears-shall">SHALL NOT</span> enable full feature sets, and <span class="ears-shall">SHALL</span> audit dependencies (duplicate versions, vulnerabilities, licenses) in CI.</p>
+      <p class="ears" data-ears-pattern="ubiquitous"><span class="ears-id">C13.3</span>: scribe2 <span class="ears-shall">SHALL NOT</span> use async in core.</p>
+      <p class="ears" data-ears-pattern="ubiquitous"><span class="ears-id">C13.4</span>: scribe2 CI <span class="ears-shall">SHALL</span> deny only the deterministic shape constraints of compile time (<a href="#r-c13-2">R-C13-2</a>).</p>
+      <p class="ears" data-ears-pattern="ubiquitous"><span class="ears-id">C13.5</span>: scribe2 <span class="ears-shall">SHALL</span> treat compile-time seconds as detection lines recorded at the interval defined in <a href="#r-c13-3">R-C13-3</a>, <span class="ears-shall">SHALL</span> file an issue automatically on regression beyond that line, and <span class="ears-shall">SHALL NOT</span> block a PR on those lines.</p>
+      <dl>
+        <dt>機構 (型 / lint / CI)</dt>
+        <dd>依存 = 許可リスト + 予算 (§3 <a href="#r-c13-1">R-C13-1</a>)。 derive は境界 crate に閉じる・<code>full</code> feature 禁止・<code>cargo deny</code> (重複版 / 脆弱性 / license) を CI に。 core は async を持たない (<code>std::thread</code> + channel・tokio 却下)。 compile は CI deny が決定論の形だけ (§3 <a href="#r-c13-2">R-C13-2</a>: profile の debug 設定・統合 test file 数・runner nextest・proc-macro 展開後比率・critical path 上の crate 分割)。 秒数は検出線 (§3 <a href="#r-c13-3">R-C13-3</a>: hyperfine 記録・悪化で原因 crate を名指しした issue を自動起票・PR は止めない)。 閾値は C4 と同じ扱い (A2)。</dd>
+        <dt>出所</dt><dd>論点 3・4</dd>
+      </dl>
+    </div>
+  </details>
+</section>
+</section>
+
+<section id="s2-2-askfirst">
+<h3>§2.2 Ask-first — 変える前に user に確認 (A1〜A4)</h3>
+<p class="section-essence" data-audience="human">勝手に変えず、 必ず user に確認してから行う 4 条です。 確認の経路は C7 の planner 経由の relay 印だけです。</p>
+
+<section class="req" id="a1" data-audience="human">
+  <div class="req__card"><span class="badge badge--req">A1</span> <span class="req__ears req__ears--event">Event-Driven</span> <strong>3 クラスの操作</strong></div>
+  <p class="req__essence">「消す / 出す / 使う」の 3 クラスに当たる操作は、 実行前に user の承認 (relay 印) を取ります。</p>
+  <details class="req__machine" data-audience="machine">
+    <summary>normative (machine)</summary>
+    <div class="req__normative">
+      <p class="ears" data-ears-pattern="event-driven"><span class="ears-id">A1</span>: <span class="ears-when">WHEN an operation of one of the three classes (delete, send out, consume) is about to be performed</span>, scribe2 <span class="ears-shall">SHALL</span> obtain the user's approval as a relay stamp through the planner before performing it.</p>
+      <dl>
+        <dt>機構 (型 / lint / CI)</dt><dd>承認は relay 印 (C7) のみ。 3 クラスの定義は vocabulary (消す / 出す / 使う)。</dd>
+        <dt>出所</dt><dd>SPEC §2 (裁定 id なし)</dd>
+      </dl>
+    </div>
+  </details>
+</section>
+
+<section class="req" id="a2" data-audience="human">
+  <div class="req__card"><span class="badge badge--req">A2</span> <span class="req__ears req__ears--event">Event-Driven</span> <strong>憲法条文の改訂と C4 / C13 の閾値変更</strong></div>
+  <p class="req__essence">条文を変えるときも、 C4 / C13 の閾値を変えるときも、 先に「その変更で何が良くなるか」を grill で検証し、 そのうえで user が裁定します。 裁定には裁定 id が付きます。 この手続きの正本は本条です。</p>
+  <details class="req__machine" data-audience="machine">
+    <summary>normative (machine)</summary>
+    <div class="req__normative">
+      <p class="ears" data-ears-pattern="event-driven"><span class="ears-id">A2</span>: <span class="ears-when">WHEN an amendment to a constitution article or a change to a threshold governed by C4 or C13 is proposed</span>, scribe2 <span class="ears-shall">SHALL</span> first perform a grill verification of the claimed benefit, and <span class="ears-shall">SHALL</span> obtain a user ruling (carrying a ruling id) before applying the change.</p>
+      <dl>
+        <dt>機構 (型 / lint / CI)</dt><dd>閾値変更 = rules 行の diff + 裁定 id (C5 が CI で強制)。 条文の改訂は同じ版の中では行わない (N4) ため版 N+1 で行う。 手続きの流れは §4 (正本は本条・C5・N4)。</dd>
+        <dt>出所</dt><dd>論点 2</dd>
+      </dl>
+    </div>
+  </details>
+</section>
+
+<section class="req" id="a3" data-audience="human">
+  <div class="req__card"><span class="badge badge--req">A3</span> <span class="req__ears req__ears--event">Event-Driven</span> <strong>依存 OSS の追加・削除</strong></div>
+  <p class="req__essence">OSS 依存を足すときも外すときも user に確認し、 C13 の手続き (予算の範囲・compile 時間の実測差を記す) を踏みます。</p>
+  <details class="req__machine" data-audience="machine">
+    <summary>normative (machine)</summary>
+    <div class="req__normative">
+      <p class="ears" data-ears-pattern="event-driven"><span class="ears-id">A3</span>: <span class="ears-when">WHEN an OSS dependency is to be added or removed</span>, scribe2 <span class="ears-shall">SHALL</span> obtain the user's approval as a relay stamp through the planner first, and <span class="ears-shall">SHALL</span> follow the C13 procedure (C13, <a href="#r-c13-1">R-C13-1</a>).</p>
+      <dl>
+        <dt>機構 (型 / lint / CI)</dt><dd>C13 の許可リスト + 予算 (§3 <a href="#r-c13-1">R-C13-1</a>) と <code>cargo deny</code>。 day-1 optional adapter (rtk / graphify) の採用も本条の対象。</dd>
+        <dt>出所</dt><dd>SPEC §2 (裁定 id なし)・論点 3・4</dd>
+      </dl>
+    </div>
+  </details>
+</section>
+
+<section class="req" id="a4" data-audience="human">
+  <div class="req__card"><span class="badge badge--req">A4</span> <span class="req__ears req__ears--event">Event-Driven</span> <strong>自己開発の解禁</strong></div>
+  <p class="req__essence">C8 の成熟条件がすべて成り立ったら、 planner が user に 1 問だけ聞きます。 解禁は user の go を relay 印として受け取ったときだけです。</p>
+  <details class="req__machine" data-audience="machine">
+    <summary>normative (machine)</summary>
+    <div class="req__normative">
+      <p class="ears" data-ears-pattern="event-driven"><span class="ears-id">A4</span>: <span class="ears-when">WHEN all maturity conditions of <a href="#r-c8-1">R-C8-1</a> hold at once</span>, the planner <span class="ears-shall">SHALL</span> ask the user exactly one question.</p>
+      <p class="ears" data-ears-pattern="ubiquitous"><span class="ears-id">A4.2</span>: scribe2 <span class="ears-shall">SHALL</span> enable self-development only on the user's go carried as a relay stamp.</p>
+      <dl>
+        <dt>機構 (型 / lint / CI)</dt><dd><code>enum SelfDev</code> を <code>Enabled { ruling_id }</code> に遷移させるのは relay 印付きの go だけ (C8 / C7)。</dd>
+        <dt>出所</dt><dd>論点 9</dd>
+      </dl>
+    </div>
+  </details>
+</section>
+</section>
+
+<section id="s2-3-never">
+<h3>§2.3 Never — 絶対にやらない (N1〜N4)</h3>
+<p class="section-essence" data-audience="human">例外を認めない 4 条です。 いずれも「やろうとしたら機械が拒む」形で守ります。</p>
+
+<section class="req" id="n1" data-audience="human">
+  <div class="req__card"><span class="badge badge--req">N1</span> <span class="req__ears req__ears--unwanted">Unwanted</span> <strong>rm による削除</strong></div>
+  <p class="req__essence">元に戻せない削除はしません。 消す必要が出たら、 退役として可逆な move で行います。</p>
+  <details class="req__machine" data-audience="machine">
+    <summary>normative (machine)</summary>
+    <div class="req__normative">
+      <p class="ears" data-ears-pattern="unwanted"><span class="ears-id">N1</span>: <span class="ears-if">IF an operation would irrecoverably delete any object managed by scribe2</span>, THEN scribe2 <span class="ears-shall">SHALL</span> reject the operation.</p>
+      <p class="ears" data-ears-pattern="ubiquitous"><span class="ears-id">N1.2</span>: scribe2 <span class="ears-shall">SHALL</span> perform any retirement only as a reversible move.</p>
+      <dl>
+        <dt>機構 (型 / lint / CI)</dt><dd>退役 = 可逆 move の 1 経路 (C2)。 (導出) 削除経路を実装しない。</dd>
+        <dt>出所</dt><dd>SPEC §2 (裁定 id なし)</dd>
+      </dl>
+    </div>
+  </details>
+</section>
+
+<section class="req" id="n2" data-audience="human">
+  <div class="req__card"><span class="badge badge--req">N2</span> <span class="req__ears req__ears--unwanted">Unwanted</span> <strong>規則を散文・memory・chat にだけ置く</strong></div>
+  <p class="req__essence">文章・記憶・会話の中にしか無い「規則」は規則として扱いません。 そういう変更は CI が落とします。</p>
+  <details class="req__machine" data-audience="machine">
+    <summary>normative (machine)</summary>
+    <div class="req__normative">
+      <p class="ears" data-ears-pattern="unwanted"><span class="ears-id">N2</span>: <span class="ears-if">IF a change would introduce a rule that exists only in prose, memory or chat</span>, THEN scribe2 <span class="ears-shall">SHALL NOT</span> treat it as a rule, and scribe2 CI <span class="ears-shall">SHALL</span> reject the change (C1.2: hand-written normative lines are zero).</p>
+      <dl>
+        <dt>機構 (型 / lint / CI)</dt><dd>C1.2 の CI (生成 doc 中の手書き規範文の行数 = 0) と C5 (裁定 id 無しの rules 行 diff を落とす)。</dd>
+        <dt>出所</dt><dd>SPEC §2 (裁定 id なし)・論点 5</dd>
+      </dl>
+    </div>
+  </details>
+</section>
+
+<section class="req" id="n3" data-audience="human">
+  <div class="req__card"><span class="badge badge--req">N3</span> <span class="req__ears req__ears--unwanted">Unwanted</span> <strong>host 固有の分岐を code に焼く</strong></div>
+  <p class="req__essence">「この host なら」の分岐を code に書きません。 host ごとの値は manifest に置きます (C10)。</p>
+  <details class="req__machine" data-audience="machine">
+    <summary>normative (machine)</summary>
+    <div class="req__normative">
+      <p class="ears" data-ears-pattern="unwanted"><span class="ears-id">N3</span>: <span class="ears-if">IF code would branch on a host-specific value</span>, THEN scribe2 <span class="ears-shall">SHALL</span> reject the change.</p>
+      <dl>
+        <dt>機構 (型 / lint / CI)</dt><dd>host 固有値は manifest 1 file 以外に置けない (C10.2)。 (導出) 検査は C10.2 の未 wire 設定 CI 検査を host 固有値へ拡張する形で行う。</dd>
+        <dt>出所</dt><dd>SPEC §2 (裁定 id なし)・論点 11</dd>
+      </dl>
+    </div>
+  </details>
+</section>
+
+<section class="req" id="n4" data-audience="human">
+  <div class="req__card"><span class="badge badge--req">N4</span> <span class="req__ears req__ears--unwanted">Unwanted</span> <strong>同じ版の中で憲法改訂・schema 非互換・C4 超えをしない</strong></div>
+  <p class="req__essence">今の版の中で憲法を書き換えたり、 schema を壊したり、 C4 の上限を超えたりする変更は拒みます。 そうした変更は版 N+1 として別 repo で行います。</p>
+  <details class="req__machine" data-audience="machine">
+    <summary>normative (machine)</summary>
+    <div class="req__normative">
+      <p class="ears" data-ears-pattern="unwanted"><span class="ears-id">N4</span>: <span class="ears-if">IF a change inside the current version would amend the constitution, break schema compatibility or exceed a C4 bound</span>, THEN scribe2 <span class="ears-shall">SHALL</span> reject the change in the current version.</p>
+      <p class="ears" data-ears-pattern="ubiquitous"><span class="ears-id">N4.2</span>: scribe2 <span class="ears-shall">SHALL</span> carry out constitution amendments, schema-incompatible changes and changes that would exceed a C4 bound only as version N+1 in a separate repository (C8).</p>
+      <dl>
+        <dt>機構 (型 / lint / CI)</dt><dd>C4 超えは CI deny (§3 <a href="#r-c4-1">R-C4-1</a>〜<a href="#r-c4-4">R-C4-4</a>)。 schema 非互換は manifest の <code>schema_version</code> (C1) で検出。 憲法改訂は版 N+1 の別 repo でのみ (C8 の bootstrap 段 1)。</dd>
+        <dt>出所</dt><dd>論点 9・SPEC §12.0</dd>
+      </dl>
+    </div>
+  </details>
+</section>
+</section>
+</section>
+
+<section id="s3-rules-rows" class="informative">
+<h2>§3. rules 行の初期値 — 条文から外した数値 (裁定 id 付き)</h2>
+<p class="section-essence" data-audience="human">条文に書かない数値をここに 1 表で写します。 正本は manifest の rules 行で、 値の変更はすべて C5 (裁定 id 付きの diff) を通り、 C4 / C13 の閾値はさらに A2 (grill 検証 → user 裁定) を前置します。</p>
+<p data-audience="machine">本表は rules 行の値の写しであり、 正本ではない。 正本は manifest の rules 行 (C1) であり、 manifest 由来の生成物 (C1.2) が存在する場合はそれが本表に優先する。 manifest が存在しない間は本表が値の唯一の存在箇所であり、 値の変更は C5 と同じ手続き (裁定 id 付き diff) を踏み、 C4 / C13 の閾値は A2 を前置する。 「種別」は deny (CI が落とす) と検出線 (記録・起票のみ・PR は止めない) を区別する。 「裁定」列は裁定文書 (RULING-v2-p1-exit-bundle-20260907.md) 内の論点番号を指す。 C5 が要求する裁定 id (ts) は manifest の rules 行が持ち、 本表は写しのため論点番号で代用する。 値の置き場は C1 が全称で定めるため、 各条の規範文は置き場を再掲せず本表の行 id を参照する。</p>
+<table>
+  <thead><tr><th>行 id</th><th>条</th><th>項目</th><th>初期値</th><th>種別</th><th>裁定</th></tr></thead>
+  <tbody>
+    <tr id="r-c4-1"><td>R-C4-1</td><td>C4</td><td>core 総行数</td><td>20,000 行 以下</td><td>deny (CI 実測)</td><td>論点 2</td></tr>
+    <tr id="r-c4-2"><td>R-C4-2</td><td>C4</td><td>1 module の行数</td><td>1,500 行 以下</td><td>deny (CI 実測)</td><td>論点 2</td></tr>
+    <tr id="r-c4-3"><td>R-C4-3</td><td>C4</td><td>test:src 行数比</td><td>1.0 以下</td><td>deny (CI 実測)</td><td>論点 2</td></tr>
+    <tr id="r-c4-4"><td>R-C4-4</td><td>C4</td><td>関数粒度 lint</td><td>関数 60 行 以下・複雑度 15 以下・引数 5 以下</td><td>deny (lint・<code>#[allow]</code> 黙殺禁止)</td><td>論点 2</td></tr>
+    <tr id="r-c6-1"><td>R-C6-1</td><td>C6</td><td>1 run の token 上限と検出線</td><td>未定 (manifest の rules 行が正本)</td><td>deny + 検出線 (値未定のため deny は未発効)</td><td>論点 11</td></tr>
+    <tr id="r-c8-1"><td>R-C8-1</td><td>C8</td><td>成熟条件 (AND)</td><td>Verdict 一致率 95% 以上 × 連続 20 便 ／ K 指標 (K1〜K3) 閾値内 × 3 日 ／ 手動介入 0 × 3 日 ／ doctor 全 host 緑</td><td>宣言条件 (裁定 id 付きで宣言)</td><td>論点 9</td></tr>
+    <tr id="r-c9-1"><td>R-C9-1</td><td>C9</td><td>口座の選定規則</td><td>新規投入は 5h 線 ／ 移住 lane は線を外して継続優先 ／ 消費計画 = 7d 残量 × 残日数で lane 数 ／ 管理席 watchdog の検知条件と再起動先</td><td>rules 行 (選定規則)</td><td>論点 8・U5</td></tr>
+    <tr id="r-c12-1"><td>R-C12-1</td><td>C12</td><td>変異生存率</td><td>週次記録 (deny 化の裁定材料は実測 2 周分)</td><td>検出線 (deny 化は user 裁定 = C5 の裁定 id 付き diff・C12.4)</td><td>論点 7</td></tr>
+    <tr id="r-c13-1"><td>R-C13-1</td><td>C13</td><td>依存の予算</td><td>直接依存 12 本 以下 (目安)・追加は 1 PR 1 本・増分 check 実測差 +0.3 秒超は理由必須</td><td>予算 (A3 併用)</td><td>論点 3・4</td></tr>
+    <tr id="r-c13-2"><td>R-C13-2</td><td>C13</td><td>compile の決定論的な形</td><td>dev profile の debug 情報は line-tables-only・統合 test file 3 以下・runner nextest・proc-macro 展開後比率 25% 以下・critical path 上の 1 crate が総時間の 40% 超なら分割</td><td>deny (CI)</td><td>論点 3・4</td></tr>
+    <tr id="r-c13-3"><td>R-C13-3</td><td>C13</td><td>compile 秒数</td><td>増分 check p50 10 秒 以下・CI 5 分 以下・link 20% 以下・週次記録・前回比 +20% 悪化で原因 crate を名指しした issue を自動起票</td><td>検出線 (PR は止めない)</td><td>論点 3・4</td></tr>
+  </tbody>
+</table>
+</section>
+
+<section id="s4-amendment" class="informative">
+<h2>§4. 改訂の手続き — どう変えると何が起きるか</h2>
+<p class="section-essence" data-audience="human">変えたいときはまず利益を grill で検証し、 user が裁定します (A2)。 閾値なら manifest の diff に裁定 id を付けて merge し (C5)、 条文なら同じ版では変えず版 N+1 で改訂します (N4)。 C4 / C13 以外の rules 行は A2 を通さず、 裁定 id 付きの diff (C5) だけで変えます。 したがって、 この file 自体を同じ版の中で書き換えるのは §3 の写しの更新と誤記の修正だけです。</p>
+<figure class="diagram">
+<pre class="mermaid">flowchart TB
+  accTitle: scribe2 憲法の改訂手続き
+  accDescr: 改訂提案はまず何を変えるかで分かれる。 憲法条文と C4 / C13 の閾値は利益の grill 検証を前置して user 裁定を受け (A2)、 却下なら変更しない。 承認 (裁定 id) のあと、 閾値なら manifest diff + 裁定 id で merge (C5)、 条文なら版 N+1 として別 repo で改訂する (N4)。 その他の rules 行は A2 を通さず、 user 裁定の裁定 id 付き diff だけで merge する (C5)。
+  P["改訂提案"] --&gt; K{"何を変えるか"}
+  K -- "憲法条文 / C4・C13 の閾値" --&gt; G["利益の grill 検証を前置 (A2)"]
+  G --&gt; U{"user 裁定"}
+  U -- "却下" --&gt; X["変更しない"]
+  U -- "承認 = 裁定 id (閾値)" --&gt; M["manifest diff + 裁定 id で merge (C5)"]
+  U -- "承認 = 裁定 id (条文)" --&gt; N["版 N+1 として別 repo で改訂 (N4)"]
+  K -- "その他の rules 行 (C6 / C8 / C9 / C12)" --&gt; R["user 裁定 (裁定 id) → manifest diff で merge (C5・A2 不要)"]
+  style P fill:#e8f0f7,stroke:#2a4d6e,color:#08131a
+  style G fill:#fefbea,stroke:#916626,color:#08131a
+  style U fill:#fefbea,stroke:#916626,color:#08131a
+  style K fill:#fefbea,stroke:#916626,color:#08131a
+  style X fill:#fdf3f3,stroke:#b22323,color:#08131a
+  style M fill:#e6f6f2,stroke:#1e7b65,color:#08131a
+  style N fill:#e6f6f2,stroke:#1e7b65,color:#08131a
+  style R fill:#e6f6f2,stroke:#1e7b65,color:#08131a</pre>
+<figcaption>図 2. 改訂の流れ。 何を変えるかで A2 の要否と着地先が違う。</figcaption>
+</figure>
+<p data-audience="machine">本章は新しい規則を持たない。 手続きの正本は A2 (grill 検証 → user 裁定)・C5 (rules 行の diff + 裁定 id)・N4 (条文は版 N+1) である。 本 constitution の version は SPEC の版に追随する。 A2 / C5 / N4 の帰結として、 同一版内の本 file の変更は §3 の写しの更新と誤記の修正に帰着する。 改訂の trace は folio の delta marker (<code>ins.delta</code> / <code>del.delta</code>) で本文に残す。</p>
+</section>
+
+<section id="s5-trace" class="informative">
+<h2>§5. Trace — 出所と対応</h2>
+<p class="section-essence" data-audience="human">本文書は条文の正本で、 SPEC v0.3 の §2 と 1 対 1 に対応します。 各条は裁定の論点番号か「裁定 id なし (grill 前から在る条)」に紐づき (一部は両方を併記)、 対応表は §2 の一覧表の「出所」列です。</p>
+<ul data-audience="machine">
+  <li>正本: 本 file が条文の canonical WHAT かつ edit-SSoT である (folio ADR-0051 §3: flip しない doc は HTML が唯一の層)。 SPEC §2 は起草元であり、 齟齬時は本 file を正とする。</li>
+  <li>起草元: <code>SPEC-scribe-v2-vessel-v0.1-20260907.md</code> §2 (folio spike 用抜粋 = <code>input/SPEC-excerpt.md</code>)。 条文は v0.3 (grill 11 論点の裁定を条文化・user 承認 2026-09-07・P1 exit 成立)。 SPEC §6 の件数表記 (Always 7 / Ask-first 3 / Never 3) は v0.1 時点の値であり、 本文書は v0.3 §2 の実体 (13 / 4 / 4) を採る。</li>
+  <li>裁定: <code>RULING-v2-p1-exit-bundle-20260907.md</code> (user 逐語)。 各条の「出所」= 論点番号。 「裁定 id なし」は grill 前から在り固有の論点番号を持たない条 (C7 / A1 / N1)。 A3 / N2 / N3 は裁定 id なしに加え、 関連する裁定の論点番号 (導出) を併記する。</li>
+  <li>技術選定 (WHY): <a href="../decisions/ADR-0001-rust-single-static-binary.html">ADR-0001</a> (Rust 単一 static binary・Go / typed Python / TypeScript 却下)。 本 constitution は WHAT を、 ADR は WHY を持つ。 実装言語と配布形態の規範は ADR-0001 §2.1 が持ち、 条文化は版 N+1 で行う (N4)。</li>
+  <li>用語: canonical 名は <code>design-intent/vocabulary.yaml</code> (P-5)。 本文の <span class="term" data-term="席">席</span> / <span class="term" data-term="口座">口座</span> / <span class="term" data-term="歯">歯</span> / <span class="term" data-term="検出線">検出線</span> / <span class="term" data-term="器">器</span> 等はそこで定義する。</li>
+  <li>段の対応: SPEC の「Always / Ask-first / Never」は folio constitution の 3 tier (いつも守る / 変える前に確認 / 絶対にやらない) と 1 対 1 に対応する。 条 id (C1〜C13 / A1〜A4 / N1〜N4) は SPEC と裁定文書の表記を逐語で維持する。</li>
+</ul>
+</section>
+
+<script>
+window.addEventListener('DOMContentLoaded', async () => {
+  if (!window.mermaid) return;
+  mermaid.initialize({
+    startOnLoad: false,
+    securityLevel: 'antiscript',
+    theme: 'base',
+    flowchart: { useMaxWidth: false, curve: 'basis' }
+  });
+  try { await mermaid.run(); } catch (e) {}
+  /* 横スクロールが発生した図のみ keyboard-focusable 化 (WCAG 2.2 SC 2.1.1、 folio rules §4.6) */
+  document.querySelectorAll('figure.diagram > pre.mermaid').forEach((p) => {
+    if (p.scrollWidth > p.clientWidth + 1) {
+      p.tabIndex = 0;
+      p.setAttribute('role', 'region');
+      const t = p.querySelector('svg title');
+      if (t && t.textContent) p.setAttribute('aria-label', t.textContent + ' (横スクロール可能な図)');
+    }
+  });
+});
+</script>
+<!-- folio:chrome-bottom -->
+<script>
+(function () {
+  var openedForPrint = [];
+  window.addEventListener('beforeprint', function () {
+    openedForPrint = [];
+    var ds = document.querySelectorAll('details:not([open])');
+    for (var i = 0; i < ds.length; i++) { ds[i].setAttribute('open', ''); openedForPrint.push(ds[i]); }
+  });
+  window.addEventListener('afterprint', function () {
+    for (var i = 0; i < openedForPrint.length; i++) openedForPrint[i].removeAttribute('open');
+    openedForPrint = [];
+  });
+  if (!document.querySelector('[data-audience]')) return;
+  /* 既定 = 人間プレゼン型 (ADR-0040 / rules §11.3): script 経由で初期 class を付与するため
+     no-JS では付かず全文可視に graceful degrade する。 static DOM は全文を保持 (AI/検索/印刷は不変)。 */
+  document.body.classList.add('audience-human');
+  var bar = document.createElement('nav');
+  bar.className = 'audience-toggle';
+  bar.setAttribute('aria-label', '表示対象の切替');
+  var states = [['both', '両方'], ['human', '人間向け'], ['machine', '機械向け']];
+  for (var s = 0; s < states.length; s++) {
+    (function (mode, label) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      b.setAttribute('aria-pressed', mode === 'human' ? 'true' : 'false');
+      b.addEventListener('click', function () {
+        document.body.classList.remove('audience-human', 'audience-machine');
+        if (mode !== 'both') document.body.classList.add('audience-' + mode);
+        var bs = bar.querySelectorAll('button');
+        for (var j = 0; j < bs.length; j++) bs[j].setAttribute('aria-pressed', bs[j] === b ? 'true' : 'false');
+      });
+      bar.appendChild(b);
+    })(states[s][0], states[s][1]);
+  }
+  var bc = document.querySelector('nav.breadcrumb');
+  if (bc && bc.parentNode) { bc.parentNode.insertBefore(bar, bc.nextSibling); }
+  else { document.body.insertBefore(bar, document.body.firstChild); }
+})();
+</script>
+<!-- /folio:chrome-bottom -->
+</body>
+</html>

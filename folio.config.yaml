@@ -1,0 +1,5 @@
+folio_version: "^1.0"
+spec_path: "design-intent/spec/"
+caller_marker_env: "FOLIO_ARCHITECT_CONTEXT"
+caller_marker_value: "folio-architect"
+review_model: "opus"
