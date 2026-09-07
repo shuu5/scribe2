@@ -18,3 +18,11 @@ embeddeddolt/
 /.beads/scribe-push-throttle
 /.beads/scribe-push.log*
 /.claude-session/
+
+# spawn worker の worktree（.worktrees/spawn/<branch>）は ephemeral・commit しない
+/.worktrees/
+
+# 1 事象 1 行の telemetry（machine-local・実体は .beads 直下）。sc repo の実績形に揃える。
+/.beads/bdw-timing.log*
+/.beads/dispatch-log.jsonl*
+.beads/events.jsonl
