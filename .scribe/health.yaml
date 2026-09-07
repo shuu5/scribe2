@@ -1,0 +1,5 @@
+suites: []
+full: []
+quick: []
+runner: local
+coalesce: latest-head

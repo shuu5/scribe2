@@ -9,3 +9,12 @@
 *.db
 .beads-credential-key
 .beads/proxieddb/
+
+# bd 台帳(Dolt が SSOT) + scribe runtime 生成物の除外（/scribe:setup が収束させる）
+.beads/issues.jsonl
+.beads/interactions.jsonl
+embeddeddolt/
+/.beads/scribe-heartbeat
+/.beads/scribe-push-throttle
+/.beads/scribe-push.log*
+/.claude-session/
