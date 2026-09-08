@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="folio-doc-type" content="research-report">
+<meta name="folio-layer" content="project">
+<meta name="folio-version" content="0.1.0">
+<meta name="folio-status" content="active">
+<meta name="folio-stakeholders" content="Developer, AI Agent">
+<meta name="folio-research-date" content="2026-09-07">
+<title>SPIKE-folio-report — folio を v2「次の器」の spec 層にできるか</title>
+<link rel="stylesheet" href="../../common.css">
+<script type="application/ld+json">
+{
+  "@context": {
+    "dc": "http://purl.org/dc/terms/",
+    "schema": "https://schema.org/",
+    "folio": "https://folio.dev/spec/v1/"
+  },
+  "@id": "./SPIKE-folio-report.html",
+  "@type": "schema:TechArticle",
+  "dc:isPartOf": [
+    { "@id": "./README.html" }
+  ],
+  "dc:title": "SPIKE-folio-report — folio を v2「次の器」の spec 層にできるか",
+  "folio:version": "0.1.0",
+  "folio:stakeholders": ["Developer", "AI Agent"]
+}
+</script>
+</head>
+<body>
+<!-- folio:chrome-top -->
+<a class="skip-link" href="#s1-recommendation">本文へスキップ</a>
+<nav class="breadcrumb" aria-label="パンくず"><ol>
+  <li><a href="../index.html">design-intent</a></li>
+  <li><a href="./README.html">research</a></li>
+  <li aria-current="page">SPIKE-folio-report</li>
+</ol></nav>
+<!-- /folio:chrome-top -->
+
+<header class="doc-header">
+  <h1>SPIKE-folio-report — folio を v2「次の器」の spec 層にできるか</h1>
+  <div class="meta">v0.1.0 &middot; status: active &middot; 調査日 2026-09-07 &middot; research-report</div>
+</header>
+<!-- folio:chrome-toc -->
+<nav class="toc" aria-label="ページ内目次">
+<ol>
+  <li><a href="#s1-recommendation">(iv) 採否の推奨（結論を先に）</a></li>
+  <li><a href="#s2-measurements">(i) 6 条の実測値</a></li>
+  <li><a href="#s3-undefined">(ii) folio が定義できなかった項目</a></li>
+  <li><a href="#s4-friction">(iii) 摩擦</a></li>
+  <li><a href="#s5-appendix">付録</a></li>
+</ol>
+</nav>
+<!-- /folio:chrome-toc -->
+
+<aside class="informative">
+<ul>
+  <li>bead: <code>sc-e8o34.1</code>（v2 program <code>sc-e8o34</code> leg 1）</li>
+  <li>実行: 2026-09-07・1 session（<code>/folio-architect</code> を 1 回起動・7-Phase を完走）</li>
+  <li>成果 commit: <code>f06ede2</code>（design-intent/ 一式・本 report は続く commit）</li>
+  <li>閲覧: tailnet serve（session 終了後は停止・URL は非掲載）</li>
+</ul>
+</aside>
+
+<section id="s1-recommendation" class="informative">
+<h2>(iv) 採否の推奨（結論を先に）</h2>
+
+<p class="section-essence"><strong>推奨 = 採用（条件付き）</strong>。 <code>design-intent/</code> を v2 リポの spec 層にする。</p>
+
+<p>folio-architect は 1 session で憲法（21 条・EARS 50 規範文・dual-audience）・ADR-0001（却下案つき）・vocabulary（64 語）を出せ、機械 gate（<code>folio validate</code>）は violation 0 で、link 整合・EARS 形式・dual-audience 構造・可読性 floor を機械が守る。plain markdown 1 本（<code>CONSTITUTION.md</code>）の代替案は<strong>不採用</strong>: 3 段と機構併記は書けても、id 整合・双方向 link・EARS pattern・章要旨の機械検査を失い、N2「散文だけの規則を残さない」を doc 層で支える手段が無くなる。</p>
+
+<p>採用の条件（3 つ。いずれも folio 側または運用側の knob）:</p>
+
+<ol>
+  <li><strong>Phase F の軸数を絞れること</strong>。今回の token 超過の主因は review agent 5 本の並列（1 本 130k〜180k）。<code>review_model</code> は config で変えられるが、軸数は SKILL に固定されている。常用するなら「軸を選ぶ knob」を folio に要求するか、憲法級の編集だけ 5 軸・通常編集は ears + fidelity の 2 軸、と運用で絞る。</li>
+  <li><strong>vocabulary gate の fail-open を folio 側で修正すること</strong>（後述 (ii)-1）。修正までは forbidden 語の目視 grep を併用する。</li>
+  <li><strong>consumer 語彙の glossary / tooltip が無いことを受容するか、folio 側に derive を要求すること</strong>（後述 (ii)-2）。</li>
+</ol>
+</section>
+
+<section id="s2-measurements" class="informative">
+<h2>(i) 6 条の実測値</h2>
+
+<table>
+  <thead><tr><th>条</th><th>実測値</th><th>検証行</th><th>rc</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>(a) constitution</td>
+      <td><code>design-intent/spec/constitution.html</code> 実在。v0.3 の 21 条（C1〜C13 / A1〜A4 / N1〜N4）の id が全て本文に現れ、tier は Always 13 / Ask-first 4 / Never 4 で §2 と一致。EARS 規範文 50 block（ubiquitous 36 / event-driven 6 / state-driven 1 / unwanted 7）。grep 計数 130</td>
+      <td>1</td>
+      <td><strong>0</strong></td>
+    </tr>
+    <tr>
+      <td>(b) ADR-0001</td>
+      <td><code>design-intent/decisions/ADR-0001-rust-single-static-binary.html</code> 実在。採用 = Rust、却下 = Go / typed Python / TypeScript の 4 語が本文と却下案 × 基準の表に現れる。grep 計数 20</td>
+      <td>2</td>
+      <td><strong>0</strong></td>
+    </tr>
+    <tr>
+      <td>(c) vocabulary</td>
+      <td><code>design-intent/vocabulary.yaml</code> に 64 語（全 <code>domain: consumer</code>）。契約の 10 語のうち 8 語が canonical として実在（lane / gate / rules 行 / doctor / adapter / 退役 / lease / 席）。<strong>tier と marker は不在</strong>（tier は folio 側の語、marker は §7 の語で今回の起動指示「§5 の用語」の範囲外）。検証行の grep 式は <code>^\s*lane\s*:</code> の key 形を前提とし、folio rules §3 の schema（<code>terms: [- canonical: lane]</code>）に一致しないため計数 0</td>
+      <td>3</td>
+      <td><strong>1（RED）</strong></td>
+    </tr>
+    <tr>
+      <td>(d) folio CLI</td>
+      <td>plugin が提供する検証名は <code>folio validate</code>（<code>folio verify</code> は doc-type pack 用で対象外）。rc=0・violation 0・WARN 3（後述 (ii)-2 の glossary link-rot）。plugin の canonical path は実行口座に無く、repo の <code>.claude-plugin/bin/folio</code> を絶対 path で実行</td>
+      <td>（行なし）</td>
+      <td>0</td>
+    </tr>
+    <tr>
+      <td>(e) 消費・所要</td>
+      <td>本体 380k/1M（admin 実測 22:52 JST）+ Phase F round 1 の review agent 5 本 ≈ 758k + round 2 の 2 本（未計測・admin footer で読む）。所要 = 投入 22:10 → 成果 commit 23:27 ≈ 77 分</td>
+      <td>（admin が読む）</td>
+      <td><strong>RED（token・時間とも）</strong></td>
+    </tr>
+    <tr>
+      <td>(f) 本 report</td>
+      <td>(i)〜(iv) を本 file に記載</td>
+      <td>4</td>
+      <td>本 commit 後に実測（最終報告に記す）</td>
+    </tr>
+    <tr>
+      <td>補助</td>
+      <td><code>input/SPEC-excerpt.md</code> 非空（admin 差替後の v0.3 §2 を使用）</td>
+      <td>5</td>
+      <td>0</td>
+    </tr>
+    <tr>
+      <td>fence</td>
+      <td>design-intent / report / input / folio.config.yaml / .gitignore 以外に未 commit 差分なし</td>
+      <td>6</td>
+      <td>0</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>契約 (a) の文言は v0.1 の「13 条」のままだが、実体は admin 差替後の v0.3（21 条）を写した（admin preflight 注記どおり）。</p>
+</section>
+
+<section id="s3-undefined" class="informative">
+<h2>(ii) folio が定義できなかった項目</h2>
+
+<ol>
+  <li><strong>vocabulary gate が非決定的に fail-open</strong>（folio 側 bug）。<code>bin/folio</code> の <code>printf '%s' "$prose" | grep -qF "$syn"</code> が <code>pipefail</code> 下で SIGPIPE（rc 141）になり violation を捨てる。scratch で forbidden 語 3 件を注入して 3 回走らせ、2 回は先頭寄りの 2 件を見逃し、1 回だけ 3 件検出（timing 依存）。<code>[OK] vocabulary</code> を P-5 の裏取りに使えない。fix 案 = <code>grep -qF "$syn" &lt;&lt;&lt; "$prose"</code> 等の非 pipe 形。</li>
+  <li><strong>consumer 語彙だけでは glossary.html が生成されず tooltip も付かない</strong>。<code>folio build</code> / <code>fix</code> / <code>validate</code> の glossary 系は <code>domain: folio-closed</code> の語しか扱わないのに、chrome の cluster-nav は vocabulary.yaml があれば無条件に <code>../glossary.html</code> を出す。結果、README 3 本に link-rot の WARN が恒常化する（非 block）。domain を偽らずそのまま残した。rules §9.5「flip しない consumer では vocabulary.yaml から derive する」の記述と emitter 実装が食い違う。</li>
+  <li><strong>数値の正本</strong>。憲法は「数値は条文に置かず rules 行へ」と定めるが、folio に rules 行に当たる概念は無い。憲法 §3 の <code>&lt;table&gt;</code>（行 id 付き・裁定列 = 論点番号）を manifest 実装までの写しとして置き、条文からは行 id の link で参照する形で代替した。</li>
+  <li><strong>順位（論点 1）の id</strong>。条ではない tie-break に id を与える枠組みが folio に無く、§1 に id 無しの EARS block として置いた。</li>
+  <li><strong>実装言語の規範</strong>。「実装言語 = Rust」は憲法に条が無く ADR-0001 §2.1 の MUST だけが持つ（条文化は版 N+1・N4）。SSoT review の指摘どおり §5 Trace に正本の所在を明記して固定した。</li>
+  <li><strong>§4 と v0.3 の矛盾</strong>（tokio 固定 vs C13「core は async を持たない」）は ADR §2.2 で「拘束条件は v0.3」と裁定を記録して解決した。SPEC §4 側の文言修正は未実施。</li>
+  <li><strong>toolchain 選定の WHY</strong>（nextest / proptest / insta / cargo-mutants / hyperfine / thiserror / cargo deny の採否理由）は WHY 側に無く、review は ADR-0002 の起票を提案した。新 ADR は user 承認必須のため未着手。</li>
+  <li><strong>§7（plugin 共存）と overview.html</strong> は起動指示の範囲外のため未作成。契約 (c) の tier / marker 不在はこの範囲差に由来する。</li>
+  <li><strong>CLI 周辺の小事</strong>: canonical path の symlink が実行口座に無い（repo を canonical path へ symlink すると解決見込み・未実施）。<code>folio init --help</code> が <code>--help</code> を dir 名と誤認する。</li>
+</ol>
+</section>
+
+<section id="s4-friction" class="informative">
+<h2>(iii) 摩擦</h2>
+
+<ul>
+  <li><strong>grill の往復数 = 0</strong>。user が実時間で応答できない前提（autonomous 指示）のため、未解決論点 7 件を推奨回答つきの text で提示して続行した（数値の置き場 / 機構併記と P-11 / tokio 矛盾 / EARS pattern 割当 / vocabulary の範囲と canonical 言語 / 視覚要素と vendoring / scope 外）。いずれも user の事後裁定で差し替え可能。</li>
+  <li><strong>Phase F の review</strong>: round 1 = 5 軸並列（ears 18 / vocabulary 19 / ssot 16 / temporal 11 / fidelity 29 = 93 件、うち high 16）。round 2 = ears + fidelity の 2 軸（high 2 → 修正して収束）。agent の返答が 4〜5KB で切れるため SendMessage で再送を 6 回要求した。</li>
+  <li><strong>手直しした file</strong>: constitution.html（全面書き直し 1 回 + 部分 edit 27 回）、ADR-0001（全面 1 回 + 部分 5 回）、vocabulary.yaml（全面 1 回）、README 3 本（版表記・章要旨・wave 語の除去）、index.html の landing hero（curated region のみ）。</li>
+  <li><strong>review が効いた芯</strong>: 段（Always / Ask-first / Never）から EARS pattern を機械写像した初稿は論理構造と型が乖離しており（C5 は unwanted、C8.2 は state-driven、C9 は event-driven が正）、N4 の分割で「C4 超え」を「C4 上限の引き上げ」に拡大する誤りも round 2 で捕捉された。folio の ceiling（LLM review）は floor（validate）が見ない意味面を実際に拾った。</li>
+  <li><strong>hook の実証</strong>: caller-marker hook は本 session で有効（marker 無しの Edit を deny）。constitution-guard は consumer の <code>schema:TechArticle</code> を通す。content-boundary の advisory は出ず（P-11 primitive の裸書き 0）。</li>
+  <li><strong>消費</strong>: 本体 380k（admin 観測）に対し review agent が 2 倍以上。折り畳み（dual-audience）と 21 card の全面書き直し 2 回も本体側の主因。</li>
+</ul>
+</section>
+
+<section id="s5-appendix" class="informative">
+<h2>付録</h2>
+
+<ul>
+  <li>成果物: <code>design-intent/spec/constitution.html</code> / <code>design-intent/decisions/ADR-0001-rust-single-static-binary.html</code> / <code>design-intent/vocabulary.yaml</code> / <code>folio.config.yaml</code> / cluster README 3 本 / <code>design-intent/index.html</code>（folio build 生成）/ <code>common.css</code>・<code>design-intent/assets/mermaid.min.js</code>（vendoring）</li>
+  <li>検証: <code>folio validate</code> = 0 violations / WARN 3（glossary link-rot）。EARS 50 block・card 21・§3 行 id 11・行 id への link 27（dangling 0）。描画（playwright）: mermaid 2 図が SVG 化、横スクロール無し。</li>
+  <li>未 commit のまま残したもの: <code>input/SPEC-excerpt.md</code> の v0.3 差替と <code>input/SPEC-excerpt.md.bak.v0.1</code>（admin / user の作業）。</li>
+  <li>記憶（auto-memory・実行口座）: folio CLI path / consumer glossary の癖 / vocabulary gate SIGPIPE の 3 件。</li>
+</ul>
+</section>
+
+<!-- folio:chrome-bottom -->
+<script>
+(function () {
+  var openedForPrint = [];
+  window.addEventListener('beforeprint', function () {
+    openedForPrint = [];
+    var ds = document.querySelectorAll('details:not([open])');
+    for (var i = 0; i < ds.length; i++) { ds[i].setAttribute('open', ''); openedForPrint.push(ds[i]); }
+  });
+  window.addEventListener('afterprint', function () {
+    for (var i = 0; i < openedForPrint.length; i++) openedForPrint[i].removeAttribute('open');
+    openedForPrint = [];
+  });
+  if (!document.querySelector('[data-audience]')) return;
+  /* 既定 = 人間プレゼン型 (ADR-0040 / rules §11.3): script 経由で初期 class を付与するため
+     no-JS では付かず全文可視に graceful degrade する。 static DOM は全文を保持 (AI/検索/印刷は不変)。 */
+  document.body.classList.add('audience-human');
+  var bar = document.createElement('nav');
+  bar.className = 'audience-toggle';
+  bar.setAttribute('aria-label', '表示対象の切替');
+  var states = [['both', '両方'], ['human', '人間向け'], ['machine', '機械向け']];
+  for (var s = 0; s < states.length; s++) {
+    (function (mode, label) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      b.setAttribute('aria-pressed', mode === 'human' ? 'true' : 'false');
+      b.addEventListener('click', function () {
+        document.body.classList.remove('audience-human', 'audience-machine');
+        if (mode !== 'both') document.body.classList.add('audience-' + mode);
+        var bs = bar.querySelectorAll('button');
+        for (var j = 0; j < bs.length; j++) bs[j].setAttribute('aria-pressed', bs[j] === b ? 'true' : 'false');
+      });
+      bar.appendChild(b);
+    })(states[s][0], states[s][1]);
+  }
+  var bc = document.querySelector('nav.breadcrumb');
+  if (bc && bc.parentNode) { bc.parentNode.insertBefore(bar, bc.nextSibling); }
+  else { document.body.insertBefore(bar, document.body.firstChild); }
+})();
+</script>
+<!-- /folio:chrome-bottom -->
+</body>
+</html>

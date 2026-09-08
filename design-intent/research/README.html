@@ -20,7 +20,10 @@
   "@id": "./README.html",
   "@type": "schema:TechArticle",
   "dc:title": "research cluster index",
-  "folio:version": "0.1.0"
+  "folio:version": "0.1.0",
+  "dc:hasPart": [
+    { "@id": "./SPIKE-folio-report.html" }
+  ]
 }
 </script>
 </head>
@@ -42,6 +45,7 @@
 <nav class="toc" aria-label="ページ内目次">
 <ol>
   <li><a href="#s1-purpose">§1. Purpose</a></li>
+  <li><a href="#s2-report-list">§2. Reports</a></li>
 </ol>
 </nav>
 <!-- /folio:chrome-toc -->
@@ -54,6 +58,16 @@
 <section id="s1-purpose" class="informative">
 <h2>§1. Purpose</h2>
 <p>research/ は exploration 領域です。 厳密な markup 規約に縛られず、 design intent が固まる前の思考を自由に記録します。 確定した内容は spec/ (WHAT) または decisions/ (WHY) へ昇格させ、 本 cluster には探索の足跡を残します。</p>
+</section>
+
+<section id="s2-report-list" class="informative">
+<h2>§2. Reports</h2>
+<table>
+  <thead><tr><th>id</th><th>title</th><th>status</th><th>date</th></tr></thead>
+  <tbody>
+    <tr><td>SPIKE-folio-report</td><td><a href="./SPIKE-folio-report.html">採用（条件付き）</a></td><td>active</td><td>2026-09-07</td></tr>
+  </tbody>
+</table>
 </section>
 
 <!-- folio:chrome-bottom -->
