@@ -26,7 +26,7 @@
 
 <section class="landing-hero">
 <!-- folio:landing-hero -->
-<p class="landing-tagline">scribe v2「次の器」の design-intent 空間です。 <strong>spec/</strong> には版をまたいで守る折れない線 (constitution: Always 13 / Ask-first 4 / Never 4 と rules 行の初期値)、 <strong>decisions/</strong> には技術選定の理由 (ADR-0001: Rust 単一 static binary・却下案つき)、 語彙は <code>vocabulary.yaml</code> に置きます。</p>
+<p class="landing-tagline">scribe v2「次の器」の design-intent 空間です。 <strong>spec/</strong> には版をまたいで守る折れない線 (constitution: Always 13 / Ask-first 4 / Never 4 と rules 行の初期値)、 <strong>decisions/</strong> には技術選定の理由 (ADR-0001: Rust 単一 static binary ／ ADR-0002: test / lint toolchain・いずれも却下案つき)、 語彙は <code>vocabulary.yaml</code> に置きます。</p>
 <nav class="reader-cards" aria-label="読者別の入口">
   <a class="reader-card" href="spec/README.html"><span class="reader-card__act">仕様・要件を調べる →</span><span class="reader-card__desc">spec — design intent (WHAT)</span></a>
   <a class="reader-card" href="decisions/README.html"><span class="reader-card__act">設計の経緯を追う →</span><span class="reader-card__desc">decisions — Architecture Decision Records (WHY)</span></a>
@@ -57,9 +57,10 @@
 </ul>
 </details>
 <details open>
-<summary>accepted <span class="nav-count">(1)</span></summary>
+<summary>accepted <span class="nav-count">(2)</span></summary>
 <ul>
   <li><a href="decisions/ADR-0001-rust-single-static-binary.html">ADR-0001 — 実装言語と構成 = Rust 単一 static binary (Go / typed Python / TypeScript 却下)</a> <span class="nav-meta">adr</span></li>
+  <li><a href="decisions/ADR-0002-test-lint-toolchain.html">ADR-0002 — test / lint toolchain = cargo nextest・粒度 lint は forbid・構造検査は cargo xtask check</a> <span class="nav-meta">adr</span></li>
 </ul>
 </details>
 </section>
