@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="folio-doc-type" content="adr">
+<meta name="folio-layer" content="project">
+<meta name="folio-version" content="0.3.0">
+<meta name="folio-status" content="accepted">
+<meta name="folio-stakeholders" content="Developer, AI Agent, External Reviewer">
+<meta name="folio-adr-id" content="0002">
+<meta name="folio-adr-date" content="2026-09-07">
+<title>ADR-0002 — test / lint toolchain = cargo nextest・粒度 lint は forbid・構造検査は cargo xtask check</title>
+<link rel="stylesheet" href="../../common.css">
+<script type="application/ld+json">
+{
+  "@context": {
+    "dc": "http://purl.org/dc/terms/",
+    "schema": "https://schema.org/",
+    "folio": "https://folio.dev/spec/v1/"
+  },
+  "@id": "./ADR-0002-test-lint-toolchain.html",
+  "@type": "schema:TechArticle",
+  "dc:isPartOf": [
+    { "@id": "./README.html" }
+  ],
+  "dc:title": "ADR-0002 — test / lint toolchain = cargo nextest・粒度 lint は forbid・構造検査は cargo xtask check",
+  "folio:version": "0.3.0",
+  "folio:stakeholders": ["Developer", "AI Agent", "External Reviewer"],
+  "dc:references": [
+    { "@id": "../spec/constitution.html#c1" },
+    { "@id": "../spec/constitution.html#c4" },
+    { "@id": "../spec/constitution.html#c11" },
+    { "@id": "../spec/constitution.html#c12" },
+    { "@id": "../spec/constitution.html#c13" },
+    { "@id": "../spec/constitution.html#a2" },
+    { "@id": "../spec/constitution.html#a3" },
+    { "@id": "../spec/constitution.html#n2" }
+  ]
+}
+</script>
+</head>
+<body>
+<!-- folio:chrome-top -->
+<a class="skip-link" href="#s1-context">本文へスキップ</a>
+<nav class="breadcrumb" aria-label="パンくず"><ol>
+  <li><a href="../index.html">design-intent</a></li>
+  <li><a href="./README.html">decisions</a></li>
+  <li aria-current="page">ADR-0002</li>
+</ol></nav>
+<!-- /folio:chrome-top -->
+
+<header class="doc-header">
+  <h1>ADR-0002 — test / lint toolchain = cargo nextest・粒度 lint は forbid・構造検査は cargo xtask check</h1>
+  <div class="meta">Status: accepted &middot; Date: 2026-09-07 &middot; version 0.3.0 (拘束条件である constitution の版の写し・決定時点で固定) &middot; AI 可決 (leg 0 の admin 裁定 2)・constitution v0.3 (user 承認済) を拘束条件として継承</div>
+</header>
+<!-- folio:chrome-toc -->
+<nav class="toc" aria-label="ページ内目次">
+<ol>
+  <li><a href="#s1-context">§1. Context</a></li>
+  <li><a href="#s2-decision">§2. Decision</a></li>
+  <li class="toc--sub"><a href="#s2-1-runner">§2.1 test runner = cargo nextest</a></li>
+  <li class="toc--sub"><a href="#s2-2-granularity">§2.2 粒度 lint 3 本は forbid</a></li>
+  <li class="toc--sub"><a href="#s2-3-allow-attributes">§2.3 allow_attributes は deny に留める</a></li>
+  <li class="toc--sub"><a href="#s2-4-xtask">§2.4 構造検査 = cargo xtask check</a></li>
+  <li class="toc--sub"><a href="#s2-5-thresholds">§2.5 閾値の実値と置き場</a></li>
+  <li class="toc--sub"><a href="#s2-6-verification">§2.6 決定の遵守をどう確かめるか</a></li>
+  <li><a href="#s3-consequences">§3. Consequences</a></li>
+  <li><a href="#s4-alternatives">§4. Alternatives Considered</a></li>
+  <li><a href="#s5-trace">§5. Trace</a></li>
+</ol>
+</nav>
+<!-- /folio:chrome-toc -->
+
+<aside class="informative">
+<p>本 ADR は IETF <strong>RFC 2119</strong> および <strong>RFC 8174 / BCP 14</strong> に定義される MUST / SHALL / SHOULD / MAY のキーワード解釈規約に従う。 ADR は決定時点の記録 (frozen) であり、 改訂は本 ADR を supersede する新 ADR で行う。</p>
+</aside>
+
+<aside class="machine-readable" aria-hidden="true">
+  <dl>
+    <dt>id</dt><dd>ADR-0002</dd>
+    <dt>doc-type</dt><dd>adr</dd>
+    <dt>status</dt><dd>accepted</dd>
+    <dt>date</dt><dd>2026-09-07</dd>
+    <dt>version</dt><dd>0.3.0 (copy of the constraining constitution version, frozen at decision time)</dd>
+    <dt>decided-by</dt><dd>AI (leg 0 admin ruling 2, fixed 2026-09-07) — constitution v0.3 (user approved) constrains the decision</dd>
+    <dt>stakeholders</dt><dd>Developer, AI Agent, External Reviewer</dd>
+    <dt>supersedes</dt><dd>(none)</dd>
+    <dt>related</dt><dd>constitution C1 / C4 / C11 / C12 / C13 / A2 / A3 / N2, leg 0 admin ruling 2, QA findings F-01 / F-02 / F-06 / F-07</dd>
+  </dl>
+</aside>
+
+<section id="s1-context" class="informative">
+<h2>§1. Context</h2>
+<p class="section-essence" data-audience="human">憲法は「歯は Rust の 1 framework だけ」「粒度の lint は黙らせられない」を求めます。 ところが骨格の検査で、 書いたつもりの歯が 2 か所とも効いていないことが実測で分かりました。 本 ADR は、 その穴を塞ぐ形で test runner と lint の level と構造検査を決めた記録です。</p>
+<p data-audience="machine">拘束条件は user 承認済の constitution v0.3 である。 <a href="../spec/constitution.html#c12">C12</a> は test framework を 1 つに限り bash / bats を全廃すると定め、 <a href="../spec/constitution.html#c11">C11</a> は panic 系・unwrap 系・標準出力の直書きを lint で deny し例外を「理由を書いた <code>#[expect]</code>」に限ると定め、 <a href="../spec/constitution.html#c4">C4</a> は関数の粒度に上限を置いたうえで「粒度の lint は <code>#[allow]</code> で黙らせられない」と明記する。 骨格 (leg 0) の敵対検査は、 この 3 条を素直に書いた設定が実際には効かない 2 例を実測した。 (a) F-01 = <code>[workspace.lints]</code> は member 側の <code>[lints] workspace = true</code> が無いと完全に不活性で、 cargo は警告を 1 行も出さない (opt-in 無しで <code>cargo clippy --workspace --all-targets -- -D warnings</code> が rc 0)。 (b) F-02 = <code>clippy.toml</code> の粒度の閾値は、 対応する lint が clippy 既定 allow のままだと 1 度も評価されない (契約と同一設定で 83 行の関数が rc 0)。 いずれも「散文には規則が在るのに機械は何も測っていない」形であり、 <a href="../spec/constitution.html#n2">N2</a> が禁じる状態そのものである。 よって本 ADR は「どの runner で走らせるか」「lint を何 level で置くか」「散文でなく何が測るか」を決定として記録する。</p>
+</section>
+
+<section id="s2-decision" class="normative">
+<h2>§2. Decision</h2>
+<p class="section-essence" data-audience="human">test は cargo nextest で走らせます。 粒度の lint 3 本は forbid にして逃げ道を無くし、 <code>allow_attributes</code> だけは deny に留めて理由つきの <code>#[expect]</code> を残します。 構造の検査は自前の <code>cargo xtask check</code> が担い、 閾値の実値は本文でなく §2.5 の表に置きます。</p>
+
+<h3 id="s2-1-runner">§2.1 test runner = cargo nextest</h3>
+<p>test framework は Rust native test の 1 つだけとし (<a href="../spec/constitution.html#c12">C12</a>)、 走らせる runner は <strong>cargo nextest</strong> とする (MUST)。 bash / bats / Python の test file は置かない (0 file)。 CI の test job は <code>cargo nextest run --workspace --no-tests=fail</code> を呼ぶ。</p>
+<p data-audience="machine">原本 (leg 0 の契約) が挙げる採用理由は <a href="../spec/constitution.html#c12">C12</a> の「1 framework = nextest」の充足である。 本 ADR はそれを記録するとともに、 land した <code>.github/workflows/ci.yml</code> の実体から 1 点を観察として付す: CI が渡している <code>--no-tests=fail</code> は「test が 1 本も無いときに落ちる」口であり、 <code>cargo test</code> には無い。 すなわち runner の層で「0 本測って GREEN」を閉じられる。 これは採用時の理由として原本に書かれたものではなく、 選択の帰結として現に効いている性質である。</p>
+
+<h3 id="s2-2-granularity">§2.2 粒度 lint 3 本は forbid</h3>
+<p><code>[workspace.lints.clippy]</code> に <code>too_many_arguments</code> / <code>too_many_lines</code> / <code>cognitive_complexity</code> の 3 本を <strong><code>forbid</code></strong> で置く (MUST)。 level を落として <code>deny</code> にすることも、 3 本を省いて <code>clippy.toml</code> の閾値だけを置くことも禁ずる。</p>
+<p data-audience="machine">理由は 2 段である。 第 1 に、 3 本のうち <code>too_many_lines</code> と <code>cognitive_complexity</code> は clippy 既定 allow なので、 <code>Cargo.toml</code> に載せない限り <code>clippy.toml</code> の閾値が 1 度も評価されない (F-02 の実測 = 契約と同一設定で 83 行の関数が rc 0)。 <strong>この 2 本と <code>too_many_arguments</code> は既定 level が違う</strong>: <code>too_many_arguments</code> は clippy 既定 warn であり、 宣言が無くても <code>-D warnings</code> 下では違反そのものは落ちる (clippy 0.1.98 実測 = 宣言ゼロの crate で 7 引数関数が <code>-D clippy::too-many-arguments</code> implied by <code>-D warnings</code> として error)。 それでも 3 本を揃えて宣言するのは、 既定 level に依存せず<strong>宣言を SSoT にする</strong>ため、 および第 2 の理由で level を <code>forbid</code> へ引き上げるためである。 第 2 に、 載せたうえで level を <code>deny</code> にすると <code>#[allow]</code> で黙殺でき、 <a href="../spec/constitution.html#c4">C4</a> が散文で禁じている「黙らせられない」が機械では真にならない。 admin が clippy 0.1.98 で実測した挙動は次表のとおりで、 <code>forbid</code> だけが両方の逃げ道を <code>E0453</code> の hard error で塞ぐ。</p>
+<table>
+  <thead><tr><th>level</th><th><code>#[allow]</code> を書いたとき</th><th><code>#[expect(..., reason = ...)]</code> を書いたとき</th></tr></thead>
+  <tbody>
+    <tr><td><code>forbid</code></td><td><code>E0453</code> の hard error</td><td><code>E0453</code> の hard error</td></tr>
+    <tr><td><code>deny</code></td><td><code>allow_attributes = "deny"</code> が error で捕まえる</td><td>通る (逃げ道が残る)</td></tr>
+  </tbody>
+</table>
+<p data-audience="machine">帰結として、 閾値を超えたのに関数を割れない case は <code>E0453</code> の compile error として現れる。 その場合は lint を下げずに BLOCKED として人間 (admin) へ返す。 すなわち<strong>逃げ道は人間の層にだけ残し、 コードの中には残さない</strong>。 なお本 3 本の閾値変更は <a href="../spec/constitution.html#a2">A2</a> (利益の grill 検証を前置した user 裁定) を要する。</p>
+
+<h3 id="s2-3-allow-attributes">§2.3 allow_attributes は deny に留める</h3>
+<p><code>[workspace.lints.clippy]</code> に <code>allow_attributes = "deny"</code> を置く (MUST)。 これを <code>forbid</code> へ引き上げてはならない (MUST NOT)。</p>
+<p data-audience="machine"><code>allow_attributes</code> は <code>#[allow]</code> にだけ反応し <code>#[expect]</code> には反応しない (実測)。 したがって <code>deny</code> に留めることで、 「<code>#[allow]</code> を塞ぎつつ理由つきの <code>#[expect]</code> は残す」という <a href="../spec/constitution.html#c11">C11</a> の例外形をそのまま成立させられる。 <code>#[expect]</code> を残す必要がある理由は具体的である: <code>print_stdout</code> / <code>print_stderr</code> は deny 据置で、 出力層はその例外を <code>#[expect(clippy::print_stdout, reason = "...")]</code> で名乗る運用になっている (F-07 系の是正)。 この 2 本を <code>forbid</code> にすると <code>#[expect]</code> ごと使えなくなるため、 出力を 1 関数へ閉じる形が書けなくなる。 <code>#[expect]</code> は<strong>実際にその lint を踏む関数</strong>にだけ付ける (踏まない関数へ付けると <code>unfulfilled_lint_expectations</code> で落ちる・実測)。 clippy が落ちたときに <code>[lints] workspace = true</code> を外す / lint を allow へ下げる / <code>#[allow]</code> を撒く、 のいずれでも解消してはならない。 許される解消は理由つき <code>#[expect]</code> と <code>clippy.toml</code> の <code>allow-*-in-tests</code> だけである。</p>
+
+<h3 id="s2-4-xtask">§2.4 構造検査 = cargo xtask check</h3>
+<p>行数 / test:src 比 / manifest-name の構造検査は、 workspace member <code>crates/xtask</code> の <strong><code>cargo xtask check</code></strong> が担う (MUST)。 xtask は直接依存 0 本 (std のみ) で書く。</p>
+<p data-audience="machine">この検査が独立して必要なのは、 clippy が構造的に沈黙する領域が在るからである。 (a) F-01 の opt-in 穴 — member の <code>[lints] workspace = true</code> が無いと clippy は rc 0 で沈黙するので、 <code>lints-optin</code> tag が member 側の opt-in を測る。 (b) F-06 — <code>unused_must_use</code> の<strong>宣言が root の <code>Cargo.toml</code> から落ちたこと</strong>は clippy では分からない。 違反そのものは rustc 既定 warn ゆえ <code>-D warnings</code> が捕まえる (clippy 0.1.98 実測 = 宣言ゼロの crate で <code>-D unused-must-use</code> implied by <code>-D warnings</code> として error・rc 101) が、 それは CI の <code>-D warnings</code> に依存した検出であって「宣言が在ること」の検査ではない。 宣言の欠落を測るのは <code>lints-set</code> tag だけである。 measure する tag は <code>core-lines</code> / <code>file-lines</code> / <code>test-src-ratio</code> / <code>manifest-name</code> / <code>manifest-version</code> / <code>lints-set</code> / <code>lints-optin</code> / <code>name-literal</code> / <code>deps-empty</code> / <code>toolchain-pin</code> である。 <code>test-src-ratio</code> の測定定義は「<code>crates/*/src/**/*.rs</code> で最初に現れる行頭 <code>#[cfg(test)]</code> からその file 末尾までを test 行、 それ以外を src 行とし、 raw line を整数比較する」と固定する (定義が無いと同一骨格で比が振れるため・F-03)。 xtask を std のみで書くのは leg 0 の admin 裁定 1 (直接依存 0 本・dev-dependencies を含む) による。 依存の追加は <a href="../spec/constitution.html#a3">A3</a> の user 手番であって実装側の裁量ではない。</p>
+
+<h3 id="s2-5-thresholds">§2.5 閾値の実値と置き場</h3>
+<p class="section-essence" data-audience="human">数値は本文に書きません。 下の表が実値と、 その値が実際に置かれている file の対応です。</p>
+<p data-audience="machine"><a href="../spec/constitution.html#c1">C1</a> は規則の値の置き場を定めており、 <a href="../spec/constitution.html#n2">N2</a> は散文にしか無い規則を規則として扱わない。 <strong>正本は manifest の <span class="term" data-term="rules 行">rules 行</span></strong> (<a href="../spec/constitution.html#c1">C1</a>) であり、 manifest が未存在の間は<strong>憲法 §3 の表 (R-C4-1〜R-C4-4) が値の唯一の存在箇所</strong>である (<a href="../spec/constitution.html#s3-rules-rows">憲法 §3</a> の当該規定)。 したがって下表も、 「実装での置き場」列に挙げた file も、 いずれも<strong>写し</strong>である。 値を変えるときは <a href="../spec/constitution.html#a2">A2</a> (grill 検証 → user 裁定) → 憲法 §3 の行 → 実装 file の順に降ろす。 逆向き (実装 file だけ直す) は禁ずる。 <strong>この 3 面の一致を測る機械は現時点で無い</strong> — <code>lints-set</code> tag は level しか突き合わせず閾値の数値を比較しないため、 実装 file だけを直すと CI 3 job は全緑のまま憲法 §3 と乖離する (§3 Negative)。 manifest への一本化は leg 2 の所管であり、 それまでこの乖離は人間の手続きで抑える。</p>
+<table>
+  <thead><tr><th>項目</th><th>実値</th><th>憲法 §3 の行 id</th><th>実装での置き場 (写し)</th></tr></thead>
+  <tbody>
+    <tr><td><code>too-many-arguments-threshold</code></td><td>5</td><td>R-C4-4</td><td><code>clippy.toml</code></td></tr>
+    <tr><td><code>too-many-lines-threshold</code></td><td>60</td><td>R-C4-4</td><td><code>clippy.toml</code></td></tr>
+    <tr><td><code>cognitive-complexity-threshold</code></td><td>15</td><td>R-C4-4</td><td><code>clippy.toml</code></td></tr>
+    <tr><td>core crate の <code>src</code> 総行数</td><td>20,000 以下</td><td>R-C4-1</td><td><code>crates/xtask/src/limits.rs</code> の <code>MAX_CORE_LINES</code></td></tr>
+    <tr><td><code>crates/*/src</code> の 1 file 行数</td><td>1,500 以下</td><td>R-C4-2</td><td><code>crates/xtask/src/limits.rs</code> の <code>MAX_FILE_LINES</code></td></tr>
+    <tr><td>test:src 比</td><td>1.0 以下 (整数比較 Σtest ≦ Σsrc)</td><td>R-C4-3</td><td><code>crates/xtask/src/check.rs</code> の <code>test-src-ratio</code></td></tr>
+    <tr><td>要求 lint の集合と level</td><td><code>REQUIRED_LINTS</code> (個数は本 ADR に書かない)</td><td>—</td><td><code>crates/xtask/src/limits.rs</code></td></tr>
+    <tr><td>test mod での逃がし</td><td><code>allow-*-in-tests</code> 6 key</td><td>—</td><td><code>clippy.toml</code></td></tr>
+    <tr><td>toolchain の版</td><td>1.98.1 (channel 固定・"stable" 語を使わない)</td><td>—</td><td><code>rust-toolchain.toml</code></td></tr>
+  </tbody>
+</table>
+
+<h3 id="s2-6-verification">§2.6 決定の遵守をどう確かめるか</h3>
+<p class="section-essence" data-audience="human">CI の 3 job が測る項と、 まだ機械が測っていない項を分けて書きます。 lint が本当に生きているかは機械が測っています。</p>
+<ul data-audience="machine">
+  <li>runner: CI の test job が <code>cargo nextest run --workspace --no-tests=fail</code> を走らせる (§2.1)。</li>
+  <li>lint の level と集合: <code>cargo xtask check</code> の <code>lints-set</code> tag が <code>REQUIRED_LINTS</code> と root の <code>Cargo.toml</code> を突き合わせる (§2.2 / §2.3)。</li>
+  <li>lint が実際に効いているか: <code>lints-optin</code> tag が member 側の <code>[lints] workspace = true</code> を測る。 clippy が沈黙する領域はここで塞ぐ (§2.4)。</li>
+  <li>構造の上限: <code>core-lines</code> / <code>file-lines</code> / <code>test-src-ratio</code> / <code>manifest-name</code> の各 tag (§2.4 / §2.5)。</li>
+  <li>依存 0 本: <code>deps-empty</code> tag。 crates.io からの fetch が要る状態になった時点で DONE ではなく BLOCKED である。</li>
+</ul>
+<p data-audience="machine"><strong>まだ機械が測っていない項</strong> (本 ADR が MUST を書いた範囲のうち、 現時点で歯が無いもの) を明示する — <a href="../spec/constitution.html#n2">N2</a> の要求により、 測っていないものを「測っている」と書かないためである。 (a) §2.1 の「bash / bats / Python の test file を置かない (0 file)」 — <code>cargo xtask check</code> の 10 tag にも CI 3 job にも、 shell / Python の test file を数える口が無い。 C12 の flip check の CI 化と併せて leg 1 の所管である。 (b) §2.5 の閾値 3 面 (憲法 §3 / <code>clippy.toml</code> / <code>crates/xtask/src/limits.rs</code>) の一致 — <code>lints-set</code> tag は level しか見ない。 いずれも本 ADR の時点では人間の手続きで抑える。</p>
+</section>
+
+<section id="s3-consequences" class="informative">
+<h2>§3. Consequences</h2>
+<p class="section-essence" data-audience="human">良い点は「書いたが効いていない歯」が構造から消えることです。 悪い点は、 関数を割れないときに作業が compile error で止まること、 閾値の置き場が当面 2 か所に分かれることです。</p>
+<h3>Positive</h3>
+<ul>
+  <li>「散文には在るが機械は測っていない」規則が消える — lint は <code>Cargo.toml</code> に載って初めて評価され、 載っていることと member が opt-in していることを <code>cargo xtask check</code> が測る (F-01 / F-02 の二重塞ぎ)。</li>
+  <li>粒度違反の逃げ道がコードから消える — <code>forbid</code> は <code>#[allow]</code> も <code>#[expect]</code> も <code>E0453</code> で塞ぐ。 逃げは人間の層 (BLOCKED → admin) にだけ残る。</li>
+  <li><span class="term" data-term="歯">歯</span>が Rust の 1 framework に収まり、 bash / bats という <span class="term" data-term="drift の面">drift の面</span>を持ち込まない (<a href="../spec/constitution.html#c12">C12</a>)。</li>
+  <li>例外が「理由つき <code>#[expect]</code>」の形で残るので、 出力層のような正当な例外は名乗りとして読める (<a href="../spec/constitution.html#c11">C11</a>)。</li>
+</ul>
+<h3>Negative</h3>
+<ul>
+  <li><code>forbid</code> は <code>#[expect]</code> も塞ぐため、 閾値を超えて関数を割れない case では作業が compile error で止まり、 admin へ返す手続きが要る。</li>
+  <li>閾値の実値が <code>clippy.toml</code> と <code>crates/xtask/src/limits.rs</code> の 2 か所に分かれている (一本化は leg 2 の所管)。</li>
+  <li>構造検査を外部 crate に頼らないので、 検査そのものを自前で保守する (TOML の読みも簡易実装)。</li>
+  <li>閾値が憲法 §3 の表・<code>clippy.toml</code>・<code>crates/xtask/src/limits.rs</code> の 3 面に写されているのに、 一致を測る機械が無い。 実装 file だけを直すと CI 3 job は全緑のまま憲法と乖離する (§2.5 / §2.6)。</li>
+  <li>「bash / bats / Python の test file 0 file」は MUST だが測る歯が無く、 これらを足す変更は現行 CI を素通りする (§2.6)。</li>
+  <li><code>allow_attributes</code> が <code>deny</code> である以上、 <code>#[expect]</code> を悪用した黙殺は機械では止まらない。 止めるのは review である。</li>
+</ul>
+<h3>Neutral</h3>
+<ul>
+  <li>本 ADR は決定の記録であり、 決定そのものは leg 0 の admin 裁定 2 (2026-09-07 確定) で行われた。 本 ADR で決定を変えない。</li>
+  <li><code>print_stdout</code> / <code>print_stderr</code> の <code>forbid</code> への引き上げは、 出力層の <code>#[expect]</code> 運用を変えるときに再検討する (supersede する新 ADR で行う)。</li>
+  <li>依存 0 本の制約は本 leg の裁定であり、 依存を足す判断は <a href="../spec/constitution.html#a3">A3</a> と <a href="../spec/constitution.html#c13">C13</a> の予算手続きに従う。</li>
+</ul>
+</section>
+
+<section id="s4-alternatives" class="informative">
+<h2>§4. Alternatives Considered</h2>
+<p class="section-essence" data-audience="human">lint の置き方を 4 案、 「<code>#[allow]</code> を塞げるか」「理由つきの <code>#[expect]</code> を残せるか」「閾値がそもそも評価されるか」で比べました。 3 つを同時に満たすのは採用案だけです。</p>
+<table>
+  <thead><tr><th>案</th><th><code>#[allow]</code> を塞ぐ</th><th><code>#[expect]</code> を残す</th><th>閾値が評価される</th><th>実測 / 出所</th><th>採否</th></tr></thead>
+  <tbody>
+    <tr><td><strong>粒度 3 本 = <code>forbid</code> + <code>allow_attributes = "deny"</code></strong></td><td>○ <code>E0453</code></td><td>○ <code>allow_attributes</code> は <code>#[allow]</code> にだけ反応する</td><td>○ <code>Cargo.toml</code> に載るため</td><td>admin が clippy 0.1.98 で実測した挙動表 (§2.2)・leg 0 の admin 裁定 2</td><td><strong>採用</strong></td></tr>
+    <tr><td>粒度 3 本 = <code>deny</code> + <code>allow_attributes = "deny"</code></td><td>△ <code>allow_attributes</code> が error で捕まえる</td><td>○ 残る</td><td>○ <code>Cargo.toml</code> に載るため</td><td>同じ実測表 — <code>deny</code> では <code>#[expect]</code> が通り、 粒度違反を黙殺する逃げ道が残る (leg 0 の admin 裁定 2)</td><td>却下</td></tr>
+    <tr><td>粒度 3 本 = <code>warn</code> + CI で <code>-D warnings</code></td><td>× <code>#[allow]</code> で黙殺できる</td><td>○ 残る</td><td>○ <code>Cargo.toml</code> に載るため</td><td>leg 0 の admin 裁定 2 — <a href="../spec/constitution.html#c4">C4</a> の「粒度の lint は <code>#[allow]</code> で黙らせられない」に反する</td><td>却下</td></tr>
+    <tr><td><code>clippy.toml</code> の閾値のみ (lint を <code>Cargo.toml</code> に載せない)</td><td>×</td><td>—</td><td>× <code>too_many_lines</code> / <code>cognitive_complexity</code> は既定 allow のため評価されない</td><td>QA F-02 の実測 — 契約と同一設定で 83 行の関数が rc 0 (leg 0 の admin 裁定 2 の前提)</td><td>却下</td></tr>
+  </tbody>
+</table>
+<p data-audience="machine">「—」= その軸が案の成否に効かないもの。 比較の順位は <a href="../spec/constitution.html#c4">C4</a> の「粒度の lint は黙らせられない」を最上位に置く。 <code>#[expect]</code> を残せるかは <a href="../spec/constitution.html#c11">C11</a> の例外形と <code>print_stdout</code> / <code>print_stderr</code> の運用 (F-07 系) に効くため第 2 の基準である。</p>
+<p class="section-essence" data-audience="human">runner と構造検査の側にも却下案があります。 いずれも憲法か leg 0 の裁定で決まっており、 好みでは決めていません。</p>
+<table>
+  <thead><tr><th>案</th><th>実測 / 出所</th><th>採否</th></tr></thead>
+  <tbody>
+    <tr><td><strong>runner = cargo nextest</strong></td><td><a href="../spec/constitution.html#c12">C12</a>「1 framework」の充足。 CI の test job が <code>--no-tests=fail</code> を渡せる (§2.1)</td><td><strong>採用</strong></td></tr>
+    <tr><td>runner に bash / bats を併用する</td><td><a href="../spec/constitution.html#c12">C12</a> が全廃を定める。 v1 で drift を招いた面そのもの (ADR-0001 §1)</td><td>却下</td></tr>
+    <tr><td><strong>構造検査 = std のみの <code>cargo xtask check</code></strong></td><td>leg 0 の admin 裁定 1 (直接依存 0 本・dev-dependencies を含む)</td><td><strong>採用</strong></td></tr>
+    <tr><td>構造検査に tokei / cargo-deny を依存として足す</td><td>leg 0 の却下案。 依存の追加は <a href="../spec/constitution.html#a3">A3</a> の user 手番であり実装側の裁量に置けない</td><td>却下</td></tr>
+    <tr><td>閾値を最初から rules 行の manifest へ置く</td><td>leg 0 の却下案。 当面の置き場は §2.5 の表のとおりで、 移設は leg 2 の所管</td><td>却下 (移設は leg 2)</td></tr>
+  </tbody>
+</table>
+</section>
+
+<section id="s5-trace" class="informative">
+<h2>§5. Trace</h2>
+<p class="section-essence" data-audience="human">出所は骨格 (leg 0) の admin 裁定 2 と、 その前提になった敵対検査の所見です。 拘束条件は憲法の C1 / C4 / C11 / C12 / C13 と A2 / A3 / N2 です。</p>
+<ul data-audience="machine">
+  <li>決定の原本: leg 0 (<code>s2-07l.1</code>) の acceptance にある <strong>admin 裁定 2</strong> (2026-09-07 確定・粒度 lint 3 本 = <code>forbid</code>、 <code>allow_attributes = "deny"</code> を追加) と <strong>admin 裁定 1</strong> (直接依存 0 本)。 clippy 0.1.98 の挙動表は同裁定の実測。</li>
+  <li>前提になった敵対検査の所見: F-01 (workspace lint の opt-in 穴)、 F-02 (<code>too_many_lines</code> / <code>cognitive_complexity</code> は既定 allow で閾値が評価されない)、 F-06 (<code>unused_must_use</code> の<em>宣言の欠落</em>は clippy では分からない)、 F-07 (opt-in を正すと test mod が落ちる → <code>allow-*-in-tests</code>)。</li>
+  <li>拘束条件: <a href="../spec/constitution.html#c1">C1</a> (規則はデータ)、 <a href="../spec/constitution.html#c4">C4</a> (大きさと粒度の上限・黙らせられない)、 <a href="../spec/constitution.html#c11">C11</a> (lint deny と理由つき <code>#[expect]</code>)、 <a href="../spec/constitution.html#c12">C12</a> (歯は Rust の 1 framework)、 <a href="../spec/constitution.html#c13">C13</a> (依存の予算)、 <a href="../spec/constitution.html#a2">A2</a> (閾値変更の手続き)、 <a href="../spec/constitution.html#a3">A3</a> (依存の追加は Ask-first)、 <a href="../spec/constitution.html#n2">N2</a> (散文だけの規則は規則でない)。</li>
+  <li>実装の実体 (本 ADR の写しの正本): <code>Cargo.toml</code> の <code>[workspace.lints.*]</code>、 <code>clippy.toml</code>、 <code>rust-toolchain.toml</code>、 <code>crates/xtask/src/limits.rs</code>、 <code>crates/xtask/src/check.rs</code>、 <code>.github/workflows/ci.yml</code>。</li>
+  <li>記録した日: 2026-09-08 (leg 0 の land 後)。 決定日 (2026-09-07) と分けて記す。</li>
+  <li>用語: 歯 / rules 行 / drift の面 は <code>design-intent/vocabulary.yaml</code> で定義する。</li>
+</ul>
+</section>
+
+<!-- folio:chrome-bottom -->
+<nav class="prevnext" aria-label="前後の文書">
+  <a class="prevnext__prev" href="ADR-0001-rust-single-static-binary.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">ADR-0001 — 実装言語と構成 = Rust 単一 static binary (Go / typed Python / TypeScript 却下)</span></a>
+</nav>
+<script>
+(function () {
+  var openedForPrint = [];
+  window.addEventListener('beforeprint', function () {
+    openedForPrint = [];
+    var ds = document.querySelectorAll('details:not([open])');
+    for (var i = 0; i < ds.length; i++) { ds[i].setAttribute('open', ''); openedForPrint.push(ds[i]); }
+  });
+  window.addEventListener('afterprint', function () {
+    for (var i = 0; i < openedForPrint.length; i++) openedForPrint[i].removeAttribute('open');
+    openedForPrint = [];
+  });
+  if (!document.querySelector('[data-audience]')) return;
+  /* 既定 = 人間プレゼン型 (ADR-0040 / rules §11.3): script 経由で初期 class を付与するため
+     no-JS では付かず全文可視に graceful degrade する。 static DOM は全文を保持 (AI/検索/印刷は不変)。 */
+  document.body.classList.add('audience-human');
+  var bar = document.createElement('nav');
+  bar.className = 'audience-toggle';
+  bar.setAttribute('aria-label', '表示対象の切替');
+  var states = [['both', '両方'], ['human', '人間向け'], ['machine', '機械向け']];
+  for (var s = 0; s < states.length; s++) {
+    (function (mode, label) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      b.setAttribute('aria-pressed', mode === 'human' ? 'true' : 'false');
+      b.addEventListener('click', function () {
+        document.body.classList.remove('audience-human', 'audience-machine');
+        if (mode !== 'both') document.body.classList.add('audience-' + mode);
+        var bs = bar.querySelectorAll('button');
+        for (var j = 0; j < bs.length; j++) bs[j].setAttribute('aria-pressed', bs[j] === b ? 'true' : 'false');
+      });
+      bar.appendChild(b);
+    })(states[s][0], states[s][1]);
+  }
+  var bc = document.querySelector('nav.breadcrumb');
+  if (bc && bc.parentNode) { bc.parentNode.insertBefore(bar, bc.nextSibling); }
+  else { document.body.insertBefore(bar, document.body.firstChild); }
+})();
+</script>
+<!-- /folio:chrome-bottom -->
+</body>
+</html>
