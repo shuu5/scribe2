@@ -2,7 +2,7 @@
 
 **codename `scribe2`** — 正式名は未定（user 裁定の手番）。
 
-scribe v1（`~/projects/local-projects/scribe`）の I1〜I7 要件を新しい器で満たすための repo。
+scribe v1（先行する scribe plugin repo）の I1〜I7 要件を新しい器で満たすための repo。
 
 ## 名前について（器 SPEC §7）
 
