@@ -106,7 +106,7 @@
 
 <h3 id="s2-2-granularity">§2.2 粒度 lint 3 本は forbid</h3>
 <p><code>[workspace.lints.clippy]</code> に <code>too_many_arguments</code> / <code>too_many_lines</code> / <code>cognitive_complexity</code> の 3 本を <strong><code>forbid</code></strong> で置く (MUST)。 level を落として <code>deny</code> にすることも、 3 本を省いて <code>clippy.toml</code> の閾値だけを置くことも禁ずる。</p>
-<p data-audience="machine">理由は 2 段である。 第 1 に、 この 3 本は clippy 既定 allow なので <code>Cargo.toml</code> に載せない限り <code>clippy.toml</code> の閾値が 1 度も評価されない (F-02 の実測)。 第 2 に、 載せたうえで level を <code>deny</code> にすると <code>#[allow]</code> で黙殺でき、 <a href="../spec/constitution.html#c4">C4</a> が散文で禁じている「黙らせられない」が機械では真にならない。 admin が clippy 0.1.98 で実測した挙動は次表のとおりで、 <code>forbid</code> だけが両方の逃げ道を <code>E0453</code> の hard error で塞ぐ。</p>
+<p data-audience="machine">理由は 2 段である。 第 1 に、 3 本のうち <code>too_many_lines</code> と <code>cognitive_complexity</code> は clippy 既定 allow なので、 <code>Cargo.toml</code> に載せない限り <code>clippy.toml</code> の閾値が 1 度も評価されない (F-02 の実測 = 契約と同一設定で 83 行の関数が rc 0)。 <strong>この 2 本と <code>too_many_arguments</code> は既定 level が違う</strong>: <code>too_many_arguments</code> は clippy 既定 warn であり、 宣言が無くても <code>-D warnings</code> 下では違反そのものは落ちる (clippy 0.1.98 実測 = 宣言ゼロの crate で 7 引数関数が <code>-D clippy::too-many-arguments</code> implied by <code>-D warnings</code> として error)。 それでも 3 本を揃えて宣言するのは、 既定 level に依存せず<strong>宣言を SSoT にする</strong>ため、 および第 2 の理由で level を <code>forbid</code> へ引き上げるためである。 第 2 に、 載せたうえで level を <code>deny</code> にすると <code>#[allow]</code> で黙殺でき、 <a href="../spec/constitution.html#c4">C4</a> が散文で禁じている「黙らせられない」が機械では真にならない。 admin が clippy 0.1.98 で実測した挙動は次表のとおりで、 <code>forbid</code> だけが両方の逃げ道を <code>E0453</code> の hard error で塞ぐ。</p>
 <table>
   <thead><tr><th>level</th><th><code>#[allow]</code> を書いたとき</th><th><code>#[expect(..., reason = ...)]</code> を書いたとき</th></tr></thead>
   <tbody>
@@ -122,28 +122,28 @@
 
 <h3 id="s2-4-xtask">§2.4 構造検査 = cargo xtask check</h3>
 <p>行数 / test:src 比 / manifest-name の構造検査は、 workspace member <code>crates/xtask</code> の <strong><code>cargo xtask check</code></strong> が担う (MUST)。 xtask は直接依存 0 本 (std のみ) で書く。</p>
-<p data-audience="machine">この検査が独立して必要なのは、 clippy が構造的に沈黙する領域が在るからである。 (a) F-01 の opt-in 穴 — member の <code>[lints] workspace = true</code> が無いと clippy は rc 0 で沈黙するので、 <code>lints-optin</code> tag が member 側の opt-in を測る。 (b) F-06 — <code>unused_must_use</code> は rustc 既定 warn ゆえ <code>clippy -D warnings</code> では検出できず、 <code>lints-set</code> tag だけが番人になる。 measure する tag は <code>core-lines</code> / <code>file-lines</code> / <code>test-src-ratio</code> / <code>manifest-name</code> / <code>manifest-version</code> / <code>lints-set</code> / <code>lints-optin</code> / <code>name-literal</code> / <code>deps-empty</code> / <code>toolchain-pin</code> である。 <code>test-src-ratio</code> の測定定義は「<code>crates/*/src/**/*.rs</code> で最初に現れる行頭 <code>#[cfg(test)]</code> からその file 末尾までを test 行、 それ以外を src 行とし、 raw line を整数比較する」と固定する (定義が無いと同一骨格で比が振れるため・F-03)。 xtask を std のみで書くのは leg 0 の admin 裁定 1 (直接依存 0 本・dev-dependencies を含む) による。 依存の追加は <a href="../spec/constitution.html#a3">A3</a> の user 手番であって実装側の裁量ではない。</p>
+<p data-audience="machine">この検査が独立して必要なのは、 clippy が構造的に沈黙する領域が在るからである。 (a) F-01 の opt-in 穴 — member の <code>[lints] workspace = true</code> が無いと clippy は rc 0 で沈黙するので、 <code>lints-optin</code> tag が member 側の opt-in を測る。 (b) F-06 — <code>unused_must_use</code> の<strong>宣言が root の <code>Cargo.toml</code> から落ちたこと</strong>は clippy では分からない。 違反そのものは rustc 既定 warn ゆえ <code>-D warnings</code> が捕まえる (clippy 0.1.98 実測 = 宣言ゼロの crate で <code>-D unused-must-use</code> implied by <code>-D warnings</code> として error・rc 101) が、 それは CI の <code>-D warnings</code> に依存した検出であって「宣言が在ること」の検査ではない。 宣言の欠落を測るのは <code>lints-set</code> tag だけである。 measure する tag は <code>core-lines</code> / <code>file-lines</code> / <code>test-src-ratio</code> / <code>manifest-name</code> / <code>manifest-version</code> / <code>lints-set</code> / <code>lints-optin</code> / <code>name-literal</code> / <code>deps-empty</code> / <code>toolchain-pin</code> である。 <code>test-src-ratio</code> の測定定義は「<code>crates/*/src/**/*.rs</code> で最初に現れる行頭 <code>#[cfg(test)]</code> からその file 末尾までを test 行、 それ以外を src 行とし、 raw line を整数比較する」と固定する (定義が無いと同一骨格で比が振れるため・F-03)。 xtask を std のみで書くのは leg 0 の admin 裁定 1 (直接依存 0 本・dev-dependencies を含む) による。 依存の追加は <a href="../spec/constitution.html#a3">A3</a> の user 手番であって実装側の裁量ではない。</p>
 
 <h3 id="s2-5-thresholds">§2.5 閾値の実値と置き場</h3>
 <p class="section-essence" data-audience="human">数値は本文に書きません。 下の表が実値と、 その値が実際に置かれている file の対応です。</p>
-<p data-audience="machine"><a href="../spec/constitution.html#c1">C1</a> は規則の値の置き場を定めており、 <a href="../spec/constitution.html#n2">N2</a> は散文にしか無い規則を規則として扱わない。 よって本 ADR は実値の<strong>写し</strong>を表として持ち、 正本は「置き場」列の file とする。 <span class="term" data-term="rules 行">rules 行</span> の manifest への移設は leg 2 の所管であり、 それまでは下表の置き場が正本である。</p>
+<p data-audience="machine"><a href="../spec/constitution.html#c1">C1</a> は規則の値の置き場を定めており、 <a href="../spec/constitution.html#n2">N2</a> は散文にしか無い規則を規則として扱わない。 <strong>正本は manifest の <span class="term" data-term="rules 行">rules 行</span></strong> (<a href="../spec/constitution.html#c1">C1</a>) であり、 manifest が未存在の間は<strong>憲法 §3 の表 (R-C4-1〜R-C4-4) が値の唯一の存在箇所</strong>である (<a href="../spec/constitution.html#s3-rules-rows">憲法 §3</a> の当該規定)。 したがって下表も、 「実装での置き場」列に挙げた file も、 いずれも<strong>写し</strong>である。 値を変えるときは <a href="../spec/constitution.html#a2">A2</a> (grill 検証 → user 裁定) → 憲法 §3 の行 → 実装 file の順に降ろす。 逆向き (実装 file だけ直す) は禁ずる。 <strong>この 3 面の一致を測る機械は現時点で無い</strong> — <code>lints-set</code> tag は level しか突き合わせず閾値の数値を比較しないため、 実装 file だけを直すと CI 3 job は全緑のまま憲法 §3 と乖離する (§3 Negative)。 manifest への一本化は leg 2 の所管であり、 それまでこの乖離は人間の手続きで抑える。</p>
 <table>
-  <thead><tr><th>項目</th><th>実値</th><th>置き場 (正本)</th></tr></thead>
+  <thead><tr><th>項目</th><th>実値</th><th>憲法 §3 の行 id</th><th>実装での置き場 (写し)</th></tr></thead>
   <tbody>
-    <tr><td><code>too-many-arguments-threshold</code></td><td>5</td><td><code>clippy.toml</code></td></tr>
-    <tr><td><code>too-many-lines-threshold</code></td><td>60</td><td><code>clippy.toml</code></td></tr>
-    <tr><td><code>cognitive-complexity-threshold</code></td><td>15</td><td><code>clippy.toml</code></td></tr>
-    <tr><td>core crate の <code>src</code> 総行数</td><td>20,000 以下</td><td><code>crates/xtask/src/limits.rs</code> の <code>MAX_CORE_LINES</code></td></tr>
-    <tr><td><code>crates/*/src</code> の 1 file 行数</td><td>1,500 以下</td><td><code>crates/xtask/src/limits.rs</code> の <code>MAX_FILE_LINES</code></td></tr>
-    <tr><td>test:src 比</td><td>1.0 以下 (整数比較 Σtest ≦ Σsrc)</td><td><code>crates/xtask/src/check.rs</code> の <code>test-src-ratio</code></td></tr>
-    <tr><td>要求 lint の集合と level</td><td><code>REQUIRED_LINTS</code> (個数は本 ADR に書かない)</td><td><code>crates/xtask/src/limits.rs</code></td></tr>
-    <tr><td>test mod での逃がし</td><td><code>allow-*-in-tests</code> 6 key</td><td><code>clippy.toml</code></td></tr>
-    <tr><td>toolchain の版</td><td>1.98.1 (channel 固定・"stable" 語を使わない)</td><td><code>rust-toolchain.toml</code></td></tr>
+    <tr><td><code>too-many-arguments-threshold</code></td><td>5</td><td>R-C4-4</td><td><code>clippy.toml</code></td></tr>
+    <tr><td><code>too-many-lines-threshold</code></td><td>60</td><td>R-C4-4</td><td><code>clippy.toml</code></td></tr>
+    <tr><td><code>cognitive-complexity-threshold</code></td><td>15</td><td>R-C4-4</td><td><code>clippy.toml</code></td></tr>
+    <tr><td>core crate の <code>src</code> 総行数</td><td>20,000 以下</td><td>R-C4-1</td><td><code>crates/xtask/src/limits.rs</code> の <code>MAX_CORE_LINES</code></td></tr>
+    <tr><td><code>crates/*/src</code> の 1 file 行数</td><td>1,500 以下</td><td>R-C4-2</td><td><code>crates/xtask/src/limits.rs</code> の <code>MAX_FILE_LINES</code></td></tr>
+    <tr><td>test:src 比</td><td>1.0 以下 (整数比較 Σtest ≦ Σsrc)</td><td>R-C4-3</td><td><code>crates/xtask/src/check.rs</code> の <code>test-src-ratio</code></td></tr>
+    <tr><td>要求 lint の集合と level</td><td><code>REQUIRED_LINTS</code> (個数は本 ADR に書かない)</td><td>—</td><td><code>crates/xtask/src/limits.rs</code></td></tr>
+    <tr><td>test mod での逃がし</td><td><code>allow-*-in-tests</code> 6 key</td><td>—</td><td><code>clippy.toml</code></td></tr>
+    <tr><td>toolchain の版</td><td>1.98.1 (channel 固定・"stable" 語を使わない)</td><td>—</td><td><code>rust-toolchain.toml</code></td></tr>
   </tbody>
 </table>
 
 <h3 id="s2-6-verification">§2.6 決定の遵守をどう確かめるか</h3>
-<p class="section-essence" data-audience="human">CI の 3 job が本 ADR の全項を測ります。 lint が本当に生きているかも、 機械が測っています。</p>
+<p class="section-essence" data-audience="human">CI の 3 job が測る項と、 まだ機械が測っていない項を分けて書きます。 lint が本当に生きているかは機械が測っています。</p>
 <ul data-audience="machine">
   <li>runner: CI の test job が <code>cargo nextest run --workspace --no-tests=fail</code> を走らせる (§2.1)。</li>
   <li>lint の level と集合: <code>cargo xtask check</code> の <code>lints-set</code> tag が <code>REQUIRED_LINTS</code> と root の <code>Cargo.toml</code> を突き合わせる (§2.2 / §2.3)。</li>
@@ -151,6 +151,7 @@
   <li>構造の上限: <code>core-lines</code> / <code>file-lines</code> / <code>test-src-ratio</code> / <code>manifest-name</code> の各 tag (§2.4 / §2.5)。</li>
   <li>依存 0 本: <code>deps-empty</code> tag。 crates.io からの fetch が要る状態になった時点で DONE ではなく BLOCKED である。</li>
 </ul>
+<p data-audience="machine"><strong>まだ機械が測っていない項</strong> (本 ADR が MUST を書いた範囲のうち、 現時点で歯が無いもの) を明示する — <a href="../spec/constitution.html#n2">N2</a> の要求により、 測っていないものを「測っている」と書かないためである。 (a) §2.1 の「bash / bats / Python の test file を置かない (0 file)」 — <code>cargo xtask check</code> の 10 tag にも CI 3 job にも、 shell / Python の test file を数える口が無い。 C12 の flip check の CI 化と併せて leg 1 の所管である。 (b) §2.5 の閾値 3 面 (憲法 §3 / <code>clippy.toml</code> / <code>crates/xtask/src/limits.rs</code>) の一致 — <code>lints-set</code> tag は level しか見ない。 いずれも本 ADR の時点では人間の手続きで抑える。</p>
 </section>
 
 <section id="s3-consequences" class="informative">
@@ -168,6 +169,8 @@
   <li><code>forbid</code> は <code>#[expect]</code> も塞ぐため、 閾値を超えて関数を割れない case では作業が compile error で止まり、 admin へ返す手続きが要る。</li>
   <li>閾値の実値が <code>clippy.toml</code> と <code>crates/xtask/src/limits.rs</code> の 2 か所に分かれている (一本化は leg 2 の所管)。</li>
   <li>構造検査を外部 crate に頼らないので、 検査そのものを自前で保守する (TOML の読みも簡易実装)。</li>
+  <li>閾値が憲法 §3 の表・<code>clippy.toml</code>・<code>crates/xtask/src/limits.rs</code> の 3 面に写されているのに、 一致を測る機械が無い。 実装 file だけを直すと CI 3 job は全緑のまま憲法と乖離する (§2.5 / §2.6)。</li>
+  <li>「bash / bats / Python の test file 0 file」は MUST だが測る歯が無く、 これらを足す変更は現行 CI を素通りする (§2.6)。</li>
   <li><code>allow_attributes</code> が <code>deny</code> である以上、 <code>#[expect]</code> を悪用した黙殺は機械では止まらない。 止めるのは review である。</li>
 </ul>
 <h3>Neutral</h3>
@@ -187,7 +190,7 @@
     <tr><td><strong>粒度 3 本 = <code>forbid</code> + <code>allow_attributes = "deny"</code></strong></td><td>○ <code>E0453</code></td><td>○ <code>allow_attributes</code> は <code>#[allow]</code> にだけ反応する</td><td>○ <code>Cargo.toml</code> に載るため</td><td>admin が clippy 0.1.98 で実測した挙動表 (§2.2)・leg 0 の admin 裁定 2</td><td><strong>採用</strong></td></tr>
     <tr><td>粒度 3 本 = <code>deny</code> + <code>allow_attributes = "deny"</code></td><td>△ <code>allow_attributes</code> が error で捕まえる</td><td>○ 残る</td><td>○ <code>Cargo.toml</code> に載るため</td><td>同じ実測表 — <code>deny</code> では <code>#[expect]</code> が通り、 粒度違反を黙殺する逃げ道が残る (leg 0 の admin 裁定 2)</td><td>却下</td></tr>
     <tr><td>粒度 3 本 = <code>warn</code> + CI で <code>-D warnings</code></td><td>× <code>#[allow]</code> で黙殺できる</td><td>○ 残る</td><td>○ <code>Cargo.toml</code> に載るため</td><td>leg 0 の admin 裁定 2 — <a href="../spec/constitution.html#c4">C4</a> の「粒度の lint は <code>#[allow]</code> で黙らせられない」に反する</td><td>却下</td></tr>
-    <tr><td><code>clippy.toml</code> の閾値のみ (lint を <code>Cargo.toml</code> に載せない)</td><td>×</td><td>—</td><td>× 既定 allow のため 1 度も評価されない</td><td>QA F-02 の実測 — 契約と同一設定で 83 行の関数が rc 0 (leg 0 の admin 裁定 2 の前提)</td><td>却下</td></tr>
+    <tr><td><code>clippy.toml</code> の閾値のみ (lint を <code>Cargo.toml</code> に載せない)</td><td>×</td><td>—</td><td>× <code>too_many_lines</code> / <code>cognitive_complexity</code> は既定 allow のため評価されない</td><td>QA F-02 の実測 — 契約と同一設定で 83 行の関数が rc 0 (leg 0 の admin 裁定 2 の前提)</td><td>却下</td></tr>
   </tbody>
 </table>
 <p data-audience="machine">「—」= その軸が案の成否に効かないもの。 比較の順位は <a href="../spec/constitution.html#c4">C4</a> の「粒度の lint は黙らせられない」を最上位に置く。 <code>#[expect]</code> を残せるかは <a href="../spec/constitution.html#c11">C11</a> の例外形と <code>print_stdout</code> / <code>print_stderr</code> の運用 (F-07 系) に効くため第 2 の基準である。</p>
@@ -209,11 +212,11 @@
 <p class="section-essence" data-audience="human">出所は骨格 (leg 0) の admin 裁定 2 と、 その前提になった敵対検査の所見です。 拘束条件は憲法の C1 / C4 / C11 / C12 / C13 と A2 / A3 / N2 です。</p>
 <ul data-audience="machine">
   <li>決定の原本: leg 0 (<code>s2-07l.1</code>) の acceptance にある <strong>admin 裁定 2</strong> (2026-09-07 確定・粒度 lint 3 本 = <code>forbid</code>、 <code>allow_attributes = "deny"</code> を追加) と <strong>admin 裁定 1</strong> (直接依存 0 本)。 clippy 0.1.98 の挙動表は同裁定の実測。</li>
-  <li>前提になった敵対検査の所見: F-01 (workspace lint の opt-in 穴)、 F-02 (既定 allow で閾値が評価されない)、 F-06 (<code>unused_must_use</code> は clippy では検出できない)、 F-07 (opt-in を正すと test mod が落ちる → <code>allow-*-in-tests</code>)。</li>
+  <li>前提になった敵対検査の所見: F-01 (workspace lint の opt-in 穴)、 F-02 (<code>too_many_lines</code> / <code>cognitive_complexity</code> は既定 allow で閾値が評価されない)、 F-06 (<code>unused_must_use</code> の<em>宣言の欠落</em>は clippy では分からない)、 F-07 (opt-in を正すと test mod が落ちる → <code>allow-*-in-tests</code>)。</li>
   <li>拘束条件: <a href="../spec/constitution.html#c1">C1</a> (規則はデータ)、 <a href="../spec/constitution.html#c4">C4</a> (大きさと粒度の上限・黙らせられない)、 <a href="../spec/constitution.html#c11">C11</a> (lint deny と理由つき <code>#[expect]</code>)、 <a href="../spec/constitution.html#c12">C12</a> (歯は Rust の 1 framework)、 <a href="../spec/constitution.html#c13">C13</a> (依存の予算)、 <a href="../spec/constitution.html#a2">A2</a> (閾値変更の手続き)、 <a href="../spec/constitution.html#a3">A3</a> (依存の追加は Ask-first)、 <a href="../spec/constitution.html#n2">N2</a> (散文だけの規則は規則でない)。</li>
   <li>実装の実体 (本 ADR の写しの正本): <code>Cargo.toml</code> の <code>[workspace.lints.*]</code>、 <code>clippy.toml</code>、 <code>rust-toolchain.toml</code>、 <code>crates/xtask/src/limits.rs</code>、 <code>crates/xtask/src/check.rs</code>、 <code>.github/workflows/ci.yml</code>。</li>
   <li>記録した日: 2026-09-08 (leg 0 の land 後)。 決定日 (2026-09-07) と分けて記す。</li>
-  <li>用語: 歯 / rules 行 / drift の面 / 検出線 は <code>design-intent/vocabulary.yaml</code> で定義する。</li>
+  <li>用語: 歯 / rules 行 / drift の面 は <code>design-intent/vocabulary.yaml</code> で定義する。</li>
 </ul>
 </section>
 
