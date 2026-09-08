@@ -1,5 +1,8 @@
-suites: []
-full: []
+suites:
+  - {name: nextest, kind: test, cmd: "cargo nextest run --workspace --no-tests=fail", timeout_sec: 60}
+  - {name: clippy, kind: lint, cmd: "cargo clippy --workspace --all-targets -- -D warnings", timeout_sec: 60}
+  - {name: xtask-check, kind: lint, cmd: "cargo xtask check", timeout_sec: 60}
+full: [nextest, clippy, xtask-check]
 quick: []
 runner: local
 coalesce: latest-head
