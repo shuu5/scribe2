@@ -14,3 +14,9 @@ P2 骨格の bootstrap 段 1。v2 は当面 **v1 の pipeline（scribe v1 の器
 
 - 憲法 v0.3（Always C1〜C13 / Ask-first A1〜A4 / Never N1〜N4）= user 承認済み（2026-09-07・P1 exit）
 - 台帳 prefix = `s2-`
+
+## cargo workspace（P2 leg 0）
+
+- **NAME 1 定数**: 名前の字面を持つ `.rs` は `crates/scribe2/src/name.rs` ただ 1 本で、`xtask check` の `name-literal` が機械で守る。
+- **`cargo xtask check`**: core 行数 / 1 file 行数 / test:src 比 / plugin manifest parity / lints 集合と opt-in / 直接依存 0 本 / toolchain pin を測り、違反 1 件 1 行で rc 1 を返す。
+- **CI 3 job**: `nextest`（`cargo nextest run --workspace`）→ `clippy`（`cargo clippy --workspace --all-targets -- -D warnings`）→ `xtask-check`（`cargo xtask check`）。

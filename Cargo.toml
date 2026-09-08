@@ -1,0 +1,27 @@
+[workspace]
+resolver = "2"
+members = ["crates/scribe2", "crates/xtask"]
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+unused_must_use = "deny"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+exit = "deny"
+indexing_slicing = "deny"
+dbg_macro = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
+too_many_arguments = "forbid"
+too_many_lines = "forbid"
+cognitive_complexity = "forbid"
+allow_attributes = "deny"
+
+[profile.dev]
+debug = "line-tables-only"
