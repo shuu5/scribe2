@@ -8,9 +8,11 @@
 //! 契約 file が読めない周は「対象そのものが壊れている」ので rc 2 で、理由を全件出す。
 
 use super::contract::Contract;
+use super::gate::{Gate, Limits};
+use super::land::Land;
 use super::spawn::{spawn, Launch};
 use super::{contract_path, current, emit, run_dir, run_id, worktree_path, Emit, Precheck};
-use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
+use crate::cli_outcome::{Outcome, RC_BROKEN, RC_OK, RC_REFUSED};
 use crate::fleet::store::{LockPolicy, StoreError};
 use crate::fleet::{self, Completion, EventKind, SeatState, Stage, State};
 use crate::hook::vessel;
@@ -23,9 +25,17 @@ use std::time::Duration;
 /// 停止の猶予を持つ rules 行。
 const ROW_GRACE: &str = "pipe.stop_grace_ms";
 
+/// gate が要る lens の本数を持つ rules 行。
+const ROW_LENS: &str = "gate.lens_count";
+
+/// gate の diff 上限（byte）を持つ rules 行。
+const ROW_CAP: &str = "gate.token_cap";
+
 /// `pipe` の使い方。
 pub fn usage() -> String {
-    format!("usage: {NAME} pipe <intake|spawn|show|resume|stop> [--state-dir D] [--rules PATH] [flags]")
+    format!(
+        "usage: {NAME} pipe <intake|spawn|gate|land|run|show|resume|stop> [--state-dir D] [--rules PATH] [flags]"
+    )
 }
 
 /// `pipe` に続く引数を捌く。
@@ -41,8 +51,11 @@ pub fn dispatch(args: &[String]) -> Outcome {
     match args.first().map(String::as_str) {
         Some("intake") => intake(args, policy),
         Some("spawn") => start(args, policy),
+        Some("gate") => by_run(args, |id| gate_run(args, id, &manifest, policy)),
+        Some("land") => by_run(args, |id| land_run(args, id, policy)),
+        Some("run") => run_all(args, &manifest, policy),
         Some("show") => show(args),
-        Some("resume") => resume(args, policy),
+        Some("resume") => resume(args, &manifest, policy),
         Some("stop") => stop(args, &manifest, policy),
         _ => Outcome::failed(RC_REFUSED, vec![usage()]),
     }
@@ -110,6 +123,15 @@ fn state_dir_of(args: &[String]) -> Result<PathBuf, String> {
 
 /// 契約 file を読み込み、置き場へ写して run を起こす。
 fn intake(args: &[String], policy: LockPolicy) -> Outcome {
+    match intake_id(args, policy) {
+        Ok(id) => Outcome::ok_line(format!("run={id}")),
+        Err(outcome) => outcome,
+    }
+}
+
+/// intake の本体。**id を返す**のは `run` が続きの段へ渡すためである
+/// （自分の stdout を読み直して id を取る形にすると、表示を変えた瞬間に連鎖が壊れる）。
+fn intake_id(args: &[String], policy: LockPolicy) -> Result<String, Outcome> {
     let parsed = (|| {
         Ok::<_, String>((
             PathBuf::from(need(args, "--contract")?),
@@ -117,37 +139,24 @@ fn intake(args: &[String], policy: LockPolicy) -> Outcome {
             PathBuf::from(need(args, "--repo")?),
         ))
     })();
-    let (path, bead, repo) = match parsed {
-        Ok(found) => found,
-        Err(reason) => return refused(reason),
-    };
+    let (path, bead, repo) = parsed.map_err(refused)?;
     // repo は spawn まで使わないが、**intake の時点で** git repo かを確かめる。
     // 後段で初めて落ちると、契約は受理されたのに進めない run が残る。
     if super::head_of(&repo).is_none() {
-        return refused(format!("{} は git repo でない", repo.display()));
+        return Err(refused(format!("{} は git repo でない", repo.display())));
     }
-    let state_dir = match state_dir_of(args) {
-        Ok(found) => found,
-        Err(reason) => return refused(reason),
-    };
-    let contract = match Contract::load(&path) {
-        Ok(found) => found,
-        Err(errors) => {
-            return Outcome::failed(RC_BROKEN, errors.iter().map(ToString::to_string).collect())
-        }
-    };
+    let state_dir = state_dir_of(args).map_err(refused)?;
+    let contract = Contract::load(&path).map_err(|errors| {
+        Outcome::failed(RC_BROKEN, errors.iter().map(ToString::to_string).collect())
+    })?;
     let id = run_id(&bead, &fleet::cli::now_utc());
     // stamp は秒までなので、同じ bead を同じ秒に 2 回 intake すると id が衝突する。
     // 黙って上書きすると **前の便の契約が別物に化ける**ので、何も書かずに断る。
     if run_dir(&state_dir, &id).exists() {
-        return refused(format!("run {id} は既に在る（同じ秒の再 intake）"));
+        return Err(refused(format!("run {id} は既に在る（同じ秒の再 intake）")));
     }
-    if let Err(reason) = copy_contract(&state_dir, &id, &path) {
-        return broken(reason);
-    }
-    if let Err(reason) = remember_repo(&state_dir, &id, &repo) {
-        return broken(reason);
-    }
+    copy_contract(&state_dir, &id, &path).map_err(broken)?;
+    remember_repo(&state_dir, &id, &repo).map_err(broken)?;
     let emitted = emit(
         &state_dir,
         &Emit {
@@ -162,8 +171,8 @@ fn intake(args: &[String], policy: LockPolicy) -> Outcome {
         policy,
     );
     match emitted {
-        Err(err) => broken(err.to_string()),
-        Ok(()) => Outcome::ok_line(format!("run={id}")),
+        Err(err) => Err(broken(err.to_string())),
+        Ok(()) => Ok(id),
     }
 }
 
@@ -213,6 +222,47 @@ fn start(args: &[String], policy: LockPolicy) -> Outcome {
     launch(args, &id, &runner, policy, &[Stage::Intake])
 }
 
+/// 段を通すのに要る材料（すべて永続面から解いたもの）。
+struct Resolved {
+    /// 置き場。
+    state_dir: PathBuf,
+    /// 対象 repo。
+    repo: PathBuf,
+    /// 読み込み済みの契約。
+    contract: Contract,
+    /// 契約の bead id。
+    bead: String,
+}
+
+/// 段の前提を確かめ、材料を永続面から解く。**3 つの段（spawn / gate / land）が共有する**。
+///
+/// **順序を変えない**: 置き場 → replay → 段 → 契約 → repo。段の検査を契約より後ろへ
+/// 動かすと、段違いの周に契約の error（rc 2）が先に出て「前提違反は何もせず rc 1」が
+/// 崩れる（event も 1 件も書かない、という不変条件はこの順序に乗っている）。
+fn resolve(args: &[String], id: &str, allowed: &[Stage]) -> Result<Resolved, Outcome> {
+    let state_dir = state_dir_of(args).map_err(refused)?;
+    let state = current(&state_dir).map_err(|errors| {
+        Outcome::failed(RC_BROKEN, errors.iter().map(StoreError::to_string).collect())
+    })?;
+    let stage = stage_of(&state, id).map_err(refused)?;
+    if !allowed.contains(&stage) {
+        return Err(refused(format!("run {id} の段は {} である", stage.as_str())));
+    }
+    let Some(run) = state.runs.get(id) else {
+        return Err(refused(format!("run {id} が無い")));
+    };
+    let contract = Contract::load(&contract_path(&state_dir, id)).map_err(|errors| {
+        Outcome::failed(RC_BROKEN, errors.iter().map(ToString::to_string).collect())
+    })?;
+    let repo = run_repo(args, &state_dir, id).map_err(refused)?;
+    Ok(Resolved {
+        state_dir,
+        repo,
+        contract,
+        bead: run.bead.clone(),
+    })
+}
+
 /// 段を確かめてから起動口を通す。
 fn launch(
     args: &[String],
@@ -221,33 +271,11 @@ fn launch(
     policy: LockPolicy,
     allowed: &[Stage],
 ) -> Outcome {
-    let state_dir = match state_dir_of(args) {
+    let resolved = match resolve(args, id, allowed) {
         Ok(found) => found,
-        Err(reason) => return refused(reason),
+        Err(outcome) => return outcome,
     };
-    let state = match current(&state_dir) {
-        Ok(found) => found,
-        Err(errors) => return Outcome::failed(RC_BROKEN, errors.iter().map(StoreError::to_string).collect()),
-    };
-    let stage = match stage_of(&state, id) {
-        Ok(found) => found,
-        Err(reason) => return refused(reason),
-    };
-    if !allowed.contains(&stage) {
-        return refused(format!("run {id} の段は {} である", stage.as_str()));
-    }
-    let Some(run) = state.runs.get(id) else {
-        return refused(format!("run {id} が無い"));
-    };
-    let contract = match Contract::load(&contract_path(&state_dir, id)) {
-        Ok(found) => found,
-        Err(errors) => return Outcome::failed(RC_BROKEN, errors.iter().map(ToString::to_string).collect()),
-    };
-    let repo = match run_repo(args, &state_dir, id) {
-        Ok(found) => found,
-        Err(reason) => return refused(reason),
-    };
-    let budget = match Precheck::measure(&contract, &repo) {
+    let budget = match Precheck::measure(&resolved.contract, &resolved.repo) {
         Ok(found) => found.into_budget(),
         Err(reason) => return refused(reason),
     };
@@ -255,14 +283,115 @@ fn launch(
         budget,
         &Launch {
             run: id,
-            bead: &run.bead,
-            repo: &repo,
-            state_dir: &state_dir,
-            contract: &contract,
+            bead: &resolved.bead,
+            repo: &resolved.repo,
+            state_dir: &resolved.state_dir,
+            contract: &resolved.contract,
             runner,
             policy,
         },
     )
+}
+
+/// `--run` を読んでから段の関数へ渡す。
+fn by_run(args: &[String], step: impl FnOnce(&str) -> Outcome) -> Outcome {
+    match need(args, "--run") {
+        Err(reason) => refused(reason),
+        Ok(id) => step(id),
+    }
+}
+
+/// 規則から gate の 2 つの線を読む。**数値を .rs へ焼かない**（憲法 C1 / C5）。
+fn limits_of(manifest: &Manifest) -> Result<Limits, String> {
+    Ok(Limits {
+        lens_count: int_row(manifest, ROW_LENS)?,
+        token_cap: int_row(manifest, ROW_CAP)?,
+    })
+}
+
+/// `pipe gate`。前提 stage = Implemented。
+fn gate_run(args: &[String], id: &str, manifest: &Manifest, policy: LockPolicy) -> Outcome {
+    let resolved = match resolve(args, id, &[Stage::Implemented]) {
+        Ok(found) => found,
+        Err(outcome) => return outcome,
+    };
+    let limits = match limits_of(manifest) {
+        Ok(found) => found,
+        Err(reason) => return broken(reason),
+    };
+    let lens = match flag(args, "--lens") {
+        Ok(found) => found,
+        Err(reason) => return refused(reason),
+    };
+    super::gate::gate(&Gate {
+        run: id,
+        bead: &resolved.bead,
+        repo: &resolved.repo,
+        state_dir: &resolved.state_dir,
+        contract: &resolved.contract,
+        lens,
+        limits,
+        policy,
+    })
+}
+
+/// `pipe land`。前提 stage = Gated（PASS の検査は land 側が持つ）。
+fn land_run(args: &[String], id: &str, policy: LockPolicy) -> Outcome {
+    let resolved = match resolve(args, id, &[Stage::Gated]) {
+        Ok(found) => found,
+        Err(outcome) => return outcome,
+    };
+    super::land::land(&Land {
+        run: id,
+        bead: &resolved.bead,
+        repo: &resolved.repo,
+        state_dir: &resolved.state_dir,
+        contract: &resolved.contract,
+        policy,
+    })
+}
+
+/// `pipe run`。intake → spawn → gate → land を 1 process で連続させる。
+///
+/// 各段は永続面を読み書きするので、途中で落ちても `resume` が続きを引ける。
+fn run_all(args: &[String], manifest: &Manifest, policy: LockPolicy) -> Outcome {
+    let runner = match need(args, "--runner") {
+        Ok(found) => found.to_owned(),
+        Err(reason) => return refused(reason),
+    };
+    let id = match intake_id(args, policy) {
+        Ok(found) => found,
+        Err(outcome) => return outcome,
+    };
+    // **run id は落ちた周も stdout に出す**。`resume` がこの id を要るためで、
+    // ここで黙ると続きから引けない便が置き場に残る。
+    let mut lines = vec![format!("run={id}")];
+    let spawned = launch(args, &id, &runner, policy, &[Stage::Intake]);
+    if let Some(stopped) = chain(&mut lines, spawned) {
+        return stopped;
+    }
+    let gated = gate_run(args, &id, manifest, policy);
+    if let Some(stopped) = chain(&mut lines, gated) {
+        return stopped;
+    }
+    let landed = land_run(args, &id, policy);
+    if let Some(stopped) = chain(&mut lines, landed) {
+        return stopped;
+    }
+    Outcome::ok(lines)
+}
+
+/// 段の結果を畳む。rc≠0 ならそこまでの行を載せて**止める形**を返す。
+fn chain(lines: &mut Vec<String>, outcome: Outcome) -> Option<Outcome> {
+    if outcome.rc == RC_OK {
+        lines.extend(outcome.out);
+        return None;
+    }
+    let mut stopped = outcome;
+    let mut out = std::mem::take(lines);
+    out.extend(stopped.out);
+    stopped.out = out;
+    Some(stopped)
 }
 
 /// 対象 repo。`--repo` が無ければ cwd の repo root。
@@ -303,7 +432,7 @@ fn show(args: &[String]) -> Outcome {
 }
 
 /// `pipe resume`。現在の段から続きの段だけを通す。
-fn resume(args: &[String], policy: LockPolicy) -> Outcome {
+fn resume(args: &[String], manifest: &Manifest, policy: LockPolicy) -> Outcome {
     let id = match need(args, "--run") {
         Ok(found) => found.to_owned(),
         Err(reason) => return refused(reason),
@@ -318,8 +447,10 @@ fn resume(args: &[String], policy: LockPolicy) -> Outcome {
     };
     match stage_of(&state, &id) {
         Err(reason) => refused(reason),
-        // gate は (b) の手番。ここでは次の段を名乗って rc 0 で終える。
-        Ok(Stage::Implemented) => Outcome::ok_line(format!("run={id} next=gate")),
+        Ok(Stage::Implemented) => gate_run(args, &id, manifest, policy),
+        // Gated から先へ進めるのは PASS の周だけで、その検査は land 側が持つ
+        // （ここで verdict を読み直すと **判定の読み手が 2 つ**になる）。
+        Ok(Stage::Gated) => land_run(args, &id, policy),
         Ok(Stage::Intake) => match need(args, "--runner") {
             Err(reason) => refused(reason),
             Ok(runner) => launch(args, &id, runner, policy, &[Stage::Intake]),

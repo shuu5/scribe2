@@ -12,6 +12,8 @@
 
 pub mod cli;
 pub mod contract;
+pub mod gate;
+pub mod land;
 pub mod spawn;
 
 use crate::fleet::store::{self, LockPolicy, StoreError};
@@ -35,6 +37,16 @@ pub fn contract_path(state_dir: &Path, id: &str) -> PathBuf {
     run_dir(state_dir, id).join(CONTRACT_FILE)
 }
 
+/// gate が逐条の rc を書く file。
+pub fn verify_log_path(state_dir: &Path, id: &str) -> PathBuf {
+    run_dir(state_dir, id).join("verify.jsonl")
+}
+
+/// gate の判定を書く file。
+pub fn verdict_path(state_dir: &Path, id: &str) -> PathBuf {
+    run_dir(state_dir, id).join("verdict.json")
+}
+
 /// 便の対象 repo を書き留める file。
 ///
 /// repo は event の schema（閉じた key 集合）に載らないので、便ごとの写し面に置く。
@@ -55,9 +67,17 @@ pub fn repo_of_run(state_dir: &Path, id: &str) -> Option<PathBuf> {
     }
 }
 
+/// 便の worktree を集める dir（repo 相対の固定 path・設計 §5.2）。
+///
+/// 便の worktree も land 後の retired も main 実測用の tmp も、**この 1 本から導く**
+/// （dir の字面を module ごとに書くと、置き場を変えたとき片側だけが取り残される）。
+pub fn worktrees_dir(repo: &Path) -> PathBuf {
+    repo.join(".worktrees").join(NAME)
+}
+
 /// 便の worktree（repo 相対の固定 path・設計 §5.2）。
 pub fn worktree_path(repo: &Path, id: &str) -> PathBuf {
-    repo.join(".worktrees").join(NAME).join(id)
+    worktrees_dir(repo).join(id)
 }
 
 /// 便の branch 名。
@@ -144,6 +164,50 @@ mod measure {
 /// repo の HEAD。git repo でなければ `None`。
 pub fn head_of(repo: &Path) -> Option<String> {
     git_line(repo, &["rev-parse", "HEAD"])
+}
+
+/// spawn が記録した base を event log から読む。
+///
+/// **replay の `Run::detail` からは読めない**。`detail` は「最後に見た自由文」なので、
+/// gate が `verdict:<V>` を書いた時点で `base:<sha>` は上書きされて消える。base は
+/// land の CAS と stale 判定の両方が要る値ゆえ、追記だけの log を遡って原本を読む。
+pub fn base_of_run(state_dir: &Path, id: &str) -> Option<String> {
+    let events = store::read_all(state_dir).ok()?;
+    events
+        .iter()
+        .rev()
+        .filter(|event| event.run == id && event.stage == Some(Stage::Spawned))
+        .find_map(|event| {
+            event
+                .detail
+                .as_deref()
+                .and_then(|detail| detail.strip_prefix("base:"))
+                .map(str::to_owned)
+        })
+}
+
+/// git を 1 回撃って stdout を byte のまま得る。rc≠0 は `None`。
+///
+/// [`git_line`] は trim して 1 行にするので、diff の byte 数を測る面には使えない
+/// （末尾改行と空行が落ちて **cap との照合が実際より小さく出る**）。
+pub fn git_bytes(dir: &Path, args: &[&str]) -> Option<Vec<u8>> {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .ok()?;
+    output.status.success().then_some(output.stdout)
+}
+
+/// git を 1 回撃って rc だけを見る。
+pub fn git_ok(dir: &Path, args: &[&str]) -> bool {
+    std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .is_ok_and(|output| output.status.success())
 }
 
 /// git を 1 回撃って stdout の 1 行を得る。失敗・空はいずれも `None`。
