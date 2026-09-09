@@ -9,6 +9,7 @@ mod check;
 mod flipcheck;
 mod genmanifest;
 mod limits;
+mod paths_clean;
 mod toml_lite;
 
 use std::path::PathBuf;
