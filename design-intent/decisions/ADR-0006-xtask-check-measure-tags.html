@@ -10,7 +10,7 @@
 <meta name="folio-stakeholders" content="Developer, AI Agent, External Reviewer">
 <meta name="folio-adr-id" content="0006">
 <meta name="folio-adr-date" content="2026-09-10">
-<title>ADR-0006 — cargo xtask check が measure する tag の列挙 (ADR-0002 §2.4 の 10 本を 11 本へ supersede)</title>
+<title>ADR-0006 — cargo xtask check が measure する tag の列挙 (ADR-0002 §2.4 の 10 本を 11 本へ部分 supersede・12 本目の案 ci-decl は不採用)</title>
 <link rel="stylesheet" href="../../common.css">
 <script type="application/ld+json">
 {
@@ -24,7 +24,7 @@
   "dc:isPartOf": [
     { "@id": "./README.html" }
   ],
-  "dc:title": "ADR-0006 — cargo xtask check が measure する tag の列挙 (ADR-0002 §2.4 の 10 本を 11 本へ supersede)",
+  "dc:title": "ADR-0006 — cargo xtask check が measure する tag の列挙 (ADR-0002 §2.4 の 10 本を 11 本へ部分 supersede・12 本目の案 ci-decl は不採用)",
   "folio:version": "0.4.6",
   "folio:stakeholders": ["Developer", "AI Agent", "External Reviewer"],
   "dc:references": [
@@ -120,8 +120,8 @@
 <p class="section-essence" data-audience="human">それぞれが何を見ているかを 1 行ずつ書きます。 数値そのものは前の記録の表にあります。</p>
 <div data-audience="machine">
   <dl>
-    <dt><code>core-lines</code></dt><dd>core crate の総行数 (<a href="../spec/constitution.html#c4">C4</a> の上限)</dd>
-    <dt><code>file-lines</code></dt><dd>1 file の最大行数 (<a href="../spec/constitution.html#c4">C4</a> の上限)</dd>
+    <dt><code>core-lines</code></dt><dd>core crate の <code>src</code> 配下の総行数 (<a href="../spec/constitution.html#c4">C4</a> の上限・<code>tests</code> 配下は母集団外)</dd>
+    <dt><code>file-lines</code></dt><dd><code>crates/*/src</code> 配下 <code>.rs</code> の 1 file 最大行数 (<a href="../spec/constitution.html#c4">C4</a> の上限)</dd>
     <dt><code>test-src-ratio</code></dt><dd>test 行と src 行の比 (測定定義は ADR-0002 §2.4 が固定した形のまま)</dd>
     <dt><code>name-literal</code></dt><dd>core crate の名前定数がただ 1 箇所で宣言されていること</dd>
     <dt><code>manifest-name</code></dt><dd>manifest 群が名乗る名前の一致</dd>
@@ -138,6 +138,7 @@
 <p class="section-essence" data-audience="human">項目を増やしたり減らしたりするときは、 この記録を差し替える新しい記録を立てます。 前の記録を後から書き換えることはしません。</p>
 <p>tag の増減は<strong>本 ADR を supersede する新 ADR</strong> で行う (MUST)。 <a href="ADR-0002-test-lint-toolchain.html">ADR-0002</a> 前文の凍結規定をそのまま継承する。</p>
 <p data-audience="machine">次は<strong>本 ADR の決定ではない</strong> (MUST NOT be read as such): 閾値の実値と置き場 (ADR-0002 §2.5 が有効)、 <code>test-src-ratio</code> の測定定義 (同 §2.4 の当該規定が有効)、 各 tag の実装 (<a href="../spec/constitution.html#c12">C12</a> の歯が測る面)、 CI の job 構成。 本 ADR が差し替えるのは ADR-0002 §2.4 の<strong>列挙 1 文</strong>だけである。</p>
+<p data-audience="machine">なお <a href="ADR-0002-test-lint-toolchain.html#s2-6-verification">ADR-0002 §2.6</a> (a) が数える「<code>cargo xtask check</code> の 10 tag」は、 本 ADR の 11 本に読み替える。 同 (a) の主張 (shell / Python の test file を数える口が無い) は依然として真であり、 §2.6 の規定そのものは有効のままである。</p>
 
 <h3 id="s2-4-correction">§2.4 ADR-0002 §2.2 の例示の訂正</h3>
 <p class="section-essence" data-audience="human">前の記録に書かれた実験の例が、 そのままでは再現しません。 引数の数が 1 つ足りないためです。 決めたこと自体は正しいので、 ここに訂正だけを残します。</p>
@@ -178,47 +179,6 @@
   <li>記録した日: 2026-09-10。</li>
 </ul>
 </section>
-</nav>
-<script>
-(function () {
-  var openedForPrint = [];
-  window.addEventListener('beforeprint', function () {
-    openedForPrint = [];
-    var ds = document.querySelectorAll('details:not([open])');
-    for (var i = 0; i < ds.length; i++) { ds[i].setAttribute('open', ''); openedForPrint.push(ds[i]); }
-  });
-  window.addEventListener('afterprint', function () {
-    for (var i = 0; i < openedForPrint.length; i++) openedForPrint[i].removeAttribute('open');
-    openedForPrint = [];
-  });
-  if (!document.querySelector('[data-audience]')) return;
-  /* 既定 = 人間プレゼン型 (ADR-0040 / rules §11.3): script 経由で初期 class を付与するため
-     no-JS では付かず全文可視に graceful degrade する。 static DOM は全文を保持 (AI/検索/印刷は不変)。 */
-  document.body.classList.add('audience-human');
-  var bar = document.createElement('nav');
-  bar.className = 'audience-toggle';
-  bar.setAttribute('aria-label', '表示対象の切替');
-  var states = [['both', '両方'], ['human', '人間向け'], ['machine', '機械向け']];
-  for (var s = 0; s < states.length; s++) {
-    (function (mode, label) {
-      var b = document.createElement('button');
-      b.type = 'button';
-      b.textContent = label;
-      b.setAttribute('aria-pressed', mode === 'human' ? 'true' : 'false');
-      b.addEventListener('click', function () {
-        document.body.classList.remove('audience-human', 'audience-machine');
-        if (mode !== 'both') document.body.classList.add('audience-' + mode);
-        var bs = bar.querySelectorAll('button');
-        for (var j = 0; j < bs.length; j++) bs[j].setAttribute('aria-pressed', bs[j] === b ? 'true' : 'false');
-      });
-      bar.appendChild(b);
-    })(states[s][0], states[s][1]);
-  }
-  var bc = document.querySelector('nav.breadcrumb');
-  if (bc && bc.parentNode) { bc.parentNode.insertBefore(bar, bc.nextSibling); }
-  else { document.body.insertBefore(bar, document.body.firstChild); }
-})();
-</script>
 <!-- folio:chrome-bottom -->
 <nav class="prevnext" aria-label="前後の文書">
   <a class="prevnext__prev" href="ADR-0005-a3-approval-surface-c7.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">ADR-0005 — 憲法改訂 = A3 の承認経路を C7 の対話面へ揃える (ADR-0003 §2.1 の決定の適用漏れの是正)</span></a>
