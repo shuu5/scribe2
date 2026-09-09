@@ -24,6 +24,7 @@
     { "@id": "./README.html" }
   ],
   "dc:isReferencedBy": [
+    { "@id": "../decisions/ADR-0005-a3-approval-surface-c7.html" },
     { "@id": "../decisions/ADR-0004-mvp-persistence-and-cross-version-formats.html" },
     { "@id": "../decisions/ADR-0003-constitution-v1-abandon-rewrite.html" },
     { "@id": "./requirements-catalog.html" },
@@ -74,7 +75,7 @@
     <dt>stakeholders</dt><dd>Developer, AI Agent, External Reviewer</dd>
     <dt>tiers</dt><dd>Always C1-C16 (16) / Ask-first A1-A4 (4) / Never N1-N4 (4)</dd>
     <dt>edit-ssot</dt><dd>this file (canonical WHAT; folio ADR-0051 §3: non-flipped doc = HTML is the only layer)</dd>
-    <dt>source</dt><dd>SPEC-scribe-v2-vessel §2 (v0.3 user approved 2026-09-07; C14 / C15 / C16 added in v0.4 / v0.4.5 by user rulings 2026-09-08 / 2026-09-09) / ADR-0003 (C7 / A1 / C8 / A4 / N4 rewritten 2026-09-09)</dd>
+    <dt>source</dt><dd>SPEC-scribe-v2-vessel §2 (v0.3 user approved 2026-09-07; C14 / C15 / C16 added in v0.4 / v0.4.5 by user rulings 2026-09-08 / 2026-09-09) / ADR-0003 (C7 / A1 / C8 / A4 / N4 rewritten 2026-09-09) / ADR-0005 (A3 rewritten 2026-09-09)</dd>
     <dt>amendment</dt><dd>A2 (grill verification first, then user ruling) + C5 (rules row diff with ruling id) + N4 (constitution amendments only with a new ADR, inline delta markers and a ruling id)</dd>
   </dl>
 </aside>
@@ -135,7 +136,7 @@
     <tr><td><a href="#c16">C16</a></td><td><ins class="delta" data-delta-id="D-2026-09-09-008">逸脱は編集の時点で止める</ins></td><td>Always</td><td><ins class="delta" data-delta-id="D-2026-09-09-008">in-loop guard を極性一覧に InLoop で載せる / guard 0 件・PostHoc のみの構成は CI が RED</ins></td><td><ins class="delta" data-delta-id="D-2026-09-09-008">SPEC v0.4.5 U9</ins></td></tr>
     <tr><td><a href="#a1">A1</a></td><td>3 クラスの操作</td><td>Ask-first</td><td><del class="delta" data-delta-id="D-2026-09-09-002" data-delta-superseded-by="D-2026-09-09-002">relay 印 (C7)</del><ins class="delta" data-delta-id="D-2026-09-09-002">C7 の対話面 (R-C7-1) を通した承認 / approval event に記帳</ins></td><td><del class="delta" data-delta-id="D-2026-09-09-002" data-delta-superseded-by="D-2026-09-09-002">SPEC §2 (裁定 id なし)</del><ins class="delta" data-delta-id="D-2026-09-09-002">SPEC §2 (裁定 id なし)・ADR-0003</ins></td></tr>
     <tr><td><a href="#a2">A2</a></td><td>憲法条文の改訂と C4 / C13 の閾値変更</td><td>Ask-first</td><td>利益の grill 検証を前置 → user 裁定 (裁定 id)</td><td>論点 2</td></tr>
-    <tr><td><a href="#a3">A3</a></td><td>依存 OSS の追加・削除</td><td>Ask-first</td><td>C13 の手続き</td><td>SPEC §2 (裁定 id なし)・論点 3・4</td></tr>
+    <tr><td><a href="#a3">A3</a></td><td>依存 OSS の追加・削除</td><td>Ask-first</td><td><ins class="delta" data-delta-id="D-2026-09-09-011">C7 の対話面 (R-C7-1) を通した承認 / </ins>C13 の手続き</td><td>SPEC §2 (裁定 id なし)・論点 3・4<ins class="delta" data-delta-id="D-2026-09-09-011">・ADR-0005</ins></td></tr>
     <tr><td><a href="#a4">A4</a></td><td><del class="delta" data-delta-id="D-2026-09-09-004" data-delta-superseded-by="D-2026-09-09-004">自己開発の解禁</del><ins class="delta" data-delta-id="D-2026-09-09-004">自己開発は既定で許可・不可逆操作だけ Ask-first</ins></td><td>Ask-first</td><td><del class="delta" data-delta-id="D-2026-09-09-004" data-delta-superseded-by="D-2026-09-09-004">C8 の成熟条件の成立後に planner が 1 問 / user の go = relay 印</del><ins class="delta" data-delta-id="D-2026-09-09-004">3 クラス (消す / 出す / 使う) の rules 行 + enforcer / 回答は C7 の対話面を通す</ins></td><td><del class="delta" data-delta-id="D-2026-09-09-004" data-delta-superseded-by="D-2026-09-09-004">論点 9</del><ins class="delta" data-delta-id="D-2026-09-09-004">ADR-0003</ins></td></tr>
     <tr><td><a href="#n1">N1</a></td><td>rm による削除</td><td>Never</td><td>退役は可逆 move のみ</td><td>SPEC §2 (裁定 id なし)</td></tr>
     <tr><td><a href="#n2">N2</a></td><td>規則を散文・memory・chat にだけ置く</td><td>Never</td><td>C1.2 の CI (手書き規範文 0 行) + C5</td><td>SPEC §2 (裁定 id なし)・論点 5</td></tr>
@@ -472,14 +473,14 @@
 
 <section class="req" id="a3" data-audience="human">
   <div class="req__card"><span class="badge badge--req">A3</span> <span class="req__ears req__ears--event">Event-Driven</span> <strong>依存 OSS の追加・削除</strong></div>
-  <p class="req__essence">OSS 依存を足すときも外すときも user に確認し、 C13 の手続き (予算の範囲・compile 時間の実測差を記す) を踏みます。</p>
+  <p class="req__essence">OSS 依存を足すときも外すときも<del class="delta" data-delta-id="D-2026-09-09-011" data-delta-superseded-by="D-2026-09-09-011"> user に確認し</del><ins class="delta" data-delta-id="D-2026-09-09-011"> C7 の対話面を通して user の承認を取り</ins>、 C13 の手続き (予算の範囲・compile 時間の実測差を記す) を踏みます。</p>
   <details class="req__machine" data-audience="machine">
     <summary>normative (machine)</summary>
     <div class="req__normative">
-      <p class="ears" data-ears-pattern="event-driven"><span class="ears-id">A3</span>: <span class="ears-when">WHEN an OSS dependency is to be added or removed</span>, scribe2 <span class="ears-shall">SHALL</span> obtain the user's approval as a relay stamp through the planner first, and <span class="ears-shall">SHALL</span> follow the C13 procedure (C13, <a href="#r-c13-1">R-C13-1</a>).</p>
+      <p class="ears" data-ears-pattern="event-driven"><span class="ears-id">A3</span>: <span class="ears-when">WHEN an OSS dependency is to be added or removed</span>, scribe2 <span class="ears-shall">SHALL</span> obtain the user's approval <del class="delta" data-delta-id="D-2026-09-09-011" data-delta-superseded-by="D-2026-09-09-011">as a relay stamp through the planner</del><ins class="delta" data-delta-id="D-2026-09-09-011">through the dialogue surface designated by <a href="#r-c7-1">R-C7-1</a> (C7)</ins> first, and <span class="ears-shall">SHALL</span> follow the C13 procedure (C13, <a href="#r-c13-1">R-C13-1</a>).</p>
       <dl>
         <dt>機構 (型 / lint / CI)</dt><dd>C13 の許可リスト + 予算 (§3 <a href="#r-c13-1">R-C13-1</a>) と <code>cargo deny</code>。 day-1 optional adapter (rtk / graphify) の採用も本条の対象。</dd>
-        <dt>出所</dt><dd>SPEC §2 (裁定 id なし)・論点 3・4</dd>
+        <dt>出所</dt><dd>SPEC §2 (裁定 id なし)・論点 3・4<ins class="delta" data-delta-id="D-2026-09-09-011">・ADR-0005 (user 裁定 2026-09-09)</ins></dd>
       </dl>
     </div>
   </details>
@@ -625,13 +626,14 @@
 
 <section id="s5-trace" class="informative">
 <h2>§5. Trace — 出所と対応</h2>
-<p class="section-essence" data-audience="human">本文書は条文の正本で、 SPEC v0.3 の §2 を起草元に、 SPEC v0.4 / v0.4.5 で加わった 3 条 (C14〜C16) と ADR-0003 による 5 条の書換えを反映した版です。 各条は裁定の論点番号か「裁定 id なし (grill 前から在る条)」に紐づき (一部は両方を併記)、 対応表は §2 の一覧表の「出所」列です。</p>
+<p class="section-essence" data-audience="human">本文書は条文の正本で、 SPEC v0.3 の §2 を起草元に、 SPEC v0.4 / v0.4.5 で加わった 3 条 (C14〜C16) と ADR-0003 による 5 条の書換えと ADR-0005 による A3 の書換えを反映した版です。 各条は裁定の論点番号か「裁定 id なし (grill 前から在る条)」に紐づき (一部は両方を併記)、 対応表は §2 の一覧表の「出所」列です。</p>
 <ul data-audience="machine">
   <li>正本: 本 file が条文の canonical WHAT かつ edit-SSoT である (folio ADR-0051 §3: flip しない doc は HTML が唯一の層)。 SPEC §2 は起草元であり、 齟齬時は本 file を正とする。</li>
   <li>起草元: <code>SPEC-scribe-v2-vessel-v0.1-20260907.md</code> §2 (folio spike 用抜粋 = <code>input/SPEC-excerpt.md</code>)。 条文は v0.3 (grill 11 論点の裁定を条文化・user 承認 2026-09-07・P1 exit 成立)。 SPEC §6 の件数表記 (Always 7 / Ask-first 3 / Never 3) は v0.1 時点の値であり、 v0.3 §2 の実体は 13 / 4 / 4、 本文書の現行は C14〜C16 追加後の 16 / 4 / 4 である。</li>
   <li>裁定: <code>RULING-v2-p1-exit-bundle-20260907.md</code> (user 逐語)。 各条の「出所」= 論点番号。 「裁定 id なし」は grill 前から在り固有の論点番号を持たない条 (C7 / A1 / N1)。 A3 / N2 / N3 は裁定 id なしに加え、 関連する裁定の論点番号 (導出) を併記する。</li>
   <li>技術選定 (WHY): <a href="../decisions/ADR-0001-rust-single-static-binary.html">ADR-0001</a> (Rust 単一 static binary・Go / typed Python / TypeScript 却下)。 本 constitution は WHAT を、 ADR は WHY を持つ。 実装言語と配布形態の規範は ADR-0001 §2.1 が持ち、 条文化は N4 の手続き (新 ADR + delta marker + 裁定 id) で行う。</li>
   <li>改訂 (2026-09-09): <a href="../decisions/ADR-0003-constitution-v1-abandon-rewrite.html">ADR-0003</a> (user 裁定・v1 完全放棄) が C7 / A1 / C8 / A4 / N4 を書き換えた。 旧文は delta marker (<code>data-delta-id</code> D-2026-09-09-001〜005・009〜010) で本文に残す。 C14 / C15 / C16 (D-2026-09-09-006〜008) は SPEC v0.4 / v0.4.5 で user 裁定済み (2026-09-08 / 2026-09-09) の条文を逐語で写したものであり、 ADR-0003 の決定ではない。 本 file の version 0.4.6 は SPEC v0.4.6 に追随する。 §2 の一覧表の C14〜C16 行は「出所」に SPEC の論点番号を持つ。</li>
+  <li>改訂 (2026-09-09・A3): <a href="../decisions/ADR-0005-a3-approval-surface-c7.html">ADR-0005</a> (user 裁定) が <a href="#a3">A3</a> の承認経路を C7 の対話面へ揃えた。 ADR-0003 §2.1 の決定 (対話面は 1 つ・identity は rules 行) を A1 と同形で A3 へ適用した是正であり、 新しい決定ではない。 旧文は delta marker (<code>data-delta-id</code> D-2026-09-09-011) で本文に残す。 C13 の手続き (予算の範囲・compile 時間の実測差) は変えていない。</li>
   <li>用語: canonical 名は <code>design-intent/vocabulary.yaml</code> (P-5)。 本文の <span class="term" data-term="席">席</span> / <span class="term" data-term="口座">口座</span> / <span class="term" data-term="歯">歯</span> / <span class="term" data-term="検出線">検出線</span> / <span class="term" data-term="器">器</span> 等はそこで定義する。</li>
   <li>段の対応: SPEC の「Always / Ask-first / Never」は folio constitution の 3 tier (いつも守る / 変える前に確認 / 絶対にやらない) と 1 対 1 に対応する。 条 id (C1〜C16 / A1〜A4 / N1〜N4) は SPEC と裁定文書の表記を逐語で維持する。</li>
 </ul>
