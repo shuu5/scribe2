@@ -95,7 +95,7 @@
 2. **main 実測**: `git worktree add --detach <tmp> <new>` して `verify` 全行を再実行。1 本でも rc≠0 → `RunStage stage=Failed detail=main-red` + rc 1（auto revert は MVP 外・main は進んだまま loud）。**実測そのものができなかった周**（tmp worktree を切れない等で verify を 1 行も撃てていない）は赤と別に `RunStage stage=Failed detail=main-unmeasured` + rc 2 で残す（「測れなかった」を「赤かった」に化けさせない＝gate の極性と同じ）。
 3. 全 GREEN → **verdict export（面 5）**: `<state_dir>/fleet/verdicts.jsonl` へ `{"schema":1,"run":…,"bead":…,"sha":"<new>","verdict":"PASS","evidence":"<verdict.json の path>","ts":…}` を append（fleet と同じ lock）→ `RunDone stage=Landed`。
 4. **後始末は可逆 move**（N1.2）: `git worktree move <worktree> <repo>/.worktrees/<NAME>/retired/<run>`。branch は消さない（squash commit は branch の祖先でないので `branch -d` は通らず、`-D` は N1 に反する）。tmp worktree（main 実測用）は `git worktree remove --force` してよい（scribe2 が作った一時物で、成果は `new` に載っている。`--force` を許すのは `verify` の生成物で dirty になった一時 worktree を leak させないためで、**「force 系 git を書かない」の趣旨は履歴・データの破壊**＝この掃除はそれに当たらない）。失敗は stderr 1 行で rc 0 のまま（land は成立している）。stdout `run=<id> landed=<new>`。
-- `--pr-cmd <cmd>`（(e)・AC2 の自己ホスト形・**公開の口**）: squash の代わりに branch を push して PR を作る seam。`{branch}` `{base}` を置換して `sh -c` する。**前提に「run に `ApprovalReceived` が在る」を足す**（無ければ rc 1・何もしない）＝seam を使う便は契約が `publish` を名乗り、spawn の手前で承認を得ている（A1「実行前」）。既定は無し（core は PR 作成の道具を知らない）。この形では main を動かさず `Landed detail=pr` で終える（merge は人が押す）。
+- `--pr-cmd <cmd>`（(e)・AC2 の自己ホスト形・**公開の口**）: squash の代わりに branch を push して PR を作る seam。`{branch}` `{base}` を置換して `sh -c` する。**前提に「run に `ApprovalReceived` が在る」を足す**（無ければ rc 1・何もしない）＝seam を使う便は契約が `publish` を名乗り、spawn の手前で承認を得ている（A1「実行前」）。既定は無し（core は PR 作成の道具を知らない）。この形では main を動かさず `Landed detail=pr` で終える（merge は人が押す）。以下の 4 点はこの形にだけ効く（`s2-07l.24` の実装時の裁定・planner 2026-09-10）: **stale base を見ない**（ref を 1 本も動かさないので CAS の old が要らない。逆にここで base を縛ると main が動いた瞬間に PR を出せなくなり、自己ホストの便が最も踏む）／**面 5（`verdicts.jsonl`）へ書かない**（あれは main に載った便の記録で、この形はまだ載っていない）／**worktree を畳まない**（merge は人が押すまで終わっていない）／**道具の失敗（push・PR 作成の rc≠0）で便を終端させない**＝rc 1 で何も書かず段も動かさない（network で落ちうるので `Failed` を焼くと再試行できない便が残る）。
 
 ### 5.5 承認（(c)・FR15 / FR16 / AC5・A1 / C7）
 - `classes` が非空の契約は、**spawn の手前**（実行前・A1）で `ApprovalRequested detail=<classes>` + `RunStage stage=Blocked` を記帳し、**人の入力を待たずに rc 3 で process を終える**（FR15）。runner は起動しない。
@@ -113,7 +113,7 @@
 - `pipe run --contract <f> --bead <id> --repo <dir> --runner <cmd> [--lens <cmd>]` = intake → spawn → gate → land を 1 process で連続（各段は fleet を読み書きし、途中で落ちても `resume` が続きを引く）。
 
 ### 5.8 report（(e)・FR22）
-`pipe report`: event log を replay し `runs=<N> landed=<N> human_events=<N> human_events_other_than_approval=<N>` の 1 行。到達点の「人由来の event が approval 以外に 0 件」を機械で示す面（AC1）。
+`pipe report`: event log を replay し `runs=<N> landed=<N> human_events=<N> human_events_other_than_approval=<N>` の 1 行。到達点の「人由来の event が approval 以外に 0 件」を機械で示す面（AC1）。**便の数と land の数は replay から、人由来の event は生の行から**数える——replay は便ごとに最後の段しか残さないので、承認の後に手で段を動かした周が replay 上は「機械だけで進んだ便」に見える。承認だけを例外にする判定は **kind**（`ApprovalReceived`）で行う（`actor` は誰が起こしたか・`kind` は何が起きたかで、例外は後者である）。
 
 ## 6. headless runner と lens（(d)・FR5・CON6・NFR1）
 
@@ -136,7 +136,7 @@
   実装の便で lens が「測れていない」と名指した経路に足した歯: `pipe_approval_blocks_in_one_shot_run`（`pipe run` の一発経路も spawn の手前で Blocked になる＝関門が段ごとの口ではなく唯一の起動口に在ることを測る）。
 - (d) `headless_` 接頭辞（claude は fake の実行 file・`--claude <path>`）: `headless_runner_reads_contract_from_stdin_and_passes_permission_mode_every_time` / `headless_runner_stops_on_rate_limit_record` / `headless_lens_inconclusive_over_cap_without_calling_claude` / `headless_lens_extracts_last_json_line` / `headless_lens_inconclusive_on_unparsable_output`。
   実装の便で lens が「測れていない」と名指した経路に足した歯: `headless_runner_mirrors_claude_rc`（包みが rc を作り替えない）/ `headless_runner_does_not_stop_on_quoted_rate_limit_words`（本文の引用で誤爆しない）/ `headless_runner_stops_on_error_record_without_rate_limit_literal`（`rate_limit` の字面が無い上限でも止まる）。
-- (e) `pipe_report_` / `pipe_five_` / `pipe_land_pr_cmd_` 接頭辞: `pipe_five_contracts_land_with_fake_runner_in_toy_repo`（正常 / write-set 外編集で guard に止まる / test 追加 / gate FAIL / 承認 Blocked → approve → land の 5 便・stdin は `/dev/null`）/ `pipe_report_counts_human_events` / `pipe_land_pr_cmd_refuses_without_approval` / `pipe_land_pr_cmd_pushes_branch_without_moving_main`。
+- (e) `pipe_report_` / `pipe_five_` / `pipe_land_pr_cmd_` 接頭辞（**5 便の歯は toy repo の `.vessel` を commit してから通す**——便の worktree は base の checkout なので、marker が untracked な repo では worktree に marker が無く `served()` は `Absent`＝guard が黙る。本 repo の root へ marker を置く理由がこれである）: `pipe_five_contracts_land_with_fake_runner_in_toy_repo`（正常 / write-set 外編集で guard に止まる / test 追加 / gate FAIL / 承認 Blocked → approve → land の 5 便・stdin は `/dev/null`）/ `pipe_report_counts_human_events` / `pipe_land_pr_cmd_refuses_without_approval` / `pipe_land_pr_cmd_pushes_branch_without_moving_main`。
 
 ## 9. 到達点の計測（AC1 / AC2・(e)）
 
