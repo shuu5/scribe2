@@ -106,7 +106,7 @@
 
 <h3 id="s2-3-scope">§2.3 射程外</h3>
 <p class="section-essence" data-audience="human">この記録は数え方だけを決めます。 上限の数を変えることも、 それを機械に見張らせることも、 ここでは決めません。</p>
-<p data-audience="machine">次は<strong>本 ADR の決定ではない</strong> (MUST NOT be read as such): 閾値の実値「3 以下」の変更 (憲法の閾値変更は user 裁定を要する別手続きであり、 本 ADR は<strong>不変</strong>のまま扱う)、 憲法 §3 rules 表と rules manifest の行の字面 (逐語のまま・解釈の置き場は本 ADR と設計 doc である)、 <strong>target 数を CI で deny する歯の実装</strong> (C13 の deny 面は別便の所管)、 統合 test の中身の分け方 (module 構成は設計の領分)。</p>
+<p data-audience="machine">次は<strong>本 ADR の決定ではない</strong> (MUST NOT be read as such): 閾値の実値「3 以下」の変更 (憲法の閾値変更は user 裁定を要する別手続きであり、 本 ADR は<strong>不変</strong>のまま扱う)、 憲法 §3 rules 表と rules manifest (<code>rules/manifest.toml</code>) の行の字面 (逐語のまま・解釈の置き場は本 ADR と設計 doc である)、 <strong>target 数を CI で deny する歯の実装</strong> (C13 の deny 面は別便の所管)、 統合 test の中身の分け方 (module 構成は設計の領分)。</p>
 </section>
 
 <section id="s3-consequences" class="informative">
@@ -118,9 +118,9 @@
 
 <section id="s4-alternatives" class="informative">
 <h2>§4. Alternatives Considered</h2>
-<p class="section-essence" data-audience="human">2 つの案を退けました。 ファイルの数をそのまま数える案と、 crate を 1 つと数える案です。</p>
+<p class="section-essence" data-audience="human">2 つの案を退けました。 ファイルの数をそのまま数える案と、 「crate」で数える案です。 後者は、 言葉が 2 通りに読めてしまい、 片方は採用案と同じこと、 もう片方は数えたいものを数えられません。</p>
 <p data-audience="machine">案 (i) <strong>物理 <code>.rs</code> file の数で数える</strong>: 却下。 現物が <strong>6 本</strong>ゆえ採用した瞬間に違反となり、 かつ module へ割る操作 (C4 の行数上限を守るための正しい手) が違反を作る。 「file」という語の素直な読みではあるが、 C13 が測ろうとする compile の形とは対応しない。</p>
-<p data-audience="machine">案 (ii) <strong>「file」を「crate」と読む</strong>: 却下。 1 crate = 統合 test 1 本に固定され、 e2e とそれ以外を別 target へ分ける将来の自由を失う。 R-C13-2 の値「3 以下」が 3 を許していることとも噛み合わない (crate 読みでは 3 crate 分の統合 test を意味してしまう)。</p>
+<p data-audience="machine">案 (ii) <strong>「file」を「crate」と読む</strong>: 却下。 ただし理由は「厳しすぎる」でも「緩すぎる」でもなく、 <strong>語が 2 通りに割れて独立した案として立たない</strong>ことである。 (a) <strong>compile 単位の crate</strong> と読む場合: cargo は integration test target 1 本を 1 つの crate として build する (本 ADR の記録時点の実測——<code>cargo test --no-run -v</code> が出す rustc の行は <code>--crate-name e2e</code> の 1 本だけである)。 ∴ この読みは §2.1 の採用案と<strong>同じものを別の語で言っている</strong>にすぎない。 (b) <strong>Cargo の package</strong> と読む場合: 1 package には統合 test target を何本でも置けるため、 target が 2 本・3 本へ増えても数は 1 のままである。 R-C13-2 が抑えようとしているもの (link される実行 file の数＝compile の形) を測らなくなるので却下する。</p>
 </section>
 
 <section id="s5-trace" class="informative">

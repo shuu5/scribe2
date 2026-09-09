@@ -369,4 +369,4 @@ terms:
     domain: consumer
     definition: cargo が kind = test として build する 1 つの単位。 dir 形の統合 test は main.rs と
       その module を合わせて 1 と数え、 数は cargo metadata が返す targets で得る (R-C13-2 の数え方の単位・ADR-0007)。
-    relationships: [統合 test]
+    relationships: [歯]
