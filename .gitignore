@@ -35,3 +35,6 @@ inventory.json
 # Claude Code の project 設定は settings.json だけを tracked にする（folio の project-scope 有効化）
 .claude/*
 !.claude/settings.json
+
+# cargo-mutants の作業 tree（週次 job が作る・commit しない）
+mutants.out/

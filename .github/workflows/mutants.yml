@@ -1,0 +1,41 @@
+name: mutants
+
+# **週次だけ**（毎 PR では回さない）。cargo-mutants は変異 1 つごとに全 suite を回すので、
+# PR の待ち時間に載せる種類の歯ではない。手で撃ちたいときは workflow_dispatch。
+on:
+  schedule:
+    - cron: '17 4 * * 1'
+  workflow_dispatch:
+
+# GITHUB_TOKEN は読取りのみ・repo 既定に依存しない多層防御（ci.yml と同じ）
+permissions:
+  contents: read
+
+jobs:
+  mutants:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          # cargo-mutants は変異ごとに tree を複製する。`--copy-vcs true` で .git も運ぶので
+          # 浅い clone では足りない。
+          fetch-depth: 0
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+      - uses: taiki-e/install-action@84f5ac3124727fb3d284d4d22ee9ab3654fd09a6
+        with:
+          tool: cargo-mutants@27.1.0,cargo-nextest
+      # **`|| true` はこの行だけ**。生き残った変異が在れば cargo-mutants は rc≠0 を返すが、
+      # それは「job の失敗」ではなく測定結果である——ここで赤くすると次の step の集計が
+      # 走らず、撃墜率という当の成果物が残らない。判断は下の summary を人が読んで行う。
+      - run: cargo mutants --workspace --no-shuffle --copy-vcs true || true
+      # 撃墜率は **artifact でなく job summary** に置く（artifact は開くまで見えない・
+      # 保存期限で消える）。outcomes.json が無い周は baseline が落ちた周ゆえ、
+      # 数字を捏造せず「測れなかった」と名乗る。
+      - name: summary
+        run: |
+          if test -f mutants.out/outcomes.json; then
+            jq -r '"total_mutants=\(.total_mutants) caught=\(.caught) missed=\(.missed)"' \
+              mutants.out/outcomes.json >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "BASELINE-FAILED-OR-NO-MUTANTS" >> "$GITHUB_STEP_SUMMARY"
+          fi

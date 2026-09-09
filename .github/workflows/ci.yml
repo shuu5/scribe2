@@ -37,3 +37,47 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
       - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
       - run: cargo xtask check
+
+  # 以下 3 job は leg 1b（s2-07l.17）で足した standing teeth。手元でしか撃っていなかった
+  # 3 本を CI が毎 PR 撃つ＝規律の SSOT を CI 1 本へ寄せる。action は既存 3 job と同じ
+  # commit SHA を使い、新しい action を足さない。
+  flip-check:
+    runs-on: ubuntu-latest
+    # **PR のときだけ**撃つ。push(main) には比較すべき base の PR が無く、
+    # `github.event.pull_request.base.sha` が空になる。
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          # base..HEAD の区間置換を行うので、浅い clone では base に届かない。
+          fetch-depth: 0
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+      - uses: taiki-e/install-action@84f5ac3124727fb3d284d4d22ee9ab3654fd09a6
+        with:
+          tool: cargo-nextest
+      - run: cargo xtask flip-check --base "${{ github.event.pull_request.base.sha }}"
+
+  deny:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+      - uses: taiki-e/install-action@84f5ac3124727fb3d284d4d22ee9ab3654fd09a6
+        with:
+          tool: cargo-deny@0.20.2
+      # **全面形**で撃つ（advisories 込み）。`-A` / `--allow` で個別に黙らせない
+      # ——黙らせた瞬間、その面は「測っていない」になる。
+      - run: cargo deny check
+
+  insta:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+      - uses: taiki-e/install-action@84f5ac3124727fb3d284d4d22ee9ab3654fd09a6
+        with:
+          tool: cargo-insta@1.48.0,cargo-nextest
+      # 2 つの穴を同時に塞ぐ: `--check` は未 accept の差分で、`--unreferenced reject` は
+      # どの歯からも参照されない orphan snapshot で赤くする（消し忘れた snapshot は
+      # 「測っているつもり」を残す）。
+      - run: cargo insta test --test-runner nextest --unreferenced reject --check --workspace
