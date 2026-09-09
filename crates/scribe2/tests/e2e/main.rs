@@ -2,6 +2,7 @@
 //! integration test **target** の数で数える。以後の leg は module で足す）。
 
 mod fleet;
+mod hook;
 mod rules;
 
 use std::path::PathBuf;

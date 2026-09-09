@@ -121,31 +121,47 @@ pub fn events_path(dir: &Path) -> PathBuf {
 
 /// lock file の path。
 pub fn lock_path(dir: &Path) -> PathBuf {
-    dir.join("fleet").join("events.jsonl.lock")
+    lock_of(&events_path(dir))
+}
+
+/// 追記先に対応する lock file の path（`<path>.lock`）。
+fn lock_of(path: &Path) -> PathBuf {
+    let mut name = path.as_os_str().to_owned();
+    name.push(".lock");
+    PathBuf::from(name)
 }
 
 /// 1 件を追記する。lock を取り、1 行書いて flush し、lock を外す。
 pub fn append(dir: &Path, event: &Event, policy: LockPolicy) -> Result<Vec<Warning>, StoreError> {
-    let events = events_path(dir);
-    let parent = events
+    append_line(&events_path(dir), &event.to_line(), policy)
+}
+
+/// 任意の追記 file へ 1 行を lock 付きで書く。
+///
+/// **lock の実装はこの 1 本だけである**（憲法 C6.3）。event log も hook の注入計測も
+/// ここを通り、第 2 の writer を作らない。lock file は `<path>.lock` で、event log に
+/// ついては [`lock_path`] が指す従来の path と同一である（挙動不変）。
+pub fn append_line(path: &Path, line: &str, policy: LockPolicy) -> Result<Vec<Warning>, StoreError> {
+    let parent = path
         .parent()
-        .ok_or_else(|| StoreError::Io("event log の親 dir が無い".to_owned()))?;
+        .ok_or_else(|| StoreError::Io("追記先の親 dir が無い".to_owned()))?;
     fs::create_dir_all(parent).map_err(|err| StoreError::Io(format!("dir を作れない: {err}")))?;
-    let warnings = acquire(&lock_path(dir), policy)?;
-    let outcome = write_line(&events, &event.to_line());
-    let released = fs::remove_file(lock_path(dir));
+    let lock = lock_of(path);
+    let warnings = acquire(&lock, policy)?;
+    let outcome = write_line(path, line);
+    let released = fs::remove_file(&lock);
     outcome?;
     released.map_err(|err| StoreError::Io(format!("lock を外せない: {err}")))?;
     Ok(warnings)
 }
 
 /// 1 行を追記して flush する。
-fn write_line(events: &Path, line: &str) -> Result<(), StoreError> {
+fn write_line(path: &Path, line: &str) -> Result<(), StoreError> {
     let mut file = OpenOptions::new()
         .create(true)
         .append(true)
-        .open(events)
-        .map_err(|err| StoreError::Io(format!("event log を開けない: {err}")))?;
+        .open(path)
+        .map_err(|err| StoreError::Io(format!("追記 file を開けない: {err}")))?;
     writeln!(file, "{line}").map_err(|err| StoreError::Io(format!("書けない: {err}")))?;
     file.flush()
         .map_err(|err| StoreError::Io(format!("flush できない: {err}")))

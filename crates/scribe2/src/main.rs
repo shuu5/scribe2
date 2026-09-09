@@ -1,4 +1,5 @@
-//! CLI の骨格。`name` / `--version` / `doctor` / `rules` / `fleet` の 5 subcommand を持つ。
+//! CLI の骨格。`name` / `--version` / `doctor` / `rules` / `fleet` / `vessel` / `hook` の
+//! 7 subcommand を持つ。
 //!
 //! subcommand の結果は [`Outcome`] ただ 1 型で、rc はその `rc` をそのまま返す。
 //!
@@ -48,7 +49,7 @@ fn render_doctor() -> Vec<String> {
 
 /// 未知の引数に対する使い方の行。
 fn render_usage() -> String {
-    format!("usage: {NAME} <name|--version|doctor|rules|fleet>")
+    format!("usage: {NAME} <name|--version|doctor|rules|fleet|vessel|hook>")
 }
 
 /// 引数 1 つを出力行の列へ写す。未知なら `Err` に使い方を載せる。
@@ -70,6 +71,9 @@ fn run(args: &[String]) -> Outcome {
     match args.first().map(String::as_str) {
         Some("rules") => vessel::rules::cli::dispatch(rest),
         Some("fleet") => vessel::fleet::cli::dispatch(rest),
+        Some("vessel") => vessel::hook::vessel::dispatch(rest),
+        // hook だけは stdin の payload を要る（Claude Code が JSON を流し込む）。
+        Some("hook") => vessel::hook::dispatch(rest, &read_stdin()),
         first => match dispatch(first) {
             Ok(lines) => Outcome::ok(lines),
             // 使い方の行は従来どおり stdout へ出し rc 1 で終える（外形は変えない）。
@@ -80,6 +84,13 @@ fn run(args: &[String]) -> Outcome {
             },
         },
     }
+}
+
+/// stdin をすべて読む。読めなければ空文字（payload 不在として扱う）。
+fn read_stdin() -> String {
+    let mut buffer = String::new();
+    let _ = std::io::Read::read_to_string(&mut std::io::stdin(), &mut buffer);
+    buffer
 }
 
 /// 組んだ行を出力層へ流す。
