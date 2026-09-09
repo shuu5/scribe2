@@ -95,6 +95,14 @@ fn slurp(path: &Path) -> String {
     fs::read_to_string(path).unwrap_or_default()
 }
 
+/// lens を 1 回撃つ（引数の並びが複数の歯で同じなので畳む）。
+fn run_lens(cap: &str, mode: &str, claude: &Path, diff: &[u8]) -> Output {
+    run_bin(
+        &["lens", "--cap", cap, "--permission-mode", mode, "--claude", &claude.display().to_string()],
+        diff,
+    )
+}
+
 /// runner を 1 回撃つための材料（引数の並びが複数の歯で同じなので畳む）。
 struct RunnerCall<'a> {
     /// plugin dir 兼 fake の置き場。
@@ -246,13 +254,7 @@ fn headless_lens_inconclusive_over_cap_without_calling_claude() {
     let dir = tmp();
     let claude = fake_claude(&dir, "{\"verdict\":\"PASS\",\"evidence\":\"呼ばれてはならない\"}\n", false, 0);
     let diff = vec![b'x'; 4096];
-    let out = run_bin(
-        &[
-            "lens", "--cap", "16", "--permission-mode", "plan",
-            "--claude", &claude.display().to_string(),
-        ],
-        &diff,
-    );
+    let out = run_lens("16", "plan", &claude, &diff);
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
     assert_eq!(
         stdout_of(&out).trim(),
@@ -267,13 +269,9 @@ fn headless_lens_inconclusive_over_cap_without_calling_claude() {
     // 黙って切り下がる（実測 2026-09-10）。境界の内側で判定が返ることを測る。
     let verdict = fake_claude(&dir, "{\"verdict\":\"PASS\",\"evidence\":\"大きくても読めた\"}\n", false, 0);
     let big = vec![b'x'; 140_000];
-    let out = run_bin(
-        &[
-            "lens", "--cap", "150000", "--permission-mode", "plan",
-            "--claude", &verdict.display().to_string(),
-        ],
-        &big,
-    );
+    // mode を歯 4 と変えてある。lens 側の permission mode を定数へ固定する変異は、
+    // 1 種類しか撃たない歯では捕まらない（実測で生存した）。
+    let out = run_lens("150000", "acceptEdits", &verdict, &big);
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
     assert!(dir.join("called").exists(), "cap の内側なので claude を呼ぶ");
     assert_eq!(
@@ -281,15 +279,30 @@ fn headless_lens_inconclusive_over_cap_without_calling_claude() {
         r#"{"verdict":"PASS","evidence":"大きくても読めた"}"#,
         "128KiB 超でも判定を返す"
     );
+    let args = slurp(&dir.join("args"));
+    assert!(
+        args.lines().collect::<Vec<_>>().windows(2).any(|w| {
+            w.first() == Some(&"--permission-mode") && w.get(1) == Some(&"acceptEdits")
+        }),
+        "lens も permission mode を毎回明示する: {args}"
+    );
+
+    // **境界ちょうど（diff の byte 数 == cap）は cap の内側**である。`>` を `>=` に
+    // すり替える変異は、境界を撃たない歯では捕まらない（実測で生存した）。
+    let edge = tmp();
+    let at_cap = fake_claude(&edge, "{\"verdict\":\"FAIL\",\"evidence\":\"境界は内側\"}\n", false, 0);
+    let out = run_lens("64", "plan", &at_cap, &vec![b'y'; 64]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    assert!(edge.join("called").exists(), "境界ちょうどでは claude を呼ぶ");
+    assert_eq!(
+        stdout_of(&out).trim(),
+        r#"{"verdict":"FAIL","evidence":"境界は内側"}"#,
+        "境界ちょうどは判定を返す"
+    );
+    clean(&[&edge]);
 
     // **cap が数でないときは断る**（上限なしで走らせない＝C6）。
-    let bad = run_bin(
-        &[
-            "lens", "--cap", "abc", "--permission-mode", "plan",
-            "--claude", &verdict.display().to_string(),
-        ],
-        b"--- a\n",
-    );
+    let bad = run_lens("abc", "plan", &verdict, b"--- a\n");
     assert_eq!(bad.status.code(), Some(i32::from(RC_REFUSED)), "cap が数でないなら断る");
     clean(&[&dir]);
 }
@@ -351,13 +364,7 @@ fn headless_lens_extracts_last_json_line() {
 fn headless_lens_inconclusive_on_unparsable_output() {
     let dir = tmp();
     let claude = fake_claude(&dir, "判定できませんでした\nもう一度お願いします\n", false, 0);
-    let out = run_bin(
-        &[
-            "lens", "--cap", "4096", "--permission-mode", "plan",
-            "--claude", &claude.display().to_string(),
-        ],
-        b"--- a\n+++ b\n",
-    );
+    let out = run_lens("4096", "plan", &claude, b"--- a\n+++ b\n");
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
     assert!(dir.join("called").exists(), "呼んだ上で読めなかった周である");
     // 読めない出力を握り潰さず、**判定に届かなかった**と名乗る（偽の PASS を作らない）。
