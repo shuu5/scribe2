@@ -11,8 +11,8 @@ meta:
   eyebrow_left: 要件定義書 (SRS)
   eyebrow_right: scribe2 — MVP
   subtitle: 契約は小さく・検証は機械が先・止まるときは記帳して止まる
-  version: "0.1"
-  date: "2026-09-09"
+  version: "0.2"
+  date: "2026-09-10"
   reader: この器で開発する人と AI（Claude Code の session）。 専門語には必ずやさしい言い換えを併記する
 
 approval:
@@ -50,11 +50,12 @@ scope:
     - manifest（規則の値）と event log（現在地）
     - 所属の目印と hook（名乗り・in-loop guard・計測 slot）
     - toy repo 5 便と自己ホスト 1 便の到達点計測
+    - 開発 session の自律機能
   out:
     - 複数口座の自動選定（v3）
     - lane 計画と席の dashboard（v3）
     - 台帳への write（bead id を持つだけ）
-    - 対話席・cycle・作業記憶の product 実装（v3）
+    - 複数の対話面（v3）
     - rtk / graphify の有効化と SQLite 化（Ask-first）
 
 actors:
@@ -81,6 +82,7 @@ acceptance:
   - { id: AC6, criterion: 不正な契約・rules manifest（欠落 / 未知 kind / 裁定 id 無し / 重複 id）は起動前に全件 loud で落ちる,     metric_v: 0 件,  metric_l: 黙って落とす入力,  links: [FR1, FR17, FR18, NFR3, NFR4] }
   - { id: AC7, criterion: write-set の外への Edit / Write は編集の時点で deny され、 hook は marker が自分を言うときだけ仕える,    metric_v: 0 件,  metric_l: 素通り,           links: [FR19, FR20, FR21, FR24, NFR5] }
   - { id: AC8, criterion: 開発 session の作業記憶の退避と復元が global skill の手順として実在し、 6 本の作法を満たす,             metric_v: 6/6,   metric_l: 作法が実在,        links: [FR23] }
+  - { id: AC9, criterion: planner と管理席の 2 つの開発 session で、 context 使用量が取れない周は rc ≠ 0 になり、 上限到達で退避以外の編集が deny され、 測れない周は deny 0 件で理由が注入計測の記録に 1 件残り、 管理 tick が規則どおりに判定し（同じ入力には同じ inject / noop）、 cycle が 1 回完走する, metric_v: 2 session + 1 回, metric_l: 判定が規則どおり,   links: [FR25, FR26, FR27, FR28] }
 
 requirements:
   - id: FR1
@@ -348,6 +350,51 @@ requirements:
       condition: marker（.vessel）が無い、 または別の NAME を言っているとき
       response: hook は stdout 0 byte・rc 0 で黙り、 その repo を 1 byte も汚さない
 
+  - id: FR25
+    type: FR
+    label: 開発 session の context 計測
+    priority: should
+    vmethod: T
+    rationale_source: N-3
+    trace: { backward: [N-3], acceptance: [AC9] }
+    ears:
+      pattern: event
+      condition: 開発 session の context 使用量を問われたとき
+      response: context 使用量を出所付きで 1 件返し、 取れない周は rc ≠ 0 で「取れなかった」と言う（0% に化けない）
+  - id: FR26
+    type: FR
+    label: 開発 session の cap guard
+    priority: should
+    vmethod: T
+    rationale_source: N-1
+    trace: { backward: [N-1, N-2], acceptance: [AC9] }
+    ears:
+      pattern: event
+      condition: 編集 tool の hook が開発 session で呼ばれたとき
+      response: context 使用量を rules 行の上限と比べ、 上限以上なら退避の口以外の編集を deny し理由 1 行を出す。 上限未満なら deny しない。 測れないときは deny せず理由を注入計測の記録の what に残す
+  - id: FR27
+    type: FR
+    label: 管理 tick
+    priority: should
+    vmethod: T
+    rationale_source: N-1
+    trace: { backward: [N-1, N-3], acceptance: [AC9] }
+    ears:
+      pattern: state
+      condition: 開発 session が idle で、 自 session の未 consumed の退避物が無く、 cycle が走っていない間
+      response: 管理 tick が pointer 1 行を注入する（条件が 1 つでも崩れていれば注入しない）
+  - id: FR28
+    type: FR
+    label: cycle
+    priority: should
+    vmethod: T
+    rationale_source: N-3
+    trace: { backward: [N-1, N-3], acceptance: [AC9] }
+    ears:
+      pattern: event
+      condition: 開発 session が作業記憶の退避を終えたとき
+      response: 排他を取って session の作り直しと復元の command を注入する（二重起動 0・退避物が無い session には撃たない）
+
 nfr:
   - { id: NFR1, type: NFR, label: lens 予算,   category: 性能, target: 1 lens は 0.15M token 以内（目標値）,                                measure: lens 起動時の diff byte と cap の照合を verdict に記録,        vmethod: T, trace: { backward: [N-2], acceptance: [AC3] }, hero: { cat: 予算, big: "0.15", unit: M token, qual: lens 1 本あたりの上限 } }
   - { id: NFR2, type: NFR, label: 契約の大きさ, category: 大きさ, target: 1 契約の diff は 300 行程度・見積は 550 行以内,                      measure: PR の diff 行数と契約の見積を記録して照合,                   vmethod: A, trace: { backward: [N-4], acceptance: [AC2] }, hero: { cat: 小ささ, big: "300", unit: 行, qual: 1 契約の diff の目安 } }
@@ -361,7 +408,7 @@ constraints:
   - { id: CON3, label: 歯,       text: test は Rust の 1 framework だけで、 bash / bats の歯を書かない,                                 regulation: 憲法 C12 }
   - { id: CON4, label: 作法,     text: 前の器（v1）の役割席・gate 席・QA 席・契約押印・tier ラベルを持ち込まない,                       regulation: ADR-0003 }
   - { id: CON5, label: 口,       text: binary は不可逆操作（force push・削除・公開・課金）の口を持たない,                               regulation: 憲法 A1 / N1 }
-  - { id: CON6, label: headless, text: permission は毎回明示・rate limit は stream-json で検知・context の上限は契約の大きさで受ける,   regulation: "" }
+  - { id: CON6, label: headless, text: headless の runner / lens は permission を毎回明示・rate limit は stream-json で検知・context の上限は契約の大きさで受ける（開発 session の context は cap guard が受ける）,   regulation: "" }
 
 glossary:
   - { term: 契約,           en: contract,               plain_short: bead 1 本の約束,          def: 何を作り・何ができたら終わりかを 1 file に書いたもの。 台帳（beads）の 1 issue に対応する。 }
@@ -395,3 +442,9 @@ glossary:
   - { term: RED,            en: red,                    plain_short: test が落ちる状態,        def: test が失敗する状態。 対は GREEN（全部通る）。 flip check は「base で RED・HEAD で GREEN」を確かめる。 }
   - { term: PR,             en: pull request,           plain_short: 取り込みの申請,           def: 変更を main に取り込むための申請。 CI が緑になってから squash merge する。 }
   - { term: docs-only,      en: docs-only,              plain_short: 文書だけの変更,           def: 変更が文書だけの PR。 flip check の test 差分の要件から除外される（憲法 C12.3）。 }
+  - { term: 開発 session,   en: development session,    plain_short: 設計・契約・review を行う AI, def: 設計・契約・実装・review を行う AI の session（Claude Code）。 planner や管理席のように session をまたいで対話を続け、 runner と違い使い捨てではない。 }
+  - { term: cap guard,      en: cap guard,              plain_short: 満杯手前で編集を止める段,   def: 開発 session の context 使用量が rules 行の上限に達したとき、 退避以外の編集を止める hook の段。 }
+  - { term: 管理 tick,      en: tick,                   plain_short: 開発 session を起こす周期の合図,     def: 開発 session が黙っていないかを周期で見て、 条件が揃ったときだけ 1 行の pointer を注入する仕組み。 }
+  - { term: cycle,          en: cycle,                  plain_short: 退避して作り直す一周,     def: 作業記憶を退避し、 session を作り直し、 退避物から復元する一周。 退避物が無い session では起こさない。 }
+  - { term: 作業記憶,       en: working memory,         plain_short: session をまたぐと消える一時メモ, def: 開発 session が一連の作業の間だけ持つ状態。 session の作り直しで消えるので、 cycle の前に退避物へ書き出す。 }
+  - { term: 退避物,         en: externalized memory,    plain_short: 作業記憶を書き出した file, def: cycle の前に作業記憶を書き出した file。 session id で一意で、 消費済みは同じ suffix で表す。 }

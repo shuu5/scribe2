@@ -317,12 +317,12 @@
 <table>
 <thead><tr><th>id</th><th>要件文</th><th>v2 表現</th><th>出所</th><th>裁定</th><th>v1 対応物</th><th>備考</th></tr></thead>
 <tbody>
-<tr><td id="r-h2"><code>R-H2</code></td><td>退避物の file 名は<strong>session 識別子で一意</strong>でなければならず、role を file 名に入れてはならない（role 分離の前後で規則が不変であるため）</td><td></td><td>runbook/admin.md §9 / skills/rebrief</td><td>なし</td><td><code>working-memory.&lt;sid&gt;.md</code></td><td>開発 session の作法（product 実装は v3）</td></tr>
-<tr><td id="r-h3"><code>R-H3</code></td><td>消費済みは<strong>同一 suffix 規約</strong>（<code>.consumed.md</code>）で表現し、列挙の除外規則を 1 本で済ませられねばならない</td><td></td><td>contract-v1.md §4</td><td>なし</td><td>-</td><td>開発 session の作法（product 実装は v3）</td></tr>
-<tr><td id="r-h4"><code>R-H4</code></td><td>消費は<strong>移動（rename）</strong>であって削除であってはならない</td><td></td><td>skills/rebrief §手順</td><td>なし</td><td>mv</td><td>開発 session の作法（product 実装は v3）</td></tr>
-<tr><td id="r-h6"><code>R-H6</code></td><td>DATA が取れない周は <strong>brief を出してはならない</strong>。「読めなかった」を「異常なし・やり残しなし」に化けさせる形が最悪の失敗である</td><td></td><td>skills/rebrief §1</td><td>なし</td><td>偽の全クリア</td><td>開発 session の作法（product 実装は v3）</td></tr>
-<tr><td id="r-h8"><code>R-H8</code></td><td>別 session の退避物（orphan）は<strong>自動で消費してはならず</strong>、残る間は毎起動で件数を surface し続けねばならない</td><td></td><td>runbook/admin.md §9 / skills/rebrief §4</td><td>なし</td><td>orphan</td><td>開発 session の作法（product 実装は v3）</td></tr>
-<tr><td id="r-h16"><code>R-H16</code></td><td>重複起動は<strong>冪等</strong>でなければならない（既に消費済みなら 1 行の ack で終える）</td><td></td><td>skills/rebrief §1-b</td><td>なし</td><td><code>[REBRIEF-ALREADY]</code></td><td>開発 session の作法（product 実装は v3）</td></tr>
+<tr><td id="r-h2"><code>R-H2</code></td><td>退避物の file 名は<strong>session 識別子で一意</strong>でなければならず、role を file 名に入れてはならない（role 分離の前後で規則が不変であるため）</td><td></td><td>runbook/admin.md §9 / skills/rebrief</td><td>なし</td><td><code>working-memory.&lt;sid&gt;.md</code></td><td>開発 session の作法（product 実装は FR27 / FR28 の便）</td></tr>
+<tr><td id="r-h3"><code>R-H3</code></td><td>消費済みは<strong>同一 suffix 規約</strong>（<code>.consumed.md</code>）で表現し、列挙の除外規則を 1 本で済ませられねばならない</td><td></td><td>contract-v1.md §4</td><td>なし</td><td>-</td><td>開発 session の作法（product 実装は FR27 / FR28 の便）</td></tr>
+<tr><td id="r-h4"><code>R-H4</code></td><td>消費は<strong>移動（rename）</strong>であって削除であってはならない</td><td></td><td>skills/rebrief §手順</td><td>なし</td><td>mv</td><td>開発 session の作法（product 実装は FR27 / FR28 の便）</td></tr>
+<tr><td id="r-h6"><code>R-H6</code></td><td>DATA が取れない周は <strong>brief を出してはならない</strong>。「読めなかった」を「異常なし・やり残しなし」に化けさせる形が最悪の失敗である</td><td></td><td>skills/rebrief §1</td><td>なし</td><td>偽の全クリア</td><td>開発 session の作法（product 実装は FR27 / FR28 の便）</td></tr>
+<tr><td id="r-h8"><code>R-H8</code></td><td>別 session の退避物（orphan）は<strong>自動で消費してはならず</strong>、残る間は毎起動で件数を surface し続けねばならない</td><td></td><td>runbook/admin.md §9 / skills/rebrief §4</td><td>なし</td><td>orphan</td><td>開発 session の作法（product 実装は FR27 / FR28 の便）</td></tr>
+<tr><td id="r-h16"><code>R-H16</code></td><td>重複起動は<strong>冪等</strong>でなければならない（既に消費済みなら 1 行の ack で終える）</td><td></td><td>skills/rebrief §1-b</td><td>なし</td><td><code>[REBRIEF-ALREADY]</code></td><td>開発 session の作法（product 実装は FR27 / FR28 の便）</td></tr>
 </tbody>
 </table>
 </details>
@@ -442,7 +442,7 @@
 <p class="section-essence" data-audience="human">要件定義書（SRS）の各要件が、 このカタログのどの行から来たかを 1 表で示します。 SRS の要件は振る舞いの単位でまとめてあるので、 1 本の要件に複数の行が対応します。 表に現れない行は、 設計から契約を切る段で参照する材料としてそのまま残ります。</p>
 <p data-audience="machine">対応の向きは SRS → カタログ（FR / NFR 1 本 → R- 行 0〜n 本）。 SRS 側の根拠 field（<code>rationale_source</code> / <code>trace.backward</code>）は上位ニーズ N-1〜N-5 を指し、 R- 行への対応は本表だけが持つ（SRS の contract に R- id は書かない）。 対応 0 本の要件は、 grill の裁定で新設した要件・要件 doc の v3 行に由来する制約・憲法 / ADR 由来の制約のいずれかで、 その旨を右列に書く。 本表で引かれない行（150 行中 71 行）は削除でも降格でもなく、 設計 doc から契約を切る段の材料として残る。 表の R- id は本 page の行へ、 FR / NFR id は <code>./srs.html</code> の要件行へ deep-link する。</p>
 <details class="req__machine" data-audience="machine">
-<summary>対応表（SRS 29 要件 → R- 行）</summary>
+<summary>対応表（SRS 33 要件 → R- 行）</summary>
 <table>
 <thead><tr><th>SRS</th><th>要件名</th><th>対応する R- 行</th></tr></thead>
 <tbody>
@@ -470,6 +470,10 @@
 <tr><td><a href="./srs.html#FR21">FR21</a></td><td>注入計測の slot</td><td><a href="#r-e21">R-E21</a>, <a href="#r-k22">R-K22</a></td></tr>
 <tr><td><a href="./srs.html#FR22">FR22</a></td><td>人手 0 の計測</td><td><a href="#r-f6">R-F6</a>, <a href="#r-f10">R-F10</a></td></tr>
 <tr><td><a href="./srs.html#FR23">FR23</a></td><td>開発 session の作業記憶</td><td><a href="#r-h2">R-H2</a>, <a href="#r-h3">R-H3</a>, <a href="#r-h4">R-H4</a>, <a href="#r-h6">R-H6</a>, <a href="#r-h8">R-H8</a>, <a href="#r-h16">R-H16</a></td></tr>
+<tr><td><a href="./srs.html#FR25">FR25</a></td><td>開発 session の context 計測</td><td>新規（原本の R- 行に対応なし。 章 H の作業記憶と同じ開発 session の作法）</td></tr>
+<tr><td><a href="./srs.html#FR26">FR26</a></td><td>開発 session の cap guard</td><td>新規（原本の R- 行に対応なし）</td></tr>
+<tr><td><a href="./srs.html#FR27">FR27</a></td><td>管理 tick</td><td><a href="#r-g20">R-G20</a>, <a href="#r-e12">R-E12</a>（席の内側に周期起動を張らない規範と両立させる形＝tick は席の外で回す）</td></tr>
+<tr><td><a href="./srs.html#FR28">FR28</a></td><td>cycle</td><td>新規（原本の R- 行に対応なし。 cycle 境界の考え方は章 H の作業記憶が前提）</td></tr>
 <tr><td><a href="./srs.html#NFR1">NFR1</a></td><td>lens 予算</td><td><a href="#r-c12">R-C12</a>, <a href="#r-j14">R-J14</a></td></tr>
 <tr><td><a href="./srs.html#NFR2">NFR2</a></td><td>契約の大きさ</td><td>—（要件 doc の R-J19 は v3 送りでカタログ外・grill 論点 2 の裁定）</td></tr>
 <tr><td><a href="./srs.html#NFR3">NFR3</a></td><td>依存</td><td>—（ADR-0001 と憲法由来・対応する R- 行なし）</td></tr>
@@ -486,7 +490,7 @@
 <ul data-audience="machine">
   <li><strong>原本の所在</strong>: repo 外（開発 host の state 領域）で凍結（読取専用・<code>chmod a-w</code>）。 sha256 先頭 8 桁 = <code>92a75005</code>、 全 669 行。 本 file はその写しであり、 齟齬時は原本を正とする。</li>
   <li><strong>版</strong>: v0.1.10。 全 R- 行 289 本に着手版 field（<code>｜着手: v2</code> / <code>｜着手: v3</code>）を追加した版で、 要件文・出所・裁定・v1 欄は前版から不変・削除 0。</li>
-  <li><strong>母集団の数え方</strong>: 原文の R- 行のうち末尾 field が <code>｜着手: v2</code> の行すべて（実測 144 本）＋ 章 H の <code>R-H2 / R-H3 / R-H4 / R-H6 / R-H8 / R-H16</code> の 6 本（着手は v3 だが「開発 session が守る作法」として収録・備考列に注記）＝ 計 150 行。 それ以外の v3 行 139 本は収録せず、 章ごとの件数だけを見出しの「v3 送り N 本」に書く。 §0 の id 体系の凡例行（<code>R-&lt;章&gt;&lt;番号&gt;</code>）は要件行ではないので数えない。</li>
+  <li><strong>母集団の数え方</strong>: 原文の R- 行のうち末尾 field が <code>｜着手: v2</code> の行すべて（実測 144 本）＋ 章 H の <code>R-H2 / R-H3 / R-H4 / R-H6 / R-H8 / R-H16</code> の 6 本（着手は v3 だが「開発 session が守る作法」として収録・備考列に注記）＝ 計 150 行。 それ以外の v3 行 139 本は収録せず、 章ごとの件数だけを見出しの「v3 送り N 本」に書く。 §0 の id 体系の凡例行（<code>R-&lt;章&gt;&lt;番号&gt;</code>）は要件行ではないので数えない。 FR25 / FR26 / FR27 / FR28 の 4 本は原本の R- 行に対応が無い新規要件で、 表では「新規」と記し母集団には数えない。</li>
   <li><strong>scrub の規則 4 点</strong>（本 repo は PUBLIC ゆえ全 field に適用し、 置換後の残存 0 を生成器が自己検査する。 非 0 なら生成を中断する）: <strong>(1) bead id</strong> — <code>sc-</code> / <code>s2-</code> / <code>orch-</code> / <code>un-</code> / <code>folio-</code> / <code>ccs-</code> / <code>paper-</code> 接頭の識別子を削除し、 空になった括弧と連続した区切り記号を畳む。 <strong>(2) 口座名</strong> — 口座を名指しする識別子（<code>black</code> + 数字 の形、 および固有名 1 種）を <code>&lt;口座&gt;</code> へ置換。 <strong>(3) user 逐語</strong> — 裁定 field の <code>「…」</code> 引用はすべて落として <code>user 裁定（…・逐語は repo 外）</code> へ畳み、 他 field は user 帰属の印（逐語 / user 直命 / user 裁定 / user 回答 / user 承認 / USER-VERBATIM）を持つ field の <code>「…」</code> だけを落とす（doc の節名を指す引用は残す）。 要件文では <code>逐語「…」</code> の形だけを落とす。 日付・時刻・論点番号・<code>RULING-…</code> の doc 名・<code>[USER-APPROVAL-RELAY v1] &lt;ts&gt;（scope=…）</code> の ts と scope は残す。 <strong>(4) 絶対 path</strong> — 開発 host の home 配下を指す絶対 path を <code>&lt;path&gt;</code> へ置換（本 doc の母集団には該当 0 件）。</li>
   <li><strong>照会先</strong>: 要件定義書 <code>./srs.html</code>（各 FR との対応は <a href="#s-migration">§移行表</a>）、 憲法 <code>./constitution.html</code>（要件が従う折れない線）。 本 file は要件 doc の写しであって要件の正本ではない。</li>
 </ul>
