@@ -94,6 +94,8 @@ ruled_at = "2026-09-07"
 
 **最初の 1 件で止めない**（silent drop 禁止・NFR4）。
 
+憲法 §3 rules 表の閾値セルは manifest の**写し**であり（値の正本は manifest 側）、両者の一致は xtask の歯 `constitution_thresholds_match_rules_manifest` が守る（R-C4-1 / R-C4-2 / R-C4-3 と R-C4-4 の 3 値＝計 6 個を順序込みで突合・憲法側の手編集は RED）。数値を持たない prose 行（R-C6-1 以降・R-C13-*）は突合できず、この歯の射程外である。
+
 ## 5. 実行時に読む manifest の場所
 
 - tracked な `rules/manifest.toml` を **build 時に binary へ埋め込む**（`include_str!`）。C1「機械が読む規則はこの manifest 1 file だけ」を、別 repo（toy repo の worktree）で走る `pipe gate` でも path に依存せず満たす。binary は自分を build した manifest の版と一体になる（単一 static binary・ADR-0001 と同じ向き）。

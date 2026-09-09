@@ -112,4 +112,119 @@ mod tests {
             "R-C4-2 と MAX_FILE_LINES"
         );
     }
+
+    /// 憲法 §3 の閾値セル（写し）を持つ file。
+    fn constitution_text() -> String {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("design-intent")
+            .join("spec")
+            .join("constitution.html");
+        std::fs::read_to_string(&path)
+            .unwrap_or_else(|err| panic!("{} を読めない: {err}", path.display()))
+    }
+
+    /// `<tr id="…">` の 4 列目（初期値）を tag を剥がして返す。
+    ///
+    /// **無い行を黙って飛ばさない**——行が消えた周に「一致した」と言わせないためで、
+    /// 見つからない / 列が足りないはいずれも panic（測れなかったを緑にしない）。
+    fn initial_cell(html: &str, id: &str) -> String {
+        let head = format!("<tr id=\"{id}\">");
+        let at = html
+            .find(&head)
+            .unwrap_or_else(|| panic!("§3 に {id} の行が無い"));
+        let rest = &html[at..];
+        let end = rest
+            .find("</tr>")
+            .unwrap_or_else(|| panic!("{id} の行が閉じていない"));
+        let cells: Vec<&str> = rest[..end].split("<td>").skip(1).collect();
+        let cell = cells
+            .get(3)
+            .unwrap_or_else(|| panic!("{id} に 4 列目（初期値）が無い"));
+        strip_tags(cell)
+    }
+
+    /// tag を剥がし、桁区切りの `,` を落とした本文（parser は書かない・std だけ）。
+    fn strip_tags(cell: &str) -> String {
+        let mut out = String::new();
+        let mut inside = false;
+        for ch in cell.chars() {
+            match ch {
+                '<' => inside = true,
+                '>' => inside = false,
+                ',' => {}
+                _ if !inside => out.push(ch),
+                _ => {}
+            }
+        }
+        out
+    }
+
+    /// 本文の整数を**出現順**に拾う。
+    fn ints(body: &str) -> Vec<u64> {
+        let mut found = Vec::new();
+        let mut digits = String::new();
+        for ch in body.chars().chain(std::iter::once(' ')) {
+            if ch.is_ascii_digit() {
+                digits.push(ch);
+                continue;
+            }
+            if !digits.is_empty() {
+                let parsed = digits
+                    .parse::<u64>()
+                    .unwrap_or_else(|err| panic!("{digits} を整数にできない: {err}"));
+                found.push(parsed);
+                digits.clear();
+            }
+        }
+        found
+    }
+
+    /// 「1.0」形の比を pct（×100）で読む。小数点以下は 2 桁までを許す。
+    fn pct(body: &str) -> u64 {
+        let token: String = body
+            .chars()
+            .skip_while(|ch| !ch.is_ascii_digit())
+            .take_while(|ch| ch.is_ascii_digit() || *ch == '.')
+            .collect();
+        let (whole, fraction) = match token.split_once('.') {
+            Some((left, right)) => (left.to_owned(), right.to_owned()),
+            None => (token.clone(), String::new()),
+        };
+        assert!(fraction.len() <= 2, "小数点以下が 2 桁を超える: {token}");
+        let padded = format!("{fraction:0<2}");
+        let hundreds = ints(&whole).first().copied().unwrap_or_else(|| panic!("比を読めない: {body}"));
+        let rest = ints(&padded).first().copied().unwrap_or(0);
+        hundreds.saturating_mul(100).saturating_add(rest)
+    }
+
+    /// 憲法 §3 の閾値セルは manifest の写しである（手編集は RED）。
+    ///
+    /// 値の正本は manifest 側で、憲法は読む人のための写しである。3 面目のこの写しを
+    /// 手で書き換えても self-test も folio も緑のままだったので、ここで突合する。
+    // flip-check: retroactive s2-07l.8
+    #[test]
+    fn constitution_thresholds_match_rules_manifest() {
+        let html = constitution_text();
+        let mut cells: Vec<u64> = Vec::new();
+        cells.extend(ints(&initial_cell(&html, "r-c4-1")));
+        cells.extend(ints(&initial_cell(&html, "r-c4-2")));
+        cells.push(pct(&initial_cell(&html, "r-c4-3")));
+        cells.extend(ints(&initial_cell(&html, "r-c4-4")));
+        assert_eq!(cells.len(), 6, "§3 の閾値セルから拾えた数値: {cells:?}");
+        let text = manifest_text();
+        let rows: Vec<u64> = [
+            "R-C4-1",
+            "R-C4-2",
+            "R-C4-3",
+            "R-C4-4.fn-lines",
+            "R-C4-4.complexity",
+            "R-C4-4.args",
+        ]
+        .iter()
+        .map(|id| int_value(&text, id).unwrap_or_else(|| panic!("manifest に {id} が無い")))
+        .collect();
+        assert_eq!(cells, rows, "憲法 §3 の閾値セルと rules manifest の値");
+    }
 }
