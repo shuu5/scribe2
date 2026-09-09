@@ -1444,6 +1444,24 @@ fn runner_cmd(marker: &Path) -> String {
     )
 }
 
+/// `fleet record` で `ApprovalReceived` を 1 件直接積む。**`pipe approve` を通さない**
+/// 経路で、書き手側の逐語検査を素通りした event が関門を開けないことを測るのに使う。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn record_approval(state: &Path, id: &str, extra: &[&str]) -> Output {
+    let mut args = vec!["fleet".to_owned(), "record".to_owned(), "--state-dir".to_owned()];
+    args.push(state.display().to_string());
+    args.extend(
+        ["--kind", "ApprovalReceived", "--run", id, "--bead", "s2-2e5"]
+            .iter()
+            .map(|item| (*item).to_owned()),
+    );
+    args.extend(extra.iter().map(|item| (*item).to_owned()));
+    Command::new(bin()).args(&args).output().expect("binary を起動できる")
+}
+
 /// 3 クラスを名乗る契約で intake → spawn まで撃ち、Blocked で止まった便の
 /// id と stdout を返す。stdout は「いまどの段に居るか」の主張なので測る対象である。
 fn blocked(repo: &Path, state: &Path, marker: &Path, classes: &str) -> (String, String) {
@@ -1590,6 +1608,39 @@ fn pipe_approval_resume_stays_blocked_without_received() {
     // 待っている事実は Blocked が既に持っている。resume のたびに積むと
     // 「何回聞いたか」が事実と食い違う。
     assert_eq!(event_count(&state), before, "何も書かない");
+
+    // **資格の無い `ApprovalReceived` では関門は開かない**（憲法 C7.2・planner 裁定 Q1）。
+    // `fleet record` は公開の口なので、書き手（`pipe approve`）の逐語検査だけでは
+    // 「承認は event に残った逐語だけ」を守れない——読み手が資格を見る。
+    for disqualified in [
+        vec!["--actor", "machine"],
+        vec!["--actor", "human"],
+        vec!["--actor", "human", "--detail", "   "],
+        vec!["--actor", "machine", "--detail", "出してよい"],
+    ] {
+        let wrote = record_approval(&state, &id, &disqualified);
+        assert_eq!(
+            wrote.status.code(),
+            Some(i32::from(RC_OK)),
+            "event を積むこと自体はできる（塞ぐのは読み手である）: {}",
+            stderr_of(&wrote)
+        );
+        assert!(
+            show_line(&repo, &state, &id).contains("approved=false"),
+            "資格の無い承認で関門は開かない: {disqualified:?}"
+        );
+        let again = run_pipe(&[
+            "resume", "--run", &id, "--repo", &repo.display().to_string(),
+            "--state-dir", &state.display().to_string(),
+            "--runner", &runner_cmd(&marker),
+        ]);
+        assert_eq!(
+            again.status.code(),
+            Some(i32::from(RC_BLOCKED)),
+            "資格の無い承認の後も rc 3 のまま: {disqualified:?}"
+        );
+        assert!(!marker.exists(), "runner を起こさない: {disqualified:?}");
+    }
     clean(&[&repo, &state]);
 }
 
@@ -1615,5 +1666,32 @@ fn pipe_approval_unlisted_class_value_is_rejected_at_intake() {
         "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
     ]);
     assert_eq!(ok.status.code(), Some(i32::from(RC_OK)), "名簿に在る値は通す: {}", stderr_of(&ok));
+    clean(&[&repo, &state]);
+}
+
+#[test]
+fn pipe_approval_blocks_in_one_shot_run() {
+    let (repo, state) = repo_with_state();
+    let marker = state.join("runner-ran");
+    let path = write_contract(&repo, &[], &[r#"classes = ["publish"]"#]);
+    // **一発経路**（intake → spawn → gate → land を 1 process で通す）でも関門は効く。
+    // 段ごとの口だけを測ると、この経路だけ素通りする実装に気づけない——関門は唯一の
+    // 起動口 `spawn()` に在るという主張を、経路の側から裏書きする歯である。
+    let out = run_pipe(&[
+        "run", "--contract", &path.display().to_string(), "--bead", "s2-2e5",
+        "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(),
+        "--runner", &runner_cmd(&marker),
+    ]);
+    assert_eq!(
+        out.status.code(),
+        Some(i32::from(RC_BLOCKED)),
+        "一発経路でも spawn の手前で止まる: {}",
+        stderr_of(&out)
+    );
+    assert!(!marker.exists(), "runner を起こさない");
+    let id = run_id_of(&out);
+    assert!(!id.is_empty(), "止まった周も run id を出す: {}", stdout_of(&out));
+    assert!(show_line(&repo, &state, &id).contains("stage=Blocked"), "段は Blocked に落ちる");
     clean(&[&repo, &state]);
 }
