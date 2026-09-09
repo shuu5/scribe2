@@ -1504,6 +1504,35 @@ fn pipe_gate_refuses_regate_after_fail() {
 }
 
 #[test]
+fn pipe_gate_refuses_regate_without_readable_verdict() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let id = implemented(&repo, &state, &path);
+    let first = gate_once(&repo, &state, &id, None);
+    assert_eq!(first.status.code(), Some(3), "測れなかった周の rc は 3");
+
+    // **判定が読めない周は測り直さない**（fail-closed・C11.2）。前提は「Gated ∧ verdict が
+    // INCONCLUSIVE」であって「Gated ∧ PASS でも FAIL でもない」ではない——後者だと
+    // verdict.json が消えた / 壊れた便まで撃ち直せてしまい、「測れなかった」ではなく
+    // **判定の記録が無い**便が gate を通る（自前の変異 M04 が生き延びた経路）。
+    let judged = state.join("pipe").join(&id).join("verdict.json");
+    fs::write(&judged, "{ 壊れた\n").expect("verdict.json を壊せる");
+    let before = event_count(&state);
+    let marker = state.join("lens-ran");
+    let lens = fake_lens(&marker, &lens_verdict("PASS"));
+    let out = gate_once(&repo, &state, &id, Some(&lens));
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "読めない周は rc 1");
+    assert!(
+        stderr_of(&out).contains("読めない"),
+        "**判定が読めない**と名乗る（INCONCLUSIVE と同じ扱いにしない）: {}",
+        stderr_of(&out)
+    );
+    assert!(!marker.exists(), "lens を起動しない");
+    assert_eq!(event_count(&state), before, "event を 1 件も書かない");
+    clean(&[&repo, &state]);
+}
+
+#[test]
 fn pipe_resume_reports_next_gate_on_inconclusive() {
     let (repo, state) = repo_with_state();
     let path = write_contract(&repo, &[], &[]);
