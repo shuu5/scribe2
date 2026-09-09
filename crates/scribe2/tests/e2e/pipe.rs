@@ -2062,6 +2062,25 @@ fn pipe_report_counts_human_events() {
 }
 
 #[test]
+fn pipe_report_returns_rc2_on_malformed_store() {
+    let (repo, state) = repo_with_state();
+    let events = state.join("fleet").join("events.jsonl");
+    fs::create_dir_all(state.join("fleet")).expect("dir を作れる");
+    fs::write(&events, "こわれ\n").expect("壊れた行を書ける");
+    // **数えられなかったを 0 に化けさせない**（C11.2）。到達点の 1 行は「人手 0」を
+    // 主張する面なので、読めない台帳から 0 を出すと**偽の全クリア**そのものになる。
+    let out = report_once(&state);
+    assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "読めない台帳は rc 2");
+    assert!(out.stdout.is_empty(), "rc 2 でも数を出さない");
+    assert!(
+        !stdout_of(&out).contains("human_events_other_than_approval=0"),
+        "0 を名乗らない: {}",
+        stdout_of(&out)
+    );
+    clean(&[&repo, &state]);
+}
+
+#[test]
 fn pipe_land_pr_cmd_refuses_without_approval() {
     let (repo, state) = repo_with_state();
     let path = write_contract(&repo, &[], &[]);
