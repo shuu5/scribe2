@@ -117,17 +117,38 @@ impl FilePair {
         self.marked() && (self.test_diff() || self.base.is_none())
     }
 
-    /// marker **行**を持つか（行頭で見る・素の `contains` では字面の言及まで拾う）。
+    /// **この便で足した**札を持つか。
     ///
     /// **bead id が要る**。marker は「どの便がなぜ RED を免除したか」を残すための札で、
     /// id の無い `// flip-check: retroactive` は誰にも辿れない——review の対象に
     /// ならない逃がしは、静かな逃がしと同じである。
+    ///
+    /// **base に既に在る札は数えない**。marker 行は file に残るので、在るだけで数えると、
+    /// 一度貼った札がその file の test 区間を触る**以後のすべての便**を免除する——札の
+    /// bead id と便が対応しなくなり、判定行の `retroactive=N` を review しても何を
+    /// 免除したのかを辿れない。
     fn marked(&self) -> bool {
-        self.head_test().lines().any(|line| {
-            line.trim_start()
-                .strip_prefix(RETROACTIVE_MARK)
-                .is_some_and(|bead| !bead.trim().is_empty())
-        })
+        !self.fresh_markers().is_empty()
+    }
+
+    /// HEAD の test 区間に在り base の test 区間に無い札の bead id（＝この便で足した札）。
+    ///
+    /// base に無い file（新規 module）は base 側の test 区間が空なので、HEAD の札が
+    /// そのまま「この便で足した札」になる。
+    fn fresh_markers(&self) -> Vec<String> {
+        let carried = marker_beads(&self.base_test());
+        marker_beads(&self.head_test())
+            .into_iter()
+            .filter(|bead| !carried.contains(bead))
+            .collect()
+    }
+
+    /// 札を持つのに **1 枚も新しくない**（base から持ち越した札だけ）か。
+    ///
+    /// 効かない札を黙って無視すると、書いた人は免除したつもりで RED を要求され、
+    /// 理由を判定行から読めない。stderr へ 1 行出して直し方を渡す。
+    fn stale_marker(&self) -> bool {
+        !marker_beads(&self.head_test()).is_empty() && self.fresh_markers().is_empty()
     }
 
     /// test 区間の差が**削除だけ**か（順序を保った行の削除だけで HEAD が得られる）。
@@ -159,6 +180,22 @@ impl FilePair {
     }
 }
 
+/// test 区間の marker 行が名乗る **bead id** を拾う（行頭で見る・素の `contains` では
+/// 字面の言及まで拾う）。
+///
+/// **札の同一性は bead id で見る**。行の字面で比べると、字下げや id の前後の空白が 1 個
+/// 違うだけで base から持ち越した札が「この便で足した札」に化け、**古い id のまま免除が
+/// 効き続ける**——この門が塞ごうとしている当の穴の裏口になる。
+fn marker_beads(region: &str) -> Vec<String> {
+    region
+        .lines()
+        .filter_map(|line| {
+            let bead = line.trim_start().strip_prefix(RETROACTIVE_MARK)?.trim();
+            (!bead.is_empty()).then(|| bead.to_owned())
+        })
+        .collect()
+}
+
 /// `crates/*/tests/` 配下の `.rs` か（flip-check 独自の追加規則で全体を test 区間と扱う）。
 ///
 /// 段数の**完全一致では数えない**。統合 test は `tests/<dir>/main.rs` の module 形を取り
@@ -167,10 +204,20 @@ impl FilePair {
 /// `not-copied` へ落ち、新しい test が base へ写らないまま rc 0 が出る。
 fn is_test_file(rel: &str) -> bool {
     let parts: Vec<&str> = rel.split('/').collect();
-    parts.len() >= 4
-        && parts.first() == Some(&"crates")
-        && parts.get(2) == Some(&"tests")
-        && rel.ends_with(".rs")
+    if !rel.ends_with(".rs") || parts.first() != Some(&"crates") || parts.len() < 4 {
+        return false;
+    }
+    if parts.get(2) == Some(&"tests") {
+        return true;
+    }
+    // `#[path]` で src 配下へ外出しした test module は `#[cfg(test)] mod` の形を持たず、
+    // 区間判定には **src 区間だけの file** に見える＝そこへ足した歯が 1 本も測られない。
+    // 名前で test file と見なして丸ごと写す（base に mod 宣言が在れば base で compile
+    // され、新しい歯の RED を測れる）。
+    parts.get(2) == Some(&"src")
+        && parts
+            .last()
+            .is_some_and(|name| *name == "tests.rs" || name.ends_with("_tests.rs"))
 }
 
 /// test 区間の始まる byte offset。
@@ -705,6 +752,16 @@ fn finish(root: &Path, outcome: Verdict) -> Verdict {
 /// `workdir` は repo 内のどこでもよい。最初に repo root を解いてから git を撃つので、
 /// 判定は起動 dir に依らない。
 pub fn judge(base: &str, workdir: &Path) -> Verdict {
+    judge_into(base, workdir, &mut emit_err)
+}
+
+/// [`judge`] の本体。内訳の行は `sink` へ渡す。
+///
+/// stderr へ直に書くと、**出したこと自体を歯から読めない**——`stale-marker` の行は
+/// 判定行にも rc にも載らないので、emit を丸ごと消しても全部の歯が緑のままになる
+/// （実測 2026-09-10・s2-07l.34 の lens F1）。CLI 面の出力は [`judge`] が
+/// `emit_err` を渡すので変わらない。
+fn judge_into(base: &str, workdir: &Path, sink: &mut dyn FnMut(&str)) -> Verdict {
     let root = match repo_root(workdir) {
         Err(reason) => return infra(&reason),
         Ok(found) => found,
@@ -720,6 +777,13 @@ pub fn judge(base: &str, workdir: &Path) -> Verdict {
         Err(reason) => return infra(&reason),
         Ok(found) => found,
     };
+    for pair in pairs.iter().filter(|pair| pair.stale_marker()) {
+        sink(&format!(
+            "flip-check: stale-marker {}（base に既に在る marker は効かない\
+             ・削除するか新しい bead id で置き直す）",
+            pair.rel
+        ));
+    }
     let counts = Counts::of(&pairs);
     if counts.flipped == 0 {
         return no_flip_verdict(&pairs, counts);
