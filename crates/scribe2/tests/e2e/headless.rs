@@ -134,6 +134,9 @@ fn headless_runner_reads_contract_from_stdin_and_passes_permission_mode_every_ti
         };
         assert!(pair("--permission-mode", mode), "permission mode を毎回明示する: {args}");
         assert!(pair("--output-format", "stream-json"), "stream-json で回す: {args}");
+        // 値を取らない flag なので対では測れない。**在ることそのもの**を見る——
+        // この版の claude は `-p` + stream-json でこれを要求し、無いと rc 1 で断る。
+        assert!(lines.contains(&"--verbose"), "stream-json には --verbose が要る: {args}");
         assert!(pair("--plugin-dir", &dir.display().to_string()), "plugin を載せる: {args}");
         // **契約は stdin から来て prompt に載る**（argv で契約を渡さない形の裏返し）。
         assert!(args.contains("goal = \"縦 1 本を通す\""), "契約が prompt に載る: {args}");
@@ -217,6 +220,13 @@ fn headless_lens_extracts_last_json_line() {
     );
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
     assert!(dir.join("called").exists(), "cap 内なので claude を呼ぶ");
+    // **lens は既定（text）で呼ぶ**。stream-json にすると全行が JSON になり、
+    // 「最後の JSON 行」が claude 自身の result record になって判定が取れない。
+    let args = slurp(&dir.join("args"));
+    assert!(
+        !args.lines().any(|line| line == "--output-format"),
+        "lens は出力形式を指定しない: {args}"
+    );
     // 途中の JSON でも末尾の地の文でもなく、**最後の JSON 行**ちょうど 1 行。
     assert_eq!(
         stdout_of(&out).trim(),

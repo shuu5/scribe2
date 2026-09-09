@@ -54,6 +54,8 @@ pub fn dispatch(args: &[String]) -> Outcome {
         plugin_dir: Some(&plugin_dir),
         account_dir: account.as_deref(),
         cwd: Some(Path::new(&worktree)),
+        // rate limit を**途中で**見るので逐次で受ける。
+        streaming: true,
     })
 }
 

@@ -72,6 +72,13 @@ pub struct Call<'a> {
     pub account_dir: Option<&'a str>,
     /// 起動する cwd。
     pub cwd: Option<&'a Path>,
+    /// record を**逐次**受け取るか（`--output-format stream-json`）。
+    ///
+    /// 逐次が要るのは runner だけである——rate limit の record を**途中で**見て止める
+    /// ためで、lens は判定を 1 つ受け取るだけなので既定（text）で呼ぶ。stream-json は
+    /// **全行が JSON** ゆえ「最後の JSON 行」が claude 自身の result record になり、
+    /// モデルの判定は record の中の文字列へ埋もれる（実測 2026-09-10）。
+    pub streaming: bool,
 }
 
 /// [`Call`] から `Command` を組む。**stdout だけ piped**（stderr は素通し）。
@@ -79,12 +86,16 @@ pub fn build(call: &Call<'_>) -> Command {
     let mut cmd = Command::new(call.claude);
     cmd.arg("-p")
         .arg(call.prompt)
-        .arg("--output-format")
-        .arg("stream-json")
         // permission mode は**毎回**渡す。省くと版の既定に従い、同じ 1 行が
         // 環境ごとに違う権限で走る。
         .arg("--permission-mode")
         .arg(call.permission_mode);
+    if call.streaming {
+        // `-p` と `stream-json` の併用は **この版の claude が `--verbose` を要求する**
+        // （無いと `requires --verbose` で rc 1・実測 2026-09-10）。fake は flag を
+        // 読まないので、これを落としても歯は緑のまま通る＝実 claude でだけ死ぬ。
+        cmd.arg("--output-format").arg("stream-json").arg("--verbose");
+    }
     if let Some(dir) = call.plugin_dir {
         cmd.arg("--plugin-dir").arg(dir);
     }
