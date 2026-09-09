@@ -261,7 +261,7 @@ mod tests {
     // 下の 2 本は **後から足した歯**である（測定そのものは s2-07l.18 までに land 済みで、
     // base でも緑になる）。RED→GREEN で非空虚性を示せないので、契約の done (iii) が
     // 求める変異 proof（門を外す変異・違反を数えない変異が rc 100 で落ちる）で担保する。
-    use super::{listed_from, scan_private_paths, Tracked, TrackedFile};
+    use super::{listed_from, measure, scan_private_paths, Layout, Tracked, TrackedFile};
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -377,6 +377,45 @@ mod tests {
         assert!(
             !head.contains("readable.md"),
             "読めた file を違反にしないはず: {head}"
+        );
+    }
+
+    /// 母集団を **測れなかった**周は違反として出す（`n/a` で無違反へ落とさない）。
+    ///
+    /// 「測れなかった」が「異常なし」に化けると paths-clean は恒久 fail-open になる。
+    /// 上の歯が固定するのは Unmeasurable を**作る**側で、ここは作った Unmeasurable を
+    /// **違反へ倒す**側＝門そのものである。
+    #[test]
+    fn paths_clean_reports_unmeasurable_population_as_violation() {
+        let dir = tmp_dir();
+        fs::create_dir_all(&dir).expect("fixture の dir を作れる");
+        // git repo の外を root にすると `git rev-parse --show-toplevel` が rc≠0 になり、
+        // 母集団は NotRepoRoot ではなく Unmeasurable へ落ちる。
+        let layout = Layout {
+            root: dir.clone(),
+            core_dir: dir.clone(),
+            member_dirs: Vec::new(),
+            name: "probe".to_owned(),
+        };
+        let measured = measure(&layout);
+        fs::remove_dir_all(&dir).ok();
+
+        assert_eq!(
+            measured.fact, "paths-clean=?",
+            "測れなかった周は走査本数を出さないはず"
+        );
+        assert!(
+            !measured.violations.is_empty(),
+            "測れなかったは違反として出すはず（n/a で無違反にしない）"
+        );
+        let head = measured
+            .violations
+            .first()
+            .map(String::as_str)
+            .unwrap_or_default();
+        assert!(
+            head.starts_with("paths-clean: "),
+            "違反 1 行は paths-clean の tag を名乗るはず: {head}"
         );
     }
 }
