@@ -8,9 +8,10 @@
 //! deny は時間切れに頼らず返す（NFR5）。timeout 到達は Claude Code 側で「判定の消失」
 //! ＝fail-open なので、判定は必ず timeout の内側で終える。
 //!
-//! root の外へ出る形は **2 段**で見る: `..` を字句で畳む段（まだ無い file も判定できる）
-//! と、実体を解いて root の内側に居るかを見る段（symlink を経由した `..` は字句では
-//! 見抜けない）。どちらかが外を指したら deny する。
+//! path は **2 段**で見る: `..` を字句で畳む段（まだ無い file も判定できる）と、実体を
+//! 解く段（symlink を経由した `..` は字句では見抜けない）。字句が root の外を指したら
+//! deny し、**allowlist は実体で解いた名前で当てる**——repo の内側で閉じる symlink は
+//! root を一歩も出ないので、字句の名前で当てると write-set の外へ書けてしまう。
 
 use crate::name::NAME;
 use std::path::{Component, Path, PathBuf};
@@ -79,9 +80,14 @@ pub fn decide(root: &Path, cwd: &Path, git_dir: &Path, tool: &str, path: Option<
         return Decision::Deny(format!("{NAME}: deny 編集先の path を読めない（C16）"));
     };
     let absolute = absolute_of(cwd, target);
-    match relative_to(root, &absolute) {
+    // 字句の段。root の外へ出る形はここで落とす（実体が root の内側を指す symlink でも、
+    // 字句で外に居る path は通さない＝fail-closed の極性を保つ）。
+    if relative_to(root, &absolute).is_none() {
+        return Decision::Deny(escaped(target));
+    }
+    // 実体の段。allowlist は**実体で解いた名前**で当てる。
+    match resolved_relative(root, &absolute) {
         None => Decision::Deny(escaped(target)),
-        Some(_) if !resolves_inside(root, &absolute) => Decision::Deny(escaped(target)),
         Some(rel) if is_allowed(&allowed, &rel) => Decision::Allow,
         Some(rel) => Decision::Deny(outside(&rel.display().to_string())),
     }
@@ -127,16 +133,16 @@ fn relative_to(root: &Path, absolute: &Path) -> Option<PathBuf> {
     Some(out)
 }
 
-/// 実体でも root の内側に居るか。
+/// 実体で解いた repo 相対 path。実体が root の外に出るなら `None`。
 ///
 /// 字句だけでは `docs/<symlink>/../evil.rs` が `docs/evil.rs` に畳まれ、実際の書き先が
-/// repo の外でも通ってしまう。**前から 1 段ずつ**積み、存在する段では symlink を解く。
-/// 存在しない段はそのまま字句で積む（まだ無い file への Write も判定するため。その段に
-/// symlink は在り得ないので、字句の結果を信じてよい）。
-fn resolves_inside(root: &Path, absolute: &Path) -> bool {
-    let Ok(real_root) = root.canonicalize() else {
-        return false;
-    };
+/// repo の外でも通ってしまう。repo の**内側**で閉じる symlink も同じで、
+/// `docs/<link>/evil.rs` の実体が `src/evil.rs` なら root は一歩も出ない——**allowlist を
+/// 実体の名前で当てないと** write-set の外へ書ける。**前から 1 段ずつ**積み、存在する段
+/// では symlink を解く。存在しない段はそのまま字句で積む（まだ無い file への Write も
+/// 判定するため。その段に symlink は在り得ないので、字句の結果を信じてよい）。
+fn resolved_relative(root: &Path, absolute: &Path) -> Option<PathBuf> {
+    let real_root = root.canonicalize().ok()?;
     let mut real = PathBuf::new();
     for part in absolute.components() {
         match part {
@@ -150,12 +156,12 @@ fn resolves_inside(root: &Path, absolute: &Path) -> bool {
             }
             Component::ParentDir => {
                 if !real.pop() {
-                    return false;
+                    return None;
                 }
             }
         }
     }
-    real.starts_with(&real_root)
+    real.strip_prefix(&real_root).ok().map(Path::to_path_buf)
 }
 
 /// repo 相対 path が allowlist の内側か。末尾 `/` の項目は配下全部を許す。
