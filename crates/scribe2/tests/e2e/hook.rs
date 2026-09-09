@@ -508,6 +508,45 @@ fn hook_guard_denies_symlink_escape() {
 }
 
 #[test]
+fn hook_guard_denies_symlink_inside_repo_outside_write_set() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    let docs = repo.join("docs");
+    fs::create_dir_all(&docs).expect("docs を作れる");
+    // repo の**内側**で閉じる symlink。root からは一歩も出ないので「repo の外」の段では
+    // 落ちない。字句の docs/link/evil.rs は allowlist に当たるが、実体は src/evil.rs。
+    std::os::unix::fs::symlink("../src", docs.join("link")).expect("symlink を張れる");
+    write_policy(&repo, "docs/\n");
+    let out = run_hook(
+        "pre-tool-use",
+        &tool_payload(&repo, "Write", "docs/link/evil.rs"),
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(i32::from(RC_BROKEN)),
+        "repo 内 symlink 経由でも write-set の外へは書かせない"
+    );
+    assert!(out.stdout.is_empty(), "deny でも stdout は 0 byte");
+    // 理由まで測る。root 逸脱の枝で落ちても rc は同じなので、字面で弁別しないと
+    // 「実体で allowlist を当てる」ことを一切測らない歯になる。名指すのも実体側である。
+    assert_eq!(
+        stderr_text(&out).trim_end(),
+        NAME.to_owned() + ": deny src/evil.rs は契約 write-set の外（C16）",
+        "deny の 1 行は実体側の path を名指す write-set 違反である"
+    );
+    // 逆向き（実体が write-set の内側）は通る。「symlink を含む path は一律 deny」という
+    // 直し方だとここが赤くなる＝実体で解いていることを弁別する対の歯である。
+    std::os::unix::fs::symlink("../docs", repo.join("src").join("into-docs"))
+        .expect("symlink を張れる");
+    let out = run_hook(
+        "pre-tool-use",
+        &tool_payload(&repo, "Write", "src/into-docs/new.md"),
+    );
+    assert_silent(&out, "実体が write-set の内側なら symlink 経由でも通す");
+    clean(&[&repo, &state]);
+}
+
+#[test]
 fn hook_guard_deny_stderr_is_one_line() {
     let repo = git_repo();
     let state = linked(&repo);
