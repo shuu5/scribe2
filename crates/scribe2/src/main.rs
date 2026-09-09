@@ -1,12 +1,12 @@
-//! CLI の骨格。`name` / `--version` / `doctor` の 3 subcommand を持つ。
+//! CLI の骨格。`name` / `--version` / `doctor` / `rules` の 4 subcommand を持つ。
 //!
-//! 名前の字面は [`name::NAME`] にだけ在り、この file には書かない。
-//! 出力は [`emit`] ただ 1 つに閉じ、rc は `main` が返す [`ExitCode`] で表す。
+//! 名前の字面は `name.rs` にだけ在り、この file には書かない。実体は lib 側に在り、
+//! この file は引数の dispatch と出力層だけを持つ。出力は [`emit`] と [`emit_err`]
+//! の 2 つに閉じ、rc は `main` が返す [`ExitCode`] で表す。
 
-mod name;
-
-use name::NAME;
 use std::process::ExitCode;
+use vessel::name::NAME;
+use vessel::rules::cli::{self, Outcome};
 
 /// 出力層。stdout へ書くのはこの関数だけである。
 #[expect(
@@ -15,6 +15,15 @@ use std::process::ExitCode;
 )]
 fn emit(line: &str) {
     println!("{line}");
+}
+
+/// 出力層。stderr へ書くのはこの関数だけである。
+#[expect(
+    clippy::print_stderr,
+    reason = "CLI の error 出力層をこの 1 関数に閉じるための例外"
+)]
+fn emit_err(line: &str) {
+    eprintln!("{line}");
 }
 
 /// `name` subcommand が出力する行を組み立てる。
@@ -37,7 +46,7 @@ fn render_doctor() -> Vec<String> {
 
 /// 未知の引数に対する使い方の行。
 fn render_usage() -> String {
-    format!("usage: {NAME} <name|--version|doctor>")
+    format!("usage: {NAME} <name|--version|doctor|rules>")
 }
 
 /// 引数 1 つを出力行の列へ写す。未知なら `Err` に使い方を載せる。
@@ -50,19 +59,38 @@ fn dispatch(arg: Option<&str>) -> Result<Vec<String>, String> {
     }
 }
 
+/// 引数列を 1 回分の結果へ写す。`rules` だけは引数を続けて取るので別扱いにする。
+fn run(args: &[String]) -> Outcome {
+    if args.first().map(String::as_str) == Some("rules") {
+        return cli::dispatch(args.get(1..).unwrap_or_default());
+    }
+    match dispatch(args.first().map(String::as_str)) {
+        Ok(lines) => Outcome {
+            out: lines,
+            err: Vec::new(),
+            ok: true,
+        },
+        Err(usage) => Outcome {
+            out: vec![usage],
+            err: Vec::new(),
+            ok: false,
+        },
+    }
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    match dispatch(args.first().map(String::as_str)) {
-        Ok(lines) => {
-            for line in &lines {
-                emit(line);
-            }
-            ExitCode::SUCCESS
-        }
-        Err(usage) => {
-            emit(&usage);
-            ExitCode::FAILURE
-        }
+    let outcome = run(&args);
+    for line in &outcome.out {
+        emit(line);
+    }
+    for line in &outcome.err {
+        emit_err(line);
+    }
+    if outcome.ok {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
     }
 }
 

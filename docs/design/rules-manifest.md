@@ -72,15 +72,15 @@ ruled_at = "2026-09-07"
 | `R-C13-1` | DepBudget | 12 | true | 論点 3・4 / 2026-09-07 |
 | `R-C13-1.per-pr` | DepPerPr | 1 | true | 同上 |
 | `R-C13-1.check-delta-ms` | CheckDeltaMs | 300 | true | 同上 |
-| `R-C13-2` | CompileShape | Policy（§3 の文・「統合 test file」は target 数で数える旨を併記） | true | 同上 |
+| `R-C13-2` | CompileShape | Policy（**§3 の逐語**・target 数で数える解釈は §2 に置き manifest には書かない） | true | 同上 |
 | `R-C13-3` | CompileSeconds | Policy（§3 の文） | **false** | 同上（検出線は未配線） |
 | `gate.lens_count` | GateLensCount | 1 | true | grill U3 / 2026-09-07・SRS scope「lens 1 本」 |
 | `gate.token_cap` | GateTokenCap | 150000 | true | grill U3 / 2026-09-07・SRS NFR1（目標値） |
 | `hook.budget_ms` | HookBudgetMs | 2000 | true | SRS NFR5 の user 承認 / 2026-09-09・要件カタログ R-K22 |
-| `pipe.stop_grace_ms` | StopGraceMs | 2000 | true | **裁定待ち**（2026-09-09 会話面で承認要求中・承認の時刻を写す） |
-| `fleet.lock_retry_ms` | LockRetryMs | 5000 | true | 同上 |
-| `fleet.lock_stale_ms` | LockStaleMs | 30000 | true | 同上 |
-| `hook.timeout_s` | HookTimeoutS | 10 | true | 同上（hooks.json の timeout・xtask がここから写す） |
+| `pipe.stop_grace_ms` | StopGraceMs | 2000 | true | user 2026-09-09T09:08Z / 2026-09-09 |
+| `fleet.lock_retry_ms` | LockRetryMs | 5000 | true | user 2026-09-09T09:08Z / 2026-09-09 |
+| `fleet.lock_stale_ms` | LockStaleMs | 30000 | true | user 2026-09-09T09:08Z / 2026-09-09 |
+| `hook.timeout_s` | HookTimeoutS | 10 | true | user 2026-09-09T09:08Z / 2026-09-09（hooks.json の timeout・xtask がここから写す） |
 
 `RuleKind` の variant はこの表の kind 列と 1:1（22 variant）。§3 の行 id は manifest の行 id の**接頭辞**として一致する（compound 行は `.` で枝分かれ）。後続の drift 歯は接頭辞で group 化して突合する。
 
@@ -108,6 +108,8 @@ ruled_at = "2026-09-07"
 ## 7. 歯（契約 `s2-chg` の検証・`tests/e2e/rules.rs` module・`rules_` 接頭辞・fixture は文字列 literal）
 
 `rules_manifest_accepts_good_fixture` / `rules_manifest_rejects_unknown_kind` / `rules_manifest_rejects_duplicate_id` / `rules_manifest_rejects_row_without_ruling` / `rules_manifest_rejects_value_type_mismatch` / `rules_manifest_reports_all_errors_with_line_numbers`（欠陥 3 箇所 → error 3 行）/ `rules_kind_parity_every_kind_has_sample`（`ALL` の各 kind が 1 行 fixture で parse + validate を通る）/ `rules_embedded_manifest_is_valid_and_covers_all_kinds`（埋め込み manifest を実 loader で読み error 0 ∧ 全 kind ≥1 行）/ `rules_cli_get_returns_value` / `rules_cli_get_refuses_disabled_row` / `rules_cli_rules_flag_overrides_embedded`（tmp manifest の値が返る）/ `rules_external_form`（usage と 1 行出力の insta snapshot）。
+
+さらに「黙って入力を捨てる」形を塞ぐ 5 本を足す（**計 17 本**・lens の指摘を再現してから追加した）: `rules_manifest_rejects_missing_schema`（拒否 5 形の 5 番目）/ `rules_manifest_rejects_duplicate_key_in_row`（`enabled = true` の次に `false` を書くと不発効の行が有効なまま読まれていた）/ `rules_manifest_rejects_duplicate_schema`（後勝ちで版が黙って差し替わる）/ `rules_manifest_rejects_empty_id` / `rules_cli_refuses_rules_flag_without_path`（PATH の無い `--rules` が埋め込みへ無言 fallback して rc 0 を返していた）。
 
 xtask 側の drift 歯（最小形）: `crates/xtask/src/limits.rs` の `#[cfg(test)]` に `limits_match_rules_manifest`（xtask 自身の `toml_lite` で manifest を読み `R-C4-1` / `R-C4-2` を const と突合。TOML scanner は MVP では core と xtask の 2 実装を許し、core 側が育ったら xtask がそれを使う）。
 
