@@ -1,0 +1,7 @@
+---
+source: crates/scribe2/tests/e2e/hook.rs
+expression: form
+---
+name=scribe2
+version=2
+usage: scribe2 vessel <init --state-dir D [--version N]|show|check> [ROOT]

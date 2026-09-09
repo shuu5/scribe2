@@ -1,14 +1,34 @@
-//! `.claude-plugin/plugin.json` を NAME と core crate の version から生成する。
+//! `.claude-plugin/plugin.json` と `hooks/hooks.json` を NAME と rules 行から生成する。
 //!
 //! manifest を手書きしないのは、名前の字面が repo へ散るのを避けるためである
 //! （器 SPEC §7）。生成は冪等で、同じ workspace からは同じ bytes が出る。
+//! hook の timeout は数値を焼かず rules 行 `hook.timeout_s` から読む（憲法 C1 / C5）。
 
 use crate::check::Layout;
+use crate::toml_lite;
 use std::fs;
 use std::path::Path;
 
 /// plugin manifest の相対 path。
 pub const MANIFEST_REL: &str = ".claude-plugin/plugin.json";
+
+/// hook manifest の相対 path。
+pub const HOOKS_REL: &str = "hooks/hooks.json";
+
+/// 規則の値の正本の相対 path。
+pub const RULES_REL: &str = "rules/manifest.toml";
+
+/// hook 1 回の timeout（秒）を持つ rules 行。
+pub const ROW_TIMEOUT: &str = "hook.timeout_s";
+
+/// `PreToolUse` で見る tool の matcher。
+const MATCHER: &str = "Edit|Write|MultiEdit|NotebookEdit";
+
+/// `SessionStart` に紐づく subcommand。
+const SUB_SESSION_START: &str = "session-start";
+
+/// `PreToolUse` に紐づく subcommand。
+const SUB_PRE_TOOL_USE: &str = "pre-tool-use";
 
 /// `name` / `version` / `description` の 3 key を持つ manifest 本文を組み立てる。
 pub fn render(name: &str, version: &str) -> String {
@@ -17,21 +37,127 @@ pub fn render(name: &str, version: &str) -> String {
     )
 }
 
-/// workspace `root` の plugin manifest を生成して書き出し、報告行を返す。
-pub fn generate(root: &Path) -> Result<String, String> {
-    let layout = Layout::discover(root)?;
-    let version = layout.core_version()?;
-    let body = render(&layout.name, &version);
-    let path = root.join(MANIFEST_REL);
+/// hook が起動するコマンドの字面。
+///
+/// `${<NAME_UPPER>_BIN:-<NAME>}` の展開は **Claude Code が hook を起動する shell**
+/// が行う。器そのものは env を 1 つも読まない（憲法 C2.2・ADR-0004 §2.4）。
+fn command(name: &str, sub: &str) -> String {
+    format!("\\\"${{{}_BIN:-{name}}}\\\" hook {sub}", name.to_uppercase())
+}
+
+/// 1 event 分の entry を組む。
+fn entry(event: &str, matcher: Option<&str>, name: &str, sub: &str, timeout: u64) -> String {
+    let head = match matcher {
+        Some(found) => format!("        \"matcher\": \"{found}\",\n"),
+        None => String::new(),
+    };
+    format!(
+        "    \"{event}\": [\n      {{\n{head}        \"hooks\": [\n          {{\n            \"type\": \"command\",\n            \"command\": \"{}\",\n            \"timeout\": {timeout}\n          }}\n        ]\n      }}\n    ]",
+        command(name, sub)
+    )
+}
+
+/// hooks.json 本文を組み立てる（entry は 2 つ・timeout は rules 行を写す）。
+pub fn render_hooks(name: &str, timeout: u64) -> String {
+    let entries = [
+        entry("SessionStart", None, name, SUB_SESSION_START, timeout),
+        entry("PreToolUse", Some(MATCHER), name, SUB_PRE_TOOL_USE, timeout),
+    ];
+    format!("{{\n  \"hooks\": {{\n{}\n  }}\n}}\n", entries.join(",\n"))
+}
+
+/// rules manifest から `id` の行の `value` を整数で引く。
+///
+/// `[[rule]]` は array-of-tables なので、section 行で block を切り替えながら
+/// 「いま読んでいる block の id」を追う（file 全体の行 grep はしない）。
+pub fn rule_int(text: &str, id: &str) -> Result<u64, String> {
+    let mut current: Option<String> = None;
+    for line in text.lines() {
+        if toml_lite::section_header(line).is_some() {
+            current = None;
+            continue;
+        }
+        let Some((key, raw)) = toml_lite::key_value(line) else {
+            continue;
+        };
+        if key == "id" {
+            current = toml_lite::quoted(raw);
+        }
+        if key == "value" && current.as_deref() == Some(id) {
+            return raw
+                .parse::<u64>()
+                .map_err(|err| format!("{id} の value が整数でない（{raw}・{err}）"));
+        }
+    }
+    Err(format!("{id} が {RULES_REL} に無い"))
+}
+
+/// `root` 配下の 1 file を親 dir ごと書き出す。
+fn write_under(root: &Path, rel: &str, body: &str) -> Result<String, String> {
+    let path = root.join(rel);
     let dir = path
         .parent()
         .ok_or_else(|| format!("{} の親 dir が無い", path.display()))?;
     fs::create_dir_all(dir).map_err(|err| format!("{} を作れない: {err}", dir.display()))?;
-    fs::write(&path, &body).map_err(|err| format!("{} を書けない: {err}", path.display()))?;
+    fs::write(&path, body).map_err(|err| format!("{} を書けない: {err}", path.display()))?;
+    Ok(path.display().to_string())
+}
+
+/// workspace `root` の plugin manifest と hook manifest を生成して書き出し、報告行を返す。
+pub fn generate(root: &Path) -> Result<String, String> {
+    let layout = Layout::discover(root)?;
+    let version = layout.core_version()?;
+    let rules = fs::read_to_string(root.join(RULES_REL))
+        .map_err(|err| format!("{RULES_REL} を読めない: {err}"))?;
+    let timeout = rule_int(&rules, ROW_TIMEOUT)?;
+    let plugin = write_under(root, MANIFEST_REL, &render(&layout.name, &version))?;
+    let hooks = write_under(root, HOOKS_REL, &render_hooks(&layout.name, timeout))?;
     Ok(format!(
-        "xtask gen-manifest: wrote {} (name={} version={})",
-        path.display(),
-        layout.name,
-        version
+        "xtask gen-manifest: wrote {plugin} and {hooks} (name={} version={version} timeout={timeout}s)",
+        layout.name
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{render_hooks, rule_int, HOOKS_REL, ROW_TIMEOUT, RULES_REL};
+    use crate::check::Layout;
+    use std::path::PathBuf;
+
+    /// workspace root（この crate の 2 つ上）。
+    fn workspace_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+    }
+
+    /// tracked な hooks.json が render の bytes と一致し、timeout が rules 行を写す。
+    ///
+    /// 生成物を手で直すと落ちる（手書き禁止の歯）。同じ入力から 2 回 render しても
+    /// 同じ bytes であることも同時に測る（冪等）。
+    #[test]
+    fn gen_manifest_hooks_json_is_idempotent() {
+        let root = workspace_root();
+        let layout = Layout::discover(&root).expect("workspace の配置を読める");
+        let rules = std::fs::read_to_string(root.join(RULES_REL)).expect("rules manifest を読める");
+        let timeout = rule_int(&rules, ROW_TIMEOUT).expect("hook.timeout_s を引ける");
+        let rendered = render_hooks(&layout.name, timeout);
+        let tracked = std::fs::read_to_string(root.join(HOOKS_REL)).expect("hooks.json を読める");
+
+        assert_eq!(rendered, tracked, "tracked な hooks.json は生成物と同じ bytes である");
+        assert_eq!(
+            render_hooks(&layout.name, timeout),
+            rendered,
+            "同じ入力からは同じ bytes が出る（冪等）"
+        );
+        assert!(
+            tracked.contains(&format!("\"timeout\": {timeout}")),
+            "timeout は rules 行 {ROW_TIMEOUT} の値（{timeout}）を写す"
+        );
+        assert_eq!(
+            tracked.matches("\"type\": \"command\"").count(),
+            2,
+            "entry は SessionStart と PreToolUse の 2 つである"
+        );
+    }
 }
