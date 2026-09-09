@@ -1,5 +1,5 @@
-//! CLI の骨格。`name` / `--version` / `doctor` / `rules` / `fleet` / `vessel` / `hook` / `pipe` の
-//! 8 subcommand を持つ。
+//! CLI の骨格。`name` / `--version` / `doctor` / `rules` / `fleet` / `vessel` / `hook` / `pipe` /
+//! `runner` / `lens` の 10 subcommand を持つ。
 //!
 //! subcommand の結果は [`Outcome`] ただ 1 型で、rc はその `rc` をそのまま返す。
 //!
@@ -49,7 +49,7 @@ fn render_doctor() -> Vec<String> {
 
 /// 未知の引数に対する使い方の行。
 fn render_usage() -> String {
-    format!("usage: {NAME} <name|--version|doctor|rules|fleet|vessel|hook|pipe>")
+    format!("usage: {NAME} <name|--version|doctor|rules|fleet|vessel|hook|pipe|runner|lens>")
 }
 
 /// 引数 1 つを出力行の列へ写す。未知なら `Err` に使い方を載せる。
@@ -73,6 +73,10 @@ fn run(args: &[String]) -> Outcome {
         Some("fleet") => vessel::fleet::cli::dispatch(rest),
         Some("vessel") => vessel::hook::vessel::dispatch(rest),
         Some("pipe") => vessel::pipe::cli::dispatch(rest),
+        // headless の 2 つは stdin を**自分で**読む（runner は契約 text・lens は diff の
+        // byte で、cap の判定に byte 数が要る＝ここで String へ均すと大きさが変わる）。
+        Some("runner") => vessel::headless::runner::dispatch(rest),
+        Some("lens") => vessel::headless::lens::dispatch(rest),
         // hook だけは stdin の payload を要る（Claude Code が JSON を流し込む）。
         Some("hook") => vessel::hook::dispatch(rest, &read_stdin()),
         first => match dispatch(first) {

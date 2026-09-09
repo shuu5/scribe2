@@ -2,6 +2,7 @@
 //! integration test **target** の数で数える。以後の leg は module で足す）。
 
 mod fleet;
+mod headless;
 mod hook;
 mod pipe;
 mod rules;
