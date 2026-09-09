@@ -1,0 +1,397 @@
+# scribe2 SRS（MVP）— folio S4 generator の入力 contract（機械 SSoT）
+#
+# 生成: folio plugin の design-system/generator にある assemble-srs.sh <本 file> → srs.html
+#       → inject-prose.sh srs.prose.yaml → verify-srs（floor）→ ceiling（fidelity-srs / persona-walk-srs / completeness-critic-srs）
+# 出所: 運用像 v1（user 裁定 2026-09-09・6 論点の grill）・要件 doc v0.1.10 の v2 行（写しは requirements-catalog.html）・憲法 v0.4.6。
+# 読者 = この器で開発する人と AI。 専門語にはやさしい言い換えを併記する。 本 repo は PUBLIC ゆえ絶対 path・口座名・user 逐語は書かない。
+
+meta:
+  doc_id: SRS-SCRIBE2-MVP
+  title: 設計 → 契約 → 実装 → 検証 → land を、 人の手を借りずに 1 本通す器（MVP）
+  eyebrow_left: 要件定義書 (SRS)
+  eyebrow_right: scribe2 — MVP
+  subtitle: 契約は小さく・検証は機械が先・止まるときは記帳して止まる
+  version: "0.1"
+  date: "2026-09-09"
+  reader: この器で開発する人と AI（Claude Code の session）。 専門語には必ずやさしい言い換えを併記する
+
+approval:
+  - role: 承認 (user)
+    who: user
+    when: 2026-09-09 grill 6 論点を裁定
+    stamp: 裁定済
+  - role: レビュー (folio review lens)
+    who: spec-review 5 軸 + SRS ceiling 3 lens
+    when: 2026-09-09 Phase F
+    stamp: 実施
+  - role: 作成 (開発 session)
+    who: AI session (Claude Code)
+    when: 2026-09-09 起草
+    stamp: 作成
+
+goals:
+  - id: GOAL 1
+    headline: 人を待たせない
+    desc: 人の手番は 3 クラス承認だけ。 それ以外の段で pipeline が人の入力を待って止まらない。
+  - id: GOAL 2
+    headline: 壊れたまま進まない
+    desc: 検証が落ちた便・PASS を名乗れない便は記帳して止まり、 黙って land しない。
+  - id: GOAL 3
+    headline: 記憶に頼らない
+    desc: 現在地は永続面（event log）から読め、 process が死んでも中断点から再開できる。
+
+scope:
+  in:
+    - 契約の intake と便の登録
+    - runner の起動と完了判定（便ごとの作業場所を切る）
+    - 機械検証と lens 1 本による審査
+    - squash land と verdict export
+    - 3 クラス操作の停止と逐語回答による再開
+    - manifest（規則の値）と event log（現在地）
+    - 所属の目印と hook（名乗り・in-loop guard・計測 slot）
+    - toy repo 5 便と自己ホスト 1 便の到達点計測
+  out:
+    - 複数口座の自動選定（v3）
+    - lane 計画と席の dashboard（v3）
+    - 台帳への write（bead id を持つだけ）
+    - 対話席・cycle・作業記憶の product 実装（v3）
+    - rtk / graphify の有効化と SQLite 化（Ask-first）
+
+actors:
+  - { key: 人, name: 開発者,      role: 要望を出し 3 クラス承認だけを行う人,                          external: false, tint: brand }
+  - { key: 席, name: 開発 session, role: 設計・契約・実装・review を行う AI（Claude Code）,          external: false, tint: violet }
+  - { key: 実, name: runner,      role: 契約 1 本を worktree で実装する headless の Claude process,   external: false, tint: ok }
+  - { key: 審, name: lens,        role: diff を読んで verdict を返す headless の Claude process,       external: false, tint: warn }
+  - { key: CI, name: CI,          role: main と PR で歯（test / lint / 構造検査）を毎回撃つ外部 service, external: true,  tint: info }
+  - { key: 帳, name: 台帳,        role: 契約（bead）と裁定の記帳先（beads・外部 OSS）,               external: true,  tint: info }
+
+upper_needs:
+  - { id: N-1, need: 人の手が入らなくても AI が自律的に開発を安全に進められる（目的関数の 1 位・K1〜K3）, origin: 目的関数 §0-1,            short: 自律安全 }
+  - { id: N-2, need: 無駄な消費は害。 1 便の見積と上限を持ち、 超えたら人手を介さず止まる,           origin: 憲法 C6・恒久直命,        short: 消費は害 }
+  - { id: N-3, need: 規則の値は manifest に、 現在地は永続面に。 席の記憶や散文を判定入力にしない,     origin: 憲法 C1 / C3 / C15,       short: 記憶に頼らない }
+  - { id: N-4, need: 契約が書き切れること。 QA の周回を繰り返さず、 検証は base で RED になる test で表す, origin: 裁定 2026-09-09（MVP 切り直し）, short: 契約は小さく }
+  - { id: N-5, need: 前の版（v1）を使わず、 design-intent を拘束条件として自分で自分を作る,           origin: ADR-0003（v1 完全放棄）,   short: 自己開発 }
+
+acceptance:
+  - { id: AC1, criterion: toy repo で内容の異なる 5 契約（正常 / 改変 / test 追加 / gate FAIL / 承認 Blocked）が実 runner + 実 lens で通り、 人由来の event が approval 以外に 0 件, metric_v: 5/5, metric_l: 便が人手 0 で通る, links: [FR4, FR5, FR6, FR11, FR12, FR22] }
+  - { id: AC2, criterion: scribe2 自身で実 bead 1 本（契約は SRS の要件 id と設計 doc の pointer を持つ）を pipeline が PR 作成まで通し、 CI が緑（merge は人が押す）,                 metric_v: 1 便,  metric_l: 自己ホスト,       links: [FR2, FR5, FR22, NFR2] }
+  - { id: AC3, criterion: verify RED・lens 不在・予算超過の便は必ず FAIL か INCONCLUSIVE で止まり、 land されない,               metric_v: 0 件,  metric_l: 偽の PASS,        links: [FR7, FR8, FR9, FR10, NFR1] }
+  - { id: AC4, criterion: process を殺して別 process で resume しても、 event log の中断点から Landed まで通る,                   metric_v: 1 回,  metric_l: 再開で完走,        links: [FR3, FR13, FR14] }
+  - { id: AC5, criterion: 3 クラス操作を名乗る契約は Blocked で止まり、 逐語付きの approve が記帳されてから再開する,              metric_v: 0 件,  metric_l: 無承認の通過,      links: [FR15, FR16] }
+  - { id: AC6, criterion: 不正な契約・rules manifest（欠落 / 未知 kind / 裁定 id 無し / 重複 id）は起動前に全件 loud で落ちる,     metric_v: 0 件,  metric_l: 黙って落とす入力,  links: [FR1, FR17, FR18, NFR3, NFR4] }
+  - { id: AC7, criterion: write-set の外への Edit / Write は編集の時点で deny され、 hook は marker が自分を言うときだけ仕える,    metric_v: 0 件,  metric_l: 素通り,           links: [FR19, FR20, FR21, FR24, NFR5] }
+  - { id: AC8, criterion: 開発 session の作業記憶の退避と復元が global skill の手順として実在し、 6 本の作法を満たす,             metric_v: 6/6,   metric_l: 作法が実在,        links: [FR23] }
+
+requirements:
+  - id: FR1
+    type: FR
+    label: 契約の検査
+    priority: must
+    vmethod: T
+    rationale_source: N-4
+    trace: { backward: [N-4], acceptance: [AC6] }
+    ears:
+      pattern: unwanted
+      condition: 契約 file に必須 field（goal / done / write-set / verify / size / owner / disposition）の欠落・複数行の verify・write-set 0 本が在るとき
+      response: 全件を行番号付きで集めて拒否し、 便を作らない
+  - id: FR2
+    type: FR
+    label: 契約の pointer
+    priority: must
+    vmethod: I
+    rationale_source: N-4
+    trace: { backward: [N-4], acceptance: [AC2] }
+    ears:
+      pattern: ubiquitous
+      condition: 常時
+      response: 契約は SRS の要件 id と設計 doc を pointer で持ち、 設計 1 本から契約が複数出る形を保つ（適用対象は本 SRS を根拠に起票する契約・v1 由来の既存 bead は対象外）
+  - id: FR3
+    type: FR
+    label: 便の永続
+    priority: must
+    vmethod: T
+    rationale_source: N-3
+    trace: { backward: [N-3], acceptance: [AC4] }
+    ears:
+      pattern: ubiquitous
+      condition: 常時
+      response: 各段は fleet の event log を replay して現在地を読み、 段の終わりに event を 1 件追記する（process の記憶に状態を持たない）
+  - id: FR4
+    type: FR
+    label: runner の起動
+    priority: must
+    vmethod: T
+    rationale_source: N-1
+    trace: { backward: [N-1], acceptance: [AC1] }
+    ears:
+      pattern: event
+      condition: 便が Intake 段にあり spawn が要求されたとき
+      response: base を記録し、 worktree を切り、 write-set の allowlist を書いて runner を headless で起動する
+  - id: FR5
+    type: FR
+    label: runner と lens の口
+    priority: must
+    vmethod: T
+    rationale_source: N-1
+    trace: { backward: [N-1], acceptance: [AC1, AC2] }
+    ears:
+      pattern: ubiquitous
+      condition: 常時
+      response: runner と lens は claude -p（headless・stdin に契約 / diff・stdout に構造化 1 行・permission を毎回明示・口座は環境変数で切替）の 1 形で呼ぶ
+  - id: FR6
+    type: FR
+    label: 完了判定
+    priority: must
+    vmethod: T
+    rationale_source: N-3
+    trace: { backward: [N-3], acceptance: [AC1] }
+    ears:
+      pattern: event
+      condition: runner が終了したとき
+      response: rc 0 かつ base からの commit が 1 件以上なら Implemented、 それ以外は Failed と記帳する
+  - id: FR7
+    type: FR
+    label: 入口の flip check
+    priority: must
+    vmethod: T
+    rationale_source: N-4
+    trace: { backward: [N-4], acceptance: [AC3] }
+    ears:
+      pattern: ubiquitous
+      condition: 常時
+      response: 変更した .rs ごとに、 test 差分だけを base に当てて新規・変更 test が 1 本以上 RED になり、 かつ HEAD では GREEN であることを機械で確かめ、 docs-only でない変更に test 差分が無ければ拒む
+  - id: FR8
+    type: FR
+    label: gate の機械検証
+    priority: must
+    vmethod: T
+    rationale_source: N-1
+    trace: { backward: [N-1], acceptance: [AC3] }
+    ears:
+      pattern: event
+      condition: gate が要求されたとき
+      response: 契約の verify 各行を worktree で実走して行ごとの rc を記録し、 1 本でも rc が 0 でなければ FAIL とする
+  - id: FR9
+    type: FR
+    label: lens の verdict
+    priority: must
+    vmethod: T
+    rationale_source: N-1
+    trace: { backward: [N-1], acceptance: [AC3] }
+    ears:
+      pattern: unwanted
+      condition: lens が要るのに lens が無い・diff が予算 cap を超える・stdout が parse できない・verdict が 3 値の外のとき
+      response: PASS を名乗らず INCONCLUSIVE とする
+  - id: FR10
+    type: FR
+    label: land の前提
+    priority: must
+    vmethod: T
+    rationale_source: N-1
+    trace: { backward: [N-1], acceptance: [AC3] }
+    ears:
+      pattern: unwanted
+      condition: verdict が PASS でない、 または main の tip が記録した base と違うとき
+      response: land は何もしない（main も event も変えない）
+  - id: FR11
+    type: FR
+    label: land
+    priority: must
+    vmethod: T
+    rationale_source: N-1
+    trace: { backward: [N-1], acceptance: [AC1] }
+    ears:
+      pattern: event
+      condition: verdict が PASS で前提が揃ったとき
+      response: worktree の tree を squash 1 commit で main に載せ（tree 同一・CAS）、 main で verify を再実走し、 RED なら Failed と記帳して止まる
+  - id: FR12
+    type: FR
+    label: verdict export
+    priority: should
+    vmethod: T
+    rationale_source: N-5
+    trace: { backward: [N-5], acceptance: [AC1] }
+    ears:
+      pattern: event
+      condition: land が成立したとき
+      response: verdicts.jsonl に schema 版付きで 1 行 append し、 Landed と記帳する（跨版の観測面）
+  - id: FR13
+    type: FR
+    label: stop
+    priority: must
+    vmethod: T
+    rationale_source: N-1
+    trace: { backward: [N-1], acceptance: [AC4] }
+    ears:
+      pattern: ubiquitous
+      condition: 常時
+      response: stop --all は live な runner を止め、 rc を 0（全部止まった / 対象なし）・1（残った）・2（state が読めない）の 3 値で返す冪等な 1 コマンドである
+  - id: FR14
+    type: FR
+    label: resume
+    priority: must
+    vmethod: T
+    rationale_source: N-3
+    trace: { backward: [N-3], acceptance: [AC4] }
+    ears:
+      pattern: event
+      condition: 別 process で resume が要求されたとき
+      response: event log の現在地から続きの段だけを通し、 Landed まで到達できる
+  - id: FR15
+    type: FR
+    label: 承認の停止
+    priority: must
+    vmethod: T
+    rationale_source: N-1
+    trace: { backward: [N-1], acceptance: [AC5] }
+    ears:
+      pattern: event
+      condition: 契約が不可逆操作（消す / 出す / 使う）を名乗る段に達したとき
+      response: approval.requested を記帳して Blocked で止まり、 人の入力を待たずに process を終える
+  - id: FR16
+    type: FR
+    label: 承認の再開
+    priority: must
+    vmethod: T
+    rationale_source: N-1
+    trace: { backward: [N-1], acceptance: [AC5] }
+    ears:
+      pattern: event
+      condition: 人が approve を逐語付きで与えたとき
+      response: approval.received（逐語付き）を記帳し、 次の resume で続きを通す
+  - id: FR17
+    type: FR
+    label: rules manifest
+    priority: must
+    vmethod: T
+    rationale_source: N-3
+    trace: { backward: [N-3], acceptance: [AC6] }
+    ears:
+      pattern: ubiquitous
+      condition: 常時
+      response: 規則の種類は閉じた enum と網羅 match で持ち、 値は tracked な manifest 1 file から起動時に読む
+  - id: FR18
+    type: FR
+    label: rules の検査
+    priority: must
+    vmethod: T
+    rationale_source: N-3
+    trace: { backward: [N-3], acceptance: [AC6] }
+    ears:
+      pattern: unwanted
+      condition: manifest に未知 kind・id 重複・型不一致・user 由来で裁定 id の無い行が在るとき
+      response: 起動前に全件を行番号付きで拒否する（黙って落とさない）
+  - id: FR19
+    type: FR
+    label: marker と hook
+    priority: must
+    vmethod: T
+    rationale_source: N-5
+    trace: { backward: [N-5], acceptance: [AC7] }
+    ears:
+      pattern: state
+      condition: marker（.vessel）が自分の NAME を言っている間
+      response: hook は SessionStart で名乗りを出す
+  - id: FR20
+    type: FR
+    label: in-loop guard
+    priority: must
+    vmethod: T
+    rationale_source: N-4
+    trace: { backward: [N-4], acceptance: [AC7] }
+    ears:
+      pattern: unwanted
+      condition: 契約の write-set の外へ Edit / Write しようとしたとき
+      response: 編集の時点で deny し、 policy が読めなければ fail-closed で deny する
+  - id: FR21
+    type: FR
+    label: 注入計測の slot
+    priority: should
+    vmethod: T
+    rationale_source: N-2
+    trace: { backward: [N-2], acceptance: [AC7] }
+    ears:
+      pattern: ubiquitous
+      condition: 常時
+      response: hook は自分の出力 1 行を（who / what / when / bytes / tokens / wall）の schema で記録し、 v3 の計測 store を後付けできる形を保つ
+  - id: FR22
+    type: FR
+    label: 人手 0 の計測
+    priority: must
+    vmethod: T
+    rationale_source: N-1
+    trace: { backward: [N-1], acceptance: [AC1, AC2] }
+    ears:
+      pattern: ubiquitous
+      condition: 常時
+      response: 到達点の計測では人由来の event を数え、 approval 以外が 0 件であることを機械で示す
+  - id: FR23
+    type: FR
+    label: 開発 session の作業記憶
+    priority: should
+    vmethod: I
+    rationale_source: N-3
+    trace: { backward: [N-3], acceptance: [AC8] }
+    ears:
+      pattern: ubiquitous
+      condition: 常時
+      response: 退避物は session id で一意、 消費済みは同一 suffix で表し、 消費は move、 DATA が無い周は brief を出さず、 別 session の退避物は自動消費せず、 重複起動は冪等とする
+  - id: FR24
+    type: FR
+    label: 管轄外での沈黙
+    priority: must
+    vmethod: T
+    rationale_source: N-5
+    trace: { backward: [N-5], acceptance: [AC7] }
+    ears:
+      pattern: unwanted
+      condition: marker（.vessel）が無い、 または別の NAME を言っているとき
+      response: hook は stdout 0 byte・rc 0 で黙り、 その repo を 1 byte も汚さない
+
+nfr:
+  - { id: NFR1, type: NFR, label: lens 予算,   category: 性能, target: 1 lens は 0.15M token 以内（目標値）,                                measure: lens 起動時の diff byte と cap の照合を verdict に記録,        vmethod: T, trace: { backward: [N-2], acceptance: [AC3] }, hero: { cat: 予算, big: "0.15", unit: M token, qual: lens 1 本あたりの上限 } }
+  - { id: NFR2, type: NFR, label: 契約の大きさ, category: 大きさ, target: 1 契約の diff は 300 行程度・見積は 550 行以内,                      measure: PR の diff 行数と契約の見積を記録して照合,                   vmethod: A, trace: { backward: [N-4], acceptance: [AC2] }, hero: { cat: 小ささ, big: "300", unit: 行, qual: 1 契約の diff の目安 } }
+  - { id: NFR3, type: NFR, label: 依存,        category: 依存, target: 実行時の直接依存 0 本・std だけで build（allowlist の外は歯が落とす）,   measure: cargo xtask check の deps-empty と cargo deny を CI で毎回,     vmethod: T, trace: { backward: [N-2], acceptance: [AC6] }, hero: { cat: 依存, big: "0", unit: 本, qual: 実行時の直接依存 } }
+  - { id: NFR4, type: NFR, label: fail-closed, category: 安全, target: 不正入力を黙って落とす件数 0・読めない store は rc 2,                     measure: fixture 実走（壊した行・未知 kind）で全件 loud を確認,           vmethod: T, trace: { backward: [N-3], acceptance: [AC6] }, hero: { cat: 安全, big: "0", unit: 件, qual: 黙って落とす入力 } }
+  - { id: NFR5, type: NFR, label: hook の予算,  category: 応答, target: hook は binary 1 本の 1 回呼出しで 2.0 秒以内・重い I/O を持たない,      measure: hook の wall time を注入計測の slot に記録,                   vmethod: T, trace: { backward: [N-2], acceptance: [AC7] }, hero: { cat: 速さ, big: "2.0", unit: 秒, qual: hook 1 回の上限 } }
+
+constraints:
+  - { id: CON1, label: 憲法,     text: 憲法（Always 16 / Ask-first 4 / Never 4）を本書の上位に置き、 矛盾する要件を書かない,            regulation: 憲法 v0.4.6 }
+  - { id: CON2, label: 公開,     text: 本 repo は PUBLIC。 絶対 path・host 名・口座名・user 逐語を tracked file に書かない,             regulation: 憲法 A1（出す） }
+  - { id: CON3, label: 歯,       text: test は Rust の 1 framework だけで、 bash / bats の歯を書かない,                                 regulation: 憲法 C12 }
+  - { id: CON4, label: 作法,     text: 前の器（v1）の役割席・gate 席・QA 席・契約押印・tier ラベルを持ち込まない,                       regulation: ADR-0003 }
+  - { id: CON5, label: 口,       text: binary は不可逆操作（force push・削除・公開・課金）の口を持たない,                               regulation: 憲法 A1 / N1 }
+  - { id: CON6, label: headless, text: permission は毎回明示・rate limit は stream-json で検知・context の上限は契約の大きさで受ける,   regulation: "" }
+
+glossary:
+  - { term: 契約,           en: contract,               plain_short: bead 1 本の約束,          def: 何を作り・何ができたら終わりかを 1 file に書いたもの。 台帳（beads）の 1 issue に対応する。 }
+  - { term: runner,         en: runner,                 plain_short: 実装役の Claude,          def: 契約 1 本を worktree で実装する headless の Claude process。 席ではなく使い捨て。 }
+  - { term: lens,           en: lens,                   plain_short: 審査役の Claude,          def: diff を読んで PASS / FAIL / INCONCLUSIVE を返す headless の Claude process。 }
+  - { term: gate,           en: gate,                   plain_short: 機械検証と審査の段,       def: 契約の verify を実走し lens 1 本の verdict を採る段。 PASS でなければ land しない。 }
+  - { term: land,           en: land,                   plain_short: main への着地,            def: worktree の成果を squash 1 commit で main に載せ、 main で歯を再実走すること。 }
+  - { term: fleet,          en: fleet,                  plain_short: 便と席の状態の全体,       def: 正定義は複数 host にまたがる席・口座・lease・退役の全体（憲法 C3）。 MVP では便と席の現在地の全体を指し、 実体は event log 1 file。 }
+  - { term: event log,      en: event log,              plain_short: 追記だけの記録,           def: 1 行 1 出来事を追記する file。 現在地はこれを replay して導く。 }
+  - { term: manifest,       en: rules manifest,         plain_short: 規則の値の置き場,         def: 規則の値（閾値・有効 / 無効・裁定 id）を持つ tracked な TOML 1 file。 憲法 C1 の「値は manifest」の実体。 }
+  - { term: verdict,        en: verdict,                plain_short: 審査の結果,               def: gate が返す 3 値（PASS / FAIL / INCONCLUSIVE）。 構造化 field が一次 truth。 }
+  - { term: 3 クラス,       en: three classes,          plain_short: 人に聞く操作,             def: 消す / 出す / 使う の 3 分類。 これに当たる操作だけ人の承認を要する。 }
+  - { term: write-set,      en: write-set,              plain_short: 触ってよい file の列,     def: 契約が宣言する、 編集してよい file の集合。 外への編集は編集の時点で止める。 }
+  - { term: ".vessel",      en: vessel marker,          plain_short: 器の所属の目印,           def: repo root の固定名 file。 中身が name と version を言い、 どの器が仕えるかを決める。 }
+  - { term: flip check,     en: flip check,             plain_short: test が先に落ちる確認,    def: 変更の test 差分だけを base に当てて新規・変更 test が RED になり、 HEAD では GREEN であることを機械で確かめる検査（憲法 C12.2）。 docs-only の変更は対象外（C12.3）。 }
+  - { term: headless,       en: headless,               plain_short: 画面なしの実行,           def: 対話画面を持たず、 入力を受けて 1 回で答えを返す Claude の実行形（claude -p）。 }
+  - { term: toy repo,       en: toy repo,               plain_short: 実験用の小さな repo,      def: 到達点を測るために一時 dir に作る、 外部依存の無い小さな git repo。 }
+  - { term: 設計 doc,       en: design doc,             plain_short: 設計 1 本の文書,          def: 要望を SRS の要件に結び、 契約が複数出る元になる tracked markdown。 }
+  - { term: 要件カタログ,   en: requirements catalog,   plain_short: 要件の一覧表,             def: 要件 doc の v2 行を scrub して写した一覧（requirements-catalog.html）。 FR との対応は同 page の §移行表 が持つ。 }
+  - { term: 承認 event,     en: approval event,         plain_short: 承認の記帳,               def: approval.requested / approval.received の 2 種。 逐語を伴い fleet に残る。 }
+  - { term: hook,           en: hook,                   plain_short: 編集の手前で動く番人,     def: Claude Code が tool を呼ぶ直前・直後に自動で走る短い処理。 器は編集を止める側（in-loop guard）と名乗りを出す側に使う。 }
+  - { term: diff,           en: diff,                   plain_short: 変更の差分,               def: 変更前と後の違いだけを取り出したもの。 lens はこれを読んで審査する。 }
+  - { term: worktree,       en: worktree,               plain_short: 便ごとの別の作業場所,     def: 同じ repo の別の branch を別 dir に取り出した作業場所。 runner は 1 便ごとに 1 つ切る。 }
+  - { term: rc,             en: return code,            plain_short: 終了を知らせる数字,       def: program が終わるときに返す数字。 0 = 成功、 それ以外 = 失敗の種類。 }
+  - { term: base,           en: base,                   plain_short: 変更の出発点,             def: 便を始めた時点の main の commit。 flip check と land はこれを基準に測る。 }
+  - { term: INCONCLUSIVE,   en: inconclusive,           plain_short: 判定できなかった,         def: verdict の 3 値の 1 つ。 合格でも不合格でもなく「判断できない」で止まり、 land されない。 }
+  - { term: CI,             en: continuous integration, plain_short: PR ごとの自動検査,        def: PR を出すたびに自動で走る検査（test・lint・xtask）。 緑でなければ merge しない。 }
+  - { term: marker,         en: marker,                 plain_short: 所属の目印 file,          def: repo root に置く .vessel のこと。 中身が name と version を言い、 hook はこれを見て仕えるかを決める。 }
+  - { term: commit,         en: commit,                 plain_short: 変更の 1 区切りの記録,    def: git に残す変更の 1 単位。 runner の完了判定は base からの commit が 1 件以上あるかで測る。 }
+  - { term: 歯,             en: test,                   plain_short: 落ちるべきときに落ちる test, def: 器を守る自動 test の総称（Rust の 1 framework・憲法 C12）。 「歯が落とす」= test が失敗して変更を止めること。 }
+  - { term: RED,            en: red,                    plain_short: test が落ちる状態,        def: test が失敗する状態。 対は GREEN（全部通る）。 flip check は「base で RED・HEAD で GREEN」を確かめる。 }
+  - { term: PR,             en: pull request,           plain_short: 取り込みの申請,           def: 変更を main に取り込むための申請。 CI が緑になってから squash merge する。 }
+  - { term: docs-only,      en: docs-only,              plain_short: 文書だけの変更,           def: 変更が文書だけの PR。 flip check の test 差分の要件から除外される（憲法 C12.3）。 }

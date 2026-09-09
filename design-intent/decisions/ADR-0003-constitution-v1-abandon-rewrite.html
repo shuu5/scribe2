@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="folio-doc-type" content="adr">
+<meta name="folio-layer" content="project">
+<meta name="folio-version" content="0.4.6">
+<meta name="folio-status" content="accepted">
+<meta name="folio-stakeholders" content="Developer, AI Agent, External Reviewer">
+<meta name="folio-adr-id" content="0003">
+<meta name="folio-adr-date" content="2026-09-09">
+<title>ADR-0003 — 憲法改訂 = v1 完全放棄に伴う C7 / A1・C8 / A4・N4 の書換え (対話面は 1 つ・design-intent が拘束条件・自己開発は既定で許可・改訂は ADR + delta marker)</title>
+<link rel="stylesheet" href="../../common.css">
+<script type="application/ld+json">
+{
+  "@context": {
+    "dc": "http://purl.org/dc/terms/",
+    "schema": "https://schema.org/",
+    "folio": "https://folio.dev/spec/v1/"
+  },
+  "@id": "./ADR-0003-constitution-v1-abandon-rewrite.html",
+  "@type": "schema:TechArticle",
+  "dc:isPartOf": [
+    { "@id": "./README.html" }
+  ],
+  "dc:title": "ADR-0003 — 憲法改訂 = v1 完全放棄に伴う C7 / A1・C8 / A4・N4 の書換え (対話面は 1 つ・design-intent が拘束条件・自己開発は既定で許可・改訂は ADR + delta marker)",
+  "folio:version": "0.4.6",
+  "folio:stakeholders": ["Developer", "AI Agent", "External Reviewer"],
+  "dc:references": [
+    { "@id": "../spec/constitution.html#c7" },
+    { "@id": "../spec/constitution.html#c8" },
+    { "@id": "../spec/constitution.html#a1" },
+    { "@id": "../spec/constitution.html#a2" },
+    { "@id": "../spec/constitution.html#a3" },
+    { "@id": "../spec/constitution.html#a4" },
+    { "@id": "../spec/constitution.html#n4" },
+    { "@id": "../spec/constitution.html#r-c8-1" },
+    { "@id": "../spec/constitution.html#s3-rules-rows" },
+    { "@id": "../spec/constitution.html#s4-amendment" }
+  ]
+}
+</script>
+</head>
+<body>
+<!-- folio:chrome-top -->
+<a class="skip-link" href="#s1-context">本文へスキップ</a>
+<nav class="breadcrumb" aria-label="パンくず"><ol>
+  <li><a href="../index.html">design-intent</a></li>
+  <li><a href="./README.html">decisions</a></li>
+  <li aria-current="page">ADR-0003</li>
+</ol></nav>
+<!-- /folio:chrome-top -->
+
+<header class="doc-header">
+  <h1>ADR-0003 — 憲法改訂 = v1 完全放棄に伴う C7 / A1・C8 / A4・N4 の書換え</h1>
+  <div class="meta">Status: accepted &middot; Date: 2026-09-09 &middot; version 0.4.6 (改訂後の constitution の版) &middot; user 裁定 2026-09-09 &middot; 憲法条文の改訂ゆえ A2 の user 裁定を経た</div>
+</header>
+<!-- folio:chrome-toc -->
+<nav class="toc" aria-label="ページ内目次">
+<ol>
+  <li><a href="#s1-context">§1. Context</a></li>
+  <li><a href="#s2-decision">§2. Decision</a></li>
+  <li class="toc--sub"><a href="#s2-1-c7">§2.1 C7 / A1 = 対話面は 1 つ・その identity は rules 行</a></li>
+  <li class="toc--sub"><a href="#s2-2-c8">§2.2 C8 = 版 N+1 は design-intent の下で作られる</a></li>
+  <li class="toc--sub"><a href="#s2-3-a4">§2.3 A4 = 自己開発は既定で許可・不可逆操作だけ Ask-first</a></li>
+  <li class="toc--sub"><a href="#s2-4-n4">§2.4 N4 = 改訂は ADR + delta marker + 裁定 id を伴う</a></li>
+  <li class="toc--sub"><a href="#s2-5-apply">§2.5 憲法 file への反映のしかた</a></li>
+  <li class="toc--sub"><a href="#s2-6-out-of-scope">§2.6 本 ADR の射程外</a></li>
+  <li><a href="#s3-consequences">§3. Consequences</a></li>
+  <li><a href="#s4-alternatives">§4. Alternatives Considered</a></li>
+  <li><a href="#s5-trace">§5. Trace</a></li>
+</ol>
+</nav>
+<!-- /folio:chrome-toc -->
+
+<aside class="informative">
+<p>本 ADR は IETF <strong>RFC 2119</strong> および <strong>RFC 8174 / BCP 14</strong> に定義される MUST / SHALL / SHOULD / MAY のキーワード解釈規約に従う。 ADR は決定時点の記録 (frozen) であり、 改訂は本 ADR を supersede する新 ADR で行う。</p>
+</aside>
+
+<aside class="machine-readable" aria-hidden="true">
+  <dl>
+    <dt>id</dt><dd>ADR-0003</dd>
+    <dt>doc-type</dt><dd>adr</dd>
+    <dt>status</dt><dd>accepted</dd>
+    <dt>date</dt><dd>2026-09-09</dd>
+    <dt>version</dt><dd>0.4.6 (改訂後の constitution の版・SPEC の版に追随する)</dd>
+    <dt>decided-by</dt><dd>user (2026-09-09) — 憲法条文の改訂は A2 の user 裁定事項。 裁定の逐語は repo 外の RULING file が原本</dd>
+    <dt>stakeholders</dt><dd>Developer, AI Agent, External Reviewer</dd>
+    <dt>supersedes</dt><dd>(none — ADR ではなく constitution の C7 / A1 / C8 / A4 / N4 / R-C8-1 を改訂する)</dd>
+    <dt>related</dt><dd>constitution C7 / C8 / A1 / A2 / A3 / A4 / N4 / R-C8-1 / §3 / §4</dd>
+  </dl>
+</aside>
+
+<section id="s1-context" class="informative">
+<h2>§1. Context</h2>
+<p class="section-essence" data-audience="human">憲法は「新しい版は前の版の下で作る」「user の承認は planner という席を通った印だけ受け取る」と定めていました。 ところが user は 2026-09-09 に前の版 (v1) を完全に捨てると決めました。 前の版が無いのに「前の版の下で」は守れず、 planner の席もその一部として消えます。 本 ADR は、 その裁定に伴って憲法の 4 か所を書き換えた記録です。</p>
+<p data-audience="machine">改訂前の <a href="../spec/constitution.html#c8">C8</a>「版 N+1 は版 N の下で作られる」と <a href="../spec/constitution.html#a4">A4</a>「自己開発の解禁 (成熟 4 条 AND + user go)」は、 版 N が oracle と停止権を持ち版 N+1 をその pipeline で作るという bootstrap model を憲法へ写したものである。 <a href="../spec/constitution.html#c7">C7</a>「planner が唯一の対話面」と <a href="../spec/constitution.html#a1">A1</a> の承認経路も、 同じ model の中の<strong>席の名</strong>を条文に焼いたものである。 2026-09-09、 user は v1 を完全に放棄し、 v1 由来の plugin 機能を積まない開発 session と beads だけで v2 を進める直命を出した (拘束条件は docs と design-intent で固定する、 という方針を伴う)。 この時点で C8 の前提 (版 N が存在し oracle を担う)、 A4 の前提 (成熟条件を版 N が測る)、 C7 / A1 の前提 (planner の席が存在する) はいずれも成立しなくなった。 起草の段階では射程を C8 / A4 の 2 点と見ていたが、 user 裁定 (2026-09-09・提示した全件について推奨案を採る形) により射程は <strong>C7 / A1・C8 / A4・N4 の 3 点</strong>へ広がった。 憲法条文の改訂は <a href="../spec/constitution.html#a2">A2</a> の user 裁定事項であり、 本 ADR はその裁定の記録面である。</p>
+</section>
+
+<section id="s2-decision" class="normative">
+<h2>§2. Decision</h2>
+<p class="section-essence" data-audience="human">決めたことは 4 つです。 (1) 承認を受け取る窓口は「ちょうど 1 つ」と定め、 その窓口が誰かは条文でなく rules 行 (差し替えできる値の行) に置きます。 (2) 新しい版を縛るのは前の版ではなく design-intent (憲法・ADR・要件 doc) です。 (3) 自己開発は既定で許可し、 user に先に聞くのは取り消せない操作だけです。 (4) 憲法の改訂は「新しい ADR + 本文の差分印 + 裁定 id」を伴うなら、 同じ版の中で行えます。</p>
+
+<p data-audience="machine">§2.1〜§2.4 の EARS block は決定時点の条文案であり、 施行された条文の正本は <code>../spec/constitution.html</code> の各条 (<code>#c7</code> / <code>#a1</code> / <code>#c8</code> / <code>#a4</code> / <code>#n4</code>) である。 施行文は条文案を次の点で精緻化している: N4 の IF 節に「新 ADR・delta marker・裁定 id を伴わない憲法改訂」を条件として明示 / A4.2 の受理を「記帳された承認 event」で表現 / C8.3 の目的節 (拘束条件は常に tracked file) は機構の説明へ移した。 齟齬時は憲法を正とする (本 ADR は WHY を持ち、 条文の WHAT は憲法が持つ)。</p>
+
+<h3 id="s2-1-c7">§2.1 C7 / A1 = 対話面は 1 つ・その identity は rules 行</h3>
+<p class="section-essence" data-audience="human">「承認を受け取る窓口は 1 つだけ」という決まりは残します。 変えるのは「その 1 つが誰か」を条文に書かない点です。 誰かは差し替えできる行 (R-C7-1) に置き、 初期値は「user 直」= 開発 session が user と直接やり取りする形にします。 planner の席を戻したくなったら、 行の値を変えるだけで条文は動きません。</p>
+<p>C7 と A1 の条文を次に置き換える (MUST)。 <strong>要旨</strong>: 承認の受理面は<strong>ちょうど 1 つ</strong>であるという不変量だけを条文に残し、 その面の identity (誰が対話面か) は条文ではなく rules 行 <code>R-C7-1</code> が持つ。</p>
+<div data-audience="machine">
+  <p class="ears" data-ears-pattern="ubiquitous"><span class="ears-id">C7</span>: scribe2 <span class="ears-shall">SHALL</span> accept a user approval only through exactly one dialogue surface, whose identity is a rules row (R-C7-1) rather than a constitution article.</p>
+  <p class="ears" data-ears-pattern="event-driven"><span class="ears-id">A1</span>: <span class="ears-when">WHEN an operation of one of the three classes (delete, send out, consume) is about to be performed</span>, scribe2 <span class="ears-shall">SHALL</span> obtain the user's approval through the dialogue surface designated by R-C7-1 before performing it.</p>
+  <dl>
+    <dt>機構 (型 / lint / CI)</dt>
+    <dd>承認の受理面は 1 つ (rules 行 <code>R-C7-1</code> の値)。 初期値 = <strong>user 直</strong> (開発 session が user と直接対話する)。 planner 席を戻すときは rules 行の値を変えるだけでよく、 条文は動かない。 承認の記帳は fleet の <code>approval.received</code> event (逐語付き) で行う。 改訂前の「planner 発行の relay 印だけを機械が受理する」は<strong>廃止</strong> (席の名を条文に焼いた形だったため)。</dd>
+    <dt>出所</dt><dd>user 裁定 2026-09-09 (v1 完全放棄に伴う書換え)・本 ADR §1</dd>
+  </dl>
+  <p>§3 rules 行の表に次の行を足す: <code>R-C7-1 | C7 | 対話面 | user 直 (開発 session) | rules 行 | ADR-0003</code>。</p>
+</div>
+
+<h3 id="s2-2-c8">§2.2 C8 = 版 N+1 は design-intent の下で作られる</h3>
+<p class="section-essence" data-audience="human">新しい版を縛るのは、 前の版の仕組みではなく設計意図の文書です。 「前の版が成熟を測ったか」で自己開発の可否を決めるのをやめます。 設計意図と食い違う編集は、 後の検査に回さずその場で止めます。</p>
+<p>C8 の条文を次に置き換える (MUST)。 <strong>要旨</strong>: 器の開発を拘束するのは design-intent (憲法・ADR・要件 doc = folio 形式の tracked 文書) であり、 前の版の pipeline や oracle ではない。 自己開発の可否を「前の版が成熟を測ったか」で決めない。</p>
+<div data-audience="machine">
+  <p class="ears" data-ears-pattern="ubiquitous"><span class="ears-id">C8</span>: scribe2 <span class="ears-shall">SHALL</span> be developed under its design-intent (constitution, ADRs, requirements) as the binding constraint, and <span class="ears-shall">SHALL NOT</span> require a previous version to act as oracle or to hold stop authority.</p>
+  <p class="ears" data-ears-pattern="event-driven"><span class="ears-id">C8.2</span>: <span class="ears-when">WHEN an edit conflicts with design-intent</span>, scribe2 <span class="ears-shall">SHALL</span> stop the edit at edit time (in-loop・C16 の機構) rather than defer the judgement to a later gate of a previous version.</p>
+  <p class="ears" data-ears-pattern="ubiquitous"><span class="ears-id">C8.3</span>: scribe2 <span class="ears-shall">SHALL</span> record every change to design-intent as an ADR or a versioned document, so that the binding constraint is always a tracked file and never a session's memory.</p>
+  <dl>
+    <dt>機構 (型 / lint / CI)</dt>
+    <dd>拘束条件の実体は tracked な <code>design-intent/</code> (憲法・ADR・要件 doc)。 機械が守るのは (a) 契約 write-set の外への編集を編集時に止める in-loop guard (C16 の機構・PreToolUse) と (b) design-intent の validate / build が CI で緑であること。 改訂前 C8 の <code>enum SelfDev</code> / <code>doctor selfdev</code> / dispatch deny / bootstrap 4 状態は<strong>廃止</strong> (前の版の存在を前提にした機構)。</dd>
+    <dt>出所</dt><dd>user 裁定 2026-09-09 (v1 完全放棄・書換え)・本 ADR §1</dd>
+  </dl>
+</div>
+
+<h3 id="s2-3-a4">§2.3 A4 = 自己開発は既定で許可・不可逆操作だけ Ask-first</h3>
+<p class="section-essence" data-audience="human">自分の repo を自分で開発することは、 いちいち許可を取らずに進めてよいことにします。 先に聞くのは取り消せない操作だけです。 消す・外に出す・お金を使う、 の 3 つです。</p>
+<p>A4 の条文を次に置き換える (MUST)。 <strong>要旨</strong>: 自己開発は既定で許可する。 user に先に聞くのは、 取り消せない操作 — 消す (データ / repo / 履歴 / live 成果物の破壊)・出す (public 化・外部送信)・使う (追加課金) — だけである。 それ以外は AI が決めて進み、 記録を残す。</p>
+<div data-audience="machine">
+  <p class="ears" data-ears-pattern="ubiquitous"><span class="ears-id">A4</span>: scribe2 <span class="ears-shall">SHALL</span> permit self-development by default, without a maturity declaration and without a user go.</p>
+  <p class="ears" data-ears-pattern="event-driven"><span class="ears-id">A4.2</span>: <span class="ears-when">WHEN an operation is irreversible (destroy / publish / incur paid usage)</span>, scribe2 <span class="ears-shall">SHALL</span> ask the user first and <span class="ears-shall">SHALL</span> accept the answer only through the dialogue surface designated by R-C7-1 (C7).</p>
+  <p class="ears" data-ears-pattern="ubiquitous"><span class="ears-id">A4.3</span>: scribe2 <span class="ears-shall">SHALL</span> treat merge, dispatch onto its own repository, and dependency-free code changes as reversible for the purpose of A4.2.</p>
+  <dl>
+    <dt>機構 (型 / lint / CI)</dt>
+    <dd>3 クラス (消す / 出す / 使う) の判定は rules 行 + enforcer (要件 doc の該当行)。 <code>enum SelfDev</code> と「解禁の 1 問」は廃止。 A1 (消す)・A3 (依存追加) との関係: A4 は自己開発の<em>既定</em>を定め、 <a href="../spec/constitution.html#a1">A1</a> / <a href="../spec/constitution.html#a3">A3</a> の個別 Ask-first を上書きしない。</dd>
+    <dt>出所</dt><dd>user 裁定 2026-09-09 (書換え・案 3)・承認 3 クラスの canonical block</dd>
+  </dl>
+  <p>A4.2 の受理面の語は §2.1 の C7 一般化に合わせた形で書く (改訂前 draft の「as a relay stamp (C7)」を「through the dialogue surface designated by R-C7-1 (C7)」に改める)。 これは §2.1 の決定の帰結であり、 A4 の内容を変えるものではない。</p>
+</div>
+
+<h3 id="s2-4-n4">§2.4 N4 = 改訂は ADR + delta marker + 裁定 id を伴う</h3>
+<p class="section-essence" data-audience="human">これまで憲法は「同じ版の中では書き換えない」と定めていました。 前の版を捨てた以上そのままでは二度と改訂できないので、 憲法改訂の部分だけを「新しい ADR と、 本文に残す差分の印と、 裁定 id が揃っていれば改訂できる」に変えます。 schema を壊す変更と C4 の上限を超える変更を禁じる部分は、 そのまま据え置きます。</p>
+<p>N4 / N4.2 の条文を次に置き換える (MUST)。 <strong>射程は憲法改訂の部分だけ</strong>である: schema 非互換と C4 超えの禁止は据置とし、 これらは従来どおり新しい版でのみ行う。</p>
+<div data-audience="machine">
+  <p class="ears" data-ears-pattern="unwanted"><span class="ears-id">N4</span>: <span class="ears-if">IF a change inside the current version would break schema compatibility or exceed a C4 bound</span>, THEN scribe2 <span class="ears-shall">SHALL</span> reject the change in the current version.</p>
+  <p class="ears" data-ears-pattern="ubiquitous"><span class="ears-id">N4.2</span>: scribe2 <span class="ears-shall">SHALL</span> carry out a constitution amendment only with a new ADR, inline delta markers in the constitution, and a user ruling id; and <span class="ears-shall">SHALL</span> carry out schema-incompatible changes and changes that would exceed a C4 bound only as a new version.</p>
+  <dl>
+    <dt>機構 (型 / lint / CI)</dt>
+    <dd>C4 超えは CI deny (§3 の R-C4-1〜R-C4-4)。 schema 非互換は manifest の <code>schema_version</code> (C1) で検出。 憲法改訂は 3 点セット (新 ADR・本文の <code>ins.delta</code> / <code>del.delta</code>・裁定 id) を伴う。 改訂前 N4.2 の「版 N+1 として別 repo で行う (C8)」は憲法改訂については<strong>廃止</strong>。</dd>
+    <dt>出所</dt><dd>user 裁定 2026-09-09 (書換え)・本 ADR §1</dd>
+  </dl>
+  <p><strong>本改訂自身の扱い</strong>: 本 ADR が行う改訂は<strong>改訂前の N4 に反する形 (同一版内の条文書換え)</strong> である。 これは user の直命による<strong>明示の例外</strong>であり、 本 ADR がその根拠として記録面を務める。 起草時点では N4 の扱いを射程外としていたが、 本 ADR で決めた (射程を広げた裁定による)。 理由は、 改訂前 N4 の「版 N+1 として別 repo へ」が C8 の bootstrap model (前の版が在る) を前提にした手続きであり、 v1 の放棄によりその前提自体が消えたためである。</p>
+</div>
+
+<h3 id="s2-5-apply">§2.5 憲法 file への反映のしかた</h3>
+<p class="section-essence" data-audience="human">憲法の file は新しく作り直さず、 同じ file の中で書き換えます。 消した文は消し線、 足した文は下線の印を付けて本文に残すので、 何がどう変わったかが後から読めます。</p>
+<p><code>design-intent/spec/constitution.html</code> を<strong>同一 file の中で</strong>改訂する (MUST)。</p>
+<div data-audience="machine">
+  <ul>
+    <li>(a) <code>#c7</code> / <code>#a1</code> / <code>#c8</code> / <code>#a4</code> / <code>#n4</code> の card (essence・normative・機構・出所) を §2.1〜§2.4 の文へ置き換え、 旧文は folio の delta marker (<code>del.delta</code> / <code>ins.delta</code>) で本文に残す。</li>
+    <li>(b) §2 の一覧表の C7・A1・C8・A4・N4 の 5 行 (名 / 機構の要点 / 出所) を新文に合わせる。 表の「出所」は各 card と逐語一致させる規約ゆえ、 5 行の出所欄は <code>ADR-0003</code> になる。</li>
+    <li>(c) §3 rules 行の表に <code>R-C7-1</code> の行を足す (§2.1)。 <code>#r-c8-1</code> 行は削除せず、 種別欄を <strong>「停止 (ADR-0003・測らない・履歴として残す)」</strong>に改める。 値の欄は変えない。</li>
+    <li>(d) §4 (改訂の手続き) の essence・地の文・図 2 の「条文なら版 N+1 として別 repo で改訂 (N4)」の枝を、 新 N4.2 (新 ADR + delta marker + 裁定 id) に合わせる。</li>
+    <li>(e) §5 Trace に本 ADR への参照を足す。</li>
+    <li>(f) 条数は変えない (Always 13 / Ask-first 4 / Never 4)。 C14〜C16 の追加は §2.6 のとおり本 ADR の射程外である。</li>
+    <li>(g) <code>folio-version</code> と JSON-LD の <code>folio:version</code> は 0.4.6 (憲法 §4 の「SPEC の版に追随する」規定による)。</li>
+    <li>(h) 憲法 file の JSON-LD への <code>dc:isReferencedBy</code> の追加と、 各 page の chrome (prevnext ほか) は folio の生成物であり、 手編集しない。</li>
+  </ul>
+</div>
+
+<h3 id="s2-6-out-of-scope">§2.6 本 ADR の射程外</h3>
+<p class="section-essence" data-audience="human">同じ変更でもう 3 条 (C14〜C16) が憲法に加わりますが、 それは本 ADR が決めたことではありません。 別に user が裁定済みの器 SPEC の条文を、 憲法へ写すだけです。</p>
+<p data-audience="machine">C14〜C16 の追随は<strong>本 ADR の決定ではない</strong> (MUST NOT be read as such)。 同じ PR で <code>constitution.html</code> に写す運びであっても、 それは器 SPEC v0.4.6 の <strong>user 裁定済み条文の写し</strong>であり、 本 ADR が新たに決めた事項ではない。 したがって条数の変化 (Always 13 → 16) は §2.5 (f) の「条数は変えない」と矛盾しない — (f) は本 ADR の改訂範囲について述べたものである。 本 ADR が変えるのは C7 / A1・C8 / A4・N4 / R-C8-1 と、 それに伴う §2 表・§3 表・§4 手続きだけである。</p>
+</section>
+
+<section id="s3-consequences" class="informative">
+<h2>§3. Consequences</h2>
+<p class="section-essence" data-audience="human">良い点は、 存在しない「前の版」を待たずに今すぐ自分で作れること、 席の名前が変わっても憲法が動かなくなることです。 悪い点は、 前の版が担っていた独立の検証役を失うこと、 承認の窓口と憲法改訂の敷居がどちらも軽い手続きで動かせるようになることです。</p>
+<h3>Positive</h3>
+<ul>
+  <li>前の版の pipeline (役割席・gate・QA・契約押印) を経ずに v2 を開発できる。 「v1 由来の plugin 機能を積まない素の session + beads で進める」という直命と憲法が一致する。</li>
+  <li>拘束条件が tracked 文書 (design-intent) に一本化され、 session の記憶や前の版の運用状態に依存しない (C3 / C14 と同じ向き)。</li>
+  <li>対話面の identity が条文から rules 行へ移り、 <strong>席の構成が変わっても条文が動かない</strong>。 planner 席を戻す / 別の面を置くのは値の差し替えで足りる。 条文の寿命が席の寿命に縛られなくなる。</li>
+  <li>憲法改訂が同一 repo の中で閉じ、 かつ改訂の跡 (ADR・delta marker・裁定 id) を必ず伴う形になった。 改訂不能でも無手続きでもない中間が定義された。</li>
+  <li><code>SelfDev</code> enum・<code>doctor selfdev</code>・bootstrap 4 状態という「前の版を前提にした機構」を実装しなくてよい。</li>
+</ul>
+<h3>Negative</h3>
+<ul>
+  <li><strong>独立 oracle の喪失</strong>: 前の版が同じ land を独立に再 gate し verdict 一致率を記録する面が成立しない。 verdict の独立性は v2 自身の gate 設計 (検証は独立した席・対象席自身の記録を根拠にしない) で別途担保する必要がある。</li>
+  <li><strong>承認経路が軽い手続きで動く</strong>: 対話面の identity が rules 行になったため、 その値の変更は C5 (裁定 id 付き diff) だけで通り、 A2 の grill 前置を要さない。 これは席の入替えを条文改訂にしないための意図した設計だが、 裏面として「承認をどこで受け取るか」を条文改訂より軽い手続きで変更できる。 歯は C5 の裁定 id だけである。</li>
+  <li><strong>改訂の 3 点セットを測る機械が無い</strong>: 新 N4.2 は憲法改訂に ADR・delta marker・裁定 id の 3 点を要求するが、 3 点が揃っているかを測る機械は現時点で存在しない (validate は ADR の存在も delta marker の有無も数えない)。 揃っていない改訂は CI 緑のまま通る。 これは「散文にしか無い規則を規則として扱わない」という N2 の要求に照らして正直に記す。</li>
+  <li>「自己開発は既定で許可」は、 不可逆操作の判定 (3 クラス) を機械が持たない間は人間の注意に依存する (enforcer が未実装)。</li>
+  <li>器 SPEC v0.4.6 のうち前の版が仕える前提で書かれた節と C8 / A4 の写しは、 本 ADR と乖離したまま凍結されている (取り込みの原本として固定済み)。 取り込み時に本 ADR を参照して読み替える。</li>
+</ul>
+<h3>Neutral</h3>
+<ul>
+  <li>本 ADR の改訂では条数を変えない (Always 13 / Ask-first 4 / Never 4)。 C14〜C16 の追随は §2.6 のとおり別事項である。</li>
+  <li>R-C8-1 の値 (verdict 一致率 95% × 連続 20 便・3 日の K 指標と手動介入 0・doctor 全 host 緑) は履歴として表に残し、 測らない。</li>
+  <li>R-C7-1 の初期値は user 直 (開発 session)。 planner 席を戻す判断は本 ADR の射程外であり、 rules 行の値の変更で行う。</li>
+  <li>本 ADR は決定の記録であり、 決定は user 裁定 (2026-09-09) で行われた。</li>
+</ul>
+</section>
+
+<section id="s4-alternatives" class="informative">
+<h2>§4. Alternatives Considered</h2>
+<p class="section-essence" data-audience="human">C8 / A4 については 4 案を user に示し、 「書き換え」が選ばれました。 対話面 (C7 / A1) と改訂手続き (N4) についても、 それぞれ 2 つの代わりの案を検討して退けています。</p>
+<table>
+  <thead><tr><th>案</th><th>内容</th><th>出所 / 理由</th><th>採否</th></tr></thead>
+  <tbody>
+    <tr><td>C8 / A4 案 1 削除</td><td>C8 / A4 を条文ごと削る (Always 12 / Ask-first 3)</td><td>「版 N+1 が何の下で作られるか」の規範が空白になる。 design-intent を拘束条件にする方針を憲法に書く場所が失われる</td><td>却下</td></tr>
+    <tr><td>C8 / A4 案 2 停止 (凍結)</td><td>条文は残し「停止中」と印を付ける</td><td>停止中の条文が Always に並ぶと、 読む側が「守るべき 13 条」を数え違える (N2 の「散文だけの規則」に近い状態)</td><td>却下</td></tr>
+    <tr><td><strong>C8 / A4 案 3 書換え</strong></td><td>C8 →「版 N+1 は design-intent の下で作られる」／A4 →「自己開発は既定で許可・不可逆操作だけ Ask-first」</td><td>user 裁定 2026-09-09</td><td><strong>採用</strong></td></tr>
+    <tr><td>C8 / A4 案 4 版 N+1 として別 repo</td><td>N4 の手続きどおり、 憲法改訂は次の版として別 repo で行う</td><td>N4 の手続きは C8 の bootstrap model (前の版が在り oracle を担う) を前提にする。 v1 を放棄した今、 「前の版の下で作る新しい repo」は作れず、 手続きの前提が消えている</td><td>却下</td></tr>
+    <tr><td>C7 / A1 案 a planner 席を残す</td><td>条文の「planner を通った relay 印」を維持し、 v2 でも planner に相当する席を立てて承認を運ぶ</td><td>席の実体が無い間、 承認が機械的に受理不能になる。 席を立てる判断は開発の進度に依存し、 憲法が席の構成に縛られ続ける (今回と同じ衝突を繰り返す)</td><td>却下</td></tr>
+    <tr><td>C7 / A1 案 b C7 を撤回</td><td>承認の受理面を条文で縛らない</td><td>承認の入口が複数になり「どの経路の承認が正か」が機械で決まらない。 N2 が禁じる「散文にしか無い規則」に近づく</td><td>却下</td></tr>
+    <tr><td><strong>C7 / A1 案 c 一般化</strong></td><td>「対話面はちょうど 1 つ」だけを条文に残し、 identity は rules 行 <code>R-C7-1</code> に置く</td><td>user 裁定 2026-09-09。 不変量 (1 つであること) と可変値 (誰か) を分け、 C1「規則はデータ」と同じ向きに揃う</td><td><strong>採用</strong></td></tr>
+    <tr><td>N4 案 a そのまま残す</td><td>「同じ版の中で憲法改訂をしない」を維持する</td><td>次の版の repo を作らない方針の下では憲法が二度と改訂できない。 本改訂自身も根拠を持てず、 条文と実態の乖離が固定される</td><td>却下</td></tr>
+    <tr><td>N4 案 b 憲法改訂の条項を削除</td><td>N4 から憲法改訂の語を消し、 改訂に手続きを課さない</td><td>改訂の跡 (ADR・delta marker・裁定 id) を残す義務が消え、 条文が session の判断で静かに動きうる。 「裁定は文書が正本」に反する</td><td>却下</td></tr>
+    <tr><td><strong>N4 案 c 書換え</strong></td><td>憲法改訂の部分だけを「新 ADR + delta marker + 裁定 id を伴えば可」に改め、 schema 非互換・C4 超えの禁止は据置く</td><td>user 裁定 2026-09-09。 改訂不能と無手続きの中間を定義し、 跡が残る形だけを許す</td><td><strong>採用</strong></td></tr>
+  </tbody>
+</table>
+<p data-audience="machine">3 つの論点 (C8 / A4・C7 / A1・N4) は独立に採否を決めたのではなく、 いずれも「前の版が存在することを前提にした条文を、 前の版の放棄後に成立する形へ移す」という同じ動機から出ている。 比較の第 1 基準は<strong>前提が消えた後も条文が成立するか</strong>、 第 2 基準は<strong>規範の空白を作らないか</strong> (N2) である。</p>
+</section>
+
+<section id="s5-trace" class="informative">
+<h2>§5. Trace</h2>
+<p class="section-essence" data-audience="human">出所は user の 2 つの判断です。 前の版を完全に捨てるという直命と、 それに伴う憲法の書き換え方の裁定です。 逐語の記録は、 この repo が public のため repo の外に置いています。</p>
+<ul data-audience="machine">
+  <li>決定の原本: <strong>user 裁定 2026-09-09</strong> (planner 席経由の relay・逐語は repo 外の RULING file)。 本 repo は public のため、 裁定の逐語・席や台帳の識別子・host 名は本 file に載せない。</li>
+  <li>前提になった user 直命: 同日の v1 完全放棄の判断 (v1 由来の plugin 機能を積まない開発 session と beads で v2 を進める、 拘束条件は docs と design-intent で固定する)。 逐語は同じ repo 外の RULING file。</li>
+  <li>衝突の surface: 直命を受けて憲法 C8 / A4 が新方針と正面衝突することを起草席が surface し、 対話面 (C7 / A1) と改訂手続き (N4) にも同じ前提の崩れが及ぶことが裁定の過程で確定した。</li>
+  <li>拘束条件: <a href="../spec/constitution.html#a2">A2</a> (憲法条文の改訂は grill 前置の user 裁定)、 <a href="../spec/constitution.html#n4">N4</a> (本改訂が明示の例外として 1 回適用し、 同時に書き換える手続き)、 <a href="../spec/constitution.html#a1">A1</a> / <a href="../spec/constitution.html#a3">A3</a> (A4 が上書きしない個別 Ask-first)。</li>
+  <li>改訂対象: <code>design-intent/spec/constitution.html</code> の <code>#c7</code> / <code>#a1</code> / <code>#c8</code> / <code>#a4</code> / <code>#n4</code>、 §2 一覧表の該当 5 行、 <a href="../spec/constitution.html#s3-rules-rows">§3</a> (<code>R-C7-1</code> の追加・<a href="../spec/constitution.html#r-c8-1">R-C8-1</a> の停止)、 <a href="../spec/constitution.html#s4-amendment">§4</a> の手続きと図、 §5 Trace。</li>
+  <li>射程外: C14〜C16 の追随 (器 SPEC v0.4.6 の user 裁定済み条文の写し・§2.6)。</li>
+  <li>記録した日: 2026-09-09 (決定日と同日)。</li>
+</ul>
+</section>
+
+<!-- folio:chrome-bottom -->
+<nav class="prevnext" aria-label="前後の文書">
+  <a class="prevnext__prev" href="ADR-0002-test-lint-toolchain.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">ADR-0002 — test / lint toolchain = cargo nextest・粒度 lint は forbid・構造検査は cargo xtask check</span></a>
+</nav>
+<script>
+(function () {
+  var openedForPrint = [];
+  window.addEventListener('beforeprint', function () {
+    openedForPrint = [];
+    var ds = document.querySelectorAll('details:not([open])');
+    for (var i = 0; i < ds.length; i++) { ds[i].setAttribute('open', ''); openedForPrint.push(ds[i]); }
+  });
+  window.addEventListener('afterprint', function () {
+    for (var i = 0; i < openedForPrint.length; i++) openedForPrint[i].removeAttribute('open');
+    openedForPrint = [];
+  });
+  if (!document.querySelector('[data-audience]')) return;
+  /* 既定 = 人間プレゼン型 (ADR-0040 / rules §11.3): script 経由で初期 class を付与するため
+     no-JS では付かず全文可視に graceful degrade する。 static DOM は全文を保持 (AI/検索/印刷は不変)。 */
+  document.body.classList.add('audience-human');
+  var bar = document.createElement('nav');
+  bar.className = 'audience-toggle';
+  bar.setAttribute('aria-label', '表示対象の切替');
+  var states = [['both', '両方'], ['human', '人間向け'], ['machine', '機械向け']];
+  for (var s = 0; s < states.length; s++) {
+    (function (mode, label) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      b.setAttribute('aria-pressed', mode === 'human' ? 'true' : 'false');
+      b.addEventListener('click', function () {
+        document.body.classList.remove('audience-human', 'audience-machine');
+        if (mode !== 'both') document.body.classList.add('audience-' + mode);
+        var bs = bar.querySelectorAll('button');
+        for (var j = 0; j < bs.length; j++) bs[j].setAttribute('aria-pressed', bs[j] === b ? 'true' : 'false');
+      });
+      bar.appendChild(b);
+    })(states[s][0], states[s][1]);
+  }
+  var bc = document.querySelector('nav.breadcrumb');
+  if (bc && bc.parentNode) { bc.parentNode.insertBefore(bar, bc.nextSibling); }
+  else { document.body.insertBefore(bar, document.body.firstChild); }
+})();
+</script>
+<!-- /folio:chrome-bottom -->
+</body>
+</html>

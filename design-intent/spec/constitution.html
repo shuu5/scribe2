@@ -5,10 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="folio-doc-type" content="constitution">
 <meta name="folio-layer" content="project">
-<meta name="folio-version" content="0.3.0">
+<meta name="folio-version" content="0.4.6">
 <meta name="folio-status" content="active">
 <meta name="folio-stakeholders" content="Developer, AI Agent, External Reviewer">
-<title>scribe2 constitution — 折れない線 (Always 13 / Ask-first 4 / Never 4)</title>
+<title>scribe2 constitution — 折れない線 (Always 16 / Ask-first 4 / Never 4)</title>
 <link rel="stylesheet" href="../../common.css">
 <script src="../assets/mermaid.min.js" defer></script>
 <script type="application/ld+json">
@@ -24,11 +24,13 @@
     { "@id": "./README.html" }
   ],
   "dc:isReferencedBy": [
+    { "@id": "../decisions/ADR-0003-constitution-v1-abandon-rewrite.html" },
+    { "@id": "./requirements-catalog.html" },
     { "@id": "../decisions/ADR-0002-test-lint-toolchain.html" },
     { "@id": "../decisions/ADR-0001-rust-single-static-binary.html" }
   ],
-  "dc:title": "scribe2 constitution — 折れない線 (Always 13 / Ask-first 4 / Never 4)",
-  "folio:version": "0.3.0",
+  "dc:title": "scribe2 constitution — 折れない線 (Always 16 / Ask-first 4 / Never 4)",
+  "folio:version": "0.4.6",
   "folio:stakeholders": ["Developer", "AI Agent", "External Reviewer"]
 }
 </script>
@@ -45,14 +47,14 @@
 
 <header class="doc-header">
   <h1>scribe2 constitution — 折れない線</h1>
-  <div class="meta">v0.3.0 &middot; status: active &middot; scribe v2「次の器」が守る 21 条 (Always 13 / Ask-first 4 / Never 4)。 各条は要旨 + 規範文 (EARS・正本) + 機構 (型 / lint / CI) + 出所を併せ持ち、 数値は条文でなく manifest の rules 行に置く (初期値は §3)</div>
+  <div class="meta">v0.4.6 &middot; status: active &middot; scribe v2「次の器」が守る 24 条 (Always 16 / Ask-first 4 / Never 4)。 各条は要旨 + 規範文 (EARS・正本) + 機構 (型 / lint / CI) + 出所を併せ持ち、 数値は条文でなく manifest の rules 行に置く (初期値は §3)</div>
 </header>
 <!-- folio:chrome-toc -->
 <nav class="toc" aria-label="ページ内目次">
 <ol>
   <li><a href="#s1-purpose">§1. Purpose — この憲法が何を決め、 どう読むか</a></li>
-  <li><a href="#s2-tiers">§2. 3 段の構造 — 21 条の一覧</a></li>
-  <li class="toc--sub"><a href="#s2-1-always">§2.1 Always — いつも守る (C1〜C13)</a></li>
+  <li><a href="#s2-tiers">§2. 3 段の構造 — 24 条の一覧</a></li>
+  <li class="toc--sub"><a href="#s2-1-always">§2.1 Always — いつも守る (C1〜C16)</a></li>
   <li class="toc--sub"><a href="#s2-2-askfirst">§2.2 Ask-first — 変える前に user に確認 (A1〜A4)</a></li>
   <li class="toc--sub"><a href="#s2-3-never">§2.3 Never — 絶対にやらない (N1〜N4)</a></li>
   <li><a href="#s3-rules-rows">§3. rules 行の初期値 — 条文から外した数値 (裁定 id 付き)</a></li>
@@ -66,13 +68,13 @@
   <dl>
     <dt>id</dt><dd>constitution</dd>
     <dt>doc-type</dt><dd>constitution</dd>
-    <dt>version</dt><dd>0.3.0 (follows the SPEC version)</dd>
+    <dt>version</dt><dd>0.4.6 (follows the SPEC version)</dd>
     <dt>status</dt><dd>active</dd>
     <dt>stakeholders</dt><dd>Developer, AI Agent, External Reviewer</dd>
-    <dt>tiers</dt><dd>Always C1-C13 (13) / Ask-first A1-A4 (4) / Never N1-N4 (4)</dd>
+    <dt>tiers</dt><dd>Always C1-C16 (16) / Ask-first A1-A4 (4) / Never N1-N4 (4)</dd>
     <dt>edit-ssot</dt><dd>this file (canonical WHAT; folio ADR-0051 §3: non-flipped doc = HTML is the only layer)</dd>
-    <dt>source</dt><dd>SPEC-scribe-v2-vessel-v0.1-20260907.md §2 (v0.3, user approved 2026-09-07) / RULING-v2-p1-exit-bundle-20260907.md</dd>
-    <dt>amendment</dt><dd>A2 (grill verification first, then user ruling) + C5 (rules row diff with ruling id) + N4 (constitution amendments only as version N+1)</dd>
+    <dt>source</dt><dd>SPEC-scribe-v2-vessel §2 (v0.3 user approved 2026-09-07; C14 / C15 / C16 added in v0.4 / v0.4.5 by user rulings 2026-09-08 / 2026-09-09) / ADR-0003 (C7 / A1 / C8 / A4 / N4 rewritten 2026-09-09)</dd>
+    <dt>amendment</dt><dd>A2 (grill verification first, then user ruling) + C5 (rules row diff with ruling id) + N4 (constitution amendments only with a new ADR, inline delta markers and a ruling id)</dd>
   </dl>
 </aside>
 
@@ -83,7 +85,7 @@
 <section id="s1-purpose" class="normative">
 <h2>§1. Purpose — この憲法が何を決め、 どう読むか</h2>
 <p class="section-essence" data-audience="human">scribe2 が版をまたいで守る「折れない線」を、 守り方の強さで Always / Ask-first / Never の 3 段に分けて置きます。 各条は「人が読む要旨」「機械が読む規範文 (正本)」「機械が検査できる形 (型 / lint / CI)」「出所 (どの裁定から来たか)」の 4 つを必ず併せ持ち、 数値は条文に書かず manifest の rules 行に置き、 その初期値を §3 に写します。 線どうしがぶつかったら、 場当たり修正の禁止 → 膨張防止 → compile 速度 の順位で決めます。</p>
-<p data-audience="machine">本 constitution は scribe v2「次の器」の design-intent の最上位文書であり、 条文の canonical WHAT かつ edit-SSoT である (folio ADR-0051 §3: flip しない doc は HTML が唯一の層)。 21 条の各条は (a) human 要旨、 (b) EARS 規範文 (canonical)、 (c) 機構 = 条を成立させる型 / lint / CI の形、 (d) 出所 = 裁定論点 id、 の 4 要素を持つ。 (c) を欠く条を置かない (散文だけの規則を残さない = N2)。 1 つの条は複数の規範文を持ちうる: 最初の規範文は条 id (例 C12)、 以降は条 id に連番を付す (例 C12.2)。 EARS pattern は各規範文の論理構造で決まり、 段 (Always / Ask-first / Never) とは独立である。 card の badge は最初の規範文の pattern を表し、 2 つ目以降の規範文の pattern は machine 層の各 block が持つ。 原本が執行主体を特定しない条は主語を scribe2 (system of interest) とし、 CI 等の執行機構は機構 dd に (導出) と明示する。 原本が CI を名指す条は scribe2 CI を主語にする。 数値 (閾値・件数・秒数) は条文に置かず <span class="term" data-term="rules 行">rules 行</span> (<span class="term" data-term="manifest">manifest</span> 内の値 1 行・<span class="term" data-term="裁定 id">裁定 id</span> 付き) に置き、 本文書ではその初期値を §3 に写す。 改訂は A2 (利益の grill 検証を前置した user 裁定) のみで、 条文の改訂は同じ版の中では行わない (N4)。</p>
+<p data-audience="machine">本 constitution は scribe v2「次の器」の design-intent の最上位文書であり、 条文の canonical WHAT かつ edit-SSoT である (folio ADR-0051 §3: flip しない doc は HTML が唯一の層)。 24 条の各条は (a) human 要旨、 (b) EARS 規範文 (canonical)、 (c) 機構 = 条を成立させる型 / lint / CI の形、 (d) 出所 = 裁定論点 id、 の 4 要素を持つ。 (c) を欠く条を置かない (散文だけの規則を残さない = N2)。 1 つの条は複数の規範文を持ちうる: 最初の規範文は条 id (例 C12)、 以降は条 id に連番を付す (例 C12.2)。 EARS pattern は各規範文の論理構造で決まり、 段 (Always / Ask-first / Never) とは独立である。 card の badge は最初の規範文の pattern を表し、 2 つ目以降の規範文の pattern は machine 層の各 block が持つ。 原本が執行主体を特定しない条は主語を scribe2 (system of interest) とし、 CI 等の執行機構は機構 dd に (導出) と明示する。 原本が CI を名指す条は scribe2 CI を主語にする。 数値 (閾値・件数・秒数) は条文に置かず <span class="term" data-term="rules 行">rules 行</span> (<span class="term" data-term="manifest">manifest</span> 内の値 1 行・<span class="term" data-term="裁定 id">裁定 id</span> 付き) に置き、 本文書ではその初期値を §3 に写す。 改訂は A2 (利益の grill 検証を前置した user 裁定) のみで、 条文の改訂は新 ADR と本文の delta marker と裁定 id を伴う (N4)。</p>
 <div data-audience="machine">
 <p class="ears" data-ears-pattern="event-driven"><span class="ears-id">順位</span>: <span class="ears-when">WHEN two lines of this constitution conflict in a decision</span>, scribe2 <span class="ears-shall">SHALL</span> resolve the conflict in this order: prohibition of ad-hoc fixes first, prevention of growth second, compile speed third.</p>
 <p>出所: 論点 1。 <span class="term" data-term="順位">順位</span>は条ではなく全条に先立つ決め方であり、 条 id の連番を持たない (§2 の一覧表にも含めない)。</p>
@@ -91,14 +93,14 @@
 </section>
 
 <section id="s2-tiers" class="normative">
-<h2>§2. 3 段の構造 — 21 条の一覧</h2>
-<p class="section-essence" data-audience="human">Always は例外なく常に守る 13 条、 Ask-first は変える前に user に確認する 4 条、 Never は絶対にやらない 4 条です。 下の図と表が全体の地図で、 各条の本文は §2.1〜§2.3 にあります。 §1 の順位は段に属さず、 表には含めません。</p>
+<h2>§2. 3 段の構造 — 24 条の一覧</h2>
+<p class="section-essence" data-audience="human">Always は例外なく常に守る 16 条、 Ask-first は変える前に user に確認する 4 条、 Never は絶対にやらない 4 条です。 下の図と表が全体の地図で、 各条の本文は §2.1〜§2.3 にあります。 §1 の順位は段に属さず、 表には含めません。</p>
 <figure class="diagram">
 <pre class="mermaid">flowchart TB
   accTitle: scribe2 憲法の 3 段構造
-  accDescr: 折れない線 21 条を守り方の強さで 3 段に分ける。 Always は C1 から C13 の 13 条で常に守る。 Ask-first は A1 から A4 の 4 条で変える前に user に確認する。 Never は N1 から N4 の 4 条で絶対に行わない。
-  T["折れない線 (21 条)"]
-  A["Always — いつも守る&#10;C1〜C13 (13 条)"]
+  accDescr: 折れない線 24 条を守り方の強さで 3 段に分ける。 Always は C1 から C16 の 16 条で常に守る。 Ask-first は A1 から A4 の 4 条で変える前に user に確認する。 Never は N1 から N4 の 4 条で絶対に行わない。
+  T["折れない線 (24 条)"]
+  A["Always — いつも守る&#10;C1〜C16 (16 条)"]
   B["Ask-first — 変える前に user に確認&#10;A1〜A4 (4 条)"]
   C["Never — 絶対にやらない&#10;N1〜N4 (4 条)"]
   T --&gt; A
@@ -108,7 +110,7 @@
   style A fill:#e6f6f2,stroke:#1e7b65,color:#08131a
   style B fill:#fefbea,stroke:#916626,color:#08131a
   style C fill:#fdf3f3,stroke:#b22323,color:#08131a</pre>
-<figcaption>図 1. 21 条の 3 段構造。 段は「守り方の強さ」で分かれる。 線どうしがぶつかったときの決め方は §1 の順位だけが定める。</figcaption>
+<figcaption>図 1. 24 条の 3 段構造。 段は「守り方の強さ」で分かれる。 線どうしがぶつかったときの決め方は §1 の順位だけが定める。</figcaption>
 </figure>
 <p data-audience="machine">本表は索引である。 機構と出所の正本は各条の card (§2.1〜§2.3) にある。 「出所」は card と逐語一致させ、 「機構の要点」は card の機構 dd の要約である。</p>
 <table>
@@ -120,27 +122,30 @@
     <tr><td><a href="#c4">C4</a></td><td>大きさに上限</td><td>Always</td><td>行数・比率・関数粒度の lint deny / CI 実測 (§3)</td><td>論点 2</td></tr>
     <tr><td><a href="#c5">C5</a></td><td>規則変更 = manifest diff + 裁定 id</td><td>Always</td><td>CI が裁定 id の無い rules 行 diff を落とす</td><td>論点 5</td></tr>
     <tr><td><a href="#c6">C6</a></td><td>消費は害</td><td>Always</td><td>Budget は Precheck 経由でのみ生成 / 起動口 1 つ / append-only store</td><td>論点 11</td></tr>
-    <tr><td><a href="#c7">C7</a></td><td>planner が唯一の対話面</td><td>Always</td><td>relay 印だけを受理</td><td>SPEC §2 (裁定 id なし)</td></tr>
-    <tr><td><a href="#c8">C8</a></td><td>版 N+1 は版 N の下で作られる</td><td>Always</td><td>SelfDev enum / dispatch deny / doctor selfdev / bootstrap 4 状態</td><td>論点 9・SPEC §12</td></tr>
+    <tr><td><a href="#c7">C7</a></td><td><del class="delta" data-delta-id="D-2026-09-09-001" data-delta-superseded-by="D-2026-09-09-001">planner が唯一の対話面</del><ins class="delta" data-delta-id="D-2026-09-09-001">対話面は 1 つ</ins></td><td>Always</td><td><del class="delta" data-delta-id="D-2026-09-09-001" data-delta-superseded-by="D-2026-09-09-001">relay 印だけを受理</del><ins class="delta" data-delta-id="D-2026-09-09-001">受理面は rules 行 R-C7-1 の 1 つ (初期値 = user 直) / 承認は approval event に逐語で記帳</ins></td><td><del class="delta" data-delta-id="D-2026-09-09-001" data-delta-superseded-by="D-2026-09-09-001">SPEC §2 (裁定 id なし)</del><ins class="delta" data-delta-id="D-2026-09-09-001">ADR-0003</ins></td></tr>
+    <tr><td><a href="#c8">C8</a></td><td><del class="delta" data-delta-id="D-2026-09-09-003" data-delta-superseded-by="D-2026-09-09-003">版 N+1 は版 N の下で作られる</del><ins class="delta" data-delta-id="D-2026-09-09-003">版 N+1 は design-intent の下で作られる</ins></td><td>Always</td><td><del class="delta" data-delta-id="D-2026-09-09-003" data-delta-superseded-by="D-2026-09-09-003">SelfDev enum / dispatch deny / doctor selfdev / bootstrap 4 状態</del><ins class="delta" data-delta-id="D-2026-09-09-003">design-intent (tracked) が拘束条件 / in-loop guard (C16) / validate・build 緑</ins></td><td><del class="delta" data-delta-id="D-2026-09-09-003" data-delta-superseded-by="D-2026-09-09-003">論点 9・SPEC §12</del><ins class="delta" data-delta-id="D-2026-09-09-003">ADR-0003</ins></td></tr>
     <tr><td><a href="#c9">C9</a></td><td>口座の連続性</td><td>Always</td><td>SeatState / Completion / migrate 1 本 / 型の前提条件</td><td>論点 8・U5</td></tr>
     <tr><td><a href="#c10">C10</a></td><td>値の出所と効力は型で弁別する</td><td>Always</td><td>Declared / Measured / Derived / Effective の 4 型 / CI</td><td>論点 11・T11 / T13 / T15</td></tr>
     <tr><td><a href="#c11">C11</a></td><td>失敗と極性は型で</td><td>Always</td><td>workspace lint deny / 境界 enum + 極性型 / build 時生成</td><td>論点 6</td></tr>
     <tr><td><a href="#c12">C12</a></td><td>歯は Rust だけ・TDD</td><td>Always</td><td>1 framework / flip check / 変異検出線 / snapshot / property test</td><td>論点 7</td></tr>
     <tr><td><a href="#c13">C13</a></td><td>compile と依存に予算</td><td>Always</td><td>許可リスト + 予算 / cargo deny / async なし / CI deny + 検出線 (§3)</td><td>論点 3・4</td></tr>
-    <tr><td><a href="#a1">A1</a></td><td>3 クラスの操作</td><td>Ask-first</td><td>relay 印 (C7)</td><td>SPEC §2 (裁定 id なし)</td></tr>
+    <tr><td><a href="#c14">C14</a></td><td><ins class="delta" data-delta-id="D-2026-09-09-006">規律の 2 面と正本の向き</ins></td><td>Always</td><td><ins class="delta" data-delta-id="D-2026-09-09-006">文書 (design-intent) = 原理と裁定の正本 / データ (rules manifest) = 執行規則の正本 / 両面の drift は歯で RED</ins></td><td><ins class="delta" data-delta-id="D-2026-09-09-006">SPEC v0.4 論点 1</ins></td></tr>
+    <tr><td><a href="#c15">C15</a></td><td><ins class="delta" data-delta-id="D-2026-09-09-007">台帳はタスク専用</ins></td><td>Always</td><td><ins class="delta" data-delta-id="D-2026-09-09-007">契約が SRS の要件 id を指す / 規則を変える PR・bead が裁定 id を指す / 参照の欠落は lint で RED</ins></td><td><ins class="delta" data-delta-id="D-2026-09-09-007">SPEC v0.4 論点 2</ins></td></tr>
+    <tr><td><a href="#c16">C16</a></td><td><ins class="delta" data-delta-id="D-2026-09-09-008">逸脱は編集の時点で止める</ins></td><td>Always</td><td><ins class="delta" data-delta-id="D-2026-09-09-008">in-loop guard を極性一覧に InLoop で載せる / guard 0 件・PostHoc のみの構成は CI が RED</ins></td><td><ins class="delta" data-delta-id="D-2026-09-09-008">SPEC v0.4.5 U9</ins></td></tr>
+    <tr><td><a href="#a1">A1</a></td><td>3 クラスの操作</td><td>Ask-first</td><td><del class="delta" data-delta-id="D-2026-09-09-002" data-delta-superseded-by="D-2026-09-09-002">relay 印 (C7)</del><ins class="delta" data-delta-id="D-2026-09-09-002">C7 の対話面 (R-C7-1) を通した承認 / approval event に記帳</ins></td><td><del class="delta" data-delta-id="D-2026-09-09-002" data-delta-superseded-by="D-2026-09-09-002">SPEC §2 (裁定 id なし)</del><ins class="delta" data-delta-id="D-2026-09-09-002">SPEC §2 (裁定 id なし)・ADR-0003</ins></td></tr>
     <tr><td><a href="#a2">A2</a></td><td>憲法条文の改訂と C4 / C13 の閾値変更</td><td>Ask-first</td><td>利益の grill 検証を前置 → user 裁定 (裁定 id)</td><td>論点 2</td></tr>
     <tr><td><a href="#a3">A3</a></td><td>依存 OSS の追加・削除</td><td>Ask-first</td><td>C13 の手続き</td><td>SPEC §2 (裁定 id なし)・論点 3・4</td></tr>
-    <tr><td><a href="#a4">A4</a></td><td>自己開発の解禁</td><td>Ask-first</td><td>C8 の成熟条件の成立後に planner が 1 問 / user の go = relay 印</td><td>論点 9</td></tr>
+    <tr><td><a href="#a4">A4</a></td><td><del class="delta" data-delta-id="D-2026-09-09-004" data-delta-superseded-by="D-2026-09-09-004">自己開発の解禁</del><ins class="delta" data-delta-id="D-2026-09-09-004">自己開発は既定で許可・不可逆操作だけ Ask-first</ins></td><td>Ask-first</td><td><del class="delta" data-delta-id="D-2026-09-09-004" data-delta-superseded-by="D-2026-09-09-004">C8 の成熟条件の成立後に planner が 1 問 / user の go = relay 印</del><ins class="delta" data-delta-id="D-2026-09-09-004">3 クラス (消す / 出す / 使う) の rules 行 + enforcer / 回答は C7 の対話面を通す</ins></td><td><del class="delta" data-delta-id="D-2026-09-09-004" data-delta-superseded-by="D-2026-09-09-004">論点 9</del><ins class="delta" data-delta-id="D-2026-09-09-004">ADR-0003</ins></td></tr>
     <tr><td><a href="#n1">N1</a></td><td>rm による削除</td><td>Never</td><td>退役は可逆 move のみ</td><td>SPEC §2 (裁定 id なし)</td></tr>
     <tr><td><a href="#n2">N2</a></td><td>規則を散文・memory・chat にだけ置く</td><td>Never</td><td>C1.2 の CI (手書き規範文 0 行) + C5</td><td>SPEC §2 (裁定 id なし)・論点 5</td></tr>
     <tr><td><a href="#n3">N3</a></td><td>host 固有の分岐を code に焼く</td><td>Never</td><td>値は manifest (C10.2)</td><td>SPEC §2 (裁定 id なし)・論点 11</td></tr>
-    <tr><td><a href="#n4">N4</a></td><td>同じ版の中で憲法改訂・schema 非互換・C4 超え</td><td>Never</td><td>版 N+1 として別 repo へ (C8)</td><td>論点 9・SPEC §12.0</td></tr>
+    <tr><td><a href="#n4">N4</a></td><td><del class="delta" data-delta-id="D-2026-09-09-005" data-delta-superseded-by="D-2026-09-09-005">同じ版の中で憲法改訂・schema 非互換・C4 超え</del><ins class="delta" data-delta-id="D-2026-09-09-005">ADR と delta marker を伴わない憲法改訂・同じ版での schema 非互換・C4 超え</ins></td><td>Never</td><td><del class="delta" data-delta-id="D-2026-09-09-005" data-delta-superseded-by="D-2026-09-09-005">版 N+1 として別 repo へ (C8)</del><ins class="delta" data-delta-id="D-2026-09-09-005">憲法改訂 = 新 ADR + delta marker + 裁定 id / schema 非互換・C4 超えは次の版へ</ins></td><td><del class="delta" data-delta-id="D-2026-09-09-005" data-delta-superseded-by="D-2026-09-09-005">論点 9・SPEC §12.0</del><ins class="delta" data-delta-id="D-2026-09-09-005">論点 9・ADR-0003</ins></td></tr>
   </tbody>
 </table>
 
 <section id="s2-1-always">
-<h3>§2.1 Always — いつも守る (C1〜C13)</h3>
-<p class="section-essence" data-audience="human">例外なく常に守る 13 条です。 規則・経路・状態を「1 つ」に閉じ、 大きさと消費と依存に予算を置き、 失敗と値の出所を型で扱い、 歯は Rust の test だけにします。</p>
+<h3>§2.1 Always — いつも守る (C1〜C16)</h3>
+<p class="section-essence" data-audience="human">例外なく常に守る 16 条です。 規則・経路・状態を「1 つ」に閉じ、 大きさと消費と依存に予算を置き、 失敗と値の出所を型で扱い、 歯は Rust の test だけにします。 規律は文書とデータの 2 面で持ち、 台帳はタスク専用で、 仕様からの逸脱は編集の時点で止めます。</p>
 
 <section class="req" id="c1" data-audience="human">
   <div class="req__card"><span class="badge badge--req">C1</span> <span class="req__ears req__ears--ubiquitous">Ubiquitous</span> <strong>規則はデータ</strong></div>
@@ -246,35 +251,38 @@
 </section>
 
 <section class="req" id="c7" data-audience="human">
-  <div class="req__card"><span class="badge badge--req">C7</span> <span class="req__ears req__ears--ubiquitous">Ubiquitous</span> <strong>planner が唯一の対話面</strong></div>
-  <p class="req__essence">user の承認は planner を通った relay 印だけを機械が受け取ります。 他の経路で来た「承認」は承認として扱いません。</p>
+  <div class="req__card"><span class="badge badge--req">C7</span> <span class="req__ears req__ears--ubiquitous">Ubiquitous</span> <strong><del class="delta" data-delta-id="D-2026-09-09-001" data-delta-superseded-by="D-2026-09-09-001">planner が唯一の対話面</del><ins class="delta" data-delta-id="D-2026-09-09-001">対話面は 1 つ</ins></strong></div>
+  <p class="req__essence"><ins class="delta" data-delta-id="D-2026-09-09-001">user の承認は、 ただ 1 つの対話面を通ったものだけを機械が受け取ります。 その対話面がどの席かは条文でなく rules 行 (R-C7-1) が決め、 今は開発 session が user と直接対話し、 受け取った承認は逐語を添えて記帳します。</ins> 他の経路で来た「承認」は承認として扱いません。</p>
   <details class="req__machine" data-audience="machine">
     <summary>normative (machine)</summary>
     <div class="req__normative">
-      <p class="ears" data-ears-pattern="ubiquitous"><span class="ears-id">C7</span>: scribe2 <span class="ears-shall">SHALL</span> accept a user approval only as a relay stamp issued through the planner.</p>
+      <p class="delta-history"><del class="delta" data-delta-id="D-2026-09-09-001" data-delta-superseded-by="D-2026-09-09-001">改訂前の要旨: user の承認は planner を通った relay 印だけを機械が受け取ります。</del></p>
+      <p class="ears" data-ears-pattern="ubiquitous"><span class="ears-id">C7</span>: scribe2 <span class="ears-shall">SHALL</span> <del class="delta" data-delta-id="D-2026-09-09-001" data-delta-superseded-by="D-2026-09-09-001">accept a user approval only as a relay stamp issued through the planner.</del><ins class="delta" data-delta-id="D-2026-09-09-001">accept a user approval only through exactly one dialogue surface, and <span class="ears-shall">SHALL</span> take the identity of that surface from the rules row <a href="#r-c7-1">R-C7-1</a> rather than from this article.</ins></p>
+      <p class="ears" data-ears-pattern="ubiquitous"><ins class="delta" data-delta-id="D-2026-09-09-001"><span class="ears-id">C7.2</span>: scribe2 <span class="ears-shall">SHALL</span> record every accepted approval as an approval event carrying the user's verbatim words.</ins></p>
       <dl>
         <dt>機構 (型 / lint / CI)</dt>
-        <dd>承認 = planner 発行の relay 印のみを機械が受理する。 A1 / A2 / A3 / A4 の承認はすべてこの経路を通る。</dd>
-        <dt>出所</dt><dd>SPEC §2 (裁定 id なし)</dd>
+        <dd><del class="delta" data-delta-id="D-2026-09-09-001" data-delta-superseded-by="D-2026-09-09-001">承認 = planner 発行の relay 印のみを機械が受理する。</del><ins class="delta" data-delta-id="D-2026-09-09-001">承認の受理面は 1 つで、 どの席かは rules 行 <a href="#r-c7-1">R-C7-1</a> の値が決める (初期値 = user 直 = 開発 session)。 planner 席を戻すときは rules 行の値を変えるだけで条文は動かない。 受理した承認は fleet の approval event (approval.received・user の逐語付き) に記帳し、 会話の記憶を承認の根拠にしない。</ins> A1 / A2 / A3 / A4 の承認はすべてこの経路を通る。</dd>
+        <dt>出所</dt><dd>SPEC §2 (裁定 id なし)<ins class="delta" data-delta-id="D-2026-09-09-001">・ADR-0003 (user 裁定 2026-09-09)</ins></dd>
       </dl>
     </div>
   </details>
 </section>
 
 <section class="req" id="c8" data-audience="human">
-  <div class="req__card"><span class="badge badge--req">C8</span> <span class="req__ears req__ears--ubiquitous">Ubiquitous</span> <strong>版 N+1 は版 N の下で作られる</strong></div>
-  <p class="req__essence">器が自分自身を開発できるのは「成熟した版」だけです。 成熟の宣言は §3 の成熟条件がすべて成り立つことを機械が測り、 裁定 id を付けて行います。 自己開発が解禁されていない間は、 自分の repo への dispatch を拒みます。 立ち上げは 4 つの状態 (段 0 / 段 1 / 段 1-test / 段 2) を持ち、 機械が塞ぐのは最後の段 2 だけです。</p>
+  <div class="req__card"><span class="badge badge--req">C8</span> <span class="req__ears req__ears--ubiquitous">Ubiquitous</span> <strong><del class="delta" data-delta-id="D-2026-09-09-003" data-delta-superseded-by="D-2026-09-09-003">版 N+1 は版 N の下で作られる</del><ins class="delta" data-delta-id="D-2026-09-09-003">版 N+1 は design-intent の下で作られる</ins></strong></div>
+  <p class="req__essence"><ins class="delta" data-delta-id="D-2026-09-09-003">器の開発を拘束するのは design-intent (憲法・ADR・要件 doc = folio 形式の tracked 文書) であり、 前の版の pipeline や oracle ではありません。 自己開発の可否を「前の版が成熟を測ったか」で決めません。 design-intent と食い違う編集は、 後の gate に回さず編集の時点で止めます (C16)。 design-intent の変更は必ず ADR か版付き文書として残します。</ins></p>
   <details class="req__machine" data-audience="machine">
     <summary>normative (machine)</summary>
     <div class="req__normative">
-      <p class="ears" data-ears-pattern="ubiquitous"><span class="ears-id">C8</span>: scribe2 <span class="ears-shall">SHALL</span> permit self-development only for a version declared mature.</p>
-      <p class="ears" data-ears-pattern="state-driven"><span class="ears-id">C8.2</span>: <span class="ears-while">WHILE self-development is not enabled with a ruling id</span>, scribe2 <span class="ears-shall">SHALL</span> deny a dispatch onto its own repository anchor.</p>
-      <p class="ears" data-ears-pattern="ubiquitous"><span class="ears-id">C8.3</span>: scribe2 <span class="ears-shall">SHALL</span> expose the maturity conditions as measured values through the doctor command.</p>
-      <p class="ears" data-ears-pattern="ubiquitous"><span class="ears-id">C8.4</span>: scribe2 <span class="ears-shall">SHALL</span> attach a ruling id to every maturity declaration, and <span class="ears-shall">SHALL</span> base every maturity declaration on all maturity conditions defined in <a href="#r-c8-1">R-C8-1</a> holding at once.</p>
+      <p class="delta-history"><del class="delta" data-delta-id="D-2026-09-09-003" data-delta-superseded-by="D-2026-09-09-003">改訂前の要旨: 器が自分自身を開発できるのは「成熟した版」だけです。 成熟の宣言は §3 の成熟条件がすべて成り立つことを機械が測り、 裁定 id を付けて行います。 自己開発が解禁されていない間は、 自分の repo への dispatch を拒みます。 立ち上げは 4 つの状態 (段 0 / 段 1 / 段 1-test / 段 2) を持ち、 機械が塞ぐのは最後の段 2 だけです。</del></p>
+      <p class="ears" data-ears-pattern="ubiquitous"><span class="ears-id">C8</span>: scribe2 <span class="ears-shall">SHALL</span> <del class="delta" data-delta-id="D-2026-09-09-003" data-delta-superseded-by="D-2026-09-09-003">permit self-development only for a version declared mature.</del><ins class="delta" data-delta-id="D-2026-09-09-003">be developed under its design-intent (constitution, ADRs, requirements) as the binding constraint, and <span class="ears-shall">SHALL NOT</span> require a previous version to act as oracle or to hold stop authority.</ins></p>
+      <p class="ears" data-ears-pattern="event-driven"><del class="delta" data-delta-id="D-2026-09-09-003" data-delta-superseded-by="D-2026-09-09-003"><span class="ears-id">C8.2</span>: <span class="ears-while">WHILE self-development is not enabled with a ruling id</span>, scribe2 <span class="ears-shall">SHALL</span> deny a dispatch onto its own repository anchor.</del><ins class="delta" data-delta-id="D-2026-09-09-003"><span class="ears-id">C8.2</span>: <span class="ears-when">WHEN an edit conflicts with design-intent</span>, scribe2 <span class="ears-shall">SHALL</span> stop the edit at edit time rather than defer the judgement to a later gate of a previous version.</ins></p>
+      <p class="ears" data-ears-pattern="ubiquitous"><del class="delta" data-delta-id="D-2026-09-09-003" data-delta-superseded-by="D-2026-09-09-003"><span class="ears-id">C8.3</span>: scribe2 <span class="ears-shall">SHALL</span> expose the maturity conditions as measured values through the doctor command.</del><ins class="delta" data-delta-id="D-2026-09-09-003"><span class="ears-id">C8.3</span>: scribe2 <span class="ears-shall">SHALL</span> record every change to design-intent as an ADR or a versioned document.</ins></p>
+      <p class="ears" data-ears-pattern="ubiquitous"><del class="delta" data-delta-id="D-2026-09-09-003" data-delta-superseded-by="D-2026-09-09-003"><span class="ears-id">C8.4</span>: scribe2 <span class="ears-shall">SHALL</span> attach a ruling id to every maturity declaration, and <span class="ears-shall">SHALL</span> base every maturity declaration on all maturity conditions defined in <a href="#r-c8-1">R-C8-1</a> holding at once.</del></p>
       <dl>
         <dt>機構 (型 / lint / CI)</dt>
-        <dd><code>enum SelfDev { Disabled, Enabled { ruling_id } }</code>。 dispatch は自 repo anchor を <code>Enabled</code> 以外で deny。 <code>doctor selfdev</code> が成熟条件を <code>Measured&lt;T&gt;</code> で出す。 bootstrap は 4 つの状態を持つ: 段 0 = v1 が v1 を自己開発 ／ 段 1 = v2 repo に v1 plugin の planner / admin を置いて v2 を開発 ／ 段 1-test = v2 repo 外の test project に v2 plugin を置いて試運転 ／ 段 2 = 成熟 + go の後に v2 repo 内の席を v2 plugin へ替えて自己開発。 deny が塞ぐのは段 2 だけ。 成熟条件の値は §3 <a href="#r-c8-1">R-C8-1</a>。</dd>
-        <dt>出所</dt><dd>論点 9・SPEC §12</dd>
+        <dd><del class="delta" data-delta-id="D-2026-09-09-003" data-delta-superseded-by="D-2026-09-09-003"><code>enum SelfDev { Disabled, Enabled { ruling_id } }</code>。 dispatch は自 repo anchor を <code>Enabled</code> 以外で deny。 <code>doctor selfdev</code> が成熟条件を <code>Measured&lt;T&gt;</code> で出す。 bootstrap は 4 つの状態を持つ: 段 0 = v1 が v1 を自己開発 ／ 段 1 = v2 repo に v1 plugin の planner / admin を置いて v2 を開発 ／ 段 1-test = v2 repo 外の test project に v2 plugin を置いて試運転 ／ 段 2 = 成熟 + go の後に v2 repo 内の席を v2 plugin へ替えて自己開発。 deny が塞ぐのは段 2 だけ。 成熟条件の値は §3 <a href="#r-c8-1">R-C8-1</a>。</del><ins class="delta" data-delta-id="D-2026-09-09-003">拘束条件の実体は tracked な <code>design-intent/</code>。 機械が守るのは (a) 契約 write-set の外への編集を編集時に止める in-loop guard (C16・PreToolUse) と (b) design-intent の validate / build が CI で緑であること。 改訂前の <code>enum SelfDev</code> / <code>doctor selfdev</code> / dispatch deny / bootstrap 4 状態は廃止 (前の版の存在を前提にした機構)。 §3 <a href="#r-c8-1">R-C8-1</a> は停止 (測らない・履歴として残す)。</ins></dd>
+        <dt>出所</dt><dd><del class="delta" data-delta-id="D-2026-09-09-003" data-delta-superseded-by="D-2026-09-09-003">論点 9・SPEC §12</del><ins class="delta" data-delta-id="D-2026-09-09-003">ADR-0003 (user 裁定 2026-09-09・v1 完全放棄・案 3 書換え)</ins></dd>
       </dl>
     </div>
   </details>
@@ -374,22 +382,73 @@
     </div>
   </details>
 </section>
+
+<section class="req" id="c14" data-audience="human">
+  <div class="req__card"><span class="badge badge--req">C14</span> <span class="req__ears req__ears--ubiquitous">Ubiquitous</span> <strong><ins class="delta" data-delta-id="D-2026-09-09-006">規律の 2 面と正本の向き</ins></strong></div>
+  <p class="req__essence"><ins class="delta" data-delta-id="D-2026-09-09-006">規律は「文書」(design-intent = 憲法条文・ADR・SRS。 人が読み裁定する面) と「データ」(rules manifest = 機械が執行する面) の 2 面で持ちます。 原理と裁定は文書が正本、 執行規則はデータが正本で、 裁定 id はその種類の正本側に付きます。 文書に書いた規則が manifest に無い、 manifest の行が文書から参照されない、 という両面の drift は機械の歯で止めます。</ins></p>
+  <details class="req__machine" data-audience="machine">
+    <summary>normative (machine)</summary>
+    <div class="req__normative">
+      <p class="ears" data-ears-pattern="ubiquitous"><ins class="delta" data-delta-id="D-2026-09-09-006"><span class="ears-id">C14</span>: scribe2 <span class="ears-shall">SHALL</span> keep discipline in exactly two faces, documents (design-intent: constitution, ADRs and SRS, the face humans read and rule on) and data (the rules manifest, the face the machine enforces), <span class="ears-shall">SHALL</span> treat documents as the source of truth for principles and rulings, and <span class="ears-shall">SHALL</span> treat the manifest as the source of truth for enforced rules.</ins></p>
+      <p class="ears" data-ears-pattern="ubiquitous"><ins class="delta" data-delta-id="D-2026-09-09-006"><span class="ears-id">C14.2</span>: scribe2 <span class="ears-shall">SHALL</span> attach a ruling id to the source-of-truth side of its kind (the document version for principles and rulings, the manifest row for enforced rules), and scribe2 CI <span class="ears-shall">SHALL</span> reject drift between the two faces (a rule written in a document but absent from the manifest, or a manifest row not referenced from any document).</ins></p>
+      <dl>
+        <dt>機構 (型 / lint / CI)</dt>
+        <dd><ins class="delta" data-delta-id="D-2026-09-09-006">文書 = <code>design-intent/</code> (手書き可・裁定 id は文書の版に付く)。 データ = rules manifest 1 file (人向け doc は生成・手書き 0 行 = C1.2・裁定 id は行に付く = C5)。 両面の drift 検査は CI の歯 (RED)。 台帳は規律を持たず参照だけ (C15)。 C1 の「手書き規範文 0 行」の母集団は執行規則の生成 doc に限り、 憲法条文・ADR の散文は本条の「原理」であって対象外。</ins></dd>
+        <dt>出所</dt><dd><ins class="delta" data-delta-id="D-2026-09-09-006">SPEC v0.4 論点 1 (user 裁定 2026-09-08)</ins></dd>
+      </dl>
+    </div>
+  </details>
+</section>
+
+<section class="req" id="c15" data-audience="human">
+  <div class="req__card"><span class="badge badge--req">C15</span> <span class="req__ears req__ears--ubiquitous">Ubiquitous</span> <strong><ins class="delta" data-delta-id="D-2026-09-09-007">台帳はタスク専用</ins></strong></div>
+  <p class="req__essence"><ins class="delta" data-delta-id="D-2026-09-09-007">台帳 (beads) はタスクと裁定の記帳先であって、 規律の置き場ではありません。 規律との接続は id の参照 2 本だけです。 契約が SRS の要件 id を指し、 規則を変える PR や bead が裁定 id を指します。 参照が欠けていれば lint が止めます。</ins></p>
+  <details class="req__machine" data-audience="machine">
+    <summary>normative (machine)</summary>
+    <div class="req__normative">
+      <p class="ears" data-ears-pattern="ubiquitous"><ins class="delta" data-delta-id="D-2026-09-09-007"><span class="ears-id">C15</span>: scribe2 <span class="ears-shall">SHALL</span> use the ledger only for tasks and rulings, and <span class="ears-shall">SHALL NOT</span> place discipline in the ledger.</ins></p>
+      <p class="ears" data-ears-pattern="ubiquitous"><ins class="delta" data-delta-id="D-2026-09-09-007"><span class="ears-id">C15.2</span>: scribe2 <span class="ears-shall">SHALL</span> connect the ledger to discipline only through id references: a contract <span class="ears-shall">SHALL</span> reference SRS requirement ids, a pull request or ledger item that changes a rule <span class="ears-shall">SHALL</span> reference a ruling id (C5), and scribe2 <span class="ears-shall">SHALL</span> reject a missing reference by lint.</ins></p>
+      <dl>
+        <dt>機構 (型 / lint / CI)</dt>
+        <dd><ins class="delta" data-delta-id="D-2026-09-09-007">契約が SRS の要件 id を指す (段 1 = acceptance 本文で <code>REQ-…</code> / <code>FR…</code> を引用・段 2 = <code>Contract.req: Vec&lt;ReqId&gt;</code>)。 規則を変える PR・bead が裁定 id を指す (C5)。 参照の欠落は lint で RED。 前の器の soft-rule bead は作らない。</ins></dd>
+        <dt>出所</dt><dd><ins class="delta" data-delta-id="D-2026-09-09-007">SPEC v0.4 論点 2 (user 裁定 2026-09-08)</ins></dd>
+      </dl>
+    </div>
+  </details>
+</section>
+
+<section class="req" id="c16" data-audience="human">
+  <div class="req__card"><span class="badge badge--req">C16</span> <span class="req__ears req__ears--ubiquitous">Ubiquitous</span> <strong><ins class="delta" data-delta-id="D-2026-09-09-008">逸脱は編集の時点で止める</ins></strong></div>
+  <p class="req__essence"><ins class="delta" data-delta-id="D-2026-09-09-008">仕様からの逸脱は、 事後の検証で見つけるのではなく、 編集の時点で止めます。 事後検証はこれの代わりになりません。 憲法に置くのはこの原則だけで、 harness の機構名は書きません。 どの hook で何を止めるかは要件と ADR に残します。</ins></p>
+  <details class="req__machine" data-audience="machine">
+    <summary>normative (machine)</summary>
+    <div class="req__normative">
+      <p class="ears" data-ears-pattern="ubiquitous"><ins class="delta" data-delta-id="D-2026-09-09-008"><span class="ears-id">C16</span>: scribe2 <span class="ears-shall">SHALL</span> stop a deviation from the specification at edit time, and <span class="ears-shall">SHALL NOT</span> substitute post-hoc verification for that stop.</ins></p>
+      <p class="ears" data-ears-pattern="ubiquitous"><ins class="delta" data-delta-id="D-2026-09-09-008"><span class="ears-id">C16.2</span>: scribe2 <span class="ears-shall">SHALL</span> list every in-loop guard in the build-time polarity list (C11.2) as in-loop, and scribe2 CI <span class="ears-shall">SHALL</span> reject a configuration whose in-loop guard count is zero or whose guards are all post-hoc.</ins></p>
+      <dl>
+        <dt>機構 (型 / lint / CI)</dt>
+        <dd><ins class="delta" data-delta-id="D-2026-09-09-008">in-loop guard の各件は C11 の極性一覧 (build 時生成) に <code>InLoop</code> として載り、 guard の総数 0 ／ <code>PostHoc</code> のみの構成を CI が RED にする (事後 gate だけで「止めた」を名乗れない)。 実装の形 (どの hook で何を止めるか) は要件カタログ R-C31 と ADR が持つ。 MVP の形 = 契約 write-set の外への Edit / Write を PreToolUse で deny (SRS FR20)。</ins></dd>
+        <dt>出所</dt><dd><ins class="delta" data-delta-id="D-2026-09-09-008">SPEC v0.4.5 U9 (user 裁定 2026-09-09)</ins></dd>
+      </dl>
+    </div>
+  </details>
+</section>
 </section>
 
 <section id="s2-2-askfirst">
 <h3>§2.2 Ask-first — 変える前に user に確認 (A1〜A4)</h3>
-<p class="section-essence" data-audience="human">勝手に変えず、 必ず user に確認してから行う 4 条です。 確認の経路は C7 の planner 経由の relay 印だけです。</p>
+<p class="section-essence" data-audience="human">勝手に変えず、 必ず user に確認してから行う 4 条です。 確認の経路は C7 が定める 1 つの対話面だけです。</p>
 
 <section class="req" id="a1" data-audience="human">
   <div class="req__card"><span class="badge badge--req">A1</span> <span class="req__ears req__ears--event">Event-Driven</span> <strong>3 クラスの操作</strong></div>
-  <p class="req__essence">「消す / 出す / 使う」の 3 クラスに当たる操作は、 実行前に user の承認 (relay 印) を取ります。</p>
+  <p class="req__essence">「消す / 出す / 使う」の 3 クラスに当たる操作は、 実行前に user の承認<del class="delta" data-delta-id="D-2026-09-09-002" data-delta-superseded-by="D-2026-09-09-002"> (relay 印)</del><ins class="delta" data-delta-id="D-2026-09-09-002">を C7 の対話面を通して</ins>取ります。<ins class="delta" data-delta-id="D-2026-09-09-002"> 機械は承認を待って止まり、 記帳された承認だけを受け入れます。</ins></p>
   <details class="req__machine" data-audience="machine">
     <summary>normative (machine)</summary>
     <div class="req__normative">
-      <p class="ears" data-ears-pattern="event-driven"><span class="ears-id">A1</span>: <span class="ears-when">WHEN an operation of one of the three classes (delete, send out, consume) is about to be performed</span>, scribe2 <span class="ears-shall">SHALL</span> obtain the user's approval as a relay stamp through the planner before performing it.</p>
+      <p class="ears" data-ears-pattern="event-driven"><span class="ears-id">A1</span>: <span class="ears-when">WHEN an operation of one of the three classes (delete, send out, consume) is about to be performed</span>, scribe2 <span class="ears-shall">SHALL</span> obtain the user's approval <del class="delta" data-delta-id="D-2026-09-09-002" data-delta-superseded-by="D-2026-09-09-002">as a relay stamp through the planner</del><ins class="delta" data-delta-id="D-2026-09-09-002">through the dialogue surface designated by <a href="#r-c7-1">R-C7-1</a> (C7)</ins> before performing it.</p>
       <dl>
-        <dt>機構 (型 / lint / CI)</dt><dd>承認は relay 印 (C7) のみ。 3 クラスの定義は vocabulary (消す / 出す / 使う)。</dd>
-        <dt>出所</dt><dd>SPEC §2 (裁定 id なし)</dd>
+        <dt>機構 (型 / lint / CI)</dt><dd><del class="delta" data-delta-id="D-2026-09-09-002" data-delta-superseded-by="D-2026-09-09-002">承認は relay 印 (C7) のみ。</del><ins class="delta" data-delta-id="D-2026-09-09-002">承認は C7 の対話面 (R-C7-1・初期値 = user 直) のみで、 approval event に逐語付きで記帳する (C7.2)。 MVP の形 = pipeline は approval.requested を記帳して Blocked で止まり、 人の逐語回答を approval.received として記帳してから再開する (SRS FR15 / FR16)。</ins> 3 クラスの定義は vocabulary (消す / 出す / 使う)。</dd>
+        <dt>出所</dt><dd>SPEC §2 (裁定 id なし)<ins class="delta" data-delta-id="D-2026-09-09-002">・ADR-0003 (user 裁定 2026-09-09)</ins></dd>
       </dl>
     </div>
   </details>
@@ -426,16 +485,18 @@
 </section>
 
 <section class="req" id="a4" data-audience="human">
-  <div class="req__card"><span class="badge badge--req">A4</span> <span class="req__ears req__ears--event">Event-Driven</span> <strong>自己開発の解禁</strong></div>
-  <p class="req__essence">C8 の成熟条件がすべて成り立ったら、 planner が user に 1 問だけ聞きます。 解禁は user の go を relay 印として受け取ったときだけです。</p>
+  <div class="req__card"><span class="badge badge--req">A4</span> <span class="req__ears req__ears--ubiquitous">Ubiquitous</span> <strong><del class="delta" data-delta-id="D-2026-09-09-004" data-delta-superseded-by="D-2026-09-09-004">自己開発の解禁</del><ins class="delta" data-delta-id="D-2026-09-09-004">自己開発は既定で許可・不可逆操作だけ Ask-first</ins></strong></div>
+  <p class="req__essence"><ins class="delta" data-delta-id="D-2026-09-09-004">自分の repo を自分で開発すること (自己開発) は既定で許可します。 user に先に聞くのは取り消せない操作 — 消す (データ / repo / 履歴 / live 成果物の破壊)・出す (public 化・外部送信)・使う (追加課金) — だけです。 それ以外は AI が決めて進み、 記録を残します。 A1 (3 クラス) と A3 (依存の追加) の個別の Ask-first はそのまま効きます。</ins></p>
   <details class="req__machine" data-audience="machine">
     <summary>normative (machine)</summary>
     <div class="req__normative">
-      <p class="ears" data-ears-pattern="event-driven"><span class="ears-id">A4</span>: <span class="ears-when">WHEN all maturity conditions of <a href="#r-c8-1">R-C8-1</a> hold at once</span>, the planner <span class="ears-shall">SHALL</span> ask the user exactly one question.</p>
-      <p class="ears" data-ears-pattern="ubiquitous"><span class="ears-id">A4.2</span>: scribe2 <span class="ears-shall">SHALL</span> enable self-development only on the user's go carried as a relay stamp.</p>
+      <p class="delta-history"><del class="delta" data-delta-id="D-2026-09-09-004" data-delta-superseded-by="D-2026-09-09-004">改訂前の要旨: C8 の成熟条件がすべて成り立ったら、 planner が user に 1 問だけ聞きます。 解禁は user の go を relay 印として受け取ったときだけです。</del></p>
+      <p class="ears" data-ears-pattern="ubiquitous"><del class="delta" data-delta-id="D-2026-09-09-004" data-delta-superseded-by="D-2026-09-09-004"><span class="ears-id">A4</span>: <span class="ears-when">WHEN all maturity conditions of <a href="#r-c8-1">R-C8-1</a> hold at once</span>, the planner <span class="ears-shall">SHALL</span> ask the user exactly one question.</del><ins class="delta" data-delta-id="D-2026-09-09-004"><span class="ears-id">A4</span>: scribe2 <span class="ears-shall">SHALL</span> permit self-development by default, without a maturity declaration and without a user go.</ins></p>
+      <p class="ears" data-ears-pattern="event-driven"><del class="delta" data-delta-id="D-2026-09-09-004" data-delta-superseded-by="D-2026-09-09-004"><span class="ears-id">A4.2</span>: scribe2 <span class="ears-shall">SHALL</span> enable self-development only on the user's go carried as a relay stamp.</del><ins class="delta" data-delta-id="D-2026-09-09-004"><span class="ears-id">A4.2</span>: <span class="ears-when">WHEN an operation is irreversible (destroy, publish or incur paid usage)</span>, scribe2 <span class="ears-shall">SHALL</span> ask the user first through the dialogue surface of C7, and <span class="ears-shall">SHALL</span> accept the answer only as a recorded approval event.</ins></p>
+      <p class="ears" data-ears-pattern="ubiquitous"><ins class="delta" data-delta-id="D-2026-09-09-004"><span class="ears-id">A4.3</span>: scribe2 <span class="ears-shall">SHALL</span> treat merge, dispatch onto its own repository, and dependency-free code changes as reversible for the purpose of A4.2.</ins></p>
       <dl>
-        <dt>機構 (型 / lint / CI)</dt><dd><code>enum SelfDev</code> を <code>Enabled { ruling_id }</code> に遷移させるのは relay 印付きの go だけ (C8 / C7)。</dd>
-        <dt>出所</dt><dd>論点 9</dd>
+        <dt>機構 (型 / lint / CI)</dt><dd><del class="delta" data-delta-id="D-2026-09-09-004" data-delta-superseded-by="D-2026-09-09-004"><code>enum SelfDev</code> を <code>Enabled { ruling_id }</code> に遷移させるのは relay 印付きの go だけ (C8 / C7)。</del><ins class="delta" data-delta-id="D-2026-09-09-004">3 クラス (消す / 出す / 使う) の判定は rules 行 + enforcer (MVP は契約の自己申告 + rules 行の deny list・enforcer は次の版)。 <code>enum SelfDev</code> と「解禁の 1 問」は廃止。 A4 は自己開発の既定を定め、 A1 / A3 の個別 Ask-first を上書きしない。</ins></dd>
+        <dt>出所</dt><dd><del class="delta" data-delta-id="D-2026-09-09-004" data-delta-superseded-by="D-2026-09-09-004">論点 9</del><ins class="delta" data-delta-id="D-2026-09-09-004">ADR-0003 (user 裁定 2026-09-09・案 3 書換え)</ins></dd>
       </dl>
     </div>
   </details>
@@ -493,16 +554,17 @@
 </section>
 
 <section class="req" id="n4" data-audience="human">
-  <div class="req__card"><span class="badge badge--req">N4</span> <span class="req__ears req__ears--unwanted">Unwanted</span> <strong>同じ版の中で憲法改訂・schema 非互換・C4 超えをしない</strong></div>
-  <p class="req__essence">今の版の中で憲法を書き換えたり、 schema を壊したり、 C4 の上限を超えたりする変更は拒みます。 そうした変更は版 N+1 として別 repo で行います。</p>
+  <div class="req__card"><span class="badge badge--req">N4</span> <span class="req__ears req__ears--unwanted">Unwanted</span> <strong><del class="delta" data-delta-id="D-2026-09-09-005" data-delta-superseded-by="D-2026-09-09-005">同じ版の中で憲法改訂・schema 非互換・C4 超えをしない</del><ins class="delta" data-delta-id="D-2026-09-09-005">ADR と delta marker を伴わない憲法改訂をしない・同じ版の中で schema 非互換・C4 超えをしない</ins></strong></div>
+  <p class="req__essence"><ins class="delta" data-delta-id="D-2026-09-09-005">憲法を書き換えるときは、 新しい ADR と本文の delta marker と user の裁定 id を必ず伴います。 それを欠く書換えは拒みます。 schema を壊したり C4 の上限を超えたりする変更は今の版では拒み、 次の版として行います。</ins></p>
   <details class="req__machine" data-audience="machine">
     <summary>normative (machine)</summary>
     <div class="req__normative">
-      <p class="ears" data-ears-pattern="unwanted"><span class="ears-id">N4</span>: <span class="ears-if">IF a change inside the current version would amend the constitution, break schema compatibility or exceed a C4 bound</span>, THEN scribe2 <span class="ears-shall">SHALL</span> reject the change in the current version.</p>
-      <p class="ears" data-ears-pattern="ubiquitous"><span class="ears-id">N4.2</span>: scribe2 <span class="ears-shall">SHALL</span> carry out constitution amendments, schema-incompatible changes and changes that would exceed a C4 bound only as version N+1 in a separate repository (C8).</p>
+      <p class="delta-history"><del class="delta" data-delta-id="D-2026-09-09-005" data-delta-superseded-by="D-2026-09-09-005">改訂前の要旨: 今の版の中で憲法を書き換えたり、 schema を壊したり、 C4 の上限を超えたりする変更は拒みます。 そうした変更は版 N+1 として別 repo で行います。</del></p>
+      <p class="ears" data-ears-pattern="unwanted"><span class="ears-id">N4</span>: <span class="ears-if">IF a change inside the current version would <del class="delta" data-delta-id="D-2026-09-09-005" data-delta-superseded-by="D-2026-09-09-005">amend the constitution, </del><ins class="delta" data-delta-id="D-2026-09-09-005">amend the constitution without a new ADR, inline delta markers and a user ruling id, or would </ins>break schema compatibility or exceed a C4 bound</span>, THEN scribe2 <span class="ears-shall">SHALL</span> reject the change in the current version.</p>
+      <p class="ears" data-ears-pattern="ubiquitous"><span class="ears-id">N4.2</span>: scribe2 <span class="ears-shall">SHALL</span> <del class="delta" data-delta-id="D-2026-09-09-005" data-delta-superseded-by="D-2026-09-09-005">carry out constitution amendments, schema-incompatible changes and changes that would exceed a C4 bound only as version N+1 in a separate repository (C8).</del><ins class="delta" data-delta-id="D-2026-09-09-005">carry out a constitution amendment only with a new ADR, inline delta markers in this file and a user ruling id (A2), and <span class="ears-shall">SHALL</span> carry out schema-incompatible changes and changes that would exceed a C4 bound only as a new version.</ins></p>
       <dl>
-        <dt>機構 (型 / lint / CI)</dt><dd>C4 超えは CI deny (§3 <a href="#r-c4-1">R-C4-1</a>〜<a href="#r-c4-4">R-C4-4</a>)。 schema 非互換は manifest の <code>schema_version</code> (C1) で検出。 憲法改訂は版 N+1 の別 repo でのみ (C8 の bootstrap 段 1)。</dd>
-        <dt>出所</dt><dd>論点 9・SPEC §12.0</dd>
+        <dt>機構 (型 / lint / CI)</dt><dd>C4 超えは CI deny (§3 <a href="#r-c4-1">R-C4-1</a>〜<a href="#r-c4-4">R-C4-4</a>)。 schema 非互換は manifest の <code>schema_version</code> (C1) で検出。 <del class="delta" data-delta-id="D-2026-09-09-005" data-delta-superseded-by="D-2026-09-09-005">憲法改訂は版 N+1 の別 repo でのみ (C8 の bootstrap 段 1)。</del><ins class="delta" data-delta-id="D-2026-09-09-005">憲法改訂 = 新 ADR + delta marker (<code>ins.delta</code> / <code>del.delta</code>・<code>data-delta-id</code>) + 裁定 id (A2)。 folio validate の delta-marker gate が marker の形を検査する。</ins></dd>
+        <dt>出所</dt><dd>論点 9<del class="delta" data-delta-id="D-2026-09-09-005" data-delta-superseded-by="D-2026-09-09-005">・SPEC §12.0</del><ins class="delta" data-delta-id="D-2026-09-09-005">・ADR-0003 (user 裁定 2026-09-09)</ins></dd>
       </dl>
     </div>
   </details>
@@ -522,7 +584,8 @@
     <tr id="r-c4-3"><td>R-C4-3</td><td>C4</td><td>test:src 行数比</td><td>1.0 以下</td><td>deny (CI 実測)</td><td>論点 2</td></tr>
     <tr id="r-c4-4"><td>R-C4-4</td><td>C4</td><td>関数粒度 lint</td><td>関数 60 行 以下・複雑度 15 以下・引数 5 以下</td><td>deny (lint・<code>#[allow]</code> 黙殺禁止)</td><td>論点 2</td></tr>
     <tr id="r-c6-1"><td>R-C6-1</td><td>C6</td><td>1 run の token 上限と検出線</td><td>未定 (manifest の rules 行が正本)</td><td>deny + 検出線 (値未定のため deny は未発効)</td><td>論点 11</td></tr>
-    <tr id="r-c8-1"><td>R-C8-1</td><td>C8</td><td>成熟条件 (AND)</td><td>Verdict 一致率 95% 以上 × 連続 20 便 ／ K 指標 (K1〜K3) 閾値内 × 3 日 ／ 手動介入 0 × 3 日 ／ doctor 全 host 緑</td><td>宣言条件 (裁定 id 付きで宣言)</td><td>論点 9</td></tr>
+    <tr id="r-c7-1"><td><ins class="delta" data-delta-id="D-2026-09-09-010">R-C7-1</ins></td><td><ins class="delta" data-delta-id="D-2026-09-09-010">C7</ins></td><td><ins class="delta" data-delta-id="D-2026-09-09-010">対話面 (承認の受理面)</ins></td><td><ins class="delta" data-delta-id="D-2026-09-09-010">user 直 (開発 session が user と直接対話)</ins></td><td><ins class="delta" data-delta-id="D-2026-09-09-010">rules 行 (受理面の識別・裁定 id 付きで切替)</ins></td><td><ins class="delta" data-delta-id="D-2026-09-09-010">ADR-0003</ins></td></tr>
+    <tr id="r-c8-1"><td>R-C8-1</td><td>C8</td><td>成熟条件 (AND)</td><td>Verdict 一致率 95% 以上 × 連続 20 便 ／ K 指標 (K1〜K3) 閾値内 × 3 日 ／ 手動介入 0 × 3 日 ／ doctor 全 host 緑</td><td><del class="delta" data-delta-id="D-2026-09-09-009" data-delta-superseded-by="D-2026-09-09-009">宣言条件 (裁定 id 付きで宣言)</del><ins class="delta" data-delta-id="D-2026-09-09-009">停止 (ADR-0003・測らない・履歴として残す)</ins></td><td>論点 9<ins class="delta" data-delta-id="D-2026-09-09-009">・ADR-0003</ins></td></tr>
     <tr id="r-c9-1"><td>R-C9-1</td><td>C9</td><td>口座の選定規則</td><td>新規投入は 5h 線 ／ 移住 lane は線を外して継続優先 ／ 消費計画 = 7d 残量 × 残日数で lane 数 ／ 管理席 watchdog の検知条件と再起動先</td><td>rules 行 (選定規則)</td><td>論点 8・U5</td></tr>
     <tr id="r-c12-1"><td>R-C12-1</td><td>C12</td><td>変異生存率</td><td>週次記録 (deny 化の裁定材料は実測 2 周分)</td><td>検出線 (deny 化は user 裁定 = C5 の裁定 id 付き diff・C12.4)</td><td>論点 7</td></tr>
     <tr id="r-c13-1"><td>R-C13-1</td><td>C13</td><td>依存の予算</td><td>直接依存 12 本 以下 (目安)・追加は 1 PR 1 本・増分 check 実測差 +0.3 秒超は理由必須</td><td>予算 (A3 併用)</td><td>論点 3・4</td></tr>
@@ -534,17 +597,17 @@
 
 <section id="s4-amendment" class="informative">
 <h2>§4. 改訂の手続き — どう変えると何が起きるか</h2>
-<p class="section-essence" data-audience="human">変えたいときはまず利益を grill で検証し、 user が裁定します (A2)。 閾値なら manifest の diff に裁定 id を付けて merge し (C5)、 条文なら同じ版では変えず版 N+1 で改訂します (N4)。 C4 / C13 以外の rules 行は A2 を通さず、 裁定 id 付きの diff (C5) だけで変えます。 したがって、 この file 自体を同じ版の中で書き換えるのは §3 の写しの更新と誤記の修正だけです。</p>
+<p class="section-essence" data-audience="human">変えたいときはまず利益を grill で検証し、 user が裁定します (A2)。 閾値なら manifest の diff に裁定 id を付けて merge し (C5)、 条文なら新しい ADR と本文の delta marker と裁定 id を伴って同じ file の中で改訂します (N4)。 C4 / C13 以外の rules 行は A2 を通さず、 裁定 id 付きの diff (C5) だけで変えます。 したがって、 この file を書き換えるのは §3 の写しの更新・誤記の修正・ADR を伴う条文改訂の 3 つだけです。</p>
 <figure class="diagram">
 <pre class="mermaid">flowchart TB
   accTitle: scribe2 憲法の改訂手続き
-  accDescr: 改訂提案はまず何を変えるかで分かれる。 憲法条文と C4 / C13 の閾値は利益の grill 検証を前置して user 裁定を受け (A2)、 却下なら変更しない。 承認 (裁定 id) のあと、 閾値なら manifest diff + 裁定 id で merge (C5)、 条文なら版 N+1 として別 repo で改訂する (N4)。 その他の rules 行は A2 を通さず、 user 裁定の裁定 id 付き diff だけで merge する (C5)。
+  accDescr: 改訂提案はまず何を変えるかで分かれる。 憲法条文と C4 / C13 の閾値は利益の grill 検証を前置して user 裁定を受け (A2)、 却下なら変更しない。 承認 (裁定 id) のあと、 閾値なら manifest diff + 裁定 id で merge (C5)、 条文なら新 ADR と delta marker と裁定 id を伴って同じ file で改訂する (N4)。 その他の rules 行は A2 を通さず、 user 裁定の裁定 id 付き diff だけで merge する (C5)。
   P["改訂提案"] --&gt; K{"何を変えるか"}
   K -- "憲法条文 / C4・C13 の閾値" --&gt; G["利益の grill 検証を前置 (A2)"]
   G --&gt; U{"user 裁定"}
   U -- "却下" --&gt; X["変更しない"]
   U -- "承認 = 裁定 id (閾値)" --&gt; M["manifest diff + 裁定 id で merge (C5)"]
-  U -- "承認 = 裁定 id (条文)" --&gt; N["版 N+1 として別 repo で改訂 (N4)"]
+  U -- "承認 = 裁定 id (条文)" --&gt; N["新 ADR + delta marker + 裁定 id で改訂 (N4)"]
   K -- "その他の rules 行 (C6 / C8 / C9 / C12)" --&gt; R["user 裁定 (裁定 id) → manifest diff で merge (C5・A2 不要)"]
   style P fill:#e8f0f7,stroke:#2a4d6e,color:#08131a
   style G fill:#fefbea,stroke:#916626,color:#08131a
@@ -556,19 +619,20 @@
   style R fill:#e6f6f2,stroke:#1e7b65,color:#08131a</pre>
 <figcaption>図 2. 改訂の流れ。 何を変えるかで A2 の要否と着地先が違う。</figcaption>
 </figure>
-<p data-audience="machine">本章は新しい規則を持たない。 手続きの正本は A2 (grill 検証 → user 裁定)・C5 (rules 行の diff + 裁定 id)・N4 (条文は版 N+1) である。 本 constitution の version は SPEC の版に追随する。 A2 / C5 / N4 の帰結として、 同一版内の本 file の変更は §3 の写しの更新と誤記の修正に帰着する。 改訂の trace は folio の delta marker (<code>ins.delta</code> / <code>del.delta</code>) で本文に残す。</p>
+<p data-audience="machine">本章は新しい規則を持たない。 手続きの正本は A2 (grill 検証 → user 裁定)・C5 (rules 行の diff + 裁定 id)・N4 (条文は新 ADR + delta marker + 裁定 id) である。 本 constitution の version は SPEC の版に追随する。 A2 / C5 / N4 の帰結として、 本 file の変更は §3 の写しの更新・誤記の修正・ADR を伴う条文改訂に帰着する。 改訂の trace は folio の delta marker (<code>ins.delta</code> / <code>del.delta</code>・<code>data-delta-id</code>) で本文に残す。</p>
 </section>
 
 <section id="s5-trace" class="informative">
 <h2>§5. Trace — 出所と対応</h2>
-<p class="section-essence" data-audience="human">本文書は条文の正本で、 SPEC v0.3 の §2 と 1 対 1 に対応します。 各条は裁定の論点番号か「裁定 id なし (grill 前から在る条)」に紐づき (一部は両方を併記)、 対応表は §2 の一覧表の「出所」列です。</p>
+<p class="section-essence" data-audience="human">本文書は条文の正本で、 SPEC v0.3 の §2 を起草元に、 SPEC v0.4 / v0.4.5 で加わった 3 条 (C14〜C16) と ADR-0003 による 5 条の書換えを反映した版です。 各条は裁定の論点番号か「裁定 id なし (grill 前から在る条)」に紐づき (一部は両方を併記)、 対応表は §2 の一覧表の「出所」列です。</p>
 <ul data-audience="machine">
   <li>正本: 本 file が条文の canonical WHAT かつ edit-SSoT である (folio ADR-0051 §3: flip しない doc は HTML が唯一の層)。 SPEC §2 は起草元であり、 齟齬時は本 file を正とする。</li>
-  <li>起草元: <code>SPEC-scribe-v2-vessel-v0.1-20260907.md</code> §2 (folio spike 用抜粋 = <code>input/SPEC-excerpt.md</code>)。 条文は v0.3 (grill 11 論点の裁定を条文化・user 承認 2026-09-07・P1 exit 成立)。 SPEC §6 の件数表記 (Always 7 / Ask-first 3 / Never 3) は v0.1 時点の値であり、 本文書は v0.3 §2 の実体 (13 / 4 / 4) を採る。</li>
+  <li>起草元: <code>SPEC-scribe-v2-vessel-v0.1-20260907.md</code> §2 (folio spike 用抜粋 = <code>input/SPEC-excerpt.md</code>)。 条文は v0.3 (grill 11 論点の裁定を条文化・user 承認 2026-09-07・P1 exit 成立)。 SPEC §6 の件数表記 (Always 7 / Ask-first 3 / Never 3) は v0.1 時点の値であり、 v0.3 §2 の実体は 13 / 4 / 4、 本文書の現行は C14〜C16 追加後の 16 / 4 / 4 である。</li>
   <li>裁定: <code>RULING-v2-p1-exit-bundle-20260907.md</code> (user 逐語)。 各条の「出所」= 論点番号。 「裁定 id なし」は grill 前から在り固有の論点番号を持たない条 (C7 / A1 / N1)。 A3 / N2 / N3 は裁定 id なしに加え、 関連する裁定の論点番号 (導出) を併記する。</li>
-  <li>技術選定 (WHY): <a href="../decisions/ADR-0001-rust-single-static-binary.html">ADR-0001</a> (Rust 単一 static binary・Go / typed Python / TypeScript 却下)。 本 constitution は WHAT を、 ADR は WHY を持つ。 実装言語と配布形態の規範は ADR-0001 §2.1 が持ち、 条文化は版 N+1 で行う (N4)。</li>
+  <li>技術選定 (WHY): <a href="../decisions/ADR-0001-rust-single-static-binary.html">ADR-0001</a> (Rust 単一 static binary・Go / typed Python / TypeScript 却下)。 本 constitution は WHAT を、 ADR は WHY を持つ。 実装言語と配布形態の規範は ADR-0001 §2.1 が持ち、 条文化は N4 の手続き (新 ADR + delta marker + 裁定 id) で行う。</li>
+  <li>改訂 (2026-09-09): <a href="../decisions/ADR-0003-constitution-v1-abandon-rewrite.html">ADR-0003</a> (user 裁定・v1 完全放棄) が C7 / A1 / C8 / A4 / N4 を書き換えた。 旧文は delta marker (<code>data-delta-id</code> D-2026-09-09-001〜005・009〜010) で本文に残す。 C14 / C15 / C16 (D-2026-09-09-006〜008) は SPEC v0.4 / v0.4.5 で user 裁定済み (2026-09-08 / 2026-09-09) の条文を逐語で写したものであり、 ADR-0003 の決定ではない。 本 file の version 0.4.6 は SPEC v0.4.6 に追随する。 §2 の一覧表の C14〜C16 行は「出所」に SPEC の論点番号を持つ。</li>
   <li>用語: canonical 名は <code>design-intent/vocabulary.yaml</code> (P-5)。 本文の <span class="term" data-term="席">席</span> / <span class="term" data-term="口座">口座</span> / <span class="term" data-term="歯">歯</span> / <span class="term" data-term="検出線">検出線</span> / <span class="term" data-term="器">器</span> 等はそこで定義する。</li>
-  <li>段の対応: SPEC の「Always / Ask-first / Never」は folio constitution の 3 tier (いつも守る / 変える前に確認 / 絶対にやらない) と 1 対 1 に対応する。 条 id (C1〜C13 / A1〜A4 / N1〜N4) は SPEC と裁定文書の表記を逐語で維持する。</li>
+  <li>段の対応: SPEC の「Always / Ask-first / Never」は folio constitution の 3 tier (いつも守る / 変える前に確認 / 絶対にやらない) と 1 対 1 に対応する。 条 id (C1〜C16 / A1〜A4 / N1〜N4) は SPEC と裁定文書の表記を逐語で維持する。</li>
 </ul>
 </section>
 
@@ -594,6 +658,9 @@ window.addEventListener('DOMContentLoaded', async () => {
 });
 </script>
 <!-- folio:chrome-bottom -->
+<nav class="prevnext" aria-label="前後の文書">
+  <a class="prevnext__next" href="srs.html"><span class="prevnext__dir">次 &rarr;</span><span class="prevnext__title">設計 → 契約 → 実装 → 検証 → land を、 人の手を借りずに 1 本通す器（MVP）</span></a>
+</nav>
 <script>
 (function () {
   var openedForPrint = [];
