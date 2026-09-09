@@ -336,3 +336,11 @@ terms:
     domain: consumer
     definition: 効力を持つ値の型。 Declared から実測を経てのみ作られる (C10)。
     relationships: [Declared]
+  - canonical: state dir
+    domain: consumer
+    definition: 器が状態 (event log・verdict export・注入計測) を置く dir。 既定は NAME 定数から導出し、 差し替えは CLI 引数だけで行う (env seam を持たない・ADR-0004 §2.4)。
+    relationships: [NAME 定数, event log, verdict export]
+  - canonical: run id
+    domain: consumer
+    definition: 便 1 本を一意に指す識別子 (bead id と UTC の時刻印から成る)。 event log と state dir 配下の dir 名に用いる。
+    relationships: [便, event log, state dir]
