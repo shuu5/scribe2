@@ -2,6 +2,6 @@
 source: crates/scribe2/tests/e2e/rules.rs
 expression: form
 ---
-usage: scribe2 <name|--version|doctor|rules>
+usage: scribe2 <name|--version|doctor|rules|fleet>
 rules: ok rows=22 kinds=22
 rules: no such id

@@ -4,5 +4,6 @@
 //! `name-literal` が「NAME の字面を持つ `.rs` は `name.rs` ただ 1 本」を測るため、
 //! bin から `use <NAME>::…` と書けないからである（設計 docs/design/rules-manifest.md §2）。
 
+pub mod fleet;
 pub mod name;
 pub mod rules;

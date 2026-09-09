@@ -1,0 +1,8 @@
+---
+source: crates/scribe2/tests/e2e/fleet.rs
+expression: form
+---
+usage: fleet <record|show|export> --state-dir D [flags]
+fleet: no such run
+{"schema":1,"kind":"export","host":"[host]","runs":0,"seats":0}
+fleet: recorded RunCreated run=r1
