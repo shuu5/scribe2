@@ -76,7 +76,7 @@
 3. `git worktree add -b <NAME>/<run> <repo>/.worktrees/<NAME>/<run> <base>`（既存なら rc 1）。
 4. write-set を `<worktree の git dir>/<NAME>/write-set.txt` に 1 行 1 path で書く（guard が読む形・[vessel-hook.md §5](./vessel-hook.md)・tracked 面に触れない）。
 5. `RunStage stage=Spawned` → runner を `sh -c <cmd>` で **cwd = worktree** で起動し `SeatSpawned seat=<run> pid=<pid>`。cmd 中の placeholder `{run}` `{worktree}` `{contract}` `{write_set}` `{base}` を置換する。**scribe2 固有の env は 1 つも足さない**（親の env はそのまま継承・ADR-0004 §2.4）。
-6. 終了待ちは `wait(Completion::RunnerExited(pid))`（[fleet-event-log.md §4](./fleet-event-log.md)）。`SeatStopped`。**rc 0 ∧ `git rev-list --count <base>..HEAD` ≥ 1** → `Implemented`、それ以外 → `Failed detail=runner-rc:<rc>,commits:<n>`（commit 0 は完了ではない）。stdout `run=<id> stage=<s>`。
+6. **runner の終了待ちは `Child::wait`**（rc を運ぶ）。pid の生存待ち（`stop`）は `wait(Completion::SeatGone)`（[fleet-event-log.md §4](./fleet-event-log.md)）で、`Completion::RunnerExited` は**別 process が spawn した runner を待つ resume 経路のために残す**。`SeatStopped`。**rc 0 ∧ `git rev-list --count <base>..HEAD` ≥ 1** → `Implemented`、それ以外 → `Failed detail=runner-rc:<rc>,commits:<n>`（commit 0 は完了ではない）。stdout `run=<id> stage=<s>`。
 
 ### 5.3 gate（(b)・FR8 / FR9 / NFR1）
 `pipe gate --run <id> [--lens <cmd>]`: 前提 = Implemented ∧ worktree clean（`git status --porcelain` 空）∧ commits ≥ 1（違反 = rc 1・lens を起動しない・`RunStage stage=Failed detail=precheck:<理由>`）。

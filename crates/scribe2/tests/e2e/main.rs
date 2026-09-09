@@ -3,6 +3,7 @@
 
 mod fleet;
 mod hook;
+mod pipe;
 mod rules;
 
 use std::path::PathBuf;
