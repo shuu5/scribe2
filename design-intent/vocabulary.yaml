@@ -352,6 +352,11 @@ terms:
     domain: consumer
     definition: index を母集団に、 tracked file の本文へ private path 形が残っていないことを測る measure tag。
     relationships: [measure tag]
+  - canonical: integration test target
+    domain: consumer
+    definition: cargo が kind = test として build する 1 つの単位。 dir 形の統合 test は main.rs と
+      その module を合わせて 1 と数え、 数は cargo metadata が返す targets で得る (R-C13-2 の数え方の単位・ADR-0007)。
+    relationships: [歯]
   # ---------------------------------------------------------------- 開発 session の自律機能 (SRS v0.2 FR25〜FR27)
   - canonical: cap guard
     domain: consumer

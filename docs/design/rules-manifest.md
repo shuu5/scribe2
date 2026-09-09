@@ -17,7 +17,7 @@
 - lib target の名前は `[lib] name` で **NAME の字面を含まない別名**（例: `vessel`）にする。理由: `cargo xtask check` の `name-literal` は `crates/*/src` の `.rs` に NAME の字面が `name.rs` 以外に無いことを測るので、`main.rs` が `use <NAME>::…` と書くと落ちる。`manifest-name` は `[package] name` だけを見るので `[lib] name` は自由（実測: xtask `check.rs` の `core_package_field("name")`）。
 - `name.rs` は lib へ移す（NAME の字面を持つ `.rs` は引き続き 1 本）。
 - 出力層: stdout は `emit`、stderr は `emit_err`（`#[expect(clippy::print_stderr, reason = …)]`・xtask と同形）。**`emit_err` は本 leg で core crate に新設する**（現状は xtask にしか無い）。
-- 統合 test は `crates/<NAME>/tests/e2e/main.rs` の **1 target**（`mod rules; mod fleet; …` の module 形）。憲法 R-C13-2「統合 test file 3 以下」は cargo の integration test **target** の数で数える（`tests/<dir>/main.rs` は 1 target・実測: `cargo metadata` の targets は bin 1 + test 1）。tmp dir は std だけの helper を `tests/e2e/main.rs` に 1 本置く（`tempfile` は A3 ゆえ足さない・xtask `check.rs` の `make_tmp_dir` と同形）。
+- 統合 test は `crates/<NAME>/tests/e2e/main.rs` の **1 target**（`mod rules; mod fleet; …` の module 形）。憲法 R-C13-2「統合 test file 3 以下」は cargo の integration test **target** の数で数える（`tests/<dir>/main.rs` は 1 target・実測: `cargo metadata` の targets は bin 1 + test 1・解釈の記録は ADR-0007）。tmp dir は std だけの helper を `tests/e2e/main.rs` に 1 本置く（`tempfile` は A3 ゆえ足さない・xtask `check.rs` の `make_tmp_dir` と同形）。
 - 外形（CLI の usage / 1 行出力の形）は insta snapshot 1 本で固定する（C12.5・既存の `doctor_external_form` と同形）。
 
 ## 3. 型（`rules` module）
