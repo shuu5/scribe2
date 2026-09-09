@@ -12,7 +12,7 @@
 pub mod lens;
 pub mod runner;
 
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
 
@@ -23,6 +23,11 @@ pub const DEFAULT_CLAUDE: &str = "claude";
 pub const RC_RATE_LIMIT: u8 = 75;
 
 /// 口座の切替に使う**子 process の**環境変数。ここへ書くだけで、自分では読まない。
+///
+/// `--account-dir` を渡さない周は、親のこの env が**そのまま子へ継承される**（planner 裁定
+/// 2026-09-10 Q5）。消す形も採れるが、この env で口座を切っている環境では runner を黙って
+/// 既定口座へ落とす実害があり、消すこと自体も env への介入である。憲法 C2.2 が禁じるのは
+/// 「読むこと」と「新しい seam を導入すること」で、継承はそのどちらでもない。
 pub const ACCOUNT_ENV: &str = "CLAUDE_CONFIG_DIR";
 
 /// 判定に届かなかった周の 1 行（lens の既定）。
@@ -81,11 +86,45 @@ pub struct Call<'a> {
     pub streaming: bool,
 }
 
-/// [`Call`] から `Command` を組む。**stdout だけ piped**（stderr は素通し）。
+/// template の placeholder を **1 走査**で埋める。
+///
+/// `replace` を重ねると、**先に埋めた値の中に次の marker が在れば展開される**——契約は
+/// 外から来る text なので、契約に `{write_set}` と書くだけで prompt の構造へ触れられて
+/// しまう（実測 2026-09-10）。埋めた値を二度と走査しないことでその経路を塞ぐ。
+pub fn fill(template: &str, pairs: &[(&str, &str)]) -> String {
+    let mut out = String::with_capacity(template.len());
+    let mut rest = template;
+    loop {
+        let mut best: Option<(usize, &str, &str)> = None;
+        for (key, value) in pairs {
+            if let Some(at) = rest.find(key) {
+                if best.is_none_or(|(found, _, _)| at < found) {
+                    best = Some((at, key, value));
+                }
+            }
+        }
+        match best {
+            None => {
+                out.push_str(rest);
+                return out;
+            }
+            Some((at, key, value)) => {
+                out.push_str(rest.get(..at).unwrap_or_default());
+                out.push_str(value);
+                rest = rest.get(at.saturating_add(key.len())..).unwrap_or_default();
+            }
+        }
+    }
+}
+
+/// [`Call`] から `Command` を組む。**prompt は argv でなく stdin で渡す**。
+///
+/// argv で渡すと Linux の 1 引数上限（`MAX_ARG_STRLEN` = 128KiB）に当たり、**user が
+/// 裁定した cap 150000 が実質 130KB へ黙って切り下がる**（実測 2026-09-10: 131000 byte で
+/// `Argument list too long`）。`claude -p` は prompt 引数が無ければ stdin から読む。
 pub fn build(call: &Call<'_>) -> Command {
     let mut cmd = Command::new(call.claude);
     cmd.arg("-p")
-        .arg(call.prompt)
         // permission mode は**毎回**渡す。省くと版の既定に従い、同じ 1 行が
         // 環境ごとに違う権限で走る。
         .arg("--permission-mode")
@@ -105,6 +144,17 @@ pub fn build(call: &Call<'_>) -> Command {
     if let Some(dir) = call.account_dir {
         cmd.env(ACCOUNT_ENV, dir);
     }
-    cmd.stdin(Stdio::null()).stdout(Stdio::piped());
+    cmd.stdin(Stdio::piped()).stdout(Stdio::piped());
     cmd
 }
+
+/// 子の stdin へ prompt を書いて閉じる。
+///
+/// 読まずに終える子への write は EPIPE になるが、**判定は出力で決める**のでここの失敗は
+/// 理由にしない（`take` で drop され、子は EOF を見る）。
+pub fn feed(child: &mut std::process::Child, prompt: &str) {
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(prompt.as_bytes());
+    }
+}
+

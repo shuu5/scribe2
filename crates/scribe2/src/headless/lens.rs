@@ -4,7 +4,7 @@
 //! 上限を置いた意味（NFR1）が無い。判定に届かなかった周はすべて INCONCLUSIVE へ倒す——
 //! 偽の PASS を作らないためである（AC3）。
 
-use super::{build, flag, need, read_stdin_bytes, Call, DEFAULT_CLAUDE};
+use super::{build, feed, fill, flag, need, read_stdin_bytes, Call, DEFAULT_CLAUDE};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
 
 /// prompt の文面（tracked な template・絶対 path も口座名も含まない）。
@@ -48,7 +48,7 @@ pub fn dispatch(args: &[String]) -> Outcome {
         // **claude を呼ばずに**返す。呼ばないことが cap の意味である。
         return Outcome::ok_line(inconclusive("diff exceeds cap"));
     }
-    let prompt = TEMPLATE.replace("{diff}", &String::from_utf8_lossy(&diff));
+    let prompt = fill(TEMPLATE, &[("{diff}", &String::from_utf8_lossy(&diff))]);
     ask(&Call {
         claude: claude.as_deref().unwrap_or(DEFAULT_CLAUDE),
         prompt: &prompt,
@@ -64,10 +64,15 @@ pub fn dispatch(args: &[String]) -> Outcome {
 
 /// claude を呼び、出力の**最後の JSON 行**を stdout 1 行に写す。
 fn ask(call: &Call<'_>) -> Outcome {
-    let spawned = build(call).output();
-    let out = match spawned {
+    let spawned = build(call).spawn();
+    let mut child = match spawned {
         Ok(found) => found,
         Err(err) => return Outcome::failed_line(RC_BROKEN, format!("lens: claude を起動できない: {err}")),
+    };
+    feed(&mut child, call.prompt);
+    let out = match child.wait_with_output() {
+        Ok(found) => found,
+        Err(err) => return Outcome::failed_line(RC_BROKEN, format!("lens: claude の出力を読めない: {err}")),
     };
     let text = String::from_utf8_lossy(&out.stdout);
     let found = text

@@ -4,7 +4,7 @@
 //! claude の rc をそのまま写す——包みが独自の判定を足すと、呼出側は「誰が止めたか」を
 //! 見失う。
 
-use super::{build, flag, need, read_stdin_bytes, Call, DEFAULT_CLAUDE, RC_RATE_LIMIT};
+use super::{build, feed, fill, flag, need, read_stdin_bytes, Call, DEFAULT_CLAUDE, RC_RATE_LIMIT};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
 use std::io::{BufRead, BufReader};
 use std::path::Path;
@@ -44,9 +44,12 @@ pub fn dispatch(args: &[String]) -> Outcome {
         Ok(found) => found,
         Err(err) => return Outcome::failed_line(RC_BROKEN, format!("runner: write-set を読めない: {err}")),
     };
-    let prompt = TEMPLATE
-        .replace("{contract}", contract.trim_end())
-        .replace("{write_set}", listed.trim_end());
+    // **1 走査で埋める**。重ねて replace すると契約本文の中の `{write_set}` まで展開され、
+    // 外から来る text が prompt の構造へ触れられる。
+    let prompt = fill(
+        TEMPLATE,
+        &[("{contract}", contract.trim_end()), ("{write_set}", listed.trim_end())],
+    );
     launch(&Call {
         claude: claude.as_deref().unwrap_or(DEFAULT_CLAUDE),
         prompt: &prompt,
@@ -66,6 +69,7 @@ fn launch(call: &Call<'_>) -> Outcome {
         Ok(found) => found,
         Err(err) => return Outcome::failed_line(RC_BROKEN, format!("runner: claude を起動できない: {err}")),
     };
+    feed(&mut child, call.prompt);
     let mut records = 0_usize;
     let mut limited = false;
     if let Some(out) = child.stdout.take() {
@@ -95,14 +99,40 @@ fn launch(call: &Call<'_>) -> Outcome {
     }
 }
 
-/// stream-json の 1 行が **rate limit の error record** か。
+/// 上限に当たったことを表す語彙（planner 裁定 2026-09-10 Q4）。
 ///
-/// 実 claude の record の字面は版で動くので、判定は「JSON の行である ∧ error を名乗る
-/// ∧ rate limit を名指す」の 3 条件に留める。狭めると取りこぼし、広げると応答本文が
-/// `rate_limit` に触れただけで誤検出する——**どちらも rc 75 の意味を壊す**。
+/// 1 語に絞ると取りこぼす——claude は上限を `rate_limit` を含まない文言でも surface する。
+const LIMIT_WORDS: &[&str] = &[
+    "rate_limit",
+    "rate limit",
+    "usage limit",
+    "429",
+    "529",
+    "overloaded",
+];
+
+/// stream-json の 1 行が **error を名乗る record** か。
+///
+/// 語彙を探す前にここで絞るのが要点である。**本文の引用で誤爆しない**ようにするには、
+/// 「どんな行か」を先に構造で決めるしかない（実測 2026-09-10: 応答が契約の文言を引用した
+/// だけで rc 75 になっていた——本 bead の契約自身がその文言を含む）。
+fn is_error_record(body: &str) -> bool {
+    body.contains(r#""is_error":true"#)
+        || body.contains(r#""type":"error""#)
+        || body.contains(r#""subtype":"error"#)
+}
+
+/// stream-json の 1 行が **上限に当たった error record** か。
+///
+/// **error 系の record の中だけ**で上限の語彙を見る。error でない record は、たとえ上限の
+/// 語を含んでいても本文の引用であって事実ではない。上限以外の error は rc 75 にせず
+/// claude の rc をそのまま写す——1 つの数に 2 つの意味を載せないためである。
 fn is_rate_limit(line: &str) -> bool {
     let body = line.trim_start();
-    body.starts_with('{') && body.contains("error") && body.contains("rate_limit")
+    if !body.starts_with('{') || !is_error_record(body) {
+        return false;
+    }
+    LIMIT_WORDS.iter().any(|word| body.contains(word))
 }
 
 /// 前提違反（rc 1 + stderr 1 行・何もしない）。
