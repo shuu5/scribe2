@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{Duration, SystemTime};
 use vessel::fleet::store::{self, LockPolicy, StoreError};
+use vessel::cli_outcome::{RC_BROKEN, RC_OK, RC_REFUSED};
 use vessel::rules::manifest::Manifest;
 use vessel::fleet::{
     json_lite, replay, wait, Completion, Event, EventKind, SeatState, Stage, Timeout, SCHEMA,
@@ -68,6 +69,63 @@ fn write_raw(dir: &Path, lines: &[&str]) {
         fs::create_dir_all(parent).expect("dir を作れる");
     }
     fs::write(&path, format!("{}\n", lines.join("\n"))).expect("fixture を書ける");
+}
+
+#[test]
+fn outcome_rc_covers_zero_one_two() {
+    let dir = state_dir();
+    let path = dir.display().to_string();
+    let args = |v: &[&str]| v.iter().map(|s| (*s).to_owned()).collect::<Vec<String>>();
+    let empty = vessel::fleet::cli::dispatch(&args(&["export", "--state-dir", &path]));
+    assert_eq!(empty.rc, RC_OK, "空の store は rc 0");
+    write_raw(&dir, &["こわれ"]);
+    let now_broken = vessel::fleet::cli::dispatch(&args(&["export", "--state-dir", &path]));
+    assert_eq!(now_broken.rc, RC_BROKEN, "読めない store は rc 2");
+    let refused = vessel::fleet::cli::dispatch(&args(&["show", "--run", "r1"]));
+    assert_eq!(refused.rc, RC_REFUSED, "--state-dir 欠けは rc 1");
+    assert!(refused.out.is_empty(), "rc 1 でも stdout は 0 byte");
+    fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn fleet_json_rejects_short_unicode() {
+    // 断りの字面まで見る。`16 進でない` だけだと base の `from_str_radix` の error
+    // （"invalid digit found in string"）にも当たってしまい、guard を外しても通る。
+    for bad in [
+        r#"{"a":"\u+123"}"#,
+        r#"{"a":"\u12"}"#,
+        r#"{"a":"\uZZZZ"}"#,
+    ] {
+        let reason = json_lite::parse_object(bad).expect_err("桁が 16 進でない \\u は拒む");
+        assert!(
+            reason.contains("\\u の桁が 16 進でない"),
+            "理由: {reason}（入力 {bad}）"
+        );
+    }
+    // 入力が尽きる経路（4 桁に届かない）は別の断りになる。
+    let cut = json_lite::parse_object(r#"{"a":"\u12"#).expect_err("桁が足りない \\u は拒む");
+    assert!(cut.contains("\\u の 4 桁が足りない"), "理由: {cut}");
+    let good = json_lite::parse_object(r#"{"a":"\u0041"}"#).expect("正しい 4 桁は通る");
+    let (_, value) = good.first().expect("1 組");
+    assert_eq!(value.as_str(), Some("A"), "U+0041 は A");
+}
+
+#[test]
+fn fleet_json_rejects_unknown_key() {
+    let mut pairs: Vec<(&str, json_lite::Value)> = vec![
+        ("schema", json_lite::Value::Num(SCHEMA)),
+        ("ts", json_lite::Value::Str("2026-09-09T00:00:00Z".to_owned())),
+        ("kind", json_lite::Value::Str("RunCreated".to_owned())),
+        ("run", json_lite::Value::Str("r1".to_owned())),
+        ("bead", json_lite::Value::Str("b1".to_owned())),
+        ("host", json_lite::Value::Str("h".to_owned())),
+        ("actor", json_lite::Value::Str("machine".to_owned())),
+    ];
+    assert!(Event::from_line(&json_lite::write_object(&pairs)).is_ok(), "既知 key だけなら通る");
+    pairs.push(("stgae", json_lite::Value::Str("Gated".to_owned())));
+    let reason = Event::from_line(&json_lite::write_object(&pairs))
+        .expect_err("綴り違いの key を黙って捨てない");
+    assert!(reason.contains("未知の key stgae"), "理由: {reason}");
 }
 
 #[test]

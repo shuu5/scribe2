@@ -1,12 +1,14 @@
 //! CLI の骨格。`name` / `--version` / `doctor` / `rules` / `fleet` の 5 subcommand を持つ。
 //!
+//! subcommand の結果は [`Outcome`] ただ 1 型で、rc はその `rc` をそのまま返す。
+//!
 //! 名前の字面は `name.rs` にだけ在り、この file には書かない。実体は lib 側に在り、
 //! この file は引数の dispatch と出力層だけを持つ。出力は [`emit`] と [`emit_err`]
 //! の 2 つに閉じ、rc は `main` が返す [`ExitCode`] で表す。
 
 use std::process::ExitCode;
+use vessel::cli_outcome::{Outcome, RC_REFUSED};
 use vessel::name::NAME;
-use vessel::rules::cli::{self, Outcome};
 
 /// 出力層。stdout へ書くのはこの関数だけである。
 #[expect(
@@ -59,21 +61,23 @@ fn dispatch(arg: Option<&str>) -> Result<Vec<String>, String> {
     }
 }
 
-/// 引数列を 1 回分の結果へ写す。`rules` だけは引数を続けて取るので別扱いにする。
+/// 引数列を 1 回分の結果へ写す。
+///
+/// subcommand は **1 つの [`Outcome`] 型だけ**を返す（憲法 C2）。rc も字面もここでは
+/// 作り替えない。
 fn run(args: &[String]) -> Outcome {
-    if args.first().map(String::as_str) == Some("rules") {
-        return cli::dispatch(args.get(1..).unwrap_or_default());
-    }
-    match dispatch(args.first().map(String::as_str)) {
-        Ok(lines) => Outcome {
-            out: lines,
-            err: Vec::new(),
-            ok: true,
-        },
-        Err(usage) => Outcome {
-            out: vec![usage],
-            err: Vec::new(),
-            ok: false,
+    let rest = args.get(1..).unwrap_or_default();
+    match args.first().map(String::as_str) {
+        Some("rules") => vessel::rules::cli::dispatch(rest),
+        Some("fleet") => vessel::fleet::cli::dispatch(rest),
+        first => match dispatch(first) {
+            Ok(lines) => Outcome::ok(lines),
+            // 使い方の行は従来どおり stdout へ出し rc 1 で終える（外形は変えない）。
+            Err(usage) => Outcome {
+                out: vec![usage],
+                err: Vec::new(),
+                rc: RC_REFUSED,
+            },
         },
     }
 }
@@ -90,20 +94,9 @@ fn emit_all(out: &[String], err: &[String]) {
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if args.first().map(String::as_str) == Some("fleet") {
-        // fleet だけ rc が 0 / 1 / 2 の 3 値を取る（設計 fleet-event-log.md §5）ので、
-        // ok の 2 値で表す他の subcommand と分けて受ける。
-        let outcome = vessel::fleet::cli::dispatch(args.get(1..).unwrap_or_default());
-        emit_all(&outcome.out, &outcome.err);
-        return ExitCode::from(outcome.code);
-    }
     let outcome = run(&args);
     emit_all(&outcome.out, &outcome.err);
-    if outcome.ok {
-        ExitCode::SUCCESS
-    } else {
-        ExitCode::FAILURE
-    }
+    ExitCode::from(outcome.rc)
 }
 
 #[cfg(test)]

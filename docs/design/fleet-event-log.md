@@ -57,6 +57,8 @@ C3 は「1 つの DB file（host 列）」と言う。MVP はそれを **append-
 - `fleet record --kind <k> --run <id> --bead <b> [--stage <s>] [--seat <id>] [--pid <n>] [--actor machine|human] [--detail <text>]` → rc 0・stdout 1 行 `fleet: recorded <kind> run=<id>`。
 - `fleet show --run <id>` → 1 行 `run=<id> bead=<b> stage=<s> approved=<bool> updated=<ts>`。無ければ `fleet: no such run` + rc 1。store が読めなければ rc 2。
 - `fleet export`（**跨版 面 2**）: stdout 1 行目 = `{"schema":1,"kind":"export","host":"<host>","runs":<N>,"seats":<N>}`、以降 run 1 件 1 行・seat 1 件 1 行。**read-only**（store の file を 1 byte も変えない・lock も取らない）。malformed なら error 行 + rc 2。
+  - run 行 = `{"kind":"run","id":"<run id>","bead":"<bead>","stage":"<Stage>","approved":<bool>,"updated":"<ts>"}`（key はこの並び）。
+  - seat 行 = `{"kind":"seat","id":"<seat id>","run":"<run id>","state":"<SeatState>","updated":"<ts>"}`（key はこの並び）。
 
 ## 6. 歯（契約 `s2-07d` の検証・`tests/e2e/fleet.rs` module・`fleet_` 接頭辞・tmp dir を `--state-dir` で指す）
 

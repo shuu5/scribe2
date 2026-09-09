@@ -15,6 +15,14 @@ use std::time::{Duration, Instant};
 /// event log の schema 版。非互換な変更で上げる。
 pub const SCHEMA: u64 = 1;
 
+/// event の 1 行が持てる key の全体（設計 §3）。
+///
+/// 未知 key を受理すると、綴り違いの field が黙って捨てられる（`stgae` と書いた行が
+/// 段の無い行として通る）。設計 §3 の「それ以外の形は error」に合わせて拒む。
+const KNOWN_KEYS: &[&str] = &[
+    "schema", "ts", "kind", "run", "bead", "host", "actor", "stage", "seat", "pid", "detail",
+];
+
 /// 起きたことの種類。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EventKind {
@@ -233,6 +241,11 @@ impl Event {
     /// 1 行の JSON から読む。欠けや未知の値は理由つきで `Err`。
     pub fn from_line(line: &str) -> Result<Self, String> {
         let pairs = json_lite::parse_object(line)?;
+        for (key, _) in &pairs {
+            if !KNOWN_KEYS.contains(&key.as_str()) {
+                return Err(format!("未知の key {key}"));
+            }
+        }
         let get = |key: &str| pairs.iter().find(|(found, _)| found == key).map(|(_, v)| v);
         let schema = get("schema").and_then(Value::as_num).ok_or("schema が無い")?;
         if schema != SCHEMA {
