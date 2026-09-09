@@ -1126,3 +1126,55 @@ fn pipe_resume_after_kill_between_spawn_and_gate() {
     assert!(show_line(&repo, &state, &id).contains("stage=Landed"), "段は Landed");
     clean(&[&repo, &state]);
 }
+
+#[test]
+fn pipe_gate_refuses_run_without_commits() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let id = intake(&repo, &state, &path);
+    // commit を作らない runner。spawn は Failed で終える（commit 0 は完了ではない）。
+    run_pipe(&[
+        "spawn", "--run", &id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(), "--runner", "true",
+    ]);
+    // 段だけを Implemented へ書き換える（＝台帳が壊れている / 手で進めた周）。
+    // worktree は在って clean なので、**commits の検査だけ**が gate を止める。
+    let forced = Command::new(bin())
+        .args(["fleet", "record", "--state-dir"])
+        .arg(&state)
+        .args(["--kind", "RunStage", "--stage", "Implemented", "--run", &id, "--bead", "s2-2e5"])
+        .output()
+        .expect("binary を起動できる");
+    assert_eq!(forced.status.code(), Some(i32::from(RC_OK)), "record は rc 0");
+    let marker = state.join("lens-ran");
+    let lens = fake_lens(&marker, &lens_verdict("PASS"));
+    let out = gate_once(&repo, &state, &id, Some(&lens));
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "commit 0 は前提違反で rc 1");
+    assert!(
+        stderr_of(&out).contains("commit が 1 本も無い"),
+        "理由は commits（dirty ではない）: {}",
+        stderr_of(&out)
+    );
+    assert!(!marker.exists(), "前提違反の周は lens を起動しない");
+    clean(&[&repo, &state]);
+}
+
+#[test]
+fn pipe_gate_inconclusive_on_unlisted_lens_verdict() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let id = implemented(&repo, &state, &path);
+    let marker = state.join("lens-ran");
+    // 3 値の外を名乗る lens。**PASS へ倒さない**（AC3「偽の PASS 0 件」）。
+    let lens = fake_lens(&marker, &lens_verdict("OK"));
+    let out = gate_once(&repo, &state, &id, Some(&lens));
+    assert_eq!(out.status.code(), Some(3), "3 値外は rc 3");
+    assert!(stdout_of(&out).contains("verdict=INCONCLUSIVE"), "{}", stdout_of(&out));
+    assert!(marker.exists(), "lens 自体は呼んでいる（判定に届いた周）");
+    assert_eq!(
+        value_of(&verdict_pairs(&state, &id), "verdict"),
+        "INCONCLUSIVE",
+        "未知の verdict を通さない"
+    );
+    clean(&[&repo, &state]);
+}
