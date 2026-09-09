@@ -360,7 +360,13 @@ fn apply_run(state: &mut State, event: &Event) {
     if event.detail.is_some() {
         run.detail = event.detail.clone();
     }
-    if event.kind == EventKind::ApprovalReceived {
+    // **承認は event に残った逐語だけである**（憲法 C7.2）。kind だけで関門を開けると、
+    // `fleet record --kind ApprovalReceived` で積んだ逐語 0 字の機械 event でも開いてしまい、
+    // 書き手側（`pipe approve`）の逐語検査が作法頼みになる。読み手が資格を見る。
+    if event.kind == EventKind::ApprovalReceived
+        && event.actor == ACTOR_HUMAN
+        && event.detail.as_deref().is_some_and(|words| !words.trim().is_empty())
+    {
         run.approved = true;
     }
 }

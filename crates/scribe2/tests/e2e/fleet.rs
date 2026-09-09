@@ -144,7 +144,9 @@ fn fleet_replay_rebuilds_state_from_events() {
 #[test]
 fn fleet_replay_marks_run_approved_on_approval_received() {
     let asked = event(EventKind::ApprovalRequested, "r1", "2026-09-09T00:00:00Z");
-    let got = event(EventKind::ApprovalReceived, "r1", "2026-09-09T00:00:05Z");
+    let mut got = event(EventKind::ApprovalReceived, "r1", "2026-09-09T00:00:05Z");
+    // 逐語まで揃って初めて承認である（C7.2）。読み手は actor と detail も見る。
+    got.detail = Some("消してよい".to_owned());
     assert_eq!(got.actor, "human", "承認の受理だけが人由来（FR22）");
     let state = replay(&[asked, got]);
     assert!(state.runs.get("r1").expect("r1 が在る").approved, "approved は導出値");
@@ -382,7 +384,7 @@ fn fleet_export_reports_runs_and_seats() {
     let calls: [&[&str]; 3] = [
         &["record", "--kind", "RunCreated", "--run", "r1", "--bead", "b1", "--stage", "Gated"],
         &["record", "--kind", "SeatSpawned", "--run", "r1", "--bead", "b1", "--seat", "s1", "--pid", "4242"],
-        &["record", "--kind", "ApprovalReceived", "--run", "r1", "--bead", "b1"],
+        &["record", "--kind", "ApprovalReceived", "--run", "r1", "--bead", "b1", "--detail", "消してよい"],
     ];
     for call in calls {
         let mut args = call.to_vec();

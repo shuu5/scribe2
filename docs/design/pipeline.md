@@ -54,7 +54,7 @@
 | stage | 入る event | 出る条件 |
 |---|---|---|
 | `Intake` | `RunCreated` | spawn（3 クラス無し）/ Blocked（3 クラス有り・未承認） |
-| `Blocked` | `RunStage` + `ApprovalRequested` | `ApprovalReceived` が在れば resume → spawn（FR16） |
+| `Blocked` | `ApprovalRequested` + `RunStage` | `ApprovalReceived`（`actor=human` ∧ 逐語が非空）が在れば resume → spawn（FR16） |
 | `Spawned` | `RunStage` + `SeatSpawned` | runner 終了 → `SeatStopped` + Implemented / Failed（FR6） |
 | `Implemented` | `RunStage` | gate |
 | `Gated` | `RunStage detail=verdict:<V>` | verdict PASS → land / それ以外は止まる（FR10） |
@@ -100,6 +100,7 @@
 - `classes` が非空の契約は、**spawn の手前**（実行前・A1）で `ApprovalRequested detail=<classes>` + `RunStage stage=Blocked` を記帳し、**人の入力を待たずに rc 3 で process を終える**（FR15）。runner は起動しない。
 - `pipe approve --run <id> --words "<user の逐語>"` → `ApprovalReceived actor=human detail=<逐語>`（C7.2）。逐語が空なら rc 1・記帳しない。**この subcommand は開発 session（R-C7-1 = user 直）が user の言葉をそのまま写して叩く**。会話の記憶を根拠にしない＝event に残った逐語だけが承認である。
 - `pipe resume` は Blocked ∧ `approved` で spawn へ進む（FR16）。Blocked ∧ 未承認は rc 3。
+- **`approved` を立てるのは読み手側の資格検査である**: replay は `ApprovalReceived` ∧ `actor=human` ∧ 逐語が非空（trim 後）のときだけ `approved` を立てる。書き手（`pipe approve`）の逐語検査だけだと、`fleet record` で積んだ逐語 0 字の機械 event でも関門が開く。
 - 3 クラスの判定は MVP では**契約の自己申告**（`classes`）に加え、**seam の使用からの導出**を 1 つ持つ: `--pr-cmd`（公開）は承認 event 無しでは動かない（§5.4）。操作の中身から 3 クラスを判定する enforcer は次の版（A4 の機構欄）。
 
 ### 5.6 stop（(a)・FR13・面 4）
@@ -130,6 +131,7 @@
 - (b) `pipe_gate_` / `pipe_land_` / `pipe_e2e_` / `pipe_resume_` 接頭辞: `pipe_gate_refuses_dirty_worktree` / `pipe_gate_fails_on_red_verify_line` / `pipe_gate_inconclusive_without_lens_when_required` / `pipe_gate_inconclusive_when_diff_exceeds_cap`（`--rules` で tmp manifest・`gate.token_cap = 1`）/ `pipe_gate_records_structured_verdict` / `pipe_land_refuses_without_pass` / `pipe_land_squashes_one_commit_with_identical_tree` / `pipe_land_refuses_stale_base` / `pipe_land_reruns_verify_on_main_and_fails_loud` / `pipe_land_exports_verdict_schema1` / `pipe_land_retires_worktree_by_move_and_keeps_branch` / `pipe_e2e_toy_repo_lands_one_bead_with_fake_runner` / `pipe_resume_after_kill_between_spawn_and_gate`。
   実装の便で**変異と lens review が「測れていない」と名指した経路**に足した歯（同じ 4 接頭辞）: `pipe_gate_refuses_run_without_commits` / `pipe_gate_inconclusive_on_unlisted_lens_verdict` / `pipe_gate_inconclusive_when_lens_count_is_not_one` / `pipe_gate_inconclusive_when_lens_exits_nonzero` / `pipe_gate_inconclusive_when_lens_output_is_not_json` / `pipe_gate_passes_diff_to_lens_on_stdin` / `pipe_gate_refuses_wrong_stage` / `pipe_land_reports_unmeasured_main_apart_from_red` / `pipe_land_removes_dirty_tmp_worktree`。
 - (c) `pipe_approval_` 接頭辞: `pipe_approval_blocks_before_spawn_when_contract_declares_class` / `pipe_approval_records_verbatim_as_human_event` / `pipe_approval_refuses_empty_words` / `pipe_approval_resume_spawns_after_received` / `pipe_approval_resume_stays_blocked_without_received` / `pipe_approval_unlisted_class_value_is_rejected_at_intake`。
+  実装の便で lens が「測れていない」と名指した経路に足した歯: `pipe_approval_blocks_in_one_shot_run`（`pipe run` の一発経路も spawn の手前で Blocked になる＝関門が段ごとの口ではなく唯一の起動口に在ることを測る）。
 - (d) `headless_` 接頭辞（claude は fake の実行 file・`--claude <path>`）: `headless_runner_reads_contract_from_stdin_and_passes_permission_mode_every_time` / `headless_runner_stops_on_rate_limit_record` / `headless_lens_inconclusive_over_cap_without_calling_claude` / `headless_lens_extracts_last_json_line` / `headless_lens_inconclusive_on_unparsable_output`。
 - (e) `pipe_report_` / `pipe_five_` / `pipe_land_pr_cmd_` 接頭辞: `pipe_five_contracts_land_with_fake_runner_in_toy_repo`（正常 / write-set 外編集で guard に止まる / test 追加 / gate FAIL / 承認 Blocked → approve → land の 5 便・stdin は `/dev/null`）/ `pipe_report_counts_human_events` / `pipe_land_pr_cmd_refuses_without_approval` / `pipe_land_pr_cmd_pushes_branch_without_moving_main`。
 
