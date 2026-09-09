@@ -3,8 +3,8 @@ source: crates/scribe2/tests/e2e/headless.rs
 expression: form
 ---
 usage: scribe2 runner --worktree D --write-set F --plugin-dir D --permission-mode M [--account-dir D] [--claude PATH] < contract
-usage: scribe2 lens --cap BYTES --permission-mode M [--account-dir D] [--claude PATH] < diff
+usage: scribe2 lens --contract F --cap BYTES --permission-mode M [--account-dir D] [--claude PATH] < diff
 runner: --worktree が要る
 usage: scribe2 runner --worktree D --write-set F --plugin-dir D --permission-mode M [--account-dir D] [--claude PATH] < contract
-lens: --cap が要る
-usage: scribe2 lens --cap BYTES --permission-mode M [--account-dir D] [--claude PATH] < diff
+lens: --contract が要る
+usage: scribe2 lens --contract F --cap BYTES --permission-mode M [--account-dir D] [--claude PATH] < diff

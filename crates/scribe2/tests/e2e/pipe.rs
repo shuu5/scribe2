@@ -1337,6 +1337,46 @@ fn pipe_gate_passes_diff_to_lens_on_stdin() {
 }
 
 #[test]
+fn pipe_gate_substitutes_contract_placeholder_in_lens_cmd() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let id = implemented(&repo, &state, &path);
+    let seen = state.join("lens-contract-arg");
+    // fake lens が **受け取った argv**（置換後の cmd に埋まった path）を写す。
+    // 置換していなければ `{contract}` の字面がそのまま残る。
+    // **穴は 2 つ置く**。1 つだけだと `replacen(_, _, 1)` へ縮める変異が生き残る
+    // （review 2026-09-10）。2 つ目が置換されなければ字面のまま file に残る。
+    let lens = format!(
+        "printf '%s\\n%s' '{{contract}}' '{{contract}}' > '{}'; cat >/dev/null; echo '{}'",
+        seen.display(),
+        lens_verdict("PASS")
+    );
+    let out = gate_once(&repo, &state, &id, Some(&lens));
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "PASS: {}", stderr_of(&out));
+    let handed = fs::read_to_string(&seen).expect("lens が受けた値を読める");
+    let handed: Vec<&str> = handed.lines().collect();
+    assert_eq!(handed.len(), 2, "穴 2 つ分が渡る: {handed:?}");
+    assert!(
+        !handed.iter().any(|line| line.contains("{contract}")),
+        "placeholder が 1 つでも置換されずに渡っている: {handed:?}"
+    );
+    let handed = handed.first().copied().unwrap_or_default().trim().to_owned();
+    // **path であって本文ではない**（cmd は `sh -c` の 1 行なので、本文を埋めると
+    // 契約の中の引用符 1 つで cmd の構造が変わる）。
+    let handed = PathBuf::from(handed.trim());
+    assert!(handed.is_absolute(), "契約 copy の絶対 path が渡る: {}", handed.display());
+    let body = fs::read_to_string(&handed).expect("lens は渡された path から契約を読める");
+    // 渡ったのが **この便の契約 copy** であること（別の file を指していない）。
+    assert!(body.contains("縦 1 本を通す"), "契約の goal が読める: {body}");
+    assert_eq!(
+        handed,
+        state.join("pipe").join(&id).join("contract.toml"),
+        "run の契約 copy を指す"
+    );
+    clean(&[&repo, &state]);
+}
+
+#[test]
 fn pipe_gate_refuses_wrong_stage() {
     let (repo, state) = repo_with_state();
     let path = write_contract(&repo, &[], &[]);
