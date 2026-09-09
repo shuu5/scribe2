@@ -17,7 +17,7 @@
 
 use super::contract::Contract;
 use super::{
-    emit, git_bytes, git_line, verdict_path, verify_log_path, worktree_path, Emit,
+    contract_path, emit, git_bytes, git_line, verdict_path, verify_log_path, worktree_path, Emit,
 };
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_OK, RC_REFUSED};
 use crate::fleet::json_lite::{self, Value};
@@ -259,10 +259,28 @@ fn decide(entry: &Gate<'_>, worktree: &Path, measured: &Measured) -> (Verdict, S
     let Some(cmd) = entry.lens else {
         return (Verdict::Inconclusive, "lens が要るのに --lens が無い".to_owned());
     };
-    ask_lens(cmd, worktree, &measured.diff)
+    ask_lens(&substitute(entry, cmd), worktree, &measured.diff)
+}
+
+/// `--lens` の cmd の `{contract}` を run の契約 copy の path へ置く。
+///
+/// **置く穴は 1 つだけ**である。`--runner` 側（[`super::spawn`]）と共有するのは
+/// placeholder の語彙であって関数ではない——あちらは worktree / write-set / base も
+/// 埋めるが、lens が要るのは契約 1 つで、読み手を増やせば「どの段でどの穴が埋まるか」が
+/// 段ごとに違う表になる（planner 裁定 2026-09-10 Q1）。
+///
+/// **渡すのは path であって本文ではない**。cmd は `sh -c` へ渡る 1 行なので、本文を
+/// 埋めると契約の中の引用符 1 つで cmd の構造が変わる。
+fn substitute(entry: &Gate<'_>, cmd: &str) -> String {
+    cmd.replace(
+        "{contract}",
+        &contract_path(entry.state_dir, entry.run).display().to_string(),
+    )
 }
 
 /// lens へ diff を stdin で渡し、stdout の JSON 1 行を読む。
+///
+/// 契約は cmd の `{contract}`（[`substitute`] が埋めた path）で渡る＝**stdin は diff 専用**。
 fn ask_lens(cmd: &str, worktree: &Path, diff: &[u8]) -> (Verdict, String) {
     let spawned = Command::new("sh")
         .arg("-c")

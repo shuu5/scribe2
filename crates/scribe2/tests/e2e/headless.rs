@@ -95,10 +95,66 @@ fn slurp(path: &Path) -> String {
     fs::read_to_string(path).unwrap_or_default()
 }
 
+/// lens へ渡す契約の各面（歯が prompt の中で照合する値）。
+///
+/// **値を歯の中で直書きしない**。契約 file と assert が同じ定数を見ることで、
+/// 「prompt に載った」と「契約に書いた」が同じものを指す。
+///
+/// ★**diff にも lens.txt にも現れない字面を選ぶ**。`src/lib.rs` のような値を使うと、
+/// 歯が渡す diff の `--- a/src/lib.rs` が同じ字面を持ち、`state()` が write-set を
+/// 1 文字も出さなくても assert が真になる（review 2026-09-10 F1・実測で再現した）。
+const CONTRACT_GOAL: &str = "縦 1 本を通す";
+/// 契約の done（[`CONTRACT_GOAL`] と対）。
+const CONTRACT_DONE: &str = "run が Implemented になる";
+/// 契約の verify 1 行目（[`CONTRACT_GOAL`] と対）。
+const CONTRACT_VERIFY: &str = "cargo nextest run --no-tests=fail";
+/// 契約の verify 2 行目。**2 要素にする**——1 要素だと「2 本目以降を捨てる」変異が生き残る。
+const CONTRACT_VERIFY_2: &str = "cargo deny check bans";
+/// 契約の write-set 1 行目（[`CONTRACT_GOAL`] と対）。
+const CONTRACT_WRITE_SET: &str = "crates/vessel-unlikely/src/only-here.rs";
+/// 契約の write-set 2 行目（[`CONTRACT_VERIFY_2`] と同じ理由で 2 要素）。
+const CONTRACT_WRITE_SET_2: &str = "crates/vessel-unlikely/src/second-only.rs";
+/// 契約の owner。**prompt に載ってはならない**面（判定の材料にならない）。
+const CONTRACT_OWNER: &str = "s2-07l-owner-marker";
+/// 契約の disposition。[`CONTRACT_OWNER`] と同じく載ってはならない面。
+const CONTRACT_DISPOSITION: &str = "A-now";
+
+/// 契約 file の本文を組む（`goal` だけ差し替えられる）。
+fn contract_text(goal: &str) -> String {
+    format!(
+        "goal = \"{goal}\"\n\
+         done = \"{CONTRACT_DONE}\"\n\
+         size = \"S\"\n\
+         owner = \"{CONTRACT_OWNER}\"\n\
+         disposition = \"{CONTRACT_DISPOSITION}\"\n\
+         write-set = [\"{CONTRACT_WRITE_SET}\", \"{CONTRACT_WRITE_SET_2}\"]\n\
+         verify = [\"{CONTRACT_VERIFY}\", \"{CONTRACT_VERIFY_2}\"]\n\
+         req = [\"FR9\"]\n\
+         design = \"docs/design/pipeline.md\"\n"
+    )
+}
+
+/// lens へ渡す契約 file を 1 本書く。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn contract_in(dir: &Path) -> PathBuf {
+    let path = dir.join("contract.toml");
+    fs::write(&path, contract_text(CONTRACT_GOAL)).expect("契約 file を書ける");
+    path
+}
+
 /// lens を 1 回撃つ（引数の並びが複数の歯で同じなので畳む）。
-fn run_lens(cap: &str, mode: &str, claude: &Path, diff: &[u8]) -> Output {
+fn run_lens(contract: &Path, cap: &str, mode: &str, claude: &Path, diff: &[u8]) -> Output {
     run_bin(
-        &["lens", "--cap", cap, "--permission-mode", mode, "--claude", &claude.display().to_string()],
+        &[
+            "lens",
+            "--contract", &contract.display().to_string(),
+            "--cap", cap,
+            "--permission-mode", mode,
+            "--claude", &claude.display().to_string(),
+        ],
         diff,
     )
 }
@@ -253,8 +309,9 @@ fn headless_runner_stops_on_rate_limit_record() {
 fn headless_lens_inconclusive_over_cap_without_calling_claude() {
     let dir = tmp();
     let claude = fake_claude(&dir, "{\"verdict\":\"PASS\",\"evidence\":\"呼ばれてはならない\"}\n", false, 0);
+    let contract = contract_in(&dir);
     let diff = vec![b'x'; 4096];
-    let out = run_lens("16", "plan", &claude, &diff);
+    let out = run_lens(&contract, "16", "plan", &claude, &diff);
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
     assert_eq!(
         stdout_of(&out).trim(),
@@ -271,7 +328,7 @@ fn headless_lens_inconclusive_over_cap_without_calling_claude() {
     let big = vec![b'x'; 140_000];
     // mode を歯 4 と変えてある。lens 側の permission mode を定数へ固定する変異は、
     // 1 種類しか撃たない歯では捕まらない（実測で生存した）。
-    let out = run_lens("150000", "acceptEdits", &verdict, &big);
+    let out = run_lens(&contract, "150000", "acceptEdits", &verdict, &big);
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
     assert!(dir.join("called").exists(), "cap の内側なので claude を呼ぶ");
     assert_eq!(
@@ -291,7 +348,8 @@ fn headless_lens_inconclusive_over_cap_without_calling_claude() {
     // すり替える変異は、境界を撃たない歯では捕まらない（実測で生存した）。
     let edge = tmp();
     let at_cap = fake_claude(&edge, "{\"verdict\":\"FAIL\",\"evidence\":\"境界は内側\"}\n", false, 0);
-    let out = run_lens("64", "plan", &at_cap, &vec![b'y'; 64]);
+    let edge_contract = contract_in(&edge);
+    let out = run_lens(&edge_contract, "64", "plan", &at_cap, &vec![b'y'; 64]);
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
     assert!(edge.join("called").exists(), "境界ちょうどでは claude を呼ぶ");
     assert_eq!(
@@ -302,7 +360,7 @@ fn headless_lens_inconclusive_over_cap_without_calling_claude() {
     clean(&[&edge]);
 
     // **cap が数でないときは断る**（上限なしで走らせない＝C6）。
-    let bad = run_lens("abc", "plan", &verdict, b"--- a\n");
+    let bad = run_lens(&contract, "abc", "plan", &verdict, b"--- a\n");
     assert_eq!(bad.status.code(), Some(i32::from(RC_REFUSED)), "cap が数でないなら断る");
     clean(&[&dir]);
 }
@@ -319,9 +377,11 @@ fn headless_lens_extracts_last_json_line() {
     );
     let account = tmp();
     let claude = fake_claude(&dir, body, false, 0);
+    let contract = contract_in(&dir);
     let out = run_bin(
         &[
-            "lens", "--cap", "4096", "--permission-mode", "plan",
+            "lens", "--contract", &contract.display().to_string(),
+            "--cap", "4096", "--permission-mode", "plan",
             "--account-dir", &account.display().to_string(),
             "--claude", &claude.display().to_string(),
         ],
@@ -364,7 +424,8 @@ fn headless_lens_extracts_last_json_line() {
 fn headless_lens_inconclusive_on_unparsable_output() {
     let dir = tmp();
     let claude = fake_claude(&dir, "判定できませんでした\nもう一度お願いします\n", false, 0);
-    let out = run_lens("4096", "plan", &claude, b"--- a\n+++ b\n");
+    let contract = contract_in(&dir);
+    let out = run_lens(&contract, "4096", "plan", &claude, b"--- a\n+++ b\n");
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
     assert!(dir.join("called").exists(), "呼んだ上で読めなかった周である");
     // 読めない出力を握り潰さず、**判定に届かなかった**と名乗る（偽の PASS を作らない）。
@@ -373,6 +434,94 @@ fn headless_lens_inconclusive_on_unparsable_output() {
         "parse 不能は INCONCLUSIVE: {}",
         stdout_of(&out)
     );
+    clean(&[&dir]);
+}
+
+#[test]
+fn headless_lens_prompt_includes_contract_fields() {
+    let dir = tmp();
+    let claude = fake_claude(&dir, "{\"verdict\":\"PASS\",\"evidence\":\"契約を読めた\"}\n", false, 0);
+    let contract = contract_in(&dir);
+    let out = run_lens(&contract, "4096", "plan", &claude, b"--- a/src/lib.rs\n+++ b/src/lib.rs\n");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    assert!(dir.join("called").exists(), "契約が在るので claude を呼ぶ");
+    let prompt = slurp(&dir.join("stdin"));
+    // **契約の 4 面が prompt に載る**（設計 §6「契約の verify と diff を読み」）。diff だけを
+    // 渡して契約適合は問えない——実 lens は「契約が未提供で適合を判定できない」と
+    // INCONCLUSIVE を返し、便がそこで止まった（実測 2026-09-10・s2-07l.24 の実 5 便）。
+    //
+    // **値の存在ではなく「どの見出しの下に在るか」まで測る**。値だけを数えると、goal と
+    // done のラベルを入れ替える変異が生き残る（review 2026-09-10 F3）。
+    assert!(prompt.contains(&format!("goal: {CONTRACT_GOAL}")), "goal が goal として載る: {prompt}");
+    assert!(prompt.contains(&format!("done: {CONTRACT_DONE}")), "done が done として載る: {prompt}");
+    // **配列は各行**。1 要素しか測らないと「2 本目以降を捨てる」変異が生き残る。
+    for want in [CONTRACT_VERIFY, CONTRACT_VERIFY_2, CONTRACT_WRITE_SET, CONTRACT_WRITE_SET_2] {
+        assert!(prompt.contains(&format!("- {want}")), "prompt に契約の {want} が行として載る: {prompt}");
+    }
+    // **契約 file を丸写ししない**（NFR1・渡すほど cap を食う）。判定の材料にならない面が
+    // 載っていないことまで測らないと、丸写しへ戻す変異が生き残る。
+    for unwanted in [CONTRACT_OWNER, CONTRACT_DISPOSITION] {
+        assert!(!prompt.contains(unwanted), "判定の材料にならない {unwanted} は載せない: {prompt}");
+    }
+    assert!(prompt.contains("--- a/src/lib.rs"), "diff も従来どおり載る: {prompt}");
+    // 穴が埋まらずに残っていたら、lens が読むのは placeholder の字面だけになる。
+    assert!(!prompt.contains("{contract}"), "契約の穴が埋まっている: {prompt}");
+    assert!(!prompt.contains("{diff}"), "diff の穴が埋まっている: {prompt}");
+    clean(&[&dir]);
+}
+
+#[test]
+fn headless_lens_fills_holes_in_one_pass() {
+    let dir = tmp();
+    let claude = fake_claude(&dir, "{\"verdict\":\"PASS\",\"evidence\":\"fake\"}\n", false, 0);
+    // **契約は外から来る text である**。goal に穴の字面を書けるので、重ねて replace すると
+    // 先に埋めた契約本文の中の `{diff}` が次の走査で展開され、契約に 1 語書くだけで
+    // prompt の構造へ触れられる。runner 側と同じ経路を lens でも測る（review 2026-09-10 F2）。
+    let contract = dir.join("holes.toml");
+    fs::write(&contract, contract_text("穴の字面 {diff} を持つ goal")).expect("契約 file を書ける");
+    let out = run_lens(&contract, "4096", "plan", &claude, b"DIFF-BODY-MARKER\n");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    let prompt = slurp(&dir.join("stdin"));
+    // 埋めた値を二度と走査しない＝契約に書いた穴の字面は**そのまま残る**。
+    assert!(
+        prompt.contains("穴の字面 {diff} を持つ goal"),
+        "契約本文の穴は展開されない: {prompt}"
+    );
+    // 展開されていれば diff の本文が契約の中にも現れ、2 か所になる。
+    assert_eq!(
+        prompt.matches("DIFF-BODY-MARKER").count(),
+        1,
+        "diff が載るのは 1 か所だけ: {prompt}"
+    );
+    clean(&[&dir]);
+}
+
+#[test]
+fn headless_lens_refuses_without_contract() {
+    let dir = tmp();
+    let claude = fake_claude(&dir, "{\"verdict\":\"PASS\",\"evidence\":\"呼ばれてはならない\"}\n", false, 0);
+    let out = run_bin(
+        &[
+            "lens", "--cap", "4096", "--permission-mode", "plan",
+            "--claude", &claude.display().to_string(),
+        ],
+        b"--- a\n+++ b\n",
+    );
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "契約が無ければ rc 1");
+    // **効果で測る**: 材料が足りないまま呼べば返るのは INCONCLUSIVE だけで、払った
+    // 1 回分が捨て金になる。呼んでいないことを痕跡の不在で見る（cap 超過の歯と同型）。
+    assert!(!dir.join("called").exists(), "claude を 1 度も起動しない");
+    assert!(
+        stderr_of(&out).contains("--contract"),
+        "何が要るかを名乗る: {}",
+        stderr_of(&out)
+    );
+    // 読めない契約でも claude を呼ばない（「無い」と「壊れている」で極性を変えない）。
+    let broken = dir.join("broken.toml");
+    fs::write(&broken, "goal = \n").expect("壊れた契約を書ける");
+    let out = run_lens(&broken, "4096", "plan", &claude, b"--- a\n+++ b\n");
+    assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "読めない契約は rc 2");
+    assert!(!dir.join("called").exists(), "読めない契約でも claude を起動しない");
     clean(&[&dir]);
 }
 
