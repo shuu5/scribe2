@@ -36,3 +36,18 @@ pub const REQUIRED_LINTS: &[(&str, &str, &str)] = &[
     ("clippy", "cognitive_complexity", "forbid"),
     ("clippy", "allow_attributes", "deny"),
 ];
+
+/// tracked file の本文に残してはならない private path 形の needle 集合。
+///
+/// 集合は 2 形ちょうどである（絶対 home dir の接頭形と、home dir の短縮展開記号 +
+/// 区切りの 2 byte 形）。字面をこの file に置くと paths-clean が自分自身を撃つので
+/// **実行時に組み立てる**（`concat!` は compile 時に連結するため source の byte 列に
+/// needle が現れない）。行頭錨ではなく行中のどこに現れても違反である。
+pub const PRIVATE_PATH_MARKS: &[&str] = &[concat!("/", "home", "/"), concat!("~", "/")];
+
+/// `[dependencies]` / `[dev-dependencies]` に在ってよい依存の `(section, dep 名)`。
+///
+/// crate 名の字面を持たない 2 つ組であるため、同名の dep をどの crate が宣言しても
+/// 区別できない（xtask に同名 dev-dep を足しても検出できないのは既知の限界であり、
+/// crate 粒度の回復は leg 2 の所管である）。
+pub const ALLOWED_DEPS: &[(&str, &str)] = &[("dev-dependencies", "insta")];
