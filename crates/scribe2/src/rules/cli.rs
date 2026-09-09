@@ -5,47 +5,8 @@
 
 use super::manifest::Manifest;
 use super::RuleError;
+use crate::cli_outcome::{Outcome, RC_REFUSED};
 use std::path::Path;
-
-/// subcommand 1 回の結果。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Outcome {
-    /// stdout へ書く行。
-    pub out: Vec<String>,
-    /// stderr へ書く行。
-    pub err: Vec<String>,
-    /// rc 0 なら true。
-    pub ok: bool,
-}
-
-impl Outcome {
-    /// stdout 1 行・rc 0。
-    fn ok(line: String) -> Self {
-        Self {
-            out: vec![line],
-            err: Vec::new(),
-            ok: true,
-        }
-    }
-
-    /// stderr 1 行・rc 1。
-    fn failed(line: String) -> Self {
-        Self {
-            out: Vec::new(),
-            err: vec![line],
-            ok: false,
-        }
-    }
-
-    /// stderr へ複数行・rc 1。
-    fn failures(lines: Vec<String>) -> Self {
-        Self {
-            out: Vec::new(),
-            err: lines,
-            ok: false,
-        }
-    }
-}
 
 /// `rules` の使い方の行。
 pub fn usage() -> String {
@@ -56,15 +17,15 @@ pub fn usage() -> String {
 pub fn dispatch(args: &[String]) -> Outcome {
     let manifest = match open(args) {
         Ok(found) => found,
-        Err(errors) => return Outcome::failures(render(&errors)),
+        Err(errors) => return Outcome::failed(RC_REFUSED, render(&errors)),
     };
     match args.first().map(String::as_str) {
         Some("validate") => validate(&manifest),
         Some("get") => match args.get(1) {
             Some(id) if !id.starts_with("--") => get(&manifest, id),
-            _ => Outcome::failed(usage()),
+            _ => Outcome::failed_line(RC_REFUSED, usage()),
         },
-        _ => Outcome::failed(usage()),
+        _ => Outcome::failed_line(RC_REFUSED, usage()),
     }
 }
 
@@ -111,18 +72,18 @@ fn validate(manifest: &Manifest) -> Outcome {
         .iter()
         .filter(|kind| rows.iter().any(|row| row.kind == **kind))
         .count();
-    Outcome::ok(format!("rules: ok rows={} kinds={kinds}", rows.len()))
+    Outcome::ok_line(format!("rules: ok rows={} kinds={kinds}", rows.len()))
 }
 
 /// 1 行の値を返す。無い行と不発効の行は rc 1 にする。
 fn get(manifest: &Manifest, id: &str) -> Outcome {
     let Some(row) = manifest.get(id) else {
-        return Outcome::failed("rules: no such id".to_owned());
+        return Outcome::failed_line(RC_REFUSED, "rules: no such id".to_owned());
     };
     if !row.enabled {
-        return Outcome::failed(format!("rules: disabled {id}"));
+        return Outcome::failed_line(RC_REFUSED, format!("rules: disabled {id}"));
     }
-    Outcome::ok(row.value.render())
+    Outcome::ok_line(row.value.render())
 }
 
 /// error を 1 件 1 行へ写す。

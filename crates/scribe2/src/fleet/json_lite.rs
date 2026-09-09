@@ -227,7 +227,10 @@ fn parse_unicode(chars: &mut Cursor<'_>) -> Result<char, String> {
     let mut hex = String::new();
     for _ in 0..4 {
         match chars.next() {
-            Some(found) => hex.push(found),
+            // 16 進の 4 桁だけを受ける。`from_str_radix` は先頭の `+` を受理するので、
+            // 桁を字で確かめないと `\u+123` のような形が U+0123 として黙って通る。
+            Some(found) if found.is_ascii_hexdigit() => hex.push(found),
+            Some(found) => return Err(format!("\\u の桁が 16 進でない（{found:?}）")),
             None => return Err("\\u の 4 桁が足りない".to_owned()),
         }
     }

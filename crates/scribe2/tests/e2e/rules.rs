@@ -4,6 +4,7 @@
 
 use crate::make_tmp_dir;
 use std::process::Command;
+use vessel::cli_outcome::{Outcome, RC_OK, RC_REFUSED};
 use vessel::rules::manifest::Manifest;
 use vessel::rules::{Rule, RuleKind, RuleValue, ValueShape, ALL};
 
@@ -89,6 +90,21 @@ fn rejected(text: &str) -> Result<Vec<String>, usize> {
         Ok(found) => Err(found.rows().len()),
         Err(errors) => Ok(errors.iter().map(ToString::to_string).collect()),
     }
+}
+
+#[test]
+fn outcome_rules_and_fleet_return_the_same_type() {
+    let from_rules = vessel::rules::cli::dispatch(&["validate".to_owned()]);
+    let from_fleet = vessel::fleet::cli::dispatch(&[]);
+    // 2 型が並んでいると、この Vec が型不一致で compile error になる（憲法 C2）。
+    let both: Vec<Outcome> = vec![from_rules, from_fleet];
+    assert_eq!(both.len(), 2, "1 つの Vec に入る＝同じ型");
+    assert_eq!(both.first().map(|o| o.rc), Some(RC_OK), "rules validate は rc 0");
+    assert_eq!(
+        both.get(1).map(|o| o.rc),
+        Some(RC_REFUSED),
+        "引数の無い fleet は rc 1"
+    );
 }
 
 #[test]
@@ -187,7 +203,7 @@ fn rules_manifest_rejects_empty_id() {
 fn rules_cli_refuses_rules_flag_without_path() {
     let args = ["validate".to_owned(), "--rules".to_owned()];
     let outcome = vessel::rules::cli::dispatch(&args);
-    assert!(!outcome.ok, "PATH の無い --rules は rc 1");
+    assert_eq!(outcome.rc, RC_REFUSED, "PATH の無い --rules は rc 1");
     assert!(outcome.out.is_empty(), "埋め込みへ倒れない");
     let joined = outcome.err.join("\n");
     assert!(joined.contains("--rules に PATH が無い"), "断りの行: {joined}");
@@ -237,7 +253,7 @@ fn rules_embedded_manifest_is_valid_and_covers_all_kinds() {
 fn rules_cli_get_returns_value() {
     let args = ["get".to_owned(), "R-C4-1".to_owned()];
     let outcome = vessel::rules::cli::dispatch(&args);
-    assert!(outcome.ok, "rc: {outcome:?}");
+    assert_eq!(outcome.rc, RC_OK, "rc: {outcome:?}");
     assert_eq!(outcome.out, vec!["20000".to_owned()], "値の行");
 }
 
@@ -245,7 +261,7 @@ fn rules_cli_get_returns_value() {
 fn rules_cli_get_refuses_disabled_row() {
     let args = ["get".to_owned(), "R-C8-1".to_owned()];
     let outcome = vessel::rules::cli::dispatch(&args);
-    assert!(!outcome.ok, "不発効の行は rc 1");
+    assert_eq!(outcome.rc, RC_REFUSED, "不発効の行は rc 1");
     assert_eq!(
         outcome.err,
         vec!["rules: disabled R-C8-1".to_owned()],
@@ -267,7 +283,7 @@ fn rules_cli_rules_flag_overrides_embedded() {
         path.display().to_string(),
     ];
     let outcome = vessel::rules::cli::dispatch(&args);
-    assert!(outcome.ok, "rc: {outcome:?}");
+    assert_eq!(outcome.rc, RC_OK, "rc: {outcome:?}");
     assert_eq!(outcome.out, vec!["1".to_owned()], "override した値");
     let embedded = vessel::rules::cli::dispatch(&["get".to_owned(), "gate.token_cap".to_owned()]);
     assert_eq!(

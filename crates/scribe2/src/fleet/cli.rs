@@ -5,40 +5,10 @@
 //! へは bin 側の `emit` / `emit_err` が書く。
 
 use super::store::{self, LockPolicy, StoreError};
+use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
 use super::{json_lite, replay, Event, EventKind, Stage, State, SCHEMA};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
-
-/// subcommand 1 回の結果。rc は 0 / 1 / 2 の 3 値を取る（設計 §5）。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Outcome {
-    /// stdout へ書く行。
-    pub out: Vec<String>,
-    /// stderr へ書く行。
-    pub err: Vec<String>,
-    /// 終了コード。
-    pub code: u8,
-}
-
-impl Outcome {
-    /// stdout へ行を出し rc 0。
-    fn ok(out: Vec<String>) -> Self {
-        Self {
-            out,
-            err: Vec::new(),
-            code: 0,
-        }
-    }
-
-    /// stderr へ行を出し rc を立てる。**stdout へは 1 byte も書かない**。
-    fn failed(code: u8, err: Vec<String>) -> Self {
-        Self {
-            out: Vec::new(),
-            err,
-            code,
-        }
-    }
-}
 
 /// `fleet` の使い方。
 pub fn usage() -> String {
@@ -49,13 +19,13 @@ pub fn usage() -> String {
 pub fn dispatch(args: &[String]) -> Outcome {
     let dir = match required(args, "--state-dir") {
         Ok(found) => PathBuf::from(found),
-        Err(_) => return Outcome::failed(1, vec![usage()]),
+        Err(_) => return Outcome::failed(RC_REFUSED, vec![usage()]),
     };
     match args.first().map(String::as_str) {
         Some("record") => record(args, &dir),
         Some("show") => show(args, &dir),
         Some("export") => export(&dir),
-        _ => Outcome::failed(1, vec![usage()]),
+        _ => Outcome::failed(RC_REFUSED, vec![usage()]),
     }
 }
 
@@ -98,11 +68,11 @@ fn required<'a>(args: &'a [String], name: &str) -> Result<&'a str, String> {
 fn record(args: &[String], dir: &Path) -> Outcome {
     let event = match build_event(args) {
         Ok(found) => found,
-        Err(reason) => return Outcome::failed(1, vec![format!("fleet: {reason}")]),
+        Err(reason) => return Outcome::failed(RC_REFUSED, vec![format!("fleet: {reason}")]),
     };
     let policy = match LockPolicy::embedded() {
         Ok(found) => found,
-        Err(err) => return Outcome::failed(2, vec![err.to_string()]),
+        Err(err) => return Outcome::failed(RC_BROKEN, vec![err.to_string()]),
     };
     match store::append(dir, &event, policy) {
         Ok(warnings) => {
@@ -114,7 +84,7 @@ fn record(args: &[String], dir: &Path) -> Outcome {
             outcome.err = warnings.iter().map(|w| w.as_str().to_owned()).collect();
             outcome
         }
-        Err(err) => Outcome::failed(2, vec![err.to_string()]),
+        Err(err) => Outcome::failed(RC_BROKEN, vec![err.to_string()]),
     }
 }
 
@@ -154,14 +124,14 @@ fn build_event(args: &[String]) -> Result<Event, String> {
 fn show(args: &[String], dir: &Path) -> Outcome {
     let id = match required(args, "--run") {
         Ok(found) => found,
-        Err(reason) => return Outcome::failed(1, vec![format!("fleet: {reason}")]),
+        Err(reason) => return Outcome::failed(RC_REFUSED, vec![format!("fleet: {reason}")]),
     };
     let state = match load(dir) {
         Ok(found) => found,
-        Err(lines) => return Outcome::failed(2, lines),
+        Err(lines) => return Outcome::failed(RC_BROKEN, lines),
     };
     match state.runs.get(id) {
-        None => Outcome::failed(1, vec!["fleet: no such run".to_owned()]),
+        None => Outcome::failed(RC_REFUSED, vec!["fleet: no such run".to_owned()]),
         Some(run) => Outcome::ok(vec![format!(
             "run={} bead={} stage={} approved={} updated={}",
             run.id,
@@ -177,7 +147,7 @@ fn show(args: &[String], dir: &Path) -> Outcome {
 fn export(dir: &Path) -> Outcome {
     let state = match load(dir) {
         Ok(found) => found,
-        Err(lines) => return Outcome::failed(2, lines),
+        Err(lines) => return Outcome::failed(RC_BROKEN, lines),
     };
     let mut lines = vec![json_lite::write_object(&[
         ("schema", json_lite::Value::Num(SCHEMA)),
