@@ -598,7 +598,9 @@ fn measure_paths_clean(layout: &Layout) -> Measured {
     }
 }
 
-/// tracked file を 1 本ずつ走査する。UTF-8 でない file は skip して数えない。
+/// tracked file を 1 本ずつ走査する。読めない file（UTF-8 でない・作業木から消えている
+/// 等）は skip して `scanned` にも数えない。母集団は index だが本文は作業木から読むので、
+/// index にしか在らない blob（tracked symlink の link target を含む）はこの面では測らない。
 fn scan_private_paths(root: &Path, rels: &[String]) -> Measured {
     let mut violations = Vec::new();
     let mut scanned = 0;

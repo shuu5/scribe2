@@ -6,8 +6,10 @@
 //!
 //! **honest fence**: git / tar / cargo の spawn 失敗と、diff / rev-parse / archive /
 //! tar / base 健全性前段 / runner 不在の rc≠0 は例外なく `reason=infra-error` として
-//! rc 1 で返し、RED とも skip とも数えない。**overlay 後の compile error は RED と
-//! 数える**（新しい test が古い木で通らないことの一形態だからである）。
+//! rc 1 で返し、RED とも skip とも数えない。runner が signal で殺され rc を持たない
+//! ときも RED と数えない（rc≠0 でないので (c) の RED-on-base に当たらない）。
+//! **overlay 後の compile error は RED と数える**（新しい test が古い木で通らないこと
+//! の一形態だからである）。
 //!
 //! **新規 src file の in-module test は base へ写さないので flip されない**——本 check が
 //! 保証するのは既存 src file の test 区間の変更についてのみである。
@@ -210,31 +212,36 @@ fn changed_rs(base: &str, workdir: &Path) -> Result<Vec<String>, String> {
         .collect())
 }
 
-/// `<rev>:<rel>` の本文。その rev に無ければ `None`。
-fn show(workdir: &Path, rev: &str, rel: &str) -> Option<String> {
+/// `<rev>:<rel>` の本文。その rev に無ければ `Ok(None)`。
+///
+/// git の **spawn 失敗だけ**を `Err`（infra-error の理由）へ上げる。rc≠0 は「その rev に
+/// その path が無い」という正当な意味なので `Ok(None)` に保つ。両者を畳むと spawn 失敗が
+/// `not-copied` に化けて flip 未検証のまま rc 0 が出る（honest fence は「例外なく」である）。
+fn show(workdir: &Path, rev: &str, rel: &str) -> Result<Option<String>, String> {
     let output = Command::new("git")
         .arg("-C")
         .arg(workdir)
         .arg("show")
         .arg(format!("{rev}:{rel}"))
         .output()
-        .ok()?;
+        .map_err(|err| format!("git show {rev}:{rel} を起動できない: {err}"))?;
     if !output.status.success() {
-        return None;
+        return Ok(None);
     }
-    Some(String::from_utf8_lossy(&output.stdout).into_owned())
+    Ok(Some(String::from_utf8_lossy(&output.stdout).into_owned()))
 }
 
 /// 変更 .rs ごとに base / HEAD の本文を読む。
-fn load_pairs(base: &str, workdir: &Path, changed: &[String]) -> Vec<FilePair> {
-    changed
-        .iter()
-        .map(|rel| FilePair {
+fn load_pairs(base: &str, workdir: &Path, changed: &[String]) -> Result<Vec<FilePair>, String> {
+    let mut pairs = Vec::new();
+    for rel in changed {
+        pairs.push(FilePair {
             rel: rel.clone(),
-            base: show(workdir, base, rel),
-            head: show(workdir, "HEAD", rel),
-        })
-        .collect()
+            base: show(workdir, base, rel)?,
+            head: show(workdir, "HEAD", rel)?,
+        });
+    }
+    Ok(pairs)
 }
 
 /// workspace root を解決する。失敗は infra-error の理由になる。
@@ -345,15 +352,17 @@ fn write_overlay(dest: &Path, pairs: &[FilePair]) -> Result<usize, String> {
 /// overlay 後の runner の rc を判定に写す。
 ///
 /// rc 4（no tests to run）は infra-error で、compile error 時の nextest rc は 101
-/// なので弁別できる。
+/// なので弁別できる。**rc を持たない終了（signal / OOM kill）は RED と数えない**
+/// ——flip の証拠が無いまま合格させる fail-open を作らないためである。
 fn judge_run(output: &Output, flipped: usize) -> Verdict {
     match output.status.code() {
         Some(0) => fail("green-on-base"),
         Some(4) => infra("no-tests-on-base"),
-        _ => verdict(
+        Some(_) => verdict(
             &format!("flip-check: RED-on-base ok tests_changed={flipped}"),
             0,
         ),
+        None => infra("runner-killed-by-signal"),
     }
 }
 
@@ -429,7 +438,10 @@ pub fn judge(base: &str, workdir: &Path) -> Verdict {
     if changed.is_empty() {
         return verdict("flip-check: skip reason=no-rust-diff", 0);
     }
-    let pairs = load_pairs(base, workdir, &changed);
+    let pairs = match load_pairs(base, workdir, &changed) {
+        Err(reason) => return infra(&reason),
+        Ok(found) => found,
+    };
     if !pairs.iter().any(FilePair::flips) {
         return fail("no-test-diff");
     }
