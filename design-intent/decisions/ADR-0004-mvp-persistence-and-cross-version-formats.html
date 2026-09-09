@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="folio-doc-type" content="adr">
+<meta name="folio-layer" content="project">
+<meta name="folio-version" content="0.1.0">
+<meta name="folio-status" content="accepted">
+<meta name="folio-stakeholders" content="Developer, AI Agent, External Reviewer">
+<meta name="folio-adr-id" content="0004">
+<meta name="folio-adr-date" content="2026-09-09">
+<title>ADR-0004 — MVP の永続面と跨版 5 面の on-disk 形式 (event log は std の JSONL 1 file・SQLite は v3・env seam を持たない・契約と manifest は TOML subset)</title>
+<link rel="stylesheet" href="../../common.css">
+<script type="application/ld+json">
+{
+  "@context": {
+    "dc": "http://purl.org/dc/terms/",
+    "schema": "https://schema.org/",
+    "folio": "https://folio.dev/spec/v1/"
+  },
+  "@id": "./ADR-0004-mvp-persistence-and-cross-version-formats.html",
+  "@type": "schema:TechArticle",
+  "dc:isPartOf": [
+    { "@id": "./README.html" }
+  ],
+  "dc:title": "ADR-0004 — MVP の永続面と跨版 5 面の on-disk 形式 (event log は std の JSONL 1 file・SQLite は v3・env seam を持たない・契約と manifest は TOML subset)",
+  "folio:version": "0.1.0",
+  "folio:stakeholders": ["Developer", "AI Agent", "External Reviewer"],
+  "dc:references": [
+    { "@id": "../spec/constitution.html#c1" },
+    { "@id": "../spec/constitution.html#c2" },
+    { "@id": "../spec/constitution.html#c3" },
+    { "@id": "../spec/constitution.html#c6" },
+    { "@id": "../spec/constitution.html#c11" },
+    { "@id": "../spec/constitution.html#c13" },
+    { "@id": "../spec/constitution.html#a3" },
+    { "@id": "../spec/constitution.html#n4" },
+    { "@id": "../spec/srs.html#FR3" },
+    { "@id": "../spec/srs.html#FR12" },
+    { "@id": "../spec/srs.html#FR13" },
+    { "@id": "../spec/srs.html#FR17" },
+    { "@id": "../spec/srs.html#FR19" },
+    { "@id": "../spec/srs.html#NFR3" },
+    { "@id": "../spec/srs.html#NFR4" },
+    { "@id": "./ADR-0003-constitution-v1-abandon-rewrite.html" }
+  ]
+}
+</script>
+</head>
+<body>
+<!-- folio:chrome-top -->
+<a class="skip-link" href="#s1-context">本文へスキップ</a>
+<nav class="breadcrumb" aria-label="パンくず"><ol>
+  <li><a href="../index.html">design-intent</a></li>
+  <li><a href="./README.html">decisions</a></li>
+  <li aria-current="page">ADR-0004</li>
+</ol></nav>
+<!-- /folio:chrome-top -->
+
+<header class="doc-header">
+  <h1>ADR-0004 — MVP の永続面と跨版 5 面の on-disk 形式</h1>
+  <div class="meta">Status: accepted &middot; Date: 2026-09-09 &middot; version 0.1.0 (SRS の版に追随する) &middot; AI 可決 (依存の増減も憲法条文の改訂も伴わない・条の解釈と on-disk 形式の決定) &middot; MVP 切り直しの user 裁定 2026-09-09 を前提にする</div>
+</header>
+<!-- folio:chrome-toc -->
+<nav class="toc" aria-label="ページ内目次">
+<ol>
+  <li><a href="#s1-context">§1. Context</a></li>
+  <li><a href="#s2-decision">§2. Decision</a></li>
+  <li class="toc--sub"><a href="#s2-1-persistence">§2.1 永続面 = 追記だけの JSONL 1 file (C3 の MVP 解釈)</a></li>
+  <li class="toc--sub"><a href="#s2-2-five-faces">§2.2 跨版 5 面の v2 側の形</a></li>
+  <li class="toc--sub"><a href="#s2-3-contract-and-manifest">§2.3 契約 file と rules manifest = TOML subset</a></li>
+  <li class="toc--sub"><a href="#s2-4-no-env-seam">§2.4 env seam を持たない (C2.2 の適用)</a></li>
+  <li class="toc--sub"><a href="#s2-5-schema-version">§2.5 schema 版と互換性</a></li>
+  <li class="toc--sub"><a href="#s2-6-out-of-scope">§2.6 本 ADR の射程外</a></li>
+  <li><a href="#s3-consequences">§3. Consequences</a></li>
+  <li><a href="#s4-alternatives">§4. Alternatives Considered</a></li>
+  <li><a href="#s5-trace">§5. Trace</a></li>
+</ol>
+</nav>
+<!-- /folio:chrome-toc -->
+
+<aside class="informative">
+<p>本 ADR は IETF <strong>RFC 2119</strong> および <strong>RFC 8174 / BCP 14</strong> に定義される MUST / SHALL / SHOULD / MAY のキーワード解釈規約に従う。 ADR は決定時点の記録 (frozen) であり、 改訂は本 ADR を supersede する新 ADR で行う。</p>
+</aside>
+
+<aside class="machine-readable" aria-hidden="true">
+  <dl>
+    <dt>id</dt><dd>ADR-0004</dd>
+    <dt>doc-type</dt><dd>adr</dd>
+    <dt>status</dt><dd>accepted</dd>
+    <dt>date</dt><dd>2026-09-09</dd>
+    <dt>version</dt><dd>0.1.0 (SRS の版に追随する)</dd>
+    <dt>decided-by</dt><dd>AI (開発 session・2026-09-09) — 依存の増減 (A3) も憲法条文の改訂 (A2) も伴わないため user 裁定を要しない。 前提となる MVP 切り直しは user 裁定 2026-09-09 (逐語は repo 外)</dd>
+    <dt>stakeholders</dt><dd>Developer, AI Agent, External Reviewer</dd>
+    <dt>supersedes</dt><dd>(none)</dd>
+    <dt>related</dt><dd>constitution C1 / C2 / C3 / C6 / C11 / C13 / A3 / N4・SRS FR3 / FR12 / FR13 / FR17 / FR19 / NFR3 / NFR4・ADR-0003</dd>
+  </dl>
+</aside>
+
+<section id="s1-context" class="informative">
+<h2>§1. Context</h2>
+<p class="section-essence" data-audience="human">MVP を小さく切り直したとき、 「状態をどこに、 どんな形で置くか」を決めないと契約が書けなくなりました。 憲法は状態の置き場を「SQLite 1 file」と例示しますが、 この repo は外部 crate を 1 本も持たない (依存 0 本) と決めていて、 SQLite を今すぐ入れると矛盾します。 加えて、 前の版と次の版が共有する 5 つの接点 (所属の目印・観測・台帳・停止・審査結果) の file の形と、 設定を環境変数で受け渡してよいかも、 契約より先に決める必要がありました。 本 ADR はその決定の記録です。</p>
+<p data-audience="machine">MVP 切り直し (user 裁定 2026-09-09) により、 SRS の到達点は toy repo 5 便 + 自己ホスト 1 便に絞られ、 契約は 5 本 + 不足 3 本に分かれた (<code>docs/design/</code> の 4 設計)。 各契約が同じ on-disk 面を読み書きするため、 形式は契約に先立って 1 箇所で決める必要がある。 拘束条件は次の 4 つである。 (1) <a href="../spec/constitution.html#c3">C3</a> は fleet の状態を「host 列を持つ 1 つの database file」に置くと定め、 機構欄は SQLite 1 file を例示する。 (2) <a href="../spec/srs.html#NFR3">NFR3</a> と <a href="../spec/constitution.html#c13">C13</a> は実行時の直接依存 0 本 (許可リストの外は歯が落とす) を定め、 依存の追加は <a href="../spec/constitution.html#a3">A3</a> の user 確認を要する。 (3) <a href="../spec/constitution.html#c2">C2.2</a> は環境変数の直読と新しい env seam の新設を禁じる。 (4) 器 SPEC §12.2 (要件カタログ R-O3) は跨版契約を 5 面 (所属 marker / 観測 export / 台帳 adapter / 停止 1 コマンド / oracle) と定め、 版番号に依らず固定する。 CLAUDE.md の「ADR を書く条件」のうち 1 (憲法条の解釈) と 3 (schema・on-disk 形式・跨版契約) に当たる。</p>
+</section>
+
+<section id="s2-decision" class="normative">
+<h2>§2. Decision</h2>
+<p class="section-essence" data-audience="human">決めたことは 5 つです。 (1) 状態は「1 行 1 出来事を末尾に足していく JSONL の file 1 つ」に置き、 SQLite は次の版で依存の確認を経てから入れます。 (2) 前の版と共有する 5 つの接点の file の形を固定します。 (3) 契約 file と規則の値の file は、 標準ライブラリだけで読める小さな TOML の形にします。 (4) 環境変数で設定を受け渡しません。 置き場は引数や repo 内の決まった場所で渡します。 (5) file の形には版番号を付け、 壊す変更は版を上げて行います。</p>
+
+<h3 id="s2-1-persistence">§2.1 永続面 = 追記だけの JSONL 1 file (C3 の MVP 解釈)</h3>
+<p class="section-essence" data-audience="human">「1 つの database file」を、 MVP では「追記だけの JSONL 1 file」と読みます。 各行に host 名を持たせるので、 憲法が求める「host 列」も満たします。 SQLite は次の版で、 依存の追加を user に確認してから入れます。</p>
+<div data-audience="machine">
+  <p class="ears" data-ears-pattern="ubiquitous"><span class="ears-id">D-1</span>: scribe2 <span class="ears-shall">SHALL</span> keep the fleet state of the MVP in exactly one append-only JSONL file, <code>&lt;state_dir&gt;/fleet/events.jsonl</code>, in which every line is one event carrying a <code>host</code> field, and <span class="ears-shall">SHALL</span> derive the current position of every run and seat only by replaying that file.</p>
+  <p class="ears" data-ears-pattern="unwanted"><span class="ears-id">D-1.2</span>: <span class="ears-if">IF a line of the event log cannot be parsed</span>, THEN scribe2 <span class="ears-shall">SHALL</span> report every such line with its line number and <span class="ears-shall">SHALL NOT</span> skip it silently.</p>
+  <dl>
+    <dt>解釈</dt>
+    <dd><a href="../spec/constitution.html#c3">C3</a> の規範文が求めるのは「1 つの file」「host 列」「per-host の dir / TSV / cache に真実を置かない」の 3 点であり、 storage engine は機構欄の例示である。 JSONL 1 file は 3 点を満たす。 SQLite 化は依存許可リスト (<a href="../spec/constitution.html#c13">C13</a> / <a href="../spec/constitution.html#a3">A3</a>) を経た v3 の手番とし、 その際も event log は消さず投影元として残す (跨版 面 2 の path を固定するため)。</dd>
+    <dt>機構</dt>
+    <dd>lock file (<code>events.jsonl.lock</code>・<code>create_new</code>・stale 30 s で除去し warn) を伴う <code>O_APPEND</code> の 1 行 write。 reader は fail-closed (<a href="../spec/srs.html#NFR4">NFR4</a>)。 型は <code>EventKind</code> (閉じた 8 variant) と <code>Stage</code> (閉じた 8 variant)。 設計は <code>docs/design/fleet-event-log.md</code>。</dd>
+    <dt>出所</dt><dd>器 SPEC v0.4.6 §4 (MVP の state store は std の JSONL・SQLite は v3)・SRS <a href="../spec/srs.html#FR3">FR3</a></dd>
+  </dl>
+</div>
+
+<h3 id="s2-2-five-faces">§2.2 跨版 5 面の v2 側の形</h3>
+<p class="section-essence" data-audience="human">前の版と次の版が共有する 5 つの接点のうち、 MVP で作るのは 4 つ (所属・観測・停止・審査結果) です。 台帳の接点は「bead の id を文字列で持つだけ」に留め、 台帳への書き込みは MVP の外です。</p>
+<div data-audience="machine">
+  <table>
+    <thead><tr><th>面</th><th>v2 側の形 (MUST)</th><th>SRS</th></tr></thead>
+    <tbody>
+      <tr><td>1 所属</td><td>repo root の固定名 <code>.vessel</code>。 中身は 2 行・LF・この順・末尾改行・余白なし: <code>name=&lt;NAME&gt;</code> / <code>version=&lt;N&gt;</code>。 不在・読めない・parse 不能は「黙る」側へ倒す</td><td><a href="../spec/srs.html#FR19">FR19</a> / FR24</td></tr>
+      <tr><td>2 観測</td><td><code>&lt;state_dir&gt;/fleet/events.jsonl</code> (schema 1) と <code>&lt;NAME&gt; fleet export</code> (stdout 1 行目が schema header・read-only・lock を取らない)</td><td><a href="../spec/srs.html#FR3">FR3</a></td></tr>
+      <tr><td>3 台帳</td><td>MVP 外。 event と契約は bead id を文字列で持つだけで、 台帳 (bd) の read / write を行わない</td><td>SRS scope out</td></tr>
+      <tr><td>4 停止</td><td><code>&lt;NAME&gt; pipe stop --all</code> 1 コマンド・冪等。 rc = 0 (全部止まった / 対象なし)・1 (残った)・2 (state が読めない)</td><td><a href="../spec/srs.html#FR13">FR13</a></td></tr>
+      <tr><td>5 oracle</td><td><code>&lt;state_dir&gt;/fleet/verdicts.jsonl</code> に land ごと 1 行 <code>{"schema":1,"run","bead","sha","verdict","evidence","ts"}</code> を append。 evidence は <code>verdict.json</code> の path</td><td><a href="../spec/srs.html#FR12">FR12</a></td></tr>
+    </tbody>
+  </table>
+  <p>path・file 名・rc 語彙は<strong>版番号に依らず固定</strong>する (R-O3)。 <code>&lt;state_dir&gt;</code> の既定は <code>$HOME/.local/state/&lt;NAME&gt;/</code> (NAME 定数から導出・C2.2)。</p>
+</div>
+
+<h3 id="s2-3-contract-and-manifest">§2.3 契約 file と rules manifest = TOML subset</h3>
+<p class="section-essence" data-audience="human">契約 file と規則の値の file は、 どちらも小さな TOML の形にします。 読み手は標準ライブラリだけで書く自前の scanner で、 未知の key は拒みます。 数字を書く file は、 人が裁定 id を添えて手で編集できる形であることが大事です。</p>
+<div data-audience="machine">
+  <p class="ears" data-ears-pattern="ubiquitous"><span class="ears-id">D-3</span>: scribe2 <span class="ears-shall">SHALL</span> read the contract file and the rules manifest as a TOML subset (top-level scalars, <code>[[rule]]</code> array-of-tables, string / integer / boolean values, string arrays) with a scanner written in the standard library only, and <span class="ears-shall">SHALL</span> reject unknown keys, missing required keys and type mismatches by collecting every error with its line number.</p>
+  <dl>
+    <dt>契約 file</dt>
+    <dd>key = <code>goal</code> / <code>done</code> / <code>size</code> / <code>owner</code> / <code>disposition</code> / <code>write-set</code> / <code>verify</code> / <code>req</code> / <code>design</code> / <code>classes</code> (任意)。 <code>req</code> (SRS の要件 id・1 本以上) と <code>design</code> (設計 doc の repo 相対 path) は SRS FR2 の帰結として必須。 <code>verify</code> の各要素は 1 行で完結する。 設計は <code>docs/design/pipeline.md</code> §3。</dd>
+    <dt>rules manifest</dt>
+    <dd><code>rules/manifest.toml</code>・<code>schema = 1</code>・行 = <code>id</code> / <code>kind</code> / <code>value</code> / <code>enabled</code> / <code>origin</code> / <code>ruling</code> / <code>ruled_at</code>。 憲法 §3 の行 id と字面一致させる。 user 逐語の key は持たない (PUBLIC repo)。 設計は <code>docs/design/rules-manifest.md</code>。</dd>
+    <dt>出所</dt><dd><a href="../spec/constitution.html#c1">C1</a> (manifest は TOML・未知 key 拒否・起動時 1 回読み)・<a href="../spec/srs.html#FR17">FR17</a>・xtask の既存 scanner (<code>toml_lite</code>) と同形</dd>
+  </dl>
+</div>
+
+<h3 id="s2-4-no-env-seam">§2.4 env seam を持たない (C2.2 の適用)</h3>
+<p class="section-essence" data-audience="human">「状態の置き場」や「触ってよい file の一覧」を環境変数で渡すのはやめます。 置き場は引数で、 一覧は作業場所の git の私有 dir に置いた file で、 実装役への情報は起動コマンドの穴埋めで渡します。 環境変数を読むのは HOME だけで、 それも 1 か所に閉じます。</p>
+<div data-audience="machine">
+  <p class="ears" data-ears-pattern="ubiquitous"><span class="ears-id">D-4</span>: scribe2 <span class="ears-shall NOT">SHALL NOT</span> read any environment variable other than <code>HOME</code>, <span class="ears-shall">SHALL</span> confine the reading of <code>HOME</code> to exactly one glue function that derives the default state directory, and <span class="ears-shall">SHALL</span> pass every other location or policy as a command-line argument, a file under the worktree's private git directory, or a placeholder substituted into the runner command.</p>
+  <dl>
+    <dt>機構</dt>
+    <dd>全 subcommand が <code>--state-dir &lt;dir&gt;</code> を持つ (test は tmp を指す)。 guard の policy は <code>&lt;git-dir&gt;/&lt;NAME&gt;/write-set.txt</code> (worktree ごとに私有・tracked 面に触れない・<code>git status</code> を汚さない)。 runner cmd の <code>{run}</code> <code>{worktree}</code> <code>{contract}</code> <code>{write_set}</code> <code>{base}</code> を置換する。 headless wrapper が子 process へ設定 dir を渡す行為は「読む」ではないため本条に触れない。</dd>
+    <dt>出所</dt><dd><a href="../spec/constitution.html#c2">C2.2</a>。 前の器で <code>SCRIBE_*</code> env が 533 種に増えて改名不能になった実測 (器 SPEC §7)。</dd>
+  </dl>
+</div>
+
+<h3 id="s2-5-schema-version">§2.5 schema 版と互換性</h3>
+<p class="section-essence" data-audience="human">JSONL の各行と TOML の先頭に <code>schema</code> の番号を持たせます。 field を足すだけの変更は同じ番号のまま、 読めなくなる変更は番号を上げて「新しい版」として行います。</p>
+<div data-audience="machine">
+  <p class="ears" data-ears-pattern="ubiquitous"><span class="ears-id">D-5</span>: scribe2 <span class="ears-shall">SHALL</span> carry an integer <code>schema</code> field in every event line, every verdict line, every injection record and at the top of the rules manifest, <span class="ears-shall">SHALL</span> treat the addition of an optional field as compatible within the same schema number, and <span class="ears-shall">SHALL</span> treat any change that makes an existing line unreadable as schema-incompatible, to be carried out only as a new version (<a href="../spec/constitution.html#n4">N4</a>).</p>
+  <dl>
+    <dt>機構</dt><dd>reader は <code>schema</code> が自分の知る値でなければ行番号付きで error にする (fail-closed)。 初期値はすべて 1。</dd>
+    <dt>出所</dt><dd><a href="../spec/constitution.html#n4">N4</a> (schema 非互換は新しい版)・R-O3 (export の schema 版付き)</dd>
+  </dl>
+</div>
+
+<h3 id="s2-6-out-of-scope">§2.6 本 ADR の射程外</h3>
+<p data-audience="machine">依存 OSS の追加・削除は決めない (rtk / graphify の seam と依存予算は別 ADR)。 folio の位置は決めない (別 ADR)。 SQLite 化の時期と schema は決めない (v3 の A3 を通す周で新 ADR)。 憲法の条文は 1 字も変えない (本 ADR は C3 / C2.2 の<em>解釈</em>を記録する)。 口座・lease・退役・tmux 席の状態 (C3 の残りの列・C9) は MVP の event log に持たせない (SRS scope out)。</p>
+</section>
+
+<section id="s3-consequences" class="informative">
+<h2>§3. Consequences</h2>
+<p class="section-essence" data-audience="human">良い点は、 依存 0 本のまま今日から状態を永続でき、 process を殺しても続きが引けること、 環境変数の増殖を最初から塞げることです。 悪い点は、 file が追記だけなので大きくなり続けること、 同じ host の中でしか lock が効かないこと、 憲法 §3 の写しと manifest の drift をまだ機械が測れないことです。</p>
+<h3>Positive</h3>
+<ul>
+  <li>直接依存 0 本 (<a href="../spec/srs.html#NFR3">NFR3</a>) を保ったまま fleet の永続面が手に入る。 cell の sandbox が crates.io を引けなくても build できる。</li>
+  <li>現在地が replay で決まるため、 process を殺して別 process で resume できる (SRS AC4)。 席の記憶や散文を判定入力にしない (C3.3) 形が構造で決まる。</li>
+  <li>跨版 5 面の path と rc 語彙が版番号に依らず固定され、 v2 が「前の版」になる日に同じ面をそのまま提供できる (R-O3)。</li>
+  <li>env seam が 0 のため、 改名 (NAME 定数の差替え) が env の洗い替えを伴わない。 test が env の漏れに左右されない。</li>
+  <li>契約 file と manifest が同じ scanner で読めるため、 形式の実装が 1 本で済む。</li>
+</ul>
+<h3>Negative</h3>
+<ul>
+  <li><strong>無限追記</strong>: event log は圧縮も rotation も持たない。 1 便あたり 10 行程度ゆえ MVP では問題にならないが、 v3 で SQLite 化するか rotation を足す判断が要る。</li>
+  <li><strong>lock は同 host 内のみ</strong>: 複数 host からの append は想定しない (C3 の host 列は「どこで起きたか」を記録するだけで、 cross-host の直列化は担わない)。 fleet を複数 host で共有する形は v3 の SQLite / 同期の手番。</li>
+  <li><strong>drift の歯が無い</strong>: manifest が憲法 §3 の行 id と字面一致するよう設計したが、 §3 の HTML と manifest を突合する CI の歯 (C14.2) は本 ADR の時点で存在しない。 最小形 (xtask の閾値 const と manifest の値の一致) だけを rules manifest の契約に含める。</li>
+  <li><strong>HOME 依存</strong>: state dir の既定は HOME を要する。 HOME が無い環境 (一部の CI / container) では <code>--state-dir</code> の明示が必須になる。</li>
+  <li>guard の policy を git dir に置くため、 git を使わない repo では guard が不活性になる (git は core 依存ゆえ許容)。</li>
+</ul>
+<h3>Neutral</h3>
+<ul>
+  <li>本 ADR は user 裁定を要しない (依存の増減も条文改訂も無い)。 前提の MVP 切り直しは user 裁定 2026-09-09。</li>
+  <li>REORG 案が予約していた ADR 番号 (0004 = 依存予算・0005 = folio) は 0005 / 0006 へ繰り下がる。 番号は land 順で採る。</li>
+</ul>
+</section>
+
+<section id="s4-alternatives" class="informative">
+<h2>§4. Alternatives Considered</h2>
+<p class="section-essence" data-audience="human">状態の置き場は 4 案、 受け渡しは 2 案、 file の形は 2 案を比べました。 いずれも「依存 0 本」「環境変数を増やさない」「壊れた行を黙って捨てない」の 3 つの物差しで決めています。</p>
+<table>
+  <thead><tr><th>案</th><th>内容</th><th>理由</th><th>採否</th></tr></thead>
+  <tbody>
+    <tr><td>永続 案 1 SQLite を今入れる</td><td>C3 の例示どおり <code>rusqlite</code> 等で 1 file</td><td>NFR3 (依存 0 本) と cell sandbox の crates.io 不達に衝突。 A3 の user 確認も要る</td><td>却下 (v3 で再提案)</td></tr>
+    <tr><td>永続 案 2 per-run の JSON file を上書き</td><td><code>&lt;state_dir&gt;/pipe/&lt;run&gt;/state.json</code> を段ごとに置換</td><td>置換 write は先行の印を消す (記帳は追記であること・要件カタログ R-I16)。 人由来 event の計数 (FR22) が成立しない</td><td>却下</td></tr>
+    <tr><td>永続 案 3 lock 無しの append</td><td>複数 process の同時 append を許す</td><td>同 host の並列 write で行が interleave する</td><td>却下</td></tr>
+    <tr><td><strong>永続 案 4 lock 付き append-only JSONL 1 file</strong></td><td>本 ADR §2.1</td><td>C3 の 3 要件を満たし依存 0 本。 fail-closed reader で NFR4</td><td><strong>採用</strong></td></tr>
+    <tr><td>受け渡し 案 a env (<code>&lt;NAME&gt;_STATE_DIR</code> 等)</td><td>state dir / write-set / run 情報を env で</td><td>C2.2 (env 直読禁止・seam 新設禁止)。 前の器の env 533 種の再演</td><td>却下</td></tr>
+    <tr><td><strong>受け渡し 案 b 引数 + git dir + placeholder</strong></td><td>本 ADR §2.4</td><td>env を読まずに test と runner の両方へ届く</td><td><strong>採用</strong></td></tr>
+    <tr><td>形式 案 i JSON</td><td>契約 file と manifest を JSON で</td><td>裁定 id を添えて人が手で編集する file としては読みにくい。 xtask の既存 scanner と二重化</td><td>却下</td></tr>
+    <tr><td><strong>形式 案 ii TOML subset</strong></td><td>本 ADR §2.3</td><td>C1 の例示 (TOML) と一致。 std だけの scanner が既に 1 本在る</td><td><strong>採用</strong></td></tr>
+    <tr><td>marker 案 版番号入りの file 名</td><td><code>.&lt;NAME&gt;2</code> 等</td><td>次の版のたびに前の版の hook を直す (R-O3 違反)。 器 SPEC §7 の却下案</td><td>却下</td></tr>
+  </tbody>
+</table>
+</section>
+
+<section id="s5-trace" class="informative">
+<h2>§5. Trace</h2>
+<p class="section-essence" data-audience="human">出所は、 憲法の C1 / C2 / C3 / C13 / N4 と、 SRS の FR3 / FR12 / FR13 / FR17 / FR19 / NFR3 / NFR4、 器 SPEC の v0.4.6 (MVP 切り直し) と §7 / §12.2 です。 決定は AI が行い、 前提の切り直しは user の裁定です。</p>
+<ul data-audience="machine">
+  <li>前提: MVP 切り直しの user 裁定 (2026-09-09・逐語は repo 外)。 器 SPEC v0.4.6 §4 (state store は std の JSONL・SQLite は v3)・§7 (marker の字面)・§12.2 (跨版 5 面)。</li>
+  <li>憲法: <a href="../spec/constitution.html#c1">C1</a> (manifest は TOML 1 file)・<a href="../spec/constitution.html#c2">C2.2</a> (env 直読禁止)・<a href="../spec/constitution.html#c3">C3</a> (1 つの file・host 列)・<a href="../spec/constitution.html#c6">C6.3</a> (計測は append-only store 1 つ)・<a href="../spec/constitution.html#c11">C11.2</a> (極性は型で)・<a href="../spec/constitution.html#c13">C13</a> / <a href="../spec/constitution.html#a3">A3</a> (依存の予算と確認)・<a href="../spec/constitution.html#n4">N4</a> (schema 非互換は新しい版)。</li>
+  <li>SRS: <a href="../spec/srs.html#FR3">FR3</a> / <a href="../spec/srs.html#FR12">FR12</a> / <a href="../spec/srs.html#FR13">FR13</a> / <a href="../spec/srs.html#FR17">FR17</a> / <a href="../spec/srs.html#FR19">FR19</a> / <a href="../spec/srs.html#NFR3">NFR3</a> / <a href="../spec/srs.html#NFR4">NFR4</a>。 要件カタログ R-O3 (5 面・版に依らず固定)・R-I16 (記帳は追記)・R-G10 (破損入力は loud)。</li>
+  <li>設計 doc: <code>docs/design/fleet-event-log.md</code> / <code>docs/design/rules-manifest.md</code> / <code>docs/design/vessel-hook.md</code> / <code>docs/design/pipeline.md</code>。 契約はこれらを pointer で指す (SRS FR2)。</li>
+  <li>関連 ADR: <a href="./ADR-0003-constitution-v1-abandon-rewrite.html">ADR-0003</a> (前の版を oracle にしない = 跨版 5 面は「v2 が前の版になる日」のために実装する)。</li>
+  <li>記録した日: 2026-09-09 (決定日と同日)。</li>
+</ul>
+</section>
+
+<!-- folio:chrome-bottom -->
+<nav class="prevnext" aria-label="前後の文書">
+  <a class="prevnext__prev" href="ADR-0003-constitution-v1-abandon-rewrite.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">ADR-0003 — 憲法改訂 = v1 完全放棄に伴う C7 / A1・C8 / A4・N4 の書換え (対話面は 1 つ・design-intent が拘束条件・自己開発は既定で許可・改訂は ADR + delta marker)</span></a>
+</nav>
+<script>
+(function () {
+  var openedForPrint = [];
+  window.addEventListener('beforeprint', function () {
+    openedForPrint = [];
+    var ds = document.querySelectorAll('details:not([open])');
+    for (var i = 0; i < ds.length; i++) { ds[i].setAttribute('open', ''); openedForPrint.push(ds[i]); }
+  });
+  window.addEventListener('afterprint', function () {
+    for (var i = 0; i < openedForPrint.length; i++) openedForPrint[i].removeAttribute('open');
+    openedForPrint = [];
+  });
+  if (!document.querySelector('[data-audience]')) return;
+  /* 既定 = 人間プレゼン型 (ADR-0040 / rules §11.3): script 経由で初期 class を付与するため
+     no-JS では付かず全文可視に graceful degrade する。 static DOM は全文を保持 (AI/検索/印刷は不変)。 */
+  document.body.classList.add('audience-human');
+  var bar = document.createElement('nav');
+  bar.className = 'audience-toggle';
+  bar.setAttribute('aria-label', '表示対象の切替');
+  var states = [['both', '両方'], ['human', '人間向け'], ['machine', '機械向け']];
+  for (var s = 0; s < states.length; s++) {
+    (function (mode, label) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      b.setAttribute('aria-pressed', mode === 'human' ? 'true' : 'false');
+      b.addEventListener('click', function () {
+        document.body.classList.remove('audience-human', 'audience-machine');
+        if (mode !== 'both') document.body.classList.add('audience-' + mode);
+        var bs = bar.querySelectorAll('button');
+        for (var j = 0; j < bs.length; j++) bs[j].setAttribute('aria-pressed', bs[j] === b ? 'true' : 'false');
+      });
+      bar.appendChild(b);
+    })(states[s][0], states[s][1]);
+  }
+  var bc = document.querySelector('nav.breadcrumb');
+  if (bc && bc.parentNode) { bc.parentNode.insertBefore(bar, bc.nextSibling); }
+  else { document.body.insertBefore(bar, document.body.firstChild); }
+})();
+</script>
+<!-- /folio:chrome-bottom -->
+</body>
+</html>
