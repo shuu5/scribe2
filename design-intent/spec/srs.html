@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="generator" content="folio S4 assembler (ADR-0042) — deterministic structure, prose slots unfilled">
+<title>設計 → 契約 → 実装 → 検証 → land を、 人の手を借りずに 1 本通す器（MVP）</title>
+<style>
+/* ===========================================================================
+   folio human-layer design system — core.css (S3 / folio-8oc プロトタイプ)
+   要件定義書 (SRS) ビジュアル design system の中核 register。
+   視覚言語 = deck帯 × B2高密度 (ADR-0041)。テーマ = 環境追従 prefers-color-scheme。
+   styling は意味クラス、taxonomy 識別は [data-component] 属性 (floor gate A)。
+   taxonomy = design-intent/research/srs-component-taxonomy.html
+   =========================================================================== */
+
+/* ---- requirement-type-color-tokens (meta / 全 register が共有・両テーマ定義) ---- */
+:root{
+  --ink:#08131a; --ink-soft:#3a4a55; --ink-faint:#5b6671;
+  --paper:#ffffff; --paper-2:#f5f8fa; --paper-3:#eef3f7;
+  --line:#dbe4ea; --line-soft:#eef3f7;
+  --brand:#2a4d6e; --brand-deep:#15324a; --brand-tint:#e8f0f7;
+  --ok:#1e7b65; --ok-tint:#e6f6f2; --ok-line:#9fd9cb;
+  --bad:#b22323; --bad-tint:#fdf3f3; --bad-line:#eab3b3;
+  --warn:#916626; --warn-tint:#fefbea; --warn-line:#e4cf8f;
+  --info:#2a5d9e; --info-tint:#eaf1fb; --info-line:#a8c4e8;
+  --violet:#5b3e8e; --violet-tint:#f0eafa; --violet-line:#cdb8ec;
+  --shadow:0 1px 2px rgba(8,19,26,.06),0 8px 24px rgba(8,19,26,.07);
+  --shadow-lg:0 2px 6px rgba(8,19,26,.08),0 18px 50px rgba(8,19,26,.12);
+  /* 要件型カラートークン (FR/NFR/CON/ASM) */
+  --fr:var(--brand); --nfr:var(--violet); --con:var(--warn); --asm:var(--info);
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --ink:#e8eef2; --ink-soft:#a9b7c1; --ink-faint:#8a99a4; /* ink-faint: 全 dark bg で contrast ≥4.85 = WCAG AA (≥4.5) 充足・最小は ok-tint/warn-tint (gate F・folio-vuf) */
+    --paper:#0d171e; --paper-2:#15222b; --paper-3:#1b2c37;
+    --line:#273947; --line-soft:#1b2c37;
+    --brand:#7db8e8; --brand-deep:#1d3a54; --brand-tint:#16293a;
+    --ok:#5ac8b8; --ok-tint:#10302b; --ok-line:#2e6258;
+    --bad:#ef7a7a; --bad-tint:#341c1c; --bad-line:#6e3636;
+    --warn:#d6a94e; --warn-tint:#312a13; --warn-line:#5e4e23;
+    --info:#7da9e8; --info-tint:#16263c; --info-line:#33507c;
+    --violet:#b89be0; --violet-tint:#241a36; --violet-line:#473a64;
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px rgba(0,0,0,.5);
+    --shadow-lg:0 2px 6px rgba(0,0,0,.5),0 18px 50px rgba(0,0,0,.6);
+  }
+}
+*{box-sizing:border-box;}
+html{scroll-behavior:smooth;}
+body{
+  margin:0; background:var(--paper-2); color:var(--ink);
+  font-family:"Noto Sans CJK JP","Noto Sans JP",system-ui,-apple-system,"Hiragino Kaku Gothic ProN",Meiryo,sans-serif;
+  font-feature-settings:"palt" 1; line-height:1.7; letter-spacing:.01em;
+  -webkit-font-smoothing:antialiased;
+}
+.page{max-width:1280px; margin:0 auto; background:var(--paper); box-shadow:var(--shadow-lg);}
+svg{display:block;} .ico{width:1em; height:1em;}
+
+/* ---- plain-language-term-inline (glossary 派生ビュー / 専門語のやさしい併記) ---- */
+.term{
+  /* font-size 下限 (folio-276 #5)。 .72em は em 連鎖 (例 .actor .role=11px 内) で 7.9px<8px へ縮み
+     判読不能化する。 max() で 10.5px を下限に据え、 広文脈では従来比率を保つ。 */
+  display:inline-block; font-size:max(10.5px,.72em); font-weight:700; line-height:1;
+  padding:.18em .5em; border-radius:999px; margin-left:.3em; vertical-align:.08em;
+  background:var(--paper-3); color:var(--ink-soft); border:1px solid var(--line);
+  letter-spacing:.02em; white-space:nowrap;
+}
+.term.en{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;}
+
+/* ===================== doc-cover-band (deck-band / 表紙) ===================== */
+[data-component="doc-cover-band"]{
+  position:relative; overflow:hidden; color:#fff;
+  /* deeper navy にして白文字 (小サイズ含む) を WCAG AA 維持 (gate F worst-case-stop が最明合成でも
+     ≥4.5 を要求)。 highlight radial は薄め、 linear の最明端 (旧 #33658f) を暗色化。 */
+  background:
+    radial-gradient(1200px 500px at 88% -10%, rgba(255,255,255,.07), transparent 60%),
+    linear-gradient(135deg,#0c1f30 0%,#143049 48%,#173a57 100%);
+  padding:54px 56px 46px;
+}
+.cover-eyebrow{font-size:12.5px; font-weight:700; letter-spacing:.22em; text-transform:uppercase; opacity:.86; margin:0 0 14px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;}
+.cover-eyebrow .doc-type{background:rgba(255,255,255,.16); padding:3px 10px; border-radius:6px; letter-spacing:.16em; border:1px solid rgba(255,255,255,.22);}
+[data-component="doc-cover-band"] h1{font-size:42px; line-height:1.14; margin:0 0 8px; font-weight:800; text-wrap:balance;}
+.cover-sub{font-size:17px; opacity:.9; margin:0 0 22px; font-weight:500;}
+.summary-card{background:rgba(255,255,255,.1); border:1px solid rgba(255,255,255,.2); border-radius:14px; padding:18px 22px; display:flex; gap:18px; align-items:flex-start; max-width:880px;}
+.summary-card .lab{font-size:11px; font-weight:700; letter-spacing:.16em; opacity:.8; margin:0 0 4px;}
+.summary-card .txt{font-size:17.5px; line-height:1.6; font-weight:600; margin:0;}
+.summary-card .txt b{color:#ffe8a8;}
+.cover-meta{display:flex; flex-wrap:wrap; gap:10px 26px; margin-top:24px; font-size:13px;}
+.cover-meta .m{display:flex; gap:8px; align-items:center; opacity:.92;}
+.cover-meta .m .k{opacity:.62; font-weight:600;} .cover-meta .m .v{font-weight:700;}
+.reader-chip{display:inline-flex; gap:8px; align-items:center; margin-top:18px; background:#ffce6e; color:#3a2c05; font-weight:700; font-size:13.5px; padding:8px 14px; border-radius:10px; box-shadow:0 3px 10px rgba(0,0,0,.2);}
+a{color:var(--brand);} /* anchor 既定色 — UA 既定 #0000ee は dark bg で 1.72 (skip-link/domain 目次等の素 anchor で 3 例目の同型欠陥・型 selector ゆえ class 付きリンクは specificity で不変・gate F WCAG AA 両テーマ ≥7.6) */
+
+/* ===================== approval-block (deck-band / 承認証跡) ★critic補填 ===== */
+[data-component="approval-block"]{display:flex; flex-wrap:wrap; gap:14px; align-items:stretch; margin-top:22px;}
+.sign{flex:1 1 200px; background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.22); border-radius:12px; padding:13px 16px; display:flex; flex-direction:column; gap:3px; min-width:0;}
+.sign .role{font-size:10.5px; font-weight:700; letter-spacing:.12em; text-transform:uppercase; opacity:.7;}
+.sign .who{font-size:15px; font-weight:800;}
+.sign .when{font-size:11.5px; opacity:.72; font-weight:600;}
+.sign .stamp{align-self:flex-start; margin-top:4px; font-size:10px; font-weight:800; letter-spacing:.08em; padding:2px 8px; border-radius:6px; background:#ffce6e; color:#3a2c05;}
+.sign .stamp.self{background:rgba(255,255,255,.18); color:#fff; border:1px solid rgba(255,255,255,.3);}
+
+/* ===================== chapter-deck-band (deck-band / 章開き) =============== */
+[data-component="chapter-deck-band"]{position:relative; padding:34px 56px 12px;}
+[data-component="chapter-deck-band"] .num{position:absolute; top:-6px; right:34px; font-size:138px; font-weight:900; line-height:1; opacity:.06; letter-spacing:-.04em; user-select:none; pointer-events:none; font-family:ui-monospace,monospace;}
+.kicker{display:inline-flex; align-items:center; gap:9px; font-size:12px; font-weight:800; letter-spacing:.14em; text-transform:uppercase; padding:5px 12px; border-radius:8px; margin-bottom:10px;}
+[data-component="chapter-deck-band"] h2{font-size:27px; margin:0 0 6px; font-weight:800; line-height:1.2;}
+.lead{font-size:15px; color:var(--ink-soft); margin:0; max-width:920px; line-height:1.65;}
+.tint-brand{background:var(--brand-tint);} .tint-ok{background:var(--ok-tint);} .tint-bad{background:var(--bad-tint);}
+.tint-warn{background:var(--warn-tint);} .tint-info{background:var(--info-tint);} .tint-violet{background:var(--violet-tint);}
+.tint-brand .kicker{background:var(--brand); color:#fff;} .tint-ok .kicker{background:var(--ok); color:#fff;}
+.tint-bad .kicker{background:var(--bad); color:#fff;} .tint-warn .kicker{background:var(--warn); color:#fff;}
+.tint-info .kicker{background:var(--info); color:#fff;} .tint-violet .kicker{background:var(--violet); color:#fff;}
+.chapbody{padding:22px 56px 40px; background:var(--paper);}
+
+/* ===================== section-lead-callout (callout / 章導入) ============= */
+[data-component="section-lead-callout"]{display:grid; grid-template-columns:repeat(3,1fr); gap:16px;}
+.card{background:var(--paper); border:1px solid var(--line); border-radius:14px; padding:18px 18px 16px; box-shadow:var(--shadow); position:relative; overflow:hidden;}
+.card.accent::before{content:""; position:absolute; left:0; top:0; bottom:0; width:5px; background:var(--brand);}
+.card .cid{font-size:11.5px; font-weight:800; letter-spacing:.12em; color:var(--brand); margin-bottom:8px; display:flex; align-items:center; gap:8px;}
+.card .ct{font-size:16.5px; font-weight:800; line-height:1.4; margin:0 0 6px;}
+.card .cd{font-size:13px; color:var(--ink-soft); margin:0;}
+
+/* ===================== scope-summary-panel (dense-list / 範囲) ============= */
+[data-component="scope-summary-panel"]{display:grid; grid-template-columns:1fr 1fr; gap:20px;}
+.scol{border-radius:14px; padding:18px 20px; box-shadow:var(--shadow);}
+.scol.in{background:var(--ok-tint); border:1px solid var(--ok-line);}
+.scol.out{background:var(--bad-tint); border:1px solid var(--bad-line);}
+.scol h3{margin:0 0 12px; font-size:15px; font-weight:800; display:flex; align-items:center; gap:9px;}
+.scol.in h3{color:var(--ok);} .scol.out h3{color:var(--bad);}
+.scol ul{list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:9px;}
+.scol li{display:flex; gap:10px; align-items:flex-start; font-size:13.5px; line-height:1.5;}
+.scol li .b{flex:0 0 auto; margin-top:3px;}
+
+/* ===================== actor-stakeholder-table (dense-table / 主体) ======== */
+[data-component="actor-stakeholder-table"]{display:flex; flex-wrap:wrap; gap:12px;}
+.actor{display:flex; align-items:center; gap:11px; background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:11px 15px 11px 12px; box-shadow:var(--shadow); min-width:0;}
+.actor .av{flex:0 0 auto; width:38px; height:38px; border-radius:10px; display:grid; place-items:center; color:#fff;}
+.actor .nm{font-size:14px; font-weight:700; line-height:1.25;}
+.actor .role{font-size:11px; color:var(--ink-faint); font-weight:600;}
+.ext-badge{font-size:9.5px; font-weight:800; letter-spacing:.08em; background:var(--warn-tint); color:var(--warn); border:1px solid var(--warn-line); padding:1px 6px; border-radius:5px; margin-left:6px;}
+
+/* ===================== source-trace-origin (dense-table / 上位ニーズ) ★補填 = */
+[data-component="source-trace-origin"]{width:100%; min-width:440px; border-collapse:separate; border-spacing:0; font-size:13.5px;}
+[data-component="source-trace-origin"] thead th{background:var(--info); color:#fff; text-align:left; font-size:11.5px; font-weight:800; letter-spacing:.06em; padding:11px 14px;}
+[data-component="source-trace-origin"] thead th:first-child{border-top-left-radius:12px;} [data-component="source-trace-origin"] thead th:last-child{border-top-right-radius:12px;}
+[data-component="source-trace-origin"] tbody td{padding:12px 14px; border-bottom:1px solid var(--line); vertical-align:top; line-height:1.5;}
+[data-component="source-trace-origin"] tbody tr:nth-child(even) td{background:var(--paper-2);}
+[data-component="source-trace-origin"] .nid{font-weight:800; font-family:ui-monospace,monospace; color:var(--info); white-space:nowrap;}
+[data-component="source-trace-origin"] .origin{font-size:11.5px; color:var(--ink-faint); font-weight:700;}
+
+/* ===================== requirement-matrix-table (dense-table / 要件本体) === */
+[data-component="requirement-matrix-table"]{width:100%; min-width:620px; border-collapse:separate; border-spacing:0; font-size:13.5px;}
+[data-component="requirement-matrix-table"] thead th{background:var(--brand-deep); color:#fff; text-align:left; font-size:11.5px; font-weight:800; letter-spacing:.06em; padding:11px 14px;}
+[data-component="requirement-matrix-table"] thead th:first-child{border-top-left-radius:12px;} [data-component="requirement-matrix-table"] thead th:last-child{border-top-right-radius:12px;}
+[data-component="requirement-matrix-table"] tbody td{padding:12px 14px; border-bottom:1px solid var(--line); vertical-align:top; line-height:1.5;}
+[data-component="requirement-matrix-table"] tbody tr:nth-child(even) td{background:var(--paper-2);}
+[data-component="requirement-matrix-table"] tbody tr:hover td{background:var(--brand-tint);}
+.fid{font-weight:800; font-family:ui-monospace,monospace; font-size:13px; white-space:nowrap; color:var(--brand);}
+td.cond{color:var(--ink-soft); font-size:13px; width:22%;}
+td.resp{font-size:13.5px; width:40%;}
+/* ears-requirement-row: 根拠 Rationale を必須スロットとして明示 (critic #3 格上げ) */
+td.resp .why{display:block; margin-top:5px; font-size:11.5px; color:var(--ink-faint); padding-left:62px; position:relative;}
+td.resp .why::before{content:"↳ なぜ要る"; position:absolute; left:0; font-weight:700; color:var(--ink-faint);}
+td.resp .plain{display:block; margin-top:5px; font-size:12.5px; color:var(--ink-soft);}
+td.resp .plain::before{content:"やさしく言うと "; font-weight:700; font-size:10px; color:var(--brand);}
+/* dense-table を clip せず狭幅で内部横スクロールへ倒す (folio-276 #1)。 旧 overflow:hidden は
+   375-390px で列を 1 文字/行へ潰し判読不能にした上 scroll も封じていた (gate F 盲点=#2 で捕捉)。
+   overflow-x:auto + table 側 min-width = rtm-grid と同じ「狭幅は横スクロール」方針へ統一する。 */
+.tbl-wrap{border:1px solid var(--line); border-radius:12px; overflow-x:auto; box-shadow:var(--shadow);}
+
+/* ---- priority-badge + EARS chip (badge) ---- */
+.ears{display:inline-flex; align-items:center; gap:5px; font-size:10.5px; font-weight:800; letter-spacing:.04em; padding:3px 9px; border-radius:7px; white-space:nowrap; border:1px solid;}
+.ears.always{background:var(--info-tint); color:var(--info); border-color:var(--info-line);}
+.ears.trigger{background:var(--brand-tint); color:var(--brand); border-color:var(--brand);}
+.ears.state{background:var(--violet-tint); color:var(--violet); border-color:var(--violet-line);}
+.ears.forbid{background:var(--bad-tint); color:var(--bad); border-color:var(--bad-line);}
+.ears.option{background:var(--warn-tint); color:var(--warn); border-color:var(--warn-line);}
+.ears .en{opacity:.7; font-weight:600; font-family:ui-monospace,monospace; font-size:9px;}
+.prio{display:inline-flex; align-items:center; gap:4px; font-size:10px; font-weight:800; letter-spacing:.04em; padding:2px 8px; border-radius:6px; white-space:nowrap;}
+.prio.must{background:var(--bad); color:#fff;} .prio.should{background:var(--warn); color:#fff;} .prio.may{background:var(--paper-3); color:var(--ink-soft); border:1px solid var(--line);}
+.vmeth{font-size:10px; font-weight:800; font-family:ui-monospace,monospace; padding:2px 6px; border-radius:5px; background:var(--ok-tint); color:var(--ok); border:1px solid var(--ok-line);}
+.ears-legend{display:flex; flex-wrap:wrap; gap:10px; margin-bottom:14px; align-items:center;}
+.ears-legend .lt{font-size:12px; font-weight:700; color:var(--ink-soft); margin-right:4px;}
+/* ears-requirement-row = requirement-matrix-table の各 <tr>。行 styling は table を継承し、
+   data-component で floor gate A 識別 + 根拠 (td.resp .why) を空不可スロットに保つ */
+tr[data-component="ears-requirement-row"] td.resp .why:empty::after{content:"⚠ 根拠 未記入"; color:var(--bad); font-weight:700;}
+
+/* ===================== nfr-hero-metrics + nfr-metrics-table =============== */
+[data-component="nfr-hero-metrics"]{display:grid; grid-template-columns:repeat(4,1fr); gap:16px; margin-bottom:24px;}
+.nfr-hero{border-radius:16px; padding:20px 18px 18px; box-shadow:var(--shadow); position:relative; overflow:hidden; border:1px solid var(--line); background:var(--paper);}
+.nfr-hero .cat{font-size:11px; font-weight:800; letter-spacing:.1em; text-transform:uppercase; margin-bottom:8px; display:flex; align-items:center; gap:7px;}
+.nfr-hero .big{font-size:38px; font-weight:900; line-height:1; letter-spacing:-.02em; display:flex; align-items:baseline; gap:4px;}
+.nfr-hero .big .u{font-size:16px; font-weight:800; opacity:.7;}
+.nfr-hero .qual{font-size:12.5px; font-weight:600; color:var(--ink-soft); margin-top:8px; line-height:1.45;}
+.nfr-hero.c1{background:linear-gradient(160deg,var(--info-tint),var(--paper));} .nfr-hero.c1 .cat,.nfr-hero.c1 .big{color:var(--info);}
+.nfr-hero.c2{background:linear-gradient(160deg,var(--ok-tint),var(--paper));} .nfr-hero.c2 .cat,.nfr-hero.c2 .big{color:var(--ok);}
+.nfr-hero.c3{background:linear-gradient(160deg,var(--brand-tint),var(--paper));} .nfr-hero.c3 .cat,.nfr-hero.c3 .big{color:var(--brand);}
+.nfr-hero.c4{background:linear-gradient(160deg,var(--violet-tint),var(--paper));} .nfr-hero.c4 .cat,.nfr-hero.c4 .big{color:var(--violet);}
+[data-component="nfr-metrics-table"]{width:100%; min-width:480px; border-collapse:separate; border-spacing:0; font-size:13px;}
+[data-component="nfr-metrics-table"] th{background:var(--paper-3); text-align:left; font-size:11px; font-weight:800; letter-spacing:.05em; color:var(--ink-soft); padding:10px 14px; text-transform:uppercase;}
+[data-component="nfr-metrics-table"] td{padding:11px 14px; border-bottom:1px solid var(--line); vertical-align:top; line-height:1.55;}
+[data-component="nfr-metrics-table"] tbody tr:last-child td{border-bottom:none;}
+.nid{font-weight:800; font-family:ui-monospace,monospace; color:var(--brand); white-space:nowrap;}
+.tgt{font-weight:800; color:var(--ink); white-space:nowrap;}
+.meas{color:var(--ink-soft); font-size:12.5px;}
+
+/* ===================== rtm-grid (rtm-grid / 双方向トレース + 孤立検出) ===== */
+[data-component="rtm-grid"]{overflow-x:auto; border:1px solid var(--line); border-radius:12px; box-shadow:var(--shadow);}
+.rtm{border-collapse:separate; border-spacing:0; font-size:12.5px; width:100%; min-width:760px;}
+.rtm th,.rtm td{padding:11px 12px; text-align:center; border-bottom:1px solid var(--line); border-right:1px solid var(--line-soft);}
+.rtm th{background:var(--brand-deep); color:#fff; font-size:11px; font-weight:800; letter-spacing:.04em;}
+.rtm thead th:first-child{text-align:left;}
+.rtm .grp{background:var(--paper-3); color:var(--ink-soft); font-weight:800; font-size:10.5px; letter-spacing:.06em; text-transform:uppercase;}
+.rtm tbody th{background:var(--paper-2); text-align:left; font-weight:800; color:var(--brand); font-family:ui-monospace,monospace; white-space:nowrap; font-size:12px;}
+.rtm tbody th .lbl{display:block; font-family:inherit; font-weight:600; color:var(--ink-soft); font-size:10.5px; margin-top:2px;}
+.rtm td.hit{background:var(--ok-tint);}
+.rtm td .dot{display:inline-grid; place-items:center; width:22px; height:22px; border-radius:50%; background:var(--ok); color:#fff;}
+.rtm td .dot.ac{display:inline-flex; align-items:center; width:auto; min-width:0; height:auto; border-radius:6px; padding:2px 7px; font-size:10px; font-weight:700; line-height:1.2; margin:1px;}
+.rtm td.gap{background:var(--bad-tint);} .rtm td.gap .x{color:var(--bad); font-weight:900;}
+.rtm tbody tr:last-child td,.rtm tbody tr:last-child th{border-bottom:none;}
+
+/* ===================== rtm-collapse (折りたたみ RTM の fold affordance / folio-276 #4) ====
+   生成 SRS は核心 RTM を <details data-component="rtm-collapse"> で既定折りたたむ。 素の details は
+   marker が小さく「開けるUI」と気付けず要旨が素通りした (ceiling 第2層)。 summary を panel ヘッダ化し
+   ▶ caret + 「クリックで開閉」ヒントで開閉可能性を明示する。 折りたたみ機構自体は assembler が所有。 */
+[data-component="rtm-collapse"]{border:1px solid var(--line); border-radius:12px; box-shadow:var(--shadow); background:var(--paper); overflow:hidden;}
+[data-component="rtm-collapse"]>summary{cursor:pointer; list-style:none; user-select:none; display:flex; align-items:center; gap:11px; padding:15px 20px; font-size:14.5px; font-weight:800; color:var(--brand); background:var(--brand-tint);}
+[data-component="rtm-collapse"]>summary::-webkit-details-marker{display:none;}
+[data-component="rtm-collapse"]>summary::before{content:""; flex:0 0 auto; width:0; height:0; border-left:7px solid currentColor; border-top:5px solid transparent; border-bottom:5px solid transparent; transition:transform .15s ease;}
+[data-component="rtm-collapse"][open]>summary::before{transform:rotate(90deg);}
+[data-component="rtm-collapse"]>summary::after{content:"クリックで開閉"; margin-left:auto; font-size:10.5px; font-weight:700; letter-spacing:.04em; color:var(--ink-faint); background:var(--paper); border:1px solid var(--line); border-radius:6px; padding:2px 9px;}
+[data-component="rtm-collapse"][open]>summary{border-bottom:1px solid var(--line);}
+[data-component="rtm-collapse"]>.rtm-summary-derived,[data-component="rtm-collapse"]>[data-prose-slot="rtm-summary"]{margin:0; padding:13px 20px 0; font-size:13px; color:var(--ink-soft); line-height:1.6;}
+[data-component="rtm-collapse"]>[data-component="rtm-grid"]{margin:16px 20px 18px;}
+
+/* ===================== acceptance-criteria-checklist (dense-list) ========= */
+[data-component="acceptance-criteria-checklist"]{display:grid; grid-template-columns:repeat(3,1fr); gap:16px;}
+.ac{background:var(--paper); border:1px solid var(--ok-line); border-radius:14px; padding:17px 18px; box-shadow:var(--shadow); position:relative; display:flex; flex-direction:column; gap:8px;}
+.ac::before{content:""; position:absolute; left:0; top:0; bottom:0; width:5px; background:var(--ok); border-radius:14px 0 0 14px;}
+.ac .aid{font-size:11.5px; font-weight:800; color:var(--ok); letter-spacing:.1em; display:flex; align-items:center; gap:8px;}
+.ac .at{font-size:14.5px; font-weight:700; line-height:1.5; margin:0;}
+.ac .at b{color:var(--ok); font-weight:800;}
+.ac .metric{display:flex; align-items:baseline; gap:6px; margin-top:auto; padding-top:6px;}
+.ac .metric .v{font-size:26px; font-weight:900; color:var(--ok); line-height:1;}
+.ac .metric .l{font-size:11.5px; color:var(--ink-faint); font-weight:600;}
+
+/* ===================== constraint-callout (callout / 制約・規制) =========== */
+[data-component="constraint-callout"]{width:100%; border-collapse:separate; border-spacing:0; font-size:13.5px;}
+[data-component="constraint-callout"] td{padding:13px 16px; border-bottom:1px solid var(--line); vertical-align:top; line-height:1.55;}
+[data-component="constraint-callout"] tbody tr:last-child td{border-bottom:none;}
+.cid2{font-weight:800; font-family:ui-monospace,monospace; color:var(--warn); white-space:nowrap; width:60px;}
+.cl{font-weight:700; white-space:nowrap; width:170px; color:var(--ink);}
+.reg-badge{font-size:9.5px; font-weight:800; letter-spacing:.06em; background:var(--bad-tint); color:var(--bad); border:1px solid var(--bad-line); padding:1px 7px; border-radius:5px; margin-left:6px;}
+
+/* ===================== glossary-term-table (glossary / 用語 SSoT) ========= */
+[data-component="glossary-term-table"]{display:grid; grid-template-columns:1fr 1fr; gap:0 28px; border:1px solid var(--line); border-radius:14px; overflow:hidden; box-shadow:var(--shadow);}
+.grow{display:flex; gap:16px; padding:15px 20px; border-bottom:1px solid var(--line-soft); align-items:flex-start;}
+.grow:nth-child(odd){background:var(--paper);} .grow:nth-child(even){background:var(--paper-2);}
+.gword{flex:0 0 142px; font-size:14.5px; font-weight:800; color:var(--brand); line-height:1.3;}
+.gword .en{display:block; font-size:11px; font-weight:700; color:var(--ink-faint); font-family:ui-monospace,monospace; margin-top:2px;}
+.gdef{font-size:13px; color:var(--ink-soft); line-height:1.55;}
+
+/* ===================== fidelity-sync-meta + footer (meta) ================= */
+.foot{padding:26px 56px 40px; background:var(--brand-deep); color:rgba(255,255,255,.78); font-size:12px;}
+.foot .ft-grid{display:flex; flex-wrap:wrap; gap:14px 40px; justify-content:space-between; align-items:center;}
+.foot b{color:#fff;}
+.foot .tags{display:flex; flex-wrap:wrap; gap:8px;}
+.foot .tags span{background:rgba(255,255,255,.1); border:1px solid rgba(255,255,255,.18); padding:4px 10px; border-radius:7px; font-size:11px; font-weight:600;}
+/* i6f9: 読者向け平易行は常時可視の第 1 行 (flex-basis:100%)、 dev メタ行は font-size のみ控えめ化
+   (色/opacity は据置 = contrast 不変で gate F に新規 risk を持ち込まない)。 */
+.foot .ft-plain{flex-basis:100%; font-size:13px; color:rgba(255,255,255,.92); font-weight:500;}
+.foot .ft-grid>[data-audience="machine"]{font-size:10.5px;}
+
+/* ===========================================================================
+   残り register (taxonomy 全 37 部品の被覆) — 多くは中核 register を再利用
+   =========================================================================== */
+
+/* ---- dense-table family: interface / data / revision-history ---- */
+[data-component="interface-spec-table"],
+[data-component="data-requirements-block"],
+[data-component="revision-history-table"]{width:100%; border-collapse:separate; border-spacing:0; font-size:13px;}
+[data-component="interface-spec-table"] th,
+[data-component="data-requirements-block"] th,
+[data-component="revision-history-table"] th{background:var(--paper-3); text-align:left; font-size:11px; font-weight:800; letter-spacing:.05em; color:var(--ink-soft); padding:10px 14px; text-transform:uppercase;}
+[data-component="interface-spec-table"] td,
+[data-component="data-requirements-block"] td,
+[data-component="revision-history-table"] td{padding:11px 14px; border-bottom:1px solid var(--line); vertical-align:top; line-height:1.55;}
+[data-component="interface-spec-table"] tbody tr:last-child td,
+[data-component="data-requirements-block"] tbody tr:last-child td,
+[data-component="revision-history-table"] tbody tr:last-child td{border-bottom:none;}
+.iid{font-weight:800; font-family:ui-monospace,monospace; color:var(--info); white-space:nowrap;}
+.dir{font-size:10px; font-weight:800; padding:2px 7px; border-radius:5px; background:var(--info-tint); color:var(--info); border:1px solid var(--info-line);}
+
+/* ---- dense-list family: ui / functions / use-case / references / toc / appendix ---- */
+[data-component="ui-spec-block"],
+[data-component="product-functions-list"],
+[data-component="use-case-card"],
+[data-component="references-list"],
+[data-component="toc-navigator"],
+[data-component="assumptions-constraints-list"],
+[data-component="supporting-info-appendix"]{list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:9px;}
+[data-component="ui-spec-block"] li,
+[data-component="product-functions-list"] li,
+[data-component="references-list"] li,
+[data-component="toc-navigator"] li,
+[data-component="assumptions-constraints-list"] li,
+[data-component="supporting-info-appendix"] li{display:flex; gap:11px; align-items:flex-start; background:var(--paper); border:1px solid var(--line); border-radius:11px; padding:11px 15px; box-shadow:var(--shadow); font-size:13.5px; line-height:1.5;}
+[data-component="assumptions-constraints-list"] li{border-left:5px solid var(--warn);}
+.li-tag{font-size:10px; font-weight:800; padding:2px 7px; border-radius:5px; background:var(--warn-tint); color:var(--warn); border:1px solid var(--warn-line); flex:0 0 auto;}
+[data-component="toc-navigator"]{display:grid; grid-template-columns:repeat(2,1fr); gap:9px 18px;}
+[data-component="toc-navigator"] li{box-shadow:none; border-color:var(--line-soft);}
+[data-component="toc-navigator"] .tn{font-weight:800; font-family:ui-monospace,monospace; color:var(--brand); flex:0 0 auto;}
+[data-component="references-list"] .ref-n{font-weight:800; font-family:ui-monospace,monospace; color:var(--ink-faint); flex:0 0 auto;}
+.li-key{font-weight:800; color:var(--brand); flex:0 0 auto;}
+
+/* use-case-card: precondition/flow/postcondition の枠 */
+[data-component="use-case-card"] li{flex-direction:column; gap:7px; border-left:5px solid var(--info); padding:14px 17px;}
+.uc-id{font-size:11.5px; font-weight:800; color:var(--info); letter-spacing:.08em;}
+.uc-flow{display:flex; flex-wrap:wrap; gap:6px; align-items:center; font-size:12.5px;}
+.uc-flow .stp{background:var(--paper-2); border:1px solid var(--line); border-radius:7px; padding:3px 9px; font-weight:600;}
+.uc-flow .ar{color:var(--ink-faint); font-weight:800;}
+
+/* ---- rtm-grid family: verification-method-grid / requirement-attributes-rtm ---- */
+[data-component="verification-method-grid"],
+[data-component="requirement-attributes-rtm"]{overflow-x:auto; border:1px solid var(--line); border-radius:12px; box-shadow:var(--shadow);}
+[data-component="verification-method-grid"] table,
+[data-component="requirement-attributes-rtm"] table{border-collapse:separate; border-spacing:0; font-size:12.5px; width:100%; min-width:680px;}
+[data-component="verification-method-grid"] th,
+[data-component="requirement-attributes-rtm"] th{background:var(--brand-deep); color:#fff; font-size:11px; font-weight:800; padding:10px 12px; text-align:left;}
+[data-component="verification-method-grid"] td,
+[data-component="requirement-attributes-rtm"] td{padding:10px 12px; border-bottom:1px solid var(--line); vertical-align:top; line-height:1.5;}
+[data-component="verification-method-grid"] tbody tr:nth-child(even) td,
+[data-component="requirement-attributes-rtm"] tbody tr:nth-child(even) td{background:var(--paper-2);}
+
+/* ---- callout family: quality-checklist / audience-toggle ---- */
+[data-component="quality-checklist-callout"]{background:var(--paper-2); border:1px solid var(--line); border-left:5px solid var(--ok); border-radius:12px; padding:16px 20px; box-shadow:var(--shadow);}
+[data-component="quality-checklist-callout"] .qt{font-size:13px; font-weight:800; color:var(--ok); margin:0 0 10px; display:flex; align-items:center; gap:8px;}
+[data-component="quality-checklist-callout"] ul{list-style:none; margin:0; padding:0; display:grid; grid-template-columns:repeat(3,1fr); gap:7px 16px;}
+[data-component="quality-checklist-callout"] li{font-size:12.5px; display:flex; gap:7px; color:var(--ink-soft);}
+[data-component="quality-checklist-callout"] li .ck{color:var(--ok); font-weight:900; flex:0 0 auto;}
+[data-component="audience-toggle"]{display:inline-flex; gap:0; border:1px solid var(--line); border-radius:10px; overflow:hidden; box-shadow:var(--shadow);}
+[data-component="audience-toggle"] button{border:none; background:var(--paper); color:var(--ink-soft); font:inherit; font-size:12.5px; font-weight:700; padding:8px 16px; cursor:pointer; border-right:1px solid var(--line);}
+[data-component="audience-toggle"] button:last-child{border-right:none;}
+[data-component="audience-toggle"] button[aria-pressed="true"]{background:var(--brand); color:#fff;}
+
+/* ---- diagram family: context / use-case-flow / state-machine ---- */
+[data-component="context-diagram"],
+[data-component="use-case-flow-diagram"],
+[data-component="state-machine-diagram"]{background:var(--paper); border:1px solid var(--line); border-radius:14px; padding:20px; box-shadow:var(--shadow); overflow-x:auto;}
+[data-component="context-diagram"] figcaption,
+[data-component="use-case-flow-diagram"] figcaption,
+[data-component="state-machine-diagram"] figcaption{font-size:11.5px; color:var(--ink-faint); font-weight:600; margin-top:10px; text-align:center;}
+/* use-case flow steps (横並びステップ) */
+.uc-basic{display:flex; align-items:stretch; gap:0; flex-wrap:wrap;}
+.uc-step{flex:1 1 0; min-width:140px; background:var(--paper); border:1px solid var(--brand); border-radius:13px; padding:14px; box-shadow:var(--shadow); display:flex; flex-direction:column; gap:5px;}
+.uc-arrow{flex:0 0 30px; display:grid; place-items:center; color:var(--brand); font-weight:800;}
+.uc-step .sn{font-size:11px; font-weight:800; color:var(--brand); letter-spacing:.06em;}
+.uc-step .st{font-size:14px; font-weight:800; line-height:1.3;}
+.uc-step .sd{font-size:11.5px; color:var(--ink-faint); line-height:1.45;}
+
+/* ---- badge: informative-normative-label ---- */
+.io-label{display:inline-flex; align-items:center; gap:5px; font-size:10px; font-weight:800; letter-spacing:.06em; padding:2px 9px; border-radius:6px; text-transform:uppercase;}
+.io-label.normative{background:var(--brand); color:#fff;}
+.io-label.informative{background:var(--paper-3); color:var(--ink-soft); border:1px solid var(--line);}
+
+/* ---- responsive ---- */
+@media (max-width:1080px){
+  [data-component="section-lead-callout"],[data-component="nfr-hero-metrics"],[data-component="acceptance-criteria-checklist"]{grid-template-columns:1fr 1fr;}
+  [data-component="scope-summary-panel"],[data-component="glossary-term-table"]{grid-template-columns:1fr;}
+}
+@media (max-width:720px){
+  [data-component="chapter-deck-band"],.chapbody,[data-component="doc-cover-band"],.foot{padding-left:22px; padding-right:22px;}
+  [data-component="section-lead-callout"],[data-component="nfr-hero-metrics"],[data-component="acceptance-criteria-checklist"]{grid-template-columns:1fr;}
+  [data-component="doc-cover-band"] h1{font-size:31px;}
+  [data-component="chapter-deck-band"] .num{font-size:92px;}
+}
+
+/* ============================================================================
+   dark accent コントラスト補正 — ★このブロックはファイル末尾に置くこと (source-order)。
+   dark では accent トークン (--brand/--info/--warn/--ok/--bad/--violet) が明色へ反転するため、
+   それを塗りに使い白文字を載せる小要素 (kicker / priority-badge / actor avatar / dot 等) は
+   WCAG AA が崩れる (gate F low-contrast で実検出)。 文字を暗色へ切替えて contrast を確保する。
+   基底の `color:#fff` ルールと同 specificity ゆえ、 source-order で後勝ちさせるには本ブロックが
+   それら全ての後 (= ファイル末尾) に来る必要がある。 前方へ移すと基底ルールに負け無効化する。
+   構造ヘッダ/フッタ (--brand-deep 塗り) は dark でも暗色維持ゆえ白文字のままで可読。
+   ============================================================================ */
+@media (prefers-color-scheme: dark){
+  .tint-brand .kicker, .tint-ok .kicker, .tint-bad .kicker,
+  .tint-warn .kicker, .tint-info .kicker, .tint-violet .kicker,
+  [data-component="source-trace-origin"] thead th,
+  .prio.must, .prio.should,
+  .rtm td .dot,
+  .actor .av,
+  [data-component="audience-toggle"] button[aria-pressed="true"],
+  .io-label.normative{ color:#08131a; }
+}
+
+</style>
+</head>
+<body>
+<div class="page" data-component="requirement-type-color-tokens">
+<header data-component="doc-cover-band">
+<p class="cover-eyebrow"><span class="doc-type">要件定義書 (SRS)</span> <span>scribe2 — MVP</span></p>
+<h1>設計 → 契約 → 実装 → 検証 → land を、 人の手を借りずに 1 本通す器（MVP）</h1>
+<p class="cover-sub">契約は小さく・検証は機械が先・止まるときは記帳して止まる</p>
+<div class="summary-card"><span class="ic"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#ffe8a8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span><div><p class="lab">この文書が約束すること (1 文サマリ)</p><p class="txt" data-prose-slot="cover-summary" data-slot-id="cover-summary">設計から契約・実装・検証・land までを、人の手番を 3 クラス承認だけに絞って 1 本通す器（MVP）の約束を定める文書です。人を待たせず、壊れたまま進まず、記憶に頼らない、の 3 つを守ります。</p></div></div>
+<div class="cover-meta"><span class="m"><span class="k">機能要件</span><span class="v">23件 (FR1–FR23)</span></span><span class="m"><span class="k">非機能要件</span><span class="v">5件 (NFR1–NFR5)</span></span><span class="m"><span class="k">受入基準</span><span class="v">8件 (AC1–AC8)</span></span><span class="m"><span class="k">版</span><span class="v">v0.1 / 2026-09-09</span></span></div>
+<div data-component="approval-block">
+<div class="sign"><span class="role">承認 (user)</span><span class="who">user</span><span class="when">2026-09-09 grill 6 論点を裁定</span><span class="stamp self">裁定済</span></div>
+<div class="sign"><span class="role">レビュー (folio review lens)</span><span class="who">spec-review 5 軸 + SRS ceiling 3 lens</span><span class="when">2026-09-09 Phase F</span><span class="stamp self">実施</span></div>
+<div class="sign"><span class="role">作成 (開発 session)</span><span class="who">AI session (Claude Code)</span><span class="when">2026-09-09 起草</span><span class="stamp self">作成</span></div>
+</div>
+<div class="reader-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 想定読者: この器で開発する人と AI（Claude Code の session）。 専門語には必ずやさしい言い換えを併記する</div>
+</header>
+<section data-component="chapter-deck-band" class="tint-brand"><span class="num">01</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.5"/><circle cx="12" cy="12" r="1"/></svg> ゴール / 絶対に避けたい 3 つの事故</span><h2>「これが起きたら失敗」を先に決める</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-01">まず「これが起きたら失敗」を 3 つ先に決めます。人を待たせる・壊れたまま進む・記憶に頼る、の 3 つです。避けたい結果を共有してから要件を読むと、各要件が何を守るためのものか分かりやすくなります。</p></section>
+<div class="chapbody">
+<div data-component="section-lead-callout">
+<div class="card accent"><div class="cid">GOAL 1</div><p class="ct">人を待たせない</p><p class="cd">人の手番は 3 クラス承認だけ。 それ以外の段で pipeline が人の入力を待って止まらない。</p></div>
+<div class="card accent"><div class="cid">GOAL 2</div><p class="ct">壊れたまま進まない</p><p class="cd">検証が落ちた便・PASS を名乗れない便は記帳して止まり、 黙って land<span class="term" data-component="plain-language-term-inline" data-term="land">main への着地</span> しない。</p></div>
+<div class="card accent"><div class="cid">GOAL 3</div><p class="ct">記憶に頼らない</p><p class="cd">現在地は永続面（event log<span class="term" data-component="plain-language-term-inline" data-term="event log">追記だけの記録</span>）から読め、 process が死んでも中断点から再開できる。</p></div>
+</div>
+</div>
+<section data-component="chapter-deck-band" class="tint-info"><span class="num">02</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M3 7l9-4 9 4-9 4-9-4z"/><path d="M3 7v10l9 4 9-4V7"/></svg> 範囲 / だれが関わるか</span><h2>この文書が扱う範囲と、 登場人物</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-02">この文書が扱う範囲（intake から land まで・承認の停止と再開・規則の値と現在地・器の所属 marker と hook・到達点の計測）と、扱わない範囲（口座の自動選定・dashboard・台帳への write・対話席の product 実装・依存の追加）をはっきりさせ、関わる人と process（開発者・開発 session・runner・lens・CI・台帳）を一覧にします。</p></section>
+<div class="chapbody">
+<div data-component="scope-summary-panel"><div class="scol in"><h3>✓ 扱う (in scope)</h3><ul>
+<li><span class="b">●</span>契約<span class="term" data-component="plain-language-term-inline" data-term="契約">bead 1 本の約束</span>の intake と run 登録</li>
+<li><span class="b">●</span>worktree での runner<span class="term" data-component="plain-language-term-inline" data-term="runner">実装役の Claude</span> 起動と完了判定</li>
+<li><span class="b">●</span>機械検証と lens<span class="term" data-component="plain-language-term-inline" data-term="lens">審査役の Claude</span> 1 本による審査</li>
+<li><span class="b">●</span>squash land と verdict<span class="term" data-component="plain-language-term-inline" data-term="verdict">審査の結果</span> export</li>
+<li><span class="b">●</span>3 クラス操作の停止と逐語回答による再開</li>
+<li><span class="b">●</span>manifest<span class="term" data-component="plain-language-term-inline" data-term="manifest">規則の値の置き場</span>（規則の値）と event log（現在地）</li>
+<li><span class="b">●</span>.vessel<span class="term" data-component="plain-language-term-inline" data-term=".vessel">器の所属の目印</span> と hook（名乗り・in-loop guard・計測 slot）</li>
+<li><span class="b">●</span>toy repo<span class="term" data-component="plain-language-term-inline" data-term="toy repo">実験用の小さな repo</span> 5 便と自己ホスト 1 便の到達点計測</li>
+</ul></div><div class="scol out"><h3>✕ 扱わない (out of scope)</h3><ul>
+<li><span class="b">●</span>複数口座の自動選定（v3）</li>
+<li><span class="b">●</span>lane 計画と席の dashboard（v3）</li>
+<li><span class="b">●</span>台帳への write（bead id を持つだけ）</li>
+<li><span class="b">●</span>対話席・cycle・作業記憶の product 実装（v3）</li>
+<li><span class="b">●</span>rtk / graphify の有効化と SQLite 化（Ask-first）</li>
+</ul></div></div>
+<div data-component="actor-stakeholder-table" style="margin-top:20px">
+<div class="actor"><span class="av" style="background:var(--brand)">人</span><div><div class="nm">開発者</div><div class="role">要望を出し 3 クラス承認だけを行う人</div></div></div>
+<div class="actor"><span class="av" style="background:var(--violet)">席</span><div><div class="nm">開発 session</div><div class="role">設計・契約・実装・review を行う AI（Claude Code）</div></div></div>
+<div class="actor"><span class="av" style="background:var(--ok)">実</span><div><div class="nm">runner</div><div class="role">契約 1 本を worktree で実装する headless<span class="term" data-component="plain-language-term-inline" data-term="headless">画面なしの実行</span> の Claude process</div></div></div>
+<div class="actor"><span class="av" style="background:var(--warn)">審</span><div><div class="nm">lens</div><div class="role">diff を読んで verdict を返す headless の Claude process</div></div></div>
+<div class="actor"><span class="av" style="background:var(--info)">CI</span><div><div class="nm">CI<span class="ext-badge">外部</span></div><div class="role">main と PR で歯（test / lint / 構造検査）を毎回撃つ外部 service</div></div></div>
+<div class="actor"><span class="av" style="background:var(--info)">帳</span><div><div class="nm">台帳<span class="ext-badge">外部</span></div><div class="role">契約（bead）と裁定の記帳先（beads・外部 OSS）</div></div></div>
+</div>
+</div>
+<section data-component="chapter-deck-band" class="tint-violet"><span class="num">03</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 2v6m0 0L9 5m3 3l3-3"/><circle cx="12" cy="14" r="6"/></svg> 上位ニーズ / なぜこの要件群が要るか</span><h2>この文書の要件は、 どの事業ニーズから来たか</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-03">各要件は思いつきではなく、5 つの上位ニーズ（自律安全・消費は害・記憶に頼らない・契約は小さく・自己開発）から来ています。この章はその出どころを示し、後の対応表で「どのニーズがどの機能になったか」を追えるようにします。</p></section>
+<div class="chapbody">
+<div class="tbl-wrap"><table data-component="source-trace-origin"><thead><tr><th>ニーズID</th><th>事業ニーズ</th><th>出どころ</th></tr></thead><tbody>
+<tr data-component="source-trace-row"><td><span class="nid">N-1</span></td><td>人の手が入らなくても AI が自律的に開発を安全に進められる（目的関数の 1 位・K1〜K3）</td><td><span class="origin">目的関数 §0-1</span></td></tr>
+<tr data-component="source-trace-row"><td><span class="nid">N-2</span></td><td>無駄な消費は害。 1 便の見積と上限を持ち、 超えたら人手を介さず止まる</td><td><span class="origin">憲法 C6・恒久直命</span></td></tr>
+<tr data-component="source-trace-row"><td><span class="nid">N-3</span></td><td>規則の値は manifest に、 現在地は永続面に。 席の記憶や散文を判定入力にしない</td><td><span class="origin">憲法 C1 / C3 / C15</span></td></tr>
+<tr data-component="source-trace-row"><td><span class="nid">N-4</span></td><td>契約が書き切れること。 QA の周回を繰り返さず、 検証は base で RED になる test で表す</td><td><span class="origin">裁定 2026-09-09（MVP 切り直し）</span></td></tr>
+<tr data-component="source-trace-row"><td><span class="nid">N-5</span></td><td>前の版（v1）を使わず、 design-intent を拘束条件として自分で自分を作る</td><td><span class="origin">ADR-0003（v1 完全放棄）</span></td></tr>
+</tbody></table></div>
+</div>
+<section data-component="chapter-deck-band" class="tint-brand"><span class="num">04</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M9 12l2 2 4-4"/></svg> 機能要件 / システムが必ずやること</span><h2>「いつ・何をするか」を一つずつ決める</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-04">器が「いつ・何をするか」を 23 本の機能要件で一つずつ定めます。契約の検査 → run の永続 → runner の起動と完了判定 → flip check と gate → land と export → stop と resume → 承認の停止と再開 → rules manifest → marker と hook → 計測、という並びで、各行にはやさしい言い換えと「なぜ要る」の根拠を添えています。</p></section>
+<div class="chapbody">
+<div class="ears-legend"><span class="lt">タイプ:</span> <span class="ears trigger">きっかけ <span class="en">When</span></span> <span class="ears state">状態 <span class="en">While</span></span> <span class="ears forbid">禁止 <span class="en">If-Then</span></span> <span class="ears always">恒常 <span class="en">Ubiq.</span></span> <span class="lt" style="margin-left:8px">優先:</span><span class="prio must" data-component="priority-badge">必須</span><span class="prio should">推奨</span> <span class="lt" style="margin-left:8px">検証:</span><span class="vmeth">T=テスト</span> <span class="vmeth">A=分析</span> <span class="vmeth">I=目視確認</span> <span class="vmeth">D=実演</span></div>
+<div class="tbl-wrap"><table data-component="requirement-matrix-table"><thead><tr><th>ID</th><th>タイプ</th><th>いつ (条件)</th><th>何をする (+ やさしい言い換え + なぜ要る)</th><th>優先/検証</th></tr></thead><tbody>
+<tr data-component="ears-requirement-row" data-req-id="FR1" id="FR1"><td><span class="fid">FR1</span></td><td><span class="ears forbid">禁止</span></td><td class="cond">契約 file に必須 field（goal / done / write-set<span class="term" data-component="plain-language-term-inline" data-term="write-set">触ってよい file の列</span> / verify / size / owner / disposition）の欠落・複数行の verify・write-set 0 本が在るとき</td><td class="resp">全件を行番号付きで集めて拒否し、 run を作らない<span class="plain" data-prose-slot="plain" data-slot-id="plain-FR1">契約の file に必須の 7 項目（goal / done / write-set / verify / size / owner / disposition）が欠けていたり、verify が複数行だったり、write-set が空だったら、問題を全部まとめて行番号付きで断り、便（run）は作りません。</span><span class="why" data-prose-slot="rationale" data-source="N-4" data-slot-id="rationale-FR1">契約が書き切れることを求めるニーズ（N-4）から来ています。欠けた契約を後の段で見つけると QA の周回が始まるので、入口で全件まとめて断る方が安いからです。</span></td><td><span class="prio must" data-component="priority-badge">必須</span> <span class="vmeth">T</span></td></tr>
+<tr data-component="ears-requirement-row" data-req-id="FR2" id="FR2"><td><span class="fid">FR2</span></td><td><span class="ears always">恒常</span></td><td class="cond">常時</td><td class="resp">契約は SRS の要件 id と設計 doc<span class="term" data-component="plain-language-term-inline" data-term="設計 doc">設計 1 本の文書</span> を pointer で持ち、 設計 1 本から契約が複数出る形を保つ<span class="plain" data-prose-slot="plain" data-slot-id="plain-FR2">契約には「どの要件のためか」（SRS の要件 id）と「どの設計から来たか」（設計 doc）を必ず書きます。設計 1 本から契約が何本も出る、という形を崩しません。</span><span class="why" data-prose-slot="rationale" data-source="N-4" data-slot-id="rationale-FR2">契約は小さく、しかし出どころは失わない、というニーズ（N-4）から来ています。要件 id と設計 doc を指していれば、契約を書き直すときも全部の bead が同じ形を保てます。</span></td><td><span class="prio must" data-component="priority-badge">必須</span> <span class="vmeth">I</span></td></tr>
+<tr data-component="ears-requirement-row" data-req-id="FR3" id="FR3"><td><span class="fid">FR3</span></td><td><span class="ears always">恒常</span></td><td class="cond">常時</td><td class="resp">各段は fleet<span class="term" data-component="plain-language-term-inline" data-term="fleet">便と席の状態の全体</span> の event log を replay して現在地を読み、 段の終わりに event を 1 件追記する（process の記憶に状態を持たない）<span class="plain" data-prose-slot="plain" data-slot-id="plain-FR3">各段は自分の記憶ではなく、追記だけの記録（event log）を最初から読み直して現在地を知り、終わるときに記録を 1 行足します。process の中に状態を抱えません。</span><span class="why" data-prose-slot="rationale" data-source="N-3" data-slot-id="rationale-FR3">記憶に頼らない、というニーズ（N-3）から来ています。process の中に状態を持つと、その process が死んだ瞬間に現在地が消えるからです。</span></td><td><span class="prio must" data-component="priority-badge">必須</span> <span class="vmeth">T</span></td></tr>
+<tr data-component="ears-requirement-row" data-req-id="FR4" id="FR4"><td><span class="fid">FR4</span></td><td><span class="ears trigger">きっかけ</span></td><td class="cond">run が Intake 段にあり spawn が要求されたとき</td><td class="resp">base を記録し、 worktree を切り、 write-set の allowlist を書いて runner を headless で起動する<span class="plain" data-prose-slot="plain" data-slot-id="plain-FR4">便が「受け付け済み」の段にあって起動を頼まれたら、出発点（base）を記録し、作業用の worktree を切り、触ってよい file の列を書き出してから、実装役（runner）を画面なしで起動します。</span><span class="why" data-prose-slot="rationale" data-source="N-1" data-slot-id="rationale-FR4">人の手が入らなくても安全に進む、というニーズ（N-1）から来ています。出発点と触ってよい範囲を先に記録しておけば、実装役を無人で走らせても後から検証できます。</span></td><td><span class="prio must" data-component="priority-badge">必須</span> <span class="vmeth">T</span></td></tr>
+<tr data-component="ears-requirement-row" data-req-id="FR5" id="FR5"><td><span class="fid">FR5</span></td><td><span class="ears always">恒常</span></td><td class="cond">常時</td><td class="resp">runner と lens は claude -p（headless・stdin に契約 / diff・stdout に構造化 1 行・permission を毎回明示・口座は環境変数で切替）の 1 形で呼ぶ<span class="plain" data-prose-slot="plain" data-slot-id="plain-FR5">実装役（runner）も審査役（lens）も、同じ 1 つの形で呼びます。画面なしの claude -p に、契約や diff を入力で渡し、答えは構造化した 1 行で受け取り、許可の設定は毎回明示し、口座は環境変数で切り替えます。</span><span class="why" data-prose-slot="rationale" data-source="N-1" data-slot-id="rationale-FR5">自律安全のニーズ（N-1）から来ています。画面のある席を建てると宛先解決や見張りの仕組みが要りますが、画面なしの 1 形なら process の起動と終了だけで完結します。</span></td><td><span class="prio must" data-component="priority-badge">必須</span> <span class="vmeth">T</span></td></tr>
+<tr data-component="ears-requirement-row" data-req-id="FR6" id="FR6"><td><span class="fid">FR6</span></td><td><span class="ears trigger">きっかけ</span></td><td class="cond">runner が終了したとき</td><td class="resp">rc 0 かつ base からの commit が 1 件以上なら Implemented、 それ以外は Failed と記帳する<span class="plain" data-prose-slot="plain" data-slot-id="plain-FR6">実装役が終わったとき、正常終了（rc 0）で、出発点から commit が 1 件以上あれば「実装済み」、そうでなければ「失敗」と記録します。</span><span class="why" data-prose-slot="rationale" data-source="N-3" data-slot-id="rationale-FR6">記憶に頼らない、というニーズ（N-3）から来ています。「終わった」と言葉で申告させず、rc と commit の数という機械の事実で判定します。</span></td><td><span class="prio must" data-component="priority-badge">必須</span> <span class="vmeth">T</span></td></tr>
+<tr data-component="ears-requirement-row" data-req-id="FR7" id="FR7"><td><span class="fid">FR7</span></td><td><span class="ears always">恒常</span></td><td class="cond">常時</td><td class="resp">変更した .rs ごとに test 差分だけを base に当てて RED になることを機械で確かめ、 test 差分の無い変更は拒む<span class="plain" data-prose-slot="plain" data-slot-id="plain-FR7">変更した Rust の file ごとに、test の差分だけを出発点に当てて「先に落ちる」ことを機械で確かめます。test の差分が無い変更は受け付けません。</span><span class="why" data-prose-slot="rationale" data-source="N-4" data-slot-id="rationale-FR7">契約は小さく、検証は base で落ちる test で表す、というニーズ（N-4）から来ています。先に落ちない test は何も守っていないので、入口で機械が確かめます。</span></td><td><span class="prio must" data-component="priority-badge">必須</span> <span class="vmeth">T</span></td></tr>
+<tr data-component="ears-requirement-row" data-req-id="FR8" id="FR8"><td><span class="fid">FR8</span></td><td><span class="ears trigger">きっかけ</span></td><td class="cond">gate<span class="term" data-component="plain-language-term-inline" data-term="gate">機械検証と審査の段</span> が要求されたとき</td><td class="resp">契約の verify 各行を worktree で実走して行ごとの rc を記録し、 1 本でも rc が 0 でなければ FAIL とする<span class="plain" data-prose-slot="plain" data-slot-id="plain-FR8">審査（gate）を頼まれたら、契約に書いた検証コマンドを 1 行ずつ作業用 worktree で実際に走らせ、行ごとの結果を記録します。1 本でも失敗すれば FAIL です。</span><span class="why" data-prose-slot="rationale" data-source="N-1" data-slot-id="rationale-FR8">自律安全のニーズ（N-1）から来ています。検証コマンドを実際に走らせた結果だけを信じ、実装役の自己申告を根拠にしません。</span></td><td><span class="prio must" data-component="priority-badge">必須</span> <span class="vmeth">T</span></td></tr>
+<tr data-component="ears-requirement-row" data-req-id="FR9" id="FR9"><td><span class="fid">FR9</span></td><td><span class="ears forbid">禁止</span></td><td class="cond">lens が要るのに lens が無い・diff が予算 cap を超える・stdout が parse できない・verdict が 3 値の外のとき</td><td class="resp">PASS を名乗らず INCONCLUSIVE とする<span class="plain" data-prose-slot="plain" data-slot-id="plain-FR9">審査役が要るのに居ない、diff が予算を超える、答えが読めない、答えが 3 値（PASS / FAIL / INCONCLUSIVE）の外、のどれかなら、合格（PASS）とは言わず「判定不能（INCONCLUSIVE）」にします。</span><span class="why" data-prose-slot="rationale" data-source="N-1" data-slot-id="rationale-FR9">自律安全のニーズ（N-1）から来ています。判定できなかった周を合格と呼ぶと、壊れたものが無人で着地します。</span></td><td><span class="prio must" data-component="priority-badge">必須</span> <span class="vmeth">T</span></td></tr>
+<tr data-component="ears-requirement-row" data-req-id="FR10" id="FR10"><td><span class="fid">FR10</span></td><td><span class="ears forbid">禁止</span></td><td class="cond">verdict が PASS でない、 または main の tip が記録した base と違うとき</td><td class="resp">land は何もしない（main も event も変えない）<span class="plain" data-prose-slot="plain" data-slot-id="plain-FR10">審査が合格でないとき、または main の先端が記録した出発点とずれているときは、着地（land）は何もしません。main も記録も変えません。</span><span class="why" data-prose-slot="rationale" data-source="N-1" data-slot-id="rationale-FR10">自律安全のニーズ（N-1）から来ています。合格していない便が main に載る経路を構造的に持たないためです。</span></td><td><span class="prio must" data-component="priority-badge">必須</span> <span class="vmeth">T</span></td></tr>
+<tr data-component="ears-requirement-row" data-req-id="FR11" id="FR11"><td><span class="fid">FR11</span></td><td><span class="ears trigger">きっかけ</span></td><td class="cond">verdict が PASS で前提が揃ったとき</td><td class="resp">worktree の tree を squash 1 commit で main に載せ（tree 同一・CAS）、 main で verify を再実走し、 RED なら Failed と記帳して止まる<span class="plain" data-prose-slot="plain" data-slot-id="plain-FR11">審査が合格で前提が揃ったら、作業用 worktree の中身を 1 つの commit にまとめて main に載せ（中身が同一であることと、他の変更と競合しないことを確かめて）、main の上で検証を撃ち直します。落ちたら「失敗」と記録して止まります。</span><span class="why" data-prose-slot="rationale" data-source="N-1" data-slot-id="rationale-FR11">自律安全のニーズ（N-1）から来ています。main に載せた直後に検証を撃ち直すことで、「作業用の木では通ったが main では落ちる」を無人で検知します。</span></td><td><span class="prio must" data-component="priority-badge">必須</span> <span class="vmeth">T</span></td></tr>
+<tr data-component="ears-requirement-row" data-req-id="FR12" id="FR12"><td><span class="fid">FR12</span></td><td><span class="ears trigger">きっかけ</span></td><td class="cond">land が成立したとき</td><td class="resp">verdicts.jsonl に schema 版付きで 1 行 append し、 Landed と記帳する（跨版の観測面）<span class="plain" data-prose-slot="plain" data-slot-id="plain-FR12">着地が成立したら、判定の結果を版番号付きの 1 行として verdicts.jsonl に追記し、「着地済み」と記録します。次の版の器がこの記録を読めるようにするためです。</span><span class="why" data-prose-slot="rationale" data-source="N-5" data-slot-id="rationale-FR12">自分で自分を作る、というニーズ（N-5）から来ています。着地ごとの判定を外から読める形で残しておけば、次の版がこの器を見張るときの材料になります。</span></td><td><span class="prio should" data-component="priority-badge">推奨</span> <span class="vmeth">T</span></td></tr>
+<tr data-component="ears-requirement-row" data-req-id="FR13" id="FR13"><td><span class="fid">FR13</span></td><td><span class="ears always">恒常</span></td><td class="cond">常時</td><td class="resp">stop --all は live な seat を止め、 rc を 0（全部止まった / 対象なし）・1（残った）・2（state が読めない）の 3 値で返す冪等な 1 コマンドである<span class="plain" data-prose-slot="plain" data-slot-id="plain-FR13">stop --all は、動いている実装役をすべて止める 1 つのコマンドです。何度撃っても同じ結果になり、結果は 0（全部止まった、または止める対象なし）・1（止められないものが残った）・2（記録が読めない）の 3 値で返します。</span><span class="why" data-prose-slot="rationale" data-source="N-1" data-slot-id="rationale-FR13">自律安全のニーズ（N-1）から来ています。無人で動くものは、いつでも 1 コマンドで止められる必要があります。</span></td><td><span class="prio must" data-component="priority-badge">必須</span> <span class="vmeth">T</span></td></tr>
+<tr data-component="ears-requirement-row" data-req-id="FR14" id="FR14"><td><span class="fid">FR14</span></td><td><span class="ears trigger">きっかけ</span></td><td class="cond">別 process で resume が要求されたとき</td><td class="resp">event log の現在地から続きの段だけを通し、 Landed まで到達できる<span class="plain" data-prose-slot="plain" data-slot-id="plain-FR14">別の process から「続きを」と頼まれたら、記録の現在地から続きの段だけを進め、着地まで到達できます。</span><span class="why" data-prose-slot="rationale" data-source="N-3" data-slot-id="rationale-FR14">記憶に頼らない、というニーズ（N-3）から来ています。途中で死んでも記録から続きを引けるなら、長い便を小さな process の列に分けられます。</span></td><td><span class="prio must" data-component="priority-badge">必須</span> <span class="vmeth">T</span></td></tr>
+<tr data-component="ears-requirement-row" data-req-id="FR15" id="FR15"><td><span class="fid">FR15</span></td><td><span class="ears trigger">きっかけ</span></td><td class="cond">契約が不可逆操作（消す / 出す / 使う）を名乗る段に達したとき</td><td class="resp">approval.requested を記帳して Blocked で止まり、 人の入力を待たずに process を終える<span class="plain" data-prose-slot="plain" data-slot-id="plain-FR15">契約が「消す・出す・使う」のどれかを名乗る段に来たら、承認を求める記録（approval.requested）を残して「保留」で止まり、人の入力を待たずに process を終えます。</span><span class="why" data-prose-slot="rationale" data-source="N-1" data-slot-id="rationale-FR15">自律安全のニーズ（N-1）から来ています。取り消せない操作だけは人が決める、という線を守るために、機械は止まって記録し、勝手に待ち続けたり進んだりしません。</span></td><td><span class="prio must" data-component="priority-badge">必須</span> <span class="vmeth">T</span></td></tr>
+<tr data-component="ears-requirement-row" data-req-id="FR16" id="FR16"><td><span class="fid">FR16</span></td><td><span class="ears trigger">きっかけ</span></td><td class="cond">人が approve を逐語付きで与えたとき</td><td class="resp">approval.received（逐語付き）を記帳し、 次の resume で続きを通す<span class="plain" data-prose-slot="plain" data-slot-id="plain-FR16">人が承認（approve）を逐語付きで与えたら、それを記録（approval.received）し、次の「続きを」で先へ進めます。</span><span class="why" data-prose-slot="rationale" data-source="N-1" data-slot-id="rationale-FR16">自律安全のニーズ（N-1）から来ています。承認を会話の記憶ではなく逐語付きの記録として残せば、誰が何を許したかを後から確かめられます。</span></td><td><span class="prio must" data-component="priority-badge">必須</span> <span class="vmeth">T</span></td></tr>
+<tr data-component="ears-requirement-row" data-req-id="FR17" id="FR17"><td><span class="fid">FR17</span></td><td><span class="ears always">恒常</span></td><td class="cond">常時</td><td class="resp">規則の種類は閉じた enum と網羅 match で持ち、 値は tracked な manifest 1 file から起動時に読む<span class="plain" data-prose-slot="plain" data-slot-id="plain-FR17">規則の「種類」は Rust の閉じた enum と網羅 match で持ち（足し忘れは compile が止める）、規則の「値」は repo に置いた manifest 1 file から起動時に読みます。</span><span class="why" data-prose-slot="rationale" data-source="N-3" data-slot-id="rationale-FR17">規則の値は manifest に、というニーズ（N-3）から来ています。種類を型で閉じれば足し忘れを compile が止め、値を 1 file に置けば AI が場当たりで規則を生やせません。</span></td><td><span class="prio must" data-component="priority-badge">必須</span> <span class="vmeth">T</span></td></tr>
+<tr data-component="ears-requirement-row" data-req-id="FR18" id="FR18"><td><span class="fid">FR18</span></td><td><span class="ears forbid">禁止</span></td><td class="cond">manifest に未知 kind・id 重複・型不一致・user 由来で裁定 id の無い行が在るとき</td><td class="resp">起動前に全件を行番号付きで拒否する（黙って落とさない）<span class="plain" data-prose-slot="plain" data-slot-id="plain-FR18">manifest に知らない種類・重複した id・型の合わない値・user 由来なのに裁定 id が無い行があれば、起動する前に問題を全部まとめて行番号付きで断ります。黙って読み飛ばしません。</span><span class="why" data-prose-slot="rationale" data-source="N-3" data-slot-id="rationale-FR18">記憶に頼らない、というニーズ（N-3）から来ています。壊れた規則を黙って読み飛ばすと、規則が効いていないことに誰も気づかないからです。</span></td><td><span class="prio must" data-component="priority-badge">必須</span> <span class="vmeth">T</span></td></tr>
+<tr data-component="ears-requirement-row" data-req-id="FR19" id="FR19"><td><span class="fid">FR19</span></td><td><span class="ears state">状態</span></td><td class="cond">marker（.vessel）が自分の NAME を言っている間</td><td class="resp">hook は SessionStart で名乗りを出し、 それ以外の repo では stdout 0 byte・rc 0 で黙る<span class="plain" data-prose-slot="plain" data-slot-id="plain-FR19">repo root の目印（.vessel）が「自分の名前」を言っている間は、hook は起動時に名乗りを出します。目印が無い、または別の名前の repo では、何も出さず正常終了（rc 0）で黙ります。</span><span class="why" data-prose-slot="rationale" data-source="N-5" data-slot-id="rationale-FR19">自分で自分を作る、というニーズ（N-5）から来ています。どの器がその repo に仕えるかを目印 1 つで決め、別の器や別の版と二重に動かないようにします。</span></td><td><span class="prio must" data-component="priority-badge">必須</span> <span class="vmeth">T</span></td></tr>
+<tr data-component="ears-requirement-row" data-req-id="FR20" id="FR20"><td><span class="fid">FR20</span></td><td><span class="ears forbid">禁止</span></td><td class="cond">契約の write-set の外へ Edit / Write しようとしたとき</td><td class="resp">編集の時点で deny し、 policy が読めなければ fail-closed で deny する<span class="plain" data-prose-slot="plain" data-slot-id="plain-FR20">契約で触ってよいとした file の外を編集しようとしたら、その編集の時点で止めます。許可リストが読めないときも、通すのではなく止めます。</span><span class="why" data-prose-slot="rationale" data-source="N-4" data-slot-id="rationale-FR20">契約は小さく、というニーズ（N-4）から来ています。契約の外を触った変更は後の審査では見つけにくく、編集の時点で止めるのが最も安いからです。</span></td><td><span class="prio must" data-component="priority-badge">必須</span> <span class="vmeth">T</span></td></tr>
+<tr data-component="ears-requirement-row" data-req-id="FR21" id="FR21"><td><span class="fid">FR21</span></td><td><span class="ears always">恒常</span></td><td class="cond">常時</td><td class="resp">hook は自分の出力 1 行を（who / what / when / bytes / tokens / wall）の schema で記録し、 v3 の計測 store を後付けできる形を保つ<span class="plain" data-prose-slot="plain" data-slot-id="plain-FR21">hook は自分が出した 1 行について、誰が・何を・いつ・何 byte・何 token・何 ms、の形で記録を残します。あとで計測の仕組みを足すときに、経路を作り直さなくて済むようにするためです。</span><span class="why" data-prose-slot="rationale" data-source="N-2" data-slot-id="rationale-FR21">消費は害、というニーズ（N-2）から来ています。起動時に注入される文章の量を後から測れるように、記録の形だけ先に決めておきます。</span></td><td><span class="prio should" data-component="priority-badge">推奨</span> <span class="vmeth">T</span></td></tr>
+<tr data-component="ears-requirement-row" data-req-id="FR22" id="FR22"><td><span class="fid">FR22</span></td><td><span class="ears always">恒常</span></td><td class="cond">常時</td><td class="resp">到達点の計測では人由来の event を数え、 approval 以外が 0 件であることを機械で示す<span class="plain" data-prose-slot="plain" data-slot-id="plain-FR22">到達点を測るときは、人が関わった記録を数え、承認以外が 0 件であることを機械で示します。</span><span class="why" data-prose-slot="rationale" data-source="N-1" data-slot-id="rationale-FR22">自律安全のニーズ（N-1）から来ています。「人手 0」を言葉で主張せず、記録を数えて示すためです。</span></td><td><span class="prio must" data-component="priority-badge">必須</span> <span class="vmeth">T</span></td></tr>
+<tr data-component="ears-requirement-row" data-req-id="FR23" id="FR23"><td><span class="fid">FR23</span></td><td><span class="ears always">恒常</span></td><td class="cond">常時</td><td class="resp">退避物は session id で一意、 消費は move、 DATA が無い周は brief を出さず、 別 session の退避物は自動消費せず、 重複起動は冪等とする<span class="plain" data-prose-slot="plain" data-slot-id="plain-FR23">開発 session（この AI）の作業記憶は、退避 file を session id で一意にし、使い終えたら削除でなく移動し、記録が読めない周は状況説明を出さず、別 session の退避物は勝手に片付けず、二重に起動しても同じ結果になるようにします。</span><span class="why" data-prose-slot="rationale" data-source="N-3" data-slot-id="rationale-FR23">記憶に頼らない、というニーズ（N-3）から来ています。開発 session が context を切り替えるときに作業状態を失わず、別 session の記憶を自分のものと取り違えないためです。</span></td><td><span class="prio should" data-component="priority-badge">推奨</span> <span class="vmeth">I</span></td></tr>
+</tbody></table></div>
+</div>
+<section data-component="chapter-deck-band" class="tint-violet"><span class="num">05</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M13 2L3 14h7l-1 8 10-12h-7l1-8z"/></svg> 非機能要件 / 速さ・安定・安全の数値約束</span><h2>「どれくらい速く・落ちず・安全か」を数字で約束する</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-05">「どれくらい小さく・速く・安全か」を数字で約束します。lens の予算・契約の大きさ・依存の本数・黙って落とさない件数・hook の時間の 5 点を、それぞれの測り方とセットで示します。</p></section>
+<div class="chapbody">
+<div data-component="nfr-hero-metrics">
+<div class="nfr-hero c1"><div class="cat">予算</div><div class="big">0.15<span class="u">M token</span></div><div class="qual">lens 1 本あたりの上限</div></div>
+<div class="nfr-hero c2"><div class="cat">小ささ</div><div class="big">300<span class="u">行</span></div><div class="qual">1 契約の diff の目安</div></div>
+<div class="nfr-hero c3"><div class="cat">依存</div><div class="big">0<span class="u">本</span></div><div class="qual">実行時の直接依存</div></div>
+<div class="nfr-hero c4"><div class="cat">安全</div><div class="big">0<span class="u">件</span></div><div class="qual">黙って落とす入力</div></div>
+<div class="nfr-hero c5"><div class="cat">速さ</div><div class="big">2.0<span class="u">秒</span></div><div class="qual">hook 1 回の上限</div></div>
+</div>
+<div class="tbl-wrap"><table data-component="nfr-metrics-table"><thead><tr><th>ID</th><th>区分</th><th>目標値 (+ やさしい言い換え)</th><th>測り方</th></tr></thead><tbody>
+<tr data-component="nfr-metric-row" id="NFR1"><td><span class="nid">NFR1</span></td><td>性能</td><td><span class="tgt">1 lens は 0.15M token 以内（目標値）</span><span class="plain" data-prose-slot="plain" data-slot-id="plain-NFR1">審査役 1 回に使う token は 0.15M 以内を目標にします。diff の大きさと上限の照合結果を判定に記録します。</span></td><td class="meas">lens 起動時の diff byte と cap の照合を verdict に記録</td></tr>
+<tr data-component="nfr-metric-row" id="NFR2"><td><span class="nid">NFR2</span></td><td>大きさ</td><td><span class="tgt">1 契約の diff は 300 行程度・見積は 550 行以内</span><span class="plain" data-prose-slot="plain" data-slot-id="plain-NFR2">1 つの契約の変更は 300 行程度、見積は 550 行以内にします。PR の行数と契約の見積を記録して見比べます。</span></td><td class="meas">PR の diff 行数と契約の見積を記録して照合</td></tr>
+<tr data-component="nfr-metric-row" id="NFR3"><td><span class="nid">NFR3</span></td><td>依存</td><td><span class="tgt">実行時の直接依存 0 本・std だけで build（allowlist の外は歯が落とす）</span><span class="plain" data-prose-slot="plain" data-slot-id="plain-NFR3">実行時に使う外部 crate は 0 本で、標準ライブラリだけで build します。許可リストの外の依存は CI の検査が毎回落とします。</span></td><td class="meas">cargo xtask check の deps-empty と cargo deny を CI で毎回</td></tr>
+<tr data-component="nfr-metric-row" id="NFR4"><td><span class="nid">NFR4</span></td><td>安全</td><td><span class="tgt">不正入力を黙って落とす件数 0・読めない store は rc 2</span><span class="plain" data-prose-slot="plain" data-slot-id="plain-NFR4">不正な入力を黙って落とす件数は 0 です。記録が読めないときは rc 2 で止まります。壊した入力を実際に流して、全部が声を上げて止まることを確かめます。</span></td><td class="meas">fixture 実走（壊した行・未知 kind）で全件 loud を確認</td></tr>
+<tr data-component="nfr-metric-row" id="NFR5"><td><span class="nid">NFR5</span></td><td>応答</td><td><span class="tgt">hook は binary 1 本の 1 回呼出しで 2.0 秒以内・重い I/O を持たない</span><span class="plain" data-prose-slot="plain" data-slot-id="plain-NFR5">hook は binary 1 本を 1 回呼ぶだけで 2.0 秒以内に終わり、重い読み書きをしません。かかった時間は注入計測の記録に残します。</span></td><td class="meas">hook の wall time を注入計測の slot に記録</td></tr>
+</tbody></table></div>
+</div>
+<section data-component="chapter-deck-band" class="tint-ok"><span class="num">06</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg> 受入基準 / 「できた」と言える条件</span><h2>これを満たせば「完成」と判定する</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-06">「MVP ができた」と言える条件を、後から確かめられる形で先に決めておきます。toy repo で 5 便、scribe2 自身で 1 便、偽の PASS が 0 件、別 process からの再開、承認の停止と再開、不正入力の loud な拒否、write-set の外の deny、作業記憶の作法、の 8 点です。</p></section>
+<div class="chapbody">
+<div data-component="acceptance-criteria-checklist">
+<div class="ac" id="AC1"><div class="aid">AC1 ← FR4/FR5/FR6/FR11/FR12/FR22</div><p class="at">toy repo で内容の異なる 5 契約（正常 / 改変 / test 追加 / gate FAIL / 承認 Blocked）が実 runner + 実 lens で通り、 人由来の event が approval 以外に 0 件</p><div class="metric"><span class="v">5/5</span><span class="l">便が人手 0 で通る</span></div></div>
+<div class="ac" id="AC2"><div class="aid">AC2 ← FR2/FR5/FR22/NFR2</div><p class="at">scribe2 自身で実 bead 1 本を pipeline が PR 作成まで通し、 CI が緑（merge は人が押す）</p><div class="metric"><span class="v">1 便</span><span class="l">自己ホスト</span></div></div>
+<div class="ac" id="AC3"><div class="aid">AC3 ← FR7/FR8/FR9/FR10/NFR1</div><p class="at">verify RED・lens 不在・予算超過の周は必ず FAIL か INCONCLUSIVE で止まり、 land されない</p><div class="metric"><span class="v">0 件</span><span class="l">偽の PASS</span></div></div>
+<div class="ac" id="AC4"><div class="aid">AC4 ← FR3/FR13/FR14</div><p class="at">process を殺して別 process で resume しても、 event log の中断点から Landed まで通る</p><div class="metric"><span class="v">1 回</span><span class="l">再開で完走</span></div></div>
+<div class="ac" id="AC5"><div class="aid">AC5 ← FR15/FR16</div><p class="at">3 クラス操作を名乗る契約は Blocked で止まり、 逐語付きの approve が記帳されてから再開する</p><div class="metric"><span class="v">0 件</span><span class="l">無承認の通過</span></div></div>
+<div class="ac" id="AC6"><div class="aid">AC6 ← FR1/FR17/FR18/NFR3/NFR4</div><p class="at">不正な契約・rules manifest（欠落 / 未知 kind / 裁定 id 無し / 重複 id）は起動前に全件 loud で落ちる</p><div class="metric"><span class="v">0 件</span><span class="l">黙って落とす入力</span></div></div>
+<div class="ac" id="AC7"><div class="aid">AC7 ← FR19/FR20/FR21/NFR5</div><p class="at">write-set の外への Edit / Write は編集の時点で deny され、 hook は marker が自分を言うときだけ仕える</p><div class="metric"><span class="v">0 件</span><span class="l">素通り</span></div></div>
+<div class="ac" id="AC8"><div class="aid">AC8 ← FR23</div><p class="at">開発 session の作業記憶の退避と復元が global skill の手順として実在し、 6 本の作法を満たす</p><div class="metric"><span class="v">6/6</span><span class="l">作法が実在</span></div></div>
+</div>
+</div>
+<section data-component="chapter-deck-band" class="tint-info"><span class="num">07</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 12h14M12 5l7 7-7 7"/></svg> トレーサビリティ / 抜け漏れチェック表</span><h2>事業ニーズ → 機能 → 検証 が全部つながっているか</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-07">上位ニーズ・機能要件・受入基準が途切れなくつながっているかを 1 枚の表で見ます。出どころの無い要件や、確かめる手段の無い要件が残っていないかを確認する章です。</p></section>
+<div class="chapbody">
+<details data-component="rtm-collapse" class="rtm-fold"><summary>トレーサビリティ表 (RTM) を開く</summary>
+<p class="rtm-summary-derived" data-derived="req=28;need=5;link=28;iso=0;unv=0">要件 28 件 / 上位ニーズ 5 件 / トレースリンク 28 本 / 孤立要件 (出所なし) 0 件 / 未検証要件 (受入なし) 0 件</p>
+<p data-prose-slot="rtm-summary" data-slot-id="rtm-summary">機能要件 23 本と非機能要件 5 本の合計 28 本が、5 つの上位ニーズのどれかにつながっています。出どころの無い要件は 0 本、受入基準に結びついていない要件も 0 本です。</p>
+<div data-component="rtm-grid"><table class="rtm"><thead><tr><th>要件</th><th class="grp">N-1 自律安全</th><th class="grp">N-2 消費は害</th><th class="grp">N-3 記憶に頼らない</th><th class="grp">N-4 契約は小さく</th><th class="grp">N-5 自己開発</th><th>受入で検証</th></tr></thead><tbody>
+<tr><th>FR1 <span class="lbl">契約の検査</span></th><td></td><td></td><td></td><td class="hit"><span class="dot" data-trace-link="FR1__N-4">●</span></td><td></td><td class="hit"><span class="dot ac" data-acc-link="FR1__AC6">AC6</span></td></tr>
+<tr><th>FR2 <span class="lbl">契約の pointer</span></th><td></td><td></td><td></td><td class="hit"><span class="dot" data-trace-link="FR2__N-4">●</span></td><td></td><td class="hit"><span class="dot ac" data-acc-link="FR2__AC2">AC2</span></td></tr>
+<tr><th>FR3 <span class="lbl">run の永続</span></th><td></td><td></td><td class="hit"><span class="dot" data-trace-link="FR3__N-3">●</span></td><td></td><td></td><td class="hit"><span class="dot ac" data-acc-link="FR3__AC4">AC4</span></td></tr>
+<tr><th>FR4 <span class="lbl">runner の起動</span></th><td class="hit"><span class="dot" data-trace-link="FR4__N-1">●</span></td><td></td><td></td><td></td><td></td><td class="hit"><span class="dot ac" data-acc-link="FR4__AC1">AC1</span></td></tr>
+<tr><th>FR5 <span class="lbl">runner と lens の口</span></th><td class="hit"><span class="dot" data-trace-link="FR5__N-1">●</span></td><td></td><td></td><td></td><td></td><td class="hit"><span class="dot ac" data-acc-link="FR5__AC1">AC1</span><span class="dot ac" data-acc-link="FR5__AC2">AC2</span></td></tr>
+<tr><th>FR6 <span class="lbl">完了判定</span></th><td></td><td></td><td class="hit"><span class="dot" data-trace-link="FR6__N-3">●</span></td><td></td><td></td><td class="hit"><span class="dot ac" data-acc-link="FR6__AC1">AC1</span></td></tr>
+<tr><th>FR7 <span class="lbl">入口の flip check</span></th><td></td><td></td><td></td><td class="hit"><span class="dot" data-trace-link="FR7__N-4">●</span></td><td></td><td class="hit"><span class="dot ac" data-acc-link="FR7__AC3">AC3</span></td></tr>
+<tr><th>FR8 <span class="lbl">gate の機械検証</span></th><td class="hit"><span class="dot" data-trace-link="FR8__N-1">●</span></td><td></td><td></td><td></td><td></td><td class="hit"><span class="dot ac" data-acc-link="FR8__AC3">AC3</span></td></tr>
+<tr><th>FR9 <span class="lbl">lens の verdict</span></th><td class="hit"><span class="dot" data-trace-link="FR9__N-1">●</span></td><td></td><td></td><td></td><td></td><td class="hit"><span class="dot ac" data-acc-link="FR9__AC3">AC3</span></td></tr>
+<tr><th>FR10 <span class="lbl">land の前提</span></th><td class="hit"><span class="dot" data-trace-link="FR10__N-1">●</span></td><td></td><td></td><td></td><td></td><td class="hit"><span class="dot ac" data-acc-link="FR10__AC3">AC3</span></td></tr>
+<tr><th>FR11 <span class="lbl">land</span></th><td class="hit"><span class="dot" data-trace-link="FR11__N-1">●</span></td><td></td><td></td><td></td><td></td><td class="hit"><span class="dot ac" data-acc-link="FR11__AC1">AC1</span></td></tr>
+<tr><th>FR12 <span class="lbl">verdict export</span></th><td></td><td></td><td></td><td></td><td class="hit"><span class="dot" data-trace-link="FR12__N-5">●</span></td><td class="hit"><span class="dot ac" data-acc-link="FR12__AC1">AC1</span></td></tr>
+<tr><th>FR13 <span class="lbl">stop</span></th><td class="hit"><span class="dot" data-trace-link="FR13__N-1">●</span></td><td></td><td></td><td></td><td></td><td class="hit"><span class="dot ac" data-acc-link="FR13__AC4">AC4</span></td></tr>
+<tr><th>FR14 <span class="lbl">resume</span></th><td></td><td></td><td class="hit"><span class="dot" data-trace-link="FR14__N-3">●</span></td><td></td><td></td><td class="hit"><span class="dot ac" data-acc-link="FR14__AC4">AC4</span></td></tr>
+<tr><th>FR15 <span class="lbl">承認の停止</span></th><td class="hit"><span class="dot" data-trace-link="FR15__N-1">●</span></td><td></td><td></td><td></td><td></td><td class="hit"><span class="dot ac" data-acc-link="FR15__AC5">AC5</span></td></tr>
+<tr><th>FR16 <span class="lbl">承認の再開</span></th><td class="hit"><span class="dot" data-trace-link="FR16__N-1">●</span></td><td></td><td></td><td></td><td></td><td class="hit"><span class="dot ac" data-acc-link="FR16__AC5">AC5</span></td></tr>
+<tr><th>FR17 <span class="lbl">rules manifest</span></th><td></td><td></td><td class="hit"><span class="dot" data-trace-link="FR17__N-3">●</span></td><td></td><td></td><td class="hit"><span class="dot ac" data-acc-link="FR17__AC6">AC6</span></td></tr>
+<tr><th>FR18 <span class="lbl">rules の検査</span></th><td></td><td></td><td class="hit"><span class="dot" data-trace-link="FR18__N-3">●</span></td><td></td><td></td><td class="hit"><span class="dot ac" data-acc-link="FR18__AC6">AC6</span></td></tr>
+<tr><th>FR19 <span class="lbl">marker と hook</span></th><td></td><td></td><td></td><td></td><td class="hit"><span class="dot" data-trace-link="FR19__N-5">●</span></td><td class="hit"><span class="dot ac" data-acc-link="FR19__AC7">AC7</span></td></tr>
+<tr><th>FR20 <span class="lbl">in-loop guard</span></th><td></td><td></td><td></td><td class="hit"><span class="dot" data-trace-link="FR20__N-4">●</span></td><td></td><td class="hit"><span class="dot ac" data-acc-link="FR20__AC7">AC7</span></td></tr>
+<tr><th>FR21 <span class="lbl">注入計測の slot</span></th><td></td><td class="hit"><span class="dot" data-trace-link="FR21__N-2">●</span></td><td></td><td></td><td></td><td class="hit"><span class="dot ac" data-acc-link="FR21__AC7">AC7</span></td></tr>
+<tr><th>FR22 <span class="lbl">人手 0 の計測</span></th><td class="hit"><span class="dot" data-trace-link="FR22__N-1">●</span></td><td></td><td></td><td></td><td></td><td class="hit"><span class="dot ac" data-acc-link="FR22__AC1">AC1</span><span class="dot ac" data-acc-link="FR22__AC2">AC2</span></td></tr>
+<tr><th>FR23 <span class="lbl">開発 session の作業記憶</span></th><td></td><td></td><td class="hit"><span class="dot" data-trace-link="FR23__N-3">●</span></td><td></td><td></td><td class="hit"><span class="dot ac" data-acc-link="FR23__AC8">AC8</span></td></tr>
+<tr><th>NFR1 <span class="lbl">lens 予算</span></th><td></td><td class="hit"><span class="dot" data-trace-link="NFR1__N-2">●</span></td><td></td><td></td><td></td><td class="hit"><span class="dot ac" data-acc-link="NFR1__AC3">AC3</span></td></tr>
+<tr><th>NFR2 <span class="lbl">契約の大きさ</span></th><td></td><td></td><td></td><td class="hit"><span class="dot" data-trace-link="NFR2__N-4">●</span></td><td></td><td class="hit"><span class="dot ac" data-acc-link="NFR2__AC2">AC2</span></td></tr>
+<tr><th>NFR3 <span class="lbl">依存</span></th><td></td><td class="hit"><span class="dot" data-trace-link="NFR3__N-2">●</span></td><td></td><td></td><td></td><td class="hit"><span class="dot ac" data-acc-link="NFR3__AC6">AC6</span></td></tr>
+<tr><th>NFR4 <span class="lbl">fail-closed</span></th><td></td><td></td><td class="hit"><span class="dot" data-trace-link="NFR4__N-3">●</span></td><td></td><td></td><td class="hit"><span class="dot ac" data-acc-link="NFR4__AC6">AC6</span></td></tr>
+<tr><th>NFR5 <span class="lbl">hook の予算</span></th><td></td><td class="hit"><span class="dot" data-trace-link="NFR5__N-2">●</span></td><td></td><td></td><td></td><td class="hit"><span class="dot ac" data-acc-link="NFR5__AC7">AC7</span></td></tr>
+</tbody></table></div></details>
+</div>
+<section data-component="chapter-deck-band" class="tint-warn"><span class="num">08</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg> 制約・規制 / 守らねばならない外枠</span><h2>設計の前に決まっている制約と、 法令</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-08">設計の前から決まっている制約を並べます。憲法が上位にあること、repo が PUBLIC であること、test は Rust だけ、前の器の作法を持ち込まない、不可逆操作の口を持たない、headless の制約、の 6 点です。</p></section>
+<div class="chapbody">
+<table data-component="constraint-callout"><tbody>
+<tr><td class="cid2">CON1</td><td class="cl">憲法</td><td>憲法（Always 16 / Ask-first 4 / Never 4）を本書の上位に置き、 矛盾する要件を書かない <span class="reg-badge">法令 憲法 v0.4.6</span></td></tr>
+<tr><td class="cid2">CON2</td><td class="cl">公開</td><td>本 repo は PUBLIC。 絶対 path・host 名・口座名・user 逐語を tracked file に書かない <span class="reg-badge">法令 憲法 A1（出す）</span></td></tr>
+<tr><td class="cid2">CON3</td><td class="cl">歯</td><td>test は Rust の 1 framework だけで、 bash / bats の歯を書かない <span class="reg-badge">法令 憲法 C12</span></td></tr>
+<tr><td class="cid2">CON4</td><td class="cl">作法</td><td>前の器（v1）の役割席・gate 席・QA 席・契約押印・tier ラベルを持ち込まない <span class="reg-badge">法令 ADR-0003</span></td></tr>
+<tr><td class="cid2">CON5</td><td class="cl">口</td><td>binary は不可逆操作（force push・削除・公開・課金）の口を持たない <span class="reg-badge">法令 憲法 A1 / N1</span></td></tr>
+<tr><td class="cid2">CON6</td><td class="cl">headless</td><td>permission は毎回明示・rate limit は stream-json で検知・context の上限は契約の大きさで受ける</td></tr>
+</tbody></table>
+</div>
+<section data-component="chapter-deck-band" class="tint-brand"><span class="num">09</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg> 用語集 / この文書で使う専門語</span><h2>本文に出てくる専門語のやさしい説明</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-09">本文に出てくる専門語（契約・runner・lens・gate・land・fleet・event log など 18 語）を、やさしい言い換えと定義で並べます。本文中の専門語には同じ言い換えを併記しています。</p></section>
+<div class="chapbody">
+<div data-component="glossary-term-table">
+<div class="grow"><div class="gword">契約<span class="en">contract</span></div><div class="gdef">何を作り・何ができたら終わりかを 1 file に書いたもの。 台帳（beads）の 1 issue に対応する。</div></div>
+<div class="grow"><div class="gword">runner<span class="en">runner</span></div><div class="gdef">契約 1 本を worktree で実装する headless の Claude process。 席ではなく使い捨て。</div></div>
+<div class="grow"><div class="gword">lens<span class="en">lens</span></div><div class="gdef">diff を読んで PASS / FAIL / INCONCLUSIVE を返す headless の Claude process。</div></div>
+<div class="grow"><div class="gword">gate<span class="en">gate</span></div><div class="gdef">契約の verify を実走し lens 1 本の verdict を採る段。 PASS でなければ land しない。</div></div>
+<div class="grow"><div class="gword">land<span class="en">land</span></div><div class="gdef">worktree の成果を squash 1 commit で main に載せ、 main で歯を再実走すること。</div></div>
+<div class="grow"><div class="gword">fleet<span class="en">fleet</span></div><div class="gdef">run と seat の現在地の全体。 実体は event log 1 file。</div></div>
+<div class="grow"><div class="gword">event log<span class="en">event log</span></div><div class="gdef">1 行 1 出来事を追記する file。 現在地はこれを replay して導く。</div></div>
+<div class="grow"><div class="gword">manifest<span class="en">rules manifest</span></div><div class="gdef">規則の値（閾値・有効 / 無効・裁定 id）を持つ tracked な TOML 1 file。 憲法 C1 の「値は manifest」の実体。</div></div>
+<div class="grow"><div class="gword">verdict<span class="en">verdict</span></div><div class="gdef">gate が返す 3 値（PASS / FAIL / INCONCLUSIVE）。 構造化 field が一次 truth。</div></div>
+<div class="grow"><div class="gword">3 クラス<span class="en">three classes</span></div><div class="gdef">消す / 出す / 使う の 3 分類。 これに当たる操作だけ人の承認を要する。</div></div>
+<div class="grow"><div class="gword">write-set<span class="en">write-set</span></div><div class="gdef">契約が宣言する、 編集してよい file の集合。 外への編集は編集の時点で止める。</div></div>
+<div class="grow"><div class="gword">.vessel<span class="en">vessel marker</span></div><div class="gdef">repo root の固定名 file。 中身が name と version を言い、 どの器が仕えるかを決める。</div></div>
+<div class="grow"><div class="gword">flip check<span class="en">flip check</span></div><div class="gdef">変更の test 差分だけを base に当てて RED になることを機械で確かめる検査。</div></div>
+<div class="grow"><div class="gword">headless<span class="en">headless</span></div><div class="gdef">対話画面を持たず、 入力を受けて 1 回で答えを返す Claude の実行形（claude -p）。</div></div>
+<div class="grow"><div class="gword">toy repo<span class="en">toy repo</span></div><div class="gdef">到達点を測るために一時 dir に作る、 外部依存の無い小さな git repo。</div></div>
+<div class="grow"><div class="gword">設計 doc<span class="en">design doc</span></div><div class="gdef">要望を SRS の要件に結び、 契約が複数出る元になる tracked markdown。</div></div>
+<div class="grow"><div class="gword">要件カタログ<span class="en">requirements catalog</span></div><div class="gdef">要件 doc の v2 行を写した一覧（requirements-catalog.html）。 FR の根拠が行 id で引く。</div></div>
+<div class="grow"><div class="gword">承認 event<span class="en">approval event</span></div><div class="gdef">approval.requested / approval.received の 2 種。 逐語を伴い fleet に残る。</div></div>
+</div>
+</div>
+</div>
+<footer class="foot" data-component="fidelity-sync-meta"><div class="ft-grid">
+<div class="ft-plain">このページは、大もとの機械データ (正本) から自動で組み立てられています。構造は機械が自動で検査し、内容が元データに忠実かは独立のレビューで確かめます。</div>
+<div data-audience="machine">機械SSoT: <b>srs.srs.yaml</b> &middot; 生成: <b>2026-09-09 07:02</b> &middot; 検証状態: <b>structure ✓ fabrication-free / prose ✓ 充填済 (fidelity ceiling → S5 対象)</b></div>
+<div class="tags" data-audience="machine"><span>folio design system</span><span>deck × B2</span><span>ISO/IEC/IEEE 29148</span><span>S4 生成</span></div>
+</div></footer>
+</body>
+</html>

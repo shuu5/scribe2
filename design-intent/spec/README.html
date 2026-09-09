@@ -22,7 +22,9 @@
   "dc:title": "spec cluster index",
   "folio:version": "0.1.0",
   "dc:hasPart": [
-    { "@id": "./constitution.html" }
+    { "@id": "./constitution.html" },
+    { "@id": "./srs.html" },
+    { "@id": "./requirements-catalog.html" }
   ]
 }
 </script>
@@ -63,14 +65,16 @@
 
 <section id="s2-contents" class="informative">
 <h2>§2. Contents</h2>
-<p class="section-essence" data-audience="human">現在の spec は constitution 1 本です。 file を足したら本表と JSON-LD の hasPart に実在 file だけを追記します。</p>
+<p class="section-essence" data-audience="human">現在の spec は 3 本です。 折れない線を定める constitution、 MVP のゴールを定める要件定義書 (SRS)、 要件 doc の写しである要件カタログです。 file を足したら本表と JSON-LD の hasPart に実在 file だけを追記します。</p>
 <table>
   <thead><tr><th>file</th><th>doc-type</th><th>内容</th><th>版 / 状態</th></tr></thead>
   <tbody>
-    <tr><td><a href="./constitution.html">constitution.html</a></td><td>constitution</td><td>scribe2 の折れない線 (Always / Ask-first / Never の 3 段と rules 行の初期値)</td><td>active</td></tr>
+    <tr><td><a href="./constitution.html">constitution.html</a></td><td>constitution</td><td>scribe2 の折れない線 (Always / Ask-first / Never の 3 段と rules 行の初期値)</td><td>v0.4.6 / active</td></tr>
+    <tr><td><a href="./srs.html">srs.html</a></td><td>srs (folio SRS pack の生成物・機械 SSoT = <code>srs.srs.yaml</code>・散文 = <code>srs.prose.yaml</code>)</td><td>MVP の要件定義書 — 設計 → 契約 → 実装 → 検証 → land を人の手を借りずに 1 本通す器 (上位ニーズ 5 / FR 23 / NFR 5 / 受入 8)</td><td>v0.1 / active</td></tr>
+    <tr><td><a href="./requirements-catalog.html">requirements-catalog.html</a></td><td>spec</td><td>要件カタログ — 要件 doc v0.1.10 の v2 行 144 本 + 開発 session の作法 6 本の写し (scrub 済み・SRS の FR が行 id で引く)</td><td>v0.1.10 / active</td></tr>
   </tbody>
 </table>
-<p data-audience="machine">本 cluster は実在 file のみを本表と JSON-LD の <code>dc:hasPart</code> に載せる。 空の placeholder は置かない (hollow-spec 防止)。 条数と版の正本は constitution.html 自身。</p>
+<p data-audience="machine">本 cluster は実在 file のみを本表と JSON-LD の <code>dc:hasPart</code> に載せる。 空の placeholder は置かない (hollow-spec 防止)。 条数と版の正本は constitution.html 自身。 srs.html は手編集しない — 編集起点は <code>srs.srs.yaml</code> (contract) と <code>srs.prose.yaml</code> (prose manifest) で、 folio の generator (<code>assemble-srs.sh</code> → <code>inject-prose.sh</code>) で再生成し、 <code>folio verify --type srs</code> の floor と ceiling lens で検証する。 requirements-catalog.html は要件 doc (repo 外で凍結) からの決定論生成物で、 原本の版が上がったときに再生成する。</p>
 </section>
 
 <!-- folio:chrome-bottom -->

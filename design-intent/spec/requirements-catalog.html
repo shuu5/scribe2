@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="folio-doc-type" content="spec">
+<meta name="folio-layer" content="project">
+<meta name="folio-version" content="0.1.10">
+<meta name="folio-status" content="active">
+<meta name="folio-stakeholders" content="Developer, AI Agent, External Reviewer">
+<title>scribe2 要件カタログ — MVP（v2 着手）の要件 144 本 + 開発 session の作法 6 本（要件 doc v0.1.10 の写し・scrub 済み）</title>
+<link rel="stylesheet" href="../../common.css">
+<script type="application/ld+json">
+{
+  "@context": {
+    "dc": "http://purl.org/dc/terms/",
+    "schema": "https://schema.org/",
+    "folio": "https://folio.dev/spec/v1/"
+  },
+  "@id": "./requirements-catalog.html",
+  "@type": "schema:TechArticle",
+  "dc:isPartOf": [
+    { "@id": "./README.html" }
+  ],
+  "dc:references": [
+    { "@id": "./srs.html" },
+    { "@id": "./constitution.html" }
+  ],
+  "dc:title": "scribe2 要件カタログ — MVP（v2 着手）の要件 144 本 + 開発 session の作法 6 本（要件 doc v0.1.10 の写し・scrub 済み）",
+  "folio:version": "0.1.10",
+  "folio:stakeholders": ["Developer", "AI Agent", "External Reviewer"]
+}
+</script>
+</head>
+<body>
+<!-- folio:chrome-top -->
+<a class="skip-link" href="#s0-reading">本文へスキップ</a>
+<nav class="breadcrumb" aria-label="パンくず"><ol>
+  <li><a href="../index.html">design-intent</a></li>
+  <li><a href="./README.html">spec</a></li>
+  <li aria-current="page">requirements-catalog</li>
+</ol></nav>
+<!-- /folio:chrome-top -->
+
+<header class="doc-header">
+  <h1>scribe2 要件カタログ</h1>
+  <div class="meta">v0.1.10 &middot; status: active &middot; MVP（v2 着手）の要件 144 本 + 開発 session の作法 6 本 = 計 150 行。 要件 doc v0.1.10（repo 外で凍結）の写しで、 bead id・口座名・user 逐語を落としてある</div>
+</header>
+<!-- folio:chrome-toc -->
+<nav class="toc" aria-label="ページ内目次">
+<ol>
+  <li><a href="#s0-reading">§0. 読み方 — この一覧が何の写しか</a></li>
+  <li><a href="#ch-a">A. intake → 契約（v2 16 本 / v3 送り 9 本）</a></li>
+  <li><a href="#ch-b">B. dispatch（v2 17 本 / v3 送り 5 本）</a></li>
+  <li><a href="#ch-c">C. gate（v2 17 本 / v3 送り 15 本）</a></li>
+  <li><a href="#ch-d">D. land（v2 17 本 / v3 送り 8 本）</a></li>
+  <li><a href="#ch-e">E. 席と役割（v2 18 本 / v3 送り 17 本）</a></li>
+  <li><a href="#ch-f">F. 承認・裁定（v2 24 本 / v3 送り 0 本）</a></li>
+  <li><a href="#ch-g">G. 口座（v2 12 本 / v3 送り 10 本）</a></li>
+  <li><a href="#ch-h">H. WM / rebrief（v2 0 本 / v3 送り 19 本）</a></li>
+  <li><a href="#ch-i">I. 台帳 adapter（v2 14 本 / v3 送り 6 本）</a></li>
+  <li><a href="#ch-j">J. 消費（v2 2 本 / v3 送り 25 本）</a></li>
+  <li><a href="#ch-k">K. 教訓（docs/lore → 歯 / schema へ落とす条件）（v2 3 本 / v3 送り 19 本）</a></li>
+  <li><a href="#ch-p">P. 可観測性・提示面（v0.1.6 新設・論点 1 (b)）（v2 0 本 / v3 送り 7 本）</a></li>
+  <li><a href="#ch-q">Q. 移植性・host（v0.1.6 新設・論点 1 (b)）（v2 0 本 / v3 送り 1 本）</a></li>
+  <li><a href="#ch-r">R. 公開安全（v0.1.6 新設・論点 1 (b)）（v2 0 本 / v3 送り 2 本）</a></li>
+  <li><a href="#ch-o">O. 跨版（前の版が次の版の oracle になる・器 SPEC §12 の要件面）（v2 4 本 / v3 送り 2 本）</a></li>
+  <li><a href="#s-trace">§Trace — 原本・母集団・scrub</a></li>
+</ol>
+</nav>
+<!-- /folio:chrome-toc -->
+
+<aside class="machine-readable" aria-hidden="true">
+  <dl>
+    <dt>id</dt><dd>requirements-catalog</dd>
+    <dt>doc-type</dt><dd>spec</dd>
+    <dt>version</dt><dd>0.1.10 (follows the requirements doc version)</dd>
+    <dt>status</dt><dd>active</dd>
+    <dt>stakeholders</dt><dd>Developer, AI Agent, External Reviewer</dd>
+    <dt>source</dt><dd>要件 doc v0.1.10（repo 外で凍結・sha256 先頭 8 桁 <code>92a75005</code>）</dd>
+    <dt>scrub</dt><dd>bead id・口座名・user 逐語を落とした</dd>
+  </dl>
+</aside>
+
+<section id="s0-reading" class="informative">
+<h2>§0. 読み方 — この一覧が何の写しか</h2>
+<p class="section-essence" data-audience="human">このページは scribe2 の要件 doc（repo の外で凍結・v0.1.10）から、 MVP で着手する要件 144 本と、 v2 の開発 session 自身が守る作法 6 本を写したものです。 各行は要件 doc の id をそのまま持ち、 要件定義書（SRS）の各要件はこの行 id を根拠として引きます。 人が読む要旨は章ごとの段落に、 原文の行は各章の折りたたみの中の表にあります。</p>
+<p data-audience="machine">id 体系 <code>R-&lt;章&gt;&lt;番号&gt;</code> は要件 doc のまま （章 = A intake→契約 / B dispatch / C gate / D land / E 席と役割 / F 承認・裁定 / G 口座 / H WM・rebrief / I 台帳 adapter / J 消費 / K 教訓 / P 可観測性・提示面 / Q 移植性・host / R 公開安全 / O 跨版）。 SRS (<code>./srs.html</code>) の各 FR は根拠としてこの行 id を引き、 各行の id セルは <code>#r-&lt;小文字 id&gt;</code>（例 <code>#r-a1</code>）で deep-link できる。 列の意味: <strong>id</strong> = 要件 doc の行 id / <strong>要件文</strong> = 原文の要件 1 文（scrub 済み）/ <strong>v2 表現</strong> = 原文に <code>｜v2:</code> field が在る行だけの値（無い行は空）/ <strong>出所</strong> = 原文の <code>｜出所:</code> field / <strong>裁定</strong> = 原文の <code>｜裁定:</code> field（user 逐語は落とし、 ts・論点番号・RULING doc 名・承認 relay の scope は残す。 <code>なし</code> = 裁定に紐づかない行、 空 = 原文にこの field が無い行）/ <strong>v1 対応物</strong> = 原文の <code>｜v1:</code> field（<code>-</code> = v1 に対応物なし）/ <strong>備考</strong> = 収録上の注記。 <strong>着手 field の意味</strong>: 原文末尾の <code>｜着手: v2</code> / <code>｜着手: v3</code> は<em>要件の効力ではなく着手時期</em>である。 <code>v2</code> = MVP（縦 1 本を v2 リポ自身で通すのに要る要件）、 <code>v3</code> = 要件として生きるが着手を次の版へ送る。 本カタログの母集団は <code>着手: v2</code> の全 144 行 + 章 H の 6 行 = 150 行で、 それ以外の v3 行は収録せず章ごとの件数だけを見出しに書く。</p>
+</section>
+
+<section id="ch-a" class="normative">
+<h2>A. intake → 契約（v2 16 本 / v3 送り 9 本）</h2>
+<p class="section-essence" data-audience="human">「やりたいこと」を 1 つの表の形にそろえ、受入文はその表から機械が組み立てます。検証行は許可された形だけを受け付け、審査の厚み（tier）は書き手が名乗らず判定器が算出します。 収録 16 行。</p>
+<details class="req__machine" data-audience="machine">
+<summary>要件行（機械向け・原文）</summary>
+<p>章の既定 tag（要件 doc の「v2 表現の既定」段落・原文）: 契約は <code>contracts</code> 表 + 子表（verify 行 / write-set / fence / premises）で、受入文は表からの決定論 render〔schema〕。検証行は「形の許可集合」を型（enum）で持ち、極性・到達可能性・種別二重宣言は bake 時の fail-closed 検査〔compiler + rules〕。tier は判定器の算出値で契約 field に存在しない〔schema〕。</p>
+<table>
+<thead><tr><th>id</th><th>要件文</th><th>v2 表現</th><th>出所</th><th>裁定</th><th>v1 対応物</th><th>備考</th></tr></thead>
+<tbody>
+<tr><td id="r-a1"><code>R-A1</code></td><td>契約は planner の draft と admin の起票を<strong>同一の 1 形式</strong>で繋ぎ、書き直しの二度手間をゼロにする形でなければならない</td><td></td><td>contracts/contract-v1.md 前文</td><td>なし</td><td><code>scribe-intake-apply.py</code></td><td></td></tr>
+<tr><td id="r-a2"><code>R-A2</code></td><td>契約本体は <strong>acceptance 相当の単一 field</strong> に置かれ、description / notes に置いた宣言は判定対象にしてはならない</td><td></td><td>contract-v1.md §1・runbook/admin.md §4</td><td>なし</td><td><code>acceptance_criteria</code></td><td></td></tr>
+<tr><td id="r-a3"><code>R-A3</code></td><td>契約の必須 field は 7 本（goal / done / write-set / verify / size / owner / disposition）で、<strong>tier を書き手が名乗ってはならない</strong></td><td></td><td>contract-v1.md §1.1</td><td>なし</td><td><code>[TIER-DECL v1]</code></td><td></td></tr>
+<tr><td id="r-a4"><code>R-A4</code></td><td><code>done</code> は close の形（何が真になったら閉じるか）を 1 文で持たねばならない。program ではこれが完成線である</td><td></td><td>contract-v1.md §1.1 / carrier-model §3.1</td><td>なし</td><td>-</td><td></td></tr>
+<tr><td id="r-a5"><code>R-A5</code></td><td>leaf は実行可能な検証コマンドを 1 本以上持たねばならず、各行は<strong>1 行だけで完結</strong>（前行の env / cd を引き継がない）でなければならない</td><td></td><td>contract-v1.md §1.5</td><td>なし</td><td><code>検証:</code> 行</td><td></td></tr>
+<tr><td id="r-a6"><code>R-A6</code></td><td>検証行は極性が機械で決まる形（帯前提なし・rc の向きが字面に現れる）でなければならず、違反する契約は<strong>押印を拒否</strong>しなければならない</td><td></td><td>contract-v1.md §1.5 V1/V2</td><td>なし</td><td><code>scribe-intake-qa lint</code> rc=22/15/13</td><td></td></tr>
+<tr><td id="r-a7"><code>R-A7</code></td><td>検証行は flip / pin / fence の 3 クラスへ分類でき、<strong>flip が 1 本以上あり、かつ着手前 GREEN の flip が 0 本</strong>でなければ受理してはならない</td><td></td><td>contract-v1.md §1.6 ACCEPT 代数</td><td>user 裁定（RULING-admin-offload O2・逐語は repo 外）</td><td><code>scribe-verify-polarity.py</code></td><td></td></tr>
+<tr><td id="r-a8"><code>R-A8</code></td><td>押印の機械は<strong>許可集合方式</strong>（未知の形は自然に人手へ落ちる）でなければならず、既知の罠を denylist で当てにいく形にしてはならない</td><td></td><td>RULING-admin-offload-20260903 §3 O2</td><td>user 裁定（逐語は repo 外）</td><td>-</td><td></td></tr>
+<tr><td id="r-a9"><code>R-A9</code></td><td>program（epic）は <code>done</code> を持ち、かつ leg が 10 本以下でなければ<strong>1 本も起票してはならない</strong></td><td></td><td>contract-v1.md §2 / dod-v1.md C3</td><td>user 裁定（RULING-ledger-hygiene 2・逐語は repo 外）</td><td><code>PROGRAM_LEG_CAP</code></td><td></td></tr>
+<tr><td id="r-a12"><code>R-A12</code></td><td>bead になれる処分は A-now と F だけで、それ以外の帰結は 1 行の処分記録に畳まねばならない</td><td></td><td>contract-v1.md §1.1 / disposition.md (4)</td><td>なし</td><td><code>[DISP]</code> 行</td><td></td></tr>
+<tr><td id="r-a13"><code>R-A13</code></td><td>tier は<strong>判定器が write-set から算出する値</strong>でなければならず、測定対象が自分の審査幅を発行できる形にしてはならない</td><td></td><td>contract-v1.md §1.1 / tier.md</td><td>なし</td><td><code>scribe-tier-classify.py</code></td><td></td></tr>
+<tr><td id="r-a14"><code>R-A14</code></td><td>tier 宣言を持たない bead は<strong>最も厚い審査へ倒したうえで起動は止めない</strong>（宣言の欠如それ自体を罰しない）</td><td></td><td>tier.md <code>TIER-DECL-OPTIONAL v1</code></td><td>なし</td><td><code>SCRIBE_TIER_DECL_REQUIRED</code></td><td></td></tr>
+<tr><td id="r-a15"><code>R-A15</code></td><td>tier 宣言を焼くのは graph 所有者 1 者だけで、<strong>起動前・anchor の木</strong>で焼かねばならない（cell 内での焼き直しは禁止）</td><td></td><td>tier.md <code>TIER-DECL-WRITER v1</code> (a)(c)</td><td>なし</td><td>-</td><td></td></tr>
+<tr><td id="r-a16"><code>R-A16</code></td><td>契約 field は全置換で書かれるため、順序は「宣言を焼く → 契約 snapshot を焼き直す」でなければならない（逆順は起動門の不一致 deny）</td><td></td><td>tier.md (d)</td><td>なし</td><td><code>[ORCH-DISPATCH-ACCEPTANCE-SNAPSHOT v1]</code></td><td></td></tr>
+<tr><td id="r-a19"><code>R-A19</code></td><td>planner の handoff は窓が消えても残る <strong>durable file</strong> でなければならず、会話面を carrier にしてはならない</td><td></td><td>contract-v1.md §4 / role-context-spec §2.7 終端</td><td>なし</td><td><code>PROPOSAL-&lt;窓名&gt;.md</code> / <code>.consumed.md</code></td><td></td></tr>
+<tr><td id="r-a20"><code>R-A20</code></td><td>契約 draft の<strong>所有は設計協調席</strong>であり、執行席は事実供給・監査・焼き・起動・funnel の 4 つだけを持つ</td><td></td><td>role-context-spec §2.7 常設職務 (a)</td><td>user 裁定（USER-VERBATIM 2026-08-30 第40号・逐語は repo 外）</td><td>-</td><td></td></tr>
+</tbody>
+</table>
+</details>
+</section>
+
+<section id="ch-b" class="normative">
+<h2>B. dispatch（v2 17 本 / v3 送り 5 本）</h2>
+<p class="section-essence" data-audience="human">どの仕事を次に始めてよいかを、台帳への 1 本の問い合わせだけで決めます。起動前の門は名前・条件・失敗時の倒し方を表の行として持ち、判定できずに飛ばした周も必ず記録に残します。 収録 17 行。</p>
+<details class="req__machine" data-audience="machine">
+<summary>要件行（機械向け・原文）</summary>
+<p>章の既定 tag（要件 doc の「v2 表現の既定」段落・原文）: dispatch 母集団は SQLite への 1 本の SQL 述語（main GREEN ∧ 契約 stamped ∧ lease live でない ∧ owner 存在 ∧ 口座適格）〔rules + schema〕。門は「名前・条件・fail-open か closed か・終了コード」を rules 表の行として持ち、未 enroll / 判定不能の skip は必ず event を出す〔event〕。</p>
+<table>
+<thead><tr><th>id</th><th>要件文</th><th>v2 表現</th><th>出所</th><th>裁定</th><th>v1 対応物</th><th>備考</th></tr></thead>
+<tbody>
+<tr><td id="r-b1"><code>R-B1</code></td><td>cell を建てられるのは <strong>graph 所有者（および委譲された機械 lane）だけ</strong>で、設計席・実装席・検証席・land 席は建ててはならない</td><td></td><td>role-context-spec §2.7/§2.8 権限表・contracts/roles-boundary.md</td><td>なし</td><td><code>scribe-spawn.sh</code></td><td></td></tr>
+<tr><td id="r-b2"><code>R-B2</code></td><td>起動門は 3 種（入口 QA 印 / 契約 snapshot 印 / tier 宣言）で、<strong>各門は独立に opt-in</strong> できなければならない</td><td></td><td>merge-gate.md「dispatch snapshot の spawn 門」/ runbook/admin.md §10-b</td><td>なし</td><td><code>.beads/intake-qa-gate</code> / <code>.beads/dispatch-snapshot-gate</code></td><td></td></tr>
+<tr><td id="r-b3"><code>R-B3</code></td><td>門の deny は門ごとに<strong>別の終了コード</strong>を持ち、判定不能・故障は fail-open で起動を続けねばならない（門の故障で fleet を止めない）</td><td></td><td>merge-gate.md 同節</td><td>なし</td><td>exit 12 / exit 14</td><td></td></tr>
+<tr><td id="r-b4"><code>R-B4</code></td><td>未 enroll の台帳では門は<strong>1 行も出力せず台帳を 1 度も叩いてはならない</strong></td><td></td><td>merge-gate.md 同節</td><td>なし</td><td>-</td><td></td></tr>
+<tr><td id="r-b5"><code>R-B5</code></td><td>印を持たない bead が門を通ることは「門が無い」ことの証拠にしてはならない（免除経路が別に存在する）</td><td></td><td>tier.md / runbook/admin.md §14</td><td>なし</td><td><code>QA_TIER_EXEMPT</code></td><td></td></tr>
+<tr><td id="r-b6"><code>R-B6</code></td><td>window / branch / worktree の名は<strong>完全な bead id を含む一意名</strong>でなければならず、人・agent による改名を禁じる</td><td></td><td>contracts/spawn-naming.md</td><td>なし</td><td><code>wt-&lt;id&gt;</code> / <code>spawn/&lt;id&gt;-HHMMSS</code> / <code>gate-&lt;id&gt;</code></td><td></td></tr>
+<tr><td id="r-b7"><code>R-B7</code></td><td>宛先の一意性は「session 名 × window 名」の組で担保し、window 名だけを見て宛先を決める consumer を作ってはならない</td><td></td><td>spawn-naming.md</td><td>なし</td><td>-</td><td></td></tr>
+<tr><td id="r-b8"><code>R-B8</code></td><td>無人 lane は<strong>例外を解いてはならない</strong>（fail-closed で 1 行報告して次へ進む）。例外の処理は人間側 role の手番である</td><td></td><td>runbook/admin.md §10</td><td>なし</td><td><code>[DISPATCH-EXC]</code></td><td></td></tr>
+<tr><td id="r-b9"><code>R-B9</code></td><td>分業は「決める（dispatcher）/ 実行する（runner）/ 例外だけ（admin）」の 3 層で、order の<strong>再発行権限は dispatcher と admin だけ</strong>（実行層は ack-first で同一 order を再実行しない）</td><td></td><td>runbook/admin.md §10</td><td>user 裁定（RULING-throughput 追補 3・逐語は repo 外）</td><td><code>scribe-cell-runner.py</code></td><td></td></tr>
+<tr><td id="r-b10"><code>R-B10</code></td><td>検証を機械が建てる lane は<strong>7 条件の AND</strong>（完了 note / 自分宛の印 / worktree / 同名窓が無い / 当日 marker が無い / HEAD 変化か記録の期限切れ / 適格口座 ≥1）で発火し、欠けた便は 1 行の skip 理由を残さねばならない</td><td></td><td>merge-gate.md「gate lane」/ protocol.md 残置区間外 pin</td><td>なし</td><td><code>gate_lane()</code></td><td></td></tr>
+<tr><td id="r-b11"><code>R-B11</code></td><td>同一 HEAD への再挑戦の抑止は<strong>期限つき（TTL）</strong>でなければならない（一過性の失敗が恒久 block に化けない）</td><td></td><td>protocol.md 残置区間外 pin (E18)</td><td>なし</td><td><code>STEP1_MEMO_TTL_SEC</code></td><td></td></tr>
+<tr><td id="r-b14"><code>R-B14</code></td><td>同時 program 数・同時席数に<strong>上限を持ってはならない</strong>。律速は依存関係と設計席・執行席の handling capacity だけである</td><td></td><td>RULING-parallelism-20260902</td><td>user 裁定（逐語は repo 外）</td><td><code>WIP_MAX_PROGRAMS</code></td><td></td></tr>
+<tr><td id="r-b16"><code>R-B16</code></td><td>fan-out する agent は model と強度を<strong>必ず明示</strong>しなければならない（既定継承はコスト事故）</td><td></td><td>methodology §1.1</td><td>なし</td><td><code>opts.effort</code> / <code>fanoutModel</code></td><td></td></tr>
+<tr><td id="r-b17"><code>R-B17</code></td><td>実装席は OS レベルで隔離された環境で走ることを既定とし、opt-out は明示 seam だけとする</td><td></td><td>runbook/admin.md §1 sandbox</td><td>なし</td><td><code>SCRIBE_SANDBOX</code></td><td></td></tr>
+<tr><td id="r-b18"><code>R-B18</code></td><td>起動は<strong>送達を実測して確認</strong>しなければならない（送ったつもりの未送達を成功扱いにしない）</td><td></td><td>runbook/admin.md §1 post-spawn / contracts/inject.md</td><td>なし</td><td>exit 7 / <code>[SPAWNED--&lt;id&gt;]</code></td><td></td></tr>
+<tr><td id="r-b19"><code>R-B19</code></td><td>起動先の口座がその anchor を信頼していない周は<strong>候補段階で落とさ</strong>ねばならない（起動直後の即死を 0 分で回避する）</td><td></td><td>scribe-account-select.py header 入力ソース 6</td><td>なし</td><td><code>trust:untrusted-anchor</code></td><td></td></tr>
+<tr><td id="r-b20"><code>R-B20</code></td><td>起動後の後始末（worktree / branch / 窓）は道具で行い、force 系の破壊操作を使ってはならない</td><td></td><td>merge-gate.md step7</td><td>なし</td><td><code>scribe-cleanup.py</code></td><td></td></tr>
+</tbody>
+</table>
+</details>
+</section>
+
+<section id="ch-c" class="normative">
+<h2>C. gate（v2 17 本 / v3 送り 15 本）</h2>
+<p class="section-essence" data-audience="human">審査の厚みは仕事の tier で決まり、観点の数と 1 観点あたりの上限を表の行に置きます。判定は 4 値で、審査する側は書き込みの口を型として持ちません。 収録 17 行。</p>
+<details class="req__machine" data-audience="machine">
+<summary>要件行（機械向け・原文）</summary>
+<p>章の既定 tag（要件 doc の「v2 表現の既定」段落・原文）: tier × lens の対応（0 = 機械検証のみ / 1 = 1 lens / 2 = 3 lens / 3 = 5 lens）と 1 lens の token cap を rules 表に持つ〔rules〕。verdict は 4 値 enum、一次 truth は構造化 field〔schema〕。差し戻せる事由 2 クラス・round 上限・fan-out 比 ≤1 は rules 行〔rules〕。gate は read-only な run（席ではない）〔compiler: 書込 API を持たない型〕。</p>
+<table>
+<thead><tr><th>id</th><th>要件文</th><th>v2 表現</th><th>出所</th><th>裁定</th><th>v1 対応物</th><th>備考</th></tr></thead>
+<tbody>
+<tr><td id="r-c1"><code>R-C1</code></td><td>検証は<strong>実装者の自己申告と self-test PASS を信用してはならない</strong>。検証側が自ら再実行して ground-truth を取る</td><td></td><td>runbook/gate.md「gate の義務」(b)</td><td>なし</td><td><code>selfTestCmd</code></td><td></td></tr>
+<tr><td id="r-c2"><code>R-C2</code></td><td>検証は契約項目を<strong>逐条で PASS/FAIL 判定</strong>し、判定根拠を永続面へ残さねばならない（総括で通さない）</td><td></td><td>runbook/gate.md (a)</td><td>なし</td><td>-</td><td></td></tr>
+<tr><td id="r-c4"><code>R-C4</code></td><td>検証は<strong>独立した席</strong>で回さねばならず、執行席の中で inline に回す形と、その場で書いた prompt で subagent に判定を委ねる形を禁じる</td><td></td><td>runbook/gate.md (補2)(補4)</td><td>なし</td><td><code>scribe-spawn --gate</code></td><td></td></tr>
+<tr><td id="r-c6"><code>R-C6</code></td><td>検証席は read-only でなければならない（成果物 1 file 以外への書込み・台帳 write・worktree の変更を禁じる。変異検証は複製の上で行う）</td><td></td><td>role-context-spec §2.4</td><td>なし</td><td><code>gate-write-guard.py</code></td><td></td></tr>
+<tr><td id="r-c7"><code>R-C7</code></td><td>リスク tier は<strong>観点数だけ</strong>を決める（0 = 観点なし / 1 = 3 観点 / 2 = 5 観点）。窓・待受・回収・merge の経路は全 tier で 1 本でなければならない</td><td></td><td>runbook/gate.md「risk-tier」/ tier.md <code>TIER-AXIS-GOVERNS v1</code></td><td>user 裁定（2026-08-22 07:04・逐語は repo 外）</td><td><code>--risk-tier</code> / <code>--tier S\|M\|L</code></td><td></td></tr>
+<tr><td id="r-c9"><code>R-C9</code></td><td>verdict の値域は <strong>PASS / FAIL / INCONCLUSIVE / DEAD</strong> の 4 値でなければならない</td><td></td><td>merge-gate.md verdict 回収</td><td>なし</td><td><code>scribe-gate-verdict</code></td><td></td></tr>
+<tr><td id="r-c10"><code>R-C10</code></td><td>verdict の一次 truth は<strong>構造化された field</strong> であり、自由文の解釈は後方互換の隔離経路に限らねばならない</td><td></td><td>merge-gate.md「verdict の一次 truth」</td><td>なし</td><td><code>json-fence</code> / <code>legacy-freetext</code></td><td></td></tr>
+<tr><td id="r-c11"><code>R-C11</code></td><td>「注記つき PASS」は blocking が空のときだけ PASS で、blocking が非空なら <strong>FAIL へ写像</strong>しなければならない</td><td></td><td>merge-gate.md 写像表</td><td>なし</td><td><code>PASS-with-notes</code></td><td></td></tr>
+<tr><td id="r-c12"><code>R-C12</code></td><td>予算超過で打ち切った run は<strong>成功 verdict を名乗ってはならない</strong>（INCONCLUSIVE へ倒す）</td><td></td><td>merge-gate.md fail-closed 2 fence</td><td>なし</td><td><code>halted:true</code></td><td></td></tr>
+<tr><td id="r-c13"><code>R-C13</code></td><td>検証 agent の実行痕跡が 1 本も無い PASS は <strong>INCONCLUSIVE</strong> へ倒さねばならない</td><td></td><td>merge-gate.md 同</td><td>なし</td><td><code>no-lens-transcript</code></td><td></td></tr>
+<tr><td id="r-c14"><code>R-C14</code></td><td>suite の成否は <strong>tool 結果の構造信号だけ</strong>で決めねばならず、model が書いた文章中の終了コードを採ってはならない</td><td></td><td>merge-gate.md rc 規約 / RULING-admin-offload O4</td><td>user 裁定（論点 4 = admin の再実走ゼロ・逐語は repo 外）</td><td><code>is_error</code> / <code>toolUseResult</code></td><td></td></tr>
+<tr><td id="r-c15"><code>R-C15</code></td><td>差し戻せる事由は <strong>(a) その diff が持ち込んだ退行</strong>と <strong>(b) 起動時に凍結した契約 / fence の明文違反</strong>の 2 クラスだけで、それ以外の新発見は verdict 非影響の処分行に留めねばならない</td><td></td><td>disposition.md (1)</td><td>なし</td><td>DoD freeze</td><td></td></tr>
+<tr><td id="r-c16"><code>R-C16</code></td><td>実行系の<strong>実 RED は必ず FAIL</strong>、base 時点から赤い既存債務は INCONCLUSIVE か注記つき PASS へ明示分岐しなければならない（黙って非 blocking へ落とさない）</td><td></td><td>disposition.md (1) 機械整合 3 条</td><td>なし</td><td>-</td><td></td></tr>
+<tr><td id="r-c18"><code>R-C18</code></td><td>round は 3 で上限とし、4 周目に入る前に戦略変更（分割 / pair review / 既知課題として記帳のうえ merge 裁定）を強制しなければならない</td><td></td><td>disposition.md (3)</td><td>なし</td><td>-</td><td></td></tr>
+<tr><td id="r-c21"><code>R-C21</code></td><td>判定に迷う失敗は<strong>自分の推測で再試行してはならない</strong>（infra 死に限り 1 回。それ以外は INCONCLUSIVE で人へ返す）</td><td></td><td>role-context-spec §2.4 失敗時の扱い</td><td>なし</td><td>-</td><td></td></tr>
+<tr><td id="r-c24"><code>R-C24</code></td><td>契約が起動後に書き換わった cell は、判定に関係なく<strong>自動 merge 資格を剥奪</strong>して人間確認へ昇格させねばならない</td><td></td><td>merge-gate.md step4 / runbook/gate.md (c)</td><td>なし</td><td>snapshot-mismatch</td><td></td></tr>
+<tr><td id="r-c31"><code>R-C31</code></td><td>実装が仕様から外れた瞬間に編集を止める in-loop の強制面を持たねばならない（事後検証はこれを代替しない）。（v0.1.9 注記: 原則形は器 SPEC v0.4.5 §2 <strong>C16</strong> へ昇格〔U9 決定・追補 4〕。本行は実装の形として不変・hook の具体形は ADR が持つ）</td><td></td><td>v1 未実装機能の移送（前文の provenance・出所 id は書かない）</td><td>[USER-APPROVAL-RELAY v1] 2026-09-08T23:58Z（scope=v2-migration-105）</td><td>-</td><td></td></tr>
+</tbody>
+</table>
+</details>
+</section>
+
+<section id="ch-d" class="normative">
+<h2>D. land（v2 17 本 / v3 送り 8 本）</h2>
+<p class="section-essence" data-audience="human">取り込み（land）は段の並びが決まった状態機械で、段・停止条件・同時に 1 つしか通せない点を表に置きます。merge の可否を LLM に判断させる口は、型として存在させません。 収録 17 行。</p>
+<details class="req__machine" data-audience="machine">
+<summary>要件行（機械向け・原文）</summary>
+<p>章の既定 tag（要件 doc の「v2 表現の既定」段落・原文）: land は段の列（状態機械）で、段の並び・停止条件・直列点を rules 表に置く〔rules + compiler〕。merge 判断を LLM に渡す口を型として持たない〔compiler〕。直列点（台帳 write / main merge / 前提検査の排他）は SQLite の lease 行〔schema〕。</p>
+<table>
+<thead><tr><th>id</th><th>要件文</th><th>v2 表現</th><th>出所</th><th>裁定</th><th>v1 対応物</th><th>備考</th></tr></thead>
+<tbody>
+<tr><td id="r-d1"><code>R-D1</code></td><td>順序は「完了 note → 完了ラベル → 前提検査 → 独立検証 → 回収 → 執行者の実測 1 件以上 → merge → go-live → close → 後始末 → 台帳同期」で固定し、逆順を許してはならない</td><td></td><td>protocol.md §0 admin core / merge-gate.md step1-8</td><td>なし</td><td>step1〜finish</td><td></td></tr>
+<tr><td id="r-d2"><code>R-D2</code></td><td>完了 note とラベルは<strong>note が先</strong>で、ラベルが note の実在を含意する不変量でなければならない</td><td></td><td>runbook/admin.md §4 / protocol.md worker core</td><td>なし</td><td><code>[DONE--&lt;id&gt;]</code> → <code>gate-pending</code></td><td></td></tr>
+<tr><td id="r-d3"><code>R-D3</code></td><td>完了判定は<strong>独立 3 信号の AND</strong>（ラベル完全一致 ∧ 完了 note 実在 ∧ commit 0 でない）でなければならない</td><td></td><td>merge-gate.md step1</td><td>なし</td><td>Layer2 commit-count</td><td></td></tr>
+<tr><td id="r-d4"><code>R-D4</code></td><td>前提検査が非 0 の木には<strong>検証 agent を 1 体も建ててはならない</strong></td><td></td><td>protocol.md 残置区間外 pin</td><td>なし</td><td><code>scribe-gate-run launch</code></td><td></td></tr>
+<tr><td id="r-d5"><code>R-D5</code></td><td>検証入力（作業木 / HEAD / 比較起点）は前提検査の実測値と<strong>突合してから</strong>渡し、食い違えば agent を建てずに止めねばならない</td><td></td><td>同上</td><td>user 裁定（RULING-morning 論点 3・AI 可決・逐語は repo 外）</td><td><code>[GATE-BASE]</code></td><td></td></tr>
+<tr><td id="r-d6"><code>R-D6</code></td><td>merge は「前提検査 PASS ∧ verdict PASS」を前提 gate とする fail-closed でなければならず、前提未達なら<strong>何もしてはならない</strong>（force 系の git 操作を使わない）</td><td></td><td>merge-gate.md merge/finish</td><td>なし</td><td><code>scribe-merge-one</code></td><td></td></tr>
+<tr><td id="r-d8"><code>R-D8</code></td><td>lane 限定の自動 merge は<strong>緩和ではなく条件の追加</strong>（前提検査の tier 証跡 + verdict の構造 3 条 + 3 クラス機械近似）でなければならない</td><td></td><td>merge-gate.md「lane 限定 auto-merge」§3/§4</td><td>user 裁定（RULING-admin-offload O1・逐語は repo 外）</td><td><code>lane-auto</code></td><td></td></tr>
+<tr><td id="r-d9"><code>R-D9</code></td><td>自動 merge lane は<strong>自分の merge 機構を書き換える便を無条件に除外</strong>しなければならない</td><td></td><td>merge-gate.md §1 除外(b)</td><td>なし</td><td><code>lane_of()</code></td><td></td></tr>
+<tr><td id="r-d10"><code>R-D10</code></td><td>close は merge 完了後に <strong>graph 所有者（または land 専任席）だけ</strong>が行い、実装席は自己 close も自己 merge もしてはならない</td><td></td><td>protocol.md §0 / roles-boundary.md</td><td>なし</td><td>-</td><td></td></tr>
+<tr><td id="r-d11"><code>R-D11</code></td><td>merge 後の main で<strong>歯を 1 回実測</strong>し、結果を記帳しなければならない（main GREEN の oracle は landed main そのもの）</td><td></td><td>runbook/admin.md (b-3) / merge-gate.md O1-B</td><td>user 裁定（RULING-admin-offload O1・逐語は repo 外）</td><td><code>scribe-post-land-check.py</code></td><td></td></tr>
+<tr><td id="r-d14"><code>R-D14</code></td><td>搬送は「既定 branch の tip を base にした単一 commit へ畳み、tree 同一で lossless を証明する」形でなければならず、追随面（local main）を作業面にしてはならない</td><td></td><td>runbook/admin.md §5 搬送規律</td><td>なし</td><td>squash 搬送</td><td></td></tr>
+<tr><td id="r-d15"><code>R-D15</code></td><td>merge 定型は <strong>step ごとに終了コードを実照合</strong>しなければならない（連結実行で失敗を貫通させない）</td><td></td><td>lore/merge-script-fail-closed.md</td><td>なし</td><td>-</td><td></td></tr>
+<tr><td id="r-d16"><code>R-D16</code></td><td>台帳の外部同期点は<strong>ちょうど 1 者・1 箇所</strong>でなければならない</td><td></td><td>protocol.md §0 / roles-boundary.md</td><td>なし</td><td><code>bd dolt push</code></td><td></td></tr>
+<tr><td id="r-d17"><code>R-D17</code></td><td>差し戻し周（errata）は issue を open のまま<strong>同一 branch へ追補</strong>し、PR を開き直してはならない。merge 後の作り直しだけが reopen 事由である</td><td></td><td>runbook/admin.md §4</td><td>なし</td><td>-</td><td></td></tr>
+<tr><td id="r-d18"><code>R-D18</code></td><td>errata の再起動は<strong>先行周の branch を base に明示</strong>しなければならず、省略は fail-loud で止めねばならない</td><td></td><td>runbook/admin.md §4</td><td>なし</td><td><code>--errata-round N</code> / <code>--base</code></td><td></td></tr>
+<tr><td id="r-d19"><code>R-D19</code></td><td>直列点は明示されねばならない: 台帳 write の直列化、前提検査の排他鍵、検証側の再実行と執行側の suite 実走の非並走</td><td></td><td>roles-boundary.md / protocol.md 残置区間外 pin / runbook/gate.md (b) ★</td><td>なし</td><td><code>bdw</code> flock / <code>SCRIBE_GATE_RUN_STEP1_LOCK</code></td><td></td></tr>
+<tr><td id="r-d20"><code>R-D20</code></td><td>land 専任席は契約本文を<strong>書き換えてはならず</strong>、追記（errata block + 印の再焼き）だけを持つ</td><td></td><td>role-context-spec §2.8 権限表</td><td>user 裁定（RULING-morning 論点 2・逐語は repo 外）</td><td><code>[ADMIN-ERRATA rN]</code></td><td></td></tr>
+</tbody>
+</table>
+</details>
+</section>
+
+<section id="ch-e" class="normative">
+<h2>E. 席と役割（v2 18 本 / v3 送り 17 本）</h2>
+<p class="section-essence" data-audience="human">役割は閉じた一覧で、誰が何をしてよいかは「役割 × 操作」の表 1 枚が決めます。常駐するのは 2 種だけで、席の身元は役割と作業対象の組で一意に決まります。 収録 18 行。</p>
+<details class="req__machine" data-audience="machine">
+<summary>要件行（機械向け・原文）</summary>
+<p>章の既定 tag（要件 doc の「v2 表現の既定」段落・原文）: role は閉じた enum + <code>role_matrix</code> 表（role × 操作 → allow|deny|scoped + enforcer）〔schema + compiler〕。常駐席は planner / admin の 2 種のみ、他は run か daemon〔rules〕。席の一意鍵は (role, anchor)〔schema〕。cycle（退避 → 復元）は event 由来の生成 context へ置換し、WM 散文は補助〔event〕。</p>
+<table>
+<thead><tr><th>id</th><th>要件文</th><th>v2 表現</th><th>出所</th><th>裁定</th><th>v1 対応物</th><th>備考</th></tr></thead>
+<tbody>
+<tr><td id="r-e1"><code>R-E1</code></td><td>role は env の明示 &gt; 作業木の位置 &gt; 既定、の順で<strong>決定論的に</strong>判定されねばならない（窓名を判定に使わない）</td><td></td><td>role-context-spec §1.1</td><td>なし</td><td><code>SCRIBE_ROLE</code> / <code>.worktrees/</code></td><td></td></tr>
+<tr><td id="r-e2"><code>R-E2</code></td><td>role 注入は opt-in ガードの内側でだけ発火し、管轄外の session を 1 byte も汚してはならない</td><td></td><td>role-context-spec §1.0</td><td>なし</td><td><code>.beads/</code></td><td></td></tr>
+<tr><td id="r-e3"><code>R-E3</code></td><td>明示 env でしか成立しない role は、作業木判定にも既定にも<strong>落ちてはならない</strong></td><td></td><td>role-context-spec §1.1</td><td>なし</td><td>gate / qa / orchestrator / planner / lander</td><td></td></tr>
+<tr><td id="r-e4"><code>R-E4</code></td><td>権限行列は少なくとも 6 面（graph / 契約起草 / 契約の焼き / 最初の起動 / 検証→merge→land / user 対話）で role ごとに一意に定まらねばならない</td><td></td><td>role-context-spec §2.8 境界表</td><td>なし</td><td>-</td><td></td></tr>
+<tr><td id="r-e5"><code>R-E5</code></td><td>実装席が書けるのは<strong>自 issue の状態・進捗・完了ラベルだけ</strong>で、graph 操作・公開面への push・他席への注入を禁じる</td><td></td><td>roles-boundary.md</td><td>なし</td><td>-</td><td></td></tr>
+<tr><td id="r-e6"><code>R-E6</code></td><td>設計協調席は台帳 write と tracked file 編集を持たず、<strong>出力は draft file だけ</strong>でなければならない</td><td></td><td>role-context-spec §2.7 write 権限</td><td>なし</td><td><code>$SCRIBE_PLANNER_DIR</code> / <code>planner-write-guard.py</code></td><td></td></tr>
+<tr><td id="r-e9"><code>R-E9</code></td><td>席の一意鍵は <strong>(role, anchor)</strong> でなければならない（窓名で区別する形は席の同一性を機械から奪う）</td><td></td><td>role-context-spec §2.8「なぜ role を分けたか」</td><td>user 裁定（RULING-morning 10:2x・逐語は repo 外）</td><td>seat-registry</td><td></td></tr>
+<tr><td id="r-e10"><code>R-E10</code></td><td>1 つの anchor に同一 role の席を 2 つ建ててはならない（別 anchor の同 role は互いを拒否しない）</td><td></td><td>role-context-spec §2.7 (1)</td><td>なし</td><td>1-role-1-席 guard</td><td></td></tr>
+<tr><td id="r-e11"><code>R-E11</code></td><td>project ごとに<strong>執行席 1 + 設計協調席 1</strong> を席セットとし、単独運用は明示 opt-out だけを正常形とする</td><td></td><td>role-context-spec §2.7 (1)</td><td>なし</td><td><code>[SEAT-SET-INCOMPLETE]</code></td><td></td></tr>
+<tr><td id="r-e12"><code>R-E12</code></td><td>常駐席は <strong>event 駆動</strong>でなければならず、周期起動を張ってはならない・執行 SLA を負ってはならない</td><td></td><td>role-context-spec §2.7 駆動形 / §2.8</td><td>なし</td><td>-</td><td></td></tr>
+<tr><td id="r-e13"><code>R-E13</code></td><td>検証席・契約修正席は<strong>案件ごとに起き、終われば畳まれる</strong>（常駐しない）</td><td></td><td>role-context-spec §2.5</td><td>なし</td><td>on-demand</td><td></td></tr>
+<tr><td id="r-e14"><code>R-E14</code></td><td>席の per-anchor な作業 dir は <strong>anchor ごとに分離</strong>されねばならない（共有すると project を跨いで混ざる）</td><td></td><td>role-context-spec §2.7 (2)</td><td>なし</td><td><code>[PLANNER-DIR-RESOLVE v1]</code></td><td></td></tr>
+<tr><td id="r-e19"><code>R-E19</code></td><td>model と推論強度の値は<strong>機械が出す 1 表</strong>が SSOT で、散文 carrier は値を二重化してはならない</td><td></td><td>role-context-spec §1.1</td><td>user 裁定（RULING-role-machinery 発議・逐語は repo 外）</td><td><code>--emit-policy</code></td><td></td></tr>
+<tr><td id="r-e20"><code>R-E20</code></td><td>model 逸脱時に<strong>止まる席は無い</strong>。告知は対話性を持つ 3 席だけに出す</td><td></td><td>RULING-model-deviation-20260902</td><td>user 裁定（逐語は repo 外）</td><td>PreModelSwitch / PostModelSwitch</td><td></td></tr>
+<tr><td id="r-e21"><code>R-E21</code></td><td>注入 carrier には<strong>上限がある</strong>（切り詰められる）ため、注入は不変条件の要約と「いつ何を読むか」の索引に留め、本文は on-demand で取りに行かせねばならない</td><td></td><td>role-context-spec §2.1 / dod-v1.md C14</td><td>なし</td><td>boot core / trigger 表</td><td></td></tr>
+<tr><td id="r-e22"><code>R-E22</code></td><td>無人席は危険操作を<strong>自動拒否</strong>することを既定とし、人が肩代わりして承認する形は救済手順に留めねばならない</td><td></td><td>RULING-cc-update-20260904 Q-C</td><td>user 裁定（逐語は repo 外）</td><td>-</td><td></td></tr>
+<tr><td id="r-e23"><code>R-E23</code></td><td>対話席は <strong>planner 1 つ</strong>である。consult は planner に吸収済みで、v2 は consult を <strong>role として持たない</strong>（L.1 (2) の閉じた 9 名は v1 SSOT の写し＝v2 の role 集合は consult を含めない・退役の指し先 = planner）</td><td></td><td>user 直命 2026-09-08 10:00 JST（逐語は repo 外）／role-context-spec :339（入口 B 退役済み・明示招集時のみ）</td><td>同逐語</td><td><code>SCRIBE_ROLE=consult</code> / §2.3 / model-switch-guard POLICY 表 "consult" 行</td><td></td></tr>
+<tr><td id="r-e24"><code>R-E24</code></td><td>席の既定 model と推論強度は <strong>rules 行</strong>（manifest・裁定 id 付き・C1 / C5）で持ち、値は <strong>planner = fable / high・orchestrator = fable / high・それ以外の席（admin / worker / gate / qa / baker / lander）と WF agent = 非 fable（opus 系）</strong>。fable を新たな席・段へ投入するのは rules 行の変更＝裁定 id が要る（C5・消費は害 C6）</td><td>〔rules〕<code>seat_model</code> 行（role → model family × effort × pin? = 無人席のみ true）。WF 内の唯一の fable 例外（intake-refine の Curate 段・08-20 裁定）も <strong>opus へ</strong>（user 裁定 2026-09-08 10:2x JST（逐語は repo 外）・N.1 U8 決定）＝v2 の WF agent に fable は <strong>0 本</strong></td><td>user 直命 2026-09-08 09:19（逐語は repo 外）／09:49（逐語は repo 外）／10:00（逐語は repo 外）／user 直命 2026-09-08 10:3x（逐語は repo 外）・v1 実測（<code>CLAUDE_CODE_EFFORT_LEVEL</code> pin が <code>/effort</code> を Not applied にする）</td><td>同逐語（v1 実装便）</td><td><code>scripts/hooks/model-switch-guard.py</code> POLICY 表・<code>scripts/scribe-spawn.sh</code> の effort literal <strong>対話席の強度は pin でなく既定</strong>: 起動側は settings 層に既定値だけを置き、席内の人の切替（<code>/effort</code>）が常に勝つ形でなければならない（env / flag の session pin は無人席だけ）</td><td></td></tr>
+</tbody>
+</table>
+</details>
+</section>
+
+<section id="ch-f" class="normative">
+<h2>F. 承認・裁定（v2 24 本 / v3 送り 0 本）</h2>
+<p class="section-essence" data-audience="human">承認は表の行として残し、逐語引用・検証状態・種別（消す / 出す / 使う / 裁定）を必ず持たせます。user へ問いを出せるのは対話席だけで、それ以外の席が出せないことを型で塞ぎます。 収録 24 行。</p>
+<details class="req__machine" data-audience="machine">
+<summary>要件行（機械向け・原文）</summary>
+<p>章の既定 tag（要件 doc の「v2 表現の既定」段落・原文）: 承認は <code>approvals</code> 表の行（origin / 逐語引用 / 検証状態 / class ∈ 消す|出す|使う|裁定）〔schema〕。3 クラス判定と E1〜E3 の閉じた列挙は rules 行〔rules〕。query は宛先 field 必須の型付き message〔schema〕。planner 以外が user 宛 query を発行できないことを型で塞ぐ〔compiler〕。</p>
+<table>
+<thead><tr><th>id</th><th>要件文</th><th>v2 表現</th><th>出所</th><th>裁定</th><th>v1 対応物</th><th>備考</th></tr></thead>
+<tbody>
+<tr><td id="r-f1"><code>R-F1</code></td><td>人間確認を要するのは<strong>取り消せない 3 クラス（消す / 出す / 使う）と契約すり替え検知</strong>だけである</td><td></td><td>protocol.md <code>scribe-core-merge-gate</code></td><td>canonical block 逐語</td><td>§5.4</td><td></td></tr>
+<tr><td id="r-f2"><code>R-F2</code></td><td>3 クラスに該当したら <strong>AI の主観に関係なく止め</strong>、グレーでも止める（fail-closed）</td><td></td><td>同 / merge-gate.md step4</td><td>同</td><td>-</td><td></td></tr>
+<tr><td id="r-f3"><code>R-F3</code></td><td>「出す」の判定単位は <strong>repo ではなく情報</strong>で、「公開 repo だから非該当」という repo 単位の断定を禁じる</td><td></td><td>canonical block (b)</td><td>user 裁定（裁定 R-A・2026-07-26・逐語は repo 外）</td><td>-</td><td></td></tr>
+<tr><td id="r-f4"><code>R-F4</code></td><td>「使う」は追加課金の発生だけを指し、<strong>定額内の token 消費は該当しない</strong></td><td></td><td>canonical block (c)</td><td>user 裁定（裁定 R-B・逐語は repo 外）</td><td>-</td><td></td></tr>
+<tr><td id="r-f5"><code>R-F5</code></td><td>merge という行為そのものは人間確認のトリガーにしてはならない</td><td></td><td>merge-gate.md step4</td><td>なし</td><td>-</td><td></td></tr>
+<tr><td id="r-f6"><code>R-F6</code></td><td>3 クラス非該当は AI 敵対 gate 通過をもって AI 判断で進め、<strong>無確認で進めた周は証跡を残さ</strong>ねばならない</td><td></td><td>merge-gate.md step4 事後証跡</td><td>なし</td><td><code>auto-merged:</code></td><td></td></tr>
+<tr><td id="r-f7"><code>R-F7</code></td><td>順序・選択肢の是認だけを求める問いを出してはならない。複数の妥当な設計が併存し選択が人間の価値観に依存するときは<strong>承認要求ではなく提案として</strong>上げる</td><td></td><td>canonical block【聞かないこと】【上げること】</td><td>同</td><td>-</td><td></td></tr>
+<tr><td id="r-f8"><code>R-F8</code></td><td>承認要求は turn の<strong>最初のアクション</strong>に置かねばならず、受動 offer で turn 末尾に置いてはならない</td><td></td><td>approval.md §7.2 規律 6 項</td><td>user 裁定（2026-07-14・逐語は repo 外）</td><td>front-load</td><td></td></tr>
+<tr><td id="r-f9"><code>R-F9</code></td><td>承認待ちの間も自律作業を並行してよく、同一 turn の複数承認点は 1 回に束ねねばならない</td><td></td><td>approval.md §7.2 4/5 項</td><td>同逐語</td><td>ask-first, work-while-waiting</td><td></td></tr>
+<tr><td id="r-f10"><code>R-F10</code></td><td>承認不要の自律域まで質問化してはならない（過剰補正の禁止）</td><td></td><td>approval.md §7.2 6 項</td><td>同逐語</td><td>-</td><td></td></tr>
+<tr><td id="r-f11"><code>R-F11</code></td><td>承認・裁定の要求は<strong>材料ごと会話ログ面の text</strong> で出す。選択肢だけで足りる例外を除き modal を既定にしてはならない</td><td></td><td>approval.md 可視性要件 (a)(b)(e)</td><td>user 裁定（逐語は repo 外）・user 直命 2026-08-22</td><td>🔴 バナー / AskUserQuestion</td><td></td></tr>
+<tr><td id="r-f12"><code>R-F12</code></td><td>user と対話する面は<strong>設計協調席ただ 1 つ</strong>で、執行席は user の対話窓ではない</td><td></td><td>approval.md「conduit の固定」/ role-context-spec §2.1/§2.7</td><td>user 裁定（2026-09-06 20:33・逐語は repo 外）</td><td>-</td><td></td></tr>
+<tr><td id="r-f13"><code>R-F13</code></td><td>執行席が承認を要する周は「query file + 機械可読ラベル + 呼び鈴」の 3 点セットに<strong>便</strong>を足して設計席へ送らねばならない（便は呼び鈴を置き換えない）</td><td></td><td>approval.md conduit</td><td>user 裁定（逐語は repo 外）</td><td><code>ADMIN-QUERY-&lt;key&gt;.md</code> / <code>needs-user</code></td><td></td></tr>
+<tr><td id="r-f14"><code>R-F14</code></td><td>query には<strong>宛先 field を必須</strong>とする（欠落は既定宛て扱いの fail-open）。宛先が無いと user 宛の承認が無人で消費される</td><td></td><td>approval.md「宛先弁別」</td><td>なし</td><td><code>[QUERY-TO] user</code></td><td></td></tr>
+<tr><td id="r-f15"><code>R-F15</code></td><td>中継された承認は「印 1 行 + user の<strong>逐語</strong>引用 1 行以上」の形でなければならず、言い換え・要約・敬体化を禁じる</td><td></td><td>approval.md §7.2.1 印の文法</td><td>逐語契約</td><td><code>[USER-APPROVAL-RELAY v1]</code></td><td></td></tr>
+<tr><td id="r-f16"><code>R-F16</code></td><td>印の時刻欄は<strong>機械で写す</strong>（手で書かない・写せなければ不明と書く）</td><td></td><td>同</td><td>同</td><td><code>at=</code></td><td></td></tr>
+<tr><td id="r-f17"><code>R-F17</code></td><td>受け手は逐語の grep で到達検証でき、<strong>射程が読めない印は不整形</strong>として扱わねばならない</td><td></td><td>approval.md 到達検証</td><td>同</td><td><code>scope=</code></td><td></td></tr>
+<tr><td id="r-f18"><code>R-F18</code></td><td>整形の印は user 承認として受理し、<strong>user へ再確認してはならない</strong>。不整形は中継元へ求め直し、user へ聞き直してはならない</td><td></td><td>approval.md 受理規則 (a)(c)</td><td>同</td><td>-</td><td></td></tr>
+<tr><td id="r-f19"><code>R-F19</code></td><td>受理したら<strong>印と引用を逐語で記帳</strong>し、対応する query 在庫を閉じねばならない（承認は会話の記憶でなく記帳から復元される）</td><td></td><td>approval.md (b) / rebrief 接続</td><td>同</td><td><code>.consumed.md</code></td><td></td></tr>
+<tr><td id="r-f20"><code>R-F20</code></td><td>中継できるのは <strong>user 本人の発話だけ</strong>で、中継者自身の推奨を印に載せる形は偽造である</td><td></td><td>approval.md fence (ii)</td><td>同</td><td>-</td><td></td></tr>
+<tr><td id="r-f21"><code>R-F21</code></td><td>席が自分の会話面に出した pending question を印で閉じてはならない</td><td></td><td>approval.md fence (i)</td><td>同</td><td>-</td><td></td></tr>
+<tr><td id="r-f22"><code>R-F22</code></td><td>執行席が自席で user に問える例外は <strong>3 つの閉じた列挙</strong>（harness の権限 dialog / user 発の緊急介入 / 対話席を建てられない周の 1 問）だけである</td><td></td><td>approval.md E1〜E3</td><td>user 裁定（逐語は repo 外）</td><td>E1/E2/E3</td><td></td></tr>
+<tr><td id="r-f23"><code>R-F23</code></td><td>user message には tool を束ねる前に<strong>本文で先に答え</strong>ねばならない</td><td></td><td>approval.md reply-first</td><td>user 直命 2026-08-22</td><td><code>reply-first-gate.py</code></td><td></td></tr>
+<tr><td id="r-f24"><code>R-F24</code></td><td>user と詰めるのは<strong>要望の精緻化・具体化・実現性</strong>に限り、技術の分岐は AI が決めて却下案を残さねばならない</td><td></td><td>RULING-host-manifest C-0</td><td>user 裁定（逐語は repo 外）</td><td>-</td><td></td></tr>
+</tbody>
+</table>
+</details>
+</section>
+
+<section id="ch-g" class="normative">
+<h2>G. 口座（v2 12 本 / v3 送り 10 本）</h2>
+<p class="section-essence" data-audience="human">口座の規則は表の 2 行だけに絞り、艦隊全体の口座は 1 つの DB 表で持ちます。除外の理由は 1 つの一覧にまとめ、選び方は 1 箇所の純関数だけが持ちます。 収録 12 行。</p>
+<details class="req__machine" data-audience="machine">
+<summary>要件行（機械向け・原文）</summary>
+<p>章の既定 tag（要件 doc の「v2 表現の既定」段落・原文）: 口座規則は rules 表の 2 行（5h 50% 線 / planner ばらけ）だけ〔rules〕。fleet DB の <code>accounts</code> 表（host 列付き・退役 = status 列）〔schema〕。除外理由は 1 enum + 1 match〔compiler〕。選定器は純関数で実行箇所は 1 つ〔compiler〕。</p>
+<table>
+<thead><tr><th>id</th><th>要件文</th><th>v2 表現</th><th>出所</th><th>裁定</th><th>v1 対応物</th><th>備考</th></tr></thead>
+<tbody>
+<tr><td id="r-g1"><code>R-G1</code></td><td>口座の規則は <strong>2 点だけ</strong>（5h 使用率 50% を超えた口座へ投入しない / 対話席を 1 口座に集めない）。それ以外は ready ならどんどん投げてよい</td><td></td><td>PLANNER-DRAFT-account-rule-2points-20260907</td><td>user 裁定（2026-09-06 18:3x・逐語は repo 外）</td><td><code>SCRIBE_ACCOUNT_H5_MAX</code></td><td></td></tr>
+<tr><td id="r-g2"><code>R-G2</code></td><td>使用率の線は<strong>候補集合からの除外</strong>（順位の減点ではない）として適用しなければならない</td><td></td><td>同 設計 (1)</td><td>同</td><td><code>floor:h5-over</code></td><td></td></tr>
+<tr><td id="r-g4"><code>R-G4</code></td><td>選定器は<strong>純粋計算</strong>でなければならず、fs 接触は明示裁定を経た例外 1 点に限る</td><td></td><td>scribe-account-select.py header 冒頭</td><td>なし</td><td>-</td><td></td></tr>
+<tr><td id="r-g8"><code>R-G8</code></td><td>全候補が policy で除外された結末は<strong>正常動作</strong>として扱い、欠陥や上流劣化として報告してはならない</td><td></td><td>同</td><td>なし</td><td>-</td><td></td></tr>
+<tr><td id="r-g9"><code>R-G9</code></td><td>seam 未設定・空・該当 0 件は<strong>完全な no-op</strong>（出力が 1 byte も変わらない）でなければならない</td><td></td><td>同 header 各 seam の極性</td><td>なし</td><td>fail-open</td><td></td></tr>
+<tr><td id="r-g10"><code>R-G10</code></td><td>破損入力は落としたうえで <strong>loud に警告</strong>しなければならない（silent drop 禁止）</td><td></td><td>同</td><td>なし</td><td>-</td><td></td></tr>
+<tr><td id="r-g11"><code>R-G11</code></td><td>選定器を実行する箇所は<strong>1 箇所だけ</strong>でなければならない（別経路で叩くと除外・予約を迂回した配置が生まれる）</td><td></td><td>同 header「全配置経路の一本化」</td><td>なし</td><td><code>resolve_account_auto</code></td><td></td></tr>
+<tr><td id="r-g13"><code>R-G13</code></td><td>同一認証へ解決される別名は<strong>同じ枠を食う</strong>ものとして扱わねばならない（dir 分けは口座分離ではない）</td><td></td><td>同 header 入力ソース 5 (3)</td><td>なし</td><td><code>duplicate_auth_labels</code></td><td></td></tr>
+<tr><td id="r-g16"><code>R-G16</code></td><td>対話席の口座は<strong>起動元と同一口座（mirror）を既定</strong>とし、自動選定へ落としてはならない</td><td></td><td>role-context-spec §2.7 model/effort/口座</td><td>user 裁定（2026-08-28 第26号・逐語は repo 外）</td><td><code>--account auto</code></td><td></td></tr>
+<tr><td id="r-g19"><code>R-G19</code></td><td>spawn 系の席（worker / gate / QA）が口座の limit で止まったら、管理側の script または admin が<strong>感知</strong>し、作業を resume しながら <strong>別口座で respawn</strong> しなければならない（MUST）。作業の途中停止と成果の喪失は許されない</td><td>〔rules〕limit 検知 event → respawn 手順・〔event〕seat.limit-hit / seat.respawned</td><td>user 回答 8</td><td></td><td></td><td>原文 id 注記: user 直命 2026-09-07 17:4x・逐語は器 SPEC §10 U5 欄</td></tr>
+<tr><td id="r-g20"><code>R-G20</code></td><td>管理系の席（planner / admin）は<strong>安全機構付き</strong> script が停止を検知し別口座で再起動できなければならない（MUST・最悪ケースの回避）</td><td>〔rules〕管理席の watchdog + 別口座 respawn（記憶の退避を前提）</td><td>同上</td><td></td><td></td><td></td></tr>
+<tr><td id="r-g21"><code>R-G21</code></td><td>口座（fable / 7d 枠）は <strong>1 週間で使い切る</strong>ことも要求される＝「止まらない・失わない」と「ギリギリまで使い切る」を<strong>両立</strong>する規則でなければならない（MUST・最初から焼き込む）</td><td>〔rules〕消費計画 = 7d 枠の残量 × 残日数で lane 数を決める・〔event〕account.exhausted は事故でなく想定内の遷移</td><td>同上</td><td></td><td></td><td></td></tr>
+</tbody>
+</table>
+</details>
+</section>
+
+<section id="ch-h" class="normative">
+<h2>H. WM / rebrief（v2 0 本 / v3 送り 19 本）</h2>
+<p class="section-essence" data-audience="human">作業記憶（session をまたぐと消える一時メモ）の扱いです。product としての実装は次の版へ送りますが、うち 6 本は v2 の開発 session 自身が守る作法として収録します。 このカタログには、 そのうち開発 session の作法として守る 6 本だけを載せます。 収録 6 行。</p>
+<details class="req__machine" data-audience="machine">
+<summary>要件行（機械向け・原文）</summary>
+<p>章の既定 tag（要件 doc の「v2 表現の既定」段落・原文）: 現在地は event 表から生成し、退避物は「effort の間だけ真」の項目に限る〔event〕。orphan / force-recovery / 偽の全クリア禁止は rebrief の rules 行〔rules〕。</p>
+<table>
+<thead><tr><th>id</th><th>要件文</th><th>v2 表現</th><th>出所</th><th>裁定</th><th>v1 対応物</th><th>備考</th></tr></thead>
+<tbody>
+<tr><td id="r-h2"><code>R-H2</code></td><td>退避物の file 名は<strong>session 識別子で一意</strong>でなければならず、role を file 名に入れてはならない（role 分離の前後で規則が不変であるため）</td><td></td><td>runbook/admin.md §9 / skills/rebrief</td><td>なし</td><td><code>working-memory.&lt;sid&gt;.md</code></td><td>開発 session の作法（product 実装は v3）</td></tr>
+<tr><td id="r-h3"><code>R-H3</code></td><td>消費済みは<strong>同一 suffix 規約</strong>（<code>.consumed.md</code>）で表現し、列挙の除外規則を 1 本で済ませられねばならない</td><td></td><td>contract-v1.md §4</td><td>なし</td><td>-</td><td>開発 session の作法（product 実装は v3）</td></tr>
+<tr><td id="r-h4"><code>R-H4</code></td><td>消費は<strong>移動（rename）</strong>であって削除であってはならない</td><td></td><td>skills/rebrief §手順</td><td>なし</td><td>mv</td><td>開発 session の作法（product 実装は v3）</td></tr>
+<tr><td id="r-h6"><code>R-H6</code></td><td>DATA が取れない周は <strong>brief を出してはならない</strong>。「読めなかった」を「異常なし・やり残しなし」に化けさせる形が最悪の失敗である</td><td></td><td>skills/rebrief §1</td><td>なし</td><td>偽の全クリア</td><td>開発 session の作法（product 実装は v3）</td></tr>
+<tr><td id="r-h8"><code>R-H8</code></td><td>別 session の退避物（orphan）は<strong>自動で消費してはならず</strong>、残る間は毎起動で件数を surface し続けねばならない</td><td></td><td>runbook/admin.md §9 / skills/rebrief §4</td><td>なし</td><td>orphan</td><td>開発 session の作法（product 実装は v3）</td></tr>
+<tr><td id="r-h16"><code>R-H16</code></td><td>重複起動は<strong>冪等</strong>でなければならない（既に消費済みなら 1 行の ack で終える）</td><td></td><td>skills/rebrief §1-b</td><td>なし</td><td><code>[REBRIEF-ALREADY]</code></td><td>開発 session の作法（product 実装は v3）</td></tr>
+</tbody>
+</table>
+</details>
+</section>
+
+<section id="ch-i" class="normative">
+<h2>I. 台帳 adapter（v2 14 本 / v3 送り 6 本）</h2>
+<p class="section-essence" data-audience="human">台帳（bd）は v2 でもそのまま使い、触り方を 1 本の adapter に閉じます。書き込みの経路は 1 本に直列化し、外部との同期点はちょうど 1 つに保ちます。 収録 14 行。</p>
+<details class="req__machine" data-audience="machine">
+<summary>要件行（機械向け・原文）</summary>
+<p>章の既定 tag（要件 doc の「v2 表現の既定」段落・原文）: 台帳は bd のまま、v2 は adapter 1 本（<code>bd --json</code> の薄い wrapper・write は直列化 1 経路）でしか触らない〔compiler: adapter 以外に bd を呼ぶ経路を持たない〕。label 語彙は版付き schema〔schema〕。外部同期点はちょうど 1 つ〔rules〕。</p>
+<table>
+<thead><tr><th>id</th><th>要件文</th><th>v2 表現</th><th>出所</th><th>裁定</th><th>v1 対応物</th><th>備考</th></tr></thead>
+<tbody>
+<tr><td id="r-i1"><code>R-I1</code></td><td>台帳 write は<strong>必ず直列化された 1 経路</strong>を通らねばならない（並列 write は lost-update を起こす）</td><td></td><td>roles-boundary.md worker の権限</td><td>なし</td><td><code>bdw</code> / flock</td><td></td></tr>
+<tr><td id="r-i2"><code>R-I2</code></td><td>graph（起票 / 依存 / 割当 / close / 外部同期）は<strong>1 role が所有</strong>し、他 role は触ってはならない</td><td></td><td>roles-boundary.md / protocol.md §0</td><td>なし</td><td>-</td><td></td></tr>
+<tr><td id="r-i3"><code>R-I3</code></td><td>外部同期点は<strong>ちょうど 1 つ</strong>でなければならない</td><td></td><td>同</td><td>なし</td><td><code>bd dolt push</code></td><td></td></tr>
+<tr><td id="r-i4"><code>R-I4</code></td><td>実装席は起票せず、タスク化が要る気づきは<strong>処分行として自 issue に書き出す</strong>に留めねばならない</td><td></td><td>roles-boundary.md</td><td>なし</td><td><code>[DISP]</code></td><td></td></tr>
+<tr><td id="r-i5"><code>R-I5</code></td><td>読みは<strong>台帳 native の集約から入り</strong>、全件列挙から始めてはならない</td><td></td><td>ledger-rules.md R0</td><td>なし</td><td><code>--readonly</code></td><td></td></tr>
+<tr><td id="r-i7"><code>R-I7</code></td><td>関係語彙を固定する: <strong>所属 = 親子 / 順序 = blocks</strong> で、所属の意味に順序辺を張ってはならない</td><td></td><td>ledger-rules.md R2</td><td>なし</td><td>-</td><td></td></tr>
+<tr><td id="r-i8"><code>R-I8</code></td><td>規約の適用は<strong>新規から</strong>で、既存の一括再編をしてはならない</td><td></td><td>ledger-rules.md R6</td><td>なし</td><td>-</td><td></td></tr>
+<tr><td id="r-i10"><code>R-I10</code></td><td>優先度は 5 段で意味を固定し、<strong>leaf の属性</strong>として扱う（容れ物の札を leaf の代わりに読まない）。最低段は起票時から保留を既定とする</td><td></td><td>ledger-rules.md R8</td><td>なし</td><td>P0〜P4 / born-deferred</td><td></td></tr>
+<tr><td id="r-i14"><code>R-I14</code></td><td>label 判定は<strong>配列に対する完全一致</strong>でなければならず、bead 全文の部分文字列 grep を禁じる</td><td></td><td>monitor-vocab.md 監視トリガー衛生</td><td>なし</td><td><code>grep -qx</code></td><td></td></tr>
+<tr><td id="r-i15"><code>R-I15</code></td><td>label 語彙は役割と状態を一意に指す最小集合であること（完了申告 / 契約修正待ち / 入口 QA 印 / 人間手番 / 保留 / 差し戻し済 / 常設 / tier / lane）</td><td></td><td>各 contracts 横断</td><td>なし</td><td><code>gate-pending</code> / <code>qa:pending</code> / <code>qa:intake</code> / <code>needs-user</code> / <code>held</code> / <code>reverted</code> / <code>standing</code> / <code>tier:N</code> / <code>port-wave*</code></td><td></td></tr>
+<tr><td id="r-i16"><code>R-I16</code></td><td>記帳は<strong>追記</strong>でなければならない（置換 write で先行の印ごと消してはならない）</td><td></td><td>runbook/admin.md §4 gate findings</td><td>なし</td><td><code>--append-notes</code></td><td></td></tr>
+<tr><td id="r-i17"><code>R-I17</code></td><td>機械が焼く要約は <strong>1 回性</strong>が担保されねばならず、記帳に失敗した周は印を立てず次周で撃ち直さねばならない</td><td></td><td>merge-gate.md gate lane 回収</td><td>なし</td><td><code>[GATE-SUMMARY v1]</code></td><td></td></tr>
+<tr><td id="r-i18"><code>R-I18</code></td><td><strong>規律台帳（rules manifest・C1 / C14）</strong>に残すべき規約・判断と、<strong>task 台帳（beads・C15）</strong>に残すべき申し送りを、<strong>どちらの台帳の外の散文へも置いたまま先送りしてはならない</strong>（v0.1.5: 旧文の『台帳』は v1 の beads 一本を指していた。v2 では規約 → manifest・申し送り → beads と置き場が分かれる〔器 SPEC v0.4 §9 (a′)〕）</td><td></td><td>ledger-rules.md R7 prose deferral</td><td>user 裁定（逐語は repo 外）・論点 2（2026-09-08 03:51Z）</td><td>-</td><td></td></tr>
+<tr><td id="r-i19"><code>R-I19</code></td><td>他 project の台帳へは <strong>write せず、read と出所保持</strong>に留めねばならない</td><td></td><td>role-context-spec §2.1 cross-ledger</td><td>なし</td><td>write-isolation</td><td></td></tr>
+</tbody>
+</table>
+</details>
+</section>
+
+<section id="ch-j" class="normative">
+<h2>J. 消費（v2 2 本 / v3 送り 25 本）</h2>
+<p class="section-essence" data-audience="human">1 回の実行に上限（安全装置）と検出線を置き、超えたら機械が止めます。どの席にどの model と推論強度を割り当てるかも、表の行として持ちます。 収録 2 行。</p>
+<details class="req__machine" data-audience="machine">
+<summary>要件行（機械向け・原文）</summary>
+<p>章の既定 tag（要件 doc の「v2 表現の既定」段落・原文）: 1 run の上限（安全装置）と検出線を rules 表に持ち、超過は機械が止める（C6）〔rules〕。model / effort の割当は rules 行〔rules〕。消費計器は run record 1 表〔schema〕。</p>
+<table>
+<thead><tr><th>id</th><th>要件文</th><th>v2 表現</th><th>出所</th><th>裁定</th><th>v1 対応物</th><th>備考</th></tr></thead>
+<tbody>
+<tr><td id="r-j14"><code>R-J14</code></td><td>高コスト model は WF agent へ投入せず、違反は<strong>agent を 1 体も起動せずに fail-fast</strong> で止めねばならない（黙って別 model へ降格しない）</td><td></td><td>methodology §1.1</td><td>なし</td><td>fable / <code>demoteFable</code> 廃止</td><td></td></tr>
+<tr><td id="r-j17"><code>R-J17</code></td><td>実 suite の実行は <strong>run 全体で 1 回</strong>とし、検証者による再実行を禁じる</td><td></td><td>runbook/gate.md doctrine C</td><td>user 裁定（逐語は repo 外）・user 直命 2026-08-19</td><td>-</td><td></td></tr>
+</tbody>
+</table>
+</details>
+</section>
+
+<section id="ch-k" class="normative">
+<h2>K. 教訓（docs/lore → 歯 / schema へ落とす条件）（v2 3 本 / v3 送り 19 本）</h2>
+<p class="section-essence" data-audience="human">教訓は散文のまま残さず、「二度と起こさない条件」を歯（CI）か型に落とした分だけを規則として数えます。 収録 3 行。</p>
+<details class="req__machine" data-audience="machine">
+<summary>要件行（機械向け・原文）</summary>
+<p>章の既定 tag（要件 doc の「v2 表現の既定」段落・原文）: 教訓は「二度と起こさない条件」として歯（CI）か schema（証拠種別のラベル・死活 2 型など）へ落とす。散文の教訓 doc は説明であって規則ではない（N2）。</p>
+<table>
+<thead><tr><th>id</th><th>要件文</th><th>v2 表現</th><th>出所</th><th>裁定</th><th>v1 対応物</th><th>備考</th></tr></thead>
+<tbody>
+<tr><td id="r-k9"><code>R-K9</code></td><td>hook が受け取る作業 dir は<strong>起動時に固定されない</strong>（session 内で動く）。席の同定に使ってはならない</td><td></td><td>lore/hook-cwd-is-not-anchor.md</td><td></td><td><code>.cwd</code></td><td></td></tr>
+<tr><td id="r-k10"><code>R-K10</code></td><td>hook の timeout 到達は <strong>deny ではなく判定の消失</strong>（fail-open）である。時間切れを fail-closed と読んではならない</td><td></td><td>lore/hook-timeout-polarity.md</td><td></td><td><code>outcome:"cancelled"</code></td><td></td></tr>
+<tr><td id="r-k22"><code>R-K22</code></td><td>起動時 hook（session 開始 / clear / compact）は<strong>予算を 2 軸</strong>で持つ——<strong>時間</strong>（起動 1 回の hook 合計 wall time・本条で新設）と<strong>注入量</strong>（注入 carrier の bytes / token・R-E21 の上限）——いずれも rules 行の<strong>検出線</strong>として毎起動で実測・記録しなければならない（数値は条文に置かない＝憲法 §2 前文・C13 の秒数と同型）。hook 本体は <strong>binary 1 本の 1 回呼び出し</strong>（M8）で、hook の中で台帳走査・fleet scan・remote fetch 等の<strong>重い I/O をしてはならない</strong>——重い集約は常駐 daemon が事前計算し、hook は cache を読んで出すだけ。同一情報の<strong>二重注入</strong>（層をまたいで同じ hook が 2 回出る形）を持たない。timeout 到達は R-K10 のとおり fail-open ゆえ、予算超過は「消えた判定」として loud に出す</td><td>〔rules〕<code>boot_budget_ms</code> 行 + <code>doctor boot</code> の実測列</td><td>user 直命 2026-09-08 10:00 JST（逐語は repo 外）／本席実測 2026-09-08 10:1x JST（v1: 口座層 10 entry + plugin 層 12 entry = 22 本を単独計測・合計 ≈97 秒のうち <code>session-start-workinprogress.py</code> 1 本が <strong>92.3 秒</strong>〔hook timeout 300s の内側ゆえ fail-open にならず素直に待たされる〕・残り 21 本の合計 ≈5 秒〔watch-arm-check 2.7s / repos-sync 0.9s / git fetch 0.8s / 他 ≤0.1s〕・LOCATION 注入が 2 層で二重）</td><td>user 裁定（逐語は repo 外）・置き場 = 本要件 + rules 行（<strong>憲法へは入れない</strong>＝改訂は A2 の grill 前置が要り、数値を条文に置かない原則にも反する）。<strong>user 承認 2026-09-08 10:2x JST 逐語</strong>（条件 = 時間軸で測ること・本条が満たす）</td><td>hooks.json 58 entry</td><td></td></tr>
+</tbody>
+</table>
+</details>
+</section>
+
+<section id="ch-p" class="normative">
+<h2>P. 可観測性・提示面（v0.1.6 新設・論点 1 (b)）（v2 0 本 / v3 送り 7 本）</h2>
+<p class="section-essence" data-audience="human">測定は「値 / 0 件 / 測れなかった」の三値を型で持ち、人が見る面はすべて同じ typed data を読みます。v2 では着手せず、次の版へ送ります。 v2 で着手する行は 0 本なので、 この章に表はありません。 収録 0 行。</p>
+<details class="req__machine" data-audience="machine">
+<summary>要件行（機械向け・原文）</summary>
+<p>章の既定 tag（要件 doc の「v2 表現の既定」段落・原文）: 測定は三値（値 / 0 件 / 測れなかった）を型で持ち〔schema〕、人間向けの面（dashboard / brief / viewer）は同じ typed data を consume する〔schema + event〕。散文の表示を判定入力にしない（C3）。</p>
+<p>この章に <code>着手: v2</code> の行は無い（全 7 本が v3 送り）。</p>
+</details>
+</section>
+
+<section id="ch-q" class="normative">
+<h2>Q. 移植性・host（v0.1.6 新設・論点 1 (b)）（v2 0 本 / v3 送り 1 本）</h2>
+<p class="section-essence" data-audience="human">host ごとに違う値は manifest 1 file に集め、導入と差分検知は何度流しても同じ結果になる 1 経路が担います。v2 では着手せず、次の版へ送ります。 v2 で着手する行は 0 本なので、 この章に表はありません。 収録 0 行。</p>
+<details class="req__machine" data-audience="machine">
+<summary>要件行（機械向け・原文）</summary>
+<p>章の既定 tag（要件 doc の「v2 表現の既定」段落・原文）: host 固有の値は manifest 1 file〔schema〕、導入と drift 検知は <code>doctor</code> / reconciler の冪等な 1 経路〔rules + CI〕。</p>
+<p>この章に <code>着手: v2</code> の行は無い（全 1 本が v3 送り）。</p>
+</details>
+</section>
+
+<section id="ch-r" class="normative">
+<h2>R. 公開安全（v0.1.6 新設・論点 1 (b)）（v2 0 本 / v3 送り 2 本）</h2>
+<p class="section-essence" data-audience="human">「出す」は判定基準だけでなく、走査と切り出しを行う機械（enforcer）も持ちます。v2 では着手せず、次の版へ送ります。 v2 で着手する行は 0 本なので、 この章に表はありません。 収録 0 行。</p>
+<details class="req__machine" data-audience="machine">
+<summary>要件行（機械向け・原文）</summary>
+<p>章の既定 tag（要件 doc の「v2 表現の既定」段落・原文）: 「出す」は判定基準（承認 3 クラス (b)）に加えて <strong>enforcer</strong>（走査と carve の機械）を持つ〔rules + CI〕。走査は列挙漏れ型を検知できる形（母集団の三値化・P）で書く。</p>
+<p>この章に <code>着手: v2</code> の行は無い（全 2 本が v3 送り）。</p>
+</details>
+</section>
+
+<section id="ch-o" class="normative">
+<h2>O. 跨版（前の版が次の版の oracle になる・器 SPEC §12 の要件面）（v2 4 本 / v3 送り 2 本）</h2>
+<p class="section-essence" data-audience="human">前の版が次の版の答え合わせ役と停止権を持つ、という版と版の間の約束です。v2 は自分が「前の版」になる日のために、同じ 5 面を実装します。 収録 4 行。</p>
+<details class="req__machine" data-audience="machine">
+<summary>要件行（機械向け・原文）</summary>
+<p>章の既定 tag（要件 doc の「v2 表現の既定」段落・原文）: 器 SPEC §12（v0.2）の要件面。本文・裁定・却下案は器 SPEC が SSOT で、ここは v2 が<strong>満たすべき状態</strong>だけを写す。</p>
+<table>
+<thead><tr><th>id</th><th>要件文</th><th>v2 表現</th><th>出所</th><th>裁定</th><th>v1 対応物</th><th>備考</th></tr></thead>
+<tbody>
+<tr><td id="r-o1"><code>R-O1</code></td><td>版 N+1 は版 N の下で作られ、版 N が oracle と停止権を持つ間だけ self-host へ進む（憲法候補 C8）</td><td>〔rules〕成熟 4 条 + 解禁の 1 問</td><td>器 SPEC §12 / user 提起 2026-09-07 16:1x</td><td></td><td></td><td></td></tr>
+<tr><td id="r-o3"><code>R-O3</code></td><td>跨版契約は 5 面（所属 marker / 観測 export / 台帳 adapter / 停止 1 コマンド / oracle 再 gate）で、版番号に依らず固定。v2 は自分が「前の版」になる日のために同じ 5 面を実装する</td><td>〔schema〕export の schema 版付き・〔CI〕5 面の存在を歯にする</td><td>器 SPEC §12.2</td><td></td><td></td><td></td></tr>
+<tr><td id="r-o4"><code>R-O4</code></td><td>v2 だけを載せた session は <code>--plugin-dir</code> 1 本で建ち、v1 の plugin・state・tmux server・台帳 prefix と共有物を持たない（beads は adapter 経由の共有のみ）</td><td>〔CI〕隔離 e2e（fresh clone → 一時 CONFIG_DIR → toy project）</td><td>器 SPEC §12.1（<code>cld</code> の <code>CLD_PLUGIN_EXCLUDE</code> seam・verified）</td><td></td><td></td><td></td></tr>
+<tr><td id="r-o6"><code>R-O6</code></td><td>前の版が次の版に対して持つ権限は 見る / 止める / 戻す の 3 つ（planner 推奨・U6）</td><td>〔schema〕停止 API と marker の可逆性</td><td>器 SPEC §12.4</td><td></td><td></td><td></td></tr>
+</tbody>
+</table>
+</details>
+</section>
+
+<section id="s-trace" class="informative">
+<h2>§Trace — 原本・母集団・scrub</h2>
+<p class="section-essence" data-audience="human">原本は repo の外で凍結されていて、 このページはその写しです。 どの行を載せたか（母集団の数え方）と、 公開前に落とした 4 種類の情報をここに置きます。</p>
+<ul data-audience="machine">
+  <li><strong>原本の所在</strong>: repo 外（開発 host の state 領域）で凍結（読取専用・<code>chmod a-w</code>）。 sha256 先頭 8 桁 = <code>92a75005</code>、 全 669 行。 本 file はその写しであり、 齟齬時は原本を正とする。</li>
+  <li><strong>版</strong>: v0.1.10。 全 R- 行 289 本に着手版 field（<code>｜着手: v2</code> / <code>｜着手: v3</code>）を追加した版で、 要件文・出所・裁定・v1 欄は前版から不変・削除 0。</li>
+  <li><strong>母集団の数え方</strong>: 原文の R- 行のうち末尾 field が <code>｜着手: v2</code> の行すべて（実測 144 本）＋ 章 H の <code>R-H2 / R-H3 / R-H4 / R-H6 / R-H8 / R-H16</code> の 6 本（着手は v3 だが「開発 session が守る作法」として収録・備考列に注記）＝ 計 150 行。 それ以外の v3 行 139 本は収録せず、 章ごとの件数だけを見出しの「v3 送り N 本」に書く。 §0 の id 体系の凡例行（<code>R-&lt;章&gt;&lt;番号&gt;</code>）は要件行ではないので数えない。</li>
+  <li><strong>scrub の規則 4 点</strong>（本 repo は PUBLIC ゆえ全 field に適用し、 置換後の残存 0 を生成器が自己検査する。 非 0 なら生成を中断する）: <strong>(1) bead id</strong> — <code>sc-</code> / <code>s2-</code> / <code>orch-</code> / <code>un-</code> / <code>folio-</code> / <code>ccs-</code> / <code>paper-</code> 接頭の識別子を削除し、 空になった括弧と連続した区切り記号を畳む。 <strong>(2) 口座名</strong> — 口座を名指しする識別子（<code>black</code> + 数字 の形、 および固有名 1 種）を <code>&lt;口座&gt;</code> へ置換。 <strong>(3) user 逐語</strong> — 裁定 field の <code>「…」</code> 引用はすべて落として <code>user 裁定（…・逐語は repo 外）</code> へ畳み、 他 field は user 帰属の印（逐語 / user 直命 / user 裁定 / user 回答 / user 承認 / USER-VERBATIM）を持つ field の <code>「…」</code> だけを落とす（doc の節名を指す引用は残す）。 要件文では <code>逐語「…」</code> の形だけを落とす。 日付・時刻・論点番号・<code>RULING-…</code> の doc 名・<code>[USER-APPROVAL-RELAY v1] &lt;ts&gt;（scope=…）</code> の ts と scope は残す。 <strong>(4) 絶対 path</strong> — 開発 host の home 配下を指す絶対 path を <code>&lt;path&gt;</code> へ置換（本 doc の母集団には該当 0 件）。</li>
+  <li><strong>照会先</strong>: 要件定義書 <code>./srs.html</code>（各 FR がこの行 id を根拠に引く）、 憲法 <code>./constitution.html</code>（要件が従う折れない線）。 本 file は要件 doc の写しであって要件の正本ではない。</li>
+</ul>
+</section>
+
+<!-- folio:chrome-bottom -->
+<nav class="prevnext" aria-label="前後の文書">
+  <a class="prevnext__prev" href="srs.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">設計 → 契約 → 実装 → 検証 → land を、 人の手を借りずに 1 本通す器（MVP）</span></a>
+</nav>
+<script>
+(function () {
+  var openedForPrint = [];
+  window.addEventListener('beforeprint', function () {
+    openedForPrint = [];
+    var ds = document.querySelectorAll('details:not([open])');
+    for (var i = 0; i < ds.length; i++) { ds[i].setAttribute('open', ''); openedForPrint.push(ds[i]); }
+  });
+  window.addEventListener('afterprint', function () {
+    for (var i = 0; i < openedForPrint.length; i++) openedForPrint[i].removeAttribute('open');
+    openedForPrint = [];
+  });
+  if (!document.querySelector('[data-audience]')) return;
+  /* 既定 = 人間プレゼン型 (ADR-0040 / rules §11.3): script 経由で初期 class を付与するため
+     no-JS では付かず全文可視に graceful degrade する。 static DOM は全文を保持 (AI/検索/印刷は不変)。 */
+  document.body.classList.add('audience-human');
+  var bar = document.createElement('nav');
+  bar.className = 'audience-toggle';
+  bar.setAttribute('aria-label', '表示対象の切替');
+  var states = [['both', '両方'], ['human', '人間向け'], ['machine', '機械向け']];
+  for (var s = 0; s < states.length; s++) {
+    (function (mode, label) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      b.setAttribute('aria-pressed', mode === 'human' ? 'true' : 'false');
+      b.addEventListener('click', function () {
+        document.body.classList.remove('audience-human', 'audience-machine');
+        if (mode !== 'both') document.body.classList.add('audience-' + mode);
+        var bs = bar.querySelectorAll('button');
+        for (var j = 0; j < bs.length; j++) bs[j].setAttribute('aria-pressed', bs[j] === b ? 'true' : 'false');
+      });
+      bar.appendChild(b);
+    })(states[s][0], states[s][1]);
+  }
+  var bc = document.querySelector('nav.breadcrumb');
+  if (bc && bc.parentNode) { bc.parentNode.insertBefore(bar, bc.nextSibling); }
+  else { document.body.insertBefore(bar, document.body.firstChild); }
+})();
+</script>
+<!-- /folio:chrome-bottom -->
+</body>
+</html>

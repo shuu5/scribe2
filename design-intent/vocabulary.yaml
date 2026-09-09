@@ -19,8 +19,8 @@ terms:
     relationships: [rules 行, doctor, 裁定 id]
   - canonical: doctor
     domain: consumer
-    definition: 全 host の版・口座・退役・rules 行を照合する 1 コマンド (C3.2)。 selfdev sub-command は成熟条件を Measured で出す (C8.3)。
-    relationships: [manifest, fleet, 自己開発, 成熟条件]
+    definition: 全 host の版・口座・退役・rules 行を照合する 1 コマンド (C3.2)。 改訂前の selfdev sub-command (成熟条件の測定) は ADR-0003 で廃止。
+    relationships: [manifest, fleet]
   # ---------------------------------------------------------------- §5 core 依存
   - canonical: tailscale
     domain: consumer
@@ -86,8 +86,12 @@ terms:
     relationships: [rules 行, 成熟条件, day-1 optional adapter]
   - canonical: land
     domain: consumer
-    definition: worker の成果を統合して着地させる操作 (merge)。 graphify は land ごとに走る。 crate の land module が担う。
-    relationships: [graphify, 便, gate]
+    definition: worker の成果を統合して着地させる操作 (merge)。 MVP では worktree の tree を squash 1 commit で main に載せ、 main で歯を再実走する (SRS FR11)。 graphify は land ごとに走る。 crate の land module が担う。
+    relationships: [graphify, 便, gate, verdict export]
+  - canonical: verdict export
+    domain: consumer
+    definition: land ごとの判定を schema 版付きで verdicts.jsonl に追記する面 (跨版の観測面・SRS FR12)。 次の版の器がこの記録を読む。
+    relationships: [land, Verdict, 版 N+1]
   # ---------------------------------------------------------------- §4 技術選定が使う概念
   - canonical: glue
     domain: consumer
@@ -128,16 +132,16 @@ terms:
     relationships: [manifest, 裁定 id, 検出線]
   - canonical: 裁定 id
     domain: consumer
-    definition: user 裁定を一意に指す id (transcript の ts)。 rules 行の変更 (C5)、 成熟の宣言 (C8)、 閾値変更 (A2) が要求する。
-    relationships: [rules 行, planner]
+    definition: user 裁定を一意に指す id (transcript の ts)。 rules 行の変更 (C5)、 閾値変更 (A2)、 憲法改訂 (N4) が要求する。
+    relationships: [rules 行, 対話面, 承認 event]
   - canonical: RuleKind
     domain: consumer
     definition: 規則の種類を閉じた列挙で表す enum。 網羅 match 必須で、 未実装は compile error (C1)。
     relationships: [rules 行, Verdict]
   - canonical: Verdict
     domain: consumer
-    definition: 規則の検査 (Rule::check) や gate が返す判定の型 (C1)。 成熟条件の一致率はこの判定を単位に数える。
-    relationships: [RuleKind, gate, 便]
+    definition: 規則の検査 (Rule::check) や gate が返す判定の型 (C1)。 gate の値は PASS / FAIL / INCONCLUSIVE の 3 値で、 構造化 field が一次 truth (SRS では値を小文字 verdict と書く)。
+    relationships: [RuleKind, gate, 便, verdict export]
   - canonical: 席
     domain: consumer
     definition: 1 つの Claude Code session が占める作業単位。 役割は worker / admin (管理席) / planner。 状態は SeatState で運ぶ (C3.3)。
@@ -150,8 +154,12 @@ terms:
     relationships: [fleet, lane, 席]
   - canonical: fleet
     domain: consumer
-    definition: 複数 host にまたがる席・口座・lease・退役の全体。 状態の持ち方は C3。
-    relationships: [席, 口座, lease, doctor]
+    definition: 複数 host にまたがる席・口座・lease・退役の全体。 状態の持ち方は C3。 MVP では run と seat の現在地の全体を指し、 実体は event log 1 file (SRS FR3)。
+    relationships: [席, 口座, lease, doctor, event log]
+  - canonical: event log
+    domain: consumer
+    definition: 1 行 1 出来事を追記する file。 fleet の現在地はこれを replay して導く (C3・SRS FR3)。 MVP の永続面で、 process の記憶に状態を持たない。
+    relationships: [fleet, 便, 承認 event]
   - canonical: lease
     domain: consumer
     definition: 席が口座や host を占有する期限付きの割当。 fleet の状態の一部。
@@ -175,21 +183,73 @@ terms:
     relationships: [席, admin lane]
   - canonical: planner
     domain: consumer
-    definition: user との唯一の対話面 (C7)。 席の役割の 1 つでもある。 user 承認は planner 経由の relay 印だけを機械が受理する。
+    definition: 席の役割の 1 つ (設計協調)。 改訂前の憲法 (C7) では唯一の対話面だったが、 ADR-0003 以後は対話面の identity を rules 行 R-C7-1 が持つ (初期値 = 開発 session が user 直)。
     forbidden: [プランナー]
-    relationships: [relay 印, 裁定 id, 対話面, 席]
+    relationships: [対話面, 席, 開発 session]
   - canonical: 対話面
     domain: consumer
-    definition: user と機械が承認や裁定をやり取りする面。 planner が唯一の対話面 (C7)。
-    relationships: [planner]
+    definition: user と機械が承認や裁定をやり取りする面。 ちょうど 1 つ (C7)。 どの席かは rules 行 R-C7-1 の値で決まり、 MVP の初期値は開発 session が user と直接対話する形。
+    relationships: [planner, 開発 session, 承認 event, rules 行]
   - canonical: relay 印
     domain: consumer
-    definition: planner が user の承認を機械へ伝える印。 これ以外の承認経路を機械は受理しない (C7)。
-    relationships: [planner]
+    definition: 改訂前の憲法 (C7・A1) で planner が user の承認を機械へ伝えていた印。 ADR-0003 以後、 承認の記帳は承認 event が担う (歴史的な語)。
+    relationships: [planner, 承認 event]
+  - canonical: 承認 event
+    domain: consumer
+    definition: user の承認を fleet に記帳する event (approval.requested / approval.received・逐語付き・C7.2)。 3 クラス操作の便はこれで止まり、 記帳された回答で再開する (SRS FR15 / FR16)。
+    relationships: [対話面, 3 クラス, event log, 裁定 id]
   - canonical: 3 クラス
     domain: consumer
     definition: user 確認を要する操作の 3 分類 (消す / 出す / 使う)。 A1 の対象。
-    relationships: [planner]
+    relationships: [対話面, 承認 event]
+  - canonical: 開発 session
+    domain: consumer
+    definition: 設計・契約・実装・review を行う AI の session (Claude Code)。 MVP の対話面 (R-C7-1 の初期値) であり、 作業記憶の退避と復元の作法を守る (SRS FR23)。
+    relationships: [対話面, 契約, 設計 doc, runner, lens]
+  - canonical: 契約
+    domain: consumer
+    definition: 何を作り・何ができたら終わりかを 1 file に書いたもの。 台帳の 1 bead に対応し、 SRS の要件 id と設計 doc を pointer で持つ (C15・SRS FR2)。
+    relationships: [台帳, 設計 doc, write-set, 便]
+  - canonical: 設計 doc
+    domain: consumer
+    definition: 要望を SRS の要件に結び、 契約が複数出る元になる tracked markdown (docs/design/)。
+    relationships: [契約, SRS]
+  - canonical: SRS
+    domain: consumer
+    definition: MVP の要件定義書 (design-intent/spec/srs.html)。 folio SRS pack の生成物で、 機械 SSoT は srs.srs.yaml。 上位ニーズ・機能要件・受入基準を持つ。
+    relationships: [要件カタログ, 契約, 設計 doc]
+  - canonical: 要件カタログ
+    domain: consumer
+    definition: 要件 doc の v2 行を scrub して写した一覧 (design-intent/spec/requirements-catalog.html)。 SRS の FR が根拠で行 id を引く。
+    relationships: [SRS]
+  - canonical: write-set
+    domain: consumer
+    definition: 契約が宣言する、 編集してよい file の集合。 外への編集は編集の時点で止める (C16・SRS FR20)。
+    relationships: [契約, in-loop guard]
+  - canonical: in-loop guard
+    domain: consumer
+    definition: 仕様からの逸脱を編集の時点で止める guard (C16)。 MVP の形は write-set の外への Edit / Write を PreToolUse で deny する hook。 極性一覧に InLoop として載る。
+    relationships: [write-set, 極性]
+  - canonical: runner
+    domain: consumer
+    definition: 契約 1 本を worktree で実装する headless の Claude process (SRS FR4 / FR5)。 席ではなく使い捨て。
+    relationships: [契約, headless, lens, 便]
+  - canonical: lens
+    domain: consumer
+    definition: diff を読んで verdict (PASS / FAIL / INCONCLUSIVE) を返す headless の Claude process (SRS FR9)。 MVP の gate は lens 1 本。
+    relationships: [gate, headless, Verdict]
+  - canonical: headless
+    domain: consumer
+    definition: 対話画面を持たず、 入力を受けて 1 回で答えを返す Claude の実行形 (claude -p)。 口座は環境変数で切り替え、 permission は毎回明示する。
+    relationships: [runner, lens]
+  - canonical: toy repo
+    domain: consumer
+    definition: 到達点を測るために一時 dir に作る、 外部依存の無い小さな git repo (SRS AC1)。
+    relationships: [便]
+  - canonical: ".vessel"
+    domain: consumer
+    definition: repo root の固定名 marker file。 中身が name と version を言い、 どの器が仕えるかを決める (SPEC §7・SRS FR19)。
+    relationships: [器, NAME 定数]
   - canonical: Budget
     domain: consumer
     definition: 起動に必要な予算の型。 Precheck の実測を消費してしか作れず、 唯一の起動口 spawn が要求する (C6)。
@@ -208,8 +268,8 @@ terms:
     relationships: [flip check, KNOWN-RED 台帳]
   - canonical: gate
     domain: consumer
-    definition: worker cell の成果物を独立に敵対 review して Verdict を返す機構。 crate の gate module が担う。 歯 (test / lint / CI) とは別の entity。
-    relationships: [Verdict, 便, land]
+    definition: 便の成果物を独立に検証して Verdict を返す機構。 MVP は契約の verify の実走 + lens 1 本 (SRS FR8 / FR9)。 crate の gate module が担う。 歯 (test / lint / CI) とは別の entity。
+    relationships: [Verdict, 便, land, lens]
   - canonical: flip check
     domain: consumer
     definition: CI が PR の test 差分だけを base に当てて RED、 HEAD で GREEN であることを確かめる検査 (C12.2)。
@@ -224,24 +284,24 @@ terms:
     relationships: [版 N+1, 自己開発]
   - canonical: 自己開発
     domain: consumer
-    definition: 器が自身の repo を開発すること。 許可の規範は C8、 解禁は A4。 機構は enum SelfDev (Disabled / Enabled { ruling_id })。
-    relationships: [器, 版 N+1, SelfDev, 成熟条件, doctor]
+    definition: 器が自身の repo を開発すること。 ADR-0003 以後は既定で許可 (A4)。 user に先に聞くのは不可逆操作 (3 クラス) だけ。 拘束条件は design-intent (C8)。
+    relationships: [器, 版 N+1, 3 クラス]
   - canonical: SelfDev
     domain: consumer
-    definition: 自己開発の許可状態を表す enum (Disabled / Enabled { ruling_id })。 dispatch の deny 判定に使う (C8.2)。
-    relationships: [自己開発, 裁定 id]
+    definition: 改訂前の C8 が定めていた自己開発の許可状態 enum (Disabled / Enabled { ruling_id })。 ADR-0003 で廃止 (歴史的な語)。
+    relationships: [自己開発]
   - canonical: 成熟条件
     domain: consumer
-    definition: 版が成熟したと宣言するために同時に成り立つ条件の集合。 値は rules 行 (§3 R-C8-1)、 測定は doctor selfdev (C8.3)。
-    relationships: [自己開発, K 指標, doctor, 便]
+    definition: 改訂前の C8 で版の成熟を宣言するために同時に成り立つ条件の集合 (§3 R-C8-1)。 ADR-0003 で停止 (測らない・履歴として残す)。
+    relationships: [自己開発, K 指標]
   - canonical: 版 N+1
     domain: consumer
-    definition: 現行版 (N) の下で別 repo に作る次世代の器。 憲法改訂・schema 非互換・C4 超えの着地先 (N4)。
-    relationships: [器, 自己開発]
+    definition: 次世代の器。 改訂後の C8 では design-intent の下で作られ、 前の版を oracle にしない。 schema 非互換・C4 超えの着地先 (N4)。
+    relationships: [器, 自己開発, verdict export]
   - canonical: 便
     domain: consumer
-    definition: worker cell の 1 往復 (dispatch → gate の Verdict)。 成熟条件の連続数はこれを単位に数える。
-    relationships: [Verdict, land, gate]
+    definition: 契約 1 本の 1 往復 (intake → runner → gate → land)。 MVP の識別子は run id で、 現在地は event log から導く。 到達点は便の本数で数える (SRS AC1 / AC2)。
+    relationships: [Verdict, land, gate, 契約, event log]
   - canonical: NAME 定数
     domain: consumer
     definition: plugin 名 / crate / skill 名前空間 / state dir / env 接頭辞 / tmux server 名を導出する 1 定数 (C2.2)。
