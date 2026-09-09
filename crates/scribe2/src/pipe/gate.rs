@@ -7,6 +7,11 @@
 //!
 //! **偽の PASS を作らない**（AC3）。判定に届かなかった周はすべて INCONCLUSIVE へ倒す
 //! ——「測れなかった」を「通った」に化けさせないためで、極性は fail-closed（C11.2）。
+//!
+//! **同じ便を 2 度以上通ることが在る**（INCONCLUSIVE からの測り直し）。`verdict.json` は
+//! 最後の判定で上書きし、`RunStage stage=Gated detail=verdict:<V>` は追記する
+//! （append-only＝「1 度目は測れなかった」という事実を消さない）。**測り直してよい便か**
+//! の判定はここではなく段の入口（[`super::cli`]）が持つ。
 
 use super::contract::Contract;
 use super::{
@@ -320,6 +325,8 @@ fn parse_lens(text: &str) -> (Verdict, String) {
 }
 
 /// 判定を `verdict.json` へ書き、`Gated` を 1 件追記する。
+///
+/// **測り直しの周も同じ経路を通る**: file は最後の判定で上書きし、event は追記する。
 fn settle(entry: &Gate<'_>, decision: &Decision) -> Result<(), String> {
     let body = json_lite::write_object(&[
         ("schema", Value::Num(SCHEMA)),

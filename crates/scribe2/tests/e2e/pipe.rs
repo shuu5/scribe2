@@ -1167,7 +1167,7 @@ fn pipe_e2e_toy_repo_lands_one_bead_with_fake_runner() {
 }
 
 #[test]
-fn pipe_resume_after_kill_between_spawn_and_gate() {
+fn pipe_resume_continues_from_implemented_in_new_process() {
     let (repo, state) = repo_with_state();
     let path = write_contract(&repo, &[], &[]);
     // spawn までで process が終わる（＝gate の手前で落ちた便と同じ現在地）。
@@ -1364,7 +1364,8 @@ fn pipe_gate_refuses_wrong_stage() {
         "理由: {}",
         stderr_of(&landed)
     );
-    // gate を通した便に gate は 2 度掛からない（段は 1 方向にしか進まない）。
+    // **判定が済んだ**便に gate は 2 度掛からない（測り直せるのは INCONCLUSIVE の
+    // 周だけ・設計 §5.3。ここは PASS ゆえ終端側である）。
     let gated = gate_once(&repo, &state, &id, Some(&lens));
     assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "1 度目は通る: {}", stderr_of(&gated));
     let again = gate_once(&repo, &state, &id, Some(&lens));
@@ -1416,6 +1417,123 @@ fn pipe_land_removes_dirty_tmp_worktree() {
     );
     let listed = git(&repo, &["worktree", "list"]);
     assert!(!listed.contains("/verify/"), "worktree の登録も残らない: {listed}");
+    clean(&[&repo, &state]);
+}
+
+#[test]
+fn pipe_gate_regates_after_inconclusive() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let id = implemented(&repo, &state, &path);
+    // 道具が足りない周（`--lens` を渡し忘れた便）。INCONCLUSIVE は「測れなかった」で
+    // あって「落ちた」ではないので、**ここで終端しない**。
+    let first = gate_once(&repo, &state, &id, None);
+    assert_eq!(first.status.code(), Some(3), "測れなかった周の rc は 3");
+    assert_eq!(value_of(&verdict_pairs(&state, &id), "verdict"), "INCONCLUSIVE");
+
+    // 道具を揃えて撃ち直す。**段が Gated でも通る**のが本便で広げた 1 分岐である。
+    let marker = state.join("lens-ran");
+    let lens = fake_lens(&marker, &lens_verdict("PASS"));
+    let second = gate_once(&repo, &state, &id, Some(&lens));
+    assert_eq!(
+        second.status.code(),
+        Some(i32::from(RC_OK)),
+        "道具を揃えた測り直しは通る: {}",
+        stderr_of(&second)
+    );
+    assert!(marker.exists(), "2 度目は lens を起動する");
+    assert_eq!(
+        value_of(&verdict_pairs(&state, &id), "verdict"),
+        "PASS",
+        "verdict.json は新しい判定で上書きされる"
+    );
+
+    // **前の INCONCLUSIVE は event に残る**（append-only・書き換えない）。
+    let gated: Vec<String> = events(&state)
+        .into_iter()
+        .filter(|event| event.run == id && event.stage == Some(Stage::Gated))
+        .filter_map(|event| event.detail)
+        .collect();
+    assert_eq!(
+        gated,
+        vec!["verdict:INCONCLUSIVE".to_owned(), "verdict:PASS".to_owned()],
+        "測り直しは 2 件目を追記する（1 件目を書き換えない）"
+    );
+    // 吸収状態が解けている＝そのまま land まで進む。
+    let landed = land_once(&repo, &state, &id);
+    assert_eq!(
+        landed.status.code(),
+        Some(i32::from(RC_OK)),
+        "測り直した便は land できる: {}",
+        stderr_of(&landed)
+    );
+    clean(&[&repo, &state]);
+}
+
+#[test]
+fn pipe_gate_refuses_regate_after_fail() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let id = implemented(&repo, &state, &path);
+    let failed_marker = state.join("lens-fail");
+    let failing = fake_lens(&failed_marker, &lens_verdict("FAIL"));
+    let first = gate_once(&repo, &state, &id, Some(&failing));
+    assert_eq!(first.status.code(), Some(i32::from(RC_REFUSED)), "FAIL の rc は 1");
+    assert_eq!(value_of(&verdict_pairs(&state, &id), "verdict"), "FAIL");
+
+    // **FAIL は終端のまま**。契約の verify が赤い便は測り直しても赤いので、撃ち直す口を
+    // 開けない（開けると「壊れたまま進む」経路になる）。**段違いの一般則どおり何もしない**。
+    let before = event_count(&state);
+    let passing_marker = state.join("lens-pass");
+    let passing = fake_lens(&passing_marker, &lens_verdict("PASS"));
+    let second = gate_once(&repo, &state, &id, Some(&passing));
+    assert_eq!(second.status.code(), Some(i32::from(RC_REFUSED)), "FAIL からの再 gate は rc 1");
+    assert!(
+        stderr_of(&second).contains("FAIL"),
+        "断る理由は「段は Gated」ではなく判定である: {}",
+        stderr_of(&second)
+    );
+    assert!(!passing_marker.exists(), "lens を起動しない");
+    assert_eq!(event_count(&state), before, "event を 1 件も書かない");
+    assert_eq!(
+        value_of(&verdict_pairs(&state, &id), "verdict"),
+        "FAIL",
+        "判定は書き換わらない（PASS の lens を渡しても）"
+    );
+    clean(&[&repo, &state]);
+}
+
+#[test]
+fn pipe_resume_reports_next_gate_on_inconclusive() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let id = implemented(&repo, &state, &path);
+    let first = gate_once(&repo, &state, &id, None);
+    assert_eq!(first.status.code(), Some(3), "測れなかった周の rc は 3");
+
+    // resume は **自動で測り直さない**（道具の不足は人が直す）。`--lens` を渡してあっても
+    // 撃たず、次に何をすればよいかだけを名乗って止まる。
+    let before = event_count(&state);
+    let marker = state.join("lens-ran");
+    let lens = fake_lens(&marker, &lens_verdict("PASS"));
+    let resumed = run_pipe(&[
+        "resume", "--run", &id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(), "--lens", &lens,
+    ]);
+    assert_eq!(resumed.status.code(), Some(3), "測れていない便の resume は rc 3");
+    assert!(
+        stdout_of(&resumed).contains("next=gate"),
+        "次の一手を名乗る: {}",
+        stdout_of(&resumed)
+    );
+    assert!(!marker.exists(), "resume は lens を起こさない（撃ち直すのは人）");
+    assert_eq!(event_count(&state), before, "何も書かない");
+    // **land を試して断られる形（吸収状態）に戻っていない**。
+    assert!(
+        !stderr_of(&resumed).contains("PASS でない"),
+        "land を試さない: {}",
+        stderr_of(&resumed)
+    );
     clean(&[&repo, &state]);
 }
 
