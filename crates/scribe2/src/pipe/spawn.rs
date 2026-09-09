@@ -6,6 +6,7 @@
 //! **scribe2 固有の env は 1 つも足さない**（C2.2・ADR-0004 §2.4）。runner へは
 //! 親の env をそのまま継承させ、必要な値は cmd の placeholder 置換で渡す。
 
+use super::approve::{block, needs_approval, Approve};
 use super::{branch_name, contract_path, emit, git_line, worktree_path, Budget, Emit};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
 use crate::fleet::store::LockPolicy;
@@ -32,6 +33,8 @@ pub struct Launch<'a> {
     pub contract: &'a Contract,
     /// runner のコマンド（placeholder を含む）。
     pub runner: &'a str,
+    /// 承認 event が在るか（replay の導出値）。
+    pub approved: bool,
     /// lock の待ち方。
     pub policy: LockPolicy,
 }
@@ -39,6 +42,12 @@ pub struct Launch<'a> {
 /// runner を起動して結果まで見届ける。**これが唯一の起動口である**。
 pub fn spawn(budget: Budget, launch: &Launch<'_>) -> Outcome {
     let _ = budget.write_set();
+    // **A1「実行前」の関門はここに置く**（設計 §5.5）。起動口が 1 本なので、この 1 行が
+    // spawn / resume / run のすべての経路を覆う。呼び手側に置くと経路が増えるたびに
+    // 素通りの穴が空く。
+    if needs_approval(launch.contract, launch.approved) {
+        return block(&approval(launch), &launch.contract.classes);
+    }
     let Some(base) = super::head_of(launch.repo) else {
         return refused(format!("{} の HEAD を読めない", launch.repo.display()));
     };
@@ -186,6 +195,17 @@ fn write_policy(worktree: &Path, write_set: &[String]) -> Result<PathBuf, String
     let body = format!("{}\n", write_set.join("\n"));
     std::fs::write(&path, body).map_err(|err| format!("{} を書けない: {err}", path.display()))?;
     Ok(path)
+}
+
+/// 承認まわりの材料を組む。
+fn approval<'a>(launch: &'a Launch<'a>) -> Approve<'a> {
+    Approve {
+        run: launch.run,
+        bead: launch.bead,
+        state_dir: launch.state_dir,
+        words: "",
+        policy: launch.policy,
+    }
 }
 
 /// 前提違反・使い方の誤り（rc 1 + stderr 1 行・何もしない）。

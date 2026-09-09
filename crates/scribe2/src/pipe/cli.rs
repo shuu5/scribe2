@@ -7,6 +7,7 @@
 //! 前提違反は **rc 1 + stderr 1 行で何もしない**（event も追記しない・設計 §4）。
 //! 契約 file が読めない周は「対象そのものが壊れている」ので rc 2 で、理由を全件出す。
 
+use super::approve::{Approve, RC_BLOCKED};
 use super::contract::Contract;
 use super::gate::{Gate, Limits};
 use super::land::Land;
@@ -34,7 +35,7 @@ const ROW_CAP: &str = "gate.token_cap";
 /// `pipe` の使い方。
 pub fn usage() -> String {
     format!(
-        "usage: {NAME} pipe <intake|spawn|gate|land|run|show|resume|stop> [--state-dir D] [--rules PATH] [flags]"
+        "usage: {NAME} pipe <intake|spawn|approve|gate|land|run|show|resume|stop> [--state-dir D] [--rules PATH] [flags]"
     )
 }
 
@@ -51,6 +52,7 @@ pub fn dispatch(args: &[String]) -> Outcome {
     match args.first().map(String::as_str) {
         Some("intake") => intake(args, policy),
         Some("spawn") => start(args, policy),
+        Some("approve") => by_run(args, |id| approve_run(args, id, policy)),
         Some("gate") => by_run(args, |id| gate_run(args, id, &manifest, policy)),
         Some("land") => by_run(args, |id| land_run(args, id, policy)),
         Some("run") => run_all(args, &manifest, policy),
@@ -232,6 +234,8 @@ struct Resolved {
     contract: Contract,
     /// 契約の bead id。
     bead: String,
+    /// 承認 event が在るか（replay の導出値）。
+    approved: bool,
 }
 
 /// 段の前提を確かめ、材料を永続面から解く。**3 つの段（spawn / gate / land）が共有する**。
@@ -260,6 +264,7 @@ fn resolve(args: &[String], id: &str, allowed: &[Stage]) -> Result<Resolved, Out
         repo,
         contract,
         bead: run.bead.clone(),
+        approved: run.approved,
     })
 }
 
@@ -288,9 +293,40 @@ fn launch(
             state_dir: &resolved.state_dir,
             contract: &resolved.contract,
             runner,
+            approved: resolved.approved,
             policy,
         },
     )
+}
+
+/// `pipe approve`。**逐語を event へ写すだけ**で、段は動かさない（resume が進める）。
+fn approve_run(args: &[String], id: &str, policy: LockPolicy) -> Outcome {
+    let words = match need(args, "--words") {
+        Ok(found) => found.to_owned(),
+        Err(reason) => return refused(reason),
+    };
+    // 段は問わない（承認は「これから起こすこと」への許しで、遅れて来ても記帳する）が、
+    // 便が在ることは確かめる＝無い run へ承認を書くと宛先の無い記録が残る。
+    let state_dir = match state_dir_of(args) {
+        Ok(found) => found,
+        Err(reason) => return refused(reason),
+    };
+    let state = match current(&state_dir) {
+        Ok(found) => found,
+        Err(errors) => {
+            return Outcome::failed(RC_BROKEN, errors.iter().map(StoreError::to_string).collect())
+        }
+    };
+    let Some(run) = state.runs.get(id) else {
+        return refused(format!("run {id} が無い"));
+    };
+    super::approve::approve(&Approve {
+        run: id,
+        bead: &run.bead,
+        state_dir: &state_dir,
+        words: &words,
+        policy,
+    })
 }
 
 /// `--run` を読んでから段の関数へ渡す。
@@ -454,6 +490,19 @@ fn resume(args: &[String], manifest: &Manifest, policy: LockPolicy) -> Outcome {
         Ok(Stage::Intake) => match need(args, "--runner") {
             Err(reason) => refused(reason),
             Ok(runner) => launch(args, &id, runner, policy, &[Stage::Intake]),
+        },
+        // Blocked から先へ進めるのは承認 event が在る周だけ。未承認は **rc 3 のまま
+        // 何も書かない**——待っている事実は既に Blocked が記帳しており、resume の
+        // たびに ApprovalRequested を積むと「何回聞いたか」が事実と食い違う。
+        Ok(Stage::Blocked) => match state.runs.get(&id).is_some_and(|run| run.approved) {
+            false => Outcome::failed_line(
+                RC_BLOCKED,
+                format!("pipe: run {id} は承認待ちである（pipe approve --words \"<user の逐語>\"）"),
+            ),
+            true => match need(args, "--runner") {
+                Err(reason) => refused(reason),
+                Ok(runner) => launch(args, &id, runner, policy, &[Stage::Blocked]),
+            },
         },
         Ok(stage) => refused(format!("run {id} の段 {} からは再開しない", stage.as_str())),
     }
