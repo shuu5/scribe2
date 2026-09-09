@@ -1,0 +1,165 @@
+# 規則の値の正本（憲法 C1「規則はデータ」）。機械が実行時に読む規則はこの file だけである。
+# 全行に user の裁定 id（ruling）と裁定の日付（ruled_at）が要る（憲法 C5）。裁定の無い行は
+# loader が拒む。user の逐語は書かない（本 repo は PUBLIC・SRS CON2）。
+# 行 id は憲法 §3 の行 id を接頭辞として持つ（compound 行は . で枝分かれ）か、MVP の運用値の
+# <領域>.<名> である。種類の一覧は crates 側の RuleKind が持つ。
+
+schema = 1
+
+[[rule]]
+id = "R-C4-1"
+kind = "CoreLines"
+value = 20000
+ruling = "RULING-v2-p1-exit-bundle 論点 2"
+ruled_at = "2026-09-07"
+
+[[rule]]
+id = "R-C4-2"
+kind = "ModuleLines"
+value = 1500
+ruling = "RULING-v2-p1-exit-bundle 論点 2"
+ruled_at = "2026-09-07"
+
+[[rule]]
+id = "R-C4-3"
+kind = "TestSrcRatioPct"
+value = 100
+ruling = "RULING-v2-p1-exit-bundle 論点 2"
+ruled_at = "2026-09-07"
+
+[[rule]]
+id = "R-C4-4.fn-lines"
+kind = "FnLines"
+value = 60
+ruling = "RULING-v2-p1-exit-bundle 論点 2"
+ruled_at = "2026-09-07"
+
+[[rule]]
+id = "R-C4-4.complexity"
+kind = "FnComplexity"
+value = 15
+ruling = "RULING-v2-p1-exit-bundle 論点 2"
+ruled_at = "2026-09-07"
+
+[[rule]]
+id = "R-C4-4.args"
+kind = "FnArgs"
+value = 5
+ruling = "RULING-v2-p1-exit-bundle 論点 2"
+ruled_at = "2026-09-07"
+
+[[rule]]
+id = "R-C7-1"
+kind = "DialogueSurface"
+value = "user-direct"
+ruling = "ADR-0003"
+ruled_at = "2026-09-09"
+
+[[rule]]
+id = "R-C8-1"
+kind = "MaturityCondition"
+value = "Verdict 一致率 95% 以上 × 連続 20 便 ／ K 指標 (K1〜K3) 閾値内 × 3 日 ／ 手動介入 0 × 3 日 ／ doctor 全 host 緑"
+enabled = false
+ruling = "RULING-v2-p1-exit-bundle 論点 9・ADR-0003"
+ruled_at = "2026-09-09"
+
+[[rule]]
+id = "R-C9-1"
+kind = "AccountSelection"
+value = "新規投入は 5h 線 ／ 移住 lane は線を外して継続優先 ／ 消費計画 = 7d 残量 × 残日数で lane 数 ／ 管理席 watchdog の検知条件と再起動先"
+enabled = false
+ruling = "RULING-v2-p1-exit-bundle 論点 8・U5"
+ruled_at = "2026-09-07"
+
+[[rule]]
+id = "R-C12-1"
+kind = "MutationSurvivalLine"
+value = "週次記録 (deny 化の裁定材料は実測 2 周分)"
+enabled = false
+ruling = "RULING-v2-p1-exit-bundle 論点 7"
+ruled_at = "2026-09-07"
+
+[[rule]]
+id = "R-C13-1"
+kind = "DepBudget"
+value = 12
+ruling = "RULING-v2-p1-exit-bundle 論点 3・4"
+ruled_at = "2026-09-07"
+
+[[rule]]
+id = "R-C13-1.per-pr"
+kind = "DepPerPr"
+value = 1
+ruling = "RULING-v2-p1-exit-bundle 論点 3・4"
+ruled_at = "2026-09-07"
+
+[[rule]]
+id = "R-C13-1.check-delta-ms"
+kind = "CheckDeltaMs"
+value = 300
+ruling = "RULING-v2-p1-exit-bundle 論点 3・4"
+ruled_at = "2026-09-07"
+
+[[rule]]
+id = "R-C13-2"
+kind = "CompileShape"
+value = "dev profile の debug 情報は line-tables-only・統合 test file 3 以下・runner nextest・proc-macro 展開後比率 25% 以下・critical path 上の 1 crate が総時間の 40% 超なら分割"
+ruling = "RULING-v2-p1-exit-bundle 論点 3・4"
+ruled_at = "2026-09-07"
+
+[[rule]]
+id = "R-C13-3"
+kind = "CompileSeconds"
+value = "増分 check p50 10 秒 以下・CI 5 分 以下・link 20% 以下・週次記録・前回比 +20% 悪化で原因 crate を名指しした issue を自動起票"
+enabled = false
+ruling = "RULING-v2-p1-exit-bundle 論点 3・4"
+ruled_at = "2026-09-07"
+
+[[rule]]
+id = "gate.lens_count"
+kind = "GateLensCount"
+value = 1
+ruling = "grill U3"
+ruled_at = "2026-09-07"
+
+[[rule]]
+id = "gate.token_cap"
+kind = "GateTokenCap"
+value = 150000
+ruling = "grill U3"
+ruled_at = "2026-09-07"
+
+[[rule]]
+id = "hook.budget_ms"
+kind = "HookBudgetMs"
+value = 2000
+ruling = "SRS NFR5 の user 承認"
+ruled_at = "2026-09-09"
+
+[[rule]]
+id = "pipe.stop_grace_ms"
+kind = "StopGraceMs"
+value = 2000
+ruling = "user 2026-09-09T09:08Z"
+ruled_at = "2026-09-09"
+
+[[rule]]
+id = "fleet.lock_retry_ms"
+kind = "LockRetryMs"
+value = 5000
+ruling = "user 2026-09-09T09:08Z"
+ruled_at = "2026-09-09"
+
+[[rule]]
+id = "fleet.lock_stale_ms"
+kind = "LockStaleMs"
+value = 30000
+ruling = "user 2026-09-09T09:08Z"
+ruled_at = "2026-09-09"
+
+[[rule]]
+id = "hook.timeout_s"
+kind = "HookTimeoutS"
+value = 10
+ruling = "user 2026-09-09T09:08Z"
+ruled_at = "2026-09-09"

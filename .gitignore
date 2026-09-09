@@ -17,6 +17,9 @@ embeddeddolt/
 .beads/events.jsonl
 # session 起動 hook が書く heartbeat（machine-local・working tree を汚すと done の定義の git status 空に抵触する）
 .beads/scribe-heartbeat
+# bd の write 系が書く push の telemetry（machine-local・同上）
+.beads/scribe-push-throttle
+.beads/scribe-push.log
 
 # 開発 session の作業記憶（/ready-compaction が退避・/rebrief が消費）
 /.claude-session/

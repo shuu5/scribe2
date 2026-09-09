@@ -51,3 +51,65 @@ pub const PRIVATE_PATH_MARKS: &[&str] = &[concat!("/", "home", "/"), concat!("~"
 /// 区別できない（xtask に同名 dev-dep を足しても検出できないのは既知の限界であり、
 /// crate 粒度の回復は leg 2 の所管である）。
 pub const ALLOWED_DEPS: &[(&str, &str)] = &[("dev-dependencies", "insta")];
+
+#[cfg(test)]
+mod tests {
+    use super::{MAX_CORE_LINES, MAX_FILE_LINES};
+    use crate::toml_lite::{quoted, sections};
+    use std::path::PathBuf;
+
+    /// `[[rule]]` の section header を [`sections`] が返す字面。
+    ///
+    /// `sections` は `[` を 1 つだけ剥がすので、array-of-tables は `[rule` になる。
+    const RULE_HEADER: &str = "[rule";
+
+    /// manifest の本文（workspace root は この crate の 2 つ上）。
+    fn manifest_text() -> String {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("rules")
+            .join("manifest.toml");
+        std::fs::read_to_string(&path)
+            .unwrap_or_else(|err| panic!("{} を読めない: {err}", path.display()))
+    }
+
+    /// 行 id を持つ `[[rule]]` の `value` を整数で引く。
+    fn int_value(text: &str, id: &str) -> Option<u64> {
+        for (header, pairs) in sections(text) {
+            if header != RULE_HEADER {
+                continue;
+            }
+            let found = pairs
+                .iter()
+                .find(|(key, _)| *key == "id")
+                .and_then(|(_, value)| quoted(value));
+            if found.as_deref() != Some(id) {
+                continue;
+            }
+            return pairs
+                .iter()
+                .find(|(key, _)| *key == "value")
+                .and_then(|(_, value)| value.trim().parse::<u64>().ok());
+        }
+        None
+    }
+
+    /// `limits.rs` の const と manifest の行が同じ値である（憲法 C14.2 の最小形）。
+    ///
+    /// const の manifest 移設は後続の便なので、いまは 2 面の写しの一致を歯で守る。
+    #[test]
+    fn limits_match_rules_manifest() {
+        let text = manifest_text();
+        assert_eq!(
+            int_value(&text, "R-C4-1"),
+            Some(MAX_CORE_LINES as u64),
+            "R-C4-1 と MAX_CORE_LINES"
+        );
+        assert_eq!(
+            int_value(&text, "R-C4-2"),
+            Some(MAX_FILE_LINES as u64),
+            "R-C4-2 と MAX_FILE_LINES"
+        );
+    }
+}
