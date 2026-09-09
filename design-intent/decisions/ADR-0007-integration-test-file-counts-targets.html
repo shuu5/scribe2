@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="folio-doc-type" content="adr">
+<meta name="folio-layer" content="project">
+<meta name="folio-version" content="0.4.6">
+<meta name="folio-status" content="accepted">
+<meta name="folio-stakeholders" content="Developer, AI Agent, External Reviewer">
+<meta name="folio-adr-id" content="0007">
+<meta name="folio-adr-date" content="2026-09-10">
+<title>ADR-0007 — 憲法 R-C13-2「統合 test file 3 以下」は cargo の integration test target の数で数える</title>
+<link rel="stylesheet" href="../../common.css">
+<script type="application/ld+json">
+{
+  "@context": {
+    "dc": "http://purl.org/dc/terms/",
+    "schema": "https://schema.org/",
+    "folio": "https://folio.dev/spec/v1/"
+  },
+  "@id": "./ADR-0007-integration-test-file-counts-targets.html",
+  "@type": "schema:TechArticle",
+  "dc:isPartOf": [
+    { "@id": "./README.html" }
+  ],
+  "dc:title": "ADR-0007 — 憲法 R-C13-2「統合 test file 3 以下」は cargo の integration test target の数で数える",
+  "folio:version": "0.4.6",
+  "folio:stakeholders": ["Developer", "AI Agent", "External Reviewer"],
+  "dc:references": [
+    { "@id": "../spec/constitution.html#c13" },
+    { "@id": "../spec/constitution.html#r-c13-2" },
+    { "@id": "../spec/constitution.html#c4" }
+  ]
+}
+</script>
+</head>
+<body>
+<!-- folio:chrome-top -->
+<a class="skip-link" href="#s1-context">本文へスキップ</a>
+<nav class="breadcrumb" aria-label="パンくず"><ol>
+  <li><a href="../index.html">design-intent</a></li>
+  <li><a href="./README.html">decisions</a></li>
+  <li aria-current="page">ADR-0007</li>
+</ol></nav>
+<!-- /folio:chrome-top -->
+
+<header class="doc-header">
+  <h1>ADR-0007 — 憲法 R-C13-2「統合 test file 3 以下」は cargo の integration test target の数で数える</h1>
+  <div class="meta">Status: accepted &middot; Date: 2026-09-10 &middot; version 0.4.6 (拘束する constitution の版) &middot; R-C13-2 の数え方の解釈を記録</div>
+</header>
+<!-- folio:chrome-toc -->
+<nav class="toc" aria-label="ページ内目次">
+<ol>
+  <li><a href="#s1-context">§1. Context</a></li>
+  <li><a href="#s2-decision">§2. Decision</a></li>
+  <li class="toc--sub"><a href="#s2-1-unit">§2.1 数える単位は integration test target</a></li>
+  <li class="toc--sub"><a href="#s2-2-how">§2.2 数える手段は cargo metadata</a></li>
+  <li class="toc--sub"><a href="#s2-3-scope">§2.3 射程外</a></li>
+  <li><a href="#s3-consequences">§3. Consequences</a></li>
+  <li><a href="#s4-alternatives">§4. Alternatives Considered</a></li>
+  <li><a href="#s5-trace">§5. Trace</a></li>
+</ol>
+</nav>
+<!-- /folio:chrome-toc -->
+
+<aside class="informative">
+<p>本 ADR は IETF <strong>RFC 2119</strong> および <strong>RFC 8174 / BCP 14</strong> に定義される MUST / SHALL / SHOULD / MAY のキーワード解釈規約に従う。 ADR は決定時点の記録 (frozen) であり、 改訂は本 ADR を supersede する新 ADR で行う。</p>
+</aside>
+
+<aside class="machine-readable" aria-hidden="true">
+  <dl>
+    <dt>id</dt><dd>ADR-0007</dd>
+    <dt>doc-type</dt><dd>adr</dd>
+    <dt>status</dt><dd>accepted</dd>
+    <dt>date</dt><dd>2026-09-10</dd>
+    <dt>version</dt><dd>0.4.6 (拘束する constitution の版・決定時点で凍結)</dd>
+    <dt>decided-by</dt><dd>設計 doc の先行記述 (2026-09-09) を ADR へ引き上げる契約化 (2026-09-10)。 閾値「3 以下」は不変ゆえ A2 の閾値変更には当たらない</dd>
+    <dt>stakeholders</dt><dd>Developer, AI Agent, External Reviewer</dd>
+    <dt>supersedes</dt><dd>無し (既存 ADR の規定を差し替えない・R-C13-2 の<strong>数え方</strong>の解釈を新たに記録する)</dd>
+    <dt>related</dt><dd>constitution C13 R-C13-2 / C4・SRS FR17 / FR18・設計 doc の rules manifest §2</dd>
+  </dl>
+</aside>
+
+<section id="s1-context" class="informative">
+<h2>§1. Context</h2>
+<p class="section-essence" data-audience="human">「統合 test の file は 3 つまで」という決まりがありますが、 何を 1 つと数えるのかが書かれていませんでした。 数え方しだいで、 いまの状態が「1 / 3」にも「6 / 3 で違反」にもなります。</p>
+<p data-audience="machine">憲法 <a href="../spec/constitution.html#c13">C13</a> の rules 行 <a href="../spec/constitution.html#r-c13-2">R-C13-2</a> は「統合 test file 3 以下」を deny (CI) の値として持つが、 <strong>何を 1 file と数えるか</strong>を定めていない。 設計 doc の rules manifest §2 は「cargo の integration test <strong>target</strong> の数で数える (<code>tests/&lt;dir&gt;/main.rs</code> は 1 target)」と読んで先に land したが (2026-09-09)、 その解釈は ADR に無い。 本 repo の作法は<strong>憲法条の解釈が要る便は実装前に ADR を書く</strong>と定めるので、 先行した解釈をここへ引き上げる。</p>
+<p data-audience="machine">現物 (本 ADR の記録時点・<code>cargo metadata --no-deps</code>): core crate の targets は <strong>lib 1 / bin 1 / test 1</strong> であり、 kind = test の target は <code>e2e</code> の <strong>1 本</strong>である。 一方 <code>crates/&lt;NAME&gt;/tests/e2e/</code> 配下の物理 <code>.rs</code> は <strong>6 本</strong> (<code>main.rs</code> + module 5) である。 ∴ 物理 file で数える読みでは<strong>すでに違反</strong>し、 target で数える読みでは <strong>1 / 3</strong> となる——数え方を決めないままでは、 同じ repo が同時に「違反」でも「余裕あり」でもある。</p>
+</section>
+
+<section id="s2-decision" class="normative">
+<h2>§2. Decision</h2>
+<p class="section-essence" data-audience="human">決めることは 3 つです。 何を 1 つと数えるか、 どうやって数えるか、 そして今回は決めない範囲はどこかです。</p>
+<p data-audience="machine">本 ADR は <a href="../spec/constitution.html#r-c13-2">R-C13-2</a> の<strong>数え方の解釈だけ</strong>を記録する。 閾値の実値 (3 以下) は不変であり、 憲法本文・rules 表・rules manifest の行はいずれも書き換えない。</p>
+
+<h3 id="s2-1-unit">§2.1 数える単位は integration test target</h3>
+<p class="section-essence" data-audience="human">cargo が「テスト用にまとめて build する 1 つのかたまり」を 1 と数えます。 その中でファイルを分けても数は増えません。</p>
+<p>R-C13-2 の「統合 test file」は <strong>cargo の integration test target 1 つを 1 と数える</strong> (MUST)。 <code>tests/&lt;dir&gt;/main.rs</code> と、 そこから <code>mod</code> で読み込まれる module file は<strong>合わせて 1</strong> である。</p>
+<p data-audience="machine">単位を target に置く理由は、 R-C13-2 が属する <a href="../spec/constitution.html#c13">C13</a> が測ろうとしているものが<strong>compile の決定論的な形</strong>だからである。 統合 test の数が compile 時間へ効くのは <strong>target の数</strong> (link される実行 file の数) であって、 その中の module 分割ではない。 module へ分ける自由を残しつつ target を増やさない形は <a href="../spec/constitution.html#c4">C4</a> (1 file の行数上限) とも両立する——<strong>1 file を小さく保つために module へ割る操作が、 別の条の違反を作らない</strong>。</p>
+
+<h3 id="s2-2-how">§2.2 数える手段は cargo metadata</h3>
+<p class="section-essence" data-audience="human">数えるときは cargo に聞きます。 ディレクトリを目で見て数えたり、 ファイル数を数えたりはしません。</p>
+<p>target の数は <code>cargo metadata</code> が返す targets のうち <strong>kind = test</strong> のものを数えて得る (MUST)。 物理 <code>.rs</code> file 数・dir の目視・glob の件数は用いない (MUST NOT)。</p>
+<p data-audience="machine">cargo metadata を正とするのは、 <strong>build する側が実際に何を target とみなすか</strong>がそこにしか無いためである。 file 名や配置の規約 (<code>tests/*.rs</code> が 1 file = 1 target・<code>tests/&lt;dir&gt;/main.rs</code> が dir = 1 target) は cargo 側の解決規則であり、 本 ADR がそれを写し取って別の場所で再実装すると、 規則が変わった日に<strong>写しだけが古い</strong>状態になる。</p>
+
+<h3 id="s2-3-scope">§2.3 射程外</h3>
+<p class="section-essence" data-audience="human">この記録は数え方だけを決めます。 上限の数を変えることも、 それを機械に見張らせることも、 ここでは決めません。</p>
+<p data-audience="machine">次は<strong>本 ADR の決定ではない</strong> (MUST NOT be read as such): 閾値の実値「3 以下」の変更 (憲法の閾値変更は user 裁定を要する別手続きであり、 本 ADR は<strong>不変</strong>のまま扱う)、 憲法 §3 rules 表と rules manifest の行の字面 (逐語のまま・解釈の置き場は本 ADR と設計 doc である)、 <strong>target 数を CI で deny する歯の実装</strong> (C13 の deny 面は別便の所管)、 統合 test の中身の分け方 (module 構成は設計の領分)。</p>
+</section>
+
+<section id="s3-consequences" class="informative">
+<h2>§3. Consequences</h2>
+<p class="section-essence" data-audience="human">良い点は、 数えた結果が人によって変わらなくなることです。 弱い点は、 その数え方を機械がまだ見張っていないことです。</p>
+<p data-audience="machine">Positive: 同じ repo に対して誰が数えても同じ数になる (現物では 1 / 3)。 統合 test を module へ割る refactoring が「file が増えた」と誤読されて条に触れることが無くなり、 <a href="../spec/constitution.html#c4">C4</a> の行数上限と R-C13-2 が互いを縛らない。</p>
+<p data-audience="machine">Negative: <strong>この数え方を測る歯はまだ無い</strong>。 target が 4 本へ増えても CI は止まらず、 気付くのは人が数えたときである (C13.4 の deny 面は別便)。 また target を 1 本に保つ運用は、 統合 test 全体が<strong>1 つの実行 file へ link される</strong>ことを意味し、 test の追加は link 時間へ直に効く——compile 予算 (R-C13-3) の側で観測する。</p>
+</section>
+
+<section id="s4-alternatives" class="informative">
+<h2>§4. Alternatives Considered</h2>
+<p class="section-essence" data-audience="human">2 つの案を退けました。 ファイルの数をそのまま数える案と、 crate を 1 つと数える案です。</p>
+<p data-audience="machine">案 (i) <strong>物理 <code>.rs</code> file の数で数える</strong>: 却下。 現物が <strong>6 本</strong>ゆえ採用した瞬間に違反となり、 かつ module へ割る操作 (C4 の行数上限を守るための正しい手) が違反を作る。 「file」という語の素直な読みではあるが、 C13 が測ろうとする compile の形とは対応しない。</p>
+<p data-audience="machine">案 (ii) <strong>「file」を「crate」と読む</strong>: 却下。 1 crate = 統合 test 1 本に固定され、 e2e とそれ以外を別 target へ分ける将来の自由を失う。 R-C13-2 の値「3 以下」が 3 を許していることとも噛み合わない (crate 読みでは 3 crate 分の統合 test を意味してしまう)。</p>
+</section>
+
+<section id="s5-trace" class="informative">
+<h2>§5. Trace</h2>
+<p class="section-essence" data-audience="human">出所は 2 件です。 設計の記録が先に同じ読みを書いていたことと、 上限の数は変えないという確認です。</p>
+<ul data-audience="machine">
+  <li>先行記述: 設計 doc の rules manifest §2 が同じ読み (target で数える) を書いて land した (<strong>2026-09-09</strong>)。 本 ADR はその解釈を記録面へ引き上げるものであり、 設計 doc 側の記述と食い違わない。</li>
+  <li>閾値の確認: 「3 以下」は<strong>不変</strong>である旨を <strong>2026-09-10</strong> に確認した。 閾値を動かさないため憲法の閾値変更 (user 裁定を要する手続き) には当たらない。 本 repo は public のため、 確認の逐語・席や台帳の識別子・host 名は本 file に載せない (出所は日付で指す)。</li>
+  <li>拘束条件: <a href="../spec/constitution.html#c13">C13</a> (compile と依存に予算) の rules 行 <a href="../spec/constitution.html#r-c13-2">R-C13-2</a>、 および <a href="../spec/constitution.html#c4">C4</a> (大きさの上限)。 要件は SRS FR17 (rules manifest) / FR18 (rules の検査)。</li>
+  <li>記録時点の現物: kind = test の target は <strong>1</strong>、 上限は <strong>3</strong>。</li>
+  <li>記録した日: 2026-09-10。</li>
+</ul>
+</section>
+
+<!-- folio:chrome-bottom -->
+<nav class="prevnext" aria-label="前後の文書">
+  <a class="prevnext__prev" href="ADR-0006-xtask-check-measure-tags.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">ADR-0006 — cargo xtask check が measure する tag の列挙 (ADR-0002 §2.4 の 10 本を 11 本へ部分 supersede・12 本目の案 ci-decl は不採用)</span></a>
+</nav>
+<script>
+(function () {
+  var openedForPrint = [];
+  window.addEventListener('beforeprint', function () {
+    openedForPrint = [];
+    var ds = document.querySelectorAll('details:not([open])');
+    for (var i = 0; i < ds.length; i++) { ds[i].setAttribute('open', ''); openedForPrint.push(ds[i]); }
+  });
+  window.addEventListener('afterprint', function () {
+    for (var i = 0; i < openedForPrint.length; i++) openedForPrint[i].removeAttribute('open');
+    openedForPrint = [];
+  });
+  if (!document.querySelector('[data-audience]')) return;
+  /* 既定 = 人間プレゼン型 (ADR-0040 / rules §11.3): script 経由で初期 class を付与するため
+     no-JS では付かず全文可視に graceful degrade する。 static DOM は全文を保持 (AI/検索/印刷は不変)。 */
+  document.body.classList.add('audience-human');
+  var bar = document.createElement('nav');
+  bar.className = 'audience-toggle';
+  bar.setAttribute('aria-label', '表示対象の切替');
+  var states = [['both', '両方'], ['human', '人間向け'], ['machine', '機械向け']];
+  for (var s = 0; s < states.length; s++) {
+    (function (mode, label) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      b.setAttribute('aria-pressed', mode === 'human' ? 'true' : 'false');
+      b.addEventListener('click', function () {
+        document.body.classList.remove('audience-human', 'audience-machine');
+        if (mode !== 'both') document.body.classList.add('audience-' + mode);
+        var bs = bar.querySelectorAll('button');
+        for (var j = 0; j < bs.length; j++) bs[j].setAttribute('aria-pressed', bs[j] === b ? 'true' : 'false');
+      });
+      bar.appendChild(b);
+    })(states[s][0], states[s][1]);
+  }
+  var bc = document.querySelector('nav.breadcrumb');
+  if (bc && bc.parentNode) { bc.parentNode.insertBefore(bar, bc.nextSibling); }
+  else { document.body.insertBefore(bar, document.body.firstChild); }
+})();
+</script>
+<!-- /folio:chrome-bottom -->
+</body>
+</html>

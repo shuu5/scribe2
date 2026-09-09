@@ -365,3 +365,8 @@ terms:
     domain: consumer
     definition: 作業記憶を退避し、 session を作り直し、 退避物から復元する一周 (SRS FR27)。 退避物が無い session では起こさない。
     relationships: [管理 tick, 開発 session]
+  - canonical: integration test target
+    domain: consumer
+    definition: cargo が kind = test として build する 1 つの単位。 dir 形の統合 test は main.rs と
+      その module を合わせて 1 と数え、 数は cargo metadata が返す targets で得る (R-C13-2 の数え方の単位・ADR-0007)。
+    relationships: [統合 test]
