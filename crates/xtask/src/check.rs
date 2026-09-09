@@ -27,8 +27,8 @@ const TEST_MOD_MARK: &str = "#[cfg(test)]";
 ///
 /// 測定一式は [`crate::paths_clean`] へ移したが、この名前だけは本 file に残す——
 /// 免除を測る歯が本 file の test 区間に在り、`#[cfg(test)]` を src 区間へ置くと
-/// test-src-ratio がそこから下を丸ごと test 区間と数えるからである（実測: 1414/7933
-/// → 2165/7024）。
+/// test-src-ratio がその行から下（本 file の残り全部）を test 区間として数えるからである。
+/// 実測値は本 file の行数そのものに依存するのでここへは焼かない（bead s2-07l.33 の notes）。
 pub(crate) const PATHS_CLEAN_SKIP: &str = ".beads/config.yaml";
 
 /// 検査対象 workspace の骨組み。root から 1 度だけ組み立てる。
@@ -603,7 +603,6 @@ fn measure_toolchain_pin(layout: &Layout) -> Measured {
         violations: violation.into_iter().collect(),
     }
 }
-
 
 /// file を読む。読めない理由はそのまま違反本文に出せる形にする。
 fn read_text(path: &Path) -> Result<String, String> {
