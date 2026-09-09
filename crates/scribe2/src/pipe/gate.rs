@@ -237,14 +237,20 @@ fn decide(entry: &Gate<'_>, worktree: &Path, measured: &Measured) -> (Verdict, S
             format!("diff {size} byte が cap {} を超えた", entry.limits.token_cap),
         );
     }
-    if entry.limits.lens_count == 0 {
-        return (Verdict::Pass, "lens を要らない規則である".to_owned());
-    }
-    let Some(cmd) = entry.lens else {
+    // **本数は照合する**。0 本（lens を呼ばずに通す）も 2 本以上（1 本で足りたことに
+    // する）も「lens の verdict」を得ていないので、判定順の 4 番目は成立しない。
+    // どちらも判定できていない周ゆえ INCONCLUSIVE へ倒す（AC3・C11.2）。
+    if entry.limits.lens_count != 1 {
         return (
             Verdict::Inconclusive,
-            format!("lens が {} 本要るのに --lens が無い", entry.limits.lens_count),
+            format!(
+                "規則は lens {} 本を定める（通せるのは 1 本だけ）",
+                entry.limits.lens_count
+            ),
         );
+    }
+    let Some(cmd) = entry.lens else {
+        return (Verdict::Inconclusive, "lens が要るのに --lens が無い".to_owned());
     };
     ask_lens(cmd, worktree, &measured.diff)
 }

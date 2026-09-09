@@ -136,12 +136,18 @@ fn run_id_of(out: &Output) -> String {
 
 /// intake を 1 回通して run id を返す。
 fn intake(repo: &Path, state: &Path, contract: &Path) -> String {
+    intake_bead(repo, state, contract, "s2-2e5")
+}
+
+/// bead を選んで intake を 1 回通す。**run id は `<bead>-<秒>`** なので、同じ秒に
+/// 2 便を起こす歯は bead を分ける（同 bead だと id が衝突して 2 便目が断られる）。
+fn intake_bead(repo: &Path, state: &Path, contract: &Path, bead: &str) -> String {
     let out = run_pipe(&[
         "intake",
         "--contract",
         &contract.display().to_string(),
         "--bead",
-        "s2-2e5",
+        bead,
         "--repo",
         &repo.display().to_string(),
         "--state-dir",
@@ -701,6 +707,38 @@ fn fake_lens(marker: &Path, body: &str) -> String {
     format!("cat >/dev/null; touch '{}'; echo '{body}'", marker.display())
 }
 
+/// `--rules` に渡す tmp manifest を書く（gate の 2 行 + lock の 2 行だけ）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn write_rules(dir: &Path, name: &str, lens_count: u64, cap: u64) -> PathBuf {
+    let row = |id: &str, kind: &str, value: u64| {
+        format!(
+            "[[rule]]\nid = \"{id}\"\nkind = \"{kind}\"\nvalue = {value}\nruling = \"t\"\nruled_at = \"d\"\n"
+        )
+    };
+    let body = format!(
+        "schema = 1\n\n{}\n{}\n{}\n{}",
+        row("gate.lens_count", "GateLensCount", lens_count),
+        row("gate.token_cap", "GateTokenCap", cap),
+        row("fleet.lock_retry_ms", "LockRetryMs", 5000),
+        row("fleet.lock_stale_ms", "LockStaleMs", 30000),
+    );
+    let path = dir.join(name);
+    fs::write(&path, body).expect("tmp manifest を書ける");
+    path
+}
+
+/// `--rules` を足して gate を 1 回撃つ。
+fn gate_with_rules(repo: &Path, state: &Path, id: &str, rules: &Path, lens: &str) -> Output {
+    run_pipe(&[
+        "gate", "--run", id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(),
+        "--rules", &rules.display().to_string(), "--lens", lens,
+    ])
+}
+
 /// 3 値を返す fake lens の本文。
 fn lens_verdict(verdict: &str) -> String {
     format!("{{\"verdict\":\"{verdict}\",\"evidence\":\"fake\"}}")
@@ -848,12 +886,7 @@ fn pipe_gate_inconclusive_when_diff_exceeds_cap() {
     let path = write_contract(&repo, &[], &[]);
     let id = implemented(&repo, &state, &path);
     // cap を 1 byte にした manifest を渡す（**数値は規則から来る**ことを測る）。
-    let rules = repo.join("tight.toml");
-    fs::write(
-        &rules,
-        "schema = 1\n\n[[rule]]\nid = \"gate.lens_count\"\nkind = \"GateLensCount\"\nvalue = 1\nruling = \"t\"\nruled_at = \"d\"\n\n[[rule]]\nid = \"gate.token_cap\"\nkind = \"GateTokenCap\"\nvalue = 1\nruling = \"t\"\nruled_at = \"d\"\n\n[[rule]]\nid = \"fleet.lock_retry_ms\"\nkind = \"LockRetryMs\"\nvalue = 5000\nruling = \"t\"\nruled_at = \"d\"\n\n[[rule]]\nid = \"fleet.lock_stale_ms\"\nkind = \"LockStaleMs\"\nvalue = 30000\nruling = \"t\"\nruled_at = \"d\"\n",
-    )
-    .expect("tmp manifest を書ける");
+    let rules = write_rules(&repo, "tight.toml", 1, 1);
     let marker = state.join("lens-ran");
     let lens = fake_lens(&marker, &lens_verdict("PASS"));
     let out = run_pipe(&[
@@ -873,6 +906,29 @@ fn pipe_gate_inconclusive_when_diff_exceeds_cap() {
     );
     let bytes: u64 = value_of(&pairs, "diff_bytes").parse().unwrap_or(0);
     assert!(bytes > 1, "diff の byte 数を実測して比べている: {bytes}");
+
+    // **境界**: 設計は「diff byte > cap → INCONCLUSIVE」＝等号は超えていない。
+    // 同じ内容の別便を cap = ちょうどその byte 数で撃ち、PASS 側に残ることを測る。
+    let twin = intake_bead(&repo, &state, &path, "s2-edge");
+    let out = run_pipe(&[
+        "spawn", "--run", &twin, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(),
+        "--runner", "echo x >> src/lib.rs && git add -A && git commit -q -m runner",
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "spawn: {}", stderr_of(&out));
+    let exact = write_rules(&repo, "exact.toml", 1, bytes);
+    let edge = gate_with_rules(&repo, &state, &twin, &exact, &lens);
+    assert_eq!(
+        edge.status.code(),
+        Some(i32::from(RC_OK)),
+        "cap ちょうどは超えていない（> であって >= でない）: {}",
+        stdout_of(&edge)
+    );
+    assert_eq!(
+        value_of(&verdict_pairs(&state, &twin), "diff_bytes"),
+        bytes.to_string(),
+        "同じ内容の便なので diff の byte 数も同じ"
+    );
     clean(&[&repo, &state]);
 }
 
@@ -1095,9 +1151,16 @@ fn pipe_e2e_toy_repo_lands_one_bead_with_fake_runner() {
     );
     let id = run_id_of(&out);
     assert!(show_line(&repo, &state, &id).contains("stage=Landed"), "段は Landed");
-    // 人由来の event は 1 件も無い（承認の要らない契約ゆえ）。
+    // 人由来の event は 1 件も無い（承認の要らない契約ゆえ）。**この行だけでは (b) の
+    // code を測れない**（human を書くのは (c) の `ApprovalReceived` だけ）ので、
+    // 「1 便が最後まで載った」ことを event の側からも測る。
     let log = fs::read_to_string(state.join("fleet").join("events.jsonl")).expect("event log");
     assert!(!log.contains("\"actor\":\"human\""), "人手 0 で通る: {log}");
+    let landed_events = log
+        .lines()
+        .filter(|line| line.contains("\"kind\":\"RunDone\"") && line.contains("\"stage\":\"Landed\""))
+        .count();
+    assert_eq!(landed_events, 1, "RunDone stage=Landed が 1 件: {log}");
     clean(&[&repo, &state]);
 }
 
@@ -1176,5 +1239,180 @@ fn pipe_gate_inconclusive_on_unlisted_lens_verdict() {
         "INCONCLUSIVE",
         "未知の verdict を通さない"
     );
+    clean(&[&repo, &state]);
+}
+
+// ── lens review（2026-09-09）で「測っていない」と名指しされた経路を塞ぐ歯 ──────
+
+#[test]
+fn pipe_gate_inconclusive_when_lens_count_is_not_one() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let marker = state.join("lens-ran");
+    let lens = fake_lens(&marker, &lens_verdict("PASS"));
+    // 0 本（lens を呼ばずに通す）も 2 本（1 本で足りたことにする）も**判定できていない**。
+    // 規則 1 行で gate が飾りになる形を塞ぐ（AC3「偽の PASS 0 件」）。
+    for (count, bead) in [(0_u64, "s2-zero"), (2, "s2-two")] {
+        let id = intake_bead(&repo, &state, &path, bead);
+        let out = run_pipe(&[
+            "spawn", "--run", &id, "--repo", &repo.display().to_string(),
+            "--state-dir", &state.display().to_string(),
+            "--runner", "echo x >> src/lib.rs && git add -A && git commit -q -m runner",
+        ]);
+        assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "spawn: {}", stderr_of(&out));
+        let rules = write_rules(&repo, &format!("lens{count}.toml"), count, 150_000);
+        let gated = gate_with_rules(&repo, &state, &id, &rules, &lens);
+        assert_eq!(gated.status.code(), Some(3), "lens {count} 本は判定不能で rc 3");
+        assert!(
+            stdout_of(&gated).contains("verdict=INCONCLUSIVE"),
+            "lens {count} 本: {}",
+            stdout_of(&gated)
+        );
+        // **land まで行かせない**（面 5 に PASS を残さない）。
+        let landed = land_once(&repo, &state, &id);
+        assert_eq!(landed.status.code(), Some(i32::from(RC_REFUSED)), "PASS でなければ land しない");
+    }
+    assert!(!marker.exists(), "0 本の周は lens を起動しない");
+    clean(&[&repo, &state]);
+}
+
+#[test]
+fn pipe_gate_inconclusive_when_lens_exits_nonzero() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let id = implemented(&repo, &state, &path);
+    // JSON は正しく吐くが rc≠0 で終える lens。**出力を信じて PASS へ倒さない**。
+    let lens = format!("cat >/dev/null; echo '{}'; exit 7", lens_verdict("PASS"));
+    let out = gate_once(&repo, &state, &id, Some(&lens));
+    assert_eq!(out.status.code(), Some(3), "lens が rc≠0 なら rc 3");
+    assert!(stdout_of(&out).contains("verdict=INCONCLUSIVE"), "{}", stdout_of(&out));
+    assert!(
+        value_of(&verdict_pairs(&state, &id), "evidence").contains("rc 7"),
+        "理由に lens の rc が残る: {}",
+        value_of(&verdict_pairs(&state, &id), "evidence")
+    );
+    clean(&[&repo, &state]);
+}
+
+#[test]
+fn pipe_gate_inconclusive_when_lens_output_is_not_json() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let id = implemented(&repo, &state, &path);
+    // rc 0 だが JSON 行が無い lens。**読めなかったを通ったに化けさせない**。
+    let lens = "cat >/dev/null; echo looks-fine".to_owned();
+    let out = gate_once(&repo, &state, &id, Some(&lens));
+    assert_eq!(out.status.code(), Some(3), "parse 不能なら rc 3");
+    assert!(stdout_of(&out).contains("verdict=INCONCLUSIVE"), "{}", stdout_of(&out));
+    assert!(
+        value_of(&verdict_pairs(&state, &id), "evidence").contains("JSON 行が無い"),
+        "理由: {}",
+        value_of(&verdict_pairs(&state, &id), "evidence")
+    );
+    clean(&[&repo, &state]);
+}
+
+#[test]
+fn pipe_gate_passes_diff_to_lens_on_stdin() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let id = implemented(&repo, &state, &path);
+    let seen = state.join("stdin-bytes");
+    // lens が **実際に受け取った byte 数**を書き出す（設計 §5.3 / FR9 の中心）。
+    let lens = format!("wc -c > '{}'; echo '{}'", seen.display(), lens_verdict("PASS"));
+    let out = gate_once(&repo, &state, &id, Some(&lens));
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "PASS: {}", stderr_of(&out));
+    let received = fs::read_to_string(&seen).expect("lens が受けた byte 数を読める");
+    let received = received.trim().to_owned();
+    assert_ne!(received, "0", "diff を渡さずに lens を呼んでいない");
+    assert_eq!(
+        received,
+        value_of(&verdict_pairs(&state, &id), "diff_bytes"),
+        "lens が受けた byte 数と verdict.json の diff_bytes は同じ diff を指す"
+    );
+    clean(&[&repo, &state]);
+}
+
+#[test]
+fn pipe_gate_refuses_wrong_stage() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let id = intake(&repo, &state, &path);
+    let before = event_count(&state);
+    let marker = state.join("lens-ran");
+    let lens = fake_lens(&marker, &lens_verdict("PASS"));
+    // Intake の便に gate は掛からない。**段違いは何もせず rc 1**（Failed で終端させない）。
+    let out = gate_once(&repo, &state, &id, Some(&lens));
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "段違いは rc 1");
+    assert!(stderr_of(&out).contains("段は Intake である"), "理由: {}", stderr_of(&out));
+    assert_eq!(event_count(&state), before, "段違いは event を 1 件も書かない");
+    assert!(!marker.exists(), "lens を起動しない");
+    // 終端していないので、正しい段まで進めれば通る（resume できる）。
+    let out = run_pipe(&[
+        "spawn", "--run", &id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(),
+        "--runner", "echo x >> src/lib.rs && git add -A && git commit -q -m runner",
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "spawn: {}", stderr_of(&out));
+    // 逆向きも同じ: Implemented の便に land は掛からない。
+    let landed = land_once(&repo, &state, &id);
+    assert_eq!(landed.status.code(), Some(i32::from(RC_REFUSED)), "gate 前の land は rc 1");
+    assert!(
+        stderr_of(&landed).contains("段は Implemented である"),
+        "理由: {}",
+        stderr_of(&landed)
+    );
+    // gate を通した便に gate は 2 度掛からない（段は 1 方向にしか進まない）。
+    let gated = gate_once(&repo, &state, &id, Some(&lens));
+    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "1 度目は通る: {}", stderr_of(&gated));
+    let again = gate_once(&repo, &state, &id, Some(&lens));
+    assert_eq!(again.status.code(), Some(i32::from(RC_REFUSED)), "2 度目の gate は rc 1");
+    assert!(stderr_of(&again).contains("段は Gated である"), "理由: {}", stderr_of(&again));
+    clean(&[&repo, &state]);
+}
+
+#[test]
+fn pipe_land_reports_unmeasured_main_apart_from_red() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let marker = state.join("lens-ran");
+    let id = gated_pass(&repo, &state, &path, &marker);
+    // main 実測用の tmp の置き場を塞ぐ＝**verify を 1 行も撃てない**。
+    let blocked = repo.join(".worktrees").join("scribe2").join("verify").join(&id);
+    fs::create_dir_all(&blocked).expect("tmp の置き場を塞げる");
+    fs::write(blocked.join("occupied"), "x\n").expect("塞げる");
+    let out = land_once(&repo, &state, &id);
+    assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "測れない周は rc 2");
+    assert!(
+        stderr_of(&out).contains("実測できない"),
+        "**赤ではなく測れない**と名乗る: {}",
+        stderr_of(&out)
+    );
+    assert!(!stderr_of(&out).contains("赤い"), "赤を名乗らない: {}", stderr_of(&out));
+    let log = fs::read_to_string(state.join("fleet").join("events.jsonl")).expect("event log");
+    assert!(log.contains("\"detail\":\"main-unmeasured\""), "別の名で残す: {log}");
+    assert!(!log.contains("\"detail\":\"main-red\""), "main-red は書かない: {log}");
+    assert!(!land::verdicts_path(&state).exists(), "面 5 へ export しない");
+    clean(&[&repo, &state]);
+}
+
+#[test]
+fn pipe_land_removes_dirty_tmp_worktree() {
+    let (repo, state) = repo_with_state();
+    // detached（= main 実測の tmp）のときだけ中間物を作る verify 行。便の worktree は
+    // branch 上なので clean のままで、retire の move が塞がれない。
+    let line = r#"verify = ["git rev-parse --abbrev-ref HEAD | grep -qx HEAD && touch build-artifact.txt; true"]"#;
+    let path = write_contract(&repo, &["verify"], &[line]);
+    let marker = state.join("lens-ran");
+    let id = gated_pass(&repo, &state, &path, &marker);
+    let out = land_once(&repo, &state, &id);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "land は rc 0: {}", stderr_of(&out));
+    // **中間物で dirty になった tmp を leak させない**（設計 §5.4 の `--force`）。
+    assert!(
+        !repo.join(".worktrees").join("scribe2").join("verify").join(&id).exists(),
+        "dirty な tmp worktree も畳む"
+    );
+    let listed = git(&repo, &["worktree", "list"]);
+    assert!(!listed.contains("/verify/"), "worktree の登録も残らない: {listed}");
     clean(&[&repo, &state]);
 }

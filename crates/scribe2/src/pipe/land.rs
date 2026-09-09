@@ -39,6 +39,20 @@ const RETIRED_DIR: &str = "retired";
 /// 衝突しない。
 const CHECK_DIR: &str = "verify";
 
+/// main 実測の結果。**「赤かった」と「測れなかった」を混ぜない**。
+///
+/// gate が「測れなかったを通ったに化けさせない」と決めているのと同じ理由で、land も
+/// 「測れなかった」を「赤かった」に化けさせない。実測を 1 行も撃てていないのに
+/// `main-red` を記帳すると、event log が事実と違うものを述べる。
+enum MainCheck {
+    /// verify 全行が rc 0。
+    Green,
+    /// 1 行以上が rc≠0（**実測した上での赤**）。
+    Red(String),
+    /// 実測そのものができなかった（tmp worktree を切れない等）。
+    Unmeasurable(String),
+}
+
 /// land 1 回の材料。
 pub struct Land<'a> {
     /// 便 id。
@@ -92,10 +106,11 @@ pub fn land(entry: &Land<'_>) -> Outcome {
         Ok(found) => found,
         Err(reason) => return broken(reason),
     };
-    if let Err(reason) = verify_main(entry, &new) {
-        return main_red(entry, &reason);
+    match verify_main(entry, &new) {
+        MainCheck::Green => finish(entry, &worktree, &new),
+        MainCheck::Red(reason) => main_red(entry, &reason),
+        MainCheck::Unmeasurable(reason) => main_unmeasured(entry, &reason),
     }
-    finish(entry, &worktree, &new)
 }
 
 /// worktree の tree を 1 commit にして main を CAS で進める。**tree の同一を実測する**。
@@ -116,16 +131,18 @@ fn squash(entry: &Land<'_>, worktree: &Path, old: &str) -> Result<String, String
     Ok(new)
 }
 
-/// 進めた main を別の worktree で実測する。1 行でも rc≠0 なら `Err`。
-fn verify_main(entry: &Land<'_>, new: &str) -> Result<(), String> {
+/// 進めた main を別の worktree で実測する。
+fn verify_main(entry: &Land<'_>, new: &str) -> MainCheck {
     let tmp = check_path(entry.repo, entry.run);
     if let Some(parent) = tmp.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|err| format!("{} を作れない: {err}", parent.display()))?;
+        if let Err(err) = std::fs::create_dir_all(parent) {
+            return MainCheck::Unmeasurable(format!("{} を作れない: {err}", parent.display()));
+        }
     }
     let path = tmp.display().to_string();
     if !git_ok(entry.repo, &["worktree", "add", "--detach", &path, new]) {
-        return Err(format!("{} を切れない", tmp.display()));
+        // **ここで赤を名乗らない**: verify 行を 1 本も撃てていない。
+        return MainCheck::Unmeasurable(format!("{} を切れない", tmp.display()));
     }
     let red = entry
         .contract
@@ -133,12 +150,13 @@ fn verify_main(entry: &Land<'_>, new: &str) -> Result<(), String> {
         .iter()
         .filter(|line| run_line(&tmp, line) != 0)
         .count();
-    // 成果は `new` に載っているので、この tmp だけは remove してよい（N1.2 の例外）。
+    // 成果は `new` に載っているので、この tmp だけは remove してよい（設計 §5.4）。
+    // `--force` は verify が tmp に生んだ中間物ごと畳むためで、履歴・データは触らない。
     let _ = git_ok(entry.repo, &["worktree", "remove", "--force", &path]);
     if red > 0 {
-        return Err(format!("main で verify の {red} 行が rc≠0"));
+        return MainCheck::Red(format!("main で verify の {red} 行が rc≠0"));
     }
-    Ok(())
+    MainCheck::Green
 }
 
 /// export → `Landed` → 後始末。ここまで来た周は land が成立している。
@@ -233,6 +251,27 @@ fn main_red(entry: &Land<'_>, reason: &str) -> Outcome {
     match emitted {
         Err(err) => broken(err.to_string()),
         Ok(()) => refused(format!("main が赤い（{reason}）・revert しない")),
+    }
+}
+
+/// main を実測できなかった周。**赤とは別の名で残す**（rc 2 = 対象が壊れている）。
+fn main_unmeasured(entry: &Land<'_>, reason: &str) -> Outcome {
+    let emitted = emit(
+        entry.state_dir,
+        &Emit {
+            kind: EventKind::RunStage,
+            run: entry.run,
+            bead: entry.bead,
+            stage: Some(Stage::Failed),
+            seat: None,
+            pid: None,
+            detail: Some("main-unmeasured".to_owned()),
+        },
+        entry.policy,
+    );
+    match emitted {
+        Err(err) => broken(err.to_string()),
+        Ok(()) => broken(format!("main を実測できない（{reason}）・revert しない")),
     }
 }
 
