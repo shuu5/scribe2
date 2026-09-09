@@ -352,3 +352,16 @@ terms:
     domain: consumer
     definition: index を母集団に、 tracked file の本文へ private path 形が残っていないことを測る measure tag。
     relationships: [measure tag]
+  # ---------------------------------------------------------------- 開発 session の自律機能 (SRS v0.2 FR25〜FR27)
+  - canonical: cap guard
+    domain: consumer
+    definition: 開発 session の context 使用量が rules 行の上限に達したとき、 退避以外の編集を止める hook の段 (SRS FR26)。 上限の値は rules 行が持つ。
+    relationships: [開発 session, hook, manifest]
+  - canonical: 管理 tick
+    domain: consumer
+    definition: 開発 session が黙っていないかを周期で見て、 条件が揃ったときだけ pointer 1 行を注入する仕組み (SRS FR27)。
+    relationships: [開発 session, cycle]
+  - canonical: cycle
+    domain: consumer
+    definition: 作業記憶を退避し、 session を作り直し、 退避物から復元する一周 (SRS FR27)。 退避物が無い session では起こさない。
+    relationships: [管理 tick, 開発 session]
