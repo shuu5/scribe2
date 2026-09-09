@@ -2,6 +2,9 @@
 name = "xtask"
 version = "0.1.0"
 edition = "2021"
+# 二択の SPDX 式（全文は repo root の LICENSE-MIT / LICENSE-APACHE）。裁定と経緯は
+# 台帳 s2-0wu が持つ。deny.toml の private ignore を外す前提でもある。
+license = "MIT OR Apache-2.0"
 publish = false
 
 [lints]
