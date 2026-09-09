@@ -68,7 +68,8 @@ fn main() -> ExitCode {
 
 #[cfg(test)]
 mod tests {
-    use super::{render_name, NAME};
+    use super::{render_doctor, render_name, render_usage, render_version, NAME};
+    use std::ffi::OsStr;
     use std::path::PathBuf;
 
     /// workspace root（この crate の 2 つ上）。
@@ -101,5 +102,85 @@ mod tests {
         assert_eq!(NAME, manifest_name, "name.rs の NAME と [package] name");
         assert_eq!(render_name(), manifest_name, "出力層へ渡る文字列と [package] name");
         assert_eq!(plugin_name, manifest_name, "plugin.json の name と [package] name");
+    }
+    /// `doctor` / usage / `--version` の外形を 1 つの snapshot に固定する。
+    ///
+    /// 結合の順序は doctor の 2 行 → usage → version で、区切り文字は LF ただ 1 種
+    /// である。版番号は assert の前に `[version]` へ置換する（`default-features =
+    /// false` では `Settings::add_filter` が無いので `filters` feature に頼らない）。
+    #[test]
+    fn doctor_external_form() {
+        let mut lines = render_doctor();
+        lines.push(render_usage());
+        lines.push(render_version());
+        let masked = lines.join("\n").replace(env!("CARGO_PKG_VERSION"), "[version]");
+        insta::assert_snapshot!(masked);
+    }
+
+    /// insta の force 系 env が立っていない（未設定・空・`0` のいずれか）。
+    fn force_flag_is_off(value: Option<&OsStr>) -> bool {
+        match value {
+            None => true,
+            Some(found) => matches!(found.to_str(), Some("") | Some("0")),
+        }
+    }
+
+    /// `INSTA_UPDATE` が許容集合（未設定・空 / `no` / `new` / `auto`）の内側か。
+    ///
+    /// `unseen` は insta 1.48.0 では「snapshot file が在る」で真になる極性反転を持ち、
+    /// **snapshot 不在時に InPlace へ落ちて実出力から `.snap` を無音生成し rc 0 で
+    /// 通す**ので、安全そうな名前だが許容集合へ入れない（`always` / `1` / `force` と
+    /// 未知値も同じく落とす）。
+    fn update_mode_is_safe(value: Option<&OsStr>) -> bool {
+        match value {
+            None => true,
+            Some(found) => matches!(
+                found.to_str(),
+                Some("") | Some("no") | Some("new") | Some("auto")
+            ),
+        }
+    }
+
+    /// insta の判定を無効化する経路が **判定プロセスの実効 env / file** に無いこと。
+    ///
+    /// 外から経路を列挙して塞ぐのをやめた面である。env はどの機構で設定されても子
+    /// プロセスが必ず見るので cargo config の `[env]` も `$CARGO_HOME` も
+    /// setup-script も一度に閉じ、config file は insta 1.48.0 の探索集合が 3 名で
+    /// 閉じているのでその不在で閉じる。
+    #[test]
+    fn insta_env_is_clean() {
+        for name in [
+            "INSTA_FORCE_PASS",
+            "INSTA_FORCE_UPDATE",
+            "INSTA_FORCE_UPDATE_SNAPSHOTS",
+        ] {
+            let value = std::env::var_os(name);
+            assert!(
+                force_flag_is_off(value.as_deref()),
+                "{name} が立っている（値 {value:?}）: insta の判定が無効化される"
+            );
+        }
+        let update = std::env::var_os("INSTA_UPDATE");
+        assert!(
+            update_mode_is_safe(update.as_deref()),
+            "INSTA_UPDATE が許容外（値 {update:?}）: 許すのは未設定 / 空 / no / new / auto だけである"
+        );
+        let runtime = std::env::var_os("INSTA_WORKSPACE_ROOT");
+        assert!(
+            runtime.is_none(),
+            "INSTA_WORKSPACE_ROOT が実行時 env に在る（値 {runtime:?}）: config 探索の root が差し替わる"
+        );
+        assert!(
+            option_env!("INSTA_WORKSPACE_ROOT").is_none(),
+            "INSTA_WORKSPACE_ROOT が compile 時 env に在る: config 探索の root が差し替わる"
+        );
+        for name in [".config/insta.yaml", "insta.yaml", ".insta.yaml"] {
+            let path = workspace_root().join(name);
+            assert!(
+                std::fs::symlink_metadata(&path).is_err(),
+                "insta の config file が在る: {}（force_pass / update を外から立てられる）",
+                path.display()
+            );
+        }
     }
 }

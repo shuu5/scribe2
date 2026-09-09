@@ -1,0 +1,8 @@
+---
+source: crates/scribe2/src/main.rs
+expression: masked
+---
+scribe2
+scribe2 [version]
+usage: scribe2 <name|--version|doctor>
+scribe2 [version]

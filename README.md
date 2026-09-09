@@ -18,5 +18,7 @@ P2 骨格の bootstrap 段 1。v2 は当面 **v1 の pipeline（scribe v1 の器
 ## cargo workspace（P2 leg 0）
 
 - **NAME 1 定数**: 名前の字面を持つ `.rs` は `crates/scribe2/src/name.rs` ただ 1 本で、`xtask check` の `name-literal` が機械で守る。
-- **`cargo xtask check`**: core 行数 / 1 file 行数 / test:src 比 / plugin manifest parity / lints 集合と opt-in / 直接依存 0 本 / toolchain pin を測り、違反 1 件 1 行で rc 1 を返す。
+- **`cargo xtask check`**: core 行数 / 1 file 行数 / test:src 比 / plugin manifest parity / lints 集合と opt-in / 直接依存は allowlist（本便は dev-dep の insta 1 本）/ toolchain pin を測り、違反 1 件 1 行で rc 1 を返す。
+- **flip check の区間置換規則**: `cargo xtask flip-check --base <ref>` は変更 `.rs` ごとに「base の src 区間 + HEAD の test 区間」を base tree へ重ねて runner を撃つ（test 区間 = 最初の行頭 `#[cfg(test)]` 以降・`crates/*/tests/*.rs` は全体）。
+- **本便が使う道具 2 本**: `cargo install --locked cargo-deny@0.20.2` / `cargo install --locked cargo-insta@1.48.0`（dev-dep の `insta` も 1.48.0 に pin）。
 - **CI 3 job**: `nextest`（`cargo nextest run --workspace`）→ `clippy`（`cargo clippy --workspace --all-targets -- -D warnings`）→ `xtask-check`（`cargo xtask check`）。

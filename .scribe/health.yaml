@@ -2,7 +2,8 @@ suites:
   - {name: nextest, kind: test, cmd: "cargo nextest run --workspace --no-tests=fail", timeout_sec: 60}
   - {name: clippy, kind: lint, cmd: "cargo clippy --workspace --all-targets -- -D warnings", timeout_sec: 60}
   - {name: xtask-check, kind: lint, cmd: "cargo xtask check", timeout_sec: 60}
-full: [nextest, clippy, xtask-check]
+  - {name: deny, kind: lint, cmd: "cargo deny check bans licenses sources", timeout_sec: 120}
+full: [nextest, clippy, xtask-check, deny]
 quick: []
 runner: local
 coalesce: latest-head

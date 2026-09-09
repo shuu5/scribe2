@@ -2,6 +2,7 @@
 name = "scribe2"
 version = "0.1.0"
 edition = "2021"
+publish = false
 
 [lints]
 workspace = true
@@ -9,3 +10,4 @@ workspace = true
 [dependencies]
 
 [dev-dependencies]
+insta = { version = "1.48.0", default-features = false }
