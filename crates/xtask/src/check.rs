@@ -27,6 +27,9 @@ const TEST_MOD_MARK: &str = "#[cfg(test)]";
 /// （bd が生成し private path 形の例をコメントに持つため）。
 const PATHS_CLEAN_SKIP: &str = ".beads/config.yaml";
 
+/// index が symlink に付ける mode（`git ls-files -s` の 1 列目）。
+const SYMLINK_MODE: &str = "120000";
+
 /// 検査対象 workspace の骨組み。root から 1 度だけ組み立てる。
 pub struct Layout {
     /// workspace root（全 path はここからの相対で解決し cwd を直読みしない）。
@@ -601,9 +604,32 @@ fn measure_toolchain_pin(layout: &Layout) -> Measured {
 }
 
 /// paths-clean の母集団（tracked file の repo 相対 path）と root 一致判定の結果。
+/// index が持つ tracked file 1 件。
+///
+/// **mode と oid を運ぶ**のは symlink のためである。symlink の「中身」は作業木では
+/// 追跡先の file であって link target 文字列ではないので、作業木から読むと
+/// private path 形の target（`git ls-files` には出るが本文としては読めない）が
+/// 素通りする。index の blob を読めば target 文字列そのものが得られる。
+struct TrackedFile {
+    /// repo 相対 path。
+    rel: String,
+    /// index の mode（symlink は 120000）。
+    mode: String,
+    /// blob の oid。
+    oid: String,
+}
+
+impl TrackedFile {
+    /// index の mode が symlink か。
+    fn is_symlink(&self) -> bool {
+        self.mode == SYMLINK_MODE
+    }
+}
+
+/// paths-clean の母集団を測れたかどうか。
 enum Tracked {
     /// `<root>` が repo root であり tracked file を列挙できた。
-    Listed(Vec<String>),
+    Listed(Vec<TrackedFile>),
     /// `<root>` が repo root でない（flip-check の base tree はこの枝に落ちる）。
     NotRepoRoot,
     /// 測れなかった（fail-closed で `n/a` へ落とさない）。
@@ -656,14 +682,44 @@ fn split_nul(raw: &[u8]) -> Vec<String> {
         .collect()
 }
 
+/// `git ls-files -s -z` の 1 件（`<mode> <oid> <stage>\t<path>`）を読む。
+///
+/// 形が合わない行は**落とさず捨てる**のではなく `None` を返し、呼び手が
+/// 「列挙できなかった」へ倒す——母集団の欠けを静かな 0 件にしないためである。
+fn parse_ls_entry(part: &str) -> Option<TrackedFile> {
+    let (meta, rel) = part.split_once('\t')?;
+    let mut fields = meta.split_whitespace();
+    let mode = fields.next()?.to_owned();
+    let oid = fields.next()?.to_owned();
+    fields.next()?;
+    Some(TrackedFile {
+        rel: rel.to_owned(),
+        mode,
+        oid,
+    })
+}
+
 /// paths-clean の母集団を data 化して固定する（cwd を直読みしない）。
 fn tracked_files(root: &Path) -> Tracked {
     match root_is_repo_root(root) {
         Err(reason) => Tracked::Unmeasurable(reason),
         Ok(false) => Tracked::NotRepoRoot,
-        Ok(true) => match git_stdout(root, &["ls-files", "-z"]) {
+        Ok(true) => match git_stdout(root, &["ls-files", "-s", "-z"]) {
             Err(reason) => Tracked::Unmeasurable(format!("tracked file を列挙できない: {reason}")),
-            Ok(raw) => Tracked::Listed(split_nul(&raw)),
+            Ok(raw) => {
+                let parts = split_nul(&raw);
+                let listed: Vec<TrackedFile> =
+                    parts.iter().filter_map(|part| parse_ls_entry(part)).collect();
+                if listed.len() == parts.len() {
+                    Tracked::Listed(listed)
+                } else {
+                    Tracked::Unmeasurable(format!(
+                        "tracked file の {} 件中 {} 件しか読めない（ls-files -s の形が違う）",
+                        parts.len(),
+                        listed.len()
+                    ))
+                }
+            }
         },
     }
 }
@@ -676,10 +732,10 @@ fn measure_paths_clean(layout: &Layout) -> Measured {
             fact: "paths-clean=n/a(not-a-repo-root)".to_owned(),
             violations: Vec::new(),
         },
-        Tracked::Listed(rels) if rels.is_empty() => {
+        Tracked::Listed(listed) if listed.is_empty() => {
             failed("paths-clean", "tracked file が 0 件である")
         }
-        Tracked::Listed(rels) => scan_private_paths(&layout.root, &rels),
+        Tracked::Listed(listed) => scan_private_paths(&layout.root, &listed),
     }
 }
 
@@ -688,23 +744,23 @@ fn measure_paths_clean(layout: &Layout) -> Measured {
 /// 本文は **byte で読み byte で検索する**。`String` へ通すと非 UTF-8 の 1 byte を混ぜる
 /// だけで file 全体が読めなくなり、needle が素通りするからである。読めない file
 /// （作業木から消えている・permission が無い等）は無言で skip せず違反として数える。
-/// 母集団は index だが本文は作業木から読むので、index にしか在らない blob
-/// （tracked symlink の link target を含む）はこの面では測らない。
-fn scan_private_paths(root: &Path, rels: &[String]) -> Measured {
+///
+/// **symlink は index の blob を読む**（作業木から読むと追跡先の中身になり、link target
+/// 文字列そのものが母集団から落ちる）。通常 file は従来どおり作業木から読む——tracked
+/// でも作業木側が書き換わっている周に、index の古い blob で合格させないためである。
+fn scan_private_paths(root: &Path, listed: &[TrackedFile]) -> Measured {
     let mut violations = Vec::new();
     let mut scanned = 0;
-    for rel in rels {
-        if rel == PATHS_CLEAN_SKIP {
-            continue;
-        }
-        match fs::read(root.join(rel)) {
-            Err(err) => violations.push(format!(
-                "paths-clean: {rel} を読めない: {err}（読めない tracked file は違反である）"
+    for file in listed {
+        let rel = &file.rel;
+        match body_of(root, file) {
+            Err(reason) => violations.push(format!(
+                "paths-clean: {rel} を読めない: {reason}（読めない tracked file は違反である）"
             )),
             Ok(bytes) => {
                 scanned += 1;
                 violations.extend(
-                    private_path_lines(&bytes)
+                    violating_lines(rel, &bytes)
                         .into_iter()
                         .map(|line| format!("paths-clean: {rel}:{line} に private path 形が在る")),
                 );
@@ -715,6 +771,42 @@ fn scan_private_paths(root: &Path, rels: &[String]) -> Measured {
         fact: format!("paths-clean={scanned}"),
         violations,
     }
+}
+
+/// 走査する本文を取る。symlink だけ index の blob（= link target 文字列）を読む。
+fn body_of(root: &Path, file: &TrackedFile) -> Result<Vec<u8>, String> {
+    if file.is_symlink() {
+        return git_stdout(root, &["cat-file", "blob", &file.oid]);
+    }
+    fs::read(root.join(&file.rel)).map_err(|err| err.to_string())
+}
+
+/// 違反として数える行番号。免除 file では **コメント行だけ**を除く。
+///
+/// file 全文の免除は「その file の中でだけ private path を書き放題」という穴になる。
+/// 免除の理由は **道具が生成した説明コメントに例として private path 形が載る**ことなので、
+/// 免除もコメント行に限る（設定値として書いた private path は違反のままにする）。
+fn violating_lines(rel: &str, bytes: &[u8]) -> Vec<usize> {
+    let lines = private_path_lines(bytes);
+    if rel != PATHS_CLEAN_SKIP {
+        return lines;
+    }
+    lines
+        .into_iter()
+        .filter(|line| !is_comment_line(bytes, *line))
+        .collect()
+}
+
+/// 1 起点の行番号の行がコメント行か（行頭の空白の後の 1 文字が `#`）。
+fn is_comment_line(bytes: &[u8], line: usize) -> bool {
+    bytes
+        .split(|byte| *byte == b'\n')
+        .nth(line.saturating_sub(1))
+        .and_then(|body| {
+            let at = body.iter().position(|byte| !byte.is_ascii_whitespace())?;
+            body.get(at).copied()
+        })
+        .is_some_and(|head| head == b'#')
 }
 
 /// private path 形を含む行の番号を昇順・重複なしで返す（行中のどこに在っても違反）。
@@ -1267,6 +1359,51 @@ mod tests {
             head.contains("docs/bin.md:2"),
             "違反本文に相対 path と行番号が載るはず: {head}"
         );
+    }
+
+    /// tracked symlink の **link target 文字列**を母集団に入れる。
+    ///
+    /// 作業木から読むと symlink の中身は追跡先の file になるので、target に private path
+    /// 形が在っても素通りする。index の blob（mode 120000）を読めば target そのものが出る。
+    #[test]
+    fn paths_clean_reads_tracked_symlink_target() {
+        let violations = check_fixture(|dir| {
+            let mark = format!("{}home{}", "/", "/");
+            fs::create_dir_all(dir.join("docs")).expect("fixture に docs を作れる");
+            std::os::unix::fs::symlink(format!("{mark}x/secret"), dir.join("docs/link"))
+                .expect("fixture に symlink を張れる");
+        });
+        assert_single(&violations, "paths-clean");
+        let head = violations.first().map(String::as_str).unwrap_or_default();
+        // **行番号まで見る**。dangling symlink は作業木から読めないので、blob を見ない
+        // 実装でも「読めない tracked file は違反」で `docs/link` を含む 1 件が出てしまい、
+        // file 名だけの assert は素通りする（review 2026-09-10 critical・実測で再現した）。
+        // 行番号が付くのは **本文を走査できた**ときだけである。
+        assert!(
+            head.contains("docs/link:1"),
+            "link target の 1 行目を走査した違反のはず: {head}"
+        );
+    }
+
+    /// 免除 file の免除は **コメント行だけ**である（全文免除にすると、その file の中では
+    /// private path を書き放題という穴になる）。
+    #[test]
+    fn paths_clean_skip_exempts_only_comment_lines_of_beads_config() {
+        let mark = format!("{}home{}", "/", "/");
+        let commented = format!("# example: {mark}someone/repo\nprefix: s2\n");
+        let ok = check_fixture(|dir| write_at(dir, super::PATHS_CLEAN_SKIP, &commented));
+        assert!(
+            !ok.iter().any(|line| line.starts_with("paths-clean")),
+            "コメント行だけなら免除される: {ok:?}"
+        );
+        // 行末コメントを持つ**設定行**は免除されない（行のどこかに `#` が在れば免除、と
+        // する実装はここで落ちる＝免除の fail-open）。字下げコメントは免除される
+        // （行頭空白を読み飛ばさない実装はここで落ちる）。
+        let live = format!("  # 字下げ: {mark}a\ndb-path: {mark}someone/db  # 行末 note\n");
+        let bad = check_fixture(|dir| write_at(dir, super::PATHS_CLEAN_SKIP, &live));
+        assert_single(&bad, "paths-clean");
+        let head = bad.first().map(String::as_str).unwrap_or_default();
+        assert!(head.contains(":2"), "非コメント行だけを名指すはず: {head}");
     }
 
     /// `../..` 形の root（`git rev-parse --show-toplevel` の出力と字面では一致しない）
