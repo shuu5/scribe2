@@ -1,6 +1,6 @@
 # scribe2 SRS（MVP）— folio S4 generator の入力 contract（機械 SSoT）
 #
-# 生成: ~/.claude/plugins/folio/.claude-plugin/design-system/generator/assemble-srs.sh <本 file> → srs.html
+# 生成: folio plugin の design-system/generator にある assemble-srs.sh <本 file> → srs.html
 #       → inject-prose.sh srs.prose.yaml → verify-srs（floor）→ ceiling（fidelity-srs / persona-walk-srs / completeness-critic-srs）
 # 出所: 運用像 v1（user 裁定 2026-09-09・6 論点の grill）・要件 doc v0.1.10 の v2 行（写しは requirements-catalog.html）・憲法 v0.4.6。
 # 読者 = この器で開発する人と AI。 専門語にはやさしい言い換えを併記する。 本 repo は PUBLIC ゆえ絶対 path・口座名・user 逐語は書かない。
