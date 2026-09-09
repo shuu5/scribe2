@@ -106,7 +106,7 @@
 
 <section id="s2-decision" class="normative">
 <h2>§2. Decision</h2>
-<p class="section-essence" data-audience="human">決めたことは 5 つです。 (1) 状態は「1 行 1 出来事を末尾に足していく JSONL の file 1 つ」に置き、 SQLite は次の版で依存の確認を経てから入れます。 (2) 前の版と共有する 5 つの接点の file の形を固定します。 (3) 契約 file と規則の値の file は、 標準ライブラリだけで読める小さな TOML の形にします。 (4) 環境変数で設定を受け渡しません。 置き場は引数や repo 内の決まった場所で渡します。 (5) file の形には版番号を付け、 壊す変更は版を上げて行います。</p>
+<p class="section-essence" data-audience="human">決めたことは 5 つです。 (1) 状態は「1 行 1 出来事を末尾に足していく JSONL の file 1 つ」に置き、 SQLite は次の版で依存の確認を経てから入れます。 (2) 前の版と共有する 5 つの接点の file の形を固定します。 (3) 契約 file と規則の値の file は、 標準ライブラリだけで読める小さな TOML の形にします。 (4) 環境変数を読みません (HOME も読みません)。 置き場は引数と、 repo に紐づけた git の local 設定で渡します。 (5) file の形には版番号を付け、 壊す変更は版を上げて行います。</p>
 
 <h3 id="s2-1-persistence">§2.1 永続面 = 追記だけの JSONL 1 file (C3 の MVP 解釈)</h3>
 <p class="section-essence" data-audience="human">「1 つの database file」を、 MVP では「追記だけの JSONL 1 file」と読みます。 各行に host 名を持たせるので、 憲法が求める「host 列」も満たします。 SQLite は次の版で、 依存の追加を user に確認してから入れます。</p>
@@ -135,7 +135,7 @@
       <tr><td>5 oracle</td><td><code>&lt;state_dir&gt;/fleet/verdicts.jsonl</code> に land ごと 1 行 <code>{"schema":1,"run","bead","sha","verdict","evidence","ts"}</code> を append。 evidence は <code>verdict.json</code> の path</td><td><a href="../spec/srs.html#FR12">FR12</a></td></tr>
     </tbody>
   </table>
-  <p>path・file 名・rc 語彙は<strong>版番号に依らず固定</strong>する (R-O3)。 <code>&lt;state_dir&gt;</code> の既定は <code>$HOME/.local/state/&lt;NAME&gt;/</code> (NAME 定数から導出・C2.2)。</p>
+  <p>path・file 名・rc 語彙は<strong>版番号に依らず固定</strong>する (R-O3)。 面 5 は要件カタログ R-O3 では「oracle 再 gate」(前の版が次の版の land を独立に gate し直す面) だが、 <a href="./ADR-0003-constitution-v1-abandon-rewrite.html">ADR-0003</a> により前の版が再 gate する形は無くなった。 v2 が固定するのは verdict を<strong>外へ出す</strong>面 (verdicts.jsonl) だけであり、 読み手が再 gate するかは読み手の版が決める。 <code>&lt;state_dir&gt;</code> は §2.4 のとおり repo ごとに git の local 設定で紐づける (env からも HOME からも導かない)。</p>
 </div>
 
 <h3 id="s2-3-contract-and-manifest">§2.3 契約 file と rules manifest = TOML subset</h3>
@@ -146,18 +146,20 @@
     <dt>契約 file</dt>
     <dd>key = <code>goal</code> / <code>done</code> / <code>size</code> / <code>owner</code> / <code>disposition</code> / <code>write-set</code> / <code>verify</code> / <code>req</code> / <code>design</code> / <code>classes</code> (任意)。 <code>req</code> (SRS の要件 id・1 本以上) と <code>design</code> (設計 doc の repo 相対 path) は SRS FR2 の帰結として必須。 <code>verify</code> の各要素は 1 行で完結する。 設計は <code>docs/design/pipeline.md</code> §3。</dd>
     <dt>rules manifest</dt>
-    <dd><code>rules/manifest.toml</code>・<code>schema = 1</code>・行 = <code>id</code> / <code>kind</code> / <code>value</code> / <code>enabled</code> / <code>origin</code> / <code>ruling</code> / <code>ruled_at</code>。 憲法 §3 の行 id と字面一致させる。 user 逐語の key は持たない (PUBLIC repo)。 設計は <code>docs/design/rules-manifest.md</code>。</dd>
+    <dd><code>rules/manifest.toml</code>・<code>schema = 1</code>・行 = <code>id</code> / <code>kind</code> / <code>value</code> / <code>enabled</code> / <code>ruling</code> / <code>ruled_at</code>。 <strong>全行が user の裁定 id を持つ</strong> (C5・裁定の無い行は loader が拒む)。 憲法 §3 の行 id は manifest の行 id の接頭辞として一致する。 user 逐語の key は持たない (PUBLIC repo)。 tracked な manifest は <strong>build 時に binary へ埋め込む</strong> (<code>include_str!</code>) ので、 別 repo の worktree で走る gate も path に依存せず同じ規則を読む。 <code>--rules &lt;path&gt;</code> は test 用の override。 設計は <code>docs/design/rules-manifest.md</code>。</dd>
     <dt>出所</dt><dd><a href="../spec/constitution.html#c1">C1</a> (manifest は TOML・未知 key 拒否・起動時 1 回読み)・<a href="../spec/srs.html#FR17">FR17</a>・xtask の既存 scanner (<code>toml_lite</code>) と同形</dd>
   </dl>
 </div>
 
 <h3 id="s2-4-no-env-seam">§2.4 env seam を持たない (C2.2 の適用)</h3>
-<p class="section-essence" data-audience="human">「状態の置き場」や「触ってよい file の一覧」を環境変数で渡すのはやめます。 置き場は引数で、 一覧は作業場所の git の私有 dir に置いた file で、 実装役への情報は起動コマンドの穴埋めで渡します。 環境変数を読むのは HOME だけで、 それも 1 か所に閉じます。</p>
+<p class="section-essence" data-audience="human">「状態の置き場」や「触ってよい file の一覧」を環境変数で渡すのはやめ、 HOME も読みません。 置き場は、 その repo を器に紐づけるときに git の local 設定へ書いておき、 引数で上書きできます。 触ってよい file の一覧は作業場所の git の私有 dir に置いた file で、 実装役への情報は起動コマンドの穴埋めで渡します。</p>
 <div data-audience="machine">
-  <p class="ears" data-ears-pattern="ubiquitous"><span class="ears-id">D-4</span>: scribe2 <span class="ears-shall NOT">SHALL NOT</span> read any environment variable other than <code>HOME</code>, <span class="ears-shall">SHALL</span> confine the reading of <code>HOME</code> to exactly one glue function that derives the default state directory, and <span class="ears-shall">SHALL</span> pass every other location or policy as a command-line argument, a file under the worktree's private git directory, or a placeholder substituted into the runner command.</p>
+  <p class="ears" data-ears-pattern="ubiquitous"><span class="ears-id">D-4</span>: scribe2 <span class="ears-shall">SHALL NOT</span> read any environment variable, <span class="ears-shall">SHALL</span> take the state directory of a served repository from that repository's local git configuration key derived from NAME (written once by <code>vessel init --state-dir</code>) or from an explicit <code>--state-dir</code> argument, and <span class="ears-shall">SHALL</span> pass every other location or policy as a command-line argument, a file under the worktree's private git directory, or a placeholder substituted into the runner command.</p>
   <dl>
     <dt>機構</dt>
-    <dd>全 subcommand が <code>--state-dir &lt;dir&gt;</code> を持つ (test は tmp を指す)。 guard の policy は <code>&lt;git-dir&gt;/&lt;NAME&gt;/write-set.txt</code> (worktree ごとに私有・tracked 面に触れない・<code>git status</code> を汚さない)。 runner cmd の <code>{run}</code> <code>{worktree}</code> <code>{contract}</code> <code>{write_set}</code> <code>{base}</code> を置換する。 headless wrapper が子 process へ設定 dir を渡す行為は「読む」ではないため本条に触れない。</dd>
+    <dd><code>vessel init --state-dir &lt;dir&gt;</code> が <code>git config --local &lt;NAME&gt;.stateDir &lt;dir&gt;</code> を書く (key 名は NAME 定数から導出・C2.2 の「state directory は NAME から導く」の MVP 形)。 <code>hook</code> と <code>pipe</code> はそれを <code>git config --get</code> で読み、 <code>fleet</code> は <code>--state-dir</code> を必須にする (既定を持たない)。 guard の policy は <code>&lt;git-dir&gt;/&lt;NAME&gt;/write-set.txt</code> (worktree ごとに私有・tracked 面に触れない・<code>git status</code> を汚さない)。 runner cmd の <code>{run}</code> <code>{worktree}</code> <code>{contract}</code> <code>{write_set}</code> <code>{base}</code> を置換し、 scribe2 固有の env は 1 つも足さない (親の env はそのまま継承)。 hooks.json の command に書く <code>${…_BIN:-&lt;NAME&gt;}</code> の展開は Claude Code 側の shell が行い、 scribe2 は読まない。 headless wrapper が子 process (claude) へ設定 dir を環境変数として渡す行為は SRS FR5「口座は環境変数で切替」の履行であり、 「読む」ではないため本条に触れない。</dd>
+    <dt>解釈</dt>
+    <dd>C2.2 は「env を直読しない」「新しい env seam を作らない」「state dir を NAME から導く」の 3 点を課す。 HOME を読んで既定を組む案は 1 点目に当たるため採らない (std に HOME を介さず home dir を得る API は無く、 依存 0 本のまま条文を字面どおり守る唯一の道は「読まない」である)。 repo ごとの git local 設定は tracked 面に無く、 key 名が NAME から導出されるので 3 点目を満たす。</dd>
     <dt>出所</dt><dd><a href="../spec/constitution.html#c2">C2.2</a>。 前の器で <code>SCRIBE_*</code> env が 533 種に増えて改名不能になった実測 (器 SPEC §7)。</dd>
   </dl>
 </div>
@@ -173,7 +175,7 @@
 </div>
 
 <h3 id="s2-6-out-of-scope">§2.6 本 ADR の射程外</h3>
-<p data-audience="machine">依存 OSS の追加・削除は決めない (rtk / graphify の seam と依存予算は別 ADR)。 folio の位置は決めない (別 ADR)。 SQLite 化の時期と schema は決めない (v3 の A3 を通す周で新 ADR)。 憲法の条文は 1 字も変えない (本 ADR は C3 / C2.2 の<em>解釈</em>を記録する)。 口座・lease・退役・tmux 席の状態 (C3 の残りの列・C9) は MVP の event log に持たせない (SRS scope out)。</p>
+<p data-audience="machine">依存 OSS の追加・削除は決めない (rtk / graphify の seam と依存予算は別 ADR)。 folio の位置は決めない (別 ADR)。 SQLite 化の時期と schema は決めない (v3 の A3 を通す周で新 ADR)。 憲法の条文も SRS の要件文も 1 字も変えない (本 ADR は C3 / C2.2 の<em>解釈</em>を記録する。 FR5「口座は環境変数で切替」は子 process への設定であり、 §2.4 と矛盾しない)。 口座・lease・退役・tmux 席の状態 (C3 の残りの列・C9) は MVP の event log に持たせない (SRS scope out)。</p>
 </section>
 
 <section id="s3-consequences" class="informative">
@@ -184,7 +186,7 @@
   <li>直接依存 0 本 (<a href="../spec/srs.html#NFR3">NFR3</a>) を保ったまま fleet の永続面が手に入る。 cell の sandbox が crates.io を引けなくても build できる。</li>
   <li>現在地が replay で決まるため、 process を殺して別 process で resume できる (SRS AC4)。 席の記憶や散文を判定入力にしない (C3.3) 形が構造で決まる。</li>
   <li>跨版 5 面の path と rc 語彙が版番号に依らず固定され、 v2 が「前の版」になる日に同じ面をそのまま提供できる (R-O3)。</li>
-  <li>env seam が 0 のため、 改名 (NAME 定数の差替え) が env の洗い替えを伴わない。 test が env の漏れに左右されない。</li>
+  <li>env を 1 つも読まないため、 改名 (NAME 定数の差替え) が env の洗い替えを伴わず、 test が env の漏れに左右されない。 manifest を埋め込むので gate がどの repo で走っても規則は 1 つ。</li>
   <li>契約 file と manifest が同じ scanner で読めるため、 形式の実装が 1 本で済む。</li>
 </ul>
 <h3>Negative</h3>
@@ -192,12 +194,13 @@
   <li><strong>無限追記</strong>: event log は圧縮も rotation も持たない。 1 便あたり 10 行程度ゆえ MVP では問題にならないが、 v3 で SQLite 化するか rotation を足す判断が要る。</li>
   <li><strong>lock は同 host 内のみ</strong>: 複数 host からの append は想定しない (C3 の host 列は「どこで起きたか」を記録するだけで、 cross-host の直列化は担わない)。 fleet を複数 host で共有する形は v3 の SQLite / 同期の手番。</li>
   <li><strong>drift の歯が無い</strong>: manifest が憲法 §3 の行 id と字面一致するよう設計したが、 §3 の HTML と manifest を突合する CI の歯 (C14.2) は本 ADR の時点で存在しない。 最小形 (xtask の閾値 const と manifest の値の一致) だけを rules manifest の契約に含める。</li>
-  <li><strong>HOME 依存</strong>: state dir の既定は HOME を要する。 HOME が無い環境 (一部の CI / container) では <code>--state-dir</code> の明示が必須になる。</li>
+  <li><strong>repo の初期化が要る</strong>: state dir は <code>vessel init --state-dir</code> を 1 回打った repo でしか解決しない。 未初期化の repo では hook は黙り、 <code>pipe</code> は rc 1 で止まる (fail-closed)。</li>
+  <li><strong>manifest の版は binary の版</strong>: 埋め込みゆえ manifest を直しても再 build するまで効かない。 tracked file と binary の drift は「build して使う」運用で吸収する (test の override は <code>--rules</code>)。</li>
   <li>guard の policy を git dir に置くため、 git を使わない repo では guard が不活性になる (git は core 依存ゆえ許容)。</li>
 </ul>
 <h3>Neutral</h3>
 <ul>
-  <li>本 ADR は user 裁定を要しない (依存の増減も条文改訂も無い)。 前提の MVP 切り直しは user 裁定 2026-09-09。</li>
+  <li>本 ADR は user 裁定を要しない (依存の増減も条文改訂も無く、 C2.2 の例外も作らない)。 前提の MVP 切り直しは user 裁定 2026-09-09。 AI が提案した運用の数値 (停止の猶予・lock の再試行と stale 線・hook の timeout) は本 ADR では決めず、 C5 の手続き (user 裁定 id 付きの rules 行) で manifest に入る。</li>
   <li>REORG 案が予約していた ADR 番号 (0004 = 依存予算・0005 = folio) は 0005 / 0006 へ繰り下がる。 番号は land 順で採る。</li>
 </ul>
 </section>
@@ -213,7 +216,9 @@
     <tr><td>永続 案 3 lock 無しの append</td><td>複数 process の同時 append を許す</td><td>同 host の並列 write で行が interleave する</td><td>却下</td></tr>
     <tr><td><strong>永続 案 4 lock 付き append-only JSONL 1 file</strong></td><td>本 ADR §2.1</td><td>C3 の 3 要件を満たし依存 0 本。 fail-closed reader で NFR4</td><td><strong>採用</strong></td></tr>
     <tr><td>受け渡し 案 a env (<code>&lt;NAME&gt;_STATE_DIR</code> 等)</td><td>state dir / write-set / run 情報を env で</td><td>C2.2 (env 直読禁止・seam 新設禁止)。 前の器の env 533 種の再演</td><td>却下</td></tr>
-    <tr><td><strong>受け渡し 案 b 引数 + git dir + placeholder</strong></td><td>本 ADR §2.4</td><td>env を読まずに test と runner の両方へ届く</td><td><strong>採用</strong></td></tr>
+    <tr><td>受け渡し 案 a′ HOME だけ読んで既定を組む</td><td>state dir の既定 = <code>$HOME/.local/state/&lt;NAME&gt;/</code></td><td>「HOME 以外は読まない」は C2.2 の SHALL NOT の縮小であって解釈ではなく、 AI 可決の範囲を外れる (lens 指摘)。 読まない形 (git local 設定 + 引数) で条文どおりにできる</td><td>却下</td></tr>
+    <tr><td><strong>受け渡し 案 b 引数 + git local 設定 + git dir + placeholder</strong></td><td>本 ADR §2.4</td><td>env を 1 つも読まずに hook・test・runner の全部へ届く</td><td><strong>採用</strong></td></tr>
+    <tr><td>manifest 案 実行時に cwd 相対の <code>rules/manifest.toml</code> を読む</td><td>gate が走る repo の root から読む</td><td>toy repo の worktree に manifest は無く、 gate が規則を見失う (lens 指摘)。 埋め込み + <code>--rules</code> override にする</td><td>却下</td></tr>
     <tr><td>形式 案 i JSON</td><td>契約 file と manifest を JSON で</td><td>裁定 id を添えて人が手で編集する file としては読みにくい。 xtask の既存 scanner と二重化</td><td>却下</td></tr>
     <tr><td><strong>形式 案 ii TOML subset</strong></td><td>本 ADR §2.3</td><td>C1 の例示 (TOML) と一致。 std だけの scanner が既に 1 本在る</td><td><strong>採用</strong></td></tr>
     <tr><td>marker 案 版番号入りの file 名</td><td><code>.&lt;NAME&gt;2</code> 等</td><td>次の版のたびに前の版の hook を直す (R-O3 違反)。 器 SPEC §7 の却下案</td><td>却下</td></tr>
@@ -227,7 +232,7 @@
 <ul data-audience="machine">
   <li>前提: MVP 切り直しの user 裁定 (2026-09-09・逐語は repo 外)。 器 SPEC v0.4.6 §4 (state store は std の JSONL・SQLite は v3)・§7 (marker の字面)・§12.2 (跨版 5 面)。</li>
   <li>憲法: <a href="../spec/constitution.html#c1">C1</a> (manifest は TOML 1 file)・<a href="../spec/constitution.html#c2">C2.2</a> (env 直読禁止)・<a href="../spec/constitution.html#c3">C3</a> (1 つの file・host 列)・<a href="../spec/constitution.html#c6">C6.3</a> (計測は append-only store 1 つ)・<a href="../spec/constitution.html#c11">C11.2</a> (極性は型で)・<a href="../spec/constitution.html#c13">C13</a> / <a href="../spec/constitution.html#a3">A3</a> (依存の予算と確認)・<a href="../spec/constitution.html#n4">N4</a> (schema 非互換は新しい版)。</li>
-  <li>SRS: <a href="../spec/srs.html#FR3">FR3</a> / <a href="../spec/srs.html#FR12">FR12</a> / <a href="../spec/srs.html#FR13">FR13</a> / <a href="../spec/srs.html#FR17">FR17</a> / <a href="../spec/srs.html#FR19">FR19</a> / <a href="../spec/srs.html#NFR3">NFR3</a> / <a href="../spec/srs.html#NFR4">NFR4</a>。 要件カタログ R-O3 (5 面・版に依らず固定)・R-I16 (記帳は追記)・R-G10 (破損入力は loud)。</li>
+  <li>SRS: <a href="../spec/srs.html#FR3">FR3</a> / <a href="../spec/srs.html#FR5">FR5</a> (口座は子 process の環境変数で切替) / <a href="../spec/srs.html#FR12">FR12</a> / <a href="../spec/srs.html#FR13">FR13</a> / <a href="../spec/srs.html#FR17">FR17</a> / <a href="../spec/srs.html#FR19">FR19</a> / <a href="../spec/srs.html#NFR3">NFR3</a> / <a href="../spec/srs.html#NFR4">NFR4</a>。 要件カタログ R-O3 (5 面・版に依らず固定)・R-I16 (記帳は追記)・R-G10 (破損入力は loud)。</li>
   <li>設計 doc: <code>docs/design/fleet-event-log.md</code> / <code>docs/design/rules-manifest.md</code> / <code>docs/design/vessel-hook.md</code> / <code>docs/design/pipeline.md</code>。 契約はこれらを pointer で指す (SRS FR2)。</li>
   <li>関連 ADR: <a href="./ADR-0003-constitution-v1-abandon-rewrite.html">ADR-0003</a> (前の版を oracle にしない = 跨版 5 面は「v2 が前の版になる日」のために実装する)。</li>
   <li>記録した日: 2026-09-09 (決定日と同日)。</li>
