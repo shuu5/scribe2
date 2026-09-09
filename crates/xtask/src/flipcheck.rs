@@ -46,8 +46,6 @@ enum Cleanup {
     Done,
     /// 消せなかった（stderr へ loud に出し判定 rc を優先する）。
     Warned(String),
-    /// 対象が `<root>/target/` 配下でないので 1 byte も消さなかった。
-    Refused(String),
 }
 
 /// 変更された 1 本の `.rs` の base 側 / HEAD 側の姿。
@@ -369,21 +367,28 @@ fn nextest(dir: &Path, target_dir: &Path) -> Result<Output, String> {
         .map_err(|err| format!("cargo nextest を起動できない: {err}"))
 }
 
+/// overlay 1 本を base tree へ書く。写せない pair は書かず `false` を返す。
+fn write_one(dest: &Path, pair: &FilePair) -> Result<bool, String> {
+    let Some(body) = pair.overlay() else {
+        emit_err(&format!("flip-check: not-copied {}", pair.rel));
+        return Ok(false);
+    };
+    let path = dest.join(&pair.rel);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|err| format!("{} を作れない: {err}", parent.display()))?;
+    }
+    fs::write(&path, body).map_err(|err| format!("{} を書けない: {err}", path.display()))?;
+    emit_err(&format!("flip-check: changed {}", pair.rel));
+    Ok(true)
+}
+
 /// overlay を base tree へ書き `tests_changed` を返す。
 fn write_overlay(dest: &Path, pairs: &[FilePair]) -> Result<usize, String> {
     let mut flipped = 0;
     for pair in pairs {
-        let Some(body) = pair.overlay() else {
-            emit_err(&format!("flip-check: not-copied {}", pair.rel));
+        if !write_one(dest, pair)? {
             continue;
-        };
-        let path = dest.join(&pair.rel);
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|err| format!("{} を作れない: {err}", parent.display()))?;
         }
-        fs::write(&path, body).map_err(|err| format!("{} を書けない: {err}", path.display()))?;
-        emit_err(&format!("flip-check: changed {}", pair.rel));
         if pair.flips() {
             flipped += 1;
             emit_err(&format!("flip-check: test-diff {}", pair.rel));
@@ -398,15 +403,120 @@ fn write_overlay(dest: &Path, pairs: &[FilePair]) -> Result<usize, String> {
 /// なので弁別できる。**rc を持たない終了（signal / OOM kill）は RED と数えない**
 /// ——flip の証拠が無いまま合格させる fail-open を作らないためである。
 fn judge_run(output: &Output, flipped: usize) -> Verdict {
-    match output.status.code() {
-        Some(0) => fail("green-on-base"),
-        Some(4) => infra("no-tests-on-base"),
-        Some(_) => verdict(
-            &format!("flip-check: RED-on-base ok tests_changed={flipped}"),
-            0,
-        ),
-        None => infra("runner-killed-by-signal"),
+    match judge_one(output, None) {
+        Err(found) => found,
+        Ok(()) => ok_line(flipped),
     }
+}
+
+/// overlay 1 回分の rc を判定する。**RED（期待どおり）だけが `Ok(())`**。
+///
+/// rc の語彙はここ 1 か所に閉じる（まとめ撃ちと file ごとの撃ちで意味がずれない）。
+/// `rel` を渡した周は緑だった file を名指す——2 本以上を 1 度に撃つと「どれが緑か」が
+/// 判定行から落ち、直す側が全部を疑うことになる。
+fn judge_one(output: &Output, rel: Option<&str>) -> Result<(), Verdict> {
+    match output.status.code() {
+        Some(0) => Err(fail(&match rel {
+            Some(rel) => format!("green-on-base file={rel}"),
+            None => "green-on-base".to_owned(),
+        })),
+        Some(4) => Err(infra("no-tests-on-base")),
+        Some(_) => Ok(()),
+        None => Err(infra("runner-killed-by-signal")),
+    }
+}
+
+/// 通した判定 1 行。
+fn ok_line(flipped: usize) -> Verdict {
+    verdict(
+        &format!("flip-check: RED-on-base ok tests_changed={flipped}"),
+        0,
+    )
+}
+
+/// 単独 overlay の後始末（撃つ前の状態へ戻す）。
+enum Restore {
+    /// base に在った file——この本文へ書き戻す。
+    Body(Vec<u8>),
+    /// base に無かった file——消す。
+    Absent,
+}
+
+impl Restore {
+    /// 撃つ前の状態へ戻す。
+    fn apply(self, path: &Path) -> Result<(), String> {
+        match self {
+            Self::Body(bytes) => {
+                fs::write(path, bytes).map_err(|err| format!("{} へ戻せない: {err}", path.display()))
+            }
+            Self::Absent => match fs::remove_file(path) {
+                Ok(()) => Ok(()),
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(err) => Err(format!("{} を消せない: {err}", path.display())),
+            },
+        }
+    }
+}
+
+/// 1 本だけ overlay を置く（戻し方を返す）。
+///
+/// 呼び手は flip する pair だけを渡す。[`FilePair::flips`] は `overlay().is_some()` を
+/// 含むので [`write_one`] の `false`（写せない pair）はここでは起きない。
+fn swap_in(dest: &Path, pair: &FilePair) -> Result<Restore, String> {
+    let path = dest.join(&pair.rel);
+    let before = match fs::read(&path) {
+        Ok(found) => Restore::Body(found),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Restore::Absent,
+        Err(err) => return Err(format!("{} を読めない: {err}", path.display())),
+    };
+    write_one(dest, pair)?;
+    Ok(before)
+}
+
+/// flip した file が 2 本以上のとき、**1 本ずつ単独で** overlay して撃つ。
+///
+/// まとめて 1 回だけ撃つと、**1 本でも RED なら全体が RED に見える**——隣の file の
+/// 新しい test が base で緑でも、赤い file に隠れて `RED-on-base ok` が出る（偽の RED）。
+/// flip-check が守ろうとしているのは「新しい歯は 1 本ずつ base で赤い」であって
+/// 「どれか 1 本が赤い」ではない。
+fn judge_each(dest: &Path, target: &Path, pairs: &[FilePair], flipping: &[&FilePair]) -> Verdict {
+    // flip しない pair は overlay しても内容が base と同じ（base の src + 同一の test 区間）
+    // なので、先にまとめて置く。ここで置いても base の緑は動かない。
+    for pair in pairs.iter().filter(|pair| !pair.flips()) {
+        if let Err(reason) = write_one(dest, pair) {
+            return infra(&reason);
+        }
+    }
+    for pair in flipping {
+        emit_err(&format!("flip-check: test-diff {}", pair.rel));
+        let path = dest.join(&pair.rel);
+        let restore = match swap_in(dest, pair) {
+            Err(reason) => return infra(&reason),
+            Ok(found) => found,
+        };
+        let judged = match nextest(dest, target) {
+            Err(reason) => Err(infra(&reason)),
+            Ok(output) => {
+                relay(&format!("overlay {}", pair.rel), &output);
+                judge_one(&output, Some(&pair.rel))
+            }
+        };
+        // **戻しは判定より先**（次の file を base の上で撃つ前提が崩れる）。ただし
+        // **返す判定は judged を優先する**——戻せなかったことで `green-on-base file=<rel>`
+        // を infra-error に化けさせると、どの file が緑だったかが判定行から消える
+        // （review 2026-09-10）。戻し失敗は loud に出すが判定は上書きしない。
+        let restored = restore.apply(&path);
+        if let Err(found) = judged {
+            if let Err(reason) = restored {
+                emit_err(&format!("flip-check: restore {reason}"));
+            }
+            return found;
+        }
+        if let Err(reason) = restored {
+            return infra(&reason);
+        }
+    }
+    ok_line(flipping.len())
 }
 
 /// base tree の健全性前段。overlay を書く前に base のまま runner を撃つ。
@@ -434,6 +544,12 @@ fn run_on_base(base: &str, root: &Path, pairs: &[FilePair]) -> Verdict {
     if let Err(blocked) = base_is_green(&dest, &target) {
         return blocked;
     }
+    // flip した file が 2 本以上なら **1 本ずつ**撃つ（まとめ撃ちは偽の RED を作る）。
+    // 1 本のときは従来どおり 1 回で足りる（分ける対象が無い）。
+    let flipping: Vec<&FilePair> = pairs.iter().filter(|pair| pair.flips()).collect();
+    if flipping.len() >= 2 {
+        return judge_each(&dest, &target, pairs, &flipping);
+    }
     let flipped = match write_overlay(&dest, pairs) {
         Err(reason) => return infra(&reason),
         Ok(count) => count,
@@ -447,12 +563,13 @@ fn run_on_base(base: &str, root: &Path, pairs: &[FilePair]) -> Verdict {
     }
 }
 
-/// `<root>/target/flipcheck` を消す。`<root>/target/` 配下でなければ 1 byte も消さない。
+/// `<root>/target/flipcheck` を消す。
+///
+/// 「`<root>/target/` 配下か」の門は置かない——[`work_dir`] が `root/target/<WORK_DIR>` を
+/// 組み立てる唯一の口なので、その門は**構造上必ず真**であり、`Refused` の枝には
+/// 到達できなかった（到達しない枝は読み手に「そういう場合が在る」と誤読させる死枝である）。
 fn cleanup(root: &Path) -> Cleanup {
     let work = work_dir(root);
-    if !work.starts_with(root.join("target")) {
-        return Cleanup::Refused(format!("{} が target 配下でない", work.display()));
-    }
     match fs::remove_dir_all(&work) {
         Ok(()) => Cleanup::Done,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Cleanup::Done,
@@ -468,7 +585,6 @@ fn finish(root: &Path, outcome: Verdict) -> Verdict {
             emit_err(&format!("flip-check: cleanup {reason}"));
             outcome
         }
-        Cleanup::Refused(reason) => infra(&reason),
     }
 }
 
@@ -823,6 +939,59 @@ mod tests {
         let got = judge(&base, &dir);
         drop_fixture(&dir);
         assert_verdict(&got.line, got.code, 1, "reason=green-on-base");
+    }
+
+    /// flip した file が 2 本以上のとき、**1 本でも base で緑なら FAIL** し、どの file が
+    /// 緑かを名指す。
+    ///
+    /// まとめて 1 回だけ撃つ実装はここで落ちる——赤い方（lib.rs）の失敗に隠れて全体が
+    /// RED に見え、緑の新規 test（tests/it.rs）を載せたまま `RED-on-base ok` が出る。
+    #[test]
+    fn flip_check_fails_when_one_of_two_flipped_files_is_green_on_base() {
+        let (dir, base) = base_commit();
+        // 1 本目: base の src（val() == 1）では落ちる新しい test ＝単独で RED。
+        write_at(&dir, &lib_rel(), &BASE_LIB.replace('1', "2"));
+        // 2 本目: base でも通る新規の統合 test ＝単独で GREEN（これを見逃してはならない）。
+        write_at(
+            &dir,
+            &format!("crates/{FIXTURE_MEMBER}/tests/it.rs"),
+            &format!("#[test]\nfn green() {{\n    assert_eq!({FIXTURE_MEMBER}::val(), 1);\n}}\n"),
+        );
+        head_commit(&dir);
+        let got = judge(&base, &dir);
+        drop_fixture(&dir);
+        assert_verdict(&got.line, got.code, 1, "reason=green-on-base");
+        assert!(
+            got.line.contains(&format!("file=crates/{FIXTURE_MEMBER}/tests/it.rs")),
+            "緑だった file を名指すはず: {}",
+            got.line
+        );
+    }
+
+    /// flip した file が 2 本とも**単独で** RED なら rc 0 で通り、`tests_changed` は
+    /// **flip した本数**を数える。
+    ///
+    /// 合格路の正例である（もう 1 本は FAIL 側の負例）。`ok_line(flipping.len())` を
+    /// 定数へ縮める変異は、負例だけでは生き残る（review 2026-09-10 Q3）。
+    #[test]
+    fn flip_check_passes_when_both_flipped_files_are_red_on_base() {
+        let (dir, base) = base_commit();
+        // どちらも base の src（val() == 1）では落ちる＝単独で RED。
+        write_at(&dir, &lib_rel(), &BASE_LIB.replace('1', "2"));
+        write_at(
+            &dir,
+            &format!("crates/{FIXTURE_MEMBER}/tests/it.rs"),
+            &format!("#[test]\nfn red() {{\n    assert_eq!({FIXTURE_MEMBER}::val(), 2);\n}}\n"),
+        );
+        head_commit(&dir);
+        let got = judge(&base, &dir);
+        drop_fixture(&dir);
+        assert_verdict(&got.line, got.code, 0, "RED-on-base ok");
+        assert!(
+            got.line.contains("tests_changed=2"),
+            "flip した 2 本を数えるはず: {}",
+            got.line
+        );
     }
 
     /// 存在しない base ref は rc 1 / `reason=infra-error` で loud に落ちる
