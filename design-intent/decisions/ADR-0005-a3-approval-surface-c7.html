@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="folio-doc-type" content="adr">
+<meta name="folio-layer" content="project">
+<meta name="folio-version" content="0.4.6">
+<meta name="folio-status" content="accepted">
+<meta name="folio-stakeholders" content="Developer, AI Agent, External Reviewer">
+<meta name="folio-adr-id" content="0005">
+<meta name="folio-adr-date" content="2026-09-09">
+<title>ADR-0005 — 憲法改訂 = A3 の承認経路を C7 の対話面へ揃える (ADR-0003 §2.1 の決定の適用漏れの是正)</title>
+<link rel="stylesheet" href="../../common.css">
+<script type="application/ld+json">
+{
+  "@context": {
+    "dc": "http://purl.org/dc/terms/",
+    "schema": "https://schema.org/",
+    "folio": "https://folio.dev/spec/v1/"
+  },
+  "@id": "./ADR-0005-a3-approval-surface-c7.html",
+  "@type": "schema:TechArticle",
+  "dc:isPartOf": [
+    { "@id": "./README.html" }
+  ],
+  "dc:title": "ADR-0005 — 憲法改訂 = A3 の承認経路を C7 の対話面へ揃える (ADR-0003 §2.1 の決定の適用漏れの是正)",
+  "folio:version": "0.4.6",
+  "folio:stakeholders": ["Developer", "AI Agent", "External Reviewer"],
+  "dc:references": [
+    { "@id": "../spec/constitution.html#a3" },
+    { "@id": "../spec/constitution.html#a1" },
+    { "@id": "../spec/constitution.html#a2" },
+    { "@id": "../spec/constitution.html#c7" },
+    { "@id": "../spec/constitution.html#c13" },
+    { "@id": "../spec/constitution.html#n4" },
+    { "@id": "../spec/constitution.html#r-c7-1" },
+    { "@id": "../spec/constitution.html#r-c13-1" }
+  ]
+}
+</script>
+</head>
+<body>
+<!-- folio:chrome-top -->
+<a class="skip-link" href="#s1-context">本文へスキップ</a>
+<nav class="breadcrumb" aria-label="パンくず"><ol>
+  <li><a href="../index.html">design-intent</a></li>
+  <li><a href="./README.html">decisions</a></li>
+  <li aria-current="page">ADR-0005</li>
+</ol></nav>
+<!-- /folio:chrome-top -->
+
+<header class="doc-header">
+  <h1>ADR-0005 — 憲法改訂 = A3 の承認経路を C7 の対話面へ揃える</h1>
+  <div class="meta">Status: accepted &middot; Date: 2026-09-09 &middot; version 0.4.6 (改訂後の constitution の版) &middot; user 裁定 2026-09-09 &middot; 憲法条文の改訂ゆえ A2 の user 裁定を経た</div>
+</header>
+<!-- folio:chrome-toc -->
+<nav class="toc" aria-label="ページ内目次">
+<ol>
+  <li><a href="#s1-context">§1. Context</a></li>
+  <li><a href="#s2-decision">§2. Decision</a></li>
+  <li class="toc--sub"><a href="#s2-1-a3">§2.1 A3 = 承認は C7 の対話面を通す・C13 の手続きは据置</a></li>
+  <li class="toc--sub"><a href="#s2-2-apply">§2.2 憲法 file への反映のしかた</a></li>
+  <li class="toc--sub"><a href="#s2-3-out-of-scope">§2.3 本 ADR の射程外</a></li>
+  <li><a href="#s3-consequences">§3. Consequences</a></li>
+  <li><a href="#s4-alternatives">§4. Alternatives Considered</a></li>
+  <li><a href="#s5-trace">§5. Trace</a></li>
+</ol>
+</nav>
+<!-- /folio:chrome-toc -->
+
+<aside class="informative">
+<p>本 ADR は IETF <strong>RFC 2119</strong> および <strong>RFC 8174 / BCP 14</strong> に定義される MUST / SHALL / SHOULD / MAY のキーワード解釈規約に従う。 ADR は決定時点の記録 (frozen) であり、 改訂は本 ADR を supersede する新 ADR で行う。</p>
+</aside>
+
+<aside class="machine-readable" aria-hidden="true">
+  <dl>
+    <dt>id</dt><dd>ADR-0005</dd>
+    <dt>doc-type</dt><dd>adr</dd>
+    <dt>status</dt><dd>accepted</dd>
+    <dt>date</dt><dd>2026-09-09</dd>
+    <dt>version</dt><dd>0.4.6 (改訂後の constitution の版・SPEC の版に追随する。 本改訂は SPEC の版を動かさない)</dd>
+    <dt>decided-by</dt><dd>user (2026-09-09) — 憲法条文の改訂は A2 の user 裁定事項。 本 ADR の裁定は ADR-0003 の裁定とは別の 1 件で、 逐語は repo 外の RULING file が原本</dd>
+    <dt>stakeholders</dt><dd>Developer, AI Agent, External Reviewer</dd>
+    <dt>supersedes</dt><dd>(none — ADR を supersede しない。 constitution の A3 だけを改訂する)</dd>
+    <dt>related</dt><dd>ADR-0003 (§2.1 の決定を A3 へ適用する) / constitution A1 / A2 / A3 / C7 / C13 / N4 / R-C7-1 / R-C13-1</dd>
+  </dl>
+</aside>
+
+<section id="s1-context" class="informative">
+<h2>§1. Context</h2>
+<p class="section-essence" data-audience="human">承認を受け取る窓口を「ちょうど 1 つ」と決め直したとき、 その決定を A1 (消す / 出す / 使う) には反映しましたが、 A3 (依存 OSS の追加・削除) には反映し忘れていました。 A3 の条文には、 もう存在しない席の名前 —「planner を通った印」— が残ったままです。 本 ADR は、 その取りこぼしを直す記録です。</p>
+<p data-audience="machine"><a href="ADR-0003-constitution-v1-abandon-rewrite.html">ADR-0003</a> §2.1 は、 承認の受理面は<strong>ちょうど 1 つ</strong>であるという不変量だけを条文に残し、 その面の identity は条文でなく rules 行 <a href="../spec/constitution.html#r-c7-1">R-C7-1</a> が持つ、 と決めた。 この決定は <a href="../spec/constitution.html#c7">C7</a> と <a href="../spec/constitution.html#a1">A1</a> に反映され、 <a href="../spec/constitution.html#a4">A4</a>.2 の受理面の語もこれに合わせた。 しかし ADR-0003 の射程は C7 / A1・C8 / A4・N4 に限られており、 <strong><a href="../spec/constitution.html#a3">A3</a> は射程に入っていなかった</strong>。 その結果、 A3 の規範文には改訂前の機構「<code>as a relay stamp through the planner</code>」が残った。 これは vocabulary が「歴史的な語」と定めた relay 印と、 唯一の対話面ではなくなった planner 席を、 現行条文が名指したまま参照し続ける状態である。 A3 は依存 OSS の追加・削除という <a href="../spec/constitution.html#c13">C13</a> の手続きの入口であり、 承認の受理面が機械的に定まらないと Ask-first が成立しない。 憲法条文の改訂は <a href="../spec/constitution.html#a2">A2</a> の user 裁定事項であり、 2026-09-09 に user は A3 を A1 と同形へ書き換える裁定を出した。 <a href="../spec/constitution.html#n4">N4</a>.2 が憲法改訂に<strong>新しい ADR</strong>を要求するため、 land 済みの ADR-0003 を書き換えるのではなく本 ADR を新設して記録面とする。</p>
+</section>
+
+<section id="s2-decision" class="normative">
+<h2>§2. Decision</h2>
+<p class="section-essence" data-audience="human">決めたことは 1 つです。 A3 で user の承認を取る経路を、 A1 と同じ「C7 が定める 1 つの対話面」に揃えます。 依存を足すときの手続き (予算の範囲に収める・compile 時間の実測差を記す) は 1 mm も変えません。</p>
+
+<p data-audience="machine">下の EARS block は決定時点の条文案であり、 施行された条文の正本は <code>../spec/constitution.html</code> の <a href="../spec/constitution.html#a3">#a3</a> である。 齟齬時は憲法を正とする (本 ADR は WHY を持ち、 条文の WHAT は憲法が持つ)。</p>
+
+<h3 id="s2-1-a3">§2.1 A3 = 承認は C7 の対話面を通す・C13 の手続きは据置</h3>
+<p class="section-essence" data-audience="human">A3 の「user に確認し」を「C7 の対話面を通して user の承認を取り」に改めます。 これは A1 に入れたのと同じ文で、 新しい決まりを足すものではありません。 対話面が誰かは条文でなく差し替えできる行 (R-C7-1) が持ち、 今の値は「user 直」です。</p>
+<p>A3 の条文を次に置き換える (MUST)。 <strong>射程は承認の受理面だけ</strong>である: C13 の手続き (許可リスト + 予算・compile 時間の実測差) と R-C13-1 の値は据置く。</p>
+<div data-audience="machine">
+  <p class="ears" data-ears-pattern="event-driven"><span class="ears-id">A3</span>: <span class="ears-when">WHEN an OSS dependency is to be added or removed</span>, scribe2 <span class="ears-shall">SHALL</span> obtain the user's approval through the dialogue surface designated by <a href="../spec/constitution.html#r-c7-1">R-C7-1</a> (C7) first, and <span class="ears-shall">SHALL</span> follow the C13 procedure (C13, <a href="../spec/constitution.html#r-c13-1">R-C13-1</a>).</p>
+  <dl>
+    <dt>機構 (型 / lint / CI)</dt>
+    <dd>承認の受理面は C7 の対話面 (rules 行 <a href="../spec/constitution.html#r-c7-1">R-C7-1</a>・初期値 = user 直) のみで、 受理した承認は approval event に逐語付きで記帳する (C7.2)。 改訂前の「planner 発行の relay 印」は<strong>廃止</strong> (席の名を条文に焼いた形だったため・ADR-0003 §2.1 と同じ理由)。 C13 の許可リスト + 予算 (<a href="../spec/constitution.html#r-c13-1">R-C13-1</a>) と <code>cargo deny</code> は無改変。</dd>
+    <dt>出所</dt><dd>user 裁定 2026-09-09 (A3 の承認経路・ADR-0003 とは別の裁定)・本 ADR §1</dd>
+  </dl>
+  <p>本改訂は ADR-0003 §2.1 の決定を A3 へ適用したものであり、 <strong>新しい決定ではない</strong>。 A1 と A3 で承認経路の語が食い違わないようにすることが目的で、 A1 の EARS の該当句と逐語で同形にする。</p>
+</div>
+
+<h3 id="s2-2-apply">§2.2 憲法 file への反映のしかた</h3>
+<p class="section-essence" data-audience="human">憲法の file は作り直さず、 同じ file の中で書き換えます。 消した文は消し線、 足した文は下線の印を付けて本文に残すので、 何がどう変わったかが後から読めます。</p>
+<p><code>design-intent/spec/constitution.html</code> を<strong>同一 file の中で</strong>改訂する (MUST)。</p>
+<div data-audience="machine">
+  <ul>
+    <li>(a) <code>#a3</code> の card の要旨・規範文・出所を §2.1 の文へ置き換え、 旧文は folio の delta marker (<code>del.delta</code> / <code>ins.delta</code>・<code>data-delta-id</code> = <strong>D-2026-09-09-011</strong>) で本文に残す。 機構 dd は C13 の記述のみで改訂前の席の名を含まないため触らない。</li>
+    <li>(b) §2 の一覧表の A3 行の「機構の要点」と「出所」を新文に合わせる (<code>ins.delta</code> のみ。 旧文「C13 の手続き」は据置ゆえ <code>del</code> にしない)。</li>
+    <li>(c) 前書きの machine-readable <code>dl</code> の <code>source</code> と §5 Trace に、 本 ADR による A3 の改訂を項として足す。 ADR-0003 の項 (5 条・D-2026-09-09-001〜005・009〜010) は変えない。</li>
+    <li>(d) 条数は変えない (Always 16 / Ask-first 4 / Never 4)。 <code>folio-version</code> と JSON-LD の <code>folio:version</code> は 0.4.6 のまま (本改訂は SPEC の版を動かさない)。</li>
+    <li>(e) JSON-LD への <code>dc:isReferencedBy</code> の追加と各 page の chrome は folio の生成物であり、 手編集しない。</li>
+  </ul>
+</div>
+
+<h3 id="s2-3-out-of-scope">§2.3 本 ADR の射程外</h3>
+<p class="section-essence" data-audience="human">この ADR は A3 の承認の窓口だけを直します。 依存を足すときの予算や手続き、 ADR-0003 が決めたことそのものには手を触れません。</p>
+<p data-audience="machine">次は<strong>本 ADR の決定ではない</strong> (MUST NOT be read as such): C13 の手続きと R-C13-1 の値 (無改変)、 ADR-0003 の本文 (frozen・本 ADR は supersede しない)、 R-C7-1 の値 (対話面が誰かの判断は rules 行の変更で行う・C5)、 A1 / A2 / A4 / N4 の条文。 本 ADR が変えるのは constitution の <code>#a3</code> と、 それに伴う §2 一覧表の 1 行・前書きの <code>source</code>・§5 Trace だけである。</p>
+</section>
+
+<section id="s3-consequences" class="informative">
+<h2>§3. Consequences</h2>
+<p class="section-essence" data-audience="human">良い点は、 承認の窓口の言い方が 4 条すべてで揃い、 席が無い今でも A3 の承認が機械的に受け取れることです。 悪い点は、 この改訂が守られているかを測る機械がまだ無いことです。</p>
+<h3>Positive</h3>
+<ul>
+  <li>A1 / A3 / A4 の承認経路が「C7 の対話面 (R-C7-1)」の 1 語に揃い、 条文の中に生きた席の名が残らなくなった。 Ask-first 4 条の受理面が 1 つであることを、 条文を横断して読める。</li>
+  <li>planner 席が存在しない現在の構成でも A3 の承認が機械的に受理可能になった (改訂前は存在しない席の印を要求していた)。</li>
+  <li>ADR-0003 を frozen のまま保てた。 land 済み ADR の題名・identity・決定本文を後から書き換えずに済み、 「ADR は決定時点の記録」という性質が壊れない。</li>
+  <li>N4.2 が要求する 3 点セット (新 ADR・delta marker・裁定 id) を、 本改訂自身が満たす形で land できる。</li>
+</ul>
+<h3>Negative</h3>
+<ul>
+  <li><strong>本改訂を守る歯が無い</strong>: <code>folio validate</code> の delta-marker gate は marker の形式 (<code>D-YYYY-MM-DD-NNN</code>) と <code>data-delta-superseded-by</code> の解決だけを見る。 marker を<strong>付けずに</strong>条文を書き換えても gate は通る。 したがって「条文に廃止語が残っていないか」「改訂に ADR と裁定 id が伴うか」を測る機械は存在せず、 base で RED になる test も無い。 ADR-0003 §3 が記した「3 点セットを測る機械が無い」は本 ADR でも解消していない。</li>
+  <li>裁定 id が日付表記 (<code>user 裁定 2026-09-09</code>) のため、 同じ日の複数の裁定を id だけでは弁別できない。 本件は ADR 番号 (ADR-0005) が弁別子を兼ねているが、 裁定 id そのものの一意性は未解決である。</li>
+  <li>ADR が 1 本増える。 決定の内容は「先の決定の適用漏れの是正」であり薄いが、 N4.2 が新 ADR を要求する以上この形を取る。</li>
+</ul>
+<h3>Neutral</h3>
+<ul>
+  <li>条数は変えない (Always 16 / Ask-first 4 / Never 4)。 constitution の版も 0.4.6 のまま動かさない。</li>
+  <li>C13 の手続きと R-C13-1 の値は無改変。 day-1 optional adapter (rtk / graphify) の採用が A3 の対象である点も変わらない。</li>
+  <li>本 ADR は決定の記録であり、 決定は user 裁定 (2026-09-09) で行われた。</li>
+</ul>
+</section>
+
+<section id="s4-alternatives" class="informative">
+<h2>§4. Alternatives Considered</h2>
+<p class="section-essence" data-audience="human">3 つの案を比べました。 新しい ADR を立てる案 (採用)、 前の ADR を書き足す案、 何もしない案です。 比べた第 1 の基準は「憲法自身の改訂手続き (N4) を破らずに直せるか」です。</p>
+<table>
+  <thead><tr><th>案</th><th>内容</th><th>理由</th><th>採否</th></tr></thead>
+  <tbody>
+    <tr><td><strong>案 A 新 ADR</strong></td><td>本 ADR (ADR-0005) を新設し、 A3 の改訂の記録面とする。 ADR-0003 は無改変</td><td>user 裁定 2026-09-09。 N4.2 の「新 ADR」を字義で満たす唯一の形。 ADR-0003 の frozen 性を保てる</td><td><strong>採用</strong></td></tr>
+    <tr><td>案 B ADR-0003 の射程拡大</td><td>ADR-0003 を in-place で改訂し、 §2.1 に A3 の 1 行・§2.5 の対象・§5 Trace を足したうえで、 題名 / <code>dc:title</code> / h1 / <code>supersedes</code> / §1 の「3 点」を 5 条 → 6 条へ全面追随させる</td><td>実態 (同じ決定の適用漏れの是正) には合うが、 N4.2 は憲法改訂に<strong>新 ADR</strong>を要求しており、 land 済み ADR の再利用はこれを満たさない。 憲法を破って憲法を直す形になる。 accepted 済み ADR の題名を後から書き換える点も、 決定時点の記録という ADR の性質に反する</td><td>却下</td></tr>
+    <tr><td>案 C 据え置き</td><td>A3 は改訂せず、 現行の「as a relay stamp through the planner」を残す</td><td>存在しない席の印を要求する条文が残り、 A3 の Ask-first が機械的に成立しない。 同じ承認経路を定める A1 / A4 と条文間で食い違い続ける。 vocabulary が歴史的な語と定めた relay 印を現行条文が参照したままになる</td><td>却下</td></tr>
+  </tbody>
+</table>
+<p data-audience="machine">案 B と案 C は、 いずれも「A3 の条文が現実と食い違っている」という事実そのものは争わない。 分岐点は<strong>是正の手続き</strong>にある: 案 B は手続き (N4.2) を満たさずに内容を直し、 案 C は手続きを守るために内容の食い違いを残す。 案 A は両立する唯一の形であり、 コストは ADR 1 本である。</p>
+</section>
+
+<section id="s5-trace" class="informative">
+<h2>§5. Trace</h2>
+<p class="section-essence" data-audience="human">出所は user の裁定 1 件です。 逐語の記録は、 この repo が public のため repo の外に置いています。</p>
+<ul data-audience="machine">
+  <li>決定の原本: <strong>user 裁定 2026-09-09</strong> (A2・A3 を A1 と同形へ書き換えてよい)。 逐語は repo 外の RULING file。 本 repo は public のため、 裁定の逐語・席や台帳の識別子・host 名は本 file に載せない。</li>
+  <li>前提になった決定: <a href="ADR-0003-constitution-v1-abandon-rewrite.html">ADR-0003</a> §2.1 (対話面はちょうど 1 つ・identity は rules 行 <a href="../spec/constitution.html#r-c7-1">R-C7-1</a>)。 本 ADR はその決定を A3 へ適用する。</li>
+  <li>拘束条件: <a href="../spec/constitution.html#a2">A2</a> (憲法条文の改訂は grill 前置の user 裁定)、 <a href="../spec/constitution.html#n4">N4</a> (改訂は新 ADR + delta marker + 裁定 id の 3 点セットを伴う — 本 ADR がその新 ADR にあたる)。</li>
+  <li>改訂対象: <code>design-intent/spec/constitution.html</code> の <a href="../spec/constitution.html#a3">#a3</a> (要旨・規範文・出所)、 §2 一覧表の A3 行、 前書きの <code>source</code>、 <a href="../spec/constitution.html#s5-trace">§5</a> Trace。 delta id は <strong>D-2026-09-09-011</strong>。</li>
+  <li>射程外: C13 の手続きと <a href="../spec/constitution.html#r-c13-1">R-C13-1</a> の値、 ADR-0003 の本文、 R-C7-1 の値。</li>
+  <li>記録した日: 2026-09-09 (決定日と同日)。</li>
+</ul>
+</section>
+
+<!-- folio:chrome-bottom -->
+<nav class="prevnext" aria-label="前後の文書">
+  <a class="prevnext__prev" href="ADR-0004-mvp-persistence-and-cross-version-formats.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">ADR-0004 — MVP の永続面と跨版 5 面の on-disk 形式 (event log は std の JSONL 1 file・SQLite は v3・env seam を持たない・契約と manifest は TOML subset)</span></a>
+</nav>
+<script>
+(function () {
+  var openedForPrint = [];
+  window.addEventListener('beforeprint', function () {
+    openedForPrint = [];
+    var ds = document.querySelectorAll('details:not([open])');
+    for (var i = 0; i < ds.length; i++) { ds[i].setAttribute('open', ''); openedForPrint.push(ds[i]); }
+  });
+  window.addEventListener('afterprint', function () {
+    for (var i = 0; i < openedForPrint.length; i++) openedForPrint[i].removeAttribute('open');
+    openedForPrint = [];
+  });
+  if (!document.querySelector('[data-audience]')) return;
+  /* 既定 = 人間プレゼン型 (ADR-0040 / rules §11.3): script 経由で初期 class を付与するため
+     no-JS では付かず全文可視に graceful degrade する。 static DOM は全文を保持 (AI/検索/印刷は不変)。 */
+  document.body.classList.add('audience-human');
+  var bar = document.createElement('nav');
+  bar.className = 'audience-toggle';
+  bar.setAttribute('aria-label', '表示対象の切替');
+  var states = [['both', '両方'], ['human', '人間向け'], ['machine', '機械向け']];
+  for (var s = 0; s < states.length; s++) {
+    (function (mode, label) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      b.setAttribute('aria-pressed', mode === 'human' ? 'true' : 'false');
+      b.addEventListener('click', function () {
+        document.body.classList.remove('audience-human', 'audience-machine');
+        if (mode !== 'both') document.body.classList.add('audience-' + mode);
+        var bs = bar.querySelectorAll('button');
+        for (var j = 0; j < bs.length; j++) bs[j].setAttribute('aria-pressed', bs[j] === b ? 'true' : 'false');
+      });
+      bar.appendChild(b);
+    })(states[s][0], states[s][1]);
+  }
+  var bc = document.querySelector('nav.breadcrumb');
+  if (bc && bc.parentNode) { bc.parentNode.insertBefore(bar, bc.nextSibling); }
+  else { document.body.insertBefore(bar, document.body.firstChild); }
+})();
+</script>
+<!-- /folio:chrome-bottom -->
+</body>
+</html>

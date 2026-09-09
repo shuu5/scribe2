@@ -25,7 +25,8 @@
     { "@id": "./ADR-0001-rust-single-static-binary.html" },
     { "@id": "./ADR-0002-test-lint-toolchain.html" },
     { "@id": "./ADR-0003-constitution-v1-abandon-rewrite.html" },
-    { "@id": "./ADR-0004-mvp-persistence-and-cross-version-formats.html" }
+    { "@id": "./ADR-0004-mvp-persistence-and-cross-version-formats.html" },
+    { "@id": "./ADR-0005-a3-approval-surface-c7.html" }
   ]
 }
 </script>
@@ -66,7 +67,7 @@
 
 <section id="s2-adr-list" class="informative">
 <h2>§2. ADRs</h2>
-<p class="section-essence" data-audience="human">ADR は 4 本です。 1 本目は実装言語と構成を Rust の単一 static binary に決めた記録、 2 本目は test / lint の toolchain を決めた記録、 3 本目は v1 の完全放棄に伴って憲法の 4 か所 (対話面・拘束条件・自己開発の既定・改訂の手続き) を書き換えた記録、 4 本目は MVP の状態の置き場と前の版と共有する接点の file の形 (追記だけの JSONL・環境変数を使わない・TOML subset) を決めた記録です。</p>
+<p class="section-essence" data-audience="human">ADR は 5 本です。 1 本目は実装言語と構成を Rust の単一 static binary に決めた記録、 2 本目は test / lint の toolchain を決めた記録、 3 本目は v1 の完全放棄に伴って憲法の 4 か所 (対話面・拘束条件・自己開発の既定・改訂の手続き) を書き換えた記録、 4 本目は MVP の状態の置き場と前の版と共有する接点の file の形 (追記だけの JSONL・環境変数を使わない・TOML subset) を決めた記録、 5 本目は 3 本目で決めた「承認を受け取る窓口は 1 つ」を、 適用し漏れていた A3 (依存 OSS の追加・削除) へ揃えた記録です。</p>
 <table>
   <thead><tr><th>id</th><th>title</th><th>status</th><th>date</th></tr></thead>
   <tbody>
@@ -74,6 +75,7 @@
     <tr><td>ADR-0002</td><td><a href="./ADR-0002-test-lint-toolchain.html">test / lint toolchain = cargo nextest・粒度 lint は forbid・構造検査は cargo xtask check</a></td><td>accepted</td><td>2026-09-07</td></tr>
     <tr><td>ADR-0003</td><td><a href="./ADR-0003-constitution-v1-abandon-rewrite.html">憲法改訂 = v1 完全放棄に伴う C7 / A1・C8 / A4・N4 の書換え (対話面は 1 つ・design-intent が拘束条件・自己開発は既定で許可・改訂は ADR + delta marker)</a></td><td>accepted</td><td>2026-09-09</td></tr>
     <tr><td>ADR-0004</td><td><a href="./ADR-0004-mvp-persistence-and-cross-version-formats.html">MVP の永続面と跨版 5 面の on-disk 形式 (event log は std の JSONL 1 file・SQLite は v3・env seam を持たない・契約と manifest は TOML subset)</a></td><td>accepted</td><td>2026-09-09</td></tr>
+    <tr><td>ADR-0005</td><td><a href="./ADR-0005-a3-approval-surface-c7.html">憲法改訂 = A3 の承認経路を C7 の対話面へ揃える (ADR-0003 §2.1 の決定の適用漏れの是正)</a></td><td>accepted</td><td>2026-09-09</td></tr>
   </tbody>
 </table>
 <p data-audience="machine">新しい決定を記録したら本表と JSON-LD の <code>dc:hasPart</code> に追記する。 ADR は frozen (改訂は supersede する新 ADR で行う)。</p>
