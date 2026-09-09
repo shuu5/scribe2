@@ -9,8 +9,8 @@
 
 use super::approve::{Approve, RC_BLOCKED};
 use super::contract::Contract;
-use super::gate::{Gate, Limits};
-use super::land::Land;
+use super::gate::{Gate, Limits, Verdict, RC_INCONCLUSIVE};
+use super::land::{verdict_of, Land};
 use super::spawn::{spawn, Launch};
 use super::{contract_path, current, emit, run_dir, run_id, worktree_path, Emit, Precheck};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_OK, RC_REFUSED};
@@ -243,7 +243,16 @@ struct Resolved {
 /// **順序を変えない**: 置き場 → replay → 段 → 契約 → repo。段の検査を契約より後ろへ
 /// 動かすと、段違いの周に契約の error（rc 2）が先に出て「前提違反は何もせず rc 1」が
 /// 崩れる（event も 1 件も書かない、という不変条件はこの順序に乗っている）。
-fn resolve(args: &[String], id: &str, allowed: &[Stage]) -> Result<Resolved, Outcome> {
+///
+/// `regate` は `Gated` を**測り直しとして**通してよいかの弁別を頼む印である。この弁別も
+/// 段の検査の一部ゆえ**契約より前**に置く——外へ出すと「段違いなのに rc 2」が Gated 段
+/// だけで起こり、上の不変条件が rc の語彙ごと崩れる（lens 実測 F1）。
+fn resolve(
+    args: &[String],
+    id: &str,
+    allowed: &[Stage],
+    regate: bool,
+) -> Result<Resolved, Outcome> {
     let state_dir = state_dir_of(args).map_err(refused)?;
     let state = current(&state_dir).map_err(|errors| {
         Outcome::failed(RC_BROKEN, errors.iter().map(StoreError::to_string).collect())
@@ -251,6 +260,20 @@ fn resolve(args: &[String], id: &str, allowed: &[Stage]) -> Result<Resolved, Out
     let stage = stage_of(&state, id).map_err(refused)?;
     if !allowed.contains(&stage) {
         return Err(refused(format!("run {id} の段は {} である", stage.as_str())));
+    }
+    if regate && stage == Stage::Gated {
+        // **測り直せるのは「測れなかった」周だけ**。PASS / FAIL は判定に届いた終端で、
+        // 判定が読めない周（file 不在 / 壊れ / 3 値の外）も測り直さない（fail-closed・
+        // C11.2）。いずれも段違いと同じ扱い＝**rc 1 で何も書かない**。
+        let verdict = verdict_of(&state_dir, id);
+        if verdict != Some(Verdict::Inconclusive) {
+            // **段と判定の両方を名乗る**。段違いの一般則で断っている事実と、その便が
+            // 測り直せない理由は別の情報で、片方だけだと読み手に届かない。
+            return Err(refused(format!(
+                "run {id} の段は Gated である（verdict={}）",
+                verdict.map_or("読めない", Verdict::as_str)
+            )));
+        }
     }
     let Some(run) = state.runs.get(id) else {
         return Err(refused(format!("run {id} が無い")));
@@ -276,7 +299,7 @@ fn launch(
     policy: LockPolicy,
     allowed: &[Stage],
 ) -> Outcome {
-    let resolved = match resolve(args, id, allowed) {
+    let resolved = match resolve(args, id, allowed, false) {
         Ok(found) => found,
         Err(outcome) => return outcome,
     };
@@ -345,9 +368,15 @@ fn limits_of(manifest: &Manifest) -> Result<Limits, String> {
     })
 }
 
-/// `pipe gate`。前提 stage = Implemented。
+/// `pipe gate`。前提 stage = `Implemented` ∨ (`Gated` ∧ verdict が INCONCLUSIVE)。
+///
+/// **測り直せるのは「測れなかった」周だけ**である。INCONCLUSIVE は道具が足りなくて
+/// 判定に届かなかった印（`--lens` 無し / diff が cap 超 / lens の不備）なので、道具を
+/// 揃えれば同じ便を撃ち直せる。PASS / FAIL は判定に届いた周ゆえ**終端のまま**で、
+/// 段違いの一般則どおり何もせず rc 1 を返す——FAIL から撃ち直す口を開けると、契約の
+/// verify が赤い便が「壊れたまま進む」経路になる。
 fn gate_run(args: &[String], id: &str, manifest: &Manifest, policy: LockPolicy) -> Outcome {
-    let resolved = match resolve(args, id, &[Stage::Implemented]) {
+    let resolved = match resolve(args, id, &[Stage::Implemented, Stage::Gated], true) {
         Ok(found) => found,
         Err(outcome) => return outcome,
     };
@@ -373,7 +402,7 @@ fn gate_run(args: &[String], id: &str, manifest: &Manifest, policy: LockPolicy) 
 
 /// `pipe land`。前提 stage = Gated（PASS の検査は land 側が持つ）。
 fn land_run(args: &[String], id: &str, policy: LockPolicy) -> Outcome {
-    let resolved = match resolve(args, id, &[Stage::Gated]) {
+    let resolved = match resolve(args, id, &[Stage::Gated], false) {
         Ok(found) => found,
         Err(outcome) => return outcome,
     };
@@ -484,9 +513,19 @@ fn resume(args: &[String], manifest: &Manifest, policy: LockPolicy) -> Outcome {
     match stage_of(&state, &id) {
         Err(reason) => refused(reason),
         Ok(Stage::Implemented) => gate_run(args, &id, manifest, policy),
-        // Gated から先へ進めるのは PASS の周だけで、その検査は land 側が持つ
-        // （ここで verdict を読み直すと **判定の読み手が 2 つ**になる）。
-        Ok(Stage::Gated) => land_run(args, &id, policy),
+        // Gated の先は判定で分かれる。**INCONCLUSIVE は land を試さない**——測れて
+        // いない便に land の「PASS でない」を返すのは、吸収状態を言い換えただけである。
+        // 次に撃つ段だけを名乗って rc 3 で止まる（**自動では測り直さない**＝道具の
+        // 不足は人が直す）。PASS / FAIL の弁別は land 側が持ち、読む関数は
+        // [`verdict_of`] の 1 本で共有する（判定の読み手は増やさない）。
+        Ok(Stage::Gated) => match verdict_of(&state_dir, &id) {
+            Some(Verdict::Inconclusive) => Outcome {
+                out: vec![format!("run={id} next=gate")],
+                err: Vec::new(),
+                rc: RC_INCONCLUSIVE,
+            },
+            _ => land_run(args, &id, policy),
+        },
         Ok(Stage::Intake) => match need(args, "--runner") {
             Err(reason) => refused(reason),
             Ok(runner) => launch(args, &id, runner, policy, &[Stage::Intake]),

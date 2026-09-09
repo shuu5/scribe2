@@ -57,7 +57,7 @@
 | `Blocked` | `ApprovalRequested` + `RunStage` | `ApprovalReceived`（`actor=human` ∧ 逐語が非空）が在れば resume → spawn（FR16） |
 | `Spawned` | `RunStage` + `SeatSpawned` | runner 終了 → `SeatStopped` + Implemented / Failed（FR6） |
 | `Implemented` | `RunStage` | gate |
-| `Gated` | `RunStage detail=verdict:<V>` | verdict PASS → land / それ以外は止まる（FR10） |
+| `Gated` | `RunStage detail=verdict:<V>` | PASS → land ／ **INCONCLUSIVE → 道具を揃えて gate を撃ち直す**（`resume` は `next=gate` で rc 3）／ FAIL は終端（FR10 / FR14） |
 | `Landed` | `RunDone` | 終端 |
 | `Stopped` | `RunStopped` | 終端（stop --all） |
 | `Failed` | `RunStage detail=<理由>` | 終端（resume は rc 1） |
@@ -79,9 +79,10 @@
 6. **runner の終了待ちは `Child::wait`**（rc を運ぶ）。pid の生存待ち（`stop`）は `wait(Completion::SeatGone)`（[fleet-event-log.md §4](./fleet-event-log.md)）で、`Completion::RunnerExited` は**別 process が spawn した runner を待つ resume 経路のために残す**。`SeatStopped`。**rc 0 ∧ `git rev-list --count <base>..HEAD` ≥ 1** → `Implemented`、それ以外 → `Failed detail=runner-rc:<rc>,commits:<n>`（commit 0 は完了ではない）。stdout `run=<id> stage=<s>`。
 
 ### 5.3 gate（(b)・FR8 / FR9 / NFR1）
-`pipe gate --run <id> [--lens <cmd>]`: 前提 = Implemented ∧ worktree clean（`git status --porcelain` 空）∧ commits ≥ 1。**違反の扱いは 2 通りに分ける**（いずれも rc 1 で lens は起動しない）。
+`pipe gate --run <id> [--lens <cmd>]`: 前提 = **`Implemented` ∨ (`Gated` ∧ verdict が INCONCLUSIVE)** ∧ worktree clean（`git status --porcelain` 空）∧ commits ≥ 1。**違反の扱いは 2 通りに分ける**（いずれも rc 1 で lens は起動しない）。
 - **worktree の事実**（clean でない / commits 0）の違反 → `RunStage stage=Failed detail=precheck:<理由>`。実装が済んだと名乗る便の中身が前提を満たしていない＝その便はここで終わる。
-- **段違い**（`Implemented` でない）→ §4 の一般則どおり **何もせず rc 1**（event を 1 件も書かない）。gate を早く叩いただけの便を `Failed` で終端させると、`resume` が引けなくなる（`Failed` からは再開しない）。
+- **段違い**（`Implemented` でも `Gated(INCONCLUSIVE)` でもない）→ §4 の一般則どおり **何もせず rc 1**（event を 1 件も書かない）。gate を早く叩いただけの便を `Failed` で終端させると、`resume` が引けなくなる（`Failed` からは再開しない）。
+- **測り直し**（`Gated` ∧ INCONCLUSIVE・FR14）: INCONCLUSIVE は道具が足りず判定に届かなかった印（`--lens` 無し / diff が cap 超 / lens の不備）ゆえ、道具を揃えて**同じ便を撃ち直せる**。`verdict.json` は最後の判定で上書きし、`RunStage stage=Gated detail=verdict:<V>` は**追記**する（append-only＝1 度目の INCONCLUSIVE が残る）。**PASS / FAIL は終端**（判定に届いた周＝撃ち直す口を開けない。verify が赤い便は測り直しても赤い＝「壊れたまま進まず」GOAL 2）。**測り直しの周も worktree の事実の違反は `Failed` で終端する**（道具を揃える前に worktree を clean へ戻す）——precheck の極性を段ごとに分けると「段の検査は入口 / worktree の事実は gate」の分離が濁るためで、終端しても worktree と branch は残る（N1）＝作り直せるのは run 1 本の側である。verdict を読む関数は `land::verdict_of` の 1 本で、land の前提・gate の入口・resume の行き先が同じ値を見る（**判定が読めない周**——file 不在 / JSON が壊れ / 3 値の外——は INCONCLUSIVE と同じ扱いにせず断る）。残るのは **3 値の履歴だけ**で、1 度目の evidence（なぜ測れなかったか）は `verdict.json` の上書きで消える。`verify.jsonl` は同じ file へ 2 周目を**追記**する（`n` は周ごとに 1 から＝file 内で一意ではない。INCONCLUSIVE の周は必ず `verify_red = 0` ゆえ古い行が偽の RED を作ることはない）。**同一便へ `pipe gate` を並行して撃たない**（`verdict.json` の write は event の lock の外にあり、file の最終内容と最終 event が別の周を指しうる）。
 - **機械検証**: contract の `verify` 各行を worktree で `sh -c` 実行し、行ごとの rc を `<state_dir>/pipe/<run>/verify.jsonl`（`{"schema":1,"n":<i>,"rc":<rc>,"cmd":"…"}`）に逐条記録。
 - **lens**: 本数 = rules 行 `gate.lens_count`（MVP は 1）、cap = `gate.token_cap`。**本数は照合する**: `gate.lens_count` が 1 でない周（0 = lens を呼ばずに通す / 2 以上 = 1 本で足りたことにする）は「lens の verdict」を得ていないので **INCONCLUSIVE**（多 lens は (b) の射程外なので、実装しない代わりに fail-closed に断る）。`--lens <cmd>` に `git diff <base>..HEAD` を stdin で渡し、stdout の JSON 1 行 `{"verdict":"PASS|FAIL|INCONCLUSIVE","evidence":"…"}` を採る。
 - **予算の照合**（NFR1「diff byte と cap の照合」）: diff の byte 数を `gate.token_cap` と**直接比べる**（byte ≥ token の保守的な読み・換算係数を持たない）。diff byte > cap → **INCONCLUSIVE**（lens を起動しない）。
@@ -108,7 +109,7 @@
 
 ### 5.7 show / resume / run
 - `pipe show --run <id>` → `run=<id> bead=<b> stage=<s> approved=<bool> worktree=<path>`（無ければ rc 1）。
-- `pipe resume --run <id> [--runner] [--lens]`: 現在 stage から**続きの段だけ**を通す（Intake → spawn / Blocked+approved → spawn / Implemented → gate / Gated(PASS) → land）。Stopped / Failed は rc 1。
+- `pipe resume --run <id> [--runner] [--lens]`: 現在 stage から**続きの段だけ**を通す（Intake → spawn / Blocked+approved → spawn / Implemented → gate / Gated(PASS) → land）。**Gated(INCONCLUSIVE) は land を試さず `run=<id> next=gate` を出して rc 3**——測れていない便に land の「PASS でない」を返すのは吸収状態の言い換えでしかなく、かといって**自動で測り直さない**（道具の不足は人が直す・`--lens` を渡してあっても撃たない）。Stopped / Failed は rc 1。
 - `pipe run --contract <f> --bead <id> --repo <dir> --runner <cmd> [--lens <cmd>]` = intake → spawn → gate → land を 1 process で連続（各段は fleet を読み書きし、途中で落ちても `resume` が続きを引く）。
 
 ### 5.8 report（(e)・FR22）
@@ -128,8 +129,9 @@
 ## 8. 歯（契約ごと・`tests/e2e/pipe.rs` module・tmp git repo（`.vessel` に `name=<NAME>`・`vessel init --state-dir` で tmp を紐づける）・fake runner / lens は `sh -c` 1 行）
 
 - (a) `pipe_` 接頭辞: `pipe_intake_rejects_missing_field` / `pipe_intake_rejects_multiline_verify` / `pipe_intake_rejects_contract_without_req_or_design` / `pipe_intake_records_run_in_fleet` / `pipe_spawn_creates_worktree_and_records_implemented` / `pipe_spawn_marks_failed_when_runner_makes_no_commit` / `pipe_spawn_writes_write_set_into_git_dir` / `pipe_spawn_substitutes_placeholders_and_adds_no_env`（fake runner が env を全部 stdout に写し、test は `<NAME_UPPER>_` で始まる変数が 0 本であることと置換結果を assert）/ `pipe_spawn_refuses_wrong_stage` / `pipe_state_survives_process_restart` / `pipe_stop_all_rc0_when_nothing_to_stop` / `pipe_stop_all_terminates_live_runner` / `pipe_stop_returns_rc2_on_malformed_store` / `pipe_external_form`（snapshot）。
-- (b) `pipe_gate_` / `pipe_land_` / `pipe_e2e_` / `pipe_resume_` 接頭辞: `pipe_gate_refuses_dirty_worktree` / `pipe_gate_fails_on_red_verify_line` / `pipe_gate_inconclusive_without_lens_when_required` / `pipe_gate_inconclusive_when_diff_exceeds_cap`（`--rules` で tmp manifest・`gate.token_cap = 1`）/ `pipe_gate_records_structured_verdict` / `pipe_land_refuses_without_pass` / `pipe_land_squashes_one_commit_with_identical_tree` / `pipe_land_refuses_stale_base` / `pipe_land_reruns_verify_on_main_and_fails_loud` / `pipe_land_exports_verdict_schema1` / `pipe_land_retires_worktree_by_move_and_keeps_branch` / `pipe_e2e_toy_repo_lands_one_bead_with_fake_runner` / `pipe_resume_after_kill_between_spawn_and_gate`。
+- (b) `pipe_gate_` / `pipe_land_` / `pipe_e2e_` / `pipe_resume_` 接頭辞: `pipe_gate_refuses_dirty_worktree` / `pipe_gate_fails_on_red_verify_line` / `pipe_gate_inconclusive_without_lens_when_required` / `pipe_gate_inconclusive_when_diff_exceeds_cap`（`--rules` で tmp manifest・`gate.token_cap = 1`）/ `pipe_gate_records_structured_verdict` / `pipe_land_refuses_without_pass` / `pipe_land_squashes_one_commit_with_identical_tree` / `pipe_land_refuses_stale_base` / `pipe_land_reruns_verify_on_main_and_fails_loud` / `pipe_land_exports_verdict_schema1` / `pipe_land_retires_worktree_by_move_and_keeps_branch` / `pipe_e2e_toy_repo_lands_one_bead_with_fake_runner` / `pipe_resume_continues_from_implemented_in_new_process`。
   実装の便で**変異と lens review が「測れていない」と名指した経路**に足した歯（同じ 4 接頭辞）: `pipe_gate_refuses_run_without_commits` / `pipe_gate_inconclusive_on_unlisted_lens_verdict` / `pipe_gate_inconclusive_when_lens_count_is_not_one` / `pipe_gate_inconclusive_when_lens_exits_nonzero` / `pipe_gate_inconclusive_when_lens_output_is_not_json` / `pipe_gate_passes_diff_to_lens_on_stdin` / `pipe_gate_refuses_wrong_stage` / `pipe_land_reports_unmeasured_main_apart_from_red` / `pipe_land_removes_dirty_tmp_worktree`。
+  測り直し経路の便（`s2-07l.30`）で足した歯: `pipe_gate_regates_after_inconclusive`（`--lens` 無しで INCONCLUSIVE → 揃えて撃ち直して PASS → land）/ `pipe_gate_refuses_regate_after_fail`（FAIL は終端・rc 1・lens を起動しない）/ `pipe_resume_reports_next_gate_on_inconclusive`（rc 3・`next=gate`・何も書かない）/ `pipe_gate_refuses_regate_without_readable_verdict`（`verdict.json` が**不在 / 壊れ / 3 値の外**の便は測り直さない＝fail-closed）/ `pipe_gate_regates_after_relaxing_cap`（cap 超過から予算を緩めて撃ち直す）/ `pipe_gate_regates_after_fixing_lens_count`（規則の lens 本数を直して撃ち直す）。/ `pipe_gate_fails_regate_on_dirty_worktree`（測り直しの周も worktree の事実の違反は終端する・掃除しても引けない非対称まで測る）。後の 4 本は変異が生き延びた経路（自前 1 本・独立 lens 6 本）とplanner 裁定 Q3 案B に足したもので、既存の歯 2 本（`pipe_gate_refuses_wrong_stage` / `pipe_gate_regates_after_inconclusive`）にも Landed 再 gate と resume(FAIL) の場合を書き足した。
 - (c) `pipe_approval_` 接頭辞: `pipe_approval_blocks_before_spawn_when_contract_declares_class` / `pipe_approval_records_verbatim_as_human_event` / `pipe_approval_refuses_empty_words` / `pipe_approval_resume_spawns_after_received` / `pipe_approval_resume_stays_blocked_without_received` / `pipe_approval_unlisted_class_value_is_rejected_at_intake`。
   実装の便で lens が「測れていない」と名指した経路に足した歯: `pipe_approval_blocks_in_one_shot_run`（`pipe run` の一発経路も spawn の手前で Blocked になる＝関門が段ごとの口ではなく唯一の起動口に在ることを測る）。
 - (d) `headless_` 接頭辞（claude は fake の実行 file・`--claude <path>`）: `headless_runner_reads_contract_from_stdin_and_passes_permission_mode_every_time` / `headless_runner_stops_on_rate_limit_record` / `headless_lens_inconclusive_over_cap_without_calling_claude` / `headless_lens_extracts_last_json_line` / `headless_lens_inconclusive_on_unparsable_output`。
@@ -142,7 +144,7 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
 
 - **toy repo 5 便（AC1）**: 開発 session が `<NAME> runner` / `<NAME> lens` を seam に渡して手元で 5 便を通し、`pipe report` の 1 行（`human_events_other_than_approval=0`）と `verdicts.jsonl`（5 行）を bead `s2-07l.24` の notes に**逐語で**写す。人由来の event は approval の 1 件だけ。
 - **自己ホスト 1 便（AC2）**: 本 repo の root に `.vessel`（`name=<NAME>` / `version=2`）を置く PR を先に land し（この便から guard が本 repo に効く）、実 bead 1 本の契約 file（`req` と `design` と `classes = ["publish"]` を持つ）を `pipe run … --pr-cmd` で PR 作成まで通す。承認は `pipe approve` で逐語を記帳する。CI 緑・merge は人。
-- AC3（偽の PASS 0 件）は (b) の `inconclusive_*` 2 本 + `fails_on_red` + `refuses_without_pass` が母集団（FR7 の面は `s2-07l.17` の CI job）。AC4 は `pipe_resume_after_kill_*` と `pipe_state_survives_*`。AC5 は (c) 6 本 + `pipe_land_pr_cmd_refuses_without_approval`。
+- AC3（偽の PASS 0 件）は (b) の `inconclusive_*` 2 本 + `fails_on_red` + `refuses_without_pass` + 測り直し経路の `pipe_gate_refuses_regate_*` 2 本と `pipe_resume_reports_next_gate_*`（**測れなかった便を「測り直してよい便」へ化けさせない**側の歯）が母集団（FR7 の面は `s2-07l.17` の CI job）。AC4 は `pipe_resume_continues_from_implemented_*` と `pipe_state_survives_*`——**process を殺してから引き直す歯は未着**で、AC1 の実測（(e) `s2-07l.24`）が担う。AC5 は (c) 6 本 + `pipe_land_pr_cmd_refuses_without_approval`。
 
 ## 10. 却下案
 
