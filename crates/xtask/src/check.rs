@@ -7,12 +7,11 @@
 //! toolchain-pin / paths-clean の 11 本である。
 
 use crate::genmanifest::MANIFEST_REL;
-use crate::limits::{ALLOWED_DEPS, MAX_CORE_LINES, MAX_FILE_LINES, PRIVATE_PATH_MARKS, REQUIRED_LINTS};
+use crate::limits::{ALLOWED_DEPS, MAX_CORE_LINES, MAX_FILE_LINES, REQUIRED_LINTS};
 use crate::toml_lite::{entries_in, lint_level, quoted, sections, string_array};
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 /// task runner 自身の package 名。core crate はこれ以外の member として発見する。
 const RUNNER_PACKAGE: &str = "xtask";
@@ -25,10 +24,12 @@ const TEST_MOD_MARK: &str = "#[cfg(test)]";
 
 /// paths-clean の母集団から外す tracked file。**ただ 1 本で固定**である
 /// （bd が生成し private path 形の例をコメントに持つため）。
-const PATHS_CLEAN_SKIP: &str = ".beads/config.yaml";
-
-/// index が symlink に付ける mode（`git ls-files -s` の 1 列目）。
-const SYMLINK_MODE: &str = "120000";
+///
+/// 測定一式は [`crate::paths_clean`] へ移したが、この名前だけは本 file に残す——
+/// 免除を測る歯が本 file の test 区間に在り、`#[cfg(test)]` を src 区間へ置くと
+/// test-src-ratio がその行から下（本 file の残り全部）を test 区間として数えるからである。
+/// 実測値は本 file の行数そのものに依存するのでここへは焼かない（bead s2-07l.33 の notes）。
+pub(crate) const PATHS_CLEAN_SKIP: &str = ".beads/config.yaml";
 
 /// 検査対象 workspace の骨組み。root から 1 度だけ組み立てる。
 pub struct Layout {
@@ -85,11 +86,11 @@ pub struct Report {
 }
 
 /// 1 tag の測定結果。
-struct Measured {
+pub(crate) struct Measured {
     /// サマリ行に載せる `tag=値` の断片。
-    fact: String,
+    pub(crate) fact: String,
     /// 違反行（合格なら空）。
-    violations: Vec<String>,
+    pub(crate) violations: Vec<String>,
 }
 
 /// 読み込んだ `.rs` 1 本。
@@ -136,7 +137,7 @@ pub fn inspect(root: &Path) -> Report {
     measured.extend(measure_lints(&layout));
     measured.push(measure_deps_empty(&layout));
     measured.push(measure_toolchain_pin(&layout));
-    measured.push(measure_paths_clean(&layout));
+    measured.push(crate::paths_clean::measure(&layout));
     fold(measured)
 }
 
@@ -173,7 +174,7 @@ fn fold(measured: Vec<Measured>) -> Report {
 }
 
 /// 測れなかった tag を違反として立てる。
-fn failed(tag: &str, reason: &str) -> Measured {
+pub(crate) fn failed(tag: &str, reason: &str) -> Measured {
     Measured {
         fact: format!("{tag}=?"),
         violations: vec![format!("{tag}: {reason}")],
@@ -601,241 +602,6 @@ fn measure_toolchain_pin(layout: &Layout) -> Measured {
         fact,
         violations: violation.into_iter().collect(),
     }
-}
-
-/// paths-clean の母集団（tracked file の repo 相対 path）と root 一致判定の結果。
-/// index が持つ tracked file 1 件。
-///
-/// **mode と oid を運ぶ**のは symlink のためである。symlink の「中身」は作業木では
-/// 追跡先の file であって link target 文字列ではないので、作業木から読むと
-/// private path 形の target（`git ls-files` には出るが本文としては読めない）が
-/// 素通りする。index の blob を読めば target 文字列そのものが得られる。
-struct TrackedFile {
-    /// repo 相対 path。
-    rel: String,
-    /// index の mode（symlink は 120000）。
-    mode: String,
-    /// blob の oid。
-    oid: String,
-}
-
-impl TrackedFile {
-    /// index の mode が symlink か。
-    fn is_symlink(&self) -> bool {
-        self.mode == SYMLINK_MODE
-    }
-}
-
-/// paths-clean の母集団を測れたかどうか。
-enum Tracked {
-    /// `<root>` が repo root であり tracked file を列挙できた。
-    Listed(Vec<TrackedFile>),
-    /// `<root>` が repo root でない（flip-check の base tree はこの枝に落ちる）。
-    NotRepoRoot,
-    /// 測れなかった（fail-closed で `n/a` へ落とさない）。
-    Unmeasurable(String),
-}
-
-/// `git -C <dir> <args...>` を撃ち rc 0 のときだけ stdout を返す。
-fn git_stdout(dir: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
-    let shown = args.join(" ");
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .output()
-        .map_err(|err| format!("git {shown} を起動できない: {err}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "git {shown} が rc≠0: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
-    Ok(output.stdout)
-}
-
-/// path を canonicalize する。失敗は path と io error を逐語で載せて fail-closed。
-fn canonical(path: &Path) -> Result<PathBuf, String> {
-    fs::canonicalize(path)
-        .map_err(|err| format!("{} を canonicalize できない: {err}", path.display()))
-}
-
-/// `<root>` が git repo の toplevel そのものか。
-///
-/// 素の [`PathBuf`] 比較では `CARGO_MANIFEST_DIR/../..` 形の root が字面で一致せず
-/// paths-clean が恒久 `n/a` に化けるので、両側を canonicalize して比べる。
-fn root_is_repo_root(root: &Path) -> Result<bool, String> {
-    let raw = git_stdout(root, &["rev-parse", "--show-toplevel"])?;
-    let shown = String::from_utf8_lossy(&raw).trim().to_owned();
-    if shown.is_empty() {
-        return Err("git rev-parse --show-toplevel が空を返した".to_owned());
-    }
-    Ok(canonical(Path::new(&shown))? == canonical(root)?)
-}
-
-/// NUL 区切りの出力を path の列へ分ける。
-fn split_nul(raw: &[u8]) -> Vec<String> {
-    String::from_utf8_lossy(raw)
-        .split('\0')
-        .filter(|part| !part.is_empty())
-        .map(str::to_owned)
-        .collect()
-}
-
-/// `git ls-files -s -z` の 1 件（`<mode> <oid> <stage>\t<path>`）を読む。
-///
-/// 形が合わない行は**落とさず捨てる**のではなく `None` を返し、呼び手が
-/// 「列挙できなかった」へ倒す——母集団の欠けを静かな 0 件にしないためである。
-fn parse_ls_entry(part: &str) -> Option<TrackedFile> {
-    let (meta, rel) = part.split_once('\t')?;
-    let mut fields = meta.split_whitespace();
-    let mode = fields.next()?.to_owned();
-    let oid = fields.next()?.to_owned();
-    fields.next()?;
-    Some(TrackedFile {
-        rel: rel.to_owned(),
-        mode,
-        oid,
-    })
-}
-
-/// paths-clean の母集団を data 化して固定する（cwd を直読みしない）。
-fn tracked_files(root: &Path) -> Tracked {
-    match root_is_repo_root(root) {
-        Err(reason) => Tracked::Unmeasurable(reason),
-        Ok(false) => Tracked::NotRepoRoot,
-        Ok(true) => match git_stdout(root, &["ls-files", "-s", "-z"]) {
-            Err(reason) => Tracked::Unmeasurable(format!("tracked file を列挙できない: {reason}")),
-            Ok(raw) => {
-                let parts = split_nul(&raw);
-                let listed: Vec<TrackedFile> =
-                    parts.iter().filter_map(|part| parse_ls_entry(part)).collect();
-                if listed.len() == parts.len() {
-                    Tracked::Listed(listed)
-                } else {
-                    Tracked::Unmeasurable(format!(
-                        "tracked file の {} 件中 {} 件しか読めない（ls-files -s の形が違う）",
-                        parts.len(),
-                        listed.len()
-                    ))
-                }
-            }
-        },
-    }
-}
-
-/// tracked file の本文に private path 形が残っていないこと（paths-clean）。
-fn measure_paths_clean(layout: &Layout) -> Measured {
-    match tracked_files(&layout.root) {
-        Tracked::Unmeasurable(reason) => failed("paths-clean", &reason),
-        Tracked::NotRepoRoot => Measured {
-            fact: "paths-clean=n/a(not-a-repo-root)".to_owned(),
-            violations: Vec::new(),
-        },
-        Tracked::Listed(listed) if listed.is_empty() => {
-            failed("paths-clean", "tracked file が 0 件である")
-        }
-        Tracked::Listed(listed) => scan_private_paths(&layout.root, &listed),
-    }
-}
-
-/// tracked file を 1 本ずつ走査する。
-///
-/// 本文は **byte で読み byte で検索する**。`String` へ通すと非 UTF-8 の 1 byte を混ぜる
-/// だけで file 全体が読めなくなり、needle が素通りするからである。読めない file
-/// （作業木から消えている・permission が無い等）は無言で skip せず違反として数える。
-///
-/// **symlink は index の blob を読む**（作業木から読むと追跡先の中身になり、link target
-/// 文字列そのものが母集団から落ちる）。通常 file は従来どおり作業木から読む——tracked
-/// でも作業木側が書き換わっている周に、index の古い blob で合格させないためである。
-fn scan_private_paths(root: &Path, listed: &[TrackedFile]) -> Measured {
-    let mut violations = Vec::new();
-    let mut scanned = 0;
-    for file in listed {
-        let rel = &file.rel;
-        match body_of(root, file) {
-            Err(reason) => violations.push(format!(
-                "paths-clean: {rel} を読めない: {reason}（読めない tracked file は違反である）"
-            )),
-            Ok(bytes) => {
-                scanned += 1;
-                violations.extend(
-                    violating_lines(rel, &bytes)
-                        .into_iter()
-                        .map(|line| format!("paths-clean: {rel}:{line} に private path 形が在る")),
-                );
-            }
-        }
-    }
-    Measured {
-        fact: format!("paths-clean={scanned}"),
-        violations,
-    }
-}
-
-/// 走査する本文を取る。symlink だけ index の blob（= link target 文字列）を読む。
-fn body_of(root: &Path, file: &TrackedFile) -> Result<Vec<u8>, String> {
-    if file.is_symlink() {
-        return git_stdout(root, &["cat-file", "blob", &file.oid]);
-    }
-    fs::read(root.join(&file.rel)).map_err(|err| err.to_string())
-}
-
-/// 違反として数える行番号。免除 file では **コメント行だけ**を除く。
-///
-/// file 全文の免除は「その file の中でだけ private path を書き放題」という穴になる。
-/// 免除の理由は **道具が生成した説明コメントに例として private path 形が載る**ことなので、
-/// 免除もコメント行に限る（設定値として書いた private path は違反のままにする）。
-fn violating_lines(rel: &str, bytes: &[u8]) -> Vec<usize> {
-    let lines = private_path_lines(bytes);
-    if rel != PATHS_CLEAN_SKIP {
-        return lines;
-    }
-    lines
-        .into_iter()
-        .filter(|line| !is_comment_line(bytes, *line))
-        .collect()
-}
-
-/// 1 起点の行番号の行がコメント行か（行頭の空白の後の 1 文字が `#`）。
-fn is_comment_line(bytes: &[u8], line: usize) -> bool {
-    bytes
-        .split(|byte| *byte == b'\n')
-        .nth(line.saturating_sub(1))
-        .and_then(|body| {
-            let at = body.iter().position(|byte| !byte.is_ascii_whitespace())?;
-            body.get(at).copied()
-        })
-        .is_some_and(|head| head == b'#')
-}
-
-/// private path 形を含む行の番号を昇順・重複なしで返す（行中のどこに在っても違反）。
-fn private_path_lines(bytes: &[u8]) -> Vec<usize> {
-    let mut lines = BTreeSet::new();
-    for mark in PRIVATE_PATH_MARKS {
-        for at in find_all(bytes, mark.as_bytes()) {
-            lines.insert(line_of(bytes, at));
-        }
-    }
-    lines.into_iter().collect()
-}
-
-/// `needle` の現れる byte offset を昇順で返す（std だけの素朴走査）。
-fn find_all(haystack: &[u8], needle: &[u8]) -> Vec<usize> {
-    if needle.is_empty() || haystack.len() < needle.len() {
-        return Vec::new();
-    }
-    haystack
-        .windows(needle.len())
-        .enumerate()
-        .filter(|(_, window)| *window == needle)
-        .map(|(at, _)| at)
-        .collect()
-}
-
-/// byte offset を 1 起点の行番号にする。
-fn line_of(bytes: &[u8], at: usize) -> usize {
-    bytes.iter().take(at).filter(|byte| **byte == b'\n').count() + 1
 }
 
 /// file を読む。読めない理由はそのまま違反本文に出せる形にする。
