@@ -344,3 +344,11 @@ terms:
     domain: consumer
     definition: 便 1 本を一意に指す識別子 (bead id と UTC の時刻印から成る)。 event log と state dir 配下の dir 名に用いる。
     relationships: [便, event log, state dir]
+  - canonical: measure tag
+    domain: consumer
+    definition: 構造検査が判定行に出す測定 1 本の名。 各 tag は測る対象と実測値を持ち、 列挙は ADR が記録する。
+    relationships: [Measured]
+  - canonical: paths-clean
+    domain: consumer
+    definition: index を母集団に、 tracked file の本文へ private path 形が残っていないことを測る measure tag。
+    relationships: [measure tag]

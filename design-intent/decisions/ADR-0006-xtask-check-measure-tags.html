@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="folio-doc-type" content="adr">
+<meta name="folio-layer" content="project">
+<meta name="folio-version" content="0.4.6">
+<meta name="folio-status" content="accepted">
+<meta name="folio-stakeholders" content="Developer, AI Agent, External Reviewer">
+<meta name="folio-adr-id" content="0006">
+<meta name="folio-adr-date" content="2026-09-10">
+<title>ADR-0006 — cargo xtask check が measure する tag の列挙 (ADR-0002 §2.4 の 10 本を 11 本へ supersede)</title>
+<link rel="stylesheet" href="../../common.css">
+<script type="application/ld+json">
+{
+  "@context": {
+    "dc": "http://purl.org/dc/terms/",
+    "schema": "https://schema.org/",
+    "folio": "https://folio.dev/spec/v1/"
+  },
+  "@id": "./ADR-0006-xtask-check-measure-tags.html",
+  "@type": "schema:TechArticle",
+  "dc:isPartOf": [
+    { "@id": "./README.html" }
+  ],
+  "dc:title": "ADR-0006 — cargo xtask check が measure する tag の列挙 (ADR-0002 §2.4 の 10 本を 11 本へ supersede)",
+  "folio:version": "0.4.6",
+  "folio:stakeholders": ["Developer", "AI Agent", "External Reviewer"],
+  "dc:references": [
+    { "@id": "./ADR-0002-test-lint-toolchain.html#s2-4-xtask" },
+    { "@id": "./ADR-0002-test-lint-toolchain.html#s2-2-granularity" },
+    { "@id": "../spec/constitution.html#c4" },
+    { "@id": "../spec/constitution.html#c12" },
+    { "@id": "../spec/constitution.html#c13" }
+  ]
+}
+</script>
+</head>
+<body>
+<!-- folio:chrome-top -->
+<a class="skip-link" href="#s1-context">本文へスキップ</a>
+<nav class="breadcrumb" aria-label="パンくず"><ol>
+  <li><a href="../index.html">design-intent</a></li>
+  <li><a href="./README.html">decisions</a></li>
+  <li aria-current="page">ADR-0006</li>
+</ol></nav>
+<!-- /folio:chrome-top -->
+
+<header class="doc-header">
+  <h1>ADR-0006 — cargo xtask check が measure する tag の列挙</h1>
+  <div class="meta">Status: accepted &middot; Date: 2026-09-10 &middot; version 0.4.6 (拘束する constitution の版) &middot; ADR-0002 §2.4 の tag 列挙を部分 supersede</div>
+</header>
+<!-- folio:chrome-toc -->
+<nav class="toc" aria-label="ページ内目次">
+<ol>
+  <li><a href="#s1-context">§1. Context</a></li>
+  <li><a href="#s2-decision">§2. Decision</a></li>
+  <li class="toc--sub"><a href="#s2-1-tags">§2.1 measure する tag は 11 本</a></li>
+  <li class="toc--sub"><a href="#s2-2-what-each-measures">§2.2 各 tag が測るもの</a></li>
+  <li class="toc--sub"><a href="#s2-3-change">§2.3 増減のしかたと射程外</a></li>
+  <li class="toc--sub"><a href="#s2-4-correction">§2.4 ADR-0002 §2.2 の例示の訂正</a></li>
+  <li><a href="#s3-consequences">§3. Consequences</a></li>
+  <li><a href="#s4-alternatives">§4. Alternatives Considered</a></li>
+  <li><a href="#s5-trace">§5. Trace</a></li>
+</ol>
+</nav>
+<!-- /folio:chrome-toc -->
+
+<aside class="informative">
+<p>本 ADR は IETF <strong>RFC 2119</strong> および <strong>RFC 8174 / BCP 14</strong> に定義される MUST / SHALL / SHOULD / MAY のキーワード解釈規約に従う。 ADR は決定時点の記録 (frozen) であり、 改訂は本 ADR を supersede する新 ADR で行う。</p>
+</aside>
+
+<aside class="machine-readable" aria-hidden="true">
+  <dl>
+    <dt>id</dt><dd>ADR-0006</dd>
+    <dt>doc-type</dt><dd>adr</dd>
+    <dt>status</dt><dd>accepted</dd>
+    <dt>date</dt><dd>2026-09-10</dd>
+    <dt>version</dt><dd>0.4.6 (拘束する constitution の版・決定時点で凍結)</dd>
+    <dt>decided-by</dt><dd>admin (2026-09-08 の leg 1 裁定 §3) + planner の契約化 (2026-09-10・12 本目の案 ci-decl は不採用)</dd>
+    <dt>stakeholders</dt><dd>Developer, AI Agent, External Reviewer</dd>
+    <dt>supersedes</dt><dd>ADR-0002 §2.4 の <strong>measure tag の列挙のみ</strong> (部分 supersede)。 ADR-0002 の §2.1〜§2.3 / §2.5 / §2.6 は有効のままである</dd>
+    <dt>related</dt><dd>ADR-0002 (§2.4 の構造検査)・constitution C4 / C12 / C13・SRS NFR3</dd>
+  </dl>
+</aside>
+
+<section id="s1-context" class="informative">
+<h2>§1. Context</h2>
+<p class="section-essence" data-audience="human">構造検査が何を測るかの一覧が、 実際に動いているものより 1 つ少ないままになっています。 前の記録は決定時点で凍結する約束なので、 その file を書き換えるのではなく、 新しい記録で一覧を差し替えます。</p>
+<p data-audience="machine"><a href="ADR-0002-test-lint-toolchain.html#s2-4-xtask">ADR-0002 §2.4</a> は <code>cargo xtask check</code> が measure する tag を <strong>10 本</strong>として列挙した (2026-09-07 の決定時点の記録)。 その後の便が 11 本目 <code>paths-clean</code> を足し、 判定行の現物は 11 tag を出す。 ADR は決定時点の記録 (frozen) であり前文の凍結規定により in-place 改訂できないため、 列挙を現物へ合わせるには<strong>本 ADR を新設して当該列挙だけを supersede する</strong>ほかない。 12 本目の案として挙がっていた <code>ci-decl</code> は CI 便で不採用となり <code>xtask</code> 側に実体を持たない (CI の job そのものが検証面である) ため、 本 ADR の列挙にも含めない。 番号は 0003 (憲法改訂) / 0004 (永続面) / 0005 (A3) が使用済みゆえ <strong>0006</strong> である。</p>
+</section>
+
+<section id="s2-decision" class="normative">
+<h2>§2. Decision</h2>
+<p class="section-essence" data-audience="human">決めることは 3 つです。 測る項目は 11 本であること、 それぞれが何を測るのかの 1 行、 そして増やしたり減らしたりするときは新しい記録を立てること。 数値のしきい値は前の記録のままで、 ここでは触りません。</p>
+<p data-audience="machine">本 ADR は <a href="ADR-0002-test-lint-toolchain.html#s2-4-xtask">ADR-0002 §2.4</a> の tag 列挙<strong>のみ</strong>を差し替える。 同 §の他の規定 (構造検査が独立に必要な理由・<code>test-src-ratio</code> の測定定義・xtask を std のみで書く決定) は有効であり、 §2.5 の閾値の実値も無改変である。</p>
+
+<h3 id="s2-1-tags">§2.1 measure する tag は 11 本</h3>
+<p class="section-essence" data-audience="human">測る項目は 11 本で、 順番は検査が出す 1 行の並びと同じです。</p>
+<p><code>cargo xtask check</code> が measure する tag は次の <strong>11 本</strong>とする (MUST)。 順序は判定行の出力順である。</p>
+<div data-audience="machine">
+  <ol>
+    <li><code>core-lines</code></li>
+    <li><code>file-lines</code></li>
+    <li><code>test-src-ratio</code></li>
+    <li><code>name-literal</code></li>
+    <li><code>manifest-name</code></li>
+    <li><code>manifest-version</code></li>
+    <li><code>lints-set</code></li>
+    <li><code>lints-optin</code></li>
+    <li><code>deps-empty</code></li>
+    <li><code>toolchain-pin</code></li>
+    <li><code>paths-clean</code></li>
+  </ol>
+  <p>判定行は違反 0 のときだけ出る 1 行で、 各 tag の実測値を <code>&lt;tag&gt;=&lt;値&gt;</code> の形で並べる。 <strong>本列挙の正しさは判定行の現物と突き合わせて確かめる</strong> (字面の pin ではなく実行出力との照合)。</p>
+</div>
+
+<h3 id="s2-2-what-each-measures">§2.2 各 tag が測るもの</h3>
+<p class="section-essence" data-audience="human">それぞれが何を見ているかを 1 行ずつ書きます。 数値そのものは前の記録の表にあります。</p>
+<div data-audience="machine">
+  <dl>
+    <dt><code>core-lines</code></dt><dd>core crate の総行数 (<a href="../spec/constitution.html#c4">C4</a> の上限)</dd>
+    <dt><code>file-lines</code></dt><dd>1 file の最大行数 (<a href="../spec/constitution.html#c4">C4</a> の上限)</dd>
+    <dt><code>test-src-ratio</code></dt><dd>test 行と src 行の比 (測定定義は ADR-0002 §2.4 が固定した形のまま)</dd>
+    <dt><code>name-literal</code></dt><dd>core crate の名前定数がただ 1 箇所で宣言されていること</dd>
+    <dt><code>manifest-name</code></dt><dd>manifest 群が名乗る名前の一致</dd>
+    <dt><code>manifest-version</code></dt><dd>manifest 群が名乗る版の一致</dd>
+    <dt><code>lints-set</code></dt><dd>workspace が宣言する lint の集合 (宣言の欠落を測る唯一の面)</dd>
+    <dt><code>lints-optin</code></dt><dd>member 側が workspace の lint を opt-in していること</dd>
+    <dt><code>deps-empty</code></dt><dd>直接依存が許可の集合に収まっていること (<a href="../spec/constitution.html#c13">C13</a>)</dd>
+    <dt><code>toolchain-pin</code></dt><dd>toolchain が版番号の字面で固定されていること</dd>
+    <dt><code>paths-clean</code></dt><dd>index を母集団に、 tracked file の本文へ private path 形が残っていないこと (実装は <code>crates/xtask/src/paths_clean.rs</code>)</dd>
+  </dl>
+</div>
+
+<h3 id="s2-3-change">§2.3 増減のしかたと射程外</h3>
+<p class="section-essence" data-audience="human">項目を増やしたり減らしたりするときは、 この記録を差し替える新しい記録を立てます。 前の記録を後から書き換えることはしません。</p>
+<p>tag の増減は<strong>本 ADR を supersede する新 ADR</strong> で行う (MUST)。 <a href="ADR-0002-test-lint-toolchain.html">ADR-0002</a> 前文の凍結規定をそのまま継承する。</p>
+<p data-audience="machine">次は<strong>本 ADR の決定ではない</strong> (MUST NOT be read as such): 閾値の実値と置き場 (ADR-0002 §2.5 が有効)、 <code>test-src-ratio</code> の測定定義 (同 §2.4 の当該規定が有効)、 各 tag の実装 (<a href="../spec/constitution.html#c12">C12</a> の歯が測る面)、 CI の job 構成。 本 ADR が差し替えるのは ADR-0002 §2.4 の<strong>列挙 1 文</strong>だけである。</p>
+
+<h3 id="s2-4-correction">§2.4 ADR-0002 §2.2 の例示の訂正</h3>
+<p class="section-essence" data-audience="human">前の記録に書かれた実験の例が、 そのままでは再現しません。 引数の数が 1 つ足りないためです。 決めたこと自体は正しいので、 ここに訂正だけを残します。</p>
+<p><a href="ADR-0002-test-lint-toolchain.html#s2-2-granularity">ADR-0002 §2.2</a> の実測引用は<strong>逐語では再現しない</strong>。 本 ADR に訂正を記録する (ADR-0002 は frozen ゆえ本文は触らない)。</p>
+<div data-audience="machine">
+  <p>当該引用は「宣言ゼロの crate で 7 引数関数が <code>-D clippy::too-many-arguments</code> implied by <code>-D warnings</code> として error」と述べる。 <code>too_many_arguments</code> の既定閾値は 7 で、 発火は閾値の<strong>超過</strong>ゆえ、 宣言ゼロ・<code>clippy.toml</code> 不在の条件では 7 引数は通る。 本 ADR の記録時点で撃ち直した実測は次のとおり:</p>
+  <dl>
+    <dt>7 引数 / 宣言ゼロ / <code>clippy.toml</code> 不在</dt><dd>rc 0 (error にならない)</dd>
+    <dt>8 引数 / 同条件</dt><dd>rc 101 — <code>-D clippy::too-many-arguments</code> implied by <code>-D warnings</code></dd>
+    <dt>7 引数 / <code>clippy.toml</code> の閾値 5 (本 repo の設定)</dt><dd>rc 101</dd>
+  </dl>
+  <p>すなわち元の引用は<strong>閾値を下げた条件での実測</strong>を、 宣言の有無だけの条件として書いたものである。 <strong>決定そのもの (<code>too_many_arguments</code> の既定 level は warn ゆえ宣言が無くても違反は <code>-D warnings</code> 下で落ちる) は正しく、 本訂正は決定に影響しない</strong>——変わるのは「何引数で落ちるか」という例示の数だけである。</p>
+</div>
+</section>
+
+<section id="s3-consequences" class="informative">
+<h2>§3. Consequences</h2>
+<p class="section-essence" data-audience="human">良い点は、 記録と実際に動いているものが一致し、 検査の 1 行を読めば何が測られているか分かることです。 弱い点は、 一致を機械が見張っているわけではないことです。</p>
+<p data-audience="machine">Positive: 記録された列挙と判定行の現物が一致するため、 判定行 1 行から「何が測られているか」を辿れる。 tag を足す便は本 ADR の supersede を伴うので、 測定面の増減が記録面に残る。</p>
+<p data-audience="machine">Negative: <strong>列挙と現物の一致を測る機械は無い</strong>。 tag を足しても本 ADR を supersede しなければ、 記録は再び現物より少ないまま気付かれない (ADR-0002 §2.4 が 10 本のまま残ったのと同じ形)。 この乖離は現時点では便の手続き (契約が ADR の更新を要求する) で抑える。 <code>ci-decl</code> のように「実体を持たない案」を先に記録しない規律も、 同じ理由で人間の手続き側に在る。</p>
+</section>
+
+<section id="s4-alternatives" class="informative">
+<h2>§4. Alternatives Considered</h2>
+<p class="section-essence" data-audience="human">2 つの案を退けました。 前の記録を直接書き換える案と、 まだ実体の無い項目を先に書いておく案です。</p>
+<p data-audience="machine">案 (i) <strong>ADR-0002 §2.4 を in-place 改訂する</strong>: 却下。 ADR は決定時点の記録 (frozen) であり、 前文の凍結規定が in-place 改訂を禁じている。 記録を書き換えると「2026-09-07 に何を決めたか」が読めなくなり、 ADR が持つ唯一の値 (決定の時点と理由が残ること) を失う。</p>
+<p data-audience="machine">案 (ii) <strong><code>ci-decl</code> を 12 本目として先行記録する</strong>: 却下。 <code>xtask</code> 側に実体が無く、 検証面は CI の job そのものである。 実体の無い項目を記録すると、 記録が事実に先行し「列挙は現物と一致する」という本 ADR の前提そのものが崩れる。 CI 便の契約化でも不採用となった。</p>
+</section>
+
+<section id="s5-trace" class="informative">
+<h2>§5. Trace</h2>
+<p class="section-essence" data-audience="human">出所は 2 件です。 実装側の裁定と、 その後の契約化で 12 本目を採らないと決めたことです。</p>
+<ul data-audience="machine">
+  <li>決定の出所: <strong>2026-09-08 の leg 1 裁定 §3</strong> (11 本目 <code>paths-clean</code> を measure 面へ足す) と、 <strong>2026-09-10 の契約化</strong> (12 本目の案 <code>ci-decl</code> は不採用・CI の job が検証面)。 本 repo は public のため、 裁定の逐語・席や台帳の識別子・host 名は本 file に載せない (出所は日付で指す)。</li>
+  <li>supersede 対象: <a href="ADR-0002-test-lint-toolchain.html#s2-4-xtask">ADR-0002 §2.4</a> の measure tag の列挙 1 文のみ (部分)。 同 §の他の規定と §2.5 の閾値は有効。</li>
+  <li>拘束条件: <a href="../spec/constitution.html#c4">C4</a> (大きさの上限を measure する)、 <a href="../spec/constitution.html#c12">C12</a> (歯は Rust の 1 framework)、 <a href="../spec/constitution.html#c13">C13</a> (依存の許可集合)。 要件は SRS NFR3 (measure = <code>cargo xtask check</code>)。</li>
+  <li>前提: <code>paths-clean</code> が main に実在すること (判定行の現物で確認できる)。</li>
+  <li>記録した日: 2026-09-10。</li>
+</ul>
+</section>
+</nav>
+<script>
+(function () {
+  var openedForPrint = [];
+  window.addEventListener('beforeprint', function () {
+    openedForPrint = [];
+    var ds = document.querySelectorAll('details:not([open])');
+    for (var i = 0; i < ds.length; i++) { ds[i].setAttribute('open', ''); openedForPrint.push(ds[i]); }
+  });
+  window.addEventListener('afterprint', function () {
+    for (var i = 0; i < openedForPrint.length; i++) openedForPrint[i].removeAttribute('open');
+    openedForPrint = [];
+  });
+  if (!document.querySelector('[data-audience]')) return;
+  /* 既定 = 人間プレゼン型 (ADR-0040 / rules §11.3): script 経由で初期 class を付与するため
+     no-JS では付かず全文可視に graceful degrade する。 static DOM は全文を保持 (AI/検索/印刷は不変)。 */
+  document.body.classList.add('audience-human');
+  var bar = document.createElement('nav');
+  bar.className = 'audience-toggle';
+  bar.setAttribute('aria-label', '表示対象の切替');
+  var states = [['both', '両方'], ['human', '人間向け'], ['machine', '機械向け']];
+  for (var s = 0; s < states.length; s++) {
+    (function (mode, label) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      b.setAttribute('aria-pressed', mode === 'human' ? 'true' : 'false');
+      b.addEventListener('click', function () {
+        document.body.classList.remove('audience-human', 'audience-machine');
+        if (mode !== 'both') document.body.classList.add('audience-' + mode);
+        var bs = bar.querySelectorAll('button');
+        for (var j = 0; j < bs.length; j++) bs[j].setAttribute('aria-pressed', bs[j] === b ? 'true' : 'false');
+      });
+      bar.appendChild(b);
+    })(states[s][0], states[s][1]);
+  }
+  var bc = document.querySelector('nav.breadcrumb');
+  if (bc && bc.parentNode) { bc.parentNode.insertBefore(bar, bc.nextSibling); }
+  else { document.body.insertBefore(bar, document.body.firstChild); }
+})();
+</script>
+<!-- folio:chrome-bottom -->
+<nav class="prevnext" aria-label="前後の文書">
+  <a class="prevnext__prev" href="ADR-0005-a3-approval-surface-c7.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">ADR-0005 — 憲法改訂 = A3 の承認経路を C7 の対話面へ揃える (ADR-0003 §2.1 の決定の適用漏れの是正)</span></a>
+</nav>
+<script>
+(function () {
+  var openedForPrint = [];
+  window.addEventListener('beforeprint', function () {
+    openedForPrint = [];
+    var ds = document.querySelectorAll('details:not([open])');
+    for (var i = 0; i < ds.length; i++) { ds[i].setAttribute('open', ''); openedForPrint.push(ds[i]); }
+  });
+  window.addEventListener('afterprint', function () {
+    for (var i = 0; i < openedForPrint.length; i++) openedForPrint[i].removeAttribute('open');
+    openedForPrint = [];
+  });
+  if (!document.querySelector('[data-audience]')) return;
+  /* 既定 = 人間プレゼン型 (ADR-0040 / rules §11.3): script 経由で初期 class を付与するため
+     no-JS では付かず全文可視に graceful degrade する。 static DOM は全文を保持 (AI/検索/印刷は不変)。 */
+  document.body.classList.add('audience-human');
+  var bar = document.createElement('nav');
+  bar.className = 'audience-toggle';
+  bar.setAttribute('aria-label', '表示対象の切替');
+  var states = [['both', '両方'], ['human', '人間向け'], ['machine', '機械向け']];
+  for (var s = 0; s < states.length; s++) {
+    (function (mode, label) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      b.setAttribute('aria-pressed', mode === 'human' ? 'true' : 'false');
+      b.addEventListener('click', function () {
+        document.body.classList.remove('audience-human', 'audience-machine');
+        if (mode !== 'both') document.body.classList.add('audience-' + mode);
+        var bs = bar.querySelectorAll('button');
+        for (var j = 0; j < bs.length; j++) bs[j].setAttribute('aria-pressed', bs[j] === b ? 'true' : 'false');
+      });
+      bar.appendChild(b);
+    })(states[s][0], states[s][1]);
+  }
+  var bc = document.querySelector('nav.breadcrumb');
+  if (bc && bc.parentNode) { bc.parentNode.insertBefore(bar, bc.nextSibling); }
+  else { document.body.insertBefore(bar, document.body.firstChild); }
+})();
+</script>
+<!-- /folio:chrome-bottom -->
+</body>
+</html>
