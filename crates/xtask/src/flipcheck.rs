@@ -755,7 +755,7 @@ pub fn judge(base: &str, workdir: &Path) -> Verdict {
     judge_into(base, workdir, &mut emit_err)
 }
 
-/// [`judge`] の本体。内訳の行は `sink` へ渡す。
+/// [`judge`] の本体。効かない札の行（`stale-marker`）を `sink` へ渡す。
 ///
 /// stderr へ直に書くと、**出したこと自体を歯から読めない**——`stale-marker` の行は
 /// 判定行にも rc にも載らないので、emit を丸ごと消しても全部の歯が緑のままになる
@@ -777,7 +777,13 @@ fn judge_into(base: &str, workdir: &Path, sink: &mut dyn FnMut(&str)) -> Verdict
         Err(reason) => return infra(&reason),
         Ok(found) => found,
     };
-    for pair in pairs.iter().filter(|pair| pair.stale_marker()) {
+    // **test 区間が動いた便にだけ**言う。札は file に残るので、`stale_marker()` だけで
+    // 数えると、その file の src を触るたびに「札を削除しろ」と言われる——免除を
+    // 求めていない便には無関係な指示で、狼少年にすると本当に効かない札を見落とす。
+    for pair in pairs
+        .iter()
+        .filter(|pair| pair.stale_marker() && pair.test_diff())
+    {
         sink(&format!(
             "flip-check: stale-marker {}（base に既に在る marker は効かない\
              ・削除するか新しい bead id で置き直す）",

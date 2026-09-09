@@ -5,10 +5,10 @@
 //! `#[path]` で `flipcheck` の子 module として取り込むので、module path は
 //! `flipcheck::tests` のまま＝歯の名前は 1 つも変わらない。
 //!
-//! ⚠ この file は `#[cfg(test)] mod` の形を持たないので **flip-check の区間判定には
-//! 見えない**（区間は空と数えられ、移動は `tests-removed-only` の枝で通る）。ここへ
-//! 足す歯が flip を検査されるようになるのは、`crates/*/src/**/*_tests.rs` を test file
-//! として丸ごと写す規則（s2-07l.34 の (6)）が land してからである。
+//! この file は `#[cfg(test)] mod` の形を持たないが、`crates/*/src/**/*_tests.rs` は
+//! **名前で test file と見なして丸ごと写す**（s2-07l.34 の (6)）ので、ここへ足した歯は
+//! base へ写り flip を検査される。名前で見なければ区間判定には src 区間だけの file に
+//! 見え、ここへ足した歯が 1 本も測られないままになる。
 
 use super::{is_test_file, judge, judge_into, parse_base, split_regions, FilePair, Verdict};
 use std::path::{Path, PathBuf};
@@ -683,8 +683,9 @@ fn flip_check_ignores_retroactive_marker_already_in_base() {
 #[test]
 fn flip_check_treats_respaced_carried_marker_as_stale() {
     let (carried, _) = carried_pair();
+    // **前後どちらの空白差も**同じ札として扱う（片側だけ trim する実装はここで落ちる）。
     let head = carried
-        .replace("retroactive s2-07l.33", "retroactive  s2-07l.33")
+        .replace("retroactive s2-07l.33", "retroactive  s2-07l.33 ")
         .replace(
             "s2-07l.33\n",
             "s2-07l.33\n    #[test]\n    fn added_later() {\n        assert_eq!(super::val(), 1);\n    }\n",
@@ -751,6 +752,26 @@ fn flip_check_emits_stale_marker_line_to_stderr() {
             .iter()
             .any(|line| line.starts_with("flip-check: stale-marker ")),
         "この便で足した札に stale を出さない: {fresh_lines:?}"
+    );
+
+    // 負例 2。**免除を求めていない便**——test 区間が 1 byte も動かず src だけ触った便
+    // ——にも出さない。札は file に残るので、これを出すとその file の src を触るたびに
+    // 「札を削除しろ」と言われる（削除は別便の仕事）。狼少年にすると、本当に効かない
+    // 札を見落とす。
+    let (carried, _) = carried_pair();
+    let src_only = carried.replace("    1\n}", "    1 + 0\n}");
+    let (dir, _) = base_commit();
+    let base = seed_fixture(&dir, &carried);
+    write_at(&dir, &lib_rel(), &src_only);
+    head_commit(&dir);
+    let mut src_lines: Vec<String> = Vec::new();
+    let _ = judge_into(&base, &dir, &mut |line| src_lines.push(line.to_owned()));
+    drop_fixture(&dir);
+    assert!(
+        !src_lines
+            .iter()
+            .any(|line| line.starts_with("flip-check: stale-marker ")),
+        "test 区間が動いていない便に stale を出さない: {src_lines:?}"
     );
 }
 
