@@ -6,7 +6,7 @@
 - 憲法: [C6](../../design-intent/spec/constitution.html#c6) 消費は害 / [C7](../../design-intent/spec/constitution.html#c7) 対話面 / [A1](../../design-intent/spec/constitution.html#a1) 3 クラス / [A4](../../design-intent/spec/constitution.html#a4) merge は可逆 / [N1](../../design-intent/spec/constitution.html#n1) rm しない
 - 決定: [ADR-0004](../../design-intent/decisions/ADR-0004-mvp-persistence-and-cross-version-formats.html) §2.2（面 4 stop・面 5 verdicts）/ §2.3（契約 file の形）/ §2.4（env seam 無し）
 - 前提の設計: [fleet-event-log.md](./fleet-event-log.md)（永続面）/ [vessel-hook.md](./vessel-hook.md)（guard）/ [rules-manifest.md](./rules-manifest.md)（lens 本数・cap）
-- この設計から出る契約（5 本）: (a) `s2-2e5` intake → spawn → stop / (b) `s2-41o` gate → land → export → e2e / (c) 承認 Blocked と resume / (d) headless runner と lens / (e) 到達点の計測（toy 5 便・自己ホスト 1 便）。(c)(d)(e) の bead id は起票時に本節へ追記する。
+- この設計から出る契約（5 本）: (a) `s2-2e5` intake → spawn → stop / (b) `s2-41o` gate → land → export → e2e / (c) `s2-07l.22` 承認 Blocked と resume / (d) `s2-07l.23` headless runner と lens / (e) `s2-07l.24` 到達点の計測（toy 5 便・自己ホスト 1 便）。順序: (a) → (b)・(c)・(d) → (e)。
 
 ## 1. 何を解くか
 
