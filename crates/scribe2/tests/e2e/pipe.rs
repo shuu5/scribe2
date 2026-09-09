@@ -2175,99 +2175,115 @@ fn toy_spawn(repo: &Path, state: &Path, bead: &str, contract: &Path, runner: &st
     (id, out)
 }
 
-#[test]
-fn pipe_five_contracts_land_with_fake_runner_in_toy_repo() {
-    let (repo, state) = repo_with_state();
-    let marker = state.join("lens-ran");
-    let pass = fake_lens(&marker, &lens_verdict("PASS"));
-    let fail = fake_lens(&state.join("lens-fail"), &lens_verdict("FAIL"));
-    let commit = "echo x >> src/lib.rs && git add -A && git commit -q -m runner";
-    // `Command::output` は stdin を /dev/null にする＝**人の入力を待つ余地が無い**形で
-    // 5 便を通す（設計 §8 (e)）。
-    let plain = write_contract(&repo, &[], &[]);
-    // **marker は tracked でなければ guard が効かない**: 便の worktree は base の checkout
-    // なので、`.vessel` が commit されていない repo では worktree に marker が無く
-    // `served()` は Absent（＝guard は黙る）。本 repo へ `.vessel` を置く理由がこれで、
-    // toy repo も同じ形にしてから 5 便を通す。
-    git(&repo, &["add", "-f", ".vessel"]);
-    git(&repo, &["commit", "-q", "-m", "vessel"]);
+/// commit を 1 本作る fake runner の 1 行。
+const TOY_COMMIT: &str = "echo x >> src/lib.rs && git add -A && git commit -q -m runner";
 
-    // (1) 正常: intake → spawn → gate(PASS) → land。
-    let (ok_id, spawned) = toy_spawn(&repo, &state, "toy-ok", &plain, commit);
-    assert_eq!(spawned.status.code(), Some(i32::from(RC_OK)), "1 便目 spawn: {}", stderr_of(&spawned));
-    let gated = gate_once(&repo, &state, &ok_id, Some(&pass));
-    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "1 便目 gate: {}", stderr_of(&gated));
-    let landed = land_once(&repo, &state, &ok_id);
-    assert_eq!(landed.status.code(), Some(i32::from(RC_OK)), "1 便目 land: {}", stderr_of(&landed));
+/// **marker を tracked にする**。便の worktree は base の checkout なので、`.vessel` が
+/// commit されていない repo では worktree に marker が無く `served()` は Absent＝guard は
+/// 黙る。本 repo の root へ `.vessel` を置く理由がこれである（設計 §9・AC2）。
+fn track_marker(repo: &Path) {
+    git(repo, &["add", "-f", ".vessel"]);
+    git(repo, &["commit", "-q", "-m", "vessel"]);
+}
 
-    // (2) write-set の外を編集しようとして guard に止まる便。**runner の中で guard を
-    // 撃ち、deny（rc 2）を見て止まる**＝実装役が禁じられた面に触れた周と同じ形。
-    let denied = format!(
+/// toy repo の 5 便が共有する材料（引数の本数を線の内へ収める）。
+struct Toy<'a> {
+    /// 対象 repo。
+    repo: &'a Path,
+    /// 置き場。
+    state: &'a Path,
+    /// PASS を返す fake lens。
+    lens: &'a str,
+}
+
+/// 1 便を intake → spawn → gate(PASS) → land まで通す（正常形）。
+fn toy_land(toy: &Toy<'_>, bead: &str, contract: &Path, runner: &str) {
+    let (repo, state, lens) = (toy.repo, toy.state, toy.lens);
+    let (id, spawned) = toy_spawn(repo, state, bead, contract, runner);
+    assert_eq!(spawned.status.code(), Some(i32::from(RC_OK)), "{bead} spawn: {}", stderr_of(&spawned));
+    let gated = gate_once(repo, state, &id, Some(lens));
+    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "{bead} gate: {}", stderr_of(&gated));
+    let landed = land_once(repo, state, &id);
+    assert_eq!(landed.status.code(), Some(i32::from(RC_OK)), "{bead} land: {}", stderr_of(&landed));
+}
+
+/// write-set の外を編集しようとして guard に止まる便。**止めたのが guard であることまで測る**
+/// （runner が別の理由で落ちた周と弁別する）。
+fn toy_denied(toy: &Toy<'_>, contract: &Path) {
+    let (repo, state) = (toy.repo, toy.state);
+    let runner = format!(
         "printf '{{\"cwd\":\"%s\",\"tool_name\":\"Write\",\"tool_input\":{{\"file_path\":\"docs/out.md\"}}}}' \"$PWD\" \
-         | '{}' hook pre-tool-use; test $? -eq 0 || exit 1; {commit}",
+         | '{}' hook pre-tool-use; test $? -eq 0 || exit 1; {TOY_COMMIT}",
         bin()
     );
-    let (denied_id, stopped) = toy_spawn(&repo, &state, "toy-guard", &plain, &denied);
+    let (id, stopped) = toy_spawn(repo, state, "toy-guard", contract, &runner);
     // **spawn の rc は 0 のまま**（段が結果を運ぶ・設計 §5.2）。便の終わり方は段で読む。
+    assert!(stdout_of(&stopped).contains("stage=Failed"), "guard に止まった便は Failed: {}", stdout_of(&stopped));
     assert!(
-        stdout_of(&stopped).contains("stage=Failed"),
-        "guard に止まった便は Failed: {}",
-        stdout_of(&stopped)
-    );
-    assert!(
-        show_line(&repo, &state, &denied_id).contains("stage=Failed"),
+        show_line(repo, state, &id).contains("stage=Failed"),
         "永続面にも Failed が残る: {}",
-        show_line(&repo, &state, &denied_id)
+        show_line(repo, state, &id)
     );
-    // **止めたのが guard であることまで測る**（runner が別の理由で落ちた周と弁別する）。
-    let denies = fs::read_to_string(inject_path(&state))
+    let denies = fs::read_to_string(inject_path(state))
         .unwrap_or_default()
         .lines()
         .filter(|line| line.contains("\"what\":\"deny\""))
         .count();
     assert_eq!(denies, 1, "write-set の外への Write が 1 件 deny されている");
+}
 
-    // (3) test を足す便（write-set に tests/ を持つ契約）。
-    let with_tests = write_contract(
-        &repo,
-        &["write-set"],
-        &[r#"write-set = ["src/lib.rs", "tests/"]"#],
-    );
-    let add_test = "mkdir -p tests && echo '#[test] fn t() {}' > tests/new.rs \
-                    && git add -A && git commit -q -m test";
-    let (test_id, spawned) = toy_spawn(&repo, &state, "toy-test", &with_tests, add_test);
-    assert_eq!(spawned.status.code(), Some(i32::from(RC_OK)), "3 便目 spawn: {}", stderr_of(&spawned));
-    let gated = gate_once(&repo, &state, &test_id, Some(&pass));
-    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "3 便目 gate: {}", stderr_of(&gated));
-    let landed = land_once(&repo, &state, &test_id);
-    assert_eq!(landed.status.code(), Some(i32::from(RC_OK)), "3 便目 land: {}", stderr_of(&landed));
-
-    // (4) gate が FAIL する便（land しない）。
-    let (fail_id, spawned) = toy_spawn(&repo, &state, "toy-fail", &plain, commit);
-    assert_eq!(spawned.status.code(), Some(i32::from(RC_OK)), "4 便目 spawn: {}", stderr_of(&spawned));
-    let gated = gate_once(&repo, &state, &fail_id, Some(&fail));
-    assert_eq!(gated.status.code(), Some(i32::from(RC_REFUSED)), "4 便目は FAIL で rc 1");
-    let refused = land_once(&repo, &state, &fail_id);
+/// gate が FAIL する便（land しない）。
+fn toy_gate_fail(toy: &Toy<'_>, contract: &Path, lens: &str) {
+    let (repo, state) = (toy.repo, toy.state);
+    let (id, spawned) = toy_spawn(repo, state, "toy-fail", contract, TOY_COMMIT);
+    assert_eq!(spawned.status.code(), Some(i32::from(RC_OK)), "spawn: {}", stderr_of(&spawned));
+    let gated = gate_once(repo, state, &id, Some(lens));
+    assert_eq!(gated.status.code(), Some(i32::from(RC_REFUSED)), "FAIL の gate は rc 1");
+    let refused = land_once(repo, state, &id);
     assert_eq!(refused.status.code(), Some(i32::from(RC_REFUSED)), "FAIL の便は land しない");
+}
 
-    // (5) 3 クラスを名乗る便: spawn の手前で Blocked → approve（逐語）→ resume → land。
-    let publish = write_contract(&repo, &[], &[r#"classes = ["publish"]"#]);
-    let (blocked_id, blocked) = toy_spawn(&repo, &state, "toy-approve", &publish, commit);
-    assert_eq!(blocked.status.code(), Some(i32::from(RC_BLOCKED)), "5 便目は Blocked で rc 3");
+/// 3 クラスを名乗る便: spawn の手前で Blocked → approve（逐語）→ resume → gate → land。
+fn toy_approved_land(toy: &Toy<'_>, contract: &Path) {
+    let (repo, state, lens) = (toy.repo, toy.state, toy.lens);
+    let (id, blocked) = toy_spawn(repo, state, "toy-approve", contract, TOY_COMMIT);
+    assert_eq!(blocked.status.code(), Some(i32::from(RC_BLOCKED)), "承認待ちは rc 3");
     let approved = run_pipe(&[
-        "approve", "--run", &blocked_id, "--words", "この便は出してよい",
+        "approve", "--run", &id, "--words", "この便は出してよい",
         "--state-dir", &state.display().to_string(),
     ]);
     assert_eq!(approved.status.code(), Some(i32::from(RC_OK)), "approve: {}", stderr_of(&approved));
     let resumed = run_pipe(&[
-        "resume", "--run", &blocked_id, "--repo", &repo.display().to_string(),
-        "--state-dir", &state.display().to_string(), "--runner", commit,
+        "resume", "--run", &id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(), "--runner", TOY_COMMIT,
     ]);
-    assert_eq!(resumed.status.code(), Some(i32::from(RC_OK)), "5 便目 resume: {}", stderr_of(&resumed));
-    let gated = gate_once(&repo, &state, &blocked_id, Some(&pass));
-    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "5 便目 gate: {}", stderr_of(&gated));
-    let landed = land_once(&repo, &state, &blocked_id);
-    assert_eq!(landed.status.code(), Some(i32::from(RC_OK)), "5 便目 land: {}", stderr_of(&landed));
+    assert_eq!(resumed.status.code(), Some(i32::from(RC_OK)), "resume: {}", stderr_of(&resumed));
+    let gated = gate_once(repo, state, &id, Some(lens));
+    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "gate: {}", stderr_of(&gated));
+    let landed = land_once(repo, state, &id);
+    assert_eq!(landed.status.code(), Some(i32::from(RC_OK)), "land: {}", stderr_of(&landed));
+}
+
+#[test]
+fn pipe_five_contracts_land_with_fake_runner_in_toy_repo() {
+    let (repo, state) = repo_with_state();
+    let pass = fake_lens(&state.join("lens-ran"), &lens_verdict("PASS"));
+    let fail = fake_lens(&state.join("lens-fail"), &lens_verdict("FAIL"));
+    let plain = write_contract(&repo, &[], &[]);
+    // `Command::output` は stdin を /dev/null にする＝**人の入力を待つ余地が無い**形で
+    // 5 便を通す（設計 §8 (e)）。
+    track_marker(&repo);
+
+    let toy = Toy { repo: &repo, state: &state, lens: &pass };
+    toy_land(&toy, "toy-ok", &plain, TOY_COMMIT);
+    toy_denied(&toy, &plain);
+    let with_tests = write_contract(&repo, &["write-set"], &[r#"write-set = ["src/lib.rs", "tests/"]"#]);
+    let add_test = "mkdir -p tests && echo '#[test] fn t() {}' > tests/new.rs \
+                    && git add -A && git commit -q -m test";
+    toy_land(&toy, "toy-test", &with_tests, add_test);
+    toy_gate_fail(&toy, &plain, &fail);
+    let publish = write_contract(&repo, &[], &[r#"classes = ["publish"]"#]);
+    toy_approved_land(&toy, &publish);
 
     // **到達点**: 5 便のうち 3 便が main に載り、人由来の event は承認の 1 件だけ。
     let out = report_once(&state);
