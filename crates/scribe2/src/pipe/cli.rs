@@ -137,7 +137,15 @@ fn intake(args: &[String], policy: LockPolicy) -> Outcome {
         }
     };
     let id = run_id(&bead, &fleet::cli::now_utc());
+    // stamp は秒までなので、同じ bead を同じ秒に 2 回 intake すると id が衝突する。
+    // 黙って上書きすると **前の便の契約が別物に化ける**ので、何も書かずに断る。
+    if run_dir(&state_dir, &id).exists() {
+        return refused(format!("run {id} は既に在る（同じ秒の再 intake）"));
+    }
     if let Err(reason) = copy_contract(&state_dir, &id, &path) {
+        return broken(reason);
+    }
+    if let Err(reason) = remember_repo(&state_dir, &id, &repo) {
         return broken(reason);
     }
     let emitted = emit(
@@ -156,6 +164,24 @@ fn intake(args: &[String], policy: LockPolicy) -> Outcome {
     match emitted {
         Err(err) => broken(err.to_string()),
         Ok(()) => Outcome::ok_line(format!("run={id}")),
+    }
+}
+
+/// 便の対象 repo を写し面へ書き留める（現在地を cwd に依らせない）。
+fn remember_repo(state_dir: &Path, id: &str, repo: &Path) -> Result<(), String> {
+    let path = super::repo_path(state_dir, id);
+    std::fs::write(&path, format!("{}\n", repo.display()))
+        .map_err(|err| format!("{} を書けない: {err}", path.display()))
+}
+
+/// 便の repo。`--repo` が上書きし、無ければ写し面 → cwd の順で解く。
+fn run_repo(args: &[String], state_dir: &Path, id: &str) -> Result<PathBuf, String> {
+    if let Some(found) = flag(args, "--repo")? {
+        return Ok(PathBuf::from(found));
+    }
+    match super::repo_of_run(state_dir, id) {
+        Some(found) => Ok(found),
+        None => repo_of(args),
     }
 }
 
@@ -217,7 +243,7 @@ fn launch(
         Ok(found) => found,
         Err(errors) => return Outcome::failed(RC_BROKEN, errors.iter().map(ToString::to_string).collect()),
     };
-    let repo = match repo_of(args) {
+    let repo = match run_repo(args, &state_dir, id) {
         Ok(found) => found,
         Err(reason) => return refused(reason),
     };
@@ -265,7 +291,7 @@ fn show(args: &[String]) -> Outcome {
     let Some(run) = state.runs.get(&id) else {
         return refused(format!("run {id} が無い"));
     };
-    let repo = repo_of(args).unwrap_or_else(|_| PathBuf::from("."));
+    let repo = run_repo(args, &state_dir, &id).unwrap_or_else(|_| PathBuf::from("."));
     Outcome::ok_line(format!(
         "run={} bead={} stage={} approved={} worktree={}",
         run.id,
@@ -320,17 +346,22 @@ fn stop(args: &[String], manifest: &Manifest, policy: LockPolicy) -> Outcome {
         Ok(found) => found,
         Err(reason) => return broken(reason),
     };
-    let live: Vec<(String, String, u64)> = state
+    // **pid を持たない Live 席も母集団に数える**。落とすと「対象なし rc 0」に化け、
+    // 止まっていない席が在るのに全クリアを名乗ってしまう。
+    let live: Vec<(String, String, Option<u64>)> = state
         .seats
         .values()
         .filter(|seat| seat.state == SeatState::Live)
-        .filter_map(|seat| seat.pid.map(|pid| (seat.id.clone(), seat.run.clone(), pid)))
+        .map(|seat| (seat.id.clone(), seat.run.clone(), seat.pid))
         .collect();
     let mut stopped = 0_usize;
     for (id, run, pid) in &live {
-        if terminate(*pid, grace) {
-            stopped += 1;
+        // 止められなかった席に「止めた」を記帳しない。記帳すると次の周が
+        // 「対象なし」を返し、生きている席が終端として消える（偽の全クリア）。
+        if !pid.is_some_and(|found| terminate(found, grace)) {
+            continue;
         }
+        stopped += 1;
         if let Err(err) = record_stop(&state_dir, &state, (id, run, *pid), policy) {
             return broken(err);
         }
@@ -370,7 +401,7 @@ fn signal(pid: u64, name: &str) {
 fn record_stop(
     state_dir: &Path,
     state: &State,
-    seat: (&str, &str, u64),
+    seat: (&str, &str, Option<u64>),
     policy: LockPolicy,
 ) -> Result<(), String> {
     let (id, run, pid) = seat;
@@ -383,7 +414,7 @@ fn record_stop(
             bead,
             stage: None,
             seat: Some(id.to_owned()),
-            pid: Some(pid),
+            pid,
             detail: None,
         },
         policy,

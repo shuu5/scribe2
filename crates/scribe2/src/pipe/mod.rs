@@ -17,7 +17,6 @@ pub mod spawn;
 use crate::fleet::store::{self, LockPolicy, StoreError};
 use crate::fleet::{self, replay, Event, EventKind, Stage, State, SCHEMA};
 use crate::name::NAME;
-use contract::Contract;
 use std::path::{Path, PathBuf};
 
 /// 便ごとの写しを置く dir 名。
@@ -34,6 +33,26 @@ pub fn run_dir(state_dir: &Path, id: &str) -> PathBuf {
 /// 便の契約 file の写し。
 pub fn contract_path(state_dir: &Path, id: &str) -> PathBuf {
     run_dir(state_dir, id).join(CONTRACT_FILE)
+}
+
+/// 便の対象 repo を書き留める file。
+///
+/// repo は event の schema（閉じた key 集合）に載らないので、便ごとの写し面に置く。
+/// ここに無いと `show` や `resume` が **その process の cwd** を見ることになり、
+/// 「現在地は永続面から読む」（GOAL 3）が崩れる。
+pub fn repo_path(state_dir: &Path, id: &str) -> PathBuf {
+    run_dir(state_dir, id).join("repo")
+}
+
+/// 便に紐づいた repo を読む。書かれていなければ `None`。
+pub fn repo_of_run(state_dir: &Path, id: &str) -> Option<PathBuf> {
+    let text = std::fs::read_to_string(repo_path(state_dir, id)).ok()?;
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(PathBuf::from(trimmed))
+    }
 }
 
 /// 便の worktree（repo 相対の固定 path・設計 §5.2）。
@@ -55,58 +74,70 @@ pub fn run_id(bead: &str, now: &str) -> String {
     format!("{bead}-{stamp}")
 }
 
-/// 起動の前に実測した量。**[`Budget`] はこれを消費してしか作れない**。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Budget {
-    write_set: usize,
-    verify: usize,
-    size: String,
-}
+pub use measure::{Budget, Precheck};
 
-impl Budget {
-    /// write-set の本数。
-    pub fn write_set(&self) -> usize {
-        self.write_set
-    }
-
-    /// verify 行の本数。
-    pub fn verify(&self) -> usize {
-        self.verify
-    }
-
-    /// 見積の目安。
-    pub fn size(&self) -> &str {
-        &self.size
-    }
-}
-
-/// 起動前の実測。
+/// 実測と予算を**兄弟 module から作れない**位置に閉じ込める（憲法 C6）。
 ///
-/// MVP は上限を効かせない（`R-C6-1` が未定）が、**型の形を先に置く**ことで
-/// 「runner を起動する前に必ず測る」を compile 時に守る。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Precheck {
-    budget: Budget,
-}
+/// `Budget` の field をこの module の private にすると、`pipe::spawn` は兄弟なので
+/// 値を組み立てられない。`Precheck::measure` を通る以外に `Budget` を得る道が無く、
+/// 「測らずに起動する」経路が型として存在しない状態を compile 時に保てる。
+mod measure {
+    use super::contract::Contract;
+    use std::path::Path;
 
-impl Precheck {
-    /// 契約と repo を実測する。repo が git repo でなければ `Err`。
-    pub fn measure(contract: &Contract, repo: &Path) -> Result<Self, String> {
-        if head_of(repo).is_none() {
-            return Err(format!("{} は git repo でない", repo.display()));
-        }
-        Ok(Self {
-            budget: Budget {
-                write_set: contract.write_set.len(),
-                verify: contract.verify.len(),
-                size: contract.size.clone(),
-            },
-        })
+    /// 起動の前に実測した量。**[`Precheck`] を通してしか作れない**。
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct Budget {
+        write_set: usize,
+        verify: usize,
+        size: String,
     }
 
-    /// 実測を [`Budget`] へ変える。**これが唯一の作り方である**。
-    pub fn into_budget(self) -> Budget {
-        self.budget
+    impl Budget {
+        /// write-set の本数。
+        pub fn write_set(&self) -> usize {
+            self.write_set
+        }
+
+        /// verify 行の本数。
+        pub fn verify(&self) -> usize {
+            self.verify
+        }
+
+        /// 見積の目安。
+        pub fn size(&self) -> &str {
+            &self.size
+        }
+    }
+
+    /// 起動前の実測。
+    ///
+    /// MVP は上限を効かせない（`R-C6-1` が未定）が、**型の形を先に置く**ことで
+    /// 「runner を起動する前に必ず測る」を compile 時に守る。
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct Precheck {
+        budget: Budget,
+    }
+
+    impl Precheck {
+        /// 契約と repo を実測する。repo が git repo でなければ `Err`。
+        pub fn measure(contract: &Contract, repo: &Path) -> Result<Self, String> {
+            if super::head_of(repo).is_none() {
+                return Err(format!("{} は git repo でない", repo.display()));
+            }
+            Ok(Self {
+                budget: Budget {
+                    write_set: contract.write_set.len(),
+                    verify: contract.verify.len(),
+                    size: contract.size.clone(),
+                },
+            })
+        }
+
+        /// 実測を [`Budget`] へ変える。**これが唯一の作り方である**。
+        pub fn into_budget(self) -> Budget {
+            self.budget
+        }
     }
 }
 

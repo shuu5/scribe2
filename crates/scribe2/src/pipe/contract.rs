@@ -99,8 +99,8 @@ impl Contract {
     /// 本文から読む。**不備は全件集めて返す**。
     pub fn parse(text: &str) -> Result<Self, Vec<ContractError>> {
         let mut errors = Vec::new();
-        let found = scan(text, &mut errors);
-        check_required(&found, &mut errors);
+        let (found, seen) = scan(text, &mut errors);
+        check_required(&seen, &mut errors);
         let built = build(&found, &mut errors);
         match built {
             Some(contract) if errors.is_empty() => Ok(contract),
@@ -110,8 +110,11 @@ impl Contract {
 }
 
 /// 1 行ずつ読み、key → 値 を集める。行の形の不備はここで全件積む。
-fn scan(text: &str, errors: &mut Vec<ContractError>) -> Vec<(String, Raw, u64)> {
+fn scan(text: &str, errors: &mut Vec<ContractError>) -> (Vec<(String, Raw, u64)>, Vec<String>) {
     let mut found: Vec<(String, Raw, u64)> = Vec::new();
+    // 値が壊れていても「その key は書かれていた」ことは覚える。忘れると
+    // 「値が読めない」と「key が無い」を同じ key について二重に報告してしまう。
+    let mut seen: Vec<String> = Vec::new();
     for (index, raw_line) in text.lines().enumerate() {
         let line = index as u64 + 1;
         let trimmed = raw_line.trim();
@@ -130,15 +133,16 @@ fn scan(text: &str, errors: &mut Vec<ContractError>) -> Vec<(String, Raw, u64)> 
             errors.push(ContractError::new(line, format!("未知の key {key}")));
             continue;
         }
-        if found.iter().any(|(seen, _, _)| *seen == key) {
+        if seen.contains(&key) {
             errors.push(ContractError::new(line, format!("key {key} が重複する")));
             continue;
         }
+        seen.push(key.clone());
         if let Some(value) = value_of(&key, raw_value.trim(), line, errors) {
             found.push((key, value, line));
         }
     }
-    found
+    (found, seen)
 }
 
 /// 1 つの値を読む。配列は 1 行に収まっていること。
@@ -158,7 +162,7 @@ fn value_of(key: &str, raw: &str, line: u64, errors: &mut Vec<ContractError>) ->
     if !raw.ends_with(']') {
         errors.push(ContractError::new(
             line,
-            format!("{key} の配列が同じ行で閉じていない（1 行で完結すること）"),
+            format!("{key} の配列が同じ行で閉じていない（要素に改行は置けない・1 行で完結すること）"),
         ));
         return None;
     }
@@ -168,15 +172,25 @@ fn value_of(key: &str, raw: &str, line: u64, errors: &mut Vec<ContractError>) ->
     };
     let mut list = Vec::new();
     for part in parts {
-        match scalar(part.trim()) {
+        // 引用符 1 組ちょうどでなければ受けない。`["a" "b"]` の区切り忘れを 1 本の
+        // 壊れた文字列として黙って通すと、**書いた本数と通る本数が食い違う**（NFR4）。
+        match scalar(part.trim()).filter(|_| quoted_once(&part)) {
             Some(Scalar::Str(text)) => list.push(text),
             _ => errors.push(ContractError::new(
                 line,
-                format!("{key} の要素が文字列でない: {}", part.trim()),
+                format!("{key} の要素が引用符 1 組の文字列でない: {}", part.trim()),
             )),
         }
     }
     Some(Raw::List(list))
+}
+
+/// 要素が引用符 1 組ちょうどか（中に裸の `"` を含まない）。
+fn quoted_once(text: &str) -> bool {
+    text.trim()
+        .strip_prefix('"')
+        .and_then(|rest| rest.strip_suffix('"'))
+        .is_some_and(|body| !body.contains('"'))
 }
 
 /// `["a", "b"]` を要素へ切る。要素の中の `,` は quote の内側として扱う。
@@ -205,10 +219,10 @@ fn elements(raw: &str) -> Option<Vec<String>> {
     Some(parts)
 }
 
-/// 必須 key の欠落を全件積む。
-fn check_required(found: &[(String, Raw, u64)], errors: &mut Vec<ContractError>) {
+/// 必須 key の欠落を全件積む。**書かれていれば値が壊れていても欠落とは言わない**。
+fn check_required(seen: &[String], errors: &mut Vec<ContractError>) {
     for key in REQUIRED {
-        if !found.iter().any(|(seen, _, _)| seen == key) {
+        if !seen.iter().any(|found| found == key) {
             errors.push(ContractError::new(0, format!("必須の key {key} が無い")));
         }
     }
@@ -259,19 +273,10 @@ fn list_of(
 
 /// 集めた key から契約を組み、値の不備を全件積む。
 fn build(found: &[(String, Raw, u64)], errors: &mut Vec<ContractError>) -> Option<Contract> {
+    // 「verify の要素に改行なし」は **1 行走査**で構造的に守られる: 値は 1 行から取るので
+    // 改行を含む要素は作れず、行を跨いだ配列は [`value_of`] が名指して断る。ここに
+    // `contains('\n')` を置いても到達しないので、届かない検査は持たない。
     let verify = list_of(found, "verify", 1, errors);
-    let line = found
-        .iter()
-        .find(|(key, _, _)| key == "verify")
-        .map_or(0, |(_, _, at)| *at);
-    for item in &verify {
-        if item.contains('\n') || item.contains('\r') {
-            errors.push(ContractError::new(
-                line,
-                format!("verify の要素に改行が在る: {item}"),
-            ));
-        }
-    }
     let classes = list_of(found, "classes", 0, errors);
     let at = found
         .iter()

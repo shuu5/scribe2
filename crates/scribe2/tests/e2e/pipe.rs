@@ -220,8 +220,11 @@ fn pipe_intake_records_run_in_fleet() {
     let (repo, state) = repo_with_state();
     let path = write_contract(&repo, &[], &[]);
     let id = intake(&repo, &state, &path);
-    assert!(id.starts_with("s2-2e5-"), "run id は <bead>-<stamp>: {id}");
-    assert!(!id.contains(':'), "id は dir 名と branch 名になるので : を含まない: {id}");
+    let stamp = id.strip_prefix("s2-2e5-").unwrap_or_default();
+    assert!(!stamp.is_empty(), "run id は <bead>-<stamp>: {id}");
+    // id は dir 名と branch 名になるので、stamp 側に : も - も残っていない。
+    assert!(!stamp.contains(':'), "stamp に : が残る: {id}");
+    assert!(!stamp.contains('-'), "stamp に - が残る: {id}");
 
     // 契約 file の写しが置き場に在る（process 間で持ち越す面）。
     assert!(
@@ -444,6 +447,215 @@ fn pipe_stop_returns_rc2_on_malformed_store() {
         "state が読めない周は rc 2（rc 語彙の 3 値目）"
     );
     assert!(out.stdout.is_empty(), "rc 2 でも stdout は 0 byte");
+    clean(&[&repo, &state]);
+}
+
+/// event log の行数（file が無ければ 0）。
+fn event_count(state: &Path) -> usize {
+    fs::read_to_string(state.join("fleet").join("events.jsonl"))
+        .map(|text| text.lines().filter(|line| !line.is_empty()).count())
+        .unwrap_or(0)
+}
+
+#[test]
+fn pipe_refuses_without_writing_events() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let id = intake(&repo, &state, &path);
+    let before = event_count(&state);
+    // 段を進めてから、同じ段の前提を要る操作をもう一度撃つ。
+    run_pipe(&["spawn", "--run", &id, "--repo", &repo.display().to_string(),
+               "--state-dir", &state.display().to_string(), "--runner", "true"]);
+    let settled = event_count(&state);
+    let out = run_pipe(&["spawn", "--run", &id, "--repo", &repo.display().to_string(),
+                         "--state-dir", &state.display().to_string(), "--runner", "true"]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "前提違反は rc 1");
+    assert_eq!(
+        event_count(&state),
+        settled,
+        "**前提違反は event を 1 件も書かない**（intake 後 {before} → 実行後 {settled}）"
+    );
+    // 存在しない run も同じ（何も書かずに断る）。
+    let missing = run_pipe(&["spawn", "--run", "no-such-run", "--repo", &repo.display().to_string(),
+                             "--state-dir", &state.display().to_string(), "--runner", "true"]);
+    assert_eq!(missing.status.code(), Some(i32::from(RC_REFUSED)), "無い run は rc 1");
+    assert_eq!(event_count(&state), settled, "無い run でも 1 件も書かない");
+    clean(&[&repo, &state]);
+}
+
+#[test]
+fn pipe_intake_refuses_duplicate_run_id() {
+    let (repo, state) = repo_with_state();
+    let first = write_contract(&repo, &["write-set"], &[r#"write-set = ["src/A.rs"]"#]);
+    let id = intake(&repo, &state, &first);
+    // stamp は秒までなので、同じ秒の再 intake は id が衝突する。**黙って上書きしない**。
+    let second = write_contract(&repo, &["write-set"], &[r#"write-set = ["src/B.rs"]"#]);
+    let out = run_pipe(&[
+        "intake", "--contract", &second.display().to_string(), "--bead", "s2-2e5",
+        "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
+    ]);
+    if out.status.code() == Some(i32::from(RC_OK)) {
+        // 秒をまたいだ周は id が違う＝衝突していない。そのときは上書きが起きていない
+        // ことだけを測る（時計に依存して flaky にしない）。
+        assert_ne!(run_id_of(&out), id, "id が違うなら衝突していない");
+    } else {
+        assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "衝突は rc 1 で断る");
+    }
+    let kept = fs::read_to_string(state.join("pipe").join(&id).join("contract.toml"))
+        .expect("最初の契約を読める");
+    assert!(
+        kept.contains("src/A.rs"),
+        "最初の便の契約が別物に化けていない: {kept}"
+    );
+    clean(&[&repo, &state]);
+}
+
+#[test]
+fn pipe_intake_rejects_broken_arrays_and_unknown_keys() {
+    let (repo, state) = repo_with_state();
+    for (drop, add, want) in [
+        // 区切り忘れを 1 本の壊れた文字列として受理しない。
+        (vec!["verify"], vec![r#"verify = ["a" "b"]"#], "引用符 1 組の文字列でない"),
+        (vec!["write-set"], vec![r#"write-set = []"#], "write-set は 1 本以上"),
+        (vec!["verify"], vec![r#"verify = []"#], "verify は 1 本以上"),
+        (vec![], vec![r#"nonsense = "x""#], "未知の key nonsense"),
+        (vec![], vec![r#"classes = ["publish", "bogus"]"#], "未知の classes 値 bogus"),
+    ] {
+        let path = write_contract(&repo, &drop, &add);
+        let out = run_pipe(&[
+            "intake", "--contract", &path.display().to_string(), "--bead", "b",
+            "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
+        ]);
+        let err = stderr_of(&out);
+        assert_ne!(out.status.code(), Some(i32::from(RC_OK)), "{want} を通さない: {err}");
+        assert!(err.contains(want), "理由に {want} が出る: {err}");
+        assert!(err.contains("line="), "行番号を持つ: {err}");
+    }
+    clean(&[&repo, &state]);
+}
+
+#[test]
+fn pipe_intake_reports_broken_value_without_claiming_absence() {
+    let (repo, state) = repo_with_state();
+    // 値が壊れているだけで key は書かれている。「無い」と二重に言わない。
+    // 文字列 key を壊すと値が 1 つも取れない＝「書かれていた」を別に覚えていないと
+    // 欠落として二重に報告される。
+    let path = write_contract(&repo, &["goal"], &[r#"goal = 1"#]);
+    let out = run_pipe(&[
+        "intake", "--contract", &path.display().to_string(), "--bead", "b",
+        "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
+    ]);
+    let err = stderr_of(&out);
+    assert!(err.contains("goal の value が文字列でない"), "値の不備を言う: {err}");
+    assert!(
+        !err.contains("必須の key goal が無い"),
+        "書かれている key を「無い」とは言わない: {err}"
+    );
+    clean(&[&repo, &state]);
+}
+
+#[test]
+fn pipe_intake_refuses_non_git_repo() {
+    let (_repo, state) = repo_with_state();
+    let bare = tmp();
+    let path = write_contract(&bare, &[], &[]);
+    let out = run_pipe(&[
+        "intake", "--contract", &path.display().to_string(), "--bead", "b",
+        "--repo", &bare.display().to_string(), "--state-dir", &state.display().to_string(),
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "git repo でなければ intake の時点で断る");
+    assert_eq!(event_count(&state), 0, "断った周は event を書かない");
+    clean(&[&bare, &state]);
+}
+
+#[test]
+fn pipe_spawn_measures_repo_before_launching() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let id = intake(&repo, &state, &path);
+    let bare = tmp();
+    // 起動口の手前（Precheck）で断る。ここを外すと同じ rc 1 でも **別の理由**
+    // （起動関数の中で HEAD を読めない）になるので、理由まで見て弁別する。
+    let out = run_pipe(&[
+        "spawn", "--run", &id, "--repo", &bare.display().to_string(),
+        "--state-dir", &state.display().to_string(), "--runner", "true",
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "git repo でなければ rc 1");
+    assert!(
+        stderr_of(&out).contains("git repo でない"),
+        "測る段で断る（起動関数へ入る前）: {}",
+        stderr_of(&out)
+    );
+    assert!(
+        !bare.join(".worktrees").exists(),
+        "断った周は worktree を作らない"
+    );
+    clean(&[&repo, &state, &bare]);
+}
+
+#[test]
+fn pipe_stop_counts_seat_without_pid() {
+    let (repo, state) = repo_with_state();
+    // pid の無い Live 席（`fleet record` の --pid は任意）。
+    let record = Command::new(bin())
+        .args(["fleet", "record", "--kind", "SeatSpawned", "--run", "r9", "--bead", "b",
+               "--seat", "s9", "--state-dir"])
+        .arg(&state)
+        .output()
+        .expect("binary を起動できる");
+    assert_eq!(record.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&record));
+    let out = run_pipe(&["stop", "--all", "--state-dir", &state.display().to_string()]);
+    assert!(
+        stdout_of(&out).contains("seats=1"),
+        "pid の無い Live 席も母集団に数える: {}",
+        stdout_of(&out)
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(i32::from(RC_REFUSED)),
+        "止められない席が残るので rc 1（「対象なし rc 0」に化けない）"
+    );
+    clean(&[&repo, &state]);
+}
+
+#[test]
+fn pipe_stop_keeps_unstoppable_seat_live() {
+    let (repo, state) = repo_with_state();
+    // pid 1 は殺せない。止めていない席を終端にしない（偽の全クリアを作らない）。
+    let record = Command::new(bin())
+        .args(["fleet", "record", "--kind", "SeatSpawned", "--run", "r8", "--bead", "b",
+               "--seat", "s8", "--pid", "1", "--state-dir"])
+        .arg(&state)
+        .output()
+        .expect("binary を起動できる");
+    assert_eq!(record.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&record));
+    for round in 1..=2 {
+        let out = run_pipe(&["stop", "--all", "--state-dir", &state.display().to_string()]);
+        assert_eq!(
+            out.status.code(),
+            Some(i32::from(RC_REFUSED)),
+            "{round} 回目も rc 1（止めていないのに rc 0 を返さない）: {}",
+            stdout_of(&out)
+        );
+        assert!(stdout_of(&out).contains("seats=1"), "{round} 回目: {}", stdout_of(&out));
+    }
+    clean(&[&repo, &state]);
+}
+
+#[test]
+fn pipe_show_reads_repo_from_state() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let id = intake(&repo, &state, &path);
+    // **--repo を渡さずに** 撃つ。cwd（この test を走らせている repo）でなく、
+    // intake が書き留めた repo から worktree の path が組まれる。
+    let out = run_pipe(&["show", "--run", &id, "--state-dir", &state.display().to_string()]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    let line = stdout_of(&out);
+    assert!(
+        line.contains(&repo.display().to_string()),
+        "worktree は便に紐づいた repo から組む: {line}"
+    );
     clean(&[&repo, &state]);
 }
 
