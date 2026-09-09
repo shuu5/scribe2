@@ -2184,6 +2184,121 @@ fn pipe_land_pr_cmd_pushes_branch_without_moving_main() {
     clean(&[&repo, &state]);
 }
 
+#[test]
+fn pipe_land_pr_cmd_ignores_moved_main() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let marker = state.join("lens-ran");
+    let id = gated_pass(&repo, &state, &path, &marker);
+    let base = git(&repo, &["rev-parse", "refs/heads/main"]);
+    let approved = run_pipe(&[
+        "approve", "--run", &id, "--words", "出してよい",
+        "--state-dir", &state.display().to_string(),
+    ]);
+    assert_eq!(approved.status.code(), Some(i32::from(RC_OK)), "approve: {}", stderr_of(&approved));
+
+    // **別便が main を進めた状況**を作る。squash の口はここで stale base を理由に断るが、
+    // PR の口は ref を 1 本も動かさないので CAS の old が要らない——ここで base を縛ると
+    // main が動いた瞬間に PR を出せなくなる（自己ホストの便が最も踏む）。
+    fs::write(repo.join("other.txt"), "x\n").expect("別便の変更を書ける");
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "other"]);
+    let moved = git(&repo, &["rev-parse", "refs/heads/main"]);
+    assert_ne!(moved, base, "main が進んでいる");
+
+    let sent = state.join("pr-base");
+    let out = run_pipe(&[
+        "land", "--run", &id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(),
+        "--pr-cmd", &format!("printf '%s' {{base}} > '{}'", sent.display()),
+    ]);
+    assert_eq!(
+        out.status.code(),
+        Some(i32::from(RC_OK)),
+        "main が動いていても PR は出せる: {}",
+        stderr_of(&out)
+    );
+    // **`{base}` は便が記録した base**（いまの main ではない）＝PR の比較先は便の出発点。
+    assert_eq!(
+        fs::read_to_string(&sent).expect("seam へ渡した base を読める"),
+        base,
+        "便の base を渡す（現在の main へ滑らせない）"
+    );
+    assert_eq!(
+        git(&repo, &["rev-parse", "refs/heads/main"]),
+        moved,
+        "main は 1 byte も動かさない"
+    );
+    clean(&[&repo, &state]);
+}
+
+#[test]
+fn pipe_land_pr_cmd_refuses_empty_or_missing_value() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let marker = state.join("lens-ran");
+    let id = gated_pass(&repo, &state, &path, &marker);
+    let approved = run_pipe(&[
+        "approve", "--run", &id, "--words", "出してよい",
+        "--state-dir", &state.display().to_string(),
+    ]);
+    assert_eq!(approved.status.code(), Some(i32::from(RC_OK)), "approve: {}", stderr_of(&approved));
+    let before = event_count(&state);
+
+    // 値欠け（SRS NFR4「黙って落とさない」）。
+    let missing = run_pipe(&[
+        "land", "--run", &id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(), "--pr-cmd",
+    ]);
+    assert_eq!(missing.status.code(), Some(i32::from(RC_REFUSED)), "値欠けは rc 1");
+    assert!(
+        stderr_of(&missing).contains("値が無い"),
+        "値欠けだと名乗る（squash 経路へ滑らせない）: {}",
+        stderr_of(&missing)
+    );
+
+    // **空文字**。`sh -c ""` は rc 0 で終わるので、素通しすると 1 行も公開していないのに
+    // 「PR を出した」を記帳し、承認だけが消費される。
+    let empty = run_pipe(&[
+        "land", "--run", &id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(), "--pr-cmd", "",
+    ]);
+    assert_eq!(empty.status.code(), Some(i32::from(RC_REFUSED)), "空の seam は rc 1");
+    assert!(
+        !show_line(&repo, &state, &id).contains("stage=Landed"),
+        "段も動かない: {}",
+        show_line(&repo, &state, &id)
+    );
+    assert_eq!(event_count(&state), before, "event を 1 件も書かない");
+    clean(&[&repo, &state]);
+}
+
+#[test]
+fn pipe_report_counts_landed_runs_not_landed_events() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let marker = state.join("lens-ran");
+    let id = gated_pass(&repo, &state, &path, &marker);
+    let landed = land_once(&repo, &state, &id);
+    assert_eq!(landed.status.code(), Some(i32::from(RC_OK)), "land: {}", stderr_of(&landed));
+    // 同じ便へ `Landed` の event をもう 1 件積む（手で積んだ / 台帳が壊れた周）。
+    // **replay は便を数える**ので landed は 1 のまま——生の行を数える実装だと 2 になる。
+    let doubled = Command::new(bin())
+        .args(["fleet", "record", "--state-dir"])
+        .arg(&state)
+        .args(["--kind", "RunDone", "--stage", "Landed", "--run", &id, "--bead", "s2-2e5"])
+        .output()
+        .expect("binary を起動できる");
+    assert_eq!(doubled.status.code(), Some(i32::from(RC_OK)), "record: {}", stderr_of(&doubled));
+    let out = report_once(&state);
+    assert_eq!(
+        stdout_of(&out).trim(),
+        "runs=1 landed=1 human_events=0 human_events_other_than_approval=0",
+        "landed は便の数であって event の数ではない"
+    );
+    clean(&[&repo, &state]);
+}
+
 /// toy repo の 1 便を intake → spawn まで通す（bead を分けて id の衝突を避ける）。
 fn toy_spawn(repo: &Path, state: &Path, bead: &str, contract: &Path, runner: &str) -> (String, Output) {
     let id = intake_bead(repo, state, contract, bead);

@@ -133,6 +133,12 @@ pub fn land(entry: &Land<'_>) -> Outcome {
 /// **道具の失敗で便を終端させない**（rc 1・event を書かない）。push や PR 作成は network
 /// で落ちうるので、`Failed` を焼くと再試行できない便が残る。
 fn open_pr(entry: &Land<'_>, base: &str, cmd: &str) -> Outcome {
+    // **空の seam を通さない**（使い方の誤り・rc 1・何も書かない）。`sh -c ""` は rc 0 で
+    // 終わるので、素通しすると「PR を出した」を記帳しながら **1 行も公開していない**便が
+    // 生まれ、承認だけが消費される（公開の口で最も避けたい嘘である）。
+    if cmd.trim().is_empty() {
+        return refused("--pr-cmd が空である".to_owned());
+    }
     if !entry.approved {
         return refused(format!(
             "run {} に承認 event が無い（pipe approve --words \"<user の逐語>\"）",

@@ -17,7 +17,12 @@ use std::path::Path;
 pub struct Counted {
     /// 置き場に在る便の数。
     pub runs: usize,
-    /// main に載った便の数。
+    /// 終端（`Landed`）まで通った便の数。
+    ///
+    /// **「main に載った数」ではない**: `--pr-cmd` の便は main を動かさず `Landed
+    /// detail=pr` で終わるが、便としては終端に達しているのでここに入る。main へ載った
+    /// 数だけを見たいときは面 5（`verdicts.jsonl`）の行数を読む（あちらは squash した
+    /// 便だけを書く）。
     pub landed: usize,
     /// 人由来の event の数。
     pub human_events: usize,
