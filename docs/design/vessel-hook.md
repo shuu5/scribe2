@@ -39,7 +39,7 @@ stdout に 1 行 `[<NAME>/SessionStart] served version=<N> root=<root>` を出�
 
 ## 5. `pre-tool-use` = write-set guard（FR20・C16）
 
-- **活性化**: 対象 worktree の git dir に policy file `<git-dir>/<NAME>/write-set.txt` が在ること。git dir は `git rev-parse --git-dir`（worktree なら `<repo>/.git/worktrees/<name>/`）。**env は使わない**（C2.2・ADR-0004 §2.4）。policy file は pipeline の spawn が書く（tracked 面に触れない・`git status` を汚さない）。
+- **活性化**: 対象 worktree の git dir に policy file `<git-dir>/<NAME>/write-set.txt` が在ること。git dir は `git rev-parse --absolute-git-dir`（worktree なら `<repo>/.git/worktrees/<name>/`）。`--git-dir` は cwd 相対の `.git` を返しうるので、policy の path を組むには絶対 path を返すこちらを撃つ。**env は使わない**（C2.2・ADR-0004 §2.4）。policy file は pipeline の spawn が書く（tracked 面に触れない・`git status` を汚さない）。
 - policy file の形: repo 相対 path 1 行 1 本。末尾 `/` は配下全部。glob 無し。
 - 判定: payload の `tool_name ∈ {Edit, Write, MultiEdit, NotebookEdit}` で `tool_input.file_path` か `notebook_path` を repo 相対へ正規化し（`..` を含む・root 外・絶対 path で root 外 → **deny**）、allowlist の外なら **deny = rc 2 + stderr 1 行 `<NAME>: deny <path> は契約 write-set の外（C16）` + stdout 0 byte**（Claude Code の blocking error の形）。内側なら rc 0・0 byte。
 - **極性**: policy file 不在 → 不活性（rc 0・0 byte＝開発 session が main を直接編集する場面）。policy file が在るのに読めない・空 → **deny（fail-closed・理由 `policy unreadable`）**。`Bash` と他 tool → rc 0・0 byte（interpreter 経路は v3）。
