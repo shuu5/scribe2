@@ -1,4 +1,4 @@
-//! CLI の骨格。`name` / `--version` / `doctor` / `rules` の 4 subcommand を持つ。
+//! CLI の骨格。`name` / `--version` / `doctor` / `rules` / `fleet` の 5 subcommand を持つ。
 //!
 //! 名前の字面は `name.rs` にだけ在り、この file には書かない。実体は lib 側に在り、
 //! この file は引数の dispatch と出力層だけを持つ。出力は [`emit`] と [`emit_err`]
@@ -46,7 +46,7 @@ fn render_doctor() -> Vec<String> {
 
 /// 未知の引数に対する使い方の行。
 fn render_usage() -> String {
-    format!("usage: {NAME} <name|--version|doctor|rules>")
+    format!("usage: {NAME} <name|--version|doctor|rules|fleet>")
 }
 
 /// 引数 1 つを出力行の列へ写す。未知なら `Err` に使い方を載せる。
@@ -78,15 +78,27 @@ fn run(args: &[String]) -> Outcome {
     }
 }
 
-fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    let outcome = run(&args);
-    for line in &outcome.out {
+/// 組んだ行を出力層へ流す。
+fn emit_all(out: &[String], err: &[String]) {
+    for line in out {
         emit(line);
     }
-    for line in &outcome.err {
+    for line in err {
         emit_err(line);
     }
+}
+
+fn main() -> ExitCode {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("fleet") {
+        // fleet だけ rc が 0 / 1 / 2 の 3 値を取る（設計 fleet-event-log.md §5）ので、
+        // ok の 2 値で表す他の subcommand と分けて受ける。
+        let outcome = vessel::fleet::cli::dispatch(args.get(1..).unwrap_or_default());
+        emit_all(&outcome.out, &outcome.err);
+        return ExitCode::from(outcome.code);
+    }
+    let outcome = run(&args);
+    emit_all(&outcome.out, &outcome.err);
     if outcome.ok {
         ExitCode::SUCCESS
     } else {

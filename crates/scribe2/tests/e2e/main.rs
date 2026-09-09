@@ -1,6 +1,7 @@
 //! 統合 test の唯一の target（憲法 R-C13-2「統合 test file 3 以下」は cargo の
 //! integration test **target** の数で数える。以後の leg は module で足す）。
 
+mod fleet;
 mod rules;
 
 use std::path::PathBuf;
