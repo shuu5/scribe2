@@ -2,7 +2,6 @@
 **/*.rs.bk
 .DS_Store
 *.local.sh
-.scribe-envprobe*
 
 # Beads / Dolt files (added by bd init)
 .dolt/
@@ -10,23 +9,24 @@
 .beads-credential-key
 .beads/proxieddb/
 
-# bd 台帳(Dolt が SSOT) + scribe runtime 生成物の除外（/scribe:setup が収束させる）
+# bd 台帳（Dolt が SSOT）の生成物と write 直列化の telemetry（machine-local）
 .beads/issues.jsonl
 .beads/interactions.jsonl
 embeddeddolt/
-/.beads/scribe-heartbeat
-/.beads/scribe-push-throttle
-/.beads/scribe-push.log*
-/.claude-session/
-
-# spawn worker の worktree（.worktrees/spawn/<branch>）は ephemeral・commit しない
-/.worktrees/
-
-# 1 事象 1 行の telemetry（machine-local・実体は .beads 直下）。sc repo の実績形に揃える。
 /.beads/bdw-timing.log*
-/.beads/dispatch-log.jsonl*
 .beads/events.jsonl
 
-# folio の caller-marker（session-local）と review の playwright 生成物
+# 開発 session の作業記憶（/ready-compaction が退避・/rebrief が消費）
+/.claude-session/
+
+# git worktree（.worktrees/<branch>）は ephemeral・commit しない
+/.worktrees/
+
+# folio の caller-marker（session-local）・prime の生成物・review の playwright 生成物
 .folio/
+inventory.json
 .playwright-mcp/
+
+# Claude Code の project 設定は settings.json だけを tracked にする（folio の project-scope 有効化）
+.claude/*
+!.claude/settings.json
