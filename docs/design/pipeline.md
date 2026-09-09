@@ -124,7 +124,12 @@
 
 ## 7. FR7（入口の flip check）の置き場
 
-本 repo 自身の flip check は `cargo xtask flip-check` と CI の job が担う。**CI の flip-check job は未 land**（`s2-07l.17`・現状の CI は nextest / clippy / xtask-check の 3 job）ため、AC3 の GREEN は `s2-07l.17` の land を前提に並べる。pipeline は契約の `verify` 行として flip check を撃つ（Rust repo の契約は `cargo xtask flip-check --base {base}` を verify に含める）。pipeline が Rust 固有の検査を内蔵する形は採らない（toy repo は Rust でないことがある）。
+本 repo 自身の flip check は `cargo xtask flip-check` と CI の job が担う。**CI の flip-check job は `s2-07l.17` で land 済み**（CI は nextest / clippy / xtask-check / flip-check / deny / insta の 6 job・flip-check は PR のときだけ撃つ）。pipeline は契約の `verify` 行として flip check を撃つ（Rust repo の契約は `cargo xtask flip-check --base {base}` を verify に含める）。pipeline が Rust 固有の検査を内蔵する形は採らない（toy repo は Rust でないことがある）。
+
+- **測れなかった便は「測れなかった」と言う**（`s2-07l.14`・reason 語彙を 3 つ足した）。いずれも fail-closed のままで、`skip` で rc 0 にする経路は持たない。
+  - `not-flippable`: base に無い `.rs`（新規 module）の in-file 歯は、base 側に `mod` 宣言ごと存在せず compile されないので**構造的に測れない**。flip が 1 本も無く、そういう file が 1 本以上在る周は runner を撃たず `FAIL reason=not-flippable files=<rel,…>` rc 1（stderr に逃がし方 1 行）。`green-on-base`（TDD の不履行）と同じ札を貼らない。
+  - `tests-removed-only`: overlay できる file で **HEAD の test 区間の行列が base の行列の部分列**（順序を保った行の削除だけで得られる）なら flip に数えず、stderr へ `not-flipped reason=tests-removed-only <rel>`。純粋な module 分割（歯の移動）が恒久 FAIL しないための門である。**`#[test]` fn 名では数えない**——名前の集合で見ると本文の改変が免除される（`⊆` は「名前が同じで本文だけ変えた歯」を、真部分集合でも「1 本消して別の 1 本の本文を変えた file」を通す）。部分列なら 1 行でも足された / 書き換えられた時点で成立しない。
+  - `retroactive`: 既に land した挙動へ**後から歯を足す**便は、歯をどこへ置いても base で緑になる（測る対象が base に在る）。test 区間内の行 `// flip-check: retroactive <bead-id>` を置いた file は RED を要求せず、判定行に `retroactive=N` が載る。**src 区間の marker は効かない**（実装の隣に 1 行足すだけで検査を外せる形にしない）。N ≥ 1 は review の対象で、notes に変異 proof を要する。marker の無い後から足す歯は従来どおり落ちる。**限界**: 行が実際にコメントか文字列の中身かは **parser 無しでは弁別できない**ので、複数行文字列の中に行頭から marker が現れる file は免除される（`crates/*/tests/*.rs` は全体が test 区間なので特に当たりやすい）。塞ぐには parser が要り、それは本器の取らない道である——代わりに `retroactive=N` が判定行に必ず出るので、**事故は見える形で残る**（review が拾う）。
 
 ## 8. 歯（契約ごと・`tests/e2e/pipe.rs` module・tmp git repo（`.vessel` に `name=<NAME>`・`vessel init --state-dir` で tmp を紐づける）・fake runner / lens は `sh -c` 1 行）
 

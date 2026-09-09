@@ -29,6 +29,14 @@ const TEST_MOD_MARK: &str = "#[cfg(test)]";
 /// [`TEST_MOD_MARK`] の直後（空行は跨ぐ）に来てよい `mod` 宣言の前置き。
 const TEST_MOD_HEADS: &[&str] = &["mod ", "pub mod ", "pub(crate) mod "];
 
+/// **後から足す歯**の明示例外を名乗る marker（test 区間内の 1 行）。
+///
+/// 既に land した挙動へ後から歯を足す便は、歯をどこへ置いても base で緑になる
+/// ——測る対象が base に在るからで、TDD の不履行ではない。marker はその弁別を
+/// **書いた人が明示する**ための逃がしであり、verdict 行に `retroactive=M` として
+/// 載る（planner review の対象・notes に変異 proof が要る）。
+const RETROACTIVE_MARK: &str = "// flip-check: retroactive ";
+
 /// base tree と runner target を置く `target/` 配下の作業 dir 名。
 const WORK_DIR: &str = "flipcheck";
 
@@ -86,9 +94,68 @@ impl FilePair {
         }
     }
 
-    /// test 区間が base と byte 差を持つか（写せる新規 test file も差と数える）。
-    fn flips(&self) -> bool {
+    /// test 区間に byte 差を持つか（写せる新規 test file も差と数える）。
+    fn test_diff(&self) -> bool {
         self.overlay().is_some() && self.head_test() != self.base_test()
+    }
+
+    /// **後から足す歯**の明示例外を名乗るか（test 区間内の marker **行**）。
+    ///
+    /// src 区間の marker は効かない。src へ書けば「実装の隣に 1 行足すだけで
+    /// flip 検査を外せる」ことになり、逃がしが静かになる。
+    ///
+    /// **行頭で見る**（素の `contains` では足りない）。marker の字面を文字列の中で
+    /// 言及しただけの file——この門を測る歯そのものがそれである——まで免除され、
+    /// **その便が丸ごと flip 検査を素通りする**（実測 2026-09-10: 本便自身が
+    /// `retroactive=1` で通ってしまった）。逃がしは書いた人が 1 行として置いたときだけ効く。
+    ///
+    /// **その便で test 区間が動いた file にだけ効く**。marker の在るだけで数えると、
+    /// 一度貼った札が**以後のすべての便を恒久的に rc 0 で通す**（実測 2026-09-10:
+    /// base に marker が在る repo で src だけ変えた便が `retroactive=1` で通った）。
+    /// base に無い file（新規 module）は test 区間が丸ごと新しいので対象に含める。
+    fn retroactive(&self) -> bool {
+        self.marked() && (self.test_diff() || self.base.is_none())
+    }
+
+    /// marker **行**を持つか（行頭で見る・素の `contains` では字面の言及まで拾う）。
+    ///
+    /// **bead id が要る**。marker は「どの便がなぜ RED を免除したか」を残すための札で、
+    /// id の無い `// flip-check: retroactive` は誰にも辿れない——review の対象に
+    /// ならない逃がしは、静かな逃がしと同じである。
+    fn marked(&self) -> bool {
+        self.head_test().lines().any(|line| {
+            line.trim_start()
+                .strip_prefix(RETROACTIVE_MARK)
+                .is_some_and(|bead| !bead.trim().is_empty())
+        })
+    }
+
+    /// test 区間の差が**削除だけ**か（順序を保った行の削除だけで HEAD が得られる）。
+    ///
+    /// 純粋な module 分割は「歯が別 file へ移った」だけで、base の src に対して
+    /// 新しく赤くなる歯は 1 本も無い。これを flip と数えると、移動しただけの便が
+    /// 恒久 `green-on-base` で落ちる。
+    ///
+    /// **行の部分列で見る**（`#[test]` fn 名の集合では足りない）。名前で数えると
+    /// **本文の改変が丸ごと免除される**——`⊆` は「名前が同じで本文だけ変えた歯」を、
+    /// 真部分集合でも「1 本消して別の 1 本の本文を変えた file」を通す（planner review
+    /// 2026-09-10 で 2 度指摘された）。部分列なら、1 行でも足された / 書き換えられた
+    /// 時点で成立しない。**fn 名を数えないので parser も要らない**。
+    fn removed_only(&self) -> bool {
+        self.test_diff() && is_line_subsequence(&self.head_test(), &self.base_test())
+    }
+
+    /// base へ写せないのに HEAD が test 区間を持つ（**構造的に flip を測れない**）。
+    ///
+    /// 新規 module は base 側に `mod` 宣言ごと存在せず compile されないので、
+    /// test 区間だけを写しても測れない。
+    fn not_flippable(&self) -> bool {
+        self.overlay().is_none() && !self.head_test().is_empty() && !self.retroactive()
+    }
+
+    /// 「base で赤くなること」を要求する差か。
+    fn flips(&self) -> bool {
+        self.test_diff() && !self.removed_only() && !self.retroactive()
     }
 }
 
@@ -158,6 +225,21 @@ fn split_regions(rel: &str, text: &str) -> (String, String) {
         Some((src, test)) => (src.to_owned(), test.to_owned()),
         None => (text.to_owned(), String::new()),
     }
+}
+
+/// `head` の行が `base` の行の**部分列**か（順序を保った行の削除だけで得られるか）。
+///
+/// 2 本の指を進めるだけ（差分アルゴリズムを持ち込まない）。等しい行が現れたら両方、
+/// 違えば `base` 側だけ進める。`head` を使い切れたら部分列である。
+fn is_line_subsequence(head: &str, base: &str) -> bool {
+    let mut wanted = head.lines();
+    let mut next = wanted.next();
+    for line in base.lines() {
+        if next == Some(line) {
+            next = wanted.next();
+        }
+    }
+    next.is_none()
 }
 
 /// 判定 1 行を組み立てる。
@@ -382,19 +464,18 @@ fn write_one(dest: &Path, pair: &FilePair) -> Result<bool, String> {
     Ok(true)
 }
 
-/// overlay を base tree へ書き `tests_changed` を返す。
-fn write_overlay(dest: &Path, pairs: &[FilePair]) -> Result<usize, String> {
-    let mut flipped = 0;
+/// overlay を base tree へ書く。**数えるのは [`Counts`] の仕事**（判定行の 3 数を
+/// 書き込み経路で数えると、file ごとに撃つ路とまとめ撃ちの路で意味がずれる）。
+fn write_overlay(dest: &Path, pairs: &[FilePair]) -> Result<(), String> {
     for pair in pairs {
         if !write_one(dest, pair)? {
             continue;
         }
         if pair.flips() {
-            flipped += 1;
             emit_err(&format!("flip-check: test-diff {}", pair.rel));
         }
     }
-    Ok(flipped)
+    Ok(())
 }
 
 /// overlay 後の runner の rc を判定に写す。
@@ -402,10 +483,10 @@ fn write_overlay(dest: &Path, pairs: &[FilePair]) -> Result<usize, String> {
 /// rc 4（no tests to run）は infra-error で、compile error 時の nextest rc は 101
 /// なので弁別できる。**rc を持たない終了（signal / OOM kill）は RED と数えない**
 /// ——flip の証拠が無いまま合格させる fail-open を作らないためである。
-fn judge_run(output: &Output, flipped: usize) -> Verdict {
+fn judge_run(output: &Output, counts: Counts) -> Verdict {
     match judge_one(output, None) {
         Err(found) => found,
-        Ok(()) => ok_line(flipped),
+        Ok(()) => ok_line(counts),
     }
 }
 
@@ -426,12 +507,38 @@ fn judge_one(output: &Output, rel: Option<&str>) -> Result<(), Verdict> {
     }
 }
 
-/// 通した判定 1 行。
-fn ok_line(flipped: usize) -> Verdict {
-    verdict(
-        &format!("flip-check: RED-on-base ok tests_changed={flipped}"),
-        0,
-    )
+/// 便 1 本の内訳（判定行に載る 3 つの数）。
+#[derive(Debug, Clone, Copy, Default)]
+struct Counts {
+    /// base で赤くなることを要求した file の本数。
+    flipped: usize,
+    /// 削除・移動だけゆえ flip に数えなかった本数。
+    removed: usize,
+    /// marker で RED を免除した本数。
+    retro: usize,
+}
+
+impl Counts {
+    /// 便の pairs から数える。
+    fn of(pairs: &[FilePair]) -> Self {
+        Self {
+            flipped: pairs.iter().filter(|pair| pair.flips()).count(),
+            removed: pairs.iter().filter(|pair| pair.removed_only()).count(),
+            retro: pairs.iter().filter(|pair| pair.retroactive()).count(),
+        }
+    }
+}
+
+/// 通した判定 1 行。**0 の内訳は出さない**（毎便に出ると読み手が意味を薄める）。
+fn ok_line(counts: Counts) -> Verdict {
+    let mut line = format!("flip-check: RED-on-base ok tests_changed={}", counts.flipped);
+    if counts.removed > 0 {
+        line.push_str(&format!(" removed-only={}", counts.removed));
+    }
+    if counts.retro > 0 {
+        line.push_str(&format!(" retroactive={}", counts.retro));
+    }
+    verdict(&line, 0)
 }
 
 /// 単独 overlay の後始末（撃つ前の状態へ戻す）。
@@ -479,7 +586,13 @@ fn swap_in(dest: &Path, pair: &FilePair) -> Result<Restore, String> {
 /// 新しい test が base で緑でも、赤い file に隠れて `RED-on-base ok` が出る（偽の RED）。
 /// flip-check が守ろうとしているのは「新しい歯は 1 本ずつ base で赤い」であって
 /// 「どれか 1 本が赤い」ではない。
-fn judge_each(dest: &Path, target: &Path, pairs: &[FilePair], flipping: &[&FilePair]) -> Verdict {
+fn judge_each(
+    dest: &Path,
+    target: &Path,
+    pairs: &[FilePair],
+    flipping: &[&FilePair],
+    counts: Counts,
+) -> Verdict {
     // flip しない pair は overlay しても内容が base と同じ（base の src + 同一の test 区間）
     // なので、先にまとめて置く。ここで置いても base の緑は動かない。
     for pair in pairs.iter().filter(|pair| !pair.flips()) {
@@ -516,7 +629,7 @@ fn judge_each(dest: &Path, target: &Path, pairs: &[FilePair], flipping: &[&FileP
             return infra(&reason);
         }
     }
-    ok_line(flipping.len())
+    ok_line(counts)
 }
 
 /// base tree の健全性前段。overlay を書く前に base のまま runner を撃つ。
@@ -535,7 +648,7 @@ fn base_is_green(dest: &Path, target: &Path) -> Result<(), Verdict> {
 }
 
 /// base を実体化し健全性を確かめ overlay を書いて runner を撃つ。
-fn run_on_base(base: &str, root: &Path, pairs: &[FilePair]) -> Verdict {
+fn run_on_base(base: &str, root: &Path, pairs: &[FilePair], counts: Counts) -> Verdict {
     let dest = match materialize_base(base, root) {
         Err(reason) => return infra(&reason),
         Ok(found) => found,
@@ -548,17 +661,16 @@ fn run_on_base(base: &str, root: &Path, pairs: &[FilePair]) -> Verdict {
     // 1 本のときは従来どおり 1 回で足りる（分ける対象が無い）。
     let flipping: Vec<&FilePair> = pairs.iter().filter(|pair| pair.flips()).collect();
     if flipping.len() >= 2 {
-        return judge_each(&dest, &target, pairs, &flipping);
+        return judge_each(&dest, &target, pairs, &flipping, counts);
     }
-    let flipped = match write_overlay(&dest, pairs) {
-        Err(reason) => return infra(&reason),
-        Ok(count) => count,
-    };
+    if let Err(reason) = write_overlay(&dest, pairs) {
+        return infra(&reason);
+    }
     match nextest(&dest, &target) {
         Err(reason) => infra(&reason),
         Ok(output) => {
             relay("overlay", &output);
-            judge_run(&output, flipped)
+            judge_run(&output, counts)
         }
     }
 }
@@ -608,11 +720,45 @@ pub fn judge(base: &str, workdir: &Path) -> Verdict {
         Err(reason) => return infra(&reason),
         Ok(found) => found,
     };
-    if !pairs.iter().any(FilePair::flips) {
-        return fail("no-test-diff");
+    let counts = Counts::of(&pairs);
+    if counts.flipped == 0 {
+        return no_flip_verdict(&pairs, counts);
     }
-    let outcome = run_on_base(base, &root, &pairs);
+    let outcome = run_on_base(base, &root, &pairs, counts);
     finish(&root, outcome)
+}
+
+/// **base で赤くなることを要求する差が 1 本も無い**周の判定（runner を撃たない）。
+///
+/// 3 通りを弁別する。まとめて 1 語で落とすと、直す側は「何を直せばよいか」を
+/// 判定行から読めない——`green-on-base` は TDD の不履行を指す語であって、
+/// 構造的に測れない便や、移動だけの便に貼ってよい札ではない。
+fn no_flip_verdict(pairs: &[FilePair], counts: Counts) -> Verdict {
+    let stuck: Vec<&str> = pairs
+        .iter()
+        .filter(|pair| pair.not_flippable())
+        .map(|pair| pair.rel.as_str())
+        .collect();
+    if !stuck.is_empty() {
+        // **逃がし方を書く**。「測れない」とだけ言われた側は、次に何をすれば
+        // 測れるようになるのかを自分で探すことになる。
+        emit_err(
+            "flip-check: 新規 module は base に mod 宣言ごと無く compile されない。\
+             test を crates/<c>/tests/<dir>/<f>.rs の module file か既存 file の test 区間へ置くか、\
+             後から足す歯なら test 区間へ `// flip-check: retroactive <bead-id>` を 1 行置く",
+        );
+        return fail(&format!("not-flippable files={}", stuck.join(",")));
+    }
+    for pair in pairs.iter().filter(|pair| pair.removed_only()) {
+        emit_err(&format!(
+            "flip-check: not-flipped reason=tests-removed-only {}",
+            pair.rel
+        ));
+    }
+    if counts.removed > 0 || counts.retro > 0 {
+        return ok_line(counts);
+    }
+    fail("no-test-diff")
 }
 
 /// CLI 面。判定行を stdout へ 1 行だけ出し rc を返す（引数不正だけが rc 2）。
@@ -642,7 +788,7 @@ pub fn run(args: &[String]) -> ExitCode {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_test_file, judge, parse_base, split_regions};
+    use super::{is_test_file, judge, parse_base, split_regions, Verdict};
     use std::path::{Path, PathBuf};
     use std::process::Command;
     use std::sync::atomic::{AtomicU32, Ordering};
@@ -730,23 +876,53 @@ mod tests {
                 "[package]\nname = \"{FIXTURE_MEMBER}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n"
             ),
         );
-        write_at(&dir, &lib_rel(), BASE_LIB);
-        write_at(&dir, "README.md", "fixture\n");
-        assert!(git(&dir, &["init", "-q"]), "fixture で git init できる");
-        assert!(git(&dir, &["add", "-A"]), "fixture で git add できる");
+        let base = seed_fixture(&dir, BASE_LIB);
+        (dir, base)
+    }
+
+    /// base と HEAD の lib 本文を与えて 1 便を判定する（marker まわりの負例で使い回す）。
+    fn judge_lib(base_lib: &str, head_lib: &str) -> Verdict {
+        let dir = make_tmp_dir();
+        let base = seed_fixture(&dir, base_lib);
+        write_at(&dir, &lib_rel(), head_lib);
+        head_commit(&dir);
+        let got = judge(&base, &dir);
+        drop_fixture(&dir);
+        got
+    }
+
+    /// marker を数えなかったことを確かめる（負例の共通 assert）。
+    fn assert_not_retroactive(got: &Verdict, what: &str) {
+        assert_eq!(got.code, 1, "{what} で通してはならない: {}", got.line);
+        assert!(!got.line.contains("retroactive"), "{what} を数えない: {}", got.line);
+    }
+
+    /// 既に組んだ fixture dir へ lib を書いて base commit を作る。
+    fn seed_fixture(dir: &Path, lib: &str) -> String {
+        write_at(dir, &lib_rel(), lib);
+        write_at(dir, "README.md", "fixture\n");
+        if !dir.join(".git").exists() {
+            assert!(git(dir, &["init", "-q"]), "fixture で git init できる");
+        }
+        assert!(git(dir, &["add", "-A"]), "fixture で git add できる");
         assert!(
-            git(&dir, &["commit", "-q", "-m", "base"]),
+            git(dir, &["commit", "-q", "-m", "base"]),
             "fixture で base を commit できる"
         );
+        head_sha(dir)
+    }
+
+    /// fixture の HEAD の SHA。
+    fn head_sha(dir: &Path) -> String {
         let sha = Command::new("git")
             .arg("-C")
-            .arg(&dir)
+            .arg(dir)
             .args(["rev-parse", "HEAD"])
             .output()
             .expect("git rev-parse を起動できる");
-        let base = String::from_utf8_lossy(&sha.stdout).trim().to_owned();
-        assert!(!base.is_empty(), "base の SHA を読める");
-        (dir, base)
+        let found = String::from_utf8_lossy(&sha.stdout).trim().to_owned();
+        assert!(!found.is_empty(), "HEAD の SHA を読める");
+        found
     }
 
     /// HEAD 側を書いて commit する。
@@ -992,6 +1168,204 @@ mod tests {
             "flip した 2 本を数えるはず: {}",
             got.line
         );
+    }
+
+    /// 新規 module の in-file 歯は base に写せない＝`green-on-base` でなく
+    /// **`not-flippable`** と名乗り、どの file かを名指す。
+    ///
+    /// base 側に `mod` 宣言ごと存在しない file の test 区間だけを写しても compile
+    /// されないので、構造的に測れない。TDD の不履行（`green-on-base`）と同じ札を
+    /// 貼ると、直す側は何を直せばよいか判定行から読めない。
+    #[test]
+    fn flip_check_reports_not_flippable_for_new_module_with_inline_tests() {
+        let (dir, base) = base_commit();
+        let rel = format!("crates/{FIXTURE_MEMBER}/src/extra.rs");
+        write_at(&dir, &rel, "pub fn v() -> u32 {\n    1\n}\n#[cfg(test)]\nmod t {\n    #[test]\n    fn probe() {\n        assert_eq!(super::v(), 1);\n    }\n}\n");
+        head_commit(&dir);
+        let got = judge(&base, &dir);
+        drop_fixture(&dir);
+        assert_verdict(&got.line, got.code, 1, "reason=not-flippable");
+        assert!(got.line.contains(&rel), "測れない file を名指すはず: {}", got.line);
+
+        // **歯を持たない新規 module は not-flippable ではない**（写せなくても測るものが無い）。
+        let (dir, base) = base_commit();
+        write_at(&dir, &format!("crates/{FIXTURE_MEMBER}/src/plain.rs"), "pub fn w() -> u32 {\n    2\n}\n");
+        head_commit(&dir);
+        let got = judge(&base, &dir);
+        drop_fixture(&dir);
+        assert!(
+            !got.line.contains("not-flippable"),
+            "test 区間の無い新規 file を not-flippable に数えない: {}",
+            got.line
+        );
+
+        // **marker を置いた新規 module は not-flippable ではなく retroactive**
+        // （契約 4「copied / not-copied 両方」）。
+        let (dir, base) = base_commit();
+        write_at(
+            &dir,
+            &format!("crates/{FIXTURE_MEMBER}/src/marked.rs"),
+            "pub fn w() -> u32 {\n    2\n}\n#[cfg(test)]\nmod t {\n    // flip-check: retroactive s2-07l.14\n    #[test]\n    fn probe() {\n        assert_eq!(super::w(), 2);\n    }\n}\n",
+        );
+        head_commit(&dir);
+        let got = judge(&base, &dir);
+        drop_fixture(&dir);
+        assert_verdict(&got.line, got.code, 0, "RED-on-base ok");
+        assert!(
+            got.line.contains("retroactive=1") && !got.line.contains("not-flippable"),
+            "marker 付きの新規 module は retroactive へ倒れるはず: {}",
+            got.line
+        );
+    }
+
+    /// src だけ変えた便は従来どおり落ちる（`not-flippable` へ逃がさない）。
+    #[test]
+    fn flip_check_keeps_green_on_base_when_no_test_changed() {
+        let (dir, base) = base_commit();
+        write_at(&dir, &lib_rel(), &BASE_LIB.replace("    1\n}", "    1 + 0\n}"));
+        head_commit(&dir);
+        let got = judge(&base, &dir);
+        drop_fixture(&dir);
+        // **従来どおり落ちる**（TDD の不履行）。現行 base では reason 語は
+        // `no-test-diff` で、`green-on-base`（overlay を撃った上で緑だった周）とは
+        // 別語である。本便はこの語を変えない＝新しい 3 語のどれへも逃がさない。
+        assert_verdict(&got.line, got.code, 1, "reason=no-test-diff");
+        for escaped in ["not-flippable", "removed-only", "retroactive"] {
+            assert!(
+                !got.line.contains(escaped),
+                "src だけの変更を {escaped} へ逃がさない: {}",
+                got.line
+            );
+        }
+    }
+
+    /// test 区間の差が**削除・移動だけ**の file は flip に数えず、その便に他の flip が
+    /// 無くても `green-on-base` へ落とさない。
+    ///
+    /// 純粋な module 分割（歯が別 file へ移る）で恒久 FAIL しないための門である。
+    #[test]
+    fn flip_check_ignores_file_whose_test_diff_only_removes_tests() {
+        // base は 2 本目の commit で取り直す（1 本目は「歯 2 本の状態」を作るためだけ）。
+        let (dir, _seed) = base_commit();
+        let two = BASE_LIB.replace(
+            "    fn holds() {\n        assert_eq!(super::val(), 1);\n    }\n",
+            "    fn holds() {\n        assert_eq!(super::val(), 1);\n    }\n    #[test]\n    fn also() {\n        assert_eq!(super::val(), 1);\n    }\n",
+        );
+        write_at(&dir, &lib_rel(), &two);
+        assert!(git(&dir, &["add", "-A"]), "fixture で add できる");
+        assert!(git(&dir, &["commit", "-q", "-m", "two"]), "2 本の歯を commit できる");
+        let base = head_sha(&dir);
+        // HEAD では 1 本減らすだけ（追加も改名も無い）。
+        write_at(&dir, &lib_rel(), BASE_LIB);
+        head_commit(&dir);
+        let got = judge(&base, &dir);
+        drop_fixture(&dir);
+        assert_verdict(&got.line, got.code, 0, "RED-on-base ok");
+        assert!(
+            got.line.contains("tests_changed=0") && got.line.contains("removed-only=1"),
+            "移動・削除だけと名乗るはず: {}",
+            got.line
+        );
+
+        // **負例: 1 本消して別の 1 本の本文を変えた file は免除しない**。
+        // `#[test]` fn 名で数える実装（`⊆` も真部分集合も）はここで落ちる——名前の上では
+        // 「1 本減っただけ」に見えるが、残った歯の中身は書き換わっている。
+        let (dir, seed) = base_commit();
+        write_at(&dir, &lib_rel(), &two);
+        assert!(git(&dir, &["add", "-A"]), "fixture で add できる");
+        assert!(git(&dir, &["commit", "-q", "-m", "two"]), "2 本の歯を commit できる");
+        let base = head_sha(&dir);
+        let _ = seed;
+        // 1 本（also）を消し、残った holds の本文を base でも通る形へ書き換える。
+        write_at(
+            &dir,
+            &lib_rel(),
+            &BASE_LIB.replace(
+                "        assert_eq!(super::val(), 1);\n",
+                "        assert!(super::val() >= 1);\n",
+            ),
+        );
+        head_commit(&dir);
+        let got = judge(&base, &dir);
+        drop_fixture(&dir);
+        assert_verdict(&got.line, got.code, 1, "reason=green-on-base");
+        assert!(
+            !got.line.contains("removed-only"),
+            "本文が変わった file を削除だけへ逃がさない: {}",
+            got.line
+        );
+    }
+
+    /// marker を置いた file の新しい歯は base で緑でも通り、判定行に `retroactive=1`。
+    ///
+    /// 既に land した挙動へ後から歯を足す便は、歯をどこへ置いても base で緑になる。
+    /// marker はその弁別を**書いた人が明示する**逃がしで、判定行に残るので review できる。
+    #[test]
+    fn flip_check_reports_retroactive_marker_instead_of_failing() {
+        let (dir, base) = base_commit();
+        let with_marker = BASE_LIB.replace(
+            "mod checks {\n",
+            "mod checks {\n    // flip-check: retroactive s2-07l.14\n    #[test]\n    fn added_later() {\n        assert_eq!(super::val(), 1);\n    }\n",
+        );
+        write_at(&dir, &lib_rel(), &with_marker);
+        head_commit(&dir);
+        let got = judge(&base, &dir);
+        drop_fixture(&dir);
+        assert_verdict(&got.line, got.code, 0, "RED-on-base ok");
+        assert!(got.line.contains("retroactive=1"), "marker を数えるはず: {}", got.line);
+
+        // **字面を言及しただけの file は免除しない**。素の `contains` で見る実装は
+        // ここで落ちる——marker を文字列に持つ歯（この門を測る当の歯）まで免除され、
+        // その便が丸ごと flip 検査を素通りする。
+        let (dir, base) = base_commit();
+        let mentions = BASE_LIB.replace(
+            "mod checks {\n",
+            "mod checks {\n    #[test]\n    fn mentions() {\n        let note = \"// flip-check: retroactive s2-xxxx\";\n        assert!(!note.is_empty());\n    }\n",
+        );
+        write_at(&dir, &lib_rel(), &mentions);
+        head_commit(&dir);
+        let got = judge(&base, &dir);
+        drop_fixture(&dir);
+        assert_verdict(&got.line, got.code, 1, "reason=green-on-base");
+        assert!(
+            !got.line.contains("retroactive"),
+            "言及しただけの file を免除しない: {}",
+            got.line
+        );
+
+        // 以下は**免除されてはならない**負例。marker は「この便で足した歯」の逃がしであり、
+        // 貼っておけば恒久的に検査が外れる札でも、src へ書けば効く札でもない。
+        let marked = BASE_LIB.replace(
+            "mod checks {\n",
+            "mod checks {\n    // flip-check: retroactive s2-07l.14\n",
+        );
+        // (a) base に残った古い marker（HEAD では src だけ変えた便・review 2026-09-10 F1）
+        assert_not_retroactive(
+            &judge_lib(&marked, &marked.replace("    1\n}", "    1 + 0\n}")),
+            "base から引き継いだ marker",
+        );
+        // (b) src 区間の marker（実装の隣の 1 行で検査を外せる形にしない）
+        let added = |body: &str| {
+            body.replace(
+                "mod checks {\n",
+                "mod checks {\n    #[test]\n    fn later() {\n        assert_eq!(super::val(), 1);\n    }\n",
+            )
+        };
+        let src_side = BASE_LIB.replace(
+            "pub fn val() -> u32 {\n",
+            "// flip-check: retroactive s2-07l.14\npub fn val() -> u32 {\n",
+        );
+        assert_not_retroactive(&judge_lib(BASE_LIB, &added(&src_side)), "src 区間の marker");
+        // (c) bead id の無い marker（区切りの空白も要る＝review の対象にならない札）
+        for bare in [
+            "// flip-check: retroactive",
+            "// flip-check: retroactives2-07l.14",
+            // 区切りの空白は在るが id が無い形（この 1 本だけが id 要求を測る）。
+            "// flip-check: retroactive ",
+        ] {
+            let head = added(BASE_LIB).replace("mod checks {\n", &format!("mod checks {{\n    {bare}\n"));
+            assert_not_retroactive(&judge_lib(BASE_LIB, &head), bare);
+        }
     }
 
     /// 存在しない base ref は rc 1 / `reason=infra-error` で loud に落ちる
