@@ -35,7 +35,7 @@ const ROW_CAP: &str = "gate.token_cap";
 /// `pipe` の使い方。
 pub fn usage() -> String {
     format!(
-        "usage: {NAME} pipe <intake|spawn|approve|gate|land|run|show|resume|stop> [--state-dir D] [--rules PATH] [flags]"
+        "usage: {NAME} pipe <intake|spawn|approve|gate|land|run|show|resume|stop|report> [--state-dir D] [--rules PATH] [flags]"
     )
 }
 
@@ -59,6 +59,10 @@ pub fn dispatch(args: &[String]) -> Outcome {
         Some("show") => show(args),
         Some("resume") => resume(args, &manifest, policy),
         Some("stop") => stop(args, &manifest, policy),
+        Some("report") => match state_dir_of(args) {
+            Err(reason) => refused(reason),
+            Ok(state_dir) => super::report::report(&state_dir),
+        },
         _ => Outcome::failed(RC_REFUSED, vec![usage()]),
     }
 }
@@ -401,10 +405,16 @@ fn gate_run(args: &[String], id: &str, manifest: &Manifest, policy: LockPolicy) 
 }
 
 /// `pipe land`。前提 stage = Gated（PASS の検査は land 側が持つ）。
+///
+/// `--pr-cmd` は**公開の口**ゆえ、承認の有無（replay の導出値）を land へ渡す（A1）。
 fn land_run(args: &[String], id: &str, policy: LockPolicy) -> Outcome {
     let resolved = match resolve(args, id, &[Stage::Gated], false) {
         Ok(found) => found,
         Err(outcome) => return outcome,
+    };
+    let pr_cmd = match flag(args, "--pr-cmd") {
+        Ok(found) => found,
+        Err(reason) => return refused(reason),
     };
     super::land::land(&Land {
         run: id,
@@ -412,6 +422,8 @@ fn land_run(args: &[String], id: &str, policy: LockPolicy) -> Outcome {
         repo: &resolved.repo,
         state_dir: &resolved.state_dir,
         contract: &resolved.contract,
+        approved: resolved.approved,
+        pr_cmd,
         policy,
     })
 }

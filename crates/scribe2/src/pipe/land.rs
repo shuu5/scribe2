@@ -65,6 +65,10 @@ pub struct Land<'a> {
     pub state_dir: &'a Path,
     /// 読み込み済みの契約。
     pub contract: &'a Contract,
+    /// 承認 event が在るか（replay の導出値・[`crate::fleet::replay`] が資格を見る）。
+    pub approved: bool,
+    /// PR を作る seam（`--pr-cmd`）。`None` なら squash して main を進める。
+    pub pr_cmd: Option<&'a str>,
     /// lock の待ち方。
     pub policy: LockPolicy,
 }
@@ -95,6 +99,9 @@ pub fn land(entry: &Land<'_>) -> Outcome {
     if verdict_of(entry.state_dir, entry.run) != Some(Verdict::Pass) {
         return refused(format!("run {} の verdict が PASS でない", entry.run));
     }
+    if let Some(cmd) = entry.pr_cmd {
+        return open_pr(entry, &base, cmd);
+    }
     let Some(old) = git_line(entry.repo, &["rev-parse", MAIN_REF]) else {
         return refused(format!("{MAIN_REF} を読めない"));
     };
@@ -110,6 +117,63 @@ pub fn land(entry: &Land<'_>) -> Outcome {
         MainCheck::Green => finish(entry, &worktree, &new),
         MainCheck::Red(reason) => main_red(entry, &reason),
         MainCheck::Unmeasurable(reason) => main_unmeasured(entry, &reason),
+    }
+}
+
+/// PR を作る seam を通す（設計 §5.4 の `--pr-cmd`・**main を動かさない**）。
+///
+/// 前提に「run に `ApprovalReceived` が在る」を足す（無ければ **rc 1 で何もしない**）。
+/// 公開は不可逆な外向きの操作ゆえ、**実行前に**人が許した周だけ通す（憲法 A1）。承認の
+/// 資格を見るのは replay 側で、ここは導出値を受け取るだけである（読み手を増やさない）。
+///
+/// **stale base は見ない**。CAS の old が要るのは ref を進める周だけで、この形は ref を
+/// 1 本も動かさない——PR が載るかどうかは forge が決める。逆にここで base を縛ると、
+/// main が動いた瞬間に PR を出せなくなる（自己ホストの便が最も踏みやすい）。
+///
+/// **道具の失敗で便を終端させない**（rc 1・event を書かない）。push や PR 作成は network
+/// で落ちうるので、`Failed` を焼くと再試行できない便が残る。
+fn open_pr(entry: &Land<'_>, base: &str, cmd: &str) -> Outcome {
+    if !entry.approved {
+        return refused(format!(
+            "run {} に承認 event が無い（pipe approve --words \"<user の逐語>\"）",
+            entry.run
+        ));
+    }
+    let branch = super::branch_name(entry.run);
+    let line = cmd.replace("{branch}", &branch).replace("{base}", base);
+    let ran = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(&line)
+        .current_dir(entry.repo)
+        .status();
+    match ran {
+        Err(err) => return refused(format!("PR の道具を起動できない: {err}")),
+        Ok(status) if !status.success() => {
+            return refused(format!(
+                "PR の道具が rc {} で終わった",
+                status.code().unwrap_or(-1)
+            ))
+        }
+        Ok(_) => {}
+    }
+    // **面 5 へは書かない**: `verdicts.jsonl` は main に載った便の記録で、この形の便は
+    // まだ載っていない（merge は人が押す）。worktree も畳まない（PR は生きている）。
+    let emitted = emit(
+        entry.state_dir,
+        &Emit {
+            kind: EventKind::RunDone,
+            run: entry.run,
+            bead: entry.bead,
+            stage: Some(Stage::Landed),
+            seat: None,
+            pid: None,
+            detail: Some("pr".to_owned()),
+        },
+        entry.policy,
+    );
+    match emitted {
+        Err(err) => broken(err.to_string()),
+        Ok(()) => Outcome::ok_line(format!("run={} landed=pr", entry.run)),
     }
 }
 

@@ -15,6 +15,7 @@ pub mod cli;
 pub mod contract;
 pub mod gate;
 pub mod land;
+pub mod report;
 pub mod spawn;
 
 use crate::fleet::store::{self, LockPolicy, StoreError};

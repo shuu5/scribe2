@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use vessel::cli_outcome::{RC_BROKEN, RC_OK, RC_REFUSED};
 use vessel::fleet::{Event, EventKind, Stage};
+use vessel::hook::inject_path;
 use vessel::pipe::approve::RC_BLOCKED;
 use vessel::pipe::land;
 
@@ -1995,5 +1996,288 @@ fn pipe_approval_blocks_in_one_shot_run() {
     let id = run_id_of(&out);
     assert!(!id.is_empty(), "止まった周も run id を出す: {}", stdout_of(&out));
     assert!(show_line(&repo, &state, &id).contains("stage=Blocked"), "段は Blocked に落ちる");
+    clean(&[&repo, &state]);
+}
+
+// ── (e) 到達点の計測（設計 §8 (e)・§9・FR22 / AC1 / AC2・憲法 A1） ──────────
+
+/// `pipe report` を 1 回撃つ。
+fn report_once(state: &Path) -> Output {
+    run_pipe(&["report", "--state-dir", &state.display().to_string()])
+}
+
+/// `fleet record` で人由来の event を 1 件積む（**`pipe approve` を通さない**）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn record_human_stage(state: &Path, id: &str) -> Output {
+    Command::new(bin())
+        .args(["fleet", "record", "--state-dir"])
+        .arg(state)
+        .args([
+            "--kind", "RunStage", "--actor", "human", "--run", id, "--bead", "s2-2e5",
+            "--stage", "Intake", "--detail", "手で段を動かした",
+        ])
+        .output()
+        .expect("binary を起動できる")
+}
+
+#[test]
+fn pipe_report_counts_human_events() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let marker = state.join("lens-ran");
+    // 1 便を land まで通す（機械だけで進む便）。
+    let landed_id = gated_pass(&repo, &state, &path, &marker);
+    let landed = land_once(&repo, &state, &landed_id);
+    assert_eq!(landed.status.code(), Some(i32::from(RC_OK)), "land: {}", stderr_of(&landed));
+    // もう 1 便は intake で止める（`landed` に数えない側）。
+    let open_id = intake_bead(&repo, &state, &path, "s2-open");
+    let approved = run_pipe(&[
+        "approve", "--run", &open_id, "--words", "推奨で進めて",
+        "--state-dir", &state.display().to_string(),
+    ]);
+    assert_eq!(approved.status.code(), Some(i32::from(RC_OK)), "approve: {}", stderr_of(&approved));
+
+    let out = report_once(&state);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "report は rc 0: {}", stderr_of(&out));
+    assert_eq!(
+        stdout_of(&out).trim(),
+        "runs=2 landed=1 human_events=1 human_events_other_than_approval=0",
+        "到達点の 1 行（設計 §5.8）"
+    );
+
+    // **approval 以外の人由来 event は別に数える**——ここが 0 であることが到達点の主張
+    // なので、0 のままにしか動かない数え方だと主張を測れない。
+    let recorded = record_human_stage(&state, &open_id);
+    assert_eq!(recorded.status.code(), Some(i32::from(RC_OK)), "record: {}", stderr_of(&recorded));
+    let after = report_once(&state);
+    assert_eq!(
+        stdout_of(&after).trim(),
+        "runs=2 landed=1 human_events=2 human_events_other_than_approval=1",
+        "approval 以外の人由来 event を数える"
+    );
+    clean(&[&repo, &state]);
+}
+
+#[test]
+fn pipe_land_pr_cmd_refuses_without_approval() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let marker = state.join("lens-ran");
+    let id = gated_pass(&repo, &state, &path, &marker);
+    let before = git(&repo, &["rev-parse", "refs/heads/main"]);
+    let ran = state.join("pr-cmd-ran");
+    // **公開の口は承認の後**（憲法 A1）。verdict が PASS でも承認 event が無ければ
+    // 道具を起動しない＝「実行前に人が許した」ことを event で確かめる。
+    let out = run_pipe(&[
+        "land", "--run", &id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(),
+        "--pr-cmd", &format!("touch '{}'", ran.display()),
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "承認が無ければ rc 1");
+    assert!(!ran.exists(), "**道具を起動しない**（起動してから断るのでは公開が起きうる）");
+    assert_eq!(
+        git(&repo, &["rev-parse", "refs/heads/main"]),
+        before,
+        "main は 1 byte も動かない"
+    );
+    assert!(
+        !show_line(&repo, &state, &id).contains("stage=Landed"),
+        "段も動かない: {}",
+        show_line(&repo, &state, &id)
+    );
+    assert!(!land::verdicts_path(&state).exists(), "面 5 へも書かない");
+    clean(&[&repo, &state]);
+}
+
+#[test]
+fn pipe_land_pr_cmd_pushes_branch_without_moving_main() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let marker = state.join("lens-ran");
+    let id = gated_pass(&repo, &state, &path, &marker);
+    let base = git(&repo, &["rev-parse", "refs/heads/main"]);
+    let approved = run_pipe(&[
+        "approve", "--run", &id, "--words", "この PR を出してよい",
+        "--state-dir", &state.display().to_string(),
+    ]);
+    assert_eq!(approved.status.code(), Some(i32::from(RC_OK)), "approve: {}", stderr_of(&approved));
+
+    // **道具の失敗で便を終端させない**: push も PR 作成も network で落ちうるので、
+    // `Failed` を焼くと再試行できない便が残る。rc 1 で何も書かず段も動かさない——だから
+    // この後そのまま成功へ進める（この 2 段で「何も書かない」を測っている）。
+    let broken_seam = run_pipe(&[
+        "land", "--run", &id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(), "--pr-cmd", "exit 7",
+    ]);
+    assert_eq!(broken_seam.status.code(), Some(i32::from(RC_REFUSED)), "道具が落ちた周は rc 1");
+    assert!(
+        stderr_of(&broken_seam).contains("rc 7"),
+        "道具の rc を理由に写す: {}",
+        stderr_of(&broken_seam)
+    );
+    assert!(
+        !show_line(&repo, &state, &id).contains("stage=Landed"),
+        "段も動かない: {}",
+        show_line(&repo, &state, &id)
+    );
+
+    // seam は `{branch}` `{base}` を置換して `sh -c` する。**道具の中身は器が知らない**
+    // ので、置換の結果を file へ写して測る。
+    let sent = state.join("pr-args");
+    let out = run_pipe(&[
+        "land", "--run", &id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(),
+        "--pr-cmd", &format!("printf '%s %s' {{branch}} {{base}} > '{}'", sent.display()),
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "承認が在れば rc 0: {}", stderr_of(&out));
+    let args = fs::read_to_string(&sent).expect("seam へ渡した引数を読める");
+    assert_eq!(
+        args,
+        format!("scribe2/{id} {base}"),
+        "`{{branch}}` と `{{base}}` を置換して渡す"
+    );
+    // **main は動かさない**（merge は人が押す・憲法 A4.3）。
+    assert_eq!(
+        git(&repo, &["rev-parse", "refs/heads/main"]),
+        base,
+        "この形では main を進めない"
+    );
+    assert!(
+        stdout_of(&out).contains("landed=pr"),
+        "PR を出した形だと名乗る: {}",
+        stdout_of(&out)
+    );
+    let log = fs::read_to_string(state.join("fleet").join("events.jsonl")).expect("event log");
+    assert!(
+        log.contains("\"stage\":\"Landed\"") && log.contains("\"detail\":\"pr\""),
+        "Landed detail=pr で終える: {log}"
+    );
+    // 便の worktree は畳まない（**merge は人が押すまで終わっていない**）。
+    assert!(worktree_of(&repo, &id).exists(), "PR 待ちの worktree は残す");
+    assert!(
+        !land::verdicts_path(&state).exists(),
+        "面 5 は main へ載った便の記録ゆえ、PR の段階では書かない"
+    );
+
+    clean(&[&repo, &state]);
+}
+
+/// toy repo の 1 便を intake → spawn まで通す（bead を分けて id の衝突を避ける）。
+fn toy_spawn(repo: &Path, state: &Path, bead: &str, contract: &Path, runner: &str) -> (String, Output) {
+    let id = intake_bead(repo, state, contract, bead);
+    let out = run_pipe(&[
+        "spawn", "--run", &id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(), "--runner", runner,
+    ]);
+    (id, out)
+}
+
+#[test]
+fn pipe_five_contracts_land_with_fake_runner_in_toy_repo() {
+    let (repo, state) = repo_with_state();
+    let marker = state.join("lens-ran");
+    let pass = fake_lens(&marker, &lens_verdict("PASS"));
+    let fail = fake_lens(&state.join("lens-fail"), &lens_verdict("FAIL"));
+    let commit = "echo x >> src/lib.rs && git add -A && git commit -q -m runner";
+    // `Command::output` は stdin を /dev/null にする＝**人の入力を待つ余地が無い**形で
+    // 5 便を通す（設計 §8 (e)）。
+    let plain = write_contract(&repo, &[], &[]);
+    // **marker は tracked でなければ guard が効かない**: 便の worktree は base の checkout
+    // なので、`.vessel` が commit されていない repo では worktree に marker が無く
+    // `served()` は Absent（＝guard は黙る）。本 repo へ `.vessel` を置く理由がこれで、
+    // toy repo も同じ形にしてから 5 便を通す。
+    git(&repo, &["add", "-f", ".vessel"]);
+    git(&repo, &["commit", "-q", "-m", "vessel"]);
+
+    // (1) 正常: intake → spawn → gate(PASS) → land。
+    let (ok_id, spawned) = toy_spawn(&repo, &state, "toy-ok", &plain, commit);
+    assert_eq!(spawned.status.code(), Some(i32::from(RC_OK)), "1 便目 spawn: {}", stderr_of(&spawned));
+    let gated = gate_once(&repo, &state, &ok_id, Some(&pass));
+    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "1 便目 gate: {}", stderr_of(&gated));
+    let landed = land_once(&repo, &state, &ok_id);
+    assert_eq!(landed.status.code(), Some(i32::from(RC_OK)), "1 便目 land: {}", stderr_of(&landed));
+
+    // (2) write-set の外を編集しようとして guard に止まる便。**runner の中で guard を
+    // 撃ち、deny（rc 2）を見て止まる**＝実装役が禁じられた面に触れた周と同じ形。
+    let denied = format!(
+        "printf '{{\"cwd\":\"%s\",\"tool_name\":\"Write\",\"tool_input\":{{\"file_path\":\"docs/out.md\"}}}}' \"$PWD\" \
+         | '{}' hook pre-tool-use; test $? -eq 0 || exit 1; {commit}",
+        bin()
+    );
+    let (denied_id, stopped) = toy_spawn(&repo, &state, "toy-guard", &plain, &denied);
+    // **spawn の rc は 0 のまま**（段が結果を運ぶ・設計 §5.2）。便の終わり方は段で読む。
+    assert!(
+        stdout_of(&stopped).contains("stage=Failed"),
+        "guard に止まった便は Failed: {}",
+        stdout_of(&stopped)
+    );
+    assert!(
+        show_line(&repo, &state, &denied_id).contains("stage=Failed"),
+        "永続面にも Failed が残る: {}",
+        show_line(&repo, &state, &denied_id)
+    );
+    // **止めたのが guard であることまで測る**（runner が別の理由で落ちた周と弁別する）。
+    let denies = fs::read_to_string(inject_path(&state))
+        .unwrap_or_default()
+        .lines()
+        .filter(|line| line.contains("\"what\":\"deny\""))
+        .count();
+    assert_eq!(denies, 1, "write-set の外への Write が 1 件 deny されている");
+
+    // (3) test を足す便（write-set に tests/ を持つ契約）。
+    let with_tests = write_contract(
+        &repo,
+        &["write-set"],
+        &[r#"write-set = ["src/lib.rs", "tests/"]"#],
+    );
+    let add_test = "mkdir -p tests && echo '#[test] fn t() {}' > tests/new.rs \
+                    && git add -A && git commit -q -m test";
+    let (test_id, spawned) = toy_spawn(&repo, &state, "toy-test", &with_tests, add_test);
+    assert_eq!(spawned.status.code(), Some(i32::from(RC_OK)), "3 便目 spawn: {}", stderr_of(&spawned));
+    let gated = gate_once(&repo, &state, &test_id, Some(&pass));
+    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "3 便目 gate: {}", stderr_of(&gated));
+    let landed = land_once(&repo, &state, &test_id);
+    assert_eq!(landed.status.code(), Some(i32::from(RC_OK)), "3 便目 land: {}", stderr_of(&landed));
+
+    // (4) gate が FAIL する便（land しない）。
+    let (fail_id, spawned) = toy_spawn(&repo, &state, "toy-fail", &plain, commit);
+    assert_eq!(spawned.status.code(), Some(i32::from(RC_OK)), "4 便目 spawn: {}", stderr_of(&spawned));
+    let gated = gate_once(&repo, &state, &fail_id, Some(&fail));
+    assert_eq!(gated.status.code(), Some(i32::from(RC_REFUSED)), "4 便目は FAIL で rc 1");
+    let refused = land_once(&repo, &state, &fail_id);
+    assert_eq!(refused.status.code(), Some(i32::from(RC_REFUSED)), "FAIL の便は land しない");
+
+    // (5) 3 クラスを名乗る便: spawn の手前で Blocked → approve（逐語）→ resume → land。
+    let publish = write_contract(&repo, &[], &[r#"classes = ["publish"]"#]);
+    let (blocked_id, blocked) = toy_spawn(&repo, &state, "toy-approve", &publish, commit);
+    assert_eq!(blocked.status.code(), Some(i32::from(RC_BLOCKED)), "5 便目は Blocked で rc 3");
+    let approved = run_pipe(&[
+        "approve", "--run", &blocked_id, "--words", "この便は出してよい",
+        "--state-dir", &state.display().to_string(),
+    ]);
+    assert_eq!(approved.status.code(), Some(i32::from(RC_OK)), "approve: {}", stderr_of(&approved));
+    let resumed = run_pipe(&[
+        "resume", "--run", &blocked_id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(), "--runner", commit,
+    ]);
+    assert_eq!(resumed.status.code(), Some(i32::from(RC_OK)), "5 便目 resume: {}", stderr_of(&resumed));
+    let gated = gate_once(&repo, &state, &blocked_id, Some(&pass));
+    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "5 便目 gate: {}", stderr_of(&gated));
+    let landed = land_once(&repo, &state, &blocked_id);
+    assert_eq!(landed.status.code(), Some(i32::from(RC_OK)), "5 便目 land: {}", stderr_of(&landed));
+
+    // **到達点**: 5 便のうち 3 便が main に載り、人由来の event は承認の 1 件だけ。
+    let out = report_once(&state);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "report: {}", stderr_of(&out));
+    assert_eq!(
+        stdout_of(&out).trim(),
+        "runs=5 landed=3 human_events=1 human_events_other_than_approval=0",
+        "5 便の到達点（AC1 の形・人手は承認 1 件だけ）"
+    );
+    let exported = fs::read_to_string(land::verdicts_path(&state)).expect("面 5 を読める");
+    assert_eq!(exported.lines().count(), 3, "main に載った便だけが面 5 に出る: {exported}");
     clean(&[&repo, &state]);
 }
