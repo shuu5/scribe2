@@ -94,10 +94,15 @@ impl FilePair {
     }
 }
 
-/// `crates/*/tests/*.rs` か（flip-check 独自の追加規則で全体を test 区間と扱う）。
+/// `crates/*/tests/` 配下の `.rs` か（flip-check 独自の追加規則で全体を test 区間と扱う）。
+///
+/// 段数の**完全一致では数えない**。統合 test は `tests/<dir>/main.rs` の module 形を取り
+/// （設計 docs/design/rules-manifest.md §2・憲法 R-C13-2 は target 数で数える）、
+/// `crates/<c>/tests/<dir>/<f>.rs` は 5 段になる。4 段に限ると module 形の test file が
+/// `not-copied` へ落ち、新しい test が base へ写らないまま rc 0 が出る。
 fn is_test_file(rel: &str) -> bool {
     let parts: Vec<&str> = rel.split('/').collect();
-    parts.len() == 4
+    parts.len() >= 4
         && parts.first() == Some(&"crates")
         && parts.get(2) == Some(&"tests")
         && rel.ends_with(".rs")
@@ -105,17 +110,30 @@ fn is_test_file(rel: &str) -> bool {
 
 /// test 区間の始まる byte offset。
 ///
-/// 行頭 `#[cfg(test)]` のうち、**次の非空行が `mod` 宣言**であるものの最初の位置を返す。
-/// 該当が無ければ `None`（＝test 区間なし）。単に最初の行頭 `#[cfg(test)]` で切ると、
+/// `#[cfg(test)]` のうち、**次の非空行が `mod` 宣言**であるものの最初の位置を返す。
+/// 列 0 の marker を先に探し、1 本も無いときだけ字下げされた marker へ落ちる。
+/// 該当が無ければ `None`（＝test 区間なし）。単に最初の `#[cfg(test)]` で切ると、
 /// file 先頭付近の `#[cfg(test)] use …;` を始点に取ってしまい base の src 区間が空になる。
 /// overlay から実装が丸ごと落ちた compile error は RED と数える規則なので、base で GREEN
 /// な test でも rc 0 が出る（fail-open）。該当なしを「test 区間なし」へ倒すのは、写さない
 /// 側が偽 RED を作らないためである。
 fn test_offset(text: &str) -> Option<usize> {
+    marker_offset(text, false).or_else(|| marker_offset(text, true))
+}
+
+/// marker の位置を探す。`allow_indent` が false なら列 0 の marker だけを見る。
+///
+/// **列 0 を先に見るのは字下げ許容の回帰を塞ぐためである**。字下げを一律に許すと、
+/// file 前半の入れ子 module の中の marker を先に拾い、その後ろに在る実装まで test
+/// 区間に入ってしまう。overlay は `base の src 区間 + HEAD の test 区間`なので、
+/// HEAD の実装が base 木へ紛れ込み、「新しい test が古い実装で赤い」という前提が
+/// 崩れる（`green-on-base` の偽 FAIL になる）。
+fn marker_offset(text: &str, allow_indent: bool) -> Option<usize> {
     let lines: Vec<&str> = text.split_inclusive('\n').collect();
     let mut at = 0;
     for (index, line) in lines.iter().enumerate() {
-        if line.starts_with(TEST_MOD_MARK) && next_line_is_test_mod(&lines, index) {
+        let head = if allow_indent { line.trim_start() } else { line };
+        if head.starts_with(TEST_MOD_MARK) && next_line_is_test_mod(&lines, index) {
             return Some(at);
         }
         at += line.len();
@@ -128,7 +146,7 @@ fn next_line_is_test_mod(lines: &[&str], index: usize) -> bool {
     lines
         .iter()
         .skip(index + 1)
-        .map(|line| line.trim_end())
+        .map(|line| line.trim())
         .find(|line| !line.is_empty())
         .is_some_and(|line| TEST_MOD_HEADS.iter().any(|head| line.starts_with(head)))
 }
@@ -508,7 +526,7 @@ pub fn run(args: &[String]) -> ExitCode {
 
 #[cfg(test)]
 mod tests {
-    use super::{judge, parse_base, split_regions};
+    use super::{is_test_file, judge, parse_base, split_regions};
     use std::path::{Path, PathBuf};
     use std::process::Command;
     use std::sync::atomic::{AtomicU32, Ordering};
@@ -633,6 +651,58 @@ mod tests {
     fn assert_verdict(line: &str, code: u8, want_code: u8, want: &str) {
         assert_eq!(code, want_code, "rc が期待と違う: {line}");
         assert!(line.contains(want), "判定行に {want} が無い: {line}");
+    }
+
+    /// module 形の統合 test（`tests/<dir>/<f>.rs`）も test file と見なす。
+    ///
+    /// 4 段完全一致だと `crates/<c>/tests/<dir>/<f>.rs` が漏れ、新しい test が base へ
+    /// 写らないまま `not-copied` になる。
+    #[test]
+    fn entrance_is_test_file_accepts_module_dirs() {
+        for rel in [
+            "crates/demo/tests/e2e/main.rs",
+            "crates/demo/tests/e2e/rules.rs",
+            "crates/demo/tests/single.rs",
+            "crates/demo/tests/a/b/c.rs",
+        ] {
+            assert!(is_test_file(rel), "test file のはず: {rel}");
+        }
+        for rel in [
+            "crates/demo/src/lib.rs",
+            "crates/demo/tests/e2e/main.txt",
+            "tests/e2e/main.rs",
+            "crates/demo/benches/x.rs",
+        ] {
+            assert!(!is_test_file(rel), "test file でないはず: {rel}");
+        }
+    }
+
+    /// 列 0 の marker が後方に在るとき、split 点は字下げ marker でなく列 0 側である。
+    ///
+    /// 字下げを一律に許すと、入れ子 module の marker を先に拾い、その後ろの実装まで
+    /// test 区間へ移る。overlay で HEAD の実装が base 木へ紛れ込む回帰の負例である。
+    #[test]
+    fn entrance_test_mod_mark_prefers_column_zero() {
+        let text = "mod inner {\n    #[cfg(test)]\n    mod probe {\n        fn x() {}\n    }\n}\npub fn real_impl() -> u32 {\n    1\n}\n#[cfg(test)]\nmod tests {\n    fn y() {}\n}\n";
+        let (src, test) = split_regions("crates/demo/src/lib.rs", text);
+        assert!(src.contains("real_impl"), "実装は src 区間に残る: {src:?}");
+        assert!(!test.contains("real_impl"), "実装は test 区間へ移らない: {test:?}");
+        assert!(
+            test.starts_with("#[cfg(test)]\nmod tests {"),
+            "test 区間は列 0 の marker から始まる: {test:?}"
+        );
+    }
+
+    /// 列 0 の marker が 1 本も無いときは、字下げされた `#[cfg(test)]` を始点にする。
+    #[test]
+    fn entrance_test_mod_mark_allows_indent() {
+        let text = "mod outer {\n    #[cfg(test)]\n    mod t {\n        fn a() {}\n    }\n}\n";
+        let (src, test) = split_regions("crates/demo/src/lib.rs", text);
+        assert_eq!(src, "mod outer {\n", "src 区間は marker の手前まで");
+        assert!(
+            test.starts_with("    #[cfg(test)]\n    mod t {"),
+            "test 区間が字下げされた marker から始まる: {test:?}"
+        );
     }
 
     /// overlay は base の src 区間を保ち HEAD の test 区間だけを乗せる。

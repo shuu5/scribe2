@@ -1271,18 +1271,62 @@ mod tests {
 
     /// `../..` 形の root（`git rev-parse --show-toplevel` の出力と字面では一致しない）
     /// でも paths-clean が走査本数を数える。素の `==` 比較の実装はここで落ちる。
+    ///
+    /// 分岐は**測定対象と独立な判別子**（`.git` の有無）で行う。paths-clean の値そのもので
+    /// 分岐すると「数が出ないこと」を常に許してしまい、素の `==` 比較の回帰を取り逃がす。
+    /// `.git` は main checkout では dir、worktree では file、flip-check が `git archive` で
+    /// 展開した base tree では不在である。
     #[test]
     fn check_paths_clean_scans_noncanonical_root() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
         let line = summary(&root);
-        let tail = line
-            .split_once("paths-clean=")
-            .map(|(_, rest)| rest)
-            .unwrap_or_default();
+        if root.join(".git").exists() {
+            let scanned = paths_clean_scanned(&line)
+                .unwrap_or_else(|| panic!("repo の中では走査本数が出るはず: {line}"));
+            assert!(scanned >= 1, "走査した tracked file 数は 1 以上のはず: {line}");
+        } else {
+            assert!(
+                paths_clean_unnumbered(&line),
+                ".git の無い木では数が出ないはず: {line}"
+            );
+            assert_eq!(paths_clean_scanned(&line), None, "数として読めない: {line}");
+        }
+    }
+
+    /// git は引けるが root が toplevel でないときの値（flip-check の base tree はこれ。
+    /// `target/` は repo の working tree の内側なので git 自体は成功する）。
+    const PATHS_CLEAN_NA: &str = "paths-clean=n/a(not-a-repo-root)";
+
+    /// git そのものが引けないときの値（repo の外の tmp 木はこれ）。
+    const PATHS_CLEAN_UNMEASURED: &str = "paths-clean=?";
+
+    /// paths-clean が数でない 2 形のどちらかか。
+    fn paths_clean_unnumbered(line: &str) -> bool {
+        line.contains(PATHS_CLEAN_NA) || line.contains(PATHS_CLEAN_UNMEASURED)
+    }
+
+    /// `paths-clean=` の直後の 10 進整数。数字で始まらなければ `None`。
+    ///
+    /// 非 repo root では `n/a(not-a-repo-root)` が入るので、数として読めないことは
+    /// 欠陥ではない。ここで `None` に倒しておかないと、flip-check が base を
+    /// `git archive` で展開した木（`.git` 無し）で撃つときに parse が panic する。
+    fn paths_clean_scanned(line: &str) -> Option<usize> {
+        let tail = line.split_once("paths-clean=").map(|(_, rest)| rest)?;
         let digits: String = tail.chars().take_while(char::is_ascii_digit).collect();
-        let scanned: usize = digits
-            .parse()
-            .unwrap_or_else(|err| panic!("paths-clean が 10 進整数でない（{err}）: {line}"));
-        assert!(scanned >= 1, "走査した tracked file 数は 1 以上のはず: {line}");
+        digits.parse().ok()
+    }
+
+    /// git repo でない木では paths-clean は数を返さず、走査数は数えられない。
+    ///
+    /// flip-check の base 健全性前段は、`git archive` で展開した `.git` の無い木で
+    /// 全 test を撃つ。その形を fixture で再現する（`git_track_all` を呼ばない）。
+    #[test]
+    fn entrance_paths_clean_is_unnumbered_outside_repo() {
+        let dir = make_tmp_dir();
+        write_healthy(&dir);
+        let line = summary(&dir);
+        let _ = fs::remove_dir_all(&dir);
+        assert!(paths_clean_unnumbered(&line), "非 repo root の値: {line}");
+        assert_eq!(paths_clean_scanned(&line), None, "走査数は数えられない: {line}");
     }
 }
