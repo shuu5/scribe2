@@ -23,8 +23,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Output, Stdio};
 
-/// in-module test の始まりを示す行頭の印（`check.rs` の `split_test_src` と同じ規則）。
+/// in-module test の始まりを示す行頭の印。
 const TEST_MOD_MARK: &str = "#[cfg(test)]";
+
+/// [`TEST_MOD_MARK`] の直後（空行は跨ぐ）に来てよい `mod` 宣言の前置き。
+const TEST_MOD_HEADS: &[&str] = &["mod ", "pub mod ", "pub(crate) mod "];
 
 /// base tree と runner target を置く `target/` 配下の作業 dir 名。
 const WORK_DIR: &str = "flipcheck";
@@ -100,16 +103,34 @@ fn is_test_file(rel: &str) -> bool {
         && rel.ends_with(".rs")
 }
 
-/// test 区間の始まる byte offset（最初の行頭 `#[cfg(test)]`）。
+/// test 区間の始まる byte offset。
+///
+/// 行頭 `#[cfg(test)]` のうち、**次の非空行が `mod` 宣言**であるものの最初の位置を返す。
+/// 該当が無ければ `None`（＝test 区間なし）。単に最初の行頭 `#[cfg(test)]` で切ると、
+/// file 先頭付近の `#[cfg(test)] use …;` を始点に取ってしまい base の src 区間が空になる。
+/// overlay から実装が丸ごと落ちた compile error は RED と数える規則なので、base で GREEN
+/// な test でも rc 0 が出る（fail-open）。該当なしを「test 区間なし」へ倒すのは、写さない
+/// 側が偽 RED を作らないためである。
 fn test_offset(text: &str) -> Option<usize> {
+    let lines: Vec<&str> = text.split_inclusive('\n').collect();
     let mut at = 0;
-    for line in text.split_inclusive('\n') {
-        if line.starts_with(TEST_MOD_MARK) {
+    for (index, line) in lines.iter().enumerate() {
+        if line.starts_with(TEST_MOD_MARK) && next_line_is_test_mod(&lines, index) {
             return Some(at);
         }
         at += line.len();
     }
     None
+}
+
+/// `index` の次に来る非空行が [`TEST_MOD_HEADS`] のいずれかで始まるか。
+fn next_line_is_test_mod(lines: &[&str], index: usize) -> bool {
+    lines
+        .iter()
+        .skip(index + 1)
+        .map(|line| line.trim_end())
+        .find(|line| !line.is_empty())
+        .is_some_and(|line| TEST_MOD_HEADS.iter().any(|head| line.starts_with(head)))
 }
 
 /// 本文を `(src 区間, test 区間)` に分ける。`crates/*/tests/*.rs` は全体が test 区間。
@@ -189,18 +210,22 @@ fn git_stdout(dir: &Path, label: &str, args: &[&str]) -> Result<String, String> 
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
-/// `git diff --name-only <base>...HEAD -- *.rs` の出力行。rc≠0 は Err（infra-error）。
+/// `git diff --name-only <base>...HEAD -- :(top)*.rs` の出力行。rc≠0 は Err（infra-error）。
 ///
 /// pathspec は shell を介さない独立した 1 引数なのでクォート文字を字面に含めない。
-fn changed_rs(base: &str, workdir: &Path) -> Result<Vec<String>, String> {
+/// **repo root から撃ち、かつ `:(top)` 錨を付ける**——素の `*.rs` は git の prefix
+/// （cwd）配下へ縮むので、subdir から起動すると差分 0 件に化けて
+/// `skip reason=no-rust-diff` の rc 0 が出る（何も検証しない fail-open）。
+/// 出力 path は `--relative` を付けない限り root 相対である。
+fn changed_rs(base: &str, root: &Path) -> Result<Vec<String>, String> {
     let range = format!("{base}...HEAD");
     let output = Command::new("git")
         .arg("-C")
-        .arg(workdir)
+        .arg(root)
         .args(["diff", "--name-only"])
         .arg(&range)
         .arg("--")
-        .arg("*.rs")
+        .arg(":(top)*.rs")
         .output()
         .map_err(|err| format!("git diff を起動できない: {err}"))?;
     if !output.status.success() {
@@ -217,10 +242,10 @@ fn changed_rs(base: &str, workdir: &Path) -> Result<Vec<String>, String> {
 /// git の **spawn 失敗だけ**を `Err`（infra-error の理由）へ上げる。rc≠0 は「その rev に
 /// その path が無い」という正当な意味なので `Ok(None)` に保つ。両者を畳むと spawn 失敗が
 /// `not-copied` に化けて flip 未検証のまま rc 0 が出る（honest fence は「例外なく」である）。
-fn show(workdir: &Path, rev: &str, rel: &str) -> Result<Option<String>, String> {
+fn show(root: &Path, rev: &str, rel: &str) -> Result<Option<String>, String> {
     let output = Command::new("git")
         .arg("-C")
-        .arg(workdir)
+        .arg(root)
         .arg("show")
         .arg(format!("{rev}:{rel}"))
         .output()
@@ -232,13 +257,13 @@ fn show(workdir: &Path, rev: &str, rel: &str) -> Result<Option<String>, String> 
 }
 
 /// 変更 .rs ごとに base / HEAD の本文を読む。
-fn load_pairs(base: &str, workdir: &Path, changed: &[String]) -> Result<Vec<FilePair>, String> {
+fn load_pairs(base: &str, root: &Path, changed: &[String]) -> Result<Vec<FilePair>, String> {
     let mut pairs = Vec::new();
     for rel in changed {
         pairs.push(FilePair {
             rel: rel.clone(),
-            base: show(workdir, base, rel)?,
-            head: show(workdir, "HEAD", rel)?,
+            base: show(root, base, rel)?,
+            head: show(root, "HEAD", rel)?,
         });
     }
     Ok(pairs)
@@ -430,25 +455,28 @@ fn finish(root: &Path, outcome: Verdict) -> Verdict {
 }
 
 /// 段を順に踏んで判定を返す。判定行は 3 語のいずれか 1 行だけで、内訳は stderr へ出す。
+///
+/// `workdir` は repo 内のどこでもよい。最初に repo root を解いてから git を撃つので、
+/// 判定は起動 dir に依らない。
 pub fn judge(base: &str, workdir: &Path) -> Verdict {
-    let changed = match changed_rs(base, workdir) {
+    let root = match repo_root(workdir) {
+        Err(reason) => return infra(&reason),
+        Ok(found) => found,
+    };
+    let changed = match changed_rs(base, &root) {
         Err(reason) => return infra(&reason),
         Ok(list) => list,
     };
     if changed.is_empty() {
         return verdict("flip-check: skip reason=no-rust-diff", 0);
     }
-    let pairs = match load_pairs(base, workdir, &changed) {
+    let pairs = match load_pairs(base, &root, &changed) {
         Err(reason) => return infra(&reason),
         Ok(found) => found,
     };
     if !pairs.iter().any(FilePair::flips) {
         return fail("no-test-diff");
     }
-    let root = match repo_root(workdir) {
-        Err(reason) => return infra(&reason),
-        Ok(found) => found,
-    };
     let outcome = run_on_base(base, &root, &pairs);
     finish(&root, outcome)
 }
@@ -628,6 +656,47 @@ mod tests {
         let (src, test) = split_regions(&format!("crates/{FIXTURE_MEMBER}/tests/it.rs"), base);
         assert!(src.is_empty(), "tests/*.rs は全体が test 区間のはず: {src}");
         assert_eq!(test, base, "tests/*.rs は全体が test 区間のはず");
+    }
+
+    /// 先頭の `#[cfg(test)] use …;` を test 区間の始点にしない。
+    ///
+    /// 始点に取ると base の src 区間が空になり overlay から実装が丸ごと落ちる。
+    /// その compile error は RED と数える規則なので、base で GREEN な test でも
+    /// rc 0 が出る（fail-open）。始点は「直後の非空行が `mod` である `#[cfg(test)]`」。
+    #[test]
+    fn flipcheck_test_region_starts_at_test_mod() {
+        let rel = lib_rel();
+        let text = "#[cfg(test)]\nuse std::fmt;\n\npub fn v() -> u32 {\n    1\n}\n\n#[cfg(test)]\nmod t {\n    // body\n}\n";
+        let (src, test) = split_regions(&rel, text);
+        assert!(src.contains("pub fn v()"), "実装は src 区間に残るはず: {src}");
+        assert!(
+            src.contains("use std::fmt;"),
+            "先頭の cfg(test) use は src 区間に残るはず: {src}"
+        );
+        assert!(
+            test.starts_with("#[cfg(test)]\nmod t {"),
+            "test 区間は mod 宣言から始まるはず: {test}"
+        );
+        assert!(!test.contains("pub fn v()"), "実装は test 区間に入らないはず: {test}");
+
+        let lone = "#[cfg(test)]\nuse std::fmt;\npub fn v() -> u32 {\n    1\n}\n";
+        let (only_src, empty) = split_regions(&rel, lone);
+        assert_eq!(only_src, lone, "mod が無ければ全体が src 区間のはず");
+        assert!(empty.is_empty(), "mod が無ければ test 区間は空のはず: {empty}");
+    }
+
+    /// subdir を cwd にしても .rs の差分を取り落とさない（pathspec が cwd 配下へ縮まない）。
+    ///
+    /// 縮むと差分 0 件に化けて `skip reason=no-rust-diff` の rc 0 が出る（fail-open）。
+    #[test]
+    fn flipcheck_sees_rust_diff_from_subdir() {
+        let (dir, base) = base_commit();
+        write_at(&dir, "notes/keep.md", "note\n");
+        write_at(&dir, &lib_rel(), &format!("// touched\n{BASE_LIB}"));
+        head_commit(&dir);
+        let got = judge(&base, &dir.join("notes"));
+        drop_fixture(&dir);
+        assert_verdict(&got.line, got.code, 1, "reason=no-test-diff");
     }
 
     /// src 区間だけの変更は rc 1 / `reason=no-test-diff` で落ちる。

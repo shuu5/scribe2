@@ -50,21 +50,30 @@ pub fn string_array(value: &str) -> Vec<String> {
     inner.split(',').filter_map(quoted).collect()
 }
 
-/// `section` の内側に在る `key = value` を順に返す。
-pub fn entries_in<'a>(text: &'a str, section: &str) -> Vec<(&'a str, &'a str)> {
-    let mut current = "";
-    let mut found = Vec::new();
+/// section header ごとに `key = value` を束ねて出現順に返す。
+///
+/// header の字面は `[dependencies.serde]` や `[target.'cfg(unix)'.dependencies]` の
+/// ような入れ子形もそのまま返す。意味づけ（どれが依存 section か）は呼出側が行う。
+/// 最初の section 行より上に在る行は、属する section が無いので捨てる。
+pub fn sections(text: &str) -> Vec<(&str, Vec<(&str, &str)>)> {
+    let mut found: Vec<(&str, Vec<(&str, &str)>)> = Vec::new();
     for line in text.lines() {
         if let Some(header) = section_header(line) {
-            current = header;
+            found.push((header, Vec::new()));
             continue;
         }
-        if current != section {
-            continue;
-        }
-        if let Some(pair) = key_value(line) {
-            found.push(pair);
+        if let (Some(pair), Some((_, pairs))) = (key_value(line), found.last_mut()) {
+            pairs.push(pair);
         }
     }
     found
+}
+
+/// `section` の内側に在る `key = value` を順に返す（同名 section は畳んで並べる）。
+pub fn entries_in<'a>(text: &'a str, section: &str) -> Vec<(&'a str, &'a str)> {
+    sections(text)
+        .into_iter()
+        .filter(|(header, _)| *header == section)
+        .flat_map(|(_, pairs)| pairs)
+        .collect()
 }

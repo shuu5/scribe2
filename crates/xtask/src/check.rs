@@ -8,7 +8,7 @@
 
 use crate::genmanifest::MANIFEST_REL;
 use crate::limits::{ALLOWED_DEPS, MAX_CORE_LINES, MAX_FILE_LINES, PRIVATE_PATH_MARKS, REQUIRED_LINTS};
-use crate::toml_lite::{entries_in, lint_level, quoted, string_array};
+use crate::toml_lite::{entries_in, lint_level, quoted, sections, string_array};
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -433,20 +433,105 @@ fn measure_deps_empty(layout: &Layout) -> Measured {
 }
 
 /// 1 つの manifest が宣言している allowlist 外の直接依存を違反行に写す。
+///
+/// section 名の完全一致では足りない。`[dependencies.<name>]` の入れ子形、
+/// `[build-dependencies]`、`[target.'cfg(unix)'.dependencies]`、
+/// `[workspace.dependencies]` のいずれも直接依存を 1 本増やすからである。
 fn declared_deps(manifest: &str, path: &Path) -> Vec<String> {
     let mut found = Vec::new();
-    for section in ["dependencies", "dev-dependencies"] {
-        for (key, _) in entries_in(manifest, section) {
-            if is_allowed_dep(section, key) {
-                continue;
+    for (header, pairs) in sections(manifest) {
+        let Some((section, nested)) = dep_section(header) else {
+            continue;
+        };
+        match nested {
+            Some(dep) => {
+                let renamed = pairs.iter().any(|(key, _)| *key == "package");
+                found.extend(dep_violation(path, header, section, dep, renamed));
             }
-            found.push(format!(
-                "deps-empty: {} の [{section}] に {key} が在る（allowlist 外の直接依存）",
-                path.display()
-            ));
+            None => {
+                for (key, value) in pairs {
+                    found.extend(dep_violation(path, header, section, key, renames_package(value)));
+                }
+            }
         }
     }
     found
+}
+
+/// 直接依存 1 本を測り、allowlist の外なら違反行を返す。
+///
+/// `package =` で別 crate へ改名した entry は key 名が allowlist に在っても違反である
+/// （さもないと `insta = { package = "other" }` が allowlist を素通りする）。
+fn dep_violation(
+    path: &Path,
+    header: &str,
+    section: &str,
+    dep: &str,
+    renamed: bool,
+) -> Option<String> {
+    if !renamed && is_allowed_dep(section, dep) {
+        return None;
+    }
+    let reason = if renamed {
+        "package = で別 crate へ改名している（allowlist は key 名では通さない）"
+    } else {
+        "allowlist 外の直接依存"
+    };
+    Some(format!(
+        "deps-empty: {} の [{header}] に {dep} が在る（{reason}）",
+        path.display()
+    ))
+}
+
+/// 直接依存を宣言しうる section の base 名。`workspace.` / `target.<spec>.` の前置は
+/// 剥がしてから照合する。
+const DEP_SECTION_BASES: &[&str] = &["dependencies", "dev-dependencies", "build-dependencies"];
+
+/// section header が依存 section なら `(base 名, `[<base>.<name>]` 形の dep 名)`。
+fn dep_section(header: &str) -> Option<(&'static str, Option<&str>)> {
+    let scoped = strip_target_scope(header.strip_prefix("workspace.").unwrap_or(header));
+    for base in DEP_SECTION_BASES {
+        if scoped == *base {
+            return Some((base, None));
+        }
+        let nested = scoped
+            .strip_prefix(*base)
+            .and_then(|rest| rest.strip_prefix('.'))
+            .filter(|dep| !dep.is_empty() && !dep.contains('.'));
+        if let Some(dep) = nested {
+            return Some((base, Some(dep)));
+        }
+    }
+    None
+}
+
+/// `target.<spec>.` の前置を剥がす。`<spec>` は quote 内に `.` を含みうるので、
+/// dot 分割ではなく base 名の直前の `.` を探して切る。
+fn strip_target_scope(header: &str) -> &str {
+    let Some(after) = header.strip_prefix("target.") else {
+        return header;
+    };
+    for base in DEP_SECTION_BASES {
+        if let Some(at) = after.find(&format!(".{base}")) {
+            return after.get(at + 1..).unwrap_or(after);
+        }
+    }
+    after
+}
+
+/// inline table 形の dep 値が `package = ` による改名を持つか。
+fn renames_package(value: &str) -> bool {
+    let Some(inner) = value
+        .trim()
+        .strip_prefix('{')
+        .and_then(|rest| rest.strip_suffix('}'))
+    else {
+        return false;
+    };
+    inner
+        .split(',')
+        .filter_map(|part| part.split_once('='))
+        .any(|(key, _)| key.trim() == "package")
 }
 
 /// `(section, dep 名)` が [`ALLOWED_DEPS`] に在るか。
@@ -598,9 +683,13 @@ fn measure_paths_clean(layout: &Layout) -> Measured {
     }
 }
 
-/// tracked file を 1 本ずつ走査する。読めない file（UTF-8 でない・作業木から消えている
-/// 等）は skip して `scanned` にも数えない。母集団は index だが本文は作業木から読むので、
-/// index にしか在らない blob（tracked symlink の link target を含む）はこの面では測らない。
+/// tracked file を 1 本ずつ走査する。
+///
+/// 本文は **byte で読み byte で検索する**。`String` へ通すと非 UTF-8 の 1 byte を混ぜる
+/// だけで file 全体が読めなくなり、needle が素通りするからである。読めない file
+/// （作業木から消えている・permission が無い等）は無言で skip せず違反として数える。
+/// 母集団は index だが本文は作業木から読むので、index にしか在らない blob
+/// （tracked symlink の link target を含む）はこの面では測らない。
 fn scan_private_paths(root: &Path, rels: &[String]) -> Measured {
     let mut violations = Vec::new();
     let mut scanned = 0;
@@ -608,11 +697,19 @@ fn scan_private_paths(root: &Path, rels: &[String]) -> Measured {
         if rel == PATHS_CLEAN_SKIP {
             continue;
         }
-        let Ok(text) = fs::read_to_string(root.join(rel)) else {
-            continue;
-        };
-        scanned += 1;
-        violations.extend(private_path_hits(rel, &text));
+        match fs::read(root.join(rel)) {
+            Err(err) => violations.push(format!(
+                "paths-clean: {rel} を読めない: {err}（読めない tracked file は違反である）"
+            )),
+            Ok(bytes) => {
+                scanned += 1;
+                violations.extend(
+                    private_path_lines(&bytes)
+                        .into_iter()
+                        .map(|line| format!("paths-clean: {rel}:{line} に private path 形が在る")),
+                );
+            }
+        }
     }
     Measured {
         fact: format!("paths-clean={scanned}"),
@@ -620,13 +717,33 @@ fn scan_private_paths(root: &Path, rels: &[String]) -> Measured {
     }
 }
 
-/// 1 file の本文から private path 形の在る行を違反行へ写す（行中のどこでも違反）。
-fn private_path_hits(rel: &str, text: &str) -> Vec<String> {
-    text.lines()
+/// private path 形を含む行の番号を昇順・重複なしで返す（行中のどこに在っても違反）。
+fn private_path_lines(bytes: &[u8]) -> Vec<usize> {
+    let mut lines = BTreeSet::new();
+    for mark in PRIVATE_PATH_MARKS {
+        for at in find_all(bytes, mark.as_bytes()) {
+            lines.insert(line_of(bytes, at));
+        }
+    }
+    lines.into_iter().collect()
+}
+
+/// `needle` の現れる byte offset を昇順で返す（std だけの素朴走査）。
+fn find_all(haystack: &[u8], needle: &[u8]) -> Vec<usize> {
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return Vec::new();
+    }
+    haystack
+        .windows(needle.len())
         .enumerate()
-        .filter(|(_, line)| PRIVATE_PATH_MARKS.iter().any(|mark| line.contains(mark)))
-        .map(|(index, _)| format!("paths-clean: {rel}:{} に private path 形が在る", index + 1))
+        .filter(|(_, window)| *window == needle)
+        .map(|(at, _)| at)
         .collect()
+}
+
+/// byte offset を 1 起点の行番号にする。
+fn line_of(bytes: &[u8], at: usize) -> usize {
+    bytes.iter().take(at).filter(|byte| **byte == b'\n').count() + 1
 }
 
 /// file を読む。読めない理由はそのまま違反本文に出せる形にする。
@@ -889,16 +1006,17 @@ mod tests {
             .unwrap_or(false)
     }
 
-    /// member manifest の `section` へ依存 1 本を足した本文。
-    fn with_dep(name: &str, section: &str, dep: &str) -> String {
+    /// member manifest の `section` へ `dep = value` を 1 本足した本文。
+    fn with_dep(name: &str, section: &str, dep: &str, value: &str) -> String {
         let mut text = member_manifest(name, true);
         let anchor = format!("[{section}]\n");
+        let line = format!("{dep} = {value}\n");
         match text.rfind(&anchor) {
             Some(at) => {
-                text.insert_str(at + anchor.len(), &format!("{dep} = \"1\"\n"));
+                text.insert_str(at + anchor.len(), &line);
                 text
             }
-            None => format!("{text}\n[{section}]\n{dep} = \"1\"\n"),
+            None => format!("{text}\n[{section}]\n{line}"),
         }
     }
 
@@ -1044,7 +1162,7 @@ mod tests {
             write_at(
                 dir,
                 &format!("crates/{FIXTURE_CORE}/Cargo.toml"),
-                &with_dep(FIXTURE_CORE, section, dep),
+                &with_dep(FIXTURE_CORE, section, dep, "\"1\""),
             );
         });
         assert!(
@@ -1055,10 +1173,100 @@ mod tests {
             write_at(
                 dir,
                 &format!("crates/{FIXTURE_CORE}/Cargo.toml"),
-                &with_dep(FIXTURE_CORE, section, "not-in-allowlist"),
+                &with_dep(FIXTURE_CORE, section, "not-in-allowlist", "\"1\""),
             );
         });
         assert_single(&outside, "deps-empty");
+    }
+
+    /// section 名の完全一致では拾えない dep 宣言形も deps-empty で落ちる。
+    ///
+    /// 完全一致だけの実装はこの 4 形を 1 本も数えず、allowlist を素通りさせる。
+    #[test]
+    fn check_counts_nested_and_scoped_dep_sections() {
+        let member_forms = [
+            "[dependencies.not-in-allowlist]\nversion = \"1\"\n",
+            "[build-dependencies]\nnot-in-allowlist = \"1\"\n",
+            "[target.'cfg(unix)'.dependencies]\nnot-in-allowlist = \"1\"\n",
+        ];
+        for form in member_forms {
+            let violations = check_fixture(|dir| {
+                write_at(
+                    dir,
+                    &format!("crates/{FIXTURE_CORE}/Cargo.toml"),
+                    &format!("{}\n{form}", member_manifest(FIXTURE_CORE, true)),
+                );
+            });
+            assert_single(&violations, "deps-empty");
+        }
+        let root_form = check_fixture(|dir| {
+            write_at(
+                dir,
+                "Cargo.toml",
+                &format!(
+                    "{}\n[workspace.dependencies]\nnot-in-allowlist = \"1\"\n",
+                    root_manifest(None)
+                ),
+            );
+        });
+        assert_single(&root_form, "deps-empty");
+    }
+
+    /// allowlist の key 名を借りた `package =` 改名は deps-empty で落ちる。
+    ///
+    /// key 名だけで照合する実装は別 crate の持ち込みを素通りさせる。
+    #[test]
+    fn check_rejects_renamed_allowlisted_dep() {
+        let (section, dep) = ALLOWED_DEPS.first().copied().unwrap_or(("", ""));
+        assert!(!section.is_empty(), "allowlist は 1 本以上のはず");
+        let inline = check_fixture(|dir| {
+            write_at(
+                dir,
+                &format!("crates/{FIXTURE_CORE}/Cargo.toml"),
+                &with_dep(
+                    FIXTURE_CORE,
+                    section,
+                    dep,
+                    "{ package = \"not-in-allowlist\", version = \"1\" }",
+                ),
+            );
+        });
+        assert_single(&inline, "deps-empty");
+        let table = check_fixture(|dir| {
+            write_at(
+                dir,
+                &format!("crates/{FIXTURE_CORE}/Cargo.toml"),
+                &format!(
+                    "{}\n[{section}.{dep}]\npackage = \"not-in-allowlist\"\nversion = \"1\"\n",
+                    member_manifest(FIXTURE_CORE, true)
+                ),
+            );
+        });
+        assert_single(&table, "deps-empty");
+    }
+
+    /// 非 UTF-8 byte を混ぜた tracked file でも private path 形を見逃さない。
+    ///
+    /// `read_to_string` で読む実装は無言で skip するので needle が素通りする。
+    #[test]
+    fn check_scans_non_utf8_tracked_file() {
+        let violations = check_fixture(|dir| {
+            let mark = format!("{}home{}", "/", "/");
+            let mut body = format!("# note\nsee {mark}someone/x").into_bytes();
+            body.push(0xFF);
+            body.push(b'\n');
+            let path = dir.join("docs/bin.md");
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).expect("擬似 workspace の dir を作れる");
+            }
+            fs::write(&path, &body).expect("非 UTF-8 の file を書ける");
+        });
+        assert_single(&violations, "paths-clean");
+        let head = violations.first().map(String::as_str).unwrap_or_default();
+        assert!(
+            head.contains("docs/bin.md:2"),
+            "違反本文に相対 path と行番号が載るはず: {head}"
+        );
     }
 
     /// `../..` 形の root（`git rev-parse --show-toplevel` の出力と字面では一致しない）
