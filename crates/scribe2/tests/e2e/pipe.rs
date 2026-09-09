@@ -1467,6 +1467,129 @@ fn pipe_gate_regates_after_inconclusive() {
         "測り直した便は land できる: {}",
         stderr_of(&landed)
     );
+    // **land 済みの便は測り直せない**。ここを開けると Gated を書き直して land を 2 度
+    // 通す口になる（測り直しが開くのは Gated の 1 段だけ）。
+    let after_land = gate_once(&repo, &state, &id, Some(&lens));
+    assert_eq!(
+        after_land.status.code(),
+        Some(i32::from(RC_REFUSED)),
+        "Landed からの再 gate は rc 1"
+    );
+    assert!(
+        stderr_of(&after_land).contains("段は Landed である"),
+        "理由は段である: {}",
+        stderr_of(&after_land)
+    );
+    clean(&[&repo, &state]);
+}
+
+#[test]
+fn pipe_gate_regates_after_relaxing_cap() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let id = implemented(&repo, &state, &path);
+    let marker = state.join("lens-ran");
+    let lens = fake_lens(&marker, &lens_verdict("PASS"));
+    // **cap 超過も「測れなかった」**（lens を呼べていない）。契約が名指す測り直しの
+    // 主用途はここで、`--lens` の渡し忘れだけを測っていると `--rules` 経由の周が丸ごと
+    // 素通りする。
+    let tight = write_rules(&repo, "tight.toml", 1, 1);
+    let first = gate_with_rules(&repo, &state, &id, &tight, &lens);
+    assert_eq!(first.status.code(), Some(3), "cap 超過の rc は 3");
+    assert!(!marker.exists(), "cap 超過の周は lens を起動しない");
+    let pairs = verdict_pairs(&state, &id);
+    assert_eq!(value_of(&pairs, "verdict"), "INCONCLUSIVE");
+    let bytes: u64 = value_of(&pairs, "diff_bytes").parse().unwrap_or(0);
+
+    // **道具を揃えずに撃ち直しても通らない**（測り直しは検査を素通りする口ではない）。
+    let retight = gate_with_rules(&repo, &state, &id, &tight, &lens);
+    assert_eq!(retight.status.code(), Some(3), "cap のままなら 2 度目も 3");
+    assert!(!marker.exists(), "2 度目も cap 超過なら lens を起動しない");
+    assert_eq!(value_of(&verdict_pairs(&state, &id), "verdict"), "INCONCLUSIVE");
+
+    // 予算を実測値まで緩めて撃ち直す（道具を揃えるのは人の手番）。
+    let relaxed = write_rules(&repo, "relaxed.toml", 1, bytes);
+    let second = gate_with_rules(&repo, &state, &id, &relaxed, &lens);
+    assert_eq!(
+        second.status.code(),
+        Some(i32::from(RC_OK)),
+        "cap を緩めた測り直しは通る: {}",
+        stderr_of(&second)
+    );
+    assert!(marker.exists(), "2 度目は lens を起動する");
+    assert_eq!(value_of(&verdict_pairs(&state, &id), "verdict"), "PASS");
+    let landed = land_once(&repo, &state, &id);
+    assert_eq!(landed.status.code(), Some(i32::from(RC_OK)), "land: {}", stderr_of(&landed));
+    clean(&[&repo, &state]);
+}
+
+#[test]
+fn pipe_gate_regates_after_fixing_lens_count() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let id = implemented(&repo, &state, &path);
+    let marker = state.join("lens-ran");
+    let lens = fake_lens(&marker, &lens_verdict("PASS"));
+    // 規則が lens 2 本を定める周は「1 本で足りたことにしない」ため INCONCLUSIVE。
+    // **規則の側の不備も道具の不足**なので、直せば同じ便を測り直せる。
+    let two = write_rules(&repo, "two-lenses.toml", 2, 100_000);
+    let first = gate_with_rules(&repo, &state, &id, &two, &lens);
+    assert_eq!(first.status.code(), Some(3), "lens_count≠1 の rc は 3");
+    assert!(!marker.exists(), "本数が合わない周は lens を起動しない");
+    assert_eq!(value_of(&verdict_pairs(&state, &id), "verdict"), "INCONCLUSIVE");
+
+    // **規則を直さずに撃ち直しても通らない**（測り直しは本数照合を外す口ではない）。
+    let retry = gate_with_rules(&repo, &state, &id, &two, &lens);
+    assert_eq!(retry.status.code(), Some(3), "規則がそのままなら 2 度目も 3");
+    assert!(!marker.exists(), "本数が合わないままなら lens を起動しない");
+
+    let one = write_rules(&repo, "one-lens.toml", 1, 100_000);
+    let second = gate_with_rules(&repo, &state, &id, &one, &lens);
+    assert_eq!(
+        second.status.code(),
+        Some(i32::from(RC_OK)),
+        "規則を直した測り直しは通る: {}",
+        stderr_of(&second)
+    );
+    assert!(marker.exists(), "2 度目は lens を起動する");
+    assert_eq!(value_of(&verdict_pairs(&state, &id), "verdict"), "PASS");
+    clean(&[&repo, &state]);
+}
+
+#[test]
+fn pipe_gate_fails_regate_on_dirty_worktree() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let id = implemented(&repo, &state, &path);
+    let first = gate_once(&repo, &state, &id, None);
+    assert_eq!(first.status.code(), Some(3), "測れなかった周の rc は 3");
+
+    // 道具（lens・cap）を揃える過程で worktree を汚した周。**測り直しに来た便でも
+    // worktree の事実の違反は Failed で終端する**——precheck の極性を段で変えると
+    // 「段の検査は cli / worktree の事実は gate」の分離が濁るため（planner 裁定
+    // 2026-09-10 Q3 案B）。運用は「道具を揃える前に worktree を clean へ戻す」。
+    fs::write(worktree_of(&repo, &id).join("dirty.txt"), "x\n").expect("汚せる");
+    let marker = state.join("lens-ran");
+    let lens = fake_lens(&marker, &lens_verdict("PASS"));
+    let out = gate_once(&repo, &state, &id, Some(&lens));
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "前提違反は rc 1");
+    assert!(stderr_of(&out).contains("clean でない"), "理由: {}", stderr_of(&out));
+    assert!(!marker.exists(), "lens を起動しない");
+    assert!(
+        show_line(&repo, &state, &id).contains("stage=Failed"),
+        "測り直しの周も precheck 違反は終端する: {}",
+        show_line(&repo, &state, &id)
+    );
+
+    // **掃除しても引けない**（Failed は終端）。この非対称は測って残す。
+    fs::remove_file(worktree_of(&repo, &id).join("dirty.txt")).expect("掃除できる");
+    let again = gate_once(&repo, &state, &id, Some(&lens));
+    assert_eq!(again.status.code(), Some(i32::from(RC_REFUSED)), "Failed からは撃ち直せない");
+    assert!(
+        stderr_of(&again).contains("段は Failed である"),
+        "理由: {}",
+        stderr_of(&again)
+    );
     clean(&[&repo, &state]);
 }
 
@@ -1500,6 +1623,17 @@ fn pipe_gate_refuses_regate_after_fail() {
         "FAIL",
         "判定は書き換わらない（PASS の lens を渡しても）"
     );
+    // resume も FAIL を測り直しへ案内しない（`next=` を名乗るのは INCONCLUSIVE だけ）。
+    let resumed = run_pipe(&[
+        "resume", "--run", &id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(),
+    ]);
+    assert_eq!(resumed.status.code(), Some(i32::from(RC_REFUSED)), "FAIL の resume は rc 1");
+    assert!(
+        !stdout_of(&resumed).contains("next="),
+        "次の一手を名乗らない（終端である）: {}",
+        stdout_of(&resumed)
+    );
     clean(&[&repo, &state]);
 }
 
@@ -1516,19 +1650,40 @@ fn pipe_gate_refuses_regate_without_readable_verdict() {
     // verdict.json が消えた / 壊れた便まで撃ち直せてしまい、「測れなかった」ではなく
     // **判定の記録が無い**便が gate を通る（自前の変異 M04 が生き延びた経路）。
     let judged = state.join("pipe").join(&id).join("verdict.json");
-    fs::write(&judged, "{ 壊れた\n").expect("verdict.json を壊せる");
     let before = event_count(&state);
     let marker = state.join("lens-ran");
     let lens = fake_lens(&marker, &lens_verdict("PASS"));
-    let out = gate_once(&repo, &state, &id, Some(&lens));
-    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "読めない周は rc 1");
-    assert!(
-        stderr_of(&out).contains("読めない"),
-        "**判定が読めない**と名乗る（INCONCLUSIVE と同じ扱いにしない）: {}",
-        stderr_of(&out)
-    );
-    assert!(!marker.exists(), "lens を起動しない");
-    assert_eq!(event_count(&state), before, "event を 1 件も書かない");
+    // `verdict_of` は 3 つの経路を等しく「読めない」へ畳む。**3 つとも測る**——1 つだけ
+    // 測ると、残り 2 つを INCONCLUSIVE へ倒す実装（＝測れなかった便を測り直してよい便に
+    // 化けさせる）が素通りする。
+    for (label, body) in [
+        ("file が無い", None),
+        ("JSON が壊れている", Some("{ 壊れた\n")),
+        (
+            "verdict が 3 値の外",
+            Some(r#"{"schema":1,"run":"x","verdict":"MAYBE","evidence":"","verify_red":0,"diff_bytes":0,"ts":"t"}"#),
+        ),
+    ] {
+        match body {
+            None => {
+                fs::remove_file(&judged).ok();
+            }
+            Some(text) => fs::write(&judged, text).expect("verdict.json を書ける"),
+        }
+        let out = gate_once(&repo, &state, &id, Some(&lens));
+        assert_eq!(
+            out.status.code(),
+            Some(i32::from(RC_REFUSED)),
+            "{label}: 読めない周は rc 1"
+        );
+        assert!(
+            stderr_of(&out).contains("読めない"),
+            "{label}: **判定が読めない**と名乗る（INCONCLUSIVE と同じ扱いにしない）: {}",
+            stderr_of(&out)
+        );
+        assert!(!marker.exists(), "{label}: lens を起動しない");
+        assert_eq!(event_count(&state), before, "{label}: event を 1 件も書かない");
+    }
     clean(&[&repo, &state]);
 }
 

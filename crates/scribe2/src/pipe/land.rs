@@ -227,7 +227,8 @@ fn retire(entry: &Land<'_>, worktree: &Path) -> Vec<String> {
 /// **判定の読み手はこの 1 本だけである**。land の前提（PASS か）だけでなく、gate の
 /// 測り直し（Gated ∧ INCONCLUSIVE か）と resume の行き先（land か gate か）も同じ値を
 /// 見る。読み手を増やすと、同じ JSON の解釈が場所ごとに静かにずれる。
-pub fn verdict_of(state_dir: &Path, id: &str) -> Option<Verdict> {
+/// 共有先は兄弟 module だけなので、公開面は crate の中に留める。
+pub(crate) fn verdict_of(state_dir: &Path, id: &str) -> Option<Verdict> {
     let text = std::fs::read_to_string(verdict_path(state_dir, id)).ok()?;
     let pairs = json_lite::parse_object(text.trim()).ok()?;
     pairs

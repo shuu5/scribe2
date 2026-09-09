@@ -228,8 +228,6 @@ fn start(args: &[String], policy: LockPolicy) -> Outcome {
 struct Resolved {
     /// 置き場。
     state_dir: PathBuf,
-    /// replay から読んだ現在の段。
-    stage: Stage,
     /// 対象 repo。
     repo: PathBuf,
     /// 読み込み済みの契約。
@@ -245,7 +243,16 @@ struct Resolved {
 /// **順序を変えない**: 置き場 → replay → 段 → 契約 → repo。段の検査を契約より後ろへ
 /// 動かすと、段違いの周に契約の error（rc 2）が先に出て「前提違反は何もせず rc 1」が
 /// 崩れる（event も 1 件も書かない、という不変条件はこの順序に乗っている）。
-fn resolve(args: &[String], id: &str, allowed: &[Stage]) -> Result<Resolved, Outcome> {
+///
+/// `regate` は `Gated` を**測り直しとして**通してよいかの弁別を頼む印である。この弁別も
+/// 段の検査の一部ゆえ**契約より前**に置く——外へ出すと「段違いなのに rc 2」が Gated 段
+/// だけで起こり、上の不変条件が rc の語彙ごと崩れる（lens 実測 F1）。
+fn resolve(
+    args: &[String],
+    id: &str,
+    allowed: &[Stage],
+    regate: bool,
+) -> Result<Resolved, Outcome> {
     let state_dir = state_dir_of(args).map_err(refused)?;
     let state = current(&state_dir).map_err(|errors| {
         Outcome::failed(RC_BROKEN, errors.iter().map(StoreError::to_string).collect())
@@ -253,6 +260,20 @@ fn resolve(args: &[String], id: &str, allowed: &[Stage]) -> Result<Resolved, Out
     let stage = stage_of(&state, id).map_err(refused)?;
     if !allowed.contains(&stage) {
         return Err(refused(format!("run {id} の段は {} である", stage.as_str())));
+    }
+    if regate && stage == Stage::Gated {
+        // **測り直せるのは「測れなかった」周だけ**。PASS / FAIL は判定に届いた終端で、
+        // 判定が読めない周（file 不在 / 壊れ / 3 値の外）も測り直さない（fail-closed・
+        // C11.2）。いずれも段違いと同じ扱い＝**rc 1 で何も書かない**。
+        let verdict = verdict_of(&state_dir, id);
+        if verdict != Some(Verdict::Inconclusive) {
+            // **段と判定の両方を名乗る**。段違いの一般則で断っている事実と、その便が
+            // 測り直せない理由は別の情報で、片方だけだと読み手に届かない。
+            return Err(refused(format!(
+                "run {id} の段は Gated である（verdict={}）",
+                verdict.map_or("読めない", Verdict::as_str)
+            )));
+        }
     }
     let Some(run) = state.runs.get(id) else {
         return Err(refused(format!("run {id} が無い")));
@@ -263,7 +284,6 @@ fn resolve(args: &[String], id: &str, allowed: &[Stage]) -> Result<Resolved, Out
     let repo = run_repo(args, &state_dir, id).map_err(refused)?;
     Ok(Resolved {
         state_dir,
-        stage,
         repo,
         contract,
         bead: run.bead.clone(),
@@ -279,7 +299,7 @@ fn launch(
     policy: LockPolicy,
     allowed: &[Stage],
 ) -> Outcome {
-    let resolved = match resolve(args, id, allowed) {
+    let resolved = match resolve(args, id, allowed, false) {
         Ok(found) => found,
         Err(outcome) => return outcome,
     };
@@ -356,22 +376,10 @@ fn limits_of(manifest: &Manifest) -> Result<Limits, String> {
 /// 段違いの一般則どおり何もせず rc 1 を返す——FAIL から撃ち直す口を開けると、契約の
 /// verify が赤い便が「壊れたまま進む」経路になる。
 fn gate_run(args: &[String], id: &str, manifest: &Manifest, policy: LockPolicy) -> Outcome {
-    let resolved = match resolve(args, id, &[Stage::Implemented, Stage::Gated]) {
+    let resolved = match resolve(args, id, &[Stage::Implemented, Stage::Gated], true) {
         Ok(found) => found,
         Err(outcome) => return outcome,
     };
-    if resolved.stage == Stage::Gated {
-        let verdict = verdict_of(&resolved.state_dir, id);
-        if verdict != Some(Verdict::Inconclusive) {
-            // **段と判定の両方を名乗る**。段違いの一般則で断っている事実（rc 1・何も
-            // 書かない）と、その便が測り直せない理由（判定が済んでいる）は別の情報で、
-            // 片方だけだと「なぜ撃ち直せないのか」が読み手に届かない。
-            return refused(format!(
-                "run {id} の段は Gated である（verdict={}）",
-                verdict.map_or("読めない", Verdict::as_str)
-            ));
-        }
-    }
     let limits = match limits_of(manifest) {
         Ok(found) => found,
         Err(reason) => return broken(reason),
@@ -394,7 +402,7 @@ fn gate_run(args: &[String], id: &str, manifest: &Manifest, policy: LockPolicy) 
 
 /// `pipe land`。前提 stage = Gated（PASS の検査は land 側が持つ）。
 fn land_run(args: &[String], id: &str, policy: LockPolicy) -> Outcome {
-    let resolved = match resolve(args, id, &[Stage::Gated]) {
+    let resolved = match resolve(args, id, &[Stage::Gated], false) {
         Ok(found) => found,
         Err(outcome) => return outcome,
     };

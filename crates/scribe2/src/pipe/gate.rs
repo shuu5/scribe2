@@ -9,9 +9,11 @@
 //! ——「測れなかった」を「通った」に化けさせないためで、極性は fail-closed（C11.2）。
 //!
 //! **同じ便を 2 度以上通ることが在る**（INCONCLUSIVE からの測り直し）。`verdict.json` は
-//! 最後の判定で上書きし、`RunStage stage=Gated detail=verdict:<V>` は追記する
-//! （append-only＝「1 度目は測れなかった」という事実を消さない）。**測り直してよい便か**
-//! の判定はここではなく段の入口（[`super::cli`]）が持つ。
+//! 最後の判定で上書きし、`RunStage stage=Gated detail=verdict:<V>` は追記する。
+//! 残るのは **3 値の履歴だけ**である——「1 度目は測れなかった」は event から読めるが、
+//! **なぜ測れなかったか（evidence）は上書きで消える**（理由まで残すには面を 1 つ増やす
+//! ことになり、MVP では取らない）。**測り直してよい便か**の判定はここではなく段の入口
+//! （[`super::cli`]）が持つ。
 
 use super::contract::Contract;
 use super::{
