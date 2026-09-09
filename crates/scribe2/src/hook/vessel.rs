@@ -231,18 +231,21 @@ fn init(args: &[String], root: &Path) -> Outcome {
             vec![format!("vessel: {other} が名乗っている（何も書かない）")],
         );
     }
+    // git 設定を**先に**書く。marker が先だと、設定に失敗した周（非 repo・git dir が
+    // 書けない）に marker だけが残り、PUBLIC repo の `git status` を汚す。設定だけが
+    // 残っても marker が無い限り `served` は `Absent` なので hook は黙る。
+    if !git_ok(root, &["config", "--local", &state_dir_key(), dir]) {
+        return Outcome::failed(
+            RC_BROKEN,
+            vec!["vessel: state dir を git の local 設定へ書けない".to_owned()],
+        );
+    }
     let marker = Marker {
         name: NAME.to_owned(),
         version,
     };
     if let Err(err) = std::fs::write(marker_path(root), marker.render()) {
         return Outcome::failed(RC_BROKEN, vec![format!("vessel: marker を書けない: {err}")]);
-    }
-    if !git_ok(root, &["config", "--local", &state_dir_key(), dir]) {
-        return Outcome::failed(
-            RC_BROKEN,
-            vec!["vessel: state dir を git の local 設定へ書けない".to_owned()],
-        );
     }
     Outcome::ok_line(format!(
         "vessel: init {} {KEY_VERSION}={version} stateDir={dir}",

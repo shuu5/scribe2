@@ -7,6 +7,10 @@
 //!
 //! deny は時間切れに頼らず返す（NFR5）。timeout 到達は Claude Code 側で「判定の消失」
 //! ＝fail-open なので、判定は必ず timeout の内側で終える。
+//!
+//! root の外へ出る形は **2 段**で見る: `..` を字句で畳む段（まだ無い file も判定できる）
+//! と、実体を解いて root の内側に居るかを見る段（symlink を経由した `..` は字句では
+//! 見抜けない）。どちらかが外を指したら deny する。
 
 use crate::name::NAME;
 use std::path::{Component, Path, PathBuf};
@@ -38,6 +42,11 @@ fn unreadable() -> String {
     format!("{NAME}: deny policy unreadable（C16）")
 }
 
+/// repo の外を指したときの 1 行。**write-set の外**とは理由が違うので字面を分ける。
+fn escaped(path: &str) -> String {
+    format!("{NAME}: deny {path} は repo の外を指す（C16）")
+}
+
 /// write-set の外を触ったときの 1 行。
 fn outside(path: &str) -> String {
     format!("{NAME}: deny {path} は契約 write-set の外（C16）")
@@ -45,9 +54,16 @@ fn outside(path: &str) -> String {
 
 /// 1 回の編集を判定する。
 ///
-/// `path` は payload の `file_path` か `notebook_path`。guard が見る tool なのに
-/// path を読めないときは **deny** する（fail-closed の極性を path 側でも保つ）。
-pub fn decide(root: &Path, git_dir: &Path, tool: &str, path: Option<&str>) -> Decision {
+/// `cwd` は payload が言う作業 dir で、**相対 `file_path` の基準**である（tool 側が
+/// その基準で解くので、guard も同じ基準で解かないと別の file を判定する）。
+/// `path` は payload の `file_path` か `notebook_path`。guard が見る tool なのに path を
+/// 読めないときは deny する（fail-closed の極性を path 側でも保つ）。
+pub fn decide(root: &Path, cwd: &Path, git_dir: &Path, tool: &str, path: Option<&str>) -> Decision {
+    // 「`Bash` と他 tool は rc 0・0 byte」は policy の状態に依らない（設計 §5）。
+    // policy を先に読むと、policy が壊れた周に `Bash` まで deny してしまう。
+    if !GUARDED.contains(&tool) {
+        return Decision::Allow;
+    }
     let policy = policy_path(git_dir);
     if !policy.exists() {
         return Decision::Inactive;
@@ -59,14 +75,13 @@ pub fn decide(root: &Path, git_dir: &Path, tool: &str, path: Option<&str>) -> De
     if allowed.is_empty() {
         return Decision::Deny(unreadable());
     }
-    if !GUARDED.contains(&tool) {
-        return Decision::Allow;
-    }
     let Some(target) = path else {
         return Decision::Deny(format!("{NAME}: deny 編集先の path を読めない（C16）"));
     };
-    match relative_to(root, target) {
-        None => Decision::Deny(outside(target)),
+    let absolute = absolute_of(cwd, target);
+    match relative_to(root, &absolute) {
+        None => Decision::Deny(escaped(target)),
+        Some(_) if !resolves_inside(root, &absolute) => Decision::Deny(escaped(target)),
         Some(rel) if is_allowed(&allowed, &rel) => Decision::Allow,
         Some(rel) => Decision::Deny(outside(&rel.display().to_string())),
     }
@@ -81,16 +96,21 @@ fn entries(text: &str) -> Vec<String> {
         .collect()
 }
 
-/// 編集先を repo 相対へ正規化する。root の外・`..` で外れるものは `None`。
-///
-/// 実 file の存在に依らず**字句だけ**で解く（まだ無い file への Write も判定する）。
-fn relative_to(root: &Path, target: &str) -> Option<PathBuf> {
+/// 編集先を絶対 path にする。相対 path の基準は payload の `cwd` である。
+fn absolute_of(cwd: &Path, target: &str) -> PathBuf {
     let raw = Path::new(target);
-    let rel = if raw.is_absolute() {
-        raw.strip_prefix(root).ok()?
+    if raw.is_absolute() {
+        raw.to_path_buf()
     } else {
-        raw
-    };
+        cwd.join(raw)
+    }
+}
+
+/// 絶対 path を repo 相対へ**字句で**畳む。root の外・`..` で外れるものは `None`。
+///
+/// 実 file の存在に依らないので、まだ無い file への Write も判定できる。
+fn relative_to(root: &Path, absolute: &Path) -> Option<PathBuf> {
+    let rel = absolute.strip_prefix(root).ok()?;
     let mut out = PathBuf::new();
     for part in rel.components() {
         match part {
@@ -105,6 +125,37 @@ fn relative_to(root: &Path, target: &str) -> Option<PathBuf> {
         }
     }
     Some(out)
+}
+
+/// 実体でも root の内側に居るか。
+///
+/// 字句だけでは `docs/<symlink>/../evil.rs` が `docs/evil.rs` に畳まれ、実際の書き先が
+/// repo の外でも通ってしまう。**前から 1 段ずつ**積み、存在する段では symlink を解く。
+/// 存在しない段はそのまま字句で積む（まだ無い file への Write も判定するため。その段に
+/// symlink は在り得ないので、字句の結果を信じてよい）。
+fn resolves_inside(root: &Path, absolute: &Path) -> bool {
+    let Ok(real_root) = root.canonicalize() else {
+        return false;
+    };
+    let mut real = PathBuf::new();
+    for part in absolute.components() {
+        match part {
+            Component::RootDir | Component::Prefix(_) => real.push(part.as_os_str()),
+            Component::CurDir => {}
+            Component::Normal(name) => {
+                real.push(name);
+                if let Ok(found) = real.canonicalize() {
+                    real = found;
+                }
+            }
+            Component::ParentDir => {
+                if !real.pop() {
+                    return false;
+                }
+            }
+        }
+    }
+    real.starts_with(&real_root)
 }
 
 /// repo 相対 path が allowlist の内側か。末尾 `/` の項目は配下全部を許す。

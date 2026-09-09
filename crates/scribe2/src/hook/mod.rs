@@ -134,12 +134,29 @@ fn cwd_of(payload: &str) -> Option<PathBuf> {
 /// `json_lite` は **flat な object 専用**で、payload は `tool_input` を入れ子に持つ
 /// ため通らない。payload は外が形を決める入力なので、要る key だけを字面で拾う最小の
 /// reader をここに置く（**書き側**の `inject.jsonl` は `json_lite` で書く）。
-/// escape は解かない: 使うのは path と tool 名だけで、いずれも `\` を含まない。
+///
+/// 拾うのは **key として現れた occurrence だけ**である（同綴りの直後の非空白が `:`）。
+/// 字面の 1 発目を無条件に拾うと、`"file_path"` という**値**を本物の key より手前へ置く
+/// だけで guard が別の path を判定し、write-set の外が通る（fail-open）。JSON では
+/// 文字列の内側の `"` は必ず escape されるので、値として現れた同綴りの次は `,` か `}`
+/// になり、この判定で弁別できる。escape は解かない: 使うのは path と tool 名だけで、
+/// いずれも `\` を含まない。
 fn field(src: &str, key: &str) -> Option<String> {
-    let after_key = src.split_once(&format!("\"{key}\""))?.1;
-    let after_colon = after_key.split_once(':')?.1;
-    let rest = after_colon.trim_start().strip_prefix('"')?;
-    rest.split_once('"').map(|(value, _)| value.to_owned())
+    let needle = format!("\"{key}\"");
+    let mut rest = src;
+    loop {
+        let (_, after) = rest.split_once(&needle)?;
+        match after.trim_start().strip_prefix(':') {
+            None => rest = after,
+            Some(value) => {
+                return value
+                    .trim_start()
+                    .strip_prefix('"')
+                    .and_then(|body| body.split_once('"'))
+                    .map(|(found, _)| found.to_owned())
+            }
+        }
+    }
 }
 
 /// `u128` の実測値を記録用の `u64` へ落とす（溢れたら上限で止める）。
@@ -154,7 +171,8 @@ fn record(who: &str, what: &str, when: &str, line: &str, started: Instant) -> In
         who: format!("hook:{who}"),
         what: what.to_owned(),
         when: when.to_owned(),
-        bytes: as_u64(line.len() as u128),
+        // 出力層（`emit` / `emit_err`）が付ける改行 1 byte を含めた実出力の byte 数。
+        bytes: as_u64(line.len() as u128 + 1),
         tokens: None,
         wall_ms: as_u64(started.elapsed().as_millis()),
     }
@@ -202,13 +220,15 @@ fn pre_tool_use(
     };
     let tool = field(payload, KEY_TOOL).unwrap_or_default();
     let path = field(payload, KEY_FILE).or_else(|| field(payload, KEY_NOTEBOOK));
-    match guard::decide(root, &git_dir, &tool, path.as_deref()) {
+    match guard::decide(root, cwd, &git_dir, &tool, path.as_deref()) {
         Decision::Inactive | Decision::Allow => Outcome::ok(Vec::new()),
         Decision::Deny(line) => {
             let entry = record(EVENT_PRE_TOOL_USE, "deny", "PreToolUse", &line, started);
-            let mut outcome = Outcome::failed_line(RC_BROKEN, line);
-            outcome.err.extend(record_lines(dir, &entry));
-            outcome
+            // deny の外形は「rc 2 + stderr 1 行 + stdout 0 byte」（FR20・必須）で、
+            // stderr は丸ごと model への判定文になる。記録（FR21・推奨）の警告や失敗を
+            // ここへ足すと判定文が濁るので、deny の周だけは戻りを stderr へ載せない。
+            let _ = append(dir, &entry);
+            Outcome::failed_line(RC_BROKEN, line)
         }
     }
 }

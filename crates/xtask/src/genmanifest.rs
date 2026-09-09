@@ -145,10 +145,10 @@ mod tests {
         let tracked = std::fs::read_to_string(root.join(HOOKS_REL)).expect("hooks.json を読める");
 
         assert_eq!(rendered, tracked, "tracked な hooks.json は生成物と同じ bytes である");
-        assert_eq!(
-            render_hooks(&layout.name, timeout),
+        assert_ne!(
+            render_hooks(&layout.name, timeout + 1),
             rendered,
-            "同じ入力からは同じ bytes が出る（冪等）"
+            "render は引数の timeout を実際に使う（値を焼いていない）"
         );
         assert!(
             tracked.contains(&format!("\"timeout\": {timeout}")),

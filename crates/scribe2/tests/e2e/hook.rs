@@ -86,10 +86,10 @@ fn run_vessel(args: &[&str]) -> Output {
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
-fn run_hook(event: &str, payload: &str) -> Output {
+fn run_hook_args(args: &[&str], payload: &str) -> Output {
     let mut child = Command::new(bin())
         .arg("hook")
-        .arg(event)
+        .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -102,6 +102,21 @@ fn run_hook(event: &str, payload: &str) -> Output {
         .write_all(payload.as_bytes())
         .expect("payload を書ける");
     child.wait_with_output().expect("終了を待てる")
+}
+
+/// `hook <event>` を撃つ（flag なし）。
+fn run_hook(event: &str, payload: &str) -> Output {
+    run_hook_args(&[event], payload)
+}
+
+/// stderr の行数。
+fn stderr_lines(out: &Output) -> usize {
+    String::from_utf8_lossy(&out.stderr).lines().count()
+}
+
+/// stderr の全文。
+fn stderr_text(out: &Output) -> String {
+    String::from_utf8_lossy(&out.stderr).into_owned()
 }
 
 /// `cwd` だけを持つ payload。
@@ -270,7 +285,9 @@ fn hook_guard_denies_edit_outside_write_set() {
 fn hook_guard_denies_path_escaping_root() {
     let repo = git_repo();
     let state = linked(&repo);
-    write_policy(&repo, "src/\n");
+    // **畳んだ後の名前を policy が許す**形で撃つ。こうしないと「write-set の外」でも
+    // deny になり、root を出たことを一切測らない歯になる（理由まで弁別する）。
+    write_policy(&repo, "outside.rs\n");
     let out = run_hook(
         "pre-tool-use",
         &tool_payload(&repo, "Write", "../outside.rs"),
@@ -281,6 +298,11 @@ fn hook_guard_denies_path_escaping_root() {
         "root の外へ出る path は deny"
     );
     assert!(out.stdout.is_empty(), "deny でも stdout は 0 byte");
+    assert!(
+        stderr_text(&out).contains("repo の外"),
+        "deny の理由は write-set 違反でなく root 逸脱である: {}",
+        stderr_text(&out)
+    );
     clean(&[&repo, &state]);
 }
 
@@ -409,6 +431,292 @@ fn vessel_init_refuses_to_overwrite_other_name() {
     let after = fs::read_to_string(repo.join(MARKER)).expect("marker を読める");
     assert_eq!(after, before, "1 byte も書き換えない");
     clean(&[&repo, &state]);
+}
+
+#[test]
+fn hook_guard_denies_decoy_payload() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    write_policy(&repo, "src/lib.rs\n");
+    // 値が key 名そのもので、本物の key より手前に在る payload。字面の 1 発目を拾う
+    // reader だと、guard は本物の編集先でなく decoy の後ろの値を判定してしまう。
+    let decoy = format!(
+        "{{\"cwd\":\"{}\",\"tool_name\":\"MultiEdit\",\"tool_input\":{{\"edits\":[{{\"old_string\":\"file_path\",\"new_string\":\"src/lib.rs\"}}],\"file_path\":\"docs/other.md\"}}}}",
+        repo.display()
+    );
+    let out = run_hook("pre-tool-use", &decoy);
+    assert_eq!(
+        out.status.code(),
+        Some(i32::from(RC_BROKEN)),
+        "decoy を挟んでも本物の file_path を判定する"
+    );
+    // notebook 側も同じ形で撃つ（file_path key が存在しない tool）。
+    let notebook = format!(
+        "{{\"cwd\":\"{}\",\"tool_name\":\"NotebookEdit\",\"tool_input\":{{\"cell_id\":\"file_path\",\"cell_type\":\"src/lib.rs\",\"notebook_path\":\"docs/evil.ipynb\"}}}}",
+        repo.display()
+    );
+    let out = run_hook("pre-tool-use", &notebook);
+    assert_eq!(
+        out.status.code(),
+        Some(i32::from(RC_BROKEN)),
+        "notebook_path も decoy に迂回されない"
+    );
+    clean(&[&repo, &state]);
+}
+
+#[test]
+fn hook_guard_resolves_relative_path_against_payload_cwd() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    write_policy(&repo, "src/lib.rs\n");
+    // cwd が subdir のとき "src/lib.rs" の実体は <repo>/docs/src/lib.rs であり
+    // write-set の外。root 基準で解くと通ってしまう。
+    let subdir = repo.join("docs");
+    fs::create_dir_all(&subdir).expect("subdir を作れる");
+    let out = run_hook("pre-tool-use", &tool_payload(&subdir, "Edit", "src/lib.rs"));
+    assert_eq!(
+        out.status.code(),
+        Some(i32::from(RC_BROKEN)),
+        "相対 path は payload の cwd 基準で解く"
+    );
+    // 同じ path でも cwd が root なら通る（基準が効いていることの対）。
+    let out = run_hook("pre-tool-use", &tool_payload(&repo, "Edit", "src/lib.rs"));
+    assert_silent(&out, "cwd が root なら同じ相対 path は write-set の内側");
+    clean(&[&repo, &state]);
+}
+
+#[test]
+fn hook_guard_denies_symlink_escape() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    let outside = tmp();
+    let docs = repo.join("docs");
+    fs::create_dir_all(&docs).expect("docs を作れる");
+    std::os::unix::fs::symlink(&outside, docs.join("link")).expect("symlink を張れる");
+    write_policy(&repo, "docs/\n");
+    // 字句では docs/evil.rs に畳まれて allowlist に当たるが、実体は repo の外。
+    let out = run_hook(
+        "pre-tool-use",
+        &tool_payload(&repo, "Write", "docs/link/../evil.rs"),
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(i32::from(RC_BROKEN)),
+        "symlink 経由で repo の外へ出る path は deny"
+    );
+    clean(&[&repo, &state, &outside]);
+}
+
+#[test]
+fn hook_guard_deny_stderr_is_one_line() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    write_policy(&repo, "src/lib.rs\n");
+    // 古い lock を置くと記録側が警告を返す。deny の判定文はそれに濁らされない。
+    let lock = inject_path(&state).with_extension("jsonl.lock");
+    fs::write(&lock, "").expect("lock を置ける");
+    let touched = Command::new("touch")
+        .args(["-d", "2020-01-01"])
+        .arg(&lock)
+        .status()
+        .expect("touch を起動できる");
+    assert!(touched.success(), "lock の mtime を古くできる");
+    let out = run_hook("pre-tool-use", &tool_payload(&repo, "Edit", "docs/x.md"));
+    assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "deny は rc 2");
+    assert!(out.stdout.is_empty(), "deny でも stdout は 0 byte");
+    assert_eq!(
+        stderr_lines(&out),
+        1,
+        "deny の stderr は 1 行（母集団: {}）",
+        stderr_text(&out)
+    );
+    clean(&[&repo, &state]);
+}
+
+#[test]
+fn hook_guard_denies_when_policy_is_empty() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    write_policy(&repo, "\n   \n");
+    let out = run_hook("pre-tool-use", &tool_payload(&repo, "Edit", "src/lib.rs"));
+    assert_eq!(
+        out.status.code(),
+        Some(i32::from(RC_BROKEN)),
+        "空の policy は不活性でなく deny（fail-closed）"
+    );
+    // 理由まで測る。空 allowlist は「どの項目にも当たらない」でも deny になるので、
+    // 理由を見ないと「policy が読めない」枝を消しても通る歯になる。
+    assert!(
+        stderr_text(&out).contains("policy unreadable"),
+        "理由は policy を読めないことである: {}",
+        stderr_text(&out)
+    );
+    clean(&[&repo, &state]);
+}
+
+#[test]
+fn hook_guard_normalizes_dot_dot_inside_root() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    // allowlist は畳んだ後の 1 本だけを許す。`..` を畳まないと `src/a/lib.rs` になり
+    // deny 側へ倒れるので、この歯は正規化そのものを測る。
+    write_policy(&repo, "src/lib.rs\n");
+    let out = run_hook("pre-tool-use", &tool_payload(&repo, "Edit", "src/a/../lib.rs"));
+    assert_silent(&out, "root の内側で閉じる .. は畳んで通す");
+    clean(&[&repo, &state]);
+}
+
+#[test]
+fn hook_guard_denies_sibling_of_allowed_dir() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    write_policy(&repo, "src/\n");
+    let out = run_hook("pre-tool-use", &tool_payload(&repo, "Edit", "src-other/x.rs"));
+    assert_eq!(
+        out.status.code(),
+        Some(i32::from(RC_BROKEN)),
+        "末尾 / の項目は配下だけを許す（前方一致で兄弟 dir を拾わない）"
+    );
+    let out = run_hook("pre-tool-use", &tool_payload(&repo, "Edit", "src/a.rs"));
+    assert_silent(&out, "配下は通る");
+    clean(&[&repo, &state]);
+}
+
+#[test]
+fn hook_guard_allows_bash_when_policy_unreadable() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    let path = write_policy(&repo, "src/lib.rs\n");
+    fs::remove_file(&path).expect("policy を消せる");
+    fs::create_dir_all(&path).expect("policy の場所を dir にできる");
+    let out = run_hook("pre-tool-use", &tool_payload(&repo, "Bash", "anywhere.rs"));
+    assert_silent(&out, "policy が壊れていても Bash は guard の対象でない");
+    clean(&[&repo, &state]);
+}
+
+#[test]
+fn hook_is_silent_for_unknown_event_and_outside_repo() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    let out = run_hook("pre-compact", &payload(&repo));
+    assert_silent(&out, "未知 event（他の器と衝突しない）");
+
+    let bare = tmp();
+    let out = run_hook("session-start", &payload(&bare));
+    assert_silent(&out, "git repo でない dir");
+    clean(&[&repo, &state, &bare]);
+}
+
+#[test]
+fn hook_session_start_honors_state_dir_flag() {
+    let repo = git_repo();
+    let linked_state = linked(&repo);
+    let override_state = tmp();
+    let out = run_hook_args(
+        &[
+            "session-start",
+            "--state-dir",
+            &override_state.display().to_string(),
+        ],
+        &payload(&repo),
+    );
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "仕える周は rc 0");
+    assert_eq!(
+        inject_lines(&override_state).len(),
+        1,
+        "--state-dir が置き場を上書きする"
+    );
+    assert!(
+        inject_lines(&linked_state).is_empty(),
+        "git 設定の置き場へは書かない"
+    );
+    clean(&[&repo, &linked_state, &override_state]);
+}
+
+#[test]
+fn hook_records_who_when_and_file_name() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    run_hook("session-start", &payload(&repo));
+    // 置き場の file 名は C6.3 の「消費を記録する store 1 つ」の所在ゆえ字面で pin する。
+    assert!(
+        state.join("inject.jsonl").exists(),
+        "記録は <state_dir>/inject.jsonl に在る"
+    );
+    let lines = inject_lines(&state);
+    let line = lines.first().map_or_else(String::new, Clone::clone);
+    assert_eq!(
+        value_of(&line, "who"),
+        Some(json_lite::Value::Str("hook:session-start".to_owned())),
+        "who: {line}"
+    );
+    assert_eq!(
+        value_of(&line, "when"),
+        Some(json_lite::Value::Str("SessionStart".to_owned())),
+        "when: {line}"
+    );
+    clean(&[&repo, &state]);
+}
+
+#[test]
+fn vessel_check_needs_marker_and_state_dir() {
+    let repo = git_repo();
+    let mine = Marker {
+        name: NAME.to_owned(),
+        version: GENERATION,
+    };
+    fs::write(repo.join(MARKER), mine.render()).expect("marker を書ける");
+    let out = run_vessel(&["check", &repo.display().to_string()]);
+    assert_eq!(
+        out.status.code(),
+        Some(i32::from(RC_REFUSED)),
+        "marker だけでは仕えない（state dir が紐づいて初めて ByMe）"
+    );
+    let state = linked(&repo);
+    let out = run_vessel(&["check", &repo.display().to_string()]);
+    assert_eq!(
+        out.status.code(),
+        Some(i32::from(RC_OK)),
+        "紐づけば ByMe（rc 0）"
+    );
+    clean(&[&repo, &state]);
+}
+
+#[test]
+fn vessel_marker_is_two_lf_lines() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    let bytes = fs::read(repo.join(MARKER)).expect("marker を読める");
+    // 跨版 面 1 は別実装が byte で読む。LF・順序・末尾改行・余白なしを byte で pin する。
+    assert_eq!(
+        bytes,
+        format!("name={NAME}\nversion={GENERATION}\n").into_bytes(),
+        "marker の byte 列: {:?}",
+        String::from_utf8_lossy(&bytes)
+    );
+    clean(&[&repo, &state]);
+}
+
+#[test]
+fn vessel_init_leaves_no_marker_without_git_repo() {
+    let bare = tmp();
+    let state = tmp();
+    let out = run_vessel(&[
+        "init",
+        "--state-dir",
+        &state.display().to_string(),
+        &bare.display().to_string(),
+    ]);
+    assert_eq!(
+        out.status.code(),
+        Some(i32::from(RC_BROKEN)),
+        "git repo でなければ rc 2"
+    );
+    assert!(
+        !bare.join(MARKER).exists(),
+        "設定に失敗した周に marker だけを残さない"
+    );
+    clean(&[&bare, &state]);
 }
 
 #[test]
