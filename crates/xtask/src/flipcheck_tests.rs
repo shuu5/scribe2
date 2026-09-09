@@ -5,12 +5,12 @@
 //! `#[path]` で `flipcheck` の子 module として取り込むので、module path は
 //! `flipcheck::tests` のまま＝歯の名前は 1 つも変わらない。
 //!
-//! ⚠ この file は `#[cfg(test)] mod` の形を持たないので **flip-check の区間判定には
-//! 見えない**（区間は空と数えられ、移動は `tests-removed-only` の枝で通る）。ここへ
-//! 足す歯が flip を検査されるようになるのは、`crates/*/src/**/*_tests.rs` を test file
-//! として丸ごと写す規則（s2-07l.34 の (6)）が land してからである。
+//! この file は `#[cfg(test)] mod` の形を持たないが、`crates/*/src/**/*_tests.rs` は
+//! **名前で test file と見なして丸ごと写す**（s2-07l.34 の (6)）ので、ここへ足した歯は
+//! base へ写り flip を検査される。名前で見なければ区間判定には src 区間だけの file に
+//! 見え、ここへ足した歯が 1 本も測られないままになる。
 
-use super::{is_test_file, judge, parse_base, split_regions, Verdict};
+use super::{is_test_file, judge, judge_into, parse_base, split_regions, FilePair, Verdict};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -617,5 +617,198 @@ fn flipcheck_base_arg_forms_are_rejected() {
         parse_base(&["--base".to_owned(), "main".to_owned()]).ok(),
         Some("main".to_owned()),
         "値が在れば Ok のはず"
+    );
+}
+
+/// 持ち越した札を持つ base と、その札を残したまま base で緑の歯を 1 本足した HEAD。
+fn carried_pair() -> (String, String) {
+    let carried = BASE_LIB.replace(
+        "mod checks {\n",
+        "mod checks {\n    // flip-check: retroactive s2-07l.33\n",
+    );
+    let head = carried.replace(
+        "s2-07l.33\n",
+        "s2-07l.33\n    #[test]\n    fn added_later() {\n        assert_eq!(super::val(), 1);\n    }\n",
+    );
+    (carried, head)
+}
+
+/// 合成 workspace の src 配下へ外出しした test file の repo 相対 path。
+fn extra_rel() -> String {
+    format!("crates/{FIXTURE_MEMBER}/src/extra_tests.rs")
+}
+
+/// **base に既に在る札は効かない**（この便で足した札だけが免除する）。
+///
+/// marker 行は file に残るので、在るだけで数えると、一度貼った札がその file の
+/// test 区間を触る**以後のすべての便**を免除する——札の bead id と便が対応しなく
+/// なり、判定行の `retroactive=N` を review しても何を免除したのかを辿れない。
+#[test]
+fn flip_check_ignores_retroactive_marker_already_in_base() {
+    let (carried, head) = carried_pair();
+    let (dir, _) = base_commit();
+    let base = seed_fixture(&dir, &carried);
+    write_at(&dir, &lib_rel(), &head);
+    head_commit(&dir);
+    let got = judge(&base, &dir);
+    drop_fixture(&dir);
+    assert_verdict(&got.line, got.code, 1, "reason=green-on-base");
+    assert_not_retroactive(&got, "base から持ち越した札");
+
+    // 述語も直接見る。効かない札は stale と名乗る。
+    let stale = FilePair {
+        rel: lib_rel(),
+        base: Some(carried),
+        head: Some(head.clone()),
+    };
+    assert!(stale.stale_marker(), "持ち越した札は stale と名乗るはず");
+    assert!(!stale.marked(), "持ち越した札を数えないはず");
+
+    // 負例。**同じ札でも base に無ければ**この便で足したものとして効く
+    // （HEAD 側だけを見る実装も、両側とも無視する実装も、ここで落ちる）。
+    let fresh = FilePair {
+        rel: lib_rel(),
+        base: Some(BASE_LIB.to_owned()),
+        head: Some(head),
+    };
+    assert!(fresh.marked(), "HEAD にだけ在る札は効くはず");
+    assert!(!fresh.stale_marker(), "この便で足した札を stale と呼ばない");
+}
+
+/// 札の同一性は **bead id** で見る（空白 1 個で持ち越した札が新しい札に化けない）。
+///
+/// 行の字面で比べると、字下げや id の前後の空白が 1 個違うだけで持ち越した札が
+/// 「この便で足した札」に化け、**古い bead id のまま免除が効き続ける**——上の門が
+/// 塞ごうとしている当の穴の裏口である。
+#[test]
+fn flip_check_treats_respaced_carried_marker_as_stale() {
+    let (carried, _) = carried_pair();
+    // **前後どちらの空白差も**同じ札として扱う（片側だけ trim する実装はここで落ちる）。
+    let head = carried
+        .replace("retroactive s2-07l.33", "retroactive  s2-07l.33 ")
+        .replace(
+            "s2-07l.33\n",
+            "s2-07l.33\n    #[test]\n    fn added_later() {\n        assert_eq!(super::val(), 1);\n    }\n",
+        );
+    let (dir, _) = base_commit();
+    let base = seed_fixture(&dir, &carried);
+    write_at(&dir, &lib_rel(), &head);
+    head_commit(&dir);
+    let got = judge(&base, &dir);
+    drop_fixture(&dir);
+    assert_verdict(&got.line, got.code, 1, "reason=green-on-base");
+    assert_not_retroactive(&got, "空白を足しただけの持ち越し札");
+
+    let pair = FilePair {
+        rel: lib_rel(),
+        base: Some(carried),
+        head: Some(head),
+    };
+    assert!(pair.stale_marker(), "空白違いは同じ札として扱うはず");
+}
+
+/// 効かない札は **stderr へ 1 行**出す（判定行にも rc にも載らないので出所を渡す）。
+///
+/// 出したこと自体を測らないと、emit を丸ごと消しても全部の歯が緑のままになる。
+#[test]
+fn flip_check_emits_stale_marker_line_to_stderr() {
+    let (carried, head) = carried_pair();
+    let (dir, _) = base_commit();
+    let base = seed_fixture(&dir, &carried);
+    write_at(&dir, &lib_rel(), &head);
+    head_commit(&dir);
+    let mut lines: Vec<String> = Vec::new();
+    let got = judge_into(&base, &dir, &mut |line| lines.push(line.to_owned()));
+    drop_fixture(&dir);
+    assert_verdict(&got.line, got.code, 1, "reason=green-on-base");
+    let stale: Vec<&String> = lines
+        .iter()
+        .filter(|line| line.starts_with("flip-check: stale-marker "))
+        .collect();
+    assert_eq!(stale.len(), 1, "効かない札を 1 行で名指すはず: {lines:?}");
+    assert!(
+        stale[0].contains(&lib_rel()),
+        "どの file の札かを名指すはず: {}",
+        stale[0]
+    );
+
+    // 負例。**この便で足した札**の周には出さない（在るだけで出す実装はここで落ちる）。
+    let (dir, base) = base_commit();
+    write_at(
+        &dir,
+        &lib_rel(),
+        &BASE_LIB.replace(
+            "mod checks {\n",
+            "mod checks {\n    // flip-check: retroactive s2-07l.34\n    #[test]\n    fn added_later() {\n        assert_eq!(super::val(), 1);\n    }\n",
+        ),
+    );
+    head_commit(&dir);
+    let mut fresh_lines: Vec<String> = Vec::new();
+    let got = judge_into(&base, &dir, &mut |line| fresh_lines.push(line.to_owned()));
+    drop_fixture(&dir);
+    assert_verdict(&got.line, got.code, 0, "RED-on-base ok");
+    assert!(
+        !fresh_lines
+            .iter()
+            .any(|line| line.starts_with("flip-check: stale-marker ")),
+        "この便で足した札に stale を出さない: {fresh_lines:?}"
+    );
+
+    // 負例 2。**免除を求めていない便**——test 区間が 1 byte も動かず src だけ触った便
+    // ——にも出さない。札は file に残るので、これを出すとその file の src を触るたびに
+    // 「札を削除しろ」と言われる（削除は別便の仕事）。狼少年にすると、本当に効かない
+    // 札を見落とす。
+    let (carried, _) = carried_pair();
+    let src_only = carried.replace("    1\n}", "    1 + 0\n}");
+    let (dir, _) = base_commit();
+    let base = seed_fixture(&dir, &carried);
+    write_at(&dir, &lib_rel(), &src_only);
+    head_commit(&dir);
+    let mut src_lines: Vec<String> = Vec::new();
+    let _ = judge_into(&base, &dir, &mut |line| src_lines.push(line.to_owned()));
+    drop_fixture(&dir);
+    assert!(
+        !src_lines
+            .iter()
+            .any(|line| line.starts_with("flip-check: stale-marker ")),
+        "test 区間が動いていない便に stale を出さない: {src_lines:?}"
+    );
+}
+
+/// `src` 配下へ外出しした test file（`*_tests.rs` / `tests.rs`）は **丸ごと写す**。
+///
+/// `#[path]` で外出しした test module は `#[cfg(test)] mod` の形を持たないので、区間判定
+/// には src 区間だけの file に見える＝そこへ足した歯が 1 本も測られない（s2-07l.36 が
+/// 作った穴）。名前で test file と見なせば、base に `mod` 宣言が在る限り base で compile
+/// され RED を測れる。
+#[test]
+fn flip_check_copies_src_tests_file_whole() {
+    let lib_with_mod =
+        format!("{BASE_LIB}\n#[cfg(test)]\n#[path = \"extra_tests.rs\"]\nmod extra;\n");
+    let base_extra = "#[test]\nfn extra_holds() {\n    assert_eq!(super::val(), 1);\n}\n";
+    let head_extra = format!(
+        "{base_extra}\n#[test]\nfn extra_added_later() {{\n    assert_eq!(super::val(), 1);\n}}\n"
+    );
+    let (dir, _) = base_commit();
+    write_at(&dir, &extra_rel(), base_extra);
+    let base = seed_fixture(&dir, &lib_with_mod);
+    write_at(&dir, &extra_rel(), &head_extra);
+    head_commit(&dir);
+    let got = judge(&base, &dir);
+    drop_fixture(&dir);
+    // 丸ごと写されるので、base で緑の新しい歯は green-on-base で落ちる。
+    // 写さない実装ではこの file の test 区間が空と数えられ reason=no-test-diff になる。
+    assert_verdict(&got.line, got.code, 1, "reason=green-on-base");
+
+    // 規則そのものも見る（実装 crate の file 名で当てる）。
+    assert!(is_test_file(&extra_rel()), "src の *_tests.rs は test file");
+    assert!(
+        is_test_file(&format!("crates/{FIXTURE_MEMBER}/src/tests.rs")),
+        "src の tests.rs も test file"
+    );
+    assert!(!is_test_file(&lib_rel()), "ふつうの src file は test file でない");
+    assert!(
+        !is_test_file(&format!("crates/{FIXTURE_MEMBER}/src/tests_helper.rs")),
+        "接尾辞が違う file を巻き込まない"
     );
 }
