@@ -6,6 +6,7 @@
 
 pub mod cli_outcome;
 pub mod fleet;
+pub mod headless;
 pub mod hook;
 pub mod name;
 pub mod pipe;

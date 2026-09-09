@@ -4,5 +4,5 @@ expression: masked
 ---
 scribe2
 scribe2 [version]
-usage: scribe2 <name|--version|doctor|rules|fleet|vessel|hook|pipe>
+usage: scribe2 <name|--version|doctor|rules|fleet|vessel|hook|pipe|runner|lens>
 scribe2 [version]
