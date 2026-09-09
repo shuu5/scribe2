@@ -8,4 +8,5 @@ pub mod cli_outcome;
 pub mod fleet;
 pub mod hook;
 pub mod name;
+pub mod pipe;
 pub mod rules;

@@ -204,7 +204,10 @@ pub fn host() -> String {
 }
 
 /// いまの UTC を `YYYY-MM-DDTHH:MM:SSZ` で返す。
-fn now_utc() -> String {
+///
+/// `pipe` も event の `ts` と run id の stamp に同じ字面を使うので pub である
+/// （時刻の字面を作る経路は器の中で 1 本・憲法 C2）。
+pub fn now_utc() -> String {
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -213,7 +216,7 @@ fn now_utc() -> String {
 }
 
 /// UNIX 秒を `YYYY-MM-DDTHH:MM:SSZ` にする。
-fn format_utc(secs: u64) -> String {
+pub fn format_utc(secs: u64) -> String {
     let days = secs / 86_400;
     let rest = secs % 86_400;
     let (year, month, day) = civil_from_days(days);

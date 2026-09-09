@@ -23,10 +23,17 @@ const KNOWN_KEYS: &[&str] = &["id", "kind", "value", "enabled", "ruling", "ruled
 const REQUIRED_KEYS: &[&str] = &["id", "kind", "value", "ruling", "ruled_at"];
 
 /// TOML subset が受理する値。
+///
+/// `pipe` の契約 file も同じ subset の値を持つので、この型と [`scalar`] を器の中で
+/// 共有する（第 2 の値 parser を作らない・憲法 C6）。**受理集合はここが唯一の定義**で、
+/// 配列の層は契約 file 側が持つ（rules manifest は配列を持たない＝挙動は不変）。
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum Scalar {
+pub enum Scalar {
+    /// 非負整数。
     Int(u64),
+    /// 文字列。
     Str(String),
+    /// 真偽。
     Bool(bool),
 }
 
@@ -153,7 +160,7 @@ fn scan_pair(
 }
 
 /// 値 1 つを読む。受理するのは `"..."` / 整数 / `true` / `false` だけ。
-fn scalar(raw: &str) -> Option<Scalar> {
+pub fn scalar(raw: &str) -> Option<Scalar> {
     if let Some(rest) = raw.strip_prefix('"') {
         return rest.strip_suffix('"').map(|text| Scalar::Str(text.to_owned()));
     }
