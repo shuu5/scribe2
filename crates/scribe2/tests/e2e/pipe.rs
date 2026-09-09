@@ -1444,8 +1444,9 @@ fn runner_cmd(marker: &Path) -> String {
     )
 }
 
-/// 3 クラスを名乗る契約で intake → spawn まで撃ち、Blocked で止まった便の id を返す。
-fn blocked(repo: &Path, state: &Path, marker: &Path, classes: &str) -> String {
+/// 3 クラスを名乗る契約で intake → spawn まで撃ち、Blocked で止まった便の
+/// id と stdout を返す。stdout は「いまどの段に居るか」の主張なので測る対象である。
+fn blocked(repo: &Path, state: &Path, marker: &Path, classes: &str) -> (String, String) {
     let path = write_contract(repo, &[], &[classes]);
     let id = intake(repo, state, &path);
     let out = run_pipe(&[
@@ -1459,14 +1460,16 @@ fn blocked(repo: &Path, state: &Path, marker: &Path, classes: &str) -> String {
         "承認が要る便は rc 3 で止まる: {}",
         stderr_of(&out)
     );
-    id
+    (id, stdout_of(&out))
 }
 
 #[test]
 fn pipe_approval_blocks_before_spawn_when_contract_declares_class() {
     let (repo, state) = repo_with_state();
     let marker = state.join("runner-ran");
-    let id = blocked(&repo, &state, &marker, r#"classes = ["delete"]"#);
+    // **2 クラス**で撃つ。1 クラスだと detail の連結が恒等になり、区切りを測れない。
+    let (id, said) = blocked(&repo, &state, &marker, r#"classes = ["delete", "publish"]"#);
+    assert!(said.contains(&format!("run={id} stage=Blocked")), "止まった先を stdout で名乗る: {said}");
     // **数字そのものが約束である**（設計 §5.5）。定数を辿るだけの assert は、定数が
     // 動いたときに歯も黙って追随する——外形の 3 はここで literal に留める。
     assert_eq!(RC_BLOCKED, 3, "人の手番で止まっている周の rc は 3");
@@ -1482,7 +1485,11 @@ fn pipe_approval_blocks_before_spawn_when_contract_declares_class() {
         .iter()
         .find(|found| found.kind == EventKind::ApprovalRequested)
         .expect("ApprovalRequested を記帳する");
-    assert_eq!(requested.detail.as_deref(), Some("delete"), "何のクラスで止めたかを名指す");
+    assert_eq!(
+        requested.detail.as_deref(),
+        Some("delete+publish"),
+        "何のクラスで止めたかを名指す（複数なら全部・区切りは +）"
+    );
     assert_eq!(requested.actor, "machine", "止めたのは機械であって人の event ではない");
     assert!(
         mine.iter().any(|found| found.stage == Some(Stage::Blocked)),
@@ -1498,9 +1505,11 @@ fn pipe_approval_blocks_before_spawn_when_contract_declares_class() {
 fn pipe_approval_records_verbatim_as_human_event() {
     let (repo, state) = repo_with_state();
     let marker = state.join("runner-ran");
-    let id = blocked(&repo, &state, &marker, r#"classes = ["publish"]"#);
-    // 引用符も全角も入った 1 行を **要約せずそのまま** 通す（C7.2）。
-    let words = r#"出してよい（user 逐語 2026-09-09）："推奨で進めて""#;
+    let (id, _) = blocked(&repo, &state, &marker, r#"classes = ["publish"]"#);
+    // 引用符も全角も入った 1 行を **要約せずそのまま** 通す（C7.2）。前後の空白と
+    // 大文字を混ぜてあるのは、正規化（trim / 小文字化）を「そのまま」と言い張れない
+    // ようにするためである——fixture が綺麗だと歯は正規化を見逃す。
+    let words = r#"  OK：出してよい（user 逐語 2026-09-09）："推奨で進めて"  "#;
     let out = run_pipe(&[
         "approve", "--run", &id, "--words", words,
         "--state-dir", &state.display().to_string(),
@@ -1512,6 +1521,7 @@ fn pipe_approval_records_verbatim_as_human_event() {
     let received = human.first().expect("承認 event が 1 件在る");
     assert_eq!(received.kind, EventKind::ApprovalReceived, "種類は ApprovalReceived");
     assert_eq!(received.detail.as_deref(), Some(words), "逐語をそのまま持つ");
+    assert_eq!(received.bead, "s2-2e5", "どの契約への承認かを持つ");
     let line = show_line(&repo, &state, &id);
     assert!(line.contains("approved=true"), "{line}");
     // 承認は「許し」であって「前進」ではない——段を動かすのは resume である。
@@ -1523,7 +1533,7 @@ fn pipe_approval_records_verbatim_as_human_event() {
 fn pipe_approval_refuses_empty_words() {
     let (repo, state) = repo_with_state();
     let marker = state.join("runner-ran");
-    let id = blocked(&repo, &state, &marker, r#"classes = ["consume"]"#);
+    let (id, _) = blocked(&repo, &state, &marker, r#"classes = ["consume"]"#);
     let before = event_count(&state);
     // 空も空白だけも承認ではない。「聞いた形」だけが残る記録を作らない。
     for words in ["", "   "] {
@@ -1546,7 +1556,7 @@ fn pipe_approval_refuses_empty_words() {
 fn pipe_approval_resume_spawns_after_received() {
     let (repo, state) = repo_with_state();
     let marker = state.join("runner-ran");
-    let id = blocked(&repo, &state, &marker, r#"classes = ["delete"]"#);
+    let (id, _) = blocked(&repo, &state, &marker, r#"classes = ["delete"]"#);
     let approved = run_pipe(&[
         "approve", "--run", &id, "--words", "消してよい",
         "--state-dir", &state.display().to_string(),
@@ -1568,7 +1578,7 @@ fn pipe_approval_resume_spawns_after_received() {
 fn pipe_approval_resume_stays_blocked_without_received() {
     let (repo, state) = repo_with_state();
     let marker = state.join("runner-ran");
-    let id = blocked(&repo, &state, &marker, r#"classes = ["publish"]"#);
+    let (id, _) = blocked(&repo, &state, &marker, r#"classes = ["publish"]"#);
     let before = event_count(&state);
     let out = run_pipe(&[
         "resume", "--run", &id, "--repo", &repo.display().to_string(),

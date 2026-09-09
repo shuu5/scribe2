@@ -16,9 +16,11 @@ use std::path::Path;
 
 /// 人の手番で止まっている周の rc（設計 §5.5）。
 ///
-/// `pipe gate` の INCONCLUSIVE と同じ数だが、**別の subcommand の別の語彙**である
-/// （gate は「判定できなかった」・こちらは「人の入力を待っている」）。1 つの
-/// subcommand の中で 2 つの意味を持たせてはいないので、呼び手は取り違えない。
+/// [`super::gate::RC_INCONCLUSIVE`] と**同じ数**である。段を 1 つだけ通す
+/// `pipe spawn` / `pipe gate` なら撃った段が語彙を決めるので取り違えようがないが、
+/// **`pipe run` と `pipe resume` は 1 つの subcommand でどちらも返しうる**——
+/// rc だけでは「人待ち」と「判定できなかった」を弁別できない。弁別は永続面の段
+/// （`Blocked` か `Gated`）と stderr の 1 行で行う。
 pub const RC_BLOCKED: u8 = 3;
 
 /// 承認 1 回の材料。
