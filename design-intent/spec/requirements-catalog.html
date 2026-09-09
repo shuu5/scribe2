@@ -65,6 +65,7 @@
   <li><a href="#ch-q">Q. 移植性・host（v0.1.6 新設・論点 1 (b)）（v2 0 本 / v3 送り 1 本）</a></li>
   <li><a href="#ch-r">R. 公開安全（v0.1.6 新設・論点 1 (b)）（v2 0 本 / v3 送り 2 本）</a></li>
   <li><a href="#ch-o">O. 跨版（前の版が次の版の oracle になる・器 SPEC §12 の要件面）（v2 4 本 / v3 送り 2 本）</a></li>
+  <li><a href="#s-migration">§移行表 — SRS の要件と R- 行の対応</a></li>
   <li><a href="#s-trace">§Trace — 原本・母集団・scrub</a></li>
 </ol>
 </nav>
@@ -84,8 +85,8 @@
 
 <section id="s0-reading" class="informative">
 <h2>§0. 読み方 — この一覧が何の写しか</h2>
-<p class="section-essence" data-audience="human">このページは scribe2 の要件 doc（repo の外で凍結・v0.1.10）から、 MVP で着手する要件 144 本と、 v2 の開発 session 自身が守る作法 6 本を写したものです。 各行は要件 doc の id をそのまま持ち、 要件定義書（SRS）の各要件はこの行 id を根拠として引きます。 人が読む要旨は章ごとの段落に、 原文の行は各章の折りたたみの中の表にあります。</p>
-<p data-audience="machine">id 体系 <code>R-&lt;章&gt;&lt;番号&gt;</code> は要件 doc のまま （章 = A intake→契約 / B dispatch / C gate / D land / E 席と役割 / F 承認・裁定 / G 口座 / H WM・rebrief / I 台帳 adapter / J 消費 / K 教訓 / P 可観測性・提示面 / Q 移植性・host / R 公開安全 / O 跨版）。 SRS (<code>./srs.html</code>) の各 FR は根拠としてこの行 id を引き、 各行の id セルは <code>#r-&lt;小文字 id&gt;</code>（例 <code>#r-a1</code>）で deep-link できる。 列の意味: <strong>id</strong> = 要件 doc の行 id / <strong>要件文</strong> = 原文の要件 1 文（scrub 済み）/ <strong>v2 表現</strong> = 原文に <code>｜v2:</code> field が在る行だけの値（無い行は空）/ <strong>出所</strong> = 原文の <code>｜出所:</code> field / <strong>裁定</strong> = 原文の <code>｜裁定:</code> field（user 逐語は落とし、 ts・論点番号・RULING doc 名・承認 relay の scope は残す。 <code>なし</code> = 裁定に紐づかない行、 空 = 原文にこの field が無い行）/ <strong>v1 対応物</strong> = 原文の <code>｜v1:</code> field（<code>-</code> = v1 に対応物なし）/ <strong>備考</strong> = 収録上の注記。 <strong>着手 field の意味</strong>: 原文末尾の <code>｜着手: v2</code> / <code>｜着手: v3</code> は<em>要件の効力ではなく着手時期</em>である。 <code>v2</code> = MVP（縦 1 本を v2 リポ自身で通すのに要る要件）、 <code>v3</code> = 要件として生きるが着手を次の版へ送る。 本カタログの母集団は <code>着手: v2</code> の全 144 行 + 章 H の 6 行 = 150 行で、 それ以外の v3 行は収録せず章ごとの件数だけを見出しに書く。</p>
+<p class="section-essence" data-audience="human">このページは scribe2 の要件 doc（repo の外で凍結・v0.1.10）から、 MVP で着手する要件 144 本と、 v2 の開発 session 自身が守る作法 6 本を写したものです。 各行は要件 doc の id をそのまま持ち、 要件定義書（SRS）の各要件がどの行から来たかは、 末尾の §移行表 が示します。 人が読む要旨は章ごとの段落に、 原文の行は各章の折りたたみの中の表にあります。</p>
+<p data-audience="machine">id 体系 <code>R-&lt;章&gt;&lt;番号&gt;</code> は要件 doc のまま （章 = A intake→契約 / B dispatch / C gate / D land / E 席と役割 / F 承認・裁定 / G 口座 / H WM・rebrief / I 台帳 adapter / J 消費 / K 教訓 / P 可観測性・提示面 / Q 移植性・host / R 公開安全 / O 跨版）。 SRS (<code>./srs.html</code>) の各 FR / NFR と本カタログ行の対応は <a href="#s-migration">§移行表</a> が持ち (SRS 側の根拠 field は上位ニーズ N-1〜N-5 を指す)、 各行の id セルは <code>#r-&lt;小文字 id&gt;</code>（例 <code>#r-a1</code>）で deep-link できる。 列の意味: <strong>id</strong> = 要件 doc の行 id / <strong>要件文</strong> = 原文の要件 1 文（scrub 済み）/ <strong>v2 表現</strong> = 原文に <code>｜v2:</code> field が在る行だけの値（無い行は空）/ <strong>出所</strong> = 原文の <code>｜出所:</code> field / <strong>裁定</strong> = 原文の <code>｜裁定:</code> field（user 逐語は落とし、 ts・論点番号・RULING doc 名・承認 relay の scope は残す。 <code>なし</code> = 裁定に紐づかない行、 空 = 原文にこの field が無い行）/ <strong>v1 対応物</strong> = 原文の <code>｜v1:</code> field（<code>-</code> = v1 に対応物なし）/ <strong>備考</strong> = 収録上の注記。 <strong>着手 field の意味</strong>: 原文末尾の <code>｜着手: v2</code> / <code>｜着手: v3</code> は<em>要件の効力ではなく着手時期</em>である。 <code>v2</code> = MVP（縦 1 本を v2 リポ自身で通すのに要る要件）、 <code>v3</code> = 要件として生きるが着手を次の版へ送る。 本カタログの母集団は <code>着手: v2</code> の全 144 行 + 章 H の 6 行 = 150 行で、 それ以外の v3 行は収録せず章ごとの件数だけを見出しに書く。</p>
 </section>
 
 <section id="ch-a" class="normative">
@@ -436,6 +437,49 @@
 </details>
 </section>
 
+<section id="s-migration" class="informative">
+<h2>§移行表 — SRS の要件と R- 行の対応</h2>
+<p class="section-essence" data-audience="human">要件定義書（SRS）の各要件が、 このカタログのどの行から来たかを 1 表で示します。 SRS の要件は振る舞いの単位でまとめてあるので、 1 本の要件に複数の行が対応します。 表に現れない行は、 設計から契約を切る段で参照する材料としてそのまま残ります。</p>
+<p data-audience="machine">対応の向きは SRS → カタログ（FR / NFR 1 本 → R- 行 0〜n 本）。 SRS 側の根拠 field（<code>rationale_source</code> / <code>trace.backward</code>）は上位ニーズ N-1〜N-5 を指し、 R- 行への対応は本表だけが持つ（SRS の contract に R- id は書かない）。 対応 0 本の要件は、 grill の裁定で新設した要件・要件 doc の v3 行に由来する制約・憲法 / ADR 由来の制約のいずれかで、 その旨を右列に書く。 本表で引かれない行（150 行中 71 行）は削除でも降格でもなく、 設計 doc から契約を切る段の材料として残る。 表の R- id は本 page の行へ、 FR / NFR id は <code>./srs.html</code> の要件行へ deep-link する。</p>
+<details class="req__machine" data-audience="machine">
+<summary>対応表（SRS 29 要件 → R- 行）</summary>
+<table>
+<thead><tr><th>SRS</th><th>要件名</th><th>対応する R- 行</th></tr></thead>
+<tbody>
+<tr><td><a href="./srs.html#FR1">FR1</a></td><td>契約の検査</td><td><a href="#r-a2">R-A2</a>, <a href="#r-a3">R-A3</a>, <a href="#r-a5">R-A5</a>, <a href="#r-a6">R-A6</a>, <a href="#r-a8">R-A8</a>, <a href="#r-g10">R-G10</a></td></tr>
+<tr><td><a href="./srs.html#FR2">FR2</a></td><td>契約の pointer</td><td>—（grill 論点 6 の裁定で新設・対応する R- 行なし）</td></tr>
+<tr><td><a href="./srs.html#FR3">FR3</a></td><td>run の永続</td><td><a href="#r-c2">R-C2</a>, <a href="#r-d1">R-D1</a>, <a href="#r-i16">R-I16</a>, <a href="#r-i17">R-I17</a></td></tr>
+<tr><td><a href="./srs.html#FR4">FR4</a></td><td>runner の起動</td><td><a href="#r-b6">R-B6</a>, <a href="#r-b17">R-B17</a>, <a href="#r-b18">R-B18</a>, <a href="#r-b20">R-B20</a></td></tr>
+<tr><td><a href="./srs.html#FR5">FR5</a></td><td>runner と lens の口</td><td><a href="#r-b16">R-B16</a>, <a href="#r-c4">R-C4</a>, <a href="#r-c6">R-C6</a>, <a href="#r-j14">R-J14</a></td></tr>
+<tr><td><a href="./srs.html#FR6">FR6</a></td><td>完了判定</td><td><a href="#r-d2">R-D2</a>, <a href="#r-d3">R-D3</a></td></tr>
+<tr><td><a href="./srs.html#FR7">FR7</a></td><td>入口の flip check</td><td><a href="#r-a5">R-A5</a>, <a href="#r-a6">R-A6</a>, <a href="#r-a7">R-A7</a></td></tr>
+<tr><td><a href="./srs.html#FR8">FR8</a></td><td>gate の機械検証</td><td><a href="#r-c1">R-C1</a>, <a href="#r-c2">R-C2</a>, <a href="#r-c14">R-C14</a>, <a href="#r-d15">R-D15</a>, <a href="#r-j17">R-J17</a></td></tr>
+<tr><td><a href="./srs.html#FR9">FR9</a></td><td>lens の verdict</td><td><a href="#r-c9">R-C9</a>, <a href="#r-c10">R-C10</a>, <a href="#r-c11">R-C11</a>, <a href="#r-c12">R-C12</a>, <a href="#r-c13">R-C13</a>, <a href="#r-c21">R-C21</a></td></tr>
+<tr><td><a href="./srs.html#FR10">FR10</a></td><td>land の前提</td><td><a href="#r-d4">R-D4</a>, <a href="#r-d5">R-D5</a>, <a href="#r-d6">R-D6</a></td></tr>
+<tr><td><a href="./srs.html#FR11">FR11</a></td><td>land</td><td><a href="#r-d11">R-D11</a>, <a href="#r-d14">R-D14</a>, <a href="#r-d15">R-D15</a></td></tr>
+<tr><td><a href="./srs.html#FR12">FR12</a></td><td>verdict export</td><td><a href="#r-c10">R-C10</a>, <a href="#r-o3">R-O3</a></td></tr>
+<tr><td><a href="./srs.html#FR13">FR13</a></td><td>stop</td><td><a href="#r-o3">R-O3</a>, <a href="#r-o6">R-O6</a></td></tr>
+<tr><td><a href="./srs.html#FR14">FR14</a></td><td>resume</td><td><a href="#r-d17">R-D17</a>, <a href="#r-d18">R-D18</a>, <a href="#r-g19">R-G19</a>, <a href="#r-g20">R-G20</a></td></tr>
+<tr><td><a href="./srs.html#FR15">FR15</a></td><td>承認の停止</td><td><a href="#r-e22">R-E22</a>, <a href="#r-f1">R-F1</a>, <a href="#r-f2">R-F2</a>, <a href="#r-f3">R-F3</a>, <a href="#r-f4">R-F4</a>, <a href="#r-f5">R-F5</a>, <a href="#r-f13">R-F13</a>, <a href="#r-f14">R-F14</a></td></tr>
+<tr><td><a href="./srs.html#FR16">FR16</a></td><td>承認の再開</td><td><a href="#r-f15">R-F15</a>, <a href="#r-f16">R-F16</a>, <a href="#r-f17">R-F17</a>, <a href="#r-f18">R-F18</a>, <a href="#r-f19">R-F19</a>, <a href="#r-f20">R-F20</a></td></tr>
+<tr><td><a href="./srs.html#FR17">FR17</a></td><td>rules manifest</td><td><a href="#r-c7">R-C7</a>, <a href="#r-e19">R-E19</a>, <a href="#r-e24">R-E24</a>, <a href="#r-i18">R-I18</a></td></tr>
+<tr><td><a href="./srs.html#FR18">FR18</a></td><td>rules の検査</td><td><a href="#r-e24">R-E24</a>, <a href="#r-g10">R-G10</a>, <a href="#r-i18">R-I18</a></td></tr>
+<tr><td><a href="./srs.html#FR19">FR19</a></td><td>marker と hook</td><td><a href="#r-e1">R-E1</a>, <a href="#r-k9">R-K9</a>, <a href="#r-o4">R-O4</a></td></tr>
+<tr><td><a href="./srs.html#FR24">FR24</a></td><td>管轄外での沈黙</td><td><a href="#r-e2">R-E2</a>, <a href="#r-g9">R-G9</a></td></tr>
+<tr><td><a href="./srs.html#FR20">FR20</a></td><td>in-loop guard</td><td><a href="#r-c31">R-C31</a>, <a href="#r-e5">R-E5</a>, <a href="#r-k10">R-K10</a></td></tr>
+<tr><td><a href="./srs.html#FR21">FR21</a></td><td>注入計測の slot</td><td><a href="#r-e21">R-E21</a>, <a href="#r-k22">R-K22</a></td></tr>
+<tr><td><a href="./srs.html#FR22">FR22</a></td><td>人手 0 の計測</td><td><a href="#r-f6">R-F6</a>, <a href="#r-f10">R-F10</a></td></tr>
+<tr><td><a href="./srs.html#FR23">FR23</a></td><td>開発 session の作業記憶</td><td><a href="#r-h2">R-H2</a>, <a href="#r-h3">R-H3</a>, <a href="#r-h4">R-H4</a>, <a href="#r-h6">R-H6</a>, <a href="#r-h8">R-H8</a>, <a href="#r-h16">R-H16</a></td></tr>
+<tr><td><a href="./srs.html#NFR1">NFR1</a></td><td>lens 予算</td><td><a href="#r-c12">R-C12</a>, <a href="#r-j14">R-J14</a></td></tr>
+<tr><td><a href="./srs.html#NFR2">NFR2</a></td><td>契約の大きさ</td><td>—（要件 doc の R-J19 は v3 送りでカタログ外・grill 論点 2 の裁定）</td></tr>
+<tr><td><a href="./srs.html#NFR3">NFR3</a></td><td>依存</td><td>—（ADR-0001 と憲法由来・対応する R- 行なし）</td></tr>
+<tr><td><a href="./srs.html#NFR4">NFR4</a></td><td>fail-closed</td><td><a href="#r-b8">R-B8</a>, <a href="#r-g10">R-G10</a></td></tr>
+<tr><td><a href="./srs.html#NFR5">NFR5</a></td><td>hook の予算</td><td><a href="#r-k10">R-K10</a>, <a href="#r-k22">R-K22</a></td></tr>
+</tbody>
+</table>
+</details>
+</section>
+
 <section id="s-trace" class="informative">
 <h2>§Trace — 原本・母集団・scrub</h2>
 <p class="section-essence" data-audience="human">原本は repo の外で凍結されていて、 このページはその写しです。 どの行を載せたか（母集団の数え方）と、 公開前に落とした 4 種類の情報をここに置きます。</p>
@@ -444,7 +488,7 @@
   <li><strong>版</strong>: v0.1.10。 全 R- 行 289 本に着手版 field（<code>｜着手: v2</code> / <code>｜着手: v3</code>）を追加した版で、 要件文・出所・裁定・v1 欄は前版から不変・削除 0。</li>
   <li><strong>母集団の数え方</strong>: 原文の R- 行のうち末尾 field が <code>｜着手: v2</code> の行すべて（実測 144 本）＋ 章 H の <code>R-H2 / R-H3 / R-H4 / R-H6 / R-H8 / R-H16</code> の 6 本（着手は v3 だが「開発 session が守る作法」として収録・備考列に注記）＝ 計 150 行。 それ以外の v3 行 139 本は収録せず、 章ごとの件数だけを見出しの「v3 送り N 本」に書く。 §0 の id 体系の凡例行（<code>R-&lt;章&gt;&lt;番号&gt;</code>）は要件行ではないので数えない。</li>
   <li><strong>scrub の規則 4 点</strong>（本 repo は PUBLIC ゆえ全 field に適用し、 置換後の残存 0 を生成器が自己検査する。 非 0 なら生成を中断する）: <strong>(1) bead id</strong> — <code>sc-</code> / <code>s2-</code> / <code>orch-</code> / <code>un-</code> / <code>folio-</code> / <code>ccs-</code> / <code>paper-</code> 接頭の識別子を削除し、 空になった括弧と連続した区切り記号を畳む。 <strong>(2) 口座名</strong> — 口座を名指しする識別子（<code>black</code> + 数字 の形、 および固有名 1 種）を <code>&lt;口座&gt;</code> へ置換。 <strong>(3) user 逐語</strong> — 裁定 field の <code>「…」</code> 引用はすべて落として <code>user 裁定（…・逐語は repo 外）</code> へ畳み、 他 field は user 帰属の印（逐語 / user 直命 / user 裁定 / user 回答 / user 承認 / USER-VERBATIM）を持つ field の <code>「…」</code> だけを落とす（doc の節名を指す引用は残す）。 要件文では <code>逐語「…」</code> の形だけを落とす。 日付・時刻・論点番号・<code>RULING-…</code> の doc 名・<code>[USER-APPROVAL-RELAY v1] &lt;ts&gt;（scope=…）</code> の ts と scope は残す。 <strong>(4) 絶対 path</strong> — 開発 host の home 配下を指す絶対 path を <code>&lt;path&gt;</code> へ置換（本 doc の母集団には該当 0 件）。</li>
-  <li><strong>照会先</strong>: 要件定義書 <code>./srs.html</code>（各 FR がこの行 id を根拠に引く）、 憲法 <code>./constitution.html</code>（要件が従う折れない線）。 本 file は要件 doc の写しであって要件の正本ではない。</li>
+  <li><strong>照会先</strong>: 要件定義書 <code>./srs.html</code>（各 FR との対応は <a href="#s-migration">§移行表</a>）、 憲法 <code>./constitution.html</code>（要件が従う折れない線）。 本 file は要件 doc の写しであって要件の正本ではない。</li>
 </ul>
 </section>
 

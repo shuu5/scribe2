@@ -154,7 +154,7 @@ terms:
     relationships: [fleet, lane, 席]
   - canonical: fleet
     domain: consumer
-    definition: 複数 host にまたがる席・口座・lease・退役の全体。 状態の持ち方は C3。 MVP では run と seat の現在地の全体を指し、 実体は event log 1 file (SRS FR3)。
+    definition: 複数 host にまたがる席・口座・lease・退役の全体。 状態の持ち方は C3。 MVP では便と席の現在地の全体を指し、 実体は event log 1 file (SRS FR3)。
     relationships: [席, 口座, lease, doctor, event log]
   - canonical: event log
     domain: consumer
@@ -300,7 +300,7 @@ terms:
     relationships: [器, 自己開発, verdict export]
   - canonical: 便
     domain: consumer
-    definition: 契約 1 本の 1 往復 (intake → runner → gate → land)。 MVP の識別子は run id で、 現在地は event log から導く。 到達点は便の本数で数える (SRS AC1 / AC2)。
+    definition: 契約 1 本の 1 往復 (intake → runner → gate → land)。 MVP の識別子は run id で (run は識別子 run id にのみ用い、 便の実体名には使わない)、 現在地は event log から導く。 到達点は便の本数で数える (SRS AC1 / AC2)。
     relationships: [Verdict, land, gate, 契約, event log]
   - canonical: NAME 定数
     domain: consumer

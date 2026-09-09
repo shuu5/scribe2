@@ -563,7 +563,7 @@
       <p class="ears" data-ears-pattern="unwanted"><span class="ears-id">N4</span>: <span class="ears-if">IF a change inside the current version would <del class="delta" data-delta-id="D-2026-09-09-005" data-delta-superseded-by="D-2026-09-09-005">amend the constitution, </del><ins class="delta" data-delta-id="D-2026-09-09-005">amend the constitution without a new ADR, inline delta markers and a user ruling id, or would </ins>break schema compatibility or exceed a C4 bound</span>, THEN scribe2 <span class="ears-shall">SHALL</span> reject the change in the current version.</p>
       <p class="ears" data-ears-pattern="ubiquitous"><span class="ears-id">N4.2</span>: scribe2 <span class="ears-shall">SHALL</span> <del class="delta" data-delta-id="D-2026-09-09-005" data-delta-superseded-by="D-2026-09-09-005">carry out constitution amendments, schema-incompatible changes and changes that would exceed a C4 bound only as version N+1 in a separate repository (C8).</del><ins class="delta" data-delta-id="D-2026-09-09-005">carry out a constitution amendment only with a new ADR, inline delta markers in this file and a user ruling id (A2), and <span class="ears-shall">SHALL</span> carry out schema-incompatible changes and changes that would exceed a C4 bound only as a new version.</ins></p>
       <dl>
-        <dt>機構 (型 / lint / CI)</dt><dd>C4 超えは CI deny (§3 <a href="#r-c4-1">R-C4-1</a>〜<a href="#r-c4-4">R-C4-4</a>)。 schema 非互換は manifest の <code>schema_version</code> (C1) で検出。 <del class="delta" data-delta-id="D-2026-09-09-005" data-delta-superseded-by="D-2026-09-09-005">憲法改訂は版 N+1 の別 repo でのみ (C8 の bootstrap 段 1)。</del><ins class="delta" data-delta-id="D-2026-09-09-005">憲法改訂 = 新 ADR + delta marker (<code>ins.delta</code> / <code>del.delta</code>・<code>data-delta-id</code>) + 裁定 id (A2)。 folio validate の delta-marker gate が marker の形を検査する。 旧文の「版 N+1 の別 repo」は C8 の bootstrap model (前の版が在る) を前提にした手続きで、 v1 の放棄により前提が消えた (ADR-0003)。</ins></dd>
+        <dt>機構 (型 / lint / CI)</dt><dd>C4 超えは CI deny (§3 <a href="#r-c4-1">R-C4-1</a>〜<a href="#r-c4-4">R-C4-4</a>)。 schema 非互換は manifest の <code>schema_version</code> (C1) で検出。 <del class="delta" data-delta-id="D-2026-09-09-005" data-delta-superseded-by="D-2026-09-09-005">憲法改訂は版 N+1 の別 repo でのみ (C8 の bootstrap 段 1)。</del><ins class="delta" data-delta-id="D-2026-09-09-005">憲法改訂 = 新 ADR + delta marker (<code>ins.delta</code> / <code>del.delta</code>・<code>data-delta-id</code>) + 裁定 id (A2)。 folio validate の delta-marker gate が marker の形を検査する。</ins></dd>
         <dt>出所</dt><dd>論点 9<del class="delta" data-delta-id="D-2026-09-09-005" data-delta-superseded-by="D-2026-09-09-005">・SPEC §12.0</del><ins class="delta" data-delta-id="D-2026-09-09-005">・ADR-0003 (user 裁定 2026-09-09)</ins></dd>
       </dl>
     </div>
@@ -619,20 +619,20 @@
   style R fill:#e6f6f2,stroke:#1e7b65,color:#08131a</pre>
 <figcaption>図 2. 改訂の流れ。 何を変えるかで A2 の要否と着地先が違う。</figcaption>
 </figure>
-<p data-audience="machine">本章は新しい規則を持たない。 手続きの正本は A2 (grill 検証 → user 裁定)・C5 (rules 行の diff + 裁定 id)・N4 (条文は新 ADR + delta marker + 裁定 id) である。 本 constitution の version は SPEC の版に追随する。 A2 / C5 / N4 の帰結として、 本 file の変更は §3 の写しの更新・誤記の修正・ADR を伴う条文改訂に帰着する。 改訂の trace は folio の delta marker (<code>ins.delta</code> / <code>del.delta</code>・<code>data-delta-id</code>) で本文に残す。 2026-09-09 の改訂 (ADR-0003) は旧 N4 の手続きに対する user 直命の明示例外として行い、 以後は本節の手続きが正である。</p>
+<p data-audience="machine">本章は新しい規則を持たない。 手続きの正本は A2 (grill 検証 → user 裁定)・C5 (rules 行の diff + 裁定 id)・N4 (条文は新 ADR + delta marker + 裁定 id) である。 本 constitution の version は SPEC の版に追随する。 A2 / C5 / N4 の帰結として、 本 file の変更は §3 の写しの更新・誤記の修正・ADR を伴う条文改訂に帰着する。 改訂の trace は folio の delta marker (<code>ins.delta</code> / <code>del.delta</code>・<code>data-delta-id</code>) で本文に残す。</p>
 </section>
 
 <section id="s5-trace" class="informative">
 <h2>§5. Trace — 出所と対応</h2>
-<p class="section-essence" data-audience="human">本文書は条文の正本で、 SPEC v0.3 の §2 と 1 対 1 に対応します。 各条は裁定の論点番号か「裁定 id なし (grill 前から在る条)」に紐づき (一部は両方を併記)、 対応表は §2 の一覧表の「出所」列です。</p>
+<p class="section-essence" data-audience="human">本文書は条文の正本で、 SPEC v0.3 の §2 を起草元に、 SPEC v0.4 / v0.4.5 で加わった 3 条 (C14〜C16) と ADR-0003 による 5 条の書換えを反映した版です。 各条は裁定の論点番号か「裁定 id なし (grill 前から在る条)」に紐づき (一部は両方を併記)、 対応表は §2 の一覧表の「出所」列です。</p>
 <ul data-audience="machine">
   <li>正本: 本 file が条文の canonical WHAT かつ edit-SSoT である (folio ADR-0051 §3: flip しない doc は HTML が唯一の層)。 SPEC §2 は起草元であり、 齟齬時は本 file を正とする。</li>
-  <li>起草元: <code>SPEC-scribe-v2-vessel-v0.1-20260907.md</code> §2 (folio spike 用抜粋 = <code>input/SPEC-excerpt.md</code>)。 条文は v0.3 (grill 11 論点の裁定を条文化・user 承認 2026-09-07・P1 exit 成立)。 SPEC §6 の件数表記 (Always 7 / Ask-first 3 / Never 3) は v0.1 時点の値であり、 本文書は v0.3 §2 の実体 (13 / 4 / 4) を採る。</li>
+  <li>起草元: <code>SPEC-scribe-v2-vessel-v0.1-20260907.md</code> §2 (folio spike 用抜粋 = <code>input/SPEC-excerpt.md</code>)。 条文は v0.3 (grill 11 論点の裁定を条文化・user 承認 2026-09-07・P1 exit 成立)。 SPEC §6 の件数表記 (Always 7 / Ask-first 3 / Never 3) は v0.1 時点の値であり、 v0.3 §2 の実体は 13 / 4 / 4、 本文書の現行は C14〜C16 追加後の 16 / 4 / 4 である。</li>
   <li>裁定: <code>RULING-v2-p1-exit-bundle-20260907.md</code> (user 逐語)。 各条の「出所」= 論点番号。 「裁定 id なし」は grill 前から在り固有の論点番号を持たない条 (C7 / A1 / N1)。 A3 / N2 / N3 は裁定 id なしに加え、 関連する裁定の論点番号 (導出) を併記する。</li>
   <li>技術選定 (WHY): <a href="../decisions/ADR-0001-rust-single-static-binary.html">ADR-0001</a> (Rust 単一 static binary・Go / typed Python / TypeScript 却下)。 本 constitution は WHAT を、 ADR は WHY を持つ。 実装言語と配布形態の規範は ADR-0001 §2.1 が持ち、 条文化は N4 の手続き (新 ADR + delta marker + 裁定 id) で行う。</li>
   <li>改訂 (2026-09-09): <a href="../decisions/ADR-0003-constitution-v1-abandon-rewrite.html">ADR-0003</a> (user 裁定・v1 完全放棄) が C7 / A1 / C8 / A4 / N4 を書き換えた。 旧文は delta marker (<code>data-delta-id</code> D-2026-09-09-001〜005・009〜010) で本文に残す。 C14 / C15 / C16 (D-2026-09-09-006〜008) は SPEC v0.4 / v0.4.5 で user 裁定済み (2026-09-08 / 2026-09-09) の条文を逐語で写したものであり、 ADR-0003 の決定ではない。 本 file の version 0.4.6 は SPEC v0.4.6 に追随する。 §2 の一覧表の C14〜C16 行は「出所」に SPEC の論点番号を持つ。</li>
   <li>用語: canonical 名は <code>design-intent/vocabulary.yaml</code> (P-5)。 本文の <span class="term" data-term="席">席</span> / <span class="term" data-term="口座">口座</span> / <span class="term" data-term="歯">歯</span> / <span class="term" data-term="検出線">検出線</span> / <span class="term" data-term="器">器</span> 等はそこで定義する。</li>
-  <li>段の対応: SPEC の「Always / Ask-first / Never」は folio constitution の 3 tier (いつも守る / 変える前に確認 / 絶対にやらない) と 1 対 1 に対応する。 条 id (C1〜C13 / A1〜A4 / N1〜N4) は SPEC と裁定文書の表記を逐語で維持する。</li>
+  <li>段の対応: SPEC の「Always / Ask-first / Never」は folio constitution の 3 tier (いつも守る / 変える前に確認 / 絶対にやらない) と 1 対 1 に対応する。 条 id (C1〜C16 / A1〜A4 / N1〜N4) は SPEC と裁定文書の表記を逐語で維持する。</li>
 </ul>
 </section>
 

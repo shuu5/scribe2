@@ -102,6 +102,8 @@
 <h2>§2. Decision</h2>
 <p class="section-essence" data-audience="human">決めたことは 4 つです。 (1) 承認を受け取る窓口は「ちょうど 1 つ」と定め、 その窓口が誰かは条文でなく rules 行 (差し替えできる値の行) に置きます。 (2) 新しい版を縛るのは前の版ではなく design-intent (憲法・ADR・要件 doc) です。 (3) 自己開発は既定で許可し、 user に先に聞くのは取り消せない操作だけです。 (4) 憲法の改訂は「新しい ADR + 本文の差分印 + 裁定 id」を伴うなら、 同じ版の中で行えます。</p>
 
+<p data-audience="machine">§2.1〜§2.4 の EARS block は決定時点の条文案であり、 施行された条文の正本は <code>../spec/constitution.html</code> の各条 (<code>#c7</code> / <code>#a1</code> / <code>#c8</code> / <code>#a4</code> / <code>#n4</code>) である。 施行文は条文案を次の点で精緻化している: N4 の IF 節に「新 ADR・delta marker・裁定 id を伴わない憲法改訂」を条件として明示 / A4.2 の受理を「記帳された承認 event」で表現 / C8.3 の目的節 (拘束条件は常に tracked file) は機構の説明へ移した。 齟齬時は憲法を正とする (本 ADR は WHY を持ち、 条文の WHAT は憲法が持つ)。</p>
+
 <h3 id="s2-1-c7">§2.1 C7 / A1 = 対話面は 1 つ・その identity は rules 行</h3>
 <p class="section-essence" data-audience="human">「承認を受け取る窓口は 1 つだけ」という決まりは残します。 変えるのは「その 1 つが誰か」を条文に書かない点です。 誰かは差し替えできる行 (R-C7-1) に置き、 初期値は「user 直」= 開発 session が user と直接やり取りする形にします。 planner の席を戻したくなったら、 行の値を変えるだけで条文は動きません。</p>
 <p>C7 と A1 の条文を次に置き換える (MUST)。 <strong>要旨</strong>: 承認の受理面は<strong>ちょうど 1 つ</strong>であるという不変量だけを条文に残し、 その面の identity (誰が対話面か) は条文ではなく rules 行 <code>R-C7-1</code> が持つ。</p>
