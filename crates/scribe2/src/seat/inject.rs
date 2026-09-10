@@ -1,0 +1,188 @@
+//! tmux pane への注入（設計 §3・記録は SRS FR21 と同じ schema）。
+//!
+//! **送る前に入力欄を見る**: 人間の打ちかけと 1 行に merge する co-submit 事故を、
+//! 「非空なら 1 key も送らない」で構造的に塞ぐ（prompt 行を特定できない周も送らない
+//! ＝fail-closed）。rc は **0 / 1 の 2 値**だけで、v1 の偽陰性（4 / 7）を作らない。
+//!
+//! 不可逆の口は持たない（憲法 CON5）: ここが送るのは呼び側が渡した 1 行だけで、
+//! `/clear` のような session を作り直す注入はこの便では扱わない。
+
+use super::{capture, input_tail, sanitize_target, tmux_ok};
+use crate::fleet::store::{self, LockPolicy};
+use crate::hook::{InjectionRecord, SCHEMA};
+use std::path::{Path, PathBuf};
+use std::thread::sleep;
+use std::time::{Duration, Instant};
+
+/// settle の 1 回あたりの待ち。
+const SETTLE_STEP: Duration = Duration::from_millis(200);
+/// settle の最大回数。
+const SETTLE_TRIES: u32 = 10;
+/// 記録に載せる payload の先頭 byte 数。
+const WHAT_CAP: usize = 80;
+/// 記録 file の名前。
+const TICK_FILE: &str = "tick.jsonl";
+/// 記録の置き場（state dir 直下の dir 名）。
+const SEAT_DIR: &str = "seat";
+/// 記録の who。
+const WHO: &str = "seat-inject";
+/// 記録の when。
+const WHEN: &str = "inject";
+
+/// 入力欄が非空（人間が打ちかけている）。
+pub const REASON_BUSY: &str = "busy";
+/// 入力欄を特定できない。
+pub const REASON_UNKNOWN_INPUT: &str = "unknown-input";
+/// 送ったが入力欄に残っている。
+pub const REASON_RESIDUAL: &str = "residual";
+/// 送ったが pane に現れない。
+pub const REASON_ABSENT: &str = "absent";
+/// tmux を撃てなかった。
+pub const REASON_TMUX_FAILED: &str = "tmux-failed";
+
+/// 注入 1 回の入力。
+pub struct Request<'a> {
+    /// tmux target（pane の指定）。
+    pub target: &'a str,
+    /// tmux の socket（既定の server を使うなら `None`）。
+    pub socket: Option<&'a str>,
+    /// 送る 1 行。
+    pub payload: &'a str,
+    /// 記録の置き場（無ければ repo の git 設定から解く）。
+    pub state_dir: Option<&'a str>,
+}
+
+/// 注入 1 回の結果。
+pub enum Delivery {
+    /// 送って送達を確認した。
+    Delivered(u64),
+    /// **1 key も送っていない**（入力欄の状態で止めた）。
+    Refused(&'static str),
+    /// 送ったが送達を確認できない。
+    Unconfirmed(&'static str),
+}
+
+/// 注入を 1 回行う。
+pub fn deliver(request: &Request) -> Delivery {
+    let started = Instant::now();
+    let Some(pane) = capture(request.socket, request.target) else {
+        return Delivery::Unconfirmed(REASON_TMUX_FAILED);
+    };
+    match input_tail(&pane) {
+        None => return Delivery::Refused(REASON_UNKNOWN_INPUT),
+        Some(tail) if !tail.is_empty() => return Delivery::Refused(REASON_BUSY),
+        Some(_) => {}
+    }
+    if !send(request) {
+        return Delivery::Unconfirmed(REASON_TMUX_FAILED);
+    }
+    match settle(request) {
+        Ok(()) => {
+            let bytes = request.payload.len() as u64;
+            record(request, bytes, started);
+            Delivery::Delivered(bytes)
+        }
+        Err(reason) => Delivery::Unconfirmed(reason),
+    }
+}
+
+/// payload を literal で送り、Enter を送る。
+fn send(request: &Request) -> bool {
+    let target = request.target;
+    tmux_ok(
+        request.socket,
+        &["send-keys", "-t", target, "-l", request.payload],
+    ) && tmux_ok(request.socket, &["send-keys", "-t", target, "Enter"])
+}
+
+/// 送達を確認する。**payload の先頭行が現れ ∧ 入力欄が空**になったら成立。
+fn settle(request: &Request) -> Result<(), &'static str> {
+    let marker = request.payload.lines().next().unwrap_or(request.payload);
+    let mut seen = false;
+    for _ in 0..SETTLE_TRIES {
+        sleep(SETTLE_STEP);
+        let Some(pane) = capture(request.socket, request.target) else {
+            return Err(REASON_TMUX_FAILED);
+        };
+        let appeared = pane.contains(marker);
+        seen = seen || appeared;
+        if appeared && input_tail(&pane).is_some_and(str::is_empty) {
+            return Ok(());
+        }
+    }
+    Err(if seen { REASON_RESIDUAL } else { REASON_ABSENT })
+}
+
+/// 記録の置き場。`--state-dir` が上書きし、無ければ repo の git 設定から読む（hook と同じ解決）。
+fn state_dir_of(request: &Request) -> Option<PathBuf> {
+    match request.state_dir {
+        Some(found) => Some(PathBuf::from(found)),
+        None => {
+            // `current_dir` は syscall であって env ではない（C2.2・hook 側と同じ扱い）。
+            let cwd = std::env::current_dir().ok()?;
+            let root = crate::hook::vessel::repo_root(&cwd)?;
+            crate::hook::vessel::state_dir(&root)
+        }
+    }
+}
+
+/// 記録 file の path。
+pub fn tick_path(state_dir: &Path, target: &str) -> PathBuf {
+    state_dir
+        .join(SEAT_DIR)
+        .join(sanitize_target(target))
+        .join(TICK_FILE)
+}
+
+/// 送達した 1 回を記録する。**置き場が解けない周は書かない**（rc は変えない）。
+fn record(request: &Request, bytes: u64, started: Instant) {
+    let Some(dir) = state_dir_of(request) else {
+        return;
+    };
+    let entry = InjectionRecord {
+        schema: SCHEMA,
+        who: WHO.to_owned(),
+        what: head(request.payload, WHAT_CAP),
+        when: WHEN.to_owned(),
+        bytes,
+        // 数えていないことを 0 と書かない。
+        tokens: None,
+        wall_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+    };
+    let Ok(policy) = LockPolicy::embedded() else {
+        return;
+    };
+    // 記録の失敗で注入の結果（rc）を変えない（FR21 は推奨で、判定そのものではない）。
+    let _ = store::append_line(&tick_path(&dir, request.target), &entry.to_line(), policy);
+}
+
+/// payload の先頭 `cap` byte（**文字の途中で切らない**）。
+fn head(payload: &str, cap: usize) -> String {
+    let mut end = 0;
+    for (at, ch) in payload.char_indices() {
+        let next = at.saturating_add(ch.len_utf8());
+        if next > cap {
+            break;
+        }
+        end = next;
+    }
+    payload.get(..end).unwrap_or_default().to_owned()
+}
+
+/// 成立の 1 行。
+pub fn render_delivered(target: &str, bytes: u64) -> String {
+    format!(
+        "seat: inject delivered target={} bytes={bytes}",
+        sanitize_target(target)
+    )
+}
+
+/// **送っていない**断りの 1 行。
+pub fn render_refused(reason: &str) -> String {
+    format!("seat: inject refused reason={reason}")
+}
+
+/// 送ったが確認できなかった 1 行。
+pub fn render_unconfirmed(reason: &str) -> String {
+    format!("seat: inject unconfirmed reason={reason}")
+}
