@@ -221,6 +221,18 @@ fn last_usage(text: &str) -> Option<u64> {
     text.lines().filter_map(usage_of).next_back()
 }
 
+/// transcript 1 本から使用 token を読む（**失敗の理由を 1 語で弁別する**）。
+///
+/// [`measure`] の fallback 経路は `read_tail(...).and_then(last_usage)` と畳んでいるので、
+/// 「file を読めない」と「有効な usage が 1 件も無い」が [`REASON_JSONL_NO_USAGE`] の 1 語へ
+/// 潰れる。seat guard（`hook::seat_guard`）は測れなかった理由を記録に残す契約なので、
+/// 同じ 2 段を**畳まずに**返す口をここへ 1 本置く（parse の実体は上の 2 関数のまま＝
+/// 2 面目を作らない）。**[`measure`] の経路と出力は 1 byte も変えていない。**
+pub(crate) fn used_from_transcript(path: &Path) -> Result<u64, &'static str> {
+    let text = read_tail(path).ok_or("unreadable")?;
+    last_usage(&text).ok_or("no-usage")
+}
+
 /// 1 行から usage の和を取る（assistant ∧ 非 sidechain ∧ usage object ∧ 和 > 0）。
 fn usage_of(line: &str) -> Option<u64> {
     if !has_value(line, "type", "assistant") || has_value(line, "isSidechain", "true") {

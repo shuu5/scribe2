@@ -9,6 +9,7 @@
 //! （[`store::append_line`]）を通す。
 
 pub mod guard;
+pub mod seat_guard;
 pub mod vessel;
 
 use crate::cli_outcome::{Outcome, RC_BROKEN};
@@ -16,6 +17,7 @@ use crate::fleet::json_lite::{self, Value};
 use crate::fleet::store::{self, LockPolicy, StoreError};
 use crate::name::NAME;
 use guard::Decision;
+use seat_guard::SeatDecision;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 use vessel::Served;
@@ -34,6 +36,8 @@ const KEY_TOOL: &str = "tool_name";
 const KEY_FILE: &str = "file_path";
 /// payload から拾う key（notebook の編集先）。
 const KEY_NOTEBOOK: &str = "notebook_path";
+/// payload から拾う key（この session の transcript）。
+const KEY_TRANSCRIPT: &str = "transcript_path";
 
 /// `session-start` の event 名。
 const EVENT_SESSION_START: &str = "session-start";
@@ -221,7 +225,14 @@ fn pre_tool_use(
     let tool = field(payload, KEY_TOOL).unwrap_or_default();
     let path = field(payload, KEY_FILE).or_else(|| field(payload, KEY_NOTEBOOK));
     match guard::decide(root, cwd, &git_dir, &tool, path.as_deref()) {
-        Decision::Inactive | Decision::Allow => Outcome::ok(Vec::new()),
+        // write-set が通した周にだけ seat guard を評価する（**deny 文は write-set が先**＝
+        // 2 つの門が同時に落ちる周に、直す側がどちらを直せばよいか読めなくならないため）。
+        Decision::Inactive | Decision::Allow => {
+            let transcript = field(payload, KEY_TRANSCRIPT);
+            let decided =
+                seat_guard::decide(root, cwd, &tool, path.as_deref(), transcript.as_deref());
+            seat_outcome(&decided, dir, started)
+        }
         Decision::Deny(line) => {
             let entry = record(EVENT_PRE_TOOL_USE, "deny", "PreToolUse", &line, started);
             // deny の外形は「rc 2 + stderr 1 行 + stdout 0 byte」（FR20・必須）で、
@@ -230,5 +241,47 @@ fn pre_tool_use(
             let _ = append(dir, &entry);
             Outcome::failed_line(RC_BROKEN, line)
         }
+    }
+}
+
+/// seat guard の判定を外形へ写す。通す周は **1 byte も書かない**。
+///
+/// 判定（[`seat_guard::decide`]）と外形をここで分けているのは憲法 C4 の引数上限である
+/// ——1 本に畳むと判定の 5 引数へ記録の 2 引数が乗って上限を超える。
+fn seat_outcome(decided: &SeatDecision, dir: &Path, started: Instant) -> Outcome {
+    match decided {
+        // 通す 2 つは記録も残さない（hook budget を毎編集ごとの追記で食い潰さない）。
+        SeatDecision::Allow | SeatDecision::Externalize => Outcome::ok(Vec::new()),
+        SeatDecision::Deny(line) => {
+            let entry = record(EVENT_PRE_TOOL_USE, "seat-guard-deny", "PreToolUse", line, started);
+            // deny の外形は write-set guard と同じ（rc 2 + stderr 1 行 + stdout 0 byte）。
+            // 記録の警告を stderr へ足すと判定文が濁るので戻りは載せない。
+            let _ = append(dir, &entry);
+            Outcome::failed_line(RC_BROKEN, line.clone())
+        }
+        // **測れない周は通す**。ただし黙って通すと「測れていない」ことが誰にも見えないので
+        // 記録だけ 1 行残す（stderr へは出さない＝allow の周に判定文を濁さない）。
+        SeatDecision::Unmeasured(reason) => {
+            let entry = silent(
+                EVENT_PRE_TOOL_USE,
+                &format!("seat-guard-unmeasured reason={reason}"),
+                started,
+            );
+            let _ = append(dir, &entry);
+            Outcome::ok(Vec::new())
+        }
+    }
+}
+
+/// 1 byte も出さなかった周の記録（`bytes` は実出力どおり 0）。
+fn silent(who: &str, what: &str, started: Instant) -> InjectionRecord {
+    InjectionRecord {
+        schema: SCHEMA,
+        who: format!("hook:{who}"),
+        what: what.to_owned(),
+        when: "PreToolUse".to_owned(),
+        bytes: 0,
+        tokens: None,
+        wall_ms: as_u64(started.elapsed().as_millis()),
     }
 }

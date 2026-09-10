@@ -17,7 +17,7 @@ use crate::name::NAME;
 use std::path::{Component, Path, PathBuf};
 
 /// guard が見る tool の名前。ここに無い tool は通す（`Bash` を含む）。
-const GUARDED: &[&str] = &["Edit", "Write", "MultiEdit", "NotebookEdit"];
+pub(crate) const GUARDED: &[&str] = &["Edit", "Write", "MultiEdit", "NotebookEdit"];
 
 /// policy file の名前。
 const POLICY_FILE: &str = "write-set.txt";

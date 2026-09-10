@@ -24,6 +24,9 @@ v2 に既に在るもの: FR23（WM の規則）・FR21（`<state_dir>/inject.js
 ## 3. 設計（subcommand `scribe2 seat …`・std のみ・env を読まない C2.2）
 - `seat meter --target <tmux target> [--sid S]` … (a) の port。pane → jsonl の順で fallback。Measured 型で返す（C10）。
 - `seat guard` … hook `pre-tool-use` の内側に組み込む（新 hook は増やさない）。cap は manifest 行 `seat.context_cap_pct`（初期値 60・裁定 id 付き）。deny の極性は既存 guard と同じ fail-closed。**計測不能は deny しない**（context が読めないだけで編集を止めると開発 session が詰む＝理由を inject.jsonl に記録して allow）。
+  - **計測の出所**: 使用 token は payload の `transcript_path` が名指す jsonl を便 2 の parse（末尾 10 MiB・最後の有効 usage 和・`seat::meter::used_from_transcript`）で読む。分母は manifest 行 `seat.context_window_tokens` の**宣言値**で、pane の statusline は読まない（hook から tmux を呼ばない・憲法 C2.2）。使用率は整数の切り捨てで、`pct >= cap` を止める。
+  - **通す口は 2 つ**（`SeatDecision::{Allow, Externalize}`・bool で持たない＝憲法 C11）。`Externalize` は `<root>/.claude-session/working-memory.*.md` **ちょうど 2 段**の編集で、使用率に関わらず通す（止めると席は退避すらできない・FR23）。口は狭く取る＝同じ dir でも別名の編集は上限に掛かる。判定は**字句と実体の 2 段**で、`working-memory.*.md` という名前の symlink が口の外を指していれば通さない（通す側の口を字句 1 段で持つと link 1 本で上限を越えられる）。**まだ無い退避物は link ではありえない**ので在るときだけ実体を見る＝これから作る周は通る。`transcript_path` の空文字は「渡されていない」と同じに扱う（`unreadable` に化けさせない）。
+  - **測れない理由は 4 語で弁別する**（`no-transcript-path` / `unreadable` / `no-usage` / `no-rule`）。1 語へ潰すと「transcript を渡し忘れている」のか「usage の形が変わった」のかを記録から後で分けられない。対象 tool は write-set guard と**同じ集合**（`hook::guard::GUARDED`）を参照する＝`Bash` は見ない。
 - `seat tick --target T` … (c) の 4 条件を同じ順序で評価し、成立時だけ注入。heartbeat は `<state_dir>/seat/<target>/heartbeat`（anchor 配下の `.claude-session/` へ書かない＝v1 と場所を分けて併走可能にする）。
 - `seat cycle --target T` … (d)。lock は `<state_dir>/seat/<target>/cycle.lock`（`O_EXCL`）。手順 = WM が未 consumed で在ることを確認 → `/clear` 注入 → 復元 command（`/rebrief`）注入 → lock 解除。
 - `seat inject --target T --text …` … tmux `send-keys` + 送達確認（pane の末尾に text が現れたか）。rc は 0 / 1 の 2 値にし、v1 の偽陰性（4 / 7）を作らない。

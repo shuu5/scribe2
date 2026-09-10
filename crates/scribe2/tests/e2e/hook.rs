@@ -767,3 +767,301 @@ fn vessel_external_form() {
     let form = [marker.render().trim_end().to_owned(), vessel::hook::vessel::usage()].join("\n");
     insta::assert_snapshot!(form);
 }
+
+/// transcript を名指す payload（`transcript_path` は payload の top-level）。
+fn seat_payload(cwd: &Path, tool: &str, file: &str, transcript: Option<&str>) -> String {
+    let head = match transcript {
+        Some(found) => format!("\"transcript_path\":\"{found}\","),
+        None => String::new(),
+    };
+    format!(
+        "{{\"cwd\":\"{}\",{head}\"tool_name\":\"{tool}\",\"tool_input\":{{\"file_path\":\"{file}\"}}}}",
+        cwd.display()
+    )
+}
+
+/// 使用 token が `used` になる transcript を書き、その path を返す。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn transcript_at(dir: &Path, name: &str, body: &str) -> String {
+    let path = dir.join(name);
+    fs::write(&path, body).expect("transcript を書ける");
+    path.display().to_string()
+}
+
+/// `used` token ちょうどの有効な usage 行 1 本。
+fn usage_jsonl(used: u64) -> String {
+    format!(
+        "{{\"type\":\"assistant\",\"isSidechain\":false,\"message\":{{\"usage\":{{\"input_tokens\":{used},\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0}}}}}}\n"
+    )
+}
+
+/// 記録 1 行の `what`。
+fn what_of(line: &str) -> String {
+    match value_of(line, "what") {
+        Some(json_lite::Value::Str(found)) => found,
+        _ => String::new(),
+    }
+}
+
+/// 上限**以上**の周は編集を止める（rc 2 + stderr 1 行 + stdout 0 byte + 記録 1 行）。
+///
+/// 宣言（rules 行）は cap 60% / 窓 1000000 token なので、650000 は 65% で上限以上である。
+#[test]
+fn hook_seat_guard_denies_edit_at_or_above_cap() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    let script = transcript_at(&state, "big.jsonl", &usage_jsonl(650_000));
+    let before = inject_lines(&state).len();
+    let target = repo.join("src").join("lib.rs");
+    let out = run_hook_args(
+        &["pre-tool-use", "--state-dir", &state.display().to_string()],
+        &seat_payload(&repo, "Edit", &target.display().to_string(), Some(&script)),
+    );
+    assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "上限以上は rc 2");
+    assert!(out.stdout.is_empty(), "deny の stdout は 0 byte");
+    assert_eq!(stderr_lines(&out), 1, "deny の stderr は 1 行");
+    let text = stderr_text(&out);
+    assert!(text.contains(&format!("{NAME}: deny context ")), "判定文が名乗る: {text}");
+    assert!(text.contains("65%"), "実測の使用率を名指す: {text}");
+    assert!(text.contains("cap 60%"), "宣言の上限を名指す: {text}");
+    let lines = inject_lines(&state);
+    assert_eq!(lines.len(), before + 1, "記録は 1 行だけ増える: {lines:?}");
+    assert_eq!(
+        what_of(&lines[lines.len() - 1]),
+        "seat-guard-deny",
+        "記録の what: {lines:?}"
+    );
+    clean(&[&repo, &state]);
+}
+
+/// **退避の口は上限に関わらず通す**（止めると席は退避すらできない・FR23）。
+///
+/// 同じ transcript（65%＝上限以上）で、編集先だけを退避物に替えると通る。負例を兼ねる:
+/// 上の歯と差し替わるのは `file_path` 1 つだけなので、退避の口が効いていなければ落ちる。
+#[test]
+fn hook_seat_guard_lets_externalize_through_above_cap() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    let script = transcript_at(&state, "big.jsonl", &usage_jsonl(650_000));
+    let before = inject_lines(&state).len();
+    let wm = repo.join(".claude-session").join("working-memory.x.md");
+    let out = run_hook_args(
+        &["pre-tool-use", "--state-dir", &state.display().to_string()],
+        &seat_payload(&repo, "Write", &wm.display().to_string(), Some(&script)),
+    );
+    assert_silent(&out, "退避の口は上限以上でも通る");
+    assert_eq!(
+        inject_lines(&state).len(),
+        before,
+        "通した周は記録も残さない"
+    );
+
+    // 負例。口を成す述語を**1 つずつ**外した形は、いずれも上限に掛かる。1 つの負例で
+    // 済ませると、他の述語を消す変異が全部生き残る（実測 2026-09-10・lens-383 F1:
+    // `notes.md` は長さ照合だけで落ちるので dir 名・前置き・後置き・段数の assert が空虚だった）。
+    for (why, rel) in [
+        ("dir 名が違う", "docs/working-memory.x.md"),
+        ("直下でない（段が深い）", "a/.claude-session/working-memory.x.md"),
+        ("前置きが違う", ".claude-session/some-quite-long-name.md"),
+        ("後置きが違う", ".claude-session/working-memory.x.txt"),
+        ("前置きと後置きが重なる", ".claude-session/working-memory.md"),
+        ("退避 dir の別名", ".claude-session/notes.md"),
+    ] {
+        let other = repo.join(rel);
+        let out = run_hook_args(
+            &["pre-tool-use", "--state-dir", &state.display().to_string()],
+            &seat_payload(&repo, "Write", &other.display().to_string(), Some(&script)),
+        );
+        assert_eq!(
+            out.status.code(),
+            Some(i32::from(RC_BROKEN)),
+            "{why} は口に入れない（{rel}）: {}",
+            stderr_text(&out)
+        );
+    }
+    clean(&[&repo, &state]);
+}
+
+/// 上限**未満**の周は 1 byte も書かない（hook budget を毎編集の追記で食い潰さない）。
+#[test]
+fn hook_seat_guard_is_silent_below_cap() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    let script = transcript_at(&state, "small.jsonl", &usage_jsonl(100_000));
+    let before = inject_lines(&state).len();
+    let target = repo.join("src").join("lib.rs");
+    let out = run_hook_args(
+        &["pre-tool-use", "--state-dir", &state.display().to_string()],
+        &seat_payload(&repo, "Edit", &target.display().to_string(), Some(&script)),
+    );
+    assert_silent(&out, "上限未満は黙って通す");
+    assert_eq!(
+        inject_lines(&state).len(),
+        before,
+        "上限未満は記録も残さない"
+    );
+    clean(&[&repo, &state]);
+}
+
+/// **測れない周は deny しない**——ただし測れていないことを記録に 1 行残す（FR26 / FR21）。
+///
+/// 3 通りとも通し、理由を弁別して書く。理由を 1 語へ潰すと「transcript を渡し忘れている」
+/// のか「usage の形が変わった」のかを、記録から後で分けられない。
+#[test]
+fn hook_seat_guard_allows_and_records_when_unmeasured() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    let missing = state.join("nope.jsonl").display().to_string();
+    let empty = transcript_at(&state, "empty.jsonl", "{\"type\":\"user\"}\n");
+    let target = repo.join("src").join("lib.rs").display().to_string();
+    let cases: [(Option<&str>, &str); 3] = [
+        (None, "no-transcript-path"),
+        (Some(&missing), "unreadable"),
+        (Some(&empty), "no-usage"),
+    ];
+    for (transcript, reason) in cases {
+        let before = inject_lines(&state).len();
+        let out = run_hook_args(
+            &["pre-tool-use", "--state-dir", &state.display().to_string()],
+            &seat_payload(&repo, "Edit", &target, transcript),
+        );
+        assert_silent(&out, &format!("測れない周（{reason}）は通す"));
+        let lines = inject_lines(&state);
+        assert_eq!(lines.len(), before + 1, "{reason}: 記録は 1 行: {lines:?}");
+        assert_eq!(
+            what_of(&lines[lines.len() - 1]),
+            format!("seat-guard-unmeasured reason={reason}"),
+            "{reason}: 理由まで書く: {lines:?}"
+        );
+    }
+    clean(&[&repo, &state]);
+}
+
+/// 上限と窓は **manifest の行**が持つ（code に焼かない・憲法 C5 の裁定 id つき）。
+///
+/// base には行が無く `rules get` が rc 1 になる＝この歯は base で RED である。
+#[test]
+fn rules_manifest_carries_seat_rows() {
+    for (id, want) in [
+        ("seat.context_cap_pct", "60"),
+        ("seat.context_window_tokens", "1000000"),
+    ] {
+        let out = Command::new(bin())
+            .args(["rules", "get", id])
+            .output()
+            .unwrap_or_else(|err| panic!("binary を起動できる: {err}"));
+        assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{id} は読める");
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout).trim(),
+            want,
+            "{id} の値"
+        );
+    }
+}
+
+/// 境界は「上限**以上**で止める」（`>=` を `>` へ緩める変異はここで落ちる）。
+///
+/// 600000 / 1000000 = ちょうど 60%。真に超過した周（65%）だけで測ると等号側が空虚になる
+/// ——歯の名前が `at_or_above` と名乗っているのに `above` しか撃っていない状態だった
+/// （実測 2026-09-10・lens-383 F2）。
+#[test]
+fn hook_seat_guard_denies_exactly_at_cap() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    let script = transcript_at(&state, "edge.jsonl", &usage_jsonl(600_000));
+    let target = repo.join("src").join("lib.rs");
+    let out = run_hook_args(
+        &["pre-tool-use", "--state-dir", &state.display().to_string()],
+        &seat_payload(&repo, "Edit", &target.display().to_string(), Some(&script)),
+    );
+    assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "ちょうど上限でも止める");
+    let text = stderr_text(&out);
+    assert!(text.contains("context 60% ≥ cap 60%"), "等号の周の判定文: {text}");
+    clean(&[&repo, &state]);
+}
+
+/// **`Bash` は見ない**（write-set guard と同じ集合だけを見る）。
+///
+/// 上限を超えた transcript を添えても `Bash` は通り、記録も残らない。tool 集合の照合を
+/// 落とす変異は、ここで `Bash` が deny されて落ちる——上限未満の payload で測ると、
+/// その変異は同じく 0 byte を返すので生き残る（実測 2026-09-10・lens-383 F3）。
+#[test]
+fn hook_seat_guard_ignores_bash_even_above_cap() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    let script = transcript_at(&state, "big.jsonl", &usage_jsonl(650_000));
+    let before = inject_lines(&state).len();
+    let target = repo.join("src").join("lib.rs");
+    let out = run_hook_args(
+        &["pre-tool-use", "--state-dir", &state.display().to_string()],
+        &seat_payload(&repo, "Bash", &target.display().to_string(), Some(&script)),
+    );
+    assert_silent(&out, "Bash は上限以上でも見ない");
+    assert_eq!(inject_lines(&state).len(), before, "Bash の周は記録も残さない");
+    clean(&[&repo, &state]);
+}
+
+/// 退避の口は **link で口の外を指す file** を通さない（通す側は実体まで見る）。
+///
+/// 字句 1 段だけだと、`working-memory.*.md` という名前の symlink を 1 本張るだけで
+/// 口の外の file を上限越しに書ける（実測 2026-09-10・lens-383 F4: `src/lib.rs` への
+/// link が 65% で rc 0 になった）。
+#[test]
+fn hook_seat_guard_rejects_externalize_symlink_out_of_mouth() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    let script = transcript_at(&state, "big.jsonl", &usage_jsonl(650_000));
+    let session = repo.join(".claude-session");
+    fs::create_dir_all(&session).unwrap_or_else(|err| panic!("退避 dir を作れる: {err}"));
+    let link = session.join("working-memory.z.md");
+    std::os::unix::fs::symlink(repo.join("src").join("lib.rs"), &link)
+        .unwrap_or_else(|err| panic!("symlink を張れる: {err}"));
+    let out = run_hook_args(
+        &["pre-tool-use", "--state-dir", &state.display().to_string()],
+        &seat_payload(&repo, "Write", &link.display().to_string(), Some(&script)),
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(i32::from(RC_BROKEN)),
+        "口の外を指す link は通さない: {}",
+        stderr_text(&out)
+    );
+
+    // 負例。**まだ無い**退避物（これから作る周）は link ではありえないので通る
+    // ——在ることを口の条件にすると退避そのものが止まる。
+    let fresh = session.join("working-memory.fresh.md").display().to_string();
+    let out = run_hook_args(
+        &["pre-tool-use", "--state-dir", &state.display().to_string()],
+        &seat_payload(&repo, "Write", &fresh, Some(&script)),
+    );
+    assert_silent(&out, "まだ無い退避物は通す");
+    clean(&[&repo, &state]);
+}
+
+/// `transcript_path` が**空文字**の周は「渡されていない」と同じに扱う。
+///
+/// 空の口をそのまま path として扱うと `unreadable`（file が壊れている）に化け、記録から
+/// 原因を取り違える（実測 2026-09-10・lens-383 F7）。
+#[test]
+fn hook_seat_guard_treats_empty_transcript_path_as_absent() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    let before = inject_lines(&state).len();
+    let target = repo.join("src").join("lib.rs");
+    let out = run_hook_args(
+        &["pre-tool-use", "--state-dir", &state.display().to_string()],
+        &seat_payload(&repo, "Edit", &target.display().to_string(), Some("")),
+    );
+    assert_silent(&out, "空の transcript_path でも通す");
+    let lines = inject_lines(&state);
+    assert_eq!(lines.len(), before + 1, "記録は 1 行: {lines:?}");
+    assert_eq!(
+        what_of(&lines[lines.len() - 1]),
+        "seat-guard-unmeasured reason=no-transcript-path",
+        "空文字は渡し忘れとして書く（unreadable ではない）: {lines:?}"
+    );
+    clean(&[&repo, &state]);
+}
