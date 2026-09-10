@@ -163,3 +163,17 @@ kind = "HookTimeoutS"
 value = 10
 ruling = "user 2026-09-09T09:08Z"
 ruled_at = "2026-09-09"
+
+[[rule]]
+id = "seat.context_cap_pct"
+kind = "SeatContextCapPct"
+value = 60
+ruling = "user 2026-09-09T22:20Z"
+ruled_at = "2026-09-10"
+
+[[rule]]
+id = "seat.context_window_tokens"
+kind = "SeatContextWindowTokens"
+value = 1000000
+ruling = "user 2026-09-09T23:51Z"
+ruled_at = "2026-09-09"

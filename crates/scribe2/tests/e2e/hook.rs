@@ -767,3 +767,186 @@ fn vessel_external_form() {
     let form = [marker.render().trim_end().to_owned(), vessel::hook::vessel::usage()].join("\n");
     insta::assert_snapshot!(form);
 }
+
+/// transcript を名指す payload（`transcript_path` は payload の top-level）。
+fn seat_payload(cwd: &Path, tool: &str, file: &str, transcript: Option<&str>) -> String {
+    let head = match transcript {
+        Some(found) => format!("\"transcript_path\":\"{found}\","),
+        None => String::new(),
+    };
+    format!(
+        "{{\"cwd\":\"{}\",{head}\"tool_name\":\"{tool}\",\"tool_input\":{{\"file_path\":\"{file}\"}}}}",
+        cwd.display()
+    )
+}
+
+/// 使用 token が `used` になる transcript を書き、その path を返す。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn transcript_at(dir: &Path, name: &str, body: &str) -> String {
+    let path = dir.join(name);
+    fs::write(&path, body).expect("transcript を書ける");
+    path.display().to_string()
+}
+
+/// `used` token ちょうどの有効な usage 行 1 本。
+fn usage_jsonl(used: u64) -> String {
+    format!(
+        "{{\"type\":\"assistant\",\"isSidechain\":false,\"message\":{{\"usage\":{{\"input_tokens\":{used},\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0}}}}}}\n"
+    )
+}
+
+/// 記録 1 行の `what`。
+fn what_of(line: &str) -> String {
+    match value_of(line, "what") {
+        Some(json_lite::Value::Str(found)) => found,
+        _ => String::new(),
+    }
+}
+
+/// 上限**以上**の周は編集を止める（rc 2 + stderr 1 行 + stdout 0 byte + 記録 1 行）。
+///
+/// 宣言（rules 行）は cap 60% / 窓 1000000 token なので、650000 は 65% で上限以上である。
+#[test]
+fn hook_seat_guard_denies_edit_at_or_above_cap() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    let script = transcript_at(&state, "big.jsonl", &usage_jsonl(650_000));
+    let before = inject_lines(&state).len();
+    let target = repo.join("src").join("lib.rs");
+    let out = run_hook_args(
+        &["pre-tool-use", "--state-dir", &state.display().to_string()],
+        &seat_payload(&repo, "Edit", &target.display().to_string(), Some(&script)),
+    );
+    assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "上限以上は rc 2");
+    assert!(out.stdout.is_empty(), "deny の stdout は 0 byte");
+    assert_eq!(stderr_lines(&out), 1, "deny の stderr は 1 行");
+    let text = stderr_text(&out);
+    assert!(text.contains(&format!("{NAME}: deny context ")), "判定文が名乗る: {text}");
+    assert!(text.contains("65%"), "実測の使用率を名指す: {text}");
+    assert!(text.contains("cap 60%"), "宣言の上限を名指す: {text}");
+    let lines = inject_lines(&state);
+    assert_eq!(lines.len(), before + 1, "記録は 1 行だけ増える: {lines:?}");
+    assert_eq!(
+        what_of(&lines[lines.len() - 1]),
+        "seat-guard-deny",
+        "記録の what: {lines:?}"
+    );
+    clean(&[&repo, &state]);
+}
+
+/// **退避の口は上限に関わらず通す**（止めると席は退避すらできない・FR23）。
+///
+/// 同じ transcript（65%＝上限以上）で、編集先だけを退避物に替えると通る。負例を兼ねる:
+/// 上の歯と差し替わるのは `file_path` 1 つだけなので、退避の口が効いていなければ落ちる。
+#[test]
+fn hook_seat_guard_lets_externalize_through_above_cap() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    let script = transcript_at(&state, "big.jsonl", &usage_jsonl(650_000));
+    let before = inject_lines(&state).len();
+    let wm = repo.join(".claude-session").join("working-memory.x.md");
+    let out = run_hook_args(
+        &["pre-tool-use", "--state-dir", &state.display().to_string()],
+        &seat_payload(&repo, "Write", &wm.display().to_string(), Some(&script)),
+    );
+    assert_silent(&out, "退避の口は上限以上でも通る");
+    assert_eq!(
+        inject_lines(&state).len(),
+        before,
+        "通した周は記録も残さない"
+    );
+
+    // 負例。同じ dir でも**退避物の名前でない**編集は上限に掛かる（口を広く取っていない）。
+    let other = repo.join(".claude-session").join("notes.md");
+    let out = run_hook_args(
+        &["pre-tool-use", "--state-dir", &state.display().to_string()],
+        &seat_payload(&repo, "Write", &other.display().to_string(), Some(&script)),
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(i32::from(RC_BROKEN)),
+        "退避 dir でも別名の編集は止める: {}",
+        stderr_text(&out)
+    );
+    clean(&[&repo, &state]);
+}
+
+/// 上限**未満**の周は 1 byte も書かない（hook budget を毎編集の追記で食い潰さない）。
+#[test]
+fn hook_seat_guard_is_silent_below_cap() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    let script = transcript_at(&state, "small.jsonl", &usage_jsonl(100_000));
+    let before = inject_lines(&state).len();
+    let target = repo.join("src").join("lib.rs");
+    let out = run_hook_args(
+        &["pre-tool-use", "--state-dir", &state.display().to_string()],
+        &seat_payload(&repo, "Edit", &target.display().to_string(), Some(&script)),
+    );
+    assert_silent(&out, "上限未満は黙って通す");
+    assert_eq!(
+        inject_lines(&state).len(),
+        before,
+        "上限未満は記録も残さない"
+    );
+    clean(&[&repo, &state]);
+}
+
+/// **測れない周は deny しない**——ただし測れていないことを記録に 1 行残す（FR26 / FR21）。
+///
+/// 3 通りとも通し、理由を弁別して書く。理由を 1 語へ潰すと「transcript を渡し忘れている」
+/// のか「usage の形が変わった」のかを、記録から後で分けられない。
+#[test]
+fn hook_seat_guard_allows_and_records_when_unmeasured() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    let missing = state.join("nope.jsonl").display().to_string();
+    let empty = transcript_at(&state, "empty.jsonl", "{\"type\":\"user\"}\n");
+    let target = repo.join("src").join("lib.rs").display().to_string();
+    let cases: [(Option<&str>, &str); 3] = [
+        (None, "no-transcript-path"),
+        (Some(&missing), "unreadable"),
+        (Some(&empty), "no-usage"),
+    ];
+    for (transcript, reason) in cases {
+        let before = inject_lines(&state).len();
+        let out = run_hook_args(
+            &["pre-tool-use", "--state-dir", &state.display().to_string()],
+            &seat_payload(&repo, "Edit", &target, transcript),
+        );
+        assert_silent(&out, &format!("測れない周（{reason}）は通す"));
+        let lines = inject_lines(&state);
+        assert_eq!(lines.len(), before + 1, "{reason}: 記録は 1 行: {lines:?}");
+        assert_eq!(
+            what_of(&lines[lines.len() - 1]),
+            format!("seat-guard-unmeasured reason={reason}"),
+            "{reason}: 理由まで書く: {lines:?}"
+        );
+    }
+    clean(&[&repo, &state]);
+}
+
+/// 上限と窓は **manifest の行**が持つ（code に焼かない・憲法 C5 の裁定 id つき）。
+///
+/// base には行が無く `rules get` が rc 1 になる＝この歯は base で RED である。
+#[test]
+fn rules_manifest_carries_seat_rows() {
+    for (id, want) in [
+        ("seat.context_cap_pct", "60"),
+        ("seat.context_window_tokens", "1000000"),
+    ] {
+        let out = Command::new(bin())
+            .args(["rules", "get", id])
+            .output()
+            .unwrap_or_else(|err| panic!("binary を起動できる: {err}"));
+        assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{id} は読める");
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout).trim(),
+            want,
+            "{id} の値"
+        );
+    }
+}

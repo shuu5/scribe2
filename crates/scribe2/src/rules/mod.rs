@@ -73,6 +73,10 @@ pub enum RuleKind {
     LockStaleMs,
     /// hook の timeout（秒）。
     HookTimeoutS,
+    /// 席の context 使用率の上限（百分率）。超えると退避以外の編集を止める。
+    SeatContextCapPct,
+    /// 席の context 窓の宣言値（token）。使用率の分母である。
+    SeatContextWindowTokens,
 }
 
 /// [`RuleKind`] の全 variant。parity test の母集団である。
@@ -99,6 +103,8 @@ pub const ALL: &[RuleKind] = &[
     RuleKind::LockRetryMs,
     RuleKind::LockStaleMs,
     RuleKind::HookTimeoutS,
+    RuleKind::SeatContextCapPct,
+    RuleKind::SeatContextWindowTokens,
 ];
 
 impl RuleKind {
@@ -127,6 +133,8 @@ impl RuleKind {
             Self::LockRetryMs => "LockRetryMs",
             Self::LockStaleMs => "LockStaleMs",
             Self::HookTimeoutS => "HookTimeoutS",
+            Self::SeatContextCapPct => "SeatContextCapPct",
+            Self::SeatContextWindowTokens => "SeatContextWindowTokens",
         }
     }
 
@@ -148,7 +156,9 @@ impl RuleKind {
             | Self::StopGraceMs
             | Self::LockRetryMs
             | Self::LockStaleMs
-            | Self::HookTimeoutS => ValueShape::Int,
+            | Self::HookTimeoutS
+            | Self::SeatContextCapPct
+            | Self::SeatContextWindowTokens => ValueShape::Int,
             Self::DialogueSurface => ValueShape::Str,
             Self::MaturityCondition
             | Self::AccountSelection
