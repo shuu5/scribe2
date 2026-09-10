@@ -1,8 +1,8 @@
 //! `rules/manifest.toml` を std だけで読む面（ADR-0004 §2.3・SRS NFR3）。
 //!
 //! 受理するのは TOML の部分集合である: 先頭の `schema = 1`・`[[rule]]` の
-//! array-of-tables・値は string / integer / bool のみ。**最初の 1 件で止めず**
-//! 違反を全件集めて返す（silent drop 禁止・SRS NFR4）。
+//! array-of-tables・値は string / integer / bool と**文字列の配列**（1 行で閉じる）。
+//! **最初の 1 件で止めず**違反を全件集めて返す（silent drop 禁止・SRS NFR4）。
 
 use super::{Rule, RuleError, RuleKind, RuleRow, RuleValue, ValueShape};
 use std::path::Path;
@@ -26,7 +26,8 @@ const REQUIRED_KEYS: &[&str] = &["id", "kind", "value", "ruling", "ruled_at"];
 ///
 /// `pipe` の契約 file も同じ subset の値を持つので、この型と [`scalar`] を器の中で
 /// 共有する（第 2 の値 parser を作らない・憲法 C6）。**受理集合はここが唯一の定義**で、
-/// 配列の層は契約 file 側が持つ（rules manifest は配列を持たない＝挙動は不変）。
+/// 配列の層も同じ module の [`list`] / [`elements`] / [`quoted_once`] が持つ
+/// （rules manifest も契約 file も同じ切り方で読む・s2-07l.55）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Scalar {
     /// 非負整数。
@@ -37,10 +38,26 @@ pub enum Scalar {
     Bool(bool),
 }
 
+/// 1 つの key が持てる生の値。**配列の層はここが唯一の定義**である。
+///
+/// `pipe` の契約 file も同じ切り方（[`elements`] / [`quoted_once`]）を使う
+/// ——配列を読む実装が 2 本あると、書いた本数と通る本数の食い違いが片側だけ直る。
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RawValue {
+    /// 単一の値。
+    One(Scalar),
+    /// 文字列の列。
+    List(Vec<String>),
+    /// 読めなかった値。**scan の時点で 1 件報告済み**なので、以降の段はこの値に
+    /// ついて何も言わない——同じ欠陥を 2 行にしないためであり、とりわけ
+    /// 「必須 key value が無い」と**嘘をつかない**ため（key は在って値が壊れている）。
+    Broken,
+}
+
 /// `[[rule]]` 1 つ分の生の key/value。
 struct RawRow {
     line: u64,
-    fields: Vec<(String, Scalar, u64)>,
+    fields: Vec<(String, RawValue, u64)>,
 }
 
 /// 読み込み済みの manifest。
@@ -139,24 +156,115 @@ fn scan_pair(
         return;
     };
     let key = key.trim().to_owned();
-    let Some(value) = scalar(raw_value.trim()) else {
-        errors.push(RuleError::new(
-            line,
-            format!("{key} の value が TOML subset の形でない（string / integer / bool のみ）"),
-        ));
-        return;
+    let raw = raw_value.trim();
+    let value = if raw.starts_with('[') {
+        match list(raw) {
+            Ok(items) => RawValue::List(items),
+            Err(reason) => {
+                errors.push(RuleError::new(line, format!("{key} の {reason}")));
+                RawValue::Broken
+            }
+        }
+    } else {
+        match scalar(raw) {
+            Some(found) => RawValue::One(found),
+            None => {
+                errors.push(RuleError::new(
+                    line,
+                    format!(
+                        "{key} の value が TOML subset の形でない（string / integer / bool / 文字列の配列のみ）"
+                    ),
+                ));
+                RawValue::Broken
+            }
+        }
     };
     match current {
         Some(row) => row.fields.push((key, value, line)),
         None if key == "schema" && schema.is_some() => {
             errors.push(RuleError::new(line, "schema が重複する".to_owned()));
         }
-        None if key == "schema" => *schema = Some((line, value)),
+        None if key == "schema" => match value {
+            RawValue::One(found) => *schema = Some((line, found)),
+            RawValue::List(_) => {
+                errors.push(RuleError::new(line, "schema は配列でない".to_owned()));
+            }
+            // 読めなかった値は scan が報告済み（`schema` は未設定のまま＝
+            // `check_schema` が「無い」と言う。値の欠陥と schema の不在は別件である）。
+            RawValue::Broken => {}
+        },
         None => errors.push(RuleError::new(
             line,
             format!("[[rule]] の外に未知の key {key} が在る"),
         )),
     }
+}
+
+/// TOML の**文字列の配列**を要素へ切る（1 行で閉じること）。
+///
+/// **空の配列は受けない**——「規則が無い」を空 array で表せてしまうと、書き間違いの
+/// `value = []` が allowlist を空のまま効かせる（空の口は「成功」に化ける）。
+/// 要素は [`scalar`] で読み、引用符 1 組ちょうどでなければ受けない
+/// （`["a" "b"]` の区切り忘れを 1 本の壊れた文字列として黙って通さない・NFR4）。
+/// **空文字の要素も受けない**——command 名や verify 行として空を通すと、何もしない口が
+/// 規則の顔で並ぶ。
+pub fn list(raw: &str) -> Result<Vec<String>, String> {
+    if !raw.ends_with(']') {
+        return Err("配列が同じ行で閉じていない（要素に改行は置けない）".to_owned());
+    }
+    let Some(parts) = elements(raw) else {
+        return Err("配列の引用符が閉じていない".to_owned());
+    };
+    if parts.is_empty() {
+        return Err("配列が空である（規則が無いことを空の配列で表さない）".to_owned());
+    }
+    let mut items = Vec::new();
+    for part in parts {
+        let trimmed = part.trim();
+        match scalar(trimmed).filter(|_| quoted_once(trimmed)) {
+            Some(Scalar::Str(text)) if !text.is_empty() => items.push(text),
+            Some(Scalar::Str(_)) => return Err(format!("配列の要素が空文字である: {trimmed}")),
+            _ => return Err(format!("配列の要素が引用符 1 組の文字列でない: {trimmed}")),
+        }
+    }
+    Ok(items)
+}
+
+/// 要素が引用符 1 組ちょうどか（中に裸の `"` を含まない）。
+///
+/// **配列を読む面はここと [`elements`] の 1 組だけ**である（`pipe` の契約 file も
+/// これを呼ぶ）。
+pub fn quoted_once(text: &str) -> bool {
+    text.trim()
+        .strip_prefix('"')
+        .and_then(|rest| rest.strip_suffix('"'))
+        .is_some_and(|body| !body.contains('"'))
+}
+
+/// `["a", "b"]` を要素へ切る。要素の中の `,` は quote の内側として扱う。
+pub fn elements(raw: &str) -> Option<Vec<String>> {
+    let body = raw.strip_prefix('[')?.strip_suffix(']')?;
+    let mut parts: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut inside = false;
+    for ch in body.chars() {
+        match ch {
+            '"' => {
+                inside = !inside;
+                current.push(ch);
+            }
+            ',' if !inside => parts.push(std::mem::take(&mut current)),
+            _ => current.push(ch),
+        }
+    }
+    if inside {
+        return None;
+    }
+    parts.push(current);
+    if parts.last().is_some_and(|last| last.trim().is_empty()) {
+        parts.pop();
+    }
+    Some(parts)
 }
 
 /// 値 1 つを読む。受理するのは `"..."` / 整数 / `true` / `false` だけ。
@@ -256,7 +364,9 @@ fn check_keys(raw: &RawRow, errors: &mut Vec<RuleError>) {
 fn text_field(raw: &RawRow, key: &str, errors: &mut Vec<RuleError>) -> Option<String> {
     let (_, value, line) = raw.fields.iter().find(|(found, _, _)| found == key)?;
     match value {
-        Scalar::Str(text) => Some(text.clone()),
+        RawValue::One(Scalar::Str(text)) => Some(text.clone()),
+        // 報告済みの欠陥は 2 行にしない。
+        RawValue::Broken => None,
         other => {
             errors.push(RuleError::new(
                 *line,
@@ -271,7 +381,8 @@ fn text_field(raw: &RawRow, key: &str, errors: &mut Vec<RuleError>) -> Option<St
 fn bool_field(raw: &RawRow, key: &str, errors: &mut Vec<RuleError>) -> Option<bool> {
     let (_, value, line) = raw.fields.iter().find(|(found, _, _)| found == key)?;
     match value {
-        Scalar::Bool(found) => Some(*found),
+        RawValue::One(Scalar::Bool(found)) => Some(*found),
+        RawValue::Broken => None,
         other => {
             errors.push(RuleError::new(
                 *line,
@@ -306,18 +417,22 @@ fn value_field(
 ) -> Option<RuleValue> {
     let (_, scalar, line) = raw.fields.iter().find(|(key, _, _)| key == "value")?;
     match scalar {
-        Scalar::Int(found) => Some(RuleValue::Int(*found)),
-        Scalar::Str(text) => Some(match kind.shape() {
+        // **形の照合はここでしない**（`RuleRow::validate` の 1 箇所が持つ）。ここで
+        // 弾くと、kind と value の対応を測る面が 2 つになる。
+        RawValue::List(items) => Some(RuleValue::List(items.clone())),
+        RawValue::One(Scalar::Int(found)) => Some(RuleValue::Int(*found)),
+        RawValue::One(Scalar::Str(text)) => Some(match kind.shape() {
             ValueShape::Policy => RuleValue::Policy(text.clone()),
-            ValueShape::Int | ValueShape::Str => RuleValue::Str(text.clone()),
+            ValueShape::Int | ValueShape::Str | ValueShape::List => RuleValue::Str(text.clone()),
         }),
-        Scalar::Bool(_) => {
+        RawValue::One(Scalar::Bool(_)) => {
             errors.push(RuleError::new(
                 *line,
                 format!("{id} の value は integer か string でなければならない"),
             ));
             None
         }
+        RawValue::Broken => None,
     }
 }
 

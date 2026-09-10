@@ -7,7 +7,7 @@
 //! **検査は 1 か所に閉じ、見つけた不備は全件集めて返す**（C2 / FR1）。1 件目で止めると
 //! 直すたびに次の 1 件が出る形になり、契約を書き切れない。
 
-use crate::rules::manifest::{scalar, Scalar};
+use crate::rules::manifest::{elements, quoted_once, scalar, Scalar};
 use std::path::Path;
 
 /// 必ず在る key（この順で報告する）。
@@ -183,40 +183,6 @@ fn value_of(key: &str, raw: &str, line: u64, errors: &mut Vec<ContractError>) ->
         }
     }
     Some(Raw::List(list))
-}
-
-/// 要素が引用符 1 組ちょうどか（中に裸の `"` を含まない）。
-fn quoted_once(text: &str) -> bool {
-    text.trim()
-        .strip_prefix('"')
-        .and_then(|rest| rest.strip_suffix('"'))
-        .is_some_and(|body| !body.contains('"'))
-}
-
-/// `["a", "b"]` を要素へ切る。要素の中の `,` は quote の内側として扱う。
-fn elements(raw: &str) -> Option<Vec<String>> {
-    let body = raw.strip_prefix('[')?.strip_suffix(']')?;
-    let mut parts: Vec<String> = Vec::new();
-    let mut current = String::new();
-    let mut inside = false;
-    for ch in body.chars() {
-        match ch {
-            '"' => {
-                inside = !inside;
-                current.push(ch);
-            }
-            ',' if !inside => parts.push(std::mem::take(&mut current)),
-            _ => current.push(ch),
-        }
-    }
-    if inside {
-        return None;
-    }
-    parts.push(current);
-    if parts.last().is_some_and(|last| last.trim().is_empty()) {
-        parts.pop();
-    }
-    Some(parts)
 }
 
 /// 必須 key の欠落を全件積む。**書かれていれば値が壊れていても欠落とは言わない**。

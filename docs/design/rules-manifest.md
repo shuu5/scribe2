@@ -24,7 +24,7 @@
 
 - `pub enum RuleKind` — **閉じた列挙・`#[non_exhaustive]` 禁止**。variant を足したら網羅 `match` が compile error になる形を保つ（C1 / C11）。variant は §4.1 の行と 1:1。
 - `pub const ALL: &[RuleKind]` — parity test の母集団。
-- `pub enum RuleValue { Int(u64), Str(String), Policy(String) }`。`Int` = 閾値（単位は kind の doc コメント）。`Str` = 識別子（対話面の identity）。`Policy` = 散文で書かれた選定規則や検出線の定義（機械は `enabled` だけを読む。本文は憲法 §3 の写し）。
+- `pub enum RuleValue { Int(u64), Str(String), Policy(String), List(Vec<String>) }`。`Int` = 閾値（単位は kind の doc コメント）。`Str` = 識別子（対話面の identity）。`Policy` = 散文で書かれた選定規則や検出線の定義（機械は `enabled` だけを読む。本文は憲法 §3 の写し）。`List` = 文字列の列（allowlist・共通 verify のような**順序のある複数値**・ADR-0009）。**空の配列は受けない**——「規則が無い」を空で表せると、書き間違いの `value = []` が空の allowlist を効かせる。要素の空文字も受けない（何もしない口を規則の顔で並べない）。配列を切る実装は `rules::manifest` の `list` / `elements` / `quoted_once` の 1 組で、`pipe` の契約 file もこれを呼ぶ（読み方が 2 本に割れない）。
 - `pub trait Rule { fn kind(&self) -> RuleKind; fn validate(&self) -> Result<(), RuleError>; }` を `RuleRow` に実装。kind ごとの値型の対応は **`match kind { … }` 1 箇所・wildcard `_` 無し**。
 - `pub struct RuleRow { id, kind, value, enabled, ruling: String, ruled_at: String, line: u64 }`。
 - `RuleError` は `Display` で **1 件 1 行・`line=<N>` を含む**。
@@ -48,7 +48,7 @@ ruled_at = "2026-09-07"
 |---|---|---|---|
 | `id` | string | 必須・一意 | 行 id。§3 の行は `R-<条>-<番号>`、compound 行は `R-<条>-<番号>.<key>`（§3 の行 id が**接頭辞**として一致）、MVP の運用値は `<領域>.<名>` |
 | `kind` | string | 必須 | `RuleKind` の variant 名（字面一致） |
-| `value` | integer / string | 必須 | kind が定める型。`Policy` は string |
+| `value` | integer / string / 文字列の配列 | 必須 | kind が定める型。`Policy` は string、`List` は 1 行で閉じる string array（空・空要素は loud） |
 | `enabled` | bool | 省略時 true | false = 値は写すが機械は効かせない（停止・v3 送り） |
 | `ruling` | string | **必須** | 裁定 id。憲法 §3 と同じく裁定文書の論点番号、または裁定の UTC ts |
 | `ruled_at` | string | **必須** | 裁定の日付（UTC・分秒が資料に無ければ日まで） |
@@ -81,8 +81,10 @@ ruled_at = "2026-09-07"
 | `fleet.lock_retry_ms` | LockRetryMs | 5000 | true | user 2026-09-09T09:08Z / 2026-09-09 |
 | `fleet.lock_stale_ms` | LockStaleMs | 30000 | true | user 2026-09-09T09:08Z / 2026-09-09 |
 | `hook.timeout_s` | HookTimeoutS | 10 | true | user 2026-09-09T09:08Z / 2026-09-09（hooks.json の timeout・xtask がここから写す） |
+| `runner.allowed_commands` | RunnerAllowedCommands | `["cargo", "git"]` | true | user 裁定 2026-09-10（ADR-0009 §2.1）＝器が runner に与える command 名 |
+| `gate.common_verify` | GateCommonVerify | flip check + done の定義 4 本（5 行） | true | user 裁定 2026-09-10（ADR-0009 §2.4）＝gate が契約の verify の前に撃つ |
 
-`RuleKind` の variant はこの表の kind 列と 1:1（22 variant）。§3 の行 id は manifest の行 id の**接頭辞**として一致する（compound 行は `.` で枝分かれ）。後続の drift 歯は接頭辞で group 化して突合する。
+`RuleKind` の variant は **28**（`rules::ALL` が母集団）で、この表が値を持つのは **24 種**である。差の 4 種（`SeatContextCapPct` / `SeatContextWindowTokens` / `SeatTickStaleS` / `SeatCycleLockTtlS`）は seat autonomy の便で足されたまま**この表へ未追加**＝既知の drift である（本便で数え直した・2026-09-10）。§3 の行 id は manifest の行 id の**接頭辞**として一致する（compound 行は `.` で枝分かれ）。後続の drift 歯は接頭辞で group 化して突合する。
 
 ### 4.2 拒否 5 形（FR18・AC6・すべて `line=<N>` 付き・全件を集めて返す）
 
