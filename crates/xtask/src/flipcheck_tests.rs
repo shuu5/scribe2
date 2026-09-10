@@ -10,6 +10,12 @@
 //! base へ写り flip を検査される。名前で見なければ区間判定には src 区間だけの file に
 //! 見え、ここへ足した歯が 1 本も測られないままになる。
 
+// 本便（s2-07l.37）が足す歯は、既に land した `flipcheck.rs` の挙動を後から測る
+// ——実装は 1 byte も変えないので、歯をどこへ置いても base で緑になる。逃がしは
+// 下の 1 行で明示する（この file は名前で丸ごと test 区間ゆえ、ここに置いた札が効く。
+// fixture の文字列の中に居る札は行頭が `"` なので別物である）。
+// flip-check: retroactive s2-07l.37
+
 use super::{is_test_file, judge, judge_into, parse_base, split_regions, FilePair, Verdict};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -772,6 +778,127 @@ fn flip_check_emits_stale_marker_line_to_stderr() {
             .iter()
             .any(|line| line.starts_with("flip-check: stale-marker ")),
         "test 区間が動いていない便に stale を出さない: {src_lines:?}"
+    );
+}
+
+/// 札を **1 枚も持たない** file には `stale-marker` を出さない。
+///
+/// 「新しい札が 1 枚も無い」だけで stale と名乗る実装——`stale_marker()` の前半
+/// （HEAD の test 区間が札を持つか）を落として `fresh_markers().is_empty()` だけで
+/// 見る形——はここで落ちる。札と無縁の便、つまり flip-check が通す便の**ほとんど
+/// 全部**に「札を削除しろ」の 1 行が出る。狼少年にすると、本当に効かない札を見落とす。
+/// 既存の負例（[`flip_check_emits_stale_marker_line_to_stderr`] の 2 本）はどちらも
+/// **札を持つ** file なので、この変異を撃ち落とせない。
+#[test]
+fn flip_check_emits_no_stale_line_for_file_without_marker() {
+    let (dir, base) = base_commit();
+    // 札は 1 枚も置かず、base の src（`val()` は 1）では落ちる歯を 1 本足すだけ。
+    write_at(
+        &dir,
+        &lib_rel(),
+        &BASE_LIB.replace(
+            "mod checks {\n",
+            "mod checks {\n    #[test]\n    fn added_later() {\n        assert_eq!(super::val(), 2);\n    }\n",
+        ),
+    );
+    head_commit(&dir);
+    let mut lines: Vec<String> = Vec::new();
+    let got = judge_into(&base, &dir, &mut |line| lines.push(line.to_owned()));
+    drop_fixture(&dir);
+    assert_verdict(&got.line, got.code, 0, "RED-on-base ok");
+    let stale = lines
+        .iter()
+        .filter(|line| line.starts_with("flip-check: stale-marker "))
+        .count();
+    assert_eq!(
+        stale,
+        0,
+        "札の無い file に stale を出さない（sink は {} 行）: {lines:?}",
+        lines.len()
+    );
+}
+
+/// この便で **札の行を消した** file を `stale-marker` と呼ばない。
+///
+/// 効かない札の在処を **HEAD 側でなく base 側**で見る実装——`stale_marker()` の
+/// `head_test()` を `base_test()` へ替える変異——はここで落ちる。base に札が在れば、
+/// HEAD で消した後も「効かない札が在る」と言い続けるからである。札を消すのは
+/// stale の 1 行が出した指示に従った側の便で、そこへ同じ指示を返すと直し方が閉じない
+/// （消しても消しても言われる）。既存の歯は base と HEAD の**両方**に札を持つ便しか
+/// 撃たないので、この変異は生き残る。
+#[test]
+fn flip_check_does_not_call_removed_marker_stale() {
+    let (carried, _) = carried_pair();
+    // HEAD: 札の行を消し、歯を base の src（`val()` は 1）では落ちる形へ書き換える。
+    let head = carried
+        .replace("    // flip-check: retroactive s2-07l.33\n", "")
+        .replace(
+            "        assert_eq!(super::val(), 1);\n",
+            "        assert_eq!(super::val(), 2);\n",
+        );
+    let (dir, _) = base_commit();
+    let base = seed_fixture(&dir, &carried);
+    write_at(&dir, &lib_rel(), &head);
+    head_commit(&dir);
+    let mut lines: Vec<String> = Vec::new();
+    let got = judge_into(&base, &dir, &mut |line| lines.push(line.to_owned()));
+    drop_fixture(&dir);
+    assert_verdict(&got.line, got.code, 0, "RED-on-base ok");
+    let stale = lines
+        .iter()
+        .filter(|line| line.starts_with("flip-check: stale-marker "))
+        .count();
+    assert_eq!(
+        stale,
+        0,
+        "消した札を stale と呼ばない（sink は {} 行）: {lines:?}",
+        lines.len()
+    );
+}
+
+/// base の **src 区間にしか無い**札は持ち越しに数えない（比べるのは test 区間だけ）。
+///
+/// 持ち越しを base の **全文**から拾う実装——`fresh_markers()` の
+/// `marker_beads(&self.base_test())` を base 本文へ広げる変異——はここで落ちる。
+/// src 区間へ同じ id を 1 行置いておけば、test 区間へ足した札が「持ち越し」に化けて
+/// **黙って無効化**され、その便は `green-on-base` の偽 FAIL になる。効く札は test 区間の
+/// ものだけ（[`flip_check_reports_retroactive_marker_instead_of_failing`] の (b)）だが、
+/// **効かない側を持ち越しに数えてもいけない**——src の 1 行はどちらの側でも数えない。
+/// 既存の歯は src 側の札を HEAD にしか置かないので、この変異は生き残る。
+#[test]
+fn flip_check_treats_marker_carried_only_outside_tests_as_fresh() {
+    // base: src 区間（`pub fn val` の直前の行）にだけ札が在る。
+    let base_lib = BASE_LIB.replace(
+        "pub fn val() -> u32 {\n",
+        "// flip-check: retroactive s2-07l.37x\npub fn val() -> u32 {\n",
+    );
+    // HEAD: test 区間へ**同じ id** の札と、base で緑の歯を 1 本足す。
+    let head = base_lib.replace(
+        "mod checks {\n",
+        "mod checks {\n    // flip-check: retroactive s2-07l.37x\n    #[test]\n    fn added_later() {\n        assert_eq!(super::val(), 1);\n    }\n",
+    );
+    let (dir, _) = base_commit();
+    let base = seed_fixture(&dir, &base_lib);
+    write_at(&dir, &lib_rel(), &head);
+    head_commit(&dir);
+    let mut lines: Vec<String> = Vec::new();
+    let got = judge_into(&base, &dir, &mut |line| lines.push(line.to_owned()));
+    drop_fixture(&dir);
+    assert_verdict(&got.line, got.code, 0, "RED-on-base ok");
+    assert!(
+        got.line.contains("retroactive=1"),
+        "test 区間へ足した札は効くはず: {}",
+        got.line
+    );
+    let stale = lines
+        .iter()
+        .filter(|line| line.starts_with("flip-check: stale-marker "))
+        .count();
+    assert_eq!(
+        stale,
+        0,
+        "効いた札に stale を出さない（sink は {} 行）: {lines:?}",
+        lines.len()
     );
 }
 
