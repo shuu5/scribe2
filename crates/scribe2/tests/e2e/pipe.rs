@@ -2694,10 +2694,12 @@ fn toy_compliant_refusal(toy: &Toy<'_>, contract: &Path) {
     let row = vessel::fleet::json_lite::parse_object(log.lines().next().unwrap_or_default().trim())
         .unwrap_or_default();
     assert_eq!(value_of(&row, "n"), "1", "verify は逐条で残る（1 行目）: {log}");
-    assert_ne!(
-        value_of(&row, "rc"),
-        "0",
-        "goal が求める docs/out.md は fence の外＝verify が赤い: {log}"
+    // **数値で測る**: `value_of` は key が無いと空文字を返すので、字面の `!= "0"` だと
+    // `rc` が消えた・改名された退行まで真になってしまう（fail-open）。
+    let rc: u64 = value_of(&row, "rc").parse().unwrap_or_default();
+    assert!(
+        rc > 0,
+        "goal が求める docs/out.md は fence の外＝verify が赤い（rc={rc}）: {log}"
     );
     // 判定順どおり、verify が赤い周は lens を**呼ばない**（PASS を返す lens を渡しても
     // 便は通らない＝gate が lens の顔色で通す形になっていないことまで測る）。
