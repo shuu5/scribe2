@@ -6,6 +6,8 @@
 //! rc は `main` が返す [`ExitCode`] で表し、helper から `process::exit` は呼ばない。
 
 mod check;
+mod check_facts;
+mod check_sizes;
 mod claude_md;
 mod flipcheck;
 mod genmanifest;

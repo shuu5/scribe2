@@ -6,10 +6,7 @@
 //! （[`summary`]）と、それが出す判定行そのものである（ADR-0013 §2.1）。doc へ写した列挙は
 //! 腐るので、増減のたびに doc を直す形を採らない。
 
-use crate::genmanifest::MANIFEST_REL;
-use crate::limits::{ALLOWED_DEPS, MAX_CORE_LINES, MAX_FILE_LINES, REQUIRED_LINTS};
-use crate::toml_lite::{entries_in, lint_level, quoted, sections, string_array};
-use std::collections::BTreeSet;
+use crate::toml_lite::{entries_in, quoted, string_array};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -70,7 +67,7 @@ impl Layout {
     }
 
     /// core crate の `[package]` から 1 key を読む。
-    fn core_package_field(&self, key: &str) -> Result<String, String> {
+    pub(crate) fn core_package_field(&self, key: &str) -> Result<String, String> {
         let manifest = read_text(&self.core_dir.join("Cargo.toml"))?;
         package_field(&manifest, key)
             .ok_or_else(|| format!("{} の [package] に {key} が無い", self.core_dir.display()))
@@ -94,21 +91,21 @@ pub(crate) struct Measured {
 }
 
 /// 読み込んだ `.rs` 1 本。
-struct SourceFile {
+pub(crate) struct SourceFile {
     /// 絶対 path。
-    path: PathBuf,
+    pub(crate) path: PathBuf,
     /// 本文。
-    text: String,
+    pub(crate) text: String,
 }
 
 impl SourceFile {
     /// 物理行数（末尾改行の有無で差を出さない）。
-    fn lines(&self) -> usize {
+    pub(crate) fn lines(&self) -> usize {
         self.text.lines().count()
     }
 
     /// 最初に現れる行頭 `#[cfg(test)]` から file 末尾までを test 行、残りを src 行と数える。
-    fn split_test_src(&self) -> (usize, usize) {
+    pub(crate) fn split_test_src(&self) -> (usize, usize) {
         let lines: Vec<&str> = self.text.lines().collect();
         match lines.iter().position(|line| line.starts_with(TEST_MOD_MARK)) {
             Some(at) => (lines.len().saturating_sub(at), at),
@@ -128,15 +125,15 @@ pub fn inspect(root: &Path) -> Report {
         Err(reason) => return blocked(&reason),
     };
     let mut measured = vec![
-        measure_core_lines(&layout, &files),
-        measure_file_lines(&files),
-        measure_test_src_ratio(&files),
-        measure_name_literal(&layout, &files),
+        crate::check_sizes::measure_core_lines(&layout, &files),
+        crate::check_sizes::measure_file_lines(&files),
+        crate::check_sizes::measure_test_src_ratio(&files),
+        crate::check_sizes::measure_name_literal(&layout, &files),
     ];
-    measured.extend(measure_manifests(&layout));
-    measured.extend(measure_lints(&layout));
-    measured.push(measure_deps_empty(&layout));
-    measured.push(measure_toolchain_pin(&layout));
+    measured.extend(crate::check_facts::measure_manifests(&layout));
+    measured.extend(crate::check_facts::measure_lints(&layout));
+    measured.push(crate::check_facts::measure_deps_empty(&layout));
+    measured.push(crate::check_facts::measure_toolchain_pin(&layout));
     measured.push(crate::paths_clean::measure(&layout));
     measured.push(crate::non_rust_exec::measure(&layout));
     measured.push(crate::non_rust_exec::ci_shell_lines(&layout));
@@ -184,431 +181,8 @@ pub(crate) fn failed(tag: &str, reason: &str) -> Measured {
     }
 }
 
-/// core crate の `src` 配下の総行数（core-lines）。
-fn measure_core_lines(layout: &Layout, files: &[SourceFile]) -> Measured {
-    let core_src = layout.core_dir.join("src");
-    let total: usize = files
-        .iter()
-        .filter(|file| file.path.starts_with(&core_src))
-        .map(SourceFile::lines)
-        .sum();
-    let mut violations = Vec::new();
-    if total > MAX_CORE_LINES {
-        violations.push(format!(
-            "core-lines: core crate の src が {total} 行で上限 {MAX_CORE_LINES} 行を超える"
-        ));
-    }
-    Measured {
-        fact: format!("core-lines={total}/{MAX_CORE_LINES}"),
-        violations,
-    }
-}
-
-/// `crates/*/src` 配下 `.rs` の 1 file 行数（file-lines）。
-fn measure_file_lines(files: &[SourceFile]) -> Measured {
-    let mut violations = Vec::new();
-    let mut worst = 0;
-    for file in files {
-        let lines = file.lines();
-        worst = worst.max(lines);
-        if lines > MAX_FILE_LINES {
-            violations.push(format!(
-                "file-lines: {} が {lines} 行で上限 {MAX_FILE_LINES} 行を超える",
-                file.path.display()
-            ));
-        }
-    }
-    Measured {
-        fact: format!("file-lines={worst}/{MAX_FILE_LINES}"),
-        violations,
-    }
-}
-
-/// test 行と src 行の比（test-src-ratio）。整数比較で `Σtest <= Σsrc` を見る。
-fn measure_test_src_ratio(files: &[SourceFile]) -> Measured {
-    let mut test_total = 0;
-    let mut src_total = 0;
-    for file in files {
-        let (test, src) = file.split_test_src();
-        test_total += test;
-        src_total += src;
-    }
-    let mut violations = Vec::new();
-    if src_total > 0 && test_total > src_total {
-        violations.push(format!(
-            "test-src-ratio: test {test_total} 行 > src {src_total} 行（比の上限は 1.0）"
-        ));
-    }
-    Measured {
-        fact: format!("test-src-ratio={test_total}/{src_total}"),
-        violations,
-    }
-}
-
-/// NAME の字面を持つ `.rs` が core crate の `name.rs` ただ 1 本であること（name-literal）。
-fn measure_name_literal(layout: &Layout, files: &[SourceFile]) -> Measured {
-    let needle = format!("\"{}\"", layout.name);
-    let allowed = layout.core_dir.join("src").join("name.rs");
-    let holders: Vec<&PathBuf> = files
-        .iter()
-        .filter(|file| file.text.contains(&needle))
-        .map(|file| &file.path)
-        .collect();
-    let mut violations = Vec::new();
-    for path in &holders {
-        if **path != allowed {
-            violations.push(format!(
-                "name-literal: {} が NAME の字面を持つ（name.rs だけが持てる）",
-                path.display()
-            ));
-        }
-    }
-    if !holders.iter().any(|path| **path == allowed) {
-        violations.push(format!(
-            "name-literal: {} に NAME の字面が無い",
-            allowed.display()
-        ));
-    }
-    Measured {
-        fact: format!("name-literal={}", holders.len()),
-        violations,
-    }
-}
-
-/// plugin manifest と core crate の突き合わせ（manifest-name / manifest-version）。
-fn measure_manifests(layout: &Layout) -> Vec<Measured> {
-    let plugin = match read_text(&layout.root.join(MANIFEST_REL)) {
-        Ok(text) => text,
-        Err(reason) => {
-            return vec![
-                failed("manifest-name", &reason),
-                failed("manifest-version", &reason),
-            ]
-        }
-    };
-    vec![
-        agreement(
-            "manifest-name",
-            &[
-                ("plugin.json", json_string_field(&plugin, "name")),
-                ("Cargo.toml", layout.core_package_field("name").ok()),
-                ("name.rs", Some(layout.name.clone())),
-            ],
-        ),
-        agreement(
-            "manifest-version",
-            &[
-                ("plugin.json", json_string_field(&plugin, "version")),
-                ("Cargo.toml", layout.core_version().ok()),
-            ],
-        ),
-    ]
-}
-
-/// 与えた出所の値がすべて同一であることを測る。
-fn agreement(tag: &str, sources: &[(&str, Option<String>)]) -> Measured {
-    let mut seen: BTreeSet<String> = BTreeSet::new();
-    let mut missing = Vec::new();
-    for (label, value) in sources {
-        match value {
-            Some(found) => {
-                seen.insert(found.clone());
-            }
-            None => missing.push(*label),
-        }
-    }
-    let listed: Vec<String> = seen.iter().cloned().collect();
-    let fact = format!("{tag}={}", listed.join("|"));
-    if !missing.is_empty() {
-        let reason = format!("{} から値を読めない", missing.join(", "));
-        return Measured {
-            fact,
-            violations: vec![format!("{tag}: {reason}")],
-        };
-    }
-    if listed.len() > 1 {
-        return Measured {
-            fact,
-            violations: vec![format!("{tag}: {}", listed.join(" != "))],
-        };
-    }
-    Measured {
-        fact,
-        violations: Vec::new(),
-    }
-}
-
-/// root manifest の lint 集合（lints-set）と member 側 opt-in（lints-optin）。
-fn measure_lints(layout: &Layout) -> Vec<Measured> {
-    let root_manifest = match read_text(&layout.root.join("Cargo.toml")) {
-        Ok(text) => text,
-        Err(reason) => {
-            return vec![failed("lints-set", &reason), failed("lints-optin", &reason)]
-        }
-    };
-    vec![measure_lints_set(&root_manifest), measure_lints_optin(layout)]
-}
-
-/// root manifest が宣言している `(section, lint, level)` の 3 つ組集合。
-fn declared_lints(manifest: &str) -> BTreeSet<(String, String, String)> {
-    let mut found = BTreeSet::new();
-    for section in ["rust", "clippy"] {
-        for (key, value) in entries_in(manifest, &format!("workspace.lints.{section}")) {
-            if let Some(level) = lint_level(value) {
-                found.insert((section.to_owned(), key.to_owned(), level));
-            }
-        }
-    }
-    found
-}
-
-/// root manifest の lint 集合が [`REQUIRED_LINTS`] と一致すること（lints-set）。
-fn measure_lints_set(manifest: &str) -> Measured {
-    let declared = declared_lints(manifest);
-    let required: BTreeSet<(String, String, String)> = REQUIRED_LINTS
-        .iter()
-        .map(|(section, lint, level)| {
-            ((*section).to_owned(), (*lint).to_owned(), (*level).to_owned())
-        })
-        .collect();
-    let mut violations = Vec::new();
-    for (section, lint, level) in required.difference(&declared) {
-        violations.push(format!(
-            "lints-set: {section}.{lint} = \"{level}\" が root Cargo.toml に無い"
-        ));
-    }
-    for (section, lint, level) in declared.difference(&required) {
-        violations.push(format!(
-            "lints-set: {section}.{lint} = \"{level}\" は REQUIRED_LINTS に無い"
-        ));
-    }
-    Measured {
-        fact: format!("lints-set={}", declared.len()),
-        violations,
-    }
-}
-
-/// 各 member が `[lints] workspace = true` を持つこと（lints-optin）。
-///
-/// これが無いと `[workspace.lints]` は member に一切適用されず、clippy も
-/// nextest も全部緑のまま歯が死ぬ。
-fn measure_lints_optin(layout: &Layout) -> Measured {
-    let mut violations = Vec::new();
-    let mut opted = 0;
-    for dir in &layout.member_dirs {
-        let path = dir.join("Cargo.toml");
-        match read_text(&path) {
-            Ok(text) if has_workspace_lints(&text) => opted += 1,
-            Ok(_) => violations.push(format!(
-                "lints-optin: {} に [lints] workspace = true が無い（workspace.lints が不活性になる）",
-                path.display()
-            )),
-            Err(reason) => violations.push(format!("lints-optin: {reason}")),
-        }
-    }
-    Measured {
-        fact: format!("lints-optin={opted}/{}", layout.member_dirs.len()),
-        violations,
-    }
-}
-
-/// member manifest が `[lints] workspace = true` を持つか。
-fn has_workspace_lints(manifest: &str) -> bool {
-    entries_in(manifest, "lints")
-        .iter()
-        .any(|(key, value)| *key == "workspace" && *value == "true")
-}
-
-/// root と全 member の直接依存が [`ALLOWED_DEPS`] の内側であること（deps-empty）。
-///
-/// 中身は allowlist だが measure tag の名は ADR-0002 §2.4 が凍結しているので
-/// `deps-empty` に据え置く。
-fn measure_deps_empty(layout: &Layout) -> Measured {
-    let mut manifests = vec![layout.root.join("Cargo.toml")];
-    manifests.extend(layout.member_dirs.iter().map(|dir| dir.join("Cargo.toml")));
-    let mut violations = Vec::new();
-    for path in &manifests {
-        match read_text(path) {
-            Ok(text) => violations.extend(declared_deps(&text, path)),
-            Err(reason) => violations.push(format!("deps-empty: {reason}")),
-        }
-    }
-    Measured {
-        fact: format!("deps-empty={}", manifests.len()),
-        violations,
-    }
-}
-
-/// 1 つの manifest が宣言している allowlist 外の直接依存を違反行に写す。
-///
-/// section 名の完全一致では足りない。`[dependencies.<name>]` の入れ子形、
-/// `[build-dependencies]`、`[target.'cfg(unix)'.dependencies]`、
-/// `[workspace.dependencies]` のいずれも直接依存を 1 本増やすからである。
-fn declared_deps(manifest: &str, path: &Path) -> Vec<String> {
-    let mut found = Vec::new();
-    for (header, pairs) in sections(manifest) {
-        let Some((section, nested)) = dep_section(header) else {
-            continue;
-        };
-        match nested {
-            Some(dep) => {
-                let renamed = pairs.iter().any(|(key, _)| *key == "package");
-                found.extend(dep_violation(path, header, section, dep, renamed));
-            }
-            None => {
-                for (key, value) in pairs {
-                    found.extend(dep_violation(path, header, section, key, renames_package(value)));
-                }
-            }
-        }
-    }
-    found
-}
-
-/// 直接依存 1 本を測り、allowlist の外なら違反行を返す。
-///
-/// `package =` で別 crate へ改名した entry は key 名が allowlist に在っても違反である
-/// （さもないと `insta = { package = "other" }` が allowlist を素通りする）。
-fn dep_violation(
-    path: &Path,
-    header: &str,
-    section: &str,
-    dep: &str,
-    renamed: bool,
-) -> Option<String> {
-    if !renamed && is_allowed_dep(section, dep) {
-        return None;
-    }
-    let reason = if renamed {
-        "package = で別 crate へ改名している（allowlist は key 名では通さない）"
-    } else {
-        "allowlist 外の直接依存"
-    };
-    Some(format!(
-        "deps-empty: {} の [{header}] に {dep} が在る（{reason}）",
-        path.display()
-    ))
-}
-
-/// 直接依存を宣言しうる section の base 名。`workspace.` / `target.<spec>.` の前置は
-/// 剥がしてから照合する。
-const DEP_SECTION_BASES: &[&str] = &["dependencies", "dev-dependencies", "build-dependencies"];
-
-/// section header が依存 section なら `(base 名, `[<base>.<name>]` 形の dep 名)`。
-fn dep_section(header: &str) -> Option<(&'static str, Option<&str>)> {
-    let scoped = strip_target_scope(header.strip_prefix("workspace.").unwrap_or(header));
-    for base in DEP_SECTION_BASES {
-        if scoped == *base {
-            return Some((base, None));
-        }
-        let nested = scoped
-            .strip_prefix(*base)
-            .and_then(|rest| rest.strip_prefix('.'))
-            .filter(|dep| !dep.is_empty() && !dep.contains('.'));
-        if let Some(dep) = nested {
-            return Some((base, Some(dep)));
-        }
-    }
-    None
-}
-
-/// `target.<spec>.` の前置を剥がす。`<spec>` は quote 内に `.` を含みうるので、
-/// dot 分割ではなく base 名の直前の `.` を探して切る。
-fn strip_target_scope(header: &str) -> &str {
-    let Some(after) = header.strip_prefix("target.") else {
-        return header;
-    };
-    for base in DEP_SECTION_BASES {
-        if let Some(at) = after.find(&format!(".{base}")) {
-            return after.get(at + 1..).unwrap_or(after);
-        }
-    }
-    after
-}
-
-/// inline table 形の dep 値が `package = ` による改名を持つか。
-fn renames_package(value: &str) -> bool {
-    let Some(inner) = value
-        .trim()
-        .strip_prefix('{')
-        .and_then(|rest| rest.strip_suffix('}'))
-    else {
-        return false;
-    };
-    inner
-        .split(',')
-        .filter_map(|part| part.split_once('='))
-        .any(|(key, _)| key.trim() == "package")
-}
-
-/// `(section, dep 名)` が [`ALLOWED_DEPS`] に在るか。
-fn is_allowed_dep(section: &str, dep: &str) -> bool {
-    ALLOWED_DEPS
-        .iter()
-        .any(|(allowed_section, allowed_dep)| *allowed_section == section && *allowed_dep == dep)
-}
-
-/// channel が浮動 channel の語を含むならその語を返す。
-fn floating_word(channel: &str) -> Option<&'static str> {
-    ["stable", "beta", "nightly"]
-        .into_iter()
-        .find(|word| channel.contains(word))
-}
-
-/// channel が版番号の字面（`major.minor.patch`・任意で `-<target-triple>` 付き）か。
-///
-/// 3 要素を要求するのは、`1.98` のような短い形が rustup では 1.98.x の最新へ
-/// **浮動解決**され、■H1 が要求する「host に既に導入済みの toolchain 名」に
-/// ならないためである。`my-custom` のような custom toolchain 名もここで落ちる。
-fn is_version_literal(channel: &str) -> bool {
-    let core = channel.split_once('-').map_or(channel, |(head, _)| head);
-    let mut parts = 0;
-    for part in core.split('.') {
-        if part.is_empty() || !part.chars().all(|digit| digit.is_ascii_digit()) {
-            return false;
-        }
-        parts += 1;
-    }
-    parts == 3
-}
-
-/// `rust-toolchain.toml` の channel が版番号の字面であり、かつ
-/// stable / beta / nightly の語を含まないこと（toolchain-pin）。
-///
-/// 負の語検査だけだと `1.98` や `my-custom` が素通りするので、正の字面検査
-/// （[`is_version_literal`]）と合接で測る。違反は多くとも 1 件に畳む。
-fn measure_toolchain_pin(layout: &Layout) -> Measured {
-    let path = layout.root.join("rust-toolchain.toml");
-    let channel = read_text(&path).ok().and_then(|text| {
-        entries_in(&text, "toolchain")
-            .into_iter()
-            .find(|(key, _)| *key == "channel")
-            .and_then(|(_, value)| quoted(value))
-    });
-    let Some(channel) = channel else {
-        return failed(
-            "toolchain-pin",
-            &format!("{} の channel を読めない", path.display()),
-        );
-    };
-    let fact = format!("toolchain-pin={channel}");
-    let violation = match floating_word(&channel) {
-        Some(word) => Some(format!(
-            "toolchain-pin: channel \"{channel}\" が {word} を含む（版番号で固定する）"
-        )),
-        None if !is_version_literal(&channel) => Some(format!(
-            "toolchain-pin: channel \"{channel}\" が版番号の字面でない（major.minor.patch で固定する）"
-        )),
-        None => None,
-    };
-    Measured {
-        fact,
-        violations: violation.into_iter().collect(),
-    }
-}
-
 /// file を読む。読めない理由はそのまま違反本文に出せる形にする。
-fn read_text(path: &Path) -> Result<String, String> {
+pub(crate) fn read_text(path: &Path) -> Result<String, String> {
     fs::read_to_string(path).map_err(|err| format!("{} を読めない: {err}", path.display()))
 }
 
@@ -700,7 +274,7 @@ fn read_name_const(path: &Path) -> Result<String, String> {
 }
 
 /// JSON から `"<key>": "<値>"` の値を std だけで抜く（骨格に JSON crate を足さない）。
-fn json_string_field(src: &str, key: &str) -> Option<String> {
+pub(crate) fn json_string_field(src: &str, key: &str) -> Option<String> {
     let after_key = src.split_once(&format!("\"{key}\""))?.1;
     let after_colon = after_key.split_once(':')?.1;
     let after_open = after_colon.split_once('"')?.1;
@@ -711,6 +285,16 @@ fn json_string_field(src: &str, key: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    // flip-check: moved s2-07l.84
+    // **純粋な移動は flip できない**。本便は measure の実装を module へ出しただけで、
+    // 挙動を 1 つも変えていない＝base で赤くなる歯を作れない（作れば「移動ではない」）。
+    // 札は `moved`（純粋移動）である——`retroactive` は**後から足す歯**の札で、その数は
+    // 「後から足した歯が N 本」と読まれるので、歯を 1 本も足さない本便に貼ると判定行から
+    // 何を免除したのか読めなくなる（s2-07l.86）。逃がしはこの 1 行だけで、bead id を
+    // 付けるのは**その便で足した札だけが効く**ため（id の無い marker は誰にも辿れず
+    // review の対象にならない）。歯そのものは 1 本も
+    // 足していない（契約 (3)）。移動の正しさは**判定行が名前・順序・書式で不変**である
+    // ことと、既存の歯 364 本が緑であることが担保する。
     use super::{check, summary};
     use crate::genmanifest;
     use crate::limits::{ALLOWED_DEPS, MAX_FILE_LINES, REQUIRED_LINTS};
