@@ -236,11 +236,11 @@ terms:
     relationships: [write-set, 極性]
   - canonical: runner
     domain: consumer
-    definition: 契約 1 本を worktree で実装する headless の Claude process (SRS FR4 / FR5)。 席ではなく使い捨て。
+    definition: 契約 1 本を worktree で実装する headless の Claude process (SRS FR4 / FR5)。 席ではなく使い捨て。 起動時に口座と対象 repo の settings を 1 つも読まない (ADR-0011)。
     relationships: [契約, headless, lens, 便, allowlist]
   - canonical: allowlist
     domain: consumer
-    definition: 器が runner に与える「実行してよい command 名の列」。 値は対象 repo の vessel 宣言が持ち、 manifest の rules 行 runner.allowed_commands は宣言が名乗れる上限である (C1 / C10・ADR-0010)。 intake が上限と突合して便ごとに凍結し、 runner は凍結した写しから claude へ --allowedTools として渡し口座設定を継承しない (ADR-0009)。 明示 allow の外は hook が deny する。
+    definition: 器が runner に与える「実行してよい command 名の列」。 値は対象 repo の vessel 宣言が持ち、 manifest の rules 行 runner.allowed_commands は宣言が名乗れる上限である (C1 / C10・ADR-0010)。 intake が上限と突合して便ごとに凍結し、 runner は凍結した写しから claude へ --allowedTools として渡し、 口座と対象 repo の settings を 1 つも読まない (ADR-0009 / ADR-0011)。 明示 allow の外は hook が deny する。
     relationships: [runner, vessel 宣言, manifest, rules 行, hook]
   - canonical: 共通 verify
     domain: consumer
@@ -252,11 +252,11 @@ terms:
     relationships: [共通 verify, gate, flip check]
   - canonical: lens
     domain: consumer
-    definition: diff を読んで verdict (PASS / FAIL / INCONCLUSIVE) を返す headless の Claude process (SRS FR9)。 MVP の gate は lens 1 本。
+    definition: diff を読んで verdict (PASS / FAIL / INCONCLUSIVE) を返す headless の Claude process (SRS FR9)。 MVP の gate は lens 1 本。 runner と同じ起動形で、 口座と対象 repo の settings を 1 つも読まない (ADR-0011)。
     relationships: [gate, headless, Verdict]
   - canonical: headless
     domain: consumer
-    definition: 対話画面を持たず、 入力を受けて 1 回で答えを返す Claude の実行形 (claude -p)。 口座は環境変数で切り替え、 permission は毎回明示する。
+    definition: 対話画面を持たず、 入力を受けて 1 回で答えを返す Claude の実行形 (claude -p)。 口座は環境変数で切り替え、 permission は毎回明示し、 user / project / local の settings は読まない (ADR-0011)。
     relationships: [runner, lens]
   - canonical: toy repo
     domain: consumer
