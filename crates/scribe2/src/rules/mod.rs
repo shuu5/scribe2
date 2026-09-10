@@ -19,6 +19,9 @@ pub enum ValueShape {
     Str,
     /// 散文で書かれた選定規則・検出線の定義。機械は `enabled` だけを読む。
     Policy,
+    /// 文字列の列（TOML の string array）。**空は受けない**＝「規則が無い」を
+    /// 空 array で表さない（書き間違いを黙って通すと allowlist が空のまま効く）。
+    List,
 }
 
 /// 規則の種類。憲法 §3 の行と MVP の運用値に 1:1 で対応する。
@@ -81,6 +84,10 @@ pub enum RuleKind {
     SeatTickStaleS,
     /// 席の cycle lock を live と見なす経過時間（秒）。超えた lock は residue として取り直す。
     SeatCycleLockTtlS,
+    /// runner に与える command 名の allowlist（ADR-0009 §2.1）。
+    RunnerAllowedCommands,
+    /// どの便にも共通の検証行（ADR-0009 §2.4）。gate が契約の verify の前に撃つ。
+    GateCommonVerify,
 }
 
 /// [`RuleKind`] の全 variant。parity test の母集団である。
@@ -111,6 +118,8 @@ pub const ALL: &[RuleKind] = &[
     RuleKind::SeatContextWindowTokens,
     RuleKind::SeatTickStaleS,
     RuleKind::SeatCycleLockTtlS,
+    RuleKind::RunnerAllowedCommands,
+    RuleKind::GateCommonVerify,
 ];
 
 impl RuleKind {
@@ -143,6 +152,8 @@ impl RuleKind {
             Self::SeatContextWindowTokens => "SeatContextWindowTokens",
             Self::SeatTickStaleS => "SeatTickStaleS",
             Self::SeatCycleLockTtlS => "SeatCycleLockTtlS",
+            Self::RunnerAllowedCommands => "RunnerAllowedCommands",
+            Self::GateCommonVerify => "GateCommonVerify",
         }
     }
 
@@ -175,6 +186,7 @@ impl RuleKind {
             | Self::MutationSurvivalLine
             | Self::CompileShape
             | Self::CompileSeconds => ValueShape::Policy,
+            Self::RunnerAllowedCommands | Self::GateCommonVerify => ValueShape::List,
         }
     }
 
@@ -193,6 +205,8 @@ pub enum RuleValue {
     Str(String),
     /// 散文の規則本文。
     Policy(String),
+    /// 文字列の列（順序は manifest の並びのまま＝機械が読む順序である）。
+    List(Vec<String>),
 }
 
 impl RuleValue {
@@ -202,6 +216,7 @@ impl RuleValue {
             Self::Int(_) => ValueShape::Int,
             Self::Str(_) => ValueShape::Str,
             Self::Policy(_) => ValueShape::Policy,
+            Self::List(_) => ValueShape::List,
         }
     }
 
@@ -210,6 +225,12 @@ impl RuleValue {
         match self {
             Self::Int(value) => value.to_string(),
             Self::Str(text) | Self::Policy(text) => text.clone(),
+            // **1 行で区切りが読める形**にする（要素を空白で継ぐと、空白を含む
+            // 要素〔共通 verify の 1 行〕が何本あるのか読めなくなる）。
+            Self::List(items) => {
+                let quoted: Vec<String> = items.iter().map(|item| format!("\"{item}\"")).collect();
+                format!("[{}]", quoted.join(", "))
+            }
         }
     }
 }

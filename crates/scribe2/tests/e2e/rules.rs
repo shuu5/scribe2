@@ -70,7 +70,177 @@ fn sample_value(kind: RuleKind) -> String {
     match kind.shape() {
         ValueShape::Int => "1".to_owned(),
         ValueShape::Str | ValueShape::Policy => "\"sample\"".to_owned(),
+        ValueShape::List => "[\"sample\"]".to_owned(),
     }
+}
+
+/// List の kind を 1 つ（歯の fixture 用）。`ALL` の順に依らず名前で選ぶ。
+const LIST_KIND: RuleKind = RuleKind::RunnerAllowedCommands;
+
+#[test]
+fn rules_list_parses_string_array() {
+    let text = one_row(LIST_KIND, r#"["cargo", "git"]"#);
+    let manifest = parsed(&text).expect("受理されるはずの fixture が拒まれた");
+    let row = manifest.get("probe").expect("probe が在る");
+    assert_eq!(
+        row.value,
+        RuleValue::List(vec!["cargo".to_owned(), "git".to_owned()]),
+        "要素は書いた順のまま"
+    );
+    assert_eq!(row.kind.shape(), ValueShape::List, "kind の形");
+}
+
+#[test]
+fn rules_list_rejects_empty_array() {
+    // 空の配列は「規則が無い」ではなく書き間違いである（空の allowlist を黙って効かせない）。
+    let errors = rejected(&one_row(LIST_KIND, "[]")).expect("拒まれるはずの fixture が受理された");
+    assert_eq!(errors.len(), 1, "件数: {errors:?}");
+    let first = errors.first().map(String::as_str).unwrap_or_default();
+    assert!(first.contains("配列が空である"), "理由: {first}");
+    assert!(first.contains("line="), "行番号: {first}");
+}
+
+#[test]
+fn rules_list_rejects_non_string_element() {
+    let errors = rejected(&one_row(LIST_KIND, r#"["cargo", 1]"#))
+        .expect("拒まれるはずの fixture が受理された");
+    assert_eq!(errors.len(), 1, "件数: {errors:?}");
+    let first = errors.first().map(String::as_str).unwrap_or_default();
+    assert!(first.contains("引用符 1 組の文字列でない"), "理由: {first}");
+}
+
+#[test]
+fn rules_list_rejects_unseparated_elements() {
+    // `["a" "b"]` を 1 本の壊れた文字列として黙って通さない（書いた本数と通る本数の食い違い）。
+    let errors = rejected(&one_row(LIST_KIND, r#"["cargo" "git"]"#))
+        .expect("拒まれるはずの fixture が受理された");
+    assert_eq!(errors.len(), 1, "件数: {errors:?}");
+    let first = errors.first().map(String::as_str).unwrap_or_default();
+    assert!(first.contains("引用符 1 組の文字列でない"), "理由: {first}");
+}
+
+#[test]
+fn rules_list_rejects_empty_element() {
+    // 空文字の command 名・verify 行は「何もしない口」ゆえ受けない。
+    let errors = rejected(&one_row(LIST_KIND, r#"["cargo", ""]"#))
+        .expect("拒まれるはずの fixture が受理された");
+    assert_eq!(errors.len(), 1, "件数: {errors:?}");
+    let first = errors.first().map(String::as_str).unwrap_or_default();
+    assert!(first.contains("空文字"), "理由: {first}");
+}
+
+#[test]
+fn rules_list_rejects_scalar_for_list_kind() {
+    // List を要求する kind に文字列を渡したら loud（AC6）。
+    let errors = rejected(&one_row(LIST_KIND, "\"cargo\""))
+        .expect("拒まれるはずの fixture が受理された");
+    assert_eq!(errors.len(), 1, "件数: {errors:?}");
+    let first = errors.first().map(String::as_str).unwrap_or_default();
+    assert!(first.contains("形と合わない"), "理由: {first}");
+    assert!(first.contains("List"), "要求する形を名指す: {first}");
+}
+
+#[test]
+fn rules_list_rejects_array_for_scalar_kind() {
+    // 逆向きの負例（配列を受ける口が、配列でない kind まで通していないか）。
+    let errors = rejected(&one_row(RuleKind::CoreLines, r#"["1"]"#))
+        .expect("拒まれるはずの fixture が受理された");
+    assert_eq!(errors.len(), 1, "件数: {errors:?}");
+    let first = errors.first().map(String::as_str).unwrap_or_default();
+    assert!(first.contains("形と合わない"), "理由: {first}");
+}
+
+#[test]
+fn rules_list_embedded_manifest_carries_allowlist_and_common_verify() {
+    let manifest = match Manifest::embedded() {
+        Ok(found) => found,
+        Err(errors) => {
+            let lines: Vec<String> = errors.iter().map(ToString::to_string).collect();
+            panic!("埋め込み manifest が拒まれた:\n{}", lines.join("\n"))
+        }
+    };
+    let allowed = manifest.get("runner.allowed_commands").expect("allowlist の行が在る");
+    assert_eq!(
+        allowed.value,
+        RuleValue::List(vec!["cargo".to_owned(), "git".to_owned()]),
+        "user 裁定 2026-09-10 の allowlist"
+    );
+    let common = manifest.get("gate.common_verify").expect("共通 verify の行が在る");
+    assert_eq!(
+        common.value,
+        RuleValue::List(vec![
+            "cargo xtask flip-check --base {base}".to_owned(),
+            "cargo nextest run --workspace --no-tests=fail".to_owned(),
+            "cargo clippy --workspace --all-targets -- -D warnings".to_owned(),
+            "cargo xtask check".to_owned(),
+            "cargo deny check bans licenses sources".to_owned(),
+        ]),
+        "共通 verify は done の定義 4 本 + flip check（mutants-diff は後続便）"
+    );
+    for row in [allowed, common] {
+        assert_eq!(row.ruling, "user 裁定 2026-09-10（ADR-0009）", "裁定: {}", row.id);
+        assert_eq!(row.ruled_at, "2026-09-10", "裁定日: {}", row.id);
+        assert!(row.enabled, "既定で効く: {}", row.id);
+    }
+}
+
+#[test]
+fn rules_list_keeps_comma_inside_quotes() {
+    // 要素の中の `,` は区切りではない。共通 verify の行は `,` を含みうるので、
+    // ここを割ると **書いた本数と通る本数が食い違う**（1 行が 2 本に化ける）。
+    let text = one_row(LIST_KIND, r#"["cargo test --features a,b", "git"]"#);
+    let manifest = parsed(&text).expect("受理されるはずの fixture が拒まれた");
+    let row = manifest.get("probe").expect("probe が在る");
+    assert_eq!(
+        row.value,
+        RuleValue::List(vec!["cargo test --features a,b".to_owned(), "git".to_owned()]),
+        "quote の内側の , で割らない（母集団 2 要素）"
+    );
+}
+
+#[test]
+fn rules_list_rejects_unclosed_bracket() {
+    // 配列は 1 行で閉じる（要素に改行を置けない）。
+    let errors = rejected(&one_row(LIST_KIND, r#"["cargo""#))
+        .expect("拒まれるはずの fixture が受理された");
+    assert_eq!(errors.len(), 1, "件数: {errors:?}");
+    let first = errors.first().map(String::as_str).unwrap_or_default();
+    assert!(first.contains("同じ行で閉じていない"), "理由: {first}");
+}
+
+#[test]
+fn rules_list_rejects_unclosed_quote() {
+    let errors = rejected(&one_row(LIST_KIND, r#"["cargo", "git]"#))
+        .expect("拒まれるはずの fixture が受理された");
+    assert_eq!(errors.len(), 1, "件数: {errors:?}");
+    let first = errors.first().map(String::as_str).unwrap_or_default();
+    assert!(first.contains("引用符が閉じていない"), "理由: {first}");
+}
+
+#[test]
+fn rules_manifest_reports_broken_value_once() {
+    // 読めなかった値は scan が 1 件報告する。後段が「必須 key が無い」と**嘘の 2 行目**を
+    // 足さないこと（key は在って値が壊れている）。value 以外の key でも同じ。
+    let text = "schema = 1\n\n[[rule]]\nid = \"probe\"\nkind = \"CoreLines\"\nvalue = 1\nruling = 1.5\nruled_at = \"d\"\n";
+    let errors = rejected(text).expect("拒まれるはずの fixture が受理された");
+    assert_eq!(errors.len(), 1, "件数（同じ欠陥を 2 行にしない）: {errors:?}");
+    let first = errors.first().map(String::as_str).unwrap_or_default();
+    assert!(first.contains("TOML subset の形でない"), "理由: {first}");
+    assert!(!first.contains("必須 key"), "「無い」と言わない: {first}");
+}
+
+#[test]
+fn rules_list_cli_get_renders_every_element() {
+    // 1 行表示で**要素の区切りが読める**こと（空白で継ぐと、空白を含む要素が
+    // 何本あるのか読めない）。
+    let args = ["get".to_owned(), "runner.allowed_commands".to_owned()];
+    let outcome = vessel::rules::cli::dispatch(&args);
+    assert_eq!(outcome.rc, RC_OK, "rc: {outcome:?}");
+    assert_eq!(
+        outcome.out,
+        vec!["[\"cargo\", \"git\"]".to_owned()],
+        "値の行"
+    );
 }
 
 /// 受理されるはずの fixture を読む。拒まれたら理由を 1 本の文字列にして `Err`。
