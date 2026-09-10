@@ -1070,8 +1070,14 @@ fn hook_seat_guard_treats_empty_transcript_path_as_absent() {
 ///
 /// `json_lite::parse_object` は flat object 専用（入れ子は error）なので、3 段の入れ子を
 /// そのままは通せない。内側の `{"behavior":…,"message":…}` を取り出して parse すれば、
-/// **escape が壊れていないこと**まで機械で確かめられる（字面の `contains` では
-/// message の `$(...)` や読点が壊れていても気づけない）。
+/// **出力が JSON として読めること**と**値がそのまま届くこと**を機械で確かめられる
+/// （字面の `contains` では key が壊れていても気づけない）。
+///
+/// ⚠ **escape そのものは本 message では測れていない**（lens-43 M-1・実測）: 契約が固定した
+/// message は `"` も `\` も制御文字も含まないので、`json_lite::quote` を素の `format!` へ
+/// 置き換える変異が**出力 byte 同一のまま生き残る**。escape を測るには message を変える
+/// （契約が固定）か `quote` を直接撃つ歯（本便の write-set 外）が要る。ここでは
+/// 「測れている」と書かないことで空虚な安心を作らない。
 #[expect(
     clippy::panic,
     reason = "統合 test の helper。clippy の allow-panic-in-tests は #[test] 関数の中だけに効く"
@@ -1121,10 +1127,24 @@ fn hook_permission_request_denies_bash_with_one_json_line() {
     );
     let lines = inject_lines(&state);
     assert_eq!(lines.len(), before + 1, "記録は 1 行だけ増える: {lines:?}");
+    // `who` だけを見ると、`what` / `when` を別の値へ書き換える変異が生き残る
+    // （実測 2026-09-10・lens-43 M-2）。契約が名指した field は全部測る。
+    let last = &lines[lines.len() - 1];
+    for (key, want) in [
+        ("who", "hook:permission-request"),
+        ("what", "deny"),
+        ("when", "PermissionRequest"),
+    ] {
+        assert_eq!(
+            value_of(last, key),
+            Some(json_lite::Value::Str(want.to_owned())),
+            "記録の {key}: {lines:?}"
+        );
+    }
     assert_eq!(
-        value_of(&lines[lines.len() - 1], "who"),
-        Some(json_lite::Value::Str("hook:permission-request".to_owned())),
-        "誰の記録かを書く: {lines:?}"
+        value_of(last, "tokens"),
+        Some(json_lite::Value::Null),
+        "数えていない token は 0 でなく null: {lines:?}"
     );
     clean(&[&repo, &state]);
 }
@@ -1143,6 +1163,26 @@ fn hook_permission_request_is_silent_for_other_tools() {
             &tool_payload(&repo, tool, "unused"),
         );
         assert_silent(&out, &format!("{tool} の問いには答えない"));
+    }
+    // payload が読めない面も同じく黙る（FR24 の「payload 不能」・lens-43 L-3）。
+    // `cwd` を持つが tool 名が無い / 壊れている形を撃つ——`cwd` を落とすと process の
+    // cwd へ落ちて別 repo を判定するので、ここで測りたいのは tool 名側の欠落である。
+    for (why, payload) in [
+        ("tool_name が無い", format!("{{\"cwd\":\"{}\"}}", repo.display())),
+        (
+            "tool_input だけ在る",
+            format!("{{\"cwd\":\"{}\",\"tool_input\":{{}}}}", repo.display()),
+        ),
+        (
+            "JSON として壊れている",
+            format!("{{\"cwd\":\"{}\",\"tool_name\"", repo.display()),
+        ),
+    ] {
+        let out = run_hook_args(
+            &["permission-request", "--state-dir", &state.display().to_string()],
+            &payload,
+        );
+        assert_silent(&out, &format!("payload 不能（{why}）でも答えない"));
     }
     assert_eq!(
         inject_lines(&state).len(),
