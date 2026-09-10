@@ -363,6 +363,183 @@ fn pipe_spawn_substitutes_placeholders_and_adds_no_env() {
     clean(&[&repo, &state]);
 }
 
+/// 写しの照合に使う plugin manifest の本文。
+const PLUGIN_JSON: &str = "{\"name\":\"toy-plugin\"}\n";
+
+/// 写しの照合に使う hooks の本文。**plugin.json と字面を変える**のは、片方だけを
+/// 写す実装でも bytes 一致が通ってしまうのを防ぐためである。
+const HOOKS_JSON: &str = "{\"hooks\":{\"PreToolUse\":[]}}\n";
+
+/// commit **後**に anchor の working tree だけを書き換える本文。
+///
+/// 写し元が worktree（＝便の base）か anchor の現在値かを弁別する negative である。
+/// これが無いと、写し元を anchor に差し替える退行が歯を素通りする。
+const PLUGIN_JSON_DIRTY: &str = "{\"name\":\"dirty-anchor\"}\n";
+
+/// plugin（`.claude-plugin/` と `hooks/`）を持つ toy repo と置き場を作る。
+///
+/// `README.md` も置くのは、**写しに worktree の他の file が混ざらない**ことを負例で
+/// 測るためである（plugin の 2 dir だけを写す、が契約）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn repo_with_plugin() -> (PathBuf, PathBuf) {
+    let (repo, state) = repo_with_state();
+    fs::create_dir_all(repo.join(".claude-plugin")).expect(".claude-plugin を作れる");
+    fs::write(repo.join(".claude-plugin").join("plugin.json"), PLUGIN_JSON)
+        .expect("plugin.json を書ける");
+    fs::create_dir_all(repo.join("hooks")).expect("hooks dir を作れる");
+    fs::write(repo.join("hooks").join("hooks.json"), HOOKS_JSON).expect("hooks.json を書ける");
+    // plugin dir の**中**の symlink（写してはならない entry）。
+    std::os::unix::fs::symlink("../README.md", repo.join("hooks").join("outside.json"))
+        .expect("hooks の中に symlink を置ける");
+    fs::write(repo.join("README.md"), "# toy\n").expect("README を書ける");
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "plugin"]);
+    // **commit の後**に anchor 側だけを汚す。便の worktree は base の checkout なので
+    // 写しがこの本文になったら、写し元が worktree でなく anchor である証拠になる。
+    fs::write(repo.join(".claude-plugin").join("plugin.json"), PLUGIN_JSON_DIRTY)
+        .expect("anchor の plugin.json を汚せる");
+    (repo, state)
+}
+
+#[test]
+fn pipe_spawn_copies_plugin_outside_worktree_and_substitutes_plugin_dir() {
+    let (repo, state) = repo_with_plugin();
+    let path = write_contract(&repo, &[], &[]);
+    let id = intake(&repo, &state, &path);
+    // 前の周の写しが残っている状態を作る（run dir は intake が作る）。写し先を先に
+    // 空にしないと、この file が **古い plugin** として runner に載ったままになる。
+    let stale = state.join("pipe").join(&id).join("plugin");
+    fs::create_dir_all(&stale).expect("古い写しの dir を作れる");
+    fs::write(stale.join("stale.json"), "{}\n").expect("古い写しを置ける");
+    let out = run_pipe(&[
+        "spawn", "--run", &id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(),
+        "--runner", "printf '%s' {plugin_dir} > plugin_dir.txt && git add -A && git commit -q -m runner",
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "spawn は rc 0: {}", stderr_of(&out));
+
+    let worktree = repo.join(".worktrees").join("scribe2").join(&id);
+    let plugin = state.join("pipe").join(&id).join("plugin");
+    let shown = fs::read_to_string(worktree.join("plugin_dir.txt")).expect("置換の写しを読める");
+    // **これが本題**: runner が受け取った plugin dir が repo の外に在るから、worktree の
+    // file が Claude Code の sensitive 判定（plugin dir 配下）に掛からない。**先に本題を
+    // 測る**——先に path の一致を測ると、worktree の path を渡す退行も「一致しない」でしか
+    // 落ちず、何が壊れたのかが読めない。
+    assert!(
+        !Path::new(&shown).starts_with(&repo),
+        "runner が受けた plugin dir は repo の配下でない: shown={shown} repo={}",
+        repo.display()
+    );
+    assert_eq!(shown, plugin.display().to_string(), "{{plugin_dir}} は run dir 配下の写し");
+
+    for (dir, name, body) in [
+        (".claude-plugin", "plugin.json", PLUGIN_JSON),
+        ("hooks", "hooks.json", HOOKS_JSON),
+    ] {
+        let source = fs::read(worktree.join(dir).join(name)).expect("worktree 側を読める");
+        let copied = fs::read(plugin.join(dir).join(name)).expect("写しを読める");
+        assert_eq!(copied, source, "{dir}/{name} の bytes が worktree と一致する");
+        assert_eq!(copied, body.as_bytes(), "{dir}/{name} は toy repo に置いた本文");
+    }
+    // 写し元は **worktree**（便の base）であって anchor の現在値ではない。
+    assert_ne!(
+        fs::read(plugin.join(".claude-plugin").join("plugin.json")).expect("写しを読める"),
+        PLUGIN_JSON_DIRTY.as_bytes(),
+        "anchor の未 commit な plugin.json を載せない"
+    );
+    // 内側の entry の symlink は写さない（`hooks/outside.json` は repo の README を指す）。
+    assert_eq!(
+        dir_names(&plugin.join("hooks")),
+        vec!["hooks.json".to_owned()],
+        "plugin dir の中の symlink を写さない"
+    );
+
+    assert!(!plugin.join("README.md").exists(), "写しに worktree の README を入れない");
+    assert!(!plugin.join("src").exists(), "写しに worktree の src を入れない");
+    let names = dir_names(&plugin);
+    assert_eq!(
+        names,
+        vec![".claude-plugin".to_owned(), "hooks".to_owned()],
+        "写しは plugin の 2 dir だけ（母集団 {} entry）",
+        names.len()
+    );
+    clean(&[&repo, &state]);
+}
+
+/// dir の entry 名を昇順で返す（写しの範囲を**集合で**測るための helper）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn dir_names(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = fs::read_dir(dir)
+        .expect("dir を読める")
+        .map(|entry| entry.expect("entry を読める").file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
+}
+
+/// plugin の dir **自体が symlink** の repo では、その dir を写さない。
+///
+/// `Path::is_dir()` は link を辿るので、判定を `symlink_metadata` にしないと link 先の
+/// 木を丸ごと写す（`hooks -> ../..` なら worktree 全体が写しに混ざる）。
+#[test]
+fn pipe_spawn_skips_plugin_dir_that_is_a_symlink() {
+    let (repo, state) = repo_with_state();
+    fs::create_dir_all(repo.join(".claude-plugin")).expect(".claude-plugin を作れる");
+    fs::write(repo.join(".claude-plugin").join("plugin.json"), PLUGIN_JSON)
+        .expect("plugin.json を書ける");
+    fs::create_dir_all(repo.join("real-hooks")).expect("real-hooks を作れる");
+    fs::write(repo.join("real-hooks").join("hooks.json"), HOOKS_JSON).expect("hooks.json を書ける");
+    std::os::unix::fs::symlink("real-hooks", repo.join("hooks")).expect("hooks を link にできる");
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "plugin-link"]);
+
+    let path = write_contract(&repo, &[], &[]);
+    let id = intake(&repo, &state, &path);
+    let out = run_pipe(&[
+        "spawn", "--run", &id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(),
+        "--runner", "echo x >> src/lib.rs && git add -A && git commit -q -m runner",
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "spawn は rc 0: {}", stderr_of(&out));
+    let plugin = state.join("pipe").join(&id).join("plugin");
+    let names = dir_names(&plugin);
+    assert_eq!(
+        names,
+        vec![".claude-plugin".to_owned()],
+        "dir 自体が symlink の面は写さない（母集団 {} entry）",
+        names.len()
+    );
+    clean(&[&repo, &state]);
+}
+
+#[test]
+fn pipe_spawn_makes_empty_plugin_dir_when_repo_has_none() {
+    // plugin を持たない repo（toy repo の既定）でも便を止めない。
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let id = intake(&repo, &state, &path);
+    let out = run_pipe(&[
+        "spawn", "--run", &id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(),
+        "--runner", "echo x >> src/lib.rs && git add -A && git commit -q -m runner",
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "spawn は rc 0: {}", stderr_of(&out));
+    let plugin = state.join("pipe").join(&id).join("plugin");
+    assert!(plugin.is_dir(), "空の plugin dir を作る: {}", plugin.display());
+    let entries: Vec<String> = fs::read_dir(&plugin)
+        .expect("写しの dir を読める")
+        .map(|entry| entry.expect("entry を読める").file_name().to_string_lossy().into_owned())
+        .collect();
+    assert!(entries.is_empty(), "写すものが無ければ空（母集団 {} entry: {entries:?}）", entries.len());
+    clean(&[&repo, &state]);
+}
+
 #[test]
 fn pipe_spawn_refuses_wrong_stage() {
     let (repo, state) = repo_with_state();
