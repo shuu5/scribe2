@@ -261,8 +261,15 @@ impl Drop for IsolatedSeat {
     /// ★**socket file を消した後では届かない**（実測 2026-09-10: `error connecting` で
     /// rc 1・server は生き残る）。ゆえに歯の成功経路では `fs::remove_dir_all` の**前**に
     /// 明示 `drop` する——panic 経路では remove が飛ぶので、この drop が最後の砦になる。
+    ///
+    /// ★**ここでは panic しない**: `tmux` を spawn できない周（PATH に無い等）に
+    /// [`tmux`] の `expect` を通すと、cleanup 中の drop で二重 panic になり **abort** する
+    /// ——読める失敗が SIGABRT へ化ける（実測 2026-09-10: rc 134・`panic in a destructor
+    /// during cleanup`）。spawn の失敗は捨てる（その周は server がそもそも立っていない）。
     fn drop(&mut self) {
-        tmux(&self.socket, &["kill-session", "-t", &self.name]);
+        let _ = Command::new("tmux")
+            .args(["-S", &self.socket, "-f", "/dev/null", "kill-session", "-t", &self.name])
+            .output();
     }
 }
 
@@ -1026,8 +1033,8 @@ fn seat_tick_reports_error_when_pane_is_readable_but_tmux_is_unreachable() {
         recorded
             .lines()
             .last()
-            .is_some_and(|line| line.contains(r#""what":"decision=error"#)),
-        "記録の末尾 1 行も error を残す（表示と記録で同じ字面）: {recorded}"
+            .is_some_and(|line| line.contains(r#""what":"decision=error reason=inject-"#)),
+        "記録の末尾 1 行も理由まで残す（表示と記録で同じ字面）: {recorded}"
     );
     fs::remove_dir_all(&dir).ok();
 }
@@ -1048,6 +1055,8 @@ fn seat_tick_ignores_short_wm_like_names() {
     let seat = seat_dir_of(&state, target);
     fs::create_dir_all(&seat).expect("seat dir を作れる");
     // 順序 4 で止める（TTL 内の lock）＝3 を通ったことが理由の字面で分かる。
+    // ★`lock_is_live` は **mtime だけ**を見て中身を読まない: `deadline:0` は失効に見えるが、
+    // いま書いた file なので live 側である（既存の歯と同じ idiom）。
     fs::write(seat.join("cycle.lock"), "{\"pid\":1,\"deadline\":0}\n").expect("lock を置ける");
     let wm = dir.join("wm");
     fs::create_dir_all(&wm).expect("wm dir を作れる");
@@ -1078,9 +1087,15 @@ fn seat_tick_ignores_short_wm_like_names() {
         "seat: tick decision=noop reason=cycle-live\n",
         "短すぎる名前は自席の退避物に数えない＝3 を通って 4 で止まる"
     );
+    // 表示の完全一致だけでは 1 段しか測れない（`wm-unconsumed` を除く assert は上の
+    // 完全一致に包含されて**発火しない**）。記録側の末尾 1 行でもう 1 段測る。
+    let recorded = fs::read_to_string(tick_file(&state, target)).unwrap_or_default();
     assert!(
-        !stdout_of(&out).contains("wm-unconsumed"),
-        "長さの条件が消えると倒れる先（この字面が出たら負例が効いていない）"
+        recorded
+            .lines()
+            .last()
+            .is_some_and(|line| line.contains(r#""what":"decision=noop reason=cycle-live""#)),
+        "記録の末尾 1 行も cycle-live（長さの条件が消えると wm-unconsumed へ倒れる）: {recorded}"
     );
     fs::remove_dir_all(&dir).ok();
 }
