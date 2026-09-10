@@ -198,10 +198,3 @@ kind = "RunnerAllowedCommands"
 value = ["cargo", "git"]
 ruling = "user 裁定 2026-09-10（ADR-0009）"
 ruled_at = "2026-09-10"
-
-[[rule]]
-id = "gate.common_verify"
-kind = "GateCommonVerify"
-value = ["cargo xtask flip-check --base {base}", "cargo nextest run --workspace --no-tests=fail", "cargo clippy --workspace --all-targets -- -D warnings", "cargo xtask check", "cargo deny check bans licenses sources"]
-ruling = "user 裁定 2026-09-10（ADR-0009）"
-ruled_at = "2026-09-10"

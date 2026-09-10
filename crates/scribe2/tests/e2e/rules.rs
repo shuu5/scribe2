@@ -150,8 +150,13 @@ fn rules_list_rejects_array_for_scalar_kind() {
     assert!(first.contains("形と合わない"), "理由: {first}");
 }
 
+/// 埋め込み manifest は**上限の行を持ち、共通 verify の行を持たない**。
+///
+/// 共通 verify の値は対象 repo の vessel 宣言 `common-verify` が持つ（ADR-0010 §2.2・
+/// 裁定 id = ADR-0010）。**行と variant は 1 PR で揃える**——片側だけ消すと、残った行の
+/// `kind` が閉じた enum の外になり `Manifest::embedded()` 自体が拒まれる（この歯が落ちる）。
 #[test]
-fn rules_list_embedded_manifest_carries_allowlist_and_common_verify() {
+fn rules_embedded_manifest_carries_allowlist_and_has_no_common_verify_row() {
     let manifest = match Manifest::embedded() {
         Ok(found) => found,
         Err(errors) => {
@@ -159,28 +164,37 @@ fn rules_list_embedded_manifest_carries_allowlist_and_common_verify() {
             panic!("埋め込み manifest が拒まれた:\n{}", lines.join("\n"))
         }
     };
-    let allowed = manifest.get("runner.allowed_commands").expect("allowlist の行が在る");
+    let allowed = manifest.get("runner.allowed_commands").expect("上限の行が在る");
     assert_eq!(
         allowed.value,
         RuleValue::List(vec!["cargo".to_owned(), "git".to_owned()]),
-        "user 裁定 2026-09-10 の allowlist"
+        "user 裁定 2026-09-10 の上限"
     );
-    let common = manifest.get("gate.common_verify").expect("共通 verify の行が在る");
-    assert_eq!(
-        common.value,
-        RuleValue::List(vec![
-            "cargo xtask flip-check --base {base}".to_owned(),
-            "cargo nextest run --workspace --no-tests=fail".to_owned(),
-            "cargo clippy --workspace --all-targets -- -D warnings".to_owned(),
-            "cargo xtask check".to_owned(),
-            "cargo deny check bans licenses sources".to_owned(),
-        ]),
-        "共通 verify は done の定義 4 本 + flip check（mutants-diff は後続便）"
+    assert_eq!(allowed.ruling, "user 裁定 2026-09-10（ADR-0009）", "裁定: {}", allowed.id);
+    assert_eq!(allowed.ruled_at, "2026-09-10", "裁定日: {}", allowed.id);
+    assert!(allowed.enabled, "既定で効く: {}", allowed.id);
+
+    assert!(
+        manifest.get("gate.common_verify").is_none(),
+        "廃止した行は manifest に無い（母集団 {} 行）",
+        manifest.rows().len()
     );
-    for row in [allowed, common] {
-        assert_eq!(row.ruling, "user 裁定 2026-09-10（ADR-0009）", "裁定: {}", row.id);
-        assert_eq!(row.ruled_at, "2026-09-10", "裁定日: {}", row.id);
-        assert!(row.enabled, "既定で効く: {}", row.id);
+    // **行 id の集合 ⊆ RuleKind の as_str 集合**。除去し忘れた行が残れば、その kind が
+    // 閉じた enum の外になって上の `embedded()` が落ちる＝2 面が同時に動く。
+    let kinds: Vec<&str> = ALL.iter().map(|kind| kind.as_str()).collect();
+    assert!(
+        !kinds.contains(&"GateCommonVerify"),
+        "廃止した variant は ALL に無い（母集団 {} 種）",
+        kinds.len()
+    );
+    for row in manifest.rows() {
+        assert!(
+            kinds.contains(&row.kind.as_str()),
+            "行 {} の kind {} は閉じた enum の内（母集団 {} 種）",
+            row.id,
+            row.kind.as_str(),
+            kinds.len()
+        );
     }
 }
 

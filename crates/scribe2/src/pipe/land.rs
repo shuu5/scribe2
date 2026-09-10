@@ -13,7 +13,8 @@
 //! N1 が禁じる形である）。
 
 use super::contract::Contract;
-use super::gate::{run_line, Verdict};
+use super::declaration::Effective;
+use super::gate::{run_checks, Checks, Verdict};
 use super::{
     emit, git_line, git_ok, verdict_path, worktree_path, worktrees_dir, Emit,
 };
@@ -208,12 +209,25 @@ fn verify_main(entry: &Land<'_>, new: &str) -> MainCheck {
         // **ここで赤を名乗らない**: verify 行を 1 本も撃てていない。
         return MainCheck::Unmeasurable(format!("{} を切れない", tmp.display()));
     }
-    let red = entry
-        .contract
-        .verify
-        .iter()
-        .filter(|line| run_line(&tmp, line) != 0)
-        .count();
+    // **gate と同じ順序を同じ関数で撃つ**（write-set 照合 → 写しの共通 verify → 契約 verify）。
+    // 材料が揃わない周は**赤を名乗らない**——読めなかったを落ちたに化けさせない。
+    let materials = materials(entry);
+    let (base, common) = match materials {
+        Ok(found) => found,
+        Err(reason) => {
+            let _ = git_ok(entry.repo, &["worktree", "remove", "--force", &path]);
+            return MainCheck::Unmeasurable(reason);
+        }
+    };
+    let red = run_checks(&Checks {
+        worktree: &tmp,
+        base: &base,
+        contract: entry.contract,
+        common: &common,
+    })
+    .iter()
+    .filter(|step| step.rc != 0)
+    .count();
     // 成果は `new` に載っているので、この tmp だけは remove してよい（設計 §5.4）。
     // `--force` は verify が tmp に生んだ中間物ごと畳むためで、履歴・データは触らない。
     let _ = git_ok(entry.repo, &["worktree", "remove", "--force", &path]);
@@ -221,6 +235,22 @@ fn verify_main(entry: &Land<'_>, new: &str) -> MainCheck {
         return MainCheck::Red(format!("main で verify の {red} 行が rc≠0"));
     }
     MainCheck::Green
+}
+
+/// main の実測に要る材料（便の base と、写しの共通 verify）を揃える。
+///
+/// **写しからしか読まない**（repo / worktree の `.vessel.toml` は読み直さない・ADR-0010 §2.4）。
+fn materials(entry: &Land<'_>) -> Result<(String, Vec<String>), String> {
+    let base = super::base_of_run(entry.state_dir, entry.run)
+        .ok_or_else(|| format!("run {} に base が無い", entry.run))?;
+    let path = super::vessel_path(entry.state_dir, entry.run);
+    let common = Effective::load(&path)
+        .map(|found| found.common_verify().to_vec())
+        .map_err(|errors| {
+            let lines: Vec<String> = errors.iter().map(ToString::to_string).collect();
+            format!("{} を読めない: {}", path.display(), lines.join(" / "))
+        })?;
+    Ok((base, common))
 }
 
 /// export → `Landed` → 後始末。ここまで来た周は land が成立している。

@@ -16,8 +16,10 @@
 //! （[`super::cli`]）が持つ。
 
 use super::contract::Contract;
+use super::declaration::Effective;
 use super::{
-    contract_path, emit, git_bytes, git_line, verdict_path, verify_log_path, worktree_path, Emit,
+    contract_path, emit, git_bytes, git_line, verdict_path, verify_log_path, vessel_path,
+    worktree_path, Emit,
 };
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_OK, RC_REFUSED};
 use crate::fleet::json_lite::{self, Value};
@@ -37,6 +39,13 @@ pub const RC_INCONCLUSIVE: u8 = 3;
 /// lens の出力から拾う JSON 行の始まり。
 const JSON_HEAD: char = '{';
 
+/// 共通 verify の行だけが持てる穴（便の base へ置換する）。**契約の行には置換しない**。
+const BASE_HOLE: &str = "{base}";
+
+/// write-set 照合の record に載せる `cmd`。**shell の行ではない**（Rust で照合する）ので、
+/// 実行した行の字面を持てない段の名前をここで 1 つだけ決める。
+const WRITE_SET_CMD: &str = "write-set";
+
 /// 赤い verify 行の stderr を残す診断 file の名（`verify.jsonl` と同じ dir）。
 ///
 /// **機械はこの file を読まない**。`verify.jsonl` の record（`schema` / `n` / `rc` /
@@ -49,6 +58,115 @@ const STDERR_LOG_FILE: &str = "verify.stderr.log";
 /// ——rules manifest は判定を動かす閾値の置き場である（憲法 C1 / C5）。**末尾**を
 /// 採るのは、落ちた command が理由を最後に出すためである。
 const STDERR_TAIL_LINES: usize = 20;
+
+/// 機械検証の段。**適用順序は [`CHECKS`] の並びが唯一の権威**である（憲法 C2）。
+///
+/// 順序を散文の注記で持たないための形である——enum が段の集合を閉じ、[`run_checks`] の
+/// 網羅 match が新しい variant を必ずこの並びへ置かせる（置き忘れは compile error）。
+/// 閉じた enum と全 variant の並びを対で持つのは器の既定の形である（[`VERDICTS`] /
+/// `rules::ALL` と同型）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Check {
+    /// diff が契約の write-set の内に収まっているか（ADR-0009 §2.4）。
+    WriteSet,
+    /// 便の写し `vessel.toml` の共通 verify（`{base}` を置換して撃つ）。
+    Common,
+    /// 契約の verify（穴を持たない）。
+    Contract,
+}
+
+/// [`Check`] の全 variant。**この並びが適用順序である**。
+pub const CHECKS: &[Check] = &[Check::WriteSet, Check::Common, Check::Contract];
+
+/// 撃った 1 段の結果。
+pub struct Step {
+    /// 実行した行の字面（置換後）。write-set 照合は [`WRITE_SET_CMD`]。
+    pub cmd: String,
+    /// process の rc（起動できない周は -1）。
+    pub rc: i32,
+    /// stderr の末尾（緑の段は空）。
+    pub stderr: String,
+}
+
+/// 検証を撃つ材料。
+pub struct Checks<'a> {
+    /// 撃つ場所。
+    pub worktree: &'a Path,
+    /// 便の base（`{base}` の実値）。
+    pub base: &'a str,
+    /// 読み込み済みの契約。
+    pub contract: &'a Contract,
+    /// **便の写しの**共通 verify（repo / worktree の宣言は読み直さない）。
+    pub common: &'a [String],
+}
+
+/// 全段を**順序どおり**に撃つ。
+///
+/// **gate も land もこの 1 本を通る**——2 本になると gate が通した行と main で撃った行の
+/// 意味が静かにずれる（行を撃つ実装を [`run_line_captured`] 1 本に保っているのと同じ理由）。
+pub fn run_checks(checks: &Checks<'_>) -> Vec<Step> {
+    let mut steps = Vec::new();
+    for check in CHECKS {
+        match *check {
+            Check::WriteSet => steps.push(check_write_set(checks)),
+            Check::Common => steps.extend(
+                checks
+                    .common
+                    .iter()
+                    .map(|line| fire(checks.worktree, line.replace(BASE_HOLE, checks.base))),
+            ),
+            Check::Contract => steps.extend(
+                checks
+                    .contract
+                    .verify
+                    .iter()
+                    .map(|line| fire(checks.worktree, line.clone())),
+            ),
+        }
+    }
+    steps
+}
+
+/// 1 行を撃って結果を組む。
+fn fire(worktree: &Path, cmd: String) -> Step {
+    let (rc, stderr) = run_line_captured(worktree, &cmd);
+    Step { cmd, rc, stderr }
+}
+
+/// diff の path が契約の write-set に収まっているか（ADR-0009 §2.4）。
+///
+/// hook の guard とは**面が違う**: あちらは編集時に実体（symlink）まで解いて 1 件ずつ止める
+/// backstop で、こちらは便が終わった後に git が出した名前を数える gate である。
+fn check_write_set(checks: &Checks<'_>) -> Step {
+    let cmd = WRITE_SET_CMD.to_owned();
+    let range = format!("{}..HEAD", checks.base);
+    // **`-z`**（NUL 区切り・quote しない）で受ける。既定の `--name-only` は非 ASCII の path を
+    // `"…"` へ quote するので、字面照合が偽の RED を出す（本 repo は日本語の doc を持つ）。
+    let Some(bytes) = git_bytes(checks.worktree, &["diff", "--name-only", "-z", &range]) else {
+        return Step { cmd, rc: -1, stderr: "diff の path を読めない".to_owned() };
+    };
+    let text = String::from_utf8_lossy(&bytes);
+    let outside: Vec<&str> = text
+        .split('\0')
+        .filter(|path| !path.is_empty() && !listed(path, &checks.contract.write_set))
+        .collect();
+    if outside.is_empty() {
+        return Step { cmd, rc: 0, stderr: String::new() };
+    }
+    Step {
+        cmd,
+        rc: 1,
+        stderr: format!("契約の write-set の外へ出た path:\n{}", outside.join("\n")),
+    }
+}
+
+/// path が write-set のいずれか（file の一致 か dir の prefix）に含まれるか。
+fn listed(path: &str, write_set: &[String]) -> bool {
+    write_set.iter().any(|entry| {
+        let trimmed = entry.trim_end_matches('/');
+        path == trimmed || path.starts_with(&format!("{trimmed}/"))
+    })
+}
 
 /// gate の 3 値。**bool で持たない**（「PASS でない」に 2 つの意味があるため）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -191,7 +309,7 @@ fn precheck(worktree: &Path, base: &str) -> Option<String> {
 
 /// verify を逐条で撃ち、diff を測る。
 fn measure(entry: &Gate<'_>, worktree: &Path, base: &str) -> Result<Measured, String> {
-    let red = record_verify(entry, worktree)?;
+    let red = record_verify(entry, worktree, base)?;
     let range = format!("{base}..HEAD");
     let diff = git_bytes(worktree, &["diff", &range])
         .ok_or_else(|| format!("{} の diff を測れない", worktree.display()))?;
@@ -204,31 +322,47 @@ fn measure(entry: &Gate<'_>, worktree: &Path, base: &str) -> Result<Measured, St
 /// rc だけでは「何がどう赤いか」が便の外から読めず、gate が落ちるたびに人が同じ行を
 /// 手で撃ち直して理由を取り直すことになる（実測 2026-09-10・`s2-07l.49`）。緑の行は
 /// 残さない——読む理由が無い出力で診断 file を埋めると、赤い行の見出しが埋もれる。
-fn record_verify(entry: &Gate<'_>, worktree: &Path) -> Result<u64, String> {
+fn record_verify(entry: &Gate<'_>, worktree: &Path, base: &str) -> Result<u64, String> {
+    let common = frozen_common(entry)?;
+    let steps = run_checks(&Checks {
+        worktree,
+        base,
+        contract: entry.contract,
+        common: &common,
+    });
     let path = verify_log_path(entry.state_dir, entry.run);
     let tail_path = path.with_file_name(STDERR_LOG_FILE);
     let mut red = 0;
-    for (index, line) in entry.contract.verify.iter().enumerate() {
+    for (index, step) in steps.iter().enumerate() {
         let number = index as u64 + 1;
-        let (rc, stderr) = run_line_captured(worktree, line);
-        if rc != 0 {
+        if step.rc != 0 {
             red += 1;
-            append_stderr(
-                &tail_path,
-                entry.policy,
-                &format!("## n={number} rc={rc} cmd={line}"),
-                &stderr,
-            )?;
+            let head = format!("## n={number} rc={} cmd={}", step.rc, step.cmd);
+            append_stderr(&tail_path, entry.policy, &head, &step.stderr)?;
         }
         let record = json_lite::write_object(&[
             ("schema", Value::Num(SCHEMA)),
             ("n", Value::Num(number)),
-            ("rc", Value::Num(recorded_rc(rc))),
-            ("cmd", Value::Str(line.clone())),
+            ("rc", Value::Num(recorded_rc(step.rc))),
+            ("cmd", Value::Str(step.cmd.clone())),
         ]);
         append_line(&path, &record, entry.policy).map_err(|err| err.to_string())?;
     }
     Ok(red)
+}
+
+/// 便の写しから共通 verify を読む。
+///
+/// **読むのは `<state_dir>/pipe/<run>/vessel.toml` だけ**である——repo や worktree の
+/// `.vessel.toml` を読み直すと、便の実装が自分の検証を書き換えられる（ADR-0010 §2.4）。
+fn frozen_common(entry: &Gate<'_>) -> Result<Vec<String>, String> {
+    let path = vessel_path(entry.state_dir, entry.run);
+    Effective::load(&path)
+        .map(|found| found.common_verify().to_vec())
+        .map_err(|errors| {
+            let lines: Vec<String> = errors.iter().map(ToString::to_string).collect();
+            format!("{} を読めない: {}", path.display(), lines.join(" / "))
+        })
 }
 
 /// 見出し 1 行と stderr の末尾を診断 file へ 1 件 append する。
@@ -241,17 +375,9 @@ fn append_stderr(path: &Path, policy: LockPolicy, head: &str, stderr: &str) -> R
     Ok(())
 }
 
-/// verify 1 行を与えられた worktree で撃って rc を得る。起動できない周も RED 側へ倒す。
-///
-/// land の「main 実測」も同じ関数を通す（**verify 行を撃つ実装は器の中で 1 本**）。
-/// 2 本になると gate が通した行と main で撃った行の意味が静かにずれる。
-pub fn run_line(worktree: &Path, line: &str) -> i32 {
-    run_line_captured(worktree, line).0
-}
-
 /// verify 1 行を撃ち、rc と **stderr の末尾**（`STDERR_TAIL_LINES` 行）を得る。
 ///
-/// **撃つ実装はここ 1 本だけ**である（[`run_line`] はこの関数の rc だけを返す薄い口）。
+/// **撃つ実装はここ 1 本だけ**である（gate も land も [`run_checks`] 経由でここへ来る）。
 /// 出力の要る側と要らない側で `Command` を 2 本に割ると、gate が通した行と land が
 /// main で撃った行が別の実装になり、意味が静かにずれる。
 pub fn run_line_captured(worktree: &Path, line: &str) -> (i32, String) {

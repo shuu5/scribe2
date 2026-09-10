@@ -1052,8 +1052,8 @@ fn pipe_intake_freezes_effective_vessel_copy() {
 ///
 /// suite の他の歯はすべて `--rules` の tmp manifest で上限を広げて通しているので、この 1 本が
 /// 無いと「自己ホストの宣言が壊れた」周も CI は緑のまま通る（lens M3・2026-09-10）。
-/// 併せて manifest の `gate.common_verify` と宣言の `common-verify` の**逐語一致**を pin する
-/// （2 面が同文である間の drift 面。行の廃止は別便）。
+/// 併せて manifest の**上限の行**（`runner.allowed_commands`）を宣言が名乗ることを pin する
+/// （共通 verify の行は `s2-07l.57` で廃止済みゆえ 2 面同文の pin は畳んだ）。
 #[test]
 fn pipe_intake_accepts_self_hosted_declaration_under_embedded_ceiling() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -1078,18 +1078,25 @@ fn pipe_intake_accepts_self_hosted_declaration_under_embedded_ceiling() {
         stderr_of(&out)
     );
 
+    // 上限の行は残る（共通 verify の行は ADR-0010 §2.2 で廃止済み＝2 面同文の pin は畳んだ）。
     let manifest = Manifest::embedded().expect("埋め込み manifest を読める");
-    let row = manifest.get("gate.common_verify").expect("共通 verify の行が在る");
-    let lines = match row.value {
+    let row = manifest.get("runner.allowed_commands").expect("上限の行が在る");
+    let ceiling = match row.value {
         RuleValue::List(ref found) => found.clone(),
         _ => Vec::new(),
     };
-    assert!(!lines.is_empty(), "母集団は manifest の行の値（実 {} 本）", lines.len());
-    for line in &lines {
+    assert!(!ceiling.is_empty(), "母集団は上限の行の値（実 {} 本）", ceiling.len());
+    // **`allowed-commands` の行だけに当てる**——宣言の本文には共通 verify（`cargo …`）も
+    // 在るので、file 全体へ `contains` すると allowlist が空でも通る（字面衝突）。
+    let line = declared
+        .lines()
+        .find(|line| line.trim_start().starts_with("allowed-commands"))
+        .unwrap_or_default();
+    for command in &ceiling {
         assert!(
-            declared.contains(line.as_str()),
-            "manifest の {line:?} が宣言に逐語で在る（母集団 {} 本）: {declared}",
-            lines.len()
+            line.contains(command.as_str()),
+            "自己ホストの宣言は上限の {command:?} を名乗る（母集団 {} 本）: {line}",
+            ceiling.len()
         );
     }
     clean(&[&repo, &state]);
@@ -1409,10 +1416,164 @@ fn pipe_gate_fails_on_red_verify_line() {
     assert!(!marker.exists(), "verify RED の周は lens を起動しない");
     let log = fs::read_to_string(state.join("pipe").join(&id).join("verify.jsonl"))
         .expect("verify.jsonl を読める");
-    assert_eq!(log.lines().count(), 2, "verify は逐条で残る: {log}");
-    assert!(log.contains("\"rc\":0"), "1 行目の rc 0: {log}");
-    assert!(log.contains("\"rc\":1"), "2 行目の rc 1: {log}");
+    // 母集団 = 4 record（write-set 照合 1 + 写しの共通 verify 1 + 契約 2 本）。
+    assert_eq!(log.lines().count(), 4, "verify は逐条で残る: {log}");
+    assert!(log.contains("\"n\":3,\"rc\":0,\"cmd\":\"sh verify-ok.sh\""), "契約 1 本目は緑: {log}");
+    assert!(log.contains("\"n\":4,\"rc\":1,\"cmd\":\"sh verify-red.sh\""), "契約 2 本目が赤: {log}");
     assert_eq!(value_of(&verdict_pairs(&state, &id), "verify_red"), "1", "赤は 1 本");
+    clean(&[&repo, &state]);
+}
+
+/// `verify.jsonl` の record を全部読む。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn verify_rows(state: &Path, id: &str) -> Vec<Vec<(String, vessel::fleet::json_lite::Value)>> {
+    let log = fs::read_to_string(state.join("pipe").join(id).join("verify.jsonl"))
+        .expect("verify.jsonl を読める");
+    log.lines()
+        .filter_map(|line| vessel::fleet::json_lite::parse_object(line.trim()).ok())
+        .collect()
+}
+
+/// n 番目（1 始まり）の record の 1 値。
+fn row_value(rows: &[Vec<(String, vessel::fleet::json_lite::Value)>], n: usize, key: &str) -> String {
+    rows.get(n.saturating_sub(1)).map_or_else(String::new, |row| value_of(row, key))
+}
+
+/// spawn を 1 回撃つ（runner を選ぶ形）。
+fn spawn_with(repo: &Path, state: &Path, id: &str, runner: &str) -> Output {
+    run_pipe(&[
+        "spawn", "--run", id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(), "--runner", runner,
+    ])
+}
+
+/// **write-set の外へ出た便は gate が落とす**（ADR-0009 §2.4・段①）。
+///
+/// guard（hook）は misbehave した runner のための backstop で、`sh -c` の runner には
+/// 効かない。**器の側で数える**面がここである。
+#[test]
+fn pipe_gate_fails_when_diff_leaves_write_set() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let id = intake(&repo, &state, &path);
+    // 契約の write-set は `src/lib.rs` だけ。runner が別 file も足す。
+    // `src/lib.rs.bak` は **write-set の entry の接頭辞だが segment 境界で外れる** path。
+    // これが無いと「`/` を 1 文字落とす」変異（`starts_with(trimmed)`）が生き残る。
+    let runner = "echo x >> src/lib.rs && echo y > stray.md && echo z > src/lib.rs.bak \
+                  && git add -A && git commit -q -m runner";
+    let spawned = spawn_with(&repo, &state, &id, runner);
+    assert_eq!(spawned.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&spawned));
+    let marker = state.join("lens-ran");
+    let lens = fake_lens(&marker, &lens_verdict("PASS"));
+    let out = gate_once(&repo, &state, &id, Some(&lens));
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "write-set の外は FAIL: {}", stderr_of(&out));
+
+    let rows = verify_rows(&state, &id);
+    assert_eq!(row_value(&rows, 1, "cmd"), "write-set", "段①は先頭（母集団 {} record）", rows.len());
+    assert_eq!(row_value(&rows, 1, "rc"), "1", "外れた便は段①が赤い");
+    // **lens は呼ばない**（赤い周は lens の顔色で通らない）。
+    assert!(!marker.exists(), "段①が赤い周は lens を起動しない");
+    let tail = fs::read_to_string(state.join("pipe").join(&id).join("verify.stderr.log"))
+        .expect("verify.stderr.log を読める");
+    assert!(tail.contains("stray.md"), "外れた path を列挙する: {tail}");
+    assert!(tail.contains("src/lib.rs.bak"), "接頭辞が一致しても segment 境界で外れる: {tail}");
+    // **内に収まる path は列挙しない**（`src/lib.rs.bak` を含む行を除いて数える＝字面の
+    // 包含関係で assert が空虚にならないようにする）。
+    assert!(
+        !tail.lines().any(|line| line.contains("src/lib.rs") && !line.contains("src/lib.rs.bak")),
+        "内に収まる path は列挙しない: {tail}"
+    );
+
+    // **弁別**: 同じ契約でも write-set の内に収まる便は段①が緑になる（`stray.md` を足さない）。
+    // **bead を分ける**（run id は `<bead>-<秒>` なので、同じ秒の 2 便目は id が衝突する）。
+    let second = write_contract(&repo, &[], &[]);
+    let inside = intake_bead(&repo, &state, &second, "s2-41o");
+    let ran = spawn_with(&repo, &state, &inside, TOY_COMMIT);
+    assert_eq!(ran.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&ran));
+    let ok = gate_once(&repo, &state, &inside, Some(&fake_lens(&state.join("lens-2"), &lens_verdict("PASS"))));
+    assert_eq!(ok.status.code(), Some(i32::from(RC_OK)), "内に収まる便は通る: {}", stderr_of(&ok));
+    assert_eq!(row_value(&verify_rows(&state, &inside), 1, "rc"), "0", "段①が緑");
+    clean(&[&repo, &state]);
+}
+
+/// **共通 verify は便の写しから撃ち、契約の verify より前に来る**（段②→段③）。
+///
+/// `{base}` は共通 verify の行だけが置ける穴で、契約の行には置換しない（.56 の intake が
+/// 契約行の穴を断っているので、契約側に穴は在り得ない）。
+#[test]
+fn pipe_gate_runs_common_verify_from_vessel_copy_before_contract() {
+    let (repo, state) = repo_with_state();
+    // git だけで rc 0 / rc≠0 になる 2 行（宣言の allowlist は git / sh）。
+    commit_vessel(
+        &repo,
+        VESSEL_ALLOWED,
+        r#"["git rev-parse --verify {base}", "git cat-file -e {base}:no-such-file"]"#,
+    );
+    let path = write_contract(&repo, &[], &[]);
+    let id = implemented(&repo, &state, &path);
+    let base = git(&repo, &["rev-parse", "HEAD"]);
+    let marker = state.join("lens-ran");
+    let out = gate_once(&repo, &state, &id, Some(&fake_lens(&marker, &lens_verdict("PASS"))));
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "共通 verify が赤ければ FAIL: {}", stderr_of(&out));
+
+    let rows = verify_rows(&state, &id);
+    assert_eq!(rows.len(), 4, "母集団 = write-set 1 + 共通 2 + 契約 1");
+    assert_eq!(row_value(&rows, 1, "cmd"), "write-set", "段①");
+    assert_eq!(row_value(&rows, 2, "rc"), "0", "共通の 1 本目は緑");
+    assert_ne!(row_value(&rows, 3, "rc"), "0", "共通の 2 本目は赤");
+    assert_eq!(row_value(&rows, 4, "cmd"), "sh verify-ok.sh", "契約の行は共通の後ろ");
+    // **`{base}` は置換されている**（穴のまま撃つと `git rev-parse --verify {base}` は赤い）。
+    assert_eq!(
+        row_value(&rows, 2, "cmd"),
+        format!("git rev-parse --verify {base}"),
+        "共通の行の穴は便の base へ置換される"
+    );
+    // 「契約の行には置換しない」は **intake が契約行の穴を断つ**ので gate では観測できない
+    // （穴を持つ契約は run にならない）。その保証は
+    // `pipe_intake_refuses_contract_verify_with_placeholder` が持つ＝ここでは測らない。
+    assert!(!marker.exists(), "段②が赤い周も lens を起動しない");
+    clean(&[&repo, &state]);
+}
+
+/// **便の実装が worktree の宣言を書き換えても、gate は写しの行を撃つ**（ADR-0010 §2.4）。
+///
+/// 読み直す実装だと、便が自分の検証を消して通れる（自己拡張）。
+#[test]
+fn pipe_gate_ignores_worktree_vessel_declaration() {
+    let (repo, state) = repo_with_state();
+    // 宣言も write-set に入れる＝段①は緑のまま段②だけを測る。
+    let path = write_contract(&repo, &["write-set"], &[r#"write-set = ["src/lib.rs", ".vessel.toml"]"#]);
+    let id = intake(&repo, &state, &path);
+    let base = git(&repo, &["rev-parse", "HEAD"]);
+    // runner が worktree の宣言を「必ず赤くなる共通 verify」へ書き換えて commit する。
+    let runner = "printf 'schema = 1\\nallowed-commands = [\"git\"]\\n\
+                  common-verify = [\"git cat-file -e HEAD:no-such-file\"]\\n' > .vessel.toml \
+                  && echo x >> src/lib.rs && git add -A && git commit -q -m runner";
+    let spawned = spawn_with(&repo, &state, &id, runner);
+    assert_eq!(spawned.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&spawned));
+    // **repo 側の宣言も intake の後に赤い行へ差し替える**＝写しからしか読まないことを
+    // worktree 面と repo 面の 2 面で縛る（main が進んだ周に凍っていない行を撃たない）。
+    commit_vessel(&repo, VESSEL_ALLOWED, r#"["git cat-file -e HEAD:no-such-file"]"#);
+    let out = gate_once(&repo, &state, &id, Some(&fake_lens(&state.join("lens-ran"), &lens_verdict("PASS"))));
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "写しの行は緑なので通る: {}", stderr_of(&out));
+
+    let rows = verify_rows(&state, &id);
+    assert_eq!(
+        row_value(&rows, 2, "cmd"),
+        format!("git rev-parse --verify {base}"),
+        "撃つのは**写し**の行"
+    );
+    let log = fs::read_to_string(state.join("pipe").join(&id).join("verify.jsonl"))
+        .expect("verify.jsonl を読める");
+    assert!(!log.contains("no-such-file"), "worktree の宣言は読み直さない: {log}");
+    // worktree 側の宣言が実際に書き換わっていることも測る（**測っていない**を「通った」に
+    // 化けさせないため＝runner が何もしていなければこの歯は空虚になる）。
+    let changed = fs::read_to_string(worktree_of(&repo, &id).join(".vessel.toml"))
+        .expect("worktree の宣言を読める");
+    assert!(changed.contains("no-such-file"), "runner は宣言を書き換えている: {changed}");
     clean(&[&repo, &state]);
 }
 
@@ -1441,12 +1602,13 @@ fn pipe_gate_keeps_stderr_tail_of_red_verify_lines() {
     let log = fs::read_to_string(state.join("pipe").join(&id).join("verify.jsonl"))
         .expect("verify.jsonl を読める");
     let rows: Vec<&str> = log.lines().collect();
-    assert_eq!(rows.len(), 2, "verify は逐条で残る: {log}");
+    // 母集団 = 4 record（write-set 照合 1 + 写しの共通 verify 1 + 契約 2 本）。
+    assert_eq!(rows.len(), 4, "verify は逐条で残る: {log}");
     let second =
-        vessel::fleet::json_lite::parse_object(rows.get(1).copied().unwrap_or_default().trim())
-            .expect("2 行目は 1 行の JSON");
-    assert_eq!(value_of(&second, "n"), "2", "赤いのは 2 行目: {log}");
-    assert_eq!(value_of(&second, "rc"), "3", "n=2 の rc: {log}");
+        vessel::fleet::json_lite::parse_object(rows.get(3).copied().unwrap_or_default().trim())
+            .expect("4 行目は 1 行の JSON");
+    assert_eq!(value_of(&second, "n"), "4", "赤いのは契約の 2 本目: {log}");
+    assert_eq!(value_of(&second, "rc"), "3", "赤い契約行の rc: {log}");
 
     let tail = fs::read_to_string(state.join("pipe").join(&id).join("verify.stderr.log"))
         .expect("verify.stderr.log を読める");
@@ -1458,9 +1620,9 @@ fn pipe_gate_keeps_stderr_tail_of_red_verify_lines() {
         tail.lines().count()
     );
     let head = heads.first().copied().unwrap_or_default();
-    assert!(head.contains("n=2 rc=3"), "見出しは赤い行を名指す: {head}");
+    assert!(head.contains("n=4 rc=3"), "見出しは赤い行を名指す: {head}");
     assert!(!head.contains("boom"), "見出しの cmd= に boom の字面は無い: {head}");
-    assert!(!tail.contains("## n=1"), "緑の行は見出しを残さない: {tail}");
+    assert!(!tail.contains("## n=3"), "緑の行は見出しを残さない: {tail}");
     assert!(tail.contains("boom"), "stderr の本文が残る: {tail}");
     clean(&[&repo, &state]);
 }
@@ -1661,6 +1823,40 @@ fn pipe_land_reruns_verify_on_main_and_fails_loud() {
         !land::verdicts_path(&state).exists(),
         "赤い周は面 5 へ export しない"
     );
+    clean(&[&repo, &state]);
+}
+
+/// **land の main 実測も写しの共通 verify を撃つ**（gate と同じ順序・同じ関数）。
+///
+/// 契約の verify だけを撃つ実装だと、main で初めて赤くなる共通の検証（repo 共通の lint /
+/// 依存監査）を素通しして便が載る。1 回目（便の worktree）は緑・2 回目（main の実測）は
+/// 赤になる行で、**撃った回数**から弁別する。
+#[test]
+fn pipe_land_reruns_common_verify_from_vessel_copy_on_main() {
+    let (repo, state) = repo_with_state();
+    commit_vessel(&repo, VESSEL_ALLOWED, r#"["sh verify-once.sh"]"#);
+    // 契約の verify（`sh verify-ok.sh`）は main でも緑＝赤いのは**写しの共通 verify** である。
+    let path = write_contract(&repo, &[], &[]);
+    let marker = state.join("lens-ran");
+    let base = git(&repo, &["rev-parse", "refs/heads/main"]);
+    let id = gated_pass(&repo, &state, &path, &marker);
+    let out = land_once(&repo, &state, &id);
+    assert_eq!(
+        out.status.code(),
+        Some(i32::from(RC_REFUSED)),
+        "main で共通 verify が赤ければ rc 1: {}",
+        stderr_of(&out)
+    );
+    assert!(stderr_of(&out).contains("main が赤い"), "理由: {}", stderr_of(&out));
+    assert!(
+        show_line(&repo, &state, &id).contains("stage=Failed"),
+        "Failed detail=main-red で残る: {}",
+        show_line(&repo, &state, &id)
+    );
+    // **auto revert しない**（main は進んだまま loud に落ちる）。
+    assert_ne!(git(&repo, &["rev-parse", "refs/heads/main"]), base, "main は進んだまま");
+    // gate の周は緑だった＝1 回目と 2 回目で結果が変わる行を、両方の面が撃っている。
+    assert_eq!(row_value(&verify_rows(&state, &id), 2, "rc"), "0", "gate では同じ行が緑");
     clean(&[&repo, &state]);
 }
 
@@ -3096,9 +3292,16 @@ fn toy_compliant_refusal(toy: &Toy<'_>, contract: &Path) {
         stderr_of(&gated)
     );
     let log = fs::read_to_string(state.join("pipe").join(&id).join("verify.jsonl")).unwrap_or_default();
-    let row = vessel::fleet::json_lite::parse_object(log.lines().next().unwrap_or_default().trim())
+    // 赤いのは**契約の**行である（n=1 の write-set 照合と n=2 の共通 verify は緑）。
+    // 段が増えたので「1 行目」ではなく **cmd の字面**で当てる。
+    let row = log
+        .lines()
+        .filter_map(|line| vessel::fleet::json_lite::parse_object(line.trim()).ok())
+        .find(|found: &Vec<(String, vessel::fleet::json_lite::Value)>| {
+            value_of(found, "cmd") == "sh verify-out.sh"
+        })
         .unwrap_or_default();
-    assert_eq!(value_of(&row, "n"), "1", "verify は逐条で残る（1 行目）: {log}");
+    assert_eq!(value_of(&row, "n"), "3", "契約の行は共通 verify の後ろ: {log}");
     // **数値で測る**: `value_of` は key が無いと空文字を返すので、字面の `!= "0"` だと
     // `rc` が消えた・改名された退行まで真になってしまう（fail-open）。
     let rc: u64 = value_of(&row, "rc").parse().unwrap_or_default();
