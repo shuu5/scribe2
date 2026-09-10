@@ -818,6 +818,11 @@ fn e2e_rel(name: &str) -> String {
     format!("crates/{FIXTURE_MEMBER}/tests/e2e/{name}")
 }
 
+/// 2 本目の統合 test target（`tests/it2/<name>`）の repo 相対 path。
+fn it2_rel(name: &str) -> String {
+    format!("crates/{FIXTURE_MEMBER}/tests/it2/{name}")
+}
+
 /// base で **落ちる** 歯（`val()` は base で 1）。
 fn red_body() -> String {
     format!("#[test]\nfn probe() {{\n    assert_eq!({FIXTURE_MEMBER}::val(), 2);\n}}\n")
@@ -944,6 +949,39 @@ fn flip_check_treats_pub_crate_mod_line_as_declaration() {
     assert!(
         !got.line.contains("decl="),
         "空白の無い可視性は宣言に数えない: {}",
+        got.line
+    );
+}
+
+/// 同梱した宣言 file の**本数**を判定行が数える（`decl=N` の N は定数ではない）。
+///
+/// 統合 test target を 2 本持つ便では宣言 file も 2 本になる。`decl=1` に潰す変異は
+/// 1 本だけの便では生き残るので、**2 本の便**で数えているかを測る。
+#[test]
+fn flip_check_counts_each_bundled_declaration_file() {
+    let (dir, _) = base_commit_with_e2e();
+    // base に 2 本目の target を置く（この commit を base にする）。
+    write_at(&dir, &it2_rel("main.rs"), "mod seed2;\n");
+    write_at(
+        &dir,
+        &it2_rel("seed2.rs"),
+        &format!("#[test]\nfn seed2_holds() {{\n    assert_eq!({FIXTURE_MEMBER}::val(), 1);\n}}\n"),
+    );
+    head_commit(&dir);
+    let base = head_sha(&dir);
+
+    // HEAD: 2 本の target それぞれへ宣言 1 行 + base で赤い本体。
+    write_at(&dir, &e2e_rel("main.rs"), "mod seed;\nmod newmod;\n");
+    write_at(&dir, &e2e_rel("newmod.rs"), &red_body());
+    write_at(&dir, &it2_rel("main.rs"), "mod seed2;\nmod newmod2;\n");
+    write_at(&dir, &it2_rel("newmod2.rs"), &red_body());
+    head_commit(&dir);
+    let got = judge(&base, &dir);
+    drop_fixture(&dir);
+    assert_verdict(&got.line, got.code, 0, "RED-on-base ok");
+    assert!(
+        got.line.contains("decl=2"),
+        "宣言 file 2 本を数えるはず: {}",
         got.line
     );
 }
