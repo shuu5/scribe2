@@ -1,8 +1,8 @@
 //! `<NAME> runner`（設計 §6・FR5）。契約を stdin で受け、`claude -p` を worktree で回す。
 //!
-//! 止める条件はただ 1 つ、**rate limit の error record** である。それ以外の失敗は
-//! claude の rc をそのまま写す——包みが独自の判定を足すと、呼出側は「誰が止めたか」を
-//! 見失う。
+//! 止める条件はただ 1 つ、**上限 record（`rate_limit_event`）の status が「止める側」の集合に
+//! 属すること**である（ADR-0012 §2.1）。それ以外の失敗は claude の rc をそのまま写す——包みが
+//! 独自の判定を足すと、呼出側は「誰が止めたか」を見失う。
 
 use super::{build, feed, fill, flag, need, read_stdin_bytes, Call, DEFAULT_CLAUDE, RC_RATE_LIMIT};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
@@ -108,28 +108,38 @@ fn launch(call: &Call<'_>, tools: &str) -> Outcome {
     feed(&mut child, call.prompt);
     let mut records = 0_usize;
     let mut limited = false;
+    // **観測した status は記録に残す**（ADR-0012 §2.1 末尾）。集合を**実測で育てる**唯一の口で、
+    // これが無いと集合は永久に空のままになる。**判定の入力ではない**ので、残せない周も便は続く。
+    let mut seen_status: Option<String> = None;
     if let Some(out) = child.stdout.take() {
         for line in BufReader::new(out).lines().map_while(Result::ok) {
             records = records.saturating_add(1);
-            if is_rate_limit(&line) {
-                limited = true;
-                // **待たずに殺す**。上限に当たった席を回し続けても、次の record は
-                // 同じ error でしか無い。
-                let _ = child.kill();
-                break;
+            match decide(&line, STOP_STATUSES) {
+                Decision::Ignore => continue,
+                Decision::Observed(status) => seen_status = Some(status),
+                Decision::Stop(status) => {
+                    seen_status = Some(status);
+                    limited = true;
+                    // **待たずに殺す**。上限に当たった席を回し続けても、次の record は
+                    // 同じ上限でしか無い。
+                    let _ = child.kill();
+                    break;
+                }
             }
         }
     }
     let status = child.wait();
+    let observed = observed_suffix(seen_status.as_deref());
     if limited {
-        return Outcome::failed_line(RC_RATE_LIMIT, "runner: rate limit の record を見たので止めた".to_owned());
+        let reason = seen_status.as_deref().unwrap_or_default();
+        return Outcome::failed_line(RC_RATE_LIMIT, stop_line(reason));
     }
     match status {
         Err(err) => Outcome::failed_line(RC_BROKEN, format!("runner: claude を待てない: {err}")),
         // **rc は claude のものを写す**（包みが作り替えない）。
         Ok(found) => {
             let rc = u8::try_from(found.code().unwrap_or(i32::from(RC_BROKEN))).unwrap_or(RC_BROKEN);
-            let line = format!("runner: rc={rc} records={records}");
+            let line = format!("runner: rc={rc} records={records}{observed}");
             if rc == 0 { Outcome::ok_line(line) } else { Outcome { out: vec![line], err: Vec::new(), rc } }
         }
     }
@@ -147,197 +157,145 @@ fn allowed_tools(commands: &[String]) -> String {
         .join(",")
 }
 
-/// 上限に当たったことを表す語彙（planner 裁定 2026-09-10 Q4）。
+/// **上限を表す status の閉じた集合**（[ADR-0012] §2.1）。
 ///
-/// 1 語に絞ると取りこぼす——claude は上限を `rate_limit` を含まない文言でも surface する。
-const LIMIT_WORDS: &[&str] = &[
-    "rate_limit",
-    "rate limit",
-    "usage limit",
-    "429",
-    "529",
-    "overloaded",
-];
+/// **実測で採れた値だけ**を入れる（MUST）。記録時点で採れている status は `allowed_warning`
+/// （＝「許可されつつ警告」の周で、止める側ではない）1 つだけなので、**この集合は空**である。
+/// ゆえに器は当面 rc 75 を一度も立てない——これは ADR の**決定**であって実装の手抜きではない。
+///
+/// 逆（許可側を列挙して未知を上限へ倒す）を採らない理由は**失敗の重さの非対称**である:
+/// rc 75 は判定の名札ではなく**実行の中断**（下の `launch` は待たずに kill する）。取りこぼした
+/// 周は「rc 75 という分類が付かない」だけで便は claude 自身の rc で止まるが、誤って上限と読んだ
+/// 周は**健全な便が殺される**（ADR-0012 §4 案 (A') の却下理由）。
+///
+/// 止まる周の status を採取したら、その値をここへ入れる。**推測で足さない**（MUST NOT）。
+///
+/// [ADR-0012]: ../../../design-intent/decisions/ADR-0012-rate-limit-detection-reads-dedicated-record.html
+const STOP_STATUSES: &[&str] = &[];
 
-/// 上限と名乗ってよい record の**種別**（claude 自身が終端 / error として出す形）。
-///
-/// 会話 record（`user` / `assistant`）を外すのが要点である。claude は tool の失敗を
-/// `user` record の中の `tool_result` block として流し、その block が `"is_error":true` を
-/// 持つので、種別を見ずに字面で拾うと **cargo や grep の出力に `429` が混じるだけで便が
-/// 「上限」で死ぬ**（planner と admin が独立に実 binary で再現・2026-09-11）。
-const LIMIT_KINDS: &[&str] = &["result", "error", "system"];
+/// 上限 record の種別（`type` field の値）。
+const EVENT_KIND: &str = "rate_limit_event";
 
-/// record の **top-level の `type` の値**（入れ子の `"type"` は種別ではない）。
+/// 構造化された上限情報の key。
+const INFO_KEY: &str = "rate_limit_info";
+
+/// 判定の入力になる field の key。
+const STATUS_KEY: &str = "status";
+
+/// status が**止める側**か（純関数）。
 ///
-/// 字面で最初の `"type":` を採ると、`tool_result` block が中に持つ種別名を record の種別と
-/// 読み違える。深さを数えて **depth 1 の key だけ**を見るのはそのためで、`value_span` は
-/// `s2-07l.71` のものをそのまま使う（本便は母集団の絞りだけを足す）。
-fn record_kind(body: &str) -> Option<&str> {
-    const KEY: &str = r#""type":"#;
-    let mut depth = 0_usize;
-    let mut in_string = false;
-    let mut escaped = false;
-    for (at, ch) in body.char_indices() {
-        if in_string {
-            if escaped {
-                escaped = false;
-            } else if ch == '\\' {
-                escaped = true;
-            } else if ch == '"' {
-                in_string = false;
-            }
-            continue;
-        }
-        if ch == '"' {
-            if depth == 1 {
-                if let Some(after) = body.get(at..).and_then(|rest| rest.strip_prefix(KEY)) {
-                    return value_span(after);
-                }
-            }
-            in_string = true;
-        } else if ch == '{' || ch == '[' {
-            depth = depth.saturating_add(1);
-        } else if ch == '}' || ch == ']' {
-            depth = depth.saturating_sub(1);
-        }
-    }
-    None
+/// 集合が空である以上、production の経路は**止まる側を一度も通らない**。判定をここへ切り出す
+/// のは、そうしないと**上限で止まる分岐に歯が 1 本も当たらない**からである（歯は非空の集合を
+/// 渡して両向きに測る）。
+pub fn stops_on(status: &str, stop_statuses: &[&str]) -> bool {
+    stop_statuses.contains(&status)
 }
 
-/// stream-json の 1 行が **error を名乗る record** か。
+/// 1 行に対する判定（純関数の返り値）。
 ///
-/// 絞りは 2 段である。(1) **母集団を record 種別で先に絞る**——claude 自身が終端 / error として
-/// 出す種別（[`LIMIT_KINDS`]）でなければ、中に何が書いてあっても上限ではない。**種別を読めない
-/// record も上限ではない**（分からない周を上限へ倒さない＝誤認すると失敗原因が台帳から消えるが、
-/// 取りこぼしても呼出側は claude の rc をそのまま見る）。(2) そのうえで error を名乗るかを見る。
-///
-/// 種別が `error` の record はそれ自体が error である（`{"type":"error","status":429}` の形が
-/// 実在する）。残る 2 条件（`is_error` / `subtype`）は**種別の絞りを通った後**でだけ効く。
-fn is_error_record(body: &str) -> bool {
-    let Some(kind) = record_kind(body) else {
-        return false;
+/// **3 値**にするのは、`launch` の loop を薄くして**判定そのものを歯で測れるようにする**ため
+/// である。集合が空である以上 production は [`Decision::Stop`] を通らないので、分岐が loop の中に
+/// 埋まっていると**上限で止まる側に歯が 1 本も当たらない**（lens 2026-09-11 H1）。
+#[derive(Debug, PartialEq, Eq)]
+pub enum Decision {
+    /// 上限 record ではない（何もしない）。
+    Ignore,
+    /// 上限 record だが**止める側ではない** status（記録だけする）。
+    Observed(String),
+    /// 止める側の status（rc 75 で中断する）。
+    Stop(String),
+}
+
+/// 1 行を判定する（純関数）。
+pub fn decide(line: &str, stop_statuses: &[&str]) -> Decision {
+    let Some(status) = rate_limit_status(line) else {
+        return Decision::Ignore;
     };
-    if !LIMIT_KINDS.contains(&kind) {
-        return false;
+    if stops_on(status, stop_statuses) {
+        return Decision::Stop(status.to_owned());
     }
-    kind == "error"
-        || body.contains(r#""is_error":true"#)
-        || body.contains(r#""subtype":"error"#)
+    Decision::Observed(status.to_owned())
 }
 
-/// 上限語彙を探す **本文 field**（何が起きたかを人が読む形で運ぶ値だけ）。
-///
-/// **id 類（`session_id` / `uuid` / `request_id`）を入れない**のが本 slice の要点である。
-/// 実測 2026-09-10（`s2-07l.64` の実 run）: claude が振った `session_id` の 16 進に `429` が
-/// 部分文字列として現れただけで、**401 authentication_failed が rc 75「上限」に化けた**
-/// （呼出側は `Failed detail=rate-limit` と記帳する＝便の失敗原因が台帳に嘘で残る）。
-const BODY_FIELDS: &[&str] = &["result", "error", "message", "text", "status"];
-
-/// record の中の `field` の値を**字面で**切り出す（JSON parser を足さない）。
-///
-/// 探すのは `"<field>":` の形だけで、**colon の前の空白（`"result" : …`）は見ない**
-/// （claude の stream-json は compact ゆえ実害が無い側へ倒す。取り落とした周は
-/// 「上限ではない」＝claude の rc を写す極性に落ちる）。colon の**後ろ**の空白は読む。
-///
-/// parser を入れれば正確になるが、それは**依存の追加**（A3 の user 承認と C13 の予算）で
-/// あり、ここで要るのは「誤爆を塞ぐ」ことであって parser を得ることではない。値は 3 形を
-/// 取る——文字列（escape されていない `"` まで）・入れ子（対応する閉じ括弧まで・`{"error":
-/// {"type":"rate_limit_error"}}` の形が実在する）・裸の scalar（`,` か `}` まで・`{"type":
-/// "error","status":429}` の形が実在する）。同じ field が複数回現れる record もあるので
-/// **全ての出現**を返す。
-fn field_values<'a>(body: &'a str, field: &str) -> Vec<&'a str> {
-    let needle = format!("\"{field}\":");
-    let mut values = Vec::new();
-    let mut rest = body;
-    while let Some(at) = rest.find(&needle) {
-        let after = rest.get(at.saturating_add(needle.len())..).unwrap_or_default();
-        if let Some(found) = value_span(after) {
-            values.push(found);
-        }
-        rest = after;
-    }
-    values
+/// 上限で止めた周の 1 行（記録面と同じ形で status を載せる）。
+pub fn stop_line(status: &str) -> String {
+    format!("runner: rate limit の record を見たので止めた rate-limit-status={status}")
 }
 
-/// `"<field>":` の直後から値 1 つ分の字面を取る。取れなければ `None`。
-fn value_span(after: &str) -> Option<&str> {
-    let trimmed = after.trim_start();
-    match trimmed.chars().next() {
-        Some('"') => quoted_span(trimmed),
-        Some(open @ ('{' | '[')) => nested_span(trimmed, open),
-        Some(_) => {
-            let end = trimmed.find([',', '}']).unwrap_or(trimmed.len());
-            trimmed.get(..end).map(str::trim)
-        }
-        None => None,
-    }
+/// 観測を記録面へ載せる後置き（観測していない周は空）。
+pub fn observed_suffix(status: Option<&str>) -> String {
+    status
+        .map(|value| format!(" rate-limit-status={value}"))
+        .unwrap_or_default()
 }
 
-/// 先頭の `"` から **escape されていない** `"` までの中身。
-fn quoted_span(trimmed: &str) -> Option<&str> {
-    let mut escaped = false;
-    for (at, ch) in trimmed.char_indices().skip(1) {
-        if escaped {
-            escaped = false;
-        } else if ch == '\\' {
-            escaped = true;
-        } else if ch == '"' {
-            return trimmed.get(1..at);
-        }
-    }
-    None
-}
-
-/// 先頭の `{` / `[` から対応する閉じ括弧までの全体（**文字列の中の括弧は数えない**）。
-fn nested_span(trimmed: &str, open: char) -> Option<&str> {
-    let close = if open == '{' { '}' } else { ']' };
-    let mut depth = 0_usize;
-    let mut in_string = false;
-    let mut escaped = false;
-    for (at, ch) in trimmed.char_indices() {
-        if in_string {
-            if escaped {
-                escaped = false;
-            } else if ch == '\\' {
-                escaped = true;
-            } else if ch == '"' {
-                in_string = false;
-            }
-            continue;
-        }
-        if ch == '"' {
-            in_string = true;
-        } else if ch == open {
-            depth = depth.saturating_add(1);
-        } else if ch == close {
-            depth = depth.saturating_sub(1);
-            if depth == 0 {
-                return trimmed.get(..at.saturating_add(1));
-            }
-        }
-    }
-    None
-}
-
-/// stream-json の 1 行が **上限に当たった error record** か。
+/// stream-json の 1 行から **`rate_limit_event` の `rate_limit_info.status`** を読む。
 ///
-/// 絞りは 2 段である。(1) **error 系の record**だけを見る（error でない record は、たとえ
-/// 上限の語を含んでも本文の引用であって事実ではない）。(2) そのうえで語彙を探すのは
-/// **本文 field の値の中だけ**で、record 全体の字面には当てない（[`BODY_FIELDS`]）。
+/// 上限の真の合図は**専用の record 種別と構造化された status** で来る（実 run の raw stream から
+/// 採取・ADR-0012 §1）。本文の語彙を探す形はこの便で撤去した——探していたのは合図ではなく
+/// 「同じ言葉が混じった別の文」で、識別子の 16 進や tool の出力で 2 度誤爆した。
 ///
-/// **本文 field の値を 1 つも取れない error record は「上限ではない」**へ倒す。分からない
-/// 周を上限と名乗ると原因が失われる（401 が rate-limit として記帳される）が、上限を
-/// 取りこぼしても呼出側は claude の rc をそのまま見る＝失う側が小さいほうへ寄せる。
-/// 上限以外の error を rc 75 にしないのは従来どおり——1 つの数に 2 つの意味を載せない。
-fn is_rate_limit(line: &str) -> bool {
+/// 読むのは **`rate_limit_info` の直下の `status`** だけである（入れ子の object に入ったら
+/// そこで打ち切る）。`rate_limit_info` は `unifiedWindows` のような入れ子を持つので、最初に
+/// 見つけた `"status"` を採る形だと **key の並び次第で別の object の値を読む**（lens 2026-09-11 H3）。
+///
+/// key と colon の間・colon と値の間の**空白に寛容**である。実 stream は compact だが（実測）、
+/// 表記が変わっただけで記録の口が無音で止まる形にはしない（lens 2026-09-11 H2）。
+///
+/// **限界**: record 種別は行の中の marker で見るので、**別の record が上限 record を入れ子で
+/// 引用した周**は status を返しうる（top-level の種別を読む実装は ADR-0012 §2.2 が撤去を命じた）。
+/// 集合が空である現在は止まらないが、記録の口には載る＝集合を育てるときは現物を確かめる。
+pub fn rate_limit_status(line: &str) -> Option<&str> {
     let body = line.trim_start();
-    if !body.starts_with('{') || !is_error_record(body) {
-        return false;
+    if !body.starts_with('{') || !has_pair(body, "type", EVENT_KIND) {
+        return None;
     }
-    BODY_FIELDS
-        .iter()
-        .flat_map(|field| field_values(body, field))
-        .any(|value| LIMIT_WORDS.iter().any(|word| value.contains(word)))
+    let at = find_key(body, INFO_KEY)?;
+    let rest = body.get(at..)?;
+    let inner = immediate_object(rest)?;
+    let status_at = find_key(inner, STATUS_KEY)?;
+    let value = inner.get(status_at..)?;
+    quoted_value(value)
+}
+
+/// `"<key>"` の**直後**（空白と colon を跨いだ先）の位置を返す。
+fn find_key(body: &str, key: &str) -> Option<usize> {
+    let needle = format!("\"{key}\"");
+    let mut from = 0_usize;
+    while let Some(hit) = body.get(from..)?.find(&needle) {
+        let at = from.saturating_add(hit).saturating_add(needle.len());
+        let rest = body.get(at..)?;
+        let after = rest.trim_start();
+        if let Some(value) = after.strip_prefix(':') {
+            let skipped = rest.len().saturating_sub(value.len());
+            return Some(at.saturating_add(skipped));
+        }
+        from = at;
+    }
+    None
+}
+
+/// `"<key>": "<value>"` の対が在るか（空白に寛容）。
+fn has_pair(body: &str, key: &str, value: &str) -> bool {
+    find_key(body, key)
+        .and_then(|at| body.get(at..))
+        .and_then(quoted_value)
+        .is_some_and(|found| found == value)
+}
+
+/// colon の後ろの `"..."` の中身（escape は考えない＝status は識別子である）。
+fn quoted_value(after_colon: &str) -> Option<&str> {
+    let opened = after_colon.trim_start().strip_prefix('"')?;
+    opened.split_once('"').map(|(value, _)| value)
+}
+
+/// colon の後ろの `{ ... }` の**直下**だけ（入れ子の object に入ったら打ち切る）。
+fn immediate_object(after_colon: &str) -> Option<&str> {
+    let opened = after_colon.trim_start().strip_prefix('{')?;
+    let end = opened
+        .find(['{', '}'])
+        .unwrap_or(opened.len());
+    opened.get(..end)
 }
 
 /// 前提違反（rc 1 + stderr 1 行・何もしない）。

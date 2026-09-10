@@ -325,14 +325,25 @@ fn headless_runner_reads_contract_from_stdin_and_passes_permission_mode_every_ti
     clean(&[&dir, &worktree, &account]);
 }
 
+/// **反転した歯**（`s2-07l.77`・[ADR-0012] §2.2）: 入れ子の `rate_limit_error` では**もう止まらない**。
+///
+/// 以前は record の字面に上限の語彙を当てていたので、この形で rc 75 になっていた。上限の真の
+/// 合図は**専用 record（`rate_limit_event`）の構造化 status** で来ると実 run の現物で分かった
+/// ため、字面照合は走査ごと撤去した。**歯を緩めたのではなく、測る対象が変わった**——この形は
+/// もう「上限」ではないので、claude の rc をそのまま写す。
+///
+/// 効果でも測る: 以前は record を見た時点で claude を kill していたので `tail-ran` が残らなかった。
+/// 止めなくなった今は fake が最後まで走る＝**痕跡が残る**。
+///
+/// [ADR-0012]: ../../../design-intent/decisions/ADR-0012-rate-limit-detection-reads-dedicated-record.html
 #[test]
-fn headless_runner_stops_on_rate_limit_record() {
+fn headless_runner_no_longer_stops_on_nested_rate_limit_error() {
     let dir = tmp();
     let worktree = tmp();
     let body = concat!(
         "{\"type\":\"system\",\"subtype\":\"init\"}\n",
         "{\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\"}}\n",
-        "{\"type\":\"assistant\",\"text\":\"この先は読まれてはならない\"}\n"
+        "{\"type\":\"assistant\",\"text\":\"この先も読んでよい\"}\n"
     );
     let claude = fake_claude(&dir, body, true, 0);
     let write_set = dir.join("write-set.txt");
@@ -342,10 +353,9 @@ fn headless_runner_stops_on_rate_limit_record() {
         &RunnerCall { dir: &dir, worktree: &worktree, write_set: &write_set, vessel: &vessel, claude: &claude, mode: "acceptEdits", account: None },
         b"goal = \"x\"\n",
     );
-    assert_eq!(out.status.code(), Some(i32::from(RC_RATE_LIMIT)), "rate limit は rc 75");
-    // **効果で測る**: 名乗るだけでなく、実際にその場で止めている（fake は body の後に
-    // 5 秒眠ってから痕跡を残すので、残っていれば最後まで走らせてしまった証拠になる）。
-    assert!(!dir.join("tail-ran").exists(), "record を見た時点で止める");
+    assert_ne!(out.status.code(), Some(i32::from(RC_RATE_LIMIT)), "字面では止まらない");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "claude の rc を写す: {}", stderr_of(&out));
+    assert!(dir.join("tail-ran").exists(), "kill しないので fake は最後まで走る");
     clean(&[&dir, &worktree]);
 }
 
@@ -680,38 +690,32 @@ fn headless_runner_does_not_stop_on_quoted_rate_limit_words() {
     clean(&[&dir, &worktree]);
 }
 
+/// **反転した歯**（`s2-07l.77`・ADR-0012 §2.2）: error record の本文に上限の語彙が在っても
+/// **もう止まらない**。判定の入力は `rate_limit_event` の status だけになった。
 #[test]
-fn headless_runner_stops_on_error_record_without_rate_limit_literal() {
+fn headless_runner_no_longer_stops_on_error_records_with_limit_words() {
     let dir = tmp();
     let worktree = tmp();
     let write_set = dir.join("write-set.txt");
     let vessel = write_vessel_copy(&dir, r#"["cargo", "git"]"#);
     fs::write(&write_set, "src/lib.rs\n").expect("write-set を書ける");
-    // 上限は `rate_limit` の字面だけで surface するとは限らない。**error を名乗る record の
-    // 中**で上限の語彙を見る形なので、別の言い回しでも止まる。
     for body in [
         "{\"type\":\"result\",\"is_error\":true,\"result\":\"usage limit reached\"}\n",
         "{\"type\":\"error\",\"status\":429}\n",
         "{\"type\":\"result\",\"subtype\":\"error_during_execution\",\"result\":\"overloaded\"}\n",
     ] {
-        let claude = fake_claude(&dir, body, false, 0);
+        // **rc を写す**ことを測る（fake の rc を 0 以外にする＝「常に 0」と弁別できる形）。
+        let claude = fake_claude(&dir, body, false, 3);
         let out = run_runner(
-        &RunnerCall { dir: &dir, worktree: &worktree, write_set: &write_set, vessel: &vessel, claude: &claude, mode: "plan", account: None },
-        b"goal = \"x\"\n",
-    );
+            &RunnerCall { dir: &dir, worktree: &worktree, write_set: &write_set, vessel: &vessel, claude: &claude, mode: "plan", account: None },
+            b"goal = \"x\"\n",
+        );
         assert_eq!(
             out.status.code(),
-            Some(i32::from(RC_RATE_LIMIT)),
-            "上限を名乗る error record では止まる: {body}"
+            Some(3),
+            "上限 record 以外は claude の rc を写す: {body}"
         );
     }
-    // **上限でない error は rc 75 にしない**（1 つの数に 2 つの意味を載せない）。
-    let other = fake_claude(&dir, "{\"type\":\"result\",\"is_error\":true,\"result\":\"file not found\"}\n", false, 1);
-    let out = run_runner(
-        &RunnerCall { dir: &dir, worktree: &worktree, write_set: &write_set, vessel: &vessel, claude: &other, mode: "plan", account: None },
-        b"goal = \"x\"\n",
-    );
-    assert_eq!(out.status.code(), Some(1), "上限でない error は claude の rc を写す");
     clean(&[&dir, &worktree]);
 }
 
@@ -894,53 +898,30 @@ fn headless_runner_does_not_stop_on_rate_limit_word_in_session_id() {
     clean(&[&dir, &worktree]);
 }
 
-/// 走査を本文 field へ狭めても**上限の検出は生きている**（`s2-07l.71`・上の歯と対）。
+/// **反転した歯**（`s2-07l.77`・ADR-0012 §2.2）: 本文 field に上限の語彙が在っても**もう止まらない**。
 ///
-/// 上の歯だけだと「常に false」へ倒す変異が生き残る。**id には上限語を置かず**、
-/// 本文 field の値にだけ置いた record で rc 75 になることを測る。
+/// `s2-07l.71` / `.73` で「どこを走査するか」を 2 度狭めた形は、走査ごと撤去された。**狭める
+/// 努力が無駄だったのではなく**、狭めても誤爆が残るという事実が「本物の合図を見ていない」ことの
+/// 証拠になり、現物を採りに行く判断（`s2-07l.67` の契約）を正当化した。
 #[test]
-fn headless_runner_stops_on_rate_limit_word_in_result_body() {
+fn headless_runner_no_longer_stops_on_limit_words_in_body_fields() {
     let dir = tmp();
     let worktree = tmp();
     let write_set = dir.join("write-set.txt");
     let vessel = write_vessel_copy(&dir, r#"["cargo", "git"]"#);
     fs::write(&write_set, "src/lib.rs\n").expect("write-set を書ける");
     for body in [
-        // 文字列の本文 field。
-        concat!(
-            "{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":true,",
-            "\"result\":\"API Error: 429 rate limit\",",
-            "\"session_id\":\"11111111-2222-4333-8444-555555555555\"}\n"
-        ),
-        // 入れ子の object を値に持つ本文 field（既存の形）。
-        concat!(
-            "{\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\"},",
-            "\"session_id\":\"11111111-2222-4333-8444-555555555555\"}\n"
-        ),
-        // **本文 field は 1 つずつ測る**——宣言した field のうち歯が当たっていない語は、
-        // 後続の便が消しても CI が気づかない（lens 2026-09-11 で `message` / `text` を
-        // 落としても 329 本すべて緑のまま通ることを実測した）。
+        "{\"type\":\"result\",\"is_error\":true,\"result\":\"API Error: 429 rate limit\"}\n",
         "{\"type\":\"system\",\"subtype\":\"error\",\"message\":\"429 Too Many Requests\"}\n",
         "{\"type\":\"error\",\"text\":\"upstream returned 429\"}\n",
-        // **escape された `\"` で値を切らない**（切ると後半の上限語を取り落とす）。
-        "{\"type\":\"result\",\"is_error\":true,\"result\":\"server said \\\"429 rate limit\\\" once\"}\n",
-        // **同じ field が複数回現れる record**では全ての出現を見る（最初の 1 つで打ち切らない）。
-        concat!(
-            "{\"type\":\"result\",\"is_error\":true,\"result\":\"first is clean\",",
-            "\"result\":\"usage limit reached\"}\n"
-        ),
     ] {
-        // claude の rc は 0 でも、**上限を見たら包みが rc 75 で止める**（rc の写しではない）。
-        let claude = fake_claude(&dir, body, false, 0);
+        // **rc を写す**ことを測る（rc 0 だと「常に 0」を返す実装と弁別できない）。
+        let claude = fake_claude(&dir, body, false, 3);
         let out = run_runner(
             &RunnerCall { dir: &dir, worktree: &worktree, write_set: &write_set, vessel: &vessel, claude: &claude, mode: "plan", account: None },
             b"goal = \"x\"\n",
         );
-        assert_eq!(
-            out.status.code(),
-            Some(i32::from(RC_RATE_LIMIT)),
-            "本文 field の上限語では止まる: {body}"
-        );
+        assert_eq!(out.status.code(), Some(3), "本文の語彙では止まらない（rc を写す）: {body}");
     }
     clean(&[&dir, &worktree]);
 }
@@ -985,60 +966,33 @@ fn headless_runner_does_not_stop_on_rate_limit_word_in_tool_result() {
     clean(&[&dir, &worktree]);
 }
 
-/// 種別として読むのは **top-level の `type` だけ**（`s2-07l.73`・上の歯と対）。
+/// **反転した歯**（`s2-07l.77`・ADR-0012 §2.2）: 入れ子に終端種別の字面が在る record も、
+/// 配列や escape を跨いだ先に種別が在る record も、**もう上限として扱わない**。
 ///
-/// この歯が無いと「終端種別の字面が record のどこかに在れば通る」実装が緑になる——入れ子の
-/// `tool_result` は `"type":"error"` を**中に**持ちうるので、字面で拾う実装は会話 record を
-/// 終端 record と読み違える。**top-level の `type` を末尾に置く**ことで、「最初に見つけた
-/// `"type":`」を採る実装と弁別する。
+/// ★契約が挙げた「反転する 3 本」に本 1 本が漏れていた（`s2-07l.73` で**両向き**にした歯で、
+/// rc 75 側の 2 形が撤去された走査〔深さ数え〕を測っていたため）。設計の変更に伴う反転であって
+/// 歯を緩めたのではない。
 #[test]
-fn headless_runner_does_not_take_nested_type_as_record_kind() {
+fn headless_runner_no_longer_stops_on_records_with_nested_type_markers() {
     let dir = tmp();
     let worktree = tmp();
     let write_set = dir.join("write-set.txt");
     let vessel = write_vessel_copy(&dir, r#"["cargo", "git"]"#);
     fs::write(&write_set, "src/lib.rs\n").expect("write-set を書ける");
-    // **両向きで測る**。「入れ子を採らない」だけだと種別を一切読まない実装（常に None＝
-    // 上限ではない）が緑になるので、**構造を跨いだ先の top-level の種別をちゃんと読む**側も
-    // 対で置く。claude の rc は 1 なので、rc 75 と rc 1 で 2 つの向きが弁別できる。
-    for (body, want) in [
-        // 入れ子には終端種別（error）が在り、**top-level の種別は会話 record（user）**で、
-        // しかも字面の順序は「入れ子が先・top-level が後」＝「最初に見つけた type」を採る実装を落とす。
-        (
-            concat!(
-                "{\"message\":{\"content\":[{\"type\":\"error\",\"content\":\"429 rate limit\"}],",
-                "\"is_error\":true},\"type\":\"user\"}\n"
-            ),
-            1,
+    for body in [
+        concat!(
+            "{\"message\":{\"content\":[{\"type\":\"error\",\"content\":\"429 rate limit\"}],",
+            "\"is_error\":true},\"type\":\"user\"}\n"
         ),
-        // **配列を跨いだ先の top-level の種別を読む**（`[` `]` の深さを数えていない実装では、
-        // 種別が depth 1 に見えなくなるか、深さが 0 へ落ちて読めなくなる）。
-        (
-            "{\"content\":[\"first\",\"second\"],\"type\":\"error\",\"status\":429}\n",
-            i32::from(RC_RATE_LIMIT),
-        ),
-        // **escape を含む文字列を跨いだ先の種別を読む**（escape を見ない実装では文字列が
-        // 閉じず、top-level の種別に到達できない）。
-        (
-            "{\"result\":\"said \\\"429 rate limit\\\" once\",\"type\":\"result\",\"is_error\":true}\n",
-            i32::from(RC_RATE_LIMIT),
-        ),
-        // **文字列の中の `\"type\":` は key ではない**（文字列の終わりを見ない実装は、tool の
-        // 出力が引用した種別名を record の種別として拾う）。
-        (
-            concat!(
-                "{\"message\":\"tool said \\\"type\\\":\\\"result\\\" and 429 rate limit\",",
-                "\"type\":\"user\",\"is_error\":true}\n"
-            ),
-            1,
-        ),
+        "{\"content\":[\"first\",\"second\"],\"type\":\"error\",\"status\":429}\n",
+        "{\"result\":\"said \\\"429 rate limit\\\" once\",\"type\":\"result\",\"is_error\":true}\n",
     ] {
         let claude = fake_claude(&dir, body, false, 1);
         let out = run_runner(
             &RunnerCall { dir: &dir, worktree: &worktree, write_set: &write_set, vessel: &vessel, claude: &claude, mode: "plan", account: None },
             b"goal = \"x\"\n",
         );
-        assert_eq!(out.status.code(), Some(want), "種別は top-level の type だけ: {body} / {}", stderr_of(&out));
+        assert_eq!(out.status.code(), Some(1), "claude の rc を写す: {body}");
     }
     clean(&[&dir, &worktree]);
 }
@@ -1138,4 +1092,234 @@ fn headless_runner_prompt_does_not_expand_allowed_placeholder_from_contract() {
     // **展開は 1 度だけ**（穴が 2 つ余計に展開されていれば command 名の出現が増える）。
     assert_eq!(prompt.matches("- cargo").count(), 1, "allowlist の展開は 1 度だけ: {prompt}");
     clean(&[&dir, &worktree]);
+}
+
+/// **上限 record でも、集合に無い status では止めない**（`s2-07l.77`・ADR-0012 §2.1）。
+///
+/// 実測で採れた唯一の status は `allowed_warning`（許可されつつ警告）で、これは**止める側では
+/// ない**。止める status の集合は**空**なので、器は当面 rc 75 を立てない——ADR の**決定**であって
+/// 実装の手抜きではない（未採取の値を推測で足すと ADR §4 案 (A') へ戻る）。
+#[test]
+fn headless_runner_does_not_stop_on_rate_limit_event_with_an_unlisted_status() {
+    let dir = tmp();
+    let worktree = tmp();
+    let write_set = dir.join("write-set.txt");
+    let vessel = write_vessel_copy(&dir, r#"["cargo", "git"]"#);
+    fs::write(&write_set, "src/lib.rs\n").expect("write-set を書ける");
+    // 実 run で採取した現物と同じ形（uuid / session_id は別値）。
+    let body = concat!(
+        "{\"type\":\"rate_limit_event\",\"rate_limit_info\":{\"status\":\"allowed_warning\",",
+        "\"rateLimitType\":\"seven_day\",\"utilization\":0.97,\"isUsingOverage\":false},",
+        "\"uuid\":\"11111111-2222-4333-8444-555555555555\"}\n"
+    );
+    let claude = fake_claude(&dir, body, false, 0);
+    let out = run_runner(
+        &RunnerCall { dir: &dir, worktree: &worktree, write_set: &write_set, vessel: &vessel, claude: &claude, mode: "plan", account: None },
+        b"goal = \"x\"\n",
+    );
+    assert_ne!(out.status.code(), Some(i32::from(RC_RATE_LIMIT)), "集合に無い status では止めない");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "claude の rc を写す: {}", stderr_of(&out));
+    // **utilization 0.97 でも止めない**（閾値で止めない・ADR §2.3・憲法 C9.2）。
+    clean(&[&dir, &worktree]);
+}
+
+/// 止める判断は**純関数**で両向きに測る（`s2-07l.77`・ADR-0012 §2.1）。
+///
+/// 集合が空である以上、production の経路は**止まる側を一度も通らない**。純関数にしないと
+/// 「上限で止まる分岐」に歯が 1 本も当たらないので、ここでは**非空の集合**を渡して測る。
+#[test]
+fn headless_runner_stops_only_on_statuses_in_the_stop_set() {
+    let stop = ["blocked", "rejected"];
+    assert!(vessel::headless::runner::stops_on("blocked", &stop), "集合の値では止まる");
+    assert!(vessel::headless::runner::stops_on("rejected", &stop), "集合の値は 1 つに限らない");
+    assert!(!vessel::headless::runner::stops_on("allowed_warning", &stop), "集合に無い値では止まらない");
+    // **未知も止めない**（未採取の値を上限へ倒さない＝誤って健全な便を殺さない）。
+    assert!(!vessel::headless::runner::stops_on("some_new_status", &stop), "未知の status では止まらない");
+    // 空の集合（現行）はどの status でも止めない。
+    assert!(!vessel::headless::runner::stops_on("blocked", &[]), "空の集合では止まらない");
+}
+
+/// **観測した status は記録に残す**（`s2-07l.77`・ADR-0012 §2.1 末尾）。
+///
+/// 集合を**実測で育てる唯一の口**である。これが無いと「実測で採れた値だけを入れる」が運用で
+/// 回らず、集合は永久に空のままになる。記録は**判定の入力ではない**ので、rc は変わらない。
+#[test]
+fn headless_runner_records_the_observed_rate_limit_status() {
+    let dir = tmp();
+    let worktree = tmp();
+    let write_set = dir.join("write-set.txt");
+    let vessel = write_vessel_copy(&dir, r#"["cargo", "git"]"#);
+    fs::write(&write_set, "src/lib.rs\n").expect("write-set を書ける");
+    let body = "{\"type\":\"rate_limit_event\",\"rate_limit_info\":{\"status\":\"allowed_warning\"}}\n";
+    let claude = fake_claude(&dir, body, false, 0);
+    let out = run_runner(
+        &RunnerCall { dir: &dir, worktree: &worktree, write_set: &write_set, vessel: &vessel, claude: &claude, mode: "plan", account: None },
+        b"goal = \"x\"\n",
+    );
+    assert!(
+        stdout_of(&out).contains("rate-limit-status=allowed_warning"),
+        "観測した status を記録面へ載せる: {}",
+        stdout_of(&out)
+    );
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "記録は rc を変えない");
+    // 上限 record が流れない周は記録も出ない（無いものを名乗らない）。
+    let quiet = fake_claude(&dir, "{\"type\":\"result\",\"is_error\":false}\n", false, 0);
+    let again = run_runner(
+        &RunnerCall { dir: &dir, worktree: &worktree, write_set: &write_set, vessel: &vessel, claude: &quiet, mode: "plan", account: None },
+        b"goal = \"x\"\n",
+    );
+    assert!(!stdout_of(&again).contains("rate-limit-status="), "観測していない周は書かない: {}", stdout_of(&again));
+    clean(&[&dir, &worktree]);
+}
+
+/// **`s2-07l.76` の症状が消えたことの裏取り**（`s2-07l.77` の契約 (7)）。
+///
+/// hook の失敗を伝える `system` record の文面に上限語が混じっても、もう rc 75 にならない。
+/// **code の不在を字面で数えず、消えた結果の挙動で測る**。
+#[test]
+fn headless_runner_no_longer_stops_on_system_record_with_limit_words() {
+    let dir = tmp();
+    let worktree = tmp();
+    let write_set = dir.join("write-set.txt");
+    let vessel = write_vessel_copy(&dir, r#"["cargo", "git"]"#);
+    fs::write(&write_set, "src/lib.rs\n").expect("write-set を書ける");
+    let body = "{\"type\":\"system\",\"subtype\":\"error\",\"message\":\"hook failed: 429 Too Many Requests\"}\n";
+    let claude = fake_claude(&dir, body, false, 1);
+    let out = run_runner(
+        &RunnerCall { dir: &dir, worktree: &worktree, write_set: &write_set, vessel: &vessel, claude: &claude, mode: "plan", account: None },
+        b"goal = \"x\"\n",
+    );
+    assert_eq!(out.status.code(), Some(1), "claude の rc を写す: {}", stderr_of(&out));
+    clean(&[&dir, &worktree]);
+}
+
+/// **`s2-07l.74` の症状が消えたことの裏取り**（`s2-07l.77` の契約 (7)）。
+///
+/// 未閉じの入れ子を大量に持つ病的な 1 行でも、上限 record でなければ**中身を見ない**。
+/// **時間は測らない**（環境差で揺れる）——走査が無くなったことは「その record を検査しない」
+/// という挙動で表れる。
+#[test]
+fn headless_runner_no_longer_scans_pathological_records() {
+    let dir = tmp();
+    let worktree = tmp();
+    let write_set = dir.join("write-set.txt");
+    let vessel = write_vessel_copy(&dir, r#"["cargo", "git"]"#);
+    fs::write(&write_set, "src/lib.rs\n").expect("write-set を書ける");
+    // 未閉じの入れ子 20000 個（旧実装はここで二次の走査に入った）。上限語も混ぜる。
+    let pathological = format!(
+        "{{\"type\":\"error\",\"is_error\":true,{}\"result\":\"429 rate limit\"\n",
+        "\"error\":[".repeat(20000)
+    );
+    let claude = fake_claude(&dir, &pathological, false, 1);
+    let out = run_runner(
+        &RunnerCall { dir: &dir, worktree: &worktree, write_set: &write_set, vessel: &vessel, claude: &claude, mode: "plan", account: None },
+        b"goal = \"x\"\n",
+    );
+    assert_eq!(out.status.code(), Some(1), "上限 record でない行は中身を見ない: {}", stderr_of(&out));
+    clean(&[&dir, &worktree]);
+}
+
+/// **record の形をしていない行は読まない**（`s2-07l.77`・変異で生存した分岐に歯を当てる）。
+///
+/// 判定の入力は「claude が出した 1 record」であって「上限 record に言及した文字列」ではない。
+/// 行頭が `{` でない行（log の前置きが付いた行・本文が record を引用した行）は、marker を
+/// 含んでいても **status を読まない**——これが崩れると、tool の出力が上限 record を引用した
+/// 周に器が反応する（集合が空の現在は止まらないが、値を入れた周に誤停止へ育つ）。
+#[test]
+fn headless_runner_does_not_read_a_rate_limit_record_from_plain_text() {
+    let dir = tmp();
+    let worktree = tmp();
+    let write_set = dir.join("write-set.txt");
+    let vessel = write_vessel_copy(&dir, r#"["cargo", "git"]"#);
+    fs::write(&write_set, "src/lib.rs\n").expect("write-set を書ける");
+    // 行頭が `{` でない（前置きが付いた）が marker と status を含む行。
+    let body = concat!(
+        "log: {\"type\":\"rate_limit_event\",\"rate_limit_info\":{\"status\":\"allowed_warning\"}}\n",
+        "{\"type\":\"result\",\"is_error\":false}\n"
+    );
+    let claude = fake_claude(&dir, body, false, 0);
+    let out = run_runner(
+        &RunnerCall { dir: &dir, worktree: &worktree, write_set: &write_set, vessel: &vessel, claude: &claude, mode: "plan", account: None },
+        b"goal = \"x\"\n",
+    );
+    assert!(
+        !stdout_of(&out).contains("rate-limit-status="),
+        "record の形をしていない行から status を読まない: {}",
+        stdout_of(&out)
+    );
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "rc は claude のもの");
+    clean(&[&dir, &worktree]);
+}
+
+/// **止める側の分岐**を測る（`s2-07l.77`・lens 2026-09-11 H1）。
+///
+/// 集合が空である以上 production は `Stop` を通らないので、**判定を 3 値の純関数へ切り出して**
+/// 非空の集合で測る。これが無いと「上限で止める」側は 1 本も測られない。
+#[test]
+fn headless_runner_decides_stop_only_for_statuses_in_the_set() {
+    use vessel::headless::runner::{decide, stop_line, Decision};
+    let event = "{\"type\":\"rate_limit_event\",\"rate_limit_info\":{\"status\":\"blocked\"}}";
+    // 集合に在る status → **止める**。
+    assert_eq!(decide(event, &["blocked"]), Decision::Stop("blocked".to_owned()));
+    // 集合に無い status → 記録だけ（止めない）。
+    assert_eq!(decide(event, &["exceeded"]), Decision::Observed("blocked".to_owned()));
+    // 現行（空の集合）→ 記録だけ。
+    assert_eq!(decide(event, &[]), Decision::Observed("blocked".to_owned()));
+    // 上限 record でない行 → 何もしない。
+    assert_eq!(decide("{\"type\":\"result\",\"is_error\":true}", &["blocked"]), Decision::Ignore);
+    // 止めた周の 1 行は **status を載せる**（後から「何で止まったか」を読めるように）。
+    assert!(stop_line("blocked").contains("rate-limit-status=blocked"), "止めた理由を記録面と同じ形で載せる");
+}
+
+/// key と colon の間の**空白に寛容**である（`s2-07l.77`・lens 2026-09-11 H2）。
+///
+/// 実 stream は compact だが（実測）、表記が変わっただけで**記録の口が無音で止まる**形にはしない
+/// ——ADR §2.1 の「観測した status を残す」は、読めなければ一度も発火しない。
+#[test]
+fn headless_runner_reads_the_status_with_spaces_around_colons() {
+    use vessel::headless::runner::rate_limit_status;
+    let spaced = "{\"type\": \"rate_limit_event\", \"rate_limit_info\": {\"status\": \"allowed_warning\"}}";
+    assert_eq!(rate_limit_status(spaced), Some("allowed_warning"), "空白入りでも読む");
+    let compact = "{\"type\":\"rate_limit_event\",\"rate_limit_info\":{\"status\":\"allowed_warning\"}}";
+    assert_eq!(rate_limit_status(compact), Some("allowed_warning"), "compact も読む（実 stream の形）");
+}
+
+/// status は **`rate_limit_info` の直下**だけを読む（`s2-07l.77`・lens 2026-09-11 H3）。
+///
+/// `rate_limit_info` は `unifiedWindows` のような入れ子を持つ。最初に見つけた `"status"` を採る形は
+/// **key の並び次第で別の object の値を読む**——記録の口は集合を育てる唯一の入力なので、ここが
+/// 汚れると「実測で採れた値だけを入れる」が入口で崩れる。
+#[test]
+fn headless_runner_reads_the_status_only_from_the_immediate_object() {
+    use vessel::headless::runner::rate_limit_status;
+    // 入れ子が先に来て、その中に status が在る形（直下には無い）。
+    let nested_first = concat!(
+        "{\"type\":\"rate_limit_event\",\"rate_limit_info\":{",
+        "\"unifiedWindows\":{\"five_hour\":{\"status\":\"blocked\"}},\"utilization\":0.1}}"
+    );
+    assert_eq!(rate_limit_status(nested_first), None, "入れ子の status は読まない");
+    // 直下に在る形（現物と同じ並び）。
+    let direct = concat!(
+        "{\"type\":\"rate_limit_event\",\"rate_limit_info\":{\"status\":\"allowed_warning\",",
+        "\"unifiedWindows\":{\"five_hour\":{\"status\":\"blocked\"}}}}"
+    );
+    assert_eq!(rate_limit_status(direct), Some("allowed_warning"), "直下の status を読む");
+}
+
+/// 判定は **`rate_limit_event` 種別に限る**（`s2-07l.77`・ADR-0012 §2.1 の MUST）。
+///
+/// 種別を見ない実装は、`rate_limit_info` の形さえ持てば**別の record を上限として読む**。
+/// 変異（種別の照合を常に真にする）が生存したので歯を当てた（lens 2026-09-11 M1 / 変異 2 周目）。
+#[test]
+fn headless_runner_reads_the_status_only_from_the_dedicated_record_kind() {
+    use vessel::headless::runner::rate_limit_status;
+    // 上限 record と同じ形の field を持つが、**種別が違う** record。
+    let impostor = "{\"type\":\"result\",\"rate_limit_info\":{\"status\":\"blocked\"}}";
+    assert_eq!(rate_limit_status(impostor), None, "種別が違えば読まない");
+    // 種別 field 自体が無い record も読まない。
+    let typeless = "{\"rate_limit_info\":{\"status\":\"blocked\"}}";
+    assert_eq!(rate_limit_status(typeless), None, "種別が無ければ読まない");
+    // 対照: 種別が合っていれば読む。
+    let real = "{\"type\":\"rate_limit_event\",\"rate_limit_info\":{\"status\":\"blocked\"}}";
+    assert_eq!(rate_limit_status(real), Some("blocked"), "種別が合えば読む");
 }
