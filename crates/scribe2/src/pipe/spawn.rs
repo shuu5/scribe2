@@ -212,7 +212,11 @@ fn copy_plugin(worktree: &Path, state_dir: &Path, run: &str) -> Result<PathBuf, 
     std::fs::create_dir_all(&dest).map_err(|err| format!("{} を作れない: {err}", dest.display()))?;
     for name in PLUGIN_DIRS {
         let from = worktree.join(name);
-        if from.is_dir() {
+        // **`Path::is_dir` では判定しない**。あれは link を辿るので、`hooks` が dir への
+        // symlink（例 `hooks -> ../..`）の周に「dir だ」と読んで link 先の木を丸ごと写す
+        // ＝「symlink は追わない」が top-level だけ抜ける。最終要素を辿らない
+        // `symlink_metadata` で見て、link なら**写さない**（fail-closed）。
+        if std::fs::symlink_metadata(&from).is_ok_and(|meta| meta.is_dir()) {
             copy_tree(&from, &dest.join(name))?;
         }
     }
