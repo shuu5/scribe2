@@ -22,13 +22,13 @@ const SYMLINK_MODE: &str = "120000";
 /// 追跡先の file であって link target 文字列ではないので、作業木から読むと
 /// private path 形の target（`git ls-files` には出るが本文としては読めない）が
 /// 素通りする。index の blob を読めば target 文字列そのものが得られる。
-struct TrackedFile {
+pub(crate) struct TrackedFile {
     /// repo 相対 path。
-    rel: String,
+    pub(crate) rel: String,
     /// index の mode（symlink は 120000）。
-    mode: String,
+    pub(crate) mode: String,
     /// blob の oid。
-    oid: String,
+    pub(crate) oid: String,
 }
 
 impl TrackedFile {
@@ -39,7 +39,7 @@ impl TrackedFile {
 }
 
 /// paths-clean の母集団を測れたかどうか。
-enum Tracked {
+pub(crate) enum Tracked {
     /// `<root>` が repo root であり tracked file を列挙できた。
     Listed(Vec<TrackedFile>),
     /// `<root>` が repo root でない（flip-check の base tree はこの枝に落ちる）。
@@ -112,7 +112,7 @@ fn parse_ls_entry(part: &str) -> Option<TrackedFile> {
 }
 
 /// paths-clean の母集団を data 化して固定する（cwd を直読みしない）。
-fn tracked_files(root: &Path) -> Tracked {
+pub(crate) fn tracked_files(root: &Path) -> Tracked {
     match root_is_repo_root(root) {
         Err(reason) => Tracked::Unmeasurable(reason),
         Ok(false) => Tracked::NotRepoRoot,

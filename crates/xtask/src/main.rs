@@ -11,6 +11,7 @@ mod flipcheck;
 mod genmanifest;
 mod limits;
 mod mutantsdiff;
+mod non_rust_exec;
 mod paths_clean;
 mod toml_lite;
 

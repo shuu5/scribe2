@@ -87,6 +87,10 @@ pub enum RuleKind {
     /// **宣言が名乗れる上限**（ADR-0010 §2.2）。対象 repo の vessel 宣言
     /// `allowed-commands` はこの部分集合でなければ intake が便を起こさない。
     RunnerAllowedCommands,
+    /// **tracked な非 Rust 実行物の例外**（ADR-0009 §2.5）。分類器（shebang / 実行 bit /
+    /// 拡張子）に当たる path のうち、この列に**完全一致**で載るものだけを `xtask check` が
+    /// 通す。定義を緩める代わりに例外を 1 面へ集めるための行である。
+    RepoNonRustExecAllow,
 }
 
 /// [`RuleKind`] の全 variant。parity test の母集団である。
@@ -118,6 +122,7 @@ pub const ALL: &[RuleKind] = &[
     RuleKind::SeatTickStaleS,
     RuleKind::SeatCycleLockTtlS,
     RuleKind::RunnerAllowedCommands,
+    RuleKind::RepoNonRustExecAllow,
 ];
 
 impl RuleKind {
@@ -151,6 +156,7 @@ impl RuleKind {
             Self::SeatTickStaleS => "SeatTickStaleS",
             Self::SeatCycleLockTtlS => "SeatCycleLockTtlS",
             Self::RunnerAllowedCommands => "RunnerAllowedCommands",
+            Self::RepoNonRustExecAllow => "RepoNonRustExecAllow",
         }
     }
 
@@ -183,7 +189,7 @@ impl RuleKind {
             | Self::MutationSurvivalLine
             | Self::CompileShape
             | Self::CompileSeconds => ValueShape::Policy,
-            Self::RunnerAllowedCommands => ValueShape::List,
+            Self::RunnerAllowedCommands | Self::RepoNonRustExecAllow => ValueShape::List,
         }
     }
 
