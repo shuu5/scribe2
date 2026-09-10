@@ -337,6 +337,12 @@ impl Effective {
         &self.allowed
     }
 
+    /// どの便でも撃つ検証行。**gate と land はここからしか読まない**（repo / worktree の
+    /// 宣言を読み直さない＝便の中で検証が動かない・ADR-0010 §2.4）。
+    pub fn common_verify(&self) -> &[String] {
+        &self.common_verify
+    }
+
     /// 便の写しの本文（**同じ reader で読み戻せる**形）。
     pub fn render(&self) -> String {
         format!(

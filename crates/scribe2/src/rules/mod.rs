@@ -84,10 +84,9 @@ pub enum RuleKind {
     SeatTickStaleS,
     /// 席の cycle lock を live と見なす経過時間（秒）。超えた lock は residue として取り直す。
     SeatCycleLockTtlS,
-    /// runner に与える command 名の allowlist（ADR-0009 §2.1）。
+    /// **宣言が名乗れる上限**（ADR-0010 §2.2）。対象 repo の vessel 宣言
+    /// `allowed-commands` はこの部分集合でなければ intake が便を起こさない。
     RunnerAllowedCommands,
-    /// どの便にも共通の検証行（ADR-0009 §2.4）。gate が契約の verify の前に撃つ。
-    GateCommonVerify,
 }
 
 /// [`RuleKind`] の全 variant。parity test の母集団である。
@@ -119,7 +118,6 @@ pub const ALL: &[RuleKind] = &[
     RuleKind::SeatTickStaleS,
     RuleKind::SeatCycleLockTtlS,
     RuleKind::RunnerAllowedCommands,
-    RuleKind::GateCommonVerify,
 ];
 
 impl RuleKind {
@@ -153,7 +151,6 @@ impl RuleKind {
             Self::SeatTickStaleS => "SeatTickStaleS",
             Self::SeatCycleLockTtlS => "SeatCycleLockTtlS",
             Self::RunnerAllowedCommands => "RunnerAllowedCommands",
-            Self::GateCommonVerify => "GateCommonVerify",
         }
     }
 
@@ -186,7 +183,7 @@ impl RuleKind {
             | Self::MutationSurvivalLine
             | Self::CompileShape
             | Self::CompileSeconds => ValueShape::Policy,
-            Self::RunnerAllowedCommands | Self::GateCommonVerify => ValueShape::List,
+            Self::RunnerAllowedCommands => ValueShape::List,
         }
     }
 
