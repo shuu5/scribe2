@@ -24,6 +24,7 @@
 - `repo_root(cwd)`: `git rev-parse --show-toplevel` を std::process で（非 repo は None → `Absent`）。
 - **state dir の紐づけ**: `vessel init --state-dir <dir> [--version N] [ROOT]` が marker を書き、同時に repo の local git config に `<NAME>.stateDir = <dir>` を書く（key 名は NAME から導出・C2.2）。`hook` と `pipe` は `git config --get <NAME>.stateDir` で読む。tracked file に path を書かない（CON2）。既存 marker が別 name なら rc 2 で何も書かない。
 - CLI: `vessel init …` / `vessel show [ROOT]`（marker の 2 行と state dir を 1 行）/ `vessel check [ROOT]`（rc 0 = ByMe / 1 = Absent / 2 = ByOther）。
+- **vessel 宣言 `.vessel.toml`**（marker の隣・tracked・[ADR-0010](../../design-intent/decisions/ADR-0010-vessel-declaration-holds-allowlist-and-common-verify.html)）: marker には行を足さない（2 行厳格 parse は跨版 面 1 ゆえ不変＝行を足すと両版の hook が `Absent` で黙る）。宣言は契約 file と同じ flat な TOML subset で `schema` / `allowed-commands` / `common-verify` の 3 key が必須。読み手は `pipe intake` だけ（hook は読まない）＝[pipeline.md §5.1](./pipeline.md)。
 - **本 repo の root に `.vessel` を置くのは自己ホスト便（AC2・[pipeline.md §9](./pipeline.md)・`s2-07l.24`）の手番**。leg 5 では CLI と test の tmp repo で示す。
 
 ## 3. hook の入口
