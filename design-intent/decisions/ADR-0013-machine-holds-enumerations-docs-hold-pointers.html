@@ -58,7 +58,7 @@
   <li><a href="#s2-decision">§2. Decision</a></li>
   <li class="toc--sub"><a href="#s2-1-pointer">§2.1 列挙の SSOT は機械側に置き、 文書は pointer だけを持つ</a></li>
   <li class="toc--sub"><a href="#s2-2-order">§2.2 C2「宣言順」の充足形</a></li>
-  <li class="toc--sub"><a href="#s2-3-limits">§2.3 pin が捕まえない形と、 それを捕まえる面</a></li>
+  <li class="toc--sub"><a href="#s2-3-limits">§2.3 pin が捕まえない形 (実測で「受ける面が無い」と分かった穴)</a></li>
   <li class="toc--sub"><a href="#s2-4-scope">§2.4 射程外</a></li>
   <li><a href="#s3-consequences">§3. Consequences</a></li>
   <li><a href="#s4-alternatives">§4. Alternatives Considered</a></li>
@@ -77,7 +77,7 @@
 <p data-audience="machine">ADR-0006 §2.1 は <code>cargo xtask check</code> が measure する tag を<strong>列挙</strong>し (記録時点で 11 本)、 §2.2 は各 tag が測るものを 1 行ずつ並べた。 2026-09-11 の実測 (main = <code>e892fdc</code>・判定行の現物) では、 判定行が並べる measure は <strong>14</strong> であった。 文書側の列挙は <strong>3 本ぶん drift</strong> していた。</p>
 <p data-audience="machine">この drift は本件固有の事故ではない。 同じ形が独立に 2 度観測されている。 (a) measure を足す便の review が「文書の件数を直さないまま『本便で数え直した』と書いた」形を捕まえた。 (b) 設計文書の歯一覧が現物と <strong>29 本</strong>ずれていることが記録された。 <strong>手で数えた列挙は必ず腐る</strong>——腐っても compile も CI も通るので、 腐ったことに気づく面が無い。</p>
 <p data-audience="machine">憲法 <a href="../spec/constitution.html#c1">C1.2</a> は「規則の文書は型と manifest から<strong>導出</strong>し、 手書きの規範行を 0 にする」と定める。 列挙を文書へ写す形はこの条と正面から衝突する。 列挙を「更新する」対処は、 次の便で同じ drift を作り直すだけである。</p>
-<p data-audience="machine">別の面として、 憲法 <a href="../spec/constitution.html#c2">C2</a> は「適用順は stage 列挙の<strong>宣言順だけ</strong>から取り、 順序についての散文注記を持たない」と定める。 器はこれを「閉じた enum + 全 variant の const slice + 網羅 <code>match</code>」の形で実装しており、 対象は 3 面ある (<code>pipe::gate::CHECKS</code> / <code>pipe::gate::VERDICTS</code> / <code>rules::ALL</code>)。 ところが <strong>const slice の並びは手で書く</strong>ので、 宣言順から静かにずれうる——ずれても compile は通り、 順序の注記は持たない方針ゆえ、 <strong>機械が測らなければ誰も気づかない</strong>。 記録時点で 3 面の並びはいずれも正しく、 それを測る歯は <strong>1 本も無かった</strong>。</p>
+<p data-audience="machine">別の面として、 憲法 <a href="../spec/constitution.html#c2">C2</a> は「適用順は stage 列挙の<strong>宣言順だけ</strong>から取り、 順序についての散文注記を持たない」と定める。 器はこれを「閉じた enum + 全 variant の const slice + 網羅 <code>match</code>」の形で実装しており、 記録時点で対象は <strong>5 面</strong>ある (<code>pipe::gate::CHECKS</code> / <code>pipe::gate::VERDICTS</code> / <code>rules::ALL</code> / <code>fleet::STAGES</code> / <code>fleet::KINDS</code>)。 C2 が名指す「stage 列挙」に直接あたるのは <code>fleet::Stage</code> である。 ところが <strong>const slice の並びは手で書く</strong>ので、 宣言順から静かにずれうる——ずれても compile は通り、 順序の注記は持たない方針ゆえ、 <strong>機械が測らなければ誰も気づかない</strong>。 記録時点で 5 面の並びはいずれも正しく、 それを測る歯は <strong>1 本も無かった</strong> (母集団 = 上の 5 面)。</p>
 </section>
 
 <section id="s2-decision" class="normative">
@@ -85,20 +85,21 @@
 
 <h3 id="s2-1-pointer">§2.1 列挙の SSOT は機械側に置き、 文書は pointer だけを持つ</h3>
 <p class="section-essence" data-audience="human">一覧の正本は<strong>動いているコードと、 それが出す実際の出力</strong>だと決めます。 文書は一覧を書き写さず、 「どこを見れば本物が分かるか」だけを書きます。 こうすると、 文書が古くなる余地そのものが無くなります。 項目が増えたり減ったりしても、 そのたびに新しい記録を立てる必要はなくなります。</p>
-<p data-audience="machine">器 SHALL 列挙の SSOT を機械側 (型と、 それを写す外形) に置く。 design-intent の文書 SHALL NOT 列挙を写す。 文書 SHALL 「どこを見れば現物が分かるか」の pointer を持つ (本件では <code>cargo xtask check</code> の判定行と、 それを組み立てる実装)。</p>
-<p data-audience="machine">本決定は ADR-0006 の次を supersede する: <strong>§2.1 (11 本の列挙)</strong>、 <strong>§2.2 (各 tag が測るものの列挙)</strong>、 <strong>§2.3 のうち「tag の増減は本 ADR を supersede する新 ADR で行う (MUST)」の規定</strong>。 文書が列挙を持たない以上、 measure の増減で差し替える列挙が存在しないためである。 measure の増減は通常の契約 (bead) で足りる (MAY)——ただし repo の「ADR を書く条件」に当たる便 (憲法条の解釈・外部依存・跨版契約・却下案を残す価値のある分岐) は従来どおり ADR を要する。 ADR-0006 <strong>§2.4 (ADR-0002 §2.2 の例示の訂正) は supersede しない</strong>——列挙ではなく実測の訂正記録だからである。</p>
+<p data-audience="machine">器 SHALL 列挙の SSOT を機械側 (型と、 それを写す外形) に置く。 design-intent の文書 SHALL NOT 列挙を写す。 文書 SHALL 「どこを見れば現物が分かるか」の pointer を持つ。 本件の pointer は <code>cargo xtask check</code> が出す判定行と、 それを組み立てる実装 (<code>crates/xtask/src/check.rs</code> の <code>summary</code>) である。</p>
+<p data-audience="machine">本決定は ADR-0006 の次を supersede する: <strong>§2.1 (11 本の列挙)</strong>、 <strong>§2.2 (各 tag が測るものの列挙)</strong>、 <strong>§2.3 のうち「tag の増減は本 ADR を supersede する新 ADR で行う (MUST)」の規定と、 同節末尾の「ADR-0002 §2.6 (a) の 10 tag は本 ADR の 11 本に読み替える」という読み替え規定</strong> (読み替え先の数が列挙であり、 現物と drift するため)。 文書が列挙を持たない以上、 measure の増減で差し替える列挙が存在しないためである。 measure の増減は通常の契約 (bead) で足りる (MAY)——ただし repo の「ADR を書く条件」に当たる便 (憲法条の解釈・外部依存・跨版契約・却下案を残す価値のある分岐) は従来どおり ADR を要する。 ADR-0006 <strong>§2.4 (ADR-0002 §2.2 の例示の訂正) は supersede しない</strong>——列挙ではなく実測の訂正記録だからである。</p>
 
 <h3 id="s2-2-order">§2.2 C2「宣言順」の充足形</h3>
 <p class="section-essence" data-audience="human">「並びがそのまま実行順になる」決まりを、 実際に守れている形として次のように定めます。 種類は閉じた型で数えきる。 全部の並びを 1 か所に書く。 場合分けは取りこぼしがあれば組み立てに失敗するようにする。 そのうえで、 <strong>並びが宣言した順のままであることを機械が測る</strong>。 最後の 1 つが今まで無かった部分です。</p>
 <p data-audience="machine">器 SHALL 憲法 C2 の充足形を次の 4 つの対で持つ: (a) <strong>閉じた enum</strong> (variant の集合を型が閉じる)、 (b) <strong>全 variant を並べた const slice</strong> (この並びが適用順序である)、 (c) <strong>網羅 <code>match</code></strong> (variant の追加が compile error になる)、 (d) <strong>const slice の並びが判別子の昇順 (0, 1, 2, …) と一致することを測る歯</strong>。</p>
 <p data-audience="machine">(d) の述語 SHALL crate 内に <strong>1 つだけ</strong>置く。 3 面が別々の実装を持つと、 片方だけ緩む形で穴が開くためである。 述語は判別子の slice ではなく<strong>写像の関数</strong>を受け取り、 <code>as</code> を書く場所を呼び手の 1 行へ閉じる。</p>
-<p data-audience="machine">記録時点の対象は 3 面である: <code>pipe::gate::CHECKS</code> (機械検証の段・並びが適用順序)、 <code>pipe::gate::VERDICTS</code> (gate の 3 値)、 <code>rules::ALL</code> (規則種別の母集団)。 <strong>この 3 面という数を文書側の権威にしない</strong> (§2.1)——新しく (a)〜(c) の形を持つ面を足す便は、 同じ便で (d) の歯を足す (MUST)。</p>
+<p data-audience="machine">記録時点の対象は <strong>5 面</strong>である: <code>pipe::gate::CHECKS</code> (機械検証の段・並びが適用順序)、 <code>pipe::gate::VERDICTS</code> (gate の 3 値)、 <code>rules::ALL</code> (規則種別の母集団)、 <code>fleet::STAGES</code> (便の段・C2 が名指す「stage 列挙」)、 <code>fleet::KINDS</code> (event の種類)。 <strong>この 3 面という数を文書側の権威にしない</strong> (§2.1)——新しく (a)〜(c) の形を持つ面を足す便は、 同じ便で (d) の歯を足す (MUST)。</p>
 
-<h3 id="s2-3-limits">§2.3 pin が捕まえない形と、 それを捕まえる面</h3>
-<p class="section-essence" data-audience="human">この測り方には、 はっきりした穴が 1 つあります。 種類を<strong>末尾に足して</strong>一覧へ入れ忘れた場合は見つけられません。 順番を入れ替えた・重複した・<strong>途中</strong>を抜いた場合は見つかります。 穴を承知で採るのは、 末尾の入れ忘れを捕まえる別の面が既にあるからです。 限界は、 主張と同じ場所に書いておきます。</p>
+<h3 id="s2-3-limits">§2.3 pin が捕まえない形 (実測で「受ける面が無い」と分かった穴)</h3>
+<p class="section-essence" data-audience="human">この測り方には、 はっきりした穴が 1 つあります。 種類を<strong>末尾に足して</strong>一覧へ入れ忘れた場合は見つけられません。 順番の入れ替え・重複・<strong>途中</strong>の抜けは見つかります。 穴を受け止める別の仕組みが既にあるのかどうかを、 実際に壊して確かめました。 結果は「ほとんどの面で受け止められていない」でした。 穴はこの記録では塞ぎません——塞ぐには別の道具が要ります。 わかった限界は、 主張と同じ場所に書いておきます。</p>
 <p data-audience="machine">(d) の歯が捕まえるのは「並べ替え」「重複」「<strong>中間</strong>の欠番」である。 <strong>enum の末尾に足した variant を const slice へ入れ忘れた形は捕まえない</strong>——残りの判別子が <code>0..len</code> に収まるからである。</p>
-<p data-audience="machine">末尾の入れ忘れを捕まえる面は面ごとに異なる。 <code>rules::ALL</code> では manifest との parity である——行の <code>kind</code> は <code>ALL</code> を通して解決されるので、 <code>ALL</code> に無い variant の行は<strong>未知の kind として parse できず</strong>歯が落ちる (行を伴わない variant は、 配線されていない設定として <a href="../spec/constitution.html#c12">C10.3</a> の面が扱う)。 <code>pipe::gate</code> の 2 面では網羅 <code>match</code> と外形である。 これらは本 ADR が作る面ではなく、 <strong>既に在る面</strong>である。</p>
-<p data-audience="machine"><strong>本 ADR の記録時点の限界</strong>: §2.1 が SSOT と定めた「判定行」は、 <strong>集合としても順序としても pin されていない</strong>。 xtask の歯は判定行に対して個別 token の <code>contains</code> を当てるだけで、 token の集合も並びも測っていない (2026-09-11 実測)。 したがって §2.1 は「文書が列挙を持たない」ことは達成するが、 「機械側が列挙を守っている」ことの担保は<strong>現時点で個別 token の存在まで</strong>である。 判定行を外形として pin する面は別便で入れる。 <strong>本 ADR はこの不在を知ったうえで決めている</strong>——担保が既に在るかのように書かない。</p>
+<p data-audience="machine">この形を受ける面が既に在るかを 2026-09-11 に<strong>実測した</strong> (結果は面ごとに異なる)。 <code>rules::ALL</code> では、 <strong>manifest 行を伴う</strong>追加だけが捕まる——行の <code>kind</code> は <code>ALL</code> を通して解決されるので、 <code>ALL</code> に無い variant の行は未知の kind として <code>parse</code> できず歯が落ちる (variant と行を足し <code>ALL</code> を更新しない木で rc 100 を実測)。 <strong>行を伴わない追加は捕まらない</strong> (同条件で行を外すと 368/368 が緑)。 <code>pipe::gate</code> の 2 面と <code>fleet</code> の 2 面では<strong>捕まらない</strong> (<code>Check</code> に variant を足し <code>CHECKS</code> から落とした木で 368/368 が緑)。 網羅 <code>match</code> は arm を書かせるが、 <strong>const slice への登録は強制しない</strong>。</p>
+<p data-audience="machine">したがって「末尾の入れ忘れ」は、 <code>rules::ALL</code> に manifest 行を伴う場合を除き、 <strong>現時点でどの面も受けていない</strong>。 本 ADR はこの穴を塞がない (MUST NOT be read as closing it)。 塞ぐには「閉じた enum の variant 数と const slice の要素数の一致」を機械が測る面が要り、 stable Rust では derive macro (外部依存の追加 = A3 の承認事項) か、 構造検査側の text 面 (判別子ではなく宣言の字面を数える) のいずれかになる。 選択は別便で行う。</p>
+<p data-audience="machine"><strong>本 ADR の記録時点のもう 1 つの限界</strong>: §2.1 が SSOT と定めた「判定行」は、 <strong>集合としても順序としても pin されていない</strong>。 構造検査の歯は判定行に対して個別 token の <code>contains</code> を当てるだけで、 token の集合も並びも測っていない (2026-09-11 実測)。 したがって §2.1 は「文書が列挙を持たない」ことは達成するが、 「機械側が列挙を守っている」ことの担保は<strong>現時点で個別 token の存在まで</strong>である。 判定行を外形として pin する面は別便で入れる。 <strong>本 ADR はこの不在を知ったうえで決めている</strong>——担保が既に在るかのように書かない。</p>
 
 <h3 id="s2-4-scope">§2.4 射程外</h3>
 <p class="section-essence" data-audience="human">この記録が決めるのは「一覧をどこに置くか」と「並びをどう測るか」だけです。 それぞれの検査が何を測るか、 上限の数値、 出力の書式は、 ここでは決めません。</p>
@@ -108,9 +109,9 @@
 <section id="s3-consequences" class="informative">
 <h2>§3. Consequences</h2>
 <p class="section-essence" data-audience="human">良い面は、 文書が古くなる余地が消えること、 そして「並びが実行順」という決まりが初めて機械で測られるようになることです。 悪い面は、 一覧を読みたい人がコードか実行結果を見に行く必要があること。 もうひとつ、 末尾の入れ忘れという穴が残ることです。 どちらも承知のうえで選んでいます。</p>
-<p data-audience="machine">Positive: 文書側に drift しうる列挙が無くなる (C1.2 の向き)。 C2 の充足が<strong>測られる</strong>状態になる——記録時点まで、 並びの正しさは誰も測っていなかった。 measure の増減で ADR を立てる必要が消え、 記録の増殖が減る (憲法の順位「増殖の防止」)。</p>
+<p data-audience="machine">Positive: 文書側に drift しうる列挙が無くなる (C1.2 の向き)。 C2 の充足のうち<strong>並びの正しさ</strong>が 5 面すべてで測られる状態になる——記録時点まで、 並びを測る歯は 1 本も無かった (母集団 5 面)。 measure の増減で ADR を立てる必要が消え、 記録の増殖が減る (憲法の順位「増殖の防止」)。</p>
 <p data-audience="machine">Negative (受け入れるコスト): 列挙を知りたい読み手は現物 (判定行または実装) を見に行くことになる。 文書だけで完結しない。 pointer が指す先が動いた便では pointer の更新が要る (列挙の更新より頻度は低い)。</p>
-<p data-audience="machine">Negative (残る穴): §2.3 の末尾入れ忘れ。 面ごとの別経路が受けるが、 <strong>1 つの歯で全部が守られるわけではない</strong>。 加えて §2.3 末尾のとおり、 判定行そのものが集合として pin されていない状態が当面続く。</p>
+<p data-audience="machine">Negative (残る穴): §2.3 の末尾入れ忘れは、 <code>rules::ALL</code> に manifest 行を伴う場合を除き<strong>どの面も受けていない</strong> (実測)。 本 ADR は並びを測る面を足すが、 <strong>集合の完全性は測らない</strong>。 加えて §2.3 末尾のとおり、 判定行そのものが集合として pin されていない状態が当面続く。 どちらも塞ぐ面は別便である。</p>
 </section>
 
 <section id="s4-alternatives" class="informative">
@@ -127,7 +128,8 @@
 <p class="section-essence" data-audience="human">出所は、 実際に検査を走らせて出力を数えたことと、 並びを測る歯を書いて「無い状態では落ちる」ことを確かめたことです。 担保が無いと分かった件は、 別の便の審査で見つかりました。</p>
 <ul data-audience="machine">
   <li>drift の実測 (2026-09-11・main = <code>e892fdc</code>): <code>cargo xtask check</code> の判定行を現物で数え、 文書側の列挙 (記録時点 11 本) との差を確認した。 判定行が並べる measure は 14 であった。</li>
-  <li>C2 の充足が測られていないことの実測 (同日): 3 面 (<code>CHECKS</code> / <code>VERDICTS</code> / <code>ALL</code>) の並びを判別子順と突き合わせる歯を検索し、 <strong>0 本</strong>であることを確認した。 並び自体は 3 面とも正しかった——測る面が無いだけである。</li>
+  <li>C2 の充足が測られていないことの実測 (同日): (a)〜(c) の形を持つ面を全数で洗い出し (母集団 <strong>5 面</strong> = <code>CHECKS</code> / <code>VERDICTS</code> / <code>ALL</code> / <code>STAGES</code> / <code>KINDS</code>)、 並びを判別子順と突き合わせる歯を検索して <strong>0 本 / 5 面</strong>であることを確認した。 並び自体は 5 面とも正しかった——測る面が無いだけである。</li>
+  <li><strong>「末尾の入れ忘れを受ける面が在るか」の実測</strong> (同日・本 ADR の §2.3 を書き直させた測定): 3 通りを現物で壊して撃った。 (i) <code>Check</code> に variant を足し <code>CHECKS</code> から落とす → 368/368 緑 (受けない)。 (ii) <code>RuleKind</code> を足し manifest 行も足して <code>ALL</code> を更新しない → rc 100 (受ける)。 (iii) 同じく行を伴わない → 368/368 緑 (受けない)。 §2.3 の初稿は「網羅 <code>match</code> と外形が受ける」と書いていたが、 (i) がそれを偽と示したので差し替えた。</li>
   <li>歯の flip の実測 (同日): (d) の歯を先に置いた木で <code>cargo nextest run --workspace</code> が rc 101 (述語が存在しない compile error = 機能不在) で落ち、 述語を置いた後に 368/368 で通ることを実測した。</li>
   <li>述語の非空虚性 (同日): 並べ替え・中間の欠番・重複の 3 つの壊し方で述語が偽を返すことを歯にした。 真を返すだけの述語ではない。</li>
   <li>判定行が集合として pin されていないことの実測 (2026-09-11・別便の review): xtask の歯は判定行に対し個別 token の <code>contains</code> のみで、 順序も token 集合も測っていないことが確認された。 §2.3 末尾の限界はこの実測に基づく。</li>
