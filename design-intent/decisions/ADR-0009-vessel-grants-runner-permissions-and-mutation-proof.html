@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="folio-doc-type" content="adr">
+<meta name="folio-layer" content="project">
+<meta name="folio-version" content="0.4.6">
+<meta name="folio-status" content="accepted">
+<meta name="folio-stakeholders" content="Developer, AI Agent, External Reviewer">
+<meta name="folio-adr-id" content="0009">
+<meta name="folio-adr-date" content="2026-09-10">
+<title>ADR-0009 — runner の権限と非空虚性の検証は器が manifest から与える (口座設定の暗黙継承・host 側 script・契約への共通規律の手書きを廃止)</title>
+<link rel="stylesheet" href="../../common.css">
+<script type="application/ld+json">
+{
+  "@context": {
+    "dc": "http://purl.org/dc/terms/",
+    "schema": "https://schema.org/",
+    "folio": "https://folio.dev/spec/v1/"
+  },
+  "@id": "./ADR-0009-vessel-grants-runner-permissions-and-mutation-proof.html",
+  "@type": "schema:TechArticle",
+  "dc:isPartOf": [
+    { "@id": "./README.html" }
+  ],
+  "dc:title": "ADR-0009 — runner の権限と非空虚性の検証は器が manifest から与える (口座設定の暗黙継承・host 側 script・契約への共通規律の手書きを廃止)",
+  "folio:version": "0.4.6",
+  "folio:stakeholders": ["Developer", "AI Agent", "External Reviewer"],
+  "dc:references": [
+    { "@id": "../spec/constitution.html#c1" },
+    { "@id": "../spec/constitution.html#c2" },
+    { "@id": "../spec/constitution.html#c12" },
+    { "@id": "./ADR-0001-rust-single-static-binary.html" },
+    { "@id": "./ADR-0002-test-lint-toolchain.html" },
+    { "@id": "./ADR-0004-mvp-persistence-and-cross-version-formats.html" }
+  ]
+}
+</script>
+</head>
+<body>
+<!-- folio:chrome-top -->
+<a class="skip-link" href="#s1-context">本文へスキップ</a>
+<nav class="breadcrumb" aria-label="パンくず"><ol>
+  <li><a href="../index.html">design-intent</a></li>
+  <li><a href="./README.html">decisions</a></li>
+  <li aria-current="page">ADR-0009</li>
+</ol></nav>
+<!-- /folio:chrome-top -->
+
+<header class="doc-header">
+  <h1>ADR-0009 — runner の権限と非空虚性の検証は器が manifest から与える (口座設定の暗黙継承・host 側 script・契約への共通規律の手書きを廃止)</h1>
+  <div class="meta">Status: accepted &middot; Date: 2026-09-10 &middot; version 0.4.6 (拘束する constitution の版) &middot; C1 / C2 / C12 の適用を記録</div>
+</header>
+<!-- folio:chrome-toc -->
+<nav class="toc" aria-label="ページ内目次">
+<ol>
+  <li><a href="#s1-context">§1. Context</a></li>
+  <li><a href="#s2-decision">§2. Decision</a></li>
+  <li class="toc--sub"><a href="#s2-1-runner-permissions">§2.1 runner の権限は器が与える</a></li>
+  <li class="toc--sub"><a href="#s2-2-intake-refuses">§2.2 撃てない契約は intake が拒む</a></li>
+  <li class="toc--sub"><a href="#s2-3-mutation-proof">§2.3 非空虚性は器が cargo-mutants で測る</a></li>
+  <li class="toc--sub"><a href="#s2-4-common-verify">§2.4 共通規律は契約に手書きしない</a></li>
+  <li class="toc--sub"><a href="#s2-5-non-rust-exec">§2.5 repo 内の非 Rust 実行物は構造検査が deny する</a></li>
+  <li class="toc--sub"><a href="#s2-6-scope">§2.6 射程外</a></li>
+  <li><a href="#s3-consequences">§3. Consequences</a></li>
+  <li><a href="#s4-alternatives">§4. Alternatives Considered</a></li>
+  <li><a href="#s5-trace">§5. Trace</a></li>
+</ol>
+</nav>
+<!-- /folio:chrome-toc -->
+
+<aside class="informative">
+<p>本 ADR は IETF <strong>RFC 2119</strong> および <strong>RFC 8174 / BCP 14</strong> に定義される MUST / SHALL / SHOULD / MAY のキーワード解釈規約に従う。 ADR は決定時点の記録 (frozen) であり、 改訂は本 ADR を supersede する新 ADR で行う。</p>
+</aside>
+
+<aside class="machine-readable" aria-hidden="true">
+  <dl>
+    <dt>id</dt><dd>ADR-0009</dd>
+    <dt>doc-type</dt><dd>adr</dd>
+    <dt>status</dt><dd>accepted</dd>
+    <dt>date</dt><dd>2026-09-10</dd>
+    <dt>version</dt><dd>0.4.6 (拘束する constitution の版・決定時点で凍結)</dd>
+    <dt>decided-by</dt><dd>user 裁定 (2026-09-10・「抜け道を塞いで Rust の厳格な project として閉じる」) を受けた記録。 憲法条文は 1 文字も変えない (C1 / C2 / C12 の<strong>適用</strong>の記録であり A2 の改訂手続きには当たらない)</dd>
+    <dt>stakeholders</dt><dd>Developer, AI Agent, External Reviewer</dd>
+    <dt>supersedes</dt><dd>無し (既存 ADR の規定を差し替えない・ADR-0002 §2.4「repo 固有の構造検査は xtask」を<strong>適用</strong>する)</dd>
+    <dt>related</dt><dd>constitution C1 / C2 / C5 / C11 / C12 / C16・ADR-0001 §2.1 (drift の面を構造から消す)・ADR-0002 §2.4 (xtask)・ADR-0004 (env seam を持たない)・SRS FR4 / FR5 / FR8 / NFR1・設計 doc の pipeline §5.1 / §5.2 / §5.3 / §6 / §7</dd>
+  </dl>
+</aside>
+
+<section id="s1-context" class="informative">
+<h2>§1. Context</h2>
+<p class="section-essence" data-audience="human">実装役 (runner) が test を撃てない状態のまま便を流していました。 器は実装役に「何を実行してよいか」を渡しておらず、 起動した人の口座設定に黙って頼っていました。 それを直さず、 検証の script を repo の外に手書きして回避していたことが分かりました。</p>
+<p data-audience="machine">runner は <code>claude -p --permission-mode acceptEdits</code> で起動する (設計 pipeline §6)。 この mode の Bash は「起動口座の settings.json の allow 規則」に一致する command だけが自動許可され、 一致しない command は承認要求になる。 v2 plugin の PermissionRequest hook は Bash の承認要求を一律 deny する (2026-09-10 の便・席を dialog で止めないため)。 器はどの command を許可するかを<strong>どこにも持っておらず</strong>、 起動口座の設定を暗黙に継承していた。 実測 (2026-09-10): <code>--setting-sources project</code> で継承を切ると <code>cargo</code> も <code>git</code> も deny される。 継承した設定に <code>cargo</code> は無く、 runner は契約の verify 行を 1 行も実測できないまま実装していた (同日の便で runner が commit 本文にその旨を申告)。 runner の prompt は「verify 行が緑になるまで直す」と命じている——器が与えていない能力を要求していた。</p>
+<p data-audience="machine">planner はこれを器で直さず、 非空虚性の検証 (変異 proof) を <strong>repo の外</strong> (host の state dir) に置いた sh + python の script へ移し、 実装の 1 行を字面で pin して gate の verify 行から撃たせた。 加えて各契約の verify 行に共通規律 (flip check・done の定義の 4 コマンド・write-set の照合) を毎便手書きしていた。 これは <a href="../spec/constitution.html#c12">C12</a> (歯は Rust の 1 framework だけ・bash / bats 全廃・非空虚性は cargo-mutants の検出線 R-C12-1) と <a href="../spec/constitution.html#c1">C1</a> (規則は manifest 1 file) に反し、 <a href="./ADR-0001-rust-single-static-binary.html">ADR-0001 §2.1</a> が Rust を採用した理由 (bash / host 差 / 環境層という drift の面を構造から消す) に真っ向から反する。 憲法の機構 (CI・xtask check) は tracked file しか見ないため、 repo の外に置いた運用物は視野の外だった。</p>
+<p data-audience="machine">cargo-mutants は host に導入済みで (README の道具 3 本・週次 CI job)、 rules manifest に R-C12-1 の行も在る。 実測 (2026-09-10): <code>cargo mutants --in-diff &lt;diff&gt; -p scribe2</code> を 1 便の diff に当てると AST から変異を自動生成し、 約 4 分で 母集団 10 / 撃墜 6 / 生存 0 / 不成立 4 を返した。 手で pin した変異 2 本を含み、 planner が思いつかなかった変異 (関数が空 Vec を返す・<code>match</code> の腕を消す) も出る。 ∴ 器が憲法の名指す道具で測れる状態は既に在り、 使っていなかっただけである。</p>
+</section>
+
+<section id="s2-decision" class="normative">
+<h2>§2. Decision</h2>
+<p class="section-essence" data-audience="human">決めることは 5 つです。 実装役の権限は器が manifest から与える、 撃てない契約は最初に拒む、 検証の抜けは cargo-mutants で器が測る、 共通のきまりは契約に毎回書かず manifest に 1 か所で持つ、 そして repo の中に Rust 以外の実行物が紛れたら構造検査が機械で落とす、 です。</p>
+<p data-audience="machine">本 ADR は C1 / C2 / C12 の<strong>適用</strong>を記録する。 憲法本文は書き換えない。 rules manifest には行を 2 本足す (C5・裁定 id = 本 ADR)。 値の初期値は §2.1 / §2.4 に写すが、 正本は manifest の行である。</p>
+
+<h3 id="s2-1-runner-permissions">§2.1 runner の権限は器が与える</h3>
+<p class="section-essence" data-audience="human">実装役を起こすとき、 器が「これだけ実行してよい」と明示します。 起動した人の設定は読みません。 最初の許可は cargo と git の 2 つだけです。</p>
+<p data-audience="machine">runner は claude を <code>--setting-sources project</code> と <code>--allowedTools &lt;allowlist&gt;</code> を付けて起こす (<strong>MUST</strong>)。 user / local の settings を継承しない (<strong>MUST NOT</strong> inherit)。 allowlist の正本は manifest の rules 行 <code>runner.allowed_commands</code> (kind <code>RunnerAllowedCommands</code>・値は command 名の列・初期値 <code>["cargo", "git"]</code>・裁定 id = user 2026-09-10) であり、 runner は各要素を <code>Bash(&lt;cmd&gt;:*)</code> の形で渡す。 PermissionRequest hook の一律 deny は不変で、 「明示 allow 以外は fail-closed」の形になる (allow を返す経路は作らない・<a href="../spec/constitution.html#c11">C11</a>)。 write-set の fence は Bash では守れない (既知) が、 その構造の fence は §2.4 の gate の照合が担う。</p>
+
+<h3 id="s2-2-intake-refuses">§2.2 撃てない契約は intake が拒む</h3>
+<p class="section-essence" data-audience="human">許可されていない command や、 repo の外にある script を検証に使う契約は、 動かす前に受け付けません。 動かしてから黙って詰まるより、 最初に大きく落ちる方を選びます。</p>
+<p data-audience="machine">intake は契約の verify 各行の先頭 command が <code>runner.allowed_commands</code> の外なら rc 1 で拒む (<strong>MUST</strong>・前提違反・event を書かない)。 verify 行が repo の外の path (絶対 path・home の短縮記号) を含む語を持つ契約も拒む (<strong>MUST</strong>)。 これにより運用物を憲法の視野の外に置く経路が閉じる——検証に使えるのは repo の中の code か、 manifest の行だけである。</p>
+
+<h3 id="s2-3-mutation-proof">§2.3 非空虚性は器が cargo-mutants で測る</h3>
+<p class="section-essence" data-audience="human">「test が本当に何かを測っているか」は、 人が変異を予言して script に書くのではなく、 Rust の道具に変異を生成させて器が測ります。 生き残りをどう扱うかは manifest の行が決めます。</p>
+<p data-audience="machine">Rust repo の共通 verify (§2.4) に <code>cargo xtask mutants-diff --base {base}</code> を置く。 xtask が <code>cargo mutants --in-diff</code> を回し、 <code>total / caught / missed / unviable / timeout</code> の 1 行を stdout へ出す。 repo 固有の検査は xtask に置く (<a href="./ADR-0002-test-lint-toolchain.html">ADR-0002 §2.4</a>) ので、 pipe は Rust を知らないまま (設計 §7・toy repo は Rust でないことがある)。 rc の極性は manifest の <code>R-C12-1</code> 行に従う: <code>enabled=false</code> (記録時点・検出線) の間は missed&gt;0 でも rc 0 で記録のみ、 <code>enabled=true</code> へ裁定で反転したら missed&gt;0 で rc≠0 (deny 化は C5 の裁定 id 付き diff・<a href="../spec/constitution.html#c12">C12.4</a>)。 不成立 (unviable) は撃墜に数えない。 cargo-mutants の不在は「測れなかった」として rc 2 で落ち、 0 件に化けない。 契約に変異 script・変異 anchor を書かない (<strong>MUST NOT</strong>)。</p>
+
+<h3 id="s2-4-common-verify">§2.4 共通規律は契約に手書きしない</h3>
+<p class="section-essence" data-audience="human">どの便にも共通のきまり (flip check・test・lint・依存監査・変異検査) は manifest に 1 か所で持ち、 器が毎便自動で撃ちます。 「触ってよい file の外を触っていないか」の照合は器の Rust の関数 1 つに閉じます。 契約に書くのはその便だけの検証行です。</p>
+<p data-audience="machine">manifest の rules 行 <code>gate.common_verify</code> (kind <code>GateCommonVerify</code>・値は command 行の列・<code>{base}</code> は便の base に置換) に repo 共通の検証を置く。 初期値: flip check・workspace の nextest・clippy・xtask check・cargo deny (§2.3 の mutants-diff は実装の便で末尾に足す)。 gate は ①write-set の照合 (Rust: <code>git diff --name-only &lt;base&gt;..HEAD</code> の各 path が契約 write-set に含まれる) → ②共通 verify 各行 → ③契約 verify 各行 の順で撃ち、 verify.jsonl の record 形は変えない。 契約の <code>verify</code> は便固有の行だけを持つ (<a href="../spec/constitution.html#c2">C2</a>・規則を 1 つに閉じる)。 land の main 実測も同じ順序で撃つ。</p>
+
+<h3 id="s2-5-non-rust-exec">§2.5 repo 内の非 Rust 実行物は構造検査が deny する</h3>
+<p class="section-essence" data-audience="human">Rust 以外の script が repo に紛れ込んだら、 人が気付くのを待たず構造検査が落とします。 例外は manifest に裁定つきで並べたものだけです。 これは憲法が最初から求めていたのに機械が無かった項です。</p>
+<p data-audience="machine"><a href="./ADR-0002-test-lint-toolchain.html">ADR-0002 §2.1</a> は「bash / bats / Python の test file を置かない (0 file)」を MUST と書きながら、 同 §2.6 (a) で「測る口が無い・人間の手続きで抑える」と記録していた。 本件はその人間の手続きが破れた実例である (host 側の sh script が契約の verify 行から gate に撃たれていた)。 ∴ <code>cargo xtask check</code> に measure <code>non-rust-exec</code> を足す (<strong>MUST</strong>): tracked file 全数 (paths-clean と同じ母集団) を閉じた分類器で分け、 shebang 行を持つ file・実行 bit の立つ file・script の拡張子 (sh / bash / py / bats 等) を持つ file を deny とし、 例外は manifest の rules 行 <code>repo.non_rust_exec_allow</code> (path の列・裁定 id 付き) に載るものだけとする。 分類は file の種別で行い prose の字面では行わない。 記録時点の母集団は tracked 113 file で、 該当は台帳 write の shim 1 本 (<code>scripts/bdw</code>・host の道具へ委譲するだけの bash) だけであり、 これを例外行の初期値とするか Rust の subcommand へ置き換えるかは rules 行の裁定 (C5) で決める。 CI の workflow に書く shell step は GitHub Actions の形式上避けられないので母集団に入れず、 その行数を <code>ci-shell-lines</code> として検出線で記録する。</p>
+
+<h3 id="s2-6-scope">§2.6 射程外</h3>
+<p class="section-essence" data-audience="human">憲法の文そのものの改訂、 契約 file や起動 command を repo のどこに置くか、 Bash 経由の編集を編集の時点で止める機構は、 ここでは決めません。</p>
+<p data-audience="machine">次は<strong>本 ADR の決定ではない</strong> (MUST NOT be read as such): 憲法条文の改訂 (A2)、 運用物 (契約 file・runner の起動行・PR 本文) を repo tracked にする置き場 (PUBLIC 面の情報を増やすため A1 に掛かる・次の ADR 候補)、 Bash 経路の write-set fence (A4 の機構欄の enforcer)、 allowlist と非 Rust 実行物の例外行の値の変更 (rules 行の裁定・C5)、 lens の起動形 (lens は Bash を撃たない)、 repo の外 (host) で人が撃つ shell を禁じること (器は自分が撃った検証しか verdict に数えない、 が答えである)。</p>
+</section>
+
+<section id="s3-consequences" class="informative">
+<h2>§3. Consequences</h2>
+<p class="section-essence" data-audience="human">良い点は、 実装役が自分で test を撃てるようになり、 検証の抜けを人が予言しなくてよくなり、 きまりが 1 か所に集まることです。 弱い点は、 審査に数分の時間が足され、 許可の粒度が command 名までしか無いことです。</p>
+<p data-audience="machine">Positive: runner の中で TDD の RED → GREEN が成立する (verify 行を自分で撃てる)。 変異が AST 生成になり planner の字面予言が消える (契約抜けの一源が消える)。 共通規律が manifest 1 か所になり契約は便固有の行だけになる。 検証に使えるものが repo の中と manifest に限られ、 憲法の視野の外に運用物が残らない (ADR-0001 が消した drift の面を再び作らない)。 Rust 以外の実行物が repo に紛れる経路は CI が構造で落とし、 ADR-0002 §2.6 (a) の「人間の手続き」が機械に置き換わる。</p>
+<p data-audience="machine">Negative: gate の所要が伸びる (mutants ≈ 4 分 / 便・token は増えない)。 allowlist は command 名の prefix 一致であり、 包み (<code>bash -c</code> 等) は弁別できない——ゆえに包みを allowlist に載せない。 Bash 経由の write-set 抜けは編集の時点では止まらず、 gate の照合で便が落ちる形で止まる (backstop は hook・関門は gate)。 RuleKind の追加は閉じた enum の変更 (型・manifest 行・裁定 id の 3 点が 1 PR に揃う)。</p>
+</section>
+
+<section id="s4-alternatives" class="informative">
+<h2>§4. Alternatives Considered</h2>
+<p class="section-essence" data-audience="human">6 つの案を退けました。 repo の外の script を続ける案、 実装役に自己申告させる案、 口座の設定に cargo を足す案、 実装役の権限確認を全部外す案、 Rust 固有の検査を器に内蔵する案、 契約に共通のきまりを書き続ける案です。</p>
+<p data-audience="machine">案 (i) <strong>host 側の sh 変異 script を続ける</strong>: 却下。 C12 (bash 全廃・非空虚性は cargo-mutants) に反し、 まだ存在しない code の字面を契約で予言する形は runner の書き方 1 つで再走になる。 憲法の視野の外に置かれるので CI も xtask check も見ない。</p>
+<p data-audience="machine">案 (ii) <strong>runner が cargo mutants を自分で回して結果を申告する</strong>: 却下。 測るのは gate であり、 runner の自己申告は verdict の根拠にならない (gate が「測れなかった」を「通った」に化けさせない設計と同じ理由)。 runner が自分の確認のために回すことは妨げない。</p>
+<p data-audience="machine">案 (iii) <strong>口座の settings.json に cargo の allow を足す</strong>: 却下。 規則が manifest の外に置かれ (C1)、 口座・host ごとに挙動が変わる (ADR-0001 が消した host 差の drift の面)。 記録時点の runner が動いていたのはこの形の偶然に依存していた。</p>
+<p data-audience="machine">案 (iv) <strong>runner を bypassPermissions で起こす</strong>: 却下。 hook の保護 (write-set の deny・rm の肩代わり) を全部失う。 同日の別便が同じ理由で退けた案と同じ。</p>
+<p data-audience="machine">案 (v) <strong>Rust 固有の検査 (flip check・mutants) を pipe に内蔵する</strong>: 却下。 設計 §7 が「pipeline が Rust 固有の検査を内蔵する形は採らない (toy repo は Rust でないことがある)」と定め、 ADR-0002 §2.4 が repo 固有の検査を xtask に置くと決めている。 共通 verify の行として manifest に置けば pipe は言語を知らないまま撃てる。</p>
+<p data-audience="machine">案 (vi) <strong>契約に共通規律を書き続ける</strong>: 却下。 同じ規則が便の数だけ手書きされ (C2 に反する)、 1 行の写し落としが契約抜けの再走になる (記録時点までに 3 回)。</p>
+</section>
+
+<section id="s5-trace" class="informative">
+<h2>§5. Trace</h2>
+<p class="section-essence" data-audience="human">出所は、 利用者の指摘と、 それを受けて器の挙動と repo の中身を実際に測った結果です。</p>
+<ul data-audience="machine">
+  <li>裁定: 2026-09-10 に user が「抜け道を塞いで Rust による厳格な project として閉じる」方向と allowlist の初期値 (cargo / git) を裁定した。 本 repo は public のため逐語・席や台帳の識別子・host 名は本 file に載せない (出所は日付で指す)。</li>
+  <li>実測: <code>claude -p --permission-mode acceptEdits --setting-sources project --allowedTools "Bash(cargo:*)"</code> で cargo は実行され git は deny された。 同じ flag を外すと両方 deny された (2026-09-10)。 <code>cargo mutants --in-diff</code> は 1 便の diff で 母集団 10 / 撃墜 6 / 生存 0 / 不成立 4 (約 4 分・2026-09-10)。</li>
+  <li>実測 (repo): 記録時点の tracked 113 file のうち shebang / 実行 bit を持つのは <code>scripts/bdw</code> の 1 本、 script 拡張子の test file は 0 本、 CI workflow の shell step は 8 行 (2026-09-10)。 host の planner 側には sh の変異 script 5 本と起動 script 5 本が在り、 本 ADR の §2.2 により契約から参照できなくなる (退役)。</li>
+  <li>先行記述: 設計 doc の pipeline §5.3 / §6 は契約の verify 行に共通規律を置く読みと、 runner の起動 flag に権限を含めない形で land していた。 本 ADR はそれを覆し、 同じ PR で設計 doc の当該記述を改訂する。</li>
+  <li>拘束条件: <a href="../spec/constitution.html#c1">C1</a> (規則は manifest 1 file)・<a href="../spec/constitution.html#c2">C2</a> (規則を 1 つに閉じる)・C5 (裁定 id 付き diff)・<a href="../spec/constitution.html#c11">C11</a> (極性は型)・<a href="../spec/constitution.html#c12">C12</a> (歯は Rust だけ・変異検出線)・C16 (write-set fence)。 ADR-0001 §2.1・ADR-0002 §2.4・ADR-0004 (env seam を持たない)。 要件は SRS FR4 (runner の起動) / FR5 (runner と lens の口) / FR8 (gate の機械検証) / NFR1。</li>
+  <li>記録した日: 2026-09-10。</li>
+</ul>
+</section>
+
+<!-- folio:chrome-bottom -->
+<nav class="prevnext" aria-label="前後の文書">
+  <a class="prevnext__prev" href="ADR-0008-own-repo-pr-is-not-publish.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">ADR-0008 — 自 repo への branch push と PR 作成は憲法 A4.2 の「出す」ではない (A4.3 の可逆)</span></a>
+</nav>
+<script>
+(function () {
+  var openedForPrint = [];
+  window.addEventListener('beforeprint', function () {
+    openedForPrint = [];
+    var ds = document.querySelectorAll('details:not([open])');
+    for (var i = 0; i < ds.length; i++) { ds[i].setAttribute('open', ''); openedForPrint.push(ds[i]); }
+  });
+  window.addEventListener('afterprint', function () {
+    for (var i = 0; i < openedForPrint.length; i++) openedForPrint[i].removeAttribute('open');
+    openedForPrint = [];
+  });
+  if (!document.querySelector('[data-audience]')) return;
+  /* 既定 = 人間プレゼン型 (ADR-0040 / rules §11.3): script 経由で初期 class を付与するため
+     no-JS では付かず全文可視に graceful degrade する。 static DOM は全文を保持 (AI/検索/印刷は不変)。 */
+  document.body.classList.add('audience-human');
+  var bar = document.createElement('nav');
+  bar.className = 'audience-toggle';
+  bar.setAttribute('aria-label', '表示対象の切替');
+  var states = [['both', '両方'], ['human', '人間向け'], ['machine', '機械向け']];
+  for (var s = 0; s < states.length; s++) {
+    (function (mode, label) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      b.setAttribute('aria-pressed', mode === 'human' ? 'true' : 'false');
+      b.addEventListener('click', function () {
+        document.body.classList.remove('audience-human', 'audience-machine');
+        if (mode !== 'both') document.body.classList.add('audience-' + mode);
+        var bs = bar.querySelectorAll('button');
+        for (var j = 0; j < bs.length; j++) bs[j].setAttribute('aria-pressed', bs[j] === b ? 'true' : 'false');
+      });
+      bar.appendChild(b);
+    })(states[s][0], states[s][1]);
+  }
+  var bc = document.querySelector('nav.breadcrumb');
+  if (bc && bc.parentNode) { bc.parentNode.insertBefore(bar, bc.nextSibling); }
+  else { document.body.insertBefore(bar, document.body.firstChild); }
+})();
+</script>
+<!-- /folio:chrome-bottom -->
+</body>
+</html>
