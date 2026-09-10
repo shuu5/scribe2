@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="folio-doc-type" content="adr">
+<meta name="folio-layer" content="project">
+<meta name="folio-version" content="0.4.6">
+<meta name="folio-status" content="accepted">
+<meta name="folio-stakeholders" content="Developer, AI Agent, External Reviewer">
+<meta name="folio-adr-id" content="0008">
+<meta name="folio-adr-date" content="2026-09-10">
+<title>ADR-0008 — 自 repo への branch push と PR 作成は憲法 A4.2 の「出す」ではない (A4.3 の可逆)</title>
+<link rel="stylesheet" href="../../common.css">
+<script type="application/ld+json">
+{
+  "@context": {
+    "dc": "http://purl.org/dc/terms/",
+    "schema": "https://schema.org/",
+    "folio": "https://folio.dev/spec/v1/"
+  },
+  "@id": "./ADR-0008-own-repo-pr-is-not-publish.html",
+  "@type": "schema:TechArticle",
+  "dc:isPartOf": [
+    { "@id": "./README.html" }
+  ],
+  "dc:title": "ADR-0008 — 自 repo への branch push と PR 作成は憲法 A4.2 の「出す」ではない (A4.3 の可逆)",
+  "folio:version": "0.4.6",
+  "folio:stakeholders": ["Developer", "AI Agent", "External Reviewer"],
+  "dc:references": [
+    { "@id": "../spec/constitution.html#a1" },
+    { "@id": "../spec/constitution.html#a4" },
+    { "@id": "./ADR-0005-a3-approval-surface-c7.html" }
+  ]
+}
+</script>
+</head>
+<body>
+<!-- folio:chrome-top -->
+<a class="skip-link" href="#s1-context">本文へスキップ</a>
+<nav class="breadcrumb" aria-label="パンくず"><ol>
+  <li><a href="../index.html">design-intent</a></li>
+  <li><a href="./README.html">decisions</a></li>
+  <li aria-current="page">ADR-0008</li>
+</ol></nav>
+<!-- /folio:chrome-top -->
+
+<header class="doc-header">
+  <h1>ADR-0008 — 自 repo への branch push と PR 作成は憲法 A4.2 の「出す」ではない (A4.3 の可逆)</h1>
+  <div class="meta">Status: accepted &middot; Date: 2026-09-10 &middot; version 0.4.6 (拘束する constitution の版) &middot; A4.2 の「出す」の範囲の解釈を記録</div>
+</header>
+<!-- folio:chrome-toc -->
+<nav class="toc" aria-label="ページ内目次">
+<ol>
+  <li><a href="#s1-context">§1. Context</a></li>
+  <li><a href="#s2-decision">§2. Decision</a></li>
+  <li class="toc--sub"><a href="#s2-1-scope-of-publish">§2.1 「出す」は repo の外へ出す操作</a></li>
+  <li class="toc--sub"><a href="#s2-2-mechanism">§2.2 機構 — 判定は契約の自己申告だけ</a></li>
+  <li class="toc--sub"><a href="#s2-3-scope">§2.3 射程外</a></li>
+  <li><a href="#s3-consequences">§3. Consequences</a></li>
+  <li><a href="#s4-alternatives">§4. Alternatives Considered</a></li>
+  <li><a href="#s5-trace">§5. Trace</a></li>
+</ol>
+</nav>
+<!-- /folio:chrome-toc -->
+
+<aside class="informative">
+<p>本 ADR は IETF <strong>RFC 2119</strong> および <strong>RFC 8174 / BCP 14</strong> に定義される MUST / SHALL / SHOULD / MAY のキーワード解釈規約に従う。 ADR は決定時点の記録 (frozen) であり、 改訂は本 ADR を supersede する新 ADR で行う。</p>
+</aside>
+
+<aside class="machine-readable" aria-hidden="true">
+  <dl>
+    <dt>id</dt><dd>ADR-0008</dd>
+    <dt>doc-type</dt><dd>adr</dd>
+    <dt>status</dt><dd>accepted</dd>
+    <dt>date</dt><dd>2026-09-10</dd>
+    <dt>version</dt><dd>0.4.6 (拘束する constitution の版・決定時点で凍結)</dd>
+    <dt>decided-by</dt><dd>user 裁定 (2026-09-10) を受けた契約化 (2026-09-10)。 憲法条文は 1 文字も変えないので A2 の改訂手続きには当たらない (A4.3 が既に答えている条の<strong>解釈</strong>である)</dd>
+    <dt>stakeholders</dt><dd>Developer, AI Agent, External Reviewer</dd>
+    <dt>supersedes</dt><dd>無し (既存 ADR の規定を差し替えない・A4.2 の「出す」の<strong>範囲</strong>の解釈を新たに記録する)</dd>
+    <dt>related</dt><dd>constitution A1 / A4 (A4.2 / A4.3) / C7・SRS FR11 / FR15 / FR16 / AC2 / AC5・ADR-0005 (承認の受理面・supersede しない)・設計 doc の pipeline §2 / §5.4 / §5.5</dd>
+  </dl>
+</aside>
+
+<section id="s1-context" class="informative">
+<h2>§1. Context</h2>
+<p class="section-essence" data-audience="human">自分の repo に枝を押して「見てください」の札 (PR) を立てる操作に、 これまで人の承認を要求していました。 憲法を読み直すと、 承認が要るのは<strong>取り消せない操作</strong>だけで、 この操作は取り消せます。</p>
+<p data-audience="machine">憲法 <a href="../spec/constitution.html#a4">A4.2</a> は「操作が不可逆 (destroy / publish / 追加課金) のとき」だけ <a href="../spec/constitution.html#c7">C7</a> の対話面で先に確認せよと定め、 <a href="../spec/constitution.html#a4">A4.3</a> は「merge・<strong>自 repo への dispatch</strong>・依存なしの code 変更は A4.2 の目的において<strong>可逆</strong>と扱う」と定める。 一方 pipeline の設計 doc は <code>--pr-cmd</code> を「公開の口」と呼び、 前提に「run に承認 event が在る」を足していた (§5.4)。 加えて §5.5 は「3 クラスの判定は契約の自己申告に加え、 <strong>seam の使用からの導出</strong>を 1 つ持つ」と定めていた。 これは ADR ではなく実装時の設計裁定 (2026-09-10) である。</p>
+<p data-audience="machine">この読みの下で、 自 repo (すでに公開されている本 repo) へ branch を push して PR を出すだけの便が「出す」に分類され、 1 便ごとに人の承認を消費していた (記録時点の実測: 同日 3 便で承認 6 回)。 承認が<strong>安く大量に</strong>要求されると、 承認そのものが儀式化して「本当に不可逆な操作の前で止まる」機能が薄まる——A4.2 が守ろうとしているのはその機能である。 ∴ 「出す」の範囲を条の解釈として確定する必要がある。 本 repo の作法は<strong>憲法条の解釈が要る便は実装前に ADR を書く</strong>と定めるので、 ここへ記録する。</p>
+</section>
+
+<section id="s2-decision" class="normative">
+<h2>§2. Decision</h2>
+<p class="section-essence" data-audience="human">決めることは 3 つです。 「出す」とは何か、 では機械はどうやって見分けるのか、 そして今回は決めない範囲はどこかです。</p>
+<p data-audience="machine">本 ADR は <a href="../spec/constitution.html#a4">A4.2</a> の「出す」(publish) の<strong>範囲の解釈だけ</strong>を記録する。 憲法本文・rules 表・SRS はいずれも書き換えない (A4.3 が既に答えているため、 解釈で足りる)。</p>
+
+<h3 id="s2-1-scope-of-publish">§2.1 「出す」は repo の外へ出す操作</h3>
+<p class="section-essence" data-audience="human">「出す」は、 自分の repo の外へ情報を出すことです。 自分の repo に枝を押して PR を立てるのは、 どちらも後から閉じられるので含みません。</p>
+<p data-audience="machine">A4.2 の「出す」は <strong>repo の外へ出す操作</strong>を指す (<strong>MUST</strong>): 他 repo への push、 外部サービスへの送信、 release / tag の公開、 公開 URL の発行。 自 repo への branch push と PR 作成は A4.3 の「自 repo への dispatch」として<strong>可逆</strong>であり、 Ask-first の対象外である (<strong>MUST NOT</strong> be gated on approval)。 可逆性の根拠は機構にある: この形は <code>main</code> を 1 byte も動かさず、 branch も PR も後から閉じられる——A4.3 が merge を可逆と呼ぶのと同じ理由で、 merge の<strong>手前</strong>の操作も可逆である。</p>
+<p data-audience="machine">本 repo が既に PUBLIC であることは判定を変えない。 PR は公開 repo の中で起こる出来事であり、 「repo の外へ出す」ではない——PUBLIC 面へ書く情報そのものの規律 (逐語・host 名・口座名を tracked file へ書かない) は本 ADR とは別の面で、 そちらは<strong>不変</strong>である。</p>
+
+<h3 id="s2-2-mechanism">§2.2 機構 — 判定は契約の自己申告だけ</h3>
+<p class="section-essence" data-audience="human">機械は「この便は消す / 出す / 使うに当たる」と契約が自分で名乗った分だけ止めます。 道具を使ったかどうかから推測するのはやめます。</p>
+<p data-audience="machine"><code>--pr-cmd</code> は承認 event を前提としない (<strong>MUST NOT</strong> require)。 3 クラス (消す / 出す / 使う) の判定は<strong>契約の自己申告</strong> (<code>classes</code>) だけとし、 設計 §5.5 の「seam の使用からの導出」は<strong>廃止する</strong>。 導出を残せない理由は、 それが<strong>操作の可逆性ではなく道具の名前で</strong>止めていたことにある——同じ seam に他 repo へ push する道具を渡しても、 自 repo へ PR を出す道具を渡しても、 導出は同じ判定を出す。 ∴ 正しく止まる形にはならない。</p>
+<p data-audience="machine"><code>classes</code> に <code>publish</code> を名乗る契約は<strong>従来どおり</strong> spawn の手前で <code>Blocked</code> となり、 承認 event を受けるまで進まない (SRS FR15 / FR16・AC5 は<strong>不変</strong>)。 承認の受理面 (C7 の対話面・逐語を event へ記帳する) も <a href="./ADR-0005-a3-approval-surface-c7.html">ADR-0005</a> のまま変えない (supersede しない)。</p>
+
+<h3 id="s2-3-scope">§2.3 射程外</h3>
+<p class="section-essence" data-audience="human">この記録は範囲の読み方だけを決めます。 憲法の文そのものを直すことも、 機械が操作の中身を見て判定することも、 ここでは決めません。</p>
+<p data-audience="machine">次は<strong>本 ADR の決定ではない</strong> (MUST NOT be read as such): 憲法条文の改訂 (A2 の手続きを要する・本 ADR は条文を 1 文字も変えない)、 操作の中身から 3 クラスを判定する <strong>enforcer</strong> の実装 (A4 の機構欄・次の版)、 <strong>push 先が自 repo かを機械が弁別すること</strong> (remote の解決は道具側にあり core は道具を知らない・MVP は自己申告)、 「出す」以外の 2 クラス (消す / 使う) の範囲 (本 ADR は publish の範囲だけを扱う)。</p>
+</section>
+
+<section id="s3-consequences" class="informative">
+<h2>§3. Consequences</h2>
+<p class="section-essence" data-audience="human">良い点は、 承認を求める回数が減って、 本当に取り返しがつかない操作の前でだけ止まるようになることです。 弱い点は、 見分けが契約の自己申告に頼るので、 名乗り間違いを機械が見つけられないことです。</p>
+<p data-audience="machine">Positive: 自 repo への PR を出す便が承認を消費しなくなる (記録時点の実測では同日 3 便で 6 回消費していた)。 承認要求が<strong>不可逆な操作に集中する</strong>ので、 A4.2 が守ろうとしている「止まる」機能が摩耗しない。 判定の面が 2 つ (自己申告 + seam からの導出) から 1 つ (自己申告) へ減り、 同じ操作が経路によって違う判定を受ける余地が消える。</p>
+<p data-audience="machine">Negative: <strong>名乗り間違いを機械が捕まえられない</strong>。 <code>classes</code> を空にした契約が <code>--pr-cmd</code> に他 repo へ push する道具を渡せば、 器は止めずに通す (弁別は §2.3 で射程外へ置いた enforcer の領分)。 ∴ MVP では<strong>契約を書く側の規律</strong>に依存する——起票時に「repo の外へ出るか」を見て <code>classes</code> を名乗る運用が要る。 また <code>Land</code> から承認の導出値を落としたので、 将来 enforcer を入れる周には land 側へ判定の材料を渡し直す設計が必要になる。</p>
+</section>
+
+<section id="s4-alternatives" class="informative">
+<h2>§4. Alternatives Considered</h2>
+<p class="section-essence" data-audience="human">3 つの案を退けました。 いまのまま承認を求め続ける案、 機械に push 先を調べさせる案、 憲法の文そのものに書き足す案です。</p>
+<p data-audience="machine">案 (i) <strong>現状維持 (1 便 1 承認)</strong>: 却下。 利点は実在する——承認 event が残るので「誰が何を許したか」の記録が便ごとに揃い、 判定を間違える余地が無い (安全側へ倒れる)。 しかし A4.3 が自 repo への dispatch を明示的に可逆と定めているため、 可逆な操作に Ask-first を課す形は<strong>条と矛盾する</strong>。 加えて承認の要求が大量に出ると承認が儀式化し、 不可逆な操作の前で止まる機能そのものが薄まる (§1 の実測)。</p>
+<p data-audience="machine">案 (ii) <strong><code>--pr-cmd</code> の文面や remote の URL から自 repo かを機械が判定する enforcer</strong>: 却下。 利点も実在する——自己申告に頼らず「repo の外へ出るか」を機械が測れるので、 名乗り間違い (§3 Negative) を塞げる。 しかし remote の解決は<strong>道具側</strong>にあり (seam に渡るのは <code>sh -c</code> の 1 行で、 push 先を決めるのは道具である)、 core は道具を知らない設計を採っている。 ここで文面を parse すると、 器が道具の方言を追いかける実装を抱え込み、 道具を変えた日に静かに誤判定する。 ∴ 判定の面は次の版の enforcer (A4 機構欄) へ置き、 本 ADR は範囲の解釈だけを確定する。</p>
+<p data-audience="machine">案 (iii) <strong>憲法 A4.2 の「出す」の範囲を条文へ明文化する</strong>: 却下。 利点は最も強い——解釈を ADR に置くより条文に置いた方が、 読む側は 1 か所で完結する。 しかし憲法条文の改訂は <a href="../spec/constitution.html#a2">A2</a> の user 裁定の手続きを要し、 かつ A4.3 が<strong>すでに</strong>「自 repo への dispatch は可逆」と答えている。 答えの在る条へ言葉を足す改訂は、 手続きの費用に見合う情報を増やさない (同じ内容が 2 か所に載り、 片方が古くなる面が生まれる)。 ∴ 解釈の記録で足りる。</p>
+</section>
+
+<section id="s5-trace" class="informative">
+<h2>§5. Trace</h2>
+<p class="section-essence" data-audience="human">出所は 3 件です。 承認は要らないという確認、 設計の記録が先に承認を前提していたこと、 そして承認の受け方を決めた別の記録との関係です。</p>
+<ul data-audience="machine">
+  <li>裁定: 自 repo への PR は「出す」に当たらない旨を <strong>2026-09-10</strong> に確認した。 本 repo は public のため、 確認の逐語・席や台帳の識別子・host 名は本 file に載せない (出所は日付で指す)。</li>
+  <li>先行記述: 設計 doc の pipeline §5.4 / §5.5 が承認を前提とする読みを書いて land していた (<strong>2026-09-10</strong> の実装時の裁定)。 本 ADR はその読みを<strong>覆す</strong>ものであり、 同じ PR で設計 doc の当該記述を改訂する。</li>
+  <li>関連: <a href="./ADR-0005-a3-approval-surface-c7.html">ADR-0005</a> (承認の受理面 = C7 の対話面) は<strong>不変</strong>で supersede しない——本 ADR が変えるのは「何が承認を要するか」だけであり、 「承認をどう受けるか」は変えない。</li>
+  <li>拘束条件: <a href="../spec/constitution.html#a1">A1</a> (3 クラス) と <a href="../spec/constitution.html#a4">A4</a> (A4.2 不可逆だけ Ask-first / A4.3 merge・自 repo への dispatch は可逆)、 <a href="../spec/constitution.html#c7">C7</a> (対話面)。 要件は SRS FR11 (land) / FR15 (承認の停止) / FR16 (承認の再開) / AC2 (自己ホスト 1 便) / AC5 (無承認の通過 0)。</li>
+  <li>記録した日: 2026-09-10。</li>
+</ul>
+</section>
+
+<!-- folio:chrome-bottom -->
+<nav class="prevnext" aria-label="前後の文書">
+  <a class="prevnext__prev" href="ADR-0007-integration-test-file-counts-targets.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">ADR-0007 — 憲法 R-C13-2「統合 test file 3 以下」は cargo の integration test target の数で数える</span></a>
+</nav>
+<script>
+(function () {
+  var openedForPrint = [];
+  window.addEventListener('beforeprint', function () {
+    openedForPrint = [];
+    var ds = document.querySelectorAll('details:not([open])');
+    for (var i = 0; i < ds.length; i++) { ds[i].setAttribute('open', ''); openedForPrint.push(ds[i]); }
+  });
+  window.addEventListener('afterprint', function () {
+    for (var i = 0; i < openedForPrint.length; i++) openedForPrint[i].removeAttribute('open');
+    openedForPrint = [];
+  });
+  if (!document.querySelector('[data-audience]')) return;
+  /* 既定 = 人間プレゼン型 (ADR-0040 / rules §11.3): script 経由で初期 class を付与するため
+     no-JS では付かず全文可視に graceful degrade する。 static DOM は全文を保持 (AI/検索/印刷は不変)。 */
+  document.body.classList.add('audience-human');
+  var bar = document.createElement('nav');
+  bar.className = 'audience-toggle';
+  bar.setAttribute('aria-label', '表示対象の切替');
+  var states = [['both', '両方'], ['human', '人間向け'], ['machine', '機械向け']];
+  for (var s = 0; s < states.length; s++) {
+    (function (mode, label) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      b.setAttribute('aria-pressed', mode === 'human' ? 'true' : 'false');
+      b.addEventListener('click', function () {
+        document.body.classList.remove('audience-human', 'audience-machine');
+        if (mode !== 'both') document.body.classList.add('audience-' + mode);
+        var bs = bar.querySelectorAll('button');
+        for (var j = 0; j < bs.length; j++) bs[j].setAttribute('aria-pressed', bs[j] === b ? 'true' : 'false');
+      });
+      bar.appendChild(b);
+    })(states[s][0], states[s][1]);
+  }
+  var bc = document.querySelector('nav.breadcrumb');
+  if (bc && bc.parentNode) { bc.parentNode.insertBefore(bar, bc.nextSibling); }
+  else { document.body.insertBefore(bar, document.body.firstChild); }
+})();
+</script>
+<!-- /folio:chrome-bottom -->
+</body>
+</html>

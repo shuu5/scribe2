@@ -200,8 +200,12 @@ terms:
     relationships: [対話面, 3 クラス, event log, 裁定 id]
   - canonical: 3 クラス
     domain: consumer
-    definition: user 確認を要する操作の 3 分類 (消す / 出す / 使う)。 A1 の対象。
-    relationships: [対話面, 承認 event]
+    definition: user 確認を要する操作の 3 分類 (消す / 出す / 使う)。 A1 の対象。 「出す」は repo の外へ出す操作 (他 repo への push・外部サービスへの送信・release / tag の公開) を指し、 自 repo への push と PR 作成は含まない (A4.3 で可逆・ADR-0008)。
+    relationships: [対話面, 承認 event, 自 repo への PR]
+  - canonical: 自 repo への PR
+    domain: consumer
+    definition: 自分の repo へ branch を push して PR を作る操作。 main を動かさず branch も PR も閉じられるため A4.3 で可逆と扱い、 3 クラスの「出す」に当たらない (ADR-0008)。 pipeline の seam は --pr-cmd。
+    relationships: [3 クラス, 承認 event, 便]
   - canonical: 開発 session
     domain: consumer
     definition: 設計・契約・実装・review を行う AI の session (Claude Code)。 MVP の対話面 (R-C7-1 の初期値) であり、 作業記憶の退避と復元の作法を守る (SRS FR23)。
