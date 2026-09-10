@@ -21,6 +21,9 @@
   },
   "@id": "./ADR-0011-vessel-launches-claude-without-settings.html",
   "@type": "schema:TechArticle",
+  "dc:isReferencedBy": [
+    { "@id": "./ADR-0012-rate-limit-detection-reads-dedicated-record.html" }
+  ],
   "dc:isPartOf": [
     { "@id": "./README.html" }
   ],
@@ -152,6 +155,7 @@
 <!-- folio:chrome-bottom -->
 <nav class="prevnext" aria-label="前後の文書">
   <a class="prevnext__prev" href="ADR-0010-vessel-declaration-holds-allowlist-and-common-verify.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">ADR-0010 — runner の allowlist と gate の共通 verify の値は対象 repo の vessel 宣言が持ち、 manifest は上限を持つ (ADR-0009 §2.1 / §2.4 の値の置き場を部分 supersede)</span></a>
+  <a class="prevnext__next" href="ADR-0012-rate-limit-detection-reads-dedicated-record.html"><span class="prevnext__dir">次 &rarr;</span><span class="prevnext__title">ADR-0012 — 上限の検出は専用 record (rate_limit_event) の構造化 field で行い、 本文への字面照合を畳む</span></a>
 </nav>
 <script>
 (function () {
