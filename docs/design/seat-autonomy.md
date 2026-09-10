@@ -57,7 +57,7 @@ v2 に既に在るもの: FR23（WM の規則）・FR21（`<state_dir>/inject.js
 2. `seat meter` + `seat inject`（歯: fixture の statusline 文字列 / jsonl から used_pct・send-keys は tmux 独立 socket で実測）。
 3. `seat guard`（hook 内・manifest 行の追加は裁定 id 付き）。
 4. `seat tick` + `seat cycle`（歯: 4 条件の真理値表・lock の排他・WM 不在では /clear を撃たない）。
-5. 切替便: planner / admin の 2 つの開発 session で v1 timer と**併走 1 日**→ 判定一致を tick.jsonl で示す → user 裁定で v1 timer を stop（消す = A1・user 手番）。
+5. 切替便: 開発 session へ器を載せる面を揃える——`marketplace.json` を gen-manifest の生成物に足し（手書きしない・冪等）、導入と切替の手順を §9 に書く。そのうえで v1 timer と**併走 1 日**→ 判定一致を tick.jsonl で示す → user 裁定で v1 timer を stop（消す = A1・user 手番）。host での install・timer 有効化・v1 停止は**器の外**（planner と user の手番）である。
 
 ## 6. 却下案
 - (i) in-session の CronCreate だけで tick を回す: respawn / 口座切替で死に、死んだことを誰も検知しない（v1 の case A 裁定と同じ理由）。
@@ -106,3 +106,30 @@ WantedBy=timers.target
   1 周期になるためである。短くすると遅れは縮むが、席が静かな間も capture が増える。
 - 有効化と停止は **user の手番**である（憲法 A1「使う」/「消す」）。器はこの unit を書き出さないし、
   v1 の timer を止めもしない（切替は §5 の便 5 で、判定一致を tick.jsonl で示してから user が裁定する）。
+
+## 9. 導入と切替（手順の**形**だけ・host 固有の値は書かない）
+
+本節は「どういう順で載せるか」を記す。**host の path・tmux target 名・口座名・起動コマンドは
+書かない**（本 repo は PUBLIC・CLAUDE.md「やらないこと」）ので、`<NAME>` と `<...>` は user が
+自分の host で埋める。
+
+**(a) binary を PATH に置く。** `cargo install --path crates/<NAME>` の形で入れる。hook が呼ぶ
+コマンドは生成物 `hooks/hooks.json` が `${<NAME_UPPER>_BIN:-<NAME>}` で解くので、別の場所に置く
+なら env を先に立てる（器そのものは env を 1 つも読まない＝解くのは hook を起動する shell）。
+
+**(b) 開発 session へ plugin を載せる。** 順に:
+
+1. この repo を directory marketplace として **user scope で**登録する。**project scope で登録して
+   はならない**——tracked の `.claude/settings.json` に host の絶対 path が書かれ、PUBLIC 面を汚す。
+2. plugin を **project scope で** install する。
+3. `.claude/settings.json` の `enabledPlugins` に `<NAME>@<NAME>` を足す。**この編集は本設計の
+   範囲外**（marketplace を host へ登録した後の別便で、admin は本便で settings に触らない）。
+4. **走行中の session には `/reload-plugins` か再起動が要る**（hook は自動では反映されない）。
+
+**(c) 管理 tick の timer を有効にする。** §8 の雛形を user が埋めて有効化する（§8 のとおり unit は
+repo に入れない）。
+
+**(d) 併走して突き合わせ、user が切り替える。** v1 の timer と 1 日併走し、判定の一致を
+`tick.jsonl` と v1 の log で突き合わせる（AC9）。**v1 timer の停止は user 裁定**（憲法 A1「消す」）
+であり、器は自分で止めない。切替の条件そのものは本 doc でなく **bd `s2-07l.38` の notes** が持つ
+（規範を doc へ写さない＝憲法 C1 / N2）。

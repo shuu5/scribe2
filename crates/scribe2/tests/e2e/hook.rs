@@ -1230,3 +1230,54 @@ fn hooks_json_carries_permission_request_entry() {
         assert_eq!(body.matches(needle).count(), 1, "既存 entry は不変: {needle}");
     }
 }
+
+/// marketplace.json は plugin.json と**同じ plugin** を名指し、PUBLIC 面に個人情報を持たない。
+///
+/// needle（private path・URL・email の字面）は**実行時に断片から組み立てる**。
+/// 字面を歯の source に置くと `xtask check` の paths-clean が歯そのものを撃つ（本 repo は
+/// PUBLIC・SRS CON2）。
+#[test]
+fn marketplace_json_names_the_same_plugin_as_plugin_json() {
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join(".claude-plugin");
+    let market = fs::read_to_string(dir.join("marketplace.json"))
+        .unwrap_or_else(|err| panic!("marketplace.json を読める: {err}"));
+    let plugin = fs::read_to_string(dir.join("plugin.json"))
+        .unwrap_or_else(|err| panic!("plugin.json を読める: {err}"));
+
+    let named = format!("\"name\": \"{NAME}\"");
+    assert_eq!(
+        plugin.matches(&named).count(),
+        1,
+        "plugin.json は自分の名前を 1 回名乗る: {plugin}"
+    );
+    let plugins = market
+        .split_once("\"plugins\"")
+        .map_or_else(String::new, |(_, tail)| tail.to_owned());
+    assert_eq!(
+        plugins.matches(&named).count(),
+        1,
+        "marketplace は plugin.json と**同じ字面**の plugin を 1 件だけ名指す: {market}"
+    );
+    assert!(
+        market.contains(&format!("\"owner\": {{\n    \"name\": \"{NAME}\"\n  }}")),
+        "owner は name だけを持つ（url / email を置かない）: {market}"
+    );
+
+    // 個人情報・host 固有値の不在。断片から組み立てるので歯の source には字面が無い。
+    for mark in [
+        concat!("/", "home", "/"),
+        concat!("~", "/"),
+        "http",
+        "\"url\"",
+        "\"email\"",
+    ] {
+        assert!(!mark.is_empty(), "needle が空だと不在の検査が空虚になる");
+        assert!(
+            !market.contains(mark),
+            "PUBLIC 面に {mark} を書かない: {market}"
+        );
+    }
+}
