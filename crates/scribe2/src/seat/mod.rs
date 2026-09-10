@@ -75,18 +75,25 @@ pub fn search_region(pane: &str) -> Vec<&str> {
             .filter(|line| !line.trim().is_empty())
             .copied()
             .collect(),
-        None => {
-            let mut tail: Vec<&str> = lines
-                .iter()
-                .rev()
-                .filter(|line| !line.trim().is_empty())
-                .take(TAIL_LINES)
-                .copied()
-                .collect();
-            tail.reverse();
-            tail
-        }
+        None => tail_nonempty(pane),
     }
+}
+
+/// prompt の位置に依らない**直近 [`TAIL_LINES`] 非空行**（裁定 (e) の探索域）。
+///
+/// idle をこの域で測るのは、**走行中の印が入力欄の上に描かれる形がある**ためである。
+/// statusline を読む [`search_region`]（最後の prompt 行より下）で測ると印が域の外に落ち、
+/// **busy な席を idle と読む**——実測 2026-09-10（lens-384 C-1）では、印が上に在る pane へ
+/// `seat cycle` が `/clear` を送っていた（印が下なら `refused reason=busy`）。
+pub fn tail_nonempty(pane: &str) -> Vec<&str> {
+    let mut tail: Vec<&str> = pane
+        .lines()
+        .rev()
+        .filter(|line| !line.trim().is_empty())
+        .take(TAIL_LINES)
+        .collect();
+    tail.reverse();
+    tail
 }
 
 /// prompt が 1 行も無い pane で末尾から見る行数。
@@ -155,13 +162,14 @@ pub fn pane_of(socket: Option<&str>, target: &str, capture_file: Option<&str>) -
     }
 }
 
-/// 席が idle か（裁定 (e)）: 入力欄が空 ∧ prompt より下に [`BUSY_MARK`] が無い。
+/// 席が idle か（裁定 (e)）: 入力欄が空 ∧ **直近 6 非空行**に [`BUSY_MARK`] が無い。
 ///
 /// prompt 行を特定できない pane は idle と名乗らない（[`input_tail`] が `None`）＝
-/// fail-closed。読めない席へ注入しない側へ倒すためである。
+/// fail-closed。読めない席へ注入しない側へ倒すためである。域を [`tail_nonempty`] に取る
+/// 理由はそちらの doc に書いた（印は入力欄の上にも出る）。
 pub fn is_idle(pane: &str) -> bool {
     input_tail(pane).is_some_and(str::is_empty)
-        && !search_region(pane)
+        && !tail_nonempty(pane)
             .iter()
             .any(|line| line.contains(BUSY_MARK))
 }

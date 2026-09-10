@@ -115,8 +115,10 @@ fn perform(request: &Request, dir: &Path) -> Cycle {
     let Some(ttl) = ttl_s() else {
         return Cycle::Refused(REASON_NO_RULE);
     };
-    if !take_lock(dir, ttl) {
-        return Cycle::Refused(REASON_LOCK_HELD);
+    match take_lock(dir, ttl) {
+        Lock::Taken => {}
+        Lock::Held => return Cycle::Refused(REASON_LOCK_HELD),
+        Lock::Broken => return Cycle::Refused(REASON_STATE_DIR),
     }
     let held = guarded(request);
     std::fs::remove_file(lock_path(dir)).ok();
@@ -146,31 +148,65 @@ fn guarded(request: &Request) -> Cycle {
     }
 }
 
+/// lock を取った結果。**競合と故障を混ぜない**（憲法 C11）。
+///
+/// 混ぜると、置き場が壊れている周も `lock-held` を名乗る＝timer の記録から「他の cycle が
+/// 走っていた」と「書けない」を分けられない（実測 2026-09-10・lens-384 M-8）。
+enum Lock {
+    /// 取れた。
+    Taken,
+    /// live な lock が在る＝譲る。
+    Held,
+    /// 置き場が使えない。
+    Broken,
+}
+
 /// lock を `O_EXCL` で取る。失効した residue は取り除いてから取り直す。
-fn take_lock(seat_dir: &Path, ttl_s: u64) -> bool {
-    if create_lock(seat_dir, ttl_s).is_ok() {
-        return true;
+fn take_lock(seat_dir: &Path, ttl_s: u64) -> Lock {
+    match create_lock(seat_dir, ttl_s) {
+        Ok(()) => Lock::Taken,
+        Err(Lock::Held) => reclaim(seat_dir, ttl_s),
+        Err(other) => other,
     }
+}
+
+/// 既存の lock が失効していれば取り直す。live なら譲る。
+fn reclaim(seat_dir: &Path, ttl_s: u64) -> Lock {
     if lock_is_live(seat_dir, ttl_s) {
-        return false;
+        return Lock::Held;
     }
-    std::fs::remove_file(lock_path(seat_dir)).ok();
-    create_lock(seat_dir, ttl_s).is_ok()
+    if std::fs::remove_file(lock_path(seat_dir)).is_err() {
+        return Lock::Broken;
+    }
+    match create_lock(seat_dir, ttl_s) {
+        Ok(()) => Lock::Taken,
+        Err(other) => other,
+    }
 }
 
 /// lock を作る。**`create_new` = `O_EXCL`** で、既に在れば失敗する（勝者は 1 つ）。
-fn create_lock(seat_dir: &Path, ttl_s: u64) -> std::io::Result<()> {
-    std::fs::create_dir_all(seat_dir)?;
-    let mut file = OpenOptions::new()
+///
+/// `create_dir_all` の失敗を [`Lock::Held`] へ落とさないのは、置き場の位置に file が在る周が
+/// `AlreadyExists` を返す（＝競合と同じ error kind になる）ためである。
+fn create_lock(seat_dir: &Path, ttl_s: u64) -> Result<(), Lock> {
+    if std::fs::create_dir_all(seat_dir).is_err() {
+        return Err(Lock::Broken);
+    }
+    let opened = OpenOptions::new()
         .write(true)
         .create_new(true)
-        .open(lock_path(seat_dir))?;
+        .open(lock_path(seat_dir));
+    let mut file = match opened {
+        Ok(found) => found,
+        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => return Err(Lock::Held),
+        Err(_) => return Err(Lock::Broken),
+    };
     let deadline = unix_secs(SystemTime::now()).saturating_add(ttl_s);
     let body = json_lite::write_object(&[
         ("pid", Value::Num(u64::from(std::process::id()))),
         ("deadline", Value::Num(deadline)),
     ]);
-    writeln!(file, "{body}")
+    writeln!(file, "{body}").map_err(|_| Lock::Broken)
 }
 
 /// 1970 年からの秒。読めなければ 0（deadline は表示用で、判定は mtime が持つ）。
@@ -200,10 +236,14 @@ fn send_clear(request: &Request) -> bool {
     false
 }
 
-/// 作り直しの済んだ pane か。
+/// 作り直しの済んだ pane か（入力欄が空 ∧ **直近 6 非空行**に `/clear` の字面が無い）。
+///
+/// 域を prompt より下に取ると、**echo された `/clear` は次の prompt の上に載る**ので第 2 項が
+/// 構造的にほぼ常に真になり、確認が実質 500 ms の sleep に化ける（実測 2026-09-10・lens-384
+/// C-2: 「常に真」へ倒す変異が全歯 GREEN のまま生存した）。
 fn cleared(pane: &str) -> bool {
     super::input_tail(pane).is_some_and(str::is_empty)
-        && !super::search_region(pane)
+        && !super::tail_nonempty(pane)
             .iter()
             .any(|line| line.contains(CLEAR))
 }

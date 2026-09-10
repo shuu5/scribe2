@@ -165,20 +165,27 @@ struct Common<'a> {
     state_dir: Option<&'a str>,
 }
 
-/// 共有の flag を読む。
+/// 必須の flag のうち**空文字を断る**もの。
+fn required_nonempty<'a>(args: &'a [String], name: &str) -> Result<&'a str, ()> {
+    nonempty(args, name)?.ok_or(())
+}
+
+/// 共有の flag を読む。**場所の flag も空文字を断る**——空の `--state-dir` は
+/// `PathBuf::from("")` が cwd 相対になり、記録と marker が撃った場所へ散る
+/// （実測 2026-09-10・lens-384 L-13: `./seat/<t>/heartbeat` が cwd に作られた）。
 fn common_of(args: &[String]) -> Result<Common<'_>, ()> {
     Ok(Common {
-        socket: optional(args, "--tmux-socket")?,
-        capture_file: optional(args, "--capture-file")?,
-        state_dir: optional(args, "--state-dir")?,
+        socket: nonempty(args, "--tmux-socket")?,
+        capture_file: nonempty(args, "--capture-file")?,
+        state_dir: nonempty(args, "--state-dir")?,
     })
 }
 
 /// `seat heartbeat`。
 fn heartbeat_of(args: &[String]) -> Outcome {
     let (Ok(target), Ok(state_dir)) = (
-        required(args, "--target"),
-        optional(args, "--state-dir"),
+        required_nonempty(args, "--target"),
+        nonempty(args, "--state-dir"),
     ) else {
         return refused_usage();
     };
@@ -200,8 +207,8 @@ fn heartbeat_of(args: &[String]) -> Outcome {
 /// `seat tick`。
 fn tick_of(args: &[String]) -> Outcome {
     let (Ok(target), Ok(wm_dir), Ok(pointer), Ok(restore), Ok(common)) = (
-        required(args, "--target"),
-        required(args, "--wm-dir"),
+        required_nonempty(args, "--target"),
+        required_nonempty(args, "--wm-dir"),
         nonempty(args, "--pointer"),
         nonempty(args, "--restore"),
         common_of(args),
@@ -222,8 +229,8 @@ fn tick_of(args: &[String]) -> Outcome {
 /// `seat cycle`。
 fn cycle_of(args: &[String]) -> Outcome {
     let (Ok(target), Ok(wm_dir), Ok(restore), Ok(common)) = (
-        required(args, "--target"),
-        required(args, "--wm-dir"),
+        required_nonempty(args, "--target"),
+        required_nonempty(args, "--wm-dir"),
         nonempty(args, "--restore"),
         common_of(args),
     ) else {
