@@ -145,14 +145,69 @@ const LIMIT_WORDS: &[&str] = &[
     "overloaded",
 ];
 
+/// 上限と名乗ってよい record の**種別**（claude 自身が終端 / error として出す形）。
+///
+/// 会話 record（`user` / `assistant`）を外すのが要点である。claude は tool の失敗を
+/// `user` record の中の `tool_result` block として流し、その block が `"is_error":true` を
+/// 持つので、種別を見ずに字面で拾うと **cargo や grep の出力に `429` が混じるだけで便が
+/// 「上限」で死ぬ**（planner と admin が独立に実 binary で再現・2026-09-11）。
+const LIMIT_KINDS: &[&str] = &["result", "error", "system"];
+
+/// record の **top-level の `type` の値**（入れ子の `"type"` は種別ではない）。
+///
+/// 字面で最初の `"type":` を採ると、`tool_result` block が中に持つ種別名を record の種別と
+/// 読み違える。深さを数えて **depth 1 の key だけ**を見るのはそのためで、`value_span` は
+/// `s2-07l.71` のものをそのまま使う（本便は母集団の絞りだけを足す）。
+fn record_kind(body: &str) -> Option<&str> {
+    const KEY: &str = r#""type":"#;
+    let mut depth = 0_usize;
+    let mut in_string = false;
+    let mut escaped = false;
+    for (at, ch) in body.char_indices() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        if ch == '"' {
+            if depth == 1 {
+                if let Some(after) = body.get(at..).and_then(|rest| rest.strip_prefix(KEY)) {
+                    return value_span(after);
+                }
+            }
+            in_string = true;
+        } else if ch == '{' || ch == '[' {
+            depth = depth.saturating_add(1);
+        } else if ch == '}' || ch == ']' {
+            depth = depth.saturating_sub(1);
+        }
+    }
+    None
+}
+
 /// stream-json の 1 行が **error を名乗る record** か。
 ///
-/// 語彙を探す前にここで絞るのが要点である。**本文の引用で誤爆しない**ようにするには、
-/// 「どんな行か」を先に構造で決めるしかない（実測 2026-09-10: 応答が契約の文言を引用した
-/// だけで rc 75 になっていた——本 bead の契約自身がその文言を含む）。
+/// 絞りは 2 段である。(1) **母集団を record 種別で先に絞る**——claude 自身が終端 / error として
+/// 出す種別（[`LIMIT_KINDS`]）でなければ、中に何が書いてあっても上限ではない。**種別を読めない
+/// record も上限ではない**（分からない周を上限へ倒さない＝誤認すると失敗原因が台帳から消えるが、
+/// 取りこぼしても呼出側は claude の rc をそのまま見る）。(2) そのうえで error を名乗るかを見る。
+///
+/// 種別が `error` の record はそれ自体が error である（`{"type":"error","status":429}` の形が
+/// 実在する）。残る 2 条件（`is_error` / `subtype`）は**種別の絞りを通った後**でだけ効く。
 fn is_error_record(body: &str) -> bool {
-    body.contains(r#""is_error":true"#)
-        || body.contains(r#""type":"error""#)
+    let Some(kind) = record_kind(body) else {
+        return false;
+    };
+    if !LIMIT_KINDS.contains(&kind) {
+        return false;
+    }
+    kind == "error"
+        || body.contains(r#""is_error":true"#)
         || body.contains(r#""subtype":"error"#)
 }
 
