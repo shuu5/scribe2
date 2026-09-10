@@ -150,14 +150,17 @@ impl FilePair {
 
     /// **この便で足した**札を持つか。
     ///
+    /// **両方の札で共有する**（`mark` で切り替える）。2 つ目の実装を作ると片方だけが
+    /// 緩む形で穴が開く。
+    ///
     /// **bead id が要る**。marker は「どの便がなぜ RED を免除したか」を残すための札で、
-    /// id の無い `// flip-check: retroactive` は誰にも辿れない——review の対象に
-    /// ならない逃がしは、静かな逃がしと同じである。
+    /// id の無い `// flip-check: retroactive`（`moved` も同じ）は誰にも辿れない——
+    /// review の対象にならない逃がしは、静かな逃がしと同じである。
     ///
     /// **base に既に在る札は数えない**。marker 行は file に残るので、在るだけで数えると、
     /// 一度貼った札がその file の test 区間を触る**以後のすべての便**を免除する——札の
-    /// bead id と便が対応しなくなり、判定行の `retroactive=N` を review しても何を
-    /// 免除したのかを辿れない。
+    /// bead id と便が対応しなくなり、判定行の `retroactive=N` / `moved=N` を review しても
+    /// 何を免除したのかを辿れない。
     fn marked(&self, mark: &str) -> bool {
         !self.fresh_markers(mark).is_empty()
     }
@@ -622,7 +625,7 @@ fn write_text(dest: &Path, rel: &str, body: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// overlay を base tree へ書く。**数えるのは [`Counts`] の仕事**（判定行の 3 数を
+/// overlay を base tree へ書く。**数えるのは [`Counts`] の仕事**（判定行の数を
 /// 書き込み経路で数えると、file ごとに撃つ路とまとめ撃ちの路で意味がずれる）。
 fn write_overlay(dest: &Path, pairs: &[FilePair]) -> Result<(), String> {
     for pair in pairs {
@@ -665,7 +668,7 @@ fn judge_one(output: &Output, rel: Option<&str>) -> Result<(), Verdict> {
     }
 }
 
-/// 便 1 本の内訳（判定行に載る 3 つの数）。
+/// 便 1 本の内訳（判定行に載る数）。
 #[derive(Debug, Clone, Copy, Default)]
 struct Counts {
     /// base で赤くなることを要求した file の本数。

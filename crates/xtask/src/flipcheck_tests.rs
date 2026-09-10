@@ -87,30 +87,41 @@ fn lib_rel() -> String {
 /// base commit を積んだ合成 workspace を作り、その dir と base の SHA を返す。
 fn base_commit() -> (PathBuf, String) {
     let dir = make_tmp_dir();
+    scaffold(&dir);
+    let base = seed_fixture(&dir, BASE_LIB);
+    (dir, base)
+}
+
+/// 合成 workspace の骨組み（workspace / toolchain / member の manifest）を書く。
+///
+/// **`judge_lib` と共有する**——片方だけが書くと、flip が 1 本でも立つ便で base tree が
+/// 不完全になり、判定行が `reason=infra-error` に化ける。免除を数えなかったことを
+/// `!line.contains("moved=")` で測る負例は、そのとき**判定路へ 1 度も入らないまま自動的に
+/// 真**になる（実測 2026-09-11: `moved=0` を出す変異が 28/28 緑のまま生存した）。
+fn scaffold(dir: &Path) {
     write_at(
-        &dir,
+        dir,
         "Cargo.toml",
         &format!("[workspace]\nresolver = \"2\"\nmembers = [\"crates/{FIXTURE_MEMBER}\"]\n"),
     );
     write_at(
-        &dir,
+        dir,
         "rust-toolchain.toml",
         &format!("[toolchain]\nchannel = \"{FIXTURE_CHANNEL}\"\n"),
     );
     write_at(
-        &dir,
+        dir,
         &format!("crates/{FIXTURE_MEMBER}/Cargo.toml"),
         &format!(
             "[package]\nname = \"{FIXTURE_MEMBER}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n"
         ),
     );
-    let base = seed_fixture(&dir, BASE_LIB);
-    (dir, base)
 }
 
 /// base と HEAD の lib 本文を与えて 1 便を判定する（marker まわりの負例で使い回す）。
 fn judge_lib(base_lib: &str, head_lib: &str) -> Verdict {
     let dir = make_tmp_dir();
+    scaffold(&dir);
     let base = seed_fixture(&dir, base_lib);
     write_at(&dir, &lib_rel(), head_lib);
     head_commit(&dir);
@@ -456,9 +467,10 @@ fn flip_check_keeps_green_on_base_when_no_test_changed() {
     drop_fixture(&dir);
     // **従来どおり落ちる**（TDD の不履行）。現行 base では reason 語は
     // `no-test-diff` で、`green-on-base`（overlay を撃った上で緑だった周）とは
-    // 別語である。本便はこの語を変えない＝新しい 3 語のどれへも逃がさない。
+    // 別語である。本便はこの語を変えない＝逃がし 4 語のどれへも逃がさない。
     assert_verdict(&got.line, got.code, 1, "reason=no-test-diff");
-    for escaped in ["not-flippable", "removed-only", "retroactive"] {
+    // `moved` の裸の字面は `removed-only` の部分列なので判定行の token 形で見る。
+    for escaped in ["not-flippable", "removed-only", "retroactive", "moved="] {
         assert!(
             !got.line.contains(escaped),
             "src だけの変更を {escaped} へ逃がさない: {}",
@@ -1368,6 +1380,29 @@ fn flip_check_reports_moved_marker_for_a_pure_move() {
     assert!(!got.line.contains("retroactive"), "retroactive は数えない: {}", got.line);
 }
 
+/// **新規 module に置いた `moved` 札**は `not-flippable` ではなく `moved` へ倒れる。
+///
+/// `no_flip_verdict` の stderr はこの逃がしを名指して案内するので、案内どおりに置いた便が
+/// 落ちると案内と挙動が食い違う（`retroactive` 側の対は「marker を置いた新規 module」の歯）。
+#[test]
+fn flip_check_treats_moved_marker_on_a_new_module_as_moved() {
+    let (dir, base) = base_commit();
+    write_at(
+        &dir,
+        &format!("crates/{FIXTURE_MEMBER}/src/shifted.rs"),
+        "pub fn w() -> u32 {\n    2\n}\n#[cfg(test)]\nmod t {\n    // flip-check: moved s2-07l.86\n    #[test]\n    fn probe() {\n        assert_eq!(super::w(), 2);\n    }\n}\n",
+    );
+    head_commit(&dir);
+    let got = judge(&base, &dir);
+    drop_fixture(&dir);
+    assert_verdict(&got.line, got.code, 0, "RED-on-base ok");
+    assert!(
+        got.line.contains("moved=1") && !got.line.contains("not-flippable"),
+        "moved 札付きの新規 module は moved へ倒れるはず: {}",
+        got.line
+    );
+}
+
 /// `moved` は `retroactive` と**同じ 4 条件**でしか効かない（緩めない）。
 ///
 /// 4 条件 = test 区間内 / 行頭 / bead id 必須 / base から持ち越した札は効かない。
@@ -1382,12 +1417,18 @@ fn flip_check_moved_marker_needs_the_same_four_conditions() {
     );
     assert!(!in_src.line.contains("moved="), "src 区間の札は数えない: {}", in_src.line);
     // (b) bead id が無い札は効かない（誰にも辿れない逃がしは静かな逃がしと同じ）。
-    let no_bead = judge_lib(
-        base,
-        "pub fn val() -> u32 {\n    1\n}\n#[cfg(test)]\nmod checks {\n    // flip-check: moved\n    #[test]\n    fn holds() {\n        assert_eq!(super::val(), 1);\n    }\n}\n",
-    );
-    assert_not_retroactive(&no_bead, "bead id の無い moved 札");
-    assert!(!no_bead.line.contains("moved="), "id の無い札は数えない: {}", no_bead.line);
+    for bare in [
+        "// flip-check: moved",
+        "// flip-check: moveds2-07l.86",
+        // 区切りの空白は在るが id が無い形（この 1 本だけが id 要求を測る。
+        // 空白の無い 2 形は prefix 不一致で外れるので、id の空判定には届かない）。
+        "// flip-check: moved ",
+    ] {
+        let head = base.replace("mod checks {\n", &format!("mod checks {{\n    {bare}\n"));
+        let no_bead = judge_lib(base, &head);
+        assert_not_retroactive(&no_bead, bare);
+        assert!(!no_bead.line.contains("moved="), "id の無い札は数えない: {}", no_bead.line);
+    }
     // (c) 行頭で見る（字面の言及は拾わない）。
     let mentioned = judge_lib(
         base,
@@ -1403,10 +1444,21 @@ fn flip_check_moved_marker_needs_the_same_four_conditions() {
 #[test]
 fn flip_check_ignores_a_carried_over_moved_marker() {
     let carried = "pub fn val() -> u32 {\n    1\n}\n#[cfg(test)]\nmod checks {\n    // flip-check: moved s2-07l.86\n    #[test]\n    fn holds() {\n        assert_eq!(super::val(), 1);\n    }\n}\n";
-    let got = judge_lib(
-        carried,
-        "pub fn val() -> u32 {\n    1\n}\n#[cfg(test)]\nmod checks {\n    // flip-check: moved s2-07l.86\n    #[test]\n    fn holds() {\n        assert_eq!(super::val(), 1);\n    }\n\n    #[test]\n    fn added() {\n        assert_eq!(super::val(), 1);\n    }\n}\n",
-    );
+    let head = "pub fn val() -> u32 {\n    1\n}\n#[cfg(test)]\nmod checks {\n    // flip-check: moved s2-07l.86\n    #[test]\n    fn holds() {\n        assert_eq!(super::val(), 1);\n    }\n\n    #[test]\n    fn added() {\n        assert_eq!(super::val(), 1);\n    }\n}\n";
+    // **理由を渡すところまで測る**（`judge_into` の sink 越し）。免除しないだけで黙ると、
+    // 書いた人は免除したつもりで RED を要求され、判定行から理由を読めない。
+    let (dir, _) = base_commit();
+    let base = seed_fixture(&dir, carried);
+    write_at(&dir, &lib_rel(), head);
+    head_commit(&dir);
+    let mut lines: Vec<String> = Vec::new();
+    let got = judge_into(&base, &dir, &mut |line| lines.push(line.to_owned()));
+    drop_fixture(&dir);
     assert_not_retroactive(&got, "持ち越した moved 札だけの便");
     assert!(!got.line.contains("moved="), "持ち越した札は数えない: {}", got.line);
+    let stale: Vec<&String> = lines
+        .iter()
+        .filter(|line| line.starts_with("flip-check: stale-marker "))
+        .collect();
+    assert_eq!(stale.len(), 1, "効かない moved 札を 1 行で名指すはず: {lines:?}");
 }
