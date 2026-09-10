@@ -985,3 +985,101 @@ fn flip_check_counts_each_bundled_declaration_file() {
         got.line
     );
 }
+
+/// 同梱は **RED を捏造しない**——本体が **2 本**でも（`s2-07l.41` が入れた fail-open）。
+///
+/// 本体 1 本を撃つ turn に便の宣言行を全部置くと、その turn ではまだ置かれていない兄弟
+/// module の `E0583` が「overlay 後の compile error は RED」の規則で RED に化ける。
+/// 本体がどちらも base で緑でも `RED-on-base ok decl=2` が出た（実測 2026-09-10）。
+/// fixture は [`flip_check_counts_each_bundled_declaration_file`] と同じで、本体だけを
+/// 緑にした対である（並べて読めば「赤 2 本は PASS・緑 2 本は FAIL」が対比になる）。
+#[test]
+fn flip_check_fails_when_sibling_declaration_hides_green_body() {
+    let (dir, _) = base_commit_with_e2e();
+    // base に 2 本目の target を置く（この commit を base にする）。
+    write_at(&dir, &it2_rel("main.rs"), "mod seed2;\n");
+    write_at(
+        &dir,
+        &it2_rel("seed2.rs"),
+        &format!("#[test]\nfn seed2_holds() {{\n    assert_eq!({FIXTURE_MEMBER}::val(), 1);\n}}\n"),
+    );
+    head_commit(&dir);
+    let base = head_sha(&dir);
+
+    // HEAD: 2 本の target それぞれへ宣言 1 行 + base で**緑**の本体。
+    write_at(&dir, &e2e_rel("main.rs"), "mod seed;\nmod newmod;\n");
+    write_at(&dir, &e2e_rel("newmod.rs"), &green_body());
+    write_at(&dir, &it2_rel("main.rs"), "mod seed2;\nmod newmod2;\n");
+    write_at(&dir, &it2_rel("newmod2.rs"), &green_body());
+    head_commit(&dir);
+    let got = judge(&base, &dir);
+    drop_fixture(&dir);
+    assert_verdict(&got.line, got.code, 1, "reason=green-on-base");
+    assert!(
+        got.line.contains(&e2e_rel("newmod.rs")),
+        "単独で緑だった本体 file を名指すはず（兄弟の E0583 に隠されない）: {}",
+        got.line
+    );
+}
+
+/// 同梱するのは **その turn の tree に本体が在る**宣言行だけ（**両方向**の取りこぼし）。
+///
+/// 本体 A = base で赤い / 本体 B = base で緑。A の turn で B の宣言行が落ちていないと
+/// B の `E0583` が A の判定を汚し、B の turn で A の宣言行が落ちていないと A の RED が
+/// B の緑を隠す——**どちらの取りこぼしでも PASS に化ける**ので、`green-on-base` が B を
+/// 名指すことが両方向の負例になる（A を名指したら A の turn 側の取りこぼしである）。
+#[test]
+fn flip_check_bundles_only_declarations_whose_body_is_present() {
+    let (dir, _) = base_commit_with_e2e();
+    write_at(&dir, &it2_rel("main.rs"), "mod seed2;\n");
+    write_at(
+        &dir,
+        &it2_rel("seed2.rs"),
+        &format!("#[test]\nfn seed2_holds() {{\n    assert_eq!({FIXTURE_MEMBER}::val(), 1);\n}}\n"),
+    );
+    head_commit(&dir);
+    let base = head_sha(&dir);
+
+    // HEAD: 本体 A（先に撃たれる）は base で赤く、本体 B は base で緑。
+    write_at(&dir, &e2e_rel("main.rs"), "mod seed;\nmod newmod;\n");
+    write_at(&dir, &e2e_rel("newmod.rs"), &red_body());
+    write_at(&dir, &it2_rel("main.rs"), "mod seed2;\nmod newmod2;\n");
+    write_at(&dir, &it2_rel("newmod2.rs"), &green_body());
+    head_commit(&dir);
+    let got = judge(&base, &dir);
+    drop_fixture(&dir);
+    assert_verdict(&got.line, got.code, 1, "reason=green-on-base");
+    assert!(
+        got.line.contains(&it2_rel("newmod2.rs")),
+        "緑だった 2 本目の本体を名指すはず（A の RED に隠されない）: {}",
+        got.line
+    );
+    assert!(
+        !got.line.contains(&e2e_rel("newmod.rs")),
+        "base で赤かった 1 本目は名指さない（B の E0583 が A を汚していない）: {}",
+        got.line
+    );
+}
+
+/// 宣言 file **しか** flip していない便は、従来どおり**単独で**撃つ。
+///
+/// 存在しない module を指す `mod x;` の `E0583` は**本当の** RED であって、同梱で
+/// 消してよいものではない。本体が 1 本も無い便まで同梱の路へ流すと overlay の runner を
+/// **1 度も撃たずに** PASS が出る（`plan_of` の空 bodies 分岐を消す変異は、本体を持つ便の
+/// 歯では全部生き残る）。stderr の `decl-with-body` 不在は assert しない——in-process の
+/// 歯が読める sink は stale-marker 行だけで、同じ seam は「やらない」の M2 が要るもの
+/// だからである（planner 裁定 2026-09-10）。
+#[test]
+fn flip_check_judges_declaration_only_change_alone() {
+    let (dir, base) = base_commit_with_e2e();
+    write_at(&dir, &e2e_rel("main.rs"), "mod seed;\nmod newmod;\n");
+    head_commit(&dir);
+    let got = judge(&base, &dir);
+    drop_fixture(&dir);
+    assert_verdict(&got.line, got.code, 0, "RED-on-base ok");
+    assert!(
+        !got.line.contains("decl="),
+        "同梱していない便に decl= は載らない: {}",
+        got.line
+    );
+}
