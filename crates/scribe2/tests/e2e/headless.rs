@@ -95,6 +95,27 @@ fn slurp(path: &Path) -> String {
     fs::read_to_string(path).unwrap_or_default()
 }
 
+/// fake が残した argv の写し（1 行 1 引数）に `flag` と `value` が **対**で在るか。
+///
+/// **flag の存在だけを見ない**——`args.contains("--setting-sources")` は値が `project` でも
+/// 真になり、「settings を 1 つも読まない」を測ったことにならない（空虚な歯・ADR-0011 §2.1）。
+fn pair(args: &str, flag: &str, value: &str) -> bool {
+    let lines: Vec<&str> = args.lines().collect();
+    lines.windows(2).any(|w| w.first() == Some(&flag) && w.get(1) == Some(&value))
+}
+
+/// argv の写しに `flag` が在るか。**値の連結形（`--flag=値`）も同じ 1 本として数える**。
+///
+/// 部分一致（`args.contains`）では数えない——値や別 flag の中の同じ字面まで拾い、不在の assert が
+/// 偽陽性になる。一方で完全一致だけにすると **`--settings=/path` が「渡していない」に化ける**
+/// （lens 2026-09-10 LENS-1・実測で再現: `--settings=` 形を足しても新しい歯 2 本が緑のまま通った）。
+/// `--settings` は ADR-0011 §2.1 が名指しで禁じた flag で、この不在 assert が却下案 (b)
+/// 「settings を消さずに足す」へ戻る経路の唯一の柵ゆえ、**分離形と連結形の両方**で見る。
+fn has_arg(args: &str, flag: &str) -> bool {
+    let joined = format!("{flag}=");
+    args.lines().any(|line| line == flag || line.starts_with(&joined))
+}
+
 /// lens へ渡す契約の各面（歯が prompt の中で照合する値）。
 ///
 /// **値を歯の中で直書きしない**。契約 file と assert が同じ定数を見ることで、
@@ -227,14 +248,10 @@ fn run_runner(call: &RunnerCall<'_>, input: &[u8]) -> Output {
 fn assert_runner_call(dir: &Path, worktree: &Path, account: &Path, mode: &str) {
     let args = slurp(&dir.join("args"));
     let lines: Vec<&str> = args.lines().collect();
-    // 引数は「flag の直後に値」の対で渡る。字面の混入でなく **対** を測る。
-    let pair = |flag: &str, value: &str| {
-        lines.windows(2).any(|w| w.first() == Some(&flag) && w.get(1) == Some(&value))
-    };
-    assert!(pair("--permission-mode", mode), "permission mode を毎回明示する: {args}");
-    assert!(pair("--output-format", "stream-json"), "stream-json で回す: {args}");
+    assert!(pair(&args, "--permission-mode", mode), "permission mode を毎回明示する: {args}");
+    assert!(pair(&args, "--output-format", "stream-json"), "stream-json で回す: {args}");
     assert!(lines.contains(&"--verbose"), "stream-json には --verbose が要る: {args}");
-    assert!(pair("--plugin-dir", &dir.display().to_string()), "plugin を載せる: {args}");
+    assert!(pair(&args, "--plugin-dir", &dir.display().to_string()), "plugin を載せる: {args}");
     assert!(lines.contains(&"-p"), "headless で回す（-p が要る）: {args}");
     // **在ってはならない flag が無いこと**も測る。在ってほしい flag だけを見ていると、
     // 権限を丸ごと外す flag が黙って混入しても気づけない。
@@ -420,11 +437,8 @@ fn headless_lens_extracts_last_json_line() {
     // lens 側の引数も runner と同じだけ測る（片側だけ測ると、もう片側は自由に壊れる）。
     let args = slurp(&dir.join("args"));
     let lines: Vec<&str> = args.lines().collect();
-    let pair = |flag: &str, value: &str| {
-        lines.windows(2).any(|w| w.first() == Some(&flag) && w.get(1) == Some(&value))
-    };
     assert!(lines.contains(&"-p"), "headless で回す: {args}");
-    assert!(pair("--permission-mode", "plan"), "permission mode を毎回明示する: {args}");
+    assert!(pair(&args, "--permission-mode", "plan"), "permission mode を毎回明示する: {args}");
     assert!(
         !lines.iter().any(|line| line.starts_with("--dangerously")),
         "権限を外す flag を渡さない: {args}"
@@ -752,11 +766,6 @@ fn headless_runner_passes_allowed_tools_from_vessel_copy() {
     let claude = fake_claude(&dir, "", false, 0);
     let write_set = dir.join("write-set.txt");
     fs::write(&write_set, "src/lib.rs\n").expect("write-set を書ける");
-    let pair = |args: &str, flag: &str, value: &str| {
-        let lines: Vec<&str> = args.lines().collect();
-        lines.windows(2).any(|w| w.first() == Some(&flag) && w.get(1) == Some(&value))
-    };
-
     let vessel = write_vessel_copy(&dir, r#"["cargo", "git"]"#);
     let out = run_runner(
         &RunnerCall { dir: &dir, worktree: &worktree, write_set: &write_set, vessel: &vessel, claude: &claude, mode: "acceptEdits", account: None },
@@ -764,7 +773,7 @@ fn headless_runner_passes_allowed_tools_from_vessel_copy() {
     );
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
     let args = slurp(&dir.join("args"));
-    assert!(pair(&args, "--setting-sources", "project"), "起動口座の settings を継承しない: {args}");
+    assert!(pair(&args, "--setting-sources", ""), "settings は 1 つも読まない（ADR-0011 §2.1）: {args}");
     assert!(
         pair(&args, "--allowedTools", "Bash(cargo:*),Bash(git:*)"),
         "写しの allowlist を Bash(<cmd>:*) で与える: {args}"
@@ -781,4 +790,62 @@ fn headless_runner_passes_allowed_tools_from_vessel_copy() {
     assert!(pair(&narrowed, "--allowedTools", "Bash(git:*)"), "狭めた写しに従う: {narrowed}");
     assert!(!narrowed.contains("cargo"), "写しに無い command は与えない: {narrowed}");
     clean(&[&dir, &worktree]);
+}
+
+/// runner が起こす claude は **口座の settings も対象 repo の settings も 1 つも読まない**
+/// （ADR-0011 §2.1）。
+///
+/// `--setting-sources project` は「起動口座を継承しない」までしか塞げず、**対象 repo の
+/// `.claude/settings.json` の allow 規則が残る**＝便ごとに凍結した allowlist（ADR-0010 §2.4）を
+/// 実装対象の repo 側から広げられる（`.56` の lens L4）。空の値は user / project / local の
+/// **どれも読まない**の意味である。
+///
+/// **値まで測る**のが要点で、`--setting-sources` が在ることだけを見る歯は値が `project` でも
+/// 緑になる（契約が名指した禁止形）。
+#[test]
+fn headless_runner_loads_no_settings_from_account_or_checkout() {
+    let dir = tmp();
+    let worktree = tmp();
+    let claude = fake_claude(&dir, "", false, 0);
+    let write_set = dir.join("write-set.txt");
+    fs::write(&write_set, "src/lib.rs\n").expect("write-set を書ける");
+    let vessel = write_vessel_copy(&dir, r#"["cargo"]"#);
+    let out = run_runner(
+        &RunnerCall { dir: &dir, worktree: &worktree, write_set: &write_set, vessel: &vessel, claude: &claude, mode: "acceptEdits", account: None },
+        b"goal = \"x\"\n",
+    );
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    let args = slurp(&dir.join("args"));
+    assert!(pair(&args, "--setting-sources", ""), "空の値を **対**で渡す: {args}");
+    // **どの源も名指されていない**（1 つでも残ると、その面の settings が読まれる）。
+    for source in ["project", "user", "local"] {
+        assert!(!pair(&args, "--setting-sources", source), "{source} の settings を読まない: {args}");
+    }
+    assert!(has_arg(&args, "--strict-mcp-config"), "MCP も宣言外を拾わない: {args}");
+    // 別 seam で settings を戻す形（ADR-0011 §4 (a) / (b)）を渡していない。
+    assert!(!has_arg(&args, "--settings"), "settings を file で渡し直さない: {args}");
+    assert!(!has_arg(&args, "--restricted"), "restricted は使わない: {args}");
+    clean(&[&dir, &worktree]);
+}
+
+/// lens が起こす claude も同じ形で起きる（構築点は `build` 1 つ・ADR-0011 §2.1）。
+///
+/// lens は `--allowedTools` を渡さない側だが、**settings 由来の allow は権限の口を開ける**ので
+/// runner と同じ 5 点を lens でも測る（片方だけ塞ぐ変異を落とす）。
+#[test]
+fn headless_lens_loads_no_settings_from_account_or_checkout() {
+    let dir = tmp();
+    let claude = fake_claude(&dir, "{\"verdict\":\"PASS\",\"evidence\":\"ok\"}\n", false, 0);
+    let contract = contract_in(&dir);
+    let out = run_lens(&contract, "4096", "plan", &claude, b"--- a\n+++ b\n");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    let args = slurp(&dir.join("args"));
+    assert!(pair(&args, "--setting-sources", ""), "空の値を **対**で渡す: {args}");
+    for source in ["project", "user", "local"] {
+        assert!(!pair(&args, "--setting-sources", source), "{source} の settings を読まない: {args}");
+    }
+    assert!(has_arg(&args, "--strict-mcp-config"), "MCP も宣言外を拾わない: {args}");
+    assert!(!has_arg(&args, "--settings"), "settings を file で渡し直さない: {args}");
+    assert!(!has_arg(&args, "--restricted"), "restricted は使わない: {args}");
+    clean(&[&dir]);
 }
