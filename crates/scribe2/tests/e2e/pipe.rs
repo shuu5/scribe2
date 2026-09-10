@@ -1617,6 +1617,54 @@ fn pipe_gate_substitutes_contract_placeholder_in_lens_cmd() {
     clean(&[&repo, &state]);
 }
 
+/// gate は `--lens` の cmd の `{worktree}` へ **便の worktree** を埋める。
+///
+/// 本契約（`s2-07l.60`）の実利は「lens の context に憲法を載せる」ことで、その唯一の
+/// 経路が gate → `{worktree}` → lens の `cwd` である。`substitute()` という純関数の中
+/// だけを測る歯では、**呼び手が別の path を穴へ入れる退行**を捕まえられない——実測
+/// 2026-09-10: `ask_lens(&substitute(cmd, &contract, worktree), …)` の第 3 引数を
+/// `entry.state_dir` へ差し替えても workspace の 297 本が 1 本も落ちなかった。
+/// ゆえに**穴の中身が正しいか**をここで測る（`{contract}` 側と対称にする）。
+#[test]
+fn pipe_gate_substitutes_worktree_placeholder_in_lens_cmd() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let id = implemented(&repo, &state, &path);
+    let seen = state.join("lens-worktree-arg");
+    // fake lens が **受け取った argv** を写す。置換していなければ `{worktree}` の字面が残る。
+    let lens = format!(
+        "printf '%s' '{{worktree}}' > '{}'; cat >/dev/null; echo '{}'",
+        seen.display(),
+        lens_verdict("PASS")
+    );
+    let out = gate_once(&repo, &state, &id, Some(&lens));
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "PASS: {}", stderr_of(&out));
+    let handed = fs::read_to_string(&seen).expect("lens が受けた値を読める");
+    assert!(
+        !handed.contains("{worktree}"),
+        "placeholder が置換されずに渡っている: {handed}"
+    );
+    let handed = PathBuf::from(handed.trim());
+    assert!(handed.is_absolute(), "絶対 path が渡る: {}", handed.display());
+    // **便の worktree ちょうど**を指す。
+    assert_eq!(
+        handed,
+        repo.join(".worktrees").join("scribe2").join(&id),
+        "run の worktree を指す"
+    );
+    // 近い path を渡す退行を負例で外す（置き場も anchor の repo も worktree ではない）。
+    assert_ne!(handed, state, "置き場を渡していない");
+    assert_ne!(handed, repo, "anchor の repo を渡していない");
+    // 憲法が載る経路である＝渡った dir は便の base の checkout である。
+    assert!(
+        handed.join(".git").exists(),
+        "worktree の checkout を指す: {}",
+        handed.display()
+    );
+    clean(&[&repo, &state]);
+}
+
+
 #[test]
 fn pipe_gate_refuses_wrong_stage() {
     let (repo, state) = repo_with_state();

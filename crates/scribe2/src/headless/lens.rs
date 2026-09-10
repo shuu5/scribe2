@@ -7,6 +7,10 @@
 //! （実測 2026-09-10・s2-07l.24 の実 5 便）。**材料の不足は前提違反として断る**（rc 1）。
 //! 契約を prompt へ差し込んでから判定を問うのが lens の口である。
 //!
+//! **`--worktree` は必須である**。lens に憲法（生成区間を持つ `CLAUDE.md`）を載せる経路は
+//! 起動 cwd 1 本なので、渡されなければ claude を起こさず rc 1 で断る——継承した cwd に
+//! 頼ると、呼び手が変わった周に憲法の載らない判定が静かに出る（fail-closed・C11.2）。
+//!
 //! **cap を超えた diff では claude を呼ばない**。呼んでから「長すぎた」と言うのでは、
 //! 上限を置いた意味（NFR1）が無い。判定に届かなかった周はすべて INCONCLUSIVE へ倒す——
 //! 偽の PASS を作らないためである（AC3）。
@@ -25,7 +29,7 @@ const JSON_HEAD: char = '{';
 /// 使い方の 1 行。
 pub fn usage() -> String {
     format!(
-        "usage: {} lens --contract F --cap BYTES --permission-mode M [--account-dir D] [--claude PATH] < diff",
+        "usage: {} lens --contract F --worktree D --cap BYTES --permission-mode M [--account-dir D] [--claude PATH] < diff",
         crate::name::NAME
     )
 }
@@ -40,13 +44,14 @@ pub fn dispatch(args: &[String]) -> Outcome {
     let parsed = (|| {
         Ok::<_, String>((
             need(args, "--contract")?.to_owned(),
+            need(args, "--worktree")?.to_owned(),
             need(args, "--cap")?.to_owned(),
             need(args, "--permission-mode")?.to_owned(),
             flag(args, "--account-dir")?.map(str::to_owned),
             flag(args, "--claude")?.map(str::to_owned),
         ))
     })();
-    let (contract, cap, mode, account, claude) = match parsed {
+    let (contract, worktree, cap, mode, account, claude) = match parsed {
         Ok(found) => found,
         Err(reason) => return Outcome::failed(RC_REFUSED, vec![format!("lens: {reason}"), usage()]),
     };
@@ -80,7 +85,9 @@ pub fn dispatch(args: &[String]) -> Outcome {
         permission_mode: &mode,
         plugin_dir: None,
         account_dir: account.as_deref(),
-        cwd: None,
+        // **便の worktree で起こす**（anchor の repo は渡さない）。判定に載る憲法は
+        // base の checkout のものであり、anchor 側の未 commit な `CLAUDE.md` ではない。
+        cwd: Some(Path::new(&worktree)),
         // 判定を 1 つ受け取るだけなので既定（text）で呼ぶ。stream-json にすると
         // 「最後の JSON 行」が claude の result record になり、判定が取れない。
         streaming: false,
