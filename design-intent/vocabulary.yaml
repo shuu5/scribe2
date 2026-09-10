@@ -256,7 +256,7 @@ terms:
     relationships: [gate, headless, Verdict]
   - canonical: headless
     domain: consumer
-    definition: 対話画面を持たず、 入力を受けて 1 回で答えを返す Claude の実行形 (claude -p)。 口座は環境変数で切り替え、 permission は毎回明示し、 settings は 1 つも読まない (ADR-0011)。
+    definition: 対話画面を持たず、 入力を受けて 1 回で答えを返す Claude の実行形 (claude -p)。 口座は環境変数で切り替え、 permission は毎回明示し、 user / project / local の settings は読まない (ADR-0011)。
     relationships: [runner, lens]
   - canonical: toy repo
     domain: consumer

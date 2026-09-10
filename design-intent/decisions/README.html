@@ -87,7 +87,7 @@
     <tr><td>ADR-0008</td><td><a href="./ADR-0008-own-repo-pr-is-not-publish.html">自 repo への branch push と PR 作成は憲法 A4.2 の「出す」ではない (A4.3 の可逆)</a></td><td>accepted</td><td>2026-09-10</td></tr>
     <tr><td>ADR-0009</td><td><a href="./ADR-0009-vessel-grants-runner-permissions-and-mutation-proof.html">runner の権限と非空虚性の検証は器が manifest から与える (口座設定の暗黙継承・host 側 script・契約への共通規律の手書きを廃止)</a></td><td>accepted</td><td>2026-09-10</td></tr>
     <tr><td>ADR-0010</td><td><a href="./ADR-0010-vessel-declaration-holds-allowlist-and-common-verify.html">runner の allowlist と gate の共通 verify の値は対象 repo の vessel 宣言が持ち、 manifest は上限を持つ (ADR-0009 §2.1 / §2.4 の値の置き場を部分 supersede)</a></td><td>accepted</td><td>2026-09-10</td></tr>
-    <tr><td>ADR-0011</td><td><a href="./ADR-0011-vessel-launches-claude-without-settings.html">器が起こす claude (runner / lens) は口座と対象 repo の settings を 1 つも読まない (--setting-sources 空 + --strict-mcp-config・ADR-0009 §2.1 の起動 flag を部分 supersede)</a></td><td>accepted</td><td>2026-09-10</td></tr>
+    <tr><td>ADR-0011</td><td><a href="./ADR-0011-vessel-launches-claude-without-settings.html">器が起こす claude (runner / lens) は口座と対象 repo の settings を 1 つも読まない (--setting-sources 空 + --strict-mcp-config・ADR-0009 §2.1 / ADR-0010 §2.4 の起動 flag を部分 supersede)</a></td><td>accepted</td><td>2026-09-10</td></tr>
   </tbody>
 </table>
 <p data-audience="machine">新しい決定を記録したら本表と JSON-LD の <code>dc:hasPart</code> に追記する。 ADR は frozen (改訂は supersede する新 ADR で行う)。</p>
