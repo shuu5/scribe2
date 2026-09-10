@@ -198,3 +198,10 @@ kind = "RunnerAllowedCommands"
 value = ["cargo", "git"]
 ruling = "user 裁定 2026-09-10（ADR-0009）"
 ruled_at = "2026-09-10"
+
+[[rule]]
+id = "repo.non_rust_exec_allow"
+kind = "RepoNonRustExecAllow"
+value = ["scripts/bdw", "design-intent/assets/mermaid.min.js"]
+ruling = "user 裁定 2026-09-10（s2-07l notes 10:4xZ (2)・ADR-0009 §2.5）"
+ruled_at = "2026-09-10"
