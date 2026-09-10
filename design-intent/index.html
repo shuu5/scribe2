@@ -58,7 +58,7 @@
 </ul>
 </details>
 <details>
-<summary>accepted <span class="nav-count">(12)</span></summary>
+<summary>accepted <span class="nav-count">(13)</span></summary>
 <ul>
   <li><a href="decisions/ADR-0001-rust-single-static-binary.html">ADR-0001 — 実装言語と構成 = Rust 単一 static binary (Go / typed Python / TypeScript 却下)</a> <span class="nav-meta">adr</span></li>
   <li><a href="decisions/ADR-0002-test-lint-toolchain.html">ADR-0002 — test / lint toolchain = cargo nextest・粒度 lint は forbid・構造検査は cargo xtask check</a> <span class="nav-meta">adr</span></li>
@@ -72,6 +72,7 @@
   <li><a href="decisions/ADR-0010-vessel-declaration-holds-allowlist-and-common-verify.html">ADR-0010 — runner の allowlist と gate の共通 verify の値は対象 repo の vessel 宣言が持ち、 manifest は上限を持つ (ADR-0009 §2.1 / §2.4 の値の置き場を部分 supersede)</a> <span class="nav-meta">adr</span></li>
   <li><a href="decisions/ADR-0011-vessel-launches-claude-without-settings.html">ADR-0011 — 器が起こす claude (runner / lens) は口座と対象 repo の settings を 1 つも読まない (--setting-sources 空 + --strict-mcp-config・ADR-0009 §2.1 / ADR-0010 §2.4 の起動 flag を部分 supersede)</a> <span class="nav-meta">adr</span></li>
   <li><a href="decisions/ADR-0012-rate-limit-detection-reads-dedicated-record.html">ADR-0012 — 上限の検出は専用 record (rate_limit_event) の構造化 field で行い、 本文への字面照合を畳む</a> <span class="nav-meta">adr</span></li>
+  <li><a href="decisions/ADR-0013-machine-holds-enumerations-docs-hold-pointers.html">ADR-0013 — 列挙は機械が持ち文書は pointer だけを持つ (ADR-0006 の measure tag 列挙を supersede)。 C2「宣言順」の充足形は const slice の判別子順 pin</a> <span class="nav-meta">adr</span></li>
 </ul>
 </details>
 </section>

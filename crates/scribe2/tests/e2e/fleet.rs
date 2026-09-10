@@ -7,9 +7,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{Duration, SystemTime};
+use vessel::order::is_declaration_order;
 use vessel::fleet::store::{self, LockPolicy, StoreError};
 use vessel::cli_outcome::{RC_BROKEN, RC_OK, RC_REFUSED};
 use vessel::rules::manifest::Manifest;
+use vessel::fleet::{KINDS, STAGES};
 use vessel::fleet::{
     json_lite, replay, wait, Completion, Event, EventKind, SeatState, Stage, Timeout, SCHEMA,
 };
@@ -551,4 +553,25 @@ fn fleet_store_error_shows_line_number() {
         reason: "壊れている".to_owned(),
     };
     assert_eq!(error.to_string(), "fleet: 壊れている line=7");
+}
+
+/// `STAGES` の並びが**宣言順**と一致する（ADR-0013 §2.2）。憲法 C2 が名指す「stage 列挙」は
+/// この面であり、並びが宣言順から外れれば段の意味が静かにずれる。
+#[test]
+fn fleet_stages_follow_declaration_order() {
+    assert!(
+        is_declaration_order(STAGES, |stage| stage as usize),
+        "STAGES の並びが宣言順と乖離している（母集団 {} 段）",
+        STAGES.len()
+    );
+}
+
+/// `KINDS` の並びが**宣言順**と一致する（ADR-0013 §2.2）。
+#[test]
+fn fleet_kinds_follow_declaration_order() {
+    assert!(
+        is_declaration_order(KINDS, |kind| kind as usize),
+        "KINDS の並びが宣言順と乖離している（母集団 {} 種）",
+        KINDS.len()
+    );
 }

@@ -9,6 +9,7 @@ pub mod fleet;
 pub mod headless;
 pub mod hook;
 pub mod name;
+pub mod order;
 pub mod pipe;
 pub mod rules;
 pub mod seat;

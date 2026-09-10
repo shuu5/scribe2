@@ -2,13 +2,9 @@
 //!
 //! 違反は 1 件 1 行 `<tag>: <本文>` で返し、1 件以上なら CLI 面が rc 1 を返す。
 //! 違反 0 のときだけ各 tag の実測値入りサマリを 1 行出す（失敗時にサマリは出さない）。
-//! 測る tag は core-lines / file-lines / test-src-ratio / manifest-name /
-//! manifest-version / lints-set / lints-optin / name-literal / deps-empty /
-//! toolchain-pin / paths-clean / claude-md-constitution / non-rust-exec / ci-shell-lines の 14 本である。
-//!
-//! ADR-0006 は 11 本を列挙して frozen であり、12 本目（claude-md-constitution）と
-//! 13 本目（ADR-0009 が要求する non-rust-exec）をまとめて supersede する ADR は
-//! 後続の便が書く（planner 裁定 2026-09-10・s2-07l.60）。
+//! **測る tag の列挙はここに書かない**——列挙の SSOT は判定行を組み立てる実装
+//! （[`summary`]）と、それが出す判定行そのものである（ADR-0013 §2.1）。doc へ写した列挙は
+//! 腐るので、増減のたびに doc を直す形を採らない。
 
 use crate::genmanifest::MANIFEST_REL;
 use crate::limits::{ALLOWED_DEPS, MAX_CORE_LINES, MAX_FILE_LINES, REQUIRED_LINTS};

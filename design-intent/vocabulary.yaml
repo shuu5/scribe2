@@ -366,8 +366,8 @@ terms:
     relationships: [便, event log, state dir]
   - canonical: measure tag
     domain: consumer
-    definition: 構造検査が判定行に出す測定 1 本の名。 各 tag は測る対象と実測値を持ち、 列挙は ADR が記録する。
-    relationships: [Measured]
+    definition: 構造検査が判定行に出す測定 1 本の名。 各 tag は測る対象と実測値を持つ。 列挙の SSOT は機械側 (判定行と実装) で、 文書は pointer だけを持つ (ADR-0013 §2.1)。
+    relationships: [Measured, 判定行]
   - canonical: paths-clean
     domain: consumer
     definition: index を母集団に、 tracked file の本文へ private path 形が残っていないことを測る measure tag。
@@ -402,3 +402,15 @@ terms:
     domain: consumer
     definition: 上限 record の status のうち「便を止める」ことを表す値の閉じた集合。 実測で採れた値だけを入れ、 集合に無い status では止めない (ADR-0012 §2.1・未知は claude の rc へ落ちる)。
     relationships: [上限 record]
+  - canonical: 判定行
+    domain: consumer
+    definition: 構造検査が違反 0 の周にだけ出す 1 行。 measure tag とその実測値を並べる。 measure の列挙はこの現物が SSOT であり、 文書は列挙を写さない (ADR-0013 §2.1)。
+    relationships: [measure tag, 構造検査]
+  - canonical: 宣言順
+    domain: consumer
+    definition: 閉じた enum の variant が宣言された順序。 適用順序はこれだけから取り、 順序の散文注記を持たない (憲法 C2)。 充足形は「閉じた enum + 全 variant の const slice + 網羅 match + 並びが判別子の昇順と一致することを測る歯」の 4 つ組である (ADR-0013 §2.2)。
+    relationships: [判別子順 pin]
+  - canonical: 判別子順 pin
+    domain: consumer
+    definition: const slice の並びが判別子の昇順 (0, 1, 2, …) と一致することを測る歯。 並べ替え・重複・中間の欠番を捕まえるが、 末尾に足した variant の入れ忘れは捕まえない (ADR-0013 §2.3)。
+    relationships: [宣言順]
