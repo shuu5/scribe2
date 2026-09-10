@@ -78,12 +78,14 @@ pub fn dispatch(args: &[String]) -> Outcome {
 
 /// claude を回し、rate limit を見たらその場で止める。
 ///
-/// **権限を与えるのはここだけ**である（lens は判定を受け取るだけ）。`--setting-sources
-/// project` を毎回付けて**起動口座の settings を継承せず**、器が与えた allow の外は
-/// plugin の PermissionRequest hook が deny する（ADR-0009 §2.1・ADR-0010 §2.4）。
+/// **権限を与えるのはここだけ**である（lens は判定を受け取るだけ）。settings を 1 つも
+/// 読まない起動形（`--setting-sources` の空値 + `--strict-mcp-config`）は runner と lens に
+/// 共通なので [`build`] が持ち、この口は**与える権限**だけを足す——器が与えた allow の外は
+/// plugin の PermissionRequest hook が deny する（ADR-0011 §2.1 が ADR-0009 §2.1 / ADR-0010
+/// §2.4 の起動 flag を部分 supersede・allowlist の形と hook の一律 deny は不変）。
 fn launch(call: &Call<'_>, tools: &str) -> Outcome {
     let mut command = build(call);
-    command.arg("--setting-sources").arg("project").arg("--allowedTools").arg(tools);
+    command.arg("--allowedTools").arg(tools);
     let spawned = command.spawn();
     let mut child = match spawned {
         Ok(found) => found,

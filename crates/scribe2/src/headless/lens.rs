@@ -116,6 +116,10 @@ fn state(contract: &Contract) -> String {
 }
 
 /// claude を呼び、出力の**最後の JSON 行**を stdout 1 行に写す。
+///
+/// 起動形は [`build`] が持つ——lens は `--allowedTools` を渡さない側だが、settings 由来の
+/// allow 規則は権限の口を開けるので、settings を 1 つも読まない形（`--setting-sources` の
+/// 空値 + `--strict-mcp-config`）は runner と同じく毎回効く（ADR-0011 §2.1）。
 fn ask(call: &Call<'_>) -> Outcome {
     let spawned = build(call).spawn();
     let mut child = match spawned {

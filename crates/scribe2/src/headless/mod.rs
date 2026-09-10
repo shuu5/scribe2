@@ -128,7 +128,18 @@ pub fn build(call: &Call<'_>) -> Command {
         // permission mode は**毎回**渡す。省くと版の既定に従い、同じ 1 行が
         // 環境ごとに違う権限で走る。
         .arg("--permission-mode")
-        .arg(call.permission_mode);
+        .arg(call.permission_mode)
+        // **settings を 1 つも読まない**（ADR-0011 §2.1）。空の値は user / project / local の
+        // **どれも読まない**という意味で、`project` に絞る形では対象 repo の
+        // `.claude/settings.json` の allow 規則が残る——便ごとに凍結した allowlist
+        // （ADR-0010 §2.4）を、実装させている当の repo 側から広げられてしまう。
+        //
+        // **runner と lens の唯一の構築点がここ**である。片方の口だけで渡す形にすると、
+        // もう片方が版の既定（= その周の口座と checkout の settings）で起きる。
+        .arg("--setting-sources")
+        .arg("")
+        // MCP も同じ極性で閉じる。宣言していない server を拾わせない。
+        .arg("--strict-mcp-config");
     if call.streaming {
         // `-p` と `stream-json` の併用は **この版の claude が `--verbose` を要求する**
         // （無いと `requires --verbose` で rc 1・実測 2026-09-10）。fake は flag を
