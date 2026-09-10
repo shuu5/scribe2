@@ -11,6 +11,7 @@ use std::process::{Command, Output};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 use vessel::cli_outcome::{RC_OK, RC_REFUSED};
+use vessel::seat::inject::tick_path;
 
 /// binary の path。
 fn bin() -> &'static str {
@@ -508,6 +509,37 @@ fn seat_inject_refuses_empty_payload() {
     assert_eq!(capture(&socket, name), before, "pane は 1 文字も変わらない");
     assert!(!state.exists(), "記録も書かない");
     stop_seat(&socket, name);
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// `.` / `..` の target は記録 dir 名として潰し、**state dir の外へ出さない**。
+///
+/// 期待する path は契約の字面から自分で組み、`tick_path` の戻りと突き合わせる
+/// （実装の潰し方を歯が呼んで期待値を作ると、壊れても同じ壊れ方をして空虚になる）。
+#[test]
+fn seat_inject_sanitizes_dot_targets() {
+    let dir = tmp();
+    let state = dir.join("state");
+    let seat_dir = state.join("seat");
+
+    let dotdot = tick_path(&state, "..");
+    assert_eq!(
+        dotdot,
+        seat_dir.join("__").join("tick.jsonl"),
+        ".. は同じ長さの _ へ潰す"
+    );
+    assert!(dotdot.starts_with(&seat_dir), "state dir の外へ出ない: {dotdot:?}");
+
+    let dot = tick_path(&state, ".");
+    assert_eq!(dot, seat_dir.join("_").join("tick.jsonl"), ". も潰す");
+    assert!(dot.starts_with(&seat_dir), "state dir の外へ出ない: {dot:?}");
+
+    // 多段は従来どおり（`/` が `_` に潰れるので component を跨がない）。
+    assert_eq!(
+        tick_path(&state, "../x"),
+        seat_dir.join(".._x").join("tick.jsonl"),
+        "多段は 1 component のまま"
+    );
     fs::remove_dir_all(&dir).ok();
 }
 

@@ -88,8 +88,13 @@ pub fn search_region(pane: &str) -> Vec<&str> {
 const TAIL_LINES: usize = 6;
 
 /// target を file 名に使える字面へ潰す（`[A-Za-z0-9_.-]` 以外は `_`）。
+///
+/// **潰した結果が `.` か `..` になった周は全部 `_` にする**。この 2 形は path の
+/// component として上へ抜けるので、`<state_dir>/seat/<target>/tick.jsonl` が
+/// `<state_dir>/tick.jsonl` になり **state dir の外を書く**（多段の `../x` は `.._x` に
+/// 潰れるので抜けない）。長さは変えない（何文字を潰したかを残す）。
 pub fn sanitize_target(target: &str) -> String {
-    target
+    let squashed: String = target
         .chars()
         .map(|ch| {
             if ch.is_ascii_alphanumeric() || matches!(ch, '_' | '.' | '-') {
@@ -98,5 +103,9 @@ pub fn sanitize_target(target: &str) -> String {
                 '_'
             }
         })
-        .collect()
+        .collect();
+    if squashed == "." || squashed == ".." {
+        return "_".repeat(squashed.len());
+    }
+    squashed
 }
