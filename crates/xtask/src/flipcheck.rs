@@ -238,16 +238,19 @@ fn meaningful(text: &str) -> Vec<&str> {
 
 /// `mod x;`（`pub` / `pub(crate)` 可）の 1 行か。
 fn is_mod_line(line: &str) -> bool {
-    let Some(body) = strip_visibility(line.trim()) else {
-        return false;
-    };
-    let Some(rest) = body.strip_prefix("mod ") else {
-        return false;
-    };
-    let Some(name) = rest.strip_suffix(';') else {
-        return false;
-    };
-    !name.is_empty() && name.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+    mod_name(line).is_some()
+}
+
+/// `mod x;`（`pub` / `pub(crate)` 可）の 1 行なら、その module 名。
+///
+/// 弁別は [`is_mod_line`] と同じ字面で行う（同じ規則を 2 か所へ書くと、宣言と数えた行と
+/// 本体の在処を探した行がずれる）。
+fn mod_name(line: &str) -> Option<&str> {
+    let name = strip_visibility(line.trim())?
+        .strip_prefix("mod ")?
+        .strip_suffix(';')?;
+    (!name.is_empty() && name.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_'))
+        .then_some(name)
 }
 
 /// 可視性の前置きを外す。`pub` の後ろに空白が無い字面（`pubmod x;`）は `None`。
@@ -565,13 +568,19 @@ fn write_one(dest: &Path, pair: &FilePair) -> Result<bool, String> {
         emit_err(&format!("flip-check: not-copied {}", pair.rel));
         return Ok(false);
     };
-    let path = dest.join(&pair.rel);
+    write_text(dest, &pair.rel, &body)?;
+    Ok(true)
+}
+
+/// 本文 1 本を base tree の `rel` へ書く（親 dir は作る）。
+fn write_text(dest: &Path, rel: &str, body: &str) -> Result<(), String> {
+    let path = dest.join(rel);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|err| format!("{} を作れない: {err}", parent.display()))?;
     }
     fs::write(&path, body).map_err(|err| format!("{} を書けない: {err}", path.display()))?;
-    emit_err(&format!("flip-check: changed {}", pair.rel));
-    Ok(true)
+    emit_err(&format!("flip-check: changed {rel}"));
+    Ok(())
 }
 
 /// overlay を base tree へ書く。**数えるのは [`Counts`] の仕事**（判定行の 3 数を
@@ -711,15 +720,9 @@ fn judge_each(dest: &Path, target: &Path, plan: &Plan, counts: Counts) -> Verdic
             return infra(&reason);
         }
     }
-    // 宣言 file（`mod x;` だけの差分）は**単独では撃たず**、本体を撃つ間ずっと置いたまま
-    // にする。宣言と本体が別 file に割れる新規 module は、単独 overlay ではどちらの判定も
-    // 意味を持たないからである（[`FilePair::declaration_only`]）。
-    for pair in &plan.decls {
-        emit_err(&format!("flip-check: decl-with-body {}", pair.rel));
-        if let Err(reason) = write_one(dest, pair) {
-            return infra(&reason);
-        }
-    }
+    // 宣言 file（`mod x;` だけの差分）は**単独では撃たず**、本体を撃つ turn ごとに
+    // 同梱する（[`bundle_decls`]）。宣言と本体が別 file に割れる新規 module は、単独
+    // overlay ではどちらの判定も意味を持たないからである（[`FilePair::declaration_only`]）。
     for pair in &plan.bodies {
         emit_err(&format!("flip-check: test-diff {}", pair.rel));
         let path = dest.join(&pair.rel);
@@ -727,12 +730,16 @@ fn judge_each(dest: &Path, target: &Path, plan: &Plan, counts: Counts) -> Verdic
             Err(reason) => return infra(&reason),
             Ok(found) => found,
         };
-        let judged = match nextest(dest, target) {
+        // **本体を置いた後**に絞る（絞り込みは dest の実体で本体の在処を見る）。
+        let judged = match bundle_decls(dest, &plan.decls) {
             Err(reason) => Err(infra(&reason)),
-            Ok(output) => {
-                relay(&format!("overlay {}", pair.rel), &output);
-                judge_one(&output, Some(&pair.rel))
-            }
+            Ok(()) => match nextest(dest, target) {
+                Err(reason) => Err(infra(&reason)),
+                Ok(output) => {
+                    relay(&format!("overlay {}", pair.rel), &output);
+                    judge_one(&output, Some(&pair.rel))
+                }
+            },
         };
         // **戻しは判定より先**（次の file を base の上で撃つ前提が崩れる）。ただし
         // **返す判定は judged を優先する**——戻せなかったことで `green-on-base file=<rel>`
@@ -750,6 +757,61 @@ fn judge_each(dest: &Path, target: &Path, plan: &Plan, counts: Counts) -> Verdic
         }
     }
     ok_line(counts)
+}
+
+/// 宣言 file を **その turn の tree に本体が在る `mod <name>;` 行だけ**へ絞って置く。
+///
+/// 便の宣言行を全部置くと、その turn ではまだ置かれていない兄弟 module の `E0583` が
+/// 「overlay 後の compile error は RED」の規則で RED に化け、撃っている本体が base で
+/// **緑でも隠れる**（実測 2026-09-10・`s2-07l.41` が入れた fail-open。本体 2 本とも緑の便が
+/// `RED-on-base ok decl=2` で通った）。turn ごとに絞れば、その turn に木へ載っている
+/// 本体の宣言だけが compile 対象になる。
+fn bundle_decls(dest: &Path, decls: &[&FilePair]) -> Result<(), String> {
+    for pair in decls {
+        emit_err(&format!("flip-check: decl-with-body {}", pair.rel));
+        let Some(body) = pair.overlay() else {
+            emit_err(&format!("flip-check: not-copied {}", pair.rel));
+            continue;
+        };
+        write_text(
+            dest,
+            &pair.rel,
+            &present_mods_only(dest, &pair.rel, &body, &pair.base_test()),
+        )?;
+    }
+    Ok(())
+}
+
+/// 宣言 file の本文から、**この便が足した** `mod <name>;` 行のうち `dest` に本体が
+/// 無いものだけを落とす。
+///
+/// `mod` 行**以外は 1 行も触らない**（宣言 file は `use` や helper を持ちうる。落とすと
+/// 本体が compile できず、これも捏造 RED になる）。本体の在処は宣言 file と同じ dir の
+/// `<name>.rs` か `<name>/mod.rs` で見る。
+///
+/// **base に既に在った宣言行は落とさない**——base が緑である以上（[`base_is_green`]）
+/// その本体は必ず在り、落とす理由が無い。`#[path = "…"]` 付きの宣言まで落とすと属性行
+/// （`mod` 行ではないので残る）が**孤児**になり、`expected item after attributes` の
+/// compile error が RED に化ける＝**この関数が消しに来た当の fail-open を別の扉から
+/// 作り直す**（実測 2026-09-10・lens-44 H1: base の xtask は正しく `green-on-base` で
+/// 落ちるのに、絞り込みを入れた側が `RED-on-base ok` で通した）。
+///
+/// ゆえに `#[path]` 付き module について本関数がするのは「壊さない」ことだけで、
+/// **救済はしない**——path 属性の指す先は字面から追えず、追うには parser が要る。
+/// この便が `#[path]` 付きの新規 module を足した周は従来どおり測れない（M4・記録のみ）。
+fn present_mods_only(dest: &Path, rel: &str, body: &str, base: &str) -> String {
+    let dir = dest.join(Path::new(rel).parent().unwrap_or(Path::new("")));
+    let carried: Vec<&str> = base.lines().filter_map(mod_name).collect();
+    body.split_inclusive('\n')
+        .filter(|line| match mod_name(line) {
+            None => true,
+            Some(name) => {
+                carried.contains(&name)
+                    || dir.join(format!("{name}.rs")).is_file()
+                    || dir.join(name).join("mod.rs").is_file()
+            }
+        })
+        .collect()
 }
 
 /// 1 便の overlay 対象（judge_each が要る 3 つの集合）。
