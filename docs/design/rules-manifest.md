@@ -24,14 +24,14 @@
 
 - `pub enum RuleKind` — **閉じた列挙・`#[non_exhaustive]` 禁止**。variant を足したら網羅 `match` が compile error になる形を保つ（C1 / C11）。variant は §4.1 の行と 1:1。
 - `pub const ALL: &[RuleKind]` — parity test の母集団。
-- `pub enum RuleValue { Int(u64), Str(String), Policy(String), List(Vec<String>) }`。`Int` = 閾値（単位は kind の doc コメント）。`Str` = 識別子（対話面の identity）。`Policy` = 散文で書かれた選定規則や検出線の定義（機械は `enabled` だけを読む。本文は憲法 §3 の写し）。`List` = 文字列の列（allowlist・共通 verify のような**順序のある複数値**・ADR-0009）。**空の配列は受けない**——「規則が無い」を空で表せると、書き間違いの `value = []` が空の allowlist を効かせる。要素の空文字も受けない（何もしない口を規則の顔で並べない）。配列を切る実装は `rules::manifest` の `list` / `elements` / `quoted_once` の 1 組で、`pipe` の契約 file もこれを呼ぶ（読み方が 2 本に割れない）。
+- `pub enum RuleValue { Int(u64), Str(String), Policy(String), List(Vec<String>) }`。`Int` = 閾値（単位は kind の doc コメント）。`Str` = 識別子（対話面の identity）。`Policy` = 散文で書かれた選定規則や検出線の定義（機械は `enabled` だけを読む。本文は憲法 §3 の写し）。`List` = 文字列の列（allowlist・共通 verify のような**順序のある複数値**・ADR-0009）。**空の配列は受けない**——「規則が無い」を空で表せると、書き間違いの `value = []` が空の allowlist を効かせる。要素の空文字も受けない（何もしない口を規則の顔で並べない）。配列を**切る**実装（`elements` / `quoted_once`）は `rules::manifest` の 1 組で、`pipe` の契約 file もこれを呼ぶ（同じ入力を別々に切って、区切り忘れの扱いが片側だけ直る事故を防ぐ）。ただし切った後の**方針**——空を拒むか・要素の空文字を拒むか・違反を全件集めるか最初の 1 件で止めるか——は呼び手ごとに違い、manifest 側は `list`、契約 file 側は`value_of` が持つ（**方針の層は 1 本ではない**・畳むなら別便）。
 - `pub trait Rule { fn kind(&self) -> RuleKind; fn validate(&self) -> Result<(), RuleError>; }` を `RuleRow` に実装。kind ごとの値型の対応は **`match kind { … }` 1 箇所・wildcard `_` 無し**。
 - `pub struct RuleRow { id, kind, value, enabled, ruling: String, ruled_at: String, line: u64 }`。
 - `RuleError` は `Display` で **1 件 1 行・`line=<N>` を含む**。
 
 ## 4. manifest（`rules/manifest.toml`・tracked・repo root 直下）
 
-TOML subset（先頭に `schema = 1`・`[[rule]]` の array-of-tables・値は string / integer / bool のみ・未知 key は拒否）。loader は std だけで書く（ADR-0004 §2.3・NFR3）。
+TOML subset（先頭に `schema = 1`・`[[rule]]` の array-of-tables・値は string / integer / bool と**文字列の配列**〔1 行で閉じる〕・未知 key は拒否）。loader は std だけで書く（ADR-0004 §2.3・NFR3）。
 
 ```toml
 schema = 1

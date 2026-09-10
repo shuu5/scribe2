@@ -185,6 +185,51 @@ fn rules_list_embedded_manifest_carries_allowlist_and_common_verify() {
 }
 
 #[test]
+fn rules_list_keeps_comma_inside_quotes() {
+    // 要素の中の `,` は区切りではない。共通 verify の行は `,` を含みうるので、
+    // ここを割ると **書いた本数と通る本数が食い違う**（1 行が 2 本に化ける）。
+    let text = one_row(LIST_KIND, r#"["cargo test --features a,b", "git"]"#);
+    let manifest = parsed(&text).expect("受理されるはずの fixture が拒まれた");
+    let row = manifest.get("probe").expect("probe が在る");
+    assert_eq!(
+        row.value,
+        RuleValue::List(vec!["cargo test --features a,b".to_owned(), "git".to_owned()]),
+        "quote の内側の , で割らない（母集団 2 要素）"
+    );
+}
+
+#[test]
+fn rules_list_rejects_unclosed_bracket() {
+    // 配列は 1 行で閉じる（要素に改行を置けない）。
+    let errors = rejected(&one_row(LIST_KIND, r#"["cargo""#))
+        .expect("拒まれるはずの fixture が受理された");
+    assert_eq!(errors.len(), 1, "件数: {errors:?}");
+    let first = errors.first().map(String::as_str).unwrap_or_default();
+    assert!(first.contains("同じ行で閉じていない"), "理由: {first}");
+}
+
+#[test]
+fn rules_list_rejects_unclosed_quote() {
+    let errors = rejected(&one_row(LIST_KIND, r#"["cargo", "git]"#))
+        .expect("拒まれるはずの fixture が受理された");
+    assert_eq!(errors.len(), 1, "件数: {errors:?}");
+    let first = errors.first().map(String::as_str).unwrap_or_default();
+    assert!(first.contains("引用符が閉じていない"), "理由: {first}");
+}
+
+#[test]
+fn rules_manifest_reports_broken_value_once() {
+    // 読めなかった値は scan が 1 件報告する。後段が「必須 key が無い」と**嘘の 2 行目**を
+    // 足さないこと（key は在って値が壊れている）。value 以外の key でも同じ。
+    let text = "schema = 1\n\n[[rule]]\nid = \"probe\"\nkind = \"CoreLines\"\nvalue = 1\nruling = 1.5\nruled_at = \"d\"\n";
+    let errors = rejected(text).expect("拒まれるはずの fixture が受理された");
+    assert_eq!(errors.len(), 1, "件数（同じ欠陥を 2 行にしない）: {errors:?}");
+    let first = errors.first().map(String::as_str).unwrap_or_default();
+    assert!(first.contains("TOML subset の形でない"), "理由: {first}");
+    assert!(!first.contains("必須 key"), "「無い」と言わない: {first}");
+}
+
+#[test]
 fn rules_list_cli_get_renders_every_element() {
     // 1 行表示で**要素の区切りが読める**こと（空白で継ぐと、空白を含む要素が
     // 何本あるのか読めない）。

@@ -300,6 +300,17 @@ fn check_schema(schema: Option<(u64, Scalar)>, errors: &mut Vec<RuleError>) {
 fn build_row(raw: &RawRow, errors: &mut Vec<RuleError>) -> Option<RuleRow> {
     let before = errors.len();
     check_keys(raw, errors);
+    // **読めなかった値が 1 つでもあれば、この行はここで打ち切る**。scan が既に
+    // 「value が TOML subset の形でない」を 1 件報告しており、続けると同じ欠陥が
+    // 「必須 key が無い」「ruling / ruled_at が無い」「id が空である」という
+    // **事実でない 2 行目**に化ける（key は在って値が壊れている）。
+    if raw
+        .fields
+        .iter()
+        .any(|(_, value, _)| matches!(value, RawValue::Broken))
+    {
+        return None;
+    }
     let id = text_field(raw, "id", errors).unwrap_or_default();
     if id.is_empty() && raw.fields.iter().any(|(key, _, _)| key == "id") {
         errors.push(RuleError::new(raw.line, "id が空である".to_owned()));
@@ -365,8 +376,6 @@ fn text_field(raw: &RawRow, key: &str, errors: &mut Vec<RuleError>) -> Option<St
     let (_, value, line) = raw.fields.iter().find(|(found, _, _)| found == key)?;
     match value {
         RawValue::One(Scalar::Str(text)) => Some(text.clone()),
-        // 報告済みの欠陥は 2 行にしない。
-        RawValue::Broken => None,
         other => {
             errors.push(RuleError::new(
                 *line,
@@ -382,7 +391,6 @@ fn bool_field(raw: &RawRow, key: &str, errors: &mut Vec<RuleError>) -> Option<bo
     let (_, value, line) = raw.fields.iter().find(|(found, _, _)| found == key)?;
     match value {
         RawValue::One(Scalar::Bool(found)) => Some(*found),
-        RawValue::Broken => None,
         other => {
             errors.push(RuleError::new(
                 *line,
@@ -432,6 +440,8 @@ fn value_field(
             ));
             None
         }
+        // 網羅のための枝。**到達しない**——読めなかった値を持つ行は
+        // [`build_row`] が先に打ち切る（Broken を見る場所は 1 か所である）。
         RawValue::Broken => None,
     }
 }
