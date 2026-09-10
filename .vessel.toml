@@ -1,0 +1,6 @@
+# vessel 宣言（ADR-0010 §2.1 / §2.5）。この repo を対象に便を起こす器へ、許してよい
+# command と「どの便でも撃つ検証」を宣言する。値は器の上限（rules 行
+# runner.allowed_commands）の内側でなければ intake が便を起こさない。
+schema = 1
+allowed-commands = ["cargo", "git"]
+common-verify = ["cargo xtask flip-check --base {base}", "cargo nextest run --workspace --no-tests=fail", "cargo clippy --workspace --all-targets -- -D warnings", "cargo xtask check", "cargo deny check bans licenses sources"]

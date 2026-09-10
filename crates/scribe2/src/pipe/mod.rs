@@ -13,6 +13,7 @@
 pub mod approve;
 pub mod cli;
 pub mod contract;
+pub mod declaration;
 pub mod gate;
 pub mod land;
 pub mod report;
@@ -29,6 +30,9 @@ pub const DIR: &str = "pipe";
 /// 契約 file の写しの名。
 pub const CONTRACT_FILE: &str = "contract.toml";
 
+/// 便ごとに凍結した vessel 宣言（Effective）の写しの名。
+pub const VESSEL_FILE: &str = "vessel.toml";
+
 /// 便 1 本の写しを置く dir。
 pub fn run_dir(state_dir: &Path, id: &str) -> PathBuf {
     state_dir.join(DIR).join(id)
@@ -37,6 +41,11 @@ pub fn run_dir(state_dir: &Path, id: &str) -> PathBuf {
 /// 便の契約 file の写し。
 pub fn contract_path(state_dir: &Path, id: &str) -> PathBuf {
     run_dir(state_dir, id).join(CONTRACT_FILE)
+}
+
+/// 便の vessel 宣言（Effective）の写し。**以後の段はこれだけを読む**（設計 §5.1）。
+pub fn vessel_path(state_dir: &Path, id: &str) -> PathBuf {
+    run_dir(state_dir, id).join(VESSEL_FILE)
 }
 
 /// 便の runner へ渡す plugin の写し（run dir 配下＝**repo の外**・設計 §5.2）。

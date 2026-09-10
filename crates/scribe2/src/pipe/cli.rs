@@ -9,10 +9,11 @@
 
 use super::approve::{Approve, RC_BLOCKED};
 use super::contract::Contract;
+use super::declaration::{self, Ceiling, Effective, CEILING_ROW};
 use super::gate::{Gate, Limits, Verdict, RC_INCONCLUSIVE};
 use super::land::{verdict_of, Land};
 use super::spawn::{spawn, Launch};
-use super::{contract_path, current, emit, run_dir, run_id, worktree_path, Emit, Precheck};
+use super::{contract_path, current, emit, run_dir, run_id, vessel_path, worktree_path, Emit, Precheck};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_OK, RC_REFUSED};
 use crate::fleet::store::{LockPolicy, StoreError};
 use crate::fleet::{self, Completion, EventKind, SeatState, Stage, State};
@@ -50,7 +51,7 @@ pub fn dispatch(args: &[String]) -> Outcome {
         Err(err) => return broken(err.to_string()),
     };
     match args.first().map(String::as_str) {
-        Some("intake") => intake(args, policy),
+        Some("intake") => intake(args, &manifest, policy),
         Some("spawn") => start(args, policy),
         Some("approve") => by_run(args, |id| approve_run(args, id, policy)),
         Some("gate") => by_run(args, |id| gate_run(args, id, &manifest, policy)),
@@ -114,6 +115,18 @@ fn int_row(manifest: &Manifest, id: &str) -> Result<u64, String> {
     }
 }
 
+/// rules 行の文字列の列。
+fn list_row(manifest: &Manifest, id: &str) -> Result<Vec<String>, String> {
+    let row = manifest.get(id).ok_or(format!("{id} が無い"))?;
+    if !row.enabled {
+        return Err(format!("{id} は不発効である"));
+    }
+    match row.value {
+        RuleValue::List(ref found) => Ok(found.clone()),
+        _ => Err(format!("{id} が文字列の列でない")),
+    }
+}
+
 /// 置き場。`--state-dir` が上書きし、無ければ repo に紐づいた git 設定から読む。
 ///
 /// repo の解き方は [`repo_of`] ただ 1 本（`--repo` → cwd の root）。ここで cwd だけを
@@ -128,8 +141,8 @@ fn state_dir_of(args: &[String]) -> Result<PathBuf, String> {
 }
 
 /// 契約 file を読み込み、置き場へ写して run を起こす。
-fn intake(args: &[String], policy: LockPolicy) -> Outcome {
-    match intake_id(args, policy) {
+fn intake(args: &[String], manifest: &Manifest, policy: LockPolicy) -> Outcome {
+    match intake_id(args, manifest, policy) {
         Ok(id) => Outcome::ok_line(format!("run={id}")),
         Err(outcome) => outcome,
     }
@@ -137,7 +150,7 @@ fn intake(args: &[String], policy: LockPolicy) -> Outcome {
 
 /// intake の本体。**id を返す**のは `run` が続きの段へ渡すためである
 /// （自分の stdout を読み直して id を取る形にすると、表示を変えた瞬間に連鎖が壊れる）。
-fn intake_id(args: &[String], policy: LockPolicy) -> Result<String, Outcome> {
+fn intake_id(args: &[String], manifest: &Manifest, policy: LockPolicy) -> Result<String, Outcome> {
     let parsed = (|| {
         Ok::<_, String>((
             PathBuf::from(need(args, "--contract")?),
@@ -155,6 +168,9 @@ fn intake_id(args: &[String], policy: LockPolicy) -> Result<String, Outcome> {
     let contract = Contract::load(&path).map_err(|errors| {
         Outcome::failed(RC_BROKEN, errors.iter().map(ToString::to_string).collect())
     })?;
+    // **宣言は上限と突き合わせてから**。ここで断つ周は run dir も event も作らない
+    // ——撃てない契約の run が置き場に残ると、続きから引ける便に見えてしまう。
+    let effective = freeze(&repo, manifest, &contract)?;
     let id = run_id(&bead, &fleet::cli::now_utc());
     // stamp は秒までなので、同じ bead を同じ秒に 2 回 intake すると id が衝突する。
     // 黙って上書きすると **前の便の契約が別物に化ける**ので、何も書かずに断る。
@@ -162,6 +178,7 @@ fn intake_id(args: &[String], policy: LockPolicy) -> Result<String, Outcome> {
         return Err(refused(format!("run {id} は既に在る（同じ秒の再 intake）")));
     }
     copy_contract(&state_dir, &id, &path).map_err(broken)?;
+    copy_vessel(&state_dir, &id, &effective).map_err(broken)?;
     remember_repo(&state_dir, &id, &repo).map_err(broken)?;
     let emitted = emit(
         &state_dir,
@@ -180,6 +197,25 @@ fn intake_id(args: &[String], policy: LockPolicy) -> Result<String, Outcome> {
         Err(err) => Err(broken(err.to_string())),
         Ok(()) => Ok(id),
     }
+}
+
+/// 対象 repo の HEAD から vessel 宣言を読み、器の上限と突き合わせて有効値にする。
+///
+/// **外れは rc 1**（前提違反）で、宣言が読めない周も同じ極性である——「宣言が無い」と
+/// 「宣言が壊れている」で扱いを変えると、器の視野の外の verify 行が片方から入る。
+fn freeze(repo: &Path, manifest: &Manifest, contract: &Contract) -> Result<Effective, Outcome> {
+    let commands = list_row(manifest, CEILING_ROW).map_err(refused)?;
+    let ceiling = Ceiling { row: CEILING_ROW, commands: &commands };
+    declaration::measure(repo, &ceiling, &contract.verify).map_err(|errors| {
+        Outcome::failed(RC_REFUSED, errors.iter().map(ToString::to_string).collect())
+    })
+}
+
+/// 有効値を便の写し面へ凍結する（以後の段は repo の宣言を読み直さない）。
+fn copy_vessel(state_dir: &Path, id: &str, effective: &Effective) -> Result<(), String> {
+    let path = vessel_path(state_dir, id);
+    std::fs::write(&path, effective.render())
+        .map_err(|err| format!("{} を書けない: {err}", path.display()))
 }
 
 /// 便の対象 repo を写し面へ書き留める（現在地を cwd に依らせない）。
@@ -435,7 +471,7 @@ fn run_all(args: &[String], manifest: &Manifest, policy: LockPolicy) -> Outcome 
         Ok(found) => found.to_owned(),
         Err(reason) => return refused(reason),
     };
-    let id = match intake_id(args, policy) {
+    let id = match intake_id(args, manifest, policy) {
         Ok(found) => found,
         Err(outcome) => return outcome,
     };

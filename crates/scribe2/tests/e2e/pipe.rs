@@ -14,6 +14,8 @@ use vessel::fleet::{Event, EventKind, Stage};
 use vessel::hook::inject_path;
 use vessel::pipe::approve::RC_BLOCKED;
 use vessel::pipe::land;
+use vessel::rules::manifest::Manifest;
+use vessel::rules::RuleValue;
 
 /// binary の path。
 fn bin() -> &'static str {
@@ -46,6 +48,61 @@ fn git(dir: &Path, args: &[&str]) -> String {
     out.status.success().then_some(text).expect("git が rc 0 で終わる")
 }
 
+/// toy repo の宣言が許す command。`sh` は歯の verify script を撃つためで、上限
+/// （`--rules` の写し）にも同じ 3 つが在る。
+const VESSEL_ALLOWED: &str = r#"["git", "sh"]"#;
+
+/// toy repo の宣言の共通 verify。**撃つのは別便**（.57）で、ここでは形だけを持つ。
+const VESSEL_COMMON: &str = r#"["git rev-parse --verify {base}"]"#;
+
+/// vessel 宣言を repo の root へ書く（commit は呼び手が行う）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn write_vessel(repo: &Path, allowed: &str, common: &str) {
+    let body = format!("schema = 1\nallowed-commands = {allowed}\ncommon-verify = {common}\n");
+    fs::write(repo.join(".vessel.toml"), body).expect("宣言を書ける");
+}
+
+/// 宣言を書き換えて commit する（**HEAD の tree が intake の読み面**である）。
+fn commit_vessel(repo: &Path, allowed: &str, common: &str) {
+    write_vessel(repo, allowed, common);
+    git(repo, &["add", "-f", ".vessel.toml"]);
+    git(repo, &["commit", "-q", "-m", "vessel-decl"]);
+}
+
+/// 契約の verify 行が撃つ script を repo へ置く。
+///
+/// 宣言の allowlist と制御文字の禁止のもとでは、契約の verify 行は **`sh <file>` の
+/// argv 1 本**になる（`;` や `|` の連結も、allowlist の外の command も書けない）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn write_verify_scripts(repo: &Path) {
+    for (name, body) in [
+        ("verify-ok.sh", "exit 0\n"),
+        ("verify-red.sh", "exit 1\n"),
+        // 見出し行は `cmd=` として字面を載せるので、**cmd に無い語**を stderr へ出す。
+        ("verify-noisy.sh", "printf 'bo%s\\n' om >&2\nexit 3\n"),
+        // 1 回目は緑・2 回目は赤。印は **git の共通 dir**（便の worktree と main 実測の
+        // tmp worktree で同じ path になる面）へ置く。
+        (
+            "verify-once.sh",
+            "seen=\"$(git rev-parse --git-common-dir)/verify-seen\"\ntest ! -f \"$seen\" && touch \"$seen\"\n",
+        ),
+        // detached（= main 実測の tmp）のときだけ中間物を作る。
+        (
+            "verify-detached.sh",
+            "git rev-parse --abbrev-ref HEAD | grep -qx HEAD && touch build-artifact.txt\nexit 0\n",
+        ),
+        ("verify-out.sh", "test -f docs/out.md\n"),
+    ] {
+        fs::write(repo.join(name), body).expect("verify script を書ける");
+    }
+}
+
 /// commit を 1 つ持つ tmp の git repo と、紐づけた置き場を作る。
 #[expect(
     clippy::expect_used,
@@ -60,6 +117,10 @@ fn repo_with_state() -> (PathBuf, PathBuf) {
     git(&repo, &["config", "user.email", "e2e@example.invalid"]);
     fs::create_dir_all(repo.join("src")).expect("src dir を作れる");
     fs::write(repo.join("src").join("lib.rs"), "// seed\n").expect("seed を書ける");
+    // **宣言も marker と一緒に commit する**（intake は HEAD の tree から読む＝作業ツリー
+    // に置いただけの宣言は無いのと同じ・設計 §8）。
+    write_vessel(&repo, VESSEL_ALLOWED, VESSEL_COMMON);
+    write_verify_scripts(&repo);
     git(&repo, &["add", "-A"]);
     git(&repo, &["commit", "-q", "-m", "seed"]);
     let state = tmp();
@@ -95,7 +156,7 @@ fn contract_body() -> Vec<String> {
         r#"owner = "s2-2e5""#,
         r#"disposition = "A-now""#,
         r#"write-set = ["src/lib.rs"]"#,
-        r#"verify = ["true"]"#,
+        r#"verify = ["sh verify-ok.sh"]"#,
         r#"req = ["FR4"]"#,
         r#"design = "docs/design/pipeline.md""#,
     ]
@@ -146,6 +207,7 @@ fn intake(repo: &Path, state: &Path, contract: &Path) -> String {
 /// bead を選んで intake を 1 回通す。**run id は `<bead>-<秒>`** なので、同じ秒に
 /// 2 便を起こす歯は bead を分ける（同 bead だと id が衝突して 2 便目が断られる）。
 fn intake_bead(repo: &Path, state: &Path, contract: &Path, bead: &str) -> String {
+    let rules = ceiling_rules(state);
     let out = run_pipe(&[
         "intake",
         "--contract",
@@ -156,6 +218,8 @@ fn intake_bead(repo: &Path, state: &Path, contract: &Path, bead: &str) -> String
         &repo.display().to_string(),
         "--state-dir",
         &state.display().to_string(),
+        "--rules",
+        &rules,
     ]);
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "intake は rc 0: {}", stderr_of(&out));
     run_id_of(&out)
@@ -567,6 +631,7 @@ fn pipe_state_survives_process_restart() {
         .arg(&path)
         .args(["--bead", "s2-2e5", "--repo"])
         .arg(&repo)
+        .args(["--rules", &ceiling_rules(&state)])
         .output()
         .expect("binary を起動できる");
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
@@ -697,6 +762,7 @@ fn pipe_intake_refuses_duplicate_run_id() {
     let out = run_pipe(&[
         "intake", "--contract", &second.display().to_string(), "--bead", "s2-2e5",
         "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
+        "--rules", &ceiling_rules(&state),
     ]);
     if out.status.code() == Some(i32::from(RC_OK)) {
         // 秒をまたいだ周は id が違う＝衝突していない。そのときは上書きが起きていない
@@ -770,6 +836,287 @@ fn pipe_intake_refuses_non_git_repo() {
     assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "git repo でなければ intake の時点で断る");
     assert_eq!(event_count(&state), 0, "断った周は event を書かない");
     clean(&[&bare, &state]);
+}
+
+/// intake を 1 回撃つ（rc を assert しない形）。
+fn intake_raw(repo: &Path, state: &Path, contract: &Path, bead: &str) -> Output {
+    let rules = ceiling_rules(state);
+    run_pipe(&[
+        "intake", "--contract", &contract.display().to_string(), "--bead", bead,
+        "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
+        "--rules", &rules,
+    ])
+}
+
+/// 便の vessel の写し。
+fn vessel_copy(state: &Path, id: &str) -> PathBuf {
+    state.join("pipe").join(id).join("vessel.toml")
+}
+
+/// 宣言が無い repo では便を起こさない（ADR-0010 §2.3）。**作業ツリーに置いただけの
+/// 宣言も無いのと同じ**である——宣言の変更は対象 repo の PR として review を通る。
+#[test]
+fn pipe_intake_refuses_without_vessel_declaration() {
+    let (repo, state) = repo_with_state();
+    git(&repo, &["rm", "-q", ".vessel.toml"]);
+    git(&repo, &["commit", "-q", "-m", "drop-vessel"]);
+    let path = write_contract(&repo, &[], &[]);
+    let out = intake_raw(&repo, &state, &path, "b");
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "宣言が無ければ rc 1: {}", stderr_of(&out));
+    assert!(stderr_of(&out).contains(".vessel.toml"), "何が無いかを名指す: {}", stderr_of(&out));
+    assert_eq!(event_count(&state), 0, "断った周は event を書かない");
+    assert!(!state.join("pipe").exists(), "断った周は run dir も作らない");
+
+    // **未 commit の宣言は読まない**（作業ツリーへ置くだけでは効かない）。
+    write_vessel(&repo, VESSEL_ALLOWED, VESSEL_COMMON);
+    let again = intake_raw(&repo, &state, &path, "b");
+    assert_eq!(again.status.code(), Some(i32::from(RC_REFUSED)), "untracked の宣言は無いのと同じ: {}", stderr_of(&again));
+    assert_eq!(event_count(&state), 0, "こちらも記帳しない");
+    clean(&[&repo, &state]);
+}
+
+/// 宣言の allowlist は器の上限（`runner.allowed_commands`）の部分集合でなければならない。
+#[test]
+fn pipe_intake_refuses_declaration_outside_ceiling() {
+    let (repo, state) = repo_with_state();
+    commit_vessel(&repo, r#"["git", "sh", "curl"]"#, VESSEL_COMMON);
+    let path = write_contract(&repo, &[], &[]);
+    let out = intake_raw(&repo, &state, &path, "b");
+    let err = stderr_of(&out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "上限の外は rc 1: {err}");
+    assert!(err.contains("allowed-commands の curl が上限"), "外れた command を理由の形で名指す: {err}");
+    assert!(err.contains("runner.allowed_commands"), "上限の出所を名指す: {err}");
+    assert!(err.contains("line="), "行番号を持つ: {err}");
+    assert_eq!(event_count(&state), 0, "断った周は event を書かない");
+    assert!(!state.join("pipe").exists(), "run dir も作らない");
+    clean(&[&repo, &state]);
+}
+
+/// 共通 verify の先頭語の基準は**宣言の** allowlist である（上限ではない）。
+#[test]
+fn pipe_intake_refuses_common_verify_outside_declared_allowlist() {
+    let (repo, state) = repo_with_state();
+    // `cargo` は上限には在るが、この repo の宣言には無い。
+    commit_vessel(&repo, r#"["git"]"#, r#"["cargo xtask check"]"#);
+    let path = write_contract(&repo, &["verify"], &[r#"verify = ["git status"]"#]);
+    let out = intake_raw(&repo, &state, &path, "b");
+    let err = stderr_of(&out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "宣言の外は rc 1: {err}");
+    assert!(err.contains("先頭 command cargo が"), "外れた先頭語を理由の形で名指す: {err}");
+    assert!(err.contains("allowed-commands"), "基準が宣言であることを言う: {err}");
+    assert_eq!(event_count(&state), 0, "断った周は event を書かない");
+    clean(&[&repo, &state]);
+}
+
+/// repo の外を指す語（絶対 path・home の短縮記号・`..` で遡る path）を持つ行は撃たせない。
+#[test]
+fn pipe_intake_refuses_common_verify_with_absolute_path() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    // home の短縮記号は **2 文字を組み立てて**書く（paths-clean は tracked file の本文に
+    // その字面が残ることを違反として数えるので、literal では書けない）。
+    let home = format!("{}{}", '~', '/');
+    for common in [
+        r#"["git rev-parse --verify /etc/passwd"]"#.to_owned(),
+        format!("[\"git config --file {home}gitconfig list\"]"),
+        // 先頭語が allowlist の内でも、引数が repo の外へ遡れば同じ穴である。
+        r#"["git rev-parse --git-dir ../../../etc"]"#.to_owned(),
+    ] {
+        commit_vessel(&repo, VESSEL_ALLOWED, &common);
+        let out = intake_raw(&repo, &state, &path, "b");
+        let err = stderr_of(&out);
+        assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{common} は rc 1: {err}");
+        assert!(err.contains("repo の外"), "理由を名指す: {err}");
+    }
+    assert_eq!(event_count(&state), 0, "断った周は event を書かない");
+    clean(&[&repo, &state]);
+}
+
+/// 置ける穴は `{base}` だけ（閉じない `{` も穴として断る）。
+#[test]
+fn pipe_intake_refuses_common_verify_with_unknown_placeholder() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    for common in [
+        r#"["git rev-parse --verify {head}"]"#,
+        r#"["git rev-parse --verify {base"]"#,
+    ] {
+        commit_vessel(&repo, VESSEL_ALLOWED, common);
+        let out = intake_raw(&repo, &state, &path, "b");
+        let err = stderr_of(&out);
+        assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{common} は rc 1: {err}");
+        assert!(err.contains("置けない穴"), "理由を名指す: {err}");
+    }
+    // 弁別: **`{base}` は通る**（穴を丸ごと禁じているのではない）。
+    commit_vessel(&repo, VESSEL_ALLOWED, VESSEL_COMMON);
+    let ok = intake_raw(&repo, &state, &path, "b");
+    assert_eq!(ok.status.code(), Some(i32::from(RC_OK)), "{{base}} は置ける: {}", stderr_of(&ok));
+    clean(&[&repo, &state]);
+}
+
+/// **先頭語だけでは境界にならない**——gate と land は行を `sh -c` で撃つ（ADR-0010 §2.3）。
+#[test]
+fn pipe_intake_refuses_common_verify_with_shell_metachar() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    for common in [
+        r#"["git --version; env"]"#.to_owned(),
+        r#"["git --version | tee out"]"#.to_owned(),
+        r#"["git --version && env"]"#.to_owned(),
+        r#"["git $(env) --version"]"#.to_owned(),
+        // 目に見えない制御文字も同じ扱い（改行を含む語彙は 1 行の値には書けない）。
+        "[\"git --version\u{7}\"]".to_owned(),
+    ] {
+        commit_vessel(&repo, VESSEL_ALLOWED, &common);
+        let out = intake_raw(&repo, &state, &path, "b");
+        let err = stderr_of(&out);
+        assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{common} は rc 1: {err}");
+        assert!(err.contains("制御文字"), "理由を名指す: {err}");
+    }
+    assert_eq!(event_count(&state), 0, "断った周は event を書かない");
+    clean(&[&repo, &state]);
+}
+
+/// 読むのは **HEAD commit の tree** で、作業ツリーではない。
+#[test]
+fn pipe_intake_reads_declaration_from_head_not_worktree() {
+    let (repo, state) = repo_with_state();
+    let head = git(&repo, &["rev-parse", "HEAD"]);
+    // 作業ツリーの宣言だけを**上限の外**へ広げる（commit しない）。
+    write_vessel(&repo, r#"["git", "sh", "curl"]"#, VESSEL_COMMON);
+    let path = write_contract(&repo, &[], &[]);
+    let id = intake_bead(&repo, &state, &path, "s2-2e5");
+    let copy = fs::read_to_string(vessel_copy(&state, &id)).expect("写しを読める");
+    assert!(!copy.contains("curl"), "作業ツリーの宣言は読まない: {copy}");
+    assert!(copy.contains(&format!("commit = \"{head}\"")), "出所は読んだ commit: {copy}");
+    clean(&[&repo, &state]);
+}
+
+/// 契約の verify 行は穴を持てない（`{base}` も置けない）。
+#[test]
+fn pipe_intake_refuses_contract_verify_with_placeholder() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &["verify"], &[r#"verify = ["sh verify-ok.sh {base}"]"#]);
+    let out = intake_raw(&repo, &state, &path, "b");
+    let err = stderr_of(&out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "契約行の穴は rc 1: {err}");
+    assert!(err.contains("契約の verify"), "どちらの面かを言う: {err}");
+    assert!(err.contains("置けない穴"), "理由を名指す: {err}");
+    assert_eq!(event_count(&state), 0, "断った周は event を書かない");
+    assert!(!state.join("pipe").exists(), "run dir も作らない");
+    clean(&[&repo, &state]);
+}
+
+/// 契約の verify 行も**宣言の** allowlist で測る。空の行も撃てる形とは認めない。
+#[test]
+fn pipe_intake_refuses_contract_verify_outside_declared_allowlist() {
+    let (repo, state) = repo_with_state();
+    for (add, want) in [
+        // `cargo` は上限には在るが toy repo の宣言には無い。
+        (r#"verify = ["cargo xtask check"]"#, "allowed-commands"),
+        // **完全一致**である（prefix 一致へ緩めると `gitk` が `git` で通る）。
+        (r#"verify = ["gitk --all"]"#, "先頭 command gitk"),
+        (r#"verify = [""]"#, "空"),
+    ] {
+        let path = write_contract(&repo, &["verify"], &[add]);
+        let out = intake_raw(&repo, &state, &path, "b");
+        let err = stderr_of(&out);
+        assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{add} は rc 1: {err}");
+        assert!(err.contains(want), "理由に {want} が出る: {err}");
+    }
+    assert_eq!(event_count(&state), 0, "断った周は event を書かない");
+    clean(&[&repo, &state]);
+}
+
+/// 有効値は便ごとに凍結され、以後 repo の宣言が動いても写しは変わらない（ADR-0010 §2.4）。
+#[test]
+fn pipe_intake_freezes_effective_vessel_copy() {
+    let (repo, state) = repo_with_state();
+    let head = git(&repo, &["rev-parse", "HEAD"]);
+    let path = write_contract(&repo, &[], &[]);
+    let id = intake_bead(&repo, &state, &path, "s2-2e5");
+    let copy = vessel_copy(&state, &id);
+    let before = fs::read_to_string(&copy).expect("写しを読める");
+    assert!(before.contains(r#"allowed-commands = ["git", "sh"]"#), "宣言の値: {before}");
+    assert!(before.contains(r#"common-verify = ["git rev-parse --verify {base}"]"#), "共通 verify: {before}");
+    assert!(before.contains(&format!("commit = \"{head}\"")), "出所の commit: {before}");
+    assert!(before.contains(r#"source = ".vessel.toml""#), "出所の path: {before}");
+    assert!(before.contains(r#"ceiling = "runner.allowed_commands""#), "出所の上限行: {before}");
+    // **便の後に宣言を commit ごと書き換えても写しは動かない**（自己拡張の閉塞）。
+    commit_vessel(&repo, r#"["git"]"#, r#"["git status"]"#);
+    assert_eq!(fs::read_to_string(&copy).expect("写しを読める"), before, "写しは凍結されている");
+    clean(&[&repo, &state]);
+}
+
+/// **本 repo 自身の宣言**が、埋め込みの上限（`--rules` を渡さない周の manifest）の内側に在る。
+///
+/// suite の他の歯はすべて `--rules` の tmp manifest で上限を広げて通しているので、この 1 本が
+/// 無いと「自己ホストの宣言が壊れた」周も CI は緑のまま通る（lens M3・2026-09-10）。
+/// 併せて manifest の `gate.common_verify` と宣言の `common-verify` の**逐語一致**を pin する
+/// （2 面が同文である間の drift 面。行の廃止は別便）。
+#[test]
+fn pipe_intake_accepts_self_hosted_declaration_under_embedded_ceiling() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("repo の root を解ける");
+    let declared = fs::read_to_string(root.join(".vessel.toml")).expect("自己ホストの宣言を読める");
+    let (repo, state) = repo_with_state();
+    fs::write(repo.join(".vessel.toml"), &declared).expect("宣言を写せる");
+    git(&repo, &["add", "-f", ".vessel.toml"]);
+    git(&repo, &["commit", "-q", "-m", "self-hosted"]);
+    // **`--rules` を渡さない**＝埋め込みの上限で測る。
+    let path = write_contract(&repo, &["verify"], &[r#"verify = ["git status"]"#]);
+    let out = run_pipe(&[
+        "intake", "--contract", &path.display().to_string(), "--bead", "s2-2e5",
+        "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
+    ]);
+    assert_eq!(
+        out.status.code(),
+        Some(i32::from(RC_OK)),
+        "自己ホストの宣言は埋め込みの上限の内側: {}",
+        stderr_of(&out)
+    );
+
+    let manifest = Manifest::embedded().expect("埋め込み manifest を読める");
+    let row = manifest.get("gate.common_verify").expect("共通 verify の行が在る");
+    let lines = match row.value {
+        RuleValue::List(ref found) => found.clone(),
+        _ => Vec::new(),
+    };
+    assert!(!lines.is_empty(), "母集団は manifest の行の値（実 {} 本）", lines.len());
+    for line in &lines {
+        assert!(
+            declared.contains(line.as_str()),
+            "manifest の {line:?} が宣言に逐語で在る（母集団 {} 本）: {declared}",
+            lines.len()
+        );
+    }
+    clean(&[&repo, &state]);
+}
+
+/// `{vessel}` は便の写しを指す（runner はこれだけを読む）。
+#[test]
+fn pipe_spawn_substitutes_vessel_placeholder() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let id = intake(&repo, &state, &path);
+    let runner = "printf '%s\\n' {vessel} > vessel-arg.txt && git add -A && git commit -q -m runner";
+    let out = run_pipe(&[
+        "spawn", "--run", &id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(), "--runner", runner,
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    let worktree = repo.join(".worktrees").join("scribe2").join(&id);
+    let handed = fs::read_to_string(worktree.join("vessel-arg.txt")).expect("置換の写しを読める");
+    assert_eq!(
+        handed.trim(),
+        vessel_copy(&state, &id).display().to_string(),
+        "{{vessel}} は便の写しを指す"
+    );
+    let read_back = fs::read_to_string(handed.trim()).expect("渡された path から写しを読める");
+    assert!(read_back.contains("allowed-commands"), "写しは宣言の値を持つ: {read_back}");
+    clean(&[&repo, &state]);
 }
 
 #[test]
@@ -913,8 +1260,12 @@ fn write_rules(dir: &Path, name: &str, lens_count: u64, cap: u64) -> PathBuf {
             "[[rule]]\nid = \"{id}\"\nkind = \"{kind}\"\nvalue = {value}\nruling = \"t\"\nruled_at = \"d\"\n"
         )
     };
+    // **上限の行も載せる**。intake は宣言をこの行と突き合わせるので、上限を持たない
+    // manifest を渡した周は「上限が無い」で断られる（`--rules` は全 subcommand に効く）。
+    let ceiling = "[[rule]]\nid = \"runner.allowed_commands\"\nkind = \"RunnerAllowedCommands\"\n\
+                   value = [\"cargo\", \"git\", \"sh\"]\nruling = \"t\"\nruled_at = \"d\"\n";
     let body = format!(
-        "schema = 1\n\n{}\n{}\n{}\n{}",
+        "schema = 1\n\n{}\n{}\n{}\n{}\n{ceiling}",
         row("gate.lens_count", "GateLensCount", lens_count),
         row("gate.token_cap", "GateTokenCap", cap),
         row("fleet.lock_retry_ms", "LockRetryMs", 5000),
@@ -923,6 +1274,15 @@ fn write_rules(dir: &Path, name: &str, lens_count: u64, cap: u64) -> PathBuf {
     let path = dir.join(name);
     fs::write(&path, body).expect("tmp manifest を書ける");
     path
+}
+
+/// intake が読む上限の manifest（`sh` を足した写し）。置き場の中に 1 本だけ作る。
+fn ceiling_rules(state: &Path) -> String {
+    let path = state.join("rules-ceiling.toml");
+    if !path.exists() {
+        return write_rules(state, "rules-ceiling.toml", 1, 1_000_000).display().to_string();
+    }
+    path.display().to_string()
 }
 
 /// `--rules` を足して gate を 1 回撃つ。
@@ -1038,7 +1398,7 @@ fn pipe_gate_refuses_dirty_worktree() {
 fn pipe_gate_fails_on_red_verify_line() {
     let (repo, state) = repo_with_state();
     // 2 行目が rc≠0。**逐条**で残るので 2 行とも verify.jsonl に出る。
-    let path = write_contract(&repo, &["verify"], &[r#"verify = ["true", "false"]"#]);
+    let path = write_contract(&repo, &["verify"], &[r#"verify = ["sh verify-ok.sh", "sh verify-red.sh"]"#]);
     let id = implemented(&repo, &state, &path);
     let marker = state.join("lens-ran");
     let lens = fake_lens(&marker, &lens_verdict("PASS"));
@@ -1068,7 +1428,7 @@ fn pipe_gate_keeps_stderr_tail_of_red_verify_lines() {
     let path = write_contract(
         &repo,
         &["verify"],
-        &[r#"verify = ["true", "printf 'bo%s\n' om >&2; exit 3"]"#],
+        &[r#"verify = ["sh verify-ok.sh", "sh verify-noisy.sh"]"#],
     );
     let id = implemented(&repo, &state, &path);
     let marker = state.join("lens-ran");
@@ -1277,14 +1637,9 @@ fn pipe_land_refuses_stale_base() {
 #[test]
 fn pipe_land_reruns_verify_on_main_and_fails_loud() {
     let (repo, state) = repo_with_state();
-    let seen = state.join("verify-seen");
-    // 1 回目（worktree）は緑・2 回目（main の実測）は赤になる verify 行。
-    let line = format!(
-        r#"verify = ["test ! -f '{}' && touch '{}'"]"#,
-        seen.display(),
-        seen.display()
-    );
-    let path = write_contract(&repo, &["verify"], &[&line]);
+    // 1 回目（worktree）は緑・2 回目（main の実測）は赤になる verify 行。印の置き場は
+    // script の中で **git の共通 dir** から解く（行に絶対 path は書けない）。
+    let path = write_contract(&repo, &["verify"], &[r#"verify = ["sh verify-once.sh"]"#]);
     let marker = state.join("lens-ran");
     let base = git(&repo, &["rev-parse", "refs/heads/main"]);
     let id = gated_pass(&repo, &state, &path, &marker);
@@ -1380,6 +1735,7 @@ fn pipe_e2e_toy_repo_lands_one_bead_with_fake_runner() {
     let out = run_pipe(&[
         "run", "--contract", &path.display().to_string(), "--bead", "s2-41o",
         "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
+        "--rules", &ceiling_rules(&state),
         "--runner", "echo x >> src/lib.rs && git add -A && git commit -q -m runner",
         "--lens", &lens,
     ]);
@@ -1734,8 +2090,7 @@ fn pipe_land_removes_dirty_tmp_worktree() {
     let (repo, state) = repo_with_state();
     // detached（= main 実測の tmp）のときだけ中間物を作る verify 行。便の worktree は
     // branch 上なので clean のままで、retire の move が塞がれない。
-    let line = r#"verify = ["git rev-parse --abbrev-ref HEAD | grep -qx HEAD && touch build-artifact.txt; true"]"#;
-    let path = write_contract(&repo, &["verify"], &[line]);
+    let path = write_contract(&repo, &["verify"], &[r#"verify = ["sh verify-detached.sh"]"#]);
     let marker = state.join("lens-ran");
     let id = gated_pass(&repo, &state, &path, &marker);
     let out = land_once(&repo, &state, &id);
@@ -2296,6 +2651,7 @@ fn pipe_approval_unlisted_class_value_is_rejected_at_intake() {
     let ok = run_pipe(&[
         "intake", "--contract", &listed.display().to_string(), "--bead", "b",
         "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
+        "--rules", &ceiling_rules(&state),
     ]);
     assert_eq!(ok.status.code(), Some(i32::from(RC_OK)), "名簿に在る値は通す: {}", stderr_of(&ok));
     clean(&[&repo, &state]);
@@ -2313,6 +2669,7 @@ fn pipe_approval_blocks_in_one_shot_run() {
         "run", "--contract", &path.display().to_string(), "--bead", "s2-2e5",
         "--repo", &repo.display().to_string(),
         "--state-dir", &state.display().to_string(),
+        "--rules", &ceiling_rules(&state),
         "--runner", &runner_cmd(&marker),
     ]);
     assert_eq!(
@@ -2812,7 +3169,7 @@ fn pipe_five_contracts_land_with_fake_runner_in_toy_repo() {
     let toy = Toy { repo: &repo, state: &state, lens: &pass };
     toy_land(&toy, "toy-ok", &plain, TOY_COMMIT);
     // 便②: goal（`docs/out.md`）が write-set（`src/lib.rs`）の外にある契約。
-    let refusal = write_contract(&repo, &["verify"], &[r#"verify = ["test -f docs/out.md"]"#]);
+    let refusal = write_contract(&repo, &["verify"], &[r#"verify = ["sh verify-out.sh"]"#]);
     toy_compliant_refusal(&toy, &refusal);
     let with_tests = write_contract(&repo, &["write-set"], &[r#"write-set = ["src/lib.rs", "tests/"]"#]);
     let add_test = "mkdir -p tests && echo '#[test] fn t() {}' > tests/new.rs \

@@ -173,12 +173,29 @@ struct RunnerCall<'a> {
     worktree: &'a Path,
     /// write-set の file。
     write_set: &'a Path,
+    /// 便ごとに凍結した vessel の写し（**権限の出所**）。
+    vessel: &'a Path,
     /// claude の実行 file（fake）。
     claude: &'a Path,
     /// permission mode。
     mode: &'a str,
     /// 口座の設定 dir（渡さない周は親から継承される）。
     account: Option<&'a Path>,
+}
+
+/// runner が読む vessel の写し（intake が凍結する形と同じ）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn write_vessel_copy(dir: &Path, allowed: &str) -> PathBuf {
+    let body = format!(
+        "schema = 1\nallowed-commands = {allowed}\ncommon-verify = [\"cargo xtask check\"]\n\
+         commit = \"c0ffee\"\nsource = \".vessel.toml\"\nceiling = \"runner.allowed_commands\"\n"
+    );
+    let path = dir.join("vessel.toml");
+    fs::write(&path, body).expect("vessel の写しを書ける");
+    path
 }
 
 /// runner を 1 回撃つ。
@@ -189,6 +206,8 @@ fn run_runner(call: &RunnerCall<'_>, input: &[u8]) -> Output {
         call.worktree.display().to_string(),
         "--write-set".to_owned(),
         call.write_set.display().to_string(),
+        "--vessel".to_owned(),
+        call.vessel.display().to_string(),
         "--plugin-dir".to_owned(),
         call.dir.display().to_string(),
         "--permission-mode".to_owned(),
@@ -248,6 +267,7 @@ fn headless_runner_reads_contract_from_stdin_and_passes_permission_mode_every_ti
     let account = tmp();
     let claude = fake_claude(&dir, "", false, 0);
     let write_set = dir.join("write-set.txt");
+    let vessel = write_vessel_copy(&dir, r#"["cargo", "git"]"#);
     fs::write(&write_set, "src/lib.rs\ndocs/\n").expect("write-set を書ける");
     let contract = "goal = \"縦 1 本を通す\"\nverify = [\"true\"]\n";
 
@@ -255,7 +275,7 @@ fn headless_runner_reads_contract_from_stdin_and_passes_permission_mode_every_ti
     // たまたま一致していた」形と区別できない。
     for mode in ["acceptEdits", "plan"] {
         let out = run_runner(
-        &RunnerCall { dir: &dir, worktree: &worktree, write_set: &write_set, claude: &claude, mode, account: Some(&account) },
+        &RunnerCall { dir: &dir, worktree: &worktree, write_set: &write_set, vessel: &vessel, claude: &claude, mode, account: Some(&account) },
         contract.as_bytes(),
     );
         assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
@@ -264,7 +284,7 @@ fn headless_runner_reads_contract_from_stdin_and_passes_permission_mode_every_ti
     // **契約本文が prompt の構造へ触れられない**（置換は 1 走査）。契約は外から来る text で、
     // 重ねて replace すると契約の中の marker まで後段で展開される。
     let out = run_runner(
-        &RunnerCall { dir: &dir, worktree: &worktree, write_set: &write_set, claude: &claude, mode: "plan", account: None },
+        &RunnerCall { dir: &dir, worktree: &worktree, write_set: &write_set, vessel: &vessel, claude: &claude, mode: "plan", account: None },
         "goal = \"契約の中に {write_set} と書く\"\n".as_bytes(),
     );
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
@@ -275,13 +295,13 @@ fn headless_runner_reads_contract_from_stdin_and_passes_permission_mode_every_ti
     // 前提違反は断る。**読めなかったものを空として続けない**（空の契約で claude を起こすと、
     // 何を作るのか分からないまま worktree を触らせることになる）。
     let empty = run_runner(
-        &RunnerCall { dir: &dir, worktree: &worktree, write_set: &write_set, claude: &claude, mode: "plan", account: None },
+        &RunnerCall { dir: &dir, worktree: &worktree, write_set: &write_set, vessel: &vessel, claude: &claude, mode: "plan", account: None },
         b"   \n",
     );
     assert_eq!(empty.status.code(), Some(i32::from(RC_REFUSED)), "空の契約は断る");
     let absent = dir.join("no-such-file");
     let missing = run_runner(
-        &RunnerCall { dir: &dir, worktree: &worktree, write_set: &absent, claude: &claude, mode: "plan", account: None },
+        &RunnerCall { dir: &dir, worktree: &worktree, write_set: &absent, vessel: &vessel, claude: &claude, mode: "plan", account: None },
         b"goal = \"x\"\n",
     );
     assert_eq!(missing.status.code(), Some(i32::from(RC_BROKEN)), "write-set を読めない周は rc 2");
@@ -299,9 +319,10 @@ fn headless_runner_stops_on_rate_limit_record() {
     );
     let claude = fake_claude(&dir, body, true, 0);
     let write_set = dir.join("write-set.txt");
+    let vessel = write_vessel_copy(&dir, r#"["cargo", "git"]"#);
     fs::write(&write_set, "src/lib.rs\n").expect("write-set を書ける");
     let out = run_runner(
-        &RunnerCall { dir: &dir, worktree: &worktree, write_set: &write_set, claude: &claude, mode: "acceptEdits", account: None },
+        &RunnerCall { dir: &dir, worktree: &worktree, write_set: &write_set, vessel: &vessel, claude: &claude, mode: "acceptEdits", account: None },
         b"goal = \"x\"\n",
     );
     assert_eq!(out.status.code(), Some(i32::from(RC_RATE_LIMIT)), "rate limit は rc 75");
@@ -600,13 +621,14 @@ fn headless_runner_mirrors_claude_rc() {
     let dir = tmp();
     let worktree = tmp();
     let write_set = dir.join("write-set.txt");
+    let vessel = write_vessel_copy(&dir, r#"["cargo", "git"]"#);
     fs::write(&write_set, "src/lib.rs\n").expect("write-set を書ける");
     // **包みが rc を作り替えない**（設計 §6）。呼出側は runner の rc で便の成否を読むので、
     // ここで潰すと失敗した実装便が成功として通る。
     for want in [0_u8, 1, 3] {
         let claude = fake_claude(&dir, "", false, want);
         let out = run_runner(
-        &RunnerCall { dir: &dir, worktree: &worktree, write_set: &write_set, claude: &claude, mode: "plan", account: None },
+        &RunnerCall { dir: &dir, worktree: &worktree, write_set: &write_set, vessel: &vessel, claude: &claude, mode: "plan", account: None },
         b"goal = \"x\"\n",
     );
         assert_eq!(out.status.code(), Some(i32::from(want)), "claude の rc をそのまま写す");
@@ -625,6 +647,7 @@ fn headless_runner_does_not_stop_on_quoted_rate_limit_words() {
     let dir = tmp();
     let worktree = tmp();
     let write_set = dir.join("write-set.txt");
+    let vessel = write_vessel_copy(&dir, r#"["cargo", "git"]"#);
     fs::write(&write_set, "src/lib.rs\n").expect("write-set を書ける");
     // **応答が上限の語を引用しただけ**の record。error を名乗っていないので上限ではない。
     // この歯が無いと、契約の文言を復唱しただけで便が rc 75 で死ぬ（本 bead の契約自身が
@@ -635,7 +658,7 @@ fn headless_runner_does_not_stop_on_quoted_rate_limit_words() {
     );
     let claude = fake_claude(&dir, body, false, 0);
     let out = run_runner(
-        &RunnerCall { dir: &dir, worktree: &worktree, write_set: &write_set, claude: &claude, mode: "plan", account: None },
+        &RunnerCall { dir: &dir, worktree: &worktree, write_set: &write_set, vessel: &vessel, claude: &claude, mode: "plan", account: None },
         b"goal = \"x\"\n",
     );
     assert_ne!(out.status.code(), Some(i32::from(RC_RATE_LIMIT)), "引用は上限ではない");
@@ -648,6 +671,7 @@ fn headless_runner_stops_on_error_record_without_rate_limit_literal() {
     let dir = tmp();
     let worktree = tmp();
     let write_set = dir.join("write-set.txt");
+    let vessel = write_vessel_copy(&dir, r#"["cargo", "git"]"#);
     fs::write(&write_set, "src/lib.rs\n").expect("write-set を書ける");
     // 上限は `rate_limit` の字面だけで surface するとは限らない。**error を名乗る record の
     // 中**で上限の語彙を見る形なので、別の言い回しでも止まる。
@@ -658,7 +682,7 @@ fn headless_runner_stops_on_error_record_without_rate_limit_literal() {
     ] {
         let claude = fake_claude(&dir, body, false, 0);
         let out = run_runner(
-        &RunnerCall { dir: &dir, worktree: &worktree, write_set: &write_set, claude: &claude, mode: "plan", account: None },
+        &RunnerCall { dir: &dir, worktree: &worktree, write_set: &write_set, vessel: &vessel, claude: &claude, mode: "plan", account: None },
         b"goal = \"x\"\n",
     );
         assert_eq!(
@@ -670,9 +694,91 @@ fn headless_runner_stops_on_error_record_without_rate_limit_literal() {
     // **上限でない error は rc 75 にしない**（1 つの数に 2 つの意味を載せない）。
     let other = fake_claude(&dir, "{\"type\":\"result\",\"is_error\":true,\"result\":\"file not found\"}\n", false, 1);
     let out = run_runner(
-        &RunnerCall { dir: &dir, worktree: &worktree, write_set: &write_set, claude: &other, mode: "plan", account: None },
+        &RunnerCall { dir: &dir, worktree: &worktree, write_set: &write_set, vessel: &vessel, claude: &other, mode: "plan", account: None },
         b"goal = \"x\"\n",
     );
     assert_eq!(out.status.code(), Some(1), "上限でない error は claude の rc を写す");
+    clean(&[&dir, &worktree]);
+}
+
+/// **`--vessel` は必須**（lens の `--contract` と同じ極性）。権限の出所が無いまま
+/// claude を起こすと、起動口座の settings を継承した席が worktree を触る。
+#[test]
+fn headless_runner_requires_vessel_flag() {
+    let dir = tmp();
+    let worktree = tmp();
+    let claude = fake_claude(&dir, "", false, 0);
+    let write_set = dir.join("write-set.txt");
+    let vessel = write_vessel_copy(&dir, r#"["cargo", "git"]"#);
+    fs::write(&write_set, "src/lib.rs\n").expect("write-set を書ける");
+    let out = run_bin(
+        &[
+            "runner",
+            "--worktree",
+            &worktree.display().to_string(),
+            "--write-set",
+            &write_set.display().to_string(),
+            "--plugin-dir",
+            &dir.display().to_string(),
+            "--permission-mode",
+            "plan",
+            "--claude",
+            &claude.display().to_string(),
+        ],
+        b"goal = \"x\"\n",
+    );
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "--vessel 無しは rc 1");
+    assert!(stderr_of(&out).contains("--vessel"), "何が要るかを名指す: {}", stderr_of(&out));
+    assert!(!dir.join("called").exists(), "claude を起動しない");
+
+    // **「無い」と「壊れている」で極性を変える**（lens の契約と同じ）。
+    let absent = dir.join("no-such-vessel.toml");
+    let broken = run_runner(
+        &RunnerCall { dir: &dir, worktree: &worktree, write_set: &write_set, vessel: &absent, claude: &claude, mode: "plan", account: None },
+        b"goal = \"x\"\n",
+    );
+    assert_eq!(broken.status.code(), Some(i32::from(RC_BROKEN)), "読めない写しは rc 2");
+    assert!(!dir.join("called").exists(), "読めない写しでも claude を起動しない");
+    // 束縛だけの vessel を使う（正常形は次の歯が測る）。
+    assert!(vessel.exists(), "写しは在る");
+    clean(&[&dir, &worktree]);
+}
+
+/// 権限は**便の写しから**組む（manifest も repo の宣言も読まない）。
+#[test]
+fn headless_runner_passes_allowed_tools_from_vessel_copy() {
+    let dir = tmp();
+    let worktree = tmp();
+    let claude = fake_claude(&dir, "", false, 0);
+    let write_set = dir.join("write-set.txt");
+    fs::write(&write_set, "src/lib.rs\n").expect("write-set を書ける");
+    let pair = |args: &str, flag: &str, value: &str| {
+        let lines: Vec<&str> = args.lines().collect();
+        lines.windows(2).any(|w| w.first() == Some(&flag) && w.get(1) == Some(&value))
+    };
+
+    let vessel = write_vessel_copy(&dir, r#"["cargo", "git"]"#);
+    let out = run_runner(
+        &RunnerCall { dir: &dir, worktree: &worktree, write_set: &write_set, vessel: &vessel, claude: &claude, mode: "acceptEdits", account: None },
+        b"goal = \"x\"\n",
+    );
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    let args = slurp(&dir.join("args"));
+    assert!(pair(&args, "--setting-sources", "project"), "起動口座の settings を継承しない: {args}");
+    assert!(
+        pair(&args, "--allowedTools", "Bash(cargo:*),Bash(git:*)"),
+        "写しの allowlist を Bash(<cmd>:*) で与える: {args}"
+    );
+
+    // **写しが変われば権限も変わる**＝上限（manifest の cargo / git）を読んでいない。
+    let narrow = write_vessel_copy(&dir, r#"["git"]"#);
+    let again = run_runner(
+        &RunnerCall { dir: &dir, worktree: &worktree, write_set: &write_set, vessel: &narrow, claude: &claude, mode: "acceptEdits", account: None },
+        b"goal = \"x\"\n",
+    );
+    assert_eq!(again.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&again));
+    let narrowed = slurp(&dir.join("args"));
+    assert!(pair(&narrowed, "--allowedTools", "Bash(git:*)"), "狭めた写しに従う: {narrowed}");
+    assert!(!narrowed.contains("cargo"), "写しに無い command は与えない: {narrowed}");
     clean(&[&dir, &worktree]);
 }
