@@ -1042,3 +1042,100 @@ fn headless_runner_does_not_take_nested_type_as_record_kind() {
     }
     clean(&[&dir, &worktree]);
 }
+
+/// prompt は**便の写しの allowlist をそのまま運ぶ**（`s2-07l.67`）。
+///
+/// 実 run の実測（過去 4 run）では cargo 呼出 9〜12 件が**全件「承認要求」で止まり出力 0 件**
+/// だった＝器は一度も cargo を回せていない。`--allowedTools` で allow は与えていたが、**prompt が
+/// 「何を撃ってよいか」「1 command で撃つ」を伝えていなかった**ため、実装役が pipe や `&&` で
+/// 繋いだ形を撃ち、allow の外として止まっていた。
+///
+/// **写しの 2 command が両方載ること**を測る（1 つだけ見る歯は、写しの一部が落ちても緑になる）。
+#[test]
+fn headless_runner_prompt_lists_allowed_commands() {
+    let dir = tmp();
+    let worktree = tmp();
+    let write_set = dir.join("write-set.txt");
+    fs::write(&write_set, "src/lib.rs\n").expect("write-set を書ける");
+    let claude = fake_claude(&dir, "", false, 0);
+    let vessel = write_vessel_copy(&dir, r#"["cargo", "git"]"#);
+    let out = run_runner(
+        &RunnerCall { dir: &dir, worktree: &worktree, write_set: &write_set, vessel: &vessel, claude: &claude, mode: "acceptEdits", account: None },
+        b"goal = \"x\"\n",
+    );
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    let prompt = slurp(&dir.join("stdin"));
+    // **2 つとも「1 行 1 command」で載る**（値の出所は写し・ADR-0010 §2.4）。行で測るのが要点で、
+    // `contains("- cargo")` だけだと区切りを `, ` へ変える変異が緑のまま通る（lens 2026-09-11 で実測）。
+    assert!(
+        prompt.contains("- cargo\n- git"),
+        "写しの 2 command が 1 行 1 command で並ぶ: {prompt}"
+    );
+    // 規律を**極性ごと**測る。字面 2 つだけを見る歯は「一覧は参考。他も試してよい」への反転を
+    // 素通しする（lens 2026-09-11 で実測）＝**排他の語と、繋がない形の列挙**まで見る。
+    assert!(prompt.contains("実行してよい command"), "allowlist の節が在る: {prompt}");
+    assert!(
+        prompt.contains("**だけ**を実行してよい"),
+        "一覧が**排他**であること（参考ではない）を言う: {prompt}"
+    );
+    assert!(prompt.contains("1 command"), "1 command で撃つ規律を運ぶ: {prompt}");
+    // 実 run で唯一 deny された形（`$(…)`）まで名指す。実測で落ちた形が prompt に無いと、
+    // 次の run も同じところで止まる。
+    // **命令の字面**で測る（`contains("$(")` だけだと、実測の引用に `$(` が残っている限り
+    // 命令行を消しても緑になる＝lens 対応で足した assert 自身が空虚だった・実測で確認した）。
+    assert!(
+        prompt.contains("command 置換"),
+        "静的解析できない形（command 置換）を名指して禁じる: {prompt}"
+    );
+    for form in ["$(", "&&", "|"] {
+        assert!(
+            prompt.contains(form),
+            "繋がない・置換しない形として {form} を名指す: {prompt}"
+        );
+    }
+    // **写しに無い command は現れない**（manifest の上限や repo の宣言を読んでいない）。
+    assert!(!prompt.contains("npm"), "写しに無い command 名は載せない: {prompt}");
+    // **狭めた写しに従う**（値が固定の字面でなく写し由来であることの対）。
+    let narrow = write_vessel_copy(&dir, r#"["git"]"#);
+    let again = run_runner(
+        &RunnerCall { dir: &dir, worktree: &worktree, write_set: &write_set, vessel: &narrow, claude: &claude, mode: "acceptEdits", account: None },
+        b"goal = \"x\"\n",
+    );
+    assert_eq!(again.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&again));
+    let narrowed = slurp(&dir.join("stdin"));
+    assert!(narrowed.contains("- git"), "狭めた写しの command は載る: {narrowed}");
+    assert!(!narrowed.contains("- cargo"), "写しから消えた command は載らない: {narrowed}");
+    clean(&[&dir, &worktree]);
+}
+
+/// 契約本文の中の `{allowed}` は**展開されない**（`s2-07l.67`・`{write_set}` と同じ極性）。
+///
+/// 契約は外から来る text なので、重ねて `replace` すると契約に 1 語書くだけで prompt の
+/// allowlist 節へ触れられる（自分の権限一覧を自分で書き換えられる）。**3 対を 1 走査**で
+/// 埋めることでその経路を塞ぐ。
+#[test]
+fn headless_runner_prompt_does_not_expand_allowed_placeholder_from_contract() {
+    let dir = tmp();
+    let worktree = tmp();
+    let write_set = dir.join("write-set.txt");
+    // write-set 側にも穴の字面を置く（埋めた値を二度と走査しないことの対）。
+    fs::write(&write_set, "src/lib.rs\n{allowed}\n").expect("write-set を書ける");
+    let claude = fake_claude(&dir, "", false, 0);
+    let vessel = write_vessel_copy(&dir, r#"["cargo", "git"]"#);
+    let out = run_runner(
+        &RunnerCall { dir: &dir, worktree: &worktree, write_set: &write_set, vessel: &vessel, claude: &claude, mode: "acceptEdits", account: None },
+        // byte string は ASCII だけ（`b"..."` に非 ASCII は置けない）。
+        b"goal = \"hole {allowed} stays here\"\n",
+    );
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    let prompt = slurp(&dir.join("stdin"));
+    // 契約本文と write-set の穴は**そのまま残る**。
+    assert!(
+        prompt.contains("hole {allowed} stays here"),
+        "契約本文の穴は展開されない: {prompt}"
+    );
+    assert_eq!(prompt.matches("{allowed}").count(), 2, "残る穴は契約と write-set の 2 つだけ: {prompt}");
+    // **展開は 1 度だけ**（穴が 2 つ余計に展開されていれば command 名の出現が増える）。
+    assert_eq!(prompt.matches("- cargo").count(), 1, "allowlist の展開は 1 度だけ: {prompt}");
+    clean(&[&dir, &worktree]);
+}

@@ -59,9 +59,23 @@ pub fn dispatch(args: &[String]) -> Outcome {
     };
     // **1 走査で埋める**。重ねて replace すると契約本文の中の `{write_set}` まで展開され、
     // 外から来る text が prompt の構造へ触れられる。
+    // 人が読む面の allowlist（`--allowedTools` の `Bash(<cmd>:*)` 形は `allowed_tools` が別に組む）。
+    // 値の出所は**便の写し**のままで、manifest も対象 repo の宣言も読まない（ADR-0010 §2.4）。
+    let listed_allowed = granted
+        .allowed()
+        .iter()
+        .map(|command| format!("- {command}"))
+        .collect::<Vec<String>>()
+        .join("\n");
+    // **3 対を 1 走査で埋める**。重ねて replace すると、先に埋めた契約本文や write-set の中の
+    // `{allowed}` が次の走査で展開され、外から来る text が prompt の構造へ触れられる。
     let prompt = fill(
         TEMPLATE,
-        &[("{contract}", contract.trim_end()), ("{write_set}", listed.trim_end())],
+        &[
+            ("{contract}", contract.trim_end()),
+            ("{write_set}", listed.trim_end()),
+            ("{allowed}", &listed_allowed),
+        ],
     );
     launch(&Call {
         claude: claude.as_deref().unwrap_or(DEFAULT_CLAUDE),
