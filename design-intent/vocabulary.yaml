@@ -240,12 +240,12 @@ terms:
     relationships: [契約, headless, lens, 便, allowlist]
   - canonical: allowlist
     domain: consumer
-    definition: 器が runner に与える「実行してよい command 名の列」。 正本は manifest の rules 行 runner.allowed_commands で、 runner は claude へ --allowedTools として渡し口座設定を継承しない (C1・ADR-0009)。 明示 allow の外は hook が deny する。
-    relationships: [runner, manifest, rules 行, hook]
+    definition: 器が runner に与える「実行してよい command 名の列」。 値は対象 repo の vessel 宣言が持ち、 manifest の rules 行 runner.allowed_commands は宣言が名乗れる上限である (C1 / C10・ADR-0010)。 intake が上限と突合して便ごとに凍結し、 runner は凍結した写しから claude へ --allowedTools として渡し口座設定を継承しない (ADR-0009)。 明示 allow の外は hook が deny する。
+    relationships: [runner, vessel 宣言, manifest, rules 行, hook]
   - canonical: 共通 verify
     domain: consumer
-    definition: どの便にも共通の検証 (flip check・test・lint・依存監査・変異検出) を manifest の rules 行 gate.common_verify に置き、 gate が契約 verify の前に撃つもの (C2・ADR-0009)。 契約の verify は便固有の行だけを持つ。
-    relationships: [gate, manifest, rules 行, 契約, 変異検出線]
+    definition: どの便にも共通の検証 (flip check・test・lint・依存監査・変異検出) を対象 repo の vessel 宣言に置き、 intake が便ごとに凍結した写しを gate が契約 verify の前に撃つもの (C2・ADR-0009 / ADR-0010)。 契約の verify は便固有の行だけを持つ。
+    relationships: [gate, vessel 宣言, 契約, 変異検出線]
   - canonical: 変異検出線
     domain: consumer
     definition: cargo-mutants で生成した変異のうち歯に撃墜されない数を測る検出線 (C12 R-C12-1)。 1 便では共通 verify の xtask mutants-diff が便の diff に対して測り、 極性 (記録のみ / deny) は manifest 行に従う (ADR-0009)。
@@ -265,7 +265,11 @@ terms:
   - canonical: ".vessel"
     domain: consumer
     definition: repo root の固定名 marker file。 中身が name と version を言い、 どの器が仕えるかを決める (SPEC §7・SRS FR19)。
-    relationships: [器, NAME 定数]
+    relationships: [器, NAME 定数, vessel 宣言]
+  - canonical: vessel 宣言
+    domain: consumer
+    definition: 対象 repo の root に marker の隣として置く tracked file .vessel.toml。 その repo の allowlist と共通 verify を repo 自身が名乗る宣言値で、 intake が manifest の上限と突合して便ごとに写しへ凍結する (C10・ADR-0010)。 marker そのものは変えない。
+    relationships: [".vessel", allowlist, 共通 verify, manifest, intake]
   - canonical: Budget
     domain: consumer
     definition: 起動に必要な予算の型。 Precheck の実測を消費してしか作れず、 唯一の起動口 spawn が要求する (C6)。

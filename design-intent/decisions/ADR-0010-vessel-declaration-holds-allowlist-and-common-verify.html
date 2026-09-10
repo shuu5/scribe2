@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="folio-doc-type" content="adr">
+<meta name="folio-layer" content="project">
+<meta name="folio-version" content="0.4.6">
+<meta name="folio-status" content="accepted">
+<meta name="folio-stakeholders" content="Developer, AI Agent, External Reviewer">
+<meta name="folio-adr-id" content="0010">
+<meta name="folio-adr-date" content="2026-09-10">
+<title>ADR-0010 — runner の allowlist と gate の共通 verify の値は対象 repo の vessel 宣言が持ち、 manifest は上限を持つ (ADR-0009 §2.1 / §2.4 の値の置き場を部分 supersede)</title>
+<link rel="stylesheet" href="../../common.css">
+<script type="application/ld+json">
+{
+  "@context": {
+    "dc": "http://purl.org/dc/terms/",
+    "schema": "https://schema.org/",
+    "folio": "https://folio.dev/spec/v1/"
+  },
+  "@id": "./ADR-0010-vessel-declaration-holds-allowlist-and-common-verify.html",
+  "@type": "schema:TechArticle",
+  "dc:isPartOf": [
+    { "@id": "./README.html" }
+  ],
+  "dc:title": "ADR-0010 — runner の allowlist と gate の共通 verify の値は対象 repo の vessel 宣言が持ち、 manifest は上限を持つ (ADR-0009 §2.1 / §2.4 の値の置き場を部分 supersede)",
+  "folio:version": "0.4.6",
+  "folio:stakeholders": ["Developer", "AI Agent", "External Reviewer"],
+  "dc:references": [
+    { "@id": "../spec/constitution.html#c1" },
+    { "@id": "../spec/constitution.html#c2" },
+    { "@id": "../spec/constitution.html#c5" },
+    { "@id": "../spec/constitution.html#c10" },
+    { "@id": "../spec/constitution.html#c14" },
+    { "@id": "./ADR-0004-mvp-persistence-and-cross-version-formats.html" },
+    { "@id": "./ADR-0009-vessel-grants-runner-permissions-and-mutation-proof.html" }
+  ]
+}
+</script>
+</head>
+<body>
+<!-- folio:chrome-top -->
+<a class="skip-link" href="#s1-context">本文へスキップ</a>
+<nav class="breadcrumb" aria-label="パンくず"><ol>
+  <li><a href="../index.html">design-intent</a></li>
+  <li><a href="./README.html">decisions</a></li>
+  <li aria-current="page">ADR-0010</li>
+</ol></nav>
+<!-- /folio:chrome-top -->
+
+<header class="doc-header">
+  <h1>ADR-0010 — runner の allowlist と gate の共通 verify の値は対象 repo の vessel 宣言が持ち、 manifest は上限を持つ (ADR-0009 §2.1 / §2.4 の値の置き場を部分 supersede)</h1>
+  <div class="meta">Status: accepted &middot; Date: 2026-09-10 &middot; version 0.4.6 (拘束する constitution の版) &middot; C1 / C10 / C14 の適用を記録</div>
+</header>
+<!-- folio:chrome-toc -->
+<nav class="toc" aria-label="ページ内目次">
+<ol>
+  <li><a href="#s1-context">§1. Context</a></li>
+  <li><a href="#s2-decision">§2. Decision</a></li>
+  <li class="toc--sub"><a href="#s2-1-declaration-file">§2.1 宣言 file — marker の隣に置く</a></li>
+  <li class="toc--sub"><a href="#s2-2-manifest-ceiling">§2.2 manifest は上限を持ち、 共通 verify の行は廃止する</a></li>
+  <li class="toc--sub"><a href="#s2-3-intake-measures">§2.3 intake が宣言を読み、 上限と突合し、 便ごとに凍結する</a></li>
+  <li class="toc--sub"><a href="#s2-4-consumers">§2.4 runner・gate・land は凍結した写しを読む</a></li>
+  <li class="toc--sub"><a href="#s2-5-self-host">§2.5 自己ホストと toy repo</a></li>
+  <li class="toc--sub"><a href="#s2-6-scope">§2.6 射程外</a></li>
+  <li><a href="#s3-consequences">§3. Consequences</a></li>
+  <li><a href="#s4-alternatives">§4. Alternatives Considered</a></li>
+  <li><a href="#s5-trace">§5. Trace</a></li>
+</ol>
+</nav>
+<!-- /folio:chrome-toc -->
+
+<aside class="informative">
+<p>本 ADR は IETF <strong>RFC 2119</strong> および <strong>RFC 8174 / BCP 14</strong> に定義される MUST / SHALL / SHOULD / MAY のキーワード解釈規約に従う。 ADR は決定時点の記録 (frozen) であり、 改訂は本 ADR を supersede する新 ADR で行う。</p>
+</aside>
+
+<aside class="machine-readable" aria-hidden="true">
+  <dl>
+    <dt>id</dt><dd>ADR-0010</dd>
+    <dt>doc-type</dt><dd>adr</dd>
+    <dt>status</dt><dd>accepted</dd>
+    <dt>date</dt><dd>2026-09-10</dd>
+    <dt>version</dt><dd>0.4.6 (拘束する constitution の版・決定時点で凍結)</dd>
+    <dt>decided-by</dt><dd>user 裁定 (2026-09-10・「値の置き場は対象 repo の宣言へ」の推奨案を採用) を受けた記録。 憲法の<strong>規範文</strong>は 1 文字も変えない (触るのは folio が生成する JSON-LD の被参照 link だけ・C1 / C10 / C14 の<strong>適用</strong>の記録であり A2 の改訂手続きには当たらない)</dd>
+    <dt>stakeholders</dt><dd>Developer, AI Agent, External Reviewer</dd>
+    <dt>supersedes</dt><dd>ADR-0009 §2.1 / §2.4 の<strong>値の置き場</strong>を部分 supersede し、 §2.2 の結語「検証に使えるのは repo の中の code か manifest の行だけ」を「…か、 その repo の vessel 宣言だけ」へ改める (権限を器が与えること・intake が撃てない契約を拒むこと・共通規律を契約に手書きしないこと・変異検出線・非 Rust 実行物の deny はいずれも<strong>不変</strong>)。 ADR-0004 §2.3 D-3 (TOML subset で読む file の列挙) と §2.5 D-5 (schema field を持つ面の列挙) の適用対象に vessel 宣言を加える (形式と schema の扱いは不変・母集団だけ拡張)</dd>
+    <dt>related</dt><dd>constitution C1 / C2 / C5 / C10 / C11 / C14・ADR-0004 §2.2 (跨版 面 1 = 所属 marker) / §2.3 (TOML subset)・ADR-0009・SRS FR1 / FR4 / FR5 / FR8 / FR19 / FR24・設計 doc の pipeline §5.1 / §5.2 / §5.3 / §6 / §8・vessel-hook §2・rules-manifest §4</dd>
+  </dl>
+</aside>
+
+<section id="s1-context" class="informative">
+<h2>§1. Context</h2>
+<p class="section-essence" data-audience="human">前の記録 (ADR-0009) は、 実装役が実行してよい command の一覧と、 どの便にも共通の検証を、 器 (scribe2) 自身の規則 file に置きました。 ところがその値は「相手の repo が何であるか」で決まるものです。 Rust でない repo を器に載せる日に、 器の規則 file を直さないと動かない形になっていました。</p>
+<p data-audience="machine"><a href="./ADR-0009-vessel-grants-runner-permissions-and-mutation-proof.html#s2-1-runner-permissions">ADR-0009 §2.1</a> は allowlist の正本を manifest の rules 行 <code>runner.allowed_commands</code> (初期値 <code>["cargo", "git"]</code>) と定め、 <a href="./ADR-0009-vessel-grants-runner-permissions-and-mutation-proof.html#s2-4-common-verify">§2.4</a> は共通 verify の正本を rules 行 <code>gate.common_verify</code> (初期値 = flip check + done の定義 4 本) と定めた。 両行は 2026-09-10 に manifest へ land した (kind <code>RunnerAllowedCommands</code> / <code>GateCommonVerify</code>・値の形は <code>List</code>)。</p>
+<p data-audience="machine">この 2 つの値は<strong>器の規則ではなく対象 repo の性質</strong>である。 共通 verify の行は Rust repo の道具 (<code>cargo xtask flip-check</code>・<code>cargo nextest</code>・<code>cargo clippy</code>・<code>cargo deny</code>) を名指し、 allowlist も同じ道具から成る。 設計 doc pipeline §7 は「pipeline が Rust 固有の検査を内蔵する形は採らない (toy repo は Rust でないことがある)」と定め、 ADR-0009 §4 案 (v) も同じ理由で Rust 固有の検査の内蔵を退けた。 しかし値を器の manifest に置く形は、 <strong>manifest 経由で同じ内蔵を作っていた</strong>——器で別の言語の repo を開発するには、 器の manifest を C5 の手続きで書き換えるか、 その repo 向けの行を器に足し続けるしかない。 前者は対象 repo の都合で器の規則が揺れ、 後者は器が対象 repo の一覧を抱える。</p>
+<p data-audience="machine">憲法の面から見ると、 <a href="../spec/constitution.html#c1">C1</a> は「規則の値は repo 内の manifest 1 file」と定め、 <a href="../spec/constitution.html#c10">C10</a> は「宣言値・出所つき実測値・導出値・有効値を型で区別し、 宣言値は実測を経てだけ有効値になる」と定め、 <a href="../spec/constitution.html#c14">C14</a> は「manifest は執行される規則の正本」と定める。 「相手の repo が何を実行するか」は器の規則というより<strong>相手についての宣言値</strong>であり、 既に所属の目印 <code>.vessel</code> (marker) が name と version をその形で持っている (SRS FR19 / FR24・ADR-0004 §2.2 面 1)。 ∴ 置き場を決め直す必要があり、 本 repo の作法「schema・on-disk 形式を決める便は ADR を先に書く」と「憲法条の解釈が要る便は ADR を書く」の両方に当たる。 選択肢は 2 つ (器の manifest のまま / 対象 repo の宣言へ) で、 選択が「器と repo のどちらが値を所有するか」という価値観に依存するため user 裁定を仰いだ (2026-09-10・推奨案を採用)。</p>
+</section>
+
+<section id="s2-decision" class="normative">
+<h2>§2. Decision</h2>
+<p class="section-essence" data-audience="human">決めることは 6 つです。 宣言は目印の隣の file に置く、 器の規則 file は「宣言が名乗ってよい上限」だけを持つ、 便を受け付けるときに宣言を読んで上限と突き合わせ便ごとに凍結する、 実装役と審査は凍結した写しを読む、 器自身と練習用 repo にも宣言を置く、 そして今回決めない範囲、 です。</p>
+<p data-audience="machine">本 ADR は C1 / C10 / C14 の<strong>適用</strong>を記録する。 憲法本文は書き換えない。 C1 の読みは次のとおり: 器の規則は「宣言が名乗れる command の<strong>上限</strong>」(manifest の行に在る) と「宣言が無い repo では便を起こさない」(型に在る: 有効値は宣言からしか作れず、 有効値の無い便は起こせない——<a href="../spec/constitution.html#c6">C6</a> の Budget と同型で、 bool の行は持たない) である。 対象 repo が何を実行し何を共通に検証するかは<strong>その repo についての宣言値</strong> (C10 の Declared) であって器の規則値ではない——marker の name / version と同じ類であり、 契約 file が既に <code>verify</code> (gate が実走する command 行) と <code>write-set</code> (guard が執行する path 集合) を manifest の外に持っていることと同型である (C1 の "rule value" は rules 行の field を指し、 器が読むあらゆる入力を指さない)。 自己ホストの周も宣言は C14 の "documents" ではなく契約と同類の<strong>入力データ</strong>であり、 規律を宣言に書く口ではない。 宣言値は intake の突合 (実測) を経てだけ有効値 (Effective) になる (C10)。 manifest は執行される規則の正本のまま (C14)。 rules manifest からは行を 1 本消す (C5・裁定 id = 本 ADR)。</p>
+
+<h3 id="s2-1-declaration-file">§2.1 宣言 file — marker の隣に置く</h3>
+<p class="section-essence" data-audience="human">目印 <code>.vessel</code> そのものには手を付けません。 前の版と共有する固定の形だからです。 その隣に <code>.vessel.toml</code> という file を置き、 「実装役が使ってよい command」と「どの便にも共通の検証」をその repo が自分で名乗ります。</p>
+<p data-audience="machine">vessel 宣言は対象 repo の root の tracked file <code>.vessel.toml</code> である (<strong>MUST</strong>)。 marker <code>.vessel</code> は変えない (<strong>MUST NOT</strong> change): marker は跨版 面 1 (ADR-0004 §2.2・要件カタログ R-O3) として版番号に依らず固定され、 読み手は 2 行厳格 (行数違いは <code>Absent</code> = hook が黙る側へ倒れる) で実装されている。 marker に行を足すと、 前の版と現在の版の両方の hook が「誰も名乗っていない」と読み、 write-set guard が<strong>黙って外れる</strong>——安全側と逆へ倒れる。 ∴ 宣言は別 file に置く。</p>
+<p data-audience="machine">宣言の形は契約 file と同じ TOML subset (ADR-0004 §2.3・section を持たない flat な key・値は文字列と 1 行の文字列配列・reader は契約 file と<strong>同じ 1 組</strong>で第 2 の parser を作らない) とする (<strong>MUST</strong>)。 key は 3 つで<strong>すべて必須</strong>: <code>schema</code> (整数・初期値 1)、 <code>allowed-commands</code> (command 名の配列・実装役が実行してよいもの)、 <code>common-verify</code> (command 行の配列・どの便にも共通の検証・<code>{base}</code> は便の base に置換される唯一の穴)。 配列は空を受けず、 要素の空文字も受けない (manifest の <code>List</code> と同じ理由: 「規則が無い」を空で表せると書き間違いが空の allowlist を効かせる)。 未知 key は拒む。 未知の <code>schema</code> も不備である (跨版は marker と違い黙らず rc 1 へ倒す)。 不備は<strong>全件集めて</strong>行番号付きで返す (契約 file と同じ・FR1)。</p>
+
+<h3 id="s2-2-manifest-ceiling">§2.2 manifest は上限を持ち、 共通 verify の行は廃止する</h3>
+<p class="section-essence" data-audience="human">器の規則 file にある「実装役が使ってよい command」の行は残しますが、 意味を「どの repo の宣言も、 この範囲の中でしか名乗れない」という<strong>上限</strong>に変えます。 上限を広げるには人の裁定が要ります。 「共通の検証」の行は器の規則 file から消します。 repo ごとに違う値を器が持つ理由が無いからです。</p>
+<p data-audience="machine">rules 行 <code>runner.allowed_commands</code> (kind <code>RunnerAllowedCommands</code>) は残し、 意味を<strong>上限 (ceiling)</strong> に変える (<strong>MUST</strong>): どの vessel 宣言の <code>allowed-commands</code> も、 この行の要素の部分集合でなければならない。 値は変えない (記録時点 <code>["cargo", "git"]</code>)。 上限を広げる (例: 別の言語の repo を載せるために <code>uv</code> や <code>pytest</code> を足す) には C5 の手続き (裁定 id 付きの diff) を要する——これは意図した摩擦である: 実装役が実行しうる command の<strong>宇宙</strong>を広げるのは「使う」に近い判断であり、 器の manifest でだけ広がる形にする。 包み (<code>sh</code> / <code>bash</code> / <code>python -c</code> 等) を上限に載せないことは ADR-0009 §3 の散文であって機構を持たない (N2 により規則とは数えない)。 上限の変更を止める機構は C5 (裁定 id 付きの diff を CI が要求する) だけであり、 包みの検査を measure として置くかは §2.6 の候補に留める。</p>
+<p data-audience="machine">rules 行 <code>gate.common_verify</code> と kind <code>GateCommonVerify</code> は<strong>廃止する</strong> (<strong>MUST</strong> remove・C5・裁定 id = 本 ADR)。 器が「Rust repo 向けの共通 verify」を持ち続けると、 宣言の無い repo でそれが黙って効く fallback の口になる (§4 案 (vi))。 <code>RuleKind</code> は閉じた enum なので variant の除去は型・manifest 行・裁定 id の 3 点が 1 PR に揃う形で行う (ADR-0009 §3 と同じ)。 廃止の実装は本 ADR の後の便に置く (本 ADR は docs のみ)。</p>
+
+<h3 id="s2-3-intake-measures">§2.3 intake が宣言を読み、 上限と突合し、 便ごとに凍結する</h3>
+<p class="section-essence" data-audience="human">便を受け付けるとき、 器は repo の宣言を読んで「上限の中に収まっているか」「検証の各行の先頭が宣言した command か」「repo の外を指していないか」を確かめ、 通ったものを<strong>その便の置き場に写して凍結</strong>します。 宣言が無い・空・上限の外なら、 その場で断って便を起こしません。 便が自分の実装の中で宣言を書き換えても、 自分の権限は広がりません。</p>
+<p data-audience="machine">intake は <code>--repo</code> の repo の <strong>HEAD commit の tree</strong> から <code>.vessel.toml</code> を読む (<strong>MUST</strong>・<code>git show HEAD:.vessel.toml</code> 相当)。 作業ツリーの file は読まない (<strong>MUST NOT</strong>): untracked・未 commit の宣言は review を経ていない値であり、 intake が読む値は常に commit 済み (= PR として lens と CI を通った値) に限る。 読めない・不在・不備ありは rc 1 で拒み、 event を書かない (ADR-0009 §2.2 と同じ極性)。 読んだ値は C10 の <strong>Declared</strong> として型で持ち、 次の突合 (実測) を経て <strong>Effective</strong> へ昇格する: (1) <code>allowed-commands</code> の各要素が manifest の上限 <code>runner.allowed_commands</code> に含まれる。 (2) <code>common-verify</code> の各行が<strong>空白区切りの argv 1 本</strong>であること: 先頭 command (第 1 語) が<strong>宣言の</strong> <code>allowed-commands</code> に含まれ、 行が shell の制御文字 (<code>;</code> <code>&amp;</code> <code>|</code> <code>`</code> <code>$</code> <code>(</code> <code>)</code> <code>&lt;</code> <code>&gt;</code> 引用符・改行) を含まず、 repo の外の path (絶対 path・home の短縮記号) を含む語を持たず、 穴は <code>{base}</code> だけである。 制御文字の禁止が要るのは、 gate と land が verify 行を <code>sh -c</code> の 1 行として実行するため、 先頭語の検査だけでは <code>cargo --version; env</code> の形で任意の command が第 2 語以降に乗るからである (先頭語の allowlist は connective を禁じてはじめて境界になる)。 (3) 契約の <code>verify</code> 各行にも (2) と同じ検査を、 判定の基準を<strong>宣言の</strong> <code>allowed-commands</code> (上限ではない) として掛け、 ただし契約行は<strong>穴を持たない</strong> (<code>{base}</code> も不可・gate は契約行に置換をしない) (ADR-0009 §2.2 の「<code>runner.allowed_commands</code> の外」は本 ADR で「宣言の allowlist の外」に読み替える)。 1 件でも外れれば rc 1 で拒む (<strong>MUST</strong>・全件を集めて報告)。 突合の結果は出所付きの実測値 (C10 の <code>Measured</code>: 値 + 出所 = 読んだ commit の sha・宣言 file の path・上限行の id) を経て Effective になる。 型名は gate の測定値 <code>Measured</code> と衝突させない。</p>
+<p data-audience="machine">突合を通った Effective の値は <code>&lt;state_dir&gt;/pipe/&lt;run&gt;/vessel.toml</code> へ写す (<strong>MUST</strong>・契約 file を <code>contract.toml</code> へ写すのと同じ形)。 以後の段 (spawn・runner・gate・land・resume) は<strong>この写しだけ</strong>を読み、 対象 repo や worktree の <code>.vessel.toml</code> を読み直さない (<strong>MUST NOT</strong>)。 これにより、 便の実装が worktree の宣言を書き換えても<strong>その便の</strong>権限と共通 verify は変わらない (自己拡張の閉塞)。 宣言を変える PR は通常の便として lens と CI の review を受け、 land した後に intake した便から効く。 event log の record 形は変えない (跨版の契約・ADR-0004 §2.5)——凍結は写し file で行い、 event に新しい field を足さない。</p>
+
+<h3 id="s2-4-consumers">§2.4 runner・gate・land は凍結した写しを読む</h3>
+<p class="section-essence" data-audience="human">実装役を起こすときは、 器が凍結した写しから「使ってよい command」を組んで渡します。 審査 (gate) と取り込み (land) は、 同じ写しの「共通の検証」を、 契約の検証の前に撃ちます。 写しを渡さずに実装役を起こすことはできません。</p>
+<p data-audience="machine">runner は <code>--vessel &lt;file&gt;</code> を<strong>必須</strong> flag として受け (<strong>MUST</strong>・lens の <code>--contract</code> と同じ fail-closed 極性・無ければ claude を起動せず rc 1)、 その写しの <code>allowed-commands</code> の各要素を <code>Bash(&lt;cmd&gt;:*)</code> の形で <code>--allowedTools</code> に渡す。 <code>--setting-sources project</code> と PermissionRequest hook の一律 deny は ADR-0009 §2.1 のまま不変。 runner は manifest を読まない (<strong>MUST NOT</strong>)——上限との突合は intake で済んでおり、 runner が読む値は Effective だけである。 spawn の <code>--runner</code> seam は placeholder <code>{vessel}</code> を写しの path へ置換する (既存の 6 つの穴に 1 つ足す・置換の規律は不変)。</p>
+<p data-audience="machine">gate と land の機械検証は、 順序を変えず (① write-set の照合 → ② 共通 verify → ③ 契約 verify・ADR-0009 §2.4)、 ② の行を manifest でなく<strong>写しの</strong> <code>common-verify</code> から取る (<strong>MUST</strong>)。 <code>{base}</code> の置換は共通 verify 行に対して行い (ADR-0009 §2.4 が決めた形・記録時点の gate にはまだ無く、 実装の便で新設する)、 契約行には行わない。 <code>verify.jsonl</code> の record 形・<code>verify.stderr.log</code> の診断は不変。 lens は Bash を撃たないので宣言を読まない (不変)。</p>
+
+<h3 id="s2-5-self-host">§2.5 自己ホストと toy repo</h3>
+<p class="section-essence" data-audience="human">器自身の repo にも同じ宣言を置きます。 中身は、 これまで器の規則 file にあった値 (cargo と git・flip check と done の定義 4 本) をそのまま移したものです。 練習用の小さな repo (toy repo) を作る歯も、 目印と一緒に宣言を commit します。</p>
+<p data-audience="machine">本 repo の root に <code>.vessel.toml</code> を置き (<strong>MUST</strong>)、 <code>allowed-commands</code> は廃止前の <code>runner.allowed_commands</code> の値、 <code>common-verify</code> は廃止する <code>gate.common_verify</code> の値をそのまま写す (値は変えない・変異検出線の <code>cargo xtask mutants-diff --base {base}</code> は ADR-0009 §2.3 のとおり実装の便で末尾に足す)。 宣言を tracked にする理由は marker とは違う: 読み手は intake だけで worktree に写る必要は無いが、 intake が HEAD の tree から読む (§2.3) ので commit されていない宣言は存在しないのと同じである。 本 repo に <code>.vessel.toml</code> を足しても public 面の情報は増えない (同じ 5 行 + 2 語は既に tracked な manifest 行として public であり、 置き場が移るだけ) ので A1 の「出す」に当たらない。 toy repo を作る歯は宣言も commit する。 toy repo の宣言は Rust を含まない (例: <code>allowed-commands = ["git"]</code>・<code>common-verify</code> は git だけで書ける 1 行) ——これが「pipe は言語を知らない」ことの歯になる。</p>
+
+<h3 id="s2-6-scope">§2.6 射程外</h3>
+<p class="section-essence" data-audience="human">宣言の<strong>中身が妥当か</strong> (たとえば test を撃たない共通の検証を名乗っていないか) を機械が判定することや、 契約 file や起動 command の置き場、 上限の値そのものの変更は、 ここでは決めません。</p>
+<p data-audience="machine">次は<strong>本 ADR の決定ではない</strong> (MUST NOT be read as such): 宣言の意味的な妥当性の機械判定 (例: 自己ホストの宣言が done の定義 4 本を含むかを xtask check の検出線で測る案・別便の候補)、 上限 <code>runner.allowed_commands</code> の値の変更 (C5 の裁定)、 運用物 (契約 file・runner の起動行) の repo tracked な置き場 (ADR-0009 §2.6 のまま・A1 に掛かる)、 宣言を <code>vessel init</code> が生成すること (宣言は repo が書く tracked file であり、 器が値を推測して書くと宣言でなくなる)、 SRS への要件の追加 (「宣言の無い repo では便を起こさない」「宣言は上限の内」に対応する FR は記録時点の SRS に無く、 spec/ の改訂は別便で user が folio-architect を起動して行う)、 上限に包みが載っていないことを測る xtask check の measure (§2.2・候補)、 verify 行を <code>sh</code> を介さず argv で起動する実装 (制御文字の禁止で同じ境界を得るため、 本 ADR は起動形を変えない)、 marker <code>.vessel</code> の形式改訂 (跨版 面 1・R-O3)、 憲法条文の改訂 (A2)。</p>
+</section>
+
+<section id="s3-consequences" class="informative">
+<h2>§3. Consequences</h2>
+<p class="section-essence" data-audience="human">良い点は、 Rust でない repo を器に載せられること、 便が自分の権限を広げられないこと、 値の変更がその repo の PR として審査されること、 器の規則 file が「何を許しうるか」の裁定だけに純化することです。 弱い点は、 新しい言語の repo を載せるたびに上限の裁定が 1 回要ること、 宣言の中身が妥当かを機械が見ないこと、 直前の便で足した行を 1 本消す手戻りがあることです。</p>
+<p data-audience="machine">Positive: 対象 repo が自分の道具を宣言できるので、 器の manifest を触らずに別の言語の repo を載せられる (設計 §7「pipe は言語を知らない」が manifest 経由の内蔵からも解放される)。 Effective の値が便ごとに凍結され、 かつ verify 行が argv 1 本に限られるので、 便の実装が宣言を書き換えても自分の allowlist と共通 verify は変わらず、 宣言を変える PR も上限と制御文字の禁止の内でしか値を動かせない (自己拡張の閉塞: 1 便では変えられず、 2 便でも上限の外へは出られない)。 宣言の変更が対象 repo の PR として lens と CI の review を通る (器の manifest を直す C5 の手続きより、 変更が「どの repo の何を変えたか」として残る)。 manifest は「宣言が名乗れる上限」という<strong>裁定の面</strong>に純化し、 repo ごとの値を抱えない。 C10 の Declared → Effective の昇格が、 型と intake の突合という実体を持つ最初の面になる。</p>
+<p data-audience="machine">Negative: 新しい言語の repo を載せる最初の 1 回は上限の裁定 (C5) を要する——意図した摩擦だが、 摩擦である。 宣言の<strong>中身</strong> (共通 verify が test を撃つか・空虚でないか) は機械が判定しない (§2.6・lens と人の review の領分)。 直前の便で足した rules 行 1 本と <code>RuleKind</code> の variant 1 つを廃止する手戻りが生じる (型・manifest・裁定 id の 3 点を揃える 1 PR)。 宣言を変える PR 自身の gate には変更後の値が効かない (次の便から)——足した／消したのいずれも、 その PR は旧い共通 verify で審査される。 道具を<strong>消す</strong> PR は land 後の main 実測が旧い行を新しい main に当てて <code>main-red</code> を残しうるので、 宣言だけの便 → 道具を外す便の 2 段に割る。 verify 行の粒度は argv 1 本であり、 包みも連結 (<code>&amp;&amp;</code> / <code>|</code>) も書けない——記録時点の e2e の契約 verify 行 9 本 (<code>true</code> / <code>test</code> / <code>printf</code> と連結) は上限と制御文字の外にあり、 実装の便は toy repo 側の script file + tmp manifest で上限を広げる形へ歯を書き直す。 rules 行の存在を assert する既存の歯 1 本も同じ PR で書き換える。 対象 repo の tracked file が 1 つ増える (repo 側の責務)。 toy repo を作る歯は宣言の commit が 1 手増える。</p>
+</section>
+
+<section id="s4-alternatives" class="informative">
+<h2>§4. Alternatives Considered</h2>
+<p class="section-essence" data-audience="human">6 つの案を退けました。 器の規則 file に置き続ける案、 目印 <code>.vessel</code> に行を足す案、 契約ごとに書く案、 便の作業 dir の宣言をそのまま読む案、 上限を置かず宣言だけにする案、 宣言が無いときは器の規則 file の値で動かす案です。</p>
+<p data-audience="machine">案 (i) <strong>器の manifest のまま (ADR-0009 の形を維持)</strong>: 却下。 利点は実在する——値の置き場が 1 か所で、 C1 を最も字義どおりに満たし、 実装は既に land している。 しかし値は対象 repo の性質であり、 別の言語の repo を載せる日に器の manifest を C5 の手続きで書き換えるか repo ごとの行を器に足すしかない (§1)。 設計 §7 と ADR-0009 §4 案 (v) が退けた「Rust 固有の検査の内蔵」を manifest 経由で作っている。 ∴ 置き場を repo 側へ移す。</p>
+<p data-audience="machine">案 (ii) <strong>marker <code>.vessel</code> に行を足す</strong>: 却下。 利点は file が増えないこと。 しかし marker は跨版 面 1 として版番号に依らず固定され (ADR-0004 §2.2・R-O3)、 読み手は 2 行厳格 parse で、 行数違いを「誰も名乗っていない」(<code>Absent</code>) と読む。 前の版と現在の版の hook が同時に黙り、 write-set guard が<strong>安全側と逆へ</strong>外れる。 marker の parser を緩める改訂は跨版契約の改訂であり、 本 ADR の費用に見合わない。 ∴ 隣の file に置く (§2.1)。</p>
+<p data-audience="machine">案 (iii) <strong>契約 file に allowlist と共通 verify を書く</strong>: 却下。 便ごとに同じ値が手書きされ (C2 に反する・ADR-0009 §4 案 (vi) と同型)、 かつ契約を書く側が自分の便の allowlist を広げられる (自己拡張)。 ∴ repo 単位の宣言にし、 契約は便固有の行だけを持つ形を保つ。</p>
+<p data-audience="machine">案 (iv) <strong>便の worktree の <code>.vessel.toml</code> を runner / gate が直接読む</strong>: 却下。 利点は写しが要らないこと。 しかし worktree は便の実装が書き換える面であり、 実装が宣言に <code>sh</code> を足せば (上限の内なら) 自分の gate をその値で通せる。 intake で凍結した写しを読む形 (§2.3) なら、 便の中で宣言を変えても<strong>その便には</strong>効かない。 ∴ 写しを読む。</p>
+<p data-audience="machine">案 (v) <strong>manifest に上限を置かず、 宣言だけで決める</strong>: 却下。 利点は器の manifest から allowlist の行が消えて最も薄くなること。 しかし宣言に <code>bash</code> や <code>python -c</code> を書けば器はそれを許すことになり、 「実装役が実行しうる command の宇宙」を広げる判断が repo 側の PR だけで通る。 それは「使う」に近い判断であり、 器の manifest で裁定 id 付きにだけ広がる形 (C5) にする。 C1 の「規則は manifest」もこの上限が担う。 ∴ 上限を残す (§2.2)。</p>
+<p data-audience="machine">案 (vi) <strong>宣言が無い repo では manifest の値で動かす (fallback)</strong>: 却下。 利点は既存の toy repo の歯が宣言無しで動き続けること。 しかし fallback は「宣言し忘れ」を「Rust の共通 verify が黙って効く」に化けさせ、 別の言語の repo で <code>cargo</code> を撃って赤くなる (原因が manifest の側にあることが便の外から見えない)。 ADR-0009 §2.2 が採った「動かしてから黙って詰まるより最初に大きく落ちる」極性に反する。 ∴ 宣言が無い repo では intake が rc 1 で断り、 <code>gate.common_verify</code> 行は廃止して fallback の口を構造から消す (§2.2)。</p>
+</section>
+
+<section id="s5-trace" class="informative">
+<h2>§5. Trace</h2>
+<p class="section-essence" data-audience="human">出所は、 利用者の裁定と、 目印の読み手・宣言の読み手・規則 file の現状を実際に測った結果です。</p>
+<ul data-audience="machine">
+  <li>裁定: 2026-09-10 に user が「allowlist と共通 verify の値の置き場」について、 器の manifest のままにする案と対象 repo の宣言へ移す案を比較した推奨 (宣言へ) を採用した。 本 repo は public のため逐語・席や台帳の識別子・host 名は本 file に載せない (出所は日付で指す)。</li>
+  <li>実測 (marker): <code>.vessel</code> の読み手は 2 行 (<code>name=</code> / <code>version=</code>) の厳格 parse で、 行数違い・key 違い・順序違いはすべて <code>Absent</code> (hook が黙る側) へ倒れる (2026-09-10・記録時点の実装)。 SRS FR19 / FR24 が marker を名指し、 ADR-0004 §2.2 が跨版 面 1 として固定する。</li>
+  <li>実測 (reader): 契約 file の reader は section を持たない flat な TOML subset で、 値の受理集合を manifest と共有する (第 2 の parser を作らない)。 宣言 file は契約 file と<strong>値の受理集合</strong> (<code>scalar</code> / <code>list</code> / <code>elements</code> / <code>quoted_once</code>) を共有する。 key の集合と <code>schema</code> の型 (整数) が違うため契約の parse 関数そのものは使わない (契約側は整数を「文字列でない」で拒む)。 manifest 側の <code>list</code> は空配列と空要素を既に拒む。</li>
+  <li>実測 (gate / land): verify 行は <code>sh -c</code> の 1 行として実行される (記録時点の gate と land の実装)。 先頭語だけの allowlist 検査では第 2 語以降に任意の command が乗るため、 §2.3 の制御文字の禁止を置いた (lens review 2026-09-10・critical)。 gate の placeholder 置換は記録時点で lens の cmd に対してだけ在り、 <code>{base}</code> の置換は共通 verify 行の新設として実装の便に置く。</li>
+  <li>実測 (manifest): 記録時点の rules 行は <code>runner.allowed_commands = ["cargo", "git"]</code> と <code>gate.common_verify</code> (flip check + done の定義 4 本の 5 行) で、 いずれも 2026-09-10 の便で land した。 両行を読む実装は記録時点でまだ無い (型と行だけが在る) ので、 廃止の実装は消す面が小さい。</li>
+  <li>先行記述: 設計 doc の pipeline §5.1 / §5.2 / §5.3 / §6 / §8・vessel-hook §2・rules-manifest §4 と vocabulary (allowlist / 共通 verify) は manifest を正本とする読みで land していた。 本 ADR は同じ PR でそれらを改訂する。</li>
+  <li>拘束条件: <a href="../spec/constitution.html#c1">C1</a> (規則は manifest 1 file)・<a href="../spec/constitution.html#c2">C2</a> (規則を 1 つに閉じる)・C5 (裁定 id 付き diff)・<a href="../spec/constitution.html#c10">C10</a> (宣言値は実測を経て有効値)・<a href="../spec/constitution.html#c11">C11</a> (極性は型)・<a href="../spec/constitution.html#c14">C14</a> (manifest は執行される規則の正本)。 ADR-0004 §2.2 / §2.3 / §2.5・ADR-0009。 要件は SRS FR1 (契約の受理) / FR4 / FR5 / FR8 / FR19 / FR24。</li>
+  <li>記録した日: 2026-09-10。</li>
+</ul>
+</section>
+
+<!-- folio:chrome-bottom -->
+<nav class="prevnext" aria-label="前後の文書">
+  <a class="prevnext__prev" href="ADR-0009-vessel-grants-runner-permissions-and-mutation-proof.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">ADR-0009 — runner の権限と非空虚性の検証は器が manifest から与える (口座設定の暗黙継承・host 側 script・契約への共通規律の手書きを廃止)</span></a>
+</nav>
+<script>
+(function () {
+  var openedForPrint = [];
+  window.addEventListener('beforeprint', function () {
+    openedForPrint = [];
+    var ds = document.querySelectorAll('details:not([open])');
+    for (var i = 0; i < ds.length; i++) { ds[i].setAttribute('open', ''); openedForPrint.push(ds[i]); }
+  });
+  window.addEventListener('afterprint', function () {
+    for (var i = 0; i < openedForPrint.length; i++) openedForPrint[i].removeAttribute('open');
+    openedForPrint = [];
+  });
+  if (!document.querySelector('[data-audience]')) return;
+  /* 既定 = 人間プレゼン型 (ADR-0040 / rules §11.3): script 経由で初期 class を付与するため
+     no-JS では付かず全文可視に graceful degrade する。 static DOM は全文を保持 (AI/検索/印刷は不変)。 */
+  document.body.classList.add('audience-human');
+  var bar = document.createElement('nav');
+  bar.className = 'audience-toggle';
+  bar.setAttribute('aria-label', '表示対象の切替');
+  var states = [['both', '両方'], ['human', '人間向け'], ['machine', '機械向け']];
+  for (var s = 0; s < states.length; s++) {
+    (function (mode, label) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      b.setAttribute('aria-pressed', mode === 'human' ? 'true' : 'false');
+      b.addEventListener('click', function () {
+        document.body.classList.remove('audience-human', 'audience-machine');
+        if (mode !== 'both') document.body.classList.add('audience-' + mode);
+        var bs = bar.querySelectorAll('button');
+        for (var j = 0; j < bs.length; j++) bs[j].setAttribute('aria-pressed', bs[j] === b ? 'true' : 'false');
+      });
+      bar.appendChild(b);
+    })(states[s][0], states[s][1]);
+  }
+  var bc = document.querySelector('nav.breadcrumb');
+  if (bc && bc.parentNode) { bc.parentNode.insertBefore(bar, bc.nextSibling); }
+  else { document.body.insertBefore(bar, document.body.firstChild); }
+})();
+</script>
+<!-- /folio:chrome-bottom -->
+</body>
+</html>

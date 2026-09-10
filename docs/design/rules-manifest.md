@@ -81,10 +81,10 @@ ruled_at = "2026-09-07"
 | `fleet.lock_retry_ms` | LockRetryMs | 5000 | true | user 2026-09-09T09:08Z / 2026-09-09 |
 | `fleet.lock_stale_ms` | LockStaleMs | 30000 | true | user 2026-09-09T09:08Z / 2026-09-09 |
 | `hook.timeout_s` | HookTimeoutS | 10 | true | user 2026-09-09T09:08Z / 2026-09-09（hooks.json の timeout・xtask がここから写す） |
-| `runner.allowed_commands` | RunnerAllowedCommands | `["cargo", "git"]` | true | user 裁定 2026-09-10（ADR-0009 §2.1）＝器が runner に与える command 名 |
-| `gate.common_verify` | GateCommonVerify | flip check + done の定義 4 本（5 行） | true | user 裁定 2026-09-10（ADR-0009 §2.4）＝gate が契約の verify の前に撃つ |
+| `runner.allowed_commands` | RunnerAllowedCommands | `["cargo", "git"]` | true | user 裁定 2026-09-10（ADR-0009 §2.1）。**意味は上限**（[ADR-0010 §2.2](../../design-intent/decisions/ADR-0010-vessel-declaration-holds-allowlist-and-common-verify.html#s2-2-manifest-ceiling)）＝各 repo の vessel 宣言 `allowed-commands` はこの部分集合でなければ intake が拒む |
+| ~~`gate.common_verify`~~ | ~~GateCommonVerify~~ | — | — | **廃止**（ADR-0010 §2.2・裁定 id = ADR-0010）＝共通 verify の値は対象 repo の vessel 宣言 `common-verify` が持つ。行と variant の除去は実装の便（型・manifest・裁定 id の 3 点を 1 PR で） |
 
-`RuleKind` の variant は **28**（`rules::ALL` が母集団）で、この表が値を持つのは **24 種**である。差の 4 種（`SeatContextCapPct` / `SeatContextWindowTokens` / `SeatTickStaleS` / `SeatCycleLockTtlS`）は seat autonomy の便で足されたまま**この表へ未追加**＝既知の drift である（本便で数え直した・2026-09-10）。§3 の行 id は manifest の行 id の**接頭辞**として一致する（compound 行は `.` で枝分かれ）。後続の drift 歯は接頭辞で group 化して突合する。
+`RuleKind` の variant は **28**（`rules::ALL` が母集団）で、この表が値を持つのは **23 種**である（`gate.common_verify` は ADR-0010 §2.2 で廃止予定のため値を持たない）。差の 4 種（`SeatContextCapPct` / `SeatContextWindowTokens` / `SeatTickStaleS` / `SeatCycleLockTtlS`）は seat autonomy の便で足されたまま**この表へ未追加**＝既知の drift である（本便で数え直した・2026-09-10）。§3 の行 id は manifest の行 id の**接頭辞**として一致する（compound 行は `.` で枝分かれ）。後続の drift 歯は接頭辞で group 化して突合する。
 
 ### 4.2 拒否 5 形（FR18・AC6・すべて `line=<N>` 付き・全件を集めて返す）
 
