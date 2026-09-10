@@ -363,6 +363,114 @@ fn pipe_spawn_substitutes_placeholders_and_adds_no_env() {
     clean(&[&repo, &state]);
 }
 
+/// 写しの照合に使う plugin manifest の本文。
+const PLUGIN_JSON: &str = "{\"name\":\"toy-plugin\"}\n";
+
+/// 写しの照合に使う hooks の本文。**plugin.json と字面を変える**のは、片方だけを
+/// 写す実装でも bytes 一致が通ってしまうのを防ぐためである。
+const HOOKS_JSON: &str = "{\"hooks\":{\"PreToolUse\":[]}}\n";
+
+/// plugin（`.claude-plugin/` と `hooks/`）を持つ toy repo と置き場を作る。
+///
+/// `README.md` も置くのは、**写しに worktree の他の file が混ざらない**ことを負例で
+/// 測るためである（plugin の 2 dir だけを写す、が契約）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn repo_with_plugin() -> (PathBuf, PathBuf) {
+    let (repo, state) = repo_with_state();
+    fs::create_dir_all(repo.join(".claude-plugin")).expect(".claude-plugin を作れる");
+    fs::write(repo.join(".claude-plugin").join("plugin.json"), PLUGIN_JSON)
+        .expect("plugin.json を書ける");
+    fs::create_dir_all(repo.join("hooks")).expect("hooks dir を作れる");
+    fs::write(repo.join("hooks").join("hooks.json"), HOOKS_JSON).expect("hooks.json を書ける");
+    fs::write(repo.join("README.md"), "# toy\n").expect("README を書ける");
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "plugin"]);
+    (repo, state)
+}
+
+#[test]
+fn pipe_spawn_copies_plugin_outside_worktree_and_substitutes_plugin_dir() {
+    let (repo, state) = repo_with_plugin();
+    let path = write_contract(&repo, &[], &[]);
+    let id = intake(&repo, &state, &path);
+    let out = run_pipe(&[
+        "spawn", "--run", &id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(),
+        "--runner", "printf '%s' {plugin_dir} > plugin_dir.txt && git add -A && git commit -q -m runner",
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "spawn は rc 0: {}", stderr_of(&out));
+
+    let worktree = repo.join(".worktrees").join("scribe2").join(&id);
+    let plugin = state.join("pipe").join(&id).join("plugin");
+    let shown = fs::read_to_string(worktree.join("plugin_dir.txt")).expect("置換の写しを読める");
+    // **これが本題**: runner が受け取った plugin dir が repo の外に在るから、worktree の
+    // file が Claude Code の sensitive 判定（plugin dir 配下）に掛からない。**先に本題を
+    // 測る**——先に path の一致を測ると、worktree の path を渡す退行も「一致しない」でしか
+    // 落ちず、何が壊れたのかが読めない。
+    assert!(
+        !Path::new(&shown).starts_with(&repo),
+        "runner が受けた plugin dir は repo の配下でない: shown={shown} repo={}",
+        repo.display()
+    );
+    assert_eq!(shown, plugin.display().to_string(), "{{plugin_dir}} は run dir 配下の写し");
+    assert!(
+        !plugin.starts_with(&repo),
+        "写しは repo の配下でない: plugin={} repo={}",
+        plugin.display(),
+        repo.display()
+    );
+
+    for (dir, name, body) in [
+        (".claude-plugin", "plugin.json", PLUGIN_JSON),
+        ("hooks", "hooks.json", HOOKS_JSON),
+    ] {
+        let source = fs::read(worktree.join(dir).join(name)).expect("worktree 側を読める");
+        let copied = fs::read(plugin.join(dir).join(name)).expect("写しを読める");
+        assert_eq!(copied, source, "{dir}/{name} の bytes が worktree と一致する");
+        assert_eq!(copied, body.as_bytes(), "{dir}/{name} は toy repo に置いた本文");
+    }
+
+    assert!(!plugin.join("README.md").exists(), "写しに worktree の README を入れない");
+    assert!(!plugin.join("src").exists(), "写しに worktree の src を入れない");
+    let mut names: Vec<String> = fs::read_dir(&plugin)
+        .expect("写しの dir を読める")
+        .map(|entry| entry.expect("entry を読める").file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    assert_eq!(
+        names,
+        vec![".claude-plugin".to_owned(), "hooks".to_owned()],
+        "写しは plugin の 2 dir だけ（母集団 {} entry）",
+        names.len()
+    );
+    clean(&[&repo, &state]);
+}
+
+#[test]
+fn pipe_spawn_makes_empty_plugin_dir_when_repo_has_none() {
+    // plugin を持たない repo（toy repo の既定）でも便を止めない。
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let id = intake(&repo, &state, &path);
+    let out = run_pipe(&[
+        "spawn", "--run", &id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(),
+        "--runner", "echo x >> src/lib.rs && git add -A && git commit -q -m runner",
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "spawn は rc 0: {}", stderr_of(&out));
+    let plugin = state.join("pipe").join(&id).join("plugin");
+    assert!(plugin.is_dir(), "空の plugin dir を作る: {}", plugin.display());
+    let entries: Vec<String> = fs::read_dir(&plugin)
+        .expect("写しの dir を読める")
+        .map(|entry| entry.expect("entry を読める").file_name().to_string_lossy().into_owned())
+        .collect();
+    assert!(entries.is_empty(), "写すものが無ければ空（母集団 {} entry: {entries:?}）", entries.len());
+    clean(&[&repo, &state]);
+}
+
 #[test]
 fn pipe_spawn_refuses_wrong_stage() {
     let (repo, state) = repo_with_state();

@@ -75,8 +75,9 @@
 2. `base = git -C <repo> rev-parse HEAD` を event に記録。
 3. `git worktree add -b <NAME>/<run> <repo>/.worktrees/<NAME>/<run> <base>`（既存なら rc 1）。
 4. write-set を `<worktree の git dir>/<NAME>/write-set.txt` に 1 行 1 path で書く（guard が読む形・[vessel-hook.md §5](./vessel-hook.md)・tracked 面に触れない）。
-5. `RunStage stage=Spawned` → runner を `sh -c <cmd>` で **cwd = worktree** で起動し `SeatSpawned seat=<run> pid=<pid>`。cmd 中の placeholder `{run}` `{worktree}` `{contract}` `{write_set}` `{base}` を置換する。**scribe2 固有の env は 1 つも足さない**（親の env はそのまま継承・ADR-0004 §2.4）。
-6. **runner の終了待ちは `Child::wait`**（rc を運ぶ）。pid の生存待ち（`stop`）は `wait(Completion::SeatGone)`（[fleet-event-log.md §4](./fleet-event-log.md)）で、`Completion::RunnerExited` は**別 process が spawn した runner を待つ resume 経路のために残す**。`SeatStopped`。**rc 0 ∧ `git rev-list --count <base>..HEAD` ≥ 1** → `Implemented`、それ以外 → `Failed detail=runner-rc:<rc>,commits:<n>`（commit 0 は完了ではない）。stdout `run=<id> stage=<s>`。
+5. **plugin（`.claude-plugin/` と `hooks/`）を worktree から `<state_dir>/pipe/<run>/plugin/` へ写す**（file だけ・symlink は追わない・再走のため先に空にする）。写すのは **worktree の**中身＝便の base の内容であって anchor の現在値ではない。plugin を持たない repo では空 dir を作るだけで進む。copy に失敗した周は broken（rc 2）で runner を起動しない。
+6. `RunStage stage=Spawned` → runner を `sh -c <cmd>` で **cwd = worktree** で起動し `SeatSpawned seat=<run> pid=<pid>`。cmd 中の placeholder `{run}` `{worktree}` `{contract}` `{write_set}` `{base}` `{plugin_dir}`（= 5 の写し）を置換する。**scribe2 固有の env は 1 つも足さない**（親の env はそのまま継承・ADR-0004 §2.4）。
+7. **runner の終了待ちは `Child::wait`**（rc を運ぶ）。pid の生存待ち（`stop`）は `wait(Completion::SeatGone)`（[fleet-event-log.md §4](./fleet-event-log.md)）で、`Completion::RunnerExited` は**別 process が spawn した runner を待つ resume 経路のために残す**。`SeatStopped`。**rc 0 ∧ `git rev-list --count <base>..HEAD` ≥ 1** → `Implemented`、それ以外 → `Failed detail=runner-rc:<rc>,commits:<n>`（commit 0 は完了ではない）。stdout `run=<id> stage=<s>`。
 
 ### 5.3 gate（(b)・FR8 / FR9 / NFR1）
 `pipe gate --run <id> [--lens <cmd>]`: 前提 = **`Implemented` ∨ (`Gated` ∧ verdict が INCONCLUSIVE)** ∧ worktree clean（`git status --porcelain` 空）∧ commits ≥ 1。**違反の扱いは 2 通りに分ける**（いずれも rc 1 で lens は起動しない）。
@@ -119,7 +120,7 @@
 
 - `<NAME> runner --worktree <dir> --write-set <f> --plugin-dir <dir> --permission-mode <mode> [--account-dir <dir>] [--claude <path>]`: **契約本文は stdin で受け**（FR5「stdin に契約」）、write-set と合わせて prompt に組み、`claude -p` を **cwd = worktree・`--output-format stream-json --verbose`（`-p` との併用では claude が `--verbose` を要求する）・`--permission-mode` を毎回明示・`--plugin-dir` で本 repo の plugin（hooks）を載せて** 起動する。**prompt は argv でなく claude の stdin で渡す**——argv だと Linux の 1 引数上限（128KiB）に当たり、user が裁定した `gate.token_cap = 150000` が実質 130KB へ切り下がる。**口座は子 process の環境変数（設定 dir）で切り替える**（FR5「口座は環境変数で切替」）。scribe2 自身は env を読まない（C2.2）＝子へ設定するのは「読む」ではない。**`--account-dir` を渡さない周は親の環境変数がそのまま子へ継承される**（消す形は、この env で口座を切っている環境で子を黙って既定口座へ落とす実害があり、消すこと自体も env への介入になるため採らない。C2.2 が禁じるのは「読むこと」と「新しい seam を導入すること」で、継承はそのどちらでもない）。stream-json に **error を名乗る record（`type=result` ∧ `is_error` / `subtype` が error 系 / `type=error`）の中だけ**で上限の語彙（`rate_limit` / `rate limit` / `usage limit` / `429` / `529` / `overloaded`）を見て rc 75 で止める（呼出側は `Failed detail=rate-limit`）。error でない record は上限の語を含んでも本文の引用であって事実ではない。**上限以外の error は rc 75 にせず claude の rc を写す**。rc は claude の rc を写す。
 - `<NAME> lens --contract <f> --cap <bytes> --permission-mode <mode> [--account-dir] [--claude <path>]`: **`--contract` は必須**で、無ければ claude を呼ばずに rc 1（前提違反）・読めない契約は rc 2。stdin の diff が cap を超えたら **claude を呼ばずに** `{"verdict":"INCONCLUSIVE","evidence":"diff exceeds cap"}`。それ以外は診断 prompt（契約の goal / done / verify 各行 / write-set 各行を `{contract}` 穴へ差し込み、diff と併せて PASS / FAIL / INCONCLUSIVE を JSON 1 行で返せ。**契約 file を丸写ししない**——owner や disposition は判定の材料にならず、渡すほど cap を食う。穴は `{contract}` と `{diff}` を **1 走査**で埋める＝契約本文の中の `{diff}` が展開されない）で `claude -p` を **`--output-format` を渡さず既定（text）で・prompt は stdin で**呼び、出力の最後の JSON 行を stdout 1 行に写す（stream-json にすると全行が JSON になり、最後の JSON 行は claude 自身の result record になって判定が取れない）。parse 不能は INCONCLUSIVE。
-- 両 wrapper は `pipe` の seam にそのまま渡せる 1 行（例: `--runner "<NAME> runner --worktree {worktree} --write-set {write_set} --plugin-dir <dir> --permission-mode acceptEdits < {contract}"`）。
+- 両 wrapper は `pipe` の seam にそのまま渡せる 1 行（例: `--runner "<NAME> runner --worktree {worktree} --write-set {write_set} --plugin-dir {plugin_dir} --permission-mode acceptEdits < {contract}"`）。**`--plugin-dir` には repo でなく `{plugin_dir}`（§5.2 の写し）を渡す**——Claude Code は読み込んだ plugin dir 配下の file を acceptEdits の自動承認から外す（sensitive）ので、repo を渡すと便の worktree（`<repo>/.worktrees/<NAME>/<run>`）はその内側になり、runner は write-set 内の 1 file も Edit / Write できない（実測 2026-09-10・`s2-07l.39` の Failed）。
 - `--claude <path>` は test の seam（fake の実行 file が引数と stdin を file に写す）。prompt の文面は tracked な template file（`crates/<NAME>/src/headless/*.txt`）で持ち、絶対 path・口座名を含めない。
 
 ## 7. FR7（入口の flip check）の置き場
@@ -167,6 +168,8 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
 - gate に Rust 固有の flip check を内蔵（toy repo は Rust とは限らない）。
 - token → byte の換算係数を code に埋める（閾値は manifest・C1。byte を cap と直接比べる保守的な読みにした）。
 - PR 作成の道具を core に内蔵（seam `--pr-cmd`。道具の選定は契約側）。〔承認 event 無しで `--pr-cmd` を動かす〕は当初 A1 の読みで却下したが、[ADR-0008](../../design-intent/decisions/ADR-0008-own-repo-pr-is-not-publish.html) で**採用へ転じた**（却下の根拠だった A1 の読みが A4.3〔merge・自 repo への dispatch は可逆〕で覆った）。
+- 便の worktree を `<state_dir>/worktrees/<run>` へ出して plugin dir の外にする（sensitive 判定の案 (b)）。retire-by-move・`.vessel` marker・歯の path 前提が一斉に動くので、写す側（run dir 配下の plugin）で解いた。
+- runner を `--permission-mode bypassPermissions` で起こす（同 案 (c)）。§6 の acceptEdits を捨てて Claude Code 側の保護を全部失うので採らない。
 - 縦 1 本を 1 契約で書く（見積 ≈1,100 行・NFR2）。
 
 ## 11. 後続

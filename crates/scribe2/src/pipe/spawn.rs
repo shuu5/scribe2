@@ -7,7 +7,7 @@
 //! 親の env をそのまま継承させ、必要な値は cmd の placeholder 置換で渡す。
 
 use super::approve::{block, needs_approval, Approve};
-use super::{branch_name, contract_path, emit, git_line, worktree_path, Budget, Emit};
+use super::{branch_name, contract_path, emit, git_line, plugin_path, worktree_path, Budget, Emit};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
 use crate::fleet::store::LockPolicy;
 use crate::fleet::{EventKind, Stage};
@@ -18,6 +18,9 @@ use std::process::Command;
 
 /// policy file の名前（guard が読む形・vessel-hook.md §5）。
 const WRITE_SET_FILE: &str = "write-set.txt";
+
+/// runner へ載せる plugin の中身（repo 相対・設計 §6）。
+const PLUGIN_DIRS: [&str; 2] = [".claude-plugin", "hooks"];
 
 /// 起動 1 回の材料。
 pub struct Launch<'a> {
@@ -59,6 +62,10 @@ pub fn spawn(budget: Budget, launch: &Launch<'_>) -> Outcome {
         Ok(path) => path,
         Err(reason) => return broken(reason),
     };
+    let plugin = match copy_plugin(&worktree, launch.state_dir, launch.run) {
+        Ok(path) => path,
+        Err(reason) => return broken(reason),
+    };
     if let Err(err) = emit(
         launch.state_dir,
         &Emit {
@@ -74,12 +81,18 @@ pub fn spawn(budget: Budget, launch: &Launch<'_>) -> Outcome {
     ) {
         return broken(err.to_string());
     }
-    launch_runner(launch, &worktree, &write_set, &base)
+    launch_runner(launch, &worktree, &write_set, &plugin, &base)
 }
 
 /// runner を起こし、終わりまで見届けて段を決める。
-fn launch_runner(launch: &Launch<'_>, worktree: &Path, write_set: &Path, base: &str) -> Outcome {
-    let cmd = substitute(launch, worktree, write_set, base);
+fn launch_runner(
+    launch: &Launch<'_>,
+    worktree: &Path,
+    write_set: &Path,
+    plugin: &Path,
+    base: &str,
+) -> Outcome {
+    let cmd = substitute(launch, worktree, write_set, plugin, base);
     // **env を 1 つも足さない**: `.env()` / `.envs()` を呼ばず親の env をそのまま継承する。
     let child = Command::new("sh").arg("-c").arg(&cmd).current_dir(worktree).spawn();
     let mut child = match child {
@@ -158,7 +171,13 @@ fn seat(
 }
 
 /// cmd の placeholder を実値へ置く。
-fn substitute(launch: &Launch<'_>, worktree: &Path, write_set: &Path, base: &str) -> String {
+fn substitute(
+    launch: &Launch<'_>,
+    worktree: &Path,
+    write_set: &Path,
+    plugin: &Path,
+    base: &str,
+) -> String {
     launch
         .runner
         .replace("{run}", launch.run)
@@ -169,6 +188,60 @@ fn substitute(launch: &Launch<'_>, worktree: &Path, write_set: &Path, base: &str
         )
         .replace("{write_set}", &write_set.display().to_string())
         .replace("{base}", base)
+        .replace("{plugin_dir}", &plugin.display().to_string())
+}
+
+/// repo の plugin を run dir 配下へ写し、その path を返す（設計 §5.2 / §6）。
+///
+/// Claude Code は**読み込んだ plugin dir の配下**を acceptEdits の自動承認から外す
+/// （sensitive）。便の worktree は `<repo>/.worktrees/<NAME>/<run>` ＝ repo を
+/// `--plugin-dir` に渡すと **その内側**なので、便の全 file で Edit / Write が deny される。
+/// 写しを repo の外（run dir 配下）へ置くことで、「repo の plugin を載せる」意図を保った
+/// まま worktree を保護対象から外す。
+///
+/// 写すのは **worktree の** [`PLUGIN_DIRS`]（＝便の base の内容）であって anchor の
+/// 現在値ではない。plugin を持たない repo では**空 dir を作るだけ**で進む
+/// （`{plugin_dir}` を使わない便を止めない）。
+fn copy_plugin(worktree: &Path, state_dir: &Path, run: &str) -> Result<PathBuf, String> {
+    let dest = plugin_path(state_dir, run);
+    // 再走で古い写しが残らないよう、先に空にする。
+    if dest.exists() {
+        std::fs::remove_dir_all(&dest)
+            .map_err(|err| format!("{} を空にできない: {err}", dest.display()))?;
+    }
+    std::fs::create_dir_all(&dest).map_err(|err| format!("{} を作れない: {err}", dest.display()))?;
+    for name in PLUGIN_DIRS {
+        let from = worktree.join(name);
+        if from.is_dir() {
+            copy_tree(&from, &dest.join(name))?;
+        }
+    }
+    Ok(dest)
+}
+
+/// dir を再帰 copy する。**file だけを写し、symlink は追わない**。
+///
+/// symlink を写すと、便の外を指す link 1 本で plugin dir の見かけが repo の外に
+/// なったまま中身が repo を指す（保護を外した意味が消える）。
+fn copy_tree(from: &Path, to: &Path) -> Result<(), String> {
+    std::fs::create_dir_all(to).map_err(|err| format!("{} を作れない: {err}", to.display()))?;
+    let entries =
+        std::fs::read_dir(from).map_err(|err| format!("{} を読めない: {err}", from.display()))?;
+    for entry in entries {
+        let entry = entry.map_err(|err| format!("{} を読めない: {err}", from.display()))?;
+        // `DirEntry::file_type` は link を辿らない（`symlink_metadata` 相当）。
+        let kind = entry
+            .file_type()
+            .map_err(|err| format!("{} の種別を読めない: {err}", entry.path().display()))?;
+        let target = to.join(entry.file_name());
+        if kind.is_dir() {
+            copy_tree(&entry.path(), &target)?;
+        } else if kind.is_file() {
+            std::fs::copy(entry.path(), &target)
+                .map_err(|err| format!("{} を写せない: {err}", entry.path().display()))?;
+        }
+    }
+    Ok(())
 }
 
 /// worktree を切る。既に在れば断る。

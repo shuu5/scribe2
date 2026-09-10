@@ -39,6 +39,13 @@ pub fn contract_path(state_dir: &Path, id: &str) -> PathBuf {
     run_dir(state_dir, id).join(CONTRACT_FILE)
 }
 
+/// 便の runner へ渡す plugin の写し（run dir 配下＝**repo の外**・設計 §5.2）。
+///
+/// run dir の規則は [`run_dir`] ただ 1 本から導く（dir の字面を 2 本目として書かない）。
+pub fn plugin_path(state_dir: &Path, id: &str) -> PathBuf {
+    run_dir(state_dir, id).join("plugin")
+}
+
 /// gate が逐条の rc を書く file。
 pub fn verify_log_path(state_dir: &Path, id: &str) -> PathBuf {
     run_dir(state_dir, id).join("verify.jsonl")
