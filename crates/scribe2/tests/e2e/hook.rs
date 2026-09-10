@@ -806,6 +806,69 @@ fn what_of(line: &str) -> String {
     }
 }
 
+/// **guard と meter が同じ入力で同じ使用率を返す**（出所が 1 本であることの歯）。
+///
+/// pane（statusline 90%）と transcript（650000 = 宣言窓 1000000 の 65%）を**わざと食い違わせ**、
+/// 同じ transcript を 2 面へ渡す。出所が 2 本ある形では meter が pane の 90 を、guard が
+/// transcript の 65 を返して割れる——cap 60% が何に対する 60% かを 1 か所で言えない状態である。
+#[test]
+fn hook_seat_guard_and_meter_agree_on_used_pct() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    let script = transcript_at(&state, "agree.jsonl", &usage_jsonl(650_000));
+    let pane = transcript_at(&state, "pane.txt", "❯ \n  90% 900k/1M Opus 5\n");
+    let meter = Command::new(bin())
+        .arg("seat")
+        .args(["meter", "--target", "unused", "--capture-file", &pane, "--transcript", &script])
+        .output()
+        .expect("binary を起動できる");
+    let shown = String::from_utf8_lossy(&meter.stdout).into_owned();
+    let target = repo.join("src").join("lib.rs");
+    let out = run_hook_args(
+        &["pre-tool-use", "--state-dir", &state.display().to_string()],
+        &seat_payload(&repo, "Edit", &target.display().to_string(), Some(&script)),
+    );
+    // **先に deny そのものを見る**。ここを見ないと、guard が通してしまう変異が
+    // 「使用率の字面が無い」という取り出しの失敗として落ち、理由を取り違える。
+    assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "65% は cap 以上なので止まる");
+    let text = stderr_text(&out);
+    // 2 面の使用率を**字面から取り出して**突き合わせる（どちらかを定数で書くと片側しか測れない）。
+    let from_meter = shown
+        .split("used_pct=")
+        .nth(1)
+        .and_then(|rest| rest.split_whitespace().next())
+        .expect("meter が使用率を出す");
+    let from_guard = text
+        .split("deny context ")
+        .nth(1)
+        .and_then(|rest| rest.split('%').next())
+        .expect("guard が使用率を名乗る");
+    assert_eq!(from_meter, from_guard, "2 面が同じ値を返す: meter={shown} guard={text}");
+    assert_eq!(from_meter, "65", "transcript を宣言窓で割った値である: {shown}");
+    assert!(!shown.contains("used_pct=90"), "pane の 90% は出ない: {shown}");
+}
+
+/// **使用率は切り捨てである**——`59.9001%` の周は止めない（cap 60%）。
+///
+/// 丸めは load-bearing で、切り上げると **cap 未満の周まで止まる**。1 本の口へ寄せた後は
+/// guard と meter が必ず同じだけずれるので、2 面の一致を見る歯では丸めを検出できない
+/// （s2-07l.75 lens H-1）。**floor と ceil が割れる点**（599001 / 1000000）を 1 つ置いて、
+/// 極性が反転すること自体を測る。
+#[test]
+fn hook_seat_guard_keeps_the_floor_rounding_at_the_boundary() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    let script = transcript_at(&state, "floor.jsonl", &usage_jsonl(599_001));
+    let before = inject_lines(&state).len();
+    let target = repo.join("src").join("lib.rs");
+    let out = run_hook_args(
+        &["pre-tool-use", "--state-dir", &state.display().to_string()],
+        &seat_payload(&repo, "Edit", &target.display().to_string(), Some(&script)),
+    );
+    assert_silent(&out, "59.9001% は cap 未満＝止めない（切り上げるとここが deny になる）");
+    assert_eq!(inject_lines(&state).len(), before, "通した周は記録を増やさない");
+}
+
 /// 上限**以上**の周は編集を止める（rc 2 + stderr 1 行 + stdout 0 byte + 記録 1 行）。
 ///
 /// 宣言（rules 行）は cap 60% / 窓 1000000 token なので、650000 は 65% で上限以上である。

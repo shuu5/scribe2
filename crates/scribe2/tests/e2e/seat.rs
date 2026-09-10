@@ -12,7 +12,9 @@ use std::process::{Command, Output};
 use std::thread::sleep;
 use std::time::{Duration, Instant, SystemTime};
 use vessel::cli_outcome::{RC_OK, RC_REFUSED};
+use vessel::rules::manifest::Manifest;
 use vessel::seat::inject::tick_path;
+use vessel::seat::meter::window_of;
 
 /// binary の path。
 fn bin() -> &'static str {
@@ -145,13 +147,16 @@ fn seat_meter_rejects_out_of_bound_statusline() {
     fs::remove_dir_all(&dir).ok();
 }
 
-/// pane に statusline が無い周は transcript の **最後の有効な usage** へ落ちる。
+/// **transcript が名指された周は transcript を見る**（健全な statusline が在っても）。
 ///
+/// 出所を入力で決める 1 本道にするための歯である——pane 一次のままだと、hook の中で pane を
+/// 持てない guard（C2.2）と meter が同じ席の同じ瞬間に違う値を返す。値は最後の有効な usage で、
 /// decoy 3 種（sidechain / usage null / 和 0）はいずれも数えない。
 #[test]
-fn seat_meter_falls_back_to_transcript_last_usage() {
+fn seat_meter_reads_the_named_transcript_over_the_pane() {
     let dir = tmp();
-    let pane = fixture(&dir, "pane.txt", "❯ \n  ready\n");
+    // pane 側は**健全な statusline**（90%）。transcript が勝つので、この値は出ない。
+    let pane = fixture(&dir, "pane.txt", "❯ \n  90% 900k/1M Opus 5\n");
     let jsonl = concat!(
         r#"{"type":"assistant","isSidechain":false,"message":{"usage":{"input_tokens":200,"cache_creation_input_tokens":300,"cache_read_input_tokens":6500}}}"#,
         "\n",
@@ -161,8 +166,10 @@ fn seat_meter_falls_back_to_transcript_last_usage() {
         "\n",
         r#"{"type":"assistant","isSidechain":false,"message":{"usage":{"input_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}"#,
         "\n",
-        // **最後の**有効 entry（これが採られる＝先頭の 7000 ではない）。
-        r#"{"type":"assistant","isSidechain":false,"message":{"usage":{"input_tokens":10,"cache_creation_input_tokens":20,"cache_read_input_tokens":70}}}"#,
+        // **最後の**有効 entry（これが採られる＝先頭の 7000 ではない）。宣言窓 1000000 に対して
+        // 250000 = 25% で、**使用率が 0 でも 100 でもない**値になる形にしてある（0% は
+        // 「割っていない実装」でも通ってしまう）。
+        r#"{"type":"assistant","isSidechain":false,"message":{"usage":{"input_tokens":30000,"cache_creation_input_tokens":70000,"cache_read_input_tokens":150000}}}"#,
         "\n",
     );
     let transcript = fixture(&dir, "transcript.jsonl", jsonl);
@@ -171,10 +178,73 @@ fn seat_meter_falls_back_to_transcript_last_usage() {
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
     assert_eq!(
         stdout_of(&out),
-        "seat: meter used_pct=- used_tokens=100 window_tokens=- source=jsonl\n",
-        "最後の有効な和を採る（先頭の 7000 ではない）・取れない値は - で 0 に化けない"
+        "seat: meter used_pct=25 used_tokens=250000 window_tokens=1000000 source=jsonl+rules\n",
+        "最後の有効な和を宣言窓で割った実値が載る（pane の 90% ではない）"
     );
     fs::remove_dir_all(&dir).ok();
+}
+
+/// **空の `--transcript` は「渡していない」と同じ**（trim 後）。
+///
+/// 空の口をそのまま path として扱うと、渡し忘れが `unreadable`（file が壊れている）に化け、
+/// 健全な pane が在るのに不成立になる＝記録から原因を取り違える。
+#[test]
+fn seat_meter_treats_empty_transcript_as_absent() {
+    let dir = tmp();
+    let pane = fixture(&dir, "pane.txt", "❯ \n  90% 900k/1M Opus 5\n");
+    let out = meter_on(&pane, Some("   "));
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(
+        stdout_of(&out),
+        "seat: meter used_pct=90 used_tokens=900000 window_tokens=1000000 source=pane\n",
+        "空の口は渡し忘れと同じ＝pane を読む（unreadable に化けない）"
+    );
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// transcript が名指されたのに測れない周は、**guard の記録と同じ語**で不成立になる。
+///
+/// 同じ条件を 2 面が別の語で呼ぶと（本便より前の `jsonl-no-usage` と `no-usage`）、記録と
+/// CLI を突き合わせたときに同じ事象が別物に見える。語は 2 段を畳まない（file が読めないのか、
+/// 有効な usage が無いのか）。
+#[test]
+fn seat_meter_names_the_same_unmeasured_reasons_as_the_guard() {
+    let dir = tmp();
+    let pane = fixture(&dir, "pane.txt", "❯ \n  90% 900k/1M Opus 5\n");
+    let empty = fixture(&dir, "empty.jsonl", "");
+    for (transcript, reason) in [(format!("{empty}-nope"), "unreadable"), (empty.clone(), "no-usage")] {
+        let out = meter_on(&pane, Some(&transcript));
+        assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "測れない周は rc≠0: {reason}");
+        assert_eq!(stdout_of(&out), "", "不成立に stdout は出さない: {reason}");
+        assert_eq!(
+            stderr_of(&out),
+            format!("seat: meter unmeasured reason={reason}\n"),
+            "guard の記録と同じ語で名乗る（pane の 90% へ逃げない）"
+        );
+    }
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// 窓の宣言が**不発効**か**0** なら窓を引けない（＝割らずに不成立へ倒す側）。
+///
+/// 埋め込みの manifest では起こらないが、3 つの述語（行の有無 / `enabled` / `> 0`）を測る口が
+/// 無いと、どれを外しても歯が落ちない。`Manifest::parse` へ fixture を渡して動かす
+/// （`tests/e2e/fleet.rs` の `LockPolicy::from_rules` と同型）。
+#[test]
+fn seat_meter_refuses_a_window_row_that_is_off_or_zero() {
+    let row = |extra: &str, value: u64| {
+        format!(
+            "schema = 1\n\n[[rule]]\nid = \"seat.context_window_tokens\"\nkind = \"SeatContextWindowTokens\"\nvalue = {value}\n{extra}ruling = \"r\"\nruled_at = \"d\"\n"
+        )
+    };
+    let live = Manifest::parse(&row("", 1_000_000)).expect("fixture を読める");
+    assert_eq!(window_of(&live), Some(1_000_000), "発効した正の行は引ける");
+    let off = Manifest::parse(&row("enabled = false\n", 1_000_000)).expect("fixture を読める");
+    assert_eq!(window_of(&off), None, "不発効の行は引かない（値は在っても使わない）");
+    let zero = Manifest::parse(&row("", 0)).expect("fixture を読める");
+    assert_eq!(window_of(&zero), None, "0 は引かない（0 で割らない）");
+    let absent = Manifest::parse("schema = 1\n").expect("fixture を読める");
+    assert_eq!(window_of(&absent), None, "行そのものが無い周も引かない");
 }
 
 /// 出所が 1 つも成立しない周は理由つきで不成立になる（0% に化けない）。
