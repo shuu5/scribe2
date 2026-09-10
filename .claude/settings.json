@@ -1,5 +1,6 @@
 {
   "enabledPlugins": {
-    "folio@folio": true
+    "folio@folio": true,
+    "scribe2@scribe2": true
   }
 }
