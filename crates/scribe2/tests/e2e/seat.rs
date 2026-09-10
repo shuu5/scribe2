@@ -234,16 +234,61 @@ fn capture(socket: &str, target: &str) -> String {
     String::from_utf8_lossy(&tmux(socket, &["capture-pane", "-p", "-t", target]).stdout).into_owned()
 }
 
-/// 独立 socket に `sh -i` の session を 1 つ立て、prompt が描かれたら `true`。
+/// 独立 socket の session を畳む RAII guard。
 ///
-/// **live server には触れない**（socket は tmp・設定は `-f /dev/null`）。判定を返すのは
-/// helper で panic しないためで、落とすのは呼び側の `#[test]` である。
-fn start_seat(socket: &str, name: &str) -> bool {
+/// **panic 経路でも drop が走る**のが要点である: 明示の後始末は assert が落ちた周に
+/// 飛ばされるので、隔離 socket の server（と子の `sh`）が残り続けた——`flip-check` の
+/// base overlay のように「わざと RED」を撃つたびに増える（実測 2026-09-10: 49 本）。
+struct IsolatedSeat {
+    /// 独立 socket の path。
+    socket: String,
+    /// session 名。
+    name: String,
+    /// prompt が描かれたか。
+    ready: bool,
+}
+
+impl IsolatedSeat {
+    /// prompt が描かれたか。**落とすのは呼び側の `#[test]`** で helper では panic しない。
+    fn ready(&self) -> bool {
+        self.ready
+    }
+}
+
+impl Drop for IsolatedSeat {
+    /// session を畳む（server は session が尽きると自分で終わる・`kill-server` は使わない）。
+    ///
+    /// ★**socket file を消した後では届かない**（実測 2026-09-10: `error connecting` で
+    /// rc 1・server は生き残る）。ゆえに歯の成功経路では `fs::remove_dir_all` の**前**に
+    /// 明示 `drop` する——panic 経路では remove が飛ぶので、この drop が最後の砦になる。
+    ///
+    /// ★**ここでは panic しない**: `tmux` を spawn できない周（PATH に無い等）に
+    /// [`tmux`] の `expect` を通すと、cleanup 中の drop で二重 panic になり **abort** する
+    /// ——読める失敗が SIGABRT へ化ける（実測 2026-09-10: rc 134・`panic in a destructor
+    /// during cleanup`）。spawn の失敗は捨てる（その周は server がそもそも立っていない）。
+    fn drop(&mut self) {
+        let _ = Command::new("tmux")
+            .args(["-S", &self.socket, "-f", "/dev/null", "kill-session", "-t", &self.name])
+            .output();
+    }
+}
+
+/// 独立 socket に `sh -i` の session を 1 つ立て、畳む guard を返す。
+///
+/// **live server には触れない**（socket は tmp・設定は `-f /dev/null`）。判定を guard へ
+/// 載せて返すのは helper で panic しないためで、落とすのは呼び側の `#[test]` である。
+fn start_seat(socket: &str, name: &str) -> IsolatedSeat {
     start_seat_with(socket, name, "PS1=❯ ", PROMPT)
 }
 
 /// prompt の字を選んで session を立てる（`❯` を持たない席も作れる）。
-fn start_seat_with(socket: &str, name: &str, ps1: &str, needle: char) -> bool {
+fn start_seat_with(socket: &str, name: &str, ps1: &str, needle: char) -> IsolatedSeat {
+    // guard を**先に**作る: `new-session` が通った後で prompt を待つ間に panic しても畳む。
+    let mut seat = IsolatedSeat {
+        socket: socket.to_owned(),
+        name: name.to_owned(),
+        ready: false,
+    };
     let out = tmux(
         socket,
         &[
@@ -251,25 +296,21 @@ fn start_seat_with(socket: &str, name: &str, ps1: &str, needle: char) -> bool {
         ],
     );
     if !out.status.success() {
-        return false;
+        return seat;
     }
     let deadline = Instant::now() + PROMPT_WAIT;
     while Instant::now() < deadline {
         if capture(socket, name).trim_end().ends_with(needle) {
-            return true;
+            seat.ready = true;
+            return seat;
         }
         sleep(Duration::from_millis(100));
     }
-    false
+    seat
 }
 
 /// prompt が描かれるのを待つ上限。
 const PROMPT_WAIT: Duration = Duration::from_secs(5);
-
-/// session を畳む（server は session が尽きると自分で終わる・`kill-server` は使わない）。
-fn stop_seat(socket: &str, name: &str) {
-    tmux(socket, &["kill-session", "-t", name]);
-}
 
 /// 送達すると tick.jsonl へ FR21 と同じ schema の 1 行が残る。
 #[test]
@@ -281,7 +322,8 @@ fn seat_inject_delivers_and_records_on_isolated_socket() {
     // **記録の dir 名と表示は潰した字面**になり、潰しが効いていることが測れる。
     let target = "seatdeliver:0.0";
     let sanitized = "seatdeliver_0.0";
-    assert!(start_seat(&socket, name), "独立 socket に prompt 付きの session を立てられる");
+    let guard = start_seat(&socket, name);
+    assert!(guard.ready(), "独立 socket に prompt 付きの session を立てられる");
     let state = dir.join("state");
     let marker = "seat-e2e-delivered";
     let payload = format!("echo {marker}");
@@ -322,7 +364,8 @@ fn seat_inject_delivers_and_records_on_isolated_socket() {
         line.contains(&format!(r#""bytes":{}"#, payload.len())),
         "byte 数は payload の byte 長: {line}"
     );
-    stop_seat(&socket, name);
+    // socket を消す**前**に畳む（消してからでは kill-session が届かない・実測 2026-09-10）。
+    drop(guard);
     fs::remove_dir_all(&dir).ok();
 }
 
@@ -332,7 +375,8 @@ fn seat_inject_refuses_when_input_line_is_busy() {
     let dir = tmp();
     let socket = socket_of(&dir);
     let name = "seat-busy";
-    assert!(start_seat(&socket, name), "独立 socket に prompt 付きの session を立てられる");
+    let guard = start_seat(&socket, name);
+    assert!(guard.ready(), "独立 socket に prompt 付きの session を立てられる");
     let state = dir.join("state");
     let marker = "seat-e2e-busy";
     tmux(&socket, &["send-keys", "-t", name, "-l", "partial"]);
@@ -367,7 +411,8 @@ fn seat_inject_refuses_when_input_line_is_busy() {
         !tick_file(&state, name).exists(),
         "送っていない周は記録も書かない"
     );
-    stop_seat(&socket, name);
+    // socket を消す**前**に畳む（消してからでは kill-session が届かない・実測 2026-09-10）。
+    drop(guard);
     fs::remove_dir_all(&dir).ok();
 }
 
@@ -410,7 +455,8 @@ fn seat_inject_reports_residual_when_input_line_stays_dirty() {
     let dir = tmp();
     let socket = socket_of(&dir);
     let name = "seat-residual";
-    assert!(start_seat(&socket, name), "独立 socket に prompt 付きの session を立てられる");
+    let guard = start_seat(&socket, name);
+    assert!(guard.ready(), "独立 socket に prompt 付きの session を立てられる");
     let state = dir.join("state");
 
     let out = run_seat(&[
@@ -435,7 +481,8 @@ fn seat_inject_reports_residual_when_input_line_stays_dirty() {
         !tick_file(&state, name).exists(),
         "送達を確認できない周は記録しない"
     );
-    stop_seat(&socket, name);
+    // socket を消す**前**に畳む（消してからでは kill-session が届かない・実測 2026-09-10）。
+    drop(guard);
     fs::remove_dir_all(&dir).ok();
 }
 
@@ -446,8 +493,9 @@ fn seat_inject_refuses_when_prompt_is_not_locatable() {
     let socket = socket_of(&dir);
     let name = "seat-noprompt";
     // `❯` を持たない席（入力欄の位置が読めない）。
+    let guard = start_seat_with(&socket, name, "PS1=$ ", '$');
     assert!(
-        start_seat_with(&socket, name, "PS1=$ ", '$'),
+        guard.ready(),
         "独立 socket に prompt の字が違う session を立てられる"
     );
     let state = dir.join("state");
@@ -474,7 +522,8 @@ fn seat_inject_refuses_when_prompt_is_not_locatable() {
     let pane = capture(&socket, name);
     assert!(!pane.contains(marker), "marker は 1 度も現れない: {pane}");
     assert!(!tick_file(&state, name).exists(), "記録も書かない");
-    stop_seat(&socket, name);
+    // socket を消す**前**に畳む（消してからでは kill-session が届かない・実測 2026-09-10）。
+    drop(guard);
     fs::remove_dir_all(&dir).ok();
 }
 
@@ -484,7 +533,8 @@ fn seat_inject_refuses_empty_payload() {
     let dir = tmp();
     let socket = socket_of(&dir);
     let name = "seat-empty";
-    assert!(start_seat(&socket, name), "独立 socket に prompt 付きの session を立てられる");
+    let guard = start_seat(&socket, name);
+    assert!(guard.ready(), "独立 socket に prompt 付きの session を立てられる");
     let state = dir.join("state");
     let before = capture(&socket, name);
 
@@ -509,7 +559,8 @@ fn seat_inject_refuses_empty_payload() {
     );
     assert_eq!(capture(&socket, name), before, "pane は 1 文字も変わらない");
     assert!(!state.exists(), "記録も書かない");
-    stop_seat(&socket, name);
+    // socket を消す**前**に畳む（消してからでは kill-session が届かない・実測 2026-09-10）。
+    drop(guard);
     fs::remove_dir_all(&dir).ok();
 }
 
@@ -605,8 +656,12 @@ fn wm_file(dir: &Path, name: &str, seat: &str) -> PathBuf {
 /// 退避物**ではない** file を 3 つ置く（数えたら `/clear` の根拠が水増しされる形）。
 ///
 /// 名前の前置きが違う `.md`／`.consumed.md`／`seat:` が frontmatter でなく**本文**に在る WM。
+///
+/// ★前置きが違う decoy は **18 文字以上の長い名前**にする。短い名前（旧 `notes.md` = 8 文字）
+/// だと前置きの条件を外す変異が長さの条件（最短形 18 文字）で偶然落ちるので、前置きの歯が
+/// 空虚になる——長さの条件は負例 1 本（`seat_tick_ignores_short_wm_like_names`）で単独に測る。
 fn wm_decoys(dir: &Path, seat: &str) {
-    wm_file(dir, "notes.md", seat);
+    wm_file(dir, "session-notes-archive-2026.md", seat);
     wm_file(dir, "working-memory.old.consumed.md", seat);
     // frontmatter を持たず、**本文の行頭**に名乗りが在る形（anchor を外すと拾ってしまう）。
     fs::write(
@@ -675,7 +730,12 @@ fn run_seat_in(cwd: &Path, args: &[&str]) -> Output {
 /// 受け取った行は `log` へ 1 行ずつ積むので、**送った順序は pane の描画でなく席が受けた行**で
 /// 測れる。`mute_after_clear` の席は作り直した後に echo を止める＝**作り直しは確認できるが
 /// 復元の送達は確認できない**周（`restore-unconfirmed`）を作る。
-fn start_clearing_seat(socket: &str, name: &str, log: &Path, mute_after_clear: bool) -> bool {
+fn start_clearing_seat(
+    socket: &str,
+    name: &str,
+    log: &Path,
+    mute_after_clear: bool,
+) -> IsolatedSeat {
     let (after_clear, on_other) = if mute_after_clear {
         ("stty -echo 2>/dev/null", ":")
     } else {
@@ -687,13 +747,19 @@ fn start_clearing_seat(socket: &str, name: &str, log: &Path, mute_after_clear: b
          *) {on_other} ;; esac; done",
         log.display()
     );
+    let mut seat = IsolatedSeat {
+        socket: socket.to_owned(),
+        name: name.to_owned(),
+        ready: false,
+    };
     let out = tmux(
         socket,
         &[
             "new-session", "-d", "-s", name, "-x", "120", "-y", "40", "sh", "-c", &script,
         ],
     );
-    out.status.success() && wait_prompt(socket, name)
+    seat.ready = out.status.success() && wait_prompt(socket, name);
+    seat
 }
 
 /// prompt が描かれるのを待つ。
@@ -867,7 +933,8 @@ fn seat_tick_injects_pointer_and_stamps_on_isolated_socket() {
     let dir = tmp();
     let socket = socket_of(&dir);
     let name = "seattick";
-    assert!(start_seat(&socket, name), "独立 socket に prompt 付きの session を立てられる");
+    let guard = start_seat(&socket, name);
+    assert!(guard.ready(), "独立 socket に prompt 付きの session を立てられる");
     let state = dir.join("state");
     let wm = dir.join("wm");
     fs::create_dir_all(&wm).ok();
@@ -898,7 +965,8 @@ fn seat_tick_injects_pointer_and_stamps_on_isolated_socket() {
     backdate(&stamp, STALE_S + 1);
     let out = run_seat(&args);
     assert_eq!(stdout_of(&out), format!("seat: tick decision=inject target={name}\n"));
-    stop_seat(&socket, name);
+    // socket を消す**前**に畳む（消してからでは kill-session が届かない・実測 2026-09-10）。
+    drop(guard);
     fs::remove_dir_all(&dir).ok();
 }
 
@@ -915,6 +983,153 @@ fn seat_tick_reports_error_with_rc_one_when_state_dir_is_unresolvable() {
     assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "失敗は rc 1（timer から見て成功に見せない）");
     assert_eq!(stdout_of(&out), "", "失敗した周は stdout 0 行");
     assert_eq!(stderr_of(&out), "seat: tick decision=error reason=state-dir\n");
+    fs::remove_dir_all(&dir).ok();
+}
+
+// flip-check: retroactive s2-07l.50
+// 下の 3 本は後から足す歯である。実装（`src/seat/*.rs`）は 1 行も変えておらず、穴は歯の
+// 側に在った——base に対して新しく赤くなる歯を作れないので、逃がしを札 1 行で明示する。
+
+/// pane は読めるが tmux を撃てない周は `decision=error reason=inject-…` と **rc 1**。
+///
+/// 既存の error 歯は `run()` の早期 return（`--state-dir` が解けない組）しか撃たず、
+/// **judgment を経由した Error 腕**——順序 4 を通って `inject_pointer` が注入を断られる
+/// 組——に届いていなかった。pane を `--capture-file` で読ませると tmux を 1 度も撃たずに
+/// 順序 2 を通れるので、**注入だけが tmux に当たって落ちる**組が作れる。
+///
+/// reason の続き（`tmux-failed` 等）は固定しない: 注入の断りは字面が noop の語彙と重なる
+/// ので、器が約束しているのは **`inject-` の前置きで分けること**だけである。
+#[test]
+fn seat_tick_reports_error_when_pane_is_readable_but_tmux_is_unreachable() {
+    let dir = tmp();
+    let target = "seatunreach";
+    let state = dir.join("state");
+    let wm = dir.join("wm");
+    // 順序 3 は**自席の**退避物だけを見る。別席の名乗りと decoy は「3 を通った」側の材料で、
+    // ここで止まると順序 4 へ届かず、この歯は Error 腕を 1 度も撃たない。
+    wm_file(&wm, "working-memory.parked.md", "other:seat");
+    wm_decoys(&wm, target);
+    fs::write(dir.join("pane.txt"), IDLE_PANE).expect("pane fixture を置ける");
+    let (wm_s, state_s) = (wm.display().to_string(), state.display().to_string());
+    let (sock_s, pane_s) = (
+        dir.join("absent-sock").display().to_string(),
+        dir.join("pane.txt").display().to_string(),
+    );
+
+    let out = run_seat(&[
+        "tick", "--target", target, "--wm-dir", &wm_s, "--tmux-socket", &sock_s,
+        "--state-dir", &state_s, "--capture-file", &pane_s,
+    ]);
+
+    assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "注入を断られた周は rc 1");
+    assert_eq!(stdout_of(&out), "", "失敗した周は stdout 0 行");
+    assert!(
+        stderr_of(&out).starts_with("seat: tick decision=error reason=inject-"),
+        "注入の断りは inject- の前置きで noop の語彙と分ける: {}",
+        stderr_of(&out)
+    );
+    let recorded = fs::read_to_string(tick_file(&state, target)).unwrap_or_default();
+    assert!(
+        recorded
+            .lines()
+            .last()
+            .is_some_and(|line| line.contains(r#""what":"decision=error reason=inject-"#)),
+        "記録の末尾 1 行も理由まで残す（表示と記録で同じ字面）: {recorded}"
+    );
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// `working-memory.` で始まり `.md` で終わるが **17 文字**の名前は退避物に数えない。
+///
+/// 長さの条件（前置き + 接尾の最短形 = 18 文字）を外す変異が生き延びていた。decoy が
+/// 短い名前だった間は、前置きを外す変異が**長さで**落ち、長さを外す変異は誰にも撃たれ
+/// なかった——ここは長さだけが効く負例を単独で置く。
+///
+/// 期待は「自席の退避物なし」で順序 3 を**通って** 4 で止まる形（`cycle-live`）である。
+/// 長さの条件が消えると同じ fixture が `wm-unconsumed` へ倒れる＝理由の字面が変異を捕まえる。
+#[test]
+fn seat_tick_ignores_short_wm_like_names() {
+    let dir = tmp();
+    let target = "seatshort";
+    let state = dir.join("state");
+    let seat = seat_dir_of(&state, target);
+    fs::create_dir_all(&seat).expect("seat dir を作れる");
+    // 順序 4 で止める（TTL 内の lock）＝3 を通ったことが理由の字面で分かる。
+    // ★`lock_is_live` は **mtime だけ**を見て中身を読まない: `deadline:0` は失効に見えるが、
+    // いま書いた file なので live 側である（既存の歯と同じ idiom）。
+    fs::write(seat.join("cycle.lock"), "{\"pid\":1,\"deadline\":0}\n").expect("lock を置ける");
+    let wm = dir.join("wm");
+    fs::create_dir_all(&wm).expect("wm dir を作れる");
+    // 前置きと接尾は満たすが 17 文字＝最短形に 1 文字足りない（名乗りは自席にしておく）。
+    let short = wm.join("working-memory.md");
+    fs::write(&short, format!("---\nseat: {target}\n---\n\n## 計画弧\n- 続き\n"))
+        .expect("短い名前の file を置ける");
+    assert_eq!(
+        short.file_name().and_then(std::ffi::OsStr::to_str).map(str::len),
+        Some(17),
+        "負例は 17 文字ちょうど（境界の 1 文字下）"
+    );
+    fs::write(dir.join("pane.txt"), IDLE_PANE).expect("pane fixture を置ける");
+    let (wm_s, state_s) = (wm.display().to_string(), state.display().to_string());
+    let (sock_s, pane_s) = (
+        dir.join("absent-sock").display().to_string(),
+        dir.join("pane.txt").display().to_string(),
+    );
+
+    let out = run_seat(&[
+        "tick", "--target", target, "--wm-dir", &wm_s, "--tmux-socket", &sock_s,
+        "--state-dir", &state_s, "--capture-file", &pane_s,
+    ]);
+
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(
+        stdout_of(&out),
+        "seat: tick decision=noop reason=cycle-live\n",
+        "短すぎる名前は自席の退避物に数えない＝3 を通って 4 で止まる"
+    );
+    // 表示の完全一致だけでは 1 段しか測れない（`wm-unconsumed` を除く assert は上の
+    // 完全一致に包含されて**発火しない**）。記録側の末尾 1 行でもう 1 段測る。
+    let recorded = fs::read_to_string(tick_file(&state, target)).unwrap_or_default();
+    assert!(
+        recorded
+            .lines()
+            .last()
+            .is_some_and(|line| line.contains(r#""what":"decision=noop reason=cycle-live""#)),
+        "記録の末尾 1 行も cycle-live（長さの条件が消えると wm-unconsumed へ倒れる）: {recorded}"
+    );
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// guard が drop されたら独立 socket の server は終わっている。
+///
+/// 後始末を「歯の末尾の 1 行」で持つと、assert が落ちた周に飛ばされて server が残る。
+/// RAII なら panic 経路でも畳めるので、**畳まれることそのもの**を 1 本で測る。
+#[test]
+fn seat_isolated_session_is_torn_down_when_guard_drops() {
+    let dir = tmp();
+    let socket = socket_of(&dir);
+    let name = "seatguard";
+    {
+        let guard = start_seat(&socket, name);
+        assert!(guard.ready(), "独立 socket に prompt 付きの session を立てられる");
+        // guard が生きている間は繋がる＝下の「繋がらない」が空虚でないことの対照。
+        assert!(
+            tmux(&socket, &["list-sessions"]).status.success(),
+            "guard が生きている間は server も生きている"
+        );
+    }
+
+    // session が尽きた server は自分で終わる＝socket へ繋げなくなる（終了は非同期ゆえ待つ）。
+    let deadline = Instant::now() + PROMPT_WAIT;
+    let mut gone = false;
+    while Instant::now() < deadline {
+        if !tmux(&socket, &["list-sessions"]).status.success() {
+            gone = true;
+            break;
+        }
+        sleep(Duration::from_millis(100));
+    }
+    assert!(gone, "guard の drop で server が終わっている");
     fs::remove_dir_all(&dir).ok();
 }
 
@@ -1037,7 +1252,8 @@ fn seat_cycle_refuses_when_lock_is_live_and_reclaims_stale_lock() {
     let socket = socket_of(&dir);
     let name = "seatlock";
     let log = dir.join("seat.log");
-    assert!(start_clearing_seat(&socket, name, &log, false), "fake な席を立てられる");
+    let guard = start_clearing_seat(&socket, name, &log, false);
+    assert!(guard.ready(), "fake な席を立てられる");
     let state = dir.join("state");
     let wm = dir.join("wm");
     wm_file(&wm, "working-memory.live.md", name);
@@ -1074,7 +1290,8 @@ fn seat_cycle_refuses_when_lock_is_live_and_reclaims_stale_lock() {
         "失効 lock は進行を止めない"
     );
     assert!(!lock.exists(), "済んだ lock は返す");
-    stop_seat(&socket, name);
+    // socket を消す**前**に畳む（消してからでは kill-session が届かない・実測 2026-09-10）。
+    drop(guard);
     fs::remove_dir_all(&dir).ok();
 }
 
@@ -1088,7 +1305,8 @@ fn seat_cycle_sends_clear_then_restore_in_order() {
     let socket = socket_of(&dir);
     let name = "seatcycle";
     let log = dir.join("seat.log");
-    assert!(start_clearing_seat(&socket, name, &log, false), "fake な席を立てられる");
+    let guard = start_clearing_seat(&socket, name, &log, false);
+    assert!(guard.ready(), "fake な席を立てられる");
     let state = dir.join("state");
     let wm = dir.join("wm");
     let parked = wm_file(&wm, "working-memory.parked.md", name);
@@ -1111,7 +1329,8 @@ fn seat_cycle_sends_clear_then_restore_in_order() {
     let recorded = fs::read_to_string(tick_file(&state, name)).unwrap_or_default();
     assert!(recorded.contains(r#""who":"seat-cycle""#), "cycle を 1 行残す: {recorded}");
     assert!(recorded.contains(r#""what":"cycle done""#), "{recorded}");
-    stop_seat(&socket, name);
+    // socket を消す**前**に畳む（消してからでは kill-session が届かない・実測 2026-09-10）。
+    drop(guard);
     fs::remove_dir_all(&dir).ok();
 }
 
@@ -1124,7 +1343,8 @@ fn seat_cycle_reports_clear_unconfirmed_when_session_is_not_rebuilt() {
     let dir = tmp();
     let socket = socket_of(&dir);
     let name = "seatstuck";
-    assert!(start_seat(&socket, name), "独立 socket に prompt 付きの session を立てられる");
+    let guard = start_seat(&socket, name);
+    assert!(guard.ready(), "独立 socket に prompt 付きの session を立てられる");
     let state = dir.join("state");
     let wm = dir.join("wm");
     wm_file(&wm, "working-memory.stuck.md", name);
@@ -1144,7 +1364,8 @@ fn seat_cycle_reports_clear_unconfirmed_when_session_is_not_rebuilt() {
         !seat_dir_of(&state, name).join("cycle.lock").exists(),
         "失敗した周も lock を返す"
     );
-    stop_seat(&socket, name);
+    // socket を消す**前**に畳む（消してからでは kill-session が届かない・実測 2026-09-10）。
+    drop(guard);
     fs::remove_dir_all(&dir).ok();
 }
 
@@ -1155,7 +1376,8 @@ fn seat_cycle_reports_restore_unconfirmed_when_seat_goes_silent() {
     let socket = socket_of(&dir);
     let name = "seatmute";
     let log = dir.join("seat.log");
-    assert!(start_clearing_seat(&socket, name, &log, true), "作り直し後に黙る席を立てられる");
+    let guard = start_clearing_seat(&socket, name, &log, true);
+    assert!(guard.ready(), "作り直し後に黙る席を立てられる");
     let state = dir.join("state");
     let wm = dir.join("wm");
     wm_file(&wm, "working-memory.mute.md", name);
@@ -1177,7 +1399,8 @@ fn seat_cycle_reports_restore_unconfirmed_when_seat_goes_silent() {
         !seat_dir_of(&state, name).join("cycle.lock").exists(),
         "失敗した周も lock を返す"
     );
-    stop_seat(&socket, name);
+    // socket を消す**前**に畳む（消してからでは kill-session が届かない・実測 2026-09-10）。
+    drop(guard);
     fs::remove_dir_all(&dir).ok();
 }
 
@@ -1188,7 +1411,8 @@ fn seat_tick_runs_cycle_when_parked() {
     let socket = socket_of(&dir);
     let name = "seatparked";
     let log = dir.join("seat.log");
-    assert!(start_clearing_seat(&socket, name, &log, false), "fake な席を立てられる");
+    let guard = start_clearing_seat(&socket, name, &log, false);
+    assert!(guard.ready(), "fake な席を立てられる");
     let state = dir.join("state");
     let wm = dir.join("wm");
     wm_file(&wm, "working-memory.parked.md", name);
@@ -1210,6 +1434,7 @@ fn seat_tick_runs_cycle_when_parked() {
         "/clear\n/rebrief\n",
         "作り直して復元した"
     );
-    stop_seat(&socket, name);
+    // socket を消す**前**に畳む（消してからでは kill-session が届かない・実測 2026-09-10）。
+    drop(guard);
     fs::remove_dir_all(&dir).ok();
 }
