@@ -58,7 +58,7 @@
 </ul>
 </details>
 <details>
-<summary>accepted <span class="nav-count">(11)</span></summary>
+<summary>accepted <span class="nav-count">(12)</span></summary>
 <ul>
   <li><a href="decisions/ADR-0001-rust-single-static-binary.html">ADR-0001 — 実装言語と構成 = Rust 単一 static binary (Go / typed Python / TypeScript 却下)</a> <span class="nav-meta">adr</span></li>
   <li><a href="decisions/ADR-0002-test-lint-toolchain.html">ADR-0002 — test / lint toolchain = cargo nextest・粒度 lint は forbid・構造検査は cargo xtask check</a> <span class="nav-meta">adr</span></li>
@@ -71,6 +71,7 @@
   <li><a href="decisions/ADR-0009-vessel-grants-runner-permissions-and-mutation-proof.html">ADR-0009 — runner の権限と非空虚性の検証は器が manifest から与える (口座設定の暗黙継承・host 側 script・契約への共通規律の手書きを廃止)</a> <span class="nav-meta">adr</span></li>
   <li><a href="decisions/ADR-0010-vessel-declaration-holds-allowlist-and-common-verify.html">ADR-0010 — runner の allowlist と gate の共通 verify の値は対象 repo の vessel 宣言が持ち、 manifest は上限を持つ (ADR-0009 §2.1 / §2.4 の値の置き場を部分 supersede)</a> <span class="nav-meta">adr</span></li>
   <li><a href="decisions/ADR-0011-vessel-launches-claude-without-settings.html">ADR-0011 — 器が起こす claude (runner / lens) は口座と対象 repo の settings を 1 つも読まない (--setting-sources 空 + --strict-mcp-config・ADR-0009 §2.1 / ADR-0010 §2.4 の起動 flag を部分 supersede)</a> <span class="nav-meta">adr</span></li>
+  <li><a href="decisions/ADR-0012-rate-limit-detection-reads-dedicated-record.html">ADR-0012 — 上限の検出は専用 record (rate_limit_event) の構造化 field で行い、 本文への字面照合を畳む</a> <span class="nav-meta">adr</span></li>
 </ul>
 </details>
 </section>

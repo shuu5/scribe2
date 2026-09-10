@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="folio-doc-type" content="adr">
+<meta name="folio-layer" content="project">
+<meta name="folio-version" content="0.4.6">
+<meta name="folio-status" content="accepted">
+<meta name="folio-stakeholders" content="Developer, AI Agent, External Reviewer">
+<meta name="folio-adr-id" content="0012">
+<meta name="folio-adr-date" content="2026-09-11">
+<title>ADR-0012 — 上限の検出は専用 record (rate_limit_event) の構造化 field で行い、 本文への字面照合を畳む</title>
+<link rel="stylesheet" href="../../common.css">
+<script type="application/ld+json">
+{
+  "@context": {
+    "dc": "http://purl.org/dc/terms/",
+    "schema": "https://schema.org/",
+    "folio": "https://folio.dev/spec/v1/"
+  },
+  "@id": "./ADR-0012-rate-limit-detection-reads-dedicated-record.html",
+  "@type": "schema:TechArticle",
+  "dc:isPartOf": [
+    { "@id": "./README.html" }
+  ],
+  "dc:title": "ADR-0012 — 上限の検出は専用 record (rate_limit_event) の構造化 field で行い、 本文への字面照合を畳む",
+  "folio:version": "0.4.6",
+  "folio:stakeholders": ["Developer", "AI Agent", "External Reviewer"],
+  "dc:references": [
+    { "@id": "../spec/constitution.html#c9" },
+    { "@id": "../spec/constitution.html#c11" },
+    { "@id": "../spec/constitution.html#c4" },
+    { "@id": "./ADR-0009-vessel-grants-runner-permissions-and-mutation-proof.html" },
+    { "@id": "./ADR-0011-vessel-launches-claude-without-settings.html" }
+  ]
+}
+</script>
+</head>
+<body>
+<!-- folio:chrome-top -->
+<a class="skip-link" href="#s1-context">本文へスキップ</a>
+<nav class="breadcrumb" aria-label="パンくず"><ol>
+  <li><a href="../index.html">design-intent</a></li>
+  <li><a href="./README.html">decisions</a></li>
+  <li aria-current="page">ADR-0012</li>
+</ol></nav>
+<!-- /folio:chrome-top -->
+
+<header class="doc-header">
+  <h1>ADR-0012 — 上限の検出は専用 record (rate_limit_event) の構造化 field で行い、 本文への字面照合を畳む</h1>
+  <div class="meta">Status: accepted &middot; Date: 2026-09-11 &middot; version 0.4.6 (拘束する constitution の版) &middot; C9.2 / C11.2 の適用を記録 (C4 は帰結の参照)</div>
+</header>
+<!-- folio:chrome-toc -->
+<nav class="toc" aria-label="ページ内目次">
+<ol>
+  <li><a href="#s1-context">§1. Context</a></li>
+  <li><a href="#s2-decision">§2. Decision</a></li>
+  <li class="toc--sub"><a href="#s2-1-signal">§2.1 判定の入力は専用 record の status で、 止める側を実測で持つ</a></li>
+  <li class="toc--sub"><a href="#s2-2-remove-text">§2.2 本文への字面照合を走査ごと撤去する</a></li>
+  <li class="toc--sub"><a href="#s2-3-no-threshold">§2.3 使用率の閾値で早期に止めない</a></li>
+  <li class="toc--sub"><a href="#s2-4-scope">§2.4 射程外</a></li>
+  <li><a href="#s3-consequences">§3. Consequences</a></li>
+  <li><a href="#s4-alternatives">§4. Alternatives Considered</a></li>
+  <li><a href="#s5-trace">§5. Trace</a></li>
+</ol>
+</nav>
+<!-- /folio:chrome-toc -->
+
+<aside class="informative">
+<p>本 ADR は IETF <strong>RFC 2119</strong> および <strong>RFC 8174 / BCP 14</strong> に定義される MUST / SHALL / SHOULD / MAY のキーワード解釈規約に従う。 ADR は決定時点の記録であり、 改訂は新しい ADR による supersede で行う。</p>
+</aside>
+
+<section id="s1-context" class="informative">
+<h2>§1. Context</h2>
+<p class="section-essence" data-audience="human">器は実装役の claude を起こし、 その出力を 1 行ずつ読んでいます。 口座の使用上限に当たった周は便を止めたいので、 これまでは出力の文中に「上限」を意味する言葉が出てこないかを探していました。 ところが実際に器を動かして出力を保存してみると、 上限は<strong>専用の報告行</strong>として、 状態や使用率が項目に分かれた形で届いていました。 言葉を探す方法は、 本物の合図を見ておらず、 関係のない文に同じ言葉が混じったときだけ反応していた、 ということです。</p>
+<p data-audience="machine">器が起こす claude は <code>--output-format stream-json</code> で 1 行 1 record を吐き、 runner はそれを逐次読みして「口座の上限に当たった」周を rc 75 で止める (呼出側は <code>Failed detail=rate-limit</code> と記帳する)。 初版の判定は、 record 1 行の字面に上限の語彙 (<code>rate_limit</code> / <code>rate limit</code> / <code>usage limit</code> / <code>429</code> / <code>529</code> / <code>overloaded</code>) を <code>contains</code> で当てる形だった。</p>
+<p data-audience="machine">この形は 2 度、 実運用で誤爆した。 (1) 401 authentication_failed の record に含まれる <code>session_id</code> の 16 進へ <code>429</code> が現れただけで rc 75 になった。 判定は語彙の走査を<strong>本文 field</strong> (<code>result</code> / <code>error</code> / <code>message</code> / <code>text</code> / <code>status</code>) の値の中に限る形へ狭められた。 (2) claude は tool の失敗を <code>type=user</code> record の中の <code>tool_result</code> block (<code>"is_error":true</code> を持つ) として流すため、 cargo や grep の出力に <code>429</code> が混じるだけで便が「上限」で死んだ。 判定は<strong>種別</strong>の絞り (claude 自身が終端 / error として出す record だけ) を足す形へ狭められた。</p>
+<p data-audience="machine">それでも誤爆は残った。 <code>{"type":"system","subtype":"error","message":"hook failed: 429 Too Many Requests"}</code> の形は、 既存の歯が「真の上限」として持つ fixture と<strong>構造が同一で本文の字面だけが違う</strong>ため、 形では弁別できない。 加えて、 本文 field の値を切り出す走査は病的な 1 行 (未閉じの入れ子を大量に持つ 180KB の record) で二次の計算量になることが実測された。</p>
+<p data-audience="machine">上限の真の形は、 実 run の raw stream を保存して初めて分かった。 器が初めて cargo を実行させた周 (2026-09-11) の stream に、 次の record が流れていた (uuid / session_id は伏字・他は逐語)。</p>
+<pre data-audience="machine"><code>{"type": "rate_limit_event",
+ "rate_limit_info": {"status": "allowed_warning", "resetsAt": …,
+   "rateLimitType": "seven_day", "utilization": 0.97,
+   "isUsingOverage": false, "surpassedThreshold": 0.75,
+   "unifiedWindows": {"five_hour": {…}, "seven_day": {…}}}}</code></pre>
+<p data-audience="machine">この現物から 3 つが確定した。 (a) 上限は<strong>専用の record 種別</strong> <code>rate_limit_event</code> と<strong>構造化された</strong> <code>rate_limit_info</code> (status / rateLimitType / utilization / isUsingOverage / surpassedThreshold / resetsAt) で来る。 (b) この record は error record では<strong>ない</strong> (<code>is_error</code> も <code>subtype:"error"</code> も持たない)。 (c) <code>rate_limit_event</code> は器が上限として扱う種別の集合に<strong>入っていない</strong>。 すなわち器は真の合図を一度も見ておらず、 2 度にわたって狭めてきたのは<strong>上限とは無関係な text に上限語が混じる誤爆</strong>だけだった。</p>
+</section>
+
+<section id="s2-decision" class="normative">
+<h2>§2. Decision</h2>
+
+<h3 id="s2-1-signal">§2.1 判定の入力は専用 record の status で、 止める側を実測で持つ</h3>
+<p class="section-essence" data-audience="human">上限かどうかは、 専用の報告行に書かれた「状態」を見て決めます。 器は「これが出たら止める」状態の一覧を持ち、 <strong>実際に見た値だけ</strong>をそこへ入れます。 見たことのない状態では<strong>止めません</strong>——止める判断は claude を途中で打ち切るので、 まだ働けるはずの回を殺す方が、 名札を付け損なうより高くつくからです。 見た状態は毎回記録し、 一覧は実測で育てます。</p>
+<p data-audience="machine">器 SHALL 上限の判定を <code>rate_limit_event</code> 種別の record に限り、 その <code>rate_limit_info.status</code> の値を判定の入力とする。 器 SHALL <strong>上限を表す status の閉じた集合</strong>を持ち、 status がその集合に属する周だけを上限として扱う (rc 75)。 <strong>集合に無い status では止めない</strong> (MUST NOT) — 未知の値も含む。</p>
+<p data-audience="machine">集合には<strong>実測で採れた値だけ</strong>を入れる (MUST)。 記録時点で採れている status は <code>allowed_warning</code> の 1 つだけで、 これは「許可されつつ警告」の周＝<strong>止める側ではない</strong>。 したがって<strong>記録時点の集合は空であり、 器は当面 rc 75 を立てない</strong>。 上限に当たって止まる周の status を採取した時点で、 その値を集合へ入れる。 推測で値を足さない (MUST NOT)。</p>
+<p data-audience="machine">「許可側を列挙して未知を上限へ倒す」形 (§4 案 (A')) を採らない理由は<strong>失敗の重さの非対称</strong>である。 rc 75 は判定の名札ではなく<strong>実行の中断</strong>である — runner は上限と読んだ時点で claude を待たずに kill する。 取りこぼした周に起きるのは「rc 75 という分類が付かない」ことだけで便は claude 自身の rc で止まるが、 誤って上限と読んだ周では<strong>健全な便が殺される</strong>。 現に採れている status は 1 件だけで、 未採取の許可値 (例 <code>allowed</code>) が実在すれば<strong>全便が止まる</strong>。 ゆえに未知は「上限ではない」へ倒す。</p>
+<p data-audience="machine">この極性は器の他の箇所と<strong>同じ向き</strong>である — 「分からない周は上限と名乗らない」。 種別を読めない record も、 集合に無い status も、 いずれも claude の rc を写す側へ落ちる。 加えて器 SHALL 観測した <code>rate_limit_event</code> の status を run の記録へ残す。 集合を<strong>実測で育てる</strong>ための口であり、 これが無いと「実測で採れた値だけを入れる」が運用で回らない。</p>
+
+<h3 id="s2-2-remove-text">§2.2 本文への字面照合を走査ごと撤去する</h3>
+<p class="section-essence" data-audience="human">出力の文中から言葉を探す仕組みは、 まるごと取り除きます。 本物の合図が別にあると分かった以上、 言葉探しは誤解の元にしかならないからです。 取り除くと、 これまで別々に追いかけていた不具合が 2 つとも消えます。</p>
+<p data-audience="machine">器 SHALL 上限の語彙表と本文 field の走査 (値を文字列 / 入れ子 / 裸の scalar の 3 形で切り出す実装と、 record 種別を深さ 1 の key から読む実装を含む) を撤去する。 上限の判定は §2.1 の経路だけを通る (MUST)。</p>
+<p data-audience="machine">撤去により、 未着手だった 2 件の不具合が<strong>不要になる</strong>。 (a) <code>system</code> 種別で本文の字面だけが違う誤爆 (形では弁別できないと判定済み)。 (b) 本文 field の値を切り出す走査の二次計算量。 どちらも走査そのものが無くなるため、 別便で追う対象ではなくなる。</p>
+
+<h3 id="s2-3-no-threshold">§2.3 使用率の閾値で早期に止めない</h3>
+<p class="section-essence" data-audience="human">使用率が高くても、 まだ許されている間は走り続けます。 口座は使い切るのが決まりなので、 手前で自主的に止めることはしません。</p>
+<p data-audience="machine">器 SHALL NOT <code>utilization</code> の閾値で便を止める。 status が許可側の集合に属する周は、 <code>utilization</code> の値に関わらず走り続ける (実測された現物は 0.97 で <code>allowed_warning</code> だった)。</p>
+<p data-audience="machine">根拠は憲法 <a href="../spec/constitution.html#c9">C9.2</a> である。 器は口座を allowance の終わりまで使い切ると定められており、 手前の閾値で自主的に止める設計はその条に反する。 加えて、 閾値を持つ設計は規則値を manifest の行として置くことを要し、 その値には user 裁定 (裁定 id) が要る (C1 / C5) が、 現時点で値の根拠が無い。</p>
+
+<h3 id="s2-4-scope">§2.4 射程外</h3>
+<p class="section-essence" data-audience="human">この決定は「止めるかどうか」だけを決めます。 使用率や次に使えるようになる時刻は、 止めた記録に残すだけで、 判断には使いません。 口座を選び直す仕組みは、 この版では作りません。</p>
+<p data-audience="machine">本 ADR は上限の<strong>検出</strong>のみを決める。 <code>rate_limit_info</code> の他の field (<code>utilization</code> / <code>rateLimitType</code> / <code>resetsAt</code> / <code>isUsingOverage</code>) は判定に用いない (MUST NOT) が、 止めた周の記録には残してよい (MAY)。 これらは口座の選定 (本版の射程外) の材料である。</p>
+<p data-audience="machine">上限に当たって<strong>止まる</strong>周の status 値は記録時点で未採取である。 本決定は<strong>その値を知らなくても実装できる</strong> (許可側だけを列挙するため)。 採取できた時点で許可側の集合を見直すが、 それは本 ADR の supersede を要さない (集合の中身は実測に従う運用であり、 決定の形は変わらない)。</p>
+</section>
+
+<section id="s3-consequences" class="informative">
+<h2>§3. Consequences</h2>
+<p class="section-essence" data-audience="human">良い面は、 誤って止まる経路が消えることです。 判断の材料が「文に何が書いてあるか」から「相手が何と言ったか」へ移るので、 実行結果や引用や識別子の中身に振り回されなくなります。 悪い面は 2 つあります。 ひとつは、 相手が別の言い方でしか上限を伝えない周を見落とすこと。 もうひとつは、 止める状態の一覧が<strong>いまは空</strong>なので、 本当に上限へ当たっても「上限で止まった」と記録できないことです。 どちらの場合も便自体は止まります — 止まった理由に名札が付かないだけです。</p>
+<p data-audience="machine">Positive: 誤爆の面が消える。 判定の入力が構造化された field になり、 tool の出力・本文の引用・識別子の中身に左右されない。 走査の実装が消えるぶん core の行数が減る (<a href="../spec/constitution.html#c4">C4</a> の上限に対する余裕)。 未着手の 2 件 (§2.2) が不要になり、 追う対象が減る。</p>
+<p data-audience="machine">Negative (受け入れるリスク): claude が <code>rate_limit_event</code> 以外の経路でしか上限を伝えない周があれば取りこぼす。 その周に起きるのは「rc 75 という<strong>分類</strong>が付かない」ことだけで、 <strong>便は止まる</strong> — claude 自身が非 0 で終わり、 器は rc をそのまま写すためである (<a href="../spec/constitution.html#c11">C11.2</a> の極性: 包みが独自の判定を足さない)。 台帳に「上限で止まった」と残らないぶん、 後から原因を読むときに 1 手増える。</p>
+<p data-audience="machine">Negative (記録時点の限界): 止める status の集合が<strong>空である</strong>ため、 器は当面 <strong>rc 75 を一度も立てない</strong>。 真に上限へ当たった周も <code>Failed detail=rate-limit</code> ではなく claude の rc による失敗として残る。 これは「上限を検出できる」と称して誤って止めるよりよい、 という判断の帰結であり、 status を 1 件採取すれば解消する。 §2.1 の記録の口がその採取を運ぶ。</p>
+<p data-audience="machine">未確定: 止まる周の status 値 (§2.4)。 現物は <code>allowed_warning</code> の 1 件のみで、 これは「許可されつつ警告」の周である。 <code>rate_limit_event</code> が警告帯の外でも流れるか、 そのとき status が何になるかは<strong>未測定</strong>であり、 現物 1 件からは推論できない。</p>
+</section>
+
+<section id="s4-alternatives" class="informative">
+<h2>§4. Alternatives Considered</h2>
+<p class="section-essence" data-audience="human">3 つの案を退けました。 言葉探しを小さく残す案は、 保険の役には立つものの、 その保険が要るという証拠がありません。 使用率で止める案は決まりに反します。 何もしない案は、 誤って止まる経路を抱え続けることになります。</p>
+<p data-audience="machine">(A') <strong>許可側の status を列挙し、 未知を上限へ倒す</strong> (fail-closed 側へ倒す形)。 却下: rc 75 は<strong>実行の中断</strong>であり (runner は claude を待たずに kill する)、 誤って上限と読むと<strong>健全な便が殺される</strong>。 採れている status は 1 件のみで、 未採取の許可値が実在すれば全便が止まる。 取りこぼし側の費用 (分類が付かないだけ) と釣り合わない。 なお本案は「上限専用 record なら未知も上限でよい」という読みに基づくが、 <code>rate_limit_event</code> が<strong>警告帯の外でも流れるか</strong>は未測定であり、 その読み自体が現物 1 件からの推論である。</p>
+<p data-audience="machine">(B) <strong>字面照合を狭めて残す</strong> (専用 record を一次にし、 最終 <code>result</code> record だけ字面の fallback を残す)。 却下: 取りこぼしへの保険にはなるが、 <strong>その保険に証拠が無い</strong> — <code>result</code> record に上限が載る現物は未採取である。 保険のために誤爆 1 件と二次計算量を抱え続ける費用が、 取りこぼしの費用 (§3 の Negative — 分類が付かないだけで便は止まる) を上回る。 現物が採れた時点で本 ADR を supersede して戻せる。</p>
+<p data-audience="machine">(C) <strong><code>utilization</code> の閾値で止める</strong> (例: 0.95 で <code>Failed</code>)。 却下: 憲法 C9.2 に反する (§2.3)。 加えて閾値は manifest の行と裁定 id を要し、 値の根拠が無い。</p>
+<p data-audience="machine">(D) <strong>現状維持</strong> (<code>rate_limit_event</code> を種別の集合に足すだけで、 字面照合も残す)。 却下: 誤爆の面が残り、 未着手の 2 件を別便で追い続けることになる。 真の合図が構造で来ると分かった以上、 字面を併用する理由が無い。</p>
+</section>
+
+<section id="s5-trace" class="informative">
+<h2>§5. Trace</h2>
+<p class="section-essence" data-audience="human">出所は、 審査役の指摘と、 器を実際に動かして出力を保存した記録です。 保存は「何が流れたか」を後から読めるようにするためのもので、 このときの記録から本物の合図の形が分かりました。</p>
+<ul data-audience="machine">
+  <li>誤爆 (1) の実測 (2026-09-10): 401 authentication_failed の record で rc 75 になった周を実 run の記録から特定。 <code>session_id</code> の 16 進に <code>429</code> が現れていた。 走査を本文 field へ限る便で塞いだ。</li>
+  <li>誤爆 (2) の実測 (2026-09-11): <code>tool_result</code> block に上限語を置いた record を実 binary へ流して rc 75 を再現。 対照として <code>session_id</code> 形が rc 1 になることも確認 (前便の修正が効いている裏取り)。 種別の絞りを足す便で塞いだ。</li>
+  <li>残る誤爆の実測 (2026-09-11): <code>{"type":"system","subtype":"error","message":"hook failed: 429 …"}</code> を実 binary へ流して rc 75 を再現。 同時に、 既存の歯が「真の上限」として持つ fixture が<strong>同じ構造</strong>であることを現物で確認し、 形では弁別できないと判定した。</li>
+  <li>二次計算量の実測 (2026-09-11・lens): 未閉じの入れ子を 20000 個持つ 180KB の 1 行で、 本文 field の切り出しが 11.99 秒 (対照 0.00 秒)。</li>
+  <li><strong>本物の合図の採取</strong> (2026-09-11・claude 2.1.267): 器が初めて cargo を実行させた周で、 runner の raw stream (全 30 行) を file へ保存。 その中に <code>rate_limit_event</code> の record が 1 件流れていた (§1 に逐語・uuid / session_id は伏字)。 保存は tracked file に入れない運用の証跡として行った。</li>
+  <li>同じ stream で、 assistant record の uuid に含まれる <code>429</code> が rc 75 を<strong>起こさなかった</strong>ことも確認した (先行 2 便の修正が実 stream で効いている裏取り)。</li>
+</ul>
+</section>
+
+<!-- folio:chrome-bottom -->
+<nav class="prevnext" aria-label="前後の文書">
+  <a class="prevnext__prev" href="ADR-0011-vessel-launches-claude-without-settings.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">ADR-0011 — 器が起こす claude (runner / lens) は口座と対象 repo の settings を 1 つも読まない (--setting-sources 空 + --strict-mcp-config・ADR-0009 §2.1 / ADR-0010 §2.4 の起動 flag を部分 supersede)</span></a>
+</nav>
+<script>
+(function () {
+  var openedForPrint = [];
+  window.addEventListener('beforeprint', function () {
+    openedForPrint = [];
+    var ds = document.querySelectorAll('details:not([open])');
+    for (var i = 0; i < ds.length; i++) { ds[i].setAttribute('open', ''); openedForPrint.push(ds[i]); }
+  });
+  window.addEventListener('afterprint', function () {
+    for (var i = 0; i < openedForPrint.length; i++) openedForPrint[i].removeAttribute('open');
+    openedForPrint = [];
+  });
+  if (!document.querySelector('[data-audience]')) return;
+  /* 既定 = 人間プレゼン型 (ADR-0040 / rules §11.3): script 経由で初期 class を付与するため
+     no-JS では付かず全文可視に graceful degrade する。 static DOM は全文を保持 (AI/検索/印刷は不変)。 */
+  document.body.classList.add('audience-human');
+  var bar = document.createElement('nav');
+  bar.className = 'audience-toggle';
+  bar.setAttribute('aria-label', '表示対象の切替');
+  var states = [['both', '両方'], ['human', '人間向け'], ['machine', '機械向け']];
+  for (var s = 0; s < states.length; s++) {
+    (function (mode, label) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      b.setAttribute('aria-pressed', mode === 'human' ? 'true' : 'false');
+      b.addEventListener('click', function () {
+        document.body.classList.remove('audience-human', 'audience-machine');
+        if (mode !== 'both') document.body.classList.add('audience-' + mode);
+        var bs = bar.querySelectorAll('button');
+        for (var j = 0; j < bs.length; j++) bs[j].setAttribute('aria-pressed', bs[j] === b ? 'true' : 'false');
+      });
+      bar.appendChild(b);
+    })(states[s][0], states[s][1]);
+  }
+  var bc = document.querySelector('nav.breadcrumb');
+  if (bc && bc.parentNode) { bc.parentNode.insertBefore(bar, bc.nextSibling); }
+  else { document.body.insertBefore(bar, document.body.firstChild); }
+})();
+</script>
+<!-- /folio:chrome-bottom -->
+</body>
+</html>

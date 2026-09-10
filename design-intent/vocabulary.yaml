@@ -394,3 +394,11 @@ terms:
     domain: consumer
     definition: 作業記憶を退避し、 session を作り直し、 退避物から復元する一周 (SRS FR27)。 退避物が無い session では起こさない。
     relationships: [管理 tick, 開発 session]
+  - canonical: 上限 record
+    domain: consumer
+    definition: claude が口座の使用上限を伝える専用種別の record (rate_limit_event)。 status と使用率を構造化 field で持ち、 器の上限判定はこの record だけを入力にする (ADR-0012 §2.1)。
+    relationships: [runner, 口座]
+  - canonical: 上限 status
+    domain: consumer
+    definition: 上限 record の status のうち「便を止める」ことを表す値の閉じた集合。 実測で採れた値だけを入れ、 集合に無い status では止めない (ADR-0012 §2.1・未知は claude の rc へ落ちる)。
+    relationships: [上限 record]
