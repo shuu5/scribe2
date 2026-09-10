@@ -28,7 +28,7 @@
 
 ## 3. hook の入口
 
-- `hooks/hooks.json` は `cargo xtask gen-manifest` が NAME から生成する（手書きしない）。entry は 2 つ: `SessionStart`（command `"${<NAME_UPPER>_BIN:-<NAME>}" hook session-start`）と `PreToolUse`（matcher `Edit|Write|MultiEdit|NotebookEdit`・command `"${<NAME_UPPER>_BIN:-<NAME>}" hook pre-tool-use`）。timeout は rules 行 `hook.timeout_s` の値を xtask が写す。冪等（同 workspace から同 bytes）。生成物は tracked。
+- `hooks/hooks.json` は `cargo xtask gen-manifest` が NAME から生成する（手書きしない）。entry は 3 つ: `SessionStart`（command `"${<NAME_UPPER>_BIN:-<NAME>}" hook session-start`）と `PreToolUse`（matcher `Edit|Write|MultiEdit|NotebookEdit`・command `"${<NAME_UPPER>_BIN:-<NAME>}" hook pre-tool-use`）と `PermissionRequest`（matcher `Bash`・command `"${<NAME_UPPER>_BIN:-<NAME>}" hook permission-request`＝§7 の一律 deny）。timeout は rules 行 `hook.timeout_s` の値を xtask が写す。冪等（同 workspace から同 bytes）。生成物は tracked。
   - `${…_BIN:-<NAME>}` の展開は **Claude Code が hook を起動する shell** が行う。scribe2 自身は env を読まない（C2.2 に触れない）。既定は PATH 上の `<NAME>`（開発者は `cargo install --path` か PATH 追加で置く）。
 - `<NAME> hook <event> [--state-dir D]`: stdin の JSON（Claude Code の hook payload・`cwd` があればそれ・無ければ process cwd）から root を解き、`served` が `ByMe` でなければ **stdout 0 byte・stderr 0 byte・rc 0**。未知 event も 0 byte・rc 0（fail-open・他の器と衝突しない）。
 - timeout 到達は Claude Code 側で「判定の消失」＝fail-open である。guard の deny は時間切れに頼らず timeout の内側で返す（NFR5・要件カタログ R-K10）。
@@ -53,6 +53,15 @@ stdout に 1 行 `[<NAME>/SessionStart] served version=<N> root=<root>` を出�
 - `session-start` は自分の出力について `who="hook:session-start"` / `what="session-start-header"` / `when="SessionStart"` / `bytes=出力 byte 数` / `tokens=None` / `wall_ms=実測` を 1 件書く。`pre-tool-use` の deny も `who="hook:pre-tool-use"` / `what="deny"` で 1 件書く。
 - 閾値 `hook.budget_ms` は rules 行（NFR5・記録との照合は検出線）。MVP は**記録だけ**。超過で止める形は v3。
 - 理由（残す）: 観測 store は v3 へ送られたが、注入経路を作る本設計が schema slot を同時に予約する（後付けにしない最小履行）。
+
+## 6.5 `permission-request` = 内蔵 guard の問いへの一律 deny（FR19 / FR21 / FR24・C11）
+
+内蔵 Bash guard は、`rm` の path に変数展開や `$(…)` が混ざると bypassPermissions でも dialog を出す。対話 session はそこで**止まる**——無人の席では誰も答えず、席が沈黙したまま cycle が進まない。ゆえに器が**一律 deny**で答え、「literal path で書き直せ」という**次の一手まで**返す（「駄目だ」だけでは席が止まる）。
+
+- 答えるのは `tool_name == "Bash"` の周だけ。stdout は**ちょうど 1 行**の `{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny","message":…}}}`・rc 0・`inject.jsonl` に 1 行（`who=hook:permission-request` / `what=deny`）。
+- `Bash` 以外・payload 不能・marker が自分の NAME を言わない repo は **0 byte・rc 0** で黙る（FR24＝Claude Code の既定の問いへ戻す。器が引き受ける筋合いの無い承認まで奪わない）。
+- 判定は `PermissionDecision::{Deny(String), Silent}` で、**`Allow` という variant を持たない**（憲法 C11）。承認を機械が与えると人間の承認 gate がここから空洞化する——止める側へ倒すのは安全だが、通す側へ倒すのは取り返しがつかない。
+- `json_lite` は flat object 専用（`parse_object` は入れ子を error にする）ので、値の escape だけ `json_lite::quote` を通し、入れ子は組み立てる。歯は内側の決定 object を切り出して parse し、**escape が壊れていないこと**まで測る。
 
 ## 7. 歯（契約 `s2-3ax` の検証・`tests/e2e/hook.rs` module・tmp git repo を `git init` + commit で作る・`vessel init --state-dir` で tmp を紐づける）
 

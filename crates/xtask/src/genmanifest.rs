@@ -30,6 +30,15 @@ const SUB_SESSION_START: &str = "session-start";
 /// `PreToolUse` に紐づく subcommand。
 const SUB_PRE_TOOL_USE: &str = "pre-tool-use";
 
+/// `PermissionRequest` で見る tool の matcher（**`Bash` だけ**）。
+///
+/// 内蔵 guard の問いに答えるのは `Bash` の周に限る。広げると器が答える筋合いの無い
+/// 承認まで機械が deny することになる。
+const MATCHER_PERMISSION: &str = "Bash";
+
+/// `PermissionRequest` に紐づく subcommand。
+const SUB_PERMISSION_REQUEST: &str = "permission-request";
+
 /// `name` / `version` / `description` の 3 key を持つ manifest 本文を組み立てる。
 pub fn render(name: &str, version: &str) -> String {
     format!(
@@ -57,11 +66,18 @@ fn entry(event: &str, matcher: Option<&str>, name: &str, sub: &str, timeout: u64
     )
 }
 
-/// hooks.json 本文を組み立てる（entry は 2 つ・timeout は rules 行を写す）。
+/// hooks.json 本文を組み立てる（entry は 3 つ・timeout は rules 行を写す）。
 pub fn render_hooks(name: &str, timeout: u64) -> String {
     let entries = [
         entry("SessionStart", None, name, SUB_SESSION_START, timeout),
         entry("PreToolUse", Some(MATCHER), name, SUB_PRE_TOOL_USE, timeout),
+        entry(
+            "PermissionRequest",
+            Some(MATCHER_PERMISSION),
+            name,
+            SUB_PERMISSION_REQUEST,
+            timeout,
+        ),
     ];
     format!("{{\n  \"hooks\": {{\n{}\n  }}\n}}\n", entries.join(",\n"))
 }
@@ -156,8 +172,17 @@ mod tests {
         );
         assert_eq!(
             tracked.matches("\"type\": \"command\"").count(),
-            2,
-            "entry は SessionStart と PreToolUse の 2 つである"
+            3,
+            "entry は SessionStart / PreToolUse / PermissionRequest の 3 つである"
         );
+        // **数だけでなく名前で**測る。件数だけだと、event 名を取り違えた生成物
+        // （同じ event を 3 回書く等）が同じ 3 で通る。
+        for event in ["SessionStart", "PreToolUse", "PermissionRequest"] {
+            assert_eq!(
+                tracked.matches(&format!("\"{event}\": [")).count(),
+                1,
+                "{event} の entry がちょうど 1 つ在る"
+            );
+        }
     }
 }

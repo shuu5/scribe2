@@ -1065,3 +1065,128 @@ fn hook_seat_guard_treats_empty_transcript_path_as_absent() {
     );
     clean(&[&repo, &state]);
 }
+
+/// 承認の問いの答えから、**flat な決定 object だけ**を切り出す。
+///
+/// `json_lite::parse_object` は flat object 専用（入れ子は error）なので、3 段の入れ子を
+/// そのままは通せない。内側の `{"behavior":…,"message":…}` を取り出して parse すれば、
+/// **escape が壊れていないこと**まで機械で確かめられる（字面の `contains` では
+/// message の `$(...)` や読点が壊れていても気づけない）。
+#[expect(
+    clippy::panic,
+    reason = "統合 test の helper。clippy の allow-panic-in-tests は #[test] 関数の中だけに効く"
+)]
+fn decision_object(line: &str) -> String {
+    let at = line.find("\"decision\":").unwrap_or_else(|| panic!("decision が在る: {line}"));
+    let rest = &line[at..];
+    let open = rest.find('{').unwrap_or_else(|| panic!("decision の object が在る: {line}"));
+    let close = rest.find('}').unwrap_or_else(|| panic!("decision の object が閉じる: {line}"));
+    rest[open..=close].to_owned()
+}
+
+/// `Bash` の周は **stdout ちょうど 1 行**で deny を返し、記録を 1 行残す。
+#[test]
+fn hook_permission_request_denies_bash_with_one_json_line() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    let before = inject_lines(&state).len();
+    let out = run_hook_args(
+        &["permission-request", "--state-dir", &state.display().to_string()],
+        &tool_payload(&repo, "Bash", "unused"),
+    );
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "承認の答えは rc 0");
+    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(text.lines().count(), 1, "stdout はちょうど 1 行: {text}");
+    assert!(
+        text.contains("\"hookEventName\":\"PermissionRequest\""),
+        "どの event への答えかを名乗る: {text}"
+    );
+    // 入れ子を剥がして **parse できること**まで測る（escape が壊れていれば落ちる）。
+    let pairs = json_lite::parse_object(&decision_object(text.trim()))
+        .unwrap_or_else(|err| panic!("決定 object を parse できる: {err} / {text}"));
+    let behavior = pairs.iter().find(|(key, _)| key == "behavior").map(|(_, v)| v.clone());
+    assert_eq!(
+        behavior,
+        Some(json_lite::Value::Str("deny".to_owned())),
+        "一律 deny である: {text}"
+    );
+    let message = match pairs.iter().find(|(key, _)| key == "message").map(|(_, v)| v.clone()) {
+        Some(json_lite::Value::Str(found)) => found,
+        other => panic!("message が文字列である: {other:?}"),
+    };
+    assert!(message.starts_with(&format!("{NAME}: ")), "器が名乗る: {message}");
+    assert!(
+        message.contains("literal path") && message.contains("$(...)"),
+        "次の一手（literal path で書き直す）まで返す: {message}"
+    );
+    let lines = inject_lines(&state);
+    assert_eq!(lines.len(), before + 1, "記録は 1 行だけ増える: {lines:?}");
+    assert_eq!(
+        value_of(&lines[lines.len() - 1], "who"),
+        Some(json_lite::Value::Str("hook:permission-request".to_owned())),
+        "誰の記録かを書く: {lines:?}"
+    );
+    clean(&[&repo, &state]);
+}
+
+/// `Bash` 以外の問いには答えない（**0 byte・rc 0**＝既定の問いへ戻す・FR24）。
+///
+/// 答えてしまうと、器が引き受ける筋合いの無い承認まで機械が deny する。
+#[test]
+fn hook_permission_request_is_silent_for_other_tools() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    let before = inject_lines(&state).len();
+    for tool in ["Edit", "Write", "WebFetch", ""] {
+        let out = run_hook_args(
+            &["permission-request", "--state-dir", &state.display().to_string()],
+            &tool_payload(&repo, tool, "unused"),
+        );
+        assert_silent(&out, &format!("{tool} の問いには答えない"));
+    }
+    assert_eq!(
+        inject_lines(&state).len(),
+        before,
+        "答えなかった周は記録も残さない"
+    );
+    clean(&[&repo, &state]);
+}
+
+/// marker の無い repo では **`Bash` でも黙る**（他の器と衝突しない・FR24）。
+#[test]
+fn hook_permission_request_is_silent_outside_vessel() {
+    let repo = git_repo();
+    let out = run_hook_args(&["permission-request"], &tool_payload(&repo, "Bash", "unused"));
+    assert_silent(&out, "marker の無い repo では答えない");
+    clean(&[&repo]);
+}
+
+/// 生成物 `hooks/hooks.json` が 3 つ目の entry を持ち、**既存 2 entry は不変**である。
+#[test]
+fn hooks_json_carries_permission_request_entry() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..");
+    let body = fs::read_to_string(root.join("hooks").join("hooks.json"))
+        .unwrap_or_else(|err| panic!("hooks.json を読める: {err}"));
+    for needle in [
+        "\"PermissionRequest\"",
+        "\"matcher\": \"Bash\"",
+        "hook permission-request",
+    ] {
+        assert_eq!(
+            body.matches(needle).count(),
+            1,
+            "{needle} はちょうど 1 回: {body}"
+        );
+    }
+    for needle in [
+        "\"SessionStart\"",
+        "hook session-start",
+        "\"PreToolUse\"",
+        "hook pre-tool-use",
+        "\"matcher\": \"Edit|Write|MultiEdit|NotebookEdit\"",
+    ] {
+        assert_eq!(body.matches(needle).count(), 1, "既存 entry は不変: {needle}");
+    }
+}
