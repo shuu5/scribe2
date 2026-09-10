@@ -812,3 +812,138 @@ fn flip_check_copies_src_tests_file_whole() {
         "接尾辞が違う file を巻き込まない"
     );
 }
+
+/// fixture の統合 test target（`tests/e2e/<name>`）の repo 相対 path。
+fn e2e_rel(name: &str) -> String {
+    format!("crates/{FIXTURE_MEMBER}/tests/e2e/{name}")
+}
+
+/// base で **落ちる** 歯（`val()` は base で 1）。
+fn red_body() -> String {
+    format!("#[test]\nfn probe() {{\n    assert_eq!({FIXTURE_MEMBER}::val(), 2);\n}}\n")
+}
+
+/// base で **通る** 歯（同梱が RED を捏造しないことの負例に使う）。
+fn green_body() -> String {
+    format!("#[test]\nfn probe() {{\n    assert_eq!({FIXTURE_MEMBER}::val(), 1);\n}}\n")
+}
+
+/// base 側に統合 test target（`tests/e2e/{main.rs,seed.rs}`）を持つ fixture を作る。
+///
+/// 新規 module の便は「宣言 file（`main.rs`）」と「本体 file」の 2 file に割れるので、
+/// その土台になる base が要る。
+fn base_commit_with_e2e() -> (PathBuf, String) {
+    let (dir, _) = base_commit();
+    write_at(&dir, &e2e_rel("main.rs"), "mod seed;\n");
+    write_at(
+        &dir,
+        &e2e_rel("seed.rs"),
+        &format!("#[test]\nfn seed_holds() {{\n    assert_eq!({FIXTURE_MEMBER}::val(), 1);\n}}\n"),
+    );
+    head_commit(&dir);
+    let base = head_sha(&dir);
+    (dir, base)
+}
+
+/// 新規 module の**宣言 file は単独で撃たず**、本体 file を撃つ木へ同梱する。
+///
+/// 割れた 2 file を単独で撃つと、どちらの判定も意味を持たない——宣言だけなら本体不在の
+/// `E0583`（偽 RED）、本体だけなら base に宣言が無く compile 対象外で全 PASS（偽 GREEN）。
+/// 同梱すれば本体の歯が base の実装で実際に落ちることを測れる。
+#[test]
+fn flip_check_bundles_module_declaration_with_new_body_file() {
+    let (dir, base) = base_commit_with_e2e();
+    write_at(&dir, &e2e_rel("main.rs"), "mod seed;\nmod newmod;\n");
+    write_at(&dir, &e2e_rel("newmod.rs"), &red_body());
+    head_commit(&dir);
+    let got = judge(&base, &dir);
+    drop_fixture(&dir);
+    assert_verdict(&got.line, got.code, 0, "RED-on-base ok");
+    assert!(
+        got.line.contains("decl=1"),
+        "同梱した宣言 file の本数が判定行に載るはず: {}",
+        got.line
+    );
+}
+
+/// `mod x;` **以外**の行も動いた file は宣言 file と見なさず、従来どおり単独で撃つ。
+///
+/// 自前の歯を足した file まで宣言と見なすと、その歯が単独で測られなくなる（同梱は判定を
+/// 緩める側なので弁別は狭く取る）。本便では本体 file が単独で緑になるので、判定は
+/// `green-on-base`＝**従来どおりの**結果になり、`decl=` は載らない。
+#[test]
+fn flip_check_still_judges_declaration_file_that_also_changes_tests() {
+    let (dir, base) = base_commit_with_e2e();
+    write_at(
+        &dir,
+        &e2e_rel("main.rs"),
+        &format!(
+            "mod seed;\nmod newmod;\n#[test]\nfn own() {{\n    assert_eq!({FIXTURE_MEMBER}::val(), 2);\n}}\n"
+        ),
+    );
+    write_at(&dir, &e2e_rel("newmod.rs"), &red_body());
+    head_commit(&dir);
+    let got = judge(&base, &dir);
+    drop_fixture(&dir);
+    assert_verdict(&got.line, got.code, 1, "reason=green-on-base");
+    assert!(
+        got.line.contains(&e2e_rel("newmod.rs")),
+        "単独で緑だった本体 file を名指すはず: {}",
+        got.line
+    );
+    assert!(
+        !got.line.contains("decl="),
+        "歯も動いた file を宣言として同梱しない: {}",
+        got.line
+    );
+}
+
+/// 同梱は **RED を捏造しない**——宣言を同梱しても本体の歯が base で緑なら FAIL のまま。
+#[test]
+fn flip_check_fails_when_new_body_file_is_green_on_base_even_with_declaration() {
+    let (dir, base) = base_commit_with_e2e();
+    write_at(&dir, &e2e_rel("main.rs"), "mod seed;\nmod newmod;\n");
+    write_at(&dir, &e2e_rel("newmod.rs"), &green_body());
+    head_commit(&dir);
+    let got = judge(&base, &dir);
+    drop_fixture(&dir);
+    assert_verdict(&got.line, got.code, 1, "reason=green-on-base");
+    assert!(
+        got.line.contains(&e2e_rel("newmod.rs")),
+        "緑だった本体 file を名指すはず: {}",
+        got.line
+    );
+}
+
+/// `pub(crate) mod x;` も宣言に数える（可視性の前置きは字面の境界だけの違い）。
+#[test]
+fn flip_check_treats_pub_crate_mod_line_as_declaration() {
+    let (dir, base) = base_commit_with_e2e();
+    write_at(&dir, &e2e_rel("main.rs"), "mod seed;\npub(crate) mod newmod;\n");
+    write_at(&dir, &e2e_rel("newmod.rs"), &red_body());
+    head_commit(&dir);
+    let got = judge(&base, &dir);
+    drop_fixture(&dir);
+    assert_verdict(&got.line, got.code, 0, "RED-on-base ok");
+    assert!(
+        got.line.contains("decl=1"),
+        "pub(crate) 付きの宣言も同梱するはず: {}",
+        got.line
+    );
+
+    // 境界の負例: 可視性の直後に**空白が無い**字面は宣言に数えない（契約の
+    // `(pub(\(crate\))?\s+)?mod \w+;` は空白 1 個以上を要求する）。数えてしまうと
+    // 「pub で始まる別の行」まで宣言に化け、同梱が広がって歯が単独で測られなくなる。
+    let (dir, base) = base_commit_with_e2e();
+    write_at(&dir, &e2e_rel("main.rs"), "mod seed;\npub(crate)mod newmod;\n");
+    write_at(&dir, &e2e_rel("newmod.rs"), &red_body());
+    head_commit(&dir);
+    let got = judge(&base, &dir);
+    drop_fixture(&dir);
+    assert_verdict(&got.line, got.code, 1, "reason=green-on-base");
+    assert!(
+        !got.line.contains("decl="),
+        "空白の無い可視性は宣言に数えない: {}",
+        got.line
+    );
+}
