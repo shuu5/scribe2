@@ -4,7 +4,11 @@
 //! 違反 0 のときだけ各 tag の実測値入りサマリを 1 行出す（失敗時にサマリは出さない）。
 //! 測る tag は core-lines / file-lines / test-src-ratio / manifest-name /
 //! manifest-version / lints-set / lints-optin / name-literal / deps-empty /
-//! toolchain-pin / paths-clean の 11 本である。
+//! toolchain-pin / paths-clean / claude-md-constitution の 12 本である。
+//!
+//! ADR-0006 は 11 本を列挙して frozen であり、12 本目（claude-md-constitution）と
+//! 13 本目（ADR-0009 が要求する non-rust-exec）をまとめて supersede する ADR は
+//! 後続の便が書く（planner 裁定 2026-09-10・s2-07l.60）。
 
 use crate::genmanifest::MANIFEST_REL;
 use crate::limits::{ALLOWED_DEPS, MAX_CORE_LINES, MAX_FILE_LINES, REQUIRED_LINTS};
@@ -138,6 +142,7 @@ pub fn inspect(root: &Path) -> Report {
     measured.push(measure_deps_empty(&layout));
     measured.push(measure_toolchain_pin(&layout));
     measured.push(crate::paths_clean::measure(&layout));
+    measured.push(crate::claude_md::measure(&layout));
     fold(measured)
 }
 

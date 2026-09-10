@@ -146,11 +146,17 @@ fn contract_in(dir: &Path) -> PathBuf {
 }
 
 /// lens を 1 回撃つ（引数の並びが複数の歯で同じなので畳む）。
+///
+/// `--worktree` は必須だが、この helper を使う歯の関心は cwd ではないので**契約の
+/// 置き場**を渡す（引数を 1 本増やすと粒度 lint の上限に当たる）。cwd がその worktree
+/// であることは [`headless_lens_runs_claude_in_the_given_worktree`] が**別 dir**で測る。
 fn run_lens(contract: &Path, cap: &str, mode: &str, claude: &Path, diff: &[u8]) -> Output {
+    let worktree = contract.parent().unwrap_or(Path::new(".")).display().to_string();
     run_bin(
         &[
             "lens",
             "--contract", &contract.display().to_string(),
+            "--worktree", &worktree,
             "--cap", cap,
             "--permission-mode", mode,
             "--claude", &claude.display().to_string(),
@@ -381,6 +387,7 @@ fn headless_lens_extracts_last_json_line() {
     let out = run_bin(
         &[
             "lens", "--contract", &contract.display().to_string(),
+            "--worktree", &dir.display().to_string(),
             "--cap", "4096", "--permission-mode", "plan",
             "--account-dir", &account.display().to_string(),
             "--claude", &claude.display().to_string(),
@@ -492,6 +499,59 @@ fn headless_lens_fills_holes_in_one_pass() {
         prompt.matches("DIFF-BODY-MARKER").count(),
         1,
         "diff が載るのは 1 か所だけ: {prompt}"
+    );
+    clean(&[&dir]);
+}
+
+/// lens は**渡された worktree で** claude を起こす（憲法を載せる経路は cwd 1 本）。
+///
+/// worktree は fake の置き場と**別の dir** にする——同じにすると「cwd を渡さず継承した」
+/// 実装でも assert が真になり、歯が空虚になる。
+#[test]
+fn headless_lens_runs_claude_in_the_given_worktree() {
+    let dir = tmp();
+    let worktree = tmp();
+    let contract = contract_in(&dir);
+    let claude = fake_claude(&dir, "{\"verdict\":\"PASS\",\"evidence\":\"ok\"}\n", false, 0);
+    let out = run_bin(
+        &[
+            "lens",
+            "--contract", &contract.display().to_string(),
+            "--worktree", &worktree.display().to_string(),
+            "--cap", "4096",
+            "--permission-mode", "plan",
+            "--claude", &claude.display().to_string(),
+        ],
+        b"--- a\n+++ b\n",
+    );
+    assert_eq!(out.status.code(), Some(0), "判定は返る: {}", stderr_of(&out));
+    let seen = slurp(&dir.join("cwd"));
+    assert_eq!(seen.trim(), worktree.display().to_string(), "cwd は渡された worktree");
+    assert_ne!(seen.trim(), dir.display().to_string(), "契約の置き場を cwd にしていない");
+    clean(&[&dir, &worktree]);
+}
+
+/// `--worktree` が無ければ claude を起こさずに断る（`--contract` と同じ極性）。
+#[test]
+fn headless_lens_refuses_without_worktree() {
+    let dir = tmp();
+    let contract = contract_in(&dir);
+    let claude = fake_claude(&dir, "{\"verdict\":\"PASS\",\"evidence\":\"呼ばれてはならない\"}\n", false, 0);
+    let out = run_bin(
+        &[
+            "lens",
+            "--contract", &contract.display().to_string(),
+            "--cap", "4096", "--permission-mode", "plan",
+            "--claude", &claude.display().to_string(),
+        ],
+        b"--- a\n+++ b\n",
+    );
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "worktree が無ければ rc 1");
+    assert!(!dir.join("called").exists(), "claude を 1 度も起動しない");
+    assert!(
+        stderr_of(&out).contains("--worktree"),
+        "何が要るかを名乗る: {}",
+        stderr_of(&out)
     );
     clean(&[&dir]);
 }

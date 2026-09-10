@@ -6,6 +6,7 @@
 //! rc は `main` が返す [`ExitCode`] で表し、helper から `process::exit` は呼ばない。
 
 mod check;
+mod claude_md;
 mod flipcheck;
 mod genmanifest;
 mod limits;
@@ -16,7 +17,8 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 /// 使い方の 1 行。
-const USAGE: &str = "usage: cargo xtask <check|gen-manifest> [ROOT] | cargo xtask flip-check --base <ref>";
+const USAGE: &str =
+    "usage: cargo xtask <check|gen-manifest|gen-claude-md> [ROOT] | cargo xtask flip-check --base <ref>";
 
 /// stdout 出力層。stdout へ書くのはこの関数だけである。
 #[expect(
@@ -65,6 +67,13 @@ fn run_gen_manifest(root_arg: Option<&str>) -> Result<ExitCode, String> {
     Ok(ExitCode::SUCCESS)
 }
 
+/// `gen-claude-md` subcommand。`CLAUDE.md` の生成区間へ憲法の規範文を書く。
+fn run_gen_claude_md(root_arg: Option<&str>) -> Result<ExitCode, String> {
+    let root = resolve_root(root_arg)?;
+    emit(&claude_md::generate(&root)?);
+    Ok(ExitCode::SUCCESS)
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let root_arg = args.get(1).map(String::as_str);
@@ -72,6 +81,7 @@ fn main() -> ExitCode {
     let outcome = match args.first().map(String::as_str) {
         Some("check") => run_check(root_arg),
         Some("gen-manifest") => run_gen_manifest(root_arg),
+        Some("gen-claude-md") => run_gen_claude_md(root_arg),
         // flip-check だけは rc 2（引数不正）を持つので `Err` → rc 1 経路へ流さない。
         Some("flip-check") => return flipcheck::run(tail),
         _ => Err(USAGE.to_owned()),

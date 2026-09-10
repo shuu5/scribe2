@@ -319,22 +319,30 @@ fn decide(entry: &Gate<'_>, worktree: &Path, measured: &Measured) -> (Verdict, S
     let Some(cmd) = entry.lens else {
         return (Verdict::Inconclusive, "lens が要るのに --lens が無い".to_owned());
     };
-    ask_lens(&substitute(entry, cmd), worktree, &measured.diff)
+    let contract = contract_path(entry.state_dir, entry.run);
+    ask_lens(&substitute(cmd, &contract, worktree), worktree, &measured.diff)
 }
 
-/// `--lens` の cmd の `{contract}` を run の契約 copy の path へ置く。
+/// `--lens` の cmd の `{contract}` / `{worktree}` を run の path へ置く。
 ///
-/// **置く穴は 1 つだけ**である。`--runner` 側（[`super::spawn`]）と共有するのは
-/// placeholder の語彙であって関数ではない——あちらは worktree / write-set / base も
-/// 埋めるが、lens が要るのは契約 1 つで、読み手を増やせば「どの段でどの穴が埋まるか」が
-/// 段ごとに違う表になる（planner 裁定 2026-09-10 Q1）。
+/// **置く穴は 2 つである**（`{contract}` / `{worktree}`・出所 s2-07l.60）。1 つだった頃の
+/// 理由（読み手を増やさない・planner 裁定 2026-09-10 Q1）は生きているが、lens に憲法を
+/// 載せる経路が起動 cwd しか無く、tracked file に絶対 path は書けない（PUBLIC repo）ので
+/// worktree は gate が埋めるほかない（planner 裁定 2026-09-10・admin Q2）。`--runner` 側
+/// （[`super::spawn`]）と共有するのは placeholder の**語彙**であって関数ではない。
+///
+/// **1 走査で埋める**。重ねて replace すると、先に埋めた path の中の `{worktree}` まで
+/// 展開されうる（runner / lens の prompt と同じ理由）。
 ///
 /// **渡すのは path であって本文ではない**。cmd は `sh -c` へ渡る 1 行なので、本文を
 /// 埋めると契約の中の引用符 1 つで cmd の構造が変わる。
-fn substitute(entry: &Gate<'_>, cmd: &str) -> String {
-    cmd.replace(
-        "{contract}",
-        &contract_path(entry.state_dir, entry.run).display().to_string(),
+fn substitute(cmd: &str, contract: &Path, worktree: &Path) -> String {
+    crate::headless::fill(
+        cmd,
+        &[
+            ("{contract}", &contract.display().to_string()),
+            ("{worktree}", &worktree.display().to_string()),
+        ],
     )
 }
 
@@ -465,4 +473,41 @@ fn refused(reason: String) -> Outcome {
 /// 対象そのものが壊れている（rc 2）。
 fn broken(reason: String) -> Outcome {
     Outcome::failed_line(RC_BROKEN, format!("pipe: {reason}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::substitute;
+    use std::path::Path;
+
+    /// `--lens` の cmd の穴は **2 つ**（契約 / worktree）で、どちらも埋まる。
+    ///
+    /// worktree 側が埋まらないと lens は `--worktree` を受け取れず rc 1 で断り、gate は
+    /// INCONCLUSIVE になる（＝憲法の載らない判定は出ないが、便も進まない）。
+    #[test]
+    fn gate_substitute_fills_contract_and_worktree() {
+        let line = substitute(
+            "lens --contract {contract} --worktree {worktree}",
+            Path::new("/state/CONTRACT-MARKER.toml"),
+            Path::new("/runs/WORKTREE-MARKER"),
+        );
+        assert_eq!(
+            line,
+            "lens --contract /state/CONTRACT-MARKER.toml --worktree /runs/WORKTREE-MARKER",
+        );
+    }
+
+    /// **1 走査で埋める**。埋めた値の中の marker は展開しない。
+    ///
+    /// 重ねて replace すると、契約 path の中に `{worktree}` が在るだけで cmd の構造へ
+    /// 触れられる（runner / lens の prompt と同じ経路）。
+    #[test]
+    fn gate_substitute_does_not_expand_filled_values() {
+        let line = substitute(
+            "lens --contract {contract}",
+            Path::new("/state/{worktree}/CONTRACT-MARKER.toml"),
+            Path::new("/runs/WORKTREE-MARKER"),
+        );
+        assert_eq!(line, "lens --contract /state/{worktree}/CONTRACT-MARKER.toml");
+    }
 }
