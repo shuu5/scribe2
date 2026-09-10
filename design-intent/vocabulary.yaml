@@ -74,11 +74,11 @@ terms:
     relationships: [rtk, graphify, seam, K 指標]
   - canonical: rtk
     domain: consumer
-    definition: tool 出力を圧縮する hook policy の 1 項目 (day-1 optional adapter)。 v1 実測「一律 arm しない」(sc-ol6t9 §8) を継承し、 機械経路には挟まない。
+    definition: tool 出力を圧縮する hook policy の 1 項目 (day-1 optional adapter)。 v1 実測の方針「一律 arm しない」を継承し、 機械経路には挟まない (v1 の実測は本 repo へ持ち越していない・SPIKE-tooling-report.md 冒頭)。
     relationships: [day-1 optional adapter]
   - canonical: graphify
     domain: consumer
-    definition: land ごとに知識グラフを生成して context を供給する候補 (day-1 optional adapter)。 v1 では micro-bench のみ (sc-a1nex)。
+    definition: land ごとに知識グラフを生成して context を供給する候補 (day-1 optional adapter)。 v1 では micro-bench のみ (v1 の実測は本 repo へ持ち越していない・SPIKE-tooling-report.md 冒頭)。
     relationships: [day-1 optional adapter, land]
   - canonical: K 指標
     domain: consumer
@@ -362,6 +362,10 @@ terms:
     domain: consumer
     definition: 開発 session の context 使用量が rules 行の上限に達したとき、 退避以外の編集を止める hook の段 (SRS FR26)。 上限の値は rules 行が持つ。
     relationships: [開発 session, hook, manifest]
+  - canonical: hook
+    domain: consumer
+    definition: 器が binary 1 本で仕える Claude Code の event の口 (PreToolUse 等)。
+    relationships: [write-set, cap guard]
   - canonical: 管理 tick
     domain: consumer
     definition: 開発 session が黙っていないかを周期で見て、 条件が揃ったときだけ pointer 1 行を注入する仕組み (SRS FR27)。
