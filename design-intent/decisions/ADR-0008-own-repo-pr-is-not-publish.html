@@ -54,7 +54,7 @@
 <ol>
   <li><a href="#s1-context">§1. Context</a></li>
   <li><a href="#s2-decision">§2. Decision</a></li>
-  <li class="toc--sub"><a href="#s2-1-scope-of-publish">§2.1 「出す」は repo の外へ出す操作</a></li>
+  <li class="toc--sub"><a href="#s2-1-scope-of-publish">§2.1 自 repo への PR は「出す」ではない</a></li>
   <li class="toc--sub"><a href="#s2-2-mechanism">§2.2 機構 — 判定は契約の自己申告だけ</a></li>
   <li class="toc--sub"><a href="#s2-3-scope">§2.3 射程外</a></li>
   <li><a href="#s3-consequences">§3. Consequences</a></li>
@@ -94,14 +94,15 @@
 <p class="section-essence" data-audience="human">決めることは 3 つです。 「出す」とは何か、 では機械はどうやって見分けるのか、 そして今回は決めない範囲はどこかです。</p>
 <p data-audience="machine">本 ADR は <a href="../spec/constitution.html#a4">A4.2</a> の「出す」(publish) の<strong>範囲の解釈だけ</strong>を記録する。 憲法本文・rules 表・SRS はいずれも書き換えない (A4.3 が既に答えているため、 解釈で足りる)。</p>
 
-<h3 id="s2-1-scope-of-publish">§2.1 「出す」は repo の外へ出す操作</h3>
-<p class="section-essence" data-audience="human">「出す」は、 自分の repo の外へ情報を出すことです。 自分の repo に枝を押して PR を立てるのは、 どちらも後から閉じられるので含みません。</p>
-<p data-audience="machine">A4.2 の「出す」は <strong>repo の外へ出す操作</strong>を指す (<strong>MUST</strong>): 他 repo への push、 外部サービスへの送信、 release / tag の公開、 公開 URL の発行。 自 repo への branch push と PR 作成は A4.3 の「自 repo への dispatch」として<strong>可逆</strong>であり、 Ask-first の対象外である (<strong>MUST NOT</strong> be gated on approval)。 可逆性の根拠は機構にある: この形は <code>main</code> を 1 byte も動かさず、 branch も PR も後から閉じられる——A4.3 が merge を可逆と呼ぶのと同じ理由で、 merge の<strong>手前</strong>の操作も可逆である。</p>
-<p data-audience="machine">本 repo が既に PUBLIC であることは判定を変えない。 PR は公開 repo の中で起こる出来事であり、 「repo の外へ出す」ではない——PUBLIC 面へ書く情報そのものの規律 (逐語・host 名・口座名を tracked file へ書かない) は本 ADR とは別の面で、 そちらは<strong>不変</strong>である。</p>
+<h3 id="s2-1-scope-of-publish">§2.1 自 repo への PR は「出す」ではない</h3>
+<p class="section-essence" data-audience="human">自分の repo に枝を押して PR を立てるのは、 どちらも後から閉じられるので「出す」に含みません。 一方、 非公開のものを公開に切り替えることや、 外へ送ることは「出す」のままです。</p>
+<p data-audience="machine">憲法の語釈は「出す (<strong>public 化</strong>・外部送信)」である。 本 ADR が確定するのは<strong>その裏側だけ</strong>——自 repo への branch push と PR 作成は A4.3 の「自 repo への dispatch」として<strong>可逆</strong>であり、 Ask-first の対象外である (<strong>MUST NOT</strong> be gated on approval)。 可逆性の根拠は機構にある: この形は <code>main</code> を 1 byte も動かさず、 branch も PR も後から閉じられる——A4.3 が merge を可逆と呼ぶのと同じ理由で、 merge の<strong>手前</strong>の操作も可逆である。</p>
+<p data-audience="machine">「出す」に<strong>含まれる</strong>ものは条の語釈のとおりで、 本 ADR はそれを 1 つも減らさない: <strong>public 化</strong> (可視性を private から public へ反転する操作・repo の公開設定を含む) と<strong>外部送信</strong> (他 repo への push、 外部サービスへの送信、 release / tag の公開、 公開 URL の発行)。 この列挙は語釈の<strong>例示であって網羅ではない</strong>——判定に迷う操作は「取り消せるか」で決め、 取り消せないなら A4.2 の側へ倒す (fail-closed)。</p>
+<p data-audience="machine">本 repo が既に PUBLIC であることは判定を変えない。 PR は公開 repo の中で起こる出来事で、 可視性を反転させないからである。 ⚠ <strong>PUBLIC 面の情報を増やす便は依然として Ask-first である</strong>——それは衛生規則ではなく <a href="../spec/constitution.html#a1">A1</a> の義務であり、 本 ADR の射程外として<strong>1 文字も緩めない</strong> (逐語・host 名・口座名を tracked file へ書かないという規律も同様に不変)。</p>
 
 <h3 id="s2-2-mechanism">§2.2 機構 — 判定は契約の自己申告だけ</h3>
 <p class="section-essence" data-audience="human">機械は「この便は消す / 出す / 使うに当たる」と契約が自分で名乗った分だけ止めます。 道具を使ったかどうかから推測するのはやめます。</p>
-<p data-audience="machine"><code>--pr-cmd</code> は承認 event を前提としない (<strong>MUST NOT</strong> require)。 3 クラス (消す / 出す / 使う) の判定は<strong>契約の自己申告</strong> (<code>classes</code>) だけとし、 設計 §5.5 の「seam の使用からの導出」は<strong>廃止する</strong>。 導出を残せない理由は、 それが<strong>操作の可逆性ではなく道具の名前で</strong>止めていたことにある——同じ seam に他 repo へ push する道具を渡しても、 自 repo へ PR を出す道具を渡しても、 導出は同じ判定を出す。 ∴ 正しく止まる形にはならない。</p>
+<p data-audience="machine"><code>--pr-cmd</code> は承認 event を前提としない (<strong>MUST NOT</strong> require)。 本 ADR が廃止するのは設計 §5.5 の「<strong>seam の使用からの導出</strong>」であり、 判定の面は憲法 A4 の機構欄が定めるとおり<strong>契約の自己申告 (<code>classes</code>) + rules 行の deny list</strong> のままである (deny list は<strong>未着</strong>——記録時点の rules manifest に 3 クラスの deny 行は 1 本も無い)。 本 ADR は「出す」の範囲だけを扱い、 「消す」「使う」の判定には触れない。 導出を残せない理由は、 それが<strong>操作の可逆性ではなく道具の名前で</strong>止めていたことにある——同じ seam に他 repo へ push する道具を渡しても、 自 repo へ PR を出す道具を渡しても、 導出は同じ判定を出す。 ∴ 正しく止まる形にはならない。</p>
 <p data-audience="machine"><code>classes</code> に <code>publish</code> を名乗る契約は<strong>従来どおり</strong> spawn の手前で <code>Blocked</code> となり、 承認 event を受けるまで進まない (SRS FR15 / FR16・AC5 は<strong>不変</strong>)。 承認の受理面 (C7 の対話面・逐語を event へ記帳する) も <a href="./ADR-0005-a3-approval-surface-c7.html">ADR-0005</a> のまま変えない (supersede しない)。</p>
 
 <h3 id="s2-3-scope">§2.3 射程外</h3>
@@ -119,7 +120,7 @@
 <section id="s4-alternatives" class="informative">
 <h2>§4. Alternatives Considered</h2>
 <p class="section-essence" data-audience="human">3 つの案を退けました。 いまのまま承認を求め続ける案、 機械に push 先を調べさせる案、 憲法の文そのものに書き足す案です。</p>
-<p data-audience="machine">案 (i) <strong>現状維持 (1 便 1 承認)</strong>: 却下。 利点は実在する——承認 event が残るので「誰が何を許したか」の記録が便ごとに揃い、 判定を間違える余地が無い (安全側へ倒れる)。 しかし A4.3 が自 repo への dispatch を明示的に可逆と定めているため、 可逆な操作に Ask-first を課す形は<strong>条と矛盾する</strong>。 加えて承認の要求が大量に出ると承認が儀式化し、 不可逆な操作の前で止まる機能そのものが薄まる (§1 の実測)。</p>
+<p data-audience="machine">案 (i) <strong>現状維持 (1 便 1 承認)</strong>: 却下。 利点は実在する——承認 event が残るので「誰が何を許したか」の記録が便ごとに揃い、 判定を間違える余地が無い (安全側へ倒れる)。 ただし却下の理由は<strong>条の違反ではない</strong>——A4.2 は「不可逆なら聞け」という<strong>下限</strong>であって、 可逆な操作について聞くことを禁じてはいない。 却下する理由は運用の実測にある: 承認が安く大量に要求されると儀式化し、 不可逆な操作の前で止まる機能そのものが薄まる (§1 の実測: 同日 3 便で 6 回)。 A4.3 が自 repo への dispatch を可逆と名指したのは、 まさにこの摩耗を避けるためである。</p>
 <p data-audience="machine">案 (ii) <strong><code>--pr-cmd</code> の文面や remote の URL から自 repo かを機械が判定する enforcer</strong>: 却下。 利点も実在する——自己申告に頼らず「repo の外へ出るか」を機械が測れるので、 名乗り間違い (§3 Negative) を塞げる。 しかし remote の解決は<strong>道具側</strong>にあり (seam に渡るのは <code>sh -c</code> の 1 行で、 push 先を決めるのは道具である)、 core は道具を知らない設計を採っている。 ここで文面を parse すると、 器が道具の方言を追いかける実装を抱え込み、 道具を変えた日に静かに誤判定する。 ∴ 判定の面は次の版の enforcer (A4 機構欄) へ置き、 本 ADR は範囲の解釈だけを確定する。</p>
 <p data-audience="machine">案 (iii) <strong>憲法 A4.2 の「出す」の範囲を条文へ明文化する</strong>: 却下。 利点は最も強い——解釈を ADR に置くより条文に置いた方が、 読む側は 1 か所で完結する。 しかし憲法条文の改訂は <a href="../spec/constitution.html#a2">A2</a> の user 裁定の手続きを要し、 かつ A4.3 が<strong>すでに</strong>「自 repo への dispatch は可逆」と答えている。 答えの在る条へ言葉を足す改訂は、 手続きの費用に見合う情報を増やさない (同じ内容が 2 か所に載り、 片方が古くなる面が生まれる)。 ∴ 解釈の記録で足りる。</p>
 </section>
