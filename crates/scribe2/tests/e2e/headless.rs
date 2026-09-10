@@ -944,3 +944,101 @@ fn headless_runner_stops_on_rate_limit_word_in_result_body() {
     }
     clean(&[&dir, &worktree]);
 }
+
+/// **tool の失敗出力に上限語彙が現れても上限ではない**（`s2-07l.73`）。
+///
+/// claude は tool の失敗を会話 record（`type=user`）の中の `tool_result` block として流し、その
+/// block が `"is_error":true` を持つ。`.71` までは record 種別を見ずに字面で `is_error` を拾って
+/// いたので、**cargo や grep の出力に `429` が混じるだけで便が「上限」で死ぬ**（planner と当席が
+/// 独立に実 binary で再現・2026-09-11）。とくに実 run で cargo を撃たせる便では、失敗した
+/// Bash tool の出力がそのまま「上限で止まった」と記帳される。
+#[test]
+fn headless_runner_does_not_stop_on_rate_limit_word_in_tool_result() {
+    let dir = tmp();
+    let worktree = tmp();
+    let write_set = dir.join("write-set.txt");
+    let vessel = write_vessel_copy(&dir, r#"["cargo", "git"]"#);
+    fs::write(&write_set, "src/lib.rs\n").expect("write-set を書ける");
+    for body in [
+        // 会話 record が運ぶ tool 出力（上限語彙も is_error も**入れ子の中**に在る）。
+        concat!(
+            "{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\",",
+            "\"content\":\"error: 429 tests failed; see log\",\"is_error\":true}]}}\n"
+        ),
+        // **種別を読めない record**（`type` が無い）は「上限ではない」へ倒す＝分からない周を
+        // 上限と名乗らない（誤認すると失敗原因が台帳から消える）。
+        "{\"is_error\":true,\"result\":\"429 rate limit\"}\n",
+    ] {
+        // claude の rc は 1。**その rc が写ること**まで測る（rc 75 でないだけでは足りない）。
+        let claude = fake_claude(&dir, body, false, 1);
+        let out = run_runner(
+            &RunnerCall { dir: &dir, worktree: &worktree, write_set: &write_set, vessel: &vessel, claude: &claude, mode: "plan", account: None },
+            b"goal = \"x\"\n",
+        );
+        assert_ne!(
+            out.status.code(),
+            Some(i32::from(RC_RATE_LIMIT)),
+            "tool 出力の上限語彙は上限ではない: {body}"
+        );
+        assert_eq!(out.status.code(), Some(1), "claude の rc を写す: {body} / {}", stderr_of(&out));
+    }
+    clean(&[&dir, &worktree]);
+}
+
+/// 種別として読むのは **top-level の `type` だけ**（`s2-07l.73`・上の歯と対）。
+///
+/// この歯が無いと「終端種別の字面が record のどこかに在れば通る」実装が緑になる——入れ子の
+/// `tool_result` は `"type":"error"` を**中に**持ちうるので、字面で拾う実装は会話 record を
+/// 終端 record と読み違える。**top-level の `type` を末尾に置く**ことで、「最初に見つけた
+/// `"type":`」を採る実装と弁別する。
+#[test]
+fn headless_runner_does_not_take_nested_type_as_record_kind() {
+    let dir = tmp();
+    let worktree = tmp();
+    let write_set = dir.join("write-set.txt");
+    let vessel = write_vessel_copy(&dir, r#"["cargo", "git"]"#);
+    fs::write(&write_set, "src/lib.rs\n").expect("write-set を書ける");
+    // **両向きで測る**。「入れ子を採らない」だけだと種別を一切読まない実装（常に None＝
+    // 上限ではない）が緑になるので、**構造を跨いだ先の top-level の種別をちゃんと読む**側も
+    // 対で置く。claude の rc は 1 なので、rc 75 と rc 1 で 2 つの向きが弁別できる。
+    for (body, want) in [
+        // 入れ子には終端種別（error）が在り、**top-level の種別は会話 record（user）**で、
+        // しかも字面の順序は「入れ子が先・top-level が後」＝「最初に見つけた type」を採る実装を落とす。
+        (
+            concat!(
+                "{\"message\":{\"content\":[{\"type\":\"error\",\"content\":\"429 rate limit\"}],",
+                "\"is_error\":true},\"type\":\"user\"}\n"
+            ),
+            1,
+        ),
+        // **配列を跨いだ先の top-level の種別を読む**（`[` `]` の深さを数えていない実装では、
+        // 種別が depth 1 に見えなくなるか、深さが 0 へ落ちて読めなくなる）。
+        (
+            "{\"content\":[\"first\",\"second\"],\"type\":\"error\",\"status\":429}\n",
+            i32::from(RC_RATE_LIMIT),
+        ),
+        // **escape を含む文字列を跨いだ先の種別を読む**（escape を見ない実装では文字列が
+        // 閉じず、top-level の種別に到達できない）。
+        (
+            "{\"result\":\"said \\\"429 rate limit\\\" once\",\"type\":\"result\",\"is_error\":true}\n",
+            i32::from(RC_RATE_LIMIT),
+        ),
+        // **文字列の中の `\"type\":` は key ではない**（文字列の終わりを見ない実装は、tool の
+        // 出力が引用した種別名を record の種別として拾う）。
+        (
+            concat!(
+                "{\"message\":\"tool said \\\"type\\\":\\\"result\\\" and 429 rate limit\",",
+                "\"type\":\"user\",\"is_error\":true}\n"
+            ),
+            1,
+        ),
+    ] {
+        let claude = fake_claude(&dir, body, false, 1);
+        let out = run_runner(
+            &RunnerCall { dir: &dir, worktree: &worktree, write_set: &write_set, vessel: &vessel, claude: &claude, mode: "plan", account: None },
+            b"goal = \"x\"\n",
+        );
+        assert_eq!(out.status.code(), Some(want), "種別は top-level の type だけ: {body} / {}", stderr_of(&out));
+    }
+    clean(&[&dir, &worktree]);
+}
