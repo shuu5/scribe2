@@ -6,6 +6,7 @@
 
 use super::{build, feed, fill, flag, need, read_stdin_bytes, Call, DEFAULT_CLAUDE, RC_RATE_LIMIT};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
+use crate::pipe::declaration::Effective;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 
@@ -15,7 +16,7 @@ const TEMPLATE: &str = include_str!("runner.txt");
 /// 使い方の 1 行。
 pub fn usage() -> String {
     format!(
-        "usage: {} runner --worktree D --write-set F --plugin-dir D --permission-mode M [--account-dir D] [--claude PATH] < contract",
+        "usage: {} runner --worktree D --write-set F --vessel F --plugin-dir D --permission-mode M [--account-dir D] [--claude PATH] < contract",
         crate::name::NAME
     )
 }
@@ -26,16 +27,28 @@ pub fn dispatch(args: &[String]) -> Outcome {
         Ok::<_, String>((
             need(args, "--worktree")?.to_owned(),
             need(args, "--write-set")?.to_owned(),
+            need(args, "--vessel")?.to_owned(),
             need(args, "--plugin-dir")?.to_owned(),
             need(args, "--permission-mode")?.to_owned(),
             flag(args, "--account-dir")?.map(str::to_owned),
             flag(args, "--claude")?.map(str::to_owned),
         ))
     })();
-    let (worktree, write_set, plugin_dir, mode, account, claude) = match parsed {
+    let (worktree, write_set, vessel, plugin_dir, mode, account, claude) = match parsed {
         Ok(found) => found,
         Err(reason) => return Outcome::failed(RC_REFUSED, vec![format!("runner: {reason}"), usage()]),
     };
+    // **権限は便の写しから読む**（manifest も repo の宣言も読まない＝便の中で権限が
+    // 動かない）。写しが読めない周は claude を起こさずに rc 2 で止める。
+    let granted = match Effective::load(Path::new(&vessel)) {
+        Ok(found) => found,
+        Err(errors) => {
+            let mut lines = vec!["runner: vessel の写しを読めない".to_owned()];
+            lines.extend(errors.iter().map(ToString::to_string));
+            return Outcome::failed(RC_BROKEN, lines);
+        }
+    };
+    let tools = allowed_tools(granted.allowed());
     let contract = String::from_utf8_lossy(&read_stdin_bytes()).into_owned();
     if contract.trim().is_empty() {
         return refused("契約が stdin に無い".to_owned());
@@ -59,12 +72,19 @@ pub fn dispatch(args: &[String]) -> Outcome {
         cwd: Some(Path::new(&worktree)),
         // rate limit を**途中で**見るので逐次で受ける。
         streaming: true,
-    })
+    },
+    &tools)
 }
 
 /// claude を回し、rate limit を見たらその場で止める。
-fn launch(call: &Call<'_>) -> Outcome {
-    let spawned = build(call).spawn();
+///
+/// **権限を与えるのはここだけ**である（lens は判定を受け取るだけ）。`--setting-sources
+/// project` を毎回付けて**起動口座の settings を継承せず**、器が与えた allow の外は
+/// plugin の PermissionRequest hook が deny する（ADR-0009 §2.1・ADR-0010 §2.4）。
+fn launch(call: &Call<'_>, tools: &str) -> Outcome {
+    let mut command = build(call);
+    command.arg("--setting-sources").arg("project").arg("--allowedTools").arg(tools);
+    let spawned = command.spawn();
     let mut child = match spawned {
         Ok(found) => found,
         Err(err) => return Outcome::failed_line(RC_BROKEN, format!("runner: claude を起動できない: {err}")),
@@ -97,6 +117,18 @@ fn launch(call: &Call<'_>) -> Outcome {
             if rc == 0 { Outcome::ok_line(line) } else { Outcome { out: vec![line], err: Vec::new(), rc } }
         }
     }
+}
+
+/// 許す command を `--allowedTools` の 1 本へ組む。
+///
+/// 値は**便ごとに凍結した写し**から来る＝実装が対象 repo の宣言を書き換えても、走っている
+/// 便の権限は変わらない（ADR-0010 §2.4）。
+fn allowed_tools(commands: &[String]) -> String {
+    commands
+        .iter()
+        .map(|command| format!("Bash({command}:*)"))
+        .collect::<Vec<String>>()
+        .join(",")
 }
 
 /// 上限に当たったことを表す語彙（planner 裁定 2026-09-10 Q4）。

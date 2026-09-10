@@ -7,7 +7,9 @@
 //! 親の env をそのまま継承させ、必要な値は cmd の placeholder 置換で渡す。
 
 use super::approve::{block, needs_approval, Approve};
-use super::{branch_name, contract_path, emit, git_line, plugin_path, worktree_path, Budget, Emit};
+use super::{
+    branch_name, contract_path, emit, git_line, plugin_path, vessel_path, worktree_path, Budget, Emit,
+};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
 use crate::fleet::store::LockPolicy;
 use crate::fleet::{EventKind, Stage};
@@ -185,6 +187,10 @@ fn substitute(
         .replace(
             "{contract}",
             &contract_path(launch.state_dir, launch.run).display().to_string(),
+        )
+        .replace(
+            "{vessel}",
+            &vessel_path(launch.state_dir, launch.run).display().to_string(),
         )
         .replace("{write_set}", &write_set.display().to_string())
         .replace("{base}", base)
