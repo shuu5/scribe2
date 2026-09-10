@@ -36,5 +36,8 @@ inventory.json
 .claude/*
 !.claude/settings.json
 
-# cargo-mutants の作業 tree（週次 job が作る・commit しない）
+# cargo-mutants の作業 tree（週次 job と mutants-diff が作る・commit しない）。
+# **前回分の rename 先も要る**——cargo-mutants は走るたび mutants.out を mutants.out.old へ
+# 退避するので、片方だけ無視すると 200 file 規模の生成物が索引に入りかける（s2-07l.56）。
 mutants.out/
+mutants.out.old/
