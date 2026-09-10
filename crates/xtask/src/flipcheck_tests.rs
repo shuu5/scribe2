@@ -668,7 +668,7 @@ fn flip_check_ignores_retroactive_marker_already_in_base() {
         head: Some(head.clone()),
     };
     assert!(stale.stale_marker(), "持ち越した札は stale と名乗るはず");
-    assert!(!stale.marked(), "持ち越した札を数えないはず");
+    assert!(!stale.marked(super::RETROACTIVE_MARK), "持ち越した札を数えないはず");
 
     // 負例。**同じ札でも base に無ければ**この便で足したものとして効く
     // （HEAD 側だけを見る実装も、両側とも無視する実装も、ここで落ちる）。
@@ -677,7 +677,7 @@ fn flip_check_ignores_retroactive_marker_already_in_base() {
         base: Some(BASE_LIB.to_owned()),
         head: Some(head),
     };
-    assert!(fresh.marked(), "HEAD にだけ在る札は効くはず");
+    assert!(fresh.marked(super::RETROACTIVE_MARK), "HEAD にだけ在る札は効くはず");
     assert!(!fresh.stale_marker(), "この便で足した札を stale と呼ばない");
 }
 
@@ -1350,4 +1350,63 @@ fn flip_check_sees_body_placed_as_module_dir() {
         "<name>/mod.rs 形の本体も同梱するはず: {}",
         got.line
     );
+}
+
+/// **純粋な移動の札**（`// flip-check: moved <bead-id>`）は RED を免除し、判定行に `moved=1`。
+///
+/// `retroactive` を転用しない理由は判定行の読みである——あちらの `retroactive=N` は
+/// 「後から足した歯が N 本」と読まれるので、歯を 1 本も足さない移動の便に貼ると、
+/// その数が何を免除したのか読めなくなる（`s2-07l.84` で実際に貼ってしまった）。
+#[test]
+fn flip_check_reports_moved_marker_for_a_pure_move() {
+    let got = judge_lib(
+        "pub fn val() -> u32 {\n    1\n}\n#[cfg(test)]\nmod checks {\n    #[test]\n    fn holds() {\n        assert_eq!(super::val(), 1);\n    }\n}\n",
+        "pub fn val() -> u32 {\n    1\n}\n#[cfg(test)]\nmod checks {\n    // flip-check: moved s2-07l.86\n    #[test]\n    fn holds() {\n        assert_eq!(super::val(), 1);\n    }\n}\n",
+    );
+    assert_eq!(got.code, 0, "純粋な移動の札は通す: {}", got.line);
+    assert!(got.line.contains("moved=1"), "判定行に moved=1 が載る: {}", got.line);
+    assert!(!got.line.contains("retroactive"), "retroactive は数えない: {}", got.line);
+}
+
+/// `moved` は `retroactive` と**同じ 4 条件**でしか効かない（緩めない）。
+///
+/// 4 条件 = test 区間内 / 行頭 / bead id 必須 / base から持ち越した札は効かない。
+/// 1 つずつ壊して、どれを壊しても免除が消えることを測る。
+#[test]
+fn flip_check_moved_marker_needs_the_same_four_conditions() {
+    let base = "pub fn val() -> u32 {\n    1\n}\n#[cfg(test)]\nmod checks {\n    #[test]\n    fn holds() {\n        assert_eq!(super::val(), 1);\n    }\n}\n";
+    // (a) src 区間の札は効かない（実装の隣に 1 行足すだけで検査を外せる形にしない）。
+    let in_src = judge_lib(
+        base,
+        "// flip-check: moved s2-07l.86\npub fn val() -> u32 {\n    2\n}\n#[cfg(test)]\nmod checks {\n    #[test]\n    fn holds() {\n        assert_eq!(super::val(), 2);\n    }\n}\n",
+    );
+    assert!(!in_src.line.contains("moved="), "src 区間の札は数えない: {}", in_src.line);
+    // (b) bead id が無い札は効かない（誰にも辿れない逃がしは静かな逃がしと同じ）。
+    let no_bead = judge_lib(
+        base,
+        "pub fn val() -> u32 {\n    1\n}\n#[cfg(test)]\nmod checks {\n    // flip-check: moved\n    #[test]\n    fn holds() {\n        assert_eq!(super::val(), 1);\n    }\n}\n",
+    );
+    assert_not_retroactive(&no_bead, "bead id の無い moved 札");
+    assert!(!no_bead.line.contains("moved="), "id の無い札は数えない: {}", no_bead.line);
+    // (c) 行頭で見る（字面の言及は拾わない）。
+    let mentioned = judge_lib(
+        base,
+        "pub fn val() -> u32 {\n    1\n}\n#[cfg(test)]\nmod checks {\n    #[test]\n    fn holds() {\n        let _ = \"// flip-check: moved s2-07l.86\";\n        assert_eq!(super::val(), 1);\n    }\n}\n",
+    );
+    assert!(!mentioned.line.contains("moved="), "字面の言及は数えない: {}", mentioned.line);
+}
+
+/// **base から持ち越した `moved` 札は効かない**（4 条件の 4 つ目）。
+///
+/// 札は file に残るので、在るだけで数えると一度貼った札がその file の test 区間を触る
+/// 以後のすべての便を免除する——`retroactive` が塞いだ穴と同じものが `moved` 側に開く。
+#[test]
+fn flip_check_ignores_a_carried_over_moved_marker() {
+    let carried = "pub fn val() -> u32 {\n    1\n}\n#[cfg(test)]\nmod checks {\n    // flip-check: moved s2-07l.86\n    #[test]\n    fn holds() {\n        assert_eq!(super::val(), 1);\n    }\n}\n";
+    let got = judge_lib(
+        carried,
+        "pub fn val() -> u32 {\n    1\n}\n#[cfg(test)]\nmod checks {\n    // flip-check: moved s2-07l.86\n    #[test]\n    fn holds() {\n        assert_eq!(super::val(), 1);\n    }\n\n    #[test]\n    fn added() {\n        assert_eq!(super::val(), 1);\n    }\n}\n",
+    );
+    assert_not_retroactive(&got, "持ち越した moved 札だけの便");
+    assert!(!got.line.contains("moved="), "持ち越した札は数えない: {}", got.line);
 }

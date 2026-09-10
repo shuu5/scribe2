@@ -37,6 +37,23 @@ const TEST_MOD_HEADS: &[&str] = &["mod ", "pub mod ", "pub(crate) mod "];
 /// 載る（planner review の対象・notes に変異 proof が要る）。
 const RETROACTIVE_MARK: &str = "// flip-check: retroactive ";
 
+/// **純粋な移動**を名乗る札（`s2-07l.86`）。
+///
+/// 「歯を 1 本も足さず、挙動を 1 つも変えず、file の間で動かしただけ」の便に使う。
+/// 機械の意図としては [`FilePair::removed_only`] が同じことを見ているが、**あの門は
+/// test 区間が動いたときにしか効かない**——歯が `check()` 越しの統合形で書かれた repo
+/// では、実装だけを module へ出す便で test 区間が 1 行も動かず、門が立たない（実測
+/// 2026-09-11・`s2-07l.84` は `no-test-diff` で落ちた）。
+///
+/// **`retroactive` を転用しない**のが本札の存在理由である。あちらは「**後から足す歯**」の
+/// 例外で、判定行の `retroactive=N` は「後から足した歯が N 本ある」と読まれる。移動の便に
+/// 貼ると、その数が何を免除したのか読めなくなる——札の doc が繰り返し警戒している
+/// 「静かな逃がし」と同型になる。
+///
+/// 効く条件は `retroactive` と**同じ 4 つ**（test 区間内 / 行頭 / bead id 必須 /
+/// base から持ち越した札は効かない）で、判定は同じ [`marker_beads`] を通る。
+const MOVED_MARK: &str = "// flip-check: moved ";
+
 /// base tree と runner target を置く `target/` 配下の作業 dir 名。
 const WORK_DIR: &str = "flipcheck";
 
@@ -101,6 +118,11 @@ impl FilePair {
 
     /// **後から足す歯**の明示例外を名乗るか（test 区間内の marker **行**）。
     ///
+    /// この札が覆うのは「**既に land した挙動へ後から歯を足す**」便だけである。歯を 1 本も
+    /// 足さない便（実装を module へ移すだけ等）は前提を満たさない——そちらは [`MOVED_MARK`]
+    /// を使う。判定行の `retroactive=N` が「後から足した歯が N 本」と読めることが、この札の
+    /// 値打ちである。
+    ///
     /// src 区間の marker は効かない。src へ書けば「実装の隣に 1 行足すだけで
     /// flip 検査を外せる」ことになり、逃がしが静かになる。
     ///
@@ -114,7 +136,16 @@ impl FilePair {
     /// base に marker が在る repo で src だけ変えた便が `retroactive=1` で通った）。
     /// base に無い file（新規 module）は test 区間が丸ごと新しいので対象に含める。
     fn retroactive(&self) -> bool {
-        self.marked() && (self.test_diff() || self.base.is_none())
+        self.marked(RETROACTIVE_MARK) && (self.test_diff() || self.base.is_none())
+    }
+
+    /// **純粋な移動**の明示例外を名乗るか（[`MOVED_MARK`]・条件は `retroactive` と同じ）。
+    ///
+    /// 同じ 4 条件（test 区間内 / 行頭 / bead id 必須 / base から持ち越した札は効かない）を
+    /// 通すため、判定は [`FilePair::marked`] を共有する——2 つ目の実装を作ると、片方だけが
+    /// 緩む形で穴が開く。
+    fn moved(&self) -> bool {
+        self.marked(MOVED_MARK) && (self.test_diff() || self.base.is_none())
     }
 
     /// **この便で足した**札を持つか。
@@ -127,17 +158,17 @@ impl FilePair {
     /// 一度貼った札がその file の test 区間を触る**以後のすべての便**を免除する——札の
     /// bead id と便が対応しなくなり、判定行の `retroactive=N` を review しても何を
     /// 免除したのかを辿れない。
-    fn marked(&self) -> bool {
-        !self.fresh_markers().is_empty()
+    fn marked(&self, mark: &str) -> bool {
+        !self.fresh_markers(mark).is_empty()
     }
 
     /// HEAD の test 区間に在り base の test 区間に無い札の bead id（＝この便で足した札）。
     ///
     /// base に無い file（新規 module）は base 側の test 区間が空なので、HEAD の札が
     /// そのまま「この便で足した札」になる。
-    fn fresh_markers(&self) -> Vec<String> {
-        let carried = marker_beads(&self.base_test());
-        marker_beads(&self.head_test())
+    fn fresh_markers(&self, mark: &str) -> Vec<String> {
+        let carried = marker_beads(&self.base_test(), mark);
+        marker_beads(&self.head_test(), mark)
             .into_iter()
             .filter(|bead| !carried.contains(bead))
             .collect()
@@ -148,7 +179,10 @@ impl FilePair {
     /// 効かない札を黙って無視すると、書いた人は免除したつもりで RED を要求され、
     /// 理由を判定行から読めない。stderr へ 1 行出して直し方を渡す。
     fn stale_marker(&self) -> bool {
-        !marker_beads(&self.head_test()).is_empty() && self.fresh_markers().is_empty()
+        [RETROACTIVE_MARK, MOVED_MARK].iter().any(|mark| {
+            !marker_beads(&self.head_test(), mark).is_empty()
+                && self.fresh_markers(mark).is_empty()
+        })
     }
 
     /// test 区間の差が**削除だけ**か（順序を保った行の削除だけで HEAD が得られる）。
@@ -171,7 +205,12 @@ impl FilePair {
     /// 新規 module は base 側に `mod` 宣言ごと存在せず compile されないので、
     /// test 区間だけを写しても測れない。
     fn not_flippable(&self) -> bool {
-        self.overlay().is_none() && !self.head_test().is_empty() && !self.retroactive()
+        self.overlay().is_none() && !self.head_test().is_empty() && !self.escaped()
+    }
+
+    /// 明示の逃がし（`retroactive` か `moved`）を名乗るか。
+    fn escaped(&self) -> bool {
+        self.retroactive() || self.moved()
     }
 
     /// **宣言だけの file** か（test 区間の差分行が全部 `mod x;` 形）。
@@ -192,7 +231,7 @@ impl FilePair {
 
     /// 「base で赤くなること」を要求する差か。
     fn flips(&self) -> bool {
-        self.test_diff() && !self.removed_only() && !self.retroactive()
+        self.test_diff() && !self.removed_only() && !self.escaped()
     }
 }
 
@@ -202,11 +241,11 @@ impl FilePair {
 /// **札の同一性は bead id で見る**。行の字面で比べると、字下げや id の前後の空白が 1 個
 /// 違うだけで base から持ち越した札が「この便で足した札」に化け、**古い id のまま免除が
 /// 効き続ける**——この門が塞ごうとしている当の穴の裏口になる。
-fn marker_beads(region: &str) -> Vec<String> {
+fn marker_beads(region: &str, mark: &str) -> Vec<String> {
     region
         .lines()
         .filter_map(|line| {
-            let bead = line.trim_start().strip_prefix(RETROACTIVE_MARK)?.trim();
+            let bead = line.trim_start().strip_prefix(mark)?.trim();
             (!bead.is_empty()).then(|| bead.to_owned())
         })
         .collect()
@@ -635,6 +674,8 @@ struct Counts {
     removed: usize,
     /// marker で RED を免除した本数。
     retro: usize,
+    /// 純粋な移動の札で RED を免除した本数。
+    moved: usize,
     /// 本体 file へ同梱した宣言 file の本数。
     decl: usize,
 }
@@ -646,6 +687,7 @@ impl Counts {
             flipped: pairs.iter().filter(|pair| pair.flips()).count(),
             removed: pairs.iter().filter(|pair| pair.removed_only()).count(),
             retro: pairs.iter().filter(|pair| pair.retroactive()).count(),
+            moved: pairs.iter().filter(|pair| pair.moved()).count(),
             // 同梱した本数は base を実体化する段（[`run_on_base`]）で決まる。
             decl: 0,
         }
@@ -660,6 +702,9 @@ fn ok_line(counts: Counts) -> Verdict {
     }
     if counts.retro > 0 {
         line.push_str(&format!(" retroactive={}", counts.retro));
+    }
+    if counts.moved > 0 {
+        line.push_str(&format!(" moved={}", counts.moved));
     }
     if counts.decl > 0 {
         line.push_str(&format!(" decl={}", counts.decl));
@@ -981,7 +1026,8 @@ fn no_flip_verdict(pairs: &[FilePair], counts: Counts) -> Verdict {
         emit_err(
             "flip-check: 新規 module は base に mod 宣言ごと無く compile されない。\
              test を crates/<c>/tests/<dir>/<f>.rs の module file か既存 file の test 区間へ置くか、\
-             後から足す歯なら test 区間へ `// flip-check: retroactive <bead-id>` を 1 行置く",
+             後から足す歯なら test 区間へ `// flip-check: retroactive <bead-id>` を、\
+             歯を足さない純粋な移動なら `// flip-check: moved <bead-id>` を 1 行置く",
         );
         return fail(&format!("not-flippable files={}", stuck.join(",")));
     }
@@ -991,7 +1037,7 @@ fn no_flip_verdict(pairs: &[FilePair], counts: Counts) -> Verdict {
             pair.rel
         ));
     }
-    if counts.removed > 0 || counts.retro > 0 {
+    if counts.removed > 0 || counts.retro > 0 || counts.moved > 0 {
         return ok_line(counts);
     }
     fail("no-test-diff")
