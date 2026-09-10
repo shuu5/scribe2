@@ -566,6 +566,8 @@ const BUSY_ABOVE: &str = "✻ Thinking… (23s · esc to interrupt)\n❯ \n";
 const NO_PROMPT: &str = "$ \n  10% 100k/1M Opus 5\n";
 /// `seat.tick_stale_s` の宣言値（`rules/manifest.toml`）。歯はこの値の**両側**を撃つ。
 const STALE_S: u64 = 2400;
+/// `seat.cycle_lock_ttl_s` の宣言値。歯はこの値の**両側**を撃つ。
+const TTL_S: u64 = 900;
 
 /// file の mtime を `secs` 秒だけ過去へ倒す。
 ///
@@ -606,9 +608,10 @@ fn wm_file(dir: &Path, name: &str, seat: &str) -> PathBuf {
 fn wm_decoys(dir: &Path, seat: &str) {
     wm_file(dir, "notes.md", seat);
     wm_file(dir, "working-memory.old.consumed.md", seat);
+    // frontmatter を持たず、**本文の行頭**に名乗りが在る形（anchor を外すと拾ってしまう）。
     fs::write(
         dir.join("working-memory.body.md"),
-        format!("# 見出し\n\n本文の中の seat: {seat}\n"),
+        format!("# 見出し\n\nseat: {seat}\n"),
     )
     .ok();
 }
@@ -1054,8 +1057,15 @@ fn seat_cycle_refuses_when_lock_is_live_and_reclaims_stale_lock() {
     assert_eq!(fs::read_to_string(&log).unwrap_or_default(), "", "1 key も送っていない");
     assert!(lock.exists(), "他の cycle の lock を消さない");
 
-    // TTL（900 秒）を超えた lock は residue＝取り直して進む。
-    backdate(&lock, 1000);
+    // TTL（900 秒）の**内側**はまだ live＝譲る（境界の下側を測る）。
+    backdate(&lock, TTL_S - 100);
+    let out = run_seat(&args);
+    assert_eq!(rc_of(&out), i32::from(RC_REFUSED));
+    assert_eq!(stderr_of(&out), "seat: cycle refused reason=lock-held\n");
+    assert_eq!(fs::read_to_string(&log).unwrap_or_default(), "", "まだ 1 key も送っていない");
+
+    // TTL を超えた lock は residue＝取り直して進む。
+    backdate(&lock, TTL_S + 100);
     let out = run_seat(&args);
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
     assert_eq!(stdout_of(&out), format!("seat: cycle done target={name}\n"));
