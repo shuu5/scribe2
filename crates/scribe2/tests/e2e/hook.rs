@@ -1266,10 +1266,28 @@ fn marketplace_json_names_the_same_plugin_as_plugin_json() {
         "owner は name だけを持つ（url / email を置かない）: {market}"
     );
 
+    // 説明文は plugin.json と**同じ字面**である（片方だけ動かす変異はここで落ちる）。
+    let described = plugin
+        .split_once("\"description\": \"")
+        .and_then(|(_, tail)| tail.split_once('"'))
+        .map(|(value, _)| value.to_owned())
+        .unwrap_or_default();
+    assert!(!described.is_empty(), "plugin.json から description を読める: {plugin}");
+    assert_eq!(
+        market
+            .matches(&format!("\"description\": \"{described}\""))
+            .count(),
+        1,
+        "marketplace は plugin.json と同じ description を 1 回だけ持つ: {market}"
+    );
+
     // 個人情報・host 固有値の不在。断片から組み立てるので歯の source には字面が無い。
     for mark in [
         concat!("/", "home", "/"),
         concat!("~", "/"),
+        // scheme の無い forge の host も塞ぐ。`http` だけだと `"repository":
+        // "<forge>/<個人>"` の形が素通りする（実測 2026-09-10・lens-385 F1）。
+        concat!("git", "hub", ".com/"),
         "http",
         "\"url\"",
         "\"email\"",
