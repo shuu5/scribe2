@@ -10,6 +10,7 @@ mod claude_md;
 mod flipcheck;
 mod genmanifest;
 mod limits;
+mod mutantsdiff;
 mod paths_clean;
 mod toml_lite;
 
@@ -17,8 +18,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 /// 使い方の 1 行。
-const USAGE: &str =
-    "usage: cargo xtask <check|gen-manifest|gen-claude-md> [ROOT] | cargo xtask flip-check --base <ref>";
+const USAGE: &str = "usage: cargo xtask <check|gen-manifest|gen-claude-md> [ROOT] | cargo xtask <flip-check|mutants-diff> --base <ref>";
 
 /// stdout 出力層。stdout へ書くのはこの関数だけである。
 #[expect(
@@ -84,6 +84,8 @@ fn main() -> ExitCode {
         Some("gen-claude-md") => run_gen_claude_md(root_arg),
         // flip-check だけは rc 2（引数不正）を持つので `Err` → rc 1 経路へ流さない。
         Some("flip-check") => return flipcheck::run(tail),
+        // mutants-diff も rc 2（測れなかった）を持つので `Err` → rc 1 経路へ流さない。
+        Some("mutants-diff") => return mutantsdiff::run(tail),
         _ => Err(USAGE.to_owned()),
     };
     match outcome {
@@ -92,5 +94,150 @@ fn main() -> ExitCode {
             emit_err(&reason);
             ExitCode::FAILURE
         }
+    }
+}
+
+/// `mutants-diff` の歯。**本体は `mutantsdiff.rs`** だが、歯はここ（base に在る file）へ置く。
+///
+/// 新規 module の中に置くと、その file ごと base に無いので **flip-check が構造的に測れない**
+/// （`not-flippable`・新規 module は base に `mod` 宣言ごと存在せず compile されない）。
+/// 契約の write-set が `{main,mutantsdiff}.rs（+ tests）` と両方を挙げているのはこのためである。
+///
+/// **cargo-mutants 本体はここから起動しない**（CI に 10 分の実行を持ち込まない）。測るのは
+/// 「1 行の形」と「rc の極性」で、材料は `outcomes.json` の fixture 3 種である。
+#[cfg(test)]
+mod tests {
+    use crate::mutantsdiff::{deny_line_enabled, measured, parse_outcomes, verdict, without_outcomes, Counts};
+    use std::process::ExitCode;
+
+    /// cargo-mutants が実際に書く形（生存 0 の周・入れ子に同名 key を持つ）。
+    const MISSED_NONE: &str = r#"{
+      "outcomes": [
+        {"scenario": "Baseline", "summary": "Success", "missed": 99, "total_mutants": 99, "caught": 99, "timeout": 99, "unviable": 99},
+        {"scenario": {"Mutant": {"function": {"function_name": "missed"}}}, "summary": "CaughtMutant"}
+      ],
+      "total_mutants": 23, "missed": 0, "caught": 23, "timeout": 0, "unviable": 0, "success": 1
+    }"#;
+
+    /// 生存が 2 件在る周（検出線の主役）。
+    const MISSED_TWO: &str = r#"{
+      "outcomes": [{"scenario": "Baseline", "summary": "Success"}],
+      "total_mutants": 18, "missed": 2, "caught": 12, "timeout": 1, "unviable": 3, "success": 1
+    }"#;
+
+    /// 途中で切れた JSON（測れていない）。
+    const BROKEN: &str = r#"{"outcomes": [{"scenario": "Baseline""#;
+
+    #[test]
+    fn mutants_diff_line_reports_every_count_from_outcomes() {
+        let counts = parse_outcomes(MISSED_TWO).expect("fixture は読める");
+        assert_eq!(
+            counts,
+            Counts { total: 18, caught: 12, missed: 2, unviable: 3, timeout: 1 },
+            "5 つの数を outcomes.json から読む"
+        );
+        // **1 行の形**まで測る（読み取れても書式が崩れれば報告の額面が読めない）。
+        assert_eq!(
+            counts.line(),
+            "mutants-diff: total=18 caught=12 missed=2 unviable=3 timeout=1",
+            "1 行の形は固定"
+        );
+        // ★**不成立は撃墜と別**（rc 101 を撃墜に数えないのと同じ極性）。1 行に別々に出る。
+        assert!(counts.line().contains("unviable=3"), "測れなかった分が額面に出る");
+    }
+
+    #[test]
+    fn mutants_diff_reads_only_top_level_counts() {
+        // 入れ子に `"missed"` の字面が在っても数えない（file 全体を grep する形との弁別）。
+        // ★fixture の入れ子は **key として** 5 つとも `99` を持つ（値の中の字面ではない）。
+        // 深さ条件を消した実装はこの 99 を拾うので **1 行が丸ごと変わる**（lens 2026-09-11:
+        // 値に字面を置いただけの fixture では深さ条件を消しても緑＝空虚な歯だった）。
+        let counts = parse_outcomes(MISSED_NONE).expect("fixture は読める");
+        assert_eq!(
+            counts.line(),
+            "mutants-diff: total=23 caught=23 missed=0 unviable=0 timeout=0",
+            "入れ子の同名 key を 1 つも拾わない"
+        );
+    }
+
+    #[test]
+    fn mutants_diff_requires_every_count_to_be_written() {
+        // `missed` が書かれていない outcomes.json を 0 と読むと、「測って 0」と「書かれて
+        // いない」が同じ緑になる（lens 2026-09-11 MEDIUM）。
+        let partial = r#"{"total_mutants": 3, "caught": 3, "timeout": 0, "unviable": 0}"#;
+        assert!(parse_outcomes(partial).is_err(), "5 つ揃わない周は Err");
+    }
+
+    #[test]
+    fn mutants_diff_does_not_trust_counts_when_the_tool_failed() {
+        // ★baseline（変異を当てない木）の test が落ちた周も cargo-mutants は outcomes.json を
+        // 書く（`total_mutants=0`）。rc を捨てると、その 1 行は「測る対象が無い」周と **1 bit も
+        // 違わない緑**になる＝suite が壊れているときほど門が緑（lens 2026-09-11 H1）。
+        assert!(
+            measured(Counts::default(), false).is_err(),
+            "非 0 で終えて生存も時間切れも無い周は測定として受けない"
+        );
+        // 非 0 の理由が件数から**説明できる**周（生存が在る）は測定として受ける。
+        let survivors = Counts { total: 18, caught: 12, missed: 6, unviable: 0, timeout: 0 };
+        assert!(measured(survivors, false).is_ok(), "生存が在る非 0 は正常な測定");
+        assert!(measured(Counts::default(), true).is_ok(), "rc 0 は測定として受ける");
+    }
+
+    #[test]
+    fn mutants_diff_entry_point_refuses_without_base() {
+        // 配線（subcommand の入口）にも歯を 1 本置く。`--base` 無しは rc 2（使い方の誤り）。
+        assert_eq!(crate::mutantsdiff::run(&[]), ExitCode::from(2), "--base 無しは rc 2");
+        assert!(crate::USAGE.contains("mutants-diff"), "usage が subcommand を名指す");
+    }
+
+    #[test]
+    fn mutants_diff_rejects_broken_outcomes_json() {
+        // **壊れた JSON を 0 に化けさせない**。0 を返すと「母集団 0 の緑」が「歯は非空虚」と読まれる。
+        let failed = parse_outcomes(BROKEN);
+        assert!(failed.is_err(), "壊れた JSON は Err（0 ではない）: {failed:?}");
+    }
+
+    #[test]
+    fn mutants_diff_records_missed_while_the_line_is_disabled() {
+        let counts = parse_outcomes(MISSED_TWO).expect("fixture は読める");
+        // enabled=false（現行の manifest）: 生存が在っても **rc 0**＝検出線であって門ではない。
+        assert_eq!(verdict(&counts, false), ExitCode::SUCCESS, "検出線は門にしない");
+        // enabled=true（C5 の user 裁定が出た後）: 同じ 1 行のまま rc 1 へ倒れる。
+        assert_eq!(verdict(&counts, true), ExitCode::FAILURE, "裁定後は門になる");
+        // 生存 0 の周は enabled の値に関わらず rc 0。
+        let clean = parse_outcomes(MISSED_NONE).expect("fixture は読める");
+        assert_eq!(verdict(&clean, true), ExitCode::SUCCESS, "生存 0 は門でも通る");
+    }
+
+    #[test]
+    fn mutants_diff_reports_zero_when_there_is_nothing_to_measure() {
+        // diff に変異が 1 つも無い周（core を触らない便）: cargo-mutants は **rc 0** で終え
+        // 出力 dir を作らない。これは「**測る対象が無い**」であって「測れなかった」ではない。
+        let counts = without_outcomes(true).expect("道具が rc 0 なら測る対象が無いだけ");
+        assert_eq!(
+            counts.line(),
+            "mutants-diff: total=0 caught=0 missed=0 unviable=0 timeout=0",
+            "母集団を額面に出す（0 件の緑と読み違えないため）"
+        );
+        // **門でも通る**——測る対象が無い周を赤にすると、docs-only 便が恒久 FAIL になる。
+        assert_eq!(verdict(&counts, true), ExitCode::SUCCESS, "測る対象が無い周は赤にしない");
+    }
+
+    #[test]
+    fn mutants_diff_is_unmeasured_when_the_tool_fails() {
+        // 道具が非 0 で終わった周は「**測れなかった**」＝rc 2 の側に残す（0 に化けさせない）。
+        let failed = without_outcomes(false);
+        assert!(failed.is_err(), "道具の異常終了は Err（total=0 の緑にしない）: {failed:?}");
+    }
+
+    #[test]
+    fn mutants_diff_takes_the_deny_polarity_from_the_manifest_row() {
+        // **値は manifest に 1 つ**（憲法 C1）。道具の側に既定を持たない。
+        let disabled = "[[rule]]\nid = \"R-C12-1\"\nenabled = false\n\n[[rule]]\nid = \"R-C13-1\"\nenabled = true\n";
+        assert!(!deny_line_enabled(disabled), "R-C12-1 の値を読む（隣の行に釣られない）");
+        let enabled = "[[rule]]\nid = \"R-C12-1\"\nenabled = true\n";
+        assert!(deny_line_enabled(enabled), "enabled=true は門");
+        // 行が無い周は**門にしない**側へ倒す（無い規則を勝手に発効させない）。
+        assert!(!deny_line_enabled("[[rule]]\nid = \"R-C4-1\"\nenabled = true\n"), "行が無ければ門にしない");
     }
 }
