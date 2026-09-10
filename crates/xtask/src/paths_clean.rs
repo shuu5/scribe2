@@ -261,9 +261,18 @@ mod tests {
     // 下の 2 本は **後から足した歯**である（測定そのものは s2-07l.18 までに land 済みで、
     // base でも緑になる）。RED→GREEN で非空虚性を示せないので、契約の done (iii) が
     // 求める変異 proof（門を外す変異・違反を数えない変異が rc 100 で落ちる）で担保する。
-    use super::{listed_from, measure, scan_private_paths, Layout, Tracked, TrackedFile};
+    // flip-check: retroactive s2-07l.35
+    // s2-07l.35 が足す 5 本も **後から足した歯**である（meta 3 列の parse・0 件の門・
+    // `n/a` の枝・needle 境界はどれも s2-07l.18 までに land 済みで base でも緑になる）。
+    // 非空虚性は契約の変異 proof 5 本（当てると各 rc 100 で落ちる）で担保する。
+    use super::{
+        find_all, listed_from, measure, parse_ls_entry, scan_private_paths, Layout, Tracked,
+        TrackedFile,
+    };
+    use crate::limits::PRIVATE_PATH_MARKS;
     use std::fs;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     /// index が通常 file に付ける mode（`git ls-files -s` の 1 列目）。
@@ -295,6 +304,17 @@ mod tests {
             "xtask-paths-clean-{}-{nanos}",
             std::process::id()
         ))
+    }
+
+    /// fixture の dir を git repo にする（rc だけを見る・外の設定も HOME も読まない）。
+    fn git_init(dir: &Path) -> bool {
+        Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["init", "-q"])
+            .output()
+            .map(|out| out.status.success())
+            .unwrap_or(false)
     }
 
     /// `git ls-files -s` の 1 件でも形が読めなければ **母集団ごと測れなかった**へ倒す。
@@ -416,6 +436,185 @@ mod tests {
         assert!(
             head.starts_with("paths-clean: "),
             "違反 1 行は paths-clean の tag を名乗るはず: {head}"
+        );
+    }
+
+    /// `git ls-files -s` の meta は **mode / oid / stage の 3 列が要る**。
+    ///
+    /// 1 列でも欠けた件を読めたことにすると、形の違う index 出力が母集団へ紛れ込んだまま
+    /// [`listed_from`] の件数一致（読めた == 全件）が通る。母集団の欠けを静かな 0 件へ
+    /// 落とさない極性は、まず 1 件の parse がここで `None` を返すことに立っている。
+    #[test]
+    fn paths_clean_ls_entry_needs_mode_oid_and_stage() {
+        let rel = "docs/design/pipeline.md";
+        let Some(parsed) = parse_ls_entry(&entry(rel)) else {
+            panic!("mode / oid / stage の揃った 1 件は読めるはず");
+        };
+        assert_eq!(parsed.rel, rel, "path は入力どおりのはず");
+        assert_eq!(parsed.mode, REGULAR_MODE, "mode は入力どおりのはず");
+        assert_eq!(parsed.oid, DUMMY_OID, "oid は入力どおりのはず");
+
+        // meta を末尾から 1 列ずつ削る（stage 欠け → oid 欠け → mode 欠け）。TAB は残すので、
+        // 落ちる理由は「列が足りない」だけに絞られる。
+        let short = [
+            format!("{REGULAR_MODE} {DUMMY_OID}"),
+            REGULAR_MODE.to_owned(),
+            String::new(),
+        ];
+        for meta in short {
+            let part = format!("{meta}\t{rel}");
+            assert!(
+                parse_ls_entry(&part).is_none(),
+                "meta が「{meta}」の 1 件は読めないはず"
+            );
+        }
+    }
+
+    /// private path 形の **2 本目**（home dir の短縮展開記号 + 区切り）も違反として数える。
+    ///
+    /// needle 集合のどれか 1 形でも数えなければ、その形で書かれた path は恒久的に素通りする。
+    /// needle の字面は [`PRIVATE_PATH_MARKS`] から取る——歯の source へ書くと paths-clean が
+    /// 本 file 自身を撃つ（この歯を足す便が自分で赤くなる）。
+    #[test]
+    fn paths_clean_flags_tilde_slash_mark() {
+        let Some(mark) = PRIVATE_PATH_MARKS.get(1) else {
+            panic!("private path 形は 2 形あるはず");
+        };
+        let dir = tmp_dir();
+        fs::create_dir_all(&dir).expect("fixture の dir を作れる");
+        fs::write(dir.join("clean.md"), b"nothing private here\nsecond line\n")
+            .expect("needle の無い fixture を書ける");
+        fs::write(
+            dir.join("dirty.md"),
+            format!("first line is clean\nstate = {mark}state/live\nthird line\n"),
+        )
+        .expect("needle の在る fixture を書ける");
+
+        let listed = match listed_from(&[entry("clean.md"), entry("dirty.md")]) {
+            Tracked::Listed(files) => files,
+            other => panic!("形の揃った 2 件は母集団になるはず: {}", describe(&other)),
+        };
+        let measured = scan_private_paths(&dir, &listed);
+        fs::remove_dir_all(&dir).ok();
+
+        assert_eq!(measured.fact, "paths-clean=2", "2 本とも走査したはず");
+        assert_eq!(
+            measured.violations.len(),
+            1,
+            "2 本目の needle を 1 件だけ数えるはず: {:?}",
+            measured.violations
+        );
+        let head = measured
+            .violations
+            .first()
+            .map(String::as_str)
+            .unwrap_or_default();
+        assert!(
+            head.contains("dirty.md:2"),
+            "違反の path と行番号を名指すはず: {head}"
+        );
+        // 負例。needle の無い file まで違反にする実装はここで落ちる。
+        assert!(
+            !head.contains("clean.md"),
+            "needle の無い file を違反にしないはず: {head}"
+        );
+    }
+
+    /// tracked file が **0 件**の周は「違反 0 件」ではなく **測れなかった**である。
+    ///
+    /// index の空を数え上げだけで通すと、母集団を 1 本も見ていない周が `paths-clean=0` の
+    /// 緑で landing する。0 件は正常な状態ではない（測る木は必ず tracked file を持つ）ので、
+    /// 門は 0 件を違反へ倒す。
+    #[test]
+    fn paths_clean_fails_on_zero_tracked_files() {
+        let dir = tmp_dir();
+        fs::create_dir_all(&dir).expect("fixture の dir を作れる");
+        assert!(git_init(&dir), "fixture を git repo にできるはず");
+        // `git add` を撃たないので index は空のまま＝母集団が 0 件になる。
+        let layout = Layout {
+            root: dir.clone(),
+            core_dir: dir.clone(),
+            member_dirs: Vec::new(),
+            name: "probe".to_owned(),
+        };
+        let measured = measure(&layout);
+        fs::remove_dir_all(&dir).ok();
+
+        assert_eq!(
+            measured.fact, "paths-clean=?",
+            "0 件の周は走査本数を出さないはず"
+        );
+        assert!(
+            !measured.violations.is_empty(),
+            "0 件は違反として出すはず（走査 0 本の緑にしない）"
+        );
+        let head = measured
+            .violations
+            .first()
+            .map(String::as_str)
+            .unwrap_or_default();
+        assert!(
+            head.starts_with("paths-clean: "),
+            "違反 1 行は paths-clean の tag を名乗るはず: {head}"
+        );
+        assert!(head.contains("0 件"), "0 件であることを名指すはず: {head}");
+    }
+
+    /// repo root **でない** dir を root にした周は `n/a` を名乗り、違反を出さない。
+    ///
+    /// flip-check の base tree は repo の内側の別 dir を root にして撃つので、この枝を
+    /// 違反へ倒すと base 健全性の前段が恒久 RED になる。`n/a` は「測らなかった」であって
+    /// 「測れなかった」ではない——後者は上の歯が違反へ倒す側である。
+    #[test]
+    fn paths_clean_is_na_outside_repo_root() {
+        let dir = tmp_dir();
+        let sub = dir.join("sub");
+        fs::create_dir_all(&sub).expect("fixture の dir を作れる");
+        assert!(git_init(&dir), "fixture を git repo にできるはず");
+        // root は repo の内側だが toplevel ではない（toplevel は 1 つ上の dir）。
+        let layout = Layout {
+            root: sub.clone(),
+            core_dir: sub.clone(),
+            member_dirs: Vec::new(),
+            name: "probe".to_owned(),
+        };
+        let measured = measure(&layout);
+        fs::remove_dir_all(&dir).ok();
+
+        assert_eq!(
+            measured.fact, "paths-clean=n/a(not-a-repo-root)",
+            "toplevel でない root は n/a を名乗るはず"
+        );
+        assert!(
+            measured.violations.is_empty(),
+            "n/a の周は違反を出さないはず: {:?}",
+            measured.violations
+        );
+    }
+
+    /// [`find_all`] は needle と haystack が **同じ長さ**でも当てる。
+    ///
+    /// 早期 return の境界を `<=` にすると、本文が needle 1 個ちょうどの file（改行の無い
+    /// 1 行 file）が丸ごと素通りする。短い haystack・空 needle・重なりの無い 2 箇所も
+    /// 同じ 1 本で並べる——境界を別々の歯に散らすと、片側だけ直した実装が通る。
+    #[test]
+    fn paths_clean_find_all_matches_needle_equal_to_haystack() {
+        let empty: Vec<usize> = Vec::new();
+        assert_eq!(
+            find_all(b"ab", b"ab"),
+            vec![0],
+            "needle と haystack が同じ長さでも当たるはず"
+        );
+        assert_eq!(
+            find_all(b"a", b"ab"),
+            empty,
+            "haystack が needle より短ければ当たらないはず"
+        );
+        assert_eq!(find_all(b"ab", b""), empty, "空の needle は当たらないはず");
+        assert_eq!(
+            find_all(b"abab", b"ab"),
+            vec![0, 2],
+            "重なりの無い 2 箇所を昇順で返すはず"
         );
     }
 }
