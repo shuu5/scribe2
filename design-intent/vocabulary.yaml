@@ -200,7 +200,7 @@ terms:
     relationships: [対話面, 3 クラス, event log, 裁定 id]
   - canonical: 3 クラス
     domain: consumer
-    definition: user 確認を要する操作の 3 分類 (消す / 出す / 使う)。 A1 の対象。 「出す」は repo の外へ出す操作 (他 repo への push・外部サービスへの送信・release / tag の公開) を指し、 自 repo への push と PR 作成は含まない (A4.3 で可逆・ADR-0008)。
+    definition: user 確認を要する操作の 3 分類 (消す / 出す / 使う)。 A1 の対象。 「出す」= public 化 (可視性の反転) ・外部送信 (他 repo への push・外部サービスへの送信・release / tag の公開)。 自 repo への push と PR 作成は含まない (A4.3 で可逆・ADR-0008)。
     relationships: [対話面, 承認 event, 自 repo への PR]
   - canonical: 自 repo への PR
     domain: consumer
