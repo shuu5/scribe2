@@ -27,9 +27,13 @@ pub enum ValueShape {
 /// 規則の種類。憲法 §3 の行と MVP の運用値に 1:1 で対応する。
 ///
 /// variant を足すと [`RuleKind::as_str`] と [`RuleKind::shape`] の網羅 `match` が
-/// compile error になるので、種類の追加は必ず手が入る。ただし **[`ALL`] への
-/// 足し忘れは機械が検出しない**（列挙の母集団が `ALL` 自身なので、抜けた variant は
-/// parity test の母集団からも消える）。variant を足したら `ALL` にも足すこと。
+/// compile error になるので、種類の追加は必ず手が入る。[`ALL`] の並びが宣言順から
+/// ずれた形（並べ替え・重複・**中間**の欠番）は [`crate::order::is_declaration_order`]
+/// を通す歯が捕まえる（ADR-0013 §2.2）。ただし **enum の末尾に足した variant を
+/// [`ALL`] へ入れ忘れた形は捕まえない**——判別子が `0..len` に収まるからである
+/// （ADR-0013 §2.3）。この形を受けるのは manifest との parity で、`ALL` に無い
+/// variant の行は未知の kind として `parse` できず落ちる。行を伴わない variant は
+/// 配線されていない設定として別の面が扱う。variant を足したら `ALL` にも足すこと。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuleKind {
     /// core crate の `src` 配下 `.rs` の総行数の上限（行）。

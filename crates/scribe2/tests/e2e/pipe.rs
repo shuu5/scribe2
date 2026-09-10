@@ -12,7 +12,9 @@ use std::process::{Command, Output};
 use vessel::cli_outcome::{RC_BROKEN, RC_OK, RC_REFUSED};
 use vessel::fleet::{Event, EventKind, Stage};
 use vessel::hook::inject_path;
+use vessel::order::is_declaration_order;
 use vessel::pipe::approve::RC_BLOCKED;
+use vessel::pipe::gate::{CHECKS, VERDICTS};
 use vessel::pipe::land;
 use vessel::rules::manifest::Manifest;
 use vessel::rules::RuleValue;
@@ -3406,4 +3408,25 @@ fn pipe_guard_is_backstop_for_misbehaving_runner() {
     let contract = write_contract(&repo, &[], &[]);
     toy_denied(&repo, &state, &contract);
     clean(&[&repo, &state]);
+}
+
+/// `CHECKS` の並びが**宣言順**と一致する（ADR-0013 D2）。**この並びが適用順序である**ので、
+/// 乖離は段の実行順が静かに変わることを意味する。
+#[test]
+fn gate_checks_follow_declaration_order() {
+    assert!(
+        is_declaration_order(CHECKS, |check| check as usize),
+        "CHECKS の並びが宣言順と乖離している（母集団 {} 段）",
+        CHECKS.len()
+    );
+}
+
+/// `VERDICTS` の並びが**宣言順**と一致する（ADR-0013 D2）。
+#[test]
+fn gate_verdicts_follow_declaration_order() {
+    assert!(
+        is_declaration_order(VERDICTS, |verdict| verdict as usize),
+        "VERDICTS の並びが宣言順と乖離している（母集団 {} 値）",
+        VERDICTS.len()
+    );
 }

@@ -5,6 +5,7 @@
 use crate::make_tmp_dir;
 use std::process::Command;
 use vessel::cli_outcome::{Outcome, RC_OK, RC_REFUSED};
+use vessel::order::is_declaration_order;
 use vessel::rules::manifest::Manifest;
 use vessel::rules::{Rule, RuleKind, RuleValue, ValueShape, ALL};
 
@@ -497,4 +498,39 @@ fn rules_external_form() {
         String::from_utf8_lossy(&missing.stderr)
     );
     insta::assert_snapshot!(form);
+}
+
+/// `ALL` の並びが**宣言順**（判別子 0, 1, 2, …）と一致する（ADR-0013 D2）。
+///
+/// 並べ替え・重複・**中間**の欠番はここで落ちる。**末尾の足し忘れは落ちない**——判別子が
+/// `0..len` に収まるからである。それを捕まえるのは manifest parity 側（未知の kind は
+/// `parse` できない）で、限界を歯の隣に置くのは「これで全部守られている」と読み違えさせない
+/// ためである。
+#[test]
+fn rules_all_follows_declaration_order() {
+    assert!(
+        is_declaration_order(ALL, |kind| kind as usize),
+        "ALL の並びが宣言順と乖離している（母集団 {} 種）",
+        ALL.len()
+    );
+}
+
+/// 述語が**真を返すだけ**でないこと（非空虚性）。3 つの壊し方をすべて false で返す。
+#[test]
+fn declaration_order_rejects_broken_slices() {
+    let swapped = [RuleKind::ModuleLines, RuleKind::CoreLines];
+    assert!(
+        !is_declaration_order(&swapped, |kind| kind as usize),
+        "入れ替えた並びは宣言順ではない"
+    );
+    let gap = [RuleKind::CoreLines, RuleKind::TestSrcRatioPct];
+    assert!(
+        !is_declaration_order(&gap, |kind| kind as usize),
+        "中間を抜いた並びは宣言順ではない"
+    );
+    let duplicated = [RuleKind::CoreLines, RuleKind::CoreLines];
+    assert!(
+        !is_declaration_order(&duplicated, |kind| kind as usize),
+        "重複した並びは宣言順ではない"
+    );
 }

@@ -64,7 +64,8 @@ const STDERR_TAIL_LINES: usize = 20;
 /// 順序を散文の注記で持たないための形である——enum が段の集合を閉じ、[`run_checks`] の
 /// 網羅 match が新しい variant を必ずこの並びへ置かせる（置き忘れは compile error）。
 /// 閉じた enum と全 variant の並びを対で持つのは器の既定の形である（[`VERDICTS`] /
-/// `rules::ALL` と同型）。
+/// `rules::ALL` と同型）。並びが宣言順のままであることは
+/// [`crate::order::is_declaration_order`] を通す歯が測る（ADR-0013 §2.2・限界は §2.3）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Check {
     /// diff が契約の write-set の内に収まっているか（ADR-0009 §2.4）。

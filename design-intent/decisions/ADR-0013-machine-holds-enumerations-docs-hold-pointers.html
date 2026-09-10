@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="folio-doc-type" content="adr">
+<meta name="folio-layer" content="project">
+<meta name="folio-version" content="0.4.6">
+<meta name="folio-status" content="accepted">
+<meta name="folio-stakeholders" content="Developer, AI Agent, External Reviewer">
+<meta name="folio-adr-id" content="0013">
+<meta name="folio-adr-date" content="2026-09-11">
+<title>ADR-0013 — 列挙は機械が持ち文書は pointer だけを持つ (ADR-0006 の measure tag 列挙を supersede)。 C2「宣言順」の充足形は const slice の判別子順 pin</title>
+<link rel="stylesheet" href="../../common.css">
+<script type="application/ld+json">
+{
+  "@context": {
+    "dc": "http://purl.org/dc/terms/",
+    "schema": "https://schema.org/",
+    "folio": "https://folio.dev/spec/v1/"
+  },
+  "@id": "./ADR-0013-machine-holds-enumerations-docs-hold-pointers.html",
+  "@type": "schema:TechArticle",
+  "dc:isPartOf": [
+    { "@id": "./README.html" }
+  ],
+  "dc:title": "ADR-0013 — 列挙は機械が持ち文書は pointer だけを持つ (ADR-0006 の measure tag 列挙を supersede)。 C2「宣言順」の充足形は const slice の判別子順 pin",
+  "folio:version": "0.4.6",
+  "folio:stakeholders": ["Developer", "AI Agent", "External Reviewer"],
+  "dc:references": [
+    { "@id": "../spec/constitution.html#c1" },
+    { "@id": "../spec/constitution.html#c2" },
+    { "@id": "../spec/constitution.html#c12" },
+    { "@id": "./ADR-0006-xtask-check-measure-tags.html" },
+    { "@id": "./ADR-0002-test-lint-toolchain.html" }
+  ]
+}
+</script>
+</head>
+<body>
+<!-- folio:chrome-top -->
+<a class="skip-link" href="#s1-context">本文へスキップ</a>
+<nav class="breadcrumb" aria-label="パンくず"><ol>
+  <li><a href="../index.html">design-intent</a></li>
+  <li><a href="./README.html">decisions</a></li>
+  <li aria-current="page">ADR-0013</li>
+</ol></nav>
+<!-- /folio:chrome-top -->
+
+<header class="doc-header">
+  <h1>ADR-0013 — 列挙は機械が持ち文書は pointer だけを持つ (ADR-0006 の measure tag 列挙を supersede)。 C2「宣言順」の充足形は const slice の判別子順 pin</h1>
+  <div class="meta">Status: accepted &middot; Date: 2026-09-11 &middot; version 0.4.6 (拘束する constitution の版) &middot; C1.2 / C2 の適用を記録 (C12.5 は帰結の参照)</div>
+</header>
+<!-- folio:chrome-toc -->
+<nav class="toc" aria-label="ページ内目次">
+<ol>
+  <li><a href="#s1-context">§1. Context</a></li>
+  <li><a href="#s2-decision">§2. Decision</a></li>
+  <li class="toc--sub"><a href="#s2-1-pointer">§2.1 列挙の SSOT は機械側に置き、 文書は pointer だけを持つ</a></li>
+  <li class="toc--sub"><a href="#s2-2-order">§2.2 C2「宣言順」の充足形</a></li>
+  <li class="toc--sub"><a href="#s2-3-limits">§2.3 pin が捕まえない形と、 それを捕まえる面</a></li>
+  <li class="toc--sub"><a href="#s2-4-scope">§2.4 射程外</a></li>
+  <li><a href="#s3-consequences">§3. Consequences</a></li>
+  <li><a href="#s4-alternatives">§4. Alternatives Considered</a></li>
+  <li><a href="#s5-trace">§5. Trace</a></li>
+</ol>
+</nav>
+<!-- /folio:chrome-toc -->
+
+<aside class="informative">
+<p>本 ADR は IETF <strong>RFC 2119</strong> および <strong>RFC 8174 / BCP 14</strong> に定義される MUST / SHALL / SHOULD / MAY のキーワード解釈規約に従う。 ADR は決定時点の記録であり、 改訂は新しい ADR による supersede で行う。</p>
+</aside>
+
+<section id="s1-context" class="informative">
+<h2>§1. Context</h2>
+<p class="section-essence" data-audience="human">この器には「どの検査を、 どの順でやるか」の一覧が、 動いているコードと、 説明の文書の 2 か所にあります。 文書側の一覧は人が書き写したもので、 実際に動いている一覧より 3 つ少ないまま残っていました。 手で数えた一覧は必ず古くなります。 いっぽうコード側では、 一覧の<strong>並びがそのまま実行順になる</strong>という決まりなのに、 その並びが正しいことを機械が測っていませんでした。 どちらも「守られているはず」と思われていて、 誰も測っていなかった、 という話です。</p>
+<p data-audience="machine">ADR-0006 §2.1 は <code>cargo xtask check</code> が measure する tag を<strong>列挙</strong>し (記録時点で 11 本)、 §2.2 は各 tag が測るものを 1 行ずつ並べた。 2026-09-11 の実測 (main = <code>e892fdc</code>・判定行の現物) では、 判定行が並べる measure は <strong>14</strong> であった。 文書側の列挙は <strong>3 本ぶん drift</strong> していた。</p>
+<p data-audience="machine">この drift は本件固有の事故ではない。 同じ形が独立に 2 度観測されている。 (a) measure を足す便の review が「文書の件数を直さないまま『本便で数え直した』と書いた」形を捕まえた。 (b) 設計文書の歯一覧が現物と <strong>29 本</strong>ずれていることが記録された。 <strong>手で数えた列挙は必ず腐る</strong>——腐っても compile も CI も通るので、 腐ったことに気づく面が無い。</p>
+<p data-audience="machine">憲法 <a href="../spec/constitution.html#c1">C1.2</a> は「規則の文書は型と manifest から<strong>導出</strong>し、 手書きの規範行を 0 にする」と定める。 列挙を文書へ写す形はこの条と正面から衝突する。 列挙を「更新する」対処は、 次の便で同じ drift を作り直すだけである。</p>
+<p data-audience="machine">別の面として、 憲法 <a href="../spec/constitution.html#c2">C2</a> は「適用順は stage 列挙の<strong>宣言順だけ</strong>から取り、 順序についての散文注記を持たない」と定める。 器はこれを「閉じた enum + 全 variant の const slice + 網羅 <code>match</code>」の形で実装しており、 対象は 3 面ある (<code>pipe::gate::CHECKS</code> / <code>pipe::gate::VERDICTS</code> / <code>rules::ALL</code>)。 ところが <strong>const slice の並びは手で書く</strong>ので、 宣言順から静かにずれうる——ずれても compile は通り、 順序の注記は持たない方針ゆえ、 <strong>機械が測らなければ誰も気づかない</strong>。 記録時点で 3 面の並びはいずれも正しく、 それを測る歯は <strong>1 本も無かった</strong>。</p>
+</section>
+
+<section id="s2-decision" class="normative">
+<h2>§2. Decision</h2>
+
+<h3 id="s2-1-pointer">§2.1 列挙の SSOT は機械側に置き、 文書は pointer だけを持つ</h3>
+<p class="section-essence" data-audience="human">一覧の正本は<strong>動いているコードと、 それが出す実際の出力</strong>だと決めます。 文書は一覧を書き写さず、 「どこを見れば本物が分かるか」だけを書きます。 こうすると、 文書が古くなる余地そのものが無くなります。 項目が増えたり減ったりしても、 そのたびに新しい記録を立てる必要はなくなります。</p>
+<p data-audience="machine">器 SHALL 列挙の SSOT を機械側 (型と、 それを写す外形) に置く。 design-intent の文書 SHALL NOT 列挙を写す。 文書 SHALL 「どこを見れば現物が分かるか」の pointer を持つ (本件では <code>cargo xtask check</code> の判定行と、 それを組み立てる実装)。</p>
+<p data-audience="machine">本決定は ADR-0006 の次を supersede する: <strong>§2.1 (11 本の列挙)</strong>、 <strong>§2.2 (各 tag が測るものの列挙)</strong>、 <strong>§2.3 のうち「tag の増減は本 ADR を supersede する新 ADR で行う (MUST)」の規定</strong>。 文書が列挙を持たない以上、 measure の増減で差し替える列挙が存在しないためである。 measure の増減は通常の契約 (bead) で足りる (MAY)——ただし repo の「ADR を書く条件」に当たる便 (憲法条の解釈・外部依存・跨版契約・却下案を残す価値のある分岐) は従来どおり ADR を要する。 ADR-0006 <strong>§2.4 (ADR-0002 §2.2 の例示の訂正) は supersede しない</strong>——列挙ではなく実測の訂正記録だからである。</p>
+
+<h3 id="s2-2-order">§2.2 C2「宣言順」の充足形</h3>
+<p class="section-essence" data-audience="human">「並びがそのまま実行順になる」決まりを、 実際に守れている形として次のように定めます。 種類は閉じた型で数えきる。 全部の並びを 1 か所に書く。 場合分けは取りこぼしがあれば組み立てに失敗するようにする。 そのうえで、 <strong>並びが宣言した順のままであることを機械が測る</strong>。 最後の 1 つが今まで無かった部分です。</p>
+<p data-audience="machine">器 SHALL 憲法 C2 の充足形を次の 4 つの対で持つ: (a) <strong>閉じた enum</strong> (variant の集合を型が閉じる)、 (b) <strong>全 variant を並べた const slice</strong> (この並びが適用順序である)、 (c) <strong>網羅 <code>match</code></strong> (variant の追加が compile error になる)、 (d) <strong>const slice の並びが判別子の昇順 (0, 1, 2, …) と一致することを測る歯</strong>。</p>
+<p data-audience="machine">(d) の述語 SHALL crate 内に <strong>1 つだけ</strong>置く。 3 面が別々の実装を持つと、 片方だけ緩む形で穴が開くためである。 述語は判別子の slice ではなく<strong>写像の関数</strong>を受け取り、 <code>as</code> を書く場所を呼び手の 1 行へ閉じる。</p>
+<p data-audience="machine">記録時点の対象は 3 面である: <code>pipe::gate::CHECKS</code> (機械検証の段・並びが適用順序)、 <code>pipe::gate::VERDICTS</code> (gate の 3 値)、 <code>rules::ALL</code> (規則種別の母集団)。 <strong>この 3 面という数を文書側の権威にしない</strong> (§2.1)——新しく (a)〜(c) の形を持つ面を足す便は、 同じ便で (d) の歯を足す (MUST)。</p>
+
+<h3 id="s2-3-limits">§2.3 pin が捕まえない形と、 それを捕まえる面</h3>
+<p class="section-essence" data-audience="human">この測り方には、 はっきりした穴が 1 つあります。 種類を<strong>末尾に足して</strong>一覧へ入れ忘れた場合は見つけられません。 順番を入れ替えた・重複した・<strong>途中</strong>を抜いた場合は見つかります。 穴を承知で採るのは、 末尾の入れ忘れを捕まえる別の面が既にあるからです。 限界は、 主張と同じ場所に書いておきます。</p>
+<p data-audience="machine">(d) の歯が捕まえるのは「並べ替え」「重複」「<strong>中間</strong>の欠番」である。 <strong>enum の末尾に足した variant を const slice へ入れ忘れた形は捕まえない</strong>——残りの判別子が <code>0..len</code> に収まるからである。</p>
+<p data-audience="machine">末尾の入れ忘れを捕まえる面は面ごとに異なる。 <code>rules::ALL</code> では manifest との parity である——行の <code>kind</code> は <code>ALL</code> を通して解決されるので、 <code>ALL</code> に無い variant の行は<strong>未知の kind として parse できず</strong>歯が落ちる (行を伴わない variant は、 配線されていない設定として <a href="../spec/constitution.html#c12">C10.3</a> の面が扱う)。 <code>pipe::gate</code> の 2 面では網羅 <code>match</code> と外形である。 これらは本 ADR が作る面ではなく、 <strong>既に在る面</strong>である。</p>
+<p data-audience="machine"><strong>本 ADR の記録時点の限界</strong>: §2.1 が SSOT と定めた「判定行」は、 <strong>集合としても順序としても pin されていない</strong>。 xtask の歯は判定行に対して個別 token の <code>contains</code> を当てるだけで、 token の集合も並びも測っていない (2026-09-11 実測)。 したがって §2.1 は「文書が列挙を持たない」ことは達成するが、 「機械側が列挙を守っている」ことの担保は<strong>現時点で個別 token の存在まで</strong>である。 判定行を外形として pin する面は別便で入れる。 <strong>本 ADR はこの不在を知ったうえで決めている</strong>——担保が既に在るかのように書かない。</p>
+
+<h3 id="s2-4-scope">§2.4 射程外</h3>
+<p class="section-essence" data-audience="human">この記録が決めるのは「一覧をどこに置くか」と「並びをどう測るか」だけです。 それぞれの検査が何を測るか、 上限の数値、 出力の書式は、 ここでは決めません。</p>
+<p data-audience="machine">次は本 ADR の決定ではない (MUST NOT be read as such): 各 measure の<strong>実装</strong>と測定定義、 閾値の実値と置き場 (rules manifest と裁定 id が扱う)、 判定行の<strong>書式</strong>、 判定行を外形 snapshot として pin する面の設計 (別便)、 CI の job 構成。</p>
+</section>
+
+<section id="s3-consequences" class="informative">
+<h2>§3. Consequences</h2>
+<p class="section-essence" data-audience="human">良い面は、 文書が古くなる余地が消えること、 そして「並びが実行順」という決まりが初めて機械で測られるようになることです。 悪い面は、 一覧を読みたい人がコードか実行結果を見に行く必要があること。 もうひとつ、 末尾の入れ忘れという穴が残ることです。 どちらも承知のうえで選んでいます。</p>
+<p data-audience="machine">Positive: 文書側に drift しうる列挙が無くなる (C1.2 の向き)。 C2 の充足が<strong>測られる</strong>状態になる——記録時点まで、 並びの正しさは誰も測っていなかった。 measure の増減で ADR を立てる必要が消え、 記録の増殖が減る (憲法の順位「増殖の防止」)。</p>
+<p data-audience="machine">Negative (受け入れるコスト): 列挙を知りたい読み手は現物 (判定行または実装) を見に行くことになる。 文書だけで完結しない。 pointer が指す先が動いた便では pointer の更新が要る (列挙の更新より頻度は低い)。</p>
+<p data-audience="machine">Negative (残る穴): §2.3 の末尾入れ忘れ。 面ごとの別経路が受けるが、 <strong>1 つの歯で全部が守られるわけではない</strong>。 加えて §2.3 末尾のとおり、 判定行そのものが集合として pin されていない状態が当面続く。</p>
+</section>
+
+<section id="s4-alternatives" class="informative">
+<h2>§4. Alternatives Considered</h2>
+<p class="section-essence" data-audience="human">4 つの案を退けました。 いちばん素直な「文書の一覧を今の数に直す」案は、 次の便で同じずれを作り直すだけです。 一覧を機械から自動生成する案は筋が通りますが、 生成の仕組みを 1 つ増やすぶん高くつきます。 並び順を文章で注記する案は決まりに反します。 何もしない案は、 ずれを抱えたまま「並びが実行順」を誰も測らない状態を続けることになります。</p>
+<p data-audience="machine">(A) <strong>文書側の列挙を現物の数へ更新する</strong> (起票時の案)。 却下: 同じ drift が次の便で再発する。 実測で 2 度観測された形であり (§1)、 「今回は気をつける」は機械的な保証ではない。 C1.2 とも衝突したままである。</p>
+<p data-audience="machine">(B) <strong>列挙を機械から生成して文書へ埋める</strong>。 却下ではないが本便では採らない: C1.2 の理想形ではあるものの、 生成物と生成器を 1 面ずつ増やす。 drift は消えず<strong>生成器へ移る</strong> (生成漏れは同じく静かである)。 現物 1 面を指す方が安く、 憲法の順位「増殖の防止」に沿う。 判定行を外形として pin する面 (§2.3) が入れば、 生成の是非を実測付きで再検討できる。</p>
+<p data-audience="machine">(C) <strong>並び順を散文の注記で持つ</strong> (「この順で適用する」と文書に書く)。 却下: 憲法 C2 が明示的に禁じる形である。 加えて注記は測れないので、 本 ADR が塞ごうとしている穴をそのまま残す。</p>
+<p data-audience="machine">(D) <strong>現状維持</strong>。 却下: 文書の 3 本 drift が残り、 C2 の充足が測られない状態が続く。 並びが静かにずれた周は、 段の実行順が変わっても誰も気づかない。</p>
+</section>
+
+<section id="s5-trace" class="informative">
+<h2>§5. Trace</h2>
+<p class="section-essence" data-audience="human">出所は、 実際に検査を走らせて出力を数えたことと、 並びを測る歯を書いて「無い状態では落ちる」ことを確かめたことです。 担保が無いと分かった件は、 別の便の審査で見つかりました。</p>
+<ul data-audience="machine">
+  <li>drift の実測 (2026-09-11・main = <code>e892fdc</code>): <code>cargo xtask check</code> の判定行を現物で数え、 文書側の列挙 (記録時点 11 本) との差を確認した。 判定行が並べる measure は 14 であった。</li>
+  <li>C2 の充足が測られていないことの実測 (同日): 3 面 (<code>CHECKS</code> / <code>VERDICTS</code> / <code>ALL</code>) の並びを判別子順と突き合わせる歯を検索し、 <strong>0 本</strong>であることを確認した。 並び自体は 3 面とも正しかった——測る面が無いだけである。</li>
+  <li>歯の flip の実測 (同日): (d) の歯を先に置いた木で <code>cargo nextest run --workspace</code> が rc 101 (述語が存在しない compile error = 機能不在) で落ち、 述語を置いた後に 368/368 で通ることを実測した。</li>
+  <li>述語の非空虚性 (同日): 並べ替え・中間の欠番・重複の 3 つの壊し方で述語が偽を返すことを歯にした。 真を返すだけの述語ではない。</li>
+  <li>判定行が集合として pin されていないことの実測 (2026-09-11・別便の review): xtask の歯は判定行に対し個別 token の <code>contains</code> のみで、 順序も token 集合も測っていないことが確認された。 §2.3 末尾の限界はこの実測に基づく。</li>
+</ul>
+</section>
+
+<!-- folio:chrome-bottom -->
+<nav class="prevnext" aria-label="前後の文書">
+  <a class="prevnext__prev" href="ADR-0012-rate-limit-detection-reads-dedicated-record.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">ADR-0012 — 上限の検出は専用 record (rate_limit_event) の構造化 field で行い、 本文への字面照合を畳む</span></a>
+</nav>
+<script>
+(function () {
+  var openedForPrint = [];
+  window.addEventListener('beforeprint', function () {
+    openedForPrint = [];
+    var ds = document.querySelectorAll('details:not([open])');
+    for (var i = 0; i < ds.length; i++) { ds[i].setAttribute('open', ''); openedForPrint.push(ds[i]); }
+  });
+  window.addEventListener('afterprint', function () {
+    for (var i = 0; i < openedForPrint.length; i++) openedForPrint[i].removeAttribute('open');
+    openedForPrint = [];
+  });
+  if (!document.querySelector('[data-audience]')) return;
+  /* 既定 = 人間プレゼン型 (ADR-0040 / rules §11.3): script 経由で初期 class を付与するため
+     no-JS では付かず全文可視に graceful degrade する。 static DOM は全文を保持 (AI/検索/印刷は不変)。 */
+  document.body.classList.add('audience-human');
+  var bar = document.createElement('nav');
+  bar.className = 'audience-toggle';
+  bar.setAttribute('aria-label', '表示対象の切替');
+  var states = [['both', '両方'], ['human', '人間向け'], ['machine', '機械向け']];
+  for (var s = 0; s < states.length; s++) {
+    (function (mode, label) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      b.setAttribute('aria-pressed', mode === 'human' ? 'true' : 'false');
+      b.addEventListener('click', function () {
+        document.body.classList.remove('audience-human', 'audience-machine');
+        if (mode !== 'both') document.body.classList.add('audience-' + mode);
+        var bs = bar.querySelectorAll('button');
+        for (var j = 0; j < bs.length; j++) bs[j].setAttribute('aria-pressed', bs[j] === b ? 'true' : 'false');
+      });
+      bar.appendChild(b);
+    })(states[s][0], states[s][1]);
+  }
+  var bc = document.querySelector('nav.breadcrumb');
+  if (bc && bc.parentNode) { bc.parentNode.insertBefore(bar, bc.nextSibling); }
+  else { document.body.insertBefore(bar, document.body.firstChild); }
+})();
+</script>
+<!-- /folio:chrome-bottom -->
+</body>
+</html>

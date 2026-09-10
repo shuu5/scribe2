@@ -33,7 +33,8 @@
     { "@id": "./ADR-0009-vessel-grants-runner-permissions-and-mutation-proof.html" },
     { "@id": "./ADR-0010-vessel-declaration-holds-allowlist-and-common-verify.html" },
     { "@id": "./ADR-0011-vessel-launches-claude-without-settings.html" },
-    { "@id": "./ADR-0012-rate-limit-detection-reads-dedicated-record.html" }
+    { "@id": "./ADR-0012-rate-limit-detection-reads-dedicated-record.html" },
+    { "@id": "./ADR-0013-machine-holds-enumerations-docs-hold-pointers.html" }
   ]
 }
 </script>
@@ -90,6 +91,7 @@
     <tr><td>ADR-0010</td><td><a href="./ADR-0010-vessel-declaration-holds-allowlist-and-common-verify.html">runner の allowlist と gate の共通 verify の値は対象 repo の vessel 宣言が持ち、 manifest は上限を持つ (ADR-0009 §2.1 / §2.4 の値の置き場を部分 supersede)</a></td><td>accepted</td><td>2026-09-10</td></tr>
     <tr><td>ADR-0011</td><td><a href="./ADR-0011-vessel-launches-claude-without-settings.html">器が起こす claude (runner / lens) は口座と対象 repo の settings を 1 つも読まない (--setting-sources 空 + --strict-mcp-config・ADR-0009 §2.1 / ADR-0010 §2.4 の起動 flag を部分 supersede)</a></td><td>accepted</td><td>2026-09-10</td></tr>
     <tr><td>ADR-0012</td><td><a href="./ADR-0012-rate-limit-detection-reads-dedicated-record.html">上限の検出は専用 record (rate_limit_event) の構造化 field で行い、 本文への字面照合を畳む</a></td><td>accepted</td><td>2026-09-11</td></tr>
+    <tr><td>ADR-0013</td><td><a href="./ADR-0013-machine-holds-enumerations-docs-hold-pointers.html">列挙は機械が持ち文書は pointer だけを持つ (ADR-0006 の measure tag 列挙を supersede)。 C2「宣言順」の充足形は const slice の判別子順 pin</a></td><td>accepted</td><td>2026-09-11</td></tr>
   </tbody>
 </table>
 <p data-audience="machine">新しい決定を記録したら本表と JSON-LD の <code>dc:hasPart</code> に追記する。 ADR は frozen (改訂は supersede する新 ADR で行う)。</p>
