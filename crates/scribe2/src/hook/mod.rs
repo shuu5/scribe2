@@ -9,6 +9,7 @@
 //! （[`store::append_line`]）を通す。
 
 pub mod guard;
+pub mod permission;
 pub mod seat_guard;
 pub mod vessel;
 
@@ -17,6 +18,7 @@ use crate::fleet::json_lite::{self, Value};
 use crate::fleet::store::{self, LockPolicy, StoreError};
 use crate::name::NAME;
 use guard::Decision;
+use permission::PermissionDecision;
 use seat_guard::SeatDecision;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -43,6 +45,8 @@ const KEY_TRANSCRIPT: &str = "transcript_path";
 const EVENT_SESSION_START: &str = "session-start";
 /// `pre-tool-use` の event 名。
 const EVENT_PRE_TOOL_USE: &str = "pre-tool-use";
+/// `permission-request` の event 名。
+const EVENT_PERMISSION_REQUEST: &str = "permission-request";
 
 /// 注入 1 回の記録（FR21: who / what / when / bytes / tokens / wall）。
 ///
@@ -112,6 +116,7 @@ pub fn dispatch(args: &[String], payload: &str) -> Outcome {
     match args.first().map(String::as_str) {
         Some(EVENT_SESSION_START) => session_start(&root, version, &dir, started),
         Some(EVENT_PRE_TOOL_USE) => pre_tool_use(&root, &cwd, payload, &dir, started),
+        Some(EVENT_PERMISSION_REQUEST) => permission_request(payload, &dir, started),
         _ => Outcome::ok(Vec::new()),
     }
 }
@@ -283,5 +288,26 @@ fn silent(who: &str, what: &str, started: Instant) -> InjectionRecord {
         bytes: 0,
         tokens: None,
         wall_ms: as_u64(started.elapsed().as_millis()),
+    }
+}
+
+/// 内蔵 guard の承認の問いへ答える。**deny か沈黙のどちらか**で、allow は返さない。
+fn permission_request(payload: &str, dir: &Path, started: Instant) -> Outcome {
+    let tool = field(payload, KEY_TOOL).unwrap_or_default();
+    match permission::decide(&tool) {
+        // 管轄外は **0 byte・rc 0**（FR24）＝Claude Code の既定の問いへ戻す。
+        PermissionDecision::Silent => Outcome::ok(Vec::new()),
+        PermissionDecision::Deny(line) => {
+            let entry = record(
+                EVENT_PERMISSION_REQUEST,
+                "deny",
+                "PermissionRequest",
+                &line,
+                started,
+            );
+            let mut outcome = Outcome::ok_line(line);
+            outcome.err = record_lines(dir, &entry);
+            outcome
+        }
     }
 }
