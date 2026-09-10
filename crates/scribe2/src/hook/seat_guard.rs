@@ -74,7 +74,9 @@ pub fn decide(
     let Some((cap, window)) = thresholds() else {
         return SeatDecision::Unmeasured(NO_RULE.to_owned());
     };
-    let Some(found) = transcript else {
+    // **空文字は「無い」と同じ**（trim 後）。空の口をそのまま path として扱うと、渡し忘れが
+    // `unreadable`（file が壊れている）に化けて、記録から原因を取り違える。
+    let Some(found) = transcript.map(str::trim).filter(|found| !found.is_empty()) else {
         return SeatDecision::Unmeasured(NO_TRANSCRIPT.to_owned());
     };
     let used = match meter::used_from_transcript(Path::new(found)) {
@@ -124,6 +126,11 @@ fn is_externalize(root: &Path, cwd: &Path, path: Option<&str>) -> bool {
     } else {
         cwd.join(raw)
     };
+    at_mouth(root, &absolute) && !escapes_by_link(root, &absolute)
+}
+
+/// 字句の段。`<root>/.claude-session/working-memory.*.md` **ちょうど 2 段**か。
+fn at_mouth(root: &Path, absolute: &Path) -> bool {
     let Ok(rel) = absolute.strip_prefix(root) else {
         return false;
     };
@@ -141,4 +148,27 @@ fn is_externalize(root: &Path, cwd: &Path, path: Option<&str>) -> bool {
     name.len() >= WM_PREFIX.len() + WM_SUFFIX.len()
         && name.starts_with(WM_PREFIX)
         && name.ends_with(WM_SUFFIX)
+}
+
+/// 実体の段。字句で口に見える file が、**link で口の外を指していないか**。
+///
+/// 通す側の口を字句 1 段で持つと、`working-memory.x.md` という名前の symlink を
+/// 1 本張るだけで口の外の file を上限越しに書ける（実測 2026-09-10・lens-383 F4:
+/// `src/lib.rs` への link が 65% で rc 0 になった）。兄弟の write-set guard が
+/// 同じ罠に実体の段で備えているのと同じ理由である。
+///
+/// **まだ無い file は link ではありえない**ので、在るときだけ実体で確かめる
+/// ——退避物は「これから作る」周がふつうで、そこで解けないことを理由に口を閉じると
+/// 退避そのものが止まる。解けない link（dangling）は口に入れない＝通す側は fail-closed。
+fn escapes_by_link(root: &Path, absolute: &Path) -> bool {
+    let Ok(meta) = std::fs::symlink_metadata(absolute) else {
+        return false;
+    };
+    if !meta.file_type().is_symlink() {
+        return false;
+    }
+    match (absolute.canonicalize(), root.canonicalize()) {
+        (Ok(real), Ok(base)) => !at_mouth(&base, &real),
+        _ => true,
+    }
 }
