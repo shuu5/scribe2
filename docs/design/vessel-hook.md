@@ -56,16 +56,16 @@ stdout に 1 行 `[<NAME>/SessionStart] served version=<N> root=<root>` を出�
 
 ## 6.5 `permission-request` = 内蔵 guard の問いへの一律 deny（FR19 / FR21 / FR24・C11）
 
-内蔵 Bash guard は、`rm` の path に変数展開や `$(…)` が混ざると bypassPermissions でも dialog を出す。対話 session はそこで**止まる**——無人の席では誰も答えず、席が沈黙したまま cycle が進まない。ゆえに器が**一律 deny**で答え、「literal path で書き直せ」という**次の一手まで**返す（「駄目だ」だけでは席が止まる）。
+内蔵 Bash guard は、`rm` の path に変数展開や `$(…)` が混ざる周を筆頭に、bypassPermissions でも dialog を出す。対話 session はそこで**止まる**——無人の席では誰も答えず、席が沈黙したまま cycle が進まない。ゆえに器は **`Bash` の承認要求を一律 deny** し（答える範囲は matcher と同じ `Bash` 全体で、`rm` の周だけではない）、「allow 規則に合う形へ書き直せ」という**次の一手まで**返す（「駄目だ」だけでは席が止まる）。`rm` の literal path はその**従属句**として添える。
 
 - 答えるのは `tool_name == "Bash"` の周だけ。stdout は**ちょうど 1 行**の `{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny","message":…}}}`・rc 0・`inject.jsonl` に 1 行（`who=hook:permission-request` / `what=deny`）。
 - `Bash` 以外・payload 不能・marker が自分の NAME を言わない repo は **0 byte・rc 0** で黙る（FR24＝Claude Code の既定の問いへ戻す。器が引き受ける筋合いの無い承認まで奪わない）。
 - 判定は `PermissionDecision::{Deny(String), Silent}` で、**`Allow` という variant を持たない**（憲法 C11）。承認を機械が与えると人間の承認 gate がここから空洞化する——止める側へ倒すのは安全だが、通す側へ倒すのは取り返しがつかない。
-- `json_lite` は flat object 専用（`parse_object` は入れ子を error にする）ので、値の escape だけ `json_lite::quote` を通し、入れ子は組み立てる。歯は内側の決定 object を切り出して parse し、**escape が壊れていないこと**まで測る。
+- `json_lite` は flat object 専用（`parse_object` は入れ子を error にする）ので、値の escape だけ `json_lite::quote` を通し、入れ子は組み立てる。歯は内側の決定 object を切り出して parse し、**escape が壊れていないこと**まで測る——e2e の周は文言が固定で `"` も `\` も動かないので、escape は `deny_line(&str)` へ任意の message を渡す unit の歯が測る。
 
 ## 7. 歯（契約 `s2-3ax` の検証・`tests/e2e/hook.rs` module・tmp git repo を `git init` + commit で作る・`vessel init --state-dir` で tmp を紐づける）
 
-flip 行は `cargo nextest run -p <NAME> -E 'test(hook_) | test(vessel_)' --no-tests=fail`（2 接頭辞の和）。
+flip 行は `cargo nextest run -p <NAME> -E 'test(hook_) | test(hooks_) | test(vessel_)' --no-tests=fail`（3 接頭辞の和）。`hooks_` を足すのは `hooks_json_carries_permission_request_entry` 系の歯が 2 接頭辞の和から落ちるためである（`hook_` は `hooks_` に前方一致しない）。
 
 `hook_session_start_is_noop_without_marker` / `hook_session_start_is_noop_for_other_name` / `hook_session_start_is_noop_without_state_dir`（marker はあるが git config 無し → 0 byte・rc 0）/ `hook_session_start_serves_own_marker`（stdout に `[<NAME>/SessionStart]` ∧ `inject.jsonl` に 1 行・`schema=1`・`bytes>0`）/ `hook_guard_denies_edit_outside_write_set`（rc 2 ∧ stderr 非空 ∧ stdout 0 byte ∧ inject.jsonl に deny 1 行）/ `hook_guard_denies_path_escaping_root` / `hook_guard_allows_edit_inside_write_set` / `hook_guard_fails_closed_when_policy_unreadable`（policy file を dir にする → rc 2）/ `hook_guard_is_inactive_without_policy_file` / `hook_guard_ignores_bash_tool` / `vessel_init_renders_two_lines_and_writes_state_dir_config` / `vessel_check_rc2_for_other_name` / `vessel_init_refuses_to_overwrite_other_name` / `vessel_external_form`（snapshot）。
 

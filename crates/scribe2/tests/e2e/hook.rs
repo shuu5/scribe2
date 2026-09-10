@@ -1073,11 +1073,11 @@ fn hook_seat_guard_treats_empty_transcript_path_as_absent() {
 /// **出力が JSON として読めること**と**値がそのまま届くこと**を機械で確かめられる
 /// （字面の `contains` では key が壊れていても気づけない）。
 ///
-/// ⚠ **escape そのものは本 message では測れていない**（lens-43 M-1・実測）: 契約が固定した
-/// message は `"` も `\` も制御文字も含まないので、`json_lite::quote` を素の `format!` へ
-/// 置き換える変異が**出力 byte 同一のまま生き残る**。escape を測るには message を変える
-/// （契約が固定）か `quote` を直接撃つ歯（本便の write-set 外）が要る。ここでは
-/// 「測れている」と書かないことで空虚な安心を作らない。
+/// ⚠ **escape そのものはこの周では測れない**（lens-43 M-1・実測）: 器が固定した message は
+/// `"` も `\` も制御文字も含まないので、`json_lite::quote` を素の `format!` へ置き換える
+/// 変異が**出力 byte 同一のまま生き残る**。escape は `deny_line` へ任意の message を渡せる
+/// unit の歯（`hook::permission` の `deny_line_round_trips_quotes_and_backslashes`）が測る。
+/// ここでそう書くのは、この周が測っている範囲を広く見せないためである。
 #[expect(
     clippy::panic,
     reason = "統合 test の helper。clippy の allow-panic-in-tests は #[test] 関数の中だけに効く"
@@ -1188,6 +1188,41 @@ fn hook_permission_request_is_silent_for_other_tools() {
         inject_lines(&state).len(),
         before,
         "答えなかった周は記録も残さない"
+    );
+    clean(&[&repo, &state]);
+}
+
+// flip-check: retroactive s2-07l.47
+/// 記録に失敗しても **deny は取り消さず**、失敗を stderr へ出す（FR21 は推奨で判定ではない）。
+///
+/// `inject.jsonl` を **dir** にすると append が open の時点で落ちる。この周でも stdout は
+/// ちょうど 1 行の deny・rc 0 のままで、落ちたことは stderr の行になる——`record_lines` を
+/// `let _ = append(…)` へ替える変異は、ここで stderr が 0 行になって落ちる。
+#[test]
+fn hook_permission_request_surfaces_record_failure_on_stderr() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    // `inject_path` は器と同じ path を組む（file 名の字面を歯へ 2 本目として置かない）。
+    fs::create_dir(inject_path(&state)).expect("inject.jsonl を dir として作れる");
+    let out = run_hook_args(
+        &["permission-request", "--state-dir", &state.display().to_string()],
+        &tool_payload(&repo, "Bash", "unused"),
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(i32::from(RC_OK)),
+        "記録が落ちても hook は落ちない"
+    );
+    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(text.lines().count(), 1, "stdout はちょうど 1 行: {text}");
+    assert!(
+        text.contains("\"behavior\":\"deny\""),
+        "記録に失敗しても deny は取り消さない: {text}"
+    );
+    assert!(
+        stderr_lines(&out) >= 1,
+        "記録の失敗を黙って消さない: {:?}",
+        stderr_text(&out)
     );
     clean(&[&repo, &state]);
 }
