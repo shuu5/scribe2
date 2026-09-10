@@ -5,6 +5,7 @@
 //! commit には identity が要るので **repo local** の設定を与える（global は触らない）。
 
 use crate::make_tmp_dir;
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -308,6 +309,7 @@ fn pipe_spawn_writes_write_set_into_git_dir() {
     clean(&[&repo, &state]);
 }
 
+// flip-check: retroactive s2-07l.49
 #[test]
 fn pipe_spawn_substitutes_placeholders_and_adds_no_env() {
     let (repo, state) = repo_with_state();
@@ -324,13 +326,26 @@ fn pipe_spawn_substitutes_placeholders_and_adds_no_env() {
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
     let worktree = repo.join(".worktrees").join("scribe2").join(&id);
 
+    // 器が足した env は**親（この test process）の env との差分**で測る。母集団を
+    // 「env.txt の当該接頭辞の行」だけに取ると、親が既に持っていた変数（器の binary を
+    // env で指した shell から撃つ周）を器が足したものと弁別できず、**歯が親の環境で
+    // 落ちる**——測っているのは「器が足したか」であって「その名の変数が在るか」ではない。
+    const OURS: &str = "SCRIBE2_";
     let env_text = fs::read_to_string(worktree.join("env.txt")).expect("env の写しを読める");
-    let ours: Vec<&str> = env_text.lines().filter(|line| line.starts_with("SCRIBE2_")).collect();
-    assert!(
-        ours.is_empty(),
-        "器固有の env を 1 つも足さない（母集団 {} 行 / 該当 {:?}）",
-        env_text.lines().count(),
-        ours
+    let parent: BTreeSet<String> = std::env::vars()
+        .map(|(key, _)| key)
+        .filter(|key| key.starts_with(OURS))
+        .collect();
+    let child: BTreeSet<String> = env_text
+        .lines()
+        .filter_map(|line| line.split_once('='))
+        .map(|(key, _)| key.to_owned())
+        .filter(|key| key.starts_with(OURS))
+        .collect();
+    assert_eq!(
+        child, parent,
+        "器固有の env を 1 つも足さない（母集団 {} 行 / 親 {parent:?} / 子 {child:?}）",
+        env_text.lines().count()
     );
 
     let subst = fs::read_to_string(worktree.join("subst.txt")).expect("置換の写しを読める");
@@ -861,6 +876,55 @@ fn pipe_gate_fails_on_red_verify_line() {
     assert!(log.contains("\"rc\":0"), "1 行目の rc 0: {log}");
     assert!(log.contains("\"rc\":1"), "2 行目の rc 1: {log}");
     assert_eq!(value_of(&verdict_pairs(&state, &id), "verify_red"), "1", "赤は 1 本");
+    clean(&[&repo, &state]);
+}
+
+/// 赤い verify 行の stderr の末尾が診断 file に残る（緑の行は残さない）。
+///
+/// `verify.jsonl` の rc だけでは「何がどう赤いか」が便の外から読めない。**stderr の
+/// 本文で測る**——見出し行にも `cmd=` として字面が載るので、cmd に**無い**字面
+/// （`boom` は `printf` が組み立てる）で「写しが空でない」を弁別する。
+#[test]
+fn pipe_gate_keeps_stderr_tail_of_red_verify_lines() {
+    let (repo, state) = repo_with_state();
+    // 2 行目が rc 3 で stderr に 1 行出す。cmd の字面には `boom` が無い。
+    let path = write_contract(
+        &repo,
+        &["verify"],
+        &[r#"verify = ["true", "printf 'bo%s\n' om >&2; exit 3"]"#],
+    );
+    let id = implemented(&repo, &state, &path);
+    let marker = state.join("lens-ran");
+    let lens = fake_lens(&marker, &lens_verdict("PASS"));
+    let out = gate_once(&repo, &state, &id, Some(&lens));
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "FAIL の rc は 1");
+    assert!(stdout_of(&out).contains("verdict=FAIL"), "{}", stdout_of(&out));
+
+    // record の形は変えない（schema 不変）。rc は逐条のまま `verify.jsonl` に在る。
+    let log = fs::read_to_string(state.join("pipe").join(&id).join("verify.jsonl"))
+        .expect("verify.jsonl を読める");
+    let rows: Vec<&str> = log.lines().collect();
+    assert_eq!(rows.len(), 2, "verify は逐条で残る: {log}");
+    let second =
+        vessel::fleet::json_lite::parse_object(rows.get(1).copied().unwrap_or_default().trim())
+            .expect("2 行目は 1 行の JSON");
+    assert_eq!(value_of(&second, "n"), "2", "赤いのは 2 行目: {log}");
+    assert_eq!(value_of(&second, "rc"), "3", "n=2 の rc: {log}");
+
+    let tail = fs::read_to_string(state.join("pipe").join(&id).join("verify.stderr.log"))
+        .expect("verify.stderr.log を読める");
+    let heads: Vec<&str> = tail.lines().filter(|line| line.starts_with("## ")).collect();
+    assert_eq!(
+        heads.len(),
+        1,
+        "見出しは赤い行の分だけ（母集団 {} 行）: {tail}",
+        tail.lines().count()
+    );
+    let head = heads.first().copied().unwrap_or_default();
+    assert!(head.contains("n=2 rc=3"), "見出しは赤い行を名指す: {head}");
+    assert!(!head.contains("boom"), "見出しの cmd= に boom の字面は無い: {head}");
+    assert!(!tail.contains("## n=1"), "緑の行は見出しを残さない: {tail}");
+    assert!(tail.contains("boom"), "stderr の本文が残る: {tail}");
     clean(&[&repo, &state]);
 }
 

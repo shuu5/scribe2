@@ -37,6 +37,19 @@ pub const RC_INCONCLUSIVE: u8 = 3;
 /// lens の出力から拾う JSON 行の始まり。
 const JSON_HEAD: char = '{';
 
+/// 赤い verify 行の stderr を残す診断 file の名（`verify.jsonl` と同じ dir）。
+///
+/// **機械はこの file を読まない**。`verify.jsonl` の record（`schema` / `n` / `rc` /
+/// `cmd`）は跨版の契約なので形を変えず、「なぜ赤かったか」だけを別の面へ逃がす。
+const STDERR_LOG_FILE: &str = "verify.stderr.log";
+
+/// 診断 file に残す stderr の行数（末尾から数える）。
+///
+/// **判定に効く値ではない**（人が理由を読むための窓の大きさ）ので規則行にしない
+/// ——rules manifest は判定を動かす閾値の置き場である（憲法 C1 / C5）。**末尾**を
+/// 採るのは、落ちた command が理由を最後に出すためである。
+const STDERR_TAIL_LINES: usize = 20;
+
 /// gate の 3 値。**bool で持たない**（「PASS でない」に 2 つの意味があるため）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Verdict {
@@ -186,17 +199,30 @@ fn measure(entry: &Gate<'_>, worktree: &Path, base: &str) -> Result<Measured, St
 }
 
 /// verify 各行を撃ち、行ごとの rc を `verify.jsonl` へ逐条で残す。
+///
+/// **赤い行だけ** stderr の末尾を診断 file（[`STDERR_LOG_FILE`]）へも append する。
+/// rc だけでは「何がどう赤いか」が便の外から読めず、gate が落ちるたびに人が同じ行を
+/// 手で撃ち直して理由を取り直すことになる（実測 2026-09-10・`s2-07l.49`）。緑の行は
+/// 残さない——読む理由が無い出力で診断 file を埋めると、赤い行の見出しが埋もれる。
 fn record_verify(entry: &Gate<'_>, worktree: &Path) -> Result<u64, String> {
     let path = verify_log_path(entry.state_dir, entry.run);
+    let tail_path = path.with_file_name(STDERR_LOG_FILE);
     let mut red = 0;
     for (index, line) in entry.contract.verify.iter().enumerate() {
-        let rc = run_line(worktree, line);
+        let number = index as u64 + 1;
+        let (rc, stderr) = run_line_captured(worktree, line);
         if rc != 0 {
             red += 1;
+            append_stderr(
+                &tail_path,
+                entry.policy,
+                &format!("## n={number} rc={rc} cmd={line}"),
+                &stderr,
+            )?;
         }
         let record = json_lite::write_object(&[
             ("schema", Value::Num(SCHEMA)),
-            ("n", Value::Num(index as u64 + 1)),
+            ("n", Value::Num(number)),
             ("rc", Value::Num(recorded_rc(rc))),
             ("cmd", Value::Str(line.clone())),
         ]);
@@ -205,17 +231,51 @@ fn record_verify(entry: &Gate<'_>, worktree: &Path) -> Result<u64, String> {
     Ok(red)
 }
 
+/// 見出し 1 行と stderr の末尾を診断 file へ 1 件 append する。
+///
+/// **見出しは呼び手が組む**。n / rc / cmd をそのまま渡す形にすると引数が 5 個を超え、
+/// C4 の線（`too_many_arguments`）に当たる。書き口は [`append_line`] の 1 本のまま
+/// （lock を持つ writer を 2 本にしない・憲法 C6.3）。
+fn append_stderr(path: &Path, policy: LockPolicy, head: &str, stderr: &str) -> Result<(), String> {
+    append_line(path, &format!("{head}\n{stderr}"), policy).map_err(|err| err.to_string())?;
+    Ok(())
+}
+
 /// verify 1 行を与えられた worktree で撃って rc を得る。起動できない周も RED 側へ倒す。
 ///
 /// land の「main 実測」も同じ関数を通す（**verify 行を撃つ実装は器の中で 1 本**）。
 /// 2 本になると gate が通した行と main で撃った行の意味が静かにずれる。
 pub fn run_line(worktree: &Path, line: &str) -> i32 {
-    Command::new("sh")
+    run_line_captured(worktree, line).0
+}
+
+/// verify 1 行を撃ち、rc と **stderr の末尾**（`STDERR_TAIL_LINES` 行）を得る。
+///
+/// **撃つ実装はここ 1 本だけ**である（[`run_line`] はこの関数の rc だけを返す薄い口）。
+/// 出力の要る側と要らない側で `Command` を 2 本に割ると、gate が通した行と land が
+/// main で撃った行が別の実装になり、意味が静かにずれる。
+pub fn run_line_captured(worktree: &Path, line: &str) -> (i32, String) {
+    let spawned = Command::new("sh")
         .arg("-c")
         .arg(line)
         .current_dir(worktree)
-        .output()
-        .map_or(-1, |out| out.status.code().unwrap_or(-1))
+        .output();
+    let Ok(out) = spawned else {
+        // 起動できなかった周は rc も stderr も**器の外に無い**。空を「何も言わなかった」
+        // として返し、極性は従来どおり RED 側（-1）へ倒す。
+        return (-1, String::new());
+    };
+    (
+        out.status.code().unwrap_or(-1),
+        tail_of(&String::from_utf8_lossy(&out.stderr)),
+    )
+}
+
+/// 末尾 [`STDERR_TAIL_LINES`] 行を改行で継いで返す（末尾の改行は行の区切りとして落ちる）。
+fn tail_of(text: &str) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    let from = lines.len().saturating_sub(STDERR_TAIL_LINES);
+    lines.get(from..).unwrap_or_default().join("\n")
 }
 
 /// rc を JSON の非負整数へ写す。`sh` が signal で落ちた周（負）は 255 に畳む。
