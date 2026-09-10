@@ -2635,8 +2635,11 @@ fn toy_land(toy: &Toy<'_>, bead: &str, contract: &Path, runner: &str) {
 
 /// write-set の外を編集しようとして guard に止まる便。**止めたのが guard であることまで測る**
 /// （runner が別の理由で落ちた周と弁別する）。
-fn toy_denied(toy: &Toy<'_>, contract: &Path) {
-    let (repo, state) = (toy.repo, toy.state);
+///
+/// この経路は **misbehave した runner** のためのもので、五便（compliant な runner）では
+/// 発火しない。ゆえに呼び手は `pipe_guard_is_backstop_for_misbehaving_runner` の 1 本だけ
+/// である（`Toy` を受けないのは、使わない lens を組み立てさせないため）。
+fn toy_denied(repo: &Path, state: &Path, contract: &Path) {
     let runner = format!(
         "printf '{{\"cwd\":\"%s\",\"tool_name\":\"Write\",\"tool_input\":{{\"file_path\":\"docs/out.md\"}}}}' \"$PWD\" \
          | '{}' hook pre-tool-use; test $? -eq 0 || exit 1; {TOY_COMMIT}",
@@ -2650,12 +2653,69 @@ fn toy_denied(toy: &Toy<'_>, contract: &Path) {
         "永続面にも Failed が残る: {}",
         show_line(repo, state, &id)
     );
-    let denies = fs::read_to_string(inject_path(state))
-        .unwrap_or_default()
-        .lines()
-        .filter(|line| line.contains("\"what\":\"deny\""))
-        .count();
-    assert_eq!(denies, 1, "write-set の外への Write が 1 件 deny されている");
+    let injected = fs::read_to_string(inject_path(state)).unwrap_or_default();
+    let denies = injected.lines().filter(|line| line.contains("\"what\":\"deny\"")).count();
+    assert_eq!(
+        denies,
+        1,
+        "write-set の外への Write が 1 件 deny されている（母集団 {} 行）",
+        injected.lines().count()
+    );
+}
+
+/// **compliant な runner** の便②: 契約の goal が求める file が write-set の外にあるとき、
+/// 実 runner は fence の外を書きに行かず「両立しない」と述べて空 commit を打つ
+/// （実測・`s2-07l.24` の AC1 再走）。便は commit 1 本ゆえ `Implemented` まで進み、
+/// **gate の verify で止まる**——guard は 1 件も発火しない（backstop であって関門ではない）。
+fn toy_compliant_refusal(toy: &Toy<'_>, contract: &Path) {
+    let (repo, state) = (toy.repo, toy.state);
+    let runner = "git commit -q --allow-empty -m 'goal と write-set が両立しない'";
+    let (id, spawned) = toy_spawn(repo, state, "toy-refuse", contract, runner);
+    assert_eq!(spawned.status.code(), Some(i32::from(RC_OK)), "spawn: {}", stderr_of(&spawned));
+    // **空 commit も commit 1 本**＝FR6 の完了判定（commit 0 は完了ではない）は通る。
+    assert!(
+        stdout_of(&spawned).contains("stage=Implemented"),
+        "空 commit 1 本で Implemented: {}",
+        stdout_of(&spawned)
+    );
+
+    // **便②専用の marker を持つ lens** を渡す（五便が共有する PASS lens の marker は
+    // 便①の gate で既に作られており、「呼ばれなかった」を測れない）。
+    let marker = state.join("lens-refusal");
+    let lens = fake_lens(&marker, &lens_verdict("PASS"));
+    let gated = gate_once(repo, state, &id, Some(&lens));
+    assert_eq!(
+        gated.status.code(),
+        Some(i32::from(RC_REFUSED)),
+        "verify が赤い便の gate は rc 1: {}",
+        stderr_of(&gated)
+    );
+    let log = fs::read_to_string(state.join("pipe").join(&id).join("verify.jsonl")).unwrap_or_default();
+    let row = vessel::fleet::json_lite::parse_object(log.lines().next().unwrap_or_default().trim())
+        .unwrap_or_default();
+    assert_eq!(value_of(&row, "n"), "1", "verify は逐条で残る（1 行目）: {log}");
+    // **数値で測る**: `value_of` は key が無いと空文字を返すので、字面の `!= "0"` だと
+    // `rc` が消えた・改名された退行まで真になってしまう（fail-open）。
+    let rc: u64 = value_of(&row, "rc").parse().unwrap_or_default();
+    assert!(
+        rc > 0,
+        "goal が求める docs/out.md は fence の外＝verify が赤い（rc={rc}）: {log}"
+    );
+    // 判定順どおり、verify が赤い周は lens を**呼ばない**（PASS を返す lens を渡しても
+    // 便は通らない＝gate が lens の顔色で通す形になっていないことまで測る）。
+    assert!(!marker.exists(), "verify が赤い周は lens を起動しない（marker 不在）");
+    // guard は misbehave した runner のための backstop＝この経路では 1 件も発火しない。
+    let injected = fs::read_to_string(inject_path(state)).unwrap_or_default();
+    let denies = injected.lines().filter(|line| line.contains("\"what\":\"deny\"")).count();
+    assert_eq!(
+        denies,
+        0,
+        "compliant な runner は fence の外を書きに行かない（母集団 {} 行）",
+        injected.lines().count()
+    );
+
+    let refused = land_once(repo, state, &id);
+    assert_eq!(refused.status.code(), Some(i32::from(RC_REFUSED)), "FAIL の便は land しない");
 }
 
 /// gate が FAIL する便（land しない）。
@@ -2690,6 +2750,7 @@ fn toy_approved_land(toy: &Toy<'_>, contract: &Path) {
     assert_eq!(landed.status.code(), Some(i32::from(RC_OK)), "land: {}", stderr_of(&landed));
 }
 
+// flip-check: retroactive s2-07l.40
 #[test]
 fn pipe_five_contracts_land_with_fake_runner_in_toy_repo() {
     let (repo, state) = repo_with_state();
@@ -2702,7 +2763,9 @@ fn pipe_five_contracts_land_with_fake_runner_in_toy_repo() {
 
     let toy = Toy { repo: &repo, state: &state, lens: &pass };
     toy_land(&toy, "toy-ok", &plain, TOY_COMMIT);
-    toy_denied(&toy, &plain);
+    // 便②: goal（`docs/out.md`）が write-set（`src/lib.rs`）の外にある契約。
+    let refusal = write_contract(&repo, &["verify"], &[r#"verify = ["test -f docs/out.md"]"#]);
+    toy_compliant_refusal(&toy, &refusal);
     let with_tests = write_contract(&repo, &["write-set"], &[r#"write-set = ["src/lib.rs", "tests/"]"#]);
     let add_test = "mkdir -p tests && echo '#[test] fn t() {}' > tests/new.rs \
                     && git add -A && git commit -q -m test";
@@ -2721,5 +2784,18 @@ fn pipe_five_contracts_land_with_fake_runner_in_toy_repo() {
     );
     let exported = fs::read_to_string(land::verdicts_path(&state)).expect("面 5 を読める");
     assert_eq!(exported.lines().count(), 3, "main に載った便だけが面 5 に出る: {exported}");
+    clean(&[&repo, &state]);
+}
+
+/// guard は **misbehave した runner のための backstop**。
+///
+/// 五便（compliant な runner）ではこの経路は発火しないので、極性はここで独立に測る
+/// ——「発火しない」だけを測ると、guard が壊れて**常に**黙る退行が素通りする。
+#[test]
+fn pipe_guard_is_backstop_for_misbehaving_runner() {
+    let (repo, state) = repo_with_state();
+    track_marker(&repo);
+    let contract = write_contract(&repo, &[], &[]);
+    toy_denied(&repo, &state, &contract);
     clean(&[&repo, &state]);
 }
