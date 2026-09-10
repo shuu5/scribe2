@@ -2121,33 +2121,59 @@ fn pipe_report_returns_rc2_on_malformed_store() {
 }
 
 #[test]
-fn pipe_land_pr_cmd_refuses_without_approval() {
+fn pipe_land_pr_cmd_runs_without_approval_event() {
     let (repo, state) = repo_with_state();
     let path = write_contract(&repo, &[], &[]);
     let marker = state.join("lens-ran");
     let id = gated_pass(&repo, &state, &path, &marker);
     let before = git(&repo, &["rev-parse", "refs/heads/main"]);
-    let ran = state.join("pr-cmd-ran");
-    // **公開の口は承認の後**（憲法 A1）。verdict が PASS でも承認 event が無ければ
-    // 道具を起動しない＝「実行前に人が許した」ことを event で確かめる。
+    let sent = state.join("pr-args");
+    // **自 repo への PR は「出す」ではない**（憲法 A4.3・ADR-0008）。main を動かさず
+    // branch も PR も閉じられる＝可逆ゆえ、承認 event を積まない周でも道具は起動する。
+    // 3 クラスの判定は契約の自己申告（`classes`）だけに効き、seam を使ったことから
+    // 導出しない（publish を名乗る契約は従来どおり spawn の手前で Blocked＝別の歯が守る）。
     let out = run_pipe(&[
         "land", "--run", &id, "--repo", &repo.display().to_string(),
         "--state-dir", &state.display().to_string(),
-        "--pr-cmd", &format!("touch '{}'", ran.display()),
+        "--pr-cmd", &format!("printf '%s %s' {{branch}} {{base}} > '{}'", sent.display()),
     ]);
-    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "承認が無ければ rc 1");
-    assert!(!ran.exists(), "**道具を起動しない**（起動してから断るのでは公開が起きうる）");
+    assert_eq!(
+        out.status.code(),
+        Some(i32::from(RC_OK)),
+        "承認 event 無しでも rc 0: {}",
+        stderr_of(&out)
+    );
+    // **道具が起動したことを file で測る**（器は道具の中身を知らない）。
+    assert_eq!(
+        fs::read_to_string(&sent).expect("seam へ渡した引数を読める"),
+        format!("scribe2/{id} {before}"),
+        "`{{branch}}` と `{{base}}` を置換して渡す"
+    );
+    // **main は動かさない**（merge は人が押す・A4.3 の可逆はここに乗っている）。
     assert_eq!(
         git(&repo, &["rev-parse", "refs/heads/main"]),
         before,
         "main は 1 byte も動かない"
     );
     assert!(
-        !show_line(&repo, &state, &id).contains("stage=Landed"),
-        "段も動かない: {}",
+        show_line(&repo, &state, &id).contains("stage=Landed"),
+        "段は Landed へ進む: {}",
         show_line(&repo, &state, &id)
     );
-    assert!(!land::verdicts_path(&state).exists(), "面 5 へも書かない");
+    assert!(
+        stdout_of(&out).contains("landed=pr"),
+        "PR を出した形だと名乗る: {}",
+        stdout_of(&out)
+    );
+    let log = fs::read_to_string(state.join("fleet").join("events.jsonl")).expect("event log");
+    assert!(
+        log.contains("\"stage\":\"Landed\"") && log.contains("\"detail\":\"pr\""),
+        "Landed detail=pr で終える: {log}"
+    );
+    assert!(
+        !land::verdicts_path(&state).exists(),
+        "面 5 は main へ載った便の記録ゆえ、PR の段階では書かない"
+    );
     clean(&[&repo, &state]);
 }
 
@@ -2158,11 +2184,6 @@ fn pipe_land_pr_cmd_pushes_branch_without_moving_main() {
     let marker = state.join("lens-ran");
     let id = gated_pass(&repo, &state, &path, &marker);
     let base = git(&repo, &["rev-parse", "refs/heads/main"]);
-    let approved = run_pipe(&[
-        "approve", "--run", &id, "--words", "この PR を出してよい",
-        "--state-dir", &state.display().to_string(),
-    ]);
-    assert_eq!(approved.status.code(), Some(i32::from(RC_OK)), "approve: {}", stderr_of(&approved));
 
     // **道具の失敗で便を終端させない**: push も PR 作成も network で落ちうるので、
     // `Failed` を焼くと再試行できない便が残る。rc 1 で何も書かず段も動かさない——だから
@@ -2191,7 +2212,7 @@ fn pipe_land_pr_cmd_pushes_branch_without_moving_main() {
         "--state-dir", &state.display().to_string(),
         "--pr-cmd", &format!("printf '%s %s' {{branch}} {{base}} > '{}'", sent.display()),
     ]);
-    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "承認が在れば rc 0: {}", stderr_of(&out));
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "承認 event 無しでも rc 0: {}", stderr_of(&out));
     let args = fs::read_to_string(&sent).expect("seam へ渡した引数を読める");
     assert_eq!(
         args,
@@ -2231,11 +2252,6 @@ fn pipe_land_pr_cmd_ignores_moved_main() {
     let marker = state.join("lens-ran");
     let id = gated_pass(&repo, &state, &path, &marker);
     let base = git(&repo, &["rev-parse", "refs/heads/main"]);
-    let approved = run_pipe(&[
-        "approve", "--run", &id, "--words", "出してよい",
-        "--state-dir", &state.display().to_string(),
-    ]);
-    assert_eq!(approved.status.code(), Some(i32::from(RC_OK)), "approve: {}", stderr_of(&approved));
 
     // **別便が main を進めた状況**を作る。squash の口はここで stale base を理由に断るが、
     // PR の口は ref を 1 本も動かさないので CAS の old が要らない——ここで base を縛ると
@@ -2278,11 +2294,6 @@ fn pipe_land_pr_cmd_refuses_empty_or_missing_value() {
     let path = write_contract(&repo, &[], &[]);
     let marker = state.join("lens-ran");
     let id = gated_pass(&repo, &state, &path, &marker);
-    let approved = run_pipe(&[
-        "approve", "--run", &id, "--words", "出してよい",
-        "--state-dir", &state.display().to_string(),
-    ]);
-    assert_eq!(approved.status.code(), Some(i32::from(RC_OK)), "approve: {}", stderr_of(&approved));
     let before = event_count(&state);
 
     // 値欠け（SRS NFR4「黙って落とさない」）。
@@ -2298,7 +2309,7 @@ fn pipe_land_pr_cmd_refuses_empty_or_missing_value() {
     );
 
     // **空文字**。`sh -c ""` は rc 0 で終わるので、素通しすると 1 行も公開していないのに
-    // 「PR を出した」を記帳し、承認だけが消費される。
+    // 「PR を出した」を記帳する（何もしていないのに「やった」が残る）。
     let empty = run_pipe(&[
         "land", "--run", &id, "--repo", &repo.display().to_string(),
         "--state-dir", &state.display().to_string(), "--pr-cmd", "",

@@ -65,8 +65,6 @@ pub struct Land<'a> {
     pub state_dir: &'a Path,
     /// 読み込み済みの契約。
     pub contract: &'a Contract,
-    /// 承認 event が在るか（replay の導出値・[`crate::fleet::replay`] が資格を見る）。
-    pub approved: bool,
     /// PR を作る seam（`--pr-cmd`）。`None` なら squash して main を進める。
     pub pr_cmd: Option<&'a str>,
     /// lock の待ち方。
@@ -122,9 +120,11 @@ pub fn land(entry: &Land<'_>) -> Outcome {
 
 /// PR を作る seam を通す（設計 §5.4 の `--pr-cmd`・**main を動かさない**）。
 ///
-/// 前提に「run に `ApprovalReceived` が在る」を足す（無ければ **rc 1 で何もしない**）。
-/// 公開は不可逆な外向きの操作ゆえ、**実行前に**人が許した周だけ通す（憲法 A1）。承認の
-/// 資格を見るのは replay 側で、ここは導出値を受け取るだけである（読み手を増やさない）。
+/// **承認 event は前提でない**。自 repo へ branch を push して PR を出す行為は main を
+/// 動かさず、branch も PR も閉じられる＝可逆ゆえ、憲法 A4.3（merge・自 repo への
+/// dispatch・依存なしの code 変更は A4.2 の目的において可逆）により Ask-first の「出す」
+/// に当たらない（ADR-0008）。3 クラスの判定は契約の自己申告（`classes`）だけに効き、
+/// seam を使ったことから導出しない。
 ///
 /// **stale base は見ない**。CAS の old が要るのは ref を進める周だけで、この形は ref を
 /// 1 本も動かさない——PR が載るかどうかは forge が決める。逆にここで base を縛ると、
@@ -135,15 +135,9 @@ pub fn land(entry: &Land<'_>) -> Outcome {
 fn open_pr(entry: &Land<'_>, base: &str, cmd: &str) -> Outcome {
     // **空の seam を通さない**（使い方の誤り・rc 1・何も書かない）。`sh -c ""` は rc 0 で
     // 終わるので、素通しすると「PR を出した」を記帳しながら **1 行も公開していない**便が
-    // 生まれ、承認だけが消費される（公開の口で最も避けたい嘘である）。
+    // 生まれる（何もしていないのに「やった」が永続面に残る——最も避けたい嘘である）。
     if cmd.trim().is_empty() {
         return refused("--pr-cmd が空である".to_owned());
-    }
-    if !entry.approved {
-        return refused(format!(
-            "run {} に承認 event が無い（pipe approve --words \"<user の逐語>\"）",
-            entry.run
-        ));
     }
     let branch = super::branch_name(entry.run);
     let line = cmd.replace("{branch}", &branch).replace("{base}", base);

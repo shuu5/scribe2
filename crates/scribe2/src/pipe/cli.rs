@@ -406,7 +406,7 @@ fn gate_run(args: &[String], id: &str, manifest: &Manifest, policy: LockPolicy) 
 
 /// `pipe land`。前提 stage = Gated（PASS の検査は land 側が持つ）。
 ///
-/// `--pr-cmd` は**公開の口**ゆえ、承認の有無（replay の導出値）を land へ渡す（A1）。
+/// `--pr-cmd` は自 repo への PR の口ゆえ**承認 event を前提としない**（A4.3・ADR-0008）。
 fn land_run(args: &[String], id: &str, policy: LockPolicy) -> Outcome {
     let resolved = match resolve(args, id, &[Stage::Gated], false) {
         Ok(found) => found,
@@ -422,7 +422,6 @@ fn land_run(args: &[String], id: &str, policy: LockPolicy) -> Outcome {
         repo: &resolved.repo,
         state_dir: &resolved.state_dir,
         contract: &resolved.contract,
-        approved: resolved.approved,
         pr_cmd,
         policy,
     })
