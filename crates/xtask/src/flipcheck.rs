@@ -773,23 +773,42 @@ fn bundle_decls(dest: &Path, decls: &[&FilePair]) -> Result<(), String> {
             emit_err(&format!("flip-check: not-copied {}", pair.rel));
             continue;
         };
-        write_text(dest, &pair.rel, &present_mods_only(dest, &pair.rel, &body))?;
+        write_text(
+            dest,
+            &pair.rel,
+            &present_mods_only(dest, &pair.rel, &body, &pair.base_test()),
+        )?;
     }
     Ok(())
 }
 
-/// 宣言 file の本文から、**`dest` に本体が在る** `mod <name>;` 行だけを残す。
+/// 宣言 file の本文から、**この便が足した** `mod <name>;` 行のうち `dest` に本体が
+/// 無いものだけを落とす。
 ///
-/// `mod` 行**以外は 1 行も触らない**。本体の在処は宣言 file と同じ dir の `<name>.rs` か
-/// `<name>/mod.rs` で見る——`#[path]` 付きの module は救わない（path 属性は字面から追えず、
-/// 追うには parser が要る。救われない形は同梱の外＝従来どおり単独で撃たれる）。
-fn present_mods_only(dest: &Path, rel: &str, body: &str) -> String {
+/// `mod` 行**以外は 1 行も触らない**（宣言 file は `use` や helper を持ちうる。落とすと
+/// 本体が compile できず、これも捏造 RED になる）。本体の在処は宣言 file と同じ dir の
+/// `<name>.rs` か `<name>/mod.rs` で見る。
+///
+/// **base に既に在った宣言行は落とさない**——base が緑である以上（[`base_is_green`]）
+/// その本体は必ず在り、落とす理由が無い。`#[path = "…"]` 付きの宣言まで落とすと属性行
+/// （`mod` 行ではないので残る）が**孤児**になり、`expected item after attributes` の
+/// compile error が RED に化ける＝**この関数が消しに来た当の fail-open を別の扉から
+/// 作り直す**（実測 2026-09-10・lens-44 H1: base の xtask は正しく `green-on-base` で
+/// 落ちるのに、絞り込みを入れた側が `RED-on-base ok` で通した）。
+///
+/// ゆえに `#[path]` 付き module について本関数がするのは「壊さない」ことだけで、
+/// **救済はしない**——path 属性の指す先は字面から追えず、追うには parser が要る。
+/// この便が `#[path]` 付きの新規 module を足した周は従来どおり測れない（M4・記録のみ）。
+fn present_mods_only(dest: &Path, rel: &str, body: &str, base: &str) -> String {
     let dir = dest.join(Path::new(rel).parent().unwrap_or(Path::new("")));
+    let carried: Vec<&str> = base.lines().filter_map(mod_name).collect();
     body.split_inclusive('\n')
         .filter(|line| match mod_name(line) {
             None => true,
             Some(name) => {
-                dir.join(format!("{name}.rs")).is_file() || dir.join(name).join("mod.rs").is_file()
+                carried.contains(&name)
+                    || dir.join(format!("{name}.rs")).is_file()
+                    || dir.join(name).join("mod.rs").is_file()
             }
         })
         .collect()
