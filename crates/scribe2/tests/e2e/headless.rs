@@ -849,3 +849,98 @@ fn headless_lens_loads_no_settings_from_account_or_checkout() {
     assert!(!has_arg(&args, "--restricted"), "restricted は使わない: {args}");
     clean(&[&dir]);
 }
+
+/// **id の乱数に上限の語が現れただけ**では止まらない（`s2-07l.71`）。
+///
+/// `.64` の実 run で実際に踏んだ形: 401 authentication_failed の result record は
+/// `is_error` を名乗るので種別の絞りは通り、そのうえで claude が振った `session_id` の
+/// 16 進に `429` が部分文字列として現れたため、**認証エラーが rc 75「上限」に化けた**
+/// （呼出側は `Failed detail=rate-limit` と記帳する＝便の失敗原因が台帳に嘘で残る）。
+///
+/// **本文 field に上限の語が 1 つも無い**ことが要点で、id 側にだけ置く。
+#[test]
+fn headless_runner_does_not_stop_on_rate_limit_word_in_session_id() {
+    let dir = tmp();
+    let worktree = tmp();
+    let write_set = dir.join("write-set.txt");
+    let vessel = write_vessel_copy(&dir, r#"["cargo", "git"]"#);
+    fs::write(&write_set, "src/lib.rs\n").expect("write-set を書ける");
+    for body in [
+        // 実 run で観測した形（口座名・API key・path は含まない・id は同形の別値）。
+        concat!(
+            "{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":true,",
+            "\"result\":\"Failed to authenticate. API Error: 401 API key is invalid.\",",
+            "\"session_id\":\"791e7ee4-d00f-4dbc-8429-dd54dcbd20c4\",",
+            "\"uuid\":\"c719aad3-e1db-42c9-a654-cae6bf758981\"}\n"
+        ),
+        // **本文 field を 1 つも持たない** error record は「上限ではない」へ倒す
+        // （分からない周を上限と名乗らない＝上限側を狭く取る）。
+        "{\"type\":\"error\",\"session_id\":\"00000000-0000-4000-8000-000000000529\"}\n",
+    ] {
+        // claude 自身の rc は 1（認証で落ちた）。**その rc が写ること**まで測る——
+        // 「rc 75 でない」だけだと、包みが独自の rc を作る変異が生き残る。
+        let claude = fake_claude(&dir, body, false, 1);
+        let out = run_runner(
+            &RunnerCall { dir: &dir, worktree: &worktree, write_set: &write_set, vessel: &vessel, claude: &claude, mode: "plan", account: None },
+            b"goal = \"x\"\n",
+        );
+        assert_ne!(
+            out.status.code(),
+            Some(i32::from(RC_RATE_LIMIT)),
+            "id の乱数に現れた上限語は上限ではない: {body}"
+        );
+        assert_eq!(out.status.code(), Some(1), "claude の rc を写す: {body} / {}", stderr_of(&out));
+    }
+    clean(&[&dir, &worktree]);
+}
+
+/// 走査を本文 field へ狭めても**上限の検出は生きている**（`s2-07l.71`・上の歯と対）。
+///
+/// 上の歯だけだと「常に false」へ倒す変異が生き残る。**id には上限語を置かず**、
+/// 本文 field の値にだけ置いた record で rc 75 になることを測る。
+#[test]
+fn headless_runner_stops_on_rate_limit_word_in_result_body() {
+    let dir = tmp();
+    let worktree = tmp();
+    let write_set = dir.join("write-set.txt");
+    let vessel = write_vessel_copy(&dir, r#"["cargo", "git"]"#);
+    fs::write(&write_set, "src/lib.rs\n").expect("write-set を書ける");
+    for body in [
+        // 文字列の本文 field。
+        concat!(
+            "{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":true,",
+            "\"result\":\"API Error: 429 rate limit\",",
+            "\"session_id\":\"11111111-2222-4333-8444-555555555555\"}\n"
+        ),
+        // 入れ子の object を値に持つ本文 field（既存の形）。
+        concat!(
+            "{\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\"},",
+            "\"session_id\":\"11111111-2222-4333-8444-555555555555\"}\n"
+        ),
+        // **本文 field は 1 つずつ測る**——宣言した field のうち歯が当たっていない語は、
+        // 後続の便が消しても CI が気づかない（lens 2026-09-11 で `message` / `text` を
+        // 落としても 329 本すべて緑のまま通ることを実測した）。
+        "{\"type\":\"system\",\"subtype\":\"error\",\"message\":\"429 Too Many Requests\"}\n",
+        "{\"type\":\"error\",\"text\":\"upstream returned 429\"}\n",
+        // **escape された `\"` で値を切らない**（切ると後半の上限語を取り落とす）。
+        "{\"type\":\"result\",\"is_error\":true,\"result\":\"server said \\\"429 rate limit\\\" once\"}\n",
+        // **同じ field が複数回現れる record**では全ての出現を見る（最初の 1 つで打ち切らない）。
+        concat!(
+            "{\"type\":\"result\",\"is_error\":true,\"result\":\"first is clean\",",
+            "\"result\":\"usage limit reached\"}\n"
+        ),
+    ] {
+        // claude の rc は 0 でも、**上限を見たら包みが rc 75 で止める**（rc の写しではない）。
+        let claude = fake_claude(&dir, body, false, 0);
+        let out = run_runner(
+            &RunnerCall { dir: &dir, worktree: &worktree, write_set: &write_set, vessel: &vessel, claude: &claude, mode: "plan", account: None },
+            b"goal = \"x\"\n",
+        );
+        assert_eq!(
+            out.status.code(),
+            Some(i32::from(RC_RATE_LIMIT)),
+            "本文 field の上限語では止まる: {body}"
+        );
+    }
+    clean(&[&dir, &worktree]);
+}
