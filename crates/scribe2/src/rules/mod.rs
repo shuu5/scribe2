@@ -77,6 +77,10 @@ pub enum RuleKind {
     SeatContextCapPct,
     /// 席の context 窓の宣言値（token）。使用率の分母である。
     SeatContextWindowTokens,
+    /// 席の tick を stale と見なす経過時間（秒）。これを超えた席にだけ tick を撃つ。
+    SeatTickStaleS,
+    /// 席の cycle lock を live と見なす経過時間（秒）。超えた lock は residue として取り直す。
+    SeatCycleLockTtlS,
 }
 
 /// [`RuleKind`] の全 variant。parity test の母集団である。
@@ -105,6 +109,8 @@ pub const ALL: &[RuleKind] = &[
     RuleKind::HookTimeoutS,
     RuleKind::SeatContextCapPct,
     RuleKind::SeatContextWindowTokens,
+    RuleKind::SeatTickStaleS,
+    RuleKind::SeatCycleLockTtlS,
 ];
 
 impl RuleKind {
@@ -135,6 +141,8 @@ impl RuleKind {
             Self::HookTimeoutS => "HookTimeoutS",
             Self::SeatContextCapPct => "SeatContextCapPct",
             Self::SeatContextWindowTokens => "SeatContextWindowTokens",
+            Self::SeatTickStaleS => "SeatTickStaleS",
+            Self::SeatCycleLockTtlS => "SeatCycleLockTtlS",
         }
     }
 
@@ -158,7 +166,9 @@ impl RuleKind {
             | Self::LockStaleMs
             | Self::HookTimeoutS
             | Self::SeatContextCapPct
-            | Self::SeatContextWindowTokens => ValueShape::Int,
+            | Self::SeatContextWindowTokens
+            | Self::SeatTickStaleS
+            | Self::SeatCycleLockTtlS => ValueShape::Int,
             Self::DialogueSurface => ValueShape::Str,
             Self::MaturityCondition
             | Self::AccountSelection

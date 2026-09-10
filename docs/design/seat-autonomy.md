@@ -27,10 +27,20 @@ v2 に既に在るもの: FR23（WM の規則）・FR21（`<state_dir>/inject.js
   - **計測の出所**: 使用 token は payload の `transcript_path` が名指す jsonl を便 2 の parse（末尾 10 MiB・最後の有効 usage 和・`seat::meter::used_from_transcript`）で読む。分母は manifest 行 `seat.context_window_tokens` の**宣言値**で、pane の statusline は読まない（hook から tmux を呼ばない・憲法 C2.2）。使用率は整数の切り捨てで、`pct >= cap` を止める。
   - **通す口は 2 つ**（`SeatDecision::{Allow, Externalize}`・bool で持たない＝憲法 C11）。`Externalize` は `<root>/.claude-session/working-memory.*.md` **ちょうど 2 段**の編集で、使用率に関わらず通す（止めると席は退避すらできない・FR23）。口は狭く取る＝同じ dir でも別名の編集は上限に掛かる。判定は**字句と実体の 2 段**で、`working-memory.*.md` という名前の symlink が口の外を指していれば通さない（通す側の口を字句 1 段で持つと link 1 本で上限を越えられる）。**まだ無い退避物は link ではありえない**ので在るときだけ実体を見る＝これから作る周は通る。`transcript_path` の空文字は「渡されていない」と同じに扱う（`unreadable` に化けさせない）。
   - **測れない理由は 4 語で弁別する**（`no-transcript-path` / `unreadable` / `no-usage` / `no-rule`）。1 語へ潰すと「transcript を渡し忘れている」のか「usage の形が変わった」のかを記録から後で分けられない。対象 tool は write-set guard と**同じ集合**（`hook::guard::GUARDED`）を参照する＝`Bash` は見ない。
-- `seat tick --target T` … (c) の 4 条件を同じ順序で評価し、成立時だけ注入。heartbeat は `<state_dir>/seat/<target>/heartbeat`（anchor 配下の `.claude-session/` へ書かない＝v1 と場所を分けて併走可能にする）。
-- `seat cycle --target T` … (d)。lock は `<state_dir>/seat/<target>/cycle.lock`（`O_EXCL`）。手順 = WM が未 consumed で在ることを確認 → `/clear` 注入 → 復元 command（`/rebrief`）注入 → lock 解除。
+- `seat heartbeat --target T` … 裁定 (a) の口。席の**中**から打刻する（`<state_dir>/seat/<潰した target>/heartbeat`）。tick が注入する 1 行がこの打刻を促す＝「席が生きている」は**席が自分で打った**ことでしか測らない。置き場を anchor 配下の `.claude-session/` に取らないのは、v1 の timer と場所を分けて併走できるようにするためである。
+- `seat tick --target T --wm-dir DIR` … 裁定 (c) の 4 条件を**順序固定の AND** で評価し、成立時だけ注入する。判定は enum `TickDecision::{Inject, Noop(NoopReason), Error(String)}` で持ち bool にしない（憲法 C11）。
+  - **順序** = 鮮度 → pane idle → 未 consumed WM → cycle lock。**最初に立たなかった条件**を理由にする（`heartbeat-fresh` / `pane-missing` / `busy` / `wm-unconsumed` / `wm-unreadable` / `cycle-live`）。順序は load-bearing で、**鮮度が fresh の周は tmux を 1 度も叩かない**（生きている席を毎周 capture しない）。理由の字面は順序の証拠でもある＝入れ替えると同じ 4 条件でも別の理由が出る。
+  - **裁定 (d) 鮮度** = `now − max(heartbeat mtime, tick-stamp mtime)` が閾値（rules 行 `seat.tick_stale_s`・裁定 id 付き）以下なら fresh。**両 file 不在は stale**。自分の打刻（tick-stamp）も見るのは、注入した直後の周が「席がまだ打刻していない」を理由に撃ち続ける自傷 storm を塞ぐためである。
+  - **裁定 (e) idle** = 最後の prompt 行の右が空 ∧ **直近 6 非空行**に `esc to interrupt` が無い。域を statusline の側（prompt より下）に狭めてはならない——**走行中の印は入力欄の上にも描かれる**ので、狭めると busy な席を idle と読む（実測 2026-09-10: 印が上に在る pane へ `seat cycle` が `/clear` を送った）。prompt 行を特定できない pane は idle と名乗らない（fail-closed・読めない席へ注入しない側へ倒す）。
+  - **裁定 (c) 自席の弁別** = 退避物の **file 名の sid ではなく frontmatter の `seat:` が target と一致**するもの（席の外から回る tick は sid を知らない）。名乗りを持たない退避物は自席のものと数えない——他席の退避物を根拠にすると、別の席の文脈で `/clear` を撃つことになる。dir が読めない周は `wm-unreadable` で、**0 件に潰さない**。
+  - **裁定 (b) cycle の駆動** = `wm-unconsumed` で止まった周**に限り**、lock が空いていれば cycle を in-process で回し、判定行の末尾に `cycle=<done|failed|refused reason=…>` を足す。それ以外の周は cycle を評価しない（`cycle=` が付かないこと自体が「評価していない」の印）。退避側の自己 kick は持たない＝退避から作り直しまでの遅れは最大 1 周期で、MVP はこれを受容する。
+  - 実行系が回らない周（置き場を解けない・注入を確認できない・宣言 rule が読めない）は `decision=error` と rc 1 にし、**noop の語彙を汚さない**（席が静かなのか機械が壊れているのかを記録から読めるようにする）。注入の断り（`busy` 等）は noop と字が重なるので `inject-` の前置きで分ける。
+- `seat cycle --target T --wm-dir DIR [--restore CMD]` … 不可逆の口。lock は `<state_dir>/seat/<潰した target>/cycle.lock`（`O_EXCL`・中身は pid と deadline の 1 行 JSON）。手順は順序固定: lock を取る → 自席の未 consumed 退避物が在ることを確認 → pane が idle であることを確認 → `/clear` 注入 → 作り直しの確認 → 復元 command（既定 `/rebrief`）注入 → lock 解除。**lock-held / wm-missing / wm-unreadable / busy / pane-missing の周は 1 key も送らずに rc 1**（憲法 CON5 / SRS FR28）。TTL（rules 行 `seat.cycle_lock_ttl_s`）を超えた lock は residue として取り直す。
+  - **`/clear` の送達確認だけは便 2 の settle を使えない**: `/clear` は pane を消すので「送った字面が現れる」形では測れず、**成功したときほど確認が落ちる**。代わりに「入力欄が空 ∧ **直近 6 非空行**に `/clear` の字面が無い」を最大 30 秒（500 ms 周期）見る＝作り直された席でだけ同時に立つ。ここも域を prompt より下に取ってはならない（echo された `/clear` は次の prompt の**上**に載るので、第 2 項が構造的にほぼ常に真になり確認が 500 ms の sleep に化ける）。復元 command の側は便 2 の送達確認をそのまま使う。
+  - **lock を取れなかった理由は 2 つに分ける**（`lock-held` = live な lock が在る / `state-dir` = 置き場が使えない）。置き場の位置に file が在る周は `create_dir_all` が競合と同じ error kind（`AlreadyExists`）を返すので、まとめると「他の cycle が走っていた」と「書けない」を記録から分けられない。
+  - **表示の `target=` は置き場の dir 名と同じ潰した字面**（`a:b` → `a_b`）にする。便 2 の `seat inject` と語彙を 1 つにするためで、契約の `<T>` からの意図した読み替えである。
 - `seat inject --target T --text …` … tmux `send-keys` + 送達確認（pane の末尾に text が現れたか）。rc は 0 / 1 の 2 値にし、v1 の偽陰性（4 / 7）を作らない。
-- 駆動: systemd user timer は **repo に入れない**（起動コマンドを repo に置かない・CLAUDE.md）。unit の雛形は docs に書き、user の host で有効化する。
+- 駆動: systemd user timer は **repo に入れない**（起動コマンドを repo に置かない・CLAUDE.md）。unit の雛形は §8 に書き、user の host で有効化する。
 - 記録: 判定と注入は `<state_dir>/seat/<target>/tick.jsonl` に 1 行ずつ（FR21 と同じ schema）。
 - 計測できない理由の弁別（便 2 の実装で決めた読み）: statusline の候補が無い周は、pane 本文が空なら `no-source`・本文が在れば `pane-no-statusline` に分ける（どちらも transcript が明示されていれば先に jsonl へ落ちる）。健全性を外れた候補は `pane-out-of-bound` で**不成立のまま**とし、別の出所で塗り直さない（壊れた面を他の値で隠さない）。
 
@@ -58,3 +68,41 @@ v2 に既に在るもの: FR23（WM の規則）・FR21（`<state_dir>/inject.js
 - 計測の一次ソース = pane（statusline）一次・transcript は fallback（v1 と同じ・速い・NFR5 に収まる）。
 - cap の初期値 = 60（user 裁定 2026-09-10・manifest 行 `seat.context_cap_pct` に裁定 id 付きで置く・C4 / C13 の閾値ではないので A2 非該当）。
 - 切替の判定 = 併走 1 日 + cycle 完走 1 回（AC9）。v1 の timer を止めるのは user 手番（A1「消す」）。
+
+## 8. 駆動（systemd user の雛形・**unit は repo に入れない**）
+
+管理 tick は席の**外**から回る（憲法 R-E12）。host 側に template unit を 1 組置き、席ごとに tmux target を
+instance 名で渡す。**host 固有の path・target 名・口座名は書かない**（本 repo は PUBLIC・CLAUDE.md
+「やらないこと」）ので、以下は雛形であって設定ではない——`<binary>` / `<anchor>` / `<state dir>` は user が
+自分の host で埋める。
+
+`<NAME>-seat-tick@.service`:
+
+```ini
+[Unit]
+Description=seat tick for %i
+
+[Service]
+Type=oneshot
+ExecStart=<binary> seat tick --target %i --wm-dir <anchor>/.claude-session --state-dir <state dir>
+```
+
+`<NAME>-seat-tick@.timer`:
+
+```ini
+[Unit]
+Description=seat tick timer for %i
+
+[Timer]
+OnCalendar=*:0/5
+Persistent=false
+
+[Install]
+WantedBy=timers.target
+```
+
+- `%i` は systemd の instance 名で、tmux target をそのまま渡す（`:` を含む形の escape は host 側で解く）。
+- 周期を 5 分に取るのは、裁定 (b) が cycle の駆動を tick に載せた結果、退避から作り直しまでの遅れが最大
+  1 周期になるためである。短くすると遅れは縮むが、席が静かな間も capture が増える。
+- 有効化と停止は **user の手番**である（憲法 A1「使う」/「消す」）。器はこの unit を書き出さないし、
+  v1 の timer を止めもしない（切替は §5 の便 5 で、判定一致を tick.jsonl で示してから user が裁定する）。

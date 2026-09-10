@@ -9,9 +9,14 @@
 //! 書く（憲法 C2）。
 
 pub mod cli;
+pub mod cycle;
+pub mod heartbeat;
 pub mod inject;
 pub mod meter;
+pub mod tick;
 
+use std::io::Read;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// 開発 session の入力欄を指す prompt の字。
@@ -70,18 +75,25 @@ pub fn search_region(pane: &str) -> Vec<&str> {
             .filter(|line| !line.trim().is_empty())
             .copied()
             .collect(),
-        None => {
-            let mut tail: Vec<&str> = lines
-                .iter()
-                .rev()
-                .filter(|line| !line.trim().is_empty())
-                .take(TAIL_LINES)
-                .copied()
-                .collect();
-            tail.reverse();
-            tail
-        }
+        None => tail_nonempty(pane),
     }
+}
+
+/// prompt の位置に依らない**直近 [`TAIL_LINES`] 非空行**（裁定 (e) の探索域）。
+///
+/// idle をこの域で測るのは、**走行中の印が入力欄の上に描かれる形がある**ためである。
+/// statusline を読む [`search_region`]（最後の prompt 行より下）で測ると印が域の外に落ち、
+/// **busy な席を idle と読む**——実測 2026-09-10（lens-384 C-1）では、印が上に在る pane へ
+/// `seat cycle` が `/clear` を送っていた（印が下なら `refused reason=busy`）。
+pub fn tail_nonempty(pane: &str) -> Vec<&str> {
+    let mut tail: Vec<&str> = pane
+        .lines()
+        .rev()
+        .filter(|line| !line.trim().is_empty())
+        .take(TAIL_LINES)
+        .collect();
+    tail.reverse();
+    tail
 }
 
 /// prompt が 1 行も無い pane で末尾から見る行数。
@@ -108,4 +120,144 @@ pub fn sanitize_target(target: &str) -> String {
         return "_".repeat(squashed.len());
     }
     squashed
+}
+
+/// 席が「いま動いている」ことを名乗る statusline の字。
+///
+/// idle の判定はこの字の**不在**で行う（裁定 (e)）。在ることを見るのでなく無いことを見る
+/// のは、走っている席へ注入すると打ちかけと混ざるためで、読めない周は idle と名乗らない。
+pub const BUSY_MARK: &str = "esc to interrupt";
+
+/// 席の置き場（`<state_dir>/seat/<潰した target>/`）。
+///
+/// 便 2 の記録 file の**親**から導く＝dir 名の字面を 2 面に持たない。写して持つと片方だけ
+/// 変わったときに heartbeat と記録が別の dir へ散り、鮮度が永久に stale になる。
+pub fn seat_dir(state_dir: &Path, target: &str) -> PathBuf {
+    let path = inject::tick_path(state_dir, target);
+    path.parent().map_or_else(|| path.clone(), Path::to_path_buf)
+}
+
+/// 置き場を解く。`--state-dir` が上書きし、無ければ repo の git 設定から読む。
+///
+/// `current_dir` は syscall であって env ではない（憲法 C2.2・hook 側と同じ扱い）。
+pub fn state_dir_of(state_dir: Option<&str>) -> Option<PathBuf> {
+    match state_dir {
+        Some(found) => Some(PathBuf::from(found)),
+        None => {
+            let cwd = std::env::current_dir().ok()?;
+            let root = crate::hook::vessel::repo_root(&cwd)?;
+            crate::hook::vessel::state_dir(&root)
+        }
+    }
+}
+
+/// pane 本文を得る。`capture_file` が在れば tmux を **1 度も呼ばない**。
+///
+/// 明示された file は tmux の**代わり**であって候補ではない: 読めない周に tmux へ落ちると、
+/// 「tmux を呼ばない」ための口が live な server を撃つ経路に化ける（meter と同じ扱い）。
+pub fn pane_of(socket: Option<&str>, target: &str, capture_file: Option<&str>) -> Option<String> {
+    match capture_file {
+        Some(path) => std::fs::read_to_string(path).ok(),
+        None => capture(socket, target),
+    }
+}
+
+/// 席が idle か（裁定 (e)）: 入力欄が空 ∧ **直近 6 非空行**に [`BUSY_MARK`] が無い。
+///
+/// prompt 行を特定できない pane は idle と名乗らない（[`input_tail`] が `None`）＝
+/// fail-closed。読めない席へ注入しない側へ倒すためである。域を [`tail_nonempty`] に取る
+/// 理由はそちらの doc に書いた（印は入力欄の上にも出る）。
+pub fn is_idle(pane: &str) -> bool {
+    input_tail(pane).is_some_and(str::is_empty)
+        && !tail_nonempty(pane)
+            .iter()
+            .any(|line| line.contains(BUSY_MARK))
+}
+
+/// 退避物の名前の前置き（FR23）。
+const WM_PREFIX: &str = "working-memory.";
+/// 退避物の名前の後置き。
+const WM_SUFFIX: &str = ".md";
+/// consume 済みの後置き（**mv が consume の実体**ゆえ、この字で終わらない `.md` が未 consumed）。
+const WM_CONSUMED: &str = ".consumed.md";
+/// frontmatter の区切り。
+const FRONTMATTER: &str = "---";
+/// frontmatter を読む上限（byte）。**全文を読まない**（退避物は数十 KB になる）。
+const FRONTMATTER_CAP: u64 = 8192;
+/// 席を名乗る frontmatter の key。
+const SEAT_KEY: &str = "seat:";
+
+/// 自席の未 consumed 退避物の数え（憲法 C11: 「0 件」と「読めない」を混ぜない）。
+pub enum WmScan {
+    /// 自席の未 consumed が在る（件数）。
+    Unconsumed(usize),
+    /// **確認した上で** 0 件。
+    None,
+    /// dir を読めない＝0 件に潰さない。
+    Unreadable,
+}
+
+/// `<wm-dir>` の未 consumed 退避物のうち、**frontmatter の `seat:` が `target` と一致**
+/// するものを数える（裁定 (c)）。
+///
+/// file 名の sid で弁別しないのは、席の外から回る tick が sid を知らないためである。
+/// 名乗りを持たない退避物は自席のものと数えない——他席の退避物を自席の根拠にすると、
+/// **別の席の文脈で `/clear` を撃つ**ことになる。
+pub fn scan_wm(dir: &Path, target: &str) -> WmScan {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return WmScan::Unreadable;
+    };
+    let mut found = 0_usize;
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !is_unconsumed_name(&name) {
+            continue;
+        }
+        if seat_of(&entry.path()).is_some_and(|seat| seat == target) {
+            found = found.saturating_add(1);
+        }
+    }
+    if found == 0 {
+        WmScan::None
+    } else {
+        WmScan::Unconsumed(found)
+    }
+}
+
+/// 未 consumed の退避物の名前か（`working-memory.*.md` かつ `.consumed.md` で終わらない）。
+fn is_unconsumed_name(name: &str) -> bool {
+    name.len() >= WM_PREFIX.len().saturating_add(WM_SUFFIX.len())
+        && name.starts_with(WM_PREFIX)
+        && name.ends_with(WM_SUFFIX)
+        && !name.ends_with(WM_CONSUMED)
+}
+
+/// 退避物の frontmatter が名乗る席。名乗りが無い・読めないなら `None`。
+fn seat_of(path: &Path) -> Option<String> {
+    let file = std::fs::File::open(path).ok()?;
+    let mut head = Vec::new();
+    Read::read_to_end(&mut file.take(FRONTMATTER_CAP), &mut head).ok()?;
+    let text = String::from_utf8_lossy(&head).into_owned();
+    let mut lines = text.lines();
+    // 先頭が区切りでない file は frontmatter を持たない（本文の `seat:` を拾わない）。
+    if lines.next()?.trim() != FRONTMATTER {
+        return None;
+    }
+    lines
+        .take_while(|line| line.trim() != FRONTMATTER)
+        .find_map(|line| line.trim().strip_prefix(SEAT_KEY))
+        .map(|value| value.trim().trim_matches('"').to_owned())
+}
+
+/// 発効している rules 行の整数値。不発効・別の形・不在は `None`（＝判定しない側へ倒す）。
+///
+/// 閾値の**値は code に焼かない**（憲法 C5・C1「規則はデータ」）。tick と cycle が同じ
+/// 読み方をするので、読みはここ 1 箇所に置く。
+pub fn int_rule(id: &str) -> Option<u64> {
+    let manifest = crate::rules::manifest::Manifest::embedded().ok()?;
+    let row = manifest.get(id)?;
+    match (row.enabled, &row.value) {
+        (true, crate::rules::RuleValue::Int(found)) => Some(*found),
+        _ => None,
+    }
 }
