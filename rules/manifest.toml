@@ -177,3 +177,17 @@ kind = "SeatContextWindowTokens"
 value = 1000000
 ruling = "user 2026-09-09T23:51Z"
 ruled_at = "2026-09-09"
+
+[[rule]]
+id = "seat.tick_stale_s"
+kind = "SeatTickStaleS"
+value = 2400
+ruling = "user 2026-09-10T00:00Z"
+ruled_at = "2026-09-10"
+
+[[rule]]
+id = "seat.cycle_lock_ttl_s"
+kind = "SeatCycleLockTtlS"
+value = 900
+ruling = "user 2026-09-10T00:00Z"
+ruled_at = "2026-09-10"

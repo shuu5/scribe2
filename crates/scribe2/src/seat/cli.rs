@@ -3,12 +3,13 @@
 //! **env も HOME も読まない**（憲法 C2.2）: 出所（pane / transcript）も置き場も
 //! 引数で明示されたものだけを見る。値欠けの flag は黙って落とさず使い方で断る。
 
-use super::{inject, meter};
+use super::cycle::{self, Cycle};
+use super::{heartbeat, inject, meter, tick};
 use crate::cli_outcome::{Outcome, RC_OK, RC_REFUSED};
 
 /// `seat` の使い方。
 pub fn usage() -> String {
-    "usage: seat <meter --target T [--capture-file PATH] [--transcript PATH]|inject --target T (--text S|--file PATH)> [--tmux-socket PATH] [--state-dir PATH]".to_owned()
+    "usage: seat <meter --target T [--transcript PATH]|inject --target T (--text S|--file PATH)|heartbeat --target T|tick --target T --wm-dir DIR [--pointer TEXT] [--restore CMD]|cycle --target T --wm-dir DIR [--restore CMD]> [--tmux-socket PATH] [--capture-file PATH] [--state-dir PATH]".to_owned()
 }
 
 /// `seat` に続く引数を捌く。
@@ -16,6 +17,9 @@ pub fn dispatch(args: &[String]) -> Outcome {
     match args.first().map(String::as_str) {
         Some("meter") => meter_of(args),
         Some("inject") => inject_of(args),
+        Some("heartbeat") => heartbeat_of(args),
+        Some("tick") => tick_of(args),
+        Some("cycle") => cycle_of(args),
         _ => refused_usage(),
     }
 }
@@ -138,4 +142,111 @@ fn payload_of(args: &[String]) -> Option<String> {
         (None, Some(path)) => std::fs::read_to_string(path).ok()?,
     };
     (!payload.trim().is_empty()).then_some(payload)
+}
+
+/// 空文字を**使い方の誤り**として断る任意の flag。
+///
+/// 空の text は `send-keys -l ""` が rc 0 で終わるので、渡し忘れが「送った」に化ける
+/// （実測 2026-09-10・空の口は成功に化ける）。断る側へ倒し、1 key も送らない。
+fn nonempty<'a>(args: &'a [String], name: &str) -> Result<Option<&'a str>, ()> {
+    match optional(args, name)? {
+        Some(found) if found.trim().is_empty() => Err(()),
+        other => Ok(other),
+    }
+}
+
+/// 場所を指す共有の flag（3 つの subcommand が同じ字で持つ）。
+struct Common<'a> {
+    /// tmux の socket。
+    socket: Option<&'a str>,
+    /// pane 本文の代わりに読む file。
+    capture_file: Option<&'a str>,
+    /// 記録と marker の置き場。
+    state_dir: Option<&'a str>,
+}
+
+/// 共有の flag を読む。
+fn common_of(args: &[String]) -> Result<Common<'_>, ()> {
+    Ok(Common {
+        socket: optional(args, "--tmux-socket")?,
+        capture_file: optional(args, "--capture-file")?,
+        state_dir: optional(args, "--state-dir")?,
+    })
+}
+
+/// `seat heartbeat`。
+fn heartbeat_of(args: &[String]) -> Outcome {
+    let (Ok(target), Ok(state_dir)) = (
+        required(args, "--target"),
+        optional(args, "--state-dir"),
+    ) else {
+        return refused_usage();
+    };
+    let Some(state) = super::state_dir_of(state_dir) else {
+        return Outcome::failed_line(
+            RC_REFUSED,
+            heartbeat::render_refused(heartbeat::REASON_STATE_DIR),
+        );
+    };
+    match heartbeat::touch(&super::seat_dir(&state, target)) {
+        Ok(()) => Outcome::ok_line(heartbeat::render(target)),
+        Err(_) => Outcome::failed_line(
+            RC_REFUSED,
+            heartbeat::render_refused(heartbeat::REASON_UNWRITABLE),
+        ),
+    }
+}
+
+/// `seat tick`。
+fn tick_of(args: &[String]) -> Outcome {
+    let (Ok(target), Ok(wm_dir), Ok(pointer), Ok(restore), Ok(common)) = (
+        required(args, "--target"),
+        required(args, "--wm-dir"),
+        nonempty(args, "--pointer"),
+        nonempty(args, "--restore"),
+        common_of(args),
+    ) else {
+        return refused_usage();
+    };
+    tick::run(&tick::Request {
+        target,
+        wm_dir,
+        pointer,
+        socket: common.socket,
+        capture_file: common.capture_file,
+        state_dir: common.state_dir,
+        restore,
+    })
+}
+
+/// `seat cycle`。
+fn cycle_of(args: &[String]) -> Outcome {
+    let (Ok(target), Ok(wm_dir), Ok(restore), Ok(common)) = (
+        required(args, "--target"),
+        required(args, "--wm-dir"),
+        nonempty(args, "--restore"),
+        common_of(args),
+    ) else {
+        return refused_usage();
+    };
+    let Some(state) = super::state_dir_of(common.state_dir) else {
+        return Outcome::failed_line(
+            RC_REFUSED,
+            cycle::render(target, &Cycle::Refused(cycle::REASON_STATE_DIR)),
+        );
+    };
+    let result = cycle::run(&cycle::Request {
+        target,
+        wm_dir,
+        socket: common.socket,
+        capture_file: common.capture_file,
+        state_dir: &state,
+        restore,
+    });
+    match result {
+        Cycle::Done => Outcome::ok_line(cycle::render(target, &result)),
+        Cycle::Refused(_) | Cycle::Failed(_) => {
+            Outcome::failed_line(RC_REFUSED, cycle::render(target, &result))
+        }
+    }
 }

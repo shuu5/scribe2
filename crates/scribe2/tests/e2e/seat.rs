@@ -6,10 +6,11 @@
 
 use crate::make_tmp_dir;
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::thread::sleep;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 use vessel::cli_outcome::{RC_OK, RC_REFUSED};
 use vessel::seat::inject::tick_path;
 
@@ -548,4 +549,355 @@ fn seat_inject_sanitizes_dot_targets() {
 fn seat_external_form() {
     let form = stderr_of(&run_seat(&[]));
     insta::assert_snapshot!(form);
+}
+
+// ─────────────────── heartbeat / tick / cycle ───────────────────
+
+/// idle な pane の本文（prompt の右が空・下に走行中の印が無い）。
+const IDLE_PANE: &str = "❯ \n  10% 100k/1M Opus 5\n";
+/// 走行中の pane の本文（裁定 (e) の印が prompt より下に在る）。
+const BUSY_PANE: &str = "❯ \n  10% 100k/1M Opus 5 (esc to interrupt)\n";
+
+/// file の mtime を `secs` 秒だけ過去へ倒す。
+///
+/// 経過を **時計の粒度に依存せず**作る（`sleep` で待つと歯が遅くなり、粒度の粗い fs では
+/// そもそも進まない）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn backdate(path: &Path, secs: u64) {
+    let file = fs::OpenOptions::new()
+        .append(true)
+        .open(path)
+        .expect("marker を開ける");
+    let at = SystemTime::now()
+        .checked_sub(Duration::from_secs(secs))
+        .unwrap_or(SystemTime::UNIX_EPOCH);
+    fs::File::set_modified(&file, at).expect("mtime を倒せる");
+}
+
+/// file の mtime（読めなければ epoch）。
+fn mtime_of(path: &Path) -> SystemTime {
+    fs::metadata(path)
+        .and_then(|meta| meta.modified())
+        .unwrap_or(SystemTime::UNIX_EPOCH)
+}
+
+/// 退避物を 1 つ置く（frontmatter で席を名乗る・FR23 / 裁定 (c)）。
+fn wm_file(dir: &Path, name: &str, seat: &str) -> PathBuf {
+    let path = dir.join(name);
+    fs::create_dir_all(dir).ok();
+    fs::write(&path, format!("---\nseat: {seat}\n---\n\n## 計画弧\n- 続き\n")).ok();
+    path
+}
+
+/// 席の置き場（`<state>/seat/<target>/`）。
+fn seat_dir_of(state: &Path, target: &str) -> PathBuf {
+    state.join("seat").join(target)
+}
+
+/// PATH の先頭に「呼ばれたら印を残す tmux」を置いて `seat` を 1 回撃つ。
+///
+/// 「tmux に触れない」は**触れたら分かる形**でしか測れない: 存在しない socket を渡すだけだと、
+/// 実装が tmux を撃って失敗した周と、そもそも撃たなかった周が同じ結果になる。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn run_seat_probed(dir: &Path, args: &[&str]) -> (Output, bool) {
+    let bin_dir = dir.join("bin");
+    fs::create_dir_all(&bin_dir).expect("shim の dir を作れる");
+    let mark = dir.join("tmux-called");
+    let shim = bin_dir.join("tmux");
+    fs::write(
+        &shim,
+        format!("#!/bin/sh\necho called >> '{}'\nexit 1\n", mark.display()),
+    )
+    .expect("shim を書ける");
+    fs::set_permissions(&shim, fs::Permissions::from_mode(0o755)).expect("shim に実行権を付ける");
+    let path = format!(
+        "{}:{}",
+        bin_dir.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let out = Command::new(bin())
+        .arg("seat")
+        .args(args)
+        .env("PATH", path)
+        .output()
+        .expect("binary を起動できる");
+    (out, mark.exists())
+}
+
+/// 打刻は無ければ作り、2 回目で mtime が進む。
+#[test]
+fn seat_heartbeat_touches_seat_file() {
+    let dir = tmp();
+    let state = dir.join("state");
+    let state_s = state.display().to_string();
+    // `:` と `.` を含む実際の target の形で撃つ（置き場の名前は潰した字面になる）。
+    let marker = seat_dir_of(&state, "seatbeat_0.0").join("heartbeat");
+
+    let out = run_seat(&["heartbeat", "--target", "seatbeat:0.0", "--state-dir", &state_s]);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(stdout_of(&out), "seat: heartbeat target=seatbeat_0.0\n");
+    assert_eq!(stderr_of(&out), "", "成立した周は stderr へ 1 byte も書かない");
+    assert!(marker.exists(), "打刻 file が在る");
+
+    backdate(&marker, 600);
+    let before = mtime_of(&marker);
+    let out = run_seat(&["heartbeat", "--target", "seatbeat:0.0", "--state-dir", &state_s]);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert!(mtime_of(&marker) > before, "2 回目で mtime が進む（開くだけでは進まない）");
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// tick の 1 組。**先に立たない条件だけが違う**——後ろの条件はどの組でも立たないので、
+/// 順序が入れ替われば別の理由が出る（理由の字面が順序の証拠になる）。
+struct TickCase {
+    /// 期待する理由。
+    reason: &'static str,
+    /// 打刻を新しく置くか（1 の条件）。
+    fresh: bool,
+    /// pane の本文（`None` = capture-file を置かない＝2 の条件）。
+    pane: Option<&'static str>,
+    /// 置く退避物が名乗る席（3 の条件）。
+    wm_seat: &'static str,
+}
+
+/// 1 組の fixture を組む。**どの組も TTL 内の lock を置く**＝cycle は評価されない
+/// （裁定 (b) の「それ以外の周は評価しない」側で、判定 1 行だけを測る）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn prepare_tick_case(dir: &Path, case: &TickCase, target: &str) -> PathBuf {
+    let state = dir.join("state");
+    let seat = seat_dir_of(&state, target);
+    fs::create_dir_all(&seat).expect("seat dir を作れる");
+    fs::write(seat.join("cycle.lock"), "{\"pid\":1,\"deadline\":0}\n").expect("lock を置ける");
+    if case.fresh {
+        fs::write(seat.join("heartbeat"), "").expect("打刻を置ける");
+    }
+    wm_file(&dir.join("wm"), "working-memory.parked.md", case.wm_seat);
+    if let Some(body) = case.pane {
+        fs::write(dir.join("pane.txt"), body).expect("pane fixture を置ける");
+    }
+    state
+}
+
+/// 4 条件は**順序固定**で見て、最初に立たなかった条件を理由にする（tmux は 1 度も撃たない）。
+#[test]
+fn seat_tick_noop_reasons_in_fixed_order() {
+    let target = "seatorder";
+    let cases = [
+        TickCase { reason: "heartbeat-fresh", fresh: true, pane: Some(BUSY_PANE), wm_seat: target },
+        TickCase { reason: "pane-missing", fresh: false, pane: None, wm_seat: target },
+        TickCase { reason: "busy", fresh: false, pane: Some(BUSY_PANE), wm_seat: target },
+        TickCase { reason: "wm-unconsumed", fresh: false, pane: Some(IDLE_PANE), wm_seat: target },
+        // 席の名乗りが違う退避物は自席の根拠にしない＝3 を**通って** 4 で止まる。
+        TickCase { reason: "cycle-live", fresh: false, pane: Some(IDLE_PANE), wm_seat: "other:seat" },
+    ];
+
+    for case in &cases {
+        let dir = tmp();
+        let state = prepare_tick_case(&dir, case, target);
+        let (wm, pane) = (dir.join("wm"), dir.join("pane.txt"));
+        let (wm_s, pane_s) = (wm.display().to_string(), pane.display().to_string());
+        let (sock_s, state_s) = (
+            dir.join("absent-sock").display().to_string(),
+            state.display().to_string(),
+        );
+        let (out, touched) = run_seat_probed(
+            &dir,
+            &[
+                "tick", "--target", target, "--wm-dir", &wm_s, "--capture-file", &pane_s,
+                "--tmux-socket", &sock_s, "--state-dir", &state_s,
+            ],
+        );
+
+        let reason = case.reason;
+        assert_eq!(rc_of(&out), i32::from(RC_OK), "{reason}: stderr={}", stderr_of(&out));
+        assert_eq!(stdout_of(&out), format!("seat: tick decision=noop reason={reason}\n"));
+        assert!(!touched, "{reason}: tmux に 1 度も触れない");
+        let recorded = fs::read_to_string(tick_file(&state, target)).unwrap_or_default();
+        assert_eq!(recorded.lines().count(), 1, "{reason}: 記録は 1 行: {recorded}");
+        assert!(recorded.contains(r#""who":"seat-tick""#), "{reason}: {recorded}");
+        assert!(
+            recorded.contains(&format!(r#""what":"decision=noop reason={reason}""#)),
+            "{reason}: 判定を残す: {recorded}"
+        );
+        fs::remove_dir_all(&dir).ok();
+    }
+}
+
+/// 4 条件が揃った周は注入し、**自分で打刻する**（次の周は fresh で撃たない＝storm 止め）。
+#[test]
+fn seat_tick_injects_pointer_and_stamps_on_isolated_socket() {
+    let dir = tmp();
+    let socket = socket_of(&dir);
+    let name = "seattick";
+    assert!(start_seat(&socket, name), "独立 socket に prompt 付きの session を立てられる");
+    let state = dir.join("state");
+    let wm = dir.join("wm");
+    fs::create_dir_all(&wm).ok();
+    let (wm_s, state_s) = (wm.display().to_string(), state.display().to_string());
+    let args = [
+        "tick", "--target", name, "--wm-dir", &wm_s, "--tmux-socket", &socket,
+        "--state-dir", &state_s,
+    ];
+
+    let out = run_seat(&args);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(stdout_of(&out), format!("seat: tick decision=inject target={name}\n"));
+    let pane = capture(&socket, name);
+    assert!(
+        pane.contains(&format!("seat heartbeat --target {name}")),
+        "既定の 1 行が pane に現れる: {pane}"
+    );
+    assert!(seat_dir_of(&state, name).join("tick-stamp").exists(), "自打刻が残る");
+
+    let out = run_seat(&args);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(
+        stdout_of(&out),
+        "seat: tick decision=noop reason=heartbeat-fresh\n",
+        "自分の打刻で fresh になる（注入の直後に撃ち続けない）"
+    );
+    stop_seat(&socket, name);
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// 退避物が無い席へは **1 key も送らない**（憲法 CON5 / SRS FR28）。
+#[test]
+fn seat_cycle_refuses_without_unconsumed_wm() {
+    let dir = tmp();
+    let socket = socket_of(&dir);
+    let name = "seatnowm";
+    assert!(start_seat(&socket, name), "独立 socket に prompt 付きの session を立てられる");
+    let state = dir.join("state");
+    let wm = dir.join("wm");
+    fs::create_dir_all(&wm).ok();
+    // consume 済みの退避物は「在る」に数えない（mv が consume の実体である）。
+    wm_file(&wm, "working-memory.old.consumed.md", name);
+    let (wm_s, state_s) = (wm.display().to_string(), state.display().to_string());
+
+    let out = run_seat(&[
+        "cycle", "--target", name, "--wm-dir", &wm_s, "--tmux-socket", &socket,
+        "--state-dir", &state_s,
+    ]);
+
+    assert_eq!(rc_of(&out), i32::from(RC_REFUSED));
+    assert_eq!(stdout_of(&out), "", "断りの周は stdout 0 行");
+    assert_eq!(stderr_of(&out), "seat: cycle refused reason=wm-missing\n");
+    let pane = capture(&socket, name);
+    assert!(!pane.contains("/clear"), "1 key も送っていない: {pane}");
+    assert!(
+        !seat_dir_of(&state, name).join("cycle.lock").exists(),
+        "断った周も lock を残さない"
+    );
+    stop_seat(&socket, name);
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// live な lock は譲り、**失効した residue は取り直す**。
+#[test]
+fn seat_cycle_refuses_when_lock_is_live_and_reclaims_stale_lock() {
+    let dir = tmp();
+    let socket = socket_of(&dir);
+    let name = "seatlock";
+    assert!(start_seat(&socket, name), "独立 socket に prompt 付きの session を立てられる");
+    let state = dir.join("state");
+    let wm = dir.join("wm");
+    wm_file(&wm, "working-memory.live.md", name);
+    let seat = seat_dir_of(&state, name);
+    fs::create_dir_all(&seat).ok();
+    let lock = seat.join("cycle.lock");
+    fs::write(&lock, "{\"pid\":1,\"deadline\":0}\n").ok();
+    let (wm_s, state_s) = (wm.display().to_string(), state.display().to_string());
+    let args = [
+        "cycle", "--target", name, "--wm-dir", &wm_s, "--tmux-socket", &socket,
+        "--state-dir", &state_s,
+    ];
+
+    let out = run_seat(&args);
+    assert_eq!(rc_of(&out), i32::from(RC_REFUSED));
+    assert_eq!(stderr_of(&out), "seat: cycle refused reason=lock-held\n");
+    assert!(!capture(&socket, name).contains("/clear"), "1 key も送っていない");
+    assert!(lock.exists(), "他の cycle の lock を消さない");
+
+    // TTL（900 秒）を超えた lock は residue＝取り直して進む。
+    backdate(&lock, 1000);
+    let out = run_seat(&args);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(stdout_of(&out), format!("seat: cycle done target={name}\n"));
+    assert!(capture(&socket, name).contains("/clear"), "失効 lock は進行を止めない");
+    assert!(!lock.exists(), "済んだ lock は返す");
+    stop_seat(&socket, name);
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// `/clear` の**後に**復元 command を送り、lock を返す。退避物そのものは動かさない。
+#[test]
+fn seat_cycle_sends_clear_then_restore_in_order() {
+    let dir = tmp();
+    let socket = socket_of(&dir);
+    let name = "seatcycle";
+    assert!(start_seat(&socket, name), "独立 socket に prompt 付きの session を立てられる");
+    let state = dir.join("state");
+    let wm = dir.join("wm");
+    let parked = wm_file(&wm, "working-memory.parked.md", name);
+    let (wm_s, state_s) = (wm.display().to_string(), state.display().to_string());
+
+    let out = run_seat(&[
+        "cycle", "--target", name, "--wm-dir", &wm_s, "--tmux-socket", &socket,
+        "--state-dir", &state_s,
+    ]);
+
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(stdout_of(&out), format!("seat: cycle done target={name}\n"));
+    let pane = capture(&socket, name);
+    let at_clear = pane.lines().position(|line| line.contains("/clear"));
+    let at_restore = pane.lines().position(|line| line.contains("/rebrief"));
+    assert!(
+        matches!((at_clear, at_restore), (Some(first), Some(second)) if first < second),
+        "作り直しの後に復元を送る: clear={at_clear:?} restore={at_restore:?}\n{pane}"
+    );
+    assert!(
+        !seat_dir_of(&state, name).join("cycle.lock").exists(),
+        "済んだ lock は返す"
+    );
+    assert!(parked.exists(), "退避物は動かさない（consume は復元側の仕事）");
+    stop_seat(&socket, name);
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// 退避して止まっている席は、tick がその場で cycle を回す（裁定 (b)）。
+#[test]
+fn seat_tick_runs_cycle_when_parked() {
+    let dir = tmp();
+    let socket = socket_of(&dir);
+    let name = "seatparked";
+    assert!(start_seat(&socket, name), "独立 socket に prompt 付きの session を立てられる");
+    let state = dir.join("state");
+    let wm = dir.join("wm");
+    wm_file(&wm, "working-memory.parked.md", name);
+    let (wm_s, state_s) = (wm.display().to_string(), state.display().to_string());
+
+    let out = run_seat(&[
+        "tick", "--target", name, "--wm-dir", &wm_s, "--tmux-socket", &socket,
+        "--state-dir", &state_s,
+    ]);
+
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(
+        stdout_of(&out),
+        "seat: tick decision=noop reason=wm-unconsumed cycle=done\n",
+        "判定は noop のまま・cycle を回したことは末尾に足す"
+    );
+    let pane = capture(&socket, name);
+    assert!(pane.contains("/clear") && pane.contains("/rebrief"), "作り直して復元した: {pane}");
+    stop_seat(&socket, name);
+    fs::remove_dir_all(&dir).ok();
 }
