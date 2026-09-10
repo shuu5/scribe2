@@ -21,6 +21,9 @@
   },
   "@id": "./ADR-0010-vessel-declaration-holds-allowlist-and-common-verify.html",
   "@type": "schema:TechArticle",
+  "dc:isReferencedBy": [
+    { "@id": "./ADR-0011-vessel-launches-claude-without-settings.html" }
+  ],
   "dc:isPartOf": [
     { "@id": "./README.html" }
   ],
@@ -167,6 +170,7 @@
 <!-- folio:chrome-bottom -->
 <nav class="prevnext" aria-label="前後の文書">
   <a class="prevnext__prev" href="ADR-0009-vessel-grants-runner-permissions-and-mutation-proof.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">ADR-0009 — runner の権限と非空虚性の検証は器が manifest から与える (口座設定の暗黙継承・host 側 script・契約への共通規律の手書きを廃止)</span></a>
+  <a class="prevnext__next" href="ADR-0011-vessel-launches-claude-without-settings.html"><span class="prevnext__dir">次 &rarr;</span><span class="prevnext__title">ADR-0011 — 器が起こす claude (runner / lens) は口座と対象 repo の settings を 1 つも読まない (--setting-sources 空 + --strict-mcp-config・ADR-0009 §2.1 の起動 flag を部分 supersede)</span></a>
 </nav>
 <script>
 (function () {
