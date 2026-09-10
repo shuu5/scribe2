@@ -1,0 +1,5 @@
+---
+source: crates/scribe2/tests/e2e/seat.rs
+expression: form
+---
+usage: seat <meter --target T [--capture-file PATH] [--transcript PATH]|inject --target T (--text S|--file PATH)> [--tmux-socket PATH] [--state-dir PATH]

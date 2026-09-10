@@ -6,6 +6,7 @@ mod headless;
 mod hook;
 mod pipe;
 mod rules;
+mod seat;
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
