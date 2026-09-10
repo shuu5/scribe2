@@ -29,7 +29,8 @@
     { "@id": "./ADR-0005-a3-approval-surface-c7.html" },
     { "@id": "./ADR-0006-xtask-check-measure-tags.html" },
     { "@id": "./ADR-0007-integration-test-file-counts-targets.html" },
-    { "@id": "./ADR-0008-own-repo-pr-is-not-publish.html" }
+    { "@id": "./ADR-0008-own-repo-pr-is-not-publish.html" },
+    { "@id": "./ADR-0009-vessel-grants-runner-permissions-and-mutation-proof.html" }
   ]
 }
 </script>
@@ -70,7 +71,7 @@
 
 <section id="s2-adr-list" class="informative">
 <h2>§2. ADRs</h2>
-<p class="section-essence" data-audience="human">ADR は 7 本です。 1 本目は実装言語と構成を Rust の単一 static binary に決めた記録、 2 本目は test / lint の toolchain を決めた記録、 3 本目は v1 の完全放棄に伴って憲法の 4 か所 (対話面・拘束条件・自己開発の既定・改訂の手続き) を書き換えた記録、 4 本目は MVP の状態の置き場と前の版と共有する接点の file の形 (追記だけの JSONL・環境変数を使わない・TOML subset) を決めた記録、 5 本目は 3 本目で決めた「承認を受け取る窓口は 1 つ」を、 適用し漏れていた A3 (依存 OSS の追加・削除) へ揃えた記録、 6 本目は構造検査が測る項目の一覧を、 実際に動いているもの (11 本) に合わせて差し替えた記録、 7 本目は「統合 test の file は 3 つまで」という決まりの数え方を、 cargo がテスト用に build するかたまり (integration test target) の数で数えると決めた記録です。</p>
+<p class="section-essence" data-audience="human">ADR は 9 本です。 1 本目は実装言語と構成を Rust の単一 static binary に決めた記録、 2 本目は test / lint の toolchain を決めた記録、 3 本目は v1 の完全放棄に伴って憲法の 4 か所 (対話面・拘束条件・自己開発の既定・改訂の手続き) を書き換えた記録、 4 本目は MVP の状態の置き場と前の版と共有する接点の file の形 (追記だけの JSONL・環境変数を使わない・TOML subset) を決めた記録、 5 本目は 3 本目で決めた「承認を受け取る窓口は 1 つ」を、 適用し漏れていた A3 (依存 OSS の追加・削除) へ揃えた記録、 6 本目は構造検査が測る項目の一覧を、 実際に動いているもの (11 本) に合わせて差し替えた記録、 7 本目は「統合 test の file は 3 つまで」という決まりの数え方を、 cargo がテスト用に build するかたまり (integration test target) の数で数えると決めた記録、 8 本目は自分の repo への branch push と PR 作成は「出す」に当たらない (取り消せる) と決めた記録、 9 本目は実装役 (runner) に何を実行してよいかと「test が本当に測っているか」の検証を、 人の口座設定や repo の外の script でなく器が manifest から与えると決めた記録です。</p>
 <table>
   <thead><tr><th>id</th><th>title</th><th>status</th><th>date</th></tr></thead>
   <tbody>
@@ -82,6 +83,7 @@
     <tr><td>ADR-0006</td><td><a href="./ADR-0006-xtask-check-measure-tags.html">cargo xtask check が measure する tag の列挙 (ADR-0002 §2.4 の 10 本を 11 本へ部分 supersede・12 本目の案 ci-decl は不採用)</a></td><td>accepted</td><td>2026-09-10</td></tr>
     <tr><td>ADR-0007</td><td><a href="./ADR-0007-integration-test-file-counts-targets.html">憲法 R-C13-2「統合 test file 3 以下」は cargo の integration test target の数で数える</a></td><td>accepted</td><td>2026-09-10</td></tr>
     <tr><td>ADR-0008</td><td><a href="./ADR-0008-own-repo-pr-is-not-publish.html">自 repo への branch push と PR 作成は憲法 A4.2 の「出す」ではない (A4.3 の可逆)</a></td><td>accepted</td><td>2026-09-10</td></tr>
+    <tr><td>ADR-0009</td><td><a href="./ADR-0009-vessel-grants-runner-permissions-and-mutation-proof.html">runner の権限と非空虚性の検証は器が manifest から与える (口座設定の暗黙継承・host 側 script・契約への共通規律の手書きを廃止)</a></td><td>accepted</td><td>2026-09-10</td></tr>
   </tbody>
 </table>
 <p data-audience="machine">新しい決定を記録したら本表と JSON-LD の <code>dc:hasPart</code> に追記する。 ADR は frozen (改訂は supersede する新 ADR で行う)。</p>

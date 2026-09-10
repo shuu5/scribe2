@@ -237,7 +237,19 @@ terms:
   - canonical: runner
     domain: consumer
     definition: 契約 1 本を worktree で実装する headless の Claude process (SRS FR4 / FR5)。 席ではなく使い捨て。
-    relationships: [契約, headless, lens, 便]
+    relationships: [契約, headless, lens, 便, allowlist]
+  - canonical: allowlist
+    domain: consumer
+    definition: 器が runner に与える「実行してよい command 名の列」。 正本は manifest の rules 行 runner.allowed_commands で、 runner は claude へ --allowedTools として渡し口座設定を継承しない (C1・ADR-0009)。 明示 allow の外は hook が deny する。
+    relationships: [runner, manifest, rules 行, hook]
+  - canonical: 共通 verify
+    domain: consumer
+    definition: どの便にも共通の検証 (flip check・test・lint・依存監査・変異検出) を manifest の rules 行 gate.common_verify に置き、 gate が契約 verify の前に撃つもの (C2・ADR-0009)。 契約の verify は便固有の行だけを持つ。
+    relationships: [gate, manifest, rules 行, 契約, 変異検出線]
+  - canonical: 変異検出線
+    domain: consumer
+    definition: cargo-mutants で生成した変異のうち歯に撃墜されない数を測る検出線 (C12 R-C12-1)。 1 便では共通 verify の xtask mutants-diff が便の diff に対して測り、 極性 (記録のみ / deny) は manifest 行に従う (ADR-0009)。
+    relationships: [共通 verify, gate, flip check]
   - canonical: lens
     domain: consumer
     definition: diff を読んで verdict (PASS / FAIL / INCONCLUSIVE) を返す headless の Claude process (SRS FR9)。 MVP の gate は lens 1 本。
