@@ -6,6 +6,14 @@
 - 契約の verify 行が緑になるまで直す。緑にできないなら、何が赤かを最後に 1 行で述べる。
 - 対話しない。人へ質問を返さず、契約と worktree の中身だけで判断する。
 
+## 実行してよい command
+- 下の一覧に挙げた command **だけ**を実行してよい。一覧の外は allow の外で、承認要求で止まり出力が返らない。
+- **1 command で撃つ**。pipe（`|`）・redirect（`>` `<`）・`&&`・`;` で繋がない——繋いだ形は一覧の外として扱われ、同じく止まる。
+- **command 置換（`$(…)` / backtick）と変数展開を使わない**。静的に解析できない形は allow の判定に載らず、一覧の中の command でも deny される（実測: `git commit -m "$(printf …)"` が `Contains shell syntax (string) that cannot be statically analyzed` で止まった）。必要な文字列は引数へ直に書く。
+- 出力を絞りたいときは pipe でなく、その command 自身の flag を使う。
+
+{allowed}
+
 ## 契約
 {contract}
 
