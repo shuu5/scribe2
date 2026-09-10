@@ -174,6 +174,22 @@ impl FilePair {
         self.overlay().is_none() && !self.head_test().is_empty() && !self.retroactive()
     }
 
+    /// **宣言だけの file** か（test 区間の差分行が全部 `mod x;` 形）。
+    ///
+    /// 新規 module は「宣言（`mod x;` の 1 行）」と「本体（module の file）」の 2 file に
+    /// 割れる。単独 overlay では**どちらの判定も意味を持たない**——宣言だけを置くと本体が
+    /// 無く `E0583` の compile error（偽 RED）、本体だけを置くと base に宣言が無く compile
+    /// 対象に入らず全 PASS（偽 GREEN）になる（実測 2026-09-10・s2-07l.38.2 が初発）。
+    /// ゆえに宣言 file は単独で撃たず、本体を撃つ木へ同梱する（[`judge_each`]）。
+    ///
+    /// 判定は**差分行の字面だけ**で行い parser は足さない。`mod` 以外の行が 1 行でも
+    /// 動いていれば宣言 file ではない——自前の歯を足した file を宣言と見なして同梱すると、
+    /// **その歯が単独で測られなくなる**（同梱は判定を緩める側なので、弁別は狭く取る）。
+    fn declaration_only(&self) -> bool {
+        let changed = changed_lines(&self.base_test(), &self.head_test());
+        !changed.is_empty() && changed.iter().all(|line| is_mod_line(line))
+    }
+
     /// 「base で赤くなること」を要求する差か。
     fn flips(&self) -> bool {
         self.test_diff() && !self.removed_only() && !self.retroactive()
@@ -194,6 +210,53 @@ fn marker_beads(region: &str) -> Vec<String> {
             (!bead.is_empty()).then(|| bead.to_owned())
         })
         .collect()
+}
+
+/// 2 つの本文の**片側にしか無い行**（追加行と削除行）。空白だけの行は数えない。
+///
+/// 順序は見ない（行の多重集合の差）。宣言 file の弁別に要るのは「何の行が動いたか」だけで、
+/// どこへ動いたかではない。
+fn changed_lines(base: &str, head: &str) -> Vec<String> {
+    let mut rest: Vec<&str> = meaningful(base);
+    let mut changed = Vec::new();
+    for line in meaningful(head) {
+        match rest.iter().position(|found| *found == line) {
+            Some(at) => {
+                rest.remove(at);
+            }
+            None => changed.push(line.to_owned()),
+        }
+    }
+    changed.extend(rest.into_iter().map(str::to_owned));
+    changed
+}
+
+/// 空白だけの行を除いた行の列。
+fn meaningful(text: &str) -> Vec<&str> {
+    text.lines().filter(|line| !line.trim().is_empty()).collect()
+}
+
+/// `mod x;`（`pub` / `pub(crate)` 可）の 1 行か。
+fn is_mod_line(line: &str) -> bool {
+    let Some(body) = strip_visibility(line.trim()) else {
+        return false;
+    };
+    let Some(rest) = body.strip_prefix("mod ") else {
+        return false;
+    };
+    let Some(name) = rest.strip_suffix(';') else {
+        return false;
+    };
+    !name.is_empty() && name.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+}
+
+/// 可視性の前置きを外す。`pub` の後ろに空白が無い字面（`pubmod x;`）は `None`。
+fn strip_visibility(body: &str) -> Option<&str> {
+    let Some(rest) = body.strip_prefix("pub") else {
+        return Some(body);
+    };
+    let rest = rest.strip_prefix("(crate)").unwrap_or(rest);
+    rest.starts_with(char::is_whitespace).then(|| rest.trim_start())
 }
 
 /// `crates/*/tests/` 配下の `.rs` か（flip-check 独自の追加規則で全体を test 区間と扱う）。
@@ -563,6 +626,8 @@ struct Counts {
     removed: usize,
     /// marker で RED を免除した本数。
     retro: usize,
+    /// 本体 file へ同梱した宣言 file の本数。
+    decl: usize,
 }
 
 impl Counts {
@@ -572,6 +637,8 @@ impl Counts {
             flipped: pairs.iter().filter(|pair| pair.flips()).count(),
             removed: pairs.iter().filter(|pair| pair.removed_only()).count(),
             retro: pairs.iter().filter(|pair| pair.retroactive()).count(),
+            // 同梱した本数は base を実体化する段（[`run_on_base`]）で決まる。
+            decl: 0,
         }
     }
 }
@@ -584,6 +651,9 @@ fn ok_line(counts: Counts) -> Verdict {
     }
     if counts.retro > 0 {
         line.push_str(&format!(" retroactive={}", counts.retro));
+    }
+    if counts.decl > 0 {
+        line.push_str(&format!(" decl={}", counts.decl));
     }
     verdict(&line, 0)
 }
@@ -633,21 +703,24 @@ fn swap_in(dest: &Path, pair: &FilePair) -> Result<Restore, String> {
 /// 新しい test が base で緑でも、赤い file に隠れて `RED-on-base ok` が出る（偽の RED）。
 /// flip-check が守ろうとしているのは「新しい歯は 1 本ずつ base で赤い」であって
 /// 「どれか 1 本が赤い」ではない。
-fn judge_each(
-    dest: &Path,
-    target: &Path,
-    pairs: &[FilePair],
-    flipping: &[&FilePair],
-    counts: Counts,
-) -> Verdict {
+fn judge_each(dest: &Path, target: &Path, plan: &Plan, counts: Counts) -> Verdict {
     // flip しない pair は overlay しても内容が base と同じ（base の src + 同一の test 区間）
     // なので、先にまとめて置く。ここで置いても base の緑は動かない。
-    for pair in pairs.iter().filter(|pair| !pair.flips()) {
+    for pair in plan.pairs.iter().filter(|pair| !pair.flips()) {
         if let Err(reason) = write_one(dest, pair) {
             return infra(&reason);
         }
     }
-    for pair in flipping {
+    // 宣言 file（`mod x;` だけの差分）は**単独では撃たず**、本体を撃つ間ずっと置いたまま
+    // にする。宣言と本体が別 file に割れる新規 module は、単独 overlay ではどちらの判定も
+    // 意味を持たないからである（[`FilePair::declaration_only`]）。
+    for pair in &plan.decls {
+        emit_err(&format!("flip-check: decl-with-body {}", pair.rel));
+        if let Err(reason) = write_one(dest, pair) {
+            return infra(&reason);
+        }
+    }
+    for pair in &plan.bodies {
         emit_err(&format!("flip-check: test-diff {}", pair.rel));
         let path = dest.join(&pair.rel);
         let restore = match swap_in(dest, pair) {
@@ -679,6 +752,32 @@ fn judge_each(
     ok_line(counts)
 }
 
+/// 1 便の overlay 対象（judge_each が要る 3 つの集合）。
+struct Plan<'a> {
+    /// 便の全 pair（flip しない pair は先にまとめて置く）。
+    pairs: &'a [FilePair],
+    /// 本体と同梱する宣言 file（単独では撃たない）。
+    decls: Vec<&'a FilePair>,
+    /// 1 本ずつ単独で撃つ本体 file。
+    bodies: Vec<&'a FilePair>,
+}
+
+/// flip した pair を「宣言 file」と「本体 file」へ割る。
+///
+/// **宣言だけの便は割らない**（本体が 1 本も無ければ従来どおり単独で撃つ）。存在しない
+/// module を指す `mod x;` だけの便も base では `E0583` で赤くなるが、それは**本当の**
+/// RED であって、同梱で消してよいものではない。
+fn plan_of<'a>(pairs: &'a [FilePair], flipping: &[&'a FilePair]) -> Plan<'a> {
+    let (decls, bodies): (Vec<&FilePair>, Vec<&FilePair>) = flipping
+        .iter()
+        .copied()
+        .partition(|pair| pair.declaration_only());
+    if bodies.is_empty() {
+        return Plan { pairs, decls: Vec::new(), bodies: decls };
+    }
+    Plan { pairs, decls, bodies }
+}
+
 /// base tree の健全性前段。overlay を書く前に base のまま runner を撃つ。
 fn base_is_green(dest: &Path, target: &Path) -> Result<(), Verdict> {
     match nextest(dest, target) {
@@ -707,8 +806,13 @@ fn run_on_base(base: &str, root: &Path, pairs: &[FilePair], counts: Counts) -> V
     // flip した file が 2 本以上なら **1 本ずつ**撃つ（まとめ撃ちは偽の RED を作る）。
     // 1 本のときは従来どおり 1 回で足りる（分ける対象が無い）。
     let flipping: Vec<&FilePair> = pairs.iter().filter(|pair| pair.flips()).collect();
-    if flipping.len() >= 2 {
-        return judge_each(&dest, &target, pairs, &flipping, counts);
+    let plan = plan_of(pairs, &flipping);
+    let counts = Counts {
+        decl: plan.decls.len(),
+        ..counts
+    };
+    if plan.bodies.len() >= 2 || !plan.decls.is_empty() {
+        return judge_each(&dest, &target, &plan, counts);
     }
     if let Err(reason) = write_overlay(&dest, pairs) {
         return infra(&reason);
