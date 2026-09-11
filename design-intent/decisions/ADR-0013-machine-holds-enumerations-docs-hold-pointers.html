@@ -21,6 +21,9 @@
   },
   "@id": "./ADR-0013-machine-holds-enumerations-docs-hold-pointers.html",
   "@type": "schema:TechArticle",
+  "dc:isReferencedBy": [
+    { "@id": "./ADR-0014-polarity-list-is-a-snapshot-rendered-by-core.html" }
+  ],
   "dc:isPartOf": [
     { "@id": "./README.html" }
   ],
@@ -139,6 +142,7 @@
 <!-- folio:chrome-bottom -->
 <nav class="prevnext" aria-label="前後の文書">
   <a class="prevnext__prev" href="ADR-0012-rate-limit-detection-reads-dedicated-record.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">ADR-0012 — 上限の検出は専用 record (rate_limit_event) の構造化 field で行い、 本文への字面照合を畳む</span></a>
+  <a class="prevnext__next" href="ADR-0014-polarity-list-is-a-snapshot-rendered-by-core.html"><span class="prevnext__dir">次 &rarr;</span><span class="prevnext__title">ADR-0014 — 極性一覧は core が描く外形 snapshot として生成し、 CI の門 (C16.2) は xtask がその tracked 生成物を読む。 極性の値は境界の型が運ぶ</span></a>
 </nav>
 <script>
 (function () {

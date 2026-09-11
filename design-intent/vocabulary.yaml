@@ -339,7 +339,16 @@ terms:
     relationships: [SeatState]
   - canonical: 極性
     domain: consumer
-    definition: 失敗時に開く (FailOpen) か閉じる (FailClosed) かの性質。 型で持ち、 一覧は build 時に生成する (C11.2)。
+    definition: guard の性質の対。 いつ止めるか (InLoop / PostHoc) と、 測れない周にどちらへ倒れるか (FailClosed / FailOpen)。 値は境界の定数が運び、 一覧は集めるだけ (C11.2・ADR-0014 §2.1)。
+    relationships: [guard, 極性一覧, in-loop guard]
+  - canonical: guard
+    domain: consumer
+    definition: 行為 (編集・起動・merge・書込・session の作り直し) を止めうる判定を返す境界。 状態を選ぶだけの判定は guard ではない (ADR-0014 §2.1)。 全数は閉じた enum が数えきる。
+    relationships: [極性, 極性一覧]
+  - canonical: 極性一覧
+    domain: consumer
+    definition: 全 guard を 1 行 1 guard で並べた core の出力 (subcommand polarity) を外形 snapshot として pin した tracked 生成物 (C11.2 / C12.5・ADR-0014 §2.2)。 構造検査の門はこの生成物の集計行を読む (C16.2・ADR-0014 §2.3)。
+    relationships: [極性, guard, 判定行]
   - canonical: Declared
     domain: consumer
     definition: 人が書いた宣言値の型 (C10)。
