@@ -1,0 +1,58 @@
+# 設計: 席の状態（busy / idle）を hook の打刻で typed に持つ — pane の字面を判定入力から外す
+
+- 要件: [FR27](../../design-intent/spec/srs.html#FR27) 打刻の合図 / [FR28](../../design-intent/spec/srs.html#FR28) cycle / [FR29](../../design-intent/spec/srs.html#FR29) 退避の合図 / [FR21](../../design-intent/spec/srs.html#FR21) 注入の記録
+- 憲法: [C3.3](../../design-intent/spec/constitution.html#c3) 席の状態は typed enum・端末描画や自由文を判定入力にしない / [C2.2](../../design-intent/spec/constitution.html#c2) env を読まない / [C10](../../design-intent/spec/constitution.html#c10) 測定値は出所付き / [C11.2](../../design-intent/spec/constitution.html#c11) 極性
+- 決定: [ADR-0015](../../design-intent/decisions/ADR-0015-seat-state-is-stamped-by-hooks-not-read-from-pane.html)（状態の出所は hook の打刻・target は生成 hooks.json の shell 行が渡す pane id から解く・打刻が無い周は注入しない）。[seat-autonomy.md](./seat-autonomy.md) §3 の裁定 (e)（pane 字面の idle 判定）を supersede する。
+- この設計から出る契約: `s2-07l.95`（打刻 hook 2 本・状態 file・tick の一次ソース差替え）→ 後続で cycle の作り直し証拠と inject の送達証拠（§6）。
+
+## 1. 何を解くか
+
+管理 tick は席が idle のときだけ 1 行を注入し、cycle は idle の席にだけ `/clear` を送る。いまの idle 判定（裁定 (e)）は pane の字面（prompt 行の右が空 ∧ 探索域に spinner の形が無い）で、Claude Code の版で印が変わるたびに壊れる（2026-09-11: `esc to interrupt` が消えて走行中の席を idle と読み `/clear` を送った・`s2-07l.94`）。字面の絞り込み（`.94` の (A)・`.96`）は露出を減らしたが、本文が印の形を持つ席を永久に busy と読む残余が残り、憲法 C3.3「端末描画や自由文を判定入力にしない」との緊張は解けていない。
+
+やさしく言うと: 「席が手を動かしているか」を画面の見た目から推測するのをやめ、席の側が「いま始めた」「いま終わった」と自分で判子を押す。tick と cycle はその判子だけを見る。
+
+## 2. 状態の型と出所
+
+- `SeatState`（閉じた enum・2 値）: `Busy`（user の入力を受けて turn が走っている）/ `Idle`（turn が終わった・または session が始まった直後）。
+- 出所 = Claude Code の hook event（席の中で器の binary が呼ばれる）:
+  - `UserPromptSubmit` → `Busy`（注入された 1 行も user の入力として submit されるので、tick の pointer が消費された周もここで Busy になる）
+  - `Stop` → `Idle`（turn の終端。`stop_hook_active` が真の再入は打刻しない）
+  - `SessionStart` → `Idle`（作り直し・再開・/clear の後。既存の `session-start` hook に打刻を足す）
+- 打刻の形: `<state_dir>/seat/<target>/state.jsonl` へ **1 行 JSON を append**（`schema` / `state` / `event` / `ts`〔UTC〕/ `sid`）。tick と cycle は**最終行**を読む。append-only は heartbeat / tick.jsonl と同じ store（`fleet::store::append_line`・lock 込み）を通す。
+- 出所付き（C10）: 行の `event` が「どの hook から来た値か」を名乗る。tick の判定行は `state=<busy|idle|missing|unreadable|stale> source=<event>` を出す。
+
+## 3. target の解決（hook の中で自席を知る）
+
+- hook は stdin JSON（`session_id` / `transcript_path` / `cwd`）で自分の session を知るが、**tmux の target（`session:window`）は知らない**。tick は target しか知らない。
+- 解決 = 生成される `hooks/hooks.json` の shell 行で `--pane "$TMUX_PANE"` を渡し、core が `tmux display-message -p -t <pane> '#{session_name}:#{window_name}'` で target を解く。**core は env を読まない**（C2.2）——env に触れるのは生成された shell 行だけで、既存の `"${<NAME_UPPER>_BIN:-<NAME>}"` と同じ場所・同じ生成器（`cargo xtask gen-manifest`）である。`--pane` が空（tmux の外・`$TMUX_PANE` 未設定）なら打刻しない（黙る）。
+- `--tmux-socket` は tick と同じ flag（歯は独立 socket で撃つ）。
+
+## 4. tick / cycle の判定（typed 状態が一次・pane は判定入力にしない）
+
+- tick の順序（[seat-autonomy.md §3](./seat-autonomy.md) の (c) を差し替える）: 鮮度 → **状態**（state.jsonl の最終行）→ context → 未 consumed WM → cycle lock。pane は **inject の送達確認**（prompt 行が在るか・目印が消費されたか）にだけ使い、idle の判定には使わない。
+- 極性（fail-closed・注入しない側へ倒す）: 最終行が `Busy` → `noop reason=busy`／file が無い → `noop reason=state-missing`（hook が載っていない席・v1 の席）／読めない → `noop reason=state-unreadable`／`Busy` の `ts` が `seat.tick_stale_s` より古い → `noop reason=state-stale`（hook が死んだ疑い・**busy とも idle とも言わない**）。`Idle` だけが注入へ進む。
+- cycle も同じ 1 本の読み口（`SeatState` を返す関数 1 つ）を通す。字面判定の関数（`is_idle` と印の集合）は削除し、探索域・印の集合の記述は設計 doc から消す（列挙は機械が持たない側へ＝もう持たない）。
+
+## 5. 極性一覧との関係
+
+- 打刻 hook（UserPromptSubmit / Stop / SessionStart の打刻）は**行為を止めない**ので guard ではない（[polarity.md §2](./polarity.md) の定義）＝極性一覧に載せない。打刻に失敗しても席は止めない（stdout 0 byte・rc 0）。
+- tick の「状態が無い・読めない・stale なら注入しない」は tick の判定（行為を止める側）で、既存の `noop` 語彙の内側。
+
+## 6. 後続（別契約）
+
+- **作り直しの証拠**: cycle は `/clear` 送達 ts の後に `SessionStart` の打刻が在ることを作り直しの証拠にする（`.96` の残余 (1)〔前の echo が見えたまま今回の `/clear` が消費されない周〕を畳む）。
+- **送達の証拠**: inject の `consumed=` は「目印が消えた」でなく「送達 ts の後に `UserPromptSubmit` の打刻が在る」で決める（`.97` lens MEDIUM-2 の残余）。
+- 打刻の `sid` と heartbeat の突合（同じ target に別 sid の打刻が混ざる周の検出）は doctor の主題。
+
+## 7. 却下案
+
+- **字面の絞り込みを続ける**（`.94` (A)・`.96`）: 版ごとに再発し、C3.3 の緊張が残る。
+- **`tool_input.command` / prompt 文から target を読む**: 自由文を判定入力にする（C3.3）。
+- **`/proc/<pid>/fd` から transcript を辿って sid を得る**: OS 依存・fd が開いている保証が無い。
+- **transcript の mtime で busy を推定**: 時間依存の ad-hoc 判定（憲法の順位 1 位・ad-hoc 禁止）。
+
+## 8. 歯（契約 `s2-07l.95`・接頭辞 `seat_state_` / 既存 `seat_tick_` の更新）
+
+- hook: 3 event の打刻が state.jsonl に typed で残る（fixture の stdin JSON と `--pane`・独立 socket の tmux で target を解く）／`--pane` 無しは黙る／`stop_hook_active` の再入は打刻しない。
+- tick: 最終行 Busy → busy／Idle → 注入／missing・unreadable・stale の 3 形は注入しない（fail-closed・理由が typed）／pane の spinner 字面だけを置いた席は **判定に効かない**（負例＝字面を読んでいない証拠）。
+- gen-manifest: hooks.json に 2 entry が増え、SessionStart の command 行に `--pane "$TMUX_PANE"` が付く（idempotent の歯と外形が動く）。
