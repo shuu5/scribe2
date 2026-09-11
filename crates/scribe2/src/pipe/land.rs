@@ -12,6 +12,7 @@
 //! branch も消さない（squash commit は branch の祖先でないので `-d` は通らず、`-D` は
 //! N1 が禁じる形である）。
 
+use crate::polarity::{OnFailure, Polarity, Timing};
 use super::contract::Contract;
 use super::declaration::Effective;
 use super::gate::{is_unreadable, run_checks, Checks, Verdict};
@@ -39,6 +40,12 @@ const RETIRED_DIR: &str = "retired";
 /// 便の worktree と同じ repo 配下から導く。run id は `<bead>-<stamp>` なのでこの名と
 /// 衝突しない。
 const CHECK_DIR: &str = "verify";
+
+/// この境界の極性（`MainCheck`）: main を進めた後に実測し、測れなかった周は `Failed detail=main-unmeasured` で止める（緑に化けさせない）。
+pub const POLARITY: Polarity = Polarity {
+    timing: Timing::PostHoc,
+    on_failure: OnFailure::FailClosed,
+};
 
 /// main 実測の結果。**「赤かった」と「測れなかった」を混ぜない**。
 ///

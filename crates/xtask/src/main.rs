@@ -16,6 +16,7 @@ mod limits;
 mod mutantsdiff;
 mod non_rust_exec;
 mod paths_clean;
+mod polarity;
 mod spawn_points;
 mod toml_lite;
 

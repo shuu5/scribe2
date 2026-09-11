@@ -5,6 +5,7 @@ mod fleet;
 mod headless;
 mod hook;
 mod pipe;
+mod polarity;
 mod rules;
 mod seat;
 
