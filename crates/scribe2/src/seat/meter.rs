@@ -54,6 +54,8 @@ pub const REASON_NO_RULE: &str = "no-rule";
 
 /// 窓を宣言する rules 行の id（**値は code に焼かない**・憲法 C5）。
 const ID_WINDOW: &str = "seat.context_window_tokens";
+/// cap を宣言する rules 行の id（**値は code に焼かない**・憲法 C5）。
+const ID_CAP: &str = "seat.context_cap_pct";
 /// 百分率の分子。
 const PERCENT: u64 = 100;
 
@@ -89,18 +91,6 @@ pub enum Measure {
     Unmeasured(&'static str),
 }
 
-/// pane を出所として見た結果。
-enum PaneLook {
-    /// 健全な statusline が在る。
-    Measured(u64, u64, u64),
-    /// 候補は在るが健全性を外れている（**fallback しない**＝壊れた面を別の出所で塗らない）。
-    OutOfBound,
-    /// 本文は得られたが候補行が無い。
-    NoStatusline,
-    /// 出所として成立しなかった（理由つき）。
-    Absent(&'static str),
-}
-
 /// 計測を 1 回行う。
 ///
 /// **transcript が名指された周は transcript だけを見る**（pane を混ぜない）。出所が入力で
@@ -127,49 +117,51 @@ pub fn measure(request: &Request) -> Measure {
         };
     }
     match look_at_pane(request) {
-        PaneLook::Measured(pct, used, window) => Measure::Measured(Reading {
+        Ok((pct, used, window)) => Measure::Measured(Reading {
             used_pct: Some(pct),
             used_tokens: Some(used),
             window_tokens: Some(window),
             source: SOURCE_PANE,
         }),
-        PaneLook::OutOfBound => Measure::Unmeasured(REASON_OUT_OF_BOUND),
-        PaneLook::NoStatusline => Measure::Unmeasured(REASON_NO_STATUSLINE),
-        PaneLook::Absent(reason) => Measure::Unmeasured(reason),
+        Err(reason) => Measure::Unmeasured(reason),
     }
 }
 
 /// pane 本文を得て statusline を読む。
-fn look_at_pane(request: &Request) -> PaneLook {
+fn look_at_pane(request: &Request) -> Result<(u64, u64, u64), &'static str> {
     let pane = match request.capture_file {
         // 明示された本文を読む周は tmux を 1 回も呼ばない。
-        Some(path) => match std::fs::read_to_string(path) {
-            Ok(found) => found,
-            Err(_) => return PaneLook::Absent(REASON_NO_SOURCE),
-        },
-        None => match capture(request.socket, request.target) {
-            Some(found) => found,
-            None => return PaneLook::Absent(REASON_TMUX_FAILED),
-        },
+        Some(path) => std::fs::read_to_string(path).map_err(|_| REASON_NO_SOURCE)?,
+        None => capture(request.socket, request.target).ok_or(REASON_TMUX_FAILED)?,
     };
-    read_pane(&pane)
+    used_from_pane_pct(&pane)
 }
 
-/// pane 本文から statusline を読む。候補が複数なら**最終行**を採る。
-fn read_pane(pane: &str) -> PaneLook {
+/// pane 本文（statusline）から**使用率まで**測る（`(使用率, 使用 token, 窓)`）。候補が複数なら
+/// **最終行**を採る。
+///
+/// **[`measure`] と管理 tick が呼ぶ 1 本の口**である（`s2-07l.89`）。tick は idle 判定のために
+/// 同じ本文を既に持っているので、ここへ渡す＝transcript の path を tick へ写す seam は作らない
+/// （憲法 C10.3）。parse を 2 本にすると、片方だけが形を変えたときに guard / meter / tick の
+/// 3 面が静かにずれる。
+///
+/// 健全性（pct ≤ 100 ∧ used ≤ window ∧ window ≥ 100000）を外れた候補は
+/// [`REASON_OUT_OF_BOUND`] で**不成立のまま**（fallback しない＝壊れた面を別の出所で塗らない）。
+/// 候補が無い周は本文が空なら [`REASON_NO_SOURCE`]・在れば [`REASON_NO_STATUSLINE`]。
+pub fn used_from_pane_pct(pane: &str) -> Result<(u64, u64, u64), &'static str> {
     let region = search_region(pane);
     let Some((pct, used, window)) = region.iter().rev().find_map(|line| parse_statusline(line))
     else {
-        return if region.is_empty() {
-            PaneLook::Absent(REASON_NO_SOURCE)
+        return Err(if region.is_empty() {
+            REASON_NO_SOURCE
         } else {
-            PaneLook::NoStatusline
-        };
+            REASON_NO_STATUSLINE
+        });
     };
     if pct <= PCT_CEIL && used <= window && window >= WINDOW_FLOOR {
-        PaneLook::Measured(pct, used, window)
+        Ok((pct, used, window))
     } else {
-        PaneLook::OutOfBound
+        Err(REASON_OUT_OF_BOUND)
     }
 }
 
@@ -192,6 +184,27 @@ pub fn used_from_transcript_pct(path: &Path) -> Result<(u64, u64, u64), &'static
 /// 埋め込みの宣言から窓を引く。
 fn declared_window() -> Option<u64> {
     window_of(&Manifest::embedded().ok()?)
+}
+
+/// 埋め込みの宣言から cap を引く。**guard と管理 tick が呼ぶ 1 本の口**（`s2-07l.89`）。
+///
+/// cap の行 id を 2 か所で持たない: guard が private に持っていた読みをここへ移し、tick は
+/// 自前の literal で cap を読まない。窓（[`window_of`]）と同じ module に置くのは、「何に対する
+/// 60% か」（窓）と「60% とは何か」（cap）を同じ面が答えるためである。
+pub fn declared_cap() -> Option<u64> {
+    cap_of(&Manifest::embedded().ok()?)
+}
+
+/// 宣言（rules 行）から cap を引く。不発効・別の形は `None`（＝測らない側へ倒す）。
+///
+/// `0` を拒まないのは guard の従来の読み（`int_of`）をそのまま持ってきているため——cap 0 は
+/// 「常に止める」の宣言であって欠落ではない（窓の `> 0` は 0 で割らないための条件で別物）。
+pub fn cap_of(manifest: &Manifest) -> Option<u64> {
+    let row = manifest.get(ID_CAP)?;
+    match (row.enabled, &row.value) {
+        (true, RuleValue::Int(found)) => Some(*found),
+        _ => None,
+    }
 }
 
 /// 宣言（rules 行）から窓を引く。不発効・別の形・0 は `None`（＝測らない側へ倒す）。
