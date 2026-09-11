@@ -5,7 +5,9 @@
 //! （hook の打刻の最終行が Idle・[`state`]・憲法 C3.3 / ADR-0015＝pane の字面は判定入力にしない）。
 //! 1 つでも欠けたら **1 key も送らずに断る**——「送ったが失敗した」と「そもそも送っていない」を
 //! [`Cycle`] で分けて持つのはこのためである（bool で持たない）。pane を読むのは送る直前の入力欄の
-//! 門（[`inject::guard_input`]・注入と同じ 1 本）と作り直しの確認だけである。
+//! 門（[`inject::guard_input`]・注入と同じ 1 本）だけで、**作り直しの確認は席の打刻**
+//! （`/clear` の送達 ts 以後に足された `SessionStart`・[`state::evidence_after`]・設計 seat-state.md §6・
+//! `s2-07l.112`）で行う。echo の字面は読まない。
 
 use crate::polarity::{OnFailure, Polarity, Timing};
 use super::{inject, pane_of, sanitize_target, state, tmux_ok, StateDir, WmScan};
@@ -51,7 +53,7 @@ pub const REASON_STATE_MISSING: &str = "state-missing";
 pub const REASON_STATE_UNREADABLE: &str = "state-unreadable";
 /// 最終の Busy が `seat.tick_stale_s` より古い（hook が死んだ疑い）。
 pub const REASON_STATE_STALE: &str = "state-stale";
-/// pane を読めない（作り直しを確認できない席へ送らない）。
+/// pane を読めない（入力欄の門を通せない席へ送らない）。
 pub const REASON_PANE_MISSING: &str = "pane-missing";
 /// 入力欄が非空（打ちかけと 1 行に merge する事故を送る直前で塞ぐ・注入と同じ門）。
 pub const REASON_INPUT_BUSY: &str = "input-busy";
@@ -63,9 +65,9 @@ pub const REASON_NO_RULE: &str = "no-rule";
 pub const REASON_STATE_DIR: &str = "state-dir";
 /// cycle-stamp を書けない＝`/clear` を送る前に断る（書けないまま送ると次の周も送りうる・N1）。
 pub const REASON_STAMP: &str = "cycle-stamp-unwritable";
-/// `/clear` は送ったが作り直しを確認できない。
+/// `/clear` は送ったが作り直しを確認できない（送達 ts 以後の `SessionStart` の打刻が窓の内に来ない）。
 pub const REASON_CLEAR: &str = "clear-unconfirmed";
-/// 復元 command は送ったが送達を確認できない。
+/// 復元 command は送ったが消費を確認できない（送達 ts 以後の `UserPromptSubmit` の打刻が来ない）。
 pub const REASON_RESTORE: &str = "restore-unconfirmed";
 
 /// cycle 1 回の入力。
@@ -189,7 +191,7 @@ fn guarded(request: &Request, dir: &Path) -> Cycle {
         Err(inject::InputGate::Busy) => return Cycle::Refused(REASON_INPUT_BUSY),
         Err(inject::InputGate::UnknownInput) => return Cycle::Refused(REASON_INPUT_UNKNOWN),
     }
-    if !send_clear(request) {
+    if !send_clear(request, dir) {
         return Cycle::Failed(REASON_CLEAR);
     }
     if send_restore(request) {
@@ -277,78 +279,37 @@ fn unix_secs(at: SystemTime) -> u64 {
         .map_or(0, |since| since.as_secs())
 }
 
-/// `/clear` を送り、作り直しを確認する。
+/// `/clear` を送り、作り直しを**席の打刻**で確認する（設計 seat-state.md §6・`s2-07l.112`）。
 ///
-/// **便 2 の送達確認（settle）は使えない**: `/clear` は pane を消すので「送った字面が現れる」
-/// 形では測れず、成功したときほど確認が落ちる。代わりに [`cleared`]（入力欄が空 ∧ 入力行より
-/// 上に消費済みの echo）で見る＝作り直された席でだけ同時に立つ。
-fn send_clear(request: &Request) -> bool {
+/// 証拠は「送達 ts 以後に、送る前の行より後ろへ足された `SessionStart` の打刻」だけ
+/// （[`state::evidence_after`]）。pane の echo `❯ /clear` は読まない——正の形が字面である限り、
+/// 前の `/clear` の echo が見えたまま今回の `/clear` が消費されなかった周を「済んだ」と読む口が
+/// 塞げなかった（`.96` の残余 (1)）。打刻が窓（[`CLEAR_WAIT`]）の内に来ない周は `false`＝
+/// `clear-unconfirmed`（復元を送らない・既存の語）。hook の無い席・古い打刻しか足さない席も
+/// 同じ側へ倒れる（作り直しを確認できない席へ復元を刺さない＝fail-closed）。
+fn send_clear(request: &Request, dir: &Path) -> bool {
+    let baseline = state::baseline(dir);
+    let since = state::now_secs();
     if !send_line(request, CLEAR) {
         return false;
     }
     let deadline = Instant::now().checked_add(CLEAR_WAIT);
     while deadline.is_some_and(|at| Instant::now() < at) {
         sleep(CLEAR_STEP);
-        if pane_of(request.socket, request.target, request.capture_file)
-            .is_some_and(|pane| cleared(&pane))
-        {
+        let found = state::evidence_after(dir, baseline, state::Event::SessionStart, since);
+        if matches!(found, state::Evidence::Found(_)) {
             return true;
         }
     }
     false
 }
 
-/// 作り直しの済んだ pane か: **入力欄が空 ∧ 入力行より上に消費済みの echo `❯ /clear` が在る**
-/// （[`is_consumed_echo`]）。
-///
-/// **正の証拠で見る**（便 2 の裁定「送った字面が現れた = 送達成功・入力欄が空 = 消費」と同じ形・
-/// bd `s2-07l.96`）。作り直された席は画面を消した後、消費済みの echo を新しい prompt の**直上に
-/// 必ず**残す（実測 2026-09-11: banner 3 行 → `❯ /clear` → 空の prompt → statusline）。
-/// 「探索域に `/clear` の字面が無い」の負の形は、この echo のせいで**構造的に偽のまま固定**され
-/// ——席が 6 行以上を出力するまで真にならず、その出力は復元を送った後にしか出ない——`/clear` が
-/// 通った席に復元を送らず空席のまま残した（実測 2026-09-11 admin 席・`.94` の域変更で極性が反転）。
-///
-/// **未 submit の `/clear` は弁別できる**: Enter だけが落ちた周の字面は**入力行そのもの**に残り
-/// [`super::input_tail`] が非空になる（第 1 項で落ちる）。echo は入力行より**上**にしか無い。
-///
-/// **域は入力行より上の全行**（旧裁定 (e) の上 6 非空行に絞らない）。`/clear` は
-/// 画面を消すので、見えている echo は**何らかの** `/clear` の後に描かれたものに限られ、上へ遡る数で
-/// 古い echo を除外する必要が無い。逆に 6 行で切ると、echo の下に描かれる行（hook の出力等）が版で
-/// 増えた周に同じ行き止まりへ戻る（実測 2026-09-11 A/B: echo の周りに 4 行が増えた）。
-///
-/// **残余（正の形が字面である限り塞げない・根治は `s2-07l.95` の typed 打刻）**: (1) 前の `/clear`
-/// の echo が見えたまま**今回の** `/clear` だけが消費されなかった周（字面が落ちて Enter だけが
-/// 通る等）は、送る前と同じ pane を「済んだ」と読む。作り直し済みで復元の届いていない席（本便の
-/// 出所の空席）と pane の形が同じなので、送る前の形で弁別すると空席を永久に回復できない
-/// ＝弁別しない側に倒す。席は退避済み ∧ idle ゆえ、害は「会話が生きたまま復元が走る」に留まる。
-/// (2) 入力行より下に prompt の字を含む行が在ると anchor が移り、未 submit の入力行が echo に
-/// 見える（[`super::input_tail`] と同根・現行の statusline には無い）。
-fn cleared(pane: &str) -> bool {
-    let lines: Vec<&str> = pane.lines().collect();
-    let Some(at) = lines.iter().rposition(|line| line.contains(super::PROMPT)) else {
-        return false;
-    };
-    super::input_tail(pane).is_some_and(str::is_empty)
-        && lines.iter().take(at).any(|line| is_consumed_echo(line))
-}
-
-/// 消費済みの echo の行か: **行頭**が prompt の字で、その右が `/clear` ちょうど。
-///
-/// 行頭に限るのは、assistant の本文と tool の出力が 2 桁字下げで描かれるためである——本文が
-/// echo の字面を**引用**した行（`  ❯ /clear`）は行頭に来ない。字下げを剥がして比べると、引用を
-/// 持つ idle な席を「作り直された」と読み、会話を捨てていない席へ復元が刺さる。右側の trim は
-/// prompt が描く nbsp を含む（`str::trim` は U+00A0 を空白に数える）。
-fn is_consumed_echo(line: &str) -> bool {
-    line.strip_prefix(super::PROMPT)
-        .is_some_and(|rest| rest.trim() == CLEAR)
-}
-
 /// 復元 command を **便 2 の inject 経路**で送る（送達確認まで込み）。
 ///
-/// 成功と数えるのは **席が消費した**（[`inject::Settled::Consumed`]）周だけ。`/clear` の
-/// 直後の席には走っている turn が無いので、上限まで入力欄に残った復元は「turn の終わりに消費
-/// される queue」ではなく submit されなかった打鍵で、会話を捨てた（不可逆）のに復元が刺さらない
-/// 席を `done` と数えることになる（lens-90 HIGH-2）。旧来の「現れた ∧ 入力欄が空」と同じ意味。
+/// 成功と数えるのは **席が消費した**（[`inject::Settled::Consumed`]＝送達 ts 以後の
+/// `UserPromptSubmit` の打刻・`s2-07l.112`）周だけ。`/clear` の直後の席には走っている turn が無いので、
+/// 上限まで消費されない復元は「turn の終わりに消費される queue」ではなく submit されなかった打鍵で、
+/// 会話を捨てた（不可逆）のに復元が刺さらない席を `done` と数えることになる（lens-90 HIGH-2）。
 ///
 /// **窓は作り直しの確認と同じ上限**（[`CLEAR_WAIT`]・bd `s2-07l.97`）: 作り直し直後の席は
 /// SessionStart hook の間（数秒〜十数秒）復元を入力欄に queue したまま turn を始めないので、

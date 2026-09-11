@@ -4,11 +4,15 @@
 //! 「非空なら 1 key も送らない」で構造的に塞ぐ（prompt 行を特定できない周も送らない
 //! ＝fail-closed）。rc は **0 / 1 の 2 値**だけで、v1 の偽陰性（4 / 7）を作らない。
 //!
+//! pane を読むのは**入力欄の門と送達の目印**（送った字面が現れた = 送達・`.90`）だけで、
+//! **消費（`consumed=`）は席の打刻**で決める（送達 ts 以後の `UserPromptSubmit`・
+//! [`state::evidence_after`]・設計 seat-state.md §6・`s2-07l.112`）。入力欄が空になったかは読まない。
+//!
 //! 不可逆の口は持たない（憲法 CON5）: ここが送るのは呼び側が渡した 1 行だけで、
 //! `/clear` のような session を作り直す注入はこの便では扱わない。
 
 use crate::polarity::{OnFailure, Polarity, Timing};
-use super::{capture, input_tail, sanitize_target, tmux_ok, StateDir};
+use super::{capture, input_tail, sanitize_target, state, tmux_ok, StateDir};
 use crate::fleet::store::{self, LockPolicy};
 use crate::hook::{InjectionRecord, SCHEMA};
 use std::path::{Path, PathBuf};
@@ -55,20 +59,43 @@ pub struct Request<'a> {
     pub state_dir: Option<&'a StateDir>,
 }
 
-/// 送達した注入を席が**その場で消費したか**（入力欄が settle の窓の内に空になったか）。
+/// 送達した注入を席が**その場で消費したか**（送達 ts 以後に `UserPromptSubmit` の打刻が足されたか・
+/// 設計 §6・`s2-07l.112`）。
 ///
-/// 席が busy な周は注入が入力欄に queue され、turn が終わるまで空にならない。それでも送達は
-/// 成功している（実測 2026-09-11: `inject-residual` 9 件が全部 turn の終わりに消費されていた・
+/// 席が busy な周は注入が入力欄に queue され、turn が終わる（次の submit）まで打刻が来ない。それでも
+/// 送達は成功している（実測 2026-09-11: `inject-residual` 9 件が全部 turn の終わりに消費されていた・
 /// bd `s2-07l.90`）ので、これは成功の**記録の detail** であって失敗の理由ではない。
 #[derive(Clone, Copy)]
 pub enum Settled {
-    /// 入力欄が空になった＝席がその場で消費した。
+    /// 送達 ts 以後の `UserPromptSubmit` の打刻が在る＝席が消費した。
     Consumed,
-    /// 入力欄に残った＝queue された（turn の終わりに消費される）。
+    /// 打刻 file は読めるが窓の内に新しい打刻が無い＝queue された（次の submit で消費される）。
     Queued,
-    /// 窓の終わりに prompt 行を特定できなかった＝**測っていない**（`false` と混ぜない・
-    /// 憲法 C10 の測定 / 未測定の弁別）。
-    UnknownInput,
+    /// 消費を**測れない**（打刻 file が無い・読めない・置き場が解けない）。`false` と混ぜず、
+    /// missing を消費と読み替えない（憲法 C10 の測定 / 未測定の弁別）。理由は [`Unmeasured`]。
+    Unmeasured(Unmeasured),
+}
+
+/// 消費を測れない理由。**閉じた 3 値**（憲法 C11）。
+#[derive(Clone, Copy)]
+pub enum Unmeasured {
+    /// 打刻 file が無い（hook が載っていない席）。
+    StateMissing,
+    /// 打刻 file を読めない。
+    StateUnreadable,
+    /// 置き場が解けない（打刻の在処を知らない）。
+    StateDir,
+}
+
+impl Unmeasured {
+    /// 行に添える字面（`reason=<値>`）。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::StateMissing => "state-missing",
+            Self::StateUnreadable => "state-unreadable",
+            Self::StateDir => "state-dir",
+        }
+    }
 }
 
 impl Settled {
@@ -77,7 +104,15 @@ impl Settled {
         match self {
             Self::Consumed => "true",
             Self::Queued => "false",
-            Self::UnknownInput => "unknown",
+            Self::Unmeasured(_) => "unknown",
+        }
+    }
+
+    /// 測れなかった理由（測れた周は `None`）。
+    pub fn reason(self) -> Option<&'static str> {
+        match self {
+            Self::Consumed | Self::Queued => None,
+            Self::Unmeasured(why) => Some(why.as_str()),
         }
     }
 }
@@ -105,11 +140,11 @@ pub fn deliver(request: &Request) -> Delivery {
 
 /// 注入を 1 回行い、settle を `window` まで見続ける。
 ///
-/// 成功の形は [`deliver`] と同じ（目印が現れた ∧ 入力欄が空 = `Consumed`・窓の終わりに残って
-/// いれば `Queued`）で、変わるのは**窓の長さだけ**。作り直し直後の席は SessionStart hook の間
-/// （数秒〜十数秒）注入を入力欄に queue したまま turn を始めないので、2 s の窓では復元が正しく
-/// 届く周ほど `Queued` に落ちる（bd `s2-07l.97`）。cycle は作り直しの確認と同じ上限を渡す。
-/// 新しい閾値は足さない（呼び側の既存の上限を再利用する＝rules 行と C5 裁定は要らない）。
+/// 成功の形は [`deliver`] と同じ（目印が現れた = 送達・送達 ts 以後の `UserPromptSubmit` の打刻 =
+/// `Consumed`・窓の終わりに無ければ `Queued`）で、変わるのは**窓の長さだけ**。作り直し直後の席は
+/// SessionStart hook の間（数秒〜十数秒）注入を入力欄に queue したまま turn を始めないので、2 s の
+/// 窓では復元が正しく届く周ほど `Queued` に落ちる（bd `s2-07l.97`）。cycle は作り直しの確認と同じ
+/// 上限を渡す。新しい閾値は足さない（呼び側の既存の上限を再利用する＝rules 行と C5 裁定は要らない）。
 pub fn deliver_within(request: &Request, window: Duration) -> Delivery {
     let started = Instant::now();
     let Some(pane) = capture(request.socket, request.target) else {
@@ -124,16 +159,52 @@ pub fn deliver_within(request: &Request, window: Duration) -> Delivery {
         return Delivery::Refused(REASON_EMPTY);
     };
     let before = pane.matches(marker).count();
+    // 消費の証拠を見る先も送る**前**に取る（基線と送達 ts・設計 §6）。
+    let seat = request
+        .state_dir
+        .map(|found| super::seat_dir(&found.path, request.target));
+    let watch = Watch {
+        seat: seat.as_deref().map(|dir| (dir, state::baseline(dir))),
+        since: state::now_secs(),
+    };
     if !send(request) {
         return Delivery::Unconfirmed(REASON_TMUX_FAILED);
     }
-    match settle(request, marker, before, tries_within(window)) {
+    match settle(request, marker, before, tries_within(window), &watch) {
         Ok(settled) => {
             let bytes = request.payload.len() as u64;
             record(request, bytes, started);
             Delivery::Delivered(bytes, settled)
         }
         Err(reason) => Delivery::Unconfirmed(reason),
+    }
+}
+
+/// 消費の証拠を見る先（送る**前**に取る・設計 §6）。置き場が解けない周は `seat` が `None`＝測れない。
+struct Watch<'a> {
+    /// 席の置き場と、送る前の打刻の基線。
+    seat: Option<(&'a Path, state::Baseline)>,
+    /// 送達 ts（打刻と同じ時計・秒）。
+    since: u64,
+}
+
+impl Watch<'_> {
+    /// いまの証拠の読み（置き場が解けない周は `None`）。
+    fn evidence(&self) -> Option<state::Evidence> {
+        self.seat.map(|(dir, baseline)| {
+            state::evidence_after(dir, baseline, state::Event::UserPromptSubmit, self.since)
+        })
+    }
+}
+
+/// 窓の終わりの証拠を [`Settled`] に写す（`Found` は途中で返るので届かないが、網羅のため写す）。
+fn settled_of(evidence: Option<state::Evidence>) -> Settled {
+    match evidence {
+        Some(state::Evidence::Found(_)) => Settled::Consumed,
+        Some(state::Evidence::NotYet) => Settled::Queued,
+        Some(state::Evidence::Missing) => Settled::Unmeasured(Unmeasured::StateMissing),
+        Some(state::Evidence::Unreadable) => Settled::Unmeasured(Unmeasured::StateUnreadable),
+        None => Settled::Unmeasured(Unmeasured::StateDir),
     }
 }
 
@@ -186,43 +257,41 @@ fn marker_of(payload: &str) -> Option<&str> {
     payload.lines().find(|line| !line.trim().is_empty())
 }
 
-/// 送達を確認する。**目印（最初の非空行）の出現数が送る前より増えた**ら成立で、入力欄が窓の内に
-/// 空になったかを [`Settled`] として添える。
+/// 送達を確認する。**目印（最初の非空行）の出現数が送る前より増えた**ら成立で、消費（送達 ts 以後の
+/// `UserPromptSubmit` の打刻）が窓の内に来たかを [`Settled`] として添える。
 ///
-/// 「現れた ∧ 入力欄が空」を成立の条件にすると、busy な席へ queue された注入（届いている）を
+/// 「現れた ∧ 消費した」を成立の条件にすると、busy な席へ queue された注入（届いている）を
 /// 失敗と数える（bd `s2-07l.90`・裁定: 現れた ＝ 成功）。失敗は `absent`（現れない）と
 /// `tmux-failed` の 2 つだけ。「在る」でなく「増えた」で見るのは、先に同じ字面が pane に在る周
 /// （tick の pointer は固定文字列で前周の写しが残る）に届いていない注入を成功と数えないため。
 /// 代償は、窓の内に pane が巻き上がって**古い写しだけ**が消えた周（新しい写しが見えていても
 /// 総数は増えない）が `absent` へ倒れうること（fail-closed 側の誤り・tick では重複注入になる。
 /// 周ごとに一意な目印にする案は「注入の内容を変えない」の契約外＝lens-90 再確認 NEW-2）。
-/// `consumed` は**窓の終わりの状態**で決める（途中の周で入力欄を読めなかったかは持たない）。
+/// `consumed` は**窓の終わりの証拠**で決める（入力欄が空かは読まない・`s2-07l.112`）。
 fn settle(
     request: &Request,
     marker: &str,
     before: usize,
     tries: u32,
+    watch: &Watch<'_>,
 ) -> Result<Settled, &'static str> {
     let mut seen = false;
-    let mut input_known = false;
+    let mut evidence = None;
     for _ in 0..tries {
         sleep(SETTLE_STEP);
         let Some(pane) = capture(request.socket, request.target) else {
             return Err(REASON_TMUX_FAILED);
         };
-        let appeared = pane.matches(marker).count() > before;
-        seen = seen || appeared;
-        let tail = input_tail(&pane);
-        if appeared && tail.is_some_and(str::is_empty) {
+        seen = seen || pane.matches(marker).count() > before;
+        evidence = watch.evidence();
+        if seen && matches!(evidence, Some(state::Evidence::Found(_))) {
             return Ok(Settled::Consumed);
         }
-        input_known = tail.is_some();
     }
-    match (seen, input_known) {
-        (false, _) => Err(REASON_ABSENT),
-        (true, true) => Ok(Settled::Queued),
-        (true, false) => Ok(Settled::UnknownInput),
+    if !seen {
+        return Err(REASON_ABSENT);
     }
+    Ok(settled_of(evidence))
 }
 
 /// 窓を settle の回数へ写す（[`SETTLE_STEP`] 刻み・**1 回は必ず見る**・既定の窓なら
@@ -289,10 +358,14 @@ pub fn suffix_of(state: Option<&StateDir>) -> String {
     state.map_or_else(String::new, StateDir::suffix)
 }
 
-/// 成立の 1 行（その場で消費したかを添える）。
+/// 成立の 1 行（その場で消費したかを添える）。測れなかった周だけ `reason=` を **`consumed=` の直後**に
+/// 添える（既存 token の名前・順序は不変・置き場の 2 語は行末のまま）。
 pub fn render_delivered(target: &str, bytes: u64, settled: Settled, state: Option<&StateDir>) -> String {
+    let reason = settled
+        .reason()
+        .map_or_else(String::new, |why| format!(" reason={why}"));
     format!(
-        "seat: inject delivered target={} bytes={bytes} consumed={}{}",
+        "seat: inject delivered target={} bytes={bytes} consumed={}{reason}{}",
         sanitize_target(target),
         settled.as_str(),
         suffix_of(state)
