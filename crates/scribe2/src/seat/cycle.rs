@@ -250,9 +250,17 @@ fn send_clear(request: &Request) -> bool {
 /// [`super::input_tail`] が非空になる（第 1 項で落ちる）。echo は入力行より**上**にしか無い。
 ///
 /// **域は入力行より上の全行**（[`super::prompt_region`] の上 6 非空行に絞らない）。`/clear` は
-/// 画面を消すので、見えている echo は作り直しの後に描かれたものに限られ、上へ遡る数で古い echo を
-/// 除外する必要が無い。逆に 6 行で切ると、echo の下に描かれる行（hook の出力等）が版で増えた周に
-/// 同じ行き止まりへ戻る。typed の証拠（SessionStart の打刻）は `s2-07l.95` の領分。
+/// 画面を消すので、見えている echo は**何らかの** `/clear` の後に描かれたものに限られ、上へ遡る数で
+/// 古い echo を除外する必要が無い。逆に 6 行で切ると、echo の下に描かれる行（hook の出力等）が版で
+/// 増えた周に同じ行き止まりへ戻る（実測 2026-09-11 A/B: echo の周りに 4 行が増えた）。
+///
+/// **残余（正の形が字面である限り塞げない・根治は `s2-07l.95` の typed 打刻）**: (1) 前の `/clear`
+/// の echo が見えたまま**今回の** `/clear` だけが消費されなかった周（字面が落ちて Enter だけが
+/// 通る等）は、送る前と同じ pane を「済んだ」と読む。作り直し済みで復元の届いていない席（本便の
+/// 出所の空席）と pane の形が同じなので、送る前の形で弁別すると空席を永久に回復できない
+/// ＝弁別しない側に倒す。席は退避済み ∧ idle ゆえ、害は「会話が生きたまま復元が走る」に留まる。
+/// (2) 入力行より下に prompt の字を含む行が在ると anchor が移り、未 submit の入力行が echo に
+/// 見える（[`super::input_tail`] と同根・現行の statusline には無い）。
 fn cleared(pane: &str) -> bool {
     let lines: Vec<&str> = pane.lines().collect();
     let Some(at) = lines.iter().rposition(|line| line.contains(super::PROMPT)) else {

@@ -834,6 +834,43 @@ const REBUILT_UNSUBMITTED_PANE: &str = concat!(
     "  Fable 5.1 [high] 5h:41%(2h8m) 7d:21%(6d5h)\n",
     "  ⏵⏵ bypass permissions on (shift+tab to cycle)\n",
 );
+/// 作り直された直後に **hook の出力が echo の下に描かれる**形（本便の A/B で実席は
+/// `Updated to latest` 2 行 + hook 2 行を描いた・版で行数が増えうる）。echo は入力行の
+/// 10 非空行上＝裁定 (e) の上 6 非空行の**外**に在る。域を 6 行に絞る実装はこの pane を
+/// 確認できず、`.94` と同じ行き止まり（復元を送らない）へ戻る。
+const REBUILT_HOOKS_PANE: &str = concat!(
+    " ▐▛███▛█   Claude Code v2.1.268\n",
+    "▝▜██████▀  Fable 5.1 with high effort · Claude Max\n",
+    "  ▝▝ ▝▝    /…/repo · /rc\n",
+    "❯ /clear\n",
+    "  ⎿  SessionStart:clear hook success: served version=2\n",
+    "  ⎿  SessionStart:clear hook success: [LOCATION] host / cwd / branch\n",
+    "  ⎿  SessionStart:clear hook success: [bd prime] workflow context\n",
+    "  ⎿  SessionStart:clear hook success: lint report 0 errors\n",
+    "  ⎿  SessionStart:clear hook success: lint report 0 errors\n",
+    "  ⎿  SessionStart:clear hook success: memory index loaded\n",
+    "  ⎿  SessionStart:clear hook success: fetch done\n",
+    "  ⎿  SessionStart:clear hook success: statusline ready\n",
+    "────────────────────────────────────────\n",
+    "❯\u{a0} \n",
+    "────────────────────────────────────────\n",
+    "  user@host (user@example.com)  repo\n",
+    "  Fable 5.1 [high] 5h:41%(2h8m) 7d:21%(6d5h)\n",
+    "  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 1 agent\n",
+);
+/// submit 済みの user 発言が `/clear` **で始まる**が `/clear` ではない pane（作り直されて
+/// いない）。発言の echo は行頭 `❯ …` に描かれるので、右側を「`/clear` で始まる」「`/clear` を
+/// 含む」まで緩めた実装はこの pane を「済んだ」と読み、会話を捨てていない席へ復元を送る。
+const PREFIXED_CLEAR_PANE: &str = concat!(
+    "❯ /clear は不可逆なので、送る前に退避の完了を確かめてください\n",
+    "● 承知しました。退避物の有無を先に見ます。\n",
+    "────────────────────────────────────────\n",
+    "❯\u{a0} \n",
+    "────────────────────────────────────────\n",
+    "  user@host (user@example.com)  scribe2  main\n",
+    "  19% 190k/1M Fable 5.1 [high] 5h:10%(4h22m) 7d:15%(6d8h)\n",
+    "  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 1 agent\n",
+);
 /// idle な席の本文が echo の字面を**引用**している pane（作り直されていない）。assistant の
 /// 本文は 2 桁字下げで描かれるので、引用の `❯ /clear` は行頭に来ない＝消費済みの echo と
 /// 弁別できる。行頭の条件を外す実装はこの pane を「済んだ」と読み、復元を送ってしまう。
@@ -1996,45 +2033,91 @@ fn seat_cycle_refuses_when_clear_is_stuck_in_input_line() {
     }
 }
 
-/// `/clear` を**送った後**の pane に字面が在っても、**入力行に残る**（未 submit・
-/// [`UNSUBMITTED_CLEAR_PANE`]）／echo と入力行の両方に在る（[`REBUILT_UNSUBMITTED_PANE`]）／
-/// 本文に**引用**されている（[`QUOTED_CLEAR_PANE`]）周は作り直しを確認できない
-/// （`clear-unconfirmed`・復元を送らない）。
+/// `/clear` を**送った後**の pane に字面が在っても、作り直しを確認できない形（`shape`）では
+/// `clear-unconfirmed`＝復元を送らない。
 ///
 /// 入口の idle 判定は送る前の pane で通す（[`IDLE_TALL_PANE`]）ので、字面は**送達の後に**
-/// 現れた形になる＝Enter だけが落ちた・席が echo を引用した周の再現。正の証拠を「`/clear` の
-/// 字面が pane の上に在る」まで緩める実装は、この 3 形を「済んだ」と読んで作り直されていない
-/// 席へ復元を送る（会話を捨てていない席に `/rebrief` が刺さる）。
+/// 現れた形になる（Enter だけが落ちた・席が echo を引用した周の再現）。形ごとに歯を分ける
+/// のは、確認の待ち（30 秒）が直列に積み上がらないようにするため。
+fn assert_clear_unconfirmed_after_send(label: &str, shape: &str) {
+    let dir = tmp();
+    let socket = socket_of(&dir);
+    let name = "seatecho";
+    let log = dir.join("seat.log");
+    let guard = start_clearing_seat(&socket, name, &log, false);
+    assert!(guard.ready(), "{label}: 偽の席を立てられる");
+    let wm = dir.join("wm");
+    wm_file(&wm, "working-memory.echo.md", name);
+
+    let out = cycle_with_pane_after_clear(&dir, name, IDLE_TALL_PANE, shape);
+
+    assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "{label}: stdout={}", stdout_of(&out));
+    assert_eq!(stderr_of(&out), "seat: cycle failed reason=clear-unconfirmed\n", "{label}");
+    assert_eq!(
+        fs::read_to_string(&log).unwrap_or_default(),
+        "/clear\n",
+        "{label}: 作り直しを確認できない周に復元を送らない"
+    );
+    // socket を消す**前**に畳む（消してからでは kill-session が届かない・実測 2026-09-10）。
+    drop(guard);
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// 未 submit（[`UNSUBMITTED_CLEAR_PANE`]）: 字面が入力行に残る周は確認できない。
 #[test]
-fn seat_cycle_does_not_confirm_clear_left_in_input_or_quoted() {
-    let shapes = [
-        ("unsubmitted", UNSUBMITTED_CLEAR_PANE),
-        ("rebuilt-unsubmitted", REBUILT_UNSUBMITTED_PANE),
-        ("quoted", QUOTED_CLEAR_PANE),
-    ];
-    for (label, shape) in shapes {
-        let dir = tmp();
-        let socket = socket_of(&dir);
-        let name = "seatecho";
-        let log = dir.join("seat.log");
-        let guard = start_clearing_seat(&socket, name, &log, false);
-        assert!(guard.ready(), "{label}: 偽の席を立てられる");
-        let wm = dir.join("wm");
-        wm_file(&wm, "working-memory.echo.md", name);
+fn seat_cycle_does_not_confirm_clear_left_unsubmitted_in_input_line() {
+    assert_clear_unconfirmed_after_send("unsubmitted", UNSUBMITTED_CLEAR_PANE);
+}
 
-        let out = cycle_with_pane_after_clear(&dir, name, IDLE_TALL_PANE, shape);
+/// echo と入力行の両方に在る（[`REBUILT_UNSUBMITTED_PANE`]）: 入力行が非空なら echo は
+/// 証拠にならない（正の証拠は入力欄が空のときだけ効く）。
+#[test]
+fn seat_cycle_does_not_confirm_clear_when_echo_and_unsubmitted_coexist() {
+    assert_clear_unconfirmed_after_send("rebuilt-unsubmitted", REBUILT_UNSUBMITTED_PANE);
+}
 
-        assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "{label}: stdout={}", stdout_of(&out));
-        assert_eq!(stderr_of(&out), "seat: cycle failed reason=clear-unconfirmed\n", "{label}");
-        assert_eq!(
-            fs::read_to_string(&log).unwrap_or_default(),
-            "/clear\n",
-            "{label}: 作り直しを確認できない周に復元を送らない"
-        );
-        // socket を消す**前**に畳む（消してからでは kill-session が届かない・実測 2026-09-10）。
-        drop(guard);
-        fs::remove_dir_all(&dir).ok();
-    }
+/// 本文の引用（[`QUOTED_CLEAR_PANE`]）: 2 桁字下げの `❯ /clear` は行頭に無い＝証拠にならない。
+#[test]
+fn seat_cycle_does_not_confirm_clear_from_quoted_echo() {
+    assert_clear_unconfirmed_after_send("quoted", QUOTED_CLEAR_PANE);
+}
+
+/// `/clear` で**始まる**発言の echo（[`PREFIXED_CLEAR_PANE`]）: 右側が `/clear` ちょうどで
+/// なければ証拠にならない（「始まる」「含む」へ緩めた実装は会話の生きた席へ復元を送る・
+/// lens-96 HIGH-2）。
+#[test]
+fn seat_cycle_does_not_confirm_clear_from_prefixed_user_line() {
+    assert_clear_unconfirmed_after_send("prefixed", PREFIXED_CLEAR_PANE);
+}
+
+/// hook の出力が echo の下に増えた版（[`REBUILT_HOOKS_PANE`]・echo は入力行の 10 非空行上）
+/// でも作り直しを確認して復元を送る。送る前は idle・送った後にこの形＝時間差の happy path。
+///
+/// 域を裁定 (e) の上 6 非空行に絞る実装はこの pane を確認できず、`.94` と同じ行き止まり
+/// （30 秒待って `clear-unconfirmed`・復元を送らない）へ戻る（lens-96 MEDIUM-1）。
+#[test]
+fn seat_cycle_confirms_rebuilt_pane_with_hook_lines_below_echo() {
+    let dir = tmp();
+    let socket = socket_of(&dir);
+    let name = "seathooks";
+    let log = dir.join("seat.log");
+    let guard = start_clearing_seat(&socket, name, &log, false);
+    assert!(guard.ready(), "偽の席を立てられる");
+    let wm = dir.join("wm");
+    wm_file(&wm, "working-memory.hooks.md", name);
+
+    let out = cycle_with_pane_after_clear(&dir, name, IDLE_TALL_PANE, REBUILT_HOOKS_PANE);
+
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(stdout_of(&out), format!("seat: cycle done target={name}\n"));
+    assert_eq!(
+        fs::read_to_string(&log).unwrap_or_default(),
+        "/clear\n/rebrief\n",
+        "echo が上の 6 非空行の外でも作り直しを確認して復元を送る"
+    );
+    // socket を消す**前**に畳む（消してからでは kill-session が届かない・実測 2026-09-10）。
+    drop(guard);
+    fs::remove_dir_all(&dir).ok();
 }
 
 /// cycle を撃ち、`/clear` が席の log（`<dir>/seat.log`）に着いた**後**で pane の写し
