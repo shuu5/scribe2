@@ -3972,3 +3972,179 @@ fn pipe_question_run_stops_with_question_token() {
     assert!(show_line(&repo, &state, &id).contains("stage=Questioned"));
     clean(&[&repo, &state]);
 }
+
+// ─────────────────── land の後の anchor 同期（`s2-07l.120`・N1・接頭辞 `pipe_land_anchor_`） ───────────────────
+
+/// land（squash 形）の後、anchor（`--repo`）の HEAD が main を指す checkout なら **index と working tree を
+/// 新 main に揃える**（`.117` 実測: base は `git update-ref` だけで index が旧のまま＝`git status` に
+/// `M  src/lib.rs` が残り、次の `commit -a` で landed 変更が消える経路・N1）。判定行に `anchor=synced`。
+#[test]
+fn pipe_land_anchor_syncs_index_and_working_tree_to_new_main() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let marker = state.join("lens-ran");
+    let id = gated_pass(&repo, &state, &path, &marker);
+    assert_eq!(git(&repo, &["status", "--porcelain", "--untracked-files=no"]).trim(), "", "land の前の anchor は clean");
+    let out = land_once(&repo, &state, &id);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "land は rc 0: {}", stderr_of(&out));
+    let new = git(&repo, &["rev-parse", "refs/heads/main"]);
+    assert!(stdout_of(&out).contains(&format!("landed={new} anchor=synced")), "判定行に anchor=synced: {}", stdout_of(&out));
+    assert_eq!(git(&repo, &["rev-parse", "HEAD"]), new, "anchor の HEAD は新 main");
+    assert_eq!(
+        git(&repo, &["status", "--porcelain", "--untracked-files=no"]).trim(),
+        "",
+        "index と working tree が新 main に揃う（M が残らない）"
+    );
+    let lib = fs::read_to_string(repo.join("src").join("lib.rs")).unwrap_or_default();
+    assert!(lib.lines().any(|line| line == "x"), "landed 変更が anchor の working tree に在る: {lib:?}");
+    clean(&[&repo, &state]);
+}
+
+/// anchor に**未 commit の変更**が在る周は触らない（成果を消さない・fail-closed）: main の ref は進めるが
+/// index / working tree は揃えず、判定行に `anchor=skipped:dirty` と stderr の warning 1 行。局所の変更は
+/// そのまま残る。
+#[test]
+fn pipe_land_anchor_skips_dirty_anchor_and_keeps_local_change() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let marker = state.join("lens-ran");
+    let id = gated_pass(&repo, &state, &path, &marker);
+    // 便の変更と同じ file に、commit していない局所の変更を置く（揃えると消える形）。
+    fs::write(repo.join("src").join("lib.rs"), "// local uncommitted\n").expect("局所の変更を置ける");
+    let out = land_once(&repo, &state, &id);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "land 自体は成立（rc 0）: {}", stderr_of(&out));
+    let new = git(&repo, &["rev-parse", "refs/heads/main"]);
+    assert!(stdout_of(&out).contains(&format!("landed={new} anchor=skipped:dirty")), "{}", stdout_of(&out));
+    assert!(stderr_of(&out).contains("anchor"), "warning の 1 行を stderr に出す: {}", stderr_of(&out));
+    assert_eq!(
+        fs::read_to_string(repo.join("src").join("lib.rs")).unwrap_or_default(),
+        "// local uncommitted\n",
+        "未 commit の変更を消さない"
+    );
+    clean(&[&repo, &state]);
+}
+
+/// anchor の HEAD が main を指さない周（別 branch・detached）は触らない: `anchor=skipped:not-main`。
+/// 他 branch の HEAD と working tree は不変。
+#[test]
+fn pipe_land_anchor_skips_when_head_is_not_main() {
+    for (label, args) in [("other-branch", vec!["checkout", "-q", "-b", "other"]), ("detached", vec!["checkout", "-q", "--detach"])] {
+        let (repo, state) = repo_with_state();
+        let path = write_contract(&repo, &[], &[]);
+        let marker = state.join("lens-ran");
+        let id = gated_pass(&repo, &state, &path, &marker);
+        let before = git(&repo, &["rev-parse", "HEAD"]);
+        git(&repo, &args);
+        let out = land_once(&repo, &state, &id);
+        assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{label}: land は rc 0: {}", stderr_of(&out));
+        let new = git(&repo, &["rev-parse", "refs/heads/main"]);
+        assert_ne!(new, before, "{label}: main は進む");
+        assert!(stdout_of(&out).contains(&format!("landed={new} anchor=skipped:not-main")), "{label}: {}", stdout_of(&out));
+        assert_eq!(git(&repo, &["rev-parse", "HEAD"]), before, "{label}: anchor の HEAD は動かない");
+        assert_eq!(git(&repo, &["status", "--porcelain", "--untracked-files=no"]).trim(), "", "{label}: working tree は不変で clean");
+        clean(&[&repo, &state]);
+    }
+}
+
+/// main の実測が**赤**でも ref は進んでいるので anchor は揃える（揃えないと failure exit で `.117` の
+/// 経路が開く・lens-120 H1）。rc 1 のまま stderr に `anchor=synced` を足し、anchor は clean・HEAD == 新 main。
+#[test]
+fn pipe_land_anchor_syncs_even_when_main_verify_is_red() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &["verify"], &[r#"verify = ["sh verify-once.sh"]"#]);
+    let marker = state.join("lens-ran");
+    let id = gated_pass(&repo, &state, &path, &marker);
+    let out = land_once(&repo, &state, &id);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "main が赤ければ rc 1");
+    assert!(stderr_of(&out).contains("main が赤い"), "理由: {}", stderr_of(&out));
+    assert!(stderr_of(&out).contains("pipe: anchor=synced"), "赤でも anchor は揃える（token を stderr に）: {}", stderr_of(&out));
+    let new = git(&repo, &["rev-parse", "refs/heads/main"]);
+    assert_eq!(git(&repo, &["rev-parse", "HEAD"]), new, "anchor の HEAD は新 main");
+    assert_eq!(git(&repo, &["status", "--porcelain", "--untracked-files=no"]).trim(), "", "赤でも staged の逆向きを残さない");
+    clean(&[&repo, &state]);
+}
+
+/// landed tree が**足す** path が anchor に untracked（ここでは **ignored**）で在る周は触らない: `read-tree -m -u` は
+/// ignored な file を黙って上書きする（実測・lens-120 M1）ので、足す path の衝突を先に見て
+/// `anchor=skipped:collision`。局所の file は不変・main は進む。
+#[test]
+fn pipe_land_anchor_skips_when_landed_tree_adds_a_path_that_exists_ignored_in_anchor() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(
+        &repo,
+        &["write-set"],
+        &[r#"write-set = ["src/lib.rs", "src/new.rs"]"#],
+    );
+    let marker = state.join("lens-ran");
+    let id = intake(&repo, &state, &path);
+    let out = run_pipe(&[
+        "spawn", "--run", &id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(),
+        "--runner", "echo n > src/new.rs && echo x >> src/lib.rs && git add -A && git commit -q -m runner",
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "spawn は rc 0: {}", stderr_of(&out));
+    let lens = fake_lens(&marker, &lens_verdict("PASS"));
+    let out = gate_once(&repo, &state, &id, Some(&lens));
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "PASS の gate は rc 0: {}", stderr_of(&out));
+    // anchor に ignored な同名 file を置く（`.gitignore` は untracked でも効く・tracked 変更ではない）。
+    fs::write(repo.join(".gitignore"), "src/new.rs\n").expect(".gitignore を置ける");
+    fs::write(repo.join("src").join("new.rs"), "// local ignored\n").expect("ignored な file を置ける");
+    assert_eq!(git(&repo, &["status", "--porcelain", "--untracked-files=no"]).trim(), "", "tracked 変更は無い");
+
+    let out = land_once(&repo, &state, &id);
+
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "land は rc 0: {}", stderr_of(&out));
+    assert!(stdout_of(&out).contains(" anchor=skipped:collision"), "{}", stdout_of(&out));
+    assert!(stderr_of(&out).contains("collision"), "warning: {}", stderr_of(&out));
+    assert_eq!(
+        fs::read_to_string(repo.join("src").join("new.rs")).unwrap_or_default(),
+        "// local ignored\n",
+        "ignored な file を上書きしない"
+    );
+    assert_eq!(
+        fs::read_to_string(repo.join("src").join("lib.rs")).unwrap_or_default(),
+        "// seed\n",
+        "衝突の周は 1 file も触らない（lib.rs も旧のまま）"
+    );
+    clean(&[&repo, &state]);
+}
+
+/// anchor の状態を**読めない**周（index が壊れている＝`git status` が fatal）は clean に読み替えず
+/// `anchor=skipped:unreadable`（fail-closed・lens-120 M3）。main は進む。
+#[test]
+fn pipe_land_anchor_skips_when_status_is_unreadable() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let marker = state.join("lens-ran");
+    let id = gated_pass(&repo, &state, &path, &marker);
+    let base = git(&repo, &["rev-parse", "refs/heads/main"]);
+    fs::write(repo.join(".git").join("index"), b"garbage").expect("index を壊せる");
+    let out = land_once(&repo, &state, &id);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "land は rc 0: {}", stderr_of(&out));
+    assert!(stdout_of(&out).contains(" anchor=skipped:unreadable"), "{}", stdout_of(&out));
+    assert!(stderr_of(&out).contains("unreadable"), "warning: {}", stderr_of(&out));
+    assert_ne!(git(&repo, &["rev-parse", "refs/heads/main"]), base, "main は進む");
+    assert_eq!(
+        fs::read_to_string(repo.join("src").join("lib.rs")).unwrap_or_default(),
+        "// seed\n",
+        "読めない周は working tree に触らない"
+    );
+    clean(&[&repo, &state]);
+}
+
+/// 見立ては Sync でも git が**途中で**断った周（`index.lock` が在る）は `anchor=skipped:sync-failed` で、
+/// warning は「部分的に更新されている可能性」を名指す（状態を「旧のまま」と断定しない・lens-120 M2 / M3）。
+#[test]
+fn pipe_land_anchor_reports_sync_failed_when_git_refuses_midway() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let marker = state.join("lens-ran");
+    let id = gated_pass(&repo, &state, &path, &marker);
+    fs::write(repo.join(".git").join("index.lock"), b"").expect("index.lock を置ける");
+    let out = land_once(&repo, &state, &id);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "land は rc 0: {}", stderr_of(&out));
+    assert!(stdout_of(&out).contains(" anchor=skipped:sync-failed"), "{}", stdout_of(&out));
+    assert!(stderr_of(&out).contains("部分的に更新されている可能性"), "warning は状態を断定しない: {}", stderr_of(&out));
+    fs::remove_file(repo.join(".git").join("index.lock")).ok();
+    clean(&[&repo, &state]);
+}
