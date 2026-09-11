@@ -23,7 +23,7 @@ const ID_TTL: &str = "seat.cycle_lock_ttl_s";
 const CLEAR: &str = "/clear";
 /// 復元の既定 command。
 pub const DEFAULT_RESTORE: &str = "/rebrief";
-/// 作り直しを待つ上限。
+/// 作り直しを待つ上限。復元の送達確認（[`send_restore`]）も同じ上限で見る。
 const CLEAR_WAIT: Duration = Duration::from_secs(30);
 /// 作り直しを見に行く周期。
 const CLEAR_STEP: Duration = Duration::from_millis(500);
@@ -283,21 +283,30 @@ fn is_consumed_echo(line: &str) -> bool {
 
 /// 復元 command を **便 2 の inject 経路**で送る（送達確認まで込み）。
 ///
-/// 成功と数えるのは **席がその場で消費した**（[`inject::Settled::Consumed`]）周だけ。`/clear` の
-/// 直後の席には走っている turn が無いので、そこで入力欄に残った復元は「turn の終わりに消費
+/// 成功と数えるのは **席が消費した**（[`inject::Settled::Consumed`]）周だけ。`/clear` の
+/// 直後の席には走っている turn が無いので、上限まで入力欄に残った復元は「turn の終わりに消費
 /// される queue」ではなく submit されなかった打鍵で、会話を捨てた（不可逆）のに復元が刺さらない
 /// 席を `done` と数えることになる（lens-90 HIGH-2）。旧来の「現れた ∧ 入力欄が空」と同じ意味。
+///
+/// **窓は作り直しの確認と同じ上限**（[`CLEAR_WAIT`]・bd `s2-07l.97`）: 作り直し直後の席は
+/// SessionStart hook の間（数秒〜十数秒）復元を入力欄に queue したまま turn を始めないので、
+/// inject の既定 2 s では**復元が正しく届く周ほど** `Queued` に落ちて `restore-unconfirmed` に
+/// なった（実測 2026-09-11 `.96` A/B・記録が真の値と食い違う＝C10）。席が queue を消費して
+/// 入力欄が空になるまで見続ける。上限の後も残っていれば従来どおり失敗（弁別は不変）。
 fn send_restore(request: &Request) -> bool {
     let Some(state) = request.state_dir.to_str() else {
         return false;
     };
     let payload = request.restore.unwrap_or(DEFAULT_RESTORE);
-    let sent = inject::deliver(&inject::Request {
-        target: request.target,
-        socket: request.socket,
-        payload,
-        state_dir: Some(state),
-    });
+    let sent = inject::deliver_within(
+        &inject::Request {
+            target: request.target,
+            socket: request.socket,
+            payload,
+            state_dir: Some(state),
+        },
+        CLEAR_WAIT,
+    );
     matches!(sent, inject::Delivery::Delivered(_, inject::Settled::Consumed))
 }
 

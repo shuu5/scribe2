@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 
 /// settle の 1 回あたりの待ち。
 const SETTLE_STEP: Duration = Duration::from_millis(200);
-/// settle の最大回数。
+/// settle の最大回数（既定の窓 = 2 s）。呼び側が窓を渡す口は [`deliver_within`]。
 const SETTLE_TRIES: u32 = 10;
 /// 記録に載せる payload の先頭 byte 数。
 const WHAT_CAP: usize = 80;
@@ -89,8 +89,19 @@ pub enum Delivery {
     Unconfirmed(&'static str),
 }
 
-/// 注入を 1 回行う。
+/// 注入を 1 回行う（settle の窓は既定の 2 s）。
 pub fn deliver(request: &Request) -> Delivery {
+    deliver_within(request, SETTLE_STEP.saturating_mul(SETTLE_TRIES))
+}
+
+/// 注入を 1 回行い、settle を `window` まで見続ける。
+///
+/// 成功の形は [`deliver`] と同じ（目印が現れた ∧ 入力欄が空 = `Consumed`・窓の終わりに残って
+/// いれば `Queued`）で、変わるのは**窓の長さだけ**。作り直し直後の席は SessionStart hook の間
+/// （数秒〜十数秒）注入を入力欄に queue したまま turn を始めないので、2 s の窓では復元が正しく
+/// 届く周ほど `Queued` に落ちる（bd `s2-07l.97`）。cycle は作り直しの確認と同じ上限を渡す。
+/// 新しい閾値は足さない（呼び側の既存の上限を再利用する＝rules 行と C5 裁定は要らない）。
+pub fn deliver_within(request: &Request, window: Duration) -> Delivery {
     let started = Instant::now();
     let Some(pane) = capture(request.socket, request.target) else {
         return Delivery::Unconfirmed(REASON_TMUX_FAILED);
@@ -109,7 +120,7 @@ pub fn deliver(request: &Request) -> Delivery {
     if !send(request) {
         return Delivery::Unconfirmed(REASON_TMUX_FAILED);
     }
-    match settle(request, marker, before) {
+    match settle(request, marker, before, tries_within(window)) {
         Ok(settled) => {
             let bytes = request.payload.len() as u64;
             record(request, bytes, started);
@@ -147,10 +158,15 @@ fn marker_of(payload: &str) -> Option<&str> {
 /// 総数は増えない）が `absent` へ倒れうること（fail-closed 側の誤り・tick では重複注入になる。
 /// 周ごとに一意な目印にする案は「注入の内容を変えない」の契約外＝lens-90 再確認 NEW-2）。
 /// `consumed` は**窓の終わりの状態**で決める（途中の周で入力欄を読めなかったかは持たない）。
-fn settle(request: &Request, marker: &str, before: usize) -> Result<Settled, &'static str> {
+fn settle(
+    request: &Request,
+    marker: &str,
+    before: usize,
+    tries: u32,
+) -> Result<Settled, &'static str> {
     let mut seen = false;
     let mut input_known = false;
-    for _ in 0..SETTLE_TRIES {
+    for _ in 0..tries {
         sleep(SETTLE_STEP);
         let Some(pane) = capture(request.socket, request.target) else {
             return Err(REASON_TMUX_FAILED);
@@ -168,6 +184,15 @@ fn settle(request: &Request, marker: &str, before: usize) -> Result<Settled, &'s
         (true, true) => Ok(Settled::Queued),
         (true, false) => Ok(Settled::UnknownInput),
     }
+}
+
+/// 窓を settle の回数へ写す（[`SETTLE_STEP`] 刻み・**1 回は必ず見る**・既定の窓なら
+/// [`SETTLE_TRIES`] と同じ値）。
+fn tries_within(window: Duration) -> u32 {
+    let step = SETTLE_STEP.as_millis().max(1);
+    u32::try_from(window.as_millis() / step)
+        .unwrap_or(u32::MAX)
+        .max(1)
 }
 
 /// 記録の置き場。`--state-dir` が上書きし、無ければ repo の git 設定から読む（hook と同じ解決）。
