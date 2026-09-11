@@ -47,6 +47,12 @@ const VERDICTS_FILE: &str = "verdicts.jsonl";
 /// land 済み worktree を寄せる dir 名。
 const RETIRED_DIR: &str = "retired";
 
+/// 追随の rebase で便の commit が 0 本になった周の終端の理由（`Failed` の `detail`）。
+///
+/// **書き手（[`rebase_onto`]）と読み手（`pipe retire` の入口）で字面を 2 度書かない**——
+/// 片方だけを直すと、畳める便の集合が静かにずれる。
+pub(crate) const REBASE_EMPTY: &str = "rebase-empty";
+
 /// anchor を揃えない理由（判定行 `anchor=skipped:<reason>`・**閉じた enum**・憲法 C11）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AnchorSkip {
@@ -118,6 +124,9 @@ pub struct Retire<'a> {
     pub repo: &'a Path,
     /// 置き場。
     pub state_dir: &'a Path,
+    /// **その便の現在の終端の段**（`Landed` か `Failed`・呼び手が replay から解いたもの）。
+    /// 畳んだ事実を残す event はこの段のままで、retire は段を 1 つも動かさない（`s2-07l.128`）。
+    pub stage: Stage,
     /// lock の待ち方。
     pub policy: LockPolicy,
 }
@@ -420,7 +429,7 @@ fn rebase_onto(entry: &Land<'_>, worktree: &Path, base: &str, main: &str) -> Res
     if commits_after_rebase(worktree, main) == Some(0) {
         return Err(follow_failed(
             entry,
-            "rebase-empty",
+            REBASE_EMPTY,
             format!(
                 "run {} の変更は既に main に在る（rebase で commit が空・base={base} main={main}）・main は動かさない",
                 entry.run
@@ -727,6 +736,11 @@ impl WorktreeCheck {
 /// stderr 1 行で終わる）を後追いで畳む口にもなるので、見るのは永続面の事実——worktree が
 /// 在るか・clean か——だけである。**merge 済みかは人が確かめる**（forge へ問い合わせない）。
 ///
+/// **段を動かさない**（`s2-07l.128`）。畳める便は `Landed` と `Failed detail=rebase-empty`
+/// （変更が既に main に在る＝close してよい便）の 2 通りで、どちらの周も残す event の段は
+/// [`Retire::stage`] のまま＝`Landed` に決め打ちしない。畳む動作そのものは 1 本で、
+/// 段の弁別は入口（`pipe::cli`）が持つ。
+///
 /// 前提違反は **rc 1 + stderr 1 行で何も書かない**（設計 §4 の一般則）。move の失敗だけは
 /// 「対象そのものが壊れている」ので rc 2 で、どちらの周も event を 1 件も残さない。
 pub fn retire(entry: &Retire<'_>) -> Outcome {
@@ -750,8 +764,8 @@ pub fn retire(entry: &Retire<'_>) -> Outcome {
             kind: EventKind::RunStage,
             run: entry.run,
             bead: entry.bead,
-            // **段は Landed のまま**（終端を動かさない）。畳んだことは detail で残す。
-            stage: Some(Stage::Landed),
+            // **段は入口が解いた終端のまま**（終端を動かさない）。畳んだことは detail で残す。
+            stage: Some(entry.stage),
             seat: None,
             pid: None,
             detail: Some("retired".to_owned()),
@@ -766,6 +780,23 @@ pub fn retire(entry: &Retire<'_>) -> Outcome {
             retired_path(entry.repo, entry.run).display()
         )),
     }
+}
+
+/// 便の**最後の `RunStage`** が名乗った `detail`（物理順で最後の 1 件）。読めない周は `None`。
+///
+/// 終端の理由（`rebase-empty` / `rebase-conflict` / `main-red` / …）は `Failed` が同じ段の
+/// 中で分かれる面ゆえ、段だけでは弁別できない。replay の `Run::detail` は「最後に見た
+/// **自由文**」なので使えない——retire 自身が書く `detail=retired` や、段を持たない event の
+/// 自由文が後から被さって理由が消える。読むのは追記だけの log の原本である
+/// （[`super::base_of_run`] と同じ理由）。
+pub(crate) fn last_stage_detail(state_dir: &Path, id: &str) -> Option<String> {
+    let events = store::read_all(state_dir).ok()?;
+    events
+        .iter()
+        .rev()
+        .find(|event| event.run == id && event.kind == EventKind::RunStage)?
+        .detail
+        .clone()
 }
 
 /// `verdict.json` から 3 値を読む。読めない周は `None`（＝PASS ではない）。

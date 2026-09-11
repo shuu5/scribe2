@@ -3776,6 +3776,98 @@ fn pipe_retire_refuses_unless_landed_and_clean() {
     clean(&[&dirty_repo, &dirty_state]);
 }
 
+/// 同一変更の 2 便: 2 本目が `Failed detail=rebase-empty` で終端した後、その worktree を
+/// `pipe retire` が畳む（`s2-07l.128`）。成果は既に main に在り**入れ物だけが残る**形は
+/// `--pr-cmd` 形の `Landed` と同じで、畳み方も同じ 1 本（move・branch は残す・main 不変）。
+/// 残す event の段は **`Failed` のまま**＝retire は終端を動かさない。
+#[test]
+fn pipe_retire_rebase_empty_folds_failed_run_and_keeps_stage() {
+    let (repo, state) = repo_with_state();
+    let marker = state.join("lens-ran");
+    let (id_a, id_b) = two_identical_gated_runs(&repo, &state, &marker);
+    let first = land_once(&repo, &state, &id_a);
+    assert_eq!(first.status.code(), Some(i32::from(RC_OK)), "1 本目の land: {}", stderr_of(&first));
+    let landed = git(&repo, &["rev-parse", "refs/heads/main"]);
+    let lens = fake_lens(&marker, &lens_verdict("PASS"));
+    let empty = run_pipe(&[
+        "land", "--run", &id_b, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(), "--lens", &lens,
+    ]);
+    assert_eq!(
+        empty.status.code(),
+        Some(i32::from(RC_REFUSED)),
+        "2 本目は rebase-empty で終端する: {}",
+        stderr_of(&empty)
+    );
+    assert!(show_line(&repo, &state, &id_b).contains("stage=Failed"), "終端の段は Failed");
+    let live = worktree_of(&repo, &id_b);
+    assert!(live.exists(), "終端した便の worktree は残る（retire の入口の前提）");
+
+    let out = retire_once(&repo, &state, &id_b);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "rebase-empty の便も畳める: {}", stderr_of(&out));
+    let retired = repo.join(".worktrees").join("scribe2").join("retired").join(&id_b);
+    assert!(
+        stdout_of(&out).contains(&format!("retired={}", retired.display())),
+        "畳んだ先を名乗る: {}",
+        stdout_of(&out)
+    );
+    assert!(retired.join("src").join("lib.rs").exists(), "中身ごと運ぶ（消さない）");
+    assert!(!live.exists(), "元の場所が空く");
+    let branches = git(&repo, &["branch", "--list", &format!("scribe2/{id_b}")]);
+    assert!(!branches.trim().is_empty(), "branch は消さない: {branches}");
+    assert_eq!(git(&repo, &["rev-parse", "refs/heads/main"]), landed, "main は 1 byte も動かない");
+    let log = fs::read_to_string(state.join("fleet").join("events.jsonl")).expect("event log");
+    let last = log.lines().rfind(|line| !line.is_empty()).unwrap_or_default();
+    assert!(
+        last.contains("\"stage\":\"Failed\"") && last.contains("\"detail\":\"retired\""),
+        "最終行は Failed detail=retired（段を Landed へ動かさない）: {last}"
+    );
+    assert!(show_line(&repo, &state, &id_b).contains("stage=Failed"), "畳んだ後も段は Failed");
+    clean(&[&repo, &state]);
+}
+
+/// 負例: `Failed` でも理由が `rebase-empty` でない便（`rebase-conflict`）は畳まない
+/// （rc 1・worktree 不動・event 0 増）。衝突した木は `--abort` で clean へ戻っているので、
+/// この rc 1 は **clean 検査ではなく終端の理由**を見ている（「断ってから解いて通す」形は
+/// 上の歯が担保する）。
+#[test]
+fn pipe_retire_rebase_empty_refuses_other_failed_reasons() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let marker = state.join("lens-ran");
+    let id = gated_pass(&repo, &state, &path, &marker);
+    // 別便が **同じ file の同じ末尾** へ別の行を足す（runner は `echo x >> src/lib.rs`）。
+    let lib = repo.join("src").join("lib.rs");
+    let mut text = fs::read_to_string(&lib).expect("seed を読める");
+    text.push_str("y\n");
+    fs::write(&lib, text).expect("別便の変更を書ける");
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "other"]);
+    let lens = fake_lens(&marker, &lens_verdict("PASS"));
+    let conflicted = run_pipe(&[
+        "land", "--run", &id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(), "--lens", &lens,
+    ]);
+    assert_eq!(conflicted.status.code(), Some(i32::from(RC_REFUSED)), "衝突は rc 1");
+    assert!(show_line(&repo, &state, &id).contains("stage=Failed"), "終端の段は Failed");
+    let live = worktree_of(&repo, &id);
+    assert!(git(&live, &["status", "--porcelain"]).is_empty(), "木は clean へ戻っている");
+
+    let before = event_count(&state);
+    let out = retire_once(&repo, &state, &id);
+    assert_eq!(
+        out.status.code(),
+        Some(i32::from(RC_REFUSED)),
+        "rebase-conflict の便は畳まない: {}",
+        stdout_of(&out)
+    );
+    assert!(live.exists(), "断った周は worktree を動かさない");
+    let retired = repo.join(".worktrees").join("scribe2").join("retired").join(&id);
+    assert!(!retired.exists(), "retired/<run> を作らない");
+    assert_eq!(event_count(&state), before, "event を 1 件も書かない");
+    clean(&[&repo, &state]);
+}
+
 #[test]
 fn pipe_report_counts_landed_runs_not_landed_events() {
     let (repo, state) = repo_with_state();
