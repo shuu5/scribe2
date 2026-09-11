@@ -18,15 +18,21 @@
 //! 揃えるのは HEAD が main を指し tracked な未 commit の変更が無く、landed tree が足す path が anchor に
 //! 無い周だけ（[`AnchorPlan`]・fail-closed）。**main の実測が赤 / 測れない周も揃える**（ref は既に
 //! 進んでいる＝揃えないと同じ経路が failure exit で開く・lens-120 H1）。
+//!
+//! **main が動いた便は追随する**（`s2-07l.119`・FR30）。記録した base が main の祖先のまま
+//! 置き去りになった周は、worktree の branch を main へ rebase し（効くのは branch だけ・
+//! main は 1 byte も動かさない・force 系は使わない）、段を `Implemented` へ戻して gate を
+//! **同じ関数で**撃ち直し、PASS なら新しい base で CAS する。衝突は木を戻して
+//! `Failed detail=rebase-conflict`（終端・fail-closed）。
 
 use crate::polarity::{OnFailure, Polarity, Timing};
 use super::contract::Contract;
 use super::declaration::Effective;
-use super::gate::{is_unreadable, run_checks, Checks, Verdict};
+use super::gate::{gate, is_unreadable, run_checks, Checks, Gate, Limits, Verdict};
 use super::{
     emit, git_bytes, git_line, git_ok, verdict_path, worktree_path, worktrees_dir, Emit,
 };
-use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
+use crate::cli_outcome::{Outcome, RC_BROKEN, RC_OK, RC_REFUSED};
 use crate::fleet::json_lite::{self, Value};
 use crate::fleet::store::{self, append_line, LockPolicy};
 use crate::fleet::{cli::now_utc, EventKind, Stage, SCHEMA};
@@ -130,8 +136,21 @@ pub struct Land<'a> {
     pub contract: &'a Contract,
     /// PR を作る seam（`--pr-cmd`）。`None` なら squash して main を進める。
     pub pr_cmd: Option<&'a str>,
+    /// main が動いた便の追随で gate を撃ち直す周の lens（`--lens`・無ければ `None`＝
+    /// 撃ち直しは INCONCLUSIVE へ倒れ land しない）。
+    pub lens: Option<&'a str>,
+    /// 規則から読んだ線（撃ち直しの gate へ渡す・land 自身は数値を見ない）。
+    pub limits: Limits,
     /// lock の待ち方。
     pub policy: LockPolicy,
+}
+
+/// main が動いた便の追随の結果（設計 §5.4）。
+enum Follow {
+    /// rebase と gate の撃ち直しを通した。stdout に載せる行（`rebase=` と撃ち直しの判定行）。
+    Ready(Vec<String>),
+    /// 追随できなかった・撃ち直しが PASS でない。呼び手はこの Outcome をそのまま返す。
+    Stopped(Outcome),
 }
 
 /// 面 5 の export 先。
@@ -166,9 +185,27 @@ pub fn land(entry: &Land<'_>) -> Outcome {
     let Some(old) = git_line(entry.repo, &["rev-parse", MAIN_REF]) else {
         return refused(format!("{MAIN_REF} を読めない"));
     };
+    let mut lines = Vec::new();
     if old != base {
-        // **CAS の old が動いている**。ここで進めると別便の land を巻き込む。
-        return refused(format!("stale base（base={base} main={old}）"));
+        // **CAS の old が動いている**。base が main の祖先なら追随する（rebase → gate の
+        // 撃ち直し・設計 §5.4）。追随の形が無い周はここで断る（何も書かない）。
+        match follow_main(entry, &worktree, &base, &old) {
+            Follow::Stopped(outcome) => return outcome,
+            Follow::Ready(followed) => lines = followed,
+        }
+    }
+    // 撃ち直しの間に main がさらに動いた周は断る。次の land が同じ経路で追随する＝
+    // 1 回の land が rebase するのは 1 度だけで、event 列が追随の回数をそのまま語る。
+    // どちらの断りも **追随と撃ち直しの判定行は捨てない**（起きたことは event に残り lens も
+    // 消費している＝stdout だけが空だと読み手が「何もしなかった」と誤読する）。
+    let Some(now) = git_line(entry.repo, &["rev-parse", MAIN_REF]) else {
+        return with_lines(lines, refused(format!("{MAIN_REF} を読めない")));
+    };
+    if now != old {
+        return with_lines(
+            lines,
+            refused(format!("stale base（base={old} main={now}・撃ち直しの間に main が動いた）")),
+        );
     }
     // anchor の見立ては **ref を進める前**に読む: 進めた後の `git status` は index の遅れを
     // 「変更」として出すので、人の未 commit と区別できない。
@@ -181,11 +218,12 @@ pub fn land(entry: &Land<'_>) -> Outcome {
     // **実測の結果に依らず揃える**: ref は既に進んでいるので、赤 / 測れない周に揃えないと
     // anchor が staged の逆向きのまま残り、人が触る failure exit でこそ `.117` の経路が開く。
     let anchor = sync_anchor(entry.repo, &plan, &old, &new);
-    match check {
+    let outcome = match check {
         MainCheck::Green => finish(entry, &worktree, &new, &anchor),
         MainCheck::Red(reason) => main_red(entry, &reason, &anchor),
         MainCheck::Unmeasurable(reason) => main_unmeasured(entry, &reason, &anchor),
-    }
+    };
+    with_lines(lines, outcome)
 }
 
 /// anchor（`--repo` の checkout）を land の後に新 main へ揃えるかの見立て（`s2-07l.120`）。
@@ -280,6 +318,104 @@ fn sync_anchor(repo: &Path, plan: &AnchorPlan, old: &str, new: &str) -> AnchorSy
         AnchorPlan::Sync if anchor_has_collision(repo, old, new) => AnchorSync::Skipped(AnchorSkip::Collision),
         AnchorPlan::Sync if git_ok(repo, &["read-tree", "-m", "-u", old, new]) => AnchorSync::Synced,
         AnchorPlan::Sync => AnchorSync::Skipped(AnchorSkip::SyncFailed),
+    }
+}
+
+/// 追随の行（`rebase=` と撃ち直しの判定行）を Outcome の stdout に前置する。
+fn with_lines(mut lines: Vec<String>, mut outcome: Outcome) -> Outcome {
+    lines.append(&mut outcome.out);
+    outcome.out = lines;
+    outcome
+}
+
+/// 便の base が main の祖先なら worktree の branch を main へ rebase し、gate を**同じ関数で**
+/// 撃ち直す（設計 §5.4・`s2-07l.119`）。**main は 1 byte も動かさない**——rebase が効くのは
+/// worktree の branch だけで、force 系は使わない（N1）。
+///
+/// - 祖先でない（main が巻き戻った / 分岐した）周は追随の形が無いので rc 1 で何もしない。
+/// - worktree が clean でない周も rc 1 で何もしない（汚れた木では rebase を走らせない）。
+/// - 衝突は `git rebase --abort` で木を戻し `Failed detail=rebase-conflict`（終端・fail-closed）。
+/// - 追随した事実は `RunStage stage=Implemented detail=rebase:<old>..<new>` で残す（段が
+///   `Gated` から `Implemented` へ戻る 1 件＝撃ち直す便の記帳）。base の読み手
+///   （[`super::base_of_run`]）はこの行から新しい base を読む。
+/// - 撃ち直しが PASS でない周は gate の判定行と rc で止まる（FAIL は `Gated` のまま
+///   land しない・INCONCLUSIVE は測り直せる側）。
+fn follow_main(entry: &Land<'_>, worktree: &Path, base: &str, main: &str) -> Follow {
+    if !git_ok(entry.repo, &["merge-base", "--is-ancestor", base, main]) {
+        return Follow::Stopped(refused(format!(
+            "stale base（base={base} main={main}・base は main の祖先でない）"
+        )));
+    }
+    if !is_clean(worktree) {
+        return Follow::Stopped(refused(format!(
+            "run {} の worktree が clean でない（rebase しない）",
+            entry.run
+        )));
+    }
+    if !git_ok(worktree, &["rebase", main]) {
+        // 木を衝突前へ戻す。戻せない周も main には触れていない（壊れているのは worktree）が、
+        // その事実は捨てない（段は Failed で retire も通らないので、読み手に届く口は stderr だけ）。
+        let restored = git_ok(worktree, &["rebase", "--abort"]);
+        let mut stopped = rebase_conflict(entry, base, main);
+        if !restored {
+            stopped
+                .err
+                .push(format!("pipe: {} は rebase の途中のまま（--abort も失敗）", worktree.display()));
+        }
+        return Follow::Stopped(stopped);
+    }
+    let rebased = emit(
+        entry.state_dir,
+        &Emit {
+            kind: EventKind::RunStage,
+            run: entry.run,
+            bead: entry.bead,
+            stage: Some(Stage::Implemented),
+            seat: None,
+            pid: None,
+            detail: Some(format!("rebase:{base}..{main}")),
+        },
+        entry.policy,
+    );
+    if let Err(err) = rebased {
+        return Follow::Stopped(broken(err.to_string()));
+    }
+    let mut lines = vec![format!("run={} rebase={base}..{main}", entry.run)];
+    let regated = gate(&Gate {
+        run: entry.run,
+        bead: entry.bead,
+        repo: entry.repo,
+        state_dir: entry.state_dir,
+        contract: entry.contract,
+        lens: entry.lens,
+        limits: entry.limits,
+        policy: entry.policy,
+    });
+    lines.extend(regated.out);
+    if regated.rc != RC_OK {
+        return Follow::Stopped(Outcome { out: lines, err: regated.err, rc: regated.rc });
+    }
+    Follow::Ready(lines)
+}
+
+/// rebase が衝突した周。木は戻してあり、便は終端する（**main は動いていない**）。
+fn rebase_conflict(entry: &Land<'_>, base: &str, main: &str) -> Outcome {
+    let emitted = emit(
+        entry.state_dir,
+        &Emit {
+            kind: EventKind::RunStage,
+            run: entry.run,
+            bead: entry.bead,
+            stage: Some(Stage::Failed),
+            seat: None,
+            pid: None,
+            detail: Some("rebase-conflict".to_owned()),
+        },
+        entry.policy,
+    );
+    match emitted {
+        Err(err) => broken(err.to_string()),
+        Ok(()) => refused(format!("rebase が衝突した（base={base} main={main}）・main は動かさない")),
     }
 }
 
@@ -451,8 +587,9 @@ fn finish(entry: &Land<'_>, worktree: &Path, new: &str, anchor: &AnchorSync) -> 
     err.extend(anchor.warning());
     Outcome {
         out: vec![format!("run={} landed={new} {}", entry.run, anchor.token())],
+        // 後始末の失敗は land を取り消さない（**rc 0 のまま stderr**）。
         err,
-        rc: crate::cli_outcome::RC_OK,
+        rc: RC_OK,
     }
 }
 
