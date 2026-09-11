@@ -3168,6 +3168,119 @@ fn pipe_land_pr_cmd_refuses_empty_or_missing_value() {
     clean(&[&repo, &state]);
 }
 
+/// Gated の便を `--pr-cmd` 形で land する（main は動かず worktree も残る）。
+fn land_pr(repo: &Path, state: &Path, id: &str) {
+    let sent = state.join("pr-args");
+    let out = run_pipe(&[
+        "land", "--run", id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(),
+        "--pr-cmd", &format!("printf '%s' {{branch}} > '{}'", sent.display()),
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "PR 形の land は rc 0: {}", stderr_of(&out));
+}
+
+/// `--pr-cmd` 形で land した便の id。
+fn landed_pr(repo: &Path, state: &Path, contract: &Path, marker: &Path) -> String {
+    let id = gated_pass(repo, state, contract, marker);
+    land_pr(repo, state, &id);
+    id
+}
+
+/// retire を 1 回撃つ。
+fn retire_once(repo: &Path, state: &Path, id: &str) -> Output {
+    run_pipe(&[
+        "retire", "--run", id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(),
+    ])
+}
+
+#[test]
+fn pipe_retire_moves_pr_landed_worktree_and_keeps_branch() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let marker = state.join("lens-ran");
+    let id = landed_pr(&repo, &state, &path, &marker);
+    let live = worktree_of(&repo, &id);
+    // `--pr-cmd` 形は worktree を畳まない（merge は人が押す）＝retire の入口の前提である。
+    assert!(live.exists(), "PR 形の land の後も便の worktree は在る");
+
+    let out = retire_once(&repo, &state, &id);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "retire は rc 0: {}", stderr_of(&out));
+    let retired = repo.join(".worktrees").join("scribe2").join("retired").join(&id);
+    assert!(
+        stdout_of(&out).contains(&format!("retired={}", retired.display())),
+        "畳んだ先を名乗る: {}",
+        stdout_of(&out)
+    );
+    // **削除しない**（N1.2）: 中身が move で運ばれている。
+    assert!(retired.join("src").join("lib.rs").exists(), "中身ごと運ぶ（消さない）");
+    assert!(!live.exists(), "元の場所には残らない");
+    let branches = git(&repo, &["branch", "--list", &format!("scribe2/{id}")]);
+    assert!(!branches.trim().is_empty(), "branch は消さない: {branches}");
+    let log = fs::read_to_string(state.join("fleet").join("events.jsonl")).expect("event log");
+    let last = log.lines().rfind(|line| !line.is_empty()).unwrap_or_default();
+    assert!(
+        last.contains("\"stage\":\"Landed\"") && last.contains("\"detail\":\"retired\""),
+        "最終行は Landed detail=retired（段は Landed のまま）: {last}"
+    );
+    let after = event_count(&state);
+
+    // 2 度目は前提（worktree が在る）を満たさない＝**rc 1 で何も書かない**。畳んだ先へ
+    // 2 周目の move を当てると、retired/<id>/<id> のような入れ子が静かに生まれる。
+    let again = retire_once(&repo, &state, &id);
+    assert_eq!(again.status.code(), Some(i32::from(RC_REFUSED)), "2 度目は rc 1");
+    assert_eq!(event_count(&state), after, "前提違反は event を 1 件も書かない");
+    assert!(retired.exists(), "畳んだ先は在るまま");
+    clean(&[&repo, &state]);
+}
+
+#[test]
+fn pipe_retire_refuses_unless_landed_and_clean() {
+    // **2 つの前提は「断ってから解いて通す」で測る**。rc 1 だけを見ると、subcommand を
+    // 持っていない器でも同じ rc 1 が返るので歯が空虚になる（stderr の文言は pin しない）。
+    //
+    // (a) 段が Gated のまま＝**終端していない便の worktree は畳まない**。
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let marker = state.join("lens-ran");
+    let id = gated_pass(&repo, &state, &path, &marker);
+    let before = event_count(&state);
+    let early = retire_once(&repo, &state, &id);
+    assert_eq!(early.status.code(), Some(i32::from(RC_REFUSED)), "Landed 以外は rc 1");
+    assert!(worktree_of(&repo, &id).exists(), "断った周は worktree を動かさない");
+    assert_eq!(event_count(&state), before, "event を 1 件も書かない");
+    // 段だけを解くと同じ便が通る＝上の rc 1 は**段**を理由にしている。
+    land_pr(&repo, &state, &id);
+    let landed = retire_once(&repo, &state, &id);
+    assert_eq!(landed.status.code(), Some(i32::from(RC_OK)), "Landed なら通る: {}", stderr_of(&landed));
+    clean(&[&repo, &state]);
+
+    // (b) Landed でも worktree が dirty なら畳まない（fail-closed・untracked も数える）。
+    // move は中身ごと運ぶので、未 commit の仕事を持った worktree を黙って動かすと
+    // 「どこへ行ったか」が便の外から読めなくなる。
+    let (dirty_repo, dirty_state) = repo_with_state();
+    let dirty_path = write_contract(&dirty_repo, &[], &[]);
+    let dirty_marker = dirty_state.join("lens-ran");
+    let dirty_id = landed_pr(&dirty_repo, &dirty_state, &dirty_path, &dirty_marker);
+    let live = worktree_of(&dirty_repo, &dirty_id);
+    let stray = live.join("dirty.txt");
+    fs::write(&stray, "x\n").expect("worktree を汚せる");
+    let dirty_before = event_count(&dirty_state);
+    let out = retire_once(&dirty_repo, &dirty_state, &dirty_id);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "dirty な worktree は rc 1");
+    assert!(live.exists(), "断った周は worktree を動かさない");
+    assert!(stray.exists(), "汚れもそのまま残す（掃除しない）");
+    assert_eq!(event_count(&dirty_state), dirty_before, "event を 1 件も書かない");
+    let dirty_retired = dirty_repo.join(".worktrees").join("scribe2").join("retired").join(&dirty_id);
+    assert!(!dirty_retired.exists(), "retired/<id> を作らない");
+    // 汚れだけを拭うと同じ便が通る＝上の rc 1 は**clean**を理由にしている。
+    fs::remove_file(&stray).expect("汚れを拭える");
+    let cleaned = retire_once(&dirty_repo, &dirty_state, &dirty_id);
+    assert_eq!(cleaned.status.code(), Some(i32::from(RC_OK)), "clean なら通る: {}", stderr_of(&cleaned));
+    assert!(dirty_retired.exists(), "畳んだ先が出来る");
+    clean(&[&dirty_repo, &dirty_state]);
+}
+
 #[test]
 fn pipe_report_counts_landed_runs_not_landed_events() {
     let (repo, state) = repo_with_state();

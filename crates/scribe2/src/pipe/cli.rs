@@ -11,7 +11,7 @@ use super::approve::{Approve, RC_BLOCKED};
 use super::contract::Contract;
 use super::declaration::{self, Ceiling, Effective, CEILING_ROW};
 use super::gate::{Gate, Limits, Verdict, RC_INCONCLUSIVE};
-use super::land::{verdict_of, Land};
+use super::land::{verdict_of, Land, Retire};
 use super::spawn::{spawn, Launch};
 use super::{contract_path, current, emit, run_dir, run_id, vessel_path, worktree_path, Emit, Precheck};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_OK, RC_REFUSED};
@@ -36,7 +36,7 @@ const ROW_CAP: &str = "gate.token_cap";
 /// `pipe` の使い方。
 pub fn usage() -> String {
     format!(
-        "usage: {NAME} pipe <intake|spawn|approve|gate|land|run|show|resume|stop|report> [--state-dir D] [--rules PATH] [flags]"
+        "usage: {NAME} pipe <intake|spawn|approve|gate|land|retire|run|show|resume|stop|report> [--state-dir D] [--rules PATH] [flags]"
     )
 }
 
@@ -56,6 +56,7 @@ pub fn dispatch(args: &[String]) -> Outcome {
         Some("approve") => by_run(args, |id| approve_run(args, id, policy)),
         Some("gate") => by_run(args, |id| gate_run(args, id, &manifest, policy)),
         Some("land") => by_run(args, |id| land_run(args, id, policy)),
+        Some("retire") => by_run(args, |id| retire_run(args, id, policy)),
         Some("run") => run_all(args, &manifest, policy),
         Some("show") => show(args),
         Some("resume") => resume(args, &manifest, policy),
@@ -459,6 +460,25 @@ fn land_run(args: &[String], id: &str, policy: LockPolicy) -> Outcome {
         state_dir: &resolved.state_dir,
         contract: &resolved.contract,
         pr_cmd,
+        policy,
+    })
+}
+
+/// `pipe retire`。前提 stage = Landed（worktree 在り・clean の検査は retire 側が持つ）。
+///
+/// **段を動かさない口である**。`--pr-cmd` 形の便は main を動かさず worktree も残して
+/// `Landed` で終端するので、merge の後に入れ物だけを畳む段が要る。Landed 以外を通すと
+/// 「まだ走っている便の worktree を畳む」経路になるため、段違いは一般則どおり rc 1。
+fn retire_run(args: &[String], id: &str, policy: LockPolicy) -> Outcome {
+    let resolved = match resolve(args, id, &[Stage::Landed], false) {
+        Ok(found) => found,
+        Err(outcome) => return outcome,
+    };
+    super::land::retire(&Retire {
+        run: id,
+        bead: &resolved.bead,
+        repo: &resolved.repo,
+        state_dir: &resolved.state_dir,
         policy,
     })
 }

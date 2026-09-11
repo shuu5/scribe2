@@ -16,7 +16,7 @@ use super::contract::Contract;
 use super::declaration::Effective;
 use super::gate::{run_checks, Checks, Verdict};
 use super::{
-    emit, git_line, git_ok, verdict_path, worktree_path, worktrees_dir, Emit,
+    emit, git_bytes, git_line, git_ok, verdict_path, worktree_path, worktrees_dir, Emit,
 };
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
 use crate::fleet::json_lite::{self, Value};
@@ -52,6 +52,24 @@ enum MainCheck {
     Red(String),
     /// 実測そのものができなかった（tmp worktree を切れない等）。
     Unmeasurable(String),
+}
+
+/// retire 1 回の材料（`--pr-cmd` 形の便を merge の後に畳む口・設計 §5.4）。
+///
+/// **契約を要らない**のが land との違いである。畳むのは worktree という入れ物だけで、
+/// 契約の verify も write-set も読まない——読む理由が無い面を材料に数えると、契約が
+/// 壊れた便の worktree が永久に畳めなくなる。
+pub struct Retire<'a> {
+    /// 便 id。
+    pub run: &'a str,
+    /// 契約の bead id。
+    pub bead: &'a str,
+    /// 対象 repo。
+    pub repo: &'a Path,
+    /// 置き場。
+    pub state_dir: &'a Path,
+    /// lock の待ち方。
+    pub policy: LockPolicy,
 }
 
 /// land 1 回の材料。
@@ -277,7 +295,7 @@ fn finish(entry: &Land<'_>, worktree: &Path, new: &str) -> Outcome {
     Outcome {
         out: vec![format!("run={} landed={new}", entry.run)],
         // 後始末の失敗は land を取り消さない（**rc 0 のまま stderr 1 行**）。
-        err: retire(entry, worktree),
+        err: retire_worktree(entry.repo, entry.run, worktree),
         rc: crate::cli_outcome::RC_OK,
     }
 }
@@ -300,8 +318,12 @@ fn export_verdict(entry: &Land<'_>, new: &str) -> Result<(), String> {
 }
 
 /// worktree を `retired/<run>` へ move する。**削除しない・branch も消さない**（N1.2）。
-fn retire(entry: &Land<'_>, worktree: &Path) -> Vec<String> {
-    let dest = retired_path(entry.repo, entry.run);
+///
+/// 呼び手は 2 つ（squash 形の [`finish`] と `pipe retire`）で、**move の中身は 1 本**である
+/// ——2 実装に割ると、一方だけが削除へ寄る余地が生まれる。失敗は stderr 行の列で返し、
+/// rc は呼び手が決める（land では 0 のまま・retire では 2）。
+pub(crate) fn retire_worktree(repo: &Path, run: &str, worktree: &Path) -> Vec<String> {
+    let dest = retired_path(repo, run);
     let Some(parent) = dest.parent() else {
         return vec!["pipe: retired の親 dir を解けない".to_owned()];
     };
@@ -310,10 +332,65 @@ fn retire(entry: &Land<'_>, worktree: &Path) -> Vec<String> {
     }
     let from = worktree.display().to_string();
     let to = dest.display().to_string();
-    if git_ok(entry.repo, &["worktree", "move", &from, &to]) {
+    if git_ok(repo, &["worktree", "move", &from, &to]) {
         return Vec::new();
     }
     vec![format!("pipe: {from} を {to} へ移せなかった")]
+}
+
+/// worktree が clean か。**読めない周は偽**（fail-closed）。
+///
+/// 「状態を読めなかった」を「汚れていない」に化けさせない——move は中身ごと運ぶので、
+/// 未 commit の仕事を持った worktree を畳むと、その仕事の行き先が便の外から読めなくなる。
+fn is_clean(worktree: &Path) -> bool {
+    git_bytes(worktree, &["status", "--porcelain"])
+        .is_some_and(|bytes| String::from_utf8_lossy(&bytes).trim().is_empty())
+}
+
+/// `--pr-cmd` 形で終端した便の worktree を、merge の後に畳む（設計 §5.4）。
+///
+/// **`detail=pr` を前提にしない**。squash 形で move だけが落ちた便（land は rc 0 のまま
+/// stderr 1 行で終わる）を後追いで畳む口にもなるので、見るのは永続面の事実——worktree が
+/// 在るか・clean か——だけである。**merge 済みかは人が確かめる**（forge へ問い合わせない）。
+///
+/// 前提違反は **rc 1 + stderr 1 行で何も書かない**（設計 §4 の一般則）。move の失敗だけは
+/// 「対象そのものが壊れている」ので rc 2 で、どちらの周も event を 1 件も残さない。
+pub fn retire(entry: &Retire<'_>) -> Outcome {
+    let worktree = worktree_path(entry.repo, entry.run);
+    if !worktree.is_dir() {
+        // 2 度目の retire もここで止まる（1 度目が畳んでいるので元の場所に無い）。
+        return refused(format!("run {} の worktree {} が無い", entry.run, worktree.display()));
+    }
+    if !is_clean(&worktree) {
+        return refused(format!("run {} の worktree が clean でない", entry.run));
+    }
+    let failures = retire_worktree(entry.repo, entry.run, &worktree);
+    if !failures.is_empty() {
+        // **畳めていないのに「畳んだ」を記帳しない**（永続面と event が食い違う）。
+        return Outcome { out: Vec::new(), err: failures, rc: RC_BROKEN };
+    }
+    let emitted = emit(
+        entry.state_dir,
+        &Emit {
+            kind: EventKind::RunStage,
+            run: entry.run,
+            bead: entry.bead,
+            // **段は Landed のまま**（終端を動かさない）。畳んだことは detail で残す。
+            stage: Some(Stage::Landed),
+            seat: None,
+            pid: None,
+            detail: Some("retired".to_owned()),
+        },
+        entry.policy,
+    );
+    match emitted {
+        Err(err) => broken(err.to_string()),
+        Ok(()) => Outcome::ok_line(format!(
+            "run={} retired={}",
+            entry.run,
+            retired_path(entry.repo, entry.run).display()
+        )),
+    }
 }
 
 /// `verdict.json` から 3 値を読む。読めない周は `None`（＝PASS ではない）。
