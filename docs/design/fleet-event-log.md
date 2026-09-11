@@ -62,7 +62,9 @@ C3 は「1 つの DB file（host 列）」と言う。MVP はそれを **append-
 
 ## 6. 歯（契約 `s2-07d` の検証・`tests/e2e/fleet.rs` module・`fleet_` 接頭辞・tmp dir を `--state-dir` で指す）
 
-`fleet_replay_rebuilds_state_from_events` / `fleet_replay_marks_run_approved_on_approval_received` / `fleet_replay_seat_state_is_stopped_after_seat_stopped` / `fleet_read_rejects_malformed_line_with_line_number`（2 行目を壊す → `Err` 1 件・`line=2`・3 行目は返らない）/ `fleet_read_rejects_unknown_schema` / `fleet_append_serializes_concurrent_writers`（8 thread × 50 append → 400 行・全行 parse 可・interleave 0）/ `fleet_state_survives_process_restart`（process A が `record`・process B が `show` → 同じ stage）/ `fleet_export_first_line_is_schema_header` / `fleet_export_is_read_only`（rc 0 ∧ stdout が 1 + runs + seats 行、**その上で**前後の file 名・size・mtime 同一・lock 残らず）/ `fleet_state_dir_flag_is_required`（無ければ rc 1・stdout 0 byte）/ `fleet_json_roundtrip_escapes` / `fleet_stale_lock_is_removed_after_threshold`（`File::set_modified` で lock の mtime を戻す・std のみ）/ `fleet_wait_times_out_with_typed_error` / `fleet_export_rc2_on_malformed_store` / `fleet_external_form`（snapshot）。
+歯は `crates/<NAME>/tests/e2e/fleet.rs` module に `fleet_` 接頭辞で置く（個々の名前はここに書かない。名前の列は現物が SSOT＝`cargo nextest list -p <NAME>`・ADR-0013 §2.1・`s2-07l.78`）。外形（usage と 1 行出力）は insta snapshot 1 本で pin する。
+
+何を測るか: replay が event から state を再構成し、承認 event で run が approved になり、席の停止 event で席が Stopped になる／壊れた行は行番号付きの `Err` 1 件になり後続の行を返さない（2 行目を壊す → `line=2`・3 行目は返らない）／未知の schema を拒む／並行 append（8 thread × 50）が 400 行・全行 parse 可・interleave 0／process を跨いで state が残る（process A が `record`・process B が `show` → 同じ stage）／export は先頭が schema header で、rc 0 ∧ stdout が 1 + runs + seats 行、**その上で**前後の file 名・size・mtime 同一・lock が残らない（読み取り専用）／`--state-dir` 無しは rc 1・stdout 0 byte／JSON の escape が round-trip する／stale lock は閾値の後に除かれる（`File::set_modified` で lock の mtime を戻す・std のみ）／wait は型付きの error で timeout する／壊れた store の export は rc 2。
 
 ## 7. 却下案
 
