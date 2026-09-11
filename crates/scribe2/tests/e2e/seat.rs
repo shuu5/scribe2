@@ -2561,20 +2561,21 @@ fn seat_cycle_reports_restore_unconfirmed_after_limit_when_restore_is_left_in_in
 /// 実席は `/clear` の後に SessionStart hook を数秒〜十数秒走らせ、その間に注入された行を
 /// 入力欄に置いたまま turn を始めない（実測 2026-09-11 `.96` A/B: `/rebrief` は着地して
 /// rebrief が走ったのに `restore-unconfirmed`）。2 s の settle の窓では必ず `Queued` で終わる
-/// ので、**復元が正しく届く周ほど failed になる**。偽の席は prompt を描いた後 4 s 読まず、
+/// ので、**復元が正しく届く周ほど failed になる**。偽の席は prompt を描いた後 8 s 読まず、
 /// その後に queue を消費する（入力欄が空になり echo が上に残る＝`Consumed` の形）。
+/// 8 s は base（2 s の窓・実測 2.6 s で失敗）に対する RED の余裕を負荷時にも保つ長さ（lens-97 LOW-1）。
 #[test]
 fn seat_cycle_restores_after_seat_consumes_queued_restore() {
     let dir = tmp();
     let socket = socket_of(&dir);
     let name = "seatqueued";
     let log = dir.join("seat.log");
-    // `/clear` の後は prompt を描いてから **hook のように 4 s 読まない**（2 s の窓より長い）。
+    // `/clear` の後は prompt を描いてから **hook のように 8 s 読まない**（2 s の窓より十分長い）。
     let guard = start_clearing_seat_with(
         &socket,
         name,
         &log,
-        "printf '\u{276f} '; sleep 4",
+        "printf '\u{276f} '; sleep 8",
         "printf 'seat got %s\\n' \"$line\"",
     );
     assert!(guard.ready(), "hook 中の席を模す偽の席を立てられる");
