@@ -1830,6 +1830,58 @@ fn pipe_land_squashes_one_commit_with_identical_tree() {
     clean(&[&repo, &state]);
 }
 
+/// 件名の歯の goal（**文が複数・200 字超**で、先頭の文が 72 文字より長い）。契約 file は
+/// 1 行 1 値ゆえ改行を置けない（「改行を保つ」側は `pipe::land` の in-file の歯が測る）。
+const LONG_GOAL: &str = "件名の要旨は goal の先頭の文を 72 文字で切って組む・この 1 文目は 72 文字より長いので末尾に印が付く・切った側と落とさない側を 1 本の message の中で持つのがこの便の主題である。2 文目はここから始まり件名には載らないが本文には逐語で載る。3 文目も同じで、契約の中身は message の本文からそのまま辿れる。";
+
+/// squash の message は **3 部**（件名 / 空行 / 本文 = goal 全文 + `run:` trailer・`s2-07l.130`・
+/// 設計 §5.4 手順 1）。件名は goal の**先頭の文**を 72 文字で切った要旨で、切って落ちた中身は
+/// 本文に逐語で残る——`git log --oneline` が読めて、便の現物へは trailer から辿れる形である。
+#[test]
+fn pipe_land_subject_cuts_first_sentence_and_keeps_goal_in_body() {
+    let (repo, state) = repo_with_state();
+    let goal = format!("goal = \"{LONG_GOAL}\"");
+    let path = write_contract(&repo, &["goal"], &[&goal]);
+    let marker = state.join("lens-ran");
+    let id = gated_pass(&repo, &state, &path, &marker);
+    let out = land_once(&repo, &state, &id);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "land は rc 0: {}", stderr_of(&out));
+    let subject = git(&repo, &["log", "-1", "--format=%s", "refs/heads/main"]);
+    assert!(
+        subject.starts_with("s2-2e5: 件名の要旨は goal の先頭の文を 72 文字で切って組む"),
+        "件名は `<bead>: ` + goal の先頭の文で始まる: {subject}"
+    );
+    assert!(
+        subject.chars().count() <= "s2-2e5: ".chars().count() + 72 + 1,
+        "件名は 72 文字 + `…` 以内（base は goal 全文を載せるので落ちる）: {subject}"
+    );
+    assert!(subject.ends_with('…'), "切った周は印が付く: {subject}");
+    // 落とさない側。**本文は goal 全文を逐語で持ち**、最終行は run へ辿る trailer である。
+    let body = git(&repo, &["log", "-1", "--format=%b", "refs/heads/main"]);
+    assert!(body.contains(LONG_GOAL), "本文に goal 全文が逐語で在る: {body}");
+    let trailer = format!("run: {id}");
+    assert_eq!(body.lines().last(), Some(trailer.as_str()), "最終行は run trailer: {body}");
+    clean(&[&repo, &state]);
+}
+
+/// 負例: goal が 1 文で 72 文字以内なら件名は**その文そのもの**で、切った印（`…`）は付かない
+/// （「。」の手前までが先頭の文である）。
+#[test]
+fn pipe_land_subject_keeps_short_single_sentence_whole() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &["goal"], &[r#"goal = "短い 1 文の goal は件名にそのまま載る。""#]);
+    let marker = state.join("lens-ran");
+    let id = gated_pass(&repo, &state, &path, &marker);
+    let out = land_once(&repo, &state, &id);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "land は rc 0: {}", stderr_of(&out));
+    assert_eq!(
+        git(&repo, &["log", "-1", "--format=%s", "refs/heads/main"]),
+        "s2-2e5: 短い 1 文の goal は件名にそのまま載る",
+        "72 文字以内の 1 文は逐語（`…` は付かない）"
+    );
+    clean(&[&repo, &state]);
+}
+
 #[test]
 fn pipe_land_rebase_without_lens_stops_inconclusive_and_keeps_main() {
     let (repo, state) = repo_with_state();

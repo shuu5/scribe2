@@ -83,6 +83,18 @@ impl AnchorSkip {
     }
 }
 
+/// squash commit の件名に載せる要旨の長さ（**char 単位**・byte でない・`s2-07l.130`）。
+///
+/// git の慣習（件名は短く 1 行）に合わせて切るが、**切った goal は本文に逐語で残す**——
+/// 要旨だけを残すと契約の中身が履歴から落ちる。
+const SUBJECT_CHARS: usize = 72;
+
+/// 要旨を切ったことを示す印（件名の末尾に 1 文字だけ足す）。
+const ELLIPSIS: char = '…';
+
+/// 本文の最後に置く trailer の key（読み手が fleet の記録へ辿る鍵）。
+const RUN_TRAILER: &str = "run: ";
+
 /// main 実測用の tmp worktree を置く dir 名。
 ///
 /// **`std::env::temp_dir` を使わない**（`TMPDIR` を読む＝憲法 C2.2 に反する）。置き場は
@@ -536,7 +548,7 @@ fn open_pr(entry: &Land<'_>, base: &str, cmd: &str) -> Outcome {
 fn squash(entry: &Land<'_>, worktree: &Path, old: &str) -> Result<String, String> {
     let tree = git_line(worktree, &["rev-parse", "HEAD^{tree}"])
         .ok_or_else(|| format!("{} の tree を読めない", worktree.display()))?;
-    let message = format!("{}: {}", entry.bead, entry.contract.goal);
+    let message = squash_message(entry.bead, &entry.contract.goal, entry.run);
     let new = git_line(entry.repo, &["commit-tree", &tree, "-p", old, "-m", &message])
         .ok_or_else(|| "squash commit を作れない".to_owned())?;
     if !git_ok(entry.repo, &["update-ref", MAIN_REF, &new, old]) {
@@ -548,6 +560,43 @@ fn squash(entry: &Land<'_>, worktree: &Path, old: &str) -> Result<String, String
         return Err(format!("tree が同一でない（{tree} → {landed}）"));
     }
     Ok(new)
+}
+
+/// squash commit の message（設計 §5.4 手順 1・**3 部**・`s2-07l.130`）。
+///
+/// (1) 件名 `<bead>: <要旨>` (2) 空行 (3) 本文 = goal 全文（**逐語・改行を保つ**）+ 空行 +
+/// `run: <run id>` の 1 行（trailer）。
+///
+/// 件名は goal の先頭の文を [`SUBJECT_CHARS`] 文字で切った要約ゆえ中身が落ちる——だから
+/// **同じ message の中に落とさない側（本文の goal 全文）を必ず持つ**。`git log --oneline` は
+/// 件名だけを読み、便の現物を追う人は本文と trailer から fleet の記録へ辿る。
+fn squash_message(bead: &str, goal: &str, run: &str) -> String {
+    format!("{}\n\n{goal}\n\n{RUN_TRAILER}{run}\n", subject_of(bead, goal))
+}
+
+/// 件名。要旨が空の周は **`<bead>` だけ**にして落とさない（契約の検査で goal は非空のはずで、
+/// 件名を組めないことは land を止める理由ではない＝ここを fail-closed に倒すと、message の
+/// 形の不備で main に載らない便が生まれる）。
+fn subject_of(bead: &str, goal: &str) -> String {
+    let gist = gist_of(goal);
+    if gist.is_empty() {
+        return bead.to_owned();
+    }
+    format!("{bead}: {gist}")
+}
+
+/// goal の先頭の文（最初の改行または「。」の手前まで・前後の空白と markdown の見出し記号 `#` を除く）
+/// を [`SUBJECT_CHARS`] 文字で切る。切った周だけ末尾に [`ELLIPSIS`] を足す。
+///
+/// 切るのは **char 単位**である（byte で切ると UTF-8 の途中で割れる＝slice 禁止・C11）。
+fn gist_of(goal: &str) -> String {
+    let head = goal.split(['\n', '。']).next().unwrap_or_default();
+    let sentence = head.trim().trim_start_matches('#').trim();
+    let cut: String = sentence.chars().take(SUBJECT_CHARS).collect();
+    if sentence.chars().count() > SUBJECT_CHARS {
+        return format!("{cut}{ELLIPSIS}");
+    }
+    cut
 }
 
 /// 進めた main を別の worktree で実測する。
@@ -878,4 +927,51 @@ fn refused(reason: String) -> Outcome {
 /// 対象そのものが壊れている（rc 2）。
 fn broken(reason: String) -> Outcome {
     Outcome::failed_line(RC_BROKEN, format!("pipe: {reason}"))
+}
+
+/// message の 3 部（`s2-07l.130`）を **goal に改行が在る形**で測る歯。
+///
+/// 契約 file の parser は 1 行 1 値で escape を解かない（`pipe::contract`）ので、e2e の
+/// 契約からは改行入りの goal を作れない——「改行を保つ」の側はここで測る。
+#[cfg(test)]
+mod tests {
+    use super::{squash_message, subject_of, SUBJECT_CHARS};
+
+    /// 複数行の goal は **本文に逐語**（改行ごと）で載り、件名は先頭の文だけを持つ。
+    /// 最終行は `run:` の trailer である。
+    #[test]
+    fn pipe_land_subject_keeps_multiline_goal_verbatim_in_body() {
+        let goal = "## 何を作るか\n- 1 本目の行である。ここは件名に載らない\n- 2 本目の行";
+        let message = squash_message("s2-07l.130", goal, "s2-07l.130-1757600000");
+        let mut lines = message.lines();
+        assert_eq!(lines.next(), Some("s2-07l.130: 何を作るか"), "件名は先頭の文（`#` と空白を除く）");
+        assert_eq!(lines.next(), Some(""), "件名の次は空行");
+        assert!(message.contains(goal), "goal 全文が逐語で在る: {message}");
+        assert_eq!(
+            message.lines().last(),
+            Some("run: s2-07l.130-1757600000"),
+            "最終行は run trailer: {message}"
+        );
+    }
+
+    /// 要旨が空（goal が空・先頭の文が空白と `#` だけ）の周は **`<bead>` だけ**の件名にして
+    /// 落とさない（land を止める理由ではない）。
+    #[test]
+    fn pipe_land_subject_falls_back_to_bead_when_gist_is_empty() {
+        assert_eq!(subject_of("s2-07l.130", ""), "s2-07l.130");
+        assert_eq!(subject_of("s2-07l.130", "## \n本文だけ"), "s2-07l.130");
+    }
+
+    /// 切るのは **char 単位**である（byte で切ると UTF-8 の途中で割れる）。
+    #[test]
+    fn pipe_land_subject_cuts_by_chars_not_bytes() {
+        let goal = "あ".repeat(SUBJECT_CHARS + 1);
+        let subject = subject_of("b", &goal);
+        assert_eq!(
+            subject.chars().count(),
+            "b: ".chars().count() + SUBJECT_CHARS + 1,
+            "件名 = `b: ` + 72 文字 + `…`: {subject}"
+        );
+        assert!(subject.ends_with('…'), "切った印が付く: {subject}");
+    }
 }
