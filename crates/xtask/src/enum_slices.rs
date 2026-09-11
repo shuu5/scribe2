@@ -8,21 +8,24 @@
 //!
 //! **読めない形は違反に倒す**（fail-closed・bd `s2-07l.88`）: payload 付き variant・判別子指定・
 //! 属性行・1 行に複数・enum を同じ file に見つけられない、のどれも「黙って一致」にしない。
-//! Rust の parser は足さない（字面で数える・憲法 C13）。
+//! 型の側も同じ極性で、要素の型が大文字で始まるのに裸の識別子でない形（`&[&Enum]` / `&[Box<Enum>]`）
+//! は違反にする（lens-88 MEDIUM-1: 黙って母集団から消える形を作らない）。`&'static [Enum]` と
+//! 字下げされた const（impl / mod の中）は対に数える。小文字始まり・tuple・`&str` は enum の
+//! slice ではないので対象外。Rust の parser は足さない（字面で数える・憲法 C13）。
 
 use crate::check::{Measured, SourceFile};
 
 /// 判定行の tag。
 const TAG: &str = "enum-slices";
 
-/// 1 対（slice と enum）の測定。
+/// 1 対（slice と enum）の材料。要素の解析は enum と確定した後（struct の slice を先に外す）。
 struct Pair {
     /// slice の名前。
     slice: String,
     /// slice の型が名指す enum。
     enum_name: String,
-    /// slice の要素（`Enum::` を剥がした名前）。
-    elements: Vec<String>,
+    /// `= &[` と `]` の間の本文。
+    body: String,
 }
 
 /// `crates/*/src` の全 `.rs` から `const NAME: &[Enum] = &[…]` を拾い、同じ file の enum と突き合わせる。
@@ -35,18 +38,30 @@ pub(crate) fn measure(files: &[SourceFile]) -> Measured {
     for file in files {
         let shown = file.path.display();
         for found in slices_in(&file.text) {
-            pairs = pairs.saturating_add(1);
             match found {
-                Err(reason) => violations.push(format!("{TAG}: {shown}: {reason}")),
+                Err(reason) => {
+                    pairs = pairs.saturating_add(1);
+                    violations.push(format!("{TAG}: {shown}: {reason}"));
+                }
                 Ok(pair) => match variants_of(&file.text, &pair.enum_name) {
-                    Err(reason) => violations.push(format!("{TAG}: {shown}: {reason}")),
+                    Err(reason) => {
+                        pairs = pairs.saturating_add(1);
+                        violations.push(format!("{TAG}: {shown}: {reason}"));
+                    }
                     // struct の slice は enum の形ではない＝対に数えない。
-                    Ok(None) => pairs = pairs.saturating_sub(1),
-                    Ok(Some(variants)) => violations.extend(
-                        compare(&pair, &variants)
-                            .into_iter()
-                            .map(|reason| format!("{TAG}: {shown}: {reason}")),
-                    ),
+                    Ok(None) => {}
+                    Ok(Some(variants)) => {
+                        pairs = pairs.saturating_add(1);
+                        let judged = match elements_of(&pair.body, &pair.enum_name) {
+                            Err(reason) => vec![reason],
+                            Ok(elements) => compare(&pair, &elements, &variants),
+                        };
+                        violations.extend(
+                            judged
+                                .into_iter()
+                                .map(|reason| format!("{TAG}: {shown}: {reason}")),
+                        );
+                    }
                 },
             }
         }
@@ -57,51 +72,68 @@ pub(crate) fn measure(files: &[SourceFile]) -> Measured {
     }
 }
 
-/// file 内の `const NAME: &[Elem] = &[…]` のうち、`Elem` が大文字で始まる裸の識別子のもの。
-///
-/// `&[&str]` / `&[u8]` / `&[(…)]` / `&[Box<…>]` は enum の slice の形ではないので対象外
-/// （`&` や `(` や小文字始まり・`<` を含む型は拾わない）。struct の slice は [`variants_of`] が
+/// file 内の `const NAME: &[Elem] = &[…]`（`&'static [Elem]` も同じ・字下げも可）のうち、
+/// `Elem` が大文字で始まるもの。裸の識別子なら対、大文字で始まるのに裸でない形
+/// （`&Enum` / `Box<Enum>` / `Enum<T>`）は読めない型として `Err`。小文字始まり・tuple・
+/// `&str` は enum の slice ではないので拾わない。struct の slice は [`variants_of`] が
 /// `struct` 宣言を見て対象外にする。
 fn slices_in(text: &str) -> Vec<Result<Pair, String>> {
     let mut found = Vec::new();
-    for (index, line) in text.lines().enumerate() {
+    let lines: Vec<&str> = text.lines().collect();
+    for (index, line) in lines.iter().enumerate() {
         let Some(head) = const_head(line) else {
             continue;
         };
-        let Some((name, rest)) = head.split_once(": &[") else {
+        let Some((name, after_name)) = head.split_once(": ") else {
+            continue;
+        };
+        let Some(rest) = ["&'static [", "&["]
+            .iter()
+            .find_map(|prefix| after_name.strip_prefix(prefix))
+        else {
             continue;
         };
         let Some((elem, after_type)) = rest.split_once(']') else {
             continue;
         };
-        if !is_type_ident(elem) {
+        if !starts_upper(elem) {
             continue;
         }
         let line_no = index.saturating_add(1);
+        if !is_type_ident(elem) {
+            found.push(Err(format!(
+                "{name}（{line_no} 行）の要素の型 `{elem}` を読めない（enum の slice は `&[Enum]` の形）"
+            )));
+            continue;
+        }
+        let tail = lines.get(index.saturating_add(1)..).unwrap_or_default();
         let body = match after_type.trim_start().strip_prefix("= &[") {
-            Some(_) => slice_body(text, index),
+            Some(open) => slice_body(open, tail),
             None => Err(format!("{name}（{line_no} 行）の右辺が `= &[` で始まらない")),
         };
-        found.push(body.and_then(|body| {
-            elements_of(&body, elem).map(|elements| Pair {
-                slice: name.to_owned(),
-                enum_name: elem.to_owned(),
-                elements,
-            })
+        found.push(body.map(|body| Pair {
+            slice: name.to_owned(),
+            enum_name: elem.to_owned(),
+            body,
         }));
     }
     found
 }
 
-/// `pub const` / `pub(crate) const` / `const` の行から `NAME: &[…] …` の部分を返す。
+/// `pub const` / `pub(crate) const` / `const` の行（字下げ可）から `NAME: &[…] …` の部分を返す。
 fn const_head(line: &str) -> Option<&str> {
     let trimmed = line.trim_start();
-    if trimmed.len() != line.len() {
-        return None; // 字下げされた const（fn / mod / test の中）は対象外。
-    }
     ["pub const ", "pub(crate) const ", "const "]
         .iter()
         .find_map(|prefix| trimmed.strip_prefix(prefix))
+}
+
+/// 要素の型が大文字で始まるか（`&Enum` のように `&` を挟む形も含めて見る）。
+fn starts_upper(elem: &str) -> bool {
+    elem.trim_start_matches('&')
+        .chars()
+        .next()
+        .is_some_and(|first| first.is_ascii_uppercase())
 }
 
 /// 大文字で始まり英数字と `_` だけの識別子か（enum / struct の名前の形）。
@@ -111,17 +143,14 @@ fn is_type_ident(elem: &str) -> bool {
         && chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
 }
 
-/// `= &[` から対応する `];` までの本文（`index` 行から下を読む）。閉じが無ければ `Err`。
-fn slice_body(text: &str, index: usize) -> Result<String, String> {
-    let from = text
-        .lines()
-        .skip(index)
-        .collect::<Vec<&str>>()
-        .join("\n");
-    let Some((_, after_open)) = from.split_once("= &[") else {
-        return Err("右辺の `= &[` を見つけられない".to_owned());
-    };
-    match after_open.split_once(']') {
+/// `= &[` の直後（`open`）から、続く行も含めて最初の `]` までの本文。閉じが無ければ `Err`。
+fn slice_body(open: &str, tail: &[&str]) -> Result<String, String> {
+    let mut from = open.to_owned();
+    for line in tail {
+        from.push('\n');
+        from.push_str(line);
+    }
+    match from.split_once(']') {
         Some((body, _)) => Ok(body.to_owned()),
         None => Err("slice の閉じ `]` を見つけられない".to_owned()),
     }
@@ -179,8 +208,8 @@ fn variants_of(text: &str, name: &str) -> Result<Option<Vec<String>>, String> {
             return Ok(Some(variants));
         }
         let trimmed = line.trim_start();
-        if trimmed.starts_with("///") || trimmed.starts_with("//") {
-            continue;
+        if trimmed.is_empty() || trimmed.starts_with("///") || trimmed.starts_with("//") {
+            continue; // 空行と doc / 行コメントは形の一部ではない。
         }
         let Some(item) = line.strip_prefix("    ") else {
             return Err(format!("enum {name} の中の行を読めない（4 空白の字下げでない）: `{line}`"));
@@ -219,10 +248,10 @@ fn is_variant_ident(ident: &str) -> bool {
 }
 
 /// variant の集合と slice の要素の集合を突き合わせる（欠け・余り・重複を全部出す）。
-fn compare(pair: &Pair, variants: &[String]) -> Vec<String> {
+fn compare(pair: &Pair, elements: &[String], variants: &[String]) -> Vec<String> {
     let mut reasons = Vec::new();
     for variant in variants {
-        let hits = pair.elements.iter().filter(|e| *e == variant).count();
+        let hits = elements.iter().filter(|e| *e == variant).count();
         if hits == 0 {
             reasons.push(format!(
                 "{}::{variant} が {} に無い（末尾の入れ忘れ）",
@@ -232,7 +261,7 @@ fn compare(pair: &Pair, variants: &[String]) -> Vec<String> {
             reasons.push(format!("{}::{variant} が {} に {hits} 回在る", pair.enum_name, pair.slice));
         }
     }
-    for element in &pair.elements {
+    for element in elements {
         if !variants.iter().any(|v| v == element) {
             reasons.push(format!(
                 "{} の {}::{element} は enum に無い variant である",
