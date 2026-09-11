@@ -1636,3 +1636,61 @@ fn runner_question_result_text_decodes_escapes_only_from_result_records() {
     assert_eq!(result_text("not json"), None);
     assert_eq!(result_text(r#"{"result":"first","type":"result"}"#).as_deref(), Some("first"), "key の並びに依らない");
 }
+
+// ── 質問 record の置き場の判定は top-level の key で見る（s2-07l.123・.116 実 run の現物） ──
+
+/// 実 claude 2.1.268 の `result` record の形（.116 の raw stream から必要最小へ写した）: `usage.iterations[]`
+/// の入れ子に `"type":"message"` が在り、top-level の `"type":"result"` はその**後ろ**に来る。
+const REAL_RESULT_RECORD_HEAD: &str = r#"{"duration_api_ms":15819,"stop_reason":"end_turn","usage":{"input_tokens":4,"iterations":[{"input_tokens":2,"output_tokens":387,"type":"message"}]},"modelUsage":{"m":{"inputTokens":4,"outputTokens":724}},"permission_denials":[],"is_error":false,"num_turns":3,"subtype":"success","api_error_status":null,"result":""#;
+const REAL_RESULT_RECORD_TAIL: &str = r#"","ttft_ms":3865,"type":"result","duration_ms":14899,"uuid":"2f7f195c","result_index":0}"#;
+
+/// 実 record の形に `result` の text（escape 済み）を挟む。
+fn real_result_record(result_json_text: &str) -> String {
+    format!("{REAL_RESULT_RECORD_HEAD}{result_json_text}{REAL_RESULT_RECORD_TAIL}")
+}
+
+/// `result_text` は入れ子の `"type"` を種別と読まず、top-level の `"type":"result"` を見る。
+#[test]
+fn runner_question_toplevel_result_text_reads_real_record_with_nested_type_first() {
+    use vessel::headless::runner::result_text;
+    let line = real_result_record(r#"契約の done が矛盾する。\n{\"question\":\"どちらの期待値が正しいか\",\"about\":\"done\"}"#);
+    assert_eq!(
+        result_text(&line).as_deref(),
+        Some("契約の done が矛盾する。\n{\"question\":\"どちらの期待値が正しいか\",\"about\":\"done\"}"),
+        "入れ子の type:message が先に在っても result record と読む"
+    );
+    // 偽陽性を塞ぐ: 入れ子だけに type:result を持ち、top-level の種別が別の行は読まない。
+    let nested_only = r#"{"type":"assistant","quoted":{"type":"result","result":"inner"},"result":"outer"}"#;
+    assert_eq!(result_text(nested_only), None, "入れ子の type:result は種別ではない");
+    // escape された \"type\" は key ではない（文字列の中）。
+    let escaped = r#"{"type":"assistant","text":"saw \"type\":\"result\" in a doc","result":"x"}"#;
+    assert_eq!(result_text(escaped), None, "文字列中の \\\"type\\\" を key と読まない");
+    // 文字列の中の brace / bracket は深さに数えない（後ろの top-level key を見失わない）。
+    let braces_in_string = r#"{"note":"has { and [ inside","type":"result","result":"ok"}"#;
+    assert_eq!(result_text(braces_in_string).as_deref(), Some("ok"), "文字列中の brace は深さに数えない");
+}
+
+/// 包み経由: 実 record の形で最終行に record → rc 76・stdout 最終行に同じ record（base では rc 0 を写す）。
+#[test]
+fn runner_question_toplevel_real_record_yields_rc76_through_the_wrapper() {
+    let dir = tmp();
+    let worktree = tmp();
+    let text = r#"契約を読んだ。\n{\"question\":\"verify 行が矛盾する\",\"about\":\"verify\"}"#;
+    let body = format!("{{\"type\":\"system\",\"subtype\":\"init\"}}\n{}\n", real_result_record(text));
+    let out = run_question_runner(&dir, &worktree, &body, 0, b"goal = \"x\"\n");
+    assert_eq!(out.status.code(), Some(i32::from(vessel::pipe::RC_QUESTION)), "実 record の形でも rc 76: {}", stderr_of(&out));
+    let stdout = stdout_of(&out);
+    assert_eq!(stdout.lines().last(), Some(QUESTION_RECORD), "最終行は同じ record: {stdout}");
+    clean(&[&dir, &worktree]);
+}
+
+/// 上限 record の読みも同じ走査に乗る: 入れ子の `"type"` が先に在っても `rate_limit_event` を種別と読み、
+/// 入れ子だけに `rate_limit_event` を持つ行（別 record の引用）は読まない。
+#[test]
+fn runner_question_toplevel_rate_limit_status_ignores_nested_type_keys() {
+    use vessel::headless::runner::rate_limit_status;
+    let nested_first = r#"{"meta":{"type":"noise"},"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","unifiedWindows":{"status":"other"}}}"#;
+    assert_eq!(rate_limit_status(nested_first), Some("allowed_warning"), "入れ子の type が先でも top-level を読む");
+    let quoted = r#"{"type":"assistant","quoted":{"type":"rate_limit_event","rate_limit_info":{"status":"blocked"}}}"#;
+    assert_eq!(rate_limit_status(quoted), None, "引用された上限 record は読まない");
+}
