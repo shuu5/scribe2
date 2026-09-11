@@ -1702,7 +1702,7 @@ fn seat_tick_injects_externalize_pointer_when_context_reaches_cap_while_busy() {
         let out = run_seat(&args);
         assert_eq!(
             stdout_of(&out),
-            format!("seat: tick decision=inject target={name} consumed=true kind=externalize context={pct}{ST_BUSY}{}\n", provenance(&state, "flag")),
+            format!("seat: tick decision=inject target={name} consumed=false kind=externalize context={pct}{ST_BUSY}{}\n", provenance(&state, "flag")),
             "{pct}%: 自打刻の直後でも退避の合図は送る（brake は打刻の合図だけ）"
         );
         // socket を消す**前**に畳む（消してからでは kill-session が届かない・実測 2026-09-10）。
@@ -2691,7 +2691,7 @@ fn seat_tick_without_freshness_gate_injects_pointer_when_heartbeat_is_fresh() {
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
     assert_eq!(
         stdout_of(&out),
-        format!("seat: tick decision=inject target={name} consumed=true kind=pointer{CTX_NO_SOURCE}{ST_IDLE}{}\n", provenance(&state, "flag")),
+        format!("seat: tick decision=inject target={name} consumed=false kind=pointer{CTX_NO_SOURCE}{ST_IDLE}{}\n", provenance(&state, "flag")),
         "heartbeat が今でも注入する（鮮度は判定入力ではない）"
     );
     assert!(capture(&socket, name).contains(&format!("seat heartbeat --target {name}")), "合図が届く");
@@ -2732,7 +2732,7 @@ fn seat_tick_without_freshness_gate_sends_externalize_when_over_cap_while_fresh(
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
     assert_eq!(
         stdout_of(&out),
-        format!("seat: tick decision=inject target={name} consumed=true kind=externalize context=96{ST_IDLE}{}\n", provenance(&state, "flag")),
+        format!("seat: tick decision=inject target={name} consumed=false kind=externalize context=96{ST_IDLE}{}\n", provenance(&state, "flag")),
         "打刻の直後でも cap 以上なら退避の合図（盲点の消滅）"
     );
     assert!(capture(&socket, name).contains("/ready-compaction"), "退避 skill の名が届く");
@@ -2799,7 +2799,7 @@ fn seat_tick_without_freshness_gate_backs_off_pointer_by_tick_stamp() {
         "tick", "--target", name, "--wm-dir", &wm_s, "--tmux-socket", &socket,
         "--state-dir", &state_s,
     ];
-    let injected = format!("seat: tick decision=inject target={name} consumed=true kind=pointer{CTX_NO_SOURCE}{ST_IDLE}{}\n", provenance(&state, "flag"));
+    let injected = format!("seat: tick decision=inject target={name} consumed=false kind=pointer{CTX_NO_SOURCE}{ST_IDLE}{}\n", provenance(&state, "flag"));
 
     let first = run_seat(&args);
     assert_eq!(stdout_of(&first), injected, "tick-stamp 不在 → 注入: stderr={}", stderr_of(&first));
@@ -2833,9 +2833,11 @@ fn seat_tick_without_freshness_gate_cycles_parked_seat_even_when_pointer_recent(
     let socket = socket_of(&dir);
     let name = "seatparkedrecent";
     let log = dir.join("seat.log");
-    let guard = start_clearing_seat(&socket, name, &log, false);
-    assert!(guard.ready(), "fake な席を立てられる");
     let state = dir.join("state");
+    let guard = start_clearing_seat(
+        &socket, name, &log, &state_file(&seat_dir_of(&state, name)), (FakeStamp::Now, FakeStamp::Now),
+    );
+    assert!(guard.ready(), "fake な席を立てられる");
     stamp_idle(&state, name);
     fs::write(seat_dir_of(&state, name).join("tick-stamp"), "").expect("直前の自打刻を置ける");
     let wm = dir.join("wm");
@@ -3967,7 +3969,7 @@ fn seat_evidence_inject_reports_unknown_reason_state_dir_when_place_is_unresolve
 }
 
 /// `consumed=false`（queue）は**送達の成功**であって失敗ではない: tick は `decision=inject` rc 0 で自打刻し、
-/// 次の周は `heartbeat-fresh` で**再送しない**（pointer は pane に 1 度だけ現れる）。false を失敗と読んで
+/// 次の周は brake（`pointer-recent`・`.109`）で**再送しない**（pointer は pane に 1 度だけ現れる）。false を失敗と読んで
 /// 打刻を飛ばす実装は 2 周目にもう 1 本送ってここで落ちる（planner 裁定 2026-09-12 の条件）。
 #[test]
 fn seat_evidence_tick_treats_consumed_false_as_delivered_and_does_not_resend() {
@@ -3995,7 +3997,7 @@ fn seat_evidence_tick_treats_consumed_false_as_delivered_and_does_not_resend() {
 
     let second = run_seat(&args);
     assert_eq!(rc_of(&second), i32::from(RC_OK), "stderr={}", stderr_of(&second));
-    assert_eq!(tick_token(&stdout_of(&second), "reason").as_deref(), Some("heartbeat-fresh"), "2 周目は再送しない: {}", stdout_of(&second));
+    assert_eq!(tick_token(&stdout_of(&second), "reason").as_deref(), Some("pointer-recent"), "2 周目は再送しない: {}", stdout_of(&second));
     let pointer = format!("seat heartbeat --target {name}");
     assert_eq!(capture(&socket, name).matches(&pointer).count(), 1, "pointer は 1 度だけ現れる");
     drop(guard);
