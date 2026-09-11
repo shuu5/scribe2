@@ -179,8 +179,9 @@ terms:
     relationships: [lane, 管理席, dolt push, gate]
   - canonical: 管理席
     domain: consumer
-    definition: admin の役割を持つ席。 停止の検知と再起動の規範は C9。
-    relationships: [席, admin lane]
+    definition: admin の役割を持つ席。 停止の検知と再起動の規範は C9。 既定の配送構造での仕事 (契約を pipeline に流す・runner の質問を planner へ中継する・go の後に merge する) は ADR-0016 §2.1 (proposed)。
+    forbidden: [運転席]
+    relationships: [席, admin lane, planner, 質問 record]
   - canonical: planner
     domain: consumer
     definition: 席の役割の 1 つ (設計協調)。 改訂前の憲法 (C7) では唯一の対話面だったが、 ADR-0003 以後は対話面の identity を rules 行 R-C7-1 が持つ (初期値 = 開発 session が user 直)。
@@ -419,6 +420,22 @@ terms:
     domain: consumer
     definition: 作業記憶を退避し、 session を作り直し、 退避物から復元する一周 (SRS FR28)。 退避物が無い session では起こさない。
     relationships: [管理 tick, 開発 session]
+  - canonical: Blocked
+    domain: consumer
+    definition: 便の段の 1 つ。 3 クラスを名乗る契約が spawn の手前で承認 event を待っている状態 (SRS FR15 / FR16)。
+    relationships: [承認 event, 3 クラス, 便]
+  - canonical: 質問 record
+    domain: consumer
+    definition: runner が契約の不足を返して止まるときに stdout の最終行へ書く JSON 1 つ (question / about)。 包みの rc と pipeline の読み方は ADR-0016 §2.2 (proposed)。
+    relationships: [runner, Questioned, 回答 event, 契約]
+  - canonical: Questioned
+    domain: consumer
+    definition: 便の段の 1 つ。 runner の質問 record を受けて回答を待っている状態 (ADR-0016 §2.2・Blocked と同型)。
+    relationships: [質問 record, 回答 event, 便]
+  - canonical: 回答 event
+    domain: consumer
+    definition: 契約の所有者 (planner) が質問に答えて fleet に記帳する event (QuestionAnswered・逐語付き・actor は machine)。 user の言葉は承認 event にだけ載る (ADR-0016 §2.3)。
+    relationships: [質問 record, Questioned, 承認 event, planner]
   - canonical: 上限 record
     domain: consumer
     definition: claude が口座の使用上限を伝える専用種別の record (rate_limit_event)。 status と使用率を構造化 field で持ち、 器の上限判定はこの record だけを入力にする (ADR-0012 §2.1)。

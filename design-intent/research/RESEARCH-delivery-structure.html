@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="folio-doc-type" content="research-report">
+<meta name="folio-layer" content="project">
+<meta name="folio-version" content="0.1.0">
+<meta name="folio-status" content="active">
+<meta name="folio-stakeholders" content="Developer, AI Agent">
+<meta name="folio-research-date" content="2026-09-11">
+<title>RESEARCH-delivery-structure — 便の配送構造: 席並列 / pipeline 並列 / 混成の比較 (2026-09-11 の実測)</title>
+<link rel="stylesheet" href="../../common.css">
+<script type="application/ld+json">
+{
+  "@context": {
+    "dc": "http://purl.org/dc/terms/",
+    "schema": "https://schema.org/",
+    "folio": "https://folio.dev/spec/v1/"
+  },
+  "@id": "./RESEARCH-delivery-structure.html",
+  "@type": "schema:TechArticle",
+  "dc:isReferencedBy": [
+    { "@id": "../decisions/ADR-0016-default-delivery-structure-and-typed-question-record.html" }
+  ],
+  "dc:isPartOf": [
+    { "@id": "./README.html" }
+  ],
+  "dc:title": "RESEARCH-delivery-structure — 便の配送構造: 席並列 / pipeline 並列 / 混成の比較 (2026-09-11 の実測)",
+  "folio:version": "0.1.0",
+  "folio:stakeholders": ["Developer", "AI Agent"]
+}
+</script>
+</head>
+<body>
+<!-- folio:chrome-top -->
+<a class="skip-link" href="#s1-question">本文へスキップ</a>
+<nav class="breadcrumb" aria-label="パンくず"><ol>
+  <li><a href="../index.html">design-intent</a></li>
+  <li><a href="./README.html">research</a></li>
+  <li aria-current="page">RESEARCH-delivery-structure</li>
+</ol></nav>
+<!-- /folio:chrome-top -->
+
+<header class="doc-header">
+  <h1>RESEARCH-delivery-structure — 便の配送構造: 席並列 / pipeline 並列 / 混成の比較 (2026-09-11 の実測)</h1>
+  <div class="meta">v0.1.0 &middot; status: active &middot; 調査日 2026-09-11 &middot; research-report &middot; 決めない (結論は <a href="../decisions/ADR-0016-default-delivery-structure-and-typed-question-record.html">ADR-0016</a> が持つ)</div>
+</header>
+<!-- folio:chrome-toc -->
+<nav class="toc" aria-label="ページ内目次">
+<ol>
+  <li><a href="#s1-question">§1. 問い (何を調べたか)</a></li>
+  <li><a href="#s2-measurements">§2. 記録時点の現実 (実測)</a></li>
+  <li><a href="#s3-comparison">§3. 3 案の比較</a></li>
+  <li><a href="#s4-teammate">§4. teammate と claude -p の差 (事実だけ)</a></li>
+  <li><a href="#s5-open">§5. 未解決の問い (ADR へ渡す)</a></li>
+  <li><a href="#s6-sources">§6. 出所</a></li>
+</ol>
+</nav>
+<!-- /folio:chrome-toc -->
+
+<aside class="informative">
+<ul>
+  <li>bead: <code>s2-07l.111</code> (相談 bead <code>s2-07l.42</code> の材料 2 件目)</li>
+  <li>出所: user の問い 2026-09-11 (会話面・planner 席)。本 doc は探索であり<strong>決めない</strong>。採否は ADR-0016 が記録し、 SRS への反映は user の裁定事項。</li>
+  <li>口座名・host 名・path は書かない (PUBLIC 面)。席は役割 (planner / 管理席) で呼び、 口座は「口座 1 つ」とだけ書く。</li>
+</ul>
+</aside>
+
+<section id="s1-question" class="informative">
+<h2>§1. 問い (何を調べたか)</h2>
+<p class="section-essence" data-audience="human">この文書が調べたのは「いまの作り方 (管理席を何席も並べて、 席が自分の手で実装する) は scribe v2 が最初に描いた形なのか」「そうでないなら、 何を既定の形と呼ぶべきか」「席ごとに口座を分けられるなら、 実装役を使い捨ての claude -p でなく席の中の teammate にしてもよいのか」の 3 点です。 答えは出しません。 材料を並べて、 決める文書 (ADR-0016) に渡します。</p>
+<p data-audience="machine">SRS が描いた並列の層は <a href="../spec/srs.html#FR5">FR5</a> (runner / lens は claude -p の 1 形) と <a href="../spec/srs.html#FR4">FR4</a> (契約 1 本に worktree 1 つと runner 1 つ) であり、 便の並列は pipeline の run の層で担保する想定だった。 記録時点 (2026-09-11) の現実は planner 1 席 + 管理席 3 席 (各 1 口座) が並び、 便の大半を席が自分の手で実装している。 問いは 3 つ: (Q-a) 席並列は v2 の本来の動きか。 (Q-b) 既定の配送構造として何を定義すべきか。 (Q-c) 口座分離が席の層で達成できるなら、 runner を teammate (Agent tool の subagent) にする方が優れるか。</p>
+</section>
+
+<section id="s2-measurements" class="informative">
+<h2>§2. 記録時点の現実 (実測)</h2>
+<p class="section-essence" data-audience="human">2026-09-11 の 1 日で main に入った変更、 pipeline が実際に回した便、 席から planner へ上がった質問、 planner が詰まった回数を数えました。 数はすべて「何を母集団にしたか」と一緒に書きます。</p>
+<table data-audience="machine">
+  <thead><tr><th>項目</th><th>値</th><th>母集団・出所</th></tr></thead>
+  <tbody>
+    <tr><td>main へ merge された PR</td><td>43 本 (JST 日) ／ 33 本 (UTC 日)</td><td>GitHub の merged 時刻を JST / UTC の日付で数えた (母集団 = <code>gh pr list --state merged</code> の直近 60 本)。 日付の境界で 10 本動く</td></tr>
+    <tr><td>main の commit</td><td>43 本</td><td><code>git log</code>・2026-09-11 00:00 (JST) 以降の origin/main</td></tr>
+    <tr><td>席の構成</td><td>planner 1 + 管理席 3</td><td>tmux の窓 (各席 1 口座・口座名は書かない)</td></tr>
+    <tr><td>scribe2 自身の便で pipeline (intake → spawn → gate → land) を通した本数</td><td>1 本 (<code>s2-07l.46</code>・AC2 の初成立)</td><td>fleet の event log と管理席の報告。 残りの便は席が worktree で自分の手で実装し、 席の中の Agent tool の subagent (lens) で review した</td></tr>
+    <tr><td>その pipeline 実 run で runner が撃った command</td><td>Bash 21 件 (cargo 11・git 4・他 6)・deny 3 件・test の RED 4 回 → 416 passed・gate の verify 8 段 rc 0・lens PASS・CI 6/6</td><td><code>s2-07l.46</code> の報告 (raw stream の集計・母集団 Bash 21 + Read 15)</td></tr>
+    <tr><td>runner が聞き返した回数</td><td>0 回</td><td>runner の prompt template が「対話しない・人へ質問を返さない」と命じ、 質問を返す record の口が無い (<code>crates/&lt;NAME&gt;/src/headless/runner.txt</code>)</td></tr>
+    <tr><td>管理席から planner へ上がった QUESTION</td><td>9 件・うち契約側の誤り 6 件</td><td>planner の計数 (会話面・2026-09-11)。 契約側の誤りの例: verify 行の制御文字 (<code>s2-07l.46</code>)・snapshot は test diff に数えない (<code>s2-07l.101</code>)・新規 module の歯は flip できない (<code>s2-07l.106</code>)</td></tr>
+    <tr><td>QUESTION の注入が planner の入力欄が塞がっていて不達になった回数</td><td>1 件が 8 回連続</td><td><code>s2-07l.103</code> の記帳 (planner が前面で長い cargo を回していた周)</td></tr>
+    <tr><td>planner の context が上限 (60%) に達して退避した回数</td><td>2 回 (54% と 60%)</td><td>planner 席の作業記憶 (2026-09-11)</td></tr>
+    <tr><td>同じ file を 2 席が触って rebase で解いた衝突</td><td>1 便・3 file 6 区間</td><td><code>s2-07l.95</code> が <code>s2-07l.105</code> の land 後に rebase (管理席の報告 §8)</td></tr>
+    <tr><td>gate の独立性の担保</td><td>散文 (dispatch file の「lens 1 本・WF 禁止」) + planner の再実測</td><td>席が実装した便の review は席自身が起こした subagent で、 merge も同じ席が押す。 pipeline の便では write-set guard・verify 行・lens が構造で在る (<a href="../decisions/ADR-0009-vessel-grants-runner-permissions-and-mutation-proof.html">ADR-0009</a>)</td></tr>
+  </tbody>
+</table>
+<p data-audience="machine">読み方: 席並列は 1 日 (JST) で 43 本の PR を land させた。 一方で pipeline を通した便は 1 本で、 gate の独立性は構造でなく散文と planner の再実測に寄っている。 planner は全 PR の再実測と go を担い、 context の上限で 2 回止まり、 席からの QUESTION は入力欄の詰まりで届かない周があった。 runner は聞き返せないため、 契約の穴 (9 件中 6 件) は pipeline では gate の FAIL か黙った推測として現れるはずで、 席経由では QUESTION として上がった。</p>
+</section>
+
+<section id="s3-comparison" class="informative">
+<h2>§3. 3 案の比較</h2>
+<p class="section-essence" data-audience="human">「席を並べる」「pipeline の便を並べる」「席が pipeline の便を流す」の 3 つを、 審査の独立性・planner の詰まり・衝突・費用・口座・聞き返しの 6 つの軸で並べます。 どれが良いかは書きません。</p>
+<table data-audience="machine">
+  <thead><tr><th>軸</th><th>(A) 席並列 (記録時点の形)</th><th>(B) pipeline 並列 (SRS が描いた形)</th><th>(C) 混成 (planner 1 + 管理席 N が pipeline を流す)</th></tr></thead>
+  <tbody>
+    <tr><td>gate の独立性</td><td>散文 + planner の再実測 (実装・review・merge が同じ席)</td><td>構造 (write-set guard・verify 行・lens・land の CAS)</td><td>構造 (便は pipeline)。 席が手で実装する便だけ (A) と同じ</td></tr>
+    <tr><td>planner の律速</td><td>全 PR の再実測と go が planner に集まる。 席を増やすほど集まる</td><td>gate は機械。 planner は契約と裁定だけ</td><td>(B) と同じ。 QUESTION の中継が席の仕事になる</td></tr>
+    <tr><td>衝突の調整</td><td>dispatch の散文 (触らない worktree の列挙)・rebase は席の手</td><td>write-set の交差は intake で検査できる (未実装)・land は base 固定の CAS</td><td>(B) と同じ</td></tr>
+    <tr><td>費用</td><td>席は常時 context を持つ。 cycle と tick の運用費が席数分</td><td>runner は便ごとに使い捨て。 席の費用は planner 1 つ分</td><td>席数分の運用費は残るが、 席の context は契約と中継だけで軽い</td></tr>
+    <tr><td>口座分離の層</td><td>席ごと (1 席 1 口座)</td><td>run ごと (<code>--account-dir</code>・渡さなければ親の口座)</td><td>席ごと。 run は親 (席) の口座を継承する (記録時点の <code>s2-07l.46</code> の形)</td></tr>
+    <tr><td>聞き返し</td><td>席から planner へ QUESTION (注入・不達の周あり)</td><td>無い (runner は対話しない)。 契約の穴は gate の FAIL か黙った推測</td><td>runner が typed な record で質問を返し、 席が planner へ中継する口を足せば可 (未実装・ADR-0016 §2.2)</td></tr>
+    <tr><td>C16 (edit time で止める) / N2 (散文の規則は規則ではない) が求める「構造で止める」の充足面</td><td>散文 (dispatch file) + 再実測</td><td>構造 (guard・verify 行・lens・CAS)</td><td>構造 (便は pipeline)。 席の役割は記録時点の SRS に無い</td></tr>
+  </tbody>
+</table>
+</section>
+
+<section id="s4-teammate" class="informative">
+<h2>§4. teammate と claude -p の差 (事実だけ)</h2>
+<p class="section-essence" data-audience="human">席の中で起こす teammate (Agent tool の subagent) と、 画面なしで起こす claude -p の違いを、 いま分かっている事実だけ並べます。 「口座を分けるため」だけが claude -p の理由ではありません。</p>
+<table data-audience="machine">
+  <thead><tr><th>観点</th><th>teammate (Agent tool の subagent)</th><th>claude -p (runner / lens の記録時点の形)</th></tr></thead>
+  <tbody>
+    <tr><td>口座</td><td>親 session の口座に固定</td><td><code>--account-dir</code> で便ごとに切替可。 渡さなければ親の口座</td></tr>
+    <tr><td>settings の読み込み</td><td>親 session の settings を継承する (器から制御できない)</td><td>user / project / local の settings を 1 つも読まない形を器が強制する (<a href="../decisions/ADR-0011-vessel-launches-claude-without-settings.html">ADR-0011</a>・実測で hook 0 件)</td></tr>
+    <tr><td>session の要否</td><td>生きている席が要る (席が cycle すると subagent の親が変わる)</td><td>binary から起こせる。 席が無くても回る</td></tr>
+    <tr><td>判定入力</td><td>親が読む text (自由文)</td><td>stream-json の record と rc (typed・<a href="../decisions/ADR-0012-rate-limit-detection-reads-dedicated-record.html">ADR-0012</a>)。 lens の verdict は最終行の JSON</td></tr>
+    <tr><td>聞き返し</td><td>途中で親へ text を返せる (multi-turn)</td><td>記録時点では不可。 最終行に typed な record を返して止まる形は足せる (ADR-0016 §2.2)</td></tr>
+    <tr><td>権限</td><td>親の permission を継承</td><td><code>--allowedTools</code> を凍結した写しから毎回明示 (<a href="../decisions/ADR-0009-vessel-grants-runner-permissions-and-mutation-proof.html">ADR-0009</a>・<a href="../decisions/ADR-0010-vessel-declaration-holds-allowlist-and-common-verify.html">ADR-0010</a>)</td></tr>
+    <tr><td>起こす手間</td><td>1 tool 呼出</td><td>worktree + 契約 + 写し + 起動 (pipeline が担う)</td></tr>
+    <tr><td>記録時点の用途</td><td>席の中の review (lens-NN)</td><td>pipeline の runner / lens</td></tr>
+  </tbody>
+</table>
+<p data-audience="machine">口座分離を席の層で達成した場合に残る差は、 settings 不読の強制・無 session での起動・typed な判定入力・毎回明示の権限の 4 つである (採否は ADR-0016 §5 (B))。</p>
+</section>
+
+<section id="s5-open" class="informative">
+<h2>§5. 未解決の問い (ADR へ渡す)</h2>
+<p class="section-essence" data-audience="human">この文書では決めません。 次の 4 つを決める文書 (ADR-0016) と、 要件を書き直す裁定 (SRS・user) に渡します。</p>
+<ol data-audience="machine">
+  <li><strong>既定の配送構造</strong>を SRS に書くか (記録時点の SRS は「planner や管理席のように session をまたいで対話を続ける」と役割に触れるだけで、 席の仕事の境界を定めていない)。</li>
+  <li><strong>QUESTION の口の形</strong>: record の置き場 (runner の最終行 JSON か run dir の file か)・段の名前・誰が答えるか・回答の記帳の actor。</li>
+  <li><strong>管理席が自分の手で実装してよい便の境界</strong> (pipeline が回せない便 = 器の穴・design-intent・host 作業、 で閉じるか)。</li>
+  <li><strong>teammate の用途</strong>を席の中の review に限るか。 再検討の条件 (口座・settings・無 session・typed record の 4 差が teammate 側で埋まったとき) を残すか。</li>
+</ol>
+</section>
+
+<section id="s6-sources" class="informative">
+<h2>§6. 出所</h2>
+<ul data-audience="machine">
+  <li>user の問い 3 点と裁定 (2026-09-11・会話面・planner 席)。 逐語は台帳 <code>s2-07l.42</code> / <code>s2-07l.111</code> の notes と planner の作業記憶が持つ (tracked file には写さない)。</li>
+  <li>pipeline 実 run の集計: 管理席の報告 <code>s2-07l.46</code> (2026-09-11)・<code>s2-07l.79</code> (toy repo 3 便)。</li>
+  <li>QUESTION の件数と契約側の誤り: planner の計数 (会話面・2026-09-11)。 不達 8 回は <code>s2-07l.103</code> の notes。</li>
+  <li>rebase 衝突: 管理席の報告 <code>s2-07l.95</code> §8。</li>
+  <li>runner / lens の起動形と判定入力: <a href="../decisions/ADR-0009-vessel-grants-runner-permissions-and-mutation-proof.html">ADR-0009</a>・<a href="../decisions/ADR-0010-vessel-declaration-holds-allowlist-and-common-verify.html">ADR-0010</a>・<a href="../decisions/ADR-0011-vessel-launches-claude-without-settings.html">ADR-0011</a>・<a href="../decisions/ADR-0012-rate-limit-detection-reads-dedicated-record.html">ADR-0012</a>・設計 <code>docs/design/pipeline.md</code> §6。</li>
+</ul>
+</section>
+
+<!-- folio:chrome-bottom -->
+<script>
+(function () {
+  var openedForPrint = [];
+  window.addEventListener('beforeprint', function () {
+    openedForPrint = [];
+    var ds = document.querySelectorAll('details:not([open])');
+    for (var i = 0; i < ds.length; i++) { ds[i].setAttribute('open', ''); openedForPrint.push(ds[i]); }
+  });
+  window.addEventListener('afterprint', function () {
+    for (var i = 0; i < openedForPrint.length; i++) openedForPrint[i].removeAttribute('open');
+    openedForPrint = [];
+  });
+  if (!document.querySelector('[data-audience]')) return;
+  /* 既定 = 人間プレゼン型 (ADR-0040 / rules §11.3): script 経由で初期 class を付与するため
+     no-JS では付かず全文可視に graceful degrade する。 static DOM は全文を保持 (AI/検索/印刷は不変)。 */
+  document.body.classList.add('audience-human');
+  var bar = document.createElement('nav');
+  bar.className = 'audience-toggle';
+  bar.setAttribute('aria-label', '表示対象の切替');
+  var states = [['both', '両方'], ['human', '人間向け'], ['machine', '機械向け']];
+  for (var s = 0; s < states.length; s++) {
+    (function (mode, label) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      b.setAttribute('aria-pressed', mode === 'human' ? 'true' : 'false');
+      b.addEventListener('click', function () {
+        document.body.classList.remove('audience-human', 'audience-machine');
+        if (mode !== 'both') document.body.classList.add('audience-' + mode);
+        var bs = bar.querySelectorAll('button');
+        for (var j = 0; j < bs.length; j++) bs[j].setAttribute('aria-pressed', bs[j] === b ? 'true' : 'false');
+      });
+      bar.appendChild(b);
+    })(states[s][0], states[s][1]);
+  }
+  var bc = document.querySelector('nav.breadcrumb');
+  if (bc && bc.parentNode) { bc.parentNode.insertBefore(bar, bc.nextSibling); }
+  else { document.body.insertBefore(bar, document.body.firstChild); }
+})();
+</script>
+<!-- /folio:chrome-bottom -->
+</body>
+</html>
