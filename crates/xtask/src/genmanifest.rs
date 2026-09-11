@@ -53,16 +53,18 @@ pub fn render(name: &str, version: &str) -> String {
     format!("{{\n  \"name\": \"{name}\",\n  \"version\": \"{version}\",\n  \"description\": \"{description}\"\n}}\n")
 }
 
-/// `name` / `owner` / `plugins` の 3 key を持つ marketplace 本文を組み立てる。
+/// `name` / `description` / `owner` / `plugins` の 4 key を持つ marketplace 本文を組み立てる。
 ///
 /// **個人の handle・repo の URL・host の path・口座名を 1 文字も持たない**（本 repo は
 /// PUBLIC・SRS CON2）。`owner.url` は任意の field なので**置かない**——置けるものを置くと、
 /// 生成器が個人情報を repo へ流し込む常設の口になる。`source` を `./` に取るのは、この repo
 /// 自身を directory marketplace として読ませるためで、絶対 path を書かずに済む形でもある。
+/// marketplace 自身の `description` は `claude plugin validate` が見る key で、plugins 側と
+/// 同じ共有 [`description`] から出す（`author` は個人情報になりうるので足さない・A1）。
 pub fn render_marketplace(name: &str) -> String {
     let description = description(name);
     format!(
-        "{{\n  \"name\": \"{name}\",\n  \"owner\": {{\n    \"name\": \"{name}\"\n  }},\n  \"plugins\": [\n    {{\n      \"name\": \"{name}\",\n      \"source\": \"./\",\n      \"description\": \"{description}\"\n    }}\n  ]\n}}\n"
+        "{{\n  \"name\": \"{name}\",\n  \"description\": \"{description}\",\n  \"owner\": {{\n    \"name\": \"{name}\"\n  }},\n  \"plugins\": [\n    {{\n      \"name\": \"{name}\",\n      \"source\": \"./\",\n      \"description\": \"{description}\"\n    }}\n  ]\n}}\n"
     )
 }
 
@@ -157,9 +159,148 @@ pub fn generate(root: &Path) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{render_hooks, render_marketplace, rule_int, HOOKS_REL, MARKETPLACE_REL, ROW_TIMEOUT, RULES_REL};
-    use crate::check::Layout;
-    use std::path::PathBuf;
+    use super::{
+        generate, render, render_hooks, render_marketplace, rule_int, HOOKS_REL, MANIFEST_REL,
+        MARKETPLACE_REL, ROW_TIMEOUT, RULES_REL,
+    };
+    use crate::check::{json_string_field, Layout};
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    /// 同一 process 内での dir 名衝突を避ける連番（`cargo test` は thread 並走）。
+    static SEQ: AtomicU32 = AtomicU32::new(0);
+
+    /// fixture の NAME。**実在しない名**にする（生成器が字面を焼く変異は、この名が出力に
+    /// 現れないことで落ちる）。
+    const FIXTURE_NAME: &str = "fixturename";
+    /// fixture の core version。
+    const FIXTURE_VERSION: &str = "9.9.9";
+    /// fixture の hook timeout（rules 行）。tracked の値と違えて「読んでいる」ことを測る。
+    const FIXTURE_TIMEOUT: u64 = 7;
+
+    /// repo の外に一意な tmp dir を作る（`tempfile` は足さない・憲法 A3）。
+    /// `create_dir`（`_all` ではない）で既存 dir を衝突として検出し、連番を変えて取り直す。
+    fn make_tmp_dir() -> PathBuf {
+        let base = std::env::temp_dir();
+        for _ in 0..8 {
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.subsec_nanos())
+                .unwrap_or(0);
+            let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+            let dir = base.join(format!("genmanifest-{}-{nanos}-{seq}", std::process::id()));
+            if std::fs::create_dir(&dir).is_ok() {
+                return dir;
+            }
+        }
+        panic!("一意な tmp dir を 8 回で作れない");
+    }
+
+    /// `generate` が読む最小の workspace を tmp に組む（Cargo.toml・core crate・runner・rules）。
+    fn write_fixture_root() -> PathBuf {
+        let root = make_tmp_dir();
+        let write = |rel: &str, body: &str| {
+            let path = root.join(rel);
+            std::fs::create_dir_all(path.parent().expect("親 dir")).expect("dir を作れる");
+            std::fs::write(&path, body).expect("fixture を書ける");
+        };
+        write(
+            "Cargo.toml",
+            "[workspace]\nmembers = [\"crates/core\", \"crates/xtask\"]\n",
+        );
+        write(
+            "crates/core/Cargo.toml",
+            &format!("[package]\nname = \"core\"\nversion = \"{FIXTURE_VERSION}\"\n"),
+        );
+        write(
+            "crates/core/src/name.rs",
+            &format!("pub const NAME: &str = \"{FIXTURE_NAME}\";\n"),
+        );
+        write("crates/xtask/Cargo.toml", "[package]\nname = \"xtask\"\n");
+        write(
+            RULES_REL,
+            &format!("[[rule]]\nid = \"{ROW_TIMEOUT}\"\nvalue = {FIXTURE_TIMEOUT}\n"),
+        );
+        root
+    }
+
+    /// tmp root の生成物を読む。
+    fn read_generated(root: &Path, rel: &str) -> String {
+        std::fs::read_to_string(root.join(rel)).unwrap_or_else(|err| panic!("{rel} を読める: {err}"))
+    }
+
+    /// `generate(root)` の**書く経路**: 3 つの manifest が実際に書かれ、render の返り値と byte
+    /// 一致する（既存の 2 本は tracked 生成物との一致しか見ず、書く経路は無測定だった）。
+    #[test]
+    fn gen_manifest_writes_all_three_manifests_via_generate() {
+        let root = write_fixture_root();
+        for rel in [MANIFEST_REL, HOOKS_REL, MARKETPLACE_REL] {
+            assert!(!root.join(rel).exists(), "生成前に {rel} は無い");
+        }
+
+        let report = generate(&root).expect("fixture の workspace から生成できる");
+        // 後始末は assert より前に済ませる（赤い回に tmp を漏らさない・check.rs の作法と同じ）。
+        let (plugin, hooks, market) = (
+            read_generated(&root, MANIFEST_REL),
+            read_generated(&root, HOOKS_REL),
+            read_generated(&root, MARKETPLACE_REL),
+        );
+        std::fs::remove_dir_all(&root).ok();
+
+        assert_eq!(plugin, render(FIXTURE_NAME, FIXTURE_VERSION), "plugin.json は render の bytes そのもの");
+        assert_eq!(
+            hooks,
+            render_hooks(FIXTURE_NAME, FIXTURE_TIMEOUT),
+            "hooks.json は render_hooks の bytes そのもの（timeout は fixture の rules 行）"
+        );
+        assert_eq!(
+            market,
+            render_marketplace(FIXTURE_NAME),
+            "marketplace.json は render_marketplace の bytes そのもの"
+        );
+        assert!(
+            report.contains(&format!("name={FIXTURE_NAME} version={FIXTURE_VERSION} timeout={FIXTURE_TIMEOUT}s")),
+            "報告行は fixture の値を写す（tracked の値ではない）: {report}"
+        );
+        // 実在の名は tracked の workspace から読む（歯の source に字面を置かない・name-literal）。
+        let real = Layout::discover(&workspace_root()).expect("workspace の配置を読める").name;
+        assert!(
+            !hooks.contains(&real),
+            "生成器は実在の名（{real}）を焼いていない（fixture の名だけが出る）"
+        );
+    }
+
+    /// 共有 `description(name)` が plugin.json と marketplace.json の**両方**へ届く: marketplace
+    /// 自身の description（plugins の前・`claude plugin validate` が見る key）と plugin.json の
+    /// description が同一 ∧ 非空 ∧ NAME を含む。A/B: description() の文言を変えると両面の期待が
+    /// 同時に動く（片方だけ写して持つ形をこの歯は通さない）。
+    #[test]
+    fn gen_manifest_shared_description_reaches_both_manifests_via_generate() {
+        let root = write_fixture_root();
+        generate(&root).expect("fixture の workspace から生成できる");
+        let plugin = read_generated(&root, MANIFEST_REL);
+        let market = read_generated(&root, MARKETPLACE_REL);
+        // 後始末は assert より前（赤い回に tmp を漏らさない）。
+        std::fs::remove_dir_all(&root).ok();
+
+        let in_plugin = json_string_field(&plugin, "description").expect("plugin.json に description");
+        let market_head = market
+            .split_once("\"plugins\"")
+            .map(|(head, _)| head.to_owned())
+            .expect("marketplace.json に plugins");
+        let in_market = json_string_field(&market_head, "description")
+            .expect("marketplace 自身（plugins の前）に description が在る");
+        assert!(!in_plugin.is_empty(), "非空");
+        assert_eq!(in_plugin, in_market, "2 つの manifest の description は同じ 1 箇所から出る");
+        assert!(in_market.contains(FIXTURE_NAME), "description は NAME を含む: {in_market}");
+        let (_, market_tail) = market.split_once("\"plugins\"").expect("plugins");
+        assert_eq!(
+            json_string_field(market_tail, "description").as_deref(),
+            Some(in_market.as_str()),
+            "plugins[0] の description も同じ 1 箇所から出る"
+        );
+    }
 
     /// workspace root（この crate の 2 つ上）。
     fn workspace_root() -> PathBuf {

@@ -136,10 +136,9 @@ WantedBy=timers.target
 
 1. この repo を directory marketplace として **user scope で**登録する。**project scope で登録して
    はならない**——tracked の `.claude/settings.json` に host の絶対 path が書かれ、PUBLIC 面を汚す。
-2. plugin を **project scope で** install する。
-3. `.claude/settings.json` の `enabledPlugins` に `<NAME>@<NAME>` を足す。**この編集は本設計の
-   範囲外**（marketplace を host へ登録した後の別便で、admin は本便で settings に触らない）。
-4. **走行中の session には `/reload-plugins` か再起動が要る**（hook は自動では反映されない）。
+2. plugin を **project scope で** install する（`claude plugin install <NAME>@<NAME> --scope project`
+   の 1 発で、`.claude/settings.json` の `enabledPlugins` まで入る＝手で足す手順は無い）。
+3. **走行中の session には `/reload-plugins` か再起動が要る**（hook は自動では反映されない）。
 
 **(c) 管理 tick の timer を有効にする。** §8 の雛形を user が埋めて有効化する（§8 のとおり unit は
 repo に入れない）。
