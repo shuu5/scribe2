@@ -5,7 +5,7 @@
 //! （打ちかけが無い）。1 つでも欠けたら **1 key も送らずに断る**——「送ったが失敗した」と
 //! 「そもそも送っていない」を [`Cycle`] で分けて持つのはこのためである（bool で持たない）。
 
-use super::{inject, is_idle, pane_of, sanitize_target, tmux_ok, WmScan};
+use super::{inject, is_idle, pane_of, sanitize_target, tmux_ok, StateDir, WmScan};
 use crate::fleet::json_lite::{self, Value};
 use crate::fleet::store::{self, LockPolicy};
 use crate::hook::{InjectionRecord, SCHEMA};
@@ -61,8 +61,8 @@ pub struct Request<'a> {
     pub socket: Option<&'a str>,
     /// pane 本文の代わりに読む file。
     pub capture_file: Option<&'a str>,
-    /// 解決済みの置き場（`<state_dir>`）。
-    pub state_dir: &'a Path,
+    /// 解決済みの置き場（`<state_dir>`・出所付き）。行と記録の末尾に 2 語を載せる（`.70`）。
+    pub state_dir: &'a StateDir,
     /// 復元 command（既定 [`DEFAULT_RESTORE`]）。
     pub restore: Option<&'a str>,
 }
@@ -104,7 +104,7 @@ pub fn lock_is_live(seat_dir: &Path, ttl_s: u64) -> bool {
 /// cycle を 1 回回す。
 pub fn run(request: &Request) -> Cycle {
     let started = Instant::now();
-    let dir = super::seat_dir(request.state_dir, request.target);
+    let dir = super::seat_dir(&request.state_dir.path, request.target);
     let result = perform(request, &dir);
     record(request, &result, started);
     result
@@ -294,16 +294,13 @@ fn is_consumed_echo(line: &str) -> bool {
 /// なった（実測 2026-09-11 `.96` A/B・記録が真の値と食い違う＝C10）。席が queue を消費して
 /// 入力欄が空になるまで見続ける。上限の後も残っていれば従来どおり失敗（弁別は不変）。
 fn send_restore(request: &Request) -> bool {
-    let Some(state) = request.state_dir.to_str() else {
-        return false;
-    };
     let payload = request.restore.unwrap_or(DEFAULT_RESTORE);
     let sent = inject::deliver_within(
         &inject::Request {
             target: request.target,
             socket: request.socket,
             payload,
-            state_dir: Some(state),
+            state_dir: Some(request.state_dir),
         },
         CLEAR_WAIT,
     );
@@ -326,17 +323,20 @@ pub fn summary(result: &Cycle) -> String {
     }
 }
 
-/// 成立の 1 行。
-pub fn render(target: &str, result: &Cycle) -> String {
+/// 成立の 1 行。置き場が解けた周は判定（done / refused / failed）に依らず末尾に 2 語を載せ、
+/// 解けない周（`state` が `None`）は載せない（tick と同じ規律・`.70`）。
+pub fn render(target: &str, result: &Cycle, state: Option<&StateDir>) -> String {
+    let suffix = inject::suffix_of(state);
     match *result {
-        Cycle::Done => format!("seat: cycle done target={}", sanitize_target(target)),
-        _ => format!("seat: cycle {}", summary(result)),
+        Cycle::Done => format!("seat: cycle done target={}{suffix}", sanitize_target(target)),
+        _ => format!("seat: cycle {}{suffix}", summary(result)),
     }
 }
 
-/// 1 回を記録する。**置き場が解けない周は書かない**（rc は変えない）。
+/// 1 回を記録する。**置き場が解けない周は書かない**（rc は変えない）。`what` の末尾にも
+/// 表示と同じ 2 語（席側の打刻行と並べるだけで別 dir を弁別できる・`.70`）。
 fn record(request: &Request, result: &Cycle, started: Instant) {
-    let what = format!("cycle {}", summary(result));
+    let what = format!("cycle {}{}", summary(result), request.state_dir.suffix());
     let entry = InjectionRecord {
         schema: SCHEMA,
         who: WHO.to_owned(),
@@ -350,6 +350,6 @@ fn record(request: &Request, result: &Cycle, started: Instant) {
     let Ok(policy) = LockPolicy::embedded() else {
         return;
     };
-    let path = inject::tick_path(request.state_dir, request.target);
+    let path = inject::tick_path(&request.state_dir.path, request.target);
     let _ = store::append_line(&path, &entry.to_line(), policy);
 }

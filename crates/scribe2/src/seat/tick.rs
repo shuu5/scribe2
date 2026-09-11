@@ -211,7 +211,7 @@ pub fn run(request: &Request) -> Outcome {
         return Outcome::failed_line(RC_REFUSED, render(&body_of_error(REASON_STATE_DIR)));
     };
     let dir = super::seat_dir(&state.path, request.target);
-    let judged = decide(request, &state.path, &dir);
+    let judged = decide(request, &state, &dir);
     let body = body(request.target, &judged, &state);
     record(&state.path, request.target, &body, started);
     match judged.decision {
@@ -221,7 +221,7 @@ pub fn run(request: &Request) -> Outcome {
 }
 
 /// 条件を順序固定で見る（鮮度 → pane 取得 → context → idle → 退避物 → lock）。
-fn decide(request: &Request, state: &Path, dir: &Path) -> Judged {
+fn decide(request: &Request, state: &super::StateDir, dir: &Path) -> Judged {
     let (Some(stale_s), Some(ttl_s)) = (super::int_rule(ID_STALE), cycle::ttl_s()) else {
         return Judged::bare(TickDecision::Error(meter::REASON_NO_RULE.to_owned()));
     };
@@ -246,7 +246,7 @@ fn decide(request: &Request, state: &Path, dir: &Path) -> Judged {
 }
 
 /// pane を取得した後の条件（context → idle → 退避物 → lock）。
-fn judge(request: &Request, state: &Path, dir: &Path, seen: &Seen) -> (TickDecision, Option<String>) {
+fn judge(request: &Request, state: &super::StateDir, dir: &Path, seen: &Seen) -> (TickDecision, Option<String>) {
     // 他の cycle が走っている席（lock が live）には退避の pointer も送らない——作り直しの最中に
     // 行を queue しても、届く先は消えるか作り直された席である（排他は cycle 側と同じ 1 本の lock）。
     if let Some((pct, cap)) = over_cap(seen).filter(|_| !cycle::lock_is_live(dir, seen.ttl_s)) {
@@ -302,7 +302,7 @@ fn measure_context(pane: &str) -> Context {
 /// 評価しない**——tick 行に `cycle=` が付かないこと自体が「評価していない」の印である。
 fn parked(
     request: &Request,
-    state: &Path,
+    state: &super::StateDir,
     dir: &Path,
     ttl_s: u64,
 ) -> (TickDecision, Option<String>) {
@@ -340,19 +340,16 @@ fn is_fresh(seat_dir: &Path, stale_s: u64) -> bool {
 /// fresh で撃たない・storm 止め）。busy な席へは queue の形で届く（`.90`）。
 fn inject_line(
     request: &Request,
-    state: &Path,
+    state: &super::StateDir,
     dir: &Path,
     kind: InjectKind,
     payload: &str,
 ) -> TickDecision {
-    let Some(state_str) = state.to_str() else {
-        return TickDecision::Error(REASON_STATE_DIR.to_owned());
-    };
     let sent = inject::deliver(&inject::Request {
         target: request.target,
         socket: request.socket,
         payload,
-        state_dir: Some(state_str),
+        state_dir: Some(state),
     });
     match sent {
         // 注入の断り（`busy` 等）は noop の語彙と字が重なるので、**前置きで分ける**。

@@ -100,29 +100,34 @@ fn inject_of(args: &[String]) -> Outcome {
     let Some(payload) = payload_of(args) else {
         return refused_usage();
     };
+    // 置き場は席の 1 実装で **1 回だけ** 解き、表示と記録の両方に同じ 1 つを渡す。
+    let state = super::state_dir_of(state_dir);
     let request = inject::Request {
         target,
         socket,
         payload: &payload,
-        state_dir,
+        state_dir: state.as_ref(),
     };
     deliver(&request)
 }
 
 /// 注入を 1 回行い、結果を行にする。
 fn deliver(request: &inject::Request) -> Outcome {
+    // 表示行の所在は request が持つ解決済みの 1 つ（記録側と同じ・解けない周は 2 語を出さない）。
+    let state = request.state_dir;
     match inject::deliver(request) {
         inject::Delivery::Delivered(bytes, settled) => Outcome {
-            out: vec![inject::render_delivered(request.target, bytes, settled)],
+            out: vec![inject::render_delivered(request.target, bytes, settled, state)],
             err: Vec::new(),
             rc: RC_OK,
         },
         inject::Delivery::Refused(reason) => {
-            Outcome::failed_line(RC_REFUSED, inject::render_refused(reason))
+            Outcome::failed_line(RC_REFUSED, inject::render_refused(reason, state))
         }
-        inject::Delivery::Unconfirmed(reason) => {
-            Outcome::failed_line(RC_REFUSED, inject::render_unconfirmed(reason))
-        }
+        inject::Delivery::Unconfirmed(reason) => Outcome::failed_line(
+            RC_REFUSED,
+            inject::render_unconfirmed(reason, state),
+        ),
     }
 }
 
@@ -239,7 +244,7 @@ fn cycle_of(args: &[String]) -> Outcome {
     let Some(state) = super::state_dir_of(common.state_dir) else {
         return Outcome::failed_line(
             RC_REFUSED,
-            cycle::render(target, &Cycle::Refused(cycle::REASON_STATE_DIR)),
+            cycle::render(target, &Cycle::Refused(cycle::REASON_STATE_DIR), None),
         );
     };
     let result = cycle::run(&cycle::Request {
@@ -247,13 +252,13 @@ fn cycle_of(args: &[String]) -> Outcome {
         wm_dir,
         socket: common.socket,
         capture_file: common.capture_file,
-        state_dir: &state.path,
+        state_dir: &state,
         restore,
     });
     match result {
-        Cycle::Done => Outcome::ok_line(cycle::render(target, &result)),
+        Cycle::Done => Outcome::ok_line(cycle::render(target, &result, Some(&state))),
         Cycle::Refused(_) | Cycle::Failed(_) => {
-            Outcome::failed_line(RC_REFUSED, cycle::render(target, &result))
+            Outcome::failed_line(RC_REFUSED, cycle::render(target, &result, Some(&state)))
         }
     }
 }
