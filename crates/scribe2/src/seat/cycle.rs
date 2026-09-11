@@ -251,6 +251,11 @@ fn cleared(pane: &str) -> bool {
 }
 
 /// 復元 command を **便 2 の inject 経路**で送る（送達確認まで込み）。
+///
+/// 成功と数えるのは **席がその場で消費した**（[`inject::Settled::Consumed`]）周だけ。`/clear` の
+/// 直後の席には走っている turn が無いので、そこで入力欄に残った復元は「turn の終わりに消費
+/// される queue」ではなく submit されなかった打鍵で、会話を捨てた（不可逆）のに復元が刺さらない
+/// 席を `done` と数えることになる（lens-90 HIGH-2）。旧来の「現れた ∧ 入力欄が空」と同じ意味。
 fn send_restore(request: &Request) -> bool {
     let Some(state) = request.state_dir.to_str() else {
         return false;
@@ -262,7 +267,7 @@ fn send_restore(request: &Request) -> bool {
         payload,
         state_dir: Some(state),
     });
-    matches!(sent, inject::Delivery::Delivered(_))
+    matches!(sent, inject::Delivery::Delivered(_, inject::Settled::Consumed))
 }
 
 /// 1 行を literal で送り、Enter を送る。

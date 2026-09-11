@@ -56,8 +56,8 @@ pub struct Request<'a> {
 /// 4 条件のどれかが立たなかった**正常**で、[`Self::Error`] は判定そのものが回らなかった
 /// 異常である。1 つに畳むと、席が静かなのか機械が壊れているのかを記録から読めなくなる。
 pub enum TickDecision {
-    /// 4 条件が揃った＝注入した。
-    Inject,
+    /// 4 条件が揃った＝注入した（席がその場で消費したかを添える）。
+    Inject(inject::Settled),
     /// 条件が立たない＝撃たない（正常）。
     Noop(NoopReason),
     /// 実行系が回らない＝撃たない（異常・rc 1）。
@@ -121,7 +121,7 @@ pub fn run(request: &Request) -> Outcome {
     record(&state, request.target, &body, started);
     match decision {
         TickDecision::Error(_) => Outcome::failed_line(RC_REFUSED, render(&body)),
-        TickDecision::Inject | TickDecision::Noop(_) => Outcome::ok_line(render(&body)),
+        TickDecision::Inject(_) | TickDecision::Noop(_) => Outcome::ok_line(render(&body)),
     }
 }
 
@@ -209,8 +209,8 @@ fn inject_pointer(request: &Request, state: &Path, dir: &Path) -> TickDecision {
         inject::Delivery::Refused(reason) | inject::Delivery::Unconfirmed(reason) => {
             TickDecision::Error(format!("inject-{reason}"))
         }
-        inject::Delivery::Delivered(_) => match heartbeat::touch_at(&stamp_path(dir)) {
-            Ok(()) => TickDecision::Inject,
+        inject::Delivery::Delivered(_, settled) => match heartbeat::touch_at(&stamp_path(dir)) {
+            Ok(()) => TickDecision::Inject(settled),
             Err(_) => TickDecision::Error(REASON_STAMP.to_owned()),
         },
     }
@@ -219,7 +219,11 @@ fn inject_pointer(request: &Request, state: &Path, dir: &Path) -> TickDecision {
 /// 判定の本体（記録の `what` と表示で**同じ字面**を使う）。
 fn body(target: &str, decision: &TickDecision, cycled: Option<&str>) -> String {
     let head = match *decision {
-        TickDecision::Inject => format!("decision=inject target={}", sanitize_target(target)),
+        TickDecision::Inject(settled) => format!(
+            "decision=inject target={} consumed={}",
+            sanitize_target(target),
+            settled.as_str()
+        ),
         TickDecision::Noop(reason) => format!("decision=noop reason={}", reason.as_str()),
         TickDecision::Error(ref reason) => body_of_error(reason),
     };
