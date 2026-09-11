@@ -115,10 +115,8 @@ pub fn deliver_within(request: &Request, window: Duration) -> Delivery {
     let Some(pane) = capture(request.socket, request.target) else {
         return Delivery::Unconfirmed(REASON_TMUX_FAILED);
     };
-    match input_tail(&pane) {
-        None => return Delivery::Refused(REASON_UNKNOWN_INPUT),
-        Some(tail) if !tail.is_empty() => return Delivery::Refused(REASON_BUSY),
-        Some(_) => {}
+    if let Err(gate) = guard_input(&pane) {
+        return Delivery::Refused(gate.as_str());
     }
     // 送る**前**の pane で目印の出現数を数えておく: 同じ字面が先に在る（前周の pointer の写し・
     // tool の出力の引用）と `contains` 1 本では届いていない周が「届いた」に化ける（lens-90 HIGH-1）。
@@ -136,6 +134,38 @@ pub fn deliver_within(request: &Request, window: Duration) -> Delivery {
             Delivery::Delivered(bytes, settled)
         }
         Err(reason) => Delivery::Unconfirmed(reason),
+    }
+}
+
+/// 入力欄の門の断り。**閉じた 2 値**（憲法 C11: 境界ごとの enum・字面で routing しない）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputGate {
+    /// 入力欄が非空（人間が打ちかけている）。
+    Busy,
+    /// prompt 行を特定できない。
+    UnknownInput,
+}
+
+impl InputGate {
+    /// 断りの 1 行に使う字面（[`REASON_BUSY`] / [`REASON_UNKNOWN_INPUT`]）。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Busy => REASON_BUSY,
+            Self::UnknownInput => REASON_UNKNOWN_INPUT,
+        }
+    }
+}
+
+/// 送る前の入力欄の門（co-submit 止め・**送達の面の唯一の字面読み**）: prompt 行を特定できない
+/// pane は [`InputGate::UnknownInput`]、入力欄が非空なら [`InputGate::Busy`] で、どちらも 1 key も
+/// 送らない側へ倒す。席の busy / idle の判定ではない（それは [`super::state`] が typed に持つ・
+/// ADR-0015）——人間の打ちかけと 1 行に merge する事故を、送る直前の入力欄で塞ぐ門である。
+/// cycle の `/clear` も同じ門を通る（第 2 の判定を作らない）。
+pub fn guard_input(pane: &str) -> Result<(), InputGate> {
+    match input_tail(pane) {
+        None => Err(InputGate::UnknownInput),
+        Some(tail) if !tail.is_empty() => Err(InputGate::Busy),
+        Some(_) => Ok(()),
     }
 }
 

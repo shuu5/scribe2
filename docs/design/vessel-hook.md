@@ -29,14 +29,14 @@
 
 ## 3. hook の入口
 
-- `hooks/hooks.json` は `cargo xtask gen-manifest` が NAME から生成する（手書きしない）。entry は 3 つ: `SessionStart`（command `"${<NAME_UPPER>_BIN:-<NAME>}" hook session-start`）と `PreToolUse`（matcher `Edit|Write|MultiEdit|NotebookEdit`・command `"${<NAME_UPPER>_BIN:-<NAME>}" hook pre-tool-use`）と `PermissionRequest`（matcher `Bash`・command `"${<NAME_UPPER>_BIN:-<NAME>}" hook permission-request`＝§6.5 の一律 deny）。timeout は rules 行 `hook.timeout_s` の値を xtask が写す。冪等（同 workspace から同 bytes）。生成物は tracked。
+- `hooks/hooks.json` は `cargo xtask gen-manifest` が NAME から生成する（手書きしない）。entry は 5 つ: `SessionStart`（command `"${<NAME_UPPER>_BIN:-<NAME>}" hook session-start --pane "$TMUX_PANE"`）と `PreToolUse`（matcher `Edit|Write|MultiEdit|NotebookEdit`・command `"${<NAME_UPPER>_BIN:-<NAME>}" hook pre-tool-use`）と `PermissionRequest`（matcher `Bash`・command `"${<NAME_UPPER>_BIN:-<NAME>}" hook permission-request`＝§6.5 の一律 deny）と `UserPromptSubmit`（command `… hook user-prompt-submit --pane "$TMUX_PANE"`）と `Stop`（command `… hook stop --pane "$TMUX_PANE"`）。打刻の 3 つ（SessionStart / UserPromptSubmit / Stop）は席の状態を `<state_dir>/seat/<target>/state.jsonl` へ typed に打つ（[seat-state.md](./seat-state.md) §2 / §3・ADR-0015・guard ではない＝極性一覧に載せない）。`$TMUX_PANE` の展開も `${…_BIN}` と同じく shell が行う。timeout は rules 行 `hook.timeout_s` の値を xtask が写す。冪等（同 workspace から同 bytes）。生成物は tracked。
   - `${…_BIN:-<NAME>}` の展開は **Claude Code が hook を起動する shell** が行う。scribe2 自身は env を読まない（C2.2 に触れない）。既定は PATH 上の `<NAME>`（開発者は `cargo install --path` か PATH 追加で置く）。
 - `<NAME> hook <event> [--state-dir D]`: stdin の JSON（Claude Code の hook payload・`cwd` があればそれ・無ければ process cwd）から root を解き、`served` が `ByMe` でなければ **stdout 0 byte・stderr 0 byte・rc 0**。未知 event も 0 byte・rc 0（fail-open・他の器と衝突しない）。
 - timeout 到達は Claude Code 側で「判定の消失」＝fail-open である。guard の deny は時間切れに頼らず timeout の内側で返す（NFR5・要件カタログ R-K10）。
 
 ## 4. `session-start`
 
-stdout に 1 行 `[<NAME>/SessionStart] served version=<N> root=<root>` を出し、§6 の record を 1 件書く。
+stdout に 1 行 `[<NAME>/SessionStart] served version=<N> root=<root>` を出し、§6 の record を 1 件書く。 名乗りの後に席の状態を Idle で打刻する（`--pane` が無い・空なら打刻せず黙る・[seat-state.md](./seat-state.md) §2）。
 
 ## 5. `pre-tool-use` = write-set guard（FR20・C16）
 
