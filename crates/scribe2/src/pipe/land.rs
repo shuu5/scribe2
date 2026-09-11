@@ -336,6 +336,8 @@ fn with_lines(mut lines: Vec<String>, mut outcome: Outcome) -> Outcome {
 /// - 祖先でない（main が巻き戻った / 分岐した）周は追随の形が無いので rc 1 で何もしない。
 /// - worktree が clean でない周も rc 1 で何もしない（汚れた木では rebase を走らせない）。
 /// - 衝突は `git rebase --abort` で木を戻し `Failed detail=rebase-conflict`（終端・fail-closed）。
+/// - rebase で commit が 0 本になった周（同一変更の便が先に land）は gate を撃ち直さず
+///   `Failed detail=rebase-empty`（便の変更は既に main に在る＝close してよい合図）。
 /// - 追随した事実は `RunStage stage=Implemented detail=rebase:<old>..<new>` で残す（段が
 ///   `Gated` から `Implemented` へ戻る 1 件＝撃ち直す便の記帳）。base の読み手
 ///   （[`super::base_of_run`]）はこの行から新しい base を読む。
@@ -355,16 +357,7 @@ fn follow_main(entry: &Land<'_>, worktree: &Path, base: &str, main: &str) -> Fol
             check.as_str()
         )));
     }
-    if !git_ok(worktree, &["rebase", main]) {
-        // 木を衝突前へ戻す。戻せない周も main には触れていない（壊れているのは worktree）が、
-        // その事実は捨てない（段は Failed で retire も通らないので、読み手に届く口は stderr だけ）。
-        let restored = git_ok(worktree, &["rebase", "--abort"]);
-        let mut stopped = rebase_conflict(entry, base, main);
-        if !restored {
-            stopped
-                .err
-                .push(format!("pipe: {} は rebase の途中のまま（--abort も失敗）", worktree.display()));
-        }
+    if let Err(stopped) = rebase_onto(entry, worktree, base, main) {
         return Follow::Stopped(stopped);
     }
     let rebased = emit(
@@ -401,8 +394,51 @@ fn follow_main(entry: &Land<'_>, worktree: &Path, base: &str, main: &str) -> Fol
     Follow::Ready(lines)
 }
 
-/// rebase が衝突した周。木は戻してあり、便は終端する（**main は動いていない**）。
-fn rebase_conflict(entry: &Land<'_>, base: &str, main: &str) -> Outcome {
+/// worktree の branch を main へ rebase する（追随の (iii)・(iii′)）。**main は動かさない**。
+///
+/// - 衝突は `git rebase --abort` で木を戻し `rebase-conflict` で終端する。戻せない周もその事実は
+///   捨てない（段は Failed で retire も通らないので、読み手に届く口は stderr だけ）。
+/// - **同一変更の便**: rebase で commit が 0 本になった周は便の変更が既に main に在る（先に land した
+///   便と同じ patch）ので gate を撃ち直さず（lens を起動しない）`rebase-empty` で終端する。commit 数を
+///   読めない周は 0 に読み替えず、従来どおり撃ち直しの precheck へ流す（fail-closed の向きを変えない・
+///   `s2-07l.125`）。
+fn rebase_onto(entry: &Land<'_>, worktree: &Path, base: &str, main: &str) -> Result<(), Outcome> {
+    if !git_ok(worktree, &["rebase", main]) {
+        let restored = git_ok(worktree, &["rebase", "--abort"]);
+        let mut stopped = follow_failed(
+            entry,
+            "rebase-conflict",
+            format!("run {} の rebase が衝突した（base={base} main={main}）・main は動かさない", entry.run),
+        );
+        if !restored {
+            stopped
+                .err
+                .push(format!("pipe: {} は rebase の途中のまま（--abort も失敗）", worktree.display()));
+        }
+        return Err(stopped);
+    }
+    if commits_after_rebase(worktree, main) == Some(0) {
+        return Err(follow_failed(
+            entry,
+            "rebase-empty",
+            format!(
+                "run {} の変更は既に main に在る（rebase で commit が空・base={base} main={main}）・main は動かさない",
+                entry.run
+            ),
+        ));
+    }
+    Ok(())
+}
+
+/// rebase の後に便へ残った commit の数（`<main>..HEAD`）。**読めない周は `None`**（0 に読み替えない）。
+fn commits_after_rebase(worktree: &Path, main: &str) -> Option<u64> {
+    let range = format!("{main}..HEAD");
+    git_line(worktree, &["rev-list", "--count", &range])?.parse().ok()
+}
+
+/// 追随の途中で便が終端した周（`rebase-conflict` / `rebase-empty`）。**main は動いていない**。
+/// 理由は `Failed` の `detail` に名乗り、stderr の 1 行は呼び手が組む（同じ形・run id と base / main を持つ）。
+fn follow_failed(entry: &Land<'_>, detail: &str, reason: String) -> Outcome {
     let emitted = emit(
         entry.state_dir,
         &Emit {
@@ -412,13 +448,13 @@ fn rebase_conflict(entry: &Land<'_>, base: &str, main: &str) -> Outcome {
             stage: Some(Stage::Failed),
             seat: None,
             pid: None,
-            detail: Some("rebase-conflict".to_owned()),
+            detail: Some(detail.to_owned()),
         },
         entry.policy,
     );
     match emitted {
         Err(err) => broken(err.to_string()),
-        Ok(()) => refused(format!("rebase が衝突した（base={base} main={main}）・main は動かさない")),
+        Ok(()) => refused(reason),
     }
 }
 
