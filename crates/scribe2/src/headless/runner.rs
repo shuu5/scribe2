@@ -8,8 +8,11 @@ use crate::polarity::{OnFailure, Polarity, Timing};
 use super::{build, feed, fill, flag, need, read_stdin_bytes, Call, DEFAULT_CLAUDE, RC_RATE_LIMIT};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
 use crate::pipe::declaration::Effective;
+use crate::pipe::gate::last_json_object;
+use crate::pipe::RC_QUESTION;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
+use std::process::ExitStatus;
 
 /// prompt の文面（tracked な template・絶対 path も口座名も含まない）。
 const TEMPLATE: &str = include_str!("runner.txt");
@@ -140,20 +143,20 @@ fn launch(call: &Call<'_>, tools: &str) -> Outcome {
         Err(err) => return Outcome::failed_line(RC_BROKEN, format!("runner: claude を起動できない: {err}")),
     };
     feed(&mut child, call.prompt);
-    let mut records = 0_usize;
-    let mut limited = false;
-    // **観測した status は記録に残す**（ADR-0012 §2.1 末尾）。集合を**実測で育てる**唯一の口で、
-    // これが無いと集合は永久に空のままになる。**判定の入力ではない**ので、残せない周も便は続く。
-    let mut seen_status: Option<String> = None;
+    let mut seen = Watched::default();
     if let Some(out) = child.stdout.take() {
         for line in BufReader::new(out).lines().map_while(Result::ok) {
-            records = records.saturating_add(1);
+            seen.records = seen.records.saturating_add(1);
+            // **最終 result の text を覚える**（質問 record の置き場・設計 pipeline-question.md §3）。
+            if let Some(text) = result_text(&line) {
+                seen.last_result = Some(text);
+            }
             match decide(&line, STOP_STATUSES) {
                 Decision::Ignore => continue,
-                Decision::Observed(status) => seen_status = Some(status),
+                Decision::Observed(status) => seen.status = Some(status),
                 Decision::Stop(status) => {
-                    seen_status = Some(status);
-                    limited = true;
+                    seen.status = Some(status);
+                    seen.limited = true;
                     // **待たずに殺す**。上限に当たった席を回し続けても、次の record は
                     // 同じ上限でしか無い。
                     let _ = child.kill();
@@ -162,20 +165,53 @@ fn launch(call: &Call<'_>, tools: &str) -> Outcome {
             }
         }
     }
-    let status = child.wait();
-    let observed = observed_suffix(seen_status.as_deref());
-    if limited {
-        let reason = seen_status.as_deref().unwrap_or_default();
+    conclude(child.wait(), &seen)
+}
+
+/// stream を読みながら覚えたもの。
+#[derive(Debug, Default)]
+struct Watched {
+    /// 読んだ record の数。
+    records: usize,
+    /// **観測した上限 status**（ADR-0012 §2.1 末尾）。集合を**実測で育てる**唯一の口で、
+    /// これが無いと集合は永久に空のままになる。**判定の入力ではない**ので、残せない周も便は続く。
+    status: Option<String>,
+    /// 止める側の status を見たか。
+    limited: bool,
+    /// 最後に見た `result` record の text（質問 record はこの最終行に来る）。
+    last_result: Option<String>,
+}
+
+/// claude が終わった後の 1 行と rc を決める。
+///
+/// **rc は claude のものを写す**（包みが作り替えない）。例外は 1 つ、**正常終了の後**に最終
+/// result の text の最終行が質問 record だった周だけで、同じ record を stdout の最終行に
+/// **そのまま**写し [`RC_QUESTION`] で終える（観測行はその前・pipeline は最終行を読む）。
+/// record が無い・読めない周は claude の rc（0）を写す（FailOpen・[`QUESTION_POLARITY`]）。
+fn conclude(status: std::io::Result<ExitStatus>, seen: &Watched) -> Outcome {
+    let observed = observed_suffix(seen.status.as_deref());
+    if seen.limited {
+        let reason = seen.status.as_deref().unwrap_or_default();
         return Outcome::failed_line(RC_RATE_LIMIT, stop_line(reason));
     }
-    match status {
-        Err(err) => Outcome::failed_line(RC_BROKEN, format!("runner: claude を待てない: {err}")),
-        // **rc は claude のものを写す**（包みが作り替えない）。
-        Ok(found) => {
-            let rc = u8::try_from(found.code().unwrap_or(i32::from(RC_BROKEN))).unwrap_or(RC_BROKEN);
-            let line = format!("runner: rc={rc} records={records}{observed}");
-            if rc == 0 { Outcome::ok_line(line) } else { Outcome { out: vec![line], err: Vec::new(), rc } }
-        }
+    let found = match status {
+        Err(err) => return Outcome::failed_line(RC_BROKEN, format!("runner: claude を待てない: {err}")),
+        Ok(found) => found,
+    };
+    let rc = u8::try_from(found.code().unwrap_or(i32::from(RC_BROKEN))).unwrap_or(RC_BROKEN);
+    let line = format!("runner: rc={rc} records={}{observed}", seen.records);
+    if rc != 0 {
+        // 正常終了でない周は最終行を読まない（質問ではなく claude の失敗）。
+        return Outcome { out: vec![line], err: Vec::new(), rc };
+    }
+    match question_ending(seen.last_result.as_deref().unwrap_or_default()) {
+        Ending::Question(record) => Outcome { out: vec![line, record], err: Vec::new(), rc: RC_QUESTION },
+        Ending::Malformed(reason) => Outcome {
+            out: vec![line],
+            err: vec![format!("runner: 最終行は質問 record の形でない（{reason}）・claude の rc を写す")],
+            rc,
+        },
+        Ending::Plain => Outcome::ok_line(line),
     }
 }
 
@@ -257,6 +293,103 @@ pub fn decide(line: &str, stop_statuses: &[&str]) -> Decision {
         return Decision::Stop(status.to_owned());
     }
     Decision::Observed(status.to_owned())
+}
+
+/// 最終 result の text の**終わり方**（純関数の 3 値・設計 pipeline-question.md §3）。
+///
+/// [`Decision`] と同型に切り出すのは、production の loop を薄くして**判定そのものを歯で両向きに
+/// 測る**ためである。
+#[derive(Debug, PartialEq, Eq)]
+pub enum Ending {
+    /// 最終行に JSON の object が無い（普通の終わり方・claude の rc を写す）。
+    Plain,
+    /// JSON らしい最終行が在るが質問 record として読めない（壊れた JSON・`question` が空・
+    /// 文字列でない・複数行）＝claude の rc を写し、理由を stderr に 1 行（FailOpen を隠さない）。
+    Malformed(String),
+    /// 質問 record（`question` 必須非空 1 行・`about` 任意）。中身は**最終行そのもの**（写す用）。
+    Question(String),
+}
+
+/// この境界の極性（[`Ending`]）: claude が正常に終わった後、最終行の質問 record を読んだその場で便を
+/// `Questioned` へ倒す（rc [`RC_QUESTION`]・InLoop）。**record が無い・読めない周は止めず claude の rc へ
+/// 落とす**（ADR-0012 §2.1 と同じ「未知は claude の rc へ」＝FailOpen・一覧はこれを隠さない）。
+pub const QUESTION_POLARITY: Polarity = Polarity {
+    timing: Timing::InLoop,
+    on_failure: OnFailure::FailOpen,
+};
+
+/// 最終 result の text の最終行を判定する（純関数）。
+///
+/// 置き場と parse は lens の verdict と**同じ 1 本**（[`last_json_object`]・最終の `{` で始まる行を
+/// 1 つの flat object に読む）。`question` key を持たない object は record ではない（[`Ending::Plain`]）。
+pub fn question_ending(result: &str) -> Ending {
+    let Some(line) = result.lines().rev().find(|line| line.trim_start().starts_with('{')) else {
+        return Ending::Plain;
+    };
+    let pairs = match last_json_object(line) {
+        Ok(found) => found,
+        Err(reason) => return Ending::Malformed(reason),
+    };
+    let Some((_, value)) = pairs.iter().find(|(key, _)| key == "question") else {
+        return Ending::Plain;
+    };
+    match value.as_str() {
+        Some(question) if question.trim().is_empty() => Ending::Malformed("question が空である".to_owned()),
+        Some(question) if question.contains('\n') => Ending::Malformed("question が 1 行でない".to_owned()),
+        Some(_) => Ending::Question(line.trim().to_owned()),
+        None => Ending::Malformed("question が文字列でない".to_owned()),
+    }
+}
+
+/// stream-json の 1 行が `result` record なら、その `result`（text）を escape を解いて返す。
+///
+/// record は入れ子（`usage` 等）を持つので flat parser は使えない。種別は `"type":"result"` の対で見て、
+/// `"result"` key の**直後**の文字列 1 つだけを読む（[`find_key`] は `:` を伴う key だけを引くので、
+/// `"type":"result"` の値の字面には当たらない）。
+pub fn result_text(line: &str) -> Option<String> {
+    let body = line.trim_start();
+    if !body.starts_with('{') || !has_pair(body, "type", "result") {
+        return None;
+    }
+    let at = find_key(body, "result")?;
+    json_string(body.get(at..)?)
+}
+
+/// colon の後ろの JSON 文字列 1 つを escape を解いて読む（`\uXXXX` の代理対は結合する）。
+fn json_string(after_colon: &str) -> Option<String> {
+    let mut chars = after_colon.trim_start().strip_prefix('"')?.chars();
+    let mut out = String::new();
+    let mut pending_high: Option<u32> = None;
+    loop {
+        let ch = chars.next()?;
+        let decoded = match ch {
+            '"' => return Some(out),
+            '\\' => match chars.next()? {
+                'n' => '\n',
+                'r' => '\r',
+                't' => '\t',
+                'b' => '\u{0008}',
+                'f' => '\u{000c}',
+                'u' => {
+                    let hex: String = chars.by_ref().take(4).collect();
+                    let unit = u32::from_str_radix(&hex, 16).ok()?;
+                    match (pending_high.take(), unit) {
+                        (Some(high), 0xDC00..=0xDFFF) => {
+                            char::from_u32(0x10000 + ((high - 0xD800) << 10) + (unit - 0xDC00))?
+                        }
+                        (None, 0xD800..=0xDBFF) => {
+                            pending_high = Some(unit);
+                            continue;
+                        }
+                        (_, unit) => char::from_u32(unit)?,
+                    }
+                }
+                other => other,
+            },
+            other => other,
+        };
+        out.push(decoded);
+    }
 }
 
 /// 上限で止めた周の 1 行（記録面と同じ形で status を載せる）。

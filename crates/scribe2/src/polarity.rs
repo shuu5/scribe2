@@ -81,6 +81,8 @@ pub enum Guard {
     Approval,
     /// runner の上限 record による便の中断（[`crate::headless::runner::Decision`]・FailOpen）。
     RunnerStop,
+    /// runner の包みが最終行の質問 record で便を `Questioned` へ倒す判定（[`crate::headless::runner::Ending`]・FailOpen）。
+    RunnerQuestion,
     /// gate の機械検証の段（[`crate::pipe::gate::Check`]）。
     GateCheck,
     /// gate の lens 1 本の判定（[`crate::pipe::gate::Verdict`]）。
@@ -104,6 +106,7 @@ pub const ALL: &[Guard] = &[
     Guard::Budget,
     Guard::Approval,
     Guard::RunnerStop,
+    Guard::RunnerQuestion,
     Guard::GateCheck,
     Guard::GateLens,
     Guard::LandMain,
@@ -123,6 +126,7 @@ impl Guard {
             Self::Budget => crate::pipe::BUDGET_POLARITY,
             Self::Approval => crate::pipe::approve::POLARITY,
             Self::RunnerStop => crate::headless::runner::POLARITY,
+            Self::RunnerQuestion => crate::headless::runner::QUESTION_POLARITY,
             Self::GateCheck => crate::pipe::gate::POLARITY,
             Self::GateLens => crate::pipe::gate::LENS_POLARITY,
             Self::LandMain => crate::pipe::land::POLARITY,
@@ -142,6 +146,7 @@ impl Guard {
             Self::Budget => "pipe::Budget",
             Self::Approval => "pipe::approve::Approval",
             Self::RunnerStop => "headless::runner::Decision",
+            Self::RunnerQuestion => "headless::runner::Ending",
             Self::GateCheck => "pipe::gate::Check",
             Self::GateLens => "pipe::gate::Verdict",
             Self::LandMain => "pipe::land::MainCheck",
@@ -161,6 +166,7 @@ impl Guard {
             Self::Budget => "spawn-budget",
             Self::Approval => "approval-gate",
             Self::RunnerStop => "runner-stop",
+            Self::RunnerQuestion => "runner-question",
             Self::GateCheck => "gate-check",
             Self::GateLens => "gate-lens",
             Self::LandMain => "land-main-check",
