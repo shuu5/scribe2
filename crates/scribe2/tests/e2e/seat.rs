@@ -1501,9 +1501,12 @@ fn fixed_order_cases(target: &'static str) -> Vec<TickCase> {
                    wm_seat: Some(target), via_file: false, tmux: true, context: "",
                    stamp: StateFix::Idle, state: ST_IDLE },
         // 状態の門は typed の打刻で決まる: 入力欄が空の字面でも Busy の打刻なら busy。
+        // 壁時計では等号を pin しない（`age_s: STALE_S` は CI の 1 秒遅れで stale へ反転した・
+        // `s2-07l.118`・main 9e2cb42 run 34619928421）＝閾値の内側は境界から離して置く。
+        // flip-check: retroactive s2-07l.118
         TickCase { reason: "busy", beat_age_s: None, pane: Some(IDLE_PANE),
                    wm_seat: Some(target), via_file: true, tmux: false, context: CTX_10,
-                   stamp: StateFix::Busy { age_s: STALE_S }, state: ST_BUSY },
+                   stamp: StateFix::Busy { age_s: STALE_S / 2 }, state: ST_BUSY },
         TickCase { reason: "state-missing", beat_age_s: None, pane: Some(IDLE_PANE),
                    wm_seat: Some(target), via_file: true, tmux: false, context: CTX_10,
                    stamp: StateFix::Absent, state: ST_MISSING },
@@ -3569,8 +3572,10 @@ fn seat_state_tick_reads_the_last_stamp_line() {
 fn seat_state_cycle_refuses_unless_stamped_idle() {
     let target = "seatstategate";
     for case in &[
+        // 壁時計では等号を pin しない（`s2-07l.118`）: 閾値の内側は境界から離す。
+        // flip-check: retroactive s2-07l.118
         GateCase { reason: "busy", wm_seat: Some("seatstategate"), pane: Some(IDLE_PANE), broken_state: false,
-                   stamp: StateFix::Busy { age_s: STALE_S } },
+                   stamp: StateFix::Busy { age_s: STALE_S / 2 } },
         GateCase { reason: "state-missing", wm_seat: Some("seatstategate"), pane: Some(IDLE_PANE), broken_state: false,
                    stamp: StateFix::Absent },
         GateCase { reason: "state-unreadable", wm_seat: Some("seatstategate"), pane: Some(IDLE_PANE), broken_state: false,
