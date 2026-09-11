@@ -3,7 +3,7 @@
 - 要件: [FR27](../../design-intent/spec/srs.html#FR27) 打刻の合図 / [FR28](../../design-intent/spec/srs.html#FR28) cycle / [FR29](../../design-intent/spec/srs.html#FR29) 退避の合図 / [FR21](../../design-intent/spec/srs.html#FR21) 注入の記録
 - 憲法: [C3.3](../../design-intent/spec/constitution.html#c3) 席の状態は typed enum・端末描画や自由文を判定入力にしない / [C2.2](../../design-intent/spec/constitution.html#c2) env を読まない / [C10](../../design-intent/spec/constitution.html#c10) 測定値は出所付き / [C11.2](../../design-intent/spec/constitution.html#c11) 極性
 - 決定: [ADR-0015](../../design-intent/decisions/ADR-0015-seat-state-is-stamped-by-hooks-not-read-from-pane.html)（状態の出所は hook の打刻・target は生成 hooks.json の shell 行が渡す pane id から解く・打刻が無い周は注入しない）。[seat-autonomy.md](./seat-autonomy.md) §3 の裁定 (e)（pane 字面の idle 判定）を supersede する。
-- この設計から出る契約: `s2-07l.95`（打刻 hook 2 本・状態 file・tick の一次ソース差替え）→ 後続で cycle の作り直し証拠と inject の送達証拠（§6）。
+- この設計から出る契約: `s2-07l.95`（打刻 hook 2 本・状態 file・tick の一次ソース差替え）→ `s2-07l.112`（cycle の作り直しの証拠と inject の消費の証拠を打刻から取る・§6）。
 
 ## 1. 何を解くか
 
@@ -34,17 +34,19 @@
 - **退避の合図は状態の門の外**（SRS FR29「idle を待たずに」> ADR-0015 §2.3・planner 裁定 2026-09-11）: context が cap 以上で自席の退避物が無く cycle が走っていない周は、打刻が Busy / missing / unreadable / stale でも退避の合図を送る（busy な席へは queue の形で届き次 turn で消費される・cap 以上の事実は打刻と独立に測れる）。状態の門が掛かるのは打刻の合図（pointer）と cycle だけ。
 - 極性（fail-closed・注入しない側へ倒す）: 最終行が `Busy` → `noop reason=busy`／file が無い → `noop reason=state-missing`（hook が載っていない席・v1 の席）／読めない → `noop reason=state-unreadable`／`Busy` の `ts` が `seat.tick_stale_s` より古い → `noop reason=state-stale`（hook が死んだ疑い・**busy とも idle とも言わない**）。`Idle` だけが注入へ進む。`Idle` は鮮度を持たない（turn が終わった席は何時間経っても idle・hook が `Stop` の直後に死んだ席は門が開いたまま＝doctor の主題）。
 - cycle も同じ 1 本の読み口（`SeatState` を返す関数 1 つ）を通す。字面判定の関数（`is_idle` と印の集合）は削除し、探索域・印の集合の記述は設計 doc から消す（列挙は機械が持たない側へ＝もう持たない）。
+- **作り直しの証拠**（cycle・`s2-07l.112`）: `/clear` を送る前に打刻 file の行数（基線）と送達 ts を取り、基線より後ろに足された `SessionStart` の打刻（`ts >= 送達 ts`・同じ秒の hook を落とさない）だけを作り直しの証拠にする。pane の echo は読まない。窓（30 s）の内に来なければ `clear-unconfirmed`（復元を送らない・既存の語）。
+- **送達の証拠**（inject・`s2-07l.112`）: 目印が pane に現れた＝送達（`.90` 不変・rc 0）。`consumed=` は送達 ts 以後の `UserPromptSubmit` の打刻で決める: 在れば `true`／file は読めるが窓の内に無ければ `false`（queue・次の submit で消費）／file が無い・読めない・置き場が解けない周は `unknown` に `reason=` を添える（測れない・消費と読み替えない・C10）。
 
 ## 5. 極性一覧との関係
 
 - 打刻 hook（UserPromptSubmit / Stop / SessionStart の打刻）は**行為を止めない**ので guard ではない（[polarity.md §2](./polarity.md) の定義）＝極性一覧に載せない。打刻に失敗しても席は止めない（stdout 0 byte・rc 0）。
 - tick の「状態が無い・読めない・stale なら注入しない」は tick の判定（行為を止める側）で、既存の `noop` 語彙の内側。
 
-## 6. 後続（別契約）
+## 6. 証拠の出所（`s2-07l.112` で本文化）と後続
 
-- **作り直しの証拠**: cycle は `/clear` 送達 ts の後に `SessionStart` の打刻が在ることを作り直しの証拠にする（`.96` の残余 (1)〔前の echo が見えたまま今回の `/clear` が消費されない周〕を畳む）。
-- **送達の証拠**: inject の `consumed=` は「目印が消えた」でなく「送達 ts の後に `UserPromptSubmit` の打刻が在る」で決める（`.97` lens MEDIUM-2 の残余）。
-- 打刻の `sid` と heartbeat の突合（同じ target に別 sid の打刻が混ざる周の検出）は doctor の主題。
+- **作り直しの証拠**: cycle は `/clear` 送達 ts の後に足された `SessionStart` の打刻が在ることを作り直しの証拠にする（`.96` の残余 (1)〔前の echo が見えたまま今回の `/clear` が消費されない周〕を畳む）。読み口は `state::evidence_after`（基線 + 送達 ts）の 1 本で、inject と共用する（§4）。
+- **送達の証拠**: inject の `consumed=` は「入力欄が空になった」でなく「送達 ts の後に `UserPromptSubmit` の打刻が在る」で決める（`.97` lens MEDIUM-2 の残余）。値は**閉じた 3 値の enum**（planner 裁定 2026-09-12・文字列で持たない）: `true` = 送達 ts 以後の `UserPromptSubmit` の打刻が在る（消費した）／`false` = 打刻 file は読めるが窓の内に新しい打刻が無い（queue・次の submit で消費される・**送達の成功であって失敗ではない**＝tick は自打刻し再送しない）／`unknown` = 測れない（`reason=state-missing`〔file が無い＝hook 不在〕/ `state-unreadable`〔読めない〕/ `state-dir`〔置き場が解けない〕を添える・消費と読み替えない）。送達そのもの（rc 0）は目印の出現で決め、`.90` の裁定は不変。
+- **後続（別契約）**: 打刻の `sid` と heartbeat の突合（同じ target に別 sid の打刻が混ざる周の検出）は doctor の主題。
 
 ## 7. 却下案
 

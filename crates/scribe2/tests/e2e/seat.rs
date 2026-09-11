@@ -414,9 +414,13 @@ fn seat_inject_delivers_and_records_on_isolated_socket() {
     // **記録の dir 名と表示は潰した字面**になり、潰しが効いていることが測れる。
     let target = "seatdeliver:0.0";
     let sanitized = "seatdeliver_0.0";
-    let guard = start_seat(&socket, name);
-    assert!(guard.ready(), "独立 socket に prompt 付きの session を立てられる");
     let state = dir.join("state");
+    // hook を持つ席の形: 打刻 file が在り、受けた行ごとに `UserPromptSubmit` を打つ（消費の証拠）。
+    stamp_idle(&state, sanitized);
+    let guard = start_clearing_seat(
+        &socket, name, &dir.join("seat.log"), &state_file(&seat_dir_of(&state, sanitized)), (FakeStamp::Never, FakeStamp::Now),
+    );
+    assert!(guard.ready(), "独立 socket に打刻する席を立てられる");
     let marker = "seat-e2e-delivered";
     let payload = format!("echo {marker}");
 
@@ -440,7 +444,7 @@ fn seat_inject_delivers_and_records_on_isolated_socket() {
             payload.len(),
             provenance(&state, "flag")
         ),
-        "入力欄が空になった周は consumed=true"
+        "送達 ts 以後に UserPromptSubmit の打刻が足された周は consumed=true"
     );
     let pane = capture(&socket, target);
     assert!(pane.contains(marker), "pane に marker が現れる: {pane}");
@@ -473,9 +477,12 @@ fn seat_inject_delivered_line_carries_state_dir_provenance() {
     let dir = tmp();
     let socket = socket_of(&dir);
     let name = "seatinjprov";
-    let guard = start_seat(&socket, name);
-    assert!(guard.ready(), "独立 socket に prompt 付きの session を立てられる");
     let state = dir.join("state");
+    stamp_idle(&state, name);
+    let guard = start_clearing_seat(
+        &socket, name, &dir.join("seat.log"), &state_file(&seat_dir_of(&state, name)), (FakeStamp::Never, FakeStamp::Now),
+    );
+    assert!(guard.ready(), "独立 socket に打刻する席を立てられる");
     let payload = "echo seat-e2e-prov";
 
     let out = run_seat(&[
@@ -582,7 +589,8 @@ fn seat_inject_fails_closed_when_tmux_target_is_unreachable() {
 }
 
 /// 送った字面が pane に現れたが入力欄が空にならない周（席が busy で注入が queue された形）は
-/// **送達成功**で、入力欄の状態は `consumed=false` として行に添える（記録は現物のまま）。
+/// **送達成功**で、消費の証拠（送達 ts 以後の `UserPromptSubmit` の打刻）が窓の内に来ない周は
+/// `consumed=false` として行に添える（queue＝次 turn で消費される・記録は現物のまま・`s2-07l.112`）。
 ///
 /// 旧実装はこれを `unconfirmed reason=residual`（rc 1）にしていたが、その注入は席に届いて
 /// turn の終わりに消費されていた（実測 2026-09-11: tick.jsonl の `inject-residual` 9 件が全部
@@ -596,7 +604,9 @@ fn seat_inject_counts_queued_delivery_as_success_with_consumed_false() {
     let guard = start_seat(&socket, name);
     assert!(guard.ready(), "独立 socket に prompt 付きの session を立てられる");
     let state = dir.join("state");
-    let payload = "echo 'unterminated";
+    // 打刻 file は在る（hook を持つ席）が、`sh -i` は受けた行で打刻しない＝新しい打刻が来ない形。
+    stamp_idle(&state, name);
+    let payload = ": seat-e2e-queued";
 
     let out = run_seat(&[
         "inject",
@@ -618,7 +628,7 @@ fn seat_inject_counts_queued_delivery_as_success_with_consumed_false() {
             payload.len(),
             provenance(&state, "flag")
         ),
-        "現れた ＝ 送達成功・入力欄が空でない周は consumed=false"
+        "現れた ＝ 送達成功・消費の打刻が来ない周は consumed=false"
     );
     assert_eq!(stderr_of(&out), "", "成功の周は stderr 0 行");
     let recorded = fs::read_to_string(tick_file(&state, name)).unwrap_or_default();
@@ -1181,25 +1191,56 @@ fn run_seat_in(cwd: &Path, args: &[&str]) -> Output {
 /// 受け取った行は `log` へ 1 行ずつ積むので、**送った順序は pane の描画でなく席が受けた行**で
 /// 測れる。`mute_after_clear` の席は作り直した後に echo を止める＝**作り直しは確認できるが
 /// 復元の送達は確認できない**周（`restore-unconfirmed`）を作る。
+/// 偽の席が hook の代わりに置く打刻の**時刻**（`s2-07l.112`）。
+#[derive(Clone, Copy)]
+enum FakeStamp {
+    /// いま（送達 ts 以後＝証拠になる）。
+    Now,
+    /// 100 秒前（送達 ts より前＝古い打刻・証拠にならない）。
+    Old,
+    /// 打たない（hook が死んだ・載っていない席の形）。
+    Never,
+}
+
+/// 偽の席が打刻を 1 行 append する shell 断片（**契約の字面から**組む・設計 seat-state.md §2）。
+/// [`FakeStamp::Never`] は何もしない `:`。
+fn stamp_cmd(state_file: &Path, state: &str, event: &str, when: FakeStamp) -> String {
+    let ts = match when {
+        FakeStamp::Now => "$(date +%s)",
+        FakeStamp::Old => "$(( $(date +%s) - 100 ))",
+        FakeStamp::Never => return ":".to_owned(),
+    };
+    format!(
+        "printf '{{\"schema\":1,\"state\":\"{state}\",\"event\":\"{event}\",\"ts\":%s,\"sid\":\"fake\"}}\\n' \"{ts}\" >> '{}'",
+        state_file.display()
+    )
+}
+
+/// `/clear` を受けると画面を消して echo を描き直し、hook の代わりに `SessionStart` を `on_clear` の
+/// 時刻で打つ偽の席。それ以外の行は `UserPromptSubmit`（復元の消費の証拠）を `on_line` の時刻で打ち、
+/// 受けた字面を描いて `Stop`（turn の終わり＝実席と同じく Idle へ戻る）を同じ時刻で打つ。
+/// 打刻の file は `state_file`（`<seat dir>/state.jsonl`）。
 fn start_clearing_seat(
     socket: &str,
     name: &str,
     log: &Path,
-    mute_after_clear: bool,
+    state_file: &Path,
+    (on_clear, on_line): (FakeStamp, FakeStamp),
 ) -> IsolatedSeat {
-    let (after_clear, on_other) = if mute_after_clear {
-        ("stty -echo 2>/dev/null", ":")
-    } else {
-        (":", "printf 'seat got %s\\n' \"$line\"")
-    };
-    start_clearing_seat_with(socket, name, log, after_clear, on_other)
+    let after_clear = stamp_cmd(state_file, "idle", "SessionStart", on_clear);
+    let on_other = format!(
+        "{}; printf 'seat got %s\\n' \"$line\"; {}",
+        stamp_cmd(state_file, "busy", "UserPromptSubmit", on_line),
+        stamp_cmd(state_file, "idle", "Stop", on_line)
+    );
+    start_clearing_seat_with(socket, name, log, &after_clear, &on_other)
 }
 
 /// `/clear` の後に走らせる shell と、それ以外の行への応答を指定して偽の席を立てる。
 ///
-/// `/clear` を受けた席は画面を消した後、実席と同じく**消費済みの echo `❯ /clear`** を行頭に
-/// 描き直す（実測 2026-09-11: 作り直された席は必ずこの echo を新しい prompt の直上に残す）。
-/// echo を描かない偽の席は、作り直しの正の証拠を持たない形＝実席と別物になる。
+/// `/clear` を受けた席は画面を消した後、実席と同じく echo `❯ /clear` を行頭に描き直す（実測
+/// 2026-09-11）。**echo は作り直しの証拠ではない**（`s2-07l.112`）: 証拠は `after_clear` が置く
+/// `SessionStart` の打刻で、echo だけを描いて打刻しない席は「作り直しを確認できない席」の形になる。
 fn start_clearing_seat_with(
     socket: &str,
     name: &str,
@@ -1568,7 +1609,8 @@ fn seat_tick_injects_pointer_and_stamps_on_isolated_socket() {
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
     assert_eq!(
         stdout_of(&out),
-        format!("seat: tick decision=inject target={name} consumed=true kind=pointer{CTX_NO_SOURCE}{ST_IDLE}{}\n", provenance(&state, "flag"))
+        format!("seat: tick decision=inject target={name} consumed=false kind=pointer{CTX_NO_SOURCE}{ST_IDLE}{}\n", provenance(&state, "flag")),
+        "`sh -i` の席は打刻しない＝消費の証拠が来ないので consumed=false（送達は成立）"
     );
     let pane = capture(&socket, name);
     assert!(
@@ -1589,7 +1631,7 @@ fn seat_tick_injects_pointer_and_stamps_on_isolated_socket() {
     let out = run_seat(&args);
     assert_eq!(
         stdout_of(&out),
-        format!("seat: tick decision=inject target={name} consumed=true kind=pointer{CTX_NO_SOURCE}{ST_IDLE}{}\n", provenance(&state, "flag"))
+        format!("seat: tick decision=inject target={name} consumed=false kind=pointer{CTX_NO_SOURCE}{ST_IDLE}{}\n", provenance(&state, "flag"))
     );
     // socket を消す**前**に畳む（消してからでは kill-session が届かない・実測 2026-09-10）。
     drop(guard);
@@ -1633,8 +1675,8 @@ fn seat_tick_injects_externalize_pointer_when_context_reaches_cap_while_busy() {
         assert_eq!(rc_of(&out), i32::from(RC_OK), "{pct}%: stderr={}", stderr_of(&out));
         assert_eq!(
             stdout_of(&out),
-            format!("seat: tick decision=inject target={name} consumed=true kind=externalize context={pct}{ST_BUSY}{}\n", provenance(&state, "flag")),
-            "{pct}%: 打刻が Busy でも退避の合図は送る（state の列は busy のまま載る）"
+            format!("seat: tick decision=inject target={name} consumed=false kind=externalize context={pct}{ST_BUSY}{}\n", provenance(&state, "flag")),
+            "{pct}%: 打刻が Busy でも退避の合図は送る（state の列は busy のまま載る・busy な席は queue＝consumed=false）"
         );
         let seen = capture(&socket, name);
         assert!(seen.contains("/ready-compaction"), "{pct}%: 退避 skill の名が届く: {seen}");
@@ -1646,7 +1688,7 @@ fn seat_tick_injects_externalize_pointer_when_context_reaches_cap_while_busy() {
         let recorded = fs::read_to_string(tick_file(&state, name)).unwrap_or_default();
         assert!(
             recorded.contains(&format!(
-                r#""what":"decision=inject target=seatovercap consumed=true kind=externalize context={pct}{ST_BUSY}{}""#,
+                r#""what":"decision=inject target=seatovercap consumed=false kind=externalize context={pct}{ST_BUSY}{}""#,
                 provenance(&state, "flag")
             )),
             "{pct}%: 記録にも kind と context と state と置き場の出所が載る: {recorded}"
@@ -2134,9 +2176,11 @@ fn seat_cycle_refuses_when_lock_is_live_and_reclaims_stale_lock() {
     let socket = socket_of(&dir);
     let name = "seatlock";
     let log = dir.join("seat.log");
-    let guard = start_clearing_seat(&socket, name, &log, false);
-    assert!(guard.ready(), "fake な席を立てられる");
     let state = dir.join("state");
+    let guard = start_clearing_seat(
+        &socket, name, &log, &state_file(&seat_dir_of(&state, name)), (FakeStamp::Now, FakeStamp::Now),
+    );
+    assert!(guard.ready(), "fake な席を立てられる");
     let wm = dir.join("wm");
     wm_file(&wm, "working-memory.live.md", name);
     stamp_idle(&state, name);
@@ -2188,9 +2232,11 @@ fn seat_cycle_sends_clear_then_restore_in_order() {
     let socket = socket_of(&dir);
     let name = "seatcycle";
     let log = dir.join("seat.log");
-    let guard = start_clearing_seat(&socket, name, &log, false);
-    assert!(guard.ready(), "fake な席を立てられる");
     let state = dir.join("state");
+    let guard = start_clearing_seat(
+        &socket, name, &log, &state_file(&seat_dir_of(&state, name)), (FakeStamp::Now, FakeStamp::Now),
+    );
+    assert!(guard.ready(), "fake な席を立てられる");
     let wm = dir.join("wm");
     let parked = wm_file(&wm, "working-memory.parked.md", name);
     stamp_idle(&state, name);
@@ -2262,9 +2308,10 @@ fn seat_cycle_reports_clear_unconfirmed_when_session_is_not_rebuilt() {
     fs::remove_dir_all(&dir).ok();
 }
 
-/// 作り直しは確認できても、**復元の送達が確認できない**周は `restore-unconfirmed`。
+/// 作り直しは確認できても、**復元の消費が確認できない**周は `restore-unconfirmed`。
 ///
-/// 復元の送達確認は作り直しの確認と同じ**上限まで待つ**（`s2-07l.97`）ので、黙った席は
+/// 席は `/rebrief` の字面を描く（送達は成立）が `UserPromptSubmit` を打たない（[`FakeStamp::Never`]）
+/// ＝消費の証拠が無い。復元の確認は作り直しの確認と同じ**上限まで待つ**（`s2-07l.97`）ので、
 /// 2 s ではなく上限の後に失敗する（待つ時間が延びるのは失敗側だけ・成功条件は不変）。
 #[test]
 fn seat_cycle_reports_restore_unconfirmed_after_limit_when_seat_goes_silent() {
@@ -2272,9 +2319,11 @@ fn seat_cycle_reports_restore_unconfirmed_after_limit_when_seat_goes_silent() {
     let socket = socket_of(&dir);
     let name = "seatmute";
     let log = dir.join("seat.log");
-    let guard = start_clearing_seat(&socket, name, &log, true);
-    assert!(guard.ready(), "作り直し後に黙る席を立てられる");
     let state = dir.join("state");
+    let guard = start_clearing_seat(
+        &socket, name, &log, &state_file(&seat_dir_of(&state, name)), (FakeStamp::Now, FakeStamp::Never),
+    );
+    assert!(guard.ready(), "作り直し後に黙る席を立てられる");
     let wm = dir.join("wm");
     wm_file(&wm, "working-memory.mute.md", name);
     stamp_idle(&state, name);
@@ -2290,7 +2339,7 @@ fn seat_cycle_reports_restore_unconfirmed_after_limit_when_seat_goes_silent() {
     assert_eq!(
         fs::read_to_string(&log).unwrap_or_default(),
         "/clear\n/rebrief\n",
-        "復元は送っている（確認できないだけ）"
+        "復元は送っている（消費の打刻が無いだけ）"
     );
     assert!(
         !seat_dir_of(&state, name).join("cycle.lock").exists(),
@@ -2308,9 +2357,11 @@ fn seat_tick_runs_cycle_when_parked() {
     let socket = socket_of(&dir);
     let name = "seatparked";
     let log = dir.join("seat.log");
-    let guard = start_clearing_seat(&socket, name, &log, false);
-    assert!(guard.ready(), "fake な席を立てられる");
     let state = dir.join("state");
+    let guard = start_clearing_seat(
+        &socket, name, &log, &state_file(&seat_dir_of(&state, name)), (FakeStamp::Now, FakeStamp::Now),
+    );
+    assert!(guard.ready(), "fake な席を立てられる");
     let wm = dir.join("wm");
     wm_file(&wm, "working-memory.parked.md", name);
     stamp_idle(&state, name);
@@ -2349,9 +2400,11 @@ fn seat_tick_cycles_freshly_stamped_seat_when_own_wm_is_unconsumed() {
     let socket = socket_of(&dir);
     let name = "seatfreshparked";
     let log = dir.join("seat.log");
-    let guard = start_clearing_seat(&socket, name, &log, false);
-    assert!(guard.ready(), "fake な席を立てられる");
     let state = dir.join("state");
+    let guard = start_clearing_seat(
+        &socket, name, &log, &state_file(&seat_dir_of(&state, name)), (FakeStamp::Now, FakeStamp::Now),
+    );
+    assert!(guard.ready(), "fake な席を立てられる");
     let seat = seat_dir_of(&state, name);
     fs::create_dir_all(&seat).expect("seat dir を作れる");
     // 直前の打刻（mtime = いま）＝鮮度だけなら fresh で止まる周。
@@ -2400,9 +2453,11 @@ fn seat_tick_backs_off_after_a_recent_cycle() {
     let socket = socket_of(&dir);
     let name = "seatbackoff";
     let log = dir.join("seat.log");
-    let guard = start_clearing_seat(&socket, name, &log, false);
-    assert!(guard.ready(), "fake な席を立てられる");
     let state = dir.join("state");
+    let guard = start_clearing_seat(
+        &socket, name, &log, &state_file(&seat_dir_of(&state, name)), (FakeStamp::Now, FakeStamp::Now),
+    );
+    assert!(guard.ready(), "fake な席を立てられる");
     let wm = dir.join("wm");
     wm_file(&wm, "working-memory.parked.md", name);
     stamp_idle(&state, name);
@@ -2463,9 +2518,11 @@ fn seat_tick_re_evaluates_cycle_once_the_cycle_stamp_is_stale() {
     let socket = socket_of(&dir);
     let name = "seatstalestamp";
     let log = dir.join("seat.log");
-    let guard = start_clearing_seat(&socket, name, &log, false);
-    assert!(guard.ready(), "fake な席を立てられる");
     let state = dir.join("state");
+    let guard = start_clearing_seat(
+        &socket, name, &log, &state_file(&seat_dir_of(&state, name)), (FakeStamp::Now, FakeStamp::Now),
+    );
+    assert!(guard.ready(), "fake な席を立てられる");
     stamp_idle(&state, name);
     let stamp = seat_dir_of(&state, name).join("cycle-stamp");
     fs::write(&stamp, "0\n").expect("stamp を置ける");
@@ -2665,23 +2722,23 @@ fn run_tick_case(dir: &Path, case: &TickCase, target: &str, state: &Path) -> (Ou
     run_seat_probed(dir, &args)
 }
 
-/// 作り直しの確認は **消費済みの echo `❯ /clear` を正の証拠**に採る（`.90` の裁定「送った
-/// 字面が現れた = 送達成功・入力欄が空 = 消費」と同じ形）。作り直された直後の実席の pane
-/// （[`REBUILT_PANE`]）で cycle は復元へ進み `done` になる。
+/// 作り直しの確認は **`/clear` の送達 ts 以後に足された `SessionStart` の打刻**で行う（`s2-07l.112`・
+/// 設計 seat-state.md §6）。作り直された直後の実席の pane（[`REBUILT_PANE`]）を `--capture-file` で
+/// 固定しても、判定に効くのは打刻で、cycle は復元へ進み `done` になる。
 ///
-/// 「探索域に `/clear` の字面が無い」で見る実装は、prompt の直上に必ず残る echo のせいで
-/// 構造的に偽のまま 30 秒待ち、復元を送らずに席を空のまま残す（base: `clear-unconfirmed`・
-/// 実測 2026-09-11 admin 席・bd `s2-07l.96`）。pane は `--capture-file` で固定し、送信だけ
-/// 偽の席へ通す。
+/// 旧来の echo `❯ /clear` を正の証拠に採る形（`.96`）は、前の `/clear` の echo が見えたまま今回の
+/// `/clear` が消費されなかった周を「済んだ」と読む残余を持った（`.96` の残余 (1)）。
 #[test]
-fn seat_cycle_confirms_rebuilt_pane_by_consumed_echo_and_restores() {
+fn seat_cycle_confirms_rebuilt_seat_by_session_start_stamp_and_restores() {
     let dir = tmp();
     let socket = socket_of(&dir);
     let name = "seatrebuilt";
     let log = dir.join("seat.log");
-    let guard = start_clearing_seat(&socket, name, &log, false);
-    assert!(guard.ready(), "偽の席を立てられる");
     let state = dir.join("state");
+    let guard = start_clearing_seat(
+        &socket, name, &log, &state_file(&seat_dir_of(&state, name)), (FakeStamp::Now, FakeStamp::Now),
+    );
+    assert!(guard.ready(), "偽の席を立てられる");
     let wm = dir.join("wm");
     wm_file(&wm, "working-memory.rebuilt.md", name);
     stamp_idle(&state, name);
@@ -2703,7 +2760,7 @@ fn seat_cycle_confirms_rebuilt_pane_by_consumed_echo_and_restores() {
     assert_eq!(
         fs::read_to_string(&log).unwrap_or_default(),
         "/clear\n/rebrief\n",
-        "作り直しを echo で確認して復元を送る"
+        "作り直しを打刻で確認して復元を送る"
     );
     // socket を消す**前**に畳む（消してからでは kill-session が届かない・実測 2026-09-10）。
     drop(guard);
@@ -2775,9 +2832,11 @@ fn seat_cycle_done_line_carries_state_dir_provenance() {
     let socket = socket_of(&dir);
     let name = "seatcycleprov";
     let log = dir.join("seat.log");
-    let guard = start_clearing_seat(&socket, name, &log, false);
-    assert!(guard.ready(), "fake な席を立てられる");
     let state = dir.join("state");
+    let guard = start_clearing_seat(
+        &socket, name, &log, &state_file(&seat_dir_of(&state, name)), (FakeStamp::Now, FakeStamp::Now),
+    );
+    assert!(guard.ready(), "fake な席を立てられる");
     let wm = dir.join("wm");
     wm_file(&wm, "working-memory.parked.md", name);
     stamp_idle(&state, name);
@@ -2806,10 +2865,10 @@ fn seat_cycle_done_line_carries_state_dir_provenance() {
     fs::remove_dir_all(&dir).ok();
 }
 
-/// `/clear` を**送った後**の pane に字面が在っても、作り直しを確認できない形（`shape`）では
-/// `clear-unconfirmed`＝復元を送らない。
+/// `/clear` を**送った後**の pane に `/clear` の字面が在っても（`shape`）、`SessionStart` の打刻が
+/// 足されない席は `clear-unconfirmed`＝復元を送らない（字面は証拠ではない・`s2-07l.112`）。
 ///
-/// 入口の idle 判定は送る前の pane で通す（[`IDLE_TALL_PANE`]）ので、字面は**送達の後に**
+/// 入口の入力欄の門は送る前の pane で通す（[`IDLE_TALL_PANE`]）ので、字面は**送達の後に**
 /// 現れた形になる（Enter だけが落ちた・席が echo を引用した周の再現）。形ごとに歯を分ける
 /// のは、確認の待ち（30 秒）が直列に積み上がらないようにするため。
 fn assert_clear_unconfirmed_after_send(label: &str, shape: &str) {
@@ -2817,7 +2876,10 @@ fn assert_clear_unconfirmed_after_send(label: &str, shape: &str) {
     let socket = socket_of(&dir);
     let name = "seatecho";
     let log = dir.join("seat.log");
-    let guard = start_clearing_seat(&socket, name, &log, false);
+    let state = dir.join("state");
+    let guard = start_clearing_seat(
+        &socket, name, &log, &state_file(&seat_dir_of(&state, name)), (FakeStamp::Never, FakeStamp::Now),
+    );
     assert!(guard.ready(), "{label}: 偽の席を立てられる");
     let wm = dir.join("wm");
     wm_file(&wm, "working-memory.echo.md", name);
@@ -2840,57 +2902,61 @@ fn assert_clear_unconfirmed_after_send(label: &str, shape: &str) {
     fs::remove_dir_all(&dir).ok();
 }
 
-/// 未 submit（[`UNSUBMITTED_CLEAR_PANE`]）: 字面が入力行に残る周は確認できない。
+/// 未 submit（[`UNSUBMITTED_CLEAR_PANE`]）: 字面が入力行に残る周は確認できない（打刻も無い）。
 #[test]
 fn seat_cycle_does_not_confirm_clear_left_unsubmitted_in_input_line() {
     assert_clear_unconfirmed_after_send("unsubmitted", UNSUBMITTED_CLEAR_PANE);
 }
 
-/// echo と入力行の両方に在る（[`REBUILT_UNSUBMITTED_PANE`]）: 入力行が非空なら echo は
-/// 証拠にならない（正の証拠は入力欄が空のときだけ効く）。
+/// echo と入力行の両方に在る（[`REBUILT_UNSUBMITTED_PANE`]）: echo は証拠にならない（証拠は打刻）。
 #[test]
 fn seat_cycle_does_not_confirm_clear_when_echo_and_unsubmitted_coexist() {
     assert_clear_unconfirmed_after_send("rebuilt-unsubmitted", REBUILT_UNSUBMITTED_PANE);
 }
 
-/// 本文の引用（[`QUOTED_CLEAR_PANE`]）: 2 桁字下げの `❯ /clear` は行頭に無い＝証拠にならない。
+/// 本文の引用（[`QUOTED_CLEAR_PANE`]）: 引用の字面は証拠にならない（証拠は打刻）。
 #[test]
 fn seat_cycle_does_not_confirm_clear_from_quoted_echo() {
     assert_clear_unconfirmed_after_send("quoted", QUOTED_CLEAR_PANE);
 }
 
-/// `/clear` で**始まる**発言の echo（[`PREFIXED_CLEAR_PANE`]）: 右側が `/clear` ちょうどで
-/// なければ証拠にならない（「始まる」「含む」へ緩めた実装は会話の生きた席へ復元を送る・
-/// lens-96 HIGH-2）。
+/// `/clear` で**始まる**発言の echo（[`PREFIXED_CLEAR_PANE`]）: 会話の生きた席の字面は証拠に
+/// ならない（lens-96 HIGH-2 の形・打刻が無ければ復元を送らない）。
 #[test]
 fn seat_cycle_does_not_confirm_clear_from_prefixed_user_line() {
     assert_clear_unconfirmed_after_send("prefixed", PREFIXED_CLEAR_PANE);
 }
 
-/// hook の出力が echo の下に増えた版（[`REBUILT_HOOKS_PANE`]・echo は入力行の 10 非空行上）
-/// でも作り直しを確認して復元を送る。送る前は idle・送った後にこの形＝時間差の happy path。
-///
-/// 域を裁定 (e) の上 6 非空行に絞る実装はこの pane を確認できず、`.94` と同じ行き止まり
-/// （30 秒待って `clear-unconfirmed`・復元を送らない）へ戻る（lens-96 MEDIUM-1）。
+/// `SessionStart` の打刻が**遅れて**来る席（実席の hook は `/clear` の数秒後に打つ）でも、窓の内に
+/// 足されれば作り直しと読んで復元へ進む（`s2-07l.112`）。pane の echo の下に hook の出力行が何行
+/// 増えても（[`REBUILT_HOOKS_PANE`]）判定に効かない＝字面の行数に依らない。
 #[test]
-fn seat_cycle_confirms_rebuilt_pane_with_hook_lines_below_echo() {
+fn seat_cycle_confirms_rebuild_when_session_start_stamp_arrives_late() {
     let dir = tmp();
     let socket = socket_of(&dir);
     let name = "seathooks";
     let log = dir.join("seat.log");
-    let guard = start_clearing_seat(&socket, name, &log, false);
-    assert!(guard.ready(), "偽の席を立てられる");
+    let state = dir.join("state");
+    let stamps = state_file(&seat_dir_of(&state, name));
+    let guard = start_clearing_seat_with(
+        &socket,
+        name,
+        &log,
+        &format!("sleep 3; {}", stamp_cmd(&stamps, "idle", "SessionStart", FakeStamp::Now)),
+        &format!("{}; printf 'seat got %s\\n' \"$line\"", stamp_cmd(&stamps, "busy", "UserPromptSubmit", FakeStamp::Now)),
+    );
+    assert!(guard.ready(), "遅れて打刻する偽の席を立てられる");
     let wm = dir.join("wm");
     wm_file(&wm, "working-memory.hooks.md", name);
 
     let out = cycle_with_pane_after_clear(&dir, name, IDLE_TALL_PANE, REBUILT_HOOKS_PANE);
 
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
-    assert_eq!(stdout_of(&out), format!("seat: cycle done target={name}{}\n", provenance(&dir.join("state"), "flag")));
+    assert_eq!(stdout_of(&out), format!("seat: cycle done target={name}{}\n", provenance(&state, "flag")));
     assert_eq!(
         fs::read_to_string(&log).unwrap_or_default(),
         "/clear\n/rebrief\n",
-        "echo が上の 6 非空行の外でも作り直しを確認して復元を送る"
+        "遅れた打刻を窓の内に拾って復元を送る"
     );
     // socket を消す**前**に畳む（消してからでは kill-session が届かない・実測 2026-09-10）。
     drop(guard);
@@ -2985,24 +3051,28 @@ fn seat_inject_does_not_count_preexisting_text_as_delivery() {
 /// `/clear` 直後の席には走っている turn が無いので、そこでの queue は「turn の終わりに消費
 /// される」ではなく submit されなかった打鍵である。
 ///
-/// 復元の送達確認は作り直しの確認と同じ**上限まで待つ**（`s2-07l.97`）: 置き去りの字面は
-/// 上限まで入力欄に残るので、待った後も `restore-unconfirmed` のまま（成功条件は不変）。
+/// 復元の消費の確認は作り直しの確認と同じ**上限まで待つ**（`s2-07l.97`）: 置き去りの復元には
+/// `UserPromptSubmit` の打刻が来ないので、待った後も `restore-unconfirmed` のまま（成功条件は不変）。
 #[test]
 fn seat_cycle_reports_restore_unconfirmed_after_limit_when_restore_is_left_in_input() {
     let dir = tmp();
     let socket = socket_of(&dir);
     let name = "seatleft";
     let log = dir.join("seat.log");
-    // `/clear` の後は prompt を描いて **読まない**（echo は入る・消費者がいない）。
+    let state = dir.join("state");
+    // `/clear` の後は作り直しの打刻を置いて prompt を描き、その後は **読まない**（echo は入る・
+    // 消費者がいない＝`UserPromptSubmit` の打刻も来ない）。
     let guard = start_clearing_seat_with(
         &socket,
         name,
         &log,
-        "printf '\u{276f} '; exec cat > /dev/null",
+        &format!(
+            "{}; printf '\u{276f} '; exec cat > /dev/null",
+            stamp_cmd(&state_file(&seat_dir_of(&state, name)), "idle", "SessionStart", FakeStamp::Now)
+        ),
         ":",
     );
     assert!(guard.ready(), "偽の席を立てられる");
-    let state = dir.join("state");
     let wm = dir.join("wm");
     wm_file(&wm, "working-memory.left.md", name);
     stamp_idle(&state, name);
@@ -3042,15 +3112,16 @@ fn seat_cycle_restores_after_seat_consumes_queued_restore() {
     let name = "seatqueued";
     let log = dir.join("seat.log");
     // `/clear` の後は prompt を描いてから **hook のように 8 s 読まない**（2 s の窓より十分長い）。
+    let state = dir.join("state");
+    let stamps = state_file(&seat_dir_of(&state, name));
     let guard = start_clearing_seat_with(
         &socket,
         name,
         &log,
-        "printf '\u{276f} '; sleep 8",
-        "printf 'seat got %s\\n' \"$line\"",
+        &format!("{}; printf '\u{276f} '; sleep 8", stamp_cmd(&stamps, "idle", "SessionStart", FakeStamp::Now)),
+        &format!("{}; printf 'seat got %s\\n' \"$line\"", stamp_cmd(&stamps, "busy", "UserPromptSubmit", FakeStamp::Now)),
     );
     assert!(guard.ready(), "hook 中の席を模す偽の席を立てられる");
-    let state = dir.join("state");
     let wm = dir.join("wm");
     wm_file(&wm, "working-memory.queued.md", name);
     stamp_idle(&state, name);
@@ -3081,58 +3152,41 @@ fn seat_cycle_restores_after_seat_consumes_queued_restore() {
     fs::remove_dir_all(&dir).ok();
 }
 
-/// 送った字面は現れたが **prompt 行が消えて入力欄を特定できない**周は `consumed=unknown`
-/// （測っていない値を `false` の字面で出さない・lens-90 MEDIUM-1・planner 裁定 2026-09-11）。
-///
-/// 席は 1 行読むと画面を消して受け取った字面だけを描き、prompt を描き直さない。
+/// 打刻 file が**無い**席（hook が載っていない）・**読めない**席へは送達しても消費を測れない＝
+/// `consumed=unknown` に **`reason=`** を添える（missing を消費と読み替えない・`false` とも混ぜない・
+/// 憲法 C10 の測定 / 未測定の弁別・`s2-07l.112`）。送達（目印が現れた）は成立ゆえ rc 0・記録は残る。
 #[test]
-fn seat_inject_reports_consumed_unknown_when_prompt_vanishes_after_send() {
-    let dir = tmp();
-    let socket = socket_of(&dir);
-    let name = "seat-noprompt-after";
-    let mut seat = IsolatedSeat {
-        socket: socket.clone(),
-        name: name.to_owned(),
-        ready: false,
-    };
-    let script = "printf '\u{276f} '; read -r x; printf '\\033[2J\\033[H received: %s\\n' \"$x\"; \
-                  exec cat > /dev/null";
-    let out = tmux(
-        &socket,
-        &["new-session", "-d", "-s", name, "-x", "120", "-y", "40", "sh", "-c", script],
-    );
-    seat.ready = out.status.success() && wait_prompt(&socket, name);
-    assert!(seat.ready, "1 行読むと prompt を消す席を立てられる");
-    let state = dir.join("state");
-    let payload = "/rebrief";
+fn seat_evidence_inject_reports_unknown_with_reason_when_stamp_file_is_missing_or_unreadable() {
+    for (fix, reason) in [(StateFix::Absent, "state-missing"), (StateFix::Unreadable, "state-unreadable")] {
+        let dir = tmp();
+        let socket = socket_of(&dir);
+        let name = "seat-nostamp";
+        let guard = start_seat(&socket, name);
+        assert!(guard.ready(), "{reason}: 独立 socket に prompt 付きの session を立てられる");
+        let state = dir.join("state");
+        write_state(&seat_dir_of(&state, name), fix);
+        let payload = ": seat-e2e-nostamp";
 
-    let out = run_seat(&[
-        "inject",
-        "--target",
-        name,
-        "--tmux-socket",
-        &socket,
-        "--state-dir",
-        &state.display().to_string(),
-        "--text",
-        payload,
-    ]);
+        let out = run_seat(&[
+            "inject", "--target", name, "--tmux-socket", &socket,
+            "--state-dir", &state.display().to_string(), "--text", payload,
+        ]);
 
-    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
-    assert_eq!(
-        stdout_of(&out),
-        format!(
-            "seat: inject delivered target={name} bytes={} consumed=unknown{}\n",
-            payload.len(),
-            provenance(&state, "flag")
-        ),
-        "入力欄を特定できない周は unknown（false と混ぜない）"
-    );
-    let pane = capture(&socket, name);
-    assert!(!pane.contains('\u{276f}'), "prompt 行は消えている: {pane}");
-    assert!(pane.contains("received: /rebrief"), "字面は現れている: {pane}");
-    drop(seat);
-    fs::remove_dir_all(&dir).ok();
+        assert_eq!(rc_of(&out), i32::from(RC_OK), "{reason}: stderr={}", stderr_of(&out));
+        assert_eq!(
+            stdout_of(&out),
+            format!(
+                "seat: inject delivered target={name} bytes={} consumed=unknown reason={reason}{}\n",
+                payload.len(),
+                provenance(&state, "flag")
+            ),
+            "{reason}: 測れない周は unknown に理由を添える（true / false と混ぜない）"
+        );
+        assert!(capture(&socket, name).contains("seat-e2e-nostamp"), "{reason}: 字面は現れている（送達は成立）");
+        assert!(tick_file(&state, name).exists(), "{reason}: 送達した周は記録する");
+        drop(guard);
+        fs::remove_dir_all(&dir).ok();
+    }
 }
 
 /// 先頭行が**空**の payload でも、送達の目印は最初の非空行＝pane が伸びただけでは成立しない
@@ -3209,7 +3263,7 @@ fn seat_state_tick_injects_despite_spinner_text_when_stamped_idle() {
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
     assert_eq!(
         stdout_of(&out),
-        format!("seat: tick decision=inject target={name} consumed=true kind=pointer{CTX_19}{ST_IDLE}{}\n", provenance(&state, "flag")),
+        format!("seat: tick decision=inject target={name} consumed=false kind=pointer{CTX_19}{ST_IDLE}{}\n", provenance(&state, "flag")),
         "spinner の字面は判定に効かない＝打刻 Idle の席には注入する"
     );
     let seen = capture(&socket, name);
@@ -3217,7 +3271,7 @@ fn seat_state_tick_injects_despite_spinner_text_when_stamped_idle() {
     let recorded = fs::read_to_string(tick_file(&state, name)).unwrap_or_default();
     assert!(
         recorded.contains(&format!(
-            r#""what":"decision=inject target={name} consumed=true kind=pointer{CTX_19}{ST_IDLE}{}""#,
+            r#""what":"decision=inject target={name} consumed=false kind=pointer{CTX_19}{ST_IDLE}{}""#,
             provenance(&state, "flag")
         )),
         "記録にも state の列（出所 = Stop）が載る: {recorded}"
@@ -3400,7 +3454,10 @@ fn seat_state_cycle_sends_clear_despite_spinner_text_when_stamped_idle() {
     let socket = socket_of(&dir);
     let name = "seatstatecycle";
     let log = dir.join("seat.log");
-    let guard = start_clearing_seat(&socket, name, &log, false);
+    let state = dir.join("state");
+    let guard = start_clearing_seat(
+        &socket, name, &log, &state_file(&seat_dir_of(&state, name)), (FakeStamp::Now, FakeStamp::Now),
+    );
     assert!(guard.ready(), "偽の席を立てられる");
     let wm = dir.join("wm");
     wm_file(&wm, "working-memory.spin.md", name);
@@ -3425,13 +3482,15 @@ fn seat_state_cycle_sends_clear_despite_spinner_text_when_stamped_idle() {
 /// context の前へ動かす実装は Busy 以外の 3 形でここで落ちる（lens-95 MEDIUM-2）。
 #[test]
 fn seat_state_tick_sends_externalize_pointer_regardless_of_stamp() {
+    // `consumed=` は打刻由来（`s2-07l.112`）: file が在れば新しい打刻が来ないので false、無い・読めない
+    // 席は測れないので unknown（tick 行は既存 token のまま＝理由は `seat inject` の行が持つ）。
     let cases = [
-        (StateFix::Busy { age_s: 0 }, ST_BUSY),
-        (StateFix::Absent, ST_MISSING),
-        (StateFix::Unreadable, ST_UNREADABLE),
-        (StateFix::Busy { age_s: STALE_S + 1 }, ST_STALE),
+        (StateFix::Busy { age_s: 0 }, ST_BUSY, "false"),
+        (StateFix::Absent, ST_MISSING, "unknown"),
+        (StateFix::Unreadable, ST_UNREADABLE, "unknown"),
+        (StateFix::Busy { age_s: STALE_S + 1 }, ST_STALE, "false"),
     ];
-    for (at, (fix, column)) in cases.into_iter().enumerate() {
+    for (at, (fix, column, consumed)) in cases.into_iter().enumerate() {
         let dir = tmp();
         let socket = socket_of(&dir);
         let name = "seatstatecap";
@@ -3457,12 +3516,316 @@ fn seat_state_tick_sends_externalize_pointer_regardless_of_stamp() {
         assert_eq!(rc_of(&out), i32::from(RC_OK), "組 {at}: stderr={}", stderr_of(&out));
         assert_eq!(
             stdout_of(&out),
-            format!("seat: tick decision=inject target={name} consumed=true kind=externalize context=96{column}{}\n", provenance(&state, "flag")),
-            "組 {at}: 退避の合図は打刻に依らず送る（state の列は打刻のまま）"
+            format!("seat: tick decision=inject target={name} consumed={consumed} kind=externalize context=96{column}{}\n", provenance(&state, "flag")),
+            "組 {at}: 退避の合図は打刻に依らず送る（state の列は打刻のまま・consumed は打刻由来）"
         );
         assert!(capture(&socket, name).contains("/ready-compaction"), "組 {at}: 退避 skill の名が届く");
         // socket を消す**前**に畳む（消してからでは kill-session が届かない・実測 2026-09-10）。
         drop(guard);
         fs::remove_dir_all(&dir).ok();
     }
+}
+
+// ─────────────────── 作り直しと送達の証拠（打刻由来・`s2-07l.112`・接頭辞 `seat_evidence_`） ───────────────────
+
+/// 作り直しの証拠は **`/clear` の送達 ts 以後に足された `SessionStart` の打刻**だけ（設計 seat-state.md §6）。
+/// pane は `--capture-file` で [`IDLE_PANE`] に固定し `/clear` の echo を**一度も**見せない＝echo を正の
+/// 証拠に採る実装（base）は 30 s 待って `clear-unconfirmed` になる（RED）。復元の消費も打刻で確認する。
+#[test]
+fn seat_evidence_cycle_confirms_rebuild_by_session_start_stamp_without_echo() {
+    let dir = tmp();
+    let socket = socket_of(&dir);
+    let name = "seatevclear";
+    let log = dir.join("seat.log");
+    let state = dir.join("state");
+    let stamps = state_file(&seat_dir_of(&state, name));
+    let guard = start_clearing_seat(&socket, name, &log, &stamps, (FakeStamp::Now, FakeStamp::Now));
+    assert!(guard.ready(), "打刻する偽の席を立てられる");
+    let wm = dir.join("wm");
+    wm_file(&wm, "working-memory.ev.md", name);
+    stamp_idle(&state, name);
+    let before = fs::read_to_string(&stamps).unwrap_or_default().lines().count();
+    let pane = dir.join("pane.txt");
+    fs::write(&pane, IDLE_PANE).ok();
+    let (wm_s, state_s, pane_s) = (
+        wm.display().to_string(),
+        state.display().to_string(),
+        pane.display().to_string(),
+    );
+
+    let out = run_seat(&[
+        "cycle", "--target", name, "--wm-dir", &wm_s, "--tmux-socket", &socket,
+        "--state-dir", &state_s, "--capture-file", &pane_s,
+    ]);
+
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(stdout_of(&out), format!("seat: cycle done target={name}{}\n", provenance(&state, "flag")));
+    assert_eq!(fs::read_to_string(&log).unwrap_or_default(), "/clear\n/rebrief\n", "作り直しを打刻で確認して復元を送る");
+    let added: Vec<String> = fs::read_to_string(&stamps)
+        .unwrap_or_default()
+        .lines()
+        .skip(before)
+        .map(str::to_owned)
+        .collect();
+    assert!(added.iter().any(|line| line.contains(r#""event":"SessionStart""#)), "作り直しの証拠が足されている: {added:?}");
+    assert!(added.iter().any(|line| line.contains(r#""event":"UserPromptSubmit""#)), "復元の消費の証拠が足されている: {added:?}");
+    // socket を消す**前**に畳む（消してからでは kill-session が届かない・実測 2026-09-10）。
+    drop(guard);
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// 送達 ts より**前**の `SessionStart` しか足されない席（[`FakeStamp::Old`]・時計が戻った・古い hook の
+/// 遅延書込）は、`/clear` の echo が pane に在っても作り直しと読まない（古い打刻を証拠に採らない）＝
+/// `clear-unconfirmed`・復元を送らない。base は echo で `done` になる（RED）。
+#[test]
+fn seat_evidence_cycle_ignores_session_start_stamp_older_than_clear() {
+    let dir = tmp();
+    let socket = socket_of(&dir);
+    let name = "seatevold";
+    let log = dir.join("seat.log");
+    let state = dir.join("state");
+    let guard = start_clearing_seat(
+        &socket, name, &log, &state_file(&seat_dir_of(&state, name)), (FakeStamp::Old, FakeStamp::Now),
+    );
+    assert!(guard.ready(), "古い打刻を置く偽の席を立てられる");
+    let wm = dir.join("wm");
+    wm_file(&wm, "working-memory.old.md", name);
+    stamp_idle(&state, name);
+    let (wm_s, state_s) = (wm.display().to_string(), state.display().to_string());
+
+    let out = run_seat(&[
+        "cycle", "--target", name, "--wm-dir", &wm_s, "--tmux-socket", &socket,
+        "--state-dir", &state_s,
+    ]);
+
+    assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "stdout={}", stdout_of(&out));
+    assert_eq!(stderr_of(&out), format!("seat: cycle failed reason=clear-unconfirmed{}\n", provenance(&state, "flag")));
+    assert_eq!(fs::read_to_string(&log).unwrap_or_default(), "/clear\n", "古い打刻では復元を送らない");
+    let pane = capture(&socket, name);
+    assert!(pane.contains("/clear"), "echo は在る（字面は証拠ではない）: {pane}");
+    drop(guard);
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// `/clear` の後に `SessionStart` を**打たない**席（hook が死んだ・載っていない）は、echo を描いても
+/// 作り直しを確認できない＝`clear-unconfirmed`・復元を送らない（作り直しを確認できない席へ復元を
+/// 刺さない・fail-closed）。base は echo で `done` になる（RED）。
+#[test]
+fn seat_evidence_cycle_reports_clear_unconfirmed_when_no_session_start_stamp_follows() {
+    let dir = tmp();
+    let socket = socket_of(&dir);
+    let name = "seatevnone";
+    let log = dir.join("seat.log");
+    let state = dir.join("state");
+    let guard = start_clearing_seat(
+        &socket, name, &log, &state_file(&seat_dir_of(&state, name)), (FakeStamp::Never, FakeStamp::Now),
+    );
+    assert!(guard.ready(), "打刻しない偽の席を立てられる");
+    let wm = dir.join("wm");
+    wm_file(&wm, "working-memory.none.md", name);
+    stamp_idle(&state, name);
+    let (wm_s, state_s) = (wm.display().to_string(), state.display().to_string());
+
+    let out = run_seat(&[
+        "cycle", "--target", name, "--wm-dir", &wm_s, "--tmux-socket", &socket,
+        "--state-dir", &state_s,
+    ]);
+
+    assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "stdout={}", stdout_of(&out));
+    assert_eq!(stderr_of(&out), format!("seat: cycle failed reason=clear-unconfirmed{}\n", provenance(&state, "flag")));
+    assert_eq!(fs::read_to_string(&log).unwrap_or_default(), "/clear\n", "打刻が無い周は復元を送らない");
+    drop(guard);
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// 送達の消費は **送達 ts 以後に足された `UserPromptSubmit` の打刻**で決める（設計 §6）。席は受けた行で
+/// 打刻し、その後 prompt に打ちかけ（`❯ pending`）を残す＝「入力欄が空」で消費を読む実装（base）は
+/// `consumed=false` になり（RED）、打刻で読む実装は `true`。
+#[test]
+fn seat_evidence_inject_consumed_true_by_user_prompt_submit_stamp_even_with_pending_input() {
+    let dir = tmp();
+    let socket = socket_of(&dir);
+    let name = "seatevconsumed";
+    let log = dir.join("seat.log");
+    let state = dir.join("state");
+    let stamps = state_file(&seat_dir_of(&state, name));
+    stamp_idle(&state, name);
+    let guard = start_clearing_seat_with(
+        &socket,
+        name,
+        &log,
+        ":",
+        &format!(
+            "{}; printf 'seat got %s\\n' \"$line\"; printf '\u{276f} pending'; sleep 30",
+            stamp_cmd(&stamps, "busy", "UserPromptSubmit", FakeStamp::Now)
+        ),
+    );
+    assert!(guard.ready(), "打刻して打ちかけを残す偽の席を立てられる");
+    let payload = "seat-e2e-stamped";
+
+    let out = run_seat(&[
+        "inject", "--target", name, "--tmux-socket", &socket,
+        "--state-dir", &state.display().to_string(), "--text", payload,
+    ]);
+
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(
+        stdout_of(&out),
+        format!(
+            "seat: inject delivered target={name} bytes={} consumed=true{}\n",
+            payload.len(),
+            provenance(&state, "flag")
+        ),
+        "打ちかけが残っていても、送達 ts 以後の UserPromptSubmit 打刻で consumed=true"
+    );
+    let pane = capture(&socket, name);
+    assert!(pane.contains("\u{276f} pending"), "入力欄は非空のまま: {pane}");
+    assert!(
+        fs::read_to_string(&stamps).unwrap_or_default().contains(r#""event":"UserPromptSubmit""#),
+        "消費の打刻が在る"
+    );
+    drop(guard);
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// 送達 ts より**前**の打刻しか無い席（`sh -i`＝受けた行で打刻しない・入力欄はすぐ空に戻る）は
+/// `consumed=false`（古い打刻を消費と読まない・queue の形）。base は入力欄が空なので `true`（RED）。
+#[test]
+fn seat_evidence_inject_reports_consumed_false_when_only_older_stamps_exist() {
+    let dir = tmp();
+    let socket = socket_of(&dir);
+    let name = "seatevolder";
+    let guard = start_seat(&socket, name);
+    assert!(guard.ready(), "独立 socket に prompt 付きの session を立てられる");
+    let state = dir.join("state");
+    // 送る前の打刻（Idle の Stop）だけが在る＝送達 ts 以後の UserPromptSubmit は来ない。
+    stamp_idle(&state, name);
+    let payload = ": seat-e2e-older";
+
+    let out = run_seat(&[
+        "inject", "--target", name, "--tmux-socket", &socket,
+        "--state-dir", &state.display().to_string(), "--text", payload,
+    ]);
+
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(
+        stdout_of(&out),
+        format!(
+            "seat: inject delivered target={name} bytes={} consumed=false{}\n",
+            payload.len(),
+            provenance(&state, "flag")
+        ),
+        "送る前の打刻しか無い周は consumed=false（入力欄が空でも消費とは読まない）"
+    );
+    assert_eq!(stderr_of(&out), "", "成功の周は stderr 0 行");
+    let pane = capture(&socket, name);
+    assert!(pane.contains("seat-e2e-older"), "字面は現れている（送達は成立）: {pane}");
+    drop(guard);
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// 置き場が**解けない**周（`--state-dir` 無し・git の外の cwd）に送達した注入は、打刻の在処を知らない
+/// ので `consumed=unknown reason=state-dir`（測れない・2 語は出さない・記録もしない）。3 つ目の理由の pin。
+#[test]
+fn seat_evidence_inject_reports_unknown_reason_state_dir_when_place_is_unresolved() {
+    let dir = tmp();
+    let socket = socket_of(&dir);
+    let name = "seatevnodir";
+    let guard = start_seat(&socket, name);
+    assert!(guard.ready(), "独立 socket に prompt 付きの session を立てられる");
+    let payload = ": seat-e2e-nodir";
+
+    let out = run_seat_in(&dir, &["inject", "--target", name, "--tmux-socket", &socket, "--text", payload]);
+
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(
+        stdout_of(&out),
+        format!("seat: inject delivered target={name} bytes={} consumed=unknown reason=state-dir\n", payload.len()),
+        "置き場が解けない周は unknown reason=state-dir（2 語なし）"
+    );
+    assert!(!dir.join("seat").exists(), "cwd に置き場を作らない");
+    drop(guard);
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// `consumed=false`（queue）は**送達の成功**であって失敗ではない: tick は `decision=inject` rc 0 で自打刻し、
+/// 次の周は `heartbeat-fresh` で**再送しない**（pointer は pane に 1 度だけ現れる）。false を失敗と読んで
+/// 打刻を飛ばす実装は 2 周目にもう 1 本送ってここで落ちる（planner 裁定 2026-09-12 の条件）。
+#[test]
+fn seat_evidence_tick_treats_consumed_false_as_delivered_and_does_not_resend() {
+    let dir = tmp();
+    let socket = socket_of(&dir);
+    let name = "seatevqueue";
+    let guard = start_seat(&socket, name);
+    assert!(guard.ready(), "独立 socket に prompt 付きの session を立てられる");
+    let state = dir.join("state");
+    let wm = dir.join("wm");
+    fs::create_dir_all(&wm).ok();
+    // 打刻 file は在る（Idle）が `sh -i` は submit で打刻しない＝送達した pointer は consumed=false になる形。
+    stamp_idle(&state, name);
+    let (wm_s, state_s) = (wm.display().to_string(), state.display().to_string());
+    let args = [
+        "tick", "--target", name, "--wm-dir", &wm_s, "--tmux-socket", &socket,
+        "--state-dir", &state_s,
+    ];
+
+    let first = run_seat(&args);
+    assert_eq!(rc_of(&first), i32::from(RC_OK), "stderr={}", stderr_of(&first));
+    assert_eq!(tick_token(&stdout_of(&first), "decision").as_deref(), Some("inject"), "{}", stdout_of(&first));
+    assert_eq!(tick_token(&stdout_of(&first), "consumed").as_deref(), Some("false"), "{}", stdout_of(&first));
+    assert!(seat_dir_of(&state, name).join("tick-stamp").is_file(), "false でも送達は成立＝自打刻する");
+
+    let second = run_seat(&args);
+    assert_eq!(rc_of(&second), i32::from(RC_OK), "stderr={}", stderr_of(&second));
+    assert_eq!(tick_token(&stdout_of(&second), "reason").as_deref(), Some("heartbeat-fresh"), "2 周目は再送しない: {}", stdout_of(&second));
+    let pointer = format!("seat heartbeat --target {name}");
+    assert_eq!(capture(&socket, name).matches(&pointer).count(), 1, "pointer は 1 度だけ現れる");
+    drop(guard);
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// cycle の復元が queue のまま（`UserPromptSubmit` の打刻が来ない）周は `restore-unconfirmed` と**記録する**
+/// だけで、次の周の tick は back-off（`cycle-recent`・`.110`）で `/clear` も復元も**再送しない**。
+/// `/clear` と `/rebrief` は偽の席の受信 log に 1 度ずつしか現れない。
+#[test]
+fn seat_evidence_cycle_does_not_resend_when_restore_stays_queued() {
+    let dir = tmp();
+    let socket = socket_of(&dir);
+    let name = "seatevnoresend";
+    let log = dir.join("seat.log");
+    let state = dir.join("state");
+    // `/clear` で SessionStart は打つが、復元の行では打刻しない（queue のまま）。
+    let guard = start_clearing_seat(
+        &socket, name, &log, &state_file(&seat_dir_of(&state, name)), (FakeStamp::Now, FakeStamp::Never),
+    );
+    assert!(guard.ready(), "復元を消費しない偽の席を立てられる");
+    let wm = dir.join("wm");
+    wm_file(&wm, "working-memory.noresend.md", name);
+    stamp_idle(&state, name);
+    let (wm_s, state_s) = (wm.display().to_string(), state.display().to_string());
+    let args = [
+        "tick", "--target", name, "--wm-dir", &wm_s, "--tmux-socket", &socket,
+        "--state-dir", &state_s,
+    ];
+
+    let first = run_seat(&args);
+    assert_eq!(rc_of(&first), i32::from(RC_OK), "stderr={}", stderr_of(&first));
+    assert_eq!(
+        tick_token(&stdout_of(&first), "cycle").as_deref(),
+        Some("failed"),
+        "復元の消費が確認できない周は failed（restore-unconfirmed）: {}",
+        stdout_of(&first)
+    );
+    assert!(stdout_of(&first).contains(" reason=restore-unconfirmed"), "{}", stdout_of(&first));
+
+    let second = run_seat(&args);
+    assert_eq!(rc_of(&second), i32::from(RC_OK), "stderr={}", stderr_of(&second));
+    assert_eq!(tick_token(&stdout_of(&second), "reason").as_deref(), Some("cycle-recent"), "2 周目は back-off: {}", stdout_of(&second));
+    assert_eq!(
+        fs::read_to_string(&log).unwrap_or_default(),
+        "/clear\n/rebrief\n",
+        "/clear も復元も 1 度ずつ（再送しない）"
+    );
+    drop(guard);
+    fs::remove_dir_all(&dir).ok();
 }

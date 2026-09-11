@@ -4,6 +4,8 @@
 //! 出所は Claude Code の hook event（`UserPromptSubmit` → Busy・`Stop` / `SessionStart` → Idle）で、
 //! 打刻は `<state_dir>/seat/<target>/state.jsonl` へ 1 行 JSON を append する（lock は fleet と同じ
 //! 1 実装 [`store::append_line`]）。tick と cycle は**最終行**を [`read_last`] の 1 本で読む。
+//! 作り直しと送達の**証拠**（設計 §6・`s2-07l.112`）は [`evidence_after`] の 1 本で読む: 送る前に
+//! [`baseline`] を取り、その後ろに足された打刻のうち送達 ts 以後のものだけを証拠に採る。
 //! pane の字面は判定入力にしない（C3.3）。
 //!
 //! **読めない側は注入しない側へ倒す**（fail-closed・ADR-0015 §2.3）: file が無い・読めない・Busy が
@@ -277,6 +279,58 @@ fn classify(stamp: &Stamp, stale_s: u64, now: u64) -> Read {
         SeatState::Busy if now.saturating_sub(stamp.ts) > stale_s => Read::Stale(stamp.event),
         SeatState::Busy => Read::Busy(stamp.event),
     }
+}
+
+/// いまの 1970 年からの秒（送達 ts を取る呼び側の 1 本・打刻と同じ時計）。
+pub fn now_secs() -> u64 {
+    unix_secs(SystemTime::now())
+}
+
+/// 送る**前**に取る基線 = 打刻 file の行数。証拠に採るのは**この行より後ろに足された**打刻だけ
+/// ——送る前から在った打刻（前の cycle の `SessionStart`・同じ秒の古い行）を「送達 ts 以後」と
+/// 読まないため（設計 seat-state.md §6）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Baseline {
+    /// 送る前の行数（file が無い・読めない周は 0＝足された行は全部が候補・ts が守る）。
+    lines: usize,
+}
+
+/// 基線を取る。
+pub fn baseline(seat_dir: &Path) -> Baseline {
+    let lines = std::fs::read_to_string(path(seat_dir)).map_or(0, |text| text.lines().count());
+    Baseline { lines }
+}
+
+/// 証拠の読み。**4 値で閉じる**（憲法 C11: 「まだ無い」「file が無い」「読めない」を混ぜない・
+/// missing を消費や作り直しに読み替えない）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Evidence {
+    /// 基線より後ろに、送達 ts 以後の当該 event の打刻が在る。
+    Found(Stamp),
+    /// file は読めるが、該当する打刻が**まだ**無い（古い打刻・別 event・壊れた行は数えない）。
+    NotYet,
+    /// file が無い（hook が載っていない席）。
+    Missing,
+    /// file を読めない。
+    Unreadable,
+}
+
+/// 基線より後ろに足された行のうち、`event` で `ts >= since` の打刻を探す（作り直し = `SessionStart`・
+/// 送達の消費 = `UserPromptSubmit`・設計 §6）。
+///
+/// `>=` は打刻が秒粒度で、送った同じ秒に hook が打つ周を落とさないため。古い行を `>=` で拾わない
+/// のは基線が守る（送る前に在った行は見ない）。壊れた行は証拠に数えない（読めた行だけ）。
+pub fn evidence_after(seat_dir: &Path, baseline: Baseline, event: Event, since: u64) -> Evidence {
+    let text = match std::fs::read_to_string(path(seat_dir)) {
+        Ok(found) => found,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Evidence::Missing,
+        Err(_) => return Evidence::Unreadable,
+    };
+    text.lines()
+        .skip(baseline.lines)
+        .filter_map(|line| Stamp::from_line(line).ok())
+        .find(|stamp| stamp.event == event && stamp.ts >= since)
+        .map_or(Evidence::NotYet, Evidence::Found)
 }
 
 #[cfg(test)]
