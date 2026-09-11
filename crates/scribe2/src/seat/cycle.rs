@@ -218,8 +218,8 @@ fn unix_secs(at: SystemTime) -> u64 {
 /// `/clear` を送り、作り直しを確認する。
 ///
 /// **便 2 の送達確認（settle）は使えない**: `/clear` は pane を消すので「送った字面が現れる」
-/// 形では測れず、成功したときほど確認が落ちる。代わりに「入力欄が空 ∧ prompt より下に
-/// `/clear` の字面が無い」で見る＝作り直された席でだけ同時に立つ。
+/// 形では測れず、成功したときほど確認が落ちる。代わりに「入力欄が空 ∧ prompt 行の周り
+/// （[`super::prompt_region`]）に `/clear` の字面が無い」で見る＝作り直された席でだけ同時に立つ。
 fn send_clear(request: &Request) -> bool {
     if !send_line(request, CLEAR) {
         return false;
@@ -236,14 +236,16 @@ fn send_clear(request: &Request) -> bool {
     false
 }
 
-/// 作り直しの済んだ pane か（入力欄が空 ∧ **直近 6 非空行**に `/clear` の字面が無い）。
+/// 作り直しの済んだ pane か（入力欄が空 ∧ [`super::prompt_region`] に `/clear` の字面が無い）。
 ///
 /// 域を prompt より下に取ると、**echo された `/clear` は次の prompt の上に載る**ので第 2 項が
 /// 構造的にほぼ常に真になり、確認が実質 500 ms の sleep に化ける（実測 2026-09-10・lens-384
-/// C-2: 「常に真」へ倒す変異が全歯 GREEN のまま生存した）。
+/// C-2: 「常に真」へ倒す変異が全歯 GREEN のまま生存した）。末尾の固定行数で取っても同じ形に
+/// 化ける——statusline 3 行 + 区切り 2 行 + prompt 行で 6 行が尽き、上の echo に届かない
+/// （`is_idle` と同じ根・bd `s2-07l.94`）。
 fn cleared(pane: &str) -> bool {
     super::input_tail(pane).is_some_and(str::is_empty)
-        && !super::tail_nonempty(pane)
+        && !super::prompt_region(pane)
             .iter()
             .any(|line| line.contains(CLEAR))
 }
