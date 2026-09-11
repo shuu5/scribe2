@@ -191,7 +191,7 @@ fn scan_private_paths(root: &Path, listed: &[TrackedFile]) -> Measured {
 }
 
 /// 走査する本文を取る。symlink だけ index の blob（= link target 文字列）を読む。
-fn body_of(root: &Path, file: &TrackedFile) -> Result<Vec<u8>, String> {
+pub(crate) fn body_of(root: &Path, file: &TrackedFile) -> Result<Vec<u8>, String> {
     if file.is_symlink() {
         return git_stdout(root, &["cat-file", "blob", &file.oid]);
     }
@@ -204,7 +204,12 @@ fn body_of(root: &Path, file: &TrackedFile) -> Result<Vec<u8>, String> {
 /// 免除の理由は **道具が生成した説明コメントに例として private path 形が載る**ことなので、
 /// 免除もコメント行に限る（設定値として書いた private path は違反のままにする）。
 fn violating_lines(rel: &str, bytes: &[u8]) -> Vec<usize> {
-    let lines = private_path_lines(bytes);
+    exempt(rel, bytes, private_path_lines(bytes))
+}
+
+/// 免除を**ただ 1 本**で適用する（paths-clean と private-clean が同じ除外を使う・`s2-07l.32`）。
+/// 免除 file（[`PATHS_CLEAN_SKIP`]）の**コメント行だけ**を落とし、他の file はそのまま返す。
+pub(crate) fn exempt(rel: &str, bytes: &[u8], lines: Vec<usize>) -> Vec<usize> {
     if rel != PATHS_CLEAN_SKIP {
         return lines;
     }
@@ -238,7 +243,7 @@ fn private_path_lines(bytes: &[u8]) -> Vec<usize> {
 }
 
 /// `needle` の現れる byte offset を昇順で返す（std だけの素朴走査）。
-fn find_all(haystack: &[u8], needle: &[u8]) -> Vec<usize> {
+pub(crate) fn find_all(haystack: &[u8], needle: &[u8]) -> Vec<usize> {
     if needle.is_empty() || haystack.len() < needle.len() {
         return Vec::new();
     }
@@ -251,7 +256,7 @@ fn find_all(haystack: &[u8], needle: &[u8]) -> Vec<usize> {
 }
 
 /// byte offset を 1 起点の行番号にする。
-fn line_of(bytes: &[u8], at: usize) -> usize {
+pub(crate) fn line_of(bytes: &[u8], at: usize) -> usize {
     bytes.iter().take(at).filter(|byte| **byte == b'\n').count() + 1
 }
 
