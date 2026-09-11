@@ -6,6 +6,8 @@
 use std::process::Command;
 use vessel::cli_outcome::RC_OK;
 use vessel::order::is_declaration_order;
+use vessel::pipe::approve::{Approval, POLARITY as APPROVAL_POLARITY};
+use vessel::pipe::contract::Contract;
 use vessel::polarity::{Guard, OnFailure, Polarity, Timing, ALL};
 
 /// `<NAME> polarity` を撃って stdout を返す（rc 0・stderr 0 byte を表明する）。
@@ -115,11 +117,60 @@ fn polarity_lists_the_three_added_guards() {
     assert_eq!(Guard::RunnerStop.polarity(), Polarity { timing: Timing::InLoop, on_failure: OnFailure::FailOpen });
     let text = output();
     for expected in [
-        "guard=approval-gate timing=in-loop on-failure=fail-closed boundary=pipe::approve::needs_approval",
+        "guard=approval-gate timing=in-loop on-failure=fail-closed boundary=pipe::approve::Approval",
         "guard=runner-stop timing=in-loop on-failure=fail-open boundary=headless::runner::Decision",
         "guard=inject-refusal timing=in-loop on-failure=fail-closed boundary=seat::inject::Delivery",
     ] {
         assert!(text.lines().any(|line| line == expected), "一覧に載る: {expected}\n{text}");
     }
     assert_eq!(ALL.len(), 13, "母集団は 13（10 + 3）");
+}
+
+/// 3 クラスを名乗らない契約。
+fn contract_with(classes: &[&str]) -> Contract {
+    Contract {
+        goal: String::new(),
+        done: String::new(),
+        size: String::new(),
+        owner: String::new(),
+        disposition: String::new(),
+        write_set: Vec::new(),
+        verify: Vec::new(),
+        req: Vec::new(),
+        design: String::new(),
+        classes: classes.iter().map(|class| (*class).to_owned()).collect(),
+    }
+}
+
+/// 承認関門の判定は閉じた enum で、`POLARITY` はその enum の隣の定数である（`s2-07l.108`・
+/// C11.2「境界ごとの enum が極性型を運ぶ」）。一覧の boundary は fn ではなく enum を名指し、
+/// 判定の値（3 クラスを名乗る契約が未承認なら止める・それ以外は通す）は `.106` から変わらない。
+#[test]
+fn polarity_approval_gate_boundary_is_an_enum() {
+    // 一覧の pointer が enum の型名を指す（型名は erasure 後の path から取る＝字面を 2 面化しない）。
+    let type_name = std::any::type_name::<Approval<'_>>();
+    let type_path = type_name.split('<').next().unwrap_or_default();
+    assert!(
+        type_path.ends_with(Guard::Approval.boundary()),
+        "boundary は enum を名指す: type={type_name} boundary={}",
+        Guard::Approval.boundary()
+    );
+    assert!(!Guard::Approval.boundary().ends_with("needs_approval"), "fn を指さない");
+    // POLARITY は enum の隣の定数として参照でき、一覧が返す値と同じ 1 つの値である。
+    let polarity: Polarity = APPROVAL_POLARITY;
+    assert_eq!(Guard::Approval.polarity(), polarity, "一覧は境界の定数を返すだけ");
+    assert_eq!(polarity, Polarity { timing: Timing::InLoop, on_failure: OnFailure::FailClosed });
+    // 判定は網羅 match で受けられる 2 値で、値は不変（.106 の needs_approval と同じ真理表）。
+    let declared = contract_with(&["send-out", "consume"]);
+    let silent = contract_with(&[]);
+    for (contract, approved, stop) in [(&declared, false, true), (&declared, true, false), (&silent, false, false), (&silent, true, false)] {
+        let stopped = match Approval::judge(contract, approved) {
+            Approval::Granted => false,
+            Approval::Required(classes) => {
+                assert_eq!(classes, contract.classes.as_slice(), "止める理由は名乗った 3 クラスそのもの");
+                true
+            }
+        };
+        assert_eq!(stopped, stop, "classes={:?} approved={approved}", contract.classes);
+    }
 }

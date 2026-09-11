@@ -6,7 +6,7 @@
 //! **scribe2 固有の env は 1 つも足さない**（C2.2・ADR-0004 §2.4）。runner へは
 //! 親の env をそのまま継承させ、必要な値は cmd の placeholder 置換で渡す。
 
-use super::approve::{block, needs_approval, Approve};
+use super::approve::{block, Approval, Approve};
 use super::{
     branch_name, contract_path, emit, git_line, plugin_path, vessel_path, worktree_path, Budget, Emit,
 };
@@ -50,8 +50,9 @@ pub fn spawn(budget: Budget, launch: &Launch<'_>) -> Outcome {
     // **A1「実行前」の関門はここに置く**（設計 §5.5）。起動口が 1 本なので、この 1 行が
     // spawn / resume / run のすべての経路を覆う。呼び手側に置くと経路が増えるたびに
     // 素通りの穴が空く。
-    if needs_approval(launch.contract, launch.approved) {
-        return block(&approval(launch), &launch.contract.classes);
+    match Approval::judge(launch.contract, launch.approved) {
+        Approval::Required(classes) => return block(&approval(launch), classes),
+        Approval::Granted => {}
     }
     let Some(base) = super::head_of(launch.repo) else {
         return refused(format!("{} の HEAD を読めない", launch.repo.display()));

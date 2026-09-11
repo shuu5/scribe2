@@ -64,15 +64,33 @@ pub fn approve(entry: &Approve<'_>) -> Outcome {
     }
 }
 
-/// この境界の極性（A1 の承認関門・[`needs_approval`] → [`block`]）: spawn の手前＝起動の時点で止め、承認は event log の逐語だけを根拠にする（読めない・無い周は起動しない）。
+/// A1 の承認関門の判定（閉じた enum・C11.2「境界ごとの enum が極性型を運ぶ」）。
+///
+/// 呼び手（[`super::spawn`]）は網羅 match で受ける——`bool` だと「止める側」がどちらかを
+/// 呼び手が覚えていなければならず、変種を足す便で素通りの穴が空く。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Approval<'a> {
+    /// 3 クラスを名乗らない、または承認 event が在る＝起動してよい。
+    Granted,
+    /// 3 クラスを名乗る契約が未承認＝人の手番で止める（中身は名乗ったクラス）。
+    Required(&'a [String]),
+}
+
+/// この境界の極性（A1 の承認関門・[`Approval::judge`] → [`block`]）: spawn の手前＝起動の時点で止め、承認は event log の逐語だけを根拠にする（読めない・無い周は起動しない）。
 pub const POLARITY: Polarity = Polarity {
     timing: Timing::InLoop,
     on_failure: OnFailure::FailClosed,
 };
 
-/// 3 クラスを名乗る契約が未承認のまま実行されようとしているか（A1「実行前」）。
-pub fn needs_approval(contract: &Contract, approved: bool) -> bool {
-    !contract.classes.is_empty() && !approved
+impl<'a> Approval<'a> {
+    /// 3 クラスを名乗る契約が未承認のまま実行されようとしているか（A1「実行前」）。
+    pub fn judge(contract: &'a Contract, approved: bool) -> Self {
+        if !contract.classes.is_empty() && !approved {
+            Self::Required(&contract.classes)
+        } else {
+            Self::Granted
+        }
+    }
 }
 
 /// 人の手番で止める。`ApprovalRequested` + `Blocked` を記帳して rc 3 で終える。
