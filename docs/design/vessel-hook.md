@@ -66,11 +66,11 @@ stdout に 1 行 `[<NAME>/SessionStart] served version=<N> root=<root>` を出�
 
 ## 7. 歯（契約 `s2-3ax` の検証・`tests/e2e/hook.rs` module・tmp git repo を `git init` + commit で作る・`vessel init --state-dir` で tmp を紐づける）
 
-flip 行は `cargo nextest run -p <NAME> -E 'test(hook_) | test(hooks_) | test(vessel_)' --no-tests=fail`（3 接頭辞の和）。`hooks_` を足すのは `hooks_json_carries_permission_request_entry` 系の歯が 2 接頭辞の和から落ちるためである（`hook_` は `hooks_` に前方一致しない）。
+歯は `crates/<NAME>/tests/e2e/hook.rs` module に `hook_` / `hooks_` / `vessel_` の 3 接頭辞で置く（個々の名前はここに書かない。名前の列は現物が SSOT＝`cargo nextest list -p <NAME>`・ADR-0013 §2.1・`s2-07l.78`）。外形（usage と 1 行出力）は insta snapshot 1 本で pin する。flip 行は `cargo nextest run -p <NAME> -E 'test(hook_) | test(hooks_) | test(vessel_)' --no-tests=fail`（3 接頭辞の和）。`hooks_` を足すのは hooks.json の歯が 2 接頭辞の和から落ちるためである（`hook_` は `hooks_` に前方一致しない）。
 
-`hook_session_start_is_noop_without_marker` / `hook_session_start_is_noop_for_other_name` / `hook_session_start_is_noop_without_state_dir`（marker はあるが git config 無し → 0 byte・rc 0）/ `hook_session_start_serves_own_marker`（stdout に `[<NAME>/SessionStart]` ∧ `inject.jsonl` に 1 行・`schema=1`・`bytes>0`）/ `hook_guard_denies_edit_outside_write_set`（rc 2 ∧ stderr 非空 ∧ stdout 0 byte ∧ inject.jsonl に deny 1 行）/ `hook_guard_denies_path_escaping_root` / `hook_guard_allows_edit_inside_write_set` / `hook_guard_fails_closed_when_policy_unreadable`（policy file を dir にする → rc 2）/ `hook_guard_is_inactive_without_policy_file` / `hook_guard_ignores_bash_tool` / `vessel_init_renders_two_lines_and_writes_state_dir_config` / `vessel_check_rc2_for_other_name` / `vessel_init_refuses_to_overwrite_other_name` / `vessel_external_form`（snapshot）。
+何を測るか: SessionStart は marker が無い repo・他の name の marker・git config の無い repo（marker はあるが state dir 無し → 0 byte・rc 0）では何もせず、自分の marker が在れば stdout に `[<NAME>/SessionStart]` を出し `inject.jsonl` に 1 行（`schema=1`・`bytes>0`）を残す／guard は write-set の外への Edit を rc 2・stderr 非空・stdout 0 byte・inject.jsonl の deny 1 行で断り、root から抜ける path も断り、write-set の内側は通し、policy file が読めない周（file を dir にする）は rc 2 で fail-closed、policy file が無ければ不活性、Bash tool は見ない／`vessel init` は 2 行を出して state dir を git config へ書き、他の name の marker は `check` が rc 2・`init` は上書きを断る。
 
-xtask 側: `crates/xtask/src/genmanifest.rs` の `#[cfg(test)]` に `gen_manifest_hooks_json_is_idempotent`（render の bytes == tracked `hooks/hooks.json`・timeout は manifest の `hook.timeout_s` と一致）。
+xtask 側: `crates/xtask/src/genmanifest.rs` の `#[cfg(test)]` に、render の bytes が tracked の `hooks/hooks.json` と一致し timeout が manifest の `hook.timeout_s` と一致することを測る歯を置く。
 
 ## 8. 却下案
 
