@@ -145,12 +145,18 @@ fn has_local_part(bytes: &[u8], at: usize) -> bool {
 }
 
 /// `@` の直後の domain（label 2 つ以上・末尾 label が英字 2 文字以上）を小文字で返す。
+///
+/// domain の**直後の 1 文字が `:`** なら scp 形の git remote（`user@host:path`）であって email
+/// ではないので `None`（構造で除外・allow 行も規則文も持たない・`s2-07l.107`）。
 fn domain_after(bytes: &[u8], at: usize) -> Option<String> {
     let tail = bytes.get(at.checked_add(1)?..)?;
     let end = tail
         .iter()
         .position(|byte| !(is_label_byte(*byte) || *byte == b'.'))
         .unwrap_or(tail.len());
+    if tail.get(end) == Some(&b':') {
+        return None;
+    }
     let raw = tail.get(..end)?.to_ascii_lowercase();
     let text = String::from_utf8(raw).ok()?;
     let trimmed = text.trim_end_matches('.');
@@ -296,6 +302,26 @@ mod tests {
         let measured = scan_fixture(&[("tools.md", body)]);
         assert_eq!(measured.fact, "private-clean=1");
         assert!(measured.violations.is_empty(), "版の形は違反でないはず: {:?}", measured.violations);
+    }
+
+    /// scp 形の git remote（`user@host:path`）は email ではない: domain の**直後の 1 文字が `:`**
+    /// なら email 形と見なさない（構造で除外・allow 行も規則文も持たない・`.32` lens MED-2・裁定 (c)）。
+    /// 負例: 同じ file の `:` 無しの非予約 email は引き続き違反（除外が広すぎない）。
+    #[test]
+    fn private_clean_skips_scp_remote_style_git_urls() {
+        let body = format!(
+            "clone: {}:owner/repo.git\ndeploy: {}:srv/app\nmail: {}\n",
+            email("git", "github.com"),
+            email("deploy", "example-corp.jp"),
+            email("a", "corp-example.co.jp"),
+        );
+        let measured = scan_fixture(&[("remotes.md", body)]);
+        assert_eq!(measured.fact, "private-clean=1");
+        assert_eq!(
+            measured.violations,
+            vec!["private-clean: remotes.md:3 email".to_owned()],
+            "scp 形の 2 行は通り、`:` 無しの email だけが違反のはず"
+        );
     }
 
     /// fail-closed（measure の枝）: 母集団 0 件は違反・index を取れない周（git の外）も違反で、
