@@ -223,10 +223,16 @@ pub fn land(entry: &Land<'_>) -> Outcome {
         Ok(found) => found,
         Err(reason) => return broken(reason),
     };
-    let check = verify_main(entry, &new);
-    // **実測の結果に依らず揃える**: ref は既に進んでいるので、赤 / 測れない周に揃えないと
-    // anchor が staged の逆向きのまま残り、人が触る failure exit でこそ `.117` の経路が開く。
+    // **squash の直後に揃える**（`s2-07l.131`）。ref を進めてから anchor を揃えるまでの窓——
+    // `git status` に landed 変更が staged の逆向きで見える時間——は、実測の後に揃えると
+    // **main 実測の長さだけ**開く（人が anchor を触れば `.117` の経路がその間ずっと開いている）。
+    // 実測の前に揃えれば窓は秒単位に縮む。「**実測の結果に依らず揃える**」（`s2-07l.120`・lens-120 H1）は
+    // この順序でこそ自明である——同期が先なら、そもそも結果を見ていない。
+    //
+    // 同期が `Skipped(SyncFailed)` の周も実測は続ける（ref は既に進んでいる＝同期の失敗で land を
+    // 止めない・極性は不変）。結果は従来どおり [`finish`] / [`main_red`] / [`main_unmeasured`] へ渡す。
     let anchor = sync_anchor(entry.repo, &plan, &old, &new);
+    let check = verify_main(entry, &new);
     let outcome = match check {
         MainCheck::Green => finish(entry, &worktree, &new, &anchor),
         MainCheck::Red(reason) => main_red(entry, &reason, &anchor),

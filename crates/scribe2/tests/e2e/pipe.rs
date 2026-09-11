@@ -4626,3 +4626,61 @@ fn pipe_land_anchor_reports_sync_failed_when_git_refuses_midway() {
     fs::remove_file(repo.join(".git").join("index.lock")).ok();
     clean(&[&repo, &state]);
 }
+
+/// 同期は **squash の直後・main 実測の前**に走る（`s2-07l.131`・窓を秒単位へ）。
+///
+/// 「揃えた」だけでは順序を測れない（実測の後に揃えても最後は clean になる）ので、**実測の最中に
+/// anchor がどう見えるか**を現物で採る: 契約の verify が main 実測の tmp worktree（detached）で
+/// 撃たれたときだけ、置き場の record file へ印 1 行と anchor の `git status --porcelain` を落とす。
+/// base（実測 → 同期）では index が旧 main のままなので `M  src/lib.rs`（staged の逆向き・`.117` の形）が
+/// 記録され、head（同期 → 実測）では空になる。
+///
+/// **record の不在を clean に読み替えない**（lens FAIL 2026-09-12）: file が在ること・先頭行が印である
+/// ことを先に要求し、その後の porcelain 部分だけを空と照合する。script は `set -e` で書き、status を
+/// 読めない周は verify が赤くなって land が `main-red` で終端する（この歯はそれも落とす）。
+#[test]
+fn pipe_land_anchor_before_verify_records_clean_anchor_during_main_check() {
+    let (repo, state) = repo_with_state();
+    let record = state.join("anchor-status");
+    // `--untracked-files=no`: anchor には便の `.worktrees/` が常に untracked で在る（器が作る入れ物で
+    // あって「揃っていない」の合図ではない）＝器の見立て（`anchor_plan`）と同じ面を読む。
+    let script = format!(
+        "set -e\n\
+         if [ \"$(git rev-parse --abbrev-ref HEAD)\" = HEAD ]; then\n\
+         printf 'anchor-observed\\n' > '{record}'\n\
+         git -C '{repo}' status --porcelain --untracked-files=no >> '{record}'\n\
+         fi\n",
+        record = record.display(),
+        repo = repo.display(),
+    );
+    fs::write(repo.join("verify-probe.sh"), script).expect("probe script を書ける");
+    git(&repo, &["add", "--", "verify-probe.sh"]);
+    git(&repo, &["commit", "-q", "-m", "probe"]);
+    let path = write_contract(&repo, &["verify"], &[r#"verify = ["sh verify-probe.sh"]"#]);
+    let marker = state.join("lens-ran");
+    let base = git(&repo, &["rev-parse", "refs/heads/main"]);
+    let id = gated_pass(&repo, &state, &path, &marker);
+    assert!(!record.exists(), "gate（branch の worktree）は record を書かない＝印は実測の周のもの");
+
+    let out = land_once(&repo, &state, &id);
+
+    // 5. 既存の挙動は不変（Landed・`anchor=synced`・main は新 sha）。
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "land は rc 0: {}", stderr_of(&out));
+    let new = git(&repo, &["rev-parse", "refs/heads/main"]);
+    assert_ne!(new, base, "main は進む");
+    assert!(stdout_of(&out).contains(&format!("landed={new} anchor=synced")), "判定行: {}", stdout_of(&out));
+    assert!(show_line(&repo, &state, &id).contains("stage=Landed"), "{}", show_line(&repo, &state, &id));
+    // 1. record が**在る**（無いを clean に化けさせない）。
+    let text = fs::read_to_string(&record).expect("main 実測の verify が record を書いている");
+    let mut lines = text.lines();
+    // 2. 先頭行は固定の印＝script が本当に走って書いた証拠。
+    assert_eq!(lines.next(), Some("anchor-observed"), "印が先頭行: {text:?}");
+    // 3. 印の後の porcelain は空＝実測の**最中に** anchor が既に新 main へ揃っている
+    //    （base ではここが `M  src/lib.rs`）。
+    assert_eq!(
+        lines.collect::<Vec<&str>>(),
+        Vec::<&str>::new(),
+        "実測の最中の anchor は揃っている（同期が先）: {text:?}"
+    );
+    clean(&[&repo, &state]);
+}
