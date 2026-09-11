@@ -3728,3 +3728,247 @@ fn pipe_gate_turns_unreadable_diff_into_inconclusive() {
     assert!(show_line(&repo, &state, &id).contains("stage=Gated"), "段は Gated へ進む（測り直せる）");
     clean(&[&repo, &state]);
 }
+
+// ── 質問の口 (a)（設計 docs/design/pipeline-question.md §8 (a)・SRS FR31 / FR32） ───────
+
+/// runner が最終行に書く質問 record。
+const QUESTION_RECORD: &str = r#"{"question":"verify 行が矛盾する","about":"verify"}"#;
+
+/// record を stdout の最終行に書いて rc 76 で終える fake runner（commit は作らない）。
+fn question_runner() -> String {
+    format!("echo before; printf '%s\\n' '{QUESTION_RECORD}'; exit 76")
+}
+
+/// intake → spawn で質問に倒した便の id を返す。
+fn questioned(repo: &Path, state: &Path) -> String {
+    let path = write_contract(repo, &[], &[]);
+    let id = intake(repo, state, &path);
+    let out = run_pipe(&[
+        "spawn", "--run", &id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(), "--runner", &question_runner(),
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_BLOCKED)), "質問は rc 3 で止まる: {}", stderr_of(&out));
+    assert!(
+        stdout_of(&out).contains(&format!("stage=Questioned question={id}")),
+        "判定行に question=<id>: {}",
+        stdout_of(&out)
+    );
+    id
+}
+
+/// 便の event を `(kind, stage, detail)` の列にする。
+fn trail(state: &Path, id: &str) -> Vec<(EventKind, Option<Stage>, Option<String>)> {
+    events(state)
+        .into_iter()
+        .filter(|event| event.run == id)
+        .map(|event| (event.kind, event.stage, event.detail))
+        .collect()
+}
+
+#[test]
+fn pipe_question_spawn_records_questioned_in_order() {
+    let (repo, state) = repo_with_state();
+    let id = questioned(&repo, &state);
+    let tail: Vec<_> = trail(&state, &id).into_iter().rev().take(3).collect::<Vec<_>>().into_iter().rev().collect();
+    assert_eq!(
+        tail,
+        vec![
+            (EventKind::SeatStopped, None, None),
+            (EventKind::QuestionRaised, None, Some("verify 行が矛盾する".to_owned())),
+            (EventKind::RunStage, Some(Stage::Questioned), Some("about:verify".to_owned())),
+        ],
+        "SeatStopped → QuestionRaised(逐語) → RunStage(Questioned) の順"
+    );
+    assert!(show_line(&repo, &state, &id).contains("stage=Questioned"), "永続面に Questioned が残る");
+    // 質問で止まった便に Live 席は無い（`pipe stop --all` の母集団に入らない）。
+    let stopped = run_pipe(&["stop", "--all", "--state-dir", &state.display().to_string()]);
+    assert!(stdout_of(&stopped).contains("seats=0"), "{}", stdout_of(&stopped));
+    clean(&[&repo, &state]);
+}
+
+#[test]
+fn pipe_question_rc76_without_record_fails_closed() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    // record が無い / 壊れた JSON / question が空 / 非文字列 / 複数行 / key 無し、の各形。
+    for (bead, last_line, reason) in [
+        ("s2-none", "not a record", "JSON 行が無い"),
+        ("s2-broken", r#"{"question":"verify"#, "読めない"),
+        ("s2-empty", r#"{"question":"  "}"#, "無いか空"),
+        ("s2-num", r#"{"question":1}"#, "無いか空"),
+        ("s2-multi", r#"{"question":"a\nb"}"#, "1 行でない"),
+        ("s2-nokey", r#"{"about":"verify"}"#, "無いか空"),
+    ] {
+        let id = intake_bead(&repo, &state, &path, bead);
+        let runner = format!("printf '%s\\n' '{last_line}'; exit 76");
+        let out = run_pipe(&[
+            "spawn", "--run", &id, "--repo", &repo.display().to_string(),
+            "--state-dir", &state.display().to_string(), "--runner", &runner,
+        ]);
+        assert!(stdout_of(&out).contains("stage=Failed"), "{bead}: {}", stdout_of(&out));
+        let last = trail(&state, &id).pop();
+        assert!(
+            matches!(&last, Some((EventKind::RunStage, Some(Stage::Failed), Some(detail)))
+                if detail.starts_with("question-record-missing:") && detail.contains(reason) && detail.ends_with(",commits:0")),
+            "{bead}: 理由 question-record-missing:{reason}: {last:?}"
+        );
+        assert!(
+            !trail(&state, &id).iter().any(|(kind, _, _)| *kind == EventKind::QuestionRaised),
+            "{bead}: 質問は記帳しない"
+        );
+    }
+    clean(&[&repo, &state]);
+}
+
+#[test]
+fn pipe_question_runner_stdout_is_kept_in_run_dir() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let id = intake(&repo, &state, &path);
+    // stdout を捕らえても、包みの観測行（rate-limit status の集合を育てる口）は残る。
+    let runner = "echo 'runner: rc=0 records=3 observed=allowed_warning'; echo x >> src/lib.rs && git add -A && git commit -q -m runner";
+    let out = run_pipe(&[
+        "spawn", "--run", &id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(), "--runner", runner,
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    let kept = fs::read_to_string(state.join("pipe").join(&id).join("runner.stdout.log")).unwrap_or_default();
+    assert!(kept.contains("observed=allowed_warning"), "観測行が残る: {kept}");
+    assert!(kept.lines().next().is_some_and(|head| head.starts_with("## ") && head.ends_with(" rc=0")), "見出し行: {kept}");
+    // stdout を出さない runner では file を作らない。
+    let id2 = intake_bead(&repo, &state, &path, "s2-quiet");
+    let quiet = run_pipe(&[
+        "spawn", "--run", &id2, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(), "--runner", "true",
+    ]);
+    assert!(stdout_of(&quiet).contains("stage=Failed"));
+    assert!(!state.join("pipe").join(&id2).join("runner.stdout.log").exists(), "空の周は書かない");
+    clean(&[&repo, &state]);
+}
+
+#[test]
+fn pipe_question_rc0_does_not_read_record_line() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let id = intake(&repo, &state, &path);
+    // 76 でない rc では最終行を読まない＝record を書いても従来どおり Implemented。
+    let runner = format!(
+        "echo x >> src/lib.rs && git add -A && git commit -q -m runner; printf '%s\\n' '{QUESTION_RECORD}'; exit 0"
+    );
+    let out = run_pipe(&[
+        "spawn", "--run", &id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(), "--runner", &runner,
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    assert!(stdout_of(&out).contains("stage=Implemented"), "{}", stdout_of(&out));
+    assert!(!trail(&state, &id).iter().any(|(kind, _, _)| *kind == EventKind::QuestionRaised));
+    // record と commit が同時の周は質問ではなく実装の失敗（rc 76 でも Failed）。
+    let path2 = write_contract(&repo, &[], &[]);
+    let id2 = intake_bead(&repo, &state, &path2, "s2-both");
+    let both = format!("echo y >> src/lib.rs && git add -A && git commit -q -m r; printf '%s\\n' '{QUESTION_RECORD}'; exit 76");
+    let out = run_pipe(&[
+        "spawn", "--run", &id2, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(), "--runner", &both,
+    ]);
+    assert!(stdout_of(&out).contains("stage=Failed"), "{}", stdout_of(&out));
+    assert!(matches!(trail(&state, &id2).pop(), Some((_, Some(Stage::Failed), Some(d))) if d.starts_with("runner-rc:76,commits:1")));
+    clean(&[&repo, &state]);
+}
+
+#[test]
+fn pipe_question_resume_waits_for_answer_without_writing() {
+    let (repo, state) = repo_with_state();
+    let id = questioned(&repo, &state);
+    let marker = state.join("runner-ran");
+    let before = event_count(&state);
+    let out = run_pipe(&[
+        "resume", "--run", &id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(), "--runner", &runner_cmd(&marker),
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_BLOCKED)), "回答の無い resume は rc 3: {}", stderr_of(&out));
+    assert!(!marker.exists(), "runner を起こさない");
+    assert_eq!(event_count(&state), before, "1 行も書かない");
+    // 空の回答は書かない（rc 1）。
+    let empty = run_pipe(&["answer", "--run", &id, "--words", "  ", "--state-dir", &state.display().to_string()]);
+    assert_eq!(empty.status.code(), Some(i32::from(RC_REFUSED)), "{}", stderr_of(&empty));
+    assert_eq!(event_count(&state), before, "空の回答は 1 byte も書かない");
+    clean(&[&repo, &state]);
+}
+
+#[test]
+fn pipe_question_answer_refuses_run_that_is_not_questioned() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let id = intake(&repo, &state, &path);
+    let before = event_count(&state);
+    let out = run_pipe(&["answer", "--run", &id, "--words", "verify は 1 行目だけ", "--state-dir", &state.display().to_string()]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_BLOCKED)), "Questioned 以外は rc 3: {}", stderr_of(&out));
+    assert_eq!(event_count(&state), before, "何も書かない");
+    let missing = run_pipe(&["answer", "--run", "nope", "--words", "x", "--state-dir", &state.display().to_string()]);
+    assert_eq!(missing.status.code(), Some(i32::from(RC_REFUSED)), "無い run は rc 1");
+    clean(&[&repo, &state]);
+}
+
+#[test]
+fn pipe_question_answer_then_resume_respawns_with_answer_section() {
+    let (repo, state) = repo_with_state();
+    let id = questioned(&repo, &state);
+    let answered = run_pipe(&[
+        "answer", "--run", &id, "--words", "verify は 1 行目だけを撃つ",
+        "--state-dir", &state.display().to_string(),
+    ]);
+    assert_eq!(answered.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&answered));
+    assert!(stdout_of(&answered).contains("answered=true"), "{}", stdout_of(&answered));
+    let copied = state.join("got-stdin.txt");
+    let runner = format!(
+        "cat > '{}' && echo x >> src/lib.rs && git add -A && git commit -q -m runner",
+        copied.display()
+    );
+    let out = run_pipe(&[
+        "resume", "--run", &id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(), "--runner", &runner,
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "回答の後は同じ便が進む: {}", stderr_of(&out));
+    assert!(show_line(&repo, &state, &id).contains("stage=Implemented"), "{}", show_line(&repo, &state, &id));
+    let stdin = fs::read_to_string(&copied).unwrap_or_default();
+    assert!(stdin.contains("## 回答"), "stdin に回答節: {stdin}");
+    assert!(stdin.contains("verify 行が矛盾する") && stdin.contains("verify は 1 行目だけを撃つ"), "質問と回答の逐語: {stdin}");
+    assert!(stdin.contains("goal = "), "契約の本文も流す: {stdin}");
+    // 同じ run が Spawned を通り直し、base は初回の記録と同じ。
+    let stages: Vec<Option<Stage>> = trail(&state, &id).into_iter().map(|(_, stage, _)| stage).collect();
+    assert_eq!(stages.iter().filter(|stage| **stage == Some(Stage::Spawned)).count(), 2, "Spawned を 2 回通る");
+    let bases: BTreeSet<String> = trail(&state, &id)
+        .into_iter()
+        .filter_map(|(_, stage, detail)| (stage == Some(Stage::Spawned)).then_some(detail).flatten())
+        .collect();
+    assert_eq!(bases.len(), 1, "base は 1 つ: {bases:?}");
+    // 回答は machine 由来（FR22 不変）。
+    let report = report_once(&state);
+    assert!(
+        stdout_of(&report).contains("human_events=0 human_events_other_than_approval=0"),
+        "{}",
+        stdout_of(&report)
+    );
+    assert!(
+        trail(&state, &id).iter().any(|(kind, _, detail)| *kind == EventKind::QuestionAnswered && detail.as_deref() == Some("verify は 1 行目だけを撃つ")),
+        "回答の逐語が残る"
+    );
+    clean(&[&repo, &state]);
+}
+
+#[test]
+fn pipe_question_run_stops_with_question_token() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let rules = ceiling_rules(&state);
+    let out = run_pipe(&[
+        "run", "--contract", &path.display().to_string(), "--bead", "s2-2e5",
+        "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
+        "--rules", &rules, "--runner", &question_runner(),
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_BLOCKED)), "{}", stderr_of(&out));
+    let id = run_id_of(&out);
+    assert!(stdout_of(&out).contains(&format!("question={id}")), "判定行に question=: {}", stdout_of(&out));
+    assert!(show_line(&repo, &state, &id).contains("stage=Questioned"));
+    clean(&[&repo, &state]);
+}

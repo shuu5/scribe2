@@ -41,26 +41,40 @@ pub struct Approve<'a> {
 /// 承認を 1 件記帳する。**逐語が空なら 1 byte も書かない**。
 pub fn approve(entry: &Approve<'_>) -> Outcome {
     // 空の承認を通すと「聞いた形」だけが残って中身が無い記録になる。
+    record_words(entry, EventKind::ApprovalReceived, "承認", "approved")
+}
+
+/// 質問への回答を 1 件記帳する（設計 pipeline-question.md §5・FR32）。**承認と同型**。
+///
+/// actor は [`EventKind::default_actor`] が返す `machine` のまま＝回答は契約の所有者
+/// （planner 席）の機械由来であり、user の言葉は承認 event でしか記帳しない（C7.2・FR22 不変）。
+/// `Emit` に actor の seam は足さない。逐語が空なら書かない。
+pub fn answer(entry: &Approve<'_>) -> Outcome {
+    record_words(entry, EventKind::QuestionAnswered, "回答", "answered")
+}
+
+/// 逐語を `detail` にそのまま写した event を 1 件書く。**要約しない**（C7.2）——言い換えた
+/// 時点で承認ではなくなる。空なら書かない。
+fn record_words(entry: &Approve<'_>, kind: EventKind, what: &str, key: &str) -> Outcome {
     if entry.words.trim().is_empty() {
-        return Outcome::failed_line(RC_REFUSED, "pipe: 承認の逐語が空である".to_owned());
+        return Outcome::failed_line(RC_REFUSED, format!("pipe: {what}の逐語が空である"));
     }
     let emitted = emit(
         entry.state_dir,
         &Emit {
-            kind: EventKind::ApprovalReceived,
+            kind,
             run: entry.run,
             bead: entry.bead,
             stage: None,
             seat: None,
             pid: None,
-            // **要約せずそのまま**書く（C7.2）。言い換えた時点で承認ではなくなる。
             detail: Some(entry.words.to_owned()),
         },
         entry.policy,
     );
     match emitted {
         Err(err) => Outcome::failed_line(RC_BROKEN, err.to_string()),
-        Ok(()) => Outcome::ok_line(format!("run={} approved=true", entry.run)),
+        Ok(()) => Outcome::ok_line(format!("run={} {key}=true", entry.run)),
     }
 }
 

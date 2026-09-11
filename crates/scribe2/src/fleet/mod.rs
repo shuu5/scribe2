@@ -42,6 +42,10 @@ pub enum EventKind {
     ApprovalRequested,
     /// 承認を受け取った。
     ApprovalReceived,
+    /// runner が契約の不足を質問 record で返して止まった（detail = 質問の逐語・FR31）。
+    QuestionRaised,
+    /// 契約の所有者が回答を記帳した（detail = 回答の逐語・actor は machine・FR32）。
+    QuestionAnswered,
 }
 
 /// [`EventKind`] の全 variant。
@@ -54,6 +58,8 @@ pub const KINDS: &[EventKind] = &[
     EventKind::SeatStopped,
     EventKind::ApprovalRequested,
     EventKind::ApprovalReceived,
+    EventKind::QuestionRaised,
+    EventKind::QuestionAnswered,
 ];
 
 impl EventKind {
@@ -68,6 +74,8 @@ impl EventKind {
             Self::SeatStopped => "SeatStopped",
             Self::ApprovalRequested => "ApprovalRequested",
             Self::ApprovalReceived => "ApprovalReceived",
+            Self::QuestionRaised => "QuestionRaised",
+            Self::QuestionAnswered => "QuestionAnswered",
         }
     }
 
@@ -86,7 +94,9 @@ impl EventKind {
             | Self::RunStopped
             | Self::SeatSpawned
             | Self::SeatStopped
-            | Self::ApprovalRequested => ACTOR_MACHINE,
+            | Self::ApprovalRequested
+            | Self::QuestionRaised
+            | Self::QuestionAnswered => ACTOR_MACHINE,
         }
     }
 }
@@ -120,6 +130,8 @@ pub enum Stage {
     Blocked,
     /// 席を立てた。
     Spawned,
+    /// runner が質問で止まり、回答を待っている（FR31）。
+    Questioned,
     /// 実装が済んだ。
     Implemented,
     /// gate を通した。
@@ -137,6 +149,7 @@ pub const STAGES: &[Stage] = &[
     Stage::Intake,
     Stage::Blocked,
     Stage::Spawned,
+    Stage::Questioned,
     Stage::Implemented,
     Stage::Gated,
     Stage::Landed,
@@ -151,6 +164,7 @@ impl Stage {
             Self::Intake => "Intake",
             Self::Blocked => "Blocked",
             Self::Spawned => "Spawned",
+            Self::Questioned => "Questioned",
             Self::Implemented => "Implemented",
             Self::Gated => "Gated",
             Self::Landed => "Landed",
@@ -396,7 +410,9 @@ fn apply_seat(state: &mut State, event: &Event) {
         | EventKind::RunDone
         | EventKind::RunStopped
         | EventKind::ApprovalRequested
-        | EventKind::ApprovalReceived => {}
+        | EventKind::ApprovalReceived
+        | EventKind::QuestionRaised
+        | EventKind::QuestionAnswered => {}
     }
 }
 
