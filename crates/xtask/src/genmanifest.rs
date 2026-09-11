@@ -165,7 +165,11 @@ mod tests {
     };
     use crate::check::{json_string_field, Layout};
     use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicU32, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    /// 同一 process 内での dir 名衝突を避ける連番（`cargo test` は thread 並走）。
+    static SEQ: AtomicU32 = AtomicU32::new(0);
 
     /// fixture の NAME。**実在しない名**にする（生成器が字面を焼く変異は、この名が出力に
     /// 現れないことで落ちる）。
@@ -176,15 +180,21 @@ mod tests {
     const FIXTURE_TIMEOUT: u64 = 7;
 
     /// repo の外に一意な tmp dir を作る（`tempfile` は足さない・憲法 A3）。
+    /// `create_dir`（`_all` ではない）で既存 dir を衝突として検出し、連番を変えて取り直す。
     fn make_tmp_dir() -> PathBuf {
         let base = std::env::temp_dir();
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.subsec_nanos())
-            .unwrap_or(0);
-        let dir = base.join(format!("genmanifest-{}-{nanos}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("tmp dir を作れる");
-        dir
+        for _ in 0..8 {
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.subsec_nanos())
+                .unwrap_or(0);
+            let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+            let dir = base.join(format!("genmanifest-{}-{nanos}-{seq}", std::process::id()));
+            if std::fs::create_dir(&dir).is_ok() {
+                return dir;
+            }
+        }
+        panic!("一意な tmp dir を 8 回で作れない");
     }
 
     /// `generate` が読む最小の workspace を tmp に組む（Cargo.toml・core crate・runner・rules）。
@@ -230,19 +240,22 @@ mod tests {
         }
 
         let report = generate(&root).expect("fixture の workspace から生成できる");
-
-        assert_eq!(
+        // 後始末は assert より前に済ませる（赤い回に tmp を漏らさない・check.rs の作法と同じ）。
+        let (plugin, hooks, market) = (
             read_generated(&root, MANIFEST_REL),
-            render(FIXTURE_NAME, FIXTURE_VERSION),
-            "plugin.json は render の bytes そのもの"
-        );
-        assert_eq!(
             read_generated(&root, HOOKS_REL),
+            read_generated(&root, MARKETPLACE_REL),
+        );
+        std::fs::remove_dir_all(&root).ok();
+
+        assert_eq!(plugin, render(FIXTURE_NAME, FIXTURE_VERSION), "plugin.json は render の bytes そのもの");
+        assert_eq!(
+            hooks,
             render_hooks(FIXTURE_NAME, FIXTURE_TIMEOUT),
             "hooks.json は render_hooks の bytes そのもの（timeout は fixture の rules 行）"
         );
         assert_eq!(
-            read_generated(&root, MARKETPLACE_REL),
+            market,
             render_marketplace(FIXTURE_NAME),
             "marketplace.json は render_marketplace の bytes そのもの"
         );
@@ -253,10 +266,9 @@ mod tests {
         // 実在の名は tracked の workspace から読む（歯の source に字面を置かない・name-literal）。
         let real = Layout::discover(&workspace_root()).expect("workspace の配置を読める").name;
         assert!(
-            !read_generated(&root, HOOKS_REL).contains(&real),
+            !hooks.contains(&real),
             "生成器は実在の名（{real}）を焼いていない（fixture の名だけが出る）"
         );
-        std::fs::remove_dir_all(&root).ok();
     }
 
     /// 共有 `description(name)` が plugin.json と marketplace.json の**両方**へ届く: marketplace
@@ -269,6 +281,8 @@ mod tests {
         generate(&root).expect("fixture の workspace から生成できる");
         let plugin = read_generated(&root, MANIFEST_REL);
         let market = read_generated(&root, MARKETPLACE_REL);
+        // 後始末は assert より前（赤い回に tmp を漏らさない）。
+        std::fs::remove_dir_all(&root).ok();
 
         let in_plugin = json_string_field(&plugin, "description").expect("plugin.json に description");
         let market_head = market
@@ -286,7 +300,6 @@ mod tests {
             Some(in_market.as_str()),
             "plugins[0] の description も同じ 1 箇所から出る"
         );
-        std::fs::remove_dir_all(&root).ok();
     }
 
     /// workspace root（この crate の 2 つ上）。
