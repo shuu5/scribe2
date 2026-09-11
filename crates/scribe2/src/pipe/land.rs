@@ -43,7 +43,7 @@ const RETIRED_DIR: &str = "retired";
 
 /// anchor を揃えない理由（判定行 `anchor=skipped:<reason>`・**閉じた enum**・憲法 C11）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AnchorSkip {
+pub enum AnchorSkip {
     /// HEAD が main を指さない（別 branch・detached）。通常形ゆえ warning は出さない。
     NotMain,
     /// tracked な未 commit の変更が在る（成果を消さない・N1）。
@@ -192,13 +192,23 @@ pub fn land(entry: &Land<'_>) -> Outcome {
 ///
 /// 揃えるのは **HEAD が `refs/heads/main` を指し ∧ tracked な未 commit の変更が無い**周だけ。
 /// untracked は数えない（揃える動作は tracked path しか触らず、衝突すれば git が断る＝
-/// [`ANCHOR_SYNC_FAILED`]）。読めない周は clean に読み替えない（fail-closed）。
-enum AnchorPlan {
+/// [`AnchorSkip::SyncFailed`]）。読めない周は clean に読み替えない（fail-closed）。
+///
+/// 極性一覧の境界（`s2-07l.124`・C11.2 / C16.2）: 隣の [`ANCHOR_POLARITY`] が値を持つ。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnchorPlan {
     /// 揃える。
     Sync,
     /// 触らない（理由）。
     Skip(AnchorSkip),
 }
+
+/// この境界の極性（[`AnchorPlan`]）: 同期の**前**に見立てて止め（in-loop）、anchor の状態を読めない周は
+/// 揃えない（fail-closed・`anchor=skipped:unreadable`）。
+pub const ANCHOR_POLARITY: Polarity = Polarity {
+    timing: Timing::InLoop,
+    on_failure: OnFailure::FailClosed,
+};
 
 /// 見立てを読む。
 fn anchor_plan(repo: &Path) -> AnchorPlan {
@@ -484,13 +494,53 @@ pub(crate) fn retire_worktree(repo: &Path, run: &str, worktree: &Path) -> Vec<St
     vec![format!("pipe: {from} を {to} へ移せなかった")]
 }
 
-/// worktree が clean か。**読めない周は偽**（fail-closed）。
+/// retire の前提 = worktree が clean か（**閉じた enum**・`s2-07l.124`・C11.2）。
 ///
-/// 「状態を読めなかった」を「汚れていない」に化けさせない——move は中身ごと運ぶので、
-/// 未 commit の仕事を持った worktree を畳むと、その仕事の行き先が便の外から読めなくなる。
-fn is_clean(worktree: &Path) -> bool {
-    git_bytes(worktree, &["status", "--porcelain"])
-        .is_some_and(|bytes| String::from_utf8_lossy(&bytes).trim().is_empty())
+/// 「状態を読めなかった」を「汚れていない」に化けさせない（[`Unreadable`](Self::Unreadable) は
+/// [`Dirty`](Self::Dirty) と同じく畳まない）——move は中身ごと運ぶので、未 commit の仕事を持った
+/// worktree を畳むと、その仕事の行き先が便の外から読めなくなる。untracked も数える。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RetireCheck {
+    /// `status --porcelain` が空。畳める。
+    Clean,
+    /// 未 commit の変更（untracked を含む）が在る。
+    Dirty,
+    /// status を読めない（git が断った・repo でない）。
+    Unreadable,
+}
+
+/// この境界の極性（[`RetireCheck`]）: move の**前**に読んで止め（in-loop）、読めない周は畳まない（fail-closed）。
+pub const RETIRE_POLARITY: Polarity = Polarity {
+    timing: Timing::InLoop,
+    on_failure: OnFailure::FailClosed,
+};
+
+impl RetireCheck {
+    /// worktree の状態を読む。
+    pub fn judge(worktree: &Path) -> Self {
+        match git_bytes(worktree, &["status", "--porcelain"]) {
+            None => Self::Unreadable,
+            Some(bytes) if String::from_utf8_lossy(&bytes).trim().is_empty() => Self::Clean,
+            Some(_) => Self::Dirty,
+        }
+    }
+
+    /// 畳めるか。**bool はここ 1 本で enum から導く**（読めない周は偽）。
+    pub fn is_clean(self) -> bool {
+        match self {
+            Self::Clean => true,
+            Self::Dirty | Self::Unreadable => false,
+        }
+    }
+
+    /// 断りの理由の字面。
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Clean => "clean",
+            Self::Dirty => "dirty",
+            Self::Unreadable => "unreadable",
+        }
+    }
 }
 
 /// `--pr-cmd` 形で終端した便の worktree を、merge の後に畳む（設計 §5.4）。
@@ -507,8 +557,9 @@ pub fn retire(entry: &Retire<'_>) -> Outcome {
         // 2 度目の retire もここで止まる（1 度目が畳んでいるので元の場所に無い）。
         return refused(format!("run {} の worktree {} が無い", entry.run, worktree.display()));
     }
-    if !is_clean(&worktree) {
-        return refused(format!("run {} の worktree が clean でない", entry.run));
+    let check = RetireCheck::judge(&worktree);
+    if !check.is_clean() {
+        return refused(format!("run {} の worktree が clean でない（{}）", entry.run, check.as_str()));
     }
     let failures = retire_worktree(entry.repo, entry.run, &worktree);
     if !failures.is_empty() {

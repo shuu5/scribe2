@@ -64,7 +64,7 @@ pub struct Polarity {
 }
 
 /// 行為を止めうる判定を返す境界の全数。**宣言順は行為の流れ**（hook → intake → spawn〔予算・承認〕→
-/// runner → gate → land → store → 注入 → cycle）で、順序に意味は無いが C2 の形（[`ALL`] と判別子順 pin）に合わせる。
+/// runner → gate → land〔main 実測・anchor 同期・retire〕→ store → 注入 → cycle）で、順序に意味は無いが C2 の形（[`ALL`] と判別子順 pin）に合わせる。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Guard {
     /// `pre-tool-use` の write-set guard（[`crate::hook::guard`]）。
@@ -89,6 +89,10 @@ pub enum Guard {
     GateLens,
     /// land の main 実測（`pipe::land::MainCheck`）。
     LandMain,
+    /// land の後に anchor を新 main へ揃えるかの見立て（[`crate::pipe::land::AnchorPlan`]）。
+    LandAnchor,
+    /// retire の前提＝worktree が clean か（[`crate::pipe::land::RetireCheck`]）。
+    LandRetire,
     /// event log の書込 lock（[`crate::fleet::store`]）。
     StoreLock,
     /// tmux pane への注入の断り＝入力欄が非空なら 1 key も送らない（[`crate::seat::inject`]）。
@@ -110,6 +114,8 @@ pub const ALL: &[Guard] = &[
     Guard::GateCheck,
     Guard::GateLens,
     Guard::LandMain,
+    Guard::LandAnchor,
+    Guard::LandRetire,
     Guard::StoreLock,
     Guard::Inject,
     Guard::Cycle,
@@ -130,6 +136,8 @@ impl Guard {
             Self::GateCheck => crate::pipe::gate::POLARITY,
             Self::GateLens => crate::pipe::gate::LENS_POLARITY,
             Self::LandMain => crate::pipe::land::POLARITY,
+            Self::LandAnchor => crate::pipe::land::ANCHOR_POLARITY,
+            Self::LandRetire => crate::pipe::land::RETIRE_POLARITY,
             Self::StoreLock => crate::fleet::store::POLARITY,
             Self::Inject => crate::seat::inject::POLARITY,
             Self::Cycle => crate::seat::cycle::POLARITY,
@@ -150,6 +158,8 @@ impl Guard {
             Self::GateCheck => "pipe::gate::Check",
             Self::GateLens => "pipe::gate::Verdict",
             Self::LandMain => "pipe::land::MainCheck",
+            Self::LandAnchor => "pipe::land::AnchorPlan",
+            Self::LandRetire => "pipe::land::RetireCheck",
             Self::StoreLock => "fleet::store::StoreError",
             Self::Inject => "seat::inject::Delivery",
             Self::Cycle => "seat::cycle::Cycle",
@@ -170,6 +180,8 @@ impl Guard {
             Self::GateCheck => "gate-check",
             Self::GateLens => "gate-lens",
             Self::LandMain => "land-main-check",
+            Self::LandAnchor => "land-anchor-sync",
+            Self::LandRetire => "land-retire-clean",
             Self::StoreLock => "store-lock",
             Self::Inject => "inject-refusal",
             Self::Cycle => "cycle-refusal",
