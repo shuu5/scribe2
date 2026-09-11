@@ -13,6 +13,7 @@
 //! **env も HOME も tmux も見ない**（C2.2・契約の「やらない」）。読むのは payload が
 //! 名指した transcript と、binary に埋め込んだ rules manifest だけである。
 
+use crate::polarity::{OnFailure, Polarity, Timing};
 use super::guard::GUARDED;
 use crate::name::NAME;
 use crate::seat::meter;
@@ -27,6 +28,12 @@ const WM_SUFFIX: &str = ".md";
 /// payload が transcript を名指していない周の理由。
 const NO_TRANSCRIPT: &str = "no-transcript-path";
 
+
+/// この境界の極性: 編集の時点で止めるが、**測れない周は deny しない**（FR26・[`SeatDecision::Unmeasured`]）＝FailOpen。一覧はこれを隠さない。
+pub const POLARITY: Polarity = Polarity {
+    timing: Timing::InLoop,
+    on_failure: OnFailure::FailOpen,
+};
 
 /// seat guard の判定。**bool で持たない**（憲法 C11）。
 ///

@@ -11,6 +11,7 @@
 //!
 //! 値の受理集合と配列の層は [`crate::rules::manifest`] と共有する（第 2 の parser を作らない）。
 
+use crate::polarity::{OnFailure, Polarity, Timing};
 use crate::rules::manifest::{list, scalar, Scalar};
 use std::path::Path;
 
@@ -78,6 +79,12 @@ pub enum Holes {
     /// 穴を置けない（契約の verify）。
     None,
 }
+
+/// この境界の極性: intake（起動の前）で断り、宣言を読めない周は断る側へ倒す（未 commit の宣言は存在しないのと同じ）。
+pub const POLARITY: Polarity = Polarity {
+    timing: Timing::InLoop,
+    on_failure: OnFailure::FailClosed,
+};
 
 /// 行が argv 1 本として撃てない理由。**新しい理由は variant を 1 つ足す**（憲法 C2）。
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -19,6 +19,7 @@ pub mod land;
 pub mod report;
 pub mod spawn;
 
+use crate::polarity::{OnFailure, Polarity, Timing};
 use crate::fleet::store::{self, LockPolicy, StoreError};
 use crate::fleet::{self, replay, Event, EventKind, Stage, State, SCHEMA};
 use crate::name::NAME;
@@ -113,6 +114,12 @@ pub fn run_id(bead: &str, now: &str) -> String {
 }
 
 pub use measure::{Budget, Precheck};
+
+/// spawn の予算の極性（[`Budget`]）: 起動の前に測り、測れない repo（git repo でない）では起動しない。
+pub const BUDGET_POLARITY: Polarity = Polarity {
+    timing: Timing::InLoop,
+    on_failure: OnFailure::FailClosed,
+};
 
 /// 実測と予算を**兄弟 module から作れない**位置に閉じ込める（憲法 C6）。
 ///

@@ -11,5 +11,6 @@ pub mod hook;
 pub mod name;
 pub mod order;
 pub mod pipe;
+pub mod polarity;
 pub mod rules;
 pub mod seat;

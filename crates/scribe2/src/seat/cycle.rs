@@ -5,6 +5,7 @@
 //! （打ちかけが無い）。1 つでも欠けたら **1 key も送らずに断る**——「送ったが失敗した」と
 //! 「そもそも送っていない」を [`Cycle`] で分けて持つのはこのためである（bool で持たない）。
 
+use crate::polarity::{OnFailure, Polarity, Timing};
 use super::{inject, is_idle, pane_of, sanitize_target, tmux_ok, StateDir, WmScan};
 use crate::fleet::json_lite::{self, Value};
 use crate::fleet::store::{self, LockPolicy};
@@ -66,6 +67,12 @@ pub struct Request<'a> {
     /// 復元 command（既定 [`DEFAULT_RESTORE`]）。
     pub restore: Option<&'a str>,
 }
+
+/// この境界の極性（[`Cycle`]）: `/clear` を送る前に条件を見て、1 つでも欠けたら 1 key も送らずに断る。
+pub const POLARITY: Polarity = Polarity {
+    timing: Timing::InLoop,
+    on_failure: OnFailure::FailClosed,
+};
 
 /// cycle 1 回の結果。
 pub enum Cycle {

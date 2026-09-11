@@ -15,6 +15,7 @@
 //! ことになり、MVP では取らない）。**測り直してよい便か**の判定はここではなく段の入口
 //! （[`super::cli`]）が持つ。
 
+use crate::polarity::{OnFailure, Polarity, Timing};
 use super::contract::Contract;
 use super::declaration::Effective;
 use super::{
@@ -58,6 +59,18 @@ const STDERR_LOG_FILE: &str = "verify.stderr.log";
 /// ——rules manifest は判定を動かす閾値の置き場である（憲法 C1 / C5）。**末尾**を
 /// 採るのは、落ちた command が理由を最後に出すためである。
 const STDERR_TAIL_LINES: usize = 20;
+
+/// gate の段の極性（[`Check`]）: 実装の後に測り、判定に届かなかった周は INCONCLUSIVE（≠ PASS・AC3）。
+pub const POLARITY: Polarity = Polarity {
+    timing: Timing::PostHoc,
+    on_failure: OnFailure::FailClosed,
+};
+
+/// gate の lens の極性（[`Verdict`]）: 実装の後に審査し、lens を呼べない・読めない周は INCONCLUSIVE（≠ PASS）。
+pub const LENS_POLARITY: Polarity = Polarity {
+    timing: Timing::PostHoc,
+    on_failure: OnFailure::FailClosed,
+};
 
 /// 機械検証の段。**適用順序は [`CHECKS`] の並びが唯一の権威**である（憲法 C2）。
 ///

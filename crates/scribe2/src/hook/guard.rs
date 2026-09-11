@@ -13,6 +13,7 @@
 //! deny し、**allowlist は実体で解いた名前で当てる**——repo の内側で閉じる symlink は
 //! root を一歩も出ないので、字句の名前で当てると write-set の外へ書けてしまう。
 
+use crate::polarity::{OnFailure, Polarity, Timing};
 use crate::name::NAME;
 use std::path::{Component, Path, PathBuf};
 
@@ -21,6 +22,12 @@ pub(crate) const GUARDED: &[&str] = &["Edit", "Write", "MultiEdit", "NotebookEdi
 
 /// policy file の名前。
 const POLICY_FILE: &str = "write-set.txt";
+
+/// この境界の極性（一覧は [`crate::polarity`] が集める）: 編集の時点で止め、policy が在るのに読めない周は deny する。
+pub const POLARITY: Polarity = Polarity {
+    timing: Timing::InLoop,
+    on_failure: OnFailure::FailClosed,
+};
 
 /// 1 回の編集の判定。**bool で持たない**（憲法 C11）。
 #[derive(Debug, Clone, PartialEq, Eq)]
