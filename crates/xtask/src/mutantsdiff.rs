@@ -44,29 +44,45 @@ impl Counts {
     pub fn line(&self, scope: &Scope) -> String {
         format!(
             "mutants-diff: total={} caught={} missed={} unviable={} timeout={} scope={}",
-            self.total, self.caught, self.missed, self.unviable, self.timeout, scope.0
+            self.total, self.caught, self.missed, self.unviable, self.timeout, scope.name()
         )
     }
 }
 
-/// 測った範囲＝`cargo mutants -p` へ**実際に渡した**名前。作れるのは [`measure_args`] だけ
-/// （field は private・`Default` も持たない）ので、行の `scope=` と実際に測った package が
-/// 別々の読みで食い違う形は型で組めない（lens-82 MEDIUM-1・再確認の残余）。
-#[derive(Debug, PartialEq, Eq)]
-pub struct Scope(String);
+pub use scope::{measure_args, Scope};
 
-/// `cargo` へ渡す引数（`cargo` の直後から）と、その `-p` に載せた [`Scope`]。
-///
-/// `--in-diff <diff>` / `-p <scope>` / `-o <out>` はそれぞれ隣り合う対で、歯が対のまま見る
-/// （`-o` を落とすと測った結果を読まずに `total=0` へ化ける・lens-82 再確認 MEDIUM-4）。
-pub fn measure_args(diff: &Path, out: &Path, scope: &str) -> (Vec<String>, Scope) {
-    let mut args: Vec<String> = ["mutants", "--in-diff"].iter().map(|s| (*s).to_owned()).collect();
-    args.push(diff.display().to_string());
-    args.push("-p".to_owned());
-    args.push(scope.to_owned());
-    args.extend(["--no-shuffle", "--copy-vcs", "true", "-o"].iter().map(|s| (*s).to_owned()));
-    args.push(out.display().to_string());
-    (args, Scope(scope.to_owned()))
+/// [`Scope`] を作れる場所を **この module の内側だけ**にする。親（[`run`] を含む）からは field が
+/// 見えないので、`-p` へ渡した名前と別の値で行を組む形は compile できない（lens-82 再確認の残余:
+/// 同じ module に置くと private field でも呼び側が literal から組めた・実測）。
+mod scope {
+    use std::path::Path;
+
+    /// 測った範囲＝`cargo mutants -p` へ**実際に渡した**名前。作れるのは [`measure_args`] だけ
+    /// （field は private・`Default` も持たない）ので、行の `scope=` と実際に測った package が
+    /// 別々の読みで食い違う形は型で組めない（lens-82 MEDIUM-1）。
+    #[derive(Debug, PartialEq, Eq)]
+    pub struct Scope(String);
+
+    impl Scope {
+        /// 行に写す名前。
+        pub fn name(&self) -> &str {
+            &self.0
+        }
+    }
+
+    /// `cargo` へ渡す引数（`cargo` の直後から）と、その `-p` に載せた [`Scope`]。
+    ///
+    /// `--in-diff <diff>` / `-p <scope>` / `-o <out>` はそれぞれ隣り合う対で、歯が対のまま見る
+    /// （`-o` を落とすと測った結果を読まずに `total=0` へ化ける・lens-82 再確認 MEDIUM-4）。
+    pub fn measure_args(diff: &Path, out: &Path, scope: &str) -> (Vec<String>, Scope) {
+        let mut args: Vec<String> = ["mutants", "--in-diff"].iter().map(|s| (*s).to_owned()).collect();
+        args.push(diff.display().to_string());
+        args.push("-p".to_owned());
+        args.push(scope.to_owned());
+        args.extend(["--no-shuffle", "--copy-vcs", "true", "-o"].iter().map(|s| (*s).to_owned()));
+        args.push(out.display().to_string());
+        (args, Scope(scope.to_owned()))
+    }
 }
 
 /// 数えた結果に対する rc。**極性は manifest の `R-C12-1` 行が決める**。
