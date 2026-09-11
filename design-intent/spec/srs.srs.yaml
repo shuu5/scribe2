@@ -11,14 +11,14 @@ meta:
   eyebrow_left: 要件定義書 (SRS)
   eyebrow_right: scribe2 — MVP
   subtitle: 契約は小さく・検証は機械が先・止まるときは記帳して止まる
-  version: "0.2"
-  date: "2026-09-10"
+  version: "0.3"
+  date: "2026-09-11"
   reader: この器で開発する人と AI（Claude Code の session）。 専門語には必ずやさしい言い換えを併記する
 
 approval:
   - role: 承認 (user)
     who: user
-    when: 2026-09-09 grill 6 論点を裁定
+    when: 2026-09-09 grill 6 論点を裁定・2026-09-11 FR29（退避の合図）を裁定
     stamp: 裁定済
   - role: レビュー (folio review lens)
     who: spec-review 5 軸 + SRS ceiling 3 lens
@@ -82,7 +82,7 @@ acceptance:
   - { id: AC6, criterion: 不正な契約・rules manifest（欠落 / 未知 kind / 裁定 id 無し / 重複 id）は起動前に全件 loud で落ちる,     metric_v: 0 件,  metric_l: 黙って落とす入力,  links: [FR1, FR17, FR18, NFR3, NFR4] }
   - { id: AC7, criterion: write-set の外への Edit / Write は編集の時点で deny され、 hook は marker が自分を言うときだけ仕える,    metric_v: 0 件,  metric_l: 素通り,           links: [FR19, FR20, FR21, FR24, NFR5] }
   - { id: AC8, criterion: 開発 session の作業記憶の退避と復元が global skill の手順として実在し、 6 本の作法を満たす,             metric_v: 6/6,   metric_l: 作法が実在,        links: [FR23] }
-  - { id: AC9, criterion: planner と管理席の 2 つの開発 session で、 context 使用量が取れない周は rc ≠ 0 になり、 上限到達で退避以外の編集が deny され、 測れない周は deny 0 件で理由が注入計測の記録に 1 件残り、 管理 tick が規則どおりに判定し（同じ入力には同じ inject / noop）、 cycle が 1 回完走する, metric_v: 2 session + 1 回, metric_l: 判定が規則どおり,   links: [FR25, FR26, FR27, FR28] }
+  - { id: AC9, criterion: planner と管理席の 2 つの開発 session で、 context 使用量が取れない周は rc ≠ 0 になり、 上限到達で退避以外の編集が deny され、 測れない周は deny 0 件で理由が注入計測の記録に 1 件残り、 管理 tick が規則どおりに判定し（同じ入力には同じ inject / noop）、 上限以上で idle でない周にも退避の合図が 1 件注入され、 測れない周と退避物が在る周は 0 件で、 cycle が 1 回完走する, metric_v: 2 session + 1 回, metric_l: 判定が規則どおり,   links: [FR25, FR26, FR27, FR28, FR29] }
 
 requirements:
   - id: FR1
@@ -381,8 +381,8 @@ requirements:
     trace: { backward: [N-1, N-3], acceptance: [AC9] }
     ears:
       pattern: state
-      condition: 開発 session が idle で、 自 session の未 consumed の退避物が無く、 cycle が走っていない間
-      response: 管理 tick が pointer 1 行を注入する（条件が 1 つでも崩れていれば注入しない）
+      condition: context 使用量が rules 行の上限未満か測れない周で、 開発 session が idle で、 自 session の未 consumed の退避物が無く、 cycle が走っていない間
+      response: 管理 tick が打刻の合図 1 行を注入する（この条件が 1 つでも崩れていれば注入しない）
   - id: FR28
     type: FR
     label: cycle
@@ -394,6 +394,17 @@ requirements:
       pattern: event
       condition: 開発 session が作業記憶の退避を終えたとき
       response: 排他を取って session の作り直しと復元の command を注入する（二重起動 0・退避物が無い session には撃たない）
+  - id: FR29
+    type: FR
+    label: 退避の合図
+    priority: should
+    vmethod: T
+    rationale_source: N-1
+    trace: { backward: [N-1, N-2], acceptance: [AC9] }
+    ears:
+      pattern: state
+      condition: 開発 session の context 使用量が rules 行の上限以上で、 自 session の未 consumed の退避物が無く、 cycle が走っていない間
+      response: 管理 tick が idle を待たずに退避の合図 1 行を注入する（使用量が測れない周・退避物が在る周・cycle が走っている周は注入しない）
 
 nfr:
   - { id: NFR1, type: NFR, label: lens 予算,   category: 性能, target: 1 lens は 0.15M token 以内（目標値）,                                measure: lens 起動時の diff byte と cap の照合を verdict に記録,        vmethod: T, trace: { backward: [N-2], acceptance: [AC3] }, hero: { cat: 予算, big: "0.15", unit: M token, qual: lens 1 本あたりの上限 } }
@@ -444,7 +455,9 @@ glossary:
   - { term: docs-only,      en: docs-only,              plain_short: 文書だけの変更,           def: 変更が文書だけの PR。 flip check の test 差分の要件から除外される（憲法 C12.3）。 }
   - { term: 開発 session,   en: development session,    plain_short: 設計・契約・review を行う AI, def: 設計・契約・実装・review を行う AI の session（Claude Code）。 planner や管理席のように session をまたいで対話を続け、 runner と違い使い捨てではない。 }
   - { term: cap guard,      en: cap guard,              plain_short: 満杯手前で編集を止める段,   def: 開発 session の context 使用量が rules 行の上限に達したとき、 退避以外の編集を止める hook の段。 }
-  - { term: 管理 tick,      en: tick,                   plain_short: 開発 session を起こす周期の合図,     def: 開発 session が黙っていないかを周期で見て、 条件が揃ったときだけ 1 行の pointer を注入する仕組み。 }
+  - { term: 管理 tick,      en: tick,                   plain_short: 開発 session を周期で見張る仕組み,     def: 開発 session が黙っていないかを周期で見て、 条件が揃ったときだけ打刻の合図か退避の合図を 1 行注入する仕組み。 }
+  - { term: 打刻の合図,     en: pointer,                plain_short: 打刻を促す 1 行,          def: 管理 tick が idle の開発 session に注入する 1 行。 heartbeat を打って続きを進めるよう促す。 }
+  - { term: 退避の合図,     en: externalize pointer,    plain_short: 退避を促す 1 行,          def: context 使用量が上限以上の開発 session に管理 tick が注入する 1 行。 idle を待たず、 作業記憶の退避を促す。 }
   - { term: cycle,          en: cycle,                  plain_short: 退避して作り直す一周,     def: 作業記憶を退避し、 session を作り直し、 退避物から復元する一周。 退避物が無い session では起こさない。 }
   - { term: 作業記憶,       en: working memory,         plain_short: session をまたぐと消える一時メモ, def: 開発 session が一連の作業の間だけ持つ状態。 session の作り直しで消えるので、 cycle の前に退避物へ書き出す。 }
   - { term: 退避物,         en: externalized memory,    plain_short: 作業記憶を書き出した file, def: cycle の前に作業記憶を書き出した file。 session id で一意で、 消費済みは同じ suffix で表す。 }
