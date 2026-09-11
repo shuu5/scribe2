@@ -406,10 +406,12 @@ fn measure_context(pane: &str) -> Context {
 /// **それ以外の周は cycle を評価しない**——tick 行に `cycle=` が付かないこと自体が「評価して
 /// いない」の印である。
 ///
-/// **back-off**（`s2-07l.110`・裁定 (a)）: cycle を評価した周（done / failed / refused のいずれでも）
-/// は cycle 側が lock の内側・`/clear` より先に `cycle-stamp` を打ち（write-ahead・打てない周は
-/// 1 key も送らず refused）、同じ席は打刻から `seat.tick_stale_s` **未満**の間 cycle を評価しない
-/// （`cycle-recent`）。`/clear` は不可逆の口（N1）で、復元されない退避物（`/rebrief` が走らない・
+/// **back-off**（`s2-07l.110`・裁定 (a)）: cycle が lock を取れた周（結果が done / failed / refused の
+/// いずれでも）は cycle 側が lock の内側・`/clear` より先に `cycle-stamp` を打ち（write-ahead・
+/// 打てない周は 1 key も送らず refused。lock を取れない周〔lock-held / state-dir / no-rule〕は打たない
+/// ＝他の cycle が打っているか置き場が使えない）、同じ席は打刻から `seat.tick_stale_s` **未満**の間
+/// cycle を評価しない（`cycle-recent`・見送った周は打ち直さない＝永久には止まらない）。stamp を
+/// 読むのは tick のここだけで、`seat cycle` を手で回す口は back-off を見ない（人の判断）。`/clear` は不可逆の口（N1）で、復元されない退避物（`/rebrief` が走らない・
 /// consume しない）へ周期ごとに繰り返してはならない。stamp を読めない周は「無い」に読み替えず
 /// 評価しない（`cycle-stamp-unreadable`・読めないことを理由に不可逆の側へ倒さない）。閾値は
 /// 鮮度と共用し、新しい rules 行を足さない（C5）。境界は**未満**（経過が閾値ちょうどの周は評価

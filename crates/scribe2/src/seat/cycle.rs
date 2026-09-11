@@ -141,7 +141,7 @@ pub fn run(request: &Request) -> Cycle {
 /// lock を取り、握っている間の手順を回して、**どの枝でも lock を返す**。
 ///
 /// **打刻は `/clear` より先**（write-ahead・`s2-07l.110`）: lock を取った周は手順に入る前に
-/// [`STAMP_FILE`] を打つ。後から打つ形だと、打てない周や途中で死んだ周に `/clear` の記憶が残らず
+/// [`STAMP_FILE`] を打つ（lock を取れない周は打たない＝他の cycle が打っているか置き場が使えない）。後から打つ形だと、打てない周や途中で死んだ周に `/clear` の記憶が残らず
 /// 次の周も送りうる（不可逆の口・N1）。打てない周は 1 key も送らずに断る。tick からでも
 /// `seat cycle` からでも同じ口を通るので、どちらの経路の cycle も back-off の根拠になる。
 fn perform(request: &Request, dir: &Path) -> Cycle {

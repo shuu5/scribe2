@@ -2419,10 +2419,9 @@ fn seat_tick_backs_off_after_a_recent_cycle() {
         format!("seat: tick decision=noop reason=wm-unconsumed{CTX_NO_SOURCE} cycle=done{ST_IDLE} cycle-stamp=none{}\n", provenance(&state, "flag")),
         "1 周目: 打刻が無いので cycle を回す（stamp は none・列は cycle → state → cycle-stamp → 出所）"
     );
-    assert!(
-        seat_dir_of(&state, name).join("cycle-stamp").is_file(),
-        "cycle を評価した周は cycle-stamp を打つ"
-    );
+    let stamp = seat_dir_of(&state, name).join("cycle-stamp");
+    assert!(stamp.is_file(), "cycle を評価した周は cycle-stamp を打つ");
+    let stamped_at = mtime_of(&stamp);
 
     // 退避物は残ったまま（偽の席は /rebrief で consume しない）。
     let second = run_seat(&args);
@@ -2446,6 +2445,11 @@ fn seat_tick_backs_off_after_a_recent_cycle() {
         fs::read_to_string(&log).unwrap_or_default(),
         "/clear\n/rebrief\n",
         "2 周目は /clear を送らない（偽の席の受信は 1 周目の 2 行のまま）"
+    );
+    assert_eq!(
+        mtime_of(&stamp),
+        stamped_at,
+        "見送った周は stamp を打ち直さない（打ち直すと back-off が永久になる）"
     );
     drop(guard);
     fs::remove_dir_all(&dir).ok();
@@ -2527,6 +2531,41 @@ fn seat_cycle_stamps_even_when_it_refuses_before_sending() {
         "stamp の中身は unix 秒 1 行"
     );
     assert!(!seat_dir_of(&state, target).join("cycle.lock").exists(), "lock は返す");
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// stamp を**打てない**周は `/clear` を送る前に断る（`cycle-stamp-unwritable`・write-ahead）:
+/// 打てないまま送ると次の周に記憶が無く、また送りうる（N1）。stamp の位置に dir を置いて
+/// 書けなくする。`seat cycle` を直に回すので back-off の読みは通らず、書き口だけを測る。
+#[test]
+fn seat_cycle_refuses_without_sending_when_the_cycle_stamp_is_unwritable() {
+    let dir = tmp();
+    let target = "seatstampro";
+    let state = dir.join("state");
+    stamp_idle(&state, target);
+    let seat = seat_dir_of(&state, target);
+    fs::create_dir_all(seat.join("cycle-stamp")).expect("stamp の位置に dir を置ける");
+    let wm = dir.join("wm");
+    wm_file(&wm, "working-memory.parked.md", target);
+    let (wm_s, state_s, sock_s) = (
+        wm.display().to_string(),
+        state.display().to_string(),
+        dir.join("absent-sock").display().to_string(),
+    );
+
+    let (out, touched) = run_seat_probed(&dir, &[
+        "cycle", "--target", target, "--wm-dir", &wm_s, "--tmux-socket", &sock_s,
+        "--state-dir", &state_s,
+    ]);
+
+    assert_ne!(rc_of(&out), i32::from(RC_OK), "打てないので断る: {}", stdout_of(&out));
+    assert!(
+        stderr_of(&out).contains("refused reason=cycle-stamp-unwritable"),
+        "断った理由は stamp を打てないこと: {}",
+        stderr_of(&out)
+    );
+    assert!(!touched, "1 key も送らない（pane も読みに行かない）");
+    assert!(!seat.join("cycle.lock").exists(), "lock は返す");
     fs::remove_dir_all(&dir).ok();
 }
 
