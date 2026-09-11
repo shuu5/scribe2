@@ -1711,16 +1711,18 @@ fn runner_rate_limit_brace_inside_string_still_stops_when_status_is_in_the_set()
     assert_eq!(decide(braces, &[]), Decision::Observed("blocked".to_owned()), "集合に無ければ記録だけ");
 }
 
-/// 負例: status より前に**入れ子の object**（文字列でない brace）が在る行は従来どおり打ち切る
-/// （本契約は「直下だけを見る」意味を変えない）。**これは現状の固定であって正しい仕様の宣言ではない**——
-/// 直下に status が在るのに key の並び次第で読めない形は fail-open の穴（lens-126 HIGH-1・`.123` の
-/// `usage.iterations[]` と同型）で、閉じ brace までを切り出して深さ guard に任せる案は後継便の裁定に委ねる。
+/// status より前に**入れ子の object**（文字列でない brace）が在っても直下の status を読む（planner 裁定 = 案 P・
+/// lens-126 HIGH-1）。入れ子で打ち切る形は key の並び次第で直下の status を取り逃す fail-open の穴だった（`.123` の
+/// `usage.iterations[]` と同型・base では None）。入れ子の**中**の status は深さ guard が読まない（既存の歯と同じ向き）。
 #[test]
 fn runner_rate_limit_brace_nested_object_before_status_still_cuts() {
     use vessel::headless::runner::rate_limit_status;
     let nested_first = r#"{"type":"rate_limit_event","rate_limit_info":{"unifiedWindows":{"status":"other"},"status":"blocked"}}"#;
-    assert_eq!(rate_limit_status(nested_first), None, "現状は入れ子で打ち切る（既知の fail-open・後継便で見直す）");
-    // 対照: 入れ子が status の後ろなら読める（打ち切りが「入れ子に入った時点」であることの裏取り）。
+    assert_eq!(rate_limit_status(nested_first), Some("blocked"), "入れ子が先でも直下の status を読む（base では None）");
+    // 入れ子の中にしか status が無ければ読まない（直下の判定は深さ guard・兄弟の入れ子を採らない）。
+    let nested_only = r#"{"type":"rate_limit_event","rate_limit_info":{"unifiedWindows":{"status":"other"},"note":"x"}}"#;
+    assert_eq!(rate_limit_status(nested_only), None, "入れ子の中の status は直下ではない");
+    // 入れ子が status の後ろでも同じ。
     let nested_after = r#"{"type":"rate_limit_event","rate_limit_info":{"status":"blocked","unifiedWindows":{"status":"other"}}}"#;
     assert_eq!(rate_limit_status(nested_after), Some("blocked"), "直下の status は読める");
 }

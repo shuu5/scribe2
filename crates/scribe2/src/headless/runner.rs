@@ -410,9 +410,10 @@ pub fn observed_suffix(status: Option<&str>) -> String {
 /// 採取・ADR-0012 §1）。本文の語彙を探す形はこの便で撤去した——探していたのは合図ではなく
 /// 「同じ言葉が混じった別の文」で、識別子の 16 進や tool の出力で 2 度誤爆した。
 ///
-/// 読むのは **`rate_limit_info` の直下の `status`** だけである（入れ子の object に入ったら
-/// そこで打ち切る）。`rate_limit_info` は `unifiedWindows` のような入れ子を持つので、最初に
-/// 見つけた `"status"` を採る形だと **key の並び次第で別の object の値を読む**（lens 2026-09-11 H3）。
+/// 読むのは **`rate_limit_info` の直下の `status`** だけである。`rate_limit_info` は `unifiedWindows` の
+/// ような入れ子を持つので、深さを見ずに最初の `"status"` を採る形だと **key の並び次第で別の object の値を
+/// 読む**（lens 2026-09-11 H3）。直下の判定は [`find_key`] の深さ guard が担い、切り出し（[`immediate_object`]）は
+/// 対応する閉じ brace までを渡す（`s2-07l.126`・入れ子で打ち切る形は key の並び次第で直下の status を取り逃した）。
 ///
 /// key と colon の間・colon と値の間の**空白に寛容**である。実 stream は compact だが（実測）、
 /// 表記が変わっただけで記録の口が無音で止まる形にはしない（lens 2026-09-11 H2）。
@@ -511,12 +512,14 @@ fn quoted_value(after_colon: &str) -> Option<&str> {
     opened.split_once('"').map(|(value, _)| value)
 }
 
-/// colon の後ろの `{ ... }` の**直下**だけ（入れ子の object に入ったら打ち切る）。
+/// colon の後ろの `{ ... }` の中身＝**対応する閉じ brace まで**（`s2-07l.126`・planner 裁定 = 案 P）。
 ///
-/// 境界は**文字列の外**の最初の `{` / `}` である（`s2-07l.126`）。文字列の中の brace（`"note":"win {5h}"`）で
-/// 切ると status の手前で終わって上限 record を見逃す（fail-open の向き）。文字列と escape の読み飛ばしは
-/// [`find_key`] と同じ [`Scan`] に乗せ、走査**状態**を 2 つ持たない（loop の骨格は 2 本在り、文字列の外だけを
-/// 返す原始を `Scan` に寄せる形は後続・lens-126 MED-1）。この呼び手は深さを使わない（終端は最初の brace）。
+/// 境界は**文字列の外**で深さ 0 に戻る `}` である。文字列の中の brace（`"note":"win {5h}"`）や、status より前の
+/// 入れ子 object で切ると status の手前で終わって上限 record を見逃す（fail-open の向き・`.123` の
+/// `usage.iterations[]` と同型）。「直下の key だけを読む」は切り出しではなく [`find_key`] の深さ guard が
+/// 担う（入れ子の `status` は深さ 1 以上ゆえ読まれない）。文字列と escape の読み飛ばしは [`find_key`] と同じ
+/// [`Scan`] に乗せ、走査**状態**を 2 つ持たない（loop の骨格は 2 本在り、文字列の外だけを返す原始を `Scan` に
+/// 寄せる形は後続・lens-126 MED-1）。閉じ brace が無い（壊れた行）周は末尾までを返し、読めるかは下流が決める。
 fn immediate_object(after_colon: &str) -> Option<&str> {
     let opened = after_colon.trim_start().strip_prefix('{')?;
     let mut scan = Scan::default();
@@ -526,10 +529,12 @@ fn immediate_object(after_colon: &str) -> Option<&str> {
             continue;
         }
         match ch {
-            '{' | '}' => {
+            '{' => scan.depth = scan.depth.saturating_add(1),
+            '}' if scan.depth == 0 => {
                 end = at;
                 break;
             }
+            '}' => scan.depth = scan.depth.saturating_sub(1),
             '"' => scan.in_string = true,
             _ => {}
         }
