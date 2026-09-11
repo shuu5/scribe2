@@ -21,6 +21,9 @@
   },
   "@id": "./ADR-0014-polarity-list-is-a-snapshot-rendered-by-core.html",
   "@type": "schema:TechArticle",
+  "dc:isReferencedBy": [
+    { "@id": "./ADR-0015-seat-state-is-stamped-by-hooks-not-read-from-pane.html" }
+  ],
   "dc:isPartOf": [
     { "@id": "./README.html" }
   ],
@@ -131,6 +134,7 @@
 <!-- folio:chrome-bottom -->
 <nav class="prevnext" aria-label="前後の文書">
   <a class="prevnext__prev" href="ADR-0013-machine-holds-enumerations-docs-hold-pointers.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">ADR-0013 — 列挙は機械が持ち文書は pointer だけを持つ (ADR-0006 の measure tag 列挙を supersede)。 C2「宣言順」の充足形は const slice の判別子順 pin</span></a>
+  <a class="prevnext__next" href="ADR-0015-seat-state-is-stamped-by-hooks-not-read-from-pane.html"><span class="prevnext__dir">次 &rarr;</span><span class="prevnext__title">ADR-0015 — 席の busy / idle は hook の打刻で typed に持ち、 pane の字面を判定入力から外す。 target は生成 hooks.json の shell 行が渡す pane id から解く</span></a>
 </nav>
 <script>
 (function () {
