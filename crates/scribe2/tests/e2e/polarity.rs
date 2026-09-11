@@ -8,6 +8,7 @@ use vessel::cli_outcome::RC_OK;
 use vessel::order::is_declaration_order;
 use vessel::pipe::approve::{Approval, POLARITY as APPROVAL_POLARITY};
 use vessel::pipe::contract::Contract;
+use vessel::pipe::land::{WorktreeCheck, ANCHOR_POLARITY, WORKTREE_POLARITY};
 use vessel::polarity::{Guard, OnFailure, Polarity, Timing, ALL};
 
 /// `<NAME> polarity` を撃って stdout を返す（rc 0・stderr 0 byte を表明する）。
@@ -123,7 +124,7 @@ fn polarity_lists_the_three_added_guards() {
     ] {
         assert!(text.lines().any(|line| line == expected), "一覧に載る: {expected}\n{text}");
     }
-    assert_eq!(ALL.len(), 14, "母集団は 14（10 + 3 + 質問の口 1・`s2-07l.115`）");
+    assert_eq!(ALL.len(), 16, "母集団は 16（10 + 3 + 質問の口 1・`s2-07l.115` + land の 2・`s2-07l.124`）");
 }
 
 /// runner の包みの質問 record（`s2-07l.115`・FR31・ADR-0016 §2.2）は **in-loop / fail-open** で載る。
@@ -142,7 +143,7 @@ fn runner_question_guard_is_in_loop_fail_open() {
     let stop = names.iter().position(|name| *name == "guard=runner-stop");
     let question = names.iter().position(|name| *name == "guard=runner-question");
     assert!(matches!((stop, question), (Some(s), Some(q)) if q == s + 1), "runner-stop の直後: {names:?}");
-    assert!(text.lines().last().is_some_and(|line| line.contains(" in-loop=11 ") && line.contains(" fail-open=3")), "集計 +1: {text}");
+    assert!(text.lines().last().is_some_and(|line| line.contains(" in-loop=13 ") && line.contains(" fail-open=3")), "集計 +1（.124 の 2 を含む）: {text}");
 }
 
 /// 3 クラスを名乗らない契約。
@@ -192,4 +193,82 @@ fn polarity_approval_gate_boundary_is_an_enum() {
         };
         assert_eq!(stopped, stop, "classes={:?} approved={approved}", contract.classes);
     }
+}
+
+/// land の anchor 同期判定と retire の clean 判定（`s2-07l.124`・.120 lens M4・C11.2 / C16.2）が
+/// **in-loop / fail-closed** で載る。値は境界の定数（`ANCHOR_POLARITY` / `WORKTREE_POLARITY`）で一覧は
+/// それを返すだけ。一覧に 2 行が値で載り、集計の in-loop が 2 増える（snapshot の字面は pin しない）。
+#[test]
+fn polarity_lists_land_anchor_sync_and_retire_clean_as_in_loop_fail_closed() {
+    let closed = Polarity { timing: Timing::InLoop, on_failure: OnFailure::FailClosed };
+    assert_eq!(Guard::LandAnchor.polarity(), closed, "anchor の同期は同期の前に止め、読めない周は揃えない");
+    assert_eq!(Guard::LandWorktree.polarity(), closed, "worktree の clean は rebase / move の前に止め、読めない周は止める");
+    // 値が境界の定数と一致する（「一覧側に literal を持たない」は値の比較では測れない・lens-124 L1）。
+    let anchor: Polarity = ANCHOR_POLARITY;
+    let worktree: Polarity = WORKTREE_POLARITY;
+    assert_eq!(Guard::LandAnchor.polarity(), anchor, "境界の定数と同じ値");
+    assert_eq!(Guard::LandWorktree.polarity(), worktree, "境界の定数と同じ値");
+    let text = output();
+    for expected in [
+        "guard=land-anchor-sync timing=in-loop on-failure=fail-closed boundary=pipe::land::AnchorPlan",
+        "guard=land-worktree-clean timing=in-loop on-failure=fail-closed boundary=pipe::land::WorktreeCheck",
+    ] {
+        assert!(text.lines().any(|line| line == expected), "一覧に載る: {expected}\n{text}");
+    }
+    // 集計は行数から独立に数えた値と一致し、.115 の 11 から 2 増えている。
+    let in_loop = text.lines().filter(|line| line.contains(" timing=in-loop ")).count();
+    assert_eq!(in_loop, 13, "in-loop の行数: {text}");
+    let summary = text.lines().last().unwrap_or_default();
+    assert_eq!(count_of(summary, "in-loop"), Some(13), "集計 +2: {summary}");
+    assert_eq!(count_of(summary, "guards"), Some(16), "母集団 +2: {summary}");
+}
+
+/// 2 境界の boundary は `pipe::land::` 配下の **型**を名指す（最終 segment が大文字で始まる＝fn 名の形でない）。
+/// 公開されている `WorktreeCheck` は erasure 後の型名とも突き合わせる（`AnchorPlan` は crate の外へ出さない）。
+/// 一覧では land-main-check の**直後**に anchor → worktree の順で並ぶ（行為の流れ = land の 3 つの止め口）。
+#[test]
+fn polarity_lists_land_anchor_boundaries_as_enums_right_after_main_check() {
+    for guard in [Guard::LandAnchor, Guard::LandWorktree] {
+        let boundary = guard.boundary();
+        assert!(boundary.starts_with("pipe::land::"), "land の境界: {boundary}");
+        let last = boundary.rsplit("::").next().unwrap_or_default();
+        assert!(last.starts_with(|c: char| c.is_ascii_uppercase()), "型名の形（fn を指さない）: {boundary}");
+    }
+    let type_name = std::any::type_name::<WorktreeCheck>();
+    assert!(type_name.ends_with(Guard::LandWorktree.boundary()), "boundary は enum を名指す: {type_name}");
+    let text = output();
+    let names: Vec<&str> = text.lines().filter_map(|line| line.split(' ').next()).collect();
+    let main = names.iter().position(|name| *name == "guard=land-main-check");
+    let anchor = names.iter().position(|name| *name == "guard=land-anchor-sync");
+    let worktree = names.iter().position(|name| *name == "guard=land-worktree-clean");
+    assert!(
+        matches!((main, anchor, worktree), (Some(m), Some(a), Some(w)) if a == m + 1 && w == a + 1),
+        "land-main-check の直後に anchor → worktree: {names:?}"
+    );
+}
+
+/// worktree の clean 判定は閉じた enum（`WorktreeCheck`・C11.2「境界ごとの enum が極性型を運ぶ」）で、bool は
+/// enum から導く。**読めない周は `Unreadable`＝止める**（fail-closed・`.120` までの `is_clean` と同じ真理表）。
+/// 歯の名は契約の接頭辞 `polarity_lists_land_anchor_` を持つ（anchor の assert は無い）。
+#[test]
+fn polarity_lists_land_anchor_retire_check_is_a_closed_enum_that_fails_closed() {
+    let Some(dir) = crate::make_tmp_dir() else {
+        panic!("tmp dir を作れる");
+    };
+    // 前提: git repo でない dir（temp_dir が repo の中を指す環境では 1 段目が囲いの repo を読んでしまう）。
+    assert!(!dir.join(".git").exists(), "tmp dir は repo でない");
+    // git repo でない dir は status を読めない＝Unreadable（clean に読み替えない）。
+    let unreadable = WorktreeCheck::judge(&dir);
+    assert_eq!(unreadable, WorktreeCheck::Unreadable, "読めない周は Unreadable");
+    assert!(!unreadable.is_clean(), "読めない周は畳まない");
+    let init = Command::new("git").args(["-C", &dir.display().to_string(), "init", "-q"]).status();
+    assert!(init.is_ok_and(|status| status.success()), "git init できる");
+    let clean = WorktreeCheck::judge(&dir);
+    assert_eq!(clean, WorktreeCheck::Clean, "空の repo は Clean");
+    assert!(clean.is_clean(), "Clean だけが進める");
+    std::fs::write(dir.join("stray.txt"), "x\n").expect("汚せる");
+    let dirty = WorktreeCheck::judge(&dir);
+    assert_eq!(dirty, WorktreeCheck::Dirty, "untracked も数える（fail-closed）");
+    assert!(!dirty.is_clean(), "Dirty は畳まない");
+    let _ = std::fs::remove_dir_all(&dir);
 }
