@@ -674,7 +674,7 @@ fn seat_external_form() {
 
 // ─────────────────── heartbeat / tick / cycle ───────────────────
 
-/// idle な pane（入力欄が空・直近 6 非空行に走行中の印が無い）。
+/// idle な pane（入力欄が空・探索域に走行中の印が無い）。
 const IDLE_PANE: &str = "❯ \n  10% 100k/1M Opus 5\n";
 /// 走行中の印が**入力欄より下**（statusline の位置）に在る pane。
 const BUSY_BELOW: &str = "❯ \n  10% 100k/1M Opus 5 (esc to interrupt)\n";
@@ -685,6 +685,158 @@ const BUSY_BELOW: &str = "❯ \n  10% 100k/1M Opus 5 (esc to interrupt)\n";
 const BUSY_ABOVE: &str = "✻ Thinking… (23s · esc to interrupt)\n❯ \n";
 /// prompt を 1 行も持たない pane（入力欄の位置が読めない）。
 const NO_PROMPT: &str = "$ \n  10% 100k/1M Opus 5\n";
+/// 走行中の実席（2026-09-11・匿名化済み）: spinner 行は `esc to interrupt` を**持たず**、
+/// 下から 8 非空行目に在る。この pane を idle と読んで `/clear` が送られた（bd `s2-07l.94`）。
+const RUNNING_PANE: &str = concat!(
+    "✻ Sublimating… (19m 36s · ↓ 36.4k tokens · thought for 59s)\n",
+    "  ⎿  Tip: Use /btw to ask a quick side question without interrupting Claude's current work\n",
+    "\n",
+    "────────────────────────────────────────\n",
+    "❯\u{a0}\n",
+    "────────────────────────────────────────\n",
+    "  user@host (user@example.com)  scribe2  main\n",
+    "  19% 190k/1M Fable 5.1 [high] 5h:10%(4h22m) 7d:15%(6d8h)\n",
+    "  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 1 agent\n",
+);
+/// API の再試行中の実席（2026-09-11・匿名化済み）: spinner の形を取らないが走っている。
+const RETRYING_PANE: &str = concat!(
+    "  queue された入力の写し\n",
+    "✻ API error · Retrying in 0s · attempt 1/10\n",
+    "────────────────────────────────────────\n",
+    "❯\u{a0}\n",
+    "────────────────────────────────────────\n",
+    "  user@host (user@example.com)  scribe2  main\n",
+    "  19% 190k/1M Fable 5.1 [high] 5h:10%(4h22m) 7d:15%(6d8h)\n",
+    "  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 1 agent\n",
+);
+/// 走行中の印が statusline の**下から 4 行目**（旧 `TAIL_LINES` の域の外）に在る pane。
+///
+/// 下は全行を見る（statusline の高さに依らない）ことを、上の域の数（6）とは別に測る。
+const BUSY_FAR_BELOW: &str = concat!(
+    "❯ \n",
+    "  line 1\n",
+    "  line 2\n",
+    "  line 3\n",
+    "  line 4\n",
+    "  line 5\n",
+    "  line 6\n",
+    "  10% 100k/1M Opus 5 (esc to interrupt)\n",
+);
+/// `/clear` を送った直後で**まだ作り直されていない**席（echo された `/clear` が次の prompt の
+/// 上に在り、statusline 3 行で末尾 6 非空行の外へ押し出されている）。
+///
+/// 末尾 6 非空行で見る作り直し確認はこの pane を「済んだ」と読み、復元を送ってしまう。
+const CLEAR_ECHO_PANE: &str = concat!(
+    "❯ /clear\n",
+    "────────────────────────────────────────\n",
+    "❯\u{a0}\n",
+    "────────────────────────────────────────\n",
+    "  user@host (user@example.com)  scribe2  main\n",
+    "  19% 190k/1M Fable 5.1 [high] 5h:10%(4h22m) 7d:15%(6d8h)\n",
+    "  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 1 agent\n",
+);
+/// 現行版の statusline（区切り 2 行 + 3 行・匿名化済み）。fixture の末尾に共通で付ける。
+const TALL_TAIL: &str = concat!(
+    "────────────────────────────────────────\n",
+    "❯\u{a0}\n",
+    "────────────────────────────────────────\n",
+    "  user@host (user@example.com)  scribe2  main\n",
+    "  19% 190k/1M Fable 5.1 [high] 5h:10%(4h22m) 7d:15%(6d8h)\n",
+    "  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 1 agent\n",
+);
+/// todo が走っている周の spinner: 語が **空白入りの文**（todo の activeForm）になる
+/// （本体 2.1.268 の実装: `overrideMessage ?? todo の activeForm ?? 乱択の 1 語`・lens-94 HIGH-1）。
+const TODO_SPINNER_PANE: &str = concat!(
+    "✻ Reviewing the seat idle predicate… (2m 3s · ↓ 12k tokens)\n",
+    "  ⎿  Tip: Use /btw to ask a quick side question\n",
+    "────────────────────────────────────────\n",
+    "❯\u{a0}\n",
+    "────────────────────────────────────────\n",
+    "  user@host (user@example.com)  scribe2  main\n",
+    "  19% 190k/1M Fable 5.1 [high] 5h:10%(4h22m) 7d:15%(6d8h)\n",
+    "  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 1 agent\n",
+);
+/// API 応答待ちの banner（`retryStatus.kind == stalled`）: spinner 行ごと置き換わり `Retrying in`
+/// も `esc to interrupt` も無い（lens-94 HIGH-2）。
+const STALLED_PANE: &str = concat!(
+    "✻ Waiting for API response · will retry in 3s · check your network\n",
+    "────────────────────────────────────────\n",
+    "❯\u{a0}\n",
+    "────────────────────────────────────────\n",
+    "  user@host (user@example.com)  scribe2  main\n",
+    "  19% 190k/1M Fable 5.1 [high] 5h:10%(4h22m) 7d:15%(6d8h)\n",
+    "  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 1 agent\n",
+);
+/// API が応答しない周の banner（2 行）。
+const NO_RESPONSE_PANE: &str = concat!(
+    "✽ No response from the API after 1m · retrying, waiting up to 2m · attempt 1/10\n",
+    "  A proxy or gateway that buffers responses may be the cause\n",
+    "────────────────────────────────────────\n",
+    "❯\u{a0}\n",
+    "────────────────────────────────────────\n",
+    "  user@host (user@example.com)  scribe2  main\n",
+    "  19% 190k/1M Fable 5.1 [high] 5h:10%(4h22m) 7d:15%(6d8h)\n",
+    "  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 1 agent\n",
+);
+/// turn 開始から 16 秒未満の spinner: 括弧（経過・token）がまだ描かれない（lens-94 MEDIUM-4）。
+const BARE_SPINNER_PANE: &str = concat!(
+    "✻ Sublimating…\n",
+    "────────────────────────────────────────\n",
+    "❯\u{a0}\n",
+    "────────────────────────────────────────\n",
+    "  user@host (user@example.com)  scribe2  main\n",
+    "  19% 190k/1M Fable 5.1 [high] 5h:10%(4h22m) 7d:15%(6d8h)\n",
+    "  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 1 agent\n",
+);
+/// compaction 中: `…` すら無い専用の行。
+const COMPACTING_PANE: &str = concat!(
+    "✻ Compacting conversation\n",
+    "────────────────────────────────────────\n",
+    "❯\u{a0}\n",
+    "────────────────────────────────────────\n",
+    "  user@host (user@example.com)  scribe2  main\n",
+    "  19% 190k/1M Fable 5.1 [high] 5h:10%(4h22m) 7d:15%(6d8h)\n",
+    "  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 1 agent\n",
+);
+/// idle な席の本文が印に**似た形**を持つ pane: 行頭 `●`（assistant 本文）+ `… (3 件)`。
+///
+/// 席は idle で出力を出さないので、これを busy と読むと tick は永久に noop になる
+/// （lens-94 HIGH-3）。`●` は spinner の frame（· ✢ ✳ ✶ ✻ ✽ *）に無い。
+const IDLE_COUNT_PANE: &str = concat!(
+    "● 直した… (3 件)\n",
+    "- 対応済… (2 件)\n",
+    "────────────────────────────────────────\n",
+    "❯\u{a0}\n",
+    "────────────────────────────────────────\n",
+    "  user@host (user@example.com)  scribe2  main\n",
+    "  19% 190k/1M Fable 5.1 [high] 5h:10%(4h22m) 7d:15%(6d8h)\n",
+    "  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 1 agent\n",
+);
+/// idle な席の本文が `esc to interrupt` を**引用**している pane（本 bead の報告文がこの形）。
+///
+/// この字は statusline（prompt より下）でだけ印として読む。
+const IDLE_QUOTE_PANE: &str = concat!(
+    "● 現行版の spinner は `esc to interrupt` を持たない。\n",
+    "────────────────────────────────────────\n",
+    "❯\u{a0}\n",
+    "────────────────────────────────────────\n",
+    "  user@host (user@example.com)  scribe2  main\n",
+    "  19% 190k/1M Fable 5.1 [high] 5h:10%(4h22m) 7d:15%(6d8h)\n",
+    "  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 1 agent\n",
+);
+/// turn を終えた実席（2026-09-11・匿名化済み）: 完了行 `Crunched for …` は spinner の形
+/// （`… (`）を持たない。これを busy と読むと tick は永久に noop になる（退行の歯）。
+const IDLE_TALL_PANE: &str = concat!(
+    "● 便の報告を送った。\n",
+    "✻ Crunched for 10m 28s · done 12:41\n",
+    "\n",
+    "────────────────────────────────────────\n",
+    "❯\u{a0}\n",
+    "────────────────────────────────────────\n",
+    "  user@host (user@example.com)  scribe2  main\n",
+    "  19% 190k/1M Fable 5.1 [high] 5h:10%(4h22m) 7d:15%(6d8h)\n",
+    "  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 1 agent\n",
+);
 /// `seat.tick_stale_s` の宣言値（`rules/manifest.toml`）。歯はこの値の**両側**を撃つ。
 const STALE_S: u64 = 2400;
 /// `seat.cycle_lock_ttl_s` の宣言値。歯はこの値の**両側**を撃つ。
@@ -1302,6 +1454,9 @@ fn seat_cycle_refuses_at_each_gate_without_sending() {
         GateCase { reason: "busy", wm_seat: Some("seatgate"), pane: Some(BUSY_BELOW), broken_state: false },
         // 走行中の印が入力欄の**上**に在る周（実際の席の spinner 位置）も打ちかけである。
         GateCase { reason: "busy", wm_seat: Some("seatgate"), pane: Some(BUSY_ABOVE), broken_state: false },
+        // 現行の版の spinner（`esc to interrupt` を持たず・statusline 3 行の上）と API 再試行中。
+        GateCase { reason: "busy", wm_seat: Some("seatgate"), pane: Some(RUNNING_PANE), broken_state: false },
+        GateCase { reason: "busy", wm_seat: Some("seatgate"), pane: Some(RETRYING_PANE), broken_state: false },
         // 入力欄の位置が読めない pane は idle と名乗らない（fail-closed）。
         GateCase { reason: "busy", wm_seat: Some("seatgate"), pane: Some(NO_PROMPT), broken_state: false },
         GateCase { reason: "pane-missing", wm_seat: Some("seatgate"), pane: None, broken_state: false },
@@ -1503,6 +1658,134 @@ fn seat_tick_runs_cycle_when_parked() {
         fs::read_to_string(&log).unwrap_or_default(),
         "/clear\n/rebrief\n",
         "作り直して復元した"
+    );
+    // socket を消す**前**に畳む（消してからでは kill-session が届かない・実測 2026-09-10）。
+    drop(guard);
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// 走行中の pane はどの形でも **busy**: 現行の spinner（`esc to interrupt` 無し・statusline
+/// 3 行）／API 再試行の banner 4 形のうち 3 形（`Retrying in` / stalled / no-response）／
+/// 印が statusline の遠い下／todo 形（語が文）／括弧無し（開始 16 秒未満）／compaction 中。
+///
+/// 域を末尾 6 非空行に取る実装は spinner を idle と読む（実測 2026-09-11: `/rebrief` 走行中の
+/// 席へ `/clear` が送られた・bd `s2-07l.94`）。`BUSY_FAR_BELOW` は「下は全行を見る」を上の
+/// 域の数とは別に測る。後半 5 形は lens-94 HIGH-1 / HIGH-2 / MEDIUM-4（本体の実装を実読）。
+#[test]
+fn seat_tick_reads_current_running_panes_as_busy() {
+    let target = "seatrunning";
+    let panes = [
+        RUNNING_PANE, RETRYING_PANE, BUSY_FAR_BELOW, TODO_SPINNER_PANE, STALLED_PANE,
+        NO_RESPONSE_PANE, BARE_SPINNER_PANE, COMPACTING_PANE,
+    ];
+    for (at, pane) in panes.into_iter().enumerate() {
+        let case = TickCase { reason: "busy", beat_age_s: None, pane: Some(pane),
+                              wm_seat: Some(target), via_file: true, tmux: false };
+        let dir = tmp();
+        let state = prepare_tick_case(&dir, &case, target);
+        let (out, touched) = run_tick_case(&dir, &case, target, &state);
+        assert_tick_case(&out, touched, &case, at);
+        fs::remove_dir_all(&dir).ok();
+    }
+}
+
+/// turn を終えた実席（完了行 `Crunched for …` + statusline 3 行）は **idle**＝手順 3
+/// （退避物）へ進む。busy と読むと tick が永久に noop になる（退行の歯・base でも GREEN）。
+#[test]
+fn seat_tick_reads_finished_pane_with_tall_statusline_as_idle() {
+    let target = "seatfinished";
+    for (at, pane) in [IDLE_TALL_PANE, IDLE_COUNT_PANE, IDLE_QUOTE_PANE].into_iter().enumerate() {
+        let case = TickCase { reason: "wm-unconsumed", beat_age_s: None, pane: Some(pane),
+                              wm_seat: Some(target), via_file: true, tmux: false };
+        let dir = tmp();
+        let state = prepare_tick_case(&dir, &case, target);
+        let (out, touched) = run_tick_case(&dir, &case, target, &state);
+        assert_tick_case(&out, touched, &case, at);
+        fs::remove_dir_all(&dir).ok();
+    }
+}
+
+/// 上の域は **6 非空行ちょうど**: spinner が prompt 行の 6 非空行上なら busy、7 なら idle
+/// （上限の側を明示する歯。域の理由は `docs/design/seat-autonomy.md` 裁定 (e)）。
+#[test]
+fn seat_tick_above_region_is_exactly_six_nonempty_lines() {
+    let target = "seatabove";
+    for (fillers, reason) in [(4_usize, "busy"), (5_usize, "wm-unconsumed")] {
+        // spinner → filler 行 × n → 区切り（1）→ prompt: spinner は prompt の (n + 2) 非空行上。
+        let mut pane = String::from("✻ Sublimating… (19m 36s · ↓ 36.4k tokens)\n");
+        for at in 0..fillers {
+            pane.push_str(&format!("  filler {at}\n"));
+        }
+        pane.push_str(TALL_TAIL);
+        let dir = tmp();
+        let path = dir.join("above.txt");
+        fs::write(&path, &pane).ok();
+        let case = TickCase { reason, beat_age_s: None, pane: None,
+                              wm_seat: Some(target), via_file: true, tmux: false };
+        let state = prepare_tick_case(&dir, &case, target);
+        fs::write(dir.join("pane.txt"), &pane).ok();
+        let (out, touched) = run_tick_case(&dir, &case, target, &state);
+        assert_tick_case(&out, touched, &case, fillers);
+        fs::remove_dir_all(&dir).ok();
+    }
+}
+
+/// tick を 1 組ぶん撃つ（`seat_tick_noop_reasons_in_fixed_order` と同じ引数の組み方）。
+fn run_tick_case(dir: &Path, case: &TickCase, target: &str, state: &Path) -> (Output, bool) {
+    let (wm_s, pane_s) = (
+        dir.join("wm").display().to_string(),
+        dir.join("pane.txt").display().to_string(),
+    );
+    let (sock_s, state_s) = (
+        dir.join("absent-sock").display().to_string(),
+        state.display().to_string(),
+    );
+    let mut args = vec![
+        "tick", "--target", target, "--wm-dir", &wm_s, "--tmux-socket", &sock_s,
+        "--state-dir", &state_s,
+    ];
+    if case.via_file {
+        args.push("--capture-file");
+        args.push(&pane_s);
+    }
+    run_seat_probed(dir, &args)
+}
+
+/// echo された `/clear` が statusline の高さで末尾 6 非空行の外に在る周は、**作り直しを確認
+/// できない**（`clear-unconfirmed`・復元を送らない）。
+///
+/// 末尾 6 非空行で見る実装はこの pane を「済んだ」と読み、作り直されていない席へ復元を送る
+/// （base: `cycle done`）。pane は `--capture-file` で固定し、送信だけ偽の席へ通す。
+#[test]
+fn seat_cycle_does_not_confirm_clear_from_echo_pushed_out_by_tall_statusline() {
+    let dir = tmp();
+    let socket = socket_of(&dir);
+    let name = "seatecho";
+    let log = dir.join("seat.log");
+    let guard = start_clearing_seat(&socket, name, &log, false);
+    assert!(guard.ready(), "偽の席を立てられる");
+    let state = dir.join("state");
+    let wm = dir.join("wm");
+    wm_file(&wm, "working-memory.echo.md", name);
+    let pane = dir.join("pane.txt");
+    fs::write(&pane, CLEAR_ECHO_PANE).ok();
+    let (wm_s, state_s, pane_s) = (
+        wm.display().to_string(),
+        state.display().to_string(),
+        pane.display().to_string(),
+    );
+
+    let out = run_seat(&[
+        "cycle", "--target", name, "--wm-dir", &wm_s, "--tmux-socket", &socket,
+        "--state-dir", &state_s, "--capture-file", &pane_s,
+    ]);
+
+    assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "stdout={}", stdout_of(&out));
+    assert_eq!(stderr_of(&out), "seat: cycle failed reason=clear-unconfirmed\n");
+    assert_eq!(
+        fs::read_to_string(&log).unwrap_or_default(),
+        "/clear\n",
+        "作り直しを確認できない周に復元を送らない"
     );
     // socket を消す**前**に畳む（消してからでは kill-session が届かない・実測 2026-09-10）。
     drop(guard);
