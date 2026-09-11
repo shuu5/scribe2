@@ -1323,3 +1323,108 @@ fn headless_runner_reads_the_status_only_from_the_dedicated_record_kind() {
     let real = "{\"type\":\"rate_limit_event\",\"rate_limit_info\":{\"status\":\"blocked\"}}";
     assert_eq!(rate_limit_status(real), Some("blocked"), "種別が合えば読む");
 }
+
+/// runner が組んだ prompt を**便の作業面へ残す**（`s2-07l.79`・設計 §6）。
+///
+/// prompt は stdin で渡すので stream には 1 行も出ない（`.67` の限界）。「何を渡したか」を
+/// 後から読める唯一の口がこの file で、置き場は **vessel の写しの隣**（= run dir・
+/// `<state_dir>/pipe/<run>/`）である。新しい flag も env も足さない（C2.2）。
+///
+/// 測るのは 3 つ: (i) file の中身が claude の stdin に届いた prompt と**同一**（要約や
+/// 別の文面ではない）(ii) claude が起きる**前**に落ちている（起きた後に書く形だと、席が
+/// 止まらない周の prompt が読めない）(iii) tracked な面（worktree）へは 1 byte も置かない。
+#[test]
+fn headless_runner_writes_the_prompt_beside_the_vessel_copy() {
+    let dir = tmp();
+    let worktree = tmp();
+    let claude = fake_claude(&dir, "", false, 0);
+    let write_set = dir.join("write-set.txt");
+    let vessel = write_vessel_copy(&dir, r#"["cargo", "git"]"#);
+    fs::write(&write_set, "src/lib.rs\n").expect("write-set を書ける");
+    let saved = dir.join("prompt.txt");
+    // fake は**起動された時点**の prompt file を写す（(ii) を rc でなく痕跡で測る）。
+    let script = slurp(&claude).replace(
+        "cat > \"",
+        &format!("cp \"{}\" \"{}\" 2>/dev/null\ncat > \"", saved.display(), dir.join("prompt-at-call").display()),
+    );
+    fs::write(&claude, script).expect("fake を書き換えられる");
+    let out = run_runner(
+        &RunnerCall { dir: &dir, worktree: &worktree, write_set: &write_set, vessel: &vessel, claude: &claude, mode: "acceptEdits", account: None },
+        "goal = \"prompt を残す\"\n".as_bytes(),
+    );
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    let sent = slurp(&dir.join("stdin"));
+    assert!(sent.contains("goal = \"prompt を残す\""), "fake は prompt を受けている: {sent}");
+    assert_eq!(slurp(&saved), sent, "残した prompt は claude へ渡したものと同一");
+    assert_eq!(slurp(&dir.join("prompt-at-call")), sent, "claude が起きる前に落ちている");
+    assert!(!worktree.join("prompt.txt").exists(), "worktree（tracked 面）には置かない");
+    assert!(!stderr_of(&out).contains("prompt を残せない"), "残せた周は欠落の行を出さない: {}", stderr_of(&out));
+    clean(&[&dir, &worktree]);
+}
+
+/// 残せない周でも便は止めない（極性: 証跡は判定の入力ではない・`s2-07l.79`）。
+///
+/// 置き場を **dir で塞ぐ**（`prompt.txt` が dir だと write は EISDIR）。claude は起き、
+/// rc は claude のものがそのまま写る（0 と 3 の両方で測る＝「たまたま 0」と区別する）。
+/// 黙って落とすのではなく stderr へ 1 行残す——証跡の欠落を人が後から読めるように。
+#[test]
+fn headless_runner_keeps_going_when_the_prompt_cannot_be_saved() {
+    let dir = tmp();
+    let worktree = tmp();
+    let write_set = dir.join("write-set.txt");
+    let vessel = write_vessel_copy(&dir, r#"["cargo", "git"]"#);
+    fs::write(&write_set, "src/lib.rs\n").expect("write-set を書ける");
+    fs::create_dir_all(dir.join("prompt.txt")).expect("置き場を dir で塞げる");
+    for want in [0_u8, 3_u8] {
+        let claude = fake_claude(&dir, "", false, want);
+        fs::remove_file(dir.join("called")).ok();
+        let out = run_runner(
+            &RunnerCall { dir: &dir, worktree: &worktree, write_set: &write_set, vessel: &vessel, claude: &claude, mode: "acceptEdits", account: None },
+            "goal = \"残せなくても進む\"\n".as_bytes(),
+        );
+        assert_eq!(out.status.code(), Some(i32::from(want)), "rc は claude のまま: {}", stderr_of(&out));
+        assert!(dir.join("called").exists(), "claude は起きる");
+        assert!(stdout_of(&out).contains(&format!("runner: rc={want} records=")), "記録行は変わらない");
+        assert!(stderr_of(&out).contains("prompt を残せない"), "欠落は stderr に 1 行: {}", stderr_of(&out));
+    }
+    clean(&[&dir, &worktree]);
+}
+
+/// 置き場が解けない写し（裸の `vessel.toml`）では prompt を **cwd へ落とさない**（lens 2026-09-11 M2）。
+///
+/// `Path::parent` は裸の名に `Some("")` を返すので、素朴に join すると prompt が runner の cwd
+/// ＝ pipeline では便の worktree（tracked 面）へ落ちる。「残さない」側へ倒し、便は止めない
+/// （rc は claude のまま・stderr に欠落の 1 行）。cwd を tmp に固定して測る＝退行しても repo を汚さない。
+#[test]
+fn headless_runner_does_not_drop_the_prompt_into_the_cwd_for_a_relative_vessel() {
+    let dir = tmp();
+    let worktree = tmp();
+    let claude = fake_claude(&dir, "", false, 0);
+    let write_set = dir.join("write-set.txt");
+    let _ = write_vessel_copy(&dir, r#"["cargo", "git"]"#);
+    fs::write(&write_set, "src/lib.rs\n").expect("write-set を書ける");
+    let mut child = Command::new(bin())
+        .args(["runner", "--worktree"])
+        .arg(&worktree)
+        .arg("--write-set")
+        .arg(&write_set)
+        .args(["--vessel", "vessel.toml", "--plugin-dir"])
+        .arg(&dir)
+        .args(["--permission-mode", "acceptEdits", "--claude"])
+        .arg(&claude)
+        .current_dir(&dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("binary を起動できる");
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all("goal = \"相対の写し\"\n".as_bytes());
+    }
+    let out = child.wait_with_output().expect("binary の出力を読める");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "便は止めない: {}", stderr_of(&out));
+    assert!(dir.join("called").exists(), "claude は起きる");
+    assert!(!dir.join("prompt.txt").exists(), "cwd（相対 vessel の隣）へは落とさない");
+    assert!(stderr_of(&out).contains("prompt を残せない"), "欠落は stderr に 1 行: {}", stderr_of(&out));
+    clean(&[&dir, &worktree]);
+}
