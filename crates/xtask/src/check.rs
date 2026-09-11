@@ -718,6 +718,23 @@ mod tests {
             );
         });
         assert_single(&by_ref, "enum-slices");
+        // ライフタイム付きの参照と、`:` の後に空白が無い形も逃がさない（lens-88 再確認）。
+        let by_static_ref = check_fixture(|dir| {
+            write_at(
+                dir,
+                &core_src,
+                "pub enum Kind {\n    Alpha,\n}\n\npub const KINDS: &'static [&'static Kind] = &[&Kind::Alpha];\n",
+            );
+        });
+        assert_single(&by_static_ref, "enum-slices");
+        let no_space = check_fixture(|dir| {
+            write_at(
+                dir,
+                &core_src,
+                "pub enum Kind {\n    Alpha,\n    Beta,\n}\n\npub const KINDS:&[Kind] = &[Kind::Alpha];\n",
+            );
+        });
+        assert_single(&no_space, "enum-slices");
         let of_struct = summary_fixture(|dir| {
             write_at(
                 dir,

@@ -12,6 +12,9 @@
 //! は違反にする（lens-88 MEDIUM-1: 黙って母集団から消える形を作らない）。`&'static [Enum]` と
 //! 字下げされた const（impl / mod の中）は対に数える。小文字始まり・tuple・`&str` は enum の
 //! slice ではないので対象外。Rust の parser は足さない（字面で数える・憲法 C13）。
+//!
+//! **意図した部分集合の const は書けない**（lens-88 MEDIUM-5）: `&[Enum]` 型の const は全 variant
+//! を並べる形しか通らず、逃がしは無い。部分集合が要るなら関数か別の型（`&[&str]` 等）で表す。
 
 use crate::check::{Measured, SourceFile};
 
@@ -84,12 +87,12 @@ fn slices_in(text: &str) -> Vec<Result<Pair, String>> {
         let Some(head) = const_head(line) else {
             continue;
         };
-        let Some((name, after_name)) = head.split_once(": ") else {
+        let Some((name, after_name)) = head.split_once(':') else {
             continue;
         };
         let Some(rest) = ["&'static [", "&["]
             .iter()
-            .find_map(|prefix| after_name.strip_prefix(prefix))
+            .find_map(|prefix| after_name.trim_start().strip_prefix(prefix))
         else {
             continue;
         };
@@ -128,12 +131,22 @@ fn const_head(line: &str) -> Option<&str> {
         .find_map(|prefix| trimmed.strip_prefix(prefix))
 }
 
-/// 要素の型が大文字で始まるか（`&Enum` のように `&` を挟む形も含めて見る）。
+/// 要素の型が大文字で始まるか（`&Enum` / `&'static Enum` のように `&` とライフタイムを挟む形も
+/// 含めて見る＝読めない型として違反にする側へ倒すため）。
 fn starts_upper(elem: &str) -> bool {
-    elem.trim_start_matches('&')
-        .chars()
-        .next()
-        .is_some_and(|first| first.is_ascii_uppercase())
+    let mut rest = elem.trim_start();
+    loop {
+        if let Some(after) = rest.strip_prefix('&') {
+            rest = after.trim_start();
+        } else if let Some(after) = rest.strip_prefix('\'') {
+            rest = after
+                .trim_start_matches(|ch: char| ch.is_ascii_alphanumeric() || ch == '_')
+                .trim_start();
+        } else {
+            break;
+        }
+    }
+    rest.chars().next().is_some_and(|first| first.is_ascii_uppercase())
 }
 
 /// 大文字で始まり英数字と `_` だけの識別子か（enum / struct の名前の形）。
