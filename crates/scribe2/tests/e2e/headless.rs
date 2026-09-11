@@ -1660,11 +1660,13 @@ fn runner_question_toplevel_result_text_reads_real_record_with_nested_type_first
         "入れ子の type:message が先に在っても result record と読む"
     );
     // 偽陽性を塞ぐ: 入れ子だけに type:result を持ち、top-level の種別が別の行は読まない。
-    let nested_only = r#"{"type":"assistant","quoted":{"type":"result","result":"inner"},"result":"outer"}"#;
+    // 入れ子を**先**に置く（top-level を先に置くと最初の対を読む実装でも None になり歯が空虚・lens H1）。
+    let nested_only = r#"{"quoted":{"type":"result","result":"inner"},"type":"assistant","result":"outer"}"#;
     assert_eq!(result_text(nested_only), None, "入れ子の type:result は種別ではない");
-    // escape された \"type\" は key ではない（文字列の中）。
-    let escaped = r#"{"type":"assistant","text":"saw \"type\":\"result\" in a doc","result":"x"}"#;
-    assert_eq!(result_text(escaped), None, "文字列中の \\\"type\\\" を key と読まない");
+    // 文字列中の escape された `"` を閉じ引用符と読まない（奇数個の `\"` で走査がずれると top-level の
+    // `"type"` を見失う・lens H2）。
+    let odd_escape = r#"{"result":"he said \"hi","type":"result"}"#;
+    assert_eq!(result_text(odd_escape).as_deref(), Some("he said \"hi"), "escape された引用符は文字列を閉じない");
     // 文字列の中の brace / bracket は深さに数えない（後ろの top-level key を見失わない）。
     let braces_in_string = r#"{"note":"has { and [ inside","type":"result","result":"ok"}"#;
     assert_eq!(result_text(braces_in_string).as_deref(), Some("ok"), "文字列中の brace は深さに数えない");
