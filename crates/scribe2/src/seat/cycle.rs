@@ -2,11 +2,13 @@
 //!
 //! `/clear` は**不可逆**である（会話は戻らない）。ゆえにこの口は 3 つの条件が同時に立つ周
 //! だけ開く: 排他（lock を握れた）・退避済み（自席の未 consumed 退避物が在る）・idle
-//! （打ちかけが無い）。1 つでも欠けたら **1 key も送らずに断る**——「送ったが失敗した」と
-//! 「そもそも送っていない」を [`Cycle`] で分けて持つのはこのためである（bool で持たない）。
+//! （hook の打刻の最終行が Idle・[`state`]・憲法 C3.3 / ADR-0015＝pane の字面は判定入力にしない）。
+//! 1 つでも欠けたら **1 key も送らずに断る**——「送ったが失敗した」と「そもそも送っていない」を
+//! [`Cycle`] で分けて持つのはこのためである（bool で持たない）。pane を読むのは送る直前の入力欄の
+//! 門（[`inject::guard_input`]・注入と同じ 1 本）と作り直しの確認だけである。
 
 use crate::polarity::{OnFailure, Polarity, Timing};
-use super::{inject, is_idle, pane_of, sanitize_target, tmux_ok, StateDir, WmScan};
+use super::{inject, pane_of, sanitize_target, state, tmux_ok, StateDir, WmScan};
 use crate::fleet::json_lite::{self, Value};
 use crate::fleet::store::{self, LockPolicy};
 use crate::hook::{InjectionRecord, SCHEMA};
@@ -39,10 +41,20 @@ pub const REASON_LOCK_HELD: &str = "lock-held";
 pub const REASON_WM_MISSING: &str = "wm-missing";
 /// 退避物の dir を読めない（**0 件と読み替えない**）。
 pub const REASON_WM_UNREADABLE: &str = "wm-unreadable";
-/// 席が打ちかけである。
+/// 席の最終の打刻が Busy（turn が走っている）。
 pub const REASON_BUSY: &str = "busy";
-/// pane を読めない（idle と名乗れない）。
+/// 打刻 file が無い（hook が載っていない席）。**idle と読み替えない**。
+pub const REASON_STATE_MISSING: &str = "state-missing";
+/// 打刻 file が読めない・最終行が壊れている。
+pub const REASON_STATE_UNREADABLE: &str = "state-unreadable";
+/// 最終の Busy が `seat.tick_stale_s` より古い（hook が死んだ疑い）。
+pub const REASON_STATE_STALE: &str = "state-stale";
+/// pane を読めない（作り直しを確認できない席へ送らない）。
 pub const REASON_PANE_MISSING: &str = "pane-missing";
+/// 入力欄が非空（打ちかけと 1 行に merge する事故を送る直前で塞ぐ・注入と同じ門）。
+pub const REASON_INPUT_BUSY: &str = "input-busy";
+/// 入力欄を特定できない（prompt 行が無い pane へ送らない・注入と同じ門）。
+pub const REASON_INPUT_UNKNOWN: &str = "input-unknown";
 /// TTL の宣言（rules 行）が読めない。
 pub const REASON_NO_RULE: &str = "no-rule";
 /// 置き場を解けない。
@@ -127,23 +139,31 @@ fn perform(request: &Request, dir: &Path) -> Cycle {
         Lock::Held => return Cycle::Refused(REASON_LOCK_HELD),
         Lock::Broken => return Cycle::Refused(REASON_STATE_DIR),
     }
-    let held = guarded(request);
+    let held = guarded(request, dir);
     std::fs::remove_file(lock_path(dir)).ok();
     held
 }
 
-/// lock を握っている間の手順（順序固定）。
-fn guarded(request: &Request) -> Cycle {
+/// lock を握っている間の手順（順序固定）: 退避物 → 状態の門 → pane → 入力欄の門 → 送る。
+fn guarded(request: &Request, dir: &Path) -> Cycle {
     match super::scan_wm(Path::new(request.wm_dir), request.target) {
         WmScan::None => return Cycle::Refused(REASON_WM_MISSING),
         WmScan::Unreadable => return Cycle::Refused(REASON_WM_UNREADABLE),
         WmScan::Unconsumed(_) => {}
     }
+    let Some(stale_s) = state::stale_s() else {
+        return Cycle::Refused(REASON_NO_RULE);
+    };
+    if let Some(reason) = gate_of(state::read_last(dir, stale_s)) {
+        return Cycle::Refused(reason);
+    }
     let Some(pane) = pane_of(request.socket, request.target, request.capture_file) else {
         return Cycle::Refused(REASON_PANE_MISSING);
     };
-    if !is_idle(&pane) {
-        return Cycle::Refused(REASON_BUSY);
+    match inject::guard_input(&pane) {
+        Ok(()) => {}
+        Err(inject::InputGate::Busy) => return Cycle::Refused(REASON_INPUT_BUSY),
+        Err(inject::InputGate::UnknownInput) => return Cycle::Refused(REASON_INPUT_UNKNOWN),
     }
     if !send_clear(request) {
         return Cycle::Failed(REASON_CLEAR);
@@ -152,6 +172,17 @@ fn guarded(request: &Request) -> Cycle {
         Cycle::Done
     } else {
         Cycle::Failed(REASON_RESTORE)
+    }
+}
+
+/// 状態の門（tick と同じ読み口・同じ極性・ADR-0015 §2.3）: **Idle だけが通る**。
+fn gate_of(read: state::Read) -> Option<&'static str> {
+    match read {
+        state::Read::Idle(_) => None,
+        state::Read::Busy(_) => Some(REASON_BUSY),
+        state::Read::Missing => Some(REASON_STATE_MISSING),
+        state::Read::Unreadable => Some(REASON_STATE_UNREADABLE),
+        state::Read::Stale(_) => Some(REASON_STATE_STALE),
     }
 }
 
@@ -256,7 +287,7 @@ fn send_clear(request: &Request) -> bool {
 /// **未 submit の `/clear` は弁別できる**: Enter だけが落ちた周の字面は**入力行そのもの**に残り
 /// [`super::input_tail`] が非空になる（第 1 項で落ちる）。echo は入力行より**上**にしか無い。
 ///
-/// **域は入力行より上の全行**（[`super::prompt_region`] の上 6 非空行に絞らない）。`/clear` は
+/// **域は入力行より上の全行**（旧裁定 (e) の上 6 非空行に絞らない）。`/clear` は
 /// 画面を消すので、見えている echo は**何らかの** `/clear` の後に描かれたものに限られ、上へ遡る数で
 /// 古い echo を除外する必要が無い。逆に 6 行で切ると、echo の下に描かれる行（hook の出力等）が版で
 /// 増えた周に同じ行き止まりへ戻る（実測 2026-09-11 A/B: echo の周りに 4 行が増えた）。

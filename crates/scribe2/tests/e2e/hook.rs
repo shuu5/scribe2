@@ -5,6 +5,7 @@
 //! `user.name` / `user.email` を与える（global 設定は 1 byte も触らない）。
 
 use crate::make_tmp_dir;
+use crate::seat::{socket_of, start_seat, tmux};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -1396,4 +1397,219 @@ fn marketplace_json_names_the_same_plugin_as_plugin_json() {
             "PUBLIC 面に {mark} を書かない: {market}"
         );
     }
+}
+
+// ─────────────────── 席の状態の打刻（hook 側・`s2-07l.95`） ───────────────────
+
+/// 独立 socket の session の pane id（`%N`・生成 hooks.json の shell 行が `$TMUX_PANE` から渡す形）。
+fn pane_id_of(socket: &str, name: &str) -> String {
+    String::from_utf8_lossy(&tmux(socket, &["display-message", "-p", "-t", name, "#{pane_id}"]).stdout)
+        .trim()
+        .to_owned()
+}
+
+/// `cwd` と `session_id` を持つ payload（打刻 hook が読む 2 key）。
+fn stamp_payload(cwd: &Path, sid: &str) -> String {
+    format!("{{\"cwd\":\"{}\",\"session_id\":\"{sid}\"}}", cwd.display())
+}
+
+/// 打刻 file の path を**契約の字面から**組む（`<state_dir>/seat/<潰した target>/state.jsonl`・
+/// target は `session:window` → `session_window`）。
+fn state_file(state: &Path, name: &str) -> PathBuf {
+    state.join("seat").join(format!("{name}_{name}")).join("state.jsonl")
+}
+
+/// 3 event の hook が `--pane` から target を解き、state.jsonl へ typed な打刻を 1 行ずつ残す
+/// （SessionStart → idle・UserPromptSubmit → busy・Stop → idle・設計 seat-state.md §2）。打刻だけの
+/// 2 event は **stdout 0 byte・stderr 0 byte・rc 0**、session-start の名乗りは不変。打刻は inject.jsonl
+/// を増やさない（hook 予算を turn ごとの追記で食わない）。
+#[test]
+fn seat_state_hook_stamps_three_events_into_state_jsonl() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    let sock_dir = tmp();
+    let socket = socket_of(&sock_dir);
+    let name = "hookstamp";
+    let guard = start_seat(&socket, name);
+    assert!(guard.ready(), "独立 socket に session を立てられる");
+    let pane = pane_id_of(&socket, name);
+    assert!(pane.starts_with('%'), "pane id の形: {pane:?}");
+    let payload = stamp_payload(&repo, "sid-e2e");
+
+    let out = run_hook_args(&["session-start", "--pane", &pane, "--tmux-socket", &socket], &payload);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "session-start は rc 0");
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains(&format!("[{NAME}/SessionStart]")),
+        "名乗りの 1 行は不変: {}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    assert_eq!(stderr_text(&out), "", "打刻が書けた周は stderr 0 byte");
+    let out = run_hook_args(&["user-prompt-submit", "--pane", &pane, "--tmux-socket", &socket], &payload);
+    assert_silent(&out, "user-prompt-submit は打刻だけ（席を止めない・context にも 1 byte も足さない）");
+    let out = run_hook_args(&["stop", "--pane", &pane, "--tmux-socket", &socket], &payload);
+    assert_silent(&out, "stop は打刻だけ");
+
+    let file = state_file(&state, name);
+    let text = fs::read_to_string(&file).unwrap_or_default();
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 3, "3 event で 3 行（母集団 {}）: {}: {text}", lines.len(), file.display());
+    let expected = [("idle", "SessionStart"), ("busy", "UserPromptSubmit"), ("idle", "Stop")];
+    for (line, (state_word, event)) in lines.iter().zip(expected) {
+        assert_eq!(value_of(line, "schema"), Some(json_lite::Value::Num(1)), "schema: {line}");
+        assert_eq!(value_of(line, "state"), Some(json_lite::Value::Str(state_word.to_owned())), "state: {line}");
+        assert_eq!(value_of(line, "event"), Some(json_lite::Value::Str(event.to_owned())), "event（出所）: {line}");
+        let ts = value_of(line, "ts").and_then(|value| value.as_num());
+        assert!(ts.is_some_and(|found| found > 1_700_000_000), "ts は 1970 年からの秒（0 や欠落でない）: {line}");
+        assert_eq!(value_of(line, "sid"), Some(json_lite::Value::Str("sid-e2e".to_owned())), "sid は payload を写す: {line}");
+    }
+    assert_eq!(inject_lines(&state).len(), 1, "inject.jsonl は session-start の 1 件だけ（打刻は記録を増やさない）");
+    // `stop_hook_active` は `Stop` の再入だけを黙らせる: 他の event の payload に在っても打刻する。
+    let reentry = format!("{{\"cwd\":\"{}\",\"session_id\":\"sid-e2e\",\"stop_hook_active\":true}}", repo.display());
+    let out = run_hook_args(&["user-prompt-submit", "--pane", &pane, "--tmux-socket", &socket], &reentry);
+    assert_silent(&out, "user-prompt-submit（stop_hook_active 付き）");
+    let text = fs::read_to_string(&file).unwrap_or_default();
+    assert_eq!(text.lines().count(), 4, "Stop 以外の event は stop_hook_active に依らず打刻する（母集団 4 行）: {text}");
+    drop(guard);
+    clean(&[&repo, &state, &sock_dir]);
+}
+
+/// hook の打刻と tick の読みが**同じ dir を見る**（継ぎ目の歯・lens-95 HIGH-1 / HIGH-2）: 独立 socket の席
+/// （window は `-n` で名付ける＝運用の契約）で `hook user-prompt-submit` を撃った後、operator が渡す形の
+/// `--target session:window` で `seat tick` を撃つと判定行が `state=busy event=UserPromptSubmit`、`hook stop`
+/// の後は `state=idle event=Stop` で pointer が注入される。writer と reader の path・潰し・schema のどれかが
+/// ずれると `state-missing` / `state-unreadable` に倒れてここで落ちる。
+#[test]
+fn seat_state_hook_stamp_is_read_by_tick_on_the_same_target() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    let sock_dir = tmp();
+    let socket = socket_of(&sock_dir);
+    let name = "hookseam";
+    let guard = start_seat(&socket, name);
+    assert!(guard.ready(), "独立 socket に session を立てられる");
+    let pane = pane_id_of(&socket, name);
+    let payload = stamp_payload(&repo, "sid-seam");
+    let target = format!("{name}:{name}");
+    let wm = sock_dir.join("wm");
+    fs::create_dir_all(&wm).expect("wm dir を作れる");
+    let pane_file = sock_dir.join("pane.txt");
+    fs::write(&pane_file, "\u{276f} \n  10% 100k/1M Opus 5\n").expect("pane fixture を置ける");
+    let (wm_s, state_s, pane_s) = (wm.display().to_string(), state.display().to_string(), pane_file.display().to_string());
+    let tick = |extra: &[&str]| {
+        let mut args = vec!["seat", "tick", "--target", &target, "--wm-dir", &wm_s, "--tmux-socket", &socket, "--state-dir", &state_s];
+        args.extend_from_slice(extra);
+        Command::new(bin()).args(&args).output().expect("binary を起動できる")
+    };
+    let suffix = format!(" source=flag state_dir={}", state.display());
+
+    let out = run_hook_args(&["user-prompt-submit", "--pane", &pane, "--tmux-socket", &socket], &payload);
+    assert_silent(&out, "打刻");
+    let out = tick(&["--capture-file", &pane_s]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "stderr={}", stderr_text(&out));
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        format!("seat: tick decision=noop reason=busy context=10 state=busy event=UserPromptSubmit{suffix}\n"),
+        "hook の打刻（Busy）を tick が同じ dir で読む"
+    );
+
+    let out = run_hook_args(&["stop", "--pane", &pane, "--tmux-socket", &socket], &payload);
+    assert_silent(&out, "打刻");
+    let out = tick(&["--capture-file", &pane_s]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "stderr={}", stderr_text(&out));
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        format!("seat: tick decision=inject target={name}_{name} consumed=true kind=pointer context=10 state=idle event=Stop{suffix}\n"),
+        "hook の打刻（Idle）で tick が pointer を注入する"
+    );
+    drop(guard);
+    clean(&[&repo, &state, &sock_dir]);
+}
+
+/// 打刻が**書けない**周（state.jsonl の位置に dir が在る）も席を止めない: rc 0・stdout 0 byte・
+/// stderr はちょうど 1 行（黙って消さない・lens-95 MEDIUM-3）。
+#[test]
+fn seat_state_hook_surfaces_store_failure_without_stopping_the_seat() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    let sock_dir = tmp();
+    let socket = socket_of(&sock_dir);
+    let name = "hookbroken";
+    let guard = start_seat(&socket, name);
+    assert!(guard.ready(), "独立 socket に session を立てられる");
+    let pane = pane_id_of(&socket, name);
+    fs::create_dir_all(state_file(&state, name)).expect("state.jsonl の位置に dir を置ける");
+
+    let out = run_hook_args(&["stop", "--pane", &pane, "--tmux-socket", &socket], &stamp_payload(&repo, "sid-e2e"));
+
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "書けなくても rc 0（席を止めない）");
+    assert!(out.stdout.is_empty(), "stdout 0 byte");
+    assert_eq!(stderr_lines(&out), 1, "書けなかったことを 1 行だけ surface する: {}", stderr_text(&out));
+    drop(guard);
+    clean(&[&repo, &state, &sock_dir]);
+}
+
+/// 打刻しない周: `--pane` が無い・空・解けない pane id・`Stop` の再入（`stop_hook_active`）・器の外の
+/// repo。いずれも state.jsonl を作らず、打刻だけの event は 0 byte・rc 0（guard ではない＝席を止めない）。
+/// session-start は打刻できなくても名乗りを出す。
+#[test]
+fn seat_state_hook_stays_silent_when_it_cannot_stamp() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    let sock_dir = tmp();
+    let socket = socket_of(&sock_dir);
+    let name = "hooksilent";
+    let guard = start_seat(&socket, name);
+    assert!(guard.ready(), "独立 socket に session を立てられる");
+    let pane = pane_id_of(&socket, name);
+    let payload = stamp_payload(&repo, "sid-e2e");
+    let reentry = format!("{{\"cwd\":\"{}\",\"session_id\":\"sid-e2e\",\"stop_hook_active\":true}}", repo.display());
+    let cases: [(&str, Vec<&str>, &str); 4] = [
+        ("--pane 無し（tmux の外の hooks.json）", vec!["user-prompt-submit"], &payload),
+        ("--pane 空（$TMUX_PANE 未設定）", vec!["user-prompt-submit", "--pane", "", "--tmux-socket", &socket], &payload),
+        ("pane id が解けない", vec!["stop", "--pane", "%99999", "--tmux-socket", &socket], &payload),
+        ("Stop の再入", vec!["stop", "--pane", &pane, "--tmux-socket", &socket], &reentry),
+    ];
+    for (label, args, body) in cases {
+        let out = run_hook_args(&args, body);
+        assert_silent(&out, label);
+    }
+    let out = run_hook_args(&["session-start", "--pane", "", "--tmux-socket", &socket], &payload);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "session-start は rc 0");
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains(&format!("[{NAME}/SessionStart]")),
+        "打刻できなくても名乗りは出す"
+    );
+    let bare = tmp();
+    let out = run_hook_args(&["user-prompt-submit", "--pane", &pane, "--tmux-socket", &socket], &stamp_payload(&bare, "x"));
+    assert_silent(&out, "器の外の repo");
+    let seats: Vec<String> = fs::read_dir(state.join("seat"))
+        .map(|entries| entries.flatten().map(|entry| entry.file_name().to_string_lossy().into_owned()).collect())
+        .unwrap_or_default();
+    assert!(seats.is_empty(), "打刻の dir を 1 つも作らない（母集団 = seat 配下の entry）: {seats:?}");
+    assert!(!state_file(&state, name).exists(), "state.jsonl は無い");
+    drop(guard);
+    clean(&[&repo, &state, &sock_dir, &bare]);
+}
+
+/// 生成物 `hooks/hooks.json` は打刻の 2 entry（UserPromptSubmit / Stop）を持ち、打刻の 3 command 行が
+/// `--pane "$TMUX_PANE"` を受ける。guard の 2 行（pre-tool-use / permission-request）は受けない。
+#[test]
+fn seat_state_hooks_json_carries_stamp_entries() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..");
+    let body = fs::read_to_string(root.join("hooks").join("hooks.json"))
+        .unwrap_or_else(|err| panic!("hooks.json を読める: {err}"));
+    let pane_arg = " --pane \\\"$TMUX_PANE\\\"";
+    for needle in ["\"UserPromptSubmit\"", "\"Stop\"", "hook user-prompt-submit", "hook stop"] {
+        assert_eq!(body.matches(needle).count(), 1, "{needle} はちょうど 1 回: {body}");
+    }
+    assert_eq!(body.matches(pane_arg).count(), 3, "打刻の 3 行だけが pane id を受ける: {body}");
+    for sub in ["session-start", "user-prompt-submit", "stop"] {
+        assert_eq!(body.matches(&format!("hook {sub}{pane_arg}")).count(), 1, "{sub} の command 行に --pane");
+    }
+    for sub in ["pre-tool-use", "permission-request"] {
+        assert_eq!(body.matches(&format!("hook {sub}\"")).count(), 1, "{sub} の command 行は --pane を持たない");
+    }
+    assert_eq!(body.matches("\"type\": \"command\"").count(), 5, "entry は 5 つ: {body}");
 }

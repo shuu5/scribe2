@@ -11,12 +11,14 @@
 pub mod guard;
 pub mod permission;
 pub mod seat_guard;
+pub mod stamp;
 pub mod vessel;
 
 use crate::cli_outcome::{Outcome, RC_BROKEN};
 use crate::fleet::json_lite::{self, Value};
 use crate::fleet::store::{self, LockPolicy, StoreError};
 use crate::name::NAME;
+use crate::seat::state::Event;
 use guard::Decision;
 use permission::PermissionDecision;
 use seat_guard::SeatDecision;
@@ -47,6 +49,12 @@ const EVENT_SESSION_START: &str = "session-start";
 const EVENT_PRE_TOOL_USE: &str = "pre-tool-use";
 /// `permission-request` の event 名。
 const EVENT_PERMISSION_REQUEST: &str = "permission-request";
+/// `user-prompt-submit` の event 名（席の状態の打刻 = Busy・設計 seat-state.md §2）。
+const EVENT_USER_PROMPT_SUBMIT: &str = "user-prompt-submit";
+/// `stop` の event 名（席の状態の打刻 = Idle）。
+const EVENT_STOP: &str = "stop";
+/// 記録の置き場を上書きする flag。
+const FLAG_STATE_DIR: &str = "--state-dir";
 
 /// 注入 1 回の記録（FR21: who / what / when / bytes / tokens / wall）。
 ///
@@ -114,20 +122,42 @@ pub fn dispatch(args: &[String], payload: &str) -> Outcome {
         return Outcome::ok(Vec::new());
     };
     match args.first().map(String::as_str) {
-        Some(EVENT_SESSION_START) => session_start(&root, version, &dir, started),
+        Some(EVENT_SESSION_START) => {
+            let mut outcome = session_start(&root, version, &dir, started);
+            // 名乗りの後に打刻（Idle）。打刻の失敗は名乗りの行も rc も変えない（席を止めない）。
+            outcome.err.extend(stamp::stamp(args, payload, Event::SessionStart, &dir));
+            outcome
+        }
         Some(EVENT_PRE_TOOL_USE) => pre_tool_use(&root, &cwd, payload, &dir, started),
         Some(EVENT_PERMISSION_REQUEST) => permission_request(payload, &dir, started),
+        Some(EVENT_USER_PROMPT_SUBMIT) => stamped(args, payload, Event::UserPromptSubmit, &dir),
+        Some(EVENT_STOP) => stamped(args, payload, Event::Stop, &dir),
         _ => Outcome::ok(Vec::new()),
     }
 }
 
+/// 打刻だけを行う event の外形: **stdout 0 byte・rc 0**（guard ではない・設計 seat-state.md §5）。
+/// 書けなかった周の 1 行だけ stderr に載せる。
+fn stamped(args: &[String], payload: &str, event: Event, dir: &Path) -> Outcome {
+    let mut outcome = Outcome::ok(Vec::new());
+    outcome.err = stamp::stamp(args, payload, event, dir);
+    outcome
+}
+
 /// 記録の置き場。`--state-dir` が上書きし、無ければ repo の git 設定から読む。
 fn state_dir_of(args: &[String], root: &Path) -> Option<PathBuf> {
-    let at = args.iter().position(|arg| arg == "--state-dir");
-    match at.and_then(|found| args.get(found + 1)) {
-        Some(found) if !found.starts_with("--") => Some(PathBuf::from(found)),
-        _ => vessel::state_dir(root),
+    match flag_of(args, FLAG_STATE_DIR) {
+        Some(found) => Some(PathBuf::from(found)),
+        None => vessel::state_dir(root),
     }
+}
+
+/// `--<name> <値>` を読む。flag が無い・値が無い（末尾か次が別の flag）はどちらも `None`。
+pub(crate) fn flag_of<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
+    let at = args.iter().position(|arg| arg == name)?;
+    args.get(at.saturating_add(1))
+        .filter(|found| !found.starts_with("--"))
+        .map(String::as_str)
 }
 
 /// payload の `cwd`。無ければ process の cwd（`current_dir` は syscall＝env ではない）。
@@ -150,20 +180,37 @@ fn cwd_of(payload: &str) -> Option<PathBuf> {
 /// 文字列の内側の `"` は必ず escape されるので、値として現れた同綴りの次は `,` か `}`
 /// になり、この判定で弁別できる。escape は解かない: 使うのは path と tool 名だけで、
 /// いずれも `\` を含まない。
-fn field(src: &str, key: &str) -> Option<String> {
+pub(crate) fn field(src: &str, key: &str) -> Option<String> {
+    raw_value(src, key)?
+        .strip_prefix('"')
+        .and_then(|body| body.split_once('"'))
+        .map(|(found, _)| found.to_owned())
+}
+
+/// payload から真偽の field を 1 つ抜く（`true` / `false` 以外・不在は `None`）。
+///
+/// key の弁別は [`field`] と同じ（値として現れた同綴りを拾わない）。`Stop` hook の
+/// `stop_hook_active` を読むためのもので、文字列の field と型を混ぜない。
+pub(crate) fn bool_field(src: &str, key: &str) -> Option<bool> {
+    let value = raw_value(src, key)?;
+    if value.starts_with("true") {
+        Some(true)
+    } else if value.starts_with("false") {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+/// `"<key>"` が **key として**現れた最初の occurrence の、`:` と空白を剥がした直後の残り。
+fn raw_value<'a>(src: &'a str, key: &str) -> Option<&'a str> {
     let needle = format!("\"{key}\"");
     let mut rest = src;
     loop {
         let (_, after) = rest.split_once(&needle)?;
         match after.trim_start().strip_prefix(':') {
             None => rest = after,
-            Some(value) => {
-                return value
-                    .trim_start()
-                    .strip_prefix('"')
-                    .and_then(|body| body.split_once('"'))
-                    .map(|(found, _)| found.to_owned())
-            }
+            Some(value) => return Some(value.trim_start()),
         }
     }
 }
