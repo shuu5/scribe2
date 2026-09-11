@@ -3,15 +3,15 @@
 //! 席の**外**（host の timer）から回り、条件を**順序固定**で見て、成立した周だけ 1 行を
 //! 注入する。R-E12 のとおり席は自分で周期起動を張らず、tick は席へ event としてしか届かない。
 //!
-//! **順序は load-bearing である**: 退避物の走査 → 鮮度 → **状態**（state.jsonl の最終行を読む）→ pane 取得 →
+//! **順序は load-bearing である**: 退避物の走査 → **状態**（state.jsonl の最終行を読む）→ pane 取得 →
 //! **context**（cap 以上なら退避の合図・状態の門の外）→ 状態の門（Idle だけが進む）→ 未 consumed
-//! 退避物 → cycle lock。鮮度を pane より先に見るのは、fresh な周に tmux を 1 度も叩かないためで
-//! （生きている席を毎周 capture しない）、その鮮度より先に自席の退避物を走査するのは、退避を終えた席は
-//! heartbeat を**直前**に打っていることが多く、退避物が在る（＝席が「作り直してよい」と申告している）
-//! のに鮮度で最大 `seat.tick_stale_s` の間 cycle が評価されないためである（`s2-07l.105`・裁定 (a)・
-//! admin2 で実測: 退避完了時 age 588 s → 約 30 分 idle）。飛ばすのは**自席の未 consumed 退避物が在る
-//! 周だけ**（裁定 (c)・走査が読めない周は「在る」に読み替えず従来どおり鮮度から）で、飛ばした周も
-//! それ以降の条件は不変（Busy の打刻の席・lock が live な周には送らない）。退避の合図を状態の門の
+//! 退避物 → cycle lock → 打刻の合図の brake（tick-stamp）。**heartbeat の鮮度 gate は持たない**
+//! （`s2-07l.109`）: 鮮度 gate は「走行中の席の pane を字面で読んで誤判定する」のを避ける門だったが、
+//! 席の状態が hook の打刻（typed・`s2-07l.95`）になって pane を idle の判定入力にしなくなり、理由が
+//! 消えた。残していた害は「打刻の直後に cap を超えた席が最大 `seat.tick_stale_s` の間 退避の合図を
+//! 受けない」盲点で（`s2-07l.105` が退避物の在る周だけ飛ばす特例で一部を塞いだ）、撤去で盲点は
+//! tick の周期だけになる。heartbeat / tick-stamp の file は「席が生きている」の記録として残す
+//! （`seat heartbeat` と合図の文面は不変・判定入力ではない）。退避の合図を状態の門の
 //! **前**に置くのは、context が cap を超えた席は
 //! busy（lens 待ち・長い cargo）であり、busy を理由に noop すると誰にも止められず auto-compact に
 //! 至るためである（`s2-07l.89`・実インシデント 2026-09-11・SRS FR29「idle を待たずに」＝planner
@@ -23,9 +23,11 @@
 //! ADR-0015）。打刻が無い・読めない・Busy が古い周は理由を分けて注入しない（fail-closed）。pane を
 //! 読むのは context（statusline の数値）と注入の送達確認だけである。
 //!
-//! **代償 = 盲点は最大 `seat.tick_stale_s`**（宣言値）: 退避物の無い fresh の周は pane を読まない
-//! ので、打刻の直後に cap を超えた席は次の stale な周まで見えない。閾値は動かさない（C5）＝この
-//! 限界は設計 §3 に「残る側」として書く。
+//! **打刻の合図（pointer）の頻度は tick 自身の打刻で決める**（planner 裁定 2026-09-12・案 A）: 合図を
+//! 注入した周は tick-stamp を打ち、その mtime が `seat.tick_stale_s` **未満**の周は合図を送らない
+//! （`pointer-recent`・`.110` の `cycle-recent` と同型・閾値は共用）。brake が掛かるのは合図だけで、
+//! 退避の合図と cycle の評価はその周も行う（heartbeat の mtime は見ない＝FR27 の合図は席の生存の
+//! 記録でなく「続きを進めろ」の促し）。
 
 use super::{cycle, heartbeat, inject, meter, pane_of, sanitize_target, state, WmScan};
 use crate::cli_outcome::{Outcome, RC_REFUSED};
@@ -103,7 +105,7 @@ impl InjectKind {
     }
 }
 
-/// pane から読んだ context 使用率。**pane を取得した周だけ評価する**——fresh で取得しない周は
+/// pane から読んだ context 使用率。**pane を取得した周だけ評価する**——取得しない周は
 /// [`Self::Unevaluated`]（`cycle=` と同じ「評価していない」の印＝判定行に載らない）。
 ///
 /// 測れない周は [`Self::Unmeasured`] で理由を 1 語持ち、**注入も停止もしない**（測れないことを
@@ -137,7 +139,7 @@ struct Judged {
     cycled: Option<String>,
     /// context の評価。
     context: Context,
-    /// 席の状態の読み（fresh の周は読まない＝`None`・判定行に載らない）。
+    /// 席の状態の読み（rules 行が読めず判定に入らない周は `None`・判定行に載らない）。
     state: Option<state::Read>,
     /// cycle-stamp の読み（cycle の評価まで進まなかった周は `None`＝読んでいない。進んだ周は
     /// 評価した・見送った・読めなかったのいずれでも `Some`）。
@@ -204,15 +206,14 @@ struct Seen {
     ttl_s: u64,
     /// 席の状態の読み（typed・pane の字面ではない）。
     state: state::Read,
-    /// 鮮度の閾値（秒）。cycle-stamp の back-off も**同じ値**を共用する（新しい閾値を足さない・C5）。
+    /// stale の閾値（秒・rules 行 `seat.tick_stale_s`）。cycle-stamp の back-off と打刻の合図の brake も
+    /// **同じ値**を共用する（新しい閾値を足さない・C5）。
     stale_s: u64,
 }
 
 /// 撃たなかった理由。**順序固定の条件のうち最初に立たなかったもの**を表す。
 #[derive(Clone, Copy)]
 pub enum NoopReason {
-    /// 1. 席は最近動いている（自席の未 consumed 退避物が在る周は見ない・`.105`）。
-    HeartbeatFresh,
     /// 2. pane を読めない。
     PaneMissing,
     /// 3. 席の最終の打刻が Busy（turn が走っている）。
@@ -233,13 +234,14 @@ pub enum NoopReason {
     CycleRecent,
     /// 5. cycle-stamp を読めない（**「無い」と読み替えない**＝不可逆の `/clear` へ倒さない）。
     CycleStampUnreadable,
+    /// 6. 打刻の合図を `seat.tick_stale_s` 未満の前に注入した（tick-stamp・storm 止め・`s2-07l.109`）。
+    PointerRecent,
 }
 
 impl NoopReason {
     /// 記録と表示に使う字面。
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::HeartbeatFresh => "heartbeat-fresh",
             Self::PaneMissing => "pane-missing",
             Self::Busy => "busy",
             Self::StateMissing => "state-missing",
@@ -250,6 +252,7 @@ impl NoopReason {
             Self::CycleLive => "cycle-live",
             Self::CycleRecent => "cycle-recent",
             Self::CycleStampUnreadable => "cycle-stamp-unreadable",
+            Self::PointerRecent => "pointer-recent",
         }
     }
 }
@@ -291,23 +294,17 @@ pub fn run(request: &Request) -> Outcome {
     }
 }
 
-/// 条件を順序固定で見る（退避物の走査 → 鮮度 → 状態の読み → pane 取得 → context → 状態の門 → 退避物 → lock）。
+/// 条件を順序固定で見る（退避物の走査 → 状態の読み → pane 取得 → context → 状態の門 → 退避物 → lock →
+/// 合図の brake）。鮮度 gate は持たない（`s2-07l.109`・module doc）。
 ///
-/// 退避物を鮮度より先に走査するのは、**自席の未 consumed 退避物が在る周は鮮度 gate を飛ばす**
-/// ためである（裁定 (a)・`s2-07l.105`）: 退避物の存在は席の「作り直してよい」の申告なので、
-/// 直前の打刻を理由に pane も見ずに noop すると、退避から作り直しまでが最大 `seat.tick_stale_s`
-/// に延びる。走査の結果は後段（context / 退避物）でも同じ値を使う（cycle を回す周だけは cycle 側が
-/// 自分の入口でもう 1 度走査する＝lock の内側で確かめ直す）。
-/// 他席の名乗り・0 件・読めない周は従来どおり鮮度から（読めない周を「在る」に読み替えない）。
+/// 退避物を最初に走査するのは、走査の結果を後段（context の合図の可否 / 退避物）で同じ値として
+/// 使うためである（cycle を回す周だけは cycle 側が自分の入口でもう 1 度走査する＝lock の内側で
+/// 確かめ直す）。読めない周を「在る」に読み替えない。
 fn decide(request: &Request, place: &super::StateDir, dir: &Path) -> Judged {
     let (Some(stale_s), Some(ttl_s)) = (state::stale_s(), cycle::ttl_s()) else {
         return Judged::bare(TickDecision::Error(meter::REASON_NO_RULE.to_owned()));
     };
     let wm = super::scan_wm(Path::new(request.wm_dir), request.target);
-    let parked_here = matches!(wm, WmScan::Unconsumed(_));
-    if !parked_here && is_fresh(dir, stale_s) {
-        return Judged::bare(TickDecision::Noop(NoopReason::HeartbeatFresh));
-    }
     // 状態は pane より先に読む（file 1 つ・tmux を叩かない）。読みは tick と cycle で 1 本。
     let read = state::read_last(dir, stale_s);
     let Some(pane) = pane_of(request.socket, request.target, request.capture_file) else {
@@ -336,7 +333,7 @@ fn decide(request: &Request, place: &super::StateDir, dir: &Path) -> Judged {
 /// 判定・cycle の要約・cycle-stamp の読み（後 2 つは cycle の評価まで進んだ周だけ `Some`）。
 type Verdict = (TickDecision, Option<String>, Option<CycleStamp>);
 
-/// pane を取得した後の条件（context → 状態の門 → 退避物 → lock → cycle-stamp）。
+/// pane を取得した後の条件（context → 状態の門 → 退避物 → lock → cycle-stamp／合図の brake）。
 fn judge(request: &Request, place: &super::StateDir, dir: &Path, seen: &Seen) -> Verdict {
     // 他の cycle が走っている席（lock が live）には退避の pointer も送らない——作り直しの最中に
     // 行を queue しても、届く先は消えるか作り直された席である（排他は cycle 側と同じ 1 本の lock）。
@@ -356,10 +353,23 @@ fn judge(request: &Request, place: &super::StateDir, dir: &Path, seen: &Seen) ->
     if cycle::lock_is_live(dir, seen.ttl_s) {
         return (TickDecision::Noop(NoopReason::CycleLive), None, None);
     }
+    if pointer_recent(dir, seen.stale_s) {
+        return (TickDecision::Noop(NoopReason::PointerRecent), None, None);
+    }
     let payload = request
         .pointer
         .map_or_else(|| default_pointer(request.target), str::to_owned);
     (inject_line(request, place, dir, InjectKind::Pointer, &payload), None, None)
+}
+
+/// 打刻の合図の brake（`s2-07l.109`・planner 裁定 2026-09-12 案 A）: tick 自身の打刻（tick-stamp）の
+/// mtime が閾値**未満**なら、この周は合図を送らない。不在・読めない周は送る側（合図は可逆な
+/// 1 行で、読めないことを理由に止めると合図が永久に止まる）。mtime が未来の周は送らない側
+/// （経過を負に読まない）。境界は未満＝経過が閾値ちょうどの周は送る。
+fn pointer_recent(seat_dir: &Path, stale_s: u64) -> bool {
+    std::fs::metadata(stamp_path(seat_dir))
+        .and_then(|meta| meta.modified())
+        .is_ok_and(|at| at.elapsed().map_or(true, |age| age.as_secs() < stale_s))
 }
 
 /// 状態の門（ADR-0015 §2.3・fail-closed）: **Idle だけが通る**。Busy・打刻なし・読めない・Busy が
@@ -414,7 +424,7 @@ fn measure_context(pane: &str) -> Context {
 /// 読むのは tick のここだけで、`seat cycle` を手で回す口は back-off を見ない（人の判断）。`/clear` は不可逆の口（N1）で、復元されない退避物（`/rebrief` が走らない・
 /// consume しない）へ周期ごとに繰り返してはならない。stamp を読めない周は「無い」に読み替えず
 /// 評価しない（`cycle-stamp-unreadable`・読めないことを理由に不可逆の側へ倒さない）。閾値は
-/// 鮮度と共用し、新しい rules 行を足さない（C5）。境界は**未満**（経過が閾値ちょうどの周は評価
+/// state-stale と共用し（`seat.tick_stale_s`）、新しい rules 行を足さない（C5）。境界は**未満**（経過が閾値ちょうどの周は評価
 /// する）。
 fn parked(request: &Request, place: &super::StateDir, dir: &Path, seen: &Seen) -> Verdict {
     let noop = TickDecision::Noop(NoopReason::WmUnconsumed);
@@ -442,23 +452,9 @@ fn parked(request: &Request, place: &super::StateDir, dir: &Path, seen: &Seen) -
     (noop, Some(cycle::summary(&result)), Some(stamp))
 }
 
-/// 鮮度: `now − max(heartbeat, tick-stamp)` が閾値**以下**か。**両方不在なら stale**。
-///
-/// 自分の打刻も見るのは、注入した直後の周が「席がまだ打刻していない」を理由に撃ち続ける
-/// storm を塞ぐためである（裁定 (d)）。mtime が未来の周は fresh 側＝撃たない側へ倒す。
-fn is_fresh(seat_dir: &Path, stale_s: u64) -> bool {
-    [heartbeat::path(seat_dir), stamp_path(seat_dir)]
-        .iter()
-        .filter_map(|marker| {
-            std::fs::metadata(marker)
-                .and_then(|meta| meta.modified())
-                .ok()
-        })
-        .any(|at| at.elapsed().map_or(true, |age| age.as_secs() <= stale_s))
-}
-
-/// 1 行を注入し、成立したら自打刻する（退避の pointer も打刻の pointer も同じ経路＝次の周は
-/// fresh で撃たない・storm 止め）。busy な席へは queue の形で届く（`.90`）。
+/// 1 行を注入し、成立したら自打刻する（退避の合図も打刻の合図も同じ経路。自打刻は打刻の合図の
+/// brake〔[`pointer_recent`]〕にだけ効き、退避の合図と cycle は次の周も評価する）。busy な席へは
+/// queue の形で届く（`.90`）。
 fn inject_line(
     request: &Request,
     place: &super::StateDir,
