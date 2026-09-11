@@ -514,8 +514,9 @@ fn quoted_value(after_colon: &str) -> Option<&str> {
 /// colon の後ろの `{ ... }` の**直下**だけ（入れ子の object に入ったら打ち切る）。
 ///
 /// 境界は**文字列の外**の最初の `{` / `}` である（`s2-07l.126`）。文字列の中の brace（`"note":"win {5h}"`）で
-/// 切ると status の手前で終わって上限 record を見逃す（fail-open の向き）。走査は [`find_key`] と同じ
-/// [`Scan`] に乗せ、同型の走査を 2 本持たない。
+/// 切ると status の手前で終わって上限 record を見逃す（fail-open の向き）。文字列と escape の読み飛ばしは
+/// [`find_key`] と同じ [`Scan`] に乗せ、走査**状態**を 2 つ持たない（loop の骨格は 2 本在り、文字列の外だけを
+/// 返す原始を `Scan` に寄せる形は後続・lens-126 MED-1）。この呼び手は深さを使わない（終端は最初の brace）。
 fn immediate_object(after_colon: &str) -> Option<&str> {
     let opened = after_colon.trim_start().strip_prefix('{')?;
     let mut scan = Scan::default();
