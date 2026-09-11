@@ -56,7 +56,7 @@ pub fn dispatch(args: &[String]) -> Outcome {
         Some("approve") => by_run(args, |id| approve_run(args, id, policy)),
         Some("answer") => by_run(args, |id| answer_run(args, id, policy)),
         Some("gate") => by_run(args, |id| gate_run(args, id, &manifest, policy)),
-        Some("land") => by_run(args, |id| land_run(args, id, policy)),
+        Some("land") => by_run(args, |id| land_run(args, id, &manifest, policy)),
         Some("retire") => by_run(args, |id| retire_run(args, id, policy)),
         Some("run") => run_all(args, &manifest, policy),
         Some("show") => show(args),
@@ -498,12 +498,22 @@ fn gate_run(args: &[String], id: &str, manifest: &Manifest, policy: LockPolicy) 
 /// `pipe land`。前提 stage = Gated（PASS の検査は land 側が持つ）。
 ///
 /// `--pr-cmd` は自 repo への PR の口ゆえ**承認 event を前提としない**（A4.3・ADR-0008）。
-fn land_run(args: &[String], id: &str, policy: LockPolicy) -> Outcome {
+/// `--lens` と規則の線は main が動いた便の追随（rebase → gate の撃ち直し・設計 §5.4）で
+/// gate へ渡すために読む（land 自身は数値を見ない）。
+fn land_run(args: &[String], id: &str, manifest: &Manifest, policy: LockPolicy) -> Outcome {
     let resolved = match resolve(args, id, &[Stage::Gated], false) {
         Ok(found) => found,
         Err(outcome) => return outcome,
     };
+    let limits = match limits_of(manifest) {
+        Ok(found) => found,
+        Err(reason) => return broken(reason),
+    };
     let pr_cmd = match flag(args, "--pr-cmd") {
+        Ok(found) => found,
+        Err(reason) => return refused(reason),
+    };
+    let lens = match flag(args, "--lens") {
         Ok(found) => found,
         Err(reason) => return refused(reason),
     };
@@ -514,6 +524,8 @@ fn land_run(args: &[String], id: &str, policy: LockPolicy) -> Outcome {
         state_dir: &resolved.state_dir,
         contract: &resolved.contract,
         pr_cmd,
+        lens,
+        limits,
         policy,
     })
 }
@@ -560,7 +572,7 @@ fn run_all(args: &[String], manifest: &Manifest, policy: LockPolicy) -> Outcome 
     if let Some(stopped) = chain(&mut lines, gated) {
         return stopped;
     }
-    let landed = land_run(args, &id, policy);
+    let landed = land_run(args, &id, manifest, policy);
     if let Some(stopped) = chain(&mut lines, landed) {
         return stopped;
     }
@@ -645,7 +657,7 @@ fn resume(args: &[String], manifest: &Manifest, policy: LockPolicy) -> Outcome {
                 err: Vec::new(),
                 rc: RC_INCONCLUSIVE,
             },
-            _ => land_run(args, &id, policy),
+            _ => land_run(args, &id, manifest, policy),
         },
         Ok(Stage::Intake) => match need(args, "--runner") {
             Err(reason) => refused(reason),

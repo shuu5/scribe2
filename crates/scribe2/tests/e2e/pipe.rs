@@ -14,7 +14,7 @@ use vessel::fleet::{Event, EventKind, Stage};
 use vessel::hook::inject_path;
 use vessel::order::is_declaration_order;
 use vessel::pipe::approve::RC_BLOCKED;
-use vessel::pipe::gate::{CHECKS, VERDICTS};
+use vessel::pipe::gate::{CHECKS, RC_INCONCLUSIVE, VERDICTS};
 use vessel::pipe::land;
 use vessel::rules::manifest::Manifest;
 use vessel::rules::RuleValue;
@@ -1824,24 +1824,311 @@ fn pipe_land_squashes_one_commit_with_identical_tree() {
 }
 
 #[test]
-fn pipe_land_refuses_stale_base() {
+fn pipe_land_rebase_without_lens_stops_inconclusive_and_keeps_main() {
     let (repo, state) = repo_with_state();
     let path = write_contract(&repo, &[], &[]);
     let marker = state.join("lens-ran");
+    let base = git(&repo, &["rev-parse", "refs/heads/main"]);
     let id = gated_pass(&repo, &state, &path, &marker);
-    // gate の後に main が別便で進む。CAS の old が動いた＝land してはならない。
+    // gate の後に main が別便で進む。CAS の old が動いた＝そのままでは land できない。
     fs::write(repo.join("other.txt"), "other\n").expect("別便の変更を書ける");
     git(&repo, &["add", "-A"]);
     git(&repo, &["commit", "-q", "-m", "other"]);
     let moved = git(&repo, &["rev-parse", "refs/heads/main"]);
+    // `--lens` 無しの land: 追随（rebase）は済むが撃ち直しの gate は lens を得られず
+    // INCONCLUSIVE＝**land しない**（測れなかったを通ったに化けさせない・FR14 で測り直せる）。
     let out = land_once(&repo, &state, &id);
-    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "stale base は rc 1");
-    assert!(stderr_of(&out).contains("stale base"), "理由: {}", stderr_of(&out));
+    assert_eq!(out.status.code(), Some(i32::from(RC_INCONCLUSIVE)), "lens 無しの撃ち直しは rc 3: {}", stderr_of(&out));
+    let stdout = stdout_of(&out);
+    assert!(stdout.contains(&format!("rebase={base}..{moved}")), "追随は済む: {stdout}");
+    assert!(stdout.contains("verdict=INCONCLUSIVE"), "撃ち直しの判定行: {stdout}");
+    assert!(!stdout.contains("landed="), "land していない: {stdout}");
     assert_eq!(
         git(&repo, &["rev-parse", "refs/heads/main"]),
         moved,
         "断った周は main を動かさない"
     );
+    assert!(show_line(&repo, &state, &id).contains("stage=Gated"), "段は Gated（測り直せる側）");
+    clean(&[&repo, &state]);
+}
+
+/// worktree が clean でない周は **rebase を撃たずに rc 1 で何も書かない**（設計 §5.4 (ii)）。
+/// 汚れた木で rebase すると撃ち直しの precheck が `Failed` で終端し、回復可能だった便が閉じる。
+#[test]
+fn pipe_land_rebase_refuses_dirty_worktree_without_rebase() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let marker = state.join("lens-ran");
+    let id = gated_pass(&repo, &state, &path, &marker);
+    let worktree = worktree_of(&repo, &id);
+    let head_before = git(&worktree, &["rev-parse", "HEAD"]);
+    fs::write(repo.join("other.txt"), "other\n").expect("別便の変更を書ける");
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "other"]);
+    let moved = git(&repo, &["rev-parse", "refs/heads/main"]);
+    // gate の後に木が汚れた（未 commit の仕事が在る）。
+    fs::write(worktree.join("dirty.txt"), "x\n").expect("汚せる");
+    let before = event_count(&state);
+    fs::remove_file(&marker).expect("lens の marker を消せる");
+    let lens = fake_lens(&marker, &lens_verdict("PASS"));
+    let out = run_pipe(&[
+        "land", "--run", &id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(), "--lens", &lens,
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "汚れた木は rc 1: {}", stderr_of(&out));
+    assert!(stderr_of(&out).contains("clean でない"), "理由: {}", stderr_of(&out));
+    assert_eq!(event_count(&state), before, "何も書かない");
+    assert!(!marker.exists(), "gate を撃ち直さない（lens は走らない）");
+    assert_eq!(git(&worktree, &["rev-parse", "HEAD"]), head_before, "rebase を撃たない（HEAD 不変）");
+    assert!(worktree.join("dirty.txt").exists(), "未 commit の仕事は残る");
+    assert_eq!(git(&repo, &["rev-parse", "refs/heads/main"]), moved, "main は動かない");
+    assert!(show_line(&repo, &state, &id).contains("stage=Gated"), "段は Gated のまま（回復可能）");
+    clean(&[&repo, &state]);
+}
+
+/// 撃ち直しの間に main がさらに動いた周は **rc 1 `stale base` で squash しない**（1 回の land が
+/// rebase するのは 1 度だけ）。次の land が同じ経路で追随する。
+#[test]
+fn pipe_land_rebase_refuses_when_main_moves_during_regate() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let marker = state.join("lens-ran");
+    let id = gated_pass(&repo, &state, &path, &marker);
+    fs::write(repo.join("other.txt"), "other\n").expect("別便の変更を書ける");
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "other"]);
+    let moved = git(&repo, &["rev-parse", "refs/heads/main"]);
+    // 撃ち直しの lens が走っている間に **さらに別便が main を進める**（lens の中で commit する）。
+    let racing = format!(
+        "cat >/dev/null; git -C '{}' commit -q --allow-empty -m racing; echo '{}'",
+        repo.display(),
+        lens_verdict("PASS")
+    );
+    let out = run_pipe(&[
+        "land", "--run", &id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(), "--lens", &racing,
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "撃ち直し中に動いた main は rc 1: {}", stderr_of(&out));
+    assert!(stderr_of(&out).contains("stale base"), "理由: {}", stderr_of(&out));
+    // **追随と撃ち直しは実際に起きた**（event に残り lens を 1 回消費した）ので、判定行も残す。
+    let stdout = stdout_of(&out);
+    assert!(stdout.contains("rebase=") && stdout.contains(&format!("..{moved}")), "追随の行が残る: {stdout}");
+    assert!(stdout.contains("verdict=PASS"), "撃ち直しの判定行が残る: {stdout}");
+    let raced = git(&repo, &["rev-parse", "refs/heads/main"]);
+    assert_ne!(raced, moved, "lens の中で main が進んでいる");
+    assert_eq!(git(&repo, &["rev-parse", &format!("{raced}^")]), moved, "main に載ったのは racing の 1 commit だけ（squash していない）");
+    assert!(show_line(&repo, &state, &id).contains("stage=Gated"), "段は Gated（撃ち直しは PASS）");
+    // 次の land が同じ経路で追随して載る。
+    let lens = fake_lens(&marker, &lens_verdict("PASS"));
+    let again = run_pipe(&[
+        "land", "--run", &id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(), "--lens", &lens,
+    ]);
+    assert_eq!(again.status.code(), Some(i32::from(RC_OK)), "次の land は追随して載る: {}", stderr_of(&again));
+    assert!(stdout_of(&again).contains(&format!("rebase={moved}..{raced}")), "2 度目の追随: {}", stdout_of(&again));
+    let new = git(&repo, &["rev-parse", "refs/heads/main"]);
+    assert_eq!(git(&repo, &["rev-parse", &format!("{new}^")]), raced, "racing の上に載る");
+    clean(&[&repo, &state]);
+}
+
+/// 同じ base から 2 便を PASS の gate まで通す（1 本目 = `src/lib.rs`・2 本目 = `src/b.rs`＝
+/// write-set は交わらない）。追随の歯の材料。
+fn two_gated_runs(repo: &Path, state: &Path, marker: &Path) -> (String, String) {
+    let contract_a = write_contract(repo, &[], &[]);
+    let id_a = gated_pass(repo, state, &contract_a, marker);
+    let contract_b = write_contract(repo, &["write-set"], &[r#"write-set = ["src/b.rs"]"#]);
+    let id_b = intake_bead(repo, state, &contract_b, "s2-3ax");
+    let spawned = run_pipe(&[
+        "spawn", "--run", &id_b, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(),
+        "--runner", "echo b > src/b.rs && git add -A && git commit -q -m runner",
+    ]);
+    assert_eq!(spawned.status.code(), Some(i32::from(RC_OK)), "2 本目の spawn: {}", stderr_of(&spawned));
+    let lens = fake_lens(marker, &lens_verdict("PASS"));
+    let gated = gate_once(repo, state, &id_b, Some(&lens));
+    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "2 本目の gate: {}", stderr_of(&gated));
+    (id_a, id_b)
+}
+
+/// 追随した便の event 列が **Implemented(rebase:) → Gated(PASS) → Landed** の順で replay できるか。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn assert_follow_events(state: &Path, base: &str, moved: &str, new: &str) {
+    let log = fs::read_to_string(state.join("fleet").join("events.jsonl")).expect("event log");
+    let rebased = log.find(&format!("rebase:{base}..{moved}")).expect("追随の event が在る");
+    let regated = log.rfind("verdict:PASS").expect("撃ち直しの判定 event が在る");
+    let landed = log.rfind(&format!("sha:{new}")).expect("Landed の event が在る");
+    assert!(rebased < regated && regated < landed, "順序: rebase → 撃ち直し → Landed\n{log}");
+    let follow = log
+        .lines()
+        .find(|line| line.contains(&format!("rebase:{base}..{moved}")))
+        .expect("追随の event の行が在る");
+    assert!(follow.contains("\"stage\":\"Implemented\""), "追随の event は段を Implemented へ戻す: {follow}");
+}
+
+/// main が動いた便の追随（設計 §5.4・`s2-07l.119`）: **2 便を同じ base から起こし、1 本目を
+/// land して main を動かした後、2 本目の land が rebase → gate の撃ち直し → 新 base で CAS**。
+#[test]
+fn pipe_land_rebase_follows_landed_sibling_and_lands() {
+    let (repo, state) = repo_with_state();
+    let base = git(&repo, &["rev-parse", "refs/heads/main"]);
+    let marker = state.join("lens-ran");
+    let (id_a, id_b) = two_gated_runs(&repo, &state, &marker);
+    // 1 本目が land して main が動く（2 本目の base は置き去り）。
+    let first = land_once(&repo, &state, &id_a);
+    assert_eq!(first.status.code(), Some(i32::from(RC_OK)), "1 本目の land: {}", stderr_of(&first));
+    let moved = git(&repo, &["rev-parse", "refs/heads/main"]);
+    assert_ne!(moved, base, "main が動いている");
+    fs::remove_file(&marker).expect("撃ち直しの前に lens の marker を消せる");
+
+    let lens = fake_lens(&marker, &lens_verdict("PASS"));
+    let out = run_pipe(&[
+        "land", "--run", &id_b, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(), "--lens", &lens,
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "追随した land は rc 0: {}", stderr_of(&out));
+    let new = git(&repo, &["rev-parse", "refs/heads/main"]);
+    assert_ne!(new, moved, "2 本目も land した");
+    assert_eq!(git(&repo, &["rev-parse", &format!("{new}^")]), moved, "squash は動いた main の上に載る");
+    assert_eq!(git(&repo, &["rev-list", "--count", &format!("{moved}..{new}")]), "1", "squash は 1 commit");
+    assert_eq!(git(&repo, &["show", &format!("{new}:src/b.rs")]), "b", "2 本目の仕事が main に載る");
+    assert!(git(&repo, &["show", &format!("{new}:src/lib.rs")]).contains('x'), "1 本目の仕事も残る");
+    assert!(marker.exists(), "gate を撃ち直した（lens が再び走った）");
+    let stdout = stdout_of(&out);
+    assert!(stdout.contains(&format!("run={id_b} rebase={base}..{moved}")), "rebase= token: {stdout}");
+    assert!(stdout.contains("verdict=PASS"), "撃ち直しの判定行: {stdout}");
+    assert!(stdout.contains(&format!("landed={new}")), "landed=: {stdout}");
+    assert_follow_events(&state, &base, &moved, &new);
+    assert!(show_line(&repo, &state, &id_b).contains("stage=Landed"), "段は Landed");
+    clean(&[&repo, &state]);
+}
+
+/// 追随の rebase が衝突した周は木を戻して `Failed detail=rebase-conflict`。**main は動かない**。
+#[test]
+fn pipe_land_rebase_conflict_fails_closed_and_keeps_main() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let marker = state.join("lens-ran");
+    let id = gated_pass(&repo, &state, &path, &marker);
+    let worktree = worktree_of(&repo, &id);
+    let head_before = git(&worktree, &["rev-parse", "HEAD"]);
+    let branch_before = git(&worktree, &["rev-parse", "--abbrev-ref", "HEAD"]);
+    // 別便が **同じ file の同じ末尾** へ別の行を足す（runner は `echo x >> src/lib.rs`）。
+    let lib = repo.join("src").join("lib.rs");
+    let mut text = fs::read_to_string(&lib).expect("seed を読める");
+    text.push_str("y\n");
+    fs::write(&lib, text).expect("別便の変更を書ける");
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "other"]);
+    let moved = git(&repo, &["rev-parse", "refs/heads/main"]);
+    let lens = fake_lens(&marker, &lens_verdict("PASS"));
+    let out = run_pipe(&[
+        "land", "--run", &id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(), "--lens", &lens,
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "衝突は rc 1");
+    assert!(stderr_of(&out).contains("rebase が衝突"), "理由: {}", stderr_of(&out));
+    assert_eq!(git(&repo, &["rev-parse", "refs/heads/main"]), moved, "main は 1 byte も動かない");
+    assert_eq!(git(&worktree, &["rev-parse", "HEAD"]), head_before, "木は衝突前へ戻る");
+    assert_eq!(git(&worktree, &["rev-parse", "--abbrev-ref", "HEAD"]), branch_before, "branch に居る（rebase 途中で detach していない）");
+    assert!(git(&worktree, &["status", "--porcelain"]).is_empty(), "衝突の残骸が無い");
+    let log = fs::read_to_string(state.join("fleet").join("events.jsonl")).expect("event log");
+    assert!(log.contains("rebase-conflict"), "終端の理由が event に残る\n{log}");
+    assert!(!log.contains("rebase:"), "追随の event は書かない（追随できていない）\n{log}");
+    assert!(show_line(&repo, &state, &id).contains("stage=Failed"), "段は Failed");
+    clean(&[&repo, &state]);
+}
+
+/// 追随した後の gate の撃ち直しが FAIL なら **land しない**（`Gated` のまま・main は動いたまま）。
+#[test]
+fn pipe_land_rebase_regate_fail_keeps_gated_and_main() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let marker = state.join("lens-ran");
+    let id = gated_pass(&repo, &state, &path, &marker);
+    let base = git(&repo, &["rev-parse", "refs/heads/main"]);
+    fs::write(repo.join("other.txt"), "other\n").expect("別便の変更を書ける");
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "other"]);
+    let moved = git(&repo, &["rev-parse", "refs/heads/main"]);
+    let lens = fake_lens(&marker, &lens_verdict("FAIL"));
+    let out = run_pipe(&[
+        "land", "--run", &id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(), "--lens", &lens,
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "撃ち直し FAIL は gate の rc 1: {}", stderr_of(&out));
+    let stdout = stdout_of(&out);
+    assert!(stdout.contains(&format!("rebase={base}..{moved}")), "追随は済んでいる: {stdout}");
+    assert!(stdout.contains("verdict=FAIL"), "撃ち直しの判定行: {stdout}");
+    assert!(!stdout.contains("landed="), "land していない: {stdout}");
+    assert_eq!(git(&repo, &["rev-parse", "refs/heads/main"]), moved, "main は撃ち直しの前のまま");
+    assert_eq!(value_of(&verdict_pairs(&state, &id), "verdict"), "FAIL", "verdict.json は撃ち直しの値");
+    assert!(show_line(&repo, &state, &id).contains("stage=Gated"), "段は Gated のまま");
+    let log = fs::read_to_string(state.join("fleet").join("events.jsonl")).expect("event log");
+    assert!(!log.contains("\"Landed\""), "Landed の event は無い\n{log}");
+    // 同じ便をもう一度 land しても PASS でないので断る（撃ち直しの FAIL は終端）。
+    let again = land_once(&repo, &state, &id);
+    assert_eq!(again.status.code(), Some(i32::from(RC_REFUSED)), "FAIL のまま land はできない");
+    assert!(stderr_of(&again).contains("PASS でない"), "理由: {}", stderr_of(&again));
+    clean(&[&repo, &state]);
+}
+
+/// `resume` の Gated(PASS) → land も同じ経路で追随する（別口を作らない）。
+#[test]
+fn pipe_land_rebase_resume_from_gated_follows_main() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let marker = state.join("lens-ran");
+    let id = gated_pass(&repo, &state, &path, &marker);
+    let base = git(&repo, &["rev-parse", "refs/heads/main"]);
+    fs::write(repo.join("other.txt"), "other\n").expect("別便の変更を書ける");
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "other"]);
+    let moved = git(&repo, &["rev-parse", "refs/heads/main"]);
+    let lens = fake_lens(&marker, &lens_verdict("PASS"));
+    let out = run_pipe(&[
+        "resume", "--run", &id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(), "--lens", &lens,
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "resume の追随は rc 0: {}", stderr_of(&out));
+    let new = git(&repo, &["rev-parse", "refs/heads/main"]);
+    assert_eq!(git(&repo, &["rev-parse", &format!("{new}^")]), moved, "動いた main の上に載る");
+    let stdout = stdout_of(&out);
+    assert!(stdout.contains(&format!("rebase={base}..{moved}")), "rebase= token: {stdout}");
+    assert!(stdout.contains(&format!("landed={new}")), "landed=: {stdout}");
+    assert!(show_line(&repo, &state, &id).contains("stage=Landed"), "段は Landed");
+    clean(&[&repo, &state]);
+}
+
+/// base が main の祖先でない周（main が巻き戻った / 分岐した）は追随の形が無い＝**rc 1 で
+/// 何も書かない**（rebase も撃たない）。
+#[test]
+fn pipe_land_rebase_refuses_when_base_is_not_ancestor_of_main() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let marker = state.join("lens-ran");
+    let id = gated_pass(&repo, &state, &path, &marker);
+    let worktree = worktree_of(&repo, &id);
+    let head_before = git(&worktree, &["rev-parse", "HEAD"]);
+    // 親を持たない commit を main に据える（便の base はその祖先でない）。
+    let tree = git(&repo, &["rev-parse", "refs/heads/main^{tree}"]);
+    let root = git(&repo, &["commit-tree", &tree, "-m", "diverged"]);
+    git(&repo, &["update-ref", "refs/heads/main", &root]);
+    let before = event_count(&state);
+    let lens = fake_lens(&marker, &lens_verdict("PASS"));
+    let out = run_pipe(&[
+        "land", "--run", &id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(), "--lens", &lens,
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "祖先でない base は rc 1");
+    assert!(stderr_of(&out).contains("stale base"), "理由: {}", stderr_of(&out));
+    assert!(stderr_of(&out).contains("祖先でない"), "理由の弁別: {}", stderr_of(&out));
+    assert_eq!(event_count(&state), before, "何も書かない");
+    assert_eq!(git(&repo, &["rev-parse", "refs/heads/main"]), root, "main は動かない");
+    assert_eq!(git(&worktree, &["rev-parse", "HEAD"]), head_before, "worktree も動かない（rebase を撃たない）");
+    assert!(show_line(&repo, &state, &id).contains("stage=Gated"), "段は Gated のまま");
     clean(&[&repo, &state]);
 }
 

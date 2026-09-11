@@ -57,8 +57,8 @@
 | `Blocked` | `ApprovalRequested` + `RunStage` | `ApprovalReceived`（`actor=human` ∧ 逐語が非空）が在れば resume → spawn（FR16） |
 | `Spawned` | `RunStage` + `SeatSpawned` | runner 終了 → `SeatStopped` + Implemented / Failed（FR6）。包みが rc `RC_QUESTION`（76）で終わり stdout の最終行が質問 record → `SeatStopped` + `QuestionRaised(detail=逐語)` + `RunStage(Questioned)`（FR31・[pipeline-question.md §3](./pipeline-question.md)） |
 | `Questioned` | `QuestionRaised` + `RunStage`（`detail=about:<key>`・任意） | **最新の質問より後**の `QuestionAnswered`（逐語が非空）が在れば resume → spawn（**同じ run・同じ worktree・記録済みの base**・FR32）。無ければ `resume` は rc 3 で何も書かない（`Blocked` と同型）。rc 76 で record が無い周・record と commit が同時の周は `Failed` |
-| `Implemented` | `RunStage` | gate |
-| `Gated` | `RunStage detail=verdict:<V>` | PASS → land ／ **INCONCLUSIVE → 道具を揃えて gate を撃ち直す**（`resume` は `next=gate` で rc 3）／ FAIL は終端（FR10 / FR14） |
+| `Implemented` | `RunStage`（spawn の完了・または land の追随 `detail=rebase:<old>..<new>` で `Gated` から戻る周・§5.4） | gate |
+| `Gated` | `RunStage detail=verdict:<V>` | PASS → land（**base が main の祖先のまま動いていれば** land の前段で worktree の branch を main へ rebase → `RunStage stage=Implemented detail=rebase:<old>..<new>` で段を戻す → gate を同じ関数で撃ち直す → PASS なら新 base で CAS・§5.4）／ **INCONCLUSIVE → 道具を揃えて gate を撃ち直す**（`resume` は `next=gate` で rc 3）／ FAIL は終端（FR10 / FR14） |
 | `Landed` | `RunDone` | 終端。`--pr-cmd` 形は merge の後に `pipe retire --run <id>` で worktree を畳む（`RunStage detail=retired`・段は `Landed` のまま） |
 | `Stopped` | `RunStopped` | 終端（stop --all） |
 | `Failed` | `RunStage detail=<理由>` | 終端（resume は rc 1） |
@@ -92,7 +92,7 @@
 - 結果は `<state_dir>/pipe/<run>/verdict.json`（`{"schema":1,"run":…,"verdict":…,"evidence":…,"verify_red":<n>,"diff_bytes":<n>,"ts":…}`）と `RunStage stage=Gated detail=verdict:<V>`。stdout `run=<id> verdict=<V>`・rc は PASS=0 / FAIL=1 / INCONCLUSIVE=3。
 
 ### 5.4 land（(b)・FR10 / FR11 / FR12・N1）
-`pipe land --run <id>`: 前提 = Gated ∧ verdict.json が PASS（それ以外 = rc 1・**何もしない**）∧ `git rev-parse refs/heads/main` == 記録した `base`（違えば rc 1 `stale base`）。
+`pipe land --run <id> [--lens <cmd>]`: 前提 = Gated ∧ verdict.json が PASS（それ以外 = rc 1・**何もしない**）。`git rev-parse refs/heads/main` が記録した `base` と違う周は **追随する**（`s2-07l.119`・FR30・並行に流した便の 2 本目が先着の後に置き去りになる形）: (i) `base` が main の祖先でなければ rc 1 `stale base`（main が巻き戻った / 分岐した＝追随の形が無い・何も書かない）(ii) worktree が clean でなければ rc 1（何も書かない・汚れた木では rebase を走らせない）(iii) worktree の branch を `git rebase <main>` する——効くのは **worktree の branch だけ**で main は 1 byte も動かさず、force 系は使わない（N1）。衝突は `git rebase --abort` で木を戻し `RunStage stage=Failed detail=rebase-conflict` + rc 1（終端・fail-closed）(iv) `RunStage stage=Implemented detail=rebase:<old>..<new>` を追記する（段が `Gated` から `Implemented` へ戻る 1 件＝撃ち直す便の記帳。`base` の読み手〔`base_of_run` の 1 本〕はこの行の新しい側を読む）→ stdout に `run=<id> rebase=<old>..<new>` (v) §5.3 の gate を**同じ関数で**撃ち直す（機械検証 + lens・diff が変わりうる）。PASS でなければ gate の判定行と rc で止まる（FAIL は `Gated` のまま land しない・INCONCLUSIVE は測り直せる側・lens は `--lens` で渡す）(vi) 撃ち直しの間に main がさらに動いた周は rc 1 `stale base`（次の land が同じ経路で追随する＝1 回の land が rebase するのは 1 度だけで、event 列が追随の回数をそのまま語る）。追随した周も以下の手順は同じ（CAS の old は新しい base）。
 1. `tree = git rev-parse <worktree HEAD>^{tree}` → `new = git commit-tree <tree> -p <old> -m "<bead>: <goal>"` → `git update-ref refs/heads/main <new> <old>`（CAS）→ `git rev-parse <new>^{tree} == tree`（lossless の実測）。
 2. **main 実測**: `git worktree add --detach <tmp> <new>` して §5.3 の機械検証を**同じ順序・同じ関数**で再実行する（① write-set 照合 → ② run の写し `vessel.toml` の `common-verify`〔`{base}` 置換〕→ ③ 契約の `verify`）——2 本の実装に割ると gate が通した行と main で撃った行の意味が静かにずれる。**材料が揃わない周**（便の base を読めない / 写しを読めない）は赤ではなく `main-unmeasured` である。1 本でも rc≠0 → `RunStage stage=Failed detail=main-red` + rc 1（auto revert は MVP 外・main は進んだまま loud）。**実測そのものができなかった周**（tmp worktree を切れない等で verify を 1 行も撃てていない）は赤と別に `RunStage stage=Failed detail=main-unmeasured` + rc 2 で残す（「測れなかった」を「赤かった」に化けさせない＝gate の極性と同じ）。**段①（write-set 照合）を読めなかった周**（Step の cmd=`write-set` ∧ rc -1・gate と同じ 1 本の判定）も rc≠0 の集計より先に `main-unmeasured` へ倒す（gate §6 の INCONCLUSIVE と同じ極性・rc -1 だけでは見ない＝signal で死んだ verify 行は走った赤・`s2-07l.103`）。
 3. 全 GREEN → **verdict export（面 5）**: `<state_dir>/fleet/verdicts.jsonl` へ `{"schema":1,"run":…,"bead":…,"sha":"<new>","verdict":"PASS","evidence":"<verdict.json の path>","ts":…}` を append（fleet と同じ lock）→ `RunDone stage=Landed`。
@@ -114,7 +114,7 @@
 
 ### 5.7 show / resume / run
 - `pipe show --run <id>` → `run=<id> bead=<b> stage=<s> approved=<bool> worktree=<path>`（無ければ rc 1）。
-- `pipe resume --run <id> [--runner] [--lens]`: 現在 stage から**続きの段だけ**を通す（Intake → spawn / Blocked+approved → spawn / Implemented → gate / Gated(PASS) → land）。**Gated(INCONCLUSIVE) は land を試さず `run=<id> next=gate` を出して rc 3**——測れていない便に land の「PASS でない」を返すのは吸収状態の言い換えでしかなく、かといって**自動で測り直さない**（道具の不足は人が直す・`--lens` を渡してあっても撃たない）。Stopped / Failed は rc 1。
+- `pipe resume --run <id> [--runner] [--lens]`: 現在 stage から**続きの段だけ**を通す（Intake → spawn / Blocked+approved → spawn / Implemented → gate / Gated(PASS) → land〔base が動いていれば §5.4 の追随を同じ経路で通す＝`--lens` を渡す〕）。**Gated(INCONCLUSIVE) は land を試さず `run=<id> next=gate` を出して rc 3**——測れていない便に land の「PASS でない」を返すのは吸収状態の言い換えでしかなく、かといって**自動で測り直さない**（道具の不足は人が直す・`--lens` を渡してあっても撃たない）。Stopped / Failed は rc 1。
 - `pipe run --contract <f> --bead <id> --repo <dir> --runner <cmd> [--lens <cmd>]` = intake → spawn → gate → land を 1 process で連続（各段は fleet を読み書きし、途中で落ちても `resume` が続きを引く。先頭行は intake と同じ 1 行＝`--rules` の周は `ceiling-overridden=` を後置する）。spawn が質問で止まった周は判定行に `question=<id>` が載って rc 3 で止まる（席の中継の入力・[pipeline-question.md §6](./pipeline-question.md)）。
 
 ### 5.8 report（(e)・FR22）
@@ -178,6 +178,7 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
 - bd を直接 write（台帳は bead id を持つだけ・SRS scope out）。
 - worktree を repo 外に置く（`.worktrees/` の運用と揃える）。
 - force 系 git・auto revert（N1・CON5。main red は loud に止める）。後始末を `worktree remove` + `branch -d` で行う（削除は N1・`branch -d` は squash では通らない・lens 指摘で却下）。
+- main が動いた便の追随を `pipe resume --rebase` の別口にする（席が明示して撃つ）／便を直列化する lock（並列を諦める）——`s2-07l.119` で却下（FR30 の向きは「main が動いた便は測り直す」を構造で持つこと。別口は撃ち忘れで Gated PASS のまま永久に land できない便を残し、lock は並列そのものを捨てる）。
 - stop を「tmux 窓を kill」で実装（MVP に tmux は無い・pid で止める）。
 - 承認を land の手前に置く（merge は可逆・A4.3。不可逆の実行は runner の中で起きるので spawn の手前）。
 - gate に Rust 固有の flip check を内蔵（toy repo は Rust とは限らない）。
