@@ -30,7 +30,7 @@
 
 ## 4. tick / cycle の判定（typed 状態が一次・pane は判定入力にしない）
 
-- tick の順序（[seat-autonomy.md §3](./seat-autonomy.md) の (c) を差し替える）: 自席の未 consumed 退避物の走査（`s2-07l.105`: 退避物が在る周は鮮度を飛ばす）→ 鮮度 → **状態**（state.jsonl の最終行・typed）→ context → 未 consumed WM → cycle lock。pane は **inject の送達確認**（prompt 行が在るか・目印が消費されたか）にだけ使い、idle の判定には使わない。
+- tick の順序（[seat-autonomy.md §3](./seat-autonomy.md) の (c) を差し替える）: 自席の未 consumed 退避物の走査 → **状態**（state.jsonl の最終行・typed）→ context → 未 consumed WM → cycle lock → 打刻の合図の brake（tick-stamp・`pointer-recent`）。heartbeat の鮮度 gate は持たない（`s2-07l.109`・`.105` の「退避物が在る周は鮮度を飛ばす」特例も不要になった）。pane は **inject の送達確認**（prompt 行が在るか・目印が消費されたか）にだけ使い、idle の判定には使わない。
 - **退避の合図は状態の門の外**（SRS FR29「idle を待たずに」> ADR-0015 §2.3・planner 裁定 2026-09-11）: context が cap 以上で自席の退避物が無く cycle が走っていない周は、打刻が Busy / missing / unreadable / stale でも退避の合図を送る（busy な席へは queue の形で届き次 turn で消費される・cap 以上の事実は打刻と独立に測れる）。状態の門が掛かるのは打刻の合図（pointer）と cycle だけ。
 - 極性（fail-closed・注入しない側へ倒す）: 最終行が `Busy` → `noop reason=busy`／file が無い → `noop reason=state-missing`（hook が載っていない席・v1 の席）／読めない → `noop reason=state-unreadable`／`Busy` の `ts` が `seat.tick_stale_s` より古い → `noop reason=state-stale`（hook が死んだ疑い・**busy とも idle とも言わない**）。`Idle` だけが注入へ進む。`Idle` は鮮度を持たない（turn が終わった席は何時間経っても idle・hook が `Stop` の直後に死んだ席は門が開いたまま＝doctor の主題）。
 - cycle も同じ 1 本の読み口（`SeatState` を返す関数 1 つ）を通す。字面判定の関数（`is_idle` と印の集合）は削除し、探索域・印の集合の記述は設計 doc から消す（列挙は機械が持たない側へ＝もう持たない）。

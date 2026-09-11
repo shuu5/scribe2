@@ -2,7 +2,7 @@
 source: crates/scribe2/tests/e2e/pipe.rs
 expression: form
 ---
-usage: scribe2 pipe <intake|spawn|approve|gate|land|retire|run|show|resume|stop|report> [--state-dir D] [--rules PATH] [flags]
+usage: scribe2 pipe <intake|spawn|approve|answer|gate|land|retire|run|show|resume|stop|report> [--state-dir D] [--rules PATH] [flags]
 pipe: --run が要る
 pipe: --all が要る
-usage: scribe2 pipe <intake|spawn|approve|gate|land|retire|run|show|resume|stop|report> [--state-dir D] [--rules PATH] [flags]
+usage: scribe2 pipe <intake|spawn|approve|answer|gate|land|retire|run|show|resume|stop|report> [--state-dir D] [--rules PATH] [flags]

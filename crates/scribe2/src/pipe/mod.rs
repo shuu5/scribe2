@@ -28,6 +28,12 @@ use std::path::{Path, PathBuf};
 /// 便ごとの写しを置く dir 名。
 pub const DIR: &str = "pipe";
 
+/// runner の包みが「質問 record で止まった」ことを名乗る rc（設計 pipeline-question.md §3）。
+///
+/// pipeline 側の契約として置く（包み = `headless` はこれを import する）。上限の rc 75
+/// （実行の中断）とは意味が違い、**包みが終了後に付ける typed な名札**である。
+pub const RC_QUESTION: u8 = 76;
+
 /// 契約 file の写しの名。
 pub const CONTRACT_FILE: &str = "contract.toml";
 
@@ -54,6 +60,15 @@ pub fn vessel_path(state_dir: &Path, id: &str) -> PathBuf {
 /// run dir の規則は [`run_dir`] ただ 1 本から導く（dir の字面を 2 本目として書かない）。
 pub fn plugin_path(state_dir: &Path, id: &str) -> PathBuf {
     run_dir(state_dir, id).join("plugin")
+}
+
+/// spawn が捕らえた runner の stdout を残す file（診断 file・機械は読まない）。
+///
+/// stdout を捕らえる（質問 record の読み面）と、包みが出す観測行（`runner: rc=… records=…
+/// observed=…`・rate-limit status の集合を育てる唯一の口）が端末から消える。捕らえた全文を
+/// 周ごとに見出し付きで append し、観測面を塞がない。
+pub fn runner_stdout_path(state_dir: &Path, id: &str) -> PathBuf {
+    run_dir(state_dir, id).join("runner.stdout.log")
 }
 
 /// gate が逐条の rc を書く file。
@@ -209,6 +224,43 @@ pub fn base_of_run(state_dir: &Path, id: &str) -> Option<String> {
                 .and_then(|detail| detail.strip_prefix("base:"))
                 .map(str::to_owned)
         })
+}
+
+/// 便の最新の質問と、それへの回答（在れば）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Question {
+    /// 質問の逐語（`QuestionRaised.detail`）。
+    pub question: String,
+    /// 契約のどの key に関する質問か（`RunStage(Questioned).detail` の `about:` の後ろ・任意）。
+    pub about: Option<String>,
+    /// 回答の逐語（最新の質問より**後**の `QuestionAnswered.detail`・非空のものだけ）。
+    pub answer: Option<String>,
+}
+
+/// 便の**最新の**質問を event log から読む。質問が 1 件も無ければ `None`。
+///
+/// replay の `Run::detail` からは読めない（最後に見た自由文しか残らない）ので、追記だけの
+/// log を遡って原本を読む（[`base_of_run`] と同じ理由）。回答は最新の質問より後の行だけを
+/// 数える＝前の質問への回答で次の質問の関門が開かない。
+pub fn question_of_run(state_dir: &Path, id: &str) -> Option<Question> {
+    let events = store::read_all(state_dir).ok()?;
+    let own: Vec<&Event> = events.iter().filter(|event| event.run == id).collect();
+    let raised = own
+        .iter()
+        .rposition(|event| event.kind == EventKind::QuestionRaised)?;
+    let after = own.get(raised..)?;
+    let question = after.first()?.detail.clone().unwrap_or_default();
+    let about = after
+        .iter()
+        .find(|event| event.kind == EventKind::RunStage && event.stage == Some(Stage::Questioned))
+        .and_then(|event| event.detail.as_deref())
+        .and_then(|detail| detail.strip_prefix("about:"))
+        .map(str::to_owned);
+    let answer = after
+        .iter()
+        .filter(|event| event.kind == EventKind::QuestionAnswered)
+        .find_map(|event| event.detail.clone().filter(|words| !words.trim().is_empty()));
+    Some(Question { question, about, answer })
 }
 
 /// git を 1 回撃って stdout を byte のまま得る。rc≠0 は `None`。
