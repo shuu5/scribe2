@@ -780,14 +780,106 @@ const BUSY_FAR_BELOW: &str = concat!(
     "  line 6\n",
     "  10% 100k/1M Opus 5 (esc to interrupt)\n",
 );
-/// `/clear` を送った直後で**まだ作り直されていない**席（echo された `/clear` が次の prompt の
-/// 上に在り、statusline 3 行で末尾 6 非空行の外へ押し出されている）。
+/// `/clear` が届いて**作り直された直後**の実席（2026-09-11・匿名化済み）: banner 3 行の下に
+/// **消費済みの echo `❯ /clear`**（行頭・col 0）が残り、その直下に空の新 prompt と statusline。
 ///
-/// 末尾 6 非空行で見る作り直し確認はこの pane を「済んだ」と読み、復元を送ってしまう。
-const CLEAR_ECHO_PANE: &str = concat!(
+/// 「探索域に `/clear` の字面が無い」で見る作り直し確認は、この echo が prompt の直上に
+/// **必ず**残るので構造的に偽のまま固定され、復元を送らずに席を空のまま残す（bd `s2-07l.96`）。
+const REBUILT_PANE: &str = concat!(
+    " ▐▛███▛█   Claude Code v2.1.268\n",
+    "▝▜██████▀  Fable 5.1 with high effort · Claude Max\n",
+    "  ▝▝ ▝▝    /…/repo · /rc\n",
     "❯ /clear\n",
     "────────────────────────────────────────\n",
-    "❯\u{a0}\n",
+    "❯\u{a0} \n",
+    "────────────────────────────────────────\n",
+    "  user@host (user@example.com)  repo\n",
+    "  Fable 5.1 [high] 5h:41%(2h8m) 7d:21%(6d5h)\n",
+    "  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 1 agent\n",
+);
+/// `/clear` を打ったが **submit されていない**実席（2026-09-11・匿名化済み）: 字面は入力行
+/// そのものに残り（`input_tail` が非空）、slash command の候補が上に描かれる。
+///
+/// 消費済みの echo と同じ `❯ /clear` の字面だが、**最後の prompt 行**に在る＝作り直しの
+/// 証拠ではない（Enter だけが落ちた周の形・実測 2026-09-11 planner 席）。
+const UNSUBMITTED_CLEAR_PANE: &str = concat!(
+    " ▐▛███▛█   Claude Code v2.1.268\n",
+    "▝▜██████▀  Fable 5.1 with high effort · Claude Max\n",
+    "  ▝▝ ▝▝    /…/repo · /rc\n",
+    "  /clear                             Start a new session with empty context; previous\n",
+    "                                     session stays on disk (resumable with /resume)\n",
+    "  /ready-compaction                  context\n",
+    "                                     cycle（/clear・respawn）の前に、失うと困る「命令…\n",
+    "────────────────────────────────────────\n",
+    "❯\u{a0} /clear\n",
+    "────────────────────────────────────────\n",
+    "  user@host (user@example.com)  repo\n",
+    "  Fable 5.1 [high] 5h:41%(2h8m) 7d:21%(6d5h)\n",
+    "  ⏵⏵ bypass permissions on (shift+tab to cycle)\n",
+);
+/// 作り直された席に **もう 1 度** `/clear` を打って submit していない実席（2026-09-11・匿名化
+/// 済み）: 上に消費済みの echo、入力行にも `/clear`。echo が在っても入力行が非空なら作り直しの
+/// 確認は立たない（正の証拠は入力欄が空のときだけ効く）。
+const REBUILT_UNSUBMITTED_PANE: &str = concat!(
+    " ▐▛███▛█   Claude Code v2.1.268\n",
+    "▝▜██████▀  Fable 5.1 with high effort · Claude Max\n",
+    "  ▝▝ ▝▝    /…/repo · /rc\n",
+    "❯ /clear\n",
+    "  /clear                             Start a new session with empty context; previous\n",
+    "                                     session stays on disk (resumable with /resume)\n",
+    "────────────────────────────────────────\n",
+    "❯\u{a0} /clear\n",
+    "────────────────────────────────────────\n",
+    "  user@host (user@example.com)  repo\n",
+    "  Fable 5.1 [high] 5h:41%(2h8m) 7d:21%(6d5h)\n",
+    "  ⏵⏵ bypass permissions on (shift+tab to cycle)\n",
+);
+/// 作り直された直後に **hook の出力が echo の下に描かれる**形（本便の A/B で実席は
+/// `Updated to latest` 2 行 + hook 2 行を描いた・版で行数が増えうる）。echo は入力行の
+/// 10 非空行上＝裁定 (e) の上 6 非空行の**外**に在る。域を 6 行に絞る実装はこの pane を
+/// 確認できず、`.94` と同じ行き止まり（復元を送らない）へ戻る。
+const REBUILT_HOOKS_PANE: &str = concat!(
+    " ▐▛███▛█   Claude Code v2.1.268\n",
+    "▝▜██████▀  Fable 5.1 with high effort · Claude Max\n",
+    "  ▝▝ ▝▝    /…/repo · /rc\n",
+    "❯ /clear\n",
+    "  ⎿  SessionStart:clear hook success: served version=2\n",
+    "  ⎿  SessionStart:clear hook success: [LOCATION] host / cwd / branch\n",
+    "  ⎿  SessionStart:clear hook success: [bd prime] workflow context\n",
+    "  ⎿  SessionStart:clear hook success: lint report 0 errors\n",
+    "  ⎿  SessionStart:clear hook success: lint report 0 errors\n",
+    "  ⎿  SessionStart:clear hook success: memory index loaded\n",
+    "  ⎿  SessionStart:clear hook success: fetch done\n",
+    "  ⎿  SessionStart:clear hook success: statusline ready\n",
+    "────────────────────────────────────────\n",
+    "❯\u{a0} \n",
+    "────────────────────────────────────────\n",
+    "  user@host (user@example.com)  repo\n",
+    "  Fable 5.1 [high] 5h:41%(2h8m) 7d:21%(6d5h)\n",
+    "  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 1 agent\n",
+);
+/// submit 済みの user 発言が `/clear` **で始まる**が `/clear` ではない pane（作り直されて
+/// いない）。発言の echo は行頭 `❯ …` に描かれるので、右側を「`/clear` で始まる」「`/clear` を
+/// 含む」まで緩めた実装はこの pane を「済んだ」と読み、会話を捨てていない席へ復元を送る。
+const PREFIXED_CLEAR_PANE: &str = concat!(
+    "❯ /clear は不可逆なので、送る前に退避の完了を確かめてください\n",
+    "● 承知しました。退避物の有無を先に見ます。\n",
+    "────────────────────────────────────────\n",
+    "❯\u{a0} \n",
+    "────────────────────────────────────────\n",
+    "  user@host (user@example.com)  scribe2  main\n",
+    "  19% 190k/1M Fable 5.1 [high] 5h:10%(4h22m) 7d:15%(6d8h)\n",
+    "  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 1 agent\n",
+);
+/// idle な席の本文が echo の字面を**引用**している pane（作り直されていない）。assistant の
+/// 本文は 2 桁字下げで描かれるので、引用の `❯ /clear` は行頭に来ない＝消費済みの echo と
+/// 弁別できる。行頭の条件を外す実装はこの pane を「済んだ」と読み、復元を送ってしまう。
+const QUOTED_CLEAR_PANE: &str = concat!(
+    "● 作り直された席の pane は次の形になる:\n",
+    "  ❯ /clear\n",
+    "  ⎿  消費済みの echo が新しい prompt の直上に残る\n",
+    "────────────────────────────────────────\n",
+    "❯\u{a0} \n",
     "────────────────────────────────────────\n",
     "  user@host (user@example.com)  scribe2  main\n",
     "  19% 190k/1M Fable 5.1 [high] 5h:10%(4h22m) 7d:15%(6d8h)\n",
@@ -1025,6 +1117,10 @@ fn start_clearing_seat(
 }
 
 /// `/clear` の後に走らせる shell と、それ以外の行への応答を指定して偽の席を立てる。
+///
+/// `/clear` を受けた席は画面を消した後、実席と同じく**消費済みの echo `❯ /clear`** を行頭に
+/// 描き直す（実測 2026-09-11: 作り直された席は必ずこの echo を新しい prompt の直上に残す）。
+/// echo を描かない偽の席は、作り直しの正の証拠を持たない形＝実席と別物になる。
 fn start_clearing_seat_with(
     socket: &str,
     name: &str,
@@ -1034,8 +1130,34 @@ fn start_clearing_seat_with(
 ) -> IsolatedSeat {
     let script = format!(
         "while :; do printf '❯ '; read -r line || exit 0; printf '%s\\n' \"$line\" >> '{}'; \
-         case \"$line\" in '/clear') printf '\\033[2J\\033[3J\\033[H'; {after_clear} ;; \
+         case \"$line\" in '/clear') printf '\\033[2J\\033[3J\\033[H❯ /clear\\n'; {after_clear} ;; \
          *) {on_other} ;; esac; done",
+        log.display()
+    );
+    let mut seat = IsolatedSeat {
+        socket: socket.to_owned(),
+        name: name.to_owned(),
+        ready: false,
+    };
+    let out = tmux(
+        socket,
+        &[
+            "new-session", "-d", "-s", name, "-x", "120", "-y", "40", "sh", "-c", &script,
+        ],
+    );
+    seat.ready = out.status.success() && wait_prompt(socket, name);
+    seat
+}
+
+/// `/clear` を**消化も echo もしない**席を立てる（作り直しが起きていない席の形）。
+///
+/// `sh -i` に送ると tty の echo が `❯ /clear` を**行頭に**残し、実席の消費済み echo と同じ
+/// 字面になる（実席ではその字面は「処理された」の証拠である）。ゆえに tty の echo を切り、
+/// 受けた行は log にだけ残す。
+fn start_swallowing_seat(socket: &str, name: &str, log: &Path) -> IsolatedSeat {
+    let script = format!(
+        "stty -echo; while :; do printf '❯ '; read -r line || exit 0; \
+         printf '%s\\n' \"$line\" >> '{}'; printf '\\n'; done",
         log.display()
     );
     let mut seat = IsolatedSeat {
@@ -1636,15 +1758,16 @@ fn seat_cycle_sends_clear_then_restore_in_order() {
 
 /// 作り直しを確認できない席へは**復元を送らない**（`/clear` が通ったことにしない）。
 ///
-/// `sh` は `/clear` を消化しないので、送った字面が直近の非空行に残り続ける＝作り直しが
-/// 起きていない席の形である。確認を素通りさせる実装はここで落ちる。
+/// 席は `/clear` を消化も echo もしない（[`start_swallowing_seat`]）＝消費済みの echo が
+/// 1 度も現れない、作り直しが起きていない席の形である。確認を素通りさせる実装はここで落ちる。
 #[test]
 fn seat_cycle_reports_clear_unconfirmed_when_session_is_not_rebuilt() {
     let dir = tmp();
     let socket = socket_of(&dir);
     let name = "seatstuck";
-    let guard = start_seat(&socket, name);
-    assert!(guard.ready(), "独立 socket に prompt 付きの session を立てられる");
+    let log = dir.join("seat.log");
+    let guard = start_swallowing_seat(&socket, name, &log);
+    assert!(guard.ready(), "独立 socket に `/clear` を飲む席を立てられる");
     let state = dir.join("state");
     let wm = dir.join("wm");
     wm_file(&wm, "working-memory.stuck.md", name);
@@ -1657,8 +1780,12 @@ fn seat_cycle_reports_clear_unconfirmed_when_session_is_not_rebuilt() {
 
     assert_eq!(rc_of(&out), i32::from(RC_REFUSED));
     assert_eq!(stderr_of(&out), "seat: cycle failed reason=clear-unconfirmed\n");
+    assert_eq!(
+        fs::read_to_string(&log).unwrap_or_default(),
+        "/clear\n",
+        "作り直しの注入自体は送っている・確認できない周に復元を送らない"
+    );
     let pane = capture(&socket, name);
-    assert!(pane.contains("/clear"), "作り直しの注入自体は送っている: {pane}");
     assert!(!pane.contains("/rebrief"), "確認できない周に復元を送らない: {pane}");
     assert!(
         !seat_dir_of(&state, name).join("cycle.lock").exists(),
@@ -1826,24 +1953,27 @@ fn run_tick_case(dir: &Path, case: &TickCase, target: &str, state: &Path) -> (Ou
     run_seat_probed(dir, &args)
 }
 
-/// echo された `/clear` が statusline の高さで末尾 6 非空行の外に在る周は、**作り直しを確認
-/// できない**（`clear-unconfirmed`・復元を送らない）。
+/// 作り直しの確認は **消費済みの echo `❯ /clear` を正の証拠**に採る（`.90` の裁定「送った
+/// 字面が現れた = 送達成功・入力欄が空 = 消費」と同じ形）。作り直された直後の実席の pane
+/// （[`REBUILT_PANE`]）で cycle は復元へ進み `done` になる。
 ///
-/// 末尾 6 非空行で見る実装はこの pane を「済んだ」と読み、作り直されていない席へ復元を送る
-/// （base: `cycle done`）。pane は `--capture-file` で固定し、送信だけ偽の席へ通す。
+/// 「探索域に `/clear` の字面が無い」で見る実装は、prompt の直上に必ず残る echo のせいで
+/// 構造的に偽のまま 30 秒待ち、復元を送らずに席を空のまま残す（base: `clear-unconfirmed`・
+/// 実測 2026-09-11 admin 席・bd `s2-07l.96`）。pane は `--capture-file` で固定し、送信だけ
+/// 偽の席へ通す。
 #[test]
-fn seat_cycle_does_not_confirm_clear_from_echo_pushed_out_by_tall_statusline() {
+fn seat_cycle_confirms_rebuilt_pane_by_consumed_echo_and_restores() {
     let dir = tmp();
     let socket = socket_of(&dir);
-    let name = "seatecho";
+    let name = "seatrebuilt";
     let log = dir.join("seat.log");
     let guard = start_clearing_seat(&socket, name, &log, false);
     assert!(guard.ready(), "偽の席を立てられる");
     let state = dir.join("state");
     let wm = dir.join("wm");
-    wm_file(&wm, "working-memory.echo.md", name);
+    wm_file(&wm, "working-memory.rebuilt.md", name);
     let pane = dir.join("pane.txt");
-    fs::write(&pane, CLEAR_ECHO_PANE).ok();
+    fs::write(&pane, REBUILT_PANE).ok();
     let (wm_s, state_s, pane_s) = (
         wm.display().to_string(),
         state.display().to_string(),
@@ -1855,16 +1985,175 @@ fn seat_cycle_does_not_confirm_clear_from_echo_pushed_out_by_tall_statusline() {
         "--state-dir", &state_s, "--capture-file", &pane_s,
     ]);
 
-    assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "stdout={}", stdout_of(&out));
-    assert_eq!(stderr_of(&out), "seat: cycle failed reason=clear-unconfirmed\n");
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(stdout_of(&out), format!("seat: cycle done target={name}\n"));
     assert_eq!(
         fs::read_to_string(&log).unwrap_or_default(),
-        "/clear\n",
-        "作り直しを確認できない周に復元を送らない"
+        "/clear\n/rebrief\n",
+        "作り直しを echo で確認して復元を送る"
     );
     // socket を消す**前**に畳む（消してからでは kill-session が届かない・実測 2026-09-10）。
     drop(guard);
     fs::remove_dir_all(&dir).ok();
+}
+
+/// `/clear` が**入力行に残る**席（未 submit・[`UNSUBMITTED_CLEAR_PANE`] / echo と入力行の両方に
+/// 在る [`REBUILT_UNSUBMITTED_PANE`]）は cycle の入口で **busy**＝1 key も送らない（Enter だけが
+/// 落ちた席へ `/clear` を重ねない・作り直し済みとも読まない）。
+#[test]
+fn seat_cycle_refuses_when_clear_is_stuck_in_input_line() {
+    for (label, shape) in [
+        ("unsubmitted", UNSUBMITTED_CLEAR_PANE),
+        ("rebuilt-unsubmitted", REBUILT_UNSUBMITTED_PANE),
+    ] {
+        let dir = tmp();
+        let name = "seatstuckinput";
+        let (state, wm, pane) = (dir.join("state"), dir.join("wm"), dir.join("pane.txt"));
+        wm_file(&wm, "working-memory.stuck.md", name);
+        fs::write(&pane, shape).ok();
+        let (wm_s, state_s, pane_s, sock_s) = (
+            wm.display().to_string(),
+            state.display().to_string(),
+            pane.display().to_string(),
+            dir.join("absent-sock").display().to_string(),
+        );
+
+        let (out, touched) = run_seat_probed(
+            &dir,
+            &[
+                "cycle", "--target", name, "--wm-dir", &wm_s, "--tmux-socket", &sock_s,
+                "--state-dir", &state_s, "--capture-file", &pane_s,
+            ],
+        );
+
+        assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "{label}: stdout={}", stdout_of(&out));
+        assert_eq!(stderr_of(&out), "seat: cycle refused reason=busy\n", "{label}");
+        assert!(!touched, "{label}: 1 key も送らない（tmux を撃たない）");
+        fs::remove_dir_all(&dir).ok();
+    }
+}
+
+/// `/clear` を**送った後**の pane に字面が在っても、作り直しを確認できない形（`shape`）では
+/// `clear-unconfirmed`＝復元を送らない。
+///
+/// 入口の idle 判定は送る前の pane で通す（[`IDLE_TALL_PANE`]）ので、字面は**送達の後に**
+/// 現れた形になる（Enter だけが落ちた・席が echo を引用した周の再現）。形ごとに歯を分ける
+/// のは、確認の待ち（30 秒）が直列に積み上がらないようにするため。
+fn assert_clear_unconfirmed_after_send(label: &str, shape: &str) {
+    let dir = tmp();
+    let socket = socket_of(&dir);
+    let name = "seatecho";
+    let log = dir.join("seat.log");
+    let guard = start_clearing_seat(&socket, name, &log, false);
+    assert!(guard.ready(), "{label}: 偽の席を立てられる");
+    let wm = dir.join("wm");
+    wm_file(&wm, "working-memory.echo.md", name);
+
+    let out = cycle_with_pane_after_clear(&dir, name, IDLE_TALL_PANE, shape);
+
+    assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "{label}: stdout={}", stdout_of(&out));
+    assert_eq!(stderr_of(&out), "seat: cycle failed reason=clear-unconfirmed\n", "{label}");
+    assert_eq!(
+        fs::read_to_string(&log).unwrap_or_default(),
+        "/clear\n",
+        "{label}: 作り直しを確認できない周に復元を送らない"
+    );
+    // socket を消す**前**に畳む（消してからでは kill-session が届かない・実測 2026-09-10）。
+    drop(guard);
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// 未 submit（[`UNSUBMITTED_CLEAR_PANE`]）: 字面が入力行に残る周は確認できない。
+#[test]
+fn seat_cycle_does_not_confirm_clear_left_unsubmitted_in_input_line() {
+    assert_clear_unconfirmed_after_send("unsubmitted", UNSUBMITTED_CLEAR_PANE);
+}
+
+/// echo と入力行の両方に在る（[`REBUILT_UNSUBMITTED_PANE`]）: 入力行が非空なら echo は
+/// 証拠にならない（正の証拠は入力欄が空のときだけ効く）。
+#[test]
+fn seat_cycle_does_not_confirm_clear_when_echo_and_unsubmitted_coexist() {
+    assert_clear_unconfirmed_after_send("rebuilt-unsubmitted", REBUILT_UNSUBMITTED_PANE);
+}
+
+/// 本文の引用（[`QUOTED_CLEAR_PANE`]）: 2 桁字下げの `❯ /clear` は行頭に無い＝証拠にならない。
+#[test]
+fn seat_cycle_does_not_confirm_clear_from_quoted_echo() {
+    assert_clear_unconfirmed_after_send("quoted", QUOTED_CLEAR_PANE);
+}
+
+/// `/clear` で**始まる**発言の echo（[`PREFIXED_CLEAR_PANE`]）: 右側が `/clear` ちょうどで
+/// なければ証拠にならない（「始まる」「含む」へ緩めた実装は会話の生きた席へ復元を送る・
+/// lens-96 HIGH-2）。
+#[test]
+fn seat_cycle_does_not_confirm_clear_from_prefixed_user_line() {
+    assert_clear_unconfirmed_after_send("prefixed", PREFIXED_CLEAR_PANE);
+}
+
+/// hook の出力が echo の下に増えた版（[`REBUILT_HOOKS_PANE`]・echo は入力行の 10 非空行上）
+/// でも作り直しを確認して復元を送る。送る前は idle・送った後にこの形＝時間差の happy path。
+///
+/// 域を裁定 (e) の上 6 非空行に絞る実装はこの pane を確認できず、`.94` と同じ行き止まり
+/// （30 秒待って `clear-unconfirmed`・復元を送らない）へ戻る（lens-96 MEDIUM-1）。
+#[test]
+fn seat_cycle_confirms_rebuilt_pane_with_hook_lines_below_echo() {
+    let dir = tmp();
+    let socket = socket_of(&dir);
+    let name = "seathooks";
+    let log = dir.join("seat.log");
+    let guard = start_clearing_seat(&socket, name, &log, false);
+    assert!(guard.ready(), "偽の席を立てられる");
+    let wm = dir.join("wm");
+    wm_file(&wm, "working-memory.hooks.md", name);
+
+    let out = cycle_with_pane_after_clear(&dir, name, IDLE_TALL_PANE, REBUILT_HOOKS_PANE);
+
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(stdout_of(&out), format!("seat: cycle done target={name}\n"));
+    assert_eq!(
+        fs::read_to_string(&log).unwrap_or_default(),
+        "/clear\n/rebrief\n",
+        "echo が上の 6 非空行の外でも作り直しを確認して復元を送る"
+    );
+    // socket を消す**前**に畳む（消してからでは kill-session が届かない・実測 2026-09-10）。
+    drop(guard);
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// cycle を撃ち、`/clear` が席の log（`<dir>/seat.log`）に着いた**後**で pane の写し
+/// （`--capture-file`）を `after` へ差し替えてから結果を待つ。写しは作り直しの確認が 500 ms
+/// ごとに読み直すので、「送る前は idle・送った後にこの形」の pane を 1 本の file で再現できる。
+/// socket は [`socket_of`]・log は偽の席と同じ path から導く（引数上限・憲法 C4）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn cycle_with_pane_after_clear(dir: &Path, name: &str, before: &str, after: &str) -> Output {
+    let (socket, log) = (socket_of(dir), dir.join("seat.log"));
+    let (state, wm, pane) = (dir.join("state"), dir.join("wm"), dir.join("pane.txt"));
+    fs::write(&pane, before).expect("pane fixture を置ける");
+    let (wm_s, state_s, pane_s) = (
+        wm.display().to_string(),
+        state.display().to_string(),
+        pane.display().to_string(),
+    );
+    let child = Command::new(bin())
+        .args([
+            "seat", "cycle", "--target", name, "--wm-dir", &wm_s, "--tmux-socket", &socket,
+            "--state-dir", &state_s, "--capture-file", &pane_s,
+        ])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("binary を起動できる");
+    let deadline = Instant::now() + PROMPT_WAIT;
+    while Instant::now() < deadline
+        && !fs::read_to_string(&log).unwrap_or_default().contains("/clear")
+    {
+        sleep(Duration::from_millis(100));
+    }
+    fs::write(&pane, after).expect("pane fixture を差し替えられる");
+    child.wait_with_output().expect("binary の終了を待てる")
 }
 
 /// **送る前から同じ字面が pane に在る**周は送達の根拠にならない（`absent`・rc 1・記録なし）。

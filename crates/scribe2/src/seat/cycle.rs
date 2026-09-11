@@ -218,8 +218,8 @@ fn unix_secs(at: SystemTime) -> u64 {
 /// `/clear` を送り、作り直しを確認する。
 ///
 /// **便 2 の送達確認（settle）は使えない**: `/clear` は pane を消すので「送った字面が現れる」
-/// 形では測れず、成功したときほど確認が落ちる。代わりに「入力欄が空 ∧ prompt 行の周り
-/// （[`super::prompt_region`]）に `/clear` の字面が無い」で見る＝作り直された席でだけ同時に立つ。
+/// 形では測れず、成功したときほど確認が落ちる。代わりに [`cleared`]（入力欄が空 ∧ 入力行より
+/// 上に消費済みの echo）で見る＝作り直された席でだけ同時に立つ。
 fn send_clear(request: &Request) -> bool {
     if !send_line(request, CLEAR) {
         return false;
@@ -236,18 +236,49 @@ fn send_clear(request: &Request) -> bool {
     false
 }
 
-/// 作り直しの済んだ pane か（入力欄が空 ∧ [`super::prompt_region`] に `/clear` の字面が無い）。
+/// 作り直しの済んだ pane か: **入力欄が空 ∧ 入力行より上に消費済みの echo `❯ /clear` が在る**
+/// （[`is_consumed_echo`]）。
 ///
-/// 域を prompt より下に取ると、**echo された `/clear` は次の prompt の上に載る**ので第 2 項が
-/// 構造的にほぼ常に真になり、確認が実質 500 ms の sleep に化ける（実測 2026-09-10・lens-384
-/// C-2: 「常に真」へ倒す変異が全歯 GREEN のまま生存した）。末尾の固定行数で取っても同じ形に
-/// 化ける——statusline 3 行 + 区切り 2 行 + prompt 行で 6 行が尽き、上の echo に届かない
-/// （`is_idle` と同じ根・bd `s2-07l.94`）。
+/// **正の証拠で見る**（便 2 の裁定「送った字面が現れた = 送達成功・入力欄が空 = 消費」と同じ形・
+/// bd `s2-07l.96`）。作り直された席は画面を消した後、消費済みの echo を新しい prompt の**直上に
+/// 必ず**残す（実測 2026-09-11: banner 3 行 → `❯ /clear` → 空の prompt → statusline）。
+/// 「探索域に `/clear` の字面が無い」の負の形は、この echo のせいで**構造的に偽のまま固定**され
+/// ——席が 6 行以上を出力するまで真にならず、その出力は復元を送った後にしか出ない——`/clear` が
+/// 通った席に復元を送らず空席のまま残した（実測 2026-09-11 admin 席・`.94` の域変更で極性が反転）。
+///
+/// **未 submit の `/clear` は弁別できる**: Enter だけが落ちた周の字面は**入力行そのもの**に残り
+/// [`super::input_tail`] が非空になる（第 1 項で落ちる）。echo は入力行より**上**にしか無い。
+///
+/// **域は入力行より上の全行**（[`super::prompt_region`] の上 6 非空行に絞らない）。`/clear` は
+/// 画面を消すので、見えている echo は**何らかの** `/clear` の後に描かれたものに限られ、上へ遡る数で
+/// 古い echo を除外する必要が無い。逆に 6 行で切ると、echo の下に描かれる行（hook の出力等）が版で
+/// 増えた周に同じ行き止まりへ戻る（実測 2026-09-11 A/B: echo の周りに 4 行が増えた）。
+///
+/// **残余（正の形が字面である限り塞げない・根治は `s2-07l.95` の typed 打刻）**: (1) 前の `/clear`
+/// の echo が見えたまま**今回の** `/clear` だけが消費されなかった周（字面が落ちて Enter だけが
+/// 通る等）は、送る前と同じ pane を「済んだ」と読む。作り直し済みで復元の届いていない席（本便の
+/// 出所の空席）と pane の形が同じなので、送る前の形で弁別すると空席を永久に回復できない
+/// ＝弁別しない側に倒す。席は退避済み ∧ idle ゆえ、害は「会話が生きたまま復元が走る」に留まる。
+/// (2) 入力行より下に prompt の字を含む行が在ると anchor が移り、未 submit の入力行が echo に
+/// 見える（[`super::input_tail`] と同根・現行の statusline には無い）。
 fn cleared(pane: &str) -> bool {
+    let lines: Vec<&str> = pane.lines().collect();
+    let Some(at) = lines.iter().rposition(|line| line.contains(super::PROMPT)) else {
+        return false;
+    };
     super::input_tail(pane).is_some_and(str::is_empty)
-        && !super::prompt_region(pane)
-            .iter()
-            .any(|line| line.contains(CLEAR))
+        && lines.iter().take(at).any(|line| is_consumed_echo(line))
+}
+
+/// 消費済みの echo の行か: **行頭**が prompt の字で、その右が `/clear` ちょうど。
+///
+/// 行頭に限るのは、assistant の本文と tool の出力が 2 桁字下げで描かれるためである——本文が
+/// echo の字面を**引用**した行（`  ❯ /clear`）は行頭に来ない。字下げを剥がして比べると、引用を
+/// 持つ idle な席を「作り直された」と読み、会話を捨てていない席へ復元が刺さる。右側の trim は
+/// prompt が描く nbsp を含む（`str::trim` は U+00A0 を空白に数える）。
+fn is_consumed_echo(line: &str) -> bool {
+    line.strip_prefix(super::PROMPT)
+        .is_some_and(|rest| rest.trim() == CLEAR)
 }
 
 /// 復元 command を **便 2 の inject 経路**で送る（送達確認まで込み）。
