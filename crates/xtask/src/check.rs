@@ -90,6 +90,9 @@ pub(crate) struct Measured {
     pub(crate) violations: Vec<String>,
 }
 
+/// 判定行の接頭辞。この右に各 measure の fact が空白区切りで並ぶ。
+const SUMMARY_PREFIX: &str = "xtask check: ok";
+
 /// 読み込んだ `.rs` 1 本。
 pub(crate) struct SourceFile {
     /// 絶対 path。
@@ -153,10 +156,13 @@ pub fn summary(root: &Path) -> String {
 
 /// 判定行を**値を伏せた形**へ写す（tag の名前・並び・値の書式だけを残す）。
 ///
-/// 値（各 token の `=` より右）の英数字の連なりを `<v>` に置き、区切り（`/` `.` `(` 等）は
-/// そのまま残す: `a=12/300 b=0.1.0` → `a=<v>/<v> b=<v>.<v>.<v>`。tag は触らない。
-/// 値は環境で動く（file-lines / paths-clean 等）ので、外形として pin できるのはこの形まで
-/// である。ADR-0013 §2.1 が SSOT と定めた判定行を、集合と順序で測る歯の材料（bd `s2-07l.87`）。
+/// [`SUMMARY_PREFIX`] は字面のまま残し、その右の各 token は `=` より右の英数字の連なりを
+/// `<v>` に置き、区切り（`/` `.` `(` 等）はそのまま残す: `a=12/300 b=0.1.0` →
+/// `a=<v>/<v> b=<v>.<v>.<v>`。tag は触らない。`=` を持たない token（fact の値が空白を含んで
+/// 割れた片割れ）は丸ごと伏せる＝環境で動く値が素通りしない（lens-87 MEDIUM-1）。英数字は
+/// Unicode で見る（非 ASCII の値も伏せる）。値は環境で動く（file-lines / paths-clean 等）ので、
+/// 外形として pin できるのはこの形までである。ADR-0013 §2.1 が SSOT と定めた判定行を、集合と
+/// 順序で測る歯の材料（bd `s2-07l.87`）。
 ///
 /// 呼ぶのは test 区間の pin だけで、runtime に判定行を消費する口は作らない（外形を増やさない）。
 /// それでも src に置くのは、base に test 区間だけを写した木で compile error＝flip-check の RED
@@ -167,14 +173,19 @@ pub fn summary(root: &Path) -> String {
     expect(dead_code, reason = "test 区間の pin だけが呼ぶ（bd s2-07l.87・flip-check の RED を src 配置で作る）")
 )]
 pub fn shape(summary: &str) -> String {
-    summary
+    let (prefix, facts) = match summary.strip_prefix(SUMMARY_PREFIX) {
+        Some(rest) => (SUMMARY_PREFIX, rest),
+        None => ("", summary),
+    };
+    let veiled = facts
         .split(' ')
         .map(|token| match token.split_once('=') {
             Some((tag, value)) => format!("{tag}={}", veil(value)),
-            None => token.to_owned(),
+            None => veil(token),
         })
         .collect::<Vec<String>>()
-        .join(" ")
+        .join(" ");
+    format!("{prefix}{veiled}")
 }
 
 /// 英数字の連なりを 1 つの `<v>` に畳む（区切り文字は残す）。
@@ -182,7 +193,7 @@ fn veil(value: &str) -> String {
     let mut out = String::new();
     let mut in_run = false;
     for ch in value.chars() {
-        if ch.is_ascii_alphanumeric() {
+        if ch.is_alphanumeric() {
             if !in_run {
                 out.push_str("<v>");
             }
@@ -212,7 +223,7 @@ fn fold(measured: Vec<Measured>) -> Report {
         facts.push(item.fact);
     }
     Report {
-        summary: format!("xtask check: ok {}", facts.join(" ")),
+        summary: format!("{SUMMARY_PREFIX} {}", facts.join(" ")),
         violations,
     }
 }
@@ -554,23 +565,66 @@ mod tests {
         );
     }
 
+    /// 判定行の外形の pin（repo root で撃ったときの形）。値は [`shape`] で伏せてある。
+    const SUMMARY_PIN: &str = "xtask check: ok core-lines=<v>/<v> file-lines=<v>/<v> \
+        test-src-ratio=<v>/<v> name-literal=<v> manifest-name=<v> manifest-version=<v>.<v>.<v> \
+        lints-set=<v> lints-optin=<v>/<v> deps-empty=<v> toolchain-pin=<v>.<v>.<v> \
+        paths-clean=<v> non-rust-exec=<v>/<v> allow=<v> ci-shell-lines=<v> \
+        claude-md-constitution=<v>";
+
+    /// git を要する measure の fact（`.git` の無い木では測れない形になり、副 field も出ない）。
+    fn is_git_fact(token: &str) -> bool {
+        ["paths-clean=", "non-rust-exec=", "allow="]
+            .iter()
+            .any(|prefix| token.starts_with(prefix))
+    }
+
     /// 判定行の**名前・並び・値の書式**を外形として pin する（ADR-0013 §2.1・`s2-07l.87`）。
     ///
     /// 値は環境で動くので [`shape`] で伏せる。measure を 1 つ落とす／2 つ並べ替える／値の
     /// 書式を変える、のどれでも落ちる。「measure が N 本」は数えない（判定行は自己区切りで
     /// なく、`allow=` は non-rust-exec の副 field）。pin の単位は token の並びである。
+    ///
+    /// 分岐は**測定対象と独立な判別子**（`.git` の有無）で行う（先例
+    /// [`check_paths_clean_scans_noncanonical_root`]）: flip-check の base 健全性前段は
+    /// `git archive` で展開した `.git` の無い木で全 suite を撃つので、そこで repo root の形を
+    /// 求めると base が恒久に赤くなり**以後の全 PR の flip-check が止まる**（lens-87 HIGH-1・
+    /// 展開木で実測）。`.git` の無い木では git を要する 2 つの measure だけが測れない形
+    /// （`n/a(not-a-repo-root)` か `?`）になるので、その fact を除いた並びが同じことと、
+    /// 2 つが数でないことを見る。
     #[test]
     fn check_summary_shape_pins_names_order_and_value_forms() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
         let line = summary(&root);
-        assert_eq!(
-            shape(&line),
-            "xtask check: ok core-lines=<v>/<v> file-lines=<v>/<v> test-src-ratio=<v>/<v> \
-             name-literal=<v> manifest-name=<v> manifest-version=<v>.<v>.<v> lints-set=<v> \
-             lints-optin=<v>/<v> deps-empty=<v> toolchain-pin=<v>.<v>.<v> paths-clean=<v> \
-             non-rust-exec=<v>/<v> allow=<v> ci-shell-lines=<v> claude-md-constitution=<v>",
-            "判定行の現物: {line}"
-        );
+        // fact の不変条件: 空白で割った token はすべて `k=v` 形（副 field も含む）。空白入りの値は
+        // 割れて環境の値が pin へ素通りするので、書式を決める本 bead でここに立てる（lens-87 MEDIUM-1）。
+        let facts = line
+            .strip_prefix(super::SUMMARY_PREFIX)
+            .unwrap_or_else(|| panic!("判定行は接頭辞で始まるはず: {line}"));
+        for token in facts.split(' ').filter(|token| !token.is_empty()) {
+            assert!(token.contains('='), "fact の token は k=v 形のはず: {token} in {line}");
+        }
+        if root.join(".git").exists() {
+            assert_eq!(shape(&line), SUMMARY_PIN, "判定行の現物: {line}");
+        } else {
+            let without_git = |shaped: &str| {
+                shaped
+                    .split(' ')
+                    .filter(|token| !is_git_fact(token))
+                    .collect::<Vec<&str>>()
+                    .join(" ")
+            };
+            assert_eq!(
+                without_git(&shape(&line)),
+                without_git(SUMMARY_PIN),
+                ".git の無い木でも git を要しない fact の並びは同じはず: {line}"
+            );
+            assert!(paths_clean_unnumbered(&line), ".git の無い木では数が出ないはず: {line}");
+            assert!(
+                line.contains("non-rust-exec=n/a(") || line.contains("non-rust-exec=?"),
+                ".git の無い木では non-rust-exec も測れない形のはず: {line}"
+            );
+        }
     }
 
     /// 上限 +1 行の .rs は file-lines だけで落ち、上限ちょうどは通る。
