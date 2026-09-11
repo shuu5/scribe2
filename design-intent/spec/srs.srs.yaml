@@ -11,18 +11,18 @@ meta:
   eyebrow_left: 要件定義書 (SRS)
   eyebrow_right: scribe2 — MVP
   subtitle: 契約は小さく・検証は機械が先・止まるときは記帳して止まる
-  version: "0.3"
-  date: "2026-09-11"
+  version: "0.4"
+  date: "2026-09-12"
   reader: この器で開発する人と AI（Claude Code の session）。 専門語には必ずやさしい言い換えを併記する
 
 approval:
   - role: 承認 (user)
     who: user
-    when: 2026-09-09 grill 6 論点を裁定・2026-09-11 FR29（退避の合図）を裁定
+    when: 2026-09-12（版 0.4・FR30 / FR31 / FR32 / AC10。 版ごとの裁定 id は台帳が持つ）
     stamp: 裁定済
   - role: レビュー (folio review lens)
     who: spec-review 5 軸 + SRS ceiling 3 lens
-    when: 2026-09-09 Phase F
+    when: 2026-09-12 Phase F
     stamp: 実施
   - role: 作成 (開発 session)
     who: AI session (Claude Code)
@@ -83,6 +83,7 @@ acceptance:
   - { id: AC7, criterion: write-set の外への Edit / Write は編集の時点で deny され、 hook は marker が自分を言うときだけ仕える,    metric_v: 0 件,  metric_l: 素通り,           links: [FR19, FR20, FR21, FR24, NFR5] }
   - { id: AC8, criterion: 開発 session の作業記憶の退避と復元が global skill の手順として実在し、 6 本の作法を満たす,             metric_v: 6/6,   metric_l: 作法が実在,        links: [FR23] }
   - { id: AC9, criterion: planner と管理席の 2 つの開発 session で、 context 使用量が取れない周は rc ≠ 0 になり、 上限到達で退避以外の編集が deny され、 測れない周は deny 0 件で理由が注入計測の記録に 1 件残り、 管理 tick が規則どおりに判定し（同じ入力には同じ inject / noop）、 上限以上で idle でない周にも退避の合図が 1 件注入され、 測れない周と退避物が在る周は 0 件で、 cycle が 1 回完走する, metric_v: 2 session + 1 回, metric_l: 判定が規則どおり,   links: [FR25, FR26, FR27, FR28, FR29] }
+  - { id: AC10, criterion: toy repo で verify 行が矛盾する契約 1 本を管理席が pipeline に流し、 runner の質問 record → Questioned → planner の回答 event（機械由来）→ resume → Landed まで通り、 人由来の event が 0 件・席が自分の手で実装した commit が 0 件, metric_v: 1 便, metric_l: 質問で止まり回答で再開, links: [FR5, FR14, FR22, FR30, FR31, FR32] }
 
 requirements:
   - id: FR1
@@ -135,7 +136,7 @@ requirements:
     priority: must
     vmethod: T
     rationale_source: N-1
-    trace: { backward: [N-1], acceptance: [AC1, AC2] }
+    trace: { backward: [N-1], acceptance: [AC1, AC2, AC10] }
     ears:
       pattern: ubiquitous
       condition: 常時
@@ -234,7 +235,7 @@ requirements:
     priority: must
     vmethod: T
     rationale_source: N-3
-    trace: { backward: [N-3], acceptance: [AC4] }
+    trace: { backward: [N-3], acceptance: [AC4, AC10] }
     ears:
       pattern: event
       condition: 別 process で resume が要求されたとき
@@ -322,7 +323,7 @@ requirements:
     priority: must
     vmethod: T
     rationale_source: N-1
-    trace: { backward: [N-1], acceptance: [AC1, AC2] }
+    trace: { backward: [N-1], acceptance: [AC1, AC2, AC10] }
     ears:
       pattern: ubiquitous
       condition: 常時
@@ -406,6 +407,40 @@ requirements:
       condition: 開発 session の context 使用量が rules 行の上限以上で、 自 session の未 consumed の退避物が無く、 cycle が走っていない間
       response: 管理 tick が idle を待たずに退避の合図 1 行を注入する（使用量が測れない周・退避物が在る周・cycle が走っている周は注入しない）
 
+  - id: FR30
+    type: FR
+    label: 配送構造
+    priority: should
+    vmethod: A
+    rationale_source: N-1
+    trace: { backward: [N-1, N-3], acceptance: [AC10] }
+    ears:
+      pattern: ubiquitous
+      condition: 常時
+      response: 便の配送構造は planner 1 席 + 管理席 N 席とし、 管理席は契約を pipeline に流す・runner の質問を planner へ中継する・go の後に land する の 3 つを担い、 自分の手で実装するのは pipeline が回せない便だけとする
+  - id: FR31
+    type: FR
+    label: 質問の停止
+    priority: should
+    vmethod: T
+    rationale_source: N-3
+    trace: { backward: [N-1, N-3], acceptance: [AC10] }
+    ears:
+      pattern: event
+      condition: runner が契約の不足を typed な質問 record で返して止まったとき
+      response: pipeline は便を Questioned の段に倒し、 質問 event を逐語付きで記帳し、 回答 event が無い間は再開しない
+  - id: FR32
+    type: FR
+    label: 質問の再開
+    priority: should
+    vmethod: T
+    rationale_source: N-3
+    trace: { backward: [N-1, N-3], acceptance: [AC10] }
+    ears:
+      pattern: event
+      condition: Questioned の便に回答 event（逐語付き）が記帳された状態で resume が要求されたとき
+      response: 同じ便を続きの段から通し、 質問と回答の逐語を runner の入力に添える
+
 nfr:
   - { id: NFR1, type: NFR, label: lens 予算,   category: 性能, target: 1 lens は 0.15M token 以内（目標値）,                                measure: lens 起動時の diff byte と cap の照合を verdict に記録,        vmethod: T, trace: { backward: [N-2], acceptance: [AC3] }, hero: { cat: 予算, big: "0.15", unit: M token, qual: lens 1 本あたりの上限 } }
   - { id: NFR2, type: NFR, label: 契約の大きさ, category: 大きさ, target: 1 契約の diff は 300 行程度・見積は 550 行以内,                      measure: PR の diff 行数と契約の見積を記録して照合,                   vmethod: A, trace: { backward: [N-4], acceptance: [AC2] }, hero: { cat: 小ささ, big: "300", unit: 行, qual: 1 契約の diff の目安 } }
@@ -461,3 +496,8 @@ glossary:
   - { term: cycle,          en: cycle,                  plain_short: 退避して作り直す一周,     def: 作業記憶を退避し、 session を作り直し、 退避物から復元する一周。 退避物が無い session では起こさない。 }
   - { term: 作業記憶,       en: working memory,         plain_short: session をまたぐと消える一時メモ, def: 開発 session が一連の作業の間だけ持つ状態。 session の作り直しで消えるので、 cycle の前に退避物へ書き出す。 }
   - { term: 退避物,         en: externalized memory,    plain_short: 作業記憶を書き出した file, def: cycle の前に作業記憶を書き出した file。 session id で一意で、 消費済みは同じ suffix で表す。 }
+  - { term: planner,        en: planner,                plain_short: 契約と裁定を持つ席,     def: 席の役割の 1 つ。 契約・裁定・merge の go を担い、 runner の質問に契約の修正か回答で応える。 対話面の identity は rules 行 R-C7-1 が持つ。 }
+  - { term: 管理席,         en: admin seat,             plain_short: 便を流す係の席,         def: admin の役割を持つ席。 既定の配送構造では契約を pipeline に流し、 runner の質問を planner へ中継し、 go の後に land する。 自分の手で実装するのは pipeline が回せない便だけ。 }
+  - { term: 質問 record,    en: question record,        plain_short: 実装役が返す質問の合図, def: runner が契約の不足を返して止まるときの typed な合図。 形式は ADR-0016 §2.2 が正本。 }
+  - { term: Questioned,     en: questioned,             plain_short: 質問中の段,               def: 便の段の 1 つ。 runner の質問 record を受けて回答 event を待っている状態。 }
+  - { term: Blocked,        en: blocked,                plain_short: 承認待ちの段,             def: 便の段の 1 つ。 3 クラスを名乗る契約が spawn の手前で承認 event を待っている状態。 }

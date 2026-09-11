@@ -58,7 +58,7 @@
 </ul>
 </details>
 <details>
-<summary>accepted <span class="nav-count">(15)</span></summary>
+<summary>accepted <span class="nav-count">(16)</span></summary>
 <ul>
   <li><a href="decisions/ADR-0001-rust-single-static-binary.html">ADR-0001 — 実装言語と構成 = Rust 単一 static binary (Go / typed Python / TypeScript 却下)</a> <span class="nav-meta">adr</span></li>
   <li><a href="decisions/ADR-0002-test-lint-toolchain.html">ADR-0002 — test / lint toolchain = cargo nextest・粒度 lint は forbid・構造検査は cargo xtask check</a> <span class="nav-meta">adr</span></li>
@@ -75,11 +75,6 @@
   <li><a href="decisions/ADR-0013-machine-holds-enumerations-docs-hold-pointers.html">ADR-0013 — 列挙は機械が持ち文書は pointer だけを持つ (ADR-0006 の measure tag 列挙を supersede)。 C2「宣言順」の充足形は const slice の判別子順 pin</a> <span class="nav-meta">adr</span></li>
   <li><a href="decisions/ADR-0014-polarity-list-is-a-snapshot-rendered-by-core.html">ADR-0014 — 極性一覧は core が描く外形 snapshot として生成し、 CI の門 (C16.2) は xtask がその tracked 生成物を読む。 極性の値は境界の型が運ぶ</a> <span class="nav-meta">adr</span></li>
   <li><a href="decisions/ADR-0015-seat-state-is-stamped-by-hooks-not-read-from-pane.html">ADR-0015 — 席の busy / idle は hook の打刻で typed に持ち、 pane の字面を判定入力から外す。 target は生成 hooks.json の shell 行が渡す pane id から解く</a> <span class="nav-meta">adr</span></li>
-</ul>
-</details>
-<details open>
-<summary>proposed <span class="nav-count">(1)</span></summary>
-<ul>
   <li><a href="decisions/ADR-0016-default-delivery-structure-and-typed-question-record.html">ADR-0016 — 便の既定の配送構造は planner 1 席 + 管理席 N 席が pipeline を流す形とし、 runner は契約の不足を typed な質問 record で返して止まる (管理席が自分の手で実装するのは pipeline が回せない便だけ)</a> <span class="nav-meta">adr</span></li>
 </ul>
 </details>

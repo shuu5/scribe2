@@ -97,7 +97,7 @@
     <tr><td>ADR-0013</td><td><a href="./ADR-0013-machine-holds-enumerations-docs-hold-pointers.html">列挙は機械が持ち文書は pointer だけを持つ (ADR-0006 の measure tag 列挙を supersede)。 C2「宣言順」の充足形は const slice の判別子順 pin</a></td><td>accepted</td><td>2026-09-11</td></tr>
     <tr><td>ADR-0014</td><td><a href="./ADR-0014-polarity-list-is-a-snapshot-rendered-by-core.html">極性一覧は core が描く外形 snapshot として生成し、 CI の門 (C16.2) は xtask がその tracked 生成物を読む。 極性の値は境界の型が運ぶ</a></td><td>accepted</td><td>2026-09-11</td></tr>
     <tr><td>ADR-0015</td><td><a href="./ADR-0015-seat-state-is-stamped-by-hooks-not-read-from-pane.html">席の busy / idle は hook の打刻で typed に持ち、 pane の字面を判定入力から外す。 target は生成 hooks.json の shell 行が渡す pane id から解く</a></td><td>accepted</td><td>2026-09-11</td></tr>
-    <tr><td>ADR-0016</td><td><a href="./ADR-0016-default-delivery-structure-and-typed-question-record.html">便の既定の配送構造は planner 1 席 + 管理席 N 席が pipeline を流す形とし、 runner は契約の不足を typed な質問 record で返して止まる (管理席が自分の手で実装するのは pipeline が回せない便だけ)</a></td><td>proposed</td><td>2026-09-11</td></tr>
+    <tr><td>ADR-0016</td><td><a href="./ADR-0016-default-delivery-structure-and-typed-question-record.html">便の既定の配送構造は planner 1 席 + 管理席 N 席が pipeline を流す形とし、 runner は契約の不足を typed な質問 record で返して止まる (管理席が自分の手で実装するのは pipeline が回せない便だけ)</a></td><td>accepted</td><td>2026-09-11</td></tr>
   </tbody>
 </table>
 <p data-audience="machine">新しい決定を記録したら本表と JSON-LD の <code>dc:hasPart</code> に追記する。 ADR は frozen (改訂は supersede する新 ADR で行う)。</p>
