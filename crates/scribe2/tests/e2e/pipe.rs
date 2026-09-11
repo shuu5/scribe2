@@ -197,7 +197,9 @@ fn stderr_of(out: &Output) -> String {
 fn run_id_of(out: &Output) -> String {
     stdout_of(out)
         .lines()
-        .find_map(|line| line.strip_prefix("run=").map(str::to_owned))
+        .find_map(|line| line.strip_prefix("run="))
+        .and_then(|rest| rest.split_whitespace().next())
+        .map(str::to_owned)
         .unwrap_or_default()
 }
 
@@ -3542,4 +3544,80 @@ fn gate_verdicts_follow_declaration_order() {
         "VERDICTS の並びが宣言順と乖離している（母集団 {} 値）",
         VERDICTS.len()
     );
+}
+
+/// `--rules` で上限を差し替えて intake を通した周は、その事実が stdout に残る（`s2-07l.65`・
+/// `.56` lens M1）。`--rules` は test の seam で、上限を無条件に差し替える——差し替えた周が
+/// 通常の周と同じ 1 行しか出さないと、review は「埋め込みの上限で通った便」と区別できない。
+/// 値は渡した path の字面そのもの（加工しない）。**差し替えていない周は出さない**（不在が既定・負例）。
+#[test]
+fn pipe_intake_names_ceiling_override_in_stdout() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let rules = ceiling_rules(&state);
+    let out = run_pipe(&[
+        "intake", "--contract", &path.display().to_string(), "--bead", "s2-2e5",
+        "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
+        "--rules", &rules,
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    let line = stdout_of(&out).lines().next().unwrap_or_default().to_owned();
+    assert!(line.starts_with("run="), "既存 token が先頭のまま: {line}");
+    assert!(
+        line.split_whitespace().any(|token| token == format!("ceiling-overridden={rules}")),
+        "差し替えた path が対で載る: {line}"
+    );
+    assert!(!run_id_of(&out).is_empty(), "run id は取れる: {line}");
+    // 負例: `--rules` を渡さない（自己ホストの宣言 = 埋め込みの上限の内側）。
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().and_then(Path::parent).expect("repo の root を解ける");
+    let declared = fs::read_to_string(root.join(".vessel.toml")).expect("自己ホストの宣言を読める");
+    let (plain, plain_state) = repo_with_state();
+    fs::write(plain.join(".vessel.toml"), &declared).expect("宣言を写せる");
+    git(&plain, &["add", "-f", ".vessel.toml"]);
+    git(&plain, &["commit", "-q", "-m", "self-hosted"]);
+    let contract = write_contract(&plain, &["verify"], &[r#"verify = ["git status"]"#]);
+    let out = run_pipe(&[
+        "intake", "--contract", &contract.display().to_string(), "--bead", "s2-2e5",
+        "--repo", &plain.display().to_string(), "--state-dir", &plain_state.display().to_string(),
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    assert!(!stdout_of(&out).contains("ceiling-overridden"), "差し替えていない周は出さない: {}", stdout_of(&out));
+    clean(&[&repo, &state, &plain, &plain_state]);
+}
+
+/// gate の段①（write-set 照合）で diff を**読めない**周は「測れなかった」であって赤ではない
+/// （`s2-07l.65`・`.57` 申し送り・land の `MainCheck::Unmeasurable` と同じ極性）。
+///
+/// 読めない状態は **base commit の tree object を消して**作る（実測: `git status` と
+/// `git rev-list --count` は通り、`git diff --name-only -z <base>..HEAD` だけが `unable to read tree`
+/// で落ちる＝precheck を抜けて段①に届く）。verdict は INCONCLUSIVE（既存 3 値の内側・rc 3）で、
+/// lens は呼ばれず（判定に届いていない）、verify.jsonl の段①の行は残る（現物を消さない）。
+#[test]
+fn pipe_gate_turns_unreadable_diff_into_inconclusive() {
+    let (repo, state) = repo_with_state();
+    // 契約行に**赤い行を 1 本**混ぜる: 「測れなかったは赤より先」（判定順）と「段①の -1 は赤に
+    // 数えないが ②③ の赤は数える」（`verify_red` = 1）を同じ便で測る。
+    let path = write_contract(&repo, &["verify"], &[r#"verify = ["sh verify-ok.sh", "sh verify-red.sh"]"#]);
+    let base = git(&repo, &["rev-parse", "HEAD"]);
+    let id = implemented(&repo, &state, &path);
+    let tree = git(&repo, &["rev-parse", &format!("{base}^{{tree}}")]);
+    let (head, tail) = tree.split_at(2);
+    let object = repo.join(".git").join("objects").join(head).join(tail);
+    fs::remove_file(&object).expect("base の tree object を消せる");
+    let marker = state.join("lens-ran");
+    let lens = fake_lens(&marker, &lens_verdict("PASS"));
+    let out = gate_once(&repo, &state, &id, Some(&lens));
+    assert_eq!(out.status.code(), Some(3), "測れなかった周は INCONCLUSIVE の rc: {}", stderr_of(&out));
+    assert!(stdout_of(&out).contains("verdict=INCONCLUSIVE"), "{}", stdout_of(&out));
+    let pairs = verdict_pairs(&state, &id);
+    assert_eq!(value_of(&pairs, "verdict"), "INCONCLUSIVE", "赤い契約行が在っても、測れなかったが先");
+    assert_eq!(value_of(&pairs, "verify_red"), "1", "段①の -1 は赤に数えず ②③ の赤（1 本）だけを数える");
+    assert!(value_of(&pairs, "evidence").contains("読めない"), "理由が残る: {}", value_of(&pairs, "evidence"));
+    assert!(!marker.exists(), "判定に届いていないので lens は呼ばない");
+    let log = fs::read_to_string(vessel::pipe::verify_log_path(&state, &id)).expect("verify.jsonl を読める");
+    let first = log.lines().next().unwrap_or_default();
+    assert!(first.contains("\"n\":1") && first.contains("\"cmd\":\"write-set\""), "段①の record は残る: {first}");
+    assert!(first.contains("\"rc\":255"), "段①の rc -1 は u64 の記録形 255 で残る（schema 不変）: {first}");
+    assert!(show_line(&repo, &state, &id).contains("stage=Gated"), "段は Gated へ進む（測り直せる）");
+    clean(&[&repo, &state]);
 }

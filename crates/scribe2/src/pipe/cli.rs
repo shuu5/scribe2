@@ -144,8 +144,21 @@ fn state_dir_of(args: &[String]) -> Result<PathBuf, String> {
 /// 契約 file を読み込み、置き場へ写して run を起こす。
 fn intake(args: &[String], manifest: &Manifest, policy: LockPolicy) -> Outcome {
     match intake_id(args, manifest, policy) {
-        Ok(id) => Outcome::ok_line(format!("run={id}")),
+        Ok(id) => Outcome::ok_line(intake_line(args, &id)),
         Err(outcome) => outcome,
+    }
+}
+
+/// intake の 1 行。`--rules` で上限を差し替えて通した周は**その事実を同じ行に残す**
+/// （`ceiling-overridden=<path>`・値は渡した path の字面そのもの・`s2-07l.65`）。
+///
+/// `--rules` は test の seam で、上限（`runner.allowed_commands`）を無条件に差し替える。
+/// 差し替えた周が通常の周と同じ 1 行しか出さないと、review は「埋め込みの上限で通った便」と
+/// 区別できない（`.56` lens M1）。差し替えていない周は出さない＝不在が既定。
+fn intake_line(args: &[String], id: &str) -> String {
+    match flag(args, "--rules") {
+        Ok(Some(path)) => format!("run={id} ceiling-overridden={path}"),
+        _ => format!("run={id}"),
     }
 }
 
@@ -497,7 +510,7 @@ fn run_all(args: &[String], manifest: &Manifest, policy: LockPolicy) -> Outcome 
     };
     // **run id は落ちた周も stdout に出す**。`resume` がこの id を要るためで、
     // ここで黙ると続きから引けない便が置き場に残る。
-    let mut lines = vec![format!("run={id}")];
+    let mut lines = vec![intake_line(args, &id)];
     let spawned = launch(args, &id, &runner, policy, &[Stage::Intake]);
     if let Some(stopped) = chain(&mut lines, spawned) {
         return stopped;

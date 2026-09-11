@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="folio-doc-type" content="adr">
+<meta name="folio-layer" content="project">
+<meta name="folio-version" content="0.4.6">
+<meta name="folio-status" content="accepted">
+<meta name="folio-stakeholders" content="Developer, AI Agent, External Reviewer">
+<meta name="folio-adr-id" content="0014">
+<meta name="folio-adr-date" content="2026-09-11">
+<title>ADR-0014 — 極性一覧は core が描く外形 snapshot として生成し、 CI の門 (C16.2) は xtask がその tracked 生成物を読む。 極性の値は境界の型が運ぶ</title>
+<link rel="stylesheet" href="../../common.css">
+<script type="application/ld+json">
+{
+  "@context": {
+    "dc": "http://purl.org/dc/terms/",
+    "schema": "https://schema.org/",
+    "folio": "https://folio.dev/spec/v1/"
+  },
+  "@id": "./ADR-0014-polarity-list-is-a-snapshot-rendered-by-core.html",
+  "@type": "schema:TechArticle",
+  "dc:isPartOf": [
+    { "@id": "./README.html" }
+  ],
+  "dc:title": "ADR-0014 — 極性一覧は core が描く外形 snapshot として生成し、 CI の門 (C16.2) は xtask がその tracked 生成物を読む。 極性の値は境界の型が運ぶ",
+  "folio:version": "0.4.6",
+  "folio:stakeholders": ["Developer", "AI Agent", "External Reviewer"],
+  "dc:references": [
+    { "@id": "../spec/constitution.html#c11" },
+    { "@id": "../spec/constitution.html#c16" },
+    { "@id": "../spec/constitution.html#c12" },
+    { "@id": "../spec/constitution.html#c2" },
+    { "@id": "./ADR-0013-machine-holds-enumerations-docs-hold-pointers.html" },
+    { "@id": "./ADR-0006-xtask-check-measure-tags.html" }
+  ]
+}
+</script>
+</head>
+<body>
+<!-- folio:chrome-top -->
+<a class="skip-link" href="#s1-context">本文へスキップ</a>
+<nav class="breadcrumb" aria-label="パンくず"><ol>
+  <li><a href="../index.html">design-intent</a></li>
+  <li><a href="./README.html">decisions</a></li>
+  <li aria-current="page">ADR-0014</li>
+</ol></nav>
+<!-- /folio:chrome-top -->
+
+<header class="doc-header">
+  <h1>ADR-0014 — 極性一覧は core が描く外形 snapshot として生成し、 CI の門 (C16.2) は xtask がその tracked 生成物を読む。 極性の値は境界の型が運ぶ</h1>
+  <div class="meta">Status: accepted &middot; Date: 2026-09-11 &middot; version 0.4.6 (拘束する constitution の版) &middot; C11.2 / C16.2 の充足形を記録 (C12.5 / C2 は参照)</div>
+</header>
+<!-- folio:chrome-toc -->
+<nav class="toc" aria-label="ページ内目次">
+<ol>
+  <li><a href="#s1-context">§1. Context</a></li>
+  <li><a href="#s2-decision">§2. Decision</a></li>
+  <li class="toc--sub"><a href="#s2-1-type">§2.1 極性の値は境界の型が運び、 一覧は集めるだけ</a></li>
+  <li class="toc--sub"><a href="#s2-2-snapshot">§2.2 「build 時に生成」の充足形は core が描く外形 snapshot</a></li>
+  <li class="toc--sub"><a href="#s2-3-gate">§2.3 C16.2 の門は xtask が tracked 生成物を読む (閾値を持たない)</a></li>
+  <li class="toc--sub"><a href="#s2-4-scope">§2.4 射程外</a></li>
+  <li><a href="#s3-consequences">§3. Consequences</a></li>
+  <li><a href="#s4-alternatives">§4. Alternatives Considered</a></li>
+  <li><a href="#s5-trace">§5. Trace</a></li>
+</ol>
+</nav>
+<!-- /folio:chrome-toc -->
+
+<aside class="informative">
+<p>本 ADR は IETF <strong>RFC 2119</strong> および <strong>RFC 8174 / BCP 14</strong> に定義される MUST / SHALL / SHOULD / MAY のキーワード解釈規約に従う。 ADR は決定時点の記録であり、 改訂は新しい ADR による supersede で行う。</p>
+</aside>
+
+<section id="s1-context" class="informative">
+<h2>§1. Context</h2>
+<p class="section-essence" data-audience="human">この器には「止める」仕組みがいくつもあります。 編集の瞬間に止めるもの、 あとから測って落とすもの、 迷ったら止めるもの、 迷ったら通して記録だけ残すもの。 ところがそれらを 1 枚に並べた表が無く、 各仕組みの性質は説明文の中にしか書かれていませんでした。 憲法は「性質を型で持ち、 一覧を機械で作り、 『その場で止める仕組みが 1 つも無い』状態を CI が拒め」と言っています。 その受け皿をどう作るかを決めます。</p>
+<p data-audience="machine">憲法 <a href="../spec/constitution.html#c11">C11.2</a> は「境界ごとの failure enum が FailOpen / FailClosed の極性型を運び、 全 guard の極性一覧を build 時に生成する」と定め、 <a href="../spec/constitution.html#c16">C16.2</a> は「in-loop guard の各件を一覧に InLoop として載せ、 guard が 0 件または全件 PostHoc の構成を CI が拒む」と定める。 <a href="../spec/constitution.html#c12">C12.5</a> は極性一覧を外形 snapshot の対象に名指す。 2026-09-09 の lens (K-7) が「MVP の 8 契約のどれもこの受け皿を持たない」と記録し、 2026-09-11 の実測でも core に極性の型は存在しない (母集団: <code>crates/&lt;NAME&gt;/src/**</code> に <code>FailOpen</code> / <code>FailClosed</code> / <code>InLoop</code> / <code>PostHoc</code> の識別子は 0)。</p>
+<p data-audience="machine">一方、 各境界の極性は<strong>散文</strong>として module の doc comment に在る (write-set guard「in-loop / fail-closed」、 cap guard「測れない周は deny しない」、 gate「判定に届かなかった周は INCONCLUSIVE」、 land「測れなかったを赤に化けさせない」)。 散文は規則ではなく (N2)、 全数を数える面も無い。 境界を足した便が極性を書き忘れても、 誰も気づけない。</p>
+<p data-audience="machine">「build 時に生成」をどう充足するかには分岐がある。 core の build script、 xtask による生成、 手書きの表、 rules manifest の行。 器は build script を持たず (ADR-0001 の単一 binary・compile speed の順位)、 xtask は core に依存しない (ADR-0006 / ADR-0013 の形)。 この制約の下で、 生成物をどこに置き、 誰が描き、 誰が門を撃つかを決める必要がある。</p>
+</section>
+
+<section id="s2-decision" class="normative">
+<h2>§2. Decision</h2>
+
+<h3 id="s2-1-type">§2.1 極性の値は境界の型が運び、 一覧は集めるだけ</h3>
+<p class="section-essence" data-audience="human">「いつ止めるか」と「迷ったらどちらへ倒れるか」を 2 つの小さな型にし、 止める仕組みのそれぞれが自分の隣にその値を書きます。 一覧はそれを集めて並べるだけで、 自分では値を持ちません。 こうすると値の置き場が 1 か所になります。</p>
+<p data-audience="machine">器 SHALL 極性を 2 つの閉じた enum の対で持つ: <code>Timing</code> (<code>InLoop</code> / <code>PostHoc</code>) と <code>OnFailure</code> (<code>FailClosed</code> / <code>FailOpen</code>)。 器 SHALL 各 guard の境界 (行為を止めうる判定を返す module) にその境界の極性を <strong>1 つの定数</strong>として置く (C11.2「境界ごとの enum が極性型を運ぶ」の充足形)。 器 SHALL 全 guard を 1 つの閉じた enum (<code>Guard</code>) で数えきり、 ADR-0013 §2.2 の 4 つ組 (閉じた enum・const slice・網羅 match・判別子順 pin) で持つ。 <code>Guard</code> の極性は境界の定数を<strong>返すだけ</strong>で、 一覧の側に値を持たない (SHALL NOT)。</p>
+<p data-audience="machine">「guard」の定義は本 ADR が固定する: <strong>行為 (編集・起動・merge・書込・session の作り直し) を止めうる判定を返す境界</strong>。 状態を選ぶだけの判定 (tick の inject / noop・session-start の served) は guard ではない (MUST NOT be listed)。 FailOpen の境界 (cap guard の「測れない周は止めない」・SRS FR26) は FailOpen として<strong>そのまま</strong>載せる——一覧の目的は全数の可視化であり、 全件を FailClosed に見せることではない。</p>
+
+<h3 id="s2-2-snapshot">§2.2 「build 時に生成」の充足形は core が描く外形 snapshot</h3>
+<p class="section-essence" data-audience="human">一覧そのものは、 器の command が出力し、 その出力を test が「前と同じか」で固定する形で残します。 固定した出力 file が repo に入るので、 一覧が変わる変更は必ず差分として見えます。 build 用の別の仕組みは作りません。</p>
+<p data-audience="machine">器 SHALL subcommand <code>&lt;NAME&gt; polarity</code> を持ち、 <code>Guard</code> の全 variant を 1 行 1 guard で描き、 末尾に集計 1 行を出す。 器 SHALL この出力を外形 snapshot (insta・tracked) として pin する (C12.5)。 C11.2「build 時に生成」の充足形は<strong>この tracked snapshot</strong>であり (test 時に core が描き、 差分が PR に現れる)、 器 SHALL NOT build script を持たない。 行の token の名前・順序・書式は設計 (<code>docs/design/polarity.md</code> §4) が正であり、 変える便は本 ADR を supersede する。</p>
+
+<h3 id="s2-3-gate">§2.3 C16.2 の門は xtask が tracked 生成物を読む (閾値を持たない)</h3>
+<p class="section-essence" data-audience="human">「その場で止める仕組みが 1 つも無い」を拒む門は、 構造検査が固定済みの出力 file を読んで数えます。 数えられなかったときは「無い」ではなく「読めなかった」として落とします。 数の上限や下限は決めません。</p>
+<p data-audience="machine">器の構造検査 (<code>cargo xtask check</code>) SHALL measure を 1 本持ち、 §2.2 の tracked snapshot の集計行を読んで in-loop の件数と全数を判定行に出す。 器 SHALL 次を違反にする: (a) snapshot が無い・集計行を読めない (fail-closed)、 (b) guard が 0 件、 (c) in-loop が 0 件。 この measure は閾値を持たず (SHALL NOT)、 rules manifest の行を持たない——極性は規則値ではなく型の事実であり、 manifest に写すと 2 面になる。 xtask SHALL NOT core に依存しない形を保つ (読むのは tracked file だけ)。</p>
+
+<h3 id="s2-4-scope">§2.4 射程外</h3>
+<p class="section-essence" data-audience="human">この記録が決めるのは「値をどこに置くか」「一覧をどう作るか」「門が何を読むか」だけです。 どの仕組みがどちらの性質を持つべきかの是非、 各仕組みの中身、 一覧の見た目の細部はここでは決めません。</p>
+<p data-audience="machine">次は本 ADR の決定ではない (MUST NOT be read as such): 各境界の極性の<strong>値</strong> (境界の設計と SRS が決める・例: cap guard の FailOpen は FR26)、 各境界の実装、 判定行や snapshot 行の書式の細部 (設計 doc)、 hook 予算の deny 化 (C5 の裁定)、 lens を独立の variant にするか (契約で決める)。</p>
+</section>
+
+<section id="s3-consequences" class="informative">
+<h2>§3. Consequences</h2>
+<p class="section-essence" data-audience="human">良い面は、 止める仕組みの全数と性質が初めて 1 枚で見え、 「その場で止める仕組みが無い」状態を CI が拒めるようになること。 迷ったら通す仕組みが隠れずに載ることも利点です。 悪い面は、 仕組みを足すたびに一覧の型と固定した出力を更新する手間が要ること。 それと、 一覧が言う性質と実際の挙動が一致しているかは、 一覧ではなく各仕組みの test が担うことです。</p>
+<p data-audience="machine">Positive: C11.2 / C16.2 の受け皿が型・snapshot・measure の 3 面で在る状態になる。 境界の追加は <code>Guard</code> への variant 追加を強いる (網羅 match・enum-slices) ので、 極性の書き忘れが compile / CI で落ちる。 FailOpen の境界が一覧に露出する (隠れた fail-open を数えられる)。</p>
+<p data-audience="machine">Negative (受け入れるコスト): 境界を足す便は <code>Guard</code>・境界の定数・snapshot の 3 か所を動かす。 一覧が述べる極性が実装と一致することは<strong>一覧では測れない</strong>——各境界の歯 (不読 → deny・INCONCLUSIVE ≠ PASS・Unmeasurable ≠ green・cap guard の測れない周 → allow + 記録) が担う。 定数が嘘をつく形は、 その境界の歯が無ければ静かに通る。</p>
+</section>
+
+<section id="s4-alternatives" class="informative">
+<h2>§4. Alternatives Considered</h2>
+<p class="section-essence" data-audience="human">4 つの案を退けました。 build のときに別の仕組みで表を作る案は、 build の経路が 2 本になり時間も増えます。 構造検査がコードの文字を読んで性質を推測する案は、 文字から性質は読めません。 表を手で書く案は必ず古くなります。 規則 file に 1 行ずつ書く案は、 値の置き場が 2 つになります。</p>
+<p data-audience="machine">(A) <strong>core の build script で一覧を生成する</strong>。 却下: 第 2 の build 経路を持ち込み、 compile 時間を増やす (憲法の順位 3 位・C13.5)。 生成物は build dir に落ちて PR の差分に現れない。</p>
+<p data-audience="machine">(B) <strong>xtask が core の source を字面で走査して極性を推定する</strong>。 却下: doc comment は規則ではなく (N2)、 字面から極性は読めない。 xtask の核である「core に依存しない」は保てるが、 数えるものが型でなくなる。</p>
+<p data-audience="machine">(C) <strong>手書きの表を design-intent か docs に置く</strong>。 却下: N2 / C1.2 / ADR-0013 §2.1 に反し、 必ず drift する。</p>
+<p data-audience="machine">(D) <strong>rules manifest に guard ごとの行を置き、 xtask がそれを読む</strong>。 却下: 極性は閾値でも裁定でもなく型の事実である。 manifest に写すと型と manifest の 2 面になり、 C14.2 の drift と同じ性質の穴を作る。</p>
+</section>
+
+<section id="s5-trace" class="informative">
+<h2>§5. Trace</h2>
+<p class="section-essence" data-audience="human">出所は、 器の中に性質の型が無いことと、 止める仕組みが説明文の中にだけ書かれていることを実際に数えたことです。 案の比較は、 build の仕組みを持たないという既存の決定と、 構造検査が器本体に依存しないという既存の決定から導きました。</p>
+<ul data-audience="machine">
+  <li>型の不在の実測 (2026-09-11・main = <code>e65d941</code>): <code>crates/&lt;NAME&gt;/src/**</code> に <code>FailOpen</code> / <code>FailClosed</code> / <code>InLoop</code> / <code>PostHoc</code> の識別子が 0 件。 極性の語は doc comment と設計 doc にのみ在る (母集団: src 8 file・docs/design 3 file)。</li>
+  <li>境界の洗い出し (同日): 行為を止めうる判定 enum を持つ module を全数で数えた——hook (write-set guard・permission deny・cap guard)、 pipe (intake の断り・spawn の予算・gate の段・lens・land の main 確認)、 fleet (store の lock)、 seat (cycle の断り)。 件数と variant の確定は契約 <code>s2-07l.25</code> の A/B が実測する。</li>
+  <li>K-7 (2026-09-09・<code>s2-07l.24</code> の lens): MVP の 8 契約に C11.2 / C16.2 の受け皿が無いことの記録。 本 ADR はその起票 (<code>s2-07l.25</code>) の設計判断である。</li>
+  <li>既存の決定との整合: build script を持たない (ADR-0001)・xtask は core に依存しない (ADR-0006 §2.3・ADR-0013 §2.1)・外形は snapshot で pin する (C12.5・既存 7 面の <code>*_external_form</code>)。</li>
+</ul>
+</section>
+
+<!-- folio:chrome-bottom -->
+<nav class="prevnext" aria-label="前後の文書">
+  <a class="prevnext__prev" href="ADR-0013-machine-holds-enumerations-docs-hold-pointers.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">ADR-0013 — 列挙は機械が持ち文書は pointer だけを持つ (ADR-0006 の measure tag 列挙を supersede)。 C2「宣言順」の充足形は const slice の判別子順 pin</span></a>
+</nav>
+<script>
+(function () {
+  var openedForPrint = [];
+  window.addEventListener('beforeprint', function () {
+    openedForPrint = [];
+    var ds = document.querySelectorAll('details:not([open])');
+    for (var i = 0; i < ds.length; i++) { ds[i].setAttribute('open', ''); openedForPrint.push(ds[i]); }
+  });
+  window.addEventListener('afterprint', function () {
+    for (var i = 0; i < openedForPrint.length; i++) openedForPrint[i].removeAttribute('open');
+    openedForPrint = [];
+  });
+  if (!document.querySelector('[data-audience]')) return;
+  /* 既定 = 人間プレゼン型 (ADR-0040 / rules §11.3): script 経由で初期 class を付与するため
+     no-JS では付かず全文可視に graceful degrade する。 static DOM は全文を保持 (AI/検索/印刷は不変)。 */
+  document.body.classList.add('audience-human');
+  var bar = document.createElement('nav');
+  bar.className = 'audience-toggle';
+  bar.setAttribute('aria-label', '表示対象の切替');
+  var states = [['both', '両方'], ['human', '人間向け'], ['machine', '機械向け']];
+  for (var s = 0; s < states.length; s++) {
+    (function (mode, label) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      b.setAttribute('aria-pressed', mode === 'human' ? 'true' : 'false');
+      b.addEventListener('click', function () {
+        document.body.classList.remove('audience-human', 'audience-machine');
+        if (mode !== 'both') document.body.classList.add('audience-' + mode);
+        var bs = bar.querySelectorAll('button');
+        for (var j = 0; j < bs.length; j++) bs[j].setAttribute('aria-pressed', bs[j] === b ? 'true' : 'false');
+      });
+      bar.appendChild(b);
+    })(states[s][0], states[s][1]);
+  }
+  var bc = document.querySelector('nav.breadcrumb');
+  if (bc && bc.parentNode) { bc.parentNode.insertBefore(bar, bc.nextSibling); }
+  else { document.body.insertBefore(bar, document.body.firstChild); }
+})();
+</script>
+<!-- /folio:chrome-bottom -->
+</body>
+</html>

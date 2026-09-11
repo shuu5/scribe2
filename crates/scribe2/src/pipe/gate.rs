@@ -239,10 +239,16 @@ pub struct Gate<'a> {
 
 /// 実測した 2 つの量。
 struct Measured {
-    /// rc≠0 だった verify 行の本数。
+    /// rc≠0 だった verify 行の本数（**測れた行**だけを数える）。
     red: u64,
-    /// `git diff <base>..HEAD` の生 byte。
+    /// `git diff <base>..HEAD` の生 byte（測れなかった周は空）。
     diff: Vec<u8>,
+    /// 段①（write-set 照合）で diff の path を**読めなかった**か（`s2-07l.65`）。
+    ///
+    /// 読めない周は「測れなかった」であって赤ではない——rc -1 を赤に数えると、道具の
+    /// 失敗が FAIL（判定に届いた便の終端）に化ける。land の `MainCheck::Unmeasurable` と
+    /// 同じ極性で INCONCLUSIVE へ倒す（fail-closed は保つ＝PASS には決してならない）。
+    unreadable: bool,
 }
 
 /// 書き留める判定 1 件。
@@ -310,11 +316,16 @@ fn precheck(worktree: &Path, base: &str) -> Option<String> {
 
 /// verify を逐条で撃ち、diff を測る。
 fn measure(entry: &Gate<'_>, worktree: &Path, base: &str) -> Result<Measured, String> {
-    let red = record_verify(entry, worktree, base)?;
+    let (red, unreadable) = record_verify(entry, worktree, base)?;
+    if unreadable {
+        // 段①が diff を読めない周は同じ range の生 diff も読めない。ここで broken（rc 2・
+        // verdict を書かない）にすると便は Implemented のまま「測り直せる便」に見えない。
+        return Ok(Measured { red, diff: Vec::new(), unreadable });
+    }
     let range = format!("{base}..HEAD");
     let diff = git_bytes(worktree, &["diff", &range])
         .ok_or_else(|| format!("{} の diff を測れない", worktree.display()))?;
-    Ok(Measured { red, diff })
+    Ok(Measured { red, diff, unreadable })
 }
 
 /// verify 各行を撃ち、行ごとの rc を `verify.jsonl` へ逐条で残す。
@@ -323,7 +334,7 @@ fn measure(entry: &Gate<'_>, worktree: &Path, base: &str) -> Result<Measured, St
 /// rc だけでは「何がどう赤いか」が便の外から読めず、gate が落ちるたびに人が同じ行を
 /// 手で撃ち直して理由を取り直すことになる（実測 2026-09-10・`s2-07l.49`）。緑の行は
 /// 残さない——読む理由が無い出力で診断 file を埋めると、赤い行の見出しが埋もれる。
-fn record_verify(entry: &Gate<'_>, worktree: &Path, base: &str) -> Result<u64, String> {
+fn record_verify(entry: &Gate<'_>, worktree: &Path, base: &str) -> Result<(u64, bool), String> {
     let common = frozen_common(entry)?;
     let steps = run_checks(&Checks {
         worktree,
@@ -334,10 +345,17 @@ fn record_verify(entry: &Gate<'_>, worktree: &Path, base: &str) -> Result<u64, S
     let path = verify_log_path(entry.state_dir, entry.run);
     let tail_path = path.with_file_name(STDERR_LOG_FILE);
     let mut red = 0;
+    // 段①が読めなかった周（rc -1）は**赤に数えない**——record は残す（現物を消さない）が、
+    // 判定は「測れなかった」側へ倒す（`s2-07l.65`）。
+    // 位置（`CHECKS` の宣言順）ではなく **段の名と rc** で見る（順序が変わっても診断が黙って消えない）。
+    let is_unreadable = |step: &Step| step.cmd == WRITE_SET_CMD && step.rc == -1;
+    let unreadable = steps.iter().any(is_unreadable);
     for (index, step) in steps.iter().enumerate() {
         let number = index as u64 + 1;
         if step.rc != 0 {
-            red += 1;
+            if !is_unreadable(step) {
+                red += 1;
+            }
             let head = format!("## n={number} rc={} cmd={}", step.rc, step.cmd);
             append_stderr(&tail_path, entry.policy, &head, &step.stderr)?;
         }
@@ -349,7 +367,7 @@ fn record_verify(entry: &Gate<'_>, worktree: &Path, base: &str) -> Result<u64, S
         ]);
         append_line(&path, &record, entry.policy).map_err(|err| err.to_string())?;
     }
-    Ok(red)
+    Ok((red, unreadable))
 }
 
 /// 便の写しから共通 verify を読む。
@@ -417,6 +435,14 @@ fn byte_count(bytes: &[u8]) -> u64 {
 
 /// 判定順を 1 か所に閉じる（**wildcard 無し・上から順に効く**）。
 fn decide(entry: &Gate<'_>, worktree: &Path, measured: &Measured) -> (Verdict, String) {
+    // **測れなかったは赤より先**（C10・AC3）。段①の diff が読めない周は判定に届いていない
+    // ので lens も呼ばず INCONCLUSIVE（測り直せる側・FR14）。
+    if measured.unreadable {
+        return (
+            Verdict::Inconclusive,
+            "diff の path を読めない（write-set を照合できない＝測れなかった）".to_owned(),
+        );
+    }
     if measured.red > 0 {
         return (
             Verdict::Fail,
