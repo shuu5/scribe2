@@ -1387,11 +1387,17 @@ fn land_once(repo: &Path, state: &Path, id: &str) -> Output {
 ///
 /// verify 行は全部 `sh -c` で撃たれるので、実在しない binary 名は sh の rc 127（実測の赤）で
 /// あって rc -1 にならない。rc -1 を作れるのは段①の diff を読めない周だけである。
+fn land_once_with_unreadable_diff(repo: &Path, state: &Path, id: &str) -> Output {
+    land_once_with_git_shim(repo, state, id, " diff --name-only -z ", None)
+}
+
+/// PATH の先頭に「引数列に `failing` を含む呼出しだけ rc 1 で落とし、他は実 git へ exec する git」を置いて
+/// land を 1 回撃つ（`--lens` は任意）。読めなかった周の極性を測る歯の共通部。
 #[expect(
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
-fn land_once_with_unreadable_diff(repo: &Path, state: &Path, id: &str) -> Output {
+fn land_once_with_git_shim(repo: &Path, state: &Path, id: &str, failing: &str, lens: Option<&str>) -> Output {
     use std::os::unix::fs::PermissionsExt;
     let bin_dir = state.join("shim-bin");
     fs::create_dir_all(&bin_dir).expect("shim の dir を作れる");
@@ -1404,20 +1410,21 @@ fn land_once_with_unreadable_diff(repo: &Path, state: &Path, id: &str) -> Output
     fs::write(
         &shim,
         format!(
-            "#!/bin/sh\ncase \"$*\" in *' diff --name-only -z '*) exit 1;; esac\nexec '{real}' \"$@\"\n"
+            "#!/bin/sh\ncase \"$*\" in *'{failing}'*) exit 1;; esac\nexec '{real}' \"$@\"\n"
         ),
     )
     .expect("shim を書ける");
     fs::set_permissions(&shim, fs::Permissions::from_mode(0o755)).expect("shim に実行権を付ける");
     let path = format!("{}:{}", bin_dir.display(), std::env::var("PATH").unwrap_or_default());
-    Command::new(bin())
-        .args([
-            "pipe", "land", "--run", id, "--repo", &repo.display().to_string(),
-            "--state-dir", &state.display().to_string(),
-        ])
-        .env("PATH", path)
-        .output()
-        .expect("binary を起動できる")
+    let mut args = vec![
+        "pipe".to_owned(), "land".to_owned(), "--run".to_owned(), id.to_owned(),
+        "--repo".to_owned(), repo.display().to_string(),
+        "--state-dir".to_owned(), state.display().to_string(),
+    ];
+    if let Some(cmd) = lens {
+        args.extend(["--lens".to_owned(), cmd.to_owned()]);
+    }
+    Command::new(bin()).args(args).env("PATH", path).output().expect("binary を起動できる")
 }
 
 /// PASS の gate まで通した便を作る。
@@ -2001,6 +2008,98 @@ fn pipe_land_rebase_follows_landed_sibling_and_lands() {
     assert!(stdout.contains("verdict=PASS"), "撃ち直しの判定行: {stdout}");
     assert!(stdout.contains(&format!("landed={new}")), "landed=: {stdout}");
     assert_follow_events(&state, &base, &moved, &new);
+    assert!(show_line(&repo, &state, &id_b).contains("stage=Landed"), "段は Landed");
+    clean(&[&repo, &state]);
+}
+
+/// 同じ base から **同一変更** の 2 便を PASS の gate まで通す（runner は既定と同じ `echo x >> src/lib.rs`）。
+fn two_identical_gated_runs(repo: &Path, state: &Path, marker: &Path) -> (String, String) {
+    let contract = write_contract(repo, &[], &[]);
+    let id_a = gated_pass(repo, state, &contract, marker);
+    let id_b = intake_bead(repo, state, &contract, "s2-3ax");
+    let spawned = run_pipe(&[
+        "spawn", "--run", &id_b, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(),
+        "--runner", "echo x >> src/lib.rs && git add -A && git commit -q -m runner",
+    ]);
+    assert_eq!(spawned.status.code(), Some(i32::from(RC_OK)), "2 本目の spawn: {}", stderr_of(&spawned));
+    let lens = fake_lens(marker, &lens_verdict("PASS"));
+    let gated = gate_once(repo, state, &id_b, Some(&lens));
+    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "2 本目の gate: {}", stderr_of(&gated));
+    (id_a, id_b)
+}
+
+/// 同一変更の 2 便: 1 本目が land した後の 2 本目は rebase で commit が 0 本になり、
+/// **gate を撃ち直さず `Failed detail=rebase-empty`**（main は 1 本目の sha のまま・`s2-07l.125`）。
+#[test]
+fn pipe_land_rebase_empty_fails_closed_without_regate() {
+    let (repo, state) = repo_with_state();
+    let marker = state.join("lens-ran");
+    let (id_a, id_b) = two_identical_gated_runs(&repo, &state, &marker);
+    let first = land_once(&repo, &state, &id_a);
+    assert_eq!(first.status.code(), Some(i32::from(RC_OK)), "1 本目の land: {}", stderr_of(&first));
+    let landed = git(&repo, &["rev-parse", "refs/heads/main"]);
+    fs::remove_file(&marker).expect("lens の marker を消せる");
+    let before = event_count(&state);
+    let lens = fake_lens(&marker, &lens_verdict("PASS"));
+    let out = run_pipe(&[
+        "land", "--run", &id_b, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(), "--lens", &lens,
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "空になった便は rc 1: {}", stderr_of(&out));
+    assert!(stderr_of(&out).contains("既に main に在る"), "理由: {}", stderr_of(&out));
+    let stderr = stderr_of(&out);
+    assert!(stderr.contains(&id_b) && stderr.contains("base=") && stderr.contains("main="), "run / base / main を名乗る: {stderr}");
+    assert_eq!(git(&repo, &["rev-parse", "refs/heads/main"]), landed, "main は 1 本目の sha のまま");
+    assert!(!marker.exists(), "gate を撃ち直さない（lens は走らない）");
+    assert_eq!(event_count(&state), before + 1, "残す event は Failed の 1 本だけ");
+    let log = fs::read_to_string(state.join("fleet").join("events.jsonl")).expect("event log");
+    let last = log.lines().last().unwrap_or_default();
+    assert!(last.contains("\"stage\":\"Failed\"") && last.contains("rebase-empty"), "末尾: {last}");
+    assert!(!log.contains("rebase:"), "追随の event は書かない（追随の先が無い）\n{log}");
+    assert!(show_line(&repo, &state, &id_b).contains("stage=Failed"), "段は Failed");
+    clean(&[&repo, &state]);
+}
+
+/// 読めない周は 0 に読み替えない: rebase の後の `rev-list --count` が落ちる周は `rebase-empty` に**倒さず**
+/// 従来どおり追随の event を残して撃ち直しの precheck へ流す（fail-closed の向きは不変）。
+#[test]
+fn pipe_land_rebase_empty_does_not_treat_unreadable_count_as_zero() {
+    let (repo, state) = repo_with_state();
+    let marker = state.join("lens-ran");
+    let (id_a, id_b) = two_gated_runs(&repo, &state, &marker);
+    let first = land_once(&repo, &state, &id_a);
+    assert_eq!(first.status.code(), Some(i32::from(RC_OK)), "1 本目の land: {}", stderr_of(&first));
+    let landed = git(&repo, &["rev-parse", "refs/heads/main"]);
+    let lens = fake_lens(&marker, &lens_verdict("PASS"));
+    // `rev-list --count` だけを落とす git を前に置く。追随の rebase 自体は通る。
+    let out = land_once_with_git_shim(&repo, &state, &id_b, " rev-list --count ", Some(&lens));
+    assert_ne!(out.status.code(), Some(i32::from(RC_OK)), "読めない周に land はしない: {}", stdout_of(&out));
+    assert!(!stderr_of(&out).contains("既に main に在る"), "読めないを 0 に読み替えない: {}", stderr_of(&out));
+    let log = fs::read_to_string(state.join("fleet").join("events.jsonl")).expect("event log");
+    assert!(!log.contains("rebase-empty"), "rebase-empty を名乗らない\n{log}");
+    assert!(log.contains("rebase:"), "追随の event は残る（従来の経路へ流れた）\n{log}");
+    assert_eq!(git(&repo, &["rev-parse", "refs/heads/main"]), landed, "main は動かない");
+    clean(&[&repo, &state]);
+}
+
+/// 負例: 変更が **異なる** 2 便は従来どおり追随して Landed（`rebase-empty` に倒れない）。
+#[test]
+fn pipe_land_rebase_empty_does_not_fire_for_distinct_changes() {
+    let (repo, state) = repo_with_state();
+    let marker = state.join("lens-ran");
+    let (id_a, id_b) = two_gated_runs(&repo, &state, &marker);
+    let first = land_once(&repo, &state, &id_a);
+    assert_eq!(first.status.code(), Some(i32::from(RC_OK)), "1 本目の land: {}", stderr_of(&first));
+    let lens = fake_lens(&marker, &lens_verdict("PASS"));
+    let out = run_pipe(&[
+        "land", "--run", &id_b, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(), "--lens", &lens,
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "異なる変更は追随して land: {}", stderr_of(&out));
+    assert!(stdout_of(&out).contains("landed="), "{}", stdout_of(&out));
+    let log = fs::read_to_string(state.join("fleet").join("events.jsonl")).expect("event log");
+    assert!(!log.contains("rebase-empty"), "rebase-empty は出ない\n{log}");
     assert!(show_line(&repo, &state, &id_b).contains("stage=Landed"), "段は Landed");
     clean(&[&repo, &state]);
 }
