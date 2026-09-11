@@ -1536,6 +1536,38 @@ fn seat_tick_injects_externalize_pointer_when_context_reaches_cap_while_busy() {
     }
 }
 
+/// cap **未満**の busy な席は、退避物 0 件 ∧ cycle lock が空いていても注入しない（`noop reason=busy`・
+/// tmux 未接触）。「cap 以上」の述語を常に真へ倒す変異（cargo mutants で唯一生存した形）は、
+/// 測れた席すべてへ退避の pointer を送る＝ここで落ちる。
+#[test]
+fn seat_tick_does_not_inject_below_cap_when_nothing_else_stops_it() {
+    let dir = tmp();
+    let target = "seatbelowfree";
+    let state = dir.join("state");
+    let wm = dir.join("wm");
+    fs::create_dir_all(&wm).ok();
+    fs::write(dir.join("pane.txt"), busy_pane_at(59)).ok();
+    let (wm_s, state_s, pane_s, sock_s) = (
+        wm.display().to_string(),
+        state.display().to_string(),
+        dir.join("pane.txt").display().to_string(),
+        dir.join("absent-sock").display().to_string(),
+    );
+
+    let (out, touched) = run_seat_probed(
+        &dir,
+        &[
+            "tick", "--target", target, "--wm-dir", &wm_s, "--tmux-socket", &sock_s,
+            "--state-dir", &state_s, "--capture-file", &pane_s,
+        ],
+    );
+
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(stdout_of(&out), "seat: tick decision=noop reason=busy context=59\n");
+    assert!(!touched, "cap 未満の busy な席には 1 key も送らない（tmux を撃たない）");
+    fs::remove_dir_all(&dir).ok();
+}
+
 /// 注入が**成立しなかった**周は打刻しない（storm 止めの極性の裏側）: 打刻を送達の前へ動かすと、
 /// 退避の促しが届かないまま次の周が fresh で黙る＝cap 以上の席を握り潰す。pane は読めるが
 /// tmux を撃てない席（shim）で `decision=error reason=inject-…`・rc 1・stamp 不在。
