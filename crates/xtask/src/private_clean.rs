@@ -27,14 +27,16 @@ const TAG: &str = "private-clean";
 /// （[`crate::limits::PRIVATE_PATH_MARKS`] と同じ理由）。
 const HOME_PATH_MARKS: &[&str] = &[concat!("/", "Users", "/"), concat!("\\", "Users", "\\")];
 
-/// RFC 2606 が予約する 2nd-level domain（完全一致・大文字小文字を区別しない）。
+/// RFC 2606 が予約する 2nd-level domain（完全一致か、その配下＝`.` を挟む suffix 一致・大文字小文字を
+/// 区別しない）。配下（`mail.example.com`）は第三者に割り当てられないので例示として通す。
+/// `example.com.evil.net` は suffix でないので落ちる（前方一致の罠を踏まない）。
 const RESERVED_DOMAINS: &[&str] = &["example.com", "example.net", "example.org"];
 
 /// RFC 2606 が予約する TLD（末尾 label の完全一致・大文字小文字を区別しない）。
 const RESERVED_TLDS: &[&str] = &["test", "example", "invalid", "localhost"];
 
 /// 違反として数える形の名（違反行に載せる）。
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy)]
 enum Form {
     /// (a) 予約 domain でないメールアドレス形。
     Email,
@@ -161,9 +163,11 @@ fn domain_after(bytes: &[u8], at: usize) -> Option<String> {
     well_formed.then(|| trimmed.to_owned())
 }
 
-/// RFC 2606 の予約 domain か（2nd-level の完全一致か、TLD の完全一致）。
+/// RFC 2606 の予約 domain か（2nd-level の完全一致・その配下・TLD の完全一致）。
 fn is_reserved(domain: &str) -> bool {
-    RESERVED_DOMAINS.contains(&domain)
+    RESERVED_DOMAINS
+        .iter()
+        .any(|reserved| domain == *reserved || domain.ends_with(&format!(".{reserved}")))
         || domain
             .rsplit('.')
             .next()
@@ -172,7 +176,7 @@ fn is_reserved(domain: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{scan, violating_lines, Form};
+    use super::{measure, scan, violating_lines, Form};
     use crate::paths_clean::TrackedFile;
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -237,22 +241,43 @@ mod tests {
             "first line\ncontact: {}\nthird\n",
             email("a", "corp-example.co.jp")
         );
+        // 予約 SLD の**配下**（RFC 2606 §3 は example.com を第 2 レベルで予約＝配下は割当不能）も通す。
         let reserved = format!(
-            "{}\n{}\n{}\n{}\n{}\n{}\n",
+            "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n",
             email("user", "example.com"),
             email("ops", "Example.NET"),
             email("x", "foo.invalid"),
             email("y", "bar.test"),
             email("z", "baz.example"),
             email("w", "q.localhost"),
+            email("m", "mail.example.com"),
+            email("s", "a.b.EXAMPLE.org"),
         );
-        let measured = scan_fixture(&[("dirty.md", dirty), ("reserved.md", reserved)]);
+        // 前方一致の罠・末尾 `.`・予約 TLD を含む別 TLD は**落ちる**（行番号で 1 対 1 に見る）。
+        let tricky = format!(
+            "{}\n{}\n{}\n{}\n",
+            email("e", "example.com.evil.net"),
+            email("d", "corp.co."),
+            email("j", "b.test.jp"),
+            email("k", "myexample.com"),
+        );
+        let measured = scan_fixture(&[
+            ("dirty.md", dirty),
+            ("reserved.md", reserved),
+            ("tricky.md", tricky),
+        ]);
 
-        assert_eq!(measured.fact, "private-clean=2", "2 本とも走査したはず");
+        assert_eq!(measured.fact, "private-clean=3", "3 本とも走査したはず");
         assert_eq!(
             measured.violations,
-            vec!["private-clean: dirty.md:2 email".to_owned()],
-            "予約でない domain の 1 行だけが違反のはず"
+            vec![
+                "private-clean: dirty.md:2 email".to_owned(),
+                "private-clean: tricky.md:1 email".to_owned(),
+                "private-clean: tricky.md:2 email".to_owned(),
+                "private-clean: tricky.md:3 email".to_owned(),
+                "private-clean: tricky.md:4 email".to_owned(),
+            ],
+            "予約でない domain だけが違反・予約 SLD の配下は通るはず"
         );
     }
 
@@ -261,14 +286,102 @@ mod tests {
     #[test]
     fn private_clean_ignores_crate_at_version_and_bare_at() {
         let body = format!(
-            "install {}\nuse {}\n{}\n",
+            "install {}\nuse {}\n{}\n{}\n",
             email("cargo-insta", "1.48.0"),
             email("", "scope.io"),
             email("vscode-jsonrpc", "8.2.0"),
+            // 末尾 label が英字 1 文字の形は email 形と見ない（2 文字以上の線）。
+            email("a", "b.c"),
         );
         let measured = scan_fixture(&[("tools.md", body)]);
         assert_eq!(measured.fact, "private-clean=1");
         assert!(measured.violations.is_empty(), "版の形は違反でないはず: {:?}", measured.violations);
+    }
+
+    /// fail-closed（measure の枝）: 母集団 0 件は違反・index を取れない周（git の外）も違反で、
+    /// どちらも fact は `?`（走査本数を出さない・0 件の緑にしない）。paths-clean と同じ極性。
+    #[test]
+    fn private_clean_measure_fails_closed_on_zero_or_unmeasurable_population() {
+        use crate::check::Layout;
+        let dir = tmp_dir();
+        let layout = |root: &Path| Layout {
+            root: root.to_path_buf(),
+            core_dir: root.to_path_buf(),
+            member_dirs: Vec::new(),
+            name: "probe".to_owned(),
+        };
+        // git の外 = `rev-parse --show-toplevel` が rc≠0 → Unmeasurable。
+        let outside = measure(&layout(&dir));
+        // git repo だが index が空 = 母集団 0 件。
+        let inited = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&dir)
+            .args(["init", "-q"])
+            .output()
+            .is_ok_and(|out| out.status.success());
+        let empty = measure(&layout(&dir));
+        fs::remove_dir_all(&dir).ok();
+
+        assert!(inited, "fixture を git repo にできるはず");
+        for (label, measured) in [("git の外", outside), ("0 件", empty)] {
+            assert_eq!(measured.fact, "private-clean=?", "{label}: 走査本数を出さないはず");
+            let head = measured.violations.first().map(String::as_str).unwrap_or_default();
+            assert!(head.starts_with("private-clean: "), "{label}: 違反として出すはず: {head}");
+        }
+    }
+
+    /// repo root **でない** dir（repo の内側の sub dir）は `n/a` を名乗り違反を出さない
+    /// （flip-check の base 木はこの枝＝違反へ倒すと以後の全 PR の flip-check が止まる・lens-87）。
+    #[test]
+    fn private_clean_is_na_outside_repo_root() {
+        use crate::check::Layout;
+        let dir = tmp_dir();
+        let sub = dir.join("sub");
+        fs::create_dir_all(&sub).expect("sub dir を作れる");
+        let inited = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&dir)
+            .args(["init", "-q"])
+            .output()
+            .is_ok_and(|out| out.status.success());
+        let measured = measure(&Layout {
+            root: sub.clone(),
+            core_dir: sub.clone(),
+            member_dirs: Vec::new(),
+            name: "probe".to_owned(),
+        });
+        fs::remove_dir_all(&dir).ok();
+
+        assert!(inited, "fixture を git repo にできるはず");
+        assert_eq!(measured.fact, "private-clean=n/a(not-a-repo-root)");
+        assert!(measured.violations.is_empty(), "n/a の周は違反を出さないはず: {:?}", measured.violations);
+    }
+
+    /// 免除は paths-clean と**同じ 1 本**を通す: 免除 file のコメント行だけが免除され、同じ file の
+    /// 非コメント行の email は違反として残る（免除を外す変異・全行に広げる変異はここで落ちる）。
+    #[test]
+    fn private_clean_shares_comment_line_exemption_with_paths_clean() {
+        use crate::check::PATHS_CLEAN_SKIP;
+        let dir = tmp_dir();
+        let rel = Path::new(PATHS_CLEAN_SKIP);
+        fs::create_dir_all(dir.join(rel.parent().unwrap_or(Path::new(""))))
+            .expect("免除 file の dir を作れる");
+        let body = format!(
+            "# example: {}\ncontact: {}\n# note: {}\n",
+            email("doc", "corp-example.co.jp"),
+            email("ops", "corp-example.co.jp"),
+            email("x", "corp-example.co.jp"),
+        );
+        fs::write(dir.join(rel), body).expect("免除 file を書ける");
+        let measured = scan(&dir, &[tracked(PATHS_CLEAN_SKIP)]);
+        fs::remove_dir_all(&dir).ok();
+
+        assert_eq!(measured.fact, "private-clean=1");
+        assert_eq!(
+            measured.violations,
+            vec![format!("private-clean: {PATHS_CLEAN_SKIP}:2 email")],
+            "コメント行だけ免除・非コメント行は違反のはず"
+        );
     }
 
     /// (b) macOS / Windows の home path 形は違反・Linux の home 接頭形だけの file は本 measure では数えない
