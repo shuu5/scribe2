@@ -4,6 +4,7 @@
 //! 属すること**である（ADR-0012 §2.1）。それ以外の失敗は claude の rc をそのまま写す——包みが
 //! 独自の判定を足すと、呼出側は「誰が止めたか」を見失う。
 
+use crate::polarity::{OnFailure, Polarity, Timing};
 use super::{build, feed, fill, flag, need, read_stdin_bytes, Call, DEFAULT_CLAUDE, RC_RATE_LIMIT};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
 use crate::pipe::declaration::Effective;
@@ -223,6 +224,14 @@ const STATUS_KEY: &str = "status";
 pub fn stops_on(status: &str, stop_statuses: &[&str]) -> bool {
     stop_statuses.contains(&status)
 }
+
+/// この境界の極性（[`Decision::Stop`]）: 上限 record を読んだその場で便を止めるが、**集合に無い status・record が無い周は止めない**（ADR-0012 §2.1「未知は claude の rc へ落ちる」）＝FailOpen。一覧はこれを隠さない。
+/// 記録時点の止める側の集合（[`STOP_STATUSES`]）は**空**で production はこの guard を通らない（歯は非空の集合を渡して
+/// 両向きに測る）——一覧の in-loop 件数に載るのは**型の事実**であり、実 run で止めた回数ではない。
+pub const POLARITY: Polarity = Polarity {
+    timing: Timing::InLoop,
+    on_failure: OnFailure::FailOpen,
+};
 
 /// 1 行に対する判定（純関数の返り値）。
 ///

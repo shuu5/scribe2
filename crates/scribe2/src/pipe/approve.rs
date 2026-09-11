@@ -7,6 +7,7 @@
 //! 止める位置は **spawn の手前**（A1「実行前」）。runner を起こしてから聞くのでは、
 //! 消す / 出す / 使うが**もう起きた後**になる。
 
+use crate::polarity::{OnFailure, Polarity, Timing};
 use super::contract::Contract;
 use super::{emit, Emit};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
@@ -62,6 +63,12 @@ pub fn approve(entry: &Approve<'_>) -> Outcome {
         Ok(()) => Outcome::ok_line(format!("run={} approved=true", entry.run)),
     }
 }
+
+/// この境界の極性（A1 の承認関門・[`needs_approval`] → [`block`]）: spawn の手前＝起動の時点で止め、承認は event log の逐語だけを根拠にする（読めない・無い周は起動しない）。
+pub const POLARITY: Polarity = Polarity {
+    timing: Timing::InLoop,
+    on_failure: OnFailure::FailClosed,
+};
 
 /// 3 クラスを名乗る契約が未承認のまま実行されようとしているか（A1「実行前」）。
 pub fn needs_approval(contract: &Contract, approved: bool) -> bool {
