@@ -1490,9 +1490,11 @@ fn prepare_tick_case(dir: &Path, case: &TickCase, target: &str) -> PathBuf {
 fn seat_tick_noop_reasons_in_fixed_order() {
     let target = "seatorder";
     let cases = [
-        // 鮮度が内側（fresh）: pane も WM も lock も立たない組だが、鮮度で止まる。
+        // 鮮度が内側（fresh）: pane も lock も立たない組だが、鮮度で止まる。退避物は**他席**の
+        // 名乗り＝自席の申告ではないので鮮度を飛ばさない（`.105`・自席の退避物が在る周は下の
+        // `freshly_stamped_seat` の歯が持つ）。
         TickCase { reason: "heartbeat-fresh", beat_age_s: Some(STALE_S - 1), pane: None,
-                   wm_seat: Some(target), via_file: false, tmux: false, context: "" },
+                   wm_seat: Some("other:seat"), via_file: false, tmux: false, context: "" },
         TickCase { reason: "pane-missing", beat_age_s: None, pane: None,
                    wm_seat: Some(target), via_file: true, tmux: false, context: "" },
         // 鮮度が外側（stale）: 同じ fixture でも pane を読みに行く＝tmux に当たる。
@@ -1804,8 +1806,9 @@ fn seat_tick_proceeds_with_unmeasured_context_without_statusline() {
 #[test]
 fn seat_tick_does_not_read_context_when_fresh() {
     let target = "seatfreshcap";
+    // 退避物は他席の名乗り（自席の退避物が在る周は鮮度を飛ばして pane を読む・`.105`）。
     let case = TickCase { reason: "heartbeat-fresh", beat_age_s: Some(STALE_S - 1),
-                          pane: Some(OVER_CAP_BUSY_PANE), wm_seat: Some(target),
+                          pane: Some(OVER_CAP_BUSY_PANE), wm_seat: Some("other:seat"),
                           via_file: true, tmux: false, context: "" };
     let dir = tmp();
     let state = prepare_tick_case(&dir, &case, target);
@@ -2330,6 +2333,84 @@ fn seat_tick_runs_cycle_when_parked() {
     // socket を消す**前**に畳む（消してからでは kill-session が届かない・実測 2026-09-10）。
     drop(guard);
     fs::remove_dir_all(&dir).ok();
+}
+
+/// 退避を終えた席は heartbeat を**直前**に打っていることが多い。自席の未 consumed 退避物が
+/// 在る周は鮮度 gate を飛ばして cycle を評価する（退避物の存在 = 席の「作り直してよい」の
+/// 申告・裁定 (a)・`s2-07l.105`・user 直命 2026-09-11「流石に長すぎだろ」）。
+///
+/// base は鮮度で `heartbeat-fresh` の noop になり、退避物が在るのに最大 `seat.tick_stale_s`
+/// の間 cycle が評価されない（admin2 で実測: 退避完了時 age 588 s → 約 30 分 idle）。
+#[test]
+fn seat_tick_cycles_freshly_stamped_seat_when_own_wm_is_unconsumed() {
+    let dir = tmp();
+    let socket = socket_of(&dir);
+    let name = "seatfreshparked";
+    let log = dir.join("seat.log");
+    let guard = start_clearing_seat(&socket, name, &log, false);
+    assert!(guard.ready(), "fake な席を立てられる");
+    let state = dir.join("state");
+    let seat = seat_dir_of(&state, name);
+    fs::create_dir_all(&seat).expect("seat dir を作れる");
+    // 直前の打刻（mtime = いま）＝鮮度だけなら fresh で止まる周。
+    fs::write(seat.join("heartbeat"), "").expect("打刻を置ける");
+    let wm = dir.join("wm");
+    wm_file(&wm, "working-memory.parked.md", name);
+    let (wm_s, state_s) = (wm.display().to_string(), state.display().to_string());
+
+    let out = run_seat(&[
+        "tick", "--target", name, "--wm-dir", &wm_s, "--tmux-socket", &socket,
+        "--state-dir", &state_s,
+    ]);
+
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(
+        stdout_of(&out),
+        format!("seat: tick decision=noop reason=wm-unconsumed{CTX_NO_SOURCE} cycle=done{}\n", provenance(&state, "flag")),
+        "打刻が fresh でも退避物が在れば鮮度を飛ばして cycle を評価する（`cycle=` が付く）"
+    );
+    assert_eq!(
+        fs::read_to_string(&log).unwrap_or_default(),
+        "/clear\n/rebrief\n",
+        "作り直して復元した"
+    );
+    drop(guard);
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// 鮮度を飛ばした周も**それ以降の条件は不変**: 走行中（busy）の席には送らない（cycle も
+/// 評価しない＝`cycle=` が付かない）。base は pane を読まずに `heartbeat-fresh` で止まる。
+#[test]
+fn seat_tick_freshly_stamped_seat_with_own_wm_is_still_not_cycled_when_busy() {
+    let target = "seatfreshbusy";
+    let case = TickCase { reason: "busy", beat_age_s: Some(STALE_S - 1), pane: Some(BUSY_BELOW),
+                          wm_seat: Some(target), via_file: true, tmux: false, context: CTX_10 };
+    let dir = tmp();
+    let state = prepare_tick_case(&dir, &case, target);
+    let (out, touched) = run_tick_case(&dir, &case, target, &state);
+    assert_tick_case(&out, touched, &case, 0, &state);
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// 鮮度 gate を飛ばすのは**自席の**未 consumed 退避物が在る周だけ（裁定 (c) 不変）: 他席の
+/// 名乗りの退避物だけの周・退避物の dir を読めない周は従来どおり `heartbeat-fresh` で止まり、
+/// tmux を叩かない（他席の文脈で cycle しない・読めない周を「在る」に読み替えない）。
+#[test]
+fn seat_tick_freshly_stamped_seat_keeps_heartbeat_gate_without_own_wm() {
+    let target = "seatfreshother";
+    let cases = [
+        TickCase { reason: "heartbeat-fresh", beat_age_s: Some(STALE_S - 1), pane: Some(IDLE_PANE),
+                   wm_seat: Some("other:seat"), via_file: false, tmux: false, context: "" },
+        TickCase { reason: "heartbeat-fresh", beat_age_s: Some(STALE_S - 1), pane: Some(IDLE_PANE),
+                   wm_seat: None, via_file: false, tmux: false, context: "" },
+    ];
+    for (at, case) in cases.iter().enumerate() {
+        let dir = tmp();
+        let state = prepare_tick_case(&dir, case, target);
+        let (out, touched) = run_tick_case(&dir, case, target, &state);
+        assert_tick_case(&out, touched, case, at, &state);
+        fs::remove_dir_all(&dir).ok();
+    }
 }
 
 /// 走行中の pane はどの形でも **busy**: 現行の spinner（`esc to interrupt` 無し・statusline
