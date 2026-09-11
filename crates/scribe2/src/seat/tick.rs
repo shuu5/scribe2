@@ -3,25 +3,31 @@
 //! 席の**外**（host の timer）から回り、条件を**順序固定**で見て、成立した周だけ 1 行を
 //! 注入する。R-E12 のとおり席は自分で周期起動を張らず、tick は席へ event としてしか届かない。
 //!
-//! **順序は load-bearing である**: 退避物の走査 → 鮮度 → pane 取得 → **context** → idle →
-//! 未 consumed 退避物 → cycle lock。鮮度を pane より先に見るのは、fresh な周に tmux を 1 度も
-//! 叩かないためで（生きている席を毎周 capture しない）、その鮮度より先に自席の退避物を走査する
-//! のは、退避を終えた席は heartbeat を**直前**に打っていることが多く、退避物が在る（＝席が
-//! 「作り直してよい」と申告している）のに鮮度で最大 `seat.tick_stale_s` の間 cycle が評価されない
-//! ためである（`s2-07l.105`・裁定 (a)・admin2 で実測: 退避完了時 age 588 s → 約 30 分 idle）。
-//! 飛ばすのは**自席の未 consumed 退避物が在る周だけ**（裁定 (c)・走査が読めない周は「在る」に
-//! 読み替えず従来どおり鮮度から）で、飛ばした周もそれ以降の条件は不変（busy の席・lock が live な
-//! 周には送らない）。context を idle の**前**に見るのは、context が cap を超えた席は
+//! **順序は load-bearing である**: 退避物の走査 → 鮮度 → **状態**（state.jsonl の最終行を読む）→ pane 取得 →
+//! **context**（cap 以上なら退避の合図・状態の門の外）→ 状態の門（Idle だけが進む）→ 未 consumed
+//! 退避物 → cycle lock。鮮度を pane より先に見るのは、fresh な周に tmux を 1 度も叩かないためで
+//! （生きている席を毎周 capture しない）、その鮮度より先に自席の退避物を走査するのは、退避を終えた席は
+//! heartbeat を**直前**に打っていることが多く、退避物が在る（＝席が「作り直してよい」と申告している）
+//! のに鮮度で最大 `seat.tick_stale_s` の間 cycle が評価されないためである（`s2-07l.105`・裁定 (a)・
+//! admin2 で実測: 退避完了時 age 588 s → 約 30 分 idle）。飛ばすのは**自席の未 consumed 退避物が在る
+//! 周だけ**（裁定 (c)・走査が読めない周は「在る」に読み替えず従来どおり鮮度から）で、飛ばした周も
+//! それ以降の条件は不変（Busy の打刻の席・lock が live な周には送らない）。退避の合図を状態の門の
+//! **前**に置くのは、context が cap を超えた席は
 //! busy（lens 待ち・長い cargo）であり、busy を理由に noop すると誰にも止められず auto-compact に
-//! 至るためである（`s2-07l.89`・実インシデント 2026-09-11）。退避物を lock より先に見るのは、
-//! 「退避して止まっている席」を cycle の入口（裁定 (b)）へ落とすためである。順序を入れ替えると
-//! 同じ条件でも別の理由が出る＝理由の字面は順序の証拠でもある。
+//! 至るためである（`s2-07l.89`・実インシデント 2026-09-11・SRS FR29「idle を待たずに」＝planner
+//! 裁定 2026-09-11: FR29 > ADR-0015 §2.3）。退避物を lock より先に見るのは、「退避して止まっている席」
+//! を cycle の入口（裁定 (b)）へ落とすためである。順序を入れ替えると同じ条件でも別の理由が出る＝
+//! 理由の字面は順序の証拠でもある。
+//!
+//! **席の busy / idle は hook の打刻（[`state`]）が一次で、pane の字面は判定入力にしない**（憲法 C3.3・
+//! ADR-0015）。打刻が無い・読めない・Busy が古い周は理由を分けて注入しない（fail-closed）。pane を
+//! 読むのは context（statusline の数値）と注入の送達確認だけである。
 //!
 //! **代償 = 盲点は最大 `seat.tick_stale_s`**（宣言値）: 退避物の無い fresh の周は pane を読まない
 //! ので、打刻の直後に cap を超えた席は次の stale な周まで見えない。閾値は動かさない（C5）＝この
 //! 限界は設計 §3 に「残る側」として書く。
 
-use super::{cycle, heartbeat, inject, is_idle, meter, pane_of, sanitize_target, WmScan};
+use super::{cycle, heartbeat, inject, meter, pane_of, sanitize_target, state, WmScan};
 use crate::cli_outcome::{Outcome, RC_REFUSED};
 use crate::fleet::store::{self, LockPolicy};
 use crate::hook::{InjectionRecord, SCHEMA};
@@ -31,8 +37,6 @@ use std::time::Instant;
 
 /// 自打刻 marker の名前。
 pub const STAMP_FILE: &str = "tick-stamp";
-/// stale 閾値を宣言する rules 行の id（**値は code に焼かない**・憲法 C5）。
-const ID_STALE: &str = "seat.tick_stale_s";
 /// 記録の who。
 const WHO: &str = "seat-tick";
 /// 記録の when。
@@ -125,7 +129,7 @@ impl Context {
     }
 }
 
-/// 判定 1 回の全体（判定・cycle の結果・context）。
+/// 判定 1 回の全体（判定・cycle の結果・context・状態の読み）。
 struct Judged {
     /// 判定。
     decision: TickDecision,
@@ -133,29 +137,32 @@ struct Judged {
     cycled: Option<String>,
     /// context の評価。
     context: Context,
+    /// 席の状態の読み（fresh の周は読まない＝`None`・判定行に載らない）。
+    state: Option<state::Read>,
 }
 
 impl Judged {
-    /// pane を取得する前に決まった周（context は評価していない）。
+    /// 状態を読む前に決まった周（context も状態も評価していない）。
     fn bare(decision: TickDecision) -> Self {
         Self {
             decision,
             cycled: None,
             context: Context::Unevaluated,
+            state: None,
         }
     }
 }
 
-/// pane を取得した後に判定へ渡す材料。
-struct Seen<'a> {
-    /// pane 本文。
-    pane: &'a str,
+/// pane を取得した後に判定へ渡す材料（pane 本文そのものは持たない＝判定は字面を読まない）。
+struct Seen {
     /// 自席の退避物の数え。
     wm: WmScan,
     /// context の評価。
     context: Context,
     /// cycle lock の TTL（秒）。
     ttl_s: u64,
+    /// 席の状態の読み（typed・pane の字面ではない）。
+    state: state::Read,
 }
 
 /// 撃たなかった理由。**順序固定の条件のうち最初に立たなかったもの**を表す。
@@ -165,13 +172,19 @@ pub enum NoopReason {
     HeartbeatFresh,
     /// 2. pane を読めない。
     PaneMissing,
-    /// 2. 席が打ちかけである。
+    /// 3. 席の最終の打刻が Busy（turn が走っている）。
     Busy,
-    /// 3. 自席の未 consumed 退避物が在る（＝退避して止まっている）。
+    /// 3. 打刻 file が無い（hook が載っていない席・v1 の席）。**idle と読み替えない**。
+    StateMissing,
+    /// 3. 打刻 file が読めない・最終行が壊れている。**idle と読み替えない**。
+    StateUnreadable,
+    /// 3. 最終の Busy が `seat.tick_stale_s` より古い（hook が死んだ疑い）。**busy とも idle とも言わない**。
+    StateStale,
+    /// 4. 自席の未 consumed 退避物が在る（＝退避して止まっている）。
     WmUnconsumed,
-    /// 3. 退避物の dir を読めない（**0 件と読み替えない**）。
+    /// 4. 退避物の dir を読めない（**0 件と読み替えない**）。
     WmUnreadable,
-    /// 4. 他の cycle が走っている。
+    /// 5. 他の cycle が走っている。
     CycleLive,
 }
 
@@ -182,6 +195,9 @@ impl NoopReason {
             Self::HeartbeatFresh => "heartbeat-fresh",
             Self::PaneMissing => "pane-missing",
             Self::Busy => "busy",
+            Self::StateMissing => "state-missing",
+            Self::StateUnreadable => "state-unreadable",
+            Self::StateStale => "state-stale",
             Self::WmUnconsumed => "wm-unconsumed",
             Self::WmUnreadable => "wm-unreadable",
             Self::CycleLive => "cycle-live",
@@ -212,21 +228,21 @@ pub fn externalize_pointer(pct: u64, cap: u64) -> String {
 /// tick を 1 回回す。
 pub fn run(request: &Request) -> Outcome {
     let started = Instant::now();
-    let Some(state) = super::state_dir_of(request.state_dir) else {
+    let Some(place) = super::state_dir_of(request.state_dir) else {
         // 置き場が無いと記録も打刻も持てない＝判定を回さない（撃たない側へ倒す）。
         return Outcome::failed_line(RC_REFUSED, render(&body_of_error(REASON_STATE_DIR)));
     };
-    let dir = super::seat_dir(&state.path, request.target);
-    let judged = decide(request, &state, &dir);
-    let body = body(request.target, &judged, &state);
-    record(&state.path, request.target, &body, started);
+    let dir = super::seat_dir(&place.path, request.target);
+    let judged = decide(request, &place, &dir);
+    let body = body(request.target, &judged, &place);
+    record(&place.path, request.target, &body, started);
     match judged.decision {
         TickDecision::Error(_) => Outcome::failed_line(RC_REFUSED, render(&body)),
         TickDecision::Inject(..) | TickDecision::Noop(_) => Outcome::ok_line(render(&body)),
     }
 }
 
-/// 条件を順序固定で見る（退避物の走査 → 鮮度 → pane 取得 → context → idle → 退避物 → lock）。
+/// 条件を順序固定で見る（退避物の走査 → 鮮度 → 状態の読み → pane 取得 → context → 状態の門 → 退避物 → lock）。
 ///
 /// 退避物を鮮度より先に走査するのは、**自席の未 consumed 退避物が在る周は鮮度 gate を飛ばす**
 /// ためである（裁定 (a)・`s2-07l.105`）: 退避物の存在は席の「作り直してよい」の申告なので、
@@ -234,8 +250,8 @@ pub fn run(request: &Request) -> Outcome {
 /// に延びる。走査の結果は後段（context / 退避物）でも同じ値を使う（cycle を回す周だけは cycle 側が
 /// 自分の入口でもう 1 度走査する＝lock の内側で確かめ直す）。
 /// 他席の名乗り・0 件・読めない周は従来どおり鮮度から（読めない周を「在る」に読み替えない）。
-fn decide(request: &Request, state: &super::StateDir, dir: &Path) -> Judged {
-    let (Some(stale_s), Some(ttl_s)) = (super::int_rule(ID_STALE), cycle::ttl_s()) else {
+fn decide(request: &Request, place: &super::StateDir, dir: &Path) -> Judged {
+    let (Some(stale_s), Some(ttl_s)) = (state::stale_s(), cycle::ttl_s()) else {
         return Judged::bare(TickDecision::Error(meter::REASON_NO_RULE.to_owned()));
     };
     let wm = super::scan_wm(Path::new(request.wm_dir), request.target);
@@ -243,37 +259,44 @@ fn decide(request: &Request, state: &super::StateDir, dir: &Path) -> Judged {
     if !parked_here && is_fresh(dir, stale_s) {
         return Judged::bare(TickDecision::Noop(NoopReason::HeartbeatFresh));
     }
+    // 状態は pane より先に読む（file 1 つ・tmux を叩かない）。読みは tick と cycle で 1 本。
+    let read = state::read_last(dir, stale_s);
     let Some(pane) = pane_of(request.socket, request.target, request.capture_file) else {
-        return Judged::bare(TickDecision::Noop(NoopReason::PaneMissing));
+        return Judged {
+            state: Some(read),
+            ..Judged::bare(TickDecision::Noop(NoopReason::PaneMissing))
+        };
     };
     let seen = Seen {
-        pane: &pane,
         wm,
         context: measure_context(&pane),
         ttl_s,
+        state: read,
     };
-    let (decision, cycled) = judge(request, state, dir, &seen);
+    let (decision, cycled) = judge(request, place, dir, &seen);
     Judged {
         decision,
         cycled,
         context: seen.context,
+        state: Some(read),
     }
 }
 
-/// pane を取得した後の条件（context → idle → 退避物 → lock）。
-fn judge(request: &Request, state: &super::StateDir, dir: &Path, seen: &Seen) -> (TickDecision, Option<String>) {
+/// pane を取得した後の条件（context → 状態の門 → 退避物 → lock）。
+fn judge(request: &Request, place: &super::StateDir, dir: &Path, seen: &Seen) -> (TickDecision, Option<String>) {
     // 他の cycle が走っている席（lock が live）には退避の pointer も送らない——作り直しの最中に
     // 行を queue しても、届く先は消えるか作り直された席である（排他は cycle 側と同じ 1 本の lock）。
+    // 退避の合図は**状態の門の外**（FR29「idle を待たずに」・busy な席へは queue の形で届く）。
     if let Some((pct, cap)) = over_cap(seen).filter(|_| !cycle::lock_is_live(dir, seen.ttl_s)) {
         let payload = externalize_pointer(pct, cap);
-        return (inject_line(request, state, dir, InjectKind::Externalize, &payload), None);
+        return (inject_line(request, place, dir, InjectKind::Externalize, &payload), None);
     }
-    if !is_idle(seen.pane) {
-        return (TickDecision::Noop(NoopReason::Busy), None);
+    if let Some(reason) = gate_of(seen.state) {
+        return (TickDecision::Noop(reason), None);
     }
     match seen.wm {
         WmScan::Unreadable => return (TickDecision::Noop(NoopReason::WmUnreadable), None),
-        WmScan::Unconsumed(_) => return parked(request, state, dir, seen.ttl_s),
+        WmScan::Unconsumed(_) => return parked(request, place, dir, seen.ttl_s),
         WmScan::None => {}
     }
     if cycle::lock_is_live(dir, seen.ttl_s) {
@@ -282,7 +305,19 @@ fn judge(request: &Request, state: &super::StateDir, dir: &Path, seen: &Seen) ->
     let payload = request
         .pointer
         .map_or_else(|| default_pointer(request.target), str::to_owned);
-    (inject_line(request, state, dir, InjectKind::Pointer, &payload), None)
+    (inject_line(request, place, dir, InjectKind::Pointer, &payload), None)
+}
+
+/// 状態の門（ADR-0015 §2.3・fail-closed）: **Idle だけが通る**。Busy・打刻なし・読めない・Busy が
+/// 古い、はそれぞれ別の理由で撃たない（missing を idle に、stale を busy に読み替えない）。
+fn gate_of(read: state::Read) -> Option<NoopReason> {
+    match read {
+        state::Read::Idle(_) => None,
+        state::Read::Busy(_) => Some(NoopReason::Busy),
+        state::Read::Missing => Some(NoopReason::StateMissing),
+        state::Read::Unreadable => Some(NoopReason::StateUnreadable),
+        state::Read::Stale(_) => Some(NoopReason::StateStale),
+    }
 }
 
 /// context が cap 以上で、退避の pointer を送るべき周か（`(使用率, cap)`・cycle lock は呼び側が見る）。
@@ -313,11 +348,11 @@ fn measure_context(pane: &str) -> Context {
 
 /// 退避して止まっている周（裁定 (b)）: lock が空いていれば cycle を**その場で**回す。
 ///
-/// 回すのは「退避物が在る ∧ idle ∧ lock が空いている」周だけで、**それ以外の周は cycle を
+/// 回すのは「退避物が在る ∧ 打刻が Idle ∧ lock が空いている」周だけで、**それ以外の周は cycle を
 /// 評価しない**——tick 行に `cycle=` が付かないこと自体が「評価していない」の印である。
 fn parked(
     request: &Request,
-    state: &super::StateDir,
+    place: &super::StateDir,
     dir: &Path,
     ttl_s: u64,
 ) -> (TickDecision, Option<String>) {
@@ -330,7 +365,7 @@ fn parked(
         wm_dir: request.wm_dir,
         socket: request.socket,
         capture_file: request.capture_file,
-        state_dir: state,
+        state_dir: place,
         restore: request.restore,
     });
     (noop, Some(cycle::summary(&result)))
@@ -355,7 +390,7 @@ fn is_fresh(seat_dir: &Path, stale_s: u64) -> bool {
 /// fresh で撃たない・storm 止め）。busy な席へは queue の形で届く（`.90`）。
 fn inject_line(
     request: &Request,
-    state: &super::StateDir,
+    place: &super::StateDir,
     dir: &Path,
     kind: InjectKind,
     payload: &str,
@@ -364,7 +399,7 @@ fn inject_line(
         target: request.target,
         socket: request.socket,
         payload,
-        state_dir: Some(state),
+        state_dir: Some(place),
     });
     match sent {
         // 注入の断り（`busy` 等）は noop の語彙と字が重なるので、**前置きで分ける**。
@@ -379,9 +414,11 @@ fn inject_line(
 }
 
 /// 判定の本体（記録の `what` と表示で**同じ字面**を使う）。context は判定の後ろ・cycle の前
-/// （評価した順）。**置き場と出所は最後**（置き場が解けた周は判定に依らず載せる＝席側の打刻行と
-/// 並べるだけで、別の dir を見ていることを記録から弁別できる・`s2-07l.70`）。
-fn body(target: &str, judged: &Judged, state: &super::StateDir) -> String {
+/// （評価した順）。席の状態（`state=<値> event=<出所|none>`）は既存 token の**後ろに追加**する
+/// （名前・順序・書式は不変・`s2-07l.95`・`event` は C10 の出所＝置き場の `source=` と混ぜない）。
+/// **置き場と出所は最後**（置き場が解けた周は判定に依らず載せる＝席側の打刻行と並べるだけで、
+/// 別の dir を見ていることを記録から弁別できる・`s2-07l.70`）。
+fn body(target: &str, judged: &Judged, place: &super::StateDir) -> String {
     let head = match judged.decision {
         TickDecision::Inject(kind, settled) => format!(
             "decision=inject target={} consumed={} kind={}",
@@ -397,7 +434,8 @@ fn body(target: &str, judged: &Judged, state: &super::StateDir) -> String {
         Some(found) => format!("{with_context} cycle={found}"),
         None => with_context,
     };
-    format!("{with_cycle}{}", state.suffix())
+    let with_state = judged.state.map_or(String::new(), state::Read::suffix);
+    format!("{with_cycle}{with_state}{}", place.suffix())
 }
 
 /// 実行系が回らなかった周の本体。

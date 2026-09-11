@@ -19,18 +19,20 @@
   - `Stop` → `Idle`（turn の終端。`stop_hook_active` が真の再入は打刻しない）
   - `SessionStart` → `Idle`（作り直し・再開・/clear の後。既存の `session-start` hook に打刻を足す）
 - 打刻の形: `<state_dir>/seat/<target>/state.jsonl` へ **1 行 JSON を append**（`schema` / `state` / `event` / `ts`〔UTC〕/ `sid`）。tick と cycle は**最終行**を読む。append-only は heartbeat / tick.jsonl と同じ store（`fleet::store::append_line`・lock 込み）を通す。
-- 出所付き（C10）: 行の `event` が「どの hook から来た値か」を名乗る。tick の判定行は `state=<busy|idle|missing|unreadable|stale> source=<event>` を出す。
+- 出所付き（C10）: 行の `event` が「どの hook から来た値か」を名乗る。tick の判定行は `state=<busy|idle|missing|unreadable|stale> event=<SessionStart|UserPromptSubmit|Stop|none>` を出す（`source=` は置き場の出所〔flag|git-config〕の既存 token ゆえ流用しない・planner 裁定 2026-09-11）。
 
 ## 3. target の解決（hook の中で自席を知る）
 
 - hook は stdin JSON（`session_id` / `transcript_path` / `cwd`）で自分の session を知るが、**tmux の target（`session:window`）は知らない**。tick は target しか知らない。
 - 解決 = 生成される `hooks/hooks.json` の shell 行で `--pane "$TMUX_PANE"` を渡し、core が `tmux display-message -p -t <pane> '#{session_name}:#{window_name}'` で target を解く。**core は env を読まない**（C2.2）——env に触れるのは生成された shell 行だけで、既存の `"${<NAME_UPPER>_BIN:-<NAME>}"` と同じ場所・同じ生成器（`cargo xtask gen-manifest`）である。`--pane` が空（tmux の外・`$TMUX_PANE` 未設定）なら打刻しない（黙る）。
 - `--tmux-socket` は tick と同じ flag（歯は独立 socket で撃つ）。
+- **運用の契約（実測 2026-09-11・tmux 3.6b）**: tick / cycle の `--target` は打刻が解く `session:window` と同じ字面でなければ同じ dir を見ない（両側とも `sanitize_target` で潰す）。window は **`-n` で明示して名付ける**（明示名は automatic-rename を off にする）。名無しの window は前景 process の名を取り、打刻の dir が席の一生の間に散る＝tick は永久に `state-missing`（fail-closed で静か）。writer と reader の dir の突合は doctor の主題（§6）。
 
 ## 4. tick / cycle の判定（typed 状態が一次・pane は判定入力にしない）
 
-- tick の順序（[seat-autonomy.md §3](./seat-autonomy.md) の (c) を差し替える）: 鮮度 → **状態**（state.jsonl の最終行）→ context → 未 consumed WM → cycle lock。pane は **inject の送達確認**（prompt 行が在るか・目印が消費されたか）にだけ使い、idle の判定には使わない。
-- 極性（fail-closed・注入しない側へ倒す）: 最終行が `Busy` → `noop reason=busy`／file が無い → `noop reason=state-missing`（hook が載っていない席・v1 の席）／読めない → `noop reason=state-unreadable`／`Busy` の `ts` が `seat.tick_stale_s` より古い → `noop reason=state-stale`（hook が死んだ疑い・**busy とも idle とも言わない**）。`Idle` だけが注入へ進む。
+- tick の順序（[seat-autonomy.md §3](./seat-autonomy.md) の (c) を差し替える）: 自席の未 consumed 退避物の走査（`s2-07l.105`: 退避物が在る周は鮮度を飛ばす）→ 鮮度 → **状態**（state.jsonl の最終行・typed）→ context → 未 consumed WM → cycle lock。pane は **inject の送達確認**（prompt 行が在るか・目印が消費されたか）にだけ使い、idle の判定には使わない。
+- **退避の合図は状態の門の外**（SRS FR29「idle を待たずに」> ADR-0015 §2.3・planner 裁定 2026-09-11）: context が cap 以上で自席の退避物が無く cycle が走っていない周は、打刻が Busy / missing / unreadable / stale でも退避の合図を送る（busy な席へは queue の形で届き次 turn で消費される・cap 以上の事実は打刻と独立に測れる）。状態の門が掛かるのは打刻の合図（pointer）と cycle だけ。
+- 極性（fail-closed・注入しない側へ倒す）: 最終行が `Busy` → `noop reason=busy`／file が無い → `noop reason=state-missing`（hook が載っていない席・v1 の席）／読めない → `noop reason=state-unreadable`／`Busy` の `ts` が `seat.tick_stale_s` より古い → `noop reason=state-stale`（hook が死んだ疑い・**busy とも idle とも言わない**）。`Idle` だけが注入へ進む。`Idle` は鮮度を持たない（turn が終わった席は何時間経っても idle・hook が `Stop` の直後に死んだ席は門が開いたまま＝doctor の主題）。
 - cycle も同じ 1 本の読み口（`SeatState` を返す関数 1 つ）を通す。字面判定の関数（`is_idle` と印の集合）は削除し、探索域・印の集合の記述は設計 doc から消す（列挙は機械が持たない側へ＝もう持たない）。
 
 ## 5. 極性一覧との関係

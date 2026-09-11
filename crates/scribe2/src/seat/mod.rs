@@ -1,9 +1,12 @@
-//! `seat` subcommand の面（設計 docs/design/seat-autonomy.md §3）: 開発 session の
-//! context 使用量を読む [`meter`] と、tmux pane へ 1 行を送る [`inject`]。
+//! `seat` subcommand の面（設計 docs/design/seat-autonomy.md §3・seat-state.md）: 開発 session の
+//! context 使用量を読む [`meter`]、tmux pane へ 1 行を送る [`inject`]、席の状態を hook の打刻で
+//! typed に持つ [`state`]。
 //!
 //! **env も HOME も読まない**（憲法 C2.2）。pane は `--target`（または明示された
 //! `--capture-file`）だけを見て、transcript は `--transcript` で明示された file だけを
 //! 読む。tmux は外部 process の呼出しで、crate 依存は増えない（憲法 A3 非該当）。
+//! **pane の字面は席の busy / idle の判定入力にしない**（憲法 C3.3・ADR-0015）: 字面を読むのは
+//! statusline の数値（[`meter`]）と注入の送達確認（[`inject`]）だけである。
 //!
 //! 出力は行を組んで返すだけで、stdout / stderr へは bin 側の `emit` / `emit_err` が
 //! 書く（憲法 C2）。
@@ -13,6 +16,7 @@ pub mod cycle;
 pub mod heartbeat;
 pub mod inject;
 pub mod meter;
+pub mod state;
 pub mod tick;
 
 use std::io::Read;
@@ -54,6 +58,23 @@ pub fn capture(socket: Option<&str>, target: &str) -> Option<String> {
     tmux_stdout(socket, &["capture-pane", "-p", "-t", target])
 }
 
+/// pane id（`%N`・生成 hooks.json の shell 行が `$TMUX_PANE` から渡す）から、tick と同じ形の
+/// target（`session:window`）を解く（設計 seat-state.md §3・ADR-0015 §2.2）。撃てない・どちらかの
+/// 名が空は `None`（打刻しない側）。
+///
+/// **両方の名が非空のときだけ** target とする: 無い pane id を渡された `display-message` は版に
+/// よって rc 非 0 でなく **`:`（両方空）を rc 0 で返す**（実測 2026-09-11・tmux 3.6b）。空を通すと
+/// 潰した dir 名 `_` の席が生まれ、存在しない席へ打刻を積む。
+pub fn target_of_pane(socket: Option<&str>, pane: &str) -> Option<String> {
+    let out = tmux_stdout(
+        socket,
+        &["display-message", "-p", "-t", pane, "#{session_name}:#{window_name}"],
+    )?;
+    let target = out.trim();
+    let (session, window) = target.split_once(':')?;
+    (!session.is_empty() && !window.is_empty()).then(|| target.to_owned())
+}
+
 /// 最後の prompt 行の右（入力欄）の字面。prompt 行が無ければ `None`。
 ///
 /// `None` は「入力欄が空」ではなく **特定できない**である（呼び側は fail-closed に
@@ -79,11 +100,7 @@ pub fn search_region(pane: &str) -> Vec<&str> {
     }
 }
 
-/// prompt の位置に依らない**直近 [`TAIL_LINES`] 非空行**（prompt 不在の pane の探索域）。
-///
-/// idle の判定には使わない（[`prompt_region`]）——この域は statusline の高さで埋まるので、
-/// 入力欄の上に描かれる走行中の印に届かない（実測 2026-09-11: statusline 3 行 + 区切り 2 行 +
-/// prompt 行で 6 行が尽き、spinner 行は下から 8 非空行目に在った）。
+/// prompt の位置に依らない**直近 [`TAIL_LINES`] 非空行**（prompt 不在の pane の statusline 探索域）。
 pub fn tail_nonempty(pane: &str) -> Vec<&str> {
     let mut tail: Vec<&str> = pane
         .lines()
@@ -119,143 +136,6 @@ pub fn sanitize_target(target: &str) -> String {
         return "_".repeat(squashed.len());
     }
     squashed
-}
-
-/// spinner 行の行頭に描かれる frame の字（本体 2.1.268 の配列を実読: unicode 版
-/// `· ✢ ✳ ✶ ✻ ✽` と ASCII 版 `· ✢ * ✶ ✻ ✽`）。
-///
-/// assistant 本文の行頭 `●`・tool の `⏺` / `⎿`・markdown の `-` はこの集合に無い＝本文が
-/// `… (3 件)` の形を持っても spinner と読まない（lens-94 HIGH-3 の絞り・planner 裁定 2026-09-11）。
-pub const SPINNER_GLYPHS: [char; 7] = ['·', '✢', '✳', '✶', '✻', '✽', '*'];
-
-/// 入力欄より**上**で走行中を名乗る字（spinner 行が banner に置き換わる周・compaction 中）。
-///
-/// API 待ちの banner は 4 形あり（本体の実装を実読・lens-94 HIGH-2）、`Retrying in` /
-/// `will retry in` / `next try in` / `waiting up to` で 4 形とも 1 つ以上に当たる。compaction 中は
-/// `…` すら描かれない専用の行（lens-94 MEDIUM-4）。字面での判定は暫定で、typed 化は `s2-07l.95`。
-pub const BUSY_MARKS_ABOVE: [&str; 5] = [
-    "Retrying in",
-    "will retry in",
-    "next try in",
-    "waiting up to",
-    "Compacting conversation",
-];
-
-/// 入力欄より**下**（statusline）で走行中を名乗る字。
-///
-/// 旧い版の印。現行の版では API 再試行行にしか描かれない（本体の文字列を実読 2026-09-11）ので
-/// **これだけでは走行中を読めない**——2026-09-11 に `/rebrief` 走行中の席へ `/clear` が送られた
-/// （bd `s2-07l.94`）。上の域では見ない: 本文がこの字を**引用**した idle な席を永久に busy と読む
-/// （lens-94 HIGH-3・席は idle だと出力を出さないので pane が変わらず脱出できない）。
-pub const BUSY_MARKS_BELOW: [&str; 1] = ["esc to interrupt"];
-
-/// 入力欄より**上**で走行中の印を探す非空行の数。
-///
-/// 実測（2026-09-11・3 席）では spinner 行は prompt 行の 2〜3 非空行上に在る（区切り線 1 行と、
-/// Tip・auto-update の注意・queue された入力の写しが 0〜2 行）。2 倍の余裕を持たせつつ、それ以上
-/// 遡らないのは、前の turn の出力に spinner の形の行が写っている（tool の結果に pane の写しが
-/// 載る等）周に idle な席を busy と読み続けないためである。行は `capture-pane -p` の**折返し後**
-/// の物理行なので、狭い pane では Tip 行が 2 行に折れて余裕が 1 行減る（lens-94 MEDIUM-6）。
-const ABOVE_LINES: usize = 6;
-
-/// 走行中の印を探す域: **最後の prompt 行より上の非空 [`ABOVE_LINES`] 行 + 下の全行**。
-///
-/// 上を数で切り下を全部取るのは、印の位置が 2 通りあるためである——spinner は入力欄の上
-/// （版によって statusline にも）に描かれ、statusline の高さは設定で変わる（実測 2026-09-11:
-/// 3 行）。末尾から固定行数を取る形（[`tail_nonempty`]）は statusline が高いほど上に届かず、
-/// **走行中の席を idle と読む**（bd `s2-07l.94`）。prompt 行が無い pane は空（呼び側は
-/// [`input_tail`] が `None` で先に fail-closed へ倒れる）。
-pub fn prompt_region(pane: &str) -> Vec<&str> {
-    let Some((mut above, below)) = split_regions(pane) else {
-        return Vec::new();
-    };
-    above.extend(below);
-    above
-}
-
-/// [`prompt_region`] を上（非空 [`ABOVE_LINES`] 行）と下（全行）に分けて返す。prompt 行が無ければ `None`。
-fn split_regions(pane: &str) -> Option<(Vec<&str>, Vec<&str>)> {
-    let lines: Vec<&str> = pane.lines().collect();
-    let at = lines.iter().rposition(|line| line.contains(PROMPT))?;
-    let mut above: Vec<&str> = lines
-        .iter()
-        .take(at)
-        .rev()
-        .filter(|line| !line.trim().is_empty())
-        .take(ABOVE_LINES)
-        .copied()
-        .collect();
-    above.reverse();
-    let below: Vec<&str> = lines
-        .iter()
-        .skip(at.saturating_add(1))
-        .filter(|line| !line.trim().is_empty())
-        .copied()
-        .collect();
-    Some((above, below))
-}
-
-/// spinner 行の形か: `<frame の 1 字> <語または文>…` に、括弧が在るなら `(<経過時間>` が続く
-/// （例 `✻ Sublimating… (19m 36s · ↓ 36.4k tokens)`・`✻ Reviewing the seat idle predicate… (2m 3s)`・
-/// `✻ Sublimating…`〔開始 16 秒未満は括弧が無い〕・旧版の `✻ Thinking… (23s · esc to interrupt)`）。
-///
-/// 語は版と周で変わり、todo が走る周は todo の文（空白入り）になる（lens-94 HIGH-1）ので、
-/// **語ではなく形**で読む: 行頭は [`SPINNER_GLYPHS`] の 1 字、`…` で切れ、括弧の中は経過時間
-/// （[`starts_with_elapsed`]）。turn の完了行（`✻ Crunched for 10m 28s · done`）は `…` を持たず、
-/// 本文の `● 直した… (3 件)` は行頭も括弧の中も外れる。ASCII 版の `*` は markdown の箇条書きと
-/// 同じ字なので、括弧無しの形では取らない。
-pub fn is_spinner_line(line: &str) -> bool {
-    let mut chars = line.trim_start().chars();
-    let Some(glyph) = chars.next() else {
-        return false;
-    };
-    if !SPINNER_GLYPHS.contains(&glyph) {
-        return false;
-    }
-    let Some(rest) = chars.as_str().strip_prefix(' ') else {
-        return false;
-    };
-    match rest.split_once("… (") {
-        Some((text, tail)) => !text.is_empty() && starts_with_elapsed(tail),
-        None => glyph != '*' && rest.len() > "…".len() && rest.ends_with('…'),
-    }
-}
-
-/// 括弧の中が経過時間で始まるか: `<n>h` / `<n>m` / `<n>s` を空白で 1〜3 つ並べ、直後が `)` か ` ·`。
-fn starts_with_elapsed(tail: &str) -> bool {
-    let mut rest = tail;
-    for _ in 0..3 {
-        let digits = rest.chars().take_while(char::is_ascii_digit).count();
-        let Some(after_digits) = rest.get(digits..) else {
-            return false;
-        };
-        if digits == 0 {
-            return false;
-        }
-        let mut units = after_digits.chars();
-        if !matches!(units.next(), Some('h' | 'm' | 's')) {
-            return false;
-        }
-        let after_unit = units.as_str();
-        if after_unit.starts_with(')') || after_unit.starts_with(" ·") {
-            return true;
-        }
-        let Some(next) = after_unit.strip_prefix(' ') else {
-            return false;
-        };
-        rest = next;
-    }
-    false
-}
-
-/// 入力欄より上の行が走行中の印を持つか（[`BUSY_MARKS_ABOVE`] のどれかを含む ∨ spinner の形）。
-fn is_busy_above(line: &str) -> bool {
-    BUSY_MARKS_ABOVE.iter().any(|mark| line.contains(mark)) || is_spinner_line(line)
-}
-
-/// 入力欄より下の行が走行中の印を持つか（[`BUSY_MARKS_BELOW`]）。
-fn is_busy_below(line: &str) -> bool {
-    BUSY_MARKS_BELOW.iter().any(|mark| line.contains(mark))
 }
 
 /// 席の置き場（`<state_dir>/seat/<潰した target>/`）。
@@ -341,21 +221,6 @@ pub fn pane_of(socket: Option<&str>, target: &str, capture_file: Option<&str>) -
         Some(path) => std::fs::read_to_string(path).ok(),
         None => capture(socket, target),
     }
-}
-
-/// 席が idle か（裁定 (e)）: 入力欄が空 ∧ 上の域（[`ABOVE_LINES`] 非空行）に spinner の形も
-/// [`BUSY_MARKS_ABOVE`] も無い ∧ 下の全行に [`BUSY_MARKS_BELOW`] が無い。
-///
-/// prompt 行を特定できない pane は idle と名乗らない（[`input_tail`] が `None`）＝
-/// fail-closed。読めない席へ注入しない側へ倒すためである。域と印の理由はそれぞれの doc に
-/// 書いた（印は入力欄の上に出る・語は版で変わる・本文の引用を上の域で印に数えない）。
-pub fn is_idle(pane: &str) -> bool {
-    let Some((above, below)) = split_regions(pane) else {
-        return false;
-    };
-    input_tail(pane).is_some_and(str::is_empty)
-        && !above.iter().any(|line| is_busy_above(line))
-        && !below.iter().any(|line| is_busy_below(line))
 }
 
 /// 退避物の名前の前置き（FR23）。

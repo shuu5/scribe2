@@ -303,7 +303,7 @@ fn tick_file(state: &Path, target: &str) -> PathBuf {
 const PROMPT: char = '❯';
 
 /// 独立 socket の path。
-fn socket_of(dir: &Path) -> String {
+pub(crate) fn socket_of(dir: &Path) -> String {
     dir.join("sock").display().to_string()
 }
 
@@ -312,7 +312,7 @@ fn socket_of(dir: &Path) -> String {
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
-fn tmux(socket: &str, args: &[&str]) -> Output {
+pub(crate) fn tmux(socket: &str, args: &[&str]) -> Output {
     Command::new("tmux")
         .args(["-S", socket, "-f", "/dev/null"])
         .args(args)
@@ -330,7 +330,7 @@ fn capture(socket: &str, target: &str) -> String {
 /// **panic 経路でも drop が走る**のが要点である: 明示の後始末は assert が落ちた周に
 /// 飛ばされるので、隔離 socket の server（と子の `sh`）が残り続けた——`flip-check` の
 /// base overlay のように「わざと RED」を撃つたびに増える（実測 2026-09-10: 49 本）。
-struct IsolatedSeat {
+pub(crate) struct IsolatedSeat {
     /// 独立 socket の path。
     socket: String,
     /// session 名。
@@ -341,7 +341,7 @@ struct IsolatedSeat {
 
 impl IsolatedSeat {
     /// prompt が描かれたか。**落とすのは呼び側の `#[test]`** で helper では panic しない。
-    fn ready(&self) -> bool {
+    pub(crate) fn ready(&self) -> bool {
         self.ready
     }
 }
@@ -364,11 +364,12 @@ impl Drop for IsolatedSeat {
     }
 }
 
-/// 独立 socket に `sh -i` の session を 1 つ立て、畳む guard を返す。
+/// 独立 socket に `sh -i` の session を 1 つ立て、畳む guard を返す。window 名も `name`（打刻の
+/// target `session:window` が `name:name` に解ける）。
 ///
 /// **live server には触れない**（socket は tmp・設定は `-f /dev/null`）。判定を guard へ
 /// 載せて返すのは helper で panic しないためで、落とすのは呼び側の `#[test]` である。
-fn start_seat(socket: &str, name: &str) -> IsolatedSeat {
+pub(crate) fn start_seat(socket: &str, name: &str) -> IsolatedSeat {
     start_seat_with(socket, name, "PS1=❯ ", PROMPT)
 }
 
@@ -383,7 +384,7 @@ fn start_seat_with(socket: &str, name: &str, ps1: &str, needle: char) -> Isolate
     let out = tmux(
         socket,
         &[
-            "new-session", "-d", "-s", name, "-x", "120", "-y", "40", "-e", ps1, "sh", "-i",
+            "new-session", "-d", "-s", name, "-n", name, "-x", "120", "-y", "40", "-e", ps1, "sh", "-i",
         ],
     );
     if !out.status.success() {
@@ -793,19 +794,15 @@ fn seat_external_form() {
 
 // ─────────────────── heartbeat / tick / cycle ───────────────────
 
-/// idle な pane（入力欄が空・探索域に走行中の印が無い）。
+/// 入力欄が空の pane（**idle に見える字面**。busy / idle は打刻で与える＝字面は判定に効かない）。
 const IDLE_PANE: &str = "❯ \n  10% 100k/1M Opus 5\n";
-/// 走行中の印が**入力欄より下**（statusline の位置）に在る pane。
-const BUSY_BELOW: &str = "❯ \n  10% 100k/1M Opus 5 (esc to interrupt)\n";
-/// 走行中の印が**入力欄より上**に在る pane（実際の席の spinner はこの位置に出る形がある）。
-///
-/// prompt より下だけを見る実装はこの pane を idle と読み、`/clear` を送ってしまう
-/// （実測 2026-09-10・lens-384 C-1）。
-const BUSY_ABOVE: &str = "✻ Thinking… (23s · esc to interrupt)\n❯ \n";
 /// prompt を 1 行も持たない pane（入力欄の位置が読めない）。
 const NO_PROMPT: &str = "$ \n  10% 100k/1M Opus 5\n";
+/// 入力欄に打ちかけが在る pane（送ると 1 行に merge する形）。
+const INPUT_BUSY_PANE: &str = "❯ typing\n  10% 100k/1M Opus 5\n";
 /// 走行中の実席（2026-09-11・匿名化済み）: spinner 行は `esc to interrupt` を**持たず**、
 /// 下から 8 非空行目に在る。この pane を idle と読んで `/clear` が送られた（bd `s2-07l.94`）。
+/// 本便では**負例**に使う: 字面が走行中に見えても打刻が Idle なら注入される（字面を読んでいない証拠）。
 const RUNNING_PANE: &str = concat!(
     "✻ Sublimating… (19m 36s · ↓ 36.4k tokens · thought for 59s)\n",
     "  ⎿  Tip: Use /btw to ask a quick side question without interrupting Claude's current work\n",
@@ -816,30 +813,6 @@ const RUNNING_PANE: &str = concat!(
     "  user@host (user@example.com)  scribe2  main\n",
     "  19% 190k/1M Fable 5.1 [high] 5h:10%(4h22m) 7d:15%(6d8h)\n",
     "  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 1 agent\n",
-);
-/// API の再試行中の実席（2026-09-11・匿名化済み）: spinner の形を取らないが走っている。
-const RETRYING_PANE: &str = concat!(
-    "  queue された入力の写し\n",
-    "✻ API error · Retrying in 0s · attempt 1/10\n",
-    "────────────────────────────────────────\n",
-    "❯\u{a0}\n",
-    "────────────────────────────────────────\n",
-    "  user@host (user@example.com)  scribe2  main\n",
-    "  19% 190k/1M Fable 5.1 [high] 5h:10%(4h22m) 7d:15%(6d8h)\n",
-    "  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 1 agent\n",
-);
-/// 走行中の印が statusline の**下から 4 行目**（旧 `TAIL_LINES` の域の外）に在る pane。
-///
-/// 下は全行を見る（statusline の高さに依らない）ことを、上の域の数（6）とは別に測る。
-const BUSY_FAR_BELOW: &str = concat!(
-    "❯ \n",
-    "  line 1\n",
-    "  line 2\n",
-    "  line 3\n",
-    "  line 4\n",
-    "  line 5\n",
-    "  line 6\n",
-    "  10% 100k/1M Opus 5 (esc to interrupt)\n",
 );
 /// `/clear` が届いて**作り直された直後**の実席（2026-09-11・匿名化済み）: banner 3 行の下に
 /// **消費済みの echo `❯ /clear`**（行頭・col 0）が残り、その直下に空の新 prompt と statusline。
@@ -946,95 +919,6 @@ const QUOTED_CLEAR_PANE: &str = concat!(
     "  19% 190k/1M Fable 5.1 [high] 5h:10%(4h22m) 7d:15%(6d8h)\n",
     "  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 1 agent\n",
 );
-/// 現行版の statusline（区切り 2 行 + 3 行・匿名化済み）。fixture の末尾に共通で付ける。
-const TALL_TAIL: &str = concat!(
-    "────────────────────────────────────────\n",
-    "❯\u{a0}\n",
-    "────────────────────────────────────────\n",
-    "  user@host (user@example.com)  scribe2  main\n",
-    "  19% 190k/1M Fable 5.1 [high] 5h:10%(4h22m) 7d:15%(6d8h)\n",
-    "  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 1 agent\n",
-);
-/// todo が走っている周の spinner: 語が **空白入りの文**（todo の activeForm）になる
-/// （本体 2.1.268 の実装: `overrideMessage ?? todo の activeForm ?? 乱択の 1 語`・lens-94 HIGH-1）。
-const TODO_SPINNER_PANE: &str = concat!(
-    "✻ Reviewing the seat idle predicate… (2m 3s · ↓ 12k tokens)\n",
-    "  ⎿  Tip: Use /btw to ask a quick side question\n",
-    "────────────────────────────────────────\n",
-    "❯\u{a0}\n",
-    "────────────────────────────────────────\n",
-    "  user@host (user@example.com)  scribe2  main\n",
-    "  19% 190k/1M Fable 5.1 [high] 5h:10%(4h22m) 7d:15%(6d8h)\n",
-    "  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 1 agent\n",
-);
-/// API 応答待ちの banner（`retryStatus.kind == stalled`）: spinner 行ごと置き換わり `Retrying in`
-/// も `esc to interrupt` も無い（lens-94 HIGH-2）。
-const STALLED_PANE: &str = concat!(
-    "✻ Waiting for API response · will retry in 3s · check your network\n",
-    "────────────────────────────────────────\n",
-    "❯\u{a0}\n",
-    "────────────────────────────────────────\n",
-    "  user@host (user@example.com)  scribe2  main\n",
-    "  19% 190k/1M Fable 5.1 [high] 5h:10%(4h22m) 7d:15%(6d8h)\n",
-    "  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 1 agent\n",
-);
-/// API が応答しない周の banner（2 行）。
-const NO_RESPONSE_PANE: &str = concat!(
-    "✽ No response from the API after 1m · retrying, waiting up to 2m · attempt 1/10\n",
-    "  A proxy or gateway that buffers responses may be the cause\n",
-    "────────────────────────────────────────\n",
-    "❯\u{a0}\n",
-    "────────────────────────────────────────\n",
-    "  user@host (user@example.com)  scribe2  main\n",
-    "  19% 190k/1M Fable 5.1 [high] 5h:10%(4h22m) 7d:15%(6d8h)\n",
-    "  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 1 agent\n",
-);
-/// turn 開始から 16 秒未満の spinner: 括弧（経過・token）がまだ描かれない（lens-94 MEDIUM-4）。
-const BARE_SPINNER_PANE: &str = concat!(
-    "✻ Sublimating…\n",
-    "────────────────────────────────────────\n",
-    "❯\u{a0}\n",
-    "────────────────────────────────────────\n",
-    "  user@host (user@example.com)  scribe2  main\n",
-    "  19% 190k/1M Fable 5.1 [high] 5h:10%(4h22m) 7d:15%(6d8h)\n",
-    "  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 1 agent\n",
-);
-/// compaction 中: `…` すら無い専用の行。
-const COMPACTING_PANE: &str = concat!(
-    "✻ Compacting conversation\n",
-    "────────────────────────────────────────\n",
-    "❯\u{a0}\n",
-    "────────────────────────────────────────\n",
-    "  user@host (user@example.com)  scribe2  main\n",
-    "  19% 190k/1M Fable 5.1 [high] 5h:10%(4h22m) 7d:15%(6d8h)\n",
-    "  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 1 agent\n",
-);
-/// idle な席の本文が印に**似た形**を持つ pane: 行頭 `●`（assistant 本文）+ `… (3 件)`。
-///
-/// 席は idle で出力を出さないので、これを busy と読むと tick は永久に noop になる
-/// （lens-94 HIGH-3）。`●` は spinner の frame（· ✢ ✳ ✶ ✻ ✽ *）に無い。
-const IDLE_COUNT_PANE: &str = concat!(
-    "● 直した… (3 件)\n",
-    "- 対応済… (2 件)\n",
-    "────────────────────────────────────────\n",
-    "❯\u{a0}\n",
-    "────────────────────────────────────────\n",
-    "  user@host (user@example.com)  scribe2  main\n",
-    "  19% 190k/1M Fable 5.1 [high] 5h:10%(4h22m) 7d:15%(6d8h)\n",
-    "  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 1 agent\n",
-);
-/// idle な席の本文が `esc to interrupt` を**引用**している pane（本 bead の報告文がこの形）。
-///
-/// この字は statusline（prompt より下）でだけ印として読む。
-const IDLE_QUOTE_PANE: &str = concat!(
-    "● 現行版の spinner は `esc to interrupt` を持たない。\n",
-    "────────────────────────────────────────\n",
-    "❯\u{a0}\n",
-    "────────────────────────────────────────\n",
-    "  user@host (user@example.com)  scribe2  main\n",
-    "  19% 190k/1M Fable 5.1 [high] 5h:10%(4h22m) 7d:15%(6d8h)\n",
-    "  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 1 agent\n",
-);
 /// turn を終えた実席（2026-09-11・匿名化済み）: 完了行 `Crunched for …` は spinner の形
 /// （`… (`）を持たない。これを busy と読むと tick は永久に noop になる（退行の歯）。
 const IDLE_TALL_PANE: &str = concat!(
@@ -1056,8 +940,8 @@ const CTX_10: &str = " context=10";
 const CTX_19: &str = " context=19";
 /// prompt より下が空＝出所なし。
 const CTX_NO_SOURCE: &str = " context=unmeasured reason=no-source";
-/// cap（manifest 行 `seat.context_cap_pct` = 60）**以上**で走行中の席（インシデントの形:
-/// lens 待ちのまま 96%・spinner が prompt の上）。両側から撃つ＝manifest の値が変わると落ちる。
+/// cap（manifest 行 `seat.context_cap_pct` = 60）**以上**の席の pane（インシデントの形: lens 待ちの
+/// まま 96%・spinner の字面が prompt の上）。busy は打刻で与える。両側から撃つ＝manifest の値が変わると落ちる。
 const OVER_CAP_BUSY_PANE: &str = concat!(
     "✻ Sublimating… (19m 36s · ↓ 36.4k tokens)\n",
     "────────────────────────────────────────\n",
@@ -1067,7 +951,7 @@ const OVER_CAP_BUSY_PANE: &str = concat!(
     "  96% 960k/1M Fable 5.1 [high] 5h:10%(4h22m) 7d:15%(6d8h)\n",
     "  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 1 agent\n",
 );
-/// cap 以上で **idle** の席（退避済みの席が `/clear` を待つ形）。
+/// cap 以上で turn を終えた字面の席（退避済みの席が `/clear` を待つ形）。
 const OVER_CAP_IDLE_PANE: &str = concat!(
     "✻ Crunched for 10m 28s · done 12:41\n",
     "────────────────────────────────────────\n",
@@ -1077,7 +961,7 @@ const OVER_CAP_IDLE_PANE: &str = concat!(
     "  96% 960k/1M Fable 5.1 [high] 5h:10%(4h22m) 7d:15%(6d8h)\n",
     "  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 1 agent\n",
 );
-/// cap **未満**で走行中の席。
+/// cap **未満**で spinner の字面を持つ席。
 const BELOW_CAP_BUSY_PANE: &str = concat!(
     "✻ Sublimating… (2m 3s · ↓ 4.1k tokens)\n",
     "────────────────────────────────────────\n",
@@ -1092,7 +976,7 @@ const NO_STATUSLINE_IDLE_PANE: &str = "❯ \n  ⏵⏵ bypass permissions on (shi
 /// statusline の候補は在るが健全性を外れた idle の席（pct > 100）。
 const OUT_OF_BOUND_IDLE_PANE: &str = "❯ \n  150% 1500k/1M Opus 5\n";
 
-/// 走行中の席の pane を使用率だけ変えて組む（cap = 60 の**両側**を撃つための fixture）。
+/// spinner の字面を持つ pane を使用率だけ変えて組む（cap = 60 の**両側**を撃つための fixture）。
 fn busy_pane_at(pct: u64) -> String {
     format!(
         "✻ Sublimating… (2m 3s · ↓ 4.1k tokens)\n\
@@ -1163,6 +1047,73 @@ fn wm_decoys(dir: &Path, seat: &str) {
 fn seat_dir_of(state: &Path, target: &str) -> PathBuf {
     state.join("seat").join(target)
 }
+
+/// 打刻の 1 行を**契約の字面から**組む（実装の型を使わない・設計 seat-state.md §2）。
+fn stamp_line(state: &str, event: &str, ts: u64, sid: &str) -> String {
+    format!(r#"{{"schema":1,"state":"{state}","event":"{event}","ts":{ts},"sid":"{sid}"}}"#)
+}
+
+/// 1970 年からの秒。
+fn unix_now() -> u64 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs())
+}
+
+/// 席の状態の fixture（`<seat dir>/state.jsonl`・hook の打刻の代わりに置く）。
+#[derive(Clone, Copy)]
+enum StateFix {
+    /// file を置かない（hook が載っていない席）。
+    Absent,
+    /// file の位置に dir を置く（読めない形）。
+    Unreadable,
+    /// 最終行が Busy（`age_s` 秒前の `UserPromptSubmit`）。
+    Busy { age_s: u64 },
+    /// 最終行が Idle（`Stop`）。
+    Idle,
+}
+
+/// 打刻 file の path（契約の字面から組む）。
+fn state_file(seat: &Path) -> PathBuf {
+    seat.join("state.jsonl")
+}
+
+/// fixture を置く。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn write_state(seat: &Path, fix: StateFix) {
+    fs::create_dir_all(seat).expect("seat dir を作れる");
+    let body = match fix {
+        StateFix::Absent => return,
+        StateFix::Unreadable => {
+            fs::create_dir_all(state_file(seat)).expect("state.jsonl の位置に dir を置ける");
+            return;
+        }
+        StateFix::Busy { age_s } => {
+            stamp_line("busy", "UserPromptSubmit", unix_now().saturating_sub(age_s), "sid-fix")
+        }
+        StateFix::Idle => stamp_line("idle", "Stop", unix_now(), "sid-fix"),
+    };
+    fs::write(state_file(seat), format!("{body}\n")).expect("打刻を置ける");
+}
+
+/// Idle の打刻を置く（tick / cycle が状態の門を通る周の fixture）。
+fn stamp_idle(state: &Path, target: &str) {
+    write_state(&seat_dir_of(state, target), StateFix::Idle);
+}
+
+/// 判定行の state の列（`state=<値> event=<出所|none>`）。
+const ST_IDLE: &str = " state=idle event=Stop";
+/// 同上（Busy・閾値の内側）。
+const ST_BUSY: &str = " state=busy event=UserPromptSubmit";
+/// 同上（Busy が閾値より古い）。
+const ST_STALE: &str = " state=stale event=UserPromptSubmit";
+/// 同上（打刻 file なし）。
+const ST_MISSING: &str = " state=missing event=none";
+/// 同上（読めない）。
+const ST_UNREADABLE: &str = " state=unreadable event=none";
 
 /// 打刻の成功行と tick の記録の末尾に載る**置き場の出所と path**（契約の字面から組む）。
 /// path は行末（空白や ` source=` を含む path でも出所を偽れない）。
@@ -1452,6 +1403,10 @@ struct TickCase {
     /// 判定行の末尾に載る context（`" context=<pct>"` / `" context=unmeasured reason=<語>"` /
     /// pane を取得しない周は `""`＝評価していない）。
     context: &'static str,
+    /// 席の状態の fixture（打刻）。
+    stamp: StateFix,
+    /// 判定行の末尾に載る state の列（fresh で読まない周は `""`）。
+    state: &'static str,
 }
 
 /// 1 組の fixture を組む。**どの組も TTL 内の lock を置く**＝cycle は評価されない
@@ -1478,10 +1433,11 @@ fn prepare_tick_case(dir: &Path, case: &TickCase, target: &str) -> PathBuf {
     if let Some(body) = case.pane {
         fs::write(dir.join("pane.txt"), body).expect("pane fixture を置ける");
     }
+    write_state(&seat, case.stamp);
     state
 }
 
-/// 4 条件は**順序固定**で見て、最初に立たなかった条件を理由にする。
+/// 条件は**順序固定**で見て、最初に立たなかった条件を理由にする。
 ///
 /// 閾値は両側から撃つ（`STALE_S - 1` は fresh・`STALE_S + 1` は stale）＝manifest の値が
 /// 変わると落ちる。fresh の組は `--capture-file` を渡さないので、pane を先に読む実装なら
@@ -1489,33 +1445,7 @@ fn prepare_tick_case(dir: &Path, case: &TickCase, target: &str) -> PathBuf {
 #[test]
 fn seat_tick_noop_reasons_in_fixed_order() {
     let target = "seatorder";
-    let cases = [
-        // 鮮度が内側（fresh）: pane も lock も立たない組だが、鮮度で止まる。退避物は**他席**の
-        // 名乗り＝自席の申告ではないので鮮度を飛ばさない（`.105`・自席の退避物が在る周は下の
-        // `freshly_stamped_seat` の歯が持つ）。
-        TickCase { reason: "heartbeat-fresh", beat_age_s: Some(STALE_S - 1), pane: None,
-                   wm_seat: Some("other:seat"), via_file: false, tmux: false, context: "" },
-        TickCase { reason: "pane-missing", beat_age_s: None, pane: None,
-                   wm_seat: Some(target), via_file: true, tmux: false, context: "" },
-        // 鮮度が外側（stale）: 同じ fixture でも pane を読みに行く＝tmux に当たる。
-        TickCase { reason: "pane-missing", beat_age_s: Some(STALE_S + 1), pane: None,
-                   wm_seat: Some(target), via_file: false, tmux: true, context: "" },
-        // pane を取得した周は context を載せる（cap 未満なら値・statusline が無ければ理由）。
-        TickCase { reason: "busy", beat_age_s: None, pane: Some(BUSY_BELOW),
-                   wm_seat: Some(target), via_file: true, tmux: false, context: CTX_10 },
-        TickCase { reason: "busy", beat_age_s: None, pane: Some(BUSY_ABOVE),
-                   wm_seat: Some(target), via_file: true, tmux: false, context: CTX_NO_SOURCE },
-        TickCase { reason: "busy", beat_age_s: None, pane: Some(NO_PROMPT),
-                   wm_seat: Some(target), via_file: true, tmux: false, context: CTX_10 },
-        TickCase { reason: "wm-unreadable", beat_age_s: None, pane: Some(IDLE_PANE),
-                   wm_seat: None, via_file: true, tmux: false, context: CTX_10 },
-        TickCase { reason: "wm-unconsumed", beat_age_s: None, pane: Some(IDLE_PANE),
-                   wm_seat: Some(target), via_file: true, tmux: false, context: CTX_10 },
-        // 席の名乗りが違う退避物と decoy は自席の根拠にしない＝3 を**通って** 4 で止まる。
-        TickCase { reason: "cycle-live", beat_age_s: None, pane: Some(IDLE_PANE),
-                   wm_seat: Some("other:seat"), via_file: true, tmux: false, context: CTX_10 },
-    ];
-
+    let cases = fixed_order_cases(target);
     for (at, case) in cases.iter().enumerate() {
         let dir = tmp();
         let state = prepare_tick_case(&dir, case, target);
@@ -1542,25 +1472,69 @@ fn seat_tick_noop_reasons_in_fixed_order() {
         assert!(recorded.contains(r#""who":"seat-tick""#), "組 {at}: {recorded}");
         assert!(
             recorded.contains(&format!(
-                r#""what":"decision=noop reason={}{}{}""#,
+                r#""what":"decision=noop reason={}{}{}{}""#,
                 case.reason,
                 case.context,
+                case.state,
                 provenance(&state, "flag")
             )),
-            "組 {at}: 判定を残す（context の列と置き場の出所も記録に載る）: {recorded}"
+            "組 {at}: 判定を残す（context と state の列と置き場の出所も記録に載る）: {recorded}"
         );
         fs::remove_dir_all(&dir).ok();
     }
 }
 
+/// 順序固定の歯の組（**先に立たない条件だけが違う**）。
+fn fixed_order_cases(target: &'static str) -> Vec<TickCase> {
+    vec![
+        // 鮮度が内側（fresh）: pane も lock も立たない組だが、鮮度で止まる（状態も読まない）。退避物は
+        // **他席**の名乗り＝自席の申告ではないので鮮度を飛ばさない（`.105`・自席の退避物が在る周は
+        // `seat_tick_cycles_freshly_stamped_seat_when_own_wm_is_unconsumed` が持つ）。
+        TickCase { reason: "heartbeat-fresh", beat_age_s: Some(STALE_S - 1), pane: None,
+                   wm_seat: Some("other:seat"), via_file: false, tmux: false, context: "",
+                   stamp: StateFix::Busy { age_s: 0 }, state: "" },
+        // pane より先に状態を読む＝pane-missing の行にも state の列が載る。
+        TickCase { reason: "pane-missing", beat_age_s: None, pane: None,
+                   wm_seat: Some(target), via_file: true, tmux: false, context: "",
+                   stamp: StateFix::Idle, state: ST_IDLE },
+        // 鮮度が外側（stale）: 同じ fixture でも pane を読みに行く＝tmux に当たる。
+        TickCase { reason: "pane-missing", beat_age_s: Some(STALE_S + 1), pane: None,
+                   wm_seat: Some(target), via_file: false, tmux: true, context: "",
+                   stamp: StateFix::Idle, state: ST_IDLE },
+        // 状態の門は typed の打刻で決まる: 入力欄が空の字面でも Busy の打刻なら busy。
+        TickCase { reason: "busy", beat_age_s: None, pane: Some(IDLE_PANE),
+                   wm_seat: Some(target), via_file: true, tmux: false, context: CTX_10,
+                   stamp: StateFix::Busy { age_s: STALE_S }, state: ST_BUSY },
+        TickCase { reason: "state-missing", beat_age_s: None, pane: Some(IDLE_PANE),
+                   wm_seat: Some(target), via_file: true, tmux: false, context: CTX_10,
+                   stamp: StateFix::Absent, state: ST_MISSING },
+        TickCase { reason: "state-unreadable", beat_age_s: None, pane: Some(IDLE_PANE),
+                   wm_seat: Some(target), via_file: true, tmux: false, context: CTX_10,
+                   stamp: StateFix::Unreadable, state: ST_UNREADABLE },
+        TickCase { reason: "state-stale", beat_age_s: None, pane: Some(IDLE_PANE),
+                   wm_seat: Some(target), via_file: true, tmux: false, context: CTX_10,
+                   stamp: StateFix::Busy { age_s: STALE_S + 1 }, state: ST_STALE },
+        TickCase { reason: "wm-unreadable", beat_age_s: None, pane: Some(IDLE_PANE),
+                   wm_seat: None, via_file: true, tmux: false, context: CTX_10,
+                   stamp: StateFix::Idle, state: ST_IDLE },
+        TickCase { reason: "wm-unconsumed", beat_age_s: None, pane: Some(IDLE_PANE),
+                   wm_seat: Some(target), via_file: true, tmux: false, context: CTX_10,
+                   stamp: StateFix::Idle, state: ST_IDLE },
+        // 席の名乗りが違う退避物と decoy は自席の根拠にしない＝4 を**通って** 5 で止まる。
+        TickCase { reason: "cycle-live", beat_age_s: None, pane: Some(IDLE_PANE),
+                   wm_seat: Some("other:seat"), via_file: true, tmux: false, context: CTX_10,
+                   stamp: StateFix::Idle, state: ST_IDLE },
+    ]
+}
+
 /// 1 組の判定を見る。
 fn assert_tick_case(out: &Output, touched: bool, case: &TickCase, at: usize, state: &Path) {
-    let (reason, context) = (case.reason, case.context);
+    let (reason, context, stamped) = (case.reason, case.context, case.state);
     assert_eq!(rc_of(out), i32::from(RC_OK), "組 {at}: stderr={}", stderr_of(out));
     assert_eq!(
         stdout_of(out),
         format!(
-            "seat: tick decision=noop reason={reason}{context}{}\n",
+            "seat: tick decision=noop reason={reason}{context}{stamped}{}\n",
             provenance(state, "flag")
         ),
         "組 {at}"
@@ -1583,6 +1557,7 @@ fn seat_tick_injects_pointer_and_stamps_on_isolated_socket() {
     let state = dir.join("state");
     let wm = dir.join("wm");
     fs::create_dir_all(&wm).ok();
+    stamp_idle(&state, name);
     let (wm_s, state_s) = (wm.display().to_string(), state.display().to_string());
     let args = [
         "tick", "--target", name, "--wm-dir", &wm_s, "--tmux-socket", &socket,
@@ -1593,7 +1568,7 @@ fn seat_tick_injects_pointer_and_stamps_on_isolated_socket() {
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
     assert_eq!(
         stdout_of(&out),
-        format!("seat: tick decision=inject target={name} consumed=true kind=pointer{CTX_NO_SOURCE}{}\n", provenance(&state, "flag"))
+        format!("seat: tick decision=inject target={name} consumed=true kind=pointer{CTX_NO_SOURCE}{ST_IDLE}{}\n", provenance(&state, "flag"))
     );
     let pane = capture(&socket, name);
     assert!(
@@ -1614,19 +1589,20 @@ fn seat_tick_injects_pointer_and_stamps_on_isolated_socket() {
     let out = run_seat(&args);
     assert_eq!(
         stdout_of(&out),
-        format!("seat: tick decision=inject target={name} consumed=true kind=pointer{CTX_NO_SOURCE}{}\n", provenance(&state, "flag"))
+        format!("seat: tick decision=inject target={name} consumed=true kind=pointer{CTX_NO_SOURCE}{ST_IDLE}{}\n", provenance(&state, "flag"))
     );
     // socket を消す**前**に畳む（消してからでは kill-session が届かない・実測 2026-09-10）。
     drop(guard);
     fs::remove_dir_all(&dir).ok();
 }
 
-/// context が cap 以上 ∧ **busy** の席（インシデントの形）には、idle を待たずに退避の pointer
-/// 1 行を注入する（`kind=externalize`）。payload の先頭行は退避 skill と実測値を持ち、注入後は
-/// 自打刻する（次の周は fresh で撃たない＝storm 止め）。
+/// context が cap 以上 ∧ **打刻が Busy** の席（インシデントの形）には、idle を待たずに退避の
+/// pointer 1 行を注入する（`kind=externalize`・SRS FR29「idle を待たずに」・退避の合図は状態の門の
+/// **外**＝planner 裁定 2026-09-11: FR29 > ADR-0015 §2.3）。payload の先頭行は退避 skill と実測値を
+/// 持ち、注入後は自打刻する（次の周は fresh で撃たない＝storm 止め）。
 ///
 /// 判定は `--capture-file` の pane で通し、送信だけ独立 socket の席へ通す。busy を理由に noop
-/// する実装（base）はこの席を誰も止められない＝auto-compact に至る（bd `s2-07l.89`）。
+/// する実装はこの席を誰も止められない＝auto-compact に至る（bd `s2-07l.89`）。
 #[test]
 fn seat_tick_injects_externalize_pointer_when_context_reaches_cap_while_busy() {
     // cap = 60 の**等号側**（60 ちょうど）も撃つ: `>=` を `>` へ緩める変異はここで落ちる。
@@ -1639,6 +1615,7 @@ fn seat_tick_injects_externalize_pointer_when_context_reaches_cap_while_busy() {
         let state = dir.join("state");
         let wm = dir.join("wm");
         fs::create_dir_all(&wm).ok();
+        write_state(&seat_dir_of(&state, name), StateFix::Busy { age_s: 0 });
         let pane = dir.join("pane.txt");
         fs::write(&pane, busy_pane_at(pct)).ok();
         let (wm_s, state_s, pane_s) = (
@@ -1656,8 +1633,8 @@ fn seat_tick_injects_externalize_pointer_when_context_reaches_cap_while_busy() {
         assert_eq!(rc_of(&out), i32::from(RC_OK), "{pct}%: stderr={}", stderr_of(&out));
         assert_eq!(
             stdout_of(&out),
-            format!("seat: tick decision=inject target={name} consumed=true kind=externalize context={pct}{}\n", provenance(&state, "flag")),
-            "{pct}%"
+            format!("seat: tick decision=inject target={name} consumed=true kind=externalize context={pct}{ST_BUSY}{}\n", provenance(&state, "flag")),
+            "{pct}%: 打刻が Busy でも退避の合図は送る（state の列は busy のまま載る）"
         );
         let seen = capture(&socket, name);
         assert!(seen.contains("/ready-compaction"), "{pct}%: 退避 skill の名が届く: {seen}");
@@ -1669,10 +1646,10 @@ fn seat_tick_injects_externalize_pointer_when_context_reaches_cap_while_busy() {
         let recorded = fs::read_to_string(tick_file(&state, name)).unwrap_or_default();
         assert!(
             recorded.contains(&format!(
-                r#""what":"decision=inject target=seatovercap consumed=true kind=externalize context={pct}{}""#,
+                r#""what":"decision=inject target=seatovercap consumed=true kind=externalize context={pct}{ST_BUSY}{}""#,
                 provenance(&state, "flag")
             )),
-            "{pct}%: 記録にも kind と context と置き場の出所が載る: {recorded}"
+            "{pct}%: 記録にも kind と context と state と置き場の出所が載る: {recorded}"
         );
 
         let out = run_seat(&args);
@@ -1697,6 +1674,7 @@ fn seat_tick_does_not_inject_below_cap_when_nothing_else_stops_it() {
     let state = dir.join("state");
     let wm = dir.join("wm");
     fs::create_dir_all(&wm).ok();
+    write_state(&seat_dir_of(&state, target), StateFix::Busy { age_s: 0 });
     fs::write(dir.join("pane.txt"), busy_pane_at(59)).ok();
     let (wm_s, state_s, pane_s, sock_s) = (
         wm.display().to_string(),
@@ -1716,7 +1694,7 @@ fn seat_tick_does_not_inject_below_cap_when_nothing_else_stops_it() {
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
     assert_eq!(
         stdout_of(&out),
-        format!("seat: tick decision=noop reason=busy context=59{}\n", provenance(&state, "flag"))
+        format!("seat: tick decision=noop reason=busy context=59{ST_BUSY}{}\n", provenance(&state, "flag"))
     );
     assert!(!touched, "cap 未満の busy な席には 1 key も送らない（tmux を撃たない）");
     fs::remove_dir_all(&dir).ok();
@@ -1732,6 +1710,7 @@ fn seat_tick_does_not_stamp_when_externalize_injection_fails() {
     let state = dir.join("state");
     let wm = dir.join("wm");
     fs::create_dir_all(&wm).ok();
+    write_state(&seat_dir_of(&state, target), StateFix::Busy { age_s: 0 });
     fs::write(dir.join("pane.txt"), OVER_CAP_BUSY_PANE).ok();
     let (wm_s, state_s, pane_s, sock_s) = (
         wm.display().to_string(),
@@ -1770,7 +1749,8 @@ fn seat_tick_reports_context_when_busy_below_cap() {
     // 59 は cap の**直下**（`>=` を `>` へ緩めても 60 で落ちる歯と対で、境界を両側から撃つ）。
     for (pane, context) in [(BELOW_CAP_BUSY_PANE.to_owned(), " context=12"), (busy_pane_at(59), " context=59")] {
         let case = TickCase { reason: "busy", beat_age_s: None, pane: None,
-                              wm_seat: Some(target), via_file: true, tmux: false, context };
+                              wm_seat: Some(target), via_file: true, tmux: false, context,
+                              stamp: StateFix::Busy { age_s: 0 }, state: ST_BUSY };
         let dir = tmp();
         let state = prepare_tick_case(&dir, &case, target);
         fs::write(dir.join("pane.txt"), &pane).ok();
@@ -1792,7 +1772,8 @@ fn seat_tick_proceeds_with_unmeasured_context_without_statusline() {
     ];
     for (at, (pane, context)) in cases.into_iter().enumerate() {
         let case = TickCase { reason: "wm-unconsumed", beat_age_s: None, pane: Some(pane),
-                              wm_seat: Some(target), via_file: true, tmux: false, context };
+                              wm_seat: Some(target), via_file: true, tmux: false, context,
+                              stamp: StateFix::Idle, state: ST_IDLE };
         let dir = tmp();
         let state = prepare_tick_case(&dir, &case, target);
         let (out, touched) = run_tick_case(&dir, &case, target, &state);
@@ -1801,15 +1782,16 @@ fn seat_tick_proceeds_with_unmeasured_context_without_statusline() {
     }
 }
 
-/// fresh の周は cap 以上でも pane を読まない＝`noop reason=heartbeat-fresh` で context も載らない
-/// （盲点の限界を pin する歯・base でも緑＝flip の根拠にしない）。
+/// fresh の周は cap 以上でも pane も打刻も読まない＝`noop reason=heartbeat-fresh` で context も
+/// state も載らない（盲点の限界を pin する歯）。
 #[test]
 fn seat_tick_does_not_read_context_when_fresh() {
     let target = "seatfreshcap";
     // 退避物は他席の名乗り（自席の退避物が在る周は鮮度を飛ばして pane を読む・`.105`）。
     let case = TickCase { reason: "heartbeat-fresh", beat_age_s: Some(STALE_S - 1),
                           pane: Some(OVER_CAP_BUSY_PANE), wm_seat: Some("other:seat"),
-                          via_file: true, tmux: false, context: "" };
+                          via_file: true, tmux: false, context: "",
+                          stamp: StateFix::Busy { age_s: 0 }, state: "" };
     let dir = tmp();
     let state = prepare_tick_case(&dir, &case, target);
     let (out, touched) = run_tick_case(&dir, &case, target, &state);
@@ -1826,14 +1808,18 @@ fn seat_tick_falls_through_to_wm_when_parked_over_cap() {
     let target = "seatparkedcap";
     let cases = [
         TickCase { reason: "busy", beat_age_s: None, pane: Some(OVER_CAP_BUSY_PANE),
-                   wm_seat: Some(target), via_file: true, tmux: false, context: " context=96" },
+                   wm_seat: Some(target), via_file: true, tmux: false, context: " context=96",
+                   stamp: StateFix::Busy { age_s: 0 }, state: ST_BUSY },
         TickCase { reason: "wm-unconsumed", beat_age_s: None, pane: Some(OVER_CAP_IDLE_PANE),
-                   wm_seat: Some(target), via_file: true, tmux: false, context: " context=96" },
+                   wm_seat: Some(target), via_file: true, tmux: false, context: " context=96",
+                   stamp: StateFix::Idle, state: ST_IDLE },
         TickCase { reason: "wm-unreadable", beat_age_s: None, pane: Some(OVER_CAP_IDLE_PANE),
-                   wm_seat: None, via_file: true, tmux: false, context: " context=96" },
+                   wm_seat: None, via_file: true, tmux: false, context: " context=96",
+                   stamp: StateFix::Idle, state: ST_IDLE },
         // 退避物 0 件でも他の cycle が走っている（lock が TTL 内）周は注入しない（排他）。
         TickCase { reason: "cycle-live", beat_age_s: None, pane: Some(OVER_CAP_IDLE_PANE),
-                   wm_seat: Some("other:seat"), via_file: true, tmux: false, context: " context=96" },
+                   wm_seat: Some("other:seat"), via_file: true, tmux: false, context: " context=96",
+                   stamp: StateFix::Idle, state: ST_IDLE },
     ];
     for (at, case) in cases.iter().enumerate() {
         let dir = tmp();
@@ -1883,6 +1869,7 @@ fn seat_tick_reports_error_when_pane_is_readable_but_tmux_is_unreachable() {
     // ここで止まると順序 4 へ届かず、この歯は Error 腕を 1 度も撃たない。
     wm_file(&wm, "working-memory.parked.md", "other:seat");
     wm_decoys(&wm, target);
+    stamp_idle(&state, target);
     fs::write(dir.join("pane.txt"), IDLE_PANE).expect("pane fixture を置ける");
     let (wm_s, state_s) = (wm.display().to_string(), state.display().to_string());
     let (sock_s, pane_s) = (
@@ -1936,6 +1923,7 @@ fn seat_tick_ignores_short_wm_like_names() {
     // ★`lock_is_live` は **mtime だけ**を見て中身を読まない: `deadline:0` は失効に見えるが、
     // いま書いた file なので live 側である（既存の歯と同じ idiom）。
     fs::write(seat.join("cycle.lock"), "{\"pid\":1,\"deadline\":0}\n").expect("lock を置ける");
+    write_state(&seat, StateFix::Idle);
     let wm = dir.join("wm");
     fs::create_dir_all(&wm).expect("wm dir を作れる");
     // 前置きと接尾は満たすが 17 文字＝最短形に 1 文字足りない（名乗りは自席にしておく）。
@@ -1962,8 +1950,8 @@ fn seat_tick_ignores_short_wm_like_names() {
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
     assert_eq!(
         stdout_of(&out),
-        format!("seat: tick decision=noop reason=cycle-live{CTX_10}{}\n", provenance(&state, "flag")),
-        "短すぎる名前は自席の退避物に数えない＝3 を通って 4 で止まる"
+        format!("seat: tick decision=noop reason=cycle-live{CTX_10}{ST_IDLE}{}\n", provenance(&state, "flag")),
+        "短すぎる名前は自席の退避物に数えない＝4 を通って 5 で止まる"
     );
     // 表示の完全一致だけでは 1 段しか測れない（`wm-unconsumed` を除く assert は上の
     // 完全一致に包含されて**発火しない**）。記録側の末尾 1 行でもう 1 段測る。
@@ -2021,6 +2009,8 @@ struct GateCase {
     pane: Option<&'static str>,
     /// 置き場の位置に file を置く（dir を作れない）。
     broken_state: bool,
+    /// 席の状態の fixture（打刻）。置き場が壊れている組では置かない。
+    stamp: StateFix,
 }
 
 /// 1 組の fixture を組む。
@@ -2043,6 +2033,9 @@ fn prepare_gate_case(dir: &Path, case: &GateCase, target: &str) -> PathBuf {
     }
     if let Some(body) = case.pane {
         fs::write(dir.join("pane.txt"), body).expect("pane fixture を置ける");
+    }
+    if !case.broken_state {
+        write_state(&seat_dir_of(&state, target), case.stamp);
     }
     state
 }
@@ -2089,15 +2082,18 @@ fn assert_gate_case(dir: &Path, case: &GateCase, target: &str, state: &Path) {
 /// 退避物が無い席へは **1 key も送らない**（憲法 CON5 / SRS FR28）。
 ///
 /// 退避物の判定は「名前の前置き ∧ `.md` ∧ `.consumed.md` でない ∧ frontmatter の `seat:` が
-/// 一致」の全部で、どれか 1 つでも緩めると decoy が根拠に化ける。pane が **busy でも**
-/// 理由が `wm-missing` になることで、手順 2（退避物）が 3（idle）より先だと測れる。
+/// 一致」の全部で、どれか 1 つでも緩めると decoy が根拠に化ける。打刻が **Busy でも**
+/// 理由が `wm-missing` になることで、手順 2（退避物）が 3（状態の門）より先だと測れる。
 #[test]
 fn seat_cycle_refuses_without_unconsumed_wm() {
     let target = "seatnowm";
     for case in &[
-        GateCase { reason: "wm-missing", wm_seat: None, pane: Some(BUSY_BELOW), broken_state: false },
-        GateCase { reason: "wm-missing", wm_seat: Some("other:seat"), pane: Some(IDLE_PANE), broken_state: false },
-        GateCase { reason: "wm-unreadable", wm_seat: None, pane: Some(IDLE_PANE), broken_state: false },
+        GateCase { reason: "wm-missing", wm_seat: None, pane: Some(IDLE_PANE), broken_state: false,
+                   stamp: StateFix::Busy { age_s: 0 } },
+        GateCase { reason: "wm-missing", wm_seat: Some("other:seat"), pane: Some(IDLE_PANE), broken_state: false,
+                   stamp: StateFix::Idle },
+        GateCase { reason: "wm-unreadable", wm_seat: None, pane: Some(IDLE_PANE), broken_state: false,
+                   stamp: StateFix::Idle },
     ] {
         let dir = tmp();
         let state = prepare_gate_case(&dir, case, target);
@@ -2106,22 +2102,23 @@ fn seat_cycle_refuses_without_unconsumed_wm() {
     }
 }
 
-/// 退避物が在っても、席が打ちかけ・読めない・置き場が壊れている周は **1 key も送らない**。
+/// 退避物が在っても、pane を読めない・入力欄を特定できない・打ちかけ・置き場が壊れている周は
+/// **1 key も送らない**（状態の門は `seat_state_cycle_refuses_unless_stamped_idle` が測る）。
 #[test]
 fn seat_cycle_refuses_at_each_gate_without_sending() {
     let target = "seatgate";
     for case in &[
-        GateCase { reason: "busy", wm_seat: Some("seatgate"), pane: Some(BUSY_BELOW), broken_state: false },
-        // 走行中の印が入力欄の**上**に在る周（実際の席の spinner 位置）も打ちかけである。
-        GateCase { reason: "busy", wm_seat: Some("seatgate"), pane: Some(BUSY_ABOVE), broken_state: false },
-        // 現行の版の spinner（`esc to interrupt` を持たず・statusline 3 行の上）と API 再試行中。
-        GateCase { reason: "busy", wm_seat: Some("seatgate"), pane: Some(RUNNING_PANE), broken_state: false },
-        GateCase { reason: "busy", wm_seat: Some("seatgate"), pane: Some(RETRYING_PANE), broken_state: false },
-        // 入力欄の位置が読めない pane は idle と名乗らない（fail-closed）。
-        GateCase { reason: "busy", wm_seat: Some("seatgate"), pane: Some(NO_PROMPT), broken_state: false },
-        GateCase { reason: "pane-missing", wm_seat: Some("seatgate"), pane: None, broken_state: false },
+        GateCase { reason: "pane-missing", wm_seat: Some("seatgate"), pane: None, broken_state: false,
+                   stamp: StateFix::Idle },
+        // 入力欄の位置が読めない pane へは送らない（注入と同じ門・fail-closed）。
+        GateCase { reason: "input-unknown", wm_seat: Some("seatgate"), pane: Some(NO_PROMPT), broken_state: false,
+                   stamp: StateFix::Idle },
+        // 打ちかけ（入力欄が非空）へは送らない（人間の打鍵と 1 行に merge しない・注入と同じ門）。
+        GateCase { reason: "input-busy", wm_seat: Some("seatgate"), pane: Some(INPUT_BUSY_PANE), broken_state: false,
+                   stamp: StateFix::Idle },
         // 置き場が使えない周を `lock-held` と名乗ると、競合と故障を記録から分けられない。
-        GateCase { reason: "state-dir", wm_seat: Some("seatgate"), pane: Some(IDLE_PANE), broken_state: true },
+        GateCase { reason: "state-dir", wm_seat: Some("seatgate"), pane: Some(IDLE_PANE), broken_state: true,
+                   stamp: StateFix::Idle },
     ] {
         let dir = tmp();
         let state = prepare_gate_case(&dir, case, target);
@@ -2142,6 +2139,7 @@ fn seat_cycle_refuses_when_lock_is_live_and_reclaims_stale_lock() {
     let state = dir.join("state");
     let wm = dir.join("wm");
     wm_file(&wm, "working-memory.live.md", name);
+    stamp_idle(&state, name);
     let seat = seat_dir_of(&state, name);
     fs::create_dir_all(&seat).ok();
     let lock = seat.join("cycle.lock");
@@ -2195,6 +2193,7 @@ fn seat_cycle_sends_clear_then_restore_in_order() {
     let state = dir.join("state");
     let wm = dir.join("wm");
     let parked = wm_file(&wm, "working-memory.parked.md", name);
+    stamp_idle(&state, name);
     let (wm_s, state_s) = (wm.display().to_string(), state.display().to_string());
 
     let out = run_seat(&[
@@ -2237,6 +2236,7 @@ fn seat_cycle_reports_clear_unconfirmed_when_session_is_not_rebuilt() {
     let state = dir.join("state");
     let wm = dir.join("wm");
     wm_file(&wm, "working-memory.stuck.md", name);
+    stamp_idle(&state, name);
     let (wm_s, state_s) = (wm.display().to_string(), state.display().to_string());
 
     let out = run_seat(&[
@@ -2277,6 +2277,7 @@ fn seat_cycle_reports_restore_unconfirmed_after_limit_when_seat_goes_silent() {
     let state = dir.join("state");
     let wm = dir.join("wm");
     wm_file(&wm, "working-memory.mute.md", name);
+    stamp_idle(&state, name);
     let (wm_s, state_s) = (wm.display().to_string(), state.display().to_string());
 
     let out = run_seat(&[
@@ -2312,6 +2313,7 @@ fn seat_tick_runs_cycle_when_parked() {
     let state = dir.join("state");
     let wm = dir.join("wm");
     wm_file(&wm, "working-memory.parked.md", name);
+    stamp_idle(&state, name);
     let (wm_s, state_s) = (wm.display().to_string(), state.display().to_string());
 
     let out = run_seat(&[
@@ -2322,8 +2324,8 @@ fn seat_tick_runs_cycle_when_parked() {
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
     assert_eq!(
         stdout_of(&out),
-        format!("seat: tick decision=noop reason=wm-unconsumed{CTX_NO_SOURCE} cycle=done{}\n", provenance(&state, "flag")),
-        "判定は noop のまま・context の後ろに cycle を回したことを足す（置き場の出所は最後）"
+        format!("seat: tick decision=noop reason=wm-unconsumed{CTX_NO_SOURCE} cycle=done{ST_IDLE}{}\n", provenance(&state, "flag")),
+        "判定は noop のまま・context の後ろに cycle を回したことを足し、state の列が続く（置き場の出所は最後）"
     );
     assert_eq!(
         fs::read_to_string(&log).unwrap_or_default(),
@@ -2356,6 +2358,7 @@ fn seat_tick_cycles_freshly_stamped_seat_when_own_wm_is_unconsumed() {
     fs::write(seat.join("heartbeat"), "").expect("打刻を置ける");
     let wm = dir.join("wm");
     wm_file(&wm, "working-memory.parked.md", name);
+    stamp_idle(&state, name);
     let (wm_s, state_s) = (wm.display().to_string(), state.display().to_string());
 
     let out = run_seat(&[
@@ -2366,7 +2369,7 @@ fn seat_tick_cycles_freshly_stamped_seat_when_own_wm_is_unconsumed() {
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
     assert_eq!(
         stdout_of(&out),
-        format!("seat: tick decision=noop reason=wm-unconsumed{CTX_NO_SOURCE} cycle=done{}\n", provenance(&state, "flag")),
+        format!("seat: tick decision=noop reason=wm-unconsumed{CTX_NO_SOURCE} cycle=done{ST_IDLE}{}\n", provenance(&state, "flag")),
         "打刻が fresh でも退避物が在れば鮮度を飛ばして cycle を評価する（`cycle=` が付く）"
     );
     assert_eq!(
@@ -2378,13 +2381,14 @@ fn seat_tick_cycles_freshly_stamped_seat_when_own_wm_is_unconsumed() {
     fs::remove_dir_all(&dir).ok();
 }
 
-/// 鮮度を飛ばした周も**それ以降の条件は不変**: 走行中（busy）の席には送らない（cycle も
-/// 評価しない＝`cycle=` が付かない）。base は pane を読まずに `heartbeat-fresh` で止まる。
+/// 鮮度を飛ばした周も**それ以降の条件は不変**: 打刻が Busy の席には送らない（cycle も
+/// 評価しない＝`cycle=` が付かない）。鮮度で止まる実装は pane も打刻も読まずに `heartbeat-fresh` で止まる。
 #[test]
 fn seat_tick_freshly_stamped_seat_with_own_wm_is_still_not_cycled_when_busy() {
     let target = "seatfreshbusy";
-    let case = TickCase { reason: "busy", beat_age_s: Some(STALE_S - 1), pane: Some(BUSY_BELOW),
-                          wm_seat: Some(target), via_file: true, tmux: false, context: CTX_10 };
+    let case = TickCase { reason: "busy", beat_age_s: Some(STALE_S - 1), pane: Some(IDLE_PANE),
+                          wm_seat: Some(target), via_file: true, tmux: false, context: CTX_10,
+                          stamp: StateFix::Busy { age_s: 0 }, state: ST_BUSY };
     let dir = tmp();
     let state = prepare_tick_case(&dir, &case, target);
     let (out, touched) = run_tick_case(&dir, &case, target, &state);
@@ -2400,82 +2404,17 @@ fn seat_tick_freshly_stamped_seat_keeps_heartbeat_gate_without_own_wm() {
     let target = "seatfreshother";
     let cases = [
         TickCase { reason: "heartbeat-fresh", beat_age_s: Some(STALE_S - 1), pane: Some(IDLE_PANE),
-                   wm_seat: Some("other:seat"), via_file: false, tmux: false, context: "" },
+                   wm_seat: Some("other:seat"), via_file: false, tmux: false, context: "",
+                   stamp: StateFix::Idle, state: "" },
         TickCase { reason: "heartbeat-fresh", beat_age_s: Some(STALE_S - 1), pane: Some(IDLE_PANE),
-                   wm_seat: None, via_file: false, tmux: false, context: "" },
+                   wm_seat: None, via_file: false, tmux: false, context: "",
+                   stamp: StateFix::Idle, state: "" },
     ];
     for (at, case) in cases.iter().enumerate() {
         let dir = tmp();
         let state = prepare_tick_case(&dir, case, target);
         let (out, touched) = run_tick_case(&dir, case, target, &state);
         assert_tick_case(&out, touched, case, at, &state);
-        fs::remove_dir_all(&dir).ok();
-    }
-}
-
-/// 走行中の pane はどの形でも **busy**: 現行の spinner（`esc to interrupt` 無し・statusline
-/// 3 行）／API 再試行の banner 4 形のうち 3 形（`Retrying in` / stalled / no-response）／
-/// 印が statusline の遠い下／todo 形（語が文）／括弧無し（開始 16 秒未満）／compaction 中。
-///
-/// 域を末尾 6 非空行に取る実装は spinner を idle と読む（実測 2026-09-11: `/rebrief` 走行中の
-/// 席へ `/clear` が送られた・bd `s2-07l.94`）。`BUSY_FAR_BELOW` は「下は全行を見る」を上の
-/// 域の数とは別に測る。後半 5 形は lens-94 HIGH-1 / HIGH-2 / MEDIUM-4（本体の実装を実読）。
-#[test]
-fn seat_tick_reads_current_running_panes_as_busy() {
-    let target = "seatrunning";
-    let panes = [
-        RUNNING_PANE, RETRYING_PANE, BUSY_FAR_BELOW, TODO_SPINNER_PANE, STALLED_PANE,
-        NO_RESPONSE_PANE, BARE_SPINNER_PANE, COMPACTING_PANE,
-    ];
-    for (at, pane) in panes.into_iter().enumerate() {
-        let context = if pane == BUSY_FAR_BELOW { CTX_10 } else { CTX_19 };
-        let case = TickCase { reason: "busy", beat_age_s: None, pane: Some(pane),
-                              wm_seat: Some(target), via_file: true, tmux: false, context };
-        let dir = tmp();
-        let state = prepare_tick_case(&dir, &case, target);
-        let (out, touched) = run_tick_case(&dir, &case, target, &state);
-        assert_tick_case(&out, touched, &case, at, &state);
-        fs::remove_dir_all(&dir).ok();
-    }
-}
-
-/// turn を終えた実席（完了行 `Crunched for …` + statusline 3 行）は **idle**＝手順 3
-/// （退避物）へ進む。busy と読むと tick が永久に noop になる（退行の歯・base でも GREEN）。
-#[test]
-fn seat_tick_reads_finished_pane_with_tall_statusline_as_idle() {
-    let target = "seatfinished";
-    for (at, pane) in [IDLE_TALL_PANE, IDLE_COUNT_PANE, IDLE_QUOTE_PANE].into_iter().enumerate() {
-        let case = TickCase { reason: "wm-unconsumed", beat_age_s: None, pane: Some(pane),
-                              wm_seat: Some(target), via_file: true, tmux: false, context: CTX_19 };
-        let dir = tmp();
-        let state = prepare_tick_case(&dir, &case, target);
-        let (out, touched) = run_tick_case(&dir, &case, target, &state);
-        assert_tick_case(&out, touched, &case, at, &state);
-        fs::remove_dir_all(&dir).ok();
-    }
-}
-
-/// 上の域は **6 非空行ちょうど**: spinner が prompt 行の 6 非空行上なら busy、7 なら idle
-/// （上限の側を明示する歯。域の理由は `docs/design/seat-autonomy.md` 裁定 (e)）。
-#[test]
-fn seat_tick_above_region_is_exactly_six_nonempty_lines() {
-    let target = "seatabove";
-    for (fillers, reason) in [(4_usize, "busy"), (5_usize, "wm-unconsumed")] {
-        // spinner → filler 行 × n → 区切り（1）→ prompt: spinner は prompt の (n + 2) 非空行上。
-        let mut pane = String::from("✻ Sublimating… (19m 36s · ↓ 36.4k tokens)\n");
-        for at in 0..fillers {
-            pane.push_str(&format!("  filler {at}\n"));
-        }
-        pane.push_str(TALL_TAIL);
-        let dir = tmp();
-        let path = dir.join("above.txt");
-        fs::write(&path, &pane).ok();
-        let case = TickCase { reason, beat_age_s: None, pane: None,
-                              wm_seat: Some(target), via_file: true, tmux: false, context: CTX_19 };
-        let state = prepare_tick_case(&dir, &case, target);
-        fs::write(dir.join("pane.txt"), &pane).ok();
-        let (out, touched) = run_tick_case(&dir, &case, target, &state);
-        assert_tick_case(&out, touched, &case, fillers, &state);
         fs::remove_dir_all(&dir).ok();
     }
 }
@@ -2520,6 +2459,7 @@ fn seat_cycle_confirms_rebuilt_pane_by_consumed_echo_and_restores() {
     let state = dir.join("state");
     let wm = dir.join("wm");
     wm_file(&wm, "working-memory.rebuilt.md", name);
+    stamp_idle(&state, name);
     let pane = dir.join("pane.txt");
     fs::write(&pane, REBUILT_PANE).ok();
     let (wm_s, state_s, pane_s) = (
@@ -2546,8 +2486,8 @@ fn seat_cycle_confirms_rebuilt_pane_by_consumed_echo_and_restores() {
 }
 
 /// `/clear` が**入力行に残る**席（未 submit・[`UNSUBMITTED_CLEAR_PANE`] / echo と入力行の両方に
-/// 在る [`REBUILT_UNSUBMITTED_PANE`]）は cycle の入口で **busy**＝1 key も送らない（Enter だけが
-/// 落ちた席へ `/clear` を重ねない・作り直し済みとも読まない）。
+/// 在る [`REBUILT_UNSUBMITTED_PANE`]）は、打刻が Idle でも送る直前の入力欄の門で **`input-busy`**＝
+/// 1 key も送らない（Enter だけが落ちた席へ `/clear` を重ねない・作り直し済みとも読まない）。
 #[test]
 fn seat_cycle_refuses_when_clear_is_stuck_in_input_line() {
     for (label, shape) in [
@@ -2558,6 +2498,7 @@ fn seat_cycle_refuses_when_clear_is_stuck_in_input_line() {
         let name = "seatstuckinput";
         let (state, wm, pane) = (dir.join("state"), dir.join("wm"), dir.join("pane.txt"));
         wm_file(&wm, "working-memory.stuck.md", name);
+        stamp_idle(&state, name);
         fs::write(&pane, shape).ok();
         let (wm_s, state_s, pane_s, sock_s) = (
             wm.display().to_string(),
@@ -2575,7 +2516,7 @@ fn seat_cycle_refuses_when_clear_is_stuck_in_input_line() {
         );
 
         assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "{label}: stdout={}", stdout_of(&out));
-        assert_eq!(stderr_of(&out), format!("seat: cycle refused reason=busy{}\n", provenance(&state, "flag")), "{label}");
+        assert_eq!(stderr_of(&out), format!("seat: cycle refused reason=input-busy{}\n", provenance(&state, "flag")), "{label}");
         assert!(!touched, "{label}: 1 key も送らない（tmux を撃たない）");
         fs::remove_dir_all(&dir).ok();
     }
@@ -2614,6 +2555,7 @@ fn seat_cycle_done_line_carries_state_dir_provenance() {
     let state = dir.join("state");
     let wm = dir.join("wm");
     wm_file(&wm, "working-memory.parked.md", name);
+    stamp_idle(&state, name);
     let (wm_s, state_s) = (wm.display().to_string(), state.display().to_string());
 
     let out = run_seat(&[
@@ -2741,6 +2683,7 @@ fn seat_cycle_confirms_rebuilt_pane_with_hook_lines_below_echo() {
 fn cycle_with_pane_after_clear(dir: &Path, name: &str, before: &str, after: &str) -> Output {
     let (socket, log) = (socket_of(dir), dir.join("seat.log"));
     let (state, wm, pane) = (dir.join("state"), dir.join("wm"), dir.join("pane.txt"));
+    stamp_idle(&state, name);
     fs::write(&pane, before).expect("pane fixture を置ける");
     let (wm_s, state_s, pane_s) = (
         wm.display().to_string(),
@@ -2837,6 +2780,7 @@ fn seat_cycle_reports_restore_unconfirmed_after_limit_when_restore_is_left_in_in
     let state = dir.join("state");
     let wm = dir.join("wm");
     wm_file(&wm, "working-memory.left.md", name);
+    stamp_idle(&state, name);
     let (wm_s, state_s) = (wm.display().to_string(), state.display().to_string());
 
     let out = run_seat(&[
@@ -2884,6 +2828,7 @@ fn seat_cycle_restores_after_seat_consumes_queued_restore() {
     let state = dir.join("state");
     let wm = dir.join("wm");
     wm_file(&wm, "working-memory.queued.md", name);
+    stamp_idle(&state, name);
     let (wm_s, state_s) = (wm.display().to_string(), state.display().to_string());
 
     let out = run_seat(&[
@@ -3005,4 +2950,294 @@ fn seat_inject_uses_first_nonblank_line_as_marker() {
     assert!(!tick_file(&state, name).exists(), "届いていない周は記録しない");
     drop(seat);
     fs::remove_dir_all(&dir).ok();
+}
+
+// ─────────────────── 席の状態（hook の打刻・typed・`s2-07l.95`） ───────────────────
+
+/// **負例（字面を読んでいない証拠）**: pane が走行中の spinner の字面だけ（[`RUNNING_PANE`]）でも、
+/// 打刻が Idle なら tick は pointer を注入する。字面で busy を読む実装はこの席へ 1 key も送らない
+/// （`noop reason=busy`）。判定は `--capture-file` の pane で通し、送信だけ独立 socket の席へ通す。
+#[test]
+fn seat_state_tick_injects_despite_spinner_text_when_stamped_idle() {
+    let dir = tmp();
+    let socket = socket_of(&dir);
+    let name = "seatstateidle";
+    let guard = start_seat(&socket, name);
+    assert!(guard.ready(), "独立 socket に prompt 付きの session を立てられる");
+    let state = dir.join("state");
+    let wm = dir.join("wm");
+    fs::create_dir_all(&wm).ok();
+    stamp_idle(&state, name);
+    let pane = dir.join("pane.txt");
+    fs::write(&pane, RUNNING_PANE).ok();
+    let (wm_s, state_s, pane_s) = (
+        wm.display().to_string(),
+        state.display().to_string(),
+        pane.display().to_string(),
+    );
+
+    let out = run_seat(&[
+        "tick", "--target", name, "--wm-dir", &wm_s, "--tmux-socket", &socket,
+        "--state-dir", &state_s, "--capture-file", &pane_s,
+    ]);
+
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(
+        stdout_of(&out),
+        format!("seat: tick decision=inject target={name} consumed=true kind=pointer{CTX_19}{ST_IDLE}{}\n", provenance(&state, "flag")),
+        "spinner の字面は判定に効かない＝打刻 Idle の席には注入する"
+    );
+    let seen = capture(&socket, name);
+    assert!(seen.contains(&format!("seat heartbeat --target {name}")), "既定の 1 行が届く: {seen}");
+    let recorded = fs::read_to_string(tick_file(&state, name)).unwrap_or_default();
+    assert!(
+        recorded.contains(&format!(
+            r#""what":"decision=inject target={name} consumed=true kind=pointer{CTX_19}{ST_IDLE}{}""#,
+            provenance(&state, "flag")
+        )),
+        "記録にも state の列（出所 = Stop）が載る: {recorded}"
+    );
+    // socket を消す**前**に畳む（消してからでは kill-session が届かない・実測 2026-09-10）。
+    drop(guard);
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// **逆の負例**: 入力欄が空で走行中の印も無い字面（[`IDLE_PANE`]）でも、打刻が Busy なら注入しない
+/// （`noop reason=busy`・tmux 未接触）。退避物 0 件・lock 空きなので、状態の門だけがこの席を止めている。
+#[test]
+fn seat_state_tick_refuses_idle_looking_pane_when_stamped_busy() {
+    let dir = tmp();
+    let target = "seatstatebusy";
+    let state = dir.join("state");
+    let wm = dir.join("wm");
+    fs::create_dir_all(&wm).ok();
+    write_state(&seat_dir_of(&state, target), StateFix::Busy { age_s: 0 });
+    fs::write(dir.join("pane.txt"), IDLE_PANE).ok();
+    let (wm_s, state_s, pane_s, sock_s) = (
+        wm.display().to_string(),
+        state.display().to_string(),
+        dir.join("pane.txt").display().to_string(),
+        dir.join("absent-sock").display().to_string(),
+    );
+
+    let (out, touched) = run_seat_probed(
+        &dir,
+        &[
+            "tick", "--target", target, "--wm-dir", &wm_s, "--tmux-socket", &sock_s,
+            "--state-dir", &state_s, "--capture-file", &pane_s,
+        ],
+    );
+
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(
+        stdout_of(&out),
+        format!("seat: tick decision=noop reason=busy{CTX_10}{ST_BUSY}{}\n", provenance(&state, "flag")),
+        "入力欄が空の字面でも打刻が Busy なら busy"
+    );
+    assert!(!touched, "Busy の席には 1 key も送らない（tmux を撃たない）");
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// 打刻が無い・読めない・Busy が古い席は、退避物 0 件・lock 空き・入力欄が空でも注入しない
+/// （fail-closed・理由が typed・tmux 未接触）。missing を idle に、stale を busy に読み替える実装は
+/// ここで落ちる（同じ fixture で注入か `busy` になる）。
+#[test]
+fn seat_state_tick_fails_closed_without_readable_fresh_stamp() {
+    let target = "seatstateclosed";
+    let cases = [
+        (StateFix::Absent, "state-missing", ST_MISSING),
+        (StateFix::Unreadable, "state-unreadable", ST_UNREADABLE),
+        (StateFix::Busy { age_s: STALE_S + 1 }, "state-stale", ST_STALE),
+    ];
+    for (at, (fix, reason, column)) in cases.into_iter().enumerate() {
+        let dir = tmp();
+        let state = dir.join("state");
+        let wm = dir.join("wm");
+        fs::create_dir_all(&wm).ok();
+        write_state(&seat_dir_of(&state, target), fix);
+        fs::write(dir.join("pane.txt"), IDLE_PANE).ok();
+        let (wm_s, state_s, pane_s, sock_s) = (
+            wm.display().to_string(),
+            state.display().to_string(),
+            dir.join("pane.txt").display().to_string(),
+            dir.join("absent-sock").display().to_string(),
+        );
+
+        let (out, touched) = run_seat_probed(
+            &dir,
+            &[
+                "tick", "--target", target, "--wm-dir", &wm_s, "--tmux-socket", &sock_s,
+                "--state-dir", &state_s, "--capture-file", &pane_s,
+            ],
+        );
+
+        assert_eq!(rc_of(&out), i32::from(RC_OK), "組 {at}（{reason}）: stderr={}", stderr_of(&out));
+        assert_eq!(
+            stdout_of(&out),
+            format!("seat: tick decision=noop reason={reason}{CTX_10}{column}{}\n", provenance(&state, "flag")),
+            "組 {at}: 読めない打刻は理由を分けて注入しない"
+        );
+        assert!(!touched, "組 {at}（{reason}）: 1 key も送らない（tmux を撃たない）");
+        let recorded = fs::read_to_string(tick_file(&state, target)).unwrap_or_default();
+        assert!(
+            recorded.lines().last().is_some_and(|line| line.contains(&format!(r#""what":"decision=noop reason={reason}{CTX_10}{column} "#))),
+            "組 {at}: 記録の末尾 1 行も同じ理由と state の列: {recorded}"
+        );
+        fs::remove_dir_all(&dir).ok();
+    }
+}
+
+/// stale の境界は `seat.tick_stale_s`（= 2400）を**共用**する（新しい閾値を足さない・ADR-0015 §2.4）:
+/// Busy の打刻が閾値ちょうど古い周は `busy`、1 秒超で `state-stale`。両側から撃つ＝manifest の値が
+/// 変わると落ちる。
+#[test]
+fn seat_state_tick_stale_boundary_shares_tick_stale_s() {
+    let target = "seatstatestale";
+    for (age, reason, column) in [(STALE_S, "busy", ST_BUSY), (STALE_S + 1, "state-stale", ST_STALE)] {
+        let case = TickCase { reason, beat_age_s: None, pane: Some(IDLE_PANE),
+                              wm_seat: Some(target), via_file: true, tmux: false, context: CTX_10,
+                              stamp: StateFix::Busy { age_s: age }, state: column };
+        let dir = tmp();
+        let state = prepare_tick_case(&dir, &case, target);
+        let (out, touched) = run_tick_case(&dir, &case, target, &state);
+        assert_tick_case(&out, touched, &case, usize::try_from(age).unwrap_or_default(), &state);
+        fs::remove_dir_all(&dir).ok();
+    }
+}
+
+/// tick が読むのは**最終行**: Busy の後に Idle が在れば idle、Idle の後に Busy なら busy。末尾の
+/// 空行は最終行に数えない。先頭行だけ・全行の多数決で読む実装はここで落ちる。
+#[test]
+fn seat_state_tick_reads_the_last_stamp_line() {
+    let target = "seatstatelast";
+    let now = unix_now();
+    let cases = [
+        (
+            format!(
+                "{}\n{}\n\n",
+                stamp_line("busy", "UserPromptSubmit", now, "s"),
+                stamp_line("idle", "Stop", now, "s")
+            ),
+            "cycle-live",
+            ST_IDLE,
+        ),
+        (
+            format!(
+                "{}\n{}\n",
+                stamp_line("idle", "SessionStart", now, "s"),
+                stamp_line("busy", "UserPromptSubmit", now, "s")
+            ),
+            "busy",
+            ST_BUSY,
+        ),
+    ];
+    for (at, (body, reason, column)) in cases.iter().enumerate() {
+        // Idle の組は lock（TTL 内）で止める＝状態の門を**通った**ことが理由の字面で分かる。
+        let case = TickCase { reason, beat_age_s: None, pane: Some(IDLE_PANE),
+                              wm_seat: Some("other:seat"), via_file: true, tmux: false, context: CTX_10,
+                              stamp: StateFix::Absent, state: column };
+        let dir = tmp();
+        let state = prepare_tick_case(&dir, &case, target);
+        fs::write(state_file(&seat_dir_of(&state, target)), body).ok();
+        let (out, touched) = run_tick_case(&dir, &case, target, &state);
+        assert_tick_case(&out, touched, &case, at, &state);
+        fs::remove_dir_all(&dir).ok();
+    }
+}
+
+/// cycle は tick と同じ読み口で状態の門を通す: Busy・打刻なし・読めない・Busy が古い席へは
+/// 退避物が在っても **1 key も送らない**（fail-closed・理由が typed・tmux 未接触）。
+#[test]
+fn seat_state_cycle_refuses_unless_stamped_idle() {
+    let target = "seatstategate";
+    for case in &[
+        GateCase { reason: "busy", wm_seat: Some("seatstategate"), pane: Some(IDLE_PANE), broken_state: false,
+                   stamp: StateFix::Busy { age_s: STALE_S } },
+        GateCase { reason: "state-missing", wm_seat: Some("seatstategate"), pane: Some(IDLE_PANE), broken_state: false,
+                   stamp: StateFix::Absent },
+        GateCase { reason: "state-unreadable", wm_seat: Some("seatstategate"), pane: Some(IDLE_PANE), broken_state: false,
+                   stamp: StateFix::Unreadable },
+        GateCase { reason: "state-stale", wm_seat: Some("seatstategate"), pane: Some(IDLE_PANE), broken_state: false,
+                   stamp: StateFix::Busy { age_s: STALE_S + 1 } },
+    ] {
+        let dir = tmp();
+        let state = prepare_gate_case(&dir, case, target);
+        assert_gate_case(&dir, case, target, &state);
+        fs::remove_dir_all(&dir).ok();
+    }
+}
+
+/// **cycle 側の負例**: 送る前の pane が走行中の spinner の字面（[`RUNNING_PANE`]）でも、打刻が Idle で
+/// 入力欄が空なら `/clear` を送り、作り直しを確認して復元する（字面を読む実装は `busy` で断る）。
+#[test]
+fn seat_state_cycle_sends_clear_despite_spinner_text_when_stamped_idle() {
+    let dir = tmp();
+    let socket = socket_of(&dir);
+    let name = "seatstatecycle";
+    let log = dir.join("seat.log");
+    let guard = start_clearing_seat(&socket, name, &log, false);
+    assert!(guard.ready(), "偽の席を立てられる");
+    let wm = dir.join("wm");
+    wm_file(&wm, "working-memory.spin.md", name);
+
+    let out = cycle_with_pane_after_clear(&dir, name, RUNNING_PANE, REBUILT_PANE);
+
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(stdout_of(&out), format!("seat: cycle done target={name}{}\n", provenance(&dir.join("state"), "flag")));
+    assert_eq!(
+        fs::read_to_string(&log).unwrap_or_default(),
+        "/clear\n/rebrief\n",
+        "spinner の字面は判定に効かない＝打刻 Idle の席は作り直して復元する"
+    );
+    // socket を消す**前**に畳む（消してからでは kill-session が届かない・実測 2026-09-10）。
+    drop(guard);
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// 退避の合図（`kind=externalize`・SRS FR29「idle を待たずに」）は**状態の門の外**: 打刻が Busy でも、
+/// 無くても、読めなくても、Busy が古くても、context が cap 以上で退避物 0・lock 空きなら送る
+/// （planner 裁定 2026-09-11: FR29 > ADR-0015 §2.3）。判定行の state の列は打刻のまま載る。状態の門を
+/// context の前へ動かす実装は Busy 以外の 3 形でここで落ちる（lens-95 MEDIUM-2）。
+#[test]
+fn seat_state_tick_sends_externalize_pointer_regardless_of_stamp() {
+    let cases = [
+        (StateFix::Busy { age_s: 0 }, ST_BUSY),
+        (StateFix::Absent, ST_MISSING),
+        (StateFix::Unreadable, ST_UNREADABLE),
+        (StateFix::Busy { age_s: STALE_S + 1 }, ST_STALE),
+    ];
+    for (at, (fix, column)) in cases.into_iter().enumerate() {
+        let dir = tmp();
+        let socket = socket_of(&dir);
+        let name = "seatstatecap";
+        let guard = start_seat(&socket, name);
+        assert!(guard.ready(), "組 {at}: 独立 socket に prompt 付きの session を立てられる");
+        let state = dir.join("state");
+        let wm = dir.join("wm");
+        fs::create_dir_all(&wm).ok();
+        write_state(&seat_dir_of(&state, name), fix);
+        let pane = dir.join("pane.txt");
+        fs::write(&pane, busy_pane_at(96)).ok();
+        let (wm_s, state_s, pane_s) = (
+            wm.display().to_string(),
+            state.display().to_string(),
+            pane.display().to_string(),
+        );
+
+        let out = run_seat(&[
+            "tick", "--target", name, "--wm-dir", &wm_s, "--tmux-socket", &socket,
+            "--state-dir", &state_s, "--capture-file", &pane_s,
+        ]);
+
+        assert_eq!(rc_of(&out), i32::from(RC_OK), "組 {at}: stderr={}", stderr_of(&out));
+        assert_eq!(
+            stdout_of(&out),
+            format!("seat: tick decision=inject target={name} consumed=true kind=externalize context=96{column}{}\n", provenance(&state, "flag")),
+            "組 {at}: 退避の合図は打刻に依らず送る（state の列は打刻のまま）"
+        );
+        assert!(capture(&socket, name).contains("/ready-compaction"), "組 {at}: 退避 skill の名が届く");
+        // socket を消す**前**に畳む（消してからでは kill-session が届かない・実測 2026-09-10）。
+        drop(guard);
+        fs::remove_dir_all(&dir).ok();
+    }
 }

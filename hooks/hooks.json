@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${SCRIBE2_BIN:-scribe2}\" hook session-start",
+            "command": "\"${SCRIBE2_BIN:-scribe2}\" hook session-start --pane \"$TMUX_PANE\"",
             "timeout": 10
           }
         ]
@@ -30,6 +30,28 @@
           {
             "type": "command",
             "command": "\"${SCRIBE2_BIN:-scribe2}\" hook permission-request",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${SCRIBE2_BIN:-scribe2}\" hook user-prompt-submit --pane \"$TMUX_PANE\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${SCRIBE2_BIN:-scribe2}\" hook stop --pane \"$TMUX_PANE\"",
             "timeout": 10
           }
         ]
