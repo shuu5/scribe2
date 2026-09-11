@@ -111,7 +111,8 @@ fn main() -> ExitCode {
 /// 「1 行の形」と「rc の極性」で、材料は `outcomes.json` の fixture 3 種である。
 #[cfg(test)]
 mod tests {
-    use crate::mutantsdiff::{deny_line_enabled, measured, parse_outcomes, verdict, without_outcomes, Counts};
+    use crate::mutantsdiff::{deny_line_enabled, measure_args, measured, parse_outcomes, verdict, without_outcomes, Counts};
+    use std::path::Path;
     use std::process::ExitCode;
 
     /// cargo-mutants が実際に書く形（生存 0 の周・入れ子に同名 key を持つ）。
@@ -138,16 +139,61 @@ mod tests {
         assert_eq!(
             counts,
             Counts { total: 18, caught: 12, missed: 2, unviable: 3, timeout: 1 },
-            "5 つの数を outcomes.json から読む"
+            "5 つの数を outcomes.json から読む（範囲は行を組むときに呼び手が渡す）"
         );
         // **1 行の形**まで測る（読み取れても書式が崩れれば報告の額面が読めない）。
+        let line = counts.line(&scope_of(PROBE_SCOPE));
         assert_eq!(
-            counts.line(),
-            "mutants-diff: total=18 caught=12 missed=2 unviable=3 timeout=1",
+            line,
+            "mutants-diff: total=18 caught=12 missed=2 unviable=3 timeout=1 scope=probe-pkg-7f3",
             "1 行の形は固定"
         );
         // ★**不成立は撃墜と別**（rc 101 を撃墜に数えないのと同じ極性）。1 行に別々に出る。
-        assert!(counts.line().contains("unviable=3"), "測れなかった分が額面に出る");
+        assert!(line.contains("unviable=3"), "測れなかった分が額面に出る");
+    }
+
+    /// 行を組む側に置く**実在しない** package 名（`s2-07l.82`）。実在の名を置くと、値が固定
+    /// 文字列に化けても歯が通る（fixture の字面と入力の衝突）。
+    const PROBE_SCOPE: &str = "probe-pkg-7f3";
+
+    /// 名前から [`crate::mutantsdiff::Scope`] を得る唯一の道＝`-p` へ渡す引数を組むこと。
+    fn scope_of(name: &str) -> crate::mutantsdiff::Scope {
+        measure_args(Path::new("in.diff"), Path::new("out"), name).1
+    }
+
+    /// 変異の行は**何を測ったか**を末尾の `scope=` で名乗り、その値は呼び手が渡した名前
+    /// そのものである（`s2-07l.82`・行は出所から切り離されて流通するので限界は行に載せる）。
+    ///
+    /// 2 つの違う名前で撃つ——行を組む側が値を literal に差し替えると片方が必ず落ちる。
+    /// **`-p` へ渡す名前も同じ値**であることを [`measure_args`] で見る（行の `scope=` と実際に
+    /// 測った package が別々の読みで食い違わない・lens-82 MEDIUM-1）。
+    #[test]
+    fn mutants_diff_line_names_the_scope_it_was_given() {
+        let other = "probe-pkg-9c1";
+        let first = parse_outcomes(MISSED_TWO).expect("fixture は読める").line(&scope_of(PROBE_SCOPE));
+        let second = parse_outcomes(MISSED_TWO).expect("fixture は読める").line(&scope_of(other));
+        assert!(
+            first.ends_with(&format!(" scope={PROBE_SCOPE}")),
+            "渡した名前を末尾の scope= に出す: {first}"
+        );
+        assert!(second.ends_with(&format!(" scope={other}")), "別の名前も同じ形で出す: {second}");
+        assert_ne!(first, second, "scope だけが違う 2 行は違う行になる");
+        // 既存 5 token の名前・順序は据え置き（scope はその後ろ）。
+        let tags: Vec<&str> = first.split(' ').skip(1).filter_map(|t| t.split_once('=').map(|(k, _)| k)).collect();
+        assert_eq!(tags, ["total", "caught", "missed", "unviable", "timeout", "scope"], "{first}");
+        // 「測る対象が無い」周の行も範囲を名乗る（unmeasured の経路は行を出さないので対象外）。
+        let none = without_outcomes(true).expect("rc 0 なら測る対象が無いだけ").line(&scope_of(other));
+        assert!(none.ends_with(&format!(" scope={other}")), "{none}");
+        // `-p` の直後に来るのは渡した名前そのもの（literal でも core の NAME でもない）。
+        // `--in-diff` と `-o` も対のまま在る（落とすと測った結果を読まずに total=0 へ化ける）。
+        for scope in [PROBE_SCOPE, other] {
+            let (args, _) = measure_args(Path::new("probe.diff"), Path::new("probe-out"), scope);
+            let value_after = |flag: &str| args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1)).map(String::as_str);
+            assert_eq!(value_after("-p"), Some(scope), "{args:?}");
+            assert_eq!(args.iter().filter(|a| *a == "-p").count(), 1, "package は 1 つだけ: {args:?}");
+            assert_eq!(value_after("--in-diff"), Some("probe.diff"), "{args:?}");
+            assert_eq!(value_after("-o"), Some("probe-out"), "{args:?}");
+        }
     }
 
     #[test]
@@ -158,8 +204,8 @@ mod tests {
         // 値に字面を置いただけの fixture では深さ条件を消しても緑＝空虚な歯だった）。
         let counts = parse_outcomes(MISSED_NONE).expect("fixture は読める");
         assert_eq!(
-            counts.line(),
-            "mutants-diff: total=23 caught=23 missed=0 unviable=0 timeout=0",
+            counts.line(&scope_of(PROBE_SCOPE)),
+            "mutants-diff: total=23 caught=23 missed=0 unviable=0 timeout=0 scope=probe-pkg-7f3",
             "入れ子の同名 key を 1 つも拾わない"
         );
     }
@@ -219,8 +265,8 @@ mod tests {
         // 出力 dir を作らない。これは「**測る対象が無い**」であって「測れなかった」ではない。
         let counts = without_outcomes(true).expect("道具が rc 0 なら測る対象が無いだけ");
         assert_eq!(
-            counts.line(),
-            "mutants-diff: total=0 caught=0 missed=0 unviable=0 timeout=0",
+            counts.line(&scope_of(PROBE_SCOPE)),
+            "mutants-diff: total=0 caught=0 missed=0 unviable=0 timeout=0 scope=probe-pkg-7f3",
             "母集団を額面に出す（0 件の緑と読み違えないため）"
         );
         // **門でも通る**——測る対象が無い周を赤にすると、docs-only 便が恒久 FAIL になる。
