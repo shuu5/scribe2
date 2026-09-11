@@ -141,6 +141,7 @@ pub fn inspect(root: &Path) -> Report {
     measured.push(crate::non_rust_exec::measure(&layout));
     measured.push(crate::non_rust_exec::ci_shell_lines(&layout));
     measured.push(crate::claude_md::measure(&layout));
+    measured.push(crate::enum_slices::measure(&files));
     fold(measured)
 }
 
@@ -570,7 +571,7 @@ mod tests {
         test-src-ratio=<v>/<v> name-literal=<v> manifest-name=<v> manifest-version=<v>.<v>.<v> \
         lints-set=<v> lints-optin=<v>/<v> deps-empty=<v> toolchain-pin=<v>.<v>.<v> \
         paths-clean=<v> non-rust-exec=<v>/<v> allow=<v> ci-shell-lines=<v> \
-        claude-md-constitution=<v>";
+        claude-md-constitution=<v> enum-slices=<v>";
 
     /// git を要する measure の fact（`.git` の無い木では測れない形になり、副 field も出ない）。
     fn is_git_fact(token: &str) -> bool {
@@ -625,6 +626,72 @@ mod tests {
                 ".git の無い木では non-rust-exec も測れない形のはず: {line}"
             );
         }
+    }
+
+    /// 擬似 workspace の core crate に enum と const slice の対を 1 つ置く。
+    fn write_enum_slice(dir: &Path, enum_body: &str, slice_body: &str) {
+        write_at(
+            dir,
+            &format!("crates/{FIXTURE_CORE}/src/kinds.rs"),
+            &format!(
+                "/// 閉じた enum。\npub enum Kind {{\n{enum_body}}}\n\n\
+                 /// 全 variant。\npub const KINDS: &[Kind] = &[\n{slice_body}];\n"
+            ),
+        );
+    }
+
+    /// enum の末尾に足した variant が const slice に無い木は `enum-slices` で落ちる
+    /// （ADR-0013 §2.3 が「どの面も受けていない」と記録した穴・`s2-07l.88`）。
+    #[test]
+    fn enum_slices_reports_variant_missing_from_slice() {
+        let violations = check_fixture(|dir| {
+            write_enum_slice(
+                dir,
+                "    /// 1。\n    Alpha,\n    /// 2。\n    Beta,\n    /// 末尾に足した。\n    Gamma,\n",
+                "    Kind::Alpha,\n    Kind::Beta,\n",
+            );
+        });
+        assert_single(&violations, "enum-slices");
+        let line = violations.first().map(String::as_str).unwrap_or_default();
+        assert!(line.contains("Kind::Gamma"), "欠けた variant を名指す: {line}");
+        // 揃っている木は通る（対は 1 つ数える）。
+        let ok = check_fixture(|dir| {
+            write_enum_slice(
+                dir,
+                "    Alpha,\n    Beta,\n    Gamma,\n",
+                "    Kind::Alpha,\n    Kind::Beta,\n    Kind::Gamma,\n",
+            );
+        });
+        assert!(ok.is_empty(), "揃った対は違反 0 のはず: {ok:?}");
+    }
+
+    /// 読めない形（payload 付き variant・属性行・`Enum::` でない要素）は**違反に倒す**
+    /// （fail-closed・「読めなかった」を「一致していた」に化けさせない）。
+    #[test]
+    fn enum_slices_refuses_unrecognized_forms_instead_of_counting() {
+        // (a) payload 付き variant: 数えれば 3 == 3 で「一致」に化ける形。
+        let payload = check_fixture(|dir| {
+            write_enum_slice(
+                dir,
+                "    Alpha,\n    Beta(u8),\n    Gamma,\n",
+                "    Kind::Alpha,\n    Kind::Beta,\n    Kind::Gamma,\n",
+            );
+        });
+        assert_single(&payload, "enum-slices");
+        // (b) 属性行が混じる形。
+        let attribute = check_fixture(|dir| {
+            write_enum_slice(
+                dir,
+                "    Alpha,\n    #[default]\n    Beta,\n",
+                "    Kind::Alpha,\n    Kind::Beta,\n",
+            );
+        });
+        assert_single(&attribute, "enum-slices");
+        // (c) slice の要素が `Kind::<Variant>` の形でない。
+        let element = check_fixture(|dir| {
+            write_enum_slice(dir, "    Alpha,\n", "    Kind::Alpha, OTHER,\n");
+        });
+        assert_single(&element, "enum-slices");
     }
 
     /// 上限 +1 行の .rs は file-lines だけで落ち、上限ちょうどは通る。
