@@ -123,7 +123,26 @@ fn polarity_lists_the_three_added_guards() {
     ] {
         assert!(text.lines().any(|line| line == expected), "一覧に載る: {expected}\n{text}");
     }
-    assert_eq!(ALL.len(), 13, "母集団は 13（10 + 3）");
+    assert_eq!(ALL.len(), 14, "母集団は 14（10 + 3 + 質問の口 1・`s2-07l.115`）");
+}
+
+/// runner の包みの質問 record（`s2-07l.115`・FR31・ADR-0016 §2.2）は **in-loop / fail-open** で載る。
+/// record が無い・読めない周は claude の rc へ落とす（ADR-0012 §2.1 と同じ向き）＝FailOpen を隠さない。
+#[test]
+fn runner_question_guard_is_in_loop_fail_open() {
+    assert_eq!(
+        Guard::RunnerQuestion.polarity(),
+        Polarity { timing: Timing::InLoop, on_failure: OnFailure::FailOpen }
+    );
+    let text = output();
+    let expected = "guard=runner-question timing=in-loop on-failure=fail-open boundary=headless::runner::Ending";
+    assert!(text.lines().any(|line| line == expected), "一覧に載る: {expected}\n{text}");
+    // 上限の中断（runner-stop）の**直後**に並ぶ（行為の流れ = runner の 2 判定）。
+    let names: Vec<&str> = text.lines().filter_map(|line| line.split(' ').next()).collect();
+    let stop = names.iter().position(|name| *name == "guard=runner-stop");
+    let question = names.iter().position(|name| *name == "guard=runner-question");
+    assert!(matches!((stop, question), (Some(s), Some(q)) if q == s + 1), "runner-stop の直後: {names:?}");
+    assert!(text.lines().last().is_some_and(|line| line.contains(" in-loop=11 ") && line.contains(" fail-open=3")), "集計 +1: {text}");
 }
 
 /// 3 クラスを名乗らない契約。

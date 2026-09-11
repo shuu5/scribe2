@@ -1482,3 +1482,157 @@ fn headless_runner_does_not_drop_the_prompt_into_the_cwd_for_a_relative_vessel()
     assert!(stderr_of(&out).contains("prompt を残せない"), "欠落は stderr に 1 行: {}", stderr_of(&out));
     clean(&[&dir, &worktree]);
 }
+
+// ── 質問の口 (b) 包み（設計 docs/design/pipeline-question.md §3 / §8 (b)・SRS FR31） ──────
+
+/// runner が最終行に書く質問 record（写す用の字面そのもの）。
+const QUESTION_RECORD: &str = r#"{"question":"verify 行が矛盾する","about":"verify"}"#;
+
+/// fake claude の stream（system 1 行 + 最終 result 1 行・`result` の text は escape 済み）。
+fn stream_with_result(result_json_text: &str) -> String {
+    format!(
+        "{{\"type\":\"system\",\"subtype\":\"init\"}}\n{{\"type\":\"result\",\"is_error\":false,\"result\":\"{result_json_text}\",\"usage\":{{\"input_tokens\":1}}}}\n"
+    )
+}
+
+/// runner を 1 回撃つ（契約は stdin・fake claude の rc を指定）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn run_question_runner(dir: &Path, worktree: &Path, body: &str, rc: u8, contract: &[u8]) -> Output {
+    let write_set = dir.join("write-set.txt");
+    fs::write(&write_set, "src/lib.rs\n").expect("write-set を書ける");
+    let vessel = write_vessel_copy(dir, r#"["cargo", "git"]"#);
+    let claude = fake_claude(dir, body, false, rc);
+    run_runner(
+        &RunnerCall { dir, worktree, write_set: &write_set, vessel: &vessel, claude: &claude, mode: "acceptEdits", account: None },
+        contract,
+    )
+}
+
+/// stdout に `{` で始まる行が無い（record を写していない）。
+fn has_no_record_line(out: &Output) -> bool {
+    !stdout_of(out).lines().any(|line| line.trim_start().starts_with('{'))
+}
+
+#[test]
+fn runner_question_record_on_last_line_yields_rc76_and_echoes_it() {
+    let dir = tmp();
+    let worktree = tmp();
+    // result の text = 本文 1 行 + 最終行の record（JSON 文字列の中なので `"` と改行は escape）。
+    let text = r#"契約を読んだ。\n{\"question\":\"verify 行が矛盾する\",\"about\":\"verify\"}"#;
+    let out = run_question_runner(&dir, &worktree, &stream_with_result(text), 0, b"goal = \"x\"\n");
+    assert_eq!(out.status.code(), Some(i32::from(vessel::pipe::RC_QUESTION)), "包みは rc 76 で終える: {}", stderr_of(&out));
+    let text = stdout_of(&out);
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.last().copied(), Some(QUESTION_RECORD), "最終行は同じ record そのもの: {lines:?}");
+    assert!(
+        lines.iter().rev().nth(1).is_some_and(|line| line.starts_with("runner: rc=0 records=")),
+        "観測行は record の前に残る: {lines:?}"
+    );
+    clean(&[&dir, &worktree]);
+}
+
+#[test]
+fn runner_question_mirrors_claude_rc_when_record_is_absent_or_unreadable() {
+    let dir = tmp();
+    let worktree = tmp();
+    // key 無し / 壊れた JSON / 入れ子で引用された record / question が空、の 4 形（+ 記録の無い普通の終わり）。
+    // `malformed` = JSON らしい最終行が読めない形（FailOpen を**隠さない**＝stderr に理由 1 行）。
+    // `Plain`（key 無し・record 無し）は普通の終わり方なので stderr を出さない。
+    for (label, text, malformed) in [
+        ("key 無し", r#"done\n{\"about\":\"verify\"}"#, false),
+        ("壊れた JSON", r#"done\n{\"question\":\"verify"#, true),
+        ("入れ子で引用", r#"done\n{\"outer\":{\"question\":\"verify\"}}"#, true),
+        ("question が空", r#"done\n{\"question\":\"  \",\"about\":\"verify\"}"#, true),
+        ("record 無し", r#"done. see {\"question\":\"x\"} above"#, false),
+    ] {
+        let out = run_question_runner(&dir, &worktree, &stream_with_result(text), 0, b"goal = \"x\"\n");
+        assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{label}: claude の rc（0）を写す: {}", stderr_of(&out));
+        assert!(has_no_record_line(&out), "{label}: stdout に record を写さない: {}", stdout_of(&out));
+        assert!(stdout_of(&out).contains("runner: rc=0 records="), "{label}: 観測行は残る");
+        assert_eq!(
+            stderr_of(&out).contains("質問 record の形でない"),
+            malformed,
+            "{label}: 読めない形だけ stderr に理由 1 行（FailOpen を隠さない）: {}",
+            stderr_of(&out)
+        );
+    }
+    clean(&[&dir, &worktree]);
+}
+
+#[test]
+fn runner_question_is_judged_only_after_normal_exit() {
+    let dir = tmp();
+    let worktree = tmp();
+    let text = r#"failed\n{\"question\":\"verify 行が矛盾する\",\"about\":\"verify\"}"#;
+    for want in [1_u8, 3] {
+        let out = run_question_runner(&dir, &worktree, &stream_with_result(text), want, b"goal = \"x\"\n");
+        assert_eq!(out.status.code(), Some(i32::from(want)), "非 0 の周は claude の rc を写す（76 にしない）");
+        assert!(has_no_record_line(&out), "非 0 の周は最終行を読まない: {}", stdout_of(&out));
+    }
+    clean(&[&dir, &worktree]);
+}
+
+#[test]
+fn runner_question_prompt_carries_record_rule_and_answer_section() {
+    let dir = tmp();
+    let worktree = tmp();
+    // pipeline が stdin へ流す形: 契約の写し + 末尾の「## 回答」節（redirect ではなく piped stdin）。
+    let contract = "goal = \"x\"\n\n## 回答\n- 質問: verify 行が矛盾する\n- 回答: verify は 1 行目だけを撃つ\n";
+    let out = run_question_runner(&dir, &worktree, "", 0, contract.as_bytes());
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    let prompt = slurp(&dir.join("stdin"));
+    assert!(prompt.contains("{\"question\":\"<"), "質問は最終行の record で、と命じる: {prompt}");
+    assert!(prompt.contains("commit を作らない"), "質問の周は commit を作らない: {prompt}");
+    assert!(prompt.contains("それ以外の形で人へ問わない"), "record 以外の対話を禁じたまま: {prompt}");
+    assert!(!prompt.contains("対話しない。人へ質問を返さず"), "旧い文言（質問を返さず）は消える: {prompt}");
+    assert!(prompt.contains("## 回答」節"), "回答節の読み方を運ぶ: {prompt}");
+    assert!(
+        prompt.contains("- 質問: verify 行が矛盾する") && prompt.contains("- 回答: verify は 1 行目だけを撃つ"),
+        "stdin の回答節が prompt に**そのまま**載る（stdin だけを読む）: {prompt}"
+    );
+    clean(&[&dir, &worktree]);
+}
+
+/// 判定の純関数の**受理側**（[`vessel::headless::runner::question_ending`]）。
+#[test]
+fn runner_question_ending_accepts_records_and_plain_text() {
+    use vessel::headless::runner::{question_ending, Ending};
+    assert_eq!(question_ending(&format!("done\n{QUESTION_RECORD}")), Ending::Question(QUESTION_RECORD.to_owned()));
+    assert_eq!(question_ending(&format!("  {QUESTION_RECORD}  \n")), Ending::Question(QUESTION_RECORD.to_owned()), "前後の空白は剥がす");
+    assert_eq!(question_ending("done\n{\"question\":\"only\"}"), Ending::Question("{\"question\":\"only\"}".to_owned()), "about は任意");
+    // 最終の `{` 行だけを見る（前の行の record は読まない・後ろの散文は無視）。
+    assert_eq!(question_ending(&format!("{QUESTION_RECORD}\nfollow-up text")), Ending::Question(QUESTION_RECORD.to_owned()), "最後の `{{` 行");
+    assert_eq!(question_ending("just text"), Ending::Plain);
+    assert_eq!(question_ending(""), Ending::Plain);
+    assert_eq!(question_ending("{\"about\":\"verify\"}"), Ending::Plain, "question key 無しは record ではない");
+}
+
+/// 判定の純関数の**拒否側**（理由の字面まで見る・FailOpen を隠さない）。
+#[test]
+fn runner_question_ending_rejects_malformed_records_with_reasons() {
+    use vessel::headless::runner::{question_ending, Ending};
+    let reason_of = |text: &str| match question_ending(text) {
+        Ending::Malformed(reason) => reason,
+        other => format!("not malformed: {other:?}"),
+    };
+    assert!(reason_of("{\"question\":\"x").contains("読めない"), "壊れた JSON");
+    assert!(reason_of("{\"outer\":{\"question\":\"x\"}}").contains("読めない"), "入れ子は flat parser が断る");
+    assert!(reason_of("{\"question\":\"   \"}").contains("空"), "空の question");
+    assert!(reason_of("{\"question\":7}").contains("文字列"), "非文字列");
+    assert!(reason_of("{\"question\":\"a\\nb\"}").contains("1 行"), "複数行");
+}
+
+/// `result` record の text を escape を解いて読む（[`vessel::headless::runner::result_text`]）。
+#[test]
+fn runner_question_result_text_decodes_escapes_only_from_result_records() {
+    use vessel::headless::runner::result_text;
+    let line = r#"{"type":"result","is_error":false,"result":"a\n\"q\" \\ é 😀","usage":{"x":1}}"#;
+    assert_eq!(result_text(line).as_deref(), Some("a\n\"q\" \\ é 😀"));
+    assert_eq!(result_text(r#"{"type":"assistant","result":"x"}"#), None, "種別が違う行は読まない");
+    assert_eq!(result_text(r#"{"type":"result","is_error":true}"#), None, "result field が無い");
+    assert_eq!(result_text("not json"), None);
+    assert_eq!(result_text(r#"{"result":"first","type":"result"}"#).as_deref(), Some("first"), "key の並びに依らない");
+}
