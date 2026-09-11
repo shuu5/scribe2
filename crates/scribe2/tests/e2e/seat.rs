@@ -2101,8 +2101,11 @@ fn seat_cycle_reports_clear_unconfirmed_when_session_is_not_rebuilt() {
 }
 
 /// 作り直しは確認できても、**復元の送達が確認できない**周は `restore-unconfirmed`。
+///
+/// 復元の送達確認は作り直しの確認と同じ**上限まで待つ**（`s2-07l.97`）ので、黙った席は
+/// 2 s ではなく上限の後に失敗する（待つ時間が延びるのは失敗側だけ・成功条件は不変）。
 #[test]
-fn seat_cycle_reports_restore_unconfirmed_when_seat_goes_silent() {
+fn seat_cycle_reports_restore_unconfirmed_after_limit_when_seat_goes_silent() {
     let dir = tmp();
     let socket = socket_of(&dir);
     let name = "seatmute";
@@ -2511,8 +2514,11 @@ fn seat_inject_does_not_count_preexisting_text_as_delivery() {
 ///
 /// `/clear` 直後の席には走っている turn が無いので、そこでの queue は「turn の終わりに消費
 /// される」ではなく submit されなかった打鍵である。
+///
+/// 復元の送達確認は作り直しの確認と同じ**上限まで待つ**（`s2-07l.97`）: 置き去りの字面は
+/// 上限まで入力欄に残るので、待った後も `restore-unconfirmed` のまま（成功条件は不変）。
 #[test]
-fn seat_cycle_reports_restore_unconfirmed_when_restore_is_left_in_input() {
+fn seat_cycle_reports_restore_unconfirmed_after_limit_when_restore_is_left_in_input() {
     let dir = tmp();
     let socket = socket_of(&dir);
     let name = "seatleft";
@@ -2545,6 +2551,57 @@ fn seat_cycle_reports_restore_unconfirmed_when_restore_is_left_in_input() {
     );
     let pane = capture(&socket, name);
     assert!(pane.contains("/rebrief"), "復元の字面は入力欄に残っている: {pane}");
+    drop(guard);
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// 作り直し直後の席が **hook の実行中で復元を入力欄に queue したまま**、後から消費する周は
+/// `done`（`s2-07l.97`）。
+///
+/// 実席は `/clear` の後に SessionStart hook を数秒〜十数秒走らせ、その間に注入された行を
+/// 入力欄に置いたまま turn を始めない（実測 2026-09-11 `.96` A/B: `/rebrief` は着地して
+/// rebrief が走ったのに `restore-unconfirmed`）。2 s の settle の窓では必ず `Queued` で終わる
+/// ので、**復元が正しく届く周ほど failed になる**。偽の席は prompt を描いた後 8 s 読まず、
+/// その後に queue を消費する（入力欄が空になり echo が上に残る＝`Consumed` の形）。
+/// 8 s は base（2 s の窓・実測 2.6 s で失敗）に対する RED の余裕を負荷時にも保つ長さ（lens-97 LOW-1）。
+#[test]
+fn seat_cycle_restores_after_seat_consumes_queued_restore() {
+    let dir = tmp();
+    let socket = socket_of(&dir);
+    let name = "seatqueued";
+    let log = dir.join("seat.log");
+    // `/clear` の後は prompt を描いてから **hook のように 8 s 読まない**（2 s の窓より十分長い）。
+    let guard = start_clearing_seat_with(
+        &socket,
+        name,
+        &log,
+        "printf '\u{276f} '; sleep 8",
+        "printf 'seat got %s\\n' \"$line\"",
+    );
+    assert!(guard.ready(), "hook 中の席を模す偽の席を立てられる");
+    let state = dir.join("state");
+    let wm = dir.join("wm");
+    wm_file(&wm, "working-memory.queued.md", name);
+    let (wm_s, state_s) = (wm.display().to_string(), state.display().to_string());
+
+    let out = run_seat(&[
+        "cycle", "--target", name, "--wm-dir", &wm_s, "--tmux-socket", &socket,
+        "--state-dir", &state_s,
+    ]);
+
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(stdout_of(&out), format!("seat: cycle done target={name}\n"));
+    assert_eq!(
+        fs::read_to_string(&log).unwrap_or_default(),
+        "/clear\n/rebrief\n",
+        "queue された復元を席が消費した"
+    );
+    let recorded = fs::read_to_string(tick_file(&state, name)).unwrap_or_default();
+    assert!(recorded.contains(r#""what":"cycle done""#), "{recorded}");
+    assert!(
+        !seat_dir_of(&state, name).join("cycle.lock").exists(),
+        "済んだ lock は返す"
+    );
     drop(guard);
     fs::remove_dir_all(&dir).ok();
 }
