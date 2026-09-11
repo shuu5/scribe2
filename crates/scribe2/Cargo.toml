@@ -17,3 +17,5 @@ workspace = true
 
 [dev-dependencies]
 insta = { version = "1.48.0", default-features = false }
+# 性質の量産（憲法 C12.7）。derive は入れない（C13.2）・default feature も使わない。
+proptest = { version = "1.11.0", default-features = false, features = ["std"] }

@@ -6,6 +6,7 @@ mod headless;
 mod hook;
 mod pipe;
 mod polarity;
+mod prop;
 mod rules;
 mod seat;
 
