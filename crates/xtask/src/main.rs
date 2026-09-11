@@ -142,7 +142,7 @@ mod tests {
             "5 つの数を outcomes.json から読む（範囲は行を組むときに呼び手が渡す）"
         );
         // **1 行の形**まで測る（読み取れても書式が崩れれば報告の額面が読めない）。
-        let line = counts.line(PROBE_SCOPE);
+        let line = counts.line(&scope_of(PROBE_SCOPE));
         assert_eq!(
             line,
             "mutants-diff: total=18 caught=12 missed=2 unviable=3 timeout=1 scope=probe-pkg-7f3",
@@ -156,6 +156,11 @@ mod tests {
     /// 文字列に化けても歯が通る（fixture の字面と入力の衝突）。
     const PROBE_SCOPE: &str = "probe-pkg-7f3";
 
+    /// 名前から [`crate::mutantsdiff::Scope`] を得る唯一の道＝`-p` へ渡す引数を組むこと。
+    fn scope_of(name: &str) -> crate::mutantsdiff::Scope {
+        measure_args(Path::new("in.diff"), Path::new("out"), name).1
+    }
+
     /// 変異の行は**何を測ったか**を末尾の `scope=` で名乗り、その値は呼び手が渡した名前
     /// そのものである（`s2-07l.82`・行は出所から切り離されて流通するので限界は行に載せる）。
     ///
@@ -165,8 +170,8 @@ mod tests {
     #[test]
     fn mutants_diff_line_names_the_scope_it_was_given() {
         let other = "probe-pkg-9c1";
-        let first = parse_outcomes(MISSED_TWO).expect("fixture は読める").line(PROBE_SCOPE);
-        let second = parse_outcomes(MISSED_TWO).expect("fixture は読める").line(other);
+        let first = parse_outcomes(MISSED_TWO).expect("fixture は読める").line(&scope_of(PROBE_SCOPE));
+        let second = parse_outcomes(MISSED_TWO).expect("fixture は読める").line(&scope_of(other));
         assert!(
             first.ends_with(&format!(" scope={PROBE_SCOPE}")),
             "渡した名前を末尾の scope= に出す: {first}"
@@ -177,14 +182,17 @@ mod tests {
         let tags: Vec<&str> = first.split(' ').skip(1).filter_map(|t| t.split_once('=').map(|(k, _)| k)).collect();
         assert_eq!(tags, ["total", "caught", "missed", "unviable", "timeout", "scope"], "{first}");
         // 「測る対象が無い」周の行も範囲を名乗る（unmeasured の経路は行を出さないので対象外）。
-        let none = without_outcomes(true).expect("rc 0 なら測る対象が無いだけ").line(other);
+        let none = without_outcomes(true).expect("rc 0 なら測る対象が無いだけ").line(&scope_of(other));
         assert!(none.ends_with(&format!(" scope={other}")), "{none}");
         // `-p` の直後に来るのは渡した名前そのもの（literal でも core の NAME でもない）。
+        // `--in-diff` と `-o` も対のまま在る（落とすと測った結果を読まずに total=0 へ化ける）。
         for scope in [PROBE_SCOPE, other] {
-            let args = measure_args(Path::new("in.diff"), Path::new("out"), scope);
-            let after_p = args.iter().position(|a| a == "-p").and_then(|i| args.get(i + 1));
-            assert_eq!(after_p.map(String::as_str), Some(scope), "{args:?}");
+            let (args, _) = measure_args(Path::new("probe.diff"), Path::new("probe-out"), scope);
+            let value_after = |flag: &str| args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1)).map(String::as_str);
+            assert_eq!(value_after("-p"), Some(scope), "{args:?}");
             assert_eq!(args.iter().filter(|a| *a == "-p").count(), 1, "package は 1 つだけ: {args:?}");
+            assert_eq!(value_after("--in-diff"), Some("probe.diff"), "{args:?}");
+            assert_eq!(value_after("-o"), Some("probe-out"), "{args:?}");
         }
     }
 
@@ -196,7 +204,7 @@ mod tests {
         // 値に字面を置いただけの fixture では深さ条件を消しても緑＝空虚な歯だった）。
         let counts = parse_outcomes(MISSED_NONE).expect("fixture は読める");
         assert_eq!(
-            counts.line(PROBE_SCOPE),
+            counts.line(&scope_of(PROBE_SCOPE)),
             "mutants-diff: total=23 caught=23 missed=0 unviable=0 timeout=0 scope=probe-pkg-7f3",
             "入れ子の同名 key を 1 つも拾わない"
         );
@@ -257,7 +265,7 @@ mod tests {
         // 出力 dir を作らない。これは「**測る対象が無い**」であって「測れなかった」ではない。
         let counts = without_outcomes(true).expect("道具が rc 0 なら測る対象が無いだけ");
         assert_eq!(
-            counts.line(PROBE_SCOPE),
+            counts.line(&scope_of(PROBE_SCOPE)),
             "mutants-diff: total=0 caught=0 missed=0 unviable=0 timeout=0 scope=probe-pkg-7f3",
             "母集団を額面に出す（0 件の緑と読み違えないため）"
         );
