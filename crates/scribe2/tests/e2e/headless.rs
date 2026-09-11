@@ -1686,6 +1686,43 @@ fn runner_question_toplevel_real_record_yields_rc76_through_the_wrapper() {
     clean(&[&dir, &worktree]);
 }
 
+/// `rate_limit_info` の直下で `status` より**前**に文字列中の brace（`"note":"win {5h}"`）が在る行
+/// （`s2-07l.126`・.123 lens MED-4）: 切り出しが文字列の中の `{` で早く終わると status が None になり、
+/// 止めるべき便を止めない（fail-open の向き）。文字列と escape を飛ばして**文字列の外**の brace で切る。
+#[test]
+fn runner_rate_limit_brace_inside_string_before_status_is_still_read() {
+    use vessel::headless::runner::rate_limit_status;
+    let braces = r#"{"type":"rate_limit_event","rate_limit_info":{"note":"win {5h}","status":"allowed_warning"}}"#;
+    assert_eq!(rate_limit_status(braces), Some("allowed_warning"), "文字列中の brace は境界ではない");
+    // escape された引用符を含む文字列でも同じ（`\"` で文字列を閉じたと読むと `{` が外に見える）。
+    let escaped = r#"{"type":"rate_limit_event","rate_limit_info":{"note":"say \"{\" then }","status":"blocked"}}"#;
+    assert_eq!(rate_limit_status(escaped), Some("blocked"), "escape された引用符は文字列を閉じない");
+    // 閉じ brace だけが文字列に在る形（早期終端の向きが `}` でも同じ）。
+    let closing = r#"{"type":"rate_limit_event","rate_limit_info":{"note":"}","status":"blocked"}}"#;
+    assert_eq!(rate_limit_status(closing), Some("blocked"), "文字列中の閉じ brace で切らない");
+}
+
+/// 同じ行で status が止める側の集合に在れば `decide` が止める（base では None → Ignore で止まらない）。
+#[test]
+fn runner_rate_limit_brace_inside_string_still_stops_when_status_is_in_the_set() {
+    use vessel::headless::runner::{decide, Decision};
+    let braces = r#"{"type":"rate_limit_event","rate_limit_info":{"note":"win {5h}","status":"blocked"}}"#;
+    assert_eq!(decide(braces, &["blocked"]), Decision::Stop("blocked".to_owned()), "止める側なら Stop");
+    assert_eq!(decide(braces, &[]), Decision::Observed("blocked".to_owned()), "集合に無ければ記録だけ");
+}
+
+/// 負例: status より前に**入れ子の object**（文字列でない brace）が在る行は従来どおり打ち切る
+/// （直下だけを見る意味は不変・`unifiedWindows` の中の status を読まない既存の歯と同じ向き）。
+#[test]
+fn runner_rate_limit_brace_nested_object_before_status_still_cuts() {
+    use vessel::headless::runner::rate_limit_status;
+    let nested_first = r#"{"type":"rate_limit_event","rate_limit_info":{"unifiedWindows":{"status":"other"},"status":"blocked"}}"#;
+    assert_eq!(rate_limit_status(nested_first), None, "入れ子の object に入ったら打ち切る（挙動不変）");
+    // 対照: 入れ子が status の後ろなら読める（打ち切りが「入れ子に入った時点」であることの裏取り）。
+    let nested_after = r#"{"type":"rate_limit_event","rate_limit_info":{"status":"blocked","unifiedWindows":{"status":"other"}}}"#;
+    assert_eq!(rate_limit_status(nested_after), Some("blocked"), "直下の status は読める");
+}
+
 /// 上限 record の読みも同じ走査に乗る: 入れ子の `"type"` が先に在っても `rate_limit_event` を種別と読み、
 /// 入れ子だけに `rate_limit_event` を持つ行（別 record の引用）は読まない。
 #[test]
