@@ -57,27 +57,10 @@ pub fn dispatch(args: &[String]) -> Outcome {
         Ok(found) => found,
         Err(err) => return Outcome::failed_line(RC_BROKEN, format!("runner: write-set を読めない: {err}")),
     };
-    // **1 走査で埋める**。重ねて replace すると契約本文の中の `{write_set}` まで展開され、
-    // 外から来る text が prompt の構造へ触れられる。
-    // 人が読む面の allowlist（`--allowedTools` の `Bash(<cmd>:*)` 形は `allowed_tools` が別に組む）。
-    // 値の出所は**便の写し**のままで、manifest も対象 repo の宣言も読まない（ADR-0010 §2.4）。
-    let listed_allowed = granted
-        .allowed()
-        .iter()
-        .map(|command| format!("- {command}"))
-        .collect::<Vec<String>>()
-        .join("\n");
-    // **3 対を 1 走査で埋める**。重ねて replace すると、先に埋めた契約本文や write-set の中の
-    // `{allowed}` が次の走査で展開され、外から来る text が prompt の構造へ触れられる。
-    let prompt = fill(
-        TEMPLATE,
-        &[
-            ("{contract}", contract.trim_end()),
-            ("{write_set}", listed.trim_end()),
-            ("{allowed}", &listed_allowed),
-        ],
-    );
-    launch(&Call {
+    let prompt = compose(&contract, &listed, granted.allowed());
+    // **claude を起こす前に**残す（起きた後に書く形だと、席が止まらない周の prompt が読めない）。
+    let unsaved = save_prompt(Path::new(&vessel), &prompt).err();
+    let mut outcome = launch(&Call {
         claude: claude.as_deref().unwrap_or(DEFAULT_CLAUDE),
         prompt: &prompt,
         permission_mode: &mode,
@@ -87,7 +70,57 @@ pub fn dispatch(args: &[String]) -> Outcome {
         // rate limit を**途中で**見るので逐次で受ける。
         streaming: true,
     },
-    &tools)
+    &tools);
+    if let Some(reason) = unsaved {
+        outcome.err.push(format!("runner: prompt を残せない: {reason}"));
+    }
+    outcome
+}
+
+/// prompt を組む（template の 3 対を **1 走査**で埋める）。
+///
+/// 重ねて replace すると、先に埋めた契約本文や write-set の中の `{allowed}` / `{write_set}` が
+/// 次の走査で展開され、外から来る text が prompt の構造へ触れられる。`{allowed}` は人が読む面の
+/// allowlist（`--allowedTools` の `Bash(<cmd>:*)` 形は [`allowed_tools`] が別に組む）で、値の出所は
+/// **便の写し**のまま＝manifest も対象 repo の宣言も読まない（ADR-0010 §2.4）。
+fn compose(contract: &str, write_set: &str, allowed: &[String]) -> String {
+    let listed_allowed = allowed
+        .iter()
+        .map(|command| format!("- {command}"))
+        .collect::<Vec<String>>()
+        .join("\n");
+    fill(
+        TEMPLATE,
+        &[
+            ("{contract}", contract.trim_end()),
+            ("{write_set}", write_set.trim_end()),
+            ("{allowed}", &listed_allowed),
+        ],
+    )
+}
+
+/// 残す prompt の file 名。置き場は **vessel の写しの隣**（= run dir・`<state_dir>/pipe/<run>/`）。
+const PROMPT_FILE: &str = "prompt.txt";
+
+/// runner が組んだ prompt を便の作業面へ残す（設計 §6・`s2-07l.79`）。
+///
+/// prompt は stdin で渡すので stream には 1 行も出ない。「何を渡したか」を後から読める口が
+/// これで、置き場は写しの隣＝便ごとの run dir である（新しい flag も env も足さない・C2.2）。
+/// **tracked な面〔worktree〕には置かない**（契約本文と write-set を PUBLIC 面へ出さない）——
+/// 置き場が解けない写しでは cwd へ落とす代わりに残さない側へ倒す。
+///
+/// **判定の入力ではない**——残せない周も便は続き、rc は claude のものを写す。呼び手は
+/// `Err` を stderr の 1 行にするだけで止めない（証跡の欠落で claude を起こさない形にしない）。
+fn save_prompt(vessel: &Path, prompt: &str) -> Result<(), String> {
+    // **置き場が解けない写し（`vessel.toml` のような裸の名）は残さない**。`Path::parent` は
+    // 裸の名に `Some("")` を返すので、そのまま join すると prompt が runner の **cwd**（＝
+    // pipeline では便の worktree・tracked 面）へ落ちる（lens 2026-09-11 M2 の実測）。
+    let dir = vessel
+        .parent()
+        .filter(|found| !found.as_os_str().is_empty())
+        .ok_or_else(|| format!("{} の置き場を解けない（写しは dir 付きの path で渡す）", vessel.display()))?;
+    let path = dir.join(PROMPT_FILE);
+    std::fs::write(&path, prompt).map_err(|err| format!("{} を書けない: {err}", path.display()))
 }
 
 /// claude を回し、rate limit を見たらその場で止める。
