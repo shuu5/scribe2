@@ -142,6 +142,7 @@ pub fn inspect(root: &Path) -> Report {
     measured.push(crate::non_rust_exec::ci_shell_lines(&layout));
     measured.push(crate::claude_md::measure(&layout));
     measured.push(crate::enum_slices::measure(&files));
+    measured.push(crate::spawn_points::measure(&layout, &files));
     fold(measured)
 }
 
@@ -341,16 +342,6 @@ pub(crate) fn json_string_field(src: &str, key: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    // flip-check: moved s2-07l.84
-    // **純粋な移動は flip できない**。本便は measure の実装を module へ出しただけで、
-    // 挙動を 1 つも変えていない＝base で赤くなる歯を作れない（作れば「移動ではない」）。
-    // 札は `moved`（純粋移動）である——`retroactive` は**後から足す歯**の札で、その数は
-    // 「後から足した歯が N 本」と読まれるので、歯を 1 本も足さない本便に貼ると判定行から
-    // 何を免除したのか読めなくなる（s2-07l.86）。逃がしはこの 1 行だけで、bead id を
-    // 付けるのは**その便で足した札だけが効く**ため（id の無い marker は誰にも辿れず
-    // review の対象にならない）。歯そのものは 1 本も
-    // 足していない（契約 (3)）。移動の正しさは**判定行が名前・順序・書式で不変**である
-    // ことと、既存の歯 364 本が緑であることが担保する。
     use super::{check, shape, summary};
     use crate::genmanifest;
     use crate::limits::{ALLOWED_DEPS, MAX_FILE_LINES, REQUIRED_LINTS};
@@ -457,6 +448,12 @@ mod tests {
         // **実 repo が持つものは fixture も持つ**。rules manifest が無い tree を「測れない」
         // 側へ倒す measure（non-rust-exec）が在るので、無いままだと fixture 全体が赤くなる。
         write_at(dir, RULES_REL, &rules_manifest(&[]));
+        // claude の構築点も同じ（claude-spawn-points は見失った形を違反に倒す・`s2-07l.101`）。
+        write_at(
+            dir,
+            &format!("crates/{FIXTURE_CORE}/src/headless/mod.rs"),
+            "pub fn build(claude: &str) -> std::process::Command {\n    let mut cmd = std::process::Command::new(claude);\n    cmd.arg(\"--setting-sources\").arg(\"\").arg(\"--strict-mcp-config\");\n    cmd\n}\n",
+        );
     }
 
     /// rules manifest の相対 path。
@@ -571,7 +568,7 @@ mod tests {
         test-src-ratio=<v>/<v> name-literal=<v> manifest-name=<v> manifest-version=<v>.<v>.<v> \
         lints-set=<v> lints-optin=<v>/<v> deps-empty=<v> toolchain-pin=<v>.<v>.<v> \
         paths-clean=<v> non-rust-exec=<v>/<v> allow=<v> ci-shell-lines=<v> \
-        claude-md-constitution=<v> enum-slices=<v>";
+        claude-md-constitution=<v> enum-slices=<v> claude-spawn-points=<v>";
 
     /// git を要する measure の fact（`.git` の無い木では測れない形になり、副 field も出ない）。
     fn is_git_fact(token: &str) -> bool {
