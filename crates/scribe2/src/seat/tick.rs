@@ -3,17 +3,23 @@
 //! 席の**外**（host の timer）から回り、条件を**順序固定**で見て、成立した周だけ 1 行を
 //! 注入する。R-E12 のとおり席は自分で周期起動を張らず、tick は席へ event としてしか届かない。
 //!
-//! **順序は load-bearing である**: 鮮度 → pane 取得 → **context** → idle → 未 consumed 退避物 →
-//! cycle lock。鮮度を最初に見るのは、fresh な周に tmux を 1 度も叩かないためで（生きている席を
-//! 毎周 capture しない）、context を idle の**前**に見るのは、context が cap を超えた席は
+//! **順序は load-bearing である**: 退避物の走査 → 鮮度 → pane 取得 → **context** → idle →
+//! 未 consumed 退避物 → cycle lock。鮮度を pane より先に見るのは、fresh な周に tmux を 1 度も
+//! 叩かないためで（生きている席を毎周 capture しない）、その鮮度より先に自席の退避物を走査する
+//! のは、退避を終えた席は heartbeat を**直前**に打っていることが多く、退避物が在る（＝席が
+//! 「作り直してよい」と申告している）のに鮮度で最大 `seat.tick_stale_s` の間 cycle が評価されない
+//! ためである（`s2-07l.105`・裁定 (a)・admin2 で実測: 退避完了時 age 588 s → 約 30 分 idle）。
+//! 飛ばすのは**自席の未 consumed 退避物が在る周だけ**（裁定 (c)・走査が読めない周は「在る」に
+//! 読み替えず従来どおり鮮度から）で、飛ばした周もそれ以降の条件は不変（busy の席・lock が live な
+//! 周には送らない）。context を idle の**前**に見るのは、context が cap を超えた席は
 //! busy（lens 待ち・長い cargo）であり、busy を理由に noop すると誰にも止められず auto-compact に
 //! 至るためである（`s2-07l.89`・実インシデント 2026-09-11）。退避物を lock より先に見るのは、
 //! 「退避して止まっている席」を cycle の入口（裁定 (b)）へ落とすためである。順序を入れ替えると
 //! 同じ条件でも別の理由が出る＝理由の字面は順序の証拠でもある。
 //!
-//! **代償 = 盲点は最大 `seat.tick_stale_s`**（宣言値）: fresh の周は pane を読まないので、
-//! 打刻の直後に cap を超えた席は次の stale な周まで見えない。閾値は動かさない（C5）＝この限界は
-//! 設計 §3 に「残る側」として書く。
+//! **代償 = 盲点は最大 `seat.tick_stale_s`**（宣言値）: 退避物の無い fresh の周は pane を読まない
+//! ので、打刻の直後に cap を超えた席は次の stale な周まで見えない。閾値は動かさない（C5）＝この
+//! 限界は設計 §3 に「残る側」として書く。
 
 use super::{cycle, heartbeat, inject, is_idle, meter, pane_of, sanitize_target, WmScan};
 use crate::cli_outcome::{Outcome, RC_REFUSED};
@@ -155,7 +161,7 @@ struct Seen<'a> {
 /// 撃たなかった理由。**順序固定の条件のうち最初に立たなかったもの**を表す。
 #[derive(Clone, Copy)]
 pub enum NoopReason {
-    /// 1. 席は最近動いている。
+    /// 1. 席は最近動いている（自席の未 consumed 退避物が在る周は見ない・`.105`）。
     HeartbeatFresh,
     /// 2. pane を読めない。
     PaneMissing,
@@ -220,12 +226,21 @@ pub fn run(request: &Request) -> Outcome {
     }
 }
 
-/// 条件を順序固定で見る（鮮度 → pane 取得 → context → idle → 退避物 → lock）。
+/// 条件を順序固定で見る（退避物の走査 → 鮮度 → pane 取得 → context → idle → 退避物 → lock）。
+///
+/// 退避物を鮮度より先に走査するのは、**自席の未 consumed 退避物が在る周は鮮度 gate を飛ばす**
+/// ためである（裁定 (a)・`s2-07l.105`）: 退避物の存在は席の「作り直してよい」の申告なので、
+/// 直前の打刻を理由に pane も見ずに noop すると、退避から作り直しまでが最大 `seat.tick_stale_s`
+/// に延びる。走査の結果は後段（context / 退避物）でも同じ値を使う（cycle を回す周だけは cycle 側が
+/// 自分の入口でもう 1 度走査する＝lock の内側で確かめ直す）。
+/// 他席の名乗り・0 件・読めない周は従来どおり鮮度から（読めない周を「在る」に読み替えない）。
 fn decide(request: &Request, state: &super::StateDir, dir: &Path) -> Judged {
     let (Some(stale_s), Some(ttl_s)) = (super::int_rule(ID_STALE), cycle::ttl_s()) else {
         return Judged::bare(TickDecision::Error(meter::REASON_NO_RULE.to_owned()));
     };
-    if is_fresh(dir, stale_s) {
+    let wm = super::scan_wm(Path::new(request.wm_dir), request.target);
+    let parked_here = matches!(wm, WmScan::Unconsumed(_));
+    if !parked_here && is_fresh(dir, stale_s) {
         return Judged::bare(TickDecision::Noop(NoopReason::HeartbeatFresh));
     }
     let Some(pane) = pane_of(request.socket, request.target, request.capture_file) else {
@@ -233,7 +248,7 @@ fn decide(request: &Request, state: &super::StateDir, dir: &Path) -> Judged {
     };
     let seen = Seen {
         pane: &pane,
-        wm: super::scan_wm(Path::new(request.wm_dir), request.target),
+        wm,
         context: measure_context(&pane),
         ttl_s,
     };
