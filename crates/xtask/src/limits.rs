@@ -50,7 +50,10 @@ pub const PRIVATE_PATH_MARKS: &[&str] = &[concat!("/", "home", "/"), concat!("~"
 /// crate 名の字面を持たない 2 つ組であるため、同名の dep をどの crate が宣言しても
 /// 区別できない（xtask に同名 dev-dep を足しても検出できないのは既知の限界であり、
 /// crate 粒度の回復は leg 2 の所管である）。
-pub const ALLOWED_DEPS: &[(&str, &str)] = &[("dev-dependencies", "insta")];
+pub const ALLOWED_DEPS: &[(&str, &str)] = &[
+    ("dev-dependencies", "insta"),
+    ("dev-dependencies", "proptest"),
+];
 
 #[cfg(test)]
 mod tests {

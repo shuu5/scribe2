@@ -6,7 +6,7 @@
 <meta name="folio-doc-type" content="adr">
 <meta name="folio-layer" content="project">
 <meta name="folio-version" content="0.4.6">
-<meta name="folio-status" content="proposed">
+<meta name="folio-status" content="accepted">
 <meta name="folio-stakeholders" content="Developer, AI Agent, External Reviewer">
 <meta name="folio-adr-id" content="0016">
 <meta name="folio-adr-date" content="2026-09-11">
@@ -60,7 +60,7 @@
 
 <header class="doc-header">
   <h1>ADR-0016 — 便の既定の配送構造は planner 1 席 + 管理席 N 席が pipeline を流す形とし、 runner は契約の不足を typed な質問 record で返して止まる (管理席が自分の手で実装するのは pipeline が回せない便だけ)</h1>
-  <div class="meta">Status: proposed &middot; Date: 2026-09-11 &middot; version 0.4.6 (拘束する constitution の版) &middot; C3.4 / C7 / C16 の適用と C2 の充足形を記録 &middot; §3 の SRS 改訂は user の裁定事項</div>
+  <div class="meta">Status: accepted &middot; Date: 2026-09-11 &middot; version 0.4.6 (拘束する constitution の版) &middot; C3.4 / C7 / C16 の適用と C2 の充足形を記録 &middot; §3 の SRS 改訂は 2026-09-12 に反映済み (v0.4)</div>
 </header>
 <!-- folio:chrome-toc -->
 <nav class="toc" aria-label="ページ内目次">
@@ -72,7 +72,7 @@
   <li class="toc--sub"><a href="#s2-3-answer-authority">§2.3 回答の権限は契約の所有者 (planner) にあり、 管理席は中継だけを担う。 user の言葉は承認 event でしか記帳しない</a></li>
   <li class="toc--sub"><a href="#s2-4-headless-stays">§2.4 runner と lens は claude -p のまま。 teammate は席の中の review に限る</a></li>
   <li class="toc--sub"><a href="#s2-5-scope">§2.5 射程外</a></li>
-  <li><a href="#s3-srs-proposal">§3. SRS への提案 (user の裁定事項)</a></li>
+  <li><a href="#s3-srs-proposal">§3. SRS への反映 (正本は SRS)</a></li>
   <li><a href="#s4-consequences">§4. Consequences</a></li>
   <li><a href="#s5-alternatives">§5. Alternatives Considered</a></li>
   <li><a href="#s6-trace">§6. Trace</a></li>
@@ -81,7 +81,7 @@
 <!-- /folio:chrome-toc -->
 
 <aside class="informative">
-<p>本 ADR は IETF <strong>RFC 2119</strong> および <strong>RFC 8174 / BCP 14</strong> に定義される MUST / SHALL / SHOULD / MAY のキーワード解釈規約に従う。 ADR は決定時点の記録であり、 改訂は新しい ADR による supersede で行う。 本 ADR の <strong>§2 は user 裁定 (2026-09-11) を受けた決定</strong>で、 <strong>§3 は SRS の改訂案</strong> (spec/ の反映は user の手番) である。 <strong>発効条件</strong>: §2.2 / §2.3 の実装 bead は §3 の SRS 改訂 (FR30 / FR31 / AC10) が user 裁定で反映されるまで起票しない (それまで本 ADR は proposed)。</p>
+<p>本 ADR は IETF <strong>RFC 2119</strong> および <strong>RFC 8174 / BCP 14</strong> に定義される MUST / SHALL / SHOULD / MAY のキーワード解釈規約に従う。 ADR は決定時点の記録であり、 改訂は新しい ADR による supersede で行う。 本 ADR の <strong>§2 は user 裁定 (2026-09-11) を受けた決定</strong>で、 <strong>§3 は SRS への pointer</strong> (文案は反映時に SRS へ移った) である。 <strong>発効</strong>: §3 の SRS 改訂は 2026-09-12 に反映済み (SRS v0.4・FR30 / FR31 / FR32 / AC10)。 要件の正本は SRS であり、 本 ADR は理由と却下案を持つ。</p>
 </aside>
 
 <section id="s1-context" class="informative">
@@ -116,19 +116,10 @@
 </section>
 
 <section id="s3-srs-proposal" class="informative">
-<h2>§3. SRS への提案 (user の裁定事項)</h2>
-<p class="section-essence" data-audience="human">要件書 (SRS) は本 ADR では触れません。 反映は user が folio の編集口で行います。 ここには、 反映するなら何を足すかの案を置きます。 2 つの要件と 1 つの受入基準です。</p>
+<h2>§3. SRS への反映 (正本は SRS)</h2>
+<p class="section-essence" data-audience="human">この記録が求めた要件は、 2026-09-12 に要件書 (SRS v0.4) へ入りました。 要件の文面はここには置かず、 要件書の当該行を指すだけにします。</p>
 <div data-audience="machine">
-<p>記録時点の SRS (FR1–FR29・AC1–AC9) に対する改訂案。 反映は <code>/folio-architect</code> (user 手番・<code>s2-07l.61</code> と同じ経路)。 番号は仮。</p>
-<table>
-  <thead><tr><th>案</th><th>型 (EARS)</th><th>文案</th><th>根拠</th></tr></thead>
-  <tbody>
-    <tr><td>FR30 (新)</td><td>恒常</td><td>便の既定の配送構造は planner 1 席 + 管理席 N 席とし、 管理席は契約を pipeline に流す・runner の質問を planner へ中継する・go の後に merge する の 3 つを担い、 自分の手で実装するのは pipeline が回せない便だけとする</td><td>§2.1・N-1 (自律安全)。 席の役割の境界が SRS に無い</td></tr>
-    <tr><td>FR31 (新)</td><td>きっかけ</td><td>runner が契約の不足を質問 record で返したとき、 pipeline は便を Questioned の段に倒し、 質問の逐語を記帳し、 回答の記帳 (逐語付き) が在る次の resume で同じ便を再開する</td><td>§2.2・§2.3・FR16 と同型。 N-3 (記憶に頼らない)</td></tr>
-    <tr><td>AC10 (新)</td><td>—</td><td>toy repo で verify 行が矛盾する契約 1 本を流し、 runner の質問 record → Questioned → planner 席の回答 (machine) → resume → Landed まで通り、 人由来の event が 0 件</td><td>§2.2 の実 run の証拠 (設計 pipeline-question.md §8 (d))</td></tr>
-  </tbody>
-</table>
-<p>FR5 と FR22 は不変 (§2.3 / §2.4)。 SRS の scope out (複数口座の自動選定・席の dashboard) も不変。</p>
+<p>本 ADR の §2.1〜§2.3 に対応する要件は SRS v0.4 が正本である: <a href="../spec/srs.html#FR30">FR30 配送構造</a> (§2.1)・<a href="../spec/srs.html#FR31">FR31 質問の停止</a> と <a href="../spec/srs.html#FR32">FR32 質問の再開</a> (§2.2 / §2.3)・<a href="../spec/srs.html#AC10">AC10</a> (実 run の受入基準)。 <a href="../spec/srs.html#FR5">FR5</a> と <a href="../spec/srs.html#FR22">FR22</a> は不変 (§2.3 / §2.4)。 SRS の scope out (複数口座の自動選定・席の dashboard) も不変。 質問 record の形式 (最終行の JSON・rc 76) は §2.2 が正本で SRS は形式を持たない。</p>
 </div>
 </section>
 
@@ -136,7 +127,7 @@
 <h2>§4. Consequences</h2>
 <p class="section-essence" data-audience="human">良い面は、 審査の独立性が文章の約束でなく pipeline の構造に戻ること、 計画役に集まっていた再実測の仕事が機械の gate に移ること、 実装役の「分からない」が失敗ではなく質問として残ること、 口座を席ごとに分ける今の形をそのまま使えることです。 悪い面は、 段と event と終了コードが 1 つずつ増え、 pipeline が実装役の出力を読む口が 1 つ増えること、 質問が上がるたびに計画役の手番が 1 回入ること (便は止まって待つ)、 席の仕事が減る分だけ移行期の速さ (1 日 43 本) は落ちうることです。 移行期の席並列を今すぐ止めるわけではなく、 質問の口が実装されてから席の仕事を切り替えます。</p>
 <p data-audience="machine">Positive: gate の独立性が pipeline の構造 (write-set guard・verify 行・lens・CAS) に戻り、 dispatch の散文と planner の再実測に寄らない (C16 / N2 の向き)。 planner の律速が契約・裁定・回答に絞られる。 契約の穴が <code>QuestionRaised</code> として typed に残り、 修正の向き (契約側) が記録から読める。 口座分離は席の層のまま (run は親の口座を継承)。 承認 (Blocked) と同型なので機構の追加は段 1・event 2・rc 1・Guard 1 と runner stdout の捕捉に閉じる。 user の言葉は承認 event にだけ載り FR22 は変わらない。</p>
-<p data-audience="machine">Negative (受け入れるコスト): 質問のたびに便が止まり planner の手番を 1 回要する (質問が多い契約は遅い＝契約の質が速度に直結する)。 移行期の速さ (席が手で実装する形) は既定では出ない。 管理席の仕事が中継と merge に減り、 席の context は軽くなるが席数分の運用費 (cycle / tick) は残る。 SRS の改訂 (§3) は user 手番で、 それまで本 ADR は proposed のまま実装 bead を切らない (設計 pipeline-question.md の契約 (a)〜(d) は裁定後)。</p>
+<p data-audience="machine">Negative (受け入れるコスト): 質問のたびに便が止まり planner の手番を 1 回要する (質問が多い契約は遅い＝契約の質が速度に直結する)。 移行期の速さ (席が手で実装する形) は既定では出ない。 管理席の仕事が中継と merge に減り、 席の context は軽くなるが席数分の運用費 (cycle / tick) は残る。 SRS の改訂 (§3) は user 手番で、 実装 bead は設計 pipeline-question.md の契約 (a)〜(c) として SRS 反映後に起票する。</p>
 </section>
 
 <section id="s5-alternatives" class="informative">
