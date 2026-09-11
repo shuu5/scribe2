@@ -151,6 +151,41 @@ pub fn summary(root: &Path) -> String {
     inspect(root).summary
 }
 
+/// 判定行を**値を伏せた形**へ写す（tag の名前・並び・値の書式だけを残す）。
+///
+/// 値（各 token の `=` より右）の英数字の連なりを `<v>` に置き、区切り（`/` `.` `(` 等）は
+/// そのまま残す: `a=12/300 b=0.1.0` → `a=<v>/<v> b=<v>.<v>.<v>`。tag は触らない。
+/// 値は環境で動く（file-lines / paths-clean 等）ので、外形として pin できるのはこの形まで
+/// である。ADR-0013 §2.1 が SSOT と定めた判定行を、集合と順序で測る歯の材料（bd `s2-07l.87`）。
+pub fn shape(summary: &str) -> String {
+    summary
+        .split(' ')
+        .map(|token| match token.split_once('=') {
+            Some((tag, value)) => format!("{tag}={}", veil(value)),
+            None => token.to_owned(),
+        })
+        .collect::<Vec<String>>()
+        .join(" ")
+}
+
+/// 英数字の連なりを 1 つの `<v>` に畳む（区切り文字は残す）。
+fn veil(value: &str) -> String {
+    let mut out = String::new();
+    let mut in_run = false;
+    for ch in value.chars() {
+        if ch.is_ascii_alphanumeric() {
+            if !in_run {
+                out.push_str("<v>");
+            }
+            in_run = true;
+        } else {
+            out.push(ch);
+            in_run = false;
+        }
+    }
+    out
+}
+
 /// workspace の形そのものが読めないときの Report。
 fn blocked(reason: &str) -> Report {
     Report {
@@ -295,7 +330,7 @@ mod tests {
     // review の対象にならない）。歯そのものは 1 本も
     // 足していない（契約 (3)）。移動の正しさは**判定行が名前・順序・書式で不変**である
     // ことと、既存の歯 364 本が緑であることが担保する。
-    use super::{check, summary};
+    use super::{check, shape, summary};
     use crate::genmanifest;
     use crate::limits::{ALLOWED_DEPS, MAX_FILE_LINES, REQUIRED_LINTS};
     use std::fs;
@@ -507,6 +542,25 @@ mod tests {
         assert!(
             violations.is_empty(),
             "自 workspace で違反 0 のはず: {violations:?}"
+        );
+    }
+
+    /// 判定行の**名前・並び・値の書式**を外形として pin する（ADR-0013 §2.1・`s2-07l.87`）。
+    ///
+    /// 値は環境で動くので [`shape`] で伏せる。measure を 1 つ落とす／2 つ並べ替える／値の
+    /// 書式を変える、のどれでも落ちる。「measure が N 本」は数えない（判定行は自己区切りで
+    /// なく、`allow=` は non-rust-exec の副 field）。pin の単位は token の並びである。
+    #[test]
+    fn check_summary_shape_pins_names_order_and_value_forms() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+        let line = summary(&root);
+        assert_eq!(
+            shape(&line),
+            "xtask check: ok core-lines=<v>/<v> file-lines=<v>/<v> test-src-ratio=<v>/<v> \
+             name-literal=<v> manifest-name=<v> manifest-version=<v>.<v>.<v> lints-set=<v> \
+             lints-optin=<v>/<v> deps-empty=<v> toolchain-pin=<v>.<v>.<v> paths-clean=<v> \
+             non-rust-exec=<v>/<v> allow=<v> ci-shell-lines=<v> claude-md-constitution=<v>",
+            "判定行の現物: {line}"
         );
     }
 
