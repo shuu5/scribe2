@@ -206,23 +206,29 @@ pub fn head_of(repo: &Path) -> Option<String> {
     git_line(repo, &["rev-parse", "HEAD"])
 }
 
-/// spawn が記録した base を event log から読む。
+/// 便の base を event log から読む（spawn が記録した `base:<sha>`、または land の追随が
+/// 記録した `rebase:<old>..<new>` の新しい側・**物理順で後の行が勝つ**）。
 ///
 /// **replay の `Run::detail` からは読めない**。`detail` は「最後に見た自由文」なので、
 /// gate が `verdict:<V>` を書いた時点で `base:<sha>` は上書きされて消える。base は
 /// land の CAS と stale 判定の両方が要る値ゆえ、追記だけの log を遡って原本を読む。
+/// **読み手はこの 1 本だけ**——spawn の再開・gate の `{base}`・land の CAS が同じ値を見る。
 pub fn base_of_run(state_dir: &Path, id: &str) -> Option<String> {
     let events = store::read_all(state_dir).ok()?;
     events
         .iter()
         .rev()
-        .filter(|event| event.run == id && event.stage == Some(Stage::Spawned))
+        .filter(|event| event.run == id)
         .find_map(|event| {
-            event
-                .detail
-                .as_deref()
-                .and_then(|detail| detail.strip_prefix("base:"))
-                .map(str::to_owned)
+            let detail = event.detail.as_deref()?;
+            match event.stage {
+                Some(Stage::Spawned) => detail.strip_prefix("base:").map(str::to_owned),
+                Some(Stage::Implemented) => detail
+                    .strip_prefix("rebase:")
+                    .and_then(|range| range.split_once(".."))
+                    .map(|(_, new)| new.to_owned()),
+                _ => None,
+            }
         })
 }
 
