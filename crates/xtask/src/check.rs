@@ -157,6 +157,15 @@ pub fn summary(root: &Path) -> String {
 /// そのまま残す: `a=12/300 b=0.1.0` → `a=<v>/<v> b=<v>.<v>.<v>`。tag は触らない。
 /// 値は環境で動く（file-lines / paths-clean 等）ので、外形として pin できるのはこの形まで
 /// である。ADR-0013 §2.1 が SSOT と定めた判定行を、集合と順序で測る歯の材料（bd `s2-07l.87`）。
+///
+/// 呼ぶのは test 区間の pin だけで、runtime に判定行を消費する口は作らない（外形を増やさない）。
+/// それでも src に置くのは、base に test 区間だけを写した木で compile error＝flip-check の RED
+/// を構造で作るためである。非 test build では未使用になるので、憲法 C11 の口（理由付き expect）
+/// で dead_code だけを除く。
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "test 区間の pin だけが呼ぶ（bd s2-07l.87・flip-check の RED を src 配置で作る）")
+)]
 pub fn shape(summary: &str) -> String {
     summary
         .split(' ')
