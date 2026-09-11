@@ -575,3 +575,34 @@ fn fleet_kinds_follow_declaration_order() {
         KINDS.len()
     );
 }
+
+/// 質問の段と 2 つの event は schema 1 のまま書けて読める（ADR-0004 §2.5・既存行の読みは
+/// 変わらない）。
+#[test]
+fn pipe_question_kinds_round_trip_on_schema_1() {
+    for (kind, stage) in [
+        (EventKind::QuestionRaised, None),
+        (EventKind::RunStage, Some(Stage::Questioned)),
+        (EventKind::QuestionAnswered, None),
+    ] {
+        let event = Event {
+            schema: SCHEMA,
+            ts: "2026-09-12T00:00:00Z".to_owned(),
+            kind,
+            run: "r".to_owned(),
+            bead: "b".to_owned(),
+            host: "h".to_owned(),
+            actor: kind.default_actor().to_owned(),
+            stage,
+            seat: None,
+            pid: None,
+            detail: Some("verify 行が矛盾する".to_owned()),
+        };
+        let line = event.to_line();
+        assert!(line.contains("\"schema\":1"), "{line}");
+        assert_eq!(Event::from_line(&line), Ok(event.clone()), "{line}");
+        assert_eq!(event.actor, "machine", "質問と回答は machine 由来");
+    }
+    let old = r#"{"schema":1,"ts":"2026-09-01T00:00:00Z","kind":"RunCreated","run":"r","bead":"b","host":"h","actor":"machine","stage":"Intake"}"#;
+    assert!(Event::from_line(old).is_ok(), "既存の行はそのまま読める");
+}

@@ -552,23 +552,25 @@ fn ask_lens(cmd: &str, worktree: &Path, diff: &[u8]) -> (Verdict, String) {
     parse_lens(&String::from_utf8_lossy(&out.stdout))
 }
 
-/// lens の stdout から最後の JSON 行を読む。読めない周は INCONCLUSIVE。
-fn parse_lens(text: &str) -> (Verdict, String) {
+/// stdout の**最後の JSON 行**を 1 つの flat object に読む（lens の verdict と runner の
+/// 質問 record が**共有する 1 本**・設計 pipeline-question.md §3）。読む条件は呼び手が持つ
+/// （gate は lens の rc 0 の周・spawn は包みの rc [`super::RC_QUESTION`] の周）。
+pub(crate) fn last_json_object(text: &str) -> Result<Vec<(String, Value)>, String> {
     let found = text
         .lines()
         .rev()
         .find(|line| line.trim_start().starts_with(JSON_HEAD));
     let Some(line) = found else {
-        return (Verdict::Inconclusive, "lens の出力に JSON 行が無い".to_owned());
+        return Err("出力に JSON 行が無い".to_owned());
     };
-    let pairs = match json_lite::parse_object(line.trim()) {
+    json_lite::parse_object(line.trim()).map_err(|reason| format!("出力を読めない: {reason}"))
+}
+
+/// lens の stdout から最後の JSON 行を読む。読めない周は INCONCLUSIVE。
+fn parse_lens(text: &str) -> (Verdict, String) {
+    let pairs = match last_json_object(text) {
         Ok(parsed) => parsed,
-        Err(reason) => {
-            return (
-                Verdict::Inconclusive,
-                format!("lens の出力を読めない: {reason}"),
-            )
-        }
+        Err(reason) => return (Verdict::Inconclusive, format!("lens の{reason}")),
     };
     let get = |key: &str| {
         pairs

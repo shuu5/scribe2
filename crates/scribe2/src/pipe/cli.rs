@@ -13,7 +13,7 @@ use super::declaration::{self, Ceiling, Effective, CEILING_ROW};
 use super::gate::{Gate, Limits, Verdict, RC_INCONCLUSIVE};
 use super::land::{verdict_of, Land, Retire};
 use super::spawn::{spawn, Launch};
-use super::{contract_path, current, emit, run_dir, run_id, vessel_path, worktree_path, Emit, Precheck};
+use super::{question_of_run, contract_path, current, emit, run_dir, run_id, vessel_path, worktree_path, Emit, Precheck};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_OK, RC_REFUSED};
 use crate::fleet::store::{LockPolicy, StoreError};
 use crate::fleet::{self, Completion, EventKind, SeatState, Stage, State};
@@ -36,7 +36,7 @@ const ROW_CAP: &str = "gate.token_cap";
 /// `pipe` の使い方。
 pub fn usage() -> String {
     format!(
-        "usage: {NAME} pipe <intake|spawn|approve|gate|land|retire|run|show|resume|stop|report> [--state-dir D] [--rules PATH] [flags]"
+        "usage: {NAME} pipe <intake|spawn|approve|answer|gate|land|retire|run|show|resume|stop|report> [--state-dir D] [--rules PATH] [flags]"
     )
 }
 
@@ -54,6 +54,7 @@ pub fn dispatch(args: &[String]) -> Outcome {
         Some("intake") => intake(args, &manifest, policy),
         Some("spawn") => start(args, policy),
         Some("approve") => by_run(args, |id| approve_run(args, id, policy)),
+        Some("answer") => by_run(args, |id| answer_run(args, id, policy)),
         Some("gate") => by_run(args, |id| gate_run(args, id, &manifest, policy)),
         Some("land") => by_run(args, |id| land_run(args, id, policy)),
         Some("retire") => by_run(args, |id| retire_run(args, id, policy)),
@@ -361,6 +362,8 @@ fn launch(
         Ok(found) => found.into_budget(),
         Err(reason) => return refused(reason),
     };
+    // 回答済みの質問が在る周だけ再 spawn の形になる（`Questioned` 以外の段では質問が無く `None`）。
+    let answered = question_of_run(&resolved.state_dir, id).filter(|question| question.answer.is_some());
     spawn(
         budget,
         &Launch {
@@ -371,6 +374,7 @@ fn launch(
             contract: &resolved.contract,
             runner,
             approved: resolved.approved,
+            answered,
             policy,
         },
     )
@@ -398,6 +402,43 @@ fn approve_run(args: &[String], id: &str, policy: LockPolicy) -> Outcome {
         return refused(format!("run {id} が無い"));
     };
     super::approve::approve(&Approve {
+        run: id,
+        bead: &run.bead,
+        state_dir: &state_dir,
+        words: &words,
+        policy,
+    })
+}
+
+/// `pipe answer`。**`Questioned` の run にだけ**逐語を event へ写す（段は動かさない・resume が進める）。
+///
+/// 承認（[`approve_run`]）と同型だが、段は問う——質問の無い便へ回答を書くと、後で来た質問の
+/// 関門が前の回答で開く。段違いは `Blocked` の未承認と同じ **rc 3 で何も書かない**。
+fn answer_run(args: &[String], id: &str, policy: LockPolicy) -> Outcome {
+    let words = match need(args, "--words") {
+        Ok(found) => found.to_owned(),
+        Err(reason) => return refused(reason),
+    };
+    let state_dir = match state_dir_of(args) {
+        Ok(found) => found,
+        Err(reason) => return refused(reason),
+    };
+    let state = match current(&state_dir) {
+        Ok(found) => found,
+        Err(errors) => {
+            return Outcome::failed(RC_BROKEN, errors.iter().map(StoreError::to_string).collect())
+        }
+    };
+    let Some(run) = state.runs.get(id) else {
+        return refused(format!("run {id} が無い"));
+    };
+    if run.stage != Stage::Questioned {
+        return Outcome::failed_line(
+            RC_BLOCKED,
+            format!("pipe: run {id} は質問で止まっていない（段 {}）", run.stage.as_str()),
+        );
+    }
+    super::approve::answer(&Approve {
         run: id,
         bead: &run.bead,
         state_dir: &state_dir,
@@ -621,6 +662,18 @@ fn resume(args: &[String], manifest: &Manifest, policy: LockPolicy) -> Outcome {
             true => match need(args, "--runner") {
                 Err(reason) => refused(reason),
                 Ok(runner) => launch(args, &id, runner, policy, &[Stage::Blocked]),
+            },
+        },
+        // Questioned から先へ進めるのは**最新の質問への回答**が在る周だけ（`Blocked` と同型・
+        // FR32）。無ければ rc 3 で何も書かない（待っている事実は Questioned が既に持つ）。
+        Ok(Stage::Questioned) => match question_of_run(&state_dir, &id).is_some_and(|q| q.answer.is_some()) {
+            false => Outcome::failed_line(
+                RC_BLOCKED,
+                format!("pipe: run {id} は回答待ちである（pipe answer --run {id} --words \"<回答の逐語>\"）"),
+            ),
+            true => match need(args, "--runner") {
+                Err(reason) => refused(reason),
+                Ok(runner) => launch(args, &id, runner, policy, &[Stage::Questioned]),
             },
         },
         Ok(stage) => refused(format!("run {id} の段 {} からは再開しない", stage.as_str())),
