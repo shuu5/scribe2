@@ -125,7 +125,7 @@ impl Context {
     }
 }
 
-/// 判定 1 回の全体（判定・cycle の結果・context）。
+/// 判定 1 回の全体（判定・cycle の結果・context・cycle-stamp）。
 struct Judged {
     /// 判定。
     decision: TickDecision,
@@ -133,6 +133,9 @@ struct Judged {
     cycled: Option<String>,
     /// context の評価。
     context: Context,
+    /// cycle-stamp の読み（cycle の評価まで進まなかった周は `None`＝読んでいない。進んだ周は
+    /// 評価した・見送った・読めなかったのいずれでも `Some`）。
+    stamp: Option<CycleStamp>,
 }
 
 impl Judged {
@@ -142,6 +145,44 @@ impl Judged {
             decision,
             cycled: None,
             context: Context::Unevaluated,
+            stamp: None,
+        }
+    }
+}
+
+/// cycle を評価した周の打刻の読み（`s2-07l.110`）。**「無い」と「読めない」を混ぜない**（憲法 C11）:
+/// 読めない周を「無い」に読み替えると不可逆の `/clear` へ倒れる（N1 の向きは繰り返さない側）。
+#[derive(Clone, Copy)]
+enum CycleStamp {
+    /// 打刻が無い＝一度も評価していない。
+    None,
+    /// 打刻からの経過（秒）。
+    Age(u64),
+    /// 打刻を読めない（置き場が壊れている等）。
+    Unreadable,
+}
+
+impl CycleStamp {
+    /// `<seat_dir>/cycle-stamp`（[`cycle::STAMP_FILE`]・書くのは cycle 側）を読む。mtime が未来の
+    /// 周は経過 0＝評価しない側へ倒す。
+    fn read(seat_dir: &Path) -> Self {
+        match std::fs::metadata(cycle::stamp_path(seat_dir)) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Self::None,
+            Err(_) => Self::Unreadable,
+            Ok(meta) => match meta.modified() {
+                Ok(at) => Self::Age(at.elapsed().map_or(0, |age| age.as_secs())),
+                Err(_) => Self::Unreadable,
+            },
+        }
+    }
+
+    /// 判定行の末尾に足す字面（cycle の評価まで進んだ周だけ＝評価した・back-off で見送った・
+    /// 読めなかった、のいずれか）。
+    fn suffix(self) -> String {
+        match self {
+            Self::None => " cycle-stamp=none".to_owned(),
+            Self::Age(age) => format!(" cycle-stamp={age}"),
+            Self::Unreadable => " cycle-stamp=unreadable".to_owned(),
         }
     }
 }
@@ -156,6 +197,8 @@ struct Seen<'a> {
     context: Context,
     /// cycle lock の TTL（秒）。
     ttl_s: u64,
+    /// 鮮度の閾値（秒）。cycle-stamp の back-off も**同じ値**を共用する（新しい閾値を足さない・C5）。
+    stale_s: u64,
 }
 
 /// 撃たなかった理由。**順序固定の条件のうち最初に立たなかったもの**を表す。
@@ -173,6 +216,10 @@ pub enum NoopReason {
     WmUnreadable,
     /// 4. 他の cycle が走っている。
     CycleLive,
+    /// 4. 同じ席の cycle を `seat.tick_stale_s` 未満の前に評価した（back-off・`s2-07l.110`）。
+    CycleRecent,
+    /// 4. cycle-stamp を読めない（**「無い」と読み替えない**＝不可逆の `/clear` へ倒さない）。
+    CycleStampUnreadable,
 }
 
 impl NoopReason {
@@ -185,6 +232,8 @@ impl NoopReason {
             Self::WmUnconsumed => "wm-unconsumed",
             Self::WmUnreadable => "wm-unreadable",
             Self::CycleLive => "cycle-live",
+            Self::CycleRecent => "cycle-recent",
+            Self::CycleStampUnreadable => "cycle-stamp-unreadable",
         }
     }
 }
@@ -251,39 +300,44 @@ fn decide(request: &Request, state: &super::StateDir, dir: &Path) -> Judged {
         wm,
         context: measure_context(&pane),
         ttl_s,
+        stale_s,
     };
-    let (decision, cycled) = judge(request, state, dir, &seen);
+    let (decision, cycled, stamp) = judge(request, state, dir, &seen);
     Judged {
         decision,
         cycled,
         context: seen.context,
+        stamp,
     }
 }
 
-/// pane を取得した後の条件（context → idle → 退避物 → lock）。
-fn judge(request: &Request, state: &super::StateDir, dir: &Path, seen: &Seen) -> (TickDecision, Option<String>) {
+/// pane を取得した後の条件（context → idle → 退避物 → lock → cycle-stamp）。
+fn judge(request: &Request, state: &super::StateDir, dir: &Path, seen: &Seen) -> Verdict {
     // 他の cycle が走っている席（lock が live）には退避の pointer も送らない——作り直しの最中に
     // 行を queue しても、届く先は消えるか作り直された席である（排他は cycle 側と同じ 1 本の lock）。
     if let Some((pct, cap)) = over_cap(seen).filter(|_| !cycle::lock_is_live(dir, seen.ttl_s)) {
         let payload = externalize_pointer(pct, cap);
-        return (inject_line(request, state, dir, InjectKind::Externalize, &payload), None);
+        return (inject_line(request, state, dir, InjectKind::Externalize, &payload), None, None);
     }
     if !is_idle(seen.pane) {
-        return (TickDecision::Noop(NoopReason::Busy), None);
+        return (TickDecision::Noop(NoopReason::Busy), None, None);
     }
     match seen.wm {
-        WmScan::Unreadable => return (TickDecision::Noop(NoopReason::WmUnreadable), None),
-        WmScan::Unconsumed(_) => return parked(request, state, dir, seen.ttl_s),
+        WmScan::Unreadable => return (TickDecision::Noop(NoopReason::WmUnreadable), None, None),
+        WmScan::Unconsumed(_) => return parked(request, state, dir, seen),
         WmScan::None => {}
     }
     if cycle::lock_is_live(dir, seen.ttl_s) {
-        return (TickDecision::Noop(NoopReason::CycleLive), None);
+        return (TickDecision::Noop(NoopReason::CycleLive), None, None);
     }
     let payload = request
         .pointer
         .map_or_else(|| default_pointer(request.target), str::to_owned);
-    (inject_line(request, state, dir, InjectKind::Pointer, &payload), None)
+    (inject_line(request, state, dir, InjectKind::Pointer, &payload), None, None)
 }
+
+/// 判定・cycle の要約・cycle-stamp の読み（後 2 つは評価した周だけ `Some`）。
+type Verdict = (TickDecision, Option<String>, Option<CycleStamp>);
 
 /// context が cap 以上で、退避の pointer を送るべき周か（`(使用率, cap)`・cycle lock は呼び側が見る）。
 ///
@@ -313,17 +367,32 @@ fn measure_context(pane: &str) -> Context {
 
 /// 退避して止まっている周（裁定 (b)）: lock が空いていれば cycle を**その場で**回す。
 ///
-/// 回すのは「退避物が在る ∧ idle ∧ lock が空いている」周だけで、**それ以外の周は cycle を
-/// 評価しない**——tick 行に `cycle=` が付かないこと自体が「評価していない」の印である。
-fn parked(
-    request: &Request,
-    state: &super::StateDir,
-    dir: &Path,
-    ttl_s: u64,
-) -> (TickDecision, Option<String>) {
+/// 回すのは「退避物が在る ∧ idle ∧ lock が空いている ∧ **直前に評価していない**」周だけで、
+/// **それ以外の周は cycle を評価しない**——tick 行に `cycle=` が付かないこと自体が「評価して
+/// いない」の印である。
+///
+/// **back-off**（`s2-07l.110`・裁定 (a)）: cycle を評価した周（done / failed / refused のいずれでも）
+/// は cycle 側が lock の内側・`/clear` より先に `cycle-stamp` を打ち（write-ahead・打てない周は
+/// 1 key も送らず refused）、同じ席は打刻から `seat.tick_stale_s` **未満**の間 cycle を評価しない
+/// （`cycle-recent`）。`/clear` は不可逆の口（N1）で、復元されない退避物（`/rebrief` が走らない・
+/// consume しない）へ周期ごとに繰り返してはならない。stamp を読めない周は「無い」に読み替えず
+/// 評価しない（`cycle-stamp-unreadable`・読めないことを理由に不可逆の側へ倒さない）。閾値は
+/// 鮮度と共用し、新しい rules 行を足さない（C5）。境界は**未満**（経過が閾値ちょうどの周は評価
+/// する）。
+fn parked(request: &Request, state: &super::StateDir, dir: &Path, seen: &Seen) -> Verdict {
     let noop = TickDecision::Noop(NoopReason::WmUnconsumed);
-    if cycle::lock_is_live(dir, ttl_s) {
-        return (noop, None);
+    if cycle::lock_is_live(dir, seen.ttl_s) {
+        return (noop, None, None);
+    }
+    let stamp = CycleStamp::read(dir);
+    match stamp {
+        CycleStamp::Unreadable => {
+            return (TickDecision::Noop(NoopReason::CycleStampUnreadable), None, Some(stamp));
+        }
+        CycleStamp::Age(age) if age < seen.stale_s => {
+            return (TickDecision::Noop(NoopReason::CycleRecent), None, Some(stamp));
+        }
+        CycleStamp::Age(_) | CycleStamp::None => {}
     }
     let result = cycle::run(&cycle::Request {
         target: request.target,
@@ -333,7 +402,7 @@ fn parked(
         state_dir: state,
         restore: request.restore,
     });
-    (noop, Some(cycle::summary(&result)))
+    (noop, Some(cycle::summary(&result)), Some(stamp))
 }
 
 /// 鮮度: `now − max(heartbeat, tick-stamp)` が閾値**以下**か。**両方不在なら stale**。
@@ -379,7 +448,8 @@ fn inject_line(
 }
 
 /// 判定の本体（記録の `what` と表示で**同じ字面**を使う）。context は判定の後ろ・cycle の前
-/// （評価した順）。**置き場と出所は最後**（置き場が解けた周は判定に依らず載せる＝席側の打刻行と
+/// （評価した順）・cycle-stamp は cycle の後ろ（cycle の評価まで進んだ周だけ・既存 token の名前と
+/// 順序は不変）。**置き場と出所は最後**（置き場が解けた周は判定に依らず載せる＝席側の打刻行と
 /// 並べるだけで、別の dir を見ていることを記録から弁別できる・`s2-07l.70`）。
 fn body(target: &str, judged: &Judged, state: &super::StateDir) -> String {
     let head = match judged.decision {
@@ -397,7 +467,11 @@ fn body(target: &str, judged: &Judged, state: &super::StateDir) -> String {
         Some(found) => format!("{with_context} cycle={found}"),
         None => with_context,
     };
-    format!("{with_cycle}{}", state.suffix())
+    let with_stamp = match judged.stamp {
+        Some(stamp) => format!("{with_cycle}{}", stamp.suffix()),
+        None => with_cycle,
+    };
+    format!("{with_stamp}{}", state.suffix())
 }
 
 /// 実行系が回らなかった周の本体。
