@@ -158,6 +158,8 @@
   - report: **読めない台帳から 0 を出さない**（到達点の 1 行は「人手 0」を主張する面ゆえ、数えられなかったを 0 に化けさせると偽の全クリアそのものになる・C11.2）／`landed` は便の数であって event の数ではない／human event を数える。`--pr-cmd` 形は**承認 event 無しでも動き**（A4.3・[ADR-0008](../../design-intent/decisions/ADR-0008-own-repo-pr-is-not-publish.html)）・branch を push して main を動かさず・main が動いても PR は出せ（`{base}` は便の base）・**空の seam は公開したと名乗らせない**（`sh -c ""` は rc 0 で終わるため）。
   - **guard は misbehave した runner のための backstop** であって関門ではない＝compliant な runner の便は guard の手前（gate の verify）で止まり、deny は 1 件も出ない。その極性は独立した歯が持つ（hook を直に叩いて write-set の外への Write を deny させ、便が `Failed` になり deny が 1 件残ることまで測る）。
 
+- **toy repo の seed（`s2-07l.117` の実測・2026-09-12）**: cargo crate の toy には **`Cargo.lock` を seed の commit に含める**。gate の precheck は untracked も clean の外と数える（便が生成した file を黙って捨てない規則は正しい）ので、lock を track していない toy では `cargo test` が生成する lock で precheck に落ちる。実 repo は lock を track 済みで発現しない。
+
 ## 9. 到達点の計測（AC1 / AC2・(e)）
 
 AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は AC1 を測らない。実測は **機械が読む成果物**で残す。
