@@ -20,6 +20,8 @@ use std::time::{Duration, Instant, SystemTime};
 
 /// 排他 marker の名前。
 pub const LOCK_FILE: &str = "cycle.lock";
+/// cycle を**評価した**周の打刻の名前（`s2-07l.110`・tick の back-off の根拠）。
+pub const STAMP_FILE: &str = "cycle-stamp";
 /// TTL を宣言する rules 行の id（**値は code に焼かない**・憲法 C5）。
 const ID_TTL: &str = "seat.cycle_lock_ttl_s";
 /// session を作り直す注入。
@@ -59,6 +61,8 @@ pub const REASON_INPUT_UNKNOWN: &str = "input-unknown";
 pub const REASON_NO_RULE: &str = "no-rule";
 /// 置き場を解けない。
 pub const REASON_STATE_DIR: &str = "state-dir";
+/// cycle-stamp を書けない＝`/clear` を送る前に断る（書けないまま送ると次の周も送りうる・N1）。
+pub const REASON_STAMP: &str = "cycle-stamp-unwritable";
 /// `/clear` は送ったが作り直しを確認できない。
 pub const REASON_CLEAR: &str = "clear-unconfirmed";
 /// 復元 command は送ったが送達を確認できない。
@@ -101,6 +105,11 @@ pub fn ttl_s() -> Option<u64> {
     super::int_rule(ID_TTL)
 }
 
+/// cycle を評価した周の打刻の path。
+pub fn stamp_path(seat_dir: &Path) -> PathBuf {
+    seat_dir.join(STAMP_FILE)
+}
+
 /// 排他 marker の path。
 pub fn lock_path(seat_dir: &Path) -> PathBuf {
     seat_dir.join(LOCK_FILE)
@@ -130,6 +139,11 @@ pub fn run(request: &Request) -> Cycle {
 }
 
 /// lock を取り、握っている間の手順を回して、**どの枝でも lock を返す**。
+///
+/// **打刻は `/clear` より先**（write-ahead・`s2-07l.110`）: lock を取った周は手順に入る前に
+/// [`STAMP_FILE`] を打つ（lock を取れない周は打たない＝他の cycle が打っているか置き場が使えない）。後から打つ形だと、打てない周や途中で死んだ周に `/clear` の記憶が残らず
+/// 次の周も送りうる（不可逆の口・N1）。打てない周は 1 key も送らずに断る。tick からでも
+/// `seat cycle` からでも同じ口を通るので、どちらの経路の cycle も back-off の根拠になる。
 fn perform(request: &Request, dir: &Path) -> Cycle {
     let Some(ttl) = ttl_s() else {
         return Cycle::Refused(REASON_NO_RULE);
@@ -139,9 +153,19 @@ fn perform(request: &Request, dir: &Path) -> Cycle {
         Lock::Held => return Cycle::Refused(REASON_LOCK_HELD),
         Lock::Broken => return Cycle::Refused(REASON_STATE_DIR),
     }
-    let held = guarded(request, dir);
+    let held = if write_stamp(dir).is_ok() {
+        guarded(request, dir)
+    } else {
+        Cycle::Refused(REASON_STAMP)
+    };
     std::fs::remove_file(lock_path(dir)).ok();
     held
+}
+
+/// cycle を評価した周の打刻（unix 秒を 1 行・mtime は書いた時刻＝tick が経過を読む）。
+fn write_stamp(seat_dir: &Path) -> std::io::Result<()> {
+    let secs = unix_secs(SystemTime::now());
+    std::fs::write(stamp_path(seat_dir), format!("{secs}\n"))
 }
 
 /// lock を握っている間の手順（順序固定）: 退避物 → 状態の門 → pane → 入力欄の門 → 送る。
