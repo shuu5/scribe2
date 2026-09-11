@@ -417,9 +417,9 @@ pub fn observed_suffix(status: Option<&str>) -> String {
 /// key と colon の間・colon と値の間の**空白に寛容**である。実 stream は compact だが（実測）、
 /// 表記が変わっただけで記録の口が無音で止まる形にはしない（lens 2026-09-11 H2）。
 ///
-/// **限界**: record 種別は行の中の marker で見るので、**別の record が上限 record を入れ子で
-/// 引用した周**は status を返しうる（top-level の種別を読む実装は ADR-0012 §2.2 が撤去を命じた）。
-/// 集合が空である現在は止まらないが、記録の口には載る＝集合を育てるときは現物を確かめる。
+/// 種別と `rate_limit_info` は **top-level の key** で見る（[`find_key`]・s2-07l.123）ので、別の record が
+/// 上限 record を入れ子で引用した周は読まない。ADR-0012 §2.2 が撤去したのは本文の語彙走査（その一部と
+/// して在った深さ 1 の種別読み）であり、専用 record の種別を marker で見る §2.1 の経路は不変である。
 pub fn rate_limit_status(line: &str) -> Option<&str> {
     let body = line.trim_start();
     if !body.starts_with('{') || !has_pair(body, "type", EVENT_KIND) {
@@ -434,20 +434,67 @@ pub fn rate_limit_status(line: &str) -> Option<&str> {
 }
 
 /// `"<key>"` の**直後**（空白と colon を跨いだ先）の位置を返す。
+///
+/// **同じ深さの key だけ**を見る（s2-07l.123）: 入力が `{` で始まる object ならその直下、
+/// [`immediate_object`] が剥がした中身なら先頭の深さである。文字列の中（escape を含む）と
+/// 入れ子の object / array の中は**跨ぐ**——実 claude（2.1.268）の `result` record は
+/// `usage.iterations[]` の入れ子に `"type":"message"` を持ち、top-level の `"type":"result"` は
+/// その後ろに来るので、最初に見える `"type"` を種別と読むと record を取り逃す（.116 実 run）。
 fn find_key(body: &str, key: &str) -> Option<usize> {
     let needle = format!("\"{key}\"");
-    let mut from = 0_usize;
-    while let Some(hit) = body.get(from..)?.find(&needle) {
-        let at = from.saturating_add(hit).saturating_add(needle.len());
-        let rest = body.get(at..)?;
-        let after = rest.trim_start();
-        if let Some(value) = after.strip_prefix(':') {
-            let skipped = rest.len().saturating_sub(value.len());
-            return Some(at.saturating_add(skipped));
+    let target = usize::from(body.trim_start().starts_with('{'));
+    let mut scan = Scan::default();
+    for (at, ch) in body.char_indices() {
+        if scan.skip(ch) {
+            continue;
         }
-        from = at;
+        match ch {
+            '{' | '[' => scan.depth = scan.depth.saturating_add(1),
+            '}' | ']' => scan.depth = scan.depth.saturating_sub(1),
+            '"' => {
+                if scan.depth == target {
+                    if let Some(after) = key_end(body, at, &needle) {
+                        return Some(after);
+                    }
+                }
+                scan.in_string = true;
+            }
+            _ => {}
+        }
     }
     None
+}
+
+/// `find_key` の走査状態（文字列の中か・escape の直後か・入れ子の深さ）。
+#[derive(Default)]
+struct Scan {
+    in_string: bool,
+    escaped: bool,
+    depth: usize,
+}
+
+impl Scan {
+    /// 文字列の中の 1 文字を読み飛ばす（true）。文字列の外なら false を返し呼び手が構造を読む。
+    fn skip(&mut self, ch: char) -> bool {
+        if !self.in_string {
+            return false;
+        }
+        if self.escaped {
+            self.escaped = false;
+        } else if ch == '\\' {
+            self.escaped = true;
+        } else if ch == '"' {
+            self.in_string = false;
+        }
+        true
+    }
+}
+
+/// `at` から `"<key>"` が始まり、その後ろ（空白を跨いで）に `:` が在れば colon の直後の位置を返す。
+fn key_end(body: &str, at: usize, needle: &str) -> Option<usize> {
+    let rest = body.get(at..)?.strip_prefix(needle)?;
+    let value = rest.trim_start().strip_prefix(':')?;
+    Some(body.len().saturating_sub(value.len()))
 }
 
 /// `"<key>": "<value>"` の対が在るか（空白に寛容）。
