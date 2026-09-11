@@ -138,6 +138,7 @@ pub fn inspect(root: &Path) -> Report {
     measured.push(crate::check_facts::measure_deps_empty(&layout));
     measured.push(crate::check_facts::measure_toolchain_pin(&layout));
     measured.push(crate::paths_clean::measure(&layout));
+    measured.push(crate::private_clean::measure(&layout));
     measured.push(crate::non_rust_exec::measure(&layout));
     measured.push(crate::non_rust_exec::ci_shell_lines(&layout));
     measured.push(crate::claude_md::measure(&layout));
@@ -574,12 +575,12 @@ mod tests {
     const SUMMARY_PIN: &str = "xtask check: ok core-lines=<v>/<v> file-lines=<v>/<v> \
         test-src-ratio=<v>/<v> name-literal=<v> manifest-name=<v> manifest-version=<v>.<v>.<v> \
         lints-set=<v> lints-optin=<v>/<v> deps-empty=<v> toolchain-pin=<v>.<v>.<v> \
-        paths-clean=<v> non-rust-exec=<v>/<v> allow=<v> ci-shell-lines=<v> \
+        paths-clean=<v> private-clean=<v> non-rust-exec=<v>/<v> allow=<v> ci-shell-lines=<v> \
         claude-md-constitution=<v> enum-slices=<v> claude-spawn-points=<v> polarity=<v>/<v>";
 
     /// git を要する measure の fact（`.git` の無い木では測れない形になり、副 field も出ない）。
     fn is_git_fact(token: &str) -> bool {
-        ["paths-clean=", "non-rust-exec=", "allow="]
+        ["paths-clean=", "private-clean=", "non-rust-exec=", "allow="]
             .iter()
             .any(|prefix| token.starts_with(prefix))
     }
@@ -625,6 +626,12 @@ mod tests {
                 ".git の無い木でも git を要しない fact の並びは同じはず: {line}"
             );
             assert!(paths_clean_unnumbered(&line), ".git の無い木では数が出ないはず: {line}");
+            // private-clean は paths-clean と同じ母集団を持つ git 依存 fact＝同じ 2 形のどちらかで
+            // **必ず載る**（token ごと消える実装はここで落ちる・`s2-07l.32`）。
+            assert!(
+                line.contains("private-clean=n/a(") || line.contains("private-clean=?"),
+                ".git の無い木では private-clean も測れない形で載るはず: {line}"
+            );
             assert!(
                 line.contains("non-rust-exec=n/a(") || line.contains("non-rust-exec=?"),
                 ".git の無い木では non-rust-exec も測れない形のはず: {line}"
