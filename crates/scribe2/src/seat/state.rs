@@ -291,13 +291,19 @@ pub fn now_secs() -> u64 {
 /// 読まないため（設計 seat-state.md §6）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Baseline {
-    /// 送る前の行数（file が無い・読めない周は 0＝足された行は全部が候補・ts が守る）。
-    lines: usize,
+    /// 送る前の行数。file が無い周は `Some(0)`（足された行は全部が候補）。**読めない周は `None`**
+    /// （基線を測れていない＝以後の証拠を採らない・fail-closed。0 行に潰すと、送る前から在った
+    /// 同じ秒の打刻が「送達 ts 以後」に化ける・lens-112 HIGH-2）。
+    lines: Option<usize>,
 }
 
 /// 基線を取る。
 pub fn baseline(seat_dir: &Path) -> Baseline {
-    let lines = std::fs::read_to_string(path(seat_dir)).map_or(0, |text| text.lines().count());
+    let lines = match std::fs::read_to_string(path(seat_dir)) {
+        Ok(text) => Some(text.lines().count()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Some(0),
+        Err(_) => None,
+    };
     Baseline { lines }
 }
 
@@ -321,13 +327,16 @@ pub enum Evidence {
 /// `>=` は打刻が秒粒度で、送った同じ秒に hook が打つ周を落とさないため。古い行を `>=` で拾わない
 /// のは基線が守る（送る前に在った行は見ない）。壊れた行は証拠に数えない（読めた行だけ）。
 pub fn evidence_after(seat_dir: &Path, baseline: Baseline, event: Event, since: u64) -> Evidence {
+    let Some(skip) = baseline.lines else {
+        return Evidence::Unreadable;
+    };
     let text = match std::fs::read_to_string(path(seat_dir)) {
         Ok(found) => found,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Evidence::Missing,
         Err(_) => return Evidence::Unreadable,
     };
     text.lines()
-        .skip(baseline.lines)
+        .skip(skip)
         .filter_map(|line| Stamp::from_line(line).ok())
         .find(|stamp| stamp.event == event && stamp.ts >= since)
         .map_or(Evidence::NotYet, Evidence::Found)

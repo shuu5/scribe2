@@ -3609,7 +3609,9 @@ fn seat_evidence_cycle_ignores_session_start_stamp_older_than_clear() {
 
 /// `/clear` の後に `SessionStart` を**打たない**席（hook が死んだ・載っていない）は、echo を描いても
 /// 作り直しを確認できない＝`clear-unconfirmed`・復元を送らない（作り直しを確認できない席へ復元を
-/// 刺さない・fail-closed）。base は echo で `done` になる（RED）。
+/// 刺さない・fail-closed）。送る**前**の最終行は `SessionStart`（Idle・前の作り直しの打刻）で、その
+/// ts は未来（+5 s）＝「送達 ts 以後」に見える——**基線**（送る前に在った行は見ない）だけがこれを
+/// 除外できる（lens-112 HIGH-1）。base は echo で `done` になる（RED）。
 #[test]
 fn seat_evidence_cycle_reports_clear_unconfirmed_when_no_session_start_stamp_follows() {
     let dir = tmp();
@@ -3623,7 +3625,13 @@ fn seat_evidence_cycle_reports_clear_unconfirmed_when_no_session_start_stamp_fol
     assert!(guard.ready(), "打刻しない偽の席を立てられる");
     let wm = dir.join("wm");
     wm_file(&wm, "working-memory.none.md", name);
-    stamp_idle(&state, name);
+    let seat = seat_dir_of(&state, name);
+    fs::create_dir_all(&seat).ok();
+    fs::write(
+        state_file(&seat),
+        format!("{}\n", stamp_line("idle", "SessionStart", unix_now().saturating_add(5), "preexisting-future")),
+    )
+    .expect("打刻 fixture を置ける");
     let (wm_s, state_s) = (wm.display().to_string(), state.display().to_string());
 
     let out = run_seat(&[
@@ -3688,8 +3696,10 @@ fn seat_evidence_inject_consumed_true_by_user_prompt_submit_stamp_even_with_pend
     fs::remove_dir_all(&dir).ok();
 }
 
-/// 送達 ts より**前**の打刻しか無い席（`sh -i`＝受けた行で打刻しない・入力欄はすぐ空に戻る）は
-/// `consumed=false`（古い打刻を消費と読まない・queue の形）。base は入力欄が空なので `true`（RED）。
+/// **送る前から在る**打刻しか無い席（`sh -i`＝受けた行で打刻しない・入力欄はすぐ空に戻る）は
+/// `consumed=false`（queue の形）。fixture は `UserPromptSubmit` を 2 行置く: 100 秒前のものと、
+/// **ts が送達 ts 以後に見える未来（+5 s）のもの**——後者は「送る前に在った行は見ない」基線だけが
+/// 除外できる（`ts >= since` では拾ってしまう・lens-112 HIGH-1）。base は入力欄が空なので `true`（RED）。
 #[test]
 fn seat_evidence_inject_reports_consumed_false_when_only_older_stamps_exist() {
     let dir = tmp();
@@ -3698,8 +3708,18 @@ fn seat_evidence_inject_reports_consumed_false_when_only_older_stamps_exist() {
     let guard = start_seat(&socket, name);
     assert!(guard.ready(), "独立 socket に prompt 付きの session を立てられる");
     let state = dir.join("state");
-    // 送る前の打刻（Idle の Stop）だけが在る＝送達 ts 以後の UserPromptSubmit は来ない。
-    stamp_idle(&state, name);
+    // 送る前から在る打刻だけ（UserPromptSubmit 2 行・片方は ts が未来）＝送達後に足される行は無い。
+    let seat = seat_dir_of(&state, name);
+    fs::create_dir_all(&seat).ok();
+    fs::write(
+        state_file(&seat),
+        format!(
+            "{}\n{}\n",
+            stamp_line("busy", "UserPromptSubmit", unix_now().saturating_sub(100), "old"),
+            stamp_line("busy", "UserPromptSubmit", unix_now().saturating_add(5), "preexisting-future")
+        ),
+    )
+    .expect("打刻 fixture を置ける");
     let payload = ": seat-e2e-older";
 
     let out = run_seat(&[
@@ -3715,7 +3735,7 @@ fn seat_evidence_inject_reports_consumed_false_when_only_older_stamps_exist() {
             payload.len(),
             provenance(&state, "flag")
         ),
-        "送る前の打刻しか無い周は consumed=false（入力欄が空でも消費とは読まない）"
+        "送る前から在る打刻しか無い周は consumed=false（ts が未来でも基線より前の行は証拠にしない）"
     );
     assert_eq!(stderr_of(&out), "", "成功の周は stderr 0 行");
     let pane = capture(&socket, name);
