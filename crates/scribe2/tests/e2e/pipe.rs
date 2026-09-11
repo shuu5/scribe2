@@ -1375,6 +1375,44 @@ fn land_once(repo: &Path, state: &Path, id: &str) -> Output {
     ])
 }
 
+/// PATH の先頭に「`diff --name-only -z` だけ rc 1 で落とし、他は実 git へ exec する git」を置いて
+/// land を 1 回撃つ（段① write-set 照合を **rc -1**＝起動できなかった段にする）。
+///
+/// verify 行は全部 `sh -c` で撃たれるので、実在しない binary 名は sh の rc 127（実測の赤）で
+/// あって rc -1 にならない。rc -1 を作れるのは段①の diff を読めない周だけである。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn land_once_with_unreadable_diff(repo: &Path, state: &Path, id: &str) -> Output {
+    use std::os::unix::fs::PermissionsExt;
+    let bin_dir = state.join("shim-bin");
+    fs::create_dir_all(&bin_dir).expect("shim の dir を作れる");
+    let real = String::from_utf8_lossy(
+        &Command::new("sh").args(["-c", "command -v git"]).output().expect("git を引ける").stdout,
+    )
+    .trim()
+    .to_owned();
+    let shim = bin_dir.join("git");
+    fs::write(
+        &shim,
+        format!(
+            "#!/bin/sh\ncase \"$*\" in *' diff --name-only -z '*) exit 1;; esac\nexec '{real}' \"$@\"\n"
+        ),
+    )
+    .expect("shim を書ける");
+    fs::set_permissions(&shim, fs::Permissions::from_mode(0o755)).expect("shim に実行権を付ける");
+    let path = format!("{}:{}", bin_dir.display(), std::env::var("PATH").unwrap_or_default());
+    Command::new(bin())
+        .args([
+            "pipe", "land", "--run", id, "--repo", &repo.display().to_string(),
+            "--state-dir", &state.display().to_string(),
+        ])
+        .env("PATH", path)
+        .output()
+        .expect("binary を起動できる")
+}
+
 /// PASS の gate まで通した便を作る。
 fn gated_pass(repo: &Path, state: &Path, contract: &Path, marker: &Path) -> String {
     let id = implemented(repo, state, contract);
@@ -2257,6 +2295,40 @@ fn pipe_gate_refuses_wrong_stage() {
     let again = gate_once(&repo, &state, &id, Some(&lens));
     assert_eq!(again.status.code(), Some(i32::from(RC_REFUSED)), "2 度目の gate は rc 1");
     assert!(stderr_of(&again).contains("段は Gated である"), "理由: {}", stderr_of(&again));
+    clean(&[&repo, &state]);
+}
+
+/// main 確認で**起動できなかった段**（Step の rc -1・段①の diff を読めない）は赤（main-red）
+/// でなく `main-unmeasured` に倒す（gate §6 の INCONCLUSIVE と同じ極性・`.65` lens M3）。
+/// fail-closed: finish（verdict export・Landed）にも main-green にも進まない。main は squash で
+/// 進んだまま（red と同じく auto revert しない・設計 §5.4）。
+#[test]
+fn pipe_land_turns_unstartable_verify_step_into_unmeasured() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let marker = state.join("lens-ran");
+    let base = git(&repo, &["rev-parse", "refs/heads/main"]);
+    let id = gated_pass(&repo, &state, &path, &marker);
+
+    let out = land_once_with_unreadable_diff(&repo, &state, &id);
+
+    assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "測れない周は rc 2: {}", stderr_of(&out));
+    assert!(stderr_of(&out).contains("実測できない"), "赤ではなく測れないと名乗る: {}", stderr_of(&out));
+    assert!(stderr_of(&out).contains("起動できない"), "理由に起動できなかった段が残る: {}", stderr_of(&out));
+    assert!(!stderr_of(&out).contains("赤い"), "赤を名乗らない: {}", stderr_of(&out));
+    let log = fs::read_to_string(state.join("fleet").join("events.jsonl")).expect("event log");
+    let last = log.lines().last().unwrap_or_default();
+    assert!(last.contains("\"kind\":\"RunStage\""), "最終行は RunStage: {last}");
+    assert!(last.contains("\"detail\":\"main-unmeasured\""), "最終行の detail は main-unmeasured: {last}");
+    assert!(!log.contains("\"detail\":\"main-red\""), "main-red は書かない: {log}");
+    assert!(!log.contains("\"stage\":\"Landed\""), "Landed へ進まない（fail-closed）: {log}");
+    assert!(!land::verdicts_path(&state).exists(), "面 5 へ export しない");
+    // squash は verify の前に済んでいる（設計 §5.4 の順序）＝main は進んだまま・revert しない。
+    let now = git(&repo, &["rev-parse", "refs/heads/main"]);
+    assert_ne!(now, base, "main は squash で進んだまま（red と同じ極性）");
+    // 負例（同じ便を実 git で撃ち直すと、段① が読めて赤は無い＝この歯の理由は shim だけ）:
+    // 2 度目の land は前提（verdict / stale base）で断られるので、ここでは segment の弁別だけ
+    // 既存の pipe_land_reruns_common_verify_from_vessel_copy_on_main（rc≠0 → main-red）に委ねる。
     clean(&[&repo, &state]);
 }
 

@@ -237,18 +237,26 @@ fn verify_main(entry: &Land<'_>, new: &str) -> MainCheck {
             return MainCheck::Unmeasurable(reason);
         }
     };
-    let red = run_checks(&Checks {
+    let steps = run_checks(&Checks {
         worktree: &tmp,
         base: &base,
         contract: entry.contract,
         common: &common,
-    })
-    .iter()
-    .filter(|step| step.rc != 0)
-    .count();
+    });
     // 成果は `new` に載っているので、この tmp だけは remove してよい（設計 §5.4）。
     // `--force` は verify が tmp に生んだ中間物ごと畳むためで、履歴・データは触らない。
     let _ = git_ok(entry.repo, &["worktree", "remove", "--force", &path]);
+    // 起動できなかった段（rc -1・段①の diff を読めない等）は**赤の集計より先に**「測れなかった」へ
+    // 倒す——読めなかったを落ちたに化けさせない（gate §6 と同じ極性・`s2-07l.103`）。Red と
+    // 同じく main-green にも finish にも進まない（fail-closed）。
+    if let Some(step) = steps.iter().find(|step| step.rc == -1) {
+        return MainCheck::Unmeasurable(format!(
+            "main で verify の段を起動できない（cmd={} stderr={}）",
+            step.cmd,
+            step.stderr.lines().next().unwrap_or_default()
+        ));
+    }
+    let red = steps.iter().filter(|step| step.rc != 0).count();
     if red > 0 {
         return MainCheck::Red(format!("main で verify の {red} 行が rc≠0"));
     }
