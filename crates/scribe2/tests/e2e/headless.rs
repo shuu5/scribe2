@@ -854,6 +854,60 @@ fn headless_lens_loads_no_settings_from_account_or_checkout() {
     clean(&[&dir]);
 }
 
+// 既に land した起動形（`build` 1 つ・ADR-0011 §2.1 / §2.2）へ後から足す**不在**の歯 2 本。
+// 実装は 1 byte も触らないので base で緑になる＝逃がしは下の 1 行で明示し、非空虚性は
+// 変異 2 本（`build` に `--mcp-config` を足す / lens の呼出側に `--allowedTools` を足す）で示す。
+// flip-check: retroactive s2-07l.72
+
+/// runner も lens も **`--mcp-config` を渡さない**（`.64` の lens LOW-4）。
+///
+/// 既存の歯は `--strict-mcp-config` の**存在**しか見ないので、宣言 file を足す変異
+/// （`--mcp-config <file>`＝strict のまま server を 1 つ載せる形）が緑のまま通る。
+/// `--strict-mcp-config` の存在は既存の歯が持つので、ここでは**不在だけ**を測る
+/// （分離形と連結形の両方＝[`has_arg`]）。
+#[test]
+fn headless_runner_and_lens_pass_no_mcp_config_absent_from_argv() {
+    let dir = tmp();
+    let worktree = tmp();
+    let claude = fake_claude(&dir, "", false, 0);
+    let write_set = dir.join("write-set.txt");
+    fs::write(&write_set, "src/lib.rs\n").expect("write-set を書ける");
+    let vessel = write_vessel_copy(&dir, r#"["cargo"]"#);
+    let out = run_runner(
+        &RunnerCall { dir: &dir, worktree: &worktree, write_set: &write_set, vessel: &vessel, claude: &claude, mode: "acceptEdits", account: None },
+        b"goal = \"x\"\n",
+    );
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    let runner_args = slurp(&dir.join("args"));
+    assert!(!has_arg(&runner_args, "--mcp-config"), "runner は MCP の宣言 file を渡さない: {runner_args}");
+
+    let lens_dir = tmp();
+    let lens_claude = fake_claude(&lens_dir, "{\"verdict\":\"PASS\",\"evidence\":\"ok\"}\n", false, 0);
+    let contract = contract_in(&lens_dir);
+    let seen = run_lens(&contract, "4096", "plan", &lens_claude, b"--- a\n+++ b\n");
+    assert_eq!(seen.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&seen));
+    let lens_args = slurp(&lens_dir.join("args"));
+    assert!(!has_arg(&lens_args, "--mcp-config"), "lens は MCP の宣言 file を渡さない: {lens_args}");
+    clean(&[&dir, &worktree, &lens_dir]);
+}
+
+/// lens は **`--allowedTools` を渡さない**（ADR-0011 §2.2: lens には器の hook も allow も載らない）。
+///
+/// runner 側の「在る」は [`headless_runner_passes_allowed_tools_from_vessel_copy`] が持つので、
+/// この歯は lens だけを見る。allow を lens の呼出側に足す変異はどの既存の歯にも当たらず、
+/// 権限を持った review が静かに始まる。
+#[test]
+fn headless_lens_passes_no_allowed_tools_absent_from_argv() {
+    let dir = tmp();
+    let claude = fake_claude(&dir, "{\"verdict\":\"PASS\",\"evidence\":\"ok\"}\n", false, 0);
+    let contract = contract_in(&dir);
+    let out = run_lens(&contract, "4096", "plan", &claude, b"--- a\n+++ b\n");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    let args = slurp(&dir.join("args"));
+    assert!(!has_arg(&args, "--allowedTools"), "lens に allow は載らない（ADR-0011 §2.2）: {args}");
+    clean(&[&dir]);
+}
+
 /// **id の乱数に上限の語が現れただけ**では止まらない（`s2-07l.71`）。
 ///
 /// `.64` の実 run で実際に踏んだ形: 401 authentication_failed の result record は
