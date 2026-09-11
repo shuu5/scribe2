@@ -112,8 +112,8 @@ fn inject_of(args: &[String]) -> Outcome {
 /// 注入を 1 回行い、結果を行にする。
 fn deliver(request: &inject::Request) -> Outcome {
     match inject::deliver(request) {
-        inject::Delivery::Delivered(bytes) => Outcome {
-            out: vec![inject::render_delivered(request.target, bytes)],
+        inject::Delivery::Delivered(bytes, settled) => Outcome {
+            out: vec![inject::render_delivered(request.target, bytes, settled)],
             err: Vec::new(),
             rc: RC_OK,
         },

@@ -33,8 +33,8 @@ const WHEN: &str = "inject";
 pub const REASON_BUSY: &str = "busy";
 /// 入力欄を特定できない。
 pub const REASON_UNKNOWN_INPUT: &str = "unknown-input";
-/// 送ったが入力欄に残っている。
-pub const REASON_RESIDUAL: &str = "residual";
+/// payload に非空の行が 1 つも無い（送達の目印を持てない）。
+pub const REASON_EMPTY: &str = "empty";
 /// 送ったが pane に現れない。
 pub const REASON_ABSENT: &str = "absent";
 /// tmux を撃てなかった。
@@ -52,10 +52,37 @@ pub struct Request<'a> {
     pub state_dir: Option<&'a str>,
 }
 
+/// 送達した注入を席が**その場で消費したか**（入力欄が settle の窓の内に空になったか）。
+///
+/// 席が busy な周は注入が入力欄に queue され、turn が終わるまで空にならない。それでも送達は
+/// 成功している（実測 2026-09-11: `inject-residual` 9 件が全部 turn の終わりに消費されていた・
+/// bd `s2-07l.90`）ので、これは成功の**記録の detail** であって失敗の理由ではない。
+#[derive(Clone, Copy)]
+pub enum Settled {
+    /// 入力欄が空になった＝席がその場で消費した。
+    Consumed,
+    /// 入力欄に残った＝queue された（turn の終わりに消費される）。
+    Queued,
+    /// 窓の終わりに prompt 行を特定できなかった＝**測っていない**（`false` と混ぜない・
+    /// 憲法 C10 の測定 / 未測定の弁別）。
+    UnknownInput,
+}
+
+impl Settled {
+    /// 記録と表示の字面（`consumed=true|false|unknown`）。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Consumed => "true",
+            Self::Queued => "false",
+            Self::UnknownInput => "unknown",
+        }
+    }
+}
+
 /// 注入 1 回の結果。
 pub enum Delivery {
-    /// 送って送達を確認した。
-    Delivered(u64),
+    /// 送って送達を確認した（byte 数・その場で消費したか）。
+    Delivered(u64, Settled),
     /// **1 key も送っていない**（入力欄の状態で止めた）。
     Refused(&'static str),
     /// 送ったが送達を確認できない。
@@ -73,14 +100,20 @@ pub fn deliver(request: &Request) -> Delivery {
         Some(tail) if !tail.is_empty() => return Delivery::Refused(REASON_BUSY),
         Some(_) => {}
     }
+    // 送る**前**の pane で目印の出現数を数えておく: 同じ字面が先に在る（前周の pointer の写し・
+    // tool の出力の引用）と `contains` 1 本では届いていない周が「届いた」に化ける（lens-90 HIGH-1）。
+    let Some(marker) = marker_of(request.payload) else {
+        return Delivery::Refused(REASON_EMPTY);
+    };
+    let before = pane.matches(marker).count();
     if !send(request) {
         return Delivery::Unconfirmed(REASON_TMUX_FAILED);
     }
-    match settle(request) {
-        Ok(()) => {
+    match settle(request, marker, before) {
+        Ok(settled) => {
             let bytes = request.payload.len() as u64;
             record(request, bytes, started);
-            Delivery::Delivered(bytes)
+            Delivery::Delivered(bytes, settled)
         }
         Err(reason) => Delivery::Unconfirmed(reason),
     }
@@ -95,22 +128,46 @@ fn send(request: &Request) -> bool {
     ) && tmux_ok(request.socket, &["send-keys", "-t", target, "Enter"])
 }
 
-/// 送達を確認する。**payload の先頭行が現れ ∧ 入力欄が空**になったら成立。
-fn settle(request: &Request) -> Result<(), &'static str> {
-    let marker = request.payload.lines().next().unwrap_or(request.payload);
+/// 送達の目印 = payload の**最初の非空行**。無ければ `None`（呼び側は 1 key も送らず断る）。
+///
+/// 先頭行が空だと目印が空文字になり、出現数が pane の長さに化けて「pane が伸びた」だけで
+/// 成立する（lens-90 再確認 NEW-1・stdin を読まない席でも `consumed=true` になった）。
+fn marker_of(payload: &str) -> Option<&str> {
+    payload.lines().find(|line| !line.trim().is_empty())
+}
+
+/// 送達を確認する。**目印（最初の非空行）の出現数が送る前より増えた**ら成立で、入力欄が窓の内に
+/// 空になったかを [`Settled`] として添える。
+///
+/// 「現れた ∧ 入力欄が空」を成立の条件にすると、busy な席へ queue された注入（届いている）を
+/// 失敗と数える（bd `s2-07l.90`・裁定: 現れた ＝ 成功）。失敗は `absent`（現れない）と
+/// `tmux-failed` の 2 つだけ。「在る」でなく「増えた」で見るのは、先に同じ字面が pane に在る周
+/// （tick の pointer は固定文字列で前周の写しが残る）に届いていない注入を成功と数えないため。
+/// 代償は、窓の内に pane が巻き上がって**古い写しだけ**が消えた周（新しい写しが見えていても
+/// 総数は増えない）が `absent` へ倒れうること（fail-closed 側の誤り・tick では重複注入になる。
+/// 周ごとに一意な目印にする案は「注入の内容を変えない」の契約外＝lens-90 再確認 NEW-2）。
+/// `consumed` は**窓の終わりの状態**で決める（途中の周で入力欄を読めなかったかは持たない）。
+fn settle(request: &Request, marker: &str, before: usize) -> Result<Settled, &'static str> {
     let mut seen = false;
+    let mut input_known = false;
     for _ in 0..SETTLE_TRIES {
         sleep(SETTLE_STEP);
         let Some(pane) = capture(request.socket, request.target) else {
             return Err(REASON_TMUX_FAILED);
         };
-        let appeared = pane.contains(marker);
+        let appeared = pane.matches(marker).count() > before;
         seen = seen || appeared;
-        if appeared && input_tail(&pane).is_some_and(str::is_empty) {
-            return Ok(());
+        let tail = input_tail(&pane);
+        if appeared && tail.is_some_and(str::is_empty) {
+            return Ok(Settled::Consumed);
         }
+        input_known = tail.is_some();
     }
-    Err(if seen { REASON_RESIDUAL } else { REASON_ABSENT })
+    match (seen, input_known) {
+        (false, _) => Err(REASON_ABSENT),
+        (true, true) => Ok(Settled::Queued),
+        (true, false) => Ok(Settled::UnknownInput),
+    }
 }
 
 /// 記録の置き場。`--state-dir` が上書きし、無ければ repo の git 設定から読む（hook と同じ解決）。
@@ -135,6 +192,10 @@ pub fn tick_path(state_dir: &Path, target: &str) -> PathBuf {
 }
 
 /// 送達した 1 回を記録する。**置き場が解けない周は書かない**（rc は変えない）。
+///
+/// `what` は payload の先頭そのまま（現物を加工しない）。その場で消費したかは tick の記録
+/// （`decision=inject … consumed=…`）と `seat inject` の stdout 行が持つ（planner 裁定 2026-09-11・
+/// 記録 schema は FR21 と共有ゆえ field は足さない）。
 fn record(request: &Request, bytes: u64, started: Instant) {
     let Some(dir) = state_dir_of(request) else {
         return;
@@ -169,11 +230,12 @@ fn head(payload: &str, cap: usize) -> String {
     payload.get(..end).unwrap_or_default().to_owned()
 }
 
-/// 成立の 1 行。
-pub fn render_delivered(target: &str, bytes: u64) -> String {
+/// 成立の 1 行（その場で消費したかを添える）。
+pub fn render_delivered(target: &str, bytes: u64, settled: Settled) -> String {
     format!(
-        "seat: inject delivered target={} bytes={bytes}",
-        sanitize_target(target)
+        "seat: inject delivered target={} bytes={bytes} consumed={}",
+        sanitize_target(target),
+        settled.as_str()
     )
 }
 
