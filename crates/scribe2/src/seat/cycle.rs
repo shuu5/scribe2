@@ -294,16 +294,13 @@ fn is_consumed_echo(line: &str) -> bool {
 /// なった（実測 2026-09-11 `.96` A/B・記録が真の値と食い違う＝C10）。席が queue を消費して
 /// 入力欄が空になるまで見続ける。上限の後も残っていれば従来どおり失敗（弁別は不変）。
 fn send_restore(request: &Request) -> bool {
-    let Some(state) = request.state_dir.path.to_str() else {
-        return false;
-    };
     let payload = request.restore.unwrap_or(DEFAULT_RESTORE);
     let sent = inject::deliver_within(
         &inject::Request {
             target: request.target,
             socket: request.socket,
             payload,
-            state_dir: Some(state),
+            state_dir: Some(request.state_dir),
         },
         CLEAR_WAIT,
     );

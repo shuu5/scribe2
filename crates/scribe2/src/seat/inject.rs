@@ -48,8 +48,10 @@ pub struct Request<'a> {
     pub socket: Option<&'a str>,
     /// 送る 1 行。
     pub payload: &'a str,
-    /// 記録の置き場（無ければ repo の git 設定から解く）。
-    pub state_dir: Option<&'a str>,
+    /// 解決済みの置き場（出所付き・`None` = 解けない周＝記録しない・表示に 2 語を出さない）。
+    /// **解決は呼び側が 1 回だけ行う**: 表示と記録が別々に解くと、settle の窓の内に git 設定が
+    /// 変わった周に表示行が書いてもいない dir を名乗る（lens-100 HIGH-1・実測 2026-09-11）。
+    pub state_dir: Option<&'a StateDir>,
 }
 
 /// 送達した注入を席が**その場で消費したか**（入力欄が settle の窓の内に空になったか）。
@@ -195,11 +197,6 @@ fn tries_within(window: Duration) -> u32 {
         .max(1)
 }
 
-/// 記録の置き場。解決は席の 1 実装（[`super::state_dir_of`]）を通る＝順序と字面を 2 面に持たない。
-fn state_dir_of(request: &Request) -> Option<PathBuf> {
-    super::state_dir_of(request.state_dir).map(|state| state.path)
-}
-
 /// 記録 file の path。
 pub fn tick_path(state_dir: &Path, target: &str) -> PathBuf {
     state_dir
@@ -214,7 +211,7 @@ pub fn tick_path(state_dir: &Path, target: &str) -> PathBuf {
 /// （`decision=inject … consumed=…`）と `seat inject` の stdout 行が持つ（planner 裁定 2026-09-11・
 /// 記録 schema は FR21 と共有ゆえ field は足さない）。
 fn record(request: &Request, bytes: u64, started: Instant) {
-    let Some(dir) = state_dir_of(request) else {
+    let Some(dir) = request.state_dir.map(|state| state.path.as_path()) else {
         return;
     };
     let entry = InjectionRecord {
@@ -231,7 +228,7 @@ fn record(request: &Request, bytes: u64, started: Instant) {
         return;
     };
     // 記録の失敗で注入の結果（rc）を変えない（FR21 は推奨で、判定そのものではない）。
-    let _ = store::append_line(&tick_path(&dir, request.target), &entry.to_line(), policy);
+    let _ = store::append_line(&tick_path(dir, request.target), &entry.to_line(), policy);
 }
 
 /// payload の先頭 `cap` byte（**文字の途中で切らない**）。

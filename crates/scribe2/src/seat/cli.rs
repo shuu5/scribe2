@@ -100,31 +100,33 @@ fn inject_of(args: &[String]) -> Outcome {
     let Some(payload) = payload_of(args) else {
         return refused_usage();
     };
+    // 置き場は席の 1 実装で **1 回だけ** 解き、表示と記録の両方に同じ 1 つを渡す。
+    let state = super::state_dir_of(state_dir);
     let request = inject::Request {
         target,
         socket,
         payload: &payload,
-        state_dir,
+        state_dir: state.as_ref(),
     };
     deliver(&request)
 }
 
 /// 注入を 1 回行い、結果を行にする。
 fn deliver(request: &inject::Request) -> Outcome {
-    // 表示行の所在は席の 1 実装で解く（記録側と同じ解決・解けない周は 2 語を出さない）。
-    let state = super::state_dir_of(request.state_dir);
+    // 表示行の所在は request が持つ解決済みの 1 つ（記録側と同じ・解けない周は 2 語を出さない）。
+    let state = request.state_dir;
     match inject::deliver(request) {
         inject::Delivery::Delivered(bytes, settled) => Outcome {
-            out: vec![inject::render_delivered(request.target, bytes, settled, state.as_ref())],
+            out: vec![inject::render_delivered(request.target, bytes, settled, state)],
             err: Vec::new(),
             rc: RC_OK,
         },
         inject::Delivery::Refused(reason) => {
-            Outcome::failed_line(RC_REFUSED, inject::render_refused(reason, state.as_ref()))
+            Outcome::failed_line(RC_REFUSED, inject::render_refused(reason, state))
         }
         inject::Delivery::Unconfirmed(reason) => Outcome::failed_line(
             RC_REFUSED,
-            inject::render_unconfirmed(reason, state.as_ref()),
+            inject::render_unconfirmed(reason, state),
         ),
     }
 }

@@ -345,14 +345,11 @@ fn inject_line(
     kind: InjectKind,
     payload: &str,
 ) -> TickDecision {
-    let Some(state_str) = state.path.to_str() else {
-        return TickDecision::Error(REASON_STATE_DIR.to_owned());
-    };
     let sent = inject::deliver(&inject::Request {
         target: request.target,
         socket: request.socket,
         payload,
-        state_dir: Some(state_str),
+        state_dir: Some(state),
     });
     match sent {
         // 注入の断り（`busy` 等）は noop の語彙と字が重なるので、**前置きで分ける**。

@@ -2500,6 +2500,26 @@ fn seat_cycle_refuses_when_clear_is_stuck_in_input_line() {
     }
 }
 
+/// 置き場が**解けない**周（`--state-dir` 無し・git の外の cwd）は cycle も inject も 2 語を
+/// 出さない（解いてもいない出所と書いてもいない置き場を名乗らない・tick と同じ規律）。
+#[test]
+fn seat_cycle_and_inject_omit_state_dir_provenance_when_unresolved() {
+    let dir = tmp();
+    let (wm_s, sock_s) = (dir.join("wm").display().to_string(), dir.join("absent-sock").display().to_string());
+
+    let out = run_seat_in(&dir, &["cycle", "--target", "seatnostate", "--wm-dir", &wm_s, "--tmux-socket", &sock_s]);
+    assert_eq!(rc_of(&out), i32::from(RC_REFUSED));
+    assert_eq!(stdout_of(&out), "");
+    assert_eq!(stderr_of(&out), "seat: cycle refused reason=state-dir\n", "解けない周は 2 語なし");
+
+    let out = run_seat_in(&dir, &["inject", "--target", "seatnostate", "--tmux-socket", &sock_s, "--text", "hello"]);
+    assert_eq!(rc_of(&out), i32::from(RC_REFUSED));
+    assert_eq!(stdout_of(&out), "");
+    assert_eq!(stderr_of(&out), "seat: inject unconfirmed reason=tmux-failed\n", "解けない周は 2 語なし");
+    assert!(!dir.join("seat").exists(), "cwd に置き場を作らない");
+    fs::remove_dir_all(&dir).ok();
+}
+
 /// cycle の成功行と記録は、置き場と出所（`.70` の 2 語）を末尾に持つ。A/B: 行の `state_dir=`
 /// 以降から組んだ tick.jsonl の path が、記録が実際に書かれた path と 1 対 1 で一致する。
 #[test]
