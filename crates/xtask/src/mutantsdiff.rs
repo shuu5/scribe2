@@ -16,7 +16,8 @@ use crate::toml_lite;
 use std::path::Path;
 use std::process::{Command, ExitCode, Stdio};
 
-/// 1 行に写す件数と、**何を測ったか**。
+/// 1 行に写す件数。**何を測ったか**（scope）は field で持たず [`Counts::line`] の引数で受ける
+/// ＝範囲を名乗らない行は組めない（lens-82 MEDIUM-2: 空の scope を表現可能にしない）。
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Counts {
     /// 生成された変異の総数。
@@ -29,29 +30,35 @@ pub struct Counts {
     pub unviable: u64,
     /// 時間切れの数。
     pub timeout: u64,
-    /// 測った範囲＝`cargo mutants -p` へ**実際に渡した**名前（bd `s2-07l.82`）。
-    ///
-    /// 行は出所から切り離されて流通する（bead notes / PR 本文 / CI log から切り出される）ので、
-    /// 「core package だけを測った」という限界は報告でなく**行そのもの**に載せる。値は行を
-    /// 組む側の literal ではなく [`Counts::in_scope`] で呼び手から持ち回る。将来 diff が触った
-    /// package を並べて測る形（案 (b)）になっても同じ field で表せる。
-    pub scope: String,
 }
 
 impl Counts {
     /// stdout へ出す 1 行。既存 5 token の名前・順序・書式は据え置き、末尾に `scope=` を足す。
-    pub fn line(&self) -> String {
+    ///
+    /// `scope` = 測った範囲＝`cargo mutants -p` へ**実際に渡した**名前（bd `s2-07l.82`）。行は
+    /// 出所から切り離されて流通する（bead notes / PR 本文 / CI log から切り出される）ので、
+    /// 「core package だけを測った」という限界は報告でなく**行そのもの**に載せる。値は行を組む側の
+    /// literal ではなく呼び手が渡す（[`run`] は [`measure_args`] と同じ 1 つの束縛を渡す）。将来
+    /// diff が触った package を並べて測る形（案 (b)）になっても同じ引数で表せる。
+    pub fn line(&self, scope: &str) -> String {
         format!(
-            "mutants-diff: total={} caught={} missed={} unviable={} timeout={} scope={}",
-            self.total, self.caught, self.missed, self.unviable, self.timeout, self.scope
+            "mutants-diff: total={} caught={} missed={} unviable={} timeout={} scope={scope}",
+            self.total, self.caught, self.missed, self.unviable, self.timeout
         )
     }
+}
 
-    /// 測った範囲を名乗らせる（呼び手が `-p` に渡した名前をそのまま渡す）。
-    pub fn in_scope(mut self, scope: &str) -> Self {
-        self.scope = scope.to_owned();
-        self
-    }
+/// `cargo` へ渡す引数（`cargo` の直後から）。`-p` に渡す名前は `scope` **ただ 1 つ**で、
+/// [`run`] は同じ束縛を [`Counts::line`] へも渡す＝行の `scope=` と実際に測った package が
+/// 別々の読みで食い違う形を作らない（lens-82 MEDIUM-1）。
+pub fn measure_args(diff: &Path, out: &Path, scope: &str) -> Vec<String> {
+    let mut args: Vec<String> = ["mutants", "--in-diff"].iter().map(|s| (*s).to_owned()).collect();
+    args.push(diff.display().to_string());
+    args.push("-p".to_owned());
+    args.push(scope.to_owned());
+    args.extend(["--no-shuffle", "--copy-vcs", "true", "-o"].iter().map(|s| (*s).to_owned()));
+    args.push(out.display().to_string());
+    args
 }
 
 /// 数えた結果に対する rc。**極性は manifest の `R-C12-1` 行が決める**。
@@ -257,13 +264,10 @@ pub fn run(args: &[String]) -> ExitCode {
         Ok(found) => found,
         Err(reason) => return unmeasured(&format!("mutants-diff: {reason}")),
     };
+    // **測る範囲は 1 つの束縛**: `-p` へ渡す名前と行の `scope=` は同じ変数から出す。
+    let scope = layout.name.as_str();
     let status = Command::new("cargo")
-        .args(["mutants", "--in-diff"])
-        .arg(&diff_path)
-        .arg("-p")
-        .arg(&layout.name)
-        .args(["--no-shuffle", "--copy-vcs", "true", "-o"])
-        .arg(&out)
+        .args(measure_args(&diff_path, &out, scope))
         .current_dir(&root)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -283,11 +287,11 @@ pub fn run(args: &[String]) -> ExitCode {
         Err(err) => Err(format!("outcomes.json を読めない: {err}（測れていない）")),
     };
     let counts = match counts {
-        // **`-p` に渡した名前そのもの**を行に持ち回る（行を組む側に literal を置かない）。
-        Ok(found) => found.in_scope(&layout.name),
+        Ok(found) => found,
         Err(reason) => return unmeasured(&format!("mutants-diff: {reason}")),
     };
-    crate::emit(&counts.line());
+    // **`-p` に渡した名前そのもの**を行に持ち回る（行を組む側に literal を置かない）。
+    crate::emit(&counts.line(scope));
     let manifest = std::fs::read_to_string(root.join("rules").join("manifest.toml")).unwrap_or_default();
     verdict(&counts, deny_line_enabled(&manifest))
 }
