@@ -77,7 +77,7 @@ pub enum TickDecision {
 /// 受けたか（storm の有無）を後から数えられない。
 #[derive(Clone, Copy)]
 pub enum InjectKind {
-    /// 席に自分の打刻を促す 1 行（条件 4 つが揃った周）。
+    /// 席に自分の打刻を促す 1 行（idle・退避物なし・lock 空きの揃った周）。
     Pointer,
     /// context が cap 以上の席へ退避を促す 1 行（idle を待たない）。
     Externalize,
@@ -152,7 +152,7 @@ struct Seen<'a> {
     ttl_s: u64,
 }
 
-/// 撃たなかった理由。**順序固定の 4 条件のうち最初に立たなかったもの**を表す。
+/// 撃たなかった理由。**順序固定の条件のうち最初に立たなかったもの**を表す。
 #[derive(Clone, Copy)]
 pub enum NoopReason {
     /// 1. 席は最近動いている。
@@ -247,7 +247,9 @@ fn decide(request: &Request, state: &Path, dir: &Path) -> Judged {
 
 /// pane を取得した後の条件（context → idle → 退避物 → lock）。
 fn judge(request: &Request, state: &Path, dir: &Path, seen: &Seen) -> (TickDecision, Option<String>) {
-    if let Some((pct, cap)) = over_cap(seen) {
+    // 他の cycle が走っている席（lock が live）には退避の pointer も送らない——作り直しの最中に
+    // 行を queue しても、届く先は消えるか作り直された席である（排他は cycle 側と同じ 1 本の lock）。
+    if let Some((pct, cap)) = over_cap(seen).filter(|_| !cycle::lock_is_live(dir, seen.ttl_s)) {
         let payload = externalize_pointer(pct, cap);
         return (inject_line(request, state, dir, InjectKind::Externalize, &payload), None);
     }
@@ -268,7 +270,7 @@ fn judge(request: &Request, state: &Path, dir: &Path, seen: &Seen) -> (TickDecis
     (inject_line(request, state, dir, InjectKind::Pointer, &payload), None)
 }
 
-/// context が cap 以上で、退避の pointer を送るべき周か（`(使用率, cap)`）。
+/// context が cap 以上で、退避の pointer を送るべき周か（`(使用率, cap)`・cycle lock は呼び側が見る）。
 ///
 /// **自席の未 consumed 退避物が 0 件と確認できた周に限る**（planner 裁定 2026-09-11）: 退避済みの
 /// 席は `/clear` 前で cap 以上のままなので、退避物を見ずに注入すると毎周 pointer を重ねて
