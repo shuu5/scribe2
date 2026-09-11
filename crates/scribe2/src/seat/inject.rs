@@ -273,3 +273,38 @@ pub fn render_refused(reason: &str) -> String {
 pub fn render_unconfirmed(reason: &str) -> String {
     format!("seat: inject unconfirmed reason={reason}")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{tries_within, SETTLE_STEP, SETTLE_TRIES};
+    use std::time::Duration;
+
+    /// 既定の窓（[`SETTLE_STEP`] × [`SETTLE_TRIES`]）は従来と同じ回数に写る（`deliver` の
+    /// 既定 2 s が変わらないことの pin）。掛け算や剰余に化けた写しはここで落ちる。
+    #[test]
+    fn inject_tries_within_default_window_is_settle_tries() {
+        assert_eq!(
+            tries_within(SETTLE_STEP.saturating_mul(SETTLE_TRIES)),
+            SETTLE_TRIES
+        );
+    }
+
+    /// cycle が渡す上限（30 s）は 200 ms 刻みで 150 回（hook の実行を跨ぐ長さ）。
+    #[test]
+    fn inject_tries_within_cycle_limit_spans_hook_run() {
+        assert_eq!(tries_within(Duration::from_secs(30)), 150);
+    }
+
+    /// 刻みより短い窓・空の窓でも **1 回は必ず見る**（0 回だと目印を見ずに `absent` に倒れる）。
+    #[test]
+    fn inject_tries_within_never_zero() {
+        assert_eq!(tries_within(Duration::ZERO), 1);
+        assert_eq!(tries_within(Duration::from_millis(100)), 1);
+    }
+
+    /// 巨大な窓は u32 で飽和させる（panic しない・C11）。
+    #[test]
+    fn inject_tries_within_saturates_on_huge_window() {
+        assert_eq!(tries_within(Duration::MAX), u32::MAX);
+    }
+}
