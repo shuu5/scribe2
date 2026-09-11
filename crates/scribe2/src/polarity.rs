@@ -63,8 +63,8 @@ pub struct Polarity {
     pub on_failure: OnFailure,
 }
 
-/// 行為を止めうる判定を返す境界の全数。**宣言順は行為の流れ**（hook → intake → spawn →
-/// gate → land → store → cycle）で、順序に意味は無いが C2 の形（[`ALL`] と判別子順 pin）に合わせる。
+/// 行為を止めうる判定を返す境界の全数。**宣言順は行為の流れ**（hook → intake → spawn〔予算・承認〕→
+/// runner → gate → land → store → 注入 → cycle）で、順序に意味は無いが C2 の形（[`ALL`] と判別子順 pin）に合わせる。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Guard {
     /// `pre-tool-use` の write-set guard（[`crate::hook::guard`]）。
@@ -77,6 +77,10 @@ pub enum Guard {
     Intake,
     /// spawn の予算＝実測を経ずに起動できない口（[`crate::pipe::Budget`]）。
     Budget,
+    /// A1 の承認関門＝3 クラスを名乗る契約を承認 event 無しに起動しない（[`crate::pipe::approve`]）。
+    Approval,
+    /// runner の上限 record による便の中断（[`crate::headless::runner::Decision`]・FailOpen）。
+    RunnerStop,
     /// gate の機械検証の段（[`crate::pipe::gate::Check`]）。
     GateCheck,
     /// gate の lens 1 本の判定（[`crate::pipe::gate::Verdict`]）。
@@ -85,6 +89,8 @@ pub enum Guard {
     LandMain,
     /// event log の書込 lock（[`crate::fleet::store`]）。
     StoreLock,
+    /// tmux pane への注入の断り＝入力欄が非空なら 1 key も送らない（[`crate::seat::inject`]）。
+    Inject,
     /// session を作り直す口の断り（[`crate::seat::cycle`]）。
     Cycle,
 }
@@ -96,10 +102,13 @@ pub const ALL: &[Guard] = &[
     Guard::Cap,
     Guard::Intake,
     Guard::Budget,
+    Guard::Approval,
+    Guard::RunnerStop,
     Guard::GateCheck,
     Guard::GateLens,
     Guard::LandMain,
     Guard::StoreLock,
+    Guard::Inject,
     Guard::Cycle,
 ];
 
@@ -112,10 +121,13 @@ impl Guard {
             Self::Cap => crate::hook::seat_guard::POLARITY,
             Self::Intake => crate::pipe::declaration::POLARITY,
             Self::Budget => crate::pipe::BUDGET_POLARITY,
+            Self::Approval => crate::pipe::approve::POLARITY,
+            Self::RunnerStop => crate::headless::runner::POLARITY,
             Self::GateCheck => crate::pipe::gate::POLARITY,
             Self::GateLens => crate::pipe::gate::LENS_POLARITY,
             Self::LandMain => crate::pipe::land::POLARITY,
             Self::StoreLock => crate::fleet::store::POLARITY,
+            Self::Inject => crate::seat::inject::POLARITY,
             Self::Cycle => crate::seat::cycle::POLARITY,
         }
     }
@@ -128,10 +140,13 @@ impl Guard {
             Self::Cap => "hook::seat_guard::SeatDecision",
             Self::Intake => "pipe::declaration::Unfit",
             Self::Budget => "pipe::Budget",
+            Self::Approval => "pipe::approve::needs_approval",
+            Self::RunnerStop => "headless::runner::Decision",
             Self::GateCheck => "pipe::gate::Check",
             Self::GateLens => "pipe::gate::Verdict",
             Self::LandMain => "pipe::land::MainCheck",
             Self::StoreLock => "fleet::store::StoreError",
+            Self::Inject => "seat::inject::Delivery",
             Self::Cycle => "seat::cycle::Cycle",
         }
     }
@@ -144,10 +159,13 @@ impl Guard {
             Self::Cap => "cap-guard",
             Self::Intake => "intake-unfit",
             Self::Budget => "spawn-budget",
+            Self::Approval => "approval-gate",
+            Self::RunnerStop => "runner-stop",
             Self::GateCheck => "gate-check",
             Self::GateLens => "gate-lens",
             Self::LandMain => "land-main-check",
             Self::StoreLock => "store-lock",
+            Self::Inject => "inject-refusal",
             Self::Cycle => "cycle-refusal",
         }
     }

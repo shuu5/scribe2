@@ -7,6 +7,7 @@
 //! 不可逆の口は持たない（憲法 CON5）: ここが送るのは呼び側が渡した 1 行だけで、
 //! `/clear` のような session を作り直す注入はこの便では扱わない。
 
+use crate::polarity::{OnFailure, Polarity, Timing};
 use super::{capture, input_tail, sanitize_target, tmux_ok, StateDir};
 use crate::fleet::store::{self, LockPolicy};
 use crate::hook::{InjectionRecord, SCHEMA};
@@ -80,6 +81,12 @@ impl Settled {
         }
     }
 }
+
+/// この境界の極性（[`Delivery::Refused`]）: 送る前に入力欄を見て、非空・prompt 行を特定できない周は 1 key も送らない。
+pub const POLARITY: Polarity = Polarity {
+    timing: Timing::InLoop,
+    on_failure: OnFailure::FailClosed,
+};
 
 /// 注入 1 回の結果。
 pub enum Delivery {

@@ -6,7 +6,7 @@
 use std::process::Command;
 use vessel::cli_outcome::RC_OK;
 use vessel::order::is_declaration_order;
-use vessel::polarity::{Guard, OnFailure, Timing, ALL};
+use vessel::polarity::{Guard, OnFailure, Polarity, Timing, ALL};
 
 /// `<NAME> polarity` を撃って stdout を返す（rc 0・stderr 0 byte を表明する）。
 #[expect(
@@ -103,4 +103,23 @@ fn polarity_lists_cap_guard_as_fail_open_without_hiding_it() {
     for guard in ALL {
         assert!(guard.boundary().contains("::"), "boundary は module::Type の形: {}", guard.boundary());
     }
+}
+
+/// `.25` の母集団に無かった 3 境界（`s2-07l.106`・lens MEDIUM-1）が**値で**載る。承認関門と注入の
+/// 断りは in-loop / fail-closed、runner の中断は集合に無い status では止めない（ADR-0012 §2.1）
+/// ゆえ **fail-open のまま**出る（cap guard と同じく隠さない）。snapshot の字面は pin しない。
+#[test]
+fn polarity_lists_the_three_added_guards() {
+    assert_eq!(Guard::Approval.polarity(), Polarity { timing: Timing::InLoop, on_failure: OnFailure::FailClosed });
+    assert_eq!(Guard::Inject.polarity(), Polarity { timing: Timing::InLoop, on_failure: OnFailure::FailClosed });
+    assert_eq!(Guard::RunnerStop.polarity(), Polarity { timing: Timing::InLoop, on_failure: OnFailure::FailOpen });
+    let text = output();
+    for expected in [
+        "guard=approval-gate timing=in-loop on-failure=fail-closed boundary=pipe::approve::needs_approval",
+        "guard=runner-stop timing=in-loop on-failure=fail-open boundary=headless::runner::Decision",
+        "guard=inject-refusal timing=in-loop on-failure=fail-closed boundary=seat::inject::Delivery",
+    ] {
+        assert!(text.lines().any(|line| line == expected), "一覧に載る: {expected}\n{text}");
+    }
+    assert_eq!(ALL.len(), 13, "母集団は 13（10 + 3）");
 }
