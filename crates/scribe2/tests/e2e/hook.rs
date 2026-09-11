@@ -1375,8 +1375,8 @@ fn marketplace_json_names_the_same_plugin_as_plugin_json() {
         market
             .matches(&format!("\"description\": \"{described}\""))
             .count(),
-        1,
-        "marketplace は plugin.json と同じ description を 1 回だけ持つ: {market}"
+        2,
+        "marketplace は plugin.json と同じ description を 2 回（marketplace 自身と plugins[0]）持つ: {market}"
     );
 
     // 個人情報・host 固有値の不在。断片から組み立てるので歯の source には字面が無い。
