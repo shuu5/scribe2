@@ -33,7 +33,13 @@
     { "@id": "../spec/constitution.html#c7" },
     { "@id": "../spec/constitution.html#c11" },
     { "@id": "../spec/constitution.html#c16" },
+    { "@id": "../spec/srs.html#FR4" },
+    { "@id": "../spec/srs.html#FR5" },
+    { "@id": "../spec/srs.html#FR15" },
+    { "@id": "../spec/srs.html#FR16" },
+    { "@id": "../spec/srs.html#FR22" },
     { "@id": "./ADR-0004-mvp-persistence-and-cross-version-formats.html" },
+    { "@id": "./ADR-0009-vessel-grants-runner-permissions-and-mutation-proof.html" },
     { "@id": "./ADR-0011-vessel-launches-claude-without-settings.html" },
     { "@id": "./ADR-0012-rate-limit-detection-reads-dedicated-record.html" },
     { "@id": "./ADR-0014-polarity-list-is-a-snapshot-rendered-by-core.html" },
@@ -63,7 +69,7 @@
   <li><a href="#s2-decision">§2. Decision</a></li>
   <li class="toc--sub"><a href="#s2-1-structure">§2.1 既定の配送構造は planner 1 席 + 管理席 N 席で、 便は pipeline が運ぶ</a></li>
   <li class="toc--sub"><a href="#s2-2-question-record">§2.2 runner は契約の不足を typed な質問 record で返して止まり、 便は Questioned の段で回答を待つ</a></li>
-  <li class="toc--sub"><a href="#s2-3-answer-authority">§2.3 回答の権限は契約の所有者 (planner) にあり、 管理席は中継だけを担う</a></li>
+  <li class="toc--sub"><a href="#s2-3-answer-authority">§2.3 回答の権限は契約の所有者 (planner) にあり、 管理席は中継だけを担う。 user の言葉は承認 event でしか記帳しない</a></li>
   <li class="toc--sub"><a href="#s2-4-headless-stays">§2.4 runner と lens は claude -p のまま。 teammate は席の中の review に限る</a></li>
   <li class="toc--sub"><a href="#s2-5-scope">§2.5 射程外</a></li>
   <li><a href="#s3-srs-proposal">§3. SRS への提案 (user の裁定事項)</a></li>
@@ -75,14 +81,14 @@
 <!-- /folio:chrome-toc -->
 
 <aside class="informative">
-<p>本 ADR は IETF <strong>RFC 2119</strong> および <strong>RFC 8174 / BCP 14</strong> に定義される MUST / SHALL / SHOULD / MAY のキーワード解釈規約に従う。 ADR は決定時点の記録であり、 改訂は新しい ADR による supersede で行う。 本 ADR の <strong>§2 は user 裁定 (2026-09-11) を受けた決定</strong>で、 <strong>§3 は SRS の改訂案</strong> (spec/ の反映は user の手番) である。</p>
+<p>本 ADR は IETF <strong>RFC 2119</strong> および <strong>RFC 8174 / BCP 14</strong> に定義される MUST / SHALL / SHOULD / MAY のキーワード解釈規約に従う。 ADR は決定時点の記録であり、 改訂は新しい ADR による supersede で行う。 本 ADR の <strong>§2 は user 裁定 (2026-09-11) を受けた決定</strong>で、 <strong>§3 は SRS の改訂案</strong> (spec/ の反映は user の手番) である。 <strong>発効条件</strong>: §2.2 / §2.3 の実装 bead は §3 の SRS 改訂 (FR30 / FR31 / AC10) が user 裁定で反映されるまで起票しない (それまで本 ADR は proposed)。</p>
 </aside>
 
 <section id="s1-context" class="informative">
 <h2>§1. Context</h2>
-<p class="section-essence" data-audience="human">要件書は「実装役と審査役は画面なしの使い捨て process で起こし、 便の並列は pipeline の便の層で作る」と描いていました。 ところが 2026-09-11 の現実は、 管理席を 3 つ並べて席が自分の手で実装し、 席の中で審査役を起こし、 同じ席が merge する形で 1 日に 32 本を main に入れました。 速い一方で、 審査の独立性は文章の約束と計画役の再実測に寄り、 計画役は context の上限で 2 回止まり、 席からの質問が届かない周がありました。 使い捨ての実装役は聞き返せないので、 契約の穴は失敗か推測にしかなりません。 user は「口座を席ごとに分けられるなら、 実装役を席の中の teammate にしてもよいのではないか」「並べる形を既定と呼ぶべきか」と問い、 調べた上で「claude -p のまま、 質問にも機械的に対応できる形に整理する方向で進める」と裁定しました。 この記録はその形を決めます。</p>
-<p data-audience="machine">SRS <a href="../spec/srs.html#FR5">FR5</a> は runner / lens を claude -p の 1 形で呼ぶと定め、 <a href="../spec/srs.html#FR4">FR4</a> は契約 1 本に worktree 1 つと runner 1 つを結ぶ。 記録時点 (2026-09-11) の実測 (<a href="../research/RESEARCH-delivery-structure.html#s2-measurements">research §2</a>): main へ merge された PR 32 本 (UTC 日付)、 うち scribe2 自身の便で pipeline を通したのは 1 本 (<code>s2-07l.46</code>・AC2 の初成立)、 残りは planner 1 席 + 管理席 3 席が worktree で自分の手で実装し、 席の中の subagent で review し、 planner の再実測と go の後に同じ席が merge した。 管理席から planner への QUESTION は 9 件 (うち契約側の誤り 6 件)、 1 件は planner の入力欄が塞がって 8 回不達 (<code>s2-07l.103</code>)、 planner は context 上限で 2 回退避した。 runner は聞き返せない (prompt template が「対話しない」と命じ、 質問を返す record の口が無い)。</p>
-<p data-audience="machine">憲法の向き: <a href="../spec/constitution.html#c16">C16</a> は逸脱を edit time で止めると定め、 <a href="../spec/constitution.html#c2">N2</a> は散文にしか無い規則を規則と扱わない。 席並列の gate の独立性は dispatch file の散文 (「lens 1 本・WF 禁止」) と planner の再実測に寄っており、 pipeline の便は write-set guard・verify 行・lens・land の CAS を構造で持つ (<a href="./ADR-0009-vessel-grants-runner-permissions-and-mutation-proof.html">ADR-0009</a>)。 記録時点の SRS は席の役割の境界を定めていない (「planner や管理席のように session をまたいで対話を続ける」と触れるだけ)。 user 裁定 (2026-09-11・会話面・逐語は台帳 <code>s2-07l.42</code> / <code>s2-07l.111</code> の notes): claude -p を使って機械的に処理できる形で question にも対応できるシステムとして整理できるならその方が良い、 その方向で進める、 検証と検討はしっかり行う。</p>
+<p class="section-essence" data-audience="human">要件書は「実装役と審査役は画面なしの使い捨て process で起こし、 便の並列は pipeline の便の層で作る」と描いていました。 ところが 2026-09-11 の現実は、 管理席を 3 つ並べて席が自分の手で実装し、 席の中で審査役を起こし、 同じ席が merge する形で 1 日に 43 本 (JST 日・merged PR) を main に入れました。 速い一方で、 審査の独立性は文章の約束と計画役の再実測に寄り、 計画役は context の上限で 2 回止まり、 席からの質問が届かない周がありました。 使い捨ての実装役は聞き返せないので、 契約の穴は失敗か推測にしかなりません。 user は「口座を席ごとに分けられるなら、 実装役を席の中の teammate にしてもよいのではないか」「並べる形を既定と呼ぶべきか」と問い、 調べた上で「claude -p のまま、 質問にも機械的に対応できる形に整理する方向で進める」と裁定しました。 この記録はその形を決めます。</p>
+<p data-audience="machine">SRS <a href="../spec/srs.html#FR5">FR5</a> は runner / lens を claude -p の 1 形で呼ぶと定め、 <a href="../spec/srs.html#FR4">FR4</a> は契約 1 本に worktree 1 つと runner 1 つを結ぶ。 記録時点 (2026-09-11) の実測 (<a href="../research/RESEARCH-delivery-structure.html#s2-measurements">research §2</a>): main へ merge された PR 43 本 (JST 日・母集団 = merged PR 60 本・UTC 日なら 33 本)、 うち scribe2 自身の便で pipeline を通したのは 1 本 (<code>s2-07l.46</code>・AC2 の初成立)、 残りは planner 1 席 + 管理席 3 席が worktree で自分の手で実装し、 席の中の subagent で review し、 planner の再実測と go の後に同じ席が merge した。 管理席から planner への QUESTION は 9 件 (うち契約側の誤り 6 件)、 1 件は planner の入力欄が塞がって 8 回不達 (<code>s2-07l.103</code>)、 planner は context 上限で 2 回退避した。 runner は聞き返せない (prompt template が「対話しない」と命じ、 質問を返す record の口が無い)。</p>
+<p data-audience="machine">憲法の向き: <a href="../spec/constitution.html#c16">C16</a> は逸脱を edit time で止めると定め、 <a href="../spec/constitution.html#c2">N2</a> は散文にしか無い規則を規則と扱わない。 席並列の gate の独立性は dispatch file の散文 (「lens 1 本・WF 禁止」) と planner の再実測に寄っており、 pipeline の便は write-set guard・verify 行・lens・land の CAS を構造で持つ (<a href="./ADR-0009-vessel-grants-runner-permissions-and-mutation-proof.html">ADR-0009</a>)。 記録時点の SRS は席の役割の境界を定めていない (「planner や管理席のように session をまたいで対話を続ける」と触れるだけ)。 user 裁定 (2026-09-11・会話面) の<strong>要旨</strong> (逐語は台帳 <code>s2-07l.42</code> / <code>s2-07l.111</code> の notes に在り、 本 file には写さない): 方向 = claude -p のまま質問にも機械的に対応できる形へ整理する。 条件 = 設計と検証を十分に行う。</p>
 </section>
 
 <section id="s2-decision" class="normative">
@@ -94,11 +100,11 @@
 
 <h3 id="s2-2-question-record">§2.2 runner は契約の不足を typed な質問 record で返して止まり、 便は Questioned の段で回答を待つ</h3>
 <p class="section-essence" data-audience="human">実装役は「この契約では作れない」と判断したら、 勝手に推測して進むのではなく、 決まった形の 1 行 (質問の record) を最後に書いて手を止めます。 器はその 1 行を読んで便を「質問中」の段に倒し、 質問の文面をそのまま記録します。 回答が記録されると、 同じ便がそこから再開します。 3 クラスの承認で使っている「止まる → 記帳 → 再開」と同じ仕組みで作ります。</p>
-<p data-audience="machine">runner SHALL 契約の不足を <strong>最終行の JSON 1 つ</strong> (<code>{"question":"&lt;1 行&gt;","about":"&lt;契約の key&gt;"}</code>・<code>about</code> は任意) で返して止まり、 その周 SHALL NOT commit を作らない。 包み (<code>&lt;NAME&gt; runner</code>) SHALL 最終行が質問 record である周を typed な rc (<code>RC_QUESTION</code>) で名乗り、 record が無い・読めない周 SHALL NOT 質問と読まず claude の rc を写す (<a href="./ADR-0012-rate-limit-detection-reads-dedicated-record.html#s2-1-record">ADR-0012 §2.1</a> と同じ「未知は claude の rc へ落ちる」)。 pipeline SHALL 段 <code>Stage::Questioned</code> と event <code>EventKind::QuestionRaised</code> (<code>detail</code> = 質問の逐語) / <code>EventKind::QuestionAnswered</code> (<code>detail</code> = 回答の逐語) を <strong>各 1 つ</strong>足し (C2「新しい理由は新 variant 1 つ」・C3.4 の完了条件は既存の <code>Completion</code> のまま増やさない)、 <code>resume</code> SHALL <code>Questioned</code> から <code>QuestionAnswered</code> が在る周だけ同じ run を再 spawn する (<code>Blocked</code> → <code>ApprovalReceived</code> と同型・回答が無い周は rc 3 で何も書かない)。 再 spawn の prompt SHALL 契約 (再読) に「回答」節 (質問と回答の逐語の対) を付ける。 質問 record を読む判定 SHALL Guard の variant 1 つ (<code>RunnerQuestion</code>・<code>InLoop</code> / <code>FailOpen</code>) として極性一覧に載る (<a href="./ADR-0014-polarity-list-is-a-snapshot-rendered-by-core.html">ADR-0014</a>・C11.2)。</p>
+<p data-audience="machine">runner SHALL 契約の不足を <strong>最終行の JSON 1 つ</strong> (<code>{"question":"&lt;1 行&gt;","about":"&lt;契約の key&gt;"}</code>・<code>about</code> は任意) で返して止まり、 その周 SHALL NOT commit を作らない。 包み (<code>&lt;NAME&gt; runner</code>) SHALL 最終行が質問 record である周を typed な rc (<code>RC_QUESTION</code>) で名乗り、 record が無い・読めない周 SHALL NOT 質問と読まず claude の rc を写す (<a href="./ADR-0012-rate-limit-detection-reads-dedicated-record.html#s2-1-signal">ADR-0012 §2.1</a> と同じ「未知は claude の rc へ落ちる」)。 pipeline SHALL 段 <code>Stage::Questioned</code> と event <code>EventKind::QuestionRaised</code> (<code>detail</code> = 質問の逐語) / <code>EventKind::QuestionAnswered</code> (<code>detail</code> = 回答の逐語) を <strong>各 1 つ</strong>足し (C2「新しい理由は新 variant 1 つ」・C3.4 の完了条件は既存の <code>Completion</code> のまま増やさない)、 宣言順の位置 SHALL <code>Stage</code> は <code>Spawned</code> の直後・<code>EventKind</code> は末尾とする (C2 の宣言順・ADR-0013 §2.2 の pin の内側)。 event log の schema 版 SHALL 1 のままとする (<a href="./ADR-0004-mvp-persistence-and-cross-version-formats.html#s2-5-schema-version">ADR-0004 §2.5</a> D-5 が版上げを求めるのは既存の行が読めなくなる変更であり、 値の追加で既存の行は読める。 古い読み手が新しい行を Err にするのは fail-closed のとおり。 ADR-0004 §2.1 の「閉じた 8 variant」は記録時点の件数で上限ではない)。 <code>resume</code> SHALL <code>Questioned</code> から <code>QuestionAnswered</code> が在る周だけ同じ run を再 spawn する (<code>Blocked</code> → <code>ApprovalReceived</code> と同型・回答が無い周は rc 3 で何も書かない)。 pipeline SHALL runner の stdout を捕らえ (記録時点の spawn は rc しか見ない)、 rc が <code>RC_QUESTION</code> (= 76・包みが claude の正常終了の後に付ける名札であり、 上限の rc 75 = 実行の中断とは別物) の周にだけ最終行を読む。 record が無い・読めない周 SHALL <code>Failed</code> へ倒す (fail-closed)。 再 spawn の prompt SHALL 契約 (再読) に「回答」節 (質問と回答の逐語の対) を付ける。 質問 record を読む判定 SHALL Guard の variant 1 つ (<code>RunnerQuestion</code>・<code>InLoop</code> / <code>FailOpen</code>) として極性一覧に載る (<a href="./ADR-0014-polarity-list-is-a-snapshot-rendered-by-core.html">ADR-0014</a>・C11.2)。</p>
 
-<h3 id="s2-3-answer-authority">§2.3 回答の権限は契約の所有者 (planner) にあり、 管理席は中継だけを担う</h3>
-<p class="section-essence" data-audience="human">質問に答えるのは契約を持っている計画役です。 係の席は質問を届けるだけで、 その場で「いいよ」と答えません。 3 クラス (消す・出す・使う) や、 憲法の閾値・裁定 id に触れる質問は、 計画役が user に上げ、 user の言葉がそのまま記録されます。 記録には「機械が答えた」か「人が答えた」かが残り、 人手ゼロの計測はこれで数えます。</p>
-<p data-audience="machine">回答 SHALL 契約の所有者 (planner 席) が記帳する (<code>pipe answer --run &lt;id&gt; --words "&lt;逐語&gt;"</code>)。 管理席 SHALL NOT 質問にその場で答えず、 pointer 1 行 (run id と <code>about</code>) を planner へ中継するだけとする。 3 クラス (A1)・憲法の閾値 (A2)・依存 (A3)・裁定 id (C5) に触れる質問 SHALL planner が user へ上げ、 user が答えた周だけ <code>actor=human</code> で記帳する (<code>--human</code>・<a href="../spec/srs.html#FR22">FR22</a> の計測面: 人由来の event は承認と回答の 2 種)。 既定の actor は <code>machine</code>。 承認の対話面は <a href="../spec/constitution.html#c7">C7</a> の R-C7-1 のままで、 本 ADR SHALL NOT 対話面を増やさない (質問は承認ではない・回答は承認 event と別の event)。</p>
+<h3 id="s2-3-answer-authority">§2.3 回答の権限は契約の所有者 (planner) にあり、 管理席は中継だけを担う。 user の言葉は承認 event でしか記帳しない</h3>
+<p class="section-essence" data-audience="human">質問に答えるのは契約を持っている計画役です。 係の席は質問を届けるだけで、 その場で「いいよ」と答えません。 3 クラス (消す・出す・使う) や、 憲法の閾値・依存・裁定 id に触れる質問は「回答」では解きません。 計画役が契約にその印を書き足してから便を再開し、 既存の承認の関門で止め、 user の言葉は承認の記録にだけ残します。 回答の記録はすべて機械由来で、 人手ゼロの計測 (承認以外 0 件) は変わりません。</p>
+<p data-audience="machine">回答 SHALL 契約の所有者 (planner 席) が記帳する (<code>pipe answer --run &lt;id&gt; --words "&lt;逐語&gt;"</code>・actor は <code>EventKind::default_actor</code> の <code>machine</code> のまま・<code>Emit</code> に actor の seam を足さない)。 管理席 SHALL NOT 質問にその場で答えず、 pointer 1 行 (run id と <code>about</code>) を planner へ中継するだけとする。 3 クラス (A1)・憲法の閾値 (A2)・依存 (A3)・裁定 id (C5) に触れる質問 SHALL NOT <code>answer</code> で解かず、 planner が契約に <code>classes</code> または裁定 id を書き足して <code>resume</code> し、 既存の承認関門 (<code>Blocked</code> → <code>pipe approve --words</code>) を通す。 user の逐語 SHALL 承認 event にだけ載る (<a href="../spec/constitution.html#c7">C7.2</a>)。 本 ADR SHALL NOT <a href="../spec/srs.html#FR22">FR22</a> (人由来の event は approval 以外 0 件) を変えない。 承認の対話面は <a href="../spec/constitution.html#c7">C7</a> の R-C7-1 のままで、 本 ADR SHALL NOT 対話面を増やさない。</p>
 
 <h3 id="s2-4-headless-stays">§2.4 runner と lens は claude -p のまま。 teammate は席の中の review に限る</h3>
 <p class="section-essence" data-audience="human">実装役と審査役は画面なしの claude -p のままにします。 口座を席ごとに分けられても、 claude -p にはほかに 4 つの理由 (設定を一切読まない形を器が強制できる・席が無くても binary から起こせる・答えを型のある記録で受け取れる・権限を毎回明示できる) が残るからです。 席の中で起こす teammate は、 席が自分の diff を review するときにだけ使います。</p>
@@ -111,7 +117,7 @@
 
 <section id="s3-srs-proposal" class="informative">
 <h2>§3. SRS への提案 (user の裁定事項)</h2>
-<p class="section-essence" data-audience="human">要件書 (SRS) は本 ADR では触れません。 反映は user が folio の編集口で行います。 ここには、 反映するなら何を足すかの案を置きます。 3 つの要件と 1 つの受入基準です。</p>
+<p class="section-essence" data-audience="human">要件書 (SRS) は本 ADR では触れません。 反映は user が folio の編集口で行います。 ここには、 反映するなら何を足すかの案を置きます。 2 つの要件と 1 つの受入基準です。</p>
 <div data-audience="machine">
 <p>記録時点の SRS (FR1–FR29・AC1–AC9) に対する改訂案。 反映は <code>/folio-architect</code> (user 手番・<code>s2-07l.61</code> と同じ経路)。 番号は仮。</p>
 <table>
@@ -119,18 +125,17 @@
   <tbody>
     <tr><td>FR30 (新)</td><td>恒常</td><td>便の既定の配送構造は planner 1 席 + 管理席 N 席とし、 管理席は契約を pipeline に流す・runner の質問を planner へ中継する・go の後に merge する の 3 つを担い、 自分の手で実装するのは pipeline が回せない便だけとする</td><td>§2.1・N-1 (自律安全)。 席の役割の境界が SRS に無い</td></tr>
     <tr><td>FR31 (新)</td><td>きっかけ</td><td>runner が契約の不足を質問 record で返したとき、 pipeline は便を Questioned の段に倒し、 質問の逐語を記帳し、 回答の記帳 (逐語付き) が在る次の resume で同じ便を再開する</td><td>§2.2・§2.3・FR16 と同型。 N-3 (記憶に頼らない)</td></tr>
-    <tr><td>FR22 (改)</td><td>恒常</td><td>「approval 以外が 0 件」を「approval と human の回答以外が 0 件」に改める</td><td>§2.3 の <code>actor=human</code> の回答を計測から漏らさない</td></tr>
     <tr><td>AC10 (新)</td><td>—</td><td>toy repo で verify 行が矛盾する契約 1 本を流し、 runner の質問 record → Questioned → planner 席の回答 (machine) → resume → Landed まで通り、 人由来の event が 0 件</td><td>§2.2 の実 run の証拠 (設計 pipeline-question.md §8 (d))</td></tr>
   </tbody>
 </table>
-<p>FR5 は不変 (§2.4)。 SRS の scope out (複数口座の自動選定・席の dashboard) も不変。</p>
+<p>FR5 と FR22 は不変 (§2.3 / §2.4)。 SRS の scope out (複数口座の自動選定・席の dashboard) も不変。</p>
 </div>
 </section>
 
 <section id="s4-consequences" class="informative">
 <h2>§4. Consequences</h2>
-<p class="section-essence" data-audience="human">良い面は、 審査の独立性が文章の約束でなく pipeline の構造に戻ること、 計画役に集まっていた再実測の仕事が機械の gate に移ること、 実装役の「分からない」が失敗ではなく質問として残ること、 口座を席ごとに分ける今の形をそのまま使えることです。 悪い面は、 段と event と rc が 1 つずつ増えること、 質問が上がるたびに計画役の手番が 1 回入ること (便は止まって待つ)、 席の仕事が減る分だけ移行期の速さ (1 日 32 本) は落ちうることです。 移行期の席並列を今すぐ止めるわけではなく、 質問の口が実装されてから席の仕事を切り替えます。</p>
-<p data-audience="machine">Positive: gate の独立性が pipeline の構造 (write-set guard・verify 行・lens・CAS) に戻り、 dispatch の散文と planner の再実測に寄らない (C16 / N2 の向き)。 planner の律速が契約・裁定・回答に絞られる。 契約の穴が <code>QuestionRaised</code> として typed に残り、 修正の向き (契約側) が記録から読める。 口座分離は席の層のまま (run は親の口座を継承)。 承認 (Blocked) と同型なので機構の追加は段 1・event 2・rc 1・Guard 1 に閉じる。</p>
+<p class="section-essence" data-audience="human">良い面は、 審査の独立性が文章の約束でなく pipeline の構造に戻ること、 計画役に集まっていた再実測の仕事が機械の gate に移ること、 実装役の「分からない」が失敗ではなく質問として残ること、 口座を席ごとに分ける今の形をそのまま使えることです。 悪い面は、 段と event と終了コードが 1 つずつ増え、 pipeline が実装役の出力を読む口が 1 つ増えること、 質問が上がるたびに計画役の手番が 1 回入ること (便は止まって待つ)、 席の仕事が減る分だけ移行期の速さ (1 日 43 本) は落ちうることです。 移行期の席並列を今すぐ止めるわけではなく、 質問の口が実装されてから席の仕事を切り替えます。</p>
+<p data-audience="machine">Positive: gate の独立性が pipeline の構造 (write-set guard・verify 行・lens・CAS) に戻り、 dispatch の散文と planner の再実測に寄らない (C16 / N2 の向き)。 planner の律速が契約・裁定・回答に絞られる。 契約の穴が <code>QuestionRaised</code> として typed に残り、 修正の向き (契約側) が記録から読める。 口座分離は席の層のまま (run は親の口座を継承)。 承認 (Blocked) と同型なので機構の追加は段 1・event 2・rc 1・Guard 1 と runner stdout の捕捉に閉じる。 user の言葉は承認 event にだけ載り FR22 は変わらない。</p>
 <p data-audience="machine">Negative (受け入れるコスト): 質問のたびに便が止まり planner の手番を 1 回要する (質問が多い契約は遅い＝契約の質が速度に直結する)。 移行期の速さ (席が手で実装する形) は既定では出ない。 管理席の仕事が中継と merge に減り、 席の context は軽くなるが席数分の運用費 (cycle / tick) は残る。 SRS の改訂 (§3) は user 手番で、 それまで本 ADR は proposed のまま実装 bead を切らない (設計 pipeline-question.md の契約 (a)〜(d) は裁定後)。</p>
 </section>
 
@@ -140,6 +145,7 @@
 <p data-audience="machine">(A) <strong>席並列を既定として定義する</strong> (管理席 N が自分の手で実装・席の subagent で review・同じ席が merge)。 却下: gate の独立性が散文 (dispatch file) と planner の再実測に寄り、 C16 / N2 に反する向き。 planner が律速になり、 席を増やすほど悪化する (research §2 の実測)。 移行期の足場としては残す (§2.1)。</p>
 <p data-audience="machine">(B) <strong>runner を teammate (Agent tool の subagent) にして親へ text で聞き返す</strong>。 却下: settings 不読の強制 (ADR-0011)・無 session での起動・typed な判定入力 (ADR-0012)・毎回明示の権限 (ADR-0009 / 0010) の 4 差を失い、 判定入力が自由文になる (C3.3 の向き)。 口座分離が席の層で達成できることは、 この 4 差を埋めない (research §4)。</p>
 <p data-audience="machine">(C) <strong>質問を gate の FAIL で代用する</strong>。 却下: 契約の穴が「実装の失敗」として記録され、 契約側を直す向きが judgment に残る。 FR22 の計測で人の関与 (回答) が見えない。</p>
+<p data-audience="machine">(E) <strong>user が答えた質問を <code>QuestionAnswered(actor=human)</code> で記帳する</strong> (本 ADR の初稿)。 却下: 承認を承認 event の外に置く形で C7.2 に反し、 <code>classes</code> が空の契約は spawn の承認関門 (<code>Approval::judge</code>・classes 空なら常に Granted) を通らないので、 A3 の質問に user が答えて resume する経路が関門を素通りする。 §2.3 の経路に改めた。</p>
 <p data-audience="machine">(D) <strong>管理席がその場で答える</strong>。 却下: 契約の SSOT は planner が持ち (台帳の契約・C15.2)、 席が答えると契約と実装が別の言葉を持つ。 中継に限る (§2.3)。 <strong>(D')</strong> 質問を <code>Blocked</code> に相乗りさせる案も却下: 承認 (人由来・3 クラス) と質問 (機械由来が既定・契約の不足) は意味も actor も違い、 同じ段に載せると FR22 の計測が混ざる。</p>
 </section>
 
@@ -147,9 +153,10 @@
 <h2>§6. Trace</h2>
 <p class="section-essence" data-audience="human">出所は、 user の問いと裁定、 その日の実測 (合流した本数・pipeline を通した本数・質問の件数・計画役の詰まり)、 そして実装役と審査役の起動の形を決めた過去の記録です。</p>
 <ul data-audience="machine">
-  <li>user の問いと裁定 (2026-09-11・会話面・planner 席): 席並列は本来の動きか／既定として定義すべきか／口座分離が要らないなら teammate か → 「claude -p のまま質問にも機械的に対応できる形に整理する方向で進める」。 逐語は台帳 <code>s2-07l.42</code> / <code>s2-07l.111</code> の notes (tracked file には写さない)。</li>
-  <li>実測 (同日・<a href="../research/RESEARCH-delivery-structure.html#s2-measurements">research §2</a>): merged PR 32 本・pipeline を通した便 1 本 (<code>s2-07l.46</code>)・QUESTION 9 件 (契約側 6)・不達 8 回 (<code>s2-07l.103</code>)・planner 退避 2 回・rebase 衝突 1 便 3 file 6 区間 (<code>s2-07l.95</code>)。</li>
+  <li>user の問いと裁定 (2026-09-11・会話面・planner 席): 席並列は本来の動きか／既定として定義すべきか／口座分離が要らないなら teammate か → 裁定の要旨は §1 (方向 = claude -p のまま質問にも機械的に対応できる形へ整理する)。 逐語は台帳 <code>s2-07l.42</code> / <code>s2-07l.111</code> の notes (tracked file には写さない)。</li>
+  <li>実測 (同日・<a href="../research/RESEARCH-delivery-structure.html#s2-measurements">research §2</a>): merged PR 43 本 (JST 日・母集団 60)・pipeline を通した便 1 本 (<code>s2-07l.46</code>)・QUESTION 9 件 (契約側 6)・不達 8 回 (<code>s2-07l.103</code>)・planner 退避 2 回・rebase 衝突 1 便 3 file 6 区間 (<code>s2-07l.95</code>)。</li>
   <li>runner が聞き返せない現物 (同日): <code>crates/&lt;NAME&gt;/src/headless/runner.txt</code>「対話しない。 人へ質問を返さず」・質問 record の口は無い。 lens の verdict は最終行の JSON (<code>lens.txt</code>) で、 §2.2 は同じ置き場を使う。</li>
+  <li>spawn が runner の stdout を捕らえていない現物 (同日): <code>crates/&lt;NAME&gt;/src/pipe/spawn.rs</code> の <code>Command::new("sh")</code> は <code>Stdio</code> を指定せず rc だけを settle へ渡す。 lens は <code>gate.rs</code> の <code>ask_lens</code> が piped で読む＝§2.2 は runner 側にも同じ捕捉を足す。 承認関門の現物 (同日): <code>pipe/approve.rs</code> の <code>Approval::judge</code> は classes が空なら Granted＝§2.3 の経路の根拠。</li>
   <li>承認の同型 (既存): <code>Stage::Blocked</code> / <code>EventKind::ApprovalRequested</code> / <code>ApprovalReceived</code> / <code>pipe approve --words</code> / <code>resume</code> の <code>Blocked</code> 分岐 (<code>crates/&lt;NAME&gt;/src/pipe/approve.rs</code>・<code>cli.rs</code>)。 §2.2 はこれを写す。</li>
   <li>起動形と判定入力の先行決定: <a href="./ADR-0009-vessel-grants-runner-permissions-and-mutation-proof.html">ADR-0009</a> (権限は manifest から)・<a href="./ADR-0011-vessel-launches-claude-without-settings.html">ADR-0011</a> (settings を 1 つも読まない)・<a href="./ADR-0012-rate-limit-detection-reads-dedicated-record.html">ADR-0012</a> (record は専用種別・未知は claude の rc へ)・<a href="./ADR-0014-polarity-list-is-a-snapshot-rendered-by-core.html">ADR-0014</a> (Guard の足し方)。</li>
   <li>設計: <code>docs/design/pipeline-question.md</code> (質問 record の schema・段と event・subcommand・席の役割・極性・歯・却下案)。</li>

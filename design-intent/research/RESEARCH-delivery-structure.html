@@ -79,7 +79,7 @@
 <table data-audience="machine">
   <thead><tr><th>項目</th><th>値</th><th>母集団・出所</th></tr></thead>
   <tbody>
-    <tr><td>main へ merge された PR</td><td>32 本</td><td>GitHub の merged 日付が 2026-09-11 (UTC) の PR。 planner が <code>gh pr list --state merged</code> で数えた</td></tr>
+    <tr><td>main へ merge された PR</td><td>43 本 (JST 日) ／ 33 本 (UTC 日)</td><td>GitHub の merged 時刻を JST / UTC の日付で数えた (母集団 = <code>gh pr list --state merged</code> の直近 60 本)。 日付の境界で 10 本動く</td></tr>
     <tr><td>main の commit</td><td>43 本</td><td><code>git log</code>・2026-09-11 00:00 (JST) 以降の origin/main</td></tr>
     <tr><td>席の構成</td><td>planner 1 + 管理席 3</td><td>tmux の窓 (各席 1 口座・口座名は書かない)</td></tr>
     <tr><td>scribe2 自身の便で pipeline (intake → spawn → gate → land) を通した本数</td><td>1 本 (<code>s2-07l.46</code>・AC2 の初成立)</td><td>fleet の event log と管理席の報告。 残りの便は席が worktree で自分の手で実装し、 席の中の Agent tool の subagent (lens) で review した</td></tr>
@@ -92,7 +92,7 @@
     <tr><td>gate の独立性の担保</td><td>散文 (dispatch file の「lens 1 本・WF 禁止」) + planner の再実測</td><td>席が実装した便の review は席自身が起こした subagent で、 merge も同じ席が押す。 pipeline の便では write-set guard・verify 行・lens が構造で在る (<a href="../decisions/ADR-0009-vessel-grants-runner-permissions-and-mutation-proof.html">ADR-0009</a>)</td></tr>
   </tbody>
 </table>
-<p data-audience="machine">読み方: 席並列は 1 日で 32 本を land させた (速い)。 一方で pipeline を通した便は 1 本で、 gate の独立性は構造でなく散文と planner の再実測に寄っている。 planner は全 PR の再実測と go を担い、 context の上限で 2 回止まり、 席からの QUESTION は入力欄の詰まりで届かない周があった。 runner は聞き返せないため、 契約の穴 (9 件中 6 件) は pipeline では gate の FAIL か黙った推測として現れるはずで、 席経由では QUESTION として上がった。</p>
+<p data-audience="machine">読み方: 席並列は 1 日 (JST) で 43 本の PR を land させた。 一方で pipeline を通した便は 1 本で、 gate の独立性は構造でなく散文と planner の再実測に寄っている。 planner は全 PR の再実測と go を担い、 context の上限で 2 回止まり、 席からの QUESTION は入力欄の詰まりで届かない周があった。 runner は聞き返せないため、 契約の穴 (9 件中 6 件) は pipeline では gate の FAIL か黙った推測として現れるはずで、 席経由では QUESTION として上がった。</p>
 </section>
 
 <section id="s3-comparison" class="informative">
@@ -107,7 +107,7 @@
     <tr><td>費用</td><td>席は常時 context を持つ。 cycle と tick の運用費が席数分</td><td>runner は便ごとに使い捨て。 席の費用は planner 1 つ分</td><td>席数分の運用費は残るが、 席の context は契約と中継だけで軽い</td></tr>
     <tr><td>口座分離の層</td><td>席ごと (1 席 1 口座)</td><td>run ごと (<code>--account-dir</code>・渡さなければ親の口座)</td><td>席ごと。 run は親 (席) の口座を継承する (記録時点の <code>s2-07l.46</code> の形)</td></tr>
     <tr><td>聞き返し</td><td>席から planner へ QUESTION (注入・不達の周あり)</td><td>無い (runner は対話しない)。 契約の穴は gate の FAIL か黙った推測</td><td>runner が typed な record で質問を返し、 席が planner へ中継する口を足せば可 (未実装・ADR-0016 §2.2)</td></tr>
-    <tr><td>憲法の向き</td><td>C16 (edit time で止める)・N2 (散文の規則は規則ではない) の両方と緊張</td><td>C16 / N2 の向きに合う。 C3.4 (完了条件は 1 enum) は Stage で充足</td><td>(B) と同じ。 席の役割を SRS に書く必要がある (記録時点の SRS は席の役割を定めていない)</td></tr>
+    <tr><td>C16 (edit time で止める) / N2 (散文の規則は規則ではない) が求める「構造で止める」の充足面</td><td>散文 (dispatch file) + 再実測</td><td>構造 (guard・verify 行・lens・CAS)</td><td>構造 (便は pipeline)。 席の役割は記録時点の SRS に無い</td></tr>
   </tbody>
 </table>
 </section>
@@ -128,7 +128,7 @@
     <tr><td>記録時点の用途</td><td>席の中の review (lens-NN)</td><td>pipeline の runner / lens</td></tr>
   </tbody>
 </table>
-<p data-audience="machine">口座分離を席の層で達成した場合に残る差は、 settings 不読の強制・無 session での起動・typed な判定入力・毎回明示の権限の 4 つである。 teammate 化は「口座分離が要らない」だけでは正当化されない (ADR-0016 §4 (B))。</p>
+<p data-audience="machine">口座分離を席の層で達成した場合に残る差は、 settings 不読の強制・無 session での起動・typed な判定入力・毎回明示の権限の 4 つである (採否は ADR-0016 §5 (B))。</p>
 </section>
 
 <section id="s5-open" class="informative">
