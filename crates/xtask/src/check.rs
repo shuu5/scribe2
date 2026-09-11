@@ -144,6 +144,7 @@ pub fn inspect(root: &Path) -> Report {
     measured.push(crate::claude_md::measure(&layout));
     measured.push(crate::enum_slices::measure(&files));
     measured.push(crate::spawn_points::measure(&layout, &files));
+    measured.push(crate::polarity::measure(&layout));
     fold(measured)
 }
 
@@ -455,6 +456,12 @@ mod tests {
             &format!("crates/{FIXTURE_CORE}/src/headless/mod.rs"),
             "pub fn build(claude: &str) -> std::process::Command {\n    let mut cmd = std::process::Command::new(claude);\n    cmd.arg(\"--setting-sources\").arg(\"\").arg(\"--strict-mcp-config\");\n    cmd\n}\n",
         );
+        // 極性一覧の snapshot も同じ（polarity は不在を違反に倒す・`s2-07l.25`）。
+        write_at(
+            dir,
+            &format!("crates/{FIXTURE_CORE}/{}", crate::polarity::SNAPSHOT_REL),
+            "---\nsource: x\nexpression: form\n---\nguard=a timing=in-loop on-failure=fail-closed boundary=m::A\npolarity: guards=1 in-loop=1 post-hoc=0 fail-open=0\n",
+        );
     }
 
     /// rules manifest の相対 path。
@@ -569,7 +576,7 @@ mod tests {
         test-src-ratio=<v>/<v> name-literal=<v> manifest-name=<v> manifest-version=<v>.<v>.<v> \
         lints-set=<v> lints-optin=<v>/<v> deps-empty=<v> toolchain-pin=<v>.<v>.<v> \
         paths-clean=<v> private-clean=<v> non-rust-exec=<v>/<v> allow=<v> ci-shell-lines=<v> \
-        claude-md-constitution=<v> enum-slices=<v> claude-spawn-points=<v>";
+        claude-md-constitution=<v> enum-slices=<v> claude-spawn-points=<v> polarity=<v>/<v>";
 
     /// git を要する measure の fact（`.git` の無い木では測れない形になり、副 field も出ない）。
     fn is_git_fact(token: &str) -> bool {

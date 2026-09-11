@@ -13,11 +13,18 @@
 //! 取り返しがつかない。答えるのは `Bash` の周だけで、それ以外は **0 byte で黙る**
 //! （FR24＝Claude Code の既定の問いへ戻す。器が答える筋合いの無い承認まで奪わない）。
 
+use crate::polarity::{OnFailure, Polarity, Timing};
 use crate::fleet::json_lite;
 use crate::name::NAME;
 
 /// 器が答える tool。内蔵 guard の問いのうち引き受けるのは `Bash` だけである。
 const ANSWERED: &str = "Bash";
+
+/// この境界の極性: 問いの時点で答え、allow を返す経路が無い（止める側へしか倒れない）。
+pub const POLARITY: Polarity = Polarity {
+    timing: Timing::InLoop,
+    on_failure: OnFailure::FailClosed,
+};
 
 /// 承認の問いへの答え。**`Allow` という variant を持たない**のが本 enum の要点である。
 #[derive(Debug, Clone, PartialEq, Eq)]

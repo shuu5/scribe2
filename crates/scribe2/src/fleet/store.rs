@@ -4,6 +4,7 @@
 //! 全件 error にする**（SRS NFR4 の fail-closed）。lock の再試行と stale の線は
 //! 数値を焼かず rules 行から読む（憲法 C1 / C5）。
 
+use crate::polarity::{OnFailure, Polarity, Timing};
 use super::Event;
 use crate::rules::manifest::Manifest;
 use crate::rules::RuleValue;
@@ -18,6 +19,12 @@ const ROW_RETRY: &str = "fleet.lock_retry_ms";
 const ROW_STALE: &str = "fleet.lock_stale_ms";
 /// lock の取り直しの間隔。
 const RETRY_TICK: Duration = Duration::from_millis(5);
+
+/// この境界の極性（[`StoreError`]）: 書込の時点で lock を取り、取れない・読めない周は書かず error にする。
+pub const POLARITY: Polarity = Polarity {
+    timing: Timing::InLoop,
+    on_failure: OnFailure::FailClosed,
+};
 
 /// store の失敗。極性は fail-closed（C11.2）。
 #[derive(Debug, Clone, PartialEq, Eq)]
