@@ -12,6 +12,7 @@ use std::process::{Command, Output};
 use std::thread::sleep;
 use std::time::{Duration, Instant, SystemTime};
 use vessel::cli_outcome::{RC_OK, RC_REFUSED};
+use vessel::name::NAME;
 use vessel::rules::manifest::Manifest;
 use vessel::seat::inject::tick_path;
 use vessel::seat::meter::{cap_of, window_of};
@@ -1123,6 +1124,18 @@ fn seat_dir_of(state: &Path, target: &str) -> PathBuf {
     state.join("seat").join(target)
 }
 
+/// 打刻の成功行と tick の記録の末尾に載る**置き場の出所**（契約の字面から組む）。
+fn provenance(state: &Path, source: &str) -> String {
+    format!(" state_dir={} source={source}", state.display())
+}
+
+/// 成功行の `state_dir=` の値を切り出す（`source=` の直前まで）。
+fn state_dir_in(line: &str) -> Option<PathBuf> {
+    let (_, rest) = line.split_once(" state_dir=")?;
+    let (path, _) = rest.split_once(" source=")?;
+    Some(PathBuf::from(path))
+}
+
 /// PATH の先頭に「呼ばれたら印を残して失敗する tmux」を置いて `seat` を 1 回撃つ。
 ///
 /// 「1 key も送らない」「tmux を叩かない」は**触れたら分かる形**でしか測れない: 存在しない
@@ -1273,9 +1286,16 @@ fn seat_heartbeat_touches_seat_file() {
 
     let out = run_seat(&["heartbeat", "--target", "seatbeat:0.0", "--state-dir", &state_s]);
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
-    assert_eq!(stdout_of(&out), "seat: heartbeat target=seatbeat_0.0\n");
+    assert_eq!(
+        stdout_of(&out),
+        format!("seat: heartbeat target=seatbeat_0.0{}\n", provenance(&state, "flag")),
+        "成功行は打刻先と、その解決の出所（--state-dir）を持つ"
+    );
     assert_eq!(stderr_of(&out), "", "成立した周は stderr へ 1 byte も書かない");
     assert!(marker.exists(), "打刻 file が在る");
+    // A/B: 行が名乗る置き場から組んだ marker が、実際に書かれた marker と 1 対 1 で一致する。
+    let claimed = state_dir_in(stdout_of(&out).trim_end()).map(|d| seat_dir_of(&d, "seatbeat_0.0").join("heartbeat"));
+    assert_eq!(claimed.as_deref(), Some(marker.as_path()), "行の path と実体の親 dir が一致する");
 
     backdate(&marker, 600);
     let before = mtime_of(&marker);
@@ -1288,6 +1308,58 @@ fn seat_heartbeat_touches_seat_file() {
     assert_eq!(rc_of(&out), i32::from(RC_REFUSED));
     assert!(stderr_of(&out).starts_with("usage: seat "), "{}", stderr_of(&out));
     assert!(!dir.join("seat").exists(), "cwd に置き場を作らない");
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// `--state-dir` が無い周は **tmp repo** の git 設定から置き場を解き、行と記録に
+/// `source=git-config` と解いた path を出す（anchor の設定は触らない）。
+///
+/// 出所の事故（2026-09-10・planner 席）: 設定が死んだ dir を指していても rc 0 の成功行が出る。
+/// 席側の打刻行と tick 側の記録を並べるだけで別の dir を見ていると分かる形にする。
+#[test]
+fn seat_heartbeat_and_tick_resolve_state_dir_from_git_config() {
+    let dir = tmp();
+    let repo = dir.join("repo");
+    let state = dir.join("state-from-config");
+    fs::create_dir_all(&repo).ok();
+    let init = Command::new("git").args(["-C"]).arg(&repo).args(["init", "-q"]).output();
+    assert!(init.is_ok_and(|out| out.status.success()), "tmp repo を作れる");
+    let set = Command::new("git")
+        .arg("-C")
+        .arg(&repo)
+        .args(["config", &format!("{NAME}.stateDir")])
+        .arg(&state)
+        .output();
+    assert!(set.is_ok_and(|out| out.status.success()), "tmp repo に置き場を設定できる");
+    let marker = seat_dir_of(&state, "seatgit").join("heartbeat");
+
+    let out = run_seat_in(&repo, &["heartbeat", "--target", "seatgit"]);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(
+        stdout_of(&out),
+        format!("seat: heartbeat target=seatgit{}\n", provenance(&state, "git-config")),
+        "git 設定から解いた周は source=git-config"
+    );
+    assert!(marker.exists(), "打刻は設定が指す dir に落ちる");
+    let claimed = state_dir_in(stdout_of(&out).trim_end()).map(|d| seat_dir_of(&d, "seatgit").join("heartbeat"));
+    assert_eq!(claimed.as_deref(), Some(marker.as_path()), "行の path と実体の親 dir が一致する");
+
+    // 同じ設定から解く tick は、直前の打刻で fresh＝tmux を叩かずに noop。記録にも同じ 2 語が載る。
+    let (wm_s, sock_s) = (dir.join("wm").display().to_string(), dir.join("absent-sock").display().to_string());
+    let out = run_seat_in(&repo, &["tick", "--target", "seatgit", "--wm-dir", &wm_s, "--tmux-socket", &sock_s]);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(
+        stdout_of(&out),
+        format!("seat: tick decision=noop reason=heartbeat-fresh{}\n", provenance(&state, "git-config"))
+    );
+    let recorded = fs::read_to_string(tick_file(&state, "seatgit")).unwrap_or_default();
+    assert!(
+        recorded.contains(&format!(
+            r#""what":"decision=noop reason=heartbeat-fresh{}""#,
+            provenance(&state, "git-config")
+        )),
+        "記録の what にも置き場と出所が載る: {recorded}"
+    );
     fs::remove_dir_all(&dir).ok();
 }
 
@@ -1391,28 +1463,33 @@ fn seat_tick_noop_reasons_in_fixed_order() {
             args.push(&pane_s);
         }
         let (out, touched) = run_seat_probed(&dir, &args);
-        assert_tick_case(&out, touched, case, at);
+        assert_tick_case(&out, touched, case, at, &state);
         let recorded = fs::read_to_string(tick_file(&state, target)).unwrap_or_default();
         assert_eq!(recorded.lines().count(), 1, "組 {at}: 記録は 1 行: {recorded}");
         assert!(recorded.contains(r#""who":"seat-tick""#), "組 {at}: {recorded}");
         assert!(
             recorded.contains(&format!(
-                r#""what":"decision=noop reason={}{}""#,
-                case.reason, case.context
+                r#""what":"decision=noop reason={}{}{}""#,
+                case.reason,
+                case.context,
+                provenance(&state, "flag")
             )),
-            "組 {at}: 判定を残す（context の列も記録に載る）: {recorded}"
+            "組 {at}: 判定を残す（context の列と置き場の出所も記録に載る）: {recorded}"
         );
         fs::remove_dir_all(&dir).ok();
     }
 }
 
 /// 1 組の判定を見る。
-fn assert_tick_case(out: &Output, touched: bool, case: &TickCase, at: usize) {
+fn assert_tick_case(out: &Output, touched: bool, case: &TickCase, at: usize, state: &Path) {
     let (reason, context) = (case.reason, case.context);
     assert_eq!(rc_of(out), i32::from(RC_OK), "組 {at}: stderr={}", stderr_of(out));
     assert_eq!(
         stdout_of(out),
-        format!("seat: tick decision=noop reason={reason}{context}\n"),
+        format!(
+            "seat: tick decision=noop reason={reason}{context}{}\n",
+            provenance(state, "flag")
+        ),
         "組 {at}"
     );
     assert_eq!(
@@ -1443,7 +1520,7 @@ fn seat_tick_injects_pointer_and_stamps_on_isolated_socket() {
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
     assert_eq!(
         stdout_of(&out),
-        format!("seat: tick decision=inject target={name} consumed=true kind=pointer{CTX_NO_SOURCE}\n")
+        format!("seat: tick decision=inject target={name} consumed=true kind=pointer{CTX_NO_SOURCE}{}\n", provenance(&state, "flag"))
     );
     let pane = capture(&socket, name);
     assert!(
@@ -1456,7 +1533,7 @@ fn seat_tick_injects_pointer_and_stamps_on_isolated_socket() {
     let out = run_seat(&args);
     assert_eq!(
         stdout_of(&out),
-        "seat: tick decision=noop reason=heartbeat-fresh\n",
+        format!("seat: tick decision=noop reason=heartbeat-fresh{}\n", provenance(&state, "flag")),
         "自分の打刻で fresh になる（注入の直後に撃ち続けない）"
     );
     // 打刻を閾値の外へ倒すと、また撃つ側に戻る（fresh が「打刻が在る」ではなく経過で決まる）。
@@ -1464,7 +1541,7 @@ fn seat_tick_injects_pointer_and_stamps_on_isolated_socket() {
     let out = run_seat(&args);
     assert_eq!(
         stdout_of(&out),
-        format!("seat: tick decision=inject target={name} consumed=true kind=pointer{CTX_NO_SOURCE}\n")
+        format!("seat: tick decision=inject target={name} consumed=true kind=pointer{CTX_NO_SOURCE}{}\n", provenance(&state, "flag"))
     );
     // socket を消す**前**に畳む（消してからでは kill-session が届かない・実測 2026-09-10）。
     drop(guard);
@@ -1506,7 +1583,7 @@ fn seat_tick_injects_externalize_pointer_when_context_reaches_cap_while_busy() {
         assert_eq!(rc_of(&out), i32::from(RC_OK), "{pct}%: stderr={}", stderr_of(&out));
         assert_eq!(
             stdout_of(&out),
-            format!("seat: tick decision=inject target={name} consumed=true kind=externalize context={pct}\n"),
+            format!("seat: tick decision=inject target={name} consumed=true kind=externalize context={pct}{}\n", provenance(&state, "flag")),
             "{pct}%"
         );
         let seen = capture(&socket, name);
@@ -1519,15 +1596,16 @@ fn seat_tick_injects_externalize_pointer_when_context_reaches_cap_while_busy() {
         let recorded = fs::read_to_string(tick_file(&state, name)).unwrap_or_default();
         assert!(
             recorded.contains(&format!(
-                r#""what":"decision=inject target=seatovercap consumed=true kind=externalize context={pct}""#
+                r#""what":"decision=inject target=seatovercap consumed=true kind=externalize context={pct}{}""#,
+                provenance(&state, "flag")
             )),
-            "{pct}%: 記録にも kind と context が載る: {recorded}"
+            "{pct}%: 記録にも kind と context と置き場の出所が載る: {recorded}"
         );
 
         let out = run_seat(&args);
         assert_eq!(
             stdout_of(&out),
-            "seat: tick decision=noop reason=heartbeat-fresh\n",
+            format!("seat: tick decision=noop reason=heartbeat-fresh{}\n", provenance(&state, "flag")),
             "{pct}%: 自分の打刻で fresh になる（同じ席へ周ごとに再注入しない・context も読まない）"
         );
         // socket を消す**前**に畳む（消してからでは kill-session が届かない・実測 2026-09-10）。
@@ -1563,7 +1641,10 @@ fn seat_tick_does_not_inject_below_cap_when_nothing_else_stops_it() {
     );
 
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
-    assert_eq!(stdout_of(&out), "seat: tick decision=noop reason=busy context=59\n");
+    assert_eq!(
+        stdout_of(&out),
+        format!("seat: tick decision=noop reason=busy context=59{}\n", provenance(&state, "flag"))
+    );
     assert!(!touched, "cap 未満の busy な席には 1 key も送らない（tmux を撃たない）");
     fs::remove_dir_all(&dir).ok();
 }
@@ -1621,7 +1702,7 @@ fn seat_tick_reports_context_when_busy_below_cap() {
         let state = prepare_tick_case(&dir, &case, target);
         fs::write(dir.join("pane.txt"), &pane).ok();
         let (out, touched) = run_tick_case(&dir, &case, target, &state);
-        assert_tick_case(&out, touched, &case, 0);
+        assert_tick_case(&out, touched, &case, 0, &state);
         fs::remove_dir_all(&dir).ok();
     }
 }
@@ -1642,7 +1723,7 @@ fn seat_tick_proceeds_with_unmeasured_context_without_statusline() {
         let dir = tmp();
         let state = prepare_tick_case(&dir, &case, target);
         let (out, touched) = run_tick_case(&dir, &case, target, &state);
-        assert_tick_case(&out, touched, &case, at);
+        assert_tick_case(&out, touched, &case, at, &state);
         fs::remove_dir_all(&dir).ok();
     }
 }
@@ -1658,7 +1739,7 @@ fn seat_tick_does_not_read_context_when_fresh() {
     let dir = tmp();
     let state = prepare_tick_case(&dir, &case, target);
     let (out, touched) = run_tick_case(&dir, &case, target, &state);
-    assert_tick_case(&out, touched, &case, 0);
+    assert_tick_case(&out, touched, &case, 0, &state);
     fs::remove_dir_all(&dir).ok();
 }
 
@@ -1684,7 +1765,7 @@ fn seat_tick_falls_through_to_wm_when_parked_over_cap() {
         let dir = tmp();
         let state = prepare_tick_case(&dir, case, target);
         let (out, touched) = run_tick_case(&dir, case, target, &state);
-        assert_tick_case(&out, touched, case, at);
+        assert_tick_case(&out, touched, case, at, &state);
         fs::remove_dir_all(&dir).ok();
     }
 }
@@ -1807,7 +1888,7 @@ fn seat_tick_ignores_short_wm_like_names() {
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
     assert_eq!(
         stdout_of(&out),
-        format!("seat: tick decision=noop reason=cycle-live{CTX_10}\n"),
+        format!("seat: tick decision=noop reason=cycle-live{CTX_10}{}\n", provenance(&state, "flag")),
         "短すぎる名前は自席の退避物に数えない＝3 を通って 4 で止まる"
     );
     // 表示の完全一致だけでは 1 段しか測れない（`wm-unconsumed` を除く assert は上の
@@ -2160,8 +2241,8 @@ fn seat_tick_runs_cycle_when_parked() {
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
     assert_eq!(
         stdout_of(&out),
-        format!("seat: tick decision=noop reason=wm-unconsumed{CTX_NO_SOURCE} cycle=done\n"),
-        "判定は noop のまま・context の後ろに cycle を回したことを足す"
+        format!("seat: tick decision=noop reason=wm-unconsumed{CTX_NO_SOURCE} cycle=done{}\n", provenance(&state, "flag")),
+        "判定は noop のまま・context の後ろに cycle を回したことを足す（置き場の出所は最後）"
     );
     assert_eq!(
         fs::read_to_string(&log).unwrap_or_default(),
@@ -2194,7 +2275,7 @@ fn seat_tick_reads_current_running_panes_as_busy() {
         let dir = tmp();
         let state = prepare_tick_case(&dir, &case, target);
         let (out, touched) = run_tick_case(&dir, &case, target, &state);
-        assert_tick_case(&out, touched, &case, at);
+        assert_tick_case(&out, touched, &case, at, &state);
         fs::remove_dir_all(&dir).ok();
     }
 }
@@ -2210,7 +2291,7 @@ fn seat_tick_reads_finished_pane_with_tall_statusline_as_idle() {
         let dir = tmp();
         let state = prepare_tick_case(&dir, &case, target);
         let (out, touched) = run_tick_case(&dir, &case, target, &state);
-        assert_tick_case(&out, touched, &case, at);
+        assert_tick_case(&out, touched, &case, at, &state);
         fs::remove_dir_all(&dir).ok();
     }
 }
@@ -2235,7 +2316,7 @@ fn seat_tick_above_region_is_exactly_six_nonempty_lines() {
         let state = prepare_tick_case(&dir, &case, target);
         fs::write(dir.join("pane.txt"), &pane).ok();
         let (out, touched) = run_tick_case(&dir, &case, target, &state);
-        assert_tick_case(&out, touched, &case, fillers);
+        assert_tick_case(&out, touched, &case, fillers, &state);
         fs::remove_dir_all(&dir).ok();
     }
 }
