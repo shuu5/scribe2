@@ -347,8 +347,6 @@ fn record_verify(entry: &Gate<'_>, worktree: &Path, base: &str) -> Result<(u64, 
     let mut red = 0;
     // 段①が読めなかった周（rc -1）は**赤に数えない**——record は残す（現物を消さない）が、
     // 判定は「測れなかった」側へ倒す（`s2-07l.65`）。
-    // 位置（`CHECKS` の宣言順）ではなく **段の名と rc** で見る（順序が変わっても診断が黙って消えない）。
-    let is_unreadable = |step: &Step| step.cmd == WRITE_SET_CMD && step.rc == -1;
     let unreadable = steps.iter().any(is_unreadable);
     for (index, step) in steps.iter().enumerate() {
         let number = index as u64 + 1;
@@ -392,6 +390,16 @@ fn frozen_common(entry: &Gate<'_>) -> Result<Vec<String>, String> {
 fn append_stderr(path: &Path, policy: LockPolicy, head: &str, stderr: &str) -> Result<(), String> {
     append_line(path, &format!("{head}\n{stderr}"), policy).map_err(|err| err.to_string())?;
     Ok(())
+}
+
+/// 段①（write-set 照合）を**読めなかった**段か（`s2-07l.65`）。
+///
+/// 位置（`CHECKS` の宣言順）ではなく **段の名と rc** で見る（順序が変わっても診断が黙って消えない）。
+/// rc だけで見ない: 撃った sh が signal で死んだ周も `code()` が無く -1 になる（[`recorded_rc`]）ので、
+/// rc -1 の全数を「読めなかった」に倒すと**走って死んだ赤**が「測れなかった」に化ける。
+/// gate と land が**同じ 1 本**で判定する（極性を 2 面に持たない・`s2-07l.103`）。
+pub fn is_unreadable(step: &Step) -> bool {
+    step.cmd == WRITE_SET_CMD && step.rc == -1
 }
 
 /// verify 1 行を撃ち、rc と **stderr の末尾**（`STDERR_TAIL_LINES` 行）を得る。

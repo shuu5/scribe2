@@ -14,7 +14,7 @@
 
 use super::contract::Contract;
 use super::declaration::Effective;
-use super::gate::{run_checks, Checks, Verdict};
+use super::gate::{is_unreadable, run_checks, Checks, Verdict};
 use super::{
     emit, git_bytes, git_line, git_ok, verdict_path, worktree_path, worktrees_dir, Emit,
 };
@@ -237,18 +237,26 @@ fn verify_main(entry: &Land<'_>, new: &str) -> MainCheck {
             return MainCheck::Unmeasurable(reason);
         }
     };
-    let red = run_checks(&Checks {
+    let steps = run_checks(&Checks {
         worktree: &tmp,
         base: &base,
         contract: entry.contract,
         common: &common,
-    })
-    .iter()
-    .filter(|step| step.rc != 0)
-    .count();
+    });
     // 成果は `new` に載っているので、この tmp だけは remove してよい（設計 §5.4）。
     // `--force` は verify が tmp に生んだ中間物ごと畳むためで、履歴・データは触らない。
     let _ = git_ok(entry.repo, &["worktree", "remove", "--force", &path]);
+    // 段①を読めなかった周（gate と**同じ 1 本の判定**・rc だけでは見ない）は**赤の集計より先に**
+    // 「測れなかった」へ倒す——読めなかったを落ちたに化けさせない（gate §6 と同じ極性・
+    // `s2-07l.103`）。Red と同じく main-green にも finish にも進まない（fail-closed）。
+    if let Some(step) = steps.iter().find(|step| is_unreadable(step)) {
+        return MainCheck::Unmeasurable(format!(
+            "main で verify の段を読めない（cmd={} stderr={}）",
+            step.cmd,
+            step.stderr.lines().next().unwrap_or_default()
+        ));
+    }
+    let red = steps.iter().filter(|step| step.rc != 0).count();
     if red > 0 {
         return MainCheck::Red(format!("main で verify の {red} 行が rc≠0"));
     }
