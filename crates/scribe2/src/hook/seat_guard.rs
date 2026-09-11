@@ -15,8 +15,6 @@
 
 use super::guard::GUARDED;
 use crate::name::NAME;
-use crate::rules::manifest::Manifest;
-use crate::rules::RuleValue;
 use crate::seat::meter;
 use std::path::{Component, Path, PathBuf};
 
@@ -26,8 +24,6 @@ const SESSION_DIR: &str = ".claude-session";
 const WM_PREFIX: &str = "working-memory.";
 /// 退避物の名前の後置き。
 const WM_SUFFIX: &str = ".md";
-/// cap を宣言する rules 行の id（**値は code に焼かない**）。
-const ID_CAP: &str = "seat.context_cap_pct";
 /// payload が transcript を名指していない周の理由。
 const NO_TRANSCRIPT: &str = "no-transcript-path";
 
@@ -66,7 +62,8 @@ pub fn decide(
     if is_externalize(root, cwd, path) {
         return SeatDecision::Externalize;
     }
-    let Some(cap) = declared_cap() else {
+    // **cap は自分で読まない**——meter の 1 本の口（tick と同じ関数）を通す（`s2-07l.89`）。
+    let Some(cap) = meter::declared_cap() else {
         return SeatDecision::Unmeasured(meter::REASON_NO_RULE.to_owned());
     };
     // **空文字は「無い」と同じ**（trim 後）。空の口をそのまま path として扱うと、渡し忘れが
@@ -86,22 +83,6 @@ pub fn decide(
         ))
     } else {
         SeatDecision::Allow
-    }
-}
-
-/// cap を manifest から読む。**窓はここでは読まない**——窓で割るのは meter の口の仕事で、
-/// 2 か所で読むと片方だけが別の行を見に行ける（同じ値を 2 面が持つ形にしない）。
-fn declared_cap() -> Option<u64> {
-    let manifest = Manifest::embedded().ok()?;
-    int_of(&manifest, ID_CAP)
-}
-
-/// 発効している行の整数値。不発効・別の形は `None`（＝測らない側へ倒す）。
-fn int_of(manifest: &Manifest, id: &str) -> Option<u64> {
-    let row = manifest.get(id)?;
-    match (row.enabled, &row.value) {
-        (true, RuleValue::Int(found)) => Some(*found),
-        _ => None,
     }
 }
 

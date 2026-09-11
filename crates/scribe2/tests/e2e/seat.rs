@@ -14,7 +14,7 @@ use std::time::{Duration, Instant, SystemTime};
 use vessel::cli_outcome::{RC_OK, RC_REFUSED};
 use vessel::rules::manifest::Manifest;
 use vessel::seat::inject::tick_path;
-use vessel::seat::meter::window_of;
+use vessel::seat::meter::{cap_of, window_of};
 
 /// binary の path。
 fn bin() -> &'static str {
@@ -245,6 +245,26 @@ fn seat_meter_refuses_a_window_row_that_is_off_or_zero() {
     assert_eq!(window_of(&zero), None, "0 は引かない（0 で割らない）");
     let absent = Manifest::parse("schema = 1\n").expect("fixture を読める");
     assert_eq!(window_of(&absent), None, "行そのものが無い周も引かない");
+}
+
+/// cap は guard と管理 tick が**同じ関数**で読む（`s2-07l.89`）: 発効した行は引き、不発効・
+/// 型違い・行不在は `None`（測らない側）。**0 は引く**（「常に止める」の宣言であって欠落では
+/// ない・窓の `> 0` とは別物）。tick 側の境界の歯（60 / 59）と対で「1 本の口」を測る。
+#[test]
+fn seat_meter_reads_cap_from_the_manifest_row() {
+    let row = |extra: &str, value: &str| {
+        format!(
+            "schema = 1\n\n[[rule]]\nid = \"seat.context_cap_pct\"\nkind = \"SeatContextCapPct\"\nvalue = {value}\n{extra}ruling = \"r\"\nruled_at = \"d\"\n"
+        )
+    };
+    let live = Manifest::parse(&row("", "60")).expect("fixture を読める");
+    assert_eq!(cap_of(&live), Some(60), "発効した行は引ける");
+    let off = Manifest::parse(&row("enabled = false\n", "60")).expect("fixture を読める");
+    assert_eq!(cap_of(&off), None, "不発効の行は引かない（値は在っても使わない）");
+    let zero = Manifest::parse(&row("", "0")).expect("fixture を読める");
+    assert_eq!(cap_of(&zero), Some(0), "0 は引く（常に止める宣言・欠落ではない）");
+    let absent = Manifest::parse("schema = 1\n").expect("fixture を読める");
+    assert_eq!(cap_of(&absent), None, "行そのものが無い周は引かない");
 }
 
 /// 出所が 1 つも成立しない周は理由つきで不成立になる（0% に化けない）。
@@ -989,6 +1009,61 @@ const IDLE_TALL_PANE: &str = concat!(
 );
 /// `seat.tick_stale_s` の宣言値（`rules/manifest.toml`）。歯はこの値の**両側**を撃つ。
 const STALE_S: u64 = 2400;
+/// 判定行の context の列（fixture の statusline は 10% / 19%）。
+const CTX_10: &str = " context=10";
+/// 同上（19%）。
+const CTX_19: &str = " context=19";
+/// prompt より下が空＝出所なし。
+const CTX_NO_SOURCE: &str = " context=unmeasured reason=no-source";
+/// cap（manifest 行 `seat.context_cap_pct` = 60）**以上**で走行中の席（インシデントの形:
+/// lens 待ちのまま 96%・spinner が prompt の上）。両側から撃つ＝manifest の値が変わると落ちる。
+const OVER_CAP_BUSY_PANE: &str = concat!(
+    "✻ Sublimating… (19m 36s · ↓ 36.4k tokens)\n",
+    "────────────────────────────────────────\n",
+    "❯\u{a0}\n",
+    "────────────────────────────────────────\n",
+    "  user@host (user@example.com)  scribe2  main\n",
+    "  96% 960k/1M Fable 5.1 [high] 5h:10%(4h22m) 7d:15%(6d8h)\n",
+    "  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 1 agent\n",
+);
+/// cap 以上で **idle** の席（退避済みの席が `/clear` を待つ形）。
+const OVER_CAP_IDLE_PANE: &str = concat!(
+    "✻ Crunched for 10m 28s · done 12:41\n",
+    "────────────────────────────────────────\n",
+    "❯\u{a0}\n",
+    "────────────────────────────────────────\n",
+    "  user@host (user@example.com)  scribe2  main\n",
+    "  96% 960k/1M Fable 5.1 [high] 5h:10%(4h22m) 7d:15%(6d8h)\n",
+    "  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 1 agent\n",
+);
+/// cap **未満**で走行中の席。
+const BELOW_CAP_BUSY_PANE: &str = concat!(
+    "✻ Sublimating… (2m 3s · ↓ 4.1k tokens)\n",
+    "────────────────────────────────────────\n",
+    "❯\u{a0}\n",
+    "────────────────────────────────────────\n",
+    "  user@host (user@example.com)  scribe2  main\n",
+    "  12% 120k/1M Fable 5.1 [high] 5h:10%(4h22m) 7d:15%(6d8h)\n",
+    "  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 1 agent\n",
+);
+/// statusline を持たない idle の席（prompt より下に候補でない行だけ）。
+const NO_STATUSLINE_IDLE_PANE: &str = "❯ \n  ⏵⏵ bypass permissions on (shift+tab to cycle)\n";
+/// statusline の候補は在るが健全性を外れた idle の席（pct > 100）。
+const OUT_OF_BOUND_IDLE_PANE: &str = "❯ \n  150% 1500k/1M Opus 5\n";
+
+/// 走行中の席の pane を使用率だけ変えて組む（cap = 60 の**両側**を撃つための fixture）。
+fn busy_pane_at(pct: u64) -> String {
+    format!(
+        "✻ Sublimating… (2m 3s · ↓ 4.1k tokens)\n\
+         ────────────────────────────────────────\n\
+         ❯\u{a0}\n\
+         ────────────────────────────────────────\n\
+         \x20 user@host (user@example.com)  scribe2  main\n\
+         \x20 {pct}% {}k/1M Fable 5.1 [high] 5h:10%(4h22m) 7d:15%(6d8h)\n\
+         \x20 ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 1 agent\n",
+        pct.saturating_mul(10)
+    )
+}
 /// `seat.cycle_lock_ttl_s` の宣言値。歯はこの値の**両側**を撃つ。
 const TTL_S: u64 = 900;
 
@@ -1231,6 +1306,9 @@ struct TickCase {
     via_file: bool,
     /// この組で tmux を撃つはずか。
     tmux: bool,
+    /// 判定行の末尾に載る context（`" context=<pct>"` / `" context=unmeasured reason=<語>"` /
+    /// pane を取得しない周は `""`＝評価していない）。
+    context: &'static str,
 }
 
 /// 1 組の fixture を組む。**どの組も TTL 内の lock を置く**＝cycle は評価されない
@@ -1271,25 +1349,26 @@ fn seat_tick_noop_reasons_in_fixed_order() {
     let cases = [
         // 鮮度が内側（fresh）: pane も WM も lock も立たない組だが、鮮度で止まる。
         TickCase { reason: "heartbeat-fresh", beat_age_s: Some(STALE_S - 1), pane: None,
-                   wm_seat: Some(target), via_file: false, tmux: false },
+                   wm_seat: Some(target), via_file: false, tmux: false, context: "" },
         TickCase { reason: "pane-missing", beat_age_s: None, pane: None,
-                   wm_seat: Some(target), via_file: true, tmux: false },
+                   wm_seat: Some(target), via_file: true, tmux: false, context: "" },
         // 鮮度が外側（stale）: 同じ fixture でも pane を読みに行く＝tmux に当たる。
         TickCase { reason: "pane-missing", beat_age_s: Some(STALE_S + 1), pane: None,
-                   wm_seat: Some(target), via_file: false, tmux: true },
+                   wm_seat: Some(target), via_file: false, tmux: true, context: "" },
+        // pane を取得した周は context を載せる（cap 未満なら値・statusline が無ければ理由）。
         TickCase { reason: "busy", beat_age_s: None, pane: Some(BUSY_BELOW),
-                   wm_seat: Some(target), via_file: true, tmux: false },
+                   wm_seat: Some(target), via_file: true, tmux: false, context: CTX_10 },
         TickCase { reason: "busy", beat_age_s: None, pane: Some(BUSY_ABOVE),
-                   wm_seat: Some(target), via_file: true, tmux: false },
+                   wm_seat: Some(target), via_file: true, tmux: false, context: CTX_NO_SOURCE },
         TickCase { reason: "busy", beat_age_s: None, pane: Some(NO_PROMPT),
-                   wm_seat: Some(target), via_file: true, tmux: false },
+                   wm_seat: Some(target), via_file: true, tmux: false, context: CTX_10 },
         TickCase { reason: "wm-unreadable", beat_age_s: None, pane: Some(IDLE_PANE),
-                   wm_seat: None, via_file: true, tmux: false },
+                   wm_seat: None, via_file: true, tmux: false, context: CTX_10 },
         TickCase { reason: "wm-unconsumed", beat_age_s: None, pane: Some(IDLE_PANE),
-                   wm_seat: Some(target), via_file: true, tmux: false },
+                   wm_seat: Some(target), via_file: true, tmux: false, context: CTX_10 },
         // 席の名乗りが違う退避物と decoy は自席の根拠にしない＝3 を**通って** 4 で止まる。
         TickCase { reason: "cycle-live", beat_age_s: None, pane: Some(IDLE_PANE),
-                   wm_seat: Some("other:seat"), via_file: true, tmux: false },
+                   wm_seat: Some("other:seat"), via_file: true, tmux: false, context: CTX_10 },
     ];
 
     for (at, case) in cases.iter().enumerate() {
@@ -1317,8 +1396,11 @@ fn seat_tick_noop_reasons_in_fixed_order() {
         assert_eq!(recorded.lines().count(), 1, "組 {at}: 記録は 1 行: {recorded}");
         assert!(recorded.contains(r#""who":"seat-tick""#), "組 {at}: {recorded}");
         assert!(
-            recorded.contains(&format!(r#""what":"decision=noop reason={}""#, case.reason)),
-            "組 {at}: 判定を残す: {recorded}"
+            recorded.contains(&format!(
+                r#""what":"decision=noop reason={}{}""#,
+                case.reason, case.context
+            )),
+            "組 {at}: 判定を残す（context の列も記録に載る）: {recorded}"
         );
         fs::remove_dir_all(&dir).ok();
     }
@@ -1326,11 +1408,11 @@ fn seat_tick_noop_reasons_in_fixed_order() {
 
 /// 1 組の判定を見る。
 fn assert_tick_case(out: &Output, touched: bool, case: &TickCase, at: usize) {
-    let reason = case.reason;
+    let (reason, context) = (case.reason, case.context);
     assert_eq!(rc_of(out), i32::from(RC_OK), "組 {at}: stderr={}", stderr_of(out));
     assert_eq!(
         stdout_of(out),
-        format!("seat: tick decision=noop reason={reason}\n"),
+        format!("seat: tick decision=noop reason={reason}{context}\n"),
         "組 {at}"
     );
     assert_eq!(
@@ -1361,7 +1443,7 @@ fn seat_tick_injects_pointer_and_stamps_on_isolated_socket() {
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
     assert_eq!(
         stdout_of(&out),
-        format!("seat: tick decision=inject target={name} consumed=true\n")
+        format!("seat: tick decision=inject target={name} consumed=true kind=pointer{CTX_NO_SOURCE}\n")
     );
     let pane = capture(&socket, name);
     assert!(
@@ -1382,11 +1464,229 @@ fn seat_tick_injects_pointer_and_stamps_on_isolated_socket() {
     let out = run_seat(&args);
     assert_eq!(
         stdout_of(&out),
-        format!("seat: tick decision=inject target={name} consumed=true\n")
+        format!("seat: tick decision=inject target={name} consumed=true kind=pointer{CTX_NO_SOURCE}\n")
     );
     // socket を消す**前**に畳む（消してからでは kill-session が届かない・実測 2026-09-10）。
     drop(guard);
     fs::remove_dir_all(&dir).ok();
+}
+
+/// context が cap 以上 ∧ **busy** の席（インシデントの形）には、idle を待たずに退避の pointer
+/// 1 行を注入する（`kind=externalize`）。payload の先頭行は退避 skill と実測値を持ち、注入後は
+/// 自打刻する（次の周は fresh で撃たない＝storm 止め）。
+///
+/// 判定は `--capture-file` の pane で通し、送信だけ独立 socket の席へ通す。busy を理由に noop
+/// する実装（base）はこの席を誰も止められない＝auto-compact に至る（bd `s2-07l.89`）。
+#[test]
+fn seat_tick_injects_externalize_pointer_when_context_reaches_cap_while_busy() {
+    // cap = 60 の**等号側**（60 ちょうど）も撃つ: `>=` を `>` へ緩める変異はここで落ちる。
+    for pct in [96_u64, 60] {
+        let dir = tmp();
+        let socket = socket_of(&dir);
+        let name = "seatovercap";
+        let guard = start_seat(&socket, name);
+        assert!(guard.ready(), "独立 socket に prompt 付きの session を立てられる");
+        let state = dir.join("state");
+        let wm = dir.join("wm");
+        fs::create_dir_all(&wm).ok();
+        let pane = dir.join("pane.txt");
+        fs::write(&pane, busy_pane_at(pct)).ok();
+        let (wm_s, state_s, pane_s) = (
+            wm.display().to_string(),
+            state.display().to_string(),
+            pane.display().to_string(),
+        );
+        // `--pointer` は打刻の促しの上書きであって、実測値を運ぶ退避の行には掛からない。
+        let args = [
+            "tick", "--target", name, "--wm-dir", &wm_s, "--tmux-socket", &socket,
+            "--state-dir", &state_s, "--capture-file", &pane_s, "--pointer", "custom-pointer",
+        ];
+
+        let out = run_seat(&args);
+        assert_eq!(rc_of(&out), i32::from(RC_OK), "{pct}%: stderr={}", stderr_of(&out));
+        assert_eq!(
+            stdout_of(&out),
+            format!("seat: tick decision=inject target={name} consumed=true kind=externalize context={pct}\n"),
+            "{pct}%"
+        );
+        let seen = capture(&socket, name);
+        assert!(seen.contains("/ready-compaction"), "{pct}%: 退避 skill の名が届く: {seen}");
+        assert!(seen.contains(&format!("{pct}%")) && seen.contains("60%"), "{pct}%: 実測値と cap が届く: {seen}");
+        assert!(!seen.contains("seat heartbeat"), "{pct}%: heartbeat の pointer ではない: {seen}");
+        assert!(!seen.contains("custom-pointer"), "{pct}%: --pointer は退避の行を上書きしない: {seen}");
+        let stamp = seat_dir_of(&state, name).join("tick-stamp");
+        assert!(stamp.exists(), "{pct}%: 自打刻が残る");
+        let recorded = fs::read_to_string(tick_file(&state, name)).unwrap_or_default();
+        assert!(
+            recorded.contains(&format!(
+                r#""what":"decision=inject target=seatovercap consumed=true kind=externalize context={pct}""#
+            )),
+            "{pct}%: 記録にも kind と context が載る: {recorded}"
+        );
+
+        let out = run_seat(&args);
+        assert_eq!(
+            stdout_of(&out),
+            "seat: tick decision=noop reason=heartbeat-fresh\n",
+            "{pct}%: 自分の打刻で fresh になる（同じ席へ周ごとに再注入しない・context も読まない）"
+        );
+        // socket を消す**前**に畳む（消してからでは kill-session が届かない・実測 2026-09-10）。
+        drop(guard);
+        fs::remove_dir_all(&dir).ok();
+    }
+}
+
+/// cap **未満**の busy な席は、退避物 0 件 ∧ cycle lock が空いていても注入しない（`noop reason=busy`・
+/// tmux 未接触）。「cap 以上」の述語を常に真へ倒す変異（cargo mutants で唯一生存した形）は、
+/// 測れた席すべてへ退避の pointer を送る＝ここで落ちる。
+#[test]
+fn seat_tick_does_not_inject_below_cap_when_nothing_else_stops_it() {
+    let dir = tmp();
+    let target = "seatbelowfree";
+    let state = dir.join("state");
+    let wm = dir.join("wm");
+    fs::create_dir_all(&wm).ok();
+    fs::write(dir.join("pane.txt"), busy_pane_at(59)).ok();
+    let (wm_s, state_s, pane_s, sock_s) = (
+        wm.display().to_string(),
+        state.display().to_string(),
+        dir.join("pane.txt").display().to_string(),
+        dir.join("absent-sock").display().to_string(),
+    );
+
+    let (out, touched) = run_seat_probed(
+        &dir,
+        &[
+            "tick", "--target", target, "--wm-dir", &wm_s, "--tmux-socket", &sock_s,
+            "--state-dir", &state_s, "--capture-file", &pane_s,
+        ],
+    );
+
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(stdout_of(&out), "seat: tick decision=noop reason=busy context=59\n");
+    assert!(!touched, "cap 未満の busy な席には 1 key も送らない（tmux を撃たない）");
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// 注入が**成立しなかった**周は打刻しない（storm 止めの極性の裏側）: 打刻を送達の前へ動かすと、
+/// 退避の促しが届かないまま次の周が fresh で黙る＝cap 以上の席を握り潰す。pane は読めるが
+/// tmux を撃てない席（shim）で `decision=error reason=inject-…`・rc 1・stamp 不在。
+#[test]
+fn seat_tick_does_not_stamp_when_externalize_injection_fails() {
+    let dir = tmp();
+    let target = "seatcapfail";
+    let state = dir.join("state");
+    let wm = dir.join("wm");
+    fs::create_dir_all(&wm).ok();
+    fs::write(dir.join("pane.txt"), OVER_CAP_BUSY_PANE).ok();
+    let (wm_s, state_s, pane_s, sock_s) = (
+        wm.display().to_string(),
+        state.display().to_string(),
+        dir.join("pane.txt").display().to_string(),
+        dir.join("absent-sock").display().to_string(),
+    );
+
+    let (out, touched) = run_seat_probed(
+        &dir,
+        &[
+            "tick", "--target", target, "--wm-dir", &wm_s, "--tmux-socket", &sock_s,
+            "--state-dir", &state_s, "--capture-file", &pane_s,
+        ],
+    );
+
+    assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "stdout={}", stdout_of(&out));
+    assert!(
+        stderr_of(&out).starts_with("seat: tick decision=error reason=inject-"),
+        "注入の断りは inject- の前置き: {}",
+        stderr_of(&out)
+    );
+    assert!(stderr_of(&out).contains(" context=96"), "context は評価済み: {}", stderr_of(&out));
+    assert!(touched, "注入だけが tmux に当たる");
+    assert!(
+        !seat_dir_of(&state, target).join("tick-stamp").exists(),
+        "成立しなかった注入では打刻しない（次の周も撃つ）"
+    );
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// cap **未満** ∧ busy は従来どおり `noop reason=busy` のまま、判定行に context の値が載る。
+#[test]
+fn seat_tick_reports_context_when_busy_below_cap() {
+    let target = "seatbelowcap";
+    // 59 は cap の**直下**（`>=` を `>` へ緩めても 60 で落ちる歯と対で、境界を両側から撃つ）。
+    for (pane, context) in [(BELOW_CAP_BUSY_PANE.to_owned(), " context=12"), (busy_pane_at(59), " context=59")] {
+        let case = TickCase { reason: "busy", beat_age_s: None, pane: None,
+                              wm_seat: Some(target), via_file: true, tmux: false, context };
+        let dir = tmp();
+        let state = prepare_tick_case(&dir, &case, target);
+        fs::write(dir.join("pane.txt"), &pane).ok();
+        let (out, touched) = run_tick_case(&dir, &case, target, &state);
+        assert_tick_case(&out, touched, &case, 0);
+        fs::remove_dir_all(&dir).ok();
+    }
+}
+
+/// statusline が無い ∧ idle は従来の判定（退避物）へ進み、判定行に `context=unmeasured` と
+/// 理由が載る（測れないことを理由に注入も停止もしない・AC9 条 3 と同じ極性）。
+#[test]
+fn seat_tick_proceeds_with_unmeasured_context_without_statusline() {
+    let target = "seatnostatus";
+    let cases = [
+        (NO_STATUSLINE_IDLE_PANE, " context=unmeasured reason=pane-no-statusline"),
+        // 候補は在るが健全性を外れた周も同じ極性（捏造値で cap を超えない・注入しない）。
+        (OUT_OF_BOUND_IDLE_PANE, " context=unmeasured reason=pane-out-of-bound"),
+    ];
+    for (at, (pane, context)) in cases.into_iter().enumerate() {
+        let case = TickCase { reason: "wm-unconsumed", beat_age_s: None, pane: Some(pane),
+                              wm_seat: Some(target), via_file: true, tmux: false, context };
+        let dir = tmp();
+        let state = prepare_tick_case(&dir, &case, target);
+        let (out, touched) = run_tick_case(&dir, &case, target, &state);
+        assert_tick_case(&out, touched, &case, at);
+        fs::remove_dir_all(&dir).ok();
+    }
+}
+
+/// fresh の周は cap 以上でも pane を読まない＝`noop reason=heartbeat-fresh` で context も載らない
+/// （盲点の限界を pin する歯・base でも緑＝flip の根拠にしない）。
+#[test]
+fn seat_tick_does_not_read_context_when_fresh() {
+    let target = "seatfreshcap";
+    let case = TickCase { reason: "heartbeat-fresh", beat_age_s: Some(STALE_S - 1),
+                          pane: Some(OVER_CAP_BUSY_PANE), wm_seat: Some(target),
+                          via_file: true, tmux: false, context: "" };
+    let dir = tmp();
+    let state = prepare_tick_case(&dir, &case, target);
+    let (out, touched) = run_tick_case(&dir, &case, target, &state);
+    assert_tick_case(&out, touched, &case, 0);
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// cap 以上でも **自席の未 consumed 退避物が在る**（退避済み）／退避物の dir を読めない／
+/// cycle lock が live の周は pointer を注入せず次の条件へ進む（planner 裁定 2026-09-11・livelock の補正）: 退避済みの席は
+/// `/clear` 前で cap 以上のままなので、注入すると毎周 pointer を重ねて cycle に一度も落ちない。
+/// busy なら `busy`、idle なら `wm-unconsumed` / `wm-unreadable`（lock は TTL 内＝cycle は評価しない）。
+#[test]
+fn seat_tick_falls_through_to_wm_when_parked_over_cap() {
+    let target = "seatparkedcap";
+    let cases = [
+        TickCase { reason: "busy", beat_age_s: None, pane: Some(OVER_CAP_BUSY_PANE),
+                   wm_seat: Some(target), via_file: true, tmux: false, context: " context=96" },
+        TickCase { reason: "wm-unconsumed", beat_age_s: None, pane: Some(OVER_CAP_IDLE_PANE),
+                   wm_seat: Some(target), via_file: true, tmux: false, context: " context=96" },
+        TickCase { reason: "wm-unreadable", beat_age_s: None, pane: Some(OVER_CAP_IDLE_PANE),
+                   wm_seat: None, via_file: true, tmux: false, context: " context=96" },
+        // 退避物 0 件でも他の cycle が走っている（lock が TTL 内）周は注入しない（排他）。
+        TickCase { reason: "cycle-live", beat_age_s: None, pane: Some(OVER_CAP_IDLE_PANE),
+                   wm_seat: Some("other:seat"), via_file: true, tmux: false, context: " context=96" },
+    ];
+    for (at, case) in cases.iter().enumerate() {
+        let dir = tmp();
+        let state = prepare_tick_case(&dir, case, target);
+        let (out, touched) = run_tick_case(&dir, case, target, &state);
+        assert_tick_case(&out, touched, case, at);
+        fs::remove_dir_all(&dir).ok();
+    }
 }
 
 /// 実行系が回らない周は `decision=error` と **rc 1**（noop の語彙を汚さない）。
@@ -1441,6 +1741,10 @@ fn seat_tick_reports_error_when_pane_is_readable_but_tmux_is_unreachable() {
     ]);
 
     assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "注入を断られた周は rc 1");
+    assert!(
+        !seat_dir_of(&state, target).join("tick-stamp").exists(),
+        "成立しなかった注入では打刻しない（打刻を送達の前へ動かす変異はここで落ちる）"
+    );
     assert_eq!(stdout_of(&out), "", "失敗した周は stdout 0 行");
     assert!(
         stderr_of(&out).starts_with("seat: tick decision=error reason=inject-"),
@@ -1503,7 +1807,7 @@ fn seat_tick_ignores_short_wm_like_names() {
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
     assert_eq!(
         stdout_of(&out),
-        "seat: tick decision=noop reason=cycle-live\n",
+        format!("seat: tick decision=noop reason=cycle-live{CTX_10}\n"),
         "短すぎる名前は自席の退避物に数えない＝3 を通って 4 で止まる"
     );
     // 表示の完全一致だけでは 1 段しか測れない（`wm-unconsumed` を除く assert は上の
@@ -1513,7 +1817,7 @@ fn seat_tick_ignores_short_wm_like_names() {
         recorded
             .lines()
             .last()
-            .is_some_and(|line| line.contains(r#""what":"decision=noop reason=cycle-live""#)),
+            .is_some_and(|line| line.contains(r#""what":"decision=noop reason=cycle-live "#)),
         "記録の末尾 1 行も cycle-live（長さの条件が消えると wm-unconsumed へ倒れる）: {recorded}"
     );
     fs::remove_dir_all(&dir).ok();
@@ -1853,8 +2157,8 @@ fn seat_tick_runs_cycle_when_parked() {
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
     assert_eq!(
         stdout_of(&out),
-        "seat: tick decision=noop reason=wm-unconsumed cycle=done\n",
-        "判定は noop のまま・cycle を回したことは末尾に足す"
+        format!("seat: tick decision=noop reason=wm-unconsumed{CTX_NO_SOURCE} cycle=done\n"),
+        "判定は noop のまま・context の後ろに cycle を回したことを足す"
     );
     assert_eq!(
         fs::read_to_string(&log).unwrap_or_default(),
@@ -1881,8 +2185,9 @@ fn seat_tick_reads_current_running_panes_as_busy() {
         NO_RESPONSE_PANE, BARE_SPINNER_PANE, COMPACTING_PANE,
     ];
     for (at, pane) in panes.into_iter().enumerate() {
+        let context = if pane == BUSY_FAR_BELOW { CTX_10 } else { CTX_19 };
         let case = TickCase { reason: "busy", beat_age_s: None, pane: Some(pane),
-                              wm_seat: Some(target), via_file: true, tmux: false };
+                              wm_seat: Some(target), via_file: true, tmux: false, context };
         let dir = tmp();
         let state = prepare_tick_case(&dir, &case, target);
         let (out, touched) = run_tick_case(&dir, &case, target, &state);
@@ -1898,7 +2203,7 @@ fn seat_tick_reads_finished_pane_with_tall_statusline_as_idle() {
     let target = "seatfinished";
     for (at, pane) in [IDLE_TALL_PANE, IDLE_COUNT_PANE, IDLE_QUOTE_PANE].into_iter().enumerate() {
         let case = TickCase { reason: "wm-unconsumed", beat_age_s: None, pane: Some(pane),
-                              wm_seat: Some(target), via_file: true, tmux: false };
+                              wm_seat: Some(target), via_file: true, tmux: false, context: CTX_19 };
         let dir = tmp();
         let state = prepare_tick_case(&dir, &case, target);
         let (out, touched) = run_tick_case(&dir, &case, target, &state);
@@ -1923,7 +2228,7 @@ fn seat_tick_above_region_is_exactly_six_nonempty_lines() {
         let path = dir.join("above.txt");
         fs::write(&path, &pane).ok();
         let case = TickCase { reason, beat_age_s: None, pane: None,
-                              wm_seat: Some(target), via_file: true, tmux: false };
+                              wm_seat: Some(target), via_file: true, tmux: false, context: CTX_19 };
         let state = prepare_tick_case(&dir, &case, target);
         fs::write(dir.join("pane.txt"), &pane).ok();
         let (out, touched) = run_tick_case(&dir, &case, target, &state);
