@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="folio-doc-type" content="adr">
+<meta name="folio-layer" content="project">
+<meta name="folio-version" content="0.4.6">
+<meta name="folio-status" content="accepted">
+<meta name="folio-stakeholders" content="Developer, AI Agent, External Reviewer">
+<meta name="folio-adr-id" content="0015">
+<meta name="folio-adr-date" content="2026-09-11">
+<title>ADR-0015 — 席の busy / idle は hook の打刻で typed に持ち、 pane の字面を判定入力から外す。 target は生成 hooks.json の shell 行が渡す pane id から解く</title>
+<link rel="stylesheet" href="../../common.css">
+<script type="application/ld+json">
+{
+  "@context": {
+    "dc": "http://purl.org/dc/terms/",
+    "schema": "https://schema.org/",
+    "folio": "https://folio.dev/spec/v1/"
+  },
+  "@id": "./ADR-0015-seat-state-is-stamped-by-hooks-not-read-from-pane.html",
+  "@type": "schema:TechArticle",
+  "dc:isPartOf": [
+    { "@id": "./README.html" }
+  ],
+  "dc:title": "ADR-0015 — 席の busy / idle は hook の打刻で typed に持ち、 pane の字面を判定入力から外す。 target は生成 hooks.json の shell 行が渡す pane id から解く",
+  "folio:version": "0.4.6",
+  "folio:stakeholders": ["Developer", "AI Agent", "External Reviewer"],
+  "dc:references": [
+    { "@id": "../spec/constitution.html#c3" },
+    { "@id": "../spec/constitution.html#c2" },
+    { "@id": "../spec/constitution.html#c10" },
+    { "@id": "./ADR-0004-mvp-persistence-and-cross-version-formats.html" },
+    { "@id": "./ADR-0014-polarity-list-is-a-snapshot-rendered-by-core.html" }
+  ]
+}
+</script>
+</head>
+<body>
+<!-- folio:chrome-top -->
+<a class="skip-link" href="#s1-context">本文へスキップ</a>
+<nav class="breadcrumb" aria-label="パンくず"><ol>
+  <li><a href="../index.html">design-intent</a></li>
+  <li><a href="./README.html">decisions</a></li>
+  <li aria-current="page">ADR-0015</li>
+</ol></nav>
+<!-- /folio:chrome-top -->
+
+<header class="doc-header">
+  <h1>ADR-0015 — 席の busy / idle は hook の打刻で typed に持ち、 pane の字面を判定入力から外す。 target は生成 hooks.json の shell 行が渡す pane id から解く</h1>
+  <div class="meta">Status: accepted &middot; Date: 2026-09-11 &middot; version 0.4.6 (拘束する constitution の版) &middot; C3.3 の充足形と C2.2 の解釈を記録 (C10 は参照)</div>
+</header>
+<!-- folio:chrome-toc -->
+<nav class="toc" aria-label="ページ内目次">
+<ol>
+  <li><a href="#s1-context">§1. Context</a></li>
+  <li><a href="#s2-decision">§2. Decision</a></li>
+  <li class="toc--sub"><a href="#s2-1-typed">§2.1 席の状態は hook の打刻から得る typed 値であり、 pane の字面は判定入力にしない</a></li>
+  <li class="toc--sub"><a href="#s2-2-target">§2.2 target は生成 hooks.json の shell 行が渡す pane id から解く (core は env を読まない)</a></li>
+  <li class="toc--sub"><a href="#s2-3-polarity">§2.3 打刻が無い・読めない・古い周は注入しない</a></li>
+  <li class="toc--sub"><a href="#s2-4-scope">§2.4 射程外</a></li>
+  <li><a href="#s3-consequences">§3. Consequences</a></li>
+  <li><a href="#s4-alternatives">§4. Alternatives Considered</a></li>
+  <li><a href="#s5-trace">§5. Trace</a></li>
+</ol>
+</nav>
+<!-- /folio:chrome-toc -->
+
+<aside class="informative">
+<p>本 ADR は IETF <strong>RFC 2119</strong> および <strong>RFC 8174 / BCP 14</strong> に定義される MUST / SHALL / SHOULD / MAY のキーワード解釈規約に従う。 ADR は決定時点の記録であり、 改訂は新しい ADR による supersede で行う。</p>
+</aside>
+
+<section id="s1-context" class="informative">
+<h2>§1. Context</h2>
+<p class="section-essence" data-audience="human">管理役は、 席が手を止めているときにだけ 1 行を差し入れ、 手を止めているときにだけ画面を作り直します。 いまの「手を止めているか」の判定は、 画面に出る回転する印や決まり文句を読む方法で、 道具の版が変わって印が消えたときに、 動いている席へ画面の作り直しを送ってしまいました。 憲法は「席の状態は型で持ち、 画面の見た目や自由な文章を判定材料にしない」と定めています。 その通りに作り直す方法を決めます。</p>
+<p data-audience="machine">憲法 <a href="../spec/constitution.html#c3">C3.3</a> は「席の状態を typed enum で持ち、 端末描画や自由文を判定入力にしない」と定める。 記録時点の器は席の idle を pane の字面 (prompt 行の右が空 ∧ 探索域に spinner の形が無い・設計 seat-autonomy.md §3 裁定 (e)) で判定している。 2026-09-11 に Claude Code 2.1.268 で走行中の印 <code>esc to interrupt</code> が statusline から消え、 走行中の席を idle と読んで <code>/clear</code> を送った (<code>s2-07l.94</code>)。 字面の絞り込み (<code>.94</code> (A)・<code>.96</code>) で露出は減ったが、 本文が印の形を持つ席を永久に busy と読む残余が残り (lens-94 HIGH-3)、 C3.3 との緊張は解けていない。</p>
+<p data-audience="machine">hook は席の中で器の binary を起こし、 stdin JSON で <code>session_id</code> / <code>transcript_path</code> / <code>cwd</code> を渡す。 一方 tick と cycle は tmux の target (<code>session:window</code>) で席を名指す。 席の状態を hook の打刻で持つには、 hook の中で自席の target を知る経路が要る。 憲法 <a href="../spec/constitution.html#c2">C2.2</a> は「env を直接読まない・新しい env seam を作らない」と定め、 記録時点で env に触れるのは生成 hooks.json の shell 行 <code>"${&lt;NAME_UPPER&gt;_BIN:-&lt;NAME&gt;}"</code> だけである。</p>
+</section>
+
+<section id="s2-decision" class="normative">
+<h2>§2. Decision</h2>
+
+<h3 id="s2-1-typed">§2.1 席の状態は hook の打刻から得る typed 値であり、 pane の字面は判定入力にしない</h3>
+<p class="section-essence" data-audience="human">席の側が「いま始めた」「いま終わった」「いま起きた」と判子を押し、 管理役はその判子だけを見て手を止めているかを決めます。 画面の見た目は「差し入れが届いたか」を確かめる補助にだけ使い、 手を止めているかの判定には使いません。</p>
+<p data-audience="machine">器 SHALL 席の状態を閉じた enum <code>SeatState</code> (<code>Busy</code> / <code>Idle</code>) で持つ。 値の出所 SHALL Claude Code の hook event の打刻とする: <code>UserPromptSubmit</code> → Busy、 <code>Stop</code> → Idle、 <code>SessionStart</code> → Idle。 打刻 SHALL <code>&lt;state_dir&gt;/seat/&lt;target&gt;/state.jsonl</code> へ 1 行 JSON を append し (ADR-0004 §2.1 の追記だけの形・<code>event</code> で出所を名乗る = C10)、 tick と cycle SHALL 最終行を一次にする。 tick と cycle SHALL NOT pane の字面を idle の判定入力にしない (C3.3)。 pane の字面 MAY 注入の送達確認 (prompt 行の特定・目印の消費) にだけ使う。 本決定は seat-autonomy.md §3 の裁定 (e) を supersede する。</p>
+
+<h3 id="s2-2-target">§2.2 target は生成 hooks.json の shell 行が渡す pane id から解く (core は env を読まない)</h3>
+<p class="section-essence" data-audience="human">判子を押す側は、 自分がどの窓にいるかを知る必要があります。 それは、 器が自動生成する hook の設定行が tmux の窓の番号を引数として渡すことで解決します。 器の本体は環境変数を読みません。 読むのは生成された設定行だけで、 場所も生成器も今まで通り 1 つです。</p>
+<p data-audience="machine">生成される <code>hooks/hooks.json</code> の command 行 SHALL <code>--pane "$TMUX_PANE"</code> を渡し、 core SHALL その pane id から <code>tmux display-message -p -t &lt;pane&gt;</code> で target を解く。 core SHALL NOT env を読まない (C2.2)。 C2.2「新しい env seam を作らない」の解釈: env に触れる場所は<strong>生成 hooks.json の shell 行の 1 面</strong>に留まり (既存の <code>${&lt;NAME_UPPER&gt;_BIN}</code> と同じ生成器 <code>cargo xtask gen-manifest</code>)、 core は typed な引数 (<code>--pane</code>) で受ける。 本 ADR はこれを「seam の場所を増やさない」充足形として記録する (MUST NOT be read as a new seam in core)。 <code>--pane</code> が空 (tmux の外) の周 SHALL 打刻せず黙る (打刻 hook は guard ではない・ADR-0014 §2.1 の定義)。</p>
+
+<h3 id="s2-3-polarity">§2.3 打刻が無い・読めない・古い周は注入しない</h3>
+<p class="section-essence" data-audience="human">判子が無い席、 判子が読めない席、 「始めた」の判子が古いまま止まっている席には、 差し入れも作り直しも送りません。 どれも「手を止めている」の証拠ではないからです。 理由はそれぞれ別の言葉で記録に残します。</p>
+<p data-audience="machine">tick と cycle SHALL 次の周に注入も作り直しもしない (fail-closed): 最終行が Busy／state.jsonl が無い (<code>state-missing</code>)／読めない (<code>state-unreadable</code>)／Busy の <code>ts</code> が rules 行 <code>seat.tick_stale_s</code> より古い (<code>state-stale</code>・hook が死んだ疑い)。 理由 SHALL typed な語 (既存の noop 語彙の内側) で判定行に出す。 器 SHALL NOT missing を idle に、 stale を busy に読み替えない。 打刻 hook 自身 SHALL 席を止めない (stdout 0 byte・rc 0・失敗しても黙る) = 極性一覧に載せない。</p>
+
+<h3 id="s2-4-scope">§2.4 射程外</h3>
+<p class="section-essence" data-audience="human">この記録が決めるのは「状態の出所」「窓の解き方」「判子が無いときの倒れ方」だけです。 作り直しが本当に起きたかの証拠、 差し入れが読まれたかの証拠、 context の測り方は別に決めます。</p>
+<p data-audience="machine">次は本 ADR の決定ではない (MUST NOT be read as such): 作り直しの証拠 (SessionStart の打刻 ts と <code>/clear</code> 送達 ts の突合) と送達の証拠 (UserPromptSubmit の打刻 ts と注入 ts の突合) の契約 (設計 seat-state.md §6)、 context の計測 (meter・cap guard)、 cycle の lock、 stale の閾値の実値 (rules 行 <code>seat.tick_stale_s</code> を共用・変えるなら C5)、 doctor による sid と heartbeat の突合。</p>
+</section>
+
+<section id="s3-consequences" class="informative">
+<h2>§3. Consequences</h2>
+<p class="section-essence" data-audience="human">良い面は、 道具の版で印が変わっても判定が壊れなくなること、 そして「手を止めているか」の根拠が席自身の判子という型のある事実になることです。 悪い面は、 判子の仕組みが載っていない席 (古い版の席や hook が無い席) には何も届かなくなること。 それと、 hook が死んで判子が止まると、 その席は放置されます。 放置は記録に残るので人が気づけます。</p>
+<p data-audience="machine">Positive: C3.3 の充足形が実在する (typed enum + 出所付きの打刻)。 版依存の字面集合 (spinner の frame・statusline の文言) と探索域の記述を器と設計 doc から消せる。 idle の誤判定が「走行中の席へ /clear」(destructive) 側に倒れる経路が構造で消える。</p>
+<p data-audience="machine">Negative (受け入れるコスト): hook が載らない席 (v1 の席・plugin 未 install) は <code>state-missing</code> で永久に注入されない (併走期間は tick の対象を v2 の席に限る)。 hook が死んだ席は <code>state-stale</code> で放置される (fail-closed の代償・記録から人が拾う)。 hooks.json の entry が 2 つ増え、 hook の呼出回数が turn ごとに 2 回増える (打刻は append 1 行・hook 予算の内側)。</p>
+</section>
+
+<section id="s4-alternatives" class="informative">
+<h2>§4. Alternatives Considered</h2>
+<p class="section-essence" data-audience="human">4 つの案を退けました。 印の読み方を改良し続ける案は、 次の版でまた壊れます。 席が打った命令文や差し入れの本文から窓を読む案は、 自由な文章を判定材料にすることになります。 OS の内部情報から席を特定する案は、 OS に依存して保証もありません。 記録 file の更新時刻で推測する案は、 時間に頼る場当たりの判定です。</p>
+<p data-audience="machine">(A) <strong>字面の絞り込みを続ける</strong> (<code>.94</code> (A)・<code>.96</code>)。 却下: 印は版で変わり (実測 2026-09-11)、 本文が印の形を持つ席の残余も消えない。 C3.3 との緊張が恒久化する。</p>
+<p data-audience="machine">(B) <strong><code>tool_input.command</code> や prompt 本文から <code>--target</code> を読んで hook 側で target を得る</strong>。 却下: 自由文を判定入力にする形そのものである (C3.3)。 heartbeat の command 行に依存し、 別の書き方をした周に黙って外れる。</p>
+<p data-audience="machine">(C) <strong><code>/proc/&lt;pid&gt;/fd</code> から transcript を辿り sid を得て、 tick が pane の pid から逆引きする</strong>。 却下: OS 依存で、 transcript の fd が開いている保証が無い (append して閉じる周は見えない)。</p>
+<p data-audience="machine">(D) <strong>transcript の mtime で busy を推定する</strong>。 却下: 時間依存の ad-hoc 判定であり、 憲法の順位 1 位 (ad-hoc 禁止) に反する。 lens-94 が同型の 0.5 秒二重 capture 案を退けたのと同じ理由。</p>
+</section>
+
+<section id="s5-trace" class="informative">
+<h2>§5. Trace</h2>
+<p class="section-essence" data-audience="human">出所は、 実際に起きた事故の記録と、 hook がどんな情報を受け取れるかを実物で確かめたこと、 そして設定行がすでに環境変数を 1 つ展開している事実です。</p>
+<ul data-audience="machine">
+  <li>事故の記録 (2026-09-11・<code>s2-07l.94</code>): Claude Code 2.1.268 で <code>esc to interrupt</code> が statusline から消え、 tick が走行中の席を idle と読み <code>/clear</code> を送った。 暫定処置は字面の絞り込み (<code>.94</code> (A)・<code>.96</code>) で、 分岐 (B) = 本 ADR は planner 裁定で別便とされた。</li>
+  <li>hook の入力の実測 (同日・<code>crates/&lt;NAME&gt;/src/hook/mod.rs</code>): stdin JSON から読む key は <code>cwd</code> / <code>transcript_path</code> / <code>session_id</code> 系で、 tmux の target は無い。 記録時点の hooks.json の event は SessionStart / PreToolUse / PermissionRequest の 3 つ (生成器 <code>cargo xtask gen-manifest</code>・<code>render_hooks</code>)。</li>
+  <li>env seam の現物 (同日): 生成 hooks.json の command 行は <code>"${&lt;NAME_UPPER&gt;_BIN:-&lt;NAME&gt;}"</code> を shell で展開しており、 core は env を読まない (C2.2 の既存の充足形)。 §2.2 はこれと同じ場所へ <code>--pane "$TMUX_PANE"</code> を足す。</li>
+  <li>Claude Code の hook event に <code>UserPromptSubmit</code> / <code>Stop</code> / <code>SessionStart</code> が在ることの実測 (同日・host の settings の lint 出力に列挙)。</li>
+  <li>残余の記録 (<code>.96</code> notes・<code>.97</code> lens MEDIUM-2): 作り直しと送達の証拠は字面では閉じず、 本 ADR の打刻を根治とする申し送りが 2 件在る (§2.4・設計 §6)。</li>
+</ul>
+</section>
+
+<!-- folio:chrome-bottom -->
+<nav class="prevnext" aria-label="前後の文書">
+  <a class="prevnext__prev" href="ADR-0014-polarity-list-is-a-snapshot-rendered-by-core.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">ADR-0014 — 極性一覧は core が描く外形 snapshot として生成し、 CI の門 (C16.2) は xtask がその tracked 生成物を読む。 極性の値は境界の型が運ぶ</span></a>
+</nav>
+<script>
+(function () {
+  var openedForPrint = [];
+  window.addEventListener('beforeprint', function () {
+    openedForPrint = [];
+    var ds = document.querySelectorAll('details:not([open])');
+    for (var i = 0; i < ds.length; i++) { ds[i].setAttribute('open', ''); openedForPrint.push(ds[i]); }
+  });
+  window.addEventListener('afterprint', function () {
+    for (var i = 0; i < openedForPrint.length; i++) openedForPrint[i].removeAttribute('open');
+    openedForPrint = [];
+  });
+  if (!document.querySelector('[data-audience]')) return;
+  /* 既定 = 人間プレゼン型 (ADR-0040 / rules §11.3): script 経由で初期 class を付与するため
+     no-JS では付かず全文可視に graceful degrade する。 static DOM は全文を保持 (AI/検索/印刷は不変)。 */
+  document.body.classList.add('audience-human');
+  var bar = document.createElement('nav');
+  bar.className = 'audience-toggle';
+  bar.setAttribute('aria-label', '表示対象の切替');
+  var states = [['both', '両方'], ['human', '人間向け'], ['machine', '機械向け']];
+  for (var s = 0; s < states.length; s++) {
+    (function (mode, label) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      b.setAttribute('aria-pressed', mode === 'human' ? 'true' : 'false');
+      b.addEventListener('click', function () {
+        document.body.classList.remove('audience-human', 'audience-machine');
+        if (mode !== 'both') document.body.classList.add('audience-' + mode);
+        var bs = bar.querySelectorAll('button');
+        for (var j = 0; j < bs.length; j++) bs[j].setAttribute('aria-pressed', bs[j] === b ? 'true' : 'false');
+      });
+      bar.appendChild(b);
+    })(states[s][0], states[s][1]);
+  }
+  var bc = document.querySelector('nav.breadcrumb');
+  if (bc && bc.parentNode) { bc.parentNode.insertBefore(bar, bc.nextSibling); }
+  else { document.body.insertBefore(bar, document.body.firstChild); }
+})();
+</script>
+<!-- /folio:chrome-bottom -->
+</body>
+</html>

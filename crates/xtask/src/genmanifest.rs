@@ -348,6 +348,30 @@ mod tests {
         }
     }
 
+    /// tracked な plugin.json が render の bytes と一致する（手書き禁止・冪等・`s2-07l.104`）。
+    ///
+    /// 生成物 3 つのうちこれだけ「tracked == render」の歯が無く、plugin.json の drift だけが
+    /// 静かに通る穴だった（`.52` lens F3）。version の出所は `generate` と同じ
+    /// `Layout::core_version`（新しい読み口を作らない）。
+    // flip-check: retroactive s2-07l.104
+    #[test]
+    fn gen_manifest_plugin_json_is_idempotent() {
+        let root = workspace_root();
+        let layout = Layout::discover(&root).expect("workspace の配置を読める");
+        let version = layout.core_version().expect("core の version を読める");
+        let rendered = render(&layout.name, &version);
+        let tracked = std::fs::read_to_string(root.join(MANIFEST_REL)).expect("plugin.json を読める");
+
+        assert_eq!(rendered, tracked, "tracked な plugin.json は生成物と同じ bytes である");
+        assert_eq!(render(&layout.name, &version), rendered, "同じ入力からは同じ bytes（冪等）");
+        assert_ne!(render("other-name", &version), rendered, "render は引数の name を実際に使う");
+        assert_ne!(render(&layout.name, "0.0.0-other"), rendered, "render は引数の version を実際に使う");
+        assert!(
+            tracked.contains(&format!("\"version\": \"{version}\"")),
+            "version は core の Cargo.toml の値（{version}）を写す"
+        );
+    }
+
     /// tracked な marketplace.json が render の bytes と一致する（手書き禁止・冪等）。
     #[test]
     fn gen_manifest_marketplace_json_is_idempotent() {

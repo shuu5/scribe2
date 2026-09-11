@@ -399,6 +399,14 @@ terms:
     domain: consumer
     definition: 開発 session が黙っていないかを周期で見て、 条件が揃ったときだけ打刻の合図か退避の合図を 1 行注入する仕組み (SRS FR27 / FR29)。
     relationships: [開発 session, cycle, 打刻の合図, 退避の合図]
+  - canonical: 席の状態
+    domain: consumer
+    definition: 開発 session が turn を走らせているか (Busy) 止めているか (Idle) の閉じた enum。 出所は hook の打刻 (UserPromptSubmit → Busy・Stop / SessionStart → Idle) で、 pane の字面は判定入力にしない (憲法 C3.3・ADR-0015 §2.1)。
+    relationships: [開発 session, 管理 tick, cycle, 状態の打刻]
+  - canonical: 状態の打刻
+    domain: consumer
+    definition: 席の中で hook が state.jsonl へ append する 1 行 (state / event / ts / sid)。 target は生成 hooks.json の shell 行が渡す pane id から解く (ADR-0015 §2.2)。 無い・読めない・古い周は注入しない (ADR-0015 §2.3)。
+    relationships: [席の状態, hook, 管理 tick]
   - canonical: 打刻の合図
     domain: consumer
     definition: 管理 tick が idle の開発 session に注入する 1 行 (SRS FR27)。 heartbeat を打って続きを進めるよう促す。
