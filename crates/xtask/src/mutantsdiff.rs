@@ -16,7 +16,7 @@ use crate::toml_lite;
 use std::path::Path;
 use std::process::{Command, ExitCode, Stdio};
 
-/// 1 行に写す件数。
+/// 1 行に写す件数と、**何を測ったか**。
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Counts {
     /// 生成された変異の総数。
@@ -29,15 +29,28 @@ pub struct Counts {
     pub unviable: u64,
     /// 時間切れの数。
     pub timeout: u64,
+    /// 測った範囲＝`cargo mutants -p` へ**実際に渡した**名前（bd `s2-07l.82`）。
+    ///
+    /// 行は出所から切り離されて流通する（bead notes / PR 本文 / CI log から切り出される）ので、
+    /// 「core package だけを測った」という限界は報告でなく**行そのもの**に載せる。値は行を
+    /// 組む側の literal ではなく [`Counts::in_scope`] で呼び手から持ち回る。将来 diff が触った
+    /// package を並べて測る形（案 (b)）になっても同じ field で表せる。
+    pub scope: String,
 }
 
 impl Counts {
-    /// stdout へ出す 1 行。
+    /// stdout へ出す 1 行。既存 5 token の名前・順序・書式は据え置き、末尾に `scope=` を足す。
     pub fn line(&self) -> String {
         format!(
-            "mutants-diff: total={} caught={} missed={} unviable={} timeout={}",
-            self.total, self.caught, self.missed, self.unviable, self.timeout
+            "mutants-diff: total={} caught={} missed={} unviable={} timeout={} scope={}",
+            self.total, self.caught, self.missed, self.unviable, self.timeout, self.scope
         )
+    }
+
+    /// 測った範囲を名乗らせる（呼び手が `-p` に渡した名前をそのまま渡す）。
+    pub fn in_scope(mut self, scope: &str) -> Self {
+        self.scope = scope.to_owned();
+        self
     }
 }
 
@@ -270,7 +283,8 @@ pub fn run(args: &[String]) -> ExitCode {
         Err(err) => Err(format!("outcomes.json を読めない: {err}（測れていない）")),
     };
     let counts = match counts {
-        Ok(found) => found,
+        // **`-p` に渡した名前そのもの**を行に持ち回る（行を組む側に literal を置かない）。
+        Ok(found) => found.in_scope(&layout.name),
         Err(reason) => return unmeasured(&format!("mutants-diff: {reason}")),
     };
     crate::emit(&counts.line());
