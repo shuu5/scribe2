@@ -267,17 +267,19 @@ pub fn seat_dir(state_dir: &Path, target: &str) -> PathBuf {
     path.parent().map_or_else(|| path.clone(), Path::to_path_buf)
 }
 
-/// 置き場の解決の出所。**2 値で閉じる**（解決順序 `--state-dir` > git 設定の 2 経路しか無く、
-/// 第 3 の経路を足すときは variant を足す＝行の `source=` が経路の全数を名乗る・憲法 C2）。
+/// 置き場の解決の出所（語彙 Provenance・憲法 C10）。**2 値で閉じる**（解決順序 `--state-dir` >
+/// git 設定の 2 経路しか無く、第 3 の経路を足すときは variant を足す＝行の `source=` が経路の
+/// 全数を名乗る・憲法 C2）。
 #[derive(Clone, Copy)]
-pub enum Source {
+pub enum Provenance {
     /// `--state-dir` で渡された。
     Flag,
-    /// repo の git 設定（`<NAME>.stateDir`）から読んだ。
+    /// git の設定解決（`git config --get <NAME>.stateDir`）から読んだ。**repo-local に限らない**
+    /// （global や git 自身の env 経由の設定も同じ 1 語で名乗る＝器は git の解決を分解しない）。
     GitConfig,
 }
 
-impl Source {
+impl Provenance {
     /// 行と記録に使う字面。
     pub fn as_str(self) -> &'static str {
         match self {
@@ -296,16 +298,19 @@ pub struct StateDir {
     /// 解決した path（**絶対**にして持つ: 相対の flag は cwd に依存し「どこへ」を名乗れない）。
     pub path: PathBuf,
     /// 解決の出所。
-    pub source: Source,
+    pub source: Provenance,
 }
 
 impl StateDir {
     /// 成功行と記録の末尾に足す字面（既存 token の後ろ＝名前・順序・書式を変えない）。
+    ///
+    /// **path は行末**に置く: path は行で唯一潰さない外部の字面で、空白や ` source=` を含みうる。
+    /// 出所を先に出せば、読み手は「` state_dir=` 以降の全部が path」と一意に読める。
     pub fn suffix(&self) -> String {
         format!(
-            " state_dir={} source={}",
-            self.path.display(),
-            self.source.as_str()
+            " source={} state_dir={}",
+            self.source.as_str(),
+            self.path.display()
         )
     }
 }
@@ -316,11 +321,11 @@ impl StateDir {
 /// 絶対化は `std::path::absolute`（symlink も存在も見ない＝書く先そのものの名前）。
 pub fn state_dir_of(state_dir: Option<&str>) -> Option<StateDir> {
     let (path, source) = match state_dir {
-        Some(found) => (PathBuf::from(found), Source::Flag),
+        Some(found) => (PathBuf::from(found), Provenance::Flag),
         None => {
             let cwd = std::env::current_dir().ok()?;
             let root = crate::hook::vessel::repo_root(&cwd)?;
-            (crate::hook::vessel::state_dir(&root)?, Source::GitConfig)
+            (crate::hook::vessel::state_dir(&root)?, Provenance::GitConfig)
         }
     };
     let path = std::path::absolute(path).ok()?;

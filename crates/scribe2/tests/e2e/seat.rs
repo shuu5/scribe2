@@ -1124,16 +1124,16 @@ fn seat_dir_of(state: &Path, target: &str) -> PathBuf {
     state.join("seat").join(target)
 }
 
-/// 打刻の成功行と tick の記録の末尾に載る**置き場の出所**（契約の字面から組む）。
+/// 打刻の成功行と tick の記録の末尾に載る**置き場の出所と path**（契約の字面から組む）。
+/// path は行末（空白や ` source=` を含む path でも出所を偽れない）。
 fn provenance(state: &Path, source: &str) -> String {
-    format!(" state_dir={} source={source}", state.display())
+    format!(" source={source} state_dir={}", state.display())
 }
 
-/// 成功行の `state_dir=` の値を切り出す（`source=` の直前まで）。
+/// 成功行の `state_dir=` の値を切り出す（行末までの全部が path）。
 fn state_dir_in(line: &str) -> Option<PathBuf> {
-    let (_, rest) = line.split_once(" state_dir=")?;
-    let (path, _) = rest.split_once(" source=")?;
-    Some(PathBuf::from(path))
+    line.split_once(" state_dir=")
+        .map(|(_, path)| PathBuf::from(path))
 }
 
 /// PATH の先頭に「呼ばれたら印を残して失敗する tmux」を置いて `seat` を 1 回撃つ。
@@ -1308,6 +1308,37 @@ fn seat_heartbeat_touches_seat_file() {
     assert_eq!(rc_of(&out), i32::from(RC_REFUSED));
     assert!(stderr_of(&out).starts_with("usage: seat "), "{}", stderr_of(&out));
     assert!(!dir.join("seat").exists(), "cwd に置き場を作らない");
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// 相対の `--state-dir` は **cwd で絶対化した path** を名乗る（flag の字面の echo ではない）。
+/// 相対のままでは cwd に依存して「どこへ」を名乗れず、行が実体と 1 対 1 にならない。
+/// 空白と ` source=` を含む dir 名でも、出所が先・path が行末なので出所を偽れない。
+#[test]
+fn seat_heartbeat_names_absolute_state_dir_for_relative_flag() {
+    let dir = tmp();
+    let cwd = dir.join("sub");
+    fs::create_dir_all(&cwd).ok();
+    let rel = "rel state source=git-config";
+    let state = cwd.join(rel);
+    let marker = seat_dir_of(&state, "seatrel").join("heartbeat");
+
+    let out = run_seat_in(&cwd, &["heartbeat", "--target", "seatrel", "--state-dir", rel]);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(
+        stdout_of(&out),
+        format!("seat: heartbeat target=seatrel{}\n", provenance(&state, "flag")),
+        "相対の flag は cwd で絶対化した path を名乗り、出所は flag のまま"
+    );
+    assert!(marker.exists(), "打刻は cwd 相対の実体に落ちる");
+    // A/B: 行が名乗る path（flag の字面ではない）から組んだ marker が実体と 1 対 1 で一致する。
+    let claimed = state_dir_in(stdout_of(&out).trim_end()).map(|d| seat_dir_of(&d, "seatrel").join("heartbeat"));
+    assert_eq!(claimed.as_deref(), Some(marker.as_path()), "行の path と実体の親 dir が一致する");
+    assert!(
+        !stdout_of(&out).contains(&format!(" state_dir={rel}")),
+        "flag の字面をそのまま echo しない: {}",
+        stdout_of(&out)
+    );
     fs::remove_dir_all(&dir).ok();
 }
 
