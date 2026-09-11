@@ -135,7 +135,24 @@ WantedBy=timers.target
    はならない**——tracked の `.claude/settings.json` に host の絶対 path が書かれ、PUBLIC 面を汚す。
 2. plugin を **project scope で** install する（`claude plugin install <NAME>@<NAME> --scope project`
    の 1 発で、`.claude/settings.json` の `enabledPlugins` まで入る＝手で足す手順は無い）。
-3. **走行中の session には `/reload-plugins` か再起動が要る**（hook は自動では反映されない）。
+3. **hook の読込元は plugin source（この repo の checkout）の `hooks/hooks.json`** であり、install 時に作られる
+   cache の写し（`plugins/cache/<NAME>/<NAME>/<version>/`）は hook の読込に使われない（Claude Code 2.1.268・
+   `--debug-file` の `Read hooks.json for plugin <NAME>` 行で実測 2026-09-12・bd `s2-07l.95` / `s2-07l.122`）。
+   走行中の session は起動時の snapshot を持つので、**`/reload-plugins` か process の作り直しが要る**（hook は
+   自動では反映されない）。`claude plugin update` は版が同じなら no-op で、hook の反映とは無関係。
+
+**(b′) `hooks/hooks.json` を変える便の rollout（順序が要る）。** 打刻（[seat-state.md](./seat-state.md) の
+`seat/<target>/state.jsonl`）の無い席には管理 tick が pointer / cycle を送らない（fail-closed）ので、順序を誤ると
+その席は cycle されないまま context を使い切る。
+
+1. 便を main に載せる（`hooks/hooks.json` は `cargo xtask gen-manifest` の生成物・手で書かない）。
+2. 各席で `/reload-plugins`（turn の走行中は入力欄に queue されるので idle を待つか、注入の後に着地を実測する）。
+3. **全席**の `state.jsonl` に新しい打刻が出るのを実測する（1 席でも欠ければ 2 を繰り返す）。
+4. **その後に** binary を入れ替える（(a)）。先に入れ替えると、hook が古い席は打刻が無いまま cycle されない。
+
+cache の写しは plugin source を丸ごと写す（`target/` や `.worktrees/` を含み大きくなりうる）が、hook の読込には
+使われないので動作には影響しない。軽くするには plugin root を小さな dir に分けて marketplace の `source` を変える
+（再 install が要る＝user 手番）。本 doc はそれを決めない。
 
 **(c) 管理 tick の timer を有効にする。** §8 の雛形を user が埋めて有効化する（§8 のとおり unit は
 repo に入れない）。
