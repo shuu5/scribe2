@@ -4,7 +4,7 @@
 //! anchor の `.claude-session/` でなく `<state_dir>/seat/<target>/` に取るのは、v1 の
 //! timer と場所を分けて併走できるようにするためである（設計 §3）。
 
-use super::sanitize_target;
+use super::{sanitize_target, StateDir};
 use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -39,8 +39,14 @@ pub fn touch_at(marker: &Path) -> std::io::Result<()> {
 }
 
 /// 打刻した 1 行。表示は記録の dir 名と同じ**潰した字面**にする（語彙を 1 つにする）。
-pub fn render(target: &str) -> String {
-    format!("seat: heartbeat target={}", sanitize_target(target))
+/// 末尾に打刻先の置き場と出所を足す（行は出所から切り離されて流通するので、所在は行の側に
+/// 置く・憲法 C10）。
+pub fn render(target: &str, state: &StateDir) -> String {
+    format!(
+        "seat: heartbeat target={}{}",
+        sanitize_target(target),
+        state.suffix()
+    )
 }
 
 /// 置き場を解けなかった 1 行。

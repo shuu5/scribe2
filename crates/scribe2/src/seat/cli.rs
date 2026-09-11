@@ -195,8 +195,8 @@ fn heartbeat_of(args: &[String]) -> Outcome {
             heartbeat::render_refused(heartbeat::REASON_STATE_DIR),
         );
     };
-    match heartbeat::touch(&super::seat_dir(&state, target)) {
-        Ok(()) => Outcome::ok_line(heartbeat::render(target)),
+    match heartbeat::touch(&super::seat_dir(&state.path, target)) {
+        Ok(()) => Outcome::ok_line(heartbeat::render(target, &state)),
         Err(_) => Outcome::failed_line(
             RC_REFUSED,
             heartbeat::render_refused(heartbeat::REASON_UNWRITABLE),
@@ -247,7 +247,7 @@ fn cycle_of(args: &[String]) -> Outcome {
         wm_dir,
         socket: common.socket,
         capture_file: common.capture_file,
-        state_dir: &state,
+        state_dir: &state.path,
         restore,
     });
     match result {

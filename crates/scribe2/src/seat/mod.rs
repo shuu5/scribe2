@@ -267,18 +267,69 @@ pub fn seat_dir(state_dir: &Path, target: &str) -> PathBuf {
     path.parent().map_or_else(|| path.clone(), Path::to_path_buf)
 }
 
+/// 置き場の解決の出所（語彙 Provenance・憲法 C10）。**2 値で閉じる**（解決順序 `--state-dir` >
+/// git 設定の 2 経路しか無く、第 3 の経路を足すときは variant を足す＝行の `source=` が経路の
+/// 全数を名乗る・憲法 C2）。
+#[derive(Clone, Copy)]
+pub enum Provenance {
+    /// `--state-dir` で渡された。
+    Flag,
+    /// git の設定解決（`git config --get <NAME>.stateDir`）から読んだ。**repo-local に限らない**
+    /// （global や git 自身の env 経由の設定も同じ 1 語で名乗る＝器は git の解決を分解しない）。
+    GitConfig,
+}
+
+impl Provenance {
+    /// 行と記録に使う字面。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Flag => "flag",
+            Self::GitConfig => "git-config",
+        }
+    }
+}
+
+/// 解決した置き場（**出所付き**・憲法 C10）。
+///
+/// 成功行が「書いた」だけでなく「どこへ・何から解いて」を名乗るための型である。
+/// rc 0 の成功行が別 dir へ書いていた事故（2026-09-10・repo-local の git 設定が死んだ
+/// probe dir を指したまま残っていた）を、行の側で見える形にする（`s2-07l.70`）。
+pub struct StateDir {
+    /// 解決した path（**絶対**にして持つ: 相対の flag は cwd に依存し「どこへ」を名乗れない）。
+    pub path: PathBuf,
+    /// 解決の出所。
+    pub source: Provenance,
+}
+
+impl StateDir {
+    /// 成功行と記録の末尾に足す字面（既存 token の後ろ＝名前・順序・書式を変えない）。
+    ///
+    /// **path は行末**に置く: path は行で唯一潰さない外部の字面で、空白や ` source=` を含みうる。
+    /// 出所を先に出せば、読み手は「` state_dir=` 以降の全部が path」と一意に読める。
+    pub fn suffix(&self) -> String {
+        format!(
+            " source={} state_dir={}",
+            self.source.as_str(),
+            self.path.display()
+        )
+    }
+}
+
 /// 置き場を解く。`--state-dir` が上書きし、無ければ repo の git 設定から読む。
 ///
 /// `current_dir` は syscall であって env ではない（憲法 C2.2・hook 側と同じ扱い）。
-pub fn state_dir_of(state_dir: Option<&str>) -> Option<PathBuf> {
-    match state_dir {
-        Some(found) => Some(PathBuf::from(found)),
+/// 絶対化は `std::path::absolute`（symlink も存在も見ない＝書く先そのものの名前）。
+pub fn state_dir_of(state_dir: Option<&str>) -> Option<StateDir> {
+    let (path, source) = match state_dir {
+        Some(found) => (PathBuf::from(found), Provenance::Flag),
         None => {
             let cwd = std::env::current_dir().ok()?;
             let root = crate::hook::vessel::repo_root(&cwd)?;
-            crate::hook::vessel::state_dir(&root)
+            (crate::hook::vessel::state_dir(&root)?, Provenance::GitConfig)
         }
-    }
+    };
+    let path = std::path::absolute(path).ok()?;
+    Some(StateDir { path, source })
 }
 
 /// pane 本文を得る。`capture_file` が在れば tmux を **1 度も呼ばない**。

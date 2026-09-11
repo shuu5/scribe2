@@ -210,10 +210,10 @@ pub fn run(request: &Request) -> Outcome {
         // 置き場が無いと記録も打刻も持てない＝判定を回さない（撃たない側へ倒す）。
         return Outcome::failed_line(RC_REFUSED, render(&body_of_error(REASON_STATE_DIR)));
     };
-    let dir = super::seat_dir(&state, request.target);
-    let judged = decide(request, &state, &dir);
-    let body = body(request.target, &judged);
-    record(&state, request.target, &body, started);
+    let dir = super::seat_dir(&state.path, request.target);
+    let judged = decide(request, &state.path, &dir);
+    let body = body(request.target, &judged, &state);
+    record(&state.path, request.target, &body, started);
     match judged.decision {
         TickDecision::Error(_) => Outcome::failed_line(RC_REFUSED, render(&body)),
         TickDecision::Inject(..) | TickDecision::Noop(_) => Outcome::ok_line(render(&body)),
@@ -367,8 +367,9 @@ fn inject_line(
 }
 
 /// 判定の本体（記録の `what` と表示で**同じ字面**を使う）。context は判定の後ろ・cycle の前
-/// （評価した順）。
-fn body(target: &str, judged: &Judged) -> String {
+/// （評価した順）。**置き場と出所は最後**（置き場が解けた周は判定に依らず載せる＝席側の打刻行と
+/// 並べるだけで、別の dir を見ていることを記録から弁別できる・`s2-07l.70`）。
+fn body(target: &str, judged: &Judged, state: &super::StateDir) -> String {
     let head = match judged.decision {
         TickDecision::Inject(kind, settled) => format!(
             "decision=inject target={} consumed={} kind={}",
@@ -380,10 +381,11 @@ fn body(target: &str, judged: &Judged) -> String {
         TickDecision::Error(ref reason) => body_of_error(reason),
     };
     let with_context = format!("{head}{}", judged.context.suffix());
-    match judged.cycled.as_deref() {
+    let with_cycle = match judged.cycled.as_deref() {
         Some(found) => format!("{with_context} cycle={found}"),
         None => with_context,
-    }
+    };
+    format!("{with_cycle}{}", state.suffix())
 }
 
 /// 実行系が回らなかった周の本体。

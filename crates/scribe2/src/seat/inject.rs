@@ -195,17 +195,9 @@ fn tries_within(window: Duration) -> u32 {
         .max(1)
 }
 
-/// 記録の置き場。`--state-dir` が上書きし、無ければ repo の git 設定から読む（hook と同じ解決）。
+/// 記録の置き場。解決は席の 1 実装（[`super::state_dir_of`]）を通る＝順序と字面を 2 面に持たない。
 fn state_dir_of(request: &Request) -> Option<PathBuf> {
-    match request.state_dir {
-        Some(found) => Some(PathBuf::from(found)),
-        None => {
-            // `current_dir` は syscall であって env ではない（C2.2・hook 側と同じ扱い）。
-            let cwd = std::env::current_dir().ok()?;
-            let root = crate::hook::vessel::repo_root(&cwd)?;
-            crate::hook::vessel::state_dir(&root)
-        }
-    }
+    super::state_dir_of(request.state_dir).map(|state| state.path)
 }
 
 /// 記録 file の path。
