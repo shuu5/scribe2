@@ -19,7 +19,21 @@ use std::path::Path;
 ///
 /// `js` を外さない——asset（minify 済みの library 等）は**例外行に載せて**通す。定義を
 /// 緩めると次の asset が黙って通り、線が「無いのと同じ」になる（契約の「やらない」）。
-const EXEC_EXTENSIONS: &[&str] = &["sh", "bash", "zsh", "py", "bats", "pl", "rb", "js", "ts", "mjs"];
+///
+/// 線引き（planner 裁定 2026-09-11・`s2-07l.83`）: **足すのは shell を起こす形だけ**。shell 系の
+/// 拡張子（fish / ps1 / awk / ksh / csh）と make の recipe（`mk`）は足し、shell ではない言語
+/// （cjs / jsx / lua）は足さない——実行されるなら shebang か exec bit が既に捕まえる。
+const EXEC_EXTENSIONS: &[&str] = &[
+    "sh", "bash", "zsh", "py", "bats", "pl", "rb", "js", "ts", "mjs", // `s2-07l.59` まで
+    "mk", "fish", "ps1", "awk", "ksh", "csh", // `s2-07l.83`: shell を起こす形だけ
+];
+
+/// build recipe と見なす **file 名**（閉じた列・完全一致・`s2-07l.83`）。
+///
+/// make / docker build / just は recipe の各行を shell で起こす＝拡張子を持たない shell
+/// script である。名前は index の字面のまま**完全一致**で見る（`Makefile.md` は捕まえない）。
+const BUILD_RECIPE_NAMES: &[&str] =
+    &["Makefile", "GNUmakefile", "makefile", "Dockerfile", "Containerfile", "Justfile", "justfile"];
 
 /// index が実行 bit を付ける mode。
 const EXEC_MODE: &str = "100755";
@@ -35,6 +49,7 @@ const BOM: &[u8] = &[0xEF, 0xBB, 0xBF];
 
 /// file の種別が「非 Rust 実行物」か。**種別だけ**を見る（本文の字面は見ない）。
 ///
+/// build recipe は file 名の完全一致で見る（`s2-07l.83`）。
 /// 拡張子は **大文字小文字を区別しない**（`.PY` は「拡張子 py の file」である）。shebang は
 /// **BOM の後ろでも見る**（BOM 付きの shebang も shebang である）。どちらも線引きの話ではなく、
 /// **同じ signal を取り落とさない**ための正規化である（lens 2026-09-11）。
@@ -45,8 +60,16 @@ pub(crate) fn is_non_rust_exec(file: &TrackedFile, body: Option<&[u8]>) -> bool 
     if body.is_some_and(has_shebang) {
         return true;
     }
+    if file_name_of(&file.rel).is_some_and(|name| BUILD_RECIPE_NAMES.contains(&name)) {
+        return true;
+    }
     extension_of(&file.rel)
         .is_some_and(|ext| EXEC_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()))
+}
+
+/// path の最終要素（file 名・index の字面のまま）。
+fn file_name_of(rel: &str) -> Option<&str> {
+    rel.rsplit('/').next().filter(|name| !name.is_empty())
 }
 
 /// 先頭が shebang か（BOM を 1 つだけ剥がしてから見る）。
@@ -240,4 +263,79 @@ pub(crate) fn count_run_lines(text: &str) -> usize {
         }
     }
     total
+}
+
+#[cfg(test)]
+mod tests {
+    use super::judge;
+    use crate::paths_clean::TrackedFile;
+    use std::path::PathBuf;
+
+    /// shebang も exec bit も無い tracked file（分類は名前と拡張子だけで決まる）。
+    fn plain(rel: &str) -> TrackedFile {
+        TrackedFile { rel: rel.to_owned(), mode: "100644".to_owned(), oid: String::new() }
+    }
+
+    /// 本文を読まない root（file は実在しない＝body は `None`・shebang の signal を持たない）。
+    fn no_root() -> PathBuf {
+        std::env::temp_dir().join("non-rust-exec-no-such-root")
+    }
+
+    /// 違反行に名指された rel の集合。
+    ///
+    /// **行の中の path token を完全一致で見る**——`contains` だと `GNUmakefile` の違反行が
+    /// `makefile` の照合にも当たり、裸の `makefile` を落とす変異が緑のまま通る（lens-83 MED-2）。
+    fn violated(listed: &[TrackedFile]) -> Vec<String> {
+        let measured = judge(&no_root(), listed, &[]);
+        let named: Vec<&str> = measured
+            .violations
+            .iter()
+            .filter_map(|line| line.strip_prefix("non-rust-exec: "))
+            .filter_map(|rest| rest.split(' ').next())
+            .collect();
+        listed
+            .iter()
+            .filter(|file| named.contains(&file.rel.as_str()))
+            .map(|file| file.rel.clone())
+            .collect()
+    }
+
+    /// build recipe は **file 名**で捕まえる（make / docker build / just は shell を起こす・
+    /// `s2-07l.83`）。shebang なし・exec bit なしでも全件が違反行に出る。名前は完全一致で、
+    /// `*.mk` だけが拡張子。
+    #[test]
+    fn non_rust_exec_denies_build_recipes_by_file_name() {
+        // 列の 7 名を**全部**置く（小文字の 2 名を落とすと、const から消す変異が生き延びる・
+        // lens-83 MED-1）。
+        // `y.MK` は拡張子の大文字小文字非区別が `mk` にも載ることの pin。
+        let listed: Vec<TrackedFile> = [
+            "Makefile", "GNUmakefile", "makefile", "sub/Dockerfile", "Containerfile", "Justfile",
+            "justfile", "x.mk", "sub/y.MK",
+        ]
+        .iter()
+        .map(|rel| plain(rel))
+        .collect();
+        let hit = violated(&listed);
+        assert_eq!(hit.len(), listed.len(), "build recipe は全件が違反行に出る: {hit:?}");
+        // 完全一致: 似た名前（接尾辞つき・別拡張子）は捕まえない。
+        let near: Vec<TrackedFile> = ["Makefile.md", "docs/Dockerfile.txt", "x.mk.bak"]
+            .iter()
+            .map(|rel| plain(rel))
+            .collect();
+        assert!(violated(&near).is_empty(), "名前は完全一致で見る: {:?}", violated(&near));
+    }
+
+    /// 線引きの現物（planner 裁定 2026-09-11）: shell を起こす拡張子は足し、shell ではない
+    /// 言語（cjs / jsx / lua）は足さない——実行されるなら shebang か exec bit で捕まる。
+    #[test]
+    fn non_rust_exec_denies_shell_family_extensions_and_skips_non_shell_languages() {
+        let shell: Vec<TrackedFile> = ["a.fish", "b.ps1", "c.awk", "d.ksh", "e.csh"]
+            .iter()
+            .map(|rel| plain(rel))
+            .collect();
+        let hit = violated(&shell);
+        assert_eq!(hit.len(), shell.len(), "shell 系の拡張子は全件が違反: {hit:?}");
+        let other: Vec<TrackedFile> = ["f.cjs", "g.jsx", "h.lua"].iter().map(|rel| plain(rel)).collect();
+        assert!(violated(&other).is_empty(), "shell ではない言語は違反にならない（負例）: {:?}", violated(&other));
+    }
 }
