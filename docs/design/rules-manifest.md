@@ -112,11 +112,13 @@ ruled_at = "2026-09-07"
 
 ## 7. 歯（契約 `s2-chg` の検証・`tests/e2e/rules.rs` module・`rules_` 接頭辞・fixture は文字列 literal）
 
-`rules_manifest_accepts_good_fixture` / `rules_manifest_rejects_unknown_kind` / `rules_manifest_rejects_duplicate_id` / `rules_manifest_rejects_row_without_ruling` / `rules_manifest_rejects_value_type_mismatch` / `rules_manifest_reports_all_errors_with_line_numbers`（欠陥 3 箇所 → error 3 行）/ `rules_kind_parity_every_kind_has_sample`（`ALL` の各 kind が 1 行 fixture で parse + validate を通る）/ `rules_embedded_manifest_is_valid_and_covers_all_kinds`（埋め込み manifest を実 loader で読み error 0 ∧ 全 kind ≥1 行）/ `rules_cli_get_returns_value` / `rules_cli_get_refuses_disabled_row` / `rules_cli_rules_flag_overrides_embedded`（tmp manifest の値が返る）/ `rules_external_form`（usage と 1 行出力の insta snapshot）。
+歯は `crates/<NAME>/tests/e2e/rules.rs` module に `rules_` 接頭辞で置く（個々の名前はここに書かない。名前の列は現物が SSOT＝`cargo nextest list -p <NAME>`・ADR-0013 §2.1・`s2-07l.78`）。外形（usage と 1 行出力）は insta snapshot 1 本で pin する。
 
-さらに「黙って入力を捨てる」形を塞ぐ 5 本を足す（**計 17 本**・lens の指摘を再現してから追加した）: `rules_manifest_rejects_missing_schema`（拒否 5 形の 5 番目）/ `rules_manifest_rejects_duplicate_key_in_row`（`enabled = true` の次に `false` を書くと不発効の行が有効なまま読まれていた）/ `rules_manifest_rejects_duplicate_schema`（後勝ちで版が黙って差し替わる）/ `rules_manifest_rejects_empty_id` / `rules_cli_refuses_rules_flag_without_path`（PATH の無い `--rules` が埋め込みへ無言 fallback して rc 0 を返していた）。
+何を測るか: 良い fixture を受理する／未知の kind・重複 id・裁定の無い行・値の型違いを拒む／欠陥 3 箇所を行番号付きの error 3 行で全件報告する／`ALL` の各 kind が 1 行 fixture で parse + validate を通る（kind parity）／埋め込み manifest を実 loader で読み error 0 ∧ 全 kind ≥1 行／CLI の get が値を返し、不発効の行を断り、`--rules` の tmp manifest の値が埋め込みより優先される。
 
-xtask 側の drift 歯（最小形）: `crates/xtask/src/limits.rs` の `#[cfg(test)]` に `limits_match_rules_manifest`（xtask 自身の `toml_lite` で manifest を読み `R-C4-1` / `R-C4-2` を const と突合。TOML scanner は MVP では core と xtask の 2 実装を許し、core 側が育ったら xtask がそれを使う）。
+さらに「黙って入力を捨てる」形を塞ぐ（lens の指摘を再現してから足した）: schema の欠落（拒否 5 形の 5 番目）／行の中の重複 key（`enabled = true` の次に `false` を書くと不発効の行が有効なまま読まれていた）／schema の重複（後勝ちで版が黙って差し替わる）／空の id／PATH の無い `--rules`（埋め込みへ無言 fallback して rc 0 を返していた）。
+
+xtask 側の drift 歯（最小形）: `crates/xtask/src/limits.rs` の `#[cfg(test)]` に、xtask 自身の `toml_lite` で manifest を読み `R-C4-1` / `R-C4-2` を const と突合する歯を置く（TOML scanner は MVP では core と xtask の 2 実装を許し、core 側が育ったら xtask がそれを使う）。
 
 ## 8. 却下案
 
