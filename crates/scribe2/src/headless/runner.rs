@@ -13,6 +13,7 @@ use crate::pipe::RC_QUESTION;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::process::ExitStatus;
+use std::str::CharIndices;
 
 /// prompt の文面（tracked な template・絶対 path も口座名も含まない）。
 const TEMPLATE: &str = include_str!("runner.txt");
@@ -445,20 +446,18 @@ fn find_key(body: &str, key: &str) -> Option<usize> {
     let needle = format!("\"{key}\"");
     let target = usize::from(body.trim_start().starts_with('{'));
     let mut scan = Scan::default();
-    for (at, ch) in body.char_indices() {
-        if scan.skip(ch) {
-            continue;
-        }
+    let mut chars = body.char_indices();
+    while let Some((at, ch)) = scan.next_structural(&mut chars) {
         match ch {
             '{' | '[' => scan.depth = scan.depth.saturating_add(1),
             '}' | ']' => scan.depth = scan.depth.saturating_sub(1),
-            '"' => {
-                if scan.depth == target {
-                    if let Some(after) = key_end(body, at, &needle) {
-                        return Some(after);
-                    }
+            // 文字列の開き（`next_structural` が `in_string` を立てた直後）＝key の候補。
+            // catch-all にしない——原始が返す種類が増えた周に、key でない位置を key の
+            // 候補として読む形へ黙って広がる。
+            '"' if scan.depth == target => {
+                if let Some(after) = key_end(body, at, &needle) {
+                    return Some(after);
                 }
-                scan.in_string = true;
             }
             _ => {}
         }
@@ -466,7 +465,7 @@ fn find_key(body: &str, key: &str) -> Option<usize> {
     None
 }
 
-/// `find_key` の走査状態（文字列の中か・escape の直後か・入れ子の深さ）。
+/// JSON 1 行の走査状態（文字列の中か・escape の直後か・入れ子の深さ）。
 #[derive(Default)]
 struct Scan {
     in_string: bool,
@@ -475,6 +474,29 @@ struct Scan {
 }
 
 impl Scan {
+    /// **文字列の外**の次の構造文字（`{` `}` `[` `]` と文字列の開き `"`）を返す。
+    ///
+    /// 文字列の中（escape された `\"` を跨ぐ）の brace や引用符は構造ではないので返さない
+    /// ——`"note":"win {5h}"` の brace で深さを動かすと切り出しが手前で終わる（`s2-07l.126`）。
+    /// 文字列の開きを返すときは `in_string` を立てて返す＝呼び手は key の候補として位置だけを
+    /// 見ればよく、走査**状態**を自分で持たない（lens-126 MED-1・深さは用途ごとに違うので呼び手）。
+    fn next_structural(&mut self, it: &mut CharIndices) -> Option<(usize, char)> {
+        for (at, ch) in it.by_ref() {
+            if self.skip(ch) {
+                continue;
+            }
+            match ch {
+                '{' | '}' | '[' | ']' => return Some((at, ch)),
+                '"' => {
+                    self.in_string = true;
+                    return Some((at, ch));
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
     /// 文字列の中の 1 文字を読み飛ばす（true）。文字列の外なら false を返し呼び手が構造を読む。
     fn skip(&mut self, ch: char) -> bool {
         if !self.in_string {
@@ -518,16 +540,15 @@ fn quoted_value(after_colon: &str) -> Option<&str> {
 /// 入れ子 object で切ると status の手前で終わって上限 record を見逃す（fail-open の向き・`.123` の
 /// `usage.iterations[]` と同型）。「直下の key だけを読む」は切り出しではなく [`find_key`] の深さ guard が
 /// 担う（入れ子の `status` は深さ 1 以上ゆえ読まれない）。文字列と escape の読み飛ばしは [`find_key`] と同じ
-/// [`Scan`] に乗せ、走査**状態**を 2 つ持たない（loop の骨格は 2 本在り、文字列の外だけを返す原始を `Scan` に
-/// 寄せる形は後続・lens-126 MED-1）。閉じ brace が無い（壊れた行）周は末尾までを返し、読めるかは下流が決める。
+/// [`Scan::next_structural`] に乗せ、走査**状態**を 2 つ持たない（loop の骨格は 2 本在るが、文字列の外の
+/// 構造文字を返す原始は 1 本・lens-126 MED-1）。閉じ brace が無い（壊れた行）周は末尾までを返し、読めるかは
+/// 下流が決める。
 fn immediate_object(after_colon: &str) -> Option<&str> {
     let opened = after_colon.trim_start().strip_prefix('{')?;
     let mut scan = Scan::default();
     let mut end = opened.len();
-    for (at, ch) in opened.char_indices() {
-        if scan.skip(ch) {
-            continue;
-        }
+    let mut chars = opened.char_indices();
+    while let Some((at, ch)) = scan.next_structural(&mut chars) {
         match ch {
             '{' => scan.depth = scan.depth.saturating_add(1),
             '}' if scan.depth == 0 => {
@@ -535,7 +556,7 @@ fn immediate_object(after_colon: &str) -> Option<&str> {
                 break;
             }
             '}' => scan.depth = scan.depth.saturating_sub(1),
-            '"' => scan.in_string = true,
+            // `[` `]` と文字列の開きは境界を動かさない（深さは brace だけで数える）。
             _ => {}
         }
     }
@@ -545,4 +566,33 @@ fn immediate_object(after_colon: &str) -> Option<&str> {
 /// 前提違反（rc 1 + stderr 1 行・何もしない）。
 fn refused(reason: String) -> Outcome {
     Outcome::failed_line(RC_REFUSED, format!("runner: {reason}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Scan;
+
+    /// 文字列の外の構造文字だけを、位置ごと順に集める。
+    fn structurals(body: &str) -> Vec<(usize, char)> {
+        let mut scan = Scan::default();
+        let mut chars = body.char_indices();
+        let mut seen = Vec::new();
+        while let Some(found) = scan.next_structural(&mut chars) {
+            seen.push(found);
+        }
+        seen
+    }
+
+    /// 文字列の中の brace は（escape された引用符を跨いでも）構造文字ではない。
+    /// 返るのは開き `"` と、文字列の外の `{` `}` `[` `]` だけである。
+    #[test]
+    fn scan_next_structural_skips_braces_inside_strings() {
+        // 文字列の中に `{` `}` と escape された `"` を持つ 1 行（期待する位置は
+        // **この字面のまま**数えた値である＝空白を足すと index がずれる）。
+        let body = r#"{"a{b\"c}":[1]}"#;
+        assert_eq!(
+            structurals(body),
+            [(0, '{'), (1, '"'), (11, '['), (13, ']'), (14, '}')]
+        );
+    }
 }

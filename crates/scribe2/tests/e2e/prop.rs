@@ -263,6 +263,31 @@ mod rate_limit {
         prop::collection::vec(ws(), 8)
     }
 
+    /// 文字列の中へ入れてよい雑音（`{` `}` の任意の並びと **escape された backslash**）。
+    /// `\\` を空間に含めるのは、閉じ引用符の直前が backslash の形（`"…\\"` ＝正しく閉じる）
+    /// を通すためである——escape を「1 つ前が backslash か」だけで見る形はここで外れる。
+    const NOISE_TEXT: &str = r"(\\\\|[{}]){0,8}";
+
+    /// `status` より**前**に置く雑音の member（`"n<key>":<値>`）。値は 3 形:
+    /// 文字列中の brace と escape された引用符・入れ子の object・入れ子の array である。
+    /// key は `n` 接頭辞ゆえ `status` と衝突しない。
+    fn noise_members() -> impl Strategy<Value = Vec<String>> {
+        let member = ("[a-z]{1,8}", NOISE_TEXT, NOISE_TEXT, 0_usize..3);
+        prop::collection::vec(member, 0..4).prop_map(|items| {
+            items
+                .into_iter()
+                .map(|(key, braces, inner, shape)| {
+                    let value = match shape {
+                        0 => format!("\"{}\\\"{}\"", braces, inner),
+                        1 => format!("{{\"a\":\"{}\\\"x\",\"b\":{{\"c\":\"{}\"}}}}", braces, inner),
+                        _ => format!("[\"{}\",{{\"d\":\"{}\\\"\"}},[]]", braces, inner),
+                    };
+                    format!("\"n{}\":{}", key, value)
+                })
+                .collect()
+        })
+    }
+
     proptest! {
         #![proptest_config(config())]
 
@@ -301,6 +326,23 @@ mod rate_limit {
             let direct_first = format!("{{\"status\":\"{}\",\"{}\":{{\"status\":\"{}\"}}}}", direct, window, nested);
             let line = rate_limit_line("rate_limit_event", &direct_first, &gap);
             prop_assert_eq!(rate_limit_status(&line), Some(direct.as_str()), "{}", line);
+        }
+
+        /// `status` より前に何が来ても直下の status をそのまま返す: 文字列中の brace
+        /// （`{` `}` の任意の並び）・escape された引用符・入れ子の object / array で
+        /// 切り出しが手前で終わらない（`s2-07l.126` の反例を strategy の空間に置く）。
+        ///
+        /// 測るのは `s2-07l.126` で**既に land した挙動**である（本便は挙動不変の refactor で、
+        /// この歯は base でも緑＝flip の RED にならない）。本便の RED は原始を直接撃つ
+        /// `headless::runner` の in-file の歯が担う。
+        // flip-check: retroactive s2-07l.129
+        #[test]
+        fn prop_rate_limit_status_survives_noise_before_status(status in status_ident(), noise in noise_members(), gap in gaps()) {
+            let mut members = noise;
+            members.push(format!("\"status\":\"{}\"", status));
+            let info = format!("{{{}}}", members.join(","));
+            let line = rate_limit_line("rate_limit_event", &info, &gap);
+            prop_assert_eq!(rate_limit_status(&line), Some(status.as_str()), "{}", line);
         }
     }
 }
