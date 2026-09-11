@@ -22,7 +22,7 @@ v2 に既に在るもの: FR23（WM の規則）・FR21（`<state_dir>/inject.js
 - 本設計はその HOW（subcommand・置き場・条件の評価順・lock）だけを決める。
 
 ## 3. 設計（subcommand `scribe2 seat …`・std のみ・env を読まない C2.2）
-- `seat meter --target <tmux target> [--sid S]` … (a) の port。pane → jsonl の順で fallback。Measured 型で返す（C10）。
+- `seat meter --target <tmux target> [--sid S]` … (a) の port。**transcript が名指された周は transcript・名指されない周は pane**（出所は入力で決まる 1 本道・s2-07l.75）。**空文字や空白だけの `--transcript` は「渡していない」と同じ**に扱う（渡し忘れを `unreadable` に化けさせない・guard の項と同じ読み）。Measured 型で返す（C10）。
 - `seat guard` … hook `pre-tool-use` の内側に組み込む（新 hook は増やさない）。cap は manifest 行 `seat.context_cap_pct`（初期値 60・裁定 id 付き）。deny の極性は既存 guard と同じ fail-closed。**計測不能は deny しない**（context が読めないだけで編集を止めると開発 session が詰む＝理由を inject.jsonl に記録して allow）。
   - **計測の出所**: 使用 token は payload の `transcript_path` が名指す jsonl を便 2 の parse（末尾 10 MiB・最後の有効 usage 和・`seat::meter::used_from_transcript`）で読む。分母は manifest 行 `seat.context_window_tokens` の**宣言値**で、pane の statusline は読まない（hook から tmux を呼ばない・憲法 C2.2）。使用率は整数の切り捨てで、`pct >= cap` を止める。
   - **通す口は 2 つ**（`SeatDecision::{Allow, Externalize}`・bool で持たない＝憲法 C11）。`Externalize` は `<root>/.claude-session/working-memory.*.md` **ちょうど 2 段**の編集で、使用率に関わらず通す（止めると席は退避すらできない・FR23）。口は狭く取る＝同じ dir でも別名の編集は上限に掛かる。判定は**字句と実体の 2 段**で、`working-memory.*.md` という名前の symlink が口の外を指していれば通さない（通す側の口を字句 1 段で持つと link 1 本で上限を越えられる）。**まだ無い退避物は link ではありえない**ので在るときだけ実体を見る＝これから作る周は通る。`transcript_path` の空文字は「渡されていない」と同じに扱う（`unreadable` に化けさせない）。
@@ -42,7 +42,7 @@ v2 に既に在るもの: FR23（WM の規則）・FR21（`<state_dir>/inject.js
 - `seat inject --target T --text …` … tmux `send-keys` + 送達確認（pane の末尾に text が現れたか）。rc は 0 / 1 の 2 値にし、v1 の偽陰性（4 / 7）を作らない。
 - 駆動: systemd user timer は **repo に入れない**（起動コマンドを repo に置かない・CLAUDE.md）。unit の雛形は §8 に書き、user の host で有効化する。
 - 記録: 判定と注入は `<state_dir>/seat/<target>/tick.jsonl` に 1 行ずつ（FR21 と同じ schema）。
-- 計測できない理由の弁別（便 2 の実装で決めた読み）: statusline の候補が無い周は、pane 本文が空なら `no-source`・本文が在れば `pane-no-statusline` に分ける（どちらも transcript が明示されていれば先に jsonl へ落ちる）。健全性を外れた候補は `pane-out-of-bound` で**不成立のまま**とし、別の出所で塗り直さない（壊れた面を他の値で隠さない）。
+- 計測できない理由の弁別（便 2 の実装で決めた読み）: statusline の候補が無い周は、pane 本文が空なら `no-source`・本文が在れば `pane-no-statusline` に分ける（どちらの弁別も **transcript を渡さない周だけ**の話で、明示された周は pane を読まずに jsonl で測る・s2-07l.75）。健全性を外れた候補は `pane-out-of-bound` で**不成立のまま**とし、別の出所で塗り直さない（壊れた面を他の値で隠さない）。**この 3 語はいずれも pane を読む周＝transcript を渡さない周にしか出ない**（渡した周は pane を読まないので到達しない）。
 
 ## 4. 憲法・制約との整合
 - R-E12（常駐席は event 駆動で周期起動を張らない）: 管理 tick は席の**外**（host の timer）で回し、席には event（注入）としてしか届かない＝両立。R-G20（管理系の席の watchdog と別口座 respawn）は本設計の tick + cycle が受け皿。
@@ -65,7 +65,7 @@ v2 に既に在るもの: FR23（WM の規則）・FR21（`<state_dir>/inject.js
 - (iii) context 上限を契約の大きさだけで受ける（CON6 の拡大解釈）: runner には正しいが開発 session には効かない。
 
 ## 7. 裁定済みの論点
-- 計測の一次ソース = pane（statusline）一次・transcript は fallback（v1 と同じ・速い・NFR5 に収まる）。
+- 計測の一次ソース = **transcript が名指された周は transcript・名指されない周は pane**（guard は hook の中で pane を持てない〔C2.2〕ので、pane 一次のままだと 2 面が同じ瞬間に違う値を返す。実測 2026-09-11・s2-07l.75: 両出所は同じ量を見ており差は平均 0.6% だが、pane は statusline の 1k 刻みの階段・transcript は 1 token 粒度の連続で、境界の判定は細かい側が安全）。**NFR5 は満たす**——transcript は末尾 10 MiB しか読まず、11.1 MiB の file を渡した実測で 1 回 0.01 秒（debug binary・3 回とも同値。上限は 2.0 秒）。
 - cap の初期値 = 60（user 裁定 2026-09-10・manifest 行 `seat.context_cap_pct` に裁定 id 付きで置く・C4 / C13 の閾値ではないので A2 非該当）。
 - 切替の判定 = 併走 1 日 + cycle 完走 1 回（AC9）。v1 の timer を止めるのは user 手番（A1「消す」）。
 

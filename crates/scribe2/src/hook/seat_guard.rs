@@ -28,14 +28,9 @@ const WM_PREFIX: &str = "working-memory.";
 const WM_SUFFIX: &str = ".md";
 /// cap を宣言する rules 行の id（**値は code に焼かない**）。
 const ID_CAP: &str = "seat.context_cap_pct";
-/// 窓を宣言する rules 行の id（**値は code に焼かない**）。
-const ID_WINDOW: &str = "seat.context_window_tokens";
 /// payload が transcript を名指していない周の理由。
 const NO_TRANSCRIPT: &str = "no-transcript-path";
-/// 宣言（rules 行）が読めない周の理由。
-const NO_RULE: &str = "no-rule";
-/// 百分率の分子。
-const PERCENT: u64 = 100;
+
 
 /// seat guard の判定。**bool で持たない**（憲法 C11）。
 ///
@@ -71,20 +66,20 @@ pub fn decide(
     if is_externalize(root, cwd, path) {
         return SeatDecision::Externalize;
     }
-    let Some((cap, window)) = thresholds() else {
-        return SeatDecision::Unmeasured(NO_RULE.to_owned());
+    let Some(cap) = declared_cap() else {
+        return SeatDecision::Unmeasured(meter::REASON_NO_RULE.to_owned());
     };
     // **空文字は「無い」と同じ**（trim 後）。空の口をそのまま path として扱うと、渡し忘れが
     // `unreadable`（file が壊れている）に化けて、記録から原因を取り違える。
     let Some(found) = transcript.map(str::trim).filter(|found| !found.is_empty()) else {
         return SeatDecision::Unmeasured(NO_TRANSCRIPT.to_owned());
     };
-    let used = match meter::used_from_transcript(Path::new(found)) {
-        Ok(found) => found,
+    // **使用率は自分で計算しない**——meter の 1 本の口を通す。2 面が別々に割ると、
+    // 丸めや窓の出所が片方だけ動いたときに静かにずれる（本便が畳んだ穴そのもの）。
+    let pct = match meter::used_from_transcript_pct(Path::new(found)) {
+        Ok((pct, _, _)) => pct,
         Err(reason) => return SeatDecision::Unmeasured(reason.to_owned()),
     };
-    // 切り捨て。境界は「cap 以上で止める」ので、切り上げると cap 未満の周まで止まる。
-    let pct = used.saturating_mul(PERCENT) / window;
     if pct >= cap {
         SeatDecision::Deny(format!(
             "{NAME}: deny context {pct}% ≥ cap {cap}%（退避してから・FR26）"
@@ -94,12 +89,11 @@ pub fn decide(
     }
 }
 
-/// cap と窓を manifest から読む。**どちらか欠けたら測らない**（0 で割らない）。
-fn thresholds() -> Option<(u64, u64)> {
+/// cap を manifest から読む。**窓はここでは読まない**——窓で割るのは meter の口の仕事で、
+/// 2 か所で読むと片方だけが別の行を見に行ける（同じ値を 2 面が持つ形にしない）。
+fn declared_cap() -> Option<u64> {
     let manifest = Manifest::embedded().ok()?;
-    let cap = int_of(&manifest, ID_CAP)?;
-    let window = int_of(&manifest, ID_WINDOW)?;
-    (window > 0).then_some((cap, window))
+    int_of(&manifest, ID_CAP)
 }
 
 /// 発効している行の整数値。不発効・別の形は `None`（＝測らない側へ倒す）。

@@ -1,13 +1,17 @@
 //! context 使用量の計測（SRS FR25・設計 §3）。
 //!
-//! 出所は **pane（statusline）が一次・transcript（jsonl）が fallback** で、成立した
-//! 出所を `source=` として必ず一緒に運ぶ（憲法 C10「Measured は出所付き」）。端末描画は
-//! 出所の 1 つであって seat state の判定入力ではない（C3.3）。
+//! 出所は **transcript が名指された周は transcript・名指されない周は pane**（statusline）で、
+//! **fallback は無い**（s2-07l.75）——出所が入力で決まる 1 本道にしないと、hook の中で pane を
+//! 持てない guard（C2.2）と 2 面が同じ瞬間に違う値を返す。成立した出所を `source=` として必ず
+//! 一緒に運ぶ（憲法 C10「Measured は出所付き」）。端末描画は出所の 1 つであって seat state の
+//! 判定入力ではない（C3.3）。
 //!
 //! **計測できない周は 0% に化けない**（FR25）: 健全性を外れた statusline は捏造値を
 //! 流さず不成立にし、理由を 1 語で返す。
 
 use super::{capture, search_region};
+use crate::rules::manifest::Manifest;
+use crate::rules::RuleValue;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
@@ -25,19 +29,33 @@ const TOKEN_DIGITS: usize = 9;
 
 /// 出所が pane（statusline）であること。
 pub const SOURCE_PANE: &str = "pane";
-/// 出所が transcript（jsonl）であること。
-pub const SOURCE_JSONL: &str = "jsonl";
+/// 出所が transcript（jsonl）と rules 行の**宣言窓**であること。
+///
+/// **3 値の出所が同じではない**ので 1 語で名乗らない（憲法 C10）——`used_tokens` は jsonl から
+/// 測った値、`window_tokens` は rules 行 `seat.context_window_tokens` の**宣言値**、`used_pct` は
+/// その 2 つからの**導出値**である。`jsonl` とだけ名乗ると 3 値が同じ出所と読める＝判定行は
+/// 出所から切り離されて流通するので、読む側に伝わらない（planner 裁定 2026-09-11）。
+/// pane 経路は 3 値とも statusline 由来ゆえ [`SOURCE_PANE`] のままでよい。
+pub const SOURCE_JSONL_RULES: &str = "jsonl+rules";
 
 /// pane 本文は得られたが statusline の候補行が無い。
 pub const REASON_NO_STATUSLINE: &str = "pane-no-statusline";
 /// statusline の候補は在るが健全性を外れている。
 pub const REASON_OUT_OF_BOUND: &str = "pane-out-of-bound";
-/// transcript は読めたが有効な usage が無い。
-pub const REASON_JSONL_NO_USAGE: &str = "jsonl-no-usage";
 /// tmux を撃てなかった。
 pub const REASON_TMUX_FAILED: &str = "tmux-failed";
 /// 出所が 1 つも成立しなかった。
 pub const REASON_NO_SOURCE: &str = "no-source";
+/// 測るのに要る宣言（rules 行）が読めない＝**割る数が無い**ので測らない。
+///
+/// guard の cap 欠落と**同じ語**である（設計 §3「測れない理由は 4 語で弁別する」）。5 語目を
+/// 足すと、記録の語彙が本便の都合で増える——出所を 1 本にする便が記録の形を動かさない。
+pub const REASON_NO_RULE: &str = "no-rule";
+
+/// 窓を宣言する rules 行の id（**値は code に焼かない**・憲法 C5）。
+const ID_WINDOW: &str = "seat.context_window_tokens";
+/// 百分率の分子。
+const PERCENT: u64 = 100;
 
 /// 計測 1 回の入力。
 pub struct Request<'a> {
@@ -47,7 +65,7 @@ pub struct Request<'a> {
     pub socket: Option<&'a str>,
     /// pane 本文の代わりに読む file（在れば tmux を呼ばない）。
     pub capture_file: Option<&'a str>,
-    /// fallback に使う transcript（明示のときだけ読む・C2.2）。
+    /// 出所に使う transcript（**明示された周はこれだけを見る**・空文字は「無い」と同じ・C2.2）。
     pub transcript: Option<&'a str>,
 }
 
@@ -77,14 +95,37 @@ enum PaneLook {
     Measured(u64, u64, u64),
     /// 候補は在るが健全性を外れている（**fallback しない**＝壊れた面を別の出所で塗らない）。
     OutOfBound,
-    /// 本文は得られたが候補行が無い（fallback 可）。
+    /// 本文は得られたが候補行が無い。
     NoStatusline,
-    /// 出所として成立しなかった（fallback 可・理由つき）。
+    /// 出所として成立しなかった（理由つき）。
     Absent(&'static str),
 }
 
 /// 計測を 1 回行う。
+///
+/// **transcript が名指された周は transcript だけを見る**（pane を混ぜない）。出所が入力で
+/// 決まる 1 本道にしないと、同じ入力に 2 つの答えが在る状態が残る——hook の中の guard は
+/// tmux も env も見ない（C2.2）ので pane を持てず、pane 一次のままだと guard と meter が
+/// **同じ席の同じ瞬間に違う値**を返す（cap 60% が何に対する 60% か 1 か所で言えない）。
+///
+/// 実測 2026-09-11（両席 × 26 点対）: 2 つの出所は**同じ量**を見ている（差は最大 1.7% /
+/// 平均 0.6%）。ただし pane は statusline の 1k 刻みの**階段**（22 点で異なり 4 種）で、
+/// transcript は 1 token 粒度の**連続**（同 14 種）である。境界（cap）の判定は細かい側を
+/// 見るほうが取り違えが少なく、**CC が圧縮する量そのもの**でもある（前席の実測: transcript
+/// 976,065 = 97.6% で auto-compact が発火・statusline は 97%）。
 pub fn measure(request: &Request) -> Measure {
+    // 空文字は「無い」と同じ（trim 後）。渡し忘れが理由の取り違えにならないようにする。
+    if let Some(path) = request.transcript.map(str::trim).filter(|p| !p.is_empty()) {
+        return match used_from_transcript_pct(Path::new(path)) {
+            Ok((pct, used, window)) => Measure::Measured(Reading {
+                used_pct: Some(pct),
+                used_tokens: Some(used),
+                window_tokens: Some(window),
+                source: SOURCE_JSONL_RULES,
+            }),
+            Err(reason) => Measure::Unmeasured(reason),
+        };
+    }
     match look_at_pane(request) {
         PaneLook::Measured(pct, used, window) => Measure::Measured(Reading {
             used_pct: Some(pct),
@@ -93,8 +134,8 @@ pub fn measure(request: &Request) -> Measure {
             source: SOURCE_PANE,
         }),
         PaneLook::OutOfBound => Measure::Unmeasured(REASON_OUT_OF_BOUND),
-        PaneLook::NoStatusline => fallback(request, REASON_NO_STATUSLINE),
-        PaneLook::Absent(reason) => fallback(request, reason),
+        PaneLook::NoStatusline => Measure::Unmeasured(REASON_NO_STATUSLINE),
+        PaneLook::Absent(reason) => Measure::Unmeasured(reason),
     }
 }
 
@@ -132,19 +173,38 @@ fn read_pane(pane: &str) -> PaneLook {
     }
 }
 
-/// transcript を fallback として読む。**明示されていない周は読まない**（C2.2）。
-fn fallback(request: &Request, pane_reason: &'static str) -> Measure {
-    let Some(path) = request.transcript else {
-        return Measure::Unmeasured(pane_reason);
-    };
-    match read_tail(Path::new(path)).as_deref().and_then(last_usage) {
-        Some(used) => Measure::Measured(Reading {
-            used_pct: None,
-            used_tokens: Some(used),
-            window_tokens: None,
-            source: SOURCE_JSONL,
-        }),
-        None => Measure::Unmeasured(REASON_JSONL_NO_USAGE),
+/// transcript を出所に**使用率まで**測る（`(使用率, 使用 token, 窓)`）。
+///
+/// **guard と meter が呼ぶ 1 本の口**である。2 つ目の計算を作ると、片方だけが丸めや窓を
+/// 変えたときに 2 面が静かにずれる——本便が畳もうとしている当の穴になる。
+///
+/// 窓は **rules 行の宣言値**（測れる窓を transcript は持たない）。宣言が読めない周は
+/// **割らずに不成立**にする（0 で割らない・0% に化けない）。
+///
+/// 使用率は**切り捨て**である。境界は「cap 以上で止める」ので、切り上げると cap 未満の
+/// 周まで止まる（guard の従来の丸めをそのまま持ってきている）。
+pub fn used_from_transcript_pct(path: &Path) -> Result<(u64, u64, u64), &'static str> {
+    let used = used_from_transcript(path)?;
+    let window = declared_window().ok_or(REASON_NO_RULE)?;
+    Ok((used.saturating_mul(PERCENT) / window, used, window))
+}
+
+/// 埋め込みの宣言から窓を引く。
+fn declared_window() -> Option<u64> {
+    window_of(&Manifest::embedded().ok()?)
+}
+
+/// 宣言（rules 行）から窓を引く。不発効・別の形・0 は `None`（＝測らない側へ倒す）。
+///
+/// **manifest を引数で取る**のは、埋め込みを関数の中で呼ぶと 3 つの述語（行の有無 /
+/// `enabled` / `> 0`）を歯から動かせなくなるためである（`Manifest::parse` は pub で、
+/// `tests/e2e/fleet.rs` の `LockPolicy::from_rules` が同じ形の前例）。「0 で割らない」は
+/// 本便が doc で名乗った保証なので、名乗る側が測れる形で置く。
+pub fn window_of(manifest: &Manifest) -> Option<u64> {
+    let row = manifest.get(ID_WINDOW)?;
+    match (row.enabled, &row.value) {
+        (true, RuleValue::Int(found)) if *found > 0 => Some(*found),
+        _ => None,
     }
 }
 
@@ -223,12 +283,19 @@ fn last_usage(text: &str) -> Option<u64> {
 
 /// transcript 1 本から使用 token を読む（**失敗の理由を 1 語で弁別する**）。
 ///
-/// [`measure`] の fallback 経路は `read_tail(...).and_then(last_usage)` と畳んでいるので、
-/// 「file を読めない」と「有効な usage が 1 件も無い」が [`REASON_JSONL_NO_USAGE`] の 1 語へ
-/// 潰れる。seat guard（`hook::seat_guard`）は測れなかった理由を記録に残す契約なので、
-/// 同じ 2 段を**畳まずに**返す口をここへ 1 本置く（parse の実体は上の 2 関数のまま＝
-/// 2 面目を作らない）。**[`measure`] の経路と出力は 1 byte も変えていない。**
-pub(crate) fn used_from_transcript(path: &Path) -> Result<u64, &'static str> {
+/// **module private である**。外から呼べると「共有の口を通らずに自分で割る」形が書けてしまい、
+/// 割る数がたまたま同じなら歯も通る——一致の歯が測るのは「同じ数」であって「同じ関数」では
+/// ないので、可視性でしか塞げない（s2-07l.75 lens M-1）。使用率が要る面は
+/// [`used_from_transcript_pct`] を呼ぶ。
+///
+/// 「file を読めない」（`unreadable`）と「有効な usage が 1 件も無い」（`no-usage`）を
+/// **畳まずに**返す。seat guard は測れなかった理由を記録に残す契約（FR21）で、畳むと
+/// 記録から原因を取り違える。
+///
+/// **この 2 語が 2 面の共通語である**。本便より前は、同じ条件を guard が `unreadable` /
+/// `no-usage`、meter が `jsonl-no-usage` と**別の語で**呼んでいた——出所が 2 本あった状態の
+/// もう 1 つの顔で、記録と CLI を突き合わせると同じ事象が別の名前で残っていた。
+fn used_from_transcript(path: &Path) -> Result<u64, &'static str> {
     let text = read_tail(path).ok_or("unreadable")?;
     last_usage(&text).ok_or("no-usage")
 }
