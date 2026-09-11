@@ -45,7 +45,7 @@
 ## 6. 証拠の出所（`s2-07l.112` で本文化）と後続
 
 - **作り直しの証拠**: cycle は `/clear` 送達 ts の後に足された `SessionStart` の打刻が在ることを作り直しの証拠にする（`.96` の残余 (1)〔前の echo が見えたまま今回の `/clear` が消費されない周〕を畳む）。読み口は `state::evidence_after`（基線 + 送達 ts）の 1 本で、inject と共用する（§4）。
-- **送達の証拠**: inject の `consumed=` は「入力欄が空になった」でなく「送達 ts の後に `UserPromptSubmit` の打刻が在る」で決める（`.97` lens MEDIUM-2 の残余）。値は**閉じた 3 値の enum**（planner 裁定 2026-09-12・文字列で持たない）: `true` = 送達 ts 以後の `UserPromptSubmit` の打刻が在る（消費した）／`false` = 打刻 file は読めるが窓の内に新しい打刻が無い（queue・次の submit で消費される・**送達の成功であって失敗ではない**＝tick は自打刻し再送しない）／`unknown` = 測れない（`reason=state-missing`〔file が無い＝hook 不在〕/ `state-unreadable`〔読めない〕/ `state-dir`〔置き場が解けない〕を添える・消費と読み替えない）。送達そのもの（rc 0）は目印の出現で決め、`.90` の裁定は不変。`false` は「窓の内に打刻が来なかった」であって「消費されなかった」ではない（既定 2 s の窓は hook の遅さも測る・cycle は 30 s）。基線を読めない周は証拠を採らない（`unknown reason=state-unreadable`・0 行に潰さない）。
+- **送達の証拠**: inject の `consumed=` は「入力欄が空になった」でなく「送達 ts の後に `UserPromptSubmit` の打刻が在る」で決める（`.97` lens MEDIUM-2 の残余）。値は**閉じた 3 値の enum**（planner 裁定 2026-09-12・文字列で持たない）: `true` = 送達 ts 以後の `UserPromptSubmit` の打刻が在る（消費した）／`false` = 打刻 file は読めるが窓の内に新しい打刻が無い（queue・次の submit で消費される・**送達の成功であって失敗ではない**＝tick は自打刻し再送しない）／`unknown` = 測れない（`reason=state-missing`〔file が無い＝hook 不在〕/ `state-unreadable`〔読めない〕/ `state-dir`〔置き場が解けない〕を添える・消費と読み替えない）。送達そのもの（rc 0）は目印の出現で決め、`.90` の裁定は不変。`false` は「窓の内に打刻が来なかった」であって「消費されなかった」ではない（既定 2 s の窓は hook の遅さも測る・cycle は 30 s）。基線を読めない周は証拠を採らない（`unknown reason=state-unreadable`・0 行に潰さない）。cycle の復元が queue（`false`）のままの周は `restore-unconfirmed` と記録する——これは「まだ確認できない」の typed な語であって失敗ではなく（planner 裁定 2026-09-12）、再送は cycle-stamp の back-off（`s2-07l.110`）が塞ぐ。
 - **後続（別契約）**: 打刻の `sid` と heartbeat の突合（同じ target に別 sid の打刻が混ざる周の検出）は doctor の主題。
 
 ## 7. 却下案
