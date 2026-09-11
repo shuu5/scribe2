@@ -435,8 +435,9 @@ fn seat_inject_delivers_and_records_on_isolated_socket() {
     assert_eq!(
         stdout_of(&out),
         format!(
-            "seat: inject delivered target={sanitized} bytes={} consumed=true\n",
-            payload.len()
+            "seat: inject delivered target={sanitized} bytes={} consumed=true{}\n",
+            payload.len(),
+            provenance(&state, "flag")
         ),
         "入力欄が空になった周は consumed=true"
     );
@@ -460,6 +461,44 @@ fn seat_inject_delivers_and_records_on_isolated_socket() {
         "byte 数は payload の byte 長: {line}"
     );
     // socket を消す**前**に畳む（消してからでは kill-session が届かない・実測 2026-09-10）。
+    drop(guard);
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// inject の表示行は末尾に出所と置き場を持つが、**記録の what は payload の先頭のまま**
+/// （FR21 と schema を共有・planner 裁定 2026-09-11）＝2 語を含まない負例まで測る。
+#[test]
+fn seat_inject_delivered_line_carries_state_dir_provenance() {
+    let dir = tmp();
+    let socket = socket_of(&dir);
+    let name = "seatinjprov";
+    let guard = start_seat(&socket, name);
+    assert!(guard.ready(), "独立 socket に prompt 付きの session を立てられる");
+    let state = dir.join("state");
+    let payload = "echo seat-e2e-prov";
+
+    let out = run_seat(&[
+        "inject", "--target", name, "--tmux-socket", &socket,
+        "--state-dir", &state.display().to_string(), "--text", payload,
+    ]);
+
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(
+        stdout_of(&out),
+        format!(
+            "seat: inject delivered target={name} bytes={} consumed=true{}\n",
+            payload.len(),
+            provenance(&state, "flag")
+        ),
+        "表示行の末尾に出所と置き場"
+    );
+    let recorded = fs::read_to_string(tick_file(&state, name)).unwrap_or_default();
+    assert_eq!(recorded.lines().count(), 1, "記録は 1 行: {recorded}");
+    assert!(recorded.contains(&format!(r#""what":"{payload}""#)), "what は payload の先頭のまま: {recorded}");
+    assert!(
+        !recorded.contains(" source=") && !recorded.contains(" state_dir="),
+        "記録の what に 2 語を足さない（加工しない）: {recorded}"
+    );
     drop(guard);
     fs::remove_dir_all(&dir).ok();
 }
@@ -495,7 +534,7 @@ fn seat_inject_refuses_when_input_line_is_busy() {
 
     assert_eq!(rc_of(&out), i32::from(RC_REFUSED));
     assert_eq!(stdout_of(&out), "", "断りの周は stdout 0 行");
-    assert_eq!(stderr_of(&out), "seat: inject refused reason=busy\n");
+    assert_eq!(stderr_of(&out), format!("seat: inject refused reason=busy{}\n", provenance(&state, "flag")));
     let pane = capture(&socket, name);
     assert!(!pane.contains(marker), "marker は 1 度も現れない: {pane}");
     assert!(
@@ -535,7 +574,7 @@ fn seat_inject_fails_closed_when_tmux_target_is_unreachable() {
     assert_eq!(stdout_of(&out), "");
     assert_eq!(
         stderr_of(&out),
-        "seat: inject unconfirmed reason=tmux-failed\n"
+        format!("seat: inject unconfirmed reason=tmux-failed{}\n", provenance(&state, "flag"))
     );
     assert!(!state.exists(), "1 byte も書かない");
     fs::remove_dir_all(&dir).ok();
@@ -574,8 +613,9 @@ fn seat_inject_counts_queued_delivery_as_success_with_consumed_false() {
     assert_eq!(
         stdout_of(&out),
         format!(
-            "seat: inject delivered target={name} bytes={} consumed=false\n",
-            payload.len()
+            "seat: inject delivered target={name} bytes={} consumed=false{}\n",
+            payload.len(),
+            provenance(&state, "flag")
         ),
         "現れた ＝ 送達成功・入力欄が空でない周は consumed=false"
     );
@@ -625,7 +665,7 @@ fn seat_inject_still_fails_when_payload_never_appears() {
 
     assert_eq!(rc_of(&out), i32::from(RC_REFUSED));
     assert_eq!(stdout_of(&out), "", "送達を確認できない周は stdout 0 行");
-    assert_eq!(stderr_of(&out), "seat: inject unconfirmed reason=absent\n");
+    assert_eq!(stderr_of(&out), format!("seat: inject unconfirmed reason=absent{}\n", provenance(&state, "flag")));
     assert!(
         !tick_file(&state, name).exists(),
         "送達を確認できない周は記録しない"
@@ -666,7 +706,7 @@ fn seat_inject_refuses_when_prompt_is_not_locatable() {
     assert_eq!(stdout_of(&out), "");
     assert_eq!(
         stderr_of(&out),
-        "seat: inject refused reason=unknown-input\n"
+        format!("seat: inject refused reason=unknown-input{}\n", provenance(&state, "flag"))
     );
     let pane = capture(&socket, name);
     assert!(!pane.contains(marker), "marker は 1 度も現れない: {pane}");
@@ -2029,7 +2069,11 @@ fn assert_gate_case(dir: &Path, case: &GateCase, target: &str, state: &Path) {
     let reason = case.reason;
     assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "{reason}: stdout={}", stdout_of(&out));
     assert_eq!(stdout_of(&out), "", "{reason}: 断りの周は stdout 0 行");
-    assert_eq!(stderr_of(&out), format!("seat: cycle refused reason={reason}\n"));
+    assert_eq!(
+        stderr_of(&out),
+        format!("seat: cycle refused reason={reason}{}\n", provenance(state, "flag")),
+        "置き場が解けた周は断りの行にも 2 語が載る"
+    );
     assert!(!touched, "{reason}: tmux を 1 度も撃たない＝1 key も送っていない");
     if !case.broken_state {
         assert!(
@@ -2107,7 +2151,7 @@ fn seat_cycle_refuses_when_lock_is_live_and_reclaims_stale_lock() {
 
     let out = run_seat(&args);
     assert_eq!(rc_of(&out), i32::from(RC_REFUSED));
-    assert_eq!(stderr_of(&out), "seat: cycle refused reason=lock-held\n");
+    assert_eq!(stderr_of(&out), format!("seat: cycle refused reason=lock-held{}\n", provenance(&state, "flag")));
     assert_eq!(fs::read_to_string(&log).unwrap_or_default(), "", "1 key も送っていない");
     assert!(lock.exists(), "他の cycle の lock を消さない");
 
@@ -2115,14 +2159,14 @@ fn seat_cycle_refuses_when_lock_is_live_and_reclaims_stale_lock() {
     backdate(&lock, TTL_S - 100);
     let out = run_seat(&args);
     assert_eq!(rc_of(&out), i32::from(RC_REFUSED));
-    assert_eq!(stderr_of(&out), "seat: cycle refused reason=lock-held\n");
+    assert_eq!(stderr_of(&out), format!("seat: cycle refused reason=lock-held{}\n", provenance(&state, "flag")));
     assert_eq!(fs::read_to_string(&log).unwrap_or_default(), "", "まだ 1 key も送っていない");
 
     // TTL を超えた lock は residue＝取り直して進む。
     backdate(&lock, TTL_S + 100);
     let out = run_seat(&args);
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
-    assert_eq!(stdout_of(&out), format!("seat: cycle done target={name}\n"));
+    assert_eq!(stdout_of(&out), format!("seat: cycle done target={name}{}\n", provenance(&state, "flag")));
     assert!(
         fs::read_to_string(&log).unwrap_or_default().contains("/clear"),
         "失効 lock は進行を止めない"
@@ -2156,7 +2200,7 @@ fn seat_cycle_sends_clear_then_restore_in_order() {
     ]);
 
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
-    assert_eq!(stdout_of(&out), format!("seat: cycle done target={name}\n"));
+    assert_eq!(stdout_of(&out), format!("seat: cycle done target={name}{}\n", provenance(&state, "flag")));
     let received = fs::read_to_string(&log).unwrap_or_default();
     assert_eq!(received, "/clear\n/rebrief\n", "作り直しの後に復元を送る: {received}");
     assert!(
@@ -2166,7 +2210,10 @@ fn seat_cycle_sends_clear_then_restore_in_order() {
     assert!(parked.exists(), "退避物は動かさない（consume は復元側の仕事）");
     let recorded = fs::read_to_string(tick_file(&state, name)).unwrap_or_default();
     assert!(recorded.contains(r#""who":"seat-cycle""#), "cycle を 1 行残す: {recorded}");
-    assert!(recorded.contains(r#""what":"cycle done""#), "{recorded}");
+    assert!(
+        recorded.contains(&format!(r#""what":"cycle done{}""#, provenance(&state, "flag"))),
+        "記録の what にも 2 語: {recorded}"
+    );
     // socket を消す**前**に畳む（消してからでは kill-session が届かない・実測 2026-09-10）。
     drop(guard);
     fs::remove_dir_all(&dir).ok();
@@ -2195,7 +2242,7 @@ fn seat_cycle_reports_clear_unconfirmed_when_session_is_not_rebuilt() {
     ]);
 
     assert_eq!(rc_of(&out), i32::from(RC_REFUSED));
-    assert_eq!(stderr_of(&out), "seat: cycle failed reason=clear-unconfirmed\n");
+    assert_eq!(stderr_of(&out), format!("seat: cycle failed reason=clear-unconfirmed{}\n", provenance(&state, "flag")));
     assert_eq!(
         fs::read_to_string(&log).unwrap_or_default(),
         "/clear\n",
@@ -2235,7 +2282,7 @@ fn seat_cycle_reports_restore_unconfirmed_after_limit_when_seat_goes_silent() {
     ]);
 
     assert_eq!(rc_of(&out), i32::from(RC_REFUSED));
-    assert_eq!(stderr_of(&out), "seat: cycle failed reason=restore-unconfirmed\n");
+    assert_eq!(stderr_of(&out), format!("seat: cycle failed reason=restore-unconfirmed{}\n", provenance(&state, "flag")));
     assert_eq!(
         fs::read_to_string(&log).unwrap_or_default(),
         "/clear\n/rebrief\n",
@@ -2406,7 +2453,7 @@ fn seat_cycle_confirms_rebuilt_pane_by_consumed_echo_and_restores() {
     ]);
 
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
-    assert_eq!(stdout_of(&out), format!("seat: cycle done target={name}\n"));
+    assert_eq!(stdout_of(&out), format!("seat: cycle done target={name}{}\n", provenance(&state, "flag")));
     assert_eq!(
         fs::read_to_string(&log).unwrap_or_default(),
         "/clear\n/rebrief\n",
@@ -2447,10 +2494,48 @@ fn seat_cycle_refuses_when_clear_is_stuck_in_input_line() {
         );
 
         assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "{label}: stdout={}", stdout_of(&out));
-        assert_eq!(stderr_of(&out), "seat: cycle refused reason=busy\n", "{label}");
+        assert_eq!(stderr_of(&out), format!("seat: cycle refused reason=busy{}\n", provenance(&state, "flag")), "{label}");
         assert!(!touched, "{label}: 1 key も送らない（tmux を撃たない）");
         fs::remove_dir_all(&dir).ok();
     }
+}
+
+/// cycle の成功行と記録は、置き場と出所（`.70` の 2 語）を末尾に持つ。A/B: 行の `state_dir=`
+/// 以降から組んだ tick.jsonl の path が、記録が実際に書かれた path と 1 対 1 で一致する。
+#[test]
+fn seat_cycle_done_line_carries_state_dir_provenance() {
+    let dir = tmp();
+    let socket = socket_of(&dir);
+    let name = "seatcycleprov";
+    let log = dir.join("seat.log");
+    let guard = start_clearing_seat(&socket, name, &log, false);
+    assert!(guard.ready(), "fake な席を立てられる");
+    let state = dir.join("state");
+    let wm = dir.join("wm");
+    wm_file(&wm, "working-memory.parked.md", name);
+    let (wm_s, state_s) = (wm.display().to_string(), state.display().to_string());
+
+    let out = run_seat(&[
+        "cycle", "--target", name, "--wm-dir", &wm_s, "--tmux-socket", &socket,
+        "--state-dir", &state_s,
+    ]);
+
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    let line = stdout_of(&out);
+    assert_eq!(line, format!("seat: cycle done target={name}{}\n", provenance(&state, "flag")));
+    let actual = tick_file(&state, name);
+    let recorded = fs::read_to_string(&actual).unwrap_or_default();
+    let last = recorded.lines().last().unwrap_or_default();
+    assert!(
+        last.contains(&format!(r#""what":"cycle done{}""#, provenance(&state, "flag"))),
+        "記録の最終行の what にも同じ 2 語: {last}"
+    );
+    // A/B: 行が名乗る置き場から組んだ記録の path が、実際に書かれた記録と 1 対 1 で一致する。
+    let claimed = state_dir_in(line.trim_end()).map(|d| tick_file(&d, name));
+    assert_eq!(claimed.as_deref(), Some(actual.as_path()), "行の path と実体の記録が一致する");
+    assert!(actual.exists(), "実体の記録が在る");
+    drop(guard);
+    fs::remove_dir_all(&dir).ok();
 }
 
 /// `/clear` を**送った後**の pane に字面が在っても、作り直しを確認できない形（`shape`）では
@@ -2472,7 +2557,11 @@ fn assert_clear_unconfirmed_after_send(label: &str, shape: &str) {
     let out = cycle_with_pane_after_clear(&dir, name, IDLE_TALL_PANE, shape);
 
     assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "{label}: stdout={}", stdout_of(&out));
-    assert_eq!(stderr_of(&out), "seat: cycle failed reason=clear-unconfirmed\n", "{label}");
+    assert_eq!(
+        stderr_of(&out),
+        format!("seat: cycle failed reason=clear-unconfirmed{}\n", provenance(&dir.join("state"), "flag")),
+        "{label}"
+    );
     assert_eq!(
         fs::read_to_string(&log).unwrap_or_default(),
         "/clear\n",
@@ -2529,7 +2618,7 @@ fn seat_cycle_confirms_rebuilt_pane_with_hook_lines_below_echo() {
     let out = cycle_with_pane_after_clear(&dir, name, IDLE_TALL_PANE, REBUILT_HOOKS_PANE);
 
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
-    assert_eq!(stdout_of(&out), format!("seat: cycle done target={name}\n"));
+    assert_eq!(stdout_of(&out), format!("seat: cycle done target={name}{}\n", provenance(&dir.join("state"), "flag")));
     assert_eq!(
         fs::read_to_string(&log).unwrap_or_default(),
         "/clear\n/rebrief\n",
@@ -2615,7 +2704,7 @@ fn seat_inject_does_not_count_preexisting_text_as_delivery() {
     ]);
 
     assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "stdout={}", stdout_of(&out));
-    assert_eq!(stderr_of(&out), "seat: inject unconfirmed reason=absent\n");
+    assert_eq!(stderr_of(&out), format!("seat: inject unconfirmed reason=absent{}\n", provenance(&state, "flag")));
     assert!(!tick_file(&state, name).exists(), "届いていない周は記録しない");
     drop(seat);
     fs::remove_dir_all(&dir).ok();
@@ -2655,7 +2744,7 @@ fn seat_cycle_reports_restore_unconfirmed_after_limit_when_restore_is_left_in_in
     ]);
 
     assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "stdout={}", stdout_of(&out));
-    assert_eq!(stderr_of(&out), "seat: cycle failed reason=restore-unconfirmed\n");
+    assert_eq!(stderr_of(&out), format!("seat: cycle failed reason=restore-unconfirmed{}\n", provenance(&state, "flag")));
     assert_eq!(
         fs::read_to_string(&log).unwrap_or_default(),
         "/clear\n",
@@ -2702,14 +2791,17 @@ fn seat_cycle_restores_after_seat_consumes_queued_restore() {
     ]);
 
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
-    assert_eq!(stdout_of(&out), format!("seat: cycle done target={name}\n"));
+    assert_eq!(stdout_of(&out), format!("seat: cycle done target={name}{}\n", provenance(&state, "flag")));
     assert_eq!(
         fs::read_to_string(&log).unwrap_or_default(),
         "/clear\n/rebrief\n",
         "queue された復元を席が消費した"
     );
     let recorded = fs::read_to_string(tick_file(&state, name)).unwrap_or_default();
-    assert!(recorded.contains(r#""what":"cycle done""#), "{recorded}");
+    assert!(
+        recorded.contains(&format!(r#""what":"cycle done{}""#, provenance(&state, "flag"))),
+        "記録の what にも 2 語: {recorded}"
+    );
     assert!(
         !seat_dir_of(&state, name).join("cycle.lock").exists(),
         "済んだ lock は返す"
@@ -2759,8 +2851,9 @@ fn seat_inject_reports_consumed_unknown_when_prompt_vanishes_after_send() {
     assert_eq!(
         stdout_of(&out),
         format!(
-            "seat: inject delivered target={name} bytes={} consumed=unknown\n",
-            payload.len()
+            "seat: inject delivered target={name} bytes={} consumed=unknown{}\n",
+            payload.len(),
+            provenance(&state, "flag")
         ),
         "入力欄を特定できない周は unknown（false と混ぜない）"
     );
@@ -2807,7 +2900,7 @@ fn seat_inject_uses_first_nonblank_line_as_marker() {
     ]);
 
     assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "stdout={}", stdout_of(&out));
-    assert_eq!(stderr_of(&out), "seat: inject unconfirmed reason=absent\n");
+    assert_eq!(stderr_of(&out), format!("seat: inject unconfirmed reason=absent{}\n", provenance(&state, "flag")));
     assert!(!tick_file(&state, name).exists(), "届いていない周は記録しない");
     drop(seat);
     fs::remove_dir_all(&dir).ok();

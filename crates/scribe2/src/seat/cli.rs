@@ -111,18 +111,21 @@ fn inject_of(args: &[String]) -> Outcome {
 
 /// 注入を 1 回行い、結果を行にする。
 fn deliver(request: &inject::Request) -> Outcome {
+    // 表示行の所在は席の 1 実装で解く（記録側と同じ解決・解けない周は 2 語を出さない）。
+    let state = super::state_dir_of(request.state_dir);
     match inject::deliver(request) {
         inject::Delivery::Delivered(bytes, settled) => Outcome {
-            out: vec![inject::render_delivered(request.target, bytes, settled)],
+            out: vec![inject::render_delivered(request.target, bytes, settled, state.as_ref())],
             err: Vec::new(),
             rc: RC_OK,
         },
         inject::Delivery::Refused(reason) => {
-            Outcome::failed_line(RC_REFUSED, inject::render_refused(reason))
+            Outcome::failed_line(RC_REFUSED, inject::render_refused(reason, state.as_ref()))
         }
-        inject::Delivery::Unconfirmed(reason) => {
-            Outcome::failed_line(RC_REFUSED, inject::render_unconfirmed(reason))
-        }
+        inject::Delivery::Unconfirmed(reason) => Outcome::failed_line(
+            RC_REFUSED,
+            inject::render_unconfirmed(reason, state.as_ref()),
+        ),
     }
 }
 
@@ -239,7 +242,7 @@ fn cycle_of(args: &[String]) -> Outcome {
     let Some(state) = super::state_dir_of(common.state_dir) else {
         return Outcome::failed_line(
             RC_REFUSED,
-            cycle::render(target, &Cycle::Refused(cycle::REASON_STATE_DIR)),
+            cycle::render(target, &Cycle::Refused(cycle::REASON_STATE_DIR), None),
         );
     };
     let result = cycle::run(&cycle::Request {
@@ -247,13 +250,13 @@ fn cycle_of(args: &[String]) -> Outcome {
         wm_dir,
         socket: common.socket,
         capture_file: common.capture_file,
-        state_dir: &state.path,
+        state_dir: &state,
         restore,
     });
     match result {
-        Cycle::Done => Outcome::ok_line(cycle::render(target, &result)),
+        Cycle::Done => Outcome::ok_line(cycle::render(target, &result, Some(&state))),
         Cycle::Refused(_) | Cycle::Failed(_) => {
-            Outcome::failed_line(RC_REFUSED, cycle::render(target, &result))
+            Outcome::failed_line(RC_REFUSED, cycle::render(target, &result, Some(&state)))
         }
     }
 }

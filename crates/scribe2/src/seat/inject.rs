@@ -7,7 +7,7 @@
 //! 不可逆の口は持たない（憲法 CON5）: ここが送るのは呼び側が渡した 1 行だけで、
 //! `/clear` のような session を作り直す注入はこの便では扱わない。
 
-use super::{capture, input_tail, sanitize_target, tmux_ok};
+use super::{capture, input_tail, sanitize_target, tmux_ok, StateDir};
 use crate::fleet::store::{self, LockPolicy};
 use crate::hook::{InjectionRecord, SCHEMA};
 use std::path::{Path, PathBuf};
@@ -247,23 +247,32 @@ fn head(payload: &str, cap: usize) -> String {
     payload.get(..end).unwrap_or_default().to_owned()
 }
 
+/// 表示行の末尾に足す置き場と出所（`.70` の 2 語）。**置き場が解けない周は空**（2 語を出さない）。
+///
+/// inject の所在は表示行が担う: 記録の `what` は payload の先頭のまま加工しない（FR21 と schema を
+/// 共有・planner 裁定 2026-09-11）。
+pub fn suffix_of(state: Option<&StateDir>) -> String {
+    state.map_or_else(String::new, StateDir::suffix)
+}
+
 /// 成立の 1 行（その場で消費したかを添える）。
-pub fn render_delivered(target: &str, bytes: u64, settled: Settled) -> String {
+pub fn render_delivered(target: &str, bytes: u64, settled: Settled, state: Option<&StateDir>) -> String {
     format!(
-        "seat: inject delivered target={} bytes={bytes} consumed={}",
+        "seat: inject delivered target={} bytes={bytes} consumed={}{}",
         sanitize_target(target),
-        settled.as_str()
+        settled.as_str(),
+        suffix_of(state)
     )
 }
 
 /// **送っていない**断りの 1 行。
-pub fn render_refused(reason: &str) -> String {
-    format!("seat: inject refused reason={reason}")
+pub fn render_refused(reason: &str, state: Option<&StateDir>) -> String {
+    format!("seat: inject refused reason={reason}{}", suffix_of(state))
 }
 
 /// 送ったが確認できなかった 1 行。
-pub fn render_unconfirmed(reason: &str) -> String {
-    format!("seat: inject unconfirmed reason={reason}")
+pub fn render_unconfirmed(reason: &str, state: Option<&StateDir>) -> String {
+    format!("seat: inject unconfirmed reason={reason}{}", suffix_of(state))
 }
 
 #[cfg(test)]
