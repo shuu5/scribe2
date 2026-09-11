@@ -140,7 +140,7 @@ impl Guard {
             Self::Cap => "hook::seat_guard::SeatDecision",
             Self::Intake => "pipe::declaration::Unfit",
             Self::Budget => "pipe::Budget",
-            Self::Approval => "pipe::approve::needs_approval",
+            Self::Approval => "pipe::approve::Approval",
             Self::RunnerStop => "headless::runner::Decision",
             Self::GateCheck => "pipe::gate::Check",
             Self::GateLens => "pipe::gate::Verdict",

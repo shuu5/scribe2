@@ -21,7 +21,7 @@
 
 ## 3. `Guard` 列挙（閉じた enum・const slice・網羅 match＝ADR-0013 §2.2 の 4 つ組）
 
-- `pub enum Guard`（宣言順は「行為の流れ」＝hook → intake → spawn → gate → land → store → cycle。順序に意味は無いが C2 の形に合わせて const slice `ALL` と判別子順 pin を持つ・`enum-slices` の measure が集合完全性を測る）。
+- `pub enum Guard`（宣言順は「行為の流れ」＝hook → intake → spawn〔予算・承認〕→ runner〔上限 record で便を止める `Stop`〕→ gate → land → store → 注入〔入力欄が非空なら断る `Refused`〕→ cycle。順序に意味は無いが C2 の形に合わせて const slice `ALL` と判別子順 pin を持つ・`enum-slices` の measure が集合完全性を測る）。
 - 各 variant は `fn polarity(self) -> Polarity`（網羅 match・各境界の `POLARITY` を返す）と `fn boundary(self) -> &'static str`（境界の module path・pointer）を持つ。
 - **記録時点の母集団**は本 doc に列挙しない（ADR-0013 §2.1）。現物は `<NAME> polarity` の出力と `polarity.rs`。目安として、記録時点で hook 3・pipe 5・fleet 1・seat 1 の境界を数えた（件数は契約の A/B が実測する）。
 - **FailOpen の境界を隠さない**: cap guard は「測れない周は deny しない」（FR26・[seat-autonomy.md §3](./seat-autonomy.md)）と設計で決めた FailOpen である。一覧はそれを FailOpen として**そのまま**出す（極性一覧の目的は全数を可視にすることで、全部を FailClosed に見せることではない）。

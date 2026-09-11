@@ -7,7 +7,7 @@ guard=permission-deny timing=in-loop on-failure=fail-closed boundary=hook::permi
 guard=cap-guard timing=in-loop on-failure=fail-open boundary=hook::seat_guard::SeatDecision
 guard=intake-unfit timing=in-loop on-failure=fail-closed boundary=pipe::declaration::Unfit
 guard=spawn-budget timing=in-loop on-failure=fail-closed boundary=pipe::Budget
-guard=approval-gate timing=in-loop on-failure=fail-closed boundary=pipe::approve::needs_approval
+guard=approval-gate timing=in-loop on-failure=fail-closed boundary=pipe::approve::Approval
 guard=runner-stop timing=in-loop on-failure=fail-open boundary=headless::runner::Decision
 guard=gate-check timing=post-hoc on-failure=fail-closed boundary=pipe::gate::Check
 guard=gate-lens timing=post-hoc on-failure=fail-closed boundary=pipe::gate::Verdict
