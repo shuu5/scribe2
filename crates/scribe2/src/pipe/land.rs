@@ -11,6 +11,11 @@
 //! 後始末は **可逆な move**（N1.2）。worktree は `retired/<run>` へ移すだけで削除せず、
 //! branch も消さない（squash commit は branch の祖先でないので `-d` は通らず、`-D` は
 //! N1 が禁じる形である）。
+//!
+//! main を進めた後は **anchor（`--repo` の checkout）の index と working tree も新 main に揃える**
+//! （`s2-07l.120`・N1）。`update-ref` は ref しか動かさないので、揃えないと anchor の `git status` に
+//! landed 変更が staged の逆向きで残り、次の `commit -a` が landed 変更を打ち消す（`.117` 実測）。
+//! 揃えるのは HEAD が main を指し tracked な未 commit の変更が無い周だけ（[`AnchorPlan`]・fail-closed）。
 
 use crate::polarity::{OnFailure, Polarity, Timing};
 use super::contract::Contract;
@@ -33,6 +38,15 @@ const VERDICTS_FILE: &str = "verdicts.jsonl";
 
 /// land 済み worktree を寄せる dir 名。
 const RETIRED_DIR: &str = "retired";
+
+/// anchor を揃えない理由（判定行 `anchor=skipped:<reason>`・**閉じた 4 値**）: HEAD が main を指さない。
+const ANCHOR_NOT_MAIN: &str = "not-main";
+/// tracked な未 commit の変更が在る（成果を消さない・N1）。
+const ANCHOR_DIRTY: &str = "dirty";
+/// anchor の状態を読めない（読めないを clean に読み替えない）。
+const ANCHOR_UNREADABLE: &str = "unreadable";
+/// 揃える git が断った（untracked file との衝突等・anchor は触られていない）。
+const ANCHOR_SYNC_FAILED: &str = "sync-failed";
 
 /// main 実測用の tmp worktree を置く dir 名。
 ///
@@ -133,14 +147,83 @@ pub fn land(entry: &Land<'_>) -> Outcome {
         // **CAS の old が動いている**。ここで進めると別便の land を巻き込む。
         return refused(format!("stale base（base={base} main={old}）"));
     }
+    // anchor の見立ては **ref を進める前**に読む: 進めた後の `git status` は index の遅れを
+    // 「変更」として出すので、人の未 commit と区別できない。
+    let plan = anchor_plan(entry.repo);
     let new = match squash(entry, &worktree, &old) {
         Ok(found) => found,
         Err(reason) => return broken(reason),
     };
     match verify_main(entry, &new) {
-        MainCheck::Green => finish(entry, &worktree, &new),
+        MainCheck::Green => finish(entry, &worktree, &old, &new, &plan),
         MainCheck::Red(reason) => main_red(entry, &reason),
         MainCheck::Unmeasurable(reason) => main_unmeasured(entry, &reason),
+    }
+}
+
+/// anchor（`--repo` の checkout）を land の後に新 main へ揃えるかの見立て（`s2-07l.120`）。
+///
+/// 揃えるのは **HEAD が `refs/heads/main` を指し ∧ tracked な未 commit の変更が無い**周だけ。
+/// untracked は数えない（揃える動作は tracked path しか触らず、衝突すれば git が断る＝
+/// [`ANCHOR_SYNC_FAILED`]）。読めない周は clean に読み替えない（fail-closed）。
+enum AnchorPlan {
+    /// 揃える。
+    Sync,
+    /// 触らない（理由）。
+    Skip(&'static str),
+}
+
+/// 見立てを読む。
+fn anchor_plan(repo: &Path) -> AnchorPlan {
+    if git_line(repo, &["symbolic-ref", "-q", "HEAD"]).is_none_or(|head| head != MAIN_REF) {
+        return AnchorPlan::Skip(ANCHOR_NOT_MAIN);
+    }
+    match git_bytes(repo, &["status", "--porcelain", "--untracked-files=no"]) {
+        None => AnchorPlan::Skip(ANCHOR_UNREADABLE),
+        Some(bytes) if !String::from_utf8_lossy(&bytes).trim().is_empty() => AnchorPlan::Skip(ANCHOR_DIRTY),
+        Some(_) => AnchorPlan::Sync,
+    }
+}
+
+/// 揃えた結果（判定行の `anchor=` token）。
+enum AnchorSync {
+    /// index と working tree が新 main に揃った。
+    Synced,
+    /// 触っていない（理由）。
+    Skipped(&'static str),
+}
+
+impl AnchorSync {
+    /// 判定行の token。
+    fn token(&self) -> String {
+        match self {
+            Self::Synced => "anchor=synced".to_owned(),
+            Self::Skipped(reason) => format!("anchor=skipped:{reason}"),
+        }
+    }
+
+    /// stderr に出す warning（人の注意が要る周だけ・別 branch は通常形なので黙る）。
+    fn warning(&self) -> Option<String> {
+        match self {
+            Self::Synced | Self::Skipped(ANCHOR_NOT_MAIN) => None,
+            Self::Skipped(reason) => Some(format!(
+                "pipe: anchor を新 main に揃えていない（{reason}）・index と working tree は旧 main のまま＝`commit -a` の前に揃えること"
+            )),
+        }
+    }
+}
+
+/// anchor の index と working tree を `old` の tree から `new` の tree へ揃える。
+///
+/// `git read-tree -m -u <old> <new>` の 2-tree merge を使う。`reset --keep <new>` は **ref が
+/// 既に `new` を指している**ため差分を 0 と見て working tree を更新しない（index だけが new に
+/// なり `commit -a` が landed 変更を巻き戻す形へ悪化する・実測 2026-09-12）。`read-tree -m -u` は
+/// old→new で変わった path だけを更新し、局所の変更が在れば "not uptodate" で **1 file も触らず**断る。
+fn sync_anchor(repo: &Path, plan: &AnchorPlan, old: &str, new: &str) -> AnchorSync {
+    match plan {
+        AnchorPlan::Skip(reason) => AnchorSync::Skipped(reason),
+        AnchorPlan::Sync if git_ok(repo, &["read-tree", "-m", "-u", old, new]) => AnchorSync::Synced,
+        AnchorPlan::Sync => AnchorSync::Skipped(ANCHOR_SYNC_FAILED),
     }
 }
 
@@ -286,8 +369,8 @@ fn materials(entry: &Land<'_>) -> Result<(String, Vec<String>), String> {
     Ok((base, common))
 }
 
-/// export → `Landed` → 後始末。ここまで来た周は land が成立している。
-fn finish(entry: &Land<'_>, worktree: &Path, new: &str) -> Outcome {
+/// export → `Landed` → anchor の同期 → 後始末。ここまで来た周は land が成立している。
+fn finish(entry: &Land<'_>, worktree: &Path, old: &str, new: &str, plan: &AnchorPlan) -> Outcome {
     if let Err(reason) = export_verdict(entry, new) {
         return broken(reason);
     }
@@ -307,10 +390,13 @@ fn finish(entry: &Land<'_>, worktree: &Path, new: &str) -> Outcome {
     if let Err(err) = emitted {
         return broken(err.to_string());
     }
+    let anchor = sync_anchor(entry.repo, plan, old, new);
+    // 後始末の失敗は land を取り消さない（**rc 0 のまま stderr 1 行**）。anchor の warning も同じ列。
+    let mut err = retire_worktree(entry.repo, entry.run, worktree);
+    err.extend(anchor.warning());
     Outcome {
-        out: vec![format!("run={} landed={new}", entry.run)],
-        // 後始末の失敗は land を取り消さない（**rc 0 のまま stderr 1 行**）。
-        err: retire_worktree(entry.repo, entry.run, worktree),
+        out: vec![format!("run={} landed={new} {}", entry.run, anchor.token())],
+        err,
         rc: crate::cli_outcome::RC_OK,
     }
 }

@@ -3972,3 +3972,76 @@ fn pipe_question_run_stops_with_question_token() {
     assert!(show_line(&repo, &state, &id).contains("stage=Questioned"));
     clean(&[&repo, &state]);
 }
+
+// ─────────────────── land の後の anchor 同期（`s2-07l.120`・N1・接頭辞 `pipe_land_anchor_`） ───────────────────
+
+/// land（squash 形）の後、anchor（`--repo`）の HEAD が main を指す checkout なら **index と working tree を
+/// 新 main に揃える**（`.117` 実測: base は `git update-ref` だけで index が旧のまま＝`git status` に
+/// `M  src/lib.rs` が残り、次の `commit -a` で landed 変更が消える経路・N1）。判定行に `anchor=synced`。
+#[test]
+fn pipe_land_anchor_syncs_index_and_working_tree_to_new_main() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let marker = state.join("lens-ran");
+    let id = gated_pass(&repo, &state, &path, &marker);
+    assert_eq!(git(&repo, &["status", "--porcelain", "--untracked-files=no"]).trim(), "", "land の前の anchor は clean");
+    let out = land_once(&repo, &state, &id);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "land は rc 0: {}", stderr_of(&out));
+    let new = git(&repo, &["rev-parse", "refs/heads/main"]);
+    assert!(stdout_of(&out).contains(&format!("landed={new} anchor=synced")), "判定行に anchor=synced: {}", stdout_of(&out));
+    assert_eq!(git(&repo, &["rev-parse", "HEAD"]), new, "anchor の HEAD は新 main");
+    assert_eq!(
+        git(&repo, &["status", "--porcelain", "--untracked-files=no"]).trim(),
+        "",
+        "index と working tree が新 main に揃う（M が残らない）"
+    );
+    let lib = fs::read_to_string(repo.join("src").join("lib.rs")).unwrap_or_default();
+    assert!(lib.lines().any(|line| line == "x"), "landed 変更が anchor の working tree に在る: {lib:?}");
+    clean(&[&repo, &state]);
+}
+
+/// anchor に**未 commit の変更**が在る周は触らない（成果を消さない・fail-closed）: main の ref は進めるが
+/// index / working tree は揃えず、判定行に `anchor=skipped:dirty` と stderr の warning 1 行。局所の変更は
+/// そのまま残る。
+#[test]
+fn pipe_land_anchor_skips_dirty_anchor_and_keeps_local_change() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let marker = state.join("lens-ran");
+    let id = gated_pass(&repo, &state, &path, &marker);
+    // 便の変更と同じ file に、commit していない局所の変更を置く（揃えると消える形）。
+    fs::write(repo.join("src").join("lib.rs"), "// local uncommitted\n").expect("局所の変更を置ける");
+    let out = land_once(&repo, &state, &id);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "land 自体は成立（rc 0）: {}", stderr_of(&out));
+    let new = git(&repo, &["rev-parse", "refs/heads/main"]);
+    assert!(stdout_of(&out).contains(&format!("landed={new} anchor=skipped:dirty")), "{}", stdout_of(&out));
+    assert!(stderr_of(&out).contains("anchor"), "warning の 1 行を stderr に出す: {}", stderr_of(&out));
+    assert_eq!(
+        fs::read_to_string(repo.join("src").join("lib.rs")).unwrap_or_default(),
+        "// local uncommitted\n",
+        "未 commit の変更を消さない"
+    );
+    clean(&[&repo, &state]);
+}
+
+/// anchor の HEAD が main を指さない周（別 branch・detached）は触らない: `anchor=skipped:not-main`。
+/// 他 branch の HEAD と working tree は不変。
+#[test]
+fn pipe_land_anchor_skips_when_head_is_not_main() {
+    for (label, args) in [("other-branch", vec!["checkout", "-q", "-b", "other"]), ("detached", vec!["checkout", "-q", "--detach"])] {
+        let (repo, state) = repo_with_state();
+        let path = write_contract(&repo, &[], &[]);
+        let marker = state.join("lens-ran");
+        let id = gated_pass(&repo, &state, &path, &marker);
+        let before = git(&repo, &["rev-parse", "HEAD"]);
+        git(&repo, &args);
+        let out = land_once(&repo, &state, &id);
+        assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{label}: land は rc 0: {}", stderr_of(&out));
+        let new = git(&repo, &["rev-parse", "refs/heads/main"]);
+        assert_ne!(new, before, "{label}: main は進む");
+        assert!(stdout_of(&out).contains(&format!("landed={new} anchor=skipped:not-main")), "{label}: {}", stdout_of(&out));
+        assert_eq!(git(&repo, &["rev-parse", "HEAD"]), before, "{label}: anchor の HEAD は動かない");
+        assert_eq!(git(&repo, &["status", "--porcelain", "--untracked-files=no"]).trim(), "", "{label}: working tree は不変で clean");
+        clean(&[&repo, &state]);
+    }
+}
