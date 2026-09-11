@@ -183,6 +183,7 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
 
 ## 11. 後続
 
+- runner の質問の口（契約の不足を typed な質問 record で返して止まり、席が planner へ中継し、回答の記帳で再開する）と既定の配送構造（planner ×1 + 管理席 ×N）: [pipeline-question.md](./pipeline-question.md)・[ADR-0016](../../design-intent/decisions/ADR-0016-default-delivery-structure-and-typed-question-record.html)（SRS 改訂は user 裁定）。
 - 3 クラスの機械 enforcer（操作の中身からの判定・A4 機構欄）。R-C6-1（1 run の token 上限）の裁定が出たら `Budget` に上限を効かせる。
 - 多 lens・tier・verdict 一致率（v3）。tmux / 席 / 口座選定（v3）。
 - retired worktree の掃除の道具化（可逆 move の先を片付ける経路・N1.2）。
