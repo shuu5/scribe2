@@ -496,12 +496,16 @@ terms:
   # ---------------------------------------------------------------- ADR-0019 (並列の便の受付と衝突)
   - canonical: 追随
     domain: consumer
-    definition: land の前に、 便の base より進んだ main へ worktree の branch を rebase し gate を撃ち直すこと (pipeline 設計 §5.4)。 衝突した周は終端にせず runner を起こし直して write-set の内側で解かせ、 runner の終了後に器が base を進めて記帳する (ADR-0019 §2.2)。
+    definition: land の前に、 便の base より進んだ main へ worktree の branch を rebase して gate をやり直すこと (要件は SRS FR34 が正本・設計は pipeline.md §5.4)。 衝突した周は終端にせず runner を起こし直して write-set の内側で解かせ、 runner の終了後に器が base を進めて記帳する (ADR-0019 §2.2)。
     relationships: [land, 便, runner, write-set]
   - canonical: write-set の交差
     domain: consumer
     definition: 2 つの契約の write-set (path の集合・末尾 / の dir は配下を含む) の共通部分が空でないこと。 intake は live な便と交差する契約を受け付けない (ADR-0019 §2.1)。
     relationships: [write-set, 契約, 便]
+  - canonical: 衝突
+    domain: consumer
+    definition: 追随の rebase で、 先着の変更と同じ箇所が重なり器が自動では合わせられないこと (SRS FR34 が記帳を求め、 解き方は ADR-0019 §2.2 の起こし直し)。 契約同士の write-set の交差 (ADR-0019 §2.1 が intake で断る) とは別の概念。
+    relationships: [追随, 起こし直し, write-set の交差]
   - canonical: live な便
     domain: consumer
     definition: 終端でない run。 終端 = 段が Landed / Failed / Stopped のいずれか、 または Gated で verdict が FAIL。 intake の排他が照合する母集団で、 pipe stop --run で 1 本だけ終端に倒せる (ADR-0019 §2.1)。
