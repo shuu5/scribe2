@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="folio-doc-type" content="adr">
+<meta name="folio-layer" content="project">
+<meta name="folio-version" content="0.4.6">
+<meta name="folio-status" content="accepted">
+<meta name="folio-stakeholders" content="Developer, AI Agent, External Reviewer">
+<meta name="folio-adr-id" content="0018">
+<meta name="folio-adr-date" content="2026-09-12">
+<title>ADR-0018 — 作業記憶の退避・復元・消費は器の subcommand が機械層を担い、 命令行は照合できる出所 pointer を必須とし、 pointer の無い行は暫定の印を付けて次の cycle に引き継がない (brief の文章は開発 session が組む・前の版の script への依存を切る)</title>
+<link rel="stylesheet" href="../../common.css">
+<script type="application/ld+json">
+{
+  "@context": {
+    "dc": "http://purl.org/dc/terms/",
+    "schema": "https://schema.org/",
+    "folio": "https://folio.dev/spec/v1/"
+  },
+  "@id": "./ADR-0018-working-memory-subcommands-and-pointer-required-directives.html",
+  "@type": "schema:TechArticle",
+  "dc:isPartOf": [
+    { "@id": "./README.html" }
+  ],
+  "dc:title": "ADR-0018 — 作業記憶の退避・復元・消費は器の subcommand が機械層を担い、 命令行は照合できる出所 pointer を必須とし、 pointer の無い行は暫定の印を付けて次の cycle に引き継がない (brief の文章は開発 session が組む・前の版の script への依存を切る)",
+  "folio:version": "0.4.6",
+  "folio:stakeholders": ["Developer", "AI Agent", "External Reviewer"],
+  "dc:references": [
+    { "@id": "../spec/constitution.html#c2" },
+    { "@id": "../spec/constitution.html#c3" },
+    { "@id": "../spec/constitution.html#c8" },
+    { "@id": "../spec/constitution.html#c10" },
+    { "@id": "../spec/constitution.html#c11" },
+    { "@id": "../spec/constitution.html#c12" },
+    { "@id": "../spec/constitution.html#c15" },
+    { "@id": "../spec/constitution.html#n2" },
+    { "@id": "../spec/srs.html#FR23" },
+    { "@id": "../spec/srs.html#FR28" },
+    { "@id": "../spec/srs.html#AC8" },
+    { "@id": "./ADR-0004-mvp-persistence-and-cross-version-formats.html" },
+    { "@id": "./ADR-0013-machine-holds-enumerations-docs-hold-pointers.html" },
+    { "@id": "./ADR-0015-seat-state-is-stamped-by-hooks-not-read-from-pane.html" }
+  ]
+}
+</script>
+</head>
+<body>
+<!-- folio:chrome-top -->
+<a class="skip-link" href="#s1-context">本文へスキップ</a>
+<nav class="breadcrumb" aria-label="パンくず"><ol>
+  <li><a href="../index.html">design-intent</a></li>
+  <li><a href="./README.html">decisions</a></li>
+  <li aria-current="page">ADR-0018</li>
+</ol></nav>
+<!-- /folio:chrome-top -->
+
+<header class="doc-header">
+  <h1>ADR-0018 — 作業記憶の退避・復元・消費は器の subcommand が機械層を担い、 命令行は照合できる出所 pointer を必須とし、 pointer の無い行は暫定の印を付けて次の cycle に引き継がない (brief の文章は開発 session が組む・前の版の script への依存を切る)</h1>
+  <div class="meta">Status: accepted &middot; Date: 2026-09-12 &middot; version 0.4.6 (拘束する constitution の版) &middot; N2 / C8 / C12 / C15 の適用と C2 の充足形を記録 &middot; 要件は SRS v0.5 (FR23 / AC8) が正本</div>
+</header>
+<!-- folio:chrome-toc -->
+<nav class="toc" aria-label="ページ内目次">
+<ol>
+  <li><a href="#s1-context">§1. Context</a></li>
+  <li><a href="#s2-decision">§2. Decision</a></li>
+  <li class="toc--sub"><a href="#s2-1-subcommands">§2.1 退避・復元・消費の機械層は器の subcommand 3 つが担い、 brief の文章は開発 session が DATA から組む</a></li>
+  <li class="toc--sub"><a href="#s2-2-pointer">§2.2 命令行は照合できる出所 pointer を必須とし、 器は pointer の形を閉じた enum で分類し、 無い行を暫定の印付きで出す</a></li>
+  <li class="toc--sub"><a href="#s2-3-non-carry">§2.3 暫定行は次の cycle に引き継がない。 引き継ぎは退避の subcommand が機械的に行い、 開発 session は退避物を直接書かない</a></li>
+  <li class="toc--sub"><a href="#s2-4-sid-and-readonly">§2.4 session id は hook の打刻から得て env を読まず、 復元は台帳を read-only で読み、 前の版の script を呼ばない</a></li>
+  <li class="toc--sub"><a href="#s2-5-scope">§2.5 射程外</a></li>
+  <li><a href="#s3-srs">§3. SRS との関係 (正本は SRS)</a></li>
+  <li><a href="#s4-consequences">§4. Consequences</a></li>
+  <li><a href="#s5-alternatives">§5. Alternatives Considered</a></li>
+  <li><a href="#s6-trace">§6. Trace</a></li>
+</ol>
+</nav>
+<!-- /folio:chrome-toc -->
+
+<aside class="informative">
+<p>本 ADR は IETF <strong>RFC 2119</strong> および <strong>RFC 8174 / BCP 14</strong> に定義される MUST / SHALL / SHOULD / MAY のキーワード解釈規約に従う。 ADR は決定時点の記録であり、 改訂は新しい ADR による supersede で行う。 本 ADR の <strong>§2 は user 裁定 (2026-09-12) を受けた決定</strong>で、 <strong>§3 は SRS への pointer</strong> である。 要件 (<a href="../spec/srs.html#FR23">FR23</a> / <a href="../spec/srs.html#AC8">AC8</a>) は本 ADR より先に SRS v0.5 へ入っており、 本 ADR は要件の文面を持たず、 <strong>理由・形・却下案</strong> だけを持つ。 本 ADR は既存の ADR を supersede しない (退避物の file 名・消費の suffix・move の作法は SRS FR23 が固定済みで、 本 ADR はそれを変えない)。</p>
+</aside>
+
+<aside class="machine-readable" aria-hidden="true">
+  <dl>
+    <dt>id</dt><dd>ADR-0018</dd>
+    <dt>doc-type</dt><dd>adr</dd>
+    <dt>status</dt><dd>accepted</dd>
+    <dt>date</dt><dd>2026-09-12</dd>
+    <dt>version</dt><dd>0.4.6 (拘束する constitution の版。 本 ADR は憲法の条文を動かさない)</dd>
+    <dt>decided-by</dt><dd>user (2026-09-12) — 3 論点のうち 3 論点目の裁定 (退避・復元を器の subcommand に・pointer 必須と暫定印・前の版の script 依存の切断・便 3 つ・brief の文章は開発 session のまま)。 起点は user 直命 2026-09-10 (根幹の skill は器に入れる・作業記憶は憲法より下)。 逐語は台帳の notes が原本で本 file には写さない (CON2)</dd>
+    <dt>stakeholders</dt><dd>Developer, AI Agent, External Reviewer</dd>
+    <dt>supersedes</dt><dd>(none — 既存 ADR を supersede しない。 前の版の global skill 2 本と plugin 版 2 本は本 ADR の便が land した後に退役する暫定処置であり、 ADR ではない)</dd>
+    <dt>related</dt><dd>ADR-0004 §2.4 / §2.5 (env を読まない・schema 版) / ADR-0013 §2.2 (閉じた enum と宣言順の充足形) / ADR-0015 §2.1 / §2.2 (席の状態と sid は hook の打刻から) / constitution C2 / C2.2 / C3.3 / C8 / C10 / C11 / C11.2 / C12 / C15 / N2 / SRS FR23 / FR27 / FR28 / FR29 / AC8 / AC9 / CON2</dd>
+  </dl>
+</aside>
+
+<section id="s1-context" class="informative">
+<h2>§1. Context</h2>
+<p class="section-essence" data-audience="human">開発 session (planner と管理席) は context が上限に近づくと作業記憶を file に退避し、 session を作り直してから復元します。 この退避と復元は今、 どの account でも使える共通 skill の手順で動いていて、 その中身は前の版 (python と bash) の script です。 user は「これは前の版を使わずに器を作るための一時しのぎで、 根幹の手順は器そのものに入れるべきだ」「作業記憶の命令が憲法より優先されるのはおかしい」と裁定しました。 要件書は先に改訂され、 退避と復元が器の subcommand として実在すること、 出所を持たない命令行に印を付けて次の周に引き継がないことが受入基準になりました。 この記録は、 器の subcommand に何を持たせ、 pointer をどう検査し、 前の版への依存をどう切るかを決めます。</p>
+<p data-audience="machine">記録時点 (2026-09-12) の現物: 退避 (<code>/ready-compaction</code>) と復元 (<code>/rebrief</code>) は user の全 account に置いた global skill 2 本で、 機械層は前の版の凍結 repo にある script (退避の preflight = python・復元の fetch = python + bash wrapper・作業記憶の 3 節 schema と carry-forward = python lib) を絶対 path で呼ぶ。 復元 fetch は session id を env と transcript から解決し、 planner 席でも role を admin と誤解決して自席の退避物を候補から外す (memory に記録された事故)。 作業記憶の file は <code>&lt;anchor&gt;/.claude-session/working-memory.&lt;sid&gt;.md</code> (untracked)・消費は <code>.consumed.md</code> への move・frontmatter に <code>seat:</code> を名乗る (SRS FR23 の 6 作法として固定済み)。 器の側: <code>seat tick</code> は退避の合図 (<code>/ready-compaction</code>) を注入し、 <code>seat cycle</code> は <code>/clear</code> の後に復元 command (既定 <code>/rebrief</code>) を注入する。 自席の退避物の弁別は frontmatter の <code>seat:</code> が target と一致するもの (<code>scan_wm</code>・file 名の sid ではない)。 hook は <code>session_id</code> を <code>state.jsonl</code> の打刻行 (<code>sid</code> field) に残す (<a href="./ADR-0015-seat-state-is-stamped-by-hooks-not-read-from-pane.html">ADR-0015</a>)。 cap guard は <code>working-memory.*.md</code> の編集だけを上限に関わらず通す口を持つ (FR26)。 作業記憶の「命令・制約」行 24 本 (planner 席の実測) はすべて <code>→ SSOT:</code> を持つが、 前の版の pointer 文法 (閉じた 5 形) では 8 本が形の外に落ちる (別 repo の独立 gate が指摘・台帳 <code>s2-07l.61</code> notes)。</p>
+<p data-audience="machine">憲法の向き: <a href="../spec/constitution.html#n2">N2</a> は prose・memory・chat にしか無い規則を規則と扱わない (作業記憶の命令行は規則ではなく pointer)。 <a href="../spec/constitution.html#c8">C8</a> は前の版を oracle にしないと定め、 <a href="../spec/constitution.html#c12">C12</a> は歯を Rust の 1 framework に限る (前の版の script は bats で守られている)。 <a href="../spec/constitution.html#c15">C15</a> は台帳を task と裁定にだけ使い、 規律を置かない (復元の周に台帳へ書くと、 全 role が回す共通手順から role 境界を越えた起票が出る — 別 repo の gate が実際に捕らえた)。 <a href="../spec/constitution.html#c2">C2.2</a> は env を読まず、 <a href="../spec/constitution.html#c2">C2</a> は順序を enum の宣言順だけから取る。 <a href="../spec/constitution.html#c3">C3.3</a> は判断入力を typed に持つ。 user の裁定 (2026-09-12・会話面・逐語「推奨で」・台帳 <code>s2-07l.61</code> notes): (A) AC8 を「器の subcommand として実在」へ改訂し、 便 3 つ (退避・復元の Rust 化・pointer 必須と暫定印・前の版の fetch 依存の切断) を pipeline で流す。 brief の文章は開発 session (LLM) のまま。 台帳の読みは <code>bd --readonly</code> を子 process で。 SRS v0.5 は同日 land した。</p>
+</section>
+
+<section id="s2-decision" class="normative">
+<h2>§2. Decision</h2>
+
+<h3 id="s2-1-subcommands">§2.1 退避・復元・消費の機械層は器の subcommand 3 つが担い、 brief の文章は開発 session が DATA から組む</h3>
+<p class="section-essence" data-audience="human">作業記憶にまつわる機械の仕事を 3 つの subcommand に分けます。 「退避」は file を作る、 「復元」は file と台帳を突き合わせて事実の行 (DATA) を出す、 「消費」は使い終えた file を移動する。 判断 (今どこにいて次に何をするか) と、 それを人に読める文章にする仕事は、 これまでどおり開発 session が担います。 復元は何も書きません。 起票が要りそうな項目も「候補」として並べるだけで、 台帳には触りません。</p>
+<p data-audience="machine">器 SHALL 作業記憶の機械層を <code>&lt;NAME&gt; seat</code> の subcommand 3 つで提供する: <strong><code>externalize</code></strong> (退避物の生成)・<strong><code>rebrief</code></strong> (復元 DATA の出力)・<strong><code>consume</code></strong> (退避物の消費 = move)。 いずれも <code>--target T</code>・<code>--wm-dir DIR</code>・<code>--state-dir DIR</code> を引数で受け、 env を読まない (C2.2・ADR-0004 D-4)。 <code>rebrief</code> SHALL read-only とし (file・台帳・git のいずれも変えない)、 台帳は <code>bd --readonly</code> を子 process で読み (C15・記録時点の台帳 adapter は MVP 外)、 起票が要る項目 SHALL 「起票候補」の行として出すに留める (台帳への write は管理席の別の口)。 DATA SHALL 行頭 marker 付きの typed な行 (1 行 1 事実・値は typed enum の名か逐語) で出し、 brief の文章 SHALL 開発 session が DATA から組む (判断は LLM 層・器は判断を持たない)。 <code>rebrief</code> が DATA を出せない周 (退避物の dir が読めない・台帳が読めない・anchor を解決できない) SHALL rc 非 0 で止まり、 DATA を 1 行も出さない (FR23「DATA が無い周は brief を出さない」の機械側)。 極性は FailClosed (読めないを「異常なし」に化けさせない)。 <code>consume</code> SHALL 冪等 (既に消費済みなら rc 0 で <code>already</code>) で、 別の席の退避物 (frontmatter の <code>seat:</code> が target と違う) を消費しない (FR23 作法 5 / 6)。 退避物の file 名・<code>.consumed.md</code> の suffix・move・frontmatter の <code>seat:</code> は SRS FR23 と <code>seat tick</code> / <code>cycle</code> の現物のまま変えず、 frontmatter に <code>schema: 1</code> を足す (ADR-0004 D-5 の on-disk 形式・任意 key の追加は同じ版)。</p>
+
+<h3 id="s2-2-pointer">§2.2 命令行は照合できる出所 pointer を必須とし、 器は pointer の形を閉じた enum で分類し、 無い行を暫定の印付きで出す</h3>
+<p class="section-essence" data-audience="human">作業記憶の「命令・制約」の各行は、 それ自体が規則ではなく「規則はここにある」という矢印です。 矢印の先 (憲法の条・ADR・設計 doc・manifest の行・台帳の id・repo の file・memory の名前・PR 番号) を器が形で見分け、 到達できるものは実在まで確かめます。 矢印の無い行は「暫定」と印を付けて出します。 どの矢印が強いか (憲法 &gt; ADR・設計 &gt; manifest &gt; 台帳の裁定 &gt; 作業記憶) は、 器の中の並び順で決まっていて、 散文の注記では持ちません。</p>
+<p data-audience="machine">「命令・制約」節の項目行 SHALL 本文末に出所 pointer (<code>→ SSOT: &lt;参照&gt;</code>) を持つ。 器 SHALL pointer の形を閉じた enum <code>PointerKind</code> (宣言順 = 優先順位: <code>Constitution</code> → <code>Adr</code> → <code>Design</code> → <code>Manifest</code> → <code>Ledger</code> → <code>RepoPath</code> → <code>Memory</code> → <code>PullRequest</code>) で分類し、 <strong>優先順位は宣言順だけから取り</strong>散文の注記を持たない (<a href="../spec/constitution.html#c2">C2</a>・<a href="./ADR-0013-machine-holds-enumerations-docs-hold-pointers.html#s2-2-order">ADR-0013 §2.2</a> の 4 つ組)。 判定 SHALL 「形で分類できる」を最小条件とし、 形から到達できる kind (憲法条の id・ADR の file・rules 行の id・repo 内 path) は実在まで検査して <code>resolved</code> / <code>unresolved</code> を分ける (実在を確かめない kind は <code>unchecked</code>・3 値を融合しない)。 pointer を持たない行・形で分類できない行 SHALL <strong>暫定行</strong> として <code>[WM-DIRECTIVE] pointer=none</code> 相当の印付きで DATA に列挙する (件数と列挙の対を器が持ち、 件数だけを出さない)。 器 SHALL NOT 行の内容と拘束 SSOT の食い違いを判定しない (内容の judgment は開発 session の層・器は形と実在だけ)。 pointer の文法は閉じた 5 形の列挙ではなく「実在を照合できる carrier 参照」であり、 前の版の 5 形で落ちた 8 本 (memory・docs の path) は <code>Memory</code> / <code>RepoPath</code> として形に入る。</p>
+
+<h3 id="s2-3-non-carry">§2.3 暫定行は次の cycle に引き継がない。 引き継ぎは退避の subcommand が機械的に行い、 開発 session は退避物を直接書かない</h3>
+<p class="section-essence" data-audience="human">退避のとき、 前の周から引き継ぐ命令行は器が機械的に運びます。 その際、 矢印の無い暫定行は運びません (消えます)。 開発 session が書くのは「今の計画」と「新しく足す命令行」だけで、 file そのものは器が組み立てます。 こうすると、 引き継ぎのたびに命令が雪だるま式に増えることも、 出所の無い規則が周を越えて生き残ることも、 構造として起きません。</p>
+<p data-audience="machine"><code>externalize</code> SHALL 自席の最新の消費済み退避物から「命令・制約」節を carry-forward し、 その際 <strong>暫定行 (§2.2) を落とし</strong>、 pointer を持つ行だけを <code>[P0-P3]</code> 昇順の安定 sort で運ぶ (上限は rules 行 <code>seat.wm_directive_cap</code>・値は裁定 id 付き・超過は rc 非 0 で止まり黙って切らない)。 「user 直命」節 SHALL 逐語のまま全行 carry する (状態が「完了」「user 撤回」の行だけ落としてよい)。 「計画弧」節と新規の命令行 SHALL 開発 session が typed な入力 (file) で渡し、 器が 3 節の schema (見出し・tag <code>[auto|confirm|hard候補]</code>・<code>[P0-P3]</code>・<code>since=</code>・pointer) を検査して file を書く。 開発 session SHALL NOT 退避物を直接 Write / Edit しない (器の口だけが書く)。 cap guard (FR26) の「退避物の編集を通す口」は本 ADR で変えないが、 器の口が唯一の書き手になった後は使われない (退役は §2.5)。 退避物が既に在る席 (未 consumed) で <code>externalize</code> を撃つ周 SHALL rc 非 0 で止まる (二重退避は退避物を取り合う・FR28 と同じ極性)。</p>
+
+<h3 id="s2-4-sid-and-readonly">§2.4 session id は hook の打刻から得て env を読まず、 復元は台帳を read-only で読み、 前の版の script を呼ばない</h3>
+<p class="section-essence" data-audience="human">「今の session は誰か」は、 hook が打刻に残した session id から読みます。 環境変数や画面の字面からは読みません。 これで、 planner の席が自分の退避物を admin のものと取り違える事故は構造として消えます。 復元は台帳を読むだけで書かず、 前の版の script は呼びません。 器の便が着地したら、 共通 skill は器を呼ぶ薄い入口だけになり、 前の版の script を指す行は消えます。</p>
+<p data-audience="machine"><code>rebrief</code> / <code>consume</code> / <code>externalize</code> SHALL 現在の session id を <code>&lt;state_dir&gt;/seat/&lt;target&gt;/state.jsonl</code> の最終打刻行の <code>sid</code> から得る (<a href="./ADR-0015-seat-state-is-stamped-by-hooks-not-read-from-pane.html#s2-1-typed">ADR-0015 §2.1</a> の typed 打刻・env と pane の字面は読まない・打刻が無い周は rc 非 0)。 自席の退避物の弁別 SHALL <code>scan_wm</code> と同じ「frontmatter の <code>seat:</code> が target と一致」とし、 file 名の sid が現在の sid と違う自席の退避物 (<code>/clear</code> の後の通常形) SHALL 候補として DATA に出し、 <code>consume</code> は現在の sid 名義へ move して <code>consumed-from: &lt;元の sid&gt;</code> を frontmatter に足す。 role による除外は持たない (席は target で一意・role の解決に依存しない)。 別の席の未消費退避物 SHALL orphan として列挙するだけで、 消費しない。 <code>rebrief</code> SHALL 台帳の現在値 (open / in_progress / blocked の件数・in_progress の一覧・退避物が言及する bead の status) を <code>bd --readonly … --json</code> の子 process で読み、 台帳が読めない周は rc 非 0 (FailClosed・「BD-COUNT=0」に化けさせない)。 器 SHALL NOT 前の版の script (fetch・lib・preflight) を呼ばず、 その path を持たない (C8)。 global skill 2 本 (退避・復元) は本 ADR の便が land した後、 器の subcommand を呼ぶ入口だけの形へ改め、 前の版の script を指す行を 0 にする (skill file は本 repo の外・user の操作)。</p>
+
+<h3 id="s2-5-scope">§2.5 射程外</h3>
+<p class="section-essence" data-audience="human">この記録が決めるのは「3 つの subcommand の役割」「pointer の形と暫定の印」「引き継ぎの機械化」「session id と読み取り専用」の 4 点だけです。 brief の文面、 起票、 transcript から user の言葉を拾う仕組み、 自動要約の検出、 skill の退役の手順、 cap guard の口の撤去は別に決めるか、 user の手番です。</p>
+<p data-audience="machine">次は本 ADR の決定ではない (MUST NOT be read as such): brief の文章と判断 (開発 session の層)、 起票 (管理席の write の口・C15)、 transcript から user 発言の逐語を抽出して「user 直命」節へ入れる機構 (前の版の digest・Claude Code の config dir を要する・v3 か hook 経由で別途)、 auto-compact の検出と強制回復 mode (PreCompact hook の打刻・別途)、 飛行中の background Agent / Workflow の列挙 (前の版の overlay・transcript の layout に依存)、 global skill と plugin 版 skill の退役手順 (本 repo の外)、 cap guard の退避物編集の口の撤去 (skill の退役後に別便)、 rules 行 <code>seat.wm_directive_cap</code> の値 (裁定 id 待ち・C5)、 <code>seat tick</code> / <code>cycle</code> が注入する合図の字面 (現物のまま)。</p>
+</section>
+
+<section id="s3-srs" class="informative">
+<h2>§3. SRS との関係 (正本は SRS)</h2>
+<p class="section-essence" data-audience="human">この記録が仕える要件は、 先に要件書 (SRS v0.5) に入っています。 要件の文面はここには置かず、 要件書の当該行を指すだけにします。 この記録は要件書を 1 字も変えません。</p>
+<div data-audience="machine">
+<p>本 ADR の §2.1〜§2.4 が仕える要件は SRS v0.5 が正本である: <a href="../spec/srs.html#FR23">FR23</a> (subcommand・作法 6 本・暫定行の印付き列挙と非引継ぎ)・<a href="../spec/srs.html#AC8">AC8</a> (器の subcommand として実在・作法と復元 DATA)。 <a href="../spec/srs.html#FR26">FR26</a> (cap guard の口)・<a href="../spec/srs.html#FR27">FR27</a> / <a href="../spec/srs.html#FR29">FR29</a> (合図)・<a href="../spec/srs.html#FR28">FR28</a> (cycle) は不変。 SRS の scope out (台帳への write) も不変 (rebrief は read-only)。 subcommand の名・DATA の marker・pointer の enum・frontmatter の schema key は §2 が正本で SRS は持たない。</p>
+</div>
+</section>
+
+<section id="s4-consequences" class="informative">
+<h2>§4. Consequences</h2>
+<p class="section-essence" data-audience="human">良い面は、 退避と復元の機械の部分が Rust の歯で守られ、 session id の取り違えが構造として消え、 出所の無い規則が周を越えて生き残らなくなり、 前の版への依存が切れることです。 悪い面は、 共通 skill の書き換えという repo の外の作業が要ること、 器が持つ subcommand と enum が増えること、 前の版が持っていた便利な観測 (飛行中の agent の列挙・user 発言の自動抽出) が当面無くなることです。</p>
+<p data-audience="machine">Positive: 機械層が Rust の歯 (C12) と typed enum (C3.3 / C11) で守られ、 前の版の bats と python から離れる (C8)。 sid を打刻から取るため role 誤解決の事故 (memory 記録) が構造として消える。 暫定行が次の cycle に載らないため N2 の向き (prose にしか無い規則は規則でない) が機械で守られる。 復元が read-only ゆえ全 role が回しても台帳への越境 write が出ない (C15)。 優先順位が enum の宣言順にあり散文注記を持たない (C2)。</p>
+<p data-audience="machine">Negative (受け入れるコスト): subcommand 3 つ・enum 2 つ (<code>PointerKind</code>・DATA の marker)・rules 行 1 つが増える (core の行数は R-C4-1 の内側で測る)。 global skill 2 本の書き換えと前の版 script の退役は本 repo の外 (user の操作)。 前の版の overlay (飛行中 agent / WF の列挙・transcript digest) は当面持たない (§2.5)。 開発 session が退避物を直接書けなくなるため、 計画弧と新規命令行を typed な入力 file で渡す手間が 1 段増える。</p>
+</section>
+
+<section id="s5-alternatives" class="informative">
+<h2>§5. Alternatives Considered</h2>
+<p class="section-essence" data-audience="human">5 つの案を退けました。 共通 skill と前の版の script のまま直す案は、 前の版を器の頼みの綱にし続けます。 brief の文章まで器に持たせる案は、 判断を機械に押し込むことになります。 作業記憶を fleet の記録 file に入れる案は、 一時的な席の記憶と fleet の状態を混ぜます。 pointer を 5 つの形に閉じる案は、 実在する参照の 3 分の 1 を落とします。 器が作業記憶と憲法の食い違いを裁く案は、 内容の判断を機械に持たせることになります。</p>
+<p data-audience="machine">(A) <strong>global skill と前の版の script のまま規律だけ直す</strong> (記録時点の暫定処置)。 却下: C8 (前の版を oracle にしない)・C12 (bats の歯)・2 系統 (global 版 / plugin 版) の drift が続く。 user 自身が「暫定処置・恒久の置き場は器」と裁定。</p>
+<p data-audience="machine">(B) <strong>brief の文章まで器が生成する</strong>。 却下: 現在地・推奨・次のアクションは judgment であり、 器は判断を持たない (C3.3 の向き = 判断入力を typed に渡すのが器の役割)。 DATA の typed 行までを器に置き、 文章は開発 session の層に残す (§2.1)。</p>
+<p data-audience="machine">(C) <strong>作業記憶を fleet の event log (C3 の 1 file) に載せる</strong>。 却下: 作業記憶は席の一時層 (session を跨ぐと消える文脈の退避物) であって fleet の状態ではなく、 FR23 が file 形 (session id で一意・move で消費) を固定済み。 event log に載せると消費 (move) の作法と衝突する。</p>
+<p data-audience="machine">(D) <strong>pointer の文法を閉じた 5 形 (憲法条 / ADR / manifest 行 / bd 裁定 / user 裁定 ts) に限る</strong> (前の版の当初形)。 却下: 実測で 24 行中 8 行 (memory・docs の path) が形の外に落ち、 実在する参照を暫定へ倒す。 「照合できる carrier 参照」を <code>PointerKind</code> の 8 形で持ち、 到達できる kind は実在まで検査する (§2.2)。</p>
+<p data-audience="machine">(E) <strong>器が作業記憶の行と拘束 SSOT の内容の食い違いを判定する</strong>。 却下: 内容の照合は自由文の意味判定であり typed にできない (C3.3「free text を判定入力にしない」)。 器は形・実在・優先順位 (宣言順) までを持ち、 内容の judgment は開発 session に残す (§2.2)。 (E') session id を env から読む案も却下 (C2.2・ADR-0004 D-4)。 打刻の sid を読む (§2.4)。</p>
+</section>
+
+<section id="s6-trace" class="informative">
+<h2>§6. Trace</h2>
+<p class="section-essence" data-audience="human">出所は、 user の直命と裁定、 別 repo の独立 gate が指摘した穴、 前の版の script と skill の現物、 器の現物 (退避物の走査・打刻・cap guard の口)、 そして先に要件書へ入った FR23 / AC8 です。</p>
+<ul data-audience="machine">
+  <li>user の直命 (2026-09-10・会話面・planner 席): 作業記憶が憲法より優先されるのはおかしい／根幹の skill (退避・復元) は器に入れるべき・global skill は暫定処置。 user の裁定 (2026-09-10・適用範囲): global のまま文法を「照合できる carrier 参照」へ広げる (暫定)。 user の裁定 (2026-09-12・逐語「推奨で」・3 論点の 3 つ目): AC8 を器の subcommand へ・便 3 つ・brief の文章は開発 session のまま・台帳は read-only の子 process。 逐語は台帳 <code>s2-07l.61</code> の notes (tracked file には写さない・CON2)。</li>
+  <li>別 repo の独立 gate の指摘 (2026-09-11・台帳 <code>s2-07l.61</code> notes に転記): 全 role が回す復元手順が起票を命じると role 境界を越えた write が出る (blocking)・pointer 文法 5 形で 24 行中 8 行が落ちる・「拘束 SSOT」が 2 値で判定不能を持たない・件数だけで列挙の置き場が無い・plugin 版と global 版の drift。 本 ADR §2.1 / §2.2 はこれらを構造で閉じる。</li>
+  <li>要件の land (2026-09-12): SRS v0.5 で AC8 を「器の subcommand として実在」へ改訂し FR23 に 2 義務 (subcommand・暫定行) を追記 (user の <code>/folio-architect</code>)。 本 ADR は要件の後に書かれ、 要件の文面を持たない。</li>
+  <li>前の版の現物 (2026-09-12・host 上): 復元 fetch = python (bash wrapper 経由・sid を env / transcript から解決・role filter で自席の退避物を除外する事故を記録)・退避 preflight = python (飛行中 WF / 常駐 process の観測)・作業記憶 lib = python (3 節の見出し定数・<code>[P0-P3]</code> 安定 sort・上限 24・tag 警告)。 global skill 2 本が絶対 path でこれらを呼ぶ。</li>
+  <li>器の現物 (2026-09-12): <code>crates/&lt;NAME&gt;/src/seat/mod.rs</code> の <code>scan_wm</code> (frontmatter の <code>seat:</code> で自席を弁別・<code>WmScan::{None, Unconsumed, Unreadable}</code>)・<code>hook/stamp.rs</code> が <code>session_id</code> を <code>state.jsonl</code> の <code>sid</code> に打刻・<code>seat/tick.rs</code> の退避の合図 <code>/ready-compaction</code>・<code>seat/cycle.rs</code> の <code>DEFAULT_RESTORE = "/rebrief"</code>・cap guard の <code>SeatDecision::Externalize</code> (FR26)。 退避物は <code>.claude-session/</code> (untracked)。</li>
+  <li>先行決定: <a href="./ADR-0004-mvp-persistence-and-cross-version-formats.html">ADR-0004</a> §2.4 (env を読まない・場所は引数) / §2.5 (schema 版)・<a href="./ADR-0013-machine-holds-enumerations-docs-hold-pointers.html">ADR-0013</a> §2.2 (閉じた enum + const slice + 網羅 match + 判別子順 pin)・<a href="./ADR-0015-seat-state-is-stamped-by-hooks-not-read-from-pane.html">ADR-0015</a> (席の状態と sid は打刻から)。</li>
+  <li>設計: <code>docs/design/working-memory.md</code> (3 節の schema と frontmatter・pointer の enum と判定・DATA の marker・subcommand の引数と rc・carry-forward と暫定行の扱い・歯・契約 3 便・却下案)。</li>
+</ul>
+</section>
+
+<!-- folio:chrome-bottom -->
+<nav class="prevnext" aria-label="前後の文書">
+  <a class="prevnext__prev" href="ADR-0017-account-allowance-measured-into-event-log.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">ADR-0017 — 口座残量は器が host の HTTP client を子 process で呼んで読み、 出所付きの実測行として fleet の event log に記録する (manifest の口座列挙は不透明な label・上限 record は検出の合図のまま・選ぶは v3)</span></a>
+</nav>
+<script>
+(function () {
+  var openedForPrint = [];
+  window.addEventListener('beforeprint', function () {
+    openedForPrint = [];
+    var ds = document.querySelectorAll('details:not([open])');
+    for (var i = 0; i < ds.length; i++) { ds[i].setAttribute('open', ''); openedForPrint.push(ds[i]); }
+  });
+  window.addEventListener('afterprint', function () {
+    for (var i = 0; i < openedForPrint.length; i++) openedForPrint[i].removeAttribute('open');
+    openedForPrint = [];
+  });
+  if (!document.querySelector('[data-audience]')) return;
+  /* 既定 = 人間プレゼン型 (ADR-0040 / rules §11.3): script 経由で初期 class を付与するため
+     no-JS では付かず全文可視に graceful degrade する。 static DOM は全文を保持 (AI/検索/印刷は不変)。 */
+  document.body.classList.add('audience-human');
+  var bar = document.createElement('nav');
+  bar.className = 'audience-toggle';
+  bar.setAttribute('aria-label', '表示対象の切替');
+  var states = [['both', '両方'], ['human', '人間向け'], ['machine', '機械向け']];
+  for (var s = 0; s < states.length; s++) {
+    (function (mode, label) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      b.setAttribute('aria-pressed', mode === 'human' ? 'true' : 'false');
+      b.addEventListener('click', function () {
+        document.body.classList.remove('audience-human', 'audience-machine');
+        if (mode !== 'both') document.body.classList.add('audience-' + mode);
+        var bs = bar.querySelectorAll('button');
+        for (var j = 0; j < bs.length; j++) bs[j].setAttribute('aria-pressed', bs[j] === b ? 'true' : 'false');
+      });
+      bar.appendChild(b);
+    })(states[s][0], states[s][1]);
+  }
+  var bc = document.querySelector('nav.breadcrumb');
+  if (bc && bc.parentNode) { bc.parentNode.insertBefore(bar, bc.nextSibling); }
+  else { document.body.insertBefore(bar, document.body.firstChild); }
+})();
+</script>
+<!-- /folio:chrome-bottom -->
+</body>
+</html>
