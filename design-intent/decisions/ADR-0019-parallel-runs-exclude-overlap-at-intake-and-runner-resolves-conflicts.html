@@ -6,11 +6,11 @@
 <meta name="folio-doc-type" content="adr">
 <meta name="folio-layer" content="project">
 <meta name="folio-version" content="0.4.6">
-<meta name="folio-status" content="accepted">
+<meta name="folio-status" content="proposed">
 <meta name="folio-stakeholders" content="Developer, AI Agent, External Reviewer">
 <meta name="folio-adr-id" content="0019">
 <meta name="folio-adr-date" content="2026-09-12">
-<title>ADR-0019 — 並列の便は intake が write-set の交差で排他し、 land の rebase 衝突は runner を起こし直して解く (人は質問の回答でだけ関わる・admin は中継と操作・手で merge する経路を持たない)</title>
+<title>ADR-0019 — 並列の便は intake が write-set の交差で排他し、 land の rebase 衝突は runner を起こし直して解く (人は質問の回答でだけ関わる・admin は中継と操作・手で merge する経路を持たない・ADR-0016 §2.2 の質問判定と再 spawn の契機を部分 supersede)</title>
 <link rel="stylesheet" href="../../common.css">
 <script type="application/ld+json">
 {
@@ -24,14 +24,16 @@
   "dc:isPartOf": [
     { "@id": "./README.html" }
   ],
-  "dc:title": "ADR-0019 — 並列の便は intake が write-set の交差で排他し、 land の rebase 衝突は runner を起こし直して解く (人は質問の回答でだけ関わる・admin は中継と操作・手で merge する経路を持たない)",
+  "dc:title": "ADR-0019 — 並列の便は intake が write-set の交差で排他し、 land の rebase 衝突は runner を起こし直して解く (人は質問の回答でだけ関わる・admin は中継と操作・手で merge する経路を持たない・ADR-0016 §2.2 の質問判定と再 spawn の契機を部分 supersede)",
   "folio:version": "0.4.6",
   "folio:stakeholders": ["Developer", "AI Agent", "External Reviewer"],
   "dc:references": [
     { "@id": "../spec/constitution.html#c2" },
+    { "@id": "../spec/constitution.html#c3" },
     { "@id": "../spec/constitution.html#c5" },
     { "@id": "../spec/constitution.html#c6" },
     { "@id": "../spec/constitution.html#c11" },
+    { "@id": "../spec/constitution.html#c14" },
     { "@id": "../spec/constitution.html#c16" },
     { "@id": "../spec/constitution.html#n1" },
     { "@id": "../spec/srs.html#FR4" },
@@ -40,9 +42,11 @@
     { "@id": "../spec/srs.html#FR14" },
     { "@id": "../spec/srs.html#FR30" },
     { "@id": "../spec/srs.html#FR31" },
+    { "@id": "../spec/srs.html#NFR4" },
     { "@id": "./ADR-0009-vessel-grants-runner-permissions-and-mutation-proof.html" },
     { "@id": "./ADR-0014-polarity-list-is-a-snapshot-rendered-by-core.html" },
-    { "@id": "./ADR-0016-default-delivery-structure-and-typed-question-record.html" }
+    { "@id": "./ADR-0016-default-delivery-structure-and-typed-question-record.html" },
+    { "@id": "./ADR-0018-working-memory-subcommands-and-pointer-required-directives.html" }
   ]
 }
 </script>
@@ -58,8 +62,8 @@
 <!-- /folio:chrome-top -->
 
 <header class="doc-header">
-  <h1>ADR-0019 — 並列の便は intake が write-set の交差で排他し、 land の rebase 衝突は runner を起こし直して解く (人は質問の回答でだけ関わる・admin は中継と操作・手で merge する経路を持たない)</h1>
-  <div class="meta">Status: accepted &middot; Date: 2026-09-12 &middot; version 0.4.6 (拘束する constitution の版) &middot; C2 / C6 / C16 / N1 の適用を記録し、 ADR-0016 §2.5 が射程外とした「write-set の交差の検査」を決める &middot; 要件は SRS v0.5 (FR4 / FR10 / FR11 / FR14 / FR30 / FR31) が正本</div>
+  <h1>ADR-0019 — 並列の便は intake が write-set の交差で排他し、 land の rebase 衝突は runner を起こし直して解く (人は質問の回答でだけ関わる・admin は中継と操作・手で merge する経路を持たない・ADR-0016 §2.2 の質問判定と再 spawn の契機を部分 supersede)</h1>
+  <div class="meta">Status: proposed &middot; Date: 2026-09-12 &middot; version 0.4.6 (拘束する constitution の版) &middot; C2 / C6 / C11.2 / C16 / N1 の適用を記録し、 ADR-0016 §2.5 が射程外とした「write-set の交差の検査」を決め、 ADR-0016 §2.2 の 2 文を部分 supersede する &middot; 要件は SRS v0.5 (FR4 / FR10 / FR11 / FR14 / FR30 / FR31) が正本 &middot; §3 の SRS 改訂 (FR10) は user の裁定事項</div>
 </header>
 <!-- folio:chrome-toc -->
 <nav class="toc" aria-label="ページ内目次">
@@ -71,6 +75,7 @@
   <li class="toc--sub"><a href="#s2-3-roles">§2.3 人が関わるのは質問への回答だけ。 admin は中継と操作、 planner は契約の設計と回答。 手で merge する経路は持たない</a></li>
   <li class="toc--sub"><a href="#s2-4-bounds">§2.4 起こし直しの回数は rules 行で上限を持ち、 その判定は guard で、 超えた便は Failed で終端して畳める</a></li>
   <li class="toc--sub"><a href="#s2-5-scope">§2.5 射程外</a></li>
+  <li class="toc--sub"><a href="#s2-6-supersede">§2.6 ADR-0016 §2.2 の質問判定と再 spawn の契機を部分 supersede する</a></li>
   <li><a href="#s3-srs">§3. SRS との関係 (正本は SRS)</a></li>
   <li><a href="#s4-consequences">§4. Consequences</a></li>
   <li><a href="#s5-alternatives">§5. Alternatives Considered</a></li>
@@ -80,19 +85,19 @@
 <!-- /folio:chrome-toc -->
 
 <aside class="informative">
-<p>本 ADR は IETF <strong>RFC 2119</strong> および <strong>RFC 8174 / BCP 14</strong> に定義される MUST / SHALL / SHOULD / MAY のキーワード解釈規約に従う。 ADR は決定時点の記録であり、 改訂は新しい ADR による supersede で行う。 本 ADR の <strong>§2 は user 裁定 (2026-09-12) を受けた決定</strong>で、 <strong>§3 は SRS への pointer</strong> である。 本 ADR は要件の文面を持たず、 既存の ADR を supersede しない (<a href="./ADR-0016-default-delivery-structure-and-typed-question-record.html#s2-5-scope">ADR-0016 §2.5</a> が「本 ADR の決定ではない」と明記して残した論点を決める)。</p>
+<p>本 ADR は IETF <strong>RFC 2119</strong> および <strong>RFC 8174 / BCP 14</strong> に定義される MUST / SHALL / SHOULD / MAY のキーワード解釈規約に従う。 ADR は決定時点の記録であり、 改訂は新しい ADR による supersede で行う。 本 ADR の <strong>§2 は user 裁定 (2026-09-12) を受けた決定</strong>で、 <strong>§3 は SRS への pointer と改訂案 1 件 (FR10)</strong> である。 本 ADR は要件の文面を持たない。 <a href="./ADR-0016-default-delivery-structure-and-typed-question-record.html#s2-5-scope">ADR-0016 §2.5</a> が「本 ADR の決定ではない」と明記して残した論点 (交差の検査) を決め、 追随 (台帳 s2-07l.119) と retire (同 .128 / .132) の延長を決め、 <strong>ADR-0016 §2.2 の 2 文を §2.6 で部分 supersede する</strong>。 <strong>発効条件</strong>: §2.2 / §2.4 / §2.6 の実装 bead は §3 の FR10 改訂が user 裁定で反映されるまで起票しない (それまで本 ADR は proposed)。 §2.1 の実装 bead は FR10 に触れないので先に起票できる。</p>
 </aside>
 
 <aside class="machine-readable" aria-hidden="true">
   <dl>
     <dt>id</dt><dd>ADR-0019</dd>
     <dt>doc-type</dt><dd>adr</dd>
-    <dt>status</dt><dd>accepted</dd>
+    <dt>status</dt><dd>proposed (§3 の SRS FR10 改訂が user 裁定で反映されたら accepted にする・ADR-0016 と同じ前例)</dd>
     <dt>date</dt><dd>2026-09-12</dd>
     <dt>version</dt><dd>0.4.6 (拘束する constitution の版。 本 ADR は憲法の条文を動かさない)</dd>
     <dt>decided-by</dt><dd>user (2026-09-12) — planner の提示「入口で排他 + 起きたら runner が解く (人は質問経由のみ)」に対する裁定 (要旨: それでよい・ただし歯は必須で両方が本当に働くことを検証する)。 逐語は台帳の notes が原本で本 file には写さない (CON2)</dd>
     <dt>stakeholders</dt><dd>Developer, AI Agent, External Reviewer</dd>
-    <dt>supersedes</dt><dd>ADR-0016 §2.2 の限定 supersede (同一 run を再 spawn する契機に「衝突からの起こし直し」を 2 つ目として足す。 「<code>Questioned</code> からは回答が在る周だけ」の読みは保つ)。 それ以外は ADR-0016 §2.5 が射程外に置いた論点を決めるだけで、 既存 ADR の決定を変えない</dd>
+    <dt>supersedes</dt><dd>ADR-0016 §2.2 の <strong>2 文の読み替え</strong> (§2.6): 「質問で止まる周 SHALL NOT commit を作らない」を「その turn で commit を増やさない」と読み、 「resume SHALL <code>Questioned</code> から <code>QuestionAnswered</code> が在る周だけ同じ run を再 spawn する」の再 spawn の契機に「§2.2 の衝突からの起こし直し」を足す。 他の文は変えない</dd>
     <dt>related</dt><dd>ADR-0009 §2.1 / §2.2 / §2.4 (write-set guard は Bash では守れない・intake の拒否・gate の照合) / ADR-0014 §2.1 (guard の定義と極性) / ADR-0016 §2.1〜§2.3 / §2.5 (配送構造・質問 record・回答の権限) / ADR-0018 §4 (manifest に無い rules 行は予定行) / constitution C2 / C3.3 / C5 / C6 / C11.2 / C14.2 / C16 / N1 / N1.2 / SRS FR4 / FR10 / FR11 / FR14 / FR30 / FR31 / NFR4</dd>
   </dl>
 </aside>
@@ -109,30 +114,34 @@
 
 <h3 id="s2-1-intake-exclusion">§2.1 intake は live な便 (終端でない run) の write-set と交差する契約を受け付けない (契約単位の拒否は 1 enum の 1 関数・C2)</h3>
 <p class="section-essence" data-audience="human">便を受け付ける入口で、 まだ終わっていない便が触る file と重なる契約は断ります。 「終わっていない」とは、 着地も失敗も停止もしておらず、 審査で不合格にもなっていない便のことです。 断る理由は「契約を断る理由の一覧」(閉じた一覧) に足し、 判定は 1 本の関数です。 重なりの判定は path の集合の共通部分で、 dir はその配下の file を含みます。 放置された便が邪魔なら、 その便を 1 本だけ止める口で外します。 断られた契約は、 重なる便が終わってから出し直します。</p>
-<p data-audience="machine"><code>pipe intake</code> SHALL 契約の write-set を、 live な便の write-set (各 run の契約の写し) と照合し、 交差する周は受け付けない (run を作らず event を書かない)。 live な便 SHALL「終端でない run」と定義する: 終端 = 段が <code>Landed</code> / <code>Failed</code> / <code>Stopped</code> のいずれか、 または <code>Gated</code> で verdict が FAIL (verdict の読み手は既存の 1 本・pipeline.md §4「FAIL は終端」)。 判定は段の閉じた enum の網羅 match で書く (段が増えれば compile で気付く)。 交差の定義 SHALL path の集合の共通部分が空でないこととし、 末尾 <code>/</code> の dir はその配下の path を含む (正規化: 先頭の <code>./</code>・重複する <code>/</code>・<code>..</code> の畳み込みを write-set guard と同じ規則で行う・symlink は解かない＝実体が同じ file を別名で持つ 2 契約は見逃す側で、 その穴は編集時の guard が実体名で塞ぎ、 Bash の git 経路は ADR-0009 §2.1 の既知の穴のまま)。 契約単位の拒否 SHALL 閉じた enum 1 つ (<code>Refuse</code>・既存の散文の理由〔git repo でない・同じ秒の再 intake〕も variant に集め、 <code>WriteSetOverlap</code> と <code>WriteSetUnreadable</code> を宣言順の末尾に足す) を返す関数 1 本で持つ (<a href="../spec/constitution.html#c2">C2</a>)。 verify 行 1 本の理由 (<code>Unfit</code>) とは境界が違い、 同じ enum には足さない。 この境界は新しい guard (<code>intake-refuse</code>・InLoop / FailClosed) として極性一覧に 1 行増える (<a href="./ADR-0014-polarity-list-is-a-snapshot-rendered-by-core.html#s2-1-type">ADR-0014 §2.1</a>)。 rc は交差 = 既存の拒否 (1)、 写しを読めない = 壊れた store (2・<a href="../spec/srs.html#NFR4">NFR4</a>)。 器 SHALL NOT 交差を許す flag を持たない。 live な便の write-set を読めない周 (契約の写しが無い・parse 不能) SHALL 受け付けない側へ倒す (fail-closed・「読めない」を「交差なし」に化けさせない)。 器 SHALL <code>pipe stop --run &lt;id&gt;</code> を持ち、 終端でない run 1 本に <code>RunStopped</code> を書いて live から外す (席が Live なら先に止める・終端の run には何も書かず rc 1・冪等)。 <code>pipe stop --all</code> の意味は変えない。</p>
+<p data-audience="machine"><code>pipe intake</code> SHALL 契約の write-set を、 live な便の write-set (各 run の契約の写し) と照合し、 交差する周は受け付けない (run を作らず event を書かない)。 live な便 SHALL「終端でない run」と定義する: 終端 = 段が <code>Landed</code> / <code>Failed</code> / <code>Stopped</code> のいずれか、 または <code>Gated</code> で verdict が FAIL (verdict の読み手は既存の 1 本・pipeline.md §4「FAIL は終端」)。 判定は段の閉じた enum の網羅 match で書く (段が増えれば compile で気付く)。 交差の定義 SHALL path の集合の共通部分が空でないこととし、 末尾 <code>/</code> の dir はその配下の path を含む (正規化: 先頭の <code>./</code>・重複する <code>/</code>・<code>..</code> の畳み込みを write-set guard と同じ規則で行う・symlink は解かない＝実体が同じ file を別名で持つ 2 契約は見逃す側で、 その穴は編集時の guard が実体名で塞ぎ、 Bash の git 経路は ADR-0009 §2.1 の既知の穴のまま)。 契約 file が読めた後の契約単位の拒否 (git repo でない・同じ秒の再 intake・交差・写しを読めない) SHALL 閉じた enum 1 つ (<code>Refuse</code>・既存の散文の理由を variant に集め、 <code>WriteSetOverlap</code> と <code>WriteSetUnreadable</code> を宣言順の末尾に足す) を返す関数 1 本で持つ (引数の不足と契約 file 自体の parse error は従来の口〔rc 1 / rc 2〕のまま <code>Refuse</code> の外・<a href="../spec/constitution.html#c2">C2</a>)。 verify 行 1 本の理由 (<code>Unfit</code>) とは境界が違い、 同じ enum には足さない。 この境界は新しい guard (<code>intake-refuse</code>・InLoop / FailClosed) として極性一覧に 1 行増える (<a href="./ADR-0014-polarity-list-is-a-snapshot-rendered-by-core.html#s2-1-type">ADR-0014 §2.1</a>)。 rc は交差 = 既存の拒否 (1)、 写しを読めない = 壊れた store (2・<code>Gated</code> run の verdict を読めない周も同じ「読めない」側で 2・<a href="../spec/srs.html#NFR4">NFR4</a>)。 器 SHALL NOT 交差を許す flag を持たない。 live な便の write-set を読めない周 (契約の写しが無い・parse 不能) SHALL 受け付けない側へ倒す (fail-closed・「読めない」を「交差なし」に化けさせない)。 器 SHALL <code>pipe stop --run &lt;id&gt;</code> を持ち、 終端でない run 1 本に <code>RunStopped</code> を書いて live から外す (席が Live なら先に止める・終端の run には event を増やさず rc 1＝書込は冪等で rc は冪等でない)。 <code>pipe stop --all</code> の意味は変えない。</p>
 
 <h3 id="s2-2-runner-resolves">§2.2 land の rebase 衝突は終端にせず、 runner を起こし直して write-set の内側で解かせ、 gate をやり直す</h3>
 <p class="section-essence" data-audience="human">入口で排他しても、 質問への回答で範囲が広がる周や、 dir 単位の write-set が実際には別 file を触る周に衝突は起きえます。 衝突したら便を失敗にせず、 木を衝突前に戻してから実装役をもう 1 回起こし、 「main が進んだので取り込んで衝突を解いてから続けよ」と契約に添えて渡します。 実装役は自分の write-set の中でだけ解き、 解けなければ木を元に戻して質問で止まります。 解けたら器が「出発点が進んだ」ことを記録し直してから審査 (gate) をやり直し、 通れば着地します。</p>
-<p data-audience="machine">land の追随 (設計 §5.4) で rebase が衝突した周、 器 SHALL <code>git rebase --abort</code> で木を戻し (戻せない周は従来どおり <code>Failed</code> で終端し理由を stderr に残す)、 <code>RunStage stage=Implemented detail=rebase-conflict:&lt;base&gt;..&lt;main&gt;</code> を記帳して (終端の <code>Failed</code> にしない)、 §2.4 の判定が許す周は同じ run の worktree と契約で runner を起こし直す (C6 の 1 つの spawn 口・Budget は Precheck から)。 起こし直しの stdin SHALL 契約の写しに「追随」節 (main の sha と「<code>git rebase &lt;main&gt;</code> を実行し衝突を write-set の内側で解いて commit せよ・解けなければ <code>git rebase --abort</code> で木を戻し〔commit を作らず clean のまま〕質問 record で止まれ」の定型) を付ける (<a href="./ADR-0016-default-delivery-structure-and-typed-question-record.html#s2-2-question-record">ADR-0016 §2.2</a> の「回答」節と同じ置き場・順序は契約 → 回答 → 追随・定型の字面は prompt template が持つ)。 runner の終了後、 器 SHALL worktree の HEAD と main の merge-base を実測し、 base が進んでいれば <code>RunStage stage=Implemented detail=rebase:&lt;old&gt;..&lt;main&gt;</code> を記帳する (base の読み手は既存の 1 本・gate は新しい base で diff を測る＝先着便の file を write-set の外と誤らない)。 その後は通常の spawn 完了と同じく <code>Implemented</code> → gate → land を通す (追随の rebase は再び走り、 解けていれば衝突しない)。 追随 turn の write-set の fence は gate の照合が担う (Bash 主体の turn ゆえ編集時の guard は効かない・<a href="./ADR-0009-vessel-grants-runner-permissions-and-mutation-proof.html#s2-1-runner-permissions">ADR-0009 §2.1</a> / §2.4)。 runner が質問 record で止まった周は <code>Questioned</code> へ倒れ (木は clean・便の commit は 0 本のまま)、 planner の回答で再開する (FR31 / FR32)。 <code>resume</code> SHALL この段 (<code>Implemented</code> で最後の <code>RunStage</code> の detail が <code>rebase-conflict:</code> で始まり、 runner が起きていない周) からも同じ起こし直しを撃てる (同一 run の再 spawn の契機は ADR-0016 §2.2 の「回答済みの質問」に本項を足した 2 つ・限定 supersede)。</p>
+<p data-audience="machine">land の追随 (設計 §5.4) で rebase が衝突した周、 器 SHALL <code>git rebase --abort</code> で木を戻し (戻せない周は <code>Failed detail=rebase-abort-failed</code> で終端し理由を stderr に残す)、 <code>RunStage stage=Implemented detail=rebase-conflict:&lt;base&gt;..&lt;main&gt;</code> を記帳して (終端の <code>Failed</code> にしない)、 §2.4 の判定が許す周は同じ run の worktree と契約で runner を起こし直す (C6 の 1 つの spawn 口・Budget は Precheck から・runner の起動形〔<code>--runner</code>〕を要し、 無い周は以後の event を書かず rc 1 で止まる＝<code>rebase-conflict:</code> の記帳は残る)。 起こし直しの stdin SHALL 契約の写しに「追随」節 (main の sha と「<code>git rebase &lt;main&gt;</code> を実行し衝突を write-set の内側で解いて commit せよ・解けなければ <code>git rebase --abort</code> で木を戻し〔commit を作らず clean のまま〕質問 record で止まれ」の定型) を付ける (<a href="./ADR-0016-default-delivery-structure-and-typed-question-record.html#s2-2-question-record">ADR-0016 §2.2</a> の「回答」節と同じ置き場・順序は契約 → 回答 → 追随・定型の字面は prompt template が持つ)。 runner の終了後、 器 SHALL worktree の HEAD と main の merge-base を実測し、 記録済みの base より進んでいれば <code>RunStage stage=Implemented detail=rebase:&lt;old&gt;..&lt;merge-base&gt;</code> を記帳する (書く値は実測した merge-base であって現在の main ではない＝turn の間に main がさらに進んでいても 2 点 diff に逆向きの差分を載せない・base の読み手は既存の 1 本・gate は新しい base で diff を測る＝先着便の file を write-set の外と誤らない)。 木が rebase の途中のまま runner が終わった周は <code>Failed detail=rebase-dirty</code> で終端する (clean 前提を守る)。 その後は通常の spawn 完了と同じく <code>Implemented</code> → gate → land を通す (追随の rebase は再び走り、 解けていれば衝突しない)。 追随 turn の write-set の fence は gate の照合が担う (Bash 主体の turn ゆえ編集時の guard は効かない・<a href="./ADR-0009-vessel-grants-runner-permissions-and-mutation-proof.html#s2-1-runner-permissions">ADR-0009 §2.1</a> / §2.4)。 runner が質問 record で止まった周は <code>Questioned</code> へ倒れ (木は clean・<strong>その turn で commit が増えていない</strong>＝§2.6 の読み替え。 便が base から持つ commit は起こし直しの前から在るので「base から 0 本」では測れない)、 planner の回答で再開する (FR31 / FR32)。 <code>resume</code> SHALL この段 (<code>Implemented</code> で最後の <code>RunStage</code> の detail が <code>rebase-conflict:</code> で始まり、 runner が起きていない周) からも同じ起こし直しを撃てる (同一 run の再 spawn の契機は ADR-0016 §2.2 の「回答済みの質問」に本項を足した 2 つ・§2.6)。</p>
 
 <h3 id="s2-3-roles">§2.3 人が関わるのは質問への回答だけ。 admin は中継と操作、 planner は契約の設計と回答。 手で merge する経路は持たない</h3>
 <p class="section-essence" data-audience="human">衝突を人が手で直す道は作りません。 係の席 (admin) は便を流し・質問を届け・着地の操作をするだけ、 計画役 (planner) は契約の write-set を設計し、 質問に答えるだけです。 こうすると、 便を何本並べても人の手番は「質問に答える」の 1 種類に収まり、 admin に仕事が集まって詰まる形になりません。</p>
 <p data-audience="machine">器 SHALL NOT 衝突した worktree を席や人が編集して land する経路を持たない (gate 分離・<a href="../spec/constitution.html#c16">C16</a>: 逸脱は edit time で止める)。 管理席の仕事は <a href="./ADR-0016-default-delivery-structure-and-typed-question-record.html#s2-1-structure">ADR-0016 §2.1</a> の 3 つ (流す・中継する・land する) のまま増やさない。 planner SHALL 契約の write-set を「触る file でなく構造の連鎖」で設計し、 交差を入口で避ける (排他は planner の設計の穴を器が止める最後の線であって、 設計の代わりではない)。 回答で write-set を広げる周 (台帳 <code>s2-07l.133</code>) は、 広げた write-set で §2.1 の照合をやり直す (広げた結果 live な便と交差すれば、 回答は受け付けず planner に戻す)。</p>
 
 <h3 id="s2-4-bounds">§2.4 起こし直しの回数は rules 行で上限を持ち、 その判定は guard で、 超えた便は Failed で終端して畳める</h3>
-<p class="section-essence" data-audience="human">解けない衝突で実装役を無限に起こし直さないよう、 「何回まで起こし直すか」を規則の値として持ちます。 値が 2 なら起こし直しは最大 2 回で、 3 回目の衝突で便は「失敗」で終わります。 この判定は「起動を止めうる判定」なので、 器の止める仕組みの一覧に載せます。 失敗した便の worktree は可逆に畳めます (消しません)。 その後は計画役が契約の範囲を切り直して出し直します。 上限の値は user の裁定で決めます。</p>
-<p data-audience="machine">器 SHALL 1 つの run の衝突による起こし直し (再 spawn) の回数を rules 行 (<code>pipe.follow_retries</code>・kind は Int・値は裁定 id 付き・<a href="../spec/constitution.html#c5">C5</a>・本 ADR は値を決めない) で上限とする。 意味 SHALL「起こし直しの回数」とし、 k 回目の衝突の時点でそれまでの起こし直しが上限未満なら起こし直し、 上限以上なら <code>Failed detail=rebase-conflict</code> で終端する (値 N = 最大 N 回起こし直す)。 回数は event log の <code>rebase-conflict:</code> の <code>RunStage</code> 行数から導く (replay の導出値・別の状態を持たない・<a href="../spec/constitution.html#c3">C3</a>)。 この判定は起動を止めうる判定ゆえ guard であり、 器 SHALL 境界の閉じた enum (起こし直す / 上限到達 / 回数を読めない) と極性定数 (InLoop / FailClosed＝回数を replay から読めない周は起こし直さず終端する) を持ち、 極性一覧に 1 行増える (<a href="../spec/constitution.html#c11">C11.2</a>・<a href="./ADR-0014-polarity-list-is-a-snapshot-rendered-by-core.html#s2-1-type">ADR-0014 §2.1</a>)。 rules 行は契約が裁定 id 付きで manifest に足すまで本 ADR の予定行であり、 <a href="../spec/constitution.html#c14">C14.2</a> の相互参照は行が manifest に在って初めて成立する (<a href="./ADR-0018-working-memory-subcommands-and-pointer-required-directives.html#s4-consequences">ADR-0018 §4</a> と同じ扱い)。 <code>pipe retire</code> SHALL <code>Failed detail=rebase-conflict</code> の便と、 <code>Gated</code> で verdict が FAIL の便の worktree を可逆 move で畳める (<a href="../spec/constitution.html#n1">N1</a> N1.2・台帳 <code>s2-07l.132</code> の memo を本 ADR が吸収する)。 上限到達後の行き先 SHALL 器の外に置かない: 畳んだ後、 planner が契約の write-set を切り直して再 intake する (同じ bead の再 intake は live でない run とは交差しない)。 <a href="./ADR-0016-default-delivery-structure-and-typed-question-record.html#s2-1-structure">ADR-0016 §2.1</a> の手実装の例外に「衝突」は足さない。</p>
+<p class="section-essence" data-audience="human">解けない衝突で実装役を無限に起こし直さないよう、 「何回まで起こし直すか」を規則の値として持ちます。 値が N なら起こし直しは最大 N 回で、 N+1 回目の衝突で便は「失敗」で終わります。 回数を記録から読めないときは「測れなかった」として別の理由で止め、 「上限に達した」とは区別します。 この判定は「起動を止めうる判定」なので、 器の止める仕組みの一覧に載せます。 失敗した便の worktree は可逆に畳めます (消しません)。 その後は計画役が契約の範囲を切り直して出し直します。 上限の値は user の裁定で決めます。</p>
+<p data-audience="machine">器 SHALL 1 つの run の衝突による起こし直し (再 spawn) の回数を rules 行 (<code>pipe.follow_retries</code>・kind は Int・値は裁定 id 付き・<a href="../spec/constitution.html#c5">C5</a>・本 ADR は値を決めない) で上限とする。 意味 SHALL「起こし直しの回数」とし、 k 回目の衝突の時点でそれまでの起こし直しが上限未満なら起こし直し、 上限以上なら <code>Failed detail=rebase-conflict</code> で終端する (値 N = 最大 N 回起こし直す)。 回数は event log の <code>rebase-conflict:</code> の <code>RunStage</code> 行数から導く (replay の導出値・別の状態を持たない・<a href="../spec/constitution.html#c3">C3</a>)。 この判定は起動を止めうる判定ゆえ guard であり、 器 SHALL 境界の閉じた enum (起こし直す / 上限到達 / 回数を読めない) と極性定数 (InLoop / FailClosed＝回数を replay から読めない周は起こし直さず <code>Failed detail=follow-unmeasured</code> + rc 2 で終端する。 上限到達の <code>rebase-conflict</code> + rc 1 とは分け、 「測れなかった」を「赤かった」に化けさせない〔設計 pipeline.md §5.4 の <code>main-unmeasured</code> と同じ極性・NFR4〕) を持ち、 極性一覧に 1 行増える (<a href="../spec/constitution.html#c11">C11.2</a>・<a href="./ADR-0014-polarity-list-is-a-snapshot-rendered-by-core.html#s2-1-type">ADR-0014 §2.1</a>)。 rules 行は契約が裁定 id 付きで manifest に足すまで本 ADR の予定行であり、 <a href="../spec/constitution.html#c14">C14.2</a> の相互参照は行が manifest に在って初めて成立する (<a href="./ADR-0018-working-memory-subcommands-and-pointer-required-directives.html#s4-consequences">ADR-0018 §4</a> と同じ扱い)。 <code>pipe retire</code> SHALL <code>Failed detail=rebase-conflict</code> の便と、 <code>Gated</code> で verdict が FAIL の便の worktree を可逆 move で畳める (<a href="../spec/constitution.html#n1">N1</a> N1.2・台帳 <code>s2-07l.132</code> の memo を本 ADR が吸収する)。 上限到達後の行き先 SHALL 器の外に置かない: 畳んだ後、 planner が契約の write-set を切り直して再 intake する (同じ bead の再 intake は live でない run とは交差しない)。 <a href="./ADR-0016-default-delivery-structure-and-typed-question-record.html#s2-1-structure">ADR-0016 §2.1</a> の手実装の例外に「衝突」は足さない。</p>
 
 <h3 id="s2-5-scope">§2.5 射程外</h3>
 <p class="section-essence" data-audience="human">この記録が決めるのは「入口の排他」「衝突時の起こし直し」「人の関わり方」「回数の上限」だけです。 host をまたぐ便、 write-set を自動で分割する仕組み、 便の優先度や待ち行列、 同時に何本まで流すかの上限は別に決めます。</p>
 <p data-audience="machine">次は本 ADR の決定ではない (MUST NOT be read as such): 複数 host にまたがる便の排他 (event log は host ごと・v3)、 write-set の自動分割や契約の自動生成、 排他で断られた契約の待ち行列と再投入 (管理席か tick の運用・別途)、 同時に流す便の本数の上限 (admission control・口座の自律制御 <code>s2-07l.142</code> と併せて別途)、 便を直列に流す運用 (同時に流さないという管理席の選択であり §2.1 の mode ではない)、 lens の指摘で範囲を広げる経路 (lens は読むだけで write-set を変えない・広げるのは planner の契約改訂)、 「追随」節の定型の字面 (prompt template の現物が正本)、 gate / lens FAIL 以外の理由で放置された run の自動掃除 (<code>pipe stop --run</code> は管理席の操作)。</p>
+
+<h3 id="s2-6-supersede">§2.6 ADR-0016 §2.2 の質問判定と再 spawn の契機を部分 supersede する</h3>
+<p class="section-essence" data-audience="human">先の記録 (ADR-0016) は「質問で止まるときは commit を作らない」「同じ便をもう一度起こすのは回答が届いたときだけ」と決めていました。 起こし直しでは便がすでに commit を持っているので、 前者は「この turn で新しい commit を作らない」と読み替えます。 後者には「衝突からの起こし直し」を 2 つ目のきっかけとして足します。 それ以外の文は変えません。</p>
+<p data-audience="machine"><a href="./ADR-0016-default-delivery-structure-and-typed-question-record.html#s2-2-question-record">ADR-0016 §2.2</a> の「その周 SHALL NOT commit を作らない (record と commit が同時に在る周は質問ではなく実装の失敗)」は、 本 ADR により「その turn で commit を増やさない (spawn の時点の worktree の tip から新しい commit が無い。 record と新しい commit が同時に在る周は実装の失敗)」と読む (SHALL be read as)。 初回の turn では tip = base ゆえ従来の判定と同値で、 起こし直しの turn では便が既に持つ commit を数えない。 同 §2.2 の「<code>resume</code> SHALL <code>Questioned</code> から <code>QuestionAnswered</code> が在る周だけ同じ run を再 spawn する」は、 本 ADR により「<code>Questioned</code> から <code>QuestionAnswered</code> が在る周と、 §2.2 の衝突からの起こし直しの周だけ同じ run を再 spawn する」と読む (SHALL be read as)。 ADR-0016 の他の文 (質問 record の形・回答の権限・配送構造) は変えない。</p>
 </section>
 
 <section id="s3-srs" class="informative">
 <h2>§3. SRS との関係 (正本は SRS)</h2>
-<p class="section-essence" data-audience="human">この記録は要件書の文面を直接は変えませんが、 1 行の改訂を求めます。 いまの要件書は「main の先端が出発点とずれていたら着地は何もしない」と言い、 追随 (main に追いつく rebase) を知りません。 この記録の起こし直しはその追随の途中で記録を書き、 実装役を起こすので、 要件書の当該行を「追随の後にまだずれていたら」の形に改める必要があります。 改訂は user の手番で、 改訂が載るまで起こし直しの契約は流しません。</p>
+<p class="section-essence" data-audience="human">この記録は要件書の文面を直接は変えませんが、 1 行の改訂を求めます。 いまの要件書は「main の先端が出発点とずれていたら着地は何もしない」と言い、 追随 (main に追いつく rebase) を知りません。 この記録の起こし直しはその追随の途中で記録を書き、 実装役を起こすので、 要件書の当該行を「追随の後にまだずれていたら」の形に改める必要があります。 改訂は user の手番で、 改訂が載るまでこの記録は「提案」の状態にとどめ、 起こし直しの契約は流しません。</p>
 <div data-audience="machine">
-<p>本 ADR が仕える要件は SRS v0.5 が正本である: <a href="../spec/srs.html#FR4">FR4</a> (契約 1 本に worktree 1 つと runner 1 つ)・<a href="../spec/srs.html#FR11">FR11</a> (審査合格と CAS の上での squash・§2.2 の起こし直しの後もこの内側)・<a href="../spec/srs.html#FR14">FR14</a> (別 process からの resume・§2.2 の起こし直しは resume と同じ口)・<a href="../spec/srs.html#FR30">FR30</a> (配送構造・§2.3)・<a href="../spec/srs.html#FR31">FR31</a> (質問の停止・§2.2 / §2.3)・<a href="../spec/srs.html#NFR4">NFR4</a> (読めない store は rc 2・§2.1)。 <a href="../spec/srs.html#FR10">FR10</a> の逐語「main の tip が記録した base と違うとき land は何もしない (main も event も変えない)」は、 既に在る追随 (<code>rebase:</code> の記帳・台帳 <code>s2-07l.119</code>) と本 ADR §2.2 (<code>rebase-conflict:</code> の記帳と起こし直し) の両方と緊張する。 本 ADR は SRS に改訂案 1 件を求める: FR10 を「追随 (base が main の祖先なら rebase して段を戻す) を試みた後に、 verdict が PASS でない、 または main の tip が記録した base と違うとき、 land は main を変えない」の形に改め、 追随の event の記帳を許容する。 改訂は user の手番 (design-intent/spec/ の編集は folio-architect 経由) で、 §2.2 / §2.4 の契約は改訂の land 後に流す (§2.1 の契約は FR10 に触れないので先に流せる)。 intake の拒否の理由 (variant の名)・「追随」節の字面・rules 行の値は §2 と現物が持ち SRS は持たない。</p>
+<p>本 ADR が仕える要件は SRS v0.5 が正本である: <a href="../spec/srs.html#FR4">FR4</a> (契約 1 本に worktree 1 つと runner 1 つ)・<a href="../spec/srs.html#FR11">FR11</a> (審査合格と CAS の上での squash・§2.2 の起こし直しの後もこの内側)・<a href="../spec/srs.html#FR14">FR14</a> (別 process からの resume・§2.2 の起こし直しは resume と同じ口)・<a href="../spec/srs.html#FR30">FR30</a> (配送構造・§2.3)・<a href="../spec/srs.html#FR31">FR31</a> (質問の停止・§2.2 / §2.3)・<a href="../spec/srs.html#NFR4">NFR4</a> (読めない store は rc 2・§2.1)。 <a href="../spec/srs.html#FR10">FR10</a> の逐語「main の tip が記録した base と違うとき land は何もしない (main も event も変えない)」は、 既に在る追随 (<code>rebase:</code> の記帳・台帳 <code>s2-07l.119</code>) と本 ADR §2.2 (<code>rebase-conflict:</code> の記帳と起こし直し) の両方と緊張する。 本 ADR は SRS に改訂案 1 件を求める: FR10 を「追随 (base が main の祖先なら rebase して段を戻す) を試みた後に、 verdict が PASS でない、 または main の tip が記録した base と違うとき、 land は main を変えない」の形に改め、 追随の event の記帳を許容する。 改訂は user の手番 (design-intent/spec/ の編集は folio-architect 経由) で、 本 ADR は改訂が反映されるまで proposed にとどめ (ADR-0016 の前例)、 §2.2 / §2.4 / §2.6 の契約は改訂の land 後に流す (§2.1 の契約は FR10 に触れないので先に流せる)。 intake の拒否の理由 (variant の名)・「追随」節の字面・rules 行の値は §2 と現物が持ち SRS は持たない。</p>
 </div>
 </section>
 
@@ -140,7 +149,7 @@
 <h2>§4. Consequences</h2>
 <p class="section-essence" data-audience="human">良い面は、 便を並べても人の手番が「質問に答える」だけに収まること、 衝突が失敗ではなく実装役の 1 turn として処理されること、 衝突や不合格で止まった便を畳めるようになることです。 悪い面は、 実装役の起こし直しの分だけ口座の枠を使うこと、 入口の排他で契約が断られて出し直しの手間が増えること、 write-set を dir で広く取った契約ほど排他に掛かりやすいこと、 止める仕組みの一覧が 2 行増えることです。</p>
 <p data-audience="machine">Positive: 並列の便で人の手番が回答 1 種類に閉じる (ADR-0016 §2.3 の形を保つ)。 衝突が段の記帳 (<code>rebase-conflict:</code> を prefix に持つ <code>RunStage</code>) として残り、 回数が replay から読める。 契約単位の拒否が閉じた enum になり、 これまで散文だった理由 (git repo でない・同じ秒の再 intake) も variant として数えられる。 retire の前提が広がり、 Failed と gate FAIL の worktree が溜まらない (N1.2)。 放置された便を 1 本だけ外す口 (<code>pipe stop --run</code>) ができる。</p>
-<p data-audience="machine">Negative (受け入れるコスト): 起こし直しは runner の turn を増やし口座の枠を使う (上限は §2.4・枠の自律制御は <code>s2-07l.142</code>)。 排他は dir 単位ゆえ、 同じ dir の別 file を触るだけの契約も断られうる (出し直しは管理席の運用)。 symlink を解かないので、 実体が同じ file を別名で持つ 2 契約は入口で見逃す (編集時の guard が実体名で塞ぎ、 Bash の git 経路は既知の穴のまま)。 rules 行 1 つ・prompt template の節 1 つ・拒否理由の enum 1 つ (variant 2 つ + 既存の散文理由の分)・event の detail の prefix 1 種・極性一覧の行 2 つ・subcommand の flag 1 つが増える。 <code>Implemented</code> の下位状態 (衝突からの起こし直し待ち) を detail の文字列 prefix で持つ (既存の <code>rebase-empty</code> と同じ形・C3.3 の向きとの緊張は受け入れる・段の variant を増やすと replay と fleet の閉じた enum を跨版で動かすため)。 並列 2 本の実地試験 (台帳 <code>s2-07l.143</code>) で追随と枠の減りを実測してから契約を流す。 FR10 の改訂 (§3) が先に要る。</p>
+<p data-audience="machine">Negative (受け入れるコスト): 起こし直しは runner の turn を増やし口座の枠を使う (上限は §2.4・枠の自律制御は <code>s2-07l.142</code>)。 排他は dir 単位ゆえ、 同じ dir の別 file を触るだけの契約も断られうる (出し直しは管理席の運用)。 symlink を解かないので、 実体が同じ file を別名で持つ 2 契約は入口で見逃す (編集時の guard が実体名で塞ぎ、 Bash の git 経路は既知の穴のまま)。 rules 行 1 つ・prompt template の節 1 つ・拒否理由の enum 1 つ (variant 2 つ + 既存の散文理由の分)・event の detail の prefix 1 種・極性一覧の行 2 つ・subcommand の flag 2 つ (<code>stop --run</code>・<code>land</code> / <code>resume</code> の <code>--runner</code>)・終端の detail 3 種 (<code>rebase-abort-failed</code> / <code>rebase-dirty</code> / <code>follow-unmeasured</code>) が増える。 ADR-0016 §2.2 の 2 文を読み替える (§2.6)。 <code>Implemented</code> の下位状態 (衝突からの起こし直し待ち) を detail の文字列 prefix で持つ (既存の <code>rebase-empty</code> と同じ形・C3.3 の向きとの緊張は受け入れる・段の variant を増やすと replay と fleet の閉じた enum を跨版で動かすため)。 並列 2 本の実地試験 (台帳 <code>s2-07l.143</code>) で追随と枠の減りを実測してから契約を流す。 FR10 の改訂 (§3) が先に要る。</p>
 </section>
 
 <section id="s5-alternatives" class="informative">
@@ -162,7 +171,7 @@
   <li>台帳の memo: <code>s2-07l.132</code> (gate / lens FAIL の worktree を retire で畳む)・<code>s2-07l.133</code> (回答で write-set が広がる周の写しの再読)。 本 ADR は前者を §2.4 で吸収し、 後者を §2.3 の再照合に結ぶ。</li>
   <li>先行決定: <a href="./ADR-0009-vessel-grants-runner-permissions-and-mutation-proof.html">ADR-0009</a> §2.1 (write-set guard) / §2.2 (intake の拒否)・<a href="./ADR-0014-polarity-list-is-a-snapshot-rendered-by-core.html">ADR-0014</a> §2.1 (guard の定義と極性)・<a href="./ADR-0016-default-delivery-structure-and-typed-question-record.html">ADR-0016</a> §2.1〜§2.3 (配送構造・質問 record・回答の権限) / §2.5 (交差の検査は射程外)。</li>
   <li>設計: <code>docs/design/pipeline-conflict.md</code> (交差の判定・live の定義・stop --run・「追随」節・起こし直しの段と base の記帳・回数の意味と guard・retire の拡張・歯・契約・並列試験の観測)。 土台 pipeline.md の §4 / §5.4 / §5.7 / §11 は同じ便で本 doc への pointer を持つ。</li>
-  <li>審査 (2026-09-12・admin 席の lens・PR #130): critical 1 / high 4 / medium 9 / low 9。 live の定義が gate FAIL の便を永久の排他源にする (C1)・FR10 逐語との緊張 (H1)・起こし直し後の gate が古い base で diff を測る (H2)・回数上限が guard の定義に当たるのに一覧に無い (H3)・<code>Unfit</code> の実体と pin の不在 (H4)・回数の意味のずれ (M2) 等を planner が現物で再現し、 本 file の §2.1 / §2.2 / §2.4 / §3 / §4 / §5 に反映した。 逐語は台帳 <code>s2-07l.143</code> の notes。</li>
+  <li>審査 (2026-09-12・admin 席の lens・PR #130): critical 1 / high 4 / medium 9 / low 9。 live の定義が gate FAIL の便を永久の排他源にする (C1)・FR10 逐語との緊張 (H1)・起こし直し後の gate が古い base で diff を測る (H2)・回数上限が guard の定義に当たるのに一覧に無い (H3)・<code>Unfit</code> の実体と pin の不在 (H4)・回数の意味のずれ (M2) 等を planner が現物で再現し、 本 file の §2.1 / §2.2 / §2.4 / §3 / §4 / §5 に反映した。 2 周目 (f2f8d88): high 1 (起こし直しの質問経路が「base から commit 0」の判定で到達不能) / medium 6 (merge-base の記帳値・読めない回数の終端形・Refuse の主語・pipeline.md の現在形・supersede の形・status) / low 9 を反映し §2.6 と proposed を置いた。 逐語は台帳 <code>s2-07l.143</code> の notes。</li>
 </ul>
 </section>
 

@@ -57,11 +57,11 @@
 | `Blocked` | `ApprovalRequested` + `RunStage` | `ApprovalReceived`（`actor=human` ∧ 逐語が非空）が在れば resume → spawn（FR16） |
 | `Spawned` | `RunStage` + `SeatSpawned` | runner 終了 → `SeatStopped` + Implemented / Failed（FR6）。包みが rc `RC_QUESTION`（76）で終わり stdout の最終行が質問 record → `SeatStopped` + `QuestionRaised(detail=逐語)` + `RunStage(Questioned)`（FR31・[pipeline-question.md §3](./pipeline-question.md)） |
 | `Questioned` | `QuestionRaised` + `RunStage`（`detail=about:<key>`・任意） | **最新の質問より後**の `QuestionAnswered`（逐語が非空）が在れば resume → spawn（**同じ run・同じ worktree・記録済みの base**・FR32）。無ければ `resume` は rc 3 で何も書かない（`Blocked` と同型）。rc 76 で record が無い周・record と commit が同時の周は `Failed` |
-| `Implemented` | `RunStage`（spawn の完了・または land の追随 `detail=rebase:<old>..<new>` で `Gated` から戻る周・§5.4・衝突からの起こし直し待ち `detail=rebase-conflict:<base>..<main>` と起こし直し後の base 記帳 `detail=rebase:<old>..<main>` も本段＝ADR-0019・[pipeline-conflict.md](./pipeline-conflict.md) §3） | gate |
-| `Gated` | `RunStage detail=verdict:<V>` | PASS → land（**base が main の祖先のまま動いていれば** land の前段で worktree の branch を main へ rebase → `RunStage stage=Implemented detail=rebase:<old>..<new>` で段を戻す → gate を同じ関数で撃ち直す → PASS なら新 base で CAS・§5.4）／ **INCONCLUSIVE → 道具を揃えて gate を撃ち直す**（`resume` は `next=gate` で rc 3）／ FAIL は終端（FR10 / FR14・`pipe retire` で畳める側＝ADR-0019 §2.4） |
+| `Implemented` | `RunStage`（spawn の完了・または land の追随 `detail=rebase:<old>..<new>` で `Gated` から戻る周・§5.4・**予定形（ADR-0019・契約 (b) の land まで現物には無い）**: 衝突からの起こし直し待ち `detail=rebase-conflict:<base>..<main>` と起こし直し後の base 記帳 `detail=rebase:<old>..<merge-base>` も本段＝[pipeline-conflict.md](./pipeline-conflict.md) §3） | gate |
+| `Gated` | `RunStage detail=verdict:<V>` | PASS → land（**base が main の祖先のまま動いていれば** land の前段で worktree の branch を main へ rebase → `RunStage stage=Implemented detail=rebase:<old>..<new>` で段を戻す → gate を同じ関数で撃ち直す → PASS なら新 base で CAS・§5.4）／ **INCONCLUSIVE → 道具を揃えて gate を撃ち直す**（`resume` は `next=gate` で rc 3）／ FAIL は終端（FR10 / FR14・**予定形**: ADR-0019 §2.4 で `pipe retire` が畳める側に入る＝契約 (b) の land まで現物は畳めない） |
 | `Landed` | `RunDone` | 終端。`--pr-cmd` 形は merge の後に `pipe retire --run <id>` で worktree を畳む（`RunStage detail=retired`・段は `Landed` のまま） |
 | `Stopped` | `RunStopped` | 終端（stop --all） |
-| `Failed` | `RunStage detail=<理由>` | 終端（resume は rc 1）。`detail=rebase-empty` と `detail=rebase-conflict`（ADR-0019 §2.4）の便は `pipe retire --run <id>` で worktree を畳める（`RunStage detail=retired`・**段は `Failed` のまま**・`s2-07l.128`） |
+| `Failed` | `RunStage detail=<理由>` | 終端（resume は rc 1）。`detail=rebase-empty` の便は `pipe retire --run <id>` で worktree を畳める（**予定形**: ADR-0019 §2.4 で `rebase-conflict` も畳める側に入る＝契約 (b) の land まで現物は `rebase-empty` だけ）（`RunStage detail=retired`・**段は `Failed` のまま**・`s2-07l.128`） |
 
 前提違反は **rc 1 + stderr 1 行・何もしない**（event も追記しない）。
 
@@ -111,11 +111,11 @@
 - 3 クラスの判定面は**契約の自己申告**（`classes`）＋ **rules 行の deny list**（憲法 A4 機構欄）で、deny list は**未着**（manifest に該当行 0）＝MVP で実際に効くのは自己申告だけである（**seam の使用からの導出は [ADR-0008](../../design-intent/decisions/ADR-0008-own-repo-pr-is-not-publish.html) で廃止**した——`--pr-cmd` は自 repo への PR の口ゆえ承認 event を前提としない・§5.4）。操作の中身から 3 クラスを判定する enforcer は次の版（A4 の機構欄）。
 
 ### 5.6 stop（(a)・FR13・面 4）
-`pipe stop --all`: replay で `SeatState::Live` な seat を列挙し pid へ `kill -TERM`（std::process で `kill`）→ `wait(Completion::SeatGone(pid), 猶予)` の猶予は rules 行 `pipe.stop_grace_ms` → 残れば `-KILL` → 各 seat に `SeatStopped`・run に `RunStopped stage=Stopped`。**rc = 0: 全部止まった / 対象なし（冪等）・1: 止められない seat が残った・2: state が読めない**。stdout `stop: seats=<N> stopped=<M>`。`pipe stop --run <id>`（ADR-0019 §2.1・[pipeline-conflict.md](./pipeline-conflict.md) §2）: 終端でない run 1 本に `RunStopped` を書いて live から外す（席が Live なら先に止める・終端の run は rc 1 で何も書かない・冪等）。
+`pipe stop --all`: replay で `SeatState::Live` な seat を列挙し pid へ `kill -TERM`（std::process で `kill`）→ `wait(Completion::SeatGone(pid), 猶予)` の猶予は rules 行 `pipe.stop_grace_ms` → 残れば `-KILL` → 各 seat に `SeatStopped`・run に `RunStopped stage=Stopped`。**rc = 0: 全部止まった / 対象なし（冪等）・1: 止められない seat が残った・2: state が読めない**。stdout `stop: seats=<N> stopped=<M>`。**予定形（ADR-0019 §2.1・契約 (a) の land まで現物は `--all` だけ）**: `pipe stop --run <id>`（[pipeline-conflict.md](./pipeline-conflict.md) §2）は終端でない run 1 本に `RunStopped` を書いて live から外す（席が Live なら先に止める・終端の run は event を増やさず rc 1）。
 
 ### 5.7 show / resume / run
 - `pipe show --run <id>` → `run=<id> bead=<b> stage=<s> approved=<bool> worktree=<path>`（無ければ rc 1）。
-- `pipe resume --run <id> [--runner] [--lens]`: 現在 stage から**続きの段だけ**を通す（Intake → spawn / Blocked+approved → spawn / Implemented → gate〔最後の `RunStage` の detail が `rebase-conflict:` で runner が起きていなければ起こし直し・ADR-0019 §2.2〕/ Gated(PASS) → land〔base が動いていれば §5.4 の追随を同じ経路で通す＝`--lens` を渡す〕）。**Gated(INCONCLUSIVE) は land を試さず `run=<id> next=gate` を出して rc 3**——測れていない便に land の「PASS でない」を返すのは吸収状態の言い換えでしかなく、かといって**自動で測り直さない**（道具の不足は人が直す・`--lens` を渡してあっても撃たない）。Stopped / Failed は rc 1。
+- `pipe resume --run <id> [--runner] [--lens]`: 現在 stage から**続きの段だけ**を通す（Intake → spawn / Blocked+approved → spawn / Implemented → gate〔**予定形**（ADR-0019 §2.2・契約 (b) の land まで現物は gate だけ）: 最後の `RunStage` の detail が `rebase-conflict:` で runner が起きていなければ起こし直し〕/ Gated(PASS) → land〔base が動いていれば §5.4 の追随を同じ経路で通す＝`--lens` を渡す〕）。**Gated(INCONCLUSIVE) は land を試さず `run=<id> next=gate` を出して rc 3**——測れていない便に land の「PASS でない」を返すのは吸収状態の言い換えでしかなく、かといって**自動で測り直さない**（道具の不足は人が直す・`--lens` を渡してあっても撃たない）。Stopped / Failed は rc 1。
 - `pipe run --contract <f> --bead <id> --repo <dir> --runner <cmd> [--lens <cmd>]` = intake → spawn → gate → land を 1 process で連続（各段は fleet を読み書きし、途中で落ちても `resume` が続きを引く。先頭行は intake と同じ 1 行＝`--rules` の周は `ceiling-overridden=` を後置する）。spawn が質問で止まった周は判定行に `question=<id>` が載って rc 3 で止まる（席の中継の入力・[pipeline-question.md §6](./pipeline-question.md)）。
 
 ### 5.8 report（(e)・FR22）

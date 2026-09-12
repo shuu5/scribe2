@@ -505,8 +505,8 @@ terms:
   - canonical: live な便
     domain: consumer
     definition: 終端でない run。 終端 = 段が Landed / Failed / Stopped のいずれか、 または Gated で verdict が FAIL。 intake の排他が照合する母集団で、 pipe stop --run で 1 本だけ終端に倒せる (ADR-0019 §2.1)。
-    relationships: [便, 段, write-set の交差]
+    relationships: [便, write-set の交差, 契約]
   - canonical: 起こし直し
     domain: consumer
     definition: land の追随が衝突した run で、 同じ worktree と契約に「追随」節を添えて runner をもう 1 回 spawn すること。 回数は rules 行 pipe.follow_retries が上限で、 その判定は guard (ADR-0019 §2.2 / §2.4)。
-    relationships: [追随, runner, spawn, guard]
+    relationships: [追随, runner, guard]
