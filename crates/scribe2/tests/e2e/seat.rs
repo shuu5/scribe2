@@ -14,6 +14,7 @@ use std::time::{Duration, Instant, SystemTime};
 use vessel::cli_outcome::{RC_OK, RC_REFUSED};
 use vessel::name::NAME;
 use vessel::rules::manifest::Manifest;
+use vessel::seat::cycle::pace_of;
 use vessel::seat::inject::tick_path;
 use vessel::seat::meter::{cap_of, window_of};
 
@@ -1006,6 +1007,45 @@ fn busy_pane_at(pct: u64) -> String {
 }
 /// `seat.cycle_lock_ttl_s` の宣言値。歯はこの値の**両側**を撃つ。
 const TTL_S: u64 = 900;
+/// `seat.cycle_settle_s` の宣言値（作り直しと復元の確認上限・秒）。
+const SETTLE_S: u64 = 30;
+/// `seat.cycle_poll_ms` の宣言値（確認を見に行く周期・ミリ秒）。
+const POLL_MS: u64 = 500;
+/// 歯が `--rules` で渡す**短い**確認上限（秒）。宣言値（[`SETTLE_S`]）では確認できない周の歯が
+/// 1 本 30 秒かかり、suite の壁時計の大半をそれが占めていた（実測 2026-09-12: 10 本で 300 s）。
+/// 分岐は同じで、縮むのは待ちだけである（`s2-07l.151`）。
+const FAST_SETTLE_S: u64 = 2;
+/// 同上（周期・ミリ秒）。
+const FAST_POLL_MS: u64 = 100;
+/// 証拠が**遅れて**来る側の歯の上限（秒）。席の `sleep 3` より長く取る（縮めると測る分岐が
+/// 「窓の内に拾う」から「窓を越えた」へ変わる）。
+const LATE_SETTLE_S: u64 = 6;
+
+/// cycle の確認の刻みだけを宣言する manifest の字面（`--rules` に渡す fixture）。
+///
+/// 他の行は持たない＝`seat` の他の閾値（`seat.tick_stale_s` / `seat.cycle_lock_ttl_s` /
+/// `seat.context_*`）は埋め込みのまま引かれる（読み口が別・[`vessel::seat::cycle::pace_of`] だけが
+/// この file を読む）。`enabled` を引数に取るのは、不発効の行を「無い」と同じに倒す側の歯（負例）を
+/// 同じ字面の組で作るためである。
+fn pace_manifest(settle_s: u64, poll_ms: u64, enabled: bool) -> String {
+    format!(
+        "schema = 1\n\n\
+         [[rule]]\nid = \"seat.cycle_settle_s\"\nkind = \"SeatCycleSettleS\"\nvalue = {settle_s}\n\
+         enabled = {enabled}\nruling = \"user 2026-09-12T12:08Z\"\nruled_at = \"2026-09-12\"\n\n\
+         [[rule]]\nid = \"seat.cycle_poll_ms\"\nkind = \"SeatCyclePollMs\"\nvalue = {poll_ms}\n\
+         enabled = {enabled}\nruling = \"user 2026-09-12T12:08Z\"\nruled_at = \"2026-09-12\"\n"
+    )
+}
+
+/// 上の fixture を `dir/rules.toml` へ書き、`--rules` に渡す path を返す。
+fn pace_rules(dir: &Path, settle_s: u64, poll_ms: u64) -> String {
+    fixture(dir, "rules.toml", &pace_manifest(settle_s, poll_ms, true))
+}
+
+/// 歯の既定の刻み（[`FAST_SETTLE_S`] / [`FAST_POLL_MS`]）を書いて path を返す。
+fn fast_rules(dir: &Path) -> String {
+    pace_rules(dir, FAST_SETTLE_S, FAST_POLL_MS)
+}
 
 /// file の mtime を `secs` 秒だけ過去へ倒す。
 ///
@@ -2293,11 +2333,15 @@ fn seat_cycle_reports_clear_unconfirmed_when_session_is_not_rebuilt() {
     let wm = dir.join("wm");
     wm_file(&wm, "working-memory.stuck.md", name);
     stamp_idle(&state, name);
-    let (wm_s, state_s) = (wm.display().to_string(), state.display().to_string());
+    let (wm_s, state_s, rules_s) = (
+        wm.display().to_string(),
+        state.display().to_string(),
+        fast_rules(&dir),
+    );
 
     let out = run_seat(&[
         "cycle", "--target", name, "--wm-dir", &wm_s, "--tmux-socket", &socket,
-        "--state-dir", &state_s,
+        "--state-dir", &state_s, "--rules", &rules_s,
     ]);
 
     assert_eq!(rc_of(&out), i32::from(RC_REFUSED));
@@ -2337,11 +2381,15 @@ fn seat_cycle_reports_restore_unconfirmed_after_limit_when_seat_goes_silent() {
     let wm = dir.join("wm");
     wm_file(&wm, "working-memory.mute.md", name);
     stamp_idle(&state, name);
-    let (wm_s, state_s) = (wm.display().to_string(), state.display().to_string());
+    let (wm_s, state_s, rules_s) = (
+        wm.display().to_string(),
+        state.display().to_string(),
+        fast_rules(&dir),
+    );
 
     let out = run_seat(&[
         "cycle", "--target", name, "--wm-dir", &wm_s, "--tmux-socket", &socket,
-        "--state-dir", &state_s,
+        "--state-dir", &state_s, "--rules", &rules_s,
     ]);
 
     assert_eq!(rc_of(&out), i32::from(RC_REFUSED));
@@ -2354,6 +2402,91 @@ fn seat_cycle_reports_restore_unconfirmed_after_limit_when_seat_goes_silent() {
     assert!(
         !seat_dir_of(&state, name).join("cycle.lock").exists(),
         "失敗した周も lock を返す"
+    );
+    // socket を消す**前**に畳む（消してからでは kill-session が届かない・実測 2026-09-10）。
+    drop(guard);
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// 確認の刻み（上限・周期）は **rules 行が持つ**（値を code に焼かない・憲法 C5・`s2-07l.151`）:
+/// 埋め込みは裁定の値（30 s / 500 ms）を返し、単位は秒とミリ秒である。**不発効の行と不在は
+/// どちらも `None`**（値が在っても使わない・呼び側は `no-rule` で 1 key も送らずに断る）。
+///
+/// 焼いた定数へ戻す変異も、秒とミリ秒を入れ替える変異もここで落ちる。
+#[test]
+fn seat_cycle_settle_pace_comes_from_the_manifest_rows() {
+    let embedded = Manifest::embedded().expect("埋め込み manifest を読める");
+    assert_eq!(
+        pace_of(&embedded),
+        Some((Duration::from_secs(SETTLE_S), Duration::from_millis(POLL_MS))),
+        "埋め込みは裁定の値を返す（上限 {SETTLE_S} s・周期 {POLL_MS} ms）"
+    );
+    let fast = Manifest::parse(&pace_manifest(FAST_SETTLE_S, FAST_POLL_MS, true))
+        .expect("fixture を読める");
+    assert_eq!(
+        pace_of(&fast),
+        Some((
+            Duration::from_secs(FAST_SETTLE_S),
+            Duration::from_millis(FAST_POLL_MS)
+        )),
+        "行の値がそのまま刻みになる（差し替えた周は差し替えた値）"
+    );
+    let off = Manifest::parse(&pace_manifest(FAST_SETTLE_S, FAST_POLL_MS, false))
+        .expect("fixture を読める");
+    assert_eq!(pace_of(&off), None, "不発効の行は引かない（値は在っても使わない）");
+    let absent = Manifest::parse("schema = 1\n").expect("fixture を読める");
+    assert_eq!(pace_of(&absent), None, "行そのものが無い周も引かない");
+}
+
+/// 確認できない周が返るまでの**壁時計**が `--rules` の行の値で決まる（`s2-07l.151`）。
+///
+/// 席は `/clear` を消化も echo もしない（[`start_swallowing_seat`]）＝分岐は宣言値のときと同じ
+/// `clear-unconfirmed` で、変わるのは待つ長さだけである。上限 1 s で撃ち、**両側**を見る:
+/// 上側は焼いた宣言値（[`SETTLE_S`] = 30 s）で待つ実装を落とし、下側は上限を無視して即断る実装を
+/// 落とす。壁時計ゆえ等号は pin せず、1 s の手前と 30 s の手前に margin を取る（`s2-07l.118`）。
+#[test]
+fn seat_cycle_settle_limit_comes_from_rules() {
+    let dir = tmp();
+    let socket = socket_of(&dir);
+    let name = "seatpace";
+    let log = dir.join("seat.log");
+    let guard = start_swallowing_seat(&socket, name, &log);
+    assert!(guard.ready(), "`/clear` を飲む席を立てられる");
+    let state = dir.join("state");
+    let wm = dir.join("wm");
+    wm_file(&wm, "working-memory.pace.md", name);
+    stamp_idle(&state, name);
+    let (wm_s, state_s, rules_s) = (
+        wm.display().to_string(),
+        state.display().to_string(),
+        pace_rules(&dir, 1, FAST_POLL_MS),
+    );
+
+    let started = Instant::now();
+    let out = run_seat(&[
+        "cycle", "--target", name, "--wm-dir", &wm_s, "--tmux-socket", &socket,
+        "--state-dir", &state_s, "--rules", &rules_s,
+    ]);
+    let waited = started.elapsed();
+
+    assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "stdout={}", stdout_of(&out));
+    assert_eq!(
+        stderr_of(&out),
+        format!("seat: cycle failed reason=clear-unconfirmed{}\n", provenance(&state, "flag")),
+        "分岐は宣言値のときと同じ（上限まで待って確認できない）"
+    );
+    assert_eq!(
+        fs::read_to_string(&log).unwrap_or_default(),
+        "/clear\n",
+        "確認できない周に復元を送らない（待ちが短くても極性は不変）"
+    );
+    assert!(
+        waited < Duration::from_secs(SETTLE_S / 2),
+        "1 s の上限で返る（実測 {waited:?}・焼いた {SETTLE_S} s なら超える）"
+    );
+    assert!(
+        waited >= Duration::from_millis(600),
+        "上限を待たずに断っていない（実測 {waited:?}）"
     );
     // socket を消す**前**に畳む（消してからでは kill-session が届かない・実測 2026-09-10）。
     drop(guard);
@@ -3073,7 +3206,8 @@ fn seat_cycle_done_line_carries_state_dir_provenance() {
 ///
 /// 入口の入力欄の門は送る前の pane で通す（[`IDLE_TALL_PANE`]）ので、字面は**送達の後に**
 /// 現れた形になる（Enter だけが落ちた・席が echo を引用した周の再現）。形ごとに歯を分ける
-/// のは、確認の待ち（30 秒）が直列に積み上がらないようにするため。
+/// のは、確認の待ちが直列に積み上がらないようにするため（待ちそのものは `--rules` の
+/// [`FAST_SETTLE_S`] で縮める・分岐は宣言値のときと同じ・`s2-07l.151`）。
 fn assert_clear_unconfirmed_after_send(label: &str, shape: &str) {
     let dir = tmp();
     let socket = socket_of(&dir);
@@ -3087,7 +3221,7 @@ fn assert_clear_unconfirmed_after_send(label: &str, shape: &str) {
     let wm = dir.join("wm");
     wm_file(&wm, "working-memory.echo.md", name);
 
-    let out = cycle_with_pane_after_clear(&dir, name, IDLE_TALL_PANE, shape);
+    let out = cycle_with_pane_after_clear(&dir, name, IDLE_TALL_PANE, shape, FAST_SETTLE_S);
 
     assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "{label}: stdout={}", stdout_of(&out));
     assert_eq!(
@@ -3133,6 +3267,9 @@ fn seat_cycle_does_not_confirm_clear_from_prefixed_user_line() {
 /// `SessionStart` の打刻が**遅れて**来る席（実席の hook は `/clear` の数秒後に打つ）でも、窓の内に
 /// 足されれば作り直しと読んで復元へ進む（`s2-07l.112`）。pane の echo の下に hook の出力行が何行
 /// 増えても（[`REBUILT_HOOKS_PANE`]）判定に効かない＝字面の行数に依らない。
+///
+/// 上限は席の `sleep 3` より**長い** [`LATE_SETTLE_S`] を渡す（窓の内に来る側の歯ゆえ
+/// [`FAST_SETTLE_S`] では遅れた打刻を拾えない＝測る分岐が別物になる）。
 #[test]
 fn seat_cycle_confirms_rebuild_when_session_start_stamp_arrives_late() {
     let dir = tmp();
@@ -3152,7 +3289,7 @@ fn seat_cycle_confirms_rebuild_when_session_start_stamp_arrives_late() {
     let wm = dir.join("wm");
     wm_file(&wm, "working-memory.hooks.md", name);
 
-    let out = cycle_with_pane_after_clear(&dir, name, IDLE_TALL_PANE, REBUILT_HOOKS_PANE);
+    let out = cycle_with_pane_after_clear(&dir, name, IDLE_TALL_PANE, REBUILT_HOOKS_PANE, LATE_SETTLE_S);
 
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
     assert_eq!(stdout_of(&out), format!("seat: cycle done target={name}{}\n", provenance(&state, "flag")));
@@ -3167,27 +3304,38 @@ fn seat_cycle_confirms_rebuild_when_session_start_stamp_arrives_late() {
 }
 
 /// cycle を撃ち、`/clear` が席の log（`<dir>/seat.log`）に着いた**後**で pane の写し
-/// （`--capture-file`）を `after` へ差し替えてから結果を待つ。写しは作り直しの確認が 500 ms
-/// ごとに読み直すので、「送る前は idle・送った後にこの形」の pane を 1 本の file で再現できる。
+/// （`--capture-file`）を `after` へ差し替えてから結果を待つ。写しは作り直しの確認が周期ごとに
+/// 読み直すので、「送る前は idle・送った後にこの形」の pane を 1 本の file で再現できる。
 /// socket は [`socket_of`]・log は偽の席と同じ path から導く（引数上限・憲法 C4）。
+///
+/// 確認の刻みは `--rules` の fixture（上限 `settle_s` 秒・周期 [`FAST_POLL_MS`]）で渡す: 確認できない
+/// 周の歯は宣言値だと 1 本 30 秒待つ（`s2-07l.151`）。**待つ長さを縮めるだけで分岐は変えない**ので、
+/// 窓の内に証拠が来る側の歯（遅れて打刻する席）は sleep より長い上限を渡す。
 #[expect(
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
-fn cycle_with_pane_after_clear(dir: &Path, name: &str, before: &str, after: &str) -> Output {
+fn cycle_with_pane_after_clear(
+    dir: &Path,
+    name: &str,
+    before: &str,
+    after: &str,
+    settle_s: u64,
+) -> Output {
     let (socket, log) = (socket_of(dir), dir.join("seat.log"));
     let (state, wm, pane) = (dir.join("state"), dir.join("wm"), dir.join("pane.txt"));
     stamp_idle(&state, name);
     fs::write(&pane, before).expect("pane fixture を置ける");
-    let (wm_s, state_s, pane_s) = (
+    let (wm_s, state_s, pane_s, rules_s) = (
         wm.display().to_string(),
         state.display().to_string(),
         pane.display().to_string(),
+        pace_rules(dir, settle_s, FAST_POLL_MS),
     );
     let child = Command::new(bin())
         .args([
             "seat", "cycle", "--target", name, "--wm-dir", &wm_s, "--tmux-socket", &socket,
-            "--state-dir", &state_s, "--capture-file", &pane_s,
+            "--state-dir", &state_s, "--capture-file", &pane_s, "--rules", &rules_s,
         ])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -3279,11 +3427,15 @@ fn seat_cycle_reports_restore_unconfirmed_after_limit_when_restore_is_left_in_in
     let wm = dir.join("wm");
     wm_file(&wm, "working-memory.left.md", name);
     stamp_idle(&state, name);
-    let (wm_s, state_s) = (wm.display().to_string(), state.display().to_string());
+    let (wm_s, state_s, rules_s) = (
+        wm.display().to_string(),
+        state.display().to_string(),
+        fast_rules(&dir),
+    );
 
     let out = run_seat(&[
         "cycle", "--target", name, "--wm-dir", &wm_s, "--tmux-socket", &socket,
-        "--state-dir", &state_s,
+        "--state-dir", &state_s, "--rules", &rules_s,
     ]);
 
     assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "stdout={}", stdout_of(&out));
@@ -3667,7 +3819,7 @@ fn seat_state_cycle_sends_clear_despite_spinner_text_when_stamped_idle() {
     let wm = dir.join("wm");
     wm_file(&wm, "working-memory.spin.md", name);
 
-    let out = cycle_with_pane_after_clear(&dir, name, RUNNING_PANE, REBUILT_PANE);
+    let out = cycle_with_pane_after_clear(&dir, name, RUNNING_PANE, REBUILT_PANE, FAST_SETTLE_S);
 
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
     assert_eq!(stdout_of(&out), format!("seat: cycle done target={name}{}\n", provenance(&dir.join("state"), "flag")));
@@ -3796,11 +3948,15 @@ fn seat_evidence_cycle_ignores_session_start_stamp_older_than_clear() {
     let wm = dir.join("wm");
     wm_file(&wm, "working-memory.old.md", name);
     stamp_idle(&state, name);
-    let (wm_s, state_s) = (wm.display().to_string(), state.display().to_string());
+    let (wm_s, state_s, rules_s) = (
+        wm.display().to_string(),
+        state.display().to_string(),
+        fast_rules(&dir),
+    );
 
     let out = run_seat(&[
         "cycle", "--target", name, "--wm-dir", &wm_s, "--tmux-socket", &socket,
-        "--state-dir", &state_s,
+        "--state-dir", &state_s, "--rules", &rules_s,
     ]);
 
     assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "stdout={}", stdout_of(&out));
@@ -3837,11 +3993,15 @@ fn seat_evidence_cycle_reports_clear_unconfirmed_when_no_session_start_stamp_fol
         format!("{}\n", stamp_line("idle", "SessionStart", unix_now().saturating_add(5), "preexisting-future")),
     )
     .expect("打刻 fixture を置ける");
-    let (wm_s, state_s) = (wm.display().to_string(), state.display().to_string());
+    let (wm_s, state_s, rules_s) = (
+        wm.display().to_string(),
+        state.display().to_string(),
+        fast_rules(&dir),
+    );
 
     let out = run_seat(&[
         "cycle", "--target", name, "--wm-dir", &wm_s, "--tmux-socket", &socket,
-        "--state-dir", &state_s,
+        "--state-dir", &state_s, "--rules", &rules_s,
     ]);
 
     assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "stdout={}", stdout_of(&out));
@@ -4027,10 +4187,14 @@ fn seat_evidence_cycle_does_not_resend_when_restore_stays_queued() {
     let wm = dir.join("wm");
     wm_file(&wm, "working-memory.noresend.md", name);
     stamp_idle(&state, name);
-    let (wm_s, state_s) = (wm.display().to_string(), state.display().to_string());
+    let (wm_s, state_s, rules_s) = (
+        wm.display().to_string(),
+        state.display().to_string(),
+        fast_rules(&dir),
+    );
     let args = [
         "tick", "--target", name, "--wm-dir", &wm_s, "--tmux-socket", &socket,
-        "--state-dir", &state_s,
+        "--state-dir", &state_s, "--rules", &rules_s,
     ];
 
     let first = run_seat(&args);

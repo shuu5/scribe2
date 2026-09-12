@@ -96,6 +96,11 @@ pub enum RuleKind {
     /// 拡張子）に当たる path のうち、この列に**完全一致**で載るものだけを `xtask check` が
     /// 通す。定義を緩める代わりに例外を 1 面へ集めるための行である。
     RepoNonRustExecAllow,
+    /// 席の cycle が**作り直しと復元を確認する上限**（秒）。超えたら `clear-unconfirmed` /
+    /// `restore-unconfirmed` で止まる。
+    SeatCycleSettleS,
+    /// 席の cycle が**確認を見に行く周期**（ミリ秒）。上限の内でこの刻みで証拠を読み直す。
+    SeatCyclePollMs,
 }
 
 /// [`RuleKind`] の全 variant。parity test の母集団である。
@@ -128,6 +133,8 @@ pub const ALL: &[RuleKind] = &[
     RuleKind::SeatCycleLockTtlS,
     RuleKind::RunnerAllowedCommands,
     RuleKind::RepoNonRustExecAllow,
+    RuleKind::SeatCycleSettleS,
+    RuleKind::SeatCyclePollMs,
 ];
 
 impl RuleKind {
@@ -162,6 +169,8 @@ impl RuleKind {
             Self::SeatCycleLockTtlS => "SeatCycleLockTtlS",
             Self::RunnerAllowedCommands => "RunnerAllowedCommands",
             Self::RepoNonRustExecAllow => "RepoNonRustExecAllow",
+            Self::SeatCycleSettleS => "SeatCycleSettleS",
+            Self::SeatCyclePollMs => "SeatCyclePollMs",
         }
     }
 
@@ -187,7 +196,9 @@ impl RuleKind {
             | Self::SeatContextCapPct
             | Self::SeatContextWindowTokens
             | Self::SeatTickStaleS
-            | Self::SeatCycleLockTtlS => ValueShape::Int,
+            | Self::SeatCycleLockTtlS
+            | Self::SeatCycleSettleS
+            | Self::SeatCyclePollMs => ValueShape::Int,
             Self::DialogueSurface => ValueShape::Str,
             Self::MaturityCondition
             | Self::AccountSelection

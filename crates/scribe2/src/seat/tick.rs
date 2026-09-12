@@ -35,7 +35,7 @@ use crate::fleet::store::{self, LockPolicy};
 use crate::hook::{InjectionRecord, SCHEMA};
 use crate::name::NAME;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// 自打刻 marker の名前。
 pub const STAMP_FILE: &str = "tick-stamp";
@@ -66,6 +66,13 @@ pub struct Request<'a> {
     pub state_dir: Option<&'a str>,
     /// cycle を回す周に渡す復元 command。
     pub restore: Option<&'a str>,
+    /// cycle を回す周に渡す確認上限（rules 行 `seat.cycle_settle_s`・解くのは [`cli`] 1 箇所）。
+    ///
+    /// [`cycle`] 側の rules を tick がもう 1 度読まないのは、同じ 1 回の判定の中で 2 面が別の
+    /// 値で走る形を作らないためである（`--rules` の seam は呼出しごとに 1 回解く）。
+    pub settle: Duration,
+    /// cycle を回す周に渡す確認の周期（rules 行 `seat.cycle_poll_ms`）。
+    pub step: Duration,
 }
 
 /// tick 1 回の判定。**bool で持たない**（憲法 C11）。
@@ -448,6 +455,8 @@ fn parked(request: &Request, place: &super::StateDir, dir: &Path, seen: &Seen) -
         capture_file: request.capture_file,
         state_dir: place,
         restore: request.restore,
+        settle: request.settle,
+        step: request.step,
     });
     (noop, Some(cycle::summary(&result)), Some(stamp))
 }
@@ -511,6 +520,15 @@ fn body(target: &str, judged: &Judged, place: &super::StateDir) -> String {
 /// 実行系が回らなかった周の本体。
 fn body_of_error(reason: &str) -> String {
     format!("decision=error reason={reason}")
+}
+
+/// 宣言 rule（cycle の確認の刻み）が読めない周の 1 行（`s2-07l.151`）。**判定を回さない**
+/// ＝置き場も pane も見ない（置き場を解けない周と同じ早い側の断りで、記録も残らない）。
+///
+/// 語彙は [`decide`] の `no-rule` と同じ 1 つ: 読めない規則を理由に `decision=error` を名乗る
+/// 形を 2 つに増やさない（理由の字面で routing する口を作らない・憲法 C11）。
+pub fn render_no_rule() -> String {
+    render(&body_of_error(meter::REASON_NO_RULE))
 }
 
 /// stdout / stderr へ出す 1 行。

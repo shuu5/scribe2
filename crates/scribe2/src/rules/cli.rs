@@ -30,7 +30,7 @@ pub fn dispatch(args: &[String]) -> Outcome {
 }
 
 /// 規則をどこから読むか。
-enum Source<'a> {
+pub(crate) enum Source<'a> {
     /// binary に埋め込んだ manifest。
     Embedded,
     /// `--rules` が指した file。
@@ -43,7 +43,10 @@ enum Source<'a> {
 ///
 /// PATH の無い `--rules` を埋め込みへ倒さないのは、指定した規則で走っているつもりの
 /// 呼出しが黙って別の規則で通るのを塞ぐためである（fail-closed・SRS NFR4）。
-fn open(args: &[String]) -> Result<Manifest, Vec<RuleError>> {
+///
+/// `seat` の `--rules` も**この 1 本**を通る（`s2-07l.151`）: 同じ flag の字面で別の解き方を
+/// 持つと、`--rules` を渡した周に面ごとに違う規則で走る。
+pub(crate) fn open(args: &[String]) -> Result<Manifest, Vec<RuleError>> {
     match source(args) {
         Source::Embedded => Manifest::embedded(),
         Source::File(path) => Manifest::load(Path::new(path)),
@@ -55,7 +58,7 @@ fn open(args: &[String]) -> Result<Manifest, Vec<RuleError>> {
 }
 
 /// `--rules` の指定を読む。
-fn source(args: &[String]) -> Source<'_> {
+pub(crate) fn source(args: &[String]) -> Source<'_> {
     let Some(at) = args.iter().position(|arg| arg == "--rules") else {
         return Source::Embedded;
     };

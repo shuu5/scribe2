@@ -217,6 +217,22 @@ ruling = "user 2026-09-10T00:00Z"
 ruled_at = "2026-09-10"
 
 [[rule]]
+id = "seat.cycle_settle_s"
+kind = "SeatCycleSettleS"
+value = 30
+enabled = true
+ruling = "user 2026-09-12T12:08Z"
+ruled_at = "2026-09-12"
+
+[[rule]]
+id = "seat.cycle_poll_ms"
+kind = "SeatCyclePollMs"
+value = 500
+enabled = true
+ruling = "user 2026-09-12T12:08Z"
+ruled_at = "2026-09-12"
+
+[[rule]]
 id = "runner.allowed_commands"
 kind = "RunnerAllowedCommands"
 value = ["cargo", "git"]

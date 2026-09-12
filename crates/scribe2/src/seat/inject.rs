@@ -144,7 +144,8 @@ pub fn deliver(request: &Request) -> Delivery {
 /// `Consumed`・窓の終わりに無ければ `Queued`）で、変わるのは**窓の長さだけ**。作り直し直後の席は
 /// SessionStart hook の間（数秒〜十数秒）注入を入力欄に queue したまま turn を始めないので、2 s の
 /// 窓では復元が正しく届く周ほど `Queued` に落ちる（bd `s2-07l.97`）。cycle は作り直しの確認と同じ
-/// 上限を渡す。新しい閾値は足さない（呼び側の既存の上限を再利用する＝rules 行と C5 裁定は要らない）。
+/// 上限を渡す。**窓はここで決めない**（`s2-07l.151`）: cycle 側の rules 行
+/// （`seat.cycle_settle_s`）が持つ値がそのまま引数で来る＝この面は規則を読まない。
 pub fn deliver_within(request: &Request, window: Duration) -> Delivery {
     let started = Instant::now();
     let Some(pane) = capture(request.socket, request.target) else {

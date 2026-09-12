@@ -6,10 +6,11 @@
 use super::cycle::{self, Cycle};
 use super::{heartbeat, inject, meter, tick};
 use crate::cli_outcome::{Outcome, RC_OK, RC_REFUSED};
+use std::time::Duration;
 
 /// `seat` の使い方。
 pub fn usage() -> String {
-    "usage: seat <meter --target T [--transcript PATH]|inject --target T (--text S|--file PATH)|heartbeat --target T|tick --target T --wm-dir DIR [--pointer TEXT] [--restore CMD]|cycle --target T --wm-dir DIR [--restore CMD]> [--tmux-socket PATH] [--capture-file PATH] [--state-dir PATH]".to_owned()
+    "usage: seat <meter --target T [--transcript PATH]|inject --target T (--text S|--file PATH)|heartbeat --target T|tick --target T --wm-dir DIR [--pointer TEXT] [--restore CMD] [--rules PATH]|cycle --target T --wm-dir DIR [--restore CMD] [--rules PATH]> [--tmux-socket PATH] [--capture-file PATH] [--state-dir PATH]".to_owned()
 }
 
 /// `seat` に続く引数を捌く。
@@ -209,16 +210,32 @@ fn heartbeat_of(args: &[String]) -> Outcome {
     }
 }
 
+/// cycle の確認の刻み（上限・周期）を解く。`--rules PATH` が在ればその file・無ければ埋め込み
+/// （`rules` subcommand と**同じ 1 本の口**＝[`crate::rules::cli::open`]・`s2-07l.151`）。
+///
+/// 読めない file・行の無い file・不発効の行は `None`＝呼び側が `no-rule` で断る（fail-closed・
+/// 値を焼かない・憲法 C5）。**1 回の呼出しで 1 回だけ解く**: tick と cycle が別々に解くと、
+/// 同じ判定の中で別の値で走りうる。
+fn pace_of(args: &[String]) -> Option<(Duration, Duration)> {
+    let manifest = crate::rules::cli::open(args).ok()?;
+    cycle::pace_of(&manifest)
+}
+
 /// `seat tick`。
 fn tick_of(args: &[String]) -> Outcome {
-    let (Ok(target), Ok(wm_dir), Ok(pointer), Ok(restore), Ok(common)) = (
+    // 値欠け・空文字の `--rules` は使い方の誤り（他の flag と同じ極性・SRS NFR4）。
+    let (Ok(target), Ok(wm_dir), Ok(pointer), Ok(restore), Ok(_), Ok(common)) = (
         required_nonempty(args, "--target"),
         required_nonempty(args, "--wm-dir"),
         nonempty(args, "--pointer"),
         nonempty(args, "--restore"),
+        nonempty(args, "--rules"),
         common_of(args),
     ) else {
         return refused_usage();
+    };
+    let Some((settle, step)) = pace_of(args) else {
+        return Outcome::failed_line(RC_REFUSED, tick::render_no_rule());
     };
     tick::run(&tick::Request {
         target,
@@ -228,15 +245,19 @@ fn tick_of(args: &[String]) -> Outcome {
         capture_file: common.capture_file,
         state_dir: common.state_dir,
         restore,
+        settle,
+        step,
     })
 }
 
 /// `seat cycle`。
 fn cycle_of(args: &[String]) -> Outcome {
-    let (Ok(target), Ok(wm_dir), Ok(restore), Ok(common)) = (
+    // 値欠け・空文字の `--rules` は使い方の誤り（他の flag と同じ極性・SRS NFR4）。
+    let (Ok(target), Ok(wm_dir), Ok(restore), Ok(_), Ok(common)) = (
         required_nonempty(args, "--target"),
         required_nonempty(args, "--wm-dir"),
         nonempty(args, "--restore"),
+        nonempty(args, "--rules"),
         common_of(args),
     ) else {
         return refused_usage();
@@ -247,6 +268,13 @@ fn cycle_of(args: &[String]) -> Outcome {
             cycle::render(target, &Cycle::Refused(cycle::REASON_STATE_DIR), None),
         );
     };
+    // 規則が読めない周は **1 key も送らずに** 断る（lock も取らない・fail-closed・`s2-07l.151`）。
+    let Some((settle, step)) = pace_of(args) else {
+        return Outcome::failed_line(
+            RC_REFUSED,
+            cycle::render(target, &Cycle::Refused(cycle::REASON_NO_RULE), Some(&state)),
+        );
+    };
     let result = cycle::run(&cycle::Request {
         target,
         wm_dir,
@@ -254,6 +282,8 @@ fn cycle_of(args: &[String]) -> Outcome {
         capture_file: common.capture_file,
         state_dir: &state,
         restore,
+        settle,
+        step,
     });
     match result {
         Cycle::Done => Outcome::ok_line(cycle::render(target, &result, Some(&state))),

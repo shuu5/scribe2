@@ -14,6 +14,8 @@ use super::{inject, pane_of, sanitize_target, state, tmux_ok, StateDir, WmScan};
 use crate::fleet::json_lite::{self, Value};
 use crate::fleet::store::{self, LockPolicy};
 use crate::hook::{InjectionRecord, SCHEMA};
+use crate::rules::manifest::Manifest;
+use crate::rules::RuleValue;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -26,14 +28,14 @@ pub const LOCK_FILE: &str = "cycle.lock";
 pub const STAMP_FILE: &str = "cycle-stamp";
 /// TTL を宣言する rules 行の id（**値は code に焼かない**・憲法 C5）。
 const ID_TTL: &str = "seat.cycle_lock_ttl_s";
+/// 作り直しと復元の確認上限（秒）を宣言する rules 行の id（`s2-07l.151`・裁定 id は manifest 行）。
+const ID_SETTLE_S: &str = "seat.cycle_settle_s";
+/// 確認を見に行く周期（ミリ秒）を宣言する rules 行の id。
+const ID_POLL_MS: &str = "seat.cycle_poll_ms";
 /// session を作り直す注入。
 const CLEAR: &str = "/clear";
 /// 復元の既定 command。
 pub const DEFAULT_RESTORE: &str = "/rebrief";
-/// 作り直しを待つ上限。復元の送達確認（[`send_restore`]）も同じ上限で見る。
-const CLEAR_WAIT: Duration = Duration::from_secs(30);
-/// 作り直しを見に行く周期。
-const CLEAR_STEP: Duration = Duration::from_millis(500);
 /// 記録の who。
 const WHO: &str = "seat-cycle";
 /// 記録の when。
@@ -84,6 +86,10 @@ pub struct Request<'a> {
     pub state_dir: &'a StateDir,
     /// 復元 command（既定 [`DEFAULT_RESTORE`]）。
     pub restore: Option<&'a str>,
+    /// 作り直しと復元の確認上限（rules 行 `seat.cycle_settle_s`・[`pace_of`] が解く）。
+    pub settle: Duration,
+    /// 確認を見に行く周期（rules 行 `seat.cycle_poll_ms`）。
+    pub step: Duration,
 }
 
 /// この境界の極性（[`Cycle`]）: `/clear` を送る前に条件を見て、1 つでも欠けたら 1 key も送らずに断る。
@@ -105,6 +111,27 @@ pub enum Cycle {
 /// TTL（秒）を manifest から読む。不発効・別の形・不在は `None`。
 pub fn ttl_s() -> Option<u64> {
     super::int_rule(ID_TTL)
+}
+
+/// 確認の刻み（上限, 周期）を**渡された manifest** から読む（`s2-07l.151`）。不発効・別の形・
+/// 不在は `None`＝呼び側は [`REASON_NO_RULE`] で断る（fail-closed・値を code に焼かない・憲法 C5）。
+///
+/// 読み先が引数である点だけが [`super::int_rule`]（埋め込み専用）と違う: `seat cycle` / `seat tick` の
+/// `--rules` は歯が確認上限を秒で差し替える seam で、埋め込みを読む口からは届かない。
+pub fn pace_of(manifest: &Manifest) -> Option<(Duration, Duration)> {
+    Some((
+        Duration::from_secs(int_row(manifest, ID_SETTLE_S)?),
+        Duration::from_millis(int_row(manifest, ID_POLL_MS)?),
+    ))
+}
+
+/// 発効している rules 行の整数値（[`super::int_rule`] と同型・読む先が引数の manifest）。
+fn int_row(manifest: &Manifest, id: &str) -> Option<u64> {
+    let row = manifest.get(id)?;
+    match (row.enabled, &row.value) {
+        (true, &RuleValue::Int(found)) => Some(found),
+        _ => None,
+    }
 }
 
 /// cycle を評価した周の打刻の path。
@@ -284,18 +311,21 @@ fn unix_secs(at: SystemTime) -> u64 {
 /// 証拠は「送達 ts 以後に、送る前の行より後ろへ足された `SessionStart` の打刻」だけ
 /// （[`state::evidence_after`]）。pane の echo `❯ /clear` は読まない——正の形が字面である限り、
 /// 前の `/clear` の echo が見えたまま今回の `/clear` が消費されなかった周を「済んだ」と読む口が
-/// 塞げなかった（`.96` の残余 (1)）。打刻が窓（[`CLEAR_WAIT`]）の内に来ない周は `false`＝
+/// 塞げなかった（`.96` の残余 (1)）。打刻が窓（[`Request::settle`]）の内に来ない周は `false`＝
 /// `clear-unconfirmed`（復元を送らない・既存の語）。hook の無い席・古い打刻しか足さない席も
 /// 同じ側へ倒れる（作り直しを確認できない席へ復元を刺さない＝fail-closed）。
+///
+/// 窓と刻みは **rules 行が持つ**（`s2-07l.151`・値を code に焼かない・憲法 C5）: 確認に要る長さは
+/// 席の hook の重さで決まる運用値で、歯は同じ分岐を短い窓の fixture で測れる。
 fn send_clear(request: &Request, dir: &Path) -> bool {
     let baseline = state::baseline(dir);
     let since = state::now_secs();
     if !send_line(request, CLEAR) {
         return false;
     }
-    let deadline = Instant::now().checked_add(CLEAR_WAIT);
+    let deadline = Instant::now().checked_add(request.settle);
     while deadline.is_some_and(|at| Instant::now() < at) {
-        sleep(CLEAR_STEP);
+        sleep(request.step);
         let found = state::evidence_after(dir, baseline, state::Event::SessionStart, since);
         if matches!(found, state::Evidence::Found(_)) {
             return true;
@@ -311,11 +341,14 @@ fn send_clear(request: &Request, dir: &Path) -> bool {
 /// 上限まで消費されない復元は「turn の終わりに消費される queue」ではなく submit されなかった打鍵で、
 /// 会話を捨てた（不可逆）のに復元が刺さらない席を `done` と数えることになる（lens-90 HIGH-2）。
 ///
-/// **窓は作り直しの確認と同じ上限**（[`CLEAR_WAIT`]・bd `s2-07l.97`）: 作り直し直後の席は
+/// **窓は作り直しの確認と同じ上限**（[`Request::settle`]・bd `s2-07l.97`）: 作り直し直後の席は
 /// SessionStart hook の間（数秒〜十数秒）復元を入力欄に queue したまま turn を始めないので、
 /// inject の既定 2 s では**復元が正しく届く周ほど** `Queued` に落ちて `restore-unconfirmed` に
 /// なった（実測 2026-09-11 `.96` A/B・記録が真の値と食い違う＝C10）。席が queue を消費して
 /// 入力欄が空になるまで見続ける。上限の後も残っていれば従来どおり失敗（弁別は不変）。
+///
+/// 上限は**引数で渡す**（`s2-07l.151`）: [`inject`] は rules を読まない面で、窓の長さは cycle 側が
+/// 解いた 1 つの値（[`Request::settle`]）から来る＝2 面が別々に規則を読んで食い違うことがない。
 fn send_restore(request: &Request) -> bool {
     let payload = request.restore.unwrap_or(DEFAULT_RESTORE);
     let sent = inject::deliver_within(
@@ -325,7 +358,7 @@ fn send_restore(request: &Request) -> bool {
             payload,
             state_dir: Some(request.state_dir),
         },
-        CLEAR_WAIT,
+        request.settle,
     );
     matches!(sent, inject::Delivery::Delivered(_, inject::Settled::Consumed))
 }
