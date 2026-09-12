@@ -11,14 +11,14 @@ meta:
   eyebrow_left: 要件定義書 (SRS)
   eyebrow_right: scribe2 — MVP
   subtitle: 契約は小さく・検証は機械が先・止まるときは記帳して止まる
-  version: "0.5"
+  version: "0.6"
   date: "2026-09-12"
   reader: この器で開発する人と AI（Claude Code の session）。 専門語には必ずやさしい言い換えを併記する
 
 approval:
   - role: 承認 (user)
     who: user
-    when: 2026-09-12（版 0.5。 版ごとの裁定 id は台帳が持つ）
+    when: 2026-09-12（版 0.6。 版ごとの裁定 id は台帳が持つ）
     stamp: 裁定済
   - role: レビュー (folio review lens)
     who: spec-review 5 軸 + SRS ceiling 3 lens
@@ -52,6 +52,7 @@ scope:
     - toy repo 5 便と自己ホスト 1 便の到達点計測
     - 開発 session の自律機能
     - 口座残量の計測と記録
+    - 追随
   out:
     - 複数口座の自動選定（v3）
     - lane 計画と席の dashboard（v3）
@@ -75,7 +76,7 @@ upper_needs:
   - { id: N-5, need: 前の版（v1）を使わず、 design-intent を拘束条件として自分で自分を作る,           origin: ADR-0003（v1 完全放棄）,   short: 自己開発 }
 
 acceptance:
-  - { id: AC1, criterion: toy repo で内容の異なる 5 契約（正常 / 改変 / test 追加 / gate FAIL / 承認 Blocked）が実 runner + 実 lens で通り、 人由来の event が approval 以外に 0 件, metric_v: 5/5, metric_l: 便が人手 0 で通る, links: [FR4, FR5, FR6, FR11, FR12, FR22] }
+  - { id: AC1, criterion: toy repo で内容の異なる 5 契約（正常 / 改変 / test 追加 / gate FAIL / 承認 Blocked）が実 runner + 実 lens で通り（うち 1 契約は先着の便の land で main が進んだ後に追随して Landed）、 人由来の event が approval 以外に 0 件, metric_v: 5/5, metric_l: 便が人手 0 で通る, links: [FR4, FR5, FR6, FR11, FR12, FR22, FR34] }
   - { id: AC2, criterion: scribe2 自身で実 bead 1 本（契約は SRS の要件 id と設計 doc の pointer を持つ）を pipeline が PR 作成まで通し、 CI が緑（merge は人が押す）,                 metric_v: 1 便,  metric_l: 自己ホスト,       links: [FR2, FR5, FR22, NFR2] }
   - { id: AC3, criterion: verify RED・lens 不在・予算超過の便は必ず FAIL か INCONCLUSIVE で止まり、 land されない,               metric_v: 0 件,  metric_l: 偽の PASS,        links: [FR7, FR8, FR9, FR10, NFR1] }
   - { id: AC4, criterion: process を殺して別 process で resume しても、 event log の中断点から Landed まで通る,                   metric_v: 1 回,  metric_l: 再開で完走,        links: [FR3, FR13, FR14] }
@@ -196,8 +197,8 @@ requirements:
     trace: { backward: [N-1], acceptance: [AC3] }
     ears:
       pattern: unwanted
-      condition: verdict が PASS でない、 または main の tip が記録した base と違うとき
-      response: land は何もしない（main も event も変えない）
+      condition: verdict が PASS でない、 または main の tip が記録した base と一致せず追随（FR34）の条件にも当たらないとき
+      response: land は main を変えない
   - id: FR11
     type: FR
     label: land
@@ -454,6 +455,17 @@ requirements:
       pattern: event
       condition: 口座残量の計測が要求されたとき
       response: manifest に列挙した口座ごとに、 5 時間窓・7 日窓・モデル別 7 日窓の口座残量と reset 時刻を口座の endpoint から 1 コマンドで読み、 出所（口座・endpoint・時刻）付きの実測値（Measured）として fleet の event log に記録し、 読めない回は理由付きで「測れなかった」を記録して 0 の値に読み替えない
+  - id: FR34
+    type: FR
+    label: 追随
+    priority: must
+    vmethod: T
+    rationale_source: N-1
+    trace: { backward: [N-1], acceptance: [AC1] }
+    ears:
+      pattern: event
+      condition: land が要求され、 verdict が PASS で、 main の tip が記録した base より進み、 base が main の祖先であるとき
+      response: worktree の branch を main へ rebase して gate をやり直し、 進んだ base と衝突の事実を event に記帳する（衝突した周も便を終端にしない・main は変えない）
 
 nfr:
   - { id: NFR1, type: NFR, label: lens 予算,   category: 性能, target: 1 lens は 0.15M token 以内（目標値）,                                measure: lens 起動時の diff byte と cap の照合を verdict に記録,        vmethod: T, trace: { backward: [N-2], acceptance: [AC3] }, hero: { cat: 予算, big: "0.15", unit: M token, qual: lens 1 本あたりの上限 } }
@@ -493,7 +505,7 @@ glossary:
   - { term: diff,           en: diff,                   plain_short: 変更の差分,               def: 変更前と後の違いだけを取り出したもの。 lens はこれを読んで審査する。 }
   - { term: worktree,       en: worktree,               plain_short: 便ごとの別の作業場所,     def: 同じ repo の別の branch を別 dir に取り出した作業場所。 runner は 1 便ごとに 1 つ切る。 }
   - { term: rc,             en: return code,            plain_short: 終了を知らせる数字,       def: program が終わるときに返す数字。 0 = 成功、 それ以外 = 失敗の種類。 }
-  - { term: base,           en: base,                   plain_short: 変更の出発点,             def: 便を始めた時点の main の commit。 flip check と land はこれを基準に測る。 }
+  - { term: base,           en: base,                   plain_short: 変更の出発点,             def: 便を始めた時点の main の commit。 追随（FR34）で進みうる（記録された最新の base が基準）。 flip check と land はこれを基準に測る。 }
   - { term: INCONCLUSIVE,   en: inconclusive,           plain_short: 判定できなかった,         def: verdict の 3 値の 1 つ。 合格でも不合格でもなく「判断できない」で止まり、 land されない。 }
   - { term: CI,             en: continuous integration, plain_short: PR ごとの自動検査,        def: PR を出すたびに自動で走る検査（test・lint・xtask）。 緑でなければ merge しない。 }
   - { term: marker,         en: marker,                 plain_short: 所属の目印 file,          def: repo root に置く .vessel のこと。 中身が name と version を言い、 hook はこれを見て仕えるかを決める。 }
@@ -516,4 +528,6 @@ glossary:
   - { term: Questioned,     en: questioned,             plain_short: 質問中の段,               def: 便の段の 1 つ。 runner の質問 record を受けて回答 event を待っている状態。 }
   - { term: Blocked,        en: blocked,                plain_short: 承認待ちの段,             def: 便の段の 1 つ。 3 クラスを名乗る契約が spawn の手前で承認 event を待っている状態。 }
   - { term: 口座残量,       en: account allowance,      plain_short: 口座の残りと reset 時刻,   def: 1 口座 1 時刻で読んだ、 5 時間窓・7 日窓・モデル別 7 日窓の残りと各 reset 時刻の組（FR33）。 runner が受ける上限 record（検出の合図）とは出所が違う。 }
+  - { term: 追随,           en: follow,                 plain_short: main に追いつくこと,      def: land の前に、 便の base より進んだ main へ worktree の branch を rebase して gate をやり直すこと（規範は FR34・衝突の周の解き方は ADR-0019）。 main は動かさない。 }
+  - { term: 衝突,           en: conflict,               plain_short: 追随の rebase でぶつかること, def: 追随の rebase で、 先着の変更と同じ箇所が重なり器が自動では合わせられないこと（FR34 が記帳する）。 intake が断る write-set の重なりとは別。 }
   - { term: 暫定行,         en: provisional line,       plain_short: 出所の無い命令行,         def: 作業記憶の「命令・制約」行のうち、 出所 pointer（憲法条・ADR・rules 行・裁定 id・user 裁定の時刻）を持たない行（FR23 / AC8）。 }
