@@ -87,14 +87,18 @@ pub const POLARITY: Polarity = Polarity {
 };
 
 /// 行が argv 1 本として撃てない理由。**新しい理由は variant を 1 つ足す**（憲法 C2）。
+///
+/// **この並びが [`unfit`] の適用順序であり、唯一の権威**である（同じ行が複数の理由に当たる
+/// 周は、この並びで最初の理由を返す）。並びと適用順が一致することは
+/// [`crate::order::is_declaration_order`] を [`Self::rank`] へ通す歯が測る（ADR-0013 §2.2）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Unfit {
+    /// shell が意味を変える文字を含む。
+    Metachar(char),
     /// 語が 1 つも無い。
     Empty,
     /// 先頭語が宣言の allowlist に無い。
     Command(String),
-    /// shell が意味を変える文字を含む。
-    Metachar(char),
     /// repo の外を指す語を含む（絶対 path・home の短縮記号・`..` で遡る path）。
     Outside(String),
     /// 置けない穴を含む。
@@ -105,17 +109,30 @@ impl Unfit {
     /// 断る理由の 1 行。
     fn reason(&self, allowed: &[String]) -> String {
         match *self {
+            Self::Metachar(found) => format!(
+                "shell の制御文字 {found:?} を含む（1 行 1 command・包みも連結も書けない）"
+            ),
             Self::Empty => "verify 行が空である".to_owned(),
             Self::Command(ref head) => {
                 format!("先頭 command {head} が宣言の allowed-commands（{}）に無い", allowed.join(" / "))
             }
-            Self::Metachar(found) => format!(
-                "shell の制御文字 {found:?} を含む（1 行 1 command・包みも連結も書けない）"
-            ),
             Self::Outside(ref word) => {
                 format!("repo の外を指す語 {word} を含む（絶対 path・home の短縮記号・.. で遡る path）")
             }
             Self::Hole(ref hole) => format!("置けない穴 {hole} を含む"),
+        }
+    }
+
+    /// 宣言順の位置（0 始まり）。判別子を `as` で取れない payload つき enum の
+    /// [`crate::order::is_declaration_order`] 用の写像で、外形には出さない。
+    #[cfg(test)]
+    fn rank(&self) -> usize {
+        match *self {
+            Self::Metachar(_) => 0,
+            Self::Empty => 1,
+            Self::Command(_) => 2,
+            Self::Outside(_) => 3,
+            Self::Hole(_) => 4,
         }
     }
 }
@@ -496,7 +513,8 @@ fn list_of(
 
 #[cfg(test)]
 mod tests {
-    use super::{Declared, Effective, Sourced, CEILING_ROW, DECL_FILE};
+    use super::{unfit, Declared, Effective, Holes, Sourced, Unfit, CEILING_ROW, DECL_FILE};
+    use crate::order::is_declaration_order;
 
     /// 宣言の本文。
     fn body(allowed: &str, common: &str) -> String {
@@ -603,5 +621,54 @@ mod tests {
         let parsed = Declared::parse(text).expect("空行とコメントは飛ばす");
         assert_eq!(parsed.allowed, vec!["git".to_owned()], "値は読めている");
         assert_eq!(parsed.allowed_line, 6, "行番号は物理行のまま（飛ばした行も数える）");
+    }
+
+    /// 複数の理由に同時に当たる行は、**宣言順で最初の理由**で断る（憲法 C2: 適用順は
+    /// 宣言順だけから取る）。
+    ///
+    /// `unfit` の検査順は手で書くので、宣言順から静かにずれうる——ずれても compile は
+    /// 通り、順序の注記を散文で持たない以上、機械が測らなければ誰も気づかない。
+    #[test]
+    fn unfit_order_takes_the_first_reason_in_declaration_order() {
+        let declared = [
+            Unfit::Metachar(';'),
+            Unfit::Empty,
+            Unfit::Command(String::new()),
+            Unfit::Outside(String::new()),
+            Unfit::Hole(String::new()),
+        ];
+        let order: Vec<&Unfit> = declared.iter().collect();
+        assert!(
+            is_declaration_order(&order, Unfit::rank),
+            "rank は宣言順に 0.. である（並べ替え・重複・中間の欠番を落とす）: {declared:?}"
+        );
+
+        // 母集団 = 2 つ以上の理由に同時に当たる行 3 本（当たる理由は fixture が持つ）。
+        let allowed = ["cargo".to_owned()];
+        for (line, holes, hit) in [
+            (
+                "rm -rf; echo",
+                Holes::Base,
+                vec![Unfit::Metachar(';'), Unfit::Command("rm".to_owned())],
+            ),
+            (
+                "rm /etc/passwd",
+                Holes::Base,
+                vec![Unfit::Command("rm".to_owned()), Unfit::Outside("/etc/passwd".to_owned())],
+            ),
+            (
+                "cargo test ../up {base}",
+                Holes::None,
+                vec![Unfit::Outside("../up".to_owned()), Unfit::Hole("{base}".to_owned())],
+            ),
+        ] {
+            assert!(hit.len() >= 2, "{line:?} は複数の理由に当たる形である: {hit:?}");
+            let first = hit.iter().min_by_key(|found| found.rank()).cloned();
+            assert_eq!(
+                unfit(line, &allowed, holes),
+                first,
+                "{line:?} が当たる理由 {hit:?} のうち宣言順で最初のものを返す"
+            );
+        }
     }
 }
