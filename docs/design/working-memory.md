@@ -27,7 +27,7 @@
 | 2 | `## 計画弧・次のステップ` | 開発 session（毎 cycle 上書き） | 自由文の項目行 |
 | 3 | `## この effort を貫く命令・制約` | carry-forward + 開発 session の追記 | `- [auto\|confirm\|hard候補] [P0-P3] since=YYYY-MM-DD <本文> → SSOT: <参照>` |
 
-- 節 3 の項目行の文法検査（**`--directives` の新規行にだけ**掛かる・carry 元には掛からない）: tag（3 語のいずれか）・`[P0-P3]`・`since=` の 3 要素。欠けた行は externalize が rc 非 0 で止まる（黙って通さない・前の版の「警告だけ」からの変更）。`→ SSOT:` の有無は検査で止めない: 無い行は暫定行として退避物に入り（rebrief が `pointer=none` で列挙）、次の carry-forward で落ちる（FR23）。carry 元の行は文法検査せず、pointer 検査だけで運ぶ / 落とすを決める。従属行（先頭が空白）は直前の項目に連結。HTML コメントは捨てる（テンプレの説明文が命令欄へ流入しない）。
+- 節 3 の項目行の文法検査（**`--directives` の新規行にだけ**掛かる・carry 元には掛からない）: tag（3 語のいずれか）・`[P0-P3]`・`since=` の 3 要素。欠けた行は externalize が rc 非 0 で止まる（黙って通さない・前の版の「警告だけ」からの変更）。`→ SSOT:` の有無は検査で止めない: 無い行は暫定行として退避物に入り（rebrief が `pointer=none` で列挙）、次の carry-forward で落ちる（FR23）。carry 元の行は文法検査せず、pointer 検査だけで運ぶ / 落とすを決める。carry 元の項目行に `[P0-P3]` が無ければ P3 として扱う（前の版と同じ・落とさない）。従属行（先頭が空白）は直前の項目に連結。HTML コメントは捨てる（テンプレの説明文が命令欄へ流入しない）。
 - 節 1 は逐語 carrier: 状態が「完了」「user 撤回」の行だけ carry から落としてよい。それ以外は 1 行も落とさない・言い換えない。
 
 ## 4. 出所 pointer（ADR-0018 §2.2）
@@ -68,7 +68,7 @@ pub enum Resolution { Resolved, Unresolved, Unchecked }
 - 出力は行頭 marker の typed 行（1 行 1 事実・値は enum の名か逐語）。marker は閉じた enum `Marker`（`ALL` + 網羅 match + 判別子順 pin の 4 つ組・出力順 = 宣言順・外形 snapshot で pin・C12.5）。
 - 段: (1) `[SID]` (2) 退避物: `[WM] found file=…` / `[WM] candidate file=…`（`seat:` 一致・sid 違い＝`/clear` 後の通常形）/ `[WM] missing` (3) `[WM-PLAN]` 節 2 の各行（marker 前置）/ `[WM-USER-DIRECTIVE]` 節 1 の各行（**逐語**）/ `[WM-DIRECTIVE] kind=<PointerKind|none> resolution=<…> line=<逐語>` 節 3 の各行 + `[WM-DIRECTIVE-COUNT] total=<n> provisional=<k> unresolved=<u>`（件数と列挙の対）(4) `[ORPHAN-WM] file=… seat=<他席>` 別席の未 consumed 退避物（消費しない）(5) 台帳: `bd --readonly list --limit 0 --json` を子 process で読み `[BD-COUNT] open= in_progress= blocked=`・`[BD-INPROGRESS] <id> updated=<ts> <title>`・節 3 が言及する bead id の status を `[DIFF] <id> bd=<status>` で並べる (6) `[TICKET-CANDIDATE]` 節 3 の行のうち **tag が `[hard候補]` かつ kind が none**（typed な条件だけ・本文の意味は読まない）の行（起票候補・**起票しない**）。
 - 出せない周（wm dir が読めない / 打刻が無い / bd の rc 非 0 か JSON 不能 / anchor 不在）は **DATA を 1 行も出さず** rc 2 + 理由 1 行（FailClosed・「BD-COUNT=0」に化けない）。`[WM] missing` は正常（DATA は出る）。
-- bd の待ち上限は既存の `hook.timeout_s` を流用せず、専用の rules 行 `seat.ledger_timeout_s`（新 kind `LedgerTimeoutS`・契約 (b) で裁定 id 付きで足す・値 60）。bd は器の外の OSS を子 process で呼ぶ初の例＝A3 の対象（承認 = user 裁定 2026-09-12・ADR-0018 §2.4）。rebrief は行為を止めないので Guard ではない（rc 2 は「DATA を出せない」の断り・ADR-0014 §2.1「状態を選ぶだけ」）。
+- bd の待ち上限は既存の `hook.timeout_s` を流用せず、専用の rules 行 `seat.ledger_timeout_s`（新 kind `LedgerTimeoutS`・値は契約 (b) が裁定 id 付きで manifest に置く＝本 doc は値を写さない・C1）。bd は器の外の OSS を子 process で呼ぶ初の例＝A3 の対象（承認 = user 裁定 2026-09-12・ADR-0018 §2.4）。rebrief は行為を止めないので Guard ではない（rc 2 は「DATA を出せない」の断り・ADR-0014 §2.1「状態を選ぶだけ」）。
 
 ### 5.3 `seat consume`
 - 対象 = 自席の未 consumed 退避物 1 件（`seat:` 一致）。sid が現在と同じなら `working-memory.<sid>.consumed.md` へ rename。違うなら `working-memory.<現在 sid>.consumed.md` へ rename して frontmatter に `consumed-from: <元 sid>` を 1 行足す。
@@ -99,11 +99,11 @@ AC8 の確認（SRS の FR23 の検証手法は I = 目視確認・2 つの開�
 
 - **(a)** `seat externalize` + `PointerKind` / `Resolution` + 3 節 schema の parser + carry-forward + rules 行 `seat.wm_directive_cap`（裁定 id が先・C5）+ `Guard::Externalize`。base で RED = externalize の歯（機能不在）+ `PointerKind` の判別子順 pin。write-set は構造の連鎖（`seat/` の新 module 宣言先 + `rules/mod.rs` + manifest + kind 件数の歯 + seat / rules の外形 snapshot + `polarity.rs` の Guard variant と極性 snapshot）。
 - **(b)** `seat rebrief` + `Marker` enum + bd の子 process + rules 行 `seat.ledger_timeout_s`（裁定 id が先）。(a) の parser に依存。
-- **(c)** `seat consume` + `Guard::Consume`。(a) に依存。land 後: global skill 2 本を器の入口へ書き換え（本 repo の外・user 手番）→ AC8 の実演。
+- **(c)** `seat consume` + `Guard::Consume`。(a) に依存。land 後: global skill 2 本を器の入口へ書き換え（本 repo の外・user 手番）→ AC8 の確認（I）。
 
 ## 10. 却下案（ADR-0018 §5 の写しは持たない・設計固有のもの）
 
-- 節 3 の文法欠落を警告だけで通す（前の版）: 出所の無い行が周を越える経路が残る。rc 1 で止める。
+- 節 3 の tag / `[P0-P3]` / `since=` の欠落を警告だけで通す（前の版）: 形の崩れた行が周を越える。新規行は rc 1 で止める（pointer の有無は文法検査でなく暫定行の扱い・§3）。
 - pointer の実在検査を全 kind で必須にする: Ledger / Memory / PR は repo 外か host 固有で、器が到達できない。3 値（Resolved / Unresolved / Unchecked）で持つ。
 - rebrief が bd を直接 DB で読む: 台帳 adapter は MVP 外（ADR-0004 §2.2 面 3）。`bd --readonly` の子 process で読む（user 裁定）。
 - DATA を JSON 1 行にする: 開発 session が読む面は行頭 marker の行が既存の skill と同型で、外形 snapshot で pin できる。
