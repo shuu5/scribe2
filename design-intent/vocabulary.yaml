@@ -180,7 +180,7 @@ terms:
     relationships: [lane, 管理席, dolt push, gate]
   - canonical: 管理席
     domain: consumer
-    definition: admin の役割を持つ席。 anchor ごとに 1 席 (SRS FR30 / FR40・ADR-0022 §2.6)。 停止の検知と再起動の規範は C9。 配送構造での仕事 (契約を pipeline に流す・runner の質問を planner へ中継する・go の後に land する) は SRS FR30 (ADR-0016 §2.1) で、 権能の執行は ADR-0022 §2.3。
+    definition: 役割 管理席 を持つ席 (Role の variant 名は core が持つ)。 anchor ごとに 1 席 (SRS FR30 / FR40・ADR-0022 §2.6)。 停止の検知と再起動の規範は C9。 配送構造での仕事 (契約を pipeline に流す・runner の質問を planner へ中継する・go の後に land する) は SRS FR30 (ADR-0016 §2.1) で、 権能の執行は ADR-0022 §2.3。
     forbidden: [運転席]
     relationships: [席, admin lane, planner, 質問 record]
   - canonical: planner
@@ -210,7 +210,7 @@ terms:
     relationships: [3 クラス, 承認 event, 便]
   - canonical: 開発 session
     domain: consumer
-    definition: 設計・契約・実装・review を行う AI の session (Claude Code)。 役割 (planner / 管理席) の登録 row を持つ席で動き (ADR-0022 §2.1)、 対話面はそのうち planner の席 (R-C7-1)。 作業記憶の退避と復元の作法を守る (SRS FR23)。
+    definition: 設計・契約・実装・review を行う AI の session (Claude Code)。 登録された席 (役割 planner / 管理席・ADR-0022 §2.1) で動くときだけ権能を持ち、 対話面はそのうち planner の席 (R-C7-1)。 作業記憶の退避と復元の作法を守る (SRS FR23)。
     relationships: [対話面, 契約, 設計 doc, runner, lens]
   - canonical: 契約
     domain: consumer
