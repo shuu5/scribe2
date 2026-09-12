@@ -12,6 +12,7 @@ use super::contract::Contract;
 use super::declaration::{self, Ceiling, Effective, CEILING_ROW};
 use super::gate::{Gate, Limits, Verdict, RC_INCONCLUSIVE};
 use super::land::{last_stage_detail, verdict_of, Land, Retire, REBASE_EMPTY};
+use super::refuse::{overlaps, Refuse};
 use super::spawn::{spawn, Launch};
 use super::{question_of_run, contract_path, current, emit, run_dir, run_id, vessel_path, worktree_path, Emit, Precheck};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_OK, RC_REFUSED};
@@ -36,7 +37,7 @@ const ROW_CAP: &str = "gate.token_cap";
 /// `pipe` の使い方。
 pub fn usage() -> String {
     format!(
-        "usage: {NAME} pipe <intake|spawn|approve|answer|gate|land|retire|run|show|resume|stop|report> [--state-dir D] [--rules PATH] [flags]"
+        "usage: {NAME} pipe <intake|spawn|approve|answer|gate|land|retire|run|show|resume|stop|report> [--state-dir D] [--rules PATH] [stop: --all|--run ID] [flags]"
     )
 }
 
@@ -177,7 +178,7 @@ fn intake_id(args: &[String], manifest: &Manifest, policy: LockPolicy) -> Result
     // repo は spawn まで使わないが、**intake の時点で** git repo かを確かめる。
     // 後段で初めて落ちると、契約は受理されたのに進めない run が残る。
     if super::head_of(&repo).is_none() {
-        return Err(refused(format!("{} は git repo でない", repo.display())));
+        return Err(refuse(&Refuse::NotARepo { repo: repo.display().to_string() }, &[]));
     }
     let state_dir = state_dir_of(args).map_err(refused)?;
     let contract = Contract::load(&path).map_err(|errors| {
@@ -186,11 +187,14 @@ fn intake_id(args: &[String], manifest: &Manifest, policy: LockPolicy) -> Result
     // **宣言は上限と突き合わせてから**。ここで断つ周は run dir も event も作らない
     // ——撃てない契約の run が置き場に残ると、続きから引ける便に見えてしまう。
     let effective = freeze(&repo, manifest, &contract)?;
+    // **入口で排他する**（ADR-0019 §2.1）。live な便と write-set が交差する契約は、
+    // run dir も event も作らずに断る——後段（land の rebase）で衝突を知るより安い。
+    exclude_overlap(&state_dir, &contract)?;
     let id = run_id(&bead, &fleet::cli::now_utc());
     // stamp は秒までなので、同じ bead を同じ秒に 2 回 intake すると id が衝突する。
     // 黙って上書きすると **前の便の契約が別物に化ける**ので、何も書かずに断る。
     if run_dir(&state_dir, &id).exists() {
-        return Err(refused(format!("run {id} は既に在る（同じ秒の再 intake）")));
+        return Err(refuse(&Refuse::DuplicateRun { run: id.clone() }, &[]));
     }
     copy_contract(&state_dir, &id, &path).map_err(broken)?;
     copy_vessel(&state_dir, &id, &effective).map_err(broken)?;
@@ -212,6 +216,66 @@ fn intake_id(args: &[String], manifest: &Manifest, policy: LockPolicy) -> Result
         Err(err) => Err(broken(err.to_string())),
         Ok(()) => Ok(id),
     }
+}
+
+/// live な便（終端でない run）と write-set が交差する契約を断る（設計 pipeline-conflict.md §2）。
+///
+/// **読めない側が勝つ**: live な便の写しを 1 つでも読めなければ、交差の有無に関わらず
+/// `WriteSetUnreadable`（rc 2）で止まる。読めない store を「交差なし」に読み替えると、
+/// 排他が黙って無効化される（fail-closed・NFR4）。
+///
+/// 交差した周は**全組を stderr へ並べ**、理由の 1 行は先頭の 1 組を名乗る。
+fn exclude_overlap(state_dir: &Path, contract: &Contract) -> Result<(), Outcome> {
+    let state = current(state_dir).map_err(|errors| {
+        Outcome::failed(RC_BROKEN, errors.iter().map(StoreError::to_string).collect())
+    })?;
+    let mut first: Option<Refuse> = None;
+    let mut lines: Vec<String> = Vec::new();
+    for (id, run) in &state.runs {
+        let Some(alive) = live(state_dir, id, run.stage) else {
+            return Err(refuse(&Refuse::WriteSetUnreadable { run: id.clone() }, &[]));
+        };
+        if !alive {
+            continue;
+        }
+        let Ok(live_contract) = Contract::load(&contract_path(state_dir, id)) else {
+            return Err(refuse(&Refuse::WriteSetUnreadable { run: id.clone() }, &[]));
+        };
+        for (mine, theirs) in overlaps(&contract.write_set, &live_contract.write_set) {
+            if first.is_none() {
+                first = Some(Refuse::WriteSetOverlap { run: id.clone(), path: mine.clone() });
+            }
+            lines.push(format!("pipe: overlap run={id} contract={mine} live={theirs}"));
+        }
+    }
+    match first {
+        None => Ok(()),
+        Some(found) => Err(refuse(&found, &lines)),
+    }
+}
+
+/// 便が live（終端でない）か。**段の網羅 match で書く**（段が増えたら compile で気付く）。
+///
+/// 終端 = `Landed` / `Failed` / `Stopped`、または `Gated` で verdict が FAIL（pipeline.md §4
+/// 「FAIL は終端」）。`Gated` の判定を読めない周は `None`＝**測れなかった**で、呼び手が
+/// 断る側へ倒す（読めない判定を「終端でない」にも「終端」にも読み替えない）。
+fn live(state_dir: &Path, id: &str, stage: Stage) -> Option<bool> {
+    match stage {
+        Stage::Landed | Stage::Failed | Stage::Stopped => Some(false),
+        Stage::Gated => verdict_of(state_dir, id).map(|found| found != Verdict::Fail),
+        Stage::Intake
+        | Stage::Blocked
+        | Stage::Spawned
+        | Stage::Questioned
+        | Stage::Implemented => Some(true),
+    }
+}
+
+/// 契約単位の拒否（**rc は理由の variant が持つ**）。`extra` は理由の後ろに並べる行。
+fn refuse(found: &Refuse, extra: &[String]) -> Outcome {
+    let mut err = vec![format!("pipe: {}", found.reason())];
+    err.extend(extra.iter().cloned());
+    Outcome::failed(found.rc(), err)
 }
 
 /// 対象 repo の HEAD から vessel 宣言を読み、器の上限と突き合わせて有効値にする。
@@ -739,8 +803,82 @@ fn resume(args: &[String], manifest: &Manifest, policy: LockPolicy) -> Outcome {
     }
 }
 
-/// `pipe stop --all`。生きている席を止める。**冪等**（対象なしは rc 0）。
+/// `pipe stop`。`--run <id>` は便 1 本を外し、`--all` は生きている席を全部止める。
+///
+/// **2 つの口の意味は別である**: `--all` は席の掃除（対象なしは rc 0 の冪等）、`--run` は
+/// 放置された便を排他の母集団から外す管理席の操作（設計 pipeline-conflict.md §2）。
 fn stop(args: &[String], manifest: &Manifest, policy: LockPolicy) -> Outcome {
+    match flag(args, "--run") {
+        Err(reason) => refused(reason),
+        Ok(Some(id)) => stop_run(args, manifest, policy, id),
+        Ok(None) => stop_all(args, manifest, policy),
+    }
+}
+
+/// `pipe stop --run <id>`。終端でない便 1 本に `RunStopped` を書く（席が Live なら先に止める）。
+///
+/// **終端の便には event を増やさず rc 1**（書込は冪等・rc は冪等でない）。2 回撃った 2 件目が
+/// この経路に落ちる＝events.jsonl は 1 件しか増えない。判定を読めない `Gated` は rc 2 で断る
+/// （読めない周を「終端でない」に読み替えない・fail-closed）。
+fn stop_run(args: &[String], manifest: &Manifest, policy: LockPolicy, id: &str) -> Outcome {
+    let state_dir = match state_dir_of(args) {
+        Ok(found) => found,
+        Err(reason) => return refused(reason),
+    };
+    let state = match current(&state_dir) {
+        Err(errors) => return Outcome::failed(RC_BROKEN, errors.iter().map(StoreError::to_string).collect()),
+        Ok(found) => found,
+    };
+    let Some(run) = state.runs.get(id) else {
+        return refused(format!("run {id} が無い"));
+    };
+    match live(&state_dir, id, run.stage) {
+        None => return broken(format!("run {id} の判定を読めない（終端かを測れない）")),
+        Some(false) => {
+            return refused(format!("run {id} は既に終端である（段 {}）", run.stage.as_str()))
+        }
+        Some(true) => {}
+    }
+    let grace = match int_row(manifest, ROW_GRACE) {
+        Ok(found) => found,
+        Err(reason) => return broken(reason),
+    };
+    // **pid を持たない Live 席も母集団に数える**（`--all` と同じ理由＝止めていない席を
+    // 黙って落とすと「全部止めた」に化ける）。止められた席にだけ `SeatStopped` を書く。
+    let live_seats: Vec<(String, Option<u64>)> = state
+        .seats
+        .values()
+        .filter(|seat| seat.state == SeatState::Live && seat.run == id)
+        .map(|seat| (seat.id.clone(), seat.pid))
+        .collect();
+    let mut stopped = 0_usize;
+    for (seat, pid) in &live_seats {
+        if !pid.is_some_and(|found| terminate(found, grace)) {
+            continue;
+        }
+        stopped = stopped.saturating_add(1);
+        if let Err(err) = record_seat_stop(&state_dir, &state, (seat, id, *pid), policy) {
+            return broken(err);
+        }
+    }
+    // 便を外すのが本体ゆえ、席を止め切れなかった周も `RunStopped` は書く（rc で名乗る）。
+    if let Err(err) = record_run_stopped(&state_dir, &state, id, policy) {
+        return broken(err);
+    }
+    let line = format!("stop: run={id} seats={} stopped={stopped}", live_seats.len());
+    if stopped == live_seats.len() {
+        Outcome::ok_line(line)
+    } else {
+        Outcome {
+            out: vec![line],
+            err: vec![format!("pipe: 止められない席が {} 残った", live_seats.len().saturating_sub(stopped))],
+            rc: RC_REFUSED,
+        }
+    }
+}
+
+/// `pipe stop --all`。生きている席を止める。**冪等**（対象なしは rc 0）。
+fn stop_all(args: &[String], manifest: &Manifest, policy: LockPolicy) -> Outcome {
     if !args.iter().any(|arg| arg == "--all") {
         return refused("--all が要る".to_owned());
     }
@@ -808,7 +946,7 @@ fn signal(pid: u64, name: &str) {
         .output();
 }
 
-/// 席と便に「止めた」を記帳する。
+/// 席と便に「止めた」を記帳する（`--all` の 1 席分）。
 fn record_stop(
     state_dir: &Path,
     state: &State,
@@ -816,13 +954,24 @@ fn record_stop(
     policy: LockPolicy,
 ) -> Result<(), String> {
     let (id, run, pid) = seat;
-    let bead = state.runs.get(run).map_or("", |found| found.bead.as_str());
+    record_seat_stop(state_dir, state, (id, run, pid), policy)?;
+    record_run_stopped(state_dir, state, run, policy)
+}
+
+/// 席に「止めた」を記帳する。**止められた席にだけ書く**（偽の全クリアを作らない）。
+fn record_seat_stop(
+    state_dir: &Path,
+    state: &State,
+    seat: (&str, &str, Option<u64>),
+    policy: LockPolicy,
+) -> Result<(), String> {
+    let (id, run, pid) = seat;
     emit(
         state_dir,
         &Emit {
             kind: EventKind::SeatStopped,
             run,
-            bead,
+            bead: bead_of(state, run),
             stage: None,
             seat: Some(id.to_owned()),
             pid,
@@ -830,13 +979,22 @@ fn record_stop(
         },
         policy,
     )
-    .map_err(|err| err.to_string())?;
+    .map_err(|err| err.to_string())
+}
+
+/// 便に「止めた」を記帳する（段 = `Stopped`＝終端＝排他の母集団から外れる）。
+fn record_run_stopped(
+    state_dir: &Path,
+    state: &State,
+    run: &str,
+    policy: LockPolicy,
+) -> Result<(), String> {
     emit(
         state_dir,
         &Emit {
             kind: EventKind::RunStopped,
             run,
-            bead,
+            bead: bead_of(state, run),
             stage: Some(Stage::Stopped),
             seat: None,
             pid: None,
@@ -845,6 +1003,11 @@ fn record_stop(
         policy,
     )
     .map_err(|err| err.to_string())
+}
+
+/// 便の bead id（replay に無ければ空）。
+fn bead_of<'a>(state: &'a State, run: &str) -> &'a str {
+    state.runs.get(run).map_or("", |found| found.bead.as_str())
 }
 
 /// 前提違反・使い方の誤り（rc 1 + stderr 1 行・何もしない）。

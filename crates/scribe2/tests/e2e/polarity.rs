@@ -124,7 +124,11 @@ fn polarity_lists_the_three_added_guards() {
     ] {
         assert!(text.lines().any(|line| line == expected), "一覧に載る: {expected}\n{text}");
     }
-    assert_eq!(ALL.len(), 16, "母集団は 16（10 + 3 + 質問の口 1・`s2-07l.115` + land の 2・`s2-07l.124`）");
+    assert_eq!(
+        ALL.len(),
+        17,
+        "母集団は 17（10 + 3 + 質問の口 1・`s2-07l.115` + land の 2・`s2-07l.124` + 入口の排他 1・`s2-07l.145`）"
+    );
 }
 
 /// runner の包みの質問 record（`s2-07l.115`・FR31・ADR-0016 §2.2）は **in-loop / fail-open** で載る。
@@ -143,7 +147,7 @@ fn runner_question_guard_is_in_loop_fail_open() {
     let stop = names.iter().position(|name| *name == "guard=runner-stop");
     let question = names.iter().position(|name| *name == "guard=runner-question");
     assert!(matches!((stop, question), (Some(s), Some(q)) if q == s + 1), "runner-stop の直後: {names:?}");
-    assert!(text.lines().last().is_some_and(|line| line.contains(" in-loop=13 ") && line.contains(" fail-open=3")), "集計 +1（.124 の 2 を含む）: {text}");
+    assert!(text.lines().last().is_some_and(|line| line.contains(" in-loop=14 ") && line.contains(" fail-open=3")), "集計 +1（.124 の 2 と .145 の 1 を含む）: {text}");
 }
 
 /// 3 クラスを名乗らない契約。
@@ -215,12 +219,33 @@ fn polarity_lists_land_anchor_sync_and_retire_clean_as_in_loop_fail_closed() {
     ] {
         assert!(text.lines().any(|line| line == expected), "一覧に載る: {expected}\n{text}");
     }
-    // 集計は行数から独立に数えた値と一致し、.115 の 11 から 2 増えている。
+    // 集計は行数から独立に数えた値と一致し、.115 の 11 から 2（+ `.145` の 1）増えている。
     let in_loop = text.lines().filter(|line| line.contains(" timing=in-loop ")).count();
-    assert_eq!(in_loop, 13, "in-loop の行数: {text}");
+    assert_eq!(in_loop, 14, "in-loop の行数: {text}");
     let summary = text.lines().last().unwrap_or_default();
-    assert_eq!(count_of(summary, "in-loop"), Some(13), "集計 +2: {summary}");
-    assert_eq!(count_of(summary, "guards"), Some(16), "母集団 +2: {summary}");
+    assert_eq!(count_of(summary, "in-loop"), Some(14), "集計 +2（+ .145 の 1）: {summary}");
+    assert_eq!(count_of(summary, "guards"), Some(17), "母集団 +2（+ .145 の 1）: {summary}");
+}
+
+/// 入口の write-set 排他（`s2-07l.145`・ADR-0019 §2.1）は **in-loop / fail-closed** で一覧に載り、
+/// 既存の `intake-unfit` の行は**不変**である（境界が違う 2 つの判定を 1 行に畳まない）。
+/// 値は境界の定数（`pipe::refuse::POLARITY`）で、一覧はそれを返すだけ。
+#[test]
+fn polarity_lists_intake_refuse_as_a_separate_in_loop_fail_closed_guard() {
+    let closed = Polarity { timing: Timing::InLoop, on_failure: OnFailure::FailClosed };
+    assert_eq!(Guard::IntakeRefuse.polarity(), closed, "交差は便を起こす前に止め、読めない周は断る");
+    let text = output();
+    for expected in [
+        "guard=intake-unfit timing=in-loop on-failure=fail-closed boundary=pipe::declaration::Unfit",
+        "guard=intake-refuse timing=in-loop on-failure=fail-closed boundary=pipe::refuse::Refuse",
+    ] {
+        assert!(text.lines().any(|line| line == expected), "一覧に載る: {expected}\n{text}");
+    }
+    // intake の 2 判定は隣り合う（行為の流れ＝入口で 2 度測る）。
+    let names: Vec<&str> = text.lines().filter_map(|line| line.split(' ').next()).collect();
+    let unfit = names.iter().position(|name| *name == "guard=intake-unfit");
+    let refuse = names.iter().position(|name| *name == "guard=intake-refuse");
+    assert!(matches!((unfit, refuse), (Some(u), Some(r)) if r == u + 1), "intake-unfit の直後: {names:?}");
 }
 
 /// 2 境界の boundary は `pipe::land::` 配下の **型**を名指す（最終 segment が大文字で始まる＝fn 名の形でない）。

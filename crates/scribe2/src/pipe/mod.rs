@@ -16,6 +16,7 @@ pub mod contract;
 pub mod declaration;
 pub mod gate;
 pub mod land;
+pub mod refuse;
 pub mod report;
 pub mod spawn;
 

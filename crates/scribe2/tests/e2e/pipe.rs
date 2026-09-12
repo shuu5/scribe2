@@ -236,6 +236,16 @@ fn intake_bead(repo: &Path, state: &Path, contract: &Path, bead: &str) -> String
     run_id_of(&out)
 }
 
+/// 測り終えた便を `stop --run` で外す（rc 0 を要求する）。
+///
+/// 入口の排他（`s2-07l.145`・ADR-0019 §2.1）が在るので、**終端でない便**が置き場に残ったまま
+/// 同じ write-set の 2 本目を intake することはできない。1 つの置き場で 2 便を順に測る歯は、
+/// 前の便をこの口で外してから次を起こす。
+fn stop_run_ok(state: &Path, id: &str) {
+    let out = run_pipe(&["stop", "--run", id, "--state-dir", &state.display().to_string()]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "stop --run: {}", stderr_of(&out));
+}
+
 /// 後片付け。
 fn clean(dirs: &[&Path]) {
     for dir in dirs {
@@ -1736,6 +1746,9 @@ fn pipe_gate_inconclusive_when_diff_exceeds_cap() {
 
     // **境界**: 設計は「diff byte > cap → INCONCLUSIVE」＝等号は超えていない。
     // 同じ内容の別便を cap = ちょうどその byte 数で撃ち、PASS 側に残ることを測る。
+    // INCONCLUSIVE は終端でない＝同じ write-set の便と交差する（`s2-07l.145`）ので、
+    // 測り終えた 1 本目を `stop --run` で外してから双子を起こす。
+    stop_run_ok(&state, &id);
     let twin = intake_bead(&repo, &state, &path, "s2-edge");
     let out = run_pipe(&[
         "spawn", "--run", &twin, "--repo", &repo.display().to_string(),
@@ -2069,21 +2082,28 @@ fn pipe_land_rebase_follows_landed_sibling_and_lands() {
     clean(&[&repo, &state]);
 }
 
-/// 同じ base から **同一変更** の 2 便を PASS の gate まで通す（runner は既定と同じ `echo x >> src/lib.rs`）。
-fn two_identical_gated_runs(repo: &Path, state: &Path, marker: &Path) -> (String, String) {
+/// 便 1 本を PASS の gate まで通し、**同じ変更を先に main へ載せる**（1 本目が land した後と
+/// 同じ状態）。返すのは便の id と、そのときの main の sha。
+///
+/// `.145` までは 2 便を同時に live にして 1 本目を land する形だった。入口の排他
+/// （`s2-07l.145`・ADR-0019 §2.1）が在る今、同じ write-set の 2 便は**同時に live にできない**
+/// ——main が動いた事実だけを器の外で作り、rebase で patch が空になる便を 1 本で測る
+/// （land / retire が測る対象は 1 つも変えていない）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn gated_run_whose_change_is_already_on_main(repo: &Path, state: &Path, marker: &Path) -> (String, String) {
     let contract = write_contract(repo, &[], &[]);
-    let id_a = gated_pass(repo, state, &contract, marker);
-    let id_b = intake_bead(repo, state, &contract, "s2-3ax");
-    let spawned = run_pipe(&[
-        "spawn", "--run", &id_b, "--repo", &repo.display().to_string(),
-        "--state-dir", &state.display().to_string(),
-        "--runner", "echo x >> src/lib.rs && git add -A && git commit -q -m runner",
-    ]);
-    assert_eq!(spawned.status.code(), Some(i32::from(RC_OK)), "2 本目の spawn: {}", stderr_of(&spawned));
-    let lens = fake_lens(marker, &lens_verdict("PASS"));
-    let gated = gate_once(repo, state, &id_b, Some(&lens));
-    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "2 本目の gate: {}", stderr_of(&gated));
-    (id_a, id_b)
+    let id = gated_pass(repo, state, &contract, marker);
+    // 便の runner（`echo x >> src/lib.rs`）と**同じ 1 行**を main へ載せる。
+    let lib = repo.join("src").join("lib.rs");
+    let text = fs::read_to_string(&lib).expect("seed を読める");
+    fs::write(&lib, format!("{text}x\n")).expect("main 側に同じ変更を書ける");
+    git(repo, &["add", "-A"]);
+    git(repo, &["commit", "-q", "-m", "same-change-from-elsewhere"]);
+    let landed = git(repo, &["rev-parse", "refs/heads/main"]);
+    (id, landed)
 }
 
 /// 同一変更の 2 便: 1 本目が land した後の 2 本目は rebase で commit が 0 本になり、
@@ -2092,10 +2112,7 @@ fn two_identical_gated_runs(repo: &Path, state: &Path, marker: &Path) -> (String
 fn pipe_land_rebase_empty_fails_closed_without_regate() {
     let (repo, state) = repo_with_state();
     let marker = state.join("lens-ran");
-    let (id_a, id_b) = two_identical_gated_runs(&repo, &state, &marker);
-    let first = land_once(&repo, &state, &id_a);
-    assert_eq!(first.status.code(), Some(i32::from(RC_OK)), "1 本目の land: {}", stderr_of(&first));
-    let landed = git(&repo, &["rev-parse", "refs/heads/main"]);
+    let (id_b, landed) = gated_run_whose_change_is_already_on_main(&repo, &state, &marker);
     fs::remove_file(&marker).expect("lens の marker を消せる");
     let before = event_count(&state);
     let lens = fake_lens(&marker, &lens_verdict("PASS"));
@@ -2559,6 +2576,9 @@ fn pipe_gate_inconclusive_when_lens_count_is_not_one() {
         // **land まで行かせない**（面 5 に PASS を残さない）。
         let landed = land_once(&repo, &state, &id);
         assert_eq!(landed.status.code(), Some(i32::from(RC_REFUSED)), "PASS でなければ land しない");
+        // INCONCLUSIVE は終端でない＝次の便と write-set が交差する（`s2-07l.145`）。測り終えた
+        // 便を `stop --run` で外してから次の周を回す（測る内容は 1 つも変えていない）。
+        stop_run_ok(&state, &id);
     }
     assert!(!marker.exists(), "0 本の周は lens を起動しない");
     clean(&[&repo, &state]);
@@ -3841,10 +3861,7 @@ fn pipe_retire_refuses_unless_landed_and_clean() {
 fn pipe_retire_rebase_empty_folds_failed_run_and_keeps_stage() {
     let (repo, state) = repo_with_state();
     let marker = state.join("lens-ran");
-    let (id_a, id_b) = two_identical_gated_runs(&repo, &state, &marker);
-    let first = land_once(&repo, &state, &id_a);
-    assert_eq!(first.status.code(), Some(i32::from(RC_OK)), "1 本目の land: {}", stderr_of(&first));
-    let landed = git(&repo, &["rev-parse", "refs/heads/main"]);
+    let (id_b, landed) = gated_run_whose_change_is_already_on_main(&repo, &state, &marker);
     let lens = fake_lens(&marker, &lens_verdict("PASS"));
     let empty = run_pipe(&[
         "land", "--run", &id_b, "--repo", &repo.display().to_string(),
@@ -4370,7 +4387,9 @@ fn pipe_question_runner_stdout_is_kept_in_run_dir() {
     let kept = fs::read_to_string(state.join("pipe").join(&id).join("runner.stdout.log")).unwrap_or_default();
     assert!(kept.contains("observed=allowed_warning"), "観測行が残る: {kept}");
     assert!(kept.lines().next().is_some_and(|head| head.starts_with("## ") && head.ends_with(" rc=0")), "見出し行: {kept}");
-    // stdout を出さない runner では file を作らない。
+    // stdout を出さない runner では file を作らない。**測り終えた便は `stop --run` で外す**
+    // ——`Implemented` は終端でないので、同じ write-set の 2 本目は交差で断られる（`s2-07l.145`）。
+    stop_run_ok(&state, &id);
     let id2 = intake_bead(&repo, &state, &path, "s2-quiet");
     let quiet = run_pipe(&[
         "spawn", "--run", &id2, "--repo", &repo.display().to_string(),
@@ -4398,6 +4417,8 @@ fn pipe_question_rc0_does_not_read_record_line() {
     assert!(stdout_of(&out).contains("stage=Implemented"), "{}", stdout_of(&out));
     assert!(!trail(&state, &id).iter().any(|(kind, _, _)| *kind == EventKind::QuestionRaised));
     // record と commit が同時の周は質問ではなく実装の失敗（rc 76 でも Failed）。
+    // 測り終えた 1 本目は `stop --run` で外す（入口の排他・`s2-07l.145`）。
+    stop_run_ok(&state, &id);
     let path2 = write_contract(&repo, &[], &[]);
     let id2 = intake_bead(&repo, &state, &path2, "s2-both");
     let both = format!("echo y >> src/lib.rs && git add -A && git commit -q -m r; printf '%s\\n' '{QUESTION_RECORD}'; exit 76");
@@ -4739,5 +4760,300 @@ fn pipe_land_anchor_before_verify_records_clean_anchor_during_main_check() {
         Vec::<&str>::new(),
         "実測の最中の anchor は揃っている（同期が先）: {text:?}"
     );
+    clean(&[&repo, &state]);
+}
+
+// ────────── 入口の write-set 排他と `stop --run`（設計 pipeline-conflict.md §2・ADR-0019 §2.1） ──────────
+
+/// event log の **byte 列**（行数では追記の中身の差が消えるので byte で比べる）。
+fn events_bytes(state: &Path) -> Vec<u8> {
+    fs::read(state.join("fleet").join("events.jsonl")).unwrap_or_default()
+}
+
+/// 置き場に在る run dir の名（「run を作らない」を数で測る）。
+fn run_dirs(state: &Path) -> Vec<String> {
+    let Ok(entries) = fs::read_dir(state.join("pipe")) else {
+        return Vec::new();
+    };
+    let mut found: Vec<String> = entries
+        .filter_map(|entry| entry.ok().map(|found| found.file_name().to_string_lossy().into_owned()))
+        .collect();
+    found.sort();
+    found
+}
+
+/// write-set だけを差し替えた契約 file を名前つきで書く（1 便 1 file＝写しの取り違えを作らない）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn write_set_contract(dir: &Path, name: &str, entries: &[&str]) -> PathBuf {
+    let quoted: Vec<String> = entries.iter().map(|item| format!("\"{item}\"")).collect();
+    let mut lines: Vec<String> = contract_body()
+        .into_iter()
+        .filter(|line| !line.starts_with("write-set"))
+        .collect();
+    lines.push(format!("write-set = [{}]", quoted.join(", ")));
+    let path = dir.join(name);
+    fs::write(&path, format!("{}\n", lines.join("\n"))).expect("契約 file を書ける");
+    path
+}
+
+/// intake を 1 回撃つ（**rc を測らない**＝断られる周の歯が使う）。
+fn try_intake(repo: &Path, state: &Path, contract: &Path, bead: &str) -> Output {
+    run_pipe(&[
+        "intake", "--contract", &contract.display().to_string(), "--bead", bead,
+        "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
+        "--rules", &ceiling_rules(state),
+    ])
+}
+
+/// fixture の event で run の段を動かす。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn record_stage(state: &Path, id: &str, stage: &str) {
+    let out = Command::new(bin())
+        .args(["fleet", "record", "--kind", "RunStage", "--stage", stage, "--run", id,
+               "--bead", "s2-live", "--state-dir"])
+        .arg(state)
+        .output()
+        .expect("binary を起動できる");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "fleet record: {}", stderr_of(&out));
+}
+
+/// fixture の `verdict.json`（gate の判定を手で置く）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn write_verdict(state: &Path, id: &str, verdict: &str) {
+    let path = state.join("pipe").join(id).join("verdict.json");
+    fs::write(&path, format!("{{\"schema\":1,\"run\":\"{id}\",\"verdict\":\"{verdict}\"}}\n"))
+        .expect("verdict.json を書ける");
+}
+
+/// live な便（intake だけ通した段 `Intake`）と **write-set が交差する 2 本目**は受け付けない
+/// （ADR-0019 §2.1）。断った周は run dir も event も作らず、stderr が 1 本目の run id と
+/// 交差した path を名乗る。**base はこの 2 本目を受理する**（run dir が 2 つできる）。
+#[test]
+fn pipe_refuse_intake_refuses_a_contract_that_overlaps_a_live_run() {
+    let (repo, state) = repo_with_state();
+    let first = write_set_contract(&repo, "first.toml", &["src/lib.rs"]);
+    let id = intake_bead(&repo, &state, &first, "s2-live");
+    let before = events_bytes(&state);
+    let dirs = run_dirs(&state);
+    let second = write_set_contract(&repo, "second.toml", &["src/lib.rs"]);
+    let out = try_intake(&repo, &state, &second, "s2-next");
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "交差は rc 1: {}", stdout_of(&out));
+    let err = stderr_of(&out);
+    assert!(err.contains(&id), "1 本目の run id を名乗る: {err}");
+    assert!(err.contains("src/lib.rs"), "交差した path を名乗る: {err}");
+    assert!(out.stdout.is_empty(), "断った周は stdout に 1 byte も書かない");
+    assert_eq!(run_dirs(&state), dirs, "run dir を作らない（母集団 {} 本）", dirs.len());
+    assert_eq!(events_bytes(&state), before, "events.jsonl は byte 不変");
+    clean(&[&repo, &state]);
+}
+
+/// dir と file の交差の表（設計 §2）を **intake の受理 / 拒否**で測る。正規化は write-set
+/// guard と同じ規則（先頭の `./`・連続する `/`・`..` の畳み）で、dir `a/` は `a/…` を含み
+/// `ab/` は含まない。
+#[test]
+fn pipe_refuse_intake_measures_dir_and_file_overlap() {
+    for (live_entry, next_entry, refused) in [
+        ("a/", "a/b.rs", true),
+        ("a/", "ab/", false),
+        ("a", "a/", true),
+        ("./a/b.rs", "a/b.rs", true),
+        ("a//b.rs", "a/b.rs", true),
+        ("src/../src/x.rs", "src/x.rs", true),
+    ] {
+        let (repo, state) = repo_with_state();
+        let first = write_set_contract(&repo, "first.toml", &[live_entry]);
+        intake_bead(&repo, &state, &first, "s2-live");
+        let second = write_set_contract(&repo, "second.toml", &[next_entry]);
+        let out = try_intake(&repo, &state, &second, "s2-next");
+        let want = if refused { RC_REFUSED } else { RC_OK };
+        assert_eq!(
+            out.status.code(),
+            Some(i32::from(want)),
+            "{live_entry} × {next_entry} は交差={refused}: {}",
+            stderr_of(&out)
+        );
+        clean(&[&repo, &state]);
+    }
+}
+
+/// **終端した便とは交差しない**（段が `Landed` / `Failed` / `Stopped`・`Gated` で verdict が
+/// FAIL）。`Gated` の PASS / INCONCLUSIVE は終端でないので交差する（pipeline.md §4「FAIL は終端」）。
+/// 契約を改訂して流し直す経路（本番 `.129` / `.131` の型）を塞がないことを測る。
+#[test]
+fn pipe_refuse_intake_ignores_terminal_runs() {
+    for (stage, verdict, refused) in [
+        ("Landed", None, false),
+        ("Failed", None, false),
+        ("Stopped", None, false),
+        ("Gated", Some("FAIL"), false),
+        ("Gated", Some("PASS"), true),
+        ("Gated", Some("INCONCLUSIVE"), true),
+    ] {
+        let (repo, state) = repo_with_state();
+        let first = write_set_contract(&repo, "first.toml", &["src/lib.rs"]);
+        let id = intake_bead(&repo, &state, &first, "s2-live");
+        if let Some(found) = verdict {
+            write_verdict(&state, &id, found);
+        }
+        record_stage(&state, &id, stage);
+        let second = write_set_contract(&repo, "second.toml", &["src/lib.rs"]);
+        let out = try_intake(&repo, &state, &second, "s2-next");
+        let want = if refused { RC_REFUSED } else { RC_OK };
+        assert_eq!(
+            out.status.code(),
+            Some(i32::from(want)),
+            "段 {stage} verdict {verdict:?} は交差={refused}: {}",
+            stderr_of(&out)
+        );
+        clean(&[&repo, &state]);
+    }
+}
+
+/// live な便の契約の写しを読めない周は **rc 2**（壊れた store・NFR4）で、run dir も event も
+/// 作らない。`Gated` の判定を読めない周も同じ「読めない」側である（fail-closed＝読めなさを
+/// 「交差なし」に読み替えない）。
+#[test]
+fn pipe_refuse_intake_is_broken_when_a_live_copy_is_unreadable() {
+    for damage in ["remove", "garble", "verdict"] {
+        let (repo, state) = repo_with_state();
+        let first = write_set_contract(&repo, "first.toml", &["src/lib.rs"]);
+        let id = intake_bead(&repo, &state, &first, "s2-live");
+        let copied = state.join("pipe").join(&id).join("contract.toml");
+        match damage {
+            "remove" => {
+                fs::remove_file(&copied).ok();
+            }
+            "garble" => {
+                fs::write(&copied, "こわれ\n").ok();
+            }
+            // 段は Gated だが verdict.json が無い＝終端かを測れない。
+            _ => record_stage(&state, &id, "Gated"),
+        }
+        let before = events_bytes(&state);
+        let dirs = run_dirs(&state);
+        let second = write_set_contract(&repo, "second.toml", &["src/lib.rs"]);
+        let out = try_intake(&repo, &state, &second, "s2-next");
+        assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "{damage}: 読めない周は rc 2");
+        let err = stderr_of(&out);
+        assert!(err.contains(&id), "{damage}: 読めない run を名指す: {err}");
+        assert!(err.contains("読めない"), "{damage}: 理由は読めないこと: {err}");
+        assert_eq!(run_dirs(&state), dirs, "{damage}: run dir を作らない");
+        assert_eq!(events_bytes(&state), before, "{damage}: events.jsonl は byte 不変");
+        clean(&[&repo, &state]);
+    }
+}
+
+/// **同じ bead の 2 本目も特別扱いしない**: write-set が同じなら交差で断られる（owner が同じ
+/// ことに意味を持たせない＝自然に掛かる）。
+#[test]
+fn pipe_refuse_intake_refuses_the_second_run_of_the_same_bead() {
+    let (repo, state) = repo_with_state();
+    let path = write_set_contract(&repo, "first.toml", &["src/lib.rs"]);
+    let id = intake_bead(&repo, &state, &path, "s2-same");
+    let out = try_intake(&repo, &state, &path, "s2-same");
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "同 bead の 2 本目も断る");
+    let err = stderr_of(&out);
+    assert!(err.contains("交差"), "断る理由は id の衝突でなく交差: {err}");
+    assert!(err.contains(&id), "交差した相手を名乗る: {err}");
+    clean(&[&repo, &state]);
+}
+
+/// 交差が 2 組以上の周は **stderr に全組が 1 組 1 行**で並び、理由の 1 行は先頭の 1 組を名乗る。
+#[test]
+fn pipe_refuse_intake_lists_every_overlapping_pair() {
+    let (repo, state) = repo_with_state();
+    let first = write_set_contract(&repo, "first.toml", &["src/a.rs", "src/b.rs"]);
+    let id = intake_bead(&repo, &state, &first, "s2-live");
+    let second = write_set_contract(&repo, "second.toml", &["src/a.rs", "src/b.rs"]);
+    let out = try_intake(&repo, &state, &second, "s2-next");
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "交差は rc 1");
+    let err = stderr_of(&out);
+    let pairs: Vec<&str> = err.lines().filter(|line| line.contains("overlap ")).collect();
+    assert_eq!(pairs.len(), 2, "交差した全組が並ぶ（母集団 {} 行）: {err}", err.lines().count());
+    for entry in ["src/a.rs", "src/b.rs"] {
+        assert!(
+            pairs.iter().any(|line| line.contains(entry) && line.contains(&id)),
+            "{entry} の組が run id つきで並ぶ: {err}"
+        );
+    }
+    let head = err.lines().next().unwrap_or_default();
+    assert!(head.contains("src/a.rs"), "理由の 1 行は先頭の 1 組: {head}");
+    assert!(!head.contains("src/b.rs"), "理由の 1 行は 1 組だけ: {head}");
+    clean(&[&repo, &state]);
+}
+
+/// `pipe stop --run <id>`: 終端でない便 1 本に `RunStopped` を **1 件だけ**書き、その後は同じ
+/// write-set の契約が通る。終端した便には何も書かず rc 1（書込は冪等・rc は冪等でない）。
+#[test]
+fn pipe_refuse_stop_run_releases_the_write_set_of_a_live_run() {
+    let (repo, state) = repo_with_state();
+    let first = write_set_contract(&repo, "first.toml", &["src/lib.rs"]);
+    let id = intake_bead(&repo, &state, &first, "s2-live");
+    let second = write_set_contract(&repo, "second.toml", &["src/lib.rs"]);
+    let blocked = try_intake(&repo, &state, &second, "s2-next");
+    assert_eq!(blocked.status.code(), Some(i32::from(RC_REFUSED)), "止める前は交差で断られる");
+    let before = event_count(&state);
+    let out = run_pipe(&["stop", "--run", &id, "--state-dir", &state.display().to_string()]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "非終端の便は止まる: {}", stderr_of(&out));
+    assert_eq!(event_count(&state), before + 1, "RunStopped を 1 件だけ書く");
+    let last = events(&state).into_iter().rfind(|found| found.run == id);
+    assert!(
+        matches!(&last, Some(found) if found.kind == EventKind::RunStopped && found.stage == Some(Stage::Stopped)),
+        "書くのは RunStopped stage=Stopped: {last:?}"
+    );
+    // 2 回撃っても 2 件目を書かない（終端した便は rc 1）。
+    let again = run_pipe(&["stop", "--run", &id, "--state-dir", &state.display().to_string()]);
+    assert_eq!(again.status.code(), Some(i32::from(RC_REFUSED)), "終端の便は rc 1");
+    assert_eq!(event_count(&state), before + 1, "2 件目を書かない");
+    // 外れた便とは交差しない＝同じ write-set の契約が通る。
+    let passed = try_intake(&repo, &state, &second, "s2-third");
+    assert_eq!(passed.status.code(), Some(i32::from(RC_OK)), "止めた後は通る: {}", stderr_of(&passed));
+    // 無い便は rc 1 で何も書かない。
+    let missing = run_pipe(&["stop", "--run", "no-such-run", "--state-dir", &state.display().to_string()]);
+    assert_eq!(missing.status.code(), Some(i32::from(RC_REFUSED)), "無い便は rc 1");
+    clean(&[&repo, &state]);
+}
+
+/// `stop --run` は便の **Live 席も止める**（`--all` と同じ関数を通る）。席を持つ便を外す口が
+/// 席を残すと、止めたはずの便の runner が走り続ける。
+#[test]
+fn pipe_refuse_stop_run_stops_the_live_seat_of_the_run() {
+    let (repo, state) = repo_with_state();
+    let path = write_set_contract(&repo, "first.toml", &["src/lib.rs"]);
+    let id = intake_bead(&repo, &state, &path, "s2-live");
+    // **孫**として起こす（test process の子のままだと zombie が /proc に残る）。
+    let spawned = Command::new("sh")
+        .arg("-c")
+        .arg("sleep 60 >/dev/null 2>&1 & echo $!")
+        .output()
+        .expect("fake runner を起こせる");
+    let pid: u32 = String::from_utf8_lossy(&spawned.stdout).trim().parse().expect("pid を読める");
+    let record = Command::new(bin())
+        .args(["fleet", "record", "--kind", "SeatSpawned", "--run", &id, "--bead", "s2-live",
+               "--seat", "seat-1", "--pid", &pid.to_string(), "--state-dir"])
+        .arg(&state)
+        .output()
+        .expect("binary を起動できる");
+    assert_eq!(record.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&record));
+    let out = run_pipe(&["stop", "--run", &id, "--state-dir", &state.display().to_string()]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "席ごと止まる: {}", stderr_of(&out));
+    assert!(stdout_of(&out).contains("seats=1 stopped=1"), "席を数える: {}", stdout_of(&out));
+    assert!(!Path::new(&format!("/proc/{pid}")).exists(), "runner の process は消えている");
+    let kinds: Vec<EventKind> = events(&state)
+        .into_iter()
+        .filter(|found| found.run == id)
+        .map(|found| found.kind)
+        .collect();
+    assert!(kinds.contains(&EventKind::SeatStopped), "席にも記帳する: {kinds:?}");
+    assert!(kinds.contains(&EventKind::RunStopped), "便にも記帳する: {kinds:?}");
     clean(&[&repo, &state]);
 }

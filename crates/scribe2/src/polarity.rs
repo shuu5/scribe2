@@ -75,6 +75,8 @@ pub enum Guard {
     Cap,
     /// intake の断り＝vessel 宣言の verify 行の不適合（[`crate::pipe::declaration`]）。
     Intake,
+    /// intake の排他＝live な便と write-set が交差する契約を受け付けない（[`crate::pipe::refuse`]）。
+    IntakeRefuse,
     /// spawn の予算＝実測を経ずに起動できない口（[`crate::pipe::Budget`]）。
     Budget,
     /// A1 の承認関門＝3 クラスを名乗る契約を承認 event 無しに起動しない（[`crate::pipe::approve`]）。
@@ -107,6 +109,7 @@ pub const ALL: &[Guard] = &[
     Guard::Permission,
     Guard::Cap,
     Guard::Intake,
+    Guard::IntakeRefuse,
     Guard::Budget,
     Guard::Approval,
     Guard::RunnerStop,
@@ -129,6 +132,7 @@ impl Guard {
             Self::Permission => crate::hook::permission::POLARITY,
             Self::Cap => crate::hook::seat_guard::POLARITY,
             Self::Intake => crate::pipe::declaration::POLARITY,
+            Self::IntakeRefuse => crate::pipe::refuse::POLARITY,
             Self::Budget => crate::pipe::BUDGET_POLARITY,
             Self::Approval => crate::pipe::approve::POLARITY,
             Self::RunnerStop => crate::headless::runner::POLARITY,
@@ -151,6 +155,7 @@ impl Guard {
             Self::Permission => "hook::permission::PermissionDecision",
             Self::Cap => "hook::seat_guard::SeatDecision",
             Self::Intake => "pipe::declaration::Unfit",
+            Self::IntakeRefuse => "pipe::refuse::Refuse",
             Self::Budget => "pipe::Budget",
             Self::Approval => "pipe::approve::Approval",
             Self::RunnerStop => "headless::runner::Decision",
@@ -173,6 +178,7 @@ impl Guard {
             Self::Permission => "permission-deny",
             Self::Cap => "cap-guard",
             Self::Intake => "intake-unfit",
+            Self::IntakeRefuse => "intake-refuse",
             Self::Budget => "spawn-budget",
             Self::Approval => "approval-gate",
             Self::RunnerStop => "runner-stop",
