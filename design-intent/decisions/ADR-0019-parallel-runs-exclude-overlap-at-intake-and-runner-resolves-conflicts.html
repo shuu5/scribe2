@@ -85,7 +85,7 @@
 <!-- /folio:chrome-toc -->
 
 <aside class="informative">
-<p>本 ADR は IETF <strong>RFC 2119</strong> および <strong>RFC 8174 / BCP 14</strong> に定義される MUST / SHALL / SHOULD / MAY のキーワード解釈規約に従う。 ADR は決定時点の記録であり、 改訂は新しい ADR による supersede で行う。 本 ADR の <strong>§2 は user 裁定 (2026-09-12) を受けた決定</strong>で、 <strong>§3 は SRS への pointer と改訂案 1 件 (FR10)</strong> である。 本 ADR は要件の文面を持たない。 <a href="./ADR-0016-default-delivery-structure-and-typed-question-record.html#s2-5-scope">ADR-0016 §2.5</a> が「本 ADR の決定ではない」と明記して残した論点 (交差の検査) を決め、 追随 (台帳 s2-07l.119) と retire (同 .128 / .132) の延長を決め、 <strong>ADR-0016 §2.2 の 2 文を §2.6 で部分 supersede する</strong>。 <strong>発効</strong>: §3 の SRS 改訂 (FR10 の改訂と FR34 追随) は 2026-09-12 に SRS v0.6 として反映され、 本 ADR は accepted である (§2.1〜§2.6 の実装 bead は起票できる)。</p>
+<p>本 ADR は IETF <strong>RFC 2119</strong> および <strong>RFC 8174 / BCP 14</strong> に定義される MUST / SHALL / SHOULD / MAY のキーワード解釈規約に従う。 ADR は決定時点の記録であり、 改訂は新しい ADR による supersede で行う。 本 ADR の <strong>§2 は user 裁定 (2026-09-12) を受けた決定</strong>で、 <strong>§3 は SRS v0.6 への pointer</strong> である。 本 ADR は要件の文面を持たない。 <a href="./ADR-0016-default-delivery-structure-and-typed-question-record.html#s2-5-scope">ADR-0016 §2.5</a> が「本 ADR の決定ではない」と明記して残した論点 (交差の検査) を決め、 追随 (台帳 s2-07l.119) と retire (同 .128 / .132) の延長を決め、 <strong>ADR-0016 §2.2 の 2 文を §2.6 で部分 supersede する</strong>。 <strong>発効</strong>: §3 の SRS 改訂 (FR10 の改訂と FR34 追随) は 2026-09-12 に SRS v0.6 として反映され、 本 ADR は accepted である (§2.1〜§2.6 の実装 bead は起票できる)。</p>
 </aside>
 
 <aside class="machine-readable" aria-hidden="true">
@@ -98,7 +98,7 @@
     <dt>decided-by</dt><dd>user (2026-09-12) — planner の提示「入口で排他 + 起きたら runner が解く (人は質問経由のみ)」に対する裁定 (要旨: それでよい・ただし歯は必須で両方が本当に働くことを検証する)。 逐語は台帳の notes が原本で本 file には写さない (CON2)</dd>
     <dt>stakeholders</dt><dd>Developer, AI Agent, External Reviewer</dd>
     <dt>supersedes</dt><dd>ADR-0016 §2.2 の <strong>2 文の読み替え</strong> (§2.6): 「質問で止まる周 SHALL NOT commit を作らない」を「その turn で commit を増やさない」と読み、 「resume SHALL <code>Questioned</code> から <code>QuestionAnswered</code> が在る周だけ同じ run を再 spawn する」の再 spawn の契機に「§2.2 の衝突からの起こし直し」を足す。 他の文は変えない</dd>
-    <dt>related</dt><dd>ADR-0009 §2.1 / §2.2 / §2.4 (write-set guard は Bash では守れない・intake の拒否・gate の照合) / ADR-0014 §2.1 (guard の定義と極性) / ADR-0016 §2.1〜§2.3 / §2.5 (配送構造・質問 record・回答の権限) / ADR-0018 §4 (manifest に無い rules 行は予定行) / constitution C2 / C3.3 / C5 / C6 / C11.2 / C14.2 / C16 / N1 / N1.2 / SRS FR4 / FR10 / FR11 / FR14 / FR30 / FR31 / NFR4</dd>
+    <dt>related</dt><dd>ADR-0009 §2.1 / §2.2 / §2.4 (write-set guard は Bash では守れない・intake の拒否・gate の照合) / ADR-0014 §2.1 (guard の定義と極性) / ADR-0016 §2.1〜§2.3 / §2.5 (配送構造・質問 record・回答の権限) / ADR-0018 §4 (manifest に無い rules 行は予定行) / constitution C2 / C3.3 / C5 / C6 / C11.2 / C14.2 / C16 / N1 / N1.2 / SRS FR4 / FR10 / FR11 / FR14 / FR30 / FR31 / FR34 / NFR4</dd>
   </dl>
 </aside>
 
@@ -139,9 +139,9 @@
 
 <section id="s3-srs" class="informative">
 <h2>§3. SRS との関係 (正本は SRS)</h2>
-<p class="section-essence" data-audience="human">この記録は要件書の文面を直接は変えませんが、 1 行の改訂を求めます。 いまの要件書は「main の先端が出発点とずれていたら着地は何もしない」と言い、 追随 (main に追いつく rebase) を知りません。 この記録の起こし直しはその追随の途中で記録を書き、 実装役を起こすので、 要件書の当該行を「追随の後にまだずれていたら」の形に改める必要があります。 改訂は 2026-09-12 に要件書 v0.6 へ入りました (要件書の当該行が正本です)。</p>
+<p class="section-essence" data-audience="human">この記録が求めた要件は、 2026-09-12 に要件書 (SRS v0.6) へ入りました。 着地の前提の行 (FR10) が追いつけない便だけを止める形に改まり、 追随そのもの (FR34) が新しい行として加わっています。 要件の文面はここには置かず、 要件書の当該行を指すだけにします。</p>
 <div data-audience="machine">
-<p>本 ADR が仕える要件は SRS v0.6 が正本である: <a href="../spec/srs.html#FR4">FR4</a> (契約 1 本に worktree 1 つと runner 1 つ)・<a href="../spec/srs.html#FR11">FR11</a> (審査合格と CAS の上での squash・§2.2 の起こし直しの後もこの内側)・<a href="../spec/srs.html#FR14">FR14</a> (別 process からの resume・§2.2 の起こし直しは resume と同じ口)・<a href="../spec/srs.html#FR30">FR30</a> (配送構造・§2.3)・<a href="../spec/srs.html#FR31">FR31</a> (質問の停止・§2.2 / §2.3)・<a href="../spec/srs.html#NFR4">NFR4</a> (読めない store は rc 2・§2.1)。 <a href="../spec/srs.html#FR10">FR10</a> の逐語「main の tip が記録した base と違うとき land は何もしない (main も event も変えない)」は、 既に在る追随 (<code>rebase:</code> の記帳・台帳 <code>s2-07l.119</code>) と本 ADR §2.2 (<code>rebase-conflict:</code> の記帳と起こし直し) の両方と緊張する。 この緊張は SRS v0.6 (2026-09-12・user の folio-architect 手番) で解けた: <a href="../spec/srs.html#FR10">FR10</a> は追随の条件に当たらない周だけを止める形に改まり、 追随そのものは新しい <a href="../spec/srs.html#FR34">FR34</a> (rebase して gate をやり直し、 進んだ base と衝突を記帳し、 衝突した周も終端にしない) が正本である。 要件の文面はここには写さない。 起こし直しの形 (§2.2) と回数 (§2.4) は FR34 / FR10 の実装形であり SRS は持たない。 intake の拒否の理由 (variant の名)・「追随」節の字面・rules 行の値は §2 と現物が持ち SRS は持たない。</p>
+<p>本 ADR が仕える要件は SRS v0.6 が正本である: <a href="../spec/srs.html#FR4">FR4</a> (契約 1 本に worktree 1 つと runner 1 つ)・<a href="../spec/srs.html#FR11">FR11</a> (審査合格と CAS の上での squash・§2.2 の起こし直しの後もこの内側)・<a href="../spec/srs.html#FR14">FR14</a> (別 process からの resume・§2.2 の起こし直しは resume と同じ口)・<a href="../spec/srs.html#FR30">FR30</a> (配送構造・§2.3)・<a href="../spec/srs.html#FR31">FR31</a> (質問の停止・§2.2 / §2.3)・<a href="../spec/srs.html#NFR4">NFR4</a> (読めない store は rc 2・§2.1)。 <a href="../spec/srs.html#FR10">FR10</a> (land の前提・追随できない周と verdict 非 PASS の周は何もしない) と <a href="../spec/srs.html#FR34">FR34</a> (追随・rebase して gate をやり直し、 進んだ base と衝突を記帳し、 衝突は rules 行の上限までは終端にしない・上限で Failed) は SRS v0.6 (2026-09-12) が正本で、 本 ADR の §2.2 / §2.4 はその実装形である。 要件の文面はここには写さない。 intake の拒否の理由 (variant の名)・「追随」節の字面・rules 行の値は §2 と現物が持ち SRS は持たない。</p>
 </div>
 </section>
 

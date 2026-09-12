@@ -76,7 +76,7 @@ upper_needs:
   - { id: N-5, need: 前の版（v1）を使わず、 design-intent を拘束条件として自分で自分を作る,           origin: ADR-0003（v1 完全放棄）,   short: 自己開発 }
 
 acceptance:
-  - { id: AC1, criterion: toy repo で内容の異なる 5 契約（正常 / 改変 / test 追加 / gate FAIL / 承認 Blocked）が実 runner + 実 lens で通り（うち 1 契約は先着の便の land で main が進んだ後に追随して Landed）、 人由来の event が approval 以外に 0 件, metric_v: 5/5, metric_l: 便が人手 0 で通る, links: [FR4, FR5, FR6, FR11, FR12, FR22, FR34] }
+  - { id: AC1, criterion: toy repo で内容の異なる 5 契約（正常 / 改変 / test 追加 / gate FAIL / 承認 Blocked）が実 runner + 実 lens で通り（うち 1 契約は先着の便の land で main が進んだ後に追随して Landed・1 契約は追随で衝突を記帳し終端せずに解いて Landed）、 人由来の event が approval 以外に 0 件, metric_v: 5/5, metric_l: 便が人手 0 で通る, links: [FR4, FR5, FR6, FR11, FR12, FR22, FR34] }
   - { id: AC2, criterion: scribe2 自身で実 bead 1 本（契約は SRS の要件 id と設計 doc の pointer を持つ）を pipeline が PR 作成まで通し、 CI が緑（merge は人が押す）,                 metric_v: 1 便,  metric_l: 自己ホスト,       links: [FR2, FR5, FR22, NFR2] }
   - { id: AC3, criterion: verify RED・lens 不在・予算超過の便は必ず FAIL か INCONCLUSIVE で止まり、 land されない,               metric_v: 0 件,  metric_l: 偽の PASS,        links: [FR7, FR8, FR9, FR10, NFR1] }
   - { id: AC4, criterion: process を殺して別 process で resume しても、 event log の中断点から Landed まで通る,                   metric_v: 1 回,  metric_l: 再開で完走,        links: [FR3, FR13, FR14] }
@@ -197,8 +197,8 @@ requirements:
     trace: { backward: [N-1], acceptance: [AC3] }
     ears:
       pattern: unwanted
-      condition: verdict が PASS でない、 または main の tip が記録した base と一致せず追随（FR34）の条件にも当たらないとき
-      response: land は main を変えない
+      condition: verdict が PASS でない、 または main の tip が記録した base と一致せず追随できない（base が main の祖先でない、 または worktree が clean でない）とき
+      response: land は何もしない（main も event も変えない）
   - id: FR11
     type: FR
     label: land
@@ -464,8 +464,8 @@ requirements:
     trace: { backward: [N-1], acceptance: [AC1] }
     ears:
       pattern: event
-      condition: land が要求され、 verdict が PASS で、 main の tip が記録した base より進み、 base が main の祖先であるとき
-      response: worktree の branch を main へ rebase して gate をやり直し、 進んだ base と衝突の事実を event に記帳する（衝突した周も便を終端にしない・main は変えない）
+      condition: land が要求され、 verdict が PASS で、 worktree が clean で、 main の tip が記録した base より進み、 base が main の祖先であるとき
+      response: worktree の branch を main へ rebase して gate をやり直し、 進んだ base と衝突の事実を event に記帳する。 衝突した周は rules 行が持つ上限までは終端にせず、 上限に達した周は Failed で終端する。 rebase で便の変更が既に main に在る（commit が空になる）周は gate をやり直さず記帳して終端する。 main は変えない
 
 nfr:
   - { id: NFR1, type: NFR, label: lens 予算,   category: 性能, target: 1 lens は 0.15M token 以内（目標値）,                                measure: lens 起動時の diff byte と cap の照合を verdict に記録,        vmethod: T, trace: { backward: [N-2], acceptance: [AC3] }, hero: { cat: 予算, big: "0.15", unit: M token, qual: lens 1 本あたりの上限 } }
@@ -528,6 +528,6 @@ glossary:
   - { term: Questioned,     en: questioned,             plain_short: 質問中の段,               def: 便の段の 1 つ。 runner の質問 record を受けて回答 event を待っている状態。 }
   - { term: Blocked,        en: blocked,                plain_short: 承認待ちの段,             def: 便の段の 1 つ。 3 クラスを名乗る契約が spawn の手前で承認 event を待っている状態。 }
   - { term: 口座残量,       en: account allowance,      plain_short: 口座の残りと reset 時刻,   def: 1 口座 1 時刻で読んだ、 5 時間窓・7 日窓・モデル別 7 日窓の残りと各 reset 時刻の組（FR33）。 runner が受ける上限 record（検出の合図）とは出所が違う。 }
-  - { term: 追随,           en: follow,                 plain_short: main に追いつくこと,      def: land の前に、 便の base より進んだ main へ worktree の branch を rebase して gate をやり直すこと（規範は FR34・衝突の周の解き方は ADR-0019）。 main は動かさない。 }
-  - { term: 衝突,           en: conflict,               plain_short: 追随の rebase でぶつかること, def: 追随の rebase で、 先着の変更と同じ箇所が重なり器が自動では合わせられないこと（FR34 が記帳する）。 intake が断る write-set の重なりとは別。 }
+  - { term: 追随,           en: follow,                 plain_short: main に追いつくこと,      def: land の前に、 便の base より進んだ main へ worktree の branch を rebase して gate をやり直すこと（規範は FR34・衝突の周の解き方は ADR-0019）。 land の要求 1 回につき 1 度で、 再び main が進んだ周は次の要求で追随する。 main は動かさない。 }
+  - { term: 衝突,           en: conflict,               plain_short: 追随の rebase でぶつかること, def: 追随の rebase で、 先着の変更と同じ箇所が重なり器が自動では合わせられないこと（FR34 が記帳する）。 契約同士の write-set の交差（ADR-0019）とは別の概念。 }
   - { term: 暫定行,         en: provisional line,       plain_short: 出所の無い命令行,         def: 作業記憶の「命令・制約」行のうち、 出所 pointer（憲法条・ADR・rules 行・裁定 id・user 裁定の時刻）を持たない行（FR23 / AC8）。 }
