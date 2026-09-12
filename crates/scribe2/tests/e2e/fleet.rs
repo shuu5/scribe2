@@ -4,13 +4,16 @@
 
 use crate::make_tmp_dir;
 use std::fs;
+use std::mem::discriminant;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 use vessel::order::is_declaration_order;
 use vessel::fleet::store::{self, LockPolicy, StoreError};
 use vessel::cli_outcome::{RC_BROKEN, RC_OK, RC_REFUSED};
+use vessel::polarity::{OnFailure, Polarity, Timing};
 use vessel::rules::manifest::Manifest;
+use vessel::fleet::json_tree::{self, parse, Tree, TreeError, MAX_DEPTH};
 use vessel::fleet::{KINDS, STAGES};
 use vessel::fleet::{
     json_lite, replay, wait, Completion, Event, EventKind, SeatState, Stage, Timeout, SCHEMA,
@@ -610,4 +613,183 @@ fn pipe_question_kinds_round_trip_on_schema_1() {
     }
     let old = r#"{"schema":1,"ts":"2026-09-01T00:00:00Z","kind":"RunCreated","run":"r","bead":"b","host":"h","actor":"machine","stage":"Intake"}"#;
     assert!(Event::from_line(old).is_ok(), "既存の行はそのまま読める");
+}
+
+/// 口座残量の応答と同じ形（設計 fleet-usage.md §3）: 窓の object・`limits` の配列・
+/// `scope.model.display_name` の 3 段・`id` は null の実測。
+const USAGE_BODY: &str = r#"{
+  "five_hour": {"utilization": 0.97, "resets_at": "2026-09-12T05:00:00Z"},
+  "seven_day": {"utilization": 0.125, "resets_at": "2026-09-18T00:00:00Z"},
+  "limits": [
+    {"kind": "weekly_scoped", "id": null,
+     "scope": {"model": {"display_name": "Opus 5", "id": null}},
+     "utilization": 1.25, "resets_at": "2026-09-18T00:00:00Z"},
+    {"kind": "weekly", "id": null, "utilization": 0.5, "resets_at": "2026-09-18T00:00:00Z"}
+  ],
+  "ok": true
+}"#;
+
+/// `depth` 段の配列だけの入れ子（深さの境界を測る fixture）。
+fn nest(depth: usize) -> String {
+    format!("{}{}", "[".repeat(depth), "]".repeat(depth))
+}
+
+/// 応答の形を `get` の連鎖で辿れる（3 段の `display_name` と各窓の `utilization` に届く）。
+#[test]
+fn fleet_json_tree_reads_the_usage_shape() {
+    let tree = parse(USAGE_BODY).expect("応答の形を読める");
+    let window = |name: &str| tree.get(name).and_then(|found| found.get("utilization"));
+    assert_eq!(window("five_hour").and_then(Tree::as_pct), Some(97), "5 時間窓");
+    assert_eq!(window("seven_day").and_then(Tree::as_pct), Some(12), "7 日窓は切り捨て");
+    assert_eq!(
+        tree.get("seven_day").and_then(|w| w.get("resets_at")).and_then(Tree::as_str),
+        Some("2026-09-18T00:00:00Z"),
+        "reset の字面"
+    );
+    let limits = tree.get("limits").and_then(Tree::as_array).expect("limits は配列");
+    assert_eq!(limits.len(), 2, "配列の要素数: {limits:?}");
+    let scoped = limits.first().expect("1 件目");
+    assert_eq!(
+        scoped
+            .get("scope")
+            .and_then(|scope| scope.get("model"))
+            .and_then(|model| model.get("display_name"))
+            .and_then(Tree::as_str),
+        Some("Opus 5"),
+        "3 段の入れ子を辿る"
+    );
+    assert_eq!(scoped.get("id"), Some(&Tree::Null), "id は null のまま持つ");
+    assert_eq!(scoped.get("utilization").and_then(Tree::as_pct), Some(125), "1 超も cap しない");
+    assert_eq!(tree.get("ok").and_then(Tree::as_bool), Some(true), "真偽");
+    assert_eq!(tree.get("nope"), None, "無い key は None");
+    assert_eq!(scoped.as_str(), None, "object は文字列ではない");
+    assert_eq!(tree.get("limits").and_then(Tree::as_bool), None, "配列は真偽ではない");
+}
+
+/// `as_pct` は 100 で cap せず切り捨て、負数と `u64` を超える値は `None`。
+///
+/// 巨大な指数（`1e9999999999` 等）は**桁を作る前に** `None` へ落ちる＝指数に比例する仕事を
+/// しない。run 1（commit edd15b7）はここで指数由来の幅の桁埋めを回して abort した。
+#[test]
+fn fleet_json_tree_as_pct_floors_without_cap_and_never_pads_by_exponent() {
+    let started = Instant::now();
+    let cases: [(&str, Option<u64>); 11] = [
+        ("0.97", Some(97)),
+        ("1.0", Some(100)),
+        ("1.25", Some(125)),
+        ("-0.1", None),
+        ("1e9999999999", None),
+        ("1e40", None),
+        ("123e18", None),
+        ("0.1e-9999999999", Some(0)),
+        ("1e18", None),
+        ("9.99e17", None),
+        ("1.8e17", Some(18_000_000_000_000_000_000)),
+    ];
+    for (text, want) in cases {
+        let tree = parse(text).expect("数の字面は読める");
+        assert_eq!(tree.as_pct(), want, "入力 {text}");
+    }
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed < Duration::from_secs(1),
+        "None の経路が指数に比例する仕事をしている（{elapsed:?}）"
+    );
+    // u64 の端（`as_pct` の最大 = u64::MAX）の内と外。
+    let inside = parse("184467440737095516.15").expect("端の内側の字面は読める");
+    assert_eq!(inside.as_pct(), Some(u64::MAX), "×100 が u64::MAX ちょうど");
+    let outside = parse("184467440737095516.16").expect("端の外側の字面も読める");
+    assert_eq!(outside.as_pct(), None, "端を 1 越えたら None");
+}
+
+/// 壊れた字面を断らせ、理由が `want` の形であることまで見て返す。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn broken(text: &str, want: fn(&TreeError) -> bool) -> TreeError {
+    let reason = parse(text).expect_err("壊れた字面は断る");
+    assert!(want(&reason), "入力 {text} の理由: {reason}");
+    reason
+}
+
+/// 理由が互いに別 variant であること（1 つに潰れていない）。
+fn each_reason_differs(reasons: &[TreeError]) {
+    let kinds: Vec<_> = reasons.iter().map(discriminant).collect();
+    for (index, first) in kinds.iter().enumerate() {
+        for second in kinds.iter().skip(index.saturating_add(1)) {
+            assert_ne!(
+                first, second,
+                "{} 通りの壊れ方が同じ variant に潰れている: {reasons:?}",
+                reasons.len()
+            );
+        }
+    }
+}
+
+/// 壊れ方ごとに**別の variant** で断る（読めない字面は部分 parse を返さない）。
+#[test]
+fn fleet_json_tree_rejects_each_broken_shape_with_its_own_variant() {
+    let reasons = [
+        broken(r#"{"a":1,"a":2}"#, |found| matches!(found, TreeError::DuplicateKey { .. })),
+        broken(r#"{"a":"x}"#, |found| matches!(found, TreeError::Unterminated { .. })),
+        broken(r#"{"a":"\q"}"#, |found| matches!(found, TreeError::BadEscape { .. })),
+        broken(r#"{"a":1} x"#, |found| matches!(found, TreeError::Trailing { .. })),
+        broken(&nest(MAX_DEPTH.saturating_add(1)), |found| {
+            matches!(found, TreeError::TooDeep { .. })
+        }),
+        broken("1e99999999999999999999", |found| {
+            matches!(found, TreeError::BadNumber { .. })
+        }),
+    ];
+    each_reason_differs(&reasons);
+    assert!(parse(&nest(MAX_DEPTH)).is_ok(), "上限ちょうどは通る");
+    let first = reasons.first().map(ToString::to_string).unwrap_or_default();
+    assert!(first.contains("位置"), "断りは位置を持つ: {first}");
+}
+
+/// escape（`\uXXXX` と surrogate 対）を解き、壊れた対は拒む。
+#[test]
+fn fleet_json_tree_reads_escapes_and_surrogate_pairs() {
+    let text = parse(r#""A😀\n\t\"\\\/あ""#).expect("escape を解ける");
+    assert_eq!(text.as_str(), Some("A\u{1f600}\n\t\"\\/あ"), "解いた中身");
+    let escaped = "\"\\uD83D\\uDE00\\u3042\\u0041\"";
+    let pair = parse(escaped).expect("surrogate 対を解ける");
+    assert_eq!(pair.as_str(), Some("\u{1f600}あA"), "対は 1 文字へ・BMP の \\uXXXX はそのまま");
+    for broken in [r#""\uD83D""#, r#""\uD83Dx""#, r#""\uDE00""#, r#""\u00Z1""#, r#""\u12""#] {
+        let reason = parse(broken).expect_err("壊れた escape は拒む");
+        assert!(
+            matches!(reason, TreeError::BadEscape { .. }),
+            "入力 {broken} の理由: {reason}"
+        );
+    }
+}
+
+/// flat 行の reader は**入れ子を拒み続ける**（広げたのは新しい型の側だけ）。
+#[test]
+fn fleet_json_tree_leaves_the_flat_reader_narrow() {
+    for nested in [r#"{"a":{"b":1}}"#, r#"{"a":[1]}"#, r#"{"a":1.5}"#, r#"{"a":-1}"#] {
+        let reason = json_lite::parse_object(nested).expect_err("flat の reader は受けない");
+        assert!(!reason.is_empty(), "断りの理由が空: {nested}");
+        assert!(parse(nested).is_ok(), "同じ字面を Tree は読める: {nested}");
+    }
+    let flat = r#"{"a":"x","b":1,"c":true,"d":null}"#;
+    assert!(json_lite::parse_object(flat).is_ok(), "1 段の行はこれまで通り読める");
+}
+
+/// 極性は fail-closed で、**極性一覧の guard には載らない**（計測は行為を止めない・設計 §6）。
+#[test]
+fn fleet_json_tree_polarity_is_fail_closed_outside_the_guard_list() {
+    let polarity: Polarity = json_tree::POLARITY;
+    assert_eq!(polarity.on_failure, OnFailure::FailClosed, "読めない字面は Err へ倒す");
+    assert_eq!(polarity.timing, Timing::InLoop, "読む時点で断る");
+    let listed = vessel::polarity::ALL
+        .iter()
+        .filter(|guard| guard.boundary().contains("json_tree"))
+        .count();
+    assert_eq!(
+        listed, 0,
+        "guard を足していない（母集団 {} 件）",
+        vessel::polarity::ALL.len()
+    );
 }

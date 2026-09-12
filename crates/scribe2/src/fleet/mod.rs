@@ -6,6 +6,7 @@
 
 pub mod cli;
 pub mod json_lite;
+pub mod json_tree;
 pub mod store;
 
 use json_lite::Value;

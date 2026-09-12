@@ -1,15 +1,16 @@
 //! 性質の歯（憲法 C12.7「property testing で歯を量産」の初着手・s2-07l.98）。
 //!
-//! 対象は **純関数 4 群**（Command を呼ぶ e2e は対象外）: 席の打刻 [`Stamp`]・fleet の
+//! 対象は **純関数 5 群**（Command を呼ぶ e2e は対象外）: 席の打刻 [`Stamp`]・fleet の
 //! [`EventKind`] / [`Stage`] / [`Event`]・rules manifest の toml-lite・headless runner の
-//! `rate_limit_status`。入力は proptest の strategy で生成し、既知の反例（入れ子の status・
-//! 空白・非 JSON・空要素）を strategy の空間に含める。
+//! `rate_limit_status`・入れ子 JSON reader の [`Tree`]。入力は proptest の strategy で生成し、
+//! 既知の反例（入れ子の status・空白・非 JSON・空要素・巨大な指数）を strategy の空間に含める。
 //!
 //! 反例の永続化（`proptest-regressions/`）は切る＝落ちた周に tracked tree を汚さない
 //! （落ちた入力は nextest の出力に出る）。case 数は既定（256）。
 
 use proptest::prelude::*;
 use proptest::test_runner::Config;
+use vessel::fleet::json_tree::{parse as parse_tree, Tree};
 use vessel::fleet::{Event as FleetEvent, EventKind, Stage, ACTOR_HUMAN, ACTOR_MACHINE, KINDS, SCHEMA as FLEET_SCHEMA, STAGES};
 use vessel::headless::runner::rate_limit_status;
 use vessel::rules::manifest::{elements, list, quoted_once, scalar, Scalar};
@@ -343,6 +344,188 @@ mod rate_limit {
             let info = format!("{{{}}}", members.join(","));
             let line = rate_limit_line("rate_limit_event", &info, &gap);
             prop_assert_eq!(rate_limit_status(&line), Some(status.as_str()), "{}", line);
+        }
+    }
+}
+
+/// 入れ子 JSON reader の性質（(5) fleet/json_tree.rs）。
+mod json_tree {
+    use super::{config, json_text, parse_tree, Tree};
+    use proptest::prelude::*;
+    use std::time::{Duration, Instant};
+
+    /// JSON の number の字面（符号・小数部・指数の有無を振る）。
+    fn number_text() -> impl Strategy<Value = String> {
+        "-?(0|[1-9][0-9]{0,5})(\\.[0-9]{1,5})?([eE][+-]?[0-9]{1,3})?"
+    }
+
+    /// 深さ 8 までの任意の [`Tree`]（object の key は重複を落とす＝parse が拒む形を作らない）。
+    fn any_tree() -> impl Strategy<Value = Tree> {
+        let leaf = prop_oneof![
+            Just(Tree::Null),
+            any::<bool>().prop_map(Tree::Bool),
+            json_text().prop_map(Tree::Str),
+            number_text().prop_map(Tree::Num),
+        ];
+        leaf.prop_recursive(8, 48, 4, |inner| {
+            prop_oneof![
+                prop::collection::vec(inner.clone(), 0..4).prop_map(Tree::Array),
+                prop::collection::vec((json_text(), inner), 0..4)
+                    .prop_map(|pairs| Tree::Object(dedup(pairs))),
+            ]
+        })
+    }
+
+    /// 同じ key の後続を落とす。
+    fn dedup(pairs: Vec<(String, Tree)>) -> Vec<(String, Tree)> {
+        let mut kept: Vec<(String, Tree)> = Vec::new();
+        for (key, value) in pairs {
+            if !kept.iter().any(|(found, _)| *found == key) {
+                kept.push((key, value));
+            }
+        }
+        kept
+    }
+
+    /// [`Tree`] を JSON text へ写す（**test 側の renderer**・実装は writer を持たない）。
+    fn render(tree: &Tree) -> String {
+        match tree {
+            Tree::Null => "null".to_owned(),
+            Tree::Bool(flag) => flag.to_string(),
+            Tree::Num(text) => text.clone(),
+            Tree::Str(text) => quote(text),
+            Tree::Array(items) => {
+                let body: Vec<String> = items.iter().map(render).collect();
+                format!("[{}]", body.join(","))
+            }
+            Tree::Object(pairs) => {
+                let body: Vec<String> = pairs
+                    .iter()
+                    .map(|(key, value)| format!("{}:{}", quote(key), render(value)))
+                    .collect();
+                format!("{{{}}}", body.join(","))
+            }
+        }
+    }
+
+    /// 文字列を escape して `"` で囲む。**非 ASCII は `\uXXXX`**（BMP 外は surrogate 対）で書く
+    /// ＝round-trip が escape の経路を通る。
+    fn quote(text: &str) -> String {
+        let mut out = String::from("\"");
+        for ch in text.chars() {
+            match ch {
+                '"' => out.push_str("\\\""),
+                '\\' => out.push_str("\\\\"),
+                other if other.is_ascii() && (other as u32) >= 0x20 => out.push(other),
+                other => out.push_str(&escaped(other)),
+            }
+        }
+        out.push('"');
+        out
+    }
+
+    /// 1 文字を `\uXXXX`（BMP 外は上位 + 下位 surrogate の 2 つ）へ写す。
+    fn escaped(ch: char) -> String {
+        let code = u32::from(ch);
+        if code <= 0xffff {
+            return format!("\\u{code:04x}");
+        }
+        let rest = code.saturating_sub(0x10000);
+        let high = 0xd800_u32.saturating_add(rest >> 10);
+        let low = 0xdc00_u32.saturating_add(rest & 0x3ff);
+        format!("\\u{high:04x}\\u{low:04x}")
+    }
+
+    /// 数の字面を組む（小数部は空なら `.` ごと落とす）。
+    fn literal_of(int: &str, frac: &str, exp: i64, negative: bool) -> String {
+        let sign = if negative { "-" } else { "" };
+        let point = if frac.is_empty() {
+            String::new()
+        } else {
+            format!(".{frac}")
+        };
+        format!("{sign}{int}{point}e{exp}")
+    }
+
+    /// 実装と**独立に**、10 進の字面を ×100 して切り捨てた値を求める（桁を文字列で数える形）。
+    /// 20 桁を超える形と負数は `None`。
+    fn expected_pct(int: &str, frac: &str, exp: i64, negative: bool) -> Option<u64> {
+        let digits = format!("{int}{frac}");
+        let significant = digits.trim_start_matches('0');
+        if significant.is_empty() {
+            return Some(0);
+        }
+        if negative {
+            return None;
+        }
+        let lead = i128::try_from(digits.len().saturating_sub(significant.len())).ok()?;
+        let int_len = i128::try_from(int.len()).ok()?;
+        let point = i128::from(exp) + int_len + 2 - lead;
+        if point <= 0 {
+            return Some(0);
+        }
+        let width = usize::try_from(point).ok().filter(|found| *found <= 20)?;
+        let mut taken: String = significant.chars().take(width).collect();
+        while taken.len() < width {
+            taken.push('0');
+        }
+        taken.parse::<u128>().ok().and_then(|found| u64::try_from(found).ok())
+    }
+
+    proptest! {
+        #![proptest_config(config())]
+
+        /// 任意の Tree は text へ写して読み戻すと同じ Tree に戻る。
+        #[test]
+        fn prop_json_tree_round_trips_through_text(tree in any_tree()) {
+            let text = render(&tree);
+            prop_assert_eq!(parse_tree(&text), Ok(tree), "{}", text);
+        }
+
+        /// 任意の文字列で panic しない。読めた字面は書き戻しても同じ Tree で、
+        /// 読めない字面は理由を持つ（どちらも値で返る）。
+        #[test]
+        fn prop_json_tree_never_panics_on_any_text(raw in "(?s).{0,64}") {
+            match parse_tree(&raw) {
+                Ok(tree) => {
+                    let again = parse_tree(&render(&tree));
+                    prop_assert_eq!(again, Ok(tree), "{}", raw);
+                }
+                Err(reason) => prop_assert!(!reason.to_string().is_empty(), "{}", raw),
+            }
+        }
+
+        /// 任意の数（整数部 30 桁・小数部 30 桁・指数は i64 全域）で `as_pct` は 1 秒以内に
+        /// Option を返し、Some は 10 進の評価 ×100 の切り捨てと一致する。
+        #[test]
+        fn prop_json_tree_pct_matches_decimal_evaluation(
+            int in "(0|[1-9][0-9]{0,29})",
+            frac in "[0-9]{0,30}",
+            exp in any::<i64>(),
+            negative in any::<bool>(),
+        ) {
+            let literal = literal_of(&int, &frac, exp, negative);
+            let started = Instant::now();
+            let read = parse_tree(&literal);
+            let got = match &read {
+                Ok(tree) => tree.as_pct(),
+                Err(_) => None,
+            };
+            let elapsed = started.elapsed();
+            prop_assert!(read.is_ok(), "読めない字面: {}", literal);
+            prop_assert!(elapsed < Duration::from_secs(1), "{:?} かかった: {}", elapsed, literal);
+            prop_assert_eq!(got, expected_pct(&int, &frac, exp, negative), "{}", literal);
+        }
+
+        /// 独立した算術との一致: 整数は ×100、`0.<小数>` は先頭 2 桁（切り捨て）。
+        #[test]
+        fn prop_json_tree_pct_agrees_with_plain_arithmetic(whole in any::<u32>(), frac in "[0-9]{2,8}") {
+            let read = parse_tree(&whole.to_string());
+            prop_assert_eq!(read.ok().and_then(|tree| tree.as_pct()), Some(u64::from(whole) * 100), "{}", whole);
+            let text = format!("0.{}", frac);
+            let head: String = frac.chars().take(2).collect();
+            let read = parse_tree(&text);
+            prop_assert_eq!(read.ok().and_then(|tree| tree.as_pct()), head.parse::<u64>().ok(), "{}", text);
         }
     }
 }
