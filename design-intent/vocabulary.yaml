@@ -460,3 +460,14 @@ terms:
     domain: consumer
     definition: const slice の並びが判別子の昇順 (0, 1, 2, …) と一致することを測る歯。 並べ替え・重複・中間の欠番を捕まえるが、 末尾に足した variant の入れ忘れは捕まえない (ADR-0013 §2.3)。
     relationships: [宣言順]
+  # ---------------------------------------------------------------- SRS v0.5 (FR33 / AC8 改訂)
+  - canonical: 口座残量
+    domain: consumer
+    definition: 1 口座 1 時刻で読んだ、 5 時間窓・7 日窓・モデル別 7 日窓の残りと各 reset 時刻の組 (SRS FR33)。 口座の endpoint 由来で、 runner が受ける上限 record (claude の record 由来・検出の合図) とは別の entity。
+    forbidden: [クォータ, quota]
+    relationships: [口座, fleet, 上限 record, Measured]
+  - canonical: 暫定行
+    domain: consumer
+    definition: 作業記憶の「命令・制約」行のうち出所 pointer (憲法条・ADR・rules 行・裁定 id・user 裁定の時刻) を持たない行 (SRS FR23 / AC8)。
+    forbidden: [仮の行, 暫定命令]
+    relationships: [作業記憶, 退避物, 憲法]

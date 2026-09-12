@@ -11,14 +11,14 @@ meta:
   eyebrow_left: 要件定義書 (SRS)
   eyebrow_right: scribe2 — MVP
   subtitle: 契約は小さく・検証は機械が先・止まるときは記帳して止まる
-  version: "0.4"
+  version: "0.5"
   date: "2026-09-12"
   reader: この器で開発する人と AI（Claude Code の session）。 専門語には必ずやさしい言い換えを併記する
 
 approval:
   - role: 承認 (user)
     who: user
-    when: 2026-09-12（版 0.4・FR30 / FR31 / FR32 / AC10。 版ごとの裁定 id は台帳が持つ）
+    when: 2026-09-12（版 0.5。 版ごとの裁定 id は台帳が持つ）
     stamp: 裁定済
   - role: レビュー (folio review lens)
     who: spec-review 5 軸 + SRS ceiling 3 lens
@@ -51,6 +51,7 @@ scope:
     - 所属の目印と hook（名乗り・in-loop guard・計測 slot）
     - toy repo 5 便と自己ホスト 1 便の到達点計測
     - 開発 session の自律機能
+    - 口座残量の計測と記録
   out:
     - 複数口座の自動選定（v3）
     - lane 計画と席の dashboard（v3）
@@ -81,9 +82,10 @@ acceptance:
   - { id: AC5, criterion: 3 クラス操作を名乗る契約は Blocked で止まり、 逐語付きの approve が記帳されてから再開する,              metric_v: 0 件,  metric_l: 無承認の通過,      links: [FR15, FR16] }
   - { id: AC6, criterion: 不正な契約・rules manifest（欠落 / 未知 kind / 裁定 id 無し / 重複 id）は起動前に全件 loud で落ちる,     metric_v: 0 件,  metric_l: 黙って落とす入力,  links: [FR1, FR17, FR18, NFR3, NFR4] }
   - { id: AC7, criterion: write-set の外への Edit / Write は編集の時点で deny され、 hook は marker が自分を言うときだけ仕える,    metric_v: 0 件,  metric_l: 素通り,           links: [FR19, FR20, FR21, FR24, NFR5] }
-  - { id: AC8, criterion: 開発 session の作業記憶の退避と復元が global skill の手順として実在し、 6 本の作法を満たす,             metric_v: 6/6,   metric_l: 作法が実在,        links: [FR23] }
+  - { id: AC8, criterion: 開発 session の作業記憶の退避と復元が器の subcommand として実在し、 FR23 の作法 6 本を満たし、 復元の DATA に暫定行が印付きで列挙されて次の cycle に引き継がれない, metric_v: 8/8,   metric_l: 作法と復元 DATA,   links: [FR23] }
   - { id: AC9, criterion: planner と管理席の 2 つの開発 session で、 context 使用量が取れない周は rc ≠ 0 になり、 上限到達で退避以外の編集が deny され、 測れない周は deny 0 件で理由が注入計測の記録に 1 件残り、 管理 tick が規則どおりに判定し（同じ入力には同じ inject / noop）、 上限以上で idle でない周にも退避の合図が 1 件注入され、 測れない周と退避物が在る周は 0 件で、 cycle が 1 回完走する, metric_v: 2 session + 1 回, metric_l: 判定が規則どおり,   links: [FR25, FR26, FR27, FR28, FR29] }
   - { id: AC10, criterion: toy repo で verify 行が矛盾する契約 1 本を管理席が pipeline に流し、 runner の質問 record → Questioned → planner の回答 event（機械由来）→ resume → Landed まで通り、 人由来の event が 0 件・席が自分の手で実装した commit が 0 件, metric_v: 1 便, metric_l: 質問で止まり回答で再開, links: [FR5, FR14, FR22, FR30, FR31, FR32] }
+  - { id: AC11, criterion: live な口座 2 つ以上を持つ host で口座残量の計測を 1 回要求すると、 口座ごとの口座残量が出所付きで fleet の event log に 1 行ずつ増え、 器の外で同じ endpoint を読む独立した手段の値と残量が一致し（reset は 1 分以内）、 認証情報の無い口座は理由付きの「測れなかった」の行になる（0 の値の行にならない）, metric_v: 2 口座, metric_l: 実測値が一致, links: [FR33] }
 
 requirements:
   - id: FR1
@@ -338,7 +340,7 @@ requirements:
     ears:
       pattern: ubiquitous
       condition: 常時
-      response: 退避物は session id で一意、 消費済みは同一 suffix で表し、 消費は move、 DATA が無い周は brief を出さず、 別 session の退避物は自動消費せず、 重複起動は冪等とする
+      response: 退避と復元を器の subcommand として提供し、 作法 6 本（退避物は session id で一意、 消費済みは同一 suffix で表し、 消費は move、 DATA が無い周は brief を出さず、 別 session の退避物は自動消費せず、 重複起動は冪等）を満たし、 復元の DATA は出所 pointer を持たない行（暫定行）を印付きで列挙して次の cycle に引き継がない
   - id: FR24
     type: FR
     label: 管轄外での沈黙
@@ -441,6 +443,18 @@ requirements:
       condition: Questioned の便に回答 event（逐語付き）が記帳された状態で resume が要求されたとき
       response: 同じ便を続きの段から通し、 質問と回答の逐語を runner の入力に添える
 
+  - id: FR33
+    type: FR
+    label: 口座残量の計測
+    priority: should
+    vmethod: D
+    rationale_source: N-2
+    trace: { backward: [N-1, N-2], acceptance: [AC11] }
+    ears:
+      pattern: event
+      condition: 口座残量の計測が要求されたとき
+      response: manifest に列挙した口座ごとに、 5 時間窓・7 日窓・モデル別 7 日窓の口座残量と reset 時刻を口座の endpoint から 1 コマンドで読み、 出所（口座・endpoint・時刻）付きの実測値（Measured）として fleet の event log に記録し、 読めない回は理由付きで「測れなかった」を記録して 0 の値に読み替えない
+
 nfr:
   - { id: NFR1, type: NFR, label: lens 予算,   category: 性能, target: 1 lens は 0.15M token 以内（目標値）,                                measure: lens 起動時の diff byte と cap の照合を verdict に記録,        vmethod: T, trace: { backward: [N-2], acceptance: [AC3] }, hero: { cat: 予算, big: "0.15", unit: M token, qual: lens 1 本あたりの上限 } }
   - { id: NFR2, type: NFR, label: 契約の大きさ, category: 大きさ, target: 1 契約の diff は 300 行程度・見積は 550 行以内,                      measure: PR の diff 行数と契約の見積を記録して照合,                   vmethod: A, trace: { backward: [N-4], acceptance: [AC2] }, hero: { cat: 小ささ, big: "300", unit: 行, qual: 1 契約の diff の目安 } }
@@ -501,3 +515,5 @@ glossary:
   - { term: 質問 record,    en: question record,        plain_short: 実装役が返す質問の合図, def: runner が契約の不足を返して止まるときの typed な合図。 形式は ADR-0016 §2.2 が正本。 }
   - { term: Questioned,     en: questioned,             plain_short: 質問中の段,               def: 便の段の 1 つ。 runner の質問 record を受けて回答 event を待っている状態。 }
   - { term: Blocked,        en: blocked,                plain_short: 承認待ちの段,             def: 便の段の 1 つ。 3 クラスを名乗る契約が spawn の手前で承認 event を待っている状態。 }
+  - { term: 口座残量,       en: account allowance,      plain_short: 口座の残りと reset 時刻,   def: 1 口座 1 時刻で読んだ、 5 時間窓・7 日窓・モデル別 7 日窓の残りと各 reset 時刻の組（FR33）。 runner が受ける上限 record（検出の合図）とは出所が違う。 }
+  - { term: 暫定行,         en: provisional line,       plain_short: 出所の無い命令行,         def: 作業記憶の「命令・制約」行のうち、 出所 pointer（憲法条・ADR・rules 行・裁定 id・user 裁定の時刻）を持たない行（FR23 / AC8）。 }
