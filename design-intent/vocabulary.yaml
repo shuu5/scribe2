@@ -496,9 +496,17 @@ terms:
   # ---------------------------------------------------------------- ADR-0019 (並列の便の受付と衝突)
   - canonical: 追随
     domain: consumer
-    definition: land の前に、 便の base より進んだ main へ worktree の branch を rebase し gate を撃ち直すこと (pipeline 設計 §5.4)。 衝突した周は終端にせず runner を起こし直して write-set の内側で解かせる (ADR-0019 §2.2)。
+    definition: land の前に、 便の base より進んだ main へ worktree の branch を rebase し gate を撃ち直すこと (pipeline 設計 §5.4)。 衝突した周は終端にせず runner を起こし直して write-set の内側で解かせ、 runner の終了後に器が base を進めて記帳する (ADR-0019 §2.2)。
     relationships: [land, 便, runner, write-set]
   - canonical: write-set の交差
     domain: consumer
     definition: 2 つの契約の write-set (path の集合・末尾 / の dir は配下を含む) の共通部分が空でないこと。 intake は live な便と交差する契約を受け付けない (ADR-0019 §2.1)。
     relationships: [write-set, 契約, 便]
+  - canonical: live な便
+    domain: consumer
+    definition: 終端でない run。 終端 = 段が Landed / Failed / Stopped のいずれか、 または Gated で verdict が FAIL。 intake の排他が照合する母集団で、 pipe stop --run で 1 本だけ終端に倒せる (ADR-0019 §2.1)。
+    relationships: [便, 段, write-set の交差]
+  - canonical: 起こし直し
+    domain: consumer
+    definition: land の追随が衝突した run で、 同じ worktree と契約に「追随」節を添えて runner をもう 1 回 spawn すること。 回数は rules 行 pipe.follow_retries が上限で、 その判定は guard (ADR-0019 §2.2 / §2.4)。
+    relationships: [追随, runner, spawn, guard]
