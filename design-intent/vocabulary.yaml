@@ -531,3 +531,23 @@ terms:
     domain: consumer
     definition: 変異検査に実際に渡す並列度。 rules 行の上限 (宣言値) と受付が測った枠 (測定値) の小さい方で、 vessel 宣言の検出線の穴に器が埋める (ADR-0021 §2.1)。
     relationships: [受付の枠, 変異検出線, vessel 宣言]
+  - canonical: 役割
+    domain: consumer
+    definition: 開発 session の席の種類 (planner / 管理席)。 閉じた enum の値で、 席の登録 row が持つ。 窓名や env の慣習では決めない (SRS FR40)。
+    relationships: [席, planner, 管理席, 権能, 席の登録]
+  - canonical: 権能
+    domain: consumer
+    definition: 役割ごとに許された操作の閉じた一覧 (回答・承認・go の記帳、 便の起動、 path 種別の編集)。 値は rules 行が持ち、 hook が tool 呼出しの境界で執行する (SRS FR41)。
+    relationships: [役割, rules 行, hook, 対話面]
+  - canonical: 席の登録
+    domain: consumer
+    definition: 席の target と役割 (と anchor) を fleet の store に記録すること。 鍵は (役割, anchor) で target を併せ持つ。 記録の無い席は権能を持たない (SRS FR40)。
+    relationships: [席, 役割, fleet]
+  - canonical: 上限停止
+    domain: consumer
+    definition: 便または開発 session が口座残量の上限に当たって止まること。 便では typed な event (SRS FR35)、 session では退避と立て直しの契機 (SRS FR38)。
+    relationships: [口座残量, 口座, 口座選定]
+  - canonical: 口座選定
+    domain: consumer
+    definition: manifest の口座と実測の口座残量から 1 本の純関数が口座を選ぶこと (SRS FR36)。 便用と session 用の 2 規則を持ち、 値は rules 行 R-C9-1。
+    relationships: [口座, 口座残量, rules 行, 上限停止]
