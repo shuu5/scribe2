@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="folio-doc-type" content="adr">
+<meta name="folio-layer" content="project">
+<meta name="folio-version" content="0.4.6">
+<meta name="folio-status" content="accepted">
+<meta name="folio-stakeholders" content="Developer, AI Agent, External Reviewer">
+<meta name="folio-adr-id" content="0019">
+<meta name="folio-adr-date" content="2026-09-12">
+<title>ADR-0019 — 並列の便は intake が write-set の交差で排他し、 land の rebase 衝突は runner を起こし直して解く (人は質問の回答でだけ関わる・admin は中継と操作・手で merge する経路を持たない)</title>
+<link rel="stylesheet" href="../../common.css">
+<script type="application/ld+json">
+{
+  "@context": {
+    "dc": "http://purl.org/dc/terms/",
+    "schema": "https://schema.org/",
+    "folio": "https://folio.dev/spec/v1/"
+  },
+  "@id": "./ADR-0019-parallel-runs-exclude-overlap-at-intake-and-runner-resolves-conflicts.html",
+  "@type": "schema:TechArticle",
+  "dc:isPartOf": [
+    { "@id": "./README.html" }
+  ],
+  "dc:title": "ADR-0019 — 並列の便は intake が write-set の交差で排他し、 land の rebase 衝突は runner を起こし直して解く (人は質問の回答でだけ関わる・admin は中継と操作・手で merge する経路を持たない)",
+  "folio:version": "0.4.6",
+  "folio:stakeholders": ["Developer", "AI Agent", "External Reviewer"],
+  "dc:references": [
+    { "@id": "../spec/constitution.html#c2" },
+    { "@id": "../spec/constitution.html#c5" },
+    { "@id": "../spec/constitution.html#c6" },
+    { "@id": "../spec/constitution.html#c11" },
+    { "@id": "../spec/constitution.html#c16" },
+    { "@id": "../spec/constitution.html#n1" },
+    { "@id": "../spec/srs.html#FR4" },
+    { "@id": "../spec/srs.html#FR10" },
+    { "@id": "../spec/srs.html#FR11" },
+    { "@id": "../spec/srs.html#FR14" },
+    { "@id": "../spec/srs.html#FR30" },
+    { "@id": "../spec/srs.html#FR31" },
+    { "@id": "./ADR-0009-vessel-grants-runner-permissions-and-mutation-proof.html" },
+    { "@id": "./ADR-0014-polarity-list-is-a-snapshot-rendered-by-core.html" },
+    { "@id": "./ADR-0016-default-delivery-structure-and-typed-question-record.html" }
+  ]
+}
+</script>
+</head>
+<body>
+<!-- folio:chrome-top -->
+<a class="skip-link" href="#s1-context">本文へスキップ</a>
+<nav class="breadcrumb" aria-label="パンくず"><ol>
+  <li><a href="../index.html">design-intent</a></li>
+  <li><a href="./README.html">decisions</a></li>
+  <li aria-current="page">ADR-0019</li>
+</ol></nav>
+<!-- /folio:chrome-top -->
+
+<header class="doc-header">
+  <h1>ADR-0019 — 並列の便は intake が write-set の交差で排他し、 land の rebase 衝突は runner を起こし直して解く (人は質問の回答でだけ関わる・admin は中継と操作・手で merge する経路を持たない)</h1>
+  <div class="meta">Status: accepted &middot; Date: 2026-09-12 &middot; version 0.4.6 (拘束する constitution の版) &middot; C2 / C6 / C16 / N1 の適用を記録し、 ADR-0016 §2.5 が射程外とした「write-set の交差の検査」を決める &middot; 要件は SRS v0.5 (FR4 / FR10 / FR11 / FR14 / FR30 / FR31) が正本</div>
+</header>
+<!-- folio:chrome-toc -->
+<nav class="toc" aria-label="ページ内目次">
+<ol>
+  <li><a href="#s1-context">§1. Context</a></li>
+  <li><a href="#s2-decision">§2. Decision</a></li>
+  <li class="toc--sub"><a href="#s2-1-intake-exclusion">§2.1 intake は live な便の write-set と交差する契約を受け付けない (排他は 1 enum の 1 関数・C2)</a></li>
+  <li class="toc--sub"><a href="#s2-2-runner-resolves">§2.2 land の rebase 衝突は終端にせず、 runner を起こし直して write-set の内側で解かせ、 gate をやり直す</a></li>
+  <li class="toc--sub"><a href="#s2-3-roles">§2.3 人が関わるのは質問への回答だけ。 admin は中継と操作、 planner は契約の設計と回答。 手で merge する経路は持たない</a></li>
+  <li class="toc--sub"><a href="#s2-4-bounds">§2.4 起こし直しの回数は rules 行で上限を持ち、 超えた便は Failed で終端して畳める</a></li>
+  <li class="toc--sub"><a href="#s2-5-scope">§2.5 射程外</a></li>
+  <li><a href="#s3-srs">§3. SRS との関係 (正本は SRS)</a></li>
+  <li><a href="#s4-consequences">§4. Consequences</a></li>
+  <li><a href="#s5-alternatives">§5. Alternatives Considered</a></li>
+  <li><a href="#s6-trace">§6. Trace</a></li>
+</ol>
+</nav>
+<!-- /folio:chrome-toc -->
+
+<aside class="informative">
+<p>本 ADR は IETF <strong>RFC 2119</strong> および <strong>RFC 8174 / BCP 14</strong> に定義される MUST / SHALL / SHOULD / MAY のキーワード解釈規約に従う。 ADR は決定時点の記録であり、 改訂は新しい ADR による supersede で行う。 本 ADR の <strong>§2 は user 裁定 (2026-09-12) を受けた決定</strong>で、 <strong>§3 は SRS への pointer</strong> である。 本 ADR は要件の文面を持たず、 既存の ADR を supersede しない (<a href="./ADR-0016-default-delivery-structure-and-typed-question-record.html#s2-5-scope">ADR-0016 §2.5</a> が「本 ADR の決定ではない」と明記して残した論点を決める)。</p>
+</aside>
+
+<aside class="machine-readable" aria-hidden="true">
+  <dl>
+    <dt>id</dt><dd>ADR-0019</dd>
+    <dt>doc-type</dt><dd>adr</dd>
+    <dt>status</dt><dd>accepted</dd>
+    <dt>date</dt><dd>2026-09-12</dd>
+    <dt>version</dt><dd>0.4.6 (拘束する constitution の版。 本 ADR は憲法の条文を動かさない)</dd>
+    <dt>decided-by</dt><dd>user (2026-09-12) — planner の提示「入口で排他 + 起きたら runner が解く (人は質問経由のみ)」に対する裁定 (要旨: それでよい・ただし歯は必須で両方が本当に働くことを検証する)。 逐語は台帳の notes が原本で本 file には写さない (CON2)</dd>
+    <dt>stakeholders</dt><dd>Developer, AI Agent, External Reviewer</dd>
+    <dt>supersedes</dt><dd>(none — ADR-0016 §2.5 が射程外に置いた論点を決めるだけで、 既存 ADR の決定を変えない)</dd>
+    <dt>related</dt><dd>ADR-0009 §2.1 / §2.2 (write-set guard・intake の拒否) / ADR-0014 §2.1 (guard の定義) / ADR-0016 §2.1〜§2.3 / §2.5 (配送構造・質問 record・回答の権限) / constitution C2 / C5 / C6 / C11.2 / C16 / N1 / N1.2 / SRS FR4 / FR10 / FR11 / FR14 / FR30 / FR31</dd>
+  </dl>
+</aside>
+
+<section id="s1-context" class="informative">
+<h2>§1. Context</h2>
+<p class="section-essence" data-audience="human">便を何本か同時に流すと、 2 本が同じ file を触っていたときに、 後から着地する便が main に追いつこうとして衝突します。 いまの器は衝突した便を「失敗」で止め、 その worktree を畳む口もありません。 user は「並列で速度を上げたいが、 review で範囲が広がって後から重なることは絶対にありうる。 誰がどう解くかを決めておかないと、 全部 admin に集まって詰まる」と問い、 planner の提案 (入口で重なりを排他し、 起きたら実装役に解かせ、 人は質問への回答でだけ関わる) を採り、 「本当に両方が働くかの歯は必須」と裁定しました。 この記録はその形を決めます。</p>
+<p data-audience="machine">記録時点 (2026-09-12) の現物: 便 1 本 = worktree 1 つ + runner 1 つ (<a href="../spec/srs.html#FR4">FR4</a>)。 runner は契約の write-set の外を編集できない (write-set guard・<a href="./ADR-0009-vessel-grants-runner-permissions-and-mutation-proof.html#s2-1-runner-permissions">ADR-0009 §2.1</a>)。 land は base が main の祖先なら worktree の branch を main へ rebase し、 段を <code>Implemented</code> へ戻して gate を撃ち直す (設計 pipeline.md §5.4)。 rebase が衝突した周は <code>git rebase --abort</code> で木を戻し <code>Failed detail=rebase-conflict</code> で**終端**する。 <code>pipe retire</code> が畳めるのは <code>Landed</code> と <code>Failed detail=rebase-empty</code> だけで、 衝突で終端した便の worktree は畳めない (台帳 <code>s2-07l.132</code>)。 intake は契約の形を検査する (<a href="./ADR-0009-vessel-grants-runner-permissions-and-mutation-proof.html#s2-2-intake-refuses">ADR-0009 §2.2</a>・<code>Unfit</code> の閉じた enum) が、 live な他の便の write-set と照合しない。 並列に 2 本を流した実績は無い (これまでの便はすべて 1 本ずつ)。 便の途中で範囲が広がる経路は runner の質問 → planner の回答だけ (lens は読むだけ・guard が外を deny する)。</p>
+<p data-audience="machine">憲法の向き: <a href="../spec/constitution.html#c2">C2</a> は選択・除外・routing を 1 enum の 1 関数で持ち、 新しい理由は variant 1 つで表す。 <a href="../spec/constitution.html#c16">C16</a> は逸脱を edit time で止め、 事後検証で代えない。 <a href="../spec/constitution.html#c6">C6</a> は起動口を 1 つ (Budget を要する spawn) に限る。 <a href="../spec/constitution.html#n1">N1</a> は器が管理する物の不可逆な削除を拒み、 N1.2 は退役を可逆な move に限る。 <a href="./ADR-0016-default-delivery-structure-and-typed-question-record.html#s2-5-scope">ADR-0016 §2.5</a> は「契約の write-set の交差を intake で検査する形」を本 ADR の決定ではないと明記して残した。 user の裁定 (2026-09-12・会話面・逐語は台帳 <code>s2-07l.143</code> の notes): planner の推奨 (入口で排他 + 起きたら runner が解く・人は質問経由のみ) でよい・歯は必須。</p>
+</section>
+
+<section id="s2-decision" class="normative">
+<h2>§2. Decision</h2>
+
+<h3 id="s2-1-intake-exclusion">§2.1 intake は live な便の write-set と交差する契約を受け付けない (排他は 1 enum の 1 関数・C2)</h3>
+<p class="section-essence" data-audience="human">便を受け付ける入口で、 いま走っている便が触る file と重なる契約は断ります。 断る理由は器の中の「断る理由の一覧」に 1 つ足すだけで、 判定は 1 本の関数です。 重なりの判定は path の集合の共通部分で、 dir はその配下の file を含みます。 断られた契約は、 重なる便が終わってから出し直します。</p>
+<p data-audience="machine"><code>pipe intake</code> SHALL 契約の write-set を、 live な便 (段が <code>Landed</code> / <code>Stopped</code> / <code>Failed</code> のいずれでもない run・event log の replay から導く) の write-set (各 run の契約の写し) と照合し、 交差する周は受け付けない (<code>Unfit</code> に variant 1 つ・rc は既存の拒否と同じ・run を作らず event を書かない)。 交差の定義 SHALL path の集合の共通部分が空でないこととし、 末尾 <code>/</code> の dir はその配下の path を含む (正規化: 先頭の <code>./</code> と重複する <code>/</code> を落とす・symlink は解かない)。 判定 SHALL 既存の intake の除外関数の内側に variant 1 つとして足す (<a href="../spec/constitution.html#c2">C2</a>・宣言順の末尾・<a href="./ADR-0014-polarity-list-is-a-snapshot-rendered-by-core.html#s2-1-type">ADR-0014 §2.1</a> の既存 guard <code>intake-unfit</code> の内側ゆえ極性一覧の行は増えない・InLoop / FailClosed)。 器 SHALL NOT 交差を許す flag を持たない。 live な便の write-set を読めない周 (契約の写しが無い・parse 不能) SHALL 受け付けない側へ倒す (fail-closed・「読めない」を「交差なし」に化けさせない)。</p>
+
+<h3 id="s2-2-runner-resolves">§2.2 land の rebase 衝突は終端にせず、 runner を起こし直して write-set の内側で解かせ、 gate をやり直す</h3>
+<p class="section-essence" data-audience="human">入口で排他しても、 質問への回答で範囲が広がる周や、 dir 単位の write-set が実際には別 file を触る周に衝突は起きえます。 衝突したら便を失敗にせず、 木を衝突前に戻してから実装役をもう 1 回起こし、 「main が進んだので取り込んで衝突を解いてから続けよ」と契約に添えて渡します。 実装役は自分の write-set の中でだけ解き、 解けなければ質問で止まります。 解けたら審査 (gate) をやり直し、 通れば着地します。</p>
+<p data-audience="machine">land の追随 (設計 §5.4) で rebase が衝突した周、 器 SHALL <code>git rebase --abort</code> で木を戻し、 <code>RunStage stage=Implemented detail=rebase-conflict:&lt;base&gt;..&lt;main&gt;</code> を記帳して (終端の <code>Failed</code> にしない)、 同じ run の worktree と契約で runner を起こし直す (C6 の 1 つの spawn 口・Budget は Precheck から)。 起こし直しの stdin SHALL 契約の写しに「追随」節 (main の sha と「<code>git rebase &lt;main&gt;</code> を実行し衝突を write-set の内側で解いて commit せよ・解けなければ質問 record で止まれ」の定型) を付ける (<a href="./ADR-0016-default-delivery-structure-and-typed-question-record.html#s2-2-question-record">ADR-0016 §2.2</a> の「回答」節と同じ置き場・定型の字面は prompt template が持つ)。 runner の終了後、 器 SHALL 通常の spawn 完了と同じく <code>Implemented</code> → gate → land を通す (rebase は再び走り、 解けていれば衝突しない)。 runner が write-set の外を触ることは従来どおり guard が deny する (<a href="./ADR-0009-vessel-grants-runner-permissions-and-mutation-proof.html#s2-1-runner-permissions">ADR-0009 §2.1</a>)。 runner が質問 record で止まった周は <code>Questioned</code> へ倒れ、 planner の回答で再開する (FR31 / FR32)。 <code>resume</code> SHALL この段 (<code>Implemented detail=rebase-conflict</code> で runner が起きていない周) からも同じ起こし直しを撃てる。</p>
+
+<h3 id="s2-3-roles">§2.3 人が関わるのは質問への回答だけ。 admin は中継と操作、 planner は契約の設計と回答。 手で merge する経路は持たない</h3>
+<p class="section-essence" data-audience="human">衝突を人が手で直す道は作りません。 係の席 (admin) は便を流し・質問を届け・着地の操作をするだけ、 計画役 (planner) は契約の write-set を設計し、 質問に答えるだけです。 こうすると、 便を何本並べても人の手番は「質問に答える」の 1 種類に収まり、 admin に仕事が集まって詰まる形になりません。</p>
+<p data-audience="machine">器 SHALL NOT 衝突した worktree を席や人が編集して land する経路を持たない (gate 分離・<a href="../spec/constitution.html#c16">C16</a>: 逸脱は edit time で止める)。 管理席の仕事は <a href="./ADR-0016-default-delivery-structure-and-typed-question-record.html#s2-1-structure">ADR-0016 §2.1</a> の 3 つ (流す・中継する・land する) のまま増やさない。 planner SHALL 契約の write-set を「触る file でなく構造の連鎖」で設計し、 交差を入口で避ける (排他は planner の設計の穴を器が止める最後の線であって、 設計の代わりではない)。 回答で write-set を広げる周 (台帳 <code>s2-07l.133</code>) は、 広げた write-set で §2.1 の照合をやり直す (広げた結果 live な便と交差すれば、 回答は受け付けず planner に戻す)。</p>
+
+<h3 id="s2-4-bounds">§2.4 起こし直しの回数は rules 行で上限を持ち、 超えた便は Failed で終端して畳める</h3>
+<p class="section-essence" data-audience="human">解けない衝突で実装役を無限に起こし直さないよう、 回数の上限を規則の値として持ちます。 上限を超えた便は「失敗」で終わり、 その worktree は可逆に畳めます (消しません)。 上限の値は user の裁定で決めます。</p>
+<p data-audience="machine">器 SHALL 1 つの run の衝突による起こし直しの回数を rules 行 (<code>pipe.follow_retries</code>・値は裁定 id 付き・<a href="../spec/constitution.html#c5">C5</a>・本 ADR は値を決めない) で上限とし、 超えた周は <code>Failed detail=rebase-conflict</code> で終端する (fail-closed)。 <code>pipe retire</code> SHALL <code>Failed detail=rebase-conflict</code> の便の worktree を可逆 move で畳める (<a href="../spec/constitution.html#n1">N1.2</a>・台帳 <code>s2-07l.132</code> の memo を本 ADR が吸収する)。 回数は event log の <code>rebase-conflict</code> の行数から導く (replay の導出値・別の状態を持たない)。</p>
+
+<h3 id="s2-5-scope">§2.5 射程外</h3>
+<p class="section-essence" data-audience="human">この記録が決めるのは「入口の排他」「衝突時の起こし直し」「人の関わり方」「回数の上限」だけです。 host をまたぐ便、 write-set を自動で分割する仕組み、 便の優先度や待ち行列、 同時に何本まで流すかの上限は別に決めます。</p>
+<p data-audience="machine">次は本 ADR の決定ではない (MUST NOT be read as such): 複数 host にまたがる便の排他 (event log は host ごと・v3)、 write-set の自動分割や契約の自動生成、 排他で断られた契約の待ち行列と再投入 (管理席か tick の運用・別途)、 同時に流す便の本数の上限 (admission control・口座の自律制御 <code>s2-07l.142</code> と併せて別途)、 lens の指摘で範囲を広げる経路 (lens は読むだけで write-set を変えない・広げるのは planner の契約改訂)、 「追随」節の定型の字面 (prompt template の現物が正本)。</p>
+</section>
+
+<section id="s3-srs" class="informative">
+<h2>§3. SRS との関係 (正本は SRS)</h2>
+<p class="section-essence" data-audience="human">この記録は要件書の文面を変えません。 便の形 (worktree 1 つ・runner 1 つ)、 着地の前提 (審査合格・出発点の一致)、 別 process からの再開、 配送構造と質問の停止は、 要件書の当該行が正本です。</p>
+<div data-audience="machine">
+<p>本 ADR が仕える要件は SRS v0.5 が正本である: <a href="../spec/srs.html#FR4">FR4</a> (契約 1 本に worktree 1 つと runner 1 つ)・<a href="../spec/srs.html#FR10">FR10</a> / <a href="../spec/srs.html#FR11">FR11</a> (land の前提と CAS・§2.2 の追随はこの内側)・<a href="../spec/srs.html#FR14">FR14</a> (別 process からの resume・§2.2 の起こし直しは resume と同じ口)・<a href="../spec/srs.html#FR30">FR30</a> (配送構造・§2.3)・<a href="../spec/srs.html#FR31">FR31</a> (質問の停止・§2.2 / §2.3)。 本 ADR は SRS に新しい要件を求めない (排他と起こし直しは FR10 / FR11 / FR14 の実装形)。 intake の拒否の理由 (variant の名)・「追随」節の字面・rules 行の値は §2 と現物が持ち SRS は持たない。</p>
+</div>
+</section>
+
+<section id="s4-consequences" class="informative">
+<h2>§4. Consequences</h2>
+<p class="section-essence" data-audience="human">良い面は、 便を並べても人の手番が「質問に答える」だけに収まること、 衝突が失敗ではなく実装役の 1 turn として処理されること、 衝突で終端した便を畳めるようになることです。 悪い面は、 実装役の起こし直しの分だけ口座の枠を使うこと、 入口の排他で契約が断られて出し直しの手間が増えること、 write-set を dir で広く取った契約ほど排他に掛かりやすいことです。</p>
+<p data-audience="machine">Positive: 並列の便で人の手番が回答 1 種類に閉じる (ADR-0016 §2.3 の形を保つ)。 衝突が typed な event (<code>rebase-conflict</code>) として残り、 回数が replay から読める。 排他は既存 guard の内側の variant 1 つで極性一覧の形を変えない。 retire の前提が広がり、 Failed の worktree が溜まらない (N1.2)。</p>
+<p data-audience="machine">Negative (受け入れるコスト): 起こし直しは runner の turn を増やし口座の枠を使う (上限は §2.4・枠の自律制御は <code>s2-07l.142</code>)。 排他は保守的 (dir 単位・symlink を解かない) なので、 実際には重ならない契約も断られうる (出し直しは管理席の運用)。 rules 行 1 つ・prompt template の節 1 つ・Unfit の variant 1 つ・event の detail 1 種が増える。 並列 2 本の実地試験 (台帳 <code>s2-07l.143</code>) で追随と枠の減りを実測してから契約を流す。</p>
+</section>
+
+<section id="s5-alternatives" class="informative">
+<h2>§5. Alternatives Considered</h2>
+<p class="section-essence" data-audience="human">5 つの案を退けました。 衝突した便を計画役が切り直す案は、 計画役が詰まります。 係の席が手で merge する案は、 審査の分離を壊します。 入口の排他だけで解く案は、 回答で広がる周に衝突が残ります。 全部を 1 本ずつ流す案は、 並列性がゼロです。 衝突を機械的な 3-way merge で解く案は、 意味の衝突を解けません。</p>
+<p data-audience="machine">(A) <strong>衝突した便は planner が契約を切り直す</strong>。 却下: planner が律速になり、 並列を上げるほど悪化する (ADR-0016 §1 の実測と同型)。 起こし直しで解けない周だけ質問として planner へ戻す (§2.2)。</p>
+<p data-audience="machine">(B) <strong>管理席が worktree を手で merge して land する</strong>。 却下: gate 分離を破り (審査の後に人が編集)、 C16 (逸脱を edit time で止める) に反する。 席の仕事は 3 つのまま (§2.3)。</p>
+<p data-audience="machine">(C) <strong>入口の排他だけを持ち、 衝突時の解消経路を持たない</strong>。 却下: 回答で write-set が広がる周 (<code>s2-07l.133</code>) と dir 単位の write-set が別 file を触る周に衝突が残り、 Failed の worktree が溜まる。</p>
+<p data-audience="machine">(D) <strong>全便を直列に流す</strong>。 却下: 並列性がゼロで user の目的 (速度) に反する。 直列は排他の特殊形 (常に交差扱い) として §2.1 に含まれる。</p>
+<p data-audience="machine">(E) <strong>衝突を器が 3-way merge の道具で自動解決する</strong>。 却下: 意味の衝突 (同じ関数を別々に直した) は道具で解けず、 解けたように見える誤 merge が gate を通る危険がある。 解くのは契約を読んだ runner で、 判定は gate (C16 の向き)。</p>
+</section>
+
+<section id="s6-trace" class="informative">
+<h2>§6. Trace</h2>
+<p class="section-essence" data-audience="human">出所は、 user の問いと裁定、 器の現物 (land の追随と衝突の終端・intake の検査・retire の前提)、 そして先行決定 (write-set guard・質問 record・guard の定義) です。</p>
+<ul data-audience="machine">
+  <li>user の問いと裁定 (2026-09-12・会話面・planner 席): 並列で後から重なる衝突を誰がどう解くか／全部 admin だと詰まる → planner の推奨 (入口で排他 + 起きたら runner が解く・人は質問経由のみ) を採用・歯は必須。 逐語は台帳 <code>s2-07l.143</code> の notes (tracked file には写さない・CON2)。</li>
+  <li>器の現物 (2026-09-12): <code>crates/&lt;NAME&gt;/src/pipe/land.rs</code> の <code>follow_main</code> / <code>rebase_onto</code> (祖先なら rebase → <code>Implemented detail=rebase:…</code> → gate 撃ち直し・衝突は abort → <code>Failed detail=rebase-conflict</code>・0 commit は <code>rebase-empty</code>)・<code>pipe/declaration.rs</code> の <code>Unfit</code> (intake の拒否理由・極性一覧 <code>intake-unfit</code>)・<code>pipe/contract.rs</code> の <code>write_set</code> (必須・1 本以上)・<code>headless/runner.txt</code> (write-set の外を書き換えない・回答節)・設計 pipeline.md §5.4 (retire の前提 = Landed ∨ rebase-empty)。</li>
+  <li>台帳の memo: <code>s2-07l.132</code> (gate / lens FAIL の worktree を retire で畳む)・<code>s2-07l.133</code> (回答で write-set が広がる周の写しの再読)。 本 ADR は前者を §2.4 で吸収し、 後者を §2.3 の再照合に結ぶ。</li>
+  <li>先行決定: <a href="./ADR-0009-vessel-grants-runner-permissions-and-mutation-proof.html">ADR-0009</a> §2.1 (write-set guard) / §2.2 (intake の拒否)・<a href="./ADR-0014-polarity-list-is-a-snapshot-rendered-by-core.html">ADR-0014</a> §2.1 (guard の定義と極性)・<a href="./ADR-0016-default-delivery-structure-and-typed-question-record.html">ADR-0016</a> §2.1〜§2.3 (配送構造・質問 record・回答の権限) / §2.5 (交差の検査は射程外)。</li>
+  <li>設計: <code>docs/design/pipeline-conflict.md</code> (交差の判定・live の定義・「追随」節・起こし直しの段と event・回数の導出・retire の拡張・歯・契約・並列試験の観測)。</li>
+</ul>
+</section>
+
+<!-- folio:chrome-bottom -->
+<nav class="prevnext" aria-label="前後の文書">
+  <a class="prevnext__prev" href="ADR-0018-working-memory-subcommands-and-pointer-required-directives.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">ADR-0018 — 作業記憶の退避・復元・消費は器の subcommand が機械層を担い、 命令行は照合できる出所 pointer を必須とし、 pointer の無い行は暫定の印を付けて次の cycle に引き継がない (brief の文章は開発 session が組む・前の版の script への依存を切る)</span></a>
+</nav>
+<script>
+(function () {
+  var openedForPrint = [];
+  window.addEventListener('beforeprint', function () {
+    openedForPrint = [];
+    var ds = document.querySelectorAll('details:not([open])');
+    for (var i = 0; i < ds.length; i++) { ds[i].setAttribute('open', ''); openedForPrint.push(ds[i]); }
+  });
+  window.addEventListener('afterprint', function () {
+    for (var i = 0; i < openedForPrint.length; i++) openedForPrint[i].removeAttribute('open');
+    openedForPrint = [];
+  });
+  if (!document.querySelector('[data-audience]')) return;
+  /* 既定 = 人間プレゼン型 (ADR-0040 / rules §11.3): script 経由で初期 class を付与するため
+     no-JS では付かず全文可視に graceful degrade する。 static DOM は全文を保持 (AI/検索/印刷は不変)。 */
+  document.body.classList.add('audience-human');
+  var bar = document.createElement('nav');
+  bar.className = 'audience-toggle';
+  bar.setAttribute('aria-label', '表示対象の切替');
+  var states = [['both', '両方'], ['human', '人間向け'], ['machine', '機械向け']];
+  for (var s = 0; s < states.length; s++) {
+    (function (mode, label) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      b.setAttribute('aria-pressed', mode === 'human' ? 'true' : 'false');
+      b.addEventListener('click', function () {
+        document.body.classList.remove('audience-human', 'audience-machine');
+        if (mode !== 'both') document.body.classList.add('audience-' + mode);
+        var bs = bar.querySelectorAll('button');
+        for (var j = 0; j < bs.length; j++) bs[j].setAttribute('aria-pressed', bs[j] === b ? 'true' : 'false');
+      });
+      bar.appendChild(b);
+    })(states[s][0], states[s][1]);
+  }
+  var bc = document.querySelector('nav.breadcrumb');
+  if (bc && bc.parentNode) { bc.parentNode.insertBefore(bar, bc.nextSibling); }
+  else { document.body.insertBefore(bar, document.body.firstChild); }
+})();
+</script>
+<!-- /folio:chrome-bottom -->
+</body>
+</html>

@@ -493,3 +493,12 @@ terms:
     domain: consumer
     definition: 作業記憶の命令行が本文末に持つ、 実在を照合できる carrier 参照。 器は形を閉じた enum (PointerKind) で分類し、 宣言順を優先順位とする (ADR-0018 §2.2)。 形の列挙は機械側 (PointerKind::ALL と外形 snapshot) が正本で、 本 file は写さない。 持たない行・分類できない行は暫定行。
     relationships: [作業記憶, 暫定行, 宣言順]
+  # ---------------------------------------------------------------- ADR-0019 (並列の便の受付と衝突)
+  - canonical: 追随
+    domain: consumer
+    definition: land の前に、 便の base より進んだ main へ worktree の branch を rebase し gate を撃ち直すこと (pipeline 設計 §5.4)。 衝突した周は終端にせず runner を起こし直して write-set の内側で解かせる (ADR-0019 §2.2)。
+    relationships: [land, 便, runner, write-set]
+  - canonical: write-set の交差
+    domain: consumer
+    definition: 2 つの契約の write-set (path の集合・末尾 / の dir は配下を含む) の共通部分が空でないこと。 intake は live な便と交差する契約を受け付けない (ADR-0019 §2.1)。
+    relationships: [write-set, 契約, 便]
