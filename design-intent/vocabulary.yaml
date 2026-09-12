@@ -471,3 +471,12 @@ terms:
     definition: 作業記憶の「命令・制約」行のうち出所 pointer (憲法条・ADR・rules 行・裁定 id・user 裁定の時刻) を持たない行 (SRS FR23 / AC8)。
     forbidden: [仮の行, 暫定命令]
     relationships: [作業記憶, 退避物, 憲法]
+  # ---------------------------------------------------------------- ADR-0017 (口座残量の計測の形)
+  - canonical: 口座 label
+    domain: consumer
+    definition: manifest の account 行が口座を指すために持つ不透明な符丁 (ADR-0017 §2.3)。 本当の口座の識別子・host 名・path のいずれでもなく、 credential の場所は state dir 配下の同名 dir から解く。
+    relationships: [口座, manifest, state dir, 口座残量]
+  - canonical: 実測行
+    domain: consumer
+    definition: 口座残量を 1 口座 1 窓で event log に追記した行 (ADR-0017 §2.1)。 出所 (口座 label・endpoint・時刻) を持つ Measured で、 読めなかった回は使用率を持たない「測れなかった」の行になる。
+    relationships: [口座残量, event log, Measured, 上限 record]

@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="folio-doc-type" content="adr">
+<meta name="folio-layer" content="project">
+<meta name="folio-version" content="0.4.6">
+<meta name="folio-status" content="accepted">
+<meta name="folio-stakeholders" content="Developer, AI Agent, External Reviewer">
+<meta name="folio-adr-id" content="0017">
+<meta name="folio-adr-date" content="2026-09-12">
+<title>ADR-0017 — 口座残量は器が host の HTTP client を子 process で呼んで読み、 出所付きの実測行として fleet の event log に記録する (manifest の口座列挙は不透明な label・上限 record は検出の合図のまま・選ぶは v3)</title>
+<link rel="stylesheet" href="../../common.css">
+<script type="application/ld+json">
+{
+  "@context": {
+    "dc": "http://purl.org/dc/terms/",
+    "schema": "https://schema.org/",
+    "folio": "https://folio.dev/spec/v1/"
+  },
+  "@id": "./ADR-0017-account-allowance-measured-into-event-log.html",
+  "@type": "schema:TechArticle",
+  "dc:isPartOf": [
+    { "@id": "./README.html" }
+  ],
+  "dc:title": "ADR-0017 — 口座残量は器が host の HTTP client を子 process で呼んで読み、 出所付きの実測行として fleet の event log に記録する (manifest の口座列挙は不透明な label・上限 record は検出の合図のまま・選ぶは v3)",
+  "folio:version": "0.4.6",
+  "folio:stakeholders": ["Developer", "AI Agent", "External Reviewer"],
+  "dc:references": [
+    { "@id": "../spec/constitution.html#c1" },
+    { "@id": "../spec/constitution.html#c2" },
+    { "@id": "../spec/constitution.html#c3" },
+    { "@id": "../spec/constitution.html#c9" },
+    { "@id": "../spec/constitution.html#c10" },
+    { "@id": "../spec/constitution.html#c11" },
+    { "@id": "../spec/constitution.html#c13" },
+    { "@id": "../spec/srs.html#FR33" },
+    { "@id": "../spec/srs.html#AC11" },
+    { "@id": "../spec/srs.html#NFR3" },
+    { "@id": "../spec/srs.html" },
+    { "@id": "./ADR-0004-mvp-persistence-and-cross-version-formats.html" },
+    { "@id": "./ADR-0009-vessel-grants-runner-permissions-and-mutation-proof.html" },
+    { "@id": "./ADR-0012-rate-limit-detection-reads-dedicated-record.html" },
+    { "@id": "./ADR-0013-machine-holds-enumerations-docs-hold-pointers.html" },
+    { "@id": "./ADR-0016-default-delivery-structure-and-typed-question-record.html" }
+  ]
+}
+</script>
+</head>
+<body>
+<!-- folio:chrome-top -->
+<a class="skip-link" href="#s1-context">本文へスキップ</a>
+<nav class="breadcrumb" aria-label="パンくず"><ol>
+  <li><a href="../index.html">design-intent</a></li>
+  <li><a href="./README.html">decisions</a></li>
+  <li aria-current="page">ADR-0017</li>
+</ol></nav>
+<!-- /folio:chrome-top -->
+
+<header class="doc-header">
+  <h1>ADR-0017 — 口座残量は器が host の HTTP client を子 process で呼んで読み、 出所付きの実測行として fleet の event log に記録する (manifest の口座列挙は不透明な label・上限 record は検出の合図のまま・選ぶは v3)</h1>
+  <div class="meta">Status: accepted &middot; Date: 2026-09-12 &middot; version 0.4.6 (拘束する constitution の版) &middot; C3 / C9.2 / C10 / C13 の適用を記録し、 ADR-0004 §2.6 の一文を口座残量の実測行に限って supersede &middot; 要件は SRS v0.5 (FR33 / AC11) が正本</div>
+</header>
+<!-- folio:chrome-toc -->
+<nav class="toc" aria-label="ページ内目次">
+<ol>
+  <li><a href="#s1-context">§1. Context</a></li>
+  <li><a href="#s2-decision">§2. Decision</a></li>
+  <li class="toc--sub"><a href="#s2-1-event-log">§2.1 記録先は fleet の event log。 ADR-0004 §2.6 の一文を口座残量の実測行に限って supersede する</a></li>
+  <li class="toc--sub"><a href="#s2-2-host-http-client">§2.2 手段は host の HTTP client を子 process で呼ぶ形。 crate の依存は足さず、 token は argv にも記録にも載せない</a></li>
+  <li class="toc--sub"><a href="#s2-3-roster">§2.3 manifest の口座列挙は不透明な label の宣言。 credential の場所は state dir 配下の label 名 dir から解く</a></li>
+  <li class="toc--sub"><a href="#s2-4-signal-vs-truth">§2.4 上限 record は検出の合図のまま。 残量の正本は実測行で、 本版では止める判断にも選ぶ判断にも使わない</a></li>
+  <li class="toc--sub"><a href="#s2-5-scope">§2.5 射程外</a></li>
+  <li><a href="#s3-srs">§3. SRS との関係 (正本は SRS)</a></li>
+  <li><a href="#s4-consequences">§4. Consequences</a></li>
+  <li><a href="#s5-alternatives">§5. Alternatives Considered</a></li>
+  <li><a href="#s6-trace">§6. Trace</a></li>
+</ol>
+</nav>
+<!-- /folio:chrome-toc -->
+
+<aside class="informative">
+<p>本 ADR は IETF <strong>RFC 2119</strong> および <strong>RFC 8174 / BCP 14</strong> に定義される MUST / SHALL / SHOULD / MAY のキーワード解釈規約に従う。 ADR は決定時点の記録であり、 改訂は新しい ADR による supersede で行う。 本 ADR の <strong>§2 は user 裁定 (2026-09-12) を受けた決定</strong>で、 <strong>§3 は SRS への pointer</strong> である。 要件 (<a href="../spec/srs.html#FR33">FR33</a> / <a href="../spec/srs.html#AC11">AC11</a>) は本 ADR より先に SRS v0.5 へ入っており、 本 ADR は要件の文面を 1 字も持たず、 <strong>理由・形・却下案</strong> だけを持つ。 本 ADR は <a href="./ADR-0004-mvp-persistence-and-cross-version-formats.html#s2-6-out-of-scope">ADR-0004 §2.6</a> のうち「口座の状態を MVP の event log に持たせない」の一文を、 <strong>口座残量の実測行に限って</strong> supersede する (ADR-0004 の他の決定・ADR-0012 は不変)。</p>
+</aside>
+
+<aside class="machine-readable" aria-hidden="true">
+  <dl>
+    <dt>id</dt><dd>ADR-0017</dd>
+    <dt>doc-type</dt><dd>adr</dd>
+    <dt>status</dt><dd>accepted</dd>
+    <dt>date</dt><dd>2026-09-12</dd>
+    <dt>version</dt><dd>0.4.6 (拘束する constitution の版。 本 ADR は憲法の条文を動かさない)</dd>
+    <dt>decided-by</dt><dd>user (2026-09-12) — 3 論点のうち 2 論点目の裁定 (見る + 記録を MVP に・選ぶは v3・手段は host の道具を子 process で)。 逐語は台帳の notes が原本で、 本 file には写さない (CON2)</dd>
+    <dt>stakeholders</dt><dd>Developer, AI Agent, External Reviewer</dd>
+    <dt>supersedes</dt><dd>ADR-0004 §2.6 の一文「口座・lease・退役・tmux 席の状態は MVP の event log に持たせない」を、 口座残量の実測行 (FR33) に限って supersede する。 lease・退役・席の状態は引き続き MVP の event log に持たない</dd>
+    <dt>related</dt><dd>ADR-0004 §2.1 / §2.4 / §2.5 (event log の形・state dir の受け渡し・schema 版) / ADR-0012 §2.1〜§2.4 (上限 record は不変) / ADR-0013 §2.2 (variant の足し方) / ADR-0016 §2.2 (schema 1 のまま variant を足した前例) / constitution C1 / C2.2 / C3 / C9.2 / C10 / C10.2 / C11.2 / C13 / A3 / R-C9-1 / SRS FR33 / AC11 / NFR3 / CON2</dd>
+  </dl>
+</aside>
+
+<section id="s1-context" class="informative">
+<h2>§1. Context</h2>
+<p class="section-essence" data-audience="human">口座の残り (5 時間枠・7 日枠・モデル別の 7 日枠と、 それぞれの reset 時刻) を見る道具は host に在りますが、 前の版の python script であって、 この器の外にあります。 器は口座の残りを読む口も記録する口も持たず、 席が口座を選ぶときは前の版の道具を手で叩いて数字を写していました。 憲法は「口座を allowance の窓の終わりまで使い切る」と命じており、 その判断には残りの数字が要ります。 user の指摘を受けて要件 (FR33 / AC11) は先に要件書へ入りました。 この記録は、 その要件を <em>どこに記録し・どうやって読み・口座をどう列挙し・止める合図とどう区別するか</em> の 4 点を決めます。</p>
+<p data-audience="machine">記録時点 (2026-09-12) の現物: 口座残量を読む手段は前の版の python script (host の <code>PATH</code> 上・器の外) だけで、 口座の endpoint (認証 API の usage 口) を各口座の credential file の access token で読み、 <code>five_hour</code> / <code>seven_day</code> (各 <code>utilization</code> と <code>resets_at</code>) と <code>limits[]</code> (kind が <code>weekly_scoped</code> の要素にモデル別の 7 日枠・モデルは <code>scope.model.display_name</code> でしか結べない) を返す。 credential の <code>expiresAt</code> が 0 の口座は墓標 (再 login は user の操作でしか戻らない) である。 器の側: <code>headless</code> は <code>--account-dir</code> の値を子 process の設定 dir として渡すだけで口座を読まない (<a href="../spec/srs.html#FR5">FR5</a>・<a href="./ADR-0004-mvp-persistence-and-cross-version-formats.html#s2-4-no-env-seam">ADR-0004 §2.4</a>)。 fleet の event log は <code>&lt;state_dir&gt;/fleet/events.jsonl</code> の 1 file (ADR-0004 D-1) で、 行は flat JSON (値は string / u64 / bool / null) を std の reader (<code>json_lite</code>) で読む。 rules 行 <code>R-C9-1</code> (口座の選択規則) は <code>enabled = false</code> のまま。 manifest は <code>[[rule]]</code> 行だけを持ち、 口座の列挙を持たない。</p>
+<p data-audience="machine">憲法の向き: <a href="../spec/constitution.html#c9">C9.2</a> は各口座を allowance 窓の終わりまで使うと定め、 残量は判断入力である。 <a href="../spec/constitution.html#c10">C10</a> は宣言値・出所付き実測値・導出値・有効値を型で分け、 宣言値は計測を通してだけ有効になる。 <a href="../spec/constitution.html#c3">C3</a> は fleet の状態を host 列を持つ 1 つの DB file に置き、 per-host の dir / TSV / cache に真実を置かない。 <a href="../spec/constitution.html#c13">C13</a> / <a href="../spec/srs.html#NFR3">NFR3</a> は実行時の crate 依存 0 本を求め、 依存の増減は <a href="../spec/constitution.html#a3">A3</a> (user 承認) を要する。 <a href="../spec/srs.html">CON2</a> は本 repo が PUBLIC であり、 絶対 path・host 名・口座名・user 逐語を tracked file に書かないと定める。 先行決定: <a href="./ADR-0004-mvp-persistence-and-cross-version-formats.html#s2-6-out-of-scope">ADR-0004 §2.6</a> は SRS v0.3 の scope (口座は扱わない) の下で「口座の状態は MVP の event log に持たせない」と書いた。 <a href="./ADR-0012-rate-limit-detection-reads-dedicated-record.html#s2-4-scope">ADR-0012 §2.4</a> は上限 record の <code>utilization</code> / <code>resetsAt</code> を判定に用いず記録に残すだけとし、 口座の選定を射程外に置いた。 user の裁定 (2026-09-12・会話面・逐語は台帳 <code>s2-07l.99</code> の notes): 見る + 記録を MVP に入れる・選ぶは v3・手段は host の道具を子 process で呼ぶ (crate 依存なし)。 要件書は同日 v0.5 で FR33 / AC11 を持ち、 実装手段は SRS から外して ADR の領分とした。</p>
+</section>
+
+<section id="s2-decision" class="normative">
+<h2>§2. Decision</h2>
+
+<h3 id="s2-1-event-log">§2.1 記録先は fleet の event log。 ADR-0004 §2.6 の一文を口座残量の実測行に限って supersede する</h3>
+<p class="section-essence" data-audience="human">読んだ残りは、 便や席の出来事と同じ 1 つの file (fleet の event log) に 1 行ずつ足します。 別の file を作らないのは、 憲法が「fleet の状態は 1 つの file」と命じるからです。 行には「どの口座を・どこから・いつ読んだか」を必ず添え、 読めなかった回は「測れなかった」と理由を残します。 0 と書いてごまかすことはしません。 file の版番号は変えません。 既存の行はそのまま読めるからです。</p>
+<p data-audience="machine">器 SHALL 口座残量の実測行を <code>&lt;state_dir&gt;/fleet/events.jsonl</code> (<a href="./ADR-0004-mvp-persistence-and-cross-version-formats.html#s2-1-persistence">ADR-0004 §2.1</a> D-1 の 1 file・<a href="../spec/constitution.html#c3">C3</a> の host 列付き) に追記し、 SHALL NOT 口座残量のための第 2 の file・表・cache を持たない。 <code>EventKind</code> SHALL <code>AllowanceMeasured</code> と <code>AllowanceUnmeasured</code> の <strong>2 variant</strong> を末尾に足す (C2 の宣言順・<a href="./ADR-0013-machine-holds-enumerations-docs-hold-pointers.html#s2-2-order">ADR-0013 §2.2</a> の pin の内側・<a href="./ADR-0016-default-delivery-structure-and-typed-question-record.html#s2-2-question-record">ADR-0016 §2.2</a> と同じ足し方)。 1 行 SHALL 1 口座 1 窓 (5 時間窓・7 日窓・モデル別 7 日窓のいずれか) を表し、 <code>ts</code> (読んだ時刻)・<code>account</code> (§2.3 の label)・<code>endpoint</code> (読んだ口の名) の 3 つを出所として持つ (<a href="../spec/constitution.html#c10">C10</a> の Measured + Provenance)。 <code>AllowanceMeasured</code> 行は使用率 (整数 %) と reset 時刻 (UTC) を、 <code>AllowanceUnmeasured</code> 行は理由 (閉じた enum の名) を持ち、 <code>AllowanceUnmeasured</code> 行 SHALL NOT 使用率の field を持たない (「測れなかった」を 0 に読み替えない・FR33)。 <code>actor</code> は <code>machine</code> (FR22 不変)。 event log の schema 版 SHALL 1 のままとし、 <code>run</code> / <code>bead</code> は任意 field に緩め、 新しい field は任意で足す (<a href="./ADR-0004-mvp-persistence-and-cross-version-formats.html#s2-5-schema-version">ADR-0004 §2.5</a> D-5: 既存の行はすべて読める。 古い読み手が新しい行を Err にするのは fail-closed のとおり)。 replay SHALL 口座残量の行を run / seat の現在地に混ぜず、 口座 × 窓ごとの最新 1 行を別の導出値として持つ。 跨版 面 2 (<code>fleet export</code>・ADR-0004 §2.2) SHALL 本 ADR で変えない。 <a href="./ADR-0004-mvp-persistence-and-cross-version-formats.html#s2-6-out-of-scope">ADR-0004 §2.6</a> の「口座・lease・退役・tmux 席の状態は MVP の event log に持たせない」は、 <strong>口座残量の実測行に限って</strong>本 ADR が supersede する。 lease・退役・席の状態は引き続き持たない (SRS scope out・v3)。</p>
+
+<h3 id="s2-2-host-http-client">§2.2 手段は host の HTTP client を子 process で呼ぶ形。 crate の依存は足さず、 token は argv にも記録にも載せない</h3>
+<p class="section-essence" data-audience="human">器は自分で HTTP を話しません。 host に入っている HTTP client (git や claude と同じ「host の道具」) を子 process として呼び、 その答えを読みます。 Rust の依存を 1 本も増やさないためです。 口座の鍵 (access token) は command の引数に載せず (他の process から見えるため)、 標準入力で渡し、 記録にも表示にも一切出しません。 応答の読み手は標準ライブラリだけで書き、 読めない・届かない・鍵が無い、 のどれも「測れなかった + 理由」の行になります。</p>
+<p data-audience="machine">器 SHALL 口座の endpoint を host の HTTP client (<code>curl</code>) を子 process として呼んで読む。 これは git / claude / tmux と同じ「host の道具」の扱いであり、 crate の依存ではない (<a href="../spec/srs.html#NFR3">NFR3</a> / <a href="../spec/constitution.html#c13">C13</a> / R-C13-1 不変・<a href="../spec/constitution.html#a3">A3</a> 非該当)。 実行 file の差し替えは CLI 引数 (<code>--curl PATH</code>・headless の <code>--claude PATH</code> と同型) だけで行い、 env は読まない (<a href="../spec/constitution.html#c2">C2.2</a>・ADR-0004 D-4)。 access token SHALL 口座の credential file から読み、 子 process へは <strong>stdin の設定 (curl の <code>-K -</code>)</strong> で渡す。 token SHALL NOT argv・event log・stdout / stderr・報告 file のいずれにも現れない。 応答 (入れ子の JSON・配列・小数) SHALL std だけの reader で読む (<code>json_lite</code> を入れ子・配列・数へ広げる。 event log の flat な行の読み方は変えない)。 endpoint の URL SHALL code の定数 1 つで持つ (host 固有の値ではない・manifest に置かない)。 失敗の極性は <strong>FailClosed</strong> (<a href="../spec/constitution.html#c11">C11.2</a>): credential file 不在・token 不在・墓標 (<code>expiresAt</code> が 0)・期限切れ・子 process の rc 非 0・HTTP status 非 200・本文 parse 不能・field 欠落のいずれも <code>AllowanceUnmeasured</code> 行 (理由は閉じた enum の 1 variant) になり、 SHALL NOT 使用率 0 の行に化けない。 子 process の待ち時間の上限 SHALL rules 行 (<a href="../spec/constitution.html#c1">C1</a>・値には裁定 id が要る <a href="../spec/constitution.html#c5">C5</a>) で持ち、 本 ADR は値を決めない。 計測 SHALL 1 コマンド (<code>&lt;NAME&gt; fleet usage --state-dir D</code>) で manifest の全口座を読んで記録し、 口座ごとに 1 行を stdout へ出す (FR33「1 コマンドで読み」・出力は emit 経由)。</p>
+
+<h3 id="s2-3-roster">§2.3 manifest の口座列挙は不透明な label の宣言。 credential の場所は state dir 配下の label 名 dir から解く</h3>
+<p class="section-essence" data-audience="human">どの口座があるかは manifest に「宣言」します。 ただしこの repo は公開なので、 本当の口座の名前や置き場の path は書けません。 manifest に書くのは器の中だけで通じる符丁 (label) だけです。 その label がどの credential を指すかは、 host ごとに state dir の下に label と同じ名前の dir (実体は user が置く link) を用意して結びます。 label があるのに host に dir が無ければ、 その口座は「この host では測れなかった」と正直に記録します。 manifest に label を足す作業は公開面の情報を増やすので、 user に聞いてから行います。</p>
+<p data-audience="machine">manifest SHALL 口座を <code>[[account]] label = "&lt;label&gt;"</code> の行で列挙する (宣言値・<a href="../spec/constitution.html#c10">C10</a>・host 固有の値の置き場は manifest だけ <a href="../spec/constitution.html#c10">C10.2</a>・manifest の schema 版は 1 のまま)。 label SHALL 不透明 (本当の口座の識別子・host 名・path のいずれでもない) とし、 <a href="../spec/srs.html">CON2</a> を守る。 credential の場所 SHALL <code>&lt;state_dir&gt;/accounts/&lt;label&gt;</code> から解き、 その dir (または link) を host ごとに置くのは user の操作である。 state dir は <a href="./ADR-0004-mvp-persistence-and-cross-version-formats.html#s2-4-no-env-seam">ADR-0004 §2.4</a> の経路 (git の local 設定または <code>--state-dir</code>) で得て、 HOME も env も読まない。 label に対する dir が無い・読めない host では、 器 SHALL その口座を <code>AllowanceUnmeasured</code> (理由 = credential 不在) として記録し、 SHALL NOT command 全体を失敗にしない (他の口座の読みは続く)。 器 SHALL NOT state dir 配下の dir を走査して口座を発見しない (真実は manifest の宣言・<a href="../spec/constitution.html#c3">C3</a>「per-host の dir に真実を置かない」)。 label 行を manifest に足す変更は公開面の情報 (口座の数) を増やすため、 <a href="../spec/constitution.html#a1">A1</a> (出す) の対話面で user に確認してから行う。 本 ADR は形だけを決め、 label 行を 1 つも足さない。</p>
+
+<h3 id="s2-4-signal-vs-truth">§2.4 上限 record は検出の合図のまま。 残量の正本は実測行で、 本版では止める判断にも選ぶ判断にも使わない</h3>
+<p class="section-essence" data-audience="human">「上限に当たった」という合図 (claude が便の途中で返す record) と、 「あとどれだけ残っているか」という数字は別のものです。 合図は便を止めるための入力で、 これまでどおり変えません。 残りの数字の正本はこの記録で決めた実測行です。 ただしこの版では、 実測行を見て便を止めたり口座を選び直したりはしません。 使い切る前に自主的に止めるのは憲法に反し、 選ぶ規則はまだ裁定されていないからです。</p>
+<p data-audience="machine"><a href="./ADR-0012-rate-limit-detection-reads-dedicated-record.html">ADR-0012</a> §2.1〜§2.4 は不変である: 上限の判定入力は上限 record の <code>status</code> だけで、 record の <code>utilization</code> / <code>resetsAt</code> は判定に用いず記録に残すだけ。 口座残量の正本 SHALL FR33 の実測行 (§2.1) とし、 上限 record の field を残量の正本と読んではならない (MUST NOT・出所が違う 2 つの entity)。 器 SHALL NOT 本版で実測行を便の停止 (<a href="./ADR-0012-rate-limit-detection-reads-dedicated-record.html#s2-3-no-threshold">ADR-0012 §2.3</a>・<a href="../spec/constitution.html#c9">C9.2</a>) にも口座の選定 (rules 行 <code>R-C9-1</code> は <code>enabled = false</code> のまま・SRS scope out) にも用いない。 実測行の読み手は席 (planner / 管理席) と doctor であり、 判断は席が行う。</p>
+
+<h3 id="s2-5-scope">§2.5 射程外</h3>
+<p class="section-essence" data-audience="human">この記録が決めるのは「記録先」「読み方」「口座の列挙の形」「合図との区別」の 4 点だけです。 口座を自動で選ぶこと、 定期的に測ること、 host をまたいで宣言と実測を突き合わせること、 鍵の更新や再 login は別に決めるか、 user の手番です。</p>
+<p data-audience="machine">次は本 ADR の決定ではない (MUST NOT be read as such): 口座の自動選定と <code>R-C9-1</code> の有効化 (v3・A2 の裁定を要する)、 計測を tick から定期実行する形 (seat-autonomy の領分・別途)、 doctor が全 host の宣言 (label) と実測 (event log) を突き合わせる面 (<a href="../spec/constitution.html#c3">C3.2</a>・v3)、 lease / 退役 / 席の状態の event log 化 (ADR-0004 §2.6 のまま)、 token の refresh と再 login (Claude Code と user の手番・器は credential file に書かない)、 モデル別 7 日窓を結ぶ規則の細部 (display name の一致・設計 doc)、 待ち時間の上限の値 (rules 行・裁定 id 待ち)、 SQLite 化 (v3・A3)。</p>
+</section>
+
+<section id="s3-srs" class="informative">
+<h2>§3. SRS との関係 (正本は SRS)</h2>
+<p class="section-essence" data-audience="human">この記録が仕える要件は、 先に要件書 (SRS v0.5) に入っています。 要件の文面はここには置かず、 要件書の当該行を指すだけにします。 この記録は要件書を 1 字も変えません。</p>
+<div data-audience="machine">
+<p>本 ADR の §2.1〜§2.3 が仕える要件は SRS v0.5 が正本である: <a href="../spec/srs.html#FR33">FR33 口座残量の計測</a> (記録先・出所・「測れなかった」の扱い・manifest の口座列挙)・<a href="../spec/srs.html#AC11">AC11</a> (live な口座 2 つ以上での実演・器の外の独立した手段との一致・credential の無い口座の行)。 <a href="../spec/srs.html#FR22">FR22</a> (人由来の event は approval 以外 0 件) は不変 (実測行の actor は machine)。 SRS の scope out (複数口座の自動選定・席の dashboard) も不変。 実装手段 (host の HTTP client・token の渡し方・label の解き方・event の field) は §2 が正本で SRS は持たない。</p>
+</div>
+</section>
+
+<section id="s4-consequences" class="informative">
+<h2>§4. Consequences</h2>
+<p class="section-essence" data-audience="human">良い面は、 口座の残りが器の中の 1 つの記録に出所付きで残り、 前の版の道具を手で叩いて写す作業が消えること、 依存を 1 本も増やさないこと、 「測れなかった」が数字に化けないことです。 悪い面は、 host に HTTP client が無ければ測れないこと、 label と credential を結ぶ dir を host ごとに user が置く手間、 応答を読む JSON reader を自前で広げる分の code、 そして口座の数が公開 repo の manifest から読めることです。</p>
+<p data-audience="machine">Positive: 口座残量が fleet の 1 file に Measured + Provenance で残り (C3 / C10)、 席の口座選びが前の版の道具への依存を離れる (C8 の向き)。 crate 依存 0 本のまま (NFR3 / C13)。 失敗が typed な理由で残り 0 に化けない (C11.2 / FR33)。 上限 record との役割分担が明文化され、 ADR-0012 の判定経路は触らない。 schema 版 1 のまま (D-5)。</p>
+<p data-audience="machine">Negative (受け入れるコスト): host の HTTP client への実行時依存 (git / claude と同種・不在は Unmeasured の理由になる)。 <code>&lt;state_dir&gt;/accounts/&lt;label&gt;</code> を host ごとに置く user の操作が 1 口座 1 回要る。 std だけの JSON reader を入れ子・配列・数へ広げる code (core の行数は R-C4-1 の内側で測る)。 manifest の label 行は口座の <em>数</em> を公開面に出す (label 自体は不透明・追加は A1 の確認を経る)。 credential file の形 (Claude Code の私有形式) への読み取り依存 — 形が変われば Unmeasured に倒れる (fail-closed・止まらない)。</p>
+</section>
+
+<section id="s5-alternatives" class="informative">
+<h2>§5. Alternatives Considered</h2>
+<p class="section-essence" data-audience="human">6 つの案を退けました。 Rust の HTTP crate を足す案は依存 0 本の約束を破ります。 前の版の script の出力を読む案は、 前の版を器の判断の元にしてしまいます。 Claude Code が disk に残す cache を読む案は、 書き手と鮮度が器の外にあり出所が付きません。 残量だけ別 file に置く案は「fleet の状態は 1 つの file」に反します。 本当の口座名や path を manifest に書く案は公開 repo で禁じられています。 state dir の下を走査して口座を見つける案は、 真実を host ごとの dir に置くことになります。</p>
+<p data-audience="machine">(A) <strong>Rust の HTTP crate を足す</strong>。 却下: NFR3 (実行時の直接依存 0 本) と C13 (依存予算・A3 の承認・compile 時間の記録) に触れ、 TLS まで含めると依存が連鎖する。 host の道具を子 process で呼ぶ形は git / claude / tmux で既に取っている形であり、 増やすのは同種の 1 つ。</p>
+<p data-audience="machine">(B) <strong>前の版の script (<code>--json</code>) を「器の外の観測物」として読む</strong>。 却下: 器の判断入力が前の版の python の出力に依存し、 C8 (前の版を oracle にしない) と ADR-0009 §2.5 (repo 内の非 Rust 実行物を deny する向き) に反する。 token の扱いも器の外に残る。</p>
+<p data-audience="machine">(C) <strong>Claude Code が disk に残す usage の cache を読む</strong>。 却下: 書き手 (statusline) と鮮度が器の外にあり、 C10 の出所 (いつ・どこから読んだか) を付けられない。 cache が無い・古い周を「測れなかった」と「古い値」に弁別できない。</p>
+<p data-audience="machine">(D) <strong>口座残量を別 file (<code>&lt;state_dir&gt;/fleet/allowance.jsonl</code>) に置く</strong>。 却下: C3「exactly one database file」と ADR-0004 D-1 (fleet の状態は 1 つの JSONL) に反する。 verdicts / inject が別 file なのは審査結果と消費であって fleet の状態ではない (設計 fleet-event-log.md §2)。 口座残量は fleet の状態 (C3 の列挙に「accounts」が在る)。</p>
+<p data-audience="machine">(E) <strong>本当の口座の識別子や credential の path を manifest に書く</strong>。 却下: CON2 (PUBLIC・絶対 path・host 名・口座名を tracked file に書かない) に反する。 不透明な label + state dir 配下の link で、 宣言 (manifest) と host 固有の結び (untracked) を分ける (§2.3)。</p>
+<p data-audience="machine">(F) <strong><code>&lt;state_dir&gt;/accounts/</code> を走査して口座を発見する (manifest に列挙しない)</strong>。 却下: 真実が per-host の dir に置かれ C3 に反する。 C10 の「宣言値は計測を通してだけ有効になる」の宣言側が無くなり、 doctor が宣言と実測を突き合わせる面 (C3.2) を将来持てない。 FR33 の「manifest に列挙した口座ごとに」とも食い違う。 (F') 口座を CLI 引数で毎回渡す案も同じ理由で却下 (宣言が無い・FR33 と食い違う)。</p>
+<p data-audience="machine">(G) <strong>実測行から口座を選ぶ・閾値で便を止める</strong>。 却下 (本版): user 裁定 (選ぶは v3)・C9.2 (使い切る前に止めない・ADR-0012 §2.3)・R-C9-1 の有効化は A2 の裁定を要する。</p>
+</section>
+
+<section id="s6-trace" class="informative">
+<h2>§6. Trace</h2>
+<p class="section-essence" data-audience="human">出所は、 user の指摘と裁定、 前の版の道具が実際にどう読んでいるかの実測、 器の現物 (event log の形・JSON reader の値域・口座の渡し方)、 そして先に要件書へ入った FR33 / AC11 です。</p>
+<ul data-audience="machine">
+  <li>user の指摘 (2026-09-11・会話面・planner 席): 口座ごとの 5h / 7d / モデル別枠と reset を見る仕組みが要る → 前の版の道具は live な口座で正しく動くと回答し、 v2 に観測口を持つかを grill 論点として台帳 <code>s2-07l.99</code> に起票。 user の裁定 (2026-09-12・逐語「推奨で」・3 論点の 2 つ目): 見る + 記録を MVP に・手段は host の道具を子 process・選ぶは v3。 逐語は台帳の notes (tracked file には写さない・CON2)。</li>
+  <li>要件の land (2026-09-12): SRS v0.5 に FR33 / AC11 を追加 (user の <code>/folio-architect</code>・review で実装手段を SRS から外し ADR の領分とした)。 本 ADR は要件の後に書かれ、 要件の文面を持たない。</li>
+  <li>前の版の道具の実測 (2026-09-11・host 上): 口座の endpoint (認証 API の usage 口) を credential file の access token で読み、 <code>five_hour</code> / <code>seven_day</code> の <code>utilization</code> と <code>resets_at</code>、 <code>limits[]</code> の <code>weekly_scoped</code> 要素 (モデル別 7 日枠・<code>scope.model.display_name</code> でしか結べず <code>id</code> は null) を返す。 <code>expiresAt</code> が 0 の credential は墓標で、 復旧は user の再 login。 live な 5 口座で値が返ることを実測。</li>
+  <li>器の現物 (2026-09-12): <code>crates/&lt;NAME&gt;/src/fleet/mod.rs</code> の <code>EventKind</code> は 10 variant・<code>KNOWN_KEYS</code> は閉じた 11 key・<code>run</code> / <code>bead</code> は必須。 <code>json_lite::Value</code> は Str / Num(u64) / Bool / Null の flat のみ。 <code>headless</code> の <code>--account-dir</code> は子 process の設定 dir 環境変数に渡すだけ。 <code>fleet</code> の subcommand は record / show / export の 3 つ。 manifest は <code>[[rule]]</code> 33 行で口座の列挙を持たない。</li>
+  <li>先行決定: <a href="./ADR-0004-mvp-persistence-and-cross-version-formats.html">ADR-0004</a> §2.1 (1 file)・§2.4 (state dir は git local 設定か引数・env を読まない)・§2.5 (schema 版)・§2.6 (口座の状態は持たない — 本 ADR が実測行に限って supersede)。 <a href="./ADR-0012-rate-limit-detection-reads-dedicated-record.html">ADR-0012</a> §2.3 / §2.4 (閾値で止めない・utilization は記録のみ)。 <a href="./ADR-0016-default-delivery-structure-and-typed-question-record.html">ADR-0016</a> §2.2 (schema 1 のまま variant を足す前例)。</li>
+  <li>設計: <code>docs/design/fleet-usage.md</code> (manifest の account 行・credential の解き方・子 process の呼び方と stdin 設定・応答の読み方・event の field・replay の導出値・CLI・失敗の enum と極性・歯・契約の分割・却下案)。</li>
+</ul>
+</section>
+
+<!-- folio:chrome-bottom -->
+<nav class="prevnext" aria-label="前後の文書">
+  <a class="prevnext__prev" href="ADR-0016-default-delivery-structure-and-typed-question-record.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">ADR-0016 — 便の既定の配送構造は planner 1 席 + 管理席 N 席が pipeline を流す形とし、 runner は契約の不足を typed な質問 record で返して止まる (管理席が自分の手で実装するのは pipeline が回せない便だけ)</span></a>
+</nav>
+<script>
+(function () {
+  var openedForPrint = [];
+  window.addEventListener('beforeprint', function () {
+    openedForPrint = [];
+    var ds = document.querySelectorAll('details:not([open])');
+    for (var i = 0; i < ds.length; i++) { ds[i].setAttribute('open', ''); openedForPrint.push(ds[i]); }
+  });
+  window.addEventListener('afterprint', function () {
+    for (var i = 0; i < openedForPrint.length; i++) openedForPrint[i].removeAttribute('open');
+    openedForPrint = [];
+  });
+  if (!document.querySelector('[data-audience]')) return;
+  /* 既定 = 人間プレゼン型 (ADR-0040 / rules §11.3): script 経由で初期 class を付与するため
+     no-JS では付かず全文可視に graceful degrade する。 static DOM は全文を保持 (AI/検索/印刷は不変)。 */
+  document.body.classList.add('audience-human');
+  var bar = document.createElement('nav');
+  bar.className = 'audience-toggle';
+  bar.setAttribute('aria-label', '表示対象の切替');
+  var states = [['both', '両方'], ['human', '人間向け'], ['machine', '機械向け']];
+  for (var s = 0; s < states.length; s++) {
+    (function (mode, label) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      b.setAttribute('aria-pressed', mode === 'human' ? 'true' : 'false');
+      b.addEventListener('click', function () {
+        document.body.classList.remove('audience-human', 'audience-machine');
+        if (mode !== 'both') document.body.classList.add('audience-' + mode);
+        var bs = bar.querySelectorAll('button');
+        for (var j = 0; j < bs.length; j++) bs[j].setAttribute('aria-pressed', bs[j] === b ? 'true' : 'false');
+      });
+      bar.appendChild(b);
+    })(states[s][0], states[s][1]);
+  }
+  var bc = document.querySelector('nav.breadcrumb');
+  if (bc && bc.parentNode) { bc.parentNode.insertBefore(bar, bc.nextSibling); }
+  else { document.body.insertBefore(bar, document.body.firstChild); }
+})();
+</script>
+<!-- /folio:chrome-bottom -->
+</body>
+</html>
