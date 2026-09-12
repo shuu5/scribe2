@@ -20,7 +20,12 @@ const SCHEMA: u64 = 1;
 const KNOWN_KEYS: &[&str] = &["id", "kind", "value", "enabled", "ruling", "ruled_at"];
 
 /// 行に必ず要る key。
-const REQUIRED_KEYS: &[&str] = &["id", "kind", "value", "ruling", "ruled_at"];
+///
+/// **`enabled` も必須である**（`s2-07l.80`・裁定 id `user 2026-09-11T23:59Z`）。省略を
+/// `true` で埋めていた間は、書き忘れた行が「効く」側へ黙って倒れていた——規則の発効は
+/// 書かれた事実であって既定ではない（C1「規則はデータ」・C5）。同じ理由で `ruled_at` の
+/// 欠落も空文字で埋めない。
+const REQUIRED_KEYS: &[&str] = &["id", "kind", "value", "enabled", "ruling", "ruled_at"];
 
 /// TOML subset が受理する値。
 ///
@@ -316,11 +321,16 @@ fn build_row(raw: &RawRow, errors: &mut Vec<RuleError>) -> Option<RuleRow> {
         errors.push(RuleError::new(raw.line, "id が空である".to_owned()));
     }
     let kind = kind_field(raw, &id, errors);
-    let enabled = bool_field(raw, "enabled", errors).unwrap_or(true);
-    let ruling = text_field(raw, "ruling", errors).unwrap_or_default();
-    let ruled_at = text_field(raw, "ruled_at", errors).unwrap_or_default();
+    // **既定で埋めない**（裁定 `user 2026-09-11T23:59Z`）。欠落は [`check_keys`] が
+    // 「必須 key が無い」で 1 件報告済みで、ここで `true` や空文字を代わりに置くと、
+    // その行は**書かれていない値**を持ったまま先へ進む。
+    let enabled = bool_field(raw, "enabled", errors);
+    let ruling = text_field(raw, "ruling", errors);
+    let ruled_at = text_field(raw, "ruled_at", errors);
     let value = kind.and_then(|found| value_field(raw, found, &id, errors));
-    let (Some(kind), Some(value)) = (kind, value) else {
+    let (Some(kind), Some(value), Some(enabled), Some(ruling), Some(ruled_at)) =
+        (kind, value, enabled, ruling, ruled_at)
+    else {
         return None;
     };
     let row = RuleRow {

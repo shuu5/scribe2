@@ -333,9 +333,14 @@ fn fleet_export_rc2_on_malformed_store() {
 }
 
 /// 2 行だけの rules fixture（lock の 2 値を外から与える）。
+///
+/// `enabled` は**必須 key**なので全行に書く（`s2-07l.80`）。この便の test 区間の差は
+/// この字面の追加だけで、assert の意味は 1 つも動かない——base の loader は `enabled` を
+/// 書いた行も同じ値で読むので、base で新しく赤くなる歯は 1 本も無い。
+// flip-check: retroactive s2-07l.80
 fn lock_rules(retry_ms: u64, stale_ms: u64) -> String {
     format!(
-        "schema = 1\n\n[[rule]]\nid = \"fleet.lock_retry_ms\"\nkind = \"LockRetryMs\"\nvalue = {retry_ms}\nruling = \"r\"\nruled_at = \"d\"\n\n[[rule]]\nid = \"fleet.lock_stale_ms\"\nkind = \"LockStaleMs\"\nvalue = {stale_ms}\nruling = \"r\"\nruled_at = \"d\"\n"
+        "schema = 1\n\n[[rule]]\nid = \"fleet.lock_retry_ms\"\nkind = \"LockRetryMs\"\nvalue = {retry_ms}\nenabled = true\nruling = \"r\"\nruled_at = \"d\"\n\n[[rule]]\nid = \"fleet.lock_stale_ms\"\nkind = \"LockStaleMs\"\nvalue = {stale_ms}\nenabled = true\nruling = \"r\"\nruled_at = \"d\"\n"
     )
 }
 

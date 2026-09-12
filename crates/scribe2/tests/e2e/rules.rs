@@ -9,13 +9,14 @@ use vessel::order::is_declaration_order;
 use vessel::rules::manifest::Manifest;
 use vessel::rules::{Rule, RuleKind, RuleValue, ValueShape, ALL};
 
-/// 受理される最小の manifest（2 行）。
+/// 受理される最小の manifest（2 行）。`enabled` は**全行に書く**（必須 key）。
 const GOOD: &str = r#"schema = 1
 
 [[rule]]
 id = "R-C4-1"
 kind = "CoreLines"
 value = 20000
+enabled = true
 ruling = "r"
 ruled_at = "2026-09-07"
 
@@ -23,17 +24,19 @@ ruled_at = "2026-09-07"
 id = "R-C7-1"
 kind = "DialogueSurface"
 value = "user-direct"
+enabled = true
 ruling = "r"
 ruled_at = "2026-09-09"
 "#;
 
-/// 欠陥 3 箇所（10 行目 = id 重複 / 17 行目 = 未知 kind / 24 行目 = ruling 欠け）。
+/// 欠陥 3 箇所（11 行目 = id 重複 / 19 行目 = 未知 kind / 27 行目 = ruling 欠け）。
 const DEFECTIVE: &str = r#"schema = 1
 
 [[rule]]
 id = "a"
 kind = "CoreLines"
 value = 1
+enabled = true
 ruling = "r"
 ruled_at = "d"
 
@@ -41,6 +44,7 @@ ruled_at = "d"
 id = "a"
 kind = "ModuleLines"
 value = 2
+enabled = true
 ruling = "r"
 ruled_at = "d"
 
@@ -48,6 +52,7 @@ ruled_at = "d"
 id = "b"
 kind = "Nope"
 value = 3
+enabled = true
 ruling = "r"
 ruled_at = "d"
 
@@ -55,13 +60,14 @@ ruled_at = "d"
 id = "c"
 kind = "FnLines"
 value = 4
+enabled = true
 ruled_at = "d"
 "#;
 
 /// 1 行だけの fixture を組む。値は kind の形に合わせる。
 fn one_row(kind: RuleKind, value: &str) -> String {
     format!(
-        "schema = 1\n\n[[rule]]\nid = \"probe\"\nkind = \"{}\"\nvalue = {value}\nruling = \"r\"\nruled_at = \"2026-09-09\"\n",
+        "schema = 1\n\n[[rule]]\nid = \"probe\"\nkind = \"{}\"\nvalue = {value}\nenabled = true\nruling = \"r\"\nruled_at = \"2026-09-09\"\n",
         kind.as_str()
     )
 }
@@ -236,7 +242,7 @@ fn rules_list_rejects_unclosed_quote() {
 fn rules_manifest_reports_broken_value_once() {
     // 読めなかった値は scan が 1 件報告する。後段が「必須 key が無い」と**嘘の 2 行目**を
     // 足さないこと（key は在って値が壊れている）。value 以外の key でも同じ。
-    let text = "schema = 1\n\n[[rule]]\nid = \"probe\"\nkind = \"CoreLines\"\nvalue = 1\nruling = 1.5\nruled_at = \"d\"\n";
+    let text = "schema = 1\n\n[[rule]]\nid = \"probe\"\nkind = \"CoreLines\"\nvalue = 1\nenabled = true\nruling = 1.5\nruled_at = \"d\"\n";
     let errors = rejected(text).expect("拒まれるはずの fixture が受理された");
     assert_eq!(errors.len(), 1, "件数（同じ欠陥を 2 行にしない）: {errors:?}");
     let first = errors.first().map(String::as_str).unwrap_or_default();
@@ -298,7 +304,7 @@ fn rules_manifest_accepts_good_fixture() {
     assert_eq!(manifest.rows().len(), 2, "行数");
     let row = manifest.get("R-C4-1").expect("R-C4-1 が在る");
     assert_eq!(row.value, RuleValue::Int(20_000), "閾値");
-    assert!(row.enabled, "enabled 省略時は true");
+    assert!(row.enabled, "書いた enabled がそのまま載る（省略は拒まれる）");
     let surface = manifest.get("R-C7-1").expect("R-C7-1 が在る");
     assert_eq!(
         surface.value,
@@ -319,13 +325,13 @@ fn rules_manifest_rejects_unknown_kind() {
 /// kind の字面を直に差し込む fixture（未知 kind を作るため）。
 fn one_row_raw(kind: &str, value: &str) -> String {
     format!(
-        "schema = 1\n\n[[rule]]\nid = \"probe\"\nkind = \"{kind}\"\nvalue = {value}\nruling = \"r\"\nruled_at = \"2026-09-09\"\n"
+        "schema = 1\n\n[[rule]]\nid = \"probe\"\nkind = \"{kind}\"\nvalue = {value}\nenabled = true\nruling = \"r\"\nruled_at = \"2026-09-09\"\n"
     )
 }
 
 #[test]
 fn rules_manifest_rejects_duplicate_id() {
-    let text = "schema = 1\n\n[[rule]]\nid = \"same\"\nkind = \"CoreLines\"\nvalue = 1\nruling = \"r\"\nruled_at = \"d\"\n\n[[rule]]\nid = \"same\"\nkind = \"FnLines\"\nvalue = 2\nruling = \"r\"\nruled_at = \"d\"\n";
+    let text = "schema = 1\n\n[[rule]]\nid = \"same\"\nkind = \"CoreLines\"\nvalue = 1\nenabled = true\nruling = \"r\"\nruled_at = \"d\"\n\n[[rule]]\nid = \"same\"\nkind = \"FnLines\"\nvalue = 2\nenabled = true\nruling = \"r\"\nruled_at = \"d\"\n";
     let errors = rejected(text).expect("拒まれるはずの fixture が受理された");
     assert_eq!(errors.len(), 1, "件数: {errors:?}");
     let first = errors.first().map(String::as_str).unwrap_or_default();
@@ -334,11 +340,44 @@ fn rules_manifest_rejects_duplicate_id() {
 
 #[test]
 fn rules_manifest_rejects_row_without_ruling() {
-    let text = "schema = 1\n\n[[rule]]\nid = \"probe\"\nkind = \"CoreLines\"\nvalue = 1\nruled_at = \"d\"\n";
+    let text = "schema = 1\n\n[[rule]]\nid = \"probe\"\nkind = \"CoreLines\"\nvalue = 1\nenabled = true\nruled_at = \"d\"\n";
     let errors = rejected(text).expect("拒まれるはずの fixture が受理された");
     assert_eq!(errors.len(), 1, "件数: {errors:?}");
     let first = errors.first().map(String::as_str).unwrap_or_default();
     assert!(first.contains("必須 key ruling"), "理由: {first}");
+}
+
+/// `enabled` の欠落は**既定 true で埋めない**（裁定 id `user 2026-09-11T23:59Z`）。
+///
+/// 「断ってから解いて通す」形で測る——足せば通ることまで見ないと、別の理由で拒まれている
+/// 周と区別がつかない。埋めていた間は、書き忘れた行が「効く」側へ黙って倒れていた。
+#[test]
+fn rules_manifest_rejects_row_without_enabled() {
+    let text = "schema = 1\n\n[[rule]]\nid = \"probe\"\nkind = \"CoreLines\"\nvalue = 1\nruling = \"r\"\nruled_at = \"d\"\n";
+    let errors = rejected(text).expect("拒まれるはずの fixture が受理された");
+    assert_eq!(errors.len(), 1, "件数: {errors:?}");
+    let first = errors.first().map(String::as_str).unwrap_or_default();
+    assert!(first.contains("必須 key enabled"), "理由: {first}");
+    assert!(first.contains("line=3"), "行番号: {first}");
+    let healed = "schema = 1\n\n[[rule]]\nid = \"probe\"\nkind = \"CoreLines\"\nvalue = 1\nenabled = true\nruling = \"r\"\nruled_at = \"d\"\n";
+    let manifest = parsed(healed).expect("enabled を足せば通る");
+    let row = manifest.get("probe").expect("probe が在る");
+    assert!(row.enabled, "書いた値がそのまま載る");
+}
+
+/// `ruled_at` の欠落も空文字で埋めない（同じ裁定・`ruling` と同じ形）。
+#[test]
+fn rules_manifest_rejects_row_without_ruled_at() {
+    let text = "schema = 1\n\n[[rule]]\nid = \"probe\"\nkind = \"CoreLines\"\nvalue = 1\nenabled = true\nruling = \"r\"\n";
+    let errors = rejected(text).expect("拒まれるはずの fixture が受理された");
+    assert_eq!(errors.len(), 1, "件数: {errors:?}");
+    let first = errors.first().map(String::as_str).unwrap_or_default();
+    assert!(first.contains("必須 key ruled_at"), "理由: {first}");
+    assert!(first.contains("line=3"), "行番号: {first}");
+    let healed = "schema = 1\n\n[[rule]]\nid = \"probe\"\nkind = \"CoreLines\"\nvalue = 1\nenabled = true\nruling = \"r\"\nruled_at = \"d\"\n";
+    let manifest = parsed(healed).expect("ruled_at を足せば通る");
+    let row = manifest.get("probe").expect("probe が在る");
+    assert_eq!(row.ruled_at, "d", "書いた値がそのまま載る");
 }
 
 #[test]
@@ -351,7 +390,7 @@ fn rules_manifest_rejects_value_type_mismatch() {
 
 #[test]
 fn rules_manifest_rejects_missing_schema() {
-    let text = "[[rule]]\nid = \"probe\"\nkind = \"CoreLines\"\nvalue = 1\nruling = \"r\"\nruled_at = \"d\"\n";
+    let text = "[[rule]]\nid = \"probe\"\nkind = \"CoreLines\"\nvalue = 1\nenabled = true\nruling = \"r\"\nruled_at = \"d\"\n";
     let errors = rejected(text).expect("拒まれるはずの fixture が受理された");
     assert_eq!(errors.len(), 1, "件数: {errors:?}");
     let first = errors.first().map(String::as_str).unwrap_or_default();
@@ -369,7 +408,7 @@ fn rules_manifest_rejects_duplicate_key_in_row() {
 
 #[test]
 fn rules_manifest_rejects_duplicate_schema() {
-    let text = "schema = 7\nschema = 1\n\n[[rule]]\nid = \"probe\"\nkind = \"GateTokenCap\"\nvalue = 1\nruling = \"r\"\nruled_at = \"d\"\n";
+    let text = "schema = 7\nschema = 1\n\n[[rule]]\nid = \"probe\"\nkind = \"GateTokenCap\"\nvalue = 1\nenabled = true\nruling = \"r\"\nruled_at = \"d\"\n";
     let errors = rejected(text).expect("拒まれるはずの fixture が受理された");
     let joined = errors.join("\n");
     assert!(joined.contains("schema が重複する"), "理由: {joined}");
@@ -377,7 +416,7 @@ fn rules_manifest_rejects_duplicate_schema() {
 
 #[test]
 fn rules_manifest_rejects_empty_id() {
-    let text = "schema = 1\n\n[[rule]]\nid = \"\"\nkind = \"GateTokenCap\"\nvalue = 1\nruling = \"r\"\nruled_at = \"d\"\n";
+    let text = "schema = 1\n\n[[rule]]\nid = \"\"\nkind = \"GateTokenCap\"\nvalue = 1\nenabled = true\nruling = \"r\"\nruled_at = \"d\"\n";
     let errors = rejected(text).expect("拒まれるはずの fixture が受理された");
     assert_eq!(errors.len(), 1, "件数: {errors:?}");
     let first = errors.first().map(String::as_str).unwrap_or_default();
@@ -399,7 +438,7 @@ fn rules_manifest_reports_all_errors_with_line_numbers() {
     let errors = rejected(DEFECTIVE).expect("拒まれるはずの fixture が受理された");
     assert_eq!(errors.len(), 3, "欠陥 3 箇所は 3 行になる: {errors:?}");
     let joined = errors.join("\n");
-    for want in ["line=10", "line=17", "line=24"] {
+    for want in ["line=11", "line=19", "line=27"] {
         assert!(joined.contains(want), "{want} が無い:\n{joined}");
     }
 }
@@ -428,6 +467,10 @@ fn rules_embedded_manifest_is_valid_and_covers_all_kinds() {
             panic!("埋め込み manifest が拒まれた:\n{}", lines.join("\n"))
         }
     };
+    // **tracked な `rules/manifest.toml` の全行が受理される**（`parse` は 1 件でも違反が
+    // 在れば `Err` を返すので、ここに届いた時点で全行が必須 key を持つ）。母集団を額面に
+    // 出すのは、行が黙って落ちた周を「全部読めた」と読み違えないためである。
+    assert_eq!(manifest.rows().len(), 28, "埋め込み manifest の行数（母集団）");
     for kind in ALL {
         let covered = manifest.rows().iter().any(|row| row.kind == *kind);
         assert!(covered, "{} の行が manifest に無い", kind.as_str());

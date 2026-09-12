@@ -231,6 +231,11 @@ fn seat_meter_names_the_same_unmeasured_reasons_as_the_guard() {
 /// 埋め込みの manifest では起こらないが、3 つの述語（行の有無 / `enabled` / `> 0`）を測る口が
 /// 無いと、どれを外しても歯が落ちない。`Manifest::parse` へ fixture を渡して動かす
 /// （`tests/e2e/fleet.rs` の `LockPolicy::from_rules` と同型）。
+///
+/// `enabled` は**必須 key**なので、発効側の fixture も `enabled = true` を明記する
+/// （`s2-07l.80`）。この便の test 区間の差はその字面だけで、assert の意味は 1 つも
+/// 動かない——base の loader は書いた行も同じ値で読むので、base で新しく赤くなる歯は無い。
+// flip-check: retroactive s2-07l.80
 #[test]
 fn seat_meter_refuses_a_window_row_that_is_off_or_zero() {
     let row = |extra: &str, value: u64| {
@@ -238,11 +243,11 @@ fn seat_meter_refuses_a_window_row_that_is_off_or_zero() {
             "schema = 1\n\n[[rule]]\nid = \"seat.context_window_tokens\"\nkind = \"SeatContextWindowTokens\"\nvalue = {value}\n{extra}ruling = \"r\"\nruled_at = \"d\"\n"
         )
     };
-    let live = Manifest::parse(&row("", 1_000_000)).expect("fixture を読める");
+    let live = Manifest::parse(&row("enabled = true\n", 1_000_000)).expect("fixture を読める");
     assert_eq!(window_of(&live), Some(1_000_000), "発効した正の行は引ける");
     let off = Manifest::parse(&row("enabled = false\n", 1_000_000)).expect("fixture を読める");
     assert_eq!(window_of(&off), None, "不発効の行は引かない（値は在っても使わない）");
-    let zero = Manifest::parse(&row("", 0)).expect("fixture を読める");
+    let zero = Manifest::parse(&row("enabled = true\n", 0)).expect("fixture を読める");
     assert_eq!(window_of(&zero), None, "0 は引かない（0 で割らない）");
     let absent = Manifest::parse("schema = 1\n").expect("fixture を読める");
     assert_eq!(window_of(&absent), None, "行そのものが無い周も引かない");
@@ -258,11 +263,11 @@ fn seat_meter_reads_cap_from_the_manifest_row() {
             "schema = 1\n\n[[rule]]\nid = \"seat.context_cap_pct\"\nkind = \"SeatContextCapPct\"\nvalue = {value}\n{extra}ruling = \"r\"\nruled_at = \"d\"\n"
         )
     };
-    let live = Manifest::parse(&row("", "60")).expect("fixture を読める");
+    let live = Manifest::parse(&row("enabled = true\n", "60")).expect("fixture を読める");
     assert_eq!(cap_of(&live), Some(60), "発効した行は引ける");
     let off = Manifest::parse(&row("enabled = false\n", "60")).expect("fixture を読める");
     assert_eq!(cap_of(&off), None, "不発効の行は引かない（値は在っても使わない）");
-    let zero = Manifest::parse(&row("", "0")).expect("fixture を読める");
+    let zero = Manifest::parse(&row("enabled = true\n", "0")).expect("fixture を読める");
     assert_eq!(cap_of(&zero), Some(0), "0 は引く（常に止める宣言・欠落ではない）");
     let absent = Manifest::parse("schema = 1\n").expect("fixture を読める");
     assert_eq!(cap_of(&absent), None, "行そのものが無い周は引かない");

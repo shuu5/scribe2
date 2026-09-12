@@ -1,6 +1,8 @@
 # 規則の値の正本（憲法 C1「規則はデータ」）。機械が実行時に読む規則はこの file だけである。
 # 全行に user の裁定 id（ruling）と裁定の日付（ruled_at）が要る（憲法 C5）。裁定の無い行は
 # loader が拒む。user の逐語は書かない（本 repo は PUBLIC・SRS CON2）。
+# enabled も全行に要る（裁定 id 'user 2026-09-11T23:59Z'）。省略を true で埋めると、書き
+# 忘れた行が黙って効く側へ倒れる——発効は書かれた事実であって既定ではない。
 # 行 id は憲法 §3 の行 id を接頭辞として持つ（compound 行は . で枝分かれ）か、MVP の運用値の
 # <領域>.<名> である。種類の一覧は crates 側の RuleKind が持つ。
 
@@ -10,6 +12,7 @@ schema = 1
 id = "R-C4-1"
 kind = "CoreLines"
 value = 20000
+enabled = true
 ruling = "RULING-v2-p1-exit-bundle 論点 2"
 ruled_at = "2026-09-07"
 
@@ -17,6 +20,7 @@ ruled_at = "2026-09-07"
 id = "R-C4-2"
 kind = "ModuleLines"
 value = 1500
+enabled = true
 ruling = "RULING-v2-p1-exit-bundle 論点 2"
 ruled_at = "2026-09-07"
 
@@ -24,6 +28,7 @@ ruled_at = "2026-09-07"
 id = "R-C4-3"
 kind = "TestSrcRatioPct"
 value = 100
+enabled = true
 ruling = "RULING-v2-p1-exit-bundle 論点 2"
 ruled_at = "2026-09-07"
 
@@ -31,6 +36,7 @@ ruled_at = "2026-09-07"
 id = "R-C4-4.fn-lines"
 kind = "FnLines"
 value = 60
+enabled = true
 ruling = "RULING-v2-p1-exit-bundle 論点 2"
 ruled_at = "2026-09-07"
 
@@ -38,6 +44,7 @@ ruled_at = "2026-09-07"
 id = "R-C4-4.complexity"
 kind = "FnComplexity"
 value = 15
+enabled = true
 ruling = "RULING-v2-p1-exit-bundle 論点 2"
 ruled_at = "2026-09-07"
 
@@ -45,6 +52,7 @@ ruled_at = "2026-09-07"
 id = "R-C4-4.args"
 kind = "FnArgs"
 value = 5
+enabled = true
 ruling = "RULING-v2-p1-exit-bundle 論点 2"
 ruled_at = "2026-09-07"
 
@@ -52,6 +60,7 @@ ruled_at = "2026-09-07"
 id = "R-C7-1"
 kind = "DialogueSurface"
 value = "user-direct"
+enabled = true
 ruling = "ADR-0003"
 ruled_at = "2026-09-09"
 
@@ -83,6 +92,7 @@ ruled_at = "2026-09-07"
 id = "R-C13-1"
 kind = "DepBudget"
 value = 12
+enabled = true
 ruling = "RULING-v2-p1-exit-bundle 論点 3・4"
 ruled_at = "2026-09-07"
 
@@ -90,6 +100,7 @@ ruled_at = "2026-09-07"
 id = "R-C13-1.per-pr"
 kind = "DepPerPr"
 value = 1
+enabled = true
 ruling = "RULING-v2-p1-exit-bundle 論点 3・4"
 ruled_at = "2026-09-07"
 
@@ -97,6 +108,7 @@ ruled_at = "2026-09-07"
 id = "R-C13-1.check-delta-ms"
 kind = "CheckDeltaMs"
 value = 300
+enabled = true
 ruling = "RULING-v2-p1-exit-bundle 論点 3・4"
 ruled_at = "2026-09-07"
 
@@ -104,6 +116,7 @@ ruled_at = "2026-09-07"
 id = "R-C13-2"
 kind = "CompileShape"
 value = "dev profile の debug 情報は line-tables-only・統合 test file 3 以下・runner nextest・proc-macro 展開後比率 25% 以下・critical path 上の 1 crate が総時間の 40% 超なら分割"
+enabled = true
 ruling = "RULING-v2-p1-exit-bundle 論点 3・4"
 ruled_at = "2026-09-07"
 
@@ -119,6 +132,7 @@ ruled_at = "2026-09-07"
 id = "gate.lens_count"
 kind = "GateLensCount"
 value = 1
+enabled = true
 ruling = "grill U3"
 ruled_at = "2026-09-07"
 
@@ -126,6 +140,7 @@ ruled_at = "2026-09-07"
 id = "gate.token_cap"
 kind = "GateTokenCap"
 value = 150000
+enabled = true
 ruling = "grill U3"
 ruled_at = "2026-09-07"
 
@@ -133,6 +148,7 @@ ruled_at = "2026-09-07"
 id = "hook.budget_ms"
 kind = "HookBudgetMs"
 value = 2000
+enabled = true
 ruling = "SRS NFR5 の user 承認"
 ruled_at = "2026-09-09"
 
@@ -140,6 +156,7 @@ ruled_at = "2026-09-09"
 id = "pipe.stop_grace_ms"
 kind = "StopGraceMs"
 value = 2000
+enabled = true
 ruling = "user 2026-09-09T09:08Z"
 ruled_at = "2026-09-09"
 
@@ -147,6 +164,7 @@ ruled_at = "2026-09-09"
 id = "fleet.lock_retry_ms"
 kind = "LockRetryMs"
 value = 5000
+enabled = true
 ruling = "user 2026-09-09T09:08Z"
 ruled_at = "2026-09-09"
 
@@ -154,6 +172,7 @@ ruled_at = "2026-09-09"
 id = "fleet.lock_stale_ms"
 kind = "LockStaleMs"
 value = 30000
+enabled = true
 ruling = "user 2026-09-09T09:08Z"
 ruled_at = "2026-09-09"
 
@@ -161,6 +180,7 @@ ruled_at = "2026-09-09"
 id = "hook.timeout_s"
 kind = "HookTimeoutS"
 value = 10
+enabled = true
 ruling = "user 2026-09-09T09:08Z"
 ruled_at = "2026-09-09"
 
@@ -168,6 +188,7 @@ ruled_at = "2026-09-09"
 id = "seat.context_cap_pct"
 kind = "SeatContextCapPct"
 value = 60
+enabled = true
 ruling = "user 2026-09-09T22:20Z"
 ruled_at = "2026-09-10"
 
@@ -175,6 +196,7 @@ ruled_at = "2026-09-10"
 id = "seat.context_window_tokens"
 kind = "SeatContextWindowTokens"
 value = 1000000
+enabled = true
 ruling = "user 2026-09-09T23:51Z"
 ruled_at = "2026-09-09"
 
@@ -182,6 +204,7 @@ ruled_at = "2026-09-09"
 id = "seat.tick_stale_s"
 kind = "SeatTickStaleS"
 value = 2400
+enabled = true
 ruling = "user 2026-09-10T00:00Z"
 ruled_at = "2026-09-10"
 
@@ -189,6 +212,7 @@ ruled_at = "2026-09-10"
 id = "seat.cycle_lock_ttl_s"
 kind = "SeatCycleLockTtlS"
 value = 900
+enabled = true
 ruling = "user 2026-09-10T00:00Z"
 ruled_at = "2026-09-10"
 
@@ -196,6 +220,7 @@ ruled_at = "2026-09-10"
 id = "runner.allowed_commands"
 kind = "RunnerAllowedCommands"
 value = ["cargo", "git"]
+enabled = true
 ruling = "user 裁定 2026-09-10（ADR-0009）"
 ruled_at = "2026-09-10"
 
@@ -203,5 +228,6 @@ ruled_at = "2026-09-10"
 id = "repo.non_rust_exec_allow"
 kind = "RepoNonRustExecAllow"
 value = ["scripts/bdw", "design-intent/assets/mermaid.min.js"]
+enabled = true
 ruling = "user 裁定 2026-09-10（s2-07l notes 10:4xZ (2)・ADR-0009 §2.5）"
 ruled_at = "2026-09-10"

@@ -287,10 +287,27 @@ mod tests {
     fn mutants_diff_takes_the_deny_polarity_from_the_manifest_row() {
         // **値は manifest に 1 つ**（憲法 C1）。道具の側に既定を持たない。
         let disabled = "[[rule]]\nid = \"R-C12-1\"\nenabled = false\n\n[[rule]]\nid = \"R-C13-1\"\nenabled = true\n";
-        assert!(!deny_line_enabled(disabled), "R-C12-1 の値を読む（隣の行に釣られない）");
+        assert_eq!(deny_line_enabled(disabled), Some(false), "R-C12-1 の値を読む（隣の行に釣られない）");
         let enabled = "[[rule]]\nid = \"R-C12-1\"\nenabled = true\n";
-        assert!(deny_line_enabled(enabled), "enabled=true は門");
+        assert_eq!(deny_line_enabled(enabled), Some(true), "enabled=true は門");
         // 行が無い周は**門にしない**側へ倒す（無い規則を勝手に発効させない）。
-        assert!(!deny_line_enabled("[[rule]]\nid = \"R-C4-1\"\nenabled = true\n"), "行が無ければ門にしない");
+        assert_eq!(
+            deny_line_enabled("[[rule]]\nid = \"R-C4-1\"\nenabled = true\n"),
+            Some(false),
+            "行が無ければ門にしない"
+        );
+    }
+
+    /// 行は在るのに `enabled` を読めない周は **`false` に化けない**（`s2-07l.80`）。
+    ///
+    /// `enabled` は manifest の必須 key（裁定 id `user 2026-09-11T23:59Z`）なので、これは
+    /// manifest が壊れている周である。`false` を返すと「不発効だと書かれている」周と同じ
+    /// 緑になり、極性を決める行が壊れているほど門が緩む。呼び手は `None` を rc 2 で止める。
+    #[test]
+    fn mutants_diff_cannot_read_the_polarity_when_the_row_has_no_enabled() {
+        let missing = "[[rule]]\nid = \"R-C12-1\"\nkind = \"MutationSurvivalLine\"\nruling = \"r\"\n";
+        assert_eq!(deny_line_enabled(missing), None, "enabled が無い行は「読めない」");
+        let typed = "[[rule]]\nid = \"R-C12-1\"\nenabled = \"true\"\n";
+        assert_eq!(deny_line_enabled(typed), None, "bool でない値も「読めない」");
     }
 }

@@ -208,11 +208,18 @@ fn top_level_number(rest: &str) -> Option<(&str, u64)> {
 }
 
 /// rules manifest の `R-C12-1` 行の `enabled`。**この道具は値を持たない**（憲法 C1: 規則値は
-/// manifest に 1 つ）。行が無い周は「門にしない」側へ倒す——無い規則を勝手に発効させない。
+/// manifest に 1 つ）。行が無い周は `Some(false)`＝「門にしない」側へ倒す——無い規則を勝手に
+/// 発効させない。
+///
+/// **行は在るのに `enabled` が読めない周は `None`**（`s2-07l.80`・裁定 id
+/// `user 2026-09-11T23:59Z`）。`false` に化けさせると、極性を決める行が壊れている周ほど
+/// 門が緩む側へ黙って倒れる——「不発効だと書かれている」と「書かれていない」は別の事実で、
+/// 後者は**測れていない**（呼び手は rc 2 で止める）。`enabled` は manifest の必須 key なので、
+/// 正しい manifest でこの枝は起きない。
 ///
 /// section は [`toml_lite::sections`] で読む。array-of-tables の header は `[` を 1 つだけ
 /// 剥がした `[rule` になる（`limits.rs` の歯と同じ字面）。
-pub fn deny_line_enabled(manifest: &str) -> bool {
+pub fn deny_line_enabled(manifest: &str) -> Option<bool> {
     for (header, pairs) in toml_lite::sections(manifest) {
         if header != RULE_HEADER {
             continue;
@@ -224,12 +231,14 @@ pub fn deny_line_enabled(manifest: &str) -> bool {
         if id.as_deref() != Some(DENY_LINE_ID) {
             continue;
         }
-        return pairs
-            .iter()
-            .find(|(key, _)| *key == "enabled")
-            .is_some_and(|(_, value)| value.trim() == "true");
+        return match pairs.iter().find(|(key, _)| *key == "enabled") {
+            Some((_, value)) if value.trim() == "true" => Some(true),
+            Some((_, value)) if value.trim() == "false" => Some(false),
+            // 行は在るのに bool として読めない（欠落・型違い）＝極性が決まらない。
+            _ => None,
+        };
     }
-    false
+    Some(false)
 }
 
 /// array-of-tables の section header の字面（`sections` は `[` を 1 つだけ剥がす）。
@@ -317,7 +326,12 @@ pub fn run(args: &[String]) -> ExitCode {
     // **`-p` に渡した名前そのもの**を行に持ち回る（[`Scope`] は literal から作れない）。
     crate::emit(&counts.line(&scope));
     let manifest = std::fs::read_to_string(root.join("rules").join("manifest.toml")).unwrap_or_default();
-    verdict(&counts, deny_line_enabled(&manifest))
+    // **極性が読めない周は判定しない**（rc 2）。`R-C12-1` が在るのに `enabled` を読めない
+    // まま `verdict` を呼ぶと、壊れた行が「門にしない」の緑と 1 bit も違わなくなる。
+    let Some(deny) = deny_line_enabled(&manifest) else {
+        return unmeasured("mutants-diff: R-C12-1 の enabled を読めない（極性が決まらない・測れていない・rc 2）");
+    };
+    verdict(&counts, deny)
 }
 
 /// cargo-mutants が居るか（`--version` が rc 0 を返すか）。

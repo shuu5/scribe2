@@ -40,6 +40,7 @@ schema = 1
 id = "R-C4-1"
 kind = "CoreLines"
 value = 20000
+enabled = true
 ruling = "RULING-v2-p1-exit-bundle 論点 2"
 ruled_at = "2026-09-07"
 ```
@@ -49,7 +50,7 @@ ruled_at = "2026-09-07"
 | `id` | string | 必須・一意 | 行 id。§3 の行は `R-<条>-<番号>`、compound 行は `R-<条>-<番号>.<key>`（§3 の行 id が**接頭辞**として一致）、MVP の運用値は `<領域>.<名>` |
 | `kind` | string | 必須 | `RuleKind` の variant 名（字面一致） |
 | `value` | integer / string / 文字列の配列 | 必須 | kind が定める型。`Policy` は string、`List` は 1 行で閉じる string array（空・空要素は loud） |
-| `enabled` | bool | 省略時 true | false = 値は写すが機械は効かせない（停止・v3 送り） |
+| `enabled` | bool | **必須** | false = 値は写すが機械は効かせない（停止・v3 送り）。省略は拒む（裁定 `user 2026-09-11T23:59Z`）＝書き忘れた行を true で埋めると、発効が既定に化ける |
 | `ruling` | string | **必須** | 裁定 id。憲法 §3 と同じく裁定文書の論点番号、または裁定の UTC ts |
 | `ruled_at` | string | **必須** | 裁定の日付（UTC・分秒が資料に無ければ日まで） |
 
@@ -93,7 +94,7 @@ ruled_at = "2026-09-07"
 2. `id` 重複
 3. `ruling` か `ruled_at` の無い行（C5・全行）
 4. `value` の型が kind の対応と不一致
-5. 必須 key（`id` / `kind` / `value` / `ruling` / `ruled_at`）の欠落、未知 key、`schema` 不在または 1 以外
+5. 必須 key（`id` / `kind` / `value` / `enabled` / `ruling` / `ruled_at`）の欠落、未知 key、`schema` 不在または 1 以外
 
 **最初の 1 件で止めない**（silent drop 禁止・NFR4）。
 

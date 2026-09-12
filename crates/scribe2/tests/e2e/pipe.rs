@@ -1268,6 +1268,11 @@ fn fake_lens(marker: &Path, body: &str) -> String {
 }
 
 /// `--rules` に渡す tmp manifest を書く（gate の 2 行 + lock の 2 行だけ）。
+///
+/// `enabled` は**必須 key**なので全行に書く（`s2-07l.80`）。この便の test 区間の差は
+/// この字面の追加だけで、assert の意味は 1 つも動かない——base の loader は `enabled` を
+/// 書いた行も同じ値で読むので、base で新しく赤くなる歯は 1 本も無い。
+// flip-check: retroactive s2-07l.80
 #[expect(
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
@@ -1275,13 +1280,13 @@ fn fake_lens(marker: &Path, body: &str) -> String {
 fn write_rules(dir: &Path, name: &str, lens_count: u64, cap: u64) -> PathBuf {
     let row = |id: &str, kind: &str, value: u64| {
         format!(
-            "[[rule]]\nid = \"{id}\"\nkind = \"{kind}\"\nvalue = {value}\nruling = \"t\"\nruled_at = \"d\"\n"
+            "[[rule]]\nid = \"{id}\"\nkind = \"{kind}\"\nvalue = {value}\nenabled = true\nruling = \"t\"\nruled_at = \"d\"\n"
         )
     };
     // **上限の行も載せる**。intake は宣言をこの行と突き合わせるので、上限を持たない
     // manifest を渡した周は「上限が無い」で断られる（`--rules` は全 subcommand に効く）。
     let ceiling = "[[rule]]\nid = \"runner.allowed_commands\"\nkind = \"RunnerAllowedCommands\"\n\
-                   value = [\"cargo\", \"git\", \"sh\"]\nruling = \"t\"\nruled_at = \"d\"\n";
+                   value = [\"cargo\", \"git\", \"sh\"]\nenabled = true\nruling = \"t\"\nruled_at = \"d\"\n";
     let body = format!(
         "schema = 1\n\n{}\n{}\n{}\n{}\n{ceiling}",
         row("gate.lens_count", "GateLensCount", lens_count),
