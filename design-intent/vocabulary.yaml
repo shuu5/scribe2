@@ -164,6 +164,7 @@ terms:
     domain: consumer
     definition: 席が口座や host を占有する期限付きの割当。 fleet の状態の一部。
     relationships: [席, 口座, fleet]
+    flagged_ambiguities: [受付札 (ADR-0021 の受付の印) は lease ではない]
   - canonical: 退役
     domain: consumer
     definition: host / 席 / 口座を運用から外す操作。 可逆 move で行う (N1)。
@@ -245,11 +246,11 @@ terms:
     relationships: [runner, vessel 宣言, manifest, rules 行, hook]
   - canonical: 共通 verify
     domain: consumer
-    definition: どの便にも共通の検証 (flip check・test・lint・依存監査・変異検出) を対象 repo の vessel 宣言に置き、 intake が便ごとに凍結した写しを gate が契約 verify の前に撃つもの (C2・ADR-0009 / ADR-0010)。 契約の verify は便固有の行だけを持つ。
+    definition: どの便にも共通の deny する検証 (flip check・test・lint・依存監査) を対象 repo の vessel 宣言に置き、 intake が便ごとに凍結した写しを gate が契約 verify の前に撃つもの (C2・ADR-0009 / ADR-0010)。 検出線の行は別の列 (detection-verify・ADR-0021 §2.4) に置き、 契約の verify は便固有の行だけを持つ。
     relationships: [gate, vessel 宣言, 契約, 変異検出線]
   - canonical: 変異検出線
     domain: consumer
-    definition: cargo-mutants で生成した変異のうち歯に撃墜されない数を測る検出線 (C12 R-C12-1)。 1 便では共通 verify の xtask mutants-diff が便の diff に対して測り、 極性 (記録のみ / deny) は manifest 行に従う (ADR-0009)。
+    definition: cargo-mutants で生成した変異のうち歯に撃墜されない数を測る検出線 (C12 R-C12-1)。 1 便では vessel 宣言の検出線の列 (detection-verify) にある xtask mutants-diff が便の diff に対して測り、 極性 (記録のみ / deny) は manifest 行に従う (ADR-0009 / ADR-0021)。 並列度は実効 jobs。
     relationships: [共通 verify, gate, flip check]
   - canonical: lens
     domain: consumer
@@ -514,3 +515,19 @@ terms:
     domain: consumer
     definition: land の追随が衝突した run で、 同じ worktree と契約に「追随」節を添えて runner をもう 1 回 spawn すること。 回数は rules 行 pipe.follow_retries が上限で、 その判定は guard (ADR-0019 §2.2 / §2.4)。
     relationships: [追随, runner, guard]
+  - canonical: 受付の枠
+    domain: consumer
+    definition: host 単位の受付が便の変異検査に配る並列の枠。 置き場は state dir の親の下の host 用 dir で project をまたぎ、 枠 1 組は受付札 1 つで表す (ADR-0021 §2.3)。 器が管理する状態ではなく受付の一時的な印。
+    relationships: [受付札, 実効 jobs, 封じ込め, 検出線]
+  - canonical: 受付札
+    domain: consumer
+    definition: 受付が配った枠を表す file (pid・run・jobs・時刻を持つ)。 生きている process の札だけを数え、 死んだ札と読めない札は回収する (ADR-0021 §2.3)。 fleet の lease (席の期限付き割当) とは別の実体。
+    relationships: [受付の枠, 実効 jobs]
+  - canonical: 封じ込め
+    domain: consumer
+    definition: 器が起こす子 process (verify 行・runner・lens) を memory の上限付きの cgroup scope の内側で走らせること。 溢れて止められるのは scope の内側だけで、 封じられない host では並列度を下げて進む (ADR-0021 §2.2)。
+    relationships: [受付の枠, 極性一覧, runner]
+  - canonical: 実効 jobs
+    domain: consumer
+    definition: 変異検査に実際に渡す並列度。 rules 行の上限 (宣言値) と受付が測った枠 (測定値) の小さい方で、 vessel 宣言の検出線の穴に器が埋める (ADR-0021 §2.1)。
+    relationships: [受付の枠, 変異検出線, vessel 宣言]
