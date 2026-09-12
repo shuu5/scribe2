@@ -29,7 +29,9 @@ use crate::polarity::{OnFailure, Polarity, Timing};
 use super::contract::Contract;
 use super::declaration::Effective;
 use super::follow::{self, Conflict, Turn};
-use super::gate::{gate, is_unreadable, run_checks, Checks, Gate, Limits, Verdict};
+use super::gate::{
+    gate, is_unreadable, run_checks, step_record, Check, Checks, Gate, Limits, Step, Verdict,
+};
 use super::{
     emit, git_bytes, git_line, git_ok, verdict_path, worktree_path, worktrees_dir, Emit,
 };
@@ -629,25 +631,30 @@ fn verify_main(entry: &Land<'_>, new: &str) -> MainCheck {
         // **ここで赤を名乗らない**: verify 行を 1 本も撃てていない。
         return MainCheck::Unmeasurable(format!("{} を切れない", tmp.display()));
     }
-    // **gate と同じ順序を同じ関数で撃つ**（write-set 照合 → 写しの共通 verify → 契約 verify）。
+    // **gate と同じ順序を同じ関数で撃つ**（write-set 照合 → 写しの共通 verify → 検出線 → 契約 verify）。
     // 材料が揃わない周は**赤を名乗らない**——読めなかったを落ちたに化けさせない。
     let materials = materials(entry);
-    let (base, common) = match materials {
+    let (base, frozen) = match materials {
         Ok(found) => found,
         Err(reason) => {
             let _ = git_ok(entry.repo, &["worktree", "remove", "--force", &path]);
             return MainCheck::Unmeasurable(reason);
         }
     };
+    let skipped = same_tree(entry, new);
     let steps = run_checks(&Checks {
         worktree: &tmp,
         base: &base,
         contract: entry.contract,
-        common: &common,
+        common: frozen.common_verify(),
+        detection: if skipped.is_some() { &[] } else { frozen.detection_verify() },
     });
     // 成果は `new` に載っているので、この tmp だけは remove してよい（設計 §5.4）。
     // `--force` は verify が tmp に生んだ中間物ごと畳むためで、履歴・データは触らない。
     let _ = git_ok(entry.repo, &["worktree", "remove", "--force", &path]);
+    if let Err(reason) = record_main(entry, &steps, skipped.as_deref()) {
+        return MainCheck::Unmeasurable(reason);
+    }
     // 段①を読めなかった周（gate と**同じ 1 本の判定**・rc だけでは見ない）は**赤の集計より先に**
     // 「測れなかった」へ倒す——読めなかったを落ちたに化けさせない（gate §6 と同じ極性・
     // `s2-07l.103`）。Red と同じく main-green にも finish にも進まない（fail-closed）。
@@ -665,20 +672,75 @@ fn verify_main(entry: &Land<'_>, new: &str) -> MainCheck {
     MainCheck::Green
 }
 
-/// main の実測に要る材料（便の base と、写しの共通 verify）を揃える。
+/// main の実測に要る材料（便の base と、写しの共通 verify・検出線）を揃える。
 ///
 /// **写しからしか読まない**（repo / worktree の `.vessel.toml` は読み直さない・ADR-0010 §2.4）。
-fn materials(entry: &Land<'_>) -> Result<(String, Vec<String>), String> {
+fn materials(entry: &Land<'_>) -> Result<(String, Effective), String> {
     let base = super::base_of_run(entry.state_dir, entry.run)
         .ok_or_else(|| format!("run {} に base が無い", entry.run))?;
     let path = super::vessel_path(entry.state_dir, entry.run);
-    let common = Effective::load(&path)
-        .map(|found| found.common_verify().to_vec())
-        .map_err(|errors| {
-            let lines: Vec<String> = errors.iter().map(ToString::to_string).collect();
-            format!("{} を読めない: {}", path.display(), lines.join(" / "))
-        })?;
-    Ok((base, common))
+    let frozen = Effective::load(&path).map_err(|errors| {
+        let lines: Vec<String> = errors.iter().map(ToString::to_string).collect();
+        format!("{} を読めない: {}", path.display(), lines.join(" / "))
+    })?;
+    Ok((base, frozen))
+}
+
+/// main 実測の record を書く file の名（gate の `verify.jsonl` と同じ dir・同じ record 形・別 file）。
+///
+/// 別 file にするのは、gate の周の `n` と main 実測の `n` を重ねないためである（設計 gate-cost.md §5）。
+const VERIFY_MAIN_FILE: &str = "verify-main.jsonl";
+
+/// 検出線を省いた段の名（record の `skipped=`）。
+const SKIPPED_DETECTION: &str = "detection";
+
+/// land した木が **gate を撃った木と同じ**なら、その sha を返す（検出線を撃ち直さない周）。
+///
+/// `tree` の無い verdict（旧 gate）・読めない木・不一致はどれも `None`＝全段を撃つ側へ倒す
+/// （省く側へ倒すと、測っていない検出線を main で通したことになる・ADR-0021 §2.4）。
+fn same_tree(entry: &Land<'_>, new: &str) -> Option<String> {
+    let gated = verdict_field(entry.state_dir, entry.run, "tree")?;
+    let landed = git_line(entry.repo, &["rev-parse", &format!("{new}^{{tree}}")])?;
+    (landed == gated).then_some(landed)
+}
+
+/// main 実測の段を `verify-main.jsonl` へ逐条で残す。検出線を省いた周は、その段の位置に
+/// `skipped=detection tree=<sha>` の record を 1 件置く（**撃たなかった事実を黙って落とさない**）。
+fn record_main(entry: &Land<'_>, steps: &[Step], skipped: Option<&str>) -> Result<(), String> {
+    let path = super::verify_log_path(entry.state_dir, entry.run).with_file_name(VERIFY_MAIN_FILE);
+    let mut records = Vec::new();
+    let mut pending = skipped;
+    for step in steps {
+        if step.stage == Check::Contract {
+            if let Some(tree) = pending.take() {
+                records.push(skip_record(records.len(), tree));
+            }
+        }
+        records.push(step_record(next_number(records.len()), step));
+    }
+    if let Some(tree) = pending {
+        records.push(skip_record(records.len(), tree));
+    }
+    for record in &records {
+        append_line(&path, record, entry.policy).map_err(|err| err.to_string())?;
+    }
+    Ok(())
+}
+
+/// 既に積んだ record 数から次の `n`（1 始まり）。
+fn next_number(len: usize) -> u64 {
+    u64::try_from(len).unwrap_or(u64::MAX).saturating_add(1)
+}
+
+/// 検出線を省いた段の record。
+fn skip_record(len: usize, tree: &str) -> String {
+    json_lite::write_object(&[
+        ("schema", Value::Num(SCHEMA)),
+        ("n", Value::Num(next_number(len))),
+        ("kind", Value::Str(Check::Detection.as_str().to_owned())),
+        ("skipped", Value::Str(SKIPPED_DETECTION.to_owned())),
+        ("tree", Value::Str(tree.to_owned())),
+    ])
 }
 
 /// export → `Landed` → 後始末。ここまで来た周は land が成立している（anchor は呼び手が揃え済み）。
@@ -862,13 +924,18 @@ pub fn retire(entry: &Retire<'_>) -> Outcome {
 /// 見る。読み手を増やすと、同じ JSON の解釈が場所ごとに静かにずれる。
 /// 共有先は兄弟 module だけなので、公開面は crate の中に留める。
 pub(crate) fn verdict_of(state_dir: &Path, id: &str) -> Option<Verdict> {
+    verdict_field(state_dir, id, "verdict").as_deref().and_then(Verdict::parse)
+}
+
+/// `verdict.json` の文字列 field を 1 つ読む（**JSON の読み手はこの 1 本**・読めない周は `None`）。
+fn verdict_field(state_dir: &Path, id: &str, key: &str) -> Option<String> {
     let text = std::fs::read_to_string(verdict_path(state_dir, id)).ok()?;
     let pairs = json_lite::parse_object(text.trim()).ok()?;
     pairs
         .iter()
-        .find(|(key, _)| key == "verdict")
+        .find(|(found, _)| found == key)
         .and_then(|(_, value)| value.as_str())
-        .and_then(Verdict::parse)
+        .map(str::to_owned)
 }
 
 /// main の実測が赤だった周。**auto revert しない**（main は進んだまま・anchor は揃え済み＝stderr に token）。

@@ -3,4 +3,8 @@
 # runner.allowed_commands）の内側でなければ intake が便を起こさない。
 schema = 1
 allowed-commands = ["cargo", "git"]
-common-verify = ["cargo xtask flip-check --base {base}", "cargo nextest run --workspace --no-tests=fail", "cargo clippy --workspace --all-targets -- -D warnings", "cargo xtask check", "cargo deny check bans licenses sources", "cargo xtask mutants-diff --base {base} --jobs {jobs}"]
+common-verify = ["cargo xtask flip-check --base {base}", "cargo nextest run --workspace --no-tests=fail", "cargo clippy --workspace --all-targets -- -D warnings", "cargo xtask check", "cargo deny check bans licenses sources"]
+# 検出線（C12.4・落ちても deny しない行）。gate は共通 verify の後・契約 verify の前に撃ち、
+# land の main 実測は木が gate と同じなら撃ち直さない（ADR-0021 §2.4）。deny に昇格した行は
+# 同じ便で common-verify へ戻す。
+detection-verify = ["cargo xtask mutants-diff --base {base} --jobs {jobs}"]

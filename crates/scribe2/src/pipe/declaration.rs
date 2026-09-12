@@ -25,17 +25,29 @@ pub const CEILING_ROW: &str = "runner.allowed_commands";
 const SCHEMA_VERSION: u64 = 1;
 
 /// 宣言が持つ key（この順で報告する）。
-const DECLARED_KEYS: &[&str] = &["schema", "allowed-commands", "common-verify"];
+const DECLARED_KEYS: &[&str] = &["schema", "allowed-commands", "common-verify", DETECTION_KEY];
 
-/// 便の写しが持つ key（宣言の 3 つ + 出所 3 つ）。
+/// 便の写しが持つ key（宣言の 4 つ + 出所 3 つ）。
 const EFFECTIVE_KEYS: &[&str] = &[
     "schema",
     "allowed-commands",
     "common-verify",
+    DETECTION_KEY,
     "commit",
     "source",
     "ceiling",
 ];
+
+/// **検出線の行の列**の key（設計 gate-cost.md §5・ADR-0021 §2.4）。
+///
+/// 検出線（C12.4）は落ちても deny しない行で、木が gate と同じ main 実測では撃ち直さない。
+/// deny する行（`common-verify`）と置き場を分けるのはそのためである。
+const DETECTION_KEY: &str = "detection-verify";
+
+/// **書かなくてよい** key（無ければ空）。書いた周の空配列は従来どおり不備である（ADR-0010 §2.1）。
+///
+/// 任意にするのは、検出線を持たない consumer（toy repo 等）の宣言を 1 行も変えさせないためである。
+const OPTIONAL_KEYS: &[&str] = &[DETECTION_KEY];
 
 /// shell が意味を変える文字。**1 行 1 command の粒度**はここで守る——gate と land は行を
 /// `sh -c` で撃つので、先頭語だけを見ても包みや連結を止められない（ADR-0010 §2.3）。
@@ -159,10 +171,14 @@ pub struct Declared {
     allowed: Vec<String>,
     /// どの便でも撃つ検証行。
     common_verify: Vec<String>,
+    /// 検出線の行（任意・無ければ空）。
+    detection_verify: Vec<String>,
     /// `allowed-commands` が書かれていた行。
     allowed_line: u64,
     /// `common-verify` が書かれていた行。
     common_line: u64,
+    /// `detection-verify` が書かれていた行（無ければ 0）。
+    detection_line: u64,
 }
 
 /// 出所つきの宣言。**[`Effective`] はこれを消費してしか作れない**（C10）。
@@ -184,6 +200,8 @@ pub struct Effective {
     allowed: Vec<String>,
     /// どの便でも撃つ検証行。
     common_verify: Vec<String>,
+    /// 検出線の行（無ければ空）。
+    detection_verify: Vec<String>,
     /// 読んだ commit の sha。
     commit: String,
     /// 宣言 file の repo 相対 path。
@@ -255,7 +273,10 @@ impl Sourced {
                 ));
             }
         }
-        check_lines(&declared.common_verify, declared, Holes::Base, &mut errors);
+        check_lines("common-verify", &declared.common_verify, declared.common_line, declared, &mut errors);
+        // **検出線の行にも同じ検査を掛ける**（ADR-0010 §2.3 (2)・ADR-0021 §2.6・lens-132d H1）。
+        // 掛けないと、共通 verify で断った迂回行を検出線の側へ置くだけで撃たせられる。
+        check_lines(DETECTION_KEY, &declared.detection_verify, declared.detection_line, declared, &mut errors);
         check_contract(contract_verify, declared, &mut errors);
         if !errors.is_empty() {
             return Err(errors);
@@ -263,6 +284,7 @@ impl Sourced {
         Ok(Effective {
             allowed: declared.allowed.clone(),
             common_verify: declared.common_verify.clone(),
+            detection_verify: declared.detection_verify.clone(),
             commit: self.commit,
             source: self.source,
             ceiling: self.ceiling,
@@ -270,13 +292,13 @@ impl Sourced {
     }
 }
 
-/// 宣言の共通 verify を全件見る。
-fn check_lines(lines: &[String], declared: &Declared, holes: Holes, errors: &mut Vec<DeclError>) {
+/// 宣言の行の列（共通 verify・検出線）を全件見る。**どちらも [`BASE_HOLES`] の穴を置ける**。
+fn check_lines(key: &str, lines: &[String], at: u64, declared: &Declared, errors: &mut Vec<DeclError>) {
     for line in lines {
-        if let Some(found) = unfit(line, &declared.allowed, holes) {
+        if let Some(found) = unfit(line, &declared.allowed, Holes::Base) {
             errors.push(DeclError::new(
-                declared.common_line,
-                format!("common-verify {line:?}: {}", found.reason(&declared.allowed)),
+                at,
+                format!("{key} {line:?}: {}", found.reason(&declared.allowed)),
             ));
         }
     }
@@ -357,6 +379,7 @@ impl Declared {
         let schema = int_of(&found, "schema", &mut errors);
         let (allowed, allowed_line) = list_of(&found, "allowed-commands", &mut errors);
         let (common_verify, common_line) = list_of(&found, "common-verify", &mut errors);
+        let (detection_verify, detection_line) = list_of(&found, DETECTION_KEY, &mut errors);
         if schema != Some(SCHEMA_VERSION) {
             errors.push(DeclError::new(
                 0,
@@ -364,7 +387,14 @@ impl Declared {
             ));
         }
         if errors.is_empty() {
-            Ok(Self { allowed, common_verify, allowed_line, common_line })
+            Ok(Self {
+                allowed,
+                common_verify,
+                detection_verify,
+                allowed_line,
+                common_line,
+                detection_line,
+            })
         } else {
             Err(errors)
         }
@@ -383,10 +413,23 @@ impl Effective {
         &self.common_verify
     }
 
+    /// 検出線の行（無ければ空）。**gate と land はここからしか読まない**（[`Self::common_verify`] と同じ）。
+    pub fn detection_verify(&self) -> &[String] {
+        &self.detection_verify
+    }
+
     /// 便の写しの本文（**同じ reader で読み戻せる**形）。
+    ///
+    /// 検出線が空の周は key ごと書かない——空配列は reader が不備として断る形であり、
+    /// 任意 key の「無い」は key の不在で表す。
     pub fn render(&self) -> String {
+        let detection = if self.detection_verify.is_empty() {
+            String::new()
+        } else {
+            format!("{DETECTION_KEY} = {}\n", array(&self.detection_verify))
+        };
         format!(
-            "schema = {SCHEMA_VERSION}\nallowed-commands = {}\ncommon-verify = {}\ncommit = \"{}\"\nsource = \"{}\"\nceiling = \"{}\"\n",
+            "schema = {SCHEMA_VERSION}\nallowed-commands = {}\ncommon-verify = {}\n{detection}commit = \"{}\"\nsource = \"{}\"\nceiling = \"{}\"\n",
             array(&self.allowed),
             array(&self.common_verify),
             self.commit,
@@ -410,6 +453,7 @@ impl Effective {
         let schema = int_of(&found, "schema", &mut errors);
         let (allowed, _) = list_of(&found, "allowed-commands", &mut errors);
         let (common_verify, _) = list_of(&found, "common-verify", &mut errors);
+        let (detection_verify, _) = list_of(&found, DETECTION_KEY, &mut errors);
         let commit = text_of(&found, "commit", &mut errors);
         let source = text_of(&found, "source", &mut errors);
         let ceiling = text_of(&found, "ceiling", &mut errors);
@@ -417,7 +461,7 @@ impl Effective {
             errors.push(DeclError::new(0, format!("schema は {SCHEMA_VERSION} である")));
         }
         if errors.is_empty() {
-            Ok(Self { allowed, common_verify, commit, source, ceiling })
+            Ok(Self { allowed, common_verify, detection_verify, commit, source, ceiling })
         } else {
             Err(errors)
         }
@@ -459,7 +503,7 @@ fn fields(text: &str, known: &[&str], errors: &mut Vec<DeclError>) -> Vec<(Strin
         }
     }
     for key in known {
-        if !seen.iter().any(|name| name == key) {
+        if !OPTIONAL_KEYS.contains(key) && !seen.iter().any(|name| name == key) {
             errors.push(DeclError::new(0, format!("必須の key {key} が無い")));
         }
     }
@@ -600,6 +644,28 @@ mod tests {
         assert_eq!(read, made, "写しは出所ごと round trip する: {text}");
         assert!(text.contains("commit = \"c0ffee\""), "読んだ commit が写しに載る: {text}");
         assert!(text.contains("ceiling = \"runner.allowed_commands\""), "上限行の id が載る: {text}");
+    }
+
+    /// `detection-verify` は**任意 key**: 無い宣言は通り（写しにも key を書かない）、在る宣言は
+    /// 写しを round trip し、書いた空配列は従来どおり不備である（ADR-0010 §2.1・ADR-0021 §2.4）。
+    #[test]
+    fn declaration_detection_verify_is_optional_and_round_trips() {
+        let absent = effective(r#"["cargo"]"#, r#"["cargo xtask check"]"#);
+        assert!(absent.detection_verify().is_empty(), "無い key は空");
+        assert!(!absent.render().contains("detection-verify"), "空の周は key ごと書かない: {}", absent.render());
+
+        let text = format!("{}detection-verify = [\"cargo xtask mutants-diff --base {{base}} --jobs {{jobs}}\"]\n", body(r#"["cargo"]"#, r#"["cargo xtask check"]"#));
+        let declared = Declared::parse(&text).expect("検出線の在る宣言を読める");
+        let made = Sourced { declared, commit: "c0ffee".to_owned(), source: DECL_FILE.to_owned(), ceiling: CEILING_ROW.to_owned() }
+            .measure(&["cargo".to_owned()], &[])
+            .expect("穴 2 つの検出線は通る");
+        assert_eq!(made.detection_verify().len(), 1, "検出線を 1 行持つ");
+        let read = Effective::parse(&made.render()).expect("写しを読み戻せる");
+        assert_eq!(read, made, "検出線ごと round trip する: {}", made.render());
+
+        let empty = format!("{}detection-verify = []\n", body(r#"["cargo"]"#, r#"["cargo xtask check"]"#));
+        let errors = Declared::parse(&empty).expect_err("書いた空配列は不備");
+        assert!(errors.iter().any(|error| error.reason.contains("配列が空である")), "{errors:?}");
     }
 
     /// schema は 1 だけ。**整数でない schema も断る**（型の取り違えを黙って通さない）。

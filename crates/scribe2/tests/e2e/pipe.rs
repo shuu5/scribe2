@@ -117,6 +117,12 @@ fn write_verify_scripts(repo: &Path) {
         ("verify-peak.sh", "printf 'confine-usage peak_bytes=3145728 oom_kill=0\\n'\nexit 0\n"),
         // 箱の中で kernel に殺された周の形（rc は 0 のまま＝**rc では見ない**ことを測る）。
         ("verify-oom.sh", "printf 'confine-usage peak_bytes=4194304 oom_kill=1\\n'\nexit 0\n"),
+        // 呼出回数 file に 1 行足す stub（引数 = 段の印）。印は **git の共通 dir**（便の worktree と
+        // main 実測の tmp worktree で同じ file になる面）へ置く。
+        (
+            "verify-count.sh",
+            "printf '%s\\n' \"$1\" >> \"$(git rev-parse --git-common-dir)/detection-calls\"\nexit 0\n",
+        ),
     ] {
         fs::write(repo.join(name), body).expect("verify script を書ける");
     }
@@ -1862,7 +1868,7 @@ fn pipe_gate_records_structured_verdict() {
     let keys: Vec<&str> = pairs.iter().map(|(key, _)| key.as_str()).collect();
     assert_eq!(
         keys,
-        vec!["schema", "run", "verdict", "evidence", "verify_red", "diff_bytes", "ts"],
+        vec!["schema", "run", "verdict", "evidence", "verify_red", "diff_bytes", "tree", "ts"],
         "verdict.json の key 列（設計 §5.3）"
     );
     assert_eq!(value_of(&pairs, "schema"), "1");
@@ -6377,5 +6383,204 @@ fn pipe_slots_ticket_lives_only_during_the_jobs_line() {
     assert_eq!(value_of(&body, "run"), id, "札の run は便 id");
     // (5) 終了で札は消える。
     assert!(slot_names(&state).is_empty(), "(5) 終了で札が消える: {:?}", slot_names(&state));
+    clean(&[&repo, &state]);
+}
+
+/// 検出線の stub の行（`{base}` を印に埋める＝置換されたことを撃たれた側で読める）。
+const DETECTION_COUNT: &str = r#"["sh verify-count.sh detection-{base}"]"#;
+
+/// `detection-verify` を持つ宣言を commit する（共通 verify も stub・`allowed-commands` は toy のまま）。
+fn commit_detection_vessel(repo: &Path, detection: &str) {
+    write_vessel(repo, VESSEL_ALLOWED, r#"["sh verify-count.sh common"]"#);
+    let path = repo.join(".vessel.toml");
+    let body = fs::read_to_string(&path).unwrap_or_default();
+    fs::write(&path, format!("{body}detection-verify = {detection}\n")).ok();
+    git(repo, &["add", "-f", ".vessel.toml"]);
+    git(repo, &["commit", "-q", "-m", "vessel-detection"]);
+}
+
+/// 検出線を持つ toy repo と、契約 verify も stub にした契約 file。
+fn detection_repo(detection: &str) -> (PathBuf, PathBuf, PathBuf) {
+    let (repo, state) = repo_with_state();
+    commit_detection_vessel(&repo, detection);
+    let contract = write_contract(&repo, &["verify"], &[r#"verify = ["sh verify-count.sh contract"]"#]);
+    (repo, state, contract)
+}
+
+/// 呼出回数 file の行（撃たれた順）。
+fn detection_calls(repo: &Path) -> Vec<String> {
+    fs::read_to_string(repo.join(".git").join("detection-calls"))
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_owned)
+        .collect()
+}
+
+/// land の main 実測の record を全部読む。
+fn main_rows(state: &Path, id: &str) -> Vec<Vec<(String, vessel::fleet::json_lite::Value)>> {
+    fs::read_to_string(state.join("pipe").join(id).join("verify-main.jsonl"))
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| vessel::fleet::json_lite::parse_object(line.trim()).ok())
+        .collect()
+}
+
+/// record 列の `kind` の並び。
+fn kinds(rows: &[Vec<(String, vessel::fleet::json_lite::Value)>]) -> Vec<String> {
+    rows.iter().map(|row| value_of(row, "kind")).collect()
+}
+
+/// [`detection_land`] の結果。
+struct DetectionLand {
+    /// **land が足した**呼出行（撃たれた順）。
+    added: Vec<String>,
+    /// main 実測の record。
+    rows: Vec<Vec<(String, vessel::fleet::json_lite::Value)>>,
+    /// land の出力。
+    out: Output,
+    /// 対象 repo。
+    repo: PathBuf,
+    /// 置き場。
+    state: PathBuf,
+    /// 便 id。
+    id: String,
+}
+
+/// PASS まで通し、`verdict.json` を `edit(本文, tree)` で差し替えてから land する。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn detection_land(edit: fn(&str, &str) -> String) -> DetectionLand {
+    let (repo, state, contract) = detection_repo(DETECTION_COUNT);
+    let id = gated_pass(&repo, &state, &contract, &state.join("lens-ran"));
+    let before = detection_calls(&repo).len();
+    let verdict = state.join("pipe").join(&id).join("verdict.json");
+    let text = fs::read_to_string(&verdict).expect("verdict.json を読める");
+    let tree = value_of(&verdict_pairs(&state, &id), "tree");
+    assert!(!tree.is_empty(), "差し替える前の verdict は tree を持つ: {text}");
+    fs::write(&verdict, edit(&text, &tree)).expect("verdict.json を差し替えられる");
+    let out = land_once(&repo, &state, &id);
+    let added = detection_calls(&repo).split_off(before);
+    let rows = main_rows(&state, &id);
+    DetectionLand { added, rows, out, repo, state, id }
+}
+
+/// (1) `detection-verify` が読めて、gate が **① write-set → ② common → ③ detection → ④ 契約** の順で撃つ。
+#[test]
+fn pipe_detection_verify_fires_third_in_gate() {
+    let (repo, state, contract) = detection_repo(DETECTION_COUNT);
+    let base = git(&repo, &["rev-parse", "HEAD"]);
+    let id = gated_pass(&repo, &state, &contract, &state.join("lens-ran"));
+    let rows = verify_rows(&state, &id);
+    assert_eq!(kinds(&rows), ["write-set", "common", "detection", "contract"], "段の順序と kind: {rows:?}");
+    assert_eq!(row_value(&rows, 3, "cmd"), format!("sh verify-count.sh detection-{base}"), "③ の穴は置換される");
+    assert_eq!(
+        detection_calls(&repo),
+        ["common".to_owned(), format!("detection-{base}"), "contract".to_owned()],
+        "撃たれた側の順序も ②③④"
+    );
+    clean(&[&repo, &state]);
+}
+
+/// (2) `verdict.json` の `tree` は **gate を撃った HEAD の木**（base の木ではない）。
+#[test]
+fn pipe_detection_verdict_carries_tree_of_gated_head() {
+    let (repo, state, contract) = detection_repo(DETECTION_COUNT);
+    let id = gated_pass(&repo, &state, &contract, &state.join("lens-ran"));
+    let tree = value_of(&verdict_pairs(&state, &id), "tree");
+    assert!(!tree.is_empty(), "tree が在る");
+    assert_eq!(tree, git(&worktree_of(&repo, &id), &["rev-parse", "HEAD^{tree}"]), "HEAD の木と一致");
+    assert_ne!(tree, git(&repo, &["rev-parse", "HEAD^{tree}"]), "base の木ではない（runner が commit した後の木）");
+    clean(&[&repo, &state]);
+}
+
+/// (3) 木が gate と同じ main 実測は **③ だけを撃たず** `skipped=detection tree=<sha>` を記す（②④は撃つ）。
+#[test]
+fn pipe_detection_land_skips_detection_when_tree_matches() {
+    let landed = detection_land(|text, _| text.to_owned());
+    let (rows, out) = (&landed.rows, &landed.out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "land は rc 0: {}", stderr_of(out));
+    assert_eq!(landed.added, ["common", "contract"], "main 実測は ②④ だけを撃つ");
+    assert_eq!(kinds(rows), ["write-set", "common", "detection", "contract"], "省いた段も位置に record が在る: {rows:?}");
+    assert_eq!(row_value(rows, 3, "skipped"), "detection", "skipped=detection");
+    assert_eq!(row_value(rows, 3, "tree"), git(&landed.repo, &["rev-parse", "refs/heads/main^{tree}"]), "tree=<land した木>");
+    assert_eq!(row_value(rows, 4, "rc"), "0", "④ は撃って緑");
+    clean(&[&landed.repo, &landed.state]);
+}
+
+/// ③ を撃った main 実測の共通 assert（(4) / (5)）。
+fn assert_detection_fired(landed: &DetectionLand) {
+    let (added, rows) = (&landed.added, &landed.rows);
+    assert_eq!(landed.out.status.code(), Some(i32::from(RC_OK)), "land は rc 0: {}", stderr_of(&landed.out));
+    assert_eq!(added.len(), 3, "②③④ を全部撃つ: {added:?}");
+    assert!(added.get(1).is_some_and(|call| call.starts_with("detection-")), "③ が呼ばれる: {added:?}");
+    assert_eq!(kinds(rows), ["write-set", "common", "detection", "contract"], "③ は撃った record: {rows:?}");
+    assert!(rows.iter().all(|row| value_of(row, "skipped").is_empty()), "省いた record は無い: {rows:?}");
+}
+
+/// (4) verdict の `tree` が land した木と違えば **③ も撃つ**。
+#[test]
+fn pipe_detection_land_fires_detection_when_tree_differs() {
+    let landed = detection_land(|text, tree| {
+        text.replace(&format!("\"tree\":\"{tree}\""), "\"tree\":\"0000000000000000000000000000000000000000\"")
+    });
+    let verdict = verdict_pairs(&landed.state, &landed.id);
+    assert_eq!(value_of(&verdict, "tree"), "0".repeat(40), "fixture は壊した tree");
+    assert_detection_fired(&landed);
+    clean(&[&landed.repo, &landed.state]);
+}
+
+/// (5) `tree` の無い verdict（旧 gate の形）でも **③ を撃つ**。
+#[test]
+fn pipe_detection_land_fires_detection_when_verdict_has_no_tree() {
+    let landed = detection_land(|text, tree| text.replace(&format!(",\"tree\":\"{tree}\""), ""));
+    let verdict = verdict_pairs(&landed.state, &landed.id);
+    assert!(verdict.iter().all(|(key, _)| key != "tree"), "fixture は tree の無い旧形: {verdict:?}");
+    assert_eq!(value_of(&verdict, "verdict"), "PASS", "fixture の verdict は読める形のまま");
+    assert_detection_fired(&landed);
+    clean(&[&landed.repo, &landed.state]);
+}
+
+/// (6) 検出線の rc≠0 は **従来どおり gate FAIL**（測れなかったを通ったに化けさせない・lens を呼ばない）。
+#[test]
+fn pipe_detection_red_line_fails_gate() {
+    let (repo, state, contract) = detection_repo(r#"["sh verify-red.sh"]"#);
+    let id = implemented(&repo, &state, &contract);
+    let marker = state.join("lens-ran");
+    let out = gate_once(&repo, &state, &id, Some(&fake_lens(&marker, &lens_verdict("PASS"))));
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "FAIL の rc は 1: {}", stderr_of(&out));
+    assert!(stdout_of(&out).contains("verdict=FAIL"), "{}", stdout_of(&out));
+    let rows = verify_rows(&state, &id);
+    assert_eq!(row_value(&rows, 3, "kind"), "detection", "③ の record");
+    assert_eq!(row_value(&rows, 3, "rc"), "1", "③ が赤");
+    assert_eq!(value_of(&verdict_pairs(&state, &id), "verify_red"), "1", "赤は ③ の 1 本");
+    assert!(!marker.exists(), "赤い周は lens を起動しない");
+    clean(&[&repo, &state]);
+}
+
+/// (7) `detection-verify` の行にも共通 verify と**同じ検査**を掛け、同じ理由の字面で rc 1 に断る。
+#[test]
+fn pipe_detection_intake_refuses_unfit_lines() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    for (detection, want) in [
+        // `cargo` は上限には在るが、この repo の宣言の allowlist には無い。
+        (r#"["cargo xtask mutants-diff --base {base}"]"#.to_owned(), "先頭 command cargo が"),
+        ("[\"git --version\u{7}\"]".to_owned(), "制御文字"),
+        (r#"["git rev-parse --git-dir ../../../etc"]"#.to_owned(), "repo の外"),
+    ] {
+        commit_detection_vessel(&repo, &detection);
+        let out = intake_raw(&repo, &state, &path, "b");
+        let err = stderr_of(&out);
+        assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{detection} は rc 1: {err}");
+        assert!(err.contains(want), "{detection} の理由は共通 verify と同じ字面 {want}: {err}");
+        assert!(err.contains("detection-verify"), "どの key の行かを名指す: {err}");
+    }
+    assert_eq!(event_count(&state), 0, "断った周は event を書かない");
+    // 弁別: 検査を通る行なら同じ宣言の形で便が起きる（key そのものを断っているのではない）。
+    commit_detection_vessel(&repo, DETECTION_COUNT);
+    let ok = intake_raw(&repo, &state, &path, "b");
+    assert_eq!(ok.status.code(), Some(i32::from(RC_OK)), "検査を通る検出線は読める: {}", stderr_of(&ok));
     clean(&[&repo, &state]);
 }

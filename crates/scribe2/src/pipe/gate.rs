@@ -94,19 +94,22 @@ pub enum Check {
     WriteSet,
     /// 便の写し `vessel.toml` の共通 verify（`{base}` を置換して撃つ）。
     Common,
+    /// 便の写しの検出線（`detection-verify`・穴は共通 verify と同じ・設計 gate-cost.md §5）。
+    Detection,
     /// 契約の verify（穴を持たない）。
     Contract,
 }
 
 /// [`Check`] の全 variant。**この並びが適用順序である**。
-pub const CHECKS: &[Check] = &[Check::WriteSet, Check::Common, Check::Contract];
+pub const CHECKS: &[Check] = &[Check::WriteSet, Check::Common, Check::Detection, Check::Contract];
 
 impl Check {
-    /// 段の名（scope の unit 名に載せる字面）。
-    fn as_str(self) -> &'static str {
+    /// 段の名（scope の unit 名と record の `kind` に載せる字面）。
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::WriteSet => WRITE_SET_CMD,
             Self::Common => "common",
+            Self::Detection => "detection",
             Self::Contract => "contract",
         }
     }
@@ -114,6 +117,8 @@ impl Check {
 
 /// 撃った 1 段の結果。
 pub struct Step {
+    /// どの段か（record の `kind=`）。
+    pub stage: Check,
     /// 実行した行の字面（置換後）。write-set 照合は [`WRITE_SET_CMD`]。
     pub cmd: String,
     /// process の rc（起動できない周は -1）。
@@ -140,6 +145,7 @@ pub struct Step {
 /// 理由を持たせないのはそのためである。
 fn unwrapped(cmd: String, rc: i32, stderr: String) -> Step {
     Step {
+        stage: Check::WriteSet,
         cmd,
         rc,
         stderr,
@@ -172,6 +178,8 @@ pub struct Checks<'a> {
     pub contract: &'a Contract,
     /// **便の写しの**共通 verify（repo / worktree の宣言は読み直さない）。
     pub common: &'a [String],
+    /// **便の写しの**検出線。land の main 実測は木が gate と同じ周に空を渡す（ADR-0021 §2.4）。
+    pub detection: &'a [String],
 }
 
 /// 全段を**順序どおり**に撃つ。
@@ -191,22 +199,19 @@ pub fn run_checks_admitted(checks: &Checks<'_>, admit: Option<&Admit<'_>>) -> Ve
     let caps = confine::Caps::embedded();
     let mut steps = Vec::new();
     for check in CHECKS {
-        match *check {
-            Check::WriteSet => steps.push(check_write_set(checks)),
-            Check::Common => {
-                for line in checks.common {
-                    let n = steps.len().saturating_add(1);
-                    let entry = Fire { checks, raw: line.as_str(), holes: true, stage: *check, n };
-                    steps.push(fire(&entry, caps, admit));
-                }
+        let (lines, holes): (&[String], bool) = match *check {
+            Check::WriteSet => {
+                steps.push(check_write_set(checks));
+                continue;
             }
-            Check::Contract => {
-                for line in &checks.contract.verify {
-                    let n = steps.len().saturating_add(1);
-                    let entry = Fire { checks, raw: line.as_str(), holes: false, stage: *check, n };
-                    steps.push(fire(&entry, caps, admit));
-                }
-            }
+            Check::Common => (checks.common, true),
+            Check::Detection => (checks.detection, true),
+            Check::Contract => (&checks.contract.verify, false),
+        };
+        for line in lines {
+            let n = steps.len().saturating_add(1);
+            let entry = Fire { checks, raw: line.as_str(), holes, stage: *check, n };
+            steps.push(fire(&entry, caps, admit));
         }
     }
     steps
@@ -268,12 +273,23 @@ fn fire(entry: &Fire<'_>, caps: Option<confine::Caps>, admit: Option<&Admit<'_>>
     if let Some(held) = grant {
         admission::release(held);
     }
-    Step { cmd, rc: fired.rc, stderr: fired.stderr, confined, reason, peak_mb, jobs, slot, slot_why }
+    Step {
+        stage: entry.stage,
+        cmd,
+        rc: fired.rc,
+        stderr: fired.stderr,
+        confined,
+        reason,
+        peak_mb,
+        jobs,
+        slot,
+        slot_why,
+    }
 }
 
 /// 行が受付を通るなら枠を取る（通らない行は `None`）。
 ///
-/// 通るのは **`{jobs}` を持つ共通 verify の行**だけである（`{jobs}` を持たない行は枠を取らない
+/// 通るのは **`{jobs}` を持つ宣言の行**（共通 verify・検出線）だけである（`{jobs}` を持たない行は枠を取らない
 /// ＝mutants を持たない consumer は費用を払わない・設計 §3.3）。**包めない周は 1 枠だけを
 /// 取りにいく**——箱の無い行に並列度を上げると、溢れたときに殺されるのが席の側になる。
 fn admitted(
@@ -435,6 +451,8 @@ struct Decision {
     red: u64,
     /// diff の byte 数。
     diff_bytes: u64,
+    /// gate を撃った HEAD の木（`HEAD^{tree}`・読めない周は `None`＝field を書かない）。
+    tree: Option<String>,
 }
 
 /// gate を 1 回通す。
@@ -446,6 +464,8 @@ pub fn gate(entry: &Gate<'_>) -> Outcome {
     if let Some(reason) = precheck(&worktree, &base) {
         return precheck_failed(entry, &reason);
     }
+    // **撃つ前の木を読む**（precheck が clean を見た木＝verify を撃つ木・設計 gate-cost.md §5）。
+    let tree = git_line(&worktree, &["rev-parse", "HEAD^{tree}"]);
     let measured = match measure(entry, &worktree, &base) {
         Ok(found) => found,
         Err(reason) => return broken(reason),
@@ -456,6 +476,7 @@ pub fn gate(entry: &Gate<'_>) -> Outcome {
         evidence,
         red: measured.red,
         diff_bytes: byte_count(&measured.diff),
+        tree,
     };
     match settle(entry, &decision) {
         Err(reason) => broken(reason),
@@ -510,7 +531,7 @@ fn measure(entry: &Gate<'_>, worktree: &Path, base: &str) -> Result<Measured, St
 /// 手で撃ち直して理由を取り直すことになる（実測 2026-09-10・`s2-07l.49`）。緑の行は
 /// 残さない——読む理由が無い出力で診断 file を埋めると、赤い行の見出しが埋もれる。
 fn record_verify(entry: &Gate<'_>, worktree: &Path, base: &str) -> Result<Counted, String> {
-    let common = frozen_common(entry)?;
+    let frozen = frozen_copy(entry)?;
     let admit = Admit {
         state_dir: entry.state_dir,
         run: entry.run,
@@ -524,7 +545,13 @@ fn record_verify(entry: &Gate<'_>, worktree: &Path, base: &str) -> Result<Counte
             policy: entry.policy,
         },
     };
-    let checks = Checks { worktree, base, contract: entry.contract, common: &common };
+    let checks = Checks {
+        worktree,
+        base,
+        contract: entry.contract,
+        common: frozen.common_verify(),
+        detection: frozen.detection_verify(),
+    };
     let steps = run_checks_admitted(&checks, Some(&admit));
     let path = verify_log_path(entry.state_dir, entry.run);
     let tail_path = path.with_file_name(STDERR_LOG_FILE);
@@ -543,30 +570,36 @@ fn record_verify(entry: &Gate<'_>, worktree: &Path, base: &str) -> Result<Counte
             let head = format!("## n={number} rc={} cmd={}", step.rc, step.cmd);
             append_stderr(&tail_path, entry.policy, &head, &step.stderr)?;
         }
-        // **schema は 1 のまま任意 field を足す**（古い読み手は未知の field を無視する・
-        // ADR-0017 §2.1 の event と同じ足し方・設計 gate-cost.md §5）。
-        let mut fields = vec![
-            ("schema", Value::Num(SCHEMA)),
-            ("n", Value::Num(number)),
-            ("rc", Value::Num(recorded_rc(step.rc))),
-            ("cmd", Value::Str(step.cmd.clone())),
-            ("jobs", Value::Num(step.jobs)),
-            ("confined", Value::Bool(step.confined)),
-            ("peak_mb", Value::Str(shown_peak(step.peak_mb))),
-        ];
-        if let Some(reason) = step.reason {
-            fields.push(("reason", Value::Str(reason.as_str().to_owned())));
-        }
-        if let Some(slot) = &step.slot {
-            fields.push(("slot", Value::Str(slot.clone())));
-        }
-        if let Some(why) = step.slot_why {
-            fields.push(("slot_why", Value::Str(why.as_str().to_owned())));
-        }
-        let record = json_lite::write_object(&fields);
-        append_line(&path, &record, entry.policy).map_err(|err| err.to_string())?;
+        append_line(&path, &step_record(number, step), entry.policy).map_err(|err| err.to_string())?;
     }
     Ok(Counted { red, unreadable, killed })
+}
+
+/// 撃った 1 段の record（`verify.jsonl` と land の `verify-main.jsonl` が**同じ形**で書く）。
+///
+/// **schema は 1 のまま任意 field を足す**（古い読み手は未知の field を無視する・
+/// ADR-0017 §2.1 の event と同じ足し方・設計 gate-cost.md §5）。
+pub fn step_record(number: u64, step: &Step) -> String {
+    let mut fields = vec![
+        ("schema", Value::Num(SCHEMA)),
+        ("n", Value::Num(number)),
+        ("rc", Value::Num(recorded_rc(step.rc))),
+        ("cmd", Value::Str(step.cmd.clone())),
+        ("jobs", Value::Num(step.jobs)),
+        ("confined", Value::Bool(step.confined)),
+        ("peak_mb", Value::Str(shown_peak(step.peak_mb))),
+        ("kind", Value::Str(step.stage.as_str().to_owned())),
+    ];
+    if let Some(reason) = step.reason {
+        fields.push(("reason", Value::Str(reason.as_str().to_owned())));
+    }
+    if let Some(slot) = &step.slot {
+        fields.push(("slot", Value::Str(slot.clone())));
+    }
+    if let Some(why) = step.slot_why {
+        fields.push(("slot_why", Value::Str(why.as_str().to_owned())));
+    }
+    json_lite::write_object(&fields)
 }
 
 /// `verify.jsonl` の数え上げ（赤の本数と、2 つの「測れなかった」）。
@@ -598,14 +631,13 @@ fn box_kill(step: &Step) -> Option<Reason> {
         .filter(|found| matches!(*found, Reason::OomKill | Reason::Signal))
 }
 
-/// 便の写しから共通 verify を読む。
+/// 便の写し（共通 verify と検出線）を読む。
 ///
 /// **読むのは `<state_dir>/pipe/<run>/vessel.toml` だけ**である——repo や worktree の
 /// `.vessel.toml` を読み直すと、便の実装が自分の検証を書き換えられる（ADR-0010 §2.4）。
-fn frozen_common(entry: &Gate<'_>) -> Result<Vec<String>, String> {
+fn frozen_copy(entry: &Gate<'_>) -> Result<Effective, String> {
     let path = vessel_path(entry.state_dir, entry.run);
     Effective::load(&path)
-        .map(|found| found.common_verify().to_vec())
         .map_err(|errors| {
             let lines: Vec<String> = errors.iter().map(ToString::to_string).collect();
             format!("{} を読めない: {}", path.display(), lines.join(" / "))
@@ -890,15 +922,21 @@ fn parse_lens(text: &str) -> (Verdict, String) {
 ///
 /// **測り直しの周も同じ経路を通る**: file は最後の判定で上書きし、event は追記する。
 fn settle(entry: &Gate<'_>, decision: &Decision) -> Result<(), String> {
-    let body = json_lite::write_object(&[
+    let mut fields = vec![
         ("schema", Value::Num(SCHEMA)),
         ("run", Value::Str(entry.run.to_owned())),
         ("verdict", Value::Str(decision.verdict.as_str().to_owned())),
         ("evidence", Value::Str(decision.evidence.clone())),
         ("verify_red", Value::Num(decision.red)),
         ("diff_bytes", Value::Num(decision.diff_bytes)),
-        ("ts", Value::Str(now_utc())),
-    ]);
+    ];
+    // **schema は 1 のまま field を足す**（読み手は未知の field を無視する）。読めない周は書かない
+    // ——land は `tree` の無い verdict を「木を比べられない」として全段を撃つ（設計 gate-cost.md §5）。
+    if let Some(tree) = &decision.tree {
+        fields.push(("tree", Value::Str(tree.clone())));
+    }
+    fields.push(("ts", Value::Str(now_utc())));
+    let body = json_lite::write_object(&fields);
     let path = verdict_path(entry.state_dir, entry.run);
     std::fs::write(&path, format!("{body}\n"))
         .map_err(|err| format!("{} を書けない: {err}", path.display()))?;
