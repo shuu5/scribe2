@@ -105,7 +105,7 @@
     <tr><td>ADR-0017</td><td><a href="./ADR-0017-account-allowance-measured-into-event-log.html">口座残量は器が host の HTTP client を子 process で呼んで読み、 出所付きの実測行として fleet の event log に記録する (manifest の口座列挙は不透明な label・上限 record は検出の合図のまま・選ぶは v3)</a></td><td>accepted</td><td>2026-09-12</td></tr>
     <tr><td>ADR-0018</td><td><a href="./ADR-0018-working-memory-subcommands-and-pointer-required-directives.html">作業記憶の退避・復元・消費は器の subcommand が機械層を担い、 命令行は照合できる出所 pointer を必須とし、 pointer の無い行は暫定の印を付けて次の cycle に引き継がない (brief の文章は開発 session が組む・前の版の script への依存を切る)</a></td><td>accepted</td><td>2026-09-12</td></tr>
     <tr><td>ADR-0019</td><td><a href="./ADR-0019-parallel-runs-exclude-overlap-at-intake-and-runner-resolves-conflicts.html">並列の便は intake が write-set の交差で排他し、 land の rebase 衝突は runner を起こし直して解く (人は質問の回答でだけ関わる・admin は中継と操作・手で merge する経路を持たない・ADR-0016 §2.2 の質問判定と再 spawn の契機を部分 supersede)</a></td><td>accepted</td><td>2026-09-12</td></tr>
-    <tr><td>ADR-0021</td><td><a href="./ADR-0021-gate-cost-is-measured-and-confined.html">gate の費用は測って決める (変異の並列度は rules 行の上限を project 横断・host 単位の受付が実測で下げ、 器の子 process は cgroup で封じ、 木が同じ main 実測は検出線を撃ち直さず、 着地は gate 済みの便を先に通す・ADR-0009 §2.3 / §2.4 と ADR-0010 §2.1 / §2.4 / §2.5 を部分 supersede)</a></td><td>accepted</td><td>2026-09-12</td></tr>
+    <tr><td>ADR-0021</td><td><a href="./ADR-0021-gate-cost-is-measured-and-confined.html">gate の費用は測って決める (変異の並列度は rules 行の上限を project 横断・host 単位の受付が実測で下げ、 器の子 process は cgroup で封じ、 木が同じ main 実測は検出線を撃ち直さず、 着地は gate 済みの便を先に通す・ADR-0009 §2.3 / §2.4 と ADR-0010 §2.1 / §2.3 / §2.4 / §2.5 を部分 supersede)</a></td><td>accepted</td><td>2026-09-12</td></tr>
   </tbody>
 </table>
 <p data-audience="machine">新しい決定を記録したら本表と JSON-LD の <code>dc:hasPart</code> に追記する。 ADR は frozen (改訂は supersede する新 ADR で行う)。</p>
