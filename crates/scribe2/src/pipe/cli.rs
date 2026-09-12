@@ -37,6 +37,18 @@ const ROW_LENS: &str = "gate.lens_count";
 /// gate の diff 上限（byte）を持つ rules 行。
 const ROW_CAP: &str = "gate.token_cap";
 
+/// 変異検査の並列度の上限を持つ rules 行（受付の宣言値）。
+const ROW_MUTANTS_JOBS: &str = "gate.mutants_jobs";
+
+/// job 1 つが要る memory（MiB）を持つ rules 行（受付の分母）。
+const ROW_JOB_MEMORY: &str = "gate.job_memory_mb";
+
+/// 席と host のために残す memory（MiB）を持つ rules 行（受付の差引）。
+const ROW_RESERVE_MEMORY: &str = "host.reserve_memory_mb";
+
+/// 受付で枠が空くのを待つ上限（秒）を持つ rules 行。
+const ROW_SLOT_WAIT: &str = "gate.slot_wait_s";
+
 /// 追随が衝突した便を起こし直す回数の上限を持つ rules 行。
 const ROW_RETRIES: &str = "pipe.follow_retries";
 
@@ -572,11 +584,18 @@ fn by_run(args: &[String], step: impl FnOnce(&str) -> Outcome) -> Outcome {
     }
 }
 
-/// 規則から gate の 2 つの線を読む。**数値を .rs へ焼かない**（憲法 C1 / C5）。
+/// 規則から gate の線（判定の 2 行と受付の 4 行）を読む。**数値を .rs へ焼かない**（憲法 C1 / C5）。
+///
+/// 受付の 4 行も `--rules` の manifest から読む（埋め込みから直に読まない）——待ちの上限を
+/// 振る歯が fixture の値を gate へ届ける口はここだけである。
 fn limits_of(manifest: &Manifest) -> Result<Limits, String> {
     Ok(Limits {
         lens_count: int_row(manifest, ROW_LENS)?,
         token_cap: int_row(manifest, ROW_CAP)?,
+        mutants_jobs: int_row(manifest, ROW_MUTANTS_JOBS)?,
+        job_memory_mb: int_row(manifest, ROW_JOB_MEMORY)?,
+        reserve_memory_mb: int_row(manifest, ROW_RESERVE_MEMORY)?,
+        slot_wait_s: int_row(manifest, ROW_SLOT_WAIT)?,
     })
 }
 

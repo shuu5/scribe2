@@ -10,6 +10,7 @@
 //!
 //! **env も HOME も読まない**（C2.2）。置き場は repo に紐づいた git 設定か `--state-dir`。
 
+pub mod admission;
 pub mod approve;
 pub mod cli;
 pub mod confine;

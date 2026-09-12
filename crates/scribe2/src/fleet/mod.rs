@@ -891,19 +891,51 @@ fn apply_seat(state: &mut State, event: &Event) {
 }
 
 /// 待つ対象。**述語を受ける口は作らない**（C3.4: 待機は 1 実装）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// variant が運ぶのは**データ**だけである。何を読んで満たされたと判じるかは [`wait`] の
+/// 内側が持つ（受付の枠なら meminfo と札の読み手・設計 gate-cost.md §3.2）。
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Completion {
     /// runner の process が終わること。
     RunnerExited(u32),
     /// 席の process が消えること（TERM の後）。
     SeatGone(u32),
+    /// host の受付に枠が 1 つ以上空くこと（[`crate::pipe::admission`]）。
+    SlotFree {
+        /// 受付札の置き場（`<state_dir の親>/<NAME>-host/slots/`）。
+        slots_dir: std::path::PathBuf,
+        /// この受付が要る枠（jobs の数）。
+        want: u64,
+        /// job 1 つが要る memory（MiB・rules 行 `gate.job_memory_mb`）。
+        job_mb: u64,
+        /// 席と host のために残す memory（MiB・rules 行 `host.reserve_memory_mb`）。
+        reserve_mb: u64,
+        /// 並列度の上限（rules 行 `gate.mutants_jobs`）。
+        cap: u64,
+    },
 }
 
 impl Completion {
-    /// 見張る pid。
-    pub fn pid(self) -> u32 {
-        match self {
+    /// 見張る pid。**pid を見張らない variant（[`Self::SlotFree`]）は 0**——pid 0 は
+    /// `/proc/0` を持たない（user の process に振られない）ので、生きている pid と取り違えない。
+    pub fn pid(&self) -> u32 {
+        match *self {
             Self::RunnerExited(pid) | Self::SeatGone(pid) => pid,
+            Self::SlotFree { .. } => 0,
+        }
+    }
+
+    /// 満たされたか（1 周分の観測）。
+    fn is_met(&self) -> bool {
+        match self {
+            Self::RunnerExited(pid) | Self::SeatGone(pid) => !pid_is_live(*pid),
+            Self::SlotFree { slots_dir, want, job_mb, reserve_mb, cap } => {
+                crate::pipe::admission::has_room(
+                    slots_dir,
+                    (*want).min(*cap),
+                    crate::pipe::admission::Sizes { job_mb: *job_mb, reserve_mb: *reserve_mb },
+                )
+            }
         }
     }
 }
@@ -917,11 +949,12 @@ const POLL: Duration = Duration::from_millis(20);
 
 /// [`Completion`] が満たされるまで待つ。**これが唯一の待機実装である**。
 ///
-/// process の生存は `/proc/<pid>` の有無で見る（libc を足さないため・NFR3）。
+/// process の生存は `/proc/<pid>` の有無で見る（libc を足さないため・NFR3）。受付の枠は
+/// 周ごとに meminfo と札を読み直す（周期はこの [`POLL`] のまま・上限は呼び手の期限）。
 pub fn wait(completion: Completion, deadline: Duration) -> Result<(), Timeout> {
     let started = Instant::now();
     loop {
-        if !pid_is_live(completion.pid()) {
+        if completion.is_met() {
             return Ok(());
         }
         if started.elapsed() >= deadline {

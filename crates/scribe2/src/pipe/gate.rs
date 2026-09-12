@@ -16,6 +16,7 @@
 //! （[`super::cli`]）が持つ。
 
 use crate::polarity::{OnFailure, Polarity, Timing};
+use super::admission::{self, Grant};
 use super::confine::{self, Confinement, Reason, Usage};
 use super::contract::Contract;
 use super::declaration::{Effective, BASE_HOLE, JOBS_HOLE};
@@ -41,15 +42,15 @@ pub const RC_INCONCLUSIVE: u8 = 3;
 /// lens の出力から拾う JSON 行の始まり。
 const JSON_HEAD: char = '{';
 
-/// **この便で実際に渡す並列度**（設計 gate-cost.md §3.3・ADR-0021 §2.1）。
+/// **受付を通らない行に渡す並列度**（設計 gate-cost.md §3.3・ADR-0021 §2.1）。
 ///
 /// 宣言値（rules 行 `gate.mutants_jobs`）を**そのまま実効にしない**（C10: 宣言値・測定値・
-/// 実効値は別物である）。受付（host 単位の枠・設計 §3.2）が入るまでは、合計を守る面がどこにも
-/// 無い——複数の gate が同時に満額を取ると host の memory が溢れて席まで死ぬ。ゆえに (a) の
-/// 段階では 1 に固定し、上限まで上げるのは受付を持つ (b) の後である。
+/// 実効値は別物である）。実効値を上げてよいのは host 単位の受付（[`admission`]・設計 §3.2）で
+/// 枠を取った行だけで、受付を持たない経路（land の main 実測・契約の verify 行）はこの値で撃つ
+/// ——合計を守る面の無い経路が満額を取ると host の memory が溢れて席まで死ぬ。
 ///
 /// 1 は常に許される（従来と同じ費用）ので、この値で縮退しても便は流れる。
-const EFFECTIVE_JOBS: u64 = 1;
+const UNADMITTED_JOBS: u64 = 1;
 
 /// write-set 照合の record に載せる `cmd`。**shell の行ではない**（Rust で照合する）ので、
 /// 実行した行の字面を持てない段の名前をここで 1 つだけ決める。
@@ -127,6 +128,10 @@ pub struct Step {
     pub peak_mb: Option<u64>,
     /// この行に渡した実効 jobs（record の `jobs=`）。
     pub jobs: u64,
+    /// 受付の結果（record の `slot=`・受付を通らない行は `None`）。
+    pub slot: Option<String>,
+    /// 受付が測れなかった理由（record の `slot_why=`・測れた周と受付を通らない行は `None`）。
+    pub slot_why: Option<admission::Unreadable>,
 }
 
 /// 撃つ process を持たない段（write-set 照合）の封じ込め欄。
@@ -134,7 +139,27 @@ pub struct Step {
 /// 包めなかったのではなく**包む対象が無い**（Rust で照合するだけで子 process を起こさない）。
 /// 理由を持たせないのはそのためである。
 fn unwrapped(cmd: String, rc: i32, stderr: String) -> Step {
-    Step { cmd, rc, stderr, confined: false, reason: None, peak_mb: None, jobs: EFFECTIVE_JOBS }
+    Step {
+        cmd,
+        rc,
+        stderr,
+        confined: false,
+        reason: None,
+        peak_mb: None,
+        jobs: UNADMITTED_JOBS,
+        slot: None,
+        slot_why: None,
+    }
+}
+
+/// 受付の材料（gate だけが持つ・land の main 実測は受付を通らない）。
+pub struct Admit<'a> {
+    /// 置き場（host の slot dir はこの親から導く）。
+    pub state_dir: &'a Path,
+    /// 便 id（札の名に載る）。
+    pub run: &'a str,
+    /// rules 行の値。
+    pub rules: admission::Rules,
 }
 
 /// 検証を撃つ材料。
@@ -154,6 +179,14 @@ pub struct Checks<'a> {
 /// **gate も land もこの 1 本を通る**——2 本になると gate が通した行と main で撃った行の
 /// 意味が静かにずれる（行を撃つ実装を [`run_line_captured`] 1 本に保っているのと同じ理由）。
 pub fn run_checks(checks: &Checks<'_>) -> Vec<Step> {
+    run_checks_admitted(checks, None)
+}
+
+/// 全段を**順序どおり**に撃つ（受付を持つ形）。[`run_checks`] はこれの受付なしの形である。
+///
+/// `admit` が在る周だけ、`{jobs}` を持つ共通 verify の行が host の受付を通る（設計 gate-cost.md
+/// §3.2・§3.3）。行を撃つ実装はこの 1 本のままである。
+pub fn run_checks_admitted(checks: &Checks<'_>, admit: Option<&Admit<'_>>) -> Vec<Step> {
     // 封じ込めの 3 線は 1 便で 1 度だけ読む（行ごとに manifest を開き直さない）。
     let caps = confine::Caps::embedded();
     let mut steps = Vec::new();
@@ -162,18 +195,16 @@ pub fn run_checks(checks: &Checks<'_>) -> Vec<Step> {
             Check::WriteSet => steps.push(check_write_set(checks)),
             Check::Common => {
                 for line in checks.common {
-                    let cmd = fill_holes(line, checks.base);
                     let n = steps.len().saturating_add(1);
-                    let entry = Fire { checks, raw: line.as_str(), cmd, stage: *check, n };
-                    steps.push(fire(&entry, caps));
+                    let entry = Fire { checks, raw: line.as_str(), holes: true, stage: *check, n };
+                    steps.push(fire(&entry, caps, admit));
                 }
             }
             Check::Contract => {
                 for line in &checks.contract.verify {
                     let n = steps.len().saturating_add(1);
-                    let entry =
-                        Fire { checks, raw: line.as_str(), cmd: line.clone(), stage: *check, n };
-                    steps.push(fire(&entry, caps));
+                    let entry = Fire { checks, raw: line.as_str(), holes: false, stage: *check, n };
+                    steps.push(fire(&entry, caps, admit));
                 }
             }
         }
@@ -185,19 +216,19 @@ pub fn run_checks(checks: &Checks<'_>) -> Vec<Step> {
 ///
 /// **1 走査で埋めない**のは、穴の値が sha と数字だけで、互いの字面を含まないためである
 /// （`{worktree}` のように外から来る path を埋める面とは条件が違う）。
-fn fill_holes(line: &str, base: &str) -> String {
+fn fill_holes(line: &str, base: &str, jobs: u64) -> String {
     line.replace(BASE_HOLE, base)
-        .replace(JOBS_HOLE, &EFFECTIVE_JOBS.to_string())
+        .replace(JOBS_HOLE, &jobs.to_string())
 }
 
 /// 1 行を撃つ材料。
 struct Fire<'a> {
     /// 撃つ場所と材料。
     checks: &'a Checks<'a>,
-    /// **置換前**の行（どの箱に入れるかはここから決まる・[`confine::limit_of`]）。
+    /// **置換前**の行（どの箱に入れるか・受付を通るかはここから決まる）。
     raw: &'a str,
-    /// 撃つ字面（置換後）。
-    cmd: String,
+    /// 穴を置換する段か（共通 verify だけ・契約の行は穴を持たない）。
+    holes: bool,
     /// 段（scope の unit 名に載る）。
     stage: Check,
     /// `verify.jsonl` の record 番号（scope の unit 名に載る）。
@@ -205,7 +236,10 @@ struct Fire<'a> {
 }
 
 /// 1 行を scope に包んで撃ち、結果を組む。
-fn fire(entry: &Fire<'_>, caps: Option<confine::Caps>) -> Step {
+///
+/// `{jobs}` を持つ共通 verify の行は、**撃つ前に受付で枠を取り、撃った後に返す**
+/// （設計 §3.2）。実効 jobs = `min(gate.mutants_jobs, 受け付けた枠)`。
+fn fire(entry: &Fire<'_>, caps: Option<confine::Caps>, admit: Option<&Admit<'_>>) -> Step {
     let place = entry
         .checks
         .worktree
@@ -213,23 +247,52 @@ fn fire(entry: &Fire<'_>, caps: Option<confine::Caps>) -> Step {
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_default();
     let unit = confine::unit_name(&place, entry.stage.as_str(), entry.n);
+    let grant = admitted(entry, caps, &unit, admit);
+    let jobs = grant.as_ref().map_or(UNADMITTED_JOBS, |held| held.jobs);
+    let cmd = if entry.holes {
+        fill_holes(entry.raw, entry.checks.base, jobs)
+    } else {
+        entry.raw.to_owned()
+    };
     let wrap = confine::Wrap {
         unit: &unit,
-        limit: confine::limit_of(entry.raw, EFFECTIVE_JOBS),
+        limit: confine::limit_of(entry.raw, jobs),
         caps,
     };
-    let fired = run_line_captured(entry.checks.worktree, &entry.cmd, &wrap);
+    let fired = run_line_captured(entry.checks.worktree, &cmd, &wrap);
     let (confined, reason, peak_mb) =
         (fired.confinement.confined(), fired.reason(), fired.usage.peak_mb);
-    Step {
-        cmd: entry.cmd.clone(),
-        rc: fired.rc,
-        stderr: fired.stderr,
-        confined,
-        reason,
-        peak_mb,
-        jobs: EFFECTIVE_JOBS,
+    let (slot, slot_why) = grant
+        .as_ref()
+        .map_or((None, None), |held| (Some(held.detail.clone()), held.why));
+    if let Some(held) = grant {
+        admission::release(held);
     }
+    Step { cmd, rc: fired.rc, stderr: fired.stderr, confined, reason, peak_mb, jobs, slot, slot_why }
+}
+
+/// 行が受付を通るなら枠を取る（通らない行は `None`）。
+///
+/// 通るのは **`{jobs}` を持つ共通 verify の行**だけである（`{jobs}` を持たない行は枠を取らない
+/// ＝mutants を持たない consumer は費用を払わない・設計 §3.3）。**包めない周は 1 枠だけを
+/// 取りにいく**——箱の無い行に並列度を上げると、溢れたときに殺されるのが席の側になる。
+fn admitted(
+    entry: &Fire<'_>,
+    caps: Option<confine::Caps>,
+    unit: &str,
+    admit: Option<&Admit<'_>>,
+) -> Option<Grant> {
+    let admit = admit?;
+    if !entry.holes || !entry.raw.contains(JOBS_HOLE) {
+        return None;
+    }
+    // 包めるかは箱の大きさ（jobs ≥ 1）に依らない。撃つ前に同じ判定を 1 度だけ引く。
+    let probe = confine::Wrap { unit, limit: confine::limit_of(entry.raw, UNADMITTED_JOBS), caps };
+    let (_, confinement) = confine::wrap_line(entry.raw, &probe);
+    let want = if confinement.confined() { admit.rules.cap } else { UNADMITTED_JOBS };
+    let mut grant = admission::admit(admit.state_dir, admit.run, want, &admit.rules);
+    grant.jobs = admit.rules.cap.min(grant.jobs).max(UNADMITTED_JOBS);
+    Some(grant)
 }
 
 /// diff の path が契約の write-set に収まっているか（ADR-0009 §2.4）。
@@ -306,13 +369,21 @@ impl Verdict {
     }
 }
 
-/// 規則から読んだ 2 つの線。**数値をこの file に焼かない**（憲法 C1 / C5）。
+/// 規則から読んだ線。**数値をこの file に焼かない**（憲法 C1 / C5）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Limits {
     /// 要る lens の本数（rules 行 `gate.lens_count`）。
     pub lens_count: u64,
     /// diff の byte 数の上限（rules 行 `gate.token_cap`）。
     pub token_cap: u64,
+    /// 変異検査の並列度の上限（rules 行 `gate.mutants_jobs`・宣言値）。
+    pub mutants_jobs: u64,
+    /// job 1 つが要る memory（MiB・rules 行 `gate.job_memory_mb`）。
+    pub job_memory_mb: u64,
+    /// 席と host のために残す memory（MiB・rules 行 `host.reserve_memory_mb`）。
+    pub reserve_memory_mb: u64,
+    /// 受付で枠が空くのを待つ上限（秒・rules 行 `gate.slot_wait_s`）。
+    pub slot_wait_s: u64,
 }
 
 /// gate 1 回の材料。
@@ -440,12 +511,21 @@ fn measure(entry: &Gate<'_>, worktree: &Path, base: &str) -> Result<Measured, St
 /// 残さない——読む理由が無い出力で診断 file を埋めると、赤い行の見出しが埋もれる。
 fn record_verify(entry: &Gate<'_>, worktree: &Path, base: &str) -> Result<Counted, String> {
     let common = frozen_common(entry)?;
-    let steps = run_checks(&Checks {
-        worktree,
-        base,
-        contract: entry.contract,
-        common: &common,
-    });
+    let admit = Admit {
+        state_dir: entry.state_dir,
+        run: entry.run,
+        rules: admission::Rules {
+            sizes: admission::Sizes {
+                job_mb: entry.limits.job_memory_mb,
+                reserve_mb: entry.limits.reserve_memory_mb,
+            },
+            cap: entry.limits.mutants_jobs,
+            wait_s: entry.limits.slot_wait_s,
+            policy: entry.policy,
+        },
+    };
+    let checks = Checks { worktree, base, contract: entry.contract, common: &common };
+    let steps = run_checks_admitted(&checks, Some(&admit));
     let path = verify_log_path(entry.state_dir, entry.run);
     let tail_path = path.with_file_name(STDERR_LOG_FILE);
     let mut red = 0;
@@ -476,6 +556,12 @@ fn record_verify(entry: &Gate<'_>, worktree: &Path, base: &str) -> Result<Counte
         ];
         if let Some(reason) = step.reason {
             fields.push(("reason", Value::Str(reason.as_str().to_owned())));
+        }
+        if let Some(slot) = &step.slot {
+            fields.push(("slot", Value::Str(slot.clone())));
+        }
+        if let Some(why) = step.slot_why {
+            fields.push(("slot_why", Value::Str(why.as_str().to_owned())));
         }
         let record = json_lite::write_object(&fields);
         append_line(&path, &record, entry.policy).map_err(|err| err.to_string())?;

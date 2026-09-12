@@ -123,11 +123,22 @@ fn write_verify_scripts(repo: &Path) {
 }
 
 /// commit を 1 つ持つ tmp の git repo と、紐づけた置き場を作る。
+fn repo_with_state() -> (PathBuf, PathBuf) {
+    // **置き場は tmp root の 1 段下**（`<tmp>/state`）。host の受付札は `<state_dir の親>` から
+    // 導くので、tmp root の直下に置くと全 test が同じ slot dir を共有して flaky になる。
+    repo_with_state_in(&tmp().join(STATE_LEAF))
+}
+
+/// 置き場の leaf 名（[`repo_with_state`] と [`clean`] が共有する）。
+const STATE_LEAF: &str = "state";
+
+/// commit を 1 つ持つ tmp の git repo と、**指名した path** に紐づけた置き場を作る。
 #[expect(
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
-fn repo_with_state() -> (PathBuf, PathBuf) {
+fn repo_with_state_in(state: &Path) -> (PathBuf, PathBuf) {
+    fs::create_dir_all(state).expect("置き場を作れる");
     let repo = tmp();
     // 設計 §5.4 の land は `refs/heads/main` を進める。`git init` の既定 branch 名は
     // 環境依存（多くの host で `master`）なので、**test 側で main を明示する**。
@@ -142,15 +153,14 @@ fn repo_with_state() -> (PathBuf, PathBuf) {
     write_verify_scripts(&repo);
     git(&repo, &["add", "-A"]);
     git(&repo, &["commit", "-q", "-m", "seed"]);
-    let state = tmp();
     let out = Command::new(bin())
         .args(["vessel", "init", "--state-dir"])
-        .arg(&state)
+        .arg(state)
         .arg(&repo)
         .output()
         .expect("binary を起動できる");
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "vessel init は rc 0");
-    (repo, state)
+    (repo, state.to_path_buf())
 }
 
 /// `pipe` を binary で 1 回撃つ。
@@ -256,10 +266,14 @@ fn stop_run_ok(state: &Path, id: &str) {
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "stop --run: {}", stderr_of(&out));
 }
 
-/// 後片付け。
+/// 後片付け。[`STATE_LEAF`] の置き場は tmp root ごと畳む（host の slot dir も同じ root に在る）。
 fn clean(dirs: &[&Path]) {
     for dir in dirs {
-        fs::remove_dir_all(dir).ok();
+        let root = dir
+            .parent()
+            .filter(|_| dir.file_name().is_some_and(|name| name == STATE_LEAF))
+            .unwrap_or(dir);
+        fs::remove_dir_all(root).ok();
     }
 }
 
@@ -1301,12 +1315,44 @@ fn write_rules(dir: &Path, name: &str, lens_count: u64, cap: u64) -> PathBuf {
 /// 引くのは、**差し替えた周だけが上限の歯である**ことを字面で読めるようにするためである。
 const FOLLOW_RETRIES: u64 = 2;
 
+/// tmp manifest の受付の待ちの上限（秒・rules 行 `gate.slot_wait_s` の fixture 値）。
+const SLOT_WAIT_S: u64 = 1;
+
+/// tmp manifest の受付の 3 値（rules 行 `gate.job_memory_mb` / `host.reserve_memory_mb` /
+/// `gate.slot_wait_s` の fixture 値）。
+#[derive(Debug, Clone, Copy)]
+struct SlotFixture {
+    /// job 1 つが要る memory（MiB）。
+    job_mb: u64,
+    /// 残す memory（MiB）。
+    reserve_mb: u64,
+    /// 待ちの上限（秒）。
+    wait_s: u64,
+}
+
+/// 既定の受付 fixture: 容量の 2 行は埋め込みの値を写し（封じ込めの箱と同じ値で測る）、待ちの
+/// 上限だけを [`SLOT_WAIT_S`] に縮める（枠の空かない host で歯が 900 秒待たない）。
+fn default_slots() -> SlotFixture {
+    SlotFixture {
+        job_mb: embedded_int("gate.job_memory_mb"),
+        reserve_mb: embedded_int("host.reserve_memory_mb"),
+        wait_s: SLOT_WAIT_S,
+    }
+}
+
 /// [`write_rules`] に起こし直しの上限を足した形（上限の歯だけが値を振る）。
+fn write_rules_with_retries(dir: &Path, name: &str, lens_count: u64, cap: u64, retries: u64) -> PathBuf {
+    write_rules_full(dir, name, (lens_count, cap), retries, default_slots())
+}
+
+/// [`write_rules_with_retries`] に受付の 3 値を足した形（待ちが解ける歯だけが値を振る）。
+/// `gate` は `(gate.lens_count, gate.token_cap)`。
 #[expect(
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
-fn write_rules_with_retries(dir: &Path, name: &str, lens_count: u64, cap: u64, retries: u64) -> PathBuf {
+fn write_rules_full(dir: &Path, name: &str, gate: (u64, u64), retries: u64, slots: SlotFixture) -> PathBuf {
+    let (lens_count, cap) = gate;
     let row = |id: &str, kind: &str, value: u64| {
         format!(
             "[[rule]]\nid = \"{id}\"\nkind = \"{kind}\"\nvalue = {value}\nenabled = true\nruling = \"t\"\nruled_at = \"d\"\n"
@@ -1316,13 +1362,18 @@ fn write_rules_with_retries(dir: &Path, name: &str, lens_count: u64, cap: u64, r
     // manifest を渡した周は「上限が無い」で断られる（`--rules` は全 subcommand に効く）。
     let ceiling = "[[rule]]\nid = \"runner.allowed_commands\"\nkind = \"RunnerAllowedCommands\"\n\
                    value = [\"cargo\", \"git\", \"sh\"]\nenabled = true\nruling = \"t\"\nruled_at = \"d\"\n";
+    // 受付の 4 行: 並列度の上限は埋め込みの値を写し、残る 3 行は [`SlotFixture`] の値。
     let body = format!(
-        "schema = 1\n\n{}\n{}\n{}\n{}\n{}\n{ceiling}",
+        "schema = 1\n\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{ceiling}",
         row("gate.lens_count", "GateLensCount", lens_count),
         row("gate.token_cap", "GateTokenCap", cap),
         row("fleet.lock_retry_ms", "LockRetryMs", 5000),
         row("fleet.lock_stale_ms", "LockStaleMs", 30000),
         row("pipe.follow_retries", "FollowRetries", retries),
+        row("gate.mutants_jobs", "GateMutantsJobs", embedded_int("gate.mutants_jobs")),
+        row("gate.job_memory_mb", "GateJobMemoryMb", slots.job_mb),
+        row("host.reserve_memory_mb", "HostReserveMemoryMb", slots.reserve_mb),
+        row("gate.slot_wait_s", "GateSlotWaitS", slots.wait_s),
     );
     let path = dir.join(name);
     fs::write(&path, body).expect("tmp manifest を書ける");
@@ -5830,10 +5881,12 @@ fn confined_run(repo: &Path, state: &Path, path: &str, lens: &str) -> (String, O
           "--state-dir", &state.display().to_string(), "--runner", TOY_COMMIT],
     );
     assert_eq!(spawned.status.code(), Some(i32::from(RC_OK)), "spawn: {}", stderr_of(&spawned));
+    // `--rules` の tmp manifest で撃つ（受付の待ちの上限を fixture の値にする）。
     let gated = run_pipe_with_path(
         path,
         &["gate", "--run", &id, "--repo", &repo.display().to_string(),
-          "--state-dir", &state.display().to_string(), "--lens", lens],
+          "--state-dir", &state.display().to_string(), "--lens", lens,
+          "--rules", &ceiling_rules(state)],
     );
     (id, gated)
 }
@@ -5852,22 +5905,28 @@ fn pipe_confine_fills_the_jobs_hole_and_uses_the_job_box() {
     assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "gate: {}", stderr_of(&gated));
 
     // **撃たれた側**が受け取った値（record の cmd だけでは置換したことを測れない）。
+    // 値は受付の実測で決まる（host 依存）ので、record の `jobs=` と突き合わせる。
+    let rows = verify_rows(&state, &id);
+    let jobs = row_value(&rows, 2, "jobs");
+    let count: u64 = jobs.parse().unwrap_or(0);
+    assert!(
+        (1..=embedded_int("gate.mutants_jobs")).contains(&count),
+        "実効 jobs は 1 以上・上限以下: {jobs}"
+    );
     let git_dir = git(&worktree_of(&repo, &id), &["rev-parse", "--absolute-git-dir"]);
     assert_eq!(
         fs::read_to_string(Path::new(&git_dir).join("jobs-seen")).unwrap_or_default(),
-        "1",
-        "受付が入るまでの実効 jobs は 1（設計 §9 (a)）"
+        jobs,
+        "撃たれた側は record と同じ実効 jobs を受け取る"
     );
-    let rows = verify_rows(&state, &id);
-    assert_eq!(row_value(&rows, 2, "cmd"), "sh verify-jobs.sh 1", "record の cmd も置換後である");
-    assert_eq!(row_value(&rows, 2, "jobs"), "1", "record に実効 jobs が載る");
+    assert_eq!(row_value(&rows, 2, "cmd"), format!("sh verify-jobs.sh {jobs}"), "record の cmd も置換後である");
     assert_eq!(row_value(&rows, 2, "confined"), "true", "包めている");
 
-    // 箱は `1 × gate.job_memory_mb`・重みは rules 行そのもの（値は manifest が持つ・C1）。
+    // 箱は `実効 jobs × gate.job_memory_mb`・重みは rules 行そのもの（値は manifest が持つ・C1）。
     let record = scope_record(&state, "-common-2-");
     assert_eq!(
         scope_prop(&record, "MemoryMax"),
-        format!("{}M", embedded_int("gate.job_memory_mb")),
+        format!("{}M", count * embedded_int("gate.job_memory_mb")),
         "job の箱: {record}"
     );
     assert_eq!(
@@ -5893,15 +5952,16 @@ fn pipe_confine_uses_two_distinct_boxes_in_one_gate() {
     );
     let path = systemd_stub(&state);
     let marker = state.join("lens-ran");
-    let (_id, gated) = confined_run(&repo, &state, &path, &fake_lens(&marker, &lens_verdict("PASS")));
+    let (id, gated) = confined_run(&repo, &state, &path, &fake_lens(&marker, &lens_verdict("PASS")));
     assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "gate: {}", stderr_of(&gated));
 
+    let jobs: u64 = row_value(&verify_rows(&state, &id), 2, "jobs").parse().unwrap_or(0);
     let job_box = scope_prop(&scope_record(&state, "-common-2-"), "MemoryMax");
     let host_box = scope_prop(&scope_record(&state, "-common-3-"), "MemoryMax");
     assert_eq!(
         job_box,
-        format!("{}M", embedded_int("gate.job_memory_mb")),
-        "{{jobs}} を持つ行は job の箱"
+        format!("{}M", jobs * embedded_int("gate.job_memory_mb")),
+        "{{jobs}} を持つ行は job の箱（実効 jobs {jobs}）"
     );
     let want_host = vessel::pipe::confine::mem_total_mb(&fs::read_to_string("/proc/meminfo").unwrap_or_default())
         .and_then(|total| total.checked_sub(embedded_int("host.reserve_memory_mb")))
@@ -6072,5 +6132,250 @@ fn pipe_confine_oom_lens_is_inconclusive() {
         "便は終端しない（測り直せる）: {}",
         show_line(&repo, &state, &id)
     );
+    clean(&[&repo, &state]);
+}
+
+/// host の受付札の置き場（`<state_dir の親>/scribe2-host/slots`・設計 gate-cost.md §3.2）。
+///
+/// **lib の関数を通さず字面で組む**——同じ関数で置き場を引くと、導き方を変えた実装でも歯が
+/// 追随して通る（置き場の字面そのものを pin する）。
+fn host_slots(state: &Path) -> PathBuf {
+    state.parent().unwrap_or(state).join("scribe2-host").join("slots")
+}
+
+/// 存在しない pid（`pid_max` の上限 4194304 を超える）。
+const DEAD_PID: u64 = 4_000_000_000;
+
+/// 受付札を 1 枚置く（歯が置く札・中身は 1 行 JSON）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn plant_ticket(state: &Path, pid: u64, jobs: u64) -> PathBuf {
+    let dir = host_slots(state);
+    fs::create_dir_all(&dir).expect("slot dir を作れる");
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| u64::try_from(since.as_millis()).unwrap_or(u64::MAX));
+    let path = dir.join(format!("{pid}-planted.slot"));
+    let body = format!("{{\"schema\":1,\"pid\":{pid},\"run\":\"planted\",\"jobs\":{jobs},\"ts\":{ts}}}\n");
+    fs::write(&path, body).expect("札を置ける");
+    path
+}
+
+/// 受付の歯の宣言: `{jobs}` の無い行 → `{jobs}` の行の順に、**撃たれた側で** slot dir を写す。
+///
+/// 札は行の終了で消えるので、外から gate の後に見ても「在った」ことは測れない。行の中から
+/// dir の中身と札の本文を git の dir へ写す（script の本文は宣言の検査の外）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn commit_slot_vessel(repo: &Path, state: &Path) {
+    let slots = host_slots(state);
+    let dir = slots.display();
+    let seen = "\"$(git rev-parse --absolute-git-dir)\"";
+    let plain = format!("ls -A '{dir}' > {seen}/slots-plain 2>/dev/null\nexit 0\n");
+    let jobs = format!(
+        "printf '%s' \"$1\" > {seen}/jobs-seen\nls -A '{dir}' > {seen}/slots-during 2>/dev/null\n\
+         cat '{dir}'/*.slot > {seen}/slots-body 2>/dev/null\nexit 0\n"
+    );
+    fs::write(repo.join("verify-slot-plain.sh"), plain).expect("script を書ける");
+    fs::write(repo.join("verify-slot.sh"), jobs).expect("script を書ける");
+    git(repo, &["add", "verify-slot-plain.sh", "verify-slot.sh"]);
+    commit_vessel(repo, VESSEL_ALLOWED, r#"["sh verify-slot-plain.sh", "sh verify-slot.sh {jobs}"]"#);
+}
+
+/// 受付の歯の 1 便（stub の `systemd-run` で包める host を作り、`--rules` の fixture で gate）。
+fn slot_gate(repo: &Path, state: &Path) -> (String, Output) {
+    commit_slot_vessel(repo, state);
+    let path = systemd_stub(state);
+    let marker = state.join("lens-ran");
+    confined_run(repo, state, &path, &fake_lens(&marker, &lens_verdict("PASS")))
+}
+
+/// `slot=` を持つ record（**ちょうど 1 件**・母集団を確かめてから読む）。
+fn slot_row(
+    rows: &[Vec<(String, vessel::fleet::json_lite::Value)>],
+) -> Vec<(String, vessel::fleet::json_lite::Value)> {
+    let hits: Vec<&Vec<(String, vessel::fleet::json_lite::Value)>> =
+        rows.iter().filter(|row| row.iter().any(|(key, _)| key == "slot")).collect();
+    assert_eq!(hits.len(), 1, "受付を通った record はちょうど 1 件: {rows:?}");
+    hits.first().map(|row| (*row).clone()).unwrap_or_default()
+}
+
+/// slot dir の `.slot` の名（dir が無ければ空）。
+fn slot_names(state: &Path) -> Vec<String> {
+    fs::read_dir(host_slots(state))
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                .filter(|name| name.ends_with(".slot"))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// record の `slot` が回収 1 枚を含む（`reclaimed:1` か `degraded,reclaimed:1`）。
+///
+/// 枠を配れたかは host の空き memory に依る（MemAvailable が `reserve + job` 未満の host では
+/// 縮退する）ので pin しない——e2e は実 host の meminfo に依らない（設計 §7）。
+fn assert_reclaimed_one(slot: &str, why: &str) {
+    assert!(
+        slot == "reclaimed:1" || slot == "degraded,reclaimed:1",
+        "{why}: slot は回収 1 枚を含む: {slot}"
+    );
+}
+
+/// **project 2 つの gate が同じ host の slot dir を見て、死んだ札を回収する**（設計 §3.2・歯 (1) (3)）。
+///
+/// 札は置き場ごとではなく `<state_dir の親>` から導く＝同じ tmp root の 2 つの置き場で、片方の
+/// gate が回収した後にもう片方の gate が**同じ dir に置き直した**札を回収する。
+#[test]
+fn pipe_slots_two_projects_share_one_dir_and_reclaim_dead_tickets() {
+    let root = tmp();
+    let (repo_a, state_a) = repo_with_state_in(&root.join("state-a"));
+    let (repo_b, state_b) = repo_with_state_in(&root.join("state-b"));
+    assert_eq!(host_slots(&state_a), host_slots(&state_b), "2 つの置き場の親は同じ");
+
+    let dead = plant_ticket(&state_a, DEAD_PID, 1);
+    let (id_a, gated_a) = slot_gate(&repo_a, &state_a);
+    assert_eq!(gated_a.status.code(), Some(i32::from(RC_OK)), "gate a: {}", stderr_of(&gated_a));
+    assert_reclaimed_one(&value_of(&slot_row(&verify_rows(&state_a, &id_a)), "slot"), "a が回収した");
+    assert!(!dead.exists(), "死んだ札は削除された");
+
+    // **b の置き場からは札を置かない**（a の親に置いた札を b の gate が拾う＝親が一致する）。
+    let again = plant_ticket(&state_a, DEAD_PID, 1);
+    let (id_b, gated_b) = slot_gate(&repo_b, &state_b);
+    assert_eq!(gated_b.status.code(), Some(i32::from(RC_OK)), "gate b: {}", stderr_of(&gated_b));
+    assert_reclaimed_one(&value_of(&slot_row(&verify_rows(&state_b, &id_b)), "slot"), "b も同じ dir を回収した");
+    assert!(!again.exists(), "置き直した札も削除された");
+    clean(&[&repo_a, &repo_b, &root]);
+}
+
+/// **生きている札が枠を食い尽くすと待ち、上限を超えたら並列度 1 で進む**（歯 (2)）。
+///
+/// 札の pid はこの歯の process（gate の間ずっと生きている）で、jobs を host の総量より大きく
+/// 置いて `by_token` を 0 にする。待ちの上限は rules fixture の `slot_wait_s = 1`。
+#[test]
+fn pipe_slots_live_ticket_waits_then_degrades_to_one_job() {
+    let (repo, state) = repo_with_state();
+    let live = plant_ticket(&state, u64::from(std::process::id()), 1_000_000);
+    let started = std::time::Instant::now();
+    let (id, gated) = slot_gate(&repo, &state);
+    let took = started.elapsed();
+    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "縮退しても便は流れる: {}", stderr_of(&gated));
+    let row = slot_row(&verify_rows(&state, &id));
+    assert_eq!(value_of(&row, "slot"), "degraded", "上限を超えた: {row:?}");
+    assert_eq!(value_of(&row, "jobs"), "1", "並列度 1 で進む（0 で走らせない）");
+    assert_eq!(value_of(&row, "cmd"), "sh verify-slot.sh 1", "置換後の cmd に 1 が載る");
+    assert!(took >= std::time::Duration::from_secs(SLOT_WAIT_S), "待った: {took:?}");
+    assert!(live.exists(), "生きている札は回収しない");
+    clean(&[&repo, &state]);
+}
+
+/// 待ちが解ける歯の待ちの上限（秒）。歯が札を消すまでの時間より十分に長く置く。
+const SLOT_WAIT_LONG_S: u64 = 60;
+
+/// **待ちの途中で塞いでいた札が消えると、上限を待たずに枠を配って進む**（歯 (9)）。
+///
+/// - 容量の 2 線を fixture で最小（job 1 MiB・reserve 0）にし、枠を配れるかを host の空き memory に
+///   依らせない（設計 §7）。塞ぐのは自 pid の札（jobs を host の総量より大きく置く）。
+/// - 待ちの始まりは**先に置いた死んだ札が 1 周目の受付で回収される**ことで知る（壁時計に頼らない）。
+/// - 待ちの間に死んだ札をもう 1 枚置き、**回収されずに残る**ことを測る（待ちの観測は lock も回収も
+///   持たない＝観測を常に「空いた」と読む実装は受付を回し続けて札を回収する）。
+/// - 観測を常に「空かない」と読む実装は上限まで待って `degraded` になる。
+#[test]
+fn pipe_slots_wait_ends_early_when_the_blocking_ticket_goes() {
+    use std::process::Stdio;
+    use std::time::{Duration, Instant};
+
+    let (repo, state) = repo_with_state();
+    commit_slot_vessel(&repo, &state);
+    let path = systemd_stub(&state);
+    let marker = state.join("lens-ran");
+    let lens = fake_lens(&marker, &lens_verdict("PASS"));
+    let slots = SlotFixture { job_mb: 1, reserve_mb: 0, wait_s: SLOT_WAIT_LONG_S };
+    let rules = write_rules_full(&state, "rules-slot-long.toml", (1, 1_000_000), FOLLOW_RETRIES, slots);
+    let contract = write_contract(&repo, &[], &[]);
+    let id = intake(&repo, &state, &contract);
+    let spawned = run_pipe_with_path(
+        &path,
+        &["spawn", "--run", &id, "--repo", &repo.display().to_string(),
+          "--state-dir", &state.display().to_string(), "--runner", TOY_COMMIT],
+    );
+    assert_eq!(spawned.status.code(), Some(i32::from(RC_OK)), "spawn: {}", stderr_of(&spawned));
+
+    let first_dead = plant_ticket(&state, DEAD_PID, 1);
+    let live = plant_ticket(&state, u64::from(std::process::id()), 1_000_000_000_000);
+    let mut child = Command::new(bin())
+        .arg("pipe")
+        .args(["gate", "--run", &id, "--repo", &repo.display().to_string(),
+               "--state-dir", &state.display().to_string(), "--lens", &lens,
+               "--rules", &rules.display().to_string()])
+        .env("PATH", &path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("binary を起動できる");
+
+    // 1 周目の受付が死んだ札を回収した＝枠が 0 で待ちに入った（塞ぐ札は生きている）。
+    let begun = Instant::now();
+    while first_dead.exists() {
+        assert!(child.try_wait().ok().flatten().is_none(), "gate が受付の前に終わった");
+        assert!(begun.elapsed() < Duration::from_secs(120), "1 周目の受付が来ない");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let second_dead = plant_ticket(&state, DEAD_PID, 1);
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(second_dead.exists(), "待ちの間は札を回収しない（観測は受付を回さない）");
+    fs::remove_file(&second_dead).expect("札を消せる");
+
+    let freed = Instant::now();
+    fs::remove_file(&live).expect("塞いでいた札を消せる");
+    let out = child.wait_with_output().expect("gate を待てる");
+    let took = freed.elapsed();
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "gate: {}", stderr_of(&out));
+    let row = slot_row(&verify_rows(&state, &id));
+    // Granted の字面（回収 1 枚＝1 周目の死んだ札・`slot_detail` の合成）。
+    assert_eq!(value_of(&row, "slot"), "reclaimed:1", "上限を待たずに枠を配った: {row:?}");
+    assert!(took < Duration::from_secs(SLOT_WAIT_LONG_S / 2), "上限を待っていない: {took:?}");
+    assert!(slot_names(&state).is_empty(), "終了で札が消える: {:?}", slot_names(&state));
+    clean(&[&repo, &state]);
+}
+
+/// **`{jobs}` の行だけが札を置き、終了で消し、置換後の cmd に実効 jobs が載る**（歯 (4) (5) (6)）。
+#[test]
+fn pipe_slots_ticket_lives_only_during_the_jobs_line() {
+    let (repo, state) = repo_with_state();
+    let (id, gated) = slot_gate(&repo, &state);
+    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "gate: {}", stderr_of(&gated));
+    let rows = verify_rows(&state, &id);
+    let row = slot_row(&rows);
+    assert_ne!(value_of(&row, "slot"), "unmeasured", "meminfo の在る host では測れる: {row:?}");
+    let jobs = value_of(&row, "jobs");
+    let count: u64 = jobs.parse().unwrap_or(0);
+    assert!((1..=embedded_int("gate.mutants_jobs")).contains(&count), "実効 jobs は 1..=上限: {jobs}");
+    assert_eq!(value_of(&row, "cmd"), format!("sh verify-slot.sh {jobs}"), "(6) record の cmd は置換後");
+
+    let git_dir = PathBuf::from(git(&worktree_of(&repo, &id), &["rev-parse", "--absolute-git-dir"]));
+    let read = |name: &str| fs::read_to_string(git_dir.join(name)).unwrap_or_default();
+    assert_eq!(read("jobs-seen"), jobs, "(6) 撃たれた側も同じ実効 jobs");
+    // (4) `{jobs}` の無い行の間は札が無い（先に撃つ行・札を置く前）。
+    assert!(!read("slots-plain").contains(".slot"), "(4) {{jobs}} の無い行は札を作らない: {}", read("slots-plain"));
+    // (5) `{jobs}` の行の間は自便の札がちょうど 1 枚在り、本文の jobs が実効 jobs と一致する。
+    let during: Vec<String> = read("slots-during")
+        .lines()
+        .filter(|name| name.ends_with(".slot"))
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(during.len(), 1, "(5) 行の間は札 1 枚: {during:?}");
+    assert!(during.iter().all(|name| name.ends_with(&format!("-{id}.slot"))), "札の名は <pid>-<run>.slot: {during:?}");
+    let body = vessel::fleet::json_lite::parse_object(read("slots-body").trim()).unwrap_or_default();
+    assert_eq!(value_of(&body, "jobs"), jobs, "札の jobs は実効 jobs: {}", read("slots-body"));
+    assert_eq!(value_of(&body, "run"), id, "札の run は便 id");
+    // (5) 終了で札は消える。
+    assert!(slot_names(&state).is_empty(), "(5) 終了で札が消える: {:?}", slot_names(&state));
     clean(&[&repo, &state]);
 }

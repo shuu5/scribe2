@@ -175,7 +175,11 @@ fn write_line(path: &Path, line: &str) -> Result<(), StoreError> {
 }
 
 /// lock を取る。古い lock は外して警告に載せる（黙って消さない）。
-fn acquire(lock: &Path, policy: LockPolicy) -> Result<Vec<Warning>, StoreError> {
+///
+/// **crate の中へ開く**のは受付（[`crate::pipe::admission`]）が slot dir の lock に同じ実装を
+/// 使うためである（lock file は別・実装は 1 本・憲法 C6.3）。外すのは呼び手が lock file を
+/// 消すこと。
+pub(crate) fn acquire(lock: &Path, policy: LockPolicy) -> Result<Vec<Warning>, StoreError> {
     let started = Instant::now();
     let mut warnings = Vec::new();
     loop {

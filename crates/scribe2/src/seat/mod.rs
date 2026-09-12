@@ -193,6 +193,24 @@ impl StateDir {
             self.path.display()
         )
     }
+
+    /// この置き場の host の受付札の置き場（[`host_slots_dir`]）。
+    pub fn slots_dir(&self) -> PathBuf {
+        host_slots_dir(&self.path)
+    }
+}
+
+/// host 単位の受付札の置き場（`<state_dir の親>/<NAME>-host/slots/`・設計 gate-cost.md §3.2）。
+///
+/// **state dir の親から導く**——同じ host の state dir は 1 つの親（host の state root）に置く
+/// 運用なので、project をまたいで 1 つの dir になる。env（`XDG_RUNTIME_DIR` / `HOME` /
+/// `TMPDIR`）は読まない（憲法 C2.2）。親を持たない path（`/`）はそれ自身を親と読む。
+pub fn host_slots_dir(state_dir: &Path) -> PathBuf {
+    state_dir
+        .parent()
+        .unwrap_or(state_dir)
+        .join(format!("{}-host", crate::name::NAME))
+        .join("slots")
 }
 
 /// 置き場を解く。`--state-dir` が上書きし、無ければ repo の git 設定から読む。

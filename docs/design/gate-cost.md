@@ -52,6 +52,16 @@ manifest に行が載るまでは ADR-0021 の予定行（C14.2 の相互参照�
 - **解放**: verify 行の終了で札を消す（Drop でも消す）。器が死んだ周は次の受付が pid で回収する。
 - **極性**: 受付は行為を止めうる判定を持たない（縮退する）ので ADR-0014 §2.1 の guard ではなく、極性一覧に載せない。測れない周（`/proc/meminfo` が読めない・lock が取れない）は `jobs = 1` で進み `slot=unmeasured` を記す（縮退＝従来の費用）。slot dir は真実を持たない印の置き場で NFR4 の「store」ではない（読めない札は回収して記録・rc は変えない）。
 
+#### 3.2.1 errata（現物との差・s2-07l.158・規範は上の §3.2 のまま）
+
+- **module は `pipe/admission.rs`**（§7 は `pipe/slots.rs`）。code の識別子は admission / Ticket 系で、hook の注入計測の slot（FR21）と intake の「受付」との字面衝突を避ける。file 名の `.slot` と record の `slot=` は ADR-0021 §2.3 の字面のまま。置き場は seat/mod.rs `host_slots_dir`（`StateDir::slots_dir` はその委譲）。
+- **札の中身は 1 行 JSON**（`schema` / `pid` / `run` / `jobs` / `ts`・§3.2 は「state dir と同じ TOML subset」と書いた）。ADR-0004 §2.3 D-3 の TOML subset の列挙を広げないためである。`ts` は UNIX epoch の ms で、生きている判定の起動時刻は `/proc/stat` の `btime` + `/proc/<pid>/stat` の starttime ÷ `USER_HZ`（ABI の 100）で組む（`btime` の秒の切り捨ては持ち主を死んだと読まない側へ寄る）。札は `.partial` に書いて rename する＝読み手は半端な札を見ない。
+- **`Completion::SlotFree { slots_dir, want, job_mb, reserve_mb, cap }`**（§3.2 の分担の宿題の決着）。variant はデータだけを運び、meminfo と札の読み手は wait の内側（`admission::has_room`）が持つ。待ちの間の観測は lock を取らず札も消さない（回収と記録は lock の内側の受付だけ）。`Completion::pid()` は pid を見張らない本 variant で 0 を返す（`/proc/0` は無い）。
+- **`slot=` の値**: `granted` / `degraded` / `unmeasured`、回収が在った周は `reclaimed:<n>`（枠を配れた周）か `<degraded|unmeasured>,reclaimed:<n>`（縮退と重なった周）。測れなかった理由は閉じた enum で `slot_why=<slots-dir|lock|meminfo>` に残す。meminfo が読めない周は札を回収しない（回収の数を残す前に縮退するため）。縮退（`degraded`）の周も 1 枠の札を置く。
+- **包めない周（`Unconfined`）は 1 枠だけを取りにいく**（札は置く）。箱の無い行に並列度を上げると、溢れたときに殺されるのが席の側になる。
+- **受付を通るのは gate の共通 verify の `{jobs}` 行だけ**。land の main 実測（`run_checks`・land.rs）は受付を持たず `jobs = 1` のまま撃つ（gate.rs `UNADMITTED_JOBS`・§3.3 の errata の `EFFECTIVE_JOBS` の改名）。main 実測の検出線は (c) で撃たなくなる。
+- **受付の 4 行（`gate.mutants_jobs` / `gate.job_memory_mb` / `host.reserve_memory_mb` / `gate.slot_wait_s`）は `--rules` の manifest から読む**（pipe/cli.rs `limits_of`）。封じ込めの 3 線（§4.4・埋め込みだけ）と読み面が違うのは、待ちの上限を振る歯の fixture が gate へ届く口がここだけだからである。
+
 ### 3.3 実効 jobs の渡し方
 
 - 宣言 file の共通 verify と検出線の穴を `{base}` と **`{jobs}`** の 2 つにする（declaration.rs `Holes::Base` → 穴の列挙を「宣言の行に置ける穴」の閉じた集合にする・ADR-0010 §2.1 の部分 supersede）。scribe2 自身の宣言は `cargo xtask mutants-diff --base {base} --jobs {jobs}`。
@@ -114,8 +124,8 @@ manifest に行が載るまでは ADR-0021 の予定行（C14.2 の相互参照�
 
 e2e は binary を spawn し外部 command は PATH 先頭の stub で差し替える（pipe.rs / seat.rs の慣行）。`/proc/meminfo` と cgroup の file を binary の外から差し替える口は持たない（C2.2・裏口を作らない）ので、**測る計算は pure 関数にして in-file の歯が fixture 文字列で測り、e2e は stub の引数・record の field・札 file の実在だけを測る**。
 
-- 受付（in-file・pipe/slots.rs）: `capacity(meminfo_text, rules, live_jobs)` の式（by_avail / by_token の min・reserve の差引・0 の床）・読めない meminfo → `unmeasured`・壊れた札の parse → 回収の数。
-- 受付（e2e・`pipe_slots_`）: tmp の state root に state dir 2 つ〔project 2 つ〕で同じ slots dir を見る・自 pid の札で `by_token` を 0 にすると待ち、rules fixture の `slot_wait_s = 1` で `jobs=1 slot=degraded`・存在しない pid の札が回収され `slot=reclaimed:1`・`{jobs}` の無い行は札を作らない・終了で札が消える・置換後の `cmd` に実効 jobs が載る。
+- 受付（in-file・pipe/admission.rs〔§3.2.1 errata〕）: `capacity(meminfo_text, rules, live_jobs)` の式（by_avail / by_token の min・reserve の差引・0 の床）・読めない meminfo → `unmeasured`・壊れた札の parse → 回収の数・`slot_detail` の合成（Granted + 回収 n → `reclaimed:n`・縮退 + 回収 n → `<slot>,reclaimed:n`・回収 0 → slot だけ）。
+- 受付（e2e・`pipe_slots_`・rules fixture は `slot_wait_s = 1`〔待ちが解ける歯だけ長い値〕）: tmp の state root に state dir 2 つ〔project 2 つ〕で同じ slots dir を見る・自 pid の札で `by_token` を 0 にすると待ち、`slot_wait_s = 1` で `jobs=1 slot=degraded`・存在しない pid の札が回収され `slot` が `reclaimed:1` を含む（枠の可否は host 依存〔errata s2-07l.158: 起票時は `slot=reclaimed:1` と pin していた・MemAvailable が `reserve + job` 未満の host では `degraded,reclaimed:1`〕）・`{jobs}` の無い行は札を作らない・終了で札が消える・置換後の `cmd` に実効 jobs が載る・待ちの途中で塞ぐ札を消すと上限を待たずに枠を配る（容量の 2 線を fixture で最小にして host の memory に依らせない・待ちの間に置いた死んだ札が残る＝待ちの観測は受付を回さない）。
 - 封じ込め（e2e・`pipe_confine_`・偽 `systemd-run` = 引数を file に写して `sh -c` を exec する stub）: `-p MemoryMax=` が `{jobs}` 行で `jobs × job_memory_mb`、それ以外の行で `MemTotal − reserve`・`CPUWeight=` が rules 行・stub 不在で素の `sh -c` と `confined=false reason=`・stub の引数に `-p OOMPolicy=continue` が在る・runner / lens の起動も wrap を通る。**歯で測れるのは引数まで**: scope の外が死なないこと・`memory.peak` / `memory.events` が読めることは実 host の 1 回を契約の done に入れる（planner の再実測・host 依存）。peak / oom_kill の読みは in-file（cgroup file の fixture 文字列）。
 - main 実測（e2e・`pipe_detection_`・verify 行は「呼出回数 file に 1 行足す」stub）: verdict.json の `tree` が gate の HEAD の木と一致・一致する周は③の stub が呼ばれず `verify-main.jsonl` に `skipped=detection` が載り**②④は呼ばれる**（回数 file を行ごとに分ける）・`tree` を壊した fixture では③も呼ばれる・`tree` 無しの verdict でも呼ばれる・検出線の rc≠0 は gate FAIL のまま。
 - e2e の state dir は tmp root の**直下に置かない**（親が tmp root になり、gate / land を撃つ既存の全 test が `<tmp>/<NAME>-host/slots/` を共有して flaky になる）: 既存 helper `tmp()` の呼び手で state dir を `<tmp>/state` に 1 段下げる（契約 (b) の write-set に tests/e2e/pipe.rs の既存呼び手を含める）。
