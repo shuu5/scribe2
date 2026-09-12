@@ -58,7 +58,7 @@
 </ul>
 </details>
 <details>
-<summary>accepted <span class="nav-count">(20)</span></summary>
+<summary>accepted <span class="nav-count">(22)</span></summary>
 <ul>
   <li><a href="decisions/ADR-0001-rust-single-static-binary.html">ADR-0001 — 実装言語と構成 = Rust 単一 static binary (Go / typed Python / TypeScript 却下)</a> <span class="nav-meta">adr</span></li>
   <li><a href="decisions/ADR-0002-test-lint-toolchain.html">ADR-0002 — test / lint toolchain = cargo nextest・粒度 lint は forbid・構造検査は cargo xtask check</a> <span class="nav-meta">adr</span></li>
@@ -79,7 +79,9 @@
   <li><a href="decisions/ADR-0017-account-allowance-measured-into-event-log.html">ADR-0017 — 口座残量は器が host の HTTP client を子 process で呼んで読み、 出所付きの実測行として fleet の event log に記録する (manifest の口座列挙は不透明な label・上限 record は検出の合図のまま・選ぶは v3)</a> <span class="nav-meta">adr</span></li>
   <li><a href="decisions/ADR-0018-working-memory-subcommands-and-pointer-required-directives.html">ADR-0018 — 作業記憶の退避・復元・消費は器の subcommand が機械層を担い、 命令行は照合できる出所 pointer を必須とし、 pointer の無い行は暫定の印を付けて次の cycle に引き継がない (brief の文章は開発 session が組む・前の版の script への依存を切る)</a> <span class="nav-meta">adr</span></li>
   <li><a href="decisions/ADR-0019-parallel-runs-exclude-overlap-at-intake-and-runner-resolves-conflicts.html">ADR-0019 — 並列の便は intake が write-set の交差で排他し、 land の rebase 衝突は runner を起こし直して解く (人は質問の回答でだけ関わる・admin は中継と操作・手で merge する経路を持たない・ADR-0016 §2.2 の質問判定と再 spawn の契機を部分 supersede)</a> <span class="nav-meta">adr</span></li>
+  <li><a href="decisions/ADR-0020-account-autonomy-limit-stop-resume-and-selection.html">ADR-0020 — 口座の上限は便を殺さず別口座で途中再開し、 開発 session は上限の手前で退避して別口座で立て直し、 口座は実測の残量から 1 つの純関数が便用と session 用の 2 規則で選ぶ (R-C9-1 を typed な値で発効・ADR-0012 §2.4 / ADR-0016 §2.1 / §2.5 / ADR-0017 §2.4 / §2.5 を部分 supersede・便を閾値で止めない ADR-0012 §2.3 は不変)</a> <span class="nav-meta">adr</span></li>
   <li><a href="decisions/ADR-0021-gate-cost-is-measured-and-confined.html">ADR-0021 — gate の費用は測って決める (変異の並列度は rules 行の上限を project 横断・host 単位の受付が実測で下げ、 器の子 process は cgroup で封じ、 木が同じ main 実測は検出線を撃ち直さず、 着地は gate 済みの便を先に通す・ADR-0009 §2.3 / §2.4 と ADR-0010 §2.1 / §2.3 / §2.4 / §2.5 を部分 supersede)</a> <span class="nav-meta">adr</span></li>
+  <li><a href="decisions/ADR-0022-seat-roles-are-typed-and-enforced-by-hooks.html">ADR-0022 — 席の役割と権能は閉じた型と rules 行で持ち、 hook が tool 呼出しの境界で執行し、 役割の指示文は行から生成して session の開始時に注入する (対話面 R-C7-1 の値を planner の席へ・管理席は anchor ごと 1 席・ADR-0004 §2.6 / ADR-0016 §2.1 を部分 supersede・器の外の散文を規則の置き場にしない)</a> <span class="nav-meta">adr</span></li>
 </ul>
 </details>
 </section>

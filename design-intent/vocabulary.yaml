@@ -144,7 +144,7 @@ terms:
     relationships: [RuleKind, gate, 便, verdict export]
   - canonical: 席
     domain: consumer
-    definition: 1 つの Claude Code session が占める作業単位。 役割は worker / admin (管理席) / planner。 状態は SeatState で運ぶ (C3.3)。
+    definition: 1 つの Claude Code session が占める作業単位。 役割は planner / 管理席の 2 値 (runner と lens は席ではない・ADR-0022 §2.1)。 状態は SeatState で運ぶ (C3.3)。
     forbidden: [シート]
     relationships: [fleet, 口座, lease, 管理席, planner]
   - canonical: 口座
@@ -180,17 +180,17 @@ terms:
     relationships: [lane, 管理席, dolt push, gate]
   - canonical: 管理席
     domain: consumer
-    definition: admin の役割を持つ席。 停止の検知と再起動の規範は C9。 配送構造での仕事 (契約を pipeline に流す・runner の質問を planner へ中継する・go の後に land する) は SRS FR30 (ADR-0016 §2.1)。
+    definition: admin の役割を持つ席。 anchor ごとに 1 席 (SRS FR30 / FR40・ADR-0022 §2.6)。 停止の検知と再起動の規範は C9。 配送構造での仕事 (契約を pipeline に流す・runner の質問を planner へ中継する・go の後に land する) は SRS FR30 (ADR-0016 §2.1) で、 権能の執行は ADR-0022 §2.3。
     forbidden: [運転席]
     relationships: [席, admin lane, planner, 質問 record]
   - canonical: planner
     domain: consumer
-    definition: 席の役割の 1 つ (設計協調)。 契約・裁定・land の go を担い、 runner の質問に契約の修正か回答 event で応える (SRS FR30 / FR32・ADR-0016 §2.1 / §2.3)。 改訂前の憲法 (C7) では唯一の対話面だったが、 ADR-0003 以後は対話面の identity を rules 行 R-C7-1 が持つ (初期値 = 開発 session が user 直)。
+    definition: 席の役割の 1 つ (設計協調)。 契約・裁定・land の go を担い、 runner の質問に契約の修正か回答 event で応える (SRS FR30 / FR32・ADR-0016 §2.1 / §2.3)。 対話面の identity は rules 行 R-C7-1 が持ち (ADR-0003)、 その値は planner の席 (ADR-0022 §2.5)。 anchor ごとに 1 席 (SRS FR40)。
     forbidden: [プランナー]
     relationships: [対話面, 席, 開発 session]
   - canonical: 対話面
     domain: consumer
-    definition: user と機械が承認や裁定をやり取りする面。 ちょうど 1 つ (C7)。 どの席かは rules 行 R-C7-1 の値で決まり、 MVP の初期値は開発 session が user と直接対話する形。
+    definition: user と機械が承認や裁定をやり取りする面。 ちょうど 1 つ (C7)。 どの席かは rules 行 R-C7-1 の値で決まり、 値は役割 planner の登録 row を持つ席 (ADR-0022 §2.5)。 承認・回答・go の記帳はその席からだけ受理される。
     relationships: [planner, 開発 session, 承認 event, rules 行]
   - canonical: relay 印
     domain: consumer
@@ -210,7 +210,7 @@ terms:
     relationships: [3 クラス, 承認 event, 便]
   - canonical: 開発 session
     domain: consumer
-    definition: 設計・契約・実装・review を行う AI の session (Claude Code)。 MVP の対話面 (R-C7-1 の初期値) であり、 作業記憶の退避と復元の作法を守る (SRS FR23)。
+    definition: 設計・契約・実装・review を行う AI の session (Claude Code)。 役割 (planner / 管理席) の登録 row を持つ席で動き (ADR-0022 §2.1)、 対話面はそのうち planner の席 (R-C7-1)。 作業記憶の退避と復元の作法を守る (SRS FR23)。
     relationships: [対話面, 契約, 設計 doc, runner, lens]
   - canonical: 契約
     domain: consumer
@@ -533,21 +533,37 @@ terms:
     relationships: [受付の枠, 変異検出線, vessel 宣言]
   - canonical: 役割
     domain: consumer
-    definition: 開発 session の席の種類 (planner / 管理席)。 閉じた enum の値で、 席の登録 row が持つ。 窓名や env の慣習では決めない (SRS FR40)。
+    definition: 開発 session の席の種類 (planner / 管理席)。 閉じた enum の値で、 席の登録 row が持つ。 窓名や env の慣習では決めない (SRS FR40・ADR-0022 §2.1)。
     relationships: [席, planner, 管理席, 権能, 席の登録]
   - canonical: 権能
     domain: consumer
-    definition: 役割ごとに許された操作の閉じた一覧 (回答・承認・go の記帳、 便の起動、 path 種別の編集)。 値は rules 行が持ち、 hook が tool 呼出しの境界で執行する (SRS FR41)。
+    definition: 役割ごとに許された操作の閉じた一覧 (回答・承認・go の記帳、 便の起動、 path 種別の編集)。 値は役割ごとの rules 行が持ち (ADR-0022 §2.2)、 hook が tool 呼出しの境界で執行する (SRS FR41・ADR-0022 §2.3)。
     relationships: [役割, rules 行, hook, 対話面]
   - canonical: 席の登録
     domain: consumer
-    definition: 席の target と役割 (と anchor) を fleet の store に記録すること。 鍵は (役割, anchor) で target を併せ持つ。 記録の無い席は権能を持たない (SRS FR40)。
+    definition: 席の役割と anchor を鍵に、 target・口座・起動の雛形を併せて fleet の event log に記録すること (SRS FR40・ADR-0022 §2.1)。 記録の無い席は権能を持たない。 pane id は鍵にも項目にも置かない。
     relationships: [席, 役割, fleet]
   - canonical: 上限停止
     domain: consumer
-    definition: 便または開発 session が口座残量の上限に当たって止まること。 便では typed な event (SRS FR35)、 session では退避と立て直しの契機 (SRS FR38)。
+    definition: 便または開発 session が口座残量の上限に当たって止まること。 便では Failed でない再開できる段 (SRS FR35・ADR-0020 §2.1)、 session では退避と立て直しの契機 (SRS FR38・ADR-0020 §2.4)。
     relationships: [口座残量, 口座, 口座選定]
   - canonical: 口座選定
     domain: consumer
-    definition: manifest の口座と実測の口座残量から 1 本の純関数が口座を選ぶこと (SRS FR36)。 便用と session 用の 2 規則を持ち、 値は rules 行 R-C9-1。
+    definition: manifest の口座と実測の口座残量から 1 本の純関数が口座を選ぶこと (SRS FR36・ADR-0020 §2.2)。 便用 (使い切る側) と session 用 (余裕を残す側) の 2 規則を持ち、 値は rules 行 R-C9-1。
     relationships: [口座, 口座残量, rules 行, 上限停止]
+  - canonical: anchor
+    domain: consumer
+    definition: 対象 repo の main checkout。 席と便の鍵の一部で、 1 つの anchor に planner 1 席・管理席 1 席 (SRS FR40・ADR-0022 §2.1)。 便の worktree はここから切る。
+    relationships: [席, 席の登録, worktree, 役割]
+  - canonical: 役割の指示文
+    domain: consumer
+    definition: 席の役割ごとに、 tracked な雛形 1 枚と権能の rules 行から器が生成して session の開始・clear・圧縮後に注入する文 (SRS FR42・ADR-0022 §2.4)。 雛形の外に手書きの規範文を持たず、 hook で塞ぐ事項は書かない。
+    relationships: [役割, 権能, hook, 開発 session]
+  - canonical: 席の queue
+    domain: consumer
+    definition: 席に向けた dispatch・席宛ての質問・裁定済みの次の行動の集合。 管理 tick は queue が空でない idle の席に続きの pointer を注入し、 queue が承認と裁定の待ちだけのときを正当な idle とする (SRS FR43)。
+    relationships: [管理 tick, 席, 席の状態]
+  - canonical: 席間の連絡
+    domain: consumer
+    definition: 開発 session の席どうしの message を、 席の入力欄を経由しない経路で届け、 経路自身の記録で着地を確かめること (SRS FR44)。 入力欄への注入は器の tick・heartbeat・復元の command にだけ使う。
+    relationships: [席, 管理 tick, 開発 session]

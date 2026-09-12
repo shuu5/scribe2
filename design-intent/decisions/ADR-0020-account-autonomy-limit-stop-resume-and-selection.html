@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="folio-doc-type" content="adr">
+<meta name="folio-layer" content="project">
+<meta name="folio-version" content="0.4.6">
+<meta name="folio-status" content="accepted">
+<meta name="folio-stakeholders" content="Developer, AI Agent, External Reviewer">
+<meta name="folio-adr-id" content="0020">
+<meta name="folio-adr-date" content="2026-09-13">
+<title>ADR-0020 — 口座の上限は便を殺さず別口座で途中再開し、 開発 session は上限の手前で退避して別口座で立て直し、 口座は実測の残量から 1 つの純関数が便用と session 用の 2 規則で選ぶ (R-C9-1 を typed な値で発効・ADR-0012 §2.4 / ADR-0016 §2.1 / §2.5 / ADR-0017 §2.4 / §2.5 を部分 supersede・便を閾値で止めない ADR-0012 §2.3 は不変)</title>
+<link rel="stylesheet" href="../../common.css">
+<script type="application/ld+json">
+{
+  "@context": {
+    "dc": "http://purl.org/dc/terms/",
+    "schema": "https://schema.org/",
+    "folio": "https://folio.dev/spec/v1/"
+  },
+  "@id": "./ADR-0020-account-autonomy-limit-stop-resume-and-selection.html",
+  "@type": "schema:TechArticle",
+  "dc:isReferencedBy": [
+    { "@id": "./ADR-0022-seat-roles-are-typed-and-enforced-by-hooks.html" }
+  ],
+  "dc:isPartOf": [
+    { "@id": "./README.html" }
+  ],
+  "dc:title": "ADR-0020 — 口座の上限は便を殺さず別口座で途中再開し、 開発 session は上限の手前で退避して別口座で立て直し、 口座は実測の残量から 1 つの純関数が便用と session 用の 2 規則で選ぶ (R-C9-1 を typed な値で発効・ADR-0012 §2.4 / ADR-0016 §2.1 / §2.5 / ADR-0017 §2.4 / §2.5 を部分 supersede・便を閾値で止めない ADR-0012 §2.3 は不変)",
+  "folio:version": "0.4.6",
+  "folio:stakeholders": ["Developer", "AI Agent", "External Reviewer"],
+  "dc:references": [
+    { "@id": "../spec/constitution.html#c1" },
+    { "@id": "../spec/constitution.html#c2" },
+    { "@id": "../spec/constitution.html#c3" },
+    { "@id": "../spec/constitution.html#c5" },
+    { "@id": "../spec/constitution.html#c9" },
+    { "@id": "../spec/constitution.html#c10" },
+    { "@id": "../spec/constitution.html#c11" },
+    { "@id": "../spec/constitution.html#n1" },
+    { "@id": "../spec/srs.html#FR14" },
+    { "@id": "../spec/srs.html#FR22" },
+    { "@id": "../spec/srs.html#FR28" },
+    { "@id": "../spec/srs.html#FR29" },
+    { "@id": "../spec/srs.html#FR32" },
+    { "@id": "../spec/srs.html#FR33" },
+    { "@id": "../spec/srs.html#FR35" },
+    { "@id": "../spec/srs.html#FR36" },
+    { "@id": "../spec/srs.html#FR37" },
+    { "@id": "../spec/srs.html#FR38" },
+    { "@id": "../spec/srs.html#AC12" },
+    { "@id": "../spec/srs.html#AC13" },
+    { "@id": "./ADR-0004-mvp-persistence-and-cross-version-formats.html" },
+    { "@id": "./ADR-0012-rate-limit-detection-reads-dedicated-record.html" },
+    { "@id": "./ADR-0015-seat-state-is-stamped-by-hooks-not-read-from-pane.html" },
+    { "@id": "./ADR-0016-default-delivery-structure-and-typed-question-record.html" },
+    { "@id": "./ADR-0017-account-allowance-measured-into-event-log.html" },
+    { "@id": "./ADR-0018-working-memory-subcommands-and-pointer-required-directives.html" },
+    { "@id": "./ADR-0021-gate-cost-is-measured-and-confined.html" },
+    { "@id": "./ADR-0022-seat-roles-are-typed-and-enforced-by-hooks.html" }
+  ]
+}
+</script>
+</head>
+<body>
+<!-- folio:chrome-top -->
+<a class="skip-link" href="#s1-context">本文へスキップ</a>
+<nav class="breadcrumb" aria-label="パンくず"><ol>
+  <li><a href="../index.html">design-intent</a></li>
+  <li><a href="./README.html">decisions</a></li>
+  <li aria-current="page">ADR-0020</li>
+</ol></nav>
+<!-- /folio:chrome-top -->
+
+<header class="doc-header">
+  <h1>ADR-0020 — 口座の上限は便を殺さず別口座で途中再開し、 開発 session は上限の手前で退避して別口座で立て直し、 口座は実測の残量から 1 つの純関数が便用と session 用の 2 規則で選ぶ (R-C9-1 を typed な値で発効・ADR-0012 §2.4 / ADR-0016 §2.1 / §2.5 / ADR-0017 §2.4 / §2.5 を部分 supersede・便を閾値で止めない ADR-0012 §2.3 は不変)</h1>
+  <div class="meta">Status: accepted &middot; Date: 2026-09-13 &middot; version 0.4.6 (拘束する constitution の版) &middot; C9 / C9.2 / C1 / C2 / C5 / C10 / C11.2 の適用を記録し、 ADR-0017 §2.5 と ADR-0016 §2.5 が「v3・scope out」に置いた口座の自動選定を v2 の MVP へ移し、 ADR-0012 §2.4 (選定の材料) / ADR-0016 §2.1 (run は席の口座を継承) / ADR-0017 §2.4 (実測行を選定に用いない) を §2.5 で部分 supersede する &middot; 要件は SRS v0.7 (FR35 / FR36 / FR37 / FR38 / AC12 / AC13) が正本 &middot; ADR-0012 §2.3 (使用率の閾値で便を止めない) は不変</div>
+</header>
+<!-- folio:chrome-toc -->
+<nav class="toc" aria-label="ページ内目次">
+<ol>
+  <li><a href="#s1-context">§1. Context</a></li>
+  <li><a href="#s2-decision">§2. Decision</a></li>
+  <li class="toc--sub"><a href="#s2-1-limit-stop">§2.1 上限で止まった便は Failed にせず、 再開できる段として typed に記帳する</a></li>
+  <li class="toc--sub"><a href="#s2-2-selection">§2.2 口座は 1 つの純関数が選ぶ。 便用は使い切る側、 session 用は余裕を残す側。 値は R-C9-1 が typed に持つ</a></li>
+  <li class="toc--sub"><a href="#s2-3-resume">§2.3 別口座での途中再開は同じ worktree と同じ契約で行い、 口座が無ければ最も早い reset まで待つ</a></li>
+  <li class="toc--sub"><a href="#s2-4-session">§2.4 開発 session は上限の手前で退避の合図を受け、 止まった後に別口座で同じ target に立て直す</a></li>
+  <li class="toc--sub"><a href="#s2-5-supersede">§2.5 ADR-0012 §2.4 / ADR-0016 §2.1 / §2.5 / ADR-0017 §2.4 / §2.5 を部分 supersede する</a></li>
+  <li class="toc--sub"><a href="#s2-6-scope">§2.6 射程外</a></li>
+  <li><a href="#s3-srs">§3. SRS との関係 (正本は SRS)</a></li>
+  <li><a href="#s4-consequences">§4. Consequences</a></li>
+  <li><a href="#s5-alternatives">§5. Alternatives Considered</a></li>
+  <li><a href="#s6-trace">§6. Trace</a></li>
+</ol>
+</nav>
+<!-- /folio:chrome-toc -->
+
+<aside class="informative">
+<p>本 ADR は IETF <strong>RFC 2119</strong> および <strong>RFC 8174 / BCP 14</strong> に定義される MUST / SHALL / SHOULD / MAY のキーワード解釈規約に従う。 ADR は決定時点の記録であり、 改訂は新しい ADR による supersede で行う。 本 ADR の <strong>§2 は user 裁定 (2026-09-12) を受けた決定</strong>で、 <strong>§3 は SRS v0.7 への pointer</strong> である。 本 ADR は要件の文面を持たない。 <a href="./ADR-0017-account-allowance-measured-into-event-log.html#s2-5-scope">ADR-0017 §2.5</a> と <a href="./ADR-0016-default-delivery-structure-and-typed-question-record.html#s2-5-scope">ADR-0016 §2.5</a> が「v3・SRS scope out」に置いた<strong>口座の自動選定を v2 の MVP へ移す</strong>決定であり、 <a href="./ADR-0012-rate-limit-detection-reads-dedicated-record.html#s2-1-signal">ADR-0012 §2.1</a> の判定入力 (上限 record の status) と同 §2.3 (使用率の閾値で便を止めない) は<strong>変えない</strong>。 <strong>発効</strong>: 本 ADR は rules 行の値を持たず (C1)、 R-C9-1 の値と session 用の閾値は契約が裁定 id 付きで manifest に書く。 accepted である (§2.1〜§2.4 の実装 bead は起票できる)。</p>
+</aside>
+
+<aside class="machine-readable" aria-hidden="true">
+  <dl>
+    <dt>id</dt><dd>ADR-0020</dd>
+    <dt>doc-type</dt><dd>adr</dd>
+    <dt>status</dt><dd>accepted</dd>
+    <dt>date</dt><dd>2026-09-13</dd>
+    <dt>version</dt><dd>0.4.6 (拘束する constitution の版。 本 ADR は憲法の条文を動かさない)</dd>
+    <dt>decided-by</dt><dd>user (2026-09-12) — planner の提示 (口座の自律制御を MVP に入れるか) に対する裁定 (要旨: MVP に入れる。 自律に直接関わる部分は v2 で解消する。 上限の検知・途中再開・口座選定が要る。 便は上限に当たっても途中再開できるので、 口座の上限を使い切るための弾と見る。 planner と管理席は上限で止まると他の仕事を詰まらせるので、 詰まる前に退避する。 モデル別の 7 日枠だけに当たる事故を v2 の間に解消する)。 逐語は台帳 <code>s2-07l.142</code> の notes が原本で本 file には写さない (CON2)</dd>
+    <dt>stakeholders</dt><dd>Developer, AI Agent, External Reviewer</dd>
+    <dt>supersedes</dt><dd>次の文を<strong>部分 supersede</strong>する (§2.5): (i) <a href="./ADR-0017-account-allowance-measured-into-event-log.html#s2-4-signal-vs-truth">ADR-0017 §2.4</a>「器 SHALL NOT 本版で実測行を便の停止にも口座の選定にも用いない」を「便の停止には用いない (不変)・口座の選定に用いる」と読む、 (ii) <a href="./ADR-0017-account-allowance-measured-into-event-log.html#s2-5-scope">ADR-0017 §2.5</a> の射程外「口座の自動選定と R-C9-1 の有効化 (v3・A2 の裁定を要する)」を「v2 の MVP・裁定は本 ADR の decided-by」と読む、 (iii) <a href="./ADR-0012-rate-limit-detection-reads-dedicated-record.html#s2-4-scope">ADR-0012 §2.4</a>「口座を選び直す仕組みは、 この版では作りません」を「仕組みは本 ADR」と読み、 選定の材料は上限 record の field ではなく実測行 (ADR-0017 §2.4 のまま) とする、 (iv) <a href="./ADR-0016-default-delivery-structure-and-typed-question-record.html#s2-1-structure">ADR-0016 §2.1</a>「口座 SHALL 席ごとに持ち、 run は親 (席) の口座を継承する」を「席は 1 口座を持つ (不変)・run の口座は §2.2 の便用の規則が選ぶ」と読む、 (v) <a href="./ADR-0016-default-delivery-structure-and-typed-question-record.html#s2-5-scope">ADR-0016 §2.5</a> の射程外「口座の自動選定 (SRS scope out)」を「本 ADR の決定」と読む。 他の文は変えない</dd>
+    <dt>related</dt><dd>ADR-0012 §2.1 / §2.3 (判定入力・閾値で止めない・不変) / ADR-0015 §2.2 (target の解き方) / ADR-0016 §2.2 (段と event の足し方) / ADR-0017 §2.1〜§2.3 (実測行・計測の手段・口座の label) / ADR-0018 §4 (manifest に無い rules 行は予定行) / ADR-0021 §2.3 (唯一の wait 実装に完了 variant を足す前例) / ADR-0022 §2.1 (席の登録 row) / constitution C1 / C2 / C2.2 / C3 / C3.4 / C5 / C9 / C9.2 / C10 / C11.2 / N1 / SRS FR14 / FR22 / FR28 / FR29 / FR32 / FR33 / FR35 / FR36 / FR37 / FR38 / AC12 / AC13</dd>
+  </dl>
+</aside>
+
+<section id="s1-context" class="informative">
+<h2>§1. Context</h2>
+<p class="section-essence" data-audience="human">口座には使える量の窓 (5 時間・7 日・モデルごとの 7 日) があり、 当たると claude は止まります。 これまで便が上限に当たると、 器はその便を「失敗」として閉じ、 作業を最初からやり直す形でした。 計画役や管理役の席が上限に当たると、 その席は止まり、 別の席の仕事まで詰まりました。 口座を選ぶのは人で、 前の版の道具の数字を見て手で決めていました。 user の裁定の要旨は、 これを器の仕事にして v2 で解消すること、 便は上限に当たっても途中から続けられるので口座を使い切るための弾と見ること、 席は詰まる前に退避すること、 の 3 点でした (逐語は台帳)。 この記録はその形を決めます。</p>
+<p data-audience="machine">記録時点 (2026-09-12) の現物: runner は上限 record (<a href="./ADR-0012-rate-limit-detection-reads-dedicated-record.html#s2-1-signal">ADR-0012 §2.1</a>) を読んで rc 75 で止まり、 pipeline はそれを <code>Failed</code> (detail = rate-limit) に倒す。 便の worktree と event は残るが、 段は終端で、 続きは新しい便でしか起こせない。 口座残量は <a href="./ADR-0017-account-allowance-measured-into-event-log.html#s2-1-event-log">ADR-0017 §2.1</a> の実測行 (1 口座 1 窓 = 1 行・出所付き) として fleet の event log に在り、 読み手は席と doctor だけで、 器は選定に使っていない。 rules 行 R-C9-1 (kind = 口座の選定規則) は前の版の散文を値に持ち、 enabled = false のまま。 headless は <code>--account-dir</code> で子 process の設定 dir を切り替える口を持つ (FR5)。 席の口座は起動時に人が選び、 席の登録 (<a href="./ADR-0022-seat-roles-are-typed-and-enforced-by-hooks.html#s2-1-role-and-registration">ADR-0022 §2.1</a>) は口座を持たない。 管理 tick は context の cap (FR26) で退避の合図を注入する (<a href="./ADR-0015-seat-state-is-stamped-by-hooks-not-read-from-pane.html#s2-1-typed">ADR-0015 §2.1</a>・FR29) が、 口座の残りは見ない。 実測 (2026-09-12・planner 席): 7 日窓に余裕が在ってもモデル別の 7 日窓だけに当たって席が止まった。 前の版の道具はモデル別の窓を表示できず、 v2 の計測 (FR33・台帳 <code>s2-07l.138</code>) がモデル名付きで記録する。</p>
+<p data-audience="machine">憲法の向き: <a href="../spec/constitution.html#c9">C9</a> は席が止まったら人手なしで検知し、 仕事を再開し、 結果を保つと定める。 C9.2 は各口座を allowance の窓の終わりまで使い切り、 選択は R-C9-1 の規則に従うと定める。 <a href="../spec/constitution.html#c1">C1</a> / <a href="../spec/constitution.html#c5">C5</a> は規則の値を manifest の行に裁定 id 付きで持つ。 <a href="../spec/constitution.html#c2">C2</a> は選択を 1 つの enum の上の 1 つの関数にする。 <a href="../spec/constitution.html#c10">C10</a> は宣言値・実測値・実効値を型で分ける。 <a href="../spec/constitution.html#c3">C3.4</a> は完了条件を 1 つの完了 enum の値で表し、 待つ実装を 1 つに限る。 <a href="../spec/constitution.html#c11">C11.2</a> は境界に極性を持たせる。 <a href="../spec/constitution.html#n1">N1</a> は器が管理する物を不可逆に消さない (上限で止まった便の worktree は管理する物)。 user の裁定 (2026-09-12・会話面・逐語は台帳 <code>s2-07l.142</code> の notes): 要旨は decided-by のとおり。</p>
+</section>
+
+<section id="s2-decision" class="normative">
+<h2>§2. Decision</h2>
+
+<h3 id="s2-1-limit-stop">§2.1 上限で止まった便は Failed にせず、 再開できる段として typed に記帳する</h3>
+<p class="section-essence" data-audience="human">実装役が上限の合図で止まったら、 器はその便を「失敗」ではなく「上限で止まった」という段に置きます。 どの口座のどの窓に当たったかを記録に残し、 作業場所 (worktree) と、 それまでの記録はそのまま保ちます。 この段の便は、 別の口座で続きから起こし直せます (§2.3)。 上限の合図の読み方 (どの record の何を見るか) は前の決定のままで、 変えません。</p>
+<p data-audience="machine">pipeline SHALL 段 <code>Stage</code> に variant 1 つ (上限停止・宣言順は Questioned の直後・<a href="../spec/constitution.html#c2">C2</a>「新しい理由は新 variant 1 つ」・<a href="./ADR-0016-default-delivery-structure-and-typed-question-record.html#s2-2-question-record">ADR-0016 §2.2</a> と同じ足し方) を足し、 runner が上限の rc (ADR-0012 §2.1 の rc 75) で終わった周 SHALL その段へ倒し、 段の event の detail に口座の label (<a href="./ADR-0017-account-allowance-measured-into-event-log.html#s2-3-roster">ADR-0017 §2.3</a> の不透明な label) と当たった窓 (WindowKind の値) を持つ (FR35)。 器 SHALL NOT その便を <code>Failed</code> に倒さず、 worktree・base・commit・質問と回答の event を保つ (<a href="../spec/constitution.html#n1">N1</a>・C9「結果を保つ」)。 上限停止の段は終端ではない (live な便として intake の排他の母集団に残る・ADR-0019 §2.1)。 event log の schema 版 SHALL 1 のままとする (値の追加で既存の行は読める・<a href="./ADR-0004-mvp-persistence-and-cross-version-formats.html#s2-5-schema-version">ADR-0004 §2.5</a>)。 上限の判定入力は上限 record の status のみ (ADR-0012 §2.1・不変) で、 本 ADR は判定を足さない。 runner 以外の子 process (lens) が上限で止まった周は FR9 の既存極性 (INCONCLUSIVE) のままとし、 本 ADR は変えない。</p>
+
+<h3 id="s2-2-selection">§2.2 口座は 1 つの純関数が選ぶ。 便用は使い切る側、 session 用は余裕を残す側。 値は R-C9-1 が typed に持つ</h3>
+<p class="section-essence" data-audience="human">どの口座を使うかは、 manifest に宣言した口座と、 実測した残り (計測の記録) だけを入力にする 1 本の関数が決めます。 関数は 2 つの規則を持ちます。 便に渡す口座は「まだ当たっていない口座のうち、 いちばん残りが少ないもの」です——便は途中から続けられるので、 口座を使い切る側に倒します。 開発 session に渡す口座は「いちばん残りが多いもの」です——席は止まると他の仕事を詰まらせるので、 余裕を残す側に倒します。 便には、 いま席が使っている口座を渡しません。 測れていない口座は選びません。 閾値の値は規則の行 (R-C9-1) が持ち、 この記録は値を決めません。 R-C9-1 はこれまで前の版の文章を値に持っていましたが、 数値の行に改めます。</p>
+<p data-audience="machine">器 SHALL 口座の選定を 1 つの純関数 (<a href="../spec/constitution.html#c2">C2</a>・入力 = manifest の <code>[[account]]</code> 行の label 列 (ADR-0017 §2.3・宣言値) と口座 × 窓ごとの最新の実測行 (ADR-0017 §2.1・実測値) と用途 (便 / session) と使う model・出力 = label 1 つまたは「候補なし」の typed な理由) で行い (FR36)、 SHALL NOT 席の判断や pane の字面や前の版の道具の出力を入力にしない。 口座の<strong>逼迫度</strong> SHALL その口座の窓のうち最大の使用率 (5 時間窓・7 日窓・用途が使う model のモデル別 7 日窓。 他の model の窓は数えない) とし、 <strong>当たっている</strong>口座 SHALL 逼迫度が 100 以上の口座、 または §2.1 の段の event が持つ窓の reset 時刻が未来の口座とする。 <strong>便用の規則</strong> SHALL 当たっていない口座のうち逼迫度が最大の口座を選ぶ (使い切る側・C9.2)。 ただし live な席の登録 row (<a href="./ADR-0022-seat-roles-are-typed-and-enforced-by-hooks.html#s2-1-role-and-registration">ADR-0022 §2.1</a>) が持つ口座 SHALL 便用の候補から外す (席の口座を便が食い潰さない)。 <strong>session 用の規則</strong> SHALL 逼迫度が最小で、 かつ R-C9-1 の値 (session 用の閾値・使用率の百分率) 未満の口座を選ぶ (余裕を残す側)。 実測行が無い・<code>AllowanceUnmeasured</code>・reset 時刻を過ぎた古い行しか無い口座 SHALL 候補から外し (測れない口座を選ばない・C10: 宣言値を実効に上げるのは測定を通してだけ)、 選定の直前に器 SHALL FR33 の計測を 1 回撃つ (実測行の鮮度を選定側が保証する・計測は既存の 1 コマンド)。 同点は label の辞書順 (決定的・C2)。 rules 行 R-C9-1 SHALL 散文の値を捨て、 typed な値 (Int・session 用の閾値) を持って enabled = true とし、 裁定 id は本 ADR の decided-by の裁定 (契約が manifest に書く・C5)。 便用の規則 SHALL 閾値を持たない (「当たっている」は事実であって規則値ではない)。 R-C9-1 の kind は既存の <code>AccountSelection</code> のまま値の型だけを改める (RuleKind の variant を足さない)。 本 ADR は値を決めない。</p>
+
+<h3 id="s2-3-resume">§2.3 別口座での途中再開は同じ worktree と同じ契約で行い、 口座が無ければ最も早い reset まで待つ</h3>
+<p class="section-essence" data-audience="human">上限で止まった便を再開するとき、 器は §2.2 の便用の規則で別の口座を選び、 同じ作業場所と同じ契約 (質問への回答も添えて) で実装役を起こし直します。 それまでの commit は残っているので、 実装役は続きから働きます。 選べる口座が 1 つも無ければ、 便を失敗にはせず、 いちばん早く窓が空く時刻まで待ってからもう一度測って選びます。 人の手は要りません。</p>
+<p data-audience="machine">上限停止の段の便の再開 (FR37) SHALL §2.2 の便用の規則で口座を選び、 同じ worktree・同じ契約・同じ base で runner を起こし直す (<code>--account-dir</code> に選んだ label の credential dir〔ADR-0017 §2.3 の <code>&lt;state_dir&gt;/accounts/&lt;label&gt;</code>〕を渡す・FR5 の口のまま・env を読まない C2.2)。 prompt SHALL 契約 (再読) に「回答」節 (FR32・Questioned の再開と同じ) と「途中再開」節 (base からの commit の一覧・止まった時刻) を添える。 再開 SHALL 便を運ぶ既存の口 (pipe の run / resume) の内側で人の操作なしに行う (<a href="../spec/constitution.html#c9">C9</a>・FR22: 人由来の event は approval 以外 0 件)。 候補なしの周、 器 SHALL 完了 enum に variant 1 つ (口座が空く・最も早い reset 時刻を運ぶ) を足して唯一の wait 実装を通し (<a href="../spec/constitution.html#c3">C3.4</a>・<a href="./ADR-0021-gate-cost-is-measured-and-confined.html#s2-3-slots">ADR-0021 §2.3</a> の SlotFree と同じ足し方・第 2 の poll loop を持たない)、 その時刻を過ぎたら計測して選び直す。 待ちの上限 SHALL NOT 持たない (reset 時刻が上限・便を Failed にしない・C12.6 の外)。 起こし直しの回数 SHALL NOT 上限を持たない (候補は当たっていない口座に限られ、 同じ口座を続けて選ばない)。 待ちの間も便は live であり (ADR-0019 §2.1 の排他の母集団)、 <code>pipe stop --run</code> で終端にできる。</p>
+
+<h3 id="s2-4-session">§2.4 開発 session は上限の手前で退避の合図を受け、 止まった後に別口座で同じ target に立て直す</h3>
+<p class="section-essence" data-audience="human">計画役や管理役の席の口座の残りが、 席用の閾値に達したら、 管理 tick は席が手を止めるのを待たずに「退避してください」の合図を差し込みます (context の上限のときと同じ合図)。 席が退避して止まったら、 器が §2.2 の session 用の規則で別の口座を選び、 同じ窓 (target) で席を立て直し、 復元の command を差し込みます。 立て直しに使う起動行は、 席を登録したときに渡した雛形 (口座の置き場だけが穴) で、 器の repo には置きません。</p>
+<p data-audience="machine">管理 tick SHALL 登録済みの席 (ADR-0022 §2.1) ごとに、 席の登録 row が持つ口座の逼迫度 (§2.2 の定義・席が使う model の窓を含む) を最新の実測行から読み、 R-C9-1 の値以上である間は idle を待たずに退避の合図を注入する (FR38・FR29 と同じ合図・FR26 の cap guard と同型で軸が口座の残り)。 判定 SHALL guard の variant 1 つ (InLoop・FailOpen: 実測行が無い・古い周は注入せず記録する・<a href="./ADR-0014-polarity-list-is-a-snapshot-rendered-by-core.html#s2-1-type">ADR-0014 §2.1</a> の定義に当たる) として極性一覧に載る。 席が退避して止まった周 (hook の打刻が Stop の後に session の終了を示す・<a href="./ADR-0015-seat-state-is-stamped-by-hooks-not-read-from-pane.html#s2-1-typed">ADR-0015 §2.1</a>)、 器 SHALL §2.2 の session 用の規則で口座を選び、 席の登録 row が持つ<strong>起動の雛形</strong> (穴は口座の credential dir 1 つ・登録時に渡す・fleet の store に在り tracked file に置かない・CON2) の穴を選んだ label の dir で埋めて同じ target の shell へ注入し、 続けて復元の command (FR28・<a href="./ADR-0018-working-memory-subcommands-and-pointer-required-directives.html#s2-1-subcommands">ADR-0018 §2.1</a>) を注入する。 器 SHALL 席の登録 row の口座 label を選んだ label に更新する (§2.2 の便用の除外の入力)。 候補なしの周 SHALL 立て直さず typed な理由を記帳し、 次の tick で選び直す (席を 0 口座で起こさない・止めない・記録する)。 立て直し SHALL 既存の登録 row を持つ席に限る (新しい席の作成・window の作成・登録の自動化は §2.6 の射程外)。 起動の雛形 SHALL NOT env を読まない・host 名や絶対 path を器が解釈しない (器は穴を埋めて注入するだけ)。</p>
+
+<h3 id="s2-5-supersede">§2.5 ADR-0012 §2.4 / ADR-0016 §2.1 / §2.5 / ADR-0017 §2.4 / §2.5 を部分 supersede する</h3>
+<p class="section-essence" data-audience="human">先の記録は「口座を選び直す仕組みはこの版では作らない」「実測の記録は止める判断にも選ぶ判断にも使わない」「口座を自動で選ぶのは v3」「便は席の口座を継承する」と決めていました。 この記録はそれぞれを、 「仕組みはこの記録」「選ぶ判断に使う (止める判断には使わない)」「v2 の MVP」「便の口座は選定の関数が決める」と読み替えます。 「使用率の閾値で便を止めない」と「上限の合図の読み方」は変えません。</p>
+<p data-audience="machine"><a href="./ADR-0017-account-allowance-measured-into-event-log.html#s2-4-signal-vs-truth">ADR-0017 §2.4</a> の「器 SHALL NOT 本版で実測行を便の停止 (ADR-0012 §2.3・C9.2) にも口座の選定 (rules 行 R-C9-1 は enabled = false のまま・SRS scope out) にも用いない」は、 本 ADR により「器 SHALL NOT 実測行を便の停止に用いない (不変)。 器 SHALL 実測行を口座の選定に用い、 R-C9-1 は typed な値で enabled = true (§2.2)」と読む (SHALL be read as)。 同 §2.4 の「実測行の読み手は席と doctor であり、 判断は席が行う」は「読み手に選定の関数が加わり、 選定の判断は器が行う」と読む。 <a href="./ADR-0017-account-allowance-measured-into-event-log.html#s2-5-scope">ADR-0017 §2.5</a> の「口座の自動選定と R-C9-1 の有効化 (v3・A2 の裁定を要する)」は「v2 の MVP・裁定は本 ADR の decided-by (R-C9-1 は憲法の閾値〔C4 / C13〕ではなく A2 の対象外・値の発効は C5 の裁定 id)」と読む。 <a href="./ADR-0012-rate-limit-detection-reads-dedicated-record.html#s2-4-scope">ADR-0012 §2.4</a> の「口座を選び直す仕組みは、 この版では作りません」は「仕組みは本 ADR §2.2 / §2.3」と読み、 同 §2.4 の「これらは口座の選定 (本版の射程外) の材料である」は「選定の材料は実測行 (ADR-0017 §2.4 の再配置のまま) であり、 上限 record の field は §2.1 の段の event が持つ窓と reset 時刻にだけ使う」と読む。 <a href="./ADR-0016-default-delivery-structure-and-typed-question-record.html#s2-1-structure">ADR-0016 §2.1</a> の「口座 SHALL 席ごとに持ち、 run は親 (席) の口座を継承する (<code>--account-dir</code> を渡さない形)」は「席は 1 口座を持つ (登録 row・ADR-0022 §2.1)。 run の口座は §2.2 の便用の規則が選び、 <code>--account-dir</code> で渡す」と読む。 <a href="./ADR-0016-default-delivery-structure-and-typed-question-record.html#s2-5-scope">ADR-0016 §2.5</a> の「口座の自動選定 (SRS scope out)」は「本 ADR の決定 (SRS v0.7 で scope in)」と読む。 ADR-0012 §2.1〜§2.3 (判定入力・字面照合の撤去・閾値で止めない) と ADR-0017 §2.1〜§2.3 (実測行・計測の手段・label) は不変である。</p>
+
+<h3 id="s2-6-scope">§2.6 射程外</h3>
+<p class="section-essence" data-audience="human">この記録が決めるのは「上限で止まった便の段」「口座を選ぶ関数と 2 つの規則」「別口座での途中再開」「席の退避と立て直し」だけです。 席を新しく作ること、 口座の置き場を探すこと、 鍵の更新や再 login、 閾値の値、 モデル別の窓を結ぶ細部は別に決めるか、 user の手番です。</p>
+<p data-audience="machine">次は本 ADR の決定ではない (MUST NOT be read as such): 席の起動そのもの (新しい席・window の作成・登録の自動化・口座の初回選択・台帳 <code>s2-07l.38</code> の延長・SRS scope out)、 state dir 配下の走査による口座の発見 (ADR-0017 §2.3 のまま禁止)、 token の refresh と再 login (user の手番)、 SQLite 化 (v3・A3)、 モデル別 7 日窓を model に結ぶ細部 (display name の一致・設計 doc・ADR-0017 §2.5 のまま)、 R-C9-1 の値と session 用の閾値の値 (契約・裁定 id)、 便の同時本数の上限 (admission control・ADR-0021 §2.7 のまま)、 lens の口座 (便の口座と同じ・別に選ばない)、 上限停止の段の便の一覧画面 (v3)、 席の発話の監視。</p>
+</section>
+
+<section id="s3-srs" class="informative">
+<h2>§3. SRS との関係 (正本は SRS)</h2>
+<p class="section-essence" data-audience="human">この記録が仕える要件は、 上限停止の検知 (FR35)、 口座選定 (FR36)、 別口座での途中再開 (FR37)、 開発 session の上限前の退避 (FR38) と、 その受入基準 (AC12 / AC13) です。 要件は同じ便の要件書 v0.7 に入り、 ここには文面を置きません。</p>
+<div data-audience="machine">
+<p>本 ADR が仕える要件は SRS v0.7 (本 ADR と同じ便で改訂) が正本である: <a href="../spec/srs.html#FR35">FR35</a> (上限停止の検知・§2.1)・<a href="../spec/srs.html#FR36">FR36</a> (口座選定・§2.2)・<a href="../spec/srs.html#FR37">FR37</a> (別口座での途中再開・§2.3)・<a href="../spec/srs.html#FR38">FR38</a> (開発 session の上限前の退避・§2.4)・<a href="../spec/srs.html#AC12">AC12</a> / <a href="../spec/srs.html#AC13">AC13</a>。 不変の要件: <a href="../spec/srs.html#FR33">FR33</a> (計測・§2.2 は読み手を足すだけ)・<a href="../spec/srs.html#FR14">FR14</a> (別 process からの再開・§2.3 はその 1 形)・<a href="../spec/srs.html#FR22">FR22</a> (人由来の event は approval 以外 0 件・§2.3 / §2.4 の event は machine)・<a href="../spec/srs.html#FR28">FR28</a> / <a href="../spec/srs.html#FR29">FR29</a> (復元と退避の合図・§2.4 は合図を増やさず契機を足す)・<a href="../spec/srs.html#FR32">FR32</a> (質問の再開・§2.3 は回答節を添える)。 SRS の scope は本便で「上限で止まった便の別口座での再開」を in に足し「複数口座の自動選定 (v3)」を out から外す。 要件の文面はここには写さない。 段の名・event の detail・R-C9-1 の値の型・完了 variant・起動の雛形の形は §2 と現物が持ち SRS は持たない。</p>
+</div>
+</section>
+
+<section id="s4-consequences" class="informative">
+<h2>§4. Consequences</h2>
+<p class="section-essence" data-audience="human">良い面は、 上限に当たっても便の作業が捨てられないこと、 口座を窓の終わりまで使い切れること、 席が上限で止まって他の仕事を詰まらせなくなること、 口座を選ぶ理由が 1 本の関数に閉じて人の手も前の版の道具も要らなくなること、 前の版の道具が見せなかったモデル別の窓が選定に効くことです。 悪い面は、 段と完了の種類が 1 つずつ増えること、 席の登録に口座と起動の雛形が要ること、 選定のたびに計測が 1 回走ること、 測れていない口座が選ばれないこと、 退避の合図が席の作業を途中で止めることです。</p>
+<p data-audience="machine">Positive: 上限停止の便の worktree・commit・回答が保たれ、 別口座で Landed まで続く (C9・N1・AC12)。 口座は当たるまで使われる (C9.2) が席の口座は便に食われない (§2.2 の除外)。 席は閾値の手前で退避し、 別口座で復元される (AC13)。 選定が 1 純関数・入力 2 種 (宣言値 + 実測値) に閉じ、 前の版の道具への依存が消える (C8 の向き)。 モデル別 7 日窓が逼迫度に入る (記録時点の事故型)。 R-C9-1 が散文の行から typed な行になり、 C1 / C14.2 の相互参照が実体を持つ。</p>
+<p data-audience="machine">Negative (受け入れるコスト): <code>Stage</code> の variant 1 つ・<code>Completion</code> の variant 1 つ・guard の variant 1 つ (極性一覧に 1 行)・rules 行 R-C9-1 の値の型変更 (契約・裁定 id) が増える。 席の登録 row (ADR-0022 §2.1) に口座 label と起動の雛形の 2 field が要り、 登録時に人が雛形を渡す (1 席 1 回)。 選定のたびに FR33 の計測 (host の HTTP client の子 process・口座数ぶん) が 1 回走る。 測れない口座 (credential 不在・墓標・HTTP 失敗) は選ばれない (保守側・その口座は席の手番で直す)。 逼迫度の比較はモデル別窓の display name 一致に依る (ADR-0017 §2.5 の限界のまま)。 退避の合図が busy の席に入るので作業が中断される (意図した不便・context の cap と同じ)。 候補なしの便は reset 時刻まで待つ (最長で窓 1 つぶん)。 R-C9-1 の値は初期は宣言値で、 退避の実測が溜まるまで保守的に出る (C10)。</p>
+</section>
+
+<section id="s5-alternatives" class="informative">
+<h2>§5. Alternatives Considered</h2>
+<p class="section-essence" data-audience="human">6 つの案を退けました。 人が口座を選ぶ案は無人運転に反します。 席の口座を便が継承する案は席の口座を便が食い潰します。 使用率の閾値で便を止める案は憲法に反します。 上限で便を失敗にして新しい便で起こす案は作業を捨てます。 上限の合図に載る数字で選ぶ案は出所が違います。 席を止まるまで走らせて立て直す案は他の仕事を詰まらせ、 退避なしの停止は作業記憶を失います。</p>
+<p data-audience="machine">(A) <strong>人が口座を選ぶ (記録時点の運用)</strong>。 却下: FR22 (人由来の event 0) と C9 (人手なしの再開) に反し、 planner が律速になる。 user 裁定で不採用 (自律制御を MVP に)。</p>
+<p data-audience="machine">(B) <strong>席の口座を便が継承する (ADR-0016 §2.1 のまま)</strong>。 却下: 便が席の口座を食い潰し、 席が上限で止まる (記録時点の事故型)。 便と席で逆向きの規則 (使い切る / 余裕を残す) が要り、 継承では表せない。 §2.5 (iv) で部分 supersede。</p>
+<p data-audience="machine">(C) <strong>使用率の閾値で便を止める</strong>。 却下: C9.2 と ADR-0012 §2.3 に反する。 便は当たるまで走り、 当たったら別口座で続く (§2.1 / §2.3)。</p>
+<p data-audience="machine">(D) <strong>上限で便を Failed にし、 新しい便で起こし直す</strong>。 却下: worktree の commit・質問と回答・base が捨てられ、 C9「結果を保つ」と N1 に反する。 FR14 (別 process からの再開) が既に同じ worktree を前提にしている。</p>
+<p data-audience="machine">(E) <strong>上限 record の utilization / resetsAt で選ぶ</strong>。 却下: 出所が違う 2 つの entity (ADR-0017 §2.4) で、 record は便の途中でしか届かず、 席の口座や便が使っていない口座の値を持たない。 選定は実測行 (1 コマンドで全口座) を入力にする。</p>
+<p data-audience="machine">(F) <strong>席は上限で止まるまで走らせ、 止まったら別口座で立て直す</strong>。 却下: 席が止まる間に他の仕事 (契約・裁定・中継) が詰まる (user 裁定の趣旨)。 退避なしの停止は作業記憶 (ADR-0018) を失う。 手前で退避し (§2.4)、 便だけを当たるまで使う (§2.2)。</p>
+</section>
+
+<section id="s6-trace" class="informative">
+<h2>§6. Trace</h2>
+<p class="section-essence" data-audience="human">出所は、 user の裁定、 モデル別の窓だけに当たった実測、 器の現物 (上限の rc・実測行・段と event)、 そして先行決定 (上限の検出・配送構造・口座残量の計測・作業記憶・gate の費用) です。</p>
+<ul data-audience="machine">
+  <li>user の問いと裁定 (2026-09-12・会話面・planner 席): 口座残量の観測口の後に「口座の自律制御を MVP に入れるか」→ 裁定の要旨は decided-by。 逐語は台帳 <code>s2-07l.142</code> の notes (tracked file には写さない・CON2)。 同日の同じ裁定で「テストは必須」(AC12 / AC13 の T / I)。</li>
+  <li>実測 (2026-09-12): 7 日窓に余裕が在ってもモデル別の 7 日窓だけに当たって planner 席が止まった。 前の版の道具はモデル別の窓を表示できない。 v2 の計測 (台帳 <code>s2-07l.138</code>) はモデル名付きで記録する。</li>
+  <li>器の現物 (2026-09-12): runner の rc 75 → <code>Failed</code> detail = rate-limit (<code>pipe/spawn.rs</code> の settle)・fleet の <code>Stage</code> 9 variant・<code>Completion</code> 2 variant・R-C9-1 (kind AccountSelection・散文の値・enabled = false)・headless の <code>--account-dir</code>・管理 tick の cap guard (FR26 / FR29)。</li>
+  <li>先行決定: <a href="./ADR-0012-rate-limit-detection-reads-dedicated-record.html">ADR-0012</a> §2.1 / §2.3 / §2.4 (判定入力・閾値で止めない・射程外)・<a href="./ADR-0016-default-delivery-structure-and-typed-question-record.html">ADR-0016</a> §2.1 / §2.2 / §2.5 (口座の継承・段の足し方・射程外)・<a href="./ADR-0017-account-allowance-measured-into-event-log.html">ADR-0017</a> §2.1〜§2.5 (実測行・label・合図と正本・射程外)・<a href="./ADR-0018-working-memory-subcommands-and-pointer-required-directives.html">ADR-0018</a> §2.1 (復元の command)・<a href="./ADR-0021-gate-cost-is-measured-and-confined.html">ADR-0021</a> §2.3 (完了 variant の足し方)・<a href="./ADR-0022-seat-roles-are-typed-and-enforced-by-hooks.html">ADR-0022</a> §2.1 (席の登録 row・同じ便)。</li>
+  <li>審査: SRS v0.7 の Phase F 1 周目 (2026-09-13・5 軸) が「SRS が accepted ADR (ADR-0016 / ADR-0017) と分岐し supersede ADR が無い」を critical として挙げ、 本 ADR を同じ便で書いた (台帳 <code>s2-07l.155</code> notes)。</li>
+  <li>設計: 段・event の detail・選定の関数・待ち・立て直しの口は <code>docs/design/</code> の設計 doc が契約の前に持つ (本便には含めない・設計 1 本から契約が複数出る形)。</li>
+</ul>
+</section>
+
+<!-- folio:chrome-bottom -->
+<nav class="prevnext" aria-label="前後の文書">
+  <a class="prevnext__prev" href="ADR-0019-parallel-runs-exclude-overlap-at-intake-and-runner-resolves-conflicts.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">ADR-0019 — 並列の便は intake が write-set の交差で排他し、 land の rebase 衝突は runner を起こし直して解く (人は質問の回答でだけ関わる・admin は中継と操作・手で merge する経路を持たない・ADR-0016 §2.2 の質問判定と再 spawn の契機を部分 supersede)</span></a>
+  <a class="prevnext__next" href="ADR-0021-gate-cost-is-measured-and-confined.html"><span class="prevnext__dir">次 &rarr;</span><span class="prevnext__title">ADR-0021 — gate の費用は測って決める (変異の並列度は rules 行の上限を project 横断・host 単位の受付が実測で下げ、 器の子 process は cgroup で封じ、 木が同じ main 実測は検出線を撃ち直さず、 着地は gate 済みの便を先に通す・ADR-0009 §2.3 / §2.4 と ADR-0010 §2.1 / §2.3 / §2.4 / §2.5 を部分 supersede)</span></a>
+</nav>
+<script>
+(function () {
+  var openedForPrint = [];
+  window.addEventListener('beforeprint', function () {
+    openedForPrint = [];
+    var ds = document.querySelectorAll('details:not([open])');
+    for (var i = 0; i < ds.length; i++) { ds[i].setAttribute('open', ''); openedForPrint.push(ds[i]); }
+  });
+  window.addEventListener('afterprint', function () {
+    for (var i = 0; i < openedForPrint.length; i++) openedForPrint[i].removeAttribute('open');
+    openedForPrint = [];
+  });
+  if (!document.querySelector('[data-audience]')) return;
+  /* 既定 = 人間プレゼン型 (ADR-0040 / rules §11.3): script 経由で初期 class を付与するため
+     no-JS では付かず全文可視に graceful degrade する。 static DOM は全文を保持 (AI/検索/印刷は不変)。 */
+  document.body.classList.add('audience-human');
+  var bar = document.createElement('nav');
+  bar.className = 'audience-toggle';
+  bar.setAttribute('aria-label', '表示対象の切替');
+  var states = [['both', '両方'], ['human', '人間向け'], ['machine', '機械向け']];
+  for (var s = 0; s < states.length; s++) {
+    (function (mode, label) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      b.setAttribute('aria-pressed', mode === 'human' ? 'true' : 'false');
+      b.addEventListener('click', function () {
+        document.body.classList.remove('audience-human', 'audience-machine');
+        if (mode !== 'both') document.body.classList.add('audience-' + mode);
+        var bs = bar.querySelectorAll('button');
+        for (var j = 0; j < bs.length; j++) bs[j].setAttribute('aria-pressed', bs[j] === b ? 'true' : 'false');
+      });
+      bar.appendChild(b);
+    })(states[s][0], states[s][1]);
+  }
+  var bc = document.querySelector('nav.breadcrumb');
+  if (bc && bc.parentNode) { bc.parentNode.insertBefore(bar, bc.nextSibling); }
+  else { document.body.insertBefore(bar, document.body.firstChild); }
+})();
+</script>
+<!-- /folio:chrome-bottom -->
+</body>
+</html>
