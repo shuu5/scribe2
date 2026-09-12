@@ -264,6 +264,49 @@ enabled = true
 ruling = "user 2026-09-12T03:25Z"
 ruled_at = "2026-09-12"
 
+# gate の費用（設計 gate-cost.md §3.1・ADR-0021）。並列度は宣言値であって実効値ではない
+# （C10）——実効値は受付（同 §3.2）が host の空きと突き合わせて導く。
+
+[[rule]]
+id = "gate.mutants_jobs"
+kind = "GateMutantsJobs"
+value = 4
+enabled = true
+ruling = "user 2026-09-12T11:42Z"
+ruled_at = "2026-09-12"
+
+[[rule]]
+id = "gate.job_memory_mb"
+kind = "GateJobMemoryMb"
+value = 3072
+enabled = true
+ruling = "user 2026-09-12T12:08Z"
+ruled_at = "2026-09-12"
+
+[[rule]]
+id = "host.reserve_memory_mb"
+kind = "HostReserveMemoryMb"
+value = 8192
+enabled = true
+ruling = "user 2026-09-12T12:08Z"
+ruled_at = "2026-09-12"
+
+[[rule]]
+id = "gate.slot_wait_s"
+kind = "GateSlotWaitS"
+value = 900
+enabled = true
+ruling = "user 2026-09-12T12:08Z"
+ruled_at = "2026-09-12"
+
+[[rule]]
+id = "gate.cpu_weight"
+kind = "GateCpuWeight"
+value = 50
+enabled = true
+ruling = "user 2026-09-12T12:08Z"
+ruled_at = "2026-09-12"
+
 # 口座の宣言（設計 fleet-usage.md §2・裁定 id 'user 2026-09-12T02:01Z'）。label は**不透明な符丁**で
 # あり、本当の口座の識別子でも host 名でも path でもない（本 repo は PUBLIC・SRS CON2）。credential の
 # 置き場は <state_dir>/accounts/<label>/ で、器はそこを走査せず、この宣言だけを真実として読む（C3）。

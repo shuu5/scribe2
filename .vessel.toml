@@ -3,4 +3,4 @@
 # runner.allowed_commands）の内側でなければ intake が便を起こさない。
 schema = 1
 allowed-commands = ["cargo", "git"]
-common-verify = ["cargo xtask flip-check --base {base}", "cargo nextest run --workspace --no-tests=fail", "cargo clippy --workspace --all-targets -- -D warnings", "cargo xtask check", "cargo deny check bans licenses sources", "cargo xtask mutants-diff --base {base}"]
+common-verify = ["cargo xtask flip-check --base {base}", "cargo nextest run --workspace --no-tests=fail", "cargo clippy --workspace --all-targets -- -D warnings", "cargo xtask check", "cargo deny check bans licenses sources", "cargo xtask mutants-diff --base {base} --jobs {jobs}"]

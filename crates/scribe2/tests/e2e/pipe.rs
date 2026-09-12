@@ -107,6 +107,16 @@ fn write_verify_scripts(repo: &Path) {
             "verify-kill.sh",
             "git rev-parse --abbrev-ref HEAD | grep -qx HEAD && kill -9 $PPID\nexit 0\n",
         ),
+        // `{jobs}` の置換を**撃たれた側**で写す（record の cmd だけを見ると、置換したのか
+        // 行に数を書いてあったのかを弁別できない）。印は git の共通 dir へ置く。
+        (
+            "verify-jobs.sh",
+            "printf '%s' \"$1\" > \"$(git rev-parse --absolute-git-dir)/jobs-seen\"\nexit 0\n",
+        ),
+        // 包みが出す終端行の fixture（`memory.peak` を読めた周の形）。
+        ("verify-peak.sh", "printf 'confine-usage peak_bytes=3145728 oom_kill=0\\n'\nexit 0\n"),
+        // 箱の中で kernel に殺された周の形（rc は 0 のまま＝**rc では見ない**ことを測る）。
+        ("verify-oom.sh", "printf 'confine-usage peak_bytes=4194304 oom_kill=1\\n'\nexit 0\n"),
     ] {
         fs::write(repo.join(name), body).expect("verify script を書ける");
     }
@@ -4401,12 +4411,17 @@ fn pipe_question_runner_stdout_is_kept_in_run_dir() {
     assert!(kept.lines().next().is_some_and(|head| head.starts_with("## ") && head.ends_with(" rc=0")), "見出し行: {kept}");
     // stdout を出さない runner では file を作らない。**測り終えた便は `stop --run` で外す**
     // ——`Implemented` は終端でないので、同じ write-set の 2 本目は交差で断られる（`s2-07l.145`）。
+    //
+    // **包めない host で撃つ**（[`lean_path`]）。封じ込めが効く host では包みが終端行
+    // （`confine-usage …`）を出すので stdout は空にならず、この面は host ごとに違う答えを
+    // 出してしまう——測っているのは「**runner が**何も言わなかった周」である。
     stop_run_ok(&state, &id);
     let id2 = intake_bead(&repo, &state, &path, "s2-quiet");
-    let quiet = run_pipe(&[
-        "spawn", "--run", &id2, "--repo", &repo.display().to_string(),
-        "--state-dir", &state.display().to_string(), "--runner", "true",
-    ]);
+    let quiet = run_pipe_with_path(
+        &lean_path(&state),
+        &["spawn", "--run", &id2, "--repo", &repo.display().to_string(),
+          "--state-dir", &state.display().to_string(), "--runner", "true"],
+    );
     assert!(stdout_of(&quiet).contains("stage=Failed"));
     assert!(!state.join("pipe").join(&id2).join("runner.stdout.log").exists(), "空の周は書かない");
     clean(&[&repo, &state]);
@@ -5687,5 +5702,375 @@ fn pipe_follow_retry_measures_the_repo_before_launching() {
     );
     assert_eq!(stub_calls(&state), 1, "起こし直しの runner は起きない");
     assert_eq!(conflict_count(&state, &id), 1, "衝突の記帳は残る（resume で続けられる）");
+    clean(&[&repo, &state]);
+}
+
+// ---- 封じ込め（設計 docs/design/gate-cost.md §4・ADR-0021 §2.2）--------------------------
+
+/// 偽 `systemd-run` の記録を置く dir 名（**起動ごとに 1 file**）。
+const SCOPE_RECORDS: &str = "scope-args";
+
+/// PATH の先頭に置く偽 `systemd-run`（返すのは PATH の値）。
+///
+/// argv を写してから `--` の後ろを exec する＝**包みの中身は実際に撃たれる**。
+///
+/// 記録は **`<unit>.args` の 1 起動 1 file** である。1 file へ追記する形は、probe の記録や
+/// 別の行の記録まで同じ母集団に入り、`contains` の assert が**撃っていない起動の引数**で
+/// 充足する（run 1 の実測: `limit_of` を常に `PerJob` にする変異で 21/21 が緑だった）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn systemd_stub(state: &Path) -> String {
+    use std::os::unix::fs::PermissionsExt;
+    let bin_dir = state.join("systemd-bin");
+    let records = state.join(SCOPE_RECORDS);
+    fs::create_dir_all(&bin_dir).expect("stub の dir を作れる");
+    fs::create_dir_all(&records).expect("記録の dir を作れる");
+    let shim = bin_dir.join("systemd-run");
+    let script = format!(
+        "#!/bin/sh\n\
+         __unit=no-unit\n\
+         for __a in \"$@\"; do case \"$__a\" in --unit=*) __unit=${{__a#--unit=}};; esac; done\n\
+         printf '%s\\n' \"$@\" > '{}'/\"$__unit\".args\n\
+         while [ $# -gt 0 ] && [ \"$1\" != \"--\" ]; do shift; done\n\
+         shift\n\
+         exec \"$@\"\n",
+        records.display()
+    );
+    fs::write(&shim, script).expect("stub を書ける");
+    fs::set_permissions(&shim, fs::Permissions::from_mode(0o755)).expect("stub に実行権を付ける");
+    format!("{}:{}", bin_dir.display(), std::env::var("PATH").unwrap_or_default())
+}
+
+/// `sh` と `git` だけを引ける PATH（`systemd-run` の**無い** host を作る）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn lean_path(state: &Path) -> String {
+    let bin_dir = state.join("lean-bin");
+    fs::create_dir_all(&bin_dir).expect("lean dir を作れる");
+    for name in ["sh", "git"] {
+        let found = Command::new("sh")
+            .args(["-c", &format!("command -v {name}")])
+            .output()
+            .expect("command -v を撃てる");
+        let real = String::from_utf8_lossy(&found.stdout).trim().to_owned();
+        assert!(!real.is_empty(), "{name} を引ける");
+        std::os::unix::fs::symlink(&real, bin_dir.join(name)).ok();
+    }
+    bin_dir.display().to_string()
+}
+
+/// `needle` を名に含む scope 記録の**ちょうど 1 件**の本文（1 行 1 引数）。
+///
+/// 0 件も 2 件以上も `panic` にするのは、母集団を確かめずに `contains` すると、別の起動の
+/// 引数で assert が充足するからである（fixture 衝突）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn scope_record(state: &Path, needle: &str) -> String {
+    let dir = state.join(SCOPE_RECORDS);
+    let names = dir_names(&dir);
+    let hits: Vec<&String> = names.iter().filter(|name| name.contains(needle)).collect();
+    assert_eq!(hits.len(), 1, "{needle} の記録はちょうど 1 件（母集団 {names:?}）");
+    let name = hits.first().expect("1 件在る");
+    fs::read_to_string(dir.join(name)).expect("記録を読める")
+}
+
+/// scope 記録の `-p <KEY>=<値>` の値（無ければ空）。
+fn scope_prop(record: &str, key: &str) -> String {
+    let head = format!("{key}=");
+    record
+        .lines()
+        .find_map(|line| line.strip_prefix(&head))
+        .unwrap_or_default()
+        .to_owned()
+}
+
+/// 埋め込み manifest の整数 1 行（封じ込めの値は `--rules` の override を通らない）。
+#[expect(
+    clippy::panic,
+    reason = "統合 test の helper。clippy の allow-panic-in-tests は #[test] 関数の中だけに効く"
+)]
+fn embedded_int(id: &str) -> u64 {
+    let manifest = match Manifest::embedded() {
+        Ok(found) => found,
+        Err(errors) => panic!("埋め込み manifest が拒まれた: {errors:?}"),
+    };
+    match manifest.get(id).map(|row| row.value.clone()) {
+        Some(RuleValue::Int(found)) => found,
+        other => panic!("{id} は整数の行のはず: {other:?}"),
+    }
+}
+
+/// PATH を差し替えて `pipe` を 1 回撃つ。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn run_pipe_with_path(path: &str, args: &[&str]) -> Output {
+    Command::new(bin())
+        .arg("pipe")
+        .args(args)
+        .env("PATH", path)
+        .output()
+        .expect("binary を起動できる")
+}
+
+/// PATH を差し替えて spawn → gate まで通す（gate の rc と便 id を返す）。
+fn confined_run(repo: &Path, state: &Path, path: &str, lens: &str) -> (String, Output) {
+    let contract = write_contract(repo, &[], &[]);
+    let id = intake(repo, state, &contract);
+    let spawned = run_pipe_with_path(
+        path,
+        &["spawn", "--run", &id, "--repo", &repo.display().to_string(),
+          "--state-dir", &state.display().to_string(), "--runner", TOY_COMMIT],
+    );
+    assert_eq!(spawned.status.code(), Some(i32::from(RC_OK)), "spawn: {}", stderr_of(&spawned));
+    let gated = run_pipe_with_path(
+        path,
+        &["gate", "--run", &id, "--repo", &repo.display().to_string(),
+          "--state-dir", &state.display().to_string(), "--lens", lens],
+    );
+    (id, gated)
+}
+
+/// **`{jobs}` を持つ行は実効値へ置換され、job の箱で撃たれる**（設計 §3.3 / §4.2）。
+///
+/// base の gate はこの宣言を intake で断る（`{jobs}` は置けない穴）ので、この歯は base で
+/// 落ちる＝flip の RED である。
+#[test]
+fn pipe_confine_fills_the_jobs_hole_and_uses_the_job_box() {
+    let (repo, state) = repo_with_state();
+    commit_vessel(&repo, VESSEL_ALLOWED, r#"["sh verify-jobs.sh {jobs}"]"#);
+    let path = systemd_stub(&state);
+    let marker = state.join("lens-ran");
+    let (id, gated) = confined_run(&repo, &state, &path, &fake_lens(&marker, &lens_verdict("PASS")));
+    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "gate: {}", stderr_of(&gated));
+
+    // **撃たれた側**が受け取った値（record の cmd だけでは置換したことを測れない）。
+    let git_dir = git(&worktree_of(&repo, &id), &["rev-parse", "--absolute-git-dir"]);
+    assert_eq!(
+        fs::read_to_string(Path::new(&git_dir).join("jobs-seen")).unwrap_or_default(),
+        "1",
+        "受付が入るまでの実効 jobs は 1（設計 §9 (a)）"
+    );
+    let rows = verify_rows(&state, &id);
+    assert_eq!(row_value(&rows, 2, "cmd"), "sh verify-jobs.sh 1", "record の cmd も置換後である");
+    assert_eq!(row_value(&rows, 2, "jobs"), "1", "record に実効 jobs が載る");
+    assert_eq!(row_value(&rows, 2, "confined"), "true", "包めている");
+
+    // 箱は `1 × gate.job_memory_mb`・重みは rules 行そのもの（値は manifest が持つ・C1）。
+    let record = scope_record(&state, "-common-2-");
+    assert_eq!(
+        scope_prop(&record, "MemoryMax"),
+        format!("{}M", embedded_int("gate.job_memory_mb")),
+        "job の箱: {record}"
+    );
+    assert_eq!(
+        scope_prop(&record, "CPUWeight"),
+        embedded_int("gate.cpu_weight").to_string(),
+        "CPU の重み: {record}"
+    );
+    assert!(!record.contains("MemoryHigh"), "MemoryHigh は付けない（設計 §4.2）: {record}");
+    clean(&[&repo, &state]);
+}
+
+/// **箱は 2 種で、同じ gate の中で互いに違う値になる**（設計 §4.2）。
+///
+/// 1 本ずつ別の unit の記録を読む——`{jobs}` 行と非 `{jobs}` 行の記録を混ぜると、
+/// `limit_of` を片方へ潰した実装でも両方の assert が通る（fixture 衝突）。
+#[test]
+fn pipe_confine_uses_two_distinct_boxes_in_one_gate() {
+    let (repo, state) = repo_with_state();
+    commit_vessel(
+        &repo,
+        VESSEL_ALLOWED,
+        r#"["sh verify-jobs.sh {jobs}", "sh verify-ok.sh"]"#,
+    );
+    let path = systemd_stub(&state);
+    let marker = state.join("lens-ran");
+    let (_id, gated) = confined_run(&repo, &state, &path, &fake_lens(&marker, &lens_verdict("PASS")));
+    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "gate: {}", stderr_of(&gated));
+
+    let job_box = scope_prop(&scope_record(&state, "-common-2-"), "MemoryMax");
+    let host_box = scope_prop(&scope_record(&state, "-common-3-"), "MemoryMax");
+    assert_eq!(
+        job_box,
+        format!("{}M", embedded_int("gate.job_memory_mb")),
+        "{{jobs}} を持つ行は job の箱"
+    );
+    let want_host = vessel::pipe::confine::mem_total_mb(&fs::read_to_string("/proc/meminfo").unwrap_or_default())
+        .and_then(|total| total.checked_sub(embedded_int("host.reserve_memory_mb")))
+        .filter(|mb| *mb > 0);
+    assert_eq!(
+        Some(host_box.clone()),
+        want_host.map(|mb| format!("{mb}M")),
+        "{{jobs}} を持たない行は host の箱（MemTotal − reserve）"
+    );
+    assert_ne!(job_box, host_box, "2 つの箱は互いに違う値である");
+    for unit in ["-common-2-", "-common-3-"] {
+        let record = scope_record(&state, unit);
+        assert!(
+            record.lines().any(|line| line == "OOMPolicy=continue"),
+            "{unit} の包みを systemd の OOM 停止から外す: {record}"
+        );
+    }
+    clean(&[&repo, &state]);
+}
+
+/// **包めない host では素の `sh -c` で撃ち、record に理由を残す**（止めない・設計 §4.2）。
+#[test]
+fn pipe_confine_falls_back_to_the_plain_shell_without_the_tool() {
+    let (repo, state) = repo_with_state();
+    let path = lean_path(&state);
+    let marker = state.join("lens-ran");
+    let (id, gated) = confined_run(&repo, &state, &path, &fake_lens(&marker, &lens_verdict("PASS")));
+    assert_eq!(
+        gated.status.code(),
+        Some(i32::from(RC_OK)),
+        "systemd-run の無い host でも便は流れる: {}",
+        stderr_of(&gated)
+    );
+    let rows = verify_rows(&state, &id);
+    assert_eq!(row_value(&rows, 3, "confined"), "false", "包めていない");
+    assert_eq!(row_value(&rows, 3, "reason"), "no-systemd-run", "理由は閉じた enum の名");
+    assert_eq!(row_value(&rows, 3, "peak_mb"), "-", "測れない peak は 0 と書かない");
+    assert_eq!(row_value(&rows, 3, "rc"), "0", "行そのものは撃たれている");
+    clean(&[&repo, &state]);
+}
+
+/// **peak は包みの終端行から読む**（設計 §4.3）。終端行の無い行は `-` である。
+#[test]
+fn pipe_confine_reads_the_peak_from_the_trailing_line() {
+    let (repo, state) = repo_with_state();
+    let path = systemd_stub(&state);
+    let contract = write_contract(
+        &repo,
+        &["verify"],
+        &[r#"verify = ["sh verify-peak.sh", "sh verify-ok.sh"]"#],
+    );
+    let id = intake(&repo, &state, &contract);
+    let spawned = run_pipe_with_path(
+        &path,
+        &["spawn", "--run", &id, "--repo", &repo.display().to_string(),
+          "--state-dir", &state.display().to_string(), "--runner", TOY_COMMIT],
+    );
+    assert_eq!(spawned.status.code(), Some(i32::from(RC_OK)), "spawn: {}", stderr_of(&spawned));
+    let marker = state.join("lens-ran");
+    let gated = run_pipe_with_path(
+        &path,
+        &["gate", "--run", &id, "--repo", &repo.display().to_string(),
+          "--state-dir", &state.display().to_string(),
+          "--lens", &fake_lens(&marker, &lens_verdict("PASS"))],
+    );
+    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "gate: {}", stderr_of(&gated));
+    let rows = verify_rows(&state, &id);
+    assert_eq!(row_value(&rows, 3, "peak_mb"), "3", "3145728 byte は 3 MiB");
+    assert_eq!(row_value(&rows, 4, "peak_mb"), "-", "終端行の無い行は不明（0 ではない）");
+    clean(&[&repo, &state]);
+}
+
+/// **runner と lens の起動も同じ包みを通る**（設計 §4.1 の 2 つ目と 3 つ目）。
+#[test]
+fn pipe_confine_wraps_the_runner_and_the_lens() {
+    let (repo, state) = repo_with_state();
+    let path = systemd_stub(&state);
+    let marker = state.join("lens-ran");
+    let (_id, gated) = confined_run(&repo, &state, &path, &fake_lens(&marker, &lens_verdict("PASS")));
+    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "gate: {}", stderr_of(&gated));
+    assert!(marker.exists(), "lens は実際に撃たれている（包みは行を殺さない）");
+    for stage in ["-runner-1-", "-lens-1-"] {
+        let record = scope_record(&state, stage);
+        assert!(record.lines().any(|line| line == "--scope"), "{stage} は scope である: {record}");
+        assert!(
+            record.lines().any(|line| line == "OOMPolicy=continue"),
+            "{stage} も OOM 停止から外す: {record}"
+        );
+    }
+    clean(&[&repo, &state]);
+}
+
+/// **箱の中で殺された verify 行は赤ではなく「測れなかった」**（設計 §4.2）。
+///
+/// rc は 0 のままの fixture で撃つ＝根拠が rc ではなく終端行の `oom_kill` であることを測る。
+#[test]
+fn pipe_confine_oom_verify_line_is_inconclusive() {
+    let (repo, state) = repo_with_state();
+    let path = systemd_stub(&state);
+    let contract = write_contract(&repo, &["verify"], &[r#"verify = ["sh verify-oom.sh"]"#]);
+    let id = intake(&repo, &state, &contract);
+    let spawned = run_pipe_with_path(
+        &path,
+        &["spawn", "--run", &id, "--repo", &repo.display().to_string(),
+          "--state-dir", &state.display().to_string(), "--runner", TOY_COMMIT],
+    );
+    assert_eq!(spawned.status.code(), Some(i32::from(RC_OK)), "spawn: {}", stderr_of(&spawned));
+    let marker = state.join("lens-ran");
+    let gated = run_pipe_with_path(
+        &path,
+        &["gate", "--run", &id, "--repo", &repo.display().to_string(),
+          "--state-dir", &state.display().to_string(),
+          "--lens", &fake_lens(&marker, &lens_verdict("PASS"))],
+    );
+    assert_eq!(gated.status.code(), Some(i32::from(RC_INCONCLUSIVE)), "{}", stdout_of(&gated));
+    assert!(stdout_of(&gated).contains("verdict=INCONCLUSIVE"), "{}", stdout_of(&gated));
+    let rows = verify_rows(&state, &id);
+    assert_eq!(row_value(&rows, 3, "rc"), "0", "rc は 0 のまま（rc では見ていない）");
+    assert_eq!(row_value(&rows, 3, "reason"), "oom-kill", "外からの kill と弁別する");
+    assert_eq!(value_of(&verdict_pairs(&state, &id), "verify_red"), "0", "赤には数えない");
+    assert!(!marker.exists(), "測れなかった周は lens を起動しない");
+    clean(&[&repo, &state]);
+}
+
+/// **runner の箱が溢れた便は `Failed detail=oom-kill` で終端する**（設計 §4.2・理由 1 つ）。
+#[test]
+fn pipe_confine_oom_runner_fails_the_run() {
+    let (repo, state) = repo_with_state();
+    let path = systemd_stub(&state);
+    let contract = write_contract(&repo, &[], &[]);
+    let id = intake(&repo, &state, &contract);
+    let runner = format!("{TOY_COMMIT}\nprintf 'confine-usage peak_bytes=9437184 oom_kill=1\\n'");
+    let out = run_pipe_with_path(
+        &path,
+        &["spawn", "--run", &id, "--repo", &repo.display().to_string(),
+          "--state-dir", &state.display().to_string(), "--runner", &runner],
+    );
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "記帳は通る: {}", stderr_of(&out));
+    let seen = trail(&state, &id);
+    assert!(
+        seen.contains(&(EventKind::RunStage, Some(Stage::Failed), Some("oom-kill".to_owned()))),
+        "閉じた理由 1 つで終端する: {seen:?}"
+    );
+    clean(&[&repo, &state]);
+}
+
+/// **lens の箱が溢れた周は INCONCLUSIVE**（FR9 の既存極性のまま・便は終端しない・設計 §4.2）。
+#[test]
+fn pipe_confine_oom_lens_is_inconclusive() {
+    let (repo, state) = repo_with_state();
+    let path = systemd_stub(&state);
+    let marker = state.join("lens-ran");
+    let body = lens_verdict("PASS");
+    let lens = format!(
+        "{}; printf 'confine-usage peak_bytes=9437184 oom_kill=1\\n'",
+        fake_lens(&marker, &body)
+    );
+    let (id, gated) = confined_run(&repo, &state, &path, &lens);
+    assert_eq!(gated.status.code(), Some(i32::from(RC_INCONCLUSIVE)), "{}", stdout_of(&gated));
+    assert!(marker.exists(), "lens は起動されている（判定だけが届かない）");
+    assert!(
+        value_of(&verdict_pairs(&state, &id), "evidence").contains("oom-kill"),
+        "理由が verdict に残る: {:?}",
+        verdict_pairs(&state, &id)
+    );
+    assert!(
+        show_line(&repo, &state, &id).contains("stage=Gated"),
+        "便は終端しない（測り直せる）: {}",
+        show_line(&repo, &state, &id)
+    );
     clean(&[&repo, &state]);
 }

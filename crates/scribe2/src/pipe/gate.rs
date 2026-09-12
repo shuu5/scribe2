@@ -16,8 +16,9 @@
 //! （[`super::cli`]）が持つ。
 
 use crate::polarity::{OnFailure, Polarity, Timing};
+use super::confine::{self, Confinement, Reason, Usage};
 use super::contract::Contract;
-use super::declaration::Effective;
+use super::declaration::{Effective, BASE_HOLE, JOBS_HOLE};
 use super::{
     contract_path, emit, git_bytes, git_line, verdict_path, verify_log_path, vessel_path,
     worktree_path, Emit,
@@ -28,7 +29,7 @@ use crate::fleet::store::{append_line, LockPolicy};
 use crate::fleet::{cli::now_utc, EventKind, Stage, SCHEMA};
 use std::io::Write;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 /// 判定できなかったときの rc（設計 §5.3）。
 ///
@@ -40,8 +41,15 @@ pub const RC_INCONCLUSIVE: u8 = 3;
 /// lens の出力から拾う JSON 行の始まり。
 const JSON_HEAD: char = '{';
 
-/// 共通 verify の行だけが持てる穴（便の base へ置換する）。**契約の行には置換しない**。
-const BASE_HOLE: &str = "{base}";
+/// **この便で実際に渡す並列度**（設計 gate-cost.md §3.3・ADR-0021 §2.1）。
+///
+/// 宣言値（rules 行 `gate.mutants_jobs`）を**そのまま実効にしない**（C10: 宣言値・測定値・
+/// 実効値は別物である）。受付（host 単位の枠・設計 §3.2）が入るまでは、合計を守る面がどこにも
+/// 無い——複数の gate が同時に満額を取ると host の memory が溢れて席まで死ぬ。ゆえに (a) の
+/// 段階では 1 に固定し、上限まで上げるのは受付を持つ (b) の後である。
+///
+/// 1 は常に許される（従来と同じ費用）ので、この値で縮退しても便は流れる。
+const EFFECTIVE_JOBS: u64 = 1;
 
 /// write-set 照合の record に載せる `cmd`。**shell の行ではない**（Rust で照合する）ので、
 /// 実行した行の字面を持てない段の名前をここで 1 つだけ決める。
@@ -92,6 +100,17 @@ pub enum Check {
 /// [`Check`] の全 variant。**この並びが適用順序である**。
 pub const CHECKS: &[Check] = &[Check::WriteSet, Check::Common, Check::Contract];
 
+impl Check {
+    /// 段の名（scope の unit 名に載せる字面）。
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::WriteSet => WRITE_SET_CMD,
+            Self::Common => "common",
+            Self::Contract => "contract",
+        }
+    }
+}
+
 /// 撃った 1 段の結果。
 pub struct Step {
     /// 実行した行の字面（置換後）。write-set 照合は [`WRITE_SET_CMD`]。
@@ -100,6 +119,22 @@ pub struct Step {
     pub rc: i32,
     /// stderr の末尾（緑の段は空）。
     pub stderr: String,
+    /// cgroup の scope で包めたか（record の `confined=`・設計 gate-cost.md §4）。
+    pub confined: bool,
+    /// 包めなかった理由 か 箱の中で起きたこと（record の `reason=`・閉じた enum）。
+    pub reason: Option<Reason>,
+    /// scope の peak（MiB）。**読めない周は `None`**＝record は `-`（0 と書かない）。
+    pub peak_mb: Option<u64>,
+    /// この行に渡した実効 jobs（record の `jobs=`）。
+    pub jobs: u64,
+}
+
+/// 撃つ process を持たない段（write-set 照合）の封じ込め欄。
+///
+/// 包めなかったのではなく**包む対象が無い**（Rust で照合するだけで子 process を起こさない）。
+/// 理由を持たせないのはそのためである。
+fn unwrapped(cmd: String, rc: i32, stderr: String) -> Step {
+    Step { cmd, rc, stderr, confined: false, reason: None, peak_mb: None, jobs: EFFECTIVE_JOBS }
 }
 
 /// 検証を撃つ材料。
@@ -119,32 +154,82 @@ pub struct Checks<'a> {
 /// **gate も land もこの 1 本を通る**——2 本になると gate が通した行と main で撃った行の
 /// 意味が静かにずれる（行を撃つ実装を [`run_line_captured`] 1 本に保っているのと同じ理由）。
 pub fn run_checks(checks: &Checks<'_>) -> Vec<Step> {
+    // 封じ込めの 3 線は 1 便で 1 度だけ読む（行ごとに manifest を開き直さない）。
+    let caps = confine::Caps::embedded();
     let mut steps = Vec::new();
     for check in CHECKS {
         match *check {
             Check::WriteSet => steps.push(check_write_set(checks)),
-            Check::Common => steps.extend(
-                checks
-                    .common
-                    .iter()
-                    .map(|line| fire(checks.worktree, line.replace(BASE_HOLE, checks.base))),
-            ),
-            Check::Contract => steps.extend(
-                checks
-                    .contract
-                    .verify
-                    .iter()
-                    .map(|line| fire(checks.worktree, line.clone())),
-            ),
+            Check::Common => {
+                for line in checks.common {
+                    let cmd = fill_holes(line, checks.base);
+                    let n = steps.len().saturating_add(1);
+                    let entry = Fire { checks, raw: line.as_str(), cmd, stage: *check, n };
+                    steps.push(fire(&entry, caps));
+                }
+            }
+            Check::Contract => {
+                for line in &checks.contract.verify {
+                    let n = steps.len().saturating_add(1);
+                    let entry =
+                        Fire { checks, raw: line.as_str(), cmd: line.clone(), stage: *check, n };
+                    steps.push(fire(&entry, caps));
+                }
+            }
         }
     }
     steps
 }
 
-/// 1 行を撃って結果を組む。
-fn fire(worktree: &Path, cmd: String) -> Step {
-    let (rc, stderr) = run_line_captured(worktree, &cmd);
-    Step { cmd, rc, stderr }
+/// 共通 verify の行の穴を実値へ置く（**契約の行には置換しない**）。
+///
+/// **1 走査で埋めない**のは、穴の値が sha と数字だけで、互いの字面を含まないためである
+/// （`{worktree}` のように外から来る path を埋める面とは条件が違う）。
+fn fill_holes(line: &str, base: &str) -> String {
+    line.replace(BASE_HOLE, base)
+        .replace(JOBS_HOLE, &EFFECTIVE_JOBS.to_string())
+}
+
+/// 1 行を撃つ材料。
+struct Fire<'a> {
+    /// 撃つ場所と材料。
+    checks: &'a Checks<'a>,
+    /// **置換前**の行（どの箱に入れるかはここから決まる・[`confine::limit_of`]）。
+    raw: &'a str,
+    /// 撃つ字面（置換後）。
+    cmd: String,
+    /// 段（scope の unit 名に載る）。
+    stage: Check,
+    /// `verify.jsonl` の record 番号（scope の unit 名に載る）。
+    n: usize,
+}
+
+/// 1 行を scope に包んで撃ち、結果を組む。
+fn fire(entry: &Fire<'_>, caps: Option<confine::Caps>) -> Step {
+    let place = entry
+        .checks
+        .worktree
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let unit = confine::unit_name(&place, entry.stage.as_str(), entry.n);
+    let wrap = confine::Wrap {
+        unit: &unit,
+        limit: confine::limit_of(entry.raw, EFFECTIVE_JOBS),
+        caps,
+    };
+    let fired = run_line_captured(entry.checks.worktree, &entry.cmd, &wrap);
+    let (confined, reason, peak_mb) =
+        (fired.confinement.confined(), fired.reason(), fired.usage.peak_mb);
+    Step {
+        cmd: entry.cmd.clone(),
+        rc: fired.rc,
+        stderr: fired.stderr,
+        confined,
+        reason,
+        peak_mb,
+        jobs: EFFECTIVE_JOBS,
+    }
 }
 
 /// diff の path が契約の write-set に収まっているか（ADR-0009 §2.4）。
@@ -157,7 +242,7 @@ fn check_write_set(checks: &Checks<'_>) -> Step {
     // **`-z`**（NUL 区切り・quote しない）で受ける。既定の `--name-only` は非 ASCII の path を
     // `"…"` へ quote するので、字面照合が偽の RED を出す（本 repo は日本語の doc を持つ）。
     let Some(bytes) = git_bytes(checks.worktree, &["diff", "--name-only", "-z", &range]) else {
-        return Step { cmd, rc: -1, stderr: "diff の path を読めない".to_owned() };
+        return unwrapped(cmd, -1, "diff の path を読めない".to_owned());
     };
     let text = String::from_utf8_lossy(&bytes);
     let outside: Vec<&str> = text
@@ -165,13 +250,13 @@ fn check_write_set(checks: &Checks<'_>) -> Step {
         .filter(|path| !path.is_empty() && !listed(path, &checks.contract.write_set))
         .collect();
     if outside.is_empty() {
-        return Step { cmd, rc: 0, stderr: String::new() };
+        return unwrapped(cmd, 0, String::new());
     }
-    Step {
+    unwrapped(
         cmd,
-        rc: 1,
-        stderr: format!("契約の write-set の外へ出た path:\n{}", outside.join("\n")),
-    }
+        1,
+        format!("契約の write-set の外へ出た path:\n{}", outside.join("\n")),
+    )
 }
 
 /// path が write-set のいずれか（file の一致 か dir の prefix）に含まれるか。
@@ -262,6 +347,11 @@ struct Measured {
     /// 失敗が FAIL（判定に届いた便の終端）に化ける。land の `MainCheck::Unmeasurable` と
     /// 同じ極性で INCONCLUSIVE へ倒す（fail-closed は保つ＝PASS には決してならない）。
     unreadable: bool,
+    /// 箱の中で殺された行の理由（在れば・設計 gate-cost.md §4.2）。
+    ///
+    /// 溢れた箱の中で死んだ行は、その内容が赤いのではなく**測れていない**。rc に依らず
+    /// INCONCLUSIVE へ倒し、record の `reason=` で外からの kill と弁別する。
+    killed: Option<Reason>,
 }
 
 /// 書き留める判定 1 件。
@@ -329,16 +419,17 @@ fn precheck(worktree: &Path, base: &str) -> Option<String> {
 
 /// verify を逐条で撃ち、diff を測る。
 fn measure(entry: &Gate<'_>, worktree: &Path, base: &str) -> Result<Measured, String> {
-    let (red, unreadable) = record_verify(entry, worktree, base)?;
+    let counted = record_verify(entry, worktree, base)?;
+    let (red, unreadable, killed) = (counted.red, counted.unreadable, counted.killed);
     if unreadable {
         // 段①が diff を読めない周は同じ range の生 diff も読めない。ここで broken（rc 2・
         // verdict を書かない）にすると便は Implemented のまま「測り直せる便」に見えない。
-        return Ok(Measured { red, diff: Vec::new(), unreadable });
+        return Ok(Measured { red, diff: Vec::new(), unreadable, killed });
     }
     let range = format!("{base}..HEAD");
     let diff = git_bytes(worktree, &["diff", &range])
         .ok_or_else(|| format!("{} の diff を測れない", worktree.display()))?;
-    Ok(Measured { red, diff, unreadable })
+    Ok(Measured { red, diff, unreadable, killed })
 }
 
 /// verify 各行を撃ち、行ごとの rc を `verify.jsonl` へ逐条で残す。
@@ -347,7 +438,7 @@ fn measure(entry: &Gate<'_>, worktree: &Path, base: &str) -> Result<Measured, St
 /// rc だけでは「何がどう赤いか」が便の外から読めず、gate が落ちるたびに人が同じ行を
 /// 手で撃ち直して理由を取り直すことになる（実測 2026-09-10・`s2-07l.49`）。緑の行は
 /// 残さない——読む理由が無い出力で診断 file を埋めると、赤い行の見出しが埋もれる。
-fn record_verify(entry: &Gate<'_>, worktree: &Path, base: &str) -> Result<(u64, bool), String> {
+fn record_verify(entry: &Gate<'_>, worktree: &Path, base: &str) -> Result<Counted, String> {
     let common = frozen_common(entry)?;
     let steps = run_checks(&Checks {
         worktree,
@@ -359,26 +450,66 @@ fn record_verify(entry: &Gate<'_>, worktree: &Path, base: &str) -> Result<(u64, 
     let tail_path = path.with_file_name(STDERR_LOG_FILE);
     let mut red = 0;
     // 段①が読めなかった周（rc -1）は**赤に数えない**——record は残す（現物を消さない）が、
-    // 判定は「測れなかった」側へ倒す（`s2-07l.65`）。
+    // 判定は「測れなかった」側へ倒す（`s2-07l.65`）。箱ごと OOM で殺された行も同じ極性で
+    // ある（rc に依らず「測れなかった」・設計 gate-cost.md §4.2）。
     let unreadable = steps.iter().any(is_unreadable);
+    let killed = steps.iter().find_map(box_kill);
     for (index, step) in steps.iter().enumerate() {
         let number = index as u64 + 1;
         if step.rc != 0 {
-            if !is_unreadable(step) {
+            if !is_unreadable(step) && box_kill(step).is_none() {
                 red += 1;
             }
             let head = format!("## n={number} rc={} cmd={}", step.rc, step.cmd);
             append_stderr(&tail_path, entry.policy, &head, &step.stderr)?;
         }
-        let record = json_lite::write_object(&[
+        // **schema は 1 のまま任意 field を足す**（古い読み手は未知の field を無視する・
+        // ADR-0017 §2.1 の event と同じ足し方・設計 gate-cost.md §5）。
+        let mut fields = vec![
             ("schema", Value::Num(SCHEMA)),
             ("n", Value::Num(number)),
             ("rc", Value::Num(recorded_rc(step.rc))),
             ("cmd", Value::Str(step.cmd.clone())),
-        ]);
+            ("jobs", Value::Num(step.jobs)),
+            ("confined", Value::Bool(step.confined)),
+            ("peak_mb", Value::Str(shown_peak(step.peak_mb))),
+        ];
+        if let Some(reason) = step.reason {
+            fields.push(("reason", Value::Str(reason.as_str().to_owned())));
+        }
+        let record = json_lite::write_object(&fields);
         append_line(&path, &record, entry.policy).map_err(|err| err.to_string())?;
     }
-    Ok((red, unreadable))
+    Ok(Counted { red, unreadable, killed })
+}
+
+/// `verify.jsonl` の数え上げ（赤の本数と、2 つの「測れなかった」）。
+struct Counted {
+    /// rc≠0 だった verify 行の本数（**測れた行**だけを数える）。
+    red: u64,
+    /// 段①（write-set 照合）で diff の path を読めなかったか。
+    unreadable: bool,
+    /// 箱の中で殺された行の理由（在れば）。
+    killed: Option<Reason>,
+}
+
+/// peak の字面。**読めない周は `-`**（0 と書かない＝「測って 0」と弁別する）。
+fn shown_peak(peak_mb: Option<u64>) -> String {
+    peak_mb.map_or_else(|| "-".to_owned(), |mb| mb.to_string())
+}
+
+/// 箱の中で殺された段か（殺された理由・設計 gate-cost.md §4.2 / §4.3）。
+///
+/// **rc では見ない**——kernel が殺した process の rc は行の内容次第で何にでもなる。根拠は
+/// 包みが出した `memory.events` の `oom_kill` で、包みごと死んで終端行を出せなかった周は
+/// signal 死をその代理にする。**包めなかった周は当たらない**（素の行が外から kill された
+/// 周を「箱が溢れた」と読まない）。
+fn box_kill(step: &Step) -> Option<Reason> {
+    if !step.confined {
+        return None;
+    }
+    step.reason
+        .filter(|found| matches!(*found, Reason::OomKill | Reason::Signal))
 }
 
 /// 便の写しから共通 verify を読む。
@@ -415,26 +546,63 @@ pub fn is_unreadable(step: &Step) -> bool {
     step.cmd == WRITE_SET_CMD && step.rc == -1
 }
 
-/// verify 1 行を撃ち、rc と **stderr の末尾**（`STDERR_TAIL_LINES` 行）を得る。
+/// verify 1 行を撃った結果。
+pub struct Fired {
+    /// process の rc（起動できない周は -1）。
+    pub rc: i32,
+    /// stderr の末尾（[`STDERR_TAIL_LINES`] 行）。
+    pub stderr: String,
+    /// 包みが stdout の終端に出した数（包めなかった周は既定）。
+    pub usage: Usage,
+    /// 包めたか。
+    pub confinement: Confinement,
+}
+
+impl Fired {
+    /// record の `reason=`。
+    ///
+    /// 包めなかった周はその理由、包めた周は**箱の中で起きたこと**を載せる——`oom_kill` が
+    /// 立った周と、包みごと signal で死んだ周（`memory.events` を読む前に死ぬので oom の
+    /// 代理・設計 §4.3）を、外からの kill と弁別するためである（lens-132d L1）。
+    fn reason(&self) -> Option<Reason> {
+        if let Some(found) = self.confinement.reason() {
+            return Some(found);
+        }
+        if self.usage.oom_kill >= 1 {
+            return Some(Reason::OomKill);
+        }
+        (self.rc < 0).then_some(Reason::Signal)
+    }
+}
+
+/// verify 1 行を **cgroup の scope に包んで**撃ち、rc・stderr の末尾・包みの数を得る。
 ///
 /// **撃つ実装はここ 1 本だけ**である（gate も land も [`run_checks`] 経由でここへ来る）。
 /// 出力の要る側と要らない側で `Command` を 2 本に割ると、gate が通した行と land が
-/// main で撃った行が別の実装になり、意味が静かにずれる。
-pub fn run_line_captured(worktree: &Path, line: &str) -> (i32, String) {
-    let spawned = Command::new("sh")
-        .arg("-c")
-        .arg(line)
-        .current_dir(worktree)
-        .output();
+/// main で撃った行が別の実装になり、意味が静かにずれる。包む口も同じ理由で 1 本である。
+///
+/// stdout を読むのは**包みの終端行のため**だけで、判定には使わない（判定は rc である）。
+pub fn run_line_captured(worktree: &Path, line: &str, wrap: &confine::Wrap<'_>) -> Fired {
+    let (mut command, confinement) = confine::wrap_line(line, wrap);
+    let spawned = command.current_dir(worktree).output();
     let Ok(out) = spawned else {
         // 起動できなかった周は rc も stderr も**器の外に無い**。空を「何も言わなかった」
         // として返し、極性は従来どおり RED 側（-1）へ倒す。
-        return (-1, String::new());
+        return Fired { rc: -1, stderr: String::new(), usage: Usage::default(), confinement };
     };
-    (
-        out.status.code().unwrap_or(-1),
-        tail_of(&String::from_utf8_lossy(&out.stderr)),
-    )
+    // **包めなかった周の stdout は読まない**。素の行が出した `confine-usage` の字面を
+    // 包みの測定として読むと、撃たれた行が自分の peak を名乗れてしまう。
+    let usage = if confinement.confined() {
+        confine::read_usage(&String::from_utf8_lossy(&out.stdout))
+    } else {
+        Usage::default()
+    };
+    Fired {
+        rc: out.status.code().unwrap_or(-1),
+        stderr: tail_of(&String::from_utf8_lossy(&out.stderr)),
+        usage,
+        confinement,
+    }
 }
 
 /// 末尾 [`STDERR_TAIL_LINES`] 行を改行で継いで返す（末尾の改行は行の区切りとして落ちる）。
@@ -462,6 +630,18 @@ fn decide(entry: &Gate<'_>, worktree: &Path, measured: &Measured) -> (Verdict, S
         return (
             Verdict::Inconclusive,
             "diff の path を読めない（write-set を照合できない＝測れなかった）".to_owned(),
+        );
+    }
+    // **箱の中で殺された行も赤より先**（設計 gate-cost.md §4.2）。溢れた箱の中で死んだ行は
+    // 内容が赤いのではなく測れていない——赤に化けさせると、host の memory が足りない周ほど
+    // 便が FAIL（終端）で落ちる。
+    if let Some(reason) = measured.killed {
+        return (
+            Verdict::Inconclusive,
+            format!(
+                "verify の行が scope の中で死んだ（reason={}・測れなかった）",
+                reason.as_str()
+            ),
         );
     }
     if measured.red > 0 {
@@ -494,8 +674,18 @@ fn decide(entry: &Gate<'_>, worktree: &Path, measured: &Measured) -> (Verdict, S
         return (Verdict::Inconclusive, "lens が要るのに --lens が無い".to_owned());
     };
     let contract = contract_path(entry.state_dir, entry.run);
-    ask_lens(&substitute(cmd, &contract, worktree), worktree, &measured.diff)
+    let unit = confine::unit_name(entry.run, LENS_STAGE, 1);
+    let wrap = confine::Wrap {
+        unit: &unit,
+        // lens は `{jobs}` を持たない起動なので host の箱である（設計 gate-cost.md §4.2）。
+        limit: confine::Limit::HostReserve,
+        caps: confine::Caps::embedded(),
+    };
+    ask_lens(&substitute(cmd, &contract, worktree), worktree, &measured.diff, &wrap)
 }
+
+/// lens の scope の unit 名に載せる段の名。
+const LENS_STAGE: &str = "lens";
 
 /// `--lens` の cmd の `{contract}` / `{worktree}` を run の path へ置く。
 ///
@@ -523,10 +713,18 @@ fn substitute(cmd: &str, contract: &Path, worktree: &Path) -> String {
 /// lens へ diff を stdin で渡し、stdout の JSON 1 行を読む。
 ///
 /// 契約は cmd の `{contract}`（[`substitute`] が埋めた path）で渡る＝**stdin は diff 専用**。
-fn ask_lens(cmd: &str, worktree: &Path, diff: &[u8]) -> (Verdict, String) {
-    let spawned = Command::new("sh")
-        .arg("-c")
-        .arg(cmd)
+///
+/// lens も scope で包む（設計 gate-cost.md §4.1 の 3 つ目）。**箱の中で殺された周は
+/// INCONCLUSIVE** ——FR9 の既存極性そのままで、stdout を parse できない周と同じ経路である
+/// （判定順は動かさない・便の成果は残っているので終端しない・設計 §4.2）。
+fn ask_lens(
+    cmd: &str,
+    worktree: &Path,
+    diff: &[u8],
+    wrap: &confine::Wrap<'_>,
+) -> (Verdict, String) {
+    let (mut command, confinement) = confine::wrap_line(cmd, wrap);
+    let spawned = command
         .current_dir(worktree)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -545,11 +743,25 @@ fn ask_lens(cmd: &str, worktree: &Path, diff: &[u8]) -> (Verdict, String) {
         Ok(found) => found,
         Err(err) => return (Verdict::Inconclusive, format!("lens の出力を読めない: {err}")),
     };
+    let text = String::from_utf8_lossy(&out.stdout);
+    // **箱の中で死んだ周は rc より先に見る**（設計 §4.2）。溢れた箱で死んだ lens の rc を
+    // 「lens が rc N で終わった」と記すと、外からの kill と弁別できない（lens-132d L1）。
+    if confinement.confined() {
+        let usage = confine::read_usage(&text);
+        let killed = (usage.oom_kill >= 1).then_some(Reason::OomKill);
+        let killed = killed.or_else(|| (out.status.code().is_none()).then_some(Reason::Signal));
+        if let Some(reason) = killed {
+            return (
+                Verdict::Inconclusive,
+                format!("lens が scope の中で死んだ（reason={}）", reason.as_str()),
+            );
+        }
+    }
     if !out.status.success() {
         let rc = out.status.code().unwrap_or(-1);
         return (Verdict::Inconclusive, format!("lens が rc {rc} で終わった"));
     }
-    parse_lens(&String::from_utf8_lossy(&out.stdout))
+    parse_lens(&text)
 }
 
 /// stdout の**最後の JSON 行**を 1 つの flat object に読む（lens の verdict と runner の

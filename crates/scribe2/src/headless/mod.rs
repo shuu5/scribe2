@@ -12,9 +12,24 @@
 pub mod lens;
 pub mod runner;
 
+use crate::pipe::confine;
 use std::io::{Read, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
+
+/// claude の scope の unit 名に載せる段の名。
+const CLAUDE_STAGE: &str = "claude";
+
+/// claude を起こしたのが runner の口か lens の口か（scope の unit 名に載る）。
+///
+/// 逐次 record が要るのは runner だけ（[`Call::streaming`]）なので、口の別はその 1 つで読める。
+fn claude_place(call: &Call<'_>) -> &'static str {
+    if call.streaming {
+        "runner"
+    } else {
+        "lens"
+    }
+}
 
 /// 既定の claude 実行 file。`--claude` は **test の seam**（fake の実行 file を渡す）。
 pub const DEFAULT_CLAUDE: &str = "claude";
@@ -123,8 +138,9 @@ pub fn fill(template: &str, pairs: &[(&str, &str)]) -> String {
 /// 裁定した cap 150000 が実質 130KB へ黙って切り下がる**（実測 2026-09-10: 131000 byte で
 /// `Argument list too long`）。`claude -p` は prompt 引数が無ければ stdin から読む。
 pub fn build(call: &Call<'_>) -> Command {
-    let mut cmd = Command::new(call.claude);
-    cmd.arg("-p")
+    let mut inner = Command::new(call.claude);
+    inner
+        .arg("-p")
         // permission mode は**毎回**渡す。省くと版の既定に従い、同じ 1 行が
         // 環境ごとに違う権限で走る。
         .arg("--permission-mode")
@@ -144,11 +160,22 @@ pub fn build(call: &Call<'_>) -> Command {
         // `-p` と `stream-json` の併用は **この版の claude が `--verbose` を要求する**
         // （無いと `requires --verbose` で rc 1・実測 2026-09-10）。fake は flag を
         // 読まないので、これを落としても歯は緑のまま通る＝実 claude でだけ死ぬ。
-        cmd.arg("--output-format").arg("stream-json").arg("--verbose");
+        inner.arg("--output-format").arg("stream-json").arg("--verbose");
     }
     if let Some(dir) = call.plugin_dir {
-        cmd.arg("--plugin-dir").arg(dir);
+        inner.arg("--plugin-dir").arg(dir);
     }
+    // **claude も cgroup の scope で包む**（設計 gate-cost.md §4.1 の 3 つ目）。包むのは argv が
+    // 揃った後・cwd と env を付ける前である——`Command` からは cwd も env も stdio も読み戻せ
+    // ないので、先に包まないと外側へ移せない。`{jobs}` を持つ起動ではないので箱は host の
+    // 予約分（同 §4.2）で、包めない host では素のまま起きる（止めない）。
+    let unit = confine::unit_name(claude_place(call), CLAUDE_STAGE, 1);
+    let wrap = confine::Wrap {
+        unit: &unit,
+        limit: confine::Limit::HostReserve,
+        caps: confine::Caps::embedded(),
+    };
+    let (mut cmd, _confined) = confine::wrap_command(inner, &wrap);
     if let Some(dir) = call.cwd {
         cmd.current_dir(dir);
     }

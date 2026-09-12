@@ -586,6 +586,43 @@ fn rules_embedded_manifest_declares_follow_retries() {
     assert!(joined.contains("未知である"), "行の kind を綴り違えた manifest は読めない: {joined}");
 }
 
+/// gate の費用の 5 行（設計 gate-cost.md §3.1・ADR-0021）。**値は manifest が持ち、ADR も
+/// 設計 doc も写さない**（C1 / C5）。
+///
+/// kind の包含を 5 行まとめて測るのは、行と variant を**対で**足させるためである——片方だけ
+/// 足した manifest は `parse` できず（未知の kind）、片方だけ足した enum は行の無い variant を
+/// 残す（親 test の `covers_all_kinds` が落ちる）。**行数は pin しない**（他便と同時に並ぶと
+/// 順序次第で動く数であり、母集団の健全性は親 test が持つ）。
+#[test]
+fn rules_embedded_manifest_declares_the_gate_cost_rows() {
+    let manifest = match Manifest::embedded() {
+        Ok(found) => found,
+        Err(errors) => {
+            let lines: Vec<String> = errors.iter().map(ToString::to_string).collect();
+            panic!("埋め込み manifest が拒まれた:\n{}", lines.join("\n"))
+        }
+    };
+    // (id, kind, 値, 裁定 id)。値は **user 2026-09-12 の裁定**（台帳 s2-07l.153 notes 逐語）。
+    let rows: [(&str, RuleKind, u64, &str); 5] = [
+        ("gate.mutants_jobs", RuleKind::GateMutantsJobs, 4, "user 2026-09-12T11:42Z"),
+        ("gate.job_memory_mb", RuleKind::GateJobMemoryMb, 3072, "user 2026-09-12T12:08Z"),
+        ("host.reserve_memory_mb", RuleKind::HostReserveMemoryMb, 8192, "user 2026-09-12T12:08Z"),
+        ("gate.slot_wait_s", RuleKind::GateSlotWaitS, 900, "user 2026-09-12T12:08Z"),
+        ("gate.cpu_weight", RuleKind::GateCpuWeight, 50, "user 2026-09-12T12:08Z"),
+    ];
+    for (id, kind, value, ruling) in rows {
+        let row = manifest.get(id).unwrap_or_else(|| panic!("{id} の行が在る"));
+        assert_eq!(row.value, RuleValue::Int(value), "{id} の値");
+        assert_eq!(row.kind, kind, "{id} の kind");
+        assert_eq!(row.kind.shape(), ValueShape::Int, "{id} の値の形");
+        assert!(row.enabled, "{id} は既定で効く");
+        assert_eq!(row.ruling, ruling, "{id} の裁定 id");
+        assert_eq!(row.ruled_at, "2026-09-12", "{id} の裁定日");
+        // kind の字面は閉じた enum を通してしか解けない（綴り違いの manifest は読めない）。
+        assert_eq!(RuleKind::parse(kind.as_str()), Some(kind), "{id} の kind を字面から引ける");
+    }
+}
+
 #[test]
 fn rules_embedded_manifest_is_valid_and_covers_all_kinds() {
     let manifest = match Manifest::embedded() {
@@ -598,7 +635,7 @@ fn rules_embedded_manifest_is_valid_and_covers_all_kinds() {
     // **tracked な `rules/manifest.toml` の全行が受理される**（`parse` は 1 件でも違反が
     // 在れば `Err` を返すので、ここに届いた時点で全行が必須 key を持つ）。母集団を額面に
     // 出すのは、行が黙って落ちた周を「全部読めた」と読み違えないためである。
-    assert_eq!(manifest.rows().len(), 32, "埋め込み manifest の行数（母集団）");
+    assert_eq!(manifest.rows().len(), 37, "埋め込み manifest の行数（母集団）");
     for kind in ALL {
         let covered = manifest.rows().iter().any(|row| row.kind == *kind);
         assert!(covered, "{} の行が manifest に無い", kind.as_str());

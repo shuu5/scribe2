@@ -12,6 +12,7 @@
 
 pub mod approve;
 pub mod cli;
+pub mod confine;
 pub mod contract;
 pub mod declaration;
 pub mod follow;

@@ -72,15 +72,21 @@ mod scope {
 
     /// `cargo` へ渡す引数（`cargo` の直後から）と、その `-p` に載せた [`Scope`]。
     ///
-    /// `--in-diff <diff>` / `-p <scope>` / `-o <out>` はそれぞれ隣り合う対で、歯が対のまま見る
-    /// （`-o` を落とすと測った結果を読まずに `total=0` へ化ける・lens-82 再確認 MEDIUM-4）。
-    pub fn measure_args(diff: &Path, out: &Path, scope: &str) -> (Vec<String>, Scope) {
+    /// `--in-diff <diff>` / `-p <scope>` / `-o <out>` / `--jobs <n>` はそれぞれ隣り合う対で、
+    /// 歯が対のまま見る（`-o` を落とすと測った結果を読まずに `total=0` へ化ける・lens-82
+    /// 再確認 MEDIUM-4）。
+    ///
+    /// **並列度の値はこの道具が持たない**（設計 gate-cost.md §3.3）。器が受付で導いた実効値を
+    /// 宣言 file の `{jobs}` 経由で受け取り、cargo-mutants の `--jobs` へそのまま渡すだけである。
+    pub fn measure_args(diff: &Path, out: &Path, scope: &str, jobs: u64) -> (Vec<String>, Scope) {
         let mut args: Vec<String> = ["mutants", "--in-diff"].iter().map(|s| (*s).to_owned()).collect();
         args.push(diff.display().to_string());
         args.push("-p".to_owned());
         args.push(scope.to_owned());
         args.extend(["--no-shuffle", "--copy-vcs", "true", "-o"].iter().map(|s| (*s).to_owned()));
         args.push(out.display().to_string());
+        args.push("--jobs".to_owned());
+        args.push(jobs.to_string());
         (args, Scope(scope.to_owned()))
     }
 }
@@ -256,7 +262,21 @@ fn flag<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
 }
 
 /// 使い方（rc 2 の 1 行）。
-const USAGE: &str = "usage: cargo xtask mutants-diff --base <ref>";
+const USAGE: &str = "usage: cargo xtask mutants-diff --base <ref> [--jobs <n>]";
+
+/// `--jobs` を渡されなかった周の並列度（設計 gate-cost.md §2「止めない、縮退する」）。
+///
+/// **1 は常に許される**（従来と同じ費用）。器を通さずに人が撃つ周と、受付が枠を取れなかった
+/// 周が同じ値になる形で、道具の側に「速い既定」を持たない。
+const JOBS_FLOOR: u64 = 1;
+
+/// `--jobs` の値。読めない字面は [`JOBS_FLOOR`] へ落とす（**速い側へ倒さない**）。
+pub fn jobs_of(args: &[String]) -> u64 {
+    flag(args, "--jobs")
+        .and_then(|value| value.parse().ok())
+        .filter(|jobs| *jobs >= JOBS_FLOOR)
+        .unwrap_or(JOBS_FLOOR)
+}
 
 /// 「測れなかった」を表す rc。**0 に化けさせない**ための第 3 の値である。
 fn unmeasured(reason: &str) -> ExitCode {
@@ -298,7 +318,7 @@ pub fn run(args: &[String]) -> ExitCode {
         Err(reason) => return unmeasured(&format!("mutants-diff: {reason}")),
     };
     // **測る範囲は 1 つの束縛**: `-p` へ渡した名前を [`Scope`] として受け取り、行はそれでしか組めない。
-    let (args, scope) = measure_args(&diff_path, &out, &layout.name);
+    let (args, scope) = measure_args(&diff_path, &out, &layout.name, jobs_of(args));
     let status = Command::new("cargo")
         .args(args)
         .current_dir(&root)

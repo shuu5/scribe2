@@ -7,6 +7,7 @@
 //! 親の env をそのまま継承させ、必要な値は cmd の placeholder 置換で渡す。
 
 use super::approve::{block, Approval, Approve, RC_BLOCKED};
+use super::confine;
 use super::gate::last_json_object;
 use super::{
     base_of_run, branch_name, contract_path, emit, git_line, plugin_path, runner_stdout_path, vessel_path,
@@ -19,7 +20,7 @@ use crate::name::NAME;
 use crate::pipe::contract::Contract;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 /// policy file の名前（guard が読む形・vessel-hook.md §5）。
 const WRITE_SET_FILE: &str = "write-set.txt";
@@ -108,11 +109,19 @@ fn launch_runner(
     // 質問で止まった turn が常に「commit を作った」側へ倒れる。初回は tip = base ゆえ同値。
     // 読めない周は base へ落とす（従来の基準）。
     let tip = git_line(worktree, &["rev-parse", "HEAD"]).unwrap_or_else(|| base.to_owned());
+    // **runner も cgroup の scope で包む**（設計 gate-cost.md §4.1 の 2 つ目）。`{jobs}` を
+    // 持つ起動ではないので箱は host の予約分（同 §4.2）で、包めない host では素のまま撃つ
+    // （止めない・縮退する）。
+    let unit = confine::unit_name(launch.run, RUNNER_STAGE, 1);
+    let wrap = confine::Wrap {
+        unit: &unit,
+        limit: confine::Limit::HostReserve,
+        caps: confine::Caps::embedded(),
+    };
+    let (mut command, confinement) = confine::wrap_line(&cmd, &wrap);
     // **env を 1 つも足さない**: `.env()` / `.envs()` を呼ばず親の env をそのまま継承する。
     // stdout は捕らえる（質問 record の読み面・`gate.rs::ask_lens` と同じ形）。stderr は継承。
-    let child = Command::new("sh")
-        .arg("-c")
-        .arg(&cmd)
+    let child = command
         .current_dir(worktree)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -145,7 +154,12 @@ fn launch_runner(
     // 捕らえた stdout は診断 file へ残す（包みの観測行を端末から消さない）。書けない周は
     // 段の判定を変えない（stderr 1 行で loud）。
     let kept = keep_stdout(launch, rc, &stdout).err();
-    let mut outcome = if rc == i32::from(RC_QUESTION) {
+    let mut outcome = if box_killed(&confinement, rc, &stdout) {
+        // **箱が溢れた周は便を終端する**（設計 gate-cost.md §4.2）。verify 行の「測れなかった」
+        // とは極性が違う——便の内容が測れないのではなく、便自身が host の予約分を超えた。
+        // 理由は閉じた 1 つ（`runner-rc` と同じ終端の段）で、`Failed` から resume しない。
+        record_stage(launch, Stage::Failed, Some(OOM_DETAIL.to_owned()))
+    } else if rc == i32::from(RC_QUESTION) {
         settle_question(launch, worktree, &tip, &stdout)
     } else {
         // **rc が 76 でない周は最終行を読まない**（従来どおり）。
@@ -155,6 +169,22 @@ fn launch_runner(
         outcome.err.push(format!("pipe: runner の stdout を残せない: {reason}"));
     }
     outcome
+}
+
+/// runner の scope の unit 名に載せる段の名。
+const RUNNER_STAGE: &str = "runner";
+
+/// 箱が溢れて終端した便の理由（**閉じた 1 つ**・設計 gate-cost.md §4.2・憲法 C2）。
+const OOM_DETAIL: &str = "oom-kill";
+
+/// runner の包みが箱の中で殺されたか（設計 gate-cost.md §4.2 / §4.3）。
+///
+/// 根拠は包みが stdout の終端に出した `oom_kill` である。包みごと死んで終端行を出せなかった
+/// 周は **signal 死**（rc が無い＝`code()` が `None` の周・器は -1 と記す）を代理にする。
+/// **包めなかった周は当たらない**——素の runner が外から止められた周（`pipe stop`）を
+/// 「箱が溢れた」と読まない。
+fn box_killed(confinement: &confine::Confinement, rc: i32, stdout: &str) -> bool {
+    confinement.confined() && (confine::read_usage(stdout).oom_kill >= 1 || rc < 0)
 }
 
 /// 捕らえた runner の stdout を `<run_dir>/runner.stdout.log` へ見出し付きで append する。

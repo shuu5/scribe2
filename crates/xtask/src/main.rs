@@ -161,7 +161,7 @@ mod tests {
 
     /// 名前から [`crate::mutantsdiff::Scope`] を得る唯一の道＝`-p` へ渡す引数を組むこと。
     fn scope_of(name: &str) -> crate::mutantsdiff::Scope {
-        measure_args(Path::new("in.diff"), Path::new("out"), name).1
+        measure_args(Path::new("in.diff"), Path::new("out"), name, 1).1
     }
 
     /// 変異の行は**何を測ったか**を末尾の `scope=` で名乗り、その値は呼び手が渡した名前
@@ -190,13 +190,44 @@ mod tests {
         // `-p` の直後に来るのは渡した名前そのもの（literal でも core の NAME でもない）。
         // `--in-diff` と `-o` も対のまま在る（落とすと測った結果を読まずに total=0 へ化ける）。
         for scope in [PROBE_SCOPE, other] {
-            let (args, _) = measure_args(Path::new("probe.diff"), Path::new("probe-out"), scope);
+            let (args, _) = measure_args(Path::new("probe.diff"), Path::new("probe-out"), scope, 3);
             let value_after = |flag: &str| args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1)).map(String::as_str);
             assert_eq!(value_after("-p"), Some(scope), "{args:?}");
             assert_eq!(args.iter().filter(|a| *a == "-p").count(), 1, "package は 1 つだけ: {args:?}");
             assert_eq!(value_after("--in-diff"), Some("probe.diff"), "{args:?}");
             assert_eq!(value_after("-o"), Some("probe-out"), "{args:?}");
+            // **並列度も対のまま渡す**（設計 gate-cost.md §3.3）。落とすと器が受付で取った枠を
+            // 使わずに 1 本ずつ測り続け、費用は下がらないのに枠だけ押さえる形になる。
+            assert_eq!(value_after("--jobs"), Some("3"), "{args:?}");
         }
+    }
+
+    /// 並列度は**器から来る値**であって、道具が持つ既定ではない（設計 gate-cost.md §3.3）。
+    ///
+    /// `--jobs` を渡さない周・読めない字面・0 は **1**（従来と同じ費用）へ落とす。速い側の
+    /// 既定を持つと、器を通さずに撃った周が host の memory を勝手に食う。
+    #[test]
+    fn mutants_diff_takes_the_jobs_from_the_caller_and_floors_at_one() {
+        let args = |line: &str| -> Vec<String> { line.split(' ').map(str::to_owned).collect() };
+        let jobs_in = |line: &str| {
+            let (built, _) = measure_args(
+                Path::new("d"),
+                Path::new("o"),
+                "p",
+                crate::mutantsdiff::jobs_of(&args(line)),
+            );
+            built
+                .iter()
+                .position(|a| a == "--jobs")
+                .and_then(|i| built.get(i + 1))
+                .cloned()
+                .unwrap_or_default()
+        };
+        assert_eq!(jobs_in("--base main --jobs 4"), "4", "渡された値をそのまま渡す");
+        assert_eq!(jobs_in("--base main"), "1", "--jobs 無しは 1");
+        assert_eq!(jobs_in("--base main --jobs x"), "1", "数でない字面は 1");
+        assert_eq!(jobs_in("--base main --jobs 0"), "1", "0 の並列度では走らせない");
+        assert_eq!(jobs_in("--base main --jobs"), "1", "値の無い --jobs は 1");
     }
 
     #[test]

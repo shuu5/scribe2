@@ -58,6 +58,7 @@ manifest に行が載るまでは ADR-0021 の予定行（C14.2 の相互参照�
 - gate は受付で得た jobs を `{jobs}` に置換して撃つ。`{jobs}` を持たない行は受付を通らない（枠を取らない＝mutants を持たない consumer は費用を払わない）。
 - xtask `mutants-diff` は `--jobs N` を cargo-mutants の `--jobs` にそのまま渡す（値は持たない）。
 - env で渡さない（C2.2 の精神・折り返しの裏口を作らない）。
+- errata（s2-07l.157 の現物）: 置ける穴は declaration.rs の**閉じた集合**（`BASE_HOLES` = `{base}` `{jobs}`）1 本が持ち、`unfit` の判定と gate の置換が同じ列を読む（片側だけに足すと、intake を通った行が穴のまま撃たれる）。受付が入るまでの実効 jobs は gate.rs の `EFFECTIVE_JOBS = 1`（§9 (a)）で、xtask 側の既定も 1（`--jobs` 無し・読めない字面・0 は 1 へ落とす＝道具に「速い既定」を持たせない）。
 
 ## 4. 封じ込め（ADR-0021 §2.2）
 
@@ -79,7 +80,20 @@ manifest に行が載るまでは ADR-0021 の予定行（C14.2 の相互参照�
 
 読みは scope の**内側**で行う: 包みの `sh -c` が行の終了後に自分の `/proc/self/cgroup` の path（scope の内側ではそれが scope 自身＝prefix の導出は要らない・端末直起動で `user@<uid>.service` の segment が無い文脈でも成立する）から `memory.peak` と `memory.events` を読み、stdout の終端に固定形の 1 行で出す（固定形は `{` で始めない＝gate.rs `last_json_object` が lens の verdict / runner の質問 record を末尾から探す経路と衝突させない）。器はその行を pure な parser（in-file の歯・fixture 文字列）で剥がし、record に `peak_mb=<n> jobs=<k>` を残す。外から終了後に読む形は成立しない（transient scope は最後の process の終了で消える・2026-09-12 本 host 実測）。包みは `OOMPolicy=continue` で OOM 停止から外す（§4.2）。それでも包みが死んだ周は signal 死（record の 255・gate.rs `recorded_rc`）を代理にする。その周の record にも `reason=<閉じた enum>`（oom-kill / signal）を載せて外からの kill と弁別する（契約 (a)）。`memory.peak` の無い kernel と終端行の無い周は field を欠く＝0 と書かない。`gate.job_memory_mb` の宣言値は、peak の測定が溜まった後に裁定で置き換える（C10: 宣言値を実効に上げるのは測定を通してだけ）。台帳 s2-07l.152（検出行の記録）と同じ行に載せる。
 
-### 4.4 極性
+### 4.4 errata（現物との差・s2-07l.157・規範は §4.1〜§4.3 のまま）
+
+実装で決め直した点だけを記す。どれも「止めない、縮退する」（§2）を強める側の差である。
+
+- **unit 名は `<NAME>-<場所>-<段>-<n>-<pid>`**（§4.2 は `<NAME>-<run>-<段>-<n>`）。同じ id を別 process が同時に測る周（歯の並列走行）で transient scope の名が衝突し、2 本目が起動できず**偽の RED** になるため、pid を足して一意にした。`<場所>` は gate では便の worktree の dir 名（= run id）、`<n>` は `verify.jsonl` の record 番号である。
+- **scope を作れるかを probe 1 回で先に確かめる**（process ごとに 1 度だけ憶える）。`systemd-run` が在っても user の session manager が無い host では scope を作れず、包んだ行は**撃たれないまま rc≠0** になる——これは縮退ではなく偽の RED である。理由は閉じた enum で `no-systemd-run`（起動できない）/ `no-scope`（作れない）を弁別する。
+- **`MemTotal − host.reserve_memory_mb` が残らない host は包まない**（`reason=no-room`）。`MemoryMax=0M` の箱を作ると中の process が即座に全部殺される。
+- **封じ込めの 3 線は埋め込み manifest から読む**（`--rules` の override は通らない・読めない周は `reason=no-rules` で包まない）。起動点 3 つのうち 2 つ（runner の包み・claude）は `--rules` を受ける口を持たないので、片方だけ override が効く形にすると同じ host の箱が別々の値で走る。
+- **終端行の固定形は `confine-usage peak_bytes=<n|-> oom_kill=<n|->`** で、包みは `/proc/self/cgroup` の末尾が**自分の unit の `.scope`** である周にだけ出す（包みの外で読んだ別 cgroup の数を自分の peak と名乗らない）。器は包めた周の stdout だけを読む。
+- **`peak_mb` は field を欠かさず `-` を書く**（§4.3 は「field を欠く」と書いた）。読み手が「field が無い」と「0」を取り違えないためで、極性は同じ（0 と書かない）である。
+- **gate が起こす lens の 1 行（gate.rs `ask_lens`）も同じ包みを通す**。§4.1 の列挙は claude の構築点を「lens」と呼ぶが、gate が `sh -c` で起こす lens そのものを箱に入れないと §4.2 の「lens の scope が殺された周」を器が観測できない。判定順は不変（殺された周は INCONCLUSIVE・便は終端しない）。
+- **verify 行の signal 死は、包めた周だけ**「測れなかった」へ倒す（包めていない行が外から kill された周は従来どおり赤のまま）。根拠が箱の中に在るかどうかで極性を分ける。
+
+### 4.5 極性
 
 封じ込めは行為を止めうる判定を持たない（縮退するだけ）ので、ADR-0014 §2.1 の guard の定義（行為を止めうる判定を返す境界）に当たらず、**極性一覧に載せない**（受付と同じ）。可視化は record の `confined=` / `reason=`。「止めない」を選ぶ理由: 止めると systemd の無い host で便が流れず、縮退の並列度 1 は従来の費用と同じで安全側。
 

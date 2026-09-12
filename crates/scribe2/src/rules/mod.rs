@@ -106,6 +106,16 @@ pub enum RuleKind {
     /// land の追随が衝突した便を**起こし直す回数の上限**（回）。値 N = 最大 N 回起こし直す
     /// （N+1 回目の衝突で終端する）。
     FollowRetries,
+    /// 変異検査の並列度の**上限**（宣言値）。実効値は受付（設計 gate-cost.md §3.3）が導く。
+    GateMutantsJobs,
+    /// job 1 つが要る memory の宣言値（MiB）。受付の分母と封じ込めの箱に使う。
+    GateJobMemoryMb,
+    /// 席と host のために常に残す memory（MiB）。受付はこれを差し引いた空きしか配らない。
+    HostReserveMemoryMb,
+    /// 受付で枠が空くのを待つ上限（秒）。超えたら並列度 1 で進む（縮退・止めない）。
+    GateSlotWaitS,
+    /// 便の scope に付ける CPU の重み（席は既定の重み）。
+    GateCpuWeight,
 }
 
 /// [`RuleKind`] の全 variant。parity test の母集団である。
@@ -142,6 +152,11 @@ pub const ALL: &[RuleKind] = &[
     RuleKind::SeatCyclePollMs,
     RuleKind::UsageTimeoutS,
     RuleKind::FollowRetries,
+    RuleKind::GateMutantsJobs,
+    RuleKind::GateJobMemoryMb,
+    RuleKind::HostReserveMemoryMb,
+    RuleKind::GateSlotWaitS,
+    RuleKind::GateCpuWeight,
 ];
 
 impl RuleKind {
@@ -180,6 +195,11 @@ impl RuleKind {
             Self::SeatCyclePollMs => "SeatCyclePollMs",
             Self::UsageTimeoutS => "UsageTimeoutS",
             Self::FollowRetries => "FollowRetries",
+            Self::GateMutantsJobs => "GateMutantsJobs",
+            Self::GateJobMemoryMb => "GateJobMemoryMb",
+            Self::HostReserveMemoryMb => "HostReserveMemoryMb",
+            Self::GateSlotWaitS => "GateSlotWaitS",
+            Self::GateCpuWeight => "GateCpuWeight",
         }
     }
 
@@ -209,7 +229,12 @@ impl RuleKind {
             | Self::SeatCycleSettleS
             | Self::SeatCyclePollMs
             | Self::UsageTimeoutS
-            | Self::FollowRetries => ValueShape::Int,
+            | Self::FollowRetries
+            | Self::GateMutantsJobs
+            | Self::GateJobMemoryMb
+            | Self::HostReserveMemoryMb
+            | Self::GateSlotWaitS
+            | Self::GateCpuWeight => ValueShape::Int,
             Self::DialogueSurface => ValueShape::Str,
             Self::MaturityCondition
             | Self::AccountSelection

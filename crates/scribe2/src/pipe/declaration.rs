@@ -71,10 +71,25 @@ pub struct Ceiling<'a> {
     pub commands: &'a [String],
 }
 
+/// 便の base を置く穴。
+pub const BASE_HOLE: &str = "{base}";
+
+/// **実効 jobs を置く穴**（設計 gate-cost.md §3.3・ADR-0021 §2.1）。並列度は env で渡さない
+/// （C2.2 の精神・折り返しの裏口を作らない）ので、宣言の行に穴として書く。
+pub const JOBS_HOLE: &str = "{jobs}";
+
+/// **宣言の共通 verify に置ける穴の閉じた集合**。
+///
+/// ADR-0010 §2.1 は穴を `{base}` 1 つと定めたが、ADR-0021 §2.1 がそれを部分 supersede して
+/// 集合にした。集合をここ 1 本に閉じるのは、[`unfit`] の判定と gate の置換が**同じ列**を
+/// 見るためである——片方だけに穴を足すと、intake を通った行が gate で置換されないまま
+/// 撃たれる（`{jobs}` という語をそのまま `--jobs` へ渡す）。
+pub const BASE_HOLES: &[&str] = &[BASE_HOLE, JOBS_HOLE];
+
 /// 行が置ける穴。**穴の可否だけが宣言の共通 verify と契約の verify の違い**である。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Holes {
-    /// `{base}` だけ置ける（宣言の共通 verify）。
+    /// [`BASE_HOLES`] の穴だけ置ける（宣言の共通 verify）。
     Base,
     /// 穴を置けない（契約の verify）。
     None,
@@ -307,9 +322,10 @@ fn unfit(line: &str, allowed: &[String], holes: Holes) -> Option<Unfit> {
     }) {
         return Some(Unfit::Outside(word.to_owned()));
     }
+    // **置ける穴は閉じた集合**（[`BASE_HOLES`]）であって `{base}` 1 つではない（ADR-0021 §2.1）。
     holes_in(line)
         .into_iter()
-        .find(|hole| !(holes == Holes::Base && hole == "{base}"))
+        .find(|hole| !(holes == Holes::Base && BASE_HOLES.contains(&hole.as_str())))
         .map(Unfit::Hole)
 }
 
@@ -513,8 +529,45 @@ fn list_of(
 
 #[cfg(test)]
 mod tests {
-    use super::{unfit, Declared, Effective, Holes, Sourced, Unfit, CEILING_ROW, DECL_FILE};
+    use super::{
+        unfit, Declared, Effective, Holes, Sourced, Unfit, BASE_HOLES, BASE_HOLE, CEILING_ROW,
+        DECL_FILE, JOBS_HOLE,
+    };
     use crate::order::is_declaration_order;
+
+    /// 宣言の共通 verify に置ける穴は**閉じた集合**であり、その外は `Hole` で断る
+    /// （ADR-0021 §2.1 が ADR-0010 §2.1 を部分 supersede）。
+    ///
+    /// 両向きを 1 本で撃つ: 集合を空にする変異も、逆に全部の穴を通す変異も、ここで落ちる。
+    #[test]
+    fn declaration_accepts_only_the_closed_set_of_holes_in_common_verify() {
+        let allowed = ["cargo".to_owned()];
+        assert_eq!(BASE_HOLES, [BASE_HOLE, JOBS_HOLE], "集合は 2 つちょうど");
+        for hole in BASE_HOLES {
+            let line = format!("cargo xtask mutants-diff --base {hole}");
+            assert_eq!(unfit(&line, &allowed, Holes::Base), None, "{hole} は共通 verify に置ける");
+            assert_eq!(
+                unfit(&line, &allowed, Holes::None),
+                Some(Unfit::Hole((*hole).to_owned())),
+                "{hole} も契約の verify には置けない"
+            );
+        }
+        // 集合の外は**綴り違いでも**断る（`{jobz}` を黙って撃たない）。
+        for outside in ["{jobz}", "{job}", "{jobs", "{JOBS}"] {
+            let line = format!("cargo xtask mutants-diff --jobs {outside}");
+            assert_eq!(
+                unfit(&line, &allowed, Holes::Base),
+                Some(Unfit::Hole(outside.to_owned())),
+                "{outside} は置けない穴である"
+            );
+        }
+        // 2 つを同じ行に置ける（scribe2 自身の宣言の形）。
+        assert_eq!(
+            unfit("cargo xtask mutants-diff --base {base} --jobs {jobs}", &allowed, Holes::Base),
+            None,
+            "2 つの穴を同じ行に置ける"
+        );
+    }
 
     /// 宣言の本文。
     fn body(allowed: &str, common: &str) -> String {
