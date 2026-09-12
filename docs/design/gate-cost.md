@@ -48,7 +48,7 @@ manifest に行が載るまでは ADR-0021 の予定行（C14.2 の相互参照�
   - `by_avail = floor(avail / gate.job_memory_mb)`（いま実際に空いている分。他 project や host の他 process が使った分は自然に減る）
   - `by_token = floor((MemTotal − host.reserve_memory_mb) / gate.job_memory_mb) − Σ 生きている札の jobs`（受け付けたがまだ常駐していない分を数える＝2 つの gate が同時に測って両方が満額を取る競合を塞ぐ）
   - `free = min(by_avail, by_token)`
-- **取得**: slot dir の lock（fleet の event log と同じ lock file の 1 本・retry / stale は rules 行 `fleet.lock_retry_ms` / `fleet.lock_stale_ms`・flock ではない・第 2 の lock 実装を持たない〔C6.3〕）の内側で測り、`jobs = min(gate.mutants_jobs, free)` の札を書く。`free == 0` なら lock を離して待つ。**待ちは完了 enum の variant 1 つ**（`Completion::SlotFree { slots_dir, want }`・現物の variant は pid を運ぶが本 variant は置き場と要る枠を運ぶ）を足して唯一の wait 実装を通す（C3.4・第 2 の poll loop を書かない・周期 = `fleet.lock_retry_ms`）。`gate.slot_wait_s` を超えたら `jobs = 1` で進み、record に `slot=degraded` を記す。**0 で走らせない・断らない**。
+- **取得**: slot dir 直下の lock file 1 つ（実装は fleet の `acquire` を公開して使う＝file は別・実装は 1 本。event log の lock file は state dir ごとで project をまたげない・retry / stale は rules 行 `fleet.lock_retry_ms` / `fleet.lock_stale_ms`・flock ではない・第 2 の lock 実装を持たない〔C6.3〕）の内側で測り、`jobs = min(gate.mutants_jobs, free)` の札を書く。`free == 0` なら lock を離して待つ。**待ちは完了 enum の variant 1 つ**（`Completion::SlotFree { slots_dir, want }`・現物の variant は pid を運ぶが本 variant は置き場と要る枠を運ぶ）を足して唯一の wait 実装を通す（C3.4・第 2 の poll loop を書かない・周期 = wait 実装の定数のまま〔`fleet.lock_retry_ms` は lock 取得の上限で周期ではない〕・上限 = `gate.slot_wait_s`）。`gate.slot_wait_s` を超えたら `jobs = 1` で進み、record に `slot=degraded` を記す。**0 で走らせない・断らない**。
 - **解放**: verify 行の終了で札を消す（Drop でも消す）。器が死んだ周は次の受付が pid で回収する。
 - **極性**: 受付は行為を止めうる判定を持たない（縮退する）ので ADR-0014 §2.1 の guard ではなく、極性一覧に載せない。測れない周（`/proc/meminfo` が読めない・lock が取れない）は `jobs = 1` で進み `slot=unmeasured` を記す（縮退＝従来の費用）。slot dir は真実を持たない印の置き場で NFR4 の「store」ではない（読めない札は回収して記録・rc は変えない）。
 
@@ -70,12 +70,13 @@ manifest に行が載るまでは ADR-0021 の予定行（C14.2 の相互参照�
 - `systemd-run --user --scope --quiet --unit=<NAME>-<run>-<段>-<n> -p MemoryMax=<上限> -p CPUWeight=<gate.cpu_weight> -- sh -c <line>`。`MemoryHigh` は付けない（係数を持たない・rules 行を増やさない）。
 - **上限は 2 種**: `{jobs}` を持つ行 = `実効 jobs × gate.job_memory_mb`。それ以外（`{jobs}` を持たない verify 行〔workspace の nextest / clippy 等〕・runner・lens）= `MemTotal − host.reserve_memory_mb`（host の予約分だけを守る箱。行ごとの値を持たない＝rules 行を増やさない）。
 - 止められたのは scope の内側の process だけで、席・他の便・他の project は影響を受けない。scope の `memory.events` の `oom_kill` が 1 以上の周は、その行を rc に依らず「測れなかった」に倒す（gate は INCONCLUSIVE・main 実測は `main-unmeasured`・赤に化けさせない）。
-- 実測（2026-09-12・本 host）: cgroup v2・user scope に memory / cpu / pids の controller が委譲されていて上限が効く。
+- **runner / lens の scope が殺された周**: verify 行の「測れなかった」とは極性を分ける（便の内容が測れないのではなく、便自身が host の予約分を超えた）。便は閉じた理由 1 つ（`Failed detail=oom-kill:<段>`・pipeline.md §5.2 の `runner-rc` と同じ終端の段・C2 の variant 1 つ）で終端し、`Failed` からは resume しない＝intake からの起こし直し。根拠は rc 137 と、包みが出す `memory.events` の `oom_kill`。peak の記録先（runner.stdout.log の終端行）は契約 (a) で確定する。
+- 実測（2026-09-12・本 host）: cgroup v2・user scope に memory / cpu / pids の controller が委譲されていて上限が効く。transient scope は最後の process の終了で cgroup dir ごと消える（0.3 s 後に不在を実測）。
 - **無い host**（`systemd-run` が無い・scope を作れない）: 封じ込めなしで**並列度 1** で走り、record に `confined=false reason=<閉じた enum の名>` を記す（理由は自由文にしない・C3.3）。止めない（systemd の無い host で便が 1 本も流れない形を作らない）。
 
 ### 4.3 測定の環（宣言値を測定値で置き換えるため）
 
-scope の終了時に `memory.peak` を読み、record に `peak_mb=<n> jobs=<k>` を残す（cgroup の path は `/proc/self/cgroup` の自分の path から user manager の prefix を取り、`--unit` の名で辿る。`memory.peak` の無い kernel は field を欠く＝0 と書かない）。`gate.job_memory_mb` の宣言値は、peak の測定が溜まった後に裁定で置き換える（C10: 宣言値を実効に上げるのは測定を通してだけ）。台帳 s2-07l.152（検出行の記録）と同じ行に載せる。
+読みは scope の**内側**で行う: 包みの `sh -c` が行の終了後に自分の `/proc/self/cgroup` の path（scope の内側ではそれが scope 自身＝prefix の導出は要らない・端末直起動で `user@<uid>.service` の segment が無い文脈でも成立する）から `memory.peak` と `memory.events` を読み、stdout の終端に固定形の 1 行で出す。器はその行を pure な parser（in-file の歯・fixture 文字列）で剥がし、record に `peak_mb=<n> jobs=<k>` を残す。外から終了後に読む形は成立しない（transient scope は最後の process の終了で消える・2026-09-12 本 host 実測）。包みごと殺された周は rc 137 を `oom_kill` の代理にする。`memory.peak` の無い kernel と終端行の無い周は field を欠く＝0 と書かない。`gate.job_memory_mb` の宣言値は、peak の測定が溜まった後に裁定で置き換える（C10: 宣言値を実効に上げるのは測定を通してだけ）。台帳 s2-07l.152（検出行の記録）と同じ行に載せる。
 
 ### 4.4 極性
 
@@ -83,7 +84,7 @@ scope の終了時に `memory.peak` を読み、record に `peak_mb=<n> jobs=<k>
 
 ## 5. main 実測は木が同じなら検出線を撃ち直さない（ADR-0021 §2.4）
 
-- 宣言 file に **`detection-verify`**（検出線の行の列・`{base}` `{jobs}` の穴を置ける・**任意の key**＝無ければ③は空・toy repo の宣言は不変・ADR-0010 §2.1 の部分 supersede）を足す。scribe2 自身は `cargo xtask mutants-diff --base {base} --jobs {jobs}` をここへ移し、`common-verify` から外す。検出線の rules 行（R-C12-1）が deny に昇格した周は、同じ便でその行を `common-verify` へ戻す（deny する行は撃ち直す側・ADR-0021 §2.4）。検出線 = 落ちても deny しない行（C12.4・rc≠0 は「測れていない」の印で、gate はそれを従来どおり赤に数える＝測れなかったを通ったに化けさせない）。
+- 宣言 file に **`detection-verify`**（検出線の行の列・`{base}` `{jobs}` の穴を置ける・**任意の key**＝無ければ③は空・toy repo の宣言は不変・ADR-0010 §2.1 の部分 supersede）を足す。scribe2 自身は `cargo xtask mutants-diff --base {base} --jobs {jobs}` をここへ移し、`common-verify` から外す（ADR-0009 §2.3 の置き場の 1 文を ADR-0021 §2.6 (v) で読み替える）。③の行は②と同じく写し（intake が凍結した宣言）から読む。検出線の rules 行（R-C12-1）が deny に昇格した周は、同じ便でその行を `common-verify` へ戻す（deny する行は撃ち直す側・ADR-0021 §2.4）。検出線 = 落ちても deny しない行（C12.4・rc≠0 は「測れていない」の印で、gate はそれを従来どおり赤に数える＝測れなかったを通ったに化けさせない）。
 - gate は ① write-set 照合 → ② common-verify → ③ detection-verify → ④ 契約 verify の順で撃つ（ADR-0009 §2.4 の順序に③を挿す・ADR-0021 §2.6）。verify.jsonl の record は schema 1 のまま**任意 field を足す**（`kind` / `jobs` / `peak_mb` / `confined` / `reason` / `slot` / `skipped` / `tree`・古い読み手は無視・ADR-0017 §2.1 の event と同じ足し方）。
 - gate は verdict.json に **`tree`**（gate を撃った HEAD の `^{tree}` の sha）を残す（schema は 1 のまま field を足す・読み手は未知の field を無視する）。
 - land の main 実測は record を **`verify-main.jsonl`**（gate と同じ record 形・別 file・gate の周の `n` と重ねない・現物の main 実測は record を書いていない）に書く。`git rev-parse <new>^{tree}` が verdict の `tree` と一致する周は **detection-verify を撃たず** `skipped=detection tree=<sha>` を記し、①②④ は従来どおり撃つ。一致しない周（在りえないが在れば）は全部撃つ。`tree` が無い verdict（旧 gate）も全部撃つ。
@@ -102,9 +103,10 @@ e2e は binary を spawn し外部 command は PATH 先頭の stub で差し替�
 - 受付（e2e・`pipe_slots_`）: tmp の state root に state dir 2 つ〔project 2 つ〕で同じ slots dir を見る・自 pid の札で `by_token` を 0 にすると待ち、rules fixture の `slot_wait_s = 1` で `jobs=1 slot=degraded`・存在しない pid の札が回収され `slot=reclaimed:1`・`{jobs}` の無い行は札を作らない・終了で札が消える・置換後の `cmd` に実効 jobs が載る。
 - 封じ込め（e2e・`pipe_confine_`・偽 `systemd-run` = 引数を file に写して `sh -c` を exec する stub）: `-p MemoryMax=` が `{jobs}` 行で `jobs × job_memory_mb`、それ以外の行で `MemTotal − reserve`・`CPUWeight=` が rules 行・stub 不在で素の `sh -c` と `confined=false reason=`・runner / lens の起動も wrap を通る。**歯で測れるのは引数まで**: scope の外が死なないこと・`memory.peak` / `memory.events` が読めることは実 host の 1 回を契約の done に入れる（planner の再実測・host 依存）。peak / oom_kill の読みは in-file（cgroup file の fixture 文字列）。
 - main 実測（e2e・`pipe_detection_`・verify 行は「呼出回数 file に 1 行足す」stub）: verdict.json の `tree` が gate の HEAD の木と一致・一致する周は③の stub が呼ばれず `verify-main.jsonl` に `skipped=detection` が載り**②④は呼ばれる**（回数 file を行ごとに分ける）・`tree` を壊した fixture では③も呼ばれる・`tree` 無しの verdict でも呼ばれる・検出線の rc≠0 は gate FAIL のまま。
+- e2e の state dir は tmp root の**直下に置かない**（親が tmp root になり、gate / land を撃つ既存の全 test が `<tmp>/<NAME>-host/slots/` を共有して flaky になる）: 既存 helper `tmp()` の呼び手で state dir を `<tmp>/state` に 1 段下げる（契約 (b) の write-set に tests/e2e/pipe.rs の既存呼び手を含める）。
 - 宣言（in-file・declaration.rs）: `detection-verify` の穴（`{base}` `{jobs}` 以外は Unfit）・key の無い宣言は従来どおり通る・空配列は不備のまま（ADR-0010 §2.1）。
 - rules: 5 行の kind 件数と外形 snapshot・欠落は RuleError（既存の型）。
-- 完了 enum: `Completion::SlotFree` の網羅 match（compile）と wait の唯一性（`wait` の呼び手が 1 本・grep でなく型で）。
+- 完了 enum: `Completion::SlotFree` の網羅 match（compile）と wait の唯一性（実装が 1 本・呼び手は複数でよい・grep でなく型で）。
 
 ## 8. 射程外
 
