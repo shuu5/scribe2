@@ -468,9 +468,9 @@ terms:
     relationships: [口座, fleet, 上限 record, Measured]
   - canonical: 暫定行
     domain: consumer
-    definition: 作業記憶の「命令・制約」行のうち出所 pointer (憲法条・ADR・rules 行・裁定 id・user 裁定の時刻) を持たない行 (SRS FR23 / AC8)。
+    definition: 作業記憶の「命令・制約」行のうち出所 pointer を持たない行、 または持っていても器が形で分類できない行 (SRS FR23 / AC8・ADR-0018 §2.2)。 復元の DATA に印付きで列挙され、 次の cycle に引き継がれない。
     forbidden: [仮の行, 暫定命令]
-    relationships: [作業記憶, 退避物, 憲法]
+    relationships: [作業記憶, 退避物, 出所 pointer, 憲法]
   # ---------------------------------------------------------------- ADR-0017 (口座残量の計測の形)
   - canonical: 口座 label
     domain: consumer
@@ -480,3 +480,16 @@ terms:
     domain: consumer
     definition: 口座残量を 1 口座 1 窓で event log に追記した行 (ADR-0017 §2.1)。 出所 (口座 label・endpoint・時刻) を持つ Measured で、 読めなかった回は使用率を持たない「測れなかった」の行になる。
     relationships: [口座残量, event log, Measured, 上限 record]
+  # ---------------------------------------------------------------- ADR-0018 (作業記憶の退避・復元・消費)
+  - canonical: 作業記憶
+    domain: consumer
+    definition: 開発 session が cycle を跨いで運ぶ一時層の記憶。 session id で一意な退避物 (file) として退避し、 復元の DATA と brief を経て消費する (SRS FR23 / ADR-0018)。 規則の置き場ではない (憲法 N2)。
+    relationships: [開発 session, 退避物, cycle, 暫定行]
+  - canonical: 退避物
+    domain: consumer
+    definition: 作業記憶を書き出した file。 file 名は session id で一意、 frontmatter で席を名乗り、 消費は同一 suffix (.consumed.md) への move で表す (SRS FR23)。 器の subcommand (seat externalize / rebrief / consume) だけが書き・読み・移す (ADR-0018 §2.1 / §2.3)。
+    relationships: [作業記憶, cycle, 管理 tick]
+  - canonical: 出所 pointer
+    domain: consumer
+    definition: 作業記憶の命令行が本文末に持つ、 実在を照合できる carrier 参照。 器は形を閉じた enum (PointerKind) で分類し、 宣言順を優先順位とする (ADR-0018 §2.2)。 形の列挙は機械側 (PointerKind::ALL と外形 snapshot) が正本で、 本 file は写さない。 持たない行・分類できない行は暫定行。
+    relationships: [作業記憶, 暫定行, 宣言順]
