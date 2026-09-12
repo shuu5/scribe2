@@ -11,6 +11,7 @@
 use proptest::prelude::*;
 use proptest::test_runner::Config;
 use vessel::fleet::json_tree::{parse as parse_tree, Tree};
+use vessel::fleet::{Allowance, Measured, WindowKind, WINDOWS};
 use vessel::fleet::{Event as FleetEvent, EventKind, Stage, ACTOR_HUMAN, ACTOR_MACHINE, KINDS, SCHEMA as FLEET_SCHEMA, STAGES};
 use vessel::headless::runner::rate_limit_status;
 use vessel::rules::manifest::{elements, list, quoted_once, scalar, Scalar};
@@ -107,7 +108,7 @@ mod stamp {
 
 /// fleet の閉じた enum と log 行の性質（(2) fleet/mod.rs）。
 mod fleet {
-    use super::{config, ident, json_text, FleetEvent, EventKind, Stage, ACTOR_HUMAN, ACTOR_MACHINE, FLEET_SCHEMA, KINDS, STAGES};
+    use super::{config, ident, json_text, Allowance, FleetEvent, EventKind, Measured, Stage, WindowKind, ACTOR_HUMAN, ACTOR_MACHINE, FLEET_SCHEMA, KINDS, STAGES, WINDOWS};
     use proptest::prelude::*;
 
     /// 全 variant の字面と、その近傍（小文字化・英字だけの任意文字列）。
@@ -117,6 +118,15 @@ mod fleet {
             1 => prop::sample::select(KINDS).prop_map(|kind| kind.as_str().to_owned()),
             1 => prop::sample::select(KINDS).prop_map(|kind| kind.as_str().to_lowercase()),
         ]
+    }
+
+    /// `run` / `bead` を持つ kind（口座残量の 2 kind は本体が別なので別の strategy が作る）。
+    fn record_kinds() -> Vec<EventKind> {
+        KINDS
+            .iter()
+            .copied()
+            .filter(|kind| !kind.is_allowance())
+            .collect()
     }
 
     /// 全 variant の字面と、その近傍。
@@ -132,7 +142,7 @@ mod fleet {
     fn any_fleet_event() -> impl Strategy<Value = FleetEvent> {
         (
             "[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z",
-            prop::sample::select(KINDS),
+            prop::sample::select(record_kinds()),
             ident(),
             ident(),
             ident(),
@@ -154,11 +164,70 @@ mod fleet {
                 seat,
                 pid,
                 detail,
+                allowance: None,
+            })
+    }
+
+    /// 実測の中身 1 つ（`model` は `seven_day_model` の周だけ必ず持つ＝行の必須条件に合わせる）。
+    fn any_measured() -> impl Strategy<Value = Measured> {
+        (
+            json_text(),
+            prop::sample::select(WINDOWS),
+            prop::option::of(json_text()),
+            ident(),
+            any::<u64>(),
+            json_text(),
+        )
+            .prop_map(|(account, window, model, endpoint, used_pct, resets_at)| Measured {
+                account,
+                window,
+                model: match window {
+                    WindowKind::SevenDayModel => Some(model.unwrap_or_default()),
+                    WindowKind::FiveHour | WindowKind::SevenDay => model,
+                },
+                endpoint,
+                used_pct,
+                resets_at,
+            })
+    }
+
+    /// 口座残量の実測行 1 本。
+    fn any_allowance_event() -> impl Strategy<Value = FleetEvent> {
+        (
+            "[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z",
+            ident(),
+            any_measured(),
+        )
+            .prop_map(|(ts, host, measured)| FleetEvent {
+                schema: FLEET_SCHEMA,
+                ts,
+                kind: EventKind::AllowanceMeasured,
+                run: String::new(),
+                bead: String::new(),
+                host,
+                actor: ACTOR_MACHINE.to_owned(),
+                stage: None,
+                seat: None,
+                pid: None,
+                detail: None,
+                allowance: Some(Allowance::Measured(measured)),
             })
     }
 
     proptest! {
         #![proptest_config(config())]
+
+        /// 任意の口座 / 窓 / model / 使用率 / reset で、実測行は書いて読むと同じ event に戻る
+        /// （`run` / `bead` を持たない側の round-trip）。
+        #[test]
+        fn prop_allowance_event_measured_round_trips_through_line(event in any_allowance_event()) {
+            let line = event.to_line();
+            // key の形（`"run":`）で見る。値の側は escape が入るので、任意の文字列が
+            // この字面を作ることはない。
+            prop_assert!(!line.contains("\"run\":"), "{}", line);
+            prop_assert!(!line.contains("\"bead\":"), "{}", line);
+            prop_assert_eq!(FleetEvent::from_line(&line), Ok(event), "{}", line);
+        }
 
         /// 全 variant で as_str → parse が戻る。
         #[test]

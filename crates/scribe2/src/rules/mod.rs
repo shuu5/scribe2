@@ -101,6 +101,8 @@ pub enum RuleKind {
     SeatCycleSettleS,
     /// 席の cycle が**確認を見に行く周期**（ミリ秒）。上限の内でこの刻みで証拠を読み直す。
     SeatCyclePollMs,
+    /// 口座残量を聞きに行く子 process の待ち時間の上限（秒）。
+    UsageTimeoutS,
 }
 
 /// [`RuleKind`] の全 variant。parity test の母集団である。
@@ -135,6 +137,7 @@ pub const ALL: &[RuleKind] = &[
     RuleKind::RepoNonRustExecAllow,
     RuleKind::SeatCycleSettleS,
     RuleKind::SeatCyclePollMs,
+    RuleKind::UsageTimeoutS,
 ];
 
 impl RuleKind {
@@ -171,6 +174,7 @@ impl RuleKind {
             Self::RepoNonRustExecAllow => "RepoNonRustExecAllow",
             Self::SeatCycleSettleS => "SeatCycleSettleS",
             Self::SeatCyclePollMs => "SeatCyclePollMs",
+            Self::UsageTimeoutS => "UsageTimeoutS",
         }
     }
 
@@ -198,7 +202,8 @@ impl RuleKind {
             | Self::SeatTickStaleS
             | Self::SeatCycleLockTtlS
             | Self::SeatCycleSettleS
-            | Self::SeatCyclePollMs => ValueShape::Int,
+            | Self::SeatCyclePollMs
+            | Self::UsageTimeoutS => ValueShape::Int,
             Self::DialogueSurface => ValueShape::Str,
             Self::MaturityCondition
             | Self::AccountSelection

@@ -14,9 +14,10 @@ use vessel::cli_outcome::{RC_BROKEN, RC_OK, RC_REFUSED};
 use vessel::polarity::{OnFailure, Polarity, Timing};
 use vessel::rules::manifest::Manifest;
 use vessel::fleet::json_tree::{self, parse, Tree, TreeError, MAX_DEPTH};
-use vessel::fleet::{KINDS, STAGES};
+use vessel::fleet::{KINDS, REASONS, STAGES, WINDOWS};
 use vessel::fleet::{
-    json_lite, replay, wait, Completion, Event, EventKind, SeatState, Stage, Timeout, SCHEMA,
+    json_lite, replay, wait, Allowance, AllowanceKey, Completion, Event, EventKind, Measured,
+    SeatState, Stage, Timeout, Unmeasured, UnmeasuredReason, WindowKind, SCHEMA,
 };
 
 /// binary の path。
@@ -47,6 +48,7 @@ fn event(kind: EventKind, run: &str, ts: &str) -> Event {
         seat: None,
         pid: None,
         detail: None,
+        allowance: None,
     }
 }
 
@@ -605,6 +607,7 @@ fn pipe_question_kinds_round_trip_on_schema_1() {
             seat: None,
             pid: None,
             detail: Some("verify 行が矛盾する".to_owned()),
+            allowance: None,
         };
         let line = event.to_line();
         assert!(line.contains("\"schema\":1"), "{line}");
@@ -775,6 +778,550 @@ fn fleet_json_tree_leaves_the_flat_reader_narrow() {
     }
     let flat = r#"{"a":"x","b":1,"c":true,"d":null}"#;
     assert!(json_lite::parse_object(flat).is_ok(), "1 段の行はこれまで通り読める");
+}
+
+/// 口座残量の行に使う時刻。
+const ALLOWANCE_TS: &str = "2026-09-12T02:00:00Z";
+
+/// 窓が開き直る時刻。
+const RESETS_AT: &str = "2026-09-12T05:00:00Z";
+
+/// 聞き先の短い識別子。
+const ENDPOINT: &str = "usage";
+
+/// 実測 1 件。
+fn measured(account: &str, window: WindowKind, model: Option<&str>, used_pct: u64) -> Allowance {
+    Allowance::Measured(Measured {
+        account: account.to_owned(),
+        window,
+        model: model.map(str::to_owned),
+        endpoint: ENDPOINT.to_owned(),
+        used_pct,
+        resets_at: RESETS_AT.to_owned(),
+    })
+}
+
+/// 測れなかった 1 件。
+fn unmeasured(account: &str, window: Option<WindowKind>, reason: UnmeasuredReason) -> Allowance {
+    Allowance::Unmeasured(Unmeasured {
+        account: account.to_owned(),
+        window,
+        model: None,
+        endpoint: ENDPOINT.to_owned(),
+        reason,
+    })
+}
+
+/// 口座残量の event を組む。**kind は本体から導く**（食い違った組を fixture にしない）。
+fn allowance_event(ts: &str, allowance: Allowance) -> Event {
+    let kind = match &allowance {
+        Allowance::Measured(_) => EventKind::AllowanceMeasured,
+        Allowance::Unmeasured(_) => EventKind::AllowanceUnmeasured,
+    };
+    Event {
+        schema: SCHEMA,
+        ts: ts.to_owned(),
+        kind,
+        run: String::new(),
+        bead: String::new(),
+        host: "h".to_owned(),
+        actor: kind.default_actor().to_owned(),
+        stage: None,
+        seat: None,
+        pid: None,
+        detail: None,
+        allowance: Some(allowance),
+    }
+}
+
+/// 最新を引く key。
+fn allowance_key(account: &str, window: Option<WindowKind>, model: Option<&str>) -> AllowanceKey {
+    AllowanceKey {
+        account: account.to_owned(),
+        window,
+        model: model.map(str::to_owned),
+    }
+}
+
+/// 口座残量の生の行を key/value から組む（malformed の fixture 用）。
+///
+/// `extra` の key は base の 7 key と衝突させない——重複 key は `json_lite` が**別の理由**で
+/// 断るので、測りたい欠陥と返る理由が入れ替わる。
+fn allowance_line(kind: &str, extra: &[(&str, json_lite::Value)]) -> String {
+    let mut pairs: Vec<(&str, json_lite::Value)> = vec![
+        ("schema", json_lite::Value::Num(SCHEMA)),
+        ("ts", json_lite::Value::Str(ALLOWANCE_TS.to_owned())),
+        ("kind", json_lite::Value::Str(kind.to_owned())),
+        ("account", json_lite::Value::Str("a1".to_owned())),
+        ("endpoint", json_lite::Value::Str(ENDPOINT.to_owned())),
+        ("host", json_lite::Value::Str("h".to_owned())),
+        ("actor", json_lite::Value::Str("machine".to_owned())),
+    ];
+    pairs.extend(extra.iter().cloned());
+    json_lite::write_object(&pairs)
+}
+
+/// 2 行目に置いた fixture が `line=2` の malformed になり、理由が `want` を含むこと。
+///
+/// 1 行目に**読める実測**を置くのは、`read_all` が Err になったのが 2 行目だけのせいだと
+/// 言えるようにするためである（件数 1 まで測る）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn refuses_second_line(forged: &str, want: &str) {
+    let dir = state_dir();
+    let good =
+        allowance_event(ALLOWANCE_TS, measured("a1", WindowKind::FiveHour, None, 97)).to_line();
+    write_raw(&dir, &[&good, forged]);
+    let errors = store::read_all(&dir).expect_err("読めない行を Ok で通さない");
+    let joined: Vec<String> = errors.iter().map(ToString::to_string).collect();
+    let text = joined.join("\n");
+    assert_eq!(errors.len(), 1, "件数（1 行目は読める）: {text}");
+    assert!(text.contains("line=2"), "行番号: {text}");
+    assert!(text.contains(want), "理由に {want} が無い: {text}（入力 {forged}）");
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// 行を順に追記して読み戻す（`append` → `read_all` の往復を通す）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn append_allowance(dir: &Path, rows: Vec<(&str, Allowance)>) -> Vec<Event> {
+    let policy = LockPolicy::embedded().expect("rules 行を引ける");
+    for (ts, allowance) in rows {
+        store::append(dir, &allowance_event(ts, allowance), policy).expect("追記できる");
+    }
+    store::read_all(dir).expect("全行 parse できる")
+}
+
+/// 口座 × 窓 × model ごとの最新が入り、便と席は 1 件も増えない（歯 (a)(1)）。
+#[test]
+fn fleet_allowance_replay_keeps_latest_per_account_and_window() {
+    let dir = state_dir();
+    let model_ts = "2026-09-12T02:00:02Z";
+    let events = append_allowance(
+        &dir,
+        vec![
+            (ALLOWANCE_TS, measured("a1", WindowKind::FiveHour, None, 97)),
+            ("2026-09-12T02:00:01Z", measured("a1", WindowKind::SevenDay, None, 12)),
+            (model_ts, measured("a1", WindowKind::SevenDayModel, Some("Opus 5"), 125)),
+            ("2026-09-12T02:00:03Z", unmeasured("a2", None, UnmeasuredReason::NoCredentials)),
+        ],
+    );
+    assert_eq!(events.len(), 4, "4 行");
+    let state = replay(&events);
+    assert_eq!(
+        state.allowance.len(),
+        4,
+        "口座 × 窓 × model ごとに 1 件: {:?}",
+        state.allowance
+    );
+    assert!(
+        state.runs.is_empty(),
+        "allowance 行は便を作らない: {:?}",
+        state.runs
+    );
+    assert!(
+        state.seats.is_empty(),
+        "allowance 行は席を作らない: {:?}",
+        state.seats
+    );
+    let key = allowance_key("a1", Some(WindowKind::SevenDayModel), Some("Opus 5"));
+    let model = state.allowance.get(&key).expect("モデル別の窓が在る");
+    assert_eq!(
+        model.allowance,
+        measured("a1", WindowKind::SevenDayModel, Some("Opus 5"), 125),
+        "実測の中身（100 で cap しない）"
+    );
+    assert_eq!(model.ts, model_ts, "行の時刻");
+    let other = state
+        .allowance
+        .get(&allowance_key("a2", None, None))
+        .expect("測れなかった口座も 1 枠を持つ");
+    assert_eq!(
+        other.allowance,
+        unmeasured("a2", None, UnmeasuredReason::NoCredentials),
+        "理由つきで残る（0 に読み替えない）"
+    );
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// 同じ枠は Measured → Unmeasured の順で書くと最新が Unmeasured（歯 (a)(2)）。
+#[test]
+fn fleet_allowance_unmeasured_replaces_the_older_measured() {
+    let first = allowance_event(ALLOWANCE_TS, measured("a1", WindowKind::FiveHour, None, 42));
+    let later = allowance_event(
+        "2026-09-12T03:00:00Z",
+        unmeasured("a1", Some(WindowKind::FiveHour), UnmeasuredReason::HttpStatus),
+    );
+    let state = replay(&[first, later]);
+    assert_eq!(state.allowance.len(), 1, "同じ枠は 1 件のまま");
+    let latest = state
+        .allowance
+        .get(&allowance_key("a1", Some(WindowKind::FiveHour), None))
+        .expect("5 時間窓が在る");
+    assert_eq!(latest.ts, "2026-09-12T03:00:00Z", "物理順で後の行が勝つ");
+    assert_eq!(
+        latest.allowance,
+        unmeasured("a1", Some(WindowKind::FiveHour), UnmeasuredReason::HttpStatus),
+        "古い実測値で「最新」を覆わない"
+    );
+}
+
+/// 口座残量の行は `run` / `bead` を持たず、書いて読むと同じ event に戻る。
+#[test]
+fn fleet_allowance_line_carries_no_run_or_bead() {
+    let event = allowance_event(
+        ALLOWANCE_TS,
+        measured("a1", WindowKind::SevenDayModel, Some("Opus 5"), 125),
+    );
+    let line = event.to_line();
+    let pairs = json_lite::parse_object(&line).expect("flat JSON である");
+    let keys: Vec<&str> = pairs.iter().map(|(key, _)| key.as_str()).collect();
+    assert_eq!(
+        keys,
+        vec![
+            "schema",
+            "ts",
+            "kind",
+            "account",
+            "window",
+            "model",
+            "endpoint",
+            "used_pct",
+            "resets_at",
+            "host",
+            "actor"
+        ],
+        "行の key の並び: {line}"
+    );
+    assert_eq!(Event::from_line(&line), Ok(event), "書いて読むと同じ: {line}");
+    // 必須 field が揃っていても、便 id を足した行は読まない（`run` の有無が kind から
+    // 読めなくなる形を通さない）。
+    let with_run = allowance_line(
+        "AllowanceMeasured",
+        &[
+            ("window", json_lite::Value::Str("five_hour".to_owned())),
+            ("used_pct", json_lite::Value::Num(97)),
+            ("resets_at", json_lite::Value::Str(RESETS_AT.to_owned())),
+            ("run", json_lite::Value::Str("r1".to_owned())),
+        ],
+    );
+    let reason = Event::from_line(&with_run).expect_err("run を持つ口座の行は読まない");
+    assert!(reason.contains("run を持たない"), "理由: {reason}");
+}
+
+/// `AllowanceUnmeasured` が持てない field と、型・字面の違う field
+/// （歯 (a)(3)・改訂 (11)(13)）。
+#[test]
+fn fleet_allowance_unmeasured_rejects_used_pct_and_wrong_types() {
+    let reason = ("reason", json_lite::Value::Str("http_status".to_owned()));
+    let cases: Vec<(Vec<(&str, json_lite::Value)>, &str)> = vec![
+        (
+            vec![reason.clone(), ("used_pct", json_lite::Value::Num(0))],
+            "used_pct を持たない",
+        ),
+        (
+            vec![
+                reason.clone(),
+                ("resets_at", json_lite::Value::Str(RESETS_AT.to_owned())),
+            ],
+            "resets_at を持たない",
+        ),
+        (
+            vec![("reason", json_lite::Value::Num(123))],
+            "reason が無いか文字列でない",
+        ),
+        (
+            vec![(
+                "reason",
+                json_lite::Value::Str("unknown-reason".to_owned()),
+            )],
+            "reason unknown-reason は未知である",
+        ),
+        (
+            vec![
+                reason.clone(),
+                ("window", json_lite::Value::Str("monthly".to_owned())),
+            ],
+            "window monthly は未知である",
+        ),
+        (
+            vec![reason, ("model", json_lite::Value::Num(5))],
+            "model が文字列でない",
+        ),
+        (vec![], "reason が無いか文字列でない"),
+    ];
+    for (extra, want) in cases {
+        refuses_second_line(&allowance_line("AllowanceUnmeasured", &extra), want);
+    }
+}
+
+/// `AllowanceMeasured` の必須 field は key の有無と**値の型**の両方で見る
+/// （歯 (a)(5)・改訂 (12)(13)）。
+#[test]
+fn fleet_allowance_measured_rejects_missing_model_and_wrong_types() {
+    let window = |text: &str| ("window", json_lite::Value::Str(text.to_owned()));
+    let pct = ("used_pct", json_lite::Value::Num(97));
+    let resets = ("resets_at", json_lite::Value::Str(RESETS_AT.to_owned()));
+    let cases: Vec<(Vec<(&str, json_lite::Value)>, &str)> = vec![
+        (
+            vec![window("seven_day_model"), pct.clone(), resets.clone()],
+            "model が無い",
+        ),
+        (
+            vec![window("monthly"), pct.clone(), resets.clone()],
+            "window monthly は未知である",
+        ),
+        (
+            vec![pct.clone(), resets.clone()],
+            "window が無いか文字列でない",
+        ),
+        (
+            vec![
+                window("five_hour"),
+                ("used_pct", json_lite::Value::Str("50".to_owned())),
+                resets.clone(),
+            ],
+            "used_pct が無いか整数でない",
+        ),
+        (
+            vec![
+                window("five_hour"),
+                pct.clone(),
+                ("resets_at", json_lite::Value::Num(5)),
+            ],
+            "resets_at が無いか文字列でない",
+        ),
+        (
+            vec![window("five_hour"), pct.clone()],
+            "resets_at が無いか文字列でない",
+        ),
+        (
+            vec![window("five_hour"), resets.clone()],
+            "used_pct が無いか整数でない",
+        ),
+        (
+            vec![
+                window("five_hour"),
+                pct,
+                resets,
+                ("reason", json_lite::Value::Str("timeout".to_owned())),
+            ],
+            "reason を持たない",
+        ),
+    ];
+    for (extra, want) in cases {
+        refuses_second_line(&allowance_line("AllowanceMeasured", &extra), want);
+    }
+}
+
+/// 型不一致の行が 1 本混ざった log は `read_all` が Err で、現在地を作れない
+/// ＝**古い実測が「最新」を名乗らない**（改訂 (14)）。
+#[test]
+fn fleet_allowance_read_refuses_the_whole_log_on_a_type_mismatch() {
+    let dir = state_dir();
+    let path = dir.display().to_string();
+    let good =
+        allowance_event(ALLOWANCE_TS, measured("a1", WindowKind::FiveHour, None, 97)).to_line();
+    let broken = allowance_line(
+        "AllowanceUnmeasured",
+        &[
+            ("window", json_lite::Value::Str("five_hour".to_owned())),
+            ("reason", json_lite::Value::Num(123)),
+        ],
+    );
+    write_raw(&dir, &[&good, &broken]);
+    let errors = store::read_all(&dir).expect_err("型不一致の行は Ok で通らない");
+    let text = errors
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<String>>()
+        .join("\n");
+    assert!(text.contains("line=2"), "行番号つきで断る: {text}");
+    let args = |v: &[&str]| v.iter().map(|s| (*s).to_owned()).collect::<Vec<String>>();
+    let outcome = vessel::fleet::cli::dispatch(&args(&["export", "--state-dir", &path]));
+    assert_eq!(
+        outcome.rc, RC_BROKEN,
+        "読めない log からは現在地を出さない: {outcome:?}"
+    );
+    assert!(outcome.out.is_empty(), "古い実測を 1 行も名乗らない");
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// 既存 kind の行は `run` / `bead` が必須のままで、口座の field を持てない（歯 (a)(4)）。
+#[test]
+fn fleet_allowance_leaves_existing_kinds_requiring_run_and_bead() {
+    let full: Vec<(&str, json_lite::Value)> = vec![
+        ("schema", json_lite::Value::Num(SCHEMA)),
+        ("ts", json_lite::Value::Str(ALLOWANCE_TS.to_owned())),
+        ("kind", json_lite::Value::Str("RunCreated".to_owned())),
+        ("run", json_lite::Value::Str("r1".to_owned())),
+        ("bead", json_lite::Value::Str("b1".to_owned())),
+        ("host", json_lite::Value::Str("h".to_owned())),
+        ("actor", json_lite::Value::Str("machine".to_owned())),
+    ];
+    assert!(
+        Event::from_line(&json_lite::write_object(&full)).is_ok(),
+        "揃った行はこれまで通り読める"
+    );
+    for dropped in ["run", "bead"] {
+        let kept: Vec<(&str, json_lite::Value)> = full
+            .iter()
+            .filter(|(key, _)| *key != dropped)
+            .cloned()
+            .collect();
+        let reason =
+            Event::from_line(&json_lite::write_object(&kept)).expect_err("欠落は malformed のまま");
+        assert!(reason.contains(dropped), "理由: {reason}");
+    }
+    let mut with_account = full;
+    with_account.push(("account", json_lite::Value::Str("a1".to_owned())));
+    let reason = Event::from_line(&json_lite::write_object(&with_account))
+        .expect_err("既存 kind は口座の field を持てない");
+    assert!(reason.contains("account を持たない"), "理由: {reason}");
+}
+
+/// `UnmeasuredReason` の 10 variant は round-trip し、極性は fail-open
+/// （**guard は足していない**・歯 (a)(6)）。
+#[test]
+fn fleet_allowance_reasons_round_trip_and_polarity_is_fail_open() {
+    assert_eq!(REASONS.len(), 10, "母集団");
+    for reason in REASONS {
+        assert_eq!(
+            UnmeasuredReason::parse(reason.as_str()),
+            Some(*reason),
+            "{}",
+            reason.as_str()
+        );
+    }
+    assert!(
+        is_declaration_order(REASONS, |reason| reason as usize),
+        "REASONS の並びが宣言順と乖離している（母集団 {} 種）",
+        REASONS.len()
+    );
+    assert_eq!(
+        UnmeasuredReason::parse("ShapeMismatch"),
+        None,
+        "variant 名の字面は受けない（行に書くのは snake_case）"
+    );
+    assert_eq!(UnmeasuredReason::parse(""), None, "空は理由ではない");
+    let polarity: Polarity = UnmeasuredReason::POLARITY;
+    assert_eq!(
+        polarity.on_failure,
+        OnFailure::FailOpen,
+        "測れない周は行にして続ける"
+    );
+    assert_eq!(polarity.timing, Timing::InLoop, "読む時点で理由が決まる");
+    let listed = vessel::polarity::ALL
+        .iter()
+        .filter(|guard| guard.boundary().contains("Unmeasured"))
+        .count();
+    assert_eq!(
+        listed, 0,
+        "計測は行為を止めない＝guard を足していない（母集団 {} 件）",
+        vessel::polarity::ALL.len()
+    );
+}
+
+/// 窓の字面は snake_case の 3 つで、並びは宣言順。
+#[test]
+fn fleet_allowance_windows_round_trip_on_snake_case() {
+    assert_eq!(WINDOWS.len(), 3, "母集団");
+    for window in WINDOWS {
+        assert_eq!(
+            WindowKind::parse(window.as_str()),
+            Some(*window),
+            "{}",
+            window.as_str()
+        );
+    }
+    assert!(
+        is_declaration_order(WINDOWS, |window| window as usize),
+        "WINDOWS の並びが宣言順と乖離している（母集団 {} 種）",
+        WINDOWS.len()
+    );
+    assert_eq!(WindowKind::parse("FiveHour"), None, "variant 名は字面でない");
+}
+
+/// `KINDS` は 12 variant で並びは宣言順のまま（歯 (a)(7)）。
+#[test]
+fn fleet_allowance_kinds_are_twelve_in_declaration_order() {
+    assert_eq!(KINDS.len(), 12, "母集団（既存 10 + 口座残量 2）");
+    assert!(
+        is_declaration_order(KINDS, |kind| kind as usize),
+        "KINDS の並びが宣言順と乖離している（母集団 {} 種）",
+        KINDS.len()
+    );
+    assert_eq!(
+        KINDS.iter().filter(|kind| kind.is_allowance()).count(),
+        2,
+        "便に紐づかない kind は 2 つだけ"
+    );
+    for kind in [EventKind::AllowanceMeasured, EventKind::AllowanceUnmeasured] {
+        assert_eq!(EventKind::parse(kind.as_str()), Some(kind), "{}", kind.as_str());
+        assert_eq!(kind.default_actor(), "machine", "計測は機械由来（FR22 不変）");
+    }
+}
+
+/// allowance の行が在っても `export`（跨版 面 2）は 1 byte も変わらない（歯 (a)(8)）。
+#[test]
+fn fleet_allowance_rows_do_not_change_export() {
+    let dir = state_dir();
+    let path = dir.display().to_string();
+    let calls: [&[&str]; 2] = [
+        &["record", "--kind", "RunCreated", "--run", "r1", "--bead", "b1", "--stage", "Gated"],
+        &["record", "--kind", "SeatSpawned", "--run", "r1", "--bead", "b1", "--seat", "s1", "--pid", "7"],
+    ];
+    for call in calls {
+        let mut args = call.to_vec();
+        args.extend_from_slice(&["--state-dir", &path]);
+        assert!(run_fleet(&args).status.success(), "record: {call:?}");
+    }
+    let before = run_fleet(&["export", "--state-dir", &path]);
+    assert!(before.status.success(), "export の rc: {before:?}");
+    let policy = LockPolicy::embedded().expect("rules 行を引ける");
+    let rows = [
+        measured("a1", WindowKind::FiveHour, None, 97),
+        unmeasured("a2", None, UnmeasuredReason::NoCredentials),
+    ];
+    for allowance in rows {
+        store::append(&dir, &allowance_event(ALLOWANCE_TS, allowance), policy)
+            .expect("追記できる");
+    }
+    let after = run_fleet(&["export", "--state-dir", &path]);
+    assert!(after.status.success(), "export の rc: {after:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&before.stdout),
+        String::from_utf8_lossy(&after.stdout),
+        "header の件数も run 行も seat 行も不変"
+    );
+    let lines = String::from_utf8_lossy(&after.stdout).lines().count();
+    assert_eq!(lines, 3, "header + run 1 + seat 1");
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// `fleet record` は口座残量の kind を書けない（書き手は `fleet usage` の 1 本・改訂 (15)）。
+#[test]
+fn fleet_allowance_record_refuses_the_kind() {
+    let dir = state_dir();
+    let path = dir.display().to_string();
+    for kind in ["AllowanceMeasured", "AllowanceUnmeasured"] {
+        let out = run_fleet(&[
+            "record", "--kind", kind, "--run", "r1", "--bead", "b1", "--state-dir", &path,
+        ]);
+        assert_eq!(out.status.code(), Some(1), "書き側で断る: {out:?}");
+        assert!(out.stdout.is_empty(), "stdout へは書かない");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(err.contains("record では書けない"), "理由: {err}");
+    }
+    assert!(
+        !store::events_path(&dir).exists(),
+        "必須 field の揃わない行を append-only の log に残さない"
+    );
+    fs::remove_dir_all(&dir).ok();
 }
 
 /// 極性は fail-closed で、**極性一覧の guard には載らない**（計測は行為を止めない・設計 §6）。

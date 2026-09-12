@@ -1,8 +1,12 @@
 //! `rules/manifest.toml` を std だけで読む面（ADR-0004 §2.3・SRS NFR3）。
 //!
-//! 受理するのは TOML の部分集合である: 先頭の `schema = 1`・`[[rule]]` の
+//! 受理するのは TOML の部分集合である: 先頭の `schema = 1`・`[[rule]]` と `[[account]]` の
 //! array-of-tables・値は string / integer / bool と**文字列の配列**（1 行で閉じる）。
 //! **最初の 1 件で止めず**違反を全件集めて返す（silent drop 禁止・SRS NFR4）。
+//!
+//! `[[account]]` は**規則の値ではなく宣言値**である（口座の列挙・設計 fleet-usage.md §2・
+//! ADR-0017 §2.3）。ゆえに裁定 id を行ごとに持たず、持てる key は `label` 1 つだけで、
+//! `[[rule]]` 行の検査（裁定 id 必須・`enabled` 必須・kind と値の形の一致）は一切変わらない。
 
 use super::{Rule, RuleError, RuleKind, RuleRow, RuleValue, ValueShape};
 use std::path::Path;
@@ -16,8 +20,14 @@ const EMBEDDED: &str = include_str!("../../../../rules/manifest.toml");
 /// manifest が要求する schema 版。
 const SCHEMA: u64 = 1;
 
-/// 行が持てる key の全体。ここに無い key は拒む。
+/// `[[rule]]` 行が持てる key の全体。ここに無い key は拒む。
 const KNOWN_KEYS: &[&str] = &["id", "kind", "value", "enabled", "ruling", "ruled_at"];
+
+/// `[[account]]` 行が持てる key の全体。**必須もこれと同じ 1 つ**である。
+///
+/// label しか持たせないのは、口座の識別に使える形（host 名・path・本当の口座 id）を
+/// 公開面へ載せないためである（CON2・設計 fleet-usage.md §2 の「不透明」）。
+const ACCOUNT_KEYS: &[&str] = &["label"];
 
 /// 行に必ず要る key。
 ///
@@ -59,16 +69,83 @@ enum RawValue {
     Broken,
 }
 
-/// `[[rule]]` 1 つ分の生の key/value。
+/// 受理する array-of-tables の種類。
+///
+/// 字面と key 集合の対応は [`Section::header`] / [`Section::known_keys`] /
+/// [`Section::required_keys`] の網羅 `match` が持つ（種類を足したら compile error）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Section {
+    /// 規則 1 行（値 + 裁定）。
+    Rule,
+    /// 口座 1 件の宣言（label だけ）。
+    Account,
+}
+
+/// [`Section`] の全 variant。
+const SECTIONS: &[Section] = &[Section::Rule, Section::Account];
+
+impl Section {
+    /// TOML の section header の字面。
+    fn header(self) -> &'static str {
+        match self {
+            Self::Rule => "[[rule]]",
+            Self::Account => "[[account]]",
+        }
+    }
+
+    /// header の字面から引く。未知なら `None`。
+    fn parse(text: &str) -> Option<Self> {
+        SECTIONS.iter().copied().find(|found| found.header() == text)
+    }
+
+    /// この section が持てる key の全体。
+    fn known_keys(self) -> &'static [&'static str] {
+        match self {
+            Self::Rule => KNOWN_KEYS,
+            Self::Account => ACCOUNT_KEYS,
+        }
+    }
+
+    /// この section に必ず要る key。
+    fn required_keys(self) -> &'static [&'static str] {
+        match self {
+            Self::Rule => REQUIRED_KEYS,
+            Self::Account => ACCOUNT_KEYS,
+        }
+    }
+}
+
+/// section 1 つ分の生の key/value。
 struct RawRow {
+    section: Section,
     line: u64,
     fields: Vec<(String, RawValue, u64)>,
+}
+
+/// `[[account]]` 1 行が名乗る**不透明な** label（設計 fleet-usage.md §2）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountLabel {
+    label: String,
+    line: u64,
+}
+
+impl AccountLabel {
+    /// label の字面。
+    pub fn label(&self) -> &str {
+        &self.label
+    }
+
+    /// manifest の中でこの行が始まる物理行番号。
+    pub fn line(&self) -> u64 {
+        self.line
+    }
 }
 
 /// 読み込み済みの manifest。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Manifest {
     rows: Vec<RuleRow>,
+    accounts: Vec<AccountLabel>,
 }
 
 impl Manifest {
@@ -94,14 +171,17 @@ impl Manifest {
         let (schema, raws) = scan(text, &mut errors);
         check_schema(schema, &mut errors);
         let mut rows = Vec::new();
+        let mut accounts = Vec::new();
         for raw in &raws {
-            if let Some(row) = build_row(raw, &mut errors) {
-                rows.push(row);
+            match raw.section {
+                Section::Rule => rows.extend(build_row(raw, &mut errors)),
+                Section::Account => accounts.extend(build_account(raw, &mut errors)),
             }
         }
         check_duplicate_ids(&rows, &mut errors);
+        check_duplicate_labels(&accounts, &mut errors);
         if errors.is_empty() {
-            Ok(Self { rows })
+            Ok(Self { rows, accounts })
         } else {
             errors.sort_by_key(|error| error.line);
             Err(errors)
@@ -117,9 +197,14 @@ impl Manifest {
     pub fn rows(&self) -> &[RuleRow] {
         &self.rows
     }
+
+    /// 宣言した口座の label を**宣言順**で返す（設計 fleet-usage.md §2）。
+    pub fn accounts(&self) -> &[AccountLabel] {
+        &self.accounts
+    }
 }
 
-/// 本文を走査して top-level の `schema` と `[[rule]]` の生 field を集める。
+/// 本文を走査して top-level の `schema` と各 section の生 field を集める。
 fn scan(text: &str, errors: &mut Vec<RuleError>) -> (Option<(u64, Scalar)>, Vec<RawRow>) {
     let mut schema = None;
     let mut raws: Vec<RawRow> = Vec::new();
@@ -130,16 +215,20 @@ fn scan(text: &str, errors: &mut Vec<RuleError>) -> (Option<(u64, Scalar)>, Vec<
             continue;
         }
         if trimmed.starts_with('[') {
-            if trimmed == "[[rule]]" {
-                raws.push(RawRow {
+            match Section::parse(trimmed) {
+                Some(section) => raws.push(RawRow {
+                    section,
                     line,
                     fields: Vec::new(),
-                });
-            } else {
-                errors.push(RuleError::new(
+                }),
+                None => errors.push(RuleError::new(
                     line,
-                    format!("未知の section {trimmed}（受理するのは [[rule]] だけ）"),
-                ));
+                    format!(
+                        "未知の section {trimmed}（受理するのは {} と {} だけ）",
+                        Section::Rule.header(),
+                        Section::Account.header()
+                    ),
+                )),
             }
             continue;
         }
@@ -200,7 +289,7 @@ fn scan_pair(
         },
         None => errors.push(RuleError::new(
             line,
-            format!("[[rule]] の外に未知の key {key} が在る"),
+            format!("section の外に未知の key {key} が在る"),
         )),
     }
 }
@@ -354,6 +443,55 @@ fn build_row(raw: &RawRow, errors: &mut Vec<RuleError>) -> Option<RuleRow> {
     Some(row)
 }
 
+/// `[[account]]` 1 つ分から label を組む。欠けや未知 key は全件 `errors` へ積む。
+///
+/// `[[rule]]` と同じ形で**打ち切る**（読めなかった値は scan が 1 件報告済み・key の欠けは
+/// [`check_keys`] が 1 件報告済み）——同じ欠陥を 2 行にしないためである。
+fn build_account(raw: &RawRow, errors: &mut Vec<RuleError>) -> Option<AccountLabel> {
+    let before = errors.len();
+    check_keys(raw, errors);
+    if raw
+        .fields
+        .iter()
+        .any(|(_, value, _)| matches!(value, RawValue::Broken))
+    {
+        return None;
+    }
+    let label = text_field(raw, "label", errors)?;
+    if errors.len() > before {
+        return None;
+    }
+    // **空の label は受けない**（`[[account]]` が 1 件在ることと、その口座を名指せることは
+    // 別である。空を通すと credential の置き場が `accounts/` そのものに解けてしまう）。
+    if label.is_empty() {
+        errors.push(RuleError::new(raw.line, "label が空である".to_owned()));
+        return None;
+    }
+    Some(AccountLabel {
+        label,
+        line: raw.line,
+    })
+}
+
+/// label の重複を集める。
+///
+/// 重複を拒むのは、同じ口座を 2 度読んで同じ枠へ 2 行書く形（`fleet usage` が同じ key の
+/// event を重ねる）を塞ぐためであり、行 id の重複と同じ理由である。
+fn check_duplicate_labels(accounts: &[AccountLabel], errors: &mut Vec<RuleError>) {
+    for (index, account) in accounts.iter().enumerate() {
+        let seen = accounts
+            .iter()
+            .take(index)
+            .any(|earlier| earlier.label == account.label);
+        if seen {
+            errors.push(RuleError::new(
+                account.line,
+                format!("label {} が重複する", account.label),
+            ));
+        }
+    }
+}
+
 /// 未知 key・重複 key・必須 key の欠落を集める。
 ///
 /// 重複を拒むのは、同じ key を 2 度書いたとき先勝ちで後の行が**黙って消える**のを
@@ -361,8 +499,9 @@ fn build_row(raw: &RawRow, errors: &mut Vec<RuleError>) -> Option<RuleRow> {
 /// `enabled = true` の次に `enabled = false` を書くと、不発効の行が有効なまま
 /// 機械に読まれてしまう。
 fn check_keys(raw: &RawRow, errors: &mut Vec<RuleError>) {
+    let known = raw.section.known_keys();
     for (index, (key, _, line)) in raw.fields.iter().enumerate() {
-        if !KNOWN_KEYS.contains(&key.as_str()) {
+        if !known.contains(&key.as_str()) {
             errors.push(RuleError::new(*line, format!("未知の key {key}")));
         }
         if raw
@@ -374,7 +513,7 @@ fn check_keys(raw: &RawRow, errors: &mut Vec<RuleError>) {
             errors.push(RuleError::new(*line, format!("key {key} が重複する")));
         }
     }
-    for want in REQUIRED_KEYS {
+    for want in raw.section.required_keys() {
         if !raw.fields.iter().any(|(key, _, _)| key == want) {
             errors.push(RuleError::new(raw.line, format!("必須 key {want} が無い")));
         }

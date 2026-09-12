@@ -458,6 +458,109 @@ fn rules_kind_parity_every_kind_has_sample() {
     }
 }
 
+/// `[[account]]` を `labels` の順で持つ fixture（`[[rule]]` 1 行の後ろに並べる）。
+fn accounts_fixture(labels: &[&str]) -> String {
+    let mut text = String::from(GOOD);
+    for label in labels {
+        text.push_str(&format!("\n[[account]]\nlabel = \"{label}\"\n"));
+    }
+    text
+}
+
+/// 口座の宣言は**宣言順**で返り、`[[rule]]` 行の読みは 1 つも動かない（歯 (b)(1)(3)）。
+#[test]
+fn rules_accounts_are_returned_in_declaration_order() {
+    let manifest = parsed(&accounts_fixture(&["a3", "a1", "a2"]))
+        .expect("受理されるはずの fixture が拒まれた");
+    let labels: Vec<&str> = manifest
+        .accounts()
+        .iter()
+        .map(vessel::rules::manifest::AccountLabel::label)
+        .collect();
+    assert_eq!(labels, vec!["a3", "a1", "a2"], "書いた順のまま（並べ替えない）");
+    assert_eq!(manifest.rows().len(), 2, "同じ file の [[rule]] 行は 2 行のまま");
+    let row = manifest.get("R-C4-1").expect("R-C4-1 が在る");
+    assert_eq!(row.value, RuleValue::Int(20_000), "規則の値は変わらない");
+    assert_eq!(row.ruling, "r", "裁定の読みも変わらない");
+    let bare = parsed(GOOD).expect("受理されるはずの fixture が拒まれた");
+    assert!(bare.accounts().is_empty(), "[[account]] が無い manifest は 0 件");
+}
+
+/// 口座の宣言の 4 つの壊し方は**それぞれ**行番号つきの error になる（歯 (b)(2)）。
+#[test]
+fn rules_accounts_reject_each_broken_row_with_line_numbers() {
+    let cases: [(&str, &str, u64); 4] = [
+        ("[[account]]\nlabel = \"a1\"\nhost = \"nope\"\n", "未知の key host", 21),
+        ("[[account]]\nlabel = \"\"\n", "label が空である", 19),
+        ("[[account]]\nlabel = \"a1\"\n\n[[account]]\nlabel = \"a1\"\n", "label a1 が重複する", 22),
+        ("[[account]]\n", "必須 key label が無い", 19),
+    ];
+    for (tail, want, line) in cases {
+        let text = format!("{GOOD}\n{tail}");
+        let errors = rejected(&text).expect("拒まれるはずの fixture が受理された");
+        assert_eq!(errors.len(), 1, "件数（{want}）: {errors:?}");
+        let first = errors.first().map(String::as_str).unwrap_or_default();
+        assert!(first.contains(want), "理由: {first}");
+        assert!(first.contains(&format!("line={line}")), "行番号: {first}");
+    }
+}
+
+/// `[[rule]]` の検査は `[[account]]` を混ぜても不変（規則側の必須 key は要り続ける）。
+#[test]
+fn rules_accounts_do_not_loosen_rule_rows() {
+    let text = format!(
+        "{}\n[[rule]]\nid = \"probe\"\nkind = \"CoreLines\"\nvalue = 1\nenabled = true\nruled_at = \"d\"\n",
+        accounts_fixture(&["a1"])
+    );
+    let errors = rejected(&text).expect("拒まれるはずの fixture が受理された");
+    assert_eq!(errors.len(), 1, "件数: {errors:?}");
+    let first = errors.first().map(String::as_str).unwrap_or_default();
+    assert!(first.contains("必須 key ruling"), "理由: {first}");
+    // 逆向き: 口座に規則の key を書いても通らない（key 集合は section ごとである）。
+    let mixed = format!("{GOOD}\n[[account]]\nlabel = \"a1\"\nenabled = true\n");
+    let errors = rejected(&mixed).expect("拒まれるはずの fixture が受理された");
+    let joined = errors.join("\n");
+    assert!(joined.contains("未知の key enabled"), "理由: {joined}");
+}
+
+/// 未知の section は受理しない（受ける section は 2 つちょうど）。
+#[test]
+fn rules_manifest_rejects_unknown_section() {
+    let text = format!("{GOOD}\n[[seat]]\nlabel = \"a1\"\n");
+    let errors = rejected(&text).expect("拒まれるはずの fixture が受理された");
+    let joined = errors.join("\n");
+    assert!(joined.contains("未知の section [[seat]]"), "理由: {joined}");
+    assert!(joined.contains("[[rule]]") && joined.contains("[[account]]"), "受理する形を名指す: {joined}");
+}
+
+/// tracked manifest は口座 5 件と待ち時間の行を持つ（歯 (b)(4)）。
+#[test]
+fn rules_embedded_manifest_declares_five_accounts_and_usage_timeout() {
+    let manifest = match Manifest::embedded() {
+        Ok(found) => found,
+        Err(errors) => {
+            let lines: Vec<String> = errors.iter().map(ToString::to_string).collect();
+            panic!("埋め込み manifest が拒まれた:\n{}", lines.join("\n"))
+        }
+    };
+    let labels: Vec<&str> = manifest
+        .accounts()
+        .iter()
+        .map(vessel::rules::manifest::AccountLabel::label)
+        .collect();
+    assert_eq!(labels.len(), 5, "宣言した口座の母集団: {labels:?}");
+    for label in &labels {
+        assert!(!label.is_empty(), "label は空でない: {labels:?}");
+    }
+    let timeout = manifest.get("fleet.usage_timeout_s").expect("待ち時間の行が在る");
+    assert_eq!(timeout.value, RuleValue::Int(30), "user 裁定 2026-09-12T02:01Z の値");
+    assert_eq!(timeout.kind, RuleKind::UsageTimeoutS, "kind");
+    assert_eq!(timeout.kind.shape(), ValueShape::Int, "値の形は Int（秒）");
+    assert!(timeout.enabled, "既定で効く");
+    assert_eq!(timeout.ruling, "user 2026-09-12T02:01Z", "裁定 id");
+    assert_eq!(timeout.ruled_at, "2026-09-12", "裁定日");
+}
+
 #[test]
 fn rules_embedded_manifest_is_valid_and_covers_all_kinds() {
     let manifest = match Manifest::embedded() {
@@ -470,7 +573,7 @@ fn rules_embedded_manifest_is_valid_and_covers_all_kinds() {
     // **tracked な `rules/manifest.toml` の全行が受理される**（`parse` は 1 件でも違反が
     // 在れば `Err` を返すので、ここに届いた時点で全行が必須 key を持つ）。母集団を額面に
     // 出すのは、行が黙って落ちた周を「全部読めた」と読み違えないためである。
-    assert_eq!(manifest.rows().len(), 30, "埋め込み manifest の行数（母集団）");
+    assert_eq!(manifest.rows().len(), 31, "埋め込み manifest の行数（母集団）");
     for kind in ALL {
         let covered = manifest.rows().iter().any(|row| row.kind == *kind);
         assert!(covered, "{} の行が manifest に無い", kind.as_str());

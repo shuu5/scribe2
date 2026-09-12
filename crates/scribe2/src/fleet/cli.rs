@@ -92,6 +92,12 @@ fn record(args: &[String], dir: &Path) -> Outcome {
 fn build_event(args: &[String]) -> Result<Event, String> {
     let kind_text = required(args, "--kind")?;
     let kind = EventKind::parse(kind_text).ok_or(format!("kind {kind_text} は未知である"))?;
+    // 口座残量の行は**この口から書けない**。`record` は `--run` / `--bead` を要る形なので、
+    // 口座の行をここで許すと便に紐づかない行に便 id が付き、必須 field も揃わない
+    // （書き手は `fleet usage` の 1 本だけである・設計 fleet-usage.md §5）。
+    if kind.is_allowance() {
+        return Err(format!("kind {kind_text} は record では書けない"));
+    }
     let stage = match optional(args, "--stage")? {
         None => None,
         Some(text) => Some(Stage::parse(text).ok_or(format!("stage {text} は未知である"))?),
@@ -117,6 +123,7 @@ fn build_event(args: &[String]) -> Result<Event, String> {
         seat: optional(args, "--seat")?.map(str::to_owned),
         pid,
         detail: optional(args, "--detail")?.map(str::to_owned),
+        allowance: None,
     })
 }
 
