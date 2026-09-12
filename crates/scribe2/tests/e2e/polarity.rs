@@ -126,8 +126,8 @@ fn polarity_lists_the_three_added_guards() {
     }
     assert_eq!(
         ALL.len(),
-        17,
-        "母集団は 17（10 + 3 + 質問の口 1・`s2-07l.115` + land の 2・`s2-07l.124` + 入口の排他 1・`s2-07l.145`）"
+        18,
+        "母集団は 18（10 + 3 + 質問の口 1・`s2-07l.115` + land の 2・`s2-07l.124` + 入口の排他 1・`s2-07l.145` + 追随の回数 1・`s2-07l.146`）"
     );
 }
 
@@ -147,7 +147,7 @@ fn runner_question_guard_is_in_loop_fail_open() {
     let stop = names.iter().position(|name| *name == "guard=runner-stop");
     let question = names.iter().position(|name| *name == "guard=runner-question");
     assert!(matches!((stop, question), (Some(s), Some(q)) if q == s + 1), "runner-stop の直後: {names:?}");
-    assert!(text.lines().last().is_some_and(|line| line.contains(" in-loop=14 ") && line.contains(" fail-open=3")), "集計 +1（.124 の 2 と .145 の 1 を含む）: {text}");
+    assert!(text.lines().last().is_some_and(|line| line.contains(" in-loop=15 ") && line.contains(" fail-open=3")), "集計 +1（.124 の 2・.145 の 1・.146 の 1 を含む）: {text}");
 }
 
 /// 3 クラスを名乗らない契約。
@@ -219,12 +219,34 @@ fn polarity_lists_land_anchor_sync_and_retire_clean_as_in_loop_fail_closed() {
     ] {
         assert!(text.lines().any(|line| line == expected), "一覧に載る: {expected}\n{text}");
     }
-    // 集計は行数から独立に数えた値と一致し、.115 の 11 から 2（+ `.145` の 1）増えている。
+    // 集計は行数から独立に数えた値と一致し、.115 の 11 から 2（+ `.145` の 1・`.146` の 1）増えている。
     let in_loop = text.lines().filter(|line| line.contains(" timing=in-loop ")).count();
-    assert_eq!(in_loop, 14, "in-loop の行数: {text}");
+    assert_eq!(in_loop, 15, "in-loop の行数: {text}");
     let summary = text.lines().last().unwrap_or_default();
-    assert_eq!(count_of(summary, "in-loop"), Some(14), "集計 +2（+ .145 の 1）: {summary}");
-    assert_eq!(count_of(summary, "guards"), Some(17), "母集団 +2（+ .145 の 1）: {summary}");
+    assert_eq!(count_of(summary, "in-loop"), Some(15), "集計 +2（+ .145 / .146 の 各 1）: {summary}");
+    assert_eq!(count_of(summary, "guards"), Some(18), "母集団 +2（+ .145 / .146 の 各 1）: {summary}");
+}
+
+/// 追随の起こし直しの回数判定（`s2-07l.146`・ADR-0019 §2.4・ADR-0014 §2.1「起動を止めうる判定」）は
+/// **in-loop / fail-closed** で一覧に載る。値は境界の定数（`pipe::follow::POLARITY`）で、一覧はそれを
+/// 返すだけ。起こし直しの spawn 自体は既存の `spawn-budget` の口ゆえ、**増える行は 1 本だけ**である。
+#[test]
+fn polarity_lists_follow_retry_as_an_in_loop_fail_closed_guard() {
+    let closed = Polarity { timing: Timing::InLoop, on_failure: OnFailure::FailClosed };
+    assert_eq!(Guard::FollowRetry.polarity(), closed, "回数は起こし直す前に測り、読めない周は起こさない");
+    let follow: Polarity = vessel::pipe::follow::POLARITY;
+    assert_eq!(Guard::FollowRetry.polarity(), follow, "境界の定数と同じ値");
+    let text = output();
+    let expected = "guard=follow-retry timing=in-loop on-failure=fail-closed boundary=pipe::follow::FollowCheck";
+    assert!(text.lines().any(|line| line == expected), "一覧に載る: {expected}\n{text}");
+    // land の 3 判定の**直後**に並ぶ（行為の流れ = land が測る面）。
+    let names: Vec<&str> = text.lines().filter_map(|line| line.split(' ').next()).collect();
+    let worktree = names.iter().position(|name| *name == "guard=land-worktree-clean");
+    let retry = names.iter().position(|name| *name == "guard=follow-retry");
+    assert!(matches!((worktree, retry), (Some(w), Some(r)) if r == w + 1), "land-worktree-clean の直後: {names:?}");
+    // 起こし直しの spawn は既存の口を通る＝`spawn-budget` の行は 1 本のまま。
+    let budgets = text.lines().filter(|line| line.starts_with("guard=spawn-budget ")).count();
+    assert_eq!(budgets, 1, "spawn の口は増えていない: {text}");
 }
 
 /// 入口の write-set 排他（`s2-07l.145`・ADR-0019 §2.1）は **in-loop / fail-closed** で一覧に載り、

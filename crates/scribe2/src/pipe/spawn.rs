@@ -46,6 +46,10 @@ pub struct Launch<'a> {
     /// **回答済みの質問**（`Questioned` からの再 spawn だけが持つ・設計 pipeline-question.md §5）。
     /// 在る周は同じ run の worktree と base を使い、runner の stdin に「回答」節を付ける。
     pub answered: Option<Question>,
+    /// **追随の相手**（main の sha・便の base が main の真の祖先である周だけ・設計
+    /// pipeline-conflict.md §3）。在る周は同じ run の worktree と base を使い、runner の
+    /// stdin に「追随」節を付ける。値の出所は [`super::follow::section`] ただ 1 本である。
+    pub follow: Option<String>,
     /// lock の待ち方。
     pub policy: LockPolicy,
 }
@@ -99,6 +103,11 @@ fn launch_runner(
     base: &str,
 ) -> Outcome {
     let cmd = substitute(launch, worktree, write_set, plugin, base);
+    // **turn 開始時の tip**（ADR-0019 §2.6）。質問の判定はこの点からの commit 数で見る
+    // ——base 基準だと、起こし直しの turn は便が base から持つ commit を数えてしまい、
+    // 質問で止まった turn が常に「commit を作った」側へ倒れる。初回は tip = base ゆえ同値。
+    // 読めない周は base へ落とす（従来の基準）。
+    let tip = git_line(worktree, &["rev-parse", "HEAD"]).unwrap_or_else(|| base.to_owned());
     // **env を 1 つも足さない**: `.env()` / `.envs()` を呼ばず親の env をそのまま継承する。
     // stdout は捕らえる（質問 record の読み面・`gate.rs::ask_lens` と同じ形）。stderr は継承。
     let child = Command::new("sh")
@@ -137,7 +146,7 @@ fn launch_runner(
     // 段の判定を変えない（stderr 1 行で loud）。
     let kept = keep_stdout(launch, rc, &stdout).err();
     let mut outcome = if rc == i32::from(RC_QUESTION) {
-        settle_question(launch, worktree, base, &stdout)
+        settle_question(launch, worktree, &tip, &stdout)
     } else {
         // **rc が 76 でない周は最終行を読まない**（従来どおり）。
         settle(launch, worktree, base, rc)
@@ -165,11 +174,16 @@ fn keep_stdout(launch: &Launch<'_>, rc: i32, stdout: &str) -> Result<(), String>
         .map_err(|err| format!("{} を書けない: {err}", path.display()))
 }
 
-/// runner の stdin に流す本文 = 契約の写し（再読）+ 回答済みの質問が在れば「回答」節。
+/// runner の stdin に流す本文 = 契約の写し（再読）+ 回答済みの質問が在れば「回答」節 +
+/// 追随の相手が在れば「追随」節。**順序は 契約 → 回答 → 追随**である（節の読み方は
+/// `headless/runner.txt` の雛形が持ち、ここは run ごとの値だけを載せる）。
 fn prompt(launch: &Launch<'_>) -> String {
     let mut body = std::fs::read_to_string(contract_path(launch.state_dir, launch.run)).unwrap_or_default();
     if let Some(Question { question, answer: Some(answer), .. }) = &launch.answered {
         body.push_str(&format!("\n## 回答\n- 質問: {question}\n- 回答: {answer}\n"));
+    }
+    if let Some(main) = &launch.follow {
+        body.push_str(&format!("\n## 追随\n- main が {main} へ進んだ\n- `git rebase {main}` を実行し、衝突を解いて `git rebase --continue` で終える\n"));
     }
     body
 }
@@ -202,8 +216,12 @@ fn settle(launch: &Launch<'_>, worktree: &Path, base: &str, rc: i32) -> Outcome 
 ///
 /// record が無い・読めない周は `Failed`（`question-record-missing`・fail-closed）。record と
 /// commit が同時に在る周は質問ではなく実装の失敗（runner の rc を写す）。
-fn settle_question(launch: &Launch<'_>, worktree: &Path, base: &str, stdout: &str) -> Outcome {
-    let commits = commit_count(worktree, base);
+///
+/// 数えるのは **turn で増えた commit**（`tip` 基準・ADR-0019 §2.6）である。初回の turn では
+/// tip = base ゆえ `.115` の判定と同値で、起こし直しの turn では「便が base から持つ commit」を
+/// 数えない——数えると、追随を解けずに質問へ倒れた turn が必ず実装の失敗に化ける。
+fn settle_question(launch: &Launch<'_>, worktree: &Path, tip: &str, stdout: &str) -> Outcome {
+    let commits = commit_count(worktree, tip);
     let (question, about) = match question_record(stdout) {
         Ok(found) if commits == 0 => found,
         Ok(_) => {
@@ -397,12 +415,13 @@ fn copy_tree(from: &Path, to: &Path) -> Result<(), String> {
 
 /// 便の worktree と base を用意する。
 ///
-/// 初回は repo の HEAD を base にして worktree を**切る**。回答済みの質問からの再 spawn
-/// （[`Launch::answered`]）は**同じ run の worktree と記録済みの base を使う**（設計
-/// pipeline-question.md §5: 再開は同じ便・worktree が無い / 別 branch に居る周は断る）。
+/// 初回は repo の HEAD を base にして worktree を**切る**。**再開の turn**——回答済みの質問
+/// （[`Launch::answered`]）か追随（[`Launch::follow`]）を持つ周——は**同じ run の worktree と
+/// 記録済みの base を使う**（設計 pipeline-question.md §5 / pipeline-conflict.md §3: 再開は
+/// 同じ便・worktree が無い / 別 branch に居る周は断る）。
 fn prepare_worktree(launch: &Launch<'_>) -> Result<(PathBuf, String), String> {
     let worktree = worktree_path(launch.repo, launch.run);
-    if launch.answered.is_none() {
+    if launch.answered.is_none() && launch.follow.is_none() {
         let base = super::head_of(launch.repo)
             .ok_or_else(|| format!("{} の HEAD を読めない", launch.repo.display()))?;
         add_worktree(launch.repo, &worktree, launch.run, &base)?;

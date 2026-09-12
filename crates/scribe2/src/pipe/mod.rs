@@ -14,6 +14,7 @@ pub mod approve;
 pub mod cli;
 pub mod contract;
 pub mod declaration;
+pub mod follow;
 pub mod gate;
 pub mod land;
 pub mod refuse;
@@ -231,6 +232,42 @@ pub fn base_of_run(state_dir: &Path, id: &str) -> Option<String> {
                 _ => None,
             }
         })
+}
+
+/// 便の**最後の `RunStage`** が名乗った `detail`（物理順で最後の 1 件）。読めない周は `None`。
+///
+/// 終端の理由（`rebase-empty` / `rebase-conflict` / `main-red` / …）も、衝突を記帳した
+/// `rebase-conflict:<base>..<main>` も、`Failed` / `Implemented` という段だけでは弁別できない。
+/// replay の `Run::detail` は「最後に見た**自由文**」なので使えない——`retire` 自身が書く
+/// `detail=retired` や、段を持たない event の自由文が後から被さって理由が消える。読むのは
+/// 追記だけの log の原本である（[`base_of_run`] と同じ理由）。
+///
+/// 読み手は 3 つ（`retire` の入口・`resume` の弁別・land の追随）で、**判定は 1 本**である。
+pub fn last_stage_detail(state_dir: &Path, id: &str) -> Option<String> {
+    let events = store::read_all(state_dir).ok()?;
+    events
+        .iter()
+        .rev()
+        .find(|event| event.run == id && event.kind == EventKind::RunStage)?
+        .detail
+        .clone()
+}
+
+/// 便の runner が**起きていない**か（最後の `SeatSpawned` より後に `SeatStopped` が在る）。
+///
+/// 起こし直しの前提である（走っている runner の隣にもう 1 つ起こさない）。席の event を
+/// 1 件も持たない便も「起きていない」＝起こしてよい側である。store を読めない周は `None`
+/// ＝呼び手が起こさない側へ倒す（fail-closed）。
+pub fn runner_is_idle(state_dir: &Path, id: &str) -> Option<bool> {
+    let events = store::read_all(state_dir).ok()?;
+    let own: Vec<&Event> = events.iter().filter(|event| event.run == id).collect();
+    let spawned = own.iter().rposition(|event| event.kind == EventKind::SeatSpawned);
+    let stopped = own.iter().rposition(|event| event.kind == EventKind::SeatStopped);
+    Some(match (spawned, stopped) {
+        (None, _) => true,
+        (Some(_), None) => false,
+        (Some(up), Some(down)) => down > up,
+    })
 }
 
 /// 便の最新の質問と、それへの回答（在れば）。

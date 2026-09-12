@@ -1283,11 +1283,20 @@ fn fake_lens(marker: &Path, body: &str) -> String {
 /// この字面の追加だけで、assert の意味は 1 つも動かない——base の loader は `enabled` を
 /// 書いた行も同じ値で読むので、base で新しく赤くなる歯は 1 本も無い。
 // flip-check: retroactive s2-07l.80
+fn write_rules(dir: &Path, name: &str, lens_count: u64, cap: u64) -> PathBuf {
+    write_rules_with_retries(dir, name, lens_count, cap, FOLLOW_RETRIES)
+}
+
+/// 埋め込み manifest の起こし直しの上限（`pipe.follow_retries`）。写しの既定値をここから
+/// 引くのは、**差し替えた周だけが上限の歯である**ことを字面で読めるようにするためである。
+const FOLLOW_RETRIES: u64 = 2;
+
+/// [`write_rules`] に起こし直しの上限を足した形（上限の歯だけが値を振る）。
 #[expect(
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
-fn write_rules(dir: &Path, name: &str, lens_count: u64, cap: u64) -> PathBuf {
+fn write_rules_with_retries(dir: &Path, name: &str, lens_count: u64, cap: u64, retries: u64) -> PathBuf {
     let row = |id: &str, kind: &str, value: u64| {
         format!(
             "[[rule]]\nid = \"{id}\"\nkind = \"{kind}\"\nvalue = {value}\nenabled = true\nruling = \"t\"\nruled_at = \"d\"\n"
@@ -1298,11 +1307,12 @@ fn write_rules(dir: &Path, name: &str, lens_count: u64, cap: u64) -> PathBuf {
     let ceiling = "[[rule]]\nid = \"runner.allowed_commands\"\nkind = \"RunnerAllowedCommands\"\n\
                    value = [\"cargo\", \"git\", \"sh\"]\nenabled = true\nruling = \"t\"\nruled_at = \"d\"\n";
     let body = format!(
-        "schema = 1\n\n{}\n{}\n{}\n{}\n{ceiling}",
+        "schema = 1\n\n{}\n{}\n{}\n{}\n{}\n{ceiling}",
         row("gate.lens_count", "GateLensCount", lens_count),
         row("gate.token_cap", "GateTokenCap", cap),
         row("fleet.lock_retry_ms", "LockRetryMs", 5000),
         row("fleet.lock_stale_ms", "LockStaleMs", 30000),
+        row("pipe.follow_retries", "FollowRetries", retries),
     );
     let path = dir.join(name);
     fs::write(&path, body).expect("tmp manifest を書ける");
@@ -1413,24 +1423,7 @@ fn land_once_with_unreadable_diff(repo: &Path, state: &Path, id: &str) -> Output
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
 fn land_once_with_git_shim(repo: &Path, state: &Path, id: &str, failing: &str, lens: Option<&str>) -> Output {
-    use std::os::unix::fs::PermissionsExt;
-    let bin_dir = state.join("shim-bin");
-    fs::create_dir_all(&bin_dir).expect("shim の dir を作れる");
-    let real = String::from_utf8_lossy(
-        &Command::new("sh").args(["-c", "command -v git"]).output().expect("git を引ける").stdout,
-    )
-    .trim()
-    .to_owned();
-    let shim = bin_dir.join("git");
-    fs::write(
-        &shim,
-        format!(
-            "#!/bin/sh\ncase \"$*\" in *'{failing}'*) exit 1;; esac\nexec '{real}' \"$@\"\n"
-        ),
-    )
-    .expect("shim を書ける");
-    fs::set_permissions(&shim, fs::Permissions::from_mode(0o755)).expect("shim に実行権を付ける");
-    let path = format!("{}:{}", bin_dir.display(), std::env::var("PATH").unwrap_or_default());
+    let path = shim_path(state, "shim-bin", &format!("case \"$*\" in *'{failing}'*) exit 1;; esac"));
     let mut args = vec![
         "pipe".to_owned(), "land".to_owned(), "--run".to_owned(), id.to_owned(),
         "--repo".to_owned(), repo.display().to_string(),
@@ -1440,6 +1433,28 @@ fn land_once_with_git_shim(repo: &Path, state: &Path, id: &str, failing: &str, l
         args.extend(["--lens".to_owned(), cmd.to_owned()]);
     }
     Command::new(bin()).args(args).env("PATH", path).output().expect("binary を起動できる")
+}
+
+/// PATH の先頭に置く偽 git（`script` を先に撃ってから実 git へ exec する）。返すのは PATH の値。
+///
+/// 器の git の呼び方を**現物で**振る唯一の口である（読めない git・書き込む git・壊す git）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn shim_path(state: &Path, name: &str, script: &str) -> String {
+    use std::os::unix::fs::PermissionsExt;
+    let bin_dir = state.join(name);
+    fs::create_dir_all(&bin_dir).expect("shim の dir を作れる");
+    let real = String::from_utf8_lossy(
+        &Command::new("sh").args(["-c", "command -v git"]).output().expect("git を引ける").stdout,
+    )
+    .trim()
+    .to_owned();
+    let shim = bin_dir.join("git");
+    fs::write(&shim, format!("#!/bin/sh\n{script}\nexec '{real}' \"$@\"\n")).expect("shim を書ける");
+    fs::set_permissions(&shim, fs::Permissions::from_mode(0o755)).expect("shim に実行権を付ける");
+    format!("{}:{}", bin_dir.display(), std::env::var("PATH").unwrap_or_default())
 }
 
 /// PASS の gate まで通した便を作る。
@@ -2178,12 +2193,18 @@ fn pipe_land_rebase_empty_does_not_fire_for_distinct_changes() {
     clean(&[&repo, &state]);
 }
 
-/// 追随の rebase が衝突した周は木を戻して `Failed detail=rebase-conflict`。**main は動かない**。
+/// 追随の rebase が衝突した周は木を戻し、**便を終端にせず**衝突を記帳して止まる（`s2-07l.146`・
+/// ADR-0019 §2.2）。この歯が pin するのは「**main は 1 byte も動かない**・木は衝突前へ戻る」で、
+/// 起こし直しそのものは `pipe_follow_` の歯が測る。
+///
+/// `--runner` を渡さない `pipe land` は起こし直せないので rc 1 で断る——衝突の記帳
+/// （`Implemented detail=rebase-conflict:…`）だけは残り、`pipe resume --runner` で続けられる。
 #[test]
 fn pipe_land_rebase_conflict_fails_closed_and_keeps_main() {
     let (repo, state) = repo_with_state();
     let path = write_contract(&repo, &[], &[]);
     let marker = state.join("lens-ran");
+    let base = git(&repo, &["rev-parse", "refs/heads/main"]);
     let id = gated_pass(&repo, &state, &path, &marker);
     let worktree = worktree_of(&repo, &id);
     let head_before = git(&worktree, &["rev-parse", "HEAD"]);
@@ -2201,16 +2222,17 @@ fn pipe_land_rebase_conflict_fails_closed_and_keeps_main() {
         "land", "--run", &id, "--repo", &repo.display().to_string(),
         "--state-dir", &state.display().to_string(), "--lens", &lens,
     ]);
-    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "衝突は rc 1");
-    assert!(stderr_of(&out).contains("rebase が衝突"), "理由: {}", stderr_of(&out));
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "起こし直せない周は rc 1: {}", stderr_of(&out));
+    assert!(stderr_of(&out).contains("--runner が要る"), "理由: {}", stderr_of(&out));
     assert_eq!(git(&repo, &["rev-parse", "refs/heads/main"]), moved, "main は 1 byte も動かない");
     assert_eq!(git(&worktree, &["rev-parse", "HEAD"]), head_before, "木は衝突前へ戻る");
     assert_eq!(git(&worktree, &["rev-parse", "--abbrev-ref", "HEAD"]), branch_before, "branch に居る（rebase 途中で detach していない）");
     assert!(git(&worktree, &["status", "--porcelain"]).is_empty(), "衝突の残骸が無い");
     let log = fs::read_to_string(state.join("fleet").join("events.jsonl")).expect("event log");
-    assert!(log.contains("rebase-conflict"), "終端の理由が event に残る\n{log}");
-    assert!(!log.contains("rebase:"), "追随の event は書かない（追随できていない）\n{log}");
-    assert!(show_line(&repo, &state, &id).contains("stage=Failed"), "段は Failed");
+    assert!(log.contains(&format!("rebase-conflict:{base}..{moved}")), "衝突が event に残る\n{log}");
+    assert!(!log.contains("\"Failed\""), "便を終端にしない\n{log}");
+    assert!(!log.contains("\"detail\":\"rebase:"), "追随の event は書かない（追随できていない）\n{log}");
+    assert!(show_line(&repo, &state, &id).contains("stage=Implemented"), "段は Implemented（起こし直せる側）");
     clean(&[&repo, &state]);
 }
 
@@ -3900,32 +3922,22 @@ fn pipe_retire_rebase_empty_folds_failed_run_and_keeps_stage() {
     clean(&[&repo, &state]);
 }
 
-/// 負例: `Failed` でも理由が `rebase-empty` でない便（`rebase-conflict`）は畳まない
-/// （rc 1・worktree 不動・event 0 増）。衝突した木は `--abort` で clean へ戻っているので、
-/// この rc 1 は **clean 検査ではなく終端の理由**を見ている（「断ってから解いて通す」形は
-/// 上の歯が担保する）。
+/// 負例: `Failed` でも畳める理由（`rebase-empty` / `rebase-conflict`）でない便——ここでは
+/// **main の実測が赤かった便**（`main-red`）——は畳まない（rc 1・worktree 不動・event 0 増）。
+/// 木は clean のままなので、この rc 1 は **clean 検査ではなく終端の理由**を見ている
+/// （「断ってから解いて通す」形は上の歯が担保する）。
 #[test]
 fn pipe_retire_rebase_empty_refuses_other_failed_reasons() {
     let (repo, state) = repo_with_state();
-    let path = write_contract(&repo, &[], &[]);
+    // 1 回目（worktree）は緑・2 回目（main の実測）は赤になる verify 行＝`main-red` で終端する。
+    let path = write_contract(&repo, &["verify"], &[r#"verify = ["sh verify-once.sh"]"#]);
     let marker = state.join("lens-ran");
     let id = gated_pass(&repo, &state, &path, &marker);
-    // 別便が **同じ file の同じ末尾** へ別の行を足す（runner は `echo x >> src/lib.rs`）。
-    let lib = repo.join("src").join("lib.rs");
-    let mut text = fs::read_to_string(&lib).expect("seed を読める");
-    text.push_str("y\n");
-    fs::write(&lib, text).expect("別便の変更を書ける");
-    git(&repo, &["add", "-A"]);
-    git(&repo, &["commit", "-q", "-m", "other"]);
-    let lens = fake_lens(&marker, &lens_verdict("PASS"));
-    let conflicted = run_pipe(&[
-        "land", "--run", &id, "--repo", &repo.display().to_string(),
-        "--state-dir", &state.display().to_string(), "--lens", &lens,
-    ]);
-    assert_eq!(conflicted.status.code(), Some(i32::from(RC_REFUSED)), "衝突は rc 1");
+    let red = land_once(&repo, &state, &id);
+    assert_eq!(red.status.code(), Some(i32::from(RC_REFUSED)), "main が赤い land は rc 1: {}", stderr_of(&red));
     assert!(show_line(&repo, &state, &id).contains("stage=Failed"), "終端の段は Failed");
     let live = worktree_of(&repo, &id);
-    assert!(git(&live, &["status", "--porcelain"]).is_empty(), "木は clean へ戻っている");
+    assert!(git(&live, &["status", "--porcelain"]).is_empty(), "木は clean のまま");
 
     let before = event_count(&state);
     let out = retire_once(&repo, &state, &id);
@@ -5055,5 +5067,625 @@ fn pipe_refuse_stop_run_stops_the_live_seat_of_the_run() {
         .collect();
     assert!(kinds.contains(&EventKind::SeatStopped), "席にも記帳する: {kinds:?}");
     assert!(kinds.contains(&EventKind::RunStopped), "便にも記帳する: {kinds:?}");
+    clean(&[&repo, &state]);
+}
+
+// ───── 追随の衝突を runner が解く（`s2-07l.146`・ADR-0019 §2.2 / §2.4 / §2.6・接頭辞 `pipe_follow_`） ─────
+
+/// 偽 runner の置き場（呼出回数と turn ごとの stdin）。
+fn stub_dir(state: &Path) -> PathBuf {
+    state.join("stub")
+}
+
+/// 偽 runner が起こされた回数（file が無ければ 0）。**「起こされなかった」を効果で測る**面である。
+fn stub_calls(state: &Path) -> usize {
+    fs::read_to_string(stub_dir(state).join("calls"))
+        .map(|text| text.lines().count())
+        .unwrap_or(0)
+}
+
+/// n turn 目（1 始まり）に渡された stdin の全文（無ければ空）。
+fn stub_stdin(state: &Path, turn: usize) -> String {
+    fs::read_to_string(stub_dir(state).join(format!("stdin-{turn}"))).unwrap_or_default()
+}
+
+/// 偽 runner（実行 file）の runner cmd。
+///
+/// turn 1 は契約の実装（`src/lib.rs` の末尾へ `x` を足して commit）で、turn 2 以降は `second` の
+/// 本文＝**追随の解き方をここで振る**。どの turn も呼出回数と stdin を置き場へ写すので、
+/// 「起こされたか」「何を渡されたか」を rc でなく効果で測れる。`$SHA` には stdin の「追随」節が
+/// 名指す main の sha が入る（節が無い周は空＝rebase が落ちて歯が赤くなる＝空虚にならない）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn stub_runner(state: &Path, second: &str) -> String {
+    let dir = stub_dir(state);
+    fs::create_dir_all(&dir).expect("stub の置き場を作れる");
+    let path = state.join("stub-runner.sh");
+    let body = format!(
+        "#!/bin/sh\nD='{}'\nprintf 'call\\n' >> \"$D/calls\"\nN=$(wc -l < \"$D/calls\" | tr -d ' ')\n\
+         cat > \"$D/stdin-$N\"\nif [ \"$N\" = 1 ]; then\nprintf 'x\\n' >> src/lib.rs\ngit add -A\n\
+         git commit -q -m runner\nexit 0\nfi\n\
+         SHA=$(sed -n 's/^- main が \\(.*\\) へ進んだ$/\\1/p' \"$D/stdin-$N\" | head -1)\n{second}\n",
+        dir.display()
+    );
+    fs::write(&path, body).expect("stub を書ける");
+    format!("sh {}", path.display())
+}
+
+/// turn 2 の本文: 衝突を write-set の中で解いて `git rebase --continue` で終える。
+const RESOLVE: &str = "if git rebase \"$SHA\"; then exit 0; fi\nprintf '// seed\\ny\\nx\\n' > src/lib.rs\ngit add src/lib.rs\nGIT_EDITOR=true git rebase --continue";
+
+/// turn 2 の本文: 解かずに木を戻して終わる（次の land でも同じ衝突が起きる）。
+const KEEP_CONFLICT: &str = "git rebase \"$SHA\" || git rebase --abort\nexit 0";
+
+/// turn 2 の本文: 木を戻して質問 record で止まる（**commit を作らない**）。
+const ABORT_AND_ASK: &str = "git rebase \"$SHA\" || git rebase --abort\nprintf '%s\\n' '{\"question\":\"追随の衝突を解けない\",\"about\":\"write-set\"}'\nexit 76";
+
+/// turn 2 の本文: commit を作ってから質問 record を出す（質問ではなく実装の失敗）。
+const COMMIT_THEN_ASK: &str = "git rebase \"$SHA\" || git rebase --abort\nprintf 'z\\n' >> src/lib.rs\ngit add -A\ngit commit -q -m extra\nprintf '%s\\n' '{\"question\":\"追随の衝突を解けない\",\"about\":\"write-set\"}'\nexit 76";
+
+/// turn 2 の本文: rebase の途中のまま turn を終える（木が clean でない）。
+const LEAVE_MID_REBASE: &str = "git rebase \"$SHA\" || true\nexit 0";
+
+/// main を**便が触った行の隣**へ進める（追随が必ず衝突する形）。返すのは動いた後の main。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn move_main_into_conflict(repo: &Path) -> String {
+    let lib = repo.join("src").join("lib.rs");
+    let mut text = fs::read_to_string(&lib).expect("seed を読める");
+    text.push_str("y\n");
+    fs::write(&lib, text).expect("別便の変更を書ける");
+    git(repo, &["add", "-A"]);
+    git(repo, &["commit", "-q", "-m", "other"]);
+    git(repo, &["rev-parse", "refs/heads/main"])
+}
+
+/// 追随が**必ず衝突する**便を 1 本作る（偽 runner の turn 1 で実装 → PASS の gate → main が
+/// 同じ行の隣へ進む）。返すのは 便の id・便の base・動いた main の sha。
+fn conflicting_run(repo: &Path, state: &Path, marker: &Path, runner: &str) -> (String, String, String) {
+    let base = git(repo, &["rev-parse", "refs/heads/main"]);
+    let path = write_contract(repo, &[], &[]);
+    let id = intake(repo, state, &path);
+    let spawned = run_pipe(&[
+        "spawn", "--run", &id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(), "--runner", runner,
+    ]);
+    assert_eq!(spawned.status.code(), Some(i32::from(RC_OK)), "turn 1 の spawn: {}", stderr_of(&spawned));
+    let lens = fake_lens(marker, &lens_verdict("PASS"));
+    let gated = gate_once(repo, state, &id, Some(&lens));
+    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "PASS の gate: {}", stderr_of(&gated));
+    let moved = move_main_into_conflict(repo);
+    (id, base, moved)
+}
+
+/// land を 1 回撃つ（`extra` で `--runner` / `--lens` / `--rules` を足す）。
+fn land_extra(repo: &Path, state: &Path, id: &str, extra: &[&str]) -> Output {
+    let mut args: Vec<String> = ["land", "--run", id].iter().map(|item| (*item).to_owned()).collect();
+    args.extend([
+        "--repo".to_owned(), repo.display().to_string(),
+        "--state-dir".to_owned(), state.display().to_string(),
+    ]);
+    args.extend(extra.iter().map(|item| (*item).to_owned()));
+    let borrowed: Vec<&str> = args.iter().map(String::as_str).collect();
+    run_pipe(&borrowed)
+}
+
+/// 便の worktree が rebase の途中か（`rebase-merge` / `rebase-apply` の有無を現物で見る）。
+fn mid_rebase(repo: &Path, id: &str) -> bool {
+    let worktree = worktree_of(repo, id);
+    let git_dir = PathBuf::from(git(&worktree, &["rev-parse", "--absolute-git-dir"]));
+    git_dir.join("rebase-merge").exists() || git_dir.join("rebase-apply").exists()
+}
+
+/// 便の `RunStage` の `(段, detail)` の列。
+fn stages(state: &Path, id: &str) -> Vec<(Option<Stage>, Option<String>)> {
+    trail(state, id)
+        .into_iter()
+        .filter(|(kind, _, _)| *kind == EventKind::RunStage)
+        .map(|(_, stage, detail)| (stage, detail))
+        .collect()
+}
+
+/// 衝突の記帳（`Implemented detail=rebase-conflict:<range>`）の件数。
+fn conflict_count(state: &Path, id: &str) -> usize {
+    stages(state, id)
+        .into_iter()
+        .filter(|(stage, detail)| {
+            *stage == Some(Stage::Implemented)
+                && detail.as_deref().is_some_and(|found| found.starts_with("rebase-conflict:"))
+        })
+        .count()
+}
+
+/// 衝突の記帳を**手で 1 件積む**（回数が replay の導出であることを測る fixture）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn record_conflict(state: &Path, id: &str, range: &str) {
+    let out = Command::new(bin())
+        .args(["fleet", "record", "--kind", "RunStage", "--stage", "Implemented", "--run", id,
+               "--bead", "s2-2e5", "--detail", &format!("rebase-conflict:{range}"), "--state-dir"])
+        .arg(state)
+        .output()
+        .expect("binary を起動できる");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "fleet record: {}", stderr_of(&out));
+}
+
+/// 衝突は**便を終端にしない**（設計 pipeline-conflict.md §3 手順 1〜2）。木を戻して
+/// `RunStage Implemented detail=rebase-conflict:<base>..<main>` を **1 件**記帳し、`Failed` は
+/// 1 件も書かない。main は 1 byte も動かず、worktree は rebase の途中でなく clean である。
+#[test]
+fn pipe_follow_records_the_conflict_without_failing_the_run() {
+    let (repo, state) = repo_with_state();
+    let marker = state.join("lens-ran");
+    let runner = stub_runner(&state, KEEP_CONFLICT);
+    let (id, base, moved) = conflicting_run(&repo, &state, &marker, &runner);
+    let out = land_extra(&repo, &state, &id, &["--runner", &runner]);
+    assert_eq!(
+        out.status.code(),
+        Some(i32::from(RC_INCONCLUSIVE)),
+        "起こし直した周は rc 3（次の段を名乗って止まる）: {}",
+        stderr_of(&out)
+    );
+    assert!(stdout_of(&out).contains(&format!("run={id} next=gate")), "次に撃つ段: {}", stdout_of(&out));
+    assert_eq!(conflict_count(&state, &id), 1, "衝突の記帳は 1 件: {:?}", stages(&state, &id));
+    assert!(
+        stages(&state, &id).iter().any(|(stage, detail)| *stage == Some(Stage::Implemented)
+            && detail.as_deref() == Some(format!("rebase-conflict:{base}..{moved}").as_str())),
+        "detail は base と main を名乗る: {:?}",
+        stages(&state, &id)
+    );
+    assert!(
+        !stages(&state, &id).iter().any(|(stage, _)| *stage == Some(Stage::Failed)),
+        "便を終端にしない: {:?}",
+        stages(&state, &id)
+    );
+    assert_eq!(git(&repo, &["rev-parse", "refs/heads/main"]), moved, "main は 1 byte も動かない");
+    assert!(!mid_rebase(&repo, &id), "木は rebase の途中でない");
+    assert!(git(&worktree_of(&repo, &id), &["status", "--porcelain"]).is_empty(), "木は clean");
+    assert_eq!(stub_calls(&state), 2, "実装役を 1 回起こし直した");
+    clean(&[&repo, &state]);
+}
+
+/// 起こし直しの turn の stdin は、契約の写しの**後ろ**に「## 追随」節を持ち、main の sha を
+/// 名指す（設計 §3 手順 4）。turn 1 の stdin には節が無い（不在が既定）。
+#[test]
+fn pipe_follow_second_turn_receives_the_follow_section() {
+    let (repo, state) = repo_with_state();
+    let marker = state.join("lens-ran");
+    let runner = stub_runner(&state, KEEP_CONFLICT);
+    let (id, _base, moved) = conflicting_run(&repo, &state, &marker, &runner);
+    let out = land_extra(&repo, &state, &id, &["--runner", &runner]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_INCONCLUSIVE)), "{}", stderr_of(&out));
+    let first = stub_stdin(&state, 1);
+    assert!(first.contains("goal = "), "turn 1 も契約の本文を受ける: {first}");
+    assert!(!first.contains("## 追随"), "追随の無い turn には節が付かない: {first}");
+    let second = stub_stdin(&state, 2);
+    assert!(second.contains("## 追随"), "起こし直しの turn に節が付く: {second}");
+    assert!(second.contains(&moved), "節は main の sha を名指す: {second}");
+    let contract_at = second.find("goal = ");
+    let follow_at = second.find("## 追随");
+    assert!(
+        matches!((contract_at, follow_at), (Some(c), Some(f)) if c < f),
+        "順序は 契約 → 追随: {second}"
+    );
+    clean(&[&repo, &state]);
+}
+
+/// 回答済みの質問を持つ便の起こし直しは、stdin に「回答」と「追随」を**この順**で持つ
+/// （設計 §3 手順 4 の「契約 → 回答 → 追随」）。
+#[test]
+fn pipe_follow_answered_question_comes_before_the_follow_section() {
+    let (repo, state) = repo_with_state();
+    let marker = state.join("lens-ran");
+    let runner = stub_runner(&state, KEEP_CONFLICT);
+    let id = questioned(&repo, &state);
+    let answered = run_pipe(&[
+        "answer", "--run", &id, "--words", "verify は 1 行目だけを撃つ",
+        "--state-dir", &state.display().to_string(),
+    ]);
+    assert_eq!(answered.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&answered));
+    let resumed = run_pipe(&[
+        "resume", "--run", &id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(), "--runner", &runner,
+    ]);
+    assert_eq!(resumed.status.code(), Some(i32::from(RC_OK)), "回答の後の turn: {}", stderr_of(&resumed));
+    let lens = fake_lens(&marker, &lens_verdict("PASS"));
+    let gated = gate_once(&repo, &state, &id, Some(&lens));
+    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "PASS の gate: {}", stderr_of(&gated));
+    move_main_into_conflict(&repo);
+    let out = land_extra(&repo, &state, &id, &["--runner", &runner]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_INCONCLUSIVE)), "{}", stderr_of(&out));
+    let second = stub_stdin(&state, 2);
+    let answer_at = second.find("## 回答");
+    let follow_at = second.find("## 追随");
+    assert!(
+        matches!((answer_at, follow_at), (Some(a), Some(f)) if a < f),
+        "順序は 回答 → 追随: {second}"
+    );
+    assert!(second.contains("verify は 1 行目だけを撃つ"), "回答の逐語も運ぶ: {second}");
+    clean(&[&repo, &state]);
+}
+
+/// 実装役が衝突を解いた周: 器が**実測した merge-base**で base を進め（`rebase:<old>..<new>`）、
+/// 続きの gate が新しい base で PASS（先着便の file が write-set の外に載らない）→ land で
+/// `Landed`。起こし直しは 1 回だけ（3 turn 目は起こされない）。
+#[test]
+fn pipe_follow_resolved_conflict_advances_the_base_and_lands() {
+    let (repo, state) = repo_with_state();
+    let marker = state.join("lens-ran");
+    let runner = stub_runner(&state, RESOLVE);
+    let (id, base, moved) = conflicting_run(&repo, &state, &marker, &runner);
+    let out = land_extra(&repo, &state, &id, &["--runner", &runner]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_INCONCLUSIVE)), "起こし直した周は rc 3: {}", stderr_of(&out));
+    assert!(
+        stdout_of(&out).contains(&format!("run={id} rebase={base}..{moved}")),
+        "新しい base を名乗る: {}",
+        stdout_of(&out)
+    );
+    assert!(
+        stages(&state, &id).iter().any(|(stage, detail)| *stage == Some(Stage::Implemented)
+            && detail.as_deref() == Some(format!("rebase:{base}..{moved}").as_str())),
+        "器が base を進めた記帳: {:?}",
+        stages(&state, &id)
+    );
+    assert!(!mid_rebase(&repo, &id), "木は rebase の途中でない");
+    // 続きは gate から（新しい base の 2 点 diff は write-set の中だけ）。
+    fs::remove_file(&marker).ok();
+    let lens = fake_lens(&marker, &lens_verdict("PASS"));
+    let gated = gate_once(&repo, &state, &id, Some(&lens));
+    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "新しい base の gate は PASS: {}", stderr_of(&gated));
+    let landed = land_extra(&repo, &state, &id, &["--runner", &runner]);
+    assert_eq!(landed.status.code(), Some(i32::from(RC_OK)), "land: {}", stderr_of(&landed));
+    let new = git(&repo, &["rev-parse", "refs/heads/main"]);
+    assert_eq!(
+        git(&repo, &["show", &format!("{new}:src/lib.rs")]),
+        "// seed\ny\nx",
+        "先着便の行と便の行が両方 main に載る"
+    );
+    let landings = trail(&state, &id)
+        .into_iter()
+        .filter(|(kind, stage, _)| *kind == EventKind::RunDone && *stage == Some(Stage::Landed))
+        .count();
+    assert_eq!(landings, 1, "Landed は 1 件");
+    assert_eq!(stub_calls(&state), 2, "起こし直しは 1 回だけ");
+    clean(&[&repo, &state]);
+}
+
+/// turn の間に main がさらに進んだ周でも、**書く値は実測した merge-base**であって現在の main
+/// ではない（2 点 diff に main の新しい commit の逆向きを載せない・設計 §3 手順 5）。
+#[test]
+fn pipe_follow_records_the_measured_merge_base_not_the_moving_main() {
+    let (repo, state) = repo_with_state();
+    let marker = state.join("lens-ran");
+    let racing = format!("{RESOLVE}\ngit -C '{}' commit -q --allow-empty -m racing", repo.display());
+    let runner = stub_runner(&state, &racing);
+    let (id, base, moved) = conflicting_run(&repo, &state, &marker, &runner);
+    let out = land_extra(&repo, &state, &id, &["--runner", &runner]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_INCONCLUSIVE)), "{}", stderr_of(&out));
+    let raced = git(&repo, &["rev-parse", "refs/heads/main"]);
+    assert_ne!(raced, moved, "turn の中で main がさらに進んでいる");
+    let details: Vec<String> = stages(&state, &id)
+        .into_iter()
+        .filter_map(|(_, detail)| detail)
+        .filter(|detail| detail.starts_with("rebase:"))
+        .collect();
+    assert_eq!(
+        details,
+        vec![format!("rebase:{base}..{moved}")],
+        "書く値は merge-base（現在の main {raced} でない）"
+    );
+    clean(&[&repo, &state]);
+}
+
+/// 上限（fixture の rules で 1 回）まで起こし直し、2 回目の衝突で終端した便を作る。
+/// 返すのは 便の id・動いた main の sha・偽 runner の cmd。
+fn exhausted_run(repo: &Path, state: &Path, marker: &Path) -> (String, String) {
+    let runner = stub_runner(state, KEEP_CONFLICT);
+    let (id, _base, moved) = conflicting_run(repo, state, marker, &runner);
+    let rules = write_rules_with_retries(state, "rules-retry-1.toml", 1, 1_000_000, 1);
+    let rules_arg = rules.display().to_string();
+    let first = land_extra(repo, state, &id, &["--runner", &runner, "--rules", &rules_arg]);
+    assert_eq!(
+        first.status.code(),
+        Some(i32::from(RC_INCONCLUSIVE)),
+        "上限の内は起こし直す: {}",
+        stderr_of(&first)
+    );
+    fs::remove_file(marker).ok();
+    let lens = fake_lens(marker, &lens_verdict("PASS"));
+    let gated = gate_with_rules(repo, state, &id, &rules, &lens);
+    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "撃ち直しの gate: {}", stderr_of(&gated));
+    let second = land_extra(repo, state, &id, &["--runner", &runner, "--rules", &rules_arg]);
+    assert_eq!(
+        second.status.code(),
+        Some(i32::from(RC_REFUSED)),
+        "上限に達した周は rc 1: {}",
+        stderr_of(&second)
+    );
+    (id, moved)
+}
+
+/// 上限の歯（値 1 ＝最大 1 回起こし直す）: 2 回目の衝突で `Failed detail=rebase-conflict` になり、
+/// runner は 3 turn 目に起こされない。main は動かない。
+#[test]
+fn pipe_follow_stops_retrying_at_the_limit() {
+    let (repo, state) = repo_with_state();
+    let marker = state.join("lens-ran");
+    let (id, moved) = exhausted_run(&repo, &state, &marker);
+    assert_eq!(
+        stages(&state, &id).last().cloned(),
+        Some((Some(Stage::Failed), Some("rebase-conflict".to_owned()))),
+        "終端の理由: {:?}",
+        stages(&state, &id)
+    );
+    assert_eq!(conflict_count(&state, &id), 2, "衝突は 2 件記帳された: {:?}", stages(&state, &id));
+    assert_eq!(stub_calls(&state), 2, "3 turn 目は起こされない");
+    assert_eq!(git(&repo, &["rev-parse", "refs/heads/main"]), moved, "main は動かない");
+    assert!(show_line(&repo, &state, &id).contains("stage=Failed"), "段は Failed");
+    clean(&[&repo, &state]);
+}
+
+/// 上限に達して終端した便（`Failed detail=rebase-conflict`）は `pipe retire` で畳める
+/// （move・元 dir 不在・retired/ に在る・**残す event の段は終端のまま**・設計 §5）。
+#[test]
+fn pipe_follow_retire_folds_an_exhausted_run_and_keeps_the_stage() {
+    let (repo, state) = repo_with_state();
+    let marker = state.join("lens-ran");
+    let (id, moved) = exhausted_run(&repo, &state, &marker);
+    let live = worktree_of(&repo, &id);
+    assert!(live.exists(), "終端した便の worktree は残る（retire の入口の前提）");
+    let out = retire_once(&repo, &state, &id);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "rebase-conflict の便も畳める: {}", stderr_of(&out));
+    let retired = repo.join(".worktrees").join("scribe2").join("retired").join(&id);
+    assert!(retired.join("src").join("lib.rs").exists(), "中身ごと運ぶ（消さない）");
+    assert!(!live.exists(), "元の場所が空く");
+    assert_eq!(
+        stages(&state, &id).last().cloned(),
+        Some((Some(Stage::Failed), Some("retired".to_owned()))),
+        "残す event の段は終端のまま: {:?}",
+        stages(&state, &id)
+    );
+    assert_eq!(git(&repo, &["rev-parse", "refs/heads/main"]), moved, "main は 1 byte も動かない");
+    clean(&[&repo, &state]);
+}
+
+/// `Gated` で verdict が FAIL の便（判定に届いた終端・`.132` の memo）も畳める。残す event の
+/// 段は `Gated` のままで、`Landed` へ動かさない。
+#[test]
+fn pipe_follow_retire_folds_a_gated_fail_run_and_keeps_the_stage() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let marker = state.join("lens-ran");
+    let id = implemented(&repo, &state, &path);
+    let lens = fake_lens(&marker, &lens_verdict("FAIL"));
+    let gated = gate_once(&repo, &state, &id, Some(&lens));
+    assert_eq!(gated.status.code(), Some(i32::from(RC_REFUSED)), "FAIL の gate は rc 1: {}", stderr_of(&gated));
+    let live = worktree_of(&repo, &id);
+    let out = retire_once(&repo, &state, &id);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "Gated(FAIL) の便も畳める: {}", stderr_of(&out));
+    assert!(!live.exists(), "元の場所が空く");
+    assert!(
+        repo.join(".worktrees").join("scribe2").join("retired").join(&id).exists(),
+        "retired/ に在る"
+    );
+    assert_eq!(
+        stages(&state, &id).last().cloned(),
+        Some((Some(Stage::Gated), Some("retired".to_owned()))),
+        "段は Gated のまま: {:?}",
+        stages(&state, &id)
+    );
+    assert!(show_line(&repo, &state, &id).contains("stage=Gated"), "畳んだ後も段は Gated");
+    clean(&[&repo, &state]);
+}
+
+/// `resume` は「最後の段が `Implemented` ∧ 最後の detail が `rebase-conflict:` ∧ runner が
+/// 起きていない」周に**同じ起こし直し**を撃つ。`--runner` の無い周は rc 1 で events.jsonl が
+/// byte 不変（衝突の記帳は land の時点で済んでいる）。detail が `rebase-conflict:` でない
+/// `Implemented` が従来どおり gate へ行くことは
+/// `pipe_resume_continues_from_implemented_in_new_process` が測る。
+#[test]
+fn pipe_follow_resume_needs_a_runner_and_continues_the_retry() {
+    let (repo, state) = repo_with_state();
+    let marker = state.join("lens-ran");
+    let runner = stub_runner(&state, RESOLVE);
+    let (id, base, moved) = conflicting_run(&repo, &state, &marker, &runner);
+    // `--runner` を渡さない land は衝突を記帳して断る（起こし直せない）。
+    let bare_land = land_extra(&repo, &state, &id, &[]);
+    assert_eq!(bare_land.status.code(), Some(i32::from(RC_REFUSED)), "起こし直せない land は rc 1");
+    assert!(stderr_of(&bare_land).contains("--runner が要る"), "理由: {}", stderr_of(&bare_land));
+    assert_eq!(stub_calls(&state), 1, "起こし直していない");
+    assert_eq!(conflict_count(&state, &id), 1, "衝突の記帳は残る");
+    // `--runner` の無い resume は 1 byte も書かない。
+    let before = events_bytes(&state);
+    let bare = run_pipe(&[
+        "resume", "--run", &id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(),
+    ]);
+    assert_eq!(bare.status.code(), Some(i32::from(RC_REFUSED)), "--runner 無しの resume は rc 1");
+    assert_eq!(events_bytes(&state), before, "events.jsonl は byte 不変");
+    assert_eq!(stub_calls(&state), 1, "runner を起こさない");
+    // `--runner` 付きの resume は land の衝突と同じ turn を撃つ。
+    let out = run_pipe(&[
+        "resume", "--run", &id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(), "--runner", &runner,
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "resume の起こし直し: {}", stderr_of(&out));
+    assert_eq!(stub_calls(&state), 2, "resume が実装役を起こした");
+    assert!(
+        stdout_of(&out).contains(&format!("run={id} rebase={base}..{moved}")),
+        "resume の turn も base を進める: {}",
+        stdout_of(&out)
+    );
+    assert!(show_line(&repo, &state, &id).contains("stage=Implemented"), "段は Implemented（次は gate）");
+    clean(&[&repo, &state]);
+}
+
+/// 追随を解けずに**木を戻して質問 record で止まった** turn は `Questioned` である
+/// （ADR-0019 §2.6: 判定は turn 開始時の tip 基準＝便が base から持つ commit を数えない）。
+#[test]
+fn pipe_follow_question_after_abort_stops_at_questioned() {
+    let (repo, state) = repo_with_state();
+    let marker = state.join("lens-ran");
+    let runner = stub_runner(&state, ABORT_AND_ASK);
+    let (id, base, moved) = conflicting_run(&repo, &state, &marker, &runner);
+    let out = land_extra(&repo, &state, &id, &["--runner", &runner]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_BLOCKED)), "質問は rc 3: {}", stderr_of(&out));
+    assert!(show_line(&repo, &state, &id).contains("stage=Questioned"), "段は Questioned");
+    let worktree = worktree_of(&repo, &id);
+    assert!(git(&worktree, &["status", "--porcelain"]).is_empty(), "木は clean");
+    assert!(!mid_rebase(&repo, &id), "木は rebase の途中でない");
+    assert_eq!(
+        git(&worktree, &["rev-list", "--count", &format!("{base}..HEAD")]),
+        "1",
+        "便が base から持つ commit は在る（turn で増えていないだけ）"
+    );
+    assert_eq!(git(&repo, &["rev-parse", "refs/heads/main"]), moved, "main は動かない");
+    assert!(
+        trail(&state, &id).iter().any(|(kind, _, _)| *kind == EventKind::QuestionRaised),
+        "質問の逐語が残る"
+    );
+    clean(&[&repo, &state]);
+}
+
+/// 負例: 起こし直しの turn で **commit を作ってから**質問 record を出した周は質問ではなく
+/// 実装の失敗である（`Failed detail=runner-rc:76,commits:1`）。
+#[test]
+fn pipe_follow_commit_before_question_is_a_failure() {
+    let (repo, state) = repo_with_state();
+    let marker = state.join("lens-ran");
+    let runner = stub_runner(&state, COMMIT_THEN_ASK);
+    let (id, _base, _moved) = conflicting_run(&repo, &state, &marker, &runner);
+    let out = land_extra(&repo, &state, &id, &["--runner", &runner]);
+    assert_ne!(out.status.code(), Some(i32::from(RC_OK)), "land はしない: {}", stdout_of(&out));
+    assert_eq!(
+        stages(&state, &id).last().cloned(),
+        Some((Some(Stage::Failed), Some("runner-rc:76,commits:1".to_owned()))),
+        "turn で作った commit を数える: {:?}",
+        stages(&state, &id)
+    );
+    assert!(
+        !trail(&state, &id).iter().any(|(kind, _, _)| *kind == EventKind::QuestionRaised),
+        "質問は記帳しない"
+    );
+    clean(&[&repo, &state]);
+}
+
+/// runner が **rebase の途中で** turn を終えた周は `Failed detail=rebase-dirty` で終端する
+/// （clean 前提を守る・fail-closed・設計 §3 手順 6）。
+#[test]
+fn pipe_follow_mid_rebase_turn_fails_dirty() {
+    let (repo, state) = repo_with_state();
+    let marker = state.join("lens-ran");
+    let runner = stub_runner(&state, LEAVE_MID_REBASE);
+    let (id, _base, moved) = conflicting_run(&repo, &state, &marker, &runner);
+    let out = land_extra(&repo, &state, &id, &["--runner", &runner]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "rebase の途中は rc 1: {}", stderr_of(&out));
+    assert_eq!(
+        stages(&state, &id).last().cloned(),
+        Some((Some(Stage::Failed), Some("rebase-dirty".to_owned()))),
+        "終端の理由: {:?}",
+        stages(&state, &id)
+    );
+    assert!(mid_rebase(&repo, &id), "木は rebase の途中のまま（器は触らない）");
+    assert_eq!(git(&repo, &["rev-parse", "refs/heads/main"]), moved, "main は動かない");
+    clean(&[&repo, &state]);
+}
+
+/// 回数は **replay の導出値**である（別の状態 file を持たない・C3）。衝突の `RunStage` を手で
+/// 2 件積んだ便は、上限 2（埋め込みの値）の下で次の衝突が終端になり、置き場に新しい file は
+/// 1 つも増えない。
+#[test]
+fn pipe_follow_counts_the_retries_from_the_event_log() {
+    let (repo, state) = repo_with_state();
+    let marker = state.join("lens-ran");
+    let runner = stub_runner(&state, KEEP_CONFLICT);
+    let (id, base, moved) = conflicting_run(&repo, &state, &marker, &runner);
+    for _ in 0..2 {
+        record_conflict(&state, &id, &format!("{base}..{moved}"));
+    }
+    // 手で積んだ段は `Implemented` なので、land の前に gate を撃ち直す。
+    fs::remove_file(&marker).ok();
+    let lens = fake_lens(&marker, &lens_verdict("PASS"));
+    let gated = gate_once(&repo, &state, &id, Some(&lens));
+    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "撃ち直しの gate: {}", stderr_of(&gated));
+    let before = dir_names(&state.join("pipe").join(&id));
+    let out = land_extra(&repo, &state, &id, &["--runner", &runner]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "上限に達した周は rc 1: {}", stderr_of(&out));
+    assert_eq!(
+        stages(&state, &id).last().cloned(),
+        Some((Some(Stage::Failed), Some("rebase-conflict".to_owned()))),
+        "終端の理由: {:?}",
+        stages(&state, &id)
+    );
+    assert_eq!(stub_calls(&state), 1, "起こし直さない（回数は log が持つ）");
+    assert_eq!(dir_names(&state.join("pipe").join(&id)), before, "置き場に新しい file を作らない");
+    clean(&[&repo, &state]);
+}
+
+/// 回数を**読めない**周は起こし直さず `Failed detail=follow-unmeasured` + rc 2 で終端する
+/// （上限到達の rc 1 と分ける・NFR4）。読めなさは、rebase の呼出しに合わせて event log へ
+/// 壊れた行を混ぜる偽 git で作る。
+#[test]
+fn pipe_follow_unreadable_retry_count_fails_closed_with_rc_two() {
+    let (repo, state) = repo_with_state();
+    let marker = state.join("lens-ran");
+    let runner = stub_runner(&state, RESOLVE);
+    let (id, _base, moved) = conflicting_run(&repo, &state, &marker, &runner);
+    let events = state.join("fleet").join("events.jsonl");
+    let path = shim_path(
+        &state,
+        "poison-bin",
+        &format!("case \"$*\" in *' rebase '*) printf 'not-json\\n' >> '{}' ;; esac", events.display()),
+    );
+    let out = Command::new(bin())
+        .args(["pipe", "land", "--run", &id, "--repo", &repo.display().to_string(),
+               "--state-dir", &state.display().to_string(), "--runner", &runner])
+        .env("PATH", path)
+        .output()
+        .expect("binary を起動できる");
+    assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "読めない回数は rc 2: {}", stderr_of(&out));
+    assert_eq!(stub_calls(&state), 1, "起こし直さない");
+    let log = fs::read_to_string(&events).expect("event log");
+    let last = log.lines().rfind(|line| !line.is_empty()).unwrap_or_default();
+    assert!(
+        last.contains("\"stage\":\"Failed\"") && last.contains("follow-unmeasured"),
+        "終端の理由は上限到達と分ける: {last}"
+    );
+    assert!(!last.contains("\"detail\":\"rebase-conflict\""), "上限到達を名乗らない: {last}");
+    assert_eq!(git(&repo, &["rev-parse", "refs/heads/main"]), moved, "main は動かない");
+    clean(&[&repo, &state]);
+}
+
+/// 起こし直しの spawn も **Budget を要る口だけ**を通る（`pipe_spawn_measures_repo_before_launching`
+/// と同型の観測）。repo の HEAD を読めない git を前に置くと、起こし直しは Precheck の段で断られ、
+/// runner は起こされない。
+#[test]
+fn pipe_follow_retry_measures_the_repo_before_launching() {
+    let (repo, state) = repo_with_state();
+    let marker = state.join("lens-ran");
+    let runner = stub_runner(&state, RESOLVE);
+    let (id, _base, _moved) = conflicting_run(&repo, &state, &marker, &runner);
+    let failing = format!("-C {} rev-parse HEAD", repo.display());
+    let path = shim_path(&state, "measure-bin", &format!("case \"$*\" in *'{failing}'*) exit 1;; esac"));
+    let out = Command::new(bin())
+        .args(["pipe", "land", "--run", &id, "--repo", &repo.display().to_string(),
+               "--state-dir", &state.display().to_string(), "--runner", &runner])
+        .env("PATH", path)
+        .output()
+        .expect("binary を起動できる");
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "測れない repo は rc 1: {}", stderr_of(&out));
+    assert!(
+        stderr_of(&out).contains("git repo でない"),
+        "測る段で断る（起動関数へ入る前）: {}",
+        stderr_of(&out)
+    );
+    assert_eq!(stub_calls(&state), 1, "起こし直しの runner は起きない");
+    assert_eq!(conflict_count(&state, &id), 1, "衝突の記帳は残る（resume で続けられる）");
     clean(&[&repo, &state]);
 }

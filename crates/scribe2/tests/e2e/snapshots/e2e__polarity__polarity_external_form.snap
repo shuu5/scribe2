@@ -16,7 +16,8 @@ guard=gate-lens timing=post-hoc on-failure=fail-closed boundary=pipe::gate::Verd
 guard=land-main-check timing=post-hoc on-failure=fail-closed boundary=pipe::land::MainCheck
 guard=land-anchor-sync timing=in-loop on-failure=fail-closed boundary=pipe::land::AnchorPlan
 guard=land-worktree-clean timing=in-loop on-failure=fail-closed boundary=pipe::land::WorktreeCheck
+guard=follow-retry timing=in-loop on-failure=fail-closed boundary=pipe::follow::FollowCheck
 guard=store-lock timing=in-loop on-failure=fail-closed boundary=fleet::store::StoreError
 guard=inject-refusal timing=in-loop on-failure=fail-closed boundary=seat::inject::Delivery
 guard=cycle-refusal timing=in-loop on-failure=fail-closed boundary=seat::cycle::Cycle
-polarity: guards=17 in-loop=14 post-hoc=3 fail-open=3
+polarity: guards=18 in-loop=15 post-hoc=3 fail-open=3

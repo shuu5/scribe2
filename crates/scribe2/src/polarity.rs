@@ -64,7 +64,7 @@ pub struct Polarity {
 }
 
 /// 行為を止めうる判定を返す境界の全数。**宣言順は行為の流れ**（hook → intake → spawn〔予算・承認〕→
-/// runner → gate → land〔main 実測・anchor 同期・worktree の clean〕→ store → 注入 → cycle）で、順序に意味は無いが C2 の形（[`ALL`] と判別子順 pin）に合わせる。
+/// runner → gate → land〔main 実測・anchor 同期・worktree の clean・追随の起こし直し〕→ store → 注入 → cycle）で、順序に意味は無いが C2 の形（[`ALL`] と判別子順 pin）に合わせる。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Guard {
     /// `pre-tool-use` の write-set guard（[`crate::hook::guard`]）。
@@ -95,6 +95,8 @@ pub enum Guard {
     LandAnchor,
     /// 便の worktree が clean か＝rebase（`.119`）と retire の move の前提（[`crate::pipe::land::WorktreeCheck`]）。
     LandWorktree,
+    /// 追随が衝突した便を起こし直す回数の上限（[`crate::pipe::follow::FollowCheck`]）。
+    FollowRetry,
     /// event log の書込 lock（[`crate::fleet::store`]）。
     StoreLock,
     /// tmux pane への注入の断り＝入力欄が非空なら 1 key も送らない（[`crate::seat::inject`]）。
@@ -119,6 +121,7 @@ pub const ALL: &[Guard] = &[
     Guard::LandMain,
     Guard::LandAnchor,
     Guard::LandWorktree,
+    Guard::FollowRetry,
     Guard::StoreLock,
     Guard::Inject,
     Guard::Cycle,
@@ -142,6 +145,7 @@ impl Guard {
             Self::LandMain => crate::pipe::land::POLARITY,
             Self::LandAnchor => crate::pipe::land::ANCHOR_POLARITY,
             Self::LandWorktree => crate::pipe::land::WORKTREE_POLARITY,
+            Self::FollowRetry => crate::pipe::follow::POLARITY,
             Self::StoreLock => crate::fleet::store::POLARITY,
             Self::Inject => crate::seat::inject::POLARITY,
             Self::Cycle => crate::seat::cycle::POLARITY,
@@ -165,6 +169,7 @@ impl Guard {
             Self::LandMain => "pipe::land::MainCheck",
             Self::LandAnchor => "pipe::land::AnchorPlan",
             Self::LandWorktree => "pipe::land::WorktreeCheck",
+            Self::FollowRetry => "pipe::follow::FollowCheck",
             Self::StoreLock => "fleet::store::StoreError",
             Self::Inject => "seat::inject::Delivery",
             Self::Cycle => "seat::cycle::Cycle",
@@ -188,6 +193,7 @@ impl Guard {
             Self::LandMain => "land-main-check",
             Self::LandAnchor => "land-anchor-sync",
             Self::LandWorktree => "land-worktree-clean",
+            Self::FollowRetry => "follow-retry",
             Self::StoreLock => "store-lock",
             Self::Inject => "inject-refusal",
             Self::Cycle => "cycle-refusal",

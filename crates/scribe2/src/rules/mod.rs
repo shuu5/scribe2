@@ -103,6 +103,9 @@ pub enum RuleKind {
     SeatCyclePollMs,
     /// 口座残量を聞きに行く子 process の待ち時間の上限（秒）。
     UsageTimeoutS,
+    /// land の追随が衝突した便を**起こし直す回数の上限**（回）。値 N = 最大 N 回起こし直す
+    /// （N+1 回目の衝突で終端する）。
+    FollowRetries,
 }
 
 /// [`RuleKind`] の全 variant。parity test の母集団である。
@@ -138,6 +141,7 @@ pub const ALL: &[RuleKind] = &[
     RuleKind::SeatCycleSettleS,
     RuleKind::SeatCyclePollMs,
     RuleKind::UsageTimeoutS,
+    RuleKind::FollowRetries,
 ];
 
 impl RuleKind {
@@ -175,6 +179,7 @@ impl RuleKind {
             Self::SeatCycleSettleS => "SeatCycleSettleS",
             Self::SeatCyclePollMs => "SeatCyclePollMs",
             Self::UsageTimeoutS => "UsageTimeoutS",
+            Self::FollowRetries => "FollowRetries",
         }
     }
 
@@ -203,7 +208,8 @@ impl RuleKind {
             | Self::SeatCycleLockTtlS
             | Self::SeatCycleSettleS
             | Self::SeatCyclePollMs
-            | Self::UsageTimeoutS => ValueShape::Int,
+            | Self::UsageTimeoutS
+            | Self::FollowRetries => ValueShape::Int,
             Self::DialogueSurface => ValueShape::Str,
             Self::MaturityCondition
             | Self::AccountSelection

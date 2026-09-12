@@ -1596,6 +1596,31 @@ fn runner_question_prompt_carries_record_rule_and_answer_section() {
     clean(&[&dir, &worktree]);
 }
 
+/// prompt は「追随」節の**読み方**（雛形）を運び、pipeline が stdin へ足した run ごとの節を
+/// **そのまま**載せる（設計 pipeline-conflict.md §3・`s2-07l.146`）。節の順序は stdin の順序
+/// （契約 → 回答 → 追随）がそのまま prompt の順序になる＝包みは並べ替えない。
+#[test]
+fn runner_prompt_carries_follow_section_rule_and_keeps_section_order() {
+    let dir = tmp();
+    let worktree = tmp();
+    // pipeline が stdin へ流す形: 契約の写し + 「## 回答」節 + 「## 追随」節。
+    let contract = "goal = \"x\"\n\n## 回答\n- 質問: verify 行が矛盾する\n- 回答: verify は 1 行目だけを撃つ\n\n## 追随\n- main が deadbeef へ進んだ\n";
+    let out = run_question_runner(&dir, &worktree, "", 0, contract.as_bytes());
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    let prompt = slurp(&dir.join("stdin"));
+    assert!(prompt.contains("## 追随」節"), "追随節の読み方を運ぶ: {prompt}");
+    assert!(prompt.contains("git rebase --continue"), "解き終え方を命じる: {prompt}");
+    assert!(prompt.contains("git rebase --abort"), "解けない周の戻し方を命じる: {prompt}");
+    assert!(prompt.contains("- main が deadbeef へ進んだ"), "stdin の節がそのまま載る: {prompt}");
+    let answer_at = prompt.rfind("- 回答: verify は 1 行目だけを撃つ");
+    let follow_at = prompt.rfind("- main が deadbeef へ進んだ");
+    assert!(
+        matches!((answer_at, follow_at), (Some(a), Some(f)) if a < f),
+        "stdin の順序（回答 → 追随）が保たれる: {prompt}"
+    );
+    clean(&[&dir, &worktree]);
+}
+
 /// 判定の純関数の**受理側**（[`vessel::headless::runner::question_ending`]）。
 #[test]
 fn runner_question_ending_accepts_records_and_plain_text() {

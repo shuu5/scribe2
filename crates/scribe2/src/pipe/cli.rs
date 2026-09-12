@@ -10,11 +10,14 @@
 use super::approve::{Approve, RC_BLOCKED};
 use super::contract::Contract;
 use super::declaration::{self, Ceiling, Effective, CEILING_ROW};
+use super::follow::{self, Turn};
 use super::gate::{Gate, Limits, Verdict, RC_INCONCLUSIVE};
-use super::land::{last_stage_detail, verdict_of, Land, Retire, REBASE_EMPTY};
+use super::land::{verdict_of, Land, Retire, REBASE_EMPTY};
 use super::refuse::{overlaps, Refuse};
-use super::spawn::{spawn, Launch};
-use super::{question_of_run, contract_path, current, emit, run_dir, run_id, vessel_path, worktree_path, Emit, Precheck};
+use super::{
+    contract_path, current, emit, last_stage_detail, question_of_run, run_dir, run_id,
+    runner_is_idle, vessel_path, worktree_path, Emit,
+};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_OK, RC_REFUSED};
 use crate::fleet::store::{LockPolicy, StoreError};
 use crate::fleet::{self, Completion, EventKind, SeatState, Stage, State};
@@ -33,6 +36,9 @@ const ROW_LENS: &str = "gate.lens_count";
 
 /// gate の diff 上限（byte）を持つ rules 行。
 const ROW_CAP: &str = "gate.token_cap";
+
+/// 追随が衝突した便を起こし直す回数の上限を持つ rules 行。
+const ROW_RETRIES: &str = "pipe.follow_retries";
 
 /// `pipe` の使い方。
 pub fn usage() -> String {
@@ -369,7 +375,8 @@ enum Extra {
     Nothing,
     /// `Gated` を**測り直し**として通してよいか（verdict が INCONCLUSIVE の周だけ）。
     Regate,
-    /// `Failed` を**畳んで**よいか（最後の `RunStage` の detail が `rebase-empty` の周だけ）。
+    /// **畳んで**よいか（`Failed` は detail が `rebase-empty` / `rebase-conflict` の周だけ・
+    /// `Gated` は verdict が FAIL の周だけ）。
     Retire,
 }
 
@@ -418,28 +425,27 @@ fn resolve(
 ///
 /// - `Gated`: **測り直せるのは「測れなかった」周だけ**。PASS / FAIL は判定に届いた終端で、
 ///   判定が読めない周（file 不在 / 壊れ / 3 値の外）も測り直さない（fail-closed・C11.2）。
-/// - `Failed`: **畳めるのは `rebase-empty` の周だけ**（変更が既に main に在る＝close してよい合図）。
-///   他の理由（`rebase-conflict` / `main-red` / `main-unmeasured` / `precheck:…`）は人が読む前に
-///   入れ物が動くと「何が起きたか」を現物から追えなくなるので断る。理由を読めない周も断る
-///   （読めなかったを `rebase-empty` に読み替えない・fail-closed）。
+/// - `Failed`: **畳めるのは `rebase-empty` と `rebase-conflict` の周だけ**（前者は変更が既に
+///   main に在る＝close してよい合図・後者は起こし直しの上限に達した便で、planner が契約を
+///   切り直して流し直す・設計 pipeline-conflict.md §5）。他の理由（`main-red` /
+///   `main-unmeasured` / `rebase-dirty` / `precheck:…`）は人が読む前に入れ物が動くと
+///   「何が起きたか」を現物から追えなくなるので断る。理由を読めない周も断る（読めなかったを
+///   畳める理由に読み替えない・fail-closed）。
+/// - `Gated`: **畳めるのは verdict が FAIL の周だけ**（判定に届いた終端・`.132` の memo）。
+///   PASS はまだ land が残っており、INCONCLUSIVE は測り直せる側ゆえ断る。
 ///
 /// **理由も名乗る**: 段違いの一般則で断っている事実と、その便が通らない理由は別の情報で、
 /// 片方だけだと読み手に届かない。
 fn discriminate(extra: &Extra, state_dir: &Path, id: &str, stage: Stage) -> Result<(), Outcome> {
     match (extra, stage) {
-        (&Extra::Regate, Stage::Gated) => {
-            let verdict = verdict_of(state_dir, id);
-            match verdict == Some(Verdict::Inconclusive) {
-                true => Ok(()),
-                false => Err(refused(format!(
-                    "run {id} の段は Gated である（verdict={}）",
-                    verdict.map_or("読めない", Verdict::as_str)
-                ))),
-            }
-        }
+        (&Extra::Regate, Stage::Gated) => gated_is(state_dir, id, Verdict::Inconclusive),
+        (&Extra::Retire, Stage::Gated) => gated_is(state_dir, id, Verdict::Fail),
         (&Extra::Retire, Stage::Failed) => {
             let detail = last_stage_detail(state_dir, id);
-            match detail.as_deref() == Some(REBASE_EMPTY) {
+            let foldable = detail.as_deref().is_some_and(|found| {
+                found == REBASE_EMPTY || found == follow::EXHAUSTED
+            });
+            match foldable {
                 true => Ok(()),
                 false => Err(refused(format!(
                     "run {id} の段は Failed である（detail={}）",
@@ -451,7 +457,23 @@ fn discriminate(extra: &Extra, state_dir: &Path, id: &str, stage: Stage) -> Resu
     }
 }
 
-/// 段を確かめてから起動口を通す。
+/// `Gated` の便の判定が求める 3 値か。**判定を読めない周は断る**（fail-closed・C11.2）。
+fn gated_is(state_dir: &Path, id: &str, want: Verdict) -> Result<(), Outcome> {
+    let verdict = verdict_of(state_dir, id);
+    match verdict == Some(want) {
+        true => Ok(()),
+        false => Err(refused(format!(
+            "run {id} の段は Gated である（verdict={}）",
+            verdict.map_or("読めない", Verdict::as_str)
+        ))),
+    }
+}
+
+/// 段を確かめてから turn の口を通す。
+///
+/// **runner を起こす経路はここ 1 本**で、材料を解いた後は `pipe::follow` の turn へ渡す
+/// （Precheck → spawn → 追随の後始末が 1 本に収まる＝起こし直しと通常の起動で後始末が
+/// 分かれない）。
 fn launch(
     args: &[String],
     id: &str,
@@ -463,26 +485,16 @@ fn launch(
         Ok(found) => found,
         Err(outcome) => return outcome,
     };
-    let budget = match Precheck::measure(&resolved.contract, &resolved.repo) {
-        Ok(found) => found.into_budget(),
-        Err(reason) => return refused(reason),
-    };
-    // 回答済みの質問が在る周だけ再 spawn の形になる（`Questioned` 以外の段では質問が無く `None`）。
-    let answered = question_of_run(&resolved.state_dir, id).filter(|question| question.answer.is_some());
-    spawn(
-        budget,
-        &Launch {
-            run: id,
-            bead: &resolved.bead,
-            repo: &resolved.repo,
-            state_dir: &resolved.state_dir,
-            contract: &resolved.contract,
-            runner,
-            approved: resolved.approved,
-            answered,
-            policy,
-        },
-    )
+    follow::spawn_turn(&Turn {
+        run: id,
+        bead: &resolved.bead,
+        repo: &resolved.repo,
+        state_dir: &resolved.state_dir,
+        contract: &resolved.contract,
+        runner: Some(runner),
+        approved: resolved.approved,
+        policy,
+    })
 }
 
 /// `pipe approve`。**逐語を event へ写すだけ**で、段は動かさない（resume が進める）。
@@ -622,6 +634,17 @@ fn land_run(args: &[String], id: &str, manifest: &Manifest, policy: LockPolicy) 
         Ok(found) => found,
         Err(reason) => return refused(reason),
     };
+    // 追随が衝突した周は実装役を起こし直す（設計 pipeline-conflict.md §3）。`pipe run` は
+    // 自分の runner をそのまま渡し、`--runner` を持たない `pipe land` は起こし直せない
+    // ——衝突の記帳だけ残して断り、`pipe resume --runner` で続けられる。
+    let runner = match flag(args, "--runner") {
+        Ok(found) => found,
+        Err(reason) => return refused(reason),
+    };
+    let retries = match int_row(manifest, ROW_RETRIES) {
+        Ok(found) => found,
+        Err(reason) => return broken(reason),
+    };
     super::land::land(&Land {
         run: id,
         bead: &resolved.bead,
@@ -631,22 +654,29 @@ fn land_run(args: &[String], id: &str, manifest: &Manifest, policy: LockPolicy) 
         pr_cmd,
         lens,
         limits,
+        runner,
+        retries,
+        approved: resolved.approved,
         policy,
     })
 }
 
 /// `pipe retire`。前提 stage = `Landed` ∨ (`Failed` ∧ 最後の `RunStage` の detail が
-/// `rebase-empty`)（worktree 在り・clean の検査は retire 側が持つ）。
+/// `rebase-empty` / `rebase-conflict`) ∨ (`Gated` ∧ verdict が FAIL)（worktree 在り・clean の
+/// 検査は retire 側が持つ）。
 ///
 /// **段を動かさない口である**。`--pr-cmd` 形の便は main を動かさず worktree も残して
 /// `Landed` で終端するので、merge の後に入れ物だけを畳む段が要る。同一変更の便が
 /// `rebase-empty` で終端した周も**成果は既に main に在る**ので入れ物だけが残る形は同じで、
-/// 畳める側に数える（`s2-07l.128`）。走っている便・他の理由で落ちた便を通すと
-/// 「まだ読まれていない現物を動かす」経路になるため、段違いは一般則どおり rc 1。
+/// 畳める側に数える（`s2-07l.128`）。起こし直しの上限に達した便（`rebase-conflict`）と
+/// 判定に届いた `Gated(FAIL)` も、終端して入れ物だけが残る形は同じである（設計
+/// pipeline-conflict.md §5）。走っている便・他の理由で落ちた便を通すと「まだ読まれて
+/// いない現物を動かす」経路になるため、段違いは一般則どおり rc 1。
 ///
 /// 残す event の段は [`Resolved::stage`] のまま＝**`Landed` に決め打ちしない**（終端を動かさない）。
 fn retire_run(args: &[String], id: &str, policy: LockPolicy) -> Outcome {
-    let resolved = match resolve(args, id, &[Stage::Landed, Stage::Failed], &Extra::Retire) {
+    let allowed = [Stage::Landed, Stage::Failed, Stage::Gated];
+    let resolved = match resolve(args, id, &allowed, &Extra::Retire) {
         Ok(found) => found,
         Err(outcome) => return outcome,
     };
@@ -756,7 +786,17 @@ fn resume(args: &[String], manifest: &Manifest, policy: LockPolicy) -> Outcome {
     };
     match stage_of(&state, &id) {
         Err(reason) => refused(reason),
-        Ok(Stage::Implemented) => gate_run(args, &id, manifest, policy),
+        // `Implemented` の先は 2 つに分かれる（設計 pipeline-conflict.md §3・ADR-0019 §2.6）。
+        // 追随が衝突して段が戻った便（最後の `RunStage` の detail が `rebase-conflict:` で
+        // 始まり、runner が起きていない）は**起こし直しの続き**で、`--runner` を要る。
+        // それ以外の `Implemented` は従来どおり gate。
+        Ok(Stage::Implemented) => match follow_pending(&state_dir, &id) {
+            false => gate_run(args, &id, manifest, policy),
+            true => match need(args, "--runner") {
+                Err(reason) => refused(reason),
+                Ok(runner) => launch(args, &id, runner, policy, &[Stage::Implemented]),
+            },
+        },
         // Gated の先は判定で分かれる。**INCONCLUSIVE は land を試さない**——測れて
         // いない便に land の「PASS でない」を返すのは、吸収状態を言い換えただけである。
         // 次に撃つ段だけを名乗って rc 3 で止まる（**自動では測り直さない**＝道具の
@@ -801,6 +841,17 @@ fn resume(args: &[String], manifest: &Manifest, policy: LockPolicy) -> Outcome {
         },
         Ok(stage) => refused(format!("run {id} の段 {} からは再開しない", stage.as_str())),
     }
+}
+
+/// `Implemented` の便が**起こし直しの続き**か（設計 pipeline-conflict.md §3 の `resume`）。
+///
+/// 条件は 2 つ——最後の `RunStage` の detail が `rebase-conflict:` で始まり、かつ runner が
+/// 起きていない（走っている runner の隣にもう 1 つ起こさない）。どちらかを読めない周は
+/// `false`＝従来どおり gate へ流す（読めなさで runner を起こさない・fail-closed）。
+fn follow_pending(state_dir: &Path, id: &str) -> bool {
+    let conflicted = last_stage_detail(state_dir, id)
+        .is_some_and(|detail| follow::is_conflict(&detail));
+    conflicted && runner_is_idle(state_dir, id) == Some(true)
 }
 
 /// `pipe stop`。`--run <id>` は便 1 本を外し、`--all` は生きている席を全部止める。

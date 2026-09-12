@@ -561,6 +561,31 @@ fn rules_embedded_manifest_declares_five_accounts_and_usage_timeout() {
     assert_eq!(timeout.ruled_at, "2026-09-12", "裁定日");
 }
 
+/// 起こし直しの回数の行（`pipe.follow_retries`・裁定 id `user 2026-09-12T03:25Z`・
+/// 設計 pipeline-conflict.md §5）。**値は manifest が持ち、ADR も設計 doc も写さない**（C1 / C5）。
+/// 行が欠けた manifest は `RuleError` で拒まれる（kind の字面は `ALL` を通してしか解けない）。
+#[test]
+fn rules_embedded_manifest_declares_follow_retries() {
+    let manifest = match Manifest::embedded() {
+        Ok(found) => found,
+        Err(errors) => {
+            let lines: Vec<String> = errors.iter().map(ToString::to_string).collect();
+            panic!("埋め込み manifest が拒まれた:\n{}", lines.join("\n"))
+        }
+    };
+    let row = manifest.get("pipe.follow_retries").expect("起こし直しの回数の行が在る");
+    assert_eq!(row.value, RuleValue::Int(2), "user 裁定 2026-09-12T03:25Z の値");
+    assert_eq!(row.kind, RuleKind::FollowRetries, "kind");
+    assert_eq!(row.kind.shape(), ValueShape::Int, "値の形は Int（回）");
+    assert!(row.enabled, "既定で効く");
+    assert_eq!(row.ruling, "user 2026-09-12T03:25Z", "裁定 id");
+    assert_eq!(row.ruled_at, "2026-09-12", "裁定日");
+    // 未知の kind は `parse` できない＝行を落とした manifest は読めない（親 test と同じ形）。
+    let errors = rejected(&one_row_raw("FollowRetry", "2")).expect("未知の kind の fixture が受理された");
+    let joined = errors.join("\n");
+    assert!(joined.contains("未知である"), "行の kind を綴り違えた manifest は読めない: {joined}");
+}
+
 #[test]
 fn rules_embedded_manifest_is_valid_and_covers_all_kinds() {
     let manifest = match Manifest::embedded() {
@@ -573,7 +598,7 @@ fn rules_embedded_manifest_is_valid_and_covers_all_kinds() {
     // **tracked な `rules/manifest.toml` の全行が受理される**（`parse` は 1 件でも違反が
     // 在れば `Err` を返すので、ここに届いた時点で全行が必須 key を持つ）。母集団を額面に
     // 出すのは、行が黙って落ちた周を「全部読めた」と読み違えないためである。
-    assert_eq!(manifest.rows().len(), 31, "埋め込み manifest の行数（母集団）");
+    assert_eq!(manifest.rows().len(), 32, "埋め込み manifest の行数（母集団）");
     for kind in ALL {
         let covered = manifest.rows().iter().any(|row| row.kind == *kind);
         assert!(covered, "{} の行が manifest に無い", kind.as_str());

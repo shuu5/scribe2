@@ -22,12 +22,13 @@
 //! **main が動いた便は追随する**（`s2-07l.119`・FR30）。記録した base が main の祖先のまま
 //! 置き去りになった周は、worktree の branch を main へ rebase し（効くのは branch だけ・
 //! main は 1 byte も動かさない・force 系は使わない）、段を `Implemented` へ戻して gate を
-//! **同じ関数で**撃ち直し、PASS なら新しい base で CAS する。衝突は木を戻して
-//! `Failed detail=rebase-conflict`（終端・fail-closed）。
+//! **同じ関数で**撃ち直し、PASS なら新しい base で CAS する。衝突は木を戻して**実装役を
+//! 起こし直す**（[`super::follow`]・便は終端にしない・終端するのは上限に達した周だけ）。
 
 use crate::polarity::{OnFailure, Polarity, Timing};
 use super::contract::Contract;
 use super::declaration::Effective;
+use super::follow::{self, Conflict, Turn};
 use super::gate::{gate, is_unreadable, run_checks, Checks, Gate, Limits, Verdict};
 use super::{
     emit, git_bytes, git_line, git_ok, verdict_path, worktree_path, worktrees_dir, Emit,
@@ -38,8 +39,8 @@ use crate::fleet::store::{self, append_line, LockPolicy};
 use crate::fleet::{cli::now_utc, EventKind, Stage, SCHEMA};
 use std::path::{Path, PathBuf};
 
-/// 進める ref。設計 §5.4 が名指す 1 本である。
-const MAIN_REF: &str = "refs/heads/main";
+/// 進める ref。設計 §5.4 が名指す 1 本である（追随の相手を読む [`super::follow`] も同じ字面を使う）。
+pub(crate) const MAIN_REF: &str = "refs/heads/main";
 
 /// 面 5 の export 先の file 名（ADR-0004 §2.2・**版番号に依らず固定**）。
 const VERDICTS_FILE: &str = "verdicts.jsonl";
@@ -162,6 +163,12 @@ pub struct Land<'a> {
     pub lens: Option<&'a str>,
     /// 規則から読んだ線（撃ち直しの gate へ渡す・land 自身は数値を見ない）。
     pub limits: Limits,
+    /// 追随が衝突した周に runner を起こし直すコマンド（`--runner`）。**無い周は起こし直さない**。
+    pub runner: Option<&'a str>,
+    /// 起こし直しの上限（rules 行 `pipe.follow_retries`・land 自身は数値を見ない）。
+    pub retries: u64,
+    /// 承認 event が在るか（起こし直しも A1 の関門を通る・replay の導出値）。
+    pub approved: bool,
     /// lock の待ち方。
     pub policy: LockPolicy,
 }
@@ -423,26 +430,22 @@ fn follow_main(entry: &Land<'_>, worktree: &Path, base: &str, main: &str) -> Fol
 
 /// worktree の branch を main へ rebase する（追随の (iii)・(iii′)）。**main は動かさない**。
 ///
-/// - 衝突は `git rebase --abort` で木を戻し `rebase-conflict` で終端する。戻せない周もその事実は
-///   捨てない（段は Failed で retire も通らないので、読み手に届く口は stderr だけ）。
+/// - 衝突は [`super::follow::on_conflict`] へ委ねる（設計 pipeline-conflict.md §3）。器は木を戻し、
+///   衝突を `Implemented detail=rebase-conflict:<base>..<main>` で記帳して**実装役を起こし直す**
+///   ——便を終端にするのは上限に達した周だけである。どの形でも land はここで止まり、続きは
+///   `gate` から撃ち直す（起こし直した turn の後は、次の land の追随で再び rebase が走る）。
 /// - **同一変更の便**: rebase で commit が 0 本になった周は便の変更が既に main に在る（先に land した
 ///   便と同じ patch）ので gate を撃ち直さず（lens を起動しない）`rebase-empty` で終端する。commit 数を
 ///   読めない周は 0 に読み替えず、従来どおり撃ち直しの precheck へ流す（fail-closed の向きを変えない・
 ///   `s2-07l.125`）。
 fn rebase_onto(entry: &Land<'_>, worktree: &Path, base: &str, main: &str) -> Result<(), Outcome> {
     if !git_ok(worktree, &["rebase", main]) {
-        let restored = git_ok(worktree, &["rebase", "--abort"]);
-        let mut stopped = follow_failed(
-            entry,
-            "rebase-conflict",
-            format!("run {} の rebase が衝突した（base={base} main={main}）・main は動かさない", entry.run),
-        );
-        if !restored {
-            stopped
-                .err
-                .push(format!("pipe: {} は rebase の途中のまま（--abort も失敗）", worktree.display()));
-        }
-        return Err(stopped);
+        return Err(follow::on_conflict(&Conflict {
+            turn: turn_of(entry),
+            base,
+            main,
+            limit: entry.retries,
+        }));
     }
     if commits_after_rebase(worktree, main) == Some(0) {
         return Err(follow_failed(
@@ -455,6 +458,20 @@ fn rebase_onto(entry: &Land<'_>, worktree: &Path, base: &str, main: &str) -> Res
         ));
     }
     Ok(())
+}
+
+/// 起こし直しの材料（land が持つ面から組む・**組み立てはこの 1 本**）。
+fn turn_of<'a>(entry: &'a Land<'a>) -> Turn<'a> {
+    Turn {
+        run: entry.run,
+        bead: entry.bead,
+        repo: entry.repo,
+        state_dir: entry.state_dir,
+        contract: entry.contract,
+        runner: entry.runner,
+        approved: entry.approved,
+        policy: entry.policy,
+    }
 }
 
 /// rebase の後に便へ残った commit の数（`<main>..HEAD`）。**読めない周は `None`**（0 に読み替えない）。
@@ -791,8 +808,9 @@ impl WorktreeCheck {
 /// stderr 1 行で終わる）を後追いで畳む口にもなるので、見るのは永続面の事実——worktree が
 /// 在るか・clean か——だけである。**merge 済みかは人が確かめる**（forge へ問い合わせない）。
 ///
-/// **段を動かさない**（`s2-07l.128`）。畳める便は `Landed` と `Failed detail=rebase-empty`
-/// （変更が既に main に在る＝close してよい便）の 2 通りで、どちらの周も残す event の段は
+/// **段を動かさない**（`s2-07l.128`）。畳める便は `Landed`・`Failed detail=rebase-empty`
+/// （変更が既に main に在る）・`Failed detail=rebase-conflict`（起こし直しの上限に達した）・
+/// `Gated` で verdict が FAIL（判定に届いた終端）の 4 通りで、どの周も残す event の段は
 /// [`Retire::stage`] のまま＝`Landed` に決め打ちしない。畳む動作そのものは 1 本で、
 /// 段の弁別は入口（`pipe::cli`）が持つ。
 ///
@@ -835,23 +853,6 @@ pub fn retire(entry: &Retire<'_>) -> Outcome {
             retired_path(entry.repo, entry.run).display()
         )),
     }
-}
-
-/// 便の**最後の `RunStage`** が名乗った `detail`（物理順で最後の 1 件）。読めない周は `None`。
-///
-/// 終端の理由（`rebase-empty` / `rebase-conflict` / `main-red` / …）は `Failed` が同じ段の
-/// 中で分かれる面ゆえ、段だけでは弁別できない。replay の `Run::detail` は「最後に見た
-/// **自由文**」なので使えない——retire 自身が書く `detail=retired` や、段を持たない event の
-/// 自由文が後から被さって理由が消える。読むのは追記だけの log の原本である
-/// （[`super::base_of_run`] と同じ理由）。
-pub(crate) fn last_stage_detail(state_dir: &Path, id: &str) -> Option<String> {
-    let events = store::read_all(state_dir).ok()?;
-    events
-        .iter()
-        .rev()
-        .find(|event| event.run == id && event.kind == EventKind::RunStage)?
-        .detail
-        .clone()
 }
 
 /// `verdict.json` から 3 値を読む。読めない周は `None`（＝PASS ではない）。
