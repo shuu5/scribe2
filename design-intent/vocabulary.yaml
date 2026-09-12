@@ -514,3 +514,15 @@ terms:
     domain: consumer
     definition: land の追随が衝突した run で、 同じ worktree と契約に「追随」節を添えて runner をもう 1 回 spawn すること。 回数は rules 行 pipe.follow_retries が上限で、 その判定は guard (ADR-0019 §2.2 / §2.4)。
     relationships: [追随, runner, guard]
+  - canonical: 受付の枠
+    domain: consumer
+    definition: host 単位の受付が便の変異検査に配る並列の枠。 置き場は state dir の親の下の host 用 dir で project をまたぎ、 枠 1 組は lease file 1 つで表す (ADR-0021 §2.3)。 器が管理する状態ではなく受付の一時的な印。
+    relationships: [実効 jobs, 封じ込め, 検出線]
+  - canonical: 封じ込め
+    domain: consumer
+    definition: 器が起こす子 process (verify 行・runner・lens) を memory の上限付きの cgroup scope の内側で走らせること。 溢れて止められるのは scope の内側だけで、 封じられない host では並列度を下げて進む (ADR-0021 §2.2)。
+    relationships: [受付の枠, 極性一覧, runner]
+  - canonical: 実効 jobs
+    domain: consumer
+    definition: 変異検査に実際に渡す並列度。 rules 行の上限 (宣言値) と受付が測った枠 (測定値) の小さい方で、 宣言 file の共通 verify の穴に器が埋める (ADR-0021 §2.1)。
+    relationships: [受付の枠, 変異検出線, 宣言]

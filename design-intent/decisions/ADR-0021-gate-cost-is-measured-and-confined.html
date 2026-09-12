@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="folio-doc-type" content="adr">
+<meta name="folio-layer" content="project">
+<meta name="folio-version" content="0.4.6">
+<meta name="folio-status" content="accepted">
+<meta name="folio-stakeholders" content="Developer, AI Agent, External Reviewer">
+<meta name="folio-adr-id" content="0021">
+<meta name="folio-adr-date" content="2026-09-12">
+<title>ADR-0021 — gate の費用は測って決める (変異の並列度は rules 行の上限を host 横断の受付が実測で下げ、 器の子 process は cgroup で封じ、 木が同じ main 実測は検出線を撃ち直さず、 着地は gate 済みの便を先に通す)</title>
+<link rel="stylesheet" href="../../common.css">
+<script type="application/ld+json">
+{
+  "@context": {
+    "dc": "http://purl.org/dc/terms/",
+    "schema": "https://schema.org/",
+    "folio": "https://folio.dev/spec/v1/"
+  },
+  "@id": "./ADR-0021-gate-cost-is-measured-and-confined.html",
+  "@type": "schema:TechArticle",
+  "dc:isPartOf": [
+    { "@id": "./README.html" }
+  ],
+  "dc:title": "ADR-0021 — gate の費用は測って決める (変異の並列度は rules 行の上限を host 横断の受付が実測で下げ、 器の子 process は cgroup で封じ、 木が同じ main 実測は検出線を撃ち直さず、 着地は gate 済みの便を先に通す)",
+  "folio:version": "0.4.6",
+  "folio:stakeholders": ["Developer", "AI Agent", "External Reviewer"],
+  "dc:references": [
+    { "@id": "../spec/constitution.html#c1" },
+    { "@id": "../spec/constitution.html#c2" },
+    { "@id": "../spec/constitution.html#c3" },
+    { "@id": "../spec/constitution.html#c5" },
+    { "@id": "../spec/constitution.html#c6" },
+    { "@id": "../spec/constitution.html#c10" },
+    { "@id": "../spec/constitution.html#c11" },
+    { "@id": "../spec/constitution.html#c12" },
+    { "@id": "../spec/constitution.html#c14" },
+    { "@id": "../spec/constitution.html#n1" },
+    { "@id": "../spec/srs.html#FR8" },
+    { "@id": "../spec/srs.html#FR9" },
+    { "@id": "../spec/srs.html#FR10" },
+    { "@id": "../spec/srs.html#FR11" },
+    { "@id": "../spec/srs.html#FR34" },
+    { "@id": "../spec/srs.html#NFR1" },
+    { "@id": "../spec/srs.html#NFR4" },
+    { "@id": "./ADR-0009-vessel-grants-runner-permissions-and-mutation-proof.html" },
+    { "@id": "./ADR-0010-vessel-declaration-holds-allowlist-and-common-verify.html" },
+    { "@id": "./ADR-0014-polarity-list-is-a-snapshot-rendered-by-core.html" },
+    { "@id": "./ADR-0017-account-allowance-measured-into-event-log.html" },
+    { "@id": "./ADR-0018-working-memory-subcommands-and-pointer-required-directives.html" },
+    { "@id": "./ADR-0019-parallel-runs-exclude-overlap-at-intake-and-runner-resolves-conflicts.html" }
+  ]
+}
+</script>
+</head>
+<body>
+<!-- folio:chrome-top -->
+<a class="skip-link" href="#s1-context">本文へスキップ</a>
+<nav class="breadcrumb" aria-label="パンくず"><ol>
+  <li><a href="../index.html">design-intent</a></li>
+  <li><a href="./README.html">decisions</a></li>
+  <li aria-current="page">ADR-0021</li>
+</ol></nav>
+<!-- /folio:chrome-top -->
+
+<header class="doc-header">
+  <h1>ADR-0021 — gate の費用は測って決める (変異の並列度は rules 行の上限を host 横断の受付が実測で下げ、 器の子 process は cgroup で封じ、 木が同じ main 実測は検出線を撃ち直さず、 着地は gate 済みの便を先に通す)</h1>
+  <div class="meta">Status: accepted &middot; Date: 2026-09-12 &middot; version 0.4.6 (拘束する constitution の版) &middot; C1 / C2.2 / C5 / C6 / C10 / C11.2 / C12.4 / C12.6 / N1 の適用を記録し、 ADR-0019 §2.5 が射程外とした「同時に流す便の本数」の隣にある「便が host の資源をどう分け合うか」を決める &middot; 要件は SRS v0.6 (FR8 / FR9 / FR10 / FR11 / FR34 / NFR1 / NFR4) が正本 &middot; host の資源を枯渇させない要件は SRS に無く v0.7 の材料へ出す (§3)</div>
+</header>
+<!-- folio:chrome-toc -->
+<nav class="toc" aria-label="ページ内目次">
+<ol>
+  <li><a href="#s1-context">§1. Context</a></li>
+  <li><a href="#s2-decision">§2. Decision</a></li>
+  <li class="toc--sub"><a href="#s2-1-jobs">§2.1 変異検査の並列度は rules 行の上限 (宣言値) を実測で下げた実効値で渡し、 宣言値をそのまま渡さない</a></li>
+  <li class="toc--sub"><a href="#s2-2-confine">§2.2 器が起こす子 process は cgroup の scope で封じ、 溢れたときに死ぬのはその scope だけにする。 封じられない host は並列度 1 で進む</a></li>
+  <li class="toc--sub"><a href="#s2-3-slots">§2.3 受付は host 単位で、 project をまたいで空き memory を lease で分け合う。 枠が無ければ待ち、 待ち切れなければ並列度 1 で進む</a></li>
+  <li class="toc--sub"><a href="#s2-4-main-check">§2.4 main 実測は木の hash が gate の木と一致する周に検出線を撃ち直さない。 deny する行は撃ち直す</a></li>
+  <li class="toc--sub"><a href="#s2-5-land-order">§2.5 着地は gate 済みの便を先に通す (機構は後続の設計)</a></li>
+  <li class="toc--sub"><a href="#s2-6-scope">§2.6 射程外</a></li>
+  <li><a href="#s3-srs">§3. SRS との関係 (正本は SRS)</a></li>
+  <li><a href="#s4-consequences">§4. Consequences</a></li>
+  <li><a href="#s5-alternatives">§5. Alternatives Considered</a></li>
+  <li><a href="#s6-trace">§6. Trace</a></li>
+</ol>
+</nav>
+<!-- /folio:chrome-toc -->
+
+<aside class="informative">
+<p>本 ADR は IETF <strong>RFC 2119</strong> および <strong>RFC 8174 / BCP 14</strong> に定義される MUST / SHALL / SHOULD / MAY のキーワード解釈規約に従う。 ADR は決定時点の記録であり、 改訂は新しい ADR による supersede で行う。 本 ADR の <strong>§2 は user 裁定 (2026-09-12) を受けた決定</strong>で、 <strong>§3 は SRS v0.6 への pointer と v0.7 への材料</strong> である。 本 ADR は要件の文面を持たない。 <a href="./ADR-0019-parallel-runs-exclude-overlap-at-intake-and-runner-resolves-conflicts.html#s2-5-scope">ADR-0019 §2.5</a> が射程外とした「同時に流す便の本数の上限」そのものは決めず、 その隣の「便が host の資源をどう分け合い、 溢れたときに何が死ぬか」と「gate と main 実測の費用の重なり」を決める。 <strong>発効</strong>: 本 ADR は rules 行の値を持たず (C1)、 値は契約が裁定 id 付きで manifest に足す。 accepted である (§2.1〜§2.5 の実装 bead は起票できる)。</p>
+</aside>
+
+<aside class="machine-readable" aria-hidden="true">
+  <dl>
+    <dt>id</dt><dd>ADR-0021</dd>
+    <dt>doc-type</dt><dd>adr</dd>
+    <dt>status</dt><dd>accepted</dd>
+    <dt>date</dt><dd>2026-09-12</dd>
+    <dt>version</dt><dd>0.4.6 (拘束する constitution の版。 本 ADR は憲法の条文を動かさない)</dd>
+    <dt>decided-by</dt><dd>user (2026-09-12) — planner の提示 (1 = 変異検査の並列度を上げる / 2 = 木が同じ main 実測は変異検査を省く / 3 = gate 済みの便を先に着地させる) に対する裁定 (要旨: 推奨で進めてよい。 ただし 1 は memory 枯渇の kill を予防・対策する機能が要る。 複数 project / 複数 pipeline の同時走行に対応し、 余らせず使い切り、 実装コストが高すぎるなら報告)。 逐語は台帳の notes が原本で本 file には写さない (CON2)</dd>
+    <dt>stakeholders</dt><dd>Developer, AI Agent, External Reviewer</dd>
+    <dt>supersedes</dt><dd>なし (ADR-0009 §2.4 の verify の順序に検出線の段を 1 つ挿す・同 §2.4 の「land の main 実測も同じ順序で撃つ」は §2.4 の条件付きの省略で読み替える)</dd>
+    <dt>related</dt><dd>ADR-0009 §2.3 / §2.4 (変異検査・共通 verify の順序と main 実測) / ADR-0010 §2.1 / §2.5 (宣言 file) / ADR-0014 §2.1 (guard の定義と極性一覧) / ADR-0017 §2.1 (host の binary を子 process で呼ぶ形) / ADR-0018 §4 (manifest に無い rules 行は予定行) / ADR-0019 §2.2 / §2.5 (追随・射程外) / constitution C1 / C2.2 / C3 / C5 / C6 / C10 / C11.2 / C12.4 / C12.6 / C14.2 / N1 / SRS FR8 / FR9 / FR10 / FR11 / FR34 / NFR1 / NFR4</dd>
+  </dl>
+</aside>
+
+<section id="s1-context" class="informative">
+<h2>§1. Context</h2>
+<p class="section-essence" data-audience="human">便を 3 本同時に流したとき、 いちばん後に着地した便が 7 時間かかりました。 便そのものの大きさで説明できるのは審査 (gate) 1 周の 82 分だけで、 残りは「他の便が先に着地するたびに審査をやり直す」「着地の後に同じ木へ同じ審査をもう一度撃つ」「変異検査を 1 本ずつしか走らせない」という器の作りの費用でした。 user は「並列を上げてよいが、 memory がいっぱいになって process が殺される事故を防ぐ仕組みが要る。 複数の project でそれぞれ便を流すこともある。 かといって資源を余らせるのもよくない」と裁定しました。 この記録はその形を決めます。</p>
+<p data-audience="machine">記録時点 (2026-09-12) の現物: gate は verify 行を <code>sh -c</code> で 1 本ずつ撃ち (<code>pipe/gate.rs</code> の <code>run_line_captured</code>・gate と land の main 実測で同じ 1 本)、 変異検査は xtask <code>mutants-diff</code> が cargo-mutants を <code>--in-diff</code> / <code>-p</code> / <code>-o</code> で呼ぶ (<code>--jobs</code> を渡さない＝並列度 1)。 変異 1 本の費用 = 増分 build (実測 2 s) + package の test suite 1 周 (壁時計 34 s・30 s の実待ちを持つ歯 10 本が床・台帳 <code>s2-07l.151</code>)。 land は squash の後、 tmp worktree を切って gate と同じ verify を全行撃つ (<code>land.rs</code> の <code>verify_main</code>・設計 pipeline.md §5.4 手順 3)。 並列 3 便の実測 (台帳 <code>s2-07l.143</code>): 先着 21 分 / 2 本目 1 時間 40 分 (追随 1 回) / 後着 7 時間 13 分 (追随 3 回・stale 2 回・gate 82 分 × 4 周 + main 実測 78 分)。 器は子 process の memory / CPU を制限せず、 host の空き memory も測らない。 本 host は cgroup v2 で user scope に memory / cpu / pids の controller が委譲され、 <code>systemd-run --user --scope -p MemoryMax=…</code> で上限が効く (実測 2026-09-12)。 state dir は project ごと (<code>&lt;NAME&gt;-v2-state</code> / <code>&lt;NAME&gt;-v2-state-folio2</code>) で、 同じ host の state dir は 1 つの親の下に置かれている。</p>
+<p data-audience="machine">憲法の向き: <a href="../spec/constitution.html#c1">C1</a> / <a href="../spec/constitution.html#c5">C5</a> は閾値を rules 行に裁定 id 付きで持つ。 <a href="../spec/constitution.html#c2">C2.2</a> は env を読まず、 置き場を NAME 定数から導く。 <a href="../spec/constitution.html#c6">C6</a> は起動口を 1 つに限り、 Budget を Precheck の測定からしか作れない形を求める (資源の枠も同じ形が望ましい)。 <a href="../spec/constitution.html#c10">C10</a> は宣言値・測定値・実効値を型で分け、 宣言値を実効に上げるのは測定を通してだけとする。 <a href="../spec/constitution.html#c11">C11.2</a> は境界に極性を持たせ、 <a href="./ADR-0014-polarity-list-is-a-snapshot-rendered-by-core.html#s2-1-type">ADR-0014 §2.1</a> は guard の定義を持つ。 <a href="../spec/constitution.html#c12">C12.4</a> は変異の生存を検出線とし deny gate にしない (昇格は裁定)。 C12.6 は main を常に緑に保つ。 <a href="../spec/constitution.html#c3">C3</a> は host・口座・席・lease・退役の状態を 1 つの DB に置く (受付の一時的な印がこの対象かは §5 で読む)。 <a href="../spec/constitution.html#n1">N1</a> は器が管理する物を不可逆に消さない。 user の裁定 (2026-09-12・会話面・逐語は台帳 <code>s2-07l.153</code> の notes): 3 点の推奨でよい・1 (並列度) は memory 枯渇の kill を予防・対策する機能が前提・複数 project / 複数 pipeline の同時走行に対応・余らせず使い切る・実装コストが高すぎるなら報告。 続く裁定 (同日): 「最適な設計で進んで」。</p>
+</section>
+
+<section id="s2-decision" class="normative">
+<h2>§2. Decision</h2>
+
+<h3 id="s2-1-jobs">§2.1 変異検査の並列度は rules 行の上限 (宣言値) を実測で下げた実効値で渡し、 宣言値をそのまま渡さない</h3>
+<p class="section-essence" data-audience="human">「何本まで同時に走らせてよいか」は規則の値として持ちますが、 それをそのまま使いません。 実際に走らせる本数は、 その瞬間の host の空き memory を測って決めた本数との小さい方です。 本数は宣言 file の検証行に穴として置き、 器が実効値を埋めて撃ちます。 環境変数では渡しません。</p>
+<p data-audience="machine">器 SHALL 変異検査の並列度の上限を rules 行 (<code>gate.mutants_jobs</code>・kind は Int・値は裁定 id 付き・<a href="../spec/constitution.html#c5">C5</a>・本 ADR は値を決めない) で持ち、 実効値 SHALL <code>min(上限, §2.3 の受付が配った枠)</code> とする (<a href="../spec/constitution.html#c10">C10</a>: 上限は宣言値・空き memory は測定値・渡す本数は実効値)。 宣言 file の共通 verify が置ける穴 SHALL <code>{base}</code> と <code>{jobs}</code> の閉じた集合とし (<a href="./ADR-0010-vessel-declaration-holds-allowlist-and-common-verify.html">ADR-0010</a> の宣言の内側)、 器 SHALL <code>{jobs}</code> を実効値で置換して撃つ。 <code>{jobs}</code> を持たない行 SHALL 受付を通らない (枠を取らない)。 器 SHALL NOT 並列度を env で子 process に渡さない (<a href="../spec/constitution.html#c2">C2.2</a> の精神・裏口を作らない)。 xtask の <code>mutants-diff</code> は <code>--jobs N</code> を受け cargo-mutants にそのまま渡す (値を持たない)。 受付 (§2.3) が実装されるまで、 器 SHALL 実効値を 1 とする (上限を実効に上げるのは受付の測定を通してだけ)。</p>
+
+<h3 id="s2-2-confine">§2.2 器が起こす子 process は cgroup の scope で封じ、 溢れたときに死ぬのはその scope だけにする。 封じられない host は並列度 1 で進む</h3>
+<p class="section-essence" data-audience="human">審査の検証行、 実装役、 審査役の process は、 それぞれ memory の上限付きの箱 (cgroup の scope) の中で走らせます。 上限は「本数 × 1 本ぶんの memory」です。 箱の中で memory が溢れたら、 殺されるのはその箱の中の process だけで、 対話中の席や他の便、 他の project は生き残ります。 箱を作れない host では、 箱なし・1 本ずつで走らせ、 そのことを記録に残します。 便を止めることはしません。</p>
+<p data-audience="machine">器 SHALL verify 行 (gate と main 実測の共通の 1 本)・runner・lens の子 process を、 host の <code>systemd-run --user --scope</code> で作る transient scope の内側で起動し (<a href="./ADR-0017-account-allowance-measured-into-event-log.html">ADR-0017</a> の「host の binary を子 process で呼ぶ」と同じ形・依存の追加ではない)、 scope に memory の上限 (<code>MemoryHigh</code> / <code>MemoryMax</code> = 実効 jobs × rules 行 <code>gate.job_memory_mb</code>) と CPU の重み (rules 行 <code>gate.cpu_weight</code>・席は既定の重み) を付ける。 CPU に上限 SHALL NOT 付けない (memory だけが硬い資源)。 scope の終了時、 器 SHALL <code>memory.peak</code> を読んで verify.jsonl の行に <code>jobs=</code> <code>peak_mb=</code> を残す (cgroup の path は <code>/proc/self/cgroup</code> の自分の path から user manager の prefix を取って辿る・env を読まない・C2.2)。 <code>gate.job_memory_mb</code> の宣言値 SHALL peak の測定が溜まった後に裁定で置き換える (C10: 宣言値を実効に上げるのは測定を通してだけ)。 <code>systemd-run</code> が無い・scope を作れない周、 器 SHALL 封じ込めなし・並列度 1 で進み、 verify.jsonl に <code>confined=false reason=&lt;…&gt;</code> を記す (止めない)。 この境界 (<code>Confinement</code>: <code>Confined</code> / <code>Unconfined(reason)</code>) SHALL 極性一覧に <strong>InLoop / FailOpen</strong> で 1 行載る (<a href="../spec/constitution.html#c11">C11.2</a>・<a href="./ADR-0014-polarity-list-is-a-snapshot-rendered-by-core.html#s2-1-type">ADR-0014 §2.1</a>。 FailOpen の理由: 止めると systemd の無い host で便が 1 本も流れない。 縮退の並列度 1 は従来の費用と同じで安全側の失敗である)。</p>
+
+<h3 id="s2-3-slots">§2.3 受付は host 単位で、 project をまたいで空き memory を lease で分け合う。 枠が無ければ待ち、 待ち切れなければ並列度 1 で進む</h3>
+<p class="section-essence" data-audience="human">「いま何本走らせてよいか」は host 単位の受付が決めます。 受付は project ごとの置き場の 1 つ上 (同じ host の置き場が集まる親) に在るので、 別の project の便とも枠を分け合えます。 受付は毎回、 host の空き memory を測り、 席のために残す分を引き、 1 本ぶんの memory で割って「配れる本数」を出します。 同時に、 すでに配った枠の合計も数えます (配った直後はまだ memory を使っていないので、 空きだけ見ると 2 つの便が同じ枠を取ってしまうためです)。 枠が無ければ待ち、 待つ上限を超えたら 1 本で走らせて記録に残します。 0 本で走らせることも、 便を断ることもしません。</p>
+<p data-audience="machine">器 SHALL 受付の置き場を <code>&lt;state_dir の親&gt;/&lt;NAME&gt;-host/slots/</code> とし (NAME 定数から導く・env を読まない・<a href="../spec/constitution.html#c2">C2.2</a>。 同じ host の state dir が 1 つの親の下に在る運用が前提で、 親を分けた project は別の受付になる＝§2.6)、 枠 SHALL lease file 1 つ (<code>&lt;pid&gt;-&lt;run&gt;.lease</code>・内容は schema / pid / run / jobs / ts) で表す。 生きている lease SHALL <code>/proc/&lt;pid&gt;</code> の実在で判定し、 死んだ lease は次の受付が回収する (lease は器が管理する「物」ではなく受付の一時的な印で、 <a href="../spec/constitution.html#n1">N1</a> の対象外・§5)。 受付 SHALL 置き場の lock (flock・fleet と同じ 1 本) の内側で毎回測る (<a href="../spec/constitution.html#c10">C10</a>): <code>avail = MemAvailable − host.reserve_memory_mb</code>、 <code>by_avail = floor(avail / gate.job_memory_mb)</code>、 <code>by_lease = floor((MemTotal − host.reserve_memory_mb) / gate.job_memory_mb) − Σ 生きている lease の jobs</code>、 <code>free = min(by_avail, by_lease)</code>。 配る枠 SHALL <code>min(gate.mutants_jobs, free)</code> とし、 <code>free = 0</code> の周は lock を離して rules 行 <code>gate.slot_wait_s</code> の内で待ち、 超えたら 1 で進んで verify.jsonl に <code>slot=degraded</code> を記す。 器 SHALL NOT 0 で走らせない・便を断らない。 測れない周 (<code>/proc/meminfo</code> が読めない・lock が取れない) SHALL 1 で進み <code>slot=unmeasured</code> を記す (縮退・従来の費用)。 verify 行の終了で lease SHALL 消す。 受付は起動を止めないので guard ではなく、 極性一覧には載せない (載るのは §2.2 の封じ込め)。 rules 行 (<code>gate.mutants_jobs</code> / <code>gate.job_memory_mb</code> / <code>host.reserve_memory_mb</code> / <code>gate.slot_wait_s</code> / <code>gate.cpu_weight</code>) は契約が裁定 id 付きで manifest に足すまで本 ADR の予定行であり、 <a href="../spec/constitution.html#c14">C14.2</a> の相互参照は行が在って初めて成立する (<a href="./ADR-0018-working-memory-subcommands-and-pointer-required-directives.html#s4-consequences">ADR-0018 §4</a> と同じ扱い)。</p>
+
+<h3 id="s2-4-main-check">§2.4 main 実測は木の hash が gate の木と一致する周に検出線を撃ち直さない。 deny する行は撃ち直す</h3>
+<p class="section-essence" data-audience="human">審査を通った木と、 着地して main になった木は同じ木です (器はそれを毎回確かめています)。 同じ木に同じ変異検査をもう一度撃っても新しいことは分からないので、 着地後の実測では「検出線」(落ちても止めない行・変異検査) を撃ちません。 test / lint / 依存監査のように「落ちたら止める」行は撃ち直します。 審査は便の作業 dir で走り、 着地後の実測は追跡された file だけの木で走るので、 環境が違うからです。 木が違っていたら全部撃ちます。</p>
+<p data-audience="machine">宣言 file SHALL <code>detection-verify</code> (検出線の行の列・穴は <code>{base}</code> <code>{jobs}</code>) を持ち、 gate SHALL ① write-set の照合 → ② <code>common-verify</code> → ③ <code>detection-verify</code> → ④ 契約の verify の順で撃つ (<a href="./ADR-0009-vessel-grants-runner-permissions-and-mutation-proof.html#s2-4-common-verify">ADR-0009 §2.4</a> の順序に③を挿す・verify.jsonl の record 形は変えず <code>kind=detection</code> を足す)。 検出線の rc≠0 SHALL 従来どおり赤に数える (「測れていない」の印・測れなかったを通ったに化けさせない)。 gate SHALL verdict.json に <code>tree</code> (gate を撃った HEAD の <code>^{tree}</code> の sha) を残す (schema 1 のまま field を足す・読み手は未知の field を無視する)。 land の main 実測 SHALL <code>git rev-parse &lt;new&gt;^{tree}</code> が verdict の <code>tree</code> と一致する周に③を撃たず verify.jsonl に <code>skipped=detection tree=&lt;sha&gt;</code> を記し、 ①②④ は従来どおり撃つ。 一致しない周と <code>tree</code> の無い verdict の周 SHALL 全部撃つ。 ADR-0009 §2.4 の「land の main 実測も同じ順序で撃つ」は本項の条件付きの省略を含めて読む (SHALL be read as)。</p>
+
+<h3 id="s2-5-land-order">§2.5 着地は gate 済みの便を先に通す (機構は後続の設計)</h3>
+<p class="section-essence" data-audience="human">審査を通った便が着地を待っている間に別の便が先に着地すると、 待っていた便は出発点がずれて審査をやり直します。 これを防ぐため、 審査済みの便が在る間は他の便の着地を待たせます。 待たせる上限や詰まりの解き方は、 衝突の起こし直し (ADR-0019) が実装された後に別の設計で決めます。</p>
+<p data-audience="machine">器 SHALL <code>Gated</code> ∧ verdict PASS の run が在る間、 他の run の land を待たせる (先に gate を通った便を先に着地させる)。 順序の判定・待ちの上限 (rules 行・裁定 id 付き)・詰まりの解き方・追随 (<a href="./ADR-0019-parallel-runs-exclude-overlap-at-intake-and-runner-resolves-conflicts.html#s2-2-runner-resolves">ADR-0019 §2.2</a>) との関係は、 台帳 <code>s2-07l.147</code> の設計が <code>s2-07l.146</code> の land 後に決める。 本 ADR は原則だけを持つ。</p>
+
+<h3 id="s2-6-scope">§2.6 射程外</h3>
+<p class="section-essence" data-audience="human">この記録が決めるのは「並列度の実効値」「封じ込め」「host 単位の受付」「main 実測の検出線の省略」「着地の順序の原則」だけです。 host をまたぐ受付、 置き場の親を分けた project 同士の統合、 CPU の上限、 便の同時本数の上限、 30 秒の実待ちの歯の改修は別に決めます。</p>
+<p data-audience="machine">次は本 ADR の決定ではない (MUST NOT be read as such): 複数 host にまたがる受付 (受付は host 単位)、 state dir の親を分けた project 同士の受付の統合 (運用で親を揃える・doctor の検査項目は移行後の epic)、 CPU の上限と swap の制御、 cargo の <code>-j</code> (cargo-mutants の内側)、 便の同時本数の上限 (admission control・口座の自律制御 <code>s2-07l.142</code> と併せて別途)、 30 秒の実待ちを持つ歯の改修 (<code>s2-07l.151</code>・裁定不要)、 検出行の値 (total / caught / missed …) の記録 (<code>s2-07l.152</code>・§2.2 の行に相乗りする)、 <code>--pr-cmd</code> の子 process の封じ込め (host の gh を呼ぶだけ)。</p>
+</section>
+
+<section id="s3-srs" class="informative">
+<h2>§3. SRS との関係 (正本は SRS)</h2>
+<p class="section-essence" data-audience="human">この記録が仕える要件は、 審査 (FR8 / FR9)、 着地 (FR10 / FR11)、 追随 (FR34)、 審査役の予算 (NFR1)、 読めない記録の扱い (NFR4) です。 「host の資源を枯渇させない」という要件は要件書にまだ無いので、 次の版 (v0.7) の材料として user の手番に出します。</p>
+<div data-audience="machine">
+<p>本 ADR が仕える要件は SRS v0.6 が正本である: <a href="../spec/srs.html#FR8">FR8</a> / <a href="../spec/srs.html#FR9">FR9</a> (gate の機械検証と lens・§2.1 / §2.4)・<a href="../spec/srs.html#FR10">FR10</a> / <a href="../spec/srs.html#FR11">FR11</a> (land の前提と squash・§2.4 / §2.5)・<a href="../spec/srs.html#FR34">FR34</a> (追随・§2.5)・<a href="../spec/srs.html#NFR1">NFR1</a> (lens の予算・§2.2 の scope は予算の器ではなく memory の箱)・<a href="../spec/srs.html#NFR4">NFR4</a> (読めない store は rc 2・受付の測れない周は rc を変えず縮退する＝§2.3)。 「器は host の memory を枯渇させない (封じ込めと受付)」の NFR は SRS v0.6 に無く、 planner が v0.7 の材料 (planner state dir) として user の <code>/folio-architect</code> 手番に出す。 要件の文面はここには写さない。 rules 行の値・lease の file 形・scope の引数は §2 と現物が持ち SRS は持たない。</p>
+</div>
+</section>
+
+<section id="s4-consequences" class="informative">
+<h2>§4. Consequences</h2>
+<p class="section-essence" data-audience="human">良い面は、 変異検査が最大 4 倍速くなること、 memory が溢れても席や他の便が死なないこと、 別の project の便とも枠を分け合えること、 着地後の実測から変異検査 1 周ぶんが消えること、 そして 1 本ぶんの memory の値を実測で更新していけることです。 悪い面は、 host の systemd に依ること (無ければ 1 本ずつ)、 受付の置き場という host 単位の物が 1 つ増えること、 規則の行が 5 つ、 宣言 file の鍵が 1 つ、 止める仕組みの一覧が 1 行増えることです。</p>
+<p data-audience="machine">Positive: 変異検査の壁時計が実効 jobs ぶん縮む (上限 4 で約 3 分の 1)。 memory の溢れが scope の内側に閉じ、 席・他の便・他の project の process が kernel の OOM で選ばれない。 受付が project をまたぐので、 複数 project の便が同じ host で同時に走っても合計が守られる。 main 実測から検出線 1 周 (実測 75 分) が消える。 <code>peak_mb</code> の測定が溜まり、 <code>gate.job_memory_mb</code> を宣言値から測定値へ置き換える材料になる (C10)。 縮退 (並列度 1) は従来の費用と同じで、 どの失敗も便を止めない。</p>
+<p data-audience="machine">Negative (受け入れるコスト): <code>systemd-run</code> と cgroup v2 の user 委譲に依る (無い host は封じ込めなし・並列度 1・記録に残る)。 host 単位の置き場 (<code>&lt;NAME&gt;-host/slots/</code>) が state dir の外に 1 つ増え、 state dir の親を揃える運用が前提になる。 rules 行 5 つ・<code>RuleKind</code> 5 variant・宣言 file の鍵 1 つ (<code>detection-verify</code>) と穴 1 つ (<code>{jobs}</code>)・verify.jsonl の token 4 種 (<code>jobs= peak_mb= confined= slot= skipped=</code>)・verdict.json の field 1 つ (<code>tree</code>)・極性一覧の行 1 つ (<code>Confinement</code>・InLoop / FailOpen) が増える。 受付の測定は `MemAvailable` に依るので、 host の他の process が急に memory を使った周は scope の上限が守る (受付は追わない)。 `gate.job_memory_mb` の初期値は宣言値で、 実測が溜まるまで並列度が保守的に出る。 検出線を main 実測で省くので、 gate と main 実測の「同じ順序・同じ関数」は条件付きになる (ADR-0009 §2.4 の読み替え・§2.4)。</p>
+</section>
+
+<section id="s5-alternatives" class="informative">
+<h2>§5. Alternatives Considered</h2>
+<p class="section-essence" data-audience="human">6 つの案を退けました。 並列度を焼くだけの案は合計を見ません。 検査の範囲を絞る案は検出の質を落とします。 着地後の実測を全部省く案は環境の違いを見落とします。 受付を project ごとの DB に置く案は host をまたげません。 箱の path を環境変数から組む案は憲法に反します。 memory が足りなければ便を断る案は、 資源の少ない host で便が 1 本も流れません。</p>
+<p data-audience="machine">(A) <strong>xtask に <code>--jobs 4</code> を焼く</strong>。 却下: 合計を見ないので複数 gate / 複数 project で溢れる。 user 裁定で不採用 (防御が前提)。</p>
+<p data-audience="machine">(B) <strong>変異検査の test suite を絞る (unit だけ・package を狭める)</strong>。 却下: 変異の kill 判定が弱くなり検出線の質が落ちる。 30 秒の実待ちの解消 (<code>s2-07l.151</code>) で 1 変異の費用は同じ以上に下がる。</p>
+<p data-audience="machine">(C) <strong>main 実測を全部省く (lossless の実測が在るので)</strong>。 却下: gate は run の worktree (untracked を含む) で撃ち、 main 実測は tracked だけの木で撃つ。 untracked に依って通った便を main 実測が捕まえる価値は残る。 省くのは検出線だけ (§2.4)。</p>
+<p data-audience="machine">(D) <strong>受付を fleet DB (C3) に置く</strong>。 却下: DB は state dir ごと＝project ごとで host 横断にならない。 lease は「host・口座・席・lease・退役の状態」(C3 の列挙) の lease ではなく、 受付の一時的な印である (器が管理する物ではなく、 pid の実在で意味が決まる)。 C3 の「真実を per-host directory に置かない」は状態の真実についてで、 受付の印は真実を持たない (測り直せば同じ答えになる) と読む。 この読みは本 ADR の解釈であり、 憲法の条文は動かさない。</p>
+<p data-audience="machine">(E) <strong>cgroup の path を <code>XDG_RUNTIME_DIR</code> から組む・受付の置き場を <code>HOME</code> / <code>TMPDIR</code> から組む</strong>。 却下: env を読む (C2.2)。 cgroup は <code>/proc/self/cgroup</code> から、 置き場は state dir の親から導く。</p>
+<p data-audience="machine">(F) <strong>memory が足りない周は便を断る (fail-closed)</strong>。 却下: systemd の無い host や memory の少ない host で便が 1 本も流れない。 縮退 (並列度 1) は従来の費用と同じで安全側。 封じ込めの境界を FailOpen で一覧に載せ、 「止めない」を記録の上で選ぶ。</p>
+</section>
+
+<section id="s6-trace" class="informative">
+<h2>§6. Trace</h2>
+<p class="section-essence" data-audience="human">出所は、 並列 3 便の実測、 変異 1 本の費用の実測、 cgroup の実測、 user の裁定、 そして先行決定 (変異検査・宣言 file・極性一覧・追随) です。</p>
+<ul data-audience="machine">
+  <li>user の問いと裁定 (2026-09-12・会話面・planner 席): 7 時間の妥当性と改善点 → 3 点の推奨 → 「推奨で進めてよいが 1 は memory 枯渇の kill を防ぐ機能が要る・複数 project / 複数 pipeline・余らせない・コストが高すぎるなら報告」→ 「最適な設計で進んで」。 逐語は台帳 <code>s2-07l.153</code> の notes (tracked file には写さない・CON2)。</li>
+  <li>実測 (2026-09-12): 並列 3 便の所要と追随・stale の回数 (台帳 <code>s2-07l.143</code> / <code>.147</code> notes)。 変異 1 本の費用 (増分 build 2 s・suite 34 s・30 s の実待ち 10 本・<code>s2-07l.151</code>)。 cgroup v2 の user scope で <code>MemoryMax</code> が効く (本 host)。 検出行が記録に残らない (<code>s2-07l.152</code>)。</li>
+  <li>器の現物: <code>crates/&lt;NAME&gt;/src/pipe/gate.rs</code> (<code>run_line_captured</code>・<code>Limits</code>・verdict.json)・<code>pipe/land.rs</code> (<code>verify_main</code>・lossless の実測)・<code>pipe/spawn.rs</code> (<code>launch_runner</code>)・<code>headless/mod.rs</code> (<code>build</code>)・<code>pipe/declaration.rs</code> (<code>Holes</code>)・<code>xtask/src/mutantsdiff.rs</code> (<code>measure_args</code>・jobs 無し)・<code>.vessel.toml</code>。</li>
+  <li>先行決定: <a href="./ADR-0009-vessel-grants-runner-permissions-and-mutation-proof.html">ADR-0009</a> §2.3 / §2.4 (変異検査・verify の順序と main 実測)・<a href="./ADR-0010-vessel-declaration-holds-allowlist-and-common-verify.html">ADR-0010</a> (宣言 file)・<a href="./ADR-0014-polarity-list-is-a-snapshot-rendered-by-core.html">ADR-0014</a> §2.1 (極性一覧)・<a href="./ADR-0017-account-allowance-measured-into-event-log.html">ADR-0017</a> §2.1 (host の binary を子 process で呼ぶ)・<a href="./ADR-0019-parallel-runs-exclude-overlap-at-intake-and-runner-resolves-conflicts.html">ADR-0019</a> §2.2 / §2.5 (追随・射程外)。</li>
+  <li>設計: <code>docs/design/gate-cost.md</code> (費用の原則・rules 行・受付・封じ込め・main 実測の省略・順序の原則・歯・契約 4 便・却下案)。 土台 pipeline.md の §5.3 / §5.4 / §6 は同じ便で本 doc への pointer を持つ。</li>
+</ul>
+</section>
+
+<!-- folio:chrome-bottom -->
+<nav class="prevnext" aria-label="前後の文書">
+  <a class="prevnext__prev" href="ADR-0019-parallel-runs-exclude-overlap-at-intake-and-runner-resolves-conflicts.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">ADR-0019 — 並列の便は intake が write-set の交差で排他し、 land の rebase 衝突は runner を起こし直して解く (人は質問の回答でだけ関わる・admin は中継と操作・手で merge する経路を持たない・ADR-0016 §2.2 の質問判定と再 spawn の契機を部分 supersede)</span></a>
+</nav>
+<script>
+(function () {
+  var openedForPrint = [];
+  window.addEventListener('beforeprint', function () {
+    openedForPrint = [];
+    var ds = document.querySelectorAll('details:not([open])');
+    for (var i = 0; i < ds.length; i++) { ds[i].setAttribute('open', ''); openedForPrint.push(ds[i]); }
+  });
+  window.addEventListener('afterprint', function () {
+    for (var i = 0; i < openedForPrint.length; i++) openedForPrint[i].removeAttribute('open');
+    openedForPrint = [];
+  });
+  if (!document.querySelector('[data-audience]')) return;
+  /* 既定 = 人間プレゼン型 (ADR-0040 / rules §11.3): script 経由で初期 class を付与するため
+     no-JS では付かず全文可視に graceful degrade する。 static DOM は全文を保持 (AI/検索/印刷は不変)。 */
+  document.body.classList.add('audience-human');
+  var bar = document.createElement('nav');
+  bar.className = 'audience-toggle';
+  bar.setAttribute('aria-label', '表示対象の切替');
+  var states = [['both', '両方'], ['human', '人間向け'], ['machine', '機械向け']];
+  for (var s = 0; s < states.length; s++) {
+    (function (mode, label) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      b.setAttribute('aria-pressed', mode === 'human' ? 'true' : 'false');
+      b.addEventListener('click', function () {
+        document.body.classList.remove('audience-human', 'audience-machine');
+        if (mode !== 'both') document.body.classList.add('audience-' + mode);
+        var bs = bar.querySelectorAll('button');
+        for (var j = 0; j < bs.length; j++) bs[j].setAttribute('aria-pressed', bs[j] === b ? 'true' : 'false');
+      });
+      bar.appendChild(b);
+    })(states[s][0], states[s][1]);
+  }
+  var bc = document.querySelector('nav.breadcrumb');
+  if (bc && bc.parentNode) { bc.parentNode.insertBefore(bar, bc.nextSibling); }
+  else { document.body.insertBefore(bar, document.body.firstChild); }
+})();
+</script>
+<!-- /folio:chrome-bottom -->
+</body>
+</html>
