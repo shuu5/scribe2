@@ -74,7 +74,7 @@
 ## 8. 契約（3 便・この順）
 
 - **(a)** `json_lite` の入れ子 reader（`Tree`）— core の中だけ・依存 0・event log の flat reader は不変。base で RED = 入れ子の parse の歯（機能不在）。
-- **(b)**（前提: rules 行 `fleet.usage_timeout_s` の値の user 裁定が先に在ること・C5。裁定前に起票しない）manifest `[[account]]` 行 + `EventKind` 2 variant + `UnmeasuredReason` + `run` / `bead` 任意化 + replay の `allowance` + rules 行 `fleet.usage_timeout_s`（kind `UsageTimeoutS`・裁定 id）+ 極性一覧 / 外形 snapshot の更新。write-set は構造の連鎖（manifest + `rules/mod.rs` + snapshot + kind 件数の歯 + `fleet/mod.rs` + `polarity`）。
+- **(b)**（前提: rules 行 `fleet.usage_timeout_s` の値の user 裁定が先に在ること・C5。裁定前に起票しない）manifest `[[account]]` 行 + `EventKind` 2 variant + `UnmeasuredReason` + `run` / `bead` 任意化 + replay の `allowance` + rules 行 `fleet.usage_timeout_s`（kind `UsageTimeoutS`・裁定 id）+ 外形 snapshot の更新（極性一覧は不変・§6）。write-set は構造の連鎖（manifest + `rules/mod.rs` + rules の外形 snapshot + kind 件数の歯 + `fleet/mod.rs`・`polarity` は触らない）。
 - **(c)** `fleet usage` / `--show` + 子 process 起動 + credential 読み + 偽 client の test helper。(a) (b) に依存。
 - AC11 の実演は (c) の land 後に planner が host で行い、値の一致を bead notes に逐語で記帳する。
 
