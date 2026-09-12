@@ -468,9 +468,9 @@ terms:
     relationships: [口座, fleet, 上限 record, Measured]
   - canonical: 暫定行
     domain: consumer
-    definition: 作業記憶の「命令・制約」行のうち出所 pointer (憲法条・ADR・rules 行・裁定 id・user 裁定の時刻) を持たない行 (SRS FR23 / AC8)。
+    definition: 作業記憶の「命令・制約」行のうち出所 pointer を持たない行、 または持っていても器が形で分類できない行 (SRS FR23 / AC8・ADR-0018 §2.2)。 復元の DATA に印付きで列挙され、 次の cycle に引き継がれない。
     forbidden: [仮の行, 暫定命令]
-    relationships: [作業記憶, 退避物, 憲法]
+    relationships: [作業記憶, 退避物, 出所 pointer, 憲法]
   # ---------------------------------------------------------------- ADR-0017 (口座残量の計測の形)
   - canonical: 口座 label
     domain: consumer
@@ -491,5 +491,5 @@ terms:
     relationships: [作業記憶, cycle, 管理 tick]
   - canonical: 出所 pointer
     domain: consumer
-    definition: 作業記憶の命令行が本文末に持つ、 実在を照合できる carrier 参照 (憲法条・ADR・設計 doc・rules 行・台帳 id・repo 内 path・memory・PR 番号)。 器は形を閉じた enum (PointerKind) で分類し、 宣言順を優先順位とする (ADR-0018 §2.2)。 持たない行は暫定行。
+    definition: 作業記憶の命令行が本文末に持つ、 実在を照合できる carrier 参照。 器は形を閉じた enum (PointerKind) で分類し、 宣言順を優先順位とする (ADR-0018 §2.2)。 形の列挙は機械側 (PointerKind::ALL と外形 snapshot) が正本で、 本 file は写さない。 持たない行・分類できない行は暫定行。
     relationships: [作業記憶, 暫定行, 宣言順]
