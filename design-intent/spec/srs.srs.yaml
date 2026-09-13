@@ -54,7 +54,8 @@ scope:
     - 口座残量の計測と記録
     - 追随
     - 上限停止した便の別口座での再開
-    - 開発 session の役割と権能
+    - 開発 session の役割
+    - 権能
     - 席の指示文の注入
     - 席の継続
     - 席間の連絡
@@ -692,4 +693,4 @@ glossary:
   - { term: anchor,         en: anchor,                 plain_short: 対象 repo の本体,             def: 対象 repo の main checkout。 席と便の鍵の一部で、 1 つの anchor に planner 1 席・管理席 1 席（FR40）。 }
   - { term: 席の指示文,   en: role brief,             plain_short: 席に差し込む指示,         def: 役割ごとの雛形と権能の rules 行から器が生成し、 session の文脈が初期化されるたびに注入する文（FR42）。 手書きの規範文は持たない。 }
   - { term: 席の queue,     en: seat queue,             plain_short: 席が抱える次の仕事,       def: 席に向けた dispatch・席宛ての質問・裁定済みの次の行動の集合（FR43）。 承認と裁定の待ちだけなら正当な idle。 }
-  - { term: 席間の連絡,     en: inter-seat message,     plain_short: 席どうしの message,       def: 開発 session の席どうしの message を、 入力欄を経由しない経路で届け、 経路の記録で着地を確かめること（FR44）。 }
+  - { term: 席間の連絡,     en: inter-seat message,     plain_short: 席から席へのやり取り,       def: 開発 session の席どうしの message を、 入力欄を経由しない経路で届け、 経路の記録で着地を確かめること（FR44）。 }

@@ -436,10 +436,11 @@ tr[data-component="ears-requirement-row"] td.resp .why:empty::after{content:"⚠
 <li><span class="b">●</span>口座残量<span class="term" data-component="plain-language-term-inline" data-term="口座残量">口座の残りと reset 時刻</span>の計測と記録</li>
 <li><span class="b">●</span>追随<span class="term" data-component="plain-language-term-inline" data-term="追随">main に追いつくこと</span></li>
 <li><span class="b">●</span>上限停止<span class="term" data-component="plain-language-term-inline" data-term="上限停止">口座の上限で止まること</span>した便の別口座での再開</li>
-<li><span class="b">●</span>開発 session の役割<span class="term" data-component="plain-language-term-inline" data-term="役割">席の種類</span>と権能<span class="term" data-component="plain-language-term-inline" data-term="権能">役割に許された操作</span></li>
+<li><span class="b">●</span>開発 session の役割<span class="term" data-component="plain-language-term-inline" data-term="役割">席の種類</span></li>
+<li><span class="b">●</span>権能<span class="term" data-component="plain-language-term-inline" data-term="権能">役割に許された操作</span></li>
 <li><span class="b">●</span>席の指示文<span class="term" data-component="plain-language-term-inline" data-term="席の指示文">席に差し込む指示</span>の注入</li>
 <li><span class="b">●</span>席の継続</li>
-<li><span class="b">●</span>席間の連絡<span class="term" data-component="plain-language-term-inline" data-term="席間の連絡">席どうしの message</span></li>
+<li><span class="b">●</span>席間の連絡<span class="term" data-component="plain-language-term-inline" data-term="席間の連絡">席から席へのやり取り</span></li>
 <li><span class="b">●</span>便の封じ込め<span class="term" data-component="plain-language-term-inline" data-term="封じ込め">memory 上限付きの箱</span></li>
 <li><span class="b">●</span>受付の枠<span class="term" data-component="plain-language-term-inline" data-term="受付の枠">変異検査の並列の枠</span></li>
 </ul></div><div class="scol out"><h3>✕ 扱わない (out of scope)</h3><ul>
@@ -468,7 +469,7 @@ tr[data-component="ears-requirement-row"] td.resp .why:empty::after{content:"⚠
 <tr data-component="source-trace-row"><td><span class="nid">N-5</span></td><td>前の版（v1）を使わず、 design-intent を拘束条件として自分で自分を作る</td><td><span class="origin">ADR-0003（v1 完全放棄）</span></td></tr>
 </tbody></table></div>
 </div>
-<section data-component="chapter-deck-band" class="tint-brand"><span class="num">04</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M9 12l2 2 4-4"/></svg> 機能要件 / システムが必ずやること</span><h2>「いつ・何をするか」を一つずつ決める</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-04">器が「いつ・何をするか」を 46 本の機能要件で一つずつ定めます。契約の検査 → 便の永続 → runner の起動と完了判定 → flip check と gate → land と export → stop と resume → 承認の停止と再開 → rules manifest → marker と hook → 計測 → 作業記憶の作法 → 開発 session の計測・cap guard・管理 tick・cycle・退避の合図 → 配送構造と質問の停止・再開 → 口座残量の計測 → 追随 → 上限停止の検知・口座選定・別口座での再開・session の上限前の退避 → intake の排他 → 席の登録・権能の所在・指示文の注入・席の継続・席間の連絡 → 権能の執行 → 縮退、という並びで、各行にはやさしい言い換えと「なぜ要る」の根拠を添えています。</p></section>
+<section data-component="chapter-deck-band" class="tint-brand"><span class="num">04</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M9 12l2 2 4-4"/></svg> 機能要件 / システムが必ずやること</span><h2>「いつ・何をするか」を一つずつ決める</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-04">器が「いつ・何をするか」を 46 本の機能要件で一つずつ定めます。契約の検査 → 便の永続 → runner の起動と完了判定 → flip check と gate → land と export → stop と resume → 承認の停止と再開 → rules manifest → marker と hook → 計測 → 作業記憶の作法 → 開発 session の計測・cap guard・管理 tick・cycle・退避の合図 → 配送構造と質問の停止・再開 → 口座残量の計測 → 追随 → 上限停止の検知・口座選定・別口座での再開・session の上限前の退避 → intake の排他 → 席の登録・権能の所在・指示文の注入・席の継続・席間の連絡 → 権能の執行 → 縮退、という主な並びで、各行にはやさしい言い換えと「なぜ要る」の根拠を添えています。</p></section>
 <div class="chapbody">
 <div class="ears-legend"><span class="lt">タイプ:</span> <span class="ears trigger">きっかけ <span class="en">When</span></span> <span class="ears state">状態 <span class="en">While</span></span> <span class="ears forbid">禁止 <span class="en">If-Then</span></span> <span class="ears always">恒常 <span class="en">Ubiq.</span></span> <span class="lt" style="margin-left:8px">優先:</span><span class="prio must" data-component="priority-badge">必須</span><span class="prio should">推奨</span> <span class="lt" style="margin-left:8px">検証:</span><span class="vmeth">T=テスト</span> <span class="vmeth">A=分析</span> <span class="vmeth">I=目視確認</span> <span class="vmeth">D=実演</span></div>
 <div class="tbl-wrap"><table data-component="requirement-matrix-table"><thead><tr><th>ID</th><th>タイプ</th><th>いつ (条件)</th><th>何をする (+ やさしい言い換え + なぜ要る)</th><th>優先/検証</th></tr></thead><tbody>
@@ -520,7 +521,7 @@ tr[data-component="ears-requirement-row"] td.resp .why:empty::after{content:"⚠
 <tr data-component="ears-requirement-row" data-req-id="FR46" id="FR46"><td><span class="fid">FR46</span></td><td><span class="ears trigger">きっかけ</span></td><td class="cond">封じ込めか受付の枠が使えない host で便が起動されたとき</td><td class="resp">器は並列度 1 で進み、 便を断らず、 縮退の事実と理由を record に残す<span class="plain" data-prose-slot="plain" data-slot-id="plain-FR46">箱（封じ込め）や受付の枠が使えない host で便を起動しても、器は断りません。並列度を 1 に落として進み、落としたことと理由を記録に残します。</span><span class="why" data-prose-slot="rationale" data-source="N-1" data-slot-id="rationale-FR46">自律安全（N-1）と消費は害（N-2）から来ています。資源の防御が無い host で便を断ると、便が 1 本も流れません。</span></td><td><span class="prio must" data-component="priority-badge">必須</span> <span class="vmeth">T</span></td></tr>
 </tbody></table></div>
 </div>
-<section data-component="chapter-deck-band" class="tint-violet"><span class="num">05</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M13 2L3 14h7l-1 8 10-12h-7l1-8z"/></svg> 非機能要件 / 速さ・安定・安全の数値約束</span><h2>「どれくらい速く・落ちず・安全か」を数字で約束する</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-05">「どれくらい小さく・速く・安全か」を数字で約束します。lens の予算・契約の大きさ・依存の本数・黙って落とさない件数・hook の時間・host の資源の 6 点を、それぞれの測り方とセットで示します。</p></section>
+<section data-component="chapter-deck-band" class="tint-violet"><span class="num">05</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M13 2L3 14h7l-1 8 10-12h-7l1-8z"/></svg> 非機能要件 / 速さ・安定・安全の数値約束</span><h2>「どれくらい速く・落ちず・安全か」を数字で約束する</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-05">「どれくらい速く・落ちず・安全か」を数字で約束します。lens の予算・契約の大きさ・依存の本数・黙って落とさない件数・hook の時間・host の資源の 6 点を、それぞれの測り方とセットで示します。</p></section>
 <div class="chapbody">
 <div data-component="nfr-hero-metrics">
 <div class="nfr-hero c1"><div class="cat">予算</div><div class="big">0.15<span class="u">M token</span></div><div class="qual">lens 1 本あたりの上限</div></div>
@@ -703,7 +704,7 @@ tr[data-component="ears-requirement-row"] td.resp .why:empty::after{content:"⚠
 </div>
 <footer class="foot" data-component="fidelity-sync-meta"><div class="ft-grid">
 <div class="ft-plain">このページは、大もとの機械データ (正本) から自動で組み立てられています。構造は機械が自動で検査し、内容が元データに忠実かは独立のレビューで確かめます。</div>
-<div data-audience="machine">機械SSoT: <b>srs.srs.yaml</b> &middot; 生成: <b>2026-09-13 02:13</b> &middot; 検証状態: <b>structure ✓ fabrication-free / prose ✓ 充填済 (fidelity ceiling → S5 対象)</b></div>
+<div data-audience="machine">機械SSoT: <b>srs.srs.yaml</b> &middot; 生成: <b>2026-09-13 02:21</b> &middot; 検証状態: <b>structure ✓ fabrication-free / prose ✓ 充填済 (fidelity ceiling → S5 対象)</b></div>
 <div class="tags" data-audience="machine"><span>folio design system</span><span>deck × B2</span><span>ISO/IEC/IEEE 29148</span><span>S4 生成</span></div>
 </div></footer>
 </body>
