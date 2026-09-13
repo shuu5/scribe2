@@ -53,7 +53,7 @@
 - **字面の絞り込みを続ける**（`.94` (A)・`.96`）: 版ごとに再発し、C3.3 の緊張が残る。
 - **`tool_input.command` / prompt 文から target を読む**: 自由文を判定入力にする（C3.3）。
 - **`/proc/<pid>/fd` から transcript を辿って sid を得る**: OS 依存・fd が開いている保証が無い。
-- **transcript の mtime で busy を推定**: 時間依存の ad-hoc 判定（憲法の順位 1 位・ad-hoc 禁止）。
+- **transcript の mtime で busy を推定**: 時間依存の ad-hoc 判定（憲法の順位の第一「ad-hoc な修正の禁止」に当たる・C16）。
 
 ## 8. 歯（契約 `s2-07l.95`・接頭辞 `seat_state_` / 既存 `seat_tick_` の更新）
 
