@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="folio-doc-type" content="adr">
+<meta name="folio-layer" content="project">
+<meta name="folio-version" content="0.4.6">
+<meta name="folio-status" content="accepted">
+<meta name="folio-stakeholders" content="Developer, AI Agent, External Reviewer">
+<meta name="folio-adr-id" content="0024">
+<meta name="folio-adr-date" content="2026-09-13">
+<title>ADR-0024 — 実測行の reset 時刻は任意とし、 消費の無い窓 (使用率 0・reset 無し) を「測れた 0%・reset 未定」の Measured として記録し、 選定と逼迫度は reset 無しの行を古くない実測として数える (ADR-0017 §2.1 の一文を部分 supersede)</title>
+<link rel="stylesheet" href="../../common.css">
+<script type="application/ld+json">
+{
+  "@context": {
+    "dc": "http://purl.org/dc/terms/",
+    "schema": "https://schema.org/",
+    "folio": "https://folio.dev/spec/v1/"
+  },
+  "@id": "./ADR-0024-idle-window-reset-time-is-optional-in-allowance-row.html",
+  "@type": "schema:TechArticle",
+  "dc:isPartOf": [
+    { "@id": "./README.html" }
+  ],
+  "dc:title": "ADR-0024 — 実測行の reset 時刻は任意とし、 消費の無い窓 (使用率 0・reset 無し) を「測れた 0%・reset 未定」の Measured として記録し、 選定と逼迫度は reset 無しの行を古くない実測として数える (ADR-0017 §2.1 の一文を部分 supersede)",
+  "folio:version": "0.4.6",
+  "folio:stakeholders": ["Developer", "AI Agent", "External Reviewer"],
+  "dc:references": [
+    { "@id": "../spec/constitution.html#c3" },
+    { "@id": "../spec/constitution.html#c9" },
+    { "@id": "../spec/constitution.html#c10" },
+    { "@id": "../spec/constitution.html#c11" },
+    { "@id": "../spec/srs.html#FR33" },
+    { "@id": "../spec/srs.html#FR35" },
+    { "@id": "../spec/srs.html#FR36" },
+    { "@id": "../spec/srs.html#FR38" },
+    { "@id": "../spec/srs.html#AC13" },
+    { "@id": "../spec/srs.html" },
+    { "@id": "./ADR-0004-mvp-persistence-and-cross-version-formats.html" },
+    { "@id": "./ADR-0017-account-allowance-measured-into-event-log.html" },
+    { "@id": "./ADR-0020-account-autonomy-limit-stop-resume-and-selection.html" }
+  ]
+}
+</script>
+</head>
+<body>
+<!-- folio:chrome-top -->
+<a class="skip-link" href="#s1-context">本文へスキップ</a>
+<nav class="breadcrumb" aria-label="パンくず"><ol>
+  <li><a href="../index.html">design-intent</a></li>
+  <li><a href="./README.html">decisions</a></li>
+  <li aria-current="page">ADR-0024</li>
+</ol></nav>
+<!-- /folio:chrome-top -->
+
+<header class="doc-header">
+  <h1>ADR-0024 — 実測行の reset 時刻は任意とし、 消費の無い窓 (使用率 0・reset 無し) を「測れた 0%・reset 未定」の Measured として記録し、 選定と逼迫度は reset 無しの行を古くない実測として数える (ADR-0017 §2.1 の一文を部分 supersede)</h1>
+  <div class="meta">Status: accepted &middot; Date: 2026-09-13 &middot; version 0.4.6 (拘束する constitution の版) &middot; C10 / C9.2 / C3 の適用を記録し、 ADR-0017 §2.1 の「実測行は使用率と reset 時刻を持つ」を reset 時刻の必須性に限って supersede &middot; 要件は SRS v0.8 (FR33 / FR36 / FR38 / AC13) が正本</div>
+</header>
+<!-- folio:chrome-toc -->
+<nav class="toc" aria-label="ページ内目次">
+<ol>
+  <li><a href="#s1-context">§1. Context</a></li>
+  <li><a href="#s2-decision">§2. Decision</a></li>
+  <li class="toc--sub"><a href="#s2-1-optional-reset">§2.1 実測行の reset 時刻は任意。 消費の無い窓は「測れた 0%・reset 未定」の Measured 行</a></li>
+  <li class="toc--sub"><a href="#s2-2-counting">§2.2 選定と逼迫度は reset 無しの行を古くない実測として数え、 最も早い reset の導出には数えない</a></li>
+  <li class="toc--sub"><a href="#s2-3-schema">§2.3 event log の schema 版は 1 のまま。 field の欠けを許すのは AllowanceMeasured の resets_at だけ</a></li>
+  <li class="toc--sub"><a href="#s2-4-scope">§2.4 射程外</a></li>
+  <li><a href="#s3-srs">§3. SRS との関係 (正本は SRS)</a></li>
+  <li><a href="#s4-consequences">§4. Consequences</a></li>
+  <li><a href="#s5-alternatives">§5. Alternatives Considered</a></li>
+  <li><a href="#s6-trace">§6. Trace</a></li>
+</ol>
+</nav>
+<!-- /folio:chrome-toc -->
+
+<aside class="informative">
+<p>本 ADR は IETF <strong>RFC 2119</strong> および <strong>RFC 8174 / BCP 14</strong> に定義される MUST / SHALL / SHOULD / MAY のキーワード解釈規約に従う。 ADR は決定時点の記録であり、 改訂は新しい ADR による supersede で行う。 本 ADR の <strong>§2 は planner の裁定 (2026-09-13・承認 SSOT の 3 クラス〔消す / 出す / 使う〕に非該当ゆえ AI 判断・on-disk の event の形に触るため ADR を要する)</strong> で、 <strong>§3 は SRS への pointer</strong> である。 本 ADR は要件の文面を 1 字も持たず、 <strong>理由・形・却下案</strong> だけを持つ。 本 ADR は <a href="./ADR-0017-account-allowance-measured-into-event-log.html#s2-1-event-log">ADR-0017 §2.1</a> のうち「<code>AllowanceMeasured</code> 行は使用率 (整数 %) と reset 時刻 (UTC) を持つ」の一文を、 <strong>reset 時刻の必須性に限って</strong> supersede する (ADR-0017 の他の決定・ADR-0020 の選定と再開の形は不変)。</p>
+</aside>
+
+<aside class="machine-readable" aria-hidden="true">
+  <dl>
+    <dt>id</dt><dd>ADR-0024</dd>
+    <dt>doc-type</dt><dd>adr</dd>
+    <dt>status</dt><dd>accepted</dd>
+    <dt>date</dt><dd>2026-09-13</dd>
+    <dt>version</dt><dd>0.4.6 (拘束する constitution の版。 本 ADR は憲法の条文を動かさない)</dd>
+    <dt>decided-by</dt><dd>planner (2026-09-13) — 承認 SSOT の 3 クラスに非該当の AI 判断。 事実の出所は管理席の実測 (台帳 s2-07l.225 の description) と planner の AC13 実演 (台帳 s2-07l の notes)。 逐語は台帳が原本で、 本 file には写さない (CON2)</dd>
+    <dt>stakeholders</dt><dd>Developer, AI Agent, External Reviewer</dd>
+    <dt>supersedes</dt><dd>ADR-0017 §2.1 の一文「AllowanceMeasured 行は使用率 (整数 %) と reset 時刻 (UTC) を持つ」を、 reset 時刻の必須性に限って supersede する (使用率は必須のまま・AllowanceUnmeasured 行の形・出所 3 つ・schema 版 1 は不変)</dd>
+    <dt>related</dt><dd>ADR-0004 §2.5 (schema 版・既存の行はすべて読める) / ADR-0017 §2.1 / §2.2 (実測行の形・FailOpen の失敗) / ADR-0020 §2.2 / §2.3 (選定の純関数・候補なしの周は最も早い reset まで待つ) / constitution C3 / C9.2 / C10 / C11.2 / C11.3 / SRS FR33 / FR35 / FR36 / FR38 / AC13 / CON2</dd>
+  </dl>
+</aside>
+
+<section id="s1-context" class="informative">
+<h2>§1. Context</h2>
+<p class="section-essence" data-audience="human">口座の残りを読む口 (ADR-0017) は、 各窓の「使用率」と「いつ元に戻るか (reset 時刻)」の 2 つが揃って初めて「測れた」としていました。 ところが口座の endpoint は、 その窓にまだ消費が無い口座に対して「使用率 0・reset は無し (null)」を返します。 器はこれを「形が違う＝測れなかった」と記録し、 口座の選定は「測れない口座は選ばない」規則でその口座を外します。 結果、 使い始めていない口座ほど便に選ばれず、 使い始めなければ 5 時間窓に消費が乗らないので永久に選ばれません。 並列の便が 1 口座に閉じ、 席の立て直しの候補も痩せました。 この記録は、 消費の無い窓を「測れた 0%・reset 未定」として正直に記録し、 選定がそれを数えるように形を決めます。</p>
+<p data-audience="machine">記録時点 (2026-09-13) の現物 (main <code>1658d79</code>): 口座の endpoint の応答は <code>five_hour</code> / <code>seven_day</code> = <code>{utilization: 数, resets_at: 文字列}</code> (設計 <code>docs/design/fleet-usage.md</code> §3) と設計されているが、 5 時間窓に消費の無い口座では <code>five_hour = {utilization: 0.0, resets_at: null}</code> が返る (管理席の実測・3 口座で同形・使い始めた口座は同じ周から文字列になる)。 <code>fleet/usage.rs</code> の <code>reading()</code> は <code>resets_at</code> を文字列必須で読み (<code>node.get("resets_at")?.as_str()?</code>)、 欠けは <code>UnmeasuredReason::ShapeMismatch</code> の <code>AllowanceUnmeasured</code> 行になる。 <code>fleet/select.rs</code> の <code>fresh_windows()</code> は「数える窓に Unmeasured が在れば測れない口座」として候補から外し (設計 <code>account-autonomy.md</code> §3・<a href="../spec/constitution.html#c10">C10</a>)、 <code>seat/tick.rs</code> の <code>pressure()</code> も同じ数え方で逼迫度を <code>None</code> にする。 <code>EventKind::AllowanceMeasured</code> の <code>resets_at</code> は <code>String</code> 必須 (<code>fleet/mod.rs</code>)。 実害: 便用の候補が使用中の 1 口座に閉じ (<code>fleet select --purpose run</code> = 1 口座・除くと <code>none=all-limited</code>)、 user 直命の 4 便並列が成立しない。 席の立て直し (FR38・AC13) の候補も同じ理由で痩せる。</p>
+<p data-audience="machine">憲法の向き: <a href="../spec/constitution.html#c10">C10</a> は宣言値・出所付き実測値・導出値・有効値を型で分ける。 「消費が無く reset が予定されていない」は endpoint が返した<strong>実測</strong>であって「測れなかった」ではなく、 reset 時刻を計測 ts + 窓長で埋める形は実測行に<strong>導出値</strong>を混ぜる。 <a href="../spec/constitution.html#c9">C9.2</a> は各口座を allowance 窓の終わりまで使い切ると定め、 消費 0 の口座を選べない形はその逆に倒れる。 <a href="../spec/constitution.html#c11">C11.3</a> は core で untyped な error を持たず、 <a href="../spec/constitution.html#c3">C3</a> は fleet の状態を 1 つの file に置く。 先行決定: <a href="./ADR-0017-account-allowance-measured-into-event-log.html#s2-1-event-log">ADR-0017 §2.1</a> は実測行が使用率と reset 時刻を持つと定め、 <a href="./ADR-0004-mvp-persistence-and-cross-version-formats.html#s2-5-schema-version">ADR-0004 §2.5</a> D-5 は「同じ schema 番号なら既存の行はすべて読める」と定める (field を足す・必須を任意へ緩めるはこの内側・<code>run</code> / <code>bead</code> を任意へ緩めた前例が ADR-0017 §2.1 に在る)。 <a href="./ADR-0020-account-autonomy-limit-stop-resume-and-selection.html">ADR-0020</a> §2.2 / §2.3 は選定の純関数と「候補なしの周は最も早い reset まで待つ」を定める。</p>
+</section>
+
+<section id="s2-decision" class="normative">
+<h2>§2. Decision</h2>
+
+<h3 id="s2-1-optional-reset">§2.1 実測行の reset 時刻は任意。 消費の無い窓は「測れた 0%・reset 未定」の Measured 行</h3>
+<p class="section-essence" data-audience="human">endpoint が「使用率 0・reset 無し」と返した窓は、 「測れなかった」ではなく「測れた。 使っていないので戻る時刻もまだ無い」として記録します。 行には使用率 0 を書き、 reset 時刻の欄は置きません。 逆に、 使用率が 0 でないのに reset 時刻が無い応答は、 endpoint の約束と食い違うので従来どおり「形が違う＝測れなかった」のままです。 0 を書けるのはこの 1 形だけです。</p>
+<p data-audience="machine">器 SHALL <code>AllowanceMeasured</code> 行の <code>resets_at</code> を<strong>任意 field</strong>とする。 応答の窓が <code>utilization</code> (数) を持ち <code>resets_at</code> が <code>null</code> (または不在) である周、 器 SHALL その窓を <code>AllowanceMeasured</code> (<code>used_pct</code> = 読んだ整数 %・<code>resets_at</code> 無し) として記録する。 この形 SHALL <code>used_pct</code> が <strong>0 の周に限る</strong>: <code>utilization</code> が 0 でなく <code>resets_at</code> が無い応答は endpoint の契約 (消費が在れば reset が予定される) と食い違うので、 従来どおり <code>AllowanceUnmeasured</code> (理由 <code>ShapeMismatch</code>) とする (「0 に読み替えない」の逆向き＝<strong>0 以外を reset 無しで記録しない</strong>)。 出所 3 つ (<code>ts</code> / <code>account</code> / <code>endpoint</code>)・<code>window</code>・<code>model</code> の規則は <a href="./ADR-0017-account-allowance-measured-into-event-log.html#s2-1-event-log">ADR-0017 §2.1</a> のまま。 <code>AllowanceUnmeasured</code> 行が <code>used_pct</code> を持てば malformed のまま (構造で 0 の捏造を拒む)。 型の側: <code>Measured::resets_at</code> SHALL <code>Option&lt;String&gt;</code> とし、 「reset 無し」を空文字・番兵の文字列・遠未来の時刻で表してはならない (MUST NOT・<a href="../spec/constitution.html#c10">C10</a>「型で分ける」・<a href="../spec/constitution.html#c11">C11.3</a>)。 stdout の 1 行表示 (fleet usage の外形) SHALL reset 無しを明示の字面 (例: <code>resets=none</code>・字面は外形 snapshot が正本) で出し、 時刻の欄を空にしない。</p>
+
+<h3 id="s2-2-counting">§2.2 選定と逼迫度は reset 無しの行を古くない実測として数え、 最も早い reset の導出には数えない</h3>
+<p class="section-essence" data-audience="human">口座を選ぶ計算と「どれだけ逼迫しているか」の計算は、 reset 時刻の無い行を「古くなっていない実測」として数えます。 使っていない窓は 0% のまま有効で、 時刻が過ぎて古くなることが無いからです。 候補が無いときに「いちばん早く戻る時刻まで待つ」計算には、 この行は入れません。 戻る時刻が無い窓は上限に当たっていないので、 待つ理由になりません。</p>
+<p data-audience="machine">選定の純関数 (<code>fleet/select.rs</code>・<a href="./ADR-0020-account-autonomy-limit-stop-resume-and-selection.html">ADR-0020 §2.2</a>) と tick の逼迫度 (<code>seat/tick.rs</code>・設計 <code>account-autonomy.md</code> §3 / §5) は、 <code>resets_at</code> を持たない <code>AllowanceMeasured</code> 行を SHALL <strong>古くない実測</strong>として数える (「reset 時刻を過ぎた古い行は数えない」の規則は reset 時刻を持つ行にだけ掛かる)。 その行の <code>used_pct</code> SHALL 逼迫度の最大の計算に入る (0 なので最大を動かさないが、 「数える窓が 1 つも無い＝測れない」には倒れない)。 候補なしの周の<strong>最も早い reset 時刻</strong> (<a href="./ADR-0020-account-autonomy-limit-stop-resume-and-selection.html">ADR-0020 §2.3</a>・<code>Completion::AccountFree</code>) の導出には、 reset 無しの行 SHALL NOT 入らない (上限に当たっている窓は必ず reset を持つ・0% の窓は待つ対象ではない)。 「当たっている」(使用率 100) の判定は不変。 便用 / session 用の 2 規則・除外・R-C9-1 の読みは <a href="./ADR-0020-account-autonomy-limit-stop-resume-and-selection.html">ADR-0020</a> のまま。</p>
+
+<h3 id="s2-3-schema">§2.3 event log の schema 版は 1 のまま。 field の欠けを許すのは AllowanceMeasured の resets_at だけ</h3>
+<p class="section-essence" data-audience="human">記録 file の版番号は変えません。 既に書かれた行はすべて今までどおり読めます (reset 時刻を持つ行は、 これからも持ちます)。 新しい形の行 (reset 時刻の無い行) を古い器が読むと「読めない」と止まりますが、 記録は host の中だけで使い、 器は host ごとに 1 つに揃えるので、 実害は無いと判断します。 緩めるのはこの 1 つの欄だけで、 他の欄の必須性は変えません。</p>
+<p data-audience="machine">event log の schema 版 SHALL 1 のまま (<a href="./ADR-0004-mvp-persistence-and-cross-version-formats.html#s2-5-schema-version">ADR-0004 §2.5</a> D-5「既存の行はすべて読める」を満たす: 本 ADR は必須を任意へ緩めるだけで、 既存の行の読みを変えない)。 必須から任意へ緩める field SHALL <code>AllowanceMeasured</code> の <code>resets_at</code> の 1 つに限る (kind ごとの必須 field の網羅 match で検査する形は不変・<code>KNOWN_KEYS</code> は増えない)。 <strong>前方互換の非対称</strong>を記録する: 本 ADR より前の器 (reader) が <code>resets_at</code> の無い <code>AllowanceMeasured</code> 行を読むと Err (fail-closed・ADR-0017 §2.1 のとおり) になる。 event log は host-local (<a href="../spec/constitution.html#c3">C3</a>・state dir 配下) で、 host の器は 1 つの binary に揃えて更新する運用 (doctor の版の突合・<a href="../spec/constitution.html#c3">C3.2</a>) ゆえ、 この非対称は受け入れる。 跨版 面 2 (<code>fleet export</code>・ADR-0004 §2.2) SHALL 変えない (allowance 行は export の外形に無い)。</p>
+
+<h3 id="s2-4-scope">§2.4 射程外</h3>
+<p class="section-essence" data-audience="human">この記録が決めるのは「reset 無しの窓をどう記録し、 どう数えるか」だけです。 tick が口座の一覧を埋め込みの manifest から読んでしまう穴、 立て直しの起動経路の穴 (設定 dir・初回の trust・session を終える手)、 モデル別窓の結び方の細部、 R-C9-1 の値は、 別の契約・memo・裁定の領分です。</p>
+<p data-audience="machine">次は本 ADR の決定ではない (MUST NOT be read as such): tick の口座 label 列を <code>--rules</code> の写しから読む修正 (台帳 <code>s2-07l.224</code>・設計の変更を伴わない bug)、 立て直しの起動経路の 3 つの穴 (台帳 <code>s2-07l.226</code>・memo)、 モデル別 7 日窓の結び方 (display name・設計 doc)、 R-C9-1 の値の改訂 (A2)、 5 時間窓を選定の数える窓から外すこと (§5 (B) で却下)、 endpoint の応答の他の形 (limits[] の要素の <code>resets_at</code> が null になる形は実測に無く、 現れた周は ShapeMismatch のまま＝本 ADR は <code>five_hour</code> / <code>seven_day</code> の窓の object にだけ掛かる)。</p>
+</section>
+
+<section id="s3-srs" class="informative">
+<h2>§3. SRS との関係 (正本は SRS)</h2>
+<p class="section-essence" data-audience="human">この記録が仕える要件は要件書 (SRS v0.8) に在ります。 要件の文面はここには置かず、 当該行を指すだけにします。 この記録は要件書を 1 字も変えません。 「reset 時刻を読む」という要件の字面は、 reset が予定されていない窓では「無いと読む」ことで満たします。</p>
+<div data-audience="machine">
+<p>本 ADR の §2.1〜§2.3 が仕える要件は SRS v0.8 が正本である: <a href="../spec/srs.html#FR33">FR33 口座残量の計測</a> (実測値の記録・「読めない回は理由付きの測れなかった」＝本 ADR は「読めた 0%」と「読めない」の境を reset の有無で越えない形に固定する)・<a href="../spec/srs.html#FR36">FR36 口座の選定</a> (実測した口座残量だけから決定的に選ぶ・消費の無い口座が候補に入る)・<a href="../spec/srs.html#FR38">FR38 席の退避と立て直し</a> / <a href="../spec/srs.html#AC13">AC13</a> (立て直しの候補が痩せない)・<a href="../spec/srs.html#FR35">FR35</a> (5 時間窓の上限の検知は不変＝窓を外さない)。 SRS の改訂は不要: FR33 の「reset 時刻を … 読み」は endpoint が返す値を読むことであり、 値が無い窓を「無い」と読むのは要件の内側である。 実装手段 (field の任意性・Option の型・数え方) は §2 が正本で SRS は持たない。</p>
+</div>
+</section>
+
+<section id="s4-consequences" class="informative">
+<h2>§4. Consequences</h2>
+<p class="section-essence" data-audience="human">良い面は、 使っていない口座が便と席の候補に入り、 並列の便が口座の数だけ出せること、 「測れなかった」と「使っていない」が記録の上で分かれること、 記録の版番号を変えないことです。 悪い面は、 古い器が新しい形の行を読めないこと (host ごとに器を揃える運用で受ける)、 reset 時刻を Option にする分だけ読み手 (選定・逼迫度・表示・export の歯) が分岐を 1 つずつ持つことです。</p>
+<p data-audience="machine">Positive: 消費の無い口座が候補に入り、 便用の選定が使用中の 1 口座に閉じない (C9.2・user 直命の 4 便並列の前提)。 席の立て直し (FR38 / AC13) の候補が痩せない。 「測れた 0%」と「測れなかった」が型で分かれる (C10)。 schema 版 1 のまま (D-5)。 rules 行を足さない (C5 非該当)。</p>
+<p data-audience="machine">Negative (受け入れるコスト): 前方互換の非対称 (§2.3・古い reader は新しい行を Err)。 <code>Measured::resets_at</code> が <code>Option</code> になる分の分岐 (select / tick の pressure / usage の表示 / e2e の fixture) と外形 snapshot の更新。 endpoint の「消費が無い窓は null」という振る舞いへの読み取り依存 (振る舞いが変われば ShapeMismatch に倒れる・fail-closed・止まらない)。</p>
+</section>
+
+<section id="s5-alternatives" class="informative">
+<h2>§5. Alternatives Considered</h2>
+<p class="section-essence" data-audience="human">4 つの案を退けました。 reset 時刻を「今 + 窓の長さ」で埋める案は、 測った値に計算した値を混ぜます。 5 時間窓を選定から外す案は、 5 時間の上限を見張る要件を壊します。 「reset 無し」を測れなかった理由の 1 つにする案は、 その口座を選べない問題を解きません。 空文字や遠い未来の時刻で「無し」を表す案は、 型でなく約束事で意味を運ぶことになります。</p>
+<p data-audience="machine">(A) <strong><code>resets_at</code> を計測 ts + 窓長 (5h / 7d) で埋めて Measured にする</strong>。 却下: 実測行に導出値を混ぜる (C10 は実測値と導出値を型で分ける)。 埋めた時刻が過ぎた周に「古い行」として数えられなくなり、 使っていない口座がまた候補から落ちる。</p>
+<p data-audience="machine">(B) <strong>5 時間窓を選定・逼迫度の数える窓から外す</strong>。 却下: FR35 (5 時間窓の上限の検知) と FR38 (5 時間窓の使用率での退避) が立たない。 問題は窓ではなく「消費の無い窓の形」に在る。</p>
+<p data-audience="machine">(C) <strong><code>UnmeasuredReason</code> に <code>NoReset</code> を足して Unmeasured のまま理由だけ分ける</strong>。 却下: 選定の「Unmeasured が在れば測れない口座」の規則で候補から外れたままになり、 鶏卵が残る。 理由の弁別は要るが、 それは Unmeasured ではなく Measured の側で持つべき事実 (測れている)。</p>
+<p data-audience="machine">(D) <strong>「無し」を空文字・<code>none</code>・遠未来の時刻の文字列で表す</strong>。 却下: 値の意味を字面の約束事で運ぶ (C10「型で分ける」・C11.3 の untyped に近い)。 比較 (<code>resets_at &gt;= now</code>) が偶然の順序で通る。 <code>Option</code> で持ち、 読み手が分岐を型で強制される形にする。</p>
+</section>
+
+<section id="s6-trace" class="informative">
+<h2>§6. Trace</h2>
+<p class="section-essence" data-audience="human">出所は、 管理席が便の口座を選ぼうとして候補が 1 つしか無いことに気付き、 endpoint の生の応答まで確かめた実測と、 planner が席の立て直しを実演して同じ理由で候補が痩せることを見た実測、 そして器の現物 (読み手・選定・逼迫度・event の型) です。</p>
+<ul data-audience="machine">
+  <li>管理席の実測 (2026-09-13・便の口座選定): <code>fleet select --purpose run --exclude &lt;planner の口座&gt; --exclude &lt;管理席の口座&gt;</code> の候補が使用中の 1 口座だけ・それを除くと <code>none=all-limited</code>。 原因: 3 口座の <code>five_hour</code> が <code>unmeasured:shape_mismatch</code>。 endpoint の生応答は <code>five_hour = {utilization: 0.0, resets_at: null}</code> (3 口座とも同形・使い始めた口座は同じ周から文字列)。 台帳 <code>s2-07l.225</code> の description が原本。</li>
+  <li>planner の実測 (2026-09-13・AC13 の実演・私用 state dir): 立て直しの候補が同じ理由で痩せる (候補 0 の直接の原因は別の穴 <code>s2-07l.224</code>)。 台帳 <code>s2-07l</code> の notes が原本。</li>
+  <li>器の現物 (main <code>1658d79</code>): <code>fleet/usage.rs</code> <code>reading()</code> (<code>resets_at</code> 文字列必須)・<code>fleet/mod.rs</code> <code>Measured::resets_at: String</code>・<code>fleet/select.rs</code> <code>fresh_windows()</code> (Unmeasured が在れば <code>None</code>・<code>resets_at &gt;= now</code> で古さを判定)・<code>seat/tick.rs</code> <code>pressure()</code> (同じ数え方)。</li>
+  <li>先行決定: <a href="./ADR-0017-account-allowance-measured-into-event-log.html">ADR-0017</a> §2.1 (実測行の形・<code>run</code> / <code>bead</code> を任意へ緩めた前例) / §2.2 (失敗は FailOpen の Unmeasured)。 <a href="./ADR-0004-mvp-persistence-and-cross-version-formats.html">ADR-0004</a> §2.5 (schema 版の規則)。 <a href="./ADR-0020-account-autonomy-limit-stop-resume-and-selection.html">ADR-0020</a> §2.2 / §2.3 (選定・最も早い reset まで待つ)。</li>
+  <li>設計: <code>docs/design/fleet-usage.md</code> §3 (応答の形に null の周を足す) / §4 (event の表で <code>resets_at</code> を任意に)・<code>docs/design/account-autonomy.md</code> §3 (候補から外す規則に reset 無しの行の読みを足す)。 契約は台帳 <code>s2-07l.225</code> (本 ADR の land 後に契約化)。</li>
+</ul>
+</section>
+
+<!-- folio:chrome-bottom -->
+<nav class="prevnext" aria-label="前後の文書">
+  <a class="prevnext__prev" href="ADR-0023-contract-source-is-the-design-document-table.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">ADR-0023 — 契約の正本は設計 doc の契約表 1 行で、 器が契約 file を生成し、 審査の段を通してから実装役を起こし、 着地の終端まで器が持つ (write-set の閉包は機械が導出・consumer の要件面は宣言 file の任意 key・ADR-0004 §2.2 / §2.3・ADR-0010 §2.1・ADR-0016 §2.1 / §2.3・ADR-0018 §2.1・ADR-0019 §2.1 / §2.3 を部分 supersede)</span></a>
+</nav>
+<script>
+(function () {
+  var openedForPrint = [];
+  window.addEventListener('beforeprint', function () {
+    openedForPrint = [];
+    var ds = document.querySelectorAll('details:not([open])');
+    for (var i = 0; i < ds.length; i++) { ds[i].setAttribute('open', ''); openedForPrint.push(ds[i]); }
+  });
+  window.addEventListener('afterprint', function () {
+    for (var i = 0; i < openedForPrint.length; i++) openedForPrint[i].removeAttribute('open');
+    openedForPrint = [];
+  });
+  if (!document.querySelector('[data-audience]')) return;
+  /* 既定 = 人間プレゼン型 (ADR-0040 / rules §11.3): script 経由で初期 class を付与するため
+     no-JS では付かず全文可視に graceful degrade する。 static DOM は全文を保持 (AI/検索/印刷は不変)。 */
+  document.body.classList.add('audience-human');
+  var bar = document.createElement('nav');
+  bar.className = 'audience-toggle';
+  bar.setAttribute('aria-label', '表示対象の切替');
+  var states = [['both', '両方'], ['human', '人間向け'], ['machine', '機械向け']];
+  for (var s = 0; s < states.length; s++) {
+    (function (mode, label) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      b.setAttribute('aria-pressed', mode === 'human' ? 'true' : 'false');
+      b.addEventListener('click', function () {
+        document.body.classList.remove('audience-human', 'audience-machine');
+        if (mode !== 'both') document.body.classList.add('audience-' + mode);
+        var bs = bar.querySelectorAll('button');
+        for (var j = 0; j < bs.length; j++) bs[j].setAttribute('aria-pressed', bs[j] === b ? 'true' : 'false');
+      });
+      bar.appendChild(b);
+    })(states[s][0], states[s][1]);
+  }
+  var bc = document.querySelector('nav.breadcrumb');
+  if (bc && bc.parentNode) { bc.parentNode.insertBefore(bar, bc.nextSibling); }
+  else { document.body.insertBefore(bar, document.body.firstChild); }
+})();
+</script>
+<!-- /folio:chrome-bottom -->
+</body>
+</html>

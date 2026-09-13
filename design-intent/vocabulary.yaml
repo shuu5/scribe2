@@ -479,7 +479,7 @@ terms:
     relationships: [口座, manifest, state dir, 口座残量]
   - canonical: 実測行
     domain: consumer
-    definition: 口座残量を 1 口座 1 窓で event log に追記した行 (ADR-0017 §2.1)。 出所 (口座 label・endpoint・時刻) を持つ Measured で、 読めなかった回は使用率を持たない「測れなかった」の行になる。
+    definition: 口座残量を 1 口座 1 窓で event log に追記した行 (ADR-0017 §2.1)。 出所 (口座 label・endpoint・時刻) を持つ Measured で、 読めなかった回は使用率を持たない「測れなかった」の行になる。 reset 時刻は任意で、 消費の無い窓 (使用率 0・reset 無し) は「測れた 0%・reset 未定」の Measured 行として reset 時刻を持たず、 選定と逼迫度はそれを古くない実測として数える (ADR-0024 §2.1 / §2.2)。
     relationships: [口座残量, event log, Measured, 上限 record]
   # ---------------------------------------------------------------- ADR-0018 (作業記憶の退避・復元・消費)
   - canonical: 作業記憶
