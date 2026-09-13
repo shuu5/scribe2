@@ -691,7 +691,7 @@ tr[data-component="ears-requirement-row"] td.resp .why:empty::after{content:"⚠
 <div class="grow"><div class="gword">口座選定<span class="en">account selection</span></div><div class="gdef">manifest の口座と実測の残量だけから口座を決定的に選ぶこと（FR36）。 便用と session 用の 2 規則を持つ。</div></div>
 <div class="grow"><div class="gword">役割<span class="en">role</span></div><div class="gdef">開発 session の席の種類。 種類は配送構造（FR30）が定め、 席の登録 row が持つ（FR40）。</div></div>
 <div class="grow"><div class="gword">権能<span class="en">capability</span></div><div class="gdef">役割ごとに許された操作の閉じた一覧。 rules 行が持ち（FR41）、 編集・実行の時点で執行される（FR45）。</div></div>
-<div class="grow"><div class="gword">席の登録<span class="en">seat registration</span></div><div class="gdef">席の役割と anchor を鍵に、 target を併せて fleet の event log に記録すること（FR40）。 記録の無い席は権能を持たない。</div></div>
+<div class="grow"><div class="gword">席の登録<span class="en">seat registration</span></div><div class="gdef">席の役割と anchor を鍵に、 target・口座 label・起動の雛形を項目として fleet の event log に記録すること（FR40）。 記録の無い席は権能を持たない。</div></div>
 <div class="grow"><div class="gword">受付の枠<span class="en">admission slot</span></div><div class="gdef">host 単位の受付が便の変異検査に配る並列の枠（NFR6）。 枠が無い host では縮退する（FR46）。</div></div>
 <div class="grow"><div class="gword">封じ込め<span class="en">confinement</span></div><div class="gdef">器が起こす子 process を memory の上限付きの箱の中で走らせること（NFR6）。</div></div>
 <div class="grow"><div class="gword">上限 record<span class="en">rate-limit record</span></div><div class="gdef">claude が口座の上限を専用の record で伝える合図。 便の停止判定はこの record だけを入力にする（FR35・ADR-0012）。</div></div>
@@ -704,7 +704,7 @@ tr[data-component="ears-requirement-row"] td.resp .why:empty::after{content:"⚠
 </div>
 <footer class="foot" data-component="fidelity-sync-meta"><div class="ft-grid">
 <div class="ft-plain">このページは、大もとの機械データ (正本) から自動で組み立てられています。構造は機械が自動で検査し、内容が元データに忠実かは独立のレビューで確かめます。</div>
-<div data-audience="machine">機械SSoT: <b>srs.srs.yaml</b> &middot; 生成: <b>2026-09-13 02:41</b> &middot; 検証状態: <b>structure ✓ fabrication-free / prose ✓ 充填済 (fidelity ceiling → S5 対象)</b></div>
+<div data-audience="machine">機械SSoT: <b>srs.srs.yaml</b> &middot; 生成: <b>2026-09-13 02:55</b> &middot; 検証状態: <b>structure ✓ fabrication-free / prose ✓ 充填済 (fidelity ceiling → S5 対象)</b></div>
 <div class="tags" data-audience="machine"><span>folio design system</span><span>deck × B2</span><span>ISO/IEC/IEEE 29148</span><span>S4 生成</span></div>
 </div></footer>
 </body>

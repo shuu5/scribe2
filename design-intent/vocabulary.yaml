@@ -144,7 +144,7 @@ terms:
     relationships: [RuleKind, gate, 便, verdict export]
   - canonical: 席
     domain: consumer
-    definition: 1 つの Claude Code session が占める作業単位。 役割は 2 値で、 値の列挙は core が持つ (runner と lens は席ではない・ADR-0022 §2.1)。 状態は SeatState で運ぶ (C3.3)。
+    definition: 1 つの Claude Code session が占める作業単位。 役割の値は core が持つ閉じた enum (runner と lens は席ではない・ADR-0022 §2.1)。 状態は SeatState で運ぶ (C3.3)。
     forbidden: [シート]
     relationships: [fleet, 口座, lease, 管理席, planner]
   - canonical: 口座

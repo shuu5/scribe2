@@ -686,7 +686,7 @@ glossary:
   - { term: 口座選定,       en: account selection,      plain_short: どの口座を使うか決める,     def: manifest の口座と実測の残量だけから口座を決定的に選ぶこと（FR36）。 便用と session 用の 2 規則を持つ。 }
   - { term: 役割,           en: role,                   plain_short: 席の種類,                 def: 開発 session の席の種類。 種類は配送構造（FR30）が定め、 席の登録 row が持つ（FR40）。 }
   - { term: 権能,           en: capability,             plain_short: 役割に許された操作,        def: 役割ごとに許された操作の閉じた一覧。 rules 行が持ち（FR41）、 編集・実行の時点で執行される（FR45）。 }
-  - { term: 席の登録,       en: seat registration,      plain_short: 席と役割の記録,            def: 席の役割と anchor を鍵に、 target を併せて fleet の event log に記録すること（FR40）。 記録の無い席は権能を持たない。 }
+  - { term: 席の登録,       en: seat registration,      plain_short: 席と役割の記録,            def: 席の役割と anchor を鍵に、 target・口座 label・起動の雛形を項目として fleet の event log に記録すること（FR40）。 記録の無い席は権能を持たない。 }
   - { term: 受付の枠,       en: admission slot,         plain_short: 変異検査の並列の枠,        def: host 単位の受付が便の変異検査に配る並列の枠（NFR6）。 枠が無い host では縮退する（FR46）。 }
   - { term: 封じ込め,       en: confinement,            plain_short: memory 上限付きの箱,       def: 器が起こす子 process を memory の上限付きの箱の中で走らせること（NFR6）。 }
   - { term: 上限 record,      en: rate-limit record,      plain_short: 上限に当たった印,         def: claude が口座の上限を専用の record で伝える合図。 便の停止判定はこの record だけを入力にする（FR35・ADR-0012）。 }
