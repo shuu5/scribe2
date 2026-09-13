@@ -36,6 +36,11 @@
 - 窓の対応: `five_hour` → `window = "five_hour"`、`seven_day` → `"seven_day"`、`limits[]` のうち `kind == "weekly_scoped"` の要素 → `window = "seven_day_model"` + `model = <scope.model.display_name>`（**display_name でしか結べない**・`id` は null の実測）。要素が 0 件なら model 行は出さない（Unmeasured ではない・窓が無いだけ）。要素が `display_name` を持たない・型が違うなら**その要素だけ** Unmeasured（理由 = 形が違う）。
 - 使用率は窓の `utilization`・`limits[]` の要素の `percent`（どちらも % の値・×100 しない・要素の `utilization` は読まない）を **整数 %（切り捨て・100 で cap しない**＝超過をそのまま残す・負数と数でない値は形が違う）に、reset は `resets_at` を UTC `YYYY-MM-DDTHH:MM:SSZ` に正規化。parse 不能なら Unmeasured（理由 = 形が違う）。
 - 待ち時間の上限 = rules 行 `fleet.usage_timeout_s`（新 kind `UsageTimeoutS`・値は user 裁定の id 付き・C5）。契約 (b) で足す。
+- **token の refresh（s2-07l.229・契約 (d)）**: credential の `expiresAt` が過ぎた口座（`TokenExpired`）は、そのままでは永久に測れず選ばれない——測れない口座は選ばれず（[account-autonomy.md](./account-autonomy.md) §3）、選ばれない口座では Claude Code が起動されないので refresh されない（使っていない口座ほど切れる・実測 2026-09-13: 4 便の枠が 2 便に縮んだ）。器は credential file を書かない（ADR-0017 §2.5 の fence は不変）が、**その口座の設定 dir で claude を 1 回起こして refresh を Claude Code にさせ、直後に credential を読み直して測る**（書き手は Claude Code のまま・器は起動と読み直しだけ）。
+  - 形: headless の唯一の構築点 `headless::build`（`Call`・`--setting-sources ""`・`--strict-mcp-config`・permission mode 明示）で起こす。`account_dir` = `<state_dir>/accounts/<label>`・cwd = state dir（repo ではない・`-p` は trust dialog を出さない）・prompt は code の定数 1 語（stdin から）・`--max-turns 1`（`Call` に項目を 1 つ足す・runner / lens は渡さない）・streaming なし・plugin なし。実行 file は `--claude PATH`（headless と同じ seam・歯は偽 claude）。待ち時間の上限は既存の rules 行 `fleet.usage_timeout_s` を共用する（新しい rules 行を足さない・C5 非該当）。
+  - **1 口座 1 command につき 1 回だけ**（loop しない）。読み直して `expiresAt` がなお過ぎている・子の rc 非 0・timeout・起こせない、の周は従来どおり `token_expired` の Unmeasured（`UnmeasuredReason` の語彙は増やさない）で、その口座の stdout の行の末尾に `refresh=<ok|rc:<n>|timeout|unlaunchable>` を足す（refresh を試みた周だけ・event log の行には載せない＝schema 1 不変・外形 snapshot は fixture で pin）。墓標（`expiresAt == 0`）と token 不在には掛けない（再 login は user の手番・ADR-0017 §2.5 の `Tombstone` のまま）。
+  - なぜ `-p` の起動か: Claude Code に refresh だけを撃たせる口は無い（`claude auth` は `login` / `logout` / `status` のみ・実測 2026-09-13・CLI 2.1.270）。refresh の実体は token endpoint への交換で model 呼出ではないが、それに届く command として実測で確かめられているのは `-p` の起動だけ（planner 2026-09-13・3 口座で measured に戻った）。model 呼出の無い command で届くことが版で確かめられたら差し替える（§10）。
+  - A1（使う）の判定: 定額の口座で 1 語 1 回・token の期限ごと（数時間に 1 回・口座あたり）は、便が枠を使い切る弾である設計（ADR-0020）の下で新しい消費の種類を増やさない＝**A1 非該当**（planner 判定 2026-09-13・記帳は bead s2-07l.229 notes）。従量の口座を manifest に足す周は前提が変わるので、その周に判定し直す。
 
 ## 4. event の追加（schema 1 のまま）
 
@@ -81,6 +86,7 @@
 - **(b)**（前提: rules 行 `fleet.usage_timeout_s` の値の user 裁定が先に在ること・C5。裁定前に起票しない）manifest `[[account]]` 行 + `EventKind` 2 variant + `UnmeasuredReason` + `run` / `bead` 任意化 + replay の `allowance` + rules 行 `fleet.usage_timeout_s`（kind `UsageTimeoutS`・裁定 id）+ 外形 snapshot の更新（極性一覧は不変・§6）。write-set は構造の連鎖（manifest + `rules/mod.rs` + rules の外形 snapshot + kind 件数の歯 + `fleet/mod.rs`・`polarity` は触らない）。
 - **(c)** `fleet usage` / `--show` + 子 process 起動 + credential 読み + 偽 client の test helper。(a) (b) に依存。
 - AC11 の実演は (c) の land 後に planner が host で行い、値の一致を bead notes に逐語で記帳する。
+- **(d) token の refresh**（S・s2-07l.229・§3 末尾）: `read_account` の `TokenExpired` の分岐で refresh の子 process を 1 回起こし、credential を読み直して測る。`Call` の `max_turns` 項目・stdout の `refresh=` 部・偽 claude（credential を書き換える stub と書き換えない stub）。write-set = `fleet/usage.rs`・`headless/mod.rs`（`Call` の項目 1 つと `build` の argv・runner / lens の argv は不変）・`tests/e2e/fleet.rs`・fleet usage の外形 snapshot（`refresh=` が足される周の fixture）。依存: なし。base で RED = 期限切れの credential + credential を書き換える偽 claude で行が measured になる歯（機能不在）・書き換えない偽 claude（rc 0）の周は `token_expired` + `refresh=ok`・rc 非 0 の周は `refresh=rc:<n>`・fresh な credential の周は偽 claude が起こされない（argv の写しが無い）歯。
 
 ## 9. 却下案（ADR-0017 §5 の写しは持たない・設計固有のもの）
 
@@ -90,8 +96,10 @@
 - `used_pct` を小数で持つ（`Value` に浮動小数を足すと flat 行の値域が広がる・整数 % で足りる）。
 - `run = "-"` の番兵（replay に幽霊の run が生まれる）。
 - Unmeasured を Measured の `used_pct = 0` + flag で表す（FR33「0 に読み替えない」に構造で反する）。
+- token の refresh（§3・s2-07l.229）の却下案: (B) tick が `token_expired` の口座を「refresh 待ち」として planner の判定行に出す（人手を挟む・C9「人手なしで継ぐ」に反する）／(C) 選定で `token_expired` を候補に残す（測れていない口座を選ぶ・C10）／器が refresh token で token endpoint を自分で叩く（器が credential file を書くことになり ADR-0017 §2.5 の fence を破る・OAuth client の秘密を器が持つ）／refresh を model 呼出の無い command（`doctor` / `mcp list` 等）で誘発する（どの command が refresh に届くかが版の内部で未検証・実測で届いたのは `-p` だけ＝確かめられたら差し替える・§10）。
 
 ## 10. 後続
 
 - doctor の面: manifest の label と event log の実測（host 列）を全 host で突き合わせ、dir の無い label・実測の無い host を 1 行ずつ出す（C3.2・v3）。
 - tick からの定期計測（seat-autonomy の領分）。選ぶ規則（R-C9-1・A2）。
+- refresh を model 呼出の無い command で誘発する形（§3・§9）: Claude Code の版で「refresh に届く非 model の command」が確かめられたら、`Call` の prompt を落としてその command に差し替える（外形は `refresh=` の値のまま・歯は偽 claude のまま）。再 login（墓標）は user の手番のまま。
