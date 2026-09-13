@@ -64,7 +64,7 @@ pub struct Polarity {
 }
 
 /// 行為を止めうる判定を返す境界の全数。**宣言順は行為の流れ**（hook → intake → spawn〔予算・承認〕→
-/// runner → gate → land〔main 実測・anchor 同期・worktree の clean・追随の起こし直し〕→ store → 注入 → cycle → 退避）で、順序に意味は無いが C2 の形（[`ALL`] と判別子順 pin）に合わせる。
+/// runner → gate → land〔main 実測・anchor 同期・worktree の clean・追随の起こし直し〕→ store → 注入 → cycle → 退避 → 消費）で、順序に意味は無いが C2 の形（[`ALL`] と判別子順 pin）に合わせる。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Guard {
     /// `pre-tool-use` の write-set guard（[`crate::hook::guard`]）。
@@ -105,6 +105,8 @@ pub enum Guard {
     Cycle,
     /// 退避物の書込を止める判定＝二重退避・上限超過・文法の断り（[`crate::seat::externalize`]）。
     Externalize,
+    /// 退避物の消費（move）を止める判定＝曖昧・移し先の既在（[`crate::seat::consume`]）。
+    Consume,
 }
 
 /// [`Guard`] の全 variant（宣言順）。
@@ -128,6 +130,7 @@ pub const ALL: &[Guard] = &[
     Guard::Inject,
     Guard::Cycle,
     Guard::Externalize,
+    Guard::Consume,
 ];
 
 impl Guard {
@@ -153,6 +156,7 @@ impl Guard {
             Self::Inject => crate::seat::inject::POLARITY,
             Self::Cycle => crate::seat::cycle::POLARITY,
             Self::Externalize => crate::seat::externalize::POLARITY,
+            Self::Consume => crate::seat::consume::POLARITY,
         }
     }
 
@@ -178,6 +182,7 @@ impl Guard {
             Self::Inject => "seat::inject::Delivery",
             Self::Cycle => "seat::cycle::Cycle",
             Self::Externalize => "seat::externalize::ExternalizeError",
+            Self::Consume => "seat::consume::ConsumeError",
         }
     }
 
@@ -203,6 +208,7 @@ impl Guard {
             Self::Inject => "inject-refusal",
             Self::Cycle => "cycle-refusal",
             Self::Externalize => "externalize-refusal",
+            Self::Consume => "consume-refusal",
         }
     }
 

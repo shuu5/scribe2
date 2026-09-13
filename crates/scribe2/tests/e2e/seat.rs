@@ -4618,3 +4618,171 @@ fn seat_wm_pointer_resolution_is_three_valued_against_the_anchor() {
     assert_eq!(anchor.resolve(PointerKind::Manifest, "rules 行 seat.wm_directive_cap"), Resolution::Resolved, "manifest の行 id");
     fs::remove_dir_all(&place.dir).ok();
 }
+
+// ─────────────────── 作業記憶の消費（consume・設計 working-memory.md §5.3 / §9 契約 (c)） ───────────────────
+
+/// `seat consume` を 1 回撃つ。
+fn wm_consume(place: &WmPlace) -> Output {
+    let (wm, state) = (place.wm.display().to_string(), place.state.display().to_string());
+    run_seat(&["consume", "--target", WM_TARGET, "--wm-dir", &wm, "--state-dir", &state])
+}
+
+/// 退避物を全文逐語で置く。
+fn wm_raw(place: &WmPlace, name: &str, text: &str) -> PathBuf {
+    let path = place.wm.join(name);
+    fs::write(&path, text).ok();
+    path
+}
+
+/// consume の歯の退避物（frontmatter に `---` の行を本文にも持つ＝閉じ区切りの位置を取り違えると本文が変わる）。
+fn wm_body(seat: &str) -> String {
+    format!("---\nschema: 1\nseat: {seat}\ntrigger: manual\n---\n\n## 計画弧・次のステップ\n- 続き\n---\n末尾の行\n")
+}
+
+/// (1) 同 sid: `working-memory.<sid>.consumed.md` へ rename・内容は 1 byte も不変・元 file は不在。
+#[test]
+fn seat_wm_consume_renames_same_sid_without_changing_a_byte() {
+    let place = wm_place();
+    wm_stamp(&place, &["sid-old", "sid-5"]);
+    let text = wm_body(WM_TARGET);
+    let source = wm_raw(&place, "working-memory.sid-5.md", &text);
+    let out = wm_consume(&place);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(stdout_of(&out), "seat: consumed file=working-memory.sid-5.consumed.md\n", "stdout 1 行");
+    assert!(stderr_of(&out).is_empty(), "stderr は空: {}", stderr_of(&out));
+    assert!(!source.exists(), "元 file は不在");
+    assert_eq!(wm_names(&place), vec!["working-memory.sid-5.consumed.md".to_owned()], "move だけ");
+    let moved = fs::read(place.wm.join("working-memory.sid-5.consumed.md")).unwrap_or_default();
+    assert_eq!(moved, text.as_bytes(), "内容は 1 byte も不変");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (2) sid 違い: 現在 sid の名義へ移し、`consumed-from: <元 sid>` を frontmatter の末尾に 1 行だけ足す（本文は不変）。
+#[test]
+fn seat_wm_consume_moves_other_sid_to_current_name_with_consumed_from() {
+    let place = wm_place();
+    wm_stamp(&place, &["sid-new"]);
+    let text = wm_body(WM_TARGET);
+    let source = wm_raw(&place, "working-memory.sid-prev.md", &text);
+    let out = wm_consume(&place);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(
+        stdout_of(&out),
+        "seat: consumed file=working-memory.sid-new.consumed.md consumed-from=sid-prev\n",
+        "stdout 1 行"
+    );
+    assert!(!source.exists(), "元 file は不在");
+    assert_eq!(wm_names(&place), vec!["working-memory.sid-new.consumed.md".to_owned()], "現在 sid の名義 1 つだけ");
+    let moved = fs::read_to_string(place.wm.join("working-memory.sid-new.consumed.md")).unwrap_or_default();
+    let want = format!(
+        "---\nschema: 1\nseat: {WM_TARGET}\ntrigger: manual\nconsumed-from: sid-prev\n---\n\n## 計画弧・次のステップ\n- 続き\n---\n末尾の行\n"
+    );
+    assert_eq!(moved, want, "frontmatter の末尾に 1 行・他は不変");
+    assert_eq!(moved.matches("consumed-from:").count(), 1, "1 行だけ");
+    assert_eq!(moved.len(), text.len() + "consumed-from: sid-prev\n".len(), "増えたのは 1 行分の byte だけ");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (3) 冪等: 2 回目は rc 0 `already` で file は不変。(4) 0 件かつ消費済みも無い → rc 1 `wm-missing`。
+#[test]
+fn seat_wm_consume_is_idempotent_and_refuses_when_nothing_to_consume() {
+    let place = wm_place();
+    wm_stamp(&place, &["sid-7"]);
+    let missing = wm_consume(&place);
+    assert_eq!(rc_of(&missing), i32::from(RC_REFUSED), "stdout={}", stdout_of(&missing));
+    assert_eq!(stderr_of(&missing), "seat: consume refused reason=wm-missing\n", "理由");
+    assert!(stdout_of(&missing).is_empty(), "断る周は stdout に書かない");
+    assert!(wm_names(&place).is_empty(), "file を作らない");
+
+    wm_raw(&place, "working-memory.sid-6.md", &wm_body(WM_TARGET));
+    let first = wm_consume(&place);
+    assert_eq!(rc_of(&first), i32::from(RC_OK), "stderr={}", stderr_of(&first));
+    let consumed = place.wm.join("working-memory.sid-7.consumed.md");
+    let before = fs::read(&consumed).unwrap_or_default();
+    let mtime = mtime_of(&consumed);
+    let second = wm_consume(&place);
+    assert_eq!(rc_of(&second), i32::from(RC_OK), "2 回目も rc 0: {}", stderr_of(&second));
+    assert_eq!(stdout_of(&second), "seat: consumed already file=working-memory.sid-7.consumed.md\n", "already");
+    assert_eq!(fs::read(&consumed).unwrap_or_default(), before, "file は不変");
+    assert_eq!(mtime_of(&consumed), mtime, "書き直さない");
+    assert_eq!(wm_names(&place), vec!["working-memory.sid-7.consumed.md".to_owned()], "増えも減りもしない");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (5) 自席の未 consumed が 2 件 → rc 1 `wm-ambiguous n=2` で両 file 不変。(6) 他席の退避物・消費済み・退避物以外は不変。
+#[test]
+fn seat_wm_consume_refuses_ambiguous_and_leaves_other_seats_alone() {
+    let place = wm_place();
+    wm_stamp(&place, &["sid-9"]);
+    let other = wm_raw(&place, "working-memory.sid-9x.md", &wm_body("other:1"));
+    let decoy = wm_raw(&place, "notes-for-working-memory.md", &wm_body(WM_TARGET));
+    let old = wm_raw(&place, "working-memory.sid-1.consumed.md", &wm_body(WM_TARGET));
+    let fixed: Vec<(PathBuf, Vec<u8>)> =
+        [&other, &decoy, &old].iter().map(|path| ((*path).clone(), fs::read(path).unwrap_or_default())).collect();
+
+    let a = wm_raw(&place, "working-memory.sid-a.md", &wm_body(WM_TARGET));
+    let b = wm_raw(&place, "working-memory.sid-9.md", &wm_body(WM_TARGET));
+    let names = wm_names(&place);
+    let out = wm_consume(&place);
+    assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "stdout={}", stdout_of(&out));
+    assert_eq!(stderr_of(&out), "seat: consume refused reason=wm-ambiguous n=2\n", "理由と件数");
+    assert!(stdout_of(&out).is_empty(), "断る周は stdout に書かない");
+    assert_eq!(wm_names(&place), names, "何も動かさない");
+    for path in [&a, &b] {
+        assert_eq!(fs::read_to_string(path).unwrap_or_default(), wm_body(WM_TARGET), "両 file 不変: {}", path.display());
+    }
+
+    fs::remove_file(&a).ok();
+    let one = wm_consume(&place);
+    assert_eq!(rc_of(&one), i32::from(RC_OK), "自席 1 件なら消費する: {}", stderr_of(&one));
+    assert_eq!(stdout_of(&one), "seat: consumed file=working-memory.sid-9.consumed.md\n", "自席だけを消費");
+    for (path, before) in &fixed {
+        assert_eq!(&fs::read(path).unwrap_or_default(), before, "他席・消費済み・退避物以外は不変: {}", path.display());
+    }
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (7) rename 先が既に在る → rc 1 `consumed-exists` で両 file 不変（上書きしない・N1）。同 sid・sid 違いの 2 経路。
+#[test]
+fn seat_wm_consume_refuses_when_destination_already_exists() {
+    for source_name in ["working-memory.sid-c.md", "working-memory.sid-b.md"] {
+        let place = wm_place();
+        wm_stamp(&place, &["sid-c"]);
+        let existing = wm_raw(&place, "working-memory.sid-c.consumed.md", "---\nseat: wm:1\n---\n既在の消費済み\n");
+        let source = wm_raw(&place, source_name, &wm_body(WM_TARGET));
+        let out = wm_consume(&place);
+        assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "{source_name}: stdout={}", stdout_of(&out));
+        assert_eq!(stderr_of(&out), "seat: consume refused reason=consumed-exists\n", "{source_name}: 理由");
+        assert_eq!(fs::read_to_string(&existing).unwrap_or_default(), "---\nseat: wm:1\n---\n既在の消費済み\n", "既在は不変");
+        assert_eq!(fs::read_to_string(&source).unwrap_or_default(), wm_body(WM_TARGET), "{source_name}: 元も不変");
+        fs::remove_dir_all(&place.dir).ok();
+    }
+}
+
+/// (8) 打刻が無い → rc 1 `sid-missing`・sid が空 → rc 1 `sid-empty`。いずれも file を動かさない。
+#[test]
+fn seat_wm_consume_refuses_without_a_stamped_sid() {
+    let place = wm_place();
+    let source = wm_raw(&place, "working-memory.sid-d.md", &wm_body(WM_TARGET));
+    let missing = wm_consume(&place);
+    assert_eq!(rc_of(&missing), i32::from(RC_REFUSED), "stdout={}", stdout_of(&missing));
+    assert_eq!(stderr_of(&missing), "seat: consume refused reason=sid-missing\n", "理由");
+    assert!(source.exists(), "動かさない");
+
+    wm_stamp(&place, &[""]);
+    let empty = wm_consume(&place);
+    assert_eq!(rc_of(&empty), i32::from(RC_REFUSED), "stdout={}", stdout_of(&empty));
+    assert_eq!(stderr_of(&empty), "seat: consume refused reason=sid-empty\n", "理由");
+    assert_eq!(wm_names(&place), vec!["working-memory.sid-d.md".to_owned()], "動かさない");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (9) 使い方の外形に consume が載る（snapshot と独立に字面で測る）・値欠けの flag は使い方で断る。
+#[test]
+fn seat_wm_consume_is_listed_in_usage_and_refuses_missing_flags() {
+    let usage = stderr_of(&run_seat(&[]));
+    assert!(usage.contains("|consume --target T --wm-dir DIR>"), "usage に consume: {usage}");
+    let out = run_seat(&["consume", "--target", WM_TARGET]);
+    assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "--wm-dir 欠けは rc 1");
+    assert_eq!(stderr_of(&out), usage, "使い方で断る");
+}

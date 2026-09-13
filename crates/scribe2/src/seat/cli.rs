@@ -3,6 +3,7 @@
 //! **env も HOME も読まない**（憲法 C2.2）: 出所（pane / transcript）も置き場も
 //! 引数で明示されたものだけを見る。値欠けの flag は黙って落とさず使い方で断る。
 
+use super::consume::{self, ConsumeError};
 use super::cycle::{self, Cycle};
 use super::externalize::{self, ExternalizeError, Trigger};
 use super::{heartbeat, inject, meter, tick};
@@ -12,7 +13,7 @@ use std::time::Duration;
 
 /// `seat` の使い方。
 pub fn usage() -> String {
-    "usage: seat <meter --target T [--transcript PATH]|inject --target T (--text S|--file PATH)|heartbeat --target T|tick --target T --wm-dir DIR [--pointer TEXT] [--restore CMD] [--rules PATH]|cycle --target T --wm-dir DIR [--restore CMD] [--rules PATH]|externalize --target T --wm-dir DIR --anchor DIR --plan FILE --directives FILE [--user FILE] [--trigger manual|tick] [--role R] [--rules PATH]> [--tmux-socket PATH] [--capture-file PATH] [--state-dir PATH]".to_owned()
+    "usage: seat <meter --target T [--transcript PATH]|inject --target T (--text S|--file PATH)|heartbeat --target T|tick --target T --wm-dir DIR [--pointer TEXT] [--restore CMD] [--rules PATH]|cycle --target T --wm-dir DIR [--restore CMD] [--rules PATH]|externalize --target T --wm-dir DIR --anchor DIR --plan FILE --directives FILE [--user FILE] [--trigger manual|tick] [--role R] [--rules PATH]|consume --target T --wm-dir DIR> [--tmux-socket PATH] [--capture-file PATH] [--state-dir PATH]".to_owned()
 }
 
 /// `seat` に続く引数を捌く。
@@ -24,6 +25,7 @@ pub fn dispatch(args: &[String]) -> Outcome {
         Some("tick") => tick_of(args),
         Some("cycle") => cycle_of(args),
         Some("externalize") => externalize_of(args),
+        Some("consume") => consume_of(args),
         _ => refused_usage(),
     }
 }
@@ -343,5 +345,30 @@ fn externalize_of(args: &[String]) -> Outcome {
     match externalize::run(&request) {
         Ok(done) => Outcome::ok_line(externalize::render(&done)),
         Err(err) => refused(err),
+    }
+}
+
+/// `seat consume`（設計 working-memory.md §5.3）。
+fn consume_of(args: &[String]) -> Outcome {
+    // 値欠け・空文字は使い方の誤り（他の flag と同じ極性・SRS NFR4）。
+    let (Ok(target), Ok(wm_dir), Ok(state_dir)) = (
+        required_nonempty(args, "--target"),
+        required_nonempty(args, "--wm-dir"),
+        nonempty(args, "--state-dir"),
+    ) else {
+        return refused_usage();
+    };
+    let refused = |err: &ConsumeError| Outcome::failed_line(RC_REFUSED, consume::render_refused(err));
+    let Some(state) = super::state_dir_of(state_dir) else {
+        return refused(&ConsumeError::StateDir);
+    };
+    let request = consume::Request {
+        target,
+        wm_dir: Path::new(wm_dir),
+        state_dir: &state,
+    };
+    match consume::run(&request) {
+        Ok(done) => Outcome::ok_line(consume::render(&done)),
+        Err(err) => refused(&err),
     }
 }

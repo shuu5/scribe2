@@ -126,8 +126,8 @@ fn polarity_lists_the_three_added_guards() {
     }
     assert_eq!(
         ALL.len(),
-        19,
-        "母集団は 19（10 + 3 + 質問の口 1・`s2-07l.115` + land の 2・`s2-07l.124` + 入口の排他 1・`s2-07l.145` + 追随の回数 1・`s2-07l.146` + 退避の断り 1・`s2-07l.139`）"
+        20,
+        "母集団は 20（10 + 3 + 質問の口 1・`s2-07l.115` + land の 2・`s2-07l.124` + 入口の排他 1・`s2-07l.145` + 追随の回数 1・`s2-07l.146` + 退避の断り 1・`s2-07l.139` + 消費の断り 1・`s2-07l.141`）"
     );
 }
 
@@ -147,7 +147,7 @@ fn runner_question_guard_is_in_loop_fail_open() {
     let stop = names.iter().position(|name| *name == "guard=runner-stop");
     let question = names.iter().position(|name| *name == "guard=runner-question");
     assert!(matches!((stop, question), (Some(s), Some(q)) if q == s + 1), "runner-stop の直後: {names:?}");
-    assert!(text.lines().last().is_some_and(|line| line.contains(" in-loop=16 ") && line.contains(" fail-open=3")), "集計 +1（.124 の 2・.145 の 1・.146 の 1・.139 の 1 を含む）: {text}");
+    assert!(text.lines().last().is_some_and(|line| line.contains(" in-loop=17 ") && line.contains(" fail-open=3")), "集計 +1（.124 の 2・.145 の 1・.146 の 1・.139 の 1・.141 の 1 を含む）: {text}");
 }
 
 /// 3 クラスを名乗らない契約。
@@ -219,12 +219,12 @@ fn polarity_lists_land_anchor_sync_and_retire_clean_as_in_loop_fail_closed() {
     ] {
         assert!(text.lines().any(|line| line == expected), "一覧に載る: {expected}\n{text}");
     }
-    // 集計は行数から独立に数えた値と一致し、.115 の 11 から 2（+ `.145` / `.146` / `.139` の 各 1）増えている。
+    // 集計は行数から独立に数えた値と一致し、.115 の 11 から 2（+ `.145` / `.146` / `.139` / `.141` の 各 1）増えている。
     let in_loop = text.lines().filter(|line| line.contains(" timing=in-loop ")).count();
-    assert_eq!(in_loop, 16, "in-loop の行数: {text}");
+    assert_eq!(in_loop, 17, "in-loop の行数: {text}");
     let summary = text.lines().last().unwrap_or_default();
-    assert_eq!(count_of(summary, "in-loop"), Some(16), "集計 +2（+ .145 / .146 / .139 の 各 1）: {summary}");
-    assert_eq!(count_of(summary, "guards"), Some(19), "母集団 +2（+ .145 / .146 / .139 の 各 1）: {summary}");
+    assert_eq!(count_of(summary, "in-loop"), Some(17), "集計 +2（+ .145 / .146 / .139 / .141 の 各 1）: {summary}");
+    assert_eq!(count_of(summary, "guards"), Some(20), "母集団 +2（+ .145 / .146 / .139 / .141 の 各 1）: {summary}");
 }
 
 /// 退避の断り（`s2-07l.139`・ADR-0018 §2.1・ADR-0014 §2.1「書込を止めうる判定」）は **in-loop / fail-closed** で
@@ -247,6 +247,26 @@ fn polarity_lists_externalize_refusal_as_an_in_loop_fail_closed_guard() {
     assert!(matches!((cycle, refusal), (Some(c), Some(r)) if r == c + 1), "cycle-refusal の直後: {names:?}");
     let caps = text.lines().filter(|line| line.starts_with("guard=cap-guard ")).count();
     assert_eq!(caps, 1, "cap guard の行は 1 本のまま: {text}");
+}
+
+/// 消費の断り（`s2-07l.141`・ADR-0018 §2.1・ADR-0014 §2.1「書込を止めうる判定」＝`wm-ambiguous` / `consumed-exists`
+/// は move を止める）は **in-loop / fail-closed** で一覧に載る。値は境界の定数（`seat::consume::POLARITY`）で、
+/// 一覧はそれを返すだけ。退避の断りの**直後**に並ぶ（行為の流れ = 消費は退避の後）。
+#[test]
+fn polarity_lists_consume_refusal_as_an_in_loop_fail_closed_guard() {
+    let closed = Polarity { timing: Timing::InLoop, on_failure: OnFailure::FailClosed };
+    assert_eq!(Guard::Consume.polarity(), closed, "move の前に判定し、測れない周は動かさない");
+    let consume: Polarity = vessel::seat::consume::POLARITY;
+    assert_eq!(Guard::Consume.polarity(), consume, "境界の定数と同じ値");
+    let type_name = std::any::type_name::<vessel::seat::consume::ConsumeError>();
+    assert!(type_name.ends_with(Guard::Consume.boundary()), "boundary は enum を名指す: {type_name}");
+    let text = output();
+    let expected = "guard=consume-refusal timing=in-loop on-failure=fail-closed boundary=seat::consume::ConsumeError";
+    assert_eq!(text.lines().filter(|line| *line == expected).count(), 1, "一覧に 1 行で載る: {expected}\n{text}");
+    let names: Vec<&str> = text.lines().filter_map(|line| line.split(' ').next()).collect();
+    let externalize = names.iter().position(|name| *name == "guard=externalize-refusal");
+    let refusal = names.iter().position(|name| *name == "guard=consume-refusal");
+    assert!(matches!((externalize, refusal), (Some(e), Some(r)) if r == e + 1), "externalize-refusal の直後: {names:?}");
 }
 
 /// 追随の起こし直しの回数判定（`s2-07l.146`・ADR-0019 §2.4・ADR-0014 §2.1「起動を止めうる判定」）は

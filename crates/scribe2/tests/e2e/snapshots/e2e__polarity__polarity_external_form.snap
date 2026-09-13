@@ -21,4 +21,5 @@ guard=store-lock timing=in-loop on-failure=fail-closed boundary=fleet::store::St
 guard=inject-refusal timing=in-loop on-failure=fail-closed boundary=seat::inject::Delivery
 guard=cycle-refusal timing=in-loop on-failure=fail-closed boundary=seat::cycle::Cycle
 guard=externalize-refusal timing=in-loop on-failure=fail-closed boundary=seat::externalize::ExternalizeError
-polarity: guards=19 in-loop=16 post-hoc=3 fail-open=3
+guard=consume-refusal timing=in-loop on-failure=fail-closed boundary=seat::consume::ConsumeError
+polarity: guards=20 in-loop=17 post-hoc=3 fail-open=3

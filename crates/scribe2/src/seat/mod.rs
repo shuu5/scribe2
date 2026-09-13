@@ -12,6 +12,7 @@
 //! 書く（憲法 C2）。
 
 pub mod cli;
+pub mod consume;
 pub mod cycle;
 pub mod externalize;
 pub mod heartbeat;
@@ -293,8 +294,8 @@ pub fn scan_wm(dir: &Path, target: &str) -> WmScan {
     }
 }
 
-/// 未 consumed の退避物の名前か（`working-memory.*.md` かつ `.consumed.md` で終わらない）。
-fn is_unconsumed_name(name: &str) -> bool {
+/// 未 consumed の退避物の名前か（`working-memory.*.md` かつ `.consumed.md` で終わらない・[`consume`] と共有）。
+pub(crate) fn is_unconsumed_name(name: &str) -> bool {
     name.len() >= WM_PREFIX.len().saturating_add(WM_SUFFIX.len())
         && name.starts_with(WM_PREFIX)
         && name.ends_with(WM_SUFFIX)
