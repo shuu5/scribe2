@@ -68,15 +68,15 @@ slots:
   plain-FR45: "権能で守られた操作は、その権能を持つ役割の席からしか通りません。検査は編集・実行の瞬間に行い、止めるときはどの役割の権能かを告げます。契約が印で開いた便では、その便の作業範囲に限って管理席の code 編集が通ります。"
   plain-FR46: "箱（封じ込め）や受付の枠が使えない host で便を起動しても、器は断りません。並列度を 1 に落として進み、落としたことと理由を記録に残します。"
 
-  plain-FR47: "契約の正本は、設計 doc の中の「機械が読む表」の 1 行だけです。行は少なくとも要件 id・実装する設計の節・write-set・検証を持ちます。台帳の bead は契約の本文を持たず、その行を指す設計 pointer を持ちます。"
+  plain-FR47: "契約の正本は、設計 doc の中の「機械が読む表」の 1 行だけです。行は少なくとも要件 id・実装する設計の節・write-set・検証を持ちます。"
   plain-FR48: "契約の行が「この enum に variant を足す」「rules 行を足す」「完了の値や event の種類を足す」と宣言したら、器はその型を構造として持つ file を base から数え上げ、write-set に足りない file を名指して断ります。読めない周も通しません。"
   plain-FR49: "intake を通ったら、実装役を起こす前に審査役が契約とそれが実装する設計と要件を読んで判定します。判定は便の段として記録し、PASS でなければ実装役を起こしません。"
   plain-FR50: "着地したら、器が push し、その commit の CI の結果を commit id で確かめ、台帳の便を「着地した commit と CI の結果」の 1 行付きで close します。終端の各手は typed な event として記録します。CI が緑でなければ close せず失敗を記録します。台帳へ書くのはこれだけです。"
   plain-FR51: "台帳を読み取り専用の台帳 adapter で読み、設計 doc の契約 id を指さない open な契約と、設計の中身を持つのに設計 doc や research への pointer が無い open な memo を名指す lint を、doctor の項目として提供します。"
-  plain-FR52: "設計 doc の文のうち規範の印を持つ文は、根拠の pointer を持ち、数 + 単位を持ちません。破った文は file と行で名指します。"
-  plain-FR53: "intake に設計 pointer（設計 doc の path と契約 id）を添えると、器は記録した base の設計 doc からその行を読み、便の契約 file をその行から作ります。"
+  plain-FR52: "設計 doc の文のうち規範の印を持つ文は、根拠の pointer を持ち、数 + 単位を持ちません。破った文は file と行で名指し、CI を非 0 で止めます。"
+  plain-FR53: "intake に設計 pointer（設計 doc の path と契約 id）を添え、それが解決すると、器は記録した base の設計 doc からその行を読み、便の契約 file をその行から作ります。"
   plain-FR54: "設計 pointer が指す設計 doc・契約表の行・実装する設計の節のどれかが無いとき、または契約 file を直接渡したときは、器は無いものを名指して断り、便を作りません。"
-  plain-FR55: "CI は tracked な設計 doc の契約表の全行に、intake と同じ write-set の閉包の検査と設計 pointer の解決を回し、違反する行を file と行で名指します。"
+  plain-FR55: "CI は tracked な設計 doc の契約表の全行に、intake と同じ write-set の閉包の検査と設計 pointer の解決を回し、違反する行を file と行で名指し、CI を非 0 で止めます。"
 
   # ---- FR: rationale（rationale_source の N-x に接地した「なぜ要る」）----
   rationale-FR1: "契約が書き切れることを求めるニーズ（N-4）から来ています。欠けた契約を後の段で見つけると QA の周回が始まるので、入口で全件まとめて断る方が安いからです。"
