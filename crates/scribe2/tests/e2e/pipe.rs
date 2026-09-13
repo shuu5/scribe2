@@ -2434,23 +2434,29 @@ fn pipe_gate_inconclusive_when_diff_exceeds_cap() {
     clean(&[&repo, &state]);
 }
 
+/// **verdict.json の key 列を完全一致で pin する**（設計 §5.3）。
+///
+/// 偽 `systemd-run` と偽 `systemctl`（殺した）を積み、**包める周に固定**して撃つ。素の環境で
+/// 撃つと包めるかは runner の周ごとに変わり、`scope` が載る周と欠ける周が混ざる（PR #154 の
+/// CI で FAIL → 再実行で success・`s2-07l.236`）。欠ける面は [`pipe_gate_verdict_scope_is_a_closed_name_or_absent`]。
 #[test]
 fn pipe_gate_records_structured_verdict() {
     let (repo, state) = repo_with_state();
-    let path = write_contract(&repo, &[], &[]);
-    let id = implemented(&repo, &state, &path);
+    let path = systemd_stub(&state);
+    systemctl_stub(&state, SYSTEMCTL_KILLED);
     let marker = state.join("lens-ran");
     let lens = fake_lens(&marker, &lens_verdict("PASS"));
-    let out = gate_once(&repo, &state, &id, Some(&lens));
+    let (id, out) = confined_run(&repo, &state, &path, &lens);
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "PASS の rc は 0: {}", stderr_of(&out));
     assert!(marker.exists(), "判定に届いた周は lens を起動する");
     let pairs = verdict_pairs(&state, &id);
     let keys: Vec<&str> = pairs.iter().map(|(key, _)| key.as_str()).collect();
     assert_eq!(
         keys,
-        vec!["schema", "run", "verdict", "evidence", "verify_red", "diff_bytes", "tree", "ts"],
-        "verdict.json の key 列（設計 §5.3）"
+        vec!["schema", "run", "verdict", "evidence", "verify_red", "diff_bytes", "tree", "scope", "ts"],
+        "verdict.json の key 列（設計 §5.3・包めた周は lens の片付けの `scope` が載る）"
     );
+    assert_eq!(value_of(&pairs, "scope"), "killed", "lens の scope に残りを殺した周");
     assert_eq!(value_of(&pairs, "schema"), "1");
     assert_eq!(value_of(&pairs, "run"), id);
     assert_eq!(value_of(&pairs, "verdict"), "PASS");
@@ -8215,6 +8221,69 @@ fn pipe_confine_release_runner_and_lens_scopes_are_released() {
     assert_eq!(value_of(&verdict_pairs(&state, &id), "scope"), "killed", "lens の片付けは verdict に残る");
     assert_eq!(value_of(&verdict_pairs(&state, &id), "verdict"), "PASS", "判定は不変");
     clean(&[&repo, &state]);
+}
+
+/// 便を 1 本 gate まで通し、`path_of` が組んだ PATH の下で書かれた verdict.json を読む
+/// （置き場は片付けてから返す）。
+fn verdict_under(path_of: impl Fn(&Path) -> String) -> Vec<(String, vessel::fleet::json_lite::Value)> {
+    let (repo, state) = repo_with_state();
+    let path = path_of(&state);
+    let marker = state.join("lens-ran");
+    let (id, gated) = confined_run(&repo, &state, &path, &fake_lens(&marker, &lens_verdict("PASS")));
+    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "gate: {}", stderr_of(&gated));
+    let pairs = verdict_pairs(&state, &id);
+    // marker では測らない: lean な PATH には `touch` が無い（lens の答えは builtin の echo で届く）。
+    assert_eq!(value_of(&pairs, "evidence"), "fake", "lens まで届いた周（片付ける lens の起動が在る）");
+    clean(&[&repo, &state]);
+    pairs
+}
+
+/// **verdict の `scope` は閉じた集合の名か、key ごと欠けるかのどちらか**（設計 §4.4 / §5.3・C10）。
+///
+/// 包めた周（偽 `systemd-run`）は lens の片付けの結果を [`Released::as_str`] の名で書く。包めない
+/// 周（PATH に `systemd-run` が無い）は片付ける scope が無い＝key を欠く（`none` 等を書かない）。
+/// 道具の有無は 2 面とも fixture で固定する——素の環境で撃つと周ごとに面が入れ替わる（`s2-07l.236`）。
+// flip-check: retroactive s2-07l.236
+#[test]
+fn pipe_gate_verdict_scope_is_a_closed_name_or_absent() {
+    use vessel::pipe::confine::Released;
+    let names: Vec<&str> = [Released::Gone, Released::Killed, Released::Failed(1), Released::NoTool]
+        .into_iter()
+        .map(Released::as_str)
+        .collect();
+    // 包めた面: 片付けの道具の答えを振る（`killed` は [`pipe_gate_records_structured_verdict`] が測る）。
+    let no_bus = "echo 'Failed to connect to bus: No medium found' >&2\nexit 1";
+    for (answer, want) in [(Some(no_bus), "failed"), (None, "no-tool")] {
+        let pairs = verdict_under(|state| {
+            let stubbed = systemd_stub(state);
+            match answer {
+                Some(found) => {
+                    systemctl_stub(state, found);
+                    stubbed
+                }
+                None => format!("{}:{}", state.join(SYSTEMD_BIN).display(), lean_path(state)),
+            }
+        });
+        let keys: Vec<&str> = pairs.iter().map(|(key, _)| key.as_str()).collect();
+        assert_eq!(
+            keys,
+            vec!["schema", "run", "verdict", "evidence", "verify_red", "diff_bytes", "tree", "scope", "ts"],
+            "包めた周は 9 key（{want}）"
+        );
+        let scope = value_of(&pairs, "scope");
+        assert!(names.contains(&scope.as_str()), "閉じた集合の名: {scope} ∉ {names:?}");
+        assert_eq!(scope, want, "片付けの道具の答えの名");
+        assert_eq!(value_of(&pairs, "verdict"), "PASS", "片付けの結果で判定は変えない");
+    }
+    // 包めない面: `scope` の key が欠ける（8 key）。
+    let pairs = verdict_under(lean_path);
+    let keys: Vec<&str> = pairs.iter().map(|(key, _)| key.as_str()).collect();
+    assert_eq!(
+        keys,
+        vec!["schema", "run", "verdict", "evidence", "verify_red", "diff_bytes", "tree", "ts"],
+        "包めない周は `scope` を欠く（測れなかった値は書かない）"
+    );
+    assert_eq!(value_of(&pairs, "verdict"), "PASS", "包めなくても便は流れる");
 }
 
 /// host の受付札の置き場（`<state_dir の親>/scribe2-host/slots`・設計 gate-cost.md §3.2）。
