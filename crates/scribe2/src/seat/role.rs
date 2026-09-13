@@ -33,6 +33,78 @@ impl Role {
     }
 }
 
+/// 権能＝操作の種別（設計 §3・ADR-0022 §2.2・SRS FR41）。**variant の列挙は core が持つ**（文書は写さない）。
+///
+/// どの役割がどの権能を持つかは rules 行 `role.<役割名>`（`RuleKind::RoleCapabilities`・値は名の列・裁定 id
+/// 付き）が持ち、ここは名の集合だけを閉じる。列に無い名は manifest の読み込みで `RuleError` になる
+/// （[`Capability::parse`] の失敗）。`Go` / `Relay` / `EditContract` は記録時点で対応する subcommand も path 種別も
+/// 無い（go の記帳の口は後続・中継は開発 session の道具・契約は台帳の write）＝行の値には在るが Bash 面では
+/// 照合されない宣言だけの権能である。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Capability {
+    /// 回答の記帳（`pipe answer`）。
+    Answer,
+    /// 承認の記帳（`pipe approve`）。
+    Approve,
+    /// go の記帳（merge の許可・記帳の口は後続）。
+    Go,
+    /// 便の起動（`pipe intake` / `run` / `resume` / `stop` / `retire`）。
+    Launch,
+    /// 席間の中継（開発 session の道具の message・器の subcommand ではない）。
+    Relay,
+    /// go 後の merge（`pipe land`）。
+    Merge,
+    /// 契約の編集（台帳の write・path 種別を持たない）。
+    EditContract,
+    /// `design-intent/` の編集。
+    EditDesignIntent,
+    /// `docs/design/` の編集。
+    EditDesignDoc,
+    /// 上記以外の repo 内の編集。
+    EditCode,
+    /// repo root の外の編集。
+    EditOutside,
+}
+
+/// [`Capability`] の全 variant（宣言順）。
+pub const CAPABILITIES: &[Capability] = &[
+    Capability::Answer,
+    Capability::Approve,
+    Capability::Go,
+    Capability::Launch,
+    Capability::Relay,
+    Capability::Merge,
+    Capability::EditContract,
+    Capability::EditDesignIntent,
+    Capability::EditDesignDoc,
+    Capability::EditCode,
+    Capability::EditOutside,
+];
+
+impl Capability {
+    /// rules 行の値と記録に使う字面。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Answer => "answer",
+            Self::Approve => "approve",
+            Self::Go => "go",
+            Self::Launch => "launch",
+            Self::Relay => "relay",
+            Self::Merge => "merge",
+            Self::EditContract => "edit-contract",
+            Self::EditDesignIntent => "edit-design-intent",
+            Self::EditDesignDoc => "edit-design-doc",
+            Self::EditCode => "edit-code",
+            Self::EditOutside => "edit-outside",
+        }
+    }
+
+    /// 字面から引く。未知なら `None`（variant 名の字面も受けない）。
+    pub fn parse(text: &str) -> Option<Self> {
+        CAPABILITIES.iter().copied().find(|found| found.as_str() == text)
+    }
+}
+
 /// 登録の受付の極性（設計 §6）: 受付の時点で止め、打刻を読めない周は登録しない。
 pub const POLARITY: Polarity = Polarity { timing: Timing::InLoop, on_failure: OnFailure::FailClosed };
 

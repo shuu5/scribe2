@@ -3,6 +3,6 @@ source: crates/scribe2/tests/e2e/rules.rs
 expression: form
 ---
 usage: scribe2 <name|--version|doctor|rules|fleet|vessel|hook|pipe|runner|lens|seat|polarity>
-rules: ok rows=40 kinds=40
+rules: ok rows=42 kinds=41
 rules: no such id
 85

@@ -10,6 +10,8 @@
 pub mod cli;
 pub mod manifest;
 
+use crate::seat::role::{Capability, Role, ALL as ROLES, CAPABILITIES};
+
 /// 種類が要求する値の形。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ValueShape {
@@ -122,6 +124,10 @@ pub enum RuleKind {
     PipeLandWaitS,
     /// 席の rebrief が台帳（`bd --readonly`）の子 process を待つ上限（秒）。超えたら DATA を出さない。
     LedgerTimeoutS,
+    /// 役割ごとの権能（設計 seat-roles.md §3・ADR-0022 §2.2）。値は権能の名の列で、名の集合は
+    /// [`crate::seat::role::Capability`] が閉じる（列に無い名は読み込みで拒む）。**1 kind で行が 2 つ**
+    /// （id は `role.<役割名>`・役割ごとに 1 行）。
+    RoleCapabilities,
 }
 
 /// [`RuleKind`] の全 variant。parity test の母集団である。
@@ -166,6 +172,7 @@ pub const ALL: &[RuleKind] = &[
     RuleKind::WmDirectiveCap,
     RuleKind::PipeLandWaitS,
     RuleKind::LedgerTimeoutS,
+    RuleKind::RoleCapabilities,
 ];
 
 impl RuleKind {
@@ -212,6 +219,7 @@ impl RuleKind {
             Self::WmDirectiveCap => "WmDirectiveCap",
             Self::PipeLandWaitS => "PipeLandWaitS",
             Self::LedgerTimeoutS => "LedgerTimeoutS",
+            Self::RoleCapabilities => "RoleCapabilities",
         }
     }
 
@@ -256,7 +264,9 @@ impl RuleKind {
             | Self::MutationSurvivalLine
             | Self::CompileShape
             | Self::CompileSeconds => ValueShape::Policy,
-            Self::RunnerAllowedCommands | Self::RepoNonRustExecAllow => ValueShape::List,
+            Self::RunnerAllowedCommands | Self::RepoNonRustExecAllow | Self::RoleCapabilities => {
+                ValueShape::List
+            }
         }
     }
 
@@ -356,7 +366,35 @@ impl Rule for RuleRow {
                 format!("{} に ruling / ruled_at が無い", self.id),
             ));
         }
-        Ok(())
+        self.names_are_known()
+    }
+}
+
+impl RuleRow {
+    /// 値が**閉じた名の集合**を指す kind は、名を core の enum で引けることまで検査する（設計
+    /// seat-roles.md §3・ADR-0022 §2.2）: `RoleCapabilities` の列は [`Capability`] の名、`DialogueSurface`
+    /// の値は [`Role`] の名。綴り違いを黙って「権能なし」「対話面なし」に倒さない（NFR4）。
+    fn names_are_known(&self) -> Result<(), RuleError> {
+        let unknown = |what: &str, name: &str, taken: &[&str]| {
+            RuleError::new(
+                self.line,
+                format!("{} の value に未知の{what} {name}（取るのは {}）", self.id, taken.join(" / ")),
+            )
+        };
+        match (self.kind, &self.value) {
+            (RuleKind::RoleCapabilities, RuleValue::List(names)) => {
+                let taken: Vec<&str> = CAPABILITIES.iter().map(|found| found.as_str()).collect();
+                match names.iter().find(|name| Capability::parse(name).is_none()) {
+                    Some(name) => Err(unknown("権能", name, &taken)),
+                    None => Ok(()),
+                }
+            }
+            (RuleKind::DialogueSurface, RuleValue::Str(name)) if Role::parse(name).is_none() => {
+                let taken: Vec<&str> = ROLES.iter().map(|found| found.as_str()).collect();
+                Err(unknown("役割", name, &taken))
+            }
+            _ => Ok(()),
+        }
     }
 }
 

@@ -2,7 +2,10 @@
 //!
 //! marker が自分の NAME を言い、state dir が紐づいているときだけ仕える。それ以外は
 //! **stdout 0 byte・stderr 0 byte・rc 0** で黙る。未知 event も黙る（fail-open＝他の
-//! 器と衝突しない）。**env も HOME も読まない**（憲法 C2.2）。
+//! 器と衝突しない）。**env も HOME も読まない**（憲法 C2.2）。anchor（repo root）は生成 hooks.json の
+//! shell 行が渡す `--project`（session の起動 dir）から解き、席が `cd` しても変わらない。**例外は席の
+//! 権能**（[`role_guard`]・設計 seat-roles.md §4）: `--pane` が在る（席である）周は anchor を解けなくても
+//! 黙らず、権能付きの操作を deny する。
 //!
 //! 記録の置き場は `<state_dir>/inject.jsonl` ただ 1 つで、これが C6.3 の「消費を記録
 //! する append-only store 1 つ」である。書き込みは fleet と**同じ lock 実装**
@@ -10,17 +13,20 @@
 
 pub mod guard;
 pub mod permission;
+pub mod role_guard;
 pub mod seat_guard;
 pub mod stamp;
 pub mod vessel;
 
 use crate::cli_outcome::{Outcome, RC_BROKEN};
 use crate::fleet::json_lite::{self, Value};
+use crate::fleet::json_tree;
 use crate::fleet::store::{self, LockPolicy, StoreError};
 use crate::name::NAME;
 use crate::seat::state::Event;
 use guard::Decision;
 use permission::PermissionDecision;
+use role_guard::{Operation, RoleDecision, Seat};
 use seat_guard::SeatDecision;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -43,6 +49,10 @@ const KEY_FILE: &str = "file_path";
 const KEY_NOTEBOOK: &str = "notebook_path";
 /// payload から拾う key（この session の transcript）。
 const KEY_TRANSCRIPT: &str = "transcript_path";
+/// payload から拾う key（`Bash` の command 行・`tool_input` の中）。
+const KEY_TOOL_INPUT: &str = "tool_input";
+/// payload から拾う key（`Bash` の command 行）。
+const KEY_COMMAND: &str = "command";
 
 /// `session-start` の event 名。
 const EVENT_SESSION_START: &str = "session-start";
@@ -60,6 +70,11 @@ const FLAG_STATE_DIR: &str = "--state-dir";
 const FLAG_PANE: &str = "--pane";
 /// tmux の socket を渡す flag（歯は独立 socket で撃つ）。
 const FLAG_SOCKET: &str = "--tmux-socket";
+/// session の起動 dir（anchor）を渡す flag。生成 hooks.json の shell 行が `$CLAUDE_PROJECT_DIR` から渡す
+/// （席が `cd` しても変わらない・設計 seat-roles.md §4）。無い周（旧 hooks.json）は payload の `cwd` で解く。
+const FLAG_PROJECT: &str = "--project";
+/// rules manifest を差し替える flag（役割の行の歯の seam・`rules get --rules` と同じ形）。
+const FLAG_RULES: &str = "--rules";
 
 /// 注入 1 回の記録（FR21: who / what / when / bytes / tokens / wall）。
 ///
@@ -126,20 +141,16 @@ pub fn append(state_dir: &Path, record: &InjectionRecord) -> Result<Vec<store::W
 
 /// `hook` に続く引数と stdin の payload を捌く。
 ///
-/// 仕えない周・未知 event は **1 byte も書かず rc 0** で終える（FR24）。
+/// 仕えない周・未知 event は **1 byte も書かず rc 0** で終える（FR24）。ただし `pre-tool-use` で
+/// `--pane` が在る（席である）のに anchor を解けない周は黙らず、権能付きの操作を deny する
+/// （[`unanchored`]・席が repo の外へ `cd` しても guard は外れない・設計 seat-roles.md §4）。
 pub fn dispatch(args: &[String], payload: &str) -> Outcome {
     let started = Instant::now();
     let Some(cwd) = cwd_of(payload) else {
         return Outcome::ok(Vec::new());
     };
-    let Some(root) = vessel::repo_root(&cwd) else {
-        return Outcome::ok(Vec::new());
-    };
-    let Served::ByMe(version) = vessel::served(&root) else {
-        return Outcome::ok(Vec::new());
-    };
-    let Some(dir) = state_dir_of(args, &root) else {
-        return Outcome::ok(Vec::new());
+    let Some((root, version, dir)) = anchor_of(args, &cwd) else {
+        return unanchored(args, &cwd, payload, started);
     };
     let hooked = Hooked {
         root: &root,
@@ -147,6 +158,7 @@ pub fn dispatch(args: &[String], payload: &str) -> Outcome {
         dir: &dir,
         pane: flag_of(args, FLAG_PANE),
         socket: flag_of(args, FLAG_SOCKET),
+        rules: flag_of(args, FLAG_RULES),
     };
     match args.first().map(String::as_str) {
         Some(EVENT_SESSION_START) => {
@@ -163,12 +175,57 @@ pub fn dispatch(args: &[String], payload: &str) -> Outcome {
     }
 }
 
+/// anchor を解く: repo root は `--project`（無い・空なら payload の `cwd`・互換）から、`served` と state dir は
+/// その root から。どれかが解けない周は `None`（仕えない側）。
+fn anchor_of(args: &[String], cwd: &Path) -> Option<(PathBuf, u64, PathBuf)> {
+    let start = flag_of(args, FLAG_PROJECT)
+        .filter(|found| !found.trim().is_empty())
+        .map_or_else(|| cwd.to_path_buf(), PathBuf::from);
+    let root = vessel::repo_root(&start)?;
+    let Served::ByMe(version) = vessel::served(&root) else {
+        return None;
+    };
+    let dir = state_dir_of(args, &root)?;
+    Some((root, version, dir))
+}
+
+/// anchor を解けない周。`pre-tool-use` で `--pane` が在れば（席なのに仕える repo が無い）権能付きの操作を
+/// deny し（FailClosed・stderr 1 行・rc 2）、記録は置き場（`--state-dir`）が解ける周にだけ 1 行残す。
+/// それ以外（pane が無い・他の event）は **1 byte も書かず rc 0**（FR24 の沈黙は pane が無い周にだけ当たる）。
+fn unanchored(args: &[String], cwd: &Path, payload: &str, started: Instant) -> Outcome {
+    let pane = flag_of(args, FLAG_PANE).filter(|found| !found.trim().is_empty());
+    if args.first().map(String::as_str) != Some(EVENT_PRE_TOOL_USE) || pane.is_none() {
+        return Outcome::ok(Vec::new());
+    }
+    let tool = field(payload, KEY_TOOL).unwrap_or_default();
+    let path = field(payload, KEY_FILE).or_else(|| field(payload, KEY_NOTEBOOK));
+    let command = command_of(payload);
+    let op = Operation { tool: &tool, command: command.as_deref(), path: path.as_deref(), root: None, cwd };
+    let Some(subject) = role_guard::subject(&op, None) else {
+        return Outcome::ok(Vec::new());
+    };
+    let line = role_guard::unanchored_line(&subject);
+    if let Some(dir) = flag_of(args, FLAG_STATE_DIR).map(PathBuf::from) {
+        let hooked = Hooked {
+            root: cwd,
+            cwd,
+            dir: &dir,
+            pane,
+            socket: flag_of(args, FLAG_SOCKET),
+            rules: None,
+        };
+        return denied(&hooked, &format!("role-deny {}", subject.render()), line, started);
+    }
+    Outcome::failed_line(RC_BROKEN, line)
+}
+
 /// 仕える周に解いた材料（repo・作業 dir・置き場・席の出所）。各 event へ 1 つで渡す。
 ///
 /// 畳むのは憲法 C4 の引数上限（R-C4-4.args = 5）ゆえ: `pre_tool_use` は既に 5 引数で、席の出所
-/// （`--pane` / `--tmux-socket`）を素の引数で足せない。席は**記録を書く周にだけ**解く（[`seat_of`]）。
+/// （`--pane` / `--tmux-socket`）を素の引数で足せない。席は**記録を書く周と役割の判定にだけ**解く
+/// （[`seat_of`] / [`role_outcome`]）。
 struct Hooked<'a> {
-    /// repo の root。
+    /// repo の root（anchor・`--project` から。無い周は payload の `cwd` から）。
     root: &'a Path,
     /// 作業 dir（payload の `cwd`）。
     cwd: &'a Path,
@@ -178,6 +235,8 @@ struct Hooked<'a> {
     pane: Option<&'a str>,
     /// tmux の socket（歯が独立 socket を渡す口・既定の server なら `None`）。
     socket: Option<&'a str>,
+    /// rules manifest の差し替え（`--rules`・無ければ埋め込み）。
+    rules: Option<&'a str>,
 }
 
 /// 記録の `seat` 列（`--pane` → target → 潰した字面）。pane が無い・空・解けない周は `None`
@@ -218,6 +277,22 @@ fn cwd_of(payload: &str) -> Option<PathBuf> {
         Some(found) => Some(PathBuf::from(found)),
         None => std::env::current_dir().ok(),
     }
+}
+
+/// payload の `tool_input.command`（`Bash` の command 行）。
+///
+/// command 行は `"` や `\` を含みうる（[`field`] は escape を解かないので、escape された `"` の手前で
+/// 切れて後ろの subcommand を見落とす＝fail-open）。入れ子の reader（[`json_tree`]）で escape を解いて
+/// 読み、payload が木として読めない周だけ [`field`] へ倒す。
+fn command_of(payload: &str) -> Option<String> {
+    let parsed = json_tree::parse(payload).ok();
+    let nested = parsed
+        .as_ref()
+        .and_then(|tree| tree.get(KEY_TOOL_INPUT))
+        .and_then(|input| input.get(KEY_COMMAND))
+        .and_then(json_tree::Tree::as_str)
+        .map(str::to_owned);
+    nested.or_else(|| field(payload, KEY_COMMAND))
 }
 
 /// Claude Code の hook payload から文字列 field を 1 つ抜く。
@@ -340,59 +415,87 @@ fn session_start(hooked: &Hooked, version: u64, started: Instant) -> Outcome {
     outcome
 }
 
-/// write-set の外への編集を編集の時点で止める。deny は rc 2 + stderr 1 行 + stdout 0 byte。
+/// 編集と権能付きの操作を行為の時点で止める。deny は rc 2 + stderr 1 行 + stdout 0 byte。
+///
+/// 門の順は write-set guard → seat guard → role guard（既存の順のまま末尾に足す・**deny 文は先の門が先**＝
+/// 2 つの門が同時に落ちる周に、直す側がどちらを直せばよいか読めなくならないため）。前 2 つは cwd の
+/// git dir が要る（cwd が repo の外なら測れない＝従来どおり通す側）が、role guard は anchor から解くので
+/// cwd に依らず評価する。
 fn pre_tool_use(hooked: &Hooked, payload: &str, started: Instant) -> Outcome {
     let (root, cwd) = (hooked.root, hooked.cwd);
-    let Some(git_dir) = vessel::git_dir(cwd) else {
-        return Outcome::ok(Vec::new());
-    };
     let tool = field(payload, KEY_TOOL).unwrap_or_default();
     let path = field(payload, KEY_FILE).or_else(|| field(payload, KEY_NOTEBOOK));
-    match guard::decide(root, cwd, &git_dir, &tool, path.as_deref()) {
-        // write-set が通した周にだけ seat guard を評価する（**deny 文は write-set が先**＝
-        // 2 つの門が同時に落ちる周に、直す側がどちらを直せばよいか読めなくならないため）。
-        Decision::Inactive | Decision::Allow => {
-            let transcript = field(payload, KEY_TRANSCRIPT);
-            let decided =
-                seat_guard::decide(root, cwd, &tool, path.as_deref(), transcript.as_deref());
-            seat_outcome(&decided, hooked, started)
+    if let Some(git_dir) = vessel::git_dir(cwd) {
+        if let Decision::Deny(line) = guard::decide(root, cwd, &git_dir, &tool, path.as_deref()) {
+            return denied(hooked, "deny", line, started);
         }
-        Decision::Deny(line) => {
-            let emit = Emit { who: EVENT_PRE_TOOL_USE, what: "deny", when: "PreToolUse", line: &line };
-            let entry = record(&emit, hooked, started);
-            // deny の外形は「rc 2 + stderr 1 行 + stdout 0 byte」（FR20・必須）で、
-            // stderr は丸ごと model への判定文になる。記録（FR21・推奨）の警告や失敗を
-            // ここへ足すと判定文が濁るので、deny の周だけは戻りを stderr へ載せない。
-            let _ = append(hooked.dir, &entry);
-            Outcome::failed_line(RC_BROKEN, line)
+        let transcript = field(payload, KEY_TRANSCRIPT);
+        let decided = seat_guard::decide(root, cwd, &tool, path.as_deref(), transcript.as_deref());
+        if let Some(outcome) = seat_outcome(&decided, hooked, started) {
+            return outcome;
+        }
+    }
+    let command = command_of(payload);
+    let op = Operation { tool: &tool, command: command.as_deref(), path: path.as_deref(), root: Some(root), cwd };
+    role_outcome(hooked, &op, started)
+}
+
+/// deny の外形（rc 2 + stderr 1 行 + stdout 0 byte・FR20）と記録 1 行。
+///
+/// stderr は丸ごと model への判定文になる。記録（FR21・推奨）の警告や失敗をここへ足すと判定文が
+/// 濁るので、deny の周だけは戻りを stderr へ載せない。
+fn denied(hooked: &Hooked, what: &str, line: String, started: Instant) -> Outcome {
+    let emit = Emit { who: EVENT_PRE_TOOL_USE, what, when: "PreToolUse", line: &line };
+    let _ = append(hooked.dir, &record(&emit, hooked, started));
+    Outcome::failed_line(RC_BROKEN, line)
+}
+
+/// 1 byte も出さない周の記録 1 行（allow の周に判定文を濁さない・stderr へは出さない）。
+fn noted(hooked: &Hooked, what: &str, started: Instant) {
+    let emit = Emit { who: EVENT_PRE_TOOL_USE, what, when: "PreToolUse", line: "" };
+    let _ = append(hooked.dir, &silent(&emit, hooked, started));
+}
+
+/// seat guard の判定を外形へ写す。止める周だけ `Some`（通す周は次の門へ・**1 byte も書かない**）。
+///
+/// 判定（[`seat_guard::decide`]）と外形をここで分けているのは憲法 C4 の引数上限である
+/// ——1 本に畳むと判定の 5 引数へ記録の 2 引数が乗って上限を超える。
+fn seat_outcome(decided: &SeatDecision, hooked: &Hooked, started: Instant) -> Option<Outcome> {
+    match decided {
+        // 通す 2 つは記録も残さない（hook budget を毎編集ごとの追記で食い潰さない）。
+        SeatDecision::Allow | SeatDecision::Externalize => None,
+        SeatDecision::Deny(line) => Some(denied(hooked, "seat-guard-deny", line.clone(), started)),
+        // **測れない周は通す**。ただし黙って通すと「測れていない」ことが誰にも見えないので
+        // 記録だけ 1 行残す。
+        SeatDecision::Unmeasured(reason) => {
+            noted(hooked, &format!("seat-guard-unmeasured reason={reason}"), started);
+            None
         }
     }
 }
 
-/// seat guard の判定を外形へ写す。通す周は **1 byte も書かない**。
+/// role guard の判定を外形へ写す（設計 seat-roles.md §4）。
 ///
-/// 判定（[`seat_guard::decide`]）と外形をここで分けているのは憲法 C4 の引数上限である
-/// ——1 本に畳むと判定の 5 引数へ記録の 2 引数が乗って上限を超える。
-fn seat_outcome(decided: &SeatDecision, hooked: &Hooked, started: Instant) -> Outcome {
-    match decided {
-        // 通す 2 つは記録も残さない（hook budget を毎編集ごとの追記で食い潰さない）。
-        SeatDecision::Allow | SeatDecision::Externalize => Outcome::ok(Vec::new()),
-        SeatDecision::Deny(line) => {
-            let emit = Emit { who: EVENT_PRE_TOOL_USE, what: "seat-guard-deny", when: "PreToolUse", line };
-            let entry = record(&emit, hooked, started);
-            // deny の外形は write-set guard と同じ（rc 2 + stderr 1 行 + stdout 0 byte）。
-            // 記録の警告を stderr へ足すと判定文が濁るので戻りは載せない。
-            let _ = append(hooked.dir, &entry);
-            Outcome::failed_line(RC_BROKEN, line.clone())
-        }
-        // **測れない周は通す**。ただし黙って通すと「測れていない」ことが誰にも見えないので
-        // 記録だけ 1 行残す（stderr へは出さない＝allow の周に判定文を濁さない）。
-        SeatDecision::Unmeasured(reason) => {
-            let what = format!("seat-guard-unmeasured reason={reason}");
-            let emit = Emit { who: EVENT_PRE_TOOL_USE, what: &what, when: "PreToolUse", line: "" };
-            let _ = append(hooked.dir, &silent(&emit, hooked, started));
+/// 権能付きでない操作（[`role_guard::subject`] が `None`）は tmux も event log も撃たずに通す（NFR5）。
+/// 権能付きの操作は allow / deny の両方で記録 1 行（`what` = `role-<allow|deny> <種別>`）。pane が無い周は
+/// 席ではない＝通す・記録なし。
+fn role_outcome(hooked: &Hooked, op: &Operation, started: Instant) -> Outcome {
+    let Some(subject) = role_guard::subject(op, Some(hooked.dir)) else {
+        return Outcome::ok(Vec::new());
+    };
+    let seat = Seat {
+        pane: hooked.pane,
+        socket: hooked.socket,
+        state_dir: hooked.dir,
+        rules: hooked.rules.map(Path::new),
+    };
+    match role_guard::decide(&subject, &seat) {
+        RoleDecision::Inactive => Outcome::ok(Vec::new()),
+        RoleDecision::Allow => {
+            noted(hooked, &format!("role-allow {}", subject.render()), started);
             Outcome::ok(Vec::new())
         }
+        RoleDecision::Deny(line) => denied(hooked, &format!("role-deny {}", subject.render()), line, started),
     }
 }
 

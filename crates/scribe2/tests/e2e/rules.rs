@@ -8,6 +8,7 @@ use vessel::cli_outcome::{Outcome, RC_OK, RC_REFUSED};
 use vessel::order::is_declaration_order;
 use vessel::rules::manifest::Manifest;
 use vessel::rules::{Rule, RuleKind, RuleValue, ValueShape, ALL};
+use vessel::seat::role::{Capability, Role, ALL as ROLES, CAPABILITIES};
 
 /// 受理される最小の manifest（2 行）。`enabled` は**全行に書く**（必須 key）。
 const GOOD: &str = r#"schema = 1
@@ -23,7 +24,7 @@ ruled_at = "2026-09-07"
 [[rule]]
 id = "R-C7-1"
 kind = "DialogueSurface"
-value = "user-direct"
+value = "planner"
 enabled = true
 ruling = "r"
 ruled_at = "2026-09-09"
@@ -72,12 +73,17 @@ fn one_row(kind: RuleKind, value: &str) -> String {
     )
 }
 
-/// 種類の形に合う値の字面。
+/// 種類の形に合う値の字面。**閉じた名の集合を指す kind** は名を core の enum から取る（対話面は `Role` の名・
+/// 権能の行は `Capability` の名・`s2-07l.201`）。
 fn sample_value(kind: RuleKind) -> String {
-    match kind.shape() {
-        ValueShape::Int => "1".to_owned(),
-        ValueShape::Str | ValueShape::Policy => "\"sample\"".to_owned(),
-        ValueShape::List => "[\"sample\"]".to_owned(),
+    match kind {
+        RuleKind::DialogueSurface => format!("\"{}\"", Role::Planner.as_str()),
+        RuleKind::RoleCapabilities => format!("[\"{}\"]", Capability::Answer.as_str()),
+        _ => match kind.shape() {
+            ValueShape::Int => "1".to_owned(),
+            ValueShape::Str | ValueShape::Policy => "\"sample\"".to_owned(),
+            ValueShape::List => "[\"sample\"]".to_owned(),
+        },
     }
 }
 
@@ -308,8 +314,8 @@ fn rules_manifest_accepts_good_fixture() {
     let surface = manifest.get("R-C7-1").expect("R-C7-1 が在る");
     assert_eq!(
         surface.value,
-        RuleValue::Str("user-direct".to_owned()),
-        "識別子"
+        RuleValue::Str("planner".to_owned()),
+        "識別子（Role の名）"
     );
 }
 
@@ -652,7 +658,7 @@ fn rules_embedded_manifest_declares_ledger_timeout() {
     assert!(row.enabled, "既定で効く");
     assert_eq!(row.ruling, "user 2026-09-12T02:01Z", "裁定 id");
     assert_eq!(row.ruled_at, "2026-09-12", "裁定日");
-    assert_eq!(ALL.last(), Some(&RuleKind::LedgerTimeoutS), "宣言順の末尾");
+    assert!(ALL.contains(&RuleKind::LedgerTimeoutS), "ALL に在る（末尾は `.201` の RoleCapabilities）");
     assert_eq!(RuleKind::parse("LedgerTimeoutS"), Some(RuleKind::LedgerTimeoutS), "kind を字面から引ける");
     let errors = rejected(&one_row_raw("LedgerTimeout", "60")).expect("未知の kind の fixture が受理された");
     assert!(errors.join("\n").contains("未知である"), "行の kind を綴り違えた manifest は読めない");
@@ -736,7 +742,7 @@ fn rules_embedded_manifest_is_valid_and_covers_all_kinds() {
     // **tracked な `rules/manifest.toml` の全行が受理される**（`parse` は 1 件でも違反が
     // 在れば `Err` を返すので、ここに届いた時点で全行が必須 key を持つ）。母集団を額面に
     // 出すのは、行が黙って落ちた周を「全部読めた」と読み違えないためである。
-    assert_eq!(manifest.rows().len(), 40, "埋め込み manifest の行数（母集団）");
+    assert_eq!(manifest.rows().len(), 42, "埋め込み manifest の行数（母集団）");
     for kind in ALL {
         let covered = manifest.rows().iter().any(|row| row.kind == *kind);
         assert!(covered, "{} の行が manifest に無い", kind.as_str());
@@ -829,6 +835,124 @@ fn rules_all_follows_declaration_order() {
         "ALL の並びが宣言順と乖離している（母集団 {} 種）",
         ALL.len()
     );
+}
+
+/// 役割ごとの権能の行（`role.<役割名>`・`RuleKind::RoleCapabilities`・裁定 id `user 2026-09-13T03:14Z`・設計
+/// seat-roles.md §3・ADR-0022 §2.2・`s2-07l.201`）: **行は `Role::ALL` と同数**（役割ごとに 1 行・1 kind で 2 行）、
+/// 値は `Capability` の名の列、宣言順の末尾の kind。**値は manifest が持ち、設計 doc は写さない**（C1 / C5）。
+#[test]
+fn rules_embedded_manifest_declares_one_capability_row_per_role() {
+    let manifest = match Manifest::embedded() {
+        Ok(found) => found,
+        Err(errors) => {
+            let lines: Vec<String> = errors.iter().map(ToString::to_string).collect();
+            panic!("埋め込み manifest が拒まれた:\n{}", lines.join("\n"))
+        }
+    };
+    let rows: Vec<_> = manifest.rows().iter().filter(|row| row.kind == RuleKind::RoleCapabilities).collect();
+    assert_eq!(rows.len(), ROLES.len(), "RoleCapabilities の行は Role::ALL と同数（母集団 {}）", ROLES.len());
+    for role in ROLES {
+        let id = format!("role.{}", role.as_str());
+        let row = manifest.get(&id).unwrap_or_else(|| panic!("{id} の行が在る"));
+        assert_eq!(row.kind, RuleKind::RoleCapabilities, "{id} の kind");
+        assert_eq!(row.kind.shape(), ValueShape::List, "{id} の値の形は List（名の列）");
+        assert!(row.enabled, "{id} は発効している");
+        assert_eq!(row.ruling, "user 2026-09-13T03:14Z", "{id} の裁定 id");
+        assert_eq!(row.ruled_at, "2026-09-13", "{id} の裁定日");
+        let names = role_row_names(&manifest, *role);
+        assert!(!names.is_empty(), "{id} の値は非空の列");
+        for name in &names {
+            assert!(Capability::parse(name).is_some(), "{id} の値 {name} は Capability の名");
+        }
+    }
+    assert_eq!(ALL.last(), Some(&RuleKind::RoleCapabilities), "宣言順の末尾");
+    assert_eq!(RuleKind::parse("RoleCapabilities"), Some(RuleKind::RoleCapabilities), "kind を字面から引ける");
+    let kinds = ALL.len();
+    assert_eq!(kinds, 41, "kind の母集団（`.201` で +1）");
+}
+
+/// 埋め込み manifest の `role.<役割名>` の行の値（名の列・行が無い・列でない周は空＝呼び側の assert が落とす）。
+fn role_row_names(manifest: &Manifest, role: Role) -> Vec<String> {
+    match manifest.get(&format!("role.{}", role.as_str())).map(|row| row.value.clone()) {
+        Some(RuleValue::List(names)) => names,
+        _ => Vec::new(),
+    }
+}
+
+/// 裁定 `user 2026-09-13T03:14Z` の値: planner だけが記帳（回答・承認・go）と design-intent / 設計 doc の編集を
+/// 持ち、管理席だけが起動と merge を持つ。**code は両役割とも持たない**（印で開いた便の write-set だけ・AC16）。
+#[test]
+fn rules_embedded_manifest_role_rows_carry_the_ruled_capabilities() {
+    let manifest = Manifest::embedded().unwrap_or_else(|errors| panic!("埋め込み manifest が拒まれた: {errors:?}"));
+    let held = |role: Role, cap: Capability| role_row_names(&manifest, role).iter().any(|name| name == cap.as_str());
+    for cap in [Capability::Answer, Capability::Approve, Capability::Go, Capability::EditDesignIntent, Capability::EditDesignDoc] {
+        assert!(held(Role::Planner, cap), "planner は {} を持つ", cap.as_str());
+        assert!(!held(Role::Admin, cap), "管理席は {} を持たない", cap.as_str());
+    }
+    for cap in [Capability::Launch, Capability::Merge] {
+        assert!(held(Role::Admin, cap), "管理席は {} を持つ", cap.as_str());
+        assert!(!held(Role::Planner, cap), "planner は {} を持たない", cap.as_str());
+    }
+    for role in ROLES {
+        assert!(held(*role, Capability::Relay), "{} は中継を持つ", role.as_str());
+        assert!(!held(*role, Capability::EditCode), "{}: code は持たない（印で開いた便だけ）", role.as_str());
+        assert!(!held(*role, Capability::EditOutside), "{}: repo の外は持たない", role.as_str());
+    }
+}
+
+/// 権能の行の**列に無い名は `RuleError`**（`Capability::parse` の失敗・既存の型）: 綴り違いを黙って
+/// 「権能なし」に倒さない。取る名を全部並べた列は受理される。
+#[test]
+fn rules_role_capabilities_reject_unknown_capability_names() {
+    let errors = rejected(&one_row(RuleKind::RoleCapabilities, r#"["answer", "fly"]"#))
+        .expect("拒まれるはずの fixture が受理された");
+    assert_eq!(errors.len(), 1, "件数: {errors:?}");
+    let first = errors.first().map(String::as_str).unwrap_or_default();
+    assert!(first.contains("未知の権能 fly"), "理由: {first}");
+    assert!(first.contains("answer") && first.contains("edit-code"), "取る名を名指す: {first}");
+    assert!(first.contains("line=3"), "行番号: {first}");
+    let all: Vec<String> = CAPABILITIES.iter().map(|cap| format!("\"{}\"", cap.as_str())).collect();
+    let healed = parsed(&one_row(RuleKind::RoleCapabilities, &format!("[{}]", all.join(", "))))
+        .expect("全権能の列は受理される");
+    assert_eq!(
+        healed.get("probe").map(|row| row.value.clone()),
+        Some(RuleValue::List(CAPABILITIES.iter().map(|cap| cap.as_str().to_owned()).collect())),
+        "書いた順のまま"
+    );
+    // variant 名の字面（`Answer`）は名ではない。
+    let errors = rejected(&one_row(RuleKind::RoleCapabilities, r#"["Answer"]"#)).expect("variant 名は受理されない");
+    assert!(errors.join("\n").contains("未知の権能 Answer"), "{errors:?}");
+}
+
+/// R-C7-1（対話面）の値は **`Role` の名**（`planner`・裁定 id `user 2026-09-13T03:14Z`・ADR-0022 §2.2）:
+/// 旧値 `user-direct` や `Role` の名でない fixture は `RuleError` で拒まれる。kind は既存の `DialogueSurface` のまま。
+#[test]
+fn rules_dialogue_surface_value_must_be_a_role_name() {
+    let manifest = match Manifest::embedded() {
+        Ok(found) => found,
+        Err(errors) => {
+            let lines: Vec<String> = errors.iter().map(ToString::to_string).collect();
+            panic!("埋め込み manifest が拒まれた:\n{}", lines.join("\n"))
+        }
+    };
+    let row = manifest.get("R-C7-1").expect("対話面の行が在る");
+    assert_eq!(row.kind, RuleKind::DialogueSurface, "kind は既存のまま");
+    assert_eq!(row.value, RuleValue::Str(Role::Planner.as_str().to_owned()), "値は planner の席");
+    assert!(row.enabled, "発効している");
+    assert_eq!(row.ruling, "user 2026-09-13T03:14Z", "裁定 id");
+    assert_eq!(row.ruled_at, "2026-09-13", "裁定日");
+    for bad in ["\"user-direct\"", "\"Planner\"", "\"\""] {
+        let errors = rejected(&one_row(RuleKind::DialogueSurface, bad)).expect("Role の名でない値は受理されない");
+        assert_eq!(errors.len(), 1, "件数（{bad}）: {errors:?}");
+        let first = errors.first().map(String::as_str).unwrap_or_default();
+        assert!(first.contains("未知の役割"), "{bad}: 理由: {first}");
+        assert!(first.contains("planner") && first.contains("admin"), "{bad}: 取る名を名指す: {first}");
+    }
+    for role in ROLES {
+        let healed = parsed(&one_row(RuleKind::DialogueSurface, &format!("\"{}\"", role.as_str())))
+            .expect("Role の名は受理される");
+        assert_eq!(healed.get("probe").map(|row| row.value.clone()), Some(RuleValue::Str(role.as_str().to_owned())));
+    }
 }
 
 /// 述語が**真を返すだけ**でないこと（非空虚性）。3 つの壊し方をすべて false で返す。

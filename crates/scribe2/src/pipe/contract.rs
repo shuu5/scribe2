@@ -7,6 +7,7 @@
 //! **検査は 1 か所に閉じ、見つけた不備は全件集めて返す**（C2 / FR1）。1 件目で止めると
 //! 直すたびに次の 1 件が出る形になり、契約を書き切れない。
 
+use crate::hook::role_guard::{PathKind, PATH_KINDS};
 use crate::rules::manifest::{elements, quoted_once, scalar, Scalar};
 use std::path::Path;
 
@@ -24,10 +25,14 @@ const REQUIRED: &[&str] = &[
 ];
 
 /// 任意の key。
-const OPTIONAL: &[&str] = &["classes"];
+const OPTIONAL: &[&str] = &["classes", "opens"];
 
 /// 3 クラスの自己申告が取れる値（FR15）。
 pub const CLASSES: &[&str] = &["delete", "publish", "consume"];
+
+/// 契約の印 `opens` の key（設計 seat-roles.md §3「契約が開く例外」・AC16）。値は path 種別
+/// （[`PathKind`]）の名の列で、管理席が自分の手で編集してよい種別を便ごとに開く。印の無い便は従来どおり。
+pub const OPENS: &str = "opens";
 
 /// 契約 file が読めない理由。**行番号を必ず持つ**（0 は file 全体を指す）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -74,6 +79,8 @@ pub struct Contract {
     pub design: String,
     /// 3 クラスの自己申告（既定 空）。
     pub classes: Vec<String>,
+    /// 契約の印（管理席の編集を開く path 種別の名・既定 空＝印なし・[`OPENS`]）。
+    pub opens: Vec<String>,
 }
 
 /// 走査中の 1 key の値。
@@ -243,19 +250,9 @@ fn build(found: &[(String, Raw, u64)], errors: &mut Vec<ContractError>) -> Optio
     // 改行を含む要素は作れず、行を跨いだ配列は [`value_of`] が名指して断る。ここに
     // `contains('\n')` を置いても到達しないので、届かない検査は持たない。
     let verify = list_of(found, "verify", 1, errors);
-    let classes = list_of(found, "classes", 0, errors);
-    let at = found
-        .iter()
-        .find(|(key, _, _)| key == "classes")
-        .map_or(0, |(_, _, found_at)| *found_at);
-    for item in &classes {
-        if !CLASSES.contains(&item.as_str()) {
-            errors.push(ContractError::new(
-                at,
-                format!("未知の classes 値 {item}（取るのは {}）", CLASSES.join(" / ")),
-            ));
-        }
-    }
+    let classes = names_of(found, "classes", CLASSES, errors);
+    let kinds: Vec<&str> = PATH_KINDS.iter().map(|kind| kind.as_str()).collect();
+    let opens = names_of(found, OPENS, &kinds, errors);
     Some(Contract {
         goal: text_of(found, "goal", errors),
         done: text_of(found, "done", errors),
@@ -267,5 +264,36 @@ fn build(found: &[(String, Raw, u64)], errors: &mut Vec<ContractError>) -> Optio
         req: list_of(found, "req", 1, errors),
         design: text_of(found, "design", errors),
         classes,
+        opens,
     })
+}
+
+/// **閉じた名の列**を取る任意 key（`classes` / `opens`）。列に無い名は行番号つきで全件積む。
+fn names_of(
+    found: &[(String, Raw, u64)],
+    key: &str,
+    taken: &[&str],
+    errors: &mut Vec<ContractError>,
+) -> Vec<String> {
+    let names = list_of(found, key, 0, errors);
+    let at = found
+        .iter()
+        .find(|(seen, _, _)| seen == key)
+        .map_or(0, |(_, _, found_at)| *found_at);
+    for item in &names {
+        if !taken.contains(&item.as_str()) {
+            errors.push(ContractError::new(
+                at,
+                format!("未知の {key} 値 {item}（取るのは {}）", taken.join(" / ")),
+            ));
+        }
+    }
+    names
+}
+
+impl Contract {
+    /// 印で開いた path 種別（`opens` の名を [`PathKind`] へ引いた列・未知の名は [`Contract::parse`] が拒む）。
+    pub fn opened_kinds(&self) -> Vec<PathKind> {
+        self.opens.iter().filter_map(|name| PathKind::parse(name)).collect()
+    }
 }

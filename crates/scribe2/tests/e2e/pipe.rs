@@ -1098,6 +1098,8 @@ fn pipe_intake_rejects_broken_arrays_and_unknown_keys() {
         (vec!["verify"], vec![r#"verify = []"#], "verify は 1 本以上"),
         (vec![], vec![r#"nonsense = "x""#], "未知の key nonsense"),
         (vec![], vec![r#"classes = ["publish", "bogus"]"#], "未知の classes 値 bogus"),
+        // 契約の印（`s2-07l.201`・AC16）も閉じた名の列＝列に無い名は既存の契約 error。
+        (vec![], vec![r#"opens = ["code", "everything"]"#], "未知の opens 値 everything"),
     ] {
         let path = write_contract(&repo, &drop, &add);
         let out = run_pipe(&[
@@ -1108,6 +1110,41 @@ fn pipe_intake_rejects_broken_arrays_and_unknown_keys() {
         assert_ne!(out.status.code(), Some(i32::from(RC_OK)), "{want} を通さない: {err}");
         assert!(err.contains(want), "理由に {want} が出る: {err}");
         assert!(err.contains("line="), "行番号を持つ: {err}");
+    }
+    clean(&[&repo, &state]);
+}
+
+/// 契約の印 `opens`（`s2-07l.201`・設計 seat-roles.md §3「契約が開く例外」・AC16）: `classes` と同じ optional list
+/// の形で、値は `PathKind` の名の列。intake の写し `contract.toml` にそのまま乗り、`Contract::load` が印を typed
+/// に返す。印の無い便は空（従来どおり）。
+#[test]
+fn pipe_contract_opens_is_an_optional_list_of_path_kinds_copied_by_intake() {
+    use vessel::hook::role_guard::{PathKind, PATH_KINDS};
+    use vessel::pipe::contract::Contract;
+    let (repo, state) = repo_with_state();
+    let marked = write_contract(&repo, &[], &[r#"opens = ["code", "design-doc"]"#]);
+    let id = intake(&repo, &state, &marked);
+    let copied = Contract::load(&state.join("pipe").join(&id).join("contract.toml")).unwrap_or_else(|errors| panic!("{errors:?}"));
+    assert_eq!(copied.opens, vec!["code".to_owned(), "design-doc".to_owned()], "写しに印が乗る（書いた順）");
+    assert_eq!(copied.opened_kinds(), vec![PathKind::Code, PathKind::DesignDoc], "印は PathKind へ引ける");
+    assert!(copied.classes.is_empty(), "classes は別の field のまま");
+    stop_run_ok(&state, &id);
+
+    let plain = Contract::parse(&fs::read_to_string(write_contract(&repo, &[], &[])).unwrap_or_default())
+        .unwrap_or_else(|errors| panic!("{errors:?}"));
+    assert!(plain.opens.is_empty() && plain.opened_kinds().is_empty(), "印の無い便は空");
+    // 取る名は PathKind の全数で、variant 名の字面・空の配列・重複 key は受けない。
+    let all: Vec<String> = PATH_KINDS.iter().map(|kind| format!("\"{}\"", kind.as_str())).collect();
+    let every = Contract::parse(&fs::read_to_string(write_contract(&repo, &[], &[&format!("opens = [{}]", all.join(", "))])).unwrap_or_default())
+        .unwrap_or_else(|errors| panic!("{errors:?}"));
+    assert_eq!(every.opened_kinds(), PATH_KINDS.to_vec(), "全種別を開ける");
+    for (add, want) in [
+        (r#"opens = ["Code"]"#, "未知の opens 値 Code"),
+        (r#"opens = "code""#, "opens は配列である"),
+    ] {
+        let text = fs::read_to_string(write_contract(&repo, &[], &[add])).unwrap_or_default();
+        let errors = Contract::parse(&text).err().unwrap_or_default();
+        assert!(errors.iter().any(|error| error.reason.contains(want)), "{add}: {errors:?}");
     }
     clean(&[&repo, &state]);
 }

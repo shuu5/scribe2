@@ -24,8 +24,10 @@ pub const RULES_REL: &str = "rules/manifest.toml";
 /// hook 1 回の timeout（秒）を持つ rules 行。
 pub const ROW_TIMEOUT: &str = "hook.timeout_s";
 
-/// `PreToolUse` で見る tool の matcher。
-const MATCHER: &str = "Edit|Write|MultiEdit|NotebookEdit";
+/// `PreToolUse` で見る tool の matcher。**`Bash` を含む**（席の権能の Bash 面・設計 seat-roles.md §4・
+/// `s2-07l.201`）: write-set guard と cap guard は `Bash` を見ないまま（core 側の集合が決める）で、role guard
+/// だけが command 行を読む。
+const MATCHER: &str = "Bash|Edit|Write|MultiEdit|NotebookEdit";
 
 /// `SessionStart` に紐づく subcommand。
 const SUB_SESSION_START: &str = "session-start";
@@ -55,6 +57,12 @@ const SUB_STOP: &str = "stop";
 /// と同じ場所・同じ生成器）。core は env を読まず、typed な引数 `--pane` で受ける。`--tmux-socket`
 /// は付けない（既定の server）。
 const PANE_ARG: &str = " --pane \\\"$TMUX_PANE\\\"";
+
+/// hook に session の起動 dir（anchor）を渡す引数（設計 seat-roles.md §4・`s2-07l.201`）。**全 entry が持つ**:
+/// repo root・`served`・state dir はこの dir から解き、席が `cd` しても変わらない（run 2 の lens FAIL の穴）。
+///
+/// `$CLAUDE_PROJECT_DIR` の展開も Claude Code が hook を起動する shell が行う（[`PANE_ARG`] と同型）。
+const PROJECT_ARG: &str = " --project \\\"$CLAUDE_PROJECT_DIR\\\"";
 
 /// plugin の説明文。**2 つの manifest が同じ 1 箇所から出す**（写して持つと片方だけ動く）。
 fn description(name: &str) -> String {
@@ -87,7 +95,7 @@ pub fn render_marketplace(name: &str) -> String {
 /// `${<NAME_UPPER>_BIN:-<NAME>}` の展開は **Claude Code が hook を起動する shell**
 /// が行う。器そのものは env を 1 つも読まない（憲法 C2.2・ADR-0004 §2.4）。
 fn command(name: &str, sub: &str) -> String {
-    format!("\\\"${{{}_BIN:-{name}}}\\\" hook {sub}{PANE_ARG}", name.to_uppercase())
+    format!("\\\"${{{}_BIN:-{name}}}\\\" hook {sub}{PANE_ARG}{PROJECT_ARG}", name.to_uppercase())
 }
 
 /// 1 event 分の材料。
@@ -378,6 +386,23 @@ mod tests {
                 "{sub} の command 行が pane id を受ける"
             );
         }
+        // 5 行すべてが anchor（session の起動 dir）を受ける（設計 seat-roles.md §4・`s2-07l.201`）。
+        let project_arg = " --project \\\"$CLAUDE_PROJECT_DIR\\\"";
+        assert_eq!(tracked.matches(project_arg).count(), 5, "hook の command 行 5 つに --project が付く");
+        for sub in ["session-start", "pre-tool-use", "permission-request", "user-prompt-submit", "stop"] {
+            assert_eq!(
+                tracked.matches(&format!("hook {sub}{pane_arg}{project_arg}")).count(),
+                1,
+                "{sub} の command 行が --pane の後ろに --project を受ける"
+            );
+        }
+        // PreToolUse の matcher は Bash を含み（role guard の Bash 面）、PermissionRequest の matcher は不変。
+        assert_eq!(
+            tracked.matches("\"matcher\": \"Bash|Edit|Write|MultiEdit|NotebookEdit\"").count(),
+            1,
+            "PreToolUse の matcher は Bash を含む"
+        );
+        assert_eq!(tracked.matches("\"matcher\": \"Bash\"").count(), 1, "PermissionRequest の matcher は Bash だけのまま");
     }
 
     /// tracked な plugin.json が render の bytes と一致する（手書き禁止・冪等・`s2-07l.104`）。
