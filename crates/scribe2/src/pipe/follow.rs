@@ -227,6 +227,8 @@ pub(crate) fn spawn_turn(entry: &Turn<'_>) -> Outcome {
     // 回答済みの質問が在る周だけ「回答」節が付く（`Questioned` 以外の段では質問が無く `None`）。
     let answered =
         question_of_run(entry.state_dir, entry.run).filter(|question| question.answer.is_some());
+    // 「追随」節の有無は **stdin の組立にだけ**効く。turn の後始末（[`settle`]）は節の有無に
+    // 依らず同じ 1 本である（設計 §3 手順 5）。
     let follow = section(entry.state_dir, entry.repo, entry.run);
     let mut outcome = spawn(
         budget,
@@ -239,14 +241,14 @@ pub(crate) fn spawn_turn(entry: &Turn<'_>) -> Outcome {
             runner,
             approved: entry.approved,
             answered,
-            follow: follow.clone(),
+            follow,
             policy: entry.policy,
         },
     );
     if outcome.rc != RC_OK {
         return outcome;
     }
-    let settled = settle(entry, follow.as_deref());
+    let settled = settle(entry);
     outcome.out.extend(settled.out);
     outcome.err.extend(settled.err);
     if settled.rc != RC_OK {
@@ -257,9 +259,9 @@ pub(crate) fn spawn_turn(entry: &Turn<'_>) -> Outcome {
 
 /// 便が追随すべき相手（main の sha）。追随の要らない周は `None`。
 ///
-/// **「便の base が main の真の祖先である」の 1 条件**で決める。この 1 本が runner の
-/// stdin の「追随」節（[`super::spawn`]）と、turn の後始末（[`settle`]）の両方を決めるので、
-/// 「節を渡したのに後始末をしない」経路が作れない。
+/// **「便の base が main の真の祖先である」の 1 条件**で決める。決めるのは runner の
+/// stdin の「追随」節（[`super::spawn`]）**だけ**である——turn の後始末（[`settle`]）は
+/// この値を見ない（節を渡さなかった turn で runner が自ら rebase した周も同じ 1 本で測る）。
 pub(crate) fn section(state_dir: &Path, repo: &Path, run: &str) -> Option<String> {
     let base = base_of_run(state_dir, run)?;
     let main = git_line(repo, &["rev-parse", MAIN_REF])?;
@@ -269,7 +271,7 @@ pub(crate) fn section(state_dir: &Path, repo: &Path, run: &str) -> Option<String
     git_ok(repo, &["merge-base", "--is-ancestor", &base, &main]).then_some(main)
 }
 
-/// 追随を頼んだ turn の後始末（設計 §3 の手順 5 / 6）。
+/// **すべての turn** の後始末（設計 §3 の手順 5 / 6）。「追随」節を渡したかは見ない。
 ///
 /// 1. 木が rebase の途中（`rebase-merge` / `rebase-apply` 在り）で終わった周は
 ///    `Failed detail=rebase-dirty` で終端する（clean 前提を守る・fail-closed）。
@@ -277,10 +279,14 @@ pub(crate) fn section(state_dir: &Path, repo: &Path, run: &str) -> Option<String
 ///    base より進んでいれば `RunStage stage=Implemented detail=rebase:<old>..<merge-base>` を
 ///    記帳する。**書く値は実測した merge-base で、現在の main ではない**——turn の間に main が
 ///    さらに進んでいても、2 点 diff に main の新しい commit の逆向きが載る穴を作らない。
-fn settle(entry: &Turn<'_>, followed: Option<&str>) -> Outcome {
-    if followed.is_none() {
-        return Outcome::ok(Vec::new());
-    }
+///    節を渡していない turn で runner が頼まれずに `git rebase` を撃った周も**同じ 1 本**で測る
+///    ——節の有無で経路を分けると、記帳の無い便の gate が古い base の 2 点 diff を測り、
+///    main 側の commit を write-set の外と誤る（.203 の実測）。
+///
+/// 2 は **turn が `Implemented` で終わった周だけ**である。`Failed` / `RateLimited` で終わった
+/// turn の後に `Implemented` を記帳すると、段が静かに `Implemented` へ戻る（終端した便が
+/// gate へ進む・止まった便が再開されない）。段を読めない周も記帳しない（fail-closed）。
+fn settle(entry: &Turn<'_>) -> Outcome {
     let worktree = worktree_path(entry.repo, entry.run);
     if mid_rebase(&worktree) {
         let recorded = record(entry, Stage::Failed, DIRTY.to_owned());
@@ -292,6 +298,9 @@ fn settle(entry: &Turn<'_>, followed: Option<&str>) -> Outcome {
             )),
         };
     }
+    if !ended_implemented(entry) {
+        return Outcome::ok(Vec::new());
+    }
     let Some((old, advanced)) = advanced(entry) else {
         return Outcome::ok(Vec::new());
     };
@@ -299,6 +308,14 @@ fn settle(entry: &Turn<'_>, followed: Option<&str>) -> Outcome {
         Err(reason) => broken(reason),
         Ok(()) => Outcome::ok_line(format!("run={} rebase={old}..{advanced}", entry.run)),
     }
+}
+
+/// turn が `Implemented` で終わったか（replay の段・読めない周は `false`＝base を進めない）。
+fn ended_implemented(entry: &Turn<'_>) -> bool {
+    super::current(entry.state_dir)
+        .ok()
+        .and_then(|state| state.runs.get(entry.run).map(|run| run.stage))
+        == Some(Stage::Implemented)
 }
 
 /// 木が rebase の途中か。**状態を読めない周は「途中」側へ倒す**（fail-closed）。

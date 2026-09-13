@@ -6230,18 +6230,25 @@ fn stub_stdin(state: &Path, turn: usize) -> String {
 /// 本文＝**追随の解き方をここで振る**。どの turn も呼出回数と stdin を置き場へ写すので、
 /// 「起こされたか」「何を渡されたか」を rc でなく効果で測れる。`$SHA` には stdin の「追随」節が
 /// 名指す main の sha が入る（節が無い周は空＝rebase が落ちて歯が赤くなる＝空虚にならない）。
+fn stub_runner(state: &Path, second: &str) -> String {
+    stub_runner_turns(state, IMPLEMENT, second)
+}
+
+/// turn 1 の既定の本文: 契約の実装（`src/lib.rs` の末尾へ `x` を足して commit）。
+const IMPLEMENT: &str = "printf 'x\\n' >> src/lib.rs\ngit add -A\ngit commit -q -m runner\nexit 0";
+
+/// [`stub_runner`] の turn 1 の本文も振る形（`first` = turn 1・`second` = turn 2 以降）。
 #[expect(
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
-fn stub_runner(state: &Path, second: &str) -> String {
+fn stub_runner_turns(state: &Path, first: &str, second: &str) -> String {
     let dir = stub_dir(state);
     fs::create_dir_all(&dir).expect("stub の置き場を作れる");
     let path = state.join("stub-runner.sh");
     let body = format!(
         "#!/bin/sh\nD='{}'\nprintf 'call\\n' >> \"$D/calls\"\nN=$(wc -l < \"$D/calls\" | tr -d ' ')\n\
-         cat > \"$D/stdin-$N\"\nif [ \"$N\" = 1 ]; then\nprintf 'x\\n' >> src/lib.rs\ngit add -A\n\
-         git commit -q -m runner\nexit 0\nfi\n\
+         cat > \"$D/stdin-$N\"\nif [ \"$N\" = 1 ]; then\n{first}\nfi\n\
          SHA=$(sed -n 's/^- main が \\(.*\\) へ進んだ$/\\1/p' \"$D/stdin-$N\" | head -1)\n{second}\n",
         dir.display()
     );
@@ -6822,6 +6829,151 @@ fn pipe_follow_retry_measures_the_repo_before_launching() {
     );
     assert_eq!(stub_calls(&state), 1, "起こし直しの runner は起きない");
     assert_eq!(conflict_count(&state, &id), 1, "衝突の記帳は残る（resume で続けられる）");
+    clean(&[&repo, &state]);
+}
+
+// ───── 追随節の無い turn で runner が自ら rebase した周（`s2-07l.213`・設計 §3 手順 5・接頭辞 `pipe_follow_self_rebase_`） ─────
+
+/// turn 1 の本文（**追随節なし**）: main を**別 file の 1 commit**で進め、頼まれていない
+/// `git rebase` を自分で撃ってから便の commit を作る（.203 run 20260913T122002Z の実測の型）。
+fn self_rebase_body(repo: &Path) -> String {
+    format!(
+        "printf 'o\\n' > '{repo}/other.txt'\ngit -C '{repo}' add other.txt\ngit -C '{repo}' commit -q -m other\n\
+         git rebase refs/heads/main\n{IMPLEMENT}",
+        repo = repo.display()
+    )
+}
+
+/// turn 1 の本文（追随節なし）: main を別 file の 1 commit で進めるが、**rebase はしない**。
+fn no_rebase_body(repo: &Path) -> String {
+    format!(
+        "printf 'o\\n' > '{repo}/other.txt'\ngit -C '{repo}' add other.txt\ngit -C '{repo}' commit -q -m other\n{IMPLEMENT}",
+        repo = repo.display()
+    )
+}
+
+/// turn 1 の本文（追随節なし）: 便の commit を作った後で main を**同じ行の隣**へ進め、
+/// 自分で撃った `git rebase` の途中のまま turn を終える。
+fn mid_rebase_body(repo: &Path) -> String {
+    format!(
+        "printf 'x\\n' >> src/lib.rs\ngit add -A\ngit commit -q -m runner\n\
+         printf 'y\\n' >> '{repo}/src/lib.rs'\ngit -C '{repo}' add src/lib.rs\ngit -C '{repo}' commit -q -m other\n\
+         git rebase refs/heads/main || true\nexit 0",
+        repo = repo.display()
+    )
+}
+
+/// 便の base を進めた記帳（`Implemented detail=rebase:<old>..<new>`）の detail の列。
+fn rebase_details(state: &Path, id: &str) -> Vec<String> {
+    stages(state, id)
+        .into_iter()
+        .filter(|(stage, _)| *stage == Some(Stage::Implemented))
+        .filter_map(|(_, detail)| detail)
+        .filter(|detail| detail.starts_with("rebase:"))
+        .collect()
+}
+
+/// **追随節の無い turn**（spawn 時 main = base）で runner が自ら `git rebase` を撃った周も、
+/// 器は turn の終了後に merge-base を実測して base を進める（設計 §3 手順 5・節の有無で経路を
+/// 分けない）。記帳は `rebase:<base>..<new main>` の 1 件・`base_of_run` は new main・続きの
+/// gate は PASS（main 側の `other.txt` を write-set の外れと数えない）。
+#[test]
+fn pipe_follow_self_rebase_advances_the_base_without_a_follow_section() {
+    let (repo, state) = repo_with_state();
+    let base = git(&repo, &["rev-parse", "refs/heads/main"]);
+    let runner = stub_runner_turns(&state, &self_rebase_body(&repo), KEEP_CONFLICT);
+    let path = write_contract(&repo, &[], &[]);
+    let id = intake(&repo, &state, &path);
+    let spawned = spawn_with(&repo, &state, &id, &runner);
+    assert_eq!(spawned.status.code(), Some(i32::from(RC_OK)), "turn 1 の spawn: {}", stderr_of(&spawned));
+    let moved = git(&repo, &["rev-parse", "refs/heads/main"]);
+    assert_ne!(moved, base, "turn の中で main が進んだ");
+    assert!(!stub_stdin(&state, 1).contains("## 追随"), "spawn 時は main = base ゆえ節は無い: {}", stub_stdin(&state, 1));
+    assert_eq!(stub_calls(&state), 1, "turn は 1 回");
+    assert_eq!(
+        rebase_details(&state, &id),
+        vec![format!("rebase:{base}..{moved}")],
+        "器が base を進めた記帳は 1 件: {:?}",
+        stages(&state, &id)
+    );
+    assert!(
+        stdout_of(&spawned).contains(&format!("run={id} rebase={base}..{moved}")),
+        "新しい base を名乗る: {}",
+        stdout_of(&spawned)
+    );
+    assert!(show_line(&repo, &state, &id).contains("stage=Implemented"), "段は Implemented（次は gate）");
+    let marker = state.join("lens-ran");
+    let lens = fake_lens(&marker, &lens_verdict("PASS"));
+    let gated = gate_once(&repo, &state, &id, Some(&lens));
+    assert_eq!(
+        gated.status.code(),
+        Some(i32::from(RC_OK)),
+        "新しい base の gate は PASS（main 側の other.txt を外れと数えない）: {}",
+        stderr_of(&gated)
+    );
+    let rows = verify_rows(&state, &id);
+    assert_eq!(row_value(&rows, 1, "cmd"), "write-set", "段①");
+    assert_eq!(row_value(&rows, 1, "rc"), "0", "段①（write-set）が緑");
+    assert_eq!(
+        row_value(&rows, 2, "cmd"),
+        format!("git rev-parse --verify {moved}"),
+        "gate が読む base（`base_of_run`）は new main"
+    );
+    clean(&[&repo, &state]);
+}
+
+/// 負例: 追随節なしで main が進んでも、runner が rebase しなければ **`rebase:` の記帳は無く**
+/// `Implemented` の detail は空のまま（merge-base は記録済みの base と同じ＝進んでいない）。
+#[test]
+fn pipe_follow_self_rebase_records_nothing_when_the_runner_does_not_rebase() {
+    let (repo, state) = repo_with_state();
+    let base = git(&repo, &["rev-parse", "refs/heads/main"]);
+    let runner = stub_runner_turns(&state, &no_rebase_body(&repo), KEEP_CONFLICT);
+    let path = write_contract(&repo, &[], &[]);
+    let id = intake(&repo, &state, &path);
+    let spawned = spawn_with(&repo, &state, &id, &runner);
+    assert_eq!(spawned.status.code(), Some(i32::from(RC_OK)), "turn 1 の spawn: {}", stderr_of(&spawned));
+    assert_ne!(git(&repo, &["rev-parse", "refs/heads/main"]), base, "turn の中で main が進んだ");
+    assert!(rebase_details(&state, &id).is_empty(), "base は進めない: {:?}", stages(&state, &id));
+    assert_eq!(
+        stages(&state, &id).last().cloned(),
+        Some((Some(Stage::Implemented), None)),
+        "Implemented の detail は空のまま: {:?}",
+        stages(&state, &id)
+    );
+    assert!(!stdout_of(&spawned).contains("rebase="), "base を名乗らない: {}", stdout_of(&spawned));
+    let marker = state.join("lens-ran");
+    let lens = fake_lens(&marker, &lens_verdict("PASS"));
+    let gated = gate_once(&repo, &state, &id, Some(&lens));
+    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "元の base の gate は PASS: {}", stderr_of(&gated));
+    assert_eq!(
+        row_value(&verify_rows(&state, &id), 2, "cmd"),
+        format!("git rev-parse --verify {base}"),
+        "gate が読む base は記録済みのまま"
+    );
+    clean(&[&repo, &state]);
+}
+
+/// 追随節の無い turn でも、木が rebase の途中のまま終わった周は `Failed detail=rebase-dirty`
+/// で終端する（`mid_rebase` の検査が節の有無に依らない・fail-closed・設計 §3 手順 6）。
+#[test]
+fn pipe_follow_self_rebase_mid_rebase_turn_fails_dirty_without_a_follow_section() {
+    let (repo, state) = repo_with_state();
+    let runner = stub_runner_turns(&state, &mid_rebase_body(&repo), KEEP_CONFLICT);
+    let path = write_contract(&repo, &[], &[]);
+    let id = intake(&repo, &state, &path);
+    let spawned = spawn_with(&repo, &state, &id, &runner);
+    assert_eq!(spawned.status.code(), Some(i32::from(RC_REFUSED)), "rebase の途中は rc 1: {}", stderr_of(&spawned));
+    assert!(!stub_stdin(&state, 1).contains("## 追随"), "節は無い: {}", stub_stdin(&state, 1));
+    assert_eq!(
+        stages(&state, &id).last().cloned(),
+        Some((Some(Stage::Failed), Some("rebase-dirty".to_owned()))),
+        "終端の理由: {:?}",
+        stages(&state, &id)
+    );
+    assert!(mid_rebase(&repo, &id), "木は rebase の途中のまま（器は触らない）");
+    assert!(rebase_details(&state, &id).is_empty(), "途中の木では base を進めない: {:?}", stages(&state, &id));
+    assert!(show_line(&repo, &state, &id).contains("stage=Failed"), "段は Failed");
     clean(&[&repo, &state]);
 }
 
