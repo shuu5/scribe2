@@ -7658,6 +7658,9 @@ fn pipe_follow_self_rebase_mid_rebase_turn_fails_dirty_without_a_follow_section(
 /// 偽 `systemd-run` の記録を置く dir 名（**起動ごとに 1 file**）。
 const SCOPE_RECORDS: &str = "scope-args";
 
+/// 偽 `systemd-run`（と偽 `systemctl`）を置く dir 名。
+const SYSTEMD_BIN: &str = "systemd-bin";
+
 /// PATH の先頭に置く偽 `systemd-run`（返すのは PATH の値）。
 ///
 /// argv を写してから `--` の後ろを exec する＝**包みの中身は実際に撃たれる**。
@@ -7665,13 +7668,16 @@ const SCOPE_RECORDS: &str = "scope-args";
 /// 記録は **`<unit>.args` の 1 起動 1 file** である。1 file へ追記する形は、probe の記録や
 /// 別の行の記録まで同じ母集団に入り、`contains` の assert が**撃っていない起動の引数**で
 /// 充足する（run 1 の実測: `limit_of` を常に `PerJob` にする変異で 21/21 が緑だった）。
+///
+/// **同じ名の 2 本目は実 systemd と同じ字面で断る**（`s2-07l.234`・.208 run 3 の stderr 逐語）——
+/// 記録を上書きする形だと、同じ process が同名を 2 度撃つ周が歯に見えない。
 #[expect(
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
 fn systemd_stub(state: &Path) -> String {
     use std::os::unix::fs::PermissionsExt;
-    let bin_dir = state.join("systemd-bin");
+    let bin_dir = state.join(SYSTEMD_BIN);
     let records = state.join(SCOPE_RECORDS);
     fs::create_dir_all(&bin_dir).expect("stub の dir を作れる");
     fs::create_dir_all(&records).expect("記録の dir を作れる");
@@ -7680,7 +7686,11 @@ fn systemd_stub(state: &Path) -> String {
         "#!/bin/sh\n\
          __unit=no-unit\n\
          for __a in \"$@\"; do case \"$__a\" in --unit=*) __unit=${{__a#--unit=}};; esac; done\n\
-         printf '%s\\n' \"$@\" > '{}'/\"$__unit\".args\n\
+         if [ -e '{0}'/\"$__unit\".args ]; then\n\
+         printf 'Failed to start transient scope unit: Unit %s.scope was already loaded or has a fragment file.\\n' \"$__unit\" >&2\n\
+         exit 1\n\
+         fi\n\
+         printf '%s\\n' \"$@\" > '{0}'/\"$__unit\".args\n\
          while [ $# -gt 0 ] && [ \"$1\" != \"--\" ]; do shift; done\n\
          shift\n\
          exec \"$@\"\n",
@@ -8029,6 +8039,181 @@ fn pipe_confine_oom_lens_is_inconclusive() {
         "便は終端しない（測り直せる）: {}",
         show_line(&repo, &state, &id)
     );
+    clean(&[&repo, &state]);
+}
+
+// ---- 行の終端の scope の片付け（設計 gate-cost.md §4.4 errata・s2-07l.234）------------------
+
+/// 偽 `systemctl` が撃たれた argv を 1 行 1 呼出で追記する file 名。
+const SYSTEMCTL_CALLS: &str = "systemctl-calls";
+
+/// 偽 `systemctl` の答え: 殺した（rc 0）。
+const SYSTEMCTL_KILLED: &str = "exit 0";
+
+/// 偽 `systemctl` の答え: unit が無い（実 systemctl と同じ字面の stderr・rc 1）。
+const SYSTEMCTL_GONE: &str = "__u=\nfor __a in \"$@\"; do __u=$__a; done\n\
+                              printf 'Failed to kill unit %s: Unit %s not loaded.\\n' \"$__u\" \"$__u\" >&2\nexit 1";
+
+/// [`systemd_stub`] の dir に偽 `systemctl` を置く（argv を写してから `answer` を撃つ）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn systemctl_stub(state: &Path, answer: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    let shim = state.join(SYSTEMD_BIN).join("systemctl");
+    let script = format!(
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\n{answer}\n",
+        state.join(SYSTEMCTL_CALLS).display()
+    );
+    fs::write(&shim, script).expect("stub を書ける");
+    fs::set_permissions(&shim, fs::Permissions::from_mode(0o755)).expect("stub に実行権を付ける");
+}
+
+/// `needle` を名に含む scope の unit 名（**ちょうど 1 件**・偽 `systemd-run` が受けた名）。
+fn scope_unit(state: &Path, needle: &str) -> String {
+    let names = dir_names(&state.join(SCOPE_RECORDS));
+    let hits: Vec<&String> = names.iter().filter(|name| name.contains(needle)).collect();
+    assert_eq!(hits.len(), 1, "{needle} の unit はちょうど 1 件（母集団 {names:?}）");
+    hits.first().map_or_else(String::new, |name| name.trim_end_matches(".args").to_owned())
+}
+
+/// 偽 `systemctl` の呼出のうち `unit` を含む行。
+fn release_calls(state: &Path, unit: &str) -> Vec<String> {
+    fs::read_to_string(state.join(SYSTEMCTL_CALLS))
+        .unwrap_or_default()
+        .lines()
+        .filter(|line| line.contains(unit))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// 1 行の record が `key` を持つか（値が空の field と不在を弁別する）。
+fn row_has(rows: &[Vec<(String, vessel::fleet::json_lite::Value)>], n: usize, key: &str) -> bool {
+    rows.get(n.saturating_sub(1)).is_some_and(|row| row.iter().any(|(found, _)| found == key))
+}
+
+/// (a) **verify 行の終端で `kill --signal=SIGKILL <unit>.scope` が 1 回撃たれ**、unit は
+/// `systemd-run` が受けた名と一致する。base では systemctl が撃たれず落ちる（機能不在）。
+#[test]
+fn pipe_confine_release_kills_the_verify_scope_once_by_its_unit() {
+    let (repo, state) = repo_with_state();
+    let path = systemd_stub(&state);
+    systemctl_stub(&state, SYSTEMCTL_KILLED);
+    let marker = state.join("lens-ran");
+    let (_id, gated) = confined_run(&repo, &state, &path, &fake_lens(&marker, &lens_verdict("PASS")));
+    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "gate: {}", stderr_of(&gated));
+    let unit = scope_unit(&state, "-contract-3-");
+    assert_eq!(
+        release_calls(&state, &unit),
+        vec![format!("--user kill --signal=SIGKILL {unit}.scope")],
+        "終端で 1 回だけ、包んだ名の scope を SIGKILL で片付ける"
+    );
+    clean(&[&repo, &state]);
+}
+
+/// (b) 偽 systemctl が rc 0 → record に `scope=killed`（判定は変えない）。
+#[test]
+fn pipe_confine_release_killed_is_recorded_on_the_row() {
+    let (repo, state) = repo_with_state();
+    let path = systemd_stub(&state);
+    systemctl_stub(&state, SYSTEMCTL_KILLED);
+    let marker = state.join("lens-ran");
+    let (id, gated) = confined_run(&repo, &state, &path, &fake_lens(&marker, &lens_verdict("PASS")));
+    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "判定は変えない: {}", stderr_of(&gated));
+    let rows = verify_rows(&state, &id);
+    assert_eq!(row_value(&rows, 3, "confined"), "true", "包めている");
+    assert_eq!(row_value(&rows, 3, "scope"), "killed", "残りを殺した周は record に残す");
+    assert!(!row_has(&rows, 1, "scope"), "撃つ process を持たない段①は片付けない");
+    clean(&[&repo, &state]);
+}
+
+/// (c) unit が既に無い（not loaded）→ record に `scope=` が無い（正常は書かない）。
+#[test]
+fn pipe_confine_release_gone_leaves_no_scope_field() {
+    let (repo, state) = repo_with_state();
+    let path = systemd_stub(&state);
+    systemctl_stub(&state, SYSTEMCTL_GONE);
+    let marker = state.join("lens-ran");
+    let (id, gated) = confined_run(&repo, &state, &path, &fake_lens(&marker, &lens_verdict("PASS")));
+    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "gate: {}", stderr_of(&gated));
+    let unit = scope_unit(&state, "-contract-3-");
+    assert_eq!(release_calls(&state, &unit).len(), 1, "片付けは撃たれている（不在は撃たなかったせいではない）");
+    let rows = verify_rows(&state, &id);
+    assert!(!row_has(&rows, 3, "scope"), "Gone は書かない: {:?}", rows.get(2));
+    assert!(!row_has(&verify_rows(&state, &id), 2, "scope"), "Gone は書かない（共通 verify の行）");
+    clean(&[&repo, &state]);
+}
+
+/// (d) `systemctl` の無い host → `scope=no-tool`・行の verdict は不変（縮退・C11.2）。
+#[test]
+fn pipe_confine_release_without_systemctl_is_no_tool_and_keeps_the_verdict() {
+    let (repo, state) = repo_with_state();
+    systemd_stub(&state);
+    let path = format!("{}:{}", state.join(SYSTEMD_BIN).display(), lean_path(&state));
+    let marker = state.join("lens-ran");
+    let (id, gated) = confined_run(&repo, &state, &path, &fake_lens(&marker, &lens_verdict("PASS")));
+    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "片付けの失敗で赤にしない: {}", stderr_of(&gated));
+    let rows = verify_rows(&state, &id);
+    assert_eq!(row_value(&rows, 3, "confined"), "true", "systemd-run は在る＝包めている");
+    assert_eq!(row_value(&rows, 3, "scope"), "no-tool", "道具が無い周の名");
+    assert_eq!(row_value(&rows, 3, "rc"), "0", "行の rc は不変");
+    assert_eq!(value_of(&verdict_pairs(&state, &id), "verdict"), "PASS", "判定は不変");
+    clean(&[&repo, &state]);
+}
+
+/// (e) **同じ process が gate を 2 周撃つ**（land の追随 → 再 gate → main 実測・どちらも場所は run id）
+/// と、2 周目の unit 名は 1 周目と異なる。偽 `systemd-run` は同名の 2 本目を実 systemd と同じ字面で
+/// 断るので、base（名に通し番号が無い）では main 実測の行が起動できず land が落ちる（.208 run 3）。
+#[test]
+fn pipe_confine_release_regate_in_one_process_uses_distinct_unit_names() {
+    let (repo, state) = repo_with_state();
+    let path = systemd_stub(&state);
+    systemctl_stub(&state, SYSTEMCTL_GONE);
+    let marker = state.join("lens-ran");
+    let (id, gated) = confined_run(&repo, &state, &path, &fake_lens(&marker, &lens_verdict("PASS")));
+    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "1 周目の gate: {}", stderr_of(&gated));
+    fs::write(repo.join("other.txt"), "other\n").expect("別便の変更を書ける");
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "other"]);
+    // land の process が撃つ名だけを数える（1 周目の gate は別 process の記録）。
+    let records = state.join(SCOPE_RECORDS);
+    fs::remove_dir_all(&records).expect("記録を空にできる");
+    fs::create_dir_all(&records).expect("記録の dir を作り直せる");
+    let lens = fake_lens(&marker, &lens_verdict("PASS"));
+    let landed = run_pipe_with_path(
+        &path,
+        &["land", "--run", &id, "--repo", &repo.display().to_string(),
+          "--state-dir", &state.display().to_string(), "--lens", &lens],
+    );
+    assert_eq!(landed.status.code(), Some(i32::from(RC_OK)), "追随して載る: {}", stderr_of(&landed));
+    assert!(stdout_of(&landed).contains("rebase="), "追随の再 gate を通った: {}", stdout_of(&landed));
+    let names = dir_names(&records);
+    let contract: Vec<&String> = names.iter().filter(|name| name.contains("-contract-3-")).collect();
+    assert_eq!(contract.len(), 2, "再 gate と main 実測の 2 周が別名で撃たれた: {names:?}");
+    assert_ne!(contract.first(), contract.get(1), "2 周の名は異なる");
+    clean(&[&repo, &state]);
+}
+
+/// (f) **runner と lens の scope も終端で片付ける**（1 起動に 1 回・lens の結果は verdict に残る）。
+#[test]
+fn pipe_confine_release_runner_and_lens_scopes_are_released() {
+    let (repo, state) = repo_with_state();
+    let path = systemd_stub(&state);
+    systemctl_stub(&state, SYSTEMCTL_KILLED);
+    let marker = state.join("lens-ran");
+    let (id, gated) = confined_run(&repo, &state, &path, &fake_lens(&marker, &lens_verdict("PASS")));
+    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "gate: {}", stderr_of(&gated));
+    for stage in ["-runner-1-", "-lens-1-"] {
+        let unit = scope_unit(&state, stage);
+        assert_eq!(
+            release_calls(&state, &unit),
+            vec![format!("--user kill --signal=SIGKILL {unit}.scope")],
+            "{stage} の scope も終端で 1 回片付ける"
+        );
+    }
+    assert_eq!(value_of(&verdict_pairs(&state, &id), "scope"), "killed", "lens の片付けは verdict に残る");
+    assert_eq!(value_of(&verdict_pairs(&state, &id), "verdict"), "PASS", "判定は不変");
     clean(&[&repo, &state]);
 }
 

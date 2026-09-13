@@ -137,7 +137,10 @@ pub fn fill(template: &str, pairs: &[(&str, &str)]) -> String {
 /// argv で渡すと Linux の 1 引数上限（`MAX_ARG_STRLEN` = 128KiB）に当たり、**user が
 /// 裁定した cap 150000 が実質 130KB へ黙って切り下がる**（実測 2026-09-10: 131000 byte で
 /// `Argument list too long`）。`claude -p` は prompt 引数が無ければ stdin から読む。
-pub fn build(call: &Call<'_>) -> Command {
+///
+/// 包みの結果（unit 名）も返す——呼び手は子の終端で [`confine::release_scope`] を撃つ
+/// （設計 gate-cost.md §4.4 errata・`s2-07l.234`）。
+pub fn build(call: &Call<'_>) -> (Command, confine::Confinement) {
     let mut inner = Command::new(call.claude);
     inner
         .arg("-p")
@@ -181,7 +184,7 @@ pub fn build(call: &Call<'_>) -> Command {
         limit: confine::Limit::HostReserve,
         caps: confine::Caps::embedded(),
     };
-    let (mut cmd, _confined) = confine::wrap_command(inner, &wrap);
+    let (mut cmd, confinement) = confine::wrap_command(inner, &wrap);
     if let Some(dir) = call.cwd {
         cmd.current_dir(dir);
     }
@@ -189,7 +192,7 @@ pub fn build(call: &Call<'_>) -> Command {
         cmd.env(ACCOUNT_ENV, dir);
     }
     cmd.stdin(Stdio::piped()).stdout(Stdio::piped());
-    cmd
+    (cmd, confinement)
 }
 
 /// plugin の root（`--plugin-dir` の値・設計 §6）の配下の **dir** を名前順に返す。
@@ -269,7 +272,7 @@ mod tests {
     /// [`build`] の argv から `--plugin-dir` の値を順に集める（包みの有無に依らず argv の中を見る）。
     fn plugin_args(root: &Path) -> Vec<String> {
         let text = root.display().to_string();
-        let command = build(&Call {
+        let (command, _) = build(&Call {
             claude: "claude",
             prompt: "",
             permission_mode: "plan",

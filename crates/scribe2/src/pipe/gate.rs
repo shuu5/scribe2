@@ -17,7 +17,7 @@
 
 use crate::polarity::{OnFailure, Polarity, Timing};
 use super::admission::{self, Grant};
-use super::confine::{self, Confinement, Reason, Usage};
+use super::confine::{self, Confinement, Reason, Released, Usage};
 use super::contract::Contract;
 use super::declaration::{Effective, BASE_HOLE, JOBS_HOLE};
 use super::{
@@ -138,6 +138,8 @@ pub struct Step {
     pub slot: Option<String>,
     /// 受付が測れなかった理由（record の `slot_why=`・測れた周と受付を通らない行は `None`）。
     pub slot_why: Option<admission::Unreadable>,
+    /// 行の終端で scope を片付けた結果（record の `scope=`・包めなかった周と `Gone` は `None`）。
+    pub scope: Option<Released>,
 }
 
 /// 撃つ process を持たない段（write-set 照合）の封じ込め欄。
@@ -156,6 +158,7 @@ fn unwrapped(cmd: String, rc: i32, stderr: String) -> Step {
         jobs: UNADMITTED_JOBS,
         slot: None,
         slot_why: None,
+        scope: None,
     }
 }
 
@@ -285,6 +288,7 @@ fn fire(entry: &Fire<'_>, caps: Result<confine::Caps, RuleRead>, admit: Option<&
         jobs,
         slot,
         slot_why,
+        scope: fired.scope,
     }
 }
 
@@ -455,6 +459,8 @@ struct Decision {
     diff_bytes: u64,
     /// gate を撃った HEAD の木（`HEAD^{tree}`・読めない周は `None`＝field を書かない）。
     tree: Option<String>,
+    /// lens の scope を片付けた結果（record に書く周だけ `Some`＝field `scope`・設計 gate-cost.md §4.4 errata）。
+    scope: Option<Released>,
 }
 
 /// gate を 1 回通す。
@@ -472,13 +478,14 @@ pub fn gate(entry: &Gate<'_>) -> Outcome {
         Ok(found) => found,
         Err(reason) => return broken(reason),
     };
-    let (verdict, evidence) = decide(entry, &worktree, &measured);
+    let (verdict, evidence, scope) = decide(entry, &worktree, &measured);
     let decision = Decision {
         verdict,
         evidence,
         red: measured.red,
         diff_bytes: byte_count(&measured.diff),
         tree,
+        scope,
     };
     match settle(entry, &decision) {
         Err(reason) => broken(reason),
@@ -601,6 +608,9 @@ pub fn step_record(number: u64, step: &Step) -> String {
     if let Some(why) = step.slot_why {
         fields.push(("slot_why", Value::Str(why.as_str().to_owned())));
     }
+    if let Some(released) = step.scope {
+        fields.push(("scope", Value::Str(released.as_str().to_owned())));
+    }
     json_lite::write_object(&fields)
 }
 
@@ -684,6 +694,8 @@ pub struct Fired {
     pub usage: Usage,
     /// 包めたか。
     pub confinement: Confinement,
+    /// 行の終端で scope を片付けた結果（record に書く周だけ `Some`・[`confine::release_scope`]）。
+    pub scope: Option<Released>,
 }
 
 impl Fired {
@@ -713,10 +725,13 @@ impl Fired {
 pub fn run_line_captured(worktree: &Path, line: &str, wrap: &confine::Wrap<'_>) -> Fired {
     let (mut command, confinement) = confine::wrap_line(line, wrap);
     let spawned = command.current_dir(worktree).output();
+    // **行の終端で scope を片付ける**（設計 gate-cost.md §4.4 errata・`s2-07l.234`）。行が孤児の
+    // process を残すと scope は active のまま残り、同じ名の次の周の相手になる。判定は変えない。
+    let scope = confine::release_scope(&confinement);
     let Ok(out) = spawned else {
         // 起動できなかった周は rc も stderr も**器の外に無い**。空を「何も言わなかった」
         // として返し、極性は従来どおり RED 側（-1）へ倒す。
-        return Fired { rc: -1, stderr: String::new(), usage: Usage::default(), confinement };
+        return Fired { rc: -1, stderr: String::new(), usage: Usage::default(), confinement, scope };
     };
     // **包めなかった周の stdout は読まない**。素の行が出した `confine-usage` の字面を
     // 包みの測定として読むと、撃たれた行が自分の peak を名乗れてしまう。
@@ -730,6 +745,7 @@ pub fn run_line_captured(worktree: &Path, line: &str, wrap: &confine::Wrap<'_>) 
         stderr: tail_of(&String::from_utf8_lossy(&out.stderr)),
         usage,
         confinement,
+        scope,
     }
 }
 
@@ -751,13 +767,16 @@ fn byte_count(bytes: &[u8]) -> u64 {
 }
 
 /// 判定順を 1 か所に閉じる（**wildcard 無し・上から順に効く**）。
-fn decide(entry: &Gate<'_>, worktree: &Path, measured: &Measured) -> (Verdict, String) {
+///
+/// 3 つ目は lens の scope を片付けた結果（record に書く周だけ `Some`・lens を撃たない周は `None`）。
+fn decide(entry: &Gate<'_>, worktree: &Path, measured: &Measured) -> (Verdict, String, Option<Released>) {
     // **測れなかったは赤より先**（C10・AC3）。段①の diff が読めない周は判定に届いていない
     // ので lens も呼ばず INCONCLUSIVE（測り直せる側・FR14）。
     if measured.unreadable {
         return (
             Verdict::Inconclusive,
             "diff の path を読めない（write-set を照合できない＝測れなかった）".to_owned(),
+            None,
         );
     }
     // **箱の中で殺された行も赤より先**（設計 gate-cost.md §4.2）。溢れた箱の中で死んだ行は
@@ -770,12 +789,14 @@ fn decide(entry: &Gate<'_>, worktree: &Path, measured: &Measured) -> (Verdict, S
                 "verify の行が scope の中で死んだ（reason={}・測れなかった）",
                 reason.as_str()
             ),
+            None,
         );
     }
     if measured.red > 0 {
         return (
             Verdict::Fail,
             format!("verify の {} 行が rc≠0", measured.red),
+            None,
         );
     }
     let size = byte_count(&measured.diff);
@@ -784,6 +805,7 @@ fn decide(entry: &Gate<'_>, worktree: &Path, measured: &Measured) -> (Verdict, S
         return (
             Verdict::Inconclusive,
             format!("diff {size} byte が cap {} を超えた", entry.limits.token_cap),
+            None,
         );
     }
     // **本数は照合する**。0 本（lens を呼ばずに通す）も 2 本以上（1 本で足りたことに
@@ -796,10 +818,11 @@ fn decide(entry: &Gate<'_>, worktree: &Path, measured: &Measured) -> (Verdict, S
                 "規則は lens {} 本を定める（通せるのは 1 本だけ）",
                 entry.limits.lens_count
             ),
+            None,
         );
     }
     let Some(cmd) = entry.lens else {
-        return (Verdict::Inconclusive, "lens が要るのに --lens が無い".to_owned());
+        return (Verdict::Inconclusive, "lens が要るのに --lens が無い".to_owned(), None);
     };
     let contract = contract_path(entry.state_dir, entry.run);
     let unit = confine::unit_name(entry.run, LENS_STAGE, 1);
@@ -850,7 +873,7 @@ fn ask_lens(
     worktree: &Path,
     diff: &[u8],
     wrap: &confine::Wrap<'_>,
-) -> (Verdict, String) {
+) -> (Verdict, String, Option<Released>) {
     let (mut command, confinement) = confine::wrap_line(cmd, wrap);
     let spawned = command
         .current_dir(worktree)
@@ -860,14 +883,23 @@ fn ask_lens(
         .spawn();
     let mut child = match spawned {
         Ok(found) => found,
-        Err(err) => return (Verdict::Inconclusive, format!("lens を起動できない: {err}")),
+        Err(err) => return (Verdict::Inconclusive, format!("lens を起動できない: {err}"), None),
     };
     if let Some(mut stdin) = child.stdin.take() {
         // 読まずに終える lens への write は EPIPE になる。**判定は出力で決める**ので
         // ここの失敗は理由にしない（take で drop され、lens は EOF を見る）。
         let _ = stdin.write_all(diff);
     }
-    let out = match child.wait_with_output() {
+    let waited = child.wait_with_output();
+    // **終端で scope を片付ける**（verify 行と同じ・設計 §4.4 errata）。判定は変えない。
+    let scope = confine::release_scope(&confinement);
+    let (verdict, evidence) = lens_outcome(waited, &confinement);
+    (verdict, evidence, scope)
+}
+
+/// 終わった lens の出力から判定を読む。
+fn lens_outcome(waited: std::io::Result<std::process::Output>, confinement: &Confinement) -> (Verdict, String) {
+    let out = match waited {
         Ok(found) => found,
         Err(err) => return (Verdict::Inconclusive, format!("lens の出力を読めない: {err}")),
     };
@@ -962,6 +994,9 @@ fn settle(entry: &Gate<'_>, decision: &Decision) -> Result<(), String> {
     // ——land は `tree` の無い verdict を「木を比べられない」として全段を撃つ（設計 gate-cost.md §5）。
     if let Some(tree) = &decision.tree {
         fields.push(("tree", Value::Str(tree.clone())));
+    }
+    if let Some(released) = decision.scope {
+        fields.push(("scope", Value::Str(released.as_str().to_owned())));
     }
     fields.push(("ts", Value::Str(now_utc())));
     let body = json_lite::write_object(&fields);

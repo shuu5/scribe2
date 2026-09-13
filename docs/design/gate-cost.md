@@ -102,6 +102,8 @@ manifest に行が載るまでは ADR-0021 の予定行（C14.2 の相互参照�
 - **`peak_mb` は field を欠かさず `-` を書く**（§4.3 は「field を欠く」と書いた）。読み手が「field が無い」と「0」を取り違えないためで、極性は同じ（0 と書かない）である。
 - **gate が起こす lens の 1 行（gate.rs `ask_lens`）も同じ包みを通す**。§4.1 の列挙は claude の構築点を「lens」と呼ぶが、gate が `sh -c` で起こす lens そのものを箱に入れないと §4.2 の「lens の scope が殺された周」を器が観測できない。判定順は不変（殺された周は INCONCLUSIVE・便は終端しない）。
 - **verify 行の signal 死は、包めた周だけ**「測れなかった」へ倒す（包めていない行が外から kill された周は従来どおり赤のまま）。根拠が箱の中に在るかどうかで極性を分ける。
+- **unit 名の末尾に process 内の通し番号 `<seq>` を足す**（`<NAME>-<場所>-<段>-<n>-<pid>-<seq>`・起動ごとに 0 から・s2-07l.234）。pid だけでは**同じ process が同じ `<n>` を 2 度撃つ周**（land の追随 → 再 gate → main 実測・場所はどちらも run id）を分けられず、1 周目の scope が孤児の process で active のまま残ると 2 周目が `was already loaded` で起動できず偽の RED になる（.208 run 3 の実測 2026-09-13）。`<n>` の意味と別 process の一意性（pid）は変えない。
+- **行の終端で scope を片付ける**（s2-07l.234）: §4.3 の「最後の process の終了で消える」は、行が fixture の tmux server や shell を孤児で残す周に成立しない。包めた起動（verify 行・gate の lens・runner・claude の子）は子が終わった直後に `systemctl --user kill --signal=SIGKILL <unit>.scope` を 1 回撃つ（SIGTERM の猶予を待たない）。結果は閉じた enum（`gone`〔既に無い＝正常・記録しない〕/ `killed` / `failed` / `no-tool`）で、`gone` 以外の周だけ record に `scope=` を足す（verify 行 = `verify.jsonl` の行・gate の lens = `verdict.json`・runner / claude の子 = stderr の 1 行）。判定の極性は持たない（片付けの失敗で行を赤にしない・§4.5）。包めなかった周は撃たない。
 
 ### 4.5 極性
 

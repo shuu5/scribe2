@@ -6,7 +6,8 @@
 //! enum の名>` を残す。ゆえにこの境界は**行為を止めうる判定を返さない**——ADR-0014 §2.1 の
 //! guard の定義に当たらないので、**極性一覧には載せない**（設計 §4.5・受付と同じ）。
 //!
-//! 現物と設計の差（unit 名の pid・probe・箱を作れない host・終端行の固定形）は設計 §4.4 の
+//! 現物と設計の差（unit 名の pid と通し番号・probe・箱を作れない host・終端行の固定形・行の終端の
+//! [`release`]）は設計 §4.4 の
 //! errata に写してある。
 //!
 //! **値をこの file に焼かない**（憲法 C1 / C5）。箱の大きさと CPU の重みは [`Caps`] が
@@ -22,7 +23,8 @@
 use crate::name::NAME;
 use crate::rules::manifest::Manifest;
 use crate::seat::{embedded_manifest, int_rule_of, RuleRead};
-use std::process::{Command, Stdio};
+use std::process::{Command, Output, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
 
 /// scope を作る道具。**PATH で解決する**（絶対 path を焼かない・env も読まない）。
@@ -206,19 +208,106 @@ pub struct Wrap<'a> {
     pub caps: Result<Caps, RuleRead>,
 }
 
-/// 便の 1 起動の unit 名（`<NAME>-<場所>-<段>-<n>-<pid>`）。
+/// 便の 1 起動の unit 名（`<NAME>-<場所>-<段>-<n>-<pid>-<seq>`）。
 ///
 /// 設計 §4.2 は `<NAME>-<run>-<段>-<n>` を書くが、**同じ id を別 process が同時に測る周**
 /// （歯の並列走行）で transient scope の名が衝突し、2 本目が起動できず偽の RED になる。
 /// 場所（gate では便の worktree の dir 名 = run id）に pid を足して一意にする
 /// （errata は設計 §4 に記した）。`<n>` は `verify.jsonl` の record 番号である。
+///
+/// **同じ process が同じ `<n>` を 2 度撃つ周**（land の追随 → 再 gate → main 実測）でも名を
+/// 分けるため、末尾に process 内の通し番号 `<seq>` を足す（`s2-07l.234`・設計 §4.4 errata）。
+/// 1 周目の scope が孤児の process で active のまま残っても、2 周目は同名で衝突しない。
 pub fn unit_name(place: &str, stage: &str, n: usize) -> String {
     format!(
-        "{NAME}-{}-{}-{n}-{}",
+        "{NAME}-{}-{}-{n}-{}-{}",
         tame(place),
         tame(stage),
-        std::process::id()
+        std::process::id(),
+        next_seq()
     )
+}
+
+/// unit 名の通し番号（process の起動ごとに 0 から・呼ぶたびに 1 進む）。
+static SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// 通し番号を 1 つ取る。
+fn next_seq() -> u64 {
+    SEQ.fetch_add(1, Ordering::Relaxed)
+}
+
+/// scope を片付ける道具。**PATH で解決する**（[`SYSTEMD_RUN`] と同じ）。
+const SYSTEMCTL: &str = "systemctl";
+
+/// unit が既に無い周に `systemctl` が stderr へ出す字面。
+const NOT_LOADED: &str = "not loaded";
+
+/// 行の終端で scope を片付けた結果（閉じた enum・record の `scope=`）。
+///
+/// **判定の極性を持たない**（設計 §4.5）: 片付けに失敗しても行は赤にしない（縮退・憲法 C11.2）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Released {
+    /// unit が既に無い（最後の process の終了で消えた・正常＝record に書かない）。
+    Gone,
+    /// scope の中に残った process を殺した。
+    Killed,
+    /// `systemctl` が別の理由で断った（rc・signal で死んだ周は 255）。
+    Failed(u8),
+    /// `systemctl` を起動できない（PATH に無い host）。
+    NoTool,
+}
+
+impl Released {
+    /// record に書く字面。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Gone => "gone",
+            Self::Killed => "killed",
+            Self::Failed(_) => "failed",
+            Self::NoTool => "no-tool",
+        }
+    }
+}
+
+/// 行の終端で scope に残った process を **SIGKILL で全部**殺す（設計 §4.4 errata・`s2-07l.234`）。
+///
+/// §4.3 の「最後の process の終了で scope は消える」は、行が fixture の server や shell を
+/// 孤児で残す周に成立しない——scope は active のまま CPU を焼き、次の周の同名の相手になる。
+/// SIGTERM の猶予は待たない（子は既に終わっている・残りは孤児だけ）。
+pub fn release(unit: &str) -> Released {
+    let out = Command::new(SYSTEMCTL)
+        .args(["--user", "kill", "--signal=SIGKILL"])
+        .arg(format!("{unit}.scope"))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output();
+    released_of(out)
+}
+
+/// `systemctl kill` の結果を閉じた enum へ読む（pure・in-file の歯が fixture で測る）。
+fn released_of(out: std::io::Result<Output>) -> Released {
+    let Ok(out) = out else {
+        return Released::NoTool;
+    };
+    if out.status.success() {
+        return Released::Killed;
+    }
+    if String::from_utf8_lossy(&out.stderr).contains(NOT_LOADED) {
+        return Released::Gone;
+    }
+    let rc = out.status.code().and_then(|code| u8::try_from(code).ok()).unwrap_or(u8::MAX);
+    Released::Failed(rc)
+}
+
+/// 包めた起動の scope を片付け、**record に書く周だけ**結果を返す。
+///
+/// 包めなかった周は撃たない（scope が無い）。`Gone` は正常なので `None`＝record は変わらない。
+pub fn release_scope(confinement: &Confinement) -> Option<Released> {
+    match confinement {
+        Confinement::Confined { unit } => Some(release(unit)).filter(|found| *found != Released::Gone),
+        Confinement::Unconfined(_) => None,
+    }
 }
 
 /// systemd の unit 名に置ける字だけへ畳む。
@@ -416,14 +505,68 @@ pub fn read_usage(stdout: &str) -> Usage {
 #[cfg(test)]
 mod tests {
     use super::{
-        limit_mb, limit_of, mem_total_mb, read_usage, script, wrap_command, wrap_line, Caps, Limit, Reason, Wrap,
-        PANE_ENV, REASONS,
+        limit_mb, limit_of, mem_total_mb, next_seq, read_usage, release_scope, released_of, script, unit_name,
+        wrap_command, wrap_line, Caps, Confinement, Limit, Reason, Released, Wrap, PANE_ENV, REASONS,
     };
     use crate::order::is_declaration_order;
     use crate::rules::manifest::Manifest;
     use crate::seat::{manifest_read, RuleRead};
     use std::ffi::OsStr;
-    use std::process::Command;
+    use std::os::unix::process::ExitStatusExt;
+    use std::process::{Command, ExitStatus, Output};
+
+    /// 同じ引数の `unit_name` を 2 回呼ぶと**別の名**になる（追随の再 gate で同名が衝突しない・`s2-07l.234`）。
+    /// `<n>` と pid の位置は変えない（別 process の一意性は pid のまま）。
+    #[test]
+    fn confine_unit_name_differs_for_the_same_arguments() {
+        let first = unit_name("run-1", "detection", 7);
+        let second = unit_name("run-1", "detection", 7);
+        assert_ne!(first, second, "同じ引数でも別名");
+        let head = format!("{}-run-1-detection-7-{}-", crate::name::NAME, std::process::id());
+        assert!(first.starts_with(&head), "`<n>` と pid は従来の位置: {first}");
+        assert!(second.starts_with(&head), "`<n>` と pid は従来の位置: {second}");
+        let seq = |name: &str| name.strip_prefix(&head).and_then(|tail| tail.parse::<u64>().ok());
+        assert!(seq(&first).is_some(), "末尾は通し番号: {first}");
+        assert!(seq(&second) > seq(&first), "後の名の番号が大きい: {first} / {second}");
+    }
+
+    /// 通し番号は呼ぶたびに単調に増える。
+    #[test]
+    fn confine_seq_increases_monotonically() {
+        let taken: Vec<u64> = (0..4).map(|_| next_seq()).collect();
+        assert!(taken.windows(2).all(|pair| pair.first() < pair.get(1)), "単調増加: {taken:?}");
+    }
+
+    /// [`Released::as_str`] の網羅（字面は record の語彙・重複しない）。
+    #[test]
+    fn confine_released_names_are_closed() {
+        let all = [Released::Gone, Released::Killed, Released::Failed(1), Released::NoTool];
+        let names: Vec<&str> = all.iter().map(|found| found.as_str()).collect();
+        assert_eq!(names, vec!["gone", "killed", "failed", "no-tool"]);
+        assert_eq!(Released::Failed(9).as_str(), "failed", "rc は字面を変えない");
+    }
+
+    /// `systemctl kill` の結果の読み: 無い unit は `Gone`・rc 0 は `Killed`・起動できない周は `NoTool`・
+    /// その他は rc 付きの `Failed`（signal 死は 255）。
+    #[test]
+    fn confine_released_of_reads_the_systemctl_result() {
+        let out = |raw: i32, stderr: &str| {
+            Ok(Output { status: ExitStatus::from_raw(raw), stdout: Vec::new(), stderr: stderr.as_bytes().to_vec() })
+        };
+        assert_eq!(released_of(out(0, "")), Released::Killed);
+        let gone = "Failed to kill unit x.scope: Unit x.scope not loaded.\n";
+        assert_eq!(released_of(out(1 << 8, gone)), Released::Gone);
+        assert_eq!(released_of(out(1 << 8, "Failed to connect to bus\n")), Released::Failed(1));
+        assert_eq!(released_of(out(9, "")), Released::Failed(u8::MAX), "signal 死");
+        let missing = std::io::Error::new(std::io::ErrorKind::NotFound, "no systemctl");
+        assert_eq!(released_of(Err(missing)), Released::NoTool);
+    }
+
+    /// 包めなかった周は片付けを撃たない（record も変わらない）。
+    #[test]
+    fn confine_release_scope_skips_the_unconfined() {
+        assert_eq!(release_scope(&Confinement::Unconfined(Reason::NoTool)), None);
+    }
 
     /// `wrap_line` が組む起動は `TMUX_PANE` を**外す**指定を持ち、ほかの env を足さない。
     ///

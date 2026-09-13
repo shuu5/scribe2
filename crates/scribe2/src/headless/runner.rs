@@ -7,6 +7,7 @@
 use crate::polarity::{OnFailure, Polarity, Timing};
 use super::{build, feed, fill, flag, need, plugin_dirs, read_stdin_bytes, Call, DEFAULT_CLAUDE, RC_RATE_LIMIT};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
+use crate::pipe::confine;
 use crate::pipe::declaration::Effective;
 use crate::pipe::gate::last_json_object;
 use crate::pipe::RC_QUESTION;
@@ -142,7 +143,7 @@ fn save_prompt(vessel: &Path, prompt: &str) -> Result<(), String> {
 /// plugin の PermissionRequest hook が deny する（ADR-0011 §2.1 が ADR-0009 §2.1 / ADR-0010
 /// §2.4 の起動 flag を部分 supersede・allowlist の形と hook の一律 deny は不変）。
 fn launch(call: &Call<'_>, tools: &str) -> Outcome {
-    let mut command = build(call);
+    let (mut command, confinement) = build(call);
     command.arg("--allowedTools").arg(tools);
     let spawned = command.spawn();
     let mut child = match spawned {
@@ -172,7 +173,13 @@ fn launch(call: &Call<'_>, tools: &str) -> Outcome {
             }
         }
     }
-    conclude(child.wait(), &seen)
+    let status = child.wait();
+    // **終端で scope を片付ける**（設計 gate-cost.md §4.4 errata・`s2-07l.234`）。rc と最終行は変えない
+    // （stdout は pipeline が読む面なので、結果は stderr の 1 行だけに出す）。
+    let scope = confine::release_scope(&confinement);
+    let mut outcome = conclude(status, &seen);
+    outcome.err.extend(scope.map(|released| format!("runner: scope={}", released.as_str())));
+    outcome
 }
 
 /// stream を読みながら覚えたもの。

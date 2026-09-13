@@ -184,7 +184,11 @@ fn launch_runner(
     // rc が要るのでここは `wait_with_output`（`Child::wait` と同じ待ち・stdout を回収する形）。
     // pid の生存だけを見る待機（`pipe stop`）は `fleet::wait` のままで、**待機の実装は
     // 増えていない**（C3.4）。
-    let out = match child.wait_with_output() {
+    let waited = child.wait_with_output();
+    // **終端で scope を片付ける**（設計 gate-cost.md §4.4 errata・`s2-07l.234`）。runner が孤児を
+    // 残しても scope を active のまま置かない。段の判定は変えない（結果は stderr の 1 行だけ）。
+    let scope = confine::release_scope(&confinement).map(|released| format!("pipe: runner scope={}", released.as_str()));
+    let out = match waited {
         Ok(found) => found,
         Err(err) => return broken(format!("runner の終了を待てない: {err}")),
     };
@@ -212,6 +216,7 @@ fn launch_runner(
     if let Some(reason) = kept {
         outcome.err.push(format!("pipe: runner の stdout を残せない: {reason}"));
     }
+    outcome.err.extend(scope);
     outcome
 }
 

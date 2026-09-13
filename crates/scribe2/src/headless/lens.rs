@@ -17,6 +17,7 @@
 
 use super::{build, feed, fill, flag, need, read_stdin_bytes, Call, DEFAULT_CLAUDE};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
+use crate::pipe::confine;
 use crate::pipe::contract::Contract;
 use std::path::Path;
 
@@ -121,13 +122,25 @@ fn state(contract: &Contract) -> String {
 /// allow 規則は権限の口を開けるので、settings を 1 つも読まない形（`--setting-sources` の
 /// 空値 + `--strict-mcp-config`）は runner と同じく毎回効く（ADR-0011 §2.1）。
 fn ask(call: &Call<'_>) -> Outcome {
-    let spawned = build(call).spawn();
+    let (mut command, confinement) = build(call);
+    let spawned = command.spawn();
     let mut child = match spawned {
         Ok(found) => found,
         Err(err) => return Outcome::failed_line(RC_BROKEN, format!("lens: claude を起動できない: {err}")),
     };
     feed(&mut child, call.prompt);
-    let out = match child.wait_with_output() {
+    let waited = child.wait_with_output();
+    // **終端で scope を片付ける**（設計 gate-cost.md §4.4 errata・`s2-07l.234`）。stdout の 1 行は
+    // 判定の面なので、結果は stderr の 1 行だけに出す。
+    let mut outcome = read_verdict(waited);
+    let scope = confine::release_scope(&confinement);
+    outcome.err.extend(scope.map(|released| format!("lens: scope={}", released.as_str())));
+    outcome
+}
+
+/// 終わった claude の出力から最後の JSON 行を読む。
+fn read_verdict(waited: std::io::Result<std::process::Output>) -> Outcome {
+    let out = match waited {
         Ok(found) => found,
         Err(err) => return Outcome::failed_line(RC_BROKEN, format!("lens: claude の出力を読めない: {err}")),
     };
