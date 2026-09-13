@@ -245,6 +245,8 @@ pub struct Located {
 ///
 /// 相対 path の基準は payload の `cwd`。root の外（字句で `..` へ抜ける・実体が symlink で外を指す）と root を
 /// 解けない周は `Outside`。便の worktree の中は worktree 相対で分類する（便の木は repo の写しである）。
+/// `.worktrees/` 直下の便の器でない worktree（`<root>/.worktrees/<name>/<rel>`・planner が docs PR 用に切る木）も
+/// repo の写しとして `<rel>` で分類する（便の印は開かない＝`run: None`）。`.worktrees/<name>` そのものは `Code`。
 pub fn locate(root: Option<&Path>, cwd: &Path, target: &str) -> Located {
     let outside = Located { kind: PathKind::Outside, run: None };
     let Some(root) = root else {
@@ -259,8 +261,9 @@ pub fn locate(root: Option<&Path>, cwd: &Path, target: &str) -> Located {
     let Some(rel) = resolved_relative(root, &absolute).or(Some(lexical)) else {
         return outside;
     };
-    let Ok(inside) = root.join(&rel).strip_prefix(worktrees_dir(root)).map(Path::to_path_buf) else {
-        return Located { kind: PathKind::of_relative(&rel), run: None };
+    let bead_trees = worktrees_dir(root);
+    let Ok(inside) = root.join(&rel).strip_prefix(&bead_trees).map(Path::to_path_buf) else {
+        return Located { kind: PathKind::of_relative(repo_copy_relative(root, &bead_trees, &rel)), run: None };
     };
     let mut parts = inside.components();
     let Some(Component::Normal(run)) = parts.next() else {
@@ -270,6 +273,22 @@ pub fn locate(root: Option<&Path>, cwd: &Path, target: &str) -> Located {
     Located {
         kind: PathKind::of_relative(&within),
         run: Some((run.to_string_lossy().into_owned(), within)),
+    }
+}
+
+/// 分類に渡す相対 path: `.worktrees/<name>/<rel>`（便の器でない worktree＝repo の写し）なら `<rel>`・
+/// `.worktrees/<name>` そのものは `.worktrees/<name>` のまま（＝`Code`）・それ以外は `rel` のまま。
+fn repo_copy_relative<'a>(root: &Path, bead_trees: &Path, rel: &'a Path) -> &'a Path {
+    let Some(copies) = bead_trees.parent().and_then(|dir| dir.strip_prefix(root).ok()) else {
+        return rel;
+    };
+    let Ok(inside) = rel.strip_prefix(copies) else {
+        return rel;
+    };
+    let mut parts = inside.components();
+    match (parts.next(), parts.as_path()) {
+        (Some(Component::Normal(_)), within) if !within.as_os_str().is_empty() => within,
+        _ => rel,
     }
 }
 
@@ -498,6 +517,31 @@ mod tests {
         // worktree の集合 dir そのもの・別の器の worktree は便の中ではない。
         assert_eq!(locate(Some(&root), &root, &format!(".worktrees/{NAME}")).run, None);
         assert_eq!(locate(Some(&root), &root, ".worktrees/other/run-1/src/lib.rs").run, None);
+    }
+
+    /// 便の器でない worktree（`.worktrees/<name>/`・planner の docs PR 用の木）は repo の写しとして worktree 相対で
+    /// 分類し、便の印は開かない（`run: None`）。`.worktrees/<name>` そのものは `Code`・便の worktree は不変。
+    #[test]
+    fn hook_role_worktree_repo_copy_is_classified_worktree_relative() {
+        let root = PathBuf::from("/repo");
+        for (target, want) in [
+            (".worktrees/planner-x/design-intent/spec/srs.html".to_owned(), PathKind::DesignIntent),
+            (".worktrees/planner-x/docs/design/a.md".to_owned(), PathKind::DesignDoc),
+            ("/repo/.worktrees/planner-x/design-intent/decisions/x.html".to_owned(), PathKind::DesignIntent),
+            (".worktrees/planner-x/src/lib.rs".to_owned(), PathKind::Code),
+            (".worktrees/planner-x".to_owned(), PathKind::Code),
+            (".worktrees".to_owned(), PathKind::Code),
+            (".worktrees/planner-x/../../../outside.rs".to_owned(), PathKind::Outside),
+        ] {
+            let found = locate(Some(&root), &root, &target);
+            assert_eq!(found.kind, want, "{target}");
+            assert_eq!(found.run, None, "{target} は便の worktree ではない");
+        }
+        // 便の worktree の分類と run id は不変。
+        let bead = locate(Some(&root), &root, &format!(".worktrees/{NAME}/run-1/design-intent/x.html"));
+        assert_eq!(bead.kind, PathKind::DesignIntent);
+        assert_eq!(bead.run, Some(("run-1".to_owned(), PathBuf::from("design-intent/x.html"))));
+        assert_eq!(locate(Some(&root), &root, &format!(".worktrees/{NAME}/run-1/src/lib.rs")).kind, PathKind::Code);
     }
 
     /// 照合は `<NAME> <sub> <sub2>` の並び: binary の名は末尾でもよく、1 行に複数在れば全部・重複は畳む・

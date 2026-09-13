@@ -2047,6 +2047,36 @@ fn hook_role_contract_mark_opens_bead_write_set_for_admin() {
     clean(&[&place.repo, &place.state, &place.sock_dir]);
 }
 
+/// `s2-07l.227`: 便の器でない worktree（`.worktrees/planner-x/`・planner の docs PR 用の木）は repo の写し＝
+/// worktree 相対で分類する: planner の `design-intent/` → allow・同じ木の `src/` → deny（edit-code）・便の worktree の
+/// `src/` は印の無い周 deny のまま。
+#[test]
+fn hook_role_worktree_repo_copy_allows_planner_design_intent() {
+    let place = role_place();
+    let (planner, planner_pane) = role_seat(&place, "roletreeplanner", Some("planner"));
+    let under = |parts: &[&str]| {
+        let path = parts.iter().fold(place.repo.join(".worktrees"), |dir, part| dir.join(part));
+        tool_payload(&place.repo, "Edit", &path.display().to_string())
+    };
+
+    let before = role_records(&place.state).len();
+    let out = run_role_hook(&place, &planner_pane, &[], &under(&["planner-x", "design-intent", "x.html"]));
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "rc 0: {}", stderr_text(&out));
+    assert_silent(&out, "planner の worktree の design-intent は通す");
+    assert_role_record(&place.state, before, "role-allow path=design-intent", "roletreeplanner_roletreeplanner");
+    assert_silent(
+        &run_role_hook(&place, &planner_pane, &[], &under(&["planner-x", "docs", "design", "a.md"])),
+        "planner の worktree の設計 doc も通す",
+    );
+
+    let text = assert_role_deny(&run_role_hook(&place, &planner_pane, &[], &under(&["planner-x", "src", "x.rs"])), "同じ木の code");
+    assert!(text.contains("edit-code"), "{text}");
+    let text = assert_role_deny(&run_role_hook(&place, &planner_pane, &[], &under(&[NAME, "run-plain", "src", "x.rs"])), "便の worktree の code");
+    assert!(text.contains("edit-code"), "{text}");
+    drop(planner);
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
 /// (8)(9): rules 行が読めない・行に無い役割 → deny（FailClosed・理由を名指す）／1 行に `pipe answer` と
 /// `pipe run` が並ぶ Bash は両方の権能が要る（planner も管理席も deny・記録の種別は両方の名）。
 #[test]
