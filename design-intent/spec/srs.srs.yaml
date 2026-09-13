@@ -55,8 +55,9 @@ scope:
     - 追随
     - 上限停止した便の別口座での再開
     - 開発 session の役割と権能
-    - 役割の指示文の注入
-    - 封じ込めと受付の枠
+    - 席の指示文の注入
+    - 便の封じ込め
+    - 受付の枠
   out:
     - 席の起動（v3）
     - lane 計画と席の dashboard（v3）
@@ -96,7 +97,7 @@ acceptance:
   - { id: AC14, criterion: 走っている便と write-set が 1 file でも交差する契約を intake が typed な理由で断り便が作られず、 その便が終端に達した後は同じ契約が通る,                         metric_v: 0 件,  metric_l: 交差した便の同時走行, links: [FR1, FR39] }
   - { id: AC15, criterion: 役割を記録した管理席から回答・承認・go の記帳を試みると deny され（deny 文に権能を持つ役割の名）、 planner 席からは記帳され、 記録の無い席からはどちらも deny される,        metric_v: 0 件,  metric_l: 権能の外の記帳,     links: [FR15, FR16, FR32, FR40, FR41, FR45] }
   - { id: AC16, criterion: 管理席の code path への編集は編集時に deny、 planner 席の design-intent と設計 doc への編集は allow、 契約が class で開いた便だけ管理席の code 編集が allow になる,             metric_v: 0 件,  metric_l: 役割の外の編集,     links: [FR20, FR45] }
-  - { id: AC17, criterion: 生成された役割の指示文は manifest の行と雛形からだけ作られ、 CI が「行に無い規範文」と「行に在って文に無い権能」の両方を 0 件と確かめ、 記録の無い席への注入は 0 byte,        metric_v: 0 件,  metric_l: 指示文の drift,     links: [FR17, FR18, FR42] }
+  - { id: AC17, criterion: 生成された席の指示文は manifest の行と雛形からだけ作られ、 CI が「行に無い規範文」と「行に在って文に無い権能」の両方を 0 件と確かめ、 記録の無い席への注入は 0 byte,        metric_v: 0 件,  metric_l: 指示文の drift,     links: [FR17, FR18, FR42] }
   - { id: AC18, criterion: fixture の席が idle で queue が空でないとき管理 tick が続きの pointer を 1 件注入し、 queue が承認と裁定の待ちだけのときは注入しない,                                  metric_v: 1 件,  metric_l: 継続の注入,         links: [FR27, FR43] }
   - { id: AC19, criterion: 席間の連絡 1 件が入力欄を経由せず届き、 届いた事実が経路の記録から取れる,                                                                                        metric_v: 1 件,  metric_l: 記録で確認,         links: [FR44] }
   - { id: AC20, criterion: 変異検査の verify 行が memory 上限付きの箱（stub の引数）で撃たれ、 箱や受付が使えない fixture では並列度 1 で進んで便が断られない,                                metric_v: 0 件,  metric_l: 資源不足での拒否,   links: [FR8, FR46, NFR6] }
@@ -559,7 +560,7 @@ requirements:
       response: 役割ごとの権能は rules manifest の行（値は閉じた権能 enum の名の列・裁定 id 付き）が持ち、 承認の記帳は rules 行 R-C7-1 が名指す対話面の役割の権能とする
   - id: FR42
     type: FR
-    label: 役割の指示文の注入
+    label: 席の指示文の注入
     priority: must
     vmethod: T
     rationale_source: N-3
@@ -688,6 +689,6 @@ glossary:
   - { term: 実効 jobs,      en: effective jobs,         plain_short: 実際の並列度,             def: 変異検査に実際に渡す並列度。 rules 行の上限を受付の枠で下げた値（NFR6）。 }
   - { term: 上限 record,      en: rate-limit record,      plain_short: 上限に当たった印,         def: claude が口座の上限を専用の record で伝える合図。 便の停止判定はこの record だけを入力にする（FR35・ADR-0012）。 }
   - { term: anchor,         en: anchor,                 plain_short: project の錨,             def: 対象 repo の main checkout。 席と便の鍵の一部で、 1 つの anchor に planner 1 席・管理席 1 席（FR40）。 }
-  - { term: 役割の指示文,   en: role brief,             plain_short: 席に差し込む指示,         def: 役割ごとの雛形と権能の rules 行から器が生成し、 session の文脈が初期化されるたびに注入する文（FR42）。 手書きの規範文は持たない。 }
+  - { term: 席の指示文,   en: role brief,             plain_short: 席に差し込む指示,         def: 役割ごとの雛形と権能の rules 行から器が生成し、 session の文脈が初期化されるたびに注入する文（FR42）。 手書きの規範文は持たない。 }
   - { term: 席の queue,     en: seat queue,             plain_short: 席が抱える次の仕事,       def: 席に向けた dispatch・席宛ての質問・裁定済みの次の行動の集合（FR43）。 承認と裁定の待ちだけなら正当な idle。 }
   - { term: 席間の連絡,     en: inter-seat message,     plain_short: 席どうしの message,       def: 開発 session の席どうしの message を、 入力欄を経由しない経路で届け、 経路の記録で着地を確かめること（FR44）。 }

@@ -555,7 +555,7 @@ terms:
     domain: consumer
     definition: 対象 repo の main checkout。 席と便の鍵の一部で、 1 つの anchor に planner 1 席・管理席 1 席 (SRS FR40・ADR-0022 §2.1)。 便の worktree はここから切る。
     relationships: [席, 席の登録, worktree, 役割]
-  - canonical: 役割の指示文
+  - canonical: 席の指示文
     domain: consumer
     definition: 席の役割ごとに、 tracked な雛形 1 枚と権能の rules 行から器が生成して session の開始・clear・圧縮後に注入する文 (SRS FR42・ADR-0022 §2.4)。 雛形の外に手書きの規範文を持たず、 hook で塞ぐ事項は書かない。
     relationships: [役割, 権能, hook, 開発 session]
