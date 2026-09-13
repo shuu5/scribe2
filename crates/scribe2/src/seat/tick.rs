@@ -1171,4 +1171,48 @@ mod tests {
         let mixed = table(&[(ts, vec![idle(WindowKind::FiveHour), measured("a1", WindowKind::SevenDay, None, 30, LATER)])]);
         assert_eq!(pressure(&mixed, "a1", None), Some(30), "reset 無しの 0 は最大を動かさない");
     }
+
+    /// Unmeasured 1 行（model 別窓）。
+    fn unmeasured(account: &str, window: Option<WindowKind>, model: Option<&str>) -> Allowance {
+        Allowance::Unmeasured(Unmeasured {
+            account: account.to_owned(),
+            window,
+            model: model.map(str::to_owned),
+            endpoint: "oauth-usage".to_owned(),
+            reason: UnmeasuredReason::ShapeMismatch,
+        })
+    }
+
+    /// 席の model と**違う** model の SevenDayModel 窓だけが Unmeasured なら、その行は数えない＝測れた口座
+    /// （Unmeasured 腕の guard を `true` に落とす: 落とすと None に化ける）。
+    // flip-check: retroactive s2-07l.232
+    #[test]
+    fn mutant_in_seat_account_pressure_ignores_unmeasured_window_of_another_model() {
+        let ts = "2026-09-13T05:59:00Z";
+        let rows = table(&[(ts, vec![
+            measured("a1", WindowKind::FiveHour, None, 10, LATER),
+            measured("a1", WindowKind::SevenDayModel, Some("Opus"), 20, LATER),
+            unmeasured("a1", Some(WindowKind::SevenDayModel), Some("Fable")),
+        ])]);
+        assert_eq!(pressure(&rows, "a1", Some("Opus")), Some(20), "Fable 窓の Unmeasured は Opus の席に効かない");
+    }
+
+    /// 数える窓（five_hour・席の model と一致する SevenDayModel）が Unmeasured なら測れない
+    /// （Unmeasured 腕の guard を `false` に落とす: 落とすと測れたことにする）。
+    // flip-check: retroactive s2-07l.232
+    #[test]
+    fn mutant_in_seat_account_pressure_is_unmeasured_when_a_counted_window_is_unmeasured() {
+        let ts = "2026-09-13T05:59:00Z";
+        let five_hour = table(&[(ts, vec![
+            unmeasured("a1", Some(WindowKind::FiveHour), None),
+            measured("a1", WindowKind::SevenDayModel, Some("Opus"), 20, LATER),
+        ])]);
+        assert_eq!(pressure(&five_hour, "a1", Some("Opus")), None, "five_hour の Unmeasured は席の model に関係なく数える");
+        let same_model = table(&[(ts, vec![
+            measured("a1", WindowKind::FiveHour, None, 10, LATER),
+            unmeasured("a1", Some(WindowKind::SevenDayModel), Some("Opus")),
+        ])]);
+        assert_eq!(pressure(&same_model, "a1", Some("Opus")), None, "席の model と同じ SevenDayModel 窓の Unmeasured");
+        assert_eq!(pressure(&same_model, "a1", None), None, "model の無い row は全 model 窓を数える（保守側）");
+    }
 }
