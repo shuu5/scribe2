@@ -856,7 +856,7 @@ fn measured(account: &str, window: WindowKind, model: Option<&str>, used_pct: u6
         model: model.map(str::to_owned),
         endpoint: ENDPOINT.to_owned(),
         used_pct,
-        resets_at: RESETS_AT.to_owned(),
+        resets_at: Some(RESETS_AT.to_owned()),
     })
 }
 
@@ -1153,11 +1153,7 @@ fn fleet_allowance_measured_rejects_missing_model_and_wrong_types() {
                 pct.clone(),
                 ("resets_at", json_lite::Value::Num(5)),
             ],
-            "resets_at が無いか文字列でない",
-        ),
-        (
-            vec![window("five_hour"), pct.clone()],
-            "resets_at が無いか文字列でない",
+            "resets_at が文字列でない",
         ),
         (
             vec![window("five_hour"), resets.clone()],
@@ -1672,7 +1668,8 @@ fn fleet_usage_measures_two_accounts_into_lines_and_events() {
         assert!(event.run.is_empty() && event.bead.is_empty(), "便に紐づかない");
         assert_eq!(event.host, vessel::fleet::cli::host(), "host は既存の解決");
     }
-    let mut seen: Vec<(String, WindowKind, Option<String>, u64, String)> = allowances(&fx)
+    type Seen = (String, WindowKind, Option<String>, u64, Option<String>);
+    let mut seen: Vec<Seen> = allowances(&fx)
         .into_iter()
         .filter_map(|row| match row {
             Allowance::Measured(found) => {
@@ -1685,9 +1682,9 @@ fn fleet_usage_measures_two_accounts_into_lines_and_events() {
     seen.sort();
     let want_for = |label: &str| {
         vec![
-            (label.to_owned(), WindowKind::FiveHour, None, 13, "2026-09-12T05:00:00Z".to_owned()),
-            (label.to_owned(), WindowKind::SevenDay, None, 41, "2026-09-18T00:00:00Z".to_owned()),
-            (label.to_owned(), WindowKind::SevenDayModel, Some("Fable".to_owned()), 38, "2026-09-18T00:00:00Z".to_owned()),
+            (label.to_owned(), WindowKind::FiveHour, None, 13, Some("2026-09-12T05:00:00Z".to_owned())),
+            (label.to_owned(), WindowKind::SevenDay, None, 41, Some("2026-09-18T00:00:00Z".to_owned())),
+            (label.to_owned(), WindowKind::SevenDayModel, Some("Fable".to_owned()), 38, Some("2026-09-18T00:00:00Z".to_owned())),
         ]
     };
     let mut want = want_for("a1");
@@ -2028,6 +2025,95 @@ fn fleet_select_run_prints_the_most_pressed_unlimited_account() {
     assert_eq!(found, Selection::Chosen("a2".to_owned()), "純関数の答え");
     assert_eq!(out_lines(&out), vec![select::line(Purpose::Run, &found)], "stdout は純関数の 1 行");
     drop_fixture(&fx);
+}
+
+/// 5 時間窓に消費の無い口座 a1（`five_hour` の reset が null）と、使用中の口座 a2（5h 50%）の置き場。
+/// a1 の 5 時間窓の本文は `idle_five` の字面で差し替える。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn idle_window_fixture(idle_five: &str) -> (UsageFixture, PathBuf) {
+    let (fx, curl) = select_fixture(&[("a1", 0, 10), ("a2", 50, 10)], true, Some("85"));
+    let body = format!(
+        r#"{{"five_hour":{idle_five},"seven_day":{{"utilization":10.0,"resets_at":"2099-01-07T00:00:00+00:00"}},"limits":[]}}"#
+    );
+    fs::write(fx.spy.join("body-tok-a1"), body).expect("本文を書ける");
+    (fx, curl)
+}
+
+/// 口座 a1 の 5 時間窓の最新の行。
+fn five_hour_of_a1(fx: &UsageFixture) -> Option<Allowance> {
+    allowances(fx)
+        .into_iter()
+        .rfind(|row| row.key() == allowance_key("a1", Some(WindowKind::FiveHour), None))
+}
+
+/// 5 時間窓が `{utilization: 0.0, resets_at: null}` の口座は `AllowanceMeasured used_pct=0`（reset 無し）で記録され、
+/// 便用の選定の候補に入る（ADR-0024 §2.1 / §2.2）。reset 無しは 1 行表示で `resets=none`。
+#[test]
+fn fleet_usage_idle_window_null_reset_is_measured_zero_and_a_run_candidate() {
+    let (fx, curl) = idle_window_fixture(r#"{"utilization":0.0,"resets_at":null}"#);
+    let out = run_select(&fx, &curl, &["--purpose", "run", "--exclude", "a2"]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{out:?}");
+    assert_eq!(out_lines(&out), vec!["select purpose=run chosen=a1".to_owned()], "消費の無い口座は候補: {out:?}");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("usage: account=a1 five_hour=0% resets=none seven_day=10% resets=2099-01-07T00:00:00Z"),
+        "reset 無しは明示の字面: {stderr}"
+    );
+    assert_eq!(
+        five_hour_of_a1(&fx),
+        Some(Allowance::Measured(Measured {
+            account: "a1".to_owned(),
+            window: WindowKind::FiveHour,
+            model: None,
+            endpoint: "oauth-usage".to_owned(),
+            used_pct: 0,
+            resets_at: None,
+        })),
+        "測れた 0%・reset 無し"
+    );
+    let events = fs::read_to_string(store::events_path(&fx.state)).expect("event log が在る");
+    let idle_line = events
+        .lines()
+        .find(|line| line.contains(r#""account":"a1""#) && line.contains(r#""window":"five_hour""#))
+        .expect("a1 の 5 時間窓の行が在る");
+    assert!(idle_line.contains(r#""kind":"AllowanceMeasured""#), "{idle_line}");
+    assert!(!idle_line.contains("resets_at"), "reset 無しの周は key を出さない: {idle_line}");
+    let out = run_select(&fx, &curl, &["--purpose", "run"]);
+    assert_eq!(out_lines(&out), vec!["select purpose=run chosen=a2".to_owned()], "便用は逼迫度の最大（a2 = 50）");
+    drop_fixture(&fx);
+}
+
+/// 5 時間窓の reset が null でも使用率が 0 でなければ（`utilization: 3.0`）ShapeMismatch のまま＝候補に入らない。
+#[test]
+fn fleet_usage_idle_window_nonzero_without_reset_stays_shape_mismatch() {
+    let (fx, curl) = idle_window_fixture(r#"{"utilization":3.0,"resets_at":null}"#);
+    let out = run_select(&fx, &curl, &["--purpose", "run", "--exclude", "a2"]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{out:?}");
+    assert_eq!(
+        out_lines(&out),
+        vec!["select purpose=run none=unmeasured earliest_reset=-".to_owned()],
+        "0 以外を reset 無しで記録しない: {out:?}"
+    );
+    assert_eq!(
+        five_hour_of_a1(&fx),
+        Some(unmeasured_window("a1", WindowKind::FiveHour)),
+        "shape_mismatch の Unmeasured"
+    );
+    drop_fixture(&fx);
+}
+
+/// 窓 1 つの ShapeMismatch（`fleet usage` の出所の識別子）。
+fn unmeasured_window(account: &str, window: WindowKind) -> Allowance {
+    Allowance::Unmeasured(Unmeasured {
+        account: account.to_owned(),
+        window: Some(window),
+        model: None,
+        endpoint: "oauth-usage".to_owned(),
+        reason: UnmeasuredReason::ShapeMismatch,
+    })
 }
 
 /// (2) `--exclude`（複数可）で席の口座を外す。外した残りが当たっていれば候補なし（rc 0）。

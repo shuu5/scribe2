@@ -699,7 +699,8 @@ fn reading(seated: &Seated, threshold: u64) -> Account {
 
 /// 口座の逼迫度（account-autonomy.md §3 の定義・model = 登録 row の `model`〔無い row は None＝全 model 窓の最大の
 /// 保守側〕）。窓の数え方は選定（[`crate::fleet::select`]）と同じ: 口座の最新の回のうち、数える窓に Unmeasured が
-/// 在れば測れない・reset を過ぎた行は数えない・残った窓の最大の使用率。数える窓が 1 つも無ければ `None`。
+/// 在れば測れない・reset を過ぎた行は数えない（reset 無しの行は古くない実測として数える・ADR-0024 §2.2）・残った窓の
+/// 最大の使用率。数える窓が 1 つも無ければ `None`。
 fn pressure(state: &State, label: &str, model: Option<&str>) -> Option<u64> {
     let mine: Vec<&AllowanceLatest> = state
         .allowance
@@ -713,7 +714,10 @@ fn pressure(state: &State, label: &str, model: Option<&str>) -> Option<u64> {
     for latest in mine.iter().filter(|latest| latest.ts == newest) {
         match &latest.allowance {
             Allowance::Unmeasured(row) if counted(model, row.window, row.model.as_deref()) => return None,
-            Allowance::Measured(row) if counted(model, Some(row.window), row.model.as_deref()) && row.resets_at >= now => {
+            Allowance::Measured(row)
+                if counted(model, Some(row.window), row.model.as_deref())
+                    && row.resets_at.as_deref().is_none_or(|resets_at| resets_at >= now.as_str()) =>
+            {
                 found = found.max(Some(row.used_pct));
             }
             Allowance::Unmeasured(_) | Allowance::Measured(_) => {}
@@ -987,7 +991,7 @@ mod tests {
             model: model.map(str::to_owned),
             endpoint: "oauth-usage".to_owned(),
             used_pct,
-            resets_at: resets_at.to_owned(),
+            resets_at: Some(resets_at.to_owned()),
         })
     }
 
@@ -1033,5 +1037,25 @@ mod tests {
         assert_eq!(pressure(&later, "a1", None), None, "最新の回が Unmeasured なら前の回の実測を読まない");
         let stale = table(&[(ts, vec![measured("a1", WindowKind::FiveHour, None, 99, PAST)])]);
         assert_eq!(pressure(&stale, "a1", None), None, "reset を過ぎた行だけ＝測れない");
+    }
+
+    /// 消費の無い窓（0%・reset 無し）は古くない実測として数える＝逼迫度が `None` に倒れない（ADR-0024 §2.2）。
+    #[test]
+    fn seat_account_pressure_counts_idle_window_without_reset() {
+        let ts = "2026-09-13T05:59:00Z";
+        let idle = |window| {
+            Allowance::Measured(Measured {
+                account: "a1".to_owned(),
+                window,
+                model: None,
+                endpoint: "oauth-usage".to_owned(),
+                used_pct: 0,
+                resets_at: None,
+            })
+        };
+        let only_idle = table(&[(ts, vec![idle(WindowKind::FiveHour), idle(WindowKind::SevenDay)])]);
+        assert_eq!(pressure(&only_idle, "a1", None), Some(0), "reset 無しだけでも測れた口座");
+        let mixed = table(&[(ts, vec![idle(WindowKind::FiveHour), measured("a1", WindowKind::SevenDay, None, 30, LATER)])]);
+        assert_eq!(pressure(&mixed, "a1", None), Some(30), "reset 無しの 0 は最大を動かさない");
     }
 }

@@ -192,19 +192,21 @@ fn standing(input: &Input<'_>, label: &str) -> Standing {
 
 /// 口座の（逼迫度・開き直る時刻）。逼迫度 = 数える窓のうち最大の使用率。開き直る時刻は当たっている
 /// 窓の reset の**遅い方**（全部の窓が開くまで当たったまま）。測れない口座は `None`。
+/// reset 無しの行は開き直る時刻の導出に入らない（待つ対象ではない・ADR-0024 §2.2）。
 fn reading(input: &Input<'_>, label: &str) -> Option<(u64, Option<String>)> {
     let windows = fresh_windows(input, label)?;
     let pressure = windows.iter().map(|found| found.used_pct).max()?;
     let reopens = windows
         .iter()
         .filter(|found| found.used_pct >= LIMIT_PCT)
-        .map(|found| found.resets_at.clone())
+        .filter_map(|found| found.resets_at.clone())
         .max();
     Some((pressure, reopens))
 }
 
 /// 口座の最新の回のうち、数える窓の古くない実測。数える窓に Unmeasured が在る・古くない実測が
-/// 1 つも無い周は `None`（測れない口座を選ばない・C10）。
+/// 1 つも無い周は `None`（測れない口座を選ばない・C10）。reset 無しの実測は古くない実測として
+/// 数える（古さの判定は reset 時刻を持つ行にだけ掛かる・ADR-0024 §2.2）。
 fn fresh_windows<'a>(input: &Input<'a>, label: &str) -> Option<Vec<&'a Measured>> {
     let mut fresh = Vec::new();
     for row in latest_round(input.allowance, label) {
@@ -216,7 +218,8 @@ fn fresh_windows<'a>(input: &Input<'a>, label: &str) -> Option<Vec<&'a Measured>
             }
             Allowance::Measured(found) => {
                 let counted = counts(input.model, Some(found.window), found.model.as_deref());
-                if counted && found.resets_at.as_str() >= input.now {
+                let not_stale = found.resets_at.as_deref().is_none_or(|resets_at| resets_at >= input.now);
+                if counted && not_stale {
                     fresh.push(found);
                 }
             }
@@ -292,7 +295,19 @@ mod tests {
             model: model.map(str::to_owned),
             endpoint: "oauth-usage".to_owned(),
             used_pct,
-            resets_at: resets_at.to_owned(),
+            resets_at: Some(resets_at.to_owned()),
+        })
+    }
+
+    /// 消費の無い窓の実測 1 行（0%・reset 無し）。
+    fn idle(account: &str, window: WindowKind) -> Allowance {
+        Allowance::Measured(Measured {
+            account: account.to_owned(),
+            window,
+            model: None,
+            endpoint: "oauth-usage".to_owned(),
+            used_pct: 0,
+            resets_at: None,
         })
     }
 
@@ -452,6 +467,29 @@ mod tests {
             choose(&["a1", "a3", "a5", "a6"], &rows, &run()),
             none(NoCandidateReason::Unmeasured, None),
             "最新が Unmeasured・古い行だけ・窓の欠け・行なし"
+        );
+    }
+
+    #[test]
+    fn select_counts_idle_window_without_reset_as_fresh_and_never_as_reopen_time() {
+        let rows = table(&[(TS, vec![
+            // a1: 5h は消費が無い（reset 無し）・7d は 20。
+            idle("a1", WindowKind::FiveHour),
+            measured("a1", WindowKind::SevenDay, None, 20, WEEK_RESET),
+            // a2: 2 窓とも消費が無い。
+            idle("a2", WindowKind::FiveHour),
+            idle("a2", WindowKind::SevenDay),
+            // a3: 7d が当たっている・5h は reset 無し。
+            idle("a3", WindowKind::FiveHour),
+            measured("a3", WindowKind::SevenDay, None, 100, WEEK_RESET),
+        ])]);
+        assert_eq!(choose(&["a1", "a2", "a3"], &rows, &run()), chosen("a1"), "reset 無しの窓は数える・逼迫度は最大の 20");
+        assert_eq!(choose(&["a2"], &rows, &run()), chosen("a2"), "全窓が reset 無しでも測れた口座");
+        assert_eq!(choose(&["a1", "a2"], &rows, &session()), chosen("a2"), "session 用は最小（0）");
+        assert_eq!(
+            choose(&["a3"], &rows, &run()),
+            none(NoCandidateReason::AllLimited, Some(WEEK_RESET)),
+            "reset 無しの行は開き直る時刻に入らない"
         );
     }
 

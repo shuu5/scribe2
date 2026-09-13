@@ -111,6 +111,9 @@ mod stamp {
 mod fleet {
     use super::{config, ident, json_text, Allowance, FleetEvent, EventKind, Measured, Registration, Stage, WindowKind, ACTOR_HUMAN, ACTOR_MACHINE, FLEET_SCHEMA, KINDS, ROLES, STAGES, WINDOWS};
     use proptest::prelude::*;
+    use std::collections::{BTreeMap, BTreeSet};
+    use vessel::fleet::select::{select, Input, NoCandidate, NoCandidateReason, Purpose, Selection};
+    use vessel::fleet::AllowanceLatest;
 
     /// 全 variant の字面と、その近傍（小文字化・英字だけの任意文字列）。
     fn kind_like() -> impl Strategy<Value = String> {
@@ -170,7 +173,8 @@ mod fleet {
             })
     }
 
-    /// 実測の中身 1 つ（`model` は `seven_day_model` の周だけ必ず持つ＝行の必須条件に合わせる）。
+    /// 実測の中身 1 つ（`model` は `seven_day_model` の周だけ必ず持つ＝行の必須条件に合わせる・`resets_at` は
+    /// 在る / 無い（消費の無い窓・ADR-0024 §2.1）の両方）。
     fn any_measured() -> impl Strategy<Value = Measured> {
         (
             json_text(),
@@ -178,7 +182,7 @@ mod fleet {
             prop::option::of(json_text()),
             ident(),
             any::<u64>(),
-            json_text(),
+            prop::option::of(json_text()),
         )
             .prop_map(|(account, window, model, endpoint, used_pct, resets_at)| Measured {
                 account,
@@ -288,7 +292,38 @@ mod fleet {
             // この字面を作ることはない。
             prop_assert!(!line.contains("\"run\":"), "{}", line);
             prop_assert!(!line.contains("\"bead\":"), "{}", line);
+            let has_reset = matches!(&event.allowance, Some(Allowance::Measured(found)) if found.resets_at.is_some());
+            prop_assert_eq!(line.contains("\"resets_at\":"), has_reset, "{}", line);
             prop_assert_eq!(FleetEvent::from_line(&line), Ok(event), "{}", line);
+        }
+
+        /// 実測 1 行だけの口座で、reset 無しの行は古くない実測として数え（測れない口座に倒れない）、
+        /// 開き直る時刻には入らない。reset を持つ行は「いま」以後だけを数える（ADR-0024 §2.2）。
+        #[test]
+        fn prop_select_counts_measured_without_reset_as_fresh(found in any_measured(), used_pct in 0_u64..=120) {
+            let found = Measured { used_pct, ..found };
+            let now = "2026-09-13T06:00:00Z";
+            let row = Allowance::Measured(found.clone());
+            let allowance = BTreeMap::from([(row.key(), AllowanceLatest { ts: "2026-09-13T05:59:00Z".to_owned(), allowance: row })]);
+            let labels = [found.account.clone()];
+            let picked = select(&Input {
+                labels: &labels,
+                allowance: &allowance,
+                purpose: Purpose::Run,
+                model: None,
+                exclude: &BTreeSet::new(),
+                threshold_pct: 85,
+                now,
+            });
+            let fresh = found.resets_at.as_deref().is_none_or(|resets_at| resets_at >= now);
+            let want = if !fresh {
+                Selection::None(NoCandidate { reason: NoCandidateReason::Unmeasured, earliest_reset: None })
+            } else if used_pct >= 100 {
+                Selection::None(NoCandidate { reason: NoCandidateReason::AllLimited, earliest_reset: found.resets_at.clone() })
+            } else {
+                Selection::Chosen(found.account.clone())
+            };
+            prop_assert_eq!(picked, want, "{:?}", found);
         }
 
         /// `Role` は全 variant で as_str → parse が戻り、列に無い字面は必ず `None`（設計 seat-roles.md §7）。

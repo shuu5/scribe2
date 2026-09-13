@@ -44,6 +44,9 @@ const RC_CLIENT_TIMEOUT: i32 = 28;
 /// モデル別 7 日窓を表す `limits[]` 要素の `kind`。
 const SCOPED_KIND: &str = "weekly_scoped";
 
+/// reset 無しの窓の表示の字面（`resets=none`）。
+const RESETS_NONE: &str = "none";
+
 /// credential の置き場（`<state_dir>/accounts/<label>/` の下）の file 名。
 const CREDENTIAL_FILE: &str = ".credentials.json";
 
@@ -387,7 +390,7 @@ fn value_key(window: WindowKind) -> &'static str {
 
 /// 窓 1 つ（値の field と `resets_at` を持つ object）を行にする。
 fn window_row(label: &str, window: WindowKind, model: Option<String>, node: Option<&Tree>) -> Allowance {
-    match node.and_then(|node| reading(node, value_key(window))) {
+    match node.and_then(|node| reading(node, window)) {
         Some((used_pct, resets_at)) => Allowance::Measured(Measured {
             account: label.to_owned(),
             window,
@@ -401,10 +404,16 @@ fn window_row(label: &str, window: WindowKind, model: Option<String>, node: Opti
 }
 
 /// 窓の object から（整数 %・正規化した reset）を読む。どちらかが読めなければ `None`。
-fn reading(node: &Tree, key: &str) -> Option<(u64, String)> {
-    let used_pct = whole_pct(node.get(key)?)?;
-    let resets_at = normalize_resets(node.get("resets_at")?.as_str()?)?;
-    Some((used_pct, resets_at))
+///
+/// `five_hour` / `seven_day` の窓に限り、`resets_at` が null（または不在）で使用率が **0** の周は
+/// 「測れた 0%・reset 未定」として reset 無しで読む（ADR-0024 §2.1）。0 以外を reset 無しで
+/// 記録しない（`None`＝ShapeMismatch）。`limits[]` の要素には掛けない。
+fn reading(node: &Tree, window: WindowKind) -> Option<(u64, Option<String>)> {
+    let used_pct = whole_pct(node.get(value_key(window))?)?;
+    match node.get("resets_at") {
+        None | Some(Tree::Null) if window != WindowKind::SevenDayModel && used_pct == 0 => Some((used_pct, None)),
+        found => Some((used_pct, Some(normalize_resets(found?.as_str()?)?))),
+    }
 }
 
 /// **すでに % の値**（`2.0` = 2%）を整数 % へ切り捨てる（cap しない）。負数と数でない値は `None`。
@@ -506,23 +515,22 @@ fn render(label: &str, rows: &[Allowance]) -> String {
     line
 }
 
-/// 窓 1 つの表示。
+/// 窓 1 つの表示。reset 無しは `resets=none` の字面（時刻の欄を空にしない・ADR-0024 §2.1）。
 fn part(row: &Allowance) -> String {
     match row {
-        Allowance::Measured(found) => match found.window {
-            WindowKind::FiveHour | WindowKind::SevenDay => format!(
-                "{}={}% resets={}",
-                found.window.as_str(),
-                found.used_pct,
-                found.resets_at
-            ),
-            WindowKind::SevenDayModel => format!(
-                "model={}:{}% resets={}",
-                found.model.as_deref().unwrap_or_default(),
-                found.used_pct,
-                found.resets_at
-            ),
-        },
+        Allowance::Measured(found) => {
+            let resets = found.resets_at.as_deref().unwrap_or(RESETS_NONE);
+            match found.window {
+                WindowKind::FiveHour | WindowKind::SevenDay => {
+                    format!("{}={}% resets={resets}", found.window.as_str(), found.used_pct)
+                }
+                WindowKind::SevenDayModel => format!(
+                    "model={}:{}% resets={resets}",
+                    found.model.as_deref().unwrap_or_default(),
+                    found.used_pct
+                ),
+            }
+        }
         Allowance::Unmeasured(found) => format!(
             "{}=unmeasured:{}",
             found.window.map_or("account", WindowKind::as_str),
@@ -634,6 +642,46 @@ mod tests {
                 "{bad} はその窓だけ shape_mismatch"
             );
         }
+    }
+
+    #[test]
+    fn fleet_usage_idle_window_null_or_absent_reset_reads_as_measured_zero_without_reset() {
+        let seven = r#""seven_day":{"utilization":1.0,"resets_at":"2026-09-18T00:00:00Z"},"limits":[]"#;
+        let tail = "seven_day=1% resets=2026-09-18T00:00:00Z";
+        for (five, name) in [
+            (r#"{"utilization":0.0,"resets_at":null}"#, "null"),
+            (r#"{"utilization":0.0}"#, "不在"),
+        ] {
+            let tree = parse(&format!(r#"{{"five_hour":{five},{seven}}}"#)).expect("fixture は JSON");
+            let rows = windows_of("a1", &tree);
+            assert!(
+                rows.iter().any(|row| matches!(row, Allowance::Measured(found)
+                    if found.window == WindowKind::FiveHour && found.used_pct == 0 && found.resets_at.is_none())),
+                "{name}: 測れた 0%・reset 無し: {rows:?}"
+            );
+            assert_eq!(render("a1", &rows), format!("usage: account=a1 five_hour=0% resets=none {tail}"), "{name}");
+        }
+        let busy = parse(&format!(r#"{{"five_hour":{{"utilization":3.0,"resets_at":null}},{seven}}}"#)).expect("fixture は JSON");
+        assert_eq!(
+            render("a1", &windows_of("a1", &busy)),
+            format!("usage: account=a1 five_hour=unmeasured:shape_mismatch {tail}"),
+            "0 以外を reset 無しで記録しない"
+        );
+        let bad = parse(&format!(r#"{{"five_hour":{{"utilization":0.0,"resets_at":5}},{seven}}}"#)).expect("fixture は JSON");
+        assert_eq!(
+            render("a1", &windows_of("a1", &bad)),
+            format!("usage: account=a1 five_hour=unmeasured:shape_mismatch {tail}"),
+            "null でも文字列でもない reset は形が違う"
+        );
+        let element = parse(
+            r#"{"five_hour":{"utilization":1.0,"resets_at":"2026-09-12T05:00:00Z"},"seven_day":{"utilization":1.0,"resets_at":"2026-09-18T00:00:00Z"},"limits":[{"kind":"weekly_scoped","percent":0,"resets_at":null,"scope":{"model":{"display_name":"Fable"}}}]}"#,
+        )
+        .expect("fixture は JSON");
+        let rows = windows_of("a1", &element);
+        assert!(
+            rows.iter().any(|row| matches!(row, Allowance::Unmeasured(found) if found.window == Some(WindowKind::SevenDayModel))),
+            "limits[] の要素には掛けない: {rows:?}"
+        );
     }
 
     #[test]

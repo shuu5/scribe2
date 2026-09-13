@@ -6641,7 +6641,7 @@ fn acct_measured(state: &Path, label: &str, pct: u64, ts: &str) {
             model: None,
             endpoint: "oauth-usage".to_owned(),
             used_pct,
-            resets_at: ACCT_RESET.to_owned(),
+            resets_at: Some(ACCT_RESET.to_owned()),
         });
         let event = Event {
             schema: SCHEMA,

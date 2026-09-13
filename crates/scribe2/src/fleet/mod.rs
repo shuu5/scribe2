@@ -385,8 +385,8 @@ pub struct Measured {
     pub endpoint: String,
     /// 使用率（整数 %・切り捨て・**100 で cap しない**）。
     pub used_pct: u64,
-    /// 窓が開き直る時刻。
-    pub resets_at: String,
+    /// 窓が開き直る時刻。`None` = 消費の無い窓（reset 未定・`used_pct` 0 の周に限る・ADR-0024 §2.1）。
+    pub resets_at: Option<String>,
 }
 
 /// 読めなかった 1 件。
@@ -440,7 +440,9 @@ impl Allowance {
                 let mut pairs = window_pairs(&found.account, Some(found.window), &found.model);
                 pairs.push(("endpoint", Value::Str(found.endpoint.clone())));
                 pairs.push(("used_pct", Value::Num(found.used_pct)));
-                pairs.push(("resets_at", Value::Str(found.resets_at.clone())));
+                if let Some(resets_at) = &found.resets_at {
+                    pairs.push(("resets_at", Value::Str(resets_at.clone())));
+                }
                 pairs
             }
             Self::Unmeasured(found) => {
@@ -704,6 +706,7 @@ fn forbid<'a>(pairs: &[(String, Value)], keys: impl IntoIterator<Item = &'a &'a 
 }
 
 /// `AllowanceMeasured` の field を読む。`seven_day_model` の行は `model` も必須。
+/// `resets_at` は任意（欠け = 消費の無い窓・在って文字列でなければ malformed・ADR-0024 §2.3）。
 fn measured_of(pairs: &[(String, Value)]) -> Result<Measured, String> {
     absent(field(pairs, "reason"), "reason")?;
     let window = window_of(field(pairs, "window"))?;
@@ -717,7 +720,7 @@ fn measured_of(pairs: &[(String, Value)]) -> Result<Measured, String> {
         model,
         endpoint: text_of(field(pairs, "endpoint"), "endpoint")?,
         used_pct: num_of(field(pairs, "used_pct"), "used_pct")?,
-        resets_at: text_of(field(pairs, "resets_at"), "resets_at")?,
+        resets_at: optional_text(field(pairs, "resets_at"), "resets_at")?,
     })
 }
 
