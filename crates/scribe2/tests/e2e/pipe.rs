@@ -142,11 +142,24 @@ fn repo_with_state() -> (PathBuf, PathBuf) {
 const STATE_LEAF: &str = "state";
 
 /// commit を 1 つ持つ tmp の git repo と、**指名した path** に紐づけた置き場を作る。
+fn repo_with_state_in(state: &Path) -> (PathBuf, PathBuf) {
+    repo_with_state_configured(state, &[])
+}
+
+/// auto maintenance を止めた config（loose object が pack へ詰まる経路を塞ぐ・`s2-07l.185`）。
+const NO_AUTO_MAINTENANCE: &[(&str, &str)] = &[
+    ("maintenance.auto", "false"),
+    ("maintenance.autoDetach", "false"),
+    ("gc.auto", "0"),
+    ("gc.autoDetach", "false"),
+];
+
+/// [`repo_with_state_in`] と同じ repo を、seed の commit を積む**前に** `config` を足して作る。
 #[expect(
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
-fn repo_with_state_in(state: &Path) -> (PathBuf, PathBuf) {
+fn repo_with_state_configured(state: &Path, config: &[(&str, &str)]) -> (PathBuf, PathBuf) {
     fs::create_dir_all(state).expect("置き場を作れる");
     let repo = tmp();
     // 設計 §5.4 の land は `refs/heads/main` を進める。`git init` の既定 branch 名は
@@ -154,6 +167,9 @@ fn repo_with_state_in(state: &Path) -> (PathBuf, PathBuf) {
     git(&repo, &["init", "-q", "-b", "main"]);
     git(&repo, &["config", "user.name", "e2e"]);
     git(&repo, &["config", "user.email", "e2e@example.invalid"]);
+    for (key, value) in config {
+        git(&repo, &["config", key, value]);
+    }
     fs::create_dir_all(repo.join("src")).expect("src dir を作れる");
     fs::write(repo.join("src").join("lib.rs"), "// seed\n").expect("seed を書ける");
     // **宣言も marker と一緒に commit する**（intake は HEAD の tree から読む＝作業ツリー
@@ -5346,9 +5362,17 @@ fn pipe_intake_names_ceiling_override_in_stdout() {
 /// `git rev-list --count` は通り、`git diff --name-only -z <base>..HEAD` だけが `unable to read tree`
 /// で落ちる＝precheck を抜けて段①に届く）。verdict は INCONCLUSIVE（既存 3 値の内側・rc 3）で、
 /// lens は呼ばれず（判定に届いていない）、verify.jsonl の段①の行は残る（現物を消さない）。
+///
+/// 消した後も tree が読める周が CI で出た（`s2-07l.185`・rc 1 の flaky）。読める経路の推定:
+/// spawn の worktree は object store を共有し、commit が起こす detached の auto maintenance が
+/// loose を pack へ詰めた周だけ読める（commit-graph は root tree の oid しか持たず中身は運ばない）。
+///
+/// そこで fixture の auto maintenance を seed の前に止め、消した直後に「読めない」を**前提として**
+/// assert する——崩れた周は `count-objects -v` の値付きで理由を出して落ちる（偽の緑にも偽の赤にもしない）。
+// flip-check: retroactive s2-07l.185
 #[test]
 fn pipe_gate_turns_unreadable_diff_into_inconclusive() {
-    let (repo, state) = repo_with_state();
+    let (repo, state) = repo_with_state_configured(&tmp().join(STATE_LEAF), NO_AUTO_MAINTENANCE);
     // 契約行に**赤い行を 1 本**混ぜる: 「測れなかったは赤より先」（判定順）と「段①の -1 は赤に
     // 数えないが ②③ の赤は数える」（`verify_red` = 1）を同じ便で測る。
     let path = write_contract(&repo, &["verify"], &[r#"verify = ["sh verify-ok.sh", "sh verify-red.sh"]"#]);
@@ -5358,6 +5382,17 @@ fn pipe_gate_turns_unreadable_diff_into_inconclusive() {
     let (head, tail) = tree.split_at(2);
     let object = repo.join(".git").join("objects").join(head).join(tail);
     fs::remove_file(&object).expect("base の tree object を消せる");
+    let readable = Command::new("git")
+        .arg("-C")
+        .arg(&repo)
+        .args(["cat-file", "-e", &tree])
+        .output()
+        .expect("git を起動できる");
+    assert!(
+        !readable.status.success(),
+        "前提: 読めない状態を作れなかった（loose を消しても tree {tree} が読める）: count-objects -v = {}",
+        git(&repo, &["count-objects", "-v"]).replace('\n', " ")
+    );
     let marker = state.join("lens-ran");
     let lens = fake_lens(&marker, &lens_verdict("PASS"));
     let out = gate_once(&repo, &state, &id, Some(&lens));
