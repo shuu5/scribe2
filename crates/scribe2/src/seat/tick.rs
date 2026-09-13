@@ -28,6 +28,14 @@
 //! まま上限に当たって止まり、planner / admin の仕事が他の便まで詰まらせるためである（user 直命 2026-09-12）。
 //! 測れない周は注入も停止もせず、打刻の合図だけを送らない（FR27 の条件に「使用率が閾値未満」が在る）。
 //!
+//! **退避後の終了の手**（account-autonomy.md §5「退避後の終了の手」・`s2-07l.226`・憲法 C9）: 立て直しの入口 (3)
+//! 「前面 process が shell」は誰かが session を終えた後にしか立たない（AC13 実演 2026-09-13 では planner が
+//! `/exit` を送った＝人手に依存）。登録 row の在る席で、直近の注入が退避の合図 ∧ その後の `Stop` ∧ 自席の未
+//! consumed 退避物が在る ∧ 前面が shell でない、の周は器が `/exit` を席の入力欄の門（cycle の `/clear` と同じ
+//! [`inject::guard_input`]）を通して注入し（`kind=exit`）、cycle-stamp を打つ（back-off は `s2-07l.110` の
+//! 既存の 1 本・再送しない）。次の周に前面が shell になれば立て直しの入口が立つ（入口 (1) は「直近の注入が
+//! `externalize` か `exit`」）。失うものが無い席（退避済み ∧ Stop）にだけ送る（N1）。
+//!
 //! **席の busy / idle は hook の打刻（[`state`]）が一次で、pane の字面は判定入力にしない**（憲法 C3.3・
 //! ADR-0015）。打刻が無い・読めない・Busy が古い周は理由を分けて注入しない（fail-closed）。pane を
 //! 読むのは context（statusline の数値）と注入の送達確認だけである。
@@ -61,6 +69,9 @@ const REASON_STATE_DIR: &str = "state-dir";
 const REASON_STAMP: &str = "stamp-unwritable";
 /// 退避を促す 1 行の skill 名（席の中で打つ command）。
 const EXTERNALIZE_SKILL: &str = "/ready-compaction";
+/// 退避して止まった席の session を終える 1 行（Claude Code の正規の終了・SessionEnd hook が走る・account-autonomy.md
+/// §5 / §10: Ctrl-C ×2 / Ctrl-D ×2 は timing と入力欄の空に依存するので採らない）。
+const EXIT: &str = "/exit";
 /// 口座の逼迫度の閾値（session 用・使用率の百分率）を宣言する rules 行の id（account-autonomy.md §3・値は code に
 /// 焼かない・C5）。
 const ID_THRESHOLD: &str = "R-C9-1";
@@ -112,8 +123,9 @@ pub enum TickDecision {
 /// 注入した 1 行の種類。**bool で持たない**（憲法 C11）。
 ///
 /// 分けるのは、促す行為が別物だからである——[`Self::Pointer`] は「打刻して続きへ」、
-/// [`Self::Externalize`] は「退避せよ」、[`Self::Relaunch`] は「別口座で立て直した」。記録に種類が残らないと、
-/// 席が退避の pointer を何度受けたか（storm の有無）を後から数えられない。
+/// [`Self::Externalize`] は「退避せよ」、[`Self::Relaunch`] は「別口座で立て直した」、[`Self::Exit`] は
+/// 「退避して止まった session を終えよ」。記録に種類が残らないと、席が退避の pointer を何度受けたか
+/// （storm の有無）を後から数えられない。
 #[derive(Clone, Copy)]
 pub enum InjectKind {
     /// 席に自分の打刻を促す 1 行（idle・退避物なし・lock 空きの揃った周）。
@@ -122,10 +134,18 @@ pub enum InjectKind {
     Externalize,
     /// 退避して止まった席を別口座で立て直した（起動の雛形と復元の 2 行・account-autonomy.md §5）。
     Relaunch,
+    /// 退避して止まった席（退避の合図 → `Stop` → 未 consumed 退避物 → 前面が shell でない）の session を終える
+    /// [`EXIT`] の 1 行（account-autonomy.md §5「退避後の終了の手」・立て直しの入口 (3) を人手なしで立てる）。
+    Exit,
 }
 
 /// [`InjectKind`] の全 variant（宣言順）。
-pub const INJECT_KINDS: &[InjectKind] = &[InjectKind::Pointer, InjectKind::Externalize, InjectKind::Relaunch];
+pub const INJECT_KINDS: &[InjectKind] = &[
+    InjectKind::Pointer,
+    InjectKind::Externalize,
+    InjectKind::Relaunch,
+    InjectKind::Exit,
+];
 
 impl InjectKind {
     /// 記録と表示に使う字面。
@@ -134,6 +154,7 @@ impl InjectKind {
             Self::Pointer => "pointer",
             Self::Externalize => "externalize",
             Self::Relaunch => "relaunch",
+            Self::Exit => "exit",
         }
     }
 }
@@ -623,16 +644,21 @@ enum Turn {
 }
 
 /// 口座の軸（account-autonomy.md §5・context の直後＝状態の門の外）: 登録 row の在る席だけ評価する。実測行が
-/// 古い周は計測を 1 回撃ってから逼迫度を読み（[`seated`]）、退避して止まった席は立て直し（[`relaunch_turn`]）、
-/// 閾値以上の席へは FR29 と同じ除外の下で idle を待たずに退避の合図を注入して自打刻する（[`account_signal`]）。
-/// 閾値未満・測れない・除外で注入しない周は逼迫度を持って次の条件へ（注入も停止もしない）。
+/// 古い周は計測を 1 回撃ってから逼迫度を読み（[`seated`]）、退避して止まった席は前面が shell なら立て直し
+/// （[`relaunch_turn`]）・shell でなければ終了の手（[`exit_turn`]・[`parked_entry`]）、閾値以上の席へは FR29 と
+/// 同じ除外の下で idle を待たずに退避の合図を注入して自打刻する（[`account_signal`]）。閾値未満・測れない・除外で
+/// 注入しない周は逼迫度を持って次の条件へ（注入も停止もしない）。
 fn account_turn(request: &Request, place: &super::StateDir, dir: &Path, seen: &Seen) -> Turn {
     let Some(seated) = seated(request, place, seen.stale_s) else {
         return Turn::Pass(Account::Unevaluated);
     };
     let account = reading(&seated, seen.threshold);
-    if relaunch_due(&place.path, request.target, request.socket, dir) {
-        return Turn::Settled(Verdict { account, ..relaunch_turn(request, place, dir, seen, &seated) });
+    match parked_entry(&place.path, request.target, request.socket, dir, &seen.wm) {
+        Entry::Relaunch => {
+            return Turn::Settled(Verdict { account, ..relaunch_turn(request, place, dir, seen, &seated) });
+        }
+        Entry::Exit => return Turn::Settled(Verdict { account, ..exit_turn(request, place, dir, seen) }),
+        Entry::None => {}
     }
     let Some(payload) = account_signal(&account, seen, dir) else {
         return Turn::Pass(account);
@@ -740,20 +766,42 @@ fn counted(model: Option<&str>, window: Option<WindowKind>, row_model: Option<&s
     }
 }
 
-/// 立て直しの入口（account-autonomy.md §5・3 条件が同時に立つ周）: (1) 自席への直近の注入の記録が退避の合図
-/// （[`last_externalize`]）(2) 打刻の最終行が `Stop` で、その ts が (1) より後（[`stopped_after`]）(3) pane の前面
-/// process が shell（[`super::pane_is_shell`]・tmux を撃つので最後）。(1) の無い停止（user の終了・crash）は
-/// 起こし直さない（器が起こしたのでない停止を器が起こし直さない）。
-fn relaunch_due(state_dir: &Path, target: &str, socket: Option<&str>, seat_dir: &Path) -> bool {
-    let Some(signalled) = last_externalize(state_dir, target) else {
-        return false;
-    };
-    stopped_after(seat_dir, signalled) && super::pane_is_shell(socket, target)
+/// 退避して止まった席の入口（account-autonomy.md §5）。**閉じた 3 値**（憲法 C11・bool で持たない）: 立て直しと
+/// 終了の手は同じ (1)(2) を共有し、前面 process の読みで分かれる。
+enum Entry {
+    /// 立て直し（前面が shell＝session は終わっている）。
+    Relaunch,
+    /// 終了の手（前面が shell でない ∧ 直近の合図が退避の合図 ∧ 自席の未 consumed 退避物が在る）。
+    Exit,
+    /// どちらも立たない（以後は既存の順序へ）。
+    None,
 }
 
-/// (1) `<state_dir>/inject.jsonl` の同じ席の最新行が tick の退避の合図（`who=seat-tick`・`kind=externalize`）なら、
-/// その ts。記録の形（判定行の `kind=` の token）は同じ module の [`body`] が書く。
-fn last_externalize(state_dir: &Path, target: &str) -> Option<u64> {
+/// 入口の条件（順序固定・tmux を撃つ前面の読みは最後）: (1) 自席への直近の注入の記録が tick の合図（退避の合図か
+/// 終了の合図・[`last_signal`]）(2) 打刻の最終行が `Stop`（[`stopped_after`]・退避の合図の周はその ts が (1) より後）
+/// (3) pane の前面 process が shell（[`super::pane_is_shell`]）なら立て直し。shell でない周は、直近が退避の合図
+/// （終了の合図の後は再送しない・back-off は送れなかった周のためにある）∧ 自席の未 consumed 退避物が在る
+/// （FR28「退避物が無い session には撃たない」と同じ極性）なら終了の手。(1) の無い停止（user の終了・crash）は
+/// 起こし直しも終了もしない（器が起こしたのでない停止に器が手を出さない）。
+fn parked_entry(state_dir: &Path, target: &str, socket: Option<&str>, seat_dir: &Path, wm: &WmScan) -> Entry {
+    let Some((kind, signalled)) = last_signal(state_dir, target) else {
+        return Entry::None;
+    };
+    if !stopped_after(seat_dir, kind, signalled) {
+        return Entry::None;
+    }
+    if super::pane_is_shell(socket, target) {
+        return Entry::Relaunch;
+    }
+    match (kind, wm) {
+        (InjectKind::Externalize, WmScan::Unconsumed(_)) => Entry::Exit,
+        _ => Entry::None,
+    }
+}
+
+/// (1) `<state_dir>/inject.jsonl` の同じ席の最新行が tick の合図（`who=seat-tick`・`kind=externalize` か `kind=exit`）
+/// なら、その種類と ts。記録の形（判定行の `kind=` の token）は同じ module の [`body`] が書く。
+fn last_signal(state_dir: &Path, target: &str) -> Option<(InjectKind, u64)> {
     let seat = seat_name(target)?;
     let text = std::fs::read_to_string(inject_path(state_dir)).ok()?;
     let last = text
@@ -762,11 +810,14 @@ fn last_externalize(state_dir: &Path, target: &str) -> Option<u64> {
         .filter_map(|line| json_lite::parse_object(line).ok())
         .find(|pairs| field(pairs, "seat").and_then(Value::as_str) == Some(seat.as_str()))?;
     let what = field(&last, "what").and_then(Value::as_str)?;
-    let kind = what.split_whitespace().find_map(|token| token.strip_prefix("kind="));
-    let signalled = field(&last, "who").and_then(Value::as_str) == Some(WHO)
-        && what.starts_with("decision=inject ")
-        && kind == Some(InjectKind::Externalize.as_str());
-    signalled.then(|| field(&last, "ts").and_then(Value::as_num)).flatten()
+    if field(&last, "who").and_then(Value::as_str) != Some(WHO) || !what.starts_with("decision=inject ") {
+        return None;
+    }
+    let token = what.split_whitespace().find_map(|token| token.strip_prefix("kind="))?;
+    let kind = [InjectKind::Externalize, InjectKind::Exit]
+        .into_iter()
+        .find(|kind| kind.as_str() == token)?;
+    Some((kind, field(&last, "ts").and_then(Value::as_num)?))
 }
 
 /// 記録 1 行の key の値。
@@ -774,14 +825,71 @@ fn field<'a>(pairs: &'a [(String, Value)], key: &str) -> Option<&'a Value> {
     pairs.iter().find(|(found, _)| found == key).map(|(_, value)| value)
 }
 
-/// (2) 打刻の最終行が `Stop` で、その ts が `after` より後か（読めない・無い周は偽＝起こさない側）。
-fn stopped_after(seat_dir: &Path, after: u64) -> bool {
+/// (2) 打刻の最終行が `Stop` か（読めない・無い周は偽＝起こさない側）。退避の合図の周は、その ts が合図（`after`）
+/// より後であること（合図に応えて退避し、止まった）。終了の合図の周は ts の前後を問わない: `/exit` は打刻を
+/// 積まず（`Event` は 3 値・seat-state.md §6・終了の hook は無い）、`Stop` が合図より前なのは終了の合図を送った
+/// 条件そのもの（退避の合図 → その後の `Stop` → `/exit`）で、席が続きを始めた周は最終行が `UserPromptSubmit` に
+/// なるので偽。
+fn stopped_after(seat_dir: &Path, kind: InjectKind, after: u64) -> bool {
     let text = std::fs::read_to_string(state::path(seat_dir)).unwrap_or_default();
     text.lines()
         .rev()
         .find(|line| !line.trim().is_empty())
         .and_then(|line| state::Stamp::from_line(line).ok())
-        .is_some_and(|stamp| stamp.event == state::Event::Stop && stamp.ts > after)
+        .is_some_and(|stamp| {
+            stamp.event == state::Event::Stop && (matches!(kind, InjectKind::Exit) || stamp.ts > after)
+        })
+}
+
+/// 退避後の終了の手（account-autonomy.md §5・`s2-07l.226`）: 入口（[`parked_entry`]）の後は cycle lock（FR29 と同じ
+/// 除外・作り直しの最中の席へ送らない）→ back-off（`s2-07l.110` の cycle-stamp・閾値は `seat.tick_stale_s`・立て直しと
+/// 同じ 1 本）→ [`send_exit`]。見送った周の理由は既存の語（`cycle-live` / `cycle-recent` / `cycle-stamp-unreadable`）。
+fn exit_turn(request: &Request, place: &super::StateDir, dir: &Path, seen: &Seen) -> Verdict {
+    if cycle::lock_is_live(dir, seen.ttl_s) {
+        return Verdict::of(TickDecision::Noop(NoopReason::CycleLive));
+    }
+    let (stamp, blocked) = back_off(dir, seen.stale_s);
+    if let Some(reason) = blocked {
+        return held(stamp, reason);
+    }
+    Verdict { stamp: Some(stamp), ..Verdict::of(send_exit(request, place, dir)) }
+}
+
+/// [`EXIT`] を 1 行注入する（順序固定）: 入力欄の門（cycle の `/clear` と同じ [`inject::guard_input`]・断りは
+/// `input-busy` / `input-unknown` で **1 key も送らない**）→ cycle-stamp（write-ahead・打てない周は送らない＝次の周も
+/// 送りうる形を作らない）→ `seat inject` と同じ経路で送達を確かめる。
+///
+/// Enter の修復（[`inject::nudge_enter`]）は通さない: `/exit` を受けた席は打刻を積まずに終わるので消費は測れず、終わった
+/// 席の pane に残る古い `❯ /exit` 行を入力欄と読んで **shell へ Enter を送る**形になる（人の打ちかけを submit する
+/// 事故の向き）。送れなかった周は `exit-<理由>` の error（rc 1）で記録に `kind=exit` は残らず、次の周は back-off の
+/// 後に同じ入口から送り直す。
+fn send_exit(request: &Request, place: &super::StateDir, dir: &Path) -> TickDecision {
+    let Some(pane) = pane_of(request.socket, request.target, request.capture_file) else {
+        return exit_error(cycle::REASON_PANE_MISSING);
+    };
+    match inject::guard_input(&pane) {
+        Ok(()) => {}
+        Err(inject::InputGate::Busy) => return exit_error(cycle::REASON_INPUT_BUSY),
+        Err(inject::InputGate::UnknownInput) => return exit_error(cycle::REASON_INPUT_UNKNOWN),
+    }
+    if std::fs::write(cycle::stamp_path(dir), format!("{}\n", state::now_secs())).is_err() {
+        return exit_error(cycle::REASON_STAMP);
+    }
+    let sending = inject::Request {
+        target: request.target,
+        socket: request.socket,
+        payload: EXIT,
+        state_dir: Some(place),
+    };
+    match inject::deliver(&sending) {
+        inject::Delivery::Refused(reason) | inject::Delivery::Unconfirmed(reason) => exit_error(reason),
+        inject::Delivery::Delivered(_, settled) => TickDecision::Inject(InjectKind::Exit, settled),
+    }
+}
+
+/// 終了の手を送れなかった周の判定（`exit-` を前置きして注入の断りや noop の語彙と分ける・[`inject_line`] と同型）。
+fn exit_error(reason: &str) -> TickDecision {
+    TickDecision::Error(format!("exit-{reason}"))
 }
 
 /// 退避して止まった席の立て直し（account-autonomy.md §5）: back-off（`s2-07l.110` の cycle-stamp・閾値は
@@ -984,7 +1092,7 @@ mod tests {
         );
         assert!(is_declaration_order(NOOP_REASONS, |reason| reason as usize));
         let kinds: Vec<&str> = INJECT_KINDS.iter().map(|kind| kind.as_str()).collect();
-        assert_eq!(kinds, ["pointer", "externalize", "relaunch"]);
+        assert_eq!(kinds, ["pointer", "externalize", "relaunch", "exit"]);
         assert!(is_declaration_order(INJECT_KINDS, |kind| kind as usize));
     }
 

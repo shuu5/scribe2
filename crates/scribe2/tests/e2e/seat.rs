@@ -7430,3 +7430,280 @@ fn seat_tick_rules_accounts_without_rules_uses_the_embedded_accounts() {
     assert_eq!(acct_curl_calls(&place), 1, "埋め込みの宣言の口座を計測する");
     fs::remove_dir_all(&place.dir).ok();
 }
+
+// ─────────────────── 退避後の終了の手（account-autonomy.md §5・`s2-07l.226`・接頭辞 `seat_exit_`） ───────────────────
+
+/// 終了の手を受けた席が写す 1 行の置き場（名に `/exit` を含めない＝送達の目印の出現数を pane の echo で汚さない）。
+const EXIT_LOG: &str = "received.log";
+
+/// pane の前面 process の名（`#{pane_current_command}`・器の入口 (3) と同じ typed な読み）。
+fn exit_foreground(place: &AcctPlace, name: &str) -> String {
+    let out = tmux(&place.socket, &["list-panes", "-t", name, "-F", "#{pane_current_command}"]);
+    String::from_utf8_lossy(&out.stdout).trim().to_owned()
+}
+
+/// 前面が `want` になるまで待つ（上限 [`PROMPT_WAIT`]）。
+fn exit_wait_foreground(place: &AcctPlace, name: &str, want: &str) -> bool {
+    let deadline = Instant::now().checked_add(PROMPT_WAIT);
+    while deadline.is_some_and(|at| Instant::now() < at) {
+        if exit_foreground(place, name) == want {
+            return true;
+        }
+        sleep(Duration::from_millis(100));
+    }
+    false
+}
+
+/// 前面が shell でない偽の席にする: `sh -i` の session（[`start_seat`]）に、prompt `❯ ` を描いて **1 行だけ読む `head`** を
+/// 走らせる。前面 process は `head`（shell の列の外＝入口 (3) は立たない）で、受けた 1 行を [`EXIT_LOG`] に写して終わり、
+/// shell へ戻る（`/exit` を受けた席が終わる形）。前面が `head` になったかを返す。
+fn exit_seat(place: &AcctPlace, name: &str) -> bool {
+    let line = format!("printf '\\342\\235\\257 '; head -n 1 >> '{}'", place.dir.join(EXIT_LOG).display());
+    tmux(&place.socket, &["send-keys", "-t", name, "-l", &line]).status.success()
+        && tmux(&place.socket, &["send-keys", "-t", name, "Enter"]).status.success()
+        && exit_wait_foreground(place, name, "head")
+}
+
+/// 退避して止まり、前面が shell でない席の fixture: [`start_seat`] → 退避の合図 → `Stop`（[`acct_parked`]・候補 a2 = 30）→
+/// 自席の未 consumed 退避物 → 前面を `head` に（退避の合図は前の `sh -i` が受ける＝`head` は 1 行も読んでいない）。
+fn exit_parked(place: &AcctPlace, name: &str) -> IsolatedSeat {
+    let guard = start_seat(&place.socket, name);
+    assert!(guard.ready(), "独立 socket に session を立てられる");
+    acct_parked(place, name, &acct_launcher(place, name), 30);
+    wm_file(&place.wm, "working-memory.parked.md", name);
+    assert!(exit_seat(place, name), "前面が head の席を作れる");
+    assert_eq!(exit_received(place), "", "head はまだ 1 行も読んでいない");
+    guard
+}
+
+/// 席が受けた 1 行（受けていなければ空・`>>` は開いた時点で空 file を作る）。
+fn exit_received(place: &AcctPlace) -> String {
+    fs::read_to_string(place.dir.join(EXIT_LOG)).unwrap_or_default()
+}
+
+/// 送らなかった周の 3 面: 席は 1 行も受けていない・cycle-stamp を打っていない・前面は `head` のまま（席は生きている）。
+fn exit_assert_not_sent(place: &AcctPlace, name: &str, case: &str) {
+    assert_eq!(exit_received(place), "", "{case}: 1 key も送らない");
+    assert!(!seat_dir_of(&place.state, name).join("cycle-stamp").exists(), "{case}: cycle-stamp を打たない");
+    assert_eq!(exit_foreground(place, name), "head", "{case}: 席は生きたまま");
+}
+
+/// (a) 退避の合図 → `Stop` → 自席の未 consumed 退避物 → 前面が shell でない（`head`）の周: 器が `/exit` を入力欄の門を
+/// 通して注入し（判定行 `decision=inject … kind=exit`・席が受けた 1 行は `/exit`）、cycle-stamp を打ち、注入の記録が
+/// `inject.jsonl` の同じ形（`who=seat-tick`・`kind=exit`）で残る。受けた席は終わって前面が shell へ戻る（次の周の
+/// 立て直しの入口 (3)）。base は機能不在＝退避物の在る周は `/clear` の cycle に落ちる（RED）。
+#[test]
+fn seat_exit_injects_exit_to_the_parked_seat_and_stamps() {
+    let place = acct_place();
+    let name = "exitsend";
+    let guard = exit_parked(&place, name);
+
+    let out = acct_tick(&place, name, None);
+
+    let line = stdout_of(&out);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stdout={line} stderr={}", stderr_of(&out));
+    for (key, want) in [("decision", "inject"), ("kind", "exit"), ("consumed", "false"), ("account", "a1:100")] {
+        assert_eq!(tick_token(&line, key).as_deref(), Some(want), "{key}: {line}");
+    }
+    assert_eq!(tick_token(&line, "cycle"), None, "/clear の cycle は回さない: {line}");
+    assert_eq!(exit_received(&place), "/exit\n", "席が受けた 1 行は /exit");
+    assert!(seat_dir_of(&place.state, name).join("cycle-stamp").exists(), "cycle-stamp を打つ");
+    let log = fs::read_to_string(place.state.join("inject.jsonl")).unwrap_or_default();
+    let last = log.lines().last().unwrap_or_default();
+    assert_eq!(acct_text(last, "who").as_deref(), Some("seat-tick"), "{log}");
+    assert_eq!(acct_text(last, "seat").as_deref(), Some(name), "{log}");
+    assert!(acct_text(last, "what").is_some_and(|what| what.contains(" kind=exit")), "判定行と同じ字面: {log}");
+    assert_eq!(acct_injected(&place.state, name).last().map(String::as_str), Some("/exit"), "seat inject の経路で送る");
+    assert!(exit_wait_foreground(&place, name, "sh"), "受けた席は終わって前面が shell へ戻る");
+    drop(guard);
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (b) 自席の未 consumed 退避物が無い周は `/exit` を送らない（FR28 と同じ極性）: 閾値以上の口座は (1) の退避の合図の側へ
+/// 落ち、席が受ける 1 行は退避の合図であって `/exit` ではない。cycle-stamp も打たない。
+#[test]
+fn seat_exit_is_not_sent_without_an_unconsumed_wm() {
+    let place = acct_place();
+    let name = "exitnowm";
+    let guard = start_seat(&place.socket, name);
+    assert!(guard.ready(), "独立 socket に session を立てられる");
+    acct_parked(&place, name, &acct_launcher(&place, name), 30);
+    assert!(exit_seat(&place, name), "前面が head の席を作れる");
+
+    let out = acct_tick(&place, name, None);
+
+    let line = stdout_of(&out);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stdout={line} stderr={}", stderr_of(&out));
+    assert_eq!(tick_token(&line, "kind").as_deref(), Some("externalize"), "退避の合図の側へ落ちる: {line}");
+    let received = exit_received(&place);
+    assert!(received.contains("/ready-compaction") && !received.contains("/exit"), "席が受けたのは退避の合図: {received}");
+    assert!(!seat_dir_of(&place.state, name).join("cycle-stamp").exists(), "cycle-stamp を打たない");
+    drop(guard);
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (c) cycle lock が live な周は送らない（`noop reason=cycle-live`・作り直しの最中の席へ重ねない）。
+#[test]
+fn seat_exit_is_not_sent_while_the_cycle_lock_is_live() {
+    let place = acct_place();
+    let name = "exitlock";
+    let guard = exit_parked(&place, name);
+    fs::write(seat_dir_of(&place.state, name).join("cycle.lock"), "{}\n").ok();
+
+    let out = acct_tick(&place, name, None);
+
+    let line = stdout_of(&out);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stdout={line} stderr={}", stderr_of(&out));
+    for (key, want) in [("decision", "noop"), ("reason", "cycle-live"), ("account", "a1:100")] {
+        assert_eq!(tick_token(&line, key).as_deref(), Some(want), "{key}: {line}");
+    }
+    exit_assert_not_sent(&place, name, "cycle-live");
+    drop(guard);
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (d) 入力欄に文字（打ちかけ `draft`）が在る周は入力欄の門で断る（`decision=error reason=exit-input-busy`・rc 1）: 1 key も
+/// 送らず、cycle-stamp も打たず、打ちかけは触られない。
+#[test]
+fn seat_exit_refuses_when_the_input_line_is_busy() {
+    let place = acct_place();
+    let name = "exitdraft";
+    let guard = exit_parked(&place, name);
+    assert!(tmux(&place.socket, &["send-keys", "-t", name, "-l", "draft"]).status.success());
+    assert!(acct_wait_pane(&place, name, |pane| pane.trim_end().ends_with("\u{276f} draft")), "打ちかけが描かれる");
+
+    let out = acct_tick(&place, name, None);
+
+    let line = stderr_of(&out);
+    assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "stdout={} stderr={line}", stdout_of(&out));
+    for (key, want) in [("decision", "error"), ("reason", "exit-input-busy")] {
+        assert_eq!(tick_token(&line, key).as_deref(), Some(want), "{key}: {line}");
+    }
+    exit_assert_not_sent(&place, name, "input-busy");
+    assert!(capture(&place.socket, name).trim_end().ends_with("\u{276f} draft"), "打ちかけは触られない");
+    drop(guard);
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (e) back-off: cycle-stamp が `seat.tick_stale_s` 未満の前なら送らず（`cycle-recent`）打ち直しもしない（打ち直すと永久に
+/// 止まる）。stamp が閾値以上前になった周は同じ入口から送る（打ち直す）。
+#[test]
+fn seat_exit_backs_off_by_the_cycle_stamp_without_restamping() {
+    let place = acct_place();
+    let name = "exitbackoff";
+    let guard = exit_parked(&place, name);
+    let stamp = seat_dir_of(&place.state, name).join("cycle-stamp");
+    fs::write(&stamp, "0\n").ok();
+    let stamped_at = mtime_of(&stamp);
+
+    let first = acct_tick(&place, name, None);
+
+    let line = stdout_of(&first);
+    assert_eq!(rc_of(&first), i32::from(RC_OK), "1 周目: stdout={line} stderr={}", stderr_of(&first));
+    for (key, want) in [("decision", "noop"), ("reason", "cycle-recent")] {
+        assert_eq!(tick_token(&line, key).as_deref(), Some(want), "1 周目 {key}: {line}");
+    }
+    assert_eq!(exit_received(&place), "", "1 周目: 1 key も送らない");
+    assert_eq!(mtime_of(&stamp), stamped_at, "1 周目: 見送った周は stamp を打ち直さない");
+    assert_eq!(exit_foreground(&place, name), "head", "1 周目: 席は生きたまま");
+
+    backdate(&stamp, STALE_S + 1);
+    let second = acct_tick(&place, name, None);
+
+    let line = stdout_of(&second);
+    assert_eq!(rc_of(&second), i32::from(RC_OK), "2 周目: stdout={line} stderr={}", stderr_of(&second));
+    assert_eq!(tick_token(&line, "kind").as_deref(), Some("exit"), "2 周目: stamp が古くなれば送る: {line}");
+    assert_eq!(exit_received(&place), "/exit\n", "2 周目: 席が /exit を受ける");
+    assert!(mtime_of(&stamp) > stamped_at, "2 周目: 送った周は stamp を打ち直す");
+    drop(guard);
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (f) 次の周: 直近の注入が `exit` ∧ 前面が shell（席が終わった）なら立て直しの入口が立ち、雛形の穴が選んだ口座（a2）の
+/// credential dir で埋まった起動と復元がこの順で注入される（`kind=relaunch`・席の記録は 退避の合図 → `/exit` → 起動 →
+/// 復元 の 4 行・登録 row の口座は a2 に）。base は入口 (1) が `exit` を読まず立て直さない（RED）。
+#[test]
+fn seat_exit_then_shell_relaunches_on_the_next_round() {
+    let place = acct_place();
+    let name = "exitrelaunch";
+    let guard = exit_parked(&place, name);
+    let first = stdout_of(&acct_tick(&place, name, None));
+    assert_eq!(tick_token(&first, "kind").as_deref(), Some("exit"), "1 周目は終了の手: {first}");
+    assert!(exit_wait_foreground(&place, name, "sh"), "席が終わって前面が shell へ戻る");
+    assert!(acct_shell_prompt(&place, name, ""), "shell の prompt を描ける");
+    backdate(&seat_dir_of(&place.state, name).join("cycle-stamp"), STALE_S + 1);
+
+    let out = acct_tick(&place, name, None);
+
+    let line = stdout_of(&out);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stdout={line} stderr={}", stderr_of(&out));
+    for (key, want) in [("decision", "inject"), ("kind", "relaunch"), ("consumed", "true"), ("relaunch", ACCT_SPARE)] {
+        assert_eq!(tick_token(&line, key).as_deref(), Some(want), "{key}: {line}");
+    }
+    assert_eq!(
+        fs::read_to_string(place.dir.join("launched")).unwrap_or_default(),
+        format!("{}\n", place.state.join("accounts").join(ACCT_SPARE).display()),
+        "穴は選んだ口座の credential dir で埋まる"
+    );
+    assert_eq!(fs::read_to_string(place.dir.join("seat.log")).unwrap_or_default(), "/rebrief\n", "立ち上がった席が復元を受けた");
+    let sent = acct_sent(&place.state, name);
+    assert_eq!(sent.len(), 4, "退避の合図・/exit・起動・復元の 4 行: {sent:?}");
+    assert_eq!(sent.get(1).map(String::as_str), Some("/exit"), "2 行目は終了の手: {sent:?}");
+    assert!(sent.get(2).is_some_and(|what| what.starts_with("sh ")), "3 行目は起動の雛形: {sent:?}");
+    assert_eq!(sent.get(3).map(String::as_str), Some("/rebrief"), "4 行目は復元: {sent:?}");
+    acct_assert_relabelled(&place, name);
+    drop(guard);
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (g) 前面が shell の周（session は終わっている）は `/exit` を送らない: 入口は立て直しの側で、候補が無ければ
+/// `account-no-candidate`（shell へ `/exit` が届かない・記録は退避の合図だけ・cycle-stamp なし）。
+#[test]
+fn seat_exit_is_not_sent_to_a_shell() {
+    let place = acct_place();
+    let name = "exitshell";
+    let guard = start_seat(&place.socket, name);
+    assert!(guard.ready(), "独立 socket に shell の session を立てられる");
+    acct_parked(&place, name, &acct_launcher(&place, name), 90);
+    wm_file(&place.wm, "working-memory.parked.md", name);
+    assert!(acct_shell_prompt(&place, name, ""), "shell の prompt を描ける");
+
+    let out = acct_tick(&place, name, None);
+
+    let line = stdout_of(&out);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stdout={line} stderr={}", stderr_of(&out));
+    for (key, want) in [("decision", "noop"), ("reason", "account-no-candidate"), ("relaunch", "none:over-threshold")] {
+        assert_eq!(tick_token(&line, key).as_deref(), Some(want), "{key}: {line}");
+    }
+    assert_eq!(tick_token(&line, "kind"), None, "注入していない: {line}");
+    assert!(!capture(&place.socket, name).contains("/exit"), "shell へ /exit を送らない");
+    assert_eq!(acct_injected(&place.state, name).len(), 1, "記録は 1 周目の退避の合図だけ");
+    assert!(!seat_dir_of(&place.state, name).join("cycle-stamp").exists(), "cycle-stamp を打たない");
+    drop(guard);
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (h) 打刻の最終行が `Stop` より後の `UserPromptSubmit`（席が続きを始めた）なら送らない: 入口 (2) が立たず、以後は既存の
+/// 順序どおり `noop reason=busy`（1 key も送らない・cycle-stamp なし・席は生きたまま）。
+#[test]
+fn seat_exit_is_not_sent_when_the_seat_resumed_after_stop() {
+    let place = acct_place();
+    let name = "exitresumed";
+    let guard = exit_parked(&place, name);
+    let file = state_file(&seat_dir_of(&place.state, name));
+    let mut text = fs::read_to_string(&file).unwrap_or_default();
+    text.push_str(&stamp_line("busy", "UserPromptSubmit", unix_now().saturating_add(2), ACCT_SID));
+    text.push('\n');
+    fs::write(&file, text).ok();
+
+    let out = acct_tick(&place, name, None);
+
+    let line = stdout_of(&out);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stdout={line} stderr={}", stderr_of(&out));
+    for (key, want) in [("decision", "noop"), ("reason", "busy"), ("account", "a1:100")] {
+        assert_eq!(tick_token(&line, key).as_deref(), Some(want), "{key}: {line}");
+    }
+    exit_assert_not_sent(&place, name, "resumed");
+    drop(guard);
+    fs::remove_dir_all(&place.dir).ok();
+}
