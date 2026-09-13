@@ -66,7 +66,7 @@
 <section id="s1-question" class="informative">
 <h2>§1. 問い（何を調べたか）</h2>
 <p class="section-essence" data-audience="human">「AI に、一番怠け者の上級開発者のように振る舞わせる」skill である ponytail の中身は何か。それを、散文の規則を規則と認めない scribe2（憲法 N2 / C1.2）にどう写せるかを調べました。結論の候補は 3 つの口（審査の観点・便の規模の検出線・はしごの typed な宣言）に分けることです。</p>
-<p data-audience="machine">問いは 3 つ。(1) ponytail が実際に何を agent に課しているか（skill の本文・付属の review・強度・強制の有無）。(2) その主張（code −54% 等）は独立に測られているか。(3) scribe2 の憲法（<a href="../spec/constitution.html#n2">N2</a>・<a href="../spec/constitution.html#c1-2">C1.2</a>・<a href="../spec/constitution.html#c2">C2</a>・<a href="../spec/constitution.html#c4">C4</a>・<a href="../spec/constitution.html#c13">C13</a>・<a href="../spec/constitution.html#c12-4">C12.4</a>）の下で、どの部分を機械の口に写せ、どの部分が散文（lens の判断）に残るか。</p>
+<p data-audience="machine">問いは 3 つ。(1) ponytail が実際に何を agent に課しているか（skill の本文・付属の review・強度・強制の有無）。(2) その主張（code −54% 等）は独立に測られているか。(3) scribe2 の憲法（<a href="../spec/constitution.html#n2">N2</a>・<a href="../spec/constitution.html#c1">C1.2</a>・<a href="../spec/constitution.html#c2">C2</a>・<a href="../spec/constitution.html#c4">C4</a>・<a href="../spec/constitution.html#c13">C13</a>・<a href="../spec/constitution.html#c12">C12.4</a>）の下で、どの部分を機械の口に写せ、どの部分が散文（lens の判断）に残るか。</p>
 </section>
 
 <section id="s2-object" class="informative">
@@ -114,7 +114,7 @@
   <thead><tr><th>案</th><th>何を作るか</th><th>機械が保証するもの</th><th>散文に残るもの</th><th>要る手続き</th><th>大きさ</th></tr></thead>
   <tbody>
     <tr><td>(1) lens の観点</td><td>lens の findings の category（closed enum）に ponytail-review の 5 種を足す。prompt の観点は pointer 付きの行として雛形へ（台帳 s2-07l.176 と同じ便で snapshot 化）</td><td>findings の型と件数・母集団（「0 件」と「未測」の弁別・台帳 s2-07l.175）</td><td>各 finding の判断そのもの</td><td>契約 1 本（設計 doc の改訂）</td><td>S</td></tr>
-    <tr><td>(2) 便の規模の検出線</td><td>便ごとに「契約の size（S / M / L）・src の diff 行数・触った file 数・新しい pub symbol の数」を land の record に残す（<a href="../spec/constitution.html#c10">C10</a>: まず測る）。閾値は<strong>持たない</strong>。分布が出た後に rules 行 1 本（例: size ごとの src 行数の上限）を裁定 id 付きで足し、検出線（<a href="../spec/constitution.html#c12-4">C12.4</a>・deny ではない）に昇格するのは裁定</td><td>宣言した size に対して大きすぎる便の検知（記録時点の 17 便の実績: S = +78〜+412 行・M = +1037〜+1810 行）</td><td>「標準 library の作り直し」「1 実装の抽象」の判定（(1) が担う）</td><td>契約 1 本（record の任意 field・schema 1 のまま）+ 後日の裁定 1 件</td><td>S〜M</td></tr>
+    <tr><td>(2) 便の規模の検出線</td><td>便ごとに「契約の size（S / M / L）・src の diff 行数・触った file 数・新しい pub symbol の数」を land の record に残す（<a href="../spec/constitution.html#c10">C10</a>: まず測る）。閾値は<strong>持たない</strong>。分布が出た後に rules 行 1 本（例: size ごとの src 行数の上限）を裁定 id 付きで足し、検出線（<a href="../spec/constitution.html#c12">C12.4</a>・deny ではない）に昇格するのは裁定</td><td>宣言した size に対して大きすぎる便の検知（記録時点の 17 便の実績: S = +78〜+412 行・M = +1037〜+1810 行）</td><td>「標準 library の作り直し」「1 実装の抽象」の判定（(1) が担う）</td><td>契約 1 本（record の任意 field・schema 1 のまま）+ 後日の裁定 1 件</td><td>S〜M</td></tr>
     <tr><td>(3) はしごの typed な宣言</td><td>段を closed enum（Skip / Reuse(symbol) / Stdlib / Native / Dependency(crate) / OneLine / Minimal・宣言順 = はしごの順）にし、runner は止まった段と「上の段を退けた理由」を typed な record で宣言する。gate は<strong>形</strong>を検査する: 段が宣言されている・選んだ段より上の段すべてに理由が在る・段の含意が diff と一致する（Reuse → その symbol を diff が使う・Dependency → C13 の allow-list 内・Skip → src の差分 0・Minimal → (2) の検出線に載る）。理由の真偽は (1) の lens が審査する。prompt には「段を宣言せよ」の pointer 1 行だけ</td><td>書く前に段を順に通った証拠・段と diff の整合・審査できる record</td><td>段の選択の正しさ・退けた理由の真偽</td><td>SRS の FR 1 本（契約と record の形）+ ADR 1 本（跨版契約: 契約 file の field と record の schema）+ 契約 2〜3 便</td><td>M〜L</td></tr>
     <tr><td>(採らない) 強度 ultra</td><td>—</td><td>—</td><td>—</td><td>要件の正本（SRS / 契約）と衝突</td><td>—</td></tr>
   </tbody>
