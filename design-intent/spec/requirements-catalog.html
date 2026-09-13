@@ -221,14 +221,14 @@
 <table>
 <thead><tr><th>id</th><th>要件文</th><th>v2 表現</th><th>出所</th><th>裁定</th><th>v1 対応物</th><th>備考</th></tr></thead>
 <tbody>
-<tr><td id="r-e1"><code>R-E1</code></td><td>role は env の明示 &gt; 作業木の位置 &gt; 既定、の順で<strong>決定論的に</strong>判定されねばならない（窓名を判定に使わない）</td><td>登録 row だけ（v0.7 FR40）: 席の役割は器の登録 row（target → 役割・anchor）から解く。env・作業木・既定の 3 経路は持たない（憲法 C2.2・裁定 2026-09-12）。窓名を判定に使わない点は同旨。</td><td>role-context-spec §1.1</td><td>なし</td><td><code>SCRIBE_ROLE</code> / <code>.worktrees/</code></td><td></td></tr>
+<tr><td id="r-e1"><code>R-E1</code></td><td>role は env の明示 &gt; 作業木の位置 &gt; 既定、の順で<strong>決定論的に</strong>判定されねばならない（窓名を判定に使わない）</td><td>登録 row だけ: 席の役割は器の登録 row（鍵は役割と anchor・target 併記）から解く。env・作業木・既定の 3 経路は持たない（憲法 C2.2）。窓名を判定に使わない点は同旨。</td><td>role-context-spec §1.1</td><td>なし</td><td><code>SCRIBE_ROLE</code> / <code>.worktrees/</code></td><td></td></tr>
 <tr><td id="r-e2"><code>R-E2</code></td><td>role 注入は opt-in ガードの内側でだけ発火し、管轄外の session を 1 byte も汚してはならない</td><td></td><td>role-context-spec §1.0</td><td>なし</td><td><code>.beads/</code></td><td></td></tr>
 <tr><td id="r-e3"><code>R-E3</code></td><td>明示 env でしか成立しない role は、作業木判定にも既定にも<strong>落ちてはならない</strong></td><td></td><td>role-context-spec §1.1</td><td>なし</td><td>gate / qa / orchestrator / planner / lander</td><td></td></tr>
 <tr><td id="r-e4"><code>R-E4</code></td><td>権限行列は少なくとも 6 面（graph / 契約起草 / 契約の焼き / 最初の起動 / 検証→merge→land / user 対話）で role ごとに一意に定まらねばならない</td><td>権能の閉じた enum + rules 行（v0.7 FR41）: 6 面は権能名（回答 / 承認 / go / 便の起動 / path 種別の編集 / 対話面）に写す。</td><td>role-context-spec §2.8 境界表</td><td>なし</td><td>-</td><td></td></tr>
 <tr><td id="r-e5"><code>R-E5</code></td><td>実装席が書けるのは<strong>自 issue の状態・進捗・完了ラベルだけ</strong>で、graph 操作・公開面への push・他席への注入を禁じる</td><td>役割別 write-set（v0.7 FR41 / AC16）: 実装は runner（席でない）が担う。管理席は code path を編集できず、契約が class で開いた便だけ許す。</td><td>roles-boundary.md</td><td>なし</td><td>-</td><td></td></tr>
 <tr><td id="r-e6"><code>R-E6</code></td><td>設計協調席は台帳 write と tracked file 編集を持たず、<strong>出力は draft file だけ</strong>でなければならない</td><td>planner の権能（v0.7 FR41）: design-intent / 設計 doc / 契約の編集と、回答・承認・go の記帳。code path は編集しない。</td><td>role-context-spec §2.7 write 権限</td><td>なし</td><td><code>$SCRIBE_PLANNER_DIR</code> / <code>planner-write-guard.py</code></td><td></td></tr>
 <tr><td id="r-e9"><code>R-E9</code></td><td>席の一意鍵は <strong>(role, anchor)</strong> でなければならない（窓名で区別する形は席の同一性を機械から奪う）</td><td>登録 row の鍵 = (役割, anchor)・target を併せ持つ（v0.7 FR40）。</td><td>role-context-spec §2.8「なぜ role を分けたか」</td><td>user 裁定（RULING-morning 10:2x・逐語は repo 外）</td><td>seat-registry</td><td></td></tr>
-<tr><td id="r-e10"><code>R-E10</code></td><td>1 つの anchor に同一 role の席を 2 つ建ててはならない（別 anchor の同 role は互いを拒否しない）</td><td>planner は anchor ごと 1 席・管理席も 1 席（v0.7 FR40・FR30 改訂。ADR-0016 §2.1 の「管理席 N 席」は ADR-0022 で部分 supersede・裁定 2026-09-12）。</td><td>role-context-spec §2.7 (1)</td><td>なし</td><td>1-role-1-席 guard</td><td></td></tr>
+<tr><td id="r-e10"><code>R-E10</code></td><td>1 つの anchor に同一 role の席を 2 つ建ててはならない（別 anchor の同 role は互いを拒否しない）</td><td>planner は anchor ごと 1 席・管理席も 1 席。</td><td>role-context-spec §2.7 (1)</td><td>なし</td><td>1-role-1-席 guard</td><td></td></tr>
 <tr><td id="r-e11"><code>R-E11</code></td><td>project ごとに<strong>執行席 1 + 設計協調席 1</strong> を席セットとし、単独運用は明示 opt-out だけを正常形とする</td><td>同上（planner 1 + 管理席 1・口座の分散は FR36 が担う）。単独運用の opt-out は v3。</td><td>role-context-spec §2.7 (1)</td><td>なし</td><td><code>[SEAT-SET-INCOMPLETE]</code></td><td></td></tr>
 <tr><td id="r-e12"><code>R-E12</code></td><td>常駐席は <strong>event 駆動</strong>でなければならず、周期起動を張ってはならない・執行 SLA を負ってはならない</td><td></td><td>role-context-spec §2.7 駆動形 / §2.8</td><td>なし</td><td>-</td><td></td></tr>
 <tr><td id="r-e13"><code>R-E13</code></td><td>検証席・契約修正席は<strong>案件ごとに起き、終われば畳まれる</strong>（常駐しない）</td><td></td><td>role-context-spec §2.5</td><td>なし</td><td>on-demand</td><td></td></tr>
@@ -237,8 +237,8 @@
 <tr><td id="r-e20"><code>R-E20</code></td><td>model 逸脱時に<strong>止まる席は無い</strong>。告知は対話性を持つ 3 席だけに出す</td><td></td><td>RULING-model-deviation-20260902</td><td>user 裁定（逐語は repo 外）</td><td>PreModelSwitch / PostModelSwitch</td><td></td></tr>
 <tr><td id="r-e21"><code>R-E21</code></td><td>注入 carrier には<strong>上限がある</strong>（切り詰められる）ため、注入は不変条件の要約と「いつ何を読むか」の索引に留め、本文は on-demand で取りに行かせねばならない</td><td>役割の指示文は rules 行と雛形から生成し短く保つ（v0.7 FR42）。本文は id で参照して on-demand で読ませる。</td><td>role-context-spec §2.1 / dod-v1.md C14</td><td>なし</td><td>boot core / trigger 表</td><td></td></tr>
 <tr><td id="r-e22"><code>R-E22</code></td><td>無人席は危険操作を<strong>自動拒否</strong>することを既定とし、人が肩代わりして承認する形は救済手順に留めねばならない</td><td>権能の外の記帳は hook が deny（v0.7 FR41 / AC15）。人が肩代わりする承認は R-C7-1 の対話面だけ。</td><td>RULING-cc-update-20260904 Q-C</td><td>user 裁定（逐語は repo 外）</td><td>-</td><td></td></tr>
-<tr><td id="r-e23"><code>R-E23</code></td><td>対話席は <strong>planner 1 つ</strong>である。consult は planner に吸収済みで、v2 は consult を <strong>role として持たない</strong>（L.1 (2) の閉じた 9 名は v1 SSOT の写し＝v2 の role 集合は consult を含めない・退役の指し先 = planner）</td><td>対話面は R-C7-1 = planner の席（v0.7 で値を改訂・裁定 2026-09-12）。</td><td>user 直命 2026-09-08 10:00 JST（逐語は repo 外）／role-context-spec :339（入口 B 退役済み・明示招集時のみ）</td><td>同逐語</td><td><code>SCRIBE_ROLE=consult</code> / §2.3 / model-switch-guard POLICY 表 "consult" 行</td><td></td></tr>
-<tr><td id="r-e24"><code>R-E24</code></td><td>席の既定 model と推論強度は <strong>rules 行</strong>（manifest・裁定 id 付き・C1 / C5）で持ち、値は <strong>planner = fable / high・orchestrator = fable / high・それ以外の席（admin / worker / gate / qa / baker / lander）と WF agent = 非 fable（opus 系）</strong>。fable を新たな席・段へ投入するのは rules 行の変更＝裁定 id が要る（C5・消費は害 C6）</td><td>〔rules〕<code>seat_model</code> 行（role → model family × effort × pin? = 無人席のみ true）。WF 内の唯一の fable 例外（intake-refine の Curate 段・08-20 裁定）も <strong>opus へ</strong>（user 裁定 2026-09-08 10:2x JST（逐語は repo 外）・N.1 U8 決定）＝v2 の WF agent に fable は <strong>0 本</strong>〔2026-09-12〕v2 は WF agent を持たない（骨格不使用）＝WF 例外の記述は無効。席の model は role→model の rules 行。</td><td>user 直命 2026-09-08 09:19（逐語は repo 外）／09:49（逐語は repo 外）／10:00（逐語は repo 外）／user 直命 2026-09-08 10:3x（逐語は repo 外）・v1 実測（<code>CLAUDE_CODE_EFFORT_LEVEL</code> pin が <code>/effort</code> を Not applied にする）</td><td>同逐語（v1 実装便）</td><td><code>scripts/hooks/model-switch-guard.py</code> POLICY 表・<code>scripts/scribe-spawn.sh</code> の effort literal <strong>対話席の強度は pin でなく既定</strong>: 起動側は settings 層に既定値だけを置き、席内の人の切替（<code>/effort</code>）が常に勝つ形でなければならない（env / flag の session pin は無人席だけ）</td><td></td></tr>
+<tr><td id="r-e23"><code>R-E23</code></td><td>対話席は <strong>planner 1 つ</strong>である。consult は planner に吸収済みで、v2 は consult を <strong>role として持たない</strong>（L.1 (2) の閉じた 9 名は v1 SSOT の写し＝v2 の role 集合は consult を含めない・退役の指し先 = planner）</td><td>対話面は R-C7-1 = planner の席。</td><td>user 直命 2026-09-08 10:00 JST（逐語は repo 外）／role-context-spec :339（入口 B 退役済み・明示招集時のみ）</td><td>同逐語</td><td><code>SCRIBE_ROLE=consult</code> / §2.3 / model-switch-guard POLICY 表 "consult" 行</td><td></td></tr>
+<tr><td id="r-e24"><code>R-E24</code></td><td>席の既定 model と推論強度は <strong>rules 行</strong>（manifest・裁定 id 付き・C1 / C5）で持ち、値は <strong>planner = fable / high・orchestrator = fable / high・それ以外の席（admin / worker / gate / qa / baker / lander）と WF agent = 非 fable（opus 系）</strong>。fable を新たな席・段へ投入するのは rules 行の変更＝裁定 id が要る（C5・消費は害 C6）</td><td>席の model は role → model の rules 行が持つ。 v2 は WF agent を持たない。</td><td>user 直命 2026-09-08 09:19（逐語は repo 外）／09:49（逐語は repo 外）／10:00（逐語は repo 外）／user 直命 2026-09-08 10:3x（逐語は repo 外）・v1 実測（<code>CLAUDE_CODE_EFFORT_LEVEL</code> pin が <code>/effort</code> を Not applied にする）</td><td>同逐語（v1 実装便）</td><td><code>scripts/hooks/model-switch-guard.py</code> POLICY 表・<code>scripts/scribe-spawn.sh</code> の effort literal <strong>対話席の強度は pin でなく既定</strong>: 起動側は settings 層に既定値だけを置き、席内の人の切替（<code>/effort</code>）が常に勝つ形でなければならない（env / flag の session pin は無人席だけ）</td><td></td></tr>
 </tbody>
 </table>
 </details>
@@ -365,7 +365,7 @@
 <table>
 <thead><tr><th>id</th><th>要件文</th><th>v2 表現</th><th>出所</th><th>裁定</th><th>v1 対応物</th><th>備考</th></tr></thead>
 <tbody>
-<tr><td id="r-j14"><code>R-J14</code></td><td>高コスト model は WF agent へ投入せず、違反は<strong>agent を 1 体も起動せずに fail-fast</strong> で止めねばならない（黙って別 model へ降格しない）</td><td>v2 は WF agent を持たない（骨格不使用・裁定 2026-09-12）。lens / runner の model は rules 行が持つ。</td><td>methodology §1.1</td><td>なし</td><td>fable / <code>demoteFable</code> 廃止</td><td></td></tr>
+<tr><td id="r-j14"><code>R-J14</code></td><td>高コスト model は WF agent へ投入せず、違反は<strong>agent を 1 体も起動せずに fail-fast</strong> で止めねばならない（黙って別 model へ降格しない）</td><td>v2 は WF agent を持たない。lens / runner の model は rules 行が持つ。</td><td>methodology §1.1</td><td>なし</td><td>fable / <code>demoteFable</code> 廃止</td><td></td></tr>
 <tr><td id="r-j17"><code>R-J17</code></td><td>実 suite の実行は <strong>run 全体で 1 回</strong>とし、検証者による再実行を禁じる</td><td></td><td>runbook/gate.md doctrine C</td><td>user 裁定（逐語は repo 外）・user 直命 2026-08-19</td><td>-</td><td></td></tr>
 </tbody>
 </table>
@@ -440,9 +440,9 @@
 <section id="s-migration" class="informative">
 <h2>§移行表 — SRS の要件と R- 行の対応</h2>
 <p class="section-essence" data-audience="human">要件定義書（SRS）の各要件が、 このカタログのどの行から来たかを 1 表で示します。 SRS の要件は振る舞いの単位でまとめてあるので、 1 本の要件に複数の行が対応します。 表に現れない行は、 設計から契約を切る段で参照する材料としてそのまま残ります。</p>
-<p data-audience="machine">対応の向きは SRS → カタログ（FR / NFR 1 本 → R- 行 0〜n 本）。 SRS 側の根拠 field（<code>rationale_source</code> / <code>trace.backward</code>）は上位ニーズ N-1〜N-5 を指し、 R- 行への対応は本表だけが持つ（SRS の contract に R- id は書かない）。 対応 0 本の要件は、 grill の裁定で新設した要件・要件 doc の v3 行に由来する制約・憲法 / ADR 由来の制約のいずれかで、 その旨を右列に書く。 本表で引かれない行（150 行中 71 行）は削除でも降格でもなく、 設計 doc から契約を切る段の材料として残る。 表の R- id は本 page の行へ、 FR / NFR id は <code>./srs.html</code> の要件行へ deep-link する。</p>
+<p data-audience="machine">対応の向きは SRS → カタログ（FR / NFR 1 本 → R- 行 0〜n 本）。 SRS 側の根拠 field（<code>rationale_source</code> / <code>trace.backward</code>）は上位ニーズ N-1〜N-5 を指し、 R- 行への対応は本表だけが持つ（SRS の contract に R- id は書かない）。 対応 0 本の要件は、 grill の裁定で新設した要件・要件 doc の v3 行に由来する制約・憲法 / ADR 由来の制約のいずれかで、 その旨を右列に書く。 本表で引かれない行（150 行中 61 行）は削除でも降格でもなく、 設計 doc から契約を切る段の材料として残る。 表の R- id は本 page の行へ、 FR / NFR id は <code>./srs.html</code> の要件行へ deep-link する。</p>
 <details class="req__machine" data-audience="machine">
-<summary>対応表（SRS 33 要件 → R- 行）</summary>
+<summary>対応表（R- 行に対応する要件 39 本。 以後の要件は R- 行を持たない）</summary>
 <table>
 <thead><tr><th>SRS</th><th>要件名</th><th>対応する R- 行</th></tr></thead>
 <tbody>
@@ -474,6 +474,12 @@
 <tr><td><a href="./srs.html#FR26">FR26</a></td><td>開発 session の cap guard</td><td>新規（原本の R- 行に対応なし）</td></tr>
 <tr><td><a href="./srs.html#FR27">FR27</a></td><td>管理 tick</td><td><a href="#r-g20">R-G20</a>, <a href="#r-e12">R-E12</a>（席の内側に周期起動を張らない規範と両立させる形＝tick は席の外で回す）</td></tr>
 <tr><td><a href="./srs.html#FR28">FR28</a></td><td>cycle</td><td>新規（原本の R- 行に対応なし。 cycle 境界の考え方は章 H の作業記憶が前提）</td></tr>
+<tr><td><a href="./srs.html#FR30">FR30</a></td><td>配送構造</td><td><a href="#r-e11">R-E11</a>, <a href="#r-e23">R-E23</a></td></tr>
+<tr><td><a href="./srs.html#FR36">FR36</a></td><td>口座選定</td><td><a href="#r-g4">R-G4</a>, <a href="#r-g11">R-G11</a>, <a href="#r-g16">R-G16</a></td></tr>
+<tr><td><a href="./srs.html#FR40">FR40</a></td><td>席の登録</td><td><a href="#r-e1">R-E1</a>, <a href="#r-e9">R-E9</a>, <a href="#r-e10">R-E10</a></td></tr>
+<tr><td><a href="./srs.html#FR41">FR41</a></td><td>権能の所在</td><td><a href="#r-e4">R-E4</a>, <a href="#r-e6">R-E6</a></td></tr>
+<tr><td><a href="./srs.html#FR42">FR42</a></td><td>役割の指示文の注入</td><td><a href="#r-e21">R-E21</a></td></tr>
+<tr><td><a href="./srs.html#FR45">FR45</a></td><td>権能の執行</td><td><a href="#r-e5">R-E5</a>, <a href="#r-e22">R-E22</a></td></tr>
 <tr><td><a href="./srs.html#NFR1">NFR1</a></td><td>lens 予算</td><td><a href="#r-c12">R-C12</a>, <a href="#r-j14">R-J14</a></td></tr>
 <tr><td><a href="./srs.html#NFR2">NFR2</a></td><td>契約の大きさ</td><td>—（要件 doc の R-J19 は v3 送りでカタログ外・grill 論点 2 の裁定）</td></tr>
 <tr><td><a href="./srs.html#NFR3">NFR3</a></td><td>依存</td><td>—（ADR-0001 と憲法由来・対応する R- 行なし）</td></tr>
