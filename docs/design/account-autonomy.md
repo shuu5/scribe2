@@ -11,7 +11,7 @@
 
 ## 2. 上限停止の段（ADR-0020 §2.1・FR35）
 
-- **`Stage::RateLimited`**（variant 1 つ・宣言順は `Questioned` の直後・`as_str` は `RateLimited`）。runner が上限の rc（`headless::RC_RATE_LIMIT`・値は現物・ADR-0012 §2.1）で終わった周は `RunStage stage=RateLimited detail=rc:<rc>,status:<観測した上限 status>` を記帳する（status は runner の停止行と同じ出所・ADR-0012 §2.1 末尾。停止行の形と読み手の純関数は同じ module `headless/runner.rs` に並べる〔質問 record の形と読み手が並ぶのと同型〕・pipe は rc が上限の周だけ読む）。口座の label は pipe が (c) の `--account-dir` の配線で初めて知るので、(c) が detail に `account:<label>` を足す。窓の種別は上限 record が運ばない（記録時点）ので段には書かず、選定は実測行（FR33）から読む。上限の判定入力は上限 record の status のみ（ADR-0012・本 doc は判定を足さない）。
+- **`Stage::RateLimited`**（variant 1 つ・宣言順は `Questioned` の直後・`as_str` は `RateLimited`）。runner が上限の rc（`headless::RC_RATE_LIMIT`・値は現物・ADR-0012 §2.1）で終わった周は `RunStage stage=RateLimited detail=rc:<rc>,status:<観測した上限 status>` を記帳する（status は runner の停止行と同じ出所・ADR-0012 §2.1 末尾。**停止行は stdout に出す**〔記録時点は stderr＝pipe は stdout だけ捕らえるので届かない・(a) が stdout へ移し rc は変えない〕・停止行の形と読み手の純関数は同じ module `headless/runner.rs` に並べる〔質問 record の形と読み手が並ぶのと同型〕・pipe は rc が上限の周だけ読む）。口座の label は pipe が (c) の `--account-dir` の配線で初めて知るので、(c) が detail に `account:<label>` を足す。窓の種別は上限 record が運ばない（記録時点）ので段には書かず、選定は実測行（FR33）から読む。上限の判定入力は上限 record の status のみ（ADR-0012・本 doc は判定を足さない）。
 - Failed に倒さない。worktree・base・commit・質問と回答の event を保つ（N1・C9）。終端ではない＝live な便として intake の排他の母集団に残る（ADR-0019 §2.1）。schema 1 のまま。lens が上限で止まった周は FR9 の既存極性（INCONCLUSIVE）のまま。
 - `pipe show` はこの段を名で出す。`pipe stop --run` は本段の便も止められる（終端手段は stop だけ・§4）。
 
@@ -45,7 +45,7 @@
 
 ## 7. 歯（`crates/<NAME>/tests/e2e/` に `pipe_ratelimit_` / `fleet_select_` / `seat_account_` 接頭辞・名前の列は現物が SSOT）
 
-- 段: 偽 runner が上限 record を最終行に書いて上限の rc で終わる fixture で `RateLimited` の段・detail に rc と観測した status・Failed でない・worktree と commit が残る・`pipe show` が段名を出す・intake の排他が本段の便を live に数える・`pipe stop --run` で止められる。
+- 段: 偽 runner が停止行を stdout に出して上限の rc で終わる fixture（実 runner と同じ形・headless の歯は実 runner の停止行が stdout に出ることを pin）で `RateLimited` の段・detail に rc と観測した status・Failed でない・worktree と commit が残る・`pipe show` が段名を出す・intake の排他が本段の便を live に数える・`pipe stop --run` で止められる。
 - 選定（in-file・純関数）: 便用は逼迫度最大の当たっていない口座・席の口座は除外・session 用は逼迫度最小かつ閾値未満・当たっている口座（100）は選ばない・Unmeasured / 古い行の口座は候補外・同点は辞書順・全部当たっているときは `NoCandidate` に最も早い reset・model が与えられた周はその model の窓だけ数え、与えられない周はモデル別窓すべての最大を数える。
 - 再開: 偽 runner を 2 回起こす fixture（1 回目は上限の rc・2 回目で commit）で別 label の `--account-dir` が渡り（stub が argv を写す）・段の detail に `account:<label>` が足される・stdin に「途中再開」節と順序（契約 → 回答 → 途中再開）・`Spawned detail=account:…,resume:rate-limit`・Landed まで通る（AC12）／全口座が当たっている fixture で `AccountFree` の待ち → 実測行を新しくすると待ちが解ける（deadline を fixture で短く）／`pipe stop --run` で待ちの便を終端できる。
 - rules: R-C9-1 の値の型（Int）と enabled = true・欠落は `RuleError`・rules 外形 snapshot。完了 enum の網羅 match（compile）。
@@ -58,7 +58,7 @@ C1 / C5（R-C9-1 は行・裁定 id）・C2（`Purpose` / `Selection` / `Stage` 
 
 ## 9. 契約（4 便・この順・実装は pipeline）
 
-- **(a) 上限停止の段**（S）: `Stage::RateLimited`・runner の上限の rc → 段の記帳（rc / status）・`pipe show`・排他の母集団・stop。write-set = fleet/mod.rs（`Stage` の variant・`STAGES`・`as_str`）・headless/runner.rs（停止行の読み手・in-file の歯）・pipe/mod.rs・pipe/spawn.rs・pipe/cli.rs（段名の表示・live の集合・stop）・tests/e2e/{pipe,fleet}.rs・snapshot。依存: なし（上限の rc は現物・label は (c) が足す）。
+- **(a) 上限停止の段**（S）: `Stage::RateLimited`・runner の上限の rc → 段の記帳（rc / status）・`pipe show`・排他の母集団・stop。write-set = fleet/mod.rs（`Stage` の variant・`STAGES`・`as_str`）・headless/runner.rs（停止行の読み手・in-file の歯）・pipe/mod.rs・pipe/spawn.rs・pipe/cli.rs（段名の表示・live の集合・stop）・tests/e2e/{pipe,fleet,headless}.rs・snapshot。依存: なし（上限の rc は現物・label は (c) が足す）。順序: fleet/mod.rs・pipe/cli.rs・tests/e2e/pipe.rs で s2-07l.147 と交差するので .147 の land 後に直列（並列の組に入れない）。
 - **(b) 選定の純関数と R-C9-1**（M）: `fleet/select.rs`・`Purpose` / `Selection` / `NoCandidate`・R-C9-1 の値の型変更（**値と裁定 id は user 裁定**）・`fleet select` subcommand・選定前の計測の呼出し。write-set = fleet/select.rs（新規）・fleet/mod.rs・fleet/cli.rs・rules/mod.rs（値の型）・rules/manifest.toml・tests/e2e/{fleet,rules}.rs・snapshot。依存: s2-07l.187（実測行の値の形）の land 後。
 - **(c) 別口座での途中再開**（M）: `Completion::AccountFree`・`pipe run` / `resume` の RateLimited の経路・「途中再開」節・`--account-dir` の配線・記帳。write-set = pipe/follow.rs・pipe/cli.rs・pipe/spawn.rs（段の detail に `account:<label>`）・fleet/mod.rs・headless/runner.txt・tests/e2e/pipe.rs。依存: (a)(b)・s2-07l.147（land の順序制御・pipe/ と fleet/mod.rs を触るので直列）・[seat-roles.md](./seat-roles.md) 契約 (a)（便用の除外集合 = 登録 row の口座の読み手）。
 - **(d) 席の退避と立て直し**（M）: tick の軸・鮮度で計測・登録 row の口座と雛形・Stop 後の立て直し・登録 row の更新。write-set = seat/tick.rs・seat/cycle.rs・seat/role.rs（登録 row の読み手）・tests/e2e/seat.rs。依存: (b)・[seat-roles.md](./seat-roles.md) 契約 (a)（登録 row）。
