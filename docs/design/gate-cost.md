@@ -118,7 +118,24 @@ manifest に行が載るまでは ADR-0021 の予定行（C14.2 の相互参照�
 ## 6. 着地は gate 済みの便を先に通す（ADR-0021 §2.5・機構は .147）
 
 - 原則: `Gated` ∧ verdict PASS の run が在る間、他の run の land は待つ（先に gate を通った便を先に着地させ、stale の連鎖を止める）。
-- 機構（順序の判定・待ちの上限 rules 行・詰まりの解き方）は s2-07l.146（衝突の起こし直し）の land 後に .147 で設計する。本 doc は原則だけを持つ。
+- **順番の鍵は event log の replay で導く**（C3・別の状態 file を持たない）: 同じ state dir の run のうち「終端でない（Landed / Failed / Stopped でなく・最新の段が `Gated` なら verdict が FAIL でない）∧ `Gated` の event を一度でも持ち最新の verdict が PASS ∧ worktree dir が実在（retire 済みは外れる）」を **着地待ちの列** とし、列の順序は各 run の**最初の** `Gated` event の ts（同時刻は run id の辞書順）。**追随して段が `Implemented` に戻り撃ち直している run も列に残る**（鍵は最初の Gated の ts のまま・撃ち直しが FAIL なら終端で外れる）＝撃ち直し中に後続が番を得ない（run 1 ee36511 の gate FAIL・lens の指摘 2026-09-13T04:05Z: 最新の段が Gated の run だけを列に入れると撃ち直し中に列から外れ、3 本以上の形で後着の 1 本が (vi) を踏み追随 2 回になる）。自分より前に列に在る run が 1 本でも在れば、自分の land は待つ。順序は全順序なので待ちが循環しない。
+- **待ちは完了 enum の variant 1 つ**（`Completion::LandTurn { state_dir, run }`・宣言順の末尾・C3.4）を足して唯一の wait 実装（`fleet::wait`）を通す。第 2 の poll loop を書かない。判定（列の導出と「自分の番か」）は pure 関数 1 本（入力 = replay した run ごとの (最新段, verdict, Gated ts, worktree 実在) の列と自分の id・出力 = `Turn::{First, After(run), Unmeasurable}` の閉じた 3 値）。
+- **上限は rules 行 `pipe.land_wait_s`**（Int・裁定 id 付き・C5）。上限を超えた周は**待たずに進む**（縮退・受付の枠 §3 と同じ極性: 詰まって止まるより stale 1 回の費用を払う側に倒す・断らない・止めない）。列を導けない周（store が読めない）は `Unmeasurable` として同じく進む（読めないを「列なし」に読み替えない・記録に残す）。**待ちが解けた周は番を再評価する**（run 2 bba45bd の追随 gate FAIL・lens 2026-09-13T04:35Z: `is_met` = `!After` は Unmeasurable でも真になるので、先頭の便が撃ち直しで verdict.json を書き直す瞬間に読めないと待ちが解け、再確認が `== Unmeasurable` だけだと After に戻っていても進む）: pure 関数 `after_wake(Turn) -> Next::{KeepWaiting, Proceed(Order)}` を 1 本置き、`After` → 待ち直す（残りの deadline で同じ完了 enum を唯一の wait 実装へ再投入・第 2 の poll loop は書かない）/ `First` → `Waited` / `Unmeasurable` → `Unmeasured`。**verdict.json は atomic に書く**（gate.rs の `settle` の書きを 1 関数にし、同じ dir の tmp へ書いて rename・読み手が途中の file を見ない＝Unmeasurable の瞬間を出す側で塞ぐ）。
+- **記録**: land の record（verdicts.jsonl の行・schema 1 のまま任意 field・ADR-0021 §2.6 (iv)）に `order=` を 1 つ足す: `first`（待ち無し）/ `waited:<秒>`（列の前が空くのを待った）/ `degraded`（上限で進んだ）/ `unmeasured`（列を導けなかった）。stdout の land 行にも同じ `order=` を出す。
+- **順番が来た便**: 既存の §5.4 の経路のまま追随（rebase）→ gate 撃ち直し（省かない・C12.6）→ CAS で着地。撃ち直しの間もその便は列の先頭に残るので他の便は待ち、(vi) の `stale base` は起きない（3 本以上の形でも各便の追随は 1 回）。
+- **効かない形**: `--pr-cmd`（自 repo への PR の口・main を動かさない）は列を見ない（stale base を見ない形と同じ理由）。`pipe land` を席が手で撃つ周も同じ列を通る（経路は 1 本）。
+- **限界（残す側・doc に書く）**: 列に在る run の `pipe run` process が死んで Gated(PASS) のまま放置されると、後続は上限まで待ってから縮退する＝操作役がその run を retire するまで 1 回ごとに `land_wait_s` を払う（.132 / .156 と同じ「置き去りの run」の箱・本便では解かない）。
+
+### 6.1 errata（現物との差・s2-07l.147・規範は上の §6 のまま）
+
+- **module は `pipe/land.rs`**（判定の pure 関数 `turn_in`・最初の `Gated` の ts を選ぶ pure 関数 `first_gated_at`・列の導出 `queue_of`・待ち `await_turn`）。`Completion::LandTurn` の観測は `land::turn_now` の 1 本を通る（wait の内側が読み手を持つ・`SlotFree` と同じ分担）。上限の読み口は pipe/cli.rs `land_run`（`--rules` の manifest から読む・env を読まない）。
+- **撃ち直し中の「最新の verdict」は前の周の PASS**: gate は判定の確定時にだけ `verdict.json` を上書きする（gate.rs `settle`）ので、追随して `Implemented` へ戻った run は撃ち直しの間 PASS のまま列に残り、撃ち直しが FAIL / INCONCLUSIVE を確定した時点で外れる（FAIL の run は段が `Gated` のまま＝§6 の「終端で外れる」は verdict で外れる形）。
+- **読めない判定も `Unmeasurable`**: 列に入りうる run（終端でない ∧ `Gated` を一度でも持つ ∧ worktree が実在）で `verdict.json` を読めない run が 1 本でも在る周は列を導けない（PASS かを測れない run を列から外すと、読めないを「列なし」に読み替えることになる）。worktree の実在を判じる repo（便の写し面 `repo`）を読めない run が在る周も同じ。store が読めない周は land の前提検査（replay）が先に rc 2 で断り、main 実測の材料（`base_of_run`）も同じ store を読むので、e2e の歯は events.jsonl を壊す形でなく「前の便の判定を壊した fixture」で `order=unmeasured` を測る。
+- **`after_wake` は待った秒も受ける**（`after_wake(&Turn, waited_s) -> Next`・`First` の周の `Waited(<秒>)` を組むため・pure のまま）。`await_turn` は解けるたびに `after_wake` を通し、`KeepWaiting` なら残りの上限（`land_wait_s` − 経過）で同じ `Completion::LandTurn` を `fleet::wait` へ再投入する。残りが 0 の周の `KeepWaiting` は `degraded`（上限で進む）。
+- **atomic な書きは gate.rs `write_verdict`**（`verdict.json.partial` へ書いて rename・落ちた周は書きかけを消して本 file を作らない）。`settle` の書きはこの 1 本だけを通る。
+- **面 5 の `order` は key 列の末尾**（既存の 7 key の並びは動かさない）。`order=` は land が成立した周（main 実測が緑）の record と stdout にだけ載る。
+- **衝突の起こし直し中の run も列に残る**: 追随の rebase が衝突して実装役を起こし直した run（`Implemented detail=rebase-conflict:`・pipeline-conflict.md §3）も、前の周の PASS が残り終端でない間は列の定義を満たす。起こし直しの間、後続は上限まで待ってから縮退しうる（上の「置き去りの run」と同じ箱・本便では解かない）。
+- **やさしく言うと**: 審査を通った順に 1 本ずつ main へ載せる。前が詰まっていたら決まった時間だけ待ち、それでも空かなければ待たずに進む（その場合は main が動いて 1 回余分に審査し直すかもしれない）。
 
 ## 7. 歯（契約ごと・in-file の unit と `tests/e2e/` の e2e の分担）
 

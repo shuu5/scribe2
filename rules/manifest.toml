@@ -317,6 +317,16 @@ enabled = true
 ruling = "user 2026-09-12T02:01Z"
 ruled_at = "2026-09-12"
 
+# 着地の順序（設計 gate-cost.md §6・ADR-0021 §2.5）。上限を超えた周は待たずに進む（縮退・止めない）。
+
+[[rule]]
+id = "pipe.land_wait_s"
+kind = "PipeLandWaitS"
+value = 5400
+enabled = true
+ruling = "user 2026-09-13T02:50Z"
+ruled_at = "2026-09-13"
+
 # 口座の宣言（設計 fleet-usage.md §2・裁定 id 'user 2026-09-12T02:01Z'）。label は**不透明な符丁**で
 # あり、本当の口座の識別子でも host 名でも path でもない（本 repo は PUBLIC・SRS CON2）。credential の
 # 置き場は <state_dir>/accounts/<label>/ で、器はそこを走査せず、この宣言だけを真実として読む（C3）。

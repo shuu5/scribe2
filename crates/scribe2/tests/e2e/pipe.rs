@@ -8,7 +8,8 @@ use crate::make_tmp_dir;
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Child, Command, Output, Stdio};
+use std::time::{Duration, Instant};
 use vessel::cli_outcome::{RC_BROKEN, RC_OK, RC_REFUSED};
 use vessel::fleet::{Event, EventKind, Stage};
 use vessel::hook::inject_path;
@@ -1604,6 +1605,10 @@ const FOLLOW_RETRIES: u64 = 2;
 /// tmp manifest の受付の待ちの上限（秒・rules 行 `gate.slot_wait_s` の fixture 値）。
 const SLOT_WAIT_S: u64 = 1;
 
+/// tmp manifest の land の順番を待つ上限（秒・rules 行 `pipe.land_wait_s` の fixture 値）。待ちが
+/// 解ける歯だけが [`write_rules_land_wait`] で長い値に振る。
+const LAND_WAIT_S: u64 = 1;
+
 /// tmp manifest の受付の 3 値（rules 行 `gate.job_memory_mb` / `host.reserve_memory_mb` /
 /// `gate.slot_wait_s` の fixture 値）。
 #[derive(Debug, Clone, Copy)]
@@ -1649,8 +1654,9 @@ fn write_rules_full(dir: &Path, name: &str, gate: (u64, u64), retries: u64, slot
     let ceiling = "[[rule]]\nid = \"runner.allowed_commands\"\nkind = \"RunnerAllowedCommands\"\n\
                    value = [\"cargo\", \"git\", \"sh\"]\nenabled = true\nruling = \"t\"\nruled_at = \"d\"\n";
     // 受付の 4 行: 並列度の上限は埋め込みの値を写し、残る 3 行は [`SlotFixture`] の値。
+    // 着地の順番の上限は [`LAND_WAIT_S`]（前の便が列に残る歯で 90 分待たない）。
     let body = format!(
-        "schema = 1\n\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{ceiling}",
+        "schema = 1\n\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{ceiling}",
         row("gate.lens_count", "GateLensCount", lens_count),
         row("gate.token_cap", "GateTokenCap", cap),
         row("fleet.lock_retry_ms", "LockRetryMs", 5000),
@@ -1660,6 +1666,7 @@ fn write_rules_full(dir: &Path, name: &str, gate: (u64, u64), retries: u64, slot
         row("gate.job_memory_mb", "GateJobMemoryMb", slots.job_mb),
         row("host.reserve_memory_mb", "HostReserveMemoryMb", slots.reserve_mb),
         row("gate.slot_wait_s", "GateSlotWaitS", slots.wait_s),
+        row("pipe.land_wait_s", "PipeLandWaitS", LAND_WAIT_S),
     );
     let path = dir.join(name);
     fs::write(&path, body).expect("tmp manifest を書ける");
@@ -2540,6 +2547,296 @@ fn pipe_land_rebase_empty_does_not_fire_for_distinct_changes() {
     clean(&[&repo, &state]);
 }
 
+/// [`write_rules`] の `pipe.land_wait_s` の行だけを差し替えた tmp manifest（`None` = 行を落とす）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn write_rules_land_wait(dir: &Path, name: &str, land_wait_s: Option<u64>) -> String {
+    let path = write_rules(dir, name, 1, 1_000_000);
+    let text = fs::read_to_string(&path).expect("tmp manifest を読める");
+    let block = |value: u64| {
+        format!(
+            "[[rule]]\nid = \"pipe.land_wait_s\"\nkind = \"PipeLandWaitS\"\nvalue = {value}\nenabled = true\nruling = \"t\"\nruled_at = \"d\"\n"
+        )
+    };
+    let default = block(LAND_WAIT_S);
+    assert!(text.contains(&default), "既定の行が在る（差し替えが空振りしない）: {text}");
+    let replaced = text.replace(&default, &land_wait_s.map(block).unwrap_or_default());
+    fs::write(&path, replaced).expect("tmp manifest を書ける");
+    path.display().to_string()
+}
+
+/// land の stdout の `order=` の値（無ければ空）。
+fn order_token(out: &Output) -> String {
+    stdout_of(out)
+        .split_whitespace()
+        .find_map(|word| word.strip_prefix("order="))
+        .map(str::to_owned)
+        .unwrap_or_default()
+}
+
+/// 面 5（`verdicts.jsonl`）の便の行の `order` の値（行も field も無ければ空）。
+fn exported_order(state: &Path, id: &str) -> String {
+    let text = fs::read_to_string(land::verdicts_path(state)).unwrap_or_default();
+    text.lines()
+        .filter_map(|line| vessel::fleet::json_lite::parse_object(line.trim()).ok())
+        .find(|pairs| value_of(pairs, "run") == id)
+        .map(|pairs| value_of(&pairs, "order"))
+        .unwrap_or_default()
+}
+
+/// 便の追随の記帳（`Implemented detail=rebase:<range>`）の件数。
+fn follow_count(state: &Path, id: &str) -> usize {
+    stages(state, id)
+        .into_iter()
+        .filter(|(stage, detail)| {
+            *stage == Some(Stage::Implemented) && detail.as_deref().is_some_and(|found| found.starts_with("rebase:"))
+        })
+        .count()
+}
+
+/// 便の `Gated` の記帳の件数（gate 1 周 = 1 件）。
+fn gate_count(state: &Path, id: &str) -> usize {
+    stages(state, id).into_iter().filter(|(stage, _)| *stage == Some(Stage::Gated)).count()
+}
+
+/// land の stdout の `landed=` の値（squash commit の sha・無ければ空）。
+fn landed_token(out: &Output) -> String {
+    stdout_of(out)
+        .split_whitespace()
+        .find_map(|word| word.strip_prefix("landed="))
+        .map(str::to_owned)
+        .unwrap_or_default()
+}
+
+/// land を背景で撃つ（列で待つ歯の材料・stdout / stderr は `wait_with_output` で読む）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn land_in_background(repo: &Path, state: &Path, id: &str, rules: &str, lens: &str) -> Child {
+    Command::new(bin())
+        .args(["pipe", "land", "--run", id, "--repo", &repo.display().to_string()])
+        .args(["--state-dir", &state.display().to_string(), "--rules", rules, "--lens", lens])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("binary を起動できる")
+}
+
+/// 同じ base から 3 便を PASS の gate まで通す（Gated の ts 順 a < b < c・3 本目 = `src/c.rs`＝
+/// write-set は交わらない）。bead も同じ順（`s2-2e5` < `s2-3ax` < `s2-4cz`）なので、同じ秒に
+/// Gated になっても列の順（同時刻は run id の辞書順）は変わらない。
+fn three_gated_runs(repo: &Path, state: &Path, marker: &Path) -> (String, String, String) {
+    let (id_a, id_b) = two_gated_runs(repo, state, marker);
+    let contract_c = write_contract(repo, &["write-set"], &[r#"write-set = ["src/c.rs"]"#]);
+    let id_c = intake_bead(repo, state, &contract_c, "s2-4cz");
+    let spawned = run_pipe(&[
+        "spawn", "--run", &id_c, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(),
+        "--runner", "echo c > src/c.rs && git add -A && git commit -q -m runner",
+    ]);
+    assert_eq!(spawned.status.code(), Some(i32::from(RC_OK)), "3 本目の spawn: {}", stderr_of(&spawned));
+    let lens = fake_lens(marker, &lens_verdict("PASS"));
+    let gated = gate_once(repo, state, &id_c, Some(&lens));
+    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "3 本目の gate: {}", stderr_of(&gated));
+    (id_a, id_b, id_c)
+}
+
+/// 着地の順番（設計 gate-cost.md §6）: 後から Gated になった便は前の便が列に居る間は待ち、上限
+/// （fixture 1 秒）で**待たずに進む**（`order=degraded`・断らない・止めない）。main は動いていないので
+/// 追随せずに Landed。
+#[test]
+fn pipe_order_later_run_degrades_at_the_limit_and_lands() {
+    let (repo, state) = repo_with_state();
+    let marker = state.join("lens-ran");
+    let (id_a, id_b) = two_gated_runs(&repo, &state, &marker);
+    let rules = write_rules_land_wait(&state, "rules-order.toml", Some(LAND_WAIT_S));
+    let out = land_extra(&repo, &state, &id_b, &["--rules", &rules]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "上限で進んで land する: {}", stderr_of(&out));
+    assert_eq!(order_token(&out), "degraded", "stdout の land 行: {}", stdout_of(&out));
+    assert_eq!(exported_order(&state, &id_b), "degraded", "面 5 の record");
+    assert!(show_line(&repo, &state, &id_b).contains("stage=Landed"), "段は Landed");
+    assert!(show_line(&repo, &state, &id_a).contains("stage=Gated"), "前の便は列に残ったまま");
+    clean(&[&repo, &state]);
+}
+
+/// 先に Gated になった便は待たない（`order=first`）。
+#[test]
+fn pipe_order_oldest_run_lands_first_without_waiting() {
+    let (repo, state) = repo_with_state();
+    let marker = state.join("lens-ran");
+    let (id_a, _id_b) = two_gated_runs(&repo, &state, &marker);
+    let rules = write_rules_land_wait(&state, "rules-order.toml", Some(30));
+    let out = land_extra(&repo, &state, &id_a, &["--rules", &rules]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "land: {}", stderr_of(&out));
+    assert_eq!(order_token(&out), "first", "stdout の land 行: {}", stdout_of(&out));
+    assert_eq!(exported_order(&state, &id_a), "first", "面 5 の record");
+    clean(&[&repo, &state]);
+}
+
+/// 待っている便は、前の便が land して列を空けた時点で**上限を待たずに**進み（`order=waited:<n>`・n < 上限）、
+/// 追随 1 回・gate の撃ち直し 1 回で Landed（撃ち直しの間は main が動かない＝(vi) が起きない）。
+#[test]
+fn pipe_order_waiting_run_lands_after_the_front_with_one_follow() {
+    let (repo, state) = repo_with_state();
+    let marker = state.join("lens-ran");
+    let (id_a, id_b) = two_gated_runs(&repo, &state, &marker);
+    let rules = write_rules_land_wait(&state, "rules-order.toml", Some(30));
+    let lens = fake_lens(&marker, &lens_verdict("PASS"));
+    let mut waiting = land_in_background(&repo, &state, &id_b, &rules, &lens);
+    std::thread::sleep(Duration::from_secs(2));
+    assert!(waiting.try_wait().expect("子の状態を読める").is_none(), "後の便は列の前が空くまで待っている");
+    let first = land_extra(&repo, &state, &id_a, &["--rules", &rules]);
+    assert_eq!(first.status.code(), Some(i32::from(RC_OK)), "前の便の land: {}", stderr_of(&first));
+    assert_eq!(order_token(&first), "first", "前の便は待たない: {}", stdout_of(&first));
+    let moved = git(&repo, &["rev-parse", "refs/heads/main"]);
+
+    let out = waiting.wait_with_output().expect("待っていた land が終わる");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "待っていた便も land する: {}", stderr_of(&out));
+    let token = order_token(&out);
+    let waited: u64 = token.strip_prefix("waited:").and_then(|secs| secs.parse().ok()).unwrap_or(u64::MAX);
+    assert!(waited < 30, "上限を待たずに進んだ（order={token}）: {}", stdout_of(&out));
+    assert_eq!(exported_order(&state, &id_b), token, "面 5 の record も同じ値");
+    assert_eq!(follow_count(&state, &id_b), 1, "追随は 1 回: {:?}", stages(&state, &id_b));
+    assert_eq!(gate_count(&state, &id_b), 2, "gate は初回 + 撃ち直し 1 回: {:?}", stages(&state, &id_b));
+    let new = git(&repo, &["rev-parse", "refs/heads/main"]);
+    assert_eq!(git(&repo, &["rev-parse", &format!("{new}^")]), moved, "前の便の上に載る");
+    assert!(show_line(&repo, &state, &id_b).contains("stage=Landed"), "段は Landed");
+    clean(&[&repo, &state]);
+}
+
+/// 前の便の worktree が在らない（retire 済み＝move 済み）なら列から外れ、後の便は待たない。
+#[test]
+fn pipe_order_front_run_without_worktree_leaves_the_queue() {
+    let (repo, state) = repo_with_state();
+    let marker = state.join("lens-ran");
+    let (id_a, id_b) = two_gated_runs(&repo, &state, &marker);
+    let rules = write_rules_land_wait(&state, "rules-order.toml", Some(30));
+    let front = worktree_of(&repo, &id_a);
+    let retired = repo.join(".worktrees").join("scribe2").join("retired").join(&id_a);
+    fs::create_dir_all(retired.parent().unwrap_or(&repo)).expect("retired の親を作れる");
+    git(&repo, &["worktree", "move", &front.display().to_string(), &retired.display().to_string()]);
+    let out = land_extra(&repo, &state, &id_b, &["--rules", &rules]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "land: {}", stderr_of(&out));
+    assert_eq!(order_token(&out), "first", "列の前が空: {}", stdout_of(&out));
+    assert!(show_line(&repo, &state, &id_b).contains("stage=Landed"), "段は Landed");
+    clean(&[&repo, &state]);
+}
+
+/// 3 便（Gated の ts 順 a < b < c）: a を land した後に b と c の land を背景で撃つと、b が追随 →
+/// 撃ち直しの間も b は列の先頭に残り c は待つ（`order=waited:<n>`）。追随は b・c とも **1 回ずつ**
+/// （2 回の便が 0＝c が (vi) の `stale base` を踏まない）で、main には a → b → c の順に載る
+/// （lens の指摘 2026-09-13T04:05Z の形・撃ち直し中の便が列から外れると c が b と並行に撃ち直す）。
+#[test]
+fn pipe_order_three_runs_follow_once_each_and_land_in_gated_order() {
+    let (repo, state) = repo_with_state();
+    let marker = state.join("lens-ran");
+    let (id_a, id_b, id_c) = three_gated_runs(&repo, &state, &marker);
+    let rules = write_rules_land_wait(&state, "rules-order.toml", Some(30));
+    let lens = fake_lens(&marker, &lens_verdict("PASS"));
+    let first = land_extra(&repo, &state, &id_a, &["--rules", &rules]);
+    assert_eq!(first.status.code(), Some(i32::from(RC_OK)), "a の land: {}", stderr_of(&first));
+    assert_eq!(order_token(&first), "first", "a は待たない: {}", stdout_of(&first));
+    let second = land_in_background(&repo, &state, &id_b, &rules, &lens);
+    let third = land_in_background(&repo, &state, &id_c, &rules, &lens);
+    let out_b = second.wait_with_output().expect("b の land が終わる");
+    let out_c = third.wait_with_output().expect("c の land が終わる");
+    assert_eq!(out_b.status.code(), Some(i32::from(RC_OK)), "b の land: {}", stderr_of(&out_b));
+    assert_eq!(out_c.status.code(), Some(i32::from(RC_OK)), "c の land: {}", stderr_of(&out_c));
+    assert_eq!(order_token(&out_b), "first", "a の着地後の b は列の先頭: {}", stdout_of(&out_b));
+    let token = order_token(&out_c);
+    let waited: u64 = token.strip_prefix("waited:").and_then(|secs| secs.parse().ok()).unwrap_or(u64::MAX);
+    assert!(waited < 30, "c は b が列を空けるまで待ち、上限は待たない（order={token}）: {}", stdout_of(&out_c));
+    assert_eq!(exported_order(&state, &id_c), token, "面 5 の record も同じ値");
+    assert_eq!(follow_count(&state, &id_b), 1, "b の追随は 1 回: {:?}", stages(&state, &id_b));
+    assert_eq!(follow_count(&state, &id_c), 1, "c の追随は 1 回: {:?}", stages(&state, &id_c));
+    let (sha_a, sha_b, sha_c) = (landed_token(&first), landed_token(&out_b), landed_token(&out_c));
+    assert_eq!(git(&repo, &["rev-parse", &format!("{sha_b}^")]), sha_a, "b は a の上に載る");
+    assert_eq!(git(&repo, &["rev-parse", &format!("{sha_c}^")]), sha_b, "c は b の上に載る");
+    assert_eq!(git(&repo, &["rev-parse", "refs/heads/main"]), sha_c, "main の先頭は c");
+    clean(&[&repo, &state]);
+}
+
+/// 撃ち直しが FAIL になった便（`Gated` のまま verdict が FAIL）は列から外れ、後続は待たずに進む
+/// （`order=first`・上限の 30 秒を待たない）。
+#[test]
+fn pipe_order_regate_fail_leaves_the_queue() {
+    let (repo, state) = repo_with_state();
+    let marker = state.join("lens-ran");
+    let (id_a, id_b, id_c) = three_gated_runs(&repo, &state, &marker);
+    let rules = write_rules_land_wait(&state, "rules-order.toml", Some(30));
+    let first = land_extra(&repo, &state, &id_a, &["--rules", &rules]);
+    assert_eq!(first.status.code(), Some(i32::from(RC_OK)), "a の land: {}", stderr_of(&first));
+    let fail = fake_lens(&marker, &lens_verdict("FAIL"));
+    let failed = land_extra(&repo, &state, &id_b, &["--rules", &rules, "--lens", &fail]);
+    assert_ne!(failed.status.code(), Some(i32::from(RC_OK)), "撃ち直しが FAIL なら land しない: {}", stdout_of(&failed));
+    assert_eq!(follow_count(&state, &id_b), 1, "b は追随して撃ち直した: {:?}", stages(&state, &id_b));
+    assert!(show_line(&repo, &state, &id_b).contains("stage=Gated"), "b は Gated(FAIL) のまま");
+    let pass = fake_lens(&marker, &lens_verdict("PASS"));
+    let started = Instant::now();
+    let out = land_extra(&repo, &state, &id_c, &["--rules", &rules, "--lens", &pass]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "c の land: {}", stderr_of(&out));
+    assert_eq!(order_token(&out), "first", "FAIL の b は列に居ない: {}", stdout_of(&out));
+    assert!(started.elapsed() < Duration::from_secs(30), "上限まで待たない");
+    assert!(show_line(&repo, &state, &id_c).contains("stage=Landed"), "c は Landed");
+    clean(&[&repo, &state]);
+}
+
+/// `--pr-cmd` の形は列を見ない（main を動かさない）: 前の便が列に居ても待たず、`order=` を出さない。
+#[test]
+fn pipe_order_pr_cmd_does_not_look_at_the_queue() {
+    let (repo, state) = repo_with_state();
+    let marker = state.join("lens-ran");
+    let (_id_a, id_b) = two_gated_runs(&repo, &state, &marker);
+    let rules = write_rules_land_wait(&state, "rules-order.toml", Some(30));
+    let main = git(&repo, &["rev-parse", "refs/heads/main"]);
+    let started = Instant::now();
+    let out = land_extra(&repo, &state, &id_b, &["--rules", &rules, "--pr-cmd", "true"]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "PR の口: {}", stderr_of(&out));
+    assert!(stdout_of(&out).contains("landed=pr"), "{}", stdout_of(&out));
+    assert!(!stdout_of(&out).contains("order="), "列を見ない形は order= を出さない: {}", stdout_of(&out));
+    assert!(started.elapsed() < Duration::from_secs(30), "上限まで待たない");
+    assert_eq!(git(&repo, &["rev-parse", "refs/heads/main"]), main, "main は動かない");
+    clean(&[&repo, &state]);
+}
+
+/// 列を導けない周（worktree 在りの `Gated` の便の判定が読めない）は `order=unmeasured` で**進む**
+/// （rc 2 にしない＝待ちは deny の関門でない・main 実測の「測れなかった」とは別の極性）。
+#[test]
+fn pipe_order_unreadable_front_verdict_is_unmeasured_and_lands() {
+    let (repo, state) = repo_with_state();
+    let marker = state.join("lens-ran");
+    let (id_a, id_b) = two_gated_runs(&repo, &state, &marker);
+    let rules = write_rules_land_wait(&state, "rules-order.toml", Some(30));
+    fs::write(state.join("pipe").join(&id_a).join("verdict.json"), "{broken\n").expect("判定を壊せる");
+    let out = land_extra(&repo, &state, &id_b, &["--rules", &rules]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "読めない周も進む: {}", stderr_of(&out));
+    assert_eq!(order_token(&out), "unmeasured", "stdout の land 行: {}", stdout_of(&out));
+    assert_eq!(exported_order(&state, &id_b), "unmeasured", "面 5 の record");
+    assert!(show_line(&repo, &state, &id_b).contains("stage=Landed"), "段は Landed");
+    clean(&[&repo, &state]);
+}
+
+/// `pipe.land_wait_s` の行が無い manifest は land を 1 byte も動かさない（rc 2・event 0 増・main 不変）。
+#[test]
+fn pipe_order_missing_land_wait_row_moves_nothing() {
+    let (repo, state) = repo_with_state();
+    let marker = state.join("lens-ran");
+    let path = write_contract(&repo, &[], &[]);
+    let id = gated_pass(&repo, &state, &path, &marker);
+    let rules = write_rules_land_wait(&state, "rules-order.toml", None);
+    let main = git(&repo, &["rev-parse", "refs/heads/main"]);
+    let before = event_count(&state);
+    let out = land_extra(&repo, &state, &id, &["--rules", &rules]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "行の欠落は rc 2: {}", stdout_of(&out));
+    assert!(stderr_of(&out).contains("pipe.land_wait_s が無い"), "行を名指す: {}", stderr_of(&out));
+    assert_eq!(event_count(&state), before, "event を 1 件も書かない");
+    assert_eq!(git(&repo, &["rev-parse", "refs/heads/main"]), main, "main は動かない");
+    clean(&[&repo, &state]);
+}
+
 /// 追随の rebase が衝突した周は木を戻し、**便を終端にせず**衝突を記帳して止まる（`s2-07l.146`・
 /// ADR-0019 §2.2）。この歯が pin するのは「**main は 1 byte も動かない**・木は衝突前へ戻る」で、
 /// 起こし直しそのものは `pipe_follow_` の歯が測る。
@@ -2751,9 +3048,11 @@ fn pipe_land_exports_verdict_schema1() {
     let line = exported.lines().next().unwrap_or_default();
     let pairs = vessel::fleet::json_lite::parse_object(line).expect("1 行の JSON");
     let keys: Vec<&str> = pairs.iter().map(|(key, _)| key.as_str()).collect();
+    // `order` は schema 1 のまま末尾に足した任意 field（ADR-0021 §2.6 (iv)・設計 gate-cost.md §6）。
+    // 既存の 7 key の並びは動かない。
     assert_eq!(
         keys,
-        vec!["schema", "run", "bead", "sha", "verdict", "evidence", "ts"],
+        vec!["schema", "run", "bead", "sha", "verdict", "evidence", "ts", "order"],
         "面 5 の key 列（ADR-0004 §2.2・版番号に依らず固定）"
     );
     assert_eq!(value_of(&pairs, "schema"), "1");

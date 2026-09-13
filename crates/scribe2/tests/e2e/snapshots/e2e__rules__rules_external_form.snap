@@ -3,5 +3,5 @@ source: crates/scribe2/tests/e2e/rules.rs
 expression: form
 ---
 usage: scribe2 <name|--version|doctor|rules|fleet|vessel|hook|pipe|runner|lens|seat|polarity>
-rules: ok rows=38 kinds=38
+rules: ok rows=39 kinds=39
 rules: no such id

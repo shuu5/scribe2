@@ -52,6 +52,9 @@ const ROW_SLOT_WAIT: &str = "gate.slot_wait_s";
 /// 追随が衝突した便を起こし直す回数の上限を持つ rules 行。
 const ROW_RETRIES: &str = "pipe.follow_retries";
 
+/// land が着地待ちの列で自分の番を待つ上限（秒）を持つ rules 行（設計 gate-cost.md §6）。
+const ROW_LAND_WAIT: &str = "pipe.land_wait_s";
+
 /// `pipe` の使い方。
 pub fn usage() -> String {
     format!(
@@ -664,6 +667,12 @@ fn land_run(args: &[String], id: &str, manifest: &Manifest, policy: LockPolicy) 
         Ok(found) => found,
         Err(reason) => return broken(reason),
     };
+    // 着地の順番を待つ上限（設計 gate-cost.md §6）。`--rules` の manifest から読む＝上限を振る歯の
+    // fixture が land へ届く口はここだけである。
+    let land_wait_s = match int_row(manifest, ROW_LAND_WAIT) {
+        Ok(found) => found,
+        Err(reason) => return broken(reason),
+    };
     super::land::land(&Land {
         run: id,
         bead: &resolved.bead,
@@ -675,6 +684,7 @@ fn land_run(args: &[String], id: &str, manifest: &Manifest, policy: LockPolicy) 
         limits,
         runner,
         retries,
+        land_wait_s,
         approved: resolved.approved,
         policy,
     })

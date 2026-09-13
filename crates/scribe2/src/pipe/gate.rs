@@ -918,6 +918,24 @@ fn parse_lens(text: &str) -> (Verdict, String) {
     }
 }
 
+/// 書きかけの `verdict.json` の拡張子（同じ dir に置いて rename する）。
+const VERDICT_PARTIAL_EXT: &str = "json.partial";
+
+/// `verdict.json` を **atomic に**書く（`s2-07l.147`・設計 gate-cost.md §6・**書きはこの 1 本**）。
+///
+/// 同じ dir の書きかけへ書いて rename する＝読み手（land の着地待ちの列）は途中の file を見ない。
+/// 撃ち直しで判定を書き直す瞬間を「読めない」と測らせない（`Unmeasurable` の瞬間を出す側で塞ぐ）。
+/// 書けなかった周は書きかけを残さず、本 file も生まれない（前の判定のまま）。
+fn write_verdict(path: &Path, text: &str) -> Result<(), String> {
+    let partial = path.with_extension(VERDICT_PARTIAL_EXT);
+    std::fs::write(&partial, text)
+        .and_then(|()| std::fs::rename(&partial, path))
+        .map_err(|err| {
+            let _ = std::fs::remove_file(&partial);
+            format!("{} を書けない: {err}", path.display())
+        })
+}
+
 /// 判定を `verdict.json` へ書き、`Gated` を 1 件追記する。
 ///
 /// **測り直しの周も同じ経路を通る**: file は最後の判定で上書きし、event は追記する。
@@ -937,9 +955,7 @@ fn settle(entry: &Gate<'_>, decision: &Decision) -> Result<(), String> {
     }
     fields.push(("ts", Value::Str(now_utc())));
     let body = json_lite::write_object(&fields);
-    let path = verdict_path(entry.state_dir, entry.run);
-    std::fs::write(&path, format!("{body}\n"))
-        .map_err(|err| format!("{} を書けない: {err}", path.display()))?;
+    write_verdict(&verdict_path(entry.state_dir, entry.run), &format!("{body}\n"))?;
     emit(
         entry.state_dir,
         &Emit {
@@ -989,8 +1005,58 @@ fn broken(reason: String) -> Outcome {
 
 #[cfg(test)]
 mod tests {
-    use super::substitute;
-    use std::path::Path;
+    use super::{substitute, write_verdict};
+    use std::path::{Path, PathBuf};
+
+    /// 歯ごとの空の tmp dir（in-file の歯の置き場・env を読まないのは器の本体の規律〔C2.2〕）。
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("gate-verdict-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::create_dir_all(&dir);
+        dir
+    }
+
+    /// dir の直下の名前（名前順）。
+    fn names(dir: &Path) -> Vec<String> {
+        let mut found: Vec<String> = std::fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect();
+        found.sort();
+        found
+    }
+
+    /// 判定の書きは完了後に書きかけを残さず、本 file の中身は完全（前の判定を丸ごと置き換える）。
+    #[test]
+    fn pipe_order_verdict_write_is_whole_and_leaves_no_partial() {
+        let dir = scratch("whole");
+        let path = dir.join("verdict.json");
+        std::fs::write(&path, "{\"verdict\":\"PASS\",\"evidence\":\"a longer previous verdict\"}\n")
+            .expect("前の判定を置ける");
+        let body = "{\"schema\":1,\"verdict\":\"FAIL\"}\n";
+        assert_eq!(write_verdict(&path, body), Ok(()));
+        assert_eq!(std::fs::read_to_string(&path).ok().as_deref(), Some(body), "本 file の中身が完全");
+        assert_eq!(names(&dir), ["verdict.json"], "書きかけを残さない");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 書けない周は本 file が生まれず（部分 file 0）、書きかけも残さない: 親 dir が無い / 行き先が dir で
+    /// rename が断られる（書きかけは書けた後に落ちる形）。
+    #[test]
+    fn pipe_order_verdict_write_failure_leaves_no_partial_file() {
+        let dir = scratch("unwritable");
+        let absent = dir.join("absent").join("verdict.json");
+        assert!(write_verdict(&absent, "{}\n").is_err(), "親 dir が無い");
+        assert!(!absent.exists(), "本 file が生まれない");
+        let blocked = dir.join("verdict.json");
+        std::fs::create_dir_all(blocked.join("inside")).expect("行き先を dir で塞げる");
+        assert!(write_verdict(&blocked, "{}\n").is_err(), "rename が断られる");
+        assert!(blocked.is_dir(), "行き先は元のまま");
+        assert_eq!(names(&dir), ["verdict.json"], "書きかけを残さない");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// `--lens` の cmd の穴は **2 つ**（契約 / worktree）で、どちらも埋まる。
     ///

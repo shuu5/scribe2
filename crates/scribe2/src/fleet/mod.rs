@@ -916,16 +916,24 @@ pub enum Completion {
     },
     /// process group の全員が消えること（group 宛ての TERM / KILL の後・値は group id）。
     GroupGone(u32),
+    /// land の番が来ること（[`crate::pipe::land`]・設計 gate-cost.md §6）: 同じ置き場の着地待ちの列で
+    /// 自分より前の便が居なくなる。列を導けない周も満たされた側である（待たずに進む・記録は land が残す）。
+    LandTurn {
+        /// event log の置き場（列は replay から導く・別の状態 file を持たない）。
+        state_dir: std::path::PathBuf,
+        /// 待つ便の id。
+        run: String,
+    },
 }
 
 impl Completion {
-    /// 見張る pid。**pid を見張らない variant（[`Self::SlotFree`]）は 0**——pid 0 は
+    /// 見張る pid。**pid を見張らない variant（[`Self::SlotFree`] / [`Self::LandTurn`]）は 0**——pid 0 は
     /// `/proc/0` を持たない（user の process に振られない）ので、生きている pid と取り違えない。
     /// [`Self::GroupGone`] は group id（= group leader の pid）を返す。
     pub fn pid(&self) -> u32 {
         match *self {
             Self::RunnerExited(pid) | Self::SeatGone(pid) | Self::GroupGone(pid) => pid,
-            Self::SlotFree { .. } => 0,
+            Self::SlotFree { .. } | Self::LandTurn { .. } => 0,
         }
     }
 
@@ -941,6 +949,10 @@ impl Completion {
                     crate::pipe::admission::Sizes { job_mb: *job_mb, reserve_mb: *reserve_mb },
                 )
             }
+            Self::LandTurn { state_dir, run } => !matches!(
+                crate::pipe::land::turn_now(state_dir, run),
+                crate::pipe::land::Turn::After(_)
+            ),
         }
     }
 }
@@ -1034,6 +1046,7 @@ mod tests {
                 cap: 1,
             },
             Completion::GroupGone(9),
+            Completion::LandTurn { state_dir: std::path::PathBuf::from("state"), run: "r".to_owned() },
         ];
         let names: Vec<&str> = all
             .iter()
@@ -1042,8 +1055,13 @@ mod tests {
                 Completion::SeatGone(_) => "SeatGone",
                 Completion::SlotFree { .. } => "SlotFree",
                 Completion::GroupGone(_) => "GroupGone",
+                Completion::LandTurn { .. } => "LandTurn",
             })
             .collect();
-        assert_eq!(names, ["RunnerExited", "SeatGone", "SlotFree", "GroupGone"], "宣言順の末尾に GroupGone");
+        assert_eq!(
+            names,
+            ["RunnerExited", "SeatGone", "SlotFree", "GroupGone", "LandTurn"],
+            "宣言順の末尾に LandTurn"
+        );
     }
 }

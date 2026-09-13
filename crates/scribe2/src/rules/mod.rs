@@ -118,6 +118,8 @@ pub enum RuleKind {
     GateCpuWeight,
     /// 退避物の節 3（命令・制約）に置ける項目行の上限（行）。超えた退避は止まる（黙って切らない）。
     WmDirectiveCap,
+    /// land が着地待ちの列で自分の番を待つ上限（秒）。超えたら待たずに進む（縮退・止めない）。
+    PipeLandWaitS,
 }
 
 /// [`RuleKind`] の全 variant。parity test の母集団である。
@@ -160,6 +162,7 @@ pub const ALL: &[RuleKind] = &[
     RuleKind::GateSlotWaitS,
     RuleKind::GateCpuWeight,
     RuleKind::WmDirectiveCap,
+    RuleKind::PipeLandWaitS,
 ];
 
 impl RuleKind {
@@ -204,6 +207,7 @@ impl RuleKind {
             Self::GateSlotWaitS => "GateSlotWaitS",
             Self::GateCpuWeight => "GateCpuWeight",
             Self::WmDirectiveCap => "WmDirectiveCap",
+            Self::PipeLandWaitS => "PipeLandWaitS",
         }
     }
 
@@ -239,7 +243,8 @@ impl RuleKind {
             | Self::HostReserveMemoryMb
             | Self::GateSlotWaitS
             | Self::GateCpuWeight
-            | Self::WmDirectiveCap => ValueShape::Int,
+            | Self::WmDirectiveCap
+            | Self::PipeLandWaitS => ValueShape::Int,
             Self::DialogueSurface => ValueShape::Str,
             Self::MaturityCondition
             | Self::AccountSelection
