@@ -6135,8 +6135,8 @@ fn pipe_ratelimit_spawn_keeps_the_run_at_rate_limited() {
     let (id, _) = rate_limited_run(&repo, &state);
     assert_eq!(
         last_stage(&state, &id),
-        Some((Some(Stage::RateLimited), Some("rc:75,status:allowed_warning".to_owned()))),
-        "段は RateLimited で status を運ぶ"
+        Some((Some(Stage::RateLimited), Some("rc:75,status:allowed_warning,account:inherited".to_owned()))),
+        "段は RateLimited で status と口座（渡していない周は inherited）を運ぶ"
     );
     assert_eq!(stage_count(&state, &id, Stage::Failed), 0, "Failed に倒さない");
     let worktree = worktree_of(&repo, &id);
@@ -6146,8 +6146,9 @@ fn pipe_ratelimit_spawn_keeps_the_run_at_rate_limited() {
     clean(&[&repo, &state]);
 }
 
-/// `RateLimited` は**終端でない**: (4) intake の排他の母集団に数えられ、`resume` は受けず（起こし
-/// 直しは後続の経路）、(5) `stop --run` で `Stopped` に倒せる（倒した後は同じ write-set が通る）。
+/// `RateLimited` は**終端でない**: (4) intake の排他の母集団に数えられ、credential の無い置き場では
+/// `resume` が口座待ち（rc 3・待つ reset が無いので起こさない）で止まり、(5) `stop --run` で `Stopped` に
+/// 倒せる（倒した後は同じ write-set が通る）。
 #[test]
 fn pipe_ratelimit_run_stays_live_until_stopped() {
     let (repo, state) = repo_with_state();
@@ -6160,9 +6161,11 @@ fn pipe_ratelimit_run_stays_live_until_stopped() {
         "resume", "--run", &id, "--repo", &repo.display().to_string(),
         "--state-dir", &state.display().to_string(), "--runner", &runner,
     ]);
-    assert_eq!(resumed.status.code(), Some(i32::from(RC_REFUSED)), "resume は断る: {}", stderr_of(&resumed));
-    assert!(stderr_of(&resumed).contains("段 RateLimited からは再開しない"), "{}", stderr_of(&resumed));
-    assert_eq!(stub_calls(&state), 1, "resume は runner を起こさない");
+    assert_eq!(resumed.status.code(), Some(i32::from(RC_BLOCKED)), "測れる口座が無い周は口座待ち: {}", stderr_of(&resumed));
+    assert!(stdout_of(&resumed).contains(&format!("run={id} next=wait reset=-")), "{}", stdout_of(&resumed));
+    assert!(stderr_of(&resumed).contains("候補なし: unmeasured"), "{}", stderr_of(&resumed));
+    assert_eq!(stub_calls(&state), 1, "口座が無い周は runner を起こさない");
+    assert!(show_line(&repo, &state, &id).contains("stage=RateLimited"), "便は RateLimited のまま live");
     stop_run_ok(&state, &id);
     assert!(show_line(&repo, &state, &id).contains("stage=Stopped"), "stop で Stopped");
     let passed = try_intake(&repo, &state, &second, "s2-third");
@@ -6180,7 +6183,7 @@ fn pipe_ratelimit_without_stop_line_records_unknown_status() {
     assert!(stdout_of(&out).contains("stage=RateLimited"), "{} / {}", stdout_of(&out), stderr_of(&out));
     assert_eq!(
         last_stage(&state, &id),
-        Some((Some(Stage::RateLimited), Some("rc:75,status:unknown".to_owned()))),
+        Some((Some(Stage::RateLimited), Some("rc:75,status:unknown,account:inherited".to_owned()))),
         "読めない status は unknown"
     );
     assert_eq!(stage_count(&state, &id, Stage::Failed), 0, "読めないを Failed に倒さない");
@@ -6202,6 +6205,497 @@ fn pipe_ratelimit_other_rc_still_fails() {
         "他の rc の経路は不変"
     );
     assert_eq!(stage_count(&state, &id, Stage::RateLimited), 0, "rc 1 は RateLimited にしない");
+    clean(&[&repo, &state]);
+}
+
+// ───── 別口座での途中再開（`s2-07l.210`・設計 account-autonomy.md §4・SRS FR37 / FR36 / FR14 / AC12・接頭辞 `pipe_ratelimit_resume_`） ─────
+
+/// turn 1 つ分の本文: 停止行を出して上限の rc で止まる（commit を作らない）。
+fn limit_turn() -> String {
+    format!("printf '%s\\n' '{RATE_LIMIT_STOP_LINE}'\nexit {RC_RATE_LIMIT}")
+}
+
+/// turn 1 つ分の本文: commit を 1 本作ってから上限で止まる（途中再開の一覧に載る commit）。
+fn commit_then_limit_turn() -> String {
+    format!("printf 'y\\n' >> src/lib.rs\ngit add -A\ngit commit -q -m partial-work\n{}", limit_turn())
+}
+
+/// turn 1 つ分の本文: 質問 record で止まる（commit を作らない）。
+fn ask_turn() -> String {
+    format!("printf '%s\\n' '{QUESTION_RECORD}'\nexit 76")
+}
+
+/// turn ごとに本文を振る偽 runner（実行 file）の runner cmd。どの turn も呼出回数・argv（1 行 1 引数の
+/// `argv-<n>`）・stdin（`stdin-<n>`）を置き場へ写す＝「どの口座で・何を渡されて」起きたかを効果で測る。
+/// 本文の無い turn は rc 1 で落ちる（数え落としを静かに通さない）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn turn_runner(state: &Path, turns: &[String]) -> String {
+    let dir = stub_dir(state);
+    fs::create_dir_all(&dir).expect("stub の置き場を作れる");
+    let mut cases = String::new();
+    for (at, body) in turns.iter().enumerate() {
+        cases.push_str(&format!("{})\n{body}\n;;\n", at + 1));
+    }
+    let body = format!(
+        "#!/bin/sh\nD='{}'\nprintf 'call\\n' >> \"$D/calls\"\nN=$(wc -l < \"$D/calls\" | tr -d ' ')\n\
+         printf '%s\\n' \"$@\" > \"$D/argv-$N\"\ncat > \"$D/stdin-$N\"\ncase \"$N\" in\n{cases}*) exit 1 ;;\nesac\n",
+        dir.display()
+    );
+    let path = state.join("turn-runner.sh");
+    fs::write(&path, body).expect("stub を書ける");
+    format!("sh {}", path.display())
+}
+
+/// n turn 目（1 始まり）に渡された argv（1 行 1 引数・無ければ空）。
+fn stub_argv(state: &Path, turn: usize) -> Vec<String> {
+    fs::read_to_string(stub_dir(state).join(format!("argv-{turn}")))
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_owned)
+        .collect()
+}
+
+/// 遠い未来の reset（どの「いま」でも古くない）。
+const FAR_RESET: &str = "2099-01-01T05:00:00Z";
+
+/// 遠い未来の 7 日窓の reset。
+const FAR_WEEK_RESET: &str = "2099-01-07T00:00:00Z";
+
+/// 口座 1 つの窓の fixture（5 時間窓の使用率と reset・7 日窓の使用率・reset は [`FAR_WEEK_RESET`]）。
+#[derive(Debug, Clone)]
+struct Windows {
+    five: u64,
+    five_reset: String,
+    seven: u64,
+}
+
+/// 5 時間窓が `five`%（reset は遠い未来）・7 日窓が `seven`% の fixture。
+fn windows(five: u64, seven: u64) -> Windows {
+    Windows { five, five_reset: FAR_RESET.to_owned(), seven }
+}
+
+/// 口座残量の応答の本文（`fleet usage` が読む形・モデル別の行なし）。
+fn usage_body(found: &Windows) -> String {
+    format!(
+        r#"{{"five_hour":{{"utilization":{},"resets_at":"{}"}},"seven_day":{{"utilization":{},"resets_at":"{FAR_WEEK_RESET}"}},"limits":[]}}"#,
+        found.five, found.five_reset, found.seven
+    )
+}
+
+/// `pipe resume` / `pipe run` に渡す manifest: [`write_rules`] の写しに計測の待ち時間の行と `[[account]]` を
+/// `labels` の順で足したもの。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn resume_rules(state: &Path, labels: &[&str]) -> String {
+    let path = write_rules(state, "rules-resume.toml", 1, 1_000_000);
+    let mut body = fs::read_to_string(&path).expect("写しを読める");
+    body.push_str(
+        "\n[[rule]]\nid = \"fleet.usage_timeout_s\"\nkind = \"UsageTimeoutS\"\nvalue = 13\nenabled = true\nruling = \"t\"\nruled_at = \"d\"\n",
+    );
+    for label in labels {
+        body.push_str(&format!("\n[[account]]\nlabel = \"{label}\"\n"));
+    }
+    fs::write(&path, body).expect("manifest を書ける");
+    path.display().to_string()
+}
+
+/// 口座 label の credential（`<state>/accounts/<label>/.credentials.json`・token は `tok-<label>`）と、偽 curl が
+/// その token に返す本文（`rounds` の n 番目は n 回目の呼出しの本文・尽きたら最後の本文のまま）を置く。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn put_account(state: &Path, label: &str, rounds: &[Windows]) {
+    let dir = state.join("accounts").join(label);
+    fs::create_dir_all(&dir).expect("credential の dir を作れる");
+    let credential = format!(
+        r#"{{"claudeAiOauth":{{"accessToken":"tok-{label}","refreshToken":"r","expiresAt":4102444800000}}}}"#
+    );
+    fs::write(dir.join(".credentials.json"), credential).expect("credential を書ける");
+    let spy = curl_spy(state);
+    fs::create_dir_all(&spy).expect("偽 curl の置き場を作れる");
+    fs::write(spy.join(format!("token-tok-{label}")), "0").expect("呼出回数を置ける");
+    for (at, found) in rounds.iter().enumerate() {
+        fs::write(spy.join(format!("body-tok-{label}-{}", at + 1)), usage_body(found)).expect("本文を書ける");
+    }
+}
+
+/// 偽 curl の置き場（呼出回数・token ごとの本文・argv の写し）。
+fn curl_spy(state: &Path) -> PathBuf {
+    state.join("curl-spy")
+}
+
+/// 偽 curl: stdin の設定行の token で口座を選び、その token の n 回目の呼出しに `body-<token>-<n>`（無ければ
+/// 最後の本文）を返す。argv は `curl-args` へ追記で写す。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn fake_usage_curl(state: &Path) -> String {
+    use std::os::unix::fs::PermissionsExt;
+    let spy = curl_spy(state);
+    fs::create_dir_all(&spy).expect("偽 curl の置き場を作れる");
+    let script = format!(
+        "#!/bin/sh\n\
+         D='{}'\n\
+         printf '%s\\n' \"$@\" >> \"$D/curl-args\"\n\
+         cfg=$(cat)\n\
+         for f in \"$D\"/token-*; do\n\
+         tok=${{f##*/token-}}\n\
+         case \"$cfg\" in *\"Bearer $tok\\\"\"*)\n\
+         n=$(cat \"$f\"); n=$((n+1)); printf '%s' \"$n\" > \"$f\"\n\
+         while [ ! -f \"$D/body-$tok-$n\" ] && [ \"$n\" -gt 1 ]; do n=$((n-1)); done\n\
+         cat \"$D/body-$tok-$n\"\n\
+         ;; esac\n\
+         done\n\
+         printf '\\n%s' '200'\n\
+         exit 0\n",
+        spy.display()
+    );
+    let path = spy.join("fake-curl");
+    fs::write(&path, script).expect("偽 curl を書ける");
+    let mut perm = fs::metadata(&path).expect("偽 curl の権限を読める").permissions();
+    perm.set_mode(0o755);
+    fs::set_permissions(&path, perm).expect("偽 curl を実行可能にできる");
+    path.display().to_string()
+}
+
+/// 偽 curl が呼ばれた回数（口座 1 つの計測につき 1 回）。
+fn curl_calls(state: &Path) -> usize {
+    fs::read_to_string(curl_spy(state).join("curl-args"))
+        .unwrap_or_default()
+        .lines()
+        .filter(|arg| *arg == "--max-time")
+        .count()
+}
+
+/// `resume` を manifest・偽 curl・runner つきで 1 回撃つ。
+fn resume_with_accounts(repo: &Path, state: &Path, id: &str, runner: &str, rules: &str) -> Output {
+    run_pipe(&[
+        "resume", "--run", id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(), "--runner", runner,
+        "--rules", rules, "--curl", &fake_usage_curl(state),
+    ])
+}
+
+/// 便の `Spawned` の detail の列（物理順）。
+fn spawned_details(state: &Path, id: &str) -> Vec<String> {
+    stages(state, id)
+        .into_iter()
+        .filter(|(stage, _)| *stage == Some(Stage::Spawned))
+        .filter_map(|(_, detail)| detail)
+        .collect()
+}
+
+/// 便の `RunStage(RateLimited)` の detail の列（物理順）。
+fn rate_limited_details(state: &Path, id: &str) -> Vec<String> {
+    stages(state, id)
+        .into_iter()
+        .filter(|(stage, _)| *stage == Some(Stage::RateLimited))
+        .filter_map(|(_, detail)| detail)
+        .collect()
+}
+
+/// `argv` に `--account-dir <dir>` の 2 引数が並ぶか。
+fn argv_account_dir(argv: &[String]) -> Option<String> {
+    argv.windows(2)
+        .find(|pair| pair.first().is_some_and(|flag| flag == "--account-dir"))
+        .and_then(|pair| pair.get(1).cloned())
+}
+
+/// 上限で止まった便（turn 1 = 上限・turn 2 以降 = `rest`）と、その置き場の口座 fixture（`labels` の manifest）を
+/// 組む。返すのは `(run id, runner cmd, manifest の path)`。
+fn rate_limited_with_accounts(repo: &Path, state: &Path, rest: &[String], labels: &[&str]) -> (String, String, String) {
+    let first = write_set_contract(repo, "first.toml", &["src/lib.rs"]);
+    let id = intake_bead(repo, state, &first, "s2-limit");
+    let mut turns = vec![limit_turn()];
+    turns.extend(rest.iter().cloned());
+    let runner = turn_runner(state, &turns);
+    let out = spawn_with(repo, state, &id, &runner);
+    assert!(stdout_of(&out).contains("stage=RateLimited"), "{} / {}", stdout_of(&out), stderr_of(&out));
+    let rules = resume_rules(state, labels);
+    (id, runner, rules)
+}
+
+/// 便を gate（PASS の偽 lens）→ land で Landed まで通し、人由来の event が 0 であることを測る。
+fn assert_lands_without_human(repo: &Path, state: &Path, id: &str) {
+    let marker = state.join("lens-ran");
+    let gated = gate_once(repo, state, id, Some(&fake_lens(&marker, &lens_verdict("PASS"))));
+    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "gate: {}", stderr_of(&gated));
+    let landed = land_once(repo, state, id);
+    assert_eq!(landed.status.code(), Some(i32::from(RC_OK)), "land: {}", stderr_of(&landed));
+    assert!(show_line(repo, state, id).contains("stage=Landed"), "Landed まで通る");
+    let report = report_once(state);
+    assert_eq!(
+        stdout_of(&report).trim(),
+        "runs=1 landed=1 human_events=0 human_events_other_than_approval=0",
+        "人由来の event は 0（FR22）"
+    );
+}
+
+/// n turn 目の stdin の中で、契約 → 回答（在れば）→ 途中再開 の順に節が並ぶか。
+fn sections_in_order(prompt: &str, with_answer: bool) -> bool {
+    let contract_at = prompt.find("goal = ");
+    let resume_at = prompt.find("## 途中再開");
+    let answer_at = if with_answer { prompt.find("## 回答") } else { contract_at };
+    matches!((contract_at, answer_at, resume_at), (Some(c), Some(a), Some(r)) if c <= a && a < r)
+}
+
+/// 席の登録 row を 1 件置く（`seat register` は打刻を要るので、便の歯は行を直に積む・読み手は replay）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn register_seat_account(state: &Path, account: &str) {
+    let event = Event {
+        schema: vessel::fleet::SCHEMA,
+        ts: vessel::fleet::cli::now_utc(),
+        kind: EventKind::SeatRegistered,
+        run: String::new(),
+        bead: String::new(),
+        host: vessel::fleet::cli::host(),
+        actor: vessel::fleet::ACTOR_MACHINE.to_owned(),
+        stage: None,
+        seat: None,
+        pid: None,
+        detail: None,
+        allowance: None,
+        registration: Some(vessel::fleet::Registration {
+            role: vessel::seat::role::Role::Planner,
+            anchor: "/repo/anchor".to_owned(),
+            target: "rs:planner".to_owned(),
+            sid: "sid-a".to_owned(),
+            account: account.to_owned(),
+            launch: "launch {credential-dir}\n".to_owned(),
+            model: None,
+        }),
+    };
+    let policy = vessel::fleet::store::LockPolicy::embedded().expect("埋め込みの lock 行を読める");
+    vessel::fleet::store::append(state, &event, policy).expect("登録 row を積める");
+}
+
+/// (1)(5)(6)(7) 上限で止まった便は器が選んだ別口座で起こし直され Landed まで通る（AC12 の T）: 余裕の
+/// label の `--account-dir` が runner の argv に渡り・`Spawned detail=account:<label>,resume:rate-limit` が
+/// 記帳され・段の detail に `account:` が載り・2 度目の prompt に「途中再開」節が契約の後に在り・人由来の
+/// event は 0。
+#[test]
+fn pipe_ratelimit_resume_respawns_on_the_free_account_and_lands() {
+    let (repo, state) = repo_with_state();
+    let (id, runner, rules) = rate_limited_with_accounts(&repo, &state, &[IMPLEMENT.to_owned()], &["a1", "a2"]);
+    assert_eq!(
+        rate_limited_details(&state, &id),
+        vec!["rc:75,status:allowed_warning,account:inherited".to_owned()],
+        "口座を渡していない turn の detail"
+    );
+    put_account(&state, "a1", &[windows(100, 10)]);
+    put_account(&state, "a2", &[windows(40, 10)]);
+    let resumed = resume_with_accounts(&repo, &state, &id, &runner, &rules);
+    assert_eq!(resumed.status.code(), Some(i32::from(RC_OK)), "{} / {}", stdout_of(&resumed), stderr_of(&resumed));
+    assert_eq!(
+        stdout_of(&resumed).trim(),
+        format!("run={id} next=spawn account=a2\nrun={id} stage=Implemented"),
+        "判定行は next=spawn account=<label>・続けて turn の結果"
+    );
+    assert_eq!(curl_calls(&state), 2, "選定の直前に FR33 の計測を 1 回（口座 2 つ）");
+    assert_eq!(stub_calls(&state), 2, "runner を 1 回起こし直した");
+    assert_eq!(argv_account_dir(&stub_argv(&state, 1)), None, "初回の turn は口座を渡さない");
+    assert_eq!(
+        argv_account_dir(&stub_argv(&state, 2)),
+        Some(state.join("accounts").join("a2").display().to_string()),
+        "起こし直しは余裕の label の credential dir を渡す: {:?}",
+        stub_argv(&state, 2)
+    );
+    let details = spawned_details(&state, &id);
+    assert!(
+        details.len() == 2 && details.first().is_some_and(|found| found.starts_with("base:")),
+        "初回は base を名乗る: {details:?}"
+    );
+    assert_eq!(details.get(1).map(String::as_str), Some("account:a2,resume:rate-limit"), "起こし直しの記帳: {details:?}");
+    let second = stub_stdin(&state, 2);
+    assert!(sections_in_order(&second, false), "2 度目の prompt に「途中再開」節が契約の後に在る: {second}");
+    assert!(second.contains("base からの commit（worktree に在る・やり直さない）: なし"), "commit の無い便は なし: {second}");
+    assert!(!stub_stdin(&state, 1).contains("## 途中再開"), "初回の turn には節が無い");
+    // 続きの段（gate → land）はそのまま通る。
+    assert_lands_without_human(&repo, &state, &id);
+    clean(&[&repo, &state]);
+}
+
+/// (2) 全口座が当たっている周は最も早い reset まで唯一の wait で待ち（`next=wait reset=<ts>`）、reset を
+/// 過ぎて `Timeout` を受けた周は計測から撃ち直して（偽 curl の 2 回目は余裕）起こし直す。
+#[test]
+fn pipe_ratelimit_resume_waits_for_the_earliest_reset_then_remeasures() {
+    let (repo, state) = repo_with_state();
+    let (id, runner, rules) = rate_limited_with_accounts(&repo, &state, &[IMPLEMENT.to_owned()], &["a1", "a2"]);
+    // a1 は 2 秒後に開き直る（最も早い reset）・a2 は 4 秒後。2 回目の計測では a1 に余裕が戻る。
+    let now = vessel::fleet::epoch_of(&vessel::fleet::cli::now_utc()).unwrap_or_default();
+    let soon = vessel::fleet::cli::format_utc(now + 2);
+    let later = vessel::fleet::cli::format_utc(now + 4);
+    let limited = |reset: &str| Windows { five: 100, five_reset: reset.to_owned(), seven: 10 };
+    put_account(&state, "a1", &[limited(&soon), windows(50, 10)]);
+    put_account(&state, "a2", &[limited(&later), limited(&later)]);
+    let started = Instant::now();
+    let resumed = resume_with_accounts(&repo, &state, &id, &runner, &rules);
+    let waited = started.elapsed();
+    assert_eq!(resumed.status.code(), Some(i32::from(RC_OK)), "{} / {}", stdout_of(&resumed), stderr_of(&resumed));
+    let stdout = stdout_of(&resumed);
+    assert!(stdout.contains(&format!("run={id} next=wait reset={soon}")), "最も早い reset を名乗って待つ: {stdout}");
+    assert!(stdout.contains(&format!("run={id} next=spawn account=a1")), "reset の後の計測で a1 を選ぶ: {stdout}");
+    assert!(stdout.contains(&format!("run={id} stage=Implemented")), "{stdout}");
+    assert!(waited >= Duration::from_secs(1), "reset まで待った（{waited:?}）");
+    assert_eq!(curl_calls(&state), 4, "Timeout の後に計測を撃ち直す（口座 2 つ × 2 回）");
+    assert_eq!(stub_calls(&state), 2, "起こし直しは 1 回");
+    assert_eq!(
+        argv_account_dir(&stub_argv(&state, 2)),
+        Some(state.join("accounts").join("a1").display().to_string()),
+        "{:?}",
+        stub_argv(&state, 2)
+    );
+    clean(&[&repo, &state]);
+}
+
+/// (3) 登録 row の口座は候補から外れる: その口座だけが余裕でも `NoCandidate`（理由 = 除外で空）で、待つ
+/// reset が無いので起こさず rc 3 で止まる（便は `RateLimited` のまま live）。
+#[test]
+fn pipe_ratelimit_resume_excludes_the_registered_seat_account() {
+    let (repo, state) = repo_with_state();
+    let (id, runner, rules) = rate_limited_with_accounts(&repo, &state, &[IMPLEMENT.to_owned()], &["a2"]);
+    put_account(&state, "a2", &[windows(40, 10)]);
+    register_seat_account(&state, "a2");
+    let resumed = resume_with_accounts(&repo, &state, &id, &runner, &rules);
+    assert_eq!(resumed.status.code(), Some(i32::from(RC_BLOCKED)), "{} / {}", stdout_of(&resumed), stderr_of(&resumed));
+    assert!(stdout_of(&resumed).contains(&format!("run={id} next=wait reset=-")), "{}", stdout_of(&resumed));
+    assert!(stderr_of(&resumed).contains("候補なし: excluded"), "理由は除外で空: {}", stderr_of(&resumed));
+    assert_eq!(curl_calls(&state), 1, "計測は撃つ（除外は選定の入力）");
+    assert_eq!(stub_calls(&state), 1, "席の口座では起こさない");
+    assert!(show_line(&repo, &state, &id).contains("stage=RateLimited"), "便は RateLimited のまま");
+    assert_eq!(spawned_details(&state, &id).len(), 1, "起こし直しの記帳は無い");
+    clean(&[&repo, &state]);
+}
+
+/// (4) 待ちの途中の便を `pipe stop --run` が止める: `RunStopped` が書かれ、待ちから抜けて起こさない。
+#[test]
+fn pipe_ratelimit_resume_stop_breaks_the_wait() {
+    let (repo, state) = repo_with_state();
+    let (id, runner, rules) = rate_limited_with_accounts(&repo, &state, &[IMPLEMENT.to_owned()], &["a1", "a2"]);
+    put_account(&state, "a1", &[windows(100, 10)]);
+    put_account(&state, "a2", &[windows(100, 10)]);
+    let curl = fake_usage_curl(&state);
+    let mut child = Command::new(bin())
+        .args([
+            "pipe", "resume", "--run", &id, "--repo", &repo.display().to_string(),
+            "--state-dir", &state.display().to_string(), "--runner", &runner,
+            "--rules", &rules, "--curl", &curl,
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("resume を背景で起こせる");
+    // 計測が終わる（口座 2 つの行が置き場に載る）まで待ってから止める＝待ちの途中で止める形。
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while curl_calls(&state) < 2 && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(curl_calls(&state), 2, "計測が撃たれた");
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(child.try_wait().expect("状態を読める").is_none(), "待ちの間は process が生きている（reset は 2099 年）");
+    stop_run_ok(&state, &id);
+    let finished = child.wait_with_output().expect("resume の終了を待てる");
+    let stdout = String::from_utf8_lossy(&finished.stdout);
+    let stderr = String::from_utf8_lossy(&finished.stderr);
+    assert_eq!(finished.status.code(), Some(i32::from(RC_REFUSED)), "止められた便は段違いで断る: {stdout} / {stderr}");
+    assert!(stdout.contains(&format!("run={id} next=wait reset={FAR_RESET}")), "待ちの判定行: {stdout}");
+    assert!(stderr.contains("段は Stopped である"), "{stderr}");
+    assert_eq!(stub_calls(&state), 1, "止めた後に起こさない");
+    assert!(show_line(&repo, &state, &id).contains("stage=Stopped"), "便は Stopped で終端");
+    assert_eq!(kind_count(&state, &id, EventKind::RunStopped), 1, "RunStopped が 1 件");
+    clean(&[&repo, &state]);
+}
+
+/// (5) 回答済みの質問を持つ便の途中再開: prompt は 契約 → 回答 → 途中再開 の順で、節は base からの
+/// commit の一覧と止まった時刻（`RateLimited` の event の ts）を運ぶ。
+#[test]
+fn pipe_ratelimit_resume_prompt_lists_commits_after_the_answer() {
+    let (repo, state) = repo_with_state();
+    let first = write_set_contract(&repo, "first.toml", &["src/lib.rs"]);
+    let id = intake_bead(&repo, &state, &first, "s2-limit");
+    let runner = turn_runner(&state, &[ask_turn(), commit_then_limit_turn(), IMPLEMENT.to_owned()]);
+    let asked = spawn_with(&repo, &state, &id, &runner);
+    assert_eq!(asked.status.code(), Some(i32::from(RC_BLOCKED)), "質問で止まる: {}", stderr_of(&asked));
+    let answered = run_pipe(&[
+        "answer", "--run", &id, "--words", "verify は 1 行目だけを撃つ",
+        "--state-dir", &state.display().to_string(),
+    ]);
+    assert_eq!(answered.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&answered));
+    let second = run_pipe(&[
+        "resume", "--run", &id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(), "--runner", &runner,
+    ]);
+    assert_eq!(second.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&second));
+    assert!(stdout_of(&second).contains("stage=RateLimited"), "commit を作ってから上限で止まる: {}", stdout_of(&second));
+    let stopped_at = events(&state)
+        .into_iter()
+        .filter(|event| event.run == id && event.stage == Some(Stage::RateLimited))
+        .map(|event| event.ts)
+        .next_back()
+        .unwrap_or_default();
+    let rules = resume_rules(&state, &["a1"]);
+    put_account(&state, "a1", &[windows(30, 30)]);
+    let third = resume_with_accounts(&repo, &state, &id, &runner, &rules);
+    assert_eq!(third.status.code(), Some(i32::from(RC_OK)), "{} / {}", stdout_of(&third), stderr_of(&third));
+    let prompt = stub_stdin(&state, 3);
+    assert!(sections_in_order(&prompt, true), "順序は 契約 → 回答 → 途中再開: {prompt}");
+    let stopped_line = format!("- 前の turn は {stopped_at} に口座の上限で止まった");
+    assert!(!stopped_at.is_empty() && prompt.contains(&stopped_line), "止まった時刻（log の ts）: {prompt}");
+    assert!(prompt.contains("partial-work") && !prompt.contains("## 追随"), "base からの commit の一覧・追随は無い: {prompt}");
+    assert!(!stub_stdin(&state, 2).contains("## 途中再開"), "上限で止まる前の turn には節が無い");
+    assert_eq!(git(&worktree_of(&repo, &id), &["rev-list", "--count", "refs/heads/main..HEAD"]), "2", "途中の commit を保ったまま続きを積む");
+    clean(&[&repo, &state]);
+}
+
+/// 起こし直した turn がまた上限で止まった周も回数の上限なく続く（`pipe run` の 1 process で
+/// intake → 上限 → 別口座 → 上限（detail に `account:<label>`）→ 別の口座 → gate → land）。
+#[test]
+fn pipe_ratelimit_resume_run_rides_out_repeated_limits_without_a_cap() {
+    let (repo, state) = repo_with_state();
+    let first = write_set_contract(&repo, "first.toml", &["src/lib.rs"]);
+    let runner = turn_runner(&state, &[limit_turn(), limit_turn(), IMPLEMENT.to_owned()]);
+    let rules = resume_rules(&state, &["a1", "a2"]);
+    // 1 回目の計測: a1 は当たっている・a2 に余裕。2 回目: a2 が当たり・a1 に余裕が戻る。
+    put_account(&state, "a1", &[windows(100, 10), windows(60, 10)]);
+    put_account(&state, "a2", &[windows(40, 10), windows(100, 10)]);
+    let marker = state.join("lens-ran");
+    let lens = fake_lens(&marker, &lens_verdict("PASS"));
+    let out = run_pipe(&[
+        "run", "--contract", &first.display().to_string(), "--bead", "s2-limit",
+        "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
+        "--rules", &rules, "--curl", &fake_usage_curl(&state), "--runner", &runner, "--lens", &lens,
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{} / {}", stdout_of(&out), stderr_of(&out));
+    let id = run_id_of(&out);
+    let stdout = stdout_of(&out);
+    assert!(stdout.contains(&format!("run={id} next=spawn account=a2")), "{stdout}");
+    assert!(stdout.contains(&format!("run={id} next=spawn account=a1")), "{stdout}");
+    assert_eq!(
+        rate_limited_details(&state, &id),
+        vec![
+            "rc:75,status:allowed_warning,account:inherited".to_owned(),
+            "rc:75,status:allowed_warning,account:a2".to_owned(),
+        ],
+        "上限の段の detail は起こした口座を運ぶ"
+    );
+    let details = spawned_details(&state, &id);
+    assert_eq!(details.len(), 3, "{details:?}");
+    assert_eq!(details[1], "account:a2,resume:rate-limit");
+    assert_eq!(details[2], "account:a1,resume:rate-limit");
+    assert_eq!(stub_calls(&state), 3);
+    assert_eq!(curl_calls(&state), 4, "起こし直しのたびに計測（2 口座 × 2 回）");
+    assert!(show_line(&repo, &state, &id).contains("stage=Landed"), "1 process で Landed まで: {stdout}");
+    assert!(!events(&state).iter().any(|event| event.actor == "human"), "人由来の event は 0");
     clean(&[&repo, &state]);
 }
 

@@ -184,7 +184,7 @@ fn retried(state_dir: &Path, run: &str) -> Option<u64> {
 
 /// 上限の内の周: runner をもう 1 turn 起こし、**次に撃つ段（gate）を名乗って止まる**。
 fn retry(entry: &Conflict<'_>) -> Outcome {
-    let mut outcome = spawn_turn(&entry.turn);
+    let mut outcome = spawn_turn(&entry.turn, None);
     if outcome.rc != RC_OK {
         return outcome;
     }
@@ -216,7 +216,10 @@ fn retry(entry: &Conflict<'_>) -> Outcome {
 /// **[`super::spawn::spawn`] への呼び手はこの 1 本だけ**である（起動口そのものは spawn で、
 /// ここはその唯一の経路＝C6 の形を崩さない）。`--runner` を持たない周は 1 行も書かずに断る
 /// ——起こし直しの口（`pipe land` / `pipe resume`）は runner を渡す責務を持つ。
-pub(crate) fn spawn_turn(entry: &Turn<'_>) -> Outcome {
+///
+/// `account` は器が選んだ口座の label（上限で止まった便の別口座での起こし直し・設計
+/// account-autonomy.md §4）で、通常の起動と衝突の起こし直しは `None`（親の環境を継承）。
+pub(crate) fn spawn_turn(entry: &Turn<'_>, account: Option<&str>) -> Outcome {
     let Some(runner) = entry.runner else {
         return refused(format!("run {} の起こし直しに --runner が要る", entry.run));
     };
@@ -230,6 +233,8 @@ pub(crate) fn spawn_turn(entry: &Turn<'_>) -> Outcome {
     // 「追随」節の有無は **stdin の組立にだけ**効く。turn の後始末（[`settle`]）は節の有無に
     // 依らず同じ 1 本である（設計 §3 手順 5）。
     let follow = section(entry.state_dir, entry.repo, entry.run);
+    // 「途中再開」節も同じく stdin の組立にだけ効く（`RateLimited` の便だけが持つ）。
+    let resumed = resumption(entry.state_dir, entry.repo, entry.run);
     let mut outcome = spawn(
         budget,
         &Launch {
@@ -242,6 +247,8 @@ pub(crate) fn spawn_turn(entry: &Turn<'_>) -> Outcome {
             approved: entry.approved,
             answered,
             follow,
+            resumed,
+            account,
             policy: entry.policy,
         },
     );
@@ -269,6 +276,48 @@ pub(crate) fn section(state_dir: &Path, repo: &Path, run: &str) -> Option<String
         return None;
     }
     git_ok(repo, &["merge-base", "--is-ancestor", &base, &main]).then_some(main)
+}
+
+/// 「途中再開」節の材料（設計 account-autonomy.md §4）: 止まった時刻と base からの commit の一覧。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Resumption {
+    /// 上限で止まった時刻（`RunStage(RateLimited)` の event の `ts`）。
+    pub stopped_at: String,
+    /// base から便が積んだ commit（`git log --oneline <base>..HEAD` の行・古い順）。
+    pub commits: Vec<String>,
+}
+
+/// 便が途中再開すべきか（`RateLimited` の段に在る周だけ `Some`・[`section`] と同型の組み立て）。
+///
+/// 決めるのは runner の stdin の「途中再開」節（[`super::spawn`]）**だけ**である。止まった時刻は
+/// 追記だけの log の原本から読む（最後の `RateLimited` の行・replay の `updated` は後の event で
+/// 動く）。commit の一覧を読めない周は空（節は付く・一覧だけ無い）。
+pub(crate) fn resumption(state_dir: &Path, repo: &Path, run: &str) -> Option<Resumption> {
+    let events = store::read_all(state_dir).ok()?;
+    let stage = crate::fleet::replay(&events).runs.get(run).map(|found| found.stage);
+    if stage != Some(Stage::RateLimited) {
+        return None;
+    }
+    let stopped_at = events
+        .iter()
+        .rev()
+        .find(|event| event.run == run && event.kind == EventKind::RunStage && event.stage == Some(Stage::RateLimited))?
+        .ts
+        .clone();
+    let commits = base_of_run(state_dir, run)
+        .and_then(|base| {
+            let range = format!("{base}..HEAD");
+            super::git_bytes(&worktree_path(repo, run), &["log", "--oneline", "--reverse", &range])
+        })
+        .map(|bytes| {
+            String::from_utf8_lossy(&bytes)
+                .lines()
+                .filter(|line| !line.trim().is_empty())
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default();
+    Some(Resumption { stopped_at, commits })
 }
 
 /// **すべての turn** の後始末（設計 §3 の手順 5 / 6）。「追随」節を渡したかは見ない。

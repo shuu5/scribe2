@@ -8,6 +8,7 @@
 
 use super::approve::{block, Approval, Approve, RC_BLOCKED};
 use super::confine;
+use super::follow::Resumption;
 use super::gate::last_json_object;
 use super::{
     base_of_run, branch_name, contract_path, emit, git_line, plugin_path, runner_stdout_path, vessel_path,
@@ -69,9 +70,22 @@ pub struct Launch<'a> {
     /// pipeline-conflict.md §3）。在る周は同じ run の worktree と base を使い、runner の
     /// stdin に「追随」節を付ける。値の出所は [`super::follow::section`] ただ 1 本である。
     pub follow: Option<String>,
+    /// **上限で止まった便の途中再開**（`RateLimited` からの再 spawn だけが持つ・設計
+    /// account-autonomy.md §4）。在る周は同じ run の worktree と base を使い、runner の stdin に
+    /// 「途中再開」節を付ける。値の出所は [`super::follow::resumption`] ただ 1 本である。
+    pub resumed: Option<Resumption>,
+    /// runner を起こす口座の label（器が選んだ周だけ `Some`・ADR-0017 §2.3）。在る周は runner の行に
+    /// `--account-dir <state_dir>/accounts/<label>` を足し、無い周は親の環境をそのまま継承させる。
+    pub account: Option<&'a str>,
     /// lock の待ち方。
     pub policy: LockPolicy,
 }
+
+/// 口座を渡していない周に段の detail へ書く label の代わり（閉じた 1 つ）。
+const INHERITED_ACCOUNT: &str = "inherited";
+
+/// 別口座での起こし直しを段の detail に名乗る印（`Spawned detail=account:<label>,resume:rate-limit`）。
+const RESUME_RATE_LIMIT: &str = "resume:rate-limit";
 
 /// runner を起動して結果まで見届ける。**これが唯一の起動口である**。
 pub fn spawn(budget: Budget, launch: &Launch<'_>) -> Outcome {
@@ -95,6 +109,12 @@ pub fn spawn(budget: Budget, launch: &Launch<'_>) -> Outcome {
         Ok(path) => path,
         Err(reason) => return broken(reason),
     };
+    // 別口座での起こし直しは `account:<label>,resume:rate-limit` を名乗る（設計 account-autonomy.md §4）。
+    // base は初回の `base:<sha>` が持ったままで、読み手（`base_of_run`）は接頭辞の違う行を飛ばす。
+    let detail = match launch.account {
+        Some(label) => format!("account:{label},{RESUME_RATE_LIMIT}"),
+        None => format!("base:{base}"),
+    };
     if let Err(err) = emit(
         launch.state_dir,
         &Emit {
@@ -104,7 +124,7 @@ pub fn spawn(budget: Budget, launch: &Launch<'_>) -> Outcome {
             stage: Some(Stage::Spawned),
             seat: None,
             pid: None,
-            detail: Some(format!("base:{base}")),
+            detail: Some(detail),
         },
         launch.policy,
     ) {
@@ -121,7 +141,7 @@ fn launch_runner(
     plugin: &Path,
     base: &str,
 ) -> Outcome {
-    let cmd = substitute(launch, worktree, write_set, plugin, base);
+    let cmd = with_account(launch, substitute(launch, worktree, write_set, plugin, base));
     // **turn 開始時の tip**（ADR-0019 §2.6）。質問の判定はこの点からの commit 数で見る
     // ——base 基準だと、起こし直しの turn は便が base から持つ commit を数えてしまい、
     // 質問で止まった turn が常に「commit を作った」側へ倒れる。初回は tip = base ゆえ同値。
@@ -228,18 +248,53 @@ fn keep_stdout(launch: &Launch<'_>, rc: i32, stdout: &str) -> Result<(), String>
         .map_err(|err| format!("{} を書けない: {err}", path.display()))
 }
 
+/// 器が選んだ口座を runner の行に足す（`--account-dir <state_dir>/accounts/<label>`・FR5 の口のまま）。
+///
+/// placeholder でなく**末尾に足す**——runner の雛形は口座を知らず（口座は便でなく器が選ぶ）、穴を
+/// 雛形に要ると、穴の無い雛形の便が黙って親の口座で起きる。渡していない周は行を変えない（親の
+/// 環境をそのまま継承させる・C2.2）。
+fn with_account(launch: &Launch<'_>, cmd: String) -> String {
+    match launch.account {
+        None => cmd,
+        Some(label) => format!(
+            "{cmd} --account-dir {}",
+            crate::fleet::account_dir(launch.state_dir, label).display()
+        ),
+    }
+}
+
 /// runner の stdin に流す本文 = 契約の写し（再読）+ 回答済みの質問が在れば「回答」節 +
-/// 追随の相手が在れば「追随」節。**順序は 契約 → 回答 → 追随**である（節の読み方は
-/// `headless/runner.txt` の雛形が持ち、ここは run ごとの値だけを載せる）。
+/// 途中再開なら「途中再開」節 + 追随の相手が在れば「追随」節。**順序は 契約 → 回答 → 途中再開 →
+/// 追随**である（節の読み方は `headless/runner.txt` の雛形が持ち、ここは run ごとの値だけを載せる）。
 fn prompt(launch: &Launch<'_>) -> String {
     let mut body = std::fs::read_to_string(contract_path(launch.state_dir, launch.run)).unwrap_or_default();
     if let Some(Question { question, answer: Some(answer), .. }) = &launch.answered {
         body.push_str(&format!("\n## 回答\n- 質問: {question}\n- 回答: {answer}\n"));
     }
+    if let Some(resumed) = &launch.resumed {
+        body.push_str(&format!(
+            "\n## 途中再開\n- 前の turn は {} に口座の上限で止まった\n- base からの commit（worktree に在る・やり直さない）: {}\n",
+            resumed.stopped_at,
+            commit_list(&resumed.commits)
+        ));
+    }
     if let Some(main) = &launch.follow {
         body.push_str(&format!("\n## 追随\n- main が {main} へ進んだ\n- `git rebase {main}` を実行し、衝突を解いて `git rebase --continue` で終える\n"));
     }
     body
+}
+
+/// 「途中再開」節の commit 一覧（1 行 1 commit・無ければ `なし`）。
+fn commit_list(commits: &[String]) -> String {
+    if commits.is_empty() {
+        return "なし".to_owned();
+    }
+    let mut text = String::new();
+    for line in commits {
+        text.push_str("\n  - ");
+        text.push_str(line);
+    }
+    text
 }
 
 /// base から先の commit 数。読めない周は 0（**commit 0 は完了ではない**側へ倒れる）。
@@ -265,7 +320,9 @@ fn settle(launch: &Launch<'_>, worktree: &Path, base: &str, rc: i32) -> Outcome 
 }
 
 /// 包みが rc [`RC_RATE_LIMIT`] で終わった周: stdout の最後の停止行を読み、
-/// `RunStage(RateLimited) detail=rc:<rc>,status:<status>` を記帳する（設計 account-autonomy.md §2）。
+/// `RunStage(RateLimited) detail=rc:<rc>,status:<status>,account:<label>` を記帳する（設計
+/// account-autonomy.md §2）。label は runner を起こした口座で、器が渡していない周は
+/// [`INHERITED_ACCOUNT`]（親の環境を継承した＝どの口座かを器は知らない）。
 ///
 /// 末尾から**停止行として読める行**を探す（包めた周は箱の終端行 `confine-usage` が停止行の後ろに
 /// 付くので、素の最終行を読むと常に unknown に化ける）。
@@ -274,7 +331,8 @@ fn settle(launch: &Launch<'_>, worktree: &Path, base: &str, rc: i32) -> Outcome 
 /// 停止行を読めない周は `status:unknown` で、段は変えない（読めないを `Failed` に倒さない）。
 fn settle_rate_limit(launch: &Launch<'_>, rc: i32, stdout: &str) -> Outcome {
     let status = stdout.lines().rev().find_map(stop_status).unwrap_or(UNKNOWN_STATUS);
-    record_stage(launch, Stage::RateLimited, Some(format!("rc:{rc},status:{status}")))
+    let account = launch.account.unwrap_or(INHERITED_ACCOUNT);
+    record_stage(launch, Stage::RateLimited, Some(format!("rc:{rc},status:{status},account:{account}")))
 }
 
 /// 停止行を読めない周の status（閉じた 1 つ）。
@@ -526,12 +584,13 @@ fn copy_tree(from: &Path, to: &Path) -> Result<(), String> {
 /// 便の worktree と base を用意する。
 ///
 /// 初回は repo の HEAD を base にして worktree を**切る**。**再開の turn**——回答済みの質問
-/// （[`Launch::answered`]）か追随（[`Launch::follow`]）を持つ周——は**同じ run の worktree と
-/// 記録済みの base を使う**（設計 pipeline-question.md §5 / pipeline-conflict.md §3: 再開は
-/// 同じ便・worktree が無い / 別 branch に居る周は断る）。
+/// （[`Launch::answered`]）か追随（[`Launch::follow`]）か途中再開（[`Launch::resumed`]）を持つ周
+/// ——は**同じ run の worktree と記録済みの base を使う**（設計 pipeline-question.md §5 /
+/// pipeline-conflict.md §3 / account-autonomy.md §4: 再開は同じ便・worktree が無い / 別 branch に
+/// 居る周は断る）。
 fn prepare_worktree(launch: &Launch<'_>) -> Result<(PathBuf, String), String> {
     let worktree = worktree_path(launch.repo, launch.run);
-    if launch.answered.is_none() && launch.follow.is_none() {
+    if launch.answered.is_none() && launch.follow.is_none() && launch.resumed.is_none() {
         let base = super::head_of(launch.repo)
             .ok_or_else(|| format!("{} の HEAD を読めない", launch.repo.display()))?;
         add_worktree(launch.repo, &worktree, launch.run, &base)?;

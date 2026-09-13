@@ -14,7 +14,7 @@ pub mod usage;
 use crate::polarity::{OnFailure, Polarity, Timing};
 use crate::seat::role::Role;
 use json_lite::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
 
 /// event log の schema 版。非互換な変更で上げる。
@@ -862,6 +862,43 @@ pub struct State {
     pub registrations: BTreeMap<(Role, String), RegistrationLatest>,
 }
 
+impl State {
+    /// 席の登録 row が持つ口座 label の集合（便用の選定の除外集合・設計 account-autonomy.md §3）。
+    ///
+    /// **席の生死を問わない**——登録が在る限りその口座は席のものである（便が席の口座を食い潰す穴を
+    /// 塞ぐのが除外の目的で、席が一時的に落ちている周に便がその口座を取ると、立て直しの口座が無い）。
+    pub fn registered_accounts(&self) -> BTreeSet<String> {
+        self.registrations
+            .values()
+            .map(|latest| latest.registration.account.clone())
+            .collect()
+    }
+}
+
+/// 口座 label の credential dir（`<state_dir>/accounts/<label>`・ADR-0017 §2.3）。runner の `--account-dir`
+/// に渡す値で、[`usage`] が読む credential file はこの dir の直下に在る。
+pub fn account_dir(state_dir: &std::path::Path, label: &str) -> std::path::PathBuf {
+    state_dir.join("accounts").join(label)
+}
+
+/// 便用の規則で口座を 1 つ選ぶ（設計 account-autonomy.md §3 / §4）。**便の再開と待ちの観測が同じ
+/// 1 本を呼ぶ**（[`Completion::AccountFree`] の `is_met` と `pipe resume` の選定が別の入力を組まない）。
+///
+/// model は渡さない（runner の起動形は model を渡さず claude の既定＝モデル別窓すべての最大を数える
+/// 保守側）。除外は登録 row の口座。閾値は便用の規則が持たないので**窓の全量**（[`select::LIMIT_PCT`]）
+/// を置く＝session 用の分岐に届かない値であって、R-C9-1 の値ではない。
+pub fn select_for_run(state: &State, labels: &[String], now: &str) -> select::Selection {
+    select::select(&select::Input {
+        labels,
+        allowance: &state.allowance,
+        purpose: select::Purpose::Run,
+        model: None,
+        exclude: &state.registered_accounts(),
+        threshold_pct: select::LIMIT_PCT,
+        now,
+    })
+}
+
 /// event の並びから現在地を導く。物理順で後の event が勝つ。
 pub fn replay(events: &[Event]) -> State {
     let mut state = State::default();
@@ -997,16 +1034,30 @@ pub enum Completion {
         /// 待つ便の id。
         run: String,
     },
+    /// 便用の口座が 1 つ空くこと（設計 account-autonomy.md §4・ADR-0020 §2.3）: 置き場の最新の実測行で
+    /// §3 の便用の規則を再評価して `Chosen` になる。deadline は呼び手が `reset_at` から計算する
+    /// （rules 行ではない・縮退を持たない）。
+    AccountFree {
+        /// 当たっている口座が開き直る最も早い時刻（`YYYY-MM-DDTHH:MM:SSZ`・deadline の出所）。
+        reset_at: String,
+        /// 実測行の置き場（`SlotFree` が `slots_dir` を運ぶのと同型）。
+        state_dir: std::path::PathBuf,
+        /// 待つ便の id。**便が `RateLimited` でなくなった周は満たされた側**（`pipe stop --run` が待ちの
+        /// 途中の便を終端した周に待ちから抜ける・呼び手が段を読み直す）。
+        run: String,
+        /// manifest の `[[account]]` の label 列（宣言値・置き場は持たないので運ぶ）。
+        labels: Vec<String>,
+    },
 }
 
 impl Completion {
-    /// 見張る pid。**pid を見張らない variant（[`Self::SlotFree`] / [`Self::LandTurn`]）は 0**——pid 0 は
-    /// `/proc/0` を持たない（user の process に振られない）ので、生きている pid と取り違えない。
-    /// [`Self::GroupGone`] は group id（= group leader の pid）を返す。
+    /// 見張る pid。**pid を見張らない variant（[`Self::SlotFree`] / [`Self::LandTurn`] /
+    /// [`Self::AccountFree`]）は 0**——pid 0 は `/proc/0` を持たない（user の process に振られない）ので、
+    /// 生きている pid と取り違えない。[`Self::GroupGone`] は group id（= group leader の pid）を返す。
     pub fn pid(&self) -> u32 {
         match *self {
             Self::RunnerExited(pid) | Self::SeatGone(pid) | Self::GroupGone(pid) => pid,
-            Self::SlotFree { .. } | Self::LandTurn { .. } => 0,
+            Self::SlotFree { .. } | Self::LandTurn { .. } | Self::AccountFree { .. } => 0,
         }
     }
 
@@ -1026,8 +1077,61 @@ impl Completion {
                 crate::pipe::land::turn_now(state_dir, run),
                 crate::pipe::land::Turn::After(_)
             ),
+            Self::AccountFree { state_dir, run, labels, .. } => account_free(state_dir, run, labels),
         }
     }
+}
+
+/// [`Completion::AccountFree`] の 1 周分の観測。
+///
+/// 置き場を replay し、便がまだ `RateLimited` なら最新の実測行で便用の規則（[`select_for_run`]）を
+/// 再評価して `Chosen` の周だけ満たされる。便が `RateLimited` でなくなった周（stop で終端した・別の
+/// process が起こし直した）は**満たされた側**＝待ち続ける理由が無い。置き場を読めない周は満たされない
+/// （読めなさで起こし直さない・期限で Timeout に倒れて計測から撃ち直す）。
+fn account_free(state_dir: &std::path::Path, run: &str, labels: &[String]) -> bool {
+    let Ok(events) = store::read_all(state_dir) else {
+        return false;
+    };
+    let state = replay(&events);
+    if state.runs.get(run).map(|found| found.stage) != Some(Stage::RateLimited) {
+        return true;
+    }
+    matches!(
+        select_for_run(&state, labels, &cli::now_utc()),
+        select::Selection::Chosen(_)
+    )
+}
+
+/// `YYYY-MM-DDTHH:MM:SSZ` を UNIX 秒にする（[`cli::format_utc`] の逆・**それ以外の形は `None`**）。
+///
+/// 待ちの deadline を reset 時刻から計算する読み手である。数の読み替えを持たない（形が違う字面を
+/// 0 秒にしない＝呼び手は `None` を「待つ時刻が無い」と読む）。
+pub fn epoch_of(ts: &str) -> Option<u64> {
+    let shape = b"0000-00-00T00:00:00Z";
+    let bytes = ts.as_bytes();
+    let fits = bytes.len() == shape.len()
+        && bytes.iter().zip(shape.iter()).all(|(found, want)| match want {
+            b'0' => found.is_ascii_digit(),
+            _ => found == want,
+        });
+    if !fits {
+        return None;
+    }
+    let num = |from: usize, len: usize| ts.get(from..from + len)?.parse::<u64>().ok();
+    let (year, month, day) = (num(0, 4)?, num(5, 2)?, num(8, 2)?);
+    let (hour, minute, second) = (num(11, 2)?, num(14, 2)?, num(17, 2)?);
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) || hour > 23 || minute > 59 || second > 59 {
+        return None;
+    }
+    // 暦の (年, 月, 日) を 1970-01-01 からの日数にする（`cli::civil_from_days` の逆・chrono を足さない）。
+    let shifted_year = if month <= 2 { year.checked_sub(1)? } else { year };
+    let era = shifted_year / 400;
+    let yoe = shifted_year - era * 400;
+    let mp = if month > 2 { month - 3 } else { month + 9 };
+    let doy = (153 * mp + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = (era * 146_097 + doe).checked_sub(719_468)?;
+    Some(days * 86_400 + hour * 3_600 + minute * 60 + second)
 }
 
 /// 期限までに終わらなかった。
@@ -1088,7 +1192,40 @@ fn pgid_of(stat_text: &str) -> Option<u32> {
 
 #[cfg(test)]
 mod tests {
-    use super::{pgid_of, Completion};
+    use super::{cli::format_utc, epoch_of, pgid_of, Completion};
+
+    /// `epoch_of` は `format_utc` の逆で、形の違う字面は `None`（0 秒に読み替えない）。
+    #[test]
+    fn pipe_ratelimit_resume_epoch_of_inverts_format_utc() {
+        for secs in [0_u64, 951_782_400, 1_789_000_000, 4_102_444_800, 1_709_251_199] {
+            let text = format_utc(secs);
+            assert_eq!(epoch_of(&text), Some(secs), "{text}");
+        }
+        assert_eq!(epoch_of("2026-09-13T06:00:00Z"), Some(1_789_279_200));
+        for bad in [
+            "2026-09-13T06:00:00",
+            "2026-09-13T06:00:00+00:00",
+            "2026-13-13T06:00:00Z",
+            "2026-09-13T24:00:00Z",
+            "2026-09-13 06:00:00Z",
+            "",
+            "-",
+        ] {
+            assert_eq!(epoch_of(bad), None, "{bad:?}");
+        }
+    }
+
+    /// `AccountFree` は pid を見張らない（0）。
+    #[test]
+    fn pipe_ratelimit_resume_account_free_watches_no_pid() {
+        let found = Completion::AccountFree {
+            reset_at: "2026-09-13T06:00:00Z".to_owned(),
+            state_dir: std::path::PathBuf::from("state"),
+            run: "r".to_owned(),
+            labels: Vec::new(),
+        };
+        assert_eq!(found.pid(), 0);
+    }
 
     #[test]
     fn pipe_stop_group_pgid_of_reads_the_fifth_field() {
@@ -1120,6 +1257,12 @@ mod tests {
             },
             Completion::GroupGone(9),
             Completion::LandTurn { state_dir: std::path::PathBuf::from("state"), run: "r".to_owned() },
+            Completion::AccountFree {
+                reset_at: "2026-09-13T06:00:00Z".to_owned(),
+                state_dir: std::path::PathBuf::from("state"),
+                run: "r".to_owned(),
+                labels: Vec::new(),
+            },
         ];
         let names: Vec<&str> = all
             .iter()
@@ -1129,12 +1272,13 @@ mod tests {
                 Completion::SlotFree { .. } => "SlotFree",
                 Completion::GroupGone(_) => "GroupGone",
                 Completion::LandTurn { .. } => "LandTurn",
+                Completion::AccountFree { .. } => "AccountFree",
             })
             .collect();
         assert_eq!(
             names,
-            ["RunnerExited", "SeatGone", "SlotFree", "GroupGone", "LandTurn"],
-            "宣言順の末尾に LandTurn"
+            ["RunnerExited", "SeatGone", "SlotFree", "GroupGone", "LandTurn", "AccountFree"],
+            "宣言順の末尾に AccountFree"
         );
     }
 }
