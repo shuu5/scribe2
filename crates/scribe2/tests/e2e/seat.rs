@@ -5224,6 +5224,10 @@ const REBRIEF_FOUND: &str = concat!(
     "[WM-DIRECTIVE-COUNT] total=5 provisional=2 unresolved=1\n",
     "[ORPHAN-WM] file=working-memory.sid-other.md seat=other:1\n",
     "[BD-COUNT] open=2 in_progress=1 blocked=1\n",
+    "[MEMO-DUE-COUNT] n=0 of=0\n",
+    "[MEMO-DUE-NONE]\n",
+    "[MEMO-STALE-COUNT] n=0 of=0 unreadable=0\n",
+    "[MEMO-STALE-NONE]\n",
     "[BD-INPROGRESS] s2-07l.61 updated=2026-09-12T02:01:00Z 裁定の記録\n",
     "[DIFF] s2-07l.61 bd=in_progress\n",
     "[DIFF] s2-07l.140 bd=unknown\n",
@@ -5256,17 +5260,25 @@ fn fake_bd(dir: &Path, name: &str, body: &str, rc: u8, sleep_s: u64) -> String {
     path.display().to_string()
 }
 
-/// 台帳の待ち上限だけを持つ rules の fixture を書き、`--rules` に渡す path を返す。
+/// 台帳の待ち上限と memo の閾値 2 つ（3 日 / P2）を持つ rules の fixture を書き、`--rules` に渡す path を返す。
 fn rebrief_rules(place: &WmPlace, secs: u64) -> String {
     fixture(
         &place.dir,
         "rebrief-rules.toml",
         &format!(
             "schema = 1\n\n[[rule]]\nid = \"seat.ledger_timeout_s\"\nkind = \"LedgerTimeoutS\"\nvalue = {secs}\n\
-             enabled = true\nruling = \"user 2026-09-12T02:01Z\"\nruled_at = \"2026-09-12\"\n"
+             enabled = true\nruling = \"user 2026-09-12T02:01Z\"\nruled_at = \"2026-09-12\"\n{MEMO_RULES}"
         ),
     )
 }
+
+/// memo の閾値 2 行（裁定 id `user 2026-09-13T14:06Z` の値）。
+const MEMO_RULES: &str = concat!(
+    "\n[[rule]]\nid = \"ledger.memo_stale_days\"\nkind = \"MemoStaleDays\"\nvalue = 3\n",
+    "enabled = true\nruling = \"user 2026-09-13T14:06Z\"\nruled_at = \"2026-09-13\"\n",
+    "\n[[rule]]\nid = \"ledger.memo_stale_priority\"\nkind = \"MemoStalePriority\"\nvalue = 2\n",
+    "enabled = true\nruling = \"user 2026-09-13T14:06Z\"\nruled_at = \"2026-09-13\"\n",
+);
 
 /// `seat rebrief` を 1 回撃つ（`extra` は追加の flag）。
 fn wm_rebrief(place: &WmPlace, bd: &str, extra: &[&str]) -> Output {
@@ -5392,6 +5404,10 @@ fn seat_wm_rebrief_marks_other_sid_as_candidate_and_other_seat_as_orphan() {
             "[WM] missing\n",
             "[ORPHAN-WM] file=working-memory.sid-x.md seat=other:1\n",
             "[BD-COUNT] open=0 in_progress=0 blocked=0\n",
+            "[MEMO-DUE-COUNT] n=0 of=0\n",
+            "[MEMO-DUE-NONE]\n",
+            "[MEMO-STALE-COUNT] n=0 of=0 unreadable=0\n",
+            "[MEMO-STALE-NONE]\n",
             "[BD-INPROGRESS-NONE]\n",
         )
     );
@@ -5453,7 +5469,8 @@ fn seat_wm_rebrief_reports_ledger_counts_and_diff_of_mentioned_ids() {
 
     let empty = fake_bd(&place.dir, "bd-empty", "[]", 0, 0);
     let zero = stdout_of(&wm_rebrief(&place, &empty, &[]));
-    assert!(zero.contains("\n[BD-COUNT] open=0 in_progress=0 blocked=0\n[BD-INPROGRESS-NONE]\n"), "{zero}");
+    assert!(zero.contains("\n[BD-COUNT] open=0 in_progress=0 blocked=0\n"), "{zero}");
+    assert!(zero.contains("\n[MEMO-STALE-NONE]\n[BD-INPROGRESS-NONE]\n"), "{zero}");
     assert!(zero.contains("\n[DIFF] s2-07l.61 bd=unknown\n[DIFF] s2-07l.140 bd=unknown\n"), "{zero}");
     fs::remove_dir_all(&place.dir).ok();
 }
@@ -5564,6 +5581,10 @@ fn seat_wm_rebrief_reads_schemaless_wm_and_marks_empty_sections() {
             "[WM-DIRECTIVE-COUNT] total=0 provisional=0 unresolved=0\n",
             "[ORPHAN-NONE]\n",
             "[BD-COUNT] open=2 in_progress=1 blocked=1\n",
+            "[MEMO-DUE-COUNT] n=0 of=0\n",
+            "[MEMO-DUE-NONE]\n",
+            "[MEMO-STALE-COUNT] n=0 of=0 unreadable=0\n",
+            "[MEMO-STALE-NONE]\n",
             "[BD-INPROGRESS] s2-07l.61 updated=2026-09-12T02:01:00Z 裁定の記録\n",
             "[DIFF-NONE]\n",
             "[TICKET-CANDIDATE-NONE]\n",
@@ -5597,6 +5618,176 @@ fn seat_wm_rebrief_is_listed_in_usage_and_refuses_missing_flags() {
     assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "--anchor 欠けは rc 1");
     assert_eq!(stderr_of(&out), usage, "使い方で断る");
     assert!(stdout_of(&out).is_empty(), "stdout は空");
+}
+
+// ─────────────── 台帳の棚卸し（memo の判定点と齢・設計 ledger-triage.md §7 / §9 (a)） ───────────────
+
+/// memo の label（設計 §3 の弁別）。
+const MEMO_LABEL: &str = "[\"intake:memo\"]";
+
+/// いまから `days` 日前の `updated_at`（閾値 3 日の ± 1 日で使う・壁時計の等号を pin しない）。
+fn days_ago(days: u64) -> String {
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .unwrap_or_default();
+    vessel::fleet::cli::format_utc(now.saturating_sub(days.saturating_mul(86_400)))
+}
+
+/// 台帳の 1 要素（open・`labels` / `deps` は JSON の字面・`updated` が `None` なら key を持たない）。
+fn memo_issue(id: &str, labels: &str, priority: u64, updated: Option<&str>, deps: &[(&str, &str, &str)]) -> String {
+    let updated = updated.map(|ts| format!(",\"updated_at\":\"{ts}\"")).unwrap_or_default();
+    let deps: Vec<String> = deps
+        .iter()
+        .map(|(to, status, kind)| format!("{{\"id\":\"{to}\",\"status\":\"{status}\",\"dependency_type\":\"{kind}\",\"description\":\"本文は読まない\"}}"))
+        .collect();
+    format!(
+        "{{\"id\":\"{id}\",\"title\":\"[memo] t\",\"status\":\"open\",\"priority\":{priority},\"labels\":{labels}{updated},\"dependencies\":[{}]}}",
+        deps.join(",")
+    )
+}
+
+/// memo の場所（自席の退避物なし・打刻 1・`issues` を返す偽 bd）。
+fn memo_place(issues: &[String]) -> (WmPlace, String) {
+    let place = wm_place();
+    wm_stamp(&place, &["sid-memo"]);
+    let bd = fake_bd(&place.dir, "bd-memo", &format!("[{}]\n", issues.join(",\n")), 0, 0);
+    (place, bd)
+}
+
+/// stdout の `[MEMO-` 行。
+fn memo_rows(text: &str) -> Vec<String> {
+    text.lines().filter(|line| line.starts_with("[MEMO-")).map(str::to_owned).collect()
+}
+
+/// (1)(2)(3)(4)(5)(6) 判定点を全部過ぎた memo だけが DUE・依存なし（parent-child だけを含む）∧ P ≤ 2 ∧ 齢 ≥ 3 日だけが
+/// STALE・label の無い bead は母集団の外・列は id の数字順（`s2-9` < `s2-13`）。
+#[test]
+fn seat_rebrief_memo_lists_due_and_stale_memos_against_the_memo_population() {
+    let (fresh, two, four, five, ten) = (days_ago(0), days_ago(2), days_ago(4), days_ago(5), days_ago(10));
+    let issues = [
+        memo_issue("s2-10", MEMO_LABEL, 1, Some(&fresh), &[("s2-2", "closed", "blocks"), ("s2-1", "closed", "blocks")]),
+        memo_issue("s2-11", MEMO_LABEL, 2, Some(&four), &[("s2-1", "closed", "blocks"), ("s2-3", "open", "blocks")]),
+        memo_issue("s2-12", MEMO_LABEL, 3, Some(&four), &[("s2-e", "closed", "parent-child")]),
+        memo_issue("s2-13", MEMO_LABEL, 2, Some(&four), &[]),
+        memo_issue("s2-14", MEMO_LABEL, 3, Some(&four), &[]),
+        memo_issue("s2-15", MEMO_LABEL, 2, Some(&two), &[]),
+        memo_issue("s2-9", MEMO_LABEL, 2, Some(&five), &[("s2-e", "closed", "parent-child")]),
+        memo_issue("s2-16", "[\"x\"]", 0, Some(&ten), &[("s2-1", "closed", "blocks")]),
+        memo_issue("s2-17", "[]", 0, Some(&ten), &[]),
+    ];
+    let (place, bd) = memo_place(&issues);
+    let out = wm_rebrief(&place, &bd, &[]);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    let text = stdout_of(&out);
+    assert_eq!(
+        memo_rows(&text),
+        [
+            format!("[MEMO-DUE] s2-10 p=1 blocks=s2-1,s2-2 updated={fresh}"),
+            "[MEMO-DUE-COUNT] n=1 of=7".to_owned(),
+            format!("[MEMO-STALE] s2-9 p=2 age_days=5 updated={five}"),
+            format!("[MEMO-STALE] s2-13 p=2 age_days=4 updated={four}"),
+            "[MEMO-STALE-COUNT] n=2 of=7 unreadable=0".to_owned(),
+        ],
+        "{text}"
+    );
+    assert!(text.contains("[BD-COUNT] open=9 in_progress=0 blocked=0\n"), "母集団 9 件の台帳: {text}");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (7) memo が在っても判定に当たらない周・台帳が空の周は、件数行 + `-NONE` を両方出す（「0 件」を確認した印）。
+#[test]
+fn seat_rebrief_memo_marks_none_for_both_when_nothing_is_due_or_stale() {
+    let issues = [
+        memo_issue("s2-1", MEMO_LABEL, 2, Some(&days_ago(2)), &[]),
+        memo_issue("s2-2", MEMO_LABEL, 1, Some(&days_ago(9)), &[("s2-3", "open", "blocks")]),
+    ];
+    let (place, bd) = memo_place(&issues);
+    let text = stdout_of(&wm_rebrief(&place, &bd, &[]));
+    let none = |of: usize| {
+        vec![
+            format!("[MEMO-DUE-COUNT] n=0 of={of}"),
+            "[MEMO-DUE-NONE]".to_owned(),
+            format!("[MEMO-STALE-COUNT] n=0 of={of} unreadable=0"),
+            "[MEMO-STALE-NONE]".to_owned(),
+        ]
+    };
+    assert_eq!(memo_rows(&text), none(2), "{text}");
+    let empty = fake_bd(&place.dir, "bd-empty", "[]", 0, 0);
+    let zero = stdout_of(&wm_rebrief(&place, &empty, &[]));
+    assert_eq!(memo_rows(&zero), none(0), "{zero}");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (8) `updated_at` が無い・形の読めない memo は stale に数えず `unreadable=` に数える（判定不能を 0 に潰さない）。
+#[test]
+fn seat_rebrief_memo_counts_unreadable_updated_at_apart_from_stale() {
+    let four = days_ago(4);
+    let issues = [
+        memo_issue("s2-1", MEMO_LABEL, 2, None, &[]),
+        memo_issue("s2-2", MEMO_LABEL, 1, Some("3 日前"), &[]),
+        memo_issue("s2-3", MEMO_LABEL, 2, Some(&four), &[]),
+    ];
+    let (place, bd) = memo_place(&issues);
+    let text = stdout_of(&wm_rebrief(&place, &bd, &[]));
+    let rows = memo_rows(&text);
+    assert_eq!(
+        rows.iter().filter(|row| row.starts_with("[MEMO-STALE")).cloned().collect::<Vec<_>>(),
+        [format!("[MEMO-STALE] s2-3 p=2 age_days=4 updated={four}"), "[MEMO-STALE-COUNT] n=1 of=3 unreadable=2".to_owned()],
+        "{text}"
+    );
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (9) 台帳が読めない周は memo の marker も出さず rc 2（既存の `ledger-unreadable`）・閾値の行が無い rules は `no-rule`。
+#[test]
+fn seat_rebrief_memo_emits_no_marker_when_ledger_or_rule_is_unreadable() {
+    let issues = [memo_issue("s2-1", MEMO_LABEL, 2, Some(&days_ago(4)), &[])];
+    let (place, _) = memo_place(&issues);
+    let broken = fake_bd(&place.dir, "bd-rc1", &format!("[{}]\n", issues.join(",")), 1, 0);
+    let out = wm_rebrief(&place, &broken, &[]);
+    assert_eq!((rc_of(&out), stderr_of(&out)), (RC_DATA_BROKEN, rebrief_refusal("ledger-unreadable")));
+    assert!(stdout_of(&out).is_empty(), "marker は 0 行: {}", stdout_of(&out));
+
+    let bd = fake_bd(&place.dir, "bd-ok", &format!("[{}]\n", issues.join(",")), 0, 0);
+    let timeout_only = fixture(
+        &place.dir,
+        "timeout-only.toml",
+        "schema = 1\n\n[[rule]]\nid = \"seat.ledger_timeout_s\"\nkind = \"LedgerTimeoutS\"\nvalue = 60\n\
+         enabled = true\nruling = \"user 2026-09-12T02:01Z\"\nruled_at = \"2026-09-12\"\n",
+    );
+    let out = wm_rebrief(&place, &bd, &["--rules", &timeout_only]);
+    assert_eq!((rc_of(&out), stderr_of(&out)), (RC_DATA_BROKEN, rebrief_refusal("no-rule")));
+    assert!(stdout_of(&out).is_empty(), "DATA は 0 行: {}", stdout_of(&out));
+    let rules = rebrief_rules(&place, 60);
+    let healed = stdout_of(&wm_rebrief(&place, &bd, &["--rules", &rules]));
+    assert!(healed.contains("\n[MEMO-STALE-COUNT] n=1 of=1 unreadable=0\n"), "閾値 2 行を足すと出る: {healed}");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (10) memo の行は `[BD-COUNT]` の直後に連続して並び、`[BD-INPROGRESS` の前で終わる（marker の宣言順）。
+#[test]
+fn seat_rebrief_memo_rows_follow_bd_count_directly() {
+    let issues = [
+        memo_issue("s2-1", MEMO_LABEL, 0, Some(&days_ago(0)), &[("s2-2", "closed", "blocks")]),
+        memo_issue("s2-3", MEMO_LABEL, 0, Some(&days_ago(6)), &[]),
+    ];
+    let (place, bd) = memo_place(&issues);
+    let text = stdout_of(&wm_rebrief(&place, &bd, &[]));
+    let lines: Vec<&str> = text.lines().collect();
+    let at = lines.iter().position(|line| line.starts_with("[BD-COUNT] ")).unwrap_or(usize::MAX);
+    let heads: Vec<&str> = lines
+        .iter()
+        .skip(at.saturating_add(1))
+        .take(5)
+        .filter_map(|line| line.split(' ').next())
+        .collect();
+    assert_eq!(
+        heads,
+        ["[MEMO-DUE]", "[MEMO-DUE-COUNT]", "[MEMO-STALE]", "[MEMO-STALE-COUNT]", "[BD-INPROGRESS-NONE]"],
+        "{text}"
+    );
+    fs::remove_dir_all(&place.dir).ok();
 }
 
 // ─────────────────────────── role / register ───────────────────────────

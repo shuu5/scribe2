@@ -363,6 +363,25 @@ enabled = true
 ruling = "user 2026-09-13T12:04Z"
 ruled_at = "2026-09-13"
 
+# 台帳の棚卸し（設計 ledger-triage.md §2 / §4）。判定点（blocks 依存）を持たない memo を stale と数える
+# 閾値 2 つ（updated_at からの日数・以上 / priority field の上限・以下）。読み手は seat rebrief。
+
+[[rule]]
+id = "ledger.memo_stale_days"
+kind = "MemoStaleDays"
+value = 3
+enabled = true
+ruling = "user 2026-09-13T14:06Z"
+ruled_at = "2026-09-13"
+
+[[rule]]
+id = "ledger.memo_stale_priority"
+kind = "MemoStalePriority"
+value = 2
+enabled = true
+ruling = "user 2026-09-13T14:06Z"
+ruled_at = "2026-09-13"
+
 # 口座の宣言（設計 fleet-usage.md §2・裁定 id 'user 2026-09-12T02:01Z'）。label は**不透明な符丁**で
 # あり、本当の口座の識別子でも host 名でも path でもない（本 repo は PUBLIC・SRS CON2）。credential の
 # 置き場は <state_dir>/accounts/<label>/ で、器はそこを走査せず、この宣言だけを真実として読む（C3）。

@@ -128,6 +128,10 @@ pub enum RuleKind {
     /// [`crate::seat::role::Capability`] が閉じる（列に無い名は読み込みで拒む）。**1 kind で行が 2 つ**
     /// （id は `role.<役割名>`・役割ごとに 1 行）。
     RoleCapabilities,
+    /// 判定点（blocks 依存）を持たない memo を stale と数える `updated_at` からの日数（日・以上）。
+    MemoStaleDays,
+    /// stale と数える memo の priority field の上限（以下・P0 = 0 … P4 = 4）。
+    MemoStalePriority,
 }
 
 /// [`RuleKind`] の全 variant。parity test の母集団である。
@@ -173,6 +177,8 @@ pub const ALL: &[RuleKind] = &[
     RuleKind::PipeLandWaitS,
     RuleKind::LedgerTimeoutS,
     RuleKind::RoleCapabilities,
+    RuleKind::MemoStaleDays,
+    RuleKind::MemoStalePriority,
 ];
 
 impl RuleKind {
@@ -220,6 +226,8 @@ impl RuleKind {
             Self::PipeLandWaitS => "PipeLandWaitS",
             Self::LedgerTimeoutS => "LedgerTimeoutS",
             Self::RoleCapabilities => "RoleCapabilities",
+            Self::MemoStaleDays => "MemoStaleDays",
+            Self::MemoStalePriority => "MemoStalePriority",
         }
     }
 
@@ -258,6 +266,8 @@ impl RuleKind {
             | Self::WmDirectiveCap
             | Self::PipeLandWaitS
             | Self::LedgerTimeoutS
+            | Self::MemoStaleDays
+            | Self::MemoStalePriority
             | Self::AccountSelection => ValueShape::Int,
             Self::DialogueSurface => ValueShape::Str,
             Self::MaturityCondition

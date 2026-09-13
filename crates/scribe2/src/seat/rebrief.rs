@@ -23,6 +23,16 @@ use std::time::{Duration, Instant};
 
 /// 台帳の待ち上限を宣言する rules 行の id（**値は code に焼かない**・憲法 C5）。
 pub const ID_TIMEOUT: &str = "seat.ledger_timeout_s";
+/// 判定点を持たない memo を stale と数える日数（以上）の rules 行の id（設計 ledger-triage.md §4）。
+pub const ID_STALE_DAYS: &str = "ledger.memo_stale_days";
+/// stale と数える memo の priority の上限（以下）の rules 行の id。
+pub const ID_STALE_PRIORITY: &str = "ledger.memo_stale_priority";
+/// memo の弁別に使う label（題の字面は読まない）。
+const MEMO_LABEL: &str = "intake:memo";
+/// 判定点に数える依存の種別（parent-child は数えない）。
+const BLOCKS: &str = "blocks";
+/// 1 日の秒数。
+const DAY_S: u64 = 86_400;
 /// `--bd` を渡さない周の台帳 client（PATH 解決は子 process の起動側）。
 pub const DEFAULT_BD: &str = "bd";
 /// 台帳を読む引数（`--readonly` を必ず付ける）。
@@ -70,6 +80,18 @@ pub enum Marker {
     OrphanNone,
     /// 台帳の status 別件数。
     BdCount,
+    /// 判定点（blocks 依存）を全部過ぎた memo の 1 件（設計 ledger-triage.md §3）。
+    MemoDue,
+    /// 判定点を過ぎた memo の件数と memo の母集団。
+    MemoDueCount,
+    /// 確認した上で判定点を過ぎた memo が 0。
+    MemoDueNone,
+    /// 判定点を持たず齢を過ぎた memo の 1 件。
+    MemoStale,
+    /// 齢を過ぎた memo の件数・母集団・判定不能（`updated_at` が読めない）の件数。
+    MemoStaleCount,
+    /// 確認した上で齢を過ぎた memo が 0。
+    MemoStaleNone,
     /// 台帳の in_progress の 1 件。
     BdInprogress,
     /// 台帳の in_progress が 0。
@@ -98,6 +120,12 @@ pub const ALL: &[Marker] = &[
     Marker::OrphanWm,
     Marker::OrphanNone,
     Marker::BdCount,
+    Marker::MemoDue,
+    Marker::MemoDueCount,
+    Marker::MemoDueNone,
+    Marker::MemoStale,
+    Marker::MemoStaleCount,
+    Marker::MemoStaleNone,
     Marker::BdInprogress,
     Marker::BdInprogressNone,
     Marker::Diff,
@@ -122,6 +150,12 @@ impl Marker {
             Self::OrphanWm => "[ORPHAN-WM]",
             Self::OrphanNone => "[ORPHAN-NONE]",
             Self::BdCount => "[BD-COUNT]",
+            Self::MemoDue => "[MEMO-DUE]",
+            Self::MemoDueCount => "[MEMO-DUE-COUNT]",
+            Self::MemoDueNone => "[MEMO-DUE-NONE]",
+            Self::MemoStale => "[MEMO-STALE]",
+            Self::MemoStaleCount => "[MEMO-STALE-COUNT]",
+            Self::MemoStaleNone => "[MEMO-STALE-NONE]",
             Self::BdInprogress => "[BD-INPROGRESS]",
             Self::BdInprogressNone => "[BD-INPROGRESS-NONE]",
             Self::Diff => "[DIFF]",
@@ -183,6 +217,27 @@ pub fn timeout_of(manifest: &Manifest) -> Option<Duration> {
     }
 }
 
+/// memo の stale を数える閾値（rules 行 [`ID_STALE_DAYS`] / [`ID_STALE_PRIORITY`]・呼び側が解く）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Thresholds {
+    /// `updated_at` からの日数（以上）。
+    pub stale_days: u64,
+    /// priority field の上限（以下）。
+    pub stale_priority: u64,
+}
+
+/// 閾値 2 つを**渡された manifest** から読む。どちらかが不発効・別の形・不在なら `None`（呼び側は `no-rule`）。
+pub fn thresholds_of(manifest: &Manifest) -> Option<Thresholds> {
+    let int = |id: &str| match manifest.get(id) {
+        Some(row) if row.enabled => match row.value {
+            RuleValue::Int(found) => Some(found),
+            _ => None,
+        },
+        _ => None,
+    };
+    Some(Thresholds { stale_days: int(ID_STALE_DAYS)?, stale_priority: int(ID_STALE_PRIORITY)? })
+}
+
 /// 復元 1 回の入力。
 pub struct Request<'a> {
     /// tmux target（frontmatter の `seat:` と突き合わせる）。
@@ -199,6 +254,8 @@ pub struct Request<'a> {
     pub bd: &'a str,
     /// 台帳の待ち上限（rules 行 [`ID_TIMEOUT`]・呼び側が解く）。
     pub timeout: Duration,
+    /// memo の stale を数える閾値（rules 行・呼び側が解く）。
+    pub thresholds: Thresholds,
 }
 
 /// 台帳の 1 件（読む key だけ）。
@@ -212,6 +269,62 @@ pub struct Issue {
     pub title: String,
     /// `updated_at`（無ければ `none`）。
     pub updated: String,
+    /// priority field（無い・非負の整数でなければ `None`）。
+    pub priority: Option<u64>,
+    /// label の列（無ければ空）。
+    pub labels: Vec<String>,
+    /// 依存の列（`dependencies[]`・3 key の揃う要素だけ）。
+    pub deps: Vec<Dep>,
+}
+
+/// 依存の 1 件（`dependencies[]` の `id` / `status` / `dependency_type` だけを読む・本文は読まない）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Dep {
+    /// 依存先の bead id。
+    pub id: String,
+    /// 依存先の status の字面。
+    pub status: String,
+    /// 依存の種別の字面（`blocks` / `parent-child` …）。
+    pub kind: String,
+}
+
+/// 判定点を過ぎた memo の 1 件。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Due {
+    /// bead id。
+    pub id: String,
+    /// priority field。
+    pub priority: Option<u64>,
+    /// 閉じた blocks 依存の id（数字順）。
+    pub blocks: Vec<String>,
+    /// `updated_at` の字面。
+    pub updated: String,
+}
+
+/// 齢を過ぎた memo の 1 件。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Stale {
+    /// bead id。
+    pub id: String,
+    /// priority field。
+    pub priority: Option<u64>,
+    /// `updated_at` から now までの日数（切り捨て・実測）。
+    pub age_days: u64,
+    /// `updated_at` の字面。
+    pub updated: String,
+}
+
+/// memo の棚卸しの判定（[`triage`] の出力・列は id の数字順）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Triage {
+    /// 判定点を過ぎた memo。
+    pub due: Vec<Due>,
+    /// 齢を過ぎた memo。
+    pub stale: Vec<Stale>,
+    /// memo の母集団（label `intake:memo` を持つ open）。
+    pub memo_total: usize,
+    /// stale の判定に届いて `updated_at` を読めなかった memo の件数（stale に数えない・C10）。
+    pub unreadable: usize,
 }
 
 /// 退避物の dir の走査結果（名前順）。
@@ -250,6 +363,7 @@ pub fn run(request: &Request) -> Result<Vec<String>, RebriefError> {
     }
     orphan_lines(&scan.orphans, &mut lines);
     ledger_lines(&issues, &mut lines);
+    memo_lines(&triage(&issues, request.thresholds, &crate::fleet::cli::now_utc()), &mut lines);
     // 出力順 = marker の宣言順（安定 sort＝同じ marker の中は組んだ順のまま）。
     lines.sort_by_key(|(marker, _)| *marker);
     Ok(lines.into_iter().map(|(marker, body)| render_line(marker, &body)).collect())
@@ -429,6 +543,119 @@ fn ledger_lines(issues: &[Issue], lines: &mut Vec<(Marker, String)>) {
     }));
 }
 
+/// memo の棚卸しの行（件数行は必ず出す・0 件は `-NONE` も足す）。
+fn memo_lines(found: &Triage, lines: &mut Vec<(Marker, String)>) {
+    let priority = |value: Option<u64>| value.map_or_else(|| NONE.to_owned(), |p| p.to_string());
+    lines.extend(found.due.iter().map(|due| {
+        let body = format!("{} p={} blocks={} updated={}", due.id, priority(due.priority), due.blocks.join(","), due.updated);
+        (Marker::MemoDue, body)
+    }));
+    lines.push((Marker::MemoDueCount, format!("n={} of={}", found.due.len(), found.memo_total)));
+    if found.due.is_empty() {
+        lines.push((Marker::MemoDueNone, String::new()));
+    }
+    lines.extend(found.stale.iter().map(|stale| {
+        let body = format!("{} p={} age_days={} updated={}", stale.id, priority(stale.priority), stale.age_days, stale.updated);
+        (Marker::MemoStale, body)
+    }));
+    let count = format!("n={} of={} unreadable={}", found.stale.len(), found.memo_total, found.unreadable);
+    lines.push((Marker::MemoStaleCount, count));
+    if found.stale.is_empty() {
+        lines.push((Marker::MemoStaleNone, String::new()));
+    }
+}
+
+/// memo の棚卸しを判定する（**純関数・I/O なし**・設計 ledger-triage.md §2）。memo = label `intake:memo` を
+/// 持つ open の issue。due = blocks 依存を 1 つ以上持ち全部が `closed`。stale = blocks 依存を持たず ∧
+/// priority ≤ 閾値 ∧ `updated_at` から閾値日以上。`updated_at`（か `now`）が読めない memo は stale に数えず
+/// `unreadable` に数える。parent-child 依存は数えない。
+pub fn triage(issues: &[Issue], thresholds: Thresholds, now: &str) -> Triage {
+    let now = epoch_of_ts(now);
+    let mut found = Triage { due: Vec::new(), stale: Vec::new(), memo_total: 0, unreadable: 0 };
+    let memos = issues
+        .iter()
+        .filter(|issue| issue.status == "open" && issue.labels.iter().any(|label| label == MEMO_LABEL));
+    for memo in memos {
+        found.memo_total = found.memo_total.saturating_add(1);
+        let blocks: Vec<&Dep> = memo.deps.iter().filter(|dep| dep.kind == BLOCKS).collect();
+        if !blocks.is_empty() {
+            if blocks.iter().all(|dep| dep.status == "closed") {
+                let mut ids: Vec<String> = blocks.iter().map(|dep| dep.id.clone()).collect();
+                ids.sort_by_cached_key(|id| id_key(id));
+                found.due.push(Due { id: memo.id.clone(), priority: memo.priority, blocks: ids, updated: memo.updated.clone() });
+            }
+            continue;
+        }
+        if !memo.priority.is_some_and(|p| p <= thresholds.stale_priority) {
+            continue;
+        }
+        let age_s = now.zip(epoch_of_ts(&memo.updated)).map(|(at, updated)| at.saturating_sub(updated));
+        match age_s {
+            None => found.unreadable = found.unreadable.saturating_add(1),
+            Some(age_s) if age_s / DAY_S >= thresholds.stale_days => found.stale.push(Stale {
+                id: memo.id.clone(),
+                priority: memo.priority,
+                age_days: age_s / DAY_S,
+                updated: memo.updated.clone(),
+            }),
+            Some(_) => {}
+        }
+    }
+    found.due.sort_by_cached_key(|due| id_key(&due.id));
+    found.stale.sort_by_cached_key(|stale| id_key(&stale.id));
+    found
+}
+
+/// id の数字順の鍵（数字の連なりは値で・それ以外は字面で比べる＝`s2-07l.61` < `s2-07l.140`）。
+fn id_key(id: &str) -> Vec<(u8, usize, String)> {
+    let mut key = Vec::new();
+    let mut rest = id;
+    while let Some(first) = rest.chars().next() {
+        let digit = first.is_ascii_digit();
+        let end = rest.find(|ch: char| ch.is_ascii_digit() != digit).unwrap_or(rest.len());
+        let (run, tail) = rest.split_at(end);
+        if digit {
+            let value = run.trim_start_matches('0');
+            key.push((1, value.len(), value.to_owned()));
+        } else {
+            key.push((0, 0, run.to_owned()));
+        }
+        rest = tail;
+    }
+    key
+}
+
+/// `YYYY-MM-DDTHH:MM:SS[.frac](Z|±HH:MM)` を UNIX 秒にする（それ以外の形は `None`＝判定不能）。
+fn epoch_of_ts(ts: &str) -> Option<u64> {
+    let base = crate::fleet::epoch_of(&format!("{}Z", ts.get(..19)?))?;
+    let mut tail = ts.get(19..)?;
+    if let Some(frac) = tail.strip_prefix('.') {
+        tail = frac.trim_start_matches(|ch: char| ch.is_ascii_digit());
+        if tail.len() == frac.len() {
+            return None;
+        }
+    }
+    if tail == "Z" {
+        return Some(base);
+    }
+    let (sign, offset) = (tail.get(..1)?, tail.get(1..)?);
+    let (hours, minutes) = offset.split_once(':')?;
+    let two_digits = |part: &str| part.len() == 2 && part.bytes().all(|b| b.is_ascii_digit());
+    if !two_digits(hours) || !two_digits(minutes) {
+        return None;
+    }
+    let (hours, minutes) = (hours.parse::<u64>().ok()?, minutes.parse::<u64>().ok()?);
+    if hours > 23 || minutes > 59 {
+        return None;
+    }
+    let shift = hours.checked_mul(3_600)?.checked_add(minutes.checked_mul(60)?)?;
+    match sign {
+        "+" => base.checked_sub(shift),
+        "-" => base.checked_add(shift),
+        _ => None,
+    }
+}
+
 /// 節 3 が言及する bead id ごとの台帳 status（台帳に無い id は `unknown`）。
 fn diff_lines(rows: &[Row], issues: &[Issue], prefixes: &[String], lines: &mut Vec<(Marker, String)>) {
     let mut ids: Vec<String> = Vec::new();
@@ -487,20 +714,35 @@ fn is_ledger_id(token: &str, prefix: &str) -> bool {
 }
 
 /// 台帳の JSON（`bd list --json` の配列）を読む。配列でない・要素に `id` / `status` の文字列が無い → `None`。
+/// priority / labels / dependencies は任意（無い・形が違えば `None` / 空・依存は 3 key の揃う要素だけ）。
 pub fn issues_of(text: &str) -> Option<Vec<Issue>> {
     let tree = json_tree::parse(text).ok()?;
     tree.as_array()?
         .iter()
         .map(|node| {
             let text_of = |key: &str| node.get(key).and_then(Tree::as_str).map(str::to_owned);
+            let array_of = |key: &str| node.get(key).and_then(Tree::as_array).unwrap_or_default();
+            let priority = match node.get("priority") {
+                Some(Tree::Num(digits)) => digits.parse::<u64>().ok(),
+                _ => None,
+            };
             Some(Issue {
                 id: text_of("id")?,
                 status: text_of("status")?,
                 title: text_of("title").unwrap_or_default(),
                 updated: text_of("updated_at").unwrap_or_else(|| NONE.to_owned()),
+                priority,
+                labels: array_of("labels").iter().filter_map(Tree::as_str).map(str::to_owned).collect(),
+                deps: array_of("dependencies").iter().filter_map(dep_of).collect(),
             })
         })
         .collect()
+}
+
+/// 依存の 1 要素（`id` / `status` / `dependency_type` の文字列が揃わなければ `None`）。
+fn dep_of(node: &Tree) -> Option<Dep> {
+    let text_of = |key: &str| node.get(key).and_then(Tree::as_str).map(str::to_owned);
+    Some(Dep { id: text_of("id")?, status: text_of("status")?, kind: text_of("dependency_type")? })
 }
 
 /// 台帳を子 process で読む（待ち上限を超えたら殺して断る・stderr は捨てる）。
@@ -556,8 +798,10 @@ fn finish(child: &mut Child, deadline: Option<Instant>) -> Option<ExitStatus> {
 
 #[cfg(test)]
 mod tests {
-    use super::{issues_of, ledger_ids, render_unavailable, Marker, RebriefError, ALL};
+    use super::{epoch_of_ts, issues_of, ledger_ids, render_unavailable, triage, Dep, Issue, Marker, RebriefError, Thresholds, ALL};
     use crate::order::is_declaration_order;
+    use proptest::prelude::*;
+    use proptest::test_runner::Config;
 
     /// (10) `ALL` は宣言順（判別子 0, 1, 2, …・ADR-0013 §2.2）で、並びは出力順そのもの。
     #[test]
@@ -579,6 +823,12 @@ mod tests {
                 "[ORPHAN-WM]",
                 "[ORPHAN-NONE]",
                 "[BD-COUNT]",
+                "[MEMO-DUE]",
+                "[MEMO-DUE-COUNT]",
+                "[MEMO-DUE-NONE]",
+                "[MEMO-STALE]",
+                "[MEMO-STALE-COUNT]",
+                "[MEMO-STALE-NONE]",
                 "[BD-INPROGRESS]",
                 "[BD-INPROGRESS-NONE]",
                 "[DIFF]",
@@ -589,7 +839,134 @@ mod tests {
             "宣言順 = 出力順"
         );
         assert_eq!(Marker::Sid as usize, 0, "先頭の判別子");
-        assert_eq!(Marker::TicketCandidateNone as usize, 17, "末尾の判別子");
+        assert_eq!(Marker::TicketCandidateNone as usize, 23, "末尾の判別子");
+    }
+
+    /// 判定の閾値（`s2-07l.217` の歯で使う値＝裁定 id `user 2026-09-13T14:06Z` の 3 日 / P2）。
+    const THRESHOLDS: Thresholds = Thresholds { stale_days: 3, stale_priority: 2 };
+    /// 判定の now。
+    const NOW: &str = "2026-09-14T12:00:00Z";
+
+    /// 1 件を組む（`labels` と `deps` は (id, status, kind)）。
+    fn issue(id: &str, labels: &[&str], priority: Option<u64>, updated: &str, deps: &[(&str, &str, &str)]) -> Issue {
+        Issue {
+            id: id.to_owned(),
+            status: "open".to_owned(),
+            title: String::new(),
+            updated: updated.to_owned(),
+            priority,
+            labels: labels.iter().map(|label| (*label).to_owned()).collect(),
+            deps: deps
+                .iter()
+                .map(|(id, status, kind)| Dep { id: (*id).to_owned(), status: (*status).to_owned(), kind: (*kind).to_owned() })
+                .collect(),
+        }
+    }
+
+    /// 判定の純関数: due は blocks が全部 closed・stale は依存なし ∧ P ≤ 閾値 ∧ 齢 ≥ 閾値・順は id の数字順。
+    #[test]
+    fn prop_rebrief_memo_triage_examples() {
+        let memo = ["intake:memo"];
+        let issues = [
+            issue("s2-07l.140", &memo, Some(1), NOW, &[("s2-9", "closed", "blocks"), ("s2-10", "closed", "blocks")]),
+            issue("s2-07l.61", &memo, Some(3), NOW, &[("s2-1", "closed", "blocks")]),
+            issue("s2-5", &memo, Some(2), NOW, &[("s2-1", "closed", "blocks"), ("s2-2", "open", "blocks")]),
+            issue("s2-6", &memo, Some(2), "2026-09-10T12:00:00Z", &[("s2-e", "closed", "parent-child")]),
+            issue("s2-7", &memo, Some(3), "2026-09-01T12:00:00Z", &[]),
+            issue("s2-8", &memo, Some(0), "2026-09-12T12:00:00Z", &[]),
+            issue("s2-9", &memo, Some(1), "none", &[]),
+            issue("s2-11", &["x"], Some(0), "2026-09-01T12:00:00Z", &[]),
+        ];
+        let found = triage(&issues, THRESHOLDS, NOW);
+        let due: Vec<(&str, Vec<String>)> = found.due.iter().map(|due| (due.id.as_str(), due.blocks.clone())).collect();
+        assert_eq!(
+            due,
+            [("s2-07l.61", vec!["s2-1".to_owned()]), ("s2-07l.140", vec!["s2-9".to_owned(), "s2-10".to_owned()])]
+        );
+        let stale: Vec<(&str, u64)> = found.stale.iter().map(|stale| (stale.id.as_str(), stale.age_days)).collect();
+        assert_eq!(stale, [("s2-6", 4)], "parent-child だけは依存なし・P3 と 2 日前は出ない");
+        assert_eq!((found.memo_total, found.unreadable), (7, 1), "label の無い bead は母集団の外・none は判定不能");
+    }
+
+    /// `updated_at` の字面: 小数秒と UTC offset を読み、形の違う字面は判定不能。
+    #[test]
+    fn prop_rebrief_memo_epoch_reads_fraction_and_offset() {
+        let base = epoch_of_ts("2026-09-13T05:06:07Z");
+        assert!(base.is_some());
+        assert_eq!(epoch_of_ts("2026-09-13T05:06:07.123456Z"), base);
+        assert_eq!(epoch_of_ts("2026-09-13T14:06:07+09:00"), base);
+        assert_eq!(epoch_of_ts("2026-09-12T23:06:07.5-06:00"), base);
+        for bad in ["none", "", "2026-09-13T05:06:07", "2026-09-13T05:06:07.Z", "2026-09-13T05:06:07+9:00", "2026-09-13T05:06:07++9:00"] {
+            assert_eq!(epoch_of_ts(bad), None, "{bad}");
+        }
+    }
+
+    /// 反例の永続化を切り、case 数を 256 に pin する（`tests/e2e/prop.rs` と同じ形）。
+    fn config() -> Config {
+        Config {
+            cases: 256,
+            failure_persistence: None,
+            ..Config::default()
+        }
+    }
+
+    /// 任意の 1 件の材料（label・status・priority・updated・依存）。
+    fn any_issue() -> impl Strategy<Value = (bool, bool, Option<u64>, usize, Vec<(bool, bool)>)> {
+        (
+            any::<bool>(),
+            any::<bool>(),
+            prop::option::of(0_u64..5),
+            0_usize..UPDATED.len(),
+            prop::collection::vec((any::<bool>(), any::<bool>()), 0..4),
+        )
+    }
+
+    /// updated の候補（読める齢・未来・読めない字面）。
+    const UPDATED: [&str; 6] =
+        ["2026-09-14T11:00:00Z", "2026-09-12T12:00:00Z", "2026-09-10T12:00:00Z", "2026-09-01T00:00:00+09:00", "2026-09-20T00:00:00Z", "none"];
+
+    proptest! {
+        #![proptest_config(config())]
+
+        /// 任意の Issue 列で due ∩ stale = ∅・due + stale ≤ memo_total・memo でない issue は両方に出ない。
+        #[test]
+        fn prop_rebrief_memo_due_and_stale_are_disjoint_memos(raw in prop::collection::vec(any_issue(), 0..12)) {
+            let issues: Vec<Issue> = raw
+                .iter()
+                .enumerate()
+                .map(|(at, (memo, open, priority, updated, deps))| {
+                    let deps: Vec<Dep> = deps
+                        .iter()
+                        .enumerate()
+                        .map(|(to, (closed, blocks))| Dep {
+                            id: format!("s2-d{to}"),
+                            status: if *closed { "closed" } else { "open" }.to_owned(),
+                            kind: if *blocks { "blocks" } else { "parent-child" }.to_owned(),
+                        })
+                        .collect();
+                    Issue {
+                        id: format!("s2-{at}"),
+                        status: if *open { "open" } else { "in_progress" }.to_owned(),
+                        title: String::new(),
+                        updated: UPDATED.get(*updated).copied().unwrap_or("none").to_owned(),
+                        priority: *priority,
+                        labels: if *memo { vec!["intake:memo".to_owned()] } else { Vec::new() },
+                        deps,
+                    }
+                })
+                .collect();
+            let found = triage(&issues, THRESHOLDS, NOW);
+            prop_assert!(found.due.iter().all(|due| found.stale.iter().all(|stale| stale.id != due.id)));
+            prop_assert!(found.due.len().saturating_add(found.stale.len()) <= found.memo_total);
+            let memos: Vec<&str> = issues
+                .iter()
+                .filter(|issue| issue.status == "open" && issue.labels.iter().any(|label| label == "intake:memo"))
+                .map(|issue| issue.id.as_str())
+                .collect();
+            prop_assert_eq!(found.memo_total, memos.len());
+            prop_assert!(found.due.iter().all(|due| memos.contains(&due.id.as_str())));
+            prop_assert!(found.stale.iter().all(|stale| memos.contains(&stale.id.as_str())));
+        }
     }
 
     /// 言及 id は prefix の形だけを拾い、文末の `.` と別 prefix を落とす。

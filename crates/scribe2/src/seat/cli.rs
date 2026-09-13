@@ -390,7 +390,7 @@ fn rebrief_of(args: &[String]) -> Outcome {
         Ok(manifest) => manifest,
         Err(errors) => return broken_rules(&errors, vec![rebrief::render_unavailable(RebriefError::NoRule)]),
     };
-    let Some(timeout) = rebrief::timeout_of(&manifest) else {
+    let (Some(timeout), Some(thresholds)) = (rebrief::timeout_of(&manifest), rebrief::thresholds_of(&manifest)) else {
         return unavailable(RebriefError::NoRule);
     };
     let request = rebrief::Request {
@@ -401,6 +401,7 @@ fn rebrief_of(args: &[String]) -> Outcome {
         prefix,
         bd: bd.unwrap_or(rebrief::DEFAULT_BD),
         timeout,
+        thresholds,
     };
     match rebrief::run(&request) {
         Ok(lines) => Outcome::ok(lines),

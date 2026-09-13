@@ -17,6 +17,10 @@ usage: seat <meter --target T [--transcript PATH]|inject --target T (--text S|--
 [WM-DIRECTIVE-COUNT] total=5 provisional=2 unresolved=1
 [ORPHAN-WM] file=working-memory.sid-other.md seat=other:1
 [BD-COUNT] open=2 in_progress=1 blocked=1
+[MEMO-DUE-COUNT] n=0 of=0
+[MEMO-DUE-NONE]
+[MEMO-STALE-COUNT] n=0 of=0 unreadable=0
+[MEMO-STALE-NONE]
 [BD-INPROGRESS] s2-07l.61 updated=2026-09-12T02:01:00Z 裁定の記録
 [DIFF] s2-07l.61 bd=in_progress
 [DIFF] s2-07l.140 bd=unknown
@@ -29,6 +33,10 @@ usage: seat <meter --target T [--transcript PATH]|inject --target T (--text S|--
 [WM-DIRECTIVE-COUNT] total=0 provisional=0 unresolved=0
 [ORPHAN-NONE]
 [BD-COUNT] open=0 in_progress=0 blocked=0
+[MEMO-DUE-COUNT] n=0 of=0
+[MEMO-DUE-NONE]
+[MEMO-STALE-COUNT] n=0 of=0 unreadable=0
+[MEMO-STALE-NONE]
 [BD-INPROGRESS-NONE]
 [DIFF-NONE]
 [TICKET-CANDIDATE-NONE]
@@ -36,5 +44,9 @@ usage: seat <meter --target T [--transcript PATH]|inject --target T (--text S|--
 [WM] missing
 [ORPHAN-NONE]
 [BD-COUNT] open=0 in_progress=0 blocked=0
+[MEMO-DUE-COUNT] n=0 of=0
+[MEMO-DUE-NONE]
+[MEMO-STALE-COUNT] n=0 of=0 unreadable=0
+[MEMO-STALE-NONE]
 [BD-INPROGRESS-NONE]
 seats: registered=2 live=unmeasurable missing=unmeasurable
