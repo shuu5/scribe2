@@ -98,8 +98,8 @@
 <table>
 <thead><tr><th>id</th><th>要件文</th><th>v2 表現</th><th>出所</th><th>裁定</th><th>v1 対応物</th><th>備考</th></tr></thead>
 <tbody>
-<tr><td id="r-a1"><code>R-A1</code></td><td>契約は planner の draft と admin の起票を<strong>同一の 1 形式</strong>で繋ぎ、書き直しの二度手間をゼロにする形でなければならない</td><td></td><td>contracts/contract-v1.md 前文</td><td>なし</td><td><code>scribe-intake-apply.py</code></td><td></td></tr>
-<tr><td id="r-a2"><code>R-A2</code></td><td>契約本体は <strong>acceptance 相当の単一 field</strong> に置かれ、description / notes に置いた宣言は判定対象にしてはならない</td><td></td><td>contract-v1.md §1・runbook/admin.md §4</td><td>なし</td><td><code>acceptance_criteria</code></td><td></td></tr>
+<tr><td id="r-a1"><code>R-A1</code></td><td>契約は planner の draft と admin の起票を<strong>同一の 1 形式</strong>で繋ぎ、書き直しの二度手間をゼロにする形でなければならない</td><td>契約の正本は設計 doc の契約表 1 行（FR47）。draft と起票の 2 形式は無く、器が契約 file を生成する（FR53）。</td><td>contracts/contract-v1.md 前文</td><td>なし</td><td><code>scribe-intake-apply.py</code></td><td></td></tr>
+<tr><td id="r-a2"><code>R-A2</code></td><td>契約本体は <strong>acceptance 相当の単一 field</strong> に置かれ、description / notes に置いた宣言は判定対象にしてはならない</td><td>契約本体は設計 doc の契約表の行で、台帳の field は判定対象でない（FR47 / FR51）。</td><td>contract-v1.md §1・runbook/admin.md §4</td><td>なし</td><td><code>acceptance_criteria</code></td><td></td></tr>
 <tr><td id="r-a3"><code>R-A3</code></td><td>契約の必須 field は 7 本（goal / done / write-set / verify / size / owner / disposition）で、<strong>tier を書き手が名乗ってはならない</strong></td><td></td><td>contract-v1.md §1.1</td><td>なし</td><td><code>[TIER-DECL v1]</code></td><td></td></tr>
 <tr><td id="r-a4"><code>R-A4</code></td><td><code>done</code> は close の形（何が真になったら閉じるか）を 1 文で持たねばならない。program ではこれが完成線である</td><td></td><td>contract-v1.md §1.1 / carrier-model §3.1</td><td>なし</td><td>-</td><td></td></tr>
 <tr><td id="r-a5"><code>R-A5</code></td><td>leaf は実行可能な検証コマンドを 1 本以上持たねばならず、各行は<strong>1 行だけで完結</strong>（前行の env / cd を引き継がない）でなければならない</td><td></td><td>contract-v1.md §1.5</td><td>なし</td><td><code>検証:</code> 行</td><td></td></tr>
@@ -113,7 +113,7 @@
 <tr><td id="r-a15"><code>R-A15</code></td><td>tier 宣言を焼くのは graph 所有者 1 者だけで、<strong>起動前・anchor の木</strong>で焼かねばならない（cell 内での焼き直しは禁止）</td><td></td><td>tier.md <code>TIER-DECL-WRITER v1</code> (a)(c)</td><td>なし</td><td>-</td><td></td></tr>
 <tr><td id="r-a16"><code>R-A16</code></td><td>契約 field は全置換で書かれるため、順序は「宣言を焼く → 契約 snapshot を焼き直す」でなければならない（逆順は起動門の不一致 deny）</td><td></td><td>tier.md (d)</td><td>なし</td><td><code>[ORCH-DISPATCH-ACCEPTANCE-SNAPSHOT v1]</code></td><td></td></tr>
 <tr><td id="r-a19"><code>R-A19</code></td><td>planner の handoff は窓が消えても残る <strong>durable file</strong> でなければならず、会話面を carrier にしてはならない</td><td></td><td>contract-v1.md §4 / role-context-spec §2.7 終端</td><td>なし</td><td><code>PROPOSAL-&lt;窓名&gt;.md</code> / <code>.consumed.md</code></td><td></td></tr>
-<tr><td id="r-a20"><code>R-A20</code></td><td>契約 draft の<strong>所有は設計協調席</strong>であり、執行席は事実供給・監査・焼き・起動・funnel の 4 つだけを持つ</td><td></td><td>role-context-spec §2.7 常設職務 (a)</td><td>user 裁定（USER-VERBATIM 2026-08-30 第40号・逐語は repo 外）</td><td>-</td><td></td></tr>
+<tr><td id="r-a20"><code>R-A20</code></td><td>契約 draft の<strong>所有は設計協調席</strong>であり、執行席は事実供給・監査・焼き・起動・funnel の 4 つだけを持つ</td><td>契約表の行は設計 doc の改訂で変わり（FR47）、器が契約 file を生成する（FR53）。管理席は intake と回答の中継だけ。</td><td>role-context-spec §2.7 常設職務 (a)</td><td>user 裁定（USER-VERBATIM 2026-08-30 第40号・逐語は repo 外）</td><td>-</td><td></td></tr>
 </tbody>
 </table>
 </details>
@@ -161,7 +161,7 @@
 <tbody>
 <tr><td id="r-c1"><code>R-C1</code></td><td>検証は<strong>実装者の自己申告と self-test PASS を信用してはならない</strong>。検証側が自ら再実行して ground-truth を取る</td><td></td><td>runbook/gate.md「gate の義務」(b)</td><td>なし</td><td><code>selfTestCmd</code></td><td></td></tr>
 <tr><td id="r-c2"><code>R-C2</code></td><td>検証は契約項目を<strong>逐条で PASS/FAIL 判定</strong>し、判定根拠を永続面へ残さねばならない（総括で通さない）</td><td></td><td>runbook/gate.md (a)</td><td>なし</td><td>-</td><td></td></tr>
-<tr><td id="r-c4"><code>R-C4</code></td><td>検証は<strong>独立した席</strong>で回さねばならず、執行席の中で inline に回す形と、その場で書いた prompt で subagent に判定を委ねる形を禁じる</td><td></td><td>runbook/gate.md (補2)(補4)</td><td>なし</td><td><code>scribe-spawn --gate</code></td><td></td></tr>
+<tr><td id="r-c4"><code>R-C4</code></td><td>検証は<strong>独立した席</strong>で回さねばならず、執行席の中で inline に回す形と、その場で書いた prompt で subagent に判定を委ねる形を禁じる</td><td>実装前の審査も独立した lens が担う（FR49）。planner が手で審査する形は持たない。</td><td>runbook/gate.md (補2)(補4)</td><td>なし</td><td><code>scribe-spawn --gate</code></td><td></td></tr>
 <tr><td id="r-c6"><code>R-C6</code></td><td>検証席は read-only でなければならない（成果物 1 file 以外への書込み・台帳 write・worktree の変更を禁じる。変異検証は複製の上で行う）</td><td></td><td>role-context-spec §2.4</td><td>なし</td><td><code>gate-write-guard.py</code></td><td></td></tr>
 <tr><td id="r-c7"><code>R-C7</code></td><td>リスク tier は<strong>観点数だけ</strong>を決める（0 = 観点なし / 1 = 3 観点 / 2 = 5 観点）。窓・待受・回収・merge の経路は全 tier で 1 本でなければならない</td><td></td><td>runbook/gate.md「risk-tier」/ tier.md <code>TIER-AXIS-GOVERNS v1</code></td><td>user 裁定（2026-08-22 07:04・逐語は repo 外）</td><td><code>--risk-tier</code> / <code>--tier S\|M\|L</code></td><td></td></tr>
 <tr><td id="r-c9"><code>R-C9</code></td><td>verdict の値域は <strong>PASS / FAIL / INCONCLUSIVE / DEAD</strong> の 4 値でなければならない</td><td></td><td>merge-gate.md verdict 回収</td><td>なし</td><td><code>scribe-gate-verdict</code></td><td></td></tr>
@@ -190,7 +190,7 @@
 <table>
 <thead><tr><th>id</th><th>要件文</th><th>v2 表現</th><th>出所</th><th>裁定</th><th>v1 対応物</th><th>備考</th></tr></thead>
 <tbody>
-<tr><td id="r-d1"><code>R-D1</code></td><td>順序は「完了 note → 完了ラベル → 前提検査 → 独立検証 → 回収 → 執行者の実測 1 件以上 → merge → go-live → close → 後始末 → 台帳同期」で固定し、逆順を許してはならない</td><td></td><td>protocol.md §0 admin core / merge-gate.md step1-8</td><td>なし</td><td>step1〜finish</td><td></td></tr>
+<tr><td id="r-d1"><code>R-D1</code></td><td>順序は「完了 note → 完了ラベル → 前提検査 → 独立検証 → 回収 → 執行者の実測 1 件以上 → merge → go-live → close → 後始末 → 台帳同期」で固定し、逆順を許してはならない</td><td>着地の後の手は器が持つ: push・CI の結果の照合（commit id）・台帳の close で、各手を typed に記帳する（FR50）。</td><td>protocol.md §0 admin core / merge-gate.md step1-8</td><td>なし</td><td>step1〜finish</td><td></td></tr>
 <tr><td id="r-d2"><code>R-D2</code></td><td>完了 note とラベルは<strong>note が先</strong>で、ラベルが note の実在を含意する不変量でなければならない</td><td></td><td>runbook/admin.md §4 / protocol.md worker core</td><td>なし</td><td><code>[DONE--&lt;id&gt;]</code> → <code>gate-pending</code></td><td></td></tr>
 <tr><td id="r-d3"><code>R-D3</code></td><td>完了判定は<strong>独立 3 信号の AND</strong>（ラベル完全一致 ∧ 完了 note 実在 ∧ commit 0 でない）でなければならない</td><td></td><td>merge-gate.md step1</td><td>なし</td><td>Layer2 commit-count</td><td></td></tr>
 <tr><td id="r-d4"><code>R-D4</code></td><td>前提検査が非 0 の木には<strong>検証 agent を 1 体も建ててはならない</strong></td><td></td><td>protocol.md 残置区間外 pin</td><td>なし</td><td><code>scribe-gate-run launch</code></td><td></td></tr>
@@ -198,15 +198,15 @@
 <tr><td id="r-d6"><code>R-D6</code></td><td>merge は「前提検査 PASS ∧ verdict PASS」を前提 gate とする fail-closed でなければならず、前提未達なら<strong>何もしてはならない</strong>（force 系の git 操作を使わない）</td><td></td><td>merge-gate.md merge/finish</td><td>なし</td><td><code>scribe-merge-one</code></td><td></td></tr>
 <tr><td id="r-d8"><code>R-D8</code></td><td>lane 限定の自動 merge は<strong>緩和ではなく条件の追加</strong>（前提検査の tier 証跡 + verdict の構造 3 条 + 3 クラス機械近似）でなければならない</td><td></td><td>merge-gate.md「lane 限定 auto-merge」§3/§4</td><td>user 裁定（RULING-admin-offload O1・逐語は repo 外）</td><td><code>lane-auto</code></td><td></td></tr>
 <tr><td id="r-d9"><code>R-D9</code></td><td>自動 merge lane は<strong>自分の merge 機構を書き換える便を無条件に除外</strong>しなければならない</td><td></td><td>merge-gate.md §1 除外(b)</td><td>なし</td><td><code>lane_of()</code></td><td></td></tr>
-<tr><td id="r-d10"><code>R-D10</code></td><td>close は merge 完了後に <strong>graph 所有者（または land 専任席）だけ</strong>が行い、実装席は自己 close も自己 merge もしてはならない</td><td></td><td>protocol.md §0 / roles-boundary.md</td><td>なし</td><td>-</td><td></td></tr>
-<tr><td id="r-d11"><code>R-D11</code></td><td>merge 後の main で<strong>歯を 1 回実測</strong>し、結果を記帳しなければならない（main GREEN の oracle は landed main そのもの）</td><td></td><td>runbook/admin.md (b-3) / merge-gate.md O1-B</td><td>user 裁定（RULING-admin-offload O1・逐語は repo 外）</td><td><code>scribe-post-land-check.py</code></td><td></td></tr>
+<tr><td id="r-d10"><code>R-D10</code></td><td>close は merge 完了後に <strong>graph 所有者（または land 専任席）だけ</strong>が行い、実装席は自己 close も自己 merge もしてはならない</td><td>close は器の land の終端が行い（FR50）、席は close しない。</td><td>protocol.md §0 / roles-boundary.md</td><td>なし</td><td>-</td><td></td></tr>
+<tr><td id="r-d11"><code>R-D11</code></td><td>merge 後の main で<strong>歯を 1 回実測</strong>し、結果を記帳しなければならない（main GREEN の oracle は landed main そのもの）</td><td>着地 commit の CI の結果を commit id で照合し、success でなければ close しない（FR50）。</td><td>runbook/admin.md (b-3) / merge-gate.md O1-B</td><td>user 裁定（RULING-admin-offload O1・逐語は repo 外）</td><td><code>scribe-post-land-check.py</code></td><td></td></tr>
 <tr><td id="r-d14"><code>R-D14</code></td><td>搬送は「既定 branch の tip を base にした単一 commit へ畳み、tree 同一で lossless を証明する」形でなければならず、追随面（local main）を作業面にしてはならない</td><td></td><td>runbook/admin.md §5 搬送規律</td><td>なし</td><td>squash 搬送</td><td></td></tr>
 <tr><td id="r-d15"><code>R-D15</code></td><td>merge 定型は <strong>step ごとに終了コードを実照合</strong>しなければならない（連結実行で失敗を貫通させない）</td><td></td><td>lore/merge-script-fail-closed.md</td><td>なし</td><td>-</td><td></td></tr>
 <tr><td id="r-d16"><code>R-D16</code></td><td>台帳の外部同期点は<strong>ちょうど 1 者・1 箇所</strong>でなければならない</td><td></td><td>protocol.md §0 / roles-boundary.md</td><td>なし</td><td><code>bd dolt push</code></td><td></td></tr>
 <tr><td id="r-d17"><code>R-D17</code></td><td>差し戻し周（errata）は issue を open のまま<strong>同一 branch へ追補</strong>し、PR を開き直してはならない。merge 後の作り直しだけが reopen 事由である</td><td></td><td>runbook/admin.md §4</td><td>なし</td><td>-</td><td></td></tr>
 <tr><td id="r-d18"><code>R-D18</code></td><td>errata の再起動は<strong>先行周の branch を base に明示</strong>しなければならず、省略は fail-loud で止めねばならない</td><td></td><td>runbook/admin.md §4</td><td>なし</td><td><code>--errata-round N</code> / <code>--base</code></td><td></td></tr>
 <tr><td id="r-d19"><code>R-D19</code></td><td>直列点は明示されねばならない: 台帳 write の直列化、前提検査の排他鍵、検証側の再実行と執行側の suite 実走の非並走</td><td></td><td>roles-boundary.md / protocol.md 残置区間外 pin / runbook/gate.md (b) ★</td><td>なし</td><td><code>bdw</code> flock / <code>SCRIBE_GATE_RUN_STEP1_LOCK</code></td><td></td></tr>
-<tr><td id="r-d20"><code>R-D20</code></td><td>land 専任席は契約本文を<strong>書き換えてはならず</strong>、追記（errata block + 印の再焼き）だけを持つ</td><td></td><td>role-context-spec §2.8 権限表</td><td>user 裁定（RULING-morning 論点 2・逐語は repo 外）</td><td><code>[ADMIN-ERRATA rN]</code></td><td></td></tr>
+<tr><td id="r-d20"><code>R-D20</code></td><td>land 専任席は契約本文を<strong>書き換えてはならず</strong>、追記（errata block + 印の再焼き）だけを持つ</td><td>契約表の行の改訂は設計 doc の PR だけで、契約 file は生成物ゆえ手で直さない（FR47）。</td><td>role-context-spec §2.8 権限表</td><td>user 裁定（RULING-morning 論点 2・逐語は repo 外）</td><td><code>[ADMIN-ERRATA rN]</code></td><td></td></tr>
 </tbody>
 </table>
 </details>
@@ -349,7 +349,7 @@
 <tr><td id="r-i15"><code>R-I15</code></td><td>label 語彙は役割と状態を一意に指す最小集合であること（完了申告 / 契約修正待ち / 入口 QA 印 / 人間手番 / 保留 / 差し戻し済 / 常設 / tier / lane）</td><td></td><td>各 contracts 横断</td><td>なし</td><td><code>gate-pending</code> / <code>qa:pending</code> / <code>qa:intake</code> / <code>needs-user</code> / <code>held</code> / <code>reverted</code> / <code>standing</code> / <code>tier:N</code> / <code>port-wave*</code></td><td></td></tr>
 <tr><td id="r-i16"><code>R-I16</code></td><td>記帳は<strong>追記</strong>でなければならない（置換 write で先行の印ごと消してはならない）</td><td></td><td>runbook/admin.md §4 gate findings</td><td>なし</td><td><code>--append-notes</code></td><td></td></tr>
 <tr><td id="r-i17"><code>R-I17</code></td><td>機械が焼く要約は <strong>1 回性</strong>が担保されねばならず、記帳に失敗した周は印を立てず次周で撃ち直さねばならない</td><td></td><td>merge-gate.md gate lane 回収</td><td>なし</td><td><code>[GATE-SUMMARY v1]</code></td><td></td></tr>
-<tr><td id="r-i18"><code>R-I18</code></td><td><strong>規律台帳（rules manifest・C1 / C14）</strong>に残すべき規約・判断と、<strong>task 台帳（beads・C15）</strong>に残すべき申し送りを、<strong>どちらの台帳の外の散文へも置いたまま先送りしてはならない</strong>（v0.1.5: 旧文の『台帳』は v1 の beads 一本を指していた。v2 では規約 → manifest・申し送り → beads と置き場が分かれる〔器 SPEC v0.4 §9 (a′)〕）</td><td></td><td>ledger-rules.md R7 prose deferral</td><td>user 裁定（逐語は repo 外）・論点 2（2026-09-08 03:51Z）</td><td>-</td><td></td></tr>
+<tr><td id="r-i18"><code>R-I18</code></td><td><strong>規律台帳（rules manifest・C1 / C14）</strong>に残すべき規約・判断と、<strong>task 台帳（beads・C15）</strong>に残すべき申し送りを、<strong>どちらの台帳の外の散文へも置いたまま先送りしてはならない</strong>（v0.1.5: 旧文の『台帳』は v1 の beads 一本を指していた。v2 では規約 → manifest・申し送り → beads と置き場が分かれる〔器 SPEC v0.4 §9 (a′)〕）</td><td>台帳の lint（FR51）が pointer の無い設計の中身を名指し、設計 doc の散文の門（FR52）が根拠の無い規範文を名指す。</td><td>ledger-rules.md R7 prose deferral</td><td>user 裁定（逐語は repo 外）・論点 2（2026-09-08 03:51Z）</td><td>-</td><td></td></tr>
 <tr><td id="r-i19"><code>R-I19</code></td><td>他 project の台帳へは <strong>write せず、read と出所保持</strong>に留めねばならない</td><td></td><td>role-context-spec §2.1 cross-ledger</td><td>なし</td><td>write-isolation</td><td></td></tr>
 </tbody>
 </table>
@@ -442,7 +442,7 @@
 <p class="section-essence" data-audience="human">要件定義書（SRS）の各要件が、 このカタログのどの行から来たかを 1 表で示します。 SRS の要件は振る舞いの単位でまとめてあるので、 1 本の要件に複数の行が対応します。 表に現れない行は、 設計から契約を切る段で参照する材料としてそのまま残ります。</p>
 <p data-audience="machine">対応の向きは SRS → カタログ（FR / NFR 1 本 → R- 行 0〜n 本）。 SRS 側の根拠 field（<code>rationale_source</code> / <code>trace.backward</code>）は上位ニーズ N-1〜N-5 を指し、 R- 行への対応は本表だけが持つ（SRS の contract に R- id は書かない）。 対応 0 本の要件は、 grill の裁定で新設した要件・要件 doc の v3 行に由来する制約・憲法 / ADR 由来の制約のいずれかで、 その旨を右列に書く。 本表で引かれない行（150 行中 61 行）は削除でも降格でもなく、 設計 doc から契約を切る段の材料として残る。 表の R- id は本 page の行へ、 FR / NFR id は <code>./srs.html</code> の要件行へ deep-link する。</p>
 <details class="req__machine" data-audience="machine">
-<summary>対応表（R- 行に対応する要件 39 本。 R- 行を持たない要件: FR29・FR31〜FR35・FR37〜FR39・FR43・FR44・FR46・NFR6）</summary>
+<summary>対応表（R- 行に対応する要件 45 本。 R- 行を持たない要件: FR29・FR31〜FR35・FR37〜FR39・FR43・FR44・FR46・FR48・FR54・FR55・NFR6）</summary>
 <table>
 <thead><tr><th>SRS</th><th>要件名</th><th>対応する R- 行</th></tr></thead>
 <tbody>
@@ -480,6 +480,12 @@
 <tr><td><a href="./srs.html#FR41">FR41</a></td><td>権能の所在</td><td><a href="#r-e4">R-E4</a>, <a href="#r-e6">R-E6</a></td></tr>
 <tr><td><a href="./srs.html#FR42">FR42</a></td><td>席の指示文の注入</td><td><a href="#r-e21">R-E21</a></td></tr>
 <tr><td><a href="./srs.html#FR45">FR45</a></td><td>権能の執行</td><td><a href="#r-e5">R-E5</a>, <a href="#r-e22">R-E22</a></td></tr>
+<tr><td><a href="./srs.html#FR47">FR47</a></td><td>契約の正本</td><td><a href="#r-a1">R-A1</a>, <a href="#r-a2">R-A2</a>, <a href="#r-a20">R-A20</a>, <a href="#r-d20">R-D20</a></td></tr>
+<tr><td><a href="./srs.html#FR49">FR49</a></td><td>契約の審査</td><td><a href="#r-c4">R-C4</a></td></tr>
+<tr><td><a href="./srs.html#FR50">FR50</a></td><td>land の終端</td><td><a href="#r-d1">R-D1</a>, <a href="#r-d10">R-D10</a>, <a href="#r-d11">R-D11</a></td></tr>
+<tr><td><a href="./srs.html#FR51">FR51</a></td><td>台帳の lint</td><td><a href="#r-i18">R-I18</a></td></tr>
+<tr><td><a href="./srs.html#FR52">FR52</a></td><td>設計 doc の散文の門</td><td><a href="#r-i18">R-I18</a></td></tr>
+<tr><td><a href="./srs.html#FR53">FR53</a></td><td>契約 file の生成</td><td><a href="#r-a1">R-A1</a>, <a href="#r-a20">R-A20</a></td></tr>
 <tr><td><a href="./srs.html#NFR1">NFR1</a></td><td>lens 予算</td><td><a href="#r-c12">R-C12</a>, <a href="#r-j14">R-J14</a></td></tr>
 <tr><td><a href="./srs.html#NFR2">NFR2</a></td><td>契約の大きさ</td><td>—（要件 doc の R-J19 は v3 送りでカタログ外・grill 論点 2 の裁定）</td></tr>
 <tr><td><a href="./srs.html#NFR3">NFR3</a></td><td>依存</td><td>—（ADR-0001 と憲法由来・対応する R- 行なし）</td></tr>

@@ -11,14 +11,14 @@ meta:
   eyebrow_left: 要件定義書 (SRS)
   eyebrow_right: scribe2 — MVP
   subtitle: 契約は小さく・検証は機械が先・止まるときは記帳して止まる
-  version: "0.7"
+  version: "0.8"
   date: "2026-09-13"
   reader: この器で開発する人と AI（Claude Code の session）。 専門語には必ずやさしい言い換えを併記する
 
 approval:
   - role: 承認 (user)
     who: user
-    when: 2026-09-13（版 0.7。 版ごとの裁定 id は台帳が持つ）
+    when: 2026-09-13（版 0.8。 版ごとの裁定 id は台帳が持つ）
     stamp: 裁定済
   - role: レビュー (folio review lens)
     who: spec-review 5 軸 + SRS ceiling 3 lens
@@ -61,10 +61,17 @@ scope:
     - 席間の連絡
     - 便の封じ込め
     - 受付の枠
+    - 契約表からの契約 file の生成
+    - 契約の審査
+    - write-set の閉包
+    - land の終端
+    - 台帳の lint
+    - 設計 doc の散文の門
+    - 契約表の検査
   out:
     - 席の起動（v3）
     - lane 計画と席の dashboard（v3）
-    - 台帳への write（bead id を持つだけ）
+    - 台帳への write（close と notes 1 行の外）
     - 複数の対話面（v3）
     - rtk / graphify の有効化と SQLite 化（Ask-first）
 
@@ -104,6 +111,12 @@ acceptance:
   - { id: AC18, criterion: fixture の席が idle で queue が空でないとき管理 tick が続きの pointer を 1 件注入し、 queue が承認と裁定の待ちだけのときは注入しない,                                  metric_v: 1 件,  metric_l: 継続の注入,         links: [FR43] }
   - { id: AC19, criterion: 席間の連絡 1 件が入力欄を経由せず届き、 届いた事実が経路の記録から取れる,                                                                                        metric_v: 1 件,  metric_l: 記録で確認,         links: [FR44] }
   - { id: AC20, criterion: 変異検査の verify 行が memory 上限付きの箱の中で撃たれ、 箱や受付が使えない fixture では並列度 1 で進んで便が断られない,                                metric_v: 0 件,  metric_l: 資源不足での拒否,   links: [FR8, FR46, NFR6] }
+  - { id: AC21, criterion: toy repo の設計 doc に契約表 3 行（正常・型の宣言に対して write-set が足りない・設計の節が無い）を置き、 intake が正常の 1 行から契約 file を生成して便を作り、 残りの 2 行を typed な理由（足りない file・無い節）で断って便が増えず、 契約 file を直接渡す形は受け付けない, metric_v: 1/3 便, metric_l: 契約表からの生成と拒否, links: [FR2, FR47, FR48, FR53, FR54] }
+  - { id: AC22, criterion: 偽の lens が FAIL を返す契約は契約の審査の段で止まり runner の process が 1 度も起きず、 PASS を返す契約は Spawned へ進んで verdict が便の記録に残る。 加えて実 lens で scribe2 自身の契約 1 本を審査し verdict と所要を記録に残す, metric_v: 0 件 + 実 1 本, metric_l: 審査を通らない便の runner 起動, links: [FR49] }
+  - { id: AC23, criterion: fixture の remote と偽の CI の結果と偽の台帳 adapter で、 Landed の後に push・CI の結果の照合・close の 1 行が typed な event として記帳され、 CI が赤の fixture では close されず失敗が記帳される。 加えて実便 1 本で land の終端が席の手順なしに close まで通る（人由来の event 0）, metric_v: 1 便 + 実 1 本, metric_l: 終端が席の手順なしに通る, links: [FR22, FR50] }
+  - { id: AC24, criterion: fixture の台帳（台帳 adapter の偽出力）で pointer の無い open な memo 2 本と契約 id を指さない open な契約 1 本を lint が名指し、 全件揃った fixture では 0 件・rc 0。 加えて実台帳で 1 回撃ち、 名指された件数と母集団を記録に残す, metric_v: 3/3 件 + 実 1 回, metric_l: pointer の欠落の名指し, links: [FR51] }
+  - { id: AC25, criterion: fixture の設計 doc（規範の印を持つ文 3 つ = pointer 無し・数 + 単位付き・適合）で散文の門が違反 2 件を file と行付きで名指して非 0、 適合だけの fixture で 0 件・rc 0。 加えて tracked な設計 doc 全件で 0 件, metric_v: 2/2 件 + 全件 0, metric_l: 散文の門の違反の名指し, links: [FR52] }
+  - { id: AC26, criterion: fixture の設計 doc の契約表（write-set が閉包に足りない行・設計の節が無い行・適合の行の 3 行）で契約表の検査が違反 2 行を file と行付きで名指して非 0、 適合だけの fixture で 0 件・rc 0, metric_v: 2/2 行, metric_l: 契約表の違反の名指し, links: [FR55] }
 
 requirements:
   - id: FR1
@@ -115,7 +128,7 @@ requirements:
     trace: { backward: [N-4], acceptance: [AC6, AC14] }
     ears:
       pattern: unwanted
-      condition: 契約 file に必須 field（goal / done / write-set / verify / size / owner / disposition）の欠落・複数行の verify・write-set 0 本が在るとき
+      condition: 契約 file（契約表の行から生成した写し・必須 field の集合は生成の型が持つ）に必須 field の欠落・複数行の verify・write-set 0 本が在るとき
       response: 全件を行番号付きで集めて拒否し、 便を作らない
   - id: FR2
     type: FR
@@ -123,7 +136,7 @@ requirements:
     priority: must
     vmethod: I
     rationale_source: N-4
-    trace: { backward: [N-4], acceptance: [AC2] }
+    trace: { backward: [N-4], acceptance: [AC2, AC21] }
     ears:
       pattern: ubiquitous
       condition: 常時
@@ -343,7 +356,7 @@ requirements:
     priority: must
     vmethod: T
     rationale_source: N-1
-    trace: { backward: [N-1], acceptance: [AC1, AC2, AC10] }
+    trace: { backward: [N-1], acceptance: [AC1, AC2, AC10, AC23] }
     ears:
       pattern: ubiquitous
       condition: 常時
@@ -617,6 +630,106 @@ requirements:
       condition: 封じ込めか受付の枠が使えない host で便が起動されたとき
       response: 器は並列度 1 で進み、 便を断らず、 縮退の事実と理由を record に残す
 
+  - id: FR47
+    type: FR
+    label: 契約の正本
+    priority: must
+    vmethod: T
+    rationale_source: N-4
+    trace: { backward: [N-4, N-3], acceptance: [AC21] }
+    ears:
+      pattern: ubiquitous
+      condition: 常時
+      response: 契約は tracked な設計 doc の契約表の 1 行（少なくとも要件 id・実装する設計の節・write-set・検証を持つ）だけから取る。 台帳の bead は契約の本文を持たず、 その行への設計 pointer を持つ
+  - id: FR48
+    type: FR
+    label: write-set の閉包
+    priority: must
+    vmethod: T
+    rationale_source: N-4
+    trace: { backward: [N-4, N-3], acceptance: [AC21] }
+    ears:
+      pattern: unwanted
+      condition: intake に出された契約の行が閉じた型（variant を得る列挙・rules 行・完了の値・event の種類）を変えると宣言し、 base でその型を構造として持つ source file の集合を write-set が含まないとき（導出が source を読めない周を含む）
+      response: 器は足りない file（読めない周はその source）を名指す typed な理由で契約を断り、 便を作らない
+  - id: FR49
+    type: FR
+    label: 契約の審査
+    priority: must
+    vmethod: T
+    rationale_source: N-2
+    trace: { backward: [N-2, N-1], acceptance: [AC22] }
+    ears:
+      pattern: event
+      condition: 便が intake を通ったとき
+      response: 器は runner を起こす前に、 契約とそれが実装する設計と要件を lens に読ませて verdict を採り、 その verdict を便の段として記帳し、 verdict が PASS でない便の runner を起こさない
+  - id: FR50
+    type: FR
+    label: land の終端
+    priority: must
+    vmethod: T
+    rationale_source: N-1
+    trace: { backward: [N-1, N-3], acceptance: [AC23] }
+    ears:
+      pattern: event
+      condition: 便が Landed に達したとき
+      response: 器は着地した main を remote へ push し、 着地 commit の CI の結果を commit id で照合し、 台帳の便を着地 commit id と CI の結果を持つ 1 行の note 付きで close し（台帳へはそれ以外を書かない）、 終端の各手を typed な event として記帳する。 CI の結果が success でなければ close せず失敗を記帳する
+  - id: FR51
+    type: FR
+    label: 台帳の lint
+    priority: must
+    vmethod: T
+    rationale_source: N-3
+    trace: { backward: [N-3], acceptance: [AC24] }
+    ears:
+      pattern: ubiquitous
+      condition: 常時
+      response: 器は doctor の 1 項目として台帳の lint を提供し、 読み取り専用の台帳 adapter で台帳を読み、 解決できる設計 pointer（設計 doc の path と契約 id）を持たない open な契約と、 tracked な設計 doc か research への pointer 無しに設計の中身を持つ open な memo を名指す
+  - id: FR52
+    type: FR
+    label: 設計 doc の散文の門
+    priority: must
+    vmethod: T
+    rationale_source: N-3
+    trace: { backward: [N-3], acceptance: [AC25] }
+    ears:
+      pattern: ubiquitous
+      condition: 常時
+      response: CI は全 tracked 設計 doc を検査し、 規範の印を持つ文が pointer（憲法の条・rules 行 id・要件 id・決定 id・契約 id のいずれか）を持ち数 + 単位を持たないことを確かめ、 違反する文を file と行で名指す
+  - id: FR53
+    type: FR
+    label: 契約 file の生成
+    priority: must
+    vmethod: T
+    rationale_source: N-4
+    trace: { backward: [N-4, N-3], acceptance: [AC21] }
+    ears:
+      pattern: event
+      condition: 設計 pointer（設計 doc の path と契約 id）を添えて intake が要求されたとき
+      response: 器は記録した base の設計 doc からその行を読み、 便の契約 file をその行から生成する
+  - id: FR54
+    type: FR
+    label: 設計 pointer の拒否
+    priority: must
+    vmethod: T
+    rationale_source: N-4
+    trace: { backward: [N-4], acceptance: [AC21] }
+    ears:
+      pattern: unwanted
+      condition: intake に添えた設計 pointer が解決しないとき（設計 doc・契約表の行・実装する設計の節のいずれかが無い）、 または契約 file が直接渡されたとき
+      response: 器は解決しないものを名指す typed な理由で契約を断り、 便を作らない
+  - id: FR55
+    type: FR
+    label: 契約表の検査
+    priority: must
+    vmethod: T
+    rationale_source: N-3
+    trace: { backward: [N-3], acceptance: [AC26] }
+    ears:
+      pattern: ubiquitous
+      condition: 常時
+      response: CI は全 tracked 設計 doc の契約表の全行に、 intake と同じ write-set の閉包の導出（FR48）と設計 pointer の解決（FR54）を回し、 違反する行を file と行で名指す
+
 nfr:
   - { id: NFR1, type: NFR, label: lens 予算,   category: 性能, target: 1 lens は 0.15M token 以内（目標値）,                                measure: lens 起動時の diff byte と cap の照合を verdict に記録,        vmethod: T, trace: { backward: [N-2], acceptance: [AC3] }, hero: { cat: 予算, big: "0.15", unit: M token, qual: lens 1 本あたりの上限 } }
   - { id: NFR2, type: NFR, label: 契約の大きさ, category: 大きさ, target: 1 契約の diff は 300 行程度・見積は 550 行以内,                      measure: PR の diff 行数と契約の見積を記録して照合,                   vmethod: A, trace: { backward: [N-4], acceptance: [AC2] }, hero: { cat: 小ささ, big: "300", unit: 行, qual: 1 契約の diff の目安 } }
@@ -634,7 +747,7 @@ constraints:
   - { id: CON6, label: headless, text: headless の runner / lens は permission を毎回明示・rate limit は stream-json で検知・context の上限は契約の大きさで受ける（開発 session の context は cap guard が受ける）,   regulation: "" }
 
 glossary:
-  - { term: 契約,           en: contract,               plain_short: bead 1 本の約束,          def: 何を作り・何ができたら終わりかを 1 file に書いたもの。 台帳（beads）の 1 issue に対応する。 }
+  - { term: 契約,           en: contract,               plain_short: bead 1 本の約束,          def: 何を作り・何ができたら終わりかを表す 1 単位。 正本は設計 doc の契約表 1 行で、 器が便の契約 file を生成する。 台帳（beads）の 1 issue に対応する。 }
   - { term: runner,         en: runner,                 plain_short: 実装役の Claude,          def: 契約 1 本を worktree で実装する headless の Claude process。 席ではなく使い捨て。 }
   - { term: lens,           en: lens,                   plain_short: 審査役の Claude,          def: diff を読んで PASS / FAIL / INCONCLUSIVE を返す headless の Claude process。 }
   - { term: gate,           en: gate,                   plain_short: 機械検証と審査の段,       def: 契約の verify を実走し lens 1 本の verdict を採る段。 PASS でなければ land しない。 }
@@ -694,3 +807,5 @@ glossary:
   - { term: 席の指示文,   en: role brief,             plain_short: 席に差し込む指示,         def: 役割ごとの雛形と権能の rules 行から器が生成し、 session の文脈が初期化されるたびに注入する文（FR42）。 手書きの規範文は持たない。 }
   - { term: 席の queue,     en: seat queue,             plain_short: 席が抱える次の仕事,       def: 席に向けた dispatch・席宛ての質問・裁定済みの次の行動の集合（FR43）。 承認と裁定の待ちだけなら正当な idle。 }
   - { term: 席間の連絡,     en: inter-seat message,     plain_short: 席から席へのやり取り,       def: 開発 session の席どうしの message を、 入力欄を経由しない経路で届け、 経路の記録で着地を確かめること（FR44）。 }
+  - { term: 設計 pointer,   en: design pointer,         plain_short: どの設計 doc のどの契約か, def: 設計 doc の path と契約 id の対。 intake の入力で、 台帳の bead の受入条件が持つ 1 行でもある（FR47）。 }
+  - { term: 台帳 adapter,   en: ledger adapter,         plain_short: 台帳への唯一の口,         def: 器が台帳を読む口（読み取り専用）と close を書く口。 台帳へ触る module はこれ 1 つ（FR50 / FR51）。 }

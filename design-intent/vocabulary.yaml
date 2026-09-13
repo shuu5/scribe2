@@ -214,11 +214,11 @@ terms:
     relationships: [対話面, 契約, 設計 doc, runner, lens]
   - canonical: 契約
     domain: consumer
-    definition: 何を作り・何ができたら終わりかを 1 file に書いたもの。 台帳の 1 bead に対応し、 SRS の要件 id と設計 doc を pointer で持つ (C15・SRS FR2)。
-    relationships: [台帳, 設計 doc, write-set, 便]
+    definition: 何を作り・何ができたら終わりかを表す 1 単位。 正本は設計 doc の契約表 1 行で、 器が便の契約 file を生成する (C15・SRS FR2 / FR47)。 台帳の 1 bead に対応し、 SRS の要件 id と設計 doc を pointer で持つ。
+    relationships: [台帳, 設計 doc, write-set, 便, 契約表]
   - canonical: 設計 doc
     domain: consumer
-    definition: 要望を SRS の要件に結び、 契約が複数出る元になる tracked markdown (docs/design/)。
+    definition: 要望を SRS の要件に結び、 契約が複数出る元になる tracked markdown (docs/design/)。 末尾に契約表の区間を 0 か 1 つ持つ (SRS FR47)。
     relationships: [契約, SRS]
   - canonical: SRS
     domain: consumer
@@ -567,3 +567,35 @@ terms:
     domain: consumer
     definition: 開発 session の席どうしの message を、 席の入力欄を経由しない経路で届け、 経路自身の記録で着地を確かめること (SRS FR44)。 入力欄への注入は器の tick・heartbeat・復元の command にだけ使う。
     relationships: [席, 管理 tick, 開発 session]
+  - canonical: 契約表
+    domain: consumer
+    definition: tracked な設計 doc が末尾に持つ機械が読む区間の表。 1 行 = 契約 1 本で、 契約の正本 (SRS FR47)。
+    relationships: [契約, 設計 doc, 設計 pointer, write-set の閉包]
+  - canonical: 設計 pointer
+    domain: consumer
+    definition: 設計 doc の path と契約 id の対。 intake の入力で、 台帳の bead の受入条件が持つ 1 行でもある (SRS FR47 / FR53)。
+    relationships: [契約表, 台帳]
+  - canonical: write-set の閉包
+    domain: consumer
+    definition: 契約の行が宣言した閉じた型を、 網羅 match・literal 構築・件数 pin で持つ source file の集合 (SRS FR48)。 write-set に足りなければ intake が契約を断る。
+    relationships: [write-set, 契約表, 便]
+  - canonical: 契約の審査
+    domain: consumer
+    definition: intake の直後に、 契約とそれが実装する設計と要件を lens が読んで判定する段 (SRS FR49)。 実装後の gate の lens (SRS FR9) とは別の段で、 判定が合格でない便は runner を起こさない。
+    relationships: [lens, 便, Stage, gate]
+  - canonical: land の終端
+    domain: consumer
+    definition: 着地の後に器が続ける 3 手 (remote への push・着地 commit の CI の結果の照合・台帳の close) と、 その typed な記帳 (SRS FR50)。
+    relationships: [land, 便, 台帳 adapter]
+  - canonical: 台帳 adapter
+    domain: consumer
+    definition: 器が台帳へ触る唯一の module。 読みは読み取り専用で、 書きは着地した便の close 1 種だけ (SRS FR50 / FR51)。 起票・受入条件・裁定の記帳は席の仕事。
+    relationships: [台帳, bd, land の終端, doctor]
+  - canonical: 散文の門
+    domain: consumer
+    definition: tracked な設計 doc の、 規範の印を持つ文が pointer を持ち数 + 単位を持たないことを CI が確かめる検査 (SRS FR52)。
+    relationships: [規範の印, 設計 doc]
+  - canonical: 規範の印
+    domain: consumer
+    definition: 設計 doc の文を規範文と見なす語の閉じた列 (SRS FR52)。 印を持つ文は散文の門の対象。
+    relationships: [散文の門, 設計 doc]
