@@ -99,6 +99,8 @@ C15 / C15.2（台帳は task と裁定・pointer の欠落は lint）・C16 / C1
 binary の世代で起動を断る（§5 4.）・契約表から台帳の bead を起票する口（台帳 write の 2 種目・A1 の「出す」に当たらないが scope の改訂が要る）・`Reviewed` の lens の観点を rules 行にする（.176）・memo 40 本の設計内容を各設計 doc の「未契約の機構」表へ移す（planner の一括作業・§6 の lint が残りを名指す）。
 
 <!-- contracts:begin -->
+schema = 1
+
 [[contract]]
 id = "a"
 title = "契約表の parser と検査（contracts check）・台帳の pointer 形"
