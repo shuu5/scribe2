@@ -57,12 +57,13 @@ pub enum Resolution { Resolved, Unresolved, Unchecked }
 
 ## 5. subcommand（`<NAME> seat …`・共通引数 `--target T --wm-dir D --state-dir S`・出力は emit 経由）
 
-### 5.1 `seat externalize --plan FILE --directives FILE [--user FILE] [--trigger manual|tick]`
+### 5.1 `seat externalize --plan FILE --directives FILE [--user FILE] [--retire FILE] [--trigger manual|tick]`
 1. sid を打刻から得る。自席の未 consumed 退避物が在れば rc 1（`wm-exists`・二重退避を取り合わない）。
 2. carry-forward: 自席の最新の `.consumed.md`（mtime 降順・`seat:` 一致）から節 1（全行・「完了」「user 撤回」は落とす）と節 3（pointer 検査 → **暫定行と unresolved の行を落とす**・残りを `[P0-P3]` 安定 sort）を運ぶ。上限 = rules 行 `seat.wm_directive_cap`（新 kind `WmDirectiveCap`・裁定 id 付き・C5）。超過は rc 1（`directive-cap`・黙って切らない）。
-3. 入力: `--plan`（節 2 の本文）・`--directives`（節 3 の新規行・文法検査）・`--user`（節 1 の追記行・逐語）。検査に落ちた行は行番号付きで全件 stderr へ・rc 1。
-4. file を `working-memory.<sid>.md` に書く（`create_new`・frontmatter 付き）。stdout 1 行 `seat: externalized file=<name> carried=<n> dropped_provisional=<k> dropped_unresolved=<u> directives=<m>`。
-- 極性: 書けない・検査に落ちる → FailClosed（退避物を作らない・rc 1）。`wm-exists` / `directive-cap` / 文法の断りは**退避物の書込を止める判定**なので `Guard::Externalize`（InLoop / FailClosed）として極性一覧に載る（ADR-0014 §2.1）。
+   - **退役（`--retire FILE`・契約 (d)）**: Resolved の行は上の検査では落ちない（pointer が実在する限り周を越えて運ばれ、cap に達すると新規行を足せない）。役目を終えた行は開発 session が `--retire` の file に**節 3 の項目行を逐語で**（rebrief の `[WM-DIRECTIVE] … line=` の値をそのまま）1 行 1 本で並べ、器が carry 元の項目行と**全文一致**（両端の空白だけ無視・従属行込み）で突合して落とす。落とした件数は `dropped_retired`。file の行のうち carry 元に一致しない行が 1 本でも在れば rc 1（`retire-unmatched`・行番号付きで全件 stderr へ・黙って残さない＝写し間違いで行が生き残る周を作らない）。退役は退避物の編集ではなく carry の入力である（退避物・`.consumed.md` は器だけが書く・§10）。節 1 は退役の対象外（逐語 carrier・落ちるのは「完了」「user 撤回」だけ・§3）。
+3. 入力: `--plan`（節 2 の本文）・`--directives`（節 3 の新規行・文法検査）・`--user`（節 1 の追記行・逐語）・`--retire`（節 3 の退役行・突合）。検査に落ちた行は行番号付きで全件 stderr へ・rc 1。
+4. file を `working-memory.<sid>.md` に書く（`create_new`・frontmatter 付き）。stdout 1 行 `seat: externalized file=<name> carried=<n> dropped_provisional=<k> dropped_unresolved=<u> dropped_retired=<r> directives=<m>`（`dropped_retired` は契約 (d) で増える field・`--retire` を渡さない周は 0）。
+- 極性: 書けない・検査に落ちる → FailClosed（退避物を作らない・rc 1）。`wm-exists` / `directive-cap` / `retire-unmatched` / 文法の断りは**退避物の書込を止める判定**なので `Guard::Externalize`（InLoop / FailClosed）として極性一覧に載る（ADR-0014 §2.1・Guard は増えない＝境界 enum の variant が 1 つ増えるだけ）。
 
 ### 5.2 `seat rebrief [--anchor DIR]`（read-only）
 - 出力は行頭 marker の typed 行（1 行 1 事実・値は enum の名か逐語）。marker は閉じた enum `Marker`（`ALL` + 網羅 match + 判別子順 pin の 4 つ組・出力順 = 宣言順・外形 snapshot で pin・C12.5）。
@@ -100,6 +101,7 @@ AC8 の確認（SRS の FR23 の検証手法は I = 目視確認・2 つの開�
 - **(a)** `seat externalize` + `PointerKind` / `Resolution` + 3 節 schema の parser + carry-forward + rules 行 `seat.wm_directive_cap`（裁定 id が先・C5）+ `Guard::Externalize`。base で RED = externalize の歯（機能不在）+ `PointerKind` の判別子順 pin。write-set は構造の連鎖（`seat/` の新 module 宣言先 + `rules/mod.rs` + manifest + kind 件数の歯 + seat / rules の外形 snapshot + `polarity.rs` の Guard variant と極性 snapshot）。
 - **(b)** `seat rebrief` + `Marker` enum + bd の子 process + rules 行 `seat.ledger_timeout_s`（裁定 id が先）。(a) の parser に依存。
 - **(c)** `seat consume` + `Guard::Consume`。(a) に依存。land 後: global skill 2 本を器の入口へ書き換え（本 repo の外・user 手番）→ AC8 の確認（I）。
+- **(d)** `--retire FILE`（§5.1 手順 2 の退役・`dropped_retired`・`retire-unmatched`）。(a) に依存。出所 = 退避物の命令行が cap に達し Resolved の行を落とす口が無かった周（台帳 s2-07l.235・user 承認 2026-09-14）。base で RED = `--retire` を渡す歯（機能不在で usage の断り）+ 一致しない行の rc 1 の歯。write-set = `seat/externalize.rs`（引数・突合・件数）+ seat の外形 snapshot（usage 行と stdout の field）+ `tests/e2e/seat.rs` の `seat_wm_externalize_` 歯。rules 行を足さない（cap の値は不変・A2 非該当）。
 
 ## 10. 却下案（ADR-0018 §5 の写しは持たない・設計固有のもの）
 
@@ -108,6 +110,8 @@ AC8 の確認（SRS の FR23 の検証手法は I = 目視確認・2 つの開�
 - rebrief が bd を直接 DB で読む: 台帳 adapter は MVP 外（ADR-0004 §2.2 面 3）。`bd --readonly` の子 process で読む（user 裁定）。
 - DATA を JSON 1 行にする: 開発 session が読む面は行頭 marker の行が既存の skill と同型で、外形 snapshot で pin できる。
 - 退避物の書き手を開発 session のまま（Write tool）にし器は検査だけ: 検査を通らない file が残る経路（Write は通り検査は後）。器の口だけが書く。
+- 役目を終えた命令行の退役を、節 1 と同じ「→ 状態: 完了」を節 3 の行に付けて carry で落とす形にする（契約 (d) の却下案）: 節 3 の carry 元は開発 session が編集できず（器だけが書く・上の却下案と同じ線）、新規行として同文 + 状態を再投入する形は突合の規則が二重になる（新規行の文法検査と carry の一致）。突合の入力を `--retire` の 1 file に分けるほうが規則が 1 つで済む。
+- 退役の一致を `since=` と本文の先頭 N 字で取る（契約 (d) の却下案）: N の値が新しい閾値になり、同じ since の行が複数在る周に誤って落とす。全文一致だけにする（rebrief の `line=` が逐語を出すので写せる）。
 
 ## 11. 後続
 
