@@ -8450,6 +8450,113 @@ fn pipe_detection_red_line_fails_gate() {
     clean(&[&repo, &state]);
 }
 
+/// 検出線の oom の歯の結果。
+struct DetectionOom {
+    /// gate の出力。
+    gated: Output,
+    /// 対象 repo。
+    repo: PathBuf,
+    /// 置き場。
+    state: PathBuf,
+    /// 便 id。
+    id: String,
+    /// lens を起動したかの印。
+    marker: PathBuf,
+}
+
+/// 撃った sh（包みの中の `sh -c`）ごと signal で殺す script（終端行を出せない周の形）。
+const VERIFY_SIGKILL: &str = "verify-sigkill.sh";
+
+/// 共通 verify と検出線を宣言した便を実装済みにし、**偽 `systemd-run` の PATH で** gate を撃つ
+/// （包めた周＝`oom_kill` の終端行が読まれる周・設計 gate-cost.md §4.2）。
+fn detection_oom_gate(common: &str, detection: &str) -> DetectionOom {
+    let (repo, state) = repo_with_state();
+    fs::write(repo.join(VERIFY_SIGKILL), "kill -9 $PPID\nexit 0\n").ok();
+    write_vessel(&repo, VESSEL_ALLOWED, common);
+    let path = repo.join(".vessel.toml");
+    let body = fs::read_to_string(&path).unwrap_or_default();
+    fs::write(&path, format!("{body}detection-verify = {detection}\n")).ok();
+    git(&repo, &["add", "-f", ".vessel.toml", VERIFY_SIGKILL]);
+    git(&repo, &["commit", "-q", "-m", "vessel-detection-oom"]);
+    let contract = write_contract(&repo, &["verify"], &[r#"verify = ["sh verify-ok.sh"]"#]);
+    let id = implemented(&repo, &state, &contract);
+    let stub = systemd_stub(&state);
+    let marker = state.join("lens-ran");
+    let gated = run_pipe_with_path(
+        &stub,
+        &["gate", "--run", &id, "--repo", &repo.display().to_string(),
+          "--state-dir", &state.display().to_string(),
+          "--lens", &fake_lens(&marker, &lens_verdict("PASS"))],
+    );
+    DetectionOom { gated, repo, state, id, marker }
+}
+
+/// (a) 検出線の行の `oom_kill`（rc 0 で完走）は **測れた周**——verdict は lens の verdict で、
+/// record の `reason=oom-kill` は残る（`s2-07l.228`・設計 gate-cost.md §4.2）。
+#[test]
+fn pipe_detection_oom_kill_in_detection_line_is_measured() {
+    let run = detection_oom_gate(r#"["sh verify-ok.sh"]"#, r#"["sh verify-oom.sh"]"#);
+    let (gated, state, id) = (&run.gated, &run.state, &run.id);
+    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "gate: {} / {}", stdout_of(gated), stderr_of(gated));
+    assert!(stdout_of(gated).contains("verdict=PASS"), "lens の verdict が届く: {}", stdout_of(gated));
+    assert!(!stdout_of(gated).contains("verdict=INCONCLUSIVE"), "{}", stdout_of(gated));
+    let rows = verify_rows(state, id);
+    assert_eq!(kinds(&rows), ["write-set", "common", "detection", "contract"], "段の並び: {rows:?}");
+    assert_eq!(row_value(&rows, 3, "confined"), "true", "包めた周である");
+    assert_eq!(row_value(&rows, 3, "rc"), "0", "道具は完走した");
+    assert_eq!(row_value(&rows, 3, "reason"), "oom-kill", "record の reason は現物のまま残す");
+    assert!(
+        rows.iter().filter(|row| value_of(row, "reason") == "oom-kill").count() == 1,
+        "oom-kill は検出線の 1 行だけ（fixture 衝突なし）: {rows:?}"
+    );
+    assert_eq!(value_of(&verdict_pairs(state, id), "verdict"), "PASS", "verdict.json も PASS");
+    assert!(run.marker.exists(), "lens は起動される");
+    clean(&[&run.repo, &run.state]);
+}
+
+/// (b) 共通 verify の行の `oom_kill` は **従来どおり INCONCLUSIVE**（退行の柵）。
+#[test]
+fn pipe_detection_oom_kill_in_common_line_stays_inconclusive() {
+    let run = detection_oom_gate(r#"["sh verify-oom.sh"]"#, r#"["sh verify-ok.sh"]"#);
+    let (gated, state, id) = (&run.gated, &run.state, &run.id);
+    assert_eq!(gated.status.code(), Some(i32::from(RC_INCONCLUSIVE)), "{}", stdout_of(gated));
+    assert!(stdout_of(gated).contains("verdict=INCONCLUSIVE"), "{}", stdout_of(gated));
+    let rows = verify_rows(state, id);
+    assert_eq!(row_value(&rows, 2, "kind"), "common", "② の record");
+    assert_eq!(row_value(&rows, 2, "confined"), "true", "包めた周である");
+    assert_eq!(row_value(&rows, 2, "reason"), "oom-kill", "② が箱の中で殺された");
+    assert_eq!(row_value(&rows, 3, "reason"), "", "③ は殺されていない");
+    assert!(
+        value_of(&verdict_pairs(state, id), "evidence").contains("oom-kill"),
+        "理由が verdict に残る: {:?}",
+        verdict_pairs(state, id)
+    );
+    assert!(!run.marker.exists(), "測れなかった周は lens を起動しない");
+    clean(&[&run.repo, &run.state]);
+}
+
+/// (c) 検出線の行が **包みごと signal で死んだ**周（終端行なし・rc 255）は従来どおり INCONCLUSIVE。
+#[test]
+fn pipe_detection_oom_signal_death_in_detection_line_stays_inconclusive() {
+    let run = detection_oom_gate(r#"["sh verify-ok.sh"]"#, r#"["sh verify-sigkill.sh"]"#);
+    let (gated, state, id) = (&run.gated, &run.state, &run.id);
+    assert_eq!(gated.status.code(), Some(i32::from(RC_INCONCLUSIVE)), "{}", stdout_of(gated));
+    assert!(stdout_of(gated).contains("verdict=INCONCLUSIVE"), "{}", stdout_of(gated));
+    let rows = verify_rows(state, id);
+    assert_eq!(row_value(&rows, 3, "kind"), "detection", "③ の record");
+    assert_eq!(row_value(&rows, 3, "confined"), "true", "包めた周である");
+    assert_eq!(row_value(&rows, 3, "rc"), "255", "rc の無い周は 255 に畳む");
+    assert_eq!(row_value(&rows, 3, "reason"), "signal", "終端行を出せずに死んだ");
+    assert_eq!(value_of(&verdict_pairs(state, id), "verify_red"), "0", "赤には数えない");
+    assert!(
+        value_of(&verdict_pairs(state, id), "evidence").contains("signal"),
+        "理由が verdict に残る: {:?}",
+        verdict_pairs(state, id)
+    );
+    assert!(!run.marker.exists(), "測れなかった周は lens を起動しない");
+    clean(&[&run.repo, &run.state]);
+}
+
 /// (7) `detection-verify` の行にも共通 verify と**同じ検査**を掛け、同じ理由の字面で rc 1 に断る。
 #[test]
 fn pipe_detection_intake_refuses_unfit_lines() {

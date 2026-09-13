@@ -437,7 +437,8 @@ struct Measured {
     /// 箱の中で殺された行の理由（在れば・設計 gate-cost.md §4.2）。
     ///
     /// 溢れた箱の中で死んだ行は、その内容が赤いのではなく**測れていない**。rc に依らず
-    /// INCONCLUSIVE へ倒し、record の `reason=` で外からの kill と弁別する。
+    /// INCONCLUSIVE へ倒し、record の `reason=` で外からの kill と弁別する（検出線の行の
+    /// `oom_kill` は除く＝道具が吸収して完走した周・[`box_kill`]）。
     killed: Option<Reason>,
 }
 
@@ -623,12 +624,20 @@ fn shown_peak(peak_mb: Option<u64>) -> String {
 /// 包みが出した `memory.events` の `oom_kill` で、包みごと死んで終端行を出せなかった周は
 /// signal 死をその代理にする。**包めなかった周は当たらない**（素の行が外から kill された
 /// 周を「箱が溢れた」と読まない）。
+///
+/// **検出線の行の `oom_kill` は数えない**（`s2-07l.228`・設計 §4.2）。変異ごとの test process を
+/// 箱の中で起こす道具は、無限 loop の変異 1 つが kernel に殺されてもその死を吸収して完走する
+/// ——測れた周であり、判定は rc と outcomes が持つ。record の `reason=oom-kill` は残る
+/// （[`step_record`] は `step.reason` をそのまま書く）。包みごとの signal 死は終端行が無い＝
+/// 測れていないので、検出線でも従来どおり数える。
 fn box_kill(step: &Step) -> Option<Reason> {
     if !step.confined {
         return None;
     }
-    step.reason
-        .filter(|found| matches!(*found, Reason::OomKill | Reason::Signal))
+    let absorbs_oom = step.stage == Check::Detection;
+    step.reason.filter(|found| {
+        matches!(*found, Reason::Signal) || (matches!(*found, Reason::OomKill) && !absorbs_oom)
+    })
 }
 
 /// 便の写し（共通 verify と検出線）を読む。
