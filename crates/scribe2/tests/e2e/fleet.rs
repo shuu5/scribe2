@@ -1328,8 +1328,13 @@ fn fleet_allowance_kinds_are_thirteen_in_declaration_order() {
     }
 }
 
-/// 席の登録の event（本体は `registration` の束）。
+/// 席の登録の event（本体は `registration` の束・`model` は任意なので `Some` の row を組む）。
 fn registration_event(target: &str) -> Event {
+    registration_event_with_model(target, Some("Fable"))
+}
+
+/// 席の登録の event（`model` を選ぶ・`None` の row は key ごと無い旧 row と同じ形）。
+fn registration_event_with_model(target: &str, model: Option<&str>) -> Event {
     Event {
         schema: SCHEMA,
         ts: ALLOWANCE_TS.to_owned(),
@@ -1350,8 +1355,32 @@ fn registration_event(target: &str) -> Event {
             sid: "sid-1".to_owned(),
             account: "a1".to_owned(),
             launch: "line 1\n\"line 2\"\n".to_owned(),
+            model: model.map(str::to_owned),
         }),
     }
+}
+
+/// 登録 row の `model`（契約 (e)）: `Some` は `"model":"…"` の key で書き読みが戻り、`None` は key ごと書かず
+/// 旧 row（`model` の無い行）は `None` で読める（schema 1 のまま値の追加）。key が在って文字列でなければ malformed。
+#[test]
+fn fleet_seat_registration_row_carries_optional_model_and_old_rows_read_as_none() {
+    let with = registration_event_with_model("s:w", Some("Fable"));
+    let line = with.to_line();
+    assert!(line.contains("\"model\":\"Fable\""), "{line}");
+    assert!(line.contains("\"schema\":1"), "schema 1 のまま: {line}");
+    assert_eq!(Event::from_line(&line), Ok(with.clone()), "{line}");
+    let without = registration_event_with_model("s:w", None);
+    let old = without.to_line();
+    assert!(!old.contains("\"model\""), "None は key ごと書かない: {old}");
+    assert_eq!(Event::from_line(&old), Ok(without.clone()), "{old}");
+    let stripped = line.replacen(",\"model\":\"Fable\"", "", 1);
+    assert_ne!(stripped, line, "置換が効く");
+    assert_eq!(Event::from_line(&stripped).ok().and_then(|found| found.registration).and_then(|row| row.model), None, "旧 row は None");
+    let typed = line.replacen("\"model\":\"Fable\"", "\"model\":7", 1);
+    assert!(Event::from_line(&typed).is_err(), "文字列でない model は malformed: {typed}");
+    let state = replay(&[without, with]);
+    let models: Vec<Option<String>> = state.registrations.values().map(|latest| latest.registration.model.clone()).collect();
+    assert_eq!(models, vec![Some("Fable".to_owned())], "同じ鍵の再登録は model も最新に置き換わる");
 }
 
 /// `SeatRegistered` の行は `to_line` → `from_line` で戻り、`run` / `bead` と口座残量だけの key を持たない。

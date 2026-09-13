@@ -47,8 +47,9 @@ fn render_doctor() -> Vec<String> {
     vec![render_name(), render_version()]
 }
 
-/// `doctor` の出力行。`--state-dir S [--tmux-socket PATH]` 付きは登録 row と実在の target の突合を 1 行
-/// 足す（C3.2）。値欠け・空文字・重複・未知の引数は使い方の誤り（`Err`）。
+/// `doctor` の出力行。`--state-dir S [--tmux-socket PATH]` 付きは登録 row の一覧（`model` の欄つき・1 row 1 行）
+/// と実在の target の突合 1 行を足す（C3.2・seat-roles.md §9 (e)）。値欠け・空文字・重複・未知の引数は使い方の
+/// 誤り（`Err`）。
 fn render_doctor_with(rest: &[String]) -> Result<Vec<String>, ()> {
     let (mut lines, mut state_dir, mut socket) = (render_doctor(), None, None);
     for pair in rest.chunks(2) {
@@ -59,7 +60,7 @@ fn render_doctor_with(rest: &[String]) -> Result<Vec<String>, ()> {
         }
     }
     match (state_dir, socket) {
-        (Some(dir), _) => lines.push(vessel::seat::role::doctor_line(std::path::Path::new(dir), socket)),
+        (Some(dir), _) => lines.extend(vessel::seat::role::doctor_lines(std::path::Path::new(dir), socket)),
         (None, Some(_)) => return Err(()),
         (None, None) => {}
     }

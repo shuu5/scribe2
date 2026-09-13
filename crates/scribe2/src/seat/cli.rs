@@ -408,16 +408,31 @@ fn rebrief_of(args: &[String]) -> Outcome {
     }
 }
 
-/// `seat register`（設計 seat-roles.md §2）。未知の `--role` は使い方の誤りとして断る。
+/// `seat register`（設計 seat-roles.md §2）。未知の `--role` は使い方の誤りとして断る。`--model M` は任意
+/// （席が使う model の display name・`--account` と同じ受け方＝空文字は使い方の誤り・契約 (e)）。
 fn register_of(args: &[String]) -> Outcome {
     let [state_dir, target, role, account, launch] = ["--state-dir", "--target", "--role", "--account", "--launch"].map(|name| required_nonempty(args, name));
-    let (Ok(state_dir), Ok(target), Ok(Some(role)), Ok(account), Ok(launch), Ok(anchor)) = (state_dir, target, role.map(role::Role::parse), account, launch, nonempty(args, "--anchor")) else {
+    let (Ok(state_dir), Ok(target), Ok(Some(role)), Ok(account), Ok(launch), Ok(anchor), Ok(model)) =
+        (state_dir, target, role.map(role::Role::parse), account, launch, nonempty(args, "--anchor"), nonempty(args, "--model"))
+    else {
         return refused_usage();
     };
-    let draft = crate::fleet::Registration { role, target: target.to_owned(), account: account.to_owned(), anchor: String::new(), sid: String::new(), launch: String::new() };
+    let draft = crate::fleet::Registration {
+        role,
+        target: target.to_owned(),
+        account: account.to_owned(),
+        anchor: String::new(),
+        sid: String::new(),
+        launch: String::new(),
+        model: model.map(str::to_owned),
+    };
     let refused = |rc, err: role::RegisterRefusal| Outcome::failed_line(rc, err.render(target));
     match role::register(Path::new(state_dir), draft, Path::new(launch), anchor.map(Path::new)) {
-        Ok(done) => Outcome::ok_line(format!("seat register: registered role={} target={} sid={} account={} anchor={}", done.role.as_str(), done.target, done.sid, done.account, done.anchor)),
+        Ok(done) => {
+            // `model` の無い row は従来の行のまま（既存の外形を変えない）・在る row は末尾に 1 語足す。
+            let model = done.model.as_ref().map(|found| format!(" model={found}")).unwrap_or_default();
+            Outcome::ok_line(format!("seat register: registered role={} target={} sid={} account={} anchor={}{model}", done.role.as_str(), done.target, done.sid, done.account, done.anchor))
+        }
         Err(err @ role::RegisterRefusal::Store(_)) => refused(RC_BROKEN, err),
         Err(err) => refused(RC_REFUSED, err),
     }

@@ -5766,7 +5766,7 @@ fn seat_role_doctor_reconciles_rows_with_live_targets() {
     assert!(seat.ready(), "隔離 seat が立つ");
     let out = role_doctor(&place);
     let lines: Vec<String> = stdout_of(&out).lines().map(str::to_owned).collect();
-    assert_eq!(lines.len(), 3, "2 行 + 項目 1 行: {lines:?}");
+    assert_eq!(lines.len(), 5, "2 行 + 登録 row 2 行 + 突合 1 行: {lines:?}");
     assert_eq!(lines.last().map(String::as_str), Some("seats: registered=2 live=1 missing=1"));
     let doctor = |args: &[&str]| Command::new(bin()).arg("doctor").args(args).output().ok();
     let bare = doctor(&[]).map(|out| stdout_of(&out)).unwrap_or_default();
@@ -5778,6 +5778,121 @@ fn seat_role_doctor_reconciles_rows_with_live_targets() {
         assert!(out.is_some_and(|found| stdout_of(&found).starts_with("usage: ")), "{bad:?}");
     }
     drop(seat);
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+// ─────────────────────────── register --model（契約 (e)・s2-07l.215） ───────────────────────────
+
+/// target の登録 row の `model`（replay の読み手 `registration_of_target` から運ぶ）。
+fn model_of_target(place: &RolePlace, target: &str) -> Option<String> {
+    vessel::seat::role::registration_of_target(&role_state(place), target).and_then(|row| row.model.clone())
+}
+
+/// `--model Fable` で登録 → `SeatRegistered` 1 件の束に model = Fable・行の key に `"model":"Fable"`・
+/// replay の読み手が `Some("Fable")` を返す・出力行の末尾に `model=Fable`（歯 (e)(1)・flip の RED）。
+#[test]
+fn seat_register_model_lands_in_the_row_and_the_reader_returns_it() {
+    let place = role_place();
+    role_stamp(&place, "rm:planner", Some("sid-m"));
+    let out = role_register(&place, "rm:planner", "planner", &["--anchor", "/repo/anchor", "--model", "Fable"]);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(
+        stdout_of(&out),
+        "seat register: registered role=planner target=rm:planner sid=sid-m account=acct-1 anchor=/repo/anchor model=Fable\n"
+    );
+    let events = vessel::fleet::store::read_all(&place.state).unwrap_or_default();
+    assert_eq!(events.len(), 1, "1 件だけ: {}", role_log(&place));
+    let registration = events.first().and_then(|event| event.registration.clone()).unwrap_or_else(|| panic!("本体が在る"));
+    assert_eq!(registration.model.as_deref(), Some("Fable"));
+    assert_eq!(registration.role, vessel::seat::role::Role::Planner, "他の項目はそのまま");
+    assert_eq!(registration.account, "acct-1");
+    let log = role_log(&place);
+    assert!(log.contains("\"model\":\"Fable\""), "行の key: {log}");
+    assert!(log.contains("\"schema\":1"), "schema 1 のまま: {log}");
+    let state = role_state(&place);
+    let row = vessel::seat::role::registration_of_target(&state, "rm:planner").unwrap_or_else(|| panic!("row が在る"));
+    assert_eq!(row.model.as_deref(), Some("Fable"), "読み手が model を運ぶ");
+    assert_eq!(row.role, vessel::seat::role::Role::Planner);
+    assert_eq!(vessel::seat::role::role_of_target(&state, "rm:planner"), Some(vessel::seat::role::Role::Planner), "役割の解決は同じ 1 本");
+    assert_eq!(vessel::seat::role::registration_of_target(&state, "rm:absent"), None, "登録の無い target は None");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// `--model` 無しで登録 → `None`・行に `model` の key が無い（旧 row と同じ形）・出力行は従来のまま（歯 (e)(2)）。
+#[test]
+fn seat_register_model_absent_reads_as_none_and_keeps_the_old_row_form() {
+    let place = role_place();
+    role_stamp(&place, "rm:plain", Some("sid-p"));
+    let out = role_register(&place, "rm:plain", "admin", &["--anchor", "/repo/anchor"]);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(stdout_of(&out), "seat register: registered role=admin target=rm:plain sid=sid-p account=acct-1 anchor=/repo/anchor\n");
+    let log = role_log(&place);
+    assert_eq!(log.lines().count(), 1, "1 件: {log}");
+    assert!(!log.contains("\"model\""), "None は key ごと書かない: {log}");
+    assert_eq!(model_of_target(&place, "rm:plain"), None);
+    assert!(vessel::seat::role::registration_of_target(&role_state(&place), "rm:plain").is_some(), "row は在る");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// `--model ''`（空白だけも）・値欠けは使い方で断り rc 1・event を書かない（歯 (e)(3)）。
+#[test]
+fn seat_register_model_empty_is_refused_with_usage_and_no_event() {
+    let place = role_place();
+    role_stamp(&place, "rm:empty", Some("sid-e"));
+    let usage = stderr_of(&run_seat(&[]));
+    for extra in [&["--anchor", "/repo", "--model", ""][..], &["--anchor", "/repo", "--model", "  "], &["--anchor", "/repo", "--model"]] {
+        let out = role_register(&place, "rm:empty", "planner", extra);
+        assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "{extra:?}: stdout={}", stdout_of(&out));
+        assert_eq!(stderr_of(&out), usage, "{extra:?} は使い方で断る");
+        assert!(stdout_of(&out).is_empty(), "{extra:?}: stdout は空");
+    }
+    assert!(!vessel::fleet::store::events_path(&place.state).exists(), "event log に行が増えない");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// 同じ鍵で `--model` を変えて再登録 → 最新が効く（付ける → 変える → 外す・前の row は残る）（歯 (e)(4)）。
+#[test]
+fn seat_register_model_reregistration_replaces_the_model_with_the_latest() {
+    let place = role_place();
+    role_stamp(&place, "rm:again", Some("sid-g"));
+    let register = |extra: &[&str]| {
+        let out = role_register(&place, "rm:again", "admin", extra);
+        assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    };
+    register(&["--anchor", "/repo/main", "--model", "Opus"]);
+    assert_eq!(model_of_target(&place, "rm:again").as_deref(), Some("Opus"));
+    register(&["--anchor", "/repo/main", "--model", "Fable"]);
+    assert_eq!(model_of_target(&place, "rm:again").as_deref(), Some("Fable"), "最新が効く");
+    register(&["--anchor", "/repo/main"]);
+    assert_eq!(model_of_target(&place, "rm:again"), None, "外した再登録は None に戻る（前の値を引き継がない）");
+    assert_eq!(role_log(&place).lines().count(), 3, "前の row は残る（append のみ）");
+    assert_eq!(role_state(&place).registrations.len(), 1, "同じ鍵は 1 つに畳む");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// doctor の登録 row の一覧に `model` の欄（None は `-`・鍵の順・突合の行の前）（歯 (e)(5)）。
+#[test]
+fn seat_register_model_shows_in_the_doctor_rows_with_dash_for_none() {
+    let place = role_place();
+    for (target, role, extra) in [("rm:doc-a", "planner", &["--anchor", "/repo/a", "--model", "Fable"][..]), ("rm:doc-b", "admin", &["--anchor", "/repo/b"])] {
+        role_stamp(&place, target, Some("sid-d"));
+        let out = role_register(&place, target, role, extra);
+        assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    }
+    let out = role_doctor(&place);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    let lines: Vec<String> = stdout_of(&out).lines().map(str::to_owned).collect();
+    assert_eq!(
+        lines.get(2..),
+        Some(&[
+            "seat: role=planner anchor=/repo/a target=rm:doc-a account=acct-1 model=Fable".to_owned(),
+            "seat: role=admin anchor=/repo/b target=rm:doc-b account=acct-1 model=-".to_owned(),
+            "seats: registered=2 live=unmeasurable missing=unmeasurable".to_owned(),
+        ][..]),
+        "{lines:?}"
+    );
+    let rows = vessel::seat::role::render_rows(&role_state(&place));
+    assert_eq!(rows, lines.get(2..4).unwrap_or_default(), "pure の一覧と同じ");
     fs::remove_dir_all(&place.dir).ok();
 }
 

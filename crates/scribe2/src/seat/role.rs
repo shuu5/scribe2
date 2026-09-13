@@ -59,8 +59,8 @@ impl RegisterRefusal {
     }
 }
 
-/// 登録を 1 件追記する。`draft` の `role` / `target` / `account` を使い、`sid` は打刻から・`launch` は file の
-/// 本文・`anchor` は明示の絶対化か cwd の repo root で埋める。**打刻を先に測る**（断る周は event を書かない）。
+/// 登録を 1 件追記する。`draft` の `role` / `target` / `account` / `model` を使い、`sid` は打刻から・`launch` は
+/// file の本文・`anchor` は明示の絶対化か cwd の repo root で埋める。**打刻を先に測る**（断る周は event を書かない）。
 pub fn register(state_dir: &Path, draft: Registration, launch: &Path, anchor: Option<&Path>) -> Result<Registration, RegisterRefusal> {
     let seat = super::seat_dir(state_dir, &draft.target);
     let text = std::fs::read_to_string(super::state::path(&seat)).unwrap_or_default();
@@ -88,11 +88,26 @@ pub fn register(state_dir: &Path, draft: Registration, launch: &Path, anchor: Op
     Ok(registration)
 }
 
-/// target の役割（**役割の解決の 1 本**・設計 §2）: 鍵ごとに最新へ畳んだ行のうち `target` が一致するものを
-/// 引き、複数の鍵が同じ target なら log の後の行が勝つ（同じ鍵の旧 row は畳まれて旧 target では解けない）。
-pub fn role_of_target(state: &State, target: &str) -> Option<Role> {
+/// target の登録 row（**役割の解決の 1 本の隣**・設計 §2 / §9 (e)）: 鍵ごとに最新へ畳んだ行のうち `target` が
+/// 一致するものを引き、複数の鍵が同じ target なら log の後の行が勝つ（同じ鍵の旧 row は畳まれて旧 target では
+/// 解けない）。row の `model` / `account` はここから運ぶ（account-autonomy.md §3 / §5 の読み手・契約 (d) / (e)）。
+pub fn registration_of_target<'a>(state: &'a State, target: &str) -> Option<&'a Registration> {
     let rows = state.registrations.values().filter(|latest| latest.registration.target == target);
-    rows.max_by_key(|latest| latest.seq).map(|latest| latest.registration.role)
+    rows.max_by_key(|latest| latest.seq).map(|latest| &latest.registration)
+}
+
+/// target の役割（**役割の解決の 1 本**・設計 §2）: [`registration_of_target`] の row の `role`。
+pub fn role_of_target(state: &State, target: &str) -> Option<Role> {
+    registration_of_target(state, target).map(|row| row.role)
+}
+
+/// 登録 row の一覧（pure・鍵の順・1 row 1 行）。`model` の無い row は `-`（契約 (e)・doctor の欄）。
+pub fn render_rows(state: &State) -> Vec<String> {
+    let row = |found: &Registration| {
+        let model = found.model.as_deref().unwrap_or("-");
+        format!("seat: role={} anchor={} target={} account={} model={model}", found.role.as_str(), found.anchor, found.target, found.account)
+    };
+    state.registrations.values().map(|latest| row(&latest.registration)).collect()
 }
 
 /// 登録 row と実在の target の突合の 1 行（pure・`seats: registered=N live=K missing=M`）。
@@ -106,10 +121,13 @@ pub fn render_reconcile(state: Option<&State>, live: Option<&[String]>) -> Strin
     format!("seats: registered={registered} live={found} missing={}", state.registrations.len().saturating_sub(found))
 }
 
-/// doctor の項目 1 行（event log を読み、tmux の `list-panes` を 1 回撃つ・C3.2）。
-pub fn doctor_line(state_dir: &Path, socket: Option<&str>) -> String {
+/// doctor の項目（event log を読み、tmux の `list-panes` を 1 回撃つ・C3.2）: 登録 row の一覧（1 row 1 行・
+/// `model` の欄つき・log を読めない周は 0 行）の後に突合の 1 行。
+pub fn doctor_lines(state_dir: &Path, socket: Option<&str>) -> Vec<String> {
     let state = store::read_all(state_dir).ok().map(|events| replay(&events));
     let panes = super::tmux_stdout(socket, &["list-panes", "-a", "-F", "#{session_name}:#{window_name}"]);
     let live: Option<Vec<String>> = panes.map(|out| out.lines().map(str::to_owned).collect());
-    render_reconcile(state.as_ref(), live.as_deref())
+    let mut lines = state.as_ref().map(render_rows).unwrap_or_default();
+    lines.push(render_reconcile(state.as_ref(), live.as_deref()));
+    lines
 }

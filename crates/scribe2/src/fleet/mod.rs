@@ -490,7 +490,8 @@ pub struct AllowanceLatest {
 }
 
 /// 席の登録の行の本体（設計 seat-roles.md §2）: 鍵 = `role` × `anchor`（repo の root・hook の cwd と突合しない）、
-/// 項目 = `target`（`session:window`）/ `sid`（打刻から解く）/ `account` / `launch`（雛形の本文）。**pane id は持たない**。
+/// 項目 = `target`（`session:window`）/ `sid`（打刻から解く）/ `account` / `launch`（雛形の本文）/ `model`（任意・
+/// 席が使う model の display name・契約 (e)・無い row / 旧 row は `None`＝逼迫度は保守側）。**pane id は持たない**。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Registration {
     pub role: Role,
@@ -499,6 +500,7 @@ pub struct Registration {
     pub sid: String,
     pub account: String,
     pub launch: String,
+    pub model: Option<String>,
 }
 
 /// 鍵ごとの最新の登録。`seq` は log の物理順（0 始まり）で、複数の鍵が同じ target なら大きい方が勝つ。
@@ -561,6 +563,8 @@ impl Event {
             let texts = [("anchor", &found.anchor), ("target", &found.target), ("sid", &found.sid), ("account", &found.account), ("launch", &found.launch)];
             pairs.push(("role", Value::Str(found.role.as_str().to_owned())));
             pairs.extend(texts.map(|(key, text)| (key, Value::Str(text.clone()))));
+            // `model` は任意（schema 1 のまま値の追加・None の row は key ごと書かない＝旧 row と同じ形）。
+            pairs.extend(found.model.iter().map(|model| ("model", Value::Str(model.clone()))));
         }
         pairs.push(("host", Value::Str(self.host.clone())));
         pairs.push(("actor", Value::Str(self.actor.clone())));
@@ -675,9 +679,10 @@ impl Body {
         Ok(Self { allowance: Some(allowance), ..Self::default() })
     }
 
-    /// 登録の行の本体。`run` / `bead` と口座残量だけの key（`account` 以外）は**持たない**。
+    /// 登録の行の本体。`run` / `bead` と口座残量だけの key（`account` / `model` 以外）は**持たない**。
+    /// `model` は任意（key が無い旧 row は `None`・在って文字列でなければ malformed）。
     fn registration(pairs: &[(String, Value)]) -> Result<Self, String> {
-        forbid(pairs, ["run", "bead"].iter().chain(ALLOWANCE_KEYS.iter().filter(|key| **key != "account")))?;
+        forbid(pairs, ["run", "bead"].iter().chain(ALLOWANCE_KEYS.iter().filter(|key| !["account", "model"].contains(key))))?;
         let text = |key: &str| text_of(field(pairs, key), key);
         let role = text("role")?;
         let registration = Registration {
@@ -687,6 +692,7 @@ impl Body {
             sid: text("sid")?,
             account: text("account")?,
             launch: text("launch")?,
+            model: optional_text(field(pairs, "model"), "model")?,
         };
         Ok(Self { registration: Some(registration), ..Self::default() })
     }
