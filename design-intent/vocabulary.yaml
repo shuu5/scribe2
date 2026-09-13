@@ -46,7 +46,7 @@ terms:
     domain: consumer
     definition: 作業 (issue) と裁定の記録。 実体は beads で、 v2 は自前の台帳を持たない。
     forbidden: [レジャー]
-    relationships: [beads, bd]
+    relationships: [beads, bd, 台帳 adapter]
   - canonical: dolt push
     domain: consumer
     definition: beads の共有 DB (dolt) を remote へ同期する操作。 admin lane だけが行う。
@@ -87,7 +87,7 @@ terms:
   - canonical: land
     domain: consumer
     definition: worker の成果を統合して着地させる操作 (merge)。 MVP では worktree の tree を squash 1 commit で main に載せ、 main で歯を再実走する (SRS FR11)。 graphify は land ごとに走る。 crate の land module が担う。
-    relationships: [graphify, 便, gate, verdict export]
+    relationships: [graphify, 便, gate, verdict export, land の終端]
   - canonical: verdict export
     domain: consumer
     definition: land ごとの判定を schema 版付きで verdicts.jsonl に追記する面 (跨版の観測面・SRS FR12)。 次の版の器がこの記録を読む。
@@ -214,11 +214,11 @@ terms:
     relationships: [対話面, 契約, 設計 doc, runner, lens]
   - canonical: 契約
     domain: consumer
-    definition: 何を作り・何ができたら終わりかを表す 1 単位。 正本は設計 doc の契約表 1 行で、 器が便の契約 file を生成する (C15・SRS FR2 / FR47)。 台帳の 1 bead に対応し、 SRS の要件 id と設計 doc を pointer で持つ。
+    definition: 何を作り・何ができたら終わりかを表す 1 単位。 正本は設計 doc の契約表 1 行で、 器が便の契約 file を生成する (C15・SRS FR2 / FR47・ADR-0023 §2.1 / §2.2)。 台帳の 1 bead に対応し、 SRS の要件 id と設計 doc を pointer で持つ。
     relationships: [台帳, 設計 doc, write-set, 便, 契約表]
   - canonical: 設計 doc
     domain: consumer
-    definition: 要望を SRS の要件に結び、 契約が複数出る元になる tracked markdown (docs/design/)。 末尾に契約表の区間を 0 か 1 つ持つ (SRS FR47)。
+    definition: 要望を SRS の要件に結び、 契約が複数出る元になる tracked markdown (docs/design/)。 末尾に契約表の区間を 0 か 1 つ持つ (SRS FR47・ADR-0023 §2.1)。
     relationships: [契約, SRS]
   - canonical: SRS
     domain: consumer
@@ -231,7 +231,7 @@ terms:
   - canonical: write-set
     domain: consumer
     definition: 契約が宣言する、 編集してよい file の集合。 外への編集は編集の時点で止める (C16・SRS FR20)。
-    relationships: [契約, in-loop guard]
+    relationships: [契約, in-loop guard, write-set の閉包]
   - canonical: in-loop guard
     domain: consumer
     definition: 仕様からの逸脱を編集の時点で止める guard (C16)。 MVP の形は write-set の外への Edit / Write を PreToolUse で deny する hook。 極性一覧に InLoop として載る。
@@ -569,27 +569,27 @@ terms:
     relationships: [席, 管理 tick, 開発 session]
   - canonical: 契約表
     domain: consumer
-    definition: tracked な設計 doc が末尾に持つ機械が読む区間の表。 1 行 = 契約 1 本で、 契約の正本 (SRS FR47)。
-    relationships: [契約, 設計 doc, 設計 pointer, write-set の閉包]
+    definition: tracked な設計 doc が末尾に持つ機械が読む区間の表。 1 行 = 契約 1 本で、 契約の正本 (SRS FR47・ADR-0023 §2.1)。 欄の集合の正本は core の型で、 文書は生成物 contracts/schema.toml を pointer で指す (ADR-0013 §2.1)。 読み手は rules manifest と同じ 1 組の parser (ADR-0010 §2.1)。
+    relationships: [契約, 設計 doc, 設計 pointer, write-set の閉包, 契約 id]
   - canonical: 設計 pointer
     domain: consumer
     definition: 設計 doc の path と契約 id の対。 intake の入力 (SRS FR53) で、 台帳の bead の受入条件が持つ 1 行でもある (SRS FR2)。
-    relationships: [契約表, 台帳]
+    relationships: [契約表, 台帳, 契約 id]
   - canonical: write-set の閉包
     domain: consumer
-    definition: 契約の行が宣言した閉じた型を、 網羅 match・literal 構築・件数 pin で持つ source file の集合 (SRS FR48)。 write-set に足りなければ intake が契約を断る。
-    relationships: [write-set, 契約表, 便]
+    definition: 契約の行が宣言した閉じた型を、 網羅 match・literal 構築・件数 pin で持つ source file の集合 (SRS FR48)。 write-set に足りなければ intake が契約を断る。 字面の走査で求めるため下界であり、 限界は歯が固定する (ADR-0023 §2.3)。
+    relationships: [write-set, 契約表, 便, in-loop guard]
   - canonical: 契約の審査
     domain: consumer
-    definition: intake の直後に、 契約とそれが実装する設計と要件を lens が読んで判定する段 (SRS FR49)。 実装後の gate の lens (SRS FR9) とは別の段で、 判定が合格でない便は runner を起こさない。
+    definition: intake の直後に、 契約とそれが実装する設計と要件を lens が読んで判定する段 (SRS FR49)。 実装後の gate の lens (SRS FR9) とは別の段で、 判定が合格でない便は runner を起こさない (ADR-0019 §2.1 の終端の定義に足す・ADR-0023 §2.7)。
     relationships: [lens, 便, Stage, gate]
   - canonical: land の終端
     domain: consumer
-    definition: 着地の後に器が続ける 3 手 (remote への push・着地 commit の CI の結果の照合・台帳の close) と、 その typed な記帳 (SRS FR50)。
-    relationships: [land, 便, 台帳 adapter]
+    definition: 着地の後に器が続ける 3 手 (remote への push・着地 commit の CI の結果の照合・台帳の close) と、 その typed な記帳 (SRS FR50)。 着地の事実の正本は器の record で、 commit の trailer はそこからの導出面 (ADR-0023 §2.5)。
+    relationships: [land, 便, 台帳 adapter, trailer, Completion]
   - canonical: 台帳 adapter
     domain: consumer
-    definition: 器が台帳へ触る唯一の module。 読みは読み取り専用で、 書きは着地した便の close 1 種だけ (SRS FR50 / FR51)。 起票・受入条件・裁定の記帳は席の仕事。
+    definition: 器が台帳へ触る唯一の module。 読みは読み取り専用で、 書きは着地した便の close 1 種だけ (SRS FR50 / FR51・ADR-0023 §2.2)。 起票・受入条件・裁定の記帳は席の仕事。
     relationships: [台帳, bd, land の終端, doctor]
   - canonical: 散文の門
     domain: consumer
@@ -599,3 +599,11 @@ terms:
     domain: consumer
     definition: 設計 doc の文を規範文と見なす語の閉じた列 (SRS FR52)。 印を持つ文は散文の門の対象。
     relationships: [散文の門, 設計 doc]
+  - canonical: 契約 id
+    domain: consumer
+    definition: 設計 doc の file 名の stem と行の id の対 (doc id # row id) で表す契約の識別子 (ADR-0023 §2.1)。 doc id は append-only で、 台帳の pointer 行・commit の trailer・外部の道具の追跡表が同じ形を鍵にする。
+    relationships: [契約表, 設計 pointer, trailer, 台帳]
+  - canonical: trailer
+    domain: consumer
+    definition: squash commit の message の末尾に器が書く行 (契約 id と要件 id の 2 行を、 既存の便 id の行と 1 組にしたもの)。 着地の事実の record からの導出面で、 外部の道具が読む唯一の口 (ADR-0023 §2.5)。 trailer を持たない commit は「まだ分からない」と読む。
+    relationships: [land の終端, 契約 id, 便, event log]

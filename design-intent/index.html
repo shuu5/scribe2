@@ -58,7 +58,7 @@
 </ul>
 </details>
 <details>
-<summary>accepted <span class="nav-count">(22)</span></summary>
+<summary>accepted <span class="nav-count">(23)</span></summary>
 <ul>
   <li><a href="decisions/ADR-0001-rust-single-static-binary.html">ADR-0001 — 実装言語と構成 = Rust 単一 static binary (Go / typed Python / TypeScript 却下)</a> <span class="nav-meta">adr</span></li>
   <li><a href="decisions/ADR-0002-test-lint-toolchain.html">ADR-0002 — test / lint toolchain = cargo nextest・粒度 lint は forbid・構造検査は cargo xtask check</a> <span class="nav-meta">adr</span></li>
@@ -82,6 +82,7 @@
   <li><a href="decisions/ADR-0020-account-autonomy-limit-stop-resume-and-selection.html">ADR-0020 — 口座の上限は便を殺さず別口座で途中再開し、 開発 session は上限の手前で退避して別口座で立て直し、 口座は実測の残量から 1 つの純関数が便用と session 用の 2 規則で選ぶ (R-C9-1 を typed な値で発効・ADR-0012 §2.4 / ADR-0016 §2.1 / §2.5 / ADR-0017 §2.4 / §2.5 を部分 supersede・便を閾値で止めない ADR-0012 §2.3 は不変)</a> <span class="nav-meta">adr</span></li>
   <li><a href="decisions/ADR-0021-gate-cost-is-measured-and-confined.html">ADR-0021 — gate の費用は測って決める (変異の並列度は rules 行の上限を project 横断・host 単位の受付が実測で下げ、 器の子 process は cgroup で封じ、 木が同じ main 実測は検出線を撃ち直さず、 着地は gate 済みの便を先に通す・ADR-0009 §2.3 / §2.4 と ADR-0010 §2.1 / §2.3 / §2.4 / §2.5 を部分 supersede)</a> <span class="nav-meta">adr</span></li>
   <li><a href="decisions/ADR-0022-seat-roles-are-typed-and-enforced-by-hooks.html">ADR-0022 — 席の役割と権能は閉じた型と rules 行で持ち、 hook が tool 呼出しの境界で執行し、 席の指示文は行から生成して session の開始時に注入する (対話面 R-C7-1 の値を planner の席へ・管理席は anchor ごと 1 席・ADR-0004 §2.6 / ADR-0016 §2.1 を部分 supersede・器の外の散文を規則の置き場にしない)</a> <span class="nav-meta">adr</span></li>
+  <li><a href="decisions/ADR-0023-contract-source-is-the-design-document-table.html">ADR-0023 — 契約の正本は設計 doc の契約表 1 行で、 器が契約 file を生成し、 審査の段を通してから実装役を起こし、 着地の終端まで器が持つ (write-set の閉包は機械が導出・consumer の要件面は宣言 file の任意 key・ADR-0004 §2.2 / §2.3・ADR-0010 §2.1・ADR-0016 §2.1 / §2.3・ADR-0018 §2.1・ADR-0019 §2.1 / §2.3 を部分 supersede)</a> <span class="nav-meta">adr</span></li>
 </ul>
 </details>
 </section>
