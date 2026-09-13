@@ -3,13 +3,19 @@
 //! write は lock を取って 1 行追記するだけ、read は **malformed を黙って飛ばさず
 //! 全件 error にする**（SRS NFR4 の fail-closed）。lock の再試行と stale の線は
 //! 数値を焼かず rules 行から読む（憲法 C1 / C5）。
+//!
+//! lock file には**所有者の pid を 10 進 1 行**で書く。書き手が lock を持ったまま SIGKILL で
+//! 落ちた周（AC4 の「process を殺して」）は所有者の死んだ lock が残るので、既存の lock に
+//! 当たった側は中身を読み、所有者が死んでいれば外して取り直す（設計 fleet-event-log.md §4）。
+//! pid の生存判定（起動時刻の probe）は受付の札（[`crate::pipe::admission`]・ADR-0021 §2.3）
+//! と**共有する 1 本**で、ここに置く（lock の実装が 1 本であるのと同じ理由・憲法 C6.3）。
 
 use crate::polarity::{OnFailure, Polarity, Timing};
 use super::Event;
 use crate::rules::manifest::Manifest;
 use crate::rules::RuleValue;
 use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -19,6 +25,18 @@ const ROW_RETRY: &str = "fleet.lock_retry_ms";
 const ROW_STALE: &str = "fleet.lock_stale_ms";
 /// lock の取り直しの間隔。
 const RETRY_TICK: Duration = Duration::from_millis(5);
+
+/// 実 probe が読む proc の root。
+const PROC_ROOT: &str = "/proc";
+
+/// `/proc/<pid>/stat` の starttime の単位（clock tick / 秒）。
+///
+/// Linux が user 空間へ見せる `USER_HZ` は ABI として 100 に固定されている（kernel の `HZ` とは
+/// 別）。libc の `sysconf` を足さないための定数である（NFR3）。
+const USER_HZ: u64 = 100;
+
+/// `/proc/<pid>/stat` の `)` の後ろで starttime が何番目か（0 始まり・field 22 − 3）。
+const STARTTIME_AT: usize = 19;
 
 /// この境界の極性（[`StoreError`]）: 書込の時点で lock を取り、取れない・読めない周は書かず error にする。
 pub const POLARITY: Polarity = Polarity {
@@ -60,6 +78,8 @@ impl std::fmt::Display for StoreError {
 pub enum Warning {
     /// 古い lock を外した。
     StaleLockRemoved,
+    /// 所有者の死んだ lock を外した（書き手が lock を持ったまま落ちた周）。
+    DeadOwnerLockRemoved,
 }
 
 impl Warning {
@@ -67,8 +87,112 @@ impl Warning {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::StaleLockRemoved => "fleet: 古い lock を外した",
+            Self::DeadOwnerLockRemoved => "fleet: 所有者の死んだ lock を外した",
         }
     }
+}
+
+/// pid の起動時刻の probe の結果（3 値・**「無い」と「読めない」を畳まない**・C11.2）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Probe {
+    /// `/proc/<pid>/stat` が無い（process が無い）。
+    Absent,
+    /// 起動時刻（epoch ms）。
+    Started(u64),
+    /// それ以外の理由で読めない（`/proc` 自体が読めない・parse 不能・権限）。
+    Unreadable,
+}
+
+impl Probe {
+    /// 起動時刻だけを取る（「無い」と「読めない」はどちらも `None`）。
+    ///
+    /// 受付の札はこの 2 つを同じ回収側に読む（ADR-0021 §5 (D)・札を失っても過剰に配る側へ
+    /// 倒れる）ので、札の判じにはこの写像で渡す。lock の判定（[`lock_owner`]）は 3 値のまま読む。
+    pub fn started(self) -> Option<u64> {
+        match self {
+            Self::Started(ms) => Some(ms),
+            Self::Absent | Self::Unreadable => None,
+        }
+    }
+}
+
+/// lock の所有者の判じ（pure・[`lock_owner`] の返り）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Owner {
+    /// 所有者の process が無い（外して取り直す側）。
+    Dead,
+    /// 所有者が生きている（待つ側・pid の再利用もここへ倒れる）。
+    Live,
+    /// 本文か probe が読めない（従来どおり `fleet.lock_stale_ms` の線に従う側）。
+    Unreadable,
+}
+
+/// lock の本文（所有者の pid・10 進 1 行）を判じる（pure）。
+///
+/// `probe` は呼び手が渡す起動時刻の写像（実 probe は [`started_ms`]）。**`Dead` になるのは
+/// probe が「無い」を返した周だけ**である——本文が 10 進 1 行でない周と probe が「読めない」を
+/// 返した周は `Unreadable` で、fail-closed の極性（stale の線まで待つ）を変えない。
+pub fn lock_owner(body: &str, probe: impl Fn(u32) -> Probe) -> Owner {
+    let Some(pid) = owner_pid(body) else {
+        return Owner::Unreadable;
+    };
+    match probe(pid) {
+        Probe::Absent => Owner::Dead,
+        Probe::Started(_) => Owner::Live,
+        Probe::Unreadable => Owner::Unreadable,
+    }
+}
+
+/// 本文を 10 進 1 行（末尾の改行 1 つは許す）の pid として読む。それ以外は `None`。
+fn owner_pid(body: &str) -> Option<u32> {
+    let line = body.strip_suffix('\n').unwrap_or(body);
+    if line.is_empty() || !line.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    line.parse().ok()
+}
+
+/// pid の起動時刻を実 `/proc` で測る。
+pub fn started_ms(pid: u32) -> Probe {
+    started_ms_in(Path::new(PROC_ROOT), pid)
+}
+
+/// pid の起動時刻を `root`（proc の root・歯は tmp dir を注入する）で測る。
+///
+/// **順序で弁別する**: 先に `<root>/stat` の `btime` を読み、読めない周は pid の有無を見ずに
+/// 「読めない」（`/proc` 自体が無い環境を「無い」に畳まない）。`btime` が読めた後で
+/// `<root>/<pid>/stat` が NotFound の周だけが「無い」。それ以外の失敗（権限・parse 不能）は
+/// 「読めない」。
+///
+/// `btime` は秒へ切り捨てた値なので、ここが出す時刻は実際の起動より**早い側**へ寄る
+/// ——札の持ち主を死んだと読む向きには外れない。
+pub fn started_ms_in(root: &Path, pid: u32) -> Probe {
+    let Some(boot) = fs::read_to_string(root.join("stat")).ok().as_deref().and_then(boot_s) else {
+        return Probe::Unreadable;
+    };
+    let stat = match fs::read_to_string(root.join(pid.to_string()).join("stat")) {
+        Ok(found) => found,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Probe::Absent,
+        Err(_) => return Probe::Unreadable,
+    };
+    let Some(ticks) = starttime_ticks(&stat) else {
+        return Probe::Unreadable;
+    };
+    boot.checked_mul(1000)
+        .and_then(|ms| ms.checked_add(ticks.checked_mul(1000)? / USER_HZ))
+        .map_or(Probe::Unreadable, Probe::Started)
+}
+
+/// `/proc/<pid>/stat` の starttime（clock tick・pure）。comm の中の空白と `)` に釣られない。
+fn starttime_ticks(stat: &str) -> Option<u64> {
+    let (_, rest) = stat.rsplit_once(')')?;
+    rest.split_whitespace().nth(STARTTIME_AT)?.parse().ok()
+}
+
+/// `/proc/stat` の `btime`（秒・pure）。
+fn boot_s(proc_stat: &str) -> Option<u64> {
+    let line = proc_stat.lines().find(|line| line.starts_with("btime "))?;
+    line.split_whitespace().nth(1)?.parse().ok()
 }
 
 /// lock の待ち方。値は rules 行から来る。
@@ -174,7 +298,10 @@ fn write_line(path: &Path, line: &str) -> Result<(), StoreError> {
         .map_err(|err| StoreError::Io(format!("flush できない: {err}")))
 }
 
-/// lock を取る。古い lock は外して警告に載せる（黙って消さない）。
+/// lock を取る。所有者の死んだ lock と古い lock は外して警告に載せる（黙って消さない）。
+///
+/// 取れた lock には**自分の pid を 10 進 1 行**で書く（`create_new` で開いた handle にそのまま
+/// 書く・第 2 の writer を作らない）。書けない周は lock を戻して error（fail-closed）。
 ///
 /// **crate の中へ開く**のは受付（[`crate::pipe::admission`]）が slot dir の lock に同じ実装を
 /// 使うためである（lock file は別・実装は 1 本・憲法 C6.3）。外すのは呼び手が lock file を
@@ -184,11 +311,21 @@ pub(crate) fn acquire(lock: &Path, policy: LockPolicy) -> Result<Vec<Warning>, S
     let mut warnings = Vec::new();
     loop {
         match OpenOptions::new().create_new(true).write(true).open(lock) {
-            Ok(_) => return Ok(warnings),
-            Err(err) if err.kind() != std::io::ErrorKind::AlreadyExists => {
+            Ok(mut handle) => {
+                if let Err(err) = writeln!(handle, "{}", std::process::id()).and_then(|()| handle.flush()) {
+                    let _ = fs::remove_file(lock);
+                    return Err(StoreError::Lock(format!("所有者を書けない: {err}")));
+                }
+                return Ok(warnings);
+            }
+            Err(err) if err.kind() != ErrorKind::AlreadyExists => {
                 return Err(StoreError::Lock(err.to_string()));
             }
             Err(_) => {}
+        }
+        if owner_is_dead(lock) && fs::remove_file(lock).is_ok() {
+            warnings.push(Warning::DeadOwnerLockRemoved);
+            continue;
         }
         if is_stale(lock, policy.stale_ms) && fs::remove_file(lock).is_ok() {
             warnings.push(Warning::StaleLockRemoved);
@@ -199,6 +336,13 @@ pub(crate) fn acquire(lock: &Path, policy: LockPolicy) -> Result<Vec<Warning>, S
         }
         std::thread::sleep(RETRY_TICK);
     }
+}
+
+/// 既存の lock の所有者が死んでいるか（本文の pid を実 probe で判じる）。
+///
+/// 読めない本文（書きかけの空 file を含む）と読めない probe は `false`＝stale の線へ落とす。
+fn owner_is_dead(lock: &Path) -> bool {
+    fs::read_to_string(lock).is_ok_and(|body| lock_owner(&body, started_ms) == Owner::Dead)
 }
 
 /// lock が stale か（mtime が線より古いか）。
@@ -237,5 +381,145 @@ pub fn read_all(dir: &Path) -> Result<Vec<Event>, Vec<StoreError>> {
         Ok(parsed)
     } else {
         Err(errors)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{boot_s, lock_owner, started_ms_in, starttime_ticks, Owner, Probe};
+    use proptest::prelude::*;
+    use proptest::test_runner::Config;
+    use std::path::PathBuf;
+
+    /// 反例の永続化を切り、case 数を 256 に pin する（`tests/e2e/prop.rs` と同じ形）。
+    fn config() -> Config {
+        Config {
+            cases: 256,
+            failure_persistence: None,
+            ..Config::default()
+        }
+    }
+
+    /// 歯ごとの空の tmp dir（proc root の注入先・env を読まないのは器の本体の規律〔C2.2〕）。
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("store-proc-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::create_dir_all(&dir);
+        dir
+    }
+
+    /// `/proc/<pid>/stat` の fixture（starttime = field 22 が `ticks`）。
+    fn pid_stat(ticks: u64) -> String {
+        let fields: Vec<String> = (3..=25).map(|at| if at == 22 { ticks.to_string() } else { at.to_string() }).collect();
+        format!("123 (a b) c) {}", fields.join(" "))
+    }
+
+    /// `/proc/<pid>/stat` の starttime は comm の空白と `)` に釣られない。
+    #[test]
+    fn store_starttime_skips_the_comm_field() {
+        let fields: Vec<String> = (3..=25).map(|at| at.to_string()).collect();
+        let stat = format!("123 (a b) c) {}", fields.join(" "));
+        assert_eq!(starttime_ticks(&stat), Some(22), "field 22");
+        assert_eq!(starttime_ticks("123 (x) S 1"), None, "短い");
+    }
+
+    /// `/proc/stat` の `btime` を読む（無ければ `None`）。
+    #[test]
+    fn store_boot_s_reads_btime() {
+        assert_eq!(boot_s("cpu 1 2\nbtime 1700000000\n"), Some(1_700_000_000), "btime");
+        assert_eq!(boot_s("cpu 1 2\n"), None, "btime が無い");
+    }
+
+    /// (2″) 実 probe の順序: `stat` を持たない root では pid dir の有無に依らず「読めない」・`btime` を持つ
+    /// `stat` が在って pid dir が無い root では「無い」・pid dir と `stat` が揃う root では起動時刻 ms。
+    #[test]
+    fn store_probe_reads_btime_before_telling_absent_from_unreadable() {
+        let root = scratch("order");
+        std::fs::create_dir_all(root.join("42")).expect("pid dir を作れる");
+        std::fs::write(root.join("42").join("stat"), pid_stat(250)).expect("pid の stat を書ける");
+        assert_eq!(started_ms_in(&root, 42), Probe::Unreadable, "stat が無い root は pid dir が在っても「読めない」");
+        assert_eq!(started_ms_in(&root, 43), Probe::Unreadable, "stat が無い root は pid dir が無くても「読めない」");
+        std::fs::write(root.join("stat"), "cpu 1 2\nbtime 1700000000\n").expect("btime を書ける");
+        assert_eq!(started_ms_in(&root, 43), Probe::Absent, "btime が読めた後で pid dir が無い周だけ「無い」");
+        // 1_700_000_000 s → ms ＋ 250 tick / USER_HZ 100 = 2500 ms。
+        assert_eq!(started_ms_in(&root, 42), Probe::Started(1_700_000_002_500), "揃った周は起動時刻 ms");
+        std::fs::write(root.join("42").join("stat"), "123 (x) S 1").expect("壊れた stat を書ける");
+        assert_eq!(started_ms_in(&root, 42), Probe::Unreadable, "parse 不能は「読めない」（「無い」に畳まない）");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 10 進 1 行の本文（末尾の改行は有無を振る）。
+    fn pid_line() -> impl Strategy<Value = (u32, String)> {
+        (any::<u32>(), any::<bool>()).prop_map(|(pid, newline)| {
+            let body = if newline { format!("{pid}\n") } else { pid.to_string() };
+            (pid, body)
+        })
+    }
+
+    /// 10 進 1 行として読めない本文（空・前後の空白・非数字・複数行・巨大な数）。
+    fn broken_body() -> impl Strategy<Value = String> {
+        prop_oneof![
+            Just(String::new()),
+            Just("\n".to_owned()),
+            any::<u32>().prop_map(|pid| format!(" {pid}")),
+            any::<u32>().prop_map(|pid| format!("{pid} ")),
+            any::<u32>().prop_map(|pid| format!("{pid}\n\n")),
+            any::<u32>().prop_map(|pid| format!("+{pid}")),
+            any::<u32>().prop_map(|pid| format!("-{pid}")),
+            "[a-zA-Z_.:-]{1,8}",
+            (any::<u32>(), any::<u32>()).prop_map(|(left, right)| format!("{left}\n{right}\n")),
+            (any::<u32>(), any::<u32>()).prop_map(|(left, right)| format!("{left} {right}")),
+            any::<u64>().prop_map(|big| format!("{}", u64::from(u32::MAX) + 1 + (big % 1000))),
+            any::<u128>().prop_map(|huge| format!("{huge}{huge}")),
+        ]
+    }
+
+    proptest! {
+        #![proptest_config(config())]
+
+        /// (1) 任意の pid で probe が「無い」を返す周は必ず `Dead`（外して取り直す側）。
+        #[test]
+        fn prop_lock_owner_absent_process_is_dead((pid, body) in pid_line()) {
+            let seen = std::cell::Cell::new(None);
+            let owner = lock_owner(&body, |asked| {
+                seen.set(Some(asked));
+                Probe::Absent
+            });
+            prop_assert_eq!(owner, Owner::Dead);
+            prop_assert_eq!(seen.get(), Some(pid));
+        }
+
+        /// (2) 起動時刻を返す周は必ず `Live`（待つ側＝pid の再利用は安全な向きへ倒れる）。
+        #[test]
+        fn prop_lock_owner_started_process_is_live((_, body) in pid_line(), ms in any::<u64>()) {
+            prop_assert_eq!(lock_owner(&body, |_| Probe::Started(ms)), Owner::Live);
+        }
+
+        /// (2′) probe が「読めない」を返す周は必ず `Unreadable` で **`Dead` には決してならない**
+        /// （`/proc` が読めない環境で全 lock が外れる側へ倒れない・C11.2）。
+        #[test]
+        fn prop_lock_owner_unreadable_probe_is_never_dead((_, body) in pid_line()) {
+            let owner = lock_owner(&body, |_| Probe::Unreadable);
+            prop_assert_eq!(owner, Owner::Unreadable);
+            prop_assert_ne!(owner, Owner::Dead);
+        }
+
+        /// (3) 10 進として読めない本文は probe の返りに依らず必ず `Unreadable` で **`Dead` には決して
+        /// ならない**（fail-closed の極性＝従来の `stale_ms` の線に従う）。probe は呼ばれない。
+        #[test]
+        fn prop_lock_owner_broken_body_is_never_dead(body in broken_body(), probe in 0u8..3) {
+            let asked = std::cell::Cell::new(0u32);
+            let owner = lock_owner(&body, |_| {
+                asked.set(asked.get() + 1);
+                match probe {
+                    0 => Probe::Absent,
+                    1 => Probe::Started(1),
+                    _ => Probe::Unreadable,
+                }
+            });
+            prop_assert_eq!(owner, Owner::Unreadable);
+            prop_assert_ne!(owner, Owner::Dead);
+            prop_assert_eq!(asked.get(), 0);
+        }
     }
 }

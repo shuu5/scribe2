@@ -3327,6 +3327,203 @@ fn pipe_resume_continues_from_implemented_in_new_process() {
     clean(&[&repo, &state]);
 }
 
+// ───── process を殺してから別 process で resume する（`s2-07l.203`・SRS AC4・接頭辞 `pipe_resume_kill_`） ─────
+//
+// 現行の resume の歯は**行儀よく終わった spawn の後**から引く。ここは `pipe run` を子 process として起こし、
+// `RunStage stage=Implemented` が event log に現れた時点で **process group ごと SIGKILL** し、殺した周が
+// 残す物（外されなかった lock・生き残った孫・途中の worktree）の上を別 process の resume が Landed まで
+// 通るかを測る（成立を宣言する歯ではなく、成立するかを測る歯）。
+//
+// **自分が起こした子の process group にしか実 signal を送らない**。撃つ前に pid ≠ 0 / 1 ∧ 子が自分の
+// group の leader ∧ 自分の group ではないことを assert し、落ちた周は撃たずに test を落とす。
+
+/// diff を読み切って marker を置き、`sleep` を背景に起こして pid を書き、前景で待ち続ける fake lens
+/// （`pipe_stop_group_*` の runner と同型）。gate は lens の stdout の EOF を待つので、この lens が
+/// 生きている間 `pipe run` は gate の途中に留まる＝殺す窓を作る。
+fn blocking_lens(marker: &Path, pid_file: &Path) -> String {
+    format!(
+        "cat >/dev/null; touch '{}'; sleep 300 & echo $! > '{}'; wait",
+        marker.display(),
+        pid_file.display()
+    )
+}
+
+/// `pipe run` を **自分の process group の leader** として起こす（intake → spawn → gate → land の 1 process）。
+///
+/// stdin / stdout / stderr は `Stdio::null()`＝読まない pipe で子を詰まらせない（殺す便は stdout を出さない
+/// ので run id は event log から取る）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn spawn_run_child(repo: &Path, state: &Path, contract: &Path, lens: &str) -> Child {
+    use std::os::unix::process::CommandExt;
+    Command::new(bin())
+        .args([
+            "pipe", "run", "--contract", &contract.display().to_string(), "--bead", "s2-kill",
+            "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
+            "--rules", &ceiling_rules(state),
+            "--runner", "echo x >> src/lib.rs && git add -A && git commit -q -m runner",
+            "--lens", lens,
+        ])
+        .process_group(0)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("binary を起動できる")
+}
+
+/// `events.jsonl` に `RunStage stage=Implemented` が現れるまで 20ms 間隔で読み、その行の run id を返す。
+///
+/// 上限 60s。その間 `child` が終わっていないことを毎周 assert する（終わっていれば Implemented の
+/// 前に落ちた便＝殺す前提を作れていない）。読めない行は飛ばす（書きかけの末尾行で panic しない）。
+fn wait_for_implemented(state: &Path, child: &mut Child) -> String {
+    let begun = Instant::now();
+    loop {
+        let found = fs::read_to_string(state.join("fleet").join("events.jsonl"))
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|line| Event::from_line(line).ok())
+            .find(|event| event.kind == EventKind::RunStage && event.stage == Some(Stage::Implemented))
+            .map(|event| event.run);
+        if let Some(id) = found {
+            return id;
+        }
+        assert!(child.try_wait().ok().flatten().is_none(), "pipe run が Implemented の前に終わった");
+        assert!(begun.elapsed() < Duration::from_secs(60), "Implemented にならない");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// 前提を assert してから **`pid` の process group 1 つだけ**へ SIGKILL を撃つ。
+///
+/// 前提 = `pid` が 0 / 1 でない ∧ `pid` が自分の group の leader（`pgid == pid`）∧ その group が
+/// この test の group でない。1 つでも落ちた周は撃たずに test を落とす（`-1` に化ける形を塞ぐ）。
+/// shell を経由せず `kill` の argv へ直に渡す。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn kill_group(pid: u32) {
+    assert!(pid > 1, "前提: 自分の子の pid は 0 でも 1 でもない: {pid}");
+    assert_eq!(proc_pgid(pid), Some(pid), "前提: {pid} は自分の group の leader");
+    assert_ne!(proc_pgid(std::process::id()), Some(pid), "前提: 自分の group には撃たない");
+    let target = format!("-{pid}");
+    let out = Command::new("kill").args(["-KILL", "--", &target]).output().expect("kill を撃てる");
+    assert!(out.status.success(), "group {pid} へ撃てる: {}", String::from_utf8_lossy(&out.stderr));
+}
+
+/// 便を `pipe run` で起こし、`Implemented` が記帳された時点で process group ごと殺す。
+/// 返すのは（便 id・殺した `pipe run` の pid）。group から漏れた lens の `sleep` は [`reap_own`] で片付ける。
+fn killed_at_implemented(repo: &Path, state: &Path, contract: &Path) -> (String, u32) {
+    let marker = state.join("lens-ran");
+    let pid_file = state.join("lens-sleep.pid");
+    let lens = blocking_lens(&marker, &pid_file);
+    let mut child = spawn_run_child(repo, state, contract, &lens);
+    let pid = child.id();
+    let id = wait_for_implemented(state, &mut child);
+    kill_group(pid);
+    child.wait().ok();
+    if let Some(sleeper) = fs::read_to_string(&pid_file).ok().and_then(|text| text.trim().parse::<u32>().ok()) {
+        reap_own(sleeper);
+    }
+    assert!(!proc_alive(pid), "殺した pipe run {pid} は消えている");
+    (id, pid)
+}
+
+/// 便の `RunDone` のうち段が `stage` の件数（`pipe_e2e_` の歯と同じ「1 便が最後まで載った」の測り方）。
+fn done_count(state: &Path, id: &str, stage: Stage) -> usize {
+    events(state)
+        .iter()
+        .filter(|found| found.run == id && found.kind == EventKind::RunDone && found.stage == Some(stage))
+        .count()
+}
+
+/// (a) `pipe run` を Implemented の時点で process group ごと SIGKILL → 中断点は event log に在り、別 process の
+/// `resume` 2 回（gate → land）で Landed まで通る。人手の event 0・殺す前の結果（runner の commit）は保たれる（C9）。
+#[test]
+fn pipe_resume_kill_at_implemented_resumes_to_landed_in_new_process() {
+    let (repo, state) = repo_with_state();
+    let contract = write_contract(&repo, &[], &[]);
+    let base = git(&repo, &["rev-parse", "refs/heads/main"]);
+    let (id, _killed) = killed_at_implemented(&repo, &state, &contract);
+
+    // 中断の現在地: Implemented が 1 件・終端の記帳は無い・show も Implemented を名乗る。
+    let log = fs::read_to_string(state.join("fleet").join("events.jsonl")).unwrap_or_default();
+    assert_eq!(stage_count(&state, &id, Stage::Implemented), 1, "Implemented は 1 件: {log}");
+    assert_eq!(kind_count(&state, &id, EventKind::RunDone), 0, "RunDone は 0 件: {log}");
+    assert_eq!(log.matches("\"stage\":\"Landed\"").count(), 0, "Landed の字面は 0 件: {log}");
+    let shown = show_line(&repo, &state, &id);
+    assert!(shown.contains("stage=Implemented"), "中断点は event log に在る: {shown}");
+
+    // 続き: 別 process が置き場だけを読んで gate → land を引く。
+    let marker = state.join("lens-ran-after-kill");
+    let lens = fake_lens(&marker, &lens_verdict("PASS"));
+    let gated = run_pipe(&[
+        "resume", "--run", &id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(), "--lens", &lens,
+    ]);
+    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "殺した後の Implemented → gate: {}", stderr_of(&gated));
+    assert!(stdout_of(&gated).contains("verdict=PASS"), "{}", stdout_of(&gated));
+    let landed = run_pipe(&[
+        "resume", "--run", &id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(),
+    ]);
+    assert_eq!(landed.status.code(), Some(i32::from(RC_OK)), "Gated → land: {}", stderr_of(&landed));
+    assert!(stdout_of(&landed).contains("landed="), "{}", stdout_of(&landed));
+    assert!(show_line(&repo, &state, &id).contains("stage=Landed"), "段は Landed");
+    let log = fs::read_to_string(state.join("fleet").join("events.jsonl")).unwrap_or_default();
+    assert_eq!(done_count(&state, &id, Stage::Landed), 1, "RunDone stage=Landed が 1 件: {log}");
+    assert!(!log.contains("\"actor\":\"human\""), "人手なしで継いだ（C9）: {log}");
+    let new = git(&repo, &["rev-parse", "refs/heads/main"]);
+    assert_eq!(
+        git(&repo, &["rev-list", "--count", &format!("{base}..{new}")]),
+        "1",
+        "殺す前の結果（runner の commit 1 本）が main に保たれている（C9）"
+    );
+    clean(&[&repo, &state]);
+}
+
+/// (b) 中断が**外されなかった lock**（殺された writer が残す形＝所有者の pid の 10 進 1 行）を残した周からの
+/// resume。所有者は死んでいる（前提 assert）。rc 0 で Landed まで通り、lock file は残らない。
+///
+/// 警告の字面はここでは測らない（pipe の funnel は store の警告を捨てる＝`tests/e2e/fleet.rs` の歯が持つ）。
+/// 時刻の窓を race で狙わず、殺した周に器が残しうる状態を構成して撃つ。
+#[test]
+fn pipe_resume_kill_dead_owner_lock_does_not_block_resume() {
+    let (repo, state) = repo_with_state();
+    let contract = write_contract(&repo, &[], &[]);
+    let (id, killed) = killed_at_implemented(&repo, &state, &contract);
+    assert!(!proc_alive(killed), "前提: 殺した pid {killed} は生きていない");
+    let lock = state.join("fleet").join("events.jsonl.lock");
+    fs::write(&lock, format!("{killed}\n")).expect("死んだ所有者の lock を置ける");
+
+    let marker = state.join("lens-ran-after-kill");
+    let lens = fake_lens(&marker, &lens_verdict("PASS"));
+    let gated = run_pipe(&[
+        "resume", "--run", &id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(), "--lens", &lens,
+    ]);
+    assert_eq!(
+        gated.status.code(),
+        Some(i32::from(RC_OK)),
+        "所有者の死んだ lock は resume を止めない: {}",
+        stderr_of(&gated)
+    );
+    assert!(stdout_of(&gated).contains("verdict=PASS"), "{}", stdout_of(&gated));
+    assert!(!lock.exists(), "死んだ所有者の lock は外されて残らない");
+    let landed = run_pipe(&[
+        "resume", "--run", &id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(),
+    ]);
+    assert_eq!(landed.status.code(), Some(i32::from(RC_OK)), "Gated → land: {}", stderr_of(&landed));
+    assert!(stdout_of(&landed).contains("landed="), "{}", stdout_of(&landed));
+    assert!(show_line(&repo, &state, &id).contains("stage=Landed"), "段は Landed");
+    assert!(!lock.exists(), "land の後も lock は残らない");
+    clean(&[&repo, &state]);
+}
+
 #[test]
 fn pipe_gate_refuses_run_without_commits() {
     let (repo, state) = repo_with_state();

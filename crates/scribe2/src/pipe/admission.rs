@@ -16,10 +16,11 @@
 //!
 //! 札は器が管理する「物」ではなく受付の一時的な印で、死んだ札・読めない札は削除して回収する
 //! （憲法 N1 の対象外・ADR-0021 §5 (D)）。回収は黙って落とさず record の `slot=` に数を残す
-//! （NFR4）。
+//! （NFR4）。札の持ち主の生存判定（pid + 起動時刻）は lock の所有者の判定と**同じ 1 本**
+//! （[`crate::fleet::store::started_ms`]）で、ここには置かない（C6.3）。
 
 use crate::fleet::json_lite::{self, Value};
-use crate::fleet::store::{acquire, LockPolicy};
+use crate::fleet::store::{acquire, started_ms, LockPolicy};
 use crate::fleet::{self, Completion, SCHEMA};
 use crate::seat::{host_slots_dir, sanitize_target};
 use std::fs;
@@ -29,9 +30,6 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 /// host の memory を測る面（受付の読み手はこの 1 本）。
 const MEMINFO: &str = "/proc/meminfo";
 
-/// boot 時刻（`btime`）を読む面。
-const PROC_STAT: &str = "/proc/stat";
-
 /// 受付札の拡張子（ADR-0021 §2.3 の字面）。
 const TICKET_EXT: &str = "slot";
 
@@ -40,15 +38,6 @@ const PARTIAL_EXT: &str = "partial";
 
 /// slot dir 直下の lock file（lock の実装は fleet の 1 本）。
 const LOCK_FILE: &str = "admission.lock";
-
-/// `/proc/<pid>/stat` の starttime の単位（clock tick / 秒）。
-///
-/// Linux が user 空間へ見せる `USER_HZ` は ABI として 100 に固定されている（kernel の `HZ` とは
-/// 別）。libc の `sysconf` を足さないための定数である（NFR3）。
-const USER_HZ: u64 = 100;
-
-/// `/proc/<pid>/stat` の `)` の後ろで starttime が何番目か（0 始まり・field 22 − 3）。
-const STARTTIME_AT: usize = 19;
 
 /// 受付の式が読む 2 つの線（MiB・値は manifest が持つ・憲法 C1 / C5）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -170,28 +159,13 @@ pub fn judge(text: &str, started_ms: impl Fn(u32) -> Option<u64>) -> Judged {
     }
 }
 
-/// `/proc/<pid>/stat` の starttime（clock tick・pure）。comm の中の空白と `)` に釣られない。
-fn starttime_ticks(stat: &str) -> Option<u64> {
-    let (_, rest) = stat.rsplit_once(')')?;
-    rest.split_whitespace().nth(STARTTIME_AT)?.parse().ok()
-}
-
-/// `/proc/stat` の `btime`（秒・pure）。
-fn boot_s(proc_stat: &str) -> Option<u64> {
-    let line = proc_stat.lines().find(|line| line.starts_with("btime "))?;
-    line.split_whitespace().nth(1)?.parse().ok()
-}
-
-/// pid の起動時刻（epoch ms）。process が無い・読めない周は `None`。
+/// 札の持ち主の起動時刻（epoch ms）。process が無い・読めない周は `None`。
 ///
-/// `btime` は秒へ切り捨てた値なので、ここが出す時刻は実際の起動より**早い側**へ寄る
-/// ——札の持ち主を死んだと読む向きには外れない。
-fn started_ms(pid: u32) -> Option<u64> {
-    let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-    let ticks = starttime_ticks(&stat)?;
-    let boot = boot_s(&fs::read_to_string(PROC_STAT).ok()?)?;
-    boot.checked_mul(1000)?
-        .checked_add(ticks.checked_mul(1000)? / USER_HZ)
+/// 生存判定の実装は lock の所有者と共有する 1 本（[`started_ms`]・設計 fleet-event-log.md §4）。
+/// 札は「無い」と「読めない」を同じ回収側に読む（ADR-0021 §5 (D)・
+/// [`crate::fleet::store::Probe::started`]）。
+fn ticket_started_ms(pid: u32) -> Option<u64> {
+    started_ms(pid).started()
 }
 
 /// いまの時刻（epoch ms）。
@@ -219,7 +193,7 @@ fn scan(dir: &Path) -> Option<Scan> {
             continue;
         }
         let text = fs::read_to_string(&path).unwrap_or_default();
-        match judge(&text, started_ms) {
+        match judge(&text, ticket_started_ms) {
             Judged::Live(jobs) => found.live_jobs = found.live_jobs.saturating_add(jobs),
             Judged::Reclaim => found.doomed.push(path),
         }
@@ -489,7 +463,7 @@ fn write_ticket(dir: &Path, run: &str, jobs: u64) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::{boot_s, capacity, judge, slot_detail, starttime_ticks, Free, Judged, Sizes, Slot, Ticket};
+    use super::{capacity, judge, now_ms, slot_detail, ticket_started_ms, Free, Judged, Sizes, Slot, Ticket};
 
     /// 歯の fixture の 2 線（tracked manifest の値を写さない）。
     const SIZES: Sizes = Sizes { job_mb: 1000, reserve_mb: 2000 };
@@ -570,15 +544,16 @@ mod tests {
         assert_eq!(judge(&line, |pid| (pid == 42).then_some(0)), Judged::Live(3), "札の pid を引く");
     }
 
-    /// `/proc/<pid>/stat` の starttime は comm の空白と `)` に釣られない。
+    /// 札の持ち主の生存は**共有の probe**（`fleet::store::started_ms`）で読む: 生きている pid（自分）は
+    /// 起動時刻（now 以前）を返し、回収済みの pid（起こして wait した子）は `None`＝回収側。
     #[test]
-    fn admission_starttime_skips_the_comm_field() {
-        let fields: Vec<String> = (3..=25).map(|at| at.to_string()).collect();
-        let stat = format!("123 (a b) c) {}", fields.join(" "));
-        assert_eq!(starttime_ticks(&stat), Some(22), "field 22");
-        assert_eq!(starttime_ticks("123 (x) S 1"), None, "短い");
-        assert_eq!(boot_s("cpu 1 2\nbtime 1700000000\n"), Some(1_700_000_000), "btime");
-        assert_eq!(boot_s("cpu 1 2\n"), None, "btime が無い");
+    fn admission_ticket_probe_reads_live_and_reaped_pids() {
+        let own = ticket_started_ms(std::process::id());
+        assert!(own.is_some_and(|ms| ms <= now_ms()), "自分の pid は起動時刻を返す（now 以前）: {own:?}");
+        let mut child = std::process::Command::new("true").spawn().expect("子を起こせる");
+        let reaped = child.id();
+        child.wait().expect("子を回収できる");
+        assert_eq!(ticket_started_ms(reaped), None, "回収済みの pid は None（回収側）");
     }
 
     /// record の `slot=` は回収の数を落とさない（Granted は `reclaimed:n` だけ・縮退は

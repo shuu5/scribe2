@@ -321,6 +321,45 @@ fn fleet_stale_lock_is_removed_after_threshold() {
     fs::remove_dir_all(&dir).ok();
 }
 
+/// 所有者の死んだ lock（書き手が lock を持ったまま SIGKILL で落ちた周が残す形＝pid の 10 進 1 行）は、
+/// stale の線（ここでは 1 時間）に掛からなくても外して追記でき、**警告 1 行**で名乗る。
+///
+/// 死んだ pid は自分が起こして回収した子のもの（`/proc/<pid>` が無いことを前提 assert する）。
+/// 置いたばかりの lock なので mtime の線には掛からず、base（中身を見ない）は retry を待ち切って
+/// `StoreError::Lock` になる＝この歯は base で決定的に赤い。
+#[test]
+fn fleet_dead_owner_lock_is_removed_with_a_warning() {
+    let mut child = Command::new("true").spawn().expect("子を起こせる");
+    let dead = child.id();
+    child.wait().expect("子を回収できる");
+    assert!(!Path::new(&format!("/proc/{dead}")).exists(), "前提: 殺した pid {dead} は生きていない");
+    let strict = Manifest::parse(&lock_rules(50, 3_600_000)).expect("fixture を読める");
+    let strict = LockPolicy::from_rules(&strict).expect("2 行を引ける");
+
+    let dir = state_dir();
+    let lock = store::lock_path(&dir);
+    if let Some(parent) = lock.parent() {
+        fs::create_dir_all(parent).expect("dir を作れる");
+    }
+    fs::write(&lock, format!("{dead}\n")).expect("死んだ所有者の lock を置ける");
+    let ev = event(EventKind::RunCreated, "r1", "2026-09-09T00:00:00Z");
+    let warnings = store::append(&dir, &ev, strict).expect("所有者の死んだ lock を外して追記できる");
+    assert_eq!(
+        warnings.iter().map(|w| w.as_str()).collect::<Vec<&str>>(),
+        ["fleet: 所有者の死んだ lock を外した"],
+        "外したことを警告 1 行で名乗る（古い lock の警告とは別の理由）"
+    );
+    assert!(!lock.exists(), "lock は残らない");
+    assert_eq!(store::read_all(&dir).map(|found| found.len()), Ok(1), "追記は届いている");
+
+    // 生きている所有者の lock（自分の pid）は外さない＝retry を待ち切って error（極性不変）。
+    fs::write(&lock, format!("{}\n", std::process::id())).expect("生きた所有者の lock を置ける");
+    let blocked = store::append(&dir, &ev, strict);
+    assert!(matches!(blocked, Err(StoreError::Lock(_))), "生きている所有者の lock は待つ側: {blocked:?}");
+    fs::remove_file(&lock).ok();
+    fs::remove_dir_all(&dir).ok();
+}
+
 #[test]
 fn fleet_wait_times_out_with_typed_error() {
     let alive = std::process::id();
