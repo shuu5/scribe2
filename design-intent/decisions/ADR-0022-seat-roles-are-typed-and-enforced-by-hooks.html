@@ -52,6 +52,7 @@
     { "@id": "../spec/srs.html#FR42" },
     { "@id": "../spec/srs.html#FR43" },
     { "@id": "../spec/srs.html#FR44" },
+    { "@id": "../spec/srs.html#FR45" },
     { "@id": "../spec/srs.html#AC15" },
     { "@id": "../spec/srs.html#AC16" },
     { "@id": "../spec/srs.html#AC17" },
@@ -86,7 +87,7 @@
 
 <header class="doc-header">
   <h1>ADR-0022 — 席の役割と権能は閉じた型と rules 行で持ち、 hook が tool 呼出しの境界で執行し、 席の指示文は行から生成して session の開始時に注入する (対話面 R-C7-1 の値を planner の席へ・管理席は anchor ごと 1 席・ADR-0004 §2.6 / ADR-0016 §2.1 を部分 supersede・器の外の散文を規則の置き場にしない)</h1>
-  <div class="meta">Status: accepted &middot; Date: 2026-09-13 &middot; version 0.4.6 (拘束する constitution の版) &middot; C1 / C1.2 / C2.2 / C3 / C3.3 / C5 / C7 / C11.2 / C14 / C14.2 / C16 / C16.2 / N2 / N3 の適用を記録し、 ADR-0016 §2.1 (管理席 N 席) と ADR-0004 §2.6 (tmux 席の状態は MVP の event log に持たない) を §2.6 で部分 supersede し、 ADR-0003 §2.1 が rules 行に置いた対話面 R-C7-1 の値を「planner の席」へ改める &middot; 要件は SRS v0.7 (FR30 / FR40 / FR41 / FR42 / FR43 / FR44 / AC15〜AC19) が正本</div>
+  <div class="meta">Status: accepted &middot; Date: 2026-09-13 &middot; version 0.4.6 (拘束する constitution の版) &middot; C1 / C1.2 / C2.2 / C3 / C3.3 / C5 / C7 / C11.2 / C14 / C14.2 / C16 / C16.2 / N2 / N3 の適用を記録し、 ADR-0016 §2.1 (管理席 N 席) と ADR-0004 §2.6 (tmux 席の状態は MVP の event log に持たない) を §2.6 で部分 supersede し、 ADR-0003 §2.1 が rules 行に置いた対話面 R-C7-1 の値を「planner の席」へ改める &middot; 要件は SRS v0.7 (FR30 / FR40 / FR41 / FR42 / FR43 / FR44 / FR45 / AC15〜AC19) が正本</div>
 </header>
 <!-- folio:chrome-toc -->
 <nav class="toc" aria-label="ページ内目次">
@@ -123,7 +124,7 @@
     <dt>decided-by</dt><dd>user (2026-09-12) — planner の相談材料 (役割の規律をどこに置き、 どう強制するか) の論点 5 つに対する裁定 (要旨: 1 = 強制の芯は Role / Capability の閉じた型 + manifest 行。 2 = 役割の識別は器の席登録 (DB に記録・起動 script に組み込む)。 3 = 注入は SessionStart hook。 4 = 対話面 R-C7-1 を planner の席へ。 5 = 席層の land を folio2 の Rust 便の前提にする。 加えて「発話は止めなくてよい・機械で止めるときに planner の許可が要ると告げれば足りる・散文や字面でなく構造 / システム / 機械で規律を守らせる」) と、 要件書の grill (同日) の裁定 (Q1 = 役割の判定は登録 row だけ。 Q2 = 管理席は 1 席。 Q3 = 継続は must・席間の連絡は should)。 逐語は台帳 <code>s2-07l.155</code> の notes が原本で本 file には写さない (CON2)</dd>
     <dt>stakeholders</dt><dd>Developer, AI Agent, External Reviewer</dd>
     <dt>supersedes</dt><dd>次の文を<strong>部分 supersede</strong>する (§2.6): (i) <a href="./ADR-0016-default-delivery-structure-and-typed-question-record.html#s2-1-structure">ADR-0016 §2.1</a>「便の既定の配送構造を planner 1 席 + 管理席 N 席 (N ≥ 1・各席 1 口座)」を「anchor ごとに planner 1 席 + 管理席 1 席 (各席 1 口座)」と読む、 (ii) <a href="./ADR-0004-mvp-persistence-and-cross-version-formats.html#s2-6-out-of-scope">ADR-0004 §2.6</a>「口座・lease・退役・tmux 席の状態 (C3 の残りの列・C9) は MVP の event log に持たせない (SRS scope out)」を、 席の登録 row (役割・target・anchor・口座 label・起動の雛形) に限って supersede する (lease・退役は引き続き持たない。 口座残量は ADR-0017 §2.1 が既に supersede 済み)。 他の文は変えない。 R-C7-1 の値の変更 (§2.5) は <a href="./ADR-0003-constitution-v1-abandon-rewrite.html#s2-1-c7">ADR-0003 §2.1</a> が想定した「行の値の変更」であり supersede ではない (related)</dd>
-    <dt>related</dt><dd>ADR-0003 §2.1 (R-C7-1 の初期値「user 直」・§2.5 で値を改める・supersede ではない) / ADR-0009 §2.1 (runner の write-set guard と allowlist・pane を持たない子 process の執行) / ADR-0011 §2.1 (runner は plugin を積む) / ADR-0013 §2.1 / §2.2 (列挙は機械が持つ・variant の足し方) / ADR-0014 §2.1 (guard の定義と極性一覧) / ADR-0015 §2.2 (target は hook が渡す pane から解く) / ADR-0016 §2.3 (回答の権限は planner・管理席は中継) / ADR-0017 §2.3 (口座の label) / ADR-0018 §2.1 / §2.2 (復元 brief と命令行の pointer) / ADR-0019 §2.3 (人は質問の回答でだけ関わる) / ADR-0020 §2.2 / §2.4 (席の口座と立て直し・同じ便) / constitution C1 / C1.2 / C2 / C2.2 / C3 / C3.3 / C5 / C7 / C11.2 / C14 / C14.2 / C16 / C16.2 / N2 / N3 / SRS FR17 / FR18 / FR20 / FR22 / FR27 / FR30 / FR40 / FR41 / FR42 / FR43 / FR44 / AC15〜AC19 / NFR5</dd>
+    <dt>related</dt><dd>ADR-0003 §2.1 (R-C7-1 の初期値「user 直」・§2.5 で値を改める・supersede ではない) / ADR-0009 §2.1 (runner の write-set guard と allowlist・pane を持たない子 process の執行) / ADR-0011 §2.1 (runner は plugin を積む) / ADR-0013 §2.1 / §2.2 (列挙は機械が持つ・variant の足し方) / ADR-0014 §2.1 (guard の定義と極性一覧) / ADR-0015 §2.2 (target は hook が渡す pane から解く) / ADR-0016 §2.3 (回答の権限は planner・管理席は中継) / ADR-0017 §2.3 (口座の label) / ADR-0018 §2.1 / §2.2 (復元 brief と命令行の pointer) / ADR-0019 §2.3 (人は質問の回答でだけ関わる) / ADR-0020 §2.2 / §2.4 (席の口座と立て直し・同じ便) / constitution C1 / C1.2 / C2 / C2.2 / C3 / C3.3 / C5 / C7 / C11.2 / C14 / C14.2 / C16 / C16.2 / N2 / N3 / SRS FR17 / FR18 / FR20 / FR22 / FR27 / FR30 / FR40 / FR41 / FR42 / FR43 / FR44 / FR45 / AC15〜AC19 / NFR5</dd>
   </dl>
 </aside>
 
@@ -172,9 +173,9 @@
 
 <section id="s3-srs" class="informative">
 <h2>§3. SRS との関係 (正本は SRS)</h2>
-<p class="section-essence" data-audience="human">この記録が仕える要件は、 席の登録 (FR40)、 役割の権能 (FR41)、 席の指示文の注入 (FR42) と、 その受入基準 (AC15 / AC16 / AC17) です。 配送構造 (FR30) は同じ便で「管理席 1 席」に改まります。 席の継続 (FR43) と席間の連絡 (FR44) は要件書が正本で、 この記録は指示文がそれを名指す形だけを持ちます。</p>
+<p class="section-essence" data-audience="human">この記録が仕える要件は、 席の登録 (FR40)、 権能の所在 (FR41) と執行 (FR45)、 席の指示文の注入 (FR42) と、 その受入基準 (AC15 / AC16 / AC17) です。 配送構造 (FR30) は同じ便で「管理席 1 席」に改まります。 席の継続 (FR43) と席間の連絡 (FR44) は要件書が正本で、 この記録は指示文がそれを名指す形だけを持ちます。</p>
 <div data-audience="machine">
-<p>本 ADR が仕える要件は SRS v0.7 (本 ADR と同じ便で改訂) が正本である: <a href="../spec/srs.html#FR40">FR40</a> (席の登録・§2.1)・<a href="../spec/srs.html#FR41">FR41</a> (役割の権能・§2.2 / §2.3 / §2.5)・<a href="../spec/srs.html#FR42">FR42</a> (席の指示文の注入・§2.4)・<a href="../spec/srs.html#AC15">AC15</a> / <a href="../spec/srs.html#AC16">AC16</a> / <a href="../spec/srs.html#AC17">AC17</a>。 <a href="../spec/srs.html#FR30">FR30</a> (配送構造) は本便で「管理席 1 席・口座は便ごとに FR36」に改まり、 §2.6 がその supersede を持つ。 FR40 と用語集の「席の登録」は本便で「役割と anchor を鍵に・target は項目」へ揃える (§2.1)。 <a href="../spec/srs.html#FR43">FR43</a> (席の継続・<a href="../spec/srs.html#AC18">AC18</a>) と <a href="../spec/srs.html#FR44">FR44</a> (席間の連絡・<a href="../spec/srs.html#AC19">AC19</a>) は SRS が正本で本 ADR は決定を持たない (§2.8)。 不変の要件: <a href="../spec/srs.html#FR17">FR17</a> / <a href="../spec/srs.html#FR18">FR18</a> (生成物と CI の drift 検査・§2.4 の xtask はその 1 面)・<a href="../spec/srs.html#FR20">FR20</a> (hook の in-loop guard・§2.3 は variant 1 つを足す)・<a href="../spec/srs.html#FR22">FR22</a> (人由来の event は approval 以外 0 件・登録 event は machine)・<a href="../spec/srs.html#FR27">FR27</a> (管理 tick)・<a href="../spec/srs.html#NFR5">NFR5</a> (hook の予算)。 要件の文面はここには写さない。 enum の variant・行の kind の名・雛形の形・deny 文の字面は §2 と現物が持ち SRS は持たない。</p>
+<p>本 ADR が仕える要件は SRS v0.7 (本 ADR と同じ便で改訂) が正本である: <a href="../spec/srs.html#FR40">FR40</a> (席の登録・§2.1)・<a href="../spec/srs.html#FR41">FR41</a> (権能の所在・§2.2 / §2.5)・<a href="../spec/srs.html#FR45">FR45</a> (権能の執行・§2.3)・<a href="../spec/srs.html#FR42">FR42</a> (席の指示文の注入・§2.4)・<a href="../spec/srs.html#AC15">AC15</a> / <a href="../spec/srs.html#AC16">AC16</a> / <a href="../spec/srs.html#AC17">AC17</a>。 <a href="../spec/srs.html#FR30">FR30</a> (配送構造) は本便で「管理席 1 席・口座は便ごとに FR36」に改まり、 §2.6 がその supersede を持つ。 FR40 と用語集の「席の登録」は本便で「役割と anchor を鍵に・target は項目」へ揃える (§2.1)。 <a href="../spec/srs.html#FR43">FR43</a> (席の継続・<a href="../spec/srs.html#AC18">AC18</a>) と <a href="../spec/srs.html#FR44">FR44</a> (席間の連絡・<a href="../spec/srs.html#AC19">AC19</a>) は SRS が正本で本 ADR は決定を持たない (§2.8)。 不変の要件: <a href="../spec/srs.html#FR17">FR17</a> / <a href="../spec/srs.html#FR18">FR18</a> (生成物と CI の drift 検査・§2.4 の xtask はその 1 面)・<a href="../spec/srs.html#FR20">FR20</a> (hook の in-loop guard・§2.3 は variant 1 つを足す)・<a href="../spec/srs.html#FR22">FR22</a> (人由来の event は approval 以外 0 件・登録 event は machine)・<a href="../spec/srs.html#FR27">FR27</a> (管理 tick)・<a href="../spec/srs.html#NFR5">NFR5</a> (hook の予算)。 要件の文面はここには写さない。 enum の variant・行の kind の名・雛形の形・deny 文の字面は §2 と現物が持ち SRS は持たない。</p>
 </div>
 </section>
 
