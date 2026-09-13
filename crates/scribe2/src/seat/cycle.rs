@@ -13,7 +13,7 @@ use crate::polarity::{OnFailure, Polarity, Timing};
 use super::{inject, pane_of, sanitize_target, state, tmux_ok, StateDir, WmScan};
 use crate::fleet::json_lite::{self, Value};
 use crate::fleet::store::{self, LockPolicy};
-use crate::hook::{InjectionRecord, SCHEMA};
+use crate::hook::{seat_name, InjectionRecord, SCHEMA};
 use crate::rules::manifest::Manifest;
 use crate::rules::RuleValue;
 use std::fs::OpenOptions;
@@ -402,6 +402,8 @@ fn record(request: &Request, result: &Cycle, started: Instant) {
         // 数えていないことを 0 と書かない。
         tokens: None,
         wall_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+        seat: seat_name(request.target),
+        ts: state::now_secs(),
     };
     let Ok(policy) = LockPolicy::embedded() else {
         return;

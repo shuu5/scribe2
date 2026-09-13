@@ -14,7 +14,7 @@
 use crate::polarity::{OnFailure, Polarity, Timing};
 use super::{capture, input_tail, sanitize_target, state, tmux_ok, StateDir};
 use crate::fleet::store::{self, LockPolicy};
-use crate::hook::{InjectionRecord, SCHEMA};
+use crate::hook::{seat_name, InjectionRecord, SCHEMA};
 use std::path::{Path, PathBuf};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
@@ -44,6 +44,8 @@ pub const REASON_EMPTY: &str = "empty";
 pub const REASON_ABSENT: &str = "absent";
 /// tmux を撃てなかった。
 pub const REASON_TMUX_FAILED: &str = "tmux-failed";
+/// 送達した字面が入力欄に残り、Enter を送り直しても消費されない（[`Settled::EnterLost`]）。
+pub const REASON_ENTER_LOST: &str = "enter-lost";
 
 /// 注入 1 回の入力。
 pub struct Request<'a> {
@@ -65,19 +67,22 @@ pub struct Request<'a> {
 /// 席が busy な周は注入が入力欄に queue され、turn が終わる（次の submit）まで打刻が来ない。それでも
 /// 送達は成功している（実測 2026-09-11: `inject-residual` 9 件が全部 turn の終わりに消費されていた・
 /// bd `s2-07l.90`）ので、これは成功の**記録の detail** であって失敗の理由ではない。
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Settled {
     /// 送達 ts 以後の `UserPromptSubmit` の打刻が在る＝席が消費した。
     Consumed,
     /// 打刻 file は読めるが窓の内に新しい打刻が無い＝queue された（次の submit で消費される）。
     Queued,
+    /// 字面は入力欄に残ったまま Enter だけが落ちた周で、Enter を 1 回送り直しても窓の内に消費の
+    /// 打刻が来ない（[`nudge_enter`]・`s2-07l.150`）。queue とは違い turn の終わりに消費されない。
+    EnterLost,
     /// 消費を**測れない**（打刻 file が無い・読めない・置き場が解けない）。`false` と混ぜず、
     /// missing を消費と読み替えない（憲法 C10 の測定 / 未測定の弁別）。理由は [`Unmeasured`]。
     Unmeasured(Unmeasured),
 }
 
 /// 消費を測れない理由。**閉じた 3 値**（憲法 C11）。
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Unmeasured {
     /// 打刻 file が無い（hook が載っていない席）。
     StateMissing,
@@ -99,21 +104,49 @@ impl Unmeasured {
 }
 
 impl Settled {
-    /// 記録と表示の字面（`consumed=true|false|unknown`）。
+    /// 記録と表示の字面（`consumed=true|false|unknown`）。Enter が落ちた周は消費していない＝`false`。
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Consumed => "true",
-            Self::Queued => "false",
+            Self::Queued | Self::EnterLost => "false",
             Self::Unmeasured(_) => "unknown",
         }
     }
 
-    /// 測れなかった理由（測れた周は `None`）。
+    /// `consumed=` に添える理由（queue と消費の周は `None`）。Enter が落ちた周は `false` だけでは
+    /// queue と同じ顔になるので理由を名乗る（憲法 C10）。
     pub fn reason(self) -> Option<&'static str> {
         match self {
             Self::Consumed | Self::Queued => None,
+            Self::EnterLost => Some(REASON_ENTER_LOST),
             Self::Unmeasured(why) => Some(why.as_str()),
         }
+    }
+}
+
+/// 送り直すか（[`repair_of`] の答え）。**閉じた 2 値**（憲法 C11・bool で持たない）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Repair {
+    /// Enter だけを 1 回送り直す。
+    ResendEnter,
+    /// 何もしない（渡された [`Settled`] のまま）。
+    Keep,
+}
+
+/// 修復の門（pure・`s2-07l.150`）: **queue に落ちた ∧ 打刻が Idle ∧ 入力欄が目印を含む**、の 3 つが
+/// 同時に立つ周だけ [`Repair::ResendEnter`]。
+///
+/// Idle の席は turn を走らせていないので、queue に落ちた注入は turn の終わりに消費される形ではなく
+/// Enter だけが落ちた形である。入力欄に**自分の目印**が在ることを条件に入れるのは、人が後から
+/// 打ちかけた行へ Enter を押して他人の下書きを submit しないため（入力欄の門と同じ fail-closed の
+/// 向き）。目印が空白だけの周は自分の字面を弁別できないので送らない。
+pub fn repair_of(settled: Settled, read: state::Read, tail: Option<&str>, marker: &str) -> Repair {
+    let needle = marker.trim();
+    let own_draft = !needle.is_empty() && tail.is_some_and(|found| found.contains(needle));
+    if matches!(settled, Settled::Queued) && matches!(read, state::Read::Idle(_)) && own_draft {
+        Repair::ResendEnter
+    } else {
+        Repair::Keep
     }
 }
 
@@ -207,6 +240,50 @@ fn settled_of(evidence: Option<state::Evidence>) -> Settled {
         Some(state::Evidence::Unreadable) => Settled::Unmeasured(Unmeasured::StateUnreadable),
         None => Settled::Unmeasured(Unmeasured::StateDir),
     }
+}
+
+/// Enter だけが落ちた周を同じ周の中で修復する（窓は [`deliver`] と同じ既定・`s2-07l.150`）。
+pub fn nudge_enter(request: &Request, settled: Settled, read: state::Read) -> Settled {
+    nudge_enter_within(request, settled, read, SETTLE_STEP.saturating_mul(SETTLE_TRIES))
+}
+
+/// [`nudge_enter`] の窓を受ける形。pane を 1 回取り、[`repair_of`] が [`Repair::Keep`] なら渡された
+/// `settled` をそのまま返す。[`Repair::ResendEnter`] なら **Enter だけを 1 回**送り（text は再送しない
+/// ＝二重投函にならない）、送る前に取った基線から消費の打刻を窓の間だけ見る: 来れば `Consumed`、
+/// 来なければ `EnterLost`。Enter を送れない周も `EnterLost`（修復できなかった側＝次の周に譲る）。
+///
+/// 修復が要り得ない周（queue でない・Idle でない）は pane を取らない（tmux を撃たない）。pane を
+/// 取れない周は入力欄を読めない＝自分の目印を確かめられないので送らない（`Keep`）。**入力欄の門は
+/// 緩めない**（[`POLARITY`] は不変）: 修復はこの周の中で閉じ、閉じない周は次の周の門が名乗る。
+pub fn nudge_enter_within(request: &Request, settled: Settled, read: state::Read, window: Duration) -> Settled {
+    let Some(marker) = marker_of(request.payload) else {
+        return settled;
+    };
+    if repair_of(settled, read, Some(marker), marker) == Repair::Keep {
+        return settled;
+    }
+    let pane = capture(request.socket, request.target);
+    let tail = pane.as_deref().and_then(input_tail);
+    if repair_of(settled, read, tail, marker) == Repair::Keep {
+        return settled;
+    }
+    let seat = request
+        .state_dir
+        .map(|found| super::seat_dir(&found.path, request.target));
+    let watch = Watch {
+        seat: seat.as_deref().map(|dir| (dir, state::baseline(dir))),
+        since: state::now_secs(),
+    };
+    if !tmux_ok(request.socket, &["send-keys", "-t", request.target, "Enter"]) {
+        return Settled::EnterLost;
+    }
+    for _ in 0..tries_within(window) {
+        sleep(SETTLE_STEP);
+        if matches!(watch.evidence(), Some(state::Evidence::Found(_))) {
+            return Settled::Consumed;
+        }
+    }
+    Settled::EnterLost
 }
 
 /// 入力欄の門の断り。**閉じた 2 値**（憲法 C11: 境界ごとの enum・字面で routing しない）。
@@ -316,7 +393,8 @@ pub fn tick_path(state_dir: &Path, target: &str) -> PathBuf {
 ///
 /// `what` は payload の先頭そのまま（現物を加工しない）。その場で消費したかは tick の記録
 /// （`decision=inject … consumed=…`）と `seat inject` の stdout 行が持つ（planner 裁定 2026-09-11・
-/// 記録 schema は FR21 と共有ゆえ field は足さない）。
+/// 記録 schema は FR21 と共有ゆえ消費の field は足さない）。席（`seat`）と時刻（`ts`）は 3 面の
+/// 書き手が同じ `tick.jsonl` へ混ぜる行を弁別する列で、全 writer が持つ（`s2-07l.150`）。
 fn record(request: &Request, bytes: u64, started: Instant) {
     let Some(dir) = request.state_dir.map(|state| state.path.as_path()) else {
         return;
@@ -330,6 +408,8 @@ fn record(request: &Request, bytes: u64, started: Instant) {
         // 数えていないことを 0 と書かない。
         tokens: None,
         wall_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+        seat: seat_name(request.target),
+        ts: state::now_secs(),
     };
     let Ok(policy) = LockPolicy::embedded() else {
         return;
@@ -385,8 +465,54 @@ pub fn render_unconfirmed(reason: &str, state: Option<&StateDir>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{tries_within, SETTLE_STEP, SETTLE_TRIES};
+    use super::{repair_of, tries_within, Repair, Settled, Unmeasured, SETTLE_STEP, SETTLE_TRIES};
+    use crate::seat::state::{Event, Read};
     use std::time::Duration;
+
+    /// 修復の門の表（`s2-07l.150`）: **queue ∧ Idle ∧ 入力欄が目印を含む**の 3 つが揃う周だけ送り直す。
+    /// どれか 1 つを崩した周（消費済み・Enter 落ち・測れない 3 形／Busy・Stale・Missing・Unreadable／
+    /// 入力欄を読めない・空・他人の下書き・空白だけの目印）はすべて `Keep`。
+    #[test]
+    fn seat_attrib_repair_of_resends_only_when_queued_idle_and_own_draft() {
+        let marker = "管理 tick: seat-attrib";
+        let idle = Read::Idle(Event::Stop);
+        assert_eq!(repair_of(Settled::Queued, idle, Some(marker), marker), Repair::ResendEnter);
+        assert_eq!(
+            repair_of(Settled::Queued, Read::Idle(Event::SessionStart), Some("x 管理 tick: seat-attrib y"), marker),
+            Repair::ResendEnter,
+            "前後に字が在っても自分の目印を含めば送り直す"
+        );
+        for settled in [
+            Settled::Consumed,
+            Settled::EnterLost,
+            Settled::Unmeasured(Unmeasured::StateMissing),
+            Settled::Unmeasured(Unmeasured::StateUnreadable),
+            Settled::Unmeasured(Unmeasured::StateDir),
+        ] {
+            assert_eq!(repair_of(settled, idle, Some(marker), marker), Repair::Keep, "{settled:?}");
+        }
+        for read in [
+            Read::Busy(Event::UserPromptSubmit),
+            Read::Stale(Event::UserPromptSubmit),
+            Read::Missing,
+            Read::Unreadable,
+        ] {
+            assert_eq!(repair_of(Settled::Queued, read, Some(marker), marker), Repair::Keep, "{read:?}");
+        }
+        for tail in [None, Some(""), Some("人の打ちかけ")] {
+            assert_eq!(repair_of(Settled::Queued, idle, tail, marker), Repair::Keep, "{tail:?}");
+        }
+        assert_eq!(repair_of(Settled::Queued, idle, Some("   "), "   "), Repair::Keep, "空白だけの目印は弁別できない");
+    }
+
+    /// Enter が落ちた周の字面: `consumed=false` だが理由 `enter-lost` を名乗る（queue と同じ顔にしない）。
+    #[test]
+    fn seat_attrib_repair_of_enter_lost_names_its_reason() {
+        assert_eq!(Settled::EnterLost.as_str(), "false");
+        assert_eq!(Settled::EnterLost.reason(), Some("enter-lost"));
+        assert_eq!(Settled::Queued.as_str(), "false");
+        assert_eq!(Settled::Queued.reason(), None, "queue は理由を持たない（従来の字面）");
+    }
 
     /// 既定の窓（[`SETTLE_STEP`] × [`SETTLE_TRIES`]）は従来と同じ回数に写る（`deliver` の
     /// 既定 2 s が変わらないことの pin）。掛け算や剰余に化けた写しはここで落ちる。

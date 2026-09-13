@@ -48,7 +48,9 @@ stdout に 1 行 `[<NAME>/SessionStart] served version=<N> root=<root>` を出�
 
 ## 6. 注入計測の slot（FR21・NFR5・C6.3）
 
-- `pub struct InjectionRecord { schema: u64 (=1), who: String, what: String, when: String, bytes: u64, tokens: Option<u64>, wall_ms: u64 }`。
+- `pub struct InjectionRecord { schema: u64 (=1), who: String, what: String, when: String, bytes: u64, tokens: Option<u64>, wall_ms: u64, seat: Option<String>, ts: u64 }`。`seat` と `ts` は既存 key の後ろに足した optional な 2 列で、schema は 1 のまま（ADR-0004 §2.5 D-5・`s2-07l.150`）。
+  - `seat` = どの席の記録か（潰した target）。hook の側は生成 hooks.json の全 entry が渡す `--pane`（`$TMUX_PANE`）から tmux の target を解いて潰す（ADR-0015 §2.2・打刻と同じ解き方）。`--pane` が無い・空・解けない周は `null`（空文字の席を作らない・`tokens` と同じく解いていない値を埋めない）。tmux を撃つのは記録を書く周だけ（毎編集には撃たない・NFR5）。
+  - `ts` = 書いた時刻（1970 年からの秒・UTC）。席の打刻 `state.jsonl` の `ts` と同じ時計・同じ単位で、突合できる（fleet の RFC3339 文字列とは混ぜない）。
 - `append(state_dir, &InjectionRecord)` → `<state_dir>/inject.jsonl`（flat JSON 1 行・fleet と同じ `json_lite` と lock）。state dir は §2 の git config から（`--state-dir` で上書き）。
 - **C6.3 の「消費を記録する append-only store 1 つ」はこの file である**（events / verdicts は状態と審査結果）。
 - `session-start` は自分の出力について `who="hook:session-start"` / `what="session-start-header"` / `when="SessionStart"` / `bytes=出力 byte 数` / `tokens=None` / `wall_ms=実測` を 1 件書く。`pre-tool-use` の deny も `who="hook:pre-tool-use"` / `what="deny"` で 1 件書く。

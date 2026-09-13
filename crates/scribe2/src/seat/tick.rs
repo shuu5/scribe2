@@ -32,7 +32,7 @@
 use super::{cycle, heartbeat, inject, meter, pane_of, sanitize_target, state, WmScan};
 use crate::cli_outcome::{Outcome, RC_REFUSED};
 use crate::fleet::store::{self, LockPolicy};
-use crate::hook::{InjectionRecord, SCHEMA};
+use crate::hook::{seat_name, InjectionRecord, SCHEMA};
 use crate::name::NAME;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -347,7 +347,8 @@ fn judge(request: &Request, place: &super::StateDir, dir: &Path, seen: &Seen) ->
     // 退避の合図は**状態の門の外**（FR29「idle を待たずに」・busy な席へは queue の形で届く）。
     if let Some((pct, cap)) = over_cap(seen).filter(|_| !cycle::lock_is_live(dir, seen.ttl_s)) {
         let payload = externalize_pointer(pct, cap);
-        return (inject_line(request, place, dir, InjectKind::Externalize, &payload), None, None);
+        let signal = Signal { kind: InjectKind::Externalize, payload: &payload, state: seen.state };
+        return (inject_line(request, place, dir, &signal), None, None);
     }
     if let Some(reason) = gate_of(seen.state) {
         return (TickDecision::Noop(reason), None, None);
@@ -366,7 +367,8 @@ fn judge(request: &Request, place: &super::StateDir, dir: &Path, seen: &Seen) ->
     let payload = request
         .pointer
         .map_or_else(|| default_pointer(request.target), str::to_owned);
-    (inject_line(request, place, dir, InjectKind::Pointer, &payload), None, None)
+    let signal = Signal { kind: InjectKind::Pointer, payload: &payload, state: seen.state };
+    (inject_line(request, place, dir, &signal), None, None)
 }
 
 /// 打刻の合図の brake（`s2-07l.109`・planner 裁定 2026-09-12 案 A）: tick 自身の打刻（tick-stamp）の
@@ -461,31 +463,49 @@ fn parked(request: &Request, place: &super::StateDir, dir: &Path, seen: &Seen) -
     (noop, Some(cycle::summary(&result)), Some(stamp))
 }
 
+/// 注入する 1 行と、それを送る周の席の状態（[`inject_line`] の入力）。
+///
+/// 畳むのは憲法 C4 の引数上限（R-C4-4.args = 5）ゆえ: 修復の門（[`inject::repair_of`]）が席の状態を
+/// 読むので、素の引数で足すと 6 になる。
+struct Signal<'a> {
+    /// 何を注入するか。
+    kind: InjectKind,
+    /// 注入する 1 行。
+    payload: &'a str,
+    /// 席の状態の読み（typed・pane の字面ではない）。
+    state: state::Read,
+}
+
 /// 1 行を注入し、成立したら自打刻する（退避の合図も打刻の合図も同じ経路。自打刻は打刻の合図の
 /// brake〔[`pointer_recent`]〕にだけ効き、退避の合図と cycle は次の周も評価する）。busy な席へは
 /// queue の形で届く（`.90`）。
-fn inject_line(
-    request: &Request,
-    place: &super::StateDir,
-    dir: &Path,
-    kind: InjectKind,
-    payload: &str,
-) -> TickDecision {
-    let sent = inject::deliver(&inject::Request {
+///
+/// 送達の後に Enter だけが落ちた周を**同じ周の中で**修復する（[`inject::nudge_enter`]・`s2-07l.150`）。
+/// 修復が閉じない周（`EnterLost`）は自打刻しない＝次の周の判定がそれを測れる（入力欄に目印が残る
+/// 席は入力欄の門が断り、`pointer-recent` の黙った noop にならない）。再注入までは主張しない。
+fn inject_line(request: &Request, place: &super::StateDir, dir: &Path, signal: &Signal) -> TickDecision {
+    let sending = inject::Request {
         target: request.target,
         socket: request.socket,
-        payload,
+        payload: signal.payload,
         state_dir: Some(place),
-    });
-    match sent {
+    };
+    match inject::deliver(&sending) {
         // 注入の断り（`busy` 等）は noop の語彙と字が重なるので、**前置きで分ける**。
         inject::Delivery::Refused(reason) | inject::Delivery::Unconfirmed(reason) => {
             TickDecision::Error(format!("inject-{reason}"))
         }
-        inject::Delivery::Delivered(_, settled) => match heartbeat::touch_at(&stamp_path(dir)) {
-            Ok(()) => TickDecision::Inject(kind, settled),
-            Err(_) => TickDecision::Error(REASON_STAMP.to_owned()),
-        },
+        inject::Delivery::Delivered(_, settled) => {
+            match inject::nudge_enter(&sending, settled, signal.state) {
+                inject::Settled::EnterLost => {
+                    TickDecision::Inject(signal.kind, inject::Settled::EnterLost)
+                }
+                repaired => match heartbeat::touch_at(&stamp_path(dir)) {
+                    Ok(()) => TickDecision::Inject(signal.kind, repaired),
+                    Err(_) => TickDecision::Error(REASON_STAMP.to_owned()),
+                },
+            }
+        }
     }
 }
 
@@ -496,12 +516,16 @@ fn inject_line(
 /// その後ろ・planner 裁定 2026-09-12）で、cycle の評価まで進んだ周だけ載る。
 /// **置き場と出所は最後**（置き場が解けた周は判定に依らず載せる＝席側の打刻行と並べるだけで、
 /// 別の dir を見ていることを記録から弁別できる・`s2-07l.70`）。
+/// 注入した周は `consumed=<値>` の**直後**に理由（`reason=<語>`・queue と消費の周は無し）を足す
+/// （`seat inject` の行と同じ並び・既存 token の名前と順序は不変・`s2-07l.150`）: 測れない周と
+/// Enter が落ちた周を `false` と同じ顔で流さない（憲法 C10）。
 fn body(target: &str, judged: &Judged, place: &super::StateDir) -> String {
     let head = match judged.decision {
         TickDecision::Inject(kind, settled) => format!(
-            "decision=inject target={} consumed={} kind={}",
+            "decision=inject target={} consumed={}{} kind={}",
             sanitize_target(target),
             settled.as_str(),
+            settled.reason().map_or_else(String::new, |why| format!(" reason={why}")),
             kind.as_str()
         ),
         TickDecision::Noop(reason) => format!("decision=noop reason={}", reason.as_str()),
@@ -548,6 +572,8 @@ fn record(state_dir: &Path, target: &str, body: &str, started: Instant) {
         // 数えていないことを 0 と書かない。
         tokens: None,
         wall_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+        seat: seat_name(target),
+        ts: state::now_secs(),
     };
     let Ok(policy) = LockPolicy::embedded() else {
         return;

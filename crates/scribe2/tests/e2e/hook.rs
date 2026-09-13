@@ -1591,8 +1591,8 @@ fn seat_state_hook_stays_silent_when_it_cannot_stamp() {
     clean(&[&repo, &state, &sock_dir, &bare]);
 }
 
-/// 生成物 `hooks/hooks.json` は打刻の 2 entry（UserPromptSubmit / Stop）を持ち、打刻の 3 command 行が
-/// `--pane "$TMUX_PANE"` を受ける。guard の 2 行（pre-tool-use / permission-request）は受けない。
+/// 生成物 `hooks/hooks.json` は打刻の 2 entry（UserPromptSubmit / Stop）を持ち、5 つの command 行が
+/// すべて `--pane "$TMUX_PANE"` を受ける（打刻の席と記録の `seat` 列・`s2-07l.150`）。
 #[test]
 fn seat_state_hooks_json_carries_stamp_entries() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -1604,12 +1604,134 @@ fn seat_state_hooks_json_carries_stamp_entries() {
     for needle in ["\"UserPromptSubmit\"", "\"Stop\"", "hook user-prompt-submit", "hook stop"] {
         assert_eq!(body.matches(needle).count(), 1, "{needle} はちょうど 1 回: {body}");
     }
-    assert_eq!(body.matches(pane_arg).count(), 3, "打刻の 3 行だけが pane id を受ける: {body}");
+    assert_eq!(body.matches(pane_arg).count(), 5, "5 行すべてが pane id を受ける: {body}");
     for sub in ["session-start", "user-prompt-submit", "stop"] {
         assert_eq!(body.matches(&format!("hook {sub}{pane_arg}")).count(), 1, "{sub} の command 行に --pane");
     }
-    for sub in ["pre-tool-use", "permission-request"] {
-        assert_eq!(body.matches(&format!("hook {sub}\"")).count(), 1, "{sub} の command 行は --pane を持たない");
-    }
     assert_eq!(body.matches("\"type\": \"command\"").count(), 5, "entry は 5 つ: {body}");
+}
+
+// ─────────────────── 記録の席の列（`seat` / `ts`・`s2-07l.150`・接頭辞 `seat_attrib_`） ───────────────────
+
+/// 記録 1 行の `seat` / `ts` / `schema` / `tokens` を見る（key が**在ること**も見る＝`None` は key 不在）。
+fn assert_attributed(line: &str, seat: Option<&str>, why: &str) {
+    let expected = seat.map_or(json_lite::Value::Null, |found| json_lite::Value::Str(found.to_owned()));
+    assert_eq!(value_of(line, "seat"), Some(expected), "{why}: seat 列: {line}");
+    let ts = value_of(line, "ts").and_then(|value| value.as_num());
+    assert!(ts.is_some_and(|found| found > 1_700_000_000), "{why}: ts は 1970 年からの秒（0 や欠落でない）: {line}");
+    assert_eq!(value_of(line, "schema"), Some(json_lite::Value::Num(SCHEMA)), "{why}: schema は 1 のまま: {line}");
+    assert_eq!(value_of(line, "tokens"), Some(json_lite::Value::Null), "{why}: 数えていない値は null: {line}");
+}
+
+/// **測れない編集の記録が席を名乗る**: `--pane` 付きの pre-tool-use（transcript 無し）は通し、記録 1 行に
+/// 独立 socket の pane から解いた席の名（`session_window`）を持つ。`--pane` が無い・空・解けない周は
+/// `seat` が `null`（key は在る・空文字の席を作らない）。
+#[test]
+fn seat_attrib_hook_unmeasured_edit_records_the_seat_named_by_pane() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    let sock_dir = tmp();
+    let socket = socket_of(&sock_dir);
+    let name = "hookattrib";
+    let guard = start_seat(&socket, name);
+    assert!(guard.ready(), "独立 socket に session を立てられる");
+    let pane = pane_id_of(&socket, name);
+    let seat = format!("{name}_{name}");
+    let (state_s, target) = (state.display().to_string(), repo.join("src").join("lib.rs").display().to_string());
+    let cases: [(&str, Vec<&str>, Option<&str>); 4] = [
+        ("--pane 付き", vec!["pre-tool-use", "--state-dir", &state_s, "--pane", &pane, "--tmux-socket", &socket], Some(&seat)),
+        ("--pane 無し", vec!["pre-tool-use", "--state-dir", &state_s], None),
+        ("--pane 空", vec!["pre-tool-use", "--state-dir", &state_s, "--pane", "", "--tmux-socket", &socket], None),
+        ("解けない pane", vec!["pre-tool-use", "--state-dir", &state_s, "--pane", "%99999", "--tmux-socket", &socket], None),
+    ];
+    for (label, args, expected) in cases {
+        let before = inject_lines(&state).len();
+        let out = run_hook_args(&args, &seat_payload(&repo, "Edit", &target, None));
+        assert_silent(&out, &format!("{label}: 測れない周は通す"));
+        let lines = inject_lines(&state);
+        assert_eq!(lines.len(), before + 1, "{label}: 記録は 1 行増える（母集団 {}）: {lines:?}", lines.len());
+        let line = &lines[lines.len() - 1];
+        assert_eq!(what_of(line), "seat-guard-unmeasured reason=no-transcript-path", "{label}");
+        assert_attributed(line, expected, label);
+    }
+    drop(guard);
+    clean(&[&repo, &state, &sock_dir]);
+}
+
+/// cap 以上の編集は従来どおり止め（rc 2 + stderr 1 行 + stdout 0 byte）、記録は席を名乗る。
+#[test]
+fn seat_attrib_hook_cap_deny_records_the_seat() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    let sock_dir = tmp();
+    let socket = socket_of(&sock_dir);
+    let name = "hookattribcap";
+    let guard = start_seat(&socket, name);
+    assert!(guard.ready(), "独立 socket に session を立てられる");
+    let pane = pane_id_of(&socket, name);
+    let script = transcript_at(&state, "big.jsonl", &usage_jsonl(650_000));
+    let target = repo.join("src").join("lib.rs").display().to_string();
+    let before = inject_lines(&state).len();
+    let out = run_hook_args(
+        &["pre-tool-use", "--state-dir", &state.display().to_string(), "--pane", &pane, "--tmux-socket", &socket],
+        &seat_payload(&repo, "Edit", &target, Some(&script)),
+    );
+    assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "上限以上は rc 2");
+    assert!(out.stdout.is_empty(), "deny の stdout は 0 byte");
+    assert_eq!(stderr_lines(&out), 1, "deny の stderr は 1 行（席の解決は判定文を濁さない）: {}", stderr_text(&out));
+    let lines = inject_lines(&state);
+    assert_eq!(lines.len(), before + 1, "記録は 1 行だけ増える: {lines:?}");
+    let line = &lines[lines.len() - 1];
+    assert_eq!(what_of(line), "seat-guard-deny");
+    assert_attributed(line, Some(&format!("{name}_{name}")), "cap 以上");
+    drop(guard);
+    clean(&[&repo, &state, &sock_dir]);
+}
+
+/// session-start の名乗りと permission-request の deny の記録も、`--pane` から解いた席を持つ。
+#[test]
+fn seat_attrib_hook_session_start_and_permission_request_record_the_seat() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    let sock_dir = tmp();
+    let socket = socket_of(&sock_dir);
+    let name = "hookattribrest";
+    let guard = start_seat(&socket, name);
+    assert!(guard.ready(), "独立 socket に session を立てられる");
+    let pane = pane_id_of(&socket, name);
+    let seat = format!("{name}_{name}");
+
+    let out = run_hook_args(&["session-start", "--pane", &pane, "--tmux-socket", &socket], &stamp_payload(&repo, "sid-attrib"));
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "session-start は rc 0");
+    let lines = inject_lines(&state);
+    assert_eq!(lines.len(), 1, "名乗りの記録は 1 行: {lines:?}");
+    assert_eq!(what_of(&lines[0]), "session-start-header");
+    assert_attributed(&lines[0], Some(&seat), "session-start");
+
+    let out = run_hook_args(
+        &["permission-request", "--pane", &pane, "--tmux-socket", &socket],
+        &tool_payload(&repo, "Bash", "unused"),
+    );
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "承認の答えは rc 0");
+    let lines = inject_lines(&state);
+    assert_eq!(lines.len(), 2, "deny の記録が 1 行増える: {lines:?}");
+    assert_eq!(what_of(&lines[1]), "deny");
+    assert_attributed(&lines[1], Some(&seat), "permission-request");
+    drop(guard);
+    clean(&[&repo, &state, &sock_dir]);
+}
+
+/// 生成物 `hooks/hooks.json` の **5 entry すべて**が `--pane "$TMUX_PANE"` を渡す（記録の席の出所）。
+#[test]
+fn seat_attrib_hook_every_hooks_json_entry_passes_the_pane() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+    let body = fs::read_to_string(root.join("hooks").join("hooks.json"))
+        .unwrap_or_else(|err| panic!("hooks.json を読める: {err}"));
+    let pane_arg = " --pane \\\"$TMUX_PANE\\\"";
+    let entries = body.matches("\"type\": \"command\"").count();
+    assert_eq!(entries, 5, "entry は 5 つ（母集団）: {body}");
+    for sub in ["session-start", "pre-tool-use", "permission-request", "user-prompt-submit", "stop"] {
+        assert_eq!(body.matches(&format!("hook {sub}{pane_arg}")).count(), 1, "{sub} の command 行が pane id を渡す: {body}");
+    }
+    assert_eq!(body.matches(pane_arg).count(), entries, "pane id を渡す行は entry と同数: {body}");
 }

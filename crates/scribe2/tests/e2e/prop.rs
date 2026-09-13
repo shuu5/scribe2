@@ -704,3 +704,124 @@ mod wm_pointer {
         }
     }
 }
+
+/// 修復の門と記録の席の列の性質（(7) seat/inject.rs の `repair_of`・hook の `InjectionRecord`・`s2-07l.150`）。
+mod seat_attrib {
+    use super::{any_event, config, json_text, Event};
+    use proptest::prelude::*;
+    use vessel::fleet::json_lite::{self, Value};
+    use vessel::hook::{seat_name, InjectionRecord, SCHEMA as HOOK_SCHEMA};
+    use vessel::seat::inject::{repair_of, Repair, Settled, Unmeasured};
+    use vessel::seat::state::Read;
+
+    /// 送達の結果（closed enum の全 variant）。
+    fn any_settled() -> impl Strategy<Value = Settled> {
+        prop::sample::select(vec![
+            Settled::Consumed,
+            Settled::Queued,
+            Settled::EnterLost,
+            Settled::Unmeasured(Unmeasured::StateMissing),
+            Settled::Unmeasured(Unmeasured::StateUnreadable),
+            Settled::Unmeasured(Unmeasured::StateDir),
+        ])
+    }
+
+    /// 席の状態の読み（5 variant × 出所の event）。
+    fn any_read() -> impl Strategy<Value = Read> {
+        (any_event(), 0..5_u8).prop_map(|(event, at): (Event, u8)| match at {
+            0 => Read::Idle(event),
+            1 => Read::Busy(event),
+            2 => Read::Stale(event),
+            3 => Read::Missing,
+            _ => Read::Unreadable,
+        })
+    }
+
+    /// 1 行の flat JSON から `key` の値を引く（無ければ `None`）。
+    fn value_at(line: &str, key: &str) -> Option<Value> {
+        json_lite::parse_object(line)
+            .ok()?
+            .into_iter()
+            .find(|(found, _)| found == key)
+            .map(|(_, value)| value)
+    }
+
+    proptest! {
+        #![proptest_config(config())]
+
+        /// 任意の入力で panic せず、`ResendEnter` は **queue ∧ Idle ∧ 入力欄が目印を含む**の周に限る。
+        #[test]
+        fn prop_seat_attrib_repair_resends_only_when_all_three_hold(
+            settled in any_settled(),
+            read in any_read(),
+            tail in proptest::option::of(json_text()),
+            marker in json_text(),
+        ) {
+            if repair_of(settled, read, tail.as_deref(), &marker) == Repair::ResendEnter {
+                prop_assert_eq!(settled, Settled::Queued);
+                prop_assert!(matches!(read, Read::Idle(_)), "{:?}", read);
+                let needle = marker.trim();
+                prop_assert!(!needle.is_empty(), "{:?}", marker);
+                prop_assert!(tail.as_deref().is_some_and(|found| found.contains(needle)), "{:?} / {:?}", tail, marker);
+            }
+        }
+
+        /// 3 条件が揃う周は `ResendEnter` で、**どれか 1 つを崩すと必ず `Keep`**（目印は大文字か数字で
+        /// 始まり、前後の字は小文字と空白だけ＝前後だけで目印を作れない形）。
+        #[test]
+        fn prop_seat_attrib_repair_keeps_when_any_condition_breaks(
+            prefix in "[a-z ]{0,8}",
+            marker in "[A-Z0-9][A-Za-z0-9:_-]{0,15}",
+            suffix in "[a-z ]{0,8}",
+            event in any_event(),
+            other in any_settled(),
+            off in any_read(),
+        ) {
+            let tail = format!("{prefix}{marker}{suffix}");
+            let idle = Read::Idle(event);
+            prop_assert_eq!(repair_of(Settled::Queued, idle, Some(&tail), &marker), Repair::ResendEnter);
+            if other != Settled::Queued {
+                prop_assert_eq!(repair_of(other, idle, Some(&tail), &marker), Repair::Keep);
+            }
+            if !matches!(off, Read::Idle(_)) {
+                prop_assert_eq!(repair_of(Settled::Queued, off, Some(&tail), &marker), Repair::Keep);
+            }
+            prop_assert_eq!(repair_of(Settled::Queued, idle, None, &marker), Repair::Keep);
+            let foreign = format!("{prefix}{suffix}");
+            prop_assert_eq!(repair_of(Settled::Queued, idle, Some(&foreign), &marker), Repair::Keep);
+        }
+
+        /// 任意の target と payload で、記録の 1 行は `seat` と `ts` の key を必ず持ち、`seat` は `null` か
+        /// **非空**（空文字の席を作らない）。書き手と同じ `seat_name` を通した値も、任意の `Option` の値も。
+        #[test]
+        fn prop_seat_attrib_record_line_carries_seat_and_ts(
+            target in json_text(),
+            payload in json_text(),
+            raw in proptest::option::of(json_text()),
+            ts in any::<u64>(),
+        ) {
+            for seat in [seat_name(&target), raw.clone()] {
+                let record = InjectionRecord {
+                    schema: HOOK_SCHEMA,
+                    who: "seat-inject".to_owned(),
+                    what: payload.clone(),
+                    when: "inject".to_owned(),
+                    bytes: 0,
+                    tokens: None,
+                    wall_ms: 0,
+                    seat,
+                    ts,
+                };
+                let line = record.to_line();
+                let found = value_at(&line, "seat");
+                let named = matches!(found, Some(Value::Str(ref text)) if !text.is_empty());
+                prop_assert!(named || found == Some(Value::Null), "{:?}", line);
+                prop_assert_eq!(value_at(&line, "ts"), Some(Value::Num(ts)), "{:?}", line);
+                prop_assert_eq!(value_at(&line, "schema"), Some(Value::Num(1)), "{:?}", line);
+                prop_assert_eq!(value_at(&line, "tokens"), Some(Value::Null), "{:?}", line);
+            }
+            // 潰しは長さを変えない＝席が null になるのは target が空の周だけ。
+            prop_assert_eq!(seat_name(&target).is_none(), target.is_empty());
+        }
+    }
+}

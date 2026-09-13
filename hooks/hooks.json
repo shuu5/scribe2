@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${SCRIBE2_BIN:-scribe2}\" hook pre-tool-use",
+            "command": "\"${SCRIBE2_BIN:-scribe2}\" hook pre-tool-use --pane \"$TMUX_PANE\"",
             "timeout": 10
           }
         ]
@@ -29,7 +29,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${SCRIBE2_BIN:-scribe2}\" hook permission-request",
+            "command": "\"${SCRIBE2_BIN:-scribe2}\" hook permission-request --pane \"$TMUX_PANE\"",
             "timeout": 10
           }
         ]

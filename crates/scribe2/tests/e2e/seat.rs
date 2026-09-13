@@ -3850,11 +3850,12 @@ fn seat_state_cycle_sends_clear_despite_spinner_text_when_stamped_idle() {
 #[test]
 fn seat_state_tick_sends_externalize_pointer_regardless_of_stamp() {
     // `consumed=` は打刻由来（`s2-07l.112`）: file が在れば新しい打刻が来ないので false、無い・読めない
-    // 席は測れないので unknown（tick 行は既存 token のまま＝理由は `seat inject` の行が持つ）。
+    // 席は測れないので unknown で、tick 行も `consumed=` の直後に理由を名乗る（`seat inject` の行と同じ
+    // 並び・`s2-07l.150`）。
     let cases = [
         (StateFix::Busy { age_s: 0 }, ST_BUSY, "false"),
-        (StateFix::Absent, ST_MISSING, "unknown"),
-        (StateFix::Unreadable, ST_UNREADABLE, "unknown"),
+        (StateFix::Absent, ST_MISSING, "unknown reason=state-missing"),
+        (StateFix::Unreadable, ST_UNREADABLE, "unknown reason=state-unreadable"),
         (StateFix::Busy { age_s: STALE_S + 1 }, ST_STALE, "false"),
     ];
     for (at, (fix, column, consumed)) in cases.into_iter().enumerate() {
@@ -3891,6 +3892,269 @@ fn seat_state_tick_sends_externalize_pointer_regardless_of_stamp() {
         drop(guard);
         fs::remove_dir_all(&dir).ok();
     }
+}
+
+// ─────────────────── Enter 落ちの修復と記録の席の列（`s2-07l.150`・接頭辞 `seat_attrib_`） ───────────────────
+
+/// Enter 落ちの歯が注入する 1 行（ASCII＝pane の幅で折り返さない・目印は最初の非空行＝この全文）。
+const ATTRIB_POINTER: &str = "attrib: seat-attrib-draft";
+
+/// **Enter を submit にしない**席（prompt を 1 つ出して入力を読み捨てる）を独立 socket に立てる。
+///
+/// tty の echo は残るので、送った字面は最後の prompt 行の右に残り、Enter は改行を描くだけで新しい
+/// prompt も打刻も出さない＝実機の「Enter だけが落ちた周」と同じ形（壁時計の閾値は使わない）。
+fn start_enter_lost_seat(socket: &str, name: &str) -> IsolatedSeat {
+    let mut seat = IsolatedSeat {
+        socket: socket.to_owned(),
+        name: name.to_owned(),
+        ready: false,
+    };
+    let out = tmux(
+        socket,
+        &["new-session", "-d", "-s", name, "-x", "120", "-y", "40", "sh", "-c", "printf '\u{276f} '; exec cat >/dev/null"],
+    );
+    seat.ready = out.status.success() && wait_prompt(socket, name);
+    seat
+}
+
+/// 修復の歯の置き場を組む（退避物 0 件・打刻は `fix`・判定に使う pane は `pane`）。
+fn attrib_setup(dir: &Path, name: &str, fix: StateFix, pane: &str) {
+    fs::create_dir_all(dir.join("wm")).ok();
+    write_state(&seat_dir_of(&dir.join("state"), name), fix);
+    fs::write(dir.join("pane.txt"), pane).ok();
+}
+
+/// 修復の歯の tick を 1 回撃つ（判定は `--capture-file`・送信は独立 socket の席）。
+fn attrib_tick(dir: &Path, name: &str, socket: &str) -> Output {
+    let (wm, state, pane) = (
+        dir.join("wm").display().to_string(),
+        dir.join("state").display().to_string(),
+        dir.join("pane.txt").display().to_string(),
+    );
+    run_seat(&[
+        "tick", "--target", name, "--wm-dir", &wm, "--tmux-socket", socket, "--state-dir", &state,
+        "--capture-file", &pane, "--pointer", ATTRIB_POINTER,
+    ])
+}
+
+/// tick-stamp の在処（契約の字面から組む）。
+fn tick_stamp_of(dir: &Path, name: &str) -> PathBuf {
+    seat_dir_of(&dir.join("state"), name).join("tick-stamp")
+}
+
+/// 記録 1 行の flat JSON から `key` の値を引く（無ければ `None`）。
+fn json_value(line: &str, key: &str) -> Option<vessel::fleet::json_lite::Value> {
+    vessel::fleet::json_lite::parse_object(line)
+        .ok()?
+        .into_iter()
+        .find(|(found, _)| found == key)
+        .map(|(_, value)| value)
+}
+
+/// (1) idle ∧ 送った目印が入力欄に残る周: Enter だけを送り直し、それでも消費の打刻が来ないので
+/// `consumed=false reason=enter-lost`・**tick-stamp を打たない**・目印は 1 つのまま（text を再送しない）。
+/// base は Enter 落ちを queue と同じ `consumed=false` で流し、自打刻する（RED）。
+#[test]
+fn seat_attrib_tick_resends_enter_once_and_reports_enter_lost() {
+    let dir = tmp();
+    let socket = socket_of(&dir);
+    let name = "seatattriblost";
+    let guard = start_enter_lost_seat(&socket, name);
+    assert!(guard.ready(), "Enter を submit にしない席を立てられる");
+    attrib_setup(&dir, name, StateFix::Idle, IDLE_PANE);
+    let state = dir.join("state");
+
+    let out = attrib_tick(&dir, name, &socket);
+
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(
+        stdout_of(&out),
+        format!(
+            "seat: tick decision=inject target={name} consumed=false reason=enter-lost kind=pointer{CTX_10}{ST_IDLE}{}\n",
+            provenance(&state, "flag")
+        ),
+        "送り直しても消費されない周は enter-lost を名乗る"
+    );
+    assert!(!tick_stamp_of(&dir, name).exists(), "修復が閉じない周は tick-stamp を打たない");
+    let pane = capture(&socket, name);
+    assert_eq!(pane.matches(ATTRIB_POINTER).count(), 1, "text は再送しない（目印は 1 つのまま）: {pane}");
+    let recorded = fs::read_to_string(tick_file(&state, name)).unwrap_or_default();
+    assert!(
+        recorded.lines().last().is_some_and(|line| line.contains("consumed=false reason=enter-lost kind=pointer")),
+        "記録の判定行も同じ理由: {recorded}"
+    );
+    drop(guard);
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// (2) 同じ席で tick を 2 回撃つと、2 周目は入力欄の門が断る（`decision=error reason=inject-busy`・rc 1）。
+/// **`pointer-recent` ではない**＝1 周目が stamp を打っていないことがここで測れる（base は 1 周目で自打刻
+/// するので 2 周目が `decision=noop reason=pointer-recent`・RED）。
+#[test]
+fn seat_attrib_tick_next_round_names_the_busy_input_not_pointer_recent() {
+    let dir = tmp();
+    let socket = socket_of(&dir);
+    let name = "seatattribnext";
+    let guard = start_enter_lost_seat(&socket, name);
+    assert!(guard.ready(), "Enter を submit にしない席を立てられる");
+    attrib_setup(&dir, name, StateFix::Idle, IDLE_PANE);
+    let state = dir.join("state");
+
+    let first = attrib_tick(&dir, name, &socket);
+    assert_eq!(rc_of(&first), i32::from(RC_OK), "stderr={}", stderr_of(&first));
+    let second = attrib_tick(&dir, name, &socket);
+
+    assert_eq!(rc_of(&second), i32::from(RC_REFUSED), "stdout={}", stdout_of(&second));
+    assert_eq!(stdout_of(&second), "", "error の周は stdout 0 byte");
+    assert_eq!(
+        stderr_of(&second),
+        format!("seat: tick decision=error reason=inject-busy{CTX_10}{ST_IDLE}{}\n", provenance(&state, "flag")),
+        "入力欄に目印が残る席は入力欄の門が名乗る（黙った pointer-recent にならない）"
+    );
+    assert!(!tick_stamp_of(&dir, name).exists(), "2 周とも tick-stamp を打たない");
+    assert_eq!(capture(&socket, name).matches(ATTRIB_POINTER).count(), 1, "2 周目は 1 key も送らない");
+    drop(guard);
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// (3) idle ∧ 入力欄が空（`sh -i` は受けた行を実行して prompt を描き直す）: 修復は発火せず、従来どおり
+/// `consumed=false`（理由なし）で自打刻する。
+#[test]
+fn seat_attrib_tick_empty_input_keeps_queued_and_stamps() {
+    let dir = tmp();
+    let socket = socket_of(&dir);
+    let name = "seatattribempty";
+    let guard = start_seat(&socket, name);
+    assert!(guard.ready(), "独立 socket に prompt 付きの session を立てられる");
+    attrib_setup(&dir, name, StateFix::Idle, IDLE_PANE);
+
+    let out = attrib_tick(&dir, name, &socket);
+
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(
+        stdout_of(&out),
+        format!("seat: tick decision=inject target={name} consumed=false kind=pointer{CTX_10}{ST_IDLE}{}\n", provenance(&dir.join("state"), "flag")),
+        "入力欄が空の周は queue のまま（reason を足さない）"
+    );
+    assert!(tick_stamp_of(&dir, name).exists(), "修復しない周は従来どおり自打刻する");
+    drop(guard);
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// (4) 打刻が Busy の席への退避の合図: 目印が入力欄に残る席でも**送り直さない**（idle でない周は
+/// turn の終わりに消費される queue）。従来どおり `consumed=false`（理由なし）で自打刻する。
+#[test]
+fn seat_attrib_tick_busy_seat_is_not_nudged() {
+    let dir = tmp();
+    let socket = socket_of(&dir);
+    let name = "seatattribbusy";
+    let guard = start_enter_lost_seat(&socket, name);
+    assert!(guard.ready(), "Enter を submit にしない席を立てられる");
+    attrib_setup(&dir, name, StateFix::Busy { age_s: 0 }, &busy_pane_at(96));
+
+    let out = attrib_tick(&dir, name, &socket);
+
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(
+        stdout_of(&out),
+        format!("seat: tick decision=inject target={name} consumed=false kind=externalize context=96{ST_BUSY}{}\n", provenance(&dir.join("state"), "flag")),
+        "Busy の席は修復の門を通らない"
+    );
+    assert!(tick_stamp_of(&dir, name).exists(), "修復しない周は従来どおり自打刻する");
+    assert_eq!(capture(&socket, name).matches("/ready-compaction").count(), 1, "退避の合図は 1 回だけ届く");
+    drop(guard);
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// (5) 打刻 file が無い・読めない席: tick 行も `consumed=unknown` の直後に理由を名乗る（C10: 測れて
+/// いない周を `false` と同じ顔で流さない・`seat inject` の行と同じ並び）。記録の判定行も同じ字面。
+#[test]
+fn seat_attrib_tick_names_the_unmeasured_reason() {
+    for (fix, column, reason) in [
+        (StateFix::Absent, ST_MISSING, "state-missing"),
+        (StateFix::Unreadable, ST_UNREADABLE, "state-unreadable"),
+    ] {
+        let dir = tmp();
+        let socket = socket_of(&dir);
+        let name = "seatattribunknown";
+        let guard = start_seat(&socket, name);
+        assert!(guard.ready(), "{reason}: 独立 socket に prompt 付きの session を立てられる");
+        attrib_setup(&dir, name, fix, &busy_pane_at(96));
+        let state = dir.join("state");
+
+        let out = attrib_tick(&dir, name, &socket);
+
+        assert_eq!(rc_of(&out), i32::from(RC_OK), "{reason}: stderr={}", stderr_of(&out));
+        let body = format!("decision=inject target={name} consumed=unknown reason={reason} kind=externalize context=96{column}");
+        assert_eq!(stdout_of(&out), format!("seat: tick {body}{}\n", provenance(&state, "flag")), "{reason}");
+        let recorded = fs::read_to_string(tick_file(&state, name)).unwrap_or_default();
+        assert!(
+            recorded.lines().last().is_some_and(|line| line.contains(&format!(r#""what":"{body} "#))),
+            "{reason}: 記録の判定行も同じ字面: {recorded}"
+        );
+        drop(guard);
+        fs::remove_dir_all(&dir).ok();
+    }
+}
+
+/// 記録の書き手 3 面（tick / inject / cycle）が**同じ `tick.jsonl`** に書く行は、どれも潰した席の名
+/// （`seat`）と時刻（`ts`・1970 年からの秒）を持ち、`schema` 1 と `tokens` null は不変。退避して止まって
+/// いる席へ tick を撃ち、cycle（`/clear` → 復元の inject）まで 1 周で回して 3 種の `who` を弁別して数える。
+/// `ts` は作り直しの打刻（`SessionStart`）の ts **以上**（3 行とも作り直しを確認した後に書く・等号は pin しない）。
+#[test]
+fn seat_attrib_record_tick_inject_and_cycle_lines_name_the_seat() {
+    let dir = tmp();
+    let socket = socket_of(&dir);
+    let name = "seatattribrec";
+    let target = format!("{name}:0");
+    let seat = format!("{name}_0");
+    let state = dir.join("state");
+    let stamps = state_file(&seat_dir_of(&state, &seat));
+    stamp_idle(&state, &seat);
+    let guard = start_clearing_seat(&socket, name, &dir.join("seat.log"), &stamps, (FakeStamp::Now, FakeStamp::Now));
+    assert!(guard.ready(), "偽の席を立てられる");
+    let wm = dir.join("wm");
+    wm_file(&wm, "working-memory.rec.md", &target);
+    fs::write(dir.join("pane.txt"), IDLE_PANE).ok();
+    let rules = fast_rules(&dir);
+    let (wm_s, state_s, pane_s) = (
+        wm.display().to_string(),
+        state.display().to_string(),
+        dir.join("pane.txt").display().to_string(),
+    );
+
+    let out = run_seat(&[
+        "tick", "--target", &target, "--wm-dir", &wm_s, "--tmux-socket", &socket, "--state-dir", &state_s,
+        "--capture-file", &pane_s, "--rules", &rules,
+    ]);
+
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert!(stdout_of(&out).contains(" cycle=done "), "cycle まで 1 周で回る: {}", stdout_of(&out));
+    let stamped = fs::read_to_string(&stamps).unwrap_or_default();
+    let rebuilt = stamped
+        .lines()
+        .filter(|line| json_value(line, "event") == Some(vessel::fleet::json_lite::Value::Str("SessionStart".to_owned())))
+        .find_map(|line| json_value(line, "ts").and_then(|value| value.as_num()));
+    assert!(rebuilt.is_some(), "作り直しの打刻が在る: {stamped}");
+    let recorded = fs::read_to_string(tick_file(&state, &seat)).unwrap_or_default();
+    let lines: Vec<&str> = recorded.lines().collect();
+    for who in ["seat-inject", "seat-cycle", "seat-tick"] {
+        let count = lines
+            .iter()
+            .filter(|line| json_value(line, "who") == Some(vessel::fleet::json_lite::Value::Str(who.to_owned())))
+            .count();
+        assert_eq!(count, 1, "{who} の行はちょうど 1 つ（母集団 {} 行）: {recorded}", lines.len());
+    }
+    assert_eq!(lines.len(), 3, "3 面が 1 行ずつ: {recorded}");
+    for line in &lines {
+        assert_eq!(json_value(line, "seat"), Some(vessel::fleet::json_lite::Value::Str(seat.clone())), "席の名（潰した target）: {line}");
+        let ts = json_value(line, "ts").and_then(|value| value.as_num());
+        assert!(ts.is_some_and(|found| rebuilt.is_some_and(|at| found >= at)), "ts は作り直しの打刻以上: {line} / {rebuilt:?}");
+        assert_eq!(json_value(line, "schema"), Some(vessel::fleet::json_lite::Value::Num(1)), "schema は 1 のまま: {line}");
+        assert_eq!(json_value(line, "tokens"), Some(vessel::fleet::json_lite::Value::Null), "tokens は null のまま: {line}");
+    }
+    drop(guard);
+    fs::remove_dir_all(&dir).ok();
 }
 
 // ─────────────────── 作り直しと送達の証拠（打刻由来・`s2-07l.112`・接頭辞 `seat_evidence_`） ───────────────────

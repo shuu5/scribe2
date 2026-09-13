@@ -48,7 +48,8 @@ const SUB_USER_PROMPT_SUBMIT: &str = "user-prompt-submit";
 /// `Stop` に紐づく subcommand（席の状態の打刻 = Idle）。
 const SUB_STOP: &str = "stop";
 
-/// 打刻 hook に自席の pane id を渡す引数（ADR-0015 §2.2）。
+/// hook に自席の pane id を渡す引数（ADR-0015 §2.2）。**全 entry が持つ**: 打刻の席と記録の
+/// `seat` 列は同じ pane id から解く（`s2-07l.150`）。
 ///
 /// `$TMUX_PANE` の展開は **Claude Code が hook を起動する shell** が行う（`${<NAME_UPPER>_BIN}`
 /// と同じ場所・同じ生成器）。core は env を読まず、typed な引数 `--pane` で受ける。`--tmux-socket`
@@ -85,9 +86,8 @@ pub fn render_marketplace(name: &str) -> String {
 ///
 /// `${<NAME_UPPER>_BIN:-<NAME>}` の展開は **Claude Code が hook を起動する shell**
 /// が行う。器そのものは env を 1 つも読まない（憲法 C2.2・ADR-0004 §2.4）。
-fn command(name: &str, sub: &str, stamps: bool) -> String {
-    let pane = if stamps { PANE_ARG } else { "" };
-    format!("\\\"${{{}_BIN:-{name}}}\\\" hook {sub}{pane}", name.to_uppercase())
+fn command(name: &str, sub: &str) -> String {
+    format!("\\\"${{{}_BIN:-{name}}}\\\" hook {sub}{PANE_ARG}", name.to_uppercase())
 }
 
 /// 1 event 分の材料。
@@ -98,8 +98,6 @@ struct Hook<'a> {
     matcher: Option<&'a str>,
     /// 紐づく subcommand。
     sub: &'a str,
-    /// 席の状態を打刻する hook か（`--pane "$TMUX_PANE"` を渡す）。
-    stamps: bool,
 }
 
 /// 1 event 分の entry を組む。
@@ -111,26 +109,18 @@ fn entry(hook: &Hook, name: &str, timeout: u64) -> String {
     format!(
         "    \"{}\": [\n      {{\n{head}        \"hooks\": [\n          {{\n            \"type\": \"command\",\n            \"command\": \"{}\",\n            \"timeout\": {timeout}\n          }}\n        ]\n      }}\n    ]",
         hook.event,
-        command(name, hook.sub, hook.stamps)
+        command(name, hook.sub)
     )
 }
 
 /// hooks.json 本文を組み立てる（entry は 5 つ・timeout は rules 行を写す）。
-///
-/// 打刻の 3 つ（SessionStart / UserPromptSubmit / Stop）は `--pane "$TMUX_PANE"` を持つ
-/// （設計 seat-state.md §3）。
 pub fn render_hooks(name: &str, timeout: u64) -> String {
     let hooks = [
-        Hook { event: "SessionStart", matcher: None, sub: SUB_SESSION_START, stamps: true },
-        Hook { event: "PreToolUse", matcher: Some(MATCHER), sub: SUB_PRE_TOOL_USE, stamps: false },
-        Hook {
-            event: "PermissionRequest",
-            matcher: Some(MATCHER_PERMISSION),
-            sub: SUB_PERMISSION_REQUEST,
-            stamps: false,
-        },
-        Hook { event: "UserPromptSubmit", matcher: None, sub: SUB_USER_PROMPT_SUBMIT, stamps: true },
-        Hook { event: "Stop", matcher: None, sub: SUB_STOP, stamps: true },
+        Hook { event: "SessionStart", matcher: None, sub: SUB_SESSION_START },
+        Hook { event: "PreToolUse", matcher: Some(MATCHER), sub: SUB_PRE_TOOL_USE },
+        Hook { event: "PermissionRequest", matcher: Some(MATCHER_PERMISSION), sub: SUB_PERMISSION_REQUEST },
+        Hook { event: "UserPromptSubmit", matcher: None, sub: SUB_USER_PROMPT_SUBMIT },
+        Hook { event: "Stop", matcher: None, sub: SUB_STOP },
     ];
     let entries: Vec<String> = hooks.iter().map(|hook| entry(hook, name, timeout)).collect();
     format!("{{\n  \"hooks\": {{\n{}\n  }}\n}}\n", entries.join(",\n"))
@@ -378,21 +368,14 @@ mod tests {
                 "{event} の entry がちょうど 1 つ在る"
             );
         }
-        // 打刻の 3 行だけが pane id を受ける（guard の 2 行には付かない・設計 seat-state.md §3）。
+        // 5 行すべてが pane id を受ける（打刻の席と記録の `seat` 列・`s2-07l.150`）。
         let pane_arg = " --pane \\\"$TMUX_PANE\\\"";
-        assert_eq!(tracked.matches(pane_arg).count(), 3, "打刻 hook の command 行 3 つに --pane が付く");
-        for sub in ["session-start", "user-prompt-submit", "stop"] {
+        assert_eq!(tracked.matches(pane_arg).count(), 5, "hook の command 行 5 つに --pane が付く");
+        for sub in ["session-start", "pre-tool-use", "permission-request", "user-prompt-submit", "stop"] {
             assert_eq!(
                 tracked.matches(&format!("hook {sub}{pane_arg}")).count(),
                 1,
                 "{sub} の command 行が pane id を受ける"
-            );
-        }
-        for sub in ["pre-tool-use", "permission-request"] {
-            assert_eq!(
-                tracked.matches(&format!("hook {sub}\"")).count(),
-                1,
-                "{sub} の command 行は pane id を受けない（打刻しない）"
             );
         }
     }
