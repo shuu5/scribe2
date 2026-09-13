@@ -8,6 +8,7 @@ pub mod cli;
 pub mod json_lite;
 pub mod json_tree;
 pub mod store;
+pub mod usage;
 
 use crate::polarity::{OnFailure, Polarity, Timing};
 use json_lite::Value;

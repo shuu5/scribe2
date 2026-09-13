@@ -1340,3 +1340,396 @@ fn fleet_json_tree_polarity_is_fail_closed_outside_the_guard_list() {
         vessel::polarity::ALL.len()
     );
 }
+
+/// `fleet usage` の歯の rules fixture が名乗る待ち時間（埋め込みの値と違う数にして出所を測る）。
+const USAGE_TIMEOUT_S: u64 = 13;
+
+/// 期限の遠い credential の `expiresAt`（2100-01-01 の epoch ms）。
+const FAR_EXPIRES_MS: u64 = 4_102_444_800_000;
+
+/// 口座 a1 / a2 の fixture token（不在を数える字面・実在の token ではない）。
+const TOKEN_A1: &str = "tok-a1-7f3c9e0d";
+const TOKEN_A2: &str = "tok-a2-b81d04aa";
+
+/// 実測の応答と同じ形の本文（`+00:00` の reset・小数の使用率・`weekly_scoped` 1 要素）。
+const LIVE_BODY: &str = r#"{
+  "five_hour": {"utilization": 0.97, "resets_at": "2026-09-12T05:00:00.412000+00:00"},
+  "seven_day": {"utilization": 0.125, "resets_at": "2026-09-18T00:00:00+00:00"},
+  "limits": [
+    {"kind": "weekly_scoped", "id": null,
+     "scope": {"model": {"display_name": "Opus 5", "id": null}},
+     "utilization": 1.25, "resets_at": "2026-09-18T00:00:00Z"},
+    {"kind": "weekly", "id": null, "utilization": 0.5, "resets_at": "2026-09-18T00:00:00Z"}
+  ]
+}"#;
+
+/// [`LIVE_BODY`] を読んだ口座の 1 行（`label` の口座）。
+fn live_line(label: &str) -> String {
+    format!(
+        "usage: account={label} five_hour=97% resets=2026-09-12T05:00:00Z seven_day=12% resets=2026-09-18T00:00:00Z model=Opus 5:125% resets=2026-09-18T00:00:00Z"
+    )
+}
+
+/// `fleet usage` の歯の置き場。
+struct UsageFixture {
+    /// `--state-dir`。
+    state: PathBuf,
+    /// 偽 curl の置き場と、偽 curl が残す写し（`args` / `stdin`）。
+    spy: PathBuf,
+    /// `--rules` の fixture。
+    rules: PathBuf,
+}
+
+/// `[[account]]` を `labels` の順で持ち、`fleet.usage_timeout_s` を 1 行持つ rules fixture。
+fn usage_rules(labels: &[&str]) -> String {
+    let mut text = format!(
+        "schema = 1\n\n[[rule]]\nid = \"fleet.usage_timeout_s\"\nkind = \"UsageTimeoutS\"\nvalue = {USAGE_TIMEOUT_S}\nenabled = true\nruling = \"r\"\nruled_at = \"d\"\n"
+    );
+    for label in labels {
+        text.push_str(&format!("\n[[account]]\nlabel = \"{label}\"\n"));
+    }
+    text
+}
+
+/// 期限の遠い、読める credential の本文。
+fn live_credential(token: &str) -> String {
+    format!(
+        r#"{{"claudeAiOauth":{{"accessToken":"{token}","refreshToken":"r-not-read","expiresAt":{FAR_EXPIRES_MS},"scopes":["user:inference"]}},"other":1}}"#
+    )
+}
+
+/// 置き場を作り、rules fixture を書く。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn usage_fixture(labels: &[&str]) -> UsageFixture {
+    let state = state_dir();
+    let spy = state_dir();
+    let rules = spy.join("rules.toml");
+    fs::write(&rules, usage_rules(labels)).expect("rules fixture を書ける");
+    UsageFixture { state, spy, rules }
+}
+
+/// `<state>/accounts/<label>/.credentials.json` に `text` を置く。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn put_credential(fx: &UsageFixture, label: &str, text: &str) {
+    let dir = fx.state.join("accounts").join(label);
+    fs::create_dir_all(&dir).expect("credential の dir を作れる");
+    fs::write(dir.join(".credentials.json"), text).expect("credential を書ける");
+}
+
+/// 偽 curl（headless の歯の `fake_claude` と同じ型）。
+///
+/// argv を 1 行 1 引数で `args` へ、stdin を `stdin` へ**追記**で写し（口座ごとに 1 回呼ばれる）、
+/// `body` と `\n<status>` を stdout へ出して `rc` で終わる。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn fake_curl(fx: &UsageFixture, body: &str, status: &str, rc: u8) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let d = fx.spy.display().to_string();
+    fs::write(fx.spy.join("body"), body).expect("body を書ける");
+    let script = format!(
+        "#!/bin/sh\n\
+         printf '%s\\n' \"$@\" >> \"{d}/args\"\n\
+         cat >> \"{d}/stdin\"\n\
+         cat \"{d}/body\"\n\
+         printf '\\n%s' '{status}'\n\
+         exit {rc}\n"
+    );
+    let path = fx.spy.join("fake-curl");
+    fs::write(&path, script).expect("fake を書ける");
+    let mut perm = fs::metadata(&path).expect("fake の権限を読める").permissions();
+    perm.set_mode(0o755);
+    fs::set_permissions(&path, perm).expect("fake を実行可能にできる");
+    path
+}
+
+/// `fleet usage` を fixture の置き場・rules・client で撃つ。
+fn run_usage(fx: &UsageFixture, curl: &Path, extra: &[&str]) -> Output {
+    let state = fx.state.display().to_string();
+    let rules = fx.rules.display().to_string();
+    let curl = curl.display().to_string();
+    let mut args = vec!["usage", "--state-dir", &state, "--rules", &rules, "--curl", &curl];
+    args.extend_from_slice(extra);
+    run_fleet(&args)
+}
+
+/// stdout の行。
+fn out_lines(out: &Output) -> Vec<String> {
+    String::from_utf8_lossy(&out.stdout).lines().map(str::to_owned).collect()
+}
+
+/// 置き場の口座残量の行（読めなければ空）。
+fn allowances(fx: &UsageFixture) -> Vec<Allowance> {
+    store::read_all(&fx.state)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|event| event.allowance)
+        .collect()
+}
+
+/// 置き場を片付ける。
+fn drop_fixture(fx: &UsageFixture) {
+    fs::remove_dir_all(&fx.state).ok();
+    fs::remove_dir_all(&fx.spy).ok();
+}
+
+/// (1) live 2 口座相当: 口座ごと 1 行・口座 × 窓（3 窓 × 2）の event・reset は UTC 形・使用率は as_pct。
+#[test]
+fn fleet_usage_measures_two_accounts_into_lines_and_events() {
+    let fx = usage_fixture(&["a1", "a2"]);
+    put_credential(&fx, "a1", &live_credential(TOKEN_A1));
+    put_credential(&fx, "a2", &live_credential(TOKEN_A2));
+    let curl = fake_curl(&fx, LIVE_BODY, "200", 0);
+    let out = run_usage(&fx, &curl, &[]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "rc 0: {out:?}");
+    assert_eq!(out_lines(&out), vec![live_line("a1"), live_line("a2")], "宣言順に口座ごと 1 行");
+
+    let events = store::read_all(&fx.state).expect("event log を読める");
+    assert_eq!(events.len(), 6, "3 窓 × 2 口座: {events:?}");
+    for event in &events {
+        assert_eq!(event.kind, EventKind::AllowanceMeasured, "{event:?}");
+        assert_eq!(event.actor, "machine");
+        assert!(event.run.is_empty() && event.bead.is_empty(), "便に紐づかない");
+        assert_eq!(event.host, vessel::fleet::cli::host(), "host は既存の解決");
+    }
+    let mut seen: Vec<(String, WindowKind, Option<String>, u64, String)> = allowances(&fx)
+        .into_iter()
+        .filter_map(|row| match row {
+            Allowance::Measured(found) => {
+                assert_eq!(found.endpoint, "oauth-usage", "出所の識別子");
+                Some((found.account, found.window, found.model, found.used_pct, found.resets_at))
+            }
+            Allowance::Unmeasured(_) => None,
+        })
+        .collect();
+    seen.sort();
+    let want_for = |label: &str| {
+        vec![
+            (label.to_owned(), WindowKind::FiveHour, None, 97, "2026-09-12T05:00:00Z".to_owned()),
+            (label.to_owned(), WindowKind::SevenDay, None, 12, "2026-09-18T00:00:00Z".to_owned()),
+            (label.to_owned(), WindowKind::SevenDayModel, Some("Opus 5".to_owned()), 125, "2026-09-18T00:00:00Z".to_owned()),
+        ]
+    };
+    let mut want = want_for("a1");
+    want.extend(want_for("a2"));
+    assert_eq!(seen, want, "used_pct は切り捨て・cap しない・reset は UTC の Z 形");
+    drop_fixture(&fx);
+}
+
+/// (2) token は stdin の設定行にだけ在り、argv・stdout・stderr・events.jsonl に 0 回。
+/// (3) `--max-time` には rules 行の値が渡る。
+#[test]
+fn fleet_usage_token_travels_only_on_stdin_and_timeout_comes_from_rules() {
+    let fx = usage_fixture(&["a1", "a2"]);
+    put_credential(&fx, "a1", &live_credential(TOKEN_A1));
+    put_credential(&fx, "a2", &live_credential(TOKEN_A2));
+    let curl = fake_curl(&fx, LIVE_BODY, "200", 0);
+    let out = run_usage(&fx, &curl, &[]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "rc 0: {out:?}");
+
+    let stdin = fs::read_to_string(fx.spy.join("stdin")).expect("偽 curl が stdin を写した");
+    for token in [TOKEN_A1, TOKEN_A2] {
+        assert!(stdin.contains(&format!("Authorization: Bearer {token}")), "stdin の設定行に token: {stdin}");
+    }
+    assert!(stdin.contains("anthropic-beta: oauth-2025-04-20"), "{stdin}");
+    assert!(stdin.contains("Accept: application/json"), "{stdin}");
+    assert!(!stdin.contains("r-not-read"), "refresh token は読まない・渡さない");
+
+    let args = fs::read_to_string(fx.spy.join("args")).expect("偽 curl が argv を写した");
+    let events = fs::read_to_string(store::events_path(&fx.state)).expect("event log が在る");
+    let faces = [
+        ("argv", args.clone()),
+        ("stdout", String::from_utf8_lossy(&out.stdout).into_owned()),
+        ("stderr", String::from_utf8_lossy(&out.stderr).into_owned()),
+        ("events.jsonl", events.clone()),
+    ];
+    for (face, text) in &faces {
+        assert!(!text.is_empty() || *face == "stderr", "{face} の母集団が空でない");
+        for token in [TOKEN_A1, TOKEN_A2] {
+            assert_eq!(text.matches(token).count(), 0, "{face} に token が 0 回（母集団 {} byte）", text.len());
+        }
+    }
+    let argv: Vec<&str> = args.lines().collect();
+    assert_eq!(argv.len() % 11, 0, "口座ごとに 11 引数: {argv:?}");
+    let pairs = argv.windows(2).filter(|w| w == &["--max-time", "13"]).count();
+    assert_eq!(pairs, 2, "--max-time に rules 行の値（口座 2 回分）: {argv:?}");
+    assert!(argv.windows(2).any(|w| w == ["-K", "-"]), "設定は stdin から: {argv:?}");
+    assert_eq!(argv.iter().filter(|arg| **arg == "https://api.anthropic.com/api/oauth/usage").count(), 2);
+    drop_fixture(&fx);
+}
+
+/// (4) credential の無い label は `no_credentials` の 1 行で、他の口座の読みは続く。
+#[test]
+fn fleet_usage_missing_credential_is_one_line_and_others_continue() {
+    let fx = usage_fixture(&["a1", "ghost", "a2"]);
+    put_credential(&fx, "a1", &live_credential(TOKEN_A1));
+    put_credential(&fx, "a2", &live_credential(TOKEN_A2));
+    let curl = fake_curl(&fx, LIVE_BODY, "200", 0);
+    let out = run_usage(&fx, &curl, &[]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "測れなかったは失敗ではない: {out:?}");
+    assert_eq!(
+        out_lines(&out),
+        vec![live_line("a1"), "usage: account=ghost unmeasured reason=no_credentials".to_owned(), live_line("a2")]
+    );
+    let ghost: Vec<Allowance> = allowances(&fx)
+        .into_iter()
+        .filter(|row| row.key().account == "ghost")
+        .collect();
+    assert_eq!(
+        ghost,
+        vec![Allowance::Unmeasured(Unmeasured {
+            account: "ghost".to_owned(),
+            window: None,
+            model: None,
+            endpoint: "oauth-usage".to_owned(),
+            reason: UnmeasuredReason::NoCredentials,
+        })],
+        "窓を持たない Unmeasured 1 行"
+    );
+    let calls = fs::read_to_string(fx.spy.join("args")).unwrap_or_default();
+    assert_eq!(calls.lines().filter(|arg| *arg == "--max-time").count(), 2, "ghost では client を起こさない");
+    drop_fixture(&fx);
+}
+
+/// (5) credential の各失敗が別の理由になる（client は 1 度も起きない）。
+#[test]
+fn fleet_usage_credential_failures_name_their_reason() {
+    let fx = usage_fixture(&["tomb", "old", "notoken", "broken"]);
+    put_credential(&fx, "tomb", r#"{"claudeAiOauth":{"accessToken":"tok-tomb","expiresAt":0}}"#);
+    put_credential(&fx, "old", r#"{"claudeAiOauth":{"accessToken":"tok-old","expiresAt":1000}}"#);
+    put_credential(&fx, "notoken", &format!(r#"{{"claudeAiOauth":{{"expiresAt":{FAR_EXPIRES_MS}}}}}"#));
+    put_credential(&fx, "broken", "{ not json");
+    let curl = fake_curl(&fx, LIVE_BODY, "200", 0);
+    let out = run_usage(&fx, &curl, &[]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{out:?}");
+    assert_eq!(
+        out_lines(&out),
+        vec![
+            "usage: account=tomb unmeasured reason=tombstone",
+            "usage: account=old unmeasured reason=token_expired",
+            "usage: account=notoken unmeasured reason=no_token",
+            "usage: account=broken unmeasured reason=shape_mismatch",
+        ]
+    );
+    assert_eq!(allowances(&fx).len(), 4, "口座ごとに 1 行");
+    assert!(!fx.spy.join("args").exists(), "credential で止まった口座は client を起こさない");
+    drop_fixture(&fx);
+}
+
+/// (6) client 側の各失敗が別の理由になる。`display_name` 欠落はその要素だけ。
+#[test]
+fn fleet_usage_client_failures_name_their_reason() {
+    let no_name = LIVE_BODY.replace(r#""display_name": "Opus 5", "#, "");
+    let cases: [(&str, &str, &str, u8, &str); 5] = [
+        ("timeout", LIVE_BODY, "200", 28, "usage: account=a1 unmeasured reason=timeout"),
+        ("refused", LIVE_BODY, "200", 7, "usage: account=a1 unmeasured reason=client_failed"),
+        ("status", LIVE_BODY, "500", 0, "usage: account=a1 unmeasured reason=http_status"),
+        ("garbage", "<html>oops</html>", "200", 0, "usage: account=a1 unmeasured reason=body_unreadable"),
+        (
+            "no display_name",
+            &no_name,
+            "200",
+            0,
+            "usage: account=a1 five_hour=97% resets=2026-09-12T05:00:00Z seven_day=12% resets=2026-09-18T00:00:00Z seven_day_model=unmeasured:shape_mismatch",
+        ),
+    ];
+    for (name, body, status, rc, want) in cases {
+        let fx = usage_fixture(&["a1"]);
+        put_credential(&fx, "a1", &live_credential(TOKEN_A1));
+        let curl = fake_curl(&fx, body, status, rc);
+        let out = run_usage(&fx, &curl, &[]);
+        assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{name}: {out:?}");
+        assert_eq!(out_lines(&out), vec![want.to_owned()], "{name}");
+        drop_fixture(&fx);
+    }
+
+    let fx = usage_fixture(&["a1"]);
+    put_credential(&fx, "a1", &live_credential(TOKEN_A1));
+    let absent = fx.spy.join("no-such-curl");
+    let out = run_usage(&fx, &absent, &[]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{out:?}");
+    assert_eq!(out_lines(&out), vec!["usage: account=a1 unmeasured reason=client_missing".to_owned()]);
+    drop_fixture(&fx);
+
+    let fx = usage_fixture(&["a1"]);
+    put_credential(&fx, "a1", &live_credential(TOKEN_A1));
+    let curl = fake_curl(&fx, &no_name, "200", 0);
+    let out = run_usage(&fx, &curl, &[]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{out:?}");
+    let rows = allowances(&fx);
+    let measured = rows.iter().filter(|row| matches!(row, Allowance::Measured(_))).count();
+    let broken: Vec<&Allowance> = rows.iter().filter(|row| matches!(row, Allowance::Unmeasured(_))).collect();
+    assert_eq!(measured, 2, "five_hour / seven_day は Measured: {rows:?}");
+    assert_eq!(
+        broken,
+        vec![&Allowance::Unmeasured(Unmeasured {
+            account: "a1".to_owned(),
+            window: Some(WindowKind::SevenDayModel),
+            model: None,
+            endpoint: "oauth-usage".to_owned(),
+            reason: UnmeasuredReason::ShapeMismatch,
+        })],
+        "その要素だけ ShapeMismatch"
+    );
+    drop_fixture(&fx);
+}
+
+/// (7) `[[account]]` 0 行の manifest は rc 1・stdout 0 byte・何も書かない。
+#[test]
+fn fleet_usage_refuses_manifest_without_accounts() {
+    let fx = usage_fixture(&[]);
+    let curl = fake_curl(&fx, LIVE_BODY, "200", 0);
+    let out = run_usage(&fx, &curl, &[]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{out:?}");
+    assert!(out.stdout.is_empty(), "stdout は 0 byte");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("[[account]]"), "理由を stderr へ");
+    assert!(!store::events_path(&fx.state).exists(), "event を書かない");
+    let shown = run_usage(&fx, &curl, &["--show"]);
+    assert_eq!(shown.status.code(), Some(i32::from(RC_REFUSED)), "--show も同じく断る");
+    assert!(shown.stdout.is_empty());
+    drop_fixture(&fx);
+}
+
+/// (8) `--show` は append しない（size・mtime 同一・lock 不在）で replay の最新を同じ 1 行形で出す。
+#[test]
+fn fleet_usage_show_is_read_only_and_prints_the_latest() {
+    let fx = usage_fixture(&["a1", "a2"]);
+    put_credential(&fx, "a1", &live_credential(TOKEN_A1));
+    put_credential(&fx, "a2", &live_credential(TOKEN_A2));
+    let curl = fake_curl(&fx, LIVE_BODY, "200", 0);
+    let first = run_usage(&fx, &curl, &[]);
+    assert_eq!(first.status.code(), Some(i32::from(RC_OK)), "{first:?}");
+    let newer = LIVE_BODY.replace("0.97", "0.33");
+    let curl = fake_curl(&fx, &newer, "200", 0);
+    let second = run_usage(&fx, &curl, &[]);
+    assert_eq!(second.status.code(), Some(i32::from(RC_OK)), "{second:?}");
+    assert!(out_lines(&second).iter().all(|line| line.contains("five_hour=33%")), "{second:?}");
+
+    let events = store::events_path(&fx.state);
+    let before = fs::metadata(&events).expect("event log が在る");
+    let shown = run_usage(&fx, &curl, &["--show"]);
+    let after = fs::metadata(&events).expect("event log が在る");
+    assert_eq!(shown.status.code(), Some(i32::from(RC_OK)), "{shown:?}");
+    assert_eq!(out_lines(&shown), out_lines(&second), "replay の最新を計測と同じ 1 行形で");
+    assert_eq!(before.len(), after.len(), "size を変えない");
+    assert_eq!(before.modified().ok(), after.modified().ok(), "mtime を変えない");
+    assert!(!store::lock_path(&fx.state).exists(), "lock を取らない");
+    assert_eq!(allowances(&fx).len(), 12, "--show は行を足さない（2 回 × 6 行）");
+    drop_fixture(&fx);
+}
+
+/// (9) `--state-dir` 無しは rc 1。
+#[test]
+fn fleet_usage_requires_state_dir() {
+    let out = run_fleet(&["usage"]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{out:?}");
+    assert!(out.stdout.is_empty(), "stdout は 0 byte");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("usage"), "使い方を stderr へ");
+}

@@ -12,7 +12,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 /// `fleet` の使い方。
 pub fn usage() -> String {
-    "usage: fleet <record|show|export> --state-dir D [flags]".to_owned()
+    "usage: fleet <record|show|export|usage> --state-dir D [flags]".to_owned()
 }
 
 /// `fleet` に続く引数を捌く。
@@ -25,6 +25,7 @@ pub fn dispatch(args: &[String]) -> Outcome {
         Some("record") => record(args, &dir),
         Some("show") => show(args, &dir),
         Some("export") => export(&dir),
+        Some("usage") => super::usage::run(args, &dir),
         _ => Outcome::failed(RC_REFUSED, vec![usage()]),
     }
 }
@@ -50,8 +51,8 @@ fn flag<'a>(args: &'a [String], name: &str) -> Flag<'a> {
     }
 }
 
-/// 任意の flag。**値欠けは黙って落とさず error にする**（SRS NFR4）。
-fn optional<'a>(args: &'a [String], name: &str) -> Result<Option<&'a str>, String> {
+/// 任意の flag。**値欠けは黙って落とさず error にする**（SRS NFR4）。`usage` も同じ読みを使う。
+pub(super) fn optional<'a>(args: &'a [String], name: &str) -> Result<Option<&'a str>, String> {
     match flag(args, name) {
         Flag::Absent => Ok(None),
         Flag::Value(found) => Ok(Some(found)),
