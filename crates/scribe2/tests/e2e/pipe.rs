@@ -481,6 +481,82 @@ fn pipe_spawn_substitutes_placeholders_and_adds_no_env() {
     clean(&[&repo, &state]);
 }
 
+/// 管理席の pane を名乗る値（親 process に置く・`%` 始まりは tmux の pane id の形）。
+const ADMIN_PANE: &str = "%99";
+
+/// 親の env に `TMUX_PANE` を置いて `pipe` を 1 回撃つ（管理席の shell から撃つ形）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn run_pipe_in_pane(args: &[&str]) -> Output {
+    Command::new(bin())
+        .arg("pipe")
+        .args(args)
+        .env("TMUX_PANE", ADMIN_PANE)
+        .output()
+        .expect("binary を起動できる")
+}
+
+/// env の写しの変数名の集合。
+fn env_keys(text: &str) -> BTreeSet<String> {
+    text.lines()
+        .filter_map(|line| line.split_once('='))
+        .map(|(key, _)| key.to_owned())
+        .collect()
+}
+
+/// **runner は起動側の `TMUX_PANE` を継承しない**（設計 seat-roles.md §4・ADR-0022 §2.3）。
+///
+/// 継承すると runner の hook が `--pane` で管理席の打刻へ書く（他 process の打刻の混入）。
+/// base では継承されて在る＝flip の RED。器固有の接頭辞の集合は親と同じまま（外すのは 1 つ）。
+#[test]
+fn pipe_spawn_drops_tmux_pane_from_runner_env() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let id = intake(&repo, &state, &path);
+    let runner = "env > env.txt && git add -A && git commit -q -m runner";
+    let out = run_pipe_in_pane(&[
+        "spawn", "--run", &id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(), "--runner", runner,
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    let env_text = fs::read_to_string(worktree_of(&repo, &id).join("env.txt")).expect("env の写しを読める");
+    let child = env_keys(&env_text);
+    // 母集団: 写しが空だと「無い」が空虚に通る。親から継承した PATH が在ることを先に測る。
+    assert!(child.contains("PATH"), "env の写しは親の env を継承している（母集団 {} 行）", env_text.lines().count());
+    assert!(!child.contains("TMUX_PANE"), "runner は TMUX_PANE を継承しない: {child:?}");
+
+    const OURS: &str = "SCRIBE2_";
+    let parent: BTreeSet<String> = std::env::vars()
+        .map(|(key, _)| key)
+        .filter(|key| key.starts_with(OURS))
+        .collect();
+    let ours: BTreeSet<String> = child.into_iter().filter(|key| key.starts_with(OURS)).collect();
+    assert_eq!(ours, parent, "器固有の env は親と同じ（足さない・外さない）");
+    clean(&[&repo, &state]);
+}
+
+/// **lens も起動側の `TMUX_PANE` を継承しない**（gate の lens cmd も同じ `wrap_line` を通る）。
+#[test]
+fn pipe_spawn_drops_tmux_pane_from_lens_env() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let id = implemented(&repo, &state, &path);
+    let seen = state.join("lens-env");
+    let lens = format!("cat >/dev/null; env > '{}'; echo '{}'", seen.display(), lens_verdict("PASS"));
+    let out = run_pipe_in_pane(&[
+        "gate", "--run", &id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(), "--lens", &lens,
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "PASS: {}", stderr_of(&out));
+    let env_text = fs::read_to_string(&seen).expect("lens の env の写しを読める");
+    let child = env_keys(&env_text);
+    assert!(child.contains("PATH"), "env の写しは親の env を継承している（母集団 {} 行）", env_text.lines().count());
+    assert!(!child.contains("TMUX_PANE"), "lens は TMUX_PANE を継承しない: {child:?}");
+    clean(&[&repo, &state]);
+}
+
 /// 写しの照合に使う plugin manifest の本文。
 const PLUGIN_JSON: &str = "{\"name\":\"toy-plugin\"}\n";
 

@@ -217,15 +217,27 @@ fn tame(text: &str) -> String {
 ///
 /// 包めた周だけ終端行の epilogue を足す（設計 §4.3）——scope の外で `/proc/self/cgroup` を
 /// 読んでも、それは自分の箱ではない別の cgroup の数である。
+///
+/// **子の env から [`PANE_ENV`] だけを外す**（設計 seat-roles.md §4・ADR-0022 §2.3）。runner /
+/// lens / verify 行の 3 経路はすべてこの関数を通るので、この 1 点で覆う。env は足さない（C2.2）。
 pub fn wrap_line(line: &str, entry: &Wrap<'_>) -> (Command, Confinement) {
-    match fitting(entry) {
+    let (mut cmd, confinement) = match fitting(entry) {
         Err(reason) => (shell(line), Confinement::Unconfined(reason)),
         Ok((caps, mb)) => (
             scope(shell(&script(line, entry.unit)), mb, entry, &caps),
             Confinement::Confined { unit: entry.unit.to_owned() },
         ),
-    }
+    };
+    cmd.env_remove(PANE_ENV);
+    (cmd, confinement)
 }
+
+/// 起動した席の pane を指す tmux の変数。
+///
+/// runner / lens は pane を持たない（席ではない・設計 seat-roles.md §4）。起動側の管理席の
+/// 値を継承させると、子の hook が `--pane` で**管理席の打刻**へ書き込む（他 process の打刻の
+/// 混入・C3.3）。
+const PANE_ENV: &str = "TMUX_PANE";
 
 /// 既に組んだ起動を scope で包む。**終端行は足さない**（argv の起動に epilogue は書けない
 /// ＝peak は測らない・設計 §4.3 の記録先は verify 行と runner の 2 面である）。
@@ -382,8 +394,30 @@ pub fn read_usage(stdout: &str) -> Usage {
 
 #[cfg(test)]
 mod tests {
-    use super::{limit_mb, limit_of, mem_total_mb, read_usage, script, Caps, Limit, Reason, REASONS};
+    use super::{
+        limit_mb, limit_of, mem_total_mb, read_usage, script, wrap_line, Caps, Limit, Reason, Wrap, PANE_ENV,
+        REASONS,
+    };
     use crate::order::is_declaration_order;
+    use std::ffi::OsStr;
+
+    /// `wrap_line` が組む起動は `TMUX_PANE` を**外す**指定を持ち、ほかの env を足さない。
+    ///
+    /// runner（spawn）と lens / verify 行（gate）は同じこの関数を通る——e2e の歯が runner と
+    /// lens の 2 経路を撃ち、ここは関数そのものの指定を pin する。
+    #[test]
+    fn pipe_spawn_drops_tmux_pane_in_wrap_line() {
+        let entry = Wrap { unit: "scribe2-probe-unit", limit: Limit::HostReserve, caps: None };
+        let (cmd, confinement) = wrap_line("true", &entry);
+        assert_eq!(confinement.reason(), Some(Reason::NoRules), "rules の無い周は素のまま撃つ");
+        let envs: Vec<(&OsStr, Option<&OsStr>)> = cmd.get_envs().collect();
+        assert_eq!(
+            envs,
+            vec![(OsStr::new(PANE_ENV), None)],
+            "外すのは TMUX_PANE だけで、足す env は無い"
+        );
+        assert_eq!(PANE_ENV, "TMUX_PANE", "外す名は tmux の pane の変数");
+    }
 
     /// 歯の fixture の 3 線（tracked manifest の値を写さない＝値が動いても歯は動かない）。
     const CAPS: Caps = Caps {

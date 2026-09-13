@@ -157,7 +157,7 @@ fn launch_runner(
         caps: confine::Caps::embedded(),
     };
     let (mut command, confinement) = confine::wrap_line(&cmd, &wrap);
-    // **env を 1 つも足さない**: `.env()` / `.envs()` を呼ばず親の env をそのまま継承する。
+    // **env を 1 つも足さない**: `.env()` / `.envs()` を呼ばず親の env をそのまま継承する（`TMUX_PANE` だけは外す＝confine）。
     // stdout は捕らえる（質問 record の読み面・`gate.rs::ask_lens` と同じ形）。stderr は継承。
     // **先頭 process を新しい process group の leader にする**（setsid ではない・cgroup の scope とは
     // 独立）。`SeatSpawned` の pid はそのまま group id として読まれ、`pipe stop` は group 宛てに
