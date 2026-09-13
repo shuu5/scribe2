@@ -31,6 +31,7 @@
   - `five_hour` / `seven_day` = `{utilization: 数（**すでに % の値**・`2.0` = 2%）, resets_at: 文字列}`。
   - `limits[]` の要素 = `{kind: 文字列, group, percent: 整数（% の値）, severity, resets_at: 文字列, scope: {model: {id, display_name: 文字列}}, is_active: 真偽}`——**`utilization` を持たない**。
   - `resets_at` は `+00:00` 形（小数秒つき）と `Z` 形の両方が現れる。
+  - **消費の無い窓は `{utilization: 0.0, resets_at: null}`**（admin 実測 2026-09-13・3 口座で同形・使い始めた周から文字列になる）。この形は「測れた 0%・reset 未定」の `AllowanceMeasured`（`resets_at` 無し）に写す（ADR-0024 §2.1）。**`utilization` が 0 でなく `resets_at` が null の応答は ShapeMismatch のまま**（0 以外を reset 無しで記録しない）。`limits[]` の要素の `resets_at` には掛けない。
 - JSON reader: `json_lite` を **入れ子 object・配列・数（小数含む）** へ広げる（std のみ）。event log の flat な行の書き手 / 読み手（`Value` の 4 値）は**変えない**（別の型 `Tree` を足す。flat 行の受理は狭いまま＝綴り違いの key を拒む性質を保つ）。
 - 窓の対応: `five_hour` → `window = "five_hour"`、`seven_day` → `"seven_day"`、`limits[]` のうち `kind == "weekly_scoped"` の要素 → `window = "seven_day_model"` + `model = <scope.model.display_name>`（**display_name でしか結べない**・`id` は null の実測）。要素が 0 件なら model 行は出さない（Unmeasured ではない・窓が無いだけ）。要素が `display_name` を持たない・型が違うなら**その要素だけ** Unmeasured（理由 = 形が違う）。
 - 使用率は窓の `utilization`・`limits[]` の要素の `percent`（どちらも % の値・×100 しない・要素の `utilization` は読まない）を **整数 %（切り捨て・100 で cap しない**＝超過をそのまま残す・負数と数でない値は形が違う）に、reset は `resets_at` を UTC `YYYY-MM-DDTHH:MM:SSZ` に正規化。parse 不能なら Unmeasured（理由 = 形が違う）。
@@ -42,7 +43,7 @@
 
 | variant | 意味 | 必須 field | 任意 field |
 |---|---|---|---|
-| `AllowanceMeasured` | 1 口座 1 窓の実測 | `account` `window` `endpoint` `used_pct`(u64) `resets_at` | `model`（`seven_day_model` のとき必須） |
+| `AllowanceMeasured` | 1 口座 1 窓の実測 | `account` `window` `endpoint` `used_pct`(u64) | `resets_at`（無し = 消費の無い窓・reset 未定・`used_pct` = 0 の周に限る・ADR-0024 §2.1 / §2.3）`model`（`seven_day_model` のとき必須） |
 | `AllowanceUnmeasured` | 読めなかった | `account` `endpoint` `reason` | `window` `model`（要素単位の失敗のとき） |
 
 - 共通 field（`schema` `ts` `kind` `host` `actor`）は既存どおり。`actor` は `machine`。
