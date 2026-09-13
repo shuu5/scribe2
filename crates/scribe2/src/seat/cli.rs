@@ -9,6 +9,7 @@ use super::externalize::{self, ExternalizeError, Trigger};
 use super::rebrief::{self, RebriefError};
 use super::{heartbeat, inject, meter, role, tick};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_OK, RC_REFUSED};
+use crate::rules::RuleError;
 use std::path::Path;
 use std::time::Duration;
 
@@ -218,15 +219,24 @@ fn heartbeat_of(args: &[String]) -> Outcome {
     }
 }
 
+/// 壊れた manifest の断り: defect を 1 件 1 行（`rules validate` と 1 byte 同じ）で全件並べ、
+/// 末尾に口の既存の断り行 `judged` を足す（設計 rules-manifest.md §5「同じ拒否 5 形」・
+/// seat-autonomy.md §3 の 1 周 1 判定行・`s2-07l.154`）。rc は `rules` / `pipe` / `fleet` と同じ 1。
+fn broken_rules(errors: &[RuleError], mut judged: Vec<String>) -> Outcome {
+    let mut lines = crate::rules::cli::render_defects(errors);
+    lines.append(&mut judged);
+    Outcome::failed(RC_REFUSED, lines)
+}
+
 /// cycle の確認の刻み（上限・周期）を解く。`--rules PATH` が在ればその file・無ければ埋め込み
 /// （`rules` subcommand と**同じ 1 本の口**＝[`crate::rules::cli::open`]・`s2-07l.151`）。
 ///
-/// 読めない file・行の無い file・不発効の行は `None`＝呼び側が `no-rule` で断る（fail-closed・
-/// 値を焼かない・憲法 C5）。**1 回の呼出しで 1 回だけ解く**: tick と cycle が別々に解くと、
-/// 同じ判定の中で別の値で走りうる。
-fn pace_of(args: &[String]) -> Option<(Duration, Duration)> {
-    let manifest = crate::rules::cli::open(args).ok()?;
-    cycle::pace_of(&manifest)
+/// 読めない manifest は `Err`（defect を全件返す）・行の無い file と不発効の行は `Ok(None)`
+/// ——**「壊れている」と「行が無い」を型で分ける**（呼び手はどちらも `no-rule` で断る・
+/// fail-closed・値を焼かない・憲法 C5 / C11）。**1 回の呼出しで 1 回だけ解く**: tick と cycle
+/// が別々に解くと、同じ判定の中で別の値で走りうる。
+fn pace_of(args: &[String]) -> Result<Option<(Duration, Duration)>, Vec<RuleError>> {
+    Ok(cycle::pace_of(&crate::rules::cli::open(args)?))
 }
 
 /// `seat tick`。
@@ -242,8 +252,10 @@ fn tick_of(args: &[String]) -> Outcome {
     ) else {
         return refused_usage();
     };
-    let Some((settle, step)) = pace_of(args) else {
-        return Outcome::failed_line(RC_REFUSED, tick::render_no_rule());
+    let (settle, step) = match pace_of(args) {
+        Ok(Some(pace)) => pace,
+        Ok(None) => return Outcome::failed_line(RC_REFUSED, tick::render_no_rule()),
+        Err(errors) => return broken_rules(&errors, vec![tick::render_no_rule()]),
     };
     tick::run(&tick::Request {
         target,
@@ -277,11 +289,11 @@ fn cycle_of(args: &[String]) -> Outcome {
         );
     };
     // 規則が読めない周は **1 key も送らずに** 断る（lock も取らない・fail-closed・`s2-07l.151`）。
-    let Some((settle, step)) = pace_of(args) else {
-        return Outcome::failed_line(
-            RC_REFUSED,
-            cycle::render(target, &Cycle::Refused(cycle::REASON_NO_RULE), Some(&state)),
-        );
+    let no_rule = || cycle::render(target, &Cycle::Refused(cycle::REASON_NO_RULE), Some(&state));
+    let (settle, step) = match pace_of(args) {
+        Ok(Some(pace)) => pace,
+        Ok(None) => return Outcome::failed_line(RC_REFUSED, no_rule()),
+        Err(errors) => return broken_rules(&errors, vec![no_rule()]),
     };
     let result = cycle::run(&cycle::Request {
         target,
@@ -329,8 +341,12 @@ fn externalize_of(args: &[String]) -> Outcome {
     let Some(state) = super::state_dir_of(state_dir) else {
         return refused(ExternalizeError::StateDir);
     };
-    // 上限は `rules` と同じ 1 本の口で解く（`--rules` が在ればその file・読めなければ断る・C5）。
-    let Some(cap) = crate::rules::cli::open(args).ok().as_ref().and_then(externalize::cap_of) else {
+    // 上限は `rules` と同じ 1 本の口で解く（`--rules` が在ればその file・読めなければ defect を全件並べて断る・C5）。
+    let manifest = match crate::rules::cli::open(args) {
+        Ok(manifest) => manifest,
+        Err(errors) => return broken_rules(&errors, externalize::render_refused(&ExternalizeError::NoRule)),
+    };
+    let Some(cap) = externalize::cap_of(&manifest) else {
         return refused(ExternalizeError::NoRule);
     };
     let request = externalize::Request {
@@ -369,8 +385,12 @@ fn rebrief_of(args: &[String]) -> Outcome {
     let Some(state) = super::state_dir_of(state_dir) else {
         return unavailable(RebriefError::StateDir);
     };
-    // 待ち上限は `rules` と同じ 1 本の口で解く（`--rules` が在ればその file・読めなければ断る・C5）。
-    let Some(timeout) = crate::rules::cli::open(args).ok().as_ref().and_then(rebrief::timeout_of) else {
+    // 待ち上限は `rules` と同じ 1 本の口で解く（`--rules` が在ればその file・読めなければ defect を全件並べて断る・C5）。
+    let manifest = match crate::rules::cli::open(args) {
+        Ok(manifest) => manifest,
+        Err(errors) => return broken_rules(&errors, vec![rebrief::render_unavailable(RebriefError::NoRule)]),
+    };
+    let Some(timeout) = rebrief::timeout_of(&manifest) else {
         return unavailable(RebriefError::NoRule);
     };
     let request = rebrief::Request {

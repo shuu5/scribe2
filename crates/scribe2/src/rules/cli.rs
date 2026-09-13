@@ -17,7 +17,7 @@ pub fn usage() -> String {
 pub fn dispatch(args: &[String]) -> Outcome {
     let manifest = match open(args) {
         Ok(found) => found,
-        Err(errors) => return Outcome::failed(RC_REFUSED, render(&errors)),
+        Err(errors) => return Outcome::failed(RC_REFUSED, render_defects(&errors)),
     };
     match args.first().map(String::as_str) {
         Some("validate") => validate(&manifest),
@@ -89,7 +89,10 @@ fn get(manifest: &Manifest, id: &str) -> Outcome {
     Outcome::ok_line(row.value.render())
 }
 
-/// error を 1 件 1 行へ写す。
-fn render(errors: &[RuleError]) -> Vec<String> {
+/// error を 1 件 1 行へ写す（拒否 5 形・すべて `line=<N>` 付き・設計 rules-manifest.md §4.2）。
+///
+/// **描画はここと [`RuleError`] の `Display` だけ**である: `seat` の `--rules` も同じ行を返す
+/// （§5「同じ拒否 5 形」・`s2-07l.154`）——面ごとに描画を持つと、同じ欠陥が面ごとに違う字で出る。
+pub fn render_defects(errors: &[RuleError]) -> Vec<String> {
     errors.iter().map(RuleError::to_string).collect()
 }
