@@ -71,7 +71,19 @@ pub fn register(state_dir: &Path, draft: Registration, launch: &Path, anchor: Op
     let (Ok(launch), Some(root)) = (std::fs::read_to_string(launch), root) else {
         return Err(RegisterRefusal::Input);
     };
-    let registration = Registration { sid, launch, anchor: root.display().to_string(), ..draft };
+    append_row(state_dir, Registration { sid, launch, anchor: root.display().to_string(), ..draft })
+}
+
+/// 登録 row の口座を `account` に更新する（account-autonomy.md §5 の立て直し・同じ鍵で `SeatRegistered` 1 件）。
+/// `seat register` を経由せず**打刻の条件は課さない**（`sid` は登録時の証拠であって現在の session の識別子では
+/// ない）: `role` / `anchor` / `target` / `sid` / `launch` / `model` は既存 row から写す。
+pub fn relabel(state_dir: &Path, row: &Registration, account: &str) -> Result<Registration, RegisterRefusal> {
+    append_row(state_dir, Registration { account: account.to_owned(), ..row.clone() })
+}
+
+/// 登録 row を 1 件積む（**書き手 2 つの同じ 1 関数**・設計 seat-roles.md §2）: `seat register`（打刻の条件を
+/// 先に測る）と tick の口座更新（[`relabel`]）がここを通る。
+fn append_row(state_dir: &Path, registration: Registration) -> Result<Registration, RegisterRefusal> {
     let event = Event {
         schema: SCHEMA,
         ts: cli::now_utc(),

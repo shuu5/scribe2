@@ -1,11 +1,12 @@
-//! 管理 tick（設計 §3・裁定 (b)〜(e)・SRS FR27 / FR29 / FR21 / FR23・憲法 R-E12 / C10 / C11 / C2.2）。
+//! 管理 tick（設計 §3・裁定 (b)〜(e)・SRS FR27 / FR29 / FR21 / FR23 / FR38・憲法 R-E12 / C10 / C11 / C2.2）。
 //!
 //! 席の**外**（host の timer）から回り、条件を**順序固定**で見て、成立した周だけ 1 行を
 //! 注入する。R-E12 のとおり席は自分で周期起動を張らず、tick は席へ event としてしか届かない。
 //!
 //! **順序は load-bearing である**: 退避物の走査 → **状態**（state.jsonl の最終行を読む）→ pane 取得 →
-//! **context**（cap 以上なら退避の合図・状態の門の外）→ 状態の門（Idle だけが進む）→ 未 consumed
-//! 退避物 → cycle lock → 打刻の合図の brake（tick-stamp）。**heartbeat の鮮度 gate は持たない**
+//! **context**（cap 以上なら退避の合図・状態の門の外）→ **口座**（登録 row の在る席だけ・下記・状態の門の外）→
+//! 状態の門（Idle だけが進む）→ 未 consumed 退避物 → cycle lock → 打刻の合図の brake（tick-stamp・口座）。
+//! **heartbeat の鮮度 gate は持たない**
 //! （`s2-07l.109`）: 鮮度 gate は「走行中の席の pane を字面で読んで誤判定する」のを避ける門だったが、
 //! 席の状態が hook の打刻（typed・`s2-07l.95`）になって pane を idle の判定入力にしなくなり、理由が
 //! 消えた。残していた害は「打刻の直後に cap を超えた席が最大 `seat.tick_stale_s` の間 退避の合図を
@@ -19,6 +20,14 @@
 //! を cycle の入口（裁定 (b)）へ落とすためである。順序を入れ替えると同じ条件でも別の理由が出る＝
 //! 理由の字面は順序の証拠でもある。
 //!
+//! **口座の軸**（設計 account-autonomy.md §5・SRS FR38・`s2-07l.211`）: 登録 row（[`role::registration_of_target`]）
+//! の在る席だけを評価する。その口座の最新の実測行が `seat.tick_stale_s` より古い・無い周は FR33 の計測を 1 回
+//! 撃ってから逼迫度を読み、退避して止まった席（直近の注入が退避の合図 ∧ その後の `Stop` ∧ pane の前面が
+//! shell）は別口座で立て直し（[`cycle::relaunch`]）、逼迫度が R-C9-1 の値以上の席へは FR29 と同じ除外の下で
+//! idle を待たずに退避の合図を注入する。context と同じく状態の門の**前**に置くのは、上限に近い席は busy の
+//! まま上限に当たって止まり、planner / admin の仕事が他の便まで詰まらせるためである（user 直命 2026-09-12）。
+//! 測れない周は注入も停止もせず、打刻の合図だけを送らない（FR27 の条件に「使用率が閾値未満」が在る）。
+//!
 //! **席の busy / idle は hook の打刻（[`state`]）が一次で、pane の字面は判定入力にしない**（憲法 C3.3・
 //! ADR-0015）。打刻が無い・読めない・Busy が古い周は理由を分けて注入しない（fail-closed）。pane を
 //! 読むのは context（statusline の数値）と注入の送達確認だけである。
@@ -29,11 +38,14 @@
 //! 退避の合図と cycle の評価はその周も行う（heartbeat の mtime は見ない＝FR27 の合図は席の生存の
 //! 記録でなく「続きを進めろ」の促し）。
 
-use super::{cycle, heartbeat, inject, meter, pane_of, sanitize_target, state, WmScan};
+use super::{cycle, heartbeat, inject, meter, pane_of, role, sanitize_target, state, WmScan};
 use crate::cli_outcome::{Outcome, RC_REFUSED};
+use crate::fleet::json_lite::{self, Value};
 use crate::fleet::store::{self, LockPolicy};
-use crate::hook::{seat_name, InjectionRecord, SCHEMA};
+use crate::fleet::{cli as fleet_cli, replay, Allowance, AllowanceLatest, Registration, State, WindowKind};
+use crate::hook::{inject_path, seat_name, InjectionRecord, SCHEMA};
 use crate::name::NAME;
+use crate::rules::manifest::Manifest;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -49,6 +61,9 @@ const REASON_STATE_DIR: &str = "state-dir";
 const REASON_STAMP: &str = "stamp-unwritable";
 /// 退避を促す 1 行の skill 名（席の中で打つ command）。
 const EXTERNALIZE_SKILL: &str = "/ready-compaction";
+/// 口座の逼迫度の閾値（session 用・使用率の百分率）を宣言する rules 行の id（account-autonomy.md §3・値は code に
+/// 焼かない・C5）。
+const ID_THRESHOLD: &str = "R-C9-1";
 
 /// tick 1 回の入力。
 pub struct Request<'a> {
@@ -91,16 +106,21 @@ pub enum TickDecision {
 
 /// 注入した 1 行の種類。**bool で持たない**（憲法 C11）。
 ///
-/// 2 つに分けるのは、促す行為が別物だからである——[`Self::Pointer`] は「打刻して続きへ」、
-/// [`Self::Externalize`] は「退避せよ」。記録に種類が残らないと、席が退避の pointer を何度
-/// 受けたか（storm の有無）を後から数えられない。
+/// 分けるのは、促す行為が別物だからである——[`Self::Pointer`] は「打刻して続きへ」、
+/// [`Self::Externalize`] は「退避せよ」、[`Self::Relaunch`] は「別口座で立て直した」。記録に種類が残らないと、
+/// 席が退避の pointer を何度受けたか（storm の有無）を後から数えられない。
 #[derive(Clone, Copy)]
 pub enum InjectKind {
     /// 席に自分の打刻を促す 1 行（idle・退避物なし・lock 空きの揃った周）。
     Pointer,
-    /// context が cap 以上の席へ退避を促す 1 行（idle を待たない）。
+    /// context が cap 以上・または登録 row の口座が閾値以上の席へ退避を促す 1 行（idle を待たない）。
     Externalize,
+    /// 退避して止まった席を別口座で立て直した（起動の雛形と復元の 2 行・account-autonomy.md §5）。
+    Relaunch,
 }
+
+/// [`InjectKind`] の全 variant（宣言順）。
+pub const INJECT_KINDS: &[InjectKind] = &[InjectKind::Pointer, InjectKind::Externalize, InjectKind::Relaunch];
 
 impl InjectKind {
     /// 記録と表示に使う字面。
@@ -108,6 +128,7 @@ impl InjectKind {
         match self {
             Self::Pointer => "pointer",
             Self::Externalize => "externalize",
+            Self::Relaunch => "relaunch",
         }
     }
 }
@@ -138,30 +159,78 @@ impl Context {
     }
 }
 
-/// 判定 1 回の全体（判定・cycle の結果・context・状態の読み・cycle-stamp）。
+/// 登録 row の口座の逼迫度（account-autonomy.md §5 (2)）。**登録 row の在る席だけ評価する**——無い席・口座の軸まで
+/// 進まなかった周は [`Self::Unevaluated`]（`cycle=` と同じ「評価していない」の印＝判定行に載らない）。
+///
+/// 測れない周は [`Self::Unmeasured`] で、注入も停止もしない（打刻の合図だけを送らない・FR27）。0% に化けさせない。
+#[derive(Clone)]
+enum Account {
+    /// 登録 row が無い＝評価していない。
+    Unevaluated,
+    /// R-C9-1 の値未満（口座 label, 逼迫度）。
+    Under(String, u64),
+    /// R-C9-1 の値以上（口座 label, 逼迫度, 閾値）。
+    Over(String, u64, u64),
+    /// 測れない（実測行なし・数える窓が Unmeasured・reset を過ぎた行だけ）（口座 label）。
+    Unmeasured(String),
+}
+
+impl Account {
+    /// 判定行の末尾に足す字面（`account=<label>:<pct>`・評価していない周は空）。
+    fn suffix(&self) -> String {
+        match self {
+            Self::Unevaluated => String::new(),
+            Self::Under(label, pct) | Self::Over(label, pct, _) => format!(" account={label}:{pct}"),
+            Self::Unmeasured(label) => format!(" account={label}:unmeasured"),
+        }
+    }
+}
+
+/// 判定 1 回の全体（判定と評価の産物・context・状態の読み）。
 struct Judged {
-    /// 判定。
-    decision: TickDecision,
-    /// cycle を回した周の要約（回していない周は `None`）。
-    cycled: Option<String>,
+    /// 判定と、判定までに評価したもの。
+    verdict: Verdict,
     /// context の評価。
     context: Context,
     /// 席の状態の読み（rules 行が読めず判定に入らない周は `None`・判定行に載らない）。
     state: Option<state::Read>,
-    /// cycle-stamp の読み（cycle の評価まで進まなかった周は `None`＝読んでいない。進んだ周は
-    /// 評価した・見送った・読めなかったのいずれでも `Some`）。
-    stamp: Option<CycleStamp>,
 }
 
 impl Judged {
     /// 状態を読む前に決まった周（context も状態も評価していない）。
     fn bare(decision: TickDecision) -> Self {
         Self {
-            decision,
-            cycled: None,
+            verdict: Verdict::of(decision),
             context: Context::Unevaluated,
             state: None,
+        }
+    }
+}
+
+/// pane を取得した後の判定と、そこまでに評価したもの（評価しなかったものは `None` / 未評価＝判定行に載らない）。
+struct Verdict {
+    /// 判定。
+    decision: TickDecision,
+    /// cycle を回した周の要約（回していない周は `None`）。
+    cycled: Option<String>,
+    /// cycle-stamp の読み（cycle か立て直しの評価まで進まなかった周は `None`＝読んでいない。進んだ周は
+    /// 評価した・見送った・読めなかったのいずれでも `Some`）。
+    stamp: Option<CycleStamp>,
+    /// 口座の逼迫度。
+    account: Account,
+    /// 立て直しを評価した周の結果（選んだ label か `none:<理由>`・評価していない周は `None`）。
+    relaunched: Option<String>,
+}
+
+impl Verdict {
+    /// 判定だけの周（他は評価していない）。
+    fn of(decision: TickDecision) -> Self {
+        Self {
+            decision,
+            cycled: None,
             stamp: None,
+            account: Account::Unevaluated,
+            relaunched: None,
         }
     }
 }
@@ -213,9 +282,11 @@ struct Seen {
     ttl_s: u64,
     /// 席の状態の読み（typed・pane の字面ではない）。
     state: state::Read,
-    /// stale の閾値（秒・rules 行 `seat.tick_stale_s`）。cycle-stamp の back-off と打刻の合図の brake も
-    /// **同じ値**を共用する（新しい閾値を足さない・C5）。
+    /// stale の閾値（秒・rules 行 `seat.tick_stale_s`）。cycle-stamp の back-off と打刻の合図の brake と
+    /// 実測行の鮮度も**同じ値**を共用する（新しい閾値を足さない・C5）。
     stale_s: u64,
+    /// 口座の逼迫度の閾値（rules 行 R-C9-1 の値・使用率の百分率）。
+    threshold: u64,
 }
 
 /// 撃たなかった理由。**順序固定の条件のうち最初に立たなかったもの**を表す。
@@ -243,7 +314,28 @@ pub enum NoopReason {
     CycleStampUnreadable,
     /// 6. 打刻の合図を `seat.tick_stale_s` 未満の前に注入した（tick-stamp・storm 止め・`s2-07l.109`）。
     PointerRecent,
+    /// 6. 登録 row の口座の逼迫度を測れない（FR27 の「使用率が閾値未満」を確かめられない・注入も停止もしない）。
+    AccountUnmeasured,
+    /// 口座: 退避して止まった席の立て直しに選べる口座が無い（注入せず次の tick で選び直す・0 口座で起こさない）。
+    AccountNoCandidate,
 }
+
+/// [`NoopReason`] の全 variant（宣言順）。
+pub const NOOP_REASONS: &[NoopReason] = &[
+    NoopReason::PaneMissing,
+    NoopReason::Busy,
+    NoopReason::StateMissing,
+    NoopReason::StateUnreadable,
+    NoopReason::StateStale,
+    NoopReason::WmUnconsumed,
+    NoopReason::WmUnreadable,
+    NoopReason::CycleLive,
+    NoopReason::CycleRecent,
+    NoopReason::CycleStampUnreadable,
+    NoopReason::PointerRecent,
+    NoopReason::AccountUnmeasured,
+    NoopReason::AccountNoCandidate,
+];
 
 impl NoopReason {
     /// 記録と表示に使う字面。
@@ -260,6 +352,8 @@ impl NoopReason {
             Self::CycleRecent => "cycle-recent",
             Self::CycleStampUnreadable => "cycle-stamp-unreadable",
             Self::PointerRecent => "pointer-recent",
+            Self::AccountUnmeasured => "account-unmeasured",
+            Self::AccountNoCandidate => "account-no-candidate",
         }
     }
 }
@@ -284,6 +378,12 @@ pub fn externalize_pointer(pct: u64, cap: u64) -> String {
     format!("退避 tick: context {pct}% ≥ cap {cap}%・{EXTERNALIZE_SKILL} で退避してください")
 }
 
+/// 退避を促す 1 行（登録 row の口座が R-C9-1 の値以上の席へ・account-autonomy.md §5）。口座の label と実測値・
+/// 閾値を含め、[`externalize_pointer`] と同じ理由で短く保ち、`--pointer` では上書きしない。
+pub fn account_pointer(label: &str, pct: u64, threshold: u64) -> String {
+    format!("退避 tick: 口座 {label} {pct}% ≥ 閾値 {threshold}%・{EXTERNALIZE_SKILL} で退避してください")
+}
+
 /// tick を 1 回回す。
 pub fn run(request: &Request) -> Outcome {
     let started = Instant::now();
@@ -294,21 +394,29 @@ pub fn run(request: &Request) -> Outcome {
     let dir = super::seat_dir(&place.path, request.target);
     let judged = decide(request, &place, &dir);
     let body = body(request.target, &judged, &place);
-    record(&place.path, request.target, &body, started);
-    match judged.decision {
+    let entry = entry_of(request.target, &body, started);
+    record(&place.path, request.target, &entry);
+    match judged.verdict.decision {
         TickDecision::Error(_) => Outcome::failed_line(RC_REFUSED, render(&body)),
-        TickDecision::Inject(..) | TickDecision::Noop(_) => Outcome::ok_line(render(&body)),
+        TickDecision::Noop(_) => Outcome::ok_line(render(&body)),
+        TickDecision::Inject(..) => {
+            // 注入した周は `<state_dir>/inject.jsonl`（注入の store・hook と同じ writer と lock・C6.3）にも同じ
+            // 1 行を積む: 立て直しの入口 (1)「その席への直近の注入の記録」の読み先（[`last_externalize`]）。
+            // 記録の失敗で rc を変えない（FR21 は推奨で、判定そのものではない）。
+            let _ = crate::hook::append(&place.path, &entry);
+            Outcome::ok_line(render(&body))
+        }
     }
 }
 
-/// 条件を順序固定で見る（退避物の走査 → 状態の読み → pane 取得 → context → 状態の門 → 退避物 → lock →
+/// 条件を順序固定で見る（退避物の走査 → 状態の読み → pane 取得 → context → 口座 → 状態の門 → 退避物 → lock →
 /// 合図の brake）。鮮度 gate は持たない（`s2-07l.109`・module doc）。
 ///
-/// 退避物を最初に走査するのは、走査の結果を後段（context の合図の可否 / 退避物）で同じ値として
+/// 退避物を最初に走査するのは、走査の結果を後段（context / 口座の合図の可否 / 退避物）で同じ値として
 /// 使うためである（cycle を回す周だけは cycle 側が自分の入口でもう 1 度走査する＝lock の内側で
 /// 確かめ直す）。読めない周を「在る」に読み替えない。
 fn decide(request: &Request, place: &super::StateDir, dir: &Path) -> Judged {
-    let (Some(stale_s), Some(ttl_s)) = (state::stale_s(), cycle::ttl_s()) else {
+    let (Some(stale_s), Some(ttl_s), Some(threshold)) = (state::stale_s(), cycle::ttl_s(), super::int_rule(ID_THRESHOLD)) else {
         return Judged::bare(TickDecision::Error(meter::REASON_NO_RULE.to_owned()));
     };
     let wm = super::scan_wm(Path::new(request.wm_dir), request.target);
@@ -326,21 +434,16 @@ fn decide(request: &Request, place: &super::StateDir, dir: &Path) -> Judged {
         ttl_s,
         state: read,
         stale_s,
+        threshold,
     };
-    let (decision, cycled, stamp) = judge(request, place, dir, &seen);
     Judged {
-        decision,
-        cycled,
+        verdict: judge(request, place, dir, &seen),
         context: seen.context,
         state: Some(read),
-        stamp,
     }
 }
 
-/// 判定・cycle の要約・cycle-stamp の読み（後 2 つは cycle の評価まで進んだ周だけ `Some`）。
-type Verdict = (TickDecision, Option<String>, Option<CycleStamp>);
-
-/// pane を取得した後の条件（context → 状態の門 → 退避物 → lock → cycle-stamp／合図の brake）。
+/// pane を取得した後の条件（context → 口座 → 状態の門 → 退避物 → lock → cycle-stamp／合図の brake）。
 fn judge(request: &Request, place: &super::StateDir, dir: &Path, seen: &Seen) -> Verdict {
     // 他の cycle が走っている席（lock が live）には退避の pointer も送らない——作り直しの最中に
     // 行を queue しても、届く先は消えるか作り直された席である（排他は cycle 側と同じ 1 本の lock）。
@@ -348,27 +451,52 @@ fn judge(request: &Request, place: &super::StateDir, dir: &Path, seen: &Seen) ->
     if let Some((pct, cap)) = over_cap(seen).filter(|_| !cycle::lock_is_live(dir, seen.ttl_s)) {
         let payload = externalize_pointer(pct, cap);
         let signal = Signal { kind: InjectKind::Externalize, payload: &payload, state: seen.state };
-        return (inject_line(request, place, dir, &signal), None, None);
+        return Verdict::of(inject_line(request, place, dir, &signal));
     }
+    let account = match account_turn(request, place, dir, seen) {
+        Turn::Settled(verdict) => return verdict,
+        Turn::Pass(account) => account,
+    };
+    let rest = after_account(request, place, dir, seen, &account);
+    Verdict { account, ..rest }
+}
+
+/// 口座の軸の後の条件（状態の門 → 退避物 → lock → 合図の brake → 打刻の合図）。
+fn after_account(request: &Request, place: &super::StateDir, dir: &Path, seen: &Seen, account: &Account) -> Verdict {
     if let Some(reason) = gate_of(seen.state) {
-        return (TickDecision::Noop(reason), None, None);
+        return Verdict::of(TickDecision::Noop(reason));
     }
     match seen.wm {
-        WmScan::Unreadable => return (TickDecision::Noop(NoopReason::WmUnreadable), None, None),
+        WmScan::Unreadable => return Verdict::of(TickDecision::Noop(NoopReason::WmUnreadable)),
         WmScan::Unconsumed(_) => return parked(request, place, dir, seen),
         WmScan::None => {}
     }
     if cycle::lock_is_live(dir, seen.ttl_s) {
-        return (TickDecision::Noop(NoopReason::CycleLive), None, None);
+        return Verdict::of(TickDecision::Noop(NoopReason::CycleLive));
     }
-    if pointer_recent(dir, seen.stale_s) {
-        return (TickDecision::Noop(NoopReason::PointerRecent), None, None);
+    if let Some(reason) = pointer_brake(dir, seen.stale_s, account) {
+        return Verdict::of(TickDecision::Noop(reason));
     }
     let payload = request
         .pointer
         .map_or_else(|| default_pointer(request.target), str::to_owned);
     let signal = Signal { kind: InjectKind::Pointer, payload: &payload, state: seen.state };
-    (inject_line(request, place, dir, &signal), None, None)
+    Verdict::of(inject_line(request, place, dir, &signal))
+}
+
+/// 打刻の合図の brake（`s2-07l.109`・planner 裁定 2026-09-12 案 A・account-autonomy.md §5）: tick 自身の打刻
+/// （tick-stamp）が新しい周に加え、FR27 の条件「使用率が閾値未満」が立たない周も合図を送らない——閾値以上の周は
+/// 同じ `pointer-recent`（閾値以上の席は退避の合図か FR29 の除外で先に返るので、ここは同じ brake の縁）、
+/// 測れない周は `account-unmeasured`（注入も停止もしない）。登録 row の無い席は口座を見ない（従来のまま）。
+fn pointer_brake(seat_dir: &Path, stale_s: u64, account: &Account) -> Option<NoopReason> {
+    if pointer_recent(seat_dir, stale_s) {
+        return Some(NoopReason::PointerRecent);
+    }
+    match account {
+        Account::Over(..) => Some(NoopReason::PointerRecent),
+        Account::Unmeasured(_) => Some(NoopReason::AccountUnmeasured),
+        Account::Unevaluated | Account::Under(..) => None,
+    }
 }
 
 /// 打刻の合図の brake（`s2-07l.109`・planner 裁定 2026-09-12 案 A）: tick 自身の打刻（tick-stamp）の
@@ -430,7 +558,8 @@ fn measure_context(pane: &str) -> Context {
 /// 打てない周は 1 key も送らず refused。lock を取れない周〔lock-held / state-dir / no-rule〕は打たない
 /// ＝他の cycle が打っているか置き場が使えない）、同じ席は打刻から `seat.tick_stale_s` **未満**の間
 /// cycle を評価しない（`cycle-recent`・見送った周は打ち直さない＝永久には止まらない）。stamp を
-/// 読むのは tick のここだけで、`seat cycle` を手で回す口は back-off を見ない（人の判断）。`/clear` は不可逆の口（N1）で、復元されない退避物（`/rebrief` が走らない・
+/// 読むのは tick のここ（と立て直しの入口）だけで、`seat cycle` を手で回す口は back-off を見ない（人の判断）。
+/// `/clear` は不可逆の口（N1）で、復元されない退避物（`/rebrief` が走らない・
 /// consume しない）へ周期ごとに繰り返してはならない。stamp を読めない周は「無い」に読み替えず
 /// 評価しない（`cycle-stamp-unreadable`・読めないことを理由に不可逆の側へ倒さない）。閾値は
 /// state-stale と共用し（`seat.tick_stale_s`）、新しい rules 行を足さない（C5）。境界は**未満**（経過が閾値ちょうどの周は評価
@@ -438,17 +567,11 @@ fn measure_context(pane: &str) -> Context {
 fn parked(request: &Request, place: &super::StateDir, dir: &Path, seen: &Seen) -> Verdict {
     let noop = TickDecision::Noop(NoopReason::WmUnconsumed);
     if cycle::lock_is_live(dir, seen.ttl_s) {
-        return (noop, None, None);
+        return Verdict::of(noop);
     }
-    let stamp = CycleStamp::read(dir);
-    match stamp {
-        CycleStamp::Unreadable => {
-            return (TickDecision::Noop(NoopReason::CycleStampUnreadable), None, Some(stamp));
-        }
-        CycleStamp::Age(age) if age < seen.stale_s => {
-            return (TickDecision::Noop(NoopReason::CycleRecent), None, Some(stamp));
-        }
-        CycleStamp::Age(_) | CycleStamp::None => {}
+    let (stamp, blocked) = back_off(dir, seen.stale_s);
+    if let Some(reason) = blocked {
+        return held(stamp, reason);
     }
     let result = cycle::run(&cycle::Request {
         target: request.target,
@@ -460,7 +583,232 @@ fn parked(request: &Request, place: &super::StateDir, dir: &Path, seen: &Seen) -
         settle: request.settle,
         step: request.step,
     });
-    (noop, Some(cycle::summary(&result)), Some(stamp))
+    Verdict { cycled: Some(cycle::summary(&result)), stamp: Some(stamp), ..Verdict::of(noop) }
+}
+
+/// cycle-stamp の back-off（`s2-07l.110`）: 読みと、評価しない理由（読めない周は `cycle-stamp-unreadable`、
+/// `seat.tick_stale_s` 未満の前に打った周は `cycle-recent`・評価してよい周は `None`）。cycle と立て直し（どちらも
+/// 二重に撃たない側の口）が同じ 1 本を通る。
+fn back_off(seat_dir: &Path, stale_s: u64) -> (CycleStamp, Option<NoopReason>) {
+    let stamp = CycleStamp::read(seat_dir);
+    let reason = match stamp {
+        CycleStamp::Unreadable => Some(NoopReason::CycleStampUnreadable),
+        CycleStamp::Age(age) if age < stale_s => Some(NoopReason::CycleRecent),
+        CycleStamp::Age(_) | CycleStamp::None => None,
+    };
+    (stamp, reason)
+}
+
+/// cycle-stamp を読んだ上で見送った周の判定。
+fn held(stamp: CycleStamp, reason: NoopReason) -> Verdict {
+    Verdict { stamp: Some(stamp), ..Verdict::of(TickDecision::Noop(reason)) }
+}
+
+/// 口座の軸の結果: 判定が決まった（立て直し・退避の合図）か、逼迫度を持って次の条件へ進むか。
+enum Turn {
+    /// この周の判定が決まった。
+    Settled(Verdict),
+    /// 次の条件へ（逼迫度は判定行と合図の brake が使う）。
+    Pass(Account),
+}
+
+/// 口座の軸（account-autonomy.md §5・context の直後＝状態の門の外）: 登録 row の在る席だけ評価する。実測行が
+/// 古い周は計測を 1 回撃ってから逼迫度を読み（[`seated`]）、退避して止まった席は立て直し（[`relaunch_turn`]）、
+/// 閾値以上の席へは FR29 と同じ除外の下で idle を待たずに退避の合図を注入して自打刻する（[`account_signal`]）。
+/// 閾値未満・測れない・除外で注入しない周は逼迫度を持って次の条件へ（注入も停止もしない）。
+fn account_turn(request: &Request, place: &super::StateDir, dir: &Path, seen: &Seen) -> Turn {
+    let Some(seated) = seated(place, request.target, seen.stale_s) else {
+        return Turn::Pass(Account::Unevaluated);
+    };
+    let account = reading(&seated, seen.threshold);
+    if relaunch_due(&place.path, request.target, request.socket, dir) {
+        return Turn::Settled(Verdict { account, ..relaunch_turn(request, place, dir, seen, &seated) });
+    }
+    let Some(payload) = account_signal(&account, seen, dir) else {
+        return Turn::Pass(account);
+    };
+    let signal = Signal { kind: InjectKind::Externalize, payload: &payload, state: seen.state };
+    Turn::Settled(Verdict { account, ..Verdict::of(inject_line(request, place, dir, &signal)) })
+}
+
+/// 閾値以上の席へ送る退避の合図の 1 行。**FR29 と同じ除外**（[`over_cap`] と同じ極性）: 自席の未 consumed
+/// 退避物が 0 件と確かめられ、cycle lock が空いている周だけ（退避済み・作り直しの最中の席へ重ねない）。
+fn account_signal(account: &Account, seen: &Seen, dir: &Path) -> Option<String> {
+    match (account, &seen.wm) {
+        (Account::Over(label, pct, threshold), WmScan::None) if !cycle::lock_is_live(dir, seen.ttl_s) => {
+            Some(account_pointer(label, *pct, *threshold))
+        }
+        _ => None,
+    }
+}
+
+/// 口座の軸の材料（登録 row と、実測行の鮮度を保った replay）。
+struct Seated {
+    /// 自席の登録 row（口座・`model`・起動の雛形）。
+    row: Registration,
+    /// replay の現在地（実測行と他の席の登録 row）。
+    state: State,
+}
+
+/// 登録 row を引き、その口座の最新の実測行が `seat.tick_stale_s` より古い・無い周は FR33 の計測を 1 回撃って
+/// から読み直す（account-autonomy.md §5 (1)・定期計測はこの 1 形に限る・`fleet usage` と同じ関数）。log を
+/// 読めない・登録 row が無い周は `None`（軸を評価しない）。計測の失敗は行として記録されるだけで止めない
+/// （fleet-usage.md §6・FailOpen）——読み直した行が Unmeasured なら逼迫度は測れない側に倒れる。
+///
+/// manifest の `[[account]]` に無い口座は撃たない: 計測は宣言した口座だけを読むので行が積まれず、撃つと毎周の
+/// 計測に化ける（測れないまま＝逼迫度は `unmeasured`）。
+fn seated(place: &super::StateDir, target: &str, stale_s: u64) -> Option<Seated> {
+    let state = replay(&store::read_all(&place.path).ok()?);
+    let row = role::registration_of_target(&state, target)?.clone();
+    if is_fresh(&state, &row.account, stale_s) || !account_labels().contains(&row.account) {
+        return Some(Seated { row, state });
+    }
+    let _ = crate::fleet::usage::run(&[], &place.path);
+    let state = store::read_all(&place.path).map_or(state, |events| replay(&events));
+    Some(Seated { row, state })
+}
+
+/// 口座の最新の実測行（全窓・Measured / Unmeasured）の ts が `stale_s` 以内か（行が無い周は偽＝計測する）。
+fn is_fresh(state: &State, label: &str, stale_s: u64) -> bool {
+    let cutoff = fleet_cli::format_utc(state::now_secs().saturating_sub(stale_s));
+    state
+        .allowance
+        .iter()
+        .any(|(key, latest)| key.account == label && latest.ts >= cutoff)
+}
+
+/// 登録 row の口座の逼迫度を閾値で分ける（閾値ちょうどは以上＝R-C9-1 は「未満なら候補」の境界）。
+fn reading(seated: &Seated, threshold: u64) -> Account {
+    let label = seated.row.account.clone();
+    match pressure(&seated.state, &label, seated.row.model.as_deref()) {
+        None => Account::Unmeasured(label),
+        Some(pct) if pct >= threshold => Account::Over(label, pct, threshold),
+        Some(pct) => Account::Under(label, pct),
+    }
+}
+
+/// 口座の逼迫度（account-autonomy.md §3 の定義・model = 登録 row の `model`〔無い row は None＝全 model 窓の最大の
+/// 保守側〕）。窓の数え方は選定（[`crate::fleet::select`]）と同じ: 口座の最新の回のうち、数える窓に Unmeasured が
+/// 在れば測れない・reset を過ぎた行は数えない・残った窓の最大の使用率。数える窓が 1 つも無ければ `None`。
+fn pressure(state: &State, label: &str, model: Option<&str>) -> Option<u64> {
+    let mine: Vec<&AllowanceLatest> = state
+        .allowance
+        .iter()
+        .filter(|(key, _)| key.account == label)
+        .map(|(_, latest)| latest)
+        .collect();
+    let newest = mine.iter().map(|latest| latest.ts.as_str()).max()?;
+    let now = fleet_cli::now_utc();
+    let mut found: Option<u64> = None;
+    for latest in mine.iter().filter(|latest| latest.ts == newest) {
+        match &latest.allowance {
+            Allowance::Unmeasured(row) if counted(model, row.window, row.model.as_deref()) => return None,
+            Allowance::Measured(row) if counted(model, Some(row.window), row.model.as_deref()) && row.resets_at >= now => {
+                found = found.max(Some(row.used_pct));
+            }
+            Allowance::Unmeasured(_) | Allowance::Measured(_) => {}
+        }
+    }
+    found
+}
+
+/// その行を逼迫度に数えるか。model が与えられた周のモデル別窓はその model の行だけを数える（model の分からない行は
+/// 保守側で数える・選定と同じ）。
+fn counted(model: Option<&str>, window: Option<WindowKind>, row_model: Option<&str>) -> bool {
+    match (window, model, row_model) {
+        (Some(WindowKind::SevenDayModel), Some(want), Some(found)) => want == found,
+        _ => true,
+    }
+}
+
+/// 立て直しの入口（account-autonomy.md §5・3 条件が同時に立つ周）: (1) 自席への直近の注入の記録が退避の合図
+/// （[`last_externalize`]）(2) 打刻の最終行が `Stop` で、その ts が (1) より後（[`stopped_after`]）(3) pane の前面
+/// process が shell（[`super::pane_is_shell`]・tmux を撃つので最後）。(1) の無い停止（user の終了・crash）は
+/// 起こし直さない（器が起こしたのでない停止を器が起こし直さない）。
+fn relaunch_due(state_dir: &Path, target: &str, socket: Option<&str>, seat_dir: &Path) -> bool {
+    let Some(signalled) = last_externalize(state_dir, target) else {
+        return false;
+    };
+    stopped_after(seat_dir, signalled) && super::pane_is_shell(socket, target)
+}
+
+/// (1) `<state_dir>/inject.jsonl` の同じ席の最新行が tick の退避の合図（`who=seat-tick`・`kind=externalize`）なら、
+/// その ts。記録の形（判定行の `kind=` の token）は同じ module の [`body`] が書く。
+fn last_externalize(state_dir: &Path, target: &str) -> Option<u64> {
+    let seat = seat_name(target)?;
+    let text = std::fs::read_to_string(inject_path(state_dir)).ok()?;
+    let last = text
+        .lines()
+        .rev()
+        .filter_map(|line| json_lite::parse_object(line).ok())
+        .find(|pairs| field(pairs, "seat").and_then(Value::as_str) == Some(seat.as_str()))?;
+    let what = field(&last, "what").and_then(Value::as_str)?;
+    let kind = what.split_whitespace().find_map(|token| token.strip_prefix("kind="));
+    let signalled = field(&last, "who").and_then(Value::as_str) == Some(WHO)
+        && what.starts_with("decision=inject ")
+        && kind == Some(InjectKind::Externalize.as_str());
+    signalled.then(|| field(&last, "ts").and_then(Value::as_num)).flatten()
+}
+
+/// 記録 1 行の key の値。
+fn field<'a>(pairs: &'a [(String, Value)], key: &str) -> Option<&'a Value> {
+    pairs.iter().find(|(found, _)| found == key).map(|(_, value)| value)
+}
+
+/// (2) 打刻の最終行が `Stop` で、その ts が `after` より後か（読めない・無い周は偽＝起こさない側）。
+fn stopped_after(seat_dir: &Path, after: u64) -> bool {
+    let text = std::fs::read_to_string(state::path(seat_dir)).unwrap_or_default();
+    text.lines()
+        .rev()
+        .find(|line| !line.trim().is_empty())
+        .and_then(|line| state::Stamp::from_line(line).ok())
+        .is_some_and(|stamp| stamp.event == state::Event::Stop && stamp.ts > after)
+}
+
+/// 退避して止まった席の立て直し（account-autonomy.md §5）: back-off（`s2-07l.110` の cycle-stamp・閾値は
+/// `seat.tick_stale_s`）→ cycle lock（FR29 と同じ除外）→ [`cycle::relaunch`]（session 用の選定・雛形の穴埋め・
+/// 起動と復元の注入・登録 row の口座の更新）。候補なしは `account-no-candidate` で注入せず次の tick で選び直し、
+/// 立て直しが送れない・確かめられない周は `relaunch-<理由>` の error（rc 1・次の周は back-off が見る）。
+fn relaunch_turn(request: &Request, place: &super::StateDir, dir: &Path, seen: &Seen, seated: &Seated) -> Verdict {
+    let (stamp, blocked) = back_off(dir, seen.stale_s);
+    if let Some(reason) = blocked {
+        return held(stamp, reason);
+    }
+    if cycle::lock_is_live(dir, seen.ttl_s) {
+        return held(stamp, NoopReason::CycleLive);
+    }
+    let labels = account_labels();
+    let result = cycle::relaunch(&cycle::Relaunch {
+        target: request.target,
+        socket: request.socket,
+        state_dir: place,
+        restore: request.restore,
+        settle: request.settle,
+        step: request.step,
+        row: &seated.row,
+        state: &seated.state,
+        labels: &labels,
+        threshold_pct: seen.threshold,
+    });
+    let (decision, relaunched) = match result {
+        cycle::Relaunched::Done(label, settled) => (TickDecision::Inject(InjectKind::Relaunch, settled), label),
+        cycle::Relaunched::None(found) => {
+            (TickDecision::Noop(NoopReason::AccountNoCandidate), format!("none:{}", found.reason.as_str()))
+        }
+        cycle::Relaunched::Refused(reason) | cycle::Relaunched::Failed(reason) => {
+            return Verdict { stamp: Some(stamp), ..Verdict::of(TickDecision::Error(format!("relaunch-{reason}"))) };
+        }
+    };
+    Verdict { stamp: Some(stamp), relaunched: Some(relaunched), ..Verdict::of(decision) }
+}
+
+/// manifest の `[[account]]` の label 列（宣言値・`fleet usage` / `fleet select` と同じ埋め込みの口）。読めない周は
+/// 空＝選定は候補なし（測れる口座が無い）に倒れる。
+fn account_labels() -> Vec<String> {
+    Manifest::embedded().map_or_else(
+        |_| Vec::new(),
+        |manifest| manifest.accounts().iter().map(|account| account.label().to_owned()).collect(),
+    )
 }
 
 /// 注入する 1 行と、それを送る周の席の状態（[`inject_line`] の入力）。
@@ -513,14 +861,16 @@ fn inject_line(request: &Request, place: &super::StateDir, dir: &Path, signal: &
 /// （評価した順）。席の状態（`state=<値> event=<出所|none>`）は既存 token の**後ろに追加**する
 /// （名前・順序・書式は不変・`s2-07l.95`・`event` は C10 の出所＝置き場の `source=` と混ぜない）。
 /// cycle-stamp（`s2-07l.110`）は**その後ろ**（先に land した側の token が前・後から land した側が
-/// その後ろ・planner 裁定 2026-09-12）で、cycle の評価まで進んだ周だけ載る。
+/// その後ろ・planner 裁定 2026-09-12）で、cycle の評価まで進んだ周だけ載る。口座（`account=<label>:<pct>`）と
+/// 立て直し（`relaunch=<label|none:理由>`・`s2-07l.211`）は同じ規律で**さらに後ろ**・評価した周だけ載る。
 /// **置き場と出所は最後**（置き場が解けた周は判定に依らず載せる＝席側の打刻行と並べるだけで、
 /// 別の dir を見ていることを記録から弁別できる・`s2-07l.70`）。
 /// 注入した周は `consumed=<値>` の**直後**に理由（`reason=<語>`・queue と消費の周は無し）を足す
 /// （`seat inject` の行と同じ並び・既存 token の名前と順序は不変・`s2-07l.150`）: 測れない周と
 /// Enter が落ちた周を `false` と同じ顔で流さない（憲法 C10）。
 fn body(target: &str, judged: &Judged, place: &super::StateDir) -> String {
-    let head = match judged.decision {
+    let verdict = &judged.verdict;
+    let head = match verdict.decision {
         TickDecision::Inject(kind, settled) => format!(
             "decision=inject target={} consumed={}{} kind={}",
             sanitize_target(target),
@@ -532,13 +882,21 @@ fn body(target: &str, judged: &Judged, place: &super::StateDir) -> String {
         TickDecision::Error(ref reason) => body_of_error(reason),
     };
     let with_context = format!("{head}{}", judged.context.suffix());
-    let with_cycle = match judged.cycled.as_deref() {
+    let with_cycle = match verdict.cycled.as_deref() {
         Some(found) => format!("{with_context} cycle={found}"),
         None => with_context,
     };
     let with_state = judged.state.map_or(String::new(), state::Read::suffix);
-    let with_stamp = judged.stamp.map_or(String::new(), CycleStamp::suffix);
-    format!("{with_cycle}{with_state}{with_stamp}{}", place.suffix())
+    let with_stamp = verdict.stamp.map_or(String::new(), CycleStamp::suffix);
+    let with_relaunch = verdict
+        .relaunched
+        .as_deref()
+        .map_or_else(String::new, |found| format!(" relaunch={found}"));
+    format!(
+        "{with_cycle}{with_state}{with_stamp}{}{with_relaunch}{}",
+        verdict.account.suffix(),
+        place.suffix()
+    )
 }
 
 /// 実行系が回らなかった周の本体。
@@ -560,9 +918,9 @@ fn render(body: &str) -> String {
     format!("seat: tick {body}")
 }
 
-/// 1 回を記録する（**全周 1 行**）。置き場が解けない周は書かない（rc は変えない）。
-fn record(state_dir: &Path, target: &str, body: &str, started: Instant) {
-    let entry = InjectionRecord {
+/// 1 回の記録（**全周 1 行**・判定行と同じ字面）。
+fn entry_of(target: &str, body: &str, started: Instant) -> InjectionRecord {
+    InjectionRecord {
         schema: SCHEMA,
         who: WHO.to_owned(),
         what: body.to_owned(),
@@ -574,10 +932,100 @@ fn record(state_dir: &Path, target: &str, body: &str, started: Instant) {
         wall_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
         seat: seat_name(target),
         ts: state::now_secs(),
-    };
+    }
+}
+
+/// 1 回を席の記録へ積む。置き場が解けない周は書かない（rc は変えない）。
+fn record(state_dir: &Path, target: &str, entry: &InjectionRecord) {
     let Ok(policy) = LockPolicy::embedded() else {
         return;
     };
     let path = inject::tick_path(state_dir, target);
     let _ = store::append_line(&path, &entry.to_line(), policy);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{pressure, INJECT_KINDS, NOOP_REASONS};
+    use crate::fleet::{Allowance, AllowanceLatest, Measured, State, Unmeasured, UnmeasuredReason, WindowKind};
+    use crate::order::is_declaration_order;
+
+    /// reset がどの「いま」より後の窓。
+    const LATER: &str = "2099-01-01T00:00:00Z";
+    /// reset を過ぎた窓。
+    const PAST: &str = "2000-01-01T00:00:00Z";
+
+    /// `NoopReason` / `InjectKind` の字面は宣言順で全数を pin する（variant を足した周はここの件数が変わる・C2）。
+    #[test]
+    fn seat_account_noop_reasons_and_kinds_are_pinned_in_declaration_order() {
+        let reasons: Vec<&str> = NOOP_REASONS.iter().map(|reason| reason.as_str()).collect();
+        assert_eq!(
+            reasons,
+            [
+                "pane-missing", "busy", "state-missing", "state-unreadable", "state-stale", "wm-unconsumed",
+                "wm-unreadable", "cycle-live", "cycle-recent", "cycle-stamp-unreadable", "pointer-recent",
+                "account-unmeasured", "account-no-candidate",
+            ]
+        );
+        assert!(is_declaration_order(NOOP_REASONS, |reason| reason as usize));
+        let kinds: Vec<&str> = INJECT_KINDS.iter().map(|kind| kind.as_str()).collect();
+        assert_eq!(kinds, ["pointer", "externalize", "relaunch"]);
+        assert!(is_declaration_order(INJECT_KINDS, |kind| kind as usize));
+    }
+
+    /// 実測 1 行。
+    fn measured(account: &str, window: WindowKind, model: Option<&str>, used_pct: u64, resets_at: &str) -> Allowance {
+        Allowance::Measured(Measured {
+            account: account.to_owned(),
+            window,
+            model: model.map(str::to_owned),
+            endpoint: "oauth-usage".to_owned(),
+            used_pct,
+            resets_at: resets_at.to_owned(),
+        })
+    }
+
+    /// 回の列を物理順に replay したのと同じ表（同じ key は後が勝つ）。
+    fn table(rounds: &[(&str, Vec<Allowance>)]) -> State {
+        let mut state = State::default();
+        for (ts, rows) in rounds {
+            for row in rows {
+                state.allowance.insert(row.key(), AllowanceLatest { ts: (*ts).to_owned(), allowance: row.clone() });
+            }
+        }
+        state
+    }
+
+    /// 席の逼迫度は登録 row の model の窓だけを数え（無い row は全 model の最大）、最新の回だけを読み、reset を
+    /// 過ぎた窓は数えず、数える窓が Unmeasured なら測れない（選定と同じ窓の数え方・account-autonomy.md §3）。
+    #[test]
+    fn seat_account_pressure_reads_the_seat_model_and_the_latest_round() {
+        let ts = "2026-09-13T05:59:00Z";
+        let rows = table(&[(ts, vec![
+            measured("a1", WindowKind::FiveHour, None, 10, LATER),
+            measured("a1", WindowKind::SevenDay, None, 12, LATER),
+            measured("a1", WindowKind::SevenDayModel, Some("Fable"), 95, LATER),
+            measured("a1", WindowKind::SevenDayModel, Some("Opus"), 20, LATER),
+            measured("a2", WindowKind::FiveHour, None, 100, PAST),
+            measured("a2", WindowKind::SevenDay, None, 40, LATER),
+        ])]);
+        assert_eq!(pressure(&rows, "a1", Some("Opus")), Some(20), "Opus の席は Fable の 95 を数えない");
+        assert_eq!(pressure(&rows, "a1", Some("Fable")), Some(95));
+        assert_eq!(pressure(&rows, "a1", None), Some(95), "model の無い row は全 model の最大（保守側）");
+        assert_eq!(pressure(&rows, "a2", None), Some(40), "reset を過ぎた 100 は数えない");
+        assert_eq!(pressure(&rows, "a3", None), None, "実測行なし");
+        let later = table(&[
+            (ts, vec![measured("a1", WindowKind::FiveHour, None, 10, LATER)]),
+            ("2026-09-13T06:00:00Z", vec![Allowance::Unmeasured(Unmeasured {
+                account: "a1".to_owned(),
+                window: None,
+                model: None,
+                endpoint: "oauth-usage".to_owned(),
+                reason: UnmeasuredReason::NoCredentials,
+            })]),
+        ]);
+        assert_eq!(pressure(&later, "a1", None), None, "最新の回が Unmeasured なら前の回の実測を読まない");
+        let stale = table(&[(ts, vec![measured("a1", WindowKind::FiveHour, None, 99, PAST)])]);
+        assert_eq!(pressure(&stale, "a1", None), None, "reset を過ぎた行だけ＝測れない");
+    }
 }

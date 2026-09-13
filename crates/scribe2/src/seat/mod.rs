@@ -46,6 +46,21 @@ fn tmux_stdout(socket: Option<&str>, args: &[&str]) -> Option<String> {
         .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
+/// pane の前面 process を shell と読む名（`#{pane_current_command}` の値・閉じた列・字面は現物が正本）。
+pub const SHELLS: &[&str] = &["sh", "bash", "zsh", "fish"];
+
+/// target の pane の前面 process が shell か＝session が終わっているか（設計 seat-state.md §6・account-autonomy.md §5
+/// の立て直しの入口 (3)）。`list-panes -F '#{pane_current_command}'` を target で引く（typed な metadata・端末描画の
+/// 字面ではない＝C3.3 の外）。**window の全 pane が [`SHELLS`] のどれかの周だけ真**で、撃てない・pane が無い・shell で
+/// ない pane が 1 つでも在る周は偽（起こし直さない側・fail-closed）。
+pub fn pane_is_shell(socket: Option<&str>, target: &str) -> bool {
+    let Some(out) = tmux_stdout(socket, &["list-panes", "-t", target, "-F", "#{pane_current_command}"]) else {
+        return false;
+    };
+    let names: Vec<&str> = out.lines().map(str::trim).filter(|name| !name.is_empty()).collect();
+    !names.is_empty() && names.iter().all(|name| SHELLS.contains(name))
+}
+
 /// tmux を 1 回撃ち、成功したかだけを見る（出力を持たない send 系に使う）。
 pub fn tmux_ok(socket: Option<&str>, args: &[&str]) -> bool {
     let mut command = Command::new("tmux");
