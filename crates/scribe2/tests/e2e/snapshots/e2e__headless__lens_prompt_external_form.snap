@@ -1,3 +1,7 @@
+---
+source: crates/scribe2/tests/e2e/headless.rs
+expression: prompt
+---
 あなたは diff を 1 周だけ読む敵対的な検査役である。**直さない**——判定だけを返す。
 
 ## 出すもの
@@ -25,8 +29,17 @@ diff がそれを満たすかを見る。**足場だけの diff**（実装の変
 - 「verify を自分で撃てなかった」「test を回せなかった」は INCONCLUSIVE の理由にならない。
 
 ## 契約
-{contract}
+goal: 縦 1 本を通す
+done: run が Implemented になる
+verify:
+- cargo nextest run --no-tests=fail
+- cargo deny check bans
+write-set:
+- crates/vessel-unlikely/src/only-here.rs
+- crates/vessel-unlikely/src/second-only.rs
 
 ## diff
 以下が stdin から渡された diff である。
-{diff}
+--- a/fixture.txt
++++ b/fixture.txt
++line

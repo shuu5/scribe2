@@ -551,6 +551,50 @@ fn headless_lens_prompt_includes_contract_fields() {
     clean(&[&dir]);
 }
 
+/// lens の prompt に載る「審査の前提」の見出し（`s2-07l.134`）。
+///
+/// ★**契約 fixture にも diff fixture にも現れない字面**を選んである——fixture が同じ字面を
+/// 持つと、lens.txt から節を消しても「ちょうど 1 回」が fixture 側で満たされ歯が空虚になる。
+const LENS_PREMISE_HEADING: &str = "## 審査の前提（検証は済んでいる）";
+
+/// lens を固定の契約と diff で 1 回撃ち、claude の stdin に渡った prompt を返す。
+fn lens_prompt_of_fixed_fixture() -> String {
+    let dir = tmp();
+    let claude = fake_claude(&dir, "{\"verdict\":\"PASS\",\"evidence\":\"fake\"}\n", false, 0);
+    let contract = contract_in(&dir);
+    let out = run_lens(&contract, "4096", "plan", &claude, b"--- a/fixture.txt\n+++ b/fixture.txt\n+line\n");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    let prompt = slurp(&dir.join("stdin"));
+    clean(&[&dir]);
+    prompt
+}
+
+/// lens の prompt は「verify は gate が済ませた・lens は tool を撃てない」前提を伝える
+/// （`s2-07l.134`・設計 pipeline.md §5.3 / ADR-0011 §2.1）。前提が無いと実 lens は cargo を
+/// 試して token を使い、撃てなかったことを INCONCLUSIVE の理由に混ぜた（.185 run 1 の実測）。
+#[test]
+fn headless_lens_prompt_states_verify_already_ran() {
+    let prompt = lens_prompt_of_fixed_fixture();
+    assert_eq!(
+        prompt.matches(LENS_PREMISE_HEADING).count(),
+        1,
+        "前提の節の見出しがちょうど 1 回在る: {prompt}"
+    );
+    let premise = prompt.find(LENS_PREMISE_HEADING);
+    let rubric = prompt.find("## 判定の決め方");
+    let contract = prompt.find("## 契約");
+    assert!(rubric.is_some() && contract.is_some(), "既存の見出しが在る: {prompt}");
+    assert!(rubric < premise, "前提の節は「判定の決め方」より後: {prompt}");
+    assert!(premise < contract, "前提の節は「## 契約」より前: {prompt}");
+}
+
+/// lens の prompt の外形（契約と diff の fixture を固定・C12.5）。
+#[test]
+fn headless_lens_prompt_external_form() {
+    let prompt = lens_prompt_of_fixed_fixture();
+    insta::assert_snapshot!("lens_prompt_external_form", prompt);
+}
+
 #[test]
 fn headless_lens_fills_holes_in_one_pass() {
     let dir = tmp();
