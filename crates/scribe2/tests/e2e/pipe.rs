@@ -1362,6 +1362,51 @@ fn spawn_live_seat(repo: &Path, state: &Path, body: &str, pid_file: &Path) -> (S
     }
 }
 
+/// 前提: `pid` が席の group から抜けているか（`SeatSpawned` の pid＝leader の pgid と異なるか）。
+///
+/// 読めない周（席も pid も見えない）は抜けていない側へ倒す＝前提を作れなかったと読む。
+fn left_the_seat_group(state: &Path, id: &str, pid: u32) -> Result<(), String> {
+    let leader = events(state)
+        .iter()
+        .find(|found| found.run == id && found.kind == EventKind::SeatSpawned)
+        .and_then(|found| found.pid)
+        .and_then(|found| u32::try_from(found).ok())
+        .and_then(proc_pgid);
+    let own = proc_pgid(pid);
+    match (leader, own) {
+        (Some(group), Some(found)) if group != found => Ok(()),
+        _ => Err(format!("leader の pgid {leader:?} / {pid} の pgid {own:?}")),
+    }
+}
+
+/// group から抜けた子を持つ偽 runner の script。**子が抜けたのを確かめてから** pid を書く。
+///
+/// `$!` は fork 直後に出るので、そのまま書くと子が `setsid()` を呼ぶ前の pid を渡しうる（遅い箱で
+/// stop の TERM が子にも届き、止め切れる周に化けた＝`s2-07l.186`）。`/proc/$!/stat` の pgid
+/// （5 番目の field）が自分の pgid と異なるまで回数の上限つきで待ち、抜けないまま上限に達したら
+/// pid を書かずに rc 3 で終える。PATH は [`group_path`] の 4 つだけなので sh の builtin で書く。
+// flip-check: retroactive s2-07l.186
+fn escaped_runner(pid_file: &Path) -> String {
+    format!(
+        "setsid sleep 300 &\n\
+         child=$!\n\
+         read -r line < /proc/$$/stat\n\
+         set -- $line\n\
+         own=$5\n\
+         tries=0\n\
+         while :; do\n\
+         \x20 read -r line < /proc/$child/stat || exit 3\n\
+         \x20 set -- $line\n\
+         \x20 [ \"$5\" != \"$own\" ] && break\n\
+         \x20 tries=$((tries + 1))\n\
+         \x20 [ \"$tries\" -lt 200000 ] || exit 3\n\
+         done\n\
+         echo $child > '{}'\n\
+         wait\n",
+        pid_file.display()
+    )
+}
+
 /// 自分が起こした子孫の process を片付ける（`sleep` の pid だけ・無ければ何もしない）。
 fn reap_own(pid: u32) {
     let is_sleep = fs::read_to_string(format!("/proc/{pid}/comm")).is_ok_and(|comm| comm.trim() == "sleep");
@@ -1400,12 +1445,21 @@ fn pipe_stop_group_run_kills_the_grandchild() {
 /// (2) group から抜けた子（`setsid`）が runner の stdout を握ったままの周: spawn は stdout の EOF を
 /// 待って runner を回収できず、group は zombie の leader で残る＝**止め切れない**。
 /// rc 1・`RunStopped` も `SeatStopped` も書かない（run は live のまま）。
+///
+/// stop を撃つ**前に**子が group から抜けたことを assert する（崩れていれば止め切れる周に化ける
+/// ＝偽の緑にしない・`s2-07l.186`）。
 #[test]
 fn pipe_stop_group_unstoppable_seat_keeps_the_run_live() {
     let (repo, state) = repo_with_state();
     let pid_file = state.join("escaped.pid");
-    let body = format!("setsid sleep 300 &\necho $! > '{}'\nwait\n", pid_file.display());
+    let body = escaped_runner(&pid_file);
     let (id, mut spawner, escaped) = spawn_live_seat(&repo, &state, &body, &pid_file);
+    let premise = left_the_seat_group(&state, &id, escaped);
+    if premise.is_err() {
+        reap_own(escaped);
+        spawner.wait().ok();
+    }
+    assert!(premise.is_ok(), "止め切れない状態を作れなかった: {premise:?}");
 
     let out = run_pipe(&["stop", "--run", &id, "--state-dir", &state.display().to_string()]);
     let run_stopped = kind_count(&state, &id, EventKind::RunStopped);
@@ -1421,6 +1475,29 @@ fn pipe_stop_group_unstoppable_seat_keeps_the_run_live() {
     assert_eq!(run_stopped, 0, "RunStopped を書かない");
     assert_eq!(seat_stopped, 0, "SeatStopped を書かない");
     assert!(stdout_of(&shown).contains("stage=Spawned"), "run は非終端のまま: {}", stdout_of(&shown));
+    clean(&[&repo, &state]);
+}
+
+/// (2′) 前提 assert の RED の向き: **`setsid` の前に** pid を書く旧 script（遅い箱の再現として子の
+/// `setsid` を 30 秒遅らせる）では、書かれた pid はまだ席の group に居る＝前提 assert が落ちる側。
+/// この形のまま stop を撃つと子ごと止まり rc 0 に化ける（CI で見た偽の形）ので、片付けは group
+/// 宛ての stop そのものに任せる（新しい signal の口を足さない）。
+#[test]
+fn pipe_stop_group_premature_pid_fails_the_premise() {
+    let (repo, state) = repo_with_state();
+    let pid_file = state.join("premature.pid");
+    let body = format!("(sleep 30; exec setsid sleep 300) &\necho $! > '{}'\nwait\n", pid_file.display());
+    let (id, mut spawner, premature) = spawn_live_seat(&repo, &state, &body, &pid_file);
+    let premise = left_the_seat_group(&state, &id, premature);
+
+    let out = run_pipe(&["stop", "--run", &id, "--state-dir", &state.display().to_string()]);
+    spawner.wait().ok();
+    let survived = proc_alive(premature);
+
+    assert!(premise.is_err(), "setsid 前の pid は group に居る＝前提 assert が落ちる: {premise:?}");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "子ごと止まる（偽の形）: {}", stderr_of(&out));
+    assert!(stdout_of(&out).contains("seats=1 stopped=1"), "{}", stdout_of(&out));
+    assert!(!survived, "{premature} も group ごと消えている");
     clean(&[&repo, &state]);
 }
 
