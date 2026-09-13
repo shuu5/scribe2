@@ -885,7 +885,8 @@ fn stop(args: &[String], manifest: &Manifest, policy: LockPolicy) -> Outcome {
     }
 }
 
-/// `pipe stop --run <id>`。終端でない便 1 本に `RunStopped` を書く（席が Live なら先に止める）。
+/// `pipe stop --run <id>`。終端でない便 1 本に `RunStopped` を書く（席が Live なら先に group 宛てに
+/// 止める・**止め切れなかった周は `RunStopped` を書かず rc 1**＝run は live のまま）。
 ///
 /// **終端の便には event を増やさず rc 1**（書込は冪等・rc は冪等でない）。2 回撃った 2 件目が
 /// この経路に落ちる＝events.jsonl は 1 件しか増えない。判定を読めない `Gated` は rc 2 で断る
@@ -931,19 +932,24 @@ fn stop_run(args: &[String], manifest: &Manifest, policy: LockPolicy, id: &str) 
             return broken(err);
         }
     }
-    // 便を外すのが本体ゆえ、席を止め切れなかった周も `RunStopped` は書く（rc で名乗る）。
+    let line = format!("stop: run={id} seats={} stopped={stopped}", live_seats.len());
+    // **席を 1 つでも止め切れなかった周は `RunStopped` を書かない**（FailClosed・C9 / C6.2）。
+    // 書くと run は終端として排他の母集団から外れるのに、その runner は走り続ける。
+    if stopped != live_seats.len() {
+        return unstoppable(line, live_seats.len().saturating_sub(stopped));
+    }
     if let Err(err) = record_run_stopped(&state_dir, &state, id, policy) {
         return broken(err);
     }
-    let line = format!("stop: run={id} seats={} stopped={stopped}", live_seats.len());
-    if stopped == live_seats.len() {
-        Outcome::ok_line(line)
-    } else {
-        Outcome {
-            out: vec![line],
-            err: vec![format!("pipe: 止められない席が {} 残った", live_seats.len().saturating_sub(stopped))],
-            rc: RC_REFUSED,
-        }
+    Outcome::ok_line(line)
+}
+
+/// 止め切れなかった周の形（rc 1・run は終端にしない）。
+fn unstoppable(line: String, left: usize) -> Outcome {
+    Outcome {
+        out: vec![line],
+        err: vec![format!("pipe: 止められない席が {left} 残った（run は終端にしない）")],
+        rc: RC_REFUSED,
     }
 }
 
@@ -974,14 +980,27 @@ fn stop_all(args: &[String], manifest: &Manifest, policy: LockPolicy) -> Outcome
         .map(|seat| (seat.id.clone(), seat.run.clone(), seat.pid))
         .collect();
     let mut stopped = 0_usize;
+    // 止めた席の便（記帳順）と、止め切れなかった席を持つ便。
+    let mut stopped_runs: Vec<&str> = Vec::new();
+    let mut unstopped_runs: Vec<&str> = Vec::new();
     for (id, run, pid) in &live {
         // 止められなかった席に「止めた」を記帳しない。記帳すると次の周が
         // 「対象なし」を返し、生きている席が終端として消える（偽の全クリア）。
         if !pid.is_some_and(|found| terminate(found, grace)) {
+            unstopped_runs.push(run.as_str());
             continue;
         }
         stopped += 1;
-        if let Err(err) = record_stop(&state_dir, &state, (id, run, *pid), policy) {
+        if let Err(err) = record_seat_stop(&state_dir, &state, (id, run, *pid), policy) {
+            return broken(err);
+        }
+        if !stopped_runs.contains(&run.as_str()) {
+            stopped_runs.push(run);
+        }
+    }
+    // `--run` と同じ極性: **止め切れなかった席を持つ便には `RunStopped` を書かない**。
+    for run in stopped_runs.iter().filter(|run| !unstopped_runs.contains(run)) {
+        if let Err(err) = record_run_stopped(&state_dir, &state, run, policy) {
             return broken(err);
         }
     }
@@ -989,43 +1008,81 @@ fn stop_all(args: &[String], manifest: &Manifest, policy: LockPolicy) -> Outcome
     if stopped == live.len() {
         Outcome::ok_line(line)
     } else {
-        Outcome {
-            out: vec![line],
-            err: vec![format!("pipe: 止められない席が {} 残った", live.len() - stopped)],
-            rc: RC_REFUSED,
-        }
+        unstoppable(line, live.len().saturating_sub(stopped))
     }
 }
 
 /// TERM → 猶予だけ待つ → 残れば KILL。**待機は fleet の 1 実装を通る**（C3.4）。
+///
+/// 席の pid は `pipe spawn` が立てた process group の leader（= group id）なので、**group 宛て**に
+/// 撃ち、group の全員が消えるのを待つ（wrapper だけが死んで子・孫が残る形を塞ぐ）。group が無い周
+/// （`kill` が rc 非 0 = group leader でない旧 record の席）と pid ≤ 1 は**単一 pid** へ撃つ（互換）。
+/// true を返すのは group（互換の周は pid）が消えた周だけである。
 fn terminate(pid: u64, grace_ms: u64) -> bool {
-    let target = u32::try_from(pid).unwrap_or(u32::MAX);
-    signal(pid, "-TERM");
-    if fleet::wait(Completion::SeatGone(target), Duration::from_millis(grace_ms)).is_ok() {
+    let grace = Duration::from_millis(grace_ms);
+    let Ok(target) = u32::try_from(pid) else {
+        return false;
+    };
+    if let StopPlan::Group(group) = stop_plan(pid) {
+        if signal(&group.target(), "-TERM") {
+            if fleet::wait(Completion::GroupGone(target), grace).is_ok() {
+                return true;
+            }
+            signal(&group.target(), "-KILL");
+            return fleet::wait(Completion::GroupGone(target), grace).is_ok();
+        }
+    }
+    signal(&pid.to_string(), "-TERM");
+    if fleet::wait(Completion::SeatGone(target), grace).is_ok() {
         return true;
     }
-    signal(pid, "-KILL");
-    fleet::wait(Completion::SeatGone(target), Duration::from_millis(grace_ms)).is_ok()
+    signal(&pid.to_string(), "-KILL");
+    fleet::wait(Completion::SeatGone(target), grace).is_ok()
 }
 
-/// pid へ signal を送る（std に kill は無いので `kill` を撃つ）。
-fn signal(pid: u64, name: &str) {
-    let _ = std::process::Command::new("kill")
+/// 席の止め方（2 値）。**選ぶのは [`stop_plan`] ただ 1 本**で、実 signal を送らずに pin できる。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StopPlan {
+    /// process group 宛て（group id = 席の pid）。
+    Group(GroupId),
+    /// 単一 pid 宛て（group 宛てにしてはならない pid）。
+    Single,
+}
+
+/// group 宛ての signal の宛先。**pid ≥ 2 だけを持てる**——`kill -- -1` は user の全 process、
+/// `kill -- -0` は自分の group であり、`-{pid}` の字面はこの型からしか作らない
+/// （guard 1 本の短絡に依らない・2026-09-13 の事故）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct GroupId(u64);
+
+impl GroupId {
+    /// pid ≤ 1 は `None`。
+    fn new(pid: u64) -> Option<Self> {
+        (pid >= 2).then_some(Self(pid))
+    }
+
+    /// `kill` へ渡す負の pid の字面。
+    fn target(self) -> String {
+        format!("-{}", self.0)
+    }
+}
+
+/// 席の pid から止め方を選ぶ（pure）。
+fn stop_plan(pid: u64) -> StopPlan {
+    match GroupId::new(pid) {
+        Some(group) => StopPlan::Group(group),
+        None => StopPlan::Single,
+    }
+}
+
+/// pid へ signal を送る（std に kill は無いので `kill` を撃つ）。rc 0 の周だけ true。
+fn signal(target: &str, name: &str) -> bool {
+    std::process::Command::new("kill")
         .arg(name)
-        .arg(pid.to_string())
-        .output();
-}
-
-/// 席と便に「止めた」を記帳する（`--all` の 1 席分）。
-fn record_stop(
-    state_dir: &Path,
-    state: &State,
-    seat: (&str, &str, Option<u64>),
-    policy: LockPolicy,
-) -> Result<(), String> {
-    let (id, run, pid) = seat;
-    record_seat_stop(state_dir, state, (id, run, pid), policy)?;
-    record_run_stopped(state_dir, state, run, policy)
+        .arg("--")
+        .arg(target)
+        .output()
+        .is_ok_and(|out| out.status.success())
 }
 
 /// 席に「止めた」を記帳する。**止められた席にだけ書く**（偽の全クリアを作らない）。
@@ -1088,4 +1145,31 @@ fn refused(reason: String) -> Outcome {
 /// 対象そのものが壊れている（rc 2）。
 fn broken(reason: String) -> Outcome {
     Outcome::failed_line(RC_BROKEN, format!("pipe: {reason}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{stop_plan, GroupId, StopPlan};
+
+    /// pid 0 / 1 は単一 pid 宛て・2 以上は group 宛て（実 signal を送らずに止め方の選択を pin する）。
+    #[test]
+    fn pipe_stop_group_plan_never_targets_pid_zero_or_one_as_group() {
+        assert_eq!(stop_plan(0), StopPlan::Single, "pid 0 を group 宛てにしない（自分の group）");
+        assert_eq!(stop_plan(1), StopPlan::Single, "pid 1 を group 宛てにしない（user の全 process）");
+        assert!(matches!(stop_plan(2), StopPlan::Group(found) if found.target() == "-2"), "{:?}", stop_plan(2));
+        assert!(
+            matches!(stop_plan(4242), StopPlan::Group(found) if found.target() == "-4242"),
+            "{:?}",
+            stop_plan(4242)
+        );
+    }
+
+    /// group 宛ての字面は型からしか作れず、型は pid ≤ 1 を持てない。
+    #[test]
+    fn pipe_stop_group_id_rejects_pid_zero_and_one() {
+        assert_eq!(GroupId::new(0), None);
+        assert_eq!(GroupId::new(1), None);
+        assert_eq!(GroupId::new(2).map(GroupId::target), Some("-2".to_owned()));
+        assert_eq!(GroupId::new(u64::MAX).map(GroupId::target), Some(format!("-{}", u64::MAX)));
+    }
 }

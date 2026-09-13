@@ -19,6 +19,7 @@ use crate::fleet::{EventKind, Stage};
 use crate::name::NAME;
 use crate::pipe::contract::Contract;
 use std::io::Write;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
@@ -121,7 +122,11 @@ fn launch_runner(
     let (mut command, confinement) = confine::wrap_line(&cmd, &wrap);
     // **env を 1 つも足さない**: `.env()` / `.envs()` を呼ばず親の env をそのまま継承する。
     // stdout は捕らえる（質問 record の読み面・`gate.rs::ask_lens` と同じ形）。stderr は継承。
+    // **先頭 process を新しい process group の leader にする**（setsid ではない・cgroup の scope とは
+    // 独立）。`SeatSpawned` の pid はそのまま group id として読まれ、`pipe stop` は group 宛てに
+    // 撃つ＝wrapper だけが死んで runner や claude が残る形を塞ぐ（設計 §5.6）。
     let child = command
+        .process_group(0)
         .current_dir(worktree)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

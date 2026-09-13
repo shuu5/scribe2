@@ -114,6 +114,7 @@
 
 ### 5.6 stop（(a)・FR13・面 4）
 `pipe stop --all`: replay で `SeatState::Live` な seat を列挙し pid へ `kill -TERM`（std::process で `kill`）→ `wait(Completion::SeatGone(pid), 猶予)` の猶予は rules 行 `pipe.stop_grace_ms` → 残れば `-KILL` → 各 seat に `SeatStopped`・run に `RunStopped stage=Stopped`。**rc = 0: 全部止まった / 対象なし（冪等）・1: 止められない seat が残った・2: state が読めない**。stdout `stop: seats=<N> stopped=<M>`。**予定形（ADR-0019 §2.1・契約 (a) の land まで現物は `--all` だけ）**: `pipe stop --run <id>`（[pipeline-conflict.md](./pipeline-conflict.md) §2）は終端でない run 1 本に `RunStopped` を書いて live から外す（席が Live なら先に止める・終端の run は event を増やさず rc 1）。
+**errata（s2-07l.180）**: 席は process group 宛てに止める（spawn が先頭 process を group leader にし、`kill -TERM -- -<pid>` → `wait(Completion::GroupGone(pid))` → 残れば `-KILL`・group が無い旧 record の席と pid ≤ 1 は単一 pid の経路）・席を 1 つでも止め切れなかった周は `RunStopped` を書かない（rc 1・run は live のまま・`--all` も同じ）。
 
 ### 5.7 show / resume / run
 - `pipe show --run <id>` → `run=<id> bead=<b> stage=<s> approved=<bool> worktree=<path>`（無ければ rc 1）。

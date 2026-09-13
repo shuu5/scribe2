@@ -913,14 +913,17 @@ pub enum Completion {
         /// 並列度の上限（rules 行 `gate.mutants_jobs`）。
         cap: u64,
     },
+    /// process group の全員が消えること（group 宛ての TERM / KILL の後・値は group id）。
+    GroupGone(u32),
 }
 
 impl Completion {
     /// 見張る pid。**pid を見張らない variant（[`Self::SlotFree`]）は 0**——pid 0 は
     /// `/proc/0` を持たない（user の process に振られない）ので、生きている pid と取り違えない。
+    /// [`Self::GroupGone`] は group id（= group leader の pid）を返す。
     pub fn pid(&self) -> u32 {
         match *self {
-            Self::RunnerExited(pid) | Self::SeatGone(pid) => pid,
+            Self::RunnerExited(pid) | Self::SeatGone(pid) | Self::GroupGone(pid) => pid,
             Self::SlotFree { .. } => 0,
         }
     }
@@ -929,6 +932,7 @@ impl Completion {
     fn is_met(&self) -> bool {
         match self {
             Self::RunnerExited(pid) | Self::SeatGone(pid) => !pid_is_live(*pid),
+            Self::GroupGone(group) => !group_is_live(*group),
             Self::SlotFree { slots_dir, want, job_mb, reserve_mb, cap } => {
                 crate::pipe::admission::has_room(
                     slots_dir,
@@ -967,4 +971,78 @@ pub fn wait(completion: Completion, deadline: Duration) -> Result<(), Timeout> {
 /// pid が生きているか。
 fn pid_is_live(pid: u32) -> bool {
     std::path::Path::new(&format!("/proc/{pid}")).exists()
+}
+
+/// pgid が `group` の process が `/proc` に 1 つでも在るか（zombie も数える＝回収されるまで在る）。
+///
+/// **`/proc` を読めない周は「在る」**（消えたと測れていないものを消えたにしない・fail-closed）。
+/// 読む間に消えた process の stat は読めないので飛ばす。
+fn group_is_live(group: u32) -> bool {
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return true;
+    };
+    entries.flatten().any(|entry| {
+        let numeric = entry.file_name().to_str().is_some_and(|name| name.bytes().all(|b| b.is_ascii_digit()));
+        numeric
+            && std::fs::read_to_string(entry.path().join("stat"))
+                .ok()
+                .and_then(|text| pgid_of(&text))
+                == Some(group)
+    })
+}
+
+/// `/proc/<pid>/stat` の 1 行から pgid（第 5 欄）を読む（pure）。
+///
+/// `comm` は空白も `)` も含みうるので、**最後の `)`** の後ろから数える（state・ppid・pgrp の順）。
+/// 欄が足りない行・数でない欄は `None`。
+fn pgid_of(stat_text: &str) -> Option<u32> {
+    let (_, rest) = stat_text.rsplit_once(')')?;
+    rest.split_whitespace().nth(2)?.parse().ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{pgid_of, Completion};
+
+    #[test]
+    fn pipe_stop_group_pgid_of_reads_the_fifth_field() {
+        assert_eq!(pgid_of("4242 (sleep) S 4200 4100 4100 0 -1 4194560 91 0"), Some(4100), "通常の comm");
+        assert_eq!(pgid_of("4242 (Web Content) S 4200 777 777 0 -1"), Some(777), "空白入り comm");
+        assert_eq!(pgid_of("4242 (a) S 1 2 (b)) R 9 31 32 0"), Some(31), "`)` 入り comm は最後の `)` から数える");
+        assert_eq!(pgid_of("4242 (sleep) S 4200"), None, "欄が足りない");
+        assert_eq!(pgid_of("4242 (sleep) S 4200 x 1"), None, "数でない欄");
+        assert_eq!(pgid_of("4242 sleep S 4200 4100"), None, "comm の閉じが無い");
+    }
+
+    #[test]
+    fn pipe_stop_group_completion_pid_is_the_group_id() {
+        assert_eq!(Completion::GroupGone(31337).pid(), 31337);
+    }
+
+    /// wait の網羅 match が新 variant を含む（variant を足したら compile で気付く形の歯）。
+    #[test]
+    fn pipe_stop_group_completion_match_is_exhaustive() {
+        let all = [
+            Completion::RunnerExited(7),
+            Completion::SeatGone(8),
+            Completion::SlotFree {
+                slots_dir: std::path::PathBuf::from("slots"),
+                want: 1,
+                job_mb: 1,
+                reserve_mb: 1,
+                cap: 1,
+            },
+            Completion::GroupGone(9),
+        ];
+        let names: Vec<&str> = all
+            .iter()
+            .map(|found| match found {
+                Completion::RunnerExited(_) => "RunnerExited",
+                Completion::SeatGone(_) => "SeatGone",
+                Completion::SlotFree { .. } => "SlotFree",
+                Completion::GroupGone(_) => "GroupGone",
+            })
+            .collect();
+        assert_eq!(names, ["RunnerExited", "SeatGone", "SlotFree", "GroupGone"], "宣言順の末尾に GroupGone");
+    }
 }

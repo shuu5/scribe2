@@ -22,6 +22,7 @@
 - rc: 交差 = `RC_REFUSED`（1・既存の拒否と同じ）/ 読めない = `RC_BROKEN`（2・契約の写しが無い / parse 不能・`Gated` run の verdict.json が読めない周も同じ「読めない」側）。いずれも run を作らず event を書かない。
 - **同じ bead の 2 本目**: owner が live run と同じ契約も交差扱い（同じ write-set になるので自然に掛かる・特別扱いしない）。終端した run（Failed / Gated FAIL / Stopped）の同 bead は交差しない＝契約を改訂して流し直す経路（本番の .129 / .131 の型）は塞がらない。
 - **放置された便を外す口**: `pipe stop --run <id>`（新 flag・pipeline.md §5.6）。終端でない run 1 本に `RunStopped` を書く（席が Live なら先に止める・pid が無い Live 席も対象）。終端の run には event を増やさず rc 1（書込は冪等・rc は冪等でない＝`--all` の「対象なし rc 0」とは語が違う）。`--all` の意味（Live な席を持つ run だけ）は変えない。
+  - errata（s2-07l.180）: 席は process group 宛てに止め、止め切れなかった周は `RunStopped` を書かない（rc 1・run は live のまま＝排他の母集団に残る・pipeline.md §5.6）。
 - 回答で write-set を広げる周（.133）: `pipe answer` が受ける回答の中に write-set の追加が在るなら、追加後の集合で同じ関数を撃ち、交差すれば answer を受け付けない（rc・理由は同じ variant）。write-set の追加をどう表すかは .133 の設計で決める（本 doc は照合の口＝`pub(crate)` の関数 1 本だけを約束する）。
 
 ## 3. 衝突の機械解消（ADR-0019 §2.2）
