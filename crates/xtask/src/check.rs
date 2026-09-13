@@ -145,6 +145,7 @@ pub fn inspect(root: &Path) -> Report {
     measured.push(crate::enum_slices::measure(&files));
     measured.push(crate::spawn_points::measure(&layout, &files));
     measured.push(crate::polarity::measure(&layout));
+    measured.push(crate::prose_gate::measure(&layout));
     fold(measured)
 }
 
@@ -462,7 +463,12 @@ mod tests {
             &format!("crates/{FIXTURE_CORE}/{}", crate::polarity::SNAPSHOT_REL),
             "---\nsource: x\nexpression: form\n---\nguard=a timing=in-loop on-failure=fail-closed boundary=m::A\npolarity: guards=1 in-loop=1 post-hoc=0 fail-open=0\n",
         );
+        // 設計 doc も同じ（prose-gate は対象 0 本を違反に倒す）。印を持つ文は pointer 付きで適合。
+        write_at(dir, PROSE_DOC_REL, "# 設計\n\n器は失敗を記録しなければならない（C1）。\n");
     }
+
+    /// fixture の設計 doc の相対 path。
+    const PROSE_DOC_REL: &str = "docs/design/probe-7q.md";
 
     /// rules manifest の相対 path。
     const RULES_REL: &str = "rules/manifest.toml";
@@ -576,11 +582,12 @@ mod tests {
         test-src-ratio=<v>/<v> name-literal=<v> manifest-name=<v> manifest-version=<v>.<v>.<v> \
         lints-set=<v> lints-optin=<v>/<v> deps-empty=<v> toolchain-pin=<v>.<v>.<v> \
         paths-clean=<v> private-clean=<v> non-rust-exec=<v>/<v> allow=<v> ci-shell-lines=<v> \
-        claude-md-constitution=<v> enum-slices=<v> claude-spawn-points=<v> polarity=<v>/<v>";
+        claude-md-constitution=<v> enum-slices=<v> claude-spawn-points=<v> polarity=<v>/<v> \
+        prose-gate=<v>/<v>";
 
     /// git を要する measure の fact（`.git` の無い木では測れない形になり、副 field も出ない）。
     fn is_git_fact(token: &str) -> bool {
-        ["paths-clean=", "private-clean=", "non-rust-exec=", "allow="]
+        ["paths-clean=", "private-clean=", "non-rust-exec=", "allow=", "prose-gate="]
             .iter()
             .any(|prefix| token.starts_with(prefix))
     }
@@ -1325,4 +1332,58 @@ mod tests {
         );
     }
 
+    /// 判定行に散文の門の fact が載る（設計 contract-source.md §12・`s2-07l.202`）。
+    #[test]
+    fn prose_gate_fact_is_in_summary() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+        let line = summary(&root);
+        assert!(line.contains(" prose-gate="), "判定行に prose-gate の fact が在るはず: {line}");
+    }
+
+    /// fact は `prose-gate=<違反数>/<母集団>` の形で、現物の `docs/design` は違反 0（母集団は空でない）。
+    ///
+    /// 分岐は `.git` の有無（flip-check の展開木では git を要する他の fact と同じく測れない形）。
+    #[test]
+    fn prose_gate_fact_counts_zero_violations_on_workspace() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+        let line = summary(&root);
+        let value = line
+            .split(' ')
+            .find_map(|token| token.strip_prefix("prose-gate="))
+            .unwrap_or_default();
+        if root.join(".git").exists() {
+            let counts: Vec<usize> = value.split('/').filter_map(|part| part.parse().ok()).collect();
+            assert_eq!(counts.len(), 2, "<n>/<m> の形のはず: {line}");
+            assert_eq!(counts.first(), Some(&0), "現物の設計 doc は違反 0 のはず: {line}");
+            assert!(counts.get(1).is_some_and(|marked| *marked >= 1), "母集団は空でないはず: {line}");
+        } else {
+            assert!(value.starts_with("n/a(") || value == "?", ".git の無い木では測れない形のはず: {line}");
+        }
+    }
+
+    /// 印を持つ文が pointer を失った設計 doc は prose-gate だけで落ち、file:line と理由を名指す。
+    #[test]
+    fn prose_gate_names_violating_design_doc_in_check() {
+        let violations = check_fixture(|dir| {
+            write_at(dir, "docs/design/probe-8w.md", "# 設計\n席は lock を確保しなければならない。\n");
+        });
+        assert_single(&violations, "prose-gate");
+        let head = violations.first().map(String::as_str).unwrap_or_default();
+        assert!(head.contains("docs/design/probe-8w.md:2: no-pointer"), "{head}");
+    }
+
+    /// tracked な設計 doc が 0 本の木は違反（0 本の緑にしない）・健全な木の fact は `0/<母集団>`。
+    #[test]
+    fn prose_gate_fails_closed_without_design_docs() {
+        let missing = check_fixture(|dir| {
+            let _ = fs::remove_file(dir.join(PROSE_DOC_REL));
+        });
+        assert_single(&missing, "prose-gate");
+        let dir = make_tmp_dir();
+        write_healthy(&dir);
+        git_track_all(&dir);
+        let line = summary(&dir);
+        let _ = fs::remove_dir_all(&dir);
+        assert!(line.contains(" prose-gate=0/1"), "健全な木は違反 0 / 母集団 1: {line}");
+    }
 }

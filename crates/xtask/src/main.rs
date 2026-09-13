@@ -18,6 +18,7 @@ mod non_rust_exec;
 mod paths_clean;
 mod polarity;
 mod private_clean;
+mod prose_gate;
 mod spawn_points;
 mod toml_lite;
 
