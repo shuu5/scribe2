@@ -807,5 +807,5 @@ glossary:
   - { term: 席の指示文,   en: role brief,             plain_short: 席に差し込む指示,         def: 役割ごとの雛形と権能の rules 行から器が生成し、 session の文脈が初期化されるたびに注入する文（FR42）。 手書きの規範文は持たない。 }
   - { term: 席の queue,     en: seat queue,             plain_short: 席が抱える次の仕事,       def: 席に向けた dispatch・席宛ての質問・裁定済みの次の行動の集合（FR43）。 承認と裁定の待ちだけなら正当な idle。 }
   - { term: 席間の連絡,     en: inter-seat message,     plain_short: 席から席へのやり取り,       def: 開発 session の席どうしの message を、 入力欄を経由しない経路で届け、 経路の記録で着地を確かめること（FR44）。 }
-  - { term: 設計 pointer,   en: design pointer,         plain_short: どの設計 doc のどの契約か, def: 設計 doc の path と契約 id の対。 intake の入力で、 台帳の bead の受入条件が持つ 1 行でもある（FR47）。 }
+  - { term: 設計 pointer,   en: design pointer,         plain_short: どの設計 doc のどの契約か, def: 設計 doc の path と契約 id の対。 intake の入力（FR53）で、 台帳の bead の受入条件が持つ 1 行でもある（FR2）。 }
   - { term: 台帳 adapter,   en: ledger adapter,         plain_short: 台帳への唯一の口,         def: 器が台帳を読む口（読み取り専用）と close を書く口。 台帳へ触る module はこれ 1 つ（FR50 / FR51）。 }

@@ -573,7 +573,7 @@ terms:
     relationships: [契約, 設計 doc, 設計 pointer, write-set の閉包]
   - canonical: 設計 pointer
     domain: consumer
-    definition: 設計 doc の path と契約 id の対。 intake の入力で、 台帳の bead の受入条件が持つ 1 行でもある (SRS FR47 / FR53)。
+    definition: 設計 doc の path と契約 id の対。 intake の入力 (SRS FR53) で、 台帳の bead の受入条件が持つ 1 行でもある (SRS FR2)。
     relationships: [契約表, 台帳]
   - canonical: write-set の閉包
     domain: consumer

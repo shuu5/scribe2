@@ -99,7 +99,7 @@
 <thead><tr><th>id</th><th>要件文</th><th>v2 表現</th><th>出所</th><th>裁定</th><th>v1 対応物</th><th>備考</th></tr></thead>
 <tbody>
 <tr><td id="r-a1"><code>R-A1</code></td><td>契約は planner の draft と admin の起票を<strong>同一の 1 形式</strong>で繋ぎ、書き直しの二度手間をゼロにする形でなければならない</td><td>契約の正本は設計 doc の契約表 1 行（FR47）。draft と起票の 2 形式は無く、器が契約 file を生成する（FR53）。</td><td>contracts/contract-v1.md 前文</td><td>なし</td><td><code>scribe-intake-apply.py</code></td><td></td></tr>
-<tr><td id="r-a2"><code>R-A2</code></td><td>契約本体は <strong>acceptance 相当の単一 field</strong> に置かれ、description / notes に置いた宣言は判定対象にしてはならない</td><td>契約本体は設計 doc の契約表の行で、台帳の field は判定対象でない（FR47 / FR51）。</td><td>contract-v1.md §1・runbook/admin.md §4</td><td>なし</td><td><code>acceptance_criteria</code></td><td></td></tr>
+<tr><td id="r-a2"><code>R-A2</code></td><td>契約本体は <strong>acceptance 相当の単一 field</strong> に置かれ、description / notes に置いた宣言は判定対象にしてはならない</td><td>契約本体は設計 doc の契約表の行で、台帳の field は判定の入力にならない（FR47）。</td><td>contract-v1.md §1・runbook/admin.md §4</td><td>なし</td><td><code>acceptance_criteria</code></td><td></td></tr>
 <tr><td id="r-a3"><code>R-A3</code></td><td>契約の必須 field は 7 本（goal / done / write-set / verify / size / owner / disposition）で、<strong>tier を書き手が名乗ってはならない</strong></td><td></td><td>contract-v1.md §1.1</td><td>なし</td><td><code>[TIER-DECL v1]</code></td><td></td></tr>
 <tr><td id="r-a4"><code>R-A4</code></td><td><code>done</code> は close の形（何が真になったら閉じるか）を 1 文で持たねばならない。program ではこれが完成線である</td><td></td><td>contract-v1.md §1.1 / carrier-model §3.1</td><td>なし</td><td>-</td><td></td></tr>
 <tr><td id="r-a5"><code>R-A5</code></td><td>leaf は実行可能な検証コマンドを 1 本以上持たねばならず、各行は<strong>1 行だけで完結</strong>（前行の env / cd を引き継がない）でなければならない</td><td></td><td>contract-v1.md §1.5</td><td>なし</td><td><code>検証:</code> 行</td><td></td></tr>
@@ -440,7 +440,7 @@
 <section id="s-migration" class="informative">
 <h2>§移行表 — SRS の要件と R- 行の対応</h2>
 <p class="section-essence" data-audience="human">要件定義書（SRS）の各要件が、 このカタログのどの行から来たかを 1 表で示します。 SRS の要件は振る舞いの単位でまとめてあるので、 1 本の要件に複数の行が対応します。 表に現れない行は、 設計から契約を切る段で参照する材料としてそのまま残ります。</p>
-<p data-audience="machine">対応の向きは SRS → カタログ（FR / NFR 1 本 → R- 行 0〜n 本）。 SRS 側の根拠 field（<code>rationale_source</code> / <code>trace.backward</code>）は上位ニーズ N-1〜N-5 を指し、 R- 行への対応は本表だけが持つ（SRS の contract に R- id は書かない）。 対応 0 本の要件は、 grill の裁定で新設した要件・要件 doc の v3 行に由来する制約・憲法 / ADR 由来の制約のいずれかで、 その旨を右列に書く。 本表で引かれない行（150 行中 61 行）は削除でも降格でもなく、 設計 doc から契約を切る段の材料として残る。 表の R- id は本 page の行へ、 FR / NFR id は <code>./srs.html</code> の要件行へ deep-link する。</p>
+<p data-audience="machine">対応の向きは SRS → カタログ（FR / NFR 1 本 → R- 行 0〜n 本）。 SRS 側の根拠 field（<code>rationale_source</code> / <code>trace.backward</code>）は上位ニーズ N-1〜N-5 を指し、 R- 行への対応は本表だけが持つ（SRS の contract に R- id は書かない）。 対応 0 本の要件は、 grill の裁定で新設した要件・要件 doc の v3 行に由来する制約・憲法 / ADR 由来の制約のいずれかで、 その旨を右列に書く。 本表で引かれない行（150 行中 57 行）は削除でも降格でもなく、 設計 doc から契約を切る段の材料として残る。 表の R- id は本 page の行へ、 FR / NFR id は <code>./srs.html</code> の要件行へ deep-link する。</p>
 <details class="req__machine" data-audience="machine">
 <summary>対応表（R- 行に対応する要件 45 本。 R- 行を持たない要件: FR29・FR31〜FR35・FR37〜FR39・FR43・FR44・FR46・FR48・FR54・FR55・NFR6）</summary>
 <table>
