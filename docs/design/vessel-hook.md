@@ -10,7 +10,7 @@
 
 3 つの面を 1 binary の `hook` subcommand で持つ。
 
-1. **所属（跨版 面 1）**: repo root の固定名 marker `.vessel` が「自分の NAME」を言うときだけ仕え、それ以外は **stdout 0 byte・rc 0** で黙る（FR19 / FR24）。
+1. **所属（跨版 面 1）**: repo root の固定名 marker `.vessel` が「自分の NAME」を言うときだけ仕え、それ以外は **stdout 0 byte・rc 0** で黙る（FR19 / FR24）。 例外は 1 つ: `--pane` が在る（登録されうる席）のに root が解けない周は黙らず、権能付きの操作を deny する（[seat-roles.md §4](./seat-roles.md)・FR45・FailClosed）。
 2. **in-loop guard（C16 の MVP 形）**: 契約の write-set の外への Edit / Write を**編集の時点で** deny する（FR20）。policy が読めなければ fail-closed で deny。
 3. **注入計測の slot（FR21）**: hook は自分の出力 1 行を schema 付きで記録し、v3 の計測 store を後付けできる形を保つ。
 
@@ -31,7 +31,7 @@
 
 - `hooks/hooks.json` は `cargo xtask gen-manifest` が NAME から生成する（手書きしない）。entry は 5 つ: `SessionStart`（command `"${<NAME_UPPER>_BIN:-<NAME>}" hook session-start --pane "$TMUX_PANE"`）と `PreToolUse`（matcher `Edit|Write|MultiEdit|NotebookEdit`・command `"${<NAME_UPPER>_BIN:-<NAME>}" hook pre-tool-use`）と `PermissionRequest`（matcher `Bash`・command `"${<NAME_UPPER>_BIN:-<NAME>}" hook permission-request`＝§6.5 の一律 deny）と `UserPromptSubmit`（command `… hook user-prompt-submit --pane "$TMUX_PANE"`）と `Stop`（command `… hook stop --pane "$TMUX_PANE"`）。打刻の 3 つ（SessionStart / UserPromptSubmit / Stop）は席の状態を `<state_dir>/seat/<target>/state.jsonl` へ typed に打つ（[seat-state.md](./seat-state.md) §2 / §3・ADR-0015・guard ではない＝極性一覧に載せない）。`$TMUX_PANE` の展開も `${…_BIN}` と同じく shell が行う。timeout は rules 行 `hook.timeout_s` の値を xtask が写す。冪等（同 workspace から同 bytes）。生成物は tracked。
   - `${…_BIN:-<NAME>}` の展開は **Claude Code が hook を起動する shell** が行う。scribe2 自身は env を読まない（C2.2 に触れない）。既定は PATH 上の `<NAME>`（開発者は `cargo install --path` か PATH 追加で置く）。
-- `<NAME> hook <event> [--state-dir D]`: stdin の JSON（Claude Code の hook payload・`cwd` があればそれ・無ければ process cwd）から root を解き、`served` が `ByMe` でなければ **stdout 0 byte・stderr 0 byte・rc 0**。未知 event も 0 byte・rc 0（fail-open・他の器と衝突しない）。
+- `<NAME> hook <event> [--state-dir D] [--project P]`: root は `--project`（生成 hooks.json の shell 行が渡す session の起動 dir・[seat-roles.md §4](./seat-roles.md)）があればそれ、無ければ stdin の JSON（Claude Code の hook payload・`cwd` があればそれ・無ければ process cwd）から解き、`served` が `ByMe` でなければ **stdout 0 byte・stderr 0 byte・rc 0**。未知 event も 0 byte・rc 0（fail-open・他の器と衝突しない）。
 - timeout 到達は Claude Code 側で「判定の消失」＝fail-open である。guard の deny は時間切れに頼らず timeout の内側で返す（NFR5・要件カタログ R-K10）。
 
 ## 4. `session-start`
