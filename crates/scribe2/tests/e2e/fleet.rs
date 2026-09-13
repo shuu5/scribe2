@@ -1351,22 +1351,24 @@ const FAR_EXPIRES_MS: u64 = 4_102_444_800_000;
 const TOKEN_A1: &str = "tok-a1-7f3c9e0d";
 const TOKEN_A2: &str = "tok-a2-b81d04aa";
 
-/// 実測の応答と同じ形の本文（`+00:00` の reset・小数の使用率・`weekly_scoped` 1 要素）。
+/// 実測の応答と同じ形の本文（設計 §3）: 窓の `utilization` は**すでに % の値**・`limits[]` の要素は
+/// `utilization` を持たず `percent`（整数）が値・reset は `+00:00` 形と `Z` 形が混ざる。値は架空。
 const LIVE_BODY: &str = r#"{
-  "five_hour": {"utilization": 0.97, "resets_at": "2026-09-12T05:00:00.412000+00:00"},
-  "seven_day": {"utilization": 0.125, "resets_at": "2026-09-18T00:00:00+00:00"},
+  "five_hour": {"utilization": 13.0, "resets_at": "2026-09-12T05:00:00.412000+00:00"},
+  "seven_day": {"utilization": 41.7, "resets_at": "2026-09-18T00:00:00+00:00"},
   "limits": [
-    {"kind": "weekly_scoped", "id": null,
-     "scope": {"model": {"display_name": "Opus 5", "id": null}},
-     "utilization": 1.25, "resets_at": "2026-09-18T00:00:00Z"},
-    {"kind": "weekly", "id": null, "utilization": 0.5, "resets_at": "2026-09-18T00:00:00Z"}
+    {"kind": "weekly_scoped", "group": "g", "percent": 38, "severity": "normal",
+     "resets_at": "2026-09-18T00:00:00Z",
+     "scope": {"model": {"display_name": "Fable", "id": null}}, "is_active": true},
+    {"kind": "weekly", "group": "g", "percent": 50, "severity": "normal",
+     "resets_at": "2026-09-18T00:00:00Z", "is_active": true}
   ]
 }"#;
 
 /// [`LIVE_BODY`] を読んだ口座の 1 行（`label` の口座）。
 fn live_line(label: &str) -> String {
     format!(
-        "usage: account={label} five_hour=97% resets=2026-09-12T05:00:00Z seven_day=12% resets=2026-09-18T00:00:00Z model=Opus 5:125% resets=2026-09-18T00:00:00Z"
+        "usage: account={label} five_hour=13% resets=2026-09-12T05:00:00Z seven_day=41% resets=2026-09-18T00:00:00Z model=Fable:38% resets=2026-09-18T00:00:00Z"
     )
 }
 
@@ -1480,7 +1482,7 @@ fn drop_fixture(fx: &UsageFixture) {
     fs::remove_dir_all(&fx.spy).ok();
 }
 
-/// (1) live 2 口座相当: 口座ごと 1 行・口座 × 窓（3 窓 × 2）の event・reset は UTC 形・使用率は as_pct。
+/// (1) live 2 口座相当: 口座ごと 1 行・口座 × 窓（3 窓 × 2）の event・reset は UTC 形・使用率は % の値の切り捨て。
 #[test]
 fn fleet_usage_measures_two_accounts_into_lines_and_events() {
     let fx = usage_fixture(&["a1", "a2"]);
@@ -1512,9 +1514,9 @@ fn fleet_usage_measures_two_accounts_into_lines_and_events() {
     seen.sort();
     let want_for = |label: &str| {
         vec![
-            (label.to_owned(), WindowKind::FiveHour, None, 97, "2026-09-12T05:00:00Z".to_owned()),
-            (label.to_owned(), WindowKind::SevenDay, None, 12, "2026-09-18T00:00:00Z".to_owned()),
-            (label.to_owned(), WindowKind::SevenDayModel, Some("Opus 5".to_owned()), 125, "2026-09-18T00:00:00Z".to_owned()),
+            (label.to_owned(), WindowKind::FiveHour, None, 13, "2026-09-12T05:00:00Z".to_owned()),
+            (label.to_owned(), WindowKind::SevenDay, None, 41, "2026-09-18T00:00:00Z".to_owned()),
+            (label.to_owned(), WindowKind::SevenDayModel, Some("Fable".to_owned()), 38, "2026-09-18T00:00:00Z".to_owned()),
         ]
     };
     let mut want = want_for("a1");
@@ -1626,7 +1628,7 @@ fn fleet_usage_credential_failures_name_their_reason() {
 /// (6) client 側の各失敗が別の理由になる。`display_name` 欠落はその要素だけ。
 #[test]
 fn fleet_usage_client_failures_name_their_reason() {
-    let no_name = LIVE_BODY.replace(r#""display_name": "Opus 5", "#, "");
+    let no_name = LIVE_BODY.replace(r#""display_name": "Fable", "#, "");
     let cases: [(&str, &str, &str, u8, &str); 5] = [
         ("timeout", LIVE_BODY, "200", 28, "usage: account=a1 unmeasured reason=timeout"),
         ("refused", LIVE_BODY, "200", 7, "usage: account=a1 unmeasured reason=client_failed"),
@@ -1637,7 +1639,7 @@ fn fleet_usage_client_failures_name_their_reason() {
             &no_name,
             "200",
             0,
-            "usage: account=a1 five_hour=97% resets=2026-09-12T05:00:00Z seven_day=12% resets=2026-09-18T00:00:00Z seven_day_model=unmeasured:shape_mismatch",
+            "usage: account=a1 five_hour=13% resets=2026-09-12T05:00:00Z seven_day=41% resets=2026-09-18T00:00:00Z seven_day_model=unmeasured:shape_mismatch",
         ),
     ];
     for (name, body, status, rc, want) in cases {
@@ -1706,7 +1708,7 @@ fn fleet_usage_show_is_read_only_and_prints_the_latest() {
     let curl = fake_curl(&fx, LIVE_BODY, "200", 0);
     let first = run_usage(&fx, &curl, &[]);
     assert_eq!(first.status.code(), Some(i32::from(RC_OK)), "{first:?}");
-    let newer = LIVE_BODY.replace("0.97", "0.33");
+    let newer = LIVE_BODY.replace("13.0", "33.0");
     let curl = fake_curl(&fx, &newer, "200", 0);
     let second = run_usage(&fx, &curl, &[]);
     assert_eq!(second.status.code(), Some(i32::from(RC_OK)), "{second:?}");

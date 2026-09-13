@@ -376,9 +376,18 @@ fn model_rows(label: &str, limits: Option<&Tree>) -> Vec<Allowance> {
         .collect()
 }
 
-/// 窓 1 つ（`utilization` と `resets_at` を持つ object）を行にする。
+/// 窓の値を持つ field。`five_hour` / `seven_day` は `utilization`、`limits[]` の要素は `percent`
+/// （要素は `utilization` を持たない実測・持っていても読まない）。
+fn value_key(window: WindowKind) -> &'static str {
+    match window {
+        WindowKind::FiveHour | WindowKind::SevenDay => "utilization",
+        WindowKind::SevenDayModel => "percent",
+    }
+}
+
+/// 窓 1 つ（値の field と `resets_at` を持つ object）を行にする。
 fn window_row(label: &str, window: WindowKind, model: Option<String>, node: Option<&Tree>) -> Allowance {
-    match node.and_then(reading) {
+    match node.and_then(|node| reading(node, value_key(window))) {
         Some((used_pct, resets_at)) => Allowance::Measured(Measured {
             account: label.to_owned(),
             window,
@@ -392,10 +401,19 @@ fn window_row(label: &str, window: WindowKind, model: Option<String>, node: Opti
 }
 
 /// 窓の object から（整数 %・正規化した reset）を読む。どちらかが読めなければ `None`。
-fn reading(node: &Tree) -> Option<(u64, String)> {
-    let used_pct = node.get("utilization")?.as_pct()?;
+fn reading(node: &Tree, key: &str) -> Option<(u64, String)> {
+    let used_pct = whole_pct(node.get(key)?)?;
     let resets_at = normalize_resets(node.get("resets_at")?.as_str()?)?;
     Some((used_pct, resets_at))
+}
+
+/// **すでに % の値**（`2.0` = 2%）を整数 % へ切り捨てる（cap しない）。負数と数でない値は `None`。
+///
+/// [`Tree::as_pct`] は割合を ×100 して切り捨てる。非負の x で `floor(100x) / 100 == floor(x)`
+/// なので、その値を 100 で割れば桁の読みを json_tree と共有したまま % の値を読める
+/// （×100 が `u64` を超える巨大な値は `None`＝ShapeMismatch）。
+fn whole_pct(value: &Tree) -> Option<u64> {
+    value.as_pct().map(|hundredths| hundredths / 100)
 }
 
 /// Unmeasured の行を組む。
@@ -591,23 +609,54 @@ mod tests {
         assert_eq!(body_of("200"), Err(UnmeasuredReason::HttpStatus), "status 行が無い");
     }
 
+    /// 窓 1 つだけを持つ本文（`five_hour` の `utilization` の字面を差し替える）。
+    fn five_hour_line(utilization: &str) -> String {
+        let body = format!(r#"{{"five_hour":{{"utilization":{utilization},"resets_at":"2026-09-12T05:00:00Z"}},"seven_day":{{"utilization":1.0,"resets_at":"2026-09-18T00:00:00Z"}},"limits":[]}}"#);
+        let tree = parse(&body).expect("fixture は JSON");
+        render("a1", &windows_of("a1", &tree))
+    }
+
+    #[test]
+    fn fleet_usage_utilization_is_already_a_percent_floored_without_cap() {
+        let tail = "seven_day=1% resets=2026-09-18T00:00:00Z";
+        for (literal, want) in [("2.0", "2%"), ("0.0", "0%"), ("125.5", "125%"), ("13", "13%"), ("99.99", "99%")] {
+            assert_eq!(
+                five_hour_line(literal),
+                format!("usage: account=a1 five_hour={want} resets=2026-09-12T05:00:00Z {tail}"),
+                "{literal} は % の値"
+            );
+        }
+        for bad in ["-1.0", "\"13\"", "null"] {
+            assert_eq!(
+                five_hour_line(bad),
+                format!("usage: account=a1 five_hour=unmeasured:shape_mismatch {tail}"),
+                "{bad} はその窓だけ shape_mismatch"
+            );
+        }
+    }
+
     #[test]
     fn fleet_usage_windows_of_maps_windows_and_isolates_the_broken_element() {
         let body = r#"{
-          "five_hour": {"utilization": 0.97, "resets_at": "2026-09-12T05:00:00+00:00"},
-          "seven_day": {"utilization": 0.125, "resets_at": "2026-09-18T00:00:00Z"},
+          "five_hour": {"utilization": 13.0, "resets_at": "2026-09-12T05:00:00.918273+00:00"},
+          "seven_day": {"utilization": 41.7, "resets_at": "2026-09-18T00:00:00Z"},
           "limits": [
-            {"kind": "weekly_scoped", "scope": {"model": {"display_name": "Opus 5"}}, "utilization": 1.25, "resets_at": "2026-09-18T00:00:00Z"},
-            {"kind": "weekly_scoped", "scope": {"model": {}}, "utilization": 0.1, "resets_at": "2026-09-18T00:00:00Z"},
-            {"kind": "weekly", "utilization": 0.5, "resets_at": "2026-09-18T00:00:00Z"}
+            {"kind": "weekly_scoped", "group": "g", "percent": 38, "severity": "normal", "resets_at": "2026-09-18T00:00:00+00:00", "scope": {"model": {"id": null, "display_name": "Fable"}}, "is_active": true},
+            {"kind": "weekly_scoped", "percent": 10, "resets_at": "2026-09-18T00:00:00Z", "scope": {"model": {}}},
+            {"kind": "weekly_scoped", "utilization": 55.0, "resets_at": "2026-09-18T00:00:00Z", "scope": {"model": {"display_name": "Nope"}}},
+            {"kind": "weekly", "percent": 50, "resets_at": "2026-09-18T00:00:00Z"}
           ]
         }"#;
         let tree = parse(body).expect("fixture は JSON");
         let rows = windows_of("a1", &tree);
-        assert_eq!(rows.len(), 4, "five + seven + model 2 要素（weekly は拾わない）: {rows:?}");
+        assert_eq!(rows.len(), 5, "five + seven + model 3 要素（weekly は拾わない）: {rows:?}");
         assert_eq!(
             render("a1", &rows),
-            "usage: account=a1 five_hour=97% resets=2026-09-12T05:00:00Z seven_day=12% resets=2026-09-18T00:00:00Z seven_day_model=unmeasured:shape_mismatch model=Opus 5:125% resets=2026-09-18T00:00:00Z"
+            "usage: account=a1 five_hour=13% resets=2026-09-12T05:00:00Z seven_day=41% resets=2026-09-18T00:00:00Z seven_day_model=unmeasured:shape_mismatch model=Fable:38% resets=2026-09-18T00:00:00Z seven_day_model=unmeasured:shape_mismatch"
+        );
+        assert!(
+            rows.iter().any(|row| matches!(row, Allowance::Unmeasured(found) if found.model.as_deref() == Some("Nope"))),
+            "percent の無い要素は utilization が在っても読まない: {rows:?}"
         );
         let empty = parse(r#"{"five_hour":{"utilization":0,"resets_at":"2026-09-12T05:00:00Z"},"seven_day":{"utilization":"x","resets_at":"2026-09-18T00:00:00Z"},"limits":[]}"#)
             .expect("fixture は JSON");

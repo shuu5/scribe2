@@ -27,10 +27,13 @@
 - HTTP client = `curl`（host の道具・git / claude / tmux と同種）。器の外の OSS の採用なので A3 の対象で、承認 = user 裁定 2026-09-12（ADR-0017 §2.2）。C13 の crate 手続きは対象なし。実行 file は `--curl PATH` で差し替え可（既定は `curl`・PATH 解決は子 process 起動側）。
 - 起動形: `curl -sS -K - --max-time <rules 行の秒> -o - -w '\n%{http_code}' <URL>`。**token は stdin の設定（`-K -`）で渡す**: `header = "Authorization: Bearer <token>"` の行（と endpoint が要する固定 header）を stdin へ書き、閉じる。argv に token を載せない（`ps` に見えるため）。
 - URL は code の定数 1 つ（host 固有の値ではない・manifest に置かない）。endpoint の名（`endpoint` field に書く出所）は同じ定数から導く短い識別子。
-- 応答: stdout の末尾 1 行が HTTP status、その前が本文。status が 200 以外・rc 非 0・timeout は Unmeasured。本文は入れ子の JSON（`five_hour` / `seven_day` = `{utilization: 小数, resets_at: 文字列}`・`limits[]` = `{kind, scope: {model: {display_name}}, utilization, resets_at}`）。
+- 応答: stdout の末尾 1 行が HTTP status、その前が本文。status が 200 以外・rc 非 0・timeout は Unmeasured。本文は入れ子の JSON。実物の形の要旨（field 名と型・s2-07l.187 の実測）:
+  - `five_hour` / `seven_day` = `{utilization: 数（**すでに % の値**・`2.0` = 2%）, resets_at: 文字列}`。
+  - `limits[]` の要素 = `{kind: 文字列, group, percent: 整数（% の値）, severity, resets_at: 文字列, scope: {model: {id, display_name: 文字列}}, is_active: 真偽}`——**`utilization` を持たない**。
+  - `resets_at` は `+00:00` 形（小数秒つき）と `Z` 形の両方が現れる。
 - JSON reader: `json_lite` を **入れ子 object・配列・数（小数含む）** へ広げる（std のみ）。event log の flat な行の書き手 / 読み手（`Value` の 4 値）は**変えない**（別の型 `Tree` を足す。flat 行の受理は狭いまま＝綴り違いの key を拒む性質を保つ）。
 - 窓の対応: `five_hour` → `window = "five_hour"`、`seven_day` → `"seven_day"`、`limits[]` のうち `kind == "weekly_scoped"` の要素 → `window = "seven_day_model"` + `model = <scope.model.display_name>`（**display_name でしか結べない**・`id` は null の実測）。要素が 0 件なら model 行は出さない（Unmeasured ではない・窓が無いだけ）。要素が `display_name` を持たない・型が違うなら**その要素だけ** Unmeasured（理由 = 形が違う）。
-- 使用率は `utilization`（0〜1 の小数・稀に 1 超）を **整数 %（切り捨て・100 で cap しない**＝超過をそのまま残す）に、reset は `resets_at` を UTC `YYYY-MM-DDTHH:MM:SSZ` に正規化。parse 不能なら Unmeasured（理由 = 形が違う）。
+- 使用率は窓の `utilization`・`limits[]` の要素の `percent`（どちらも % の値・×100 しない・要素の `utilization` は読まない）を **整数 %（切り捨て・100 で cap しない**＝超過をそのまま残す・負数と数でない値は形が違う）に、reset は `resets_at` を UTC `YYYY-MM-DDTHH:MM:SSZ` に正規化。parse 不能なら Unmeasured（理由 = 形が違う）。
 - 待ち時間の上限 = rules 行 `fleet.usage_timeout_s`（新 kind `UsageTimeoutS`・値は user 裁定の id 付き・C5）。契約 (b) で足す。
 
 ## 4. event の追加（schema 1 のまま）
