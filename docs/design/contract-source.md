@@ -13,9 +13,9 @@
 
 ## 2. 契約表（FR47）
 
-- **本文の形**: **TOML subset の `[[contract]]` の表**（rules manifest と同じ parser・ADR-0004 §2.3）。**置き場は 2 形を同じ読み手で受ける**: (i) 記録時点 = 設計 doc（`docs/design/<題>.md`）の末尾の機械が読む区間 `<!-- contracts:begin -->` … `<!-- contracts:end -->`（CLAUDE.md の憲法区間と同じ marker 形・行走査で区間を抜いて同じ parser に渡す・設計 doc 1 本に区間は 0 か 1 つ）(ii) 後続 = folio2 が設計ノート（YAML 正本）から導出する tracked な `.toml` 1 file（全文を同じ parser に渡す・folio2 planner との擦り合わせ 2026-09-13・scribe2 側は path を差し替えるだけ）。読み手は path の拡張子（`.md` = 区間 / `.toml` = 全文）で形を決め、それ以外は typed に断る。
-- **契約 id** = `<doc id>#<row id>`（doc id = file 名の stem・row id = 行の `id`・folio2 の設計ノートと同じ形）。
-- **行の field**（現物の契約 file の `REQUIRED` と 1:1 + 宣言 2 つ・folio2 の導出 file も同じ集合）: `id`（doc 内で一意・`a` `b` …）/ `title` / `req`（要件 id の列）/ `section`（本 doc の節 anchor・生成時に節の本文を `goal` へ写す＝説明文を二重に書かない）/ `touches`（閉じた型の宣言の列・`crate::module::Type` の形・空可・§3）/ `write-set`（path の列）/ `verify`（positional filter 形の列・`(` を含まない）/ `size` / `done`（1 行）/ `depends`（同 doc の契約 id の列・順序）/ `classes`・`opens`（optional・既存の形）。`owner` / `disposition` は生成時に固定値（現物の contract.rs が要求する field を埋める）。
+- **本文の形**: **TOML subset の `[[contract]]` の表**（rules manifest と同じ parser・ADR-0004 §2.3。現物の parser は `[[rule]]` / `[[account]]` の 2 種だけを受け**空の配列を拒む**ので、array-of-tables の種類に `[[contract]]` を 1 つ足し〔C2・variant 1 つ〕、**空の列は key を省いて表す**〔`touches` / `depends` が無い行 = 空・空配列の拒否は緩めない〕）。**置き場は 2 形を同じ読み手で受ける**: (i) 記録時点 = 設計 doc（`docs/design/<題>.md`）の末尾の機械が読む区間 `<!-- contracts:begin -->` … `<!-- contracts:end -->`（CLAUDE.md の憲法区間と同じ marker 形・行走査で区間を抜いて同じ parser に渡す・設計 doc 1 本に区間は 0 か 1 つ）(ii) 後続 = folio2 が設計ノート（YAML 正本）から導出する tracked な `.toml` 1 file（全文を同じ parser に渡す・folio2 planner との擦り合わせ 2026-09-13・scribe2 側は path を差し替えるだけ）。読み手は path の拡張子（`.md` = 区間 / `.toml` = 全文）で形を決め、それ以外は typed に断る。
+- **契約 id** = `<doc id>#<row id>`（doc id = file 名の stem・row id = 行の `id`・folio2 の設計ノートと同じ形）。doc id は **append-only**（file を改名しても id は変えない＝改名は新 id + 旧 id の廃止・folio2 へ移すとき設計ノートの meta.id に同じ文字列を写す）。
+- **行の field**（現物の契約 file の `REQUIRED` と 1:1 + 宣言 2 つ・folio2 の導出 file も同じ集合）: `id`（doc 内で一意・`a` `b` …）/ `title` / `req`（要件 id の列）/ `section`（本 doc の節 anchor・生成時に節の本文を `goal` へ写す＝説明文を二重に書かない）/ `touches`（閉じた型の宣言の列・`crate::module::Type` の形・空可・§3）/ `write-set`（path の列）/ `verify`（positional filter 形の列・`(` を含まない）/ `size` / `done`（1 行）/ `depends`（同 doc の契約 id の列・順序・床が解決と輪の無さを数える）/ `classes`（optional・既存）/ `opens`（optional・[seat-roles.md](./seat-roles.md) 契約 (b) が足す印・(b) の land までは未知 key として断る）。**散文の欄は `title` と `done` の 2 つだけ**（他は id / path / 型名 / 命令の識別子・folio2 の床〔語彙に無い裸の英字語 0・数 + 単位の写し 0〕はこの 2 欄に掛かる・括弧の中は免除）。`section` は同じ doc の **節番号（`§N` の N・append-only・見出しの字面ではない）** で、`contracts check` は `## N.` の見出しが在り本文が非空であることを見る。`owner` / `disposition` は生成時に固定値（現物の contract.rs が要求する field を埋める）。
 - **台帳の bead**: title・status・裁定（notes）・acceptance は `design = docs/design/<題>.md#<id>` の **1 行だけ**。契約の改訂 = 設計 doc の改訂（PR・folio と CI の門を通る）。台帳の acceptance に本文を書く形は §9 (a) の land 後に止める（FR51 の lint が名指す）。
 - **生成**: `<NAME> pipe intake --design docs/design/<題>.md#<id> --bead <bead id> --repo R [--rules PATH]`。器は base（`--repo` の HEAD）の設計 doc から区間を読み、行 1 つを契約 file（run dir の `contract.toml`・field は現物の REQUIRED + `design` = pointer + `touches`）へ写す。**`--contract PATH` は廃止**（手書きの契約 file を受け付けない・FR47）。歯の toy repo は設計 doc の fixture を持つ。
 - **表の検査**（`<NAME> contracts check --repo R`・CI の 1 job・xtask check は core に依存しないので撃たない）: 全 tracked 設計 doc の区間を parse し、id の一意・`req` の id が SRS（`design-intent/spec/srs.html` の anchor）に実在・`section` が同 doc に実在し本文が非空・`verify` の形・`depends` の解決・`touches` の閉包 ⊆ `write-set`（§3）を全件・行番号付きで出す（FR18 と同じ「全件・黙って落とさない」）。intake は同じ関数を 1 行に対して撃つ（1 実装・C2）。
@@ -43,7 +43,7 @@ Landed（gate-cost.md §6 の CAS の後）に続けて器が行う。各段は 
 2. **CI の照合**: 唯一の wait 実装に `Completion::CiResult { repo, sha }` を足し、forge の CLI（`gh run list --commit <sha> --json status,conclusion`・子 process・`.vessel.toml` の `ci-cmd`〔optional・無ければ既定の 1 行〕）を deadline（rules 行 `pipe.ci_wait_s`・Int・裁定 id）まで待つ。結果は 3 値（success / failure / unmeasurable）。**success 以外は close しない**（FailClosed）・記帳して rc 1。
 3. **台帳の close**: 台帳 adapter（§6）で `close <bead> --reason "landed <sha> ci=success"`。adapter が撃てない・rc ≠ 0 なら `RunDone detail=close:failed` で止める（着地は成立している＝やり直しは `pipe land --terminal-only <run>` で終端だけ再実行・冪等）。
 4. **binary の世代**: record（verdicts.jsonl の行）に `generation=<landed sha>` を足す。自分の版が landed sha より古い周に起動を断るかは後続（§12）。
-5. **commit の trailer**: squash commit の本文末尾に `Contract: <doc id>#<row id>` と `Requirements: <req の列>` の trailer を書く（既存の land の commit 文の組み立てに 2 行・**契約と要件の結線の正本は commit**・verdicts.jsonl の export は補助・folio2 の RTM がこの trailer を読む）。
+5. **commit の trailer**: squash commit の本文末尾に `<Name>-Contract: <doc id>#<row id>` と `<Name>-Requirements: <req の列>` の trailer を書く（名は NAME 定数から導出・C2.2・他の道具の trailer と衝突しない）（既存の land の commit 文の組み立てに 2 行・**契約と要件の結線の正本は commit**・verdicts.jsonl の export は補助・folio2 の RTM がこの trailer を読む）。
 
 `--pr-cmd` の形（自 repo への PR）は終端を持たない（従来どおり）。
 
@@ -99,19 +99,18 @@ binary の世代で起動を断る（§5 4.）・契約表から台帳の bead �
 id = "a"
 title = "契約表の parser と検査（contracts check）・台帳の pointer 形"
 req = ["FR47", "FR48"]
-section = "2-契約表"
+section = "2"
 touches = ["crate::pipe::refuse::Refuse", "crate::polarity::Guard"]
-write-set = ["crates/scribe2/src/pipe/table.rs", "crates/scribe2/src/pipe/closure.rs", "crates/scribe2/src/pipe/mod.rs", "crates/scribe2/src/pipe/refuse.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/main.rs", "crates/scribe2/src/polarity.rs", "crates/scribe2/tests/e2e/pipe.rs", "crates/scribe2/tests/e2e/polarity.rs", "crates/scribe2/tests/e2e/snapshots"]
+write-set = ["crates/scribe2/src/pipe/table.rs", "crates/scribe2/src/pipe/closure.rs", "crates/scribe2/src/pipe/mod.rs", "crates/scribe2/src/pipe/refuse.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/rules/manifest.rs", "crates/scribe2/src/main.rs", "crates/scribe2/src/polarity.rs", "crates/scribe2/tests/e2e/pipe.rs", "crates/scribe2/tests/e2e/rules.rs", "crates/scribe2/tests/e2e/polarity.rs", "crates/scribe2/tests/e2e/snapshots"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail contract_"]
 size = "M"
 done = "contracts check が本 doc の区間を全件通し、閉包が足りない fixture を名指す"
-depends = []
 
 [[contract]]
 id = "b"
 title = "intake の生成（--design）と --contract の廃止"
 req = ["FR47", "FR48", "FR39"]
-section = "2-契約表"
+section = "2"
 touches = ["crate::pipe::refuse::Refuse"]
 write-set = ["crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/mod.rs", "crates/scribe2/src/pipe/contract.rs", "crates/scribe2/src/pipe/refuse.rs", "crates/scribe2/tests/e2e/pipe.rs", "crates/scribe2/tests/e2e/snapshots"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_intake_design_"]
@@ -123,7 +122,7 @@ depends = ["a"]
 id = "c"
 title = "契約の審査の段（Stage::Reviewed・lens-contract.txt・review.json）"
 req = ["FR49", "FR9"]
-section = "4-契約の審査の段"
+section = "4"
 touches = ["crate::fleet::Stage", "crate::polarity::Guard"]
 write-set = ["crates/scribe2/src/fleet/mod.rs", "crates/scribe2/src/pipe/mod.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/review.rs", "crates/scribe2/src/pipe/spawn.rs", "crates/scribe2/src/pipe/land.rs", "crates/scribe2/src/headless/lens.rs", "crates/scribe2/src/headless/lens-contract.txt", "crates/scribe2/src/polarity.rs", "crates/scribe2/tests/e2e/pipe.rs", "crates/scribe2/tests/e2e/fleet.rs", "crates/scribe2/tests/e2e/headless.rs", "crates/scribe2/tests/e2e/polarity.rs", "crates/scribe2/tests/e2e/prop.rs", "crates/scribe2/tests/e2e/snapshots"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_review_"]
@@ -135,7 +134,7 @@ depends = ["b"]
 id = "d"
 title = "land の終端（push・CI の照合・台帳の close）と rules 行 pipe.ci_wait_s"
 req = ["FR50", "FR12"]
-section = "5-land-の終端"
+section = "5"
 touches = ["crate::fleet::Completion", "crate::rules::RuleKind", "crate::polarity::Guard"]
 write-set = ["rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "crates/scribe2/src/fleet/mod.rs", "crates/scribe2/src/pipe/land.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/declaration.rs", "crates/scribe2/src/ledger/mod.rs", "crates/scribe2/src/lib.rs", "crates/scribe2/src/polarity.rs", "crates/scribe2/tests/e2e/pipe.rs", "crates/scribe2/tests/e2e/rules.rs", "crates/scribe2/tests/e2e/fleet.rs", "crates/scribe2/tests/e2e/polarity.rs", "crates/scribe2/tests/e2e/snapshots"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_terminal_"]
@@ -147,8 +146,7 @@ depends = ["b"]
 id = "e"
 title = "台帳 lint（doctor の項目）"
 req = ["FR51"]
-section = "6-台帳-adapter"
-touches = []
+section = "6"
 write-set = ["crates/scribe2/src/ledger/mod.rs", "crates/scribe2/src/ledger/lint.rs", "crates/scribe2/src/main.rs", "crates/scribe2/tests/e2e/ledger.rs", "crates/scribe2/src/snapshots"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail ledger_lint_"]
 size = "S"
