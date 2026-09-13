@@ -5899,6 +5899,78 @@ fn seat_role_doctor_reconciles_rows_with_live_targets() {
     fs::remove_dir_all(&place.dir).ok();
 }
 
+// ─────────────────────────── 変異生存の検出線（s2-07l.196・ADR-0013） ───────────────────────────
+
+/// `doctor` の突合は **渡した `--tmux-socket` の server** を見る（登録 row 1 つ・独立 socket）: 席の立つ
+/// socket なら `live=1 missing=0`・server の無い別 socket なら `unmeasurable`・**`--tmux-socket` の重複は
+/// 使い方で断る**（rc 1・突合の行を出さない）。
+///
+/// .192 の検出線で生き残った変異 `render_doctor_with` の match guard `socket.is_none()` → `true` は
+/// 重複の周だけ挙動が変わる（2 つ目が黙って勝ち rc 0 で突合の行が出る）。現物の挙動を pin する歯なので
+/// base でも通る（retroactive）。live な server には触れない（socket は tmp・`-f /dev/null`）。
+// flip-check: retroactive s2-07l.196
+#[test]
+fn mutant_e2e_doctor_reconciles_against_the_given_tmux_socket_and_refuses_a_duplicate() {
+    let place = role_place();
+    role_stamp(&place, "mutdoc:mutdoc", Some("sid-mut"));
+    let out = role_register(&place, "mutdoc:mutdoc", "planner", &["--anchor", "/repo"]);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    let seat = start_seat(&place.socket, "mutdoc");
+    assert!(seat.ready(), "隔離 seat が立つ");
+    let state = place.state.display().to_string();
+    let doctor = |args: &[&str]| Command::new(bin()).arg("doctor").args(args).output().ok();
+    let live = doctor(&["--state-dir", &state, "--tmux-socket", &place.socket]);
+    assert_eq!(live.as_ref().map(rc_of), Some(i32::from(RC_OK)), "{live:?}");
+    let lines: Vec<String> = live.map(|out| stdout_of(&out)).unwrap_or_default().lines().map(str::to_owned).collect();
+    assert_eq!(lines.len(), 4, "2 行 + 登録 row 1 行 + 突合 1 行: {lines:?}");
+    assert_eq!(lines.last().map(String::as_str), Some("seats: registered=1 live=1 missing=0"), "席の立つ socket");
+    let elsewhere = place.dir.join("no-server-sock").display().to_string();
+    let away = doctor(&["--state-dir", &state, "--tmux-socket", &elsewhere]);
+    assert_eq!(away.as_ref().map(rc_of), Some(i32::from(RC_OK)), "{away:?}");
+    assert_eq!(
+        away.map(|out| stdout_of(&out)).unwrap_or_default().lines().last(),
+        Some("seats: registered=1 live=unmeasurable missing=unmeasurable"),
+        "server の無い socket は 0 と書かない"
+    );
+    for dup in [
+        &["--state-dir", &state, "--tmux-socket", &place.socket, "--tmux-socket", &place.socket][..],
+        &["--state-dir", &state, "--tmux-socket", &elsewhere, "--tmux-socket", &place.socket],
+        &["--tmux-socket", &place.socket, "--state-dir", &state, "--tmux-socket", &place.socket],
+    ] {
+        let out = doctor(dup);
+        assert_eq!(out.as_ref().map(rc_of), Some(i32::from(RC_REFUSED)), "{dup:?} は使い方で断る");
+        let stdout = out.map(|found| stdout_of(&found)).unwrap_or_default();
+        assert!(stdout.starts_with("usage: "), "{dup:?}: {stdout}");
+        assert_eq!(stdout.lines().count(), 1, "{dup:?}: 使い方の 1 行だけ: {stdout}");
+        assert!(!stdout.contains("seats:"), "{dup:?}: 2 つ目が黙って勝たない（突合の行を出さない）: {stdout}");
+    }
+    drop(seat);
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// binary を `--version` で撃つと `NAME version` の 1 行（rc 0・stderr 空）。`--version` を先頭以外に置いても
+/// 使い方（rc 1）で、version の行は出ない。
+///
+/// .192 の検出線で生き残った変異 `dispatch` の `Some("--version")` arm の削除は、bin crate の in-module 歯
+/// （`render_version` の戻り値を見る）からは binary を撃てないので捕まらない。e2e 側で binary の外形を pin する
+/// （ADR-0013）。現物の挙動を pin する歯なので base でも通る（retroactive）。
+// flip-check: retroactive s2-07l.196
+#[test]
+fn mutant_e2e_version_flag_prints_name_and_version_on_the_binary() {
+    let out = Command::new(bin()).arg("--version").output().ok();
+    assert_eq!(out.as_ref().map(rc_of), Some(i32::from(RC_OK)), "{out:?}");
+    let expected = format!("{NAME} {}\n", env!("CARGO_PKG_VERSION"));
+    assert_eq!(out.as_ref().map(stdout_of), Some(expected.clone()), "NAME + version の 1 行");
+    assert_eq!(out.as_ref().map(stderr_of).as_deref(), Some(""), "stderr は空");
+    assert!(!expected.starts_with("usage: "), "使い方でない");
+    let name = Command::new(bin()).arg("name").output().ok();
+    assert_eq!(name.as_ref().map(stdout_of).as_deref(), Some(format!("{NAME}\n").as_str()), "`name` は NAME だけ（version の行と別）");
+    let misplaced = Command::new(bin()).args(["doctor", "--version"]).output().ok();
+    assert_eq!(misplaced.as_ref().map(rc_of), Some(i32::from(RC_REFUSED)), "{misplaced:?}");
+    let stdout = misplaced.map(|found| stdout_of(&found)).unwrap_or_default();
+    assert!(stdout.starts_with("usage: ") && !stdout.contains(&expected), "先頭以外の `--version` は使い方: {stdout}");
+}
+
 // ─────────────────────────── register --model（契約 (e)・s2-07l.215） ───────────────────────────
 
 /// target の登録 row の `model`（replay の読み手 `registration_of_target` から運ぶ）。

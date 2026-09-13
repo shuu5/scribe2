@@ -2051,6 +2051,38 @@ fn fleet_select_exclude_drops_the_seat_accounts() {
     drop_fixture(&fx);
 }
 
+/// `--exclude` の直後に別の flag が来る周（`--exclude --purpose run`）は **値欠け**で usage に断られる
+/// （rc 1・chosen を出さない・次の flag を label に取らない・計測しない）。`--` で始まる字面は label にならない。
+///
+/// .191 の検出線で生き残った変異 `excludes` の match guard `!label.starts_with("--")` → `true` は、この周だけ
+/// 挙動が変わる（`--purpose` が label に化けて選定が通り chosen を出す）。現物の挙動を pin する歯なので base
+/// でも通る（retroactive）。
+// flip-check: retroactive s2-07l.196
+#[test]
+fn mutant_e2e_fleet_select_exclude_followed_by_a_flag_is_a_missing_value() {
+    let (fx, curl) = select_fixture(SELECT_THREE, true, Some("85"));
+    for extra in [
+        &["--exclude", "--purpose", "run"][..],
+        &["--purpose", "run", "--exclude", "--model", "Fable"],
+        &["--purpose", "run", "--exclude", "a2", "--exclude", "--purpose", "run"],
+        &["--purpose", "run", "--exclude", "--"],
+    ] {
+        let out = run_select(&fx, &curl, extra);
+        assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{extra:?}: 値欠けは断る: {out:?}");
+        assert!(out.stdout.is_empty(), "{extra:?}: chosen を出さない: {out:?}");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(stderr.contains("fleet: --exclude に値が無い"), "{extra:?}: 値欠けの理由: {stderr}");
+        assert!(stderr.contains("usage: fleet"), "{extra:?}: 使い方を stderr へ: {stderr}");
+        assert!(!stderr.contains("chosen="), "{extra:?}: 次の flag を label に取って選ばない: {stderr}");
+    }
+    assert_eq!(curl_calls(&fx), 0, "断った周は計測しない");
+    assert!(!store::events_path(&fx.state).exists(), "event を書かない");
+    let out = run_select(&fx, &curl, &["--exclude", "a2", "--purpose", "run"]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "値の在る `--exclude` は flag の前でも通る: {out:?}");
+    assert_eq!(out_lines(&out), vec!["select purpose=run chosen=a1".to_owned()]);
+    drop_fixture(&fx);
+}
+
 /// (3) session 用は閾値未満で最小の口座を出す。全口座が閾値以上（当たってはいない）の周は
 /// `all-limited` でなく閾値の理由。
 #[test]
