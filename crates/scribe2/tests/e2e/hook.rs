@@ -1766,11 +1766,12 @@ struct RolePlace {
     rules: String,
 }
 
-/// planner の権能（裁定 `user 2026-09-13T03:14Z` の値と同じ）。
-const PLANNER_CAPS: &[&str] = &["answer", "approve", "go", "relay", "edit-contract", "edit-design-intent", "edit-design-doc"];
+/// planner の権能（裁定 `user 2026-09-13T03:14Z` の値に、裁定 `user 2026-09-13T12:04Z` の `edit-outside` を足したもの）。
+const PLANNER_CAPS: &[&str] =
+    &["answer", "approve", "go", "relay", "edit-contract", "edit-design-intent", "edit-design-doc", "edit-outside"];
 
-/// 管理席の権能（同じ裁定）。
-const ADMIN_CAPS: &[&str] = &["launch", "relay", "merge"];
+/// 管理席の権能（同じ 2 つの裁定）。
+const ADMIN_CAPS: &[&str] = &["launch", "relay", "merge", "edit-outside"];
 
 /// 役割ごとの行を持つ rules manifest の本文（`admin` が `None` なら管理席の行を置かない）。
 fn role_rules_text(planner: &[&str], admin: Option<&[&str]>) -> String {
@@ -2105,13 +2106,12 @@ fn hook_role_anchor_comes_from_project_not_cwd() {
     let text = assert_role_deny(&out, "cd で repo の外に居ても anchor から解けて deny");
     assert!(text.contains("role.planner"), "{text}");
     assert_role_record(&place.state, before, "role-deny capability=answer", "roleanchoradmin_roleanchoradmin");
-    // 同じ形で権能付きでない Bash と Edit（repo の外の path＝Outside）。
+    // 同じ形で権能付きでない Bash と Edit（repo の外の path＝Outside・管理席は edit-outside を持つ＝裁定 12:04Z）。
     assert_silent(&run_role_hook(&place, &admin_pane, &["--project", &project], &bash_payload(&outside, "ls")), "ls");
-    let text = assert_role_deny(
+    assert_silent(
         &run_role_hook(&place, &admin_pane, &["--project", &project], &tool_payload(&outside, "Edit", "x.rs")),
         "repo の外の編集",
     );
-    assert!(text.contains("edit-outside"), "{text}");
 
     // pane 無し + cwd = repo の外 → 黙る（FR24）。
     let out = run_hook_args(&["pre-tool-use", "--rules", &place.rules], &payload);
@@ -2135,6 +2135,59 @@ fn hook_role_anchor_comes_from_project_not_cwd() {
     assert_role_record(&place.state, before, "role-deny capability=answer", "roleanchoradmin_roleanchoradmin");
     drop(admin);
     clean(&[&place.repo, &place.state, &place.sock_dir, &outside, &bare]);
+}
+
+/// repo の外の path（`Outside`）への Edit / Write を撃ち、fixture の rules・埋め込み manifest の両方で通ることと、
+/// `edit-outside` を抜いた行では deny（権能を名指す）になることを見る。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn assert_outside_edit_allowed_for(place: &RolePlace, pane: &str, seat: &str, caps: &[&str]) {
+    let outside = tmp();
+    let file = outside.join("note.md").display().to_string();
+    let edit = tool_payload(&place.repo, "Edit", &file);
+
+    let before = role_records(&place.state).len();
+    assert_silent(&run_role_hook(place, pane, &[], &edit), "repo の外の Edit は通す");
+    assert_role_record(&place.state, before, "role-allow path=outside", seat);
+    assert_silent(&run_role_hook(place, pane, &[], &tool_payload(&place.repo, "Write", &file)), "repo の外の Write も通す");
+    // 埋め込み manifest（tracked の `role.*` の行）でも同じ＝裁定 12:04Z の値が binary に在る。
+    let out = run_hook_args(&["pre-tool-use", "--pane", pane, "--tmux-socket", &place.socket], &edit);
+    assert_silent(&out, "埋め込み manifest でも repo の外の Edit は通す");
+
+    // 対: edit-outside を抜いた行では deny（通したのは行の値であって判定の穴ではない）。
+    let without: Vec<&str> = caps.iter().copied().filter(|name| *name != "edit-outside").collect();
+    let (planner, admin) = if caps == PLANNER_CAPS { (without.as_slice(), ADMIN_CAPS) } else { (PLANNER_CAPS, without.as_slice()) };
+    let stripped = place.sock_dir.join("no-outside.toml");
+    fs::write(&stripped, role_rules_text(planner, Some(admin))).expect("rules を書ける");
+    let args = ["pre-tool-use", "--pane", pane, "--tmux-socket", &place.socket, "--rules", &stripped.display().to_string()];
+    let text = assert_role_deny(&run_hook_args(&args, &edit), "edit-outside の無い行");
+    assert!(text.contains("edit-outside"), "種別の権能を名指す: {text}");
+    // repo の内の種別の判定は変わらない（code は持たない）。
+    assert_role_deny(&run_role_hook(place, pane, &[], &tool_payload(&place.repo, "Edit", "src/lib.rs")), "repo 内の code");
+    clean(&[&outside]);
+}
+
+/// 裁定 `user 2026-09-13T12:04Z`: 登録済み planner 席の repo の外（dispatch file の state dir・auto-memory）への
+/// Edit / Write は allow（`PathKind::Outside` → `edit-outside`）。
+#[test]
+fn hook_role_outside_edit_is_allowed_for_planner() {
+    let place = role_place();
+    let (planner, planner_pane) = role_seat(&place, "roleoutplanner", Some("planner"));
+    assert_outside_edit_allowed_for(&place, &planner_pane, "roleoutplanner_roleoutplanner", PLANNER_CAPS);
+    drop(planner);
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
+/// 裁定 `user 2026-09-13T12:04Z`: 登録済み管理席の repo の外（`.claude-session/`・scratchpad）への Edit / Write は allow。
+#[test]
+fn hook_role_outside_edit_is_allowed_for_admin() {
+    let place = role_place();
+    let (admin, admin_pane) = role_seat(&place, "roleoutadmin", Some("admin"));
+    assert_outside_edit_allowed_for(&place, &admin_pane, "roleoutadmin_roleoutadmin", ADMIN_CAPS);
+    drop(admin);
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
 }
 
 /// command 行の中の escape（`"` / `\`）の後ろに在る subcommand も見落とさない（`field` の字面読みは escape

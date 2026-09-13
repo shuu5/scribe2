@@ -837,7 +837,7 @@ fn rules_all_follows_declaration_order() {
     );
 }
 
-/// 役割ごとの権能の行（`role.<役割名>`・`RuleKind::RoleCapabilities`・裁定 id `user 2026-09-13T03:14Z`・設計
+/// 役割ごとの権能の行（`role.<役割名>`・`RuleKind::RoleCapabilities`・裁定 id `user 2026-09-13T12:04Z`・設計
 /// seat-roles.md §3・ADR-0022 §2.2・`s2-07l.201`）: **行は `Role::ALL` と同数**（役割ごとに 1 行・1 kind で 2 行）、
 /// 値は `Capability` の名の列、宣言順の末尾の kind。**値は manifest が持ち、設計 doc は写さない**（C1 / C5）。
 #[test]
@@ -857,7 +857,7 @@ fn rules_embedded_manifest_declares_one_capability_row_per_role() {
         assert_eq!(row.kind, RuleKind::RoleCapabilities, "{id} の kind");
         assert_eq!(row.kind.shape(), ValueShape::List, "{id} の値の形は List（名の列）");
         assert!(row.enabled, "{id} は発効している");
-        assert_eq!(row.ruling, "user 2026-09-13T03:14Z", "{id} の裁定 id");
+        assert_eq!(row.ruling, "user 2026-09-13T12:04Z", "{id} の裁定 id（edit-outside の追加）");
         assert_eq!(row.ruled_at, "2026-09-13", "{id} の裁定日");
         let names = role_row_names(&manifest, *role);
         assert!(!names.is_empty(), "{id} の値は非空の列");
@@ -881,6 +881,7 @@ fn role_row_names(manifest: &Manifest, role: Role) -> Vec<String> {
 
 /// 裁定 `user 2026-09-13T03:14Z` の値: planner だけが記帳（回答・承認・go）と design-intent / 設計 doc の編集を
 /// 持ち、管理席だけが起動と merge を持つ。**code は両役割とも持たない**（印で開いた便の write-set だけ・AC16）。
+/// 裁定 `user 2026-09-13T12:04Z`: 対象 repo の外（state dir・auto-memory・scratchpad）の編集は両役割とも持つ。
 #[test]
 fn rules_embedded_manifest_role_rows_carry_the_ruled_capabilities() {
     let manifest = Manifest::embedded().unwrap_or_else(|errors| panic!("埋め込み manifest が拒まれた: {errors:?}"));
@@ -896,7 +897,7 @@ fn rules_embedded_manifest_role_rows_carry_the_ruled_capabilities() {
     for role in ROLES {
         assert!(held(*role, Capability::Relay), "{} は中継を持つ", role.as_str());
         assert!(!held(*role, Capability::EditCode), "{}: code は持たない（印で開いた便だけ）", role.as_str());
-        assert!(!held(*role, Capability::EditOutside), "{}: repo の外は持たない", role.as_str());
+        assert!(held(*role, Capability::EditOutside), "{}: repo の外は持つ（12:04Z）", role.as_str());
     }
 }
 

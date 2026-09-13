@@ -350,17 +350,17 @@ ruled_at = "2026-09-12"
 [[rule]]
 id = "role.planner"
 kind = "RoleCapabilities"
-value = ["answer", "approve", "go", "relay", "edit-contract", "edit-design-intent", "edit-design-doc"]
+value = ["answer", "approve", "go", "relay", "edit-contract", "edit-design-intent", "edit-design-doc", "edit-outside"]
 enabled = true
-ruling = "user 2026-09-13T03:14Z"
+ruling = "user 2026-09-13T12:04Z"
 ruled_at = "2026-09-13"
 
 [[rule]]
 id = "role.admin"
 kind = "RoleCapabilities"
-value = ["launch", "relay", "merge"]
+value = ["launch", "relay", "merge", "edit-outside"]
 enabled = true
-ruling = "user 2026-09-13T03:14Z"
+ruling = "user 2026-09-13T12:04Z"
 ruled_at = "2026-09-13"
 
 # 口座の宣言（設計 fleet-usage.md §2・裁定 id 'user 2026-09-12T02:01Z'）。label は**不透明な符丁**で
