@@ -47,6 +47,8 @@ pub const DEFAULT_RESTORE: &str = "/rebrief";
 const WHO: &str = "seat-cycle";
 /// 記録の when。
 const WHEN: &str = "cycle";
+/// 立て直しの起動の記録の when。
+const WHEN_RELAUNCH: &str = "relaunch";
 /// 口座の credential dir の置き場（`<state_dir>/accounts/<label>/`・ADR-0017 §2.3）。
 const ACCOUNTS_DIR: &str = "accounts";
 /// 起動の雛形の穴（設計 account-autonomy.md §5・seat-roles.md §2）: 選んだ口座の credential dir で埋める 1 つ。
@@ -383,9 +385,12 @@ fn send_restore(request: &Request) -> bool {
 
 /// 1 行を literal で送り、Enter を送る。
 fn send_line(request: &Request, text: &str) -> bool {
-    let target = request.target;
-    tmux_ok(request.socket, &["send-keys", "-t", target, "-l", text])
-        && tmux_ok(request.socket, &["send-keys", "-t", target, "Enter"])
+    send_to(request.socket, request.target, text)
+}
+
+/// `target` へ 1 行を literal で送り、Enter を送る（cycle の `/clear` と立て直しの起動の 1 本）。
+fn send_to(socket: Option<&str>, target: &str, text: &str) -> bool {
+    tmux_ok(socket, &["send-keys", "-t", target, "-l", text]) && tmux_ok(socket, &["send-keys", "-t", target, "Enter"])
 }
 
 /// 結果を 1 語（＋理由）にする。tick 行の末尾へも同じ字面が載る。
@@ -557,19 +562,31 @@ fn choose(request: &Relaunch) -> Selection {
     })
 }
 
-/// lock を握っている間の手順（順序固定）: 起動の雛形 → 立ち上がりの確認 → 登録 row の更新 → 復元。
+/// lock を握っている間の手順（順序固定）: shell の入力欄の門 → 起動の雛形 → 立ち上がりの確認 → 登録 row の更新 → 復元。
+///
+/// 起動は**前面が shell の pane** へ撃つので、門は席の `❯` の行（[`inject::guard_input`]）でなく shell の prompt 末尾
+/// （[`super::shell_input_empty`]・account-autonomy.md §5「shell への注入の門」・`s2-07l.218`）で見る。断りの字面は
+/// cycle の門と同じ `input-busy` / `input-unknown`。立ち上がった後の復元は席の pane なので従来どおり注入の門を通る。
 ///
 /// 登録 row は**立ち上がりを確かめた直後**に更新する: 起動が届いた席は選んだ口座で走っており、復元を
 /// 確かめられない周でも row が旧い口座を名乗ると、選定の除外と次の周の逼迫度が別の口座を見る。
 /// 成功と数えるのは復元が**消費された**周だけ（[`send_restore`] と同じ・立ち上がった直後の席に turn は無い）。
 fn relaunch_held(request: &Relaunch, dir: &Path, launch: &str, label: &str) -> Relaunched {
+    let Some(pane) = super::tmux_stdout(request.socket, &["capture-pane", "-p", "-J", "-t", request.target]) else {
+        return Relaunched::Refused(REASON_PANE_MISSING);
+    };
+    match super::shell_input_empty(&pane) {
+        Ok(()) => {}
+        Err(inject::InputGate::Busy) => return Relaunched::Refused(REASON_INPUT_BUSY),
+        Err(inject::InputGate::UnknownInput) => return Relaunched::Refused(REASON_INPUT_UNKNOWN),
+    }
     let baseline = state::baseline(dir);
     let since = state::now_secs();
-    match inject::deliver(&sending(request, launch)) {
-        inject::Delivery::Delivered(..) => {}
-        inject::Delivery::Refused(reason) => return Relaunched::Refused(reason),
-        inject::Delivery::Unconfirmed(reason) => return Relaunched::Failed(reason),
+    let started_at = Instant::now();
+    if !send_to(request.socket, request.target, launch) {
+        return Relaunched::Failed(inject::REASON_TMUX_FAILED);
     }
+    record_launch(request, launch, started_at);
     if !started(dir, (baseline, since), request.settle, request.step) {
         return Relaunched::Failed(REASON_LAUNCH);
     }
@@ -601,7 +618,30 @@ fn restore_when_ready(request: &Relaunch) -> Option<inject::Settled> {
     }
 }
 
-/// 立て直しの 1 行を送る注入の入力（`seat inject` と同じ経路・記録は席の `tick.jsonl`）。
+/// 立て直しの起動 1 行を席の `tick.jsonl` に記録する（`who=seat-cycle`・`when=relaunch`・`what` は起動の 1 行そのまま）。
+/// 起動は shell の門（[`super::shell_input_empty`]）を通して直に送るので `seat inject` の経路の行ではない（C10）。
+/// **置き場へ書けない周も結果を変えない**（記録は判定そのものではない）。
+fn record_launch(request: &Relaunch, launch: &str, started: Instant) {
+    let entry = InjectionRecord {
+        schema: SCHEMA,
+        who: WHO.to_owned(),
+        what: launch.to_owned(),
+        when: WHEN_RELAUNCH.to_owned(),
+        bytes: launch.len() as u64,
+        // 数えていないことを 0 と書かない。
+        tokens: None,
+        wall_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+        seat: seat_name(request.target),
+        ts: state::now_secs(),
+    };
+    let Ok(policy) = LockPolicy::embedded() else {
+        return;
+    };
+    let path = inject::tick_path(&request.state_dir.path, request.target);
+    let _ = store::append_line(&path, &entry.to_line(), policy);
+}
+
+/// 復元の 1 行を送る注入の入力（`seat inject` と同じ経路・記録は席の `tick.jsonl`）。
 fn sending<'r>(request: &Relaunch<'r>, payload: &'r str) -> inject::Request<'r> {
     inject::Request {
         target: request.target,

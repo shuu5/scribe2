@@ -6441,6 +6441,16 @@ fn acct_injected(state: &Path, target: &str) -> Vec<String> {
         .collect()
 }
 
+/// 席の記録（`tick.jsonl`）のうち注入の経路（`seat-inject`）と立て直しの起動（`seat-cycle`）が積んだ行の `what`（送った順）。
+fn acct_sent(state: &Path, target: &str) -> Vec<String> {
+    fs::read_to_string(tick_file(state, target))
+        .unwrap_or_default()
+        .lines()
+        .filter(|line| matches!(acct_text(line, "who").as_deref(), Some("seat-inject" | "seat-cycle")))
+        .filter_map(|line| acct_text(line, "what"))
+        .collect()
+}
+
 /// event log の登録 row（積んだ順）。
 fn acct_rows(state: &Path) -> Vec<vessel::fleet::Registration> {
     vessel::fleet::store::read_all(state)
@@ -6747,7 +6757,7 @@ fn acct_assert_launched_then_restored(place: &AcctPlace, target: &str) {
         "/rebrief\n",
         "立ち上がった席が復元の command を受けた（起動の後）"
     );
-    let sent = acct_injected(&place.state, target);
+    let sent = acct_sent(&place.state, target);
     assert_eq!(sent.len(), 3, "退避の合図・起動・復元の 3 行: {sent:?}");
     assert!(sent.get(1).is_some_and(|what| what.starts_with("sh ")), "2 行目は起動の雛形: {sent:?}");
     assert_eq!(sent.get(2).map(String::as_str), Some("/rebrief"), "3 行目は復元: {sent:?}");
@@ -6775,6 +6785,7 @@ fn seat_account_relaunch_fills_the_template_on_another_account_and_restores() {
     let guard = start_seat(&place.socket, name);
     assert!(guard.ready(), "独立 socket に shell の session を立てられる");
     acct_parked(&place, name, &acct_launcher(&place, name), 30);
+    assert!(acct_shell_prompt(&place, name, ""), "席の終了後の pane は shell の prompt で終わる");
 
     let out = acct_tick(&place, name, None);
 
@@ -6891,4 +6902,135 @@ fn seat_account_relaunch_refuses_templates_without_exactly_one_hole() {
         drop(guard);
         fs::remove_dir_all(&place.dir).ok();
     }
+}
+
+/// 席が終わった後の shell の prompt（`❯` を持たない・user の bash prompt の形）。
+const ACCT_SHELL_PS1: &str = "user@host:dir$ ";
+
+/// 席が終わって shell へ戻った pane を作る: prompt を [`ACCT_SHELL_PS1`] に替えて画面を消し、`extra`（printf の書式）を
+/// 描いてから prompt を待つ。前面 process は `sh` のまま（入口 (3) は立つ）。描けたかを返す（panic しない）。
+fn acct_shell_prompt(place: &AcctPlace, target: &str, extra: &str) -> bool {
+    let line = format!("PS1='{ACCT_SHELL_PS1}'; printf '\\033[H\\033[2J{extra}'");
+    if !tmux(&place.socket, &["send-keys", "-t", target, "-l", &line]).status.success()
+        || !tmux(&place.socket, &["send-keys", "-t", target, "Enter"]).status.success()
+    {
+        return false;
+    }
+    acct_wait_pane(place, target, |pane| pane.trim_end().ends_with('$') && !pane.contains("PS1="))
+}
+
+/// pane が `ready` を満たすまで待つ（上限 [`PROMPT_WAIT`]）。
+fn acct_wait_pane(place: &AcctPlace, target: &str, ready: impl Fn(&str) -> bool) -> bool {
+    let deadline = Instant::now().checked_add(PROMPT_WAIT);
+    while deadline.is_some_and(|at| Instant::now() < at) {
+        if ready(&capture(&place.socket, target)) {
+            return true;
+        }
+        sleep(Duration::from_millis(100));
+    }
+    false
+}
+
+/// 立て直しの注入の門で断った周（rc 1・`decision=error reason=<reason>`）: 起動の雛形は注入されず、登録 row は
+/// 増えず、席の記録は 1 周目の退避の合図だけ。
+fn acct_assert_shell_refused(place: &AcctPlace, target: &str, out: &Output, reason: &str) {
+    let line = stderr_of(out);
+    assert_eq!(rc_of(out), i32::from(RC_REFUSED), "{reason}: stdout={} stderr={line}", stdout_of(out));
+    assert_eq!(tick_token(&line, "decision").as_deref(), Some("error"), "{line}");
+    assert_eq!(tick_token(&line, "reason").as_deref(), Some(reason), "{line}");
+    assert!(!place.dir.join("launched").exists(), "{reason}: 起動の雛形は注入されない");
+    assert_eq!(acct_rows(&place.state).len(), 1, "{reason}: SeatRegistered は増えない");
+    assert_eq!(acct_sent(&place.state, target).len(), 1, "{reason}: 1 周目の退避の合図だけ");
+}
+
+/// (1) 席が終わって pane の可視域が shell の prompt（`user@host:dir$ `・`❯` 無し）で終わる周は、shell の門を通って
+/// 立て直す（起動 → 復元・判定行は `kind=relaunch`）。base は席の門（`❯` の行）で読み `relaunch-input-unknown`
+/// 相当で断る（RED）。
+#[test]
+fn seat_relaunch_shell_prompt_without_the_seat_prompt_relaunches() {
+    let place = acct_place();
+    let name = "shellplain";
+    let guard = start_seat(&place.socket, name);
+    assert!(guard.ready(), "独立 socket に shell の session を立てられる");
+    acct_parked(&place, name, &acct_launcher(&place, name), 30);
+    assert!(acct_shell_prompt(&place, name, ""), "shell の prompt を描ける");
+    let seen = capture(&place.socket, name);
+    assert!(!seen.contains('\u{276f}'), "可視域に `❯` は無い: {seen}");
+
+    let out = acct_tick(&place, name, None);
+
+    let line = stdout_of(&out);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stdout={line} stderr={}", stderr_of(&out));
+    for (key, want) in [("decision", "inject"), ("kind", "relaunch"), ("consumed", "true"), ("relaunch", ACCT_SPARE)] {
+        assert_eq!(tick_token(&line, key).as_deref(), Some(want), "{key}: {line}");
+    }
+    acct_assert_launched_then_restored(&place, name);
+    acct_assert_relabelled(&place, name);
+    drop(guard);
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (2) shell の prompt の後に打ちかけ（`git st`）が在る周は送らない（`relaunch-input-busy`）。
+#[test]
+fn seat_relaunch_shell_prompt_with_a_draft_is_refused_busy() {
+    let place = acct_place();
+    let name = "shelldraft";
+    let guard = start_seat(&place.socket, name);
+    assert!(guard.ready(), "独立 socket に shell の session を立てられる");
+    acct_parked(&place, name, &acct_launcher(&place, name), 30);
+    assert!(acct_shell_prompt(&place, name, ""), "shell の prompt を描ける");
+    assert!(tmux(&place.socket, &["send-keys", "-t", name, "-l", "git st"]).status.success());
+    assert!(acct_wait_pane(&place, name, |pane| pane.trim_end().ends_with("$ git st")), "打ちかけが描かれる");
+
+    let out = acct_tick(&place, name, None);
+
+    acct_assert_shell_refused(&place, name, &out, "relaunch-input-busy");
+    assert!(capture(&place.socket, name).trim_end().ends_with("$ git st"), "打ちかけは触られない");
+    drop(guard);
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (3) 可視域の上に終了した席の古い `❯` 行が残っていても、最後の非空行が shell の prompt なら (1) と同じく送る
+/// （古い `❯` 行の右側を入力欄と読まない）。
+#[test]
+fn seat_relaunch_shell_prompt_below_a_stale_seat_prompt_relaunches() {
+    let place = acct_place();
+    let name = "shellstale";
+    let guard = start_seat(&place.socket, name);
+    assert!(guard.ready(), "独立 socket に shell の session を立てられる");
+    acct_parked(&place, name, &acct_launcher(&place, name), 30);
+    assert!(acct_shell_prompt(&place, name, "\\342\\235\\257 /exit\\n"), "古い `❯` 行の下に shell の prompt を描ける");
+    let seen = capture(&place.socket, name);
+    assert!(seen.contains("\u{276f} /exit"), "古い `❯` 行が残る: {seen}");
+
+    let out = acct_tick(&place, name, None);
+
+    let line = stdout_of(&out);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stdout={line} stderr={}", stderr_of(&out));
+    for (key, want) in [("decision", "inject"), ("kind", "relaunch"), ("relaunch", ACCT_SPARE)] {
+        assert_eq!(tick_token(&line, key).as_deref(), Some(want), "{key}: {line}");
+    }
+    acct_assert_launched_then_restored(&place, name);
+    drop(guard);
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (4) 最後の非空行が shell の prompt 末尾で終わらない（`Password:` の問い）周は送らない（`relaunch-input-unknown`）。
+#[test]
+fn seat_relaunch_shell_without_a_prompt_tail_is_refused_unknown() {
+    let place = acct_place();
+    let name = "shellpassword";
+    let guard = start_seat(&place.socket, name);
+    assert!(guard.ready(), "独立 socket に shell の session を立てられる");
+    acct_parked(&place, name, &acct_launcher(&place, name), 30);
+    assert!(acct_shell_prompt(&place, name, ""), "shell の prompt を描ける");
+    assert!(tmux(&place.socket, &["send-keys", "-t", name, "-l", "printf 'Password:'; read answer"]).status.success());
+    assert!(tmux(&place.socket, &["send-keys", "-t", name, "Enter"]).status.success());
+    assert!(acct_wait_pane(&place, name, |pane| pane.trim_end().ends_with("Password:")), "問いが描かれる");
+
+    let out = acct_tick(&place, name, None);
+
+    acct_assert_shell_refused(&place, name, &out, "relaunch-input-unknown");
+    drop(guard);
+    fs::remove_dir_all(&place.dir).ok();
 }

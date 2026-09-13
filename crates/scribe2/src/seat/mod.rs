@@ -106,6 +106,30 @@ pub fn input_tail(pane: &str) -> Option<&str> {
         .map(|(_, right)| right.trim())
 }
 
+/// shell の prompt の末尾（**閉じた列**・宣言順・字面は現物が正本・憲法 C2）。立て直しの注入は shell の pane に
+/// 撃つので、席の [`PROMPT`] では入力欄を特定できない（設計 account-autonomy.md §5「shell への注入の門」）。
+pub const SHELL_PROMPT_TAILS: &[&str] = &["$ ", "# ", "% ", "> "];
+
+/// shell の pane の入力欄の門（pure・`s2-07l.218`）: 可視域の**最後の非空行**が [`SHELL_PROMPT_TAILS`] のどれかで
+/// 終わる（右端の空白は trim しない＝prompt の直後に字が無い）周だけ `Ok`。その行が末尾のどれかを途中に含む
+/// （prompt の後に打ちかけが在る）周は [`inject::InputGate::Busy`]、含まない（`Password:` 等・空 pane）周は
+/// [`inject::InputGate::UnknownInput`]——どちらも 1 key も送らない側（C11.2・緩めない）。
+///
+/// 席の `❯` の行は読まない: 終了した席の画面に残る古い `❯` 行は shell の入力欄ではない（[`inject::guard_input`] は
+/// 席の pane 用のまま）。
+pub fn shell_input_empty(pane: &str) -> Result<(), inject::InputGate> {
+    let Some(last) = pane.lines().rfind(|line| !line.trim().is_empty()) else {
+        return Err(inject::InputGate::UnknownInput);
+    };
+    if SHELL_PROMPT_TAILS.iter().any(|tail| last.ends_with(tail)) {
+        Ok(())
+    } else if SHELL_PROMPT_TAILS.iter().any(|tail| last.contains(tail)) {
+        Err(inject::InputGate::Busy)
+    } else {
+        Err(inject::InputGate::UnknownInput)
+    }
+}
+
 /// statusline を探す域: 最後の prompt 行より下の非空行（prompt 不在なら末尾 6 非空行）。
 pub fn search_region(pane: &str) -> Vec<&str> {
     let lines: Vec<&str> = pane.lines().collect();
@@ -347,5 +371,72 @@ pub fn int_rule(id: &str) -> Option<u64> {
     match (row.enabled, &row.value) {
         (true, crate::rules::RuleValue::Int(found)) => Some(*found),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::inject::InputGate;
+    use super::{shell_input_empty, SHELL_PROMPT_TAILS};
+    use proptest::prelude::*;
+    use proptest::test_runner::Config;
+
+    /// 末尾 4 種の各々は prompt の直後に字が無い周だけ通り、打ちかけは `Busy`・prompt 末尾で終わらない行は
+    /// `UnknownInput`（`s2-07l.218`）。列の字面と宣言順も pin する。
+    #[test]
+    fn seat_relaunch_shell_input_each_tail_passes_only_when_empty() {
+        assert_eq!(SHELL_PROMPT_TAILS, ["$ ", "# ", "% ", "> "]);
+        for (prompt, tail) in [("user@host:dir$ ", "$ "), ("root@host:/# ", "# "), ("host% ", "% "), ("PS C:\\> ", "> ")] {
+            assert_eq!(shell_input_empty(prompt), Ok(()), "{tail}");
+            assert_eq!(shell_input_empty(&format!("old output\n\n{prompt}\n\n")), Ok(()), "{tail}: 下の空行は読まない");
+            assert_eq!(shell_input_empty(&format!("{prompt}git st")), Err(InputGate::Busy), "{tail}: 打ちかけ");
+        }
+    }
+
+    /// 空 pane・空白だけの pane・prompt 末尾で終わらない行は特定できない。
+    #[test]
+    fn seat_relaunch_shell_input_unknown_without_a_prompt_tail() {
+        for pane in ["", "\n\n", "   \n \t\n", "[sudo] password for user:", "Password:", "user@host:dir$"] {
+            assert_eq!(shell_input_empty(pane), Err(InputGate::UnknownInput), "{pane:?}");
+        }
+    }
+
+    /// 右端の空白は trim しない: `$` の直後に空白が無い行は一致せず、空白が 2 つ（打った空白）は打ちかけ。
+    #[test]
+    fn seat_relaunch_shell_input_does_not_trim_the_right_edge() {
+        assert_eq!(shell_input_empty("user@host:dir$\n"), Err(InputGate::UnknownInput));
+        assert_eq!(shell_input_empty("user@host:dir$  "), Err(InputGate::Busy));
+    }
+
+    /// 古い `❯` 行は読まない（最後の非空行だけが門の入力）。
+    #[test]
+    fn seat_relaunch_shell_input_ignores_a_stale_seat_prompt() {
+        assert_eq!(shell_input_empty("\u{276f} /exit\nuser@host:dir$ "), Ok(()));
+        assert_eq!(shell_input_empty("user@host:dir$ \n\u{276f} "), Err(InputGate::UnknownInput));
+    }
+
+    /// 反例の永続化を切り、case 数を 256 に pin する（`tests/e2e/prop.rs` と同じ形）。
+    fn config() -> Config {
+        Config {
+            cases: 256,
+            failure_persistence: None,
+            ..Config::default()
+        }
+    }
+
+    proptest! {
+        #![proptest_config(config())]
+
+        /// 任意の行列で `Ok` なら最後の非空行が末尾のどれかで終わる。
+        #[test]
+        fn seat_relaunch_shell_input_ok_implies_last_line_ends_with_a_tail(
+            lines in prop::collection::vec("[ a-z$#%>:\u{276f}]{0,12}", 0..6)
+        ) {
+            let pane = lines.join("\n");
+            if shell_input_empty(&pane).is_ok() {
+                let last = pane.lines().rfind(|line| !line.trim().is_empty()).unwrap_or_default();
+                prop_assert!(SHELL_PROMPT_TAILS.iter().any(|tail| last.ends_with(tail)));
+            }
+        }
     }
 }
