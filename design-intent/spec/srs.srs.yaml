@@ -505,7 +505,7 @@ requirements:
     ears:
       pattern: ubiquitous
       condition: 常時
-      response: 口座は、 manifest に宣言した口座と実測した口座残量（FR33）だけから決定的に選び、 便用（口座残量を使い切る側）と開発 session 用（余裕を残す側）の 2 つの規則を持ち、 規則の値は rules 行 R-C9-1（user 裁定で発効）だけから取る
+      response: 口座は、 manifest に宣言した口座（便用は席の登録 row を持つ口座を除く）と実測した口座残量（FR33）だけから決定的に選び、 便用（口座残量を使い切る側）と開発 session 用（余裕を残す側）の 2 つの規則を持ち、 規則の値は rules 行 R-C9-1（user 裁定で発効）だけから取る
   - id: FR37
     type: FR
     label: 別口座での途中再開
@@ -516,7 +516,7 @@ requirements:
     ears:
       pattern: event
       condition: FR35 で記帳された便の再開が要求されたとき（この便の再開は FR14 に優先する）
-      response: 器は FR36 で別の口座を選び、 同じ worktree と同じ契約（回答済みの質問を添えて・FR32）で runner を起こし直し、 記帳した段から Landed まで続ける
+      response: 器は FR36 で別の口座を選び、 同じ worktree と同じ契約（回答済みの質問を添えて・FR32）で runner を起こし直し、 記帳した段から Landed まで続ける。 候補となる口座が無い周は便を Failed にせず、 いずれかの口座の窓が最も早く reset する時刻まで待ってから再開する
   - id: FR38
     type: FR
     label: 開発 session の上限前の退避
@@ -549,7 +549,7 @@ requirements:
     ears:
       pattern: ubiquitous
       condition: 常時
-      response: 器は開発 session の席ごとの役割を閉じた一覧の値として持ち、 席の識別子（役割, anchor）を鍵に、 席の target を併せて fleet の event log へ記録し、 役割の記録が無い席をどの権能も持たない席として扱う。 1 つの anchor に planner は 1 席・管理席は 1 席とする
+      response: 器は開発 session の席ごとの役割を閉じた一覧の値として持ち、 席の識別子（役割, anchor）を鍵に、 席の target・口座 label・起動の雛形を項目として fleet の event log へ記録し、 役割の記録が無い席をどの権能も持たない席として扱う。 1 つの anchor に planner は 1 席・管理席は 1 席とする
   - id: FR41
     type: FR
     label: 権能の所在

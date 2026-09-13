@@ -144,7 +144,7 @@ terms:
     relationships: [RuleKind, gate, 便, verdict export]
   - canonical: 席
     domain: consumer
-    definition: 1 つの Claude Code session が占める作業単位。 役割は planner / 管理席の 2 値 (runner と lens は席ではない・ADR-0022 §2.1)。 状態は SeatState で運ぶ (C3.3)。
+    definition: 1 つの Claude Code session が占める作業単位。 役割は 2 値で、 値の列挙は core が持つ (runner と lens は席ではない・ADR-0022 §2.1)。 状態は SeatState で運ぶ (C3.3)。
     forbidden: [シート]
     relationships: [fleet, 口座, lease, 管理席, planner]
   - canonical: 口座
@@ -533,15 +533,15 @@ terms:
     relationships: [受付の枠, 変異検出線, vessel 宣言]
   - canonical: 役割
     domain: consumer
-    definition: 開発 session の席の種類 (planner / 管理席)。 閉じた enum の値で、 席の登録 row が持つ。 窓名や env の慣習では決めない (SRS FR40・ADR-0022 §2.1)。
+    definition: 開発 session の席の種類。 閉じた enum の値で (列挙は core が持ち文書は写さない・ADR-0013 §2.1)、 席の登録 row が持つ。 窓名や env の慣習では決めない (SRS FR40・ADR-0022 §2.1)。
     relationships: [席, planner, 管理席, 権能, 席の登録]
   - canonical: 権能
     domain: consumer
-    definition: 役割ごとに許された操作の閉じた一覧 (回答・承認・go の記帳、 便の起動、 path 種別の編集)。 値は役割ごとの rules 行が持ち (ADR-0022 §2.2)、 hook が tool 呼出しの境界で執行する (SRS FR41・ADR-0022 §2.3)。
+    definition: 役割ごとに許された操作の閉じた一覧 (列挙は core が持ち文書は写さない・ADR-0013 §2.1)。 値は役割ごとの rules 行が持ち (ADR-0022 §2.2)、 hook が tool 呼出しの境界で執行する (SRS FR41・ADR-0022 §2.3)。
     relationships: [役割, rules 行, hook, 対話面]
   - canonical: 席の登録
     domain: consumer
-    definition: 席の役割と anchor を鍵に、 target・口座・起動の雛形を併せて fleet の event log に記録すること (SRS FR40・ADR-0022 §2.1)。 記録の無い席は権能を持たない。 pane id は鍵にも項目にも置かない。
+    definition: 席の役割と anchor を鍵に、 target・口座 label・起動の雛形を項目として fleet の event log に記録すること (SRS FR40・ADR-0022 §2.1)。 記録の無い席は権能を持たない。 pane id は鍵にも項目にも置かない。
     relationships: [席, 役割, fleet]
   - canonical: 上限停止
     domain: consumer
