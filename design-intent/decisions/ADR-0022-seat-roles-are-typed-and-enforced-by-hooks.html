@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="folio-doc-type" content="adr">
+<meta name="folio-layer" content="project">
+<meta name="folio-version" content="0.4.6">
+<meta name="folio-status" content="accepted">
+<meta name="folio-stakeholders" content="Developer, AI Agent, External Reviewer">
+<meta name="folio-adr-id" content="0022">
+<meta name="folio-adr-date" content="2026-09-13">
+<title>ADR-0022 — 席の役割と権能は閉じた型と rules 行で持ち、 hook が tool 呼出しの境界で執行し、 席の指示文は行から生成して session の開始時に注入する (対話面 R-C7-1 の値を planner の席へ・管理席は anchor ごと 1 席・ADR-0004 §2.6 / ADR-0016 §2.1 を部分 supersede・器の外の散文を規則の置き場にしない)</title>
+<link rel="stylesheet" href="../../common.css">
+<script type="application/ld+json">
+{
+  "@context": {
+    "dc": "http://purl.org/dc/terms/",
+    "schema": "https://schema.org/",
+    "folio": "https://folio.dev/spec/v1/"
+  },
+  "@id": "./ADR-0022-seat-roles-are-typed-and-enforced-by-hooks.html",
+  "@type": "schema:TechArticle",
+  "dc:isReferencedBy": [
+    { "@id": "./ADR-0020-account-autonomy-limit-stop-resume-and-selection.html" }
+  ],
+  "dc:isPartOf": [
+    { "@id": "./README.html" }
+  ],
+  "dc:title": "ADR-0022 — 席の役割と権能は閉じた型と rules 行で持ち、 hook が tool 呼出しの境界で執行し、 席の指示文は行から生成して session の開始時に注入する (対話面 R-C7-1 の値を planner の席へ・管理席は anchor ごと 1 席・ADR-0004 §2.6 / ADR-0016 §2.1 を部分 supersede・器の外の散文を規則の置き場にしない)",
+  "folio:version": "0.4.6",
+  "folio:stakeholders": ["Developer", "AI Agent", "External Reviewer"],
+  "dc:references": [
+    { "@id": "../spec/constitution.html#c1" },
+    { "@id": "../spec/constitution.html#c2" },
+    { "@id": "../spec/constitution.html#c3" },
+    { "@id": "../spec/constitution.html#c5" },
+    { "@id": "../spec/constitution.html#c7" },
+    { "@id": "../spec/constitution.html#c11" },
+    { "@id": "../spec/constitution.html#c14" },
+    { "@id": "../spec/constitution.html#c16" },
+    { "@id": "../spec/constitution.html#n2" },
+    { "@id": "../spec/constitution.html#n3" },
+    { "@id": "../spec/srs.html#FR17" },
+    { "@id": "../spec/srs.html#FR18" },
+    { "@id": "../spec/srs.html#FR20" },
+    { "@id": "../spec/srs.html#FR22" },
+    { "@id": "../spec/srs.html#FR27" },
+    { "@id": "../spec/srs.html#FR30" },
+    { "@id": "../spec/srs.html#FR40" },
+    { "@id": "../spec/srs.html#FR41" },
+    { "@id": "../spec/srs.html#FR42" },
+    { "@id": "../spec/srs.html#FR43" },
+    { "@id": "../spec/srs.html#FR44" },
+    { "@id": "../spec/srs.html#FR45" },
+    { "@id": "../spec/srs.html#AC15" },
+    { "@id": "../spec/srs.html#AC16" },
+    { "@id": "../spec/srs.html#AC17" },
+    { "@id": "../spec/srs.html#AC18" },
+    { "@id": "../spec/srs.html#AC19" },
+    { "@id": "../spec/srs.html#NFR5" },
+    { "@id": "./ADR-0003-constitution-v1-abandon-rewrite.html" },
+    { "@id": "./ADR-0004-mvp-persistence-and-cross-version-formats.html" },
+    { "@id": "./ADR-0009-vessel-grants-runner-permissions-and-mutation-proof.html" },
+    { "@id": "./ADR-0011-vessel-launches-claude-without-settings.html" },
+    { "@id": "./ADR-0013-machine-holds-enumerations-docs-hold-pointers.html" },
+    { "@id": "./ADR-0014-polarity-list-is-a-snapshot-rendered-by-core.html" },
+    { "@id": "./ADR-0015-seat-state-is-stamped-by-hooks-not-read-from-pane.html" },
+    { "@id": "./ADR-0016-default-delivery-structure-and-typed-question-record.html" },
+    { "@id": "./ADR-0017-account-allowance-measured-into-event-log.html" },
+    { "@id": "./ADR-0018-working-memory-subcommands-and-pointer-required-directives.html" },
+    { "@id": "./ADR-0019-parallel-runs-exclude-overlap-at-intake-and-runner-resolves-conflicts.html" },
+    { "@id": "./ADR-0020-account-autonomy-limit-stop-resume-and-selection.html" }
+  ]
+}
+</script>
+</head>
+<body>
+<!-- folio:chrome-top -->
+<a class="skip-link" href="#s1-context">本文へスキップ</a>
+<nav class="breadcrumb" aria-label="パンくず"><ol>
+  <li><a href="../index.html">design-intent</a></li>
+  <li><a href="./README.html">decisions</a></li>
+  <li aria-current="page">ADR-0022</li>
+</ol></nav>
+<!-- /folio:chrome-top -->
+
+<header class="doc-header">
+  <h1>ADR-0022 — 席の役割と権能は閉じた型と rules 行で持ち、 hook が tool 呼出しの境界で執行し、 席の指示文は行から生成して session の開始時に注入する (対話面 R-C7-1 の値を planner の席へ・管理席は anchor ごと 1 席・ADR-0004 §2.6 / ADR-0016 §2.1 を部分 supersede・器の外の散文を規則の置き場にしない)</h1>
+  <div class="meta">Status: accepted &middot; Date: 2026-09-13 &middot; version 0.4.6 (拘束する constitution の版) &middot; C1 / C1.2 / C2.2 / C3 / C3.3 / C5 / C7 / C11.2 / C14 / C14.2 / C16 / C16.2 / N2 / N3 の適用を記録し、 ADR-0016 §2.1 (管理席 N 席) と ADR-0004 §2.6 (tmux 席の状態は MVP の event log に持たない) を §2.6 で部分 supersede し、 ADR-0003 §2.1 が rules 行に置いた対話面 R-C7-1 の値を「planner の席」へ改める &middot; 要件は SRS v0.7 (FR30 / FR40 / FR41 / FR42 / FR43 / FR44 / FR45 / AC15〜AC19) が正本</div>
+</header>
+<!-- folio:chrome-toc -->
+<nav class="toc" aria-label="ページ内目次">
+<ol>
+  <li><a href="#s1-context">§1. Context</a></li>
+  <li><a href="#s2-decision">§2. Decision</a></li>
+  <li class="toc--sub"><a href="#s2-1-role-and-registration">§2.1 役割は閉じた enum で、 席は (役割, anchor) を鍵に fleet の store へ登録する。 未登録の席は権能を持たない</a></li>
+  <li class="toc--sub"><a href="#s2-2-capability-rows">§2.2 権能は役割ごとの rules 行 (値は閉じた権能 enum の名の列・裁定 id 付き) が持ち、 執行・注入・生成文書が同じ行を読む</a></li>
+  <li class="toc--sub"><a href="#s2-3-guard">§2.3 執行は PreToolUse の guard。 identity は hook が渡す pane だけ、 subcommand は役割を検査しない、 deny 文は権能を持つ役割の名を告げる</a></li>
+  <li class="toc--sub"><a href="#s2-4-brief">§2.4 注入は SessionStart の生成文。 役割ごとの tracked な雛形 1 枚 + 行から生成し、 手書きの規範文は 0、 未登録の席には 0 byte</a></li>
+  <li class="toc--sub"><a href="#s2-5-dialogue-surface">§2.5 対話面 R-C7-1 の値を「planner の席」へ改める。 承認・回答・go の記帳は planner の席からだけ受理する</a></li>
+  <li class="toc--sub"><a href="#s2-6-supersede">§2.6 ADR-0016 §2.1 と ADR-0004 §2.6 を部分 supersede する</a></li>
+  <li class="toc--sub"><a href="#s2-7-prose">§2.7 器の外の散文を規則の置き場にしない</a></li>
+  <li class="toc--sub"><a href="#s2-8-scope">§2.8 射程外</a></li>
+  <li><a href="#s3-srs">§3. SRS との関係 (正本は SRS)</a></li>
+  <li><a href="#s4-consequences">§4. Consequences</a></li>
+  <li><a href="#s5-alternatives">§5. Alternatives Considered</a></li>
+  <li><a href="#s6-trace">§6. Trace</a></li>
+</ol>
+</nav>
+<!-- /folio:chrome-toc -->
+
+<aside class="informative">
+<p>本 ADR は IETF <strong>RFC 2119</strong> および <strong>RFC 8174 / BCP 14</strong> に定義される MUST / SHALL / SHOULD / MAY のキーワード解釈規約に従う。 ADR は決定時点の記録であり、 改訂は新しい ADR による supersede で行う。 本 ADR の <strong>§2 は user 裁定 (2026-09-12・論点 1〜5 と要件書の grill Q1〜Q3) を受けた決定</strong>で、 <strong>§3 は SRS v0.7 への pointer</strong> である。 本 ADR は要件の文面を持たない。 <a href="./ADR-0016-default-delivery-structure-and-typed-question-record.html#s2-1-structure">ADR-0016 §2.1</a> が文書面にだけ置いた席の役割の規律 (管理席は答えず中継する・go の後に merge する・自分の手で実装しない) に、 <strong>データ面 (rules 行) と機械の執行 (guard) と注入 (生成文)</strong> を与える決定であり、 <strong>憲法の条文は動かさない</strong> (C7 は「対話面の identity は R-C7-1 が持つ」と定めており、 §2.5 は行の値の変更である)。 <strong>発効</strong>: 本 ADR は rules 行の値を持たず (C1)、 役割ごとの権能の列と R-C7-1 の新しい値は契約が裁定 id 付きで manifest に書く。 accepted である (§2.1〜§2.5 の実装 bead は起票できる)。</p>
+</aside>
+
+<aside class="machine-readable" aria-hidden="true">
+  <dl>
+    <dt>id</dt><dd>ADR-0022</dd>
+    <dt>doc-type</dt><dd>adr</dd>
+    <dt>status</dt><dd>accepted</dd>
+    <dt>date</dt><dd>2026-09-13</dd>
+    <dt>version</dt><dd>0.4.6 (拘束する constitution の版。 本 ADR は憲法の条文を動かさない)</dd>
+    <dt>decided-by</dt><dd>user (2026-09-12) — planner の相談材料 (役割の規律をどこに置き、 どう強制するか) の論点 5 つに対する裁定 (要旨: 1 = 強制の芯は Role / Capability の閉じた型 + manifest 行。 2 = 役割の識別は器の席登録 (DB に記録・起動 script に組み込む)。 3 = 注入は SessionStart hook。 4 = 対話面 R-C7-1 を planner の席へ。 5 = 席層の land を folio2 の Rust 便の前提にする。 加えて「発話は止めなくてよい・機械で止めるときに planner の許可が要ると告げれば足りる・散文や字面でなく構造 / システム / 機械で規律を守らせる」) と、 要件書の grill (同日) の裁定 (Q1 = 役割の判定は登録 row だけ。 Q2 = 管理席は 1 席。 Q3 = 継続は must・席間の連絡は should)。 逐語は台帳 <code>s2-07l.155</code> の notes が原本で本 file には写さない (CON2)</dd>
+    <dt>stakeholders</dt><dd>Developer, AI Agent, External Reviewer</dd>
+    <dt>supersedes</dt><dd>次の文を<strong>部分 supersede</strong>する (§2.6): (i) <a href="./ADR-0016-default-delivery-structure-and-typed-question-record.html#s2-1-structure">ADR-0016 §2.1</a>「便の既定の配送構造を planner 1 席 + 管理席 N 席 (N ≥ 1・各席 1 口座)」を「anchor ごとに planner 1 席 + 管理席 1 席 (各席 1 口座)」と読む、 (ii) <a href="./ADR-0004-mvp-persistence-and-cross-version-formats.html#s2-6-out-of-scope">ADR-0004 §2.6</a>「口座・lease・退役・tmux 席の状態 (C3 の残りの列・C9) は MVP の event log に持たせない (SRS scope out)」を、 席の登録 row (役割・target・anchor・口座 label・起動の雛形) に限って supersede する (lease・退役は引き続き持たない。 口座残量は ADR-0017 §2.1 が既に supersede 済み)。 他の文は変えない。 R-C7-1 の値の変更 (§2.5) は <a href="./ADR-0003-constitution-v1-abandon-rewrite.html#s2-1-c7">ADR-0003 §2.1</a> が想定した「行の値の変更」であり supersede ではない (related)</dd>
+    <dt>related</dt><dd>ADR-0003 §2.1 (R-C7-1 の初期値「user 直」・§2.5 で値を改める・supersede ではない) / ADR-0009 §2.1 (runner の write-set guard と allowlist・pane を持たない子 process の執行) / ADR-0011 §2.1 (runner は plugin を積む) / ADR-0013 §2.1 / §2.2 (列挙は機械が持つ・variant の足し方) / ADR-0014 §2.1 (guard の定義と極性一覧) / ADR-0015 §2.2 (target は hook が渡す pane から解く) / ADR-0016 §2.3 (回答の権限は planner・管理席は中継) / ADR-0017 §2.3 (口座の label) / ADR-0018 §2.1 / §2.2 (復元 brief と命令行の pointer) / ADR-0019 §2.3 (人は質問の回答でだけ関わる) / ADR-0020 §2.2 / §2.4 (席の口座と立て直し・同じ便) / constitution C1 / C1.2 / C2 / C2.2 / C3 / C3.3 / C5 / C7 / C11.2 / C14 / C14.2 / C16 / C16.2 / N2 / N3 / SRS FR17 / FR18 / FR20 / FR22 / FR27 / FR30 / FR40 / FR41 / FR42 / FR43 / FR44 / FR45 / AC15〜AC19 / NFR5</dd>
+  </dl>
+</aside>
+
+<section id="s1-context" class="informative">
+<h2>§1. Context</h2>
+<p class="section-essence" data-audience="human">計画役 (planner) と管理役 (管理席) の仕事の分け方は、 要件書と先の決定 (ADR-0016) に文章として書かれていました。 ところが器の中には「この席は planner だ」という情報も、 「管理席は質問に答えてはいけない」を止める仕組みもなく、 決まりを守らせていたのは、 user の設定 file・共有の skill・退避物の命令行・便ごとの指示 file といった、 器の外の文章 7 面でした。 別の project でこの器を使うとき、 同じ文章を手で敷けば前の版と同じ「同じ文が 5 か所に散って食い違う」形に戻ります。 user は「役割ごとの指示をどう整理し、 強制力をどう持たせ、 規律が散らばらず、 結局文章で制御することにならないか」を問い、 5 つの論点をそれぞれ推奨案で裁定しました (逐語は台帳)。 この記録はその形を決めます。</p>
+<p data-audience="machine">記録時点 (2026-09-12) の現物: 文書面は SRS FR30 / FR31 / FR32 と <a href="./ADR-0016-default-delivery-structure-and-typed-question-record.html#s2-1-structure">ADR-0016 §2.1</a>〜§2.3 (SHALL / SHALL NOT 8 文) と語彙 (planner / 管理席 / 席) で相互に整合する。 データ面 (rules manifest) に役割の行は 0。 R-C7-1 (kind = 対話面) の値は「user 直」(ADR-0003) で席の役割と結び付いていない。 器の型は fleet の <code>SeatState</code> (Live / Stopped) と席の <code>SeatState</code> (Busy / Idle) だけで、 役割の型は無い。 席の target は <code>session:window</code> の文字列で、 役割は window 名の慣習。 plugin が consumer に注入するのは hooks 5 本 (SessionStart の header 1 行・PreToolUse の write-set guard と context の cap guard・PermissionRequest・UserPromptSubmit / Stop の打刻) だけで、 席の指示文は 0。 headless の runner / lens には tracked な雛形 (穴に契約の値) が在り、 planner / 管理席の雛形は無い。 散文面 (器の外・実効の置き場) は 7 面: user の設定 file (役割 3 行 + 前の版の文書への pointer)・共有 skill 2 本 (17 行)・退避物の命令行 (25 行)・便ごとの指示 file の冒頭定型・対象 repo の CLAUDE.md と台帳の PRIME (0 行)。 散文でしか止まっていない事故型は 6 つ: (a) 管理席が質問にその場で答える (<code>pipe answer</code> は誰の席からでも撃てる)・(b) 管理席が planner の go 無しに merge する・(c) 席が自分の手で実装する (guard は context の cap しか見ない)・(d) 管理席が user に直接裁定を求める・(e) 3 クラス / 閾値 / 依存 / 裁定 id に触れる質問を回答で解く・(f) 席の cycle / 復元の作法が共有 skill に在る (台帳 <code>s2-07l.61</code>)。 実測 (2026-09-12): 信頼できる席の identity は生成 hooks.json の shell 行が渡す <code>--pane</code> だけで (SessionStart / UserPromptSubmit / Stop の 3 本・<a href="./ADR-0015-seat-state-is-stamped-by-hooks-not-read-from-pane.html#s2-2-target">ADR-0015 §2.2</a>)、 PreToolUse は Edit 系のみで <code>--pane</code> を渡していない。 subcommand が受け取れる identity は model が打った引数だけ＝偽装できる。 pane → target の解決と event log の全走査は hook の予算 (NFR5) の内側 (実測 0.00 s)。</p>
+<p data-audience="machine">憲法の向き: <a href="../spec/constitution.html#n2">N2</a> は散文・記憶・会話にしか無い規則を規則と扱わない。 <a href="../spec/constitution.html#c14">C14</a> は規律を文書 (原則と裁定) と manifest (執行規則) の 2 面に限り、 C14.2 は 2 面の drift を CI が拒む。 <a href="../spec/constitution.html#c1">C1</a> / <a href="../spec/constitution.html#c5">C5</a> は規則の値を manifest の行に裁定 id 付きで持ち、 C1.2 は生成文書に手書きの規範文を 0 とする。 <a href="../spec/constitution.html#c3">C3</a> は席の状態を host 列付きの 1 つの DB に置き、 C3.3 は席の状態を typed に持ち字面を判定入力にしない。 <a href="../spec/constitution.html#c16">C16</a> は逸脱を編集時に止め、 C16.2 は in-loop guard を極性一覧に載せる。 <a href="../spec/constitution.html#c7">C7</a> は対話面を 1 つとし、 その identity は R-C7-1 が持つ。 <a href="../spec/constitution.html#c2">C2.2</a> は env を読まず新しい env seam を作らない。 <a href="../spec/constitution.html#n3">N3</a> は host 固有値で分岐しない (window 名の慣習は同じ極性)。 user の裁定 (2026-09-12・会話面・逐語は台帳 <code>s2-07l.155</code> の notes): 要旨は decided-by のとおり。</p>
+</section>
+
+<section id="s2-decision" class="normative">
+<h2>§2. Decision</h2>
+
+<h3 id="s2-1-role-and-registration">§2.1 役割は閉じた enum で、 席は (役割, anchor) を鍵に fleet の store へ登録する。 未登録の席は権能を持たない</h3>
+<p class="section-essence" data-audience="human">「この席は planner か管理席か」は、 器が閉じた一覧の値として持ちます。 席は器の口で登録し、 記録は fleet の記録 (他の出来事と同じ 1 つの file) に残ります。 鍵は「役割と project (anchor)」の組で、 1 つの project に planner は 1 席・管理席は 1 席です。 どの窓 (target) かは鍵ではなく記録の項目です——窓の番号は席を立て直すと変わるからです。 登録の無い席は、 何の権能も持ちません。 既定の役割を勝手に与えることはしません。 登録は、 器の hook が動いている session からしか受け付けません。</p>
+<p data-audience="machine">core SHALL 席の役割を閉じた enum (<code>Role</code>・記録時点の値は planner と管理席の 2 つ・runner / lens は席ではなく既存の雛形のまま・variant の列挙は core が持ち文書は写さない〔<a href="./ADR-0013-machine-holds-enumerations-docs-hold-pointers.html#s2-1-pointer">ADR-0013 §2.1</a>〕) で持つ (<a href="../spec/constitution.html#c3">C3.3</a>・FR40)。 席の登録 SHALL 器の subcommand 1 つ (<code>seat register</code>・引数は target・役割・口座 label〔ADR-0017 §2.3〕・起動の雛形〔ADR-0020 §2.4〕) が fleet の event log (<a href="./ADR-0004-mvp-persistence-and-cross-version-formats.html#s2-1-persistence">ADR-0004 §2.1</a> の 1 file・C3 の host 列付き) に <code>EventKind</code> の variant 1 つ (末尾・C2 の宣言順・ADR-0016 §2.2 と同じ足し方) で記帳し、 schema 版は 1 のまま。 登録 row の<strong>鍵</strong> SHALL (役割, anchor) とし (anchor = 対象 repo の main checkout・語彙)、 1 つの anchor に役割ごとに 1 席 (FR40・裁定 Q2)。 target (<code>session:window</code>) と session id と口座 label は鍵ではなく row の項目で、 同じ鍵の再登録 SHALL 前の row を置き換える (event log は append のみ・前の行は残る・N1)。 pane id SHALL NOT 鍵にも項目にも置かない (再起動で変わる・hook が毎回 pane → target に解く〔ADR-0015 §2.2〕)。 登録 SHALL 器の hook が走った session からだけ受ける (登録の event に SessionStart の打刻が持つ session id を載せ、 打刻の無い session からの登録は typed な理由で断る＝guard の無い席が権能を持てない)。 登録の無い席 SHALL どの権能も持たない (既定の役割を持たない・fail-closed・裁定 Q1: env・作業木・既定 role の 3 経路を採らない)。 役割の判定 SHALL 登録 row だけを入力とし、 window 名・env・作業木の path・pane の字面を入力にしない (C2.2・C3.3・N3)。 doctor SHALL 登録 row と実在の target の突合を項目に持つ (C3.2・値は生成物)。</p>
+
+<h3 id="s2-2-capability-rows">§2.2 権能は役割ごとの rules 行 (値は閉じた権能 enum の名の列・裁定 id 付き) が持ち、 執行・注入・生成文書が同じ行を読む</h3>
+<p class="section-essence" data-audience="human">「planner は何をしてよく、 管理席は何をしてよいか」は、 規則の行として manifest に置きます。 行の値は権能の名前の列で、 名前は器が持つ閉じた一覧から取ります (回答・承認・go を記帳する、 便を起動する、 design-intent や設計文書を編集する、 code を編集する、 中継する、 go の後に merge する、 といった操作の種類です)。 行には user の裁定の印が付きます。 この行を、 止める仕組み (§2.3) も、 指示文の生成 (§2.4) も、 人が読む規則文書の生成も、 同じように読みます。 置き場は 1 つです。 manifest にある「文章だけの行」の型は使いません。</p>
+<p data-audience="machine">core SHALL 権能を閉じた enum (<code>Capability</code>・variant は操作の種別〔記帳の種別 3 つ・便の起動・path 種別の編集・中継・go 後の merge 等〕・列挙は core が持ち文書は写さない) で持つ。 manifest SHALL 役割ごとに rules 行 1 つ (kind は <code>RuleKind</code> の variant 1 つ〔役割の権能〕・値は権能の名の列・裁定 id 付き・<a href="../spec/constitution.html#c1">C1</a> / <a href="../spec/constitution.html#c5">C5</a>) を持ち、 本 ADR は値 (どの役割がどの権能を持つか) を決めない (契約が裁定 id 付きで書く・<a href="./ADR-0018-working-memory-subcommands-and-pointer-required-directives.html#s4-consequences">ADR-0018 §4</a> の予定行)。 権能の名の列の読み手 SHALL 4 つで同じ行を読む: §2.3 の guard・§2.4 の注入文の生成・C1.2 の生成文書・xtask の drift 検査 (C14.2)。 器 SHALL NOT manifest の散文型の行 (機械が enabled しか読まない行) を役割の規律に使わない (裁定 論点 1・「manifest に散文を置いただけ」を作らない)。 権能の列に無い名 SHALL manifest の読み込みで拒む (閉じた enum の parse・NFR4)。 契約が class で開く例外 (管理席が自分の手で code を編集してよい便) SHALL 契約の field (既存の <code>classes</code> と同じ形の typed な印) で表し、 散文に置かない (FR41・AC16)。</p>
+
+<h3 id="s2-3-guard">§2.3 執行は PreToolUse の guard。 identity は hook が渡す pane だけ、 subcommand は役割を検査しない、 deny 文は権能を持つ役割の名を告げる</h3>
+<p class="section-essence" data-audience="human">決まりを守らせるのは、 席が command を撃つ瞬間と file を編集する瞬間に器の hook が挟む「番人」です。 番人は、 自分がどの窓にいるか (hook が渡す pane) から登録の記録を引き、 役割の権能の行を読み、 権能の外の操作を止めます。 止めるときは「この操作は planner 席の権能です」のように、 誰の権能かを告げます——止められた席が迂回せず、 権能を持つ席へ持ち込めるようにです。 器の subcommand 自身は役割を検査しません。 subcommand が受け取れる identity は打った側の言い分だけで、 信用できないからです。 席の発話は止めません。 機械に見えるのは編集と実行だけで、 発話で裁定を求めても記帳できなければ効かない、 という期待値で足ります。</p>
+<p data-audience="machine">執行 SHALL PreToolUse の guard (variant 1 つ・<code>Guard</code> の宣言順は hook の束の末尾〔Cap の直後・宣言順は行為の流れ〕・InLoop・<a href="./ADR-0014-polarity-list-is-a-snapshot-rendered-by-core.html#s2-1-type">ADR-0014 §2.1</a> の定義「行為を止めうる判定を返す境界」に当たる・極性一覧に載る〔C16.2〕) が、 Bash と Edit 系の 2 面で行う (FR41): (1) Bash — command 行が器の権能付き subcommand (回答・承認・go の記帳〔§2.5〕・便の起動・退役 等・core の const slice が名指す) を含む周に、 席の役割の行がその権能を持たなければ deny。 (2) Edit 系 — path の種別 (design-intent / 設計 doc / code / 対象 repo の外) ごとの権能を照合し、 持たなければ deny。 契約が class で開いた便 (§2.2) の write-set の内側は許す。 identity SHALL 生成 hooks.json の shell 行が渡す <code>--pane</code> だけとし (<a href="./ADR-0015-seat-state-is-stamped-by-hooks-not-read-from-pane.html#s2-2-target">ADR-0015 §2.2</a> の 1 面・生成器は同じ <code>gen-manifest</code>)、 PreToolUse の shell 行 SHALL <code>--pane</code> を渡し、 matcher SHALL Edit 系に Bash を足す形へ改める (記録時点は Edit 系のみ・<code>--pane</code> 無し)。 guard SHALL pane → target → 登録 row → 役割 → 行 → 権能 の順に解く。 <strong>pane が空 (tmux の外) の周は席ではなく本 guard の対象外</strong> (器が起こす runner / lens は plugin を積むが pane を持たない〔ADR-0011〕。 その編集と実行は <a href="./ADR-0009-vessel-grants-runner-permissions-and-mutation-proof.html">ADR-0009</a> の write-set guard と allowlist が担い、 本 guard は何も止めない・ADR-0009 の極性は不変)。 <strong>pane が在って登録 row が無い・target が解けない周は権能なし</strong> (FailClosed)。 止めるのは権能付きの操作 (権能付き subcommand の command 行・権能で守られた path 種別の Edit) だけで、 それ以外の Bash / Edit は通す。 subcommand SHALL NOT 役割を検査しない (引数の identity は偽装できる・実測 2026-09-12)。 deny 文 SHALL 権能を持つ役割の名を含む (「planner 席の権能」・裁定「機械で止めるときに planner の許可が要ると告げれば足りる」)。 帰属 SHALL guard の記録行 (allow の周も target と command の種別を 1 行・打刻と同じ置き場) で残す。 発話 SHALL NOT 監視しない (機械が見えるのは Edit / Bash だけ・事故型 (d) は記帳を止めることで効かなくする)。 plugin を積まない session の席は guard が無い (fail-open・台帳 <code>s2-07l.149</code> と同じ束・§2.8) が、 §2.1 の登録の条件により権能も持たない。 hook の実行 SHALL NFR5 の予算の内側とし、 登録 row の解決は event log の replay で持つ (第 2 の cache を作らない・C3)。</p>
+
+<h3 id="s2-4-brief">§2.4 注入は SessionStart の生成文。 役割ごとの tracked な雛形 1 枚 + 行から生成し、 手書きの規範文は 0、 未登録の席には 0 byte</h3>
+<p class="section-essence" data-audience="human">席が立ち上がる・/clear する・圧縮されるたびに、 器の hook がその席の席の指示文を差し込みます。 指示文は、 役割ごとに 1 枚ある雛形 (実装役・審査役の雛形と同じ形) の穴に、 権能の行の値を入れて作ります。 雛形の外に手書きの決まりは置きません。 番人 (§2.3) で止められる事項は指示文に書きません——同じ決まりを 2 か所に置かないためです。 指示文に残るのは、 番人では止められない振る舞い (中継の形・報告の形・裁定の持ち込み先・cycle の作法) だけです。 登録の無い席には何も差し込みません。 対象 repo の CLAUDE.md には書きません。 経路は 1 つです。</p>
+<p data-audience="machine">plugin の SessionStart hook SHALL pane → target → 登録 row で役割を解き、 役割ごとの tracked な雛形 1 枚 (headless の runner / lens の雛形と同じ形・binary に埋め込む・穴は権能の行の値と席の識別子) から生成した指示文を stdout で注入する (FR42・起動・/clear・compaction 後のたび・ADR-0018 §2.1 の復元 brief とは別の 1 面で、 復元は開発 session が DATA から組む)。 雛形の行 SHALL 穴か、 出所 pointer (design-intent の id・ADR の節・SRS の要件 id・rules 行の id) を持つ行に限り (<a href="./ADR-0018-working-memory-subcommands-and-pointer-required-directives.html#s2-2-pointer">ADR-0018 §2.2</a> の命令行と同じ検査・pointer の形の enum を再利用)、 <strong>規範文</strong>の定義 SHALL「pointer を持たない行」とする (typed・字面の語彙で判定しない)。 生成文 SHALL 雛形の外に手書きの規範文を 0 とし (<a href="../spec/constitution.html#c1">C1.2</a>)、 xtask SHALL 雛形の穴 ⊆ 権能の名・pointer を持たない行 0・行に在って文に無い権能 0 を検査する (C14.2・AC17)。 §2.3 で塞ぐ事項 (回答・承認・go・merge・code の Edit) SHALL NOT 指示文に書かない (二重化しない)。 指示文が持つのは §2.3 で塞げない振る舞い (中継の形・報告の形・裁定の持ち込み先・第一手の復元・命令行は pointer 付きだけ従う〔ADR-0018 §2.2〕・席間の連絡の経路〔FR44〕・3 クラスの発火の pointer) に限り、 それらは権能ではなく pointer 付きの行として雛形に置き、 役割ごとに短く保つ。 登録の無い席 SHALL 0 byte (注入しない・断りも出さない)。 器 SHALL NOT consumer の repo に file を書かない (CLAUDE.md の生成区間を持たない・1 経路・C2.2 の精神)。 注入は hook の予算 (NFR5) の内側。</p>
+
+<h3 id="s2-5-dialogue-surface">§2.5 対話面 R-C7-1 の値を「planner の席」へ改める。 承認・回答・go の記帳は planner の席からだけ受理する</h3>
+<p class="section-essence" data-audience="human">user の承認を受け取る窓口は 1 つ、 という憲法の決まりはそのままです。 変えるのは「その 1 つが誰か」を持つ規則の行 (R-C7-1) の値で、 「開発 session が user と直接」から「planner の席」に改めます。 承認・質問への回答・merge の go の記帳は、 planner として登録された席からしか通りません。 管理席が user から直接裁定を聞いても記帳できず、 planner へ持ち込むことになります。 これは意図した不便です。</p>
+<p data-audience="machine">rules 行 R-C7-1 (kind = 対話面) の値 SHALL 「役割 = planner の登録 row を持つ席」へ改める (<a href="../spec/constitution.html#c7">C7</a>「identity は行が持つ」のとおり条文は動かさない・行の値の変更は C5 の裁定 id を要し、 裁定は本 ADR の decided-by の論点 4・契約が manifest に <code>ruling</code> / <code>ruled_at</code> を付ける)。 承認 event (C7.2・A1 / A2 / A3 の受理)・回答 event (ADR-0016 §2.3)・go (merge の許可) の記帳 SHALL planner の席からだけ受理し (§2.3 の Bash guard・権能の行が planner にだけ記帳の権能を与える形で契約が書く)、 管理席・未登録の席からの記帳は deny (AC15)。 管理席が user から直接受けた裁定 SHALL 記帳できず planner へ中継する (ADR-0016 §2.3「中継だけ」の執行・事故型 (d) を「効かなくする」)。 user の逐語 SHALL 承認 event にだけ載る (C7.2・FR22 不変)。 席の登録 (§2.1) SHALL 権能を要しない (登録が無い間は承認を 1 件も記帳できないので、 登録が先。 登録を受ける条件は §2.1 の「hook が走った session から」だけ)。 対話面の数 SHALL 1 のまま (複数の対話面は SRS scope out・v3)。</p>
+
+<h3 id="s2-6-supersede">§2.6 ADR-0016 §2.1 と ADR-0004 §2.6 を部分 supersede する</h3>
+<p class="section-essence" data-audience="human">先の記録は「管理席は N 席 (1 席以上)」「tmux の席の状態は MVP の記録に持たない」と決めていました。 この記録はそれぞれを、 「管理席は project ごとに 1 席」「席の登録 (役割・窓・project・口座・起動の雛形) は fleet の記録に持つ」と読み替えます。 便の並列は席の数ではなく pipeline の便の層 (ADR-0019) が担い、 口座の分散は席ではなく便ごとの選定 (ADR-0020) が担うので、 席を増やす理由が無くなりました。</p>
+<p data-audience="machine"><a href="./ADR-0016-default-delivery-structure-and-typed-question-record.html#s2-1-structure">ADR-0016 §2.1</a> の「器 SHALL 便の既定の配送構造を planner 1 席 + 管理席 N 席 (N ≥ 1・各席 1 口座) とし」は、 本 ADR により「anchor ごとに planner 1 席 + 管理席 1 席 (各席 1 口座)」と読む (SHALL be read as・FR30 / FR40・裁定 Q2)。 並列は便の層 (<a href="./ADR-0019-parallel-runs-exclude-overlap-at-intake-and-runner-resolves-conflicts.html#s2-1-intake-exclusion">ADR-0019 §2.1</a>) が、 口座の分散は便ごとの選定 (<a href="./ADR-0020-account-autonomy-limit-stop-resume-and-selection.html#s2-2-selection">ADR-0020 §2.2</a>) が担う。 同 §2.1 の管理席の仕事 3 つ (流す・中継する・go の後に land する) と「自分の手で実装するのは pipeline が回せない便だけ」は不変で、 本 ADR はその執行 (§2.3) と例外の typed な形 (§2.2 の契約 class) を与える。 同 §2.3「管理席 SHALL NOT 質問にその場で答えず」も不変で、 執行は §2.5。 <a href="./ADR-0004-mvp-persistence-and-cross-version-formats.html#s2-6-out-of-scope">ADR-0004 §2.6</a> の「口座・lease・退役・tmux 席の状態 (C3 の残りの列・C9) は MVP の event log に持たせない (SRS scope out)」は、 席の登録 row (§2.1) に限って本 ADR が supersede する (lease・退役は引き続き持たない。 口座残量は <a href="./ADR-0017-account-allowance-measured-into-event-log.html#s2-1-event-log">ADR-0017 §2.1</a> が既に supersede 済み。 席の busy / idle は ADR-0015 のまま席の置き場)。 <a href="./ADR-0003-constitution-v1-abandon-rewrite.html#s2-1-c7">ADR-0003 §2.1</a> の「初期値は user 直 (開発 session)」は §2.5 の値の変更で置き換わるが、 同 §2.1 の決定「identity は条文ではなく行が持つ」は不変であり supersede ではない。 ADR-0015 §2.2 (pane → target) は不変で、 本 ADR は同じ解決を guard と注入に再利用する。</p>
+
+<h3 id="s2-7-prose">§2.7 器の外の散文を規則の置き場にしない</h3>
+<p class="section-essence" data-audience="human">user の設定 file・共有の skill・退避物の命令行・便ごとの指示 file に書かれた役割の決まりは、 規則ではありません (憲法 N2)。 §2.3 と §2.4 が入った便の後は、 同じ文を器の外に残さない運用にします (消すときは user に確かめます)。 便ごとの指示 file には「契約の pointer と順序」だけが残ります。 別の project でこの器を使うときも、 文章を手で敷くのではなく、 席を登録すれば同じ執行と注入が効きます。</p>
+<p data-audience="machine">器の外の散文面 (user の設定 file の役割行と前の版の文書への pointer・共有 skill の役割節・退避物の役割の命令行・便ごとの指示 file の冒頭定型) SHALL NOT 役割の規則の置き場と扱わない (<a href="../spec/constitution.html#n2">N2</a>・<a href="../spec/constitution.html#c14">C14</a> の 2 面の外)。 §2.3 / §2.4 が land した後にそれらの同文を器の外に残さない (同文 N 面を作らない・前の版の drift 型に戻さない) のは器の外の運用であり、 本 ADR が決めるのは「規則ではない」の側だけである。 削除は <a href="../spec/constitution.html#a1">A1</a> の「消す」として対話面で user に確かめてから行う (本 ADR は削除を命じない)。 便ごとの指示 file SHALL 契約の pointer と順序だけを持つ (審査の形は器が持つ・ADR-0016 §4)。 consumer の repo (別 project) SHALL 席の登録 (§2.1) だけで同じ執行と注入を得る (consumer の CLAUDE.md に役割の文を書かない・§2.4)。</p>
+
+<h3 id="s2-8-scope">§2.8 射程外</h3>
+<p class="section-essence" data-audience="human">この記録が決めるのは「役割の型と登録」「権能の行」「番人」「指示文の注入」「対話面の値」だけです。 席を新しく作ること、 席の発話を監視すること、 器の hook を積まない session の番人、 実装役・審査役の雛形、 権能の値そのもの、 複数の対話面は別に決めます。</p>
+<p data-audience="machine">次は本 ADR の決定ではない (MUST NOT be read as such): 席の起動そのもの (window の作成・登録の自動化・台帳 <code>s2-07l.38</code> の延長・SRS scope out。 起動が器に入った便で登録を同じ口で行う)、 席の発話の監視 (裁定「効かなければよい」)、 plugin を積まない session の guard (fail-open・台帳 <code>s2-07l.149</code> の束)、 runner / lens の雛形と権限 (ADR-0009 / ADR-0011 のまま)、 役割ごとの権能の値と R-C7-1 の新しい値の字面 (契約・裁定 id)、 複数の対話面 (v3)、 席の cycle / 退避 / 復元の作法の器への内蔵 (台帳 <code>s2-07l.61</code> / <code>.139</code>・ADR-0018)、 管理 tick の継続の注入 (FR43) と席間の連絡の経路 (FR44) の設計 (要件は SRS・設計 doc の領分・本 ADR は指示文が経路を名指す形だけを §2.4 で持つ)、 席の model の割当 (role → model の rules 行・別の裁定)。</p>
+</section>
+
+<section id="s3-srs" class="informative">
+<h2>§3. SRS との関係 (正本は SRS)</h2>
+<p class="section-essence" data-audience="human">この記録が仕える要件は、 席の登録 (FR40)、 権能の所在 (FR41) と執行 (FR45)、 席の指示文の注入 (FR42) と、 その受入基準 (AC15 / AC16 / AC17) です。 配送構造 (FR30) は同じ便で「管理席 1 席」に改まります。 席の継続 (FR43) と席間の連絡 (FR44) は要件書が正本で、 この記録は指示文がそれを名指す形だけを持ちます。</p>
+<div data-audience="machine">
+<p>本 ADR が仕える要件は SRS v0.7 (本 ADR と同じ便で改訂) が正本である: <a href="../spec/srs.html#FR40">FR40</a> (席の登録・§2.1)・<a href="../spec/srs.html#FR41">FR41</a> (権能の所在・§2.2 / §2.5)・<a href="../spec/srs.html#FR45">FR45</a> (権能の執行・§2.3)・<a href="../spec/srs.html#FR42">FR42</a> (席の指示文の注入・§2.4)・<a href="../spec/srs.html#AC15">AC15</a> / <a href="../spec/srs.html#AC16">AC16</a> / <a href="../spec/srs.html#AC17">AC17</a>。 <a href="../spec/srs.html#FR30">FR30</a> (配送構造) は本便で「管理席 1 席・口座は便ごとに FR36」に改まり、 §2.6 がその supersede を持つ。 FR40 と用語集の「席の登録」は本便で「役割と anchor を鍵に・target は項目」へ揃える (§2.1)。 <a href="../spec/srs.html#FR43">FR43</a> (席の継続・<a href="../spec/srs.html#AC18">AC18</a>) と <a href="../spec/srs.html#FR44">FR44</a> (席間の連絡・<a href="../spec/srs.html#AC19">AC19</a>) は SRS が正本で本 ADR は決定を持たない (§2.8)。 不変の要件: <a href="../spec/srs.html#FR17">FR17</a> / <a href="../spec/srs.html#FR18">FR18</a> (生成物と CI の drift 検査・§2.4 の xtask はその 1 面)・<a href="../spec/srs.html#FR20">FR20</a> (hook の in-loop guard・§2.3 は variant 1 つを足す)・<a href="../spec/srs.html#FR22">FR22</a> (人由来の event は approval 以外 0 件・登録 event は machine)・<a href="../spec/srs.html#FR27">FR27</a> (管理 tick)・<a href="../spec/srs.html#NFR5">NFR5</a> (hook の予算)。 要件の文面はここには写さない。 enum の variant・行の kind の名・雛形の形・deny 文の字面は §2 と現物が持ち SRS は持たない。</p>
+</div>
+</section>
+
+<section id="s4-consequences" class="informative">
+<h2>§4. Consequences</h2>
+<p class="section-essence" data-audience="human">良い面は、 役割の決まりが文章の約束から器の構造 (型・行・番人・生成文) に移り、 別の project でも席を登録するだけで同じように効くこと、 決まりの置き場が 1 つになって前の版の「同じ文が散って食い違う」形が消えること、 管理席が user に直接裁定を求めても記帳で止まること、 止められた席が「誰の権能か」を知って迂回せず持ち込めることです。 悪い面は、 型が 2 つ・行が役割の数だけ・番人が 1 つ・event が 1 つ増えること、 席を使う前に登録が要ること、 hook が Bash にも挟まって毎回 pane を解くこと、 発話までは止められないこと、 器の hook を積まない session では番人が効かないことです。</p>
+<p data-audience="machine">Positive: 役割の規律が C14 の 2 面 (文書 = SRS / ADR・manifest = 権能の行) に収まり、 執行 (§2.3)・注入 (§2.4)・生成文書 (C1.2)・drift 検査 (C14.2) が同じ行を読む (1 source)。 consumer は席の登録だけで同じ執行と注入を得る (前の版の同文 N 面を作らない・N2)。 事故型 (a) (b) (c) (e) は guard で止まり、 (d) は記帳で効かなくなり、 (f) は ADR-0018 の内蔵の便へ。 deny 文が権能の所在を告げるので、 席は迂回でなく持ち込みへ向かう (裁定の期待値)。 identity が hook の pane に閉じ、 subcommand の引数を信用しない (偽装の面が消える)。 席の数が anchor ごとに 2 で固定され、 tick / cycle の運用費が席数で増えない。</p>
+<p data-audience="machine">Negative (受け入れるコスト): <code>Role</code> / <code>Capability</code> の enum 2 つ・<code>RuleKind</code> の variant 1 つと役割ごとの rules 行・<code>Guard</code> の variant 1 つ (極性一覧に 1 行・hook の束の末尾)・<code>EventKind</code> の variant 1 つ・subcommand 1 つ・雛形 2 枚・xtask の検査 1 つ・PreToolUse の shell 行の変更 (Bash の matcher と <code>--pane</code>) が増える。 席は使う前に登録が要る (1 席 1 回・起動が器に入るまで人の操作)。 PreToolUse(Bash) が毎回 pane → target → replay を解く (NFR5 の内側で実測済みだが event log の伸びに比例する・replay の cache は C3 により持たない)。 発話は止まらない (期待値で受ける)。 plugin を積まない session は guard が無く、 登録もできない (fail-open の面は <code>s2-07l.149</code> の束)。 R-C7-1 の値の変更で、 user が管理席に直接話した裁定は記帳されず planner の手番が 1 回入る (意図した不便)。 管理席 1 席への縮退で、 移行期の席並列 (ADR-0016 §1) の速さは出ない (並列は便の層)。</p>
+</section>
+
+<section id="s5-alternatives" class="informative">
+<h2>§5. Alternatives Considered</h2>
+<p class="section-essence" data-audience="human">7 つの案を退けました。 役割ごとの skill や agent 定義を plugin に同梱する案は文章の置き場を増やします。 対象 repo の CLAUDE.md に生成区間を書く案は注入と二重になります。 窓の名前で役割を決める案は字面と host の慣習に依ります。 subcommand が役割の引数を検査する案は identity を偽装できます。 管理席を N 席のままにする案は、 並列と口座の分散が別の層に移った今、 理由がありません。 manifest の文章型の行に置く案は文章を manifest に置いただけです。 発話を監視して止める案は機械に見えないものを見ようとします。</p>
+<p data-audience="machine">(A) <strong>役割ごとの skill / agent 定義を plugin に同梱する</strong>。 却下: 散文の置き場が増え (N2 に弱い)、 skill は user が打つ経路で毎 session の注入にならない。 §2.4 の生成文は雛形 1 枚 + 行で、 skill ではない。</p>
+<p data-audience="machine">(B) <strong>consumer の CLAUDE.md に生成区間を書く</strong>。 却下: SessionStart の注入と二重化し (1 経路に反する)、 consumer の repo に file を書く。 役割は席の性質であって repo の性質ではない。 裁定 論点 3。</p>
+<p data-audience="machine">(C) <strong>window 名の慣習で役割を決める</strong>。 却下: 字面を判定入力にする (C3.3) ・host の慣習で分岐する (N3 と同じ極性)。 登録 row だけを入力にする (§2.1・裁定 Q1)。</p>
+<p data-audience="machine">(D) <strong>subcommand が <code>--role</code> 引数で役割を検査する (相談材料の初稿の T1)</strong>。 却下: subcommand が受け取れる identity は model が打った引数だけで偽装できる (実測 2026-09-12)。 信頼できる identity は hook の pane だけ (ADR-0015 §2.2) なので、 執行は guard (§2.3)。</p>
+<p data-audience="machine">(E) <strong>管理席 N 席のまま (ADR-0016 §2.1)</strong>。 却下: 並列は便の層 (ADR-0019) が、 口座の分散は便ごとの選定 (ADR-0020) が担い、 席を増やす理由が消えた。 席が増えると鍵 (役割, anchor) の一意性が崩れ、 中継の宛先が一意でなくなる。 裁定 Q2。</p>
+<p data-audience="machine">(F) <strong>manifest の散文型の行 (機械が enabled しか読まない行) に役割の規律を置く</strong>。 却下: 散文を manifest に置いただけで、 執行も生成も読めない。 権能の行は閉じた enum の名の列 (§2.2)。 裁定 論点 1。</p>
+<p data-audience="machine">(G) <strong>席の発話を監視して裁定の要求を止める</strong>。 却下: 機械が見えるのは Edit / Bash だけで、 発話の監視は字面の判定 (C3.3) になる。 記帳を止めれば発話は効かない (§2.5・裁定「効かなければよい」)。</p>
+</section>
+
+<section id="s6-trace" class="informative">
+<h2>§6. Trace</h2>
+<p class="section-essence" data-audience="human">出所は、 user の問いと 5 つの論点の裁定、 要件書の grill の裁定、 器の現物 (hook が渡す identity・plugin の注入・型と行) の実測、 散文面の棚卸し、 そして先行決定 (対話面の行・席の状態の打刻・配送構造・列挙の置き場・極性一覧) です。</p>
+<ul data-audience="machine">
+  <li>user の問いと裁定 (2026-09-12・会話面・planner 席): 憲法は「この器を作る規律」で「この器を plugin として使う規律」ではない → 役割の規律の置き場と強制力を 5 論点で grill → 論点 1〜5 を推奨で裁定 → 「発話は止めなくてよい・機械で止めるとき planner の許可が要ると告げれば足りる・構造 / システム / 機械で守らせる・同種の問題が無いか全体を確かめる」→ 要件書の grill Q1〜Q3 を裁定。 逐語は台帳 <code>s2-07l.155</code> の notes (tracked file には写さない・CON2)。</li>
+  <li>実測 (2026-09-12): 信頼できる identity は生成 hooks.json の shell 行が渡す <code>--pane</code> だけ (SessionStart / UserPromptSubmit / Stop)・PreToolUse は Edit 系のみで <code>--pane</code> 無し・subcommand の引数は偽装可能・pane → target と event log の全走査は 0.00 s (NFR5 の内側)。 散文面の棚卸し 28 件 (残す 10 / 統合 3 群 / 落とす 11 / 抜け 3)・事故型 6 つ・強制力の 3 段 (型で不能 / guard で不能 / 注入)。 要旨は台帳 <code>s2-07l.155</code> の notes。</li>
+  <li>全体監査 (2026-09-12・多 agent・findings 118・反証 1・26 塊): 規律が散文にしか無い箇所の一覧 (台帳 <code>s2-07l.160</code>〜<code>.178</code> の memo・本 ADR の対象は席の役割の塊)。</li>
+  <li>器の現物 (2026-09-12): fleet の <code>SeatState</code> (Live / Stopped)・席の <code>SeatState</code> (Busy / Idle)・<code>Guard</code> の variant 群・<code>EventKind</code> の variant 群・R-C7-1 (値 = user 直)・plugin の hooks 5 本・headless の雛形 2 枚 (runner / lens)・<code>seat/mod.rs</code> の pane → target。</li>
+  <li>先行決定: <a href="./ADR-0003-constitution-v1-abandon-rewrite.html">ADR-0003</a> §2.1 (対話面の identity は行が持つ)・<a href="./ADR-0004-mvp-persistence-and-cross-version-formats.html">ADR-0004</a> §2.1 / §2.6 (1 file・席の状態は持たない)・<a href="./ADR-0013-machine-holds-enumerations-docs-hold-pointers.html">ADR-0013</a> (列挙は機械が持つ)・<a href="./ADR-0014-polarity-list-is-a-snapshot-rendered-by-core.html">ADR-0014</a> §2.1 (guard の定義)・<a href="./ADR-0015-seat-state-is-stamped-by-hooks-not-read-from-pane.html">ADR-0015</a> §2.2 (pane → target)・<a href="./ADR-0016-default-delivery-structure-and-typed-question-record.html">ADR-0016</a> §2.1 / §2.3 (配送構造・回答の権限)・<a href="./ADR-0018-working-memory-subcommands-and-pointer-required-directives.html">ADR-0018</a> §2.1 / §2.2 (復元 brief・命令行の pointer)・<a href="./ADR-0019-parallel-runs-exclude-overlap-at-intake-and-runner-resolves-conflicts.html">ADR-0019</a> §2.3 (人は回答でだけ関わる)・<a href="./ADR-0020-account-autonomy-limit-stop-resume-and-selection.html">ADR-0020</a> §2.2 / §2.4 (席の口座と立て直し・同じ便)。</li>
+  <li>審査: SRS v0.7 の Phase F 1 周目 (2026-09-13・5 軸) が「SRS FR30 / FR40 が accepted ADR-0016 §2.1 (N 席) と分岐し supersede ADR が無い」を critical として挙げ、 本 ADR を同じ便で書いた (台帳 <code>s2-07l.155</code> notes)。</li>
+  <li>設計: 型・行・guard の 2 面・雛形・xtask の検査・登録の subcommand は <code>docs/design/</code> の設計 doc が契約の前に持つ (本便には含めない・設計 1 本から契約が複数出る形)。</li>
+</ul>
+</section>
+
+<!-- folio:chrome-bottom -->
+<nav class="prevnext" aria-label="前後の文書">
+  <a class="prevnext__prev" href="ADR-0021-gate-cost-is-measured-and-confined.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">ADR-0021 — gate の費用は測って決める (変異の並列度は rules 行の上限を project 横断・host 単位の受付が実測で下げ、 器の子 process は cgroup で封じ、 木が同じ main 実測は検出線を撃ち直さず、 着地は gate 済みの便を先に通す・ADR-0009 §2.3 / §2.4 と ADR-0010 §2.1 / §2.3 / §2.4 / §2.5 を部分 supersede)</span></a>
+</nav>
+<script>
+(function () {
+  var openedForPrint = [];
+  window.addEventListener('beforeprint', function () {
+    openedForPrint = [];
+    var ds = document.querySelectorAll('details:not([open])');
+    for (var i = 0; i < ds.length; i++) { ds[i].setAttribute('open', ''); openedForPrint.push(ds[i]); }
+  });
+  window.addEventListener('afterprint', function () {
+    for (var i = 0; i < openedForPrint.length; i++) openedForPrint[i].removeAttribute('open');
+    openedForPrint = [];
+  });
+  if (!document.querySelector('[data-audience]')) return;
+  /* 既定 = 人間プレゼン型 (ADR-0040 / rules §11.3): script 経由で初期 class を付与するため
+     no-JS では付かず全文可視に graceful degrade する。 static DOM は全文を保持 (AI/検索/印刷は不変)。 */
+  document.body.classList.add('audience-human');
+  var bar = document.createElement('nav');
+  bar.className = 'audience-toggle';
+  bar.setAttribute('aria-label', '表示対象の切替');
+  var states = [['both', '両方'], ['human', '人間向け'], ['machine', '機械向け']];
+  for (var s = 0; s < states.length; s++) {
+    (function (mode, label) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      b.setAttribute('aria-pressed', mode === 'human' ? 'true' : 'false');
+      b.addEventListener('click', function () {
+        document.body.classList.remove('audience-human', 'audience-machine');
+        if (mode !== 'both') document.body.classList.add('audience-' + mode);
+        var bs = bar.querySelectorAll('button');
+        for (var j = 0; j < bs.length; j++) bs[j].setAttribute('aria-pressed', bs[j] === b ? 'true' : 'false');
+      });
+      bar.appendChild(b);
+    })(states[s][0], states[s][1]);
+  }
+  var bc = document.querySelector('nav.breadcrumb');
+  if (bc && bc.parentNode) { bc.parentNode.insertBefore(bar, bc.nextSibling); }
+  else { document.body.insertBefore(bar, document.body.firstChild); }
+})();
+</script>
+<!-- /folio:chrome-bottom -->
+</body>
+</html>

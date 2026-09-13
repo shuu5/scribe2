@@ -21,6 +21,9 @@
   },
   "@id": "./ADR-0021-gate-cost-is-measured-and-confined.html",
   "@type": "schema:TechArticle",
+  "dc:isReferencedBy": [
+    { "@id": "./ADR-0020-account-autonomy-limit-stop-resume-and-selection.html" }
+  ],
   "dc:isPartOf": [
     { "@id": "./README.html" }
   ],
@@ -187,7 +190,8 @@
 
 <!-- folio:chrome-bottom -->
 <nav class="prevnext" aria-label="前後の文書">
-  <a class="prevnext__prev" href="ADR-0019-parallel-runs-exclude-overlap-at-intake-and-runner-resolves-conflicts.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">ADR-0019 — 並列の便は intake が write-set の交差で排他し、 land の rebase 衝突は runner を起こし直して解く (人は質問の回答でだけ関わる・admin は中継と操作・手で merge する経路を持たない・ADR-0016 §2.2 の質問判定と再 spawn の契機を部分 supersede)</span></a>
+  <a class="prevnext__prev" href="ADR-0020-account-autonomy-limit-stop-resume-and-selection.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">ADR-0020 — 口座の上限は便を殺さず別口座で途中再開し、 開発 session は上限の手前で退避して別口座で立て直し、 口座は実測の残量から 1 つの純関数が便用と session 用の 2 規則で選ぶ (R-C9-1 を typed な値で発効・ADR-0012 §2.4 / ADR-0016 §2.1 / §2.5 / ADR-0017 §2.4 / §2.5 を部分 supersede・便を閾値で止めない ADR-0012 §2.3 は不変)</span></a>
+  <a class="prevnext__next" href="ADR-0022-seat-roles-are-typed-and-enforced-by-hooks.html"><span class="prevnext__dir">次 &rarr;</span><span class="prevnext__title">ADR-0022 — 席の役割と権能は閉じた型と rules 行で持ち、 hook が tool 呼出しの境界で執行し、 席の指示文は行から生成して session の開始時に注入する (対話面 R-C7-1 の値を planner の席へ・管理席は anchor ごと 1 席・ADR-0004 §2.6 / ADR-0016 §2.1 を部分 supersede・器の外の散文を規則の置き場にしない)</span></a>
 </nav>
 <script>
 (function () {
