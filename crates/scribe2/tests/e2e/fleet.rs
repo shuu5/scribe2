@@ -3,6 +3,7 @@
 //! 置き場は毎回 tmp dir を `--state-dir` で指す（env も HOME も読まない形の裏返し）。
 
 use crate::make_tmp_dir;
+use std::collections::BTreeSet;
 use std::fs;
 use std::mem::discriminant;
 use std::path::{Path, PathBuf};
@@ -14,6 +15,7 @@ use vessel::cli_outcome::{RC_BROKEN, RC_OK, RC_REFUSED};
 use vessel::polarity::{OnFailure, Polarity, Timing};
 use vessel::rules::manifest::Manifest;
 use vessel::fleet::json_tree::{self, parse, Tree, TreeError, MAX_DEPTH};
+use vessel::fleet::select::{self, Input, Purpose, Selection};
 use vessel::fleet::{KINDS, REASONS, STAGES, WINDOWS};
 use vessel::fleet::{
     json_lite, replay, wait, Allowance, AllowanceKey, Completion, Event, EventKind, Measured,
@@ -1835,4 +1837,236 @@ fn fleet_usage_requires_state_dir() {
     assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{out:?}");
     assert!(out.stdout.is_empty(), "stdout は 0 byte");
     assert!(String::from_utf8_lossy(&out.stderr).contains("usage"), "使い方を stderr へ");
+}
+
+/// `fleet select` の歯の 5 時間窓の reset（遠い未来＝どの「いま」でも古くない）。
+const SELECT_FIVE_RESET: &str = "2099-01-01T05:00:00Z";
+
+/// 3 口座: a1 = 30（5h）・a2 = 70（7d）・a3 = 100（5h・当たっている）。
+const SELECT_THREE: &[(&str, u64, u64)] = &[("a1", 30, 10), ("a2", 20, 70), ("a3", 100, 5)];
+
+/// `fleet select` の rules fixture。待ち時間の行（`timeout`）と R-C9-1 の行（値の字面 `selection`）を持ち分ける。
+fn select_rules(labels: &[&str], timeout: bool, selection: Option<&str>) -> String {
+    let mut text = "schema = 1\n".to_owned();
+    if timeout {
+        text.push_str(&format!(
+            "\n[[rule]]\nid = \"fleet.usage_timeout_s\"\nkind = \"UsageTimeoutS\"\nvalue = {USAGE_TIMEOUT_S}\nenabled = true\nruling = \"r\"\nruled_at = \"d\"\n"
+        ));
+    }
+    if let Some(value) = selection {
+        text.push_str(&format!(
+            "\n[[rule]]\nid = \"R-C9-1\"\nkind = \"AccountSelection\"\nvalue = {value}\nenabled = true\nruling = \"r\"\nruled_at = \"d\"\n"
+        ));
+    }
+    for label in labels {
+        text.push_str(&format!("\n[[account]]\nlabel = \"{label}\"\n"));
+    }
+    text
+}
+
+/// 5 時間窓と 7 日窓だけの本文（`limits` は空＝モデル別の行なし）。
+fn select_body(five: u64, seven: u64) -> String {
+    format!(
+        r#"{{"five_hour":{{"utilization":{five},"resets_at":"{SELECT_FIVE_RESET}"}},"seven_day":{{"utilization":{seven},"resets_at":"2099-01-07T00:00:00+00:00"}},"limits":[]}}"#
+    )
+}
+
+/// 口座ごとに違う本文を返す偽 curl。stdin の token で `body-<token>` を選び、argv は `args` へ追記で写す。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn token_curl(fx: &UsageFixture) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let d = fx.spy.display().to_string();
+    let script = format!(
+        "#!/bin/sh\n\
+         printf '%s\\n' \"$@\" >> \"{d}/args\"\n\
+         cfg=$(cat)\n\
+         for f in \"{d}\"/body-*; do\n\
+         case \"$cfg\" in *\"Bearer ${{f##*/body-}}\\\"\"*) cat \"$f\" ;; esac\n\
+         done\n\
+         printf '\\n%s' '200'\n\
+         exit 0\n"
+    );
+    let path = fx.spy.join("token-curl");
+    fs::write(&path, script).expect("fake を書ける");
+    let mut perm = fs::metadata(&path).expect("fake の権限を読める").permissions();
+    perm.set_mode(0o755);
+    fs::set_permissions(&path, perm).expect("fake を実行可能にできる");
+    path
+}
+
+/// 口座ごとに (label, 5h %, 7d %) を返す置き場と偽 curl。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn select_fixture(accounts: &[(&str, u64, u64)], timeout: bool, selection: Option<&str>) -> (UsageFixture, PathBuf) {
+    let labels: Vec<&str> = accounts.iter().map(|(label, _, _)| *label).collect();
+    let fx = usage_fixture(&labels);
+    fs::write(&fx.rules, select_rules(&labels, timeout, selection)).expect("rules fixture を書ける");
+    for (label, five, seven) in accounts {
+        let token = format!("tok-{label}");
+        put_credential(&fx, label, &live_credential(&token));
+        fs::write(fx.spy.join(format!("body-{token}")), select_body(*five, *seven)).expect("本文を書ける");
+    }
+    let curl = token_curl(&fx);
+    (fx, curl)
+}
+
+/// `fleet select` を fixture の置き場・rules・client で撃つ。
+fn run_select(fx: &UsageFixture, curl: &Path, extra: &[&str]) -> Output {
+    let state = fx.state.display().to_string();
+    let rules = fx.rules.display().to_string();
+    let curl = curl.display().to_string();
+    let mut args = vec!["select", "--state-dir", &state, "--rules", &rules, "--curl", &curl];
+    args.extend_from_slice(extra);
+    run_fleet(&args)
+}
+
+/// 偽 curl が呼ばれた回数（口座 1 つにつき 1 回）。
+fn curl_calls(fx: &UsageFixture) -> usize {
+    fs::read_to_string(fx.spy.join("args"))
+        .unwrap_or_default()
+        .lines()
+        .filter(|arg| *arg == "--max-time")
+        .count()
+}
+
+/// (1) 便用は最も逼迫した当たっていない口座を出し、stdout は同じ log を渡した純関数の 1 行と一致する。
+#[test]
+fn fleet_select_run_prints_the_most_pressed_unlimited_account() {
+    let (fx, curl) = select_fixture(SELECT_THREE, true, Some("85"));
+    let out = run_select(&fx, &curl, &["--purpose", "run"]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{out:?}");
+    assert_eq!(out_lines(&out), vec!["select purpose=run chosen=a2".to_owned()], "a3 は 100 で当たっている");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("usage: account=a2 five_hour=20%"), "計測の行は stderr へ: {stderr}");
+
+    let events = store::read_all(&fx.state).expect("event log を読める");
+    let state = replay(&events);
+    let labels: Vec<String> = ["a1", "a2", "a3"].iter().map(|label| (*label).to_owned()).collect();
+    let exclude = BTreeSet::new();
+    let found = select::select(&Input {
+        labels: &labels,
+        allowance: &state.allowance,
+        purpose: Purpose::Run,
+        model: None,
+        exclude: &exclude,
+        threshold_pct: 85,
+        now: "2026-09-13T00:00:00Z",
+    });
+    assert_eq!(found, Selection::Chosen("a2".to_owned()), "純関数の答え");
+    assert_eq!(out_lines(&out), vec![select::line(Purpose::Run, &found)], "stdout は純関数の 1 行");
+    drop_fixture(&fx);
+}
+
+/// (2) `--exclude`（複数可）で席の口座を外す。外した残りが当たっていれば候補なし（rc 0）。
+#[test]
+fn fleet_select_exclude_drops_the_seat_accounts() {
+    let (fx, curl) = select_fixture(SELECT_THREE, true, Some("85"));
+    let out = run_select(&fx, &curl, &["--purpose", "run", "--exclude", "a2"]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{out:?}");
+    assert_eq!(out_lines(&out), vec!["select purpose=run chosen=a1".to_owned()]);
+    let out = run_select(&fx, &curl, &["--purpose", "run", "--exclude", "a2", "--exclude", "a1"]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "候補なしは断りではない: {out:?}");
+    assert_eq!(
+        out_lines(&out),
+        vec![format!("select purpose=run none=all-limited earliest_reset={SELECT_FIVE_RESET}")]
+    );
+    let calls = curl_calls(&fx);
+    let out = run_select(&fx, &curl, &["--purpose", "run", "--exclude"]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "値の無い --exclude は断る: {out:?}");
+    assert!(out.stdout.is_empty(), "選ばない");
+    assert_eq!(curl_calls(&fx), calls, "断った周は計測しない");
+    drop_fixture(&fx);
+}
+
+/// (3) session 用は閾値未満で最小の口座を出す。全口座が閾値以上（当たってはいない）の周は
+/// `all-limited` でなく閾値の理由。
+#[test]
+fn fleet_select_session_keeps_headroom_and_names_the_threshold_reason() {
+    let (fx, curl) = select_fixture(SELECT_THREE, true, Some("85"));
+    let out = run_select(&fx, &curl, &["--purpose", "session"]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{out:?}");
+    assert_eq!(out_lines(&out), vec!["select purpose=session chosen=a1".to_owned()]);
+    drop_fixture(&fx);
+
+    let (fx, curl) = select_fixture(&[("a1", 85, 0), ("a2", 90, 10), ("a3", 99, 99)], true, Some("85"));
+    let out = run_select(&fx, &curl, &["--purpose", "session"]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{out:?}");
+    let lines = out_lines(&out);
+    assert_eq!(lines, vec!["select purpose=session none=over-threshold earliest_reset=-".to_owned()], "閾値ちょうども候補外");
+    assert!(lines.iter().all(|line| !line.contains("all-limited")), "当たってはいない: {lines:?}");
+    let out = run_select(&fx, &curl, &["--purpose", "run"]);
+    assert_eq!(out_lines(&out), vec!["select purpose=run chosen=a3".to_owned()], "便用は閾値を持たない");
+    drop_fixture(&fx);
+}
+
+/// (4) 選定の前に計測が 1 回（口座ごとに偽 curl 1 回・実測行が 1 周分）走る。
+#[test]
+fn fleet_select_measures_once_before_selecting() {
+    let (fx, curl) = select_fixture(SELECT_THREE, true, Some("85"));
+    assert_eq!(curl_calls(&fx), 0, "撃つ前は 0 回");
+    assert!(allowances(&fx).is_empty(), "撃つ前は実測行なし");
+    let first = run_select(&fx, &curl, &["--purpose", "run"]);
+    assert_eq!(first.status.code(), Some(i32::from(RC_OK)), "{first:?}");
+    assert_eq!(curl_calls(&fx), 3, "3 口座 × 1 周");
+    assert_eq!(allowances(&fx).len(), 6, "3 口座 × 2 窓");
+    let second = run_select(&fx, &curl, &["--purpose", "session"]);
+    assert_eq!(second.status.code(), Some(i32::from(RC_OK)), "{second:?}");
+    assert_eq!(curl_calls(&fx), 6, "撃つたびに 1 周");
+    assert_eq!(allowances(&fx).len(), 12, "撃つたびに 1 周分");
+    drop_fixture(&fx);
+}
+
+/// (5) 計測が撃てない周（待ち時間の行が無い）は `UsageError` の rc で、選ばない・書かない。
+#[test]
+fn fleet_select_refuses_with_the_usage_error_when_measurement_cannot_run() {
+    let (fx, curl) = select_fixture(SELECT_THREE, false, Some("85"));
+    let out = run_select(&fx, &curl, &["--purpose", "run"]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "UsageError::Manifest の rc: {out:?}");
+    assert!(out.stdout.is_empty(), "選ばない");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("fleet usage:") && stderr.contains("fleet.usage_timeout_s"), "計測の断り: {stderr}");
+    assert_eq!(curl_calls(&fx), 0, "client を起こさない");
+    assert!(!store::events_path(&fx.state).exists(), "event を書かない");
+    drop_fixture(&fx);
+}
+
+/// (6) `--purpose` の未知の値・値欠け・欠落は usage で断る（計測しない）。
+#[test]
+fn fleet_select_refuses_unknown_purpose_with_usage() {
+    let (fx, curl) = select_fixture(SELECT_THREE, true, Some("85"));
+    for extra in [&["--purpose", "lane"][..], &["--purpose"][..], &[][..]] {
+        let out = run_select(&fx, &curl, extra);
+        assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{extra:?}: {out:?}");
+        assert!(out.stdout.is_empty(), "{extra:?}: 選ばない");
+        assert!(String::from_utf8_lossy(&out.stderr).contains("usage: fleet"), "{extra:?}: 使い方を stderr へ");
+    }
+    assert_eq!(curl_calls(&fx), 0, "計測しない");
+    assert!(!store::events_path(&fx.state).exists(), "event を書かない");
+    drop_fixture(&fx);
+}
+
+/// (7) R-C9-1 の欠落・散文の値は `RuleError` で断る（計測しない）。
+#[test]
+fn fleet_select_refuses_rules_without_the_selection_row() {
+    let (fx, curl) = select_fixture(SELECT_THREE, true, None);
+    let out = run_select(&fx, &curl, &["--purpose", "run"]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{out:?}");
+    assert!(out.stdout.is_empty(), "選ばない");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("rules: R-C9-1 が無い"), "RuleError の行: {stderr}");
+    assert_eq!(curl_calls(&fx), 0, "計測しない");
+    drop_fixture(&fx);
+
+    let (fx, curl) = select_fixture(SELECT_THREE, true, Some("\"新規投入は 5h 線\""));
+    let out = run_select(&fx, &curl, &["--purpose", "run"]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{out:?}");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("rules:") && stderr.contains("形と合わない"), "形の不一致: {stderr}");
+    assert_eq!(curl_calls(&fx), 0, "計測しない");
+    drop_fixture(&fx);
 }

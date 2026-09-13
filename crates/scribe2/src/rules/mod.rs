@@ -53,7 +53,7 @@ pub enum RuleKind {
     DialogueSurface,
     /// 成熟条件（停止・履歴として残す）。
     MaturityCondition,
-    /// 口座の選定規則。
+    /// session 用の口座選定の閾値（使用率の百分率・未満の口座だけが候補）。便用の規則は閾値を持たない。
     AccountSelection,
     /// 変異生存率の検出線。
     MutationSurvivalLine,
@@ -249,10 +249,10 @@ impl RuleKind {
             | Self::GateCpuWeight
             | Self::WmDirectiveCap
             | Self::PipeLandWaitS
-            | Self::LedgerTimeoutS => ValueShape::Int,
+            | Self::LedgerTimeoutS
+            | Self::AccountSelection => ValueShape::Int,
             Self::DialogueSurface => ValueShape::Str,
             Self::MaturityCondition
-            | Self::AccountSelection
             | Self::MutationSurvivalLine
             | Self::CompileShape
             | Self::CompileSeconds => ValueShape::Policy,

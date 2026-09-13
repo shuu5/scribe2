@@ -4,15 +4,22 @@
 //! 必ず外から受け取り、既定を持たない。出力は行を組んで返すだけで、stdout / stderr
 //! へは bin 側の `emit` / `emit_err` が書く。
 
+use super::select;
 use super::store::{self, LockPolicy, StoreError};
-use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
+use crate::cli_outcome::{Outcome, RC_BROKEN, RC_OK, RC_REFUSED};
+use crate::rules::manifest::Manifest;
+use crate::rules::{RuleError, RuleValue};
 use super::{json_lite, replay, Event, EventKind, Stage, State, SCHEMA};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// 口座選定の rules 行（session 用の閾値・設計 account-autonomy.md §3）。
+const ROW_SELECTION: &str = "R-C9-1";
+
 /// `fleet` の使い方。
 pub fn usage() -> String {
-    "usage: fleet <record|show|export|usage> --state-dir D [flags]".to_owned()
+    "usage: fleet <record|show|export|usage|select> --state-dir D [flags]".to_owned()
 }
 
 /// `fleet` に続く引数を捌く。
@@ -26,7 +33,99 @@ pub fn dispatch(args: &[String]) -> Outcome {
         Some("show") => show(args, &dir),
         Some("export") => export(&dir),
         Some("usage") => super::usage::run(args, &dir),
+        Some("select") => select_account(args, &dir),
         _ => Outcome::failed(RC_REFUSED, vec![usage()]),
+    }
+}
+
+/// 口座を 1 つ選ぶ（設計 account-autonomy.md §3）。引数と rules 行を先に読み、選定の直前に FR33 の計測を
+/// 1 回撃ち（その行は stderr 側へ）、log を replay して純関数へ渡す。**候補なしも rc 0**（断りではない・
+/// FailOpen）。計測が撃てない周は `fleet usage` の rc のまま返し、選ばない。
+fn select_account(args: &[String], dir: &Path) -> Outcome {
+    let (purpose, model, exclude) = match select_flags(args) {
+        Ok(found) => found,
+        Err(reason) => return Outcome::failed(RC_REFUSED, vec![format!("fleet: {reason}"), usage()]),
+    };
+    let (labels, threshold_pct) = match selection_rules(args) {
+        Ok(found) => found,
+        Err(lines) => return Outcome::failed(RC_REFUSED, lines),
+    };
+    let measured = super::usage::run(args, dir);
+    if measured.rc != RC_OK {
+        return measured;
+    }
+    let state = match load(dir) {
+        Ok(found) => found,
+        Err(lines) => return Outcome::failed(RC_BROKEN, lines),
+    };
+    let now = now_utc();
+    let found = select::select(&select::Input {
+        labels: &labels,
+        allowance: &state.allowance,
+        purpose,
+        model,
+        exclude: &exclude,
+        threshold_pct,
+        now: &now,
+    });
+    let mut outcome = Outcome::ok(vec![select::line(purpose, &found)]);
+    outcome.err = measured.out.into_iter().chain(measured.err).collect();
+    outcome
+}
+
+/// `--purpose`（必須）・`--model`・`--exclude`（複数可）を読む。
+fn select_flags(args: &[String]) -> Result<(select::Purpose, Option<&str>, BTreeSet<String>), String> {
+    let text = required(args, "--purpose")?;
+    let purpose = select::Purpose::parse(text).ok_or(format!("purpose {text} は run でも session でもない"))?;
+    let model = optional(args, "--model")?;
+    Ok((purpose, model, excludes(args)?))
+}
+
+/// `--exclude L` を全部読む。値欠けは黙って落とさず断る（SRS NFR4）。
+fn excludes(args: &[String]) -> Result<BTreeSet<String>, String> {
+    let mut found = BTreeSet::new();
+    for (at, arg) in args.iter().enumerate() {
+        if arg != "--exclude" {
+            continue;
+        }
+        match args.get(at + 1) {
+            Some(label) if !label.starts_with("--") => {
+                found.insert(label.clone());
+            }
+            _ => return Err("--exclude に値が無い".to_owned()),
+        }
+    }
+    Ok(found)
+}
+
+/// manifest の口座 label（宣言順）と R-C9-1 の値。manifest は `fleet usage` と同じ口で読む
+/// （`--rules PATH` か埋め込み・env を読まない）。
+fn selection_rules(args: &[String]) -> Result<(Vec<String>, u64), Vec<String>> {
+    let loaded = match optional(args, "--rules").map_err(|reason| vec![format!("fleet: {reason}")])? {
+        Some(path) => Manifest::load(Path::new(path)),
+        None => Manifest::embedded(),
+    };
+    let manifest = loaded.map_err(|errors| errors.iter().map(RuleError::to_string).collect::<Vec<String>>())?;
+    let threshold = threshold_of(&manifest).map_err(|error| vec![error.to_string()])?;
+    let labels = manifest
+        .accounts()
+        .iter()
+        .map(|account| account.label().to_owned())
+        .collect();
+    Ok((labels, threshold))
+}
+
+/// R-C9-1 の値（session 用の閾値・使用率の百分率）。無い・不発効・整数でない行は `RuleError`。
+fn threshold_of(manifest: &Manifest) -> Result<u64, RuleError> {
+    let row = manifest
+        .get(ROW_SELECTION)
+        .ok_or_else(|| RuleError::new(0, format!("{ROW_SELECTION} が無い")))?;
+    if !row.enabled {
+        return Err(RuleError::new(row.line, format!("{ROW_SELECTION} は不発効である")));
+    }
+    match row.value {
+        RuleValue::Int(found) => Ok(found),
+        _ => Err(RuleError::new(row.line, format!("{ROW_SELECTION} が整数でない"))),
     }
 }
 

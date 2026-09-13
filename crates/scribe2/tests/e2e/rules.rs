@@ -658,6 +658,35 @@ fn rules_embedded_manifest_declares_ledger_timeout() {
     assert!(errors.join("\n").contains("未知である"), "行の kind を綴り違えた manifest は読めない");
 }
 
+/// 口座選定の行（`R-C9-1`・裁定 id `user 2026-09-13T03:14Z`・設計 account-autonomy.md §3）。値は
+/// session 用の閾値（使用率の百分率）で形は `Int`。**散文（Policy）の値を置いた行は形の不一致で拒まれる**
+/// （形は `RuleKind::shape` の 1 箇所が持つ）。
+#[test]
+fn rules_embedded_manifest_declares_account_selection_threshold() {
+    let manifest = match Manifest::embedded() {
+        Ok(found) => found,
+        Err(errors) => {
+            let lines: Vec<String> = errors.iter().map(ToString::to_string).collect();
+            panic!("埋め込み manifest が拒まれた:\n{}", lines.join("\n"))
+        }
+    };
+    let row = manifest.get("R-C9-1").expect("口座選定の行が在る");
+    assert_eq!(row.value, RuleValue::Int(85), "user 裁定 2026-09-13T03:14Z の値");
+    assert_eq!(row.kind, RuleKind::AccountSelection, "kind は既存のまま");
+    assert_eq!(row.kind.shape(), ValueShape::Int, "値の形は Int（百分率）");
+    assert!(row.enabled, "発効している");
+    assert_eq!(row.ruling, "user 2026-09-13T03:14Z", "裁定 id");
+    assert_eq!(row.ruled_at, "2026-09-13", "裁定日");
+    let errors = rejected(&one_row(RuleKind::AccountSelection, "\"新規投入は 5h 線\""))
+        .expect("散文の値の fixture が受理された");
+    assert_eq!(errors.len(), 1, "件数: {errors:?}");
+    let first = errors.first().map(String::as_str).unwrap_or_default();
+    assert!(first.contains("形と合わない"), "理由: {first}");
+    assert!(first.contains("要 Int"), "要求する形を名指す: {first}");
+    let healed = parsed(&one_row(RuleKind::AccountSelection, "85")).expect("Int の値は受理される");
+    assert_eq!(healed.get("probe").map(|found| found.value.clone()), Some(RuleValue::Int(85)));
+}
+
 /// gate の費用の 5 行（設計 gate-cost.md §3.1・ADR-0021）。**値は manifest が持ち、ADR も
 /// 設計 doc も写さない**（C1 / C5）。
 ///
@@ -719,7 +748,7 @@ fn rules_cli_get_returns_value() {
     let args = ["get".to_owned(), "R-C4-1".to_owned()];
     let outcome = vessel::rules::cli::dispatch(&args);
     assert_eq!(outcome.rc, RC_OK, "rc: {outcome:?}");
-    assert_eq!(outcome.out, vec!["20000".to_owned()], "値の行");
+    assert_eq!(outcome.out, vec!["26000".to_owned()], "値の行（裁定 id user 2026-09-13T07:08Z）");
 }
 
 #[test]
@@ -771,11 +800,18 @@ fn rules_external_form() {
         .args(["rules", "get", "nope"])
         .output()
         .expect("binary を起動できる");
+    // 口座選定の行は発効した Int（不発効の周は stderr の断りになり stdout は空）。
+    let selection = Command::new(bin)
+        .args(["rules", "get", "R-C9-1"])
+        .output()
+        .expect("binary を起動できる");
     let form = format!(
-        "{}{}{}",
+        "{}{}{}{}{}",
         String::from_utf8_lossy(&usage.stdout),
         String::from_utf8_lossy(&validate.stdout),
-        String::from_utf8_lossy(&missing.stderr)
+        String::from_utf8_lossy(&missing.stderr),
+        String::from_utf8_lossy(&selection.stdout),
+        String::from_utf8_lossy(&selection.stderr)
     );
     insta::assert_snapshot!(form);
 }

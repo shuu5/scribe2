@@ -11,10 +11,10 @@ schema = 1
 [[rule]]
 id = "R-C4-1"
 kind = "CoreLines"
-value = 20000
+value = 26000
 enabled = true
-ruling = "RULING-v2-p1-exit-bundle 論点 2"
-ruled_at = "2026-09-07"
+ruling = "user 2026-09-13T07:08Z"
+ruled_at = "2026-09-13"
 
 [[rule]]
 id = "R-C4-2"
@@ -72,13 +72,16 @@ enabled = false
 ruling = "RULING-v2-p1-exit-bundle 論点 9・ADR-0003"
 ruled_at = "2026-09-09"
 
+# 口座の選定（設計 account-autonomy.md §3・ADR-0020 §2.2）。値は session 用の閾値（使用率の百分率・
+# 未満の口座だけが候補）。便用の規則は閾値を持たない（当たっていない口座のうち逼迫度が最大）。
+
 [[rule]]
 id = "R-C9-1"
 kind = "AccountSelection"
-value = "新規投入は 5h 線 ／ 移住 lane は線を外して継続優先 ／ 消費計画 = 7d 残量 × 残日数で lane 数 ／ 管理席 watchdog の検知条件と再起動先"
-enabled = false
-ruling = "RULING-v2-p1-exit-bundle 論点 8・U5"
-ruled_at = "2026-09-07"
+value = 85
+enabled = true
+ruling = "user 2026-09-13T03:14Z"
+ruled_at = "2026-09-13"
 
 [[rule]]
 id = "R-C12-1"

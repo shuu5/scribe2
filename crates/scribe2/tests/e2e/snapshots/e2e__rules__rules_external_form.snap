@@ -5,3 +5,4 @@ expression: form
 usage: scribe2 <name|--version|doctor|rules|fleet|vessel|hook|pipe|runner|lens|seat|polarity>
 rules: ok rows=40 kinds=40
 rules: no such id
+85

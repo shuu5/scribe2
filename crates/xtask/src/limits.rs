@@ -5,7 +5,7 @@
 //! ここを参照して機械的に作る（fixture に magic number を書かない）。
 
 /// core crate の `src` 配下 `.rs` の総行数の上限。
-pub const MAX_CORE_LINES: usize = 20_000;
+pub const MAX_CORE_LINES: usize = 26_000;
 
 /// `crates/*/src` 配下 `.rs` 1 file あたりの物理行数の上限。
 pub const MAX_FILE_LINES: usize = 1_500;
@@ -77,8 +77,8 @@ mod tests {
             .unwrap_or_else(|err| panic!("{} を読めない: {err}", path.display()))
     }
 
-    /// 行 id を持つ `[[rule]]` の `value` を整数で引く。
-    fn int_value(text: &str, id: &str) -> Option<u64> {
+    /// 行 id を持つ `[[rule]]` の `field` の生の値を引く。
+    fn raw_field(text: &str, id: &str, field: &str) -> Option<String> {
         for (header, pairs) in sections(text) {
             if header != RULE_HEADER {
                 continue;
@@ -92,10 +92,20 @@ mod tests {
             }
             return pairs
                 .iter()
-                .find(|(key, _)| *key == "value")
-                .and_then(|(_, value)| value.trim().parse::<u64>().ok());
+                .find(|(key, _)| *key == field)
+                .map(|(_, value)| (*value).to_owned());
         }
         None
+    }
+
+    /// 行 id を持つ `[[rule]]` の `value` を整数で引く。
+    fn int_value(text: &str, id: &str) -> Option<u64> {
+        raw_field(text, id, "value").and_then(|value| value.trim().parse::<u64>().ok())
+    }
+
+    /// 行 id を持つ `[[rule]]` の `ruling` を引く。
+    fn ruling(text: &str, id: &str) -> Option<String> {
+        raw_field(text, id, "ruling").and_then(|value| quoted(&value))
     }
 
     /// `limits.rs` の const と manifest の行が同じ値である（憲法 C14.2 の最小形）。
@@ -252,32 +262,100 @@ mod tests {
         hundreds.saturating_mul(100).saturating_add(rest)
     }
 
-    /// 憲法 §3 の閾値セルは manifest の写しである（手編集は RED）。
+    /// 憲法 §3 の初期値の裁定 id の接頭辞。§3 の閾値セルはこの裁定の値を写した列である。
+    const INITIAL_RULING: &str = "RULING-v2-p1-exit-bundle";
+
+    /// §3 の閾値セルと突合する manifest の行（セルから拾う数値の出現順）。
+    const THRESHOLD_ROWS: [&str; 6] = [
+        "R-C4-1",
+        "R-C4-2",
+        "R-C4-3",
+        "R-C4-4.fn-lines",
+        "R-C4-4.complexity",
+        "R-C4-4.args",
+    ];
+
+    /// §3 の閾値セル（初期値）と manifest の行を突合し、**裁定の無い差**を返す。
     ///
-    /// 値の正本は manifest 側で、憲法は読む人のための写しである。3 面目のこの写しを
+    /// 現在値の正本は manifest の行で、§3 は初期値の列である。初期値と違う値の行は、
+    /// ruling が初期の裁定（[`INITIAL_RULING`]）でない＝新しい裁定で改めた行だけを通す。
+    /// 値を変えて ruling を初期のまま残した行（手編集）は差として返す。
+    fn unruled_drift(html: &str, text: &str) -> Vec<String> {
+        let mut cells: Vec<u64> = Vec::new();
+        cells.extend(ints(&initial_cell(html, "r-c4-1")));
+        cells.extend(ints(&initial_cell(html, "r-c4-2")));
+        cells.push(pct(&initial_cell(html, "r-c4-3")));
+        cells.extend(ints(&initial_cell(html, "r-c4-4")));
+        assert_eq!(cells.len(), THRESHOLD_ROWS.len(), "§3 の閾値セルから拾えた数値: {cells:?}");
+        let mut drift = Vec::new();
+        for (cell, id) in cells.iter().zip(THRESHOLD_ROWS) {
+            let value = int_value(text, id).unwrap_or_else(|| panic!("manifest に {id} が無い"));
+            if value == *cell {
+                continue;
+            }
+            let ruled = ruling(text, id).unwrap_or_else(|| panic!("manifest の {id} に ruling が無い"));
+            if ruled.starts_with(INITIAL_RULING) {
+                drift.push(format!("{id}: §3 = {cell}・manifest = {value}・ruling = {ruled}"));
+            }
+        }
+        drift
+    }
+
+    /// 憲法 §3 の閾値セルは manifest の初期値の写しである（裁定なしの手編集は RED）。
+    ///
+    /// 値の正本は manifest 側で、憲法は読む人のための初期値の列である。3 面目のこの写しを
     /// 手で書き換えても self-test も folio も緑のままだったので、ここで突合する。
     // flip-check: retroactive s2-07l.8
     #[test]
     fn constitution_thresholds_match_rules_manifest() {
-        let html = constitution_text();
-        let mut cells: Vec<u64> = Vec::new();
-        cells.extend(ints(&initial_cell(&html, "r-c4-1")));
-        cells.extend(ints(&initial_cell(&html, "r-c4-2")));
-        cells.push(pct(&initial_cell(&html, "r-c4-3")));
-        cells.extend(ints(&initial_cell(&html, "r-c4-4")));
-        assert_eq!(cells.len(), 6, "§3 の閾値セルから拾えた数値: {cells:?}");
-        let text = manifest_text();
-        let rows: Vec<u64> = [
-            "R-C4-1",
-            "R-C4-2",
-            "R-C4-3",
-            "R-C4-4.fn-lines",
-            "R-C4-4.complexity",
-            "R-C4-4.args",
-        ]
-        .iter()
-        .map(|id| int_value(&text, id).unwrap_or_else(|| panic!("manifest に {id} が無い")))
-        .collect();
-        assert_eq!(cells, rows, "憲法 §3 の閾値セルと rules manifest の値");
+        let drift = unruled_drift(&constitution_text(), &manifest_text());
+        assert!(drift.is_empty(), "憲法 §3 の閾値セルと rules manifest の値: {drift:?}");
+    }
+
+    /// §3 の 4 行の fixture（初期値 = 20,000 / 1,500 / 1.0 / 60・15・5）。
+    const HTML_FIXTURE: &str = concat!(
+        "<tr id=\"r-c4-1\"><td>R-C4-1</td><td>C4</td><td>core</td><td>20,000 行 以下</td></tr>\n",
+        "<tr id=\"r-c4-2\"><td>R-C4-2</td><td>C4</td><td>module</td><td>1,500 行 以下</td></tr>\n",
+        "<tr id=\"r-c4-3\"><td>R-C4-3</td><td>C4</td><td>ratio</td><td>1.0 以下</td></tr>\n",
+        "<tr id=\"r-c4-4\"><td>R-C4-4</td><td>C4</td><td>fn</td><td>関数 60 行・複雑度 15・引数 5</td></tr>\n",
+    );
+
+    /// 6 行の manifest fixture。R-C4-1 だけ値と ruling を差し替える。
+    fn manifest_fixture(core_lines: u64, core_ruling: &str) -> String {
+        let rows = [
+            ("R-C4-1", core_lines, core_ruling),
+            ("R-C4-2", 1500, "RULING-v2-p1-exit-bundle 論点 2"),
+            ("R-C4-3", 100, "RULING-v2-p1-exit-bundle 論点 2"),
+            ("R-C4-4.fn-lines", 60, "RULING-v2-p1-exit-bundle 論点 2"),
+            ("R-C4-4.complexity", 15, "RULING-v2-p1-exit-bundle 論点 2"),
+            ("R-C4-4.args", 5, "RULING-v2-p1-exit-bundle 論点 2"),
+        ];
+        let mut text = "schema = 1\n".to_owned();
+        for (id, value, ruled) in rows {
+            text.push_str(&format!(
+                "\n[[rule]]\nid = \"{id}\"\nvalue = {value}\nruling = \"{ruled}\"\n"
+            ));
+        }
+        text
+    }
+
+    /// 値を変え ruling を新しい裁定にした行は通る（初期値のままの行も通る）。
+    // flip-check: retroactive s2-07l.191
+    #[test]
+    fn constitution_drift_passes_rows_changed_under_a_new_ruling() {
+        let initial = manifest_fixture(20_000, "RULING-v2-p1-exit-bundle 論点 2");
+        assert_eq!(unruled_drift(HTML_FIXTURE, &initial), Vec::<String>::new(), "初期値のまま");
+        let ruled = manifest_fixture(26_000, "user 2026-09-13T07:08Z");
+        assert_eq!(unruled_drift(HTML_FIXTURE, &ruled), Vec::<String>::new(), "新しい裁定で改めた行");
+    }
+
+    /// 値を変え ruling を初期の裁定のまま残した行（裁定なしの手編集）は差として返る。
+    #[test]
+    fn constitution_drift_flags_rows_changed_under_the_initial_ruling() {
+        let unruled = manifest_fixture(26_000, "RULING-v2-p1-exit-bundle 論点 2");
+        assert_eq!(
+            unruled_drift(HTML_FIXTURE, &unruled),
+            vec!["R-C4-1: §3 = 20000・manifest = 26000・ruling = RULING-v2-p1-exit-bundle 論点 2".to_owned()]
+        );
     }
 }
