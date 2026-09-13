@@ -115,6 +115,12 @@ manifest に行が載るまでは ADR-0021 の予定行（C14.2 の相互参照�
 - land の main 実測は record を **`verify-main.jsonl`**（gate と同じ record 形・別 file・gate の周の `n` と重ねない・現物の main 実測は record を書いていない）に書く。`git rev-parse <new>^{tree}` が verdict の `tree` と一致する周は **detection-verify を撃たず** `skipped=detection tree=<sha>` を記し、①②④ は従来どおり撃つ。一致しない周（在りえないが在れば）は全部撃つ。`tree` が無い verdict（旧 gate）も全部撃つ。
 - 節約の実測（.136 run 2）: main 実測 78 分のうち変異検査が約 75 分。
 
+### 5.1 検出線の値と便の規模を record に残す（s2-07l.152 / .206 / .189・C12.4 / C10）
+
+- **検出線の 1 行**（.152 / .206）: gate は verify 各行の record（`verify.jsonl`・schema 1 のまま任意 field・§5）に、**`kind=detection` の行だけ** `line=<stdout の末尾の非空 1 行・逐語>` を足す（xtask `mutants-diff` が出す `mutants-diff: total=… caught=… missed=… unviable=… timeout=… scope=…` の 1 行・形の正本は xtask の `Counts::line`）。core はこの行を **parse しない**（判定は rc のまま・`run_line_captured` の「stdout を判定に使わない」規律は不変・記録に写すだけ）。stdout が空・読めない・行の無い周は field を**欠く**（0 と書かない・「未取得」と「0 件」を混ぜない・C10）。land の main 実測（`verify-main.jsonl`・同じ関数）も同じ形で、③ を省いた周は `skipped=detection` のまま `line` を持たない。`pipe show --run` は detection 行の `line` を逐語で 1 行出す（外形 snapshot）。common / contract の行には `line` を足さない（stdout の量が無界・判定に無関係）。
+- **便の規模**（.189・research ponytail §4 (2)）: land の面 5（`verdicts.jsonl`・schema 1 のまま任意 field・`order` の後ろ）に `size=<契約の size の字面〔S / M / L〕>`・`files=<touched file 数〔write-set 照合と同じ `git diff --name-only <base>..<new>` の件数〕>`・`lines=<+行数>/<−行数〔`git diff --numstat <base>..<new>` の合計・test 区間を除かない＝xtask flip-check の区間判定を core に写さない〕>`・`pub_symbols=<`git diff <base>..<new>` の追加行のうち `pub ` で始まる行の数〔字面走査の下界・ADR-0023 §2.3 と同じ扱い〕>` を足す。**閾値は持たない**（knob 0・分布が溜まった後に rules 行 1 本を裁定で足すのは別の裁定・C12.4 と同型）。計算は pure 関数（diff の text → 4 値・in-file の歯）で、git を撃つのは land の既存の経路。読めない周は field を欠く（0 と書かない）。stdout の land 行には出さない（面 5 の行だけ）。
+- **却下**: (i) xtask が counts の json を書いて core が読む（core に第 2 の reader・path の literal を 2 crate で持つ）(ii) core で `mutants-diff:` の行を parse して 5 数を record に持つ（同上・値の読み手が無い間は逐語で足りる）(iii) `lines` から test 区間を除く（flip-check の区間判定の複製）。
+
 ## 6. 着地は gate 済みの便を先に通す（ADR-0021 §2.5・機構は .147）
 
 - 原則: `Gated` ∧ verdict PASS の run が在る間、他の run の land は待つ（先に gate を通った便を先に着地させ、stale の連鎖を止める）。
@@ -149,6 +155,7 @@ e2e は binary を spawn し外部 command は PATH 先頭の stub で差し替�
 - 宣言（in-file・declaration.rs）: `detection-verify` の穴（`{base}` `{jobs}` 以外は Unfit）・先頭語 / 制御文字 / repo 外 path の検査は共通 verify と同じ関数（`check_lines`）を detection-verify の行にも掛ける（ADR-0010 §2.3 (2)・ADR-0021 §2.6・迂回行を宣言に置けないことを歯で pin）・key の無い宣言は従来どおり通る・空配列は不備のまま（ADR-0010 §2.1）。
 - rules: 5 行の kind 件数と外形 snapshot・欠落は RuleError（既存の型）。
 - 完了 enum: `Completion::SlotFree` の網羅 match（compile）と wait の唯一性（実装が 1 本・呼び手は複数でよい・grep でなく型で）。
+- 記録（§5.1・e2e・`pipe_record_`）: detection-verify の stub が `mutants-diff: total=3 caught=2 missed=1 unviable=0 timeout=0 scope=x` を stdout に出す fixture で `verify.jsonl` の detection 行にその逐語が `line` として載り、common の行には載らない・stdout の無い detection 行は `line` を欠く・`verify-main.jsonl` の skip の周も欠く・`pipe show` が逐語を 1 行出す（外形 snapshot）。便の規模（in-file・pure）: numstat / name-only / diff の text の fixture から 4 値・空の diff は `files=0 lines=0/0 pub_symbols=0`（読めた 0）・読めない周は None。e2e（`pipe_land_`）: land の面 5 の行に `size= files= lines= pub_symbols=` が `order` の後ろに載る。
 
 ## 8. 射程外
 
@@ -158,7 +165,7 @@ e2e は binary を spawn し外部 command は PATH 先頭の stub で差し替�
 - 便の同時本数の上限（admission control・口座の自律制御 s2-07l.142 と併せて別途）。
 - 30 秒の実待ちの歯の改修（s2-07l.151・本 doc より先に流す）。
 - 検出線の deny 化そのもの（C12.4 の裁定。本 doc は昇格時の置き場だけ）。
-- 検出行の値の記録（s2-07l.152・§4.3 の行に相乗りする）。
+- 検出行の値を **parse して型で持つ**こと（§5.1 は逐語の 1 行を残すまで。5 数を core の型で持つ形は、値を読む側〔report・deny への昇格 C12.4〕が要る周に別途・xtask の `Counts` と第 2 の parser を core に作らない ADR-0010 §2.1 の趣旨）。
 
 ## 9. 契約（bead）
 
@@ -166,6 +173,8 @@ e2e は binary を spawn し外部 command は PATH 先頭の stub で差し替�
 2. **(b) 受付**（M）: slot dir・受付札・容量の測定（pure 関数）・`Completion::SlotFree` と唯一の wait・縮退・回収・歯。land 後に (a) の実効 jobs が上限まで上がる。
 3. **(c) main 実測の検出線省略**（S）: `detection-verify`（任意 key）・verdict `tree`・`verify-main.jsonl`・land の skip・歯。
 4. **(d) land の順序**（.147・.146 の後）。
+5. **(e) 検出線の 1 行を record に**（S・.152 + .206 を 1 便・§5.1）: gate.rs の `step_record` に detection 行だけ `line`・`Fired` が stdout の末尾行を運ぶ・`pipe show` の外形・歯。
+6. **(f) 便の規模を面 5 に**（S・.189・§5.1）: land.rs の `export_verdict` に 4 field・pure な計算関数・歯。(e) と gate.rs / land.rs で交差しない読みだが e2e/pipe.rs で交差＝直列。
 
 (a) と (b) は pipe/ と rules/ で交差するので直列。(c) は (a) と宣言 file・gate.rs で交差するので直列。s2-07l.151 は test/ と seat/ で交差しないので先に流せる。
 
