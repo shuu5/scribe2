@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="folio-doc-type" content="adr">
+<meta name="folio-layer" content="project">
+<meta name="folio-version" content="0.4.6">
+<meta name="folio-status" content="accepted">
+<meta name="folio-stakeholders" content="Developer, AI Agent, External Reviewer">
+<meta name="folio-adr-id" content="0025">
+<meta name="folio-adr-date" content="2026-09-14">
+<title>ADR-0025 — runner の allowlist は先頭語の許可に加えて「禁じる語列」の rules 行を対で持ち、 hook の command guard が Bash の実行時点で止め、 intake は verify 行に同じ判定を掛ける (ADR-0009 §2.1 / ADR-0010 §2.3 を部分 supersede)</title>
+<link rel="stylesheet" href="../../common.css">
+<script type="application/ld+json">
+{
+  "@context": {
+    "dc": "http://purl.org/dc/terms/",
+    "schema": "https://schema.org/",
+    "folio": "https://folio.dev/spec/v1/"
+  },
+  "@id": "./ADR-0025-denied-command-rows-and-bash-command-guard.html",
+  "@type": "schema:TechArticle",
+  "dc:isPartOf": [
+    { "@id": "./README.html" }
+  ],
+  "dc:title": "ADR-0025 — runner の allowlist は先頭語の許可に加えて「禁じる語列」の rules 行を対で持ち、 hook の command guard が Bash の実行時点で止め、 intake は verify 行に同じ判定を掛ける (ADR-0009 §2.1 / ADR-0010 §2.3 を部分 supersede)",
+  "folio:version": "0.4.6",
+  "folio:stakeholders": ["Developer", "AI Agent", "External Reviewer"],
+  "dc:references": [
+    { "@id": "../spec/constitution.html#c1" },
+    { "@id": "../spec/constitution.html#c2" },
+    { "@id": "../spec/constitution.html#c5" },
+    { "@id": "../spec/constitution.html#c11" },
+    { "@id": "../spec/constitution.html#c14" },
+    { "@id": "../spec/constitution.html#c16" },
+    { "@id": "../spec/constitution.html#n1" },
+    { "@id": "../spec/srs.html#FR5" },
+    { "@id": "../spec/srs.html#FR20" },
+    { "@id": "../spec/srs.html#FR45" },
+    { "@id": "../spec/srs.html#NFR4" },
+    { "@id": "../spec/srs.html" },
+    { "@id": "./ADR-0009-vessel-grants-runner-permissions-and-mutation-proof.html" },
+    { "@id": "./ADR-0010-vessel-declaration-holds-allowlist-and-common-verify.html" },
+    { "@id": "./ADR-0011-vessel-launches-claude-without-settings.html" },
+    { "@id": "./ADR-0014-polarity-list-is-a-snapshot-rendered-by-core.html" },
+    { "@id": "./ADR-0021-gate-cost-is-measured-and-confined.html" },
+    { "@id": "./ADR-0022-seat-roles-are-typed-and-enforced-by-hooks.html" }
+  ]
+}
+</script>
+</head>
+<body>
+<!-- folio:chrome-top -->
+<a class="skip-link" href="#s1-context">本文へスキップ</a>
+<nav class="breadcrumb" aria-label="パンくず"><ol>
+  <li><a href="../index.html">design-intent</a></li>
+  <li><a href="./README.html">decisions</a></li>
+  <li aria-current="page">ADR-0025</li>
+</ol></nav>
+<!-- /folio:chrome-top -->
+
+<header class="doc-header">
+  <h1>ADR-0025 — runner の allowlist は先頭語の許可に加えて「禁じる語列」の rules 行を対で持ち、 hook の command guard が Bash の実行時点で止め、 intake は verify 行に同じ判定を掛ける (ADR-0009 §2.1 / ADR-0010 §2.3 を部分 supersede)</h1>
+  <div class="meta">Status: accepted &middot; Date: 2026-09-14 &middot; version 0.4.6 (拘束する constitution の版) &middot; N1 / C16 / C1 / C2 / C11 の適用を記録し、 ADR-0009 §2.1 の「allowlist の正本は runner.allowed_commands (値は command 名の列)」を「禁じる語列の行と対で読む」形に、 ADR-0010 §2.3 の intake の突合に禁じる語列の判定を足す形に、 それぞれ限って supersede &middot; 要件は SRS (FR20 / FR45 / FR5 / NFR4) が正本</div>
+</header>
+<!-- folio:chrome-toc -->
+<nav class="toc" aria-label="ページ内目次">
+<ol>
+  <li><a href="#s1-context">§1. Context</a></li>
+  <li><a href="#s2-decision">§2. Decision</a></li>
+  <li class="toc--sub"><a href="#s2-1-denied-row">§2.1 禁じる語列は rules 行 runner.denied_commands が持ち、 許す先頭語の行と対で読む</a></li>
+  <li class="toc--sub"><a href="#s2-2-command-guard">§2.2 hook の command guard が Bash の実行時点で止める (全席共通・in-loop・fail-closed)</a></li>
+  <li class="toc--sub"><a href="#s2-3-intake">§2.3 intake は宣言の共通 verify と契約の verify 行に同じ関数を掛ける</a></li>
+  <li class="toc--sub"><a href="#s2-4-no-disallowed-tools">§2.4 claude の権限系 (--disallowedTools) を正本にしない</a></li>
+  <li class="toc--sub"><a href="#s2-5-supersede">§2.5 ADR-0009 §2.1 と ADR-0010 §2.3 を部分 supersede する</a></li>
+  <li class="toc--sub"><a href="#s2-6-scope">§2.6 射程外</a></li>
+  <li><a href="#s3-srs">§3. SRS との関係 (正本は SRS)</a></li>
+  <li><a href="#s4-consequences">§4. Consequences</a></li>
+  <li><a href="#s5-alternatives">§5. Alternatives Considered</a></li>
+  <li><a href="#s6-trace">§6. Trace</a></li>
+</ol>
+</nav>
+<!-- /folio:chrome-toc -->
+
+<aside class="informative">
+<p>本 ADR は IETF <strong>RFC 2119</strong> および <strong>RFC 8174 / BCP 14</strong> に定義される MUST / SHALL / SHOULD / MAY のキーワード解釈規約に従う。 ADR は決定時点の記録であり、 改訂は新しい ADR による supersede で行う。 本 ADR の <strong>§2 は user の裁定 (2026-09-14・rules 行を足すため C5 の裁定 id を要する・逐語は台帳が原本で本 file には写さない〔CON2〕)</strong> で、 <strong>§3 は SRS への pointer</strong> である。 本 ADR は要件の文面を 1 字も持たず、 <strong>理由・形・却下案</strong> だけを持つ。 本 ADR は <a href="./ADR-0009-vessel-grants-runner-permissions-and-mutation-proof.html#s2-1-runner-permissions">ADR-0009 §2.1</a> のうち「allowlist の正本は manifest の rules 行 <code>runner.allowed_commands</code> (値は command 名の列)」の一文を<strong>禁じる語列の行と対で読む形に限って</strong>、 <a href="./ADR-0010-vessel-declaration-holds-allowlist-and-common-verify.html#s2-3-intake-measures">ADR-0010 §2.3</a> のうち intake の突合 (上限・argv 1 本・制御文字・repo 外 path) を<strong>禁じる語列の判定を 1 つ足す形に限って</strong> supersede する (runner の起動形〔ADR-0011〕・宣言 file の形〔ADR-0010 §2.1〕・凍結した写しの読み〔ADR-0010 §2.4〕は不変)。</p>
+</aside>
+
+<aside class="machine-readable" aria-hidden="true">
+  <dl>
+    <dt>id</dt><dd>ADR-0025</dd>
+    <dt>doc-type</dt><dd>adr</dd>
+    <dt>status</dt><dd>accepted</dd>
+    <dt>date</dt><dd>2026-09-14</dd>
+    <dt>version</dt><dd>0.4.6 (拘束する constitution の版。 本 ADR は憲法の条文を動かさない)</dd>
+    <dt>decided-by</dt><dd>user (2026-09-14) — rules 行の追加は C5 の裁定 id を要する。 出所は監査 memo (台帳 s2-07l.168) と便の終端の実測 (台帳 s2-07l.230・s2-07l.222 の description)。 裁定の逐語は台帳 s2-07l.168 の notes が原本で、 本 file には写さない (CON2)</dd>
+    <dt>stakeholders</dt><dd>Developer, AI Agent, External Reviewer</dd>
+    <dt>supersedes</dt><dd>ADR-0009 §2.1 の一文「allowlist の正本は manifest の rules 行 runner.allowed_commands (kind RunnerAllowedCommands・値は command 名の列)」を、 禁じる語列の行 runner.denied_commands と対で読む形に限って supersede する (先頭語の許可の形・Bash(&lt;cmd&gt;:*) の渡し方・PermissionRequest の一律 deny は不変)。 ADR-0010 §2.3 の intake の突合を、 禁じる語列の判定を 1 つ足す形に限って supersede する (突合の他の 4 つ・凍結・写しの形は不変)</dd>
+    <dt>related</dt><dd>ADR-0009 §2.1 / §2.2 (runner の権限・intake の拒否) / ADR-0010 §2.1 / §2.2 / §2.3 / §2.4 (宣言 file・上限・突合・写し) / ADR-0011 §2.1 (settings を読まない起動形・不変) / ADR-0014 §2.1 (guard の定義・極性一覧) / ADR-0021 §4.2 (runner の箱の上限は 1 種・行ごとの上限を足さない) / ADR-0022 §2.3 (PreToolUse の権能 guard・同じ境界) / constitution C1 / C2 / C5 / C11 / C11.2 / C14 / C16 / C16.2 / N1 / SRS FR5 / FR20 / FR45 / NFR4 / CON2</dd>
+  </dl>
+</aside>
+
+<section id="s1-context" class="informative">
+<h2>§1. Context</h2>
+<p class="section-essence" data-audience="human">実装役 (runner) に器が与える権限は「cargo と git を丸ごと」の 2 つです。 この形では、 便を殺す <code>cargo mutants</code> の全 suite 実行も、 取り消せない <code>git push --force</code> も、 同じ許可の内側に入ります。 実際に 1 本の便が自分で変異検査を回して host のほぼ全量 (54 GB) まで膨らみ、 kernel に殺されて終端しました。 監査は同じ穴を「破壊的 git が便から撃てる」として先に指摘していました。 runner は起動した人の設定 file を 1 つも読まないので、 host 側の guard は届きません。 一方で器の plugin の hook は runner にも届いており、 Edit / Write の write-set guard と権能 guard はそこで動いています。 足りないのは「Bash の command そのものを見る guard」1 つで、 その値の置き場と判定の置き場をこの記録で決めます。</p>
+<p data-audience="machine">記録時点 (2026-09-14) の現物 (main <code>d19cacb</code>): rules 行 <code>runner.allowed_commands = ["cargo", "git"]</code> (kind <code>RunnerAllowedCommands</code>・<a href="./ADR-0009-vessel-grants-runner-permissions-and-mutation-proof.html#s2-1-runner-permissions">ADR-0009 §2.1</a>) は<strong>上限</strong>で、 対象 repo の vessel 宣言 <code>allowed-commands</code> (<a href="./ADR-0010-vessel-declaration-holds-allowlist-and-common-verify.html#s2-1-declaration-file">ADR-0010 §2.1</a>) がその内側で先頭語を名乗り、 runner は写しの各要素を <code>Bash(&lt;cmd&gt;:*)</code> の形で <code>--allowedTools</code> に渡す (<code>headless/runner.rs</code> <code>allowed_tools</code>)。 判定の粒度は<strong>先頭 1 語</strong>で、 intake の突合 (<code>pipe/declaration.rs</code> の unfit: 制御文字・先頭語・repo 外 path・穴) も同じ粒度である。 hook の <code>pre-tool-use</code> は matcher <code>Bash|Edit|Write|MultiEdit|NotebookEdit</code> で runner にも届く (runner は <code>--plugin-dir</code> で器の plugin を積む・settings は読まない〔<a href="./ADR-0011-vessel-launches-claude-without-settings.html">ADR-0011</a>〕) が、 <code>hook/guard.rs</code> は <code>Bash</code> を通し (設計 vessel-hook.md §5「Bash と他 tool → rc 0・0 byte」)、 権能 guard (<a href="./ADR-0022-seat-roles-are-typed-and-enforced-by-hooks.html#s2-3-guard">ADR-0022 §2.3</a>) の Bash 判定は器自身の権能付き subcommand だけを見る。 実害 2 件: (1) 便 <code>s2-07l.222</code> run 1 (2026-09-13) の runner が自分の箱の中で <code>cargo mutants</code> の全 suite を回し、 loop 条件の反転の変異が alloc を止めず箱の上限 (MemTotal − reserve ≈ 54 GB) まで膨らみ oom-kill で便が終端 (台帳 <code>s2-07l.230</code>)。 (2) 監査 2026-09-12 (台帳 <code>s2-07l.168</code>) の findings: <code>git push --force origin main</code> は制御文字も絶対 path も含まないので intake が受理し、 gate / land が <code>sh -c</code> で実走する＝<a href="../spec/constitution.html#n1">N1</a> が verify の境界で成立していない。 host の git guard (PreToolUse hook・host 固有) は runner に届かない (<code>--setting-sources ""</code>)。 契約の散文 (「runner は cargo mutants を回さず 1 行当ての A/B」) で回避してきたが、 それは規則を prose に置く形 (<a href="../spec/constitution.html#n2">N2</a>) である。</p>
+<p data-audience="machine">憲法の向き: <a href="../spec/constitution.html#n1">N1</a> は回復不能な削除を拒む。 <a href="../spec/constitution.html#c16">C16</a> は逸脱を編集・実行の時点で止め、 事後の検証で代替しない。 <a href="../spec/constitution.html#c1">C1</a> は規則の値を manifest だけに置き、 <a href="../spec/constitution.html#c14">C14</a> は執行される規則の正本を manifest とする (宣言 file は consumer が緩められる面)。 <a href="../spec/constitution.html#c2">C2</a> は判定を 1 関数・1 列挙で持ち、 新しい理由は 1 variant で表す。 <a href="../spec/constitution.html#c5">C5</a> は rules 行の追加に裁定 id を要する。 <a href="../spec/constitution.html#c11">C11.2</a> / <a href="../spec/constitution.html#c16">C16.2</a> は guard を極性一覧に in-loop として載せる。 先行決定: <a href="./ADR-0021-gate-cost-is-measured-and-confined.html">ADR-0021</a> §4.2 は runner の箱の上限を「MemTotal − reserve」の 1 種に決め、 行ごとの上限を足さない (台帳 <code>s2-07l.230</code> の案 (A) は ADR-0021 に反する)。 <a href="./ADR-0014-polarity-list-is-a-snapshot-rendered-by-core.html">ADR-0014</a> §2.1 は「行為を止めうる判定」を guard と定める。</p>
+</section>
+
+<section id="s2-decision" class="normative">
+<h2>§2. Decision</h2>
+
+<h3 id="s2-1-denied-row">§2.1 禁じる語列は rules 行 runner.denied_commands が持ち、 許す先頭語の行と対で読む</h3>
+<p class="section-essence" data-audience="human">「使ってよい command の先頭語」の行はそのままにして、 「その先頭語で始まっても撃ってはいけない語の並び」の行を 1 本足します。 値は器の規則 file (manifest) だけが持ち、 相手の repo の宣言 file からは緩められません。 最初の値は、 cargo の <code>mutants</code> と <code>publish</code>、 git の force push・hard reset・branch の強制削除・clean・stash の削除です。</p>
+<p data-audience="machine">manifest SHALL rules 行 <code>runner.denied_commands</code> (kind <code>RunnerDeniedCommands</code>・閉じた <code>RuleKind</code> の新 variant・値は語列の配列・各要素は空白区切りの語 1 つ以上・空配列と空要素は不備・裁定 id = user 2026-09-14〔台帳 <code>s2-07l.168</code> notes〕) を持つ。 初期値 SHALL <code>cargo mutants</code> / <code>cargo publish</code> / <code>git push --force</code> / <code>git push -f</code> / <code>git reset --hard</code> / <code>git branch -D</code> / <code>git clean -f</code> / <code>git stash drop</code> / <code>git stash clear</code> とする。 行の意味は<strong>上限側の禁止</strong>である: vessel 宣言 (<a href="./ADR-0010-vessel-declaration-holds-allowlist-and-common-verify.html#s2-1-declaration-file">ADR-0010 §2.1</a>) は禁じる語列を名乗らず、 緩めることも足すこともできない (MUST NOT・<a href="../spec/constitution.html#c14">C14</a>: 執行される規則の正本は manifest)。 <code>runner.allowed_commands</code> の値形 (先頭語の配列・上限) と runner が <code>Bash(&lt;cmd&gt;:*)</code> を渡す形は不変 (MUST NOT change)。 <strong>照合規則</strong> (1 関数・<a href="../spec/constitution.html#c2">C2</a>): command 行を shell の区切り (<code>;</code> / <code>&amp;&amp;</code> / <code>||</code> / <code>|</code> / 改行) で segment に分け、 各 segment を空白で語に分け、 語列の<strong>先頭の語が segment の先頭の語と一致し、 残りの語がすべて segment の語に含まれる</strong> (順序を問わない・<code>git push origin main --force</code> と <code>git push --force origin main</code> を同じ 1 語列で当てる) とき「当たる」とする。 引用符の中身・変数の展開・interpreter の引数 (<code>sh -c "…"</code>) は<strong>解かない</strong> (§2.6)。 判定の出力は閉じた型 (当たった語列を持つ variant か、 当たらない) で、 呼び手 (§2.2 / §2.3) が分岐を強制される (<a href="../spec/constitution.html#c11">C11.3</a>)。</p>
+
+<h3 id="s2-2-command-guard">§2.2 hook の command guard が Bash の実行時点で止める (全席共通・in-loop・fail-closed)</h3>
+<p class="section-essence" data-audience="human">Bash が呼ばれる瞬間に hook が command を読み、 禁じる語の並びに当たれば実行の前に止め、 「どのrules 行のどの並びに当たったか」と「次の一手」を 1 行で返します。 この guard は実装役だけでなく planner・管理席にも同じく効きます (同じ hook だからです)。 規則 file が読めないときは通さず止めます。</p>
+<p data-audience="machine">hook <code>pre-tool-use</code> SHALL <code>tool_name == "Bash"</code> の周に §2.1 の関数を command 文字列に掛け、 当たる周は <strong>deny</strong> (rc 2 + stderr 1 行 + stdout 0 byte・<a href="../spec/srs.html#FR20">FR20</a> の write-set guard と同じ外形) とし、 stderr の 1 行 SHALL rules 行 id (<code>runner.denied_commands</code>) と当たった語列と次の一手 (契約の A/B 手順・別の形への書き直し) を含む。 記録 SHALL <code>inject.jsonl</code> に 1 行 (<code>who=hook:pre-tool-use</code> / <code>what=command-deny &lt;語列&gt;</code>)。 通す周は 1 byte も書かない (write-set guard と同じ・hook budget)。 判定の順序 SHALL write-set guard → seat guard → <strong>command guard</strong> → 権能 guard とし、 順序は閉じた列挙の宣言順で持つ (<a href="../spec/constitution.html#c2">C2</a>・prose の順序注記を持たない)。 活性化 SHALL marker <code>.vessel</code> が自分の NAME を言う repo だけ (FR24・他の repo を 1 byte も汚さない)。 極性: manifest が読めない・行が無い → <strong>deny (FailClosed)</strong> (<a href="../spec/srs.html#NFR4">NFR4</a>・read できない store を黙って通さない)。 guard SHALL 閉じた <code>Guard</code> enum の新 variant <code>Command</code> として極性一覧に <code>InLoop</code> / <code>FailClosed</code> で載る (<a href="./ADR-0014-polarity-list-is-a-snapshot-rendered-by-core.html">ADR-0014 §2.1</a>・<a href="../spec/constitution.html#c16">C16.2</a>)。 席の弁別 SHALL しない (runner / planner / 管理席の全 Bash に同じ判定・席ごとの例外行を持たない)。</p>
+
+<h3 id="s2-3-intake">§2.3 intake は宣言の共通 verify と契約の verify 行に同じ関数を掛ける</h3>
+<p class="section-essence" data-audience="human">受付 (intake) は、 相手の repo の宣言に書かれた共通の検証行と、 契約に書かれた検証行の両方を、 同じ関数で見ます。 禁じる語の並びを含む行が 1 本でもあれば、 行番号付きで断り、 便を起こしません。 審査 (gate) と取り込み (land) はその行を <code>sh -c</code> で実走するので、 入口で止めるしかないからです。</p>
+<p data-audience="machine">intake の突合 (<a href="./ADR-0010-vessel-declaration-holds-allowlist-and-common-verify.html#s2-3-intake-measures">ADR-0010 §2.3</a>・<code>pipe/declaration.rs</code> の unfit) SHALL 既存の 4 判定 (上限・argv 1 本・制御文字・repo 外 path) に、 §2.1 の関数による<strong>禁じる語列の判定</strong>を 1 つ足し、 <code>common-verify</code> / <code>detection-verify</code> / 契約 <code>verify</code> の各行に掛ける。 当たる行は他の不備と同じく<strong>全件・行番号付き</strong>で rc 1 (event を書かない・<a href="./ADR-0009-vessel-grants-runner-permissions-and-mutation-proof.html#s2-2-intake-refuses">ADR-0009 §2.2</a>)。 verify 行は argv 1 本 (制御文字なし) なので segment は 1 つである。 gate / land が実走する行は intake が凍結した写しだけ (ADR-0010 §2.4・不変) なので、 §2.3 の判定は写しの側で二度掛けない。 <code>Guard::Intake</code> の断りの 1 理由が増えるだけで、 Guard は増えない。</p>
+
+<h3 id="s2-4-no-disallowed-tools">§2.4 claude の権限系 (--disallowedTools) を正本にしない</h3>
+<p class="section-essence" data-audience="human">claude 自身にも「この command は駄目」と伝える起動 flag がありますが、 それを止める仕組みの正本にはしません。 claude の版ごとに振る舞いが変わりうるうえ、 器の「止める仕組みの一覧」に載らないからです。 止めるのは器の hook で、 claude への許可の渡し方は今までどおりです。</p>
+<p data-audience="machine">runner SHALL NOT <code>--disallowedTools</code> を渡さない形を保つ (<a href="./ADR-0011-vessel-launches-claude-without-settings.html#s2-1-launch-form">ADR-0011 §2.1</a> の起動形は不変・<code>--allowedTools</code> の <code>Bash(&lt;cmd&gt;:*)</code> 形も不変)。 理由: claude の権限系は版依存で (pattern の意味が版で変わりうる)、 極性一覧に載らず (<a href="../spec/constitution.html#c16">C16.2</a> の in-loop guard の母集団に入らない)、 器の deny 文 (次の一手を含む 1 行) を運べない。 hook の command guard (§2.2) が唯一の執行点で、 <a href="./ADR-0009-vessel-grants-runner-permissions-and-mutation-proof.html#s2-1-runner-permissions">ADR-0009 §2.1</a> の「明示 allow の外は PermissionRequest hook が deny」と対になる (allow の内側の禁止 = 本 ADR・allow の外 = ADR-0009)。</p>
+
+<h3 id="s2-5-supersede">§2.5 ADR-0009 §2.1 と ADR-0010 §2.3 を部分 supersede する</h3>
+<p class="section-essence" data-audience="human">先行の 2 つの記録のうち、 「許可の正本は先頭語の行」の一文と「受付の突合は 4 つ」の一文だけを、 それぞれ「禁じる語列の行と対で読む」「突合は 5 つ」に改めます。 それ以外 (宣言 file の形・写しの凍結・起動形・一律 deny) はそのままです。</p>
+<p data-audience="machine"><a href="./ADR-0009-vessel-grants-runner-permissions-and-mutation-proof.html#s2-1-runner-permissions">ADR-0009 §2.1</a> の「allowlist の正本は manifest の rules 行 <code>runner.allowed_commands</code> (値は command 名の列)」SHALL 「許す先頭語の行 <code>runner.allowed_commands</code> と禁じる語列の行 <code>runner.denied_commands</code> の<strong>対</strong>」と読み替える。 <a href="./ADR-0010-vessel-declaration-holds-allowlist-and-common-verify.html#s2-3-intake-measures">ADR-0010 §2.3</a> の突合 SHALL §2.3 の 5 判定と読み替える。 <a href="./ADR-0010-vessel-declaration-holds-allowlist-and-common-verify.html#s2-2-manifest-ceiling">ADR-0010 §2.2</a> 「manifest は上限を持つ」は、 禁じる語列の行が<strong>上限側の禁止</strong>である点で整合し、 supersede しない。 vessel-hook.md §8 の却下案「Bash command の parse guard — interpreter 経路は v3」は、 語列の照合 (parse ではない) に限って採用し、 interpreter 経路の中身の解析は v3 のまま (§2.6)。</p>
+
+<h3 id="s2-6-scope">§2.6 射程外</h3>
+<p class="section-essence" data-audience="human">この記録が決めるのは「禁じる語列の置き場」「Bash の実行時点の guard」「受付の同型判定」の 3 つだけです。 <code>sh -c</code> や script file の中身まで読むこと、 変数展開の先を読むこと、 runner の箱の memory 上限を行ごとに持つこと、 禁じる語列の値の改訂そのものは、 別の便・裁定の領分です。</p>
+<p data-audience="machine">次は本 ADR の決定ではない (MUST NOT be read as such): interpreter 経路 (<code>sh -c "…"</code> / <code>bash script.sh</code> / <code>python -c</code> / <code>xargs</code>) の引数や file の中身の解析 (v3・字面照合の誤爆を持ち込まない〔ADR-0012 §2.2 の教訓〕)、 環境変数・alias・関数の展開先、 runner の箱の行ごとの memory 上限 (台帳 <code>s2-07l.230</code> 案 (A)・ADR-0021 §4.2 に反するので却下)、 禁じる語列の値の追加・削除 (rules 行の改訂 = C5 の裁定 id を持つ便)、 host 側の git guard の撤去 (器の guard と二重に効いてよい・host 固有の道具は器の視野の外)、 lens の Bash (lens は Bash を撃たない・不変)。</p>
+</section>
+
+<section id="s3-srs" class="informative">
+<h2>§3. SRS との関係 (正本は SRS)</h2>
+<p class="section-essence" data-audience="human">この記録が仕える要件は要件書に在ります。 「実行の時点で止める」「write-set の外の編集を止める」「実装役の起動形」「不正な入力を黙って落とさない」の 4 つです。 禁じる語列そのものを名指す要件は、 次の要件書の改訂 (材料は planner の置き場に用意済み) で足し、 その id は改訂の後に本 ADR から辿れます。 この記録は要件書を 1 字も変えません。</p>
+<div data-audience="machine">
+<p>本 ADR の §2.1〜§2.4 が仕える要件: <a href="../spec/srs.html#FR45">FR45</a> (権能で守られた操作の検査は編集・実行の時点で〔in-loop〕・同じ PreToolUse の境界)・<a href="../spec/srs.html#FR20">FR20</a> (write-set の外への編集を編集の時点で deny・fail-closed・deny の外形の前例)・<a href="../spec/srs.html#FR5">FR5</a> (runner と lens は claude -p の 1 形・起動形は不変)・<a href="../spec/srs.html#NFR4">NFR4</a> (不正入力を黙って落とす件数 0・読めない store は止まる)。 禁じる語列の command を実行の時点で拒む要件 (FR56 相当) は SRS v0.9 の改訂で足す (材料 = planner state dir <code>srs-command-guard-fr.md</code>・改訂は user の /folio-architect)。 SRS の改訂まで本 ADR は FR45 / FR20 の境界を指す。 実装手段 (行の id と kind・照合規則・deny 文・極性) は §2 が正本で SRS は持たない。</p>
+</div>
+</section>
+
+<section id="s4-consequences" class="informative">
+<h2>§4. Consequences</h2>
+<p class="section-essence" data-audience="human">良い面は、 便を殺す検査と取り消せない git が実行の前に止まること、 その規則が器の規則 file 1 か所に在り相手の repo から緩められないこと、 止める仕組みの一覧に 1 本増えて数えられること、 planner と管理席にも同じ guard が効くことです。 悪い面は、 hook が Bash のたびに規則 file を読む分の費用、 語列の照合が引用符や interpreter の中身を見ないという既知の限界、 禁じる語列を増やすたびに裁定が要ることです。</p>
+<p data-audience="machine">Positive: N1 / C16 が Bash の境界で成立する (契約の散文による回避を撤去できる・N2)。 値は manifest 1 行 (C1 / C14)・判定は 1 関数 (C2)・guard は極性一覧 +1 (C16.2 の母集団が増える)。 全席共通 (runner の穴と席の穴を 1 つの guard で塞ぐ・host の guard との二重化は許容)。 rules 行 1 本 (C5 の裁定 id 付き)・Guard variant 1 本・極性一覧 snapshot +1 行・seat / hook の外形 snapshot の更新。</p>
+<p data-audience="machine">Negative (受け入れるコスト): hook が Bash ごとに manifest を読む (rules の読みは既存の権能 guard と同じ経路・hook budget の内側で測る)。 照合は語列の包含で、 引用符・展開・interpreter の中身を見ない (§2.6・回避は可能だが「runner が判断を誤る」型の事故を塞ぐには足りる・悪意の runner は本 ADR の射程外)。 禁じる語列の改訂は毎回 C5 の裁定を要する (規則の増殖を裁定で抑える側に倒す)。 fail-closed ゆえ manifest が読めない周は全席の Bash が止まる (権能 guard の registry-unreadable と同じ極性・.225 直後の事故の型を再現しうる＝event 形を変える便は PATH 版の install を先に)。</p>
+</section>
+
+<section id="s5-alternatives" class="informative">
+<h2>§5. Alternatives Considered</h2>
+<p class="section-essence" data-audience="human">5 つの案を退けました。 許可の行の値の形そのものを変える案は、 規則 file の読み手 (文字列と 1 行の配列だけ) を広げるか、 文字列の中に構造を詰めることになります。 claude の起動 flag で禁じる案は、 版依存で一覧に載りません。 相手の repo の宣言 file に禁じる語列を置く案は、 相手が自分で緩められます。 実装役の箱に行ごとの memory 上限を持たせる案は、 先行の記録に反し、 force push を止められません。 現状維持は、 規則を散文に置いたままです。</p>
+<p data-audience="machine">(A) <strong><code>runner.allowed_commands</code> の値形を「先頭語 + 禁じる語列」の入れ子に変える</strong>。 却下: manifest の reader は TOML subset (文字列と 1 行の文字列配列・<a href="./ADR-0010-vessel-declaration-holds-allowlist-and-common-verify.html#s2-1-declaration-file">ADR-0010 §2.1</a>・ADR-0004 §2.3) で、 入れ子を許すと第 2 の parser か文字列 encoding (<code>"cargo:mutants,publish"</code>) になる (C10「型で分ける」に反する・C11.3 の untyped に近い)。 行を 1 本足す形は C2「新しい理由は 1 variant」と C5 の内側で済む。</p>
+<p data-audience="machine">(B) <strong><code>--disallowedTools "Bash(cargo mutants:*)"</code> を runner に渡す</strong>。 却下: 版依存・極性一覧の外・deny 文を運べない (§2.4)。 席 (planner・管理席) には届かない。</p>
+<p data-audience="machine">(C) <strong>vessel 宣言に <code>denied-commands</code> key を足す</strong>。 却下: 宣言は consumer が書く面で、 禁じる語列を消せる・緩められる (C14: 執行される規則の正本は manifest)。 宣言の key 集合 (3 つ必須) を変えると ADR-0010 §2.1 の supersede 範囲が広がる。</p>
+<p data-audience="machine">(D) <strong>runner の箱に行ごとの memory 上限 (新 rules 行 <code>gate.runner_memory_mb</code>) を持たせる</strong> (台帳 <code>s2-07l.230</code> 案 (A))。 却下: ADR-0021 §4.2「上限は 2 種・行ごとの値を持たない」に反する。 memory の症状だけを見て force push を止められない。 分布 (peak の実測) が溜まった後の別裁定の領分。</p>
+<p data-audience="machine">(E) <strong>現状維持 (契約の手順で「runner は cargo mutants を回さない」と書く・reserve が host を守る)</strong>。 却下: 規則が prose にしか無い (N2)。 runner が判断を誤れば再発し (.222 run 1)、 破壊的 git は 1 度も止まらない。</p>
+</section>
+
+<section id="s6-trace" class="informative">
+<h2>§6. Trace</h2>
+<p class="section-essence" data-audience="human">出所は、 便が自分で変異検査を回して殺された実測、 監査が先に指摘していた「破壊的 git が便から撃てる」findings、 器の現物 (許可の渡し方・hook の Bash の扱い・受付の突合)、 hook が runner に届いている記録、 そして user の裁定です。</p>
+<ul data-audience="machine">
+  <li>便の終端の実測 (2026-09-13 20:23Z・管理席): <code>s2-07l.222</code> run 1 が Failed <code>detail=oom-kill</code>。 runner が箱の中で <code>cargo mutants</code> の全 suite を回し 54 GB まで膨らんだ (台帳 <code>s2-07l.230</code> の description が原本)。</li>
+  <li>監査 2026-09-12 (台帳 <code>s2-07l.168</code>): findings <code>srs:F10</code> / <code>outside-prose:f12</code> (反証済み upheld)。 verify 行の allowlist は先頭語だけ・runner の git は先頭語だけで許され、 破壊形の弁別を host の hook に頼っている。</li>
+  <li>器の現物 (main <code>d19cacb</code>): <code>headless/runner.rs</code> <code>allowed_tools</code> (<code>Bash(&lt;cmd&gt;:*)</code>)・<code>headless/mod.rs</code> <code>build</code> (<code>--setting-sources ""</code>・<code>--plugin-dir</code>)・<code>hook/guard.rs</code> (Bash を通す)・<code>hook/role_guard.rs</code> <code>subject</code> (Bash は権能付き subcommand だけ)・<code>pipe/declaration.rs</code> unfit (先頭語)・<code>hooks/hooks.json</code> (PreToolUse matcher に Bash)。 hook が runner に届く証跡: <code>inject.jsonl</code> の <code>permission-request deny</code> 63 件・<code>pre-tool-use deny</code> 8 件 (2026-09-14 planner 実測)。</li>
+  <li>user 裁定 (2026-09-14・会話面): 推奨案 (禁じる語列を manifest に・hook の command guard・intake の同型判定・<code>--disallowedTools</code> を使わない・初期値 9 語列) を承認。 逐語は台帳 <code>s2-07l.168</code> の notes が原本。</li>
+  <li>先行決定: <a href="./ADR-0009-vessel-grants-runner-permissions-and-mutation-proof.html">ADR-0009</a> §2.1 / §2.2・<a href="./ADR-0010-vessel-declaration-holds-allowlist-and-common-verify.html">ADR-0010</a> §2.1〜§2.4・<a href="./ADR-0011-vessel-launches-claude-without-settings.html">ADR-0011</a> §2.1・<a href="./ADR-0014-polarity-list-is-a-snapshot-rendered-by-core.html">ADR-0014</a> §2.1・<a href="./ADR-0021-gate-cost-is-measured-and-confined.html">ADR-0021</a> §4.2・<a href="./ADR-0022-seat-roles-are-typed-and-enforced-by-hooks.html">ADR-0022</a> §2.3。</li>
+  <li>設計: <code>docs/design/vessel-hook.md</code> §5 (command guard の bullet) / §8 (却下案の限定採用)・<code>docs/design/pipeline.md</code> §5.1 (突合 5 つ目)・<code>docs/design/rules-manifest.md</code> (行の表に <code>runner.denied_commands</code>)。 契約は台帳 <code>s2-07l.168</code> (本 ADR の land 後に契約化・<code>s2-07l.230</code> を吸収)。</li>
+</ul>
+</section>
+
+<!-- folio:chrome-bottom -->
+<nav class="prevnext" aria-label="前後の文書">
+  <a class="prevnext__prev" href="ADR-0024-idle-window-reset-time-is-optional-in-allowance-row.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">ADR-0024 — 実測行の reset 時刻は任意とし、 消費の無い窓 (使用率 0・reset 無し) を「測れた 0%・reset 未定」の Measured として記録し、 選定と逼迫度は reset 無しの行を古くない実測として数える (ADR-0017 §2.1 の一文を部分 supersede)</span></a>
+</nav>
+<script>
+(function () {
+  var openedForPrint = [];
+  window.addEventListener('beforeprint', function () {
+    openedForPrint = [];
+    var ds = document.querySelectorAll('details:not([open])');
+    for (var i = 0; i < ds.length; i++) { ds[i].setAttribute('open', ''); openedForPrint.push(ds[i]); }
+  });
+  window.addEventListener('afterprint', function () {
+    for (var i = 0; i < openedForPrint.length; i++) openedForPrint[i].removeAttribute('open');
+    openedForPrint = [];
+  });
+  if (!document.querySelector('[data-audience]')) return;
+  /* 既定 = 人間プレゼン型 (ADR-0040 / rules §11.3): script 経由で初期 class を付与するため
+     no-JS では付かず全文可視に graceful degrade する。 static DOM は全文を保持 (AI/検索/印刷は不変)。 */
+  document.body.classList.add('audience-human');
+  var bar = document.createElement('nav');
+  bar.className = 'audience-toggle';
+  bar.setAttribute('aria-label', '表示対象の切替');
+  var states = [['both', '両方'], ['human', '人間向け'], ['machine', '機械向け']];
+  for (var s = 0; s < states.length; s++) {
+    (function (mode, label) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      b.setAttribute('aria-pressed', mode === 'human' ? 'true' : 'false');
+      b.addEventListener('click', function () {
+        document.body.classList.remove('audience-human', 'audience-machine');
+        if (mode !== 'both') document.body.classList.add('audience-' + mode);
+        var bs = bar.querySelectorAll('button');
+        for (var j = 0; j < bs.length; j++) bs[j].setAttribute('aria-pressed', bs[j] === b ? 'true' : 'false');
+      });
+      bar.appendChild(b);
+    })(states[s][0], states[s][1]);
+  }
+  var bc = document.querySelector('nav.breadcrumb');
+  if (bc && bc.parentNode) { bc.parentNode.insertBefore(bar, bc.nextSibling); }
+  else { document.body.insertBefore(bar, document.body.firstChild); }
+})();
+</script>
+<!-- /folio:chrome-bottom -->
+</body>
+</html>

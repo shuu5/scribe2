@@ -234,16 +234,20 @@ terms:
     relationships: [契約, in-loop guard, write-set の閉包]
   - canonical: in-loop guard
     domain: consumer
-    definition: 仕様からの逸脱を編集の時点で止める guard (C16)。 MVP の形は write-set の外への Edit / Write を PreToolUse で deny する hook。 極性一覧に InLoop として載る。
-    relationships: [write-set, 極性]
+    definition: 仕様からの逸脱を編集の時点で止める guard (C16)。 MVP の形は write-set の外への Edit / Write を PreToolUse で deny する hook。 極性一覧に InLoop として載る。 Bash の command guard (ADR-0025) も同じ境界の in-loop guard である。
+    relationships: [write-set, 極性, command guard]
   - canonical: runner
     domain: consumer
     definition: 契約 1 本を worktree で実装する headless の Claude process (SRS FR4 / FR5)。 席ではなく使い捨て。 起動時に口座と対象 repo の settings を 1 つも読まない (ADR-0011)。
     relationships: [契約, headless, lens, 便, allowlist]
   - canonical: allowlist
     domain: consumer
-    definition: 器が runner に与える「実行してよい command 名の列」。 値は対象 repo の vessel 宣言が持ち、 manifest の rules 行 runner.allowed_commands は宣言が名乗れる上限である (C1 / C10・ADR-0010)。 intake が上限と突合して便ごとに凍結し、 runner は凍結した写しから claude へ --allowedTools として渡し、 口座と対象 repo の settings を 1 つも読まない (ADR-0009 / ADR-0011)。 明示 allow の外は hook が deny する。
-    relationships: [runner, vessel 宣言, manifest, rules 行, hook]
+    definition: 器が runner に与える「実行してよい command 名の列」。 値は対象 repo の vessel 宣言が持ち、 manifest の rules 行 runner.allowed_commands は宣言が名乗れる上限である (C1 / C10・ADR-0010)。 intake が上限と突合して便ごとに凍結し、 runner は凍結した写しから claude へ --allowedTools として渡し、 口座と対象 repo の settings を 1 つも読まない (ADR-0009 / ADR-0011)。 明示 allow の外は hook が deny する。 許可の内側で禁じる語列は manifest の rules 行 runner.denied_commands が対で持ち、 宣言は緩められない (ADR-0025 §2.1)。
+    relationships: [runner, vessel 宣言, manifest, rules 行, hook, command guard]
+  - canonical: command guard
+    domain: consumer
+    definition: hook の PreToolUse が Bash の command を shell の区切りごとに語に分け、 rules 行 runner.denied_commands の語列に当たる segment を実行の前に deny する guard (ADR-0025 §2.2)。 全席共通の in-loop guard で、 極性一覧に InLoop / FailClosed として載る。 intake は同じ関数を verify 行に掛ける (ADR-0025 §2.3)。
+    relationships: [hook, in-loop guard, allowlist, rules 行, 極性一覧]
   - canonical: 共通 verify
     domain: consumer
     definition: どの便にも共通の deny する検証 (flip check・test・lint・依存監査) を対象 repo の vessel 宣言に置き、 intake が便ごとに凍結した写しを gate が契約 verify の前に撃つもの (C2・ADR-0009 / ADR-0010)。 検出線の行は別の列 (detection-verify・ADR-0021 §2.4) に置き、 契約の verify は便固有の行だけを持つ。
