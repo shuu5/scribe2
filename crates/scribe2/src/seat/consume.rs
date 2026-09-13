@@ -283,4 +283,85 @@ mod tests {
         assert_eq!(render_refused(&ConsumeError::ConsumedExists), "seat: consume refused reason=consumed-exists");
         assert_eq!(render(&Consumed::Already("f".to_owned())), "seat: consumed already file=f");
     }
+
+    /// 歯ごとの空の tmp dir（in-file の歯の置き場・env を読まないのは器の本体の規律〔C2.2〕）。
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("seat-consume-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::create_dir_all(&dir);
+        dir
+    }
+
+    /// 打刻 file に最終行の sid を書いた席 dir（末尾の空行は読み飛ばされる側を pin する材料）。
+    fn seat_with_sid(root: &Path, sid: &str) -> PathBuf {
+        let seat = root.join("seat");
+        let _ = std::fs::create_dir_all(&seat);
+        let line = state::Stamp::now(state::Event::SessionStart, sid).to_line();
+        let _ = std::fs::write(state::path(&seat), format!("{line}\n\n"));
+        seat
+    }
+
+    // flip-check: retroactive s2-07l.223
+    /// `sid_of` の 2 つの短絡（`||` と `&&`）を片側ずつ撃つ: 使える字だけの sid は通り（`||` を `&&` にすると
+    /// 全部 `sid-invalid` に化ける）、`.` で始まる sid と `/` を含む sid は各々 `sid-invalid`（`&&` を `||` に
+    /// すると片側だけで通る）。不在 / 読めない / 空も別の variant で断る。
+    #[test]
+    fn mutant_in_seat_consume_sid_of_rejects_each_unsafe_side_separately() {
+        let root = scratch("sid-of");
+        assert_eq!(sid_of(&seat_with_sid(&root.join("ok"), "abc-1.2_X")), Ok("abc-1.2_X".to_owned()));
+        assert_eq!(sid_of(&seat_with_sid(&root.join("dot"), ".abc")), Err(ConsumeError::SidInvalid), "先頭の `.`");
+        assert_eq!(sid_of(&seat_with_sid(&root.join("slash"), "a/b")), Err(ConsumeError::SidInvalid), "使えない字");
+        assert_eq!(sid_of(&seat_with_sid(&root.join("empty"), " ")), Err(ConsumeError::SidEmpty));
+        assert_eq!(sid_of(&root.join("absent")), Err(ConsumeError::SidMissing), "打刻 file が無い");
+        let unreadable = root.join("unreadable");
+        let _ = std::fs::create_dir_all(state::path(&unreadable));
+        assert_eq!(sid_of(&unreadable), Err(ConsumeError::SidUnreadable), "打刻 file が dir（不在ではない）");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // flip-check: retroactive s2-07l.223
+    /// `move_same` は move の実体（元は消え・移し先に同じ byte が在る）で、移し先が既在なら `consumed-exists` で
+    /// 元を残す（`Unwritable` へ潰さない）。
+    #[test]
+    fn mutant_in_seat_consume_move_same_moves_and_refuses_existing_dest() {
+        let root = scratch("move-same");
+        let (source, dest) = (root.join("working-memory.s1.md"), root.join("working-memory.s1.consumed.md"));
+        let _ = std::fs::write(&source, b"---\nseat: wm:1\n---\nbody\n");
+        assert_eq!(move_same(&source, &dest), Ok(()));
+        assert!(!source.exists(), "元は消える");
+        assert_eq!(std::fs::read(&dest).ok(), Some(b"---\nseat: wm:1\n---\nbody\n".to_vec()), "移し先は同じ byte");
+        let _ = std::fs::write(&source, b"again\n");
+        assert_eq!(move_same(&source, &dest), Err(ConsumeError::ConsumedExists), "既在は上書きしない");
+        assert_eq!(std::fs::read(&source).ok(), Some(b"again\n".to_vec()), "断った周は元を残す");
+        assert_eq!(std::fs::read(&dest).ok(), Some(b"---\nseat: wm:1\n---\nbody\n".to_vec()), "移し先も変えない");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // flip-check: retroactive s2-07l.223
+    /// `move_with_origin` は `consumed-from:` を閉じ区切りの直前に 1 行足した中身を移し先に書いて元を消し、
+    /// 移し先が既在なら `consumed-exists`、閉じ区切りが無ければ `frontmatter-unclosed`——どちらも元を残す。
+    #[test]
+    fn mutant_in_seat_consume_move_with_origin_adds_one_line_and_refuses_existing_dest() {
+        let root = scratch("move-origin");
+        let (source, dest) = (root.join("working-memory.old.md"), root.join("working-memory.new.consumed.md"));
+        let _ = std::fs::write(&source, b"---\nseat: wm:1\n---\nbody\n");
+        assert_eq!(move_with_origin(&source, &dest, "old"), Ok(()));
+        assert!(!source.exists(), "元は消える");
+        assert_eq!(
+            std::fs::read(&dest).ok(),
+            Some(b"---\nseat: wm:1\nconsumed-from: old\n---\nbody\n".to_vec()),
+            "足すのは 1 行だけ"
+        );
+        let _ = std::fs::write(&source, b"---\nseat: wm:1\n---\nlater\n");
+        assert_eq!(move_with_origin(&source, &dest, "old"), Err(ConsumeError::ConsumedExists), "既在は上書きしない");
+        assert!(source.exists(), "断った周は元を残す");
+        let unclosed = root.join("working-memory.open.md");
+        let _ = std::fs::write(&unclosed, b"---\nseat: wm:1\n");
+        assert_eq!(
+            move_with_origin(&unclosed, &root.join("working-memory.x.consumed.md"), "open"),
+            Err(ConsumeError::FrontmatterUnclosed)
+        );
+        assert!(unclosed.exists() && !root.join("working-memory.x.consumed.md").exists(), "1 file も動かさない");
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

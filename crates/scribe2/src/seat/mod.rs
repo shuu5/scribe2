@@ -377,9 +377,23 @@ pub fn int_rule(id: &str) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::inject::InputGate;
-    use super::{shell_input_empty, SHELL_PROMPT_TAILS};
+    use super::{host_slots_dir, shell_input_empty, Provenance, StateDir, SHELL_PROMPT_TAILS};
     use proptest::prelude::*;
     use proptest::test_runner::Config;
+    use std::path::{Path, PathBuf};
+
+    // flip-check: retroactive s2-07l.223
+    /// `StateDir::slots_dir` は Default（空 path）でなく、置き場の**親**の下の固定の相対 path
+    /// （`<親>/<NAME>-host/slots`）＝ [`host_slots_dir`] と 1 面。
+    #[test]
+    fn mutant_in_seat_slots_dir_is_under_the_state_root_not_default() {
+        let state = StateDir { path: PathBuf::from("/srv/state/project"), source: Provenance::Flag };
+        let expected = Path::new("/srv/state").join(format!("{}-host", crate::name::NAME)).join("slots");
+        assert_eq!(state.slots_dir(), expected);
+        assert_eq!(state.slots_dir(), host_slots_dir(&state.path), "1 面");
+        assert_ne!(state.slots_dir(), PathBuf::default(), "空 path ではない");
+        assert!(state.slots_dir().strip_prefix("/srv/state").is_ok(), "置き場の親の下");
+    }
 
     /// 末尾 4 種の各々は prompt の直後に字が無い周だけ通り、打ちかけは `Busy`・prompt 末尾で終わらない行は
     /// `UnknownInput`（`s2-07l.218`）。列の字面と宣言順も pin する。

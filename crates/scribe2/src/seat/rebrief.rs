@@ -798,8 +798,15 @@ fn finish(child: &mut Child, deadline: Option<Instant>) -> Option<ExitStatus> {
 
 #[cfg(test)]
 mod tests {
-    use super::{epoch_of_ts, issues_of, ledger_ids, render_unavailable, triage, Dep, Issue, Marker, RebriefError, Thresholds, ALL};
+    use super::{
+        adopt, anchor_of, epoch_of_ts, finish, issues_of, ledger_ids, orphan_lines, render_unavailable, sid_of, triage, Dep, Issue,
+        Marker, RebriefError, Thresholds, ALL,
+    };
     use crate::order::is_declaration_order;
+    use crate::seat::state;
+    use std::path::{Path, PathBuf};
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
     use proptest::prelude::*;
     use proptest::test_runner::Config;
 
@@ -990,5 +997,131 @@ mod tests {
         assert_eq!(issues_of(r#"{"id":"s2-1"}"#), None, "配列でない");
         assert_eq!(issues_of("not json"), None, "JSON 不能");
         assert_eq!(render_unavailable(RebriefError::LedgerUnreadable), "seat: rebrief unavailable reason=ledger-unreadable");
+    }
+
+    /// 歯ごとの空の tmp dir（in-file の歯の置き場・env を読まないのは器の本体の規律〔C2.2〕）。
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("seat-rebrief-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::create_dir_all(&dir);
+        dir
+    }
+
+    /// 打刻 file に sid の列を書いた席 dir（最終行が現在・末尾の空行は読み飛ばされる）。
+    fn seat_with_sids(root: &Path, sids: &[&str]) -> PathBuf {
+        let seat = root.join("seat");
+        let _ = std::fs::create_dir_all(&seat);
+        let lines: Vec<String> = sids
+            .iter()
+            .map(|sid| state::Stamp::now(state::Event::SessionStart, sid).to_line())
+            .collect();
+        let _ = std::fs::write(state::path(&seat), format!("{}\n\n", lines.join("\n")));
+        seat
+    }
+
+    // flip-check: retroactive s2-07l.223
+    /// `sid_of` は**最終行**の sid（桁が 1 つ足りない後の打刻が現在＝前の行を読まない）で、不在 / 読めない / 空を
+    /// 別の variant で断る（読めない周を `sid-missing` に潰さない）。
+    #[test]
+    fn mutant_in_seat_rebrief_sid_of_reads_the_last_stamp_and_separates_missing_from_unreadable() {
+        let root = scratch("sid-of");
+        assert_eq!(sid_of(&seat_with_sids(&root.join("two"), &["abcdef", "abcde"])), Ok("abcde".to_owned()));
+        assert_eq!(sid_of(&seat_with_sids(&root.join("empty"), &[" "])), Err(RebriefError::SidEmpty));
+        assert_eq!(sid_of(&root.join("absent")), Err(RebriefError::SidMissing), "打刻 file が無い");
+        let unreadable = root.join("unreadable");
+        let _ = std::fs::create_dir_all(state::path(&unreadable));
+        assert_eq!(sid_of(&unreadable), Err(RebriefError::SidUnreadable), "打刻 file が dir（不在ではない）");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // flip-check: retroactive s2-07l.223
+    /// `anchor_of` は `.beads` から prefix を解けた周は `--prefix` を使わず、解けない周だけ `--prefix` へ落ちる
+    /// （区切りの無い `--prefix` の字面もそのまま）。dir でない anchor は `anchor-missing`。
+    #[test]
+    fn mutant_in_seat_rebrief_anchor_of_prefers_ledger_prefix_over_the_flag() {
+        let root = scratch("anchor-of");
+        let with_ledger = root.join("with");
+        let _ = std::fs::create_dir_all(with_ledger.join(".beads"));
+        let _ = std::fs::write(with_ledger.join(".beads").join("config.yaml"), "issue-prefix: s2\n");
+        let bare = root.join("bare");
+        let _ = std::fs::create_dir_all(&bare);
+        let prefixes = |anchor: Result<super::Anchor, RebriefError>| anchor.map(|anchor| anchor.prefixes().to_vec());
+        assert_eq!(prefixes(anchor_of(&with_ledger, Some("zz"))), Ok(vec!["s2".to_owned()]), "台帳の prefix が勝つ");
+        assert_eq!(prefixes(anchor_of(&with_ledger, None)), Ok(vec!["s2".to_owned()]));
+        assert_eq!(prefixes(anchor_of(&bare, Some("zz"))), Ok(vec!["zz".to_owned()]), "解けない周だけ flag");
+        assert_eq!(prefixes(anchor_of(&bare, None)), Ok(Vec::new()), "どちらも無ければ空");
+        assert_eq!(prefixes(anchor_of(&root.join("absent"), Some("zz"))), Err(RebriefError::AnchorMissing));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // flip-check: retroactive s2-07l.223
+    /// `adopt` の件数境界: 候補 0 は `missing`・1 は sid が一致すれば `found` / 違えば `candidate`・2 は
+    /// `ambiguous n=2`（選ばない）・読めない 1 件は `unreadable`。中身を返すのは読めた 1 件の周だけ。
+    #[test]
+    fn mutant_in_seat_rebrief_adopt_distinguishes_found_candidate_missing_ambiguous() {
+        let root = scratch("adopt");
+        let _ = std::fs::write(root.join("working-memory.s1.md"), "---\nseat: wm:1\n---\n");
+        let _ = std::fs::write(root.join("working-memory.s0.md"), "---\nseat: wm:1\n---\n");
+        let _ = std::fs::write(root.join("working-memory.bad.md"), "no frontmatter\n");
+        let wm = |own: &[&str]| {
+            let own: Vec<String> = own.iter().map(|name| (*name).to_owned()).collect();
+            let mut lines = Vec::new();
+            let doc = adopt(&root, &own, "s1", &mut lines);
+            (lines, doc.is_some())
+        };
+        assert_eq!(wm(&[]), (vec![(Marker::Wm, "missing".to_owned())], false));
+        assert_eq!(wm(&["working-memory.s1.md"]), (vec![(Marker::Wm, "found file=working-memory.s1.md".to_owned())], true));
+        assert_eq!(
+            wm(&["working-memory.s0.md"]),
+            (vec![(Marker::Wm, "candidate file=working-memory.s0.md sid=s0".to_owned())], true)
+        );
+        assert_eq!(
+            wm(&["working-memory.s0.md", "working-memory.s1.md"]),
+            (vec![(Marker::Wm, "ambiguous n=2".to_owned())], false)
+        );
+        assert_eq!(wm(&["working-memory.bad.md"]), (vec![(Marker::Wm, "unreadable file=working-memory.bad.md".to_owned())], false));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // flip-check: retroactive s2-07l.223
+    /// 別席の未 consumed は 0 なら `[ORPHAN-NONE]` だけ・1 以上なら 1 件 1 行で `-NONE` を出さない。
+    #[test]
+    fn mutant_in_seat_rebrief_orphan_lines_emit_none_or_one_line_each() {
+        let mut lines = Vec::new();
+        orphan_lines(&[], &mut lines);
+        assert_eq!(lines, [(Marker::OrphanNone, String::new())]);
+        let mut lines = Vec::new();
+        orphan_lines(&[("working-memory.x.md".to_owned(), "wm:2".to_owned())], &mut lines);
+        assert_eq!(lines, [(Marker::OrphanWm, "file=working-memory.x.md seat=wm:2".to_owned())]);
+    }
+
+    /// 子 process を起こす（`sleep <秒>`・coreutils）。
+    fn sleeping(seconds: &str) -> Option<std::process::Child> {
+        Command::new("sleep").arg(seconds).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().ok()
+    }
+
+    // flip-check: retroactive s2-07l.223
+    /// `finish` は上限の**前**に終わった子の status を返し（上限なし・十分先の上限のどちらも待つ）、上限を過ぎても
+    /// 終わらない子は `None`（待ち続けない・上限を `Instant` の等号や逆向きで読まない）。
+    #[test]
+    fn mutant_in_seat_rebrief_finish_waits_only_until_the_deadline() {
+        let Some(mut quick) = sleeping("0.2") else {
+            panic!("sleep を起こせない");
+        };
+        assert!(finish(&mut quick, None).is_some_and(|status| status.success()), "上限なしは終わるまで待つ");
+        let Some(mut quick) = sleeping("0.2") else {
+            panic!("sleep を起こせない");
+        };
+        let far = Instant::now().checked_add(Duration::from_secs(30));
+        assert!(finish(&mut quick, far).is_some_and(|status| status.success()), "先の上限は終わるまで待つ");
+        let Some(mut slow) = sleeping("3") else {
+            panic!("sleep を起こせない");
+        };
+        let near = Instant::now().checked_add(Duration::from_millis(100));
+        let started = Instant::now();
+        assert_eq!(finish(&mut slow, near), None, "上限を過ぎたら子の終了を待たない");
+        assert!(started.elapsed() < Duration::from_secs(2), "上限の後に待ち続けない");
+        let _ = slow.kill();
+        let _ = slow.wait();
     }
 }
