@@ -801,10 +801,14 @@ fn seat_inject_sanitizes_dot_targets() {
     fs::remove_dir_all(&dir).ok();
 }
 
-/// `seat` の使い方を snapshot 1 本に固定する（C12.5）。
+/// `seat` の使い方と rebrief の DATA の 3 形（found / candidate / missing の marker の並び）を
+/// snapshot 1 本に固定する（C12.5）。
 #[test]
 fn seat_external_form() {
-    let form = stderr_of(&run_seat(&[]));
+    let mut form = stderr_of(&run_seat(&[]));
+    for out in rebrief_forms() {
+        form.push_str(&stdout_of(&out));
+    }
     insta::assert_snapshot!(form);
 }
 
@@ -4785,4 +4789,424 @@ fn seat_wm_consume_is_listed_in_usage_and_refuses_missing_flags() {
     let out = run_seat(&["consume", "--target", WM_TARGET]);
     assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "--wm-dir 欠けは rc 1");
     assert_eq!(stderr_of(&out), usage, "使い方で断る");
+}
+
+// ─────────────────── 作業記憶の復元（rebrief・設計 working-memory.md §5.2 / §9 契約 (b)） ───────────────────
+
+/// DATA を出せない周の rc（契約の字面から持つ）。
+const RC_DATA_BROKEN: i32 = 2;
+
+/// 偽の台帳（open 2・in_progress 1・blocked 1・`updated_at` の無い 1 件を含む）。
+const BD_JSON: &str = concat!(
+    "[{\"id\":\"s2-07l.61\",\"title\":\"裁定の記録\",\"status\":\"in_progress\",\"updated_at\":\"2026-09-12T02:01:00Z\",\"priority\":1},\n",
+    " {\"id\":\"s2-1\",\"title\":\"a\",\"status\":\"open\",\"updated_at\":\"2026-09-11T00:00:00Z\"},\n",
+    " {\"id\":\"s2-2\",\"title\":\"b\",\"status\":\"blocked\",\"updated_at\":\"2026-09-11T00:00:00Z\"},\n",
+    " {\"id\":\"s2-3\",\"title\":\"c\",\"status\":\"open\"}]\n",
+);
+
+/// 復元の歯の節 1（従属行・連続空白・全角空白・閉じた状態の行を含む＝逐語でなければ字面が変わる）。
+const REBRIEF_USER: &str = concat!(
+    "- [2026-09-12 10:00] 「A を  そのまま、直せ。」 → 状態: 未着手\n",
+    "  補足の従属行（逐語・全角　空白）\n",
+    "- [2026-09-12 10:05] 「B は済んだ」 → 状態: 完了 s2-07l.1\n",
+);
+
+/// 復元の歯の節 3（Resolved / Unresolved / Unchecked / none × 2・`[hard候補]` は pointer 有りと無しの 2 行）。
+const REBRIEF_DIRECTIVES: &str = concat!(
+    "- [hard候補] [P0] since=2026-09-01 prose は規則でない → SSOT: 憲法 N2\n",
+    "- [auto] [P1] since=2026-09-01 無い条 → SSOT: 憲法 C99\n",
+    "- [confirm] [P1] since=2026-09-01 台帳の続き → SSOT: s2-07l.61\n",
+    "- [hard候補] [P1] since=2026-09-01 矢印の無い命令 s2-07l.140 を見る\n",
+    "- [auto] [P2] since=2026-09-01 裁定だけ → SSOT: user 裁定 2026-09-12T02:01Z\n",
+);
+
+/// found の周の DATA 全体（契約の字面から組む）。
+const REBRIEF_FOUND: &str = concat!(
+    "[SID] sid-now\n",
+    "[WM] found file=working-memory.sid-now.md\n",
+    "[WM-PLAN] - 次は rebrief の land\n",
+    "[WM-USER-DIRECTIVE] - [2026-09-12 10:00] 「A を  そのまま、直せ。」 → 状態: 未着手\n",
+    "[WM-USER-DIRECTIVE]   補足の従属行（逐語・全角　空白）\n",
+    "[WM-USER-DIRECTIVE] - [2026-09-12 10:05] 「B は済んだ」 → 状態: 完了 s2-07l.1\n",
+    "[WM-DIRECTIVE] kind=Constitution resolution=Resolved line=- [hard候補] [P0] since=2026-09-01 prose は規則でない → SSOT: 憲法 N2\n",
+    "[WM-DIRECTIVE] kind=Constitution resolution=Unresolved line=- [auto] [P1] since=2026-09-01 無い条 → SSOT: 憲法 C99\n",
+    "[WM-DIRECTIVE] kind=Ledger resolution=Unchecked line=- [confirm] [P1] since=2026-09-01 台帳の続き → SSOT: s2-07l.61\n",
+    "[WM-DIRECTIVE] kind=none resolution=none line=- [hard候補] [P1] since=2026-09-01 矢印の無い命令 s2-07l.140 を見る\n",
+    "[WM-DIRECTIVE] kind=none resolution=none line=- [auto] [P2] since=2026-09-01 裁定だけ → SSOT: user 裁定 2026-09-12T02:01Z\n",
+    "[WM-DIRECTIVE-COUNT] total=5 provisional=2 unresolved=1\n",
+    "[ORPHAN-WM] file=working-memory.sid-other.md seat=other:1\n",
+    "[BD-COUNT] open=2 in_progress=1 blocked=1\n",
+    "[BD-INPROGRESS] s2-07l.61 updated=2026-09-12T02:01:00Z 裁定の記録\n",
+    "[DIFF] s2-07l.61 bd=in_progress\n",
+    "[DIFF] s2-07l.140 bd=unknown\n",
+    "[TICKET-CANDIDATE] - [hard候補] [P1] since=2026-09-01 矢印の無い命令 s2-07l.140 を見る\n",
+);
+
+/// 断りの 1 行（契約の字面から組む）。
+fn rebrief_refusal(reason: &str) -> String {
+    format!("seat: rebrief unavailable reason={reason}\n")
+}
+
+/// 偽の bd を 1 本作る（headless の fake_claude と同じ型）。引数を `<name>.args` へ写し、`body` を stdout へ
+/// 出して `rc` で終わる。`sleep_s` > 0 なら出力の前に `exec sleep` で眠る（殺せば 1 process で終わる）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn fake_bd(dir: &Path, name: &str, body: &str, rc: u8, sleep_s: u64) -> String {
+    let d = dir.display().to_string();
+    fs::write(dir.join(format!("{name}.json")), body).expect("body を書ける");
+    let sleep = if sleep_s > 0 { format!("exec sleep {sleep_s}\n") } else { String::new() };
+    let script = format!(
+        "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"{d}/{name}.args\"\n{sleep}cat \"{d}/{name}.json\"\nexit {rc}\n"
+    );
+    let path = dir.join(name);
+    fs::write(&path, script).expect("fake を書ける");
+    let mut perm = fs::metadata(&path).expect("fake の権限を読める").permissions();
+    perm.set_mode(0o755);
+    fs::set_permissions(&path, perm).expect("fake を実行可能にできる");
+    path.display().to_string()
+}
+
+/// 台帳の待ち上限だけを持つ rules の fixture を書き、`--rules` に渡す path を返す。
+fn rebrief_rules(place: &WmPlace, secs: u64) -> String {
+    fixture(
+        &place.dir,
+        "rebrief-rules.toml",
+        &format!(
+            "schema = 1\n\n[[rule]]\nid = \"seat.ledger_timeout_s\"\nkind = \"LedgerTimeoutS\"\nvalue = {secs}\n\
+             enabled = true\nruling = \"user 2026-09-12T02:01Z\"\nruled_at = \"2026-09-12\"\n"
+        ),
+    )
+}
+
+/// `seat rebrief` を 1 回撃つ（`extra` は追加の flag）。
+fn wm_rebrief(place: &WmPlace, bd: &str, extra: &[&str]) -> Output {
+    let (wm, state, anchor) = (
+        place.wm.display().to_string(),
+        place.state.display().to_string(),
+        place.anchor.display().to_string(),
+    );
+    let mut args = vec![
+        "rebrief", "--target", WM_TARGET, "--wm-dir", &wm, "--state-dir", &state, "--anchor", &anchor, "--bd", bd,
+    ];
+    args.extend_from_slice(extra);
+    run_seat(&args)
+}
+
+/// 3 節を持つ退避物の全文。
+fn rebrief_body(seat: &str) -> String {
+    format!(
+        "---\nschema: 1\nseat: {seat}\ntrigger: manual\n---\n\n{WM_HEAD_USER}\n{REBRIEF_USER}\n{WM_HEAD_PLAN}\n- 次は rebrief の land\n\n{WM_HEAD_DIRECTIVES}\n{REBRIEF_DIRECTIVES}"
+    )
+}
+
+/// `schema` 無し・節 2 だけの退避物（前の版の skill が書いた形）。
+fn rebrief_legacy_body() -> String {
+    format!("---\nseat: {WM_TARGET}\n---\n\n{WM_HEAD_PLAN}\n- 続き\n")
+}
+
+/// found の場所（自席 1・別席 1・消費済み 1〔数えない〕・偽 bd）。
+fn rebrief_found() -> (WmPlace, String) {
+    let place = wm_place();
+    wm_stamp(&place, &["sid-old", "sid-now"]);
+    wm_raw(&place, "working-memory.sid-now.md", &rebrief_body(WM_TARGET));
+    wm_raw(&place, "working-memory.sid-other.md", &wm_body("other:1"));
+    wm_raw(&place, "working-memory.sid-0.consumed.md", &rebrief_body(WM_TARGET));
+    let bd = fake_bd(&place.dir, "bd", BD_JSON, 0, 0);
+    (place, bd)
+}
+
+/// 外形 snapshot の 3 形（found / candidate / missing）を撃った出力。
+fn rebrief_forms() -> Vec<Output> {
+    let (found, bd) = rebrief_found();
+    let mut outs = vec![wm_rebrief(&found, &bd, &[])];
+    fs::remove_dir_all(&found.dir).ok();
+    for own in [Some("working-memory.sid-prev.md"), None] {
+        let place = wm_place();
+        wm_stamp(&place, &["sid-new"]);
+        if let Some(name) = own {
+            wm_raw(&place, name, &rebrief_legacy_body());
+        }
+        let empty = fake_bd(&place.dir, "bd", "[]", 0, 0);
+        outs.push(wm_rebrief(&place, &empty, &[]));
+        fs::remove_dir_all(&place.dir).ok();
+    }
+    outs
+}
+
+/// wm dir と state dir の全 entry の (path, size, mtime)（dir の mtime も含む＝lock の作成を捕まえる）。
+fn tree_stat(root: &Path) -> Vec<(PathBuf, u64, SystemTime)> {
+    let mut found = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in fs::read_dir(&dir).into_iter().flatten().flatten() {
+            let path = entry.path();
+            let Ok(meta) = fs::symlink_metadata(&path) else {
+                continue;
+            };
+            if meta.is_dir() {
+                stack.push(path.clone());
+            }
+            found.push((path, meta.len(), meta.modified().unwrap_or(SystemTime::UNIX_EPOCH)));
+        }
+    }
+    found.sort();
+    found
+}
+
+/// (1) found の周は全段を marker の宣言順に出す（stdout 全体を契約の字面で照合）・bd は `--readonly` で撃つ。
+#[test]
+fn seat_wm_rebrief_lists_found_wm_with_every_stage_in_marker_order() {
+    let (place, bd) = rebrief_found();
+    let out = wm_rebrief(&place, &bd, &[]);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert!(stderr_of(&out).is_empty(), "stderr は空: {}", stderr_of(&out));
+    assert_eq!(stdout_of(&out), REBRIEF_FOUND, "DATA 全体");
+    assert_eq!(
+        fs::read_to_string(place.dir.join("bd.args")).unwrap_or_default(),
+        "--readonly\nlist\n--limit\n0\n--json\n",
+        "台帳は --readonly の子 process で読む"
+    );
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (2) sid 違いの自席退避物は candidate・他席のは `[ORPHAN-WM]`（file は不変）・0 件は missing・2 件は ambiguous。
+#[test]
+fn seat_wm_rebrief_marks_other_sid_as_candidate_and_other_seat_as_orphan() {
+    let place = wm_place();
+    wm_stamp(&place, &["sid-new"]);
+    let bd = fake_bd(&place.dir, "bd", "[]", 0, 0);
+    let own = wm_raw(&place, "working-memory.sid-prev.md", &rebrief_legacy_body());
+    let other = wm_raw(&place, "working-memory.sid-x.md", &wm_body("other:1"));
+    let out = wm_rebrief(&place, &bd, &[]);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    let text = stdout_of(&out);
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.get(1).copied(), Some("[WM] candidate file=working-memory.sid-prev.md sid=sid-prev"), "{text}");
+    assert!(lines.contains(&"[ORPHAN-WM] file=working-memory.sid-x.md seat=other:1"), "{text}");
+    assert!(!lines.contains(&"[ORPHAN-NONE]"), "orphan が在る周に空印を出さない: {text}");
+    assert_eq!(fs::read_to_string(&other).unwrap_or_default(), wm_body("other:1"), "他席は不変");
+    assert!(own.exists(), "自席も消費しない");
+
+    let second = wm_raw(&place, "working-memory.sid-new.md", &rebrief_legacy_body());
+    let ambiguous = stdout_of(&wm_rebrief(&place, &bd, &[]));
+    assert!(ambiguous.contains("\n[WM] ambiguous n=2\n") && !ambiguous.contains("[WM-PLAN"), "採用しない: {ambiguous}");
+
+    fs::remove_file(&own).ok();
+    fs::remove_file(&second).ok();
+    let missing = wm_rebrief(&place, &bd, &[]);
+    assert_eq!(rc_of(&missing), i32::from(RC_OK), "missing は正常: {}", stderr_of(&missing));
+    assert_eq!(
+        stdout_of(&missing),
+        concat!(
+            "[SID] sid-new\n",
+            "[WM] missing\n",
+            "[ORPHAN-WM] file=working-memory.sid-x.md seat=other:1\n",
+            "[BD-COUNT] open=0 in_progress=0 blocked=0\n",
+            "[BD-INPROGRESS-NONE]\n",
+        )
+    );
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (3) 節 3 の 5 行が kind・resolution 付きで列挙され、COUNT が列挙から数えた値と一致する。
+#[test]
+fn seat_wm_rebrief_directive_count_matches_the_listing() {
+    let (place, bd) = rebrief_found();
+    let text = stdout_of(&wm_rebrief(&place, &bd, &[]));
+    let listed: Vec<&str> = text.lines().filter(|line| line.starts_with("[WM-DIRECTIVE] ")).collect();
+    let pairs: Vec<(&str, &str)> = listed
+        .iter()
+        .filter_map(|line| {
+            let rest = line.strip_prefix("[WM-DIRECTIVE] kind=")?;
+            let (kind, rest) = rest.split_once(" resolution=")?;
+            Some((kind, rest.split_once(" line=")?.0))
+        })
+        .collect();
+    assert_eq!(
+        pairs,
+        [("Constitution", "Resolved"), ("Constitution", "Unresolved"), ("Ledger", "Unchecked"), ("none", "none"), ("none", "none")],
+        "{text}"
+    );
+    let provisional = pairs.iter().filter(|(kind, _)| *kind == "none").count();
+    let unresolved = pairs.iter().filter(|(_, resolution)| *resolution == "Unresolved").count();
+    let want = format!("[WM-DIRECTIVE-COUNT] total={} provisional={provisional} unresolved={unresolved}", listed.len());
+    assert_eq!(want, "[WM-DIRECTIVE-COUNT] total=5 provisional=2 unresolved=1", "母集団 5 行");
+    assert_eq!(text.lines().filter(|line| line.starts_with("[WM-DIRECTIVE-COUNT]")).collect::<Vec<_>>(), [want.as_str()], "{text}");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (4) 節 1 の各行は 1 byte も変えずに出る（従属行の字下げ・連続空白・全角空白・閉じた状態の行も）。
+#[test]
+fn seat_wm_rebrief_user_directives_are_verbatim() {
+    let (place, bd) = rebrief_found();
+    let text = stdout_of(&wm_rebrief(&place, &bd, &[]));
+    let listed: Vec<&str> = text.lines().filter_map(|line| line.strip_prefix("[WM-USER-DIRECTIVE] ")).collect();
+    let source: Vec<&str> = REBRIEF_USER.lines().collect();
+    assert_eq!(source.len(), 3, "母集団 3 行");
+    assert_eq!(listed, source, "逐語: {text}");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (5) 偽 bd の fixture で BD-COUNT / INPROGRESS / DIFF（言及 id の status・台帳に無い id は unknown）。
+/// 節 1 の id は DIFF に載らない・空の台帳は正当な 0。
+#[test]
+fn seat_wm_rebrief_reports_ledger_counts_and_diff_of_mentioned_ids() {
+    let (place, bd) = rebrief_found();
+    let text = stdout_of(&wm_rebrief(&place, &bd, &[]));
+    let pick = |head: &str| -> Vec<String> {
+        text.lines().filter(|line| line.starts_with(head)).map(str::to_owned).collect()
+    };
+    assert_eq!(pick("[BD-COUNT]"), ["[BD-COUNT] open=2 in_progress=1 blocked=1"]);
+    assert_eq!(pick("[BD-INPROGRESS"), ["[BD-INPROGRESS] s2-07l.61 updated=2026-09-12T02:01:00Z 裁定の記録"]);
+    assert_eq!(pick("[DIFF"), ["[DIFF] s2-07l.61 bd=in_progress", "[DIFF] s2-07l.140 bd=unknown"]);
+    assert!(!text.contains("s2-07l.1 bd="), "節 1 の id は比べない: {text}");
+
+    let empty = fake_bd(&place.dir, "bd-empty", "[]", 0, 0);
+    let zero = stdout_of(&wm_rebrief(&place, &empty, &[]));
+    assert!(zero.contains("\n[BD-COUNT] open=0 in_progress=0 blocked=0\n[BD-INPROGRESS-NONE]\n"), "{zero}");
+    assert!(zero.contains("\n[DIFF] s2-07l.61 bd=unknown\n[DIFF] s2-07l.140 bd=unknown\n"), "{zero}");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (6) 偽 bd が rc 1・JSON ゴミ・timeout（stub が眠る・rules の fixture で 1 s）・不在のそれぞれで DATA 0 行 + rc 2。
+#[test]
+fn seat_wm_rebrief_emits_no_data_when_ledger_is_unreadable() {
+    let (place, _) = rebrief_found();
+    let rules = rebrief_rules(&place, 1);
+    let cases = [
+        ("rc 1", fake_bd(&place.dir, "bd-rc1", BD_JSON, 1, 0)),
+        ("JSON ゴミ", fake_bd(&place.dir, "bd-junk", "[{\"id\": \"s2-1\", ", 0, 0)),
+        ("形違い", fake_bd(&place.dir, "bd-shape", "{\"id\":\"s2-1\",\"status\":\"open\"}", 0, 0)),
+        ("timeout", fake_bd(&place.dir, "bd-slow", BD_JSON, 0, 5)),
+        ("不在", place.dir.join("no-such-bd").display().to_string()),
+    ];
+    for (label, bd) in cases {
+        let started = Instant::now();
+        let out = wm_rebrief(&place, &bd, &["--rules", &rules]);
+        assert_eq!(rc_of(&out), RC_DATA_BROKEN, "{label}: stdout={}", stdout_of(&out));
+        assert!(stdout_of(&out).is_empty(), "{label}: DATA は 0 行: {}", stdout_of(&out));
+        assert_eq!(stderr_of(&out), rebrief_refusal("ledger-unreadable"), "{label}: 理由");
+        assert!(started.elapsed() < Duration::from_secs(4), "{label}: 待ち上限で打ち切る: {:?}", started.elapsed());
+    }
+    let fast = fake_bd(&place.dir, "bd-fast", BD_JSON, 0, 0);
+    assert_eq!(rc_of(&wm_rebrief(&place, &fast, &["--rules", &rules])), i32::from(RC_OK), "同じ rules で読める bd は通る");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (7) wm dir が読めない（不在・file）周は rc 2 `wm-dir-unreadable`・anchor が dir でない周は `anchor-missing`。
+#[test]
+fn seat_wm_rebrief_refuses_when_wm_dir_or_anchor_is_unreadable() {
+    let (place, bd) = rebrief_found();
+    let (state, anchor) = (place.state.display().to_string(), place.anchor.display().to_string());
+    let absent = place.dir.join("no-such-wm").display().to_string();
+    let file = fixture(&place.dir, "not-a-dir", "x\n");
+    for wm in [absent, file] {
+        let out = run_seat(&[
+            "rebrief", "--target", WM_TARGET, "--wm-dir", &wm, "--state-dir", &state, "--anchor", &anchor, "--bd", &bd,
+        ]);
+        assert_eq!(rc_of(&out), RC_DATA_BROKEN, "{wm}: stdout={}", stdout_of(&out));
+        assert!(stdout_of(&out).is_empty(), "DATA は 0 行");
+        assert_eq!(stderr_of(&out), rebrief_refusal("wm-dir-unreadable"), "{wm}");
+    }
+    let no_anchor = place.dir.join("no-such-anchor").display().to_string();
+    let wm = place.wm.display().to_string();
+    let out = run_seat(&[
+        "rebrief", "--target", WM_TARGET, "--wm-dir", &wm, "--state-dir", &state, "--anchor", &no_anchor, "--bd", &bd,
+    ]);
+    assert_eq!((rc_of(&out), stderr_of(&out)), (RC_DATA_BROKEN, rebrief_refusal("anchor-missing")));
+    assert!(stdout_of(&out).is_empty(), "DATA は 0 行");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (8) read-only: 実行前後で wm dir・state dir・anchor の全 entry の size / mtime が同一・entry も増えない（lock 不在）。
+#[test]
+fn seat_wm_rebrief_changes_nothing_on_disk() {
+    let (place, bd) = rebrief_found();
+    for root in [&place.wm, &place.state, &place.anchor] {
+        for (path, _, _) in tree_stat(root) {
+            if path.is_file() {
+                backdate(&path, 600);
+            }
+        }
+    }
+    let before: Vec<_> = [&place.wm, &place.state, &place.anchor].iter().map(|root| tree_stat(root)).collect();
+    assert!(before.iter().map(Vec::len).sum::<usize>() >= 8, "母集団: {before:?}");
+    for _ in 0..2 {
+        let out = wm_rebrief(&place, &bd, &[]);
+        assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    }
+    let after: Vec<_> = [&place.wm, &place.state, &place.anchor].iter().map(|root| tree_stat(root)).collect();
+    assert_eq!(after, before, "何も書かない・何も作らない");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (9) `[TICKET-CANDIDATE]` は `[hard候補]` かつ pointer なしの行だけ（pointer 有りの `[hard候補]`・pointer なしの `[auto]` は載らない）。
+#[test]
+fn seat_wm_rebrief_ticket_candidates_are_hard_candidates_without_pointer() {
+    let (place, bd) = rebrief_found();
+    let text = stdout_of(&wm_rebrief(&place, &bd, &[]));
+    let candidates: Vec<&str> = text.lines().filter(|line| line.starts_with("[TICKET-CANDIDATE")).collect();
+    assert_eq!(
+        candidates,
+        ["[TICKET-CANDIDATE] - [hard候補] [P1] since=2026-09-01 矢印の無い命令 s2-07l.140 を見る"],
+        "{text}"
+    );
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (11) `schema` 無しの退避物も found として読める・空の節は空印で出す（「なし」に化けさせない）。
+#[test]
+fn seat_wm_rebrief_reads_schemaless_wm_and_marks_empty_sections() {
+    let place = wm_place();
+    wm_stamp(&place, &["sid-l"]);
+    wm_raw(&place, "working-memory.sid-l.md", &rebrief_legacy_body());
+    let bd = fake_bd(&place.dir, "bd", BD_JSON, 0, 0);
+    let out = wm_rebrief(&place, &bd, &[]);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(
+        stdout_of(&out),
+        concat!(
+            "[SID] sid-l\n",
+            "[WM] found file=working-memory.sid-l.md\n",
+            "[WM-PLAN] - 続き\n",
+            "[WM-USER-DIRECTIVE-EMPTY]\n",
+            "[WM-DIRECTIVE-EMPTY]\n",
+            "[WM-DIRECTIVE-COUNT] total=0 provisional=0 unresolved=0\n",
+            "[ORPHAN-NONE]\n",
+            "[BD-COUNT] open=2 in_progress=1 blocked=1\n",
+            "[BD-INPROGRESS] s2-07l.61 updated=2026-09-12T02:01:00Z 裁定の記録\n",
+            "[DIFF-NONE]\n",
+            "[TICKET-CANDIDATE-NONE]\n",
+        )
+    );
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (12) 打刻の sid が空なら rc 2 `sid-empty`・打刻が無ければ `sid-missing`（いずれも DATA 0 行）。
+#[test]
+fn seat_wm_rebrief_refuses_without_a_stamped_sid() {
+    let (place, bd) = rebrief_found();
+    wm_stamp(&place, &["sid-now", ""]);
+    let empty = wm_rebrief(&place, &bd, &[]);
+    assert_eq!(rc_of(&empty), RC_DATA_BROKEN, "stdout={}", stdout_of(&empty));
+    assert!(stdout_of(&empty).is_empty(), "DATA は 0 行");
+    assert_eq!(stderr_of(&empty), rebrief_refusal("sid-empty"));
+    fs::remove_dir_all(&place.state).ok();
+    let missing = wm_rebrief(&place, &bd, &[]);
+    assert_eq!((rc_of(&missing), stderr_of(&missing)), (RC_DATA_BROKEN, rebrief_refusal("sid-missing")));
+    assert!(stdout_of(&missing).is_empty(), "DATA は 0 行");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// 使い方の外形に rebrief が載る（snapshot と独立に字面で測る）・必須 flag の欠けは rc 1 で使い方を返す。
+#[test]
+fn seat_wm_rebrief_is_listed_in_usage_and_refuses_missing_flags() {
+    let usage = stderr_of(&run_seat(&[]));
+    assert!(usage.contains("|rebrief --target T --wm-dir DIR --anchor DIR [--bd PATH]"), "usage に rebrief: {usage}");
+    let out = run_seat(&["rebrief", "--target", WM_TARGET, "--wm-dir", "/nonexistent"]);
+    assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "--anchor 欠けは rc 1");
+    assert_eq!(stderr_of(&out), usage, "使い方で断る");
+    assert!(stdout_of(&out).is_empty(), "stdout は空");
 }

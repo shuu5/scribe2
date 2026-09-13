@@ -327,6 +327,16 @@ enabled = true
 ruling = "user 2026-09-13T02:50Z"
 ruled_at = "2026-09-13"
 
+# 作業記憶の復元（設計 working-memory.md §5.2・ADR-0018 §2.4）。台帳の子 process を待つ上限。
+
+[[rule]]
+id = "seat.ledger_timeout_s"
+kind = "LedgerTimeoutS"
+value = 60
+enabled = true
+ruling = "user 2026-09-12T02:01Z"
+ruled_at = "2026-09-12"
+
 # 口座の宣言（設計 fleet-usage.md §2・裁定 id 'user 2026-09-12T02:01Z'）。label は**不透明な符丁**で
 # あり、本当の口座の識別子でも host 名でも path でもない（本 repo は PUBLIC・SRS CON2）。credential の
 # 置き場は <state_dir>/accounts/<label>/ で、器はそこを走査せず、この宣言だけを真実として読む（C3）。

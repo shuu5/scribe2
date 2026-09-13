@@ -2,4 +2,38 @@
 source: crates/scribe2/tests/e2e/seat.rs
 expression: form
 ---
-usage: seat <meter --target T [--transcript PATH]|inject --target T (--text S|--file PATH)|heartbeat --target T|tick --target T --wm-dir DIR [--pointer TEXT] [--restore CMD] [--rules PATH]|cycle --target T --wm-dir DIR [--restore CMD] [--rules PATH]|externalize --target T --wm-dir DIR --anchor DIR --plan FILE --directives FILE [--user FILE] [--trigger manual|tick] [--role R] [--rules PATH]|consume --target T --wm-dir DIR> [--tmux-socket PATH] [--capture-file PATH] [--state-dir PATH]
+usage: seat <meter --target T [--transcript PATH]|inject --target T (--text S|--file PATH)|heartbeat --target T|tick --target T --wm-dir DIR [--pointer TEXT] [--restore CMD] [--rules PATH]|cycle --target T --wm-dir DIR [--restore CMD] [--rules PATH]|externalize --target T --wm-dir DIR --anchor DIR --plan FILE --directives FILE [--user FILE] [--trigger manual|tick] [--role R] [--rules PATH]|rebrief --target T --wm-dir DIR --anchor DIR [--bd PATH] [--prefix P] [--rules PATH]|consume --target T --wm-dir DIR> [--tmux-socket PATH] [--capture-file PATH] [--state-dir PATH]
+[SID] sid-now
+[WM] found file=working-memory.sid-now.md
+[WM-PLAN] - 次は rebrief の land
+[WM-USER-DIRECTIVE] - [2026-09-12 10:00] 「A を  そのまま、直せ。」 → 状態: 未着手
+[WM-USER-DIRECTIVE]   補足の従属行（逐語・全角　空白）
+[WM-USER-DIRECTIVE] - [2026-09-12 10:05] 「B は済んだ」 → 状態: 完了 s2-07l.1
+[WM-DIRECTIVE] kind=Constitution resolution=Resolved line=- [hard候補] [P0] since=2026-09-01 prose は規則でない → SSOT: 憲法 N2
+[WM-DIRECTIVE] kind=Constitution resolution=Unresolved line=- [auto] [P1] since=2026-09-01 無い条 → SSOT: 憲法 C99
+[WM-DIRECTIVE] kind=Ledger resolution=Unchecked line=- [confirm] [P1] since=2026-09-01 台帳の続き → SSOT: s2-07l.61
+[WM-DIRECTIVE] kind=none resolution=none line=- [hard候補] [P1] since=2026-09-01 矢印の無い命令 s2-07l.140 を見る
+[WM-DIRECTIVE] kind=none resolution=none line=- [auto] [P2] since=2026-09-01 裁定だけ → SSOT: user 裁定 2026-09-12T02:01Z
+[WM-DIRECTIVE-COUNT] total=5 provisional=2 unresolved=1
+[ORPHAN-WM] file=working-memory.sid-other.md seat=other:1
+[BD-COUNT] open=2 in_progress=1 blocked=1
+[BD-INPROGRESS] s2-07l.61 updated=2026-09-12T02:01:00Z 裁定の記録
+[DIFF] s2-07l.61 bd=in_progress
+[DIFF] s2-07l.140 bd=unknown
+[TICKET-CANDIDATE] - [hard候補] [P1] since=2026-09-01 矢印の無い命令 s2-07l.140 を見る
+[SID] sid-new
+[WM] candidate file=working-memory.sid-prev.md sid=sid-prev
+[WM-PLAN] - 続き
+[WM-USER-DIRECTIVE-EMPTY]
+[WM-DIRECTIVE-EMPTY]
+[WM-DIRECTIVE-COUNT] total=0 provisional=0 unresolved=0
+[ORPHAN-NONE]
+[BD-COUNT] open=0 in_progress=0 blocked=0
+[BD-INPROGRESS-NONE]
+[DIFF-NONE]
+[TICKET-CANDIDATE-NONE]
+[SID] sid-new
+[WM] missing
+[ORPHAN-NONE]
+[BD-COUNT] open=0 in_progress=0 blocked=0
+[BD-INPROGRESS-NONE]

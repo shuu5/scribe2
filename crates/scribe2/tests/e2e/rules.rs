@@ -627,11 +627,35 @@ fn rules_embedded_manifest_declares_land_wait() {
     assert!(row.enabled, "既定で効く");
     assert_eq!(row.ruling, "user 2026-09-13T02:50Z", "裁定 id");
     assert_eq!(row.ruled_at, "2026-09-13", "裁定日");
-    assert_eq!(ALL.last(), Some(&RuleKind::PipeLandWaitS), "宣言順の末尾");
+    assert!(ALL.contains(&RuleKind::PipeLandWaitS), "ALL に在る");
     assert_eq!(RuleKind::parse("PipeLandWaitS"), Some(RuleKind::PipeLandWaitS), "kind を字面から引ける");
     let errors = rejected(&one_row_raw("PipeLandWait", "5400")).expect("未知の kind の fixture が受理された");
     let joined = errors.join("\n");
     assert!(joined.contains("未知である"), "行の kind を綴り違えた manifest は読めない: {joined}");
+}
+
+/// rebrief が台帳を待つ上限の行（`seat.ledger_timeout_s`・裁定 id `user 2026-09-12T02:01Z`・設計
+/// working-memory.md §5.2）。**値は manifest が持ち、設計 doc は写さない**（C1 / C5）。
+#[test]
+fn rules_embedded_manifest_declares_ledger_timeout() {
+    let manifest = match Manifest::embedded() {
+        Ok(found) => found,
+        Err(errors) => {
+            let lines: Vec<String> = errors.iter().map(ToString::to_string).collect();
+            panic!("埋め込み manifest が拒まれた:\n{}", lines.join("\n"))
+        }
+    };
+    let row = manifest.get("seat.ledger_timeout_s").expect("台帳の待ち上限の行が在る");
+    assert_eq!(row.value, RuleValue::Int(60), "user 裁定 2026-09-12T02:01Z の値");
+    assert_eq!(row.kind, RuleKind::LedgerTimeoutS, "kind");
+    assert_eq!(row.kind.shape(), ValueShape::Int, "値の形は Int（秒）");
+    assert!(row.enabled, "既定で効く");
+    assert_eq!(row.ruling, "user 2026-09-12T02:01Z", "裁定 id");
+    assert_eq!(row.ruled_at, "2026-09-12", "裁定日");
+    assert_eq!(ALL.last(), Some(&RuleKind::LedgerTimeoutS), "宣言順の末尾");
+    assert_eq!(RuleKind::parse("LedgerTimeoutS"), Some(RuleKind::LedgerTimeoutS), "kind を字面から引ける");
+    let errors = rejected(&one_row_raw("LedgerTimeout", "60")).expect("未知の kind の fixture が受理された");
+    assert!(errors.join("\n").contains("未知である"), "行の kind を綴り違えた manifest は読めない");
 }
 
 /// gate の費用の 5 行（設計 gate-cost.md §3.1・ADR-0021）。**値は manifest が持ち、ADR も
@@ -683,7 +707,7 @@ fn rules_embedded_manifest_is_valid_and_covers_all_kinds() {
     // **tracked な `rules/manifest.toml` の全行が受理される**（`parse` は 1 件でも違反が
     // 在れば `Err` を返すので、ここに届いた時点で全行が必須 key を持つ）。母集団を額面に
     // 出すのは、行が黙って落ちた周を「全部読めた」と読み違えないためである。
-    assert_eq!(manifest.rows().len(), 39, "埋め込み manifest の行数（母集団）");
+    assert_eq!(manifest.rows().len(), 40, "埋め込み manifest の行数（母集団）");
     for kind in ALL {
         let covered = manifest.rows().iter().any(|row| row.kind == *kind);
         assert!(covered, "{} の行が manifest に無い", kind.as_str());

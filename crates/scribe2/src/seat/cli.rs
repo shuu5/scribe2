@@ -6,14 +6,15 @@
 use super::consume::{self, ConsumeError};
 use super::cycle::{self, Cycle};
 use super::externalize::{self, ExternalizeError, Trigger};
+use super::rebrief::{self, RebriefError};
 use super::{heartbeat, inject, meter, tick};
-use crate::cli_outcome::{Outcome, RC_OK, RC_REFUSED};
+use crate::cli_outcome::{Outcome, RC_BROKEN, RC_OK, RC_REFUSED};
 use std::path::Path;
 use std::time::Duration;
 
 /// `seat` の使い方。
 pub fn usage() -> String {
-    "usage: seat <meter --target T [--transcript PATH]|inject --target T (--text S|--file PATH)|heartbeat --target T|tick --target T --wm-dir DIR [--pointer TEXT] [--restore CMD] [--rules PATH]|cycle --target T --wm-dir DIR [--restore CMD] [--rules PATH]|externalize --target T --wm-dir DIR --anchor DIR --plan FILE --directives FILE [--user FILE] [--trigger manual|tick] [--role R] [--rules PATH]|consume --target T --wm-dir DIR> [--tmux-socket PATH] [--capture-file PATH] [--state-dir PATH]".to_owned()
+    "usage: seat <meter --target T [--transcript PATH]|inject --target T (--text S|--file PATH)|heartbeat --target T|tick --target T --wm-dir DIR [--pointer TEXT] [--restore CMD] [--rules PATH]|cycle --target T --wm-dir DIR [--restore CMD] [--rules PATH]|externalize --target T --wm-dir DIR --anchor DIR --plan FILE --directives FILE [--user FILE] [--trigger manual|tick] [--role R] [--rules PATH]|rebrief --target T --wm-dir DIR --anchor DIR [--bd PATH] [--prefix P] [--rules PATH]|consume --target T --wm-dir DIR> [--tmux-socket PATH] [--capture-file PATH] [--state-dir PATH]".to_owned()
 }
 
 /// `seat` に続く引数を捌く。
@@ -25,6 +26,7 @@ pub fn dispatch(args: &[String]) -> Outcome {
         Some("tick") => tick_of(args),
         Some("cycle") => cycle_of(args),
         Some("externalize") => externalize_of(args),
+        Some("rebrief") => rebrief_of(args),
         Some("consume") => consume_of(args),
         _ => refused_usage(),
     }
@@ -345,6 +347,43 @@ fn externalize_of(args: &[String]) -> Outcome {
     match externalize::run(&request) {
         Ok(done) => Outcome::ok_line(externalize::render(&done)),
         Err(err) => refused(err),
+    }
+}
+
+/// `seat rebrief`（設計 working-memory.md §5.2・read-only）。DATA を出せない周は stdout 0 行で rc 2。
+fn rebrief_of(args: &[String]) -> Outcome {
+    // 値欠け・空文字は使い方の誤り（他の flag と同じ極性・SRS NFR4）。
+    let (Ok(target), Ok(wm_dir), Ok(anchor), Ok(bd), Ok(prefix), Ok(_), Ok(state_dir)) = (
+        required_nonempty(args, "--target"),
+        required_nonempty(args, "--wm-dir"),
+        required_nonempty(args, "--anchor"),
+        nonempty(args, "--bd"),
+        nonempty(args, "--prefix"),
+        nonempty(args, "--rules"),
+        nonempty(args, "--state-dir"),
+    ) else {
+        return refused_usage();
+    };
+    let unavailable = |err: RebriefError| Outcome::failed_line(RC_BROKEN, rebrief::render_unavailable(err));
+    let Some(state) = super::state_dir_of(state_dir) else {
+        return unavailable(RebriefError::StateDir);
+    };
+    // 待ち上限は `rules` と同じ 1 本の口で解く（`--rules` が在ればその file・読めなければ断る・C5）。
+    let Some(timeout) = crate::rules::cli::open(args).ok().as_ref().and_then(rebrief::timeout_of) else {
+        return unavailable(RebriefError::NoRule);
+    };
+    let request = rebrief::Request {
+        target,
+        wm_dir: Path::new(wm_dir),
+        state_dir: &state,
+        anchor: Path::new(anchor),
+        prefix,
+        bd: bd.unwrap_or(rebrief::DEFAULT_BD),
+        timeout,
+    };
+    match rebrief::run(&request) {
+        Ok(lines) => Outcome::ok(lines),
+        Err(err) => unavailable(err),
     }
 }
 

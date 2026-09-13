@@ -18,6 +18,7 @@ pub mod externalize;
 pub mod heartbeat;
 pub mod inject;
 pub mod meter;
+pub mod rebrief;
 pub mod state;
 pub mod tick;
 pub mod wm;

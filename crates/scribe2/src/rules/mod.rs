@@ -120,6 +120,8 @@ pub enum RuleKind {
     WmDirectiveCap,
     /// land が着地待ちの列で自分の番を待つ上限（秒）。超えたら待たずに進む（縮退・止めない）。
     PipeLandWaitS,
+    /// 席の rebrief が台帳（`bd --readonly`）の子 process を待つ上限（秒）。超えたら DATA を出さない。
+    LedgerTimeoutS,
 }
 
 /// [`RuleKind`] の全 variant。parity test の母集団である。
@@ -163,6 +165,7 @@ pub const ALL: &[RuleKind] = &[
     RuleKind::GateCpuWeight,
     RuleKind::WmDirectiveCap,
     RuleKind::PipeLandWaitS,
+    RuleKind::LedgerTimeoutS,
 ];
 
 impl RuleKind {
@@ -208,6 +211,7 @@ impl RuleKind {
             Self::GateCpuWeight => "GateCpuWeight",
             Self::WmDirectiveCap => "WmDirectiveCap",
             Self::PipeLandWaitS => "PipeLandWaitS",
+            Self::LedgerTimeoutS => "LedgerTimeoutS",
         }
     }
 
@@ -244,7 +248,8 @@ impl RuleKind {
             | Self::GateSlotWaitS
             | Self::GateCpuWeight
             | Self::WmDirectiveCap
-            | Self::PipeLandWaitS => ValueShape::Int,
+            | Self::PipeLandWaitS
+            | Self::LedgerTimeoutS => ValueShape::Int,
             Self::DialogueSurface => ValueShape::Str,
             Self::MaturityCondition
             | Self::AccountSelection
