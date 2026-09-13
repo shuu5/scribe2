@@ -6412,24 +6412,41 @@ const FAR_RESET: &str = "2099-01-01T05:00:00Z";
 /// 遠い未来の 7 日窓の reset。
 const FAR_WEEK_RESET: &str = "2099-01-07T00:00:00Z";
 
-/// 口座 1 つの窓の fixture（5 時間窓の使用率と reset・7 日窓の使用率・reset は [`FAR_WEEK_RESET`]）。
+/// 口座 1 つの窓の fixture（5 時間窓の使用率・7 日窓の使用率・reset）。reset は `None` なら遠い未来
+/// （[`FAR_RESET`] / [`FAR_WEEK_RESET`]）、`Some(secs)` なら**偽 curl が呼ばれた瞬間**から `secs` 秒後を
+/// **両窓に**置く（[`fake_usage_curl`] が応答の直前に `date -u` で作って埋める＝process の起動遅れに依らず
+/// 計測時点で未来。両窓を揃えるのは、5 時間窓だけが古くなる周に 7 日窓の実測で計測なしに選ばれないため）。
 #[derive(Debug, Clone)]
 struct Windows {
     five: u64,
-    five_reset: String,
     seven: u64,
+    reset_in: Option<u64>,
 }
 
-/// 5 時間窓が `five`%（reset は遠い未来）・7 日窓が `seven`% の fixture。
+/// 5 時間窓が `five`%・7 日窓が `seven`%（reset はどちらも遠い未来）の fixture。
 fn windows(five: u64, seven: u64) -> Windows {
-    Windows { five, five_reset: FAR_RESET.to_owned(), seven }
+    Windows { five, seven, reset_in: None }
+}
+
+/// 5 時間窓が当たっている（100%・7 日窓は 10%）口座で、reset は偽 curl の呼出しから `secs` 秒後。
+fn limited_for(secs: u64) -> Windows {
+    Windows { five: 100, seven: 10, reset_in: Some(secs) }
+}
+
+/// 偽 curl が呼出時刻から相対で埋める reset の穴（`@RESET+<secs>@`・穴はこの 1 種だけ）。
+fn reset_hole(secs: u64) -> String {
+    format!("@RESET+{secs}@")
 }
 
 /// 口座残量の応答の本文（`fleet usage` が読む形・モデル別の行なし）。
 fn usage_body(found: &Windows) -> String {
+    let (five_reset, week_reset) = match found.reset_in {
+        Some(secs) => (reset_hole(secs), reset_hole(secs)),
+        None => (FAR_RESET.to_owned(), FAR_WEEK_RESET.to_owned()),
+    };
     format!(
-        r#"{{"five_hour":{{"utilization":{},"resets_at":"{}"}},"seven_day":{{"utilization":{},"resets_at":"{FAR_WEEK_RESET}"}},"limits":[]}}"#,
-        found.five, found.five_reset, found.seven
+        r#"{{"five_hour":{{"utilization":{},"resets_at":"{five_reset}"}},"seven_day":{{"utilization":{},"resets_at":"{week_reset}"}},"limits":[]}}"#,
+        found.five, found.seven
     )
 }
 
@@ -6479,7 +6496,9 @@ fn curl_spy(state: &Path) -> PathBuf {
 }
 
 /// 偽 curl: stdin の設定行の token で口座を選び、その token の n 回目の呼出しに `body-<token>-<n>`（無ければ
-/// 最後の本文）を返す。argv は `curl-args` へ追記で写す。
+/// 最後の本文）を返す。本文の `@RESET+<secs>@`（[`reset_hole`]）は**呼ばれた瞬間**の `date -u` から
+/// `secs` 秒後の ts で埋め、その ts を `reset-<token>-<n>` に写す（歯は [`spy_reset`] で読む）。argv は
+/// `curl-args` へ追記で写す。
 #[expect(
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
@@ -6498,7 +6517,14 @@ fn fake_usage_curl(state: &Path) -> String {
          case \"$cfg\" in *\"Bearer $tok\\\"\"*)\n\
          n=$(cat \"$f\"); n=$((n+1)); printf '%s' \"$n\" > \"$f\"\n\
          while [ ! -f \"$D/body-$tok-$n\" ] && [ \"$n\" -gt 1 ]; do n=$((n-1)); done\n\
-         cat \"$D/body-$tok-$n\"\n\
+         body=$(cat \"$D/body-$tok-$n\")\n\
+         case \"$body\" in *@RESET+*)\n\
+         secs=${{body#*@RESET+}}; secs=${{secs%%@*}}\n\
+         at=$(date -u -d \"@$(( $(date -u +%s) + secs ))\" +%Y-%m-%dT%H:%M:%SZ)\n\
+         printf '%s' \"$at\" > \"$D/reset-$tok-$n\"\n\
+         while :; do case \"$body\" in *\"@RESET+$secs@\"*) body=\"${{body%%@RESET+$secs@*}}$at${{body#*@RESET+$secs@}}\" ;; *) break ;; esac; done\n\
+         ;; esac\n\
+         printf '%s' \"$body\"\n\
          ;; esac\n\
          done\n\
          printf '\\n%s' '200'\n\
@@ -6511,6 +6537,11 @@ fn fake_usage_curl(state: &Path) -> String {
     perm.set_mode(0o755);
     fs::set_permissions(&path, perm).expect("偽 curl を実行可能にできる");
     path.display().to_string()
+}
+
+/// 偽 curl が口座 `label` の `round` 回目（1 始まり）の応答に埋めた相対 reset の ts（埋めていなければ空）。
+fn spy_reset(state: &Path, label: &str, round: usize) -> String {
+    fs::read_to_string(curl_spy(state).join(format!("reset-tok-{label}-{round}"))).unwrap_or_default()
 }
 
 /// 偽 curl が呼ばれた回数（口座 1 つの計測につき 1 回）。
@@ -6675,22 +6706,25 @@ fn pipe_ratelimit_resume_respawns_on_the_free_account_and_lands() {
 
 /// (2) 全口座が当たっている周は最も早い reset まで唯一の wait で待ち（`next=wait reset=<ts>`）、reset を
 /// 過ぎて `Timeout` を受けた周は計測から撃ち直して（偽 curl の 2 回目は余裕）起こし直す。
+///
+/// reset は test の開始時刻でなく**偽 curl が呼ばれた瞬間**から相対で作る（[`limited_for`]）: 固定の
+/// 壁時計だと負荷で `pipe resume` の起動と 1 回目の計測が 2 秒を超えた周に reset が既に過ぎていて、器は
+/// 正しく待たずに選ぶ＝計測 2 回で落ちる（s2-07l.134 run 161621Z の main-red）。
+// flip-check: retroactive s2-07l.219
 #[test]
 fn pipe_ratelimit_resume_waits_for_the_earliest_reset_then_remeasures() {
     let (repo, state) = repo_with_state();
     let (id, runner, rules) = rate_limited_with_accounts(&repo, &state, &[IMPLEMENT.to_owned()], &["a1", "a2"]);
-    // a1 は 2 秒後に開き直る（最も早い reset）・a2 は 4 秒後。2 回目の計測では a1 に余裕が戻る。
-    let now = vessel::fleet::epoch_of(&vessel::fleet::cli::now_utc()).unwrap_or_default();
-    let soon = vessel::fleet::cli::format_utc(now + 2);
-    let later = vessel::fleet::cli::format_utc(now + 4);
-    let limited = |reset: &str| Windows { five: 100, five_reset: reset.to_owned(), seven: 10 };
-    put_account(&state, "a1", &[limited(&soon), windows(50, 10)]);
-    put_account(&state, "a2", &[limited(&later), limited(&later)]);
+    // a1 は計測の 2 秒後に開き直る（最も早い reset）・a2 は 4 秒後。2 回目の計測では a1 に余裕が戻る。
+    put_account(&state, "a1", &[limited_for(2), windows(50, 10)]);
+    put_account(&state, "a2", &[limited_for(4), limited_for(4)]);
     let started = Instant::now();
     let resumed = resume_with_accounts(&repo, &state, &id, &runner, &rules);
     let waited = started.elapsed();
     assert_eq!(resumed.status.code(), Some(i32::from(RC_OK)), "{} / {}", stdout_of(&resumed), stderr_of(&resumed));
     let stdout = stdout_of(&resumed);
+    let soon = spy_reset(&state, "a1", 1);
+    assert!(vessel::fleet::epoch_of(&soon).is_some(), "偽 curl が a1 の 1 回目に相対 reset を埋めた: {soon:?}");
     assert!(stdout.contains(&format!("run={id} next=wait reset={soon}")), "最も早い reset を名乗って待つ: {stdout}");
     assert!(stdout.contains(&format!("run={id} next=spawn account=a1")), "reset の後の計測で a1 を選ぶ: {stdout}");
     assert!(stdout.contains(&format!("run={id} stage=Implemented")), "{stdout}");
