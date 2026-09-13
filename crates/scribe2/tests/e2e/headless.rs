@@ -188,7 +188,7 @@ fn run_lens(contract: &Path, cap: &str, mode: &str, claude: &Path, diff: &[u8]) 
 
 /// runner を 1 回撃つための材料（引数の並びが複数の歯で同じなので畳む）。
 struct RunnerCall<'a> {
-    /// plugin dir 兼 fake の置き場。
+    /// plugin root 兼 fake の置き場（配下に [`PLUGIN_LEAF`] の dir を 1 つ置いて渡す）。
     dir: &'a Path,
     /// 実装させる worktree。
     worktree: &'a Path,
@@ -219,8 +219,32 @@ fn write_vessel_copy(dir: &Path, allowed: &str) -> PathBuf {
     path
 }
 
-/// runner を 1 回撃つ。
+/// 既存の runner の歯が root（[`RunnerCall::dir`]）の配下に置く plugin の dir 名。
+///
+/// runner は root の配下の dir を 1 つずつ `--plugin-dir` に渡し、配下 0 の root では claude を
+/// 起こさない（設計 §6・`s2-07l.149`）ので、root には dir が 1 つ要る。root 直下の file
+/// （fake・args・body …）は plugin と見られない。
+const PLUGIN_LEAF: &str = "vessel-plugin";
+
+/// root の配下に [`PLUGIN_LEAF`] の dir を置き、その path を返す。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn plugin_leaf(root: &Path) -> PathBuf {
+    let leaf = root.join(PLUGIN_LEAF);
+    fs::create_dir_all(&leaf).expect("plugin の dir を作れる");
+    leaf
+}
+
+/// runner を 1 回撃つ（plugin root = [`RunnerCall::dir`]・配下に [`PLUGIN_LEAF`] を置く）。
 fn run_runner(call: &RunnerCall<'_>, input: &[u8]) -> Output {
+    plugin_leaf(call.dir);
+    run_runner_in(call, call.dir, input)
+}
+
+/// runner を 1 回撃つ（plugin root を名指す形・root の中身は呼び手が作る）。
+fn run_runner_in(call: &RunnerCall<'_>, root: &Path, input: &[u8]) -> Output {
     let mut args = vec![
         "runner".to_owned(),
         "--worktree".to_owned(),
@@ -230,7 +254,7 @@ fn run_runner(call: &RunnerCall<'_>, input: &[u8]) -> Output {
         "--vessel".to_owned(),
         call.vessel.display().to_string(),
         "--plugin-dir".to_owned(),
-        call.dir.display().to_string(),
+        root.display().to_string(),
         "--permission-mode".to_owned(),
         call.mode.to_owned(),
         "--claude".to_owned(),
@@ -251,7 +275,12 @@ fn assert_runner_call(dir: &Path, worktree: &Path, account: &Path, mode: &str) {
     assert!(pair(&args, "--permission-mode", mode), "permission mode を毎回明示する: {args}");
     assert!(pair(&args, "--output-format", "stream-json"), "stream-json で回す: {args}");
     assert!(lines.contains(&"--verbose"), "stream-json には --verbose が要る: {args}");
-    assert!(pair(&args, "--plugin-dir", &dir.display().to_string()), "plugin を載せる: {args}");
+    // root（`dir`）そのものではなく、配下の dir が 1 本だけ渡る（root 直下の file は plugin でない）。
+    assert_eq!(
+        plugin_dir_values(&args),
+        vec![dir.join(PLUGIN_LEAF).display().to_string()],
+        "plugin root の配下の dir を載せる: {args}"
+    );
     assert!(lines.contains(&"-p"), "headless で回す（-p が要る）: {args}");
     // **在ってはならない flag が無いこと**も測る。在ってほしい flag だけを見ていると、
     // 権限を丸ごと外す flag が黙って混入しても気づけない。
@@ -1476,6 +1505,7 @@ fn headless_runner_does_not_drop_the_prompt_into_the_cwd_for_a_relative_vessel()
     let write_set = dir.join("write-set.txt");
     let _ = write_vessel_copy(&dir, r#"["cargo", "git"]"#);
     fs::write(&write_set, "src/lib.rs\n").expect("write-set を書ける");
+    plugin_leaf(&dir);
     let mut child = Command::new(bin())
         .args(["runner", "--worktree"])
         .arg(&worktree)
@@ -1499,6 +1529,97 @@ fn headless_runner_does_not_drop_the_prompt_into_the_cwd_for_a_relative_vessel()
     assert!(dir.join("called").exists(), "claude は起きる");
     assert!(!dir.join("prompt.txt").exists(), "cwd（相対 vessel の隣）へは落とさない");
     assert!(stderr_of(&out).contains("prompt を残せない"), "欠落は stderr に 1 行: {}", stderr_of(&out));
+    clean(&[&dir, &worktree]);
+}
+
+// ── plugin root の展開（設計 docs/design/pipeline.md §6・s2-07l.149・SRS FR20） ──────
+
+/// fake が残した argv の写しから `--plugin-dir` の値を順に集める。
+fn plugin_dir_values(args: &str) -> Vec<String> {
+    let lines: Vec<&str> = args.lines().collect();
+    lines
+        .windows(2)
+        .filter(|w| w.first() == Some(&"--plugin-dir"))
+        .filter_map(|w| w.get(1).map(|value| (*value).to_owned()))
+        .collect()
+}
+
+/// root の配下の dir を**名前順に 1 つずつ** `--plugin-dir` へ渡す。root 直下の file と、dir を
+/// 指す symlink は plugin と見ない。作る順を名前の逆にする（作った順を写す実装を落とす）。
+#[test]
+fn headless_plugin_root_passes_each_subdir_in_name_order() {
+    let dir = tmp();
+    let worktree = tmp();
+    let root = tmp();
+    let claude = fake_claude(&dir, "", false, 0);
+    let write_set = dir.join("write-set.txt");
+    fs::write(&write_set, "src/lib.rs\n").expect("write-set を書ける");
+    let vessel = write_vessel_copy(&dir, r#"["cargo", "git"]"#);
+    for name in ["zz-consumer", "aa-vessel"] {
+        fs::create_dir(root.join(name)).expect("plugin の dir を作れる");
+    }
+    fs::write(root.join("mm-file.json"), "{}\n").expect("root 直下に file を置ける");
+    std::os::unix::fs::symlink(root.join("aa-vessel"), root.join("bb-link"))
+        .expect("root 直下に dir への symlink を置ける");
+    let out = run_runner_in(
+        &RunnerCall { dir: &dir, worktree: &worktree, write_set: &write_set, vessel: &vessel, claude: &claude, mode: "acceptEdits", account: None },
+        &root,
+        b"goal = \"x\"\n",
+    );
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    let args = slurp(&dir.join("args"));
+    assert_eq!(
+        plugin_dir_values(&args),
+        vec![
+            root.join("aa-vessel").display().to_string(),
+            root.join("zz-consumer").display().to_string(),
+        ],
+        "配下の dir を名前順に 2 本・file と symlink は渡さない: {args}"
+    );
+    clean(&[&dir, &worktree, &root]);
+}
+
+/// 配下に dir が 0 の root（file と dir への symlink だけ）では **claude を起こさず rc 2**。
+/// guard 0 本の claude を起こさない（fail-closed・憲法 C16.2）。
+#[test]
+fn headless_plugin_root_without_subdirs_does_not_start_claude() {
+    let dir = tmp();
+    let worktree = tmp();
+    let root = tmp();
+    let claude = fake_claude(&dir, "", false, 0);
+    let write_set = dir.join("write-set.txt");
+    fs::write(&write_set, "src/lib.rs\n").expect("write-set を書ける");
+    let vessel = write_vessel_copy(&dir, r#"["cargo", "git"]"#);
+    fs::write(root.join("plugin.json"), "{}\n").expect("root 直下に file を置ける");
+    std::os::unix::fs::symlink(&worktree, root.join("linked")).expect("root 直下に dir への symlink を置ける");
+    let out = run_runner_in(
+        &RunnerCall { dir: &dir, worktree: &worktree, write_set: &write_set, vessel: &vessel, claude: &claude, mode: "acceptEdits", account: None },
+        &root,
+        b"goal = \"x\"\n",
+    );
+    assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "配下 0 の root は rc 2: {}", stderr_of(&out));
+    assert!(!dir.join("called").exists(), "配下 0 の root では claude を起動しない");
+    assert!(stderr_of(&out).contains("plugin root"), "何が壊れたかを名指す: {}", stderr_of(&out));
+    clean(&[&dir, &worktree, &root]);
+}
+
+/// root が無い周も **claude を起こさず rc 2**（読めない root を空の root として続けない）。
+#[test]
+fn headless_plugin_root_absent_does_not_start_claude() {
+    let dir = tmp();
+    let worktree = tmp();
+    let claude = fake_claude(&dir, "", false, 0);
+    let write_set = dir.join("write-set.txt");
+    fs::write(&write_set, "src/lib.rs\n").expect("write-set を書ける");
+    let vessel = write_vessel_copy(&dir, r#"["cargo", "git"]"#);
+    let absent = dir.join("no-such-root");
+    let out = run_runner_in(
+        &RunnerCall { dir: &dir, worktree: &worktree, write_set: &write_set, vessel: &vessel, claude: &claude, mode: "acceptEdits", account: None },
+        &absent,
+        b"goal = \"x\"\n",
+    );
+    assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "不在の root は rc 2: {}", stderr_of(&out));
+    assert!(!dir.join("called").exists(), "不在の root では claude を起動しない");
     clean(&[&dir, &worktree]);
 }
 

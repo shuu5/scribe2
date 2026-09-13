@@ -14,7 +14,7 @@ pub mod runner;
 
 use crate::pipe::confine;
 use std::io::{Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 /// claude の scope の unit 名に載せる段の名。
@@ -162,8 +162,14 @@ pub fn build(call: &Call<'_>) -> Command {
         // 読まないので、これを落としても歯は緑のまま通る＝実 claude でだけ死ぬ。
         inner.arg("--output-format").arg("stream-json").arg("--verbose");
     }
-    if let Some(dir) = call.plugin_dir {
-        inner.arg("--plugin-dir").arg(dir);
+    // **`plugin_dir` は plugin の root**（設計 §6）: 配下の dir を名前順に 1 つずつ渡す。root を
+    // そのまま渡して claude の folder 展開に任せる形にしないのは、読めない周・0 本の周の極性と
+    // 読み込み順を器が握るためである（版依存に寄せない）。読めない・0 本の root は runner が
+    // claude を起こす前に rc 2 で落とす（ここへ来ない）。
+    if let Some(root) = call.plugin_dir {
+        for dir in plugin_dirs(Path::new(root)).unwrap_or_default() {
+            inner.arg("--plugin-dir").arg(dir);
+        }
     }
     // **claude も cgroup の scope で包む**（設計 gate-cost.md §4.1 の 3 つ目）。包むのは argv が
     // 揃った後・cwd と env を付ける前である——`Command` からは cwd も env も stdio も読み戻せ
@@ -186,6 +192,27 @@ pub fn build(call: &Call<'_>) -> Command {
     cmd
 }
 
+/// plugin の root（`--plugin-dir` の値・設計 §6）の配下の **dir** を名前順に返す。
+///
+/// root 直下の file と symlink は plugin と見ない（`DirEntry::file_type` は link を辿らない＝
+/// root の外を指す link 1 本で別の木を載せない）。**root が読めない・配下の dir が 0 の周は `Err`**
+/// ——pipe の spawn は器の plugin を root へ必ず書くので、0 本は root が壊れた印である。
+pub fn plugin_dirs(root: &Path) -> Result<Vec<PathBuf>, String> {
+    let unreadable = |err: std::io::Error| format!("plugin root {} を読めない: {err}", root.display());
+    let mut dirs = Vec::new();
+    for entry in std::fs::read_dir(root).map_err(unreadable)? {
+        let entry = entry.map_err(unreadable)?;
+        if entry.file_type().map_err(unreadable)?.is_dir() {
+            dirs.push(entry.path());
+        }
+    }
+    if dirs.is_empty() {
+        return Err(format!("plugin root {} の配下に plugin の dir が無い", root.display()));
+    }
+    dirs.sort();
+    Ok(dirs)
+}
+
 /// 子の stdin へ prompt を書いて閉じる。
 ///
 /// 読まずに終える子への write は EPIPE になるが、**判定は出力で決める**のでここの失敗は
@@ -193,6 +220,92 @@ pub fn build(call: &Call<'_>) -> Command {
 pub fn feed(child: &mut std::process::Child, prompt: &str) {
     if let Some(mut stdin) = child.stdin.take() {
         let _ = stdin.write_all(prompt.as_bytes());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{build, plugin_dirs, Call};
+    use proptest::prelude::*;
+    use proptest::test_runner::Config;
+    use std::collections::BTreeSet;
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// 反例の永続化を切り、case 数を pin する（`pipe/refuse.rs` と同じ形・case ごとに fs を触るので 64）。
+    fn config() -> Config {
+        Config {
+            cases: 64,
+            failure_persistence: None,
+            ..Config::default()
+        }
+    }
+
+    /// case の通番（tmp の root を case ごとに分ける）。
+    static CASE: AtomicUsize = AtomicUsize::new(0);
+
+    /// 名前集合の subdir（`d` 前置）と file（`f` 前置）と root 自身を指す symlink（`link`）を
+    /// 置いた root を作り、期待する `--plugin-dir` の列（subdir の名前の昇順）と対で返す。
+    fn layout(dirs: &BTreeSet<String>, files: &BTreeSet<String>) -> (PathBuf, Vec<String>) {
+        let root = std::env::temp_dir().join(format!(
+            "headless-plugin-root-{}-{}",
+            std::process::id(),
+            CASE.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::create_dir_all(&root);
+        for name in dirs {
+            let _ = std::fs::create_dir(root.join(format!("d{name}")));
+        }
+        for name in files {
+            let _ = std::fs::write(root.join(format!("f{name}")), "{}\n");
+        }
+        let _ = std::os::unix::fs::symlink(&root, root.join("link"));
+        // BTreeSet の順＝名前の昇順（`d` 前置は順を変えない）。
+        let want = dirs.iter().map(|name| root.join(format!("d{name}")).display().to_string()).collect();
+        (root, want)
+    }
+
+    /// [`build`] の argv から `--plugin-dir` の値を順に集める（包みの有無に依らず argv の中を見る）。
+    fn plugin_args(root: &Path) -> Vec<String> {
+        let text = root.display().to_string();
+        let command = build(&Call {
+            claude: "claude",
+            prompt: "",
+            permission_mode: "plan",
+            plugin_dir: Some(&text),
+            account_dir: None,
+            cwd: None,
+            streaming: true,
+        });
+        let args: Vec<String> = command.get_args().map(|arg| arg.to_string_lossy().into_owned()).collect();
+        args.windows(2)
+            .filter(|pair| pair.first().is_some_and(|flag| flag == "--plugin-dir"))
+            .filter_map(|pair| pair.get(1).cloned())
+            .collect()
+    }
+
+    /// 名前の集合（大小文字を混ぜて byte 順が自明でない形・0〜5 個）。
+    fn names() -> impl Strategy<Value = BTreeSet<String>> {
+        prop::collection::btree_set("[A-Za-z0-9_-]{1,6}", 0..6)
+    }
+
+    proptest! {
+        #![proptest_config(config())]
+
+        /// `--plugin-dir` の列は subdir の名前の昇順 ∧ 件数一致 ∧ file と symlink を含まない
+        /// （期待列は subdir だけで組むので、等号がそのまま「file を含まない」を測る）。
+        /// dir 0 の root は `Err`（runner が rc 2 で落とす極性）で、argv にも 1 本も載らない。
+        #[test]
+        fn prop_plugin_root_expands_subdirs_in_name_order(dirs in names(), files in names()) {
+            let (root, want) = layout(&dirs, &files);
+            let got = plugin_args(&root);
+            let checked = plugin_dirs(&root);
+            let _ = std::fs::remove_dir_all(&root);
+            prop_assert_eq!(&got, &want);
+            prop_assert_eq!(got.len(), dirs.len());
+            prop_assert_eq!(checked.is_err(), dirs.is_empty());
+        }
     }
 }
 

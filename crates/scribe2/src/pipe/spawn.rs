@@ -16,7 +16,7 @@ use super::{
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
 use crate::fleet::store::LockPolicy;
 use crate::fleet::{EventKind, Stage};
-use crate::headless::runner::stop_status;
+use crate::headless::runner::{stop_status, top_level_string};
 use crate::headless::RC_RATE_LIMIT;
 use crate::name::NAME;
 use crate::pipe::contract::Contract;
@@ -30,6 +30,21 @@ const WRITE_SET_FILE: &str = "write-set.txt";
 
 /// runner へ載せる plugin の中身（repo 相対・設計 §6）。
 const PLUGIN_DIRS: [&str; 2] = [".claude-plugin", "hooks"];
+
+/// 器の plugin manifest（`gen-manifest` の生成物＝tracked と同じ bytes・設計 §5.2 手順 5）。
+const EMBEDDED_PLUGIN_JSON: &str = include_str!("../../../../.claude-plugin/plugin.json");
+
+/// 器の hooks（[`EMBEDDED_PLUGIN_JSON`] と同じく生成物の埋め込み）。
+const EMBEDDED_HOOKS_JSON: &str = include_str!("../../../../hooks/hooks.json");
+
+/// 器の plugin として root の `<NAME>/` へ必ず書く 3 つ組（dir・file 名・本文）。
+const EMBEDDED_PLUGIN: [(&str, &str, &str); 2] = [
+    (".claude-plugin", "plugin.json", EMBEDDED_PLUGIN_JSON),
+    ("hooks", "hooks.json", EMBEDDED_HOOKS_JSON),
+];
+
+/// consumer の plugin を写す root 配下の subdir 名。
+const CONSUMER_DIR: &str = "consumer";
 
 /// 起動 1 回の材料。
 pub struct Launch<'a> {
@@ -411,7 +426,14 @@ fn substitute(
         .replace("{plugin_dir}", &plugin.display().to_string())
 }
 
-/// repo の plugin を run dir 配下へ写し、その path を返す（設計 §5.2 / §6）。
+/// plugin の root を run dir 配下に組み、その path を返す（設計 §5.2 手順 5 / §6）。
+///
+/// root の配下は 1 dir = 1 plugin で、runner が名前順に claude の `--plugin-dir` へ渡す:
+/// - `<NAME>/`: **器の plugin**。binary に埋め込んだ [`EMBEDDED_PLUGIN`] を**必ず**書く＝
+///   plugin を持たない consumer repo の便にも hook の in-loop guard が載る（憲法 C16.2・
+///   `s2-07l.149` 裁定 (A)）。
+/// - `consumer/`: worktree が**別名の** plugin を持つ周だけ（[`consumer_plugin`]）、その
+///   [`PLUGIN_DIRS`] を写す。
 ///
 /// Claude Code は**読み込んだ plugin dir の配下**を acceptEdits の自動承認から外す
 /// （sensitive）。便の worktree は `<repo>/.worktrees/<NAME>/<run>` ＝ repo を
@@ -420,8 +442,7 @@ fn substitute(
 /// まま worktree を保護対象から外す。
 ///
 /// 写すのは **worktree の** [`PLUGIN_DIRS`]（＝便の base の内容）であって anchor の
-/// 現在値ではない。plugin を持たない repo では**空 dir を作るだけ**で進む
-/// （`{plugin_dir}` を使わない便を止めない）。
+/// 現在値ではない。
 fn copy_plugin(worktree: &Path, state_dir: &Path, run: &str) -> Result<PathBuf, String> {
     let dest = plugin_path(state_dir, run);
     // 再走で古い写しが残らないよう、先に空にする。
@@ -429,18 +450,52 @@ fn copy_plugin(worktree: &Path, state_dir: &Path, run: &str) -> Result<PathBuf, 
         std::fs::remove_dir_all(&dest)
             .map_err(|err| format!("{} を空にできない: {err}", dest.display()))?;
     }
-    std::fs::create_dir_all(&dest).map_err(|err| format!("{} を作れない: {err}", dest.display()))?;
-    for name in PLUGIN_DIRS {
-        let from = worktree.join(name);
-        // **`Path::is_dir` では判定しない**。あれは link を辿るので、`hooks` が dir への
-        // symlink（例 `hooks -> ../..`）の周に「dir だ」と読んで link 先の木を丸ごと写す
-        // ＝「symlink は追わない」が top-level だけ抜ける。最終要素を辿らない
-        // `symlink_metadata` で見て、link なら**写さない**（fail-closed）。
-        if std::fs::symlink_metadata(&from).is_ok_and(|meta| meta.is_dir()) {
-            copy_tree(&from, &dest.join(name))?;
+    let vessel = dest.join(NAME);
+    for (dir, name, body) in EMBEDDED_PLUGIN {
+        let parent = vessel.join(dir);
+        std::fs::create_dir_all(&parent)
+            .map_err(|err| format!("{} を作れない: {err}", parent.display()))?;
+        let path = parent.join(name);
+        std::fs::write(&path, body).map_err(|err| format!("{} を書けない: {err}", path.display()))?;
+    }
+    if consumer_plugin(worktree) {
+        let consumer = dest.join(CONSUMER_DIR);
+        for name in PLUGIN_DIRS {
+            let from = worktree.join(name);
+            // **`Path::is_dir` では判定しない**。あれは link を辿るので、`hooks` が dir への
+            // symlink（例 `hooks -> ../..`）の周に「dir だ」と読んで link 先の木を丸ごと写す
+            // ＝「symlink は追わない」が top-level だけ抜ける。最終要素を辿らない
+            // `symlink_metadata` で見て、link なら**写さない**（fail-closed）。
+            if real_dir(&from) {
+                copy_tree(&from, &consumer.join(name))?;
+            }
         }
     }
     Ok(dest)
+}
+
+/// worktree が **consumer の plugin** を持つか（設計 §5.2 手順 5 (ii)）。
+///
+/// `.claude-plugin/plugin.json` と `hooks/hooks.json` が**両方**、link を辿らずに dir の中の
+/// file として在り、plugin.json の top-level の `name` が [`NAME`] と**違う**周だけ真。
+/// `name` が同じ周は器自身の repo＝世代がずれていても器の 1 本だけを載せる（同じ hook を
+/// 2 度走らせない）。片方だけの周・`name` が読めない周は consumer の plugin と見ない。
+fn consumer_plugin(worktree: &Path) -> bool {
+    let present = EMBEDDED_PLUGIN.iter().all(|(dir, file, _)| {
+        let parent = worktree.join(dir);
+        real_dir(&parent) && std::fs::symlink_metadata(parent.join(file)).is_ok_and(|meta| meta.is_file())
+    });
+    let [(manifest_dir, manifest, _), _] = EMBEDDED_PLUGIN;
+    present
+        && std::fs::read_to_string(worktree.join(manifest_dir).join(manifest))
+            .ok()
+            .and_then(|body| top_level_string(&body, "name"))
+            .is_some_and(|name| name != NAME)
+}
+
+/// path が link でない dir か（最終要素を辿らない）。
+fn real_dir(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|meta| meta.is_dir())
 }
 
 /// dir を再帰 copy する。**file だけを写し、symlink は追わない**。

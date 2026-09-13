@@ -5,7 +5,7 @@
 //! 独自の判定を足すと、呼出側は「誰が止めたか」を見失う。
 
 use crate::polarity::{OnFailure, Polarity, Timing};
-use super::{build, feed, fill, flag, need, read_stdin_bytes, Call, DEFAULT_CLAUDE, RC_RATE_LIMIT};
+use super::{build, feed, fill, flag, need, plugin_dirs, read_stdin_bytes, Call, DEFAULT_CLAUDE, RC_RATE_LIMIT};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
 use crate::pipe::declaration::Effective;
 use crate::pipe::gate::last_json_object;
@@ -62,6 +62,12 @@ pub fn dispatch(args: &[String]) -> Outcome {
         Ok(found) => found,
         Err(err) => return Outcome::failed_line(RC_BROKEN, format!("runner: write-set を読めない: {err}")),
     };
+    // **plugin root は claude を起こす前に検査する**（設計 §6・FR20・憲法 C16.2）。pipe の spawn は
+    // 器の plugin を root へ必ず書くので、読めない・配下の dir が 0 の周は root が壊れた印＝
+    // guard 0 本の claude を起こさず rc 2 で落とす（fail-closed）。展開は [`build`] が同じ関数で行う。
+    if let Err(reason) = plugin_dirs(Path::new(&plugin_dir)) {
+        return Outcome::failed_line(RC_BROKEN, format!("runner: {reason}"));
+    }
     let prompt = compose(&contract, &listed, granted.allowed());
     // **claude を起こす前に**残す（起きた後に書く形だと、席が止まらない周の prompt が読めない）。
     let unsaved = save_prompt(Path::new(&vessel), &prompt).err();
@@ -351,7 +357,16 @@ pub fn result_text(line: &str) -> Option<String> {
     if !body.starts_with('{') || !has_pair(body, "type", "result") {
         return None;
     }
-    let at = find_key(body, "result")?;
+    top_level_string(body, "result")
+}
+
+/// JSON object 1 つの **top-level の** `key` の文字列値を escape を解いて読む（入れ子の同名 key は
+/// 読まない・[`find_key`] の深さ guard）。値が文字列でない・key が無い周は `None`。
+///
+/// 読み手は [`result_text`] と、consumer の plugin.json の `name` を読む `pipe/spawn.rs` の 2 つ
+/// （JSON の読み手を 2 本に増やさない）。
+pub(crate) fn top_level_string(body: &str, key: &str) -> Option<String> {
+    let at = find_key(body, key)?;
     json_string(body.get(at..)?)
 }
 
