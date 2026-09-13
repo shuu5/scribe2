@@ -421,8 +421,12 @@ pub fn run(request: &Request) -> Outcome {
 /// 使うためである（cycle を回す周だけは cycle 側が自分の入口でもう 1 度走査する＝lock の内側で
 /// 確かめ直す）。読めない周を「在る」に読み替えない。
 fn decide(request: &Request, place: &super::StateDir, dir: &Path) -> Judged {
-    let (Some(stale_s), Some(ttl_s), Some(threshold)) = (state::stale_s(), cycle::ttl_s(), super::int_rule(ID_THRESHOLD)) else {
-        return Judged::bare(TickDecision::Error(meter::REASON_NO_RULE.to_owned()));
+    // 3 行のどれかが読めない周は判定に入らない（理由は最初に読めなかった行の variant 付き・`s2-07l.205`）。
+    let (stale_s, ttl_s, threshold) = match (state::stale_s(), cycle::ttl_s(), super::int_rule(ID_THRESHOLD)) {
+        (Ok(stale_s), Ok(ttl_s), Ok(threshold)) => (stale_s, ttl_s, threshold),
+        (Err(read), _, _) | (_, Err(read), _) | (_, _, Err(read)) => {
+            return Judged::bare(TickDecision::Error(read.no_rule().to_owned()));
+        }
     };
     let wm = super::scan_wm(Path::new(request.wm_dir), request.target);
     // 状態は pane より先に読む（file 1 つ・tmux を叩かない）。読みは tick と cycle で 1 本。
@@ -543,8 +547,9 @@ fn over_cap(seen: &Seen) -> Option<(u64, u64)> {
 /// pane 本文から context を評価する。cap も使用率も **meter の口**で読む（自前の literal も
 /// parse も持たない＝guard / meter / tick の 3 面が同じ関数を見る）。
 fn measure_context(pane: &str) -> Context {
-    let Some(cap) = meter::declared_cap() else {
-        return Context::Unmeasured(meter::REASON_NO_RULE);
+    let cap = match meter::declared_cap() {
+        Ok(found) => found,
+        Err(read) => return Context::Unmeasured(read.no_rule()),
     };
     match meter::used_from_pane_pct(pane) {
         Ok((pct, _, _)) => Context::Measured(pct, cap),

@@ -69,9 +69,11 @@ pub fn decide(
     if is_externalize(root, cwd, path) {
         return SeatDecision::Externalize;
     }
-    // **cap は自分で読まない**——meter の 1 本の口（tick と同じ関数）を通す（`s2-07l.89`）。
-    let Some(cap) = meter::declared_cap() else {
-        return SeatDecision::Unmeasured(meter::REASON_NO_RULE.to_owned());
+    // **cap は自分で読まない**——meter の 1 本の口（tick と同じ関数）を通す（`s2-07l.89`）。読めない周は
+    // 止めない（極性は不変）まま、読めなかった variant を `no-rule:` に添えて記録する（`s2-07l.205`）。
+    let cap = match meter::declared_cap() {
+        Ok(found) => found,
+        Err(read) => return SeatDecision::Unmeasured(read.no_rule().to_owned()),
     };
     // **空文字は「無い」と同じ**（trim 後）。空の口をそのまま path として扱うと、渡し忘れが
     // `unreadable`（file が壊れている）に化けて、記録から原因を取り違える。

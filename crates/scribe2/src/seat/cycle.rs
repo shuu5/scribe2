@@ -74,7 +74,8 @@ pub const REASON_PANE_MISSING: &str = "pane-missing";
 pub const REASON_INPUT_BUSY: &str = "input-busy";
 /// 入力欄を特定できない（prompt 行が無い pane へ送らない・注入と同じ門）。
 pub const REASON_INPUT_UNKNOWN: &str = "input-unknown";
-/// TTL の宣言（rules 行）が読めない。
+/// TTL の宣言（rules 行）が読めない。埋め込みを読む周は読めなかった variant を `:` で添える
+/// （[`super::RuleRead::no_rule`]・`s2-07l.205`）。
 pub const REASON_NO_RULE: &str = "no-rule";
 /// 置き場を解けない。
 pub const REASON_STATE_DIR: &str = "state-dir";
@@ -125,8 +126,8 @@ pub enum Cycle {
     Failed(&'static str),
 }
 
-/// TTL（秒）を manifest から読む。不発効・別の形・不在は `None`。
-pub fn ttl_s() -> Option<u64> {
+/// TTL（秒）を埋め込み manifest から読む。読めない周は理由付き（[`super::RuleRead`]）。
+pub fn ttl_s() -> Result<u64, super::RuleRead> {
     super::int_rule(ID_TTL)
 }
 
@@ -191,8 +192,9 @@ pub fn run(request: &Request) -> Cycle {
 /// 次の周も送りうる（不可逆の口・N1）。打てない周は 1 key も送らずに断る。tick からでも
 /// `seat cycle` からでも同じ口を通るので、どちらの経路の cycle も back-off の根拠になる。
 fn perform(request: &Request, dir: &Path) -> Cycle {
-    let Some(ttl) = ttl_s() else {
-        return Cycle::Refused(REASON_NO_RULE);
+    let ttl = match ttl_s() {
+        Ok(found) => found,
+        Err(read) => return Cycle::Refused(read.no_rule()),
     };
     match take_lock(dir, ttl) {
         Lock::Taken => {}
@@ -221,8 +223,9 @@ fn guarded(request: &Request, dir: &Path) -> Cycle {
         WmScan::Unreadable => return Cycle::Refused(REASON_WM_UNREADABLE),
         WmScan::Unconsumed(_) => {}
     }
-    let Some(stale_s) = state::stale_s() else {
-        return Cycle::Refused(REASON_NO_RULE);
+    let stale_s = match state::stale_s() {
+        Ok(found) => found,
+        Err(read) => return Cycle::Refused(read.no_rule()),
     };
     if let Some(reason) = gate_of(state::read_last(dir, stale_s)) {
         return Cycle::Refused(reason);
@@ -520,8 +523,9 @@ pub fn relaunch(request: &Relaunch) -> Relaunched {
         Ok(found) => found,
         Err(holes) => return Relaunched::Refused(holes.as_str()),
     };
-    let Some(ttl) = ttl_s() else {
-        return Relaunched::Refused(REASON_NO_RULE);
+    let ttl = match ttl_s() {
+        Ok(found) => found,
+        Err(read) => return Relaunched::Refused(read.no_rule()),
     };
     let dir = super::seat_dir(&request.state_dir.path, request.target);
     match take_lock(&dir, ttl) {

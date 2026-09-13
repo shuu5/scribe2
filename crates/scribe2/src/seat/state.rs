@@ -197,8 +197,8 @@ pub fn path(seat_dir: &Path) -> PathBuf {
     seat_dir.join(FILE)
 }
 
-/// stale 閾値（秒）を manifest から読む。不発効・別の形・不在は `None`。
-pub fn stale_s() -> Option<u64> {
+/// stale 閾値（秒）を埋め込み manifest から読む。読めない周は理由付き（[`super::RuleRead`]）。
+pub fn stale_s() -> Result<u64, super::RuleRead> {
     super::int_rule(ID_STALE)
 }
 

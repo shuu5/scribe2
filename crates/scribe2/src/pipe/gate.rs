@@ -28,6 +28,7 @@ use crate::cli_outcome::{Outcome, RC_BROKEN, RC_OK, RC_REFUSED};
 use crate::fleet::json_lite::{self, Value};
 use crate::fleet::store::{append_line, LockPolicy};
 use crate::fleet::{cli::now_utc, EventKind, Stage, SCHEMA};
+use crate::seat::RuleRead;
 use std::io::Write;
 use std::path::Path;
 use std::process::Stdio;
@@ -244,7 +245,7 @@ struct Fire<'a> {
 ///
 /// `{jobs}` を持つ共通 verify の行は、**撃つ前に受付で枠を取り、撃った後に返す**
 /// （設計 §3.2）。実効 jobs = `min(gate.mutants_jobs, 受け付けた枠)`。
-fn fire(entry: &Fire<'_>, caps: Option<confine::Caps>, admit: Option<&Admit<'_>>) -> Step {
+fn fire(entry: &Fire<'_>, caps: Result<confine::Caps, RuleRead>, admit: Option<&Admit<'_>>) -> Step {
     let place = entry
         .checks
         .worktree
@@ -294,7 +295,7 @@ fn fire(entry: &Fire<'_>, caps: Option<confine::Caps>, admit: Option<&Admit<'_>>
 /// 取りにいく**——箱の無い行に並列度を上げると、溢れたときに殺されるのが席の側になる。
 fn admitted(
     entry: &Fire<'_>,
-    caps: Option<confine::Caps>,
+    caps: Result<confine::Caps, RuleRead>,
     unit: &str,
     admit: Option<&Admit<'_>>,
 ) -> Option<Grant> {

@@ -10,7 +10,9 @@
 //! errata に写してある。
 //!
 //! **値をこの file に焼かない**（憲法 C1 / C5）。箱の大きさと CPU の重みは [`Caps`] が
-//! manifest の 3 行から読む。`MemoryHigh` は付けない（係数を持たない・設計 §4.2）。
+//! manifest の 3 行から読む（読めない周は理由付き＝manifest そのものが読めない周は
+//! `reason=manifest-unreadable`・行が欠ける周は `no-rules`）。`MemoryHigh` は付けない
+//! （係数を持たない・設計 §4.2）。
 //!
 //! peak の読みは **scope の内側**で行う（設計 §4.3）。transient scope は最後の process の
 //! 終了で cgroup dir ごと消えるので、外から終了後に読む形は成立しない。包みの `sh -c` が
@@ -19,7 +21,7 @@
 
 use crate::name::NAME;
 use crate::rules::manifest::Manifest;
-use crate::rules::RuleValue;
+use crate::seat::{embedded_manifest, int_rule_of, RuleRead};
 use std::process::{Command, Stdio};
 use std::sync::OnceLock;
 
@@ -53,7 +55,7 @@ const MIB: u64 = 1024 * 1024;
 
 /// 封じ込めの record（`reason=`）に載る閉じた語彙。
 ///
-/// **理由を自由文にしない**（憲法 C3.3・設計 §4.2）。包めなかった 4 つと、包んだ箱の中で
+/// **理由を自由文にしない**（憲法 C3.3・設計 §4.2）。包めなかった 5 つと、包んだ箱の中で
 /// 起きた 2 つ（oom / signal）を 1 つの列挙で持つ——record の読み手はどちらも同じ `reason=`
 /// で読むので、語彙が 2 面に割れると「外からの kill」と弁別できない（lens-132d L1）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,8 +64,11 @@ pub enum Reason {
     NoTool,
     /// `systemd-run` は在るが scope を作れない（user の session manager が無い host）。
     NoScope,
-    /// 封じ込めの rules 行を読めない。
+    /// 封じ込めの rules 行を読めない（manifest は読めたが行が無い・不発効・整数でない）。
     NoRules,
+    /// 埋め込み manifest そのものを parse できない（`s2-07l.205`・[`RuleRead::ManifestUnreadable`]）。
+    /// 「行が無い」と潰さない: tracked の埋め込みが壊れているのは器の欠陥で、record から読める形で残す。
+    ManifestUnreadable,
     /// 箱の大きさが残らない（`MemTotal − host.reserve_memory_mb` が 0 以下）。
     NoRoom,
     /// scope の中で kernel が process を殺した（`memory.events` の `oom_kill` ≥ 1）。
@@ -77,6 +82,7 @@ pub const REASONS: &[Reason] = &[
     Reason::NoTool,
     Reason::NoScope,
     Reason::NoRules,
+    Reason::ManifestUnreadable,
     Reason::NoRoom,
     Reason::OomKill,
     Reason::Signal,
@@ -89,9 +95,19 @@ impl Reason {
             Self::NoTool => "no-systemd-run",
             Self::NoScope => "no-scope",
             Self::NoRules => "no-rules",
+            Self::ManifestUnreadable => "manifest-unreadable",
             Self::NoRoom => "no-room",
             Self::OomKill => "oom-kill",
             Self::Signal => "signal",
+        }
+    }
+
+    /// 3 線を読めなかった理由を record の語彙へ写す（manifest が読めない周だけ別の 1 語・それ以外は
+    /// 従来どおり `no-rules`）。
+    fn of_rule_read(read: RuleRead) -> Self {
+        match read {
+            RuleRead::ManifestUnreadable => Self::ManifestUnreadable,
+            RuleRead::Missing | RuleRead::Disabled | RuleRead::NotInt => Self::NoRules,
         }
     }
 }
@@ -156,21 +172,26 @@ pub struct Caps {
 }
 
 impl Caps {
-    /// 埋め込み manifest から読む。**1 行でも欠ければ `None`**＝包まない（止めない）。
+    /// 埋め込み manifest から読む。**manifest が読めない・1 行でも欠ければ理由付きの Err**＝包まない
+    /// （止めない・理由は [`Reason::of_rule_read`] が record の語彙へ写す）。
     ///
     /// 読むのは埋め込みだけである——封じ込めの起動点は 3 つ（gate の verify 行・runner・
     /// claude）で、そのうち 2 つは `--rules` を受ける口を持たない。片方だけ override が
     /// 効く形にすると、同じ host の 3 つの箱が別々の値で走る。
-    pub fn embedded() -> Option<Self> {
-        let manifest = Manifest::embedded().ok()?;
-        let int = |id: &str| match manifest.get(id).map(|row| &row.value) {
-            Some(&RuleValue::Int(found)) => Some(found),
-            _ => None,
-        };
-        Some(Self {
-            job_memory_mb: int(JOB_MEMORY_ROW)?,
-            reserve_memory_mb: int(RESERVE_ROW)?,
-            cpu_weight: int(CPU_WEIGHT_ROW)?,
+    pub fn embedded() -> Result<Self, RuleRead> {
+        Self::of(embedded_manifest())
+    }
+
+    /// 読んだ manifest（または読めなかった理由）から 3 線を組む（pure・in-file の歯が parse に失敗する
+    /// text から `Manifest::parse` の Err を作って撃つ＝埋め込みは差し替えられない）。
+    ///
+    /// 行の読みは席と同じ [`int_rule_of`] 1 本（不在 / 不発効 / 整数でない、を別の variant で返す）。
+    pub fn of(read: Result<Manifest, RuleRead>) -> Result<Self, RuleRead> {
+        let manifest = read?;
+        Ok(Self {
+            job_memory_mb: int_rule_of(&manifest, JOB_MEMORY_ROW)?,
+            reserve_memory_mb: int_rule_of(&manifest, RESERVE_ROW)?,
+            cpu_weight: int_rule_of(&manifest, CPU_WEIGHT_ROW)?,
         })
     }
 }
@@ -181,8 +202,8 @@ pub struct Wrap<'a> {
     pub unit: &'a str,
     /// この起動に掛ける上限の種。
     pub limit: Limit,
-    /// 封じ込めの 3 線（読めない周は `None`）。
-    pub caps: Option<Caps>,
+    /// 封じ込めの 3 線（読めない周は理由付きの Err・[`Caps::embedded`] の結果をそのまま渡す）。
+    pub caps: Result<Caps, RuleRead>,
 }
 
 /// 便の 1 起動の unit 名（`<NAME>-<場所>-<段>-<n>-<pid>`）。
@@ -255,7 +276,7 @@ pub fn wrap_command(cmd: Command, entry: &Wrap<'_>) -> (Command, Confinement) {
 
 /// 箱の大きさ（MiB）を決める。包めない周は閉じた理由を返す。
 fn fitting(entry: &Wrap<'_>) -> Result<(Caps, u64), Reason> {
-    let caps = entry.caps.ok_or(Reason::NoRules)?;
+    let caps = entry.caps.map_err(Reason::of_rule_read)?;
     let meminfo = std::fs::read_to_string(MEMINFO).unwrap_or_default();
     let mb = limit_mb(entry.limit, &caps, &meminfo).ok_or(Reason::NoRoom)?;
     let host = limit_mb(Limit::HostReserve, &caps, &meminfo).ok_or(Reason::NoRoom)?;
@@ -395,11 +416,14 @@ pub fn read_usage(stdout: &str) -> Usage {
 #[cfg(test)]
 mod tests {
     use super::{
-        limit_mb, limit_of, mem_total_mb, read_usage, script, wrap_line, Caps, Limit, Reason, Wrap, PANE_ENV,
-        REASONS,
+        limit_mb, limit_of, mem_total_mb, read_usage, script, wrap_command, wrap_line, Caps, Limit, Reason, Wrap,
+        PANE_ENV, REASONS,
     };
     use crate::order::is_declaration_order;
+    use crate::rules::manifest::Manifest;
+    use crate::seat::{manifest_read, RuleRead};
     use std::ffi::OsStr;
+    use std::process::Command;
 
     /// `wrap_line` が組む起動は `TMUX_PANE` を**外す**指定を持ち、ほかの env を足さない。
     ///
@@ -407,7 +431,7 @@ mod tests {
     /// lens の 2 経路を撃ち、ここは関数そのものの指定を pin する。
     #[test]
     fn pipe_spawn_drops_tmux_pane_in_wrap_line() {
-        let entry = Wrap { unit: "scribe2-probe-unit", limit: Limit::HostReserve, caps: None };
+        let entry = Wrap { unit: "scribe2-probe-unit", limit: Limit::HostReserve, caps: Err(RuleRead::Missing) };
         let (cmd, confinement) = wrap_line("true", &entry);
         assert_eq!(confinement.reason(), Some(Reason::NoRules), "rules の無い周は素のまま撃つ");
         let envs: Vec<(&OsStr, Option<&OsStr>)> = cmd.get_envs().collect();
@@ -559,6 +583,50 @@ mod tests {
         assert_eq!(Reason::NoTool.as_str(), "no-systemd-run");
         assert_eq!(Reason::OomKill.as_str(), "oom-kill");
         assert_eq!(Reason::Signal.as_str(), "signal");
-        assert_eq!(REASONS.len(), 6, "母集団（包めない 4 つ + 箱の中の 2 つ）");
+        assert_eq!(Reason::ManifestUnreadable.as_str(), "manifest-unreadable");
+        assert_eq!(REASONS.len(), 7, "母集団（包めない 5 つ + 箱の中の 2 つ）");
+    }
+
+    /// parse に失敗する text からの読みは `Caps::of` が [`RuleRead::ManifestUnreadable`] のまま運び、包みは
+    /// 「包まない」のまま record の理由を `manifest-unreadable` にする（`s2-07l.205`）。行が欠ける周は従来
+    /// どおり `no-rules`（2 つを 1 語に潰す変異はここで落ちる）。
+    #[test]
+    fn rule_read_confine_unreadable_manifest_is_named_in_the_reason() {
+        let broken = Caps::of(manifest_read(Manifest::parse("schema = 1\n\n[[rule]]\nid = \"x\"\n")));
+        assert_eq!(broken, Err(RuleRead::ManifestUnreadable), "parse の Err は 1 語に畳む");
+        let entry = Wrap { unit: "scribe2-probe-unit", limit: Limit::HostReserve, caps: broken };
+        let (cmd, confinement) = wrap_line("true", &entry);
+        assert!(!confinement.confined(), "読めない周は包まない（止めない）");
+        assert_eq!(confinement.reason(), Some(Reason::ManifestUnreadable), "理由は manifest-unreadable");
+        assert_eq!(cmd.get_program(), OsStr::new("sh"), "素の sh -c のまま");
+        let (_, wrapped) = wrap_command(Command::new("true"), &entry);
+        assert_eq!(wrapped.reason(), Some(Reason::ManifestUnreadable), "argv の包みも同じ理由");
+
+        // 行が欠ける（読めた manifest に 3 線が無い）周は `no-rules` のまま。
+        let absent = Caps::of(manifest_read(Manifest::parse("schema = 1\n")));
+        assert_eq!(absent, Err(RuleRead::Missing), "行が無い");
+        let entry = Wrap { unit: "scribe2-probe-unit", limit: Limit::HostReserve, caps: absent };
+        assert_eq!(wrap_line("true", &entry).1.reason(), Some(Reason::NoRules), "行が無い周は no-rules");
+        for read in [RuleRead::Disabled, RuleRead::NotInt] {
+            let entry = Wrap { unit: "scribe2-probe-unit", limit: Limit::HostReserve, caps: Err(read) };
+            assert_eq!(wrap_line("true", &entry).1.reason(), Some(Reason::NoRules), "{read:?} は no-rules");
+        }
+    }
+
+    /// 3 線の揃った manifest は `Caps` になり、1 行でも欠ければその行の variant で Err（3 線の全部を読む）。
+    #[test]
+    fn rule_read_confine_caps_of_reads_all_three_rows() {
+        let row = |id: &str, kind: &str, value: u64| {
+            format!(
+                "[[rule]]\nid = \"{id}\"\nkind = \"{kind}\"\nvalue = {value}\nenabled = true\nruling = \"r\"\nruled_at = \"d\"\n\n"
+            )
+        };
+        let job = row("gate.job_memory_mb", "GateJobMemoryMb", 7);
+        let reserve = row("host.reserve_memory_mb", "HostReserveMemoryMb", 11);
+        let weight = row("gate.cpu_weight", "GateCpuWeight", 50);
+        let full = format!("schema = 1\n\n{job}{reserve}{weight}");
+        assert_eq!(Caps::of(manifest_read(Manifest::parse(&full))), Ok(CAPS), "3 線が揃う");
+        let short = format!("schema = 1\n\n{job}{reserve}");
+        assert_eq!(Caps::of(manifest_read(Manifest::parse(&short))), Err(RuleRead::Missing), "cpu_weight が無い");
     }
 }

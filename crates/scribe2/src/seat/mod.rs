@@ -361,26 +361,184 @@ pub fn seat_of(path: &Path) -> Option<String> {
         .map(|value| value.trim().trim_matches('"').to_owned())
 }
 
-/// 発効している rules 行の整数値。不発効・別の形・不在は `None`（＝判定しない側へ倒す）。
+/// 埋め込み manifest の rules 行を読めなかった理由（**閉じた列**・憲法 C11.2 / C11.3・`s2-07l.205`）。
+///
+/// 「manifest そのものが読めない」を「行が無い」に潰さない: 埋め込みは tracked で build 時に焼く
+/// ので parse の失敗は器の欠陥であり、呼び手が既定値・no-rule の分岐へ倒れると欠陥が記録から
+/// 消える（NFR4「読めない周は黙って落とさない」）。呼び手はどれも「判定しない側」のままで、
+/// **variant の名を理由行に添えるだけ**（極性は変えない）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuleRead {
+    /// 埋め込み manifest を parse できない（`Manifest::embedded` の Err）。
+    ManifestUnreadable,
+    /// その id の行が無い。
+    Missing,
+    /// 行は在るが `enabled = false`。
+    Disabled,
+    /// 行は発効しているが値が整数でない。
+    NotInt,
+}
+
+impl RuleRead {
+    /// 理由行に書く字面。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ManifestUnreadable => "manifest-unreadable",
+            Self::Missing => "missing",
+            Self::Disabled => "disabled",
+            Self::NotInt => "not-int",
+        }
+    }
+
+    /// 既存の理由 `no-rule`（[`meter::REASON_NO_RULE`] / [`cycle::REASON_NO_RULE`]）に variant を添えた
+    /// 字面（`no-rule:<variant>`）。`&'static str` の理由を運ぶ既存の型（`Cycle::Refused` /
+    /// `Context::Unmeasured` 等）をそのまま使うために、組んだ字面を literal で持つ（in-file の歯が
+    /// `no-rule:` + [`Self::as_str`] と 1 面であることを pin する）。
+    pub fn no_rule(self) -> &'static str {
+        match self {
+            Self::ManifestUnreadable => "no-rule:manifest-unreadable",
+            Self::Missing => "no-rule:missing",
+            Self::Disabled => "no-rule:disabled",
+            Self::NotInt => "no-rule:not-int",
+        }
+    }
+}
+
+/// [`RuleRead`] の全 variant（宣言順・歯の網羅の母集団）。
+pub const RULE_READS: &[RuleRead] = &[
+    RuleRead::ManifestUnreadable,
+    RuleRead::Missing,
+    RuleRead::Disabled,
+    RuleRead::NotInt,
+];
+
+/// manifest の読み（parse の結果）を typed な理由へ写す（pure・in-file の歯の入口）。
+///
+/// parse の Err（`Vec<RuleError>`・行ごとの欠陥）は 1 語 [`RuleRead::ManifestUnreadable`] に畳む:
+/// 欠陥の列挙は `rules validate` の面が持ち、席の判定行は「読めなかった」だけを名乗る。
+pub fn manifest_read(
+    read: Result<crate::rules::manifest::Manifest, Vec<crate::rules::RuleError>>,
+) -> Result<crate::rules::manifest::Manifest, RuleRead> {
+    read.map_err(|_| RuleRead::ManifestUnreadable)
+}
+
+/// 埋め込み manifest を読む（読めない周は [`RuleRead::ManifestUnreadable`]）。
+///
+/// 席の面（tick / cycle / meter）と封じ込め（`pipe::confine`）が埋め込みを読む **1 本の口**。
+pub fn embedded_manifest() -> Result<crate::rules::manifest::Manifest, RuleRead> {
+    manifest_read(crate::rules::manifest::Manifest::embedded())
+}
+
+/// 発効している rules 行の整数値。読めない周は理由付きの Err（＝呼び手は判定しない側へ倒す）。
 ///
 /// 閾値の**値は code に焼かない**（憲法 C5・C1「規則はデータ」）。tick と cycle が同じ
 /// 読み方をするので、読みはここ 1 箇所に置く。
-pub fn int_rule(id: &str) -> Option<u64> {
-    let manifest = crate::rules::manifest::Manifest::embedded().ok()?;
-    let row = manifest.get(id)?;
-    match (row.enabled, &row.value) {
-        (true, crate::rules::RuleValue::Int(found)) => Some(*found),
-        _ => None,
+pub fn int_rule(id: &str) -> Result<u64, RuleRead> {
+    int_rule_of(&embedded_manifest()?, id)
+}
+
+/// **渡された manifest** から発効している rules 行の整数値を読む（pure・in-file の歯の入口）。
+/// 不在 / 不発効 / 整数でない、をそれぞれ別の variant で返す。
+pub fn int_rule_of(manifest: &crate::rules::manifest::Manifest, id: &str) -> Result<u64, RuleRead> {
+    let row = manifest.get(id).ok_or(RuleRead::Missing)?;
+    if !row.enabled {
+        return Err(RuleRead::Disabled);
+    }
+    match row.value {
+        crate::rules::RuleValue::Int(found) => Ok(found),
+        _ => Err(RuleRead::NotInt),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::inject::InputGate;
-    use super::{host_slots_dir, shell_input_empty, Provenance, StateDir, SHELL_PROMPT_TAILS};
+    use super::{
+        host_slots_dir, int_rule_of, manifest_read, shell_input_empty, Provenance, RuleRead, StateDir, RULE_READS,
+        SHELL_PROMPT_TAILS,
+    };
+    use crate::order::is_declaration_order;
+    use crate::rules::manifest::Manifest;
     use proptest::prelude::*;
     use proptest::test_runner::Config;
     use std::path::{Path, PathBuf};
+
+    /// 歯の fixture の行 id（tracked manifest の id を写さない＝行が動いても歯は動かない）。
+    const FIXTURE_ID: &str = "fixture.int";
+
+    /// `[[rule]]` 1 行の fixture（kind は整数形の 1 つ・値と発効は引数）。
+    fn manifest_with(kind: &str, value: &str, enabled: bool) -> Manifest {
+        let text = format!(
+            "schema = 1\n\n[[rule]]\nid = \"{FIXTURE_ID}\"\nkind = \"{kind}\"\nvalue = {value}\nenabled = {enabled}\nruling = \"r\"\nruled_at = \"d\"\n"
+        );
+        match Manifest::parse(&text) {
+            Ok(found) => found,
+            Err(errors) => panic!("fixture の manifest を読める: {errors:?}"),
+        }
+    }
+
+    /// `int_rule_of` は 4 つの読みを別の variant で返す（不在 / 不発効 / 整数でない / 正常）。
+    ///
+    /// 3 つの Err を **1 つに潰す変異**（`.ok_or(Missing)` で全部を Missing に、`enabled` を見ない、
+    /// 形を見ない）はどれかの assert で落ちる。
+    #[test]
+    fn rule_read_int_rule_of_names_each_failure() {
+        let absent = match Manifest::parse("schema = 1\n") {
+            Ok(found) => found,
+            Err(errors) => panic!("空の manifest を読める: {errors:?}"),
+        };
+        assert_eq!(int_rule_of(&absent, FIXTURE_ID), Err(RuleRead::Missing), "行が無い");
+        assert_eq!(
+            int_rule_of(&manifest_with("SeatTickStaleS", "7", false), FIXTURE_ID),
+            Err(RuleRead::Disabled),
+            "行は在るが不発効"
+        );
+        assert_eq!(
+            int_rule_of(&manifest_with("DialogueSurface", "\"planner\"", true), FIXTURE_ID),
+            Err(RuleRead::NotInt),
+            "発効しているが整数でない"
+        );
+        assert_eq!(int_rule_of(&manifest_with("SeatTickStaleS", "7", true), FIXTURE_ID), Ok(7), "正常");
+        // 不発効かつ整数でない行は**不発効**が先（発効を見てから形を見る）。
+        assert_eq!(
+            int_rule_of(&manifest_with("DialogueSurface", "\"planner\"", false), FIXTURE_ID),
+            Err(RuleRead::Disabled),
+            "不発効が形より先"
+        );
+    }
+
+    /// `as_str` の全 variant を網羅 match で pin する（列の宣言順・字面の重複なし・`no_rule` は
+    /// `no-rule:` + `as_str` と 1 面）。
+    #[test]
+    fn rule_read_as_str_covers_every_variant() {
+        assert!(is_declaration_order(RULE_READS, |read| read as usize), "RULE_READS は宣言順");
+        assert_eq!(RULE_READS.len(), 4, "母集団");
+        for read in RULE_READS.iter().copied() {
+            let want = match read {
+                RuleRead::ManifestUnreadable => "manifest-unreadable",
+                RuleRead::Missing => "missing",
+                RuleRead::Disabled => "disabled",
+                RuleRead::NotInt => "not-int",
+            };
+            assert_eq!(read.as_str(), want, "{read:?}");
+            assert_eq!(read.no_rule(), format!("{}:{}", super::meter::REASON_NO_RULE, read.as_str()), "{read:?}");
+            assert_eq!(read.no_rule(), format!("{}:{}", super::cycle::REASON_NO_RULE, read.as_str()), "{read:?}");
+            let same = RULE_READS.iter().filter(|other| other.as_str() == read.as_str()).count();
+            assert_eq!(same, 1, "字面 {} が重複する", read.as_str());
+        }
+    }
+
+    /// parse に失敗する text からの読みは `ManifestUnreadable` 1 語に畳み、読める text は通す。
+    #[test]
+    fn rule_read_manifest_read_maps_parse_failure_to_unreadable() {
+        assert_eq!(
+            manifest_read(Manifest::parse("schema = 1\n\n[[rule]]\nid = \"x\"\n")).map(|_| ()),
+            Err(RuleRead::ManifestUnreadable),
+            "欠けた行は読めない"
+        );
+        assert_eq!(manifest_read(Manifest::parse("こわれ\n")).map(|_| ()), Err(RuleRead::ManifestUnreadable));
+        assert_eq!(manifest_read(Manifest::parse("schema = 1\n")).map(|_| ()), Ok(()), "空の manifest は読める");
+    }
 
     // flip-check: retroactive s2-07l.223
     /// `StateDir::slots_dir` は Default（空 path）でなく、置き場の**親**の下の固定の相対 path

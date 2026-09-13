@@ -9,7 +9,7 @@
 //! **計測できない周は 0% に化けない**（FR25）: 健全性を外れた statusline は捏造値を
 //! 流さず不成立にし、理由を 1 語で返す。
 
-use super::{capture, search_region};
+use super::{capture, embedded_manifest, int_rule_of, search_region, RuleRead};
 use crate::rules::manifest::Manifest;
 use crate::rules::RuleValue;
 use std::fs::File;
@@ -50,6 +50,7 @@ pub const REASON_NO_SOURCE: &str = "no-source";
 ///
 /// guard の cap 欠落と**同じ語**である（設計 §3「測れない理由は 4 語で弁別する」）。5 語目を
 /// 足すと、記録の語彙が本便の都合で増える——出所を 1 本にする便が記録の形を動かさない。
+/// 埋め込みを読む周は読めなかった variant を `:` で添える（[`RuleRead::no_rule`]・`s2-07l.205`）。
 pub const REASON_NO_RULE: &str = "no-rule";
 
 /// 窓を宣言する rules 行の id（**値は code に焼かない**・憲法 C5）。
@@ -171,28 +172,36 @@ pub fn used_from_pane_pct(pane: &str) -> Result<(u64, u64, u64), &'static str> {
 /// 変えたときに 2 面が静かにずれる——本便が畳もうとしている当の穴になる。
 ///
 /// 窓は **rules 行の宣言値**（測れる窓を transcript は持たない）。宣言が読めない周は
-/// **割らずに不成立**にする（0 で割らない・0% に化けない）。
+/// **割らずに不成立**にする（0 で割らない・0% に化けない）。理由は [`REASON_NO_RULE`] に
+/// 読めなかった variant を添えた字面（[`RuleRead::no_rule`]・`s2-07l.205`）。
 ///
 /// 使用率は**切り捨て**である。境界は「cap 以上で止める」ので、切り上げると cap 未満の
 /// 周まで止まる（guard の従来の丸めをそのまま持ってきている）。
 pub fn used_from_transcript_pct(path: &Path) -> Result<(u64, u64, u64), &'static str> {
     let used = used_from_transcript(path)?;
-    let window = declared_window().ok_or(REASON_NO_RULE)?;
+    let window = declared_window().map_err(RuleRead::no_rule)?;
     Ok((used.saturating_mul(PERCENT) / window, used, window))
 }
 
-/// 埋め込みの宣言から窓を引く。
-fn declared_window() -> Option<u64> {
-    window_of(&Manifest::embedded().ok()?)
+/// 埋め込みの宣言から窓を引く。読めない周は理由付き（`s2-07l.205`）: manifest が読めない /
+/// 行の不在・不発効・形違いは [`int_rule_of`] の variant、発効した整数でも窓の形（`> 0`）を
+/// 外れる `0` は [`RuleRead::NotInt`]（[`window_of`] の pure 側は不変）。
+fn declared_window() -> Result<u64, RuleRead> {
+    let manifest = embedded_manifest()?;
+    int_rule_of(&manifest, ID_WINDOW)?;
+    window_of(&manifest).ok_or(RuleRead::NotInt)
 }
 
 /// 埋め込みの宣言から cap を引く。**guard と管理 tick が呼ぶ 1 本の口**（`s2-07l.89`）。
 ///
 /// cap の行 id を 2 か所で持たない: guard が private に持っていた読みをここへ移し、tick は
 /// 自前の literal で cap を読まない。窓（[`window_of`]）と同じ module に置くのは、「何に対する
-/// 60% か」（窓）と「60% とは何か」（cap）を同じ面が答えるためである。
-pub fn declared_cap() -> Option<u64> {
-    cap_of(&Manifest::embedded().ok()?)
+/// 60% か」（窓）と「60% とは何か」（cap）を同じ面が答えるためである。読めない周は理由付き
+/// （[`int_rule_of`] の variant・[`cap_of`] の pure 側は不変）。
+pub fn declared_cap() -> Result<u64, RuleRead> {
+    let manifest = embedded_manifest()?;
+    int_rule_of(&manifest, ID_CAP)?;
+    cap_of(&manifest).ok_or(RuleRead::NotInt)
 }
 
 /// 宣言（rules 行）から cap を引く。不発効・別の形は `None`（＝測らない側へ倒す）。
