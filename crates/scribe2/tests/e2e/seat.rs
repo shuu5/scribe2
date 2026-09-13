@@ -4218,3 +4218,403 @@ fn seat_evidence_cycle_does_not_resend_when_restore_stays_queued() {
     drop(guard);
     fs::remove_dir_all(&dir).ok();
 }
+
+// ─────────────────── 作業記憶の退避（externalize・設計 working-memory.md §5.1 / §8） ───────────────────
+
+/// 退避の歯の席（`:` を含む＝置き場の dir 名は潰した `wm_1`、frontmatter の `seat:` は逐語）。
+const WM_TARGET: &str = "wm:1";
+/// 上の target を潰した dir 名（契約の字面から組む）。
+const WM_SEAT_DIR: &str = "wm_1";
+/// 節 1 の見出し（設計 §3 の固定字面を歯の側でも逐語で持つ）。
+const WM_HEAD_USER: &str = "## user 直命（verbatim・言い換え禁止）";
+/// 節 2 の見出し。
+const WM_HEAD_PLAN: &str = "## 計画弧・次のステップ";
+/// 節 3 の見出し。
+const WM_HEAD_DIRECTIVES: &str = "## この effort を貫く命令・制約";
+
+/// 退避の歯の場所（tmp の wm dir・state dir・anchor・入力 file の dir）。
+struct WmPlace {
+    /// tmp の root。
+    dir: PathBuf,
+    /// 退避物の dir。
+    wm: PathBuf,
+    /// 置き場。
+    state: PathBuf,
+    /// 実在検査の repo root（fixture）。
+    anchor: PathBuf,
+}
+
+/// 場所を作る。anchor には憲法 `n2` / `c11`・ADR-0018・設計 doc 1 本・repo 内 file 1 本・台帳 prefix `s2` を置く。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn wm_place() -> WmPlace {
+    let dir = tmp();
+    let (wm, state, anchor) = (dir.join("wm"), dir.join("state"), dir.join("anchor"));
+    for sub in ["design-intent/spec", "design-intent/decisions", "docs/design", "src", ".beads"] {
+        fs::create_dir_all(anchor.join(sub)).expect("anchor の dir を作れる");
+    }
+    fs::create_dir_all(&wm).expect("wm dir を作れる");
+    fs::create_dir_all(dir.join("in")).expect("入力 dir を作れる");
+    let files = [
+        ("design-intent/spec/constitution.html", "<section id=\"n2\"></section>\n<section id=\"c11\"></section>\n"),
+        ("design-intent/decisions/ADR-0018-working-memory.html", "<html></html>\n"),
+        ("docs/design/working-memory.md", "# 設計\n"),
+        ("src/lib.rs", "// fixture\n"),
+        (".beads/metadata.json", "{\n  \"dolt_database\": \"s2\"\n}\n"),
+    ];
+    for (path, body) in files {
+        fs::write(anchor.join(path), body).expect("anchor の file を書ける");
+    }
+    WmPlace { dir, wm, state, anchor }
+}
+
+/// 打刻を置く（行は契約の字面から組む・最後の行が現在の sid）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn wm_stamp(place: &WmPlace, sids: &[&str]) {
+    let seat = seat_dir_of(&place.state, WM_SEAT_DIR);
+    fs::create_dir_all(&seat).expect("seat dir を作れる");
+    let lines: String = sids
+        .iter()
+        .map(|sid| format!("{}\n", stamp_line("idle", "Stop", unix_now(), sid)))
+        .collect();
+    fs::write(state_file(&seat), lines).expect("打刻を置ける");
+}
+
+/// 上限だけを持つ rules の fixture を書き、`--rules` に渡す path を返す。
+fn wm_rules(place: &WmPlace, cap: u64) -> String {
+    fixture(
+        &place.dir,
+        "wm-rules.toml",
+        &format!(
+            "schema = 1\n\n[[rule]]\nid = \"seat.wm_directive_cap\"\nkind = \"WmDirectiveCap\"\nvalue = {cap}\n\
+             enabled = true\nruling = \"user 2026-09-12T02:01Z\"\nruled_at = \"2026-09-12\"\n"
+        ),
+    )
+}
+
+/// `seat externalize` を 1 回撃つ（計画弧は固定・節 3 の新規行は `directives`・`extra` は追加の flag）。
+fn wm_externalize(place: &WmPlace, directives: &str, extra: &[&str]) -> Output {
+    let input = place.dir.join("in");
+    let plan = fixture(&input, "plan.md", "- 次は s2-07l.139 の land\n");
+    let directives = fixture(&input, "directives.md", directives);
+    let (wm, state, anchor) = (
+        place.wm.display().to_string(),
+        place.state.display().to_string(),
+        place.anchor.display().to_string(),
+    );
+    let mut args = vec![
+        "externalize", "--target", WM_TARGET, "--wm-dir", &wm, "--state-dir", &state, "--anchor", &anchor,
+        "--plan", &plan, "--directives", &directives,
+    ];
+    args.extend_from_slice(extra);
+    run_seat(&args)
+}
+
+/// wm dir に在る退避物の名前（sort 済み）。
+fn wm_names(place: &WmPlace) -> Vec<String> {
+    let mut names: Vec<String> = fs::read_dir(&place.wm)
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    names.sort();
+    names
+}
+
+/// 消費済み退避物を 1 つ置く（`front` は frontmatter の中身・節は逐語）。
+fn wm_consumed(place: &WmPlace, name: &str, front: &str, user: &str, directives: &str) -> PathBuf {
+    let path = place.wm.join(name);
+    let body = format!(
+        "---\n{front}---\n\n{WM_HEAD_USER}\n{user}\n{WM_HEAD_PLAN}\n- 前の計画\n\n{WM_HEAD_DIRECTIVES}\n{directives}"
+    );
+    fs::write(&path, body).ok();
+    path
+}
+
+/// 節 3 の本文だけを返す（見出しの後ろ全部）。
+fn wm_directive_section(text: &str) -> String {
+    text.split_once(WM_HEAD_DIRECTIVES)
+        .map(|(_, tail)| tail.to_owned())
+        .unwrap_or_default()
+}
+
+/// (1) 打刻の最終行の sid で file 名が決まる。打刻が無い周は rc 1 `sid-missing` で理由を stderr に出し、file を作らない。
+#[test]
+fn seat_wm_externalize_names_file_by_stamped_sid_and_refuses_without_stamp() {
+    let place = wm_place();
+    let line = "- [auto] [P1] since=2026-09-13 退避は器の口で → SSOT: ADR-0018 §2.3\n";
+    let missing = wm_externalize(&place, line, &[]);
+    assert_eq!(rc_of(&missing), i32::from(RC_REFUSED), "打刻が無い周は rc 1: {}", stdout_of(&missing));
+    assert!(stderr_of(&missing).contains("reason=sid-missing"), "理由: {}", stderr_of(&missing));
+    assert!(stdout_of(&missing).is_empty(), "断る周は stdout に書かない");
+    assert!(wm_names(&place).is_empty(), "file を作らない: {:?}", wm_names(&place));
+
+    wm_stamp(&place, &["sid-old", "sid-now-1"]);
+    let out = wm_externalize(&place, line, &[]);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(
+        stdout_of(&out),
+        "seat: externalized file=working-memory.sid-now-1.md carried=0 dropped_provisional=0 dropped_unresolved=0 directives=1\n",
+        "stdout 1 行"
+    );
+    assert_eq!(wm_names(&place), vec!["working-memory.sid-now-1.md".to_owned()], "最終行の sid の名義で 1 つだけ");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (2) 自席の未 consumed 退避物が在れば rc 1 `wm-exists` で新しい file を作らない（他席の未 consumed は止めない）。
+#[test]
+fn seat_wm_externalize_refuses_when_own_unconsumed_wm_exists() {
+    let place = wm_place();
+    wm_stamp(&place, &["sid-2"]);
+    let other = wm_file(&place.wm, "working-memory.other.md", "other:1");
+    let first = wm_externalize(&place, "", &[]);
+    assert_eq!(rc_of(&first), i32::from(RC_OK), "他席の未 consumed は止めない: {}", stderr_of(&first));
+    fs::remove_file(place.wm.join("working-memory.sid-2.md")).ok();
+
+    let own = wm_file(&place.wm, "working-memory.prev.md", WM_TARGET);
+    let before = fs::read_to_string(&own).unwrap_or_default();
+    let out = wm_externalize(&place, "", &[]);
+    assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "stdout={}", stdout_of(&out));
+    assert!(stderr_of(&out).contains("reason=wm-exists"), "理由: {}", stderr_of(&out));
+    assert!(!place.wm.join("working-memory.sid-2.md").exists(), "新しい file を作らない");
+    assert_eq!(fs::read_to_string(&own).unwrap_or_default(), before, "既存の退避物は不変");
+    assert!(other.exists(), "他席の退避物は不変");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// carry 元の節 3（pointer 行 3 本〔repo path P2・憲法 P0・ADR P1〕と暫定行 2 本〔SSOT 無し・user 裁定だけ〕）。
+const CARRY_DIRECTIVES: &str = concat!(
+    "- [auto] [P2] since=2026-09-01 repo の現物 → SSOT: src/lib.rs\n",
+    "- [confirm] [P1] since=2026-09-01 矢印の無い命令\n",
+    "- [auto] [P0] since=2026-09-01 prose は規則でない → SSOT: 憲法 N2\n",
+    "- [auto] [P1] since=2026-09-01 裁定だけの命令 → SSOT: user 裁定 2026-09-12T02:01Z\n",
+    "- [hard候補] [P1] since=2026-09-01 退避は器の口 → SSOT: ADR-0018 §2.3\n",
+);
+
+/// carry 元の節 1（未着手・完了・着手中〔従属行つき〕・user 撤回）。
+const CARRY_USER: &str = concat!(
+    "- [2026-09-12 10:00] 「A を直せ」 → 状態: 未着手\n",
+    "- [2026-09-12 10:05] 「B は済んだ」 → 状態: 完了 s2-07l.1\n",
+    "- [2026-09-12 10:10] 「C を、そのまま」 → 状態: 着手中 s2-07l.2\n",
+    "  補足の従属行（逐語）\n",
+    "- [2026-09-12 10:20] 「D はやめる」 → 状態: user 撤回\n",
+);
+
+/// (3) consumed からの carry で pointer 行 3 本は残り暫定行 2 本は落ちる・残りは P 昇順の安定 sort。
+#[test]
+fn seat_wm_externalize_carries_pointer_lines_and_drops_provisional_in_priority_order() {
+    let place = wm_place();
+    wm_stamp(&place, &["sid-3"]);
+    wm_consumed(&place, "working-memory.sid-2.consumed.md", &format!("schema: 1\nseat: {WM_TARGET}\n"), CARRY_USER, CARRY_DIRECTIVES);
+    let fresh = "- [confirm] [P1] since=2026-09-13 新規の命令 → SSOT: docs/design/working-memory.md §5.1\n";
+    let out = wm_externalize(&place, fresh, &[]);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(
+        stdout_of(&out),
+        "seat: externalized file=working-memory.sid-3.md carried=3 dropped_provisional=2 dropped_unresolved=0 directives=1\n"
+    );
+    let text = fs::read_to_string(place.wm.join("working-memory.sid-3.md")).unwrap_or_default();
+    let section = wm_directive_section(&text);
+    let lines: Vec<&str> = section.lines().filter(|line| line.starts_with("- ")).collect();
+    assert_eq!(
+        lines,
+        vec![
+            "- [auto] [P0] since=2026-09-01 prose は規則でない → SSOT: 憲法 N2",
+            "- [hard候補] [P1] since=2026-09-01 退避は器の口 → SSOT: ADR-0018 §2.3",
+            "- [confirm] [P1] since=2026-09-13 新規の命令 → SSOT: docs/design/working-memory.md §5.1",
+            "- [auto] [P2] since=2026-09-01 repo の現物 → SSOT: src/lib.rs",
+        ],
+        "P 昇順・同じ P は carry → 新規の順（安定）: {text}"
+    );
+    assert!(!text.contains("矢印の無い命令") && !text.contains("裁定だけの命令"), "暫定行は運ばない: {text}");
+    assert!(text.contains("\ncarry_source: working-memory.sid-2.consumed.md\n"), "{text}");
+    assert!(text.contains("\ncarry_items: 3\n"), "{text}");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (4) 節 1 は逐語で全行残り「完了」「user 撤回」の行だけ落ちる・`--user` の追記は逐語で後ろに足す。
+#[test]
+fn seat_wm_externalize_carries_user_section_verbatim_and_drops_only_closed_rows() {
+    let place = wm_place();
+    wm_stamp(&place, &["sid-4"]);
+    wm_consumed(&place, "working-memory.sid-3.consumed.md", &format!("seat: {WM_TARGET}\n"), CARRY_USER, "");
+    let user = fixture(&place.dir, "user.md", "- [2026-09-13 01:00] 「E、語尾も逐語で。」 → 状態: 未着手\n");
+    let out = wm_externalize(&place, "", &["--user", &user]);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    let text = fs::read_to_string(place.wm.join("working-memory.sid-4.md")).unwrap_or_default();
+    let section = text
+        .split_once(WM_HEAD_USER)
+        .and_then(|(_, tail)| tail.split_once(WM_HEAD_PLAN))
+        .map(|(body, _)| body.trim_matches('\n').to_owned())
+        .unwrap_or_default();
+    assert_eq!(
+        section,
+        concat!(
+            "- [2026-09-12 10:00] 「A を直せ」 → 状態: 未着手\n",
+            "- [2026-09-12 10:10] 「C を、そのまま」 → 状態: 着手中 s2-07l.2\n",
+            "  補足の従属行（逐語）\n",
+            "- [2026-09-13 01:00] 「E、語尾も逐語で。」 → 状態: 未着手",
+        ),
+        "逐語・閉じた 2 行だけ落ちる: {text}"
+    );
+    assert!(text.contains("\ncarry_user_directives: 2\n"), "{text}");
+    assert!(text.contains(&format!("{WM_HEAD_PLAN}\n- 次は s2-07l.139 の land\n")), "計画弧は --plan の逐語: {text}");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (5) `--directives` の tag / P / since 欠落の 3 行は行番号付きで全件 stderr・rc 1・file 不作成。SSOT 欠落の行は断りに載らない。
+#[test]
+fn seat_wm_externalize_reports_every_grammar_failure_with_line_numbers() {
+    let place = wm_place();
+    wm_stamp(&place, &["sid-5"]);
+    let lines = concat!(
+        "- [P1] since=2026-09-13 tag 欠落 → SSOT: 憲法 N2\n",
+        "<!-- テンプレの説明（捨てる） -->\n",
+        "- [auto] since=2026-09-13 P 欠落 → SSOT: 憲法 N2\n",
+        "- [auto] [P1] since 欠落 → SSOT: 憲法 N2\n",
+        "- [confirm] [P2] since=2026-09-13 SSOT 欠落（暫定行として入る形）\n",
+    );
+    let out = wm_externalize(&place, lines, &[]);
+    assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "stdout={}", stdout_of(&out));
+    let err = stderr_of(&out);
+    assert_eq!(
+        err,
+        concat!(
+            "seat: externalize refused reason=directive-grammar lines=3\n",
+            "seat: externalize directive line=1 missing=tag\n",
+            "seat: externalize directive line=3 missing=priority\n",
+            "seat: externalize directive line=4 missing=since\n",
+        ),
+        "全件・行番号付き（コメント行も行番号を数える）"
+    );
+    assert!(wm_names(&place).is_empty(), "file を作らない: {:?}", wm_names(&place));
+    // SSOT 欠落だけの行は止めない（暫定行として入る）。
+    let provisional = wm_externalize(&place, "- [confirm] [P2] since=2026-09-13 SSOT 欠落\n", &[]);
+    assert_eq!(rc_of(&provisional), i32::from(RC_OK), "stderr={}", stderr_of(&provisional));
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (6) 節 3 の合計が上限（fixture の rules で 3）を超えたら rc 1 `directive-cap`（黙って切らない）・ちょうど 3 は通る。
+#[test]
+fn seat_wm_externalize_refuses_over_directive_cap_from_rules() {
+    let place = wm_place();
+    wm_stamp(&place, &["sid-6"]);
+    let rules = wm_rules(&place, 3);
+    let row = |n: u32| format!("- [auto] [P1] since=2026-09-13 命令 {n} → SSOT: 憲法 N2\n");
+    let four: String = (1..=4).map(row).collect();
+    let over = wm_externalize(&place, &four, &["--rules", &rules]);
+    assert_eq!(rc_of(&over), i32::from(RC_REFUSED), "stdout={}", stdout_of(&over));
+    assert_eq!(stderr_of(&over), "seat: externalize refused reason=directive-cap total=4 cap=3\n");
+    assert!(wm_names(&place).is_empty(), "file を作らない: {:?}", wm_names(&place));
+    let three: String = (1..=3).map(row).collect();
+    let at = wm_externalize(&place, &three, &["--rules", &rules]);
+    assert_eq!(rc_of(&at), i32::from(RC_OK), "上限ちょうどは通る: {}", stderr_of(&at));
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (7) frontmatter に `schema: 1` と `seat:` が在り、`--trigger` と `--role` が写る（既定の trigger は manual）。
+#[test]
+fn seat_wm_externalize_writes_frontmatter_with_schema_seat_and_trigger() {
+    let place = wm_place();
+    wm_stamp(&place, &["sid-7"]);
+    let out = wm_externalize(&place, "", &["--trigger", "tick", "--role", "planner"]);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    let text = fs::read_to_string(place.wm.join("working-memory.sid-7.md")).unwrap_or_default();
+    assert!(text.starts_with(&format!("---\nschema: 1\nseat: {WM_TARGET}\nrole: planner\nexternalized_at: ")), "{text}");
+    for key in ["\ntrigger: tick\n", "\ncarry_source: none\n", "\ncarry_items: 0\n", "\ncarry_user_directives: 0\n"] {
+        assert!(text.contains(key), "{key:?} が在る: {text}");
+    }
+    for head in [WM_HEAD_USER, WM_HEAD_PLAN, WM_HEAD_DIRECTIVES] {
+        assert!(text.contains(&format!("\n{head}\n")), "見出し {head}: {text}");
+    }
+    fs::remove_dir_all(&place.wm).ok();
+    fs::create_dir_all(&place.wm).ok();
+    let manual = wm_externalize(&place, "", &[]);
+    assert_eq!(rc_of(&manual), i32::from(RC_OK), "stderr={}", stderr_of(&manual));
+    let text = fs::read_to_string(place.wm.join("working-memory.sid-7.md")).unwrap_or_default();
+    assert!(text.contains("\ntrigger: manual\n") && !text.contains("\nrole:"), "既定: {text}");
+    let bad = wm_externalize(&place, "", &["--trigger", "cron"]);
+    assert_eq!(rc_of(&bad), i32::from(RC_REFUSED), "未知の trigger は使い方の誤り");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (8) 他席の consumed は carry の source にならない・unresolved の行（実在しない憲法 id）は落ちて数えられる・
+/// `schema` 無しの consumed も carry 元になる・打刻の sid が空なら rc 1 `sid-empty`。
+#[test]
+fn seat_wm_externalize_carries_only_own_seat_and_drops_unresolved_rows() {
+    let place = wm_place();
+    let own = wm_consumed(
+        &place,
+        "working-memory.sid-a.consumed.md",
+        &format!("seat: {WM_TARGET}\n"),
+        "",
+        concat!(
+            "- [auto] [P1] since=2026-09-01 在る条 → SSOT: 憲法 C11.2\n",
+            "- [auto] [P0] since=2026-09-01 無い条 → SSOT: 憲法 C99 / s2-07l.61\n",
+        ),
+    );
+    backdate(&own, 600);
+    wm_consumed(
+        &place,
+        "working-memory.sid-b.consumed.md",
+        "schema: 1\nseat: other:1\n",
+        "",
+        "- [auto] [P0] since=2026-09-01 他席の命令 → SSOT: 憲法 N2\n",
+    );
+    wm_stamp(&place, &["sid-9", ""]);
+    let empty = wm_externalize(&place, "", &[]);
+    assert_eq!(rc_of(&empty), i32::from(RC_REFUSED), "stdout={}", stdout_of(&empty));
+    assert!(stderr_of(&empty).contains("reason=sid-empty"), "理由: {}", stderr_of(&empty));
+
+    wm_stamp(&place, &["sid-9"]);
+    let out = wm_externalize(&place, "", &[]);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(
+        stdout_of(&out),
+        "seat: externalized file=working-memory.sid-9.md carried=1 dropped_provisional=0 dropped_unresolved=1 directives=0\n"
+    );
+    let text = fs::read_to_string(place.wm.join("working-memory.sid-9.md")).unwrap_or_default();
+    assert!(text.contains("\ncarry_source: working-memory.sid-a.consumed.md\n"), "新しい他席の file は source にならない: {text}");
+    assert!(text.contains("在る条") && !text.contains("無い条") && !text.contains("他席の命令"), "{text}");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (9) 実在検査の 3 値: 憲法 id 在 → Resolved / 無 → Unresolved / 台帳 → Unchecked（ADR・設計・repo path・anchor 外も）。
+#[test]
+fn seat_wm_pointer_resolution_is_three_valued_against_the_anchor() {
+    use vessel::seat::wm::{classify, Anchor, PointerKind, Resolution};
+    let place = wm_place();
+    let anchor = Anchor::open(&place.anchor).expect("anchor を開ける");
+    assert_eq!(anchor.prefixes(), ["s2".to_owned()], "台帳 prefix は .beads から解く");
+    let cases = [
+        ("憲法 N2", PointerKind::Constitution, Resolution::Resolved),
+        ("C11.2", PointerKind::Constitution, Resolution::Resolved),
+        ("憲法 C99", PointerKind::Constitution, Resolution::Unresolved),
+        ("ADR-0018 §2.2", PointerKind::Adr, Resolution::Resolved),
+        ("ADR-0099", PointerKind::Adr, Resolution::Unresolved),
+        ("docs/design/working-memory.md §4", PointerKind::Design, Resolution::Resolved),
+        ("docs/design/missing.md", PointerKind::Design, Resolution::Unresolved),
+        ("src/lib.rs#fixture", PointerKind::RepoPath, Resolution::Resolved),
+        ("../anchor/src/lib.rs", PointerKind::RepoPath, Resolution::Unresolved),
+        ("rules 行 seat.wm_directive_cap", PointerKind::Manifest, Resolution::Unresolved),
+        ("s2-07l.61", PointerKind::Ledger, Resolution::Unchecked),
+        ("auto-memory some-slug", PointerKind::Memory, Resolution::Unchecked),
+        ("PR #128", PointerKind::PullRequest, Resolution::Unchecked),
+    ];
+    for (reference, kind, want) in cases {
+        assert_eq!(classify(reference, anchor.prefixes()), Some(kind), "{reference}");
+        assert_eq!(anchor.resolve(kind, reference), want, "{reference}");
+    }
+    fs::create_dir_all(place.anchor.join("rules")).ok();
+    fs::write(place.anchor.join("rules/manifest.toml"), fs::read_to_string(wm_rules(&place, 24)).unwrap_or_default()).ok();
+    assert_eq!(anchor.resolve(PointerKind::Manifest, "rules 行 seat.wm_directive_cap"), Resolution::Resolved, "manifest の行 id");
+    fs::remove_dir_all(&place.dir).ok();
+}

@@ -4,13 +4,15 @@
 //! 引数で明示されたものだけを見る。値欠けの flag は黙って落とさず使い方で断る。
 
 use super::cycle::{self, Cycle};
+use super::externalize::{self, ExternalizeError, Trigger};
 use super::{heartbeat, inject, meter, tick};
 use crate::cli_outcome::{Outcome, RC_OK, RC_REFUSED};
+use std::path::Path;
 use std::time::Duration;
 
 /// `seat` の使い方。
 pub fn usage() -> String {
-    "usage: seat <meter --target T [--transcript PATH]|inject --target T (--text S|--file PATH)|heartbeat --target T|tick --target T --wm-dir DIR [--pointer TEXT] [--restore CMD] [--rules PATH]|cycle --target T --wm-dir DIR [--restore CMD] [--rules PATH]> [--tmux-socket PATH] [--capture-file PATH] [--state-dir PATH]".to_owned()
+    "usage: seat <meter --target T [--transcript PATH]|inject --target T (--text S|--file PATH)|heartbeat --target T|tick --target T --wm-dir DIR [--pointer TEXT] [--restore CMD] [--rules PATH]|cycle --target T --wm-dir DIR [--restore CMD] [--rules PATH]|externalize --target T --wm-dir DIR --anchor DIR --plan FILE --directives FILE [--user FILE] [--trigger manual|tick] [--role R] [--rules PATH]> [--tmux-socket PATH] [--capture-file PATH] [--state-dir PATH]".to_owned()
 }
 
 /// `seat` に続く引数を捌く。
@@ -21,6 +23,7 @@ pub fn dispatch(args: &[String]) -> Outcome {
         Some("heartbeat") => heartbeat_of(args),
         Some("tick") => tick_of(args),
         Some("cycle") => cycle_of(args),
+        Some("externalize") => externalize_of(args),
         _ => refused_usage(),
     }
 }
@@ -290,5 +293,55 @@ fn cycle_of(args: &[String]) -> Outcome {
         Cycle::Refused(_) | Cycle::Failed(_) => {
             Outcome::failed_line(RC_REFUSED, cycle::render(target, &result, Some(&state)))
         }
+    }
+}
+
+/// `seat externalize`（設計 working-memory.md §5.1）。
+fn externalize_of(args: &[String]) -> Outcome {
+    // 値欠け・空文字は使い方の誤り（他の flag と同じ極性・SRS NFR4）。
+    let (Ok(target), Ok(wm_dir), Ok(anchor), Ok(plan), Ok(directives), Ok(user), Ok(trigger), Ok(role), Ok(_), Ok(state_dir)) = (
+        required_nonempty(args, "--target"),
+        required_nonempty(args, "--wm-dir"),
+        required_nonempty(args, "--anchor"),
+        required_nonempty(args, "--plan"),
+        required_nonempty(args, "--directives"),
+        nonempty(args, "--user"),
+        nonempty(args, "--trigger"),
+        nonempty(args, "--role"),
+        nonempty(args, "--rules"),
+        nonempty(args, "--state-dir"),
+    ) else {
+        return refused_usage();
+    };
+    // frontmatter の 1 行に入る字面だけを受ける（改行を含む名乗りは別の key を作りうる）。
+    if [Some(target), role].into_iter().flatten().any(|text| text.contains(['\n', '\r'])) {
+        return refused_usage();
+    }
+    let Some(trigger) = trigger.map_or(Some(Trigger::Manual), Trigger::parse) else {
+        return refused_usage();
+    };
+    let refused = |err: ExternalizeError| Outcome::failed(RC_REFUSED, externalize::render_refused(&err));
+    let Some(state) = super::state_dir_of(state_dir) else {
+        return refused(ExternalizeError::StateDir);
+    };
+    // 上限は `rules` と同じ 1 本の口で解く（`--rules` が在ればその file・読めなければ断る・C5）。
+    let Some(cap) = crate::rules::cli::open(args).ok().as_ref().and_then(externalize::cap_of) else {
+        return refused(ExternalizeError::NoRule);
+    };
+    let request = externalize::Request {
+        target,
+        wm_dir: Path::new(wm_dir),
+        state_dir: &state,
+        anchor: Path::new(anchor),
+        plan: Path::new(plan),
+        directives: Path::new(directives),
+        user: user.map(Path::new),
+        trigger,
+        role,
+        cap,
+    };
+    match externalize::run(&request) {
+        Ok(done) => Outcome::ok_line(externalize::render(&done)),
+        Err(err) => refused(err),
     }
 }

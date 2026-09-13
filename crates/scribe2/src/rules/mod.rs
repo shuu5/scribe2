@@ -116,6 +116,8 @@ pub enum RuleKind {
     GateSlotWaitS,
     /// 便の scope に付ける CPU の重み（席は既定の重み）。
     GateCpuWeight,
+    /// 退避物の節 3（命令・制約）に置ける項目行の上限（行）。超えた退避は止まる（黙って切らない）。
+    WmDirectiveCap,
 }
 
 /// [`RuleKind`] の全 variant。parity test の母集団である。
@@ -157,6 +159,7 @@ pub const ALL: &[RuleKind] = &[
     RuleKind::HostReserveMemoryMb,
     RuleKind::GateSlotWaitS,
     RuleKind::GateCpuWeight,
+    RuleKind::WmDirectiveCap,
 ];
 
 impl RuleKind {
@@ -200,6 +203,7 @@ impl RuleKind {
             Self::HostReserveMemoryMb => "HostReserveMemoryMb",
             Self::GateSlotWaitS => "GateSlotWaitS",
             Self::GateCpuWeight => "GateCpuWeight",
+            Self::WmDirectiveCap => "WmDirectiveCap",
         }
     }
 
@@ -234,7 +238,8 @@ impl RuleKind {
             | Self::GateJobMemoryMb
             | Self::HostReserveMemoryMb
             | Self::GateSlotWaitS
-            | Self::GateCpuWeight => ValueShape::Int,
+            | Self::GateCpuWeight
+            | Self::WmDirectiveCap => ValueShape::Int,
             Self::DialogueSurface => ValueShape::Str,
             Self::MaturityCondition
             | Self::AccountSelection

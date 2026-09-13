@@ -13,11 +13,13 @@
 
 pub mod cli;
 pub mod cycle;
+pub mod externalize;
 pub mod heartbeat;
 pub mod inject;
 pub mod meter;
 pub mod state;
 pub mod tick;
+pub mod wm;
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -241,18 +243,18 @@ pub fn pane_of(socket: Option<&str>, target: &str, capture_file: Option<&str>) -
     }
 }
 
-/// 退避物の名前の前置き（FR23）。
-const WM_PREFIX: &str = "working-memory.";
+/// 退避物の名前の前置き（FR23・[`externalize`] と共有）。
+pub const WM_PREFIX: &str = "working-memory.";
 /// 退避物の名前の後置き。
-const WM_SUFFIX: &str = ".md";
+pub const WM_SUFFIX: &str = ".md";
 /// consume 済みの後置き（**mv が consume の実体**ゆえ、この字で終わらない `.md` が未 consumed）。
-const WM_CONSUMED: &str = ".consumed.md";
+pub const WM_CONSUMED: &str = ".consumed.md";
 /// frontmatter の区切り。
-const FRONTMATTER: &str = "---";
+pub const FRONTMATTER: &str = "---";
 /// frontmatter を読む上限（byte）。**全文を読まない**（退避物は数十 KB になる）。
 const FRONTMATTER_CAP: u64 = 8192;
 /// 席を名乗る frontmatter の key。
-const SEAT_KEY: &str = "seat:";
+pub const SEAT_KEY: &str = "seat:";
 
 /// 自席の未 consumed 退避物の数え（憲法 C11: 「0 件」と「読めない」を混ぜない）。
 pub enum WmScan {
@@ -299,8 +301,9 @@ fn is_unconsumed_name(name: &str) -> bool {
         && !name.ends_with(WM_CONSUMED)
 }
 
-/// 退避物の frontmatter が名乗る席。名乗りが無い・読めないなら `None`。
-fn seat_of(path: &Path) -> Option<String> {
+/// 退避物の frontmatter が名乗る席。名乗りが無い・読めないなら `None`（[`externalize`] の carry 元の
+/// 弁別もこの 1 本を通る＝自席の数え方を 2 面に持たない）。
+pub fn seat_of(path: &Path) -> Option<String> {
     let file = std::fs::File::open(path).ok()?;
     let mut head = Vec::new();
     Read::read_to_end(&mut file.take(FRONTMATTER_CAP), &mut head).ok()?;

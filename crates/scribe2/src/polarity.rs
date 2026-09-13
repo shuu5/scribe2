@@ -64,7 +64,7 @@ pub struct Polarity {
 }
 
 /// 行為を止めうる判定を返す境界の全数。**宣言順は行為の流れ**（hook → intake → spawn〔予算・承認〕→
-/// runner → gate → land〔main 実測・anchor 同期・worktree の clean・追随の起こし直し〕→ store → 注入 → cycle）で、順序に意味は無いが C2 の形（[`ALL`] と判別子順 pin）に合わせる。
+/// runner → gate → land〔main 実測・anchor 同期・worktree の clean・追随の起こし直し〕→ store → 注入 → cycle → 退避）で、順序に意味は無いが C2 の形（[`ALL`] と判別子順 pin）に合わせる。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Guard {
     /// `pre-tool-use` の write-set guard（[`crate::hook::guard`]）。
@@ -103,6 +103,8 @@ pub enum Guard {
     Inject,
     /// session を作り直す口の断り（[`crate::seat::cycle`]）。
     Cycle,
+    /// 退避物の書込を止める判定＝二重退避・上限超過・文法の断り（[`crate::seat::externalize`]）。
+    Externalize,
 }
 
 /// [`Guard`] の全 variant（宣言順）。
@@ -125,6 +127,7 @@ pub const ALL: &[Guard] = &[
     Guard::StoreLock,
     Guard::Inject,
     Guard::Cycle,
+    Guard::Externalize,
 ];
 
 impl Guard {
@@ -149,6 +152,7 @@ impl Guard {
             Self::StoreLock => crate::fleet::store::POLARITY,
             Self::Inject => crate::seat::inject::POLARITY,
             Self::Cycle => crate::seat::cycle::POLARITY,
+            Self::Externalize => crate::seat::externalize::POLARITY,
         }
     }
 
@@ -173,6 +177,7 @@ impl Guard {
             Self::StoreLock => "fleet::store::StoreError",
             Self::Inject => "seat::inject::Delivery",
             Self::Cycle => "seat::cycle::Cycle",
+            Self::Externalize => "seat::externalize::ExternalizeError",
         }
     }
 
@@ -197,6 +202,7 @@ impl Guard {
             Self::StoreLock => "store-lock",
             Self::Inject => "inject-refusal",
             Self::Cycle => "cycle-refusal",
+            Self::Externalize => "externalize-refusal",
         }
     }
 
