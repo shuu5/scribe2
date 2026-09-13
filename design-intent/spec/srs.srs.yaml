@@ -56,6 +56,8 @@ scope:
     - 上限停止した便の別口座での再開
     - 開発 session の役割と権能
     - 席の指示文の注入
+    - 席の継続
+    - 席間の連絡
     - 便の封じ込め
     - 受付の枠
   out:
@@ -93,14 +95,14 @@ acceptance:
   - { id: AC10, criterion: toy repo で verify 行が矛盾する契約 1 本を管理席が pipeline に流し、 runner の質問 record → Questioned → planner の回答 event（機械由来）→ resume → Landed まで通り、 人由来の event が 0 件・席が自分の手で実装した commit が 0 件, metric_v: 1 便, metric_l: 質問で止まり回答で再開, links: [FR5, FR14, FR22, FR30, FR31, FR32] }
   - { id: AC11, criterion: live な口座 2 つ以上を持つ host で口座残量の計測を 1 回要求すると、 口座ごとの口座残量が出所付きで fleet の event log に 1 行ずつ増え、 器の外で同じ endpoint を読む独立した手段の値と残量が一致し（reset は 1 分以内）、 認証情報の無い口座は理由付きの「測れなかった」の行になる（0 の値の行にならない）, metric_v: 2 口座, metric_l: 実測値が一致, links: [FR33] }
   - { id: AC12, criterion: 偽の runner が上限 record で止まった便を、 器が別の口座（fixture）で resume して Landed まで通す。 実便で上限に当たった記録が 1 件以上得られたら、 別口座で Landed になった事実を記録に残す,   metric_v: 1 便,  metric_l: 別口座で完走,       links: [FR14, FR33, FR35, FR36, FR37] }
-  - { id: AC13, criterion: 2 つの開発 session のうち 1 つで口座の使用率が閾値以上のとき、 管理 tick が退避の合図を 1 件注入し、 退避後に別口座で session が立ち上がり復元が走る,                    metric_v: 1 回,  metric_l: 別口座で立て直し,   links: [FR27, FR28, FR29, FR36, FR38] }
+  - { id: AC13, criterion: 2 つの開発 session のうち 1 つで口座の使用率が閾値以上のとき、 管理 tick が退避の合図を 1 件注入し、 退避後に別口座で session が立ち上がり復元が走る,                    metric_v: 1 回,  metric_l: 別口座で立て直し,   links: [FR28, FR29, FR36, FR38] }
   - { id: AC14, criterion: 走っている便と write-set が 1 file でも交差する契約を intake が typed な理由で断り便が作られず、 その便が終端に達した後は同じ契約が通る,                         metric_v: 0 件,  metric_l: 交差した便の同時走行, links: [FR1, FR39] }
-  - { id: AC15, criterion: 役割を記録した管理席から回答・承認・go の記帳を試みると deny され（deny 文に権能を持つ役割の名）、 planner 席からは記帳され、 記録の無い席からはどちらも deny される,        metric_v: 0 件,  metric_l: 権能の外の記帳,     links: [FR15, FR16, FR32, FR40, FR41, FR45] }
-  - { id: AC16, criterion: 管理席の code path への編集は編集時に deny、 planner 席の design-intent と設計 doc への編集は allow、 契約が class で開いた便だけ管理席の code 編集が allow になる,             metric_v: 0 件,  metric_l: 役割の外の編集,     links: [FR20, FR45] }
+  - { id: AC15, criterion: 役割を記録した管理席から回答・承認・go の記帳を試みると deny され（deny 文に権能を持つ役割の名）、 planner 席からは記帳され、 記録の無い席からはどちらも deny される,        metric_v: 0 件,  metric_l: 権能の外の記帳,     links: [FR15, FR16, FR40, FR41, FR45] }
+  - { id: AC16, criterion: manifest 行が与えていない path 種別への編集は編集時に deny、 与えた種別への編集は allow、 契約が typed な印で開いた便の write-set の内側だけ管理席の code 編集が allow になる,             metric_v: 0 件,  metric_l: 役割の外の編集,     links: [FR20, FR45] }
   - { id: AC17, criterion: 生成された席の指示文は manifest の行と雛形からだけ作られ、 CI が「行に無い規範文」と「行に在って文に無い権能」の両方を 0 件と確かめ、 記録の無い席への注入は 0 byte,        metric_v: 0 件,  metric_l: 指示文の drift,     links: [FR17, FR18, FR42] }
-  - { id: AC18, criterion: fixture の席が idle で queue が空でないとき管理 tick が続きの pointer を 1 件注入し、 queue が承認と裁定の待ちだけのときは注入しない,                                  metric_v: 1 件,  metric_l: 継続の注入,         links: [FR27, FR43] }
+  - { id: AC18, criterion: fixture の席が idle で queue が空でないとき管理 tick が続きの pointer を 1 件注入し、 queue が承認と裁定の待ちだけのときは注入しない,                                  metric_v: 1 件,  metric_l: 継続の注入,         links: [FR43] }
   - { id: AC19, criterion: 席間の連絡 1 件が入力欄を経由せず届き、 届いた事実が経路の記録から取れる,                                                                                        metric_v: 1 件,  metric_l: 記録で確認,         links: [FR44] }
-  - { id: AC20, criterion: 変異検査の verify 行が memory 上限付きの箱（stub の引数）で撃たれ、 箱や受付が使えない fixture では並列度 1 で進んで便が断られない,                                metric_v: 0 件,  metric_l: 資源不足での拒否,   links: [FR8, FR46, NFR6] }
+  - { id: AC20, criterion: 変異検査の verify 行が memory 上限付きの箱の中で撃たれ、 箱や受付が使えない fixture では並列度 1 で進んで便が断られない,                                metric_v: 0 件,  metric_l: 資源不足での拒否,   links: [FR8, FR46, NFR6] }
 
 requirements:
   - id: FR1
@@ -109,7 +111,7 @@ requirements:
     priority: must
     vmethod: T
     rationale_source: N-4
-    trace: { backward: [N-4], acceptance: [AC6] }
+    trace: { backward: [N-4], acceptance: [AC6, AC14] }
     ears:
       pattern: unwanted
       condition: 契約 file に必須 field（goal / done / write-set / verify / size / owner / disposition）の欠落・複数行の verify・write-set 0 本が在るとき
@@ -186,7 +188,7 @@ requirements:
     priority: must
     vmethod: T
     rationale_source: N-1
-    trace: { backward: [N-1], acceptance: [AC3] }
+    trace: { backward: [N-1], acceptance: [AC3, AC20] }
     ears:
       pattern: event
       condition: gate が要求されたとき
@@ -252,7 +254,7 @@ requirements:
     priority: must
     vmethod: T
     rationale_source: N-3
-    trace: { backward: [N-3], acceptance: [AC4, AC10] }
+    trace: { backward: [N-3], acceptance: [AC4, AC10, AC12] }
     ears:
       pattern: event
       condition: 別 process で resume が要求されたとき
@@ -263,7 +265,7 @@ requirements:
     priority: must
     vmethod: T
     rationale_source: N-1
-    trace: { backward: [N-1], acceptance: [AC5] }
+    trace: { backward: [N-1], acceptance: [AC5, AC15] }
     ears:
       pattern: event
       condition: 契約が不可逆操作（消す / 出す / 使う）を名乗る段に達したとき
@@ -274,7 +276,7 @@ requirements:
     priority: must
     vmethod: T
     rationale_source: N-1
-    trace: { backward: [N-1], acceptance: [AC5] }
+    trace: { backward: [N-1], acceptance: [AC5, AC15] }
     ears:
       pattern: event
       condition: 人が approve を逐語付きで与えたとき
@@ -285,7 +287,7 @@ requirements:
     priority: must
     vmethod: T
     rationale_source: N-3
-    trace: { backward: [N-3], acceptance: [AC6] }
+    trace: { backward: [N-3], acceptance: [AC6, AC17] }
     ears:
       pattern: ubiquitous
       condition: 常時
@@ -296,7 +298,7 @@ requirements:
     priority: must
     vmethod: T
     rationale_source: N-3
-    trace: { backward: [N-3], acceptance: [AC6] }
+    trace: { backward: [N-3], acceptance: [AC6, AC17] }
     ears:
       pattern: unwanted
       condition: manifest に未知 kind・id 重複・型不一致・user 由来で裁定 id の無い行が在るとき
@@ -318,7 +320,7 @@ requirements:
     priority: must
     vmethod: T
     rationale_source: N-4
-    trace: { backward: [N-4], acceptance: [AC7] }
+    trace: { backward: [N-4], acceptance: [AC7, AC16] }
     ears:
       pattern: unwanted
       condition: 契約の write-set の外へ Edit / Write しようとしたとき
@@ -399,15 +401,15 @@ requirements:
     trace: { backward: [N-1, N-3], acceptance: [AC9] }
     ears:
       pattern: state
-      condition: context 使用量が rules 行の上限未満か測れない周で、 開発 session が idle で、 自 session の未 consumed の退避物が無く、 cycle が走っていない間
-      response: 管理 tick が打刻の合図 1 行を注入する（この条件が 1 つでも崩れていれば注入しない）
+      condition: context 使用量が rules 行の上限未満か測れない周で、 開発 session の口座の使用率が session 用の閾値未満（FR38）で、 開発 session が idle で、 自 session の未 consumed の退避物が無く、 cycle が走っていない間
+      response: 管理 tick が打刻の合図 1 行を注入する（合図には席の queue から取った続きの pointer を載せる〔FR43〕・この条件が 1 つでも崩れていれば注入しない）
   - id: FR28
     type: FR
     label: cycle
     priority: should
     vmethod: T
     rationale_source: N-3
-    trace: { backward: [N-1, N-3], acceptance: [AC9] }
+    trace: { backward: [N-1, N-3], acceptance: [AC9, AC13] }
     ears:
       pattern: event
       condition: 開発 session が作業記憶の退避を終えたとき
@@ -418,7 +420,7 @@ requirements:
     priority: should
     vmethod: T
     rationale_source: N-1
-    trace: { backward: [N-1, N-2], acceptance: [AC9] }
+    trace: { backward: [N-1, N-2], acceptance: [AC9, AC13] }
     ears:
       pattern: state
       condition: 開発 session の context 使用量が rules 行の上限以上で、 自 session の未 consumed の退避物が無く、 cycle が走っていない間
@@ -434,7 +436,7 @@ requirements:
     ears:
       pattern: ubiquitous
       condition: 常時
-      response: 便の配送構造は anchor ごとに planner 1 席 + 管理席 1 席とし（席数と一意性は FR40）、 口座は便ごとに FR36 が選び、 管理席は契約を pipeline に流す・runner の質問を planner へ中継する・go の後に land する の 3 つを担い、 自分の手で実装するのは pipeline が回せない便だけとする
+      response: 便の配送構造は planner と管理席の 2 役割の席からなり（席数と一意性は FR40）、 口座は便ごとに FR36 が選び、 管理席は契約を pipeline に流す・runner の質問を planner へ中継する・go の後に land する の 3 つを担い、 自分の手で実装するのは pipeline が回せない便だけとする
   - id: FR31
     type: FR
     label: 質問の停止
@@ -464,7 +466,7 @@ requirements:
     priority: should
     vmethod: D
     rationale_source: N-2
-    trace: { backward: [N-1, N-2], acceptance: [AC11] }
+    trace: { backward: [N-1, N-2], acceptance: [AC11, AC12] }
     ears:
       pattern: event
       condition: 口座残量の計測が要求されたとき
@@ -491,7 +493,7 @@ requirements:
     ears:
       pattern: event
       condition: 便の runner が上限 record（ADR-0012 の typed な record・口座の上限の合図）で止まったとき
-      response: 器はその停止を、 口座の label と当たった窓を持つ typed な event として記帳し、 worktree と便の記録を保ち、 便を Failed にしない
+      response: 器はその停止を、 どの口座のどの窓かが分かる typed な event として記帳し、 worktree と便の記録を保ち、 便を Failed にしない
   - id: FR36
     type: FR
     label: 口座選定
@@ -502,7 +504,7 @@ requirements:
     ears:
       pattern: ubiquitous
       condition: 常時
-      response: 口座は、 manifest に宣言した口座と実測した口座残量（FR33）の上で 1 本の純関数が選び、 便用（口座残量を使い切る側）と開発 session 用（余裕を残す側）の 2 つの規則を持ち、 規則の値は rules 行 R-C9-1（user 裁定で発効）だけから取る
+      response: 口座は、 manifest に宣言した口座と実測した口座残量（FR33）だけから決定的に選び、 便用（口座残量を使い切る側）と開発 session 用（余裕を残す側）の 2 つの規則を持ち、 規則の値は rules 行 R-C9-1（user 裁定で発効）だけから取る
   - id: FR37
     type: FR
     label: 別口座での途中再開
@@ -518,13 +520,13 @@ requirements:
     type: FR
     label: 開発 session の上限前の退避
     priority: should
-    vmethod: I
+    vmethod: T
     rationale_source: N-1
     trace: { backward: [N-1, N-3], acceptance: [AC13] }
     ears:
       pattern: state
       condition: 開発 session の口座の窓（5 時間・7 日・モデル別 7 日）の使用率が session 用の rules 行の閾値以上である間
-      response: 管理 tick は idle を待たずに退避の合図を注入し（FR29）、 session が退避して止まった後は FR36 で選んだ別の口座で session を立て直して復元の command を注入する（FR28）
+      response: 管理 tick は FR29 と同じ除外（退避物が在る周・cycle が走っている周は注入しない）の下で idle を待たずに退避の合図を注入し、 session が退避して止まった後は FR36 で選んだ別の口座で session を立て直して復元の command を注入する（FR28）
   - id: FR39
     type: FR
     label: intake の排他
@@ -546,7 +548,7 @@ requirements:
     ears:
       pattern: ubiquitous
       condition: 常時
-      response: 器は開発 session の席ごとの役割を 1 つの閉じた役割 enum の値として持ち、 席の識別子（役割, anchor）を鍵に、 席の target を併せて fleet の event log へ記録し、 役割の記録が無い席をどの権能も持たない席として扱う。 1 つの anchor に planner は 1 席・管理席は 1 席とする
+      response: 器は開発 session の席ごとの役割を閉じた一覧の値として持ち、 席の識別子（役割, anchor）を鍵に、 席の target を併せて fleet の event log へ記録し、 役割の記録が無い席をどの権能も持たない席として扱う。 1 つの anchor に planner は 1 席・管理席は 1 席とする
   - id: FR41
     type: FR
     label: 権能の所在
@@ -557,7 +559,7 @@ requirements:
     ears:
       pattern: ubiquitous
       condition: 常時
-      response: 役割ごとの権能は rules manifest の行（値は閉じた権能 enum の名の列・裁定 id 付き）が持ち、 承認の記帳は rules 行 R-C7-1 が名指す対話面の役割の権能とする
+      response: 役割ごとの権能は rules manifest の行（裁定 id 付き）が持ち、 承認の記帳は rules 行 R-C7-1 が名指す対話面の役割の権能とする
   - id: FR42
     type: FR
     label: 席の指示文の注入
@@ -567,8 +569,8 @@ requirements:
     trace: { backward: [N-3], acceptance: [AC17] }
     ears:
       pattern: event
-      condition: 役割の記録が在る席で session の文脈が初期化されるとき
-      response: 器はその役割の manifest 行と役割ごとの tracked な雛形 1 枚から生成した指示文を注入し、 役割の記録が無い席には注入せず、 生成した指示文は雛形の外に手書きの規範文を含まない
+      condition: 開発 session の席で session の文脈が初期化されるとき
+      response: 器は、 その席に役割の記録が在ればその役割の manifest 行と役割ごとの雛形から生成した指示文を session の文脈へ直接注入し（入力欄を経由しない）、 役割の記録が無ければ注入しない。 生成した指示文は行が持つ権能をすべて名指し、 雛形の外に手書きの規範文を含まない（両向きの drift は CI が検査する・FR18）
   - id: FR43
     type: FR
     label: 席の継続
@@ -578,8 +580,8 @@ requirements:
     trace: { backward: [N-1], acceptance: [AC18] }
     ears:
       pattern: event
-      condition: 管理 tick が idle の席を見つけ、 その席の queue（席に向けた dispatch・席宛ての質問・裁定済みの次の行動）が空でないとき
-      response: 器は続きの pointer を注入する。 queue の項目がすべて user の 3 クラス承認か裁定の待ちであるときは注入しない（正当な idle）
+      condition: 管理 tick が打刻の合図を注入する周（FR27）に、 その席の queue（席に向けた dispatch・席宛ての質問・裁定済みの次の行動）が空でないとき
+      response: 器は続きの pointer（queue の先頭を指す 1 行）を打刻の合図に載せる。 queue の項目がすべて user の 3 クラス承認か裁定の待ちであるときは合図ごと注入しない（正当な idle）
   - id: FR44
     type: FR
     label: 席間の連絡
@@ -590,7 +592,7 @@ requirements:
     ears:
       pattern: ubiquitous
       condition: 常時
-      response: 開発 session の席どうしの連絡は席の入力欄を経由しない経路で届け、 届いたことは端末の描画でなく経路自身の記録で確かめ、 入力欄への注入は器の tick・heartbeat・復元の command にだけ使う
+      response: 開発 session の席どうしの連絡は席の入力欄を経由しない経路で届け、 届いたことは端末の描画でなく経路自身の記録で確かめ、 入力欄への注入は器の管理 tick の合図（打刻・退避）と復元の command にだけ使う
   - id: FR45
     type: FR
     label: 権能の執行
@@ -601,7 +603,7 @@ requirements:
     ears:
       pattern: ubiquitous
       condition: 常時
-      response: 権能で守られた操作（回答・承認・go の記帳、 便の起動、 path 種別の編集）はその権能を持つ役割の席からだけ通し、 検査は hook が運ぶ席の identity を用いて tool 呼出しの境界で in-loop に行い、 断るときは権能を持つ役割の名を告げる
+      response: 権能で守られた操作はその権能を持つ役割の席からだけ通し、 検査は編集・実行の時点で（in-loop に）行い、 断るときは権能を持つ役割の名を告げる。 契約が typed な印で開いた便の write-set の内側に限り、 管理席の code の編集を通す
   - id: FR46
     type: FR
     label: 縮退
@@ -610,7 +612,7 @@ requirements:
     rationale_source: N-1
     trace: { backward: [N-1, N-2], acceptance: [AC20] }
     ears:
-      pattern: unwanted
+      pattern: event
       condition: 封じ込めか受付の枠が使えない host で便が起動されたとき
       response: 器は並列度 1 で進み、 便を断らず、 縮退の事実と理由を record に残す
 
@@ -620,7 +622,7 @@ nfr:
   - { id: NFR3, type: NFR, label: 依存,        category: 依存, target: 実行時の直接依存 0 本・std だけで build（allowlist の外は歯が落とす）,   measure: cargo xtask check の deps-empty と cargo deny を CI で毎回,     vmethod: T, trace: { backward: [N-2], acceptance: [AC6] }, hero: { cat: 依存, big: "0", unit: 本, qual: 実行時の直接依存 } }
   - { id: NFR4, type: NFR, label: fail-closed, category: 安全, target: 不正入力を黙って落とす件数 0・読めない store は rc 2,                     measure: fixture 実走（壊した行・未知 kind）で全件 loud を確認,           vmethod: T, trace: { backward: [N-3], acceptance: [AC6] }, hero: { cat: 安全, big: "0", unit: 件, qual: 黙って落とす入力 } }
   - { id: NFR5, type: NFR, label: hook の予算,  category: 応答, target: hook は binary 1 本の 1 回呼出しで 2.0 秒以内・重い I/O を持たない,      measure: hook の wall time を注入計測の slot に記録,                   vmethod: T, trace: { backward: [N-2], acceptance: [AC7] }, hero: { cat: 速さ, big: "2.0", unit: 秒, qual: hook 1 回の上限 } }
-  - { id: NFR6, type: NFR, label: host の資源,  category: 安全, target: 封じ込めの外で走る器の子 process 0 本・変異検査の並列度は受付の枠から, measure: 箱の引数と受付の判定を record に残し fixture で確認, vmethod: T, trace: { backward: [N-1, N-2], acceptance: [AC20] }, hero: { cat: 資源, big: "0", unit: 本, qual: 封じ込めの外で走る子 process } }
+  - { id: NFR6, type: NFR, label: host の資源,  category: 安全, target: 封じ込めの外で走る器の子 process 0 本・変異検査の並列度は受付の枠から, measure: 便ごとに封じ込めの有無・並列度・縮退の理由が record に残ることを fixture で確認, vmethod: T, trace: { backward: [N-1, N-2], acceptance: [AC20] }, hero: { cat: 資源, big: "0", unit: 本, qual: 封じ込めの外で走る子 process } }
 
 constraints:
   - { id: CON1, label: 憲法,     text: 憲法（Always 16 / Ask-first 4 / Never 4）を本書の上位に置き、 矛盾する要件を書かない,            regulation: 憲法 v0.4.6 }
@@ -665,7 +667,7 @@ glossary:
   - { term: 開発 session,   en: development session,    plain_short: 設計・契約・review を行う AI, def: 設計・契約・実装・review を行う AI の session（Claude Code）。 planner や管理席のように session をまたいで対話を続け、 runner と違い使い捨てではない。 }
   - { term: cap guard,      en: cap guard,              plain_short: 満杯手前で編集を止める段,   def: 開発 session の context 使用量が rules 行の上限に達したとき、 退避以外の編集を止める hook の段。 }
   - { term: 管理 tick,      en: tick,                   plain_short: 開発 session を周期で見張る仕組み,     def: 開発 session が黙っていないかを周期で見て、 条件が揃ったときだけ打刻の合図か退避の合図を 1 行注入する仕組み。 }
-  - { term: 打刻の合図,     en: pointer,                plain_short: 打刻を促す 1 行,          def: 管理 tick が idle の開発 session に注入する 1 行。 heartbeat を打って続きを進めるよう促す。 }
+  - { term: 打刻の合図,     en: pointer,                plain_short: 打刻を促す 1 行,          def: 管理 tick が idle の開発 session に注入する 1 行。 打刻を促し、 席の queue が空でなければ続きの pointer（FR43）を載せる。 }
   - { term: 退避の合図,     en: externalize pointer,    plain_short: 退避を促す 1 行,          def: context 使用量が上限以上の開発 session に管理 tick が注入する 1 行。 idle を待たず、 作業記憶の退避を促す。 }
   - { term: cycle,          en: cycle,                  plain_short: 退避して作り直す一周,     def: 作業記憶を退避し、 session を作り直し、 退避物から復元する一周。 退避物が無い session では起こさない。 }
   - { term: 作業記憶,       en: working memory,         plain_short: session をまたぐと消える一時メモ, def: 開発 session が一連の作業の間だけ持つ状態。 session の作り直しで消えるので、 cycle の前に退避物へ書き出す。 }
@@ -680,15 +682,14 @@ glossary:
   - { term: 衝突,           en: conflict,               plain_short: 追随の rebase でぶつかること, def: 追随の rebase で、 先着の変更と同じ箇所が重なり器が自動では合わせられないこと（FR34 が記帳する）。 契約同士の write-set の交差（ADR-0019）とは別の概念。 }
   - { term: 暫定行,         en: provisional line,       plain_short: 出所の無い命令行,         def: 作業記憶の「命令・制約」行のうち、 出所 pointer（憲法条・ADR・rules 行・裁定 id・user 裁定の時刻）を持たない行（FR23 / AC8）。 }
   - { term: 上限停止,       en: limit stop,             plain_short: 口座の上限で止まること,    def: 便や開発 session が口座の残量の上限に当たって止まること。 便では FR35 の event、 session では退避と立て直しの契機。 }
-  - { term: 口座選定,       en: account selection,      plain_short: どの口座を使うか決める,     def: manifest の口座と実測の残量から 1 本の純関数が口座を選ぶこと（FR36）。 便用と session 用の 2 規則を持つ。 }
-  - { term: 役割,           en: role,                   plain_short: 席の種類,                 def: 開発 session の席の種類（planner / 管理席）。 閉じた enum の値で、 席の登録 row が持つ（FR40）。 }
-  - { term: 権能,           en: capability,             plain_short: 役割に許された操作,        def: 役割ごとに許された操作の閉じた一覧（回答・承認・go の記帳、 便の起動、 path 種別の編集）。 rules 行が持ち（FR41）、 hook が執行する（FR45）。 }
+  - { term: 口座選定,       en: account selection,      plain_short: どの口座を使うか決める,     def: manifest の口座と実測の残量だけから口座を決定的に選ぶこと（FR36）。 便用と session 用の 2 規則を持つ。 }
+  - { term: 役割,           en: role,                   plain_short: 席の種類,                 def: 開発 session の席の種類。 種類は配送構造（FR30）が定め、 席の登録 row が持つ（FR40）。 }
+  - { term: 権能,           en: capability,             plain_short: 役割に許された操作,        def: 役割ごとに許された操作の閉じた一覧。 rules 行が持ち（FR41）、 編集・実行の時点で執行される（FR45）。 }
   - { term: 席の登録,       en: seat registration,      plain_short: 席と役割の記録,            def: 席の役割と anchor を鍵に、 target を併せて fleet の event log に記録すること（FR40）。 記録の無い席は権能を持たない。 }
-  - { term: 受付の枠,       en: admission slot,         plain_short: 変異検査の並列の枠,        def: host 単位の受付が便の変異検査に配る並列の枠。 空き memory を測って配り、 無ければ待つか 1 に落とす（NFR6）。 }
-  - { term: 封じ込め,       en: confinement,            plain_short: memory 上限付きの箱,       def: 器が起こす子 process を memory の上限付きの箱の中で走らせること。 溢れて止められるのは箱の中だけ（NFR6）。 }
-  - { term: 実効 jobs,      en: effective jobs,         plain_short: 実際の並列度,             def: 変異検査に実際に渡す並列度。 rules 行の上限を受付の枠で下げた値（NFR6）。 }
+  - { term: 受付の枠,       en: admission slot,         plain_short: 変異検査の並列の枠,        def: host 単位の受付が便の変異検査に配る並列の枠（NFR6）。 枠が無い host では縮退する（FR46）。 }
+  - { term: 封じ込め,       en: confinement,            plain_short: memory 上限付きの箱,       def: 器が起こす子 process を memory の上限付きの箱の中で走らせること（NFR6）。 }
   - { term: 上限 record,      en: rate-limit record,      plain_short: 上限に当たった印,         def: claude が口座の上限を専用の record で伝える合図。 便の停止判定はこの record だけを入力にする（FR35・ADR-0012）。 }
-  - { term: anchor,         en: anchor,                 plain_short: project の錨,             def: 対象 repo の main checkout。 席と便の鍵の一部で、 1 つの anchor に planner 1 席・管理席 1 席（FR40）。 }
+  - { term: anchor,         en: anchor,                 plain_short: 対象 repo の本体,             def: 対象 repo の main checkout。 席と便の鍵の一部で、 1 つの anchor に planner 1 席・管理席 1 席（FR40）。 }
   - { term: 席の指示文,   en: role brief,             plain_short: 席に差し込む指示,         def: 役割ごとの雛形と権能の rules 行から器が生成し、 session の文脈が初期化されるたびに注入する文（FR42）。 手書きの規範文は持たない。 }
   - { term: 席の queue,     en: seat queue,             plain_short: 席が抱える次の仕事,       def: 席に向けた dispatch・席宛ての質問・裁定済みの次の行動の集合（FR43）。 承認と裁定の待ちだけなら正当な idle。 }
   - { term: 席間の連絡,     en: inter-seat message,     plain_short: 席どうしの message,       def: 開発 session の席どうしの message を、 入力欄を経由しない経路で届け、 経路の記録で着地を確かめること（FR44）。 }
