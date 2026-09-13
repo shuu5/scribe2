@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="folio-doc-type" content="research-report">
+<meta name="folio-layer" content="project">
+<meta name="folio-version" content="0.1.0">
+<meta name="folio-status" content="active">
+<meta name="folio-stakeholders" content="Developer, AI Agent">
+<meta name="folio-research-date" content="2026-09-13">
+<title>RESEARCH-ponytail — ponytail（YAGNI の決定はしご）を scribe2 に写せるか: 散文の skill を 3 つの機械の口に分ける（2026-09-13 の調査）</title>
+<link rel="stylesheet" href="../../common.css">
+<script type="application/ld+json">
+{
+  "@context": {
+    "dc": "http://purl.org/dc/terms/",
+    "schema": "https://schema.org/",
+    "folio": "https://folio.dev/spec/v1/"
+  },
+  "@id": "./RESEARCH-ponytail.html",
+  "@type": "schema:TechArticle",
+  "dc:isPartOf": [
+    { "@id": "./README.html" }
+  ],
+  "dc:title": "RESEARCH-ponytail — ponytail（YAGNI の決定はしご）を scribe2 に写せるか: 散文の skill を 3 つの機械の口に分ける（2026-09-13 の調査）",
+  "folio:version": "0.1.0",
+  "folio:stakeholders": ["Developer", "AI Agent"]
+}
+</script>
+</head>
+<body>
+<!-- folio:chrome-top -->
+<a class="skip-link" href="#s1-question">本文へスキップ</a>
+<nav class="breadcrumb" aria-label="パンくず"><ol>
+  <li><a href="../index.html">design-intent</a></li>
+  <li><a href="./README.html">research</a></li>
+  <li aria-current="page">RESEARCH-ponytail</li>
+</ol></nav>
+<!-- /folio:chrome-top -->
+
+<header class="doc-header">
+  <h1>RESEARCH-ponytail — ponytail（YAGNI の決定はしご）を scribe2 に写せるか: 散文の skill を 3 つの機械の口に分ける（2026-09-13 の調査）</h1>
+  <div class="meta">v0.1.0 &middot; status: active &middot; 調査日 2026-09-13 &middot; research-report &middot; 決めない（採否は後続の ADR と SRS の改訂が記録する）</div>
+</header>
+<!-- folio:chrome-toc -->
+<nav class="toc" aria-label="ページ内目次">
+<ol>
+  <li><a href="#s1-question">§1. 問い（何を調べたか）</a></li>
+  <li><a href="#s2-object">§2. 調査対象の実体（ponytail・記録時点）</a></li>
+  <li><a href="#s3-constitution">§3. 憲法との突合（そのまま入れられない理由）</a></li>
+  <li><a href="#s4-mapping">§4. 3 つの写し方（比較）</a></li>
+  <li><a href="#s5-open">§5. 未解決の問い（ADR / SRS へ渡す）</a></li>
+  <li><a href="#s6-sources">§6. 出所</a></li>
+</ol>
+</nav>
+<!-- /folio:chrome-toc -->
+
+<aside class="informative">
+<ul>
+  <li>出所: user の問い 2026-09-13（会話面・planner 席）「ponytail という skill の概念を scribe に取り入れられるか検討したい」。本 doc は探索であり<strong>決めない</strong>。</li>
+  <li>ponytail は MIT license の公開 OSS（§6）。本 doc が引用するのは公開 repo と公開の独立検証の記述だけで、口座名・host 名・path は書かない（PUBLIC 面）。</li>
+</ul>
+</aside>
+
+<section id="s1-question" class="informative">
+<h2>§1. 問い（何を調べたか）</h2>
+<p class="section-essence" data-audience="human">「AI に、一番怠け者の上級開発者のように振る舞わせる」skill である ponytail の中身は何か。それを、散文の規則を規則と認めない scribe2（憲法 N2 / C1.2）にどう写せるかを調べました。結論の候補は 3 つの口（審査の観点・便の規模の検出線・はしごの typed な宣言）に分けることです。</p>
+<p data-audience="machine">問いは 3 つ。(1) ponytail が実際に何を agent に課しているか（skill の本文・付属の review・強度・強制の有無）。(2) その主張（code −54% 等）は独立に測られているか。(3) scribe2 の憲法（<a href="../spec/constitution.html#n2">N2</a>・<a href="../spec/constitution.html#c1-2">C1.2</a>・<a href="../spec/constitution.html#c2">C2</a>・<a href="../spec/constitution.html#c4">C4</a>・<a href="../spec/constitution.html#c13">C13</a>・<a href="../spec/constitution.html#c12-4">C12.4</a>）の下で、どの部分を機械の口に写せ、どの部分が散文（lens の判断）に残るか。</p>
+</section>
+
+<section id="s2-object" class="informative">
+<h2>§2. 調査対象の実体（ponytail・記録時点）</h2>
+<p class="section-essence" data-audience="human">ponytail は「書く前に、要るか・既に在るか・標準 library で足りるか」を順に問う<strong>決定はしご</strong>で、最初に成立した段で止まります。強制の仕組みは無く、散文の指示だけです。独立検証では code が約 15%・費用が約 10% 減り、品質の低下は見つかっていません（宣伝値の 1/4〜1/2）。</p>
+<table data-audience="machine">
+  <thead><tr><th>項目</th><th>記録時点の事実</th><th>出所</th></tr></thead>
+  <tbody>
+    <tr><td>正体</td><td>agent 横断の skill 配布物（MIT・GitHub 136k★・2026 年初公開・20 以上の agent に adapter）。中核は skill 1 本と付属の review / help skill</td><td>§6 (1)(2)</td></tr>
+    <tr><td>決定はしご（逐語の要旨・順序が規則）</td><td>① 本当に要るか（不要なら 1 行で却下・YAGNI）→ ② 既存 code に在るか → ③ 標準 library で足りるか → ④ platform の native 機能で足りるか → ⑤ 入っている依存で解けるか → ⑥ 1 行で書けるか → ⑦ それ以上は最小実装のみ。「最初に成立した段で止まる」</td><td>§6 (2)</td></tr>
+    <tr><td>agent の手順</td><td>触る file を全部読む（呼び出し箇所を grep）→ はしごを判定 → 根本原因を直す → 最小差分 → 出力は「code → 省いたもの + 足す時機」の 3 行以内</td><td>§6 (2)</td></tr>
+    <tr><td>禁止</td><td>要求の無い抽象化（1 実装の interface・単一製品 factory）・boilerplate・理解を飛ばした小さい差分。<strong>入力検証・error 処理・security・accessibility は省かない</strong></td><td>§6 (2)</td></tr>
+    <tr><td>強度</td><td>lite（要件を実装し、より短い代替を 1 行で提示）/ full（既定・はしご）/ ultra（削除を追加より先・1 行案の後に残る要件へ異議）</td><td>§6 (1)(2)</td></tr>
+    <tr><td>付属の review</td><td>過剰設計だけを探す 5 種: delete（dead code・使われない柔軟性・推測の機能）/ stdlib（標準 library の作り直し）/ native（platform が持つ物の再実装）/ yagni（1 実装の抽象・誰も設定しない config・呼び手 1 つの層）/ shrink（同じ論理で行を減らす）。出力は 1 件 1 行 + 「net: −N lines possible」。正しさ・security・性能は明示的に対象外</td><td>§6 (3)</td></tr>
+    <tr><td>強制の仕組み</td><td><strong>無い</strong>。README が prose-only と明記（CI / linter なし・hook は mode の有効化と規則の注入だけ・遵守は agent 任せ）</td><td>§6 (1)</td></tr>
+    <tr><td>宣伝値</td><td>code −54%（平均・作りすぎの周は −94%）・token −22%・費用 −20%・時間 −27%（headless の agent session で 12 ticket × n=4・小さい model）</td><td>§6 (1)</td></tr>
+    <tr><td>独立検証</td><td>80 task の対比較（sandbox・中位の model）: code −15.4%（中央値）・費用 −10.3%（p = 0.004）・時間 −11%。test 合格率は 65 task が同点・9 が僅かに低下・6 が僅かに改善＝有意な品質低下なし（security と入力検証は検証の外）。効くのは作りすぎる task（−31%）で、もともと最小の task は変化なし</td><td>§6 (4)</td></tr>
+  </tbody>
+</table>
+<p data-audience="machine">読み方: ponytail の価値は「はしごの順序」と「書く前に問う」構造に在り、効果は実在するが宣伝の 1/4〜1/2。強制は無く、scribe2 の語彙では<strong>散文の規範文</strong>である。</p>
+</section>
+
+<section id="s3-constitution" class="informative">
+<h2>§3. 憲法との突合（そのまま入れられない理由）</h2>
+<p class="section-essence" data-audience="human">scribe2 は「散文にしか無い規則は規則ではない」と決めているので、ponytail を skill としてそのまま積むことはできません。一方で、はしごの各段は憲法の既存の線（依存の予算・大きさの上限・1 関数 1 enum の順序）と大部分が重なります。</p>
+<table data-audience="machine">
+  <thead><tr><th>ponytail の段</th><th>scribe2 の対応先</th><th>記録時点の状態</th></tr></thead>
+  <tbody>
+    <tr><td>⑤ 入っている依存だけ・新しい依存を足さない</td><td><a href="../spec/constitution.html#c13">C13</a>（allow-list と予算・<a href="../spec/constitution.html#a3">A3</a>）</td><td>機械（deny gate・予算と compile の形は台帳 s2-07l.161 で強化予定）</td></tr>
+    <tr><td>⑦ 最小実装・関数を小さく</td><td><a href="../spec/constitution.html#c4">C4</a>（module / 関数の大きさ・複雑度・引数の上限・rules 行 R-C4-*）</td><td>機械（CI deny）</td></tr>
+    <tr><td>② 既存 code の再利用</td><td>契約の write-set（FR20）+ lens の契約適合の審査</td><td>半分散文（lens の判断）</td></tr>
+    <tr><td>① 要るか（YAGNI）・④ native</td><td>無い</td><td>—</td></tr>
+    <tr><td>「最初に成立した段で止まる」</td><td><a href="../spec/constitution.html#c2">C2</a>（選択・除外・routing は 1 つの enum の上の 1 関数・順序は宣言順）</td><td>器の内部の型としては既にこの形（Stage / Guard / Completion）。契約と runner の判断には未適用</td></tr>
+    <tr><td>付属の review（5 種）</td><td>lens（FR9・記録時点の観点は契約適合 / 歯の非空虚性 / 憲法整合の 1 本）</td><td>散文（prompt 本文・台帳 s2-07l.176 の穴）</td></tr>
+    <tr><td>強度 ultra（要件への異議）</td><td>要件の正本は SRS と契約。runner が異議を出す口は質問 record（FR31）だけ</td><td>採らない（契約適合の gate と衝突）</td></tr>
+  </tbody>
+</table>
+<p data-audience="machine">突合の帰結: (a) ponytail を skill として積む（散文の注入）は N2 / C1.2 に反し、台帳 s2-07l.176（prompt 本文が規範文で snapshot も裁定も無い）の穴を広げる。(b) 段の大半は既に機械の線が在り、無いのは「要るか」「native」と「段を順に通った証拠」である。(c) 判断（この抽象は要るか）は機械では決められず、lens の判断に残る。</p>
+</section>
+
+<section id="s4-mapping" class="informative">
+<h2>§4. 3 つの写し方（比較）</h2>
+<p class="section-essence" data-audience="human">写し方は 3 つで、軽い順に (1) 審査の観点に「過剰設計」を足す、(2) 便の規模を検出線として測る、(3) はしごの段を runner が typed に宣言し gate が形を検査する。(3) は SRS と ADR が要るので後ですが、構造で規定するぶん効果と安全性は最も高いと読みます。</p>
+<table data-audience="machine">
+  <thead><tr><th>案</th><th>何を作るか</th><th>機械が保証するもの</th><th>散文に残るもの</th><th>要る手続き</th><th>大きさ</th></tr></thead>
+  <tbody>
+    <tr><td>(1) lens の観点</td><td>lens の findings の category（closed enum）に ponytail-review の 5 種を足す。prompt の観点は pointer 付きの行として雛形へ（台帳 s2-07l.176 と同じ便で snapshot 化）</td><td>findings の型と件数・母集団（「0 件」と「未測」の弁別・台帳 s2-07l.175）</td><td>各 finding の判断そのもの</td><td>契約 1 本（設計 doc の改訂）</td><td>S</td></tr>
+    <tr><td>(2) 便の規模の検出線</td><td>便ごとに「契約の size（S / M / L）・src の diff 行数・触った file 数・新しい pub symbol の数」を land の record に残す（<a href="../spec/constitution.html#c10">C10</a>: まず測る）。閾値は<strong>持たない</strong>。分布が出た後に rules 行 1 本（例: size ごとの src 行数の上限）を裁定 id 付きで足し、検出線（<a href="../spec/constitution.html#c12-4">C12.4</a>・deny ではない）に昇格するのは裁定</td><td>宣言した size に対して大きすぎる便の検知（記録時点の 17 便の実績: S = +78〜+412 行・M = +1037〜+1810 行）</td><td>「標準 library の作り直し」「1 実装の抽象」の判定（(1) が担う）</td><td>契約 1 本（record の任意 field・schema 1 のまま）+ 後日の裁定 1 件</td><td>S〜M</td></tr>
+    <tr><td>(3) はしごの typed な宣言</td><td>段を closed enum（Skip / Reuse(symbol) / Stdlib / Native / Dependency(crate) / OneLine / Minimal・宣言順 = はしごの順）にし、runner は止まった段と「上の段を退けた理由」を typed な record で宣言する。gate は<strong>形</strong>を検査する: 段が宣言されている・選んだ段より上の段すべてに理由が在る・段の含意が diff と一致する（Reuse → その symbol を diff が使う・Dependency → C13 の allow-list 内・Skip → src の差分 0・Minimal → (2) の検出線に載る）。理由の真偽は (1) の lens が審査する。prompt には「段を宣言せよ」の pointer 1 行だけ</td><td>書く前に段を順に通った証拠・段と diff の整合・審査できる record</td><td>段の選択の正しさ・退けた理由の真偽</td><td>SRS の FR 1 本（契約と record の形）+ ADR 1 本（跨版契約: 契約 file の field と record の schema）+ 契約 2〜3 便</td><td>M〜L</td></tr>
+    <tr><td>(採らない) 強度 ultra</td><td>—</td><td>—</td><td>—</td><td>要件の正本（SRS / 契約）と衝突</td><td>—</td></tr>
+  </tbody>
+</table>
+<p data-audience="machine">比較の読み方: (1)(2) は既存の線の延長で、SRS の改訂を要しない（lens の観点は FR9 の内側・record の任意 field は ADR-0021 §2.6 (iv) の内側）。(3) は契約の型と record の schema を決めるので「ADR を書く条件」3（schema・跨版契約）に当たり、SRS の FR が要る。効果の高さは (3) > (2) > (1) と読む（(3) は runner が必ず一度「要るか・在るか」を通る構造になり、過剰設計が record に残る）。安全側の理由: 判断を機械に肩代わりさせず、形だけを強制する（散文で判断・機械で形を強制＝scribe2 の作法）。</p>
+</section>
+
+<section id="s5-open" class="informative">
+<h2>§5. 未解決の問い（ADR / SRS へ渡す）</h2>
+<p class="section-essence" data-audience="human">決めていないのは、はしごの段をどこに宣言するか（契約か runner の出力か）、段の含意をどこまで gate が照合するか、規模の検出線の閾値をいつ・どの値で足すか、の 3 点です。</p>
+<ul data-audience="machine">
+  <li>(3) の宣言の置き場: 契約 file の field（planner が期待する段）か、runner の出力 record（runner が止まった段）か、両方か。両方なら gate は「runner の段 ≤ 契約の段」を照合できる（順序は enum の宣言順）。</li>
+  <li>(3) の含意の照合の範囲: Reuse(symbol) の「diff が symbol を使う」は字面照合になる（C3.3 の極性と衝突しないか＝symbol 名は契約の typed な値であり pane の字面ではない、と読めるか）。Stdlib / Native は照合できる形が無い（宣言だけ・lens が審査）。</li>
+  <li>(2) の閾値: 分布を何便ぶん集めてから足すか（記録時点の 17 便で足りるか）・値は size ごとに 1 本か・deny への昇格は要るか（C12.4 の裁定）。</li>
+  <li>(1) の観点の追加は lens の予算（NFR1）の内側に収まるか（findings の category が増えると出力も増える・母集団の記録は必須）。</li>
+  <li>ponytail の「触る file を全部読む・呼び出し箇所を grep」は runner の手順であり、機械で担保する形（read の記録）は本 doc の射程外。</li>
+</ul>
+</section>
+
+<section id="s6-sources" class="informative">
+<h2>§6. 出所</h2>
+<ol data-audience="machine">
+  <li>ponytail の公開 repo（README: 主張・強度・対応 agent・強制の有無・license）: <a href="https://github.com/DietrichGebert/ponytail">github.com/DietrichGebert/ponytail</a></li>
+  <li>skill の本文（決定はしご・手順・禁止・出力形式）: <a href="https://github.com/DietrichGebert/ponytail/blob/main/skills/ponytail/SKILL.md">skills/ponytail/SKILL.md</a></li>
+  <li>付属の review skill（5 種・出力形式・対象外）: <a href="https://github.com/DietrichGebert/ponytail/blob/main/skills/ponytail-review/SKILL.md">skills/ponytail-review/SKILL.md</a></li>
+  <li>独立検証（80 task の対比較・費用と品質）: <a href="https://blog.jetbrains.com/ai/2026/07/ponytail-skill-claude-tested/">JetBrains AI blog, 2026-07</a></li>
+  <li>scribe2 側の現物（記録時点）: rules 行 R-C4-1〜R-C4-4 / C13 の allow-list・lens の観点（docs/design/pipeline.md §6）・land の record（ADR-0021 §2.6 (iv)）・便の実績 17 本（fleet の event log・2026-09-11〜13）。</li>
+</ol>
+</section>
+<!-- folio:chrome-bottom -->
+<script>
+(function () {
+  var openedForPrint = [];
+  window.addEventListener('beforeprint', function () {
+    openedForPrint = [];
+    var ds = document.querySelectorAll('details:not([open])');
+    for (var i = 0; i < ds.length; i++) { ds[i].setAttribute('open', ''); openedForPrint.push(ds[i]); }
+  });
+  window.addEventListener('afterprint', function () {
+    for (var i = 0; i < openedForPrint.length; i++) openedForPrint[i].removeAttribute('open');
+    openedForPrint = [];
+  });
+  if (!document.querySelector('[data-audience]')) return;
+  /* 既定 = 人間プレゼン型 (ADR-0040 / rules §11.3): script 経由で初期 class を付与するため
+     no-JS では付かず全文可視に graceful degrade する。 static DOM は全文を保持 (AI/検索/印刷は不変)。 */
+  document.body.classList.add('audience-human');
+  var bar = document.createElement('nav');
+  bar.className = 'audience-toggle';
+  bar.setAttribute('aria-label', '表示対象の切替');
+  var states = [['both', '両方'], ['human', '人間向け'], ['machine', '機械向け']];
+  for (var s = 0; s < states.length; s++) {
+    (function (mode, label) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      b.setAttribute('aria-pressed', mode === 'human' ? 'true' : 'false');
+      b.addEventListener('click', function () {
+        document.body.classList.remove('audience-human', 'audience-machine');
+        if (mode !== 'both') document.body.classList.add('audience-' + mode);
+        var bs = bar.querySelectorAll('button');
+        for (var j = 0; j < bs.length; j++) bs[j].setAttribute('aria-pressed', bs[j] === b ? 'true' : 'false');
+      });
+      bar.appendChild(b);
+    })(states[s][0], states[s][1]);
+  }
+  var bc = document.querySelector('nav.breadcrumb');
+  if (bc && bc.parentNode) { bc.parentNode.insertBefore(bar, bc.nextSibling); }
+  else { document.body.insertBefore(bar, document.body.firstChild); }
+})();
+</script>
+<!-- /folio:chrome-bottom -->
+</body>
+</html>
