@@ -192,8 +192,7 @@ struct Watched {
 fn conclude(status: std::io::Result<ExitStatus>, seen: &Watched) -> Outcome {
     let observed = observed_suffix(seen.status.as_deref());
     if seen.limited {
-        let reason = seen.status.as_deref().unwrap_or_default();
-        return Outcome::failed_line(RC_RATE_LIMIT, stop_line(reason));
+        return limited(seen.status.as_deref().unwrap_or_default());
     }
     let found = match status {
         Err(err) => return Outcome::failed_line(RC_BROKEN, format!("runner: claude を待てない: {err}")),
@@ -395,7 +394,28 @@ fn json_string(after_colon: &str) -> Option<String> {
 
 /// 上限で止めた周の 1 行（記録面と同じ形で status を載せる）。
 pub fn stop_line(status: &str) -> String {
-    format!("runner: rate limit の record を見たので止めた rate-limit-status={status}")
+    format!("{STOP_PREFIX}{status}")
+}
+
+/// 停止行の status の前までの字面（[`stop_line`] と [`stop_status`] が共有する）。
+const STOP_PREFIX: &str = "runner: rate limit の record を見たので止めた rate-limit-status=";
+
+/// 上限で止めた周の結果: 停止行を **stdout** の 1 行に出し rc [`RC_RATE_LIMIT`]。
+///
+/// pipe は runner の stdout だけを捕らえる（`pipe/spawn.rs`）ので、stderr に出すと段の記帳へ
+/// status が届かない（設計 account-autonomy.md §2）。
+pub fn limited(status: &str) -> Outcome {
+    Outcome { out: vec![stop_line(status)], err: Vec::new(), rc: RC_RATE_LIMIT }
+}
+
+/// 停止行（[`stop_line`]）から `rate-limit-status=` の値を読む（純関数・[`stop_line`] の対）。
+///
+/// 読むのは**停止行そのもの**だけで、観測の後置き（`runner: rc=… rate-limit-status=…`）は
+/// 停止行ではないので `None`。値が空の行も `None`（呼び手は `unknown` と記す）。
+pub fn stop_status(line: &str) -> Option<&str> {
+    line.trim_end()
+        .strip_prefix(STOP_PREFIX)
+        .filter(|status| !status.is_empty())
 }
 
 /// 観測を記録面へ載せる後置き（観測していない周は空）。
@@ -570,7 +590,17 @@ fn refused(reason: String) -> Outcome {
 
 #[cfg(test)]
 mod tests {
-    use super::Scan;
+    use super::{observed_suffix, stop_line, stop_status, Scan};
+
+    /// 停止行の読み手は [`stop_line`] と往復し、観測行と空行は停止行として読まない。
+    #[test]
+    fn stop_status_reads_back_the_stop_line_only() {
+        assert_eq!(stop_status(&stop_line("allowed_warning")), Some("allowed_warning"));
+        let observed = format!("runner: rc=0 records=3{}", observed_suffix(Some("allowed_warning")));
+        assert_eq!(stop_status(&observed), None, "観測の後置きは停止行ではない: {observed}");
+        assert_eq!(stop_status(""), None, "空行は停止行ではない");
+        assert_eq!(stop_status(&stop_line("")), None, "値が空の停止行は読めない側");
+    }
 
     /// 文字列の外の構造文字だけを、位置ごと順に集める。
     fn structurals(body: &str) -> Vec<(usize, char)> {

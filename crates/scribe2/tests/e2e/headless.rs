@@ -1325,6 +1325,25 @@ fn headless_runner_decides_stop_only_for_statuses_in_the_set() {
     assert!(stop_line("blocked").contains("rate-limit-status=blocked"), "止めた理由を記録面と同じ形で載せる");
 }
 
+/// **上限で止めた周の停止行は stdout に出る**（`s2-07l.190`・設計 account-autonomy.md §2）。
+///
+/// pipe は runner の stdout だけを捕らえるので、stderr に出すと段の記帳へ status が届かない。
+/// 止める側の集合が空である以上 production の binary は止まる側を通らないので、結果を組む口を
+/// 直接撃つ（`conclude` はこの 1 本を返す）。
+#[test]
+fn headless_runner_limited_puts_the_stop_line_on_stdout() {
+    use vessel::headless::runner::{limited, stop_line, stop_status};
+    let out = limited("allowed_warning");
+    assert_eq!(out.out, vec![stop_line("allowed_warning")], "停止行は stdout の 1 行");
+    assert!(out.err.is_empty(), "stderr には出さない: {:?}", out.err);
+    assert_eq!(out.rc, RC_RATE_LIMIT, "rc は RC_RATE_LIMIT のまま");
+    assert_eq!(
+        out.out.last().map(String::as_str).and_then(stop_status),
+        Some("allowed_warning"),
+        "pipe の読み手で往復する"
+    );
+}
+
 /// key と colon の間の**空白に寛容**である（`s2-07l.77`・lens 2026-09-11 H2）。
 ///
 /// 実 stream は compact だが（実測）、表記が変わっただけで**記録の口が無音で止まる**形にはしない

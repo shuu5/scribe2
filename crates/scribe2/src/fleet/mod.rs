@@ -180,6 +180,9 @@ pub enum Stage {
     Spawned,
     /// runner が質問で止まり、回答を待っている（FR31）。
     Questioned,
+    /// runner が上限 record で止まった（FR35・**終端でない**＝worktree と commit を保ち、別口座で
+    /// 起こし直せる段・ADR-0020 §2.1）。
+    RateLimited,
     /// 実装が済んだ。
     Implemented,
     /// gate を通した。
@@ -198,6 +201,7 @@ pub const STAGES: &[Stage] = &[
     Stage::Blocked,
     Stage::Spawned,
     Stage::Questioned,
+    Stage::RateLimited,
     Stage::Implemented,
     Stage::Gated,
     Stage::Landed,
@@ -213,6 +217,7 @@ impl Stage {
             Self::Blocked => "Blocked",
             Self::Spawned => "Spawned",
             Self::Questioned => "Questioned",
+            Self::RateLimited => "RateLimited",
             Self::Implemented => "Implemented",
             Self::Gated => "Gated",
             Self::Landed => "Landed",

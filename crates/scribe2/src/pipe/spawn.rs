@@ -16,6 +16,8 @@ use super::{
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
 use crate::fleet::store::LockPolicy;
 use crate::fleet::{EventKind, Stage};
+use crate::headless::runner::stop_status;
+use crate::headless::RC_RATE_LIMIT;
 use crate::name::NAME;
 use crate::pipe::contract::Contract;
 use std::io::Write;
@@ -166,8 +168,10 @@ fn launch_runner(
         record_stage(launch, Stage::Failed, Some(OOM_DETAIL.to_owned()))
     } else if rc == i32::from(RC_QUESTION) {
         settle_question(launch, worktree, &tip, &stdout)
+    } else if rc == i32::from(RC_RATE_LIMIT) {
+        settle_rate_limit(launch, rc, &stdout)
     } else {
-        // **rc が 76 でない周は最終行を読まない**（従来どおり）。
+        // **rc が 76 / 75 でない周は最終行を読まない**（従来どおり）。
         settle(launch, worktree, base, rc)
     };
     if let Some(reason) = kept {
@@ -244,6 +248,22 @@ fn settle(launch: &Launch<'_>, worktree: &Path, base: &str, rc: i32) -> Outcome 
     };
     record_stage(launch, stage, detail)
 }
+
+/// 包みが rc [`RC_RATE_LIMIT`] で終わった周: stdout の最後の停止行を読み、
+/// `RunStage(RateLimited) detail=rc:<rc>,status:<status>` を記帳する（設計 account-autonomy.md §2）。
+///
+/// 末尾から**停止行として読める行**を探す（包めた周は箱の終端行 `confine-usage` が停止行の後ろに
+/// 付くので、素の最終行を読むと常に unknown に化ける）。
+///
+/// **終端でない段**である（ADR-0020 §2.1）: worktree・base・commit・質問と回答の event は保つ。
+/// 停止行を読めない周は `status:unknown` で、段は変えない（読めないを `Failed` に倒さない）。
+fn settle_rate_limit(launch: &Launch<'_>, rc: i32, stdout: &str) -> Outcome {
+    let status = stdout.lines().rev().find_map(stop_status).unwrap_or(UNKNOWN_STATUS);
+    record_stage(launch, Stage::RateLimited, Some(format!("rc:{rc},status:{status}")))
+}
+
+/// 停止行を読めない周の status（閉じた 1 つ）。
+const UNKNOWN_STATUS: &str = "unknown";
 
 /// 包みが rc [`RC_QUESTION`] で終わった周: stdout の最終行を質問 record として読み、
 /// `QuestionRaised(detail=逐語)` → `RunStage(Questioned)` の順で記帳して **rc 3 で止まる**

@@ -278,7 +278,7 @@ fn exclude_overlap(state_dir: &Path, contract: &Contract) -> Result<(), Outcome>
 /// 便が live（終端でない）か。**段の網羅 match で書く**（段が増えたら compile で気付く）。
 ///
 /// 終端 = `Landed` / `Failed` / `Stopped`、または `Gated` で verdict が FAIL（pipeline.md §4
-/// 「FAIL は終端」）。`Gated` の判定を読めない周は `None`＝**測れなかった**で、呼び手が
+/// 「FAIL は終端」）。`RateLimited` は終端でない（口座の窓の都合で止まっただけ・ADR-0020 §2.1）。`Gated` の判定を読めない周は `None`＝**測れなかった**で、呼び手が
 /// 断る側へ倒す（読めない判定を「終端でない」にも「終端」にも読み替えない）。
 fn live(state_dir: &Path, id: &str, stage: Stage) -> Option<bool> {
     match stage {
@@ -288,6 +288,7 @@ fn live(state_dir: &Path, id: &str, stage: Stage) -> Option<bool> {
         | Stage::Blocked
         | Stage::Spawned
         | Stage::Questioned
+        | Stage::RateLimited
         | Stage::Implemented => Some(true),
     }
 }

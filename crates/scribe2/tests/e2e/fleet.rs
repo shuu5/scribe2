@@ -576,6 +576,21 @@ fn fleet_stages_follow_declaration_order() {
     );
 }
 
+/// `RateLimited` は `Questioned` の直後に並び（母集団 10 段）、字面が往復する（`s2-07l.190`・
+/// 設計 account-autonomy.md §2）。
+#[test]
+fn fleet_stages_place_rate_limited_after_questioned() {
+    let at = |want: Stage| STAGES.iter().position(|stage| *stage == want);
+    assert_eq!(STAGES.len(), 10, "段は 10 個");
+    assert_eq!(
+        at(Stage::RateLimited),
+        at(Stage::Questioned).map(|found| found.saturating_add(1)),
+        "RateLimited は Questioned の直後"
+    );
+    assert_eq!(Stage::RateLimited.as_str(), "RateLimited");
+    assert_eq!(Stage::parse("RateLimited"), Some(Stage::RateLimited), "as_str ↔ parse の往復");
+}
+
 /// `KINDS` の並びが**宣言順**と一致する（ADR-0013 §2.2）。
 #[test]
 fn fleet_kinds_follow_declaration_order() {

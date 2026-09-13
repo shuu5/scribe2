@@ -12,6 +12,7 @@ use std::process::{Child, Command, Output, Stdio};
 use std::time::{Duration, Instant};
 use vessel::cli_outcome::{RC_BROKEN, RC_OK, RC_REFUSED};
 use vessel::fleet::{Event, EventKind, Stage};
+use vessel::headless::RC_RATE_LIMIT;
 use vessel::hook::inject_path;
 use vessel::order::is_declaration_order;
 use vessel::pipe::approve::RC_BLOCKED;
@@ -5718,6 +5719,129 @@ fn pipe_refuse_stop_run_stops_the_live_seat_of_the_run() {
         .collect();
     assert!(kinds.contains(&EventKind::SeatStopped), "席にも記帳する: {kinds:?}");
     assert!(kinds.contains(&EventKind::RunStopped), "便にも記帳する: {kinds:?}");
+    clean(&[&repo, &state]);
+}
+
+// ───── 上限停止の段（`s2-07l.190`・設計 account-autonomy.md §2・SRS FR35・接頭辞 `pipe_ratelimit_`） ─────
+
+/// 上限で止まった runner が stdout に出す停止行（headless の `stop_line` と同じ字面）。
+const RATE_LIMIT_STOP_LINE: &str = "runner: rate limit の record を見たので止めた rate-limit-status=allowed_warning";
+
+/// 偽 runner（実行 file）の runner cmd: 呼出回数を置き場へ写し、`line` が在れば stdout へ 1 行出して
+/// rc `rc` で終わる（**commit を作らない**）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn limit_runner(state: &Path, line: Option<&str>, rc: u8) -> String {
+    let dir = stub_dir(state);
+    fs::create_dir_all(&dir).expect("stub の置き場を作れる");
+    let path = state.join("limit-runner.sh");
+    let print = line.map(|found| format!("printf '%s\\n' '{found}'\n")).unwrap_or_default();
+    let body = format!("#!/bin/sh\nprintf 'call\\n' >> '{}/calls'\n{print}exit {rc}\n", dir.display());
+    fs::write(&path, body).expect("stub を書ける");
+    format!("sh {}", path.display())
+}
+
+/// 便の `RunStage` の最新 `(段, detail)`。
+fn last_stage(state: &Path, id: &str) -> Option<(Option<Stage>, Option<String>)> {
+    stages(state, id).pop()
+}
+
+/// 便の `RunStage` のうち段が `want` の件数。
+fn stage_count(state: &Path, id: &str, want: Stage) -> usize {
+    stages(state, id).iter().filter(|(stage, _)| *stage == Some(want)).count()
+}
+
+/// write-set `src/lib.rs` の便を intake → 停止行 + rc 75 の runner で spawn し、`RateLimited` に
+/// 倒れたことを確かめて run id と runner cmd を返す。
+fn rate_limited_run(repo: &Path, state: &Path) -> (String, String) {
+    let first = write_set_contract(repo, "first.toml", &["src/lib.rs"]);
+    let id = intake_bead(repo, state, &first, "s2-limit");
+    let runner = limit_runner(state, Some(RATE_LIMIT_STOP_LINE), RC_RATE_LIMIT);
+    let out = spawn_with(repo, state, &id, &runner);
+    assert!(stdout_of(&out).contains("stage=RateLimited"), "{} / {}", stdout_of(&out), stderr_of(&out));
+    assert_eq!(stub_calls(state), 1, "runner は 1 回だけ起きる");
+    (id, runner)
+}
+
+/// runner が停止行を出して rc 75 で終わった便は **`RateLimited` で残る**: (1) 段の最新が
+/// `RateLimited` で rc と status を運び `Failed` は 0 本 (2) worktree と base を保つ (3) `pipe show`
+/// に段名が出る。
+#[test]
+fn pipe_ratelimit_spawn_keeps_the_run_at_rate_limited() {
+    let (repo, state) = repo_with_state();
+    let base = git(&repo, &["rev-parse", "refs/heads/main"]);
+    let (id, _) = rate_limited_run(&repo, &state);
+    assert_eq!(
+        last_stage(&state, &id),
+        Some((Some(Stage::RateLimited), Some("rc:75,status:allowed_warning".to_owned()))),
+        "段は RateLimited で status を運ぶ"
+    );
+    assert_eq!(stage_count(&state, &id, Stage::Failed), 0, "Failed に倒さない");
+    let worktree = worktree_of(&repo, &id);
+    assert!(worktree.exists(), "worktree は残る（retire されない）: {}", worktree.display());
+    assert_eq!(git(&worktree, &["rev-parse", "HEAD"]), base, "worktree は base の commit のまま");
+    assert!(show_line(&repo, &state, &id).contains("stage=RateLimited"), "永続面に RateLimited が残る");
+    clean(&[&repo, &state]);
+}
+
+/// `RateLimited` は**終端でない**: (4) intake の排他の母集団に数えられ、`resume` は受けず（起こし
+/// 直しは後続の経路）、(5) `stop --run` で `Stopped` に倒せる（倒した後は同じ write-set が通る）。
+#[test]
+fn pipe_ratelimit_run_stays_live_until_stopped() {
+    let (repo, state) = repo_with_state();
+    let (id, runner) = rate_limited_run(&repo, &state);
+    let second = write_set_contract(&repo, "second.toml", &["src/lib.rs"]);
+    let blocked = try_intake(&repo, &state, &second, "s2-next");
+    assert_eq!(blocked.status.code(), Some(i32::from(RC_REFUSED)), "RateLimited は live: {}", stdout_of(&blocked));
+    assert!(stderr_of(&blocked).contains(&id), "交差した相手を名乗る: {}", stderr_of(&blocked));
+    let resumed = run_pipe(&[
+        "resume", "--run", &id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(), "--runner", &runner,
+    ]);
+    assert_eq!(resumed.status.code(), Some(i32::from(RC_REFUSED)), "resume は断る: {}", stderr_of(&resumed));
+    assert!(stderr_of(&resumed).contains("段 RateLimited からは再開しない"), "{}", stderr_of(&resumed));
+    assert_eq!(stub_calls(&state), 1, "resume は runner を起こさない");
+    stop_run_ok(&state, &id);
+    assert!(show_line(&repo, &state, &id).contains("stage=Stopped"), "stop で Stopped");
+    let passed = try_intake(&repo, &state, &second, "s2-third");
+    assert_eq!(passed.status.code(), Some(i32::from(RC_OK)), "止めた後は通る: {}", stderr_of(&passed));
+    clean(&[&repo, &state]);
+}
+
+/// (6) 停止行の無い rc 75（stdout 空）は `status:unknown` で、段は `RateLimited`（Failed に倒れない）。
+#[test]
+fn pipe_ratelimit_without_stop_line_records_unknown_status() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let id = intake(&repo, &state, &path);
+    let out = spawn_with(&repo, &state, &id, &limit_runner(&state, None, RC_RATE_LIMIT));
+    assert!(stdout_of(&out).contains("stage=RateLimited"), "{} / {}", stdout_of(&out), stderr_of(&out));
+    assert_eq!(
+        last_stage(&state, &id),
+        Some((Some(Stage::RateLimited), Some("rc:75,status:unknown".to_owned()))),
+        "読めない status は unknown"
+    );
+    assert_eq!(stage_count(&state, &id, Stage::Failed), 0, "読めないを Failed に倒さない");
+    clean(&[&repo, &state]);
+}
+
+/// (7) rc 75 以外は従来どおり `Failed detail=runner-rc:<rc>,commits:<n>`（停止行を出していても
+/// rc で分岐してから読む＝他の rc では読まない）。
+#[test]
+fn pipe_ratelimit_other_rc_still_fails() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let id = intake(&repo, &state, &path);
+    let out = spawn_with(&repo, &state, &id, &limit_runner(&state, Some(RATE_LIMIT_STOP_LINE), 1));
+    assert!(stdout_of(&out).contains("stage=Failed"), "{} / {}", stdout_of(&out), stderr_of(&out));
+    assert_eq!(
+        last_stage(&state, &id),
+        Some((Some(Stage::Failed), Some("runner-rc:1,commits:0".to_owned()))),
+        "他の rc の経路は不変"
+    );
+    assert_eq!(stage_count(&state, &id, Stage::RateLimited), 0, "rc 1 は RateLimited にしない");
     clean(&[&repo, &state]);
 }
 
