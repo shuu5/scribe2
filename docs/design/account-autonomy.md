@@ -17,7 +17,7 @@
 
 ## 3. 選定の純関数（ADR-0020 §2.2・FR36）
 
-- **入力**（2 種 + 用途）: manifest の `[[account]]` 行の label 列（宣言値）・口座 × 窓ごとの**最新の実測行**（`AllowanceMeasured` / `AllowanceUnmeasured`・実測値・reset 時刻付き）・用途（`Purpose::{Run, Session}`・closed enum）・使う model（`Option`・display name・与えられた周はその model のモデル別 7 日窓だけを数え、与えられない周はモデル別窓すべての最大を数える〔保守側〕。記録時点は両用途とも与えられない: runner の起動形は model を渡さず〔claude の既定〕、登録 row に model の項目は無い〔§11〕）・除外する label の集合（席の登録 row が持つ口座・[seat-roles.md](./seat-roles.md) §2）・rules 行の値（session 用の閾値）。**席の判断・pane の字面・前の版の道具の出力は入力にしない**。
+- **入力**（2 種 + 用途）: manifest の `[[account]]` 行の label 列（宣言値）・口座 × 窓ごとの**最新の実測行**（`AllowanceMeasured` / `AllowanceUnmeasured`・実測値・reset 時刻付き）・用途（`Purpose::{Run, Session}`・closed enum）・使う model（`Option`・display name・与えられた周はその model のモデル別 7 日窓だけを数え、与えられない周はモデル別窓すべての最大を数える〔保守側〕。便用は与えられない〔runner の起動形は model を渡さず claude の既定〕・session 用は席の登録 row の `model` 項目（[seat-roles.md](./seat-roles.md) §2・任意・display name・無い row は None＝全 model 窓の最大を数える保守側〕を渡す。席ごとに使う model が違う〔planner の Fable 枠が当たっても管理席の口座には効かない・その逆も〕ので、席の逼迫度はその席の model の窓で数えないと退避が偽陽性になる）・除外する label の集合（席の登録 row が持つ口座・[seat-roles.md](./seat-roles.md) §2）・rules 行の値（session 用の閾値）。**席の判断・pane の字面・前の版の道具の出力は入力にしない**。
 - **出力**: `Selection::{Chosen(label), None(NoCandidate)}`。`NoCandidate` は typed な理由（全口座が当たっている / 測れない / 除外で空）と**最も早い reset 時刻**（§4 の待ちに渡す）を運ぶ。
 - **逼迫度** = その口座の窓のうち最大の使用率（5 時間・7 日・model が与えられた周はその model のモデル別 7 日窓だけ、与えられない周はモデル別窓すべての最大）。**当たっている** = 最新の実測行の使用率が 100（窓の全量・規則値ではない）に達している。
 - **便用**: 当たっていない口座のうち逼迫度が最大の口座（使い切る側・C9.2）。席の登録 row が持つ口座は候補から外す（席の生死を問わず登録が在る限り）。
@@ -35,8 +35,8 @@
 
 ## 5. 席の退避と立て直し（ADR-0020 §2.4・FR38）
 
-- **tick の判定に軸を 1 つ足す**（[seat-autonomy.md](./seat-autonomy.md) §3 の `judge`・inject / noop の判定であって guard ではない・極性一覧に載せない）: 登録済みの席ごとに、(1) 実測行の鮮度が既存の rules 行 `seat.tick_stale_s` の値より古い周は FR33 の計測を先に撃つ（定期計測はこの 1 形に限る）→ (2) 席の登録 row が持つ口座の逼迫度（§3 の定義・席が使う model の窓を含む）を最新の実測行から読む → (3) **R-C9-1 の値以上**である間は、FR29 と同じ除外（退避物が在る周・cycle が走っている周は注入しない）の下で idle を待たずに退避の合図を注入する。実測行が無い・測れない周は注入せず `NoopReason` に理由 1 つ（縮退・止めない）。FR27 の打刻の合図はこの周は出ない（FR27 の条件に「使用率が閾値未満」が在る）。
-- **立て直し**: 席が退避して止まった周（打刻が Stop の後に session の終了を示す・[seat-state.md](./seat-state.md)）、tick は §3 の session 用の規則で口座を選び、登録 row が持つ**起動の雛形**（穴 `{account_dir}` 1 つ）の穴を選んだ label の credential dir で埋めて同じ target の shell へ注入し、続けて復元の command（FR28・`seat rebrief`）を注入する。登録 row の口座 label を選んだ label に更新する（同じ鍵で再登録 = `SeatRegistered` 1 件・[seat-roles.md](./seat-roles.md) §2）。この更新は `seat register` の subcommand を経由せず、器の内部の同じ 1 関数が event を積み、`target` / `sid` / `launch` は既存 row から写す（打刻の条件は席の session が撃つ登録に課すもので、器自身の更新には課さない・`sid` は登録時の証拠であって現在の session の識別子ではない）。候補なしの周は立て直さず typed な理由を記帳し、次の tick で選び直す（0 口座で起こさない・止めない）。立て直しは既存の登録 row を持つ席に限る。
+- **tick の判定に軸を 1 つ足す**（[seat-autonomy.md](./seat-autonomy.md) §3 の `judge`・inject / noop の判定であって guard ではない・極性一覧に載せない）: 登録済みの席ごとに、(1) 実測行の鮮度が既存の rules 行 `seat.tick_stale_s` の値より古い周は FR33 の計測を先に撃つ（定期計測はこの 1 形に限る）→ (2) 席の登録 row が持つ口座の逼迫度（§3 の定義・model = 登録 row の `model` 項目・無ければ None＝全 model 窓の最大〔保守側〕）を最新の実測行から読む → (3) **R-C9-1 の値以上**である間は、FR29 と同じ除外（退避物が在る周・cycle が走っている周は注入しない）の下で idle を待たずに退避の合図を注入する。実測行が無い・測れない周は注入せず `NoopReason` に理由 1 つ（縮退・止めない）。FR27 の打刻の合図はこの周は出ない（FR27 の条件に「使用率が閾値未満」が在る）。
+- **立て直し**: 席が退避して止まった周（打刻が Stop の後に session の終了を示す・[seat-state.md](./seat-state.md)）、tick は §3 の session 用の規則（model = 登録 row の `model` 項目・除外 = 他の席の登録 row が持つ口座）で口座を選び、登録 row が持つ**起動の雛形**（穴 `{account_dir}` 1 つ）の穴を選んだ label の credential dir で埋めて同じ target の shell へ注入し、続けて復元の command（FR28・`seat rebrief`）を注入する。登録 row の口座 label を選んだ label に更新する（同じ鍵で再登録 = `SeatRegistered` 1 件・[seat-roles.md](./seat-roles.md) §2）。この更新は `seat register` の subcommand を経由せず、器の内部の同じ 1 関数が event を積み、`target` / `sid` / `launch` は既存 row から写す（打刻の条件は席の session が撃つ登録に課すもので、器自身の更新には課さない・`sid` は登録時の証拠であって現在の session の識別子ではない）。候補なしの周は立て直さず typed な理由を記帳し、次の tick で選び直す（0 口座で起こさない・止めない）。立て直しは既存の登録 row を持つ席に限る。
 - 起動の雛形は env を読まず、器は穴を埋めて注入するだけ（host 名や絶対 path を解釈しない）。
 
 ## 6. 極性
@@ -61,7 +61,7 @@ C1 / C5（R-C9-1 は行・裁定 id）・C2（`Purpose` / `Selection` / `Stage` 
 - **(a) 上限停止の段**（S）: `Stage::RateLimited`・runner の上限の rc → 段の記帳（rc / status）・`pipe show`・排他の母集団・stop。write-set = fleet/mod.rs（`Stage` の variant・`STAGES`・`as_str`）・headless/runner.rs（停止行の読み手・in-file の歯）・pipe/mod.rs・pipe/spawn.rs・pipe/cli.rs（段名の表示・live の集合・stop）・tests/e2e/{pipe,fleet,headless}.rs・snapshot。依存: なし（上限の rc は現物・label は (c) が足す）。順序: fleet/mod.rs・pipe/cli.rs・tests/e2e/pipe.rs で s2-07l.147 と交差するので .147 の land 後に直列（並列の組に入れない）。
 - **(b) 選定の純関数と R-C9-1**（M）: `fleet/select.rs`・`Purpose` / `Selection` / `NoCandidate`・R-C9-1 の値の型変更（**値と裁定 id は user 裁定**）・`fleet select` subcommand・選定前の計測の呼出し。write-set = fleet/select.rs（新規）・fleet/mod.rs・fleet/cli.rs・rules/mod.rs（値の型）・rules/manifest.toml・tests/e2e/{fleet,rules}.rs・snapshot。依存: s2-07l.187（実測行の値の形）の land 後。
 - **(c) 別口座での途中再開**（M）: `Completion::AccountFree`・`pipe run` / `resume` の RateLimited の経路・「途中再開」節・`--account-dir` の配線・記帳。write-set = pipe/follow.rs・pipe/cli.rs・pipe/spawn.rs（段の detail に `account:<label>`）・fleet/mod.rs・headless/runner.txt・tests/e2e/pipe.rs。依存: (a)(b)・s2-07l.147（land の順序制御・pipe/ と fleet/mod.rs を触るので直列）・[seat-roles.md](./seat-roles.md) 契約 (a)（便用の除外集合 = 登録 row の口座の読み手）。
-- **(d) 席の退避と立て直し**（M）: tick の軸・鮮度で計測・登録 row の口座と雛形・Stop 後の立て直し・登録 row の更新。write-set = seat/tick.rs・seat/cycle.rs・seat/role.rs（登録 row の読み手）・tests/e2e/seat.rs。依存: (b)・[seat-roles.md](./seat-roles.md) 契約 (a)（登録 row）。
+- **(d) 席の退避と立て直し**（M）: tick の軸・鮮度で計測・登録 row の口座と雛形と `model`・Stop 後の立て直し（session 用・model = 登録 row・除外 = 他の席の口座）・登録 row の更新。write-set = seat/tick.rs・seat/cycle.rs・seat/role.rs（登録 row の読み手）・tests/e2e/seat.rs。依存: (b)・[seat-roles.md](./seat-roles.md) 契約 (a)（登録 row）と契約 (e)（登録 row の `model` 項目）。
 
 ## 10. 却下案（ADR-0020 §5 の写しは持たない・設計固有のもの）
 
