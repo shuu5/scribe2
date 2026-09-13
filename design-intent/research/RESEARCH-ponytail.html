@@ -58,7 +58,7 @@
 
 <aside class="informative">
 <ul>
-  <li>出所: user の問い 2026-09-13（会話面・planner 席）「ponytail という skill の概念を scribe に取り入れられるか検討したい」。本 doc は探索であり<strong>決めない</strong>。</li>
+  <li>出所: user の問い 2026-09-13（会話面・planner 席）＝ponytail の概念を scribe2 に取り入れられるかの検討依頼（要旨）。本 doc は探索であり<strong>決めない</strong>。</li>
   <li>ponytail は MIT license の公開 OSS（§6）。本 doc が引用するのは公開 repo と公開の独立検証の記述だけで、口座名・host 名・path は書かない（PUBLIC 面）。</li>
 </ul>
 </aside>
@@ -101,7 +101,7 @@
     <tr><td>① 要るか（YAGNI）・④ native</td><td>無い</td><td>—</td></tr>
     <tr><td>「最初に成立した段で止まる」</td><td><a href="../spec/constitution.html#c2">C2</a>（選択・除外・routing は 1 つの enum の上の 1 関数・順序は宣言順）</td><td>器の内部の型としては既にこの形（Stage / Guard / Completion）。契約と runner の判断には未適用</td></tr>
     <tr><td>付属の review（5 種）</td><td>lens（FR9・記録時点の観点は契約適合 / 歯の非空虚性 / 憲法整合の 1 本）</td><td>散文（prompt 本文・台帳 s2-07l.176 の穴）</td></tr>
-    <tr><td>強度 ultra（要件への異議）</td><td>要件の正本は SRS と契約。runner が異議を出す口は質問 record（FR31）だけ</td><td>採らない（契約適合の gate と衝突）</td></tr>
+    <tr><td>強度 ultra（要件への異議）</td><td>要件の正本は SRS と契約。runner が異議を出す口は質問 record（FR31）だけ</td><td>契約適合の gate（FR9）と衝突する（観察）</td></tr>
   </tbody>
 </table>
 <p data-audience="machine">突合の帰結: (a) ponytail を skill として積む（散文の注入）は N2 / C1.2 に反し、台帳 s2-07l.176（prompt 本文が規範文で snapshot も裁定も無い）の穴を広げる。(b) 段の大半は既に機械の線が在り、無いのは「要るか」「native」と「段を順に通った証拠」である。(c) 判断（この抽象は要るか）は機械では決められず、lens の判断に残る。</p>
@@ -116,7 +116,7 @@
     <tr><td>(1) lens の観点</td><td>lens の findings の category（closed enum）に ponytail-review の 5 種を足す。prompt の観点は pointer 付きの行として雛形へ（台帳 s2-07l.176 と同じ便で snapshot 化）</td><td>findings の型と件数・母集団（「0 件」と「未測」の弁別・台帳 s2-07l.175）</td><td>各 finding の判断そのもの</td><td>契約 1 本（設計 doc の改訂）</td><td>S</td></tr>
     <tr><td>(2) 便の規模の検出線</td><td>便ごとに「契約の size（S / M / L）・src の diff 行数・触った file 数・新しい pub symbol の数」を land の record に残す（<a href="../spec/constitution.html#c10">C10</a>: まず測る）。閾値は<strong>持たない</strong>。分布が出た後に rules 行 1 本（例: size ごとの src 行数の上限）を裁定 id 付きで足し、検出線（<a href="../spec/constitution.html#c12">C12.4</a>・deny ではない）に昇格するのは裁定</td><td>宣言した size に対して大きすぎる便の検知（記録時点の 17 便の実績: S = +78〜+412 行・M = +1037〜+1810 行）</td><td>「標準 library の作り直し」「1 実装の抽象」の判定（(1) が担う）</td><td>契約 1 本（record の任意 field・schema 1 のまま）+ 後日の裁定 1 件</td><td>S〜M</td></tr>
     <tr><td>(3) はしごの typed な宣言</td><td>段を closed enum（Skip / Reuse(symbol) / Stdlib / Native / Dependency(crate) / OneLine / Minimal・宣言順 = はしごの順）にし、runner は止まった段と「上の段を退けた理由」を typed な record で宣言する。gate は<strong>形</strong>を検査する: 段が宣言されている・選んだ段より上の段すべてに理由が在る・段の含意が diff と一致する（Reuse → その symbol を diff が使う・Dependency → C13 の allow-list 内・Skip → src の差分 0・Minimal → (2) の検出線に載る）。理由の真偽は (1) の lens が審査する。prompt には「段を宣言せよ」の pointer 1 行だけ</td><td>書く前に段を順に通った証拠・段と diff の整合・審査できる record</td><td>段の選択の正しさ・退けた理由の真偽</td><td>SRS の FR 1 本（契約と record の形）+ ADR 1 本（跨版契約: 契約 file の field と record の schema）+ 契約 2〜3 便</td><td>M〜L</td></tr>
-    <tr><td>(採らない) 強度 ultra</td><td>—</td><td>—</td><td>—</td><td>要件の正本（SRS / 契約）と衝突</td><td>—</td></tr>
+    <tr><td>（対照）強度 ultra</td><td>—</td><td>—</td><td>—</td><td>要件の正本（SRS / 契約）と衝突する（観察・写し方には数えない）</td><td>—</td></tr>
   </tbody>
 </table>
 <p data-audience="machine">比較の読み方: (1)(2) は既存の線の延長で、SRS の改訂を要しない（lens の観点は FR9 の内側・record の任意 field は ADR-0021 §2.6 (iv) の内側）。(3) は契約の型と record の schema を決めるので「ADR を書く条件」3（schema・跨版契約）に当たり、SRS の FR が要る。効果の高さは (3) > (2) > (1) と読む（(3) は runner が必ず一度「要るか・在るか」を通る構造になり、過剰設計が record に残る）。安全側の理由: 判断を機械に肩代わりさせず、形だけを強制する（散文で判断・機械で形を強制＝scribe2 の作法）。</p>

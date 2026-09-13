@@ -13,27 +13,27 @@
 
 - **`Role`**（closed enum・core）: variant の列挙は core が持ち文書は写さない。記録時点の値は 2 つ。`as_str` / `ALL` / 判別子順の pin は既存の enum（`RuleKind` / `Guard`）と同じ形。
 - **登録の subcommand**: `<NAME> seat register --state-dir S --target T --role R --account L --launch FILE [--anchor DIR]`。`--anchor` の既定は cwd の repo root（`git rev-parse --show-toplevel`・env を読まない）。`--launch FILE` は起動の雛形（穴は口座の credential dir 1 つ・[account-autonomy.md](./account-autonomy.md) §5 が使う）で、内容を event に載せる（tracked file に置かない・CON2）。
-- **event**: `EventKind::SeatRegistered`（末尾・宣言順）1 件。項目 = `role` / `anchor` / `target` / `sid`（登録を撃った session の id・SessionStart の打刻から解く）/ `account` / `launch`（雛形の本文）。schema 1 のまま（値の追加）。
+- **event**: `EventKind::SeatRegistered`（末尾・宣言順）1 件。項目 = `role` / `anchor` / `target` / `sid`（登録を撃った session の id・SessionStart の打刻から解く）/ `account` / `launch`（雛形の本文）。項目は `Event` の typed な束 1 つ（`allowance` と同型の `Option<Registration>`・kind ではなく束の有無が本体を決める）で持つ＝`Event` を literal で組む既存の構築点（core・歯・property の生成器）と `KINDS` の件数の pin がすべて変わる（write-set は §9 (a)）。schema 1 のまま（値の追加）。
 - **鍵と置き換え**: 鍵 = (role, anchor)。同じ鍵の再登録は前の row を置き換える（append のみ・replay の最新が効く・N1）。1 つの anchor に役割ごとに 1 席（FR40）。`target` / `sid` / `account` は項目で鍵ではない。pane id は鍵にも項目にも置かない。
 - **登録を受ける条件**: 登録を撃った session に SessionStart の打刻（[seat-state.md](./seat-state.md) §2）が在ること。打刻の無い session（plugin を積まない・tmux の外）からの登録は typed な理由（`RegisterRefusal::NoStamp`）で断る＝guard の無い席が権能を持てない。登録そのものは権能を要しない（登録が先・ADR-0022 §2.5）。
-- **役割の解決**（1 本・読み手は guard / 注入 / doctor / tick）: `pane → target（ADR-0015 §2.2）→ replay の最新の SeatRegistered（anchor は hook の cwd の repo root と一致する row）→ role`。window 名・env・作業木の path・pane の字面は入力にしない（C2.2 / C3.3 / N3）。replay の cache は持たない（C3・hook の予算 NFR5 の内側で実測済み）。
-- **doctor**: 登録 row と実在の target（tmux の `list-panes`）の突合を項目に持つ（C3.2・値は生成物・`doctor` の既存の項目列に 1 行）。
+- **役割の解決**（1 本・読み手は guard / 注入 / doctor / tick）: `pane → target（ADR-0015 §2.2）→ replay の最新の SeatRegistered（`target` が一致する row・同じ target の row が複数在れば replay の最新）→ role`。`anchor` は row の項目として読むだけで、hook の cwd と突合しない（席が worktree へ cd した周も同じ row が解ける）。window 名・env・作業木の path・pane の字面は入力にしない（C2.2 / C3.3 / N3）。replay の cache は持たない（C3・hook の予算 NFR5 の内側で実測済み）。
+- **doctor**: 登録 row と実在の target（tmux の `list-panes`）の突合を項目に持つ（C3.2・値は生成物）。`doctor` の現物は bin crate の `render_doctor`（記録時点は name / version の 2 行・state dir の引数なし）なので、`--state-dir S` の口を足し項目列に 1 行足す（外形 snapshot `doctor_external_form` が変わる）。
 
 ## 3. 権能と rules 行（ADR-0022 §2.2 / §2.5）
 
 - **`Capability`**（closed enum・core）: 操作の種別。記録時点の variant の**種類**は次のとおりで、名は core が持つ: 回答の記帳（`pipe answer`）・承認の記帳（approval event）・go の記帳（merge の許可）・便の起動（`pipe intake` / `run` / `resume` / `stop` / `retire`）・中継（席間の連絡を送る）・go 後の merge・path 種別ごとの編集（design-intent / 設計 doc / code / 対象 repo の外）。
-- **rules 行**: `RuleKind::RoleCapabilities`（variant 1 つ・値は権能の名の**列**〔manifest の値の型に list を足す・現物は Int / Bool / Str〕・裁定 id 付き）を役割ごとに 1 行（id は `role.<役割名>`）。値（どの役割がどの権能を持つか）は本 doc が決めず、契約 (b) が裁定 id 付きで書く（§9）。列に無い名は manifest の読み込みで拒む（閉じた enum の parse・既存の `RuleError`）。
+- **rules 行**: `RuleKind::RoleCapabilities`（variant 1 つ・値は権能の名の**列**〔既存の `RuleValue::List`・manifest に list の行が既に在る〕・裁定 id 付き）を役割ごとに 1 行（id は `role.<役割名>`）。値（どの役割がどの権能を持つか）は本 doc が決めず、契約 (b) が裁定 id 付きで書く（§9）。列に無い名は manifest の読み込みで拒む（閉じた enum の parse・既存の `RuleError`）。
 - **読み手は 4 つ・行は 1 つ**: §4 の guard・§5 の注入文の生成・C1.2 の生成文書（rules 表）・xtask の drift 検査（C14.2）。
 - **R-C7-1**: kind は既存の `Dialogue`（対話面）のまま、値を「役割 planner の登録 row を持つ席」を表す typed な値（`Role` の名）へ改める（行の値の変更・裁定 id・契約 (b)）。承認 event / 回答 event / go の記帳は planner の席からだけ受理（§4 の Bash guard が権能の行で止める・AC15）。
 - **契約が開く例外**: 管理席が自分の手で code を編集してよい便は、契約 file の typed な印（既存の `classes` と同じ形の field・名は契約 (b) が決める）で表す。§4 の Edit guard はその便の write-set の内側だけ通す（AC16）。散文に置かない。
 
 ## 4. 執行（ADR-0022 §2.3）
 
-- **`Guard::Role`**（variant 1 つ・宣言順は `Cap` の直後〔hook の束の末尾・行為の流れ〕・InLoop・FailClosed・極性一覧に 1 行）。
+- **`Guard::Role`**（variant 1 つ・宣言順は `Register` の直後〔hook の束の末尾・行為の流れ〕・InLoop・FailClosed・極性一覧に 1 行）。
 - **2 面**: (1) **Bash** — command 行が権能付き subcommand（core の const slice `CAPABILITY_COMMANDS`: subcommand の名 → `Capability`）を含む周に、席の役割の行がその権能を持たなければ deny。(2) **Edit 系** — path の種別（`PathKind`: design-intent / 設計 doc / code / 対象 repo の外・closed enum・分類は repo root からの相対 path の prefix）ごとの権能を照合し、持たなければ deny。契約が印で開いた便の write-set の内側は通す。
 - **identity**: 生成 hooks.json の shell 行が渡す `--pane` だけ（[vessel-hook.md](./vessel-hook.md)・生成器は同じ gen-manifest）。PreToolUse の shell 行に `--pane "$TMUX_PANE"` を足し、matcher を `Edit|Write|MultiEdit|NotebookEdit` から **Bash を含む形**へ改める（Bash は PermissionRequest の matcher でもある・2 面の判定は別 hook event）。
 - **解く順**: pane → target → 登録 row → role → 行 → 権能。pane が空（tmux の外・runner / lens）は席ではなく本 guard の対象外（ADR-0009 の write-set guard と allowlist がそのまま担う）。pane が在って登録 row が無い・target が解けない周は権能なし（FailClosed）。止めるのは権能付きの操作だけで、それ以外の Bash / Edit は通す。
-- **deny 文**: 権能を持つ役割の名を含む（例の形: `<NAME>: この操作は <役割名> 席の権能（rules 行 <id>）`・字面は現物が正本）。**記録行**: allow の周も target と command の種別を 1 行（打刻と同じ置き場 `inject.jsonl`・[seat-state.md](./seat-state.md)）。
+- **deny 文**: 権能を持つ役割の名を含む（例の形: `<NAME>: この操作は <役割名> 席の権能（rules 行 <id>）`・字面は現物が正本）。**記録行**: allow の周も target と command の種別を 1 行（hook の消費記録と同じ置き場 `<state_dir>/inject.jsonl`・[vessel-hook.md](./vessel-hook.md)。打刻の `state.jsonl` には書かない）。
 - **subcommand は役割を検査しない**（引数の identity は偽装できる）。発話は監視しない。
 
 ## 5. 注入（ADR-0022 §2.4）
@@ -49,9 +49,10 @@
 
 | guard | 段 | 極性 | 何を止めるか |
 |---|---|---|---|
+| `Register` | in-loop（`seat register` の受付） | FailClosed | 打刻の無い session からの登録（`RegisterRefusal::NoStamp`・打刻が読めない周も断る）。`IntakeRefuse` と同型（受付で止める） |
 | `Role` | in-loop（PreToolUse・Bash / Edit 系） | FailClosed | 権能の無い役割の席からの権能付き subcommand と、権能の無い path 種別の編集（登録 row が無い・target が解けない周も deny） |
 
-§2 の登録の拒否（`RegisterRefusal`）と §5 の注入は guard ではない（行為を止めうる判定を返さない・ADR-0014 §2.1）。
+§2 の登録の拒否は行為（登録）を止める判定を返すので guard（ADR-0014 §2.1）＝`Guard::Register`（variant 1 つ・宣言順は `Cap` の直後・極性の定数は `seat/role.rs`）。§5 の注入は guard ではない（行為を止めうる判定を返さない）。
 
 ## 7. 歯（`crates/<NAME>/tests/e2e/seat.rs` に `seat_role_` 接頭辞・hook は `tests/e2e/hook.rs` に `hook_role_`・名前の列は現物が SSOT）
 
@@ -60,7 +61,7 @@
 - guard（hook.rs・偽 tmux で pane → target を返す stub）: 管理席の target から `pipe answer` を含む Bash → deny・deny 文に権能を持つ役割の名と rules 行 id・記録行 1 件／planner の target から同じ command → allow・記録行 1 件／登録の無い pane → deny／pane 無し → 通す（記録なし）／Edit: 管理席の code path → deny・planner の design-intent → allow・契約の印で開いた便の write-set の内側 → allow・外 → deny（AC16）／権能付きでない Bash / Edit は通す。
 - rules: 役割ごとの行の kind 件数 +1・値が列であること・列に無い名は `RuleError`・R-C7-1 の値の型（Str → Role の名）・rules 外形 snapshot。
 - 注入（hook.rs）: 登録済みの target の SessionStart で生成文が出て権能の名がすべて含まれる・登録の無い target で 0 byte・雛形に pointer の無い行を置いた fixture で xtask check が落ちる（AC17）・行に在って文に無い権能を作った fixture で落ちる・生成文の外形 snapshot。
-- 極性一覧 snapshot に `Role` の 1 行（件数 +1）・doctor の項目 1 行。
+- 極性一覧 snapshot に `Register`（(a)）と `Role`（(b)）の 2 行（件数 +2・N = K + M の pin）・doctor の項目 1 行（`--state-dir` 付きの外形 snapshot）。
 - property（`prop_role_`・in-file）: `Role` / `Capability` / `PathKind` の `as_str` ↔ parse が往復し、列に無い名は必ず Err。
 
 ## 8. 憲法・制約との整合
@@ -69,8 +70,8 @@ C1 / C5（権能の値は行・裁定 id）・C1.2（生成文に手書きの規
 
 ## 9. 契約（4 便・この順・実装は pipeline）
 
-- **(a) 役割と登録**（M）: `Role`・`seat register`・`EventKind::SeatRegistered`・打刻の条件・役割の解決 1 本・doctor の項目・歯 §7 の登録 / 解決。write-set = seat/（新 module `seat/role.rs`）・fleet/mod.rs（variant）・fleet/cli.rs（doctor）・tests/e2e/seat.rs・snapshot。依存: [working-memory.md](./working-memory.md) 契約 (a)（s2-07l.139・打刻の sid の読み手）の land 後。
-- **(b) 権能と執行**（M）: `Capability`・`RuleKind::RoleCapabilities`（値の型 list）・役割ごとの rules 行（**値と裁定 id は user 裁定**）・R-C7-1 の値の変更（裁定 id）・`PathKind`・`Guard::Role`・PreToolUse の 2 面・hooks.json の matcher と `--pane`・契約の印（field 名）・deny 文・記録行・歯 §7 の guard / rules。write-set = hook/（新 module `hook/role_guard.rs`）・polarity.rs・rules/mod.rs・rules/manifest.toml・xtask/genmanifest.rs・pipe/declaration.rs（印の field）・tests/e2e/{hook,rules,polarity}.rs・snapshot。依存: (a)。
+- **(a) 役割と登録**（M）: `Role`・`seat register`・`EventKind::SeatRegistered`（`Event` の束 `Registration`）・打刻の条件・`Guard::Register`・役割の解決 1 本・doctor の口と項目・歯 §7 の登録 / 解決。write-set = seat/（新 module `seat/role.rs`・極性の定数）・fleet/mod.rs（variant・`Event` の束・`KINDS`）・fleet/usage.rs・fleet/cli.rs・pipe/mod.rs（`Event` の literal 構築点）・main.rs（doctor の `--state-dir` と項目）・polarity.rs（`Guard::Register`）・tests/e2e/{seat,fleet,prop,polarity}.rs（構築点・`KINDS` の件数の pin・N = K + M）・snapshot（doctor・極性一覧）。依存: [working-memory.md](./working-memory.md) 契約 (a)（s2-07l.139・打刻の sid の読み手）の land 後。
+- **(b) 権能と執行**（M）: `Capability`・`RuleKind::RoleCapabilities`（値は既存の `List`）・役割ごとの rules 行（**値と裁定 id は user 裁定**）・R-C7-1 の値の変更（裁定 id）・`PathKind`・`Guard::Role`・PreToolUse の 2 面・hooks.json の matcher と `--pane`・契約の印（field 名）・deny 文・記録行・歯 §7 の guard / rules。write-set = hook/（新 module `hook/role_guard.rs`）・polarity.rs・rules/mod.rs・rules/manifest.toml・xtask/genmanifest.rs・hooks/hooks.json（tracked な生成物・gen-manifest の出力・歯が読む）・pipe/declaration.rs（印の field）・tests/e2e/{hook,rules,polarity}.rs・snapshot。依存: (a)。
 - **(c) 注入と検査**（M）: 雛形 2 枚・SessionStart の生成文・xtask の検査 3 つ・外形 snapshot・歯 §7 の注入。write-set = seat/brief/・hook/mod.rs・xtask/check.rs・tests/e2e/hook.rs・snapshot。依存: (b)・PointerKind（s2-07l.139）。
 - **(d) 器の外の散文の撤去**（運用・便ではない）: (b)(c) の land 後、user の設定 file の役割行・共有 skill の役割節・退避物の役割の命令行の同文を A1 の「消す」として user に確かめてから外す（ADR-0022 §2.7）。
 
