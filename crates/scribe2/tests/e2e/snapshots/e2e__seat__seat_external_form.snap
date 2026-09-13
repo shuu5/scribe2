@@ -2,7 +2,7 @@
 source: crates/scribe2/tests/e2e/seat.rs
 expression: form
 ---
-usage: seat <meter --target T [--transcript PATH]|inject --target T (--text S|--file PATH)|heartbeat --target T|tick --target T --wm-dir DIR [--pointer TEXT] [--restore CMD] [--rules PATH]|cycle --target T --wm-dir DIR [--restore CMD] [--rules PATH]|externalize --target T --wm-dir DIR --anchor DIR --plan FILE --directives FILE [--user FILE] [--trigger manual|tick] [--role R] [--rules PATH]|rebrief --target T --wm-dir DIR --anchor DIR [--bd PATH] [--prefix P] [--rules PATH]|consume --target T --wm-dir DIR> [--tmux-socket PATH] [--capture-file PATH] [--state-dir PATH]
+usage: seat <meter --target T [--transcript PATH]|inject --target T (--text S|--file PATH)|heartbeat --target T|tick --target T --wm-dir DIR [--pointer TEXT] [--restore CMD] [--rules PATH]|cycle --target T --wm-dir DIR [--restore CMD] [--rules PATH]|externalize --target T --wm-dir DIR --anchor DIR --plan FILE --directives FILE [--user FILE] [--trigger manual|tick] [--role R] [--rules PATH]|rebrief --target T --wm-dir DIR --anchor DIR [--bd PATH] [--prefix P] [--rules PATH]|consume --target T --wm-dir DIR|register --state-dir S --target T --role R --account L --launch FILE [--anchor DIR]> [--tmux-socket PATH] [--capture-file PATH] [--state-dir PATH]
 [SID] sid-now
 [WM] found file=working-memory.sid-now.md
 [WM-PLAN] - 次は rebrief の land
@@ -37,3 +37,4 @@ usage: seat <meter --target T [--transcript PATH]|inject --target T (--text S|--
 [ORPHAN-NONE]
 [BD-COUNT] open=0 in_progress=0 blocked=0
 [BD-INPROGRESS-NONE]
+seats: registered=2 live=unmeasurable missing=unmeasurable

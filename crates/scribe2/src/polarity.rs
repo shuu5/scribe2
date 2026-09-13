@@ -63,7 +63,7 @@ pub struct Polarity {
     pub on_failure: OnFailure,
 }
 
-/// 行為を止めうる判定を返す境界の全数。**宣言順は行為の流れ**（hook → intake → spawn〔予算・承認〕→
+/// 行為を止めうる判定を返す境界の全数。**宣言順は行為の流れ**（hook → 席の登録 → intake → spawn〔予算・承認〕→
 /// runner → gate → land〔main 実測・anchor 同期・worktree の clean・追随の起こし直し〕→ store → 注入 → cycle → 退避 → 消費）で、順序に意味は無いが C2 の形（[`ALL`] と判別子順 pin）に合わせる。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Guard {
@@ -73,6 +73,8 @@ pub enum Guard {
     Permission,
     /// 席の context 上限の cap guard（[`crate::hook::seat_guard`]・FailOpen）。
     Cap,
+    /// 席の登録の受付＝打刻の無い session からの登録を断る（[`crate::seat::role`]）。
+    Register,
     /// intake の断り＝vessel 宣言の verify 行の不適合（[`crate::pipe::declaration`]）。
     Intake,
     /// intake の排他＝live な便と write-set が交差する契約を受け付けない（[`crate::pipe::refuse`]）。
@@ -114,6 +116,7 @@ pub const ALL: &[Guard] = &[
     Guard::WriteSet,
     Guard::Permission,
     Guard::Cap,
+    Guard::Register,
     Guard::Intake,
     Guard::IntakeRefuse,
     Guard::Budget,
@@ -140,6 +143,7 @@ impl Guard {
             Self::WriteSet => crate::hook::guard::POLARITY,
             Self::Permission => crate::hook::permission::POLARITY,
             Self::Cap => crate::hook::seat_guard::POLARITY,
+            Self::Register => crate::seat::role::POLARITY,
             Self::Intake => crate::pipe::declaration::POLARITY,
             Self::IntakeRefuse => crate::pipe::refuse::POLARITY,
             Self::Budget => crate::pipe::BUDGET_POLARITY,
@@ -166,6 +170,7 @@ impl Guard {
             Self::WriteSet => "hook::guard::Decision",
             Self::Permission => "hook::permission::PermissionDecision",
             Self::Cap => "hook::seat_guard::SeatDecision",
+            Self::Register => "seat::role::RegisterRefusal",
             Self::Intake => "pipe::declaration::Unfit",
             Self::IntakeRefuse => "pipe::refuse::Refuse",
             Self::Budget => "pipe::Budget",
@@ -192,6 +197,7 @@ impl Guard {
             Self::WriteSet => "write-set-guard",
             Self::Permission => "permission-deny",
             Self::Cap => "cap-guard",
+            Self::Register => "register-refusal",
             Self::Intake => "intake-unfit",
             Self::IntakeRefuse => "intake-refuse",
             Self::Budget => "spawn-budget",

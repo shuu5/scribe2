@@ -483,6 +483,7 @@ fn event_of(ts: &str, host: &str, row: &Allowance) -> Event {
         pid: None,
         detail: None,
         allowance: Some(row.clone()),
+        registration: None,
     }
 }
 

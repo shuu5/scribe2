@@ -11,7 +11,8 @@
 use proptest::prelude::*;
 use proptest::test_runner::Config;
 use vessel::fleet::json_tree::{parse as parse_tree, Tree};
-use vessel::fleet::{Allowance, Measured, WindowKind, WINDOWS};
+use vessel::fleet::{Allowance, Measured, Registration, WindowKind, WINDOWS};
+use vessel::seat::role::ALL as ROLES;
 use vessel::fleet::{Event as FleetEvent, EventKind, Stage, ACTOR_HUMAN, ACTOR_MACHINE, KINDS, SCHEMA as FLEET_SCHEMA, STAGES};
 use vessel::headless::runner::rate_limit_status;
 use vessel::rules::manifest::{elements, list, quoted_once, scalar, Scalar};
@@ -108,7 +109,7 @@ mod stamp {
 
 /// fleet の閉じた enum と log 行の性質（(2) fleet/mod.rs）。
 mod fleet {
-    use super::{config, ident, json_text, Allowance, FleetEvent, EventKind, Measured, Stage, WindowKind, ACTOR_HUMAN, ACTOR_MACHINE, FLEET_SCHEMA, KINDS, STAGES, WINDOWS};
+    use super::{config, ident, json_text, Allowance, FleetEvent, EventKind, Measured, Registration, Stage, WindowKind, ACTOR_HUMAN, ACTOR_MACHINE, FLEET_SCHEMA, KINDS, ROLES, STAGES, WINDOWS};
     use proptest::prelude::*;
 
     /// 全 variant の字面と、その近傍（小文字化・英字だけの任意文字列）。
@@ -120,12 +121,12 @@ mod fleet {
         ]
     }
 
-    /// `run` / `bead` を持つ kind（口座残量の 2 kind は本体が別なので別の strategy が作る）。
+    /// `run` / `bead` を持つ kind（口座残量の 2 kind と席の登録は本体が別なので別の strategy が作る）。
     fn record_kinds() -> Vec<EventKind> {
         KINDS
             .iter()
             .copied()
-            .filter(|kind| !kind.is_allowance())
+            .filter(|kind| !kind.is_allowance() && *kind != EventKind::SeatRegistered)
             .collect()
     }
 
@@ -165,6 +166,7 @@ mod fleet {
                 pid,
                 detail,
                 allowance: None,
+                registration: None,
             })
     }
 
@@ -211,11 +213,66 @@ mod fleet {
                 pid: None,
                 detail: None,
                 allowance: Some(Allowance::Measured(measured)),
+                registration: None,
+            })
+    }
+
+    /// 席の登録の中身 1 つ（役割は全 variant・文字列は改行や `"` を含む任意の字面）。
+    fn any_registration() -> impl Strategy<Value = Registration> {
+        (
+            prop::sample::select(ROLES),
+            json_text(),
+            json_text(),
+            json_text(),
+            json_text(),
+            json_text(),
+        )
+            .prop_map(|(role, anchor, target, sid, account, launch)| Registration {
+                role,
+                anchor,
+                target,
+                sid,
+                account,
+                launch,
+            })
+    }
+
+    /// 席の登録の行 1 本。
+    fn any_registration_event() -> impl Strategy<Value = FleetEvent> {
+        (
+            "[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z",
+            ident(),
+            any_registration(),
+        )
+            .prop_map(|(ts, host, registration)| FleetEvent {
+                schema: FLEET_SCHEMA,
+                ts,
+                kind: EventKind::SeatRegistered,
+                run: String::new(),
+                bead: String::new(),
+                host,
+                actor: ACTOR_MACHINE.to_owned(),
+                stage: None,
+                seat: None,
+                pid: None,
+                detail: None,
+                allowance: None,
+                registration: Some(registration),
             })
     }
 
     proptest! {
         #![proptest_config(config())]
+
+        /// 任意の役割 / anchor / target / sid / 口座 / 雛形で、登録の行は書いて読むと同じ event に戻り、
+        /// `run` / `bead` を持たない（`registration` の束の round-trip）。
+        #[test]
+        fn prop_seat_registration_round_trips_through_line(event in any_registration_event()) {
+            let line = event.to_line();
+            prop_assert!(!line.contains("\"run\":"), "{}", line);
+            prop_assert!(!line.contains("\"bead\":"), "{}", line);
+            prop_assert_eq!(FleetEvent::from_line(&line), Ok(event), "{}", line);
+        }
 
         /// 任意の口座 / 窓 / model / 使用率 / reset で、実測行は書いて読むと同じ event に戻る
         /// （`run` / `bead` を持たない側の round-trip）。
@@ -227,6 +284,14 @@ mod fleet {
             prop_assert!(!line.contains("\"run\":"), "{}", line);
             prop_assert!(!line.contains("\"bead\":"), "{}", line);
             prop_assert_eq!(FleetEvent::from_line(&line), Ok(event), "{}", line);
+        }
+
+        /// `Role` は全 variant で as_str → parse が戻り、列に無い字面は必ず `None`（設計 seat-roles.md §7）。
+        #[test]
+        fn prop_role_parse_round_trips_and_rejects_others(role in prop::sample::select(ROLES), text in "[A-Za-z_-]{0,12}") {
+            prop_assert_eq!(vessel::seat::role::Role::parse(role.as_str()), Some(role));
+            let known = ROLES.iter().any(|found| found.as_str() == text);
+            prop_assert_eq!(vessel::seat::role::Role::parse(&text).is_some(), known);
         }
 
         /// 全 variant で as_str → parse が戻る。

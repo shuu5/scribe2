@@ -1309,6 +1309,7 @@ mod tests {
             pid: None,
             detail: None,
             allowance: None,
+            registration: None,
         }
     }
 

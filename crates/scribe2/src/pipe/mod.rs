@@ -389,6 +389,7 @@ pub fn emit(state_dir: &Path, entry: &Emit<'_>, policy: LockPolicy) -> Result<()
         detail: entry.detail.clone(),
         // pipeline の段は必ず便に紐づく（口座残量の行は `fleet` 側の口が書く）。
         allowance: None,
+        registration: None,
     };
     store::append(state_dir, &event, policy).map(|_| ())
 }

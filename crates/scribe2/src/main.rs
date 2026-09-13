@@ -47,17 +47,36 @@ fn render_doctor() -> Vec<String> {
     vec![render_name(), render_version()]
 }
 
+/// `doctor` の出力行。`--state-dir S [--tmux-socket PATH]` 付きは登録 row と実在の target の突合を 1 行
+/// 足す（C3.2）。値欠け・空文字・重複・未知の引数は使い方の誤り（`Err`）。
+fn render_doctor_with(rest: &[String]) -> Result<Vec<String>, ()> {
+    let (mut lines, mut state_dir, mut socket) = (render_doctor(), None, None);
+    for pair in rest.chunks(2) {
+        match (pair.first().map(String::as_str), pair.get(1).filter(|v| !v.trim().is_empty() && !v.starts_with("--"))) {
+            (Some("--state-dir"), Some(found)) if state_dir.is_none() => state_dir = Some(found),
+            (Some("--tmux-socket"), Some(found)) if socket.is_none() => socket = Some(found.as_str()),
+            _ => return Err(()),
+        }
+    }
+    match (state_dir, socket) {
+        (Some(dir), _) => lines.push(vessel::seat::role::doctor_line(std::path::Path::new(dir), socket)),
+        (None, Some(_)) => return Err(()),
+        (None, None) => {}
+    }
+    Ok(lines)
+}
+
 /// 未知の引数に対する使い方の行。
 fn render_usage() -> String {
     format!("usage: {NAME} <name|--version|doctor|rules|fleet|vessel|hook|pipe|runner|lens|seat|polarity>")
 }
 
-/// 引数 1 つを出力行の列へ写す。未知なら `Err` に使い方を載せる。
-fn dispatch(arg: Option<&str>) -> Result<Vec<String>, String> {
+/// 先頭の引数と続く引数を出力行の列へ写す。未知なら `Err` に使い方を載せる。
+fn dispatch(arg: Option<&str>, rest: &[String]) -> Result<Vec<String>, String> {
     match arg {
         Some("name") => Ok(vec![render_name()]),
         Some("--version") => Ok(vec![render_version()]),
-        Some("doctor") => Ok(render_doctor()),
+        Some("doctor") => render_doctor_with(rest).map_err(|()| render_usage()),
         _ => Err(render_usage()),
     }
 }
@@ -82,7 +101,7 @@ fn run(args: &[String]) -> Outcome {
         Some("lens") => vessel::headless::lens::dispatch(rest),
         // hook だけは stdin の payload を要る（Claude Code が JSON を流し込む）。
         Some("hook") => vessel::hook::dispatch(rest, &read_stdin()),
-        first => match dispatch(first) {
+        first => match dispatch(first, rest) {
             Ok(lines) => Outcome::ok(lines),
             // 使い方の行は従来どおり stdout へ出し rc 1 で終える（外形は変えない）。
             Err(usage) => Outcome {

@@ -96,7 +96,8 @@ fn build_event(args: &[String]) -> Result<Event, String> {
     // 口座残量の行は**この口から書けない**。`record` は `--run` / `--bead` を要る形なので、
     // 口座の行をここで許すと便に紐づかない行に便 id が付き、必須 field も揃わない
     // （書き手は `fleet usage` の 1 本だけである・設計 fleet-usage.md §5）。
-    if kind.is_allowance() {
+    // 席の登録の行も同じ（書き手は打刻の条件付きの `seat register` だけ）。
+    if kind.is_allowance() || kind == EventKind::SeatRegistered {
         return Err(format!("kind {kind_text} は record では書けない"));
     }
     let stage = match optional(args, "--stage")? {
@@ -125,6 +126,7 @@ fn build_event(args: &[String]) -> Result<Event, String> {
         pid,
         detail: optional(args, "--detail")?.map(str::to_owned),
         allowance: None,
+        registration: None,
     })
 }
 

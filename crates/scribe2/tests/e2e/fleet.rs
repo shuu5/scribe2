@@ -17,8 +17,9 @@ use vessel::fleet::json_tree::{self, parse, Tree, TreeError, MAX_DEPTH};
 use vessel::fleet::{KINDS, REASONS, STAGES, WINDOWS};
 use vessel::fleet::{
     json_lite, replay, wait, Allowance, AllowanceKey, Completion, Event, EventKind, Measured,
-    SeatState, Stage, Timeout, Unmeasured, UnmeasuredReason, WindowKind, SCHEMA,
+    Registration, SeatState, Stage, Timeout, Unmeasured, UnmeasuredReason, WindowKind, SCHEMA,
 };
+use vessel::seat::role::Role;
 
 /// binary の path。
 fn bin() -> &'static str {
@@ -49,6 +50,7 @@ fn event(kind: EventKind, run: &str, ts: &str) -> Event {
         pid: None,
         detail: None,
         allowance: None,
+        registration: None,
     }
 }
 
@@ -623,6 +625,7 @@ fn pipe_question_kinds_round_trip_on_schema_1() {
             pid: None,
             detail: Some("verify 行が矛盾する".to_owned()),
             allowance: None,
+            registration: None,
         };
         let line = event.to_line();
         assert!(line.contains("\"schema\":1"), "{line}");
@@ -846,6 +849,7 @@ fn allowance_event(ts: &str, allowance: Allowance) -> Event {
         pid: None,
         detail: None,
         allowance: Some(allowance),
+        registration: None,
     }
 }
 
@@ -1261,10 +1265,12 @@ fn fleet_allowance_windows_round_trip_on_snake_case() {
     assert_eq!(WindowKind::parse("FiveHour"), None, "variant 名は字面でない");
 }
 
-/// `KINDS` は 12 variant で並びは宣言順のまま（歯 (a)(7)）。
+/// `KINDS` は 13 variant で並びは宣言順のまま（歯 (a)(7)・席の登録 1 を末尾に足した）。
 #[test]
-fn fleet_allowance_kinds_are_twelve_in_declaration_order() {
-    assert_eq!(KINDS.len(), 12, "母集団（既存 10 + 口座残量 2）");
+fn fleet_allowance_kinds_are_thirteen_in_declaration_order() {
+    assert_eq!(KINDS.len(), 13, "母集団（既存 10 + 口座残量 2 + 席の登録 1）");
+    assert_eq!(KINDS.last(), Some(&EventKind::SeatRegistered), "登録は末尾");
+    assert!(!EventKind::SeatRegistered.is_allowance(), "登録は口座残量の kind ではない");
     assert!(
         is_declaration_order(KINDS, |kind| kind as usize),
         "KINDS の並びが宣言順と乖離している（母集団 {} 種）",
@@ -1279,6 +1285,86 @@ fn fleet_allowance_kinds_are_twelve_in_declaration_order() {
         assert_eq!(EventKind::parse(kind.as_str()), Some(kind), "{}", kind.as_str());
         assert_eq!(kind.default_actor(), "machine", "計測は機械由来（FR22 不変）");
     }
+}
+
+/// 席の登録の event（本体は `registration` の束）。
+fn registration_event(target: &str) -> Event {
+    Event {
+        schema: SCHEMA,
+        ts: ALLOWANCE_TS.to_owned(),
+        kind: EventKind::SeatRegistered,
+        run: String::new(),
+        bead: String::new(),
+        host: "h".to_owned(),
+        actor: EventKind::SeatRegistered.default_actor().to_owned(),
+        stage: None,
+        seat: None,
+        pid: None,
+        detail: None,
+        allowance: None,
+        registration: Some(Registration {
+            role: Role::Admin,
+            anchor: "/repo".to_owned(),
+            target: target.to_owned(),
+            sid: "sid-1".to_owned(),
+            account: "a1".to_owned(),
+            launch: "line 1\n\"line 2\"\n".to_owned(),
+        }),
+    }
+}
+
+/// `SeatRegistered` の行は `to_line` → `from_line` で戻り、`run` / `bead` と口座残量だけの key を持たない。
+/// 登録の key を持つ `RunStage` の行・口座残量の行は malformed・未知の role も malformed（歯 (b)）。
+#[test]
+fn fleet_seat_role_registration_row_round_trips_and_its_keys_stay_exclusive() {
+    let event = registration_event("s:w");
+    let line = event.to_line();
+    assert_eq!(Event::from_line(&line), Ok(event), "{line}");
+    assert!(!line.contains("\"run\":") && !line.contains("\"bead\":"), "{line}");
+    assert!(line.contains("\"schema\":1"), "schema 1 のまま: {line}");
+    let run_stage: Vec<(&str, json_lite::Value)> = vec![
+        ("schema", json_lite::Value::Num(SCHEMA)),
+        ("ts", json_lite::Value::Str(ALLOWANCE_TS.to_owned())),
+        ("kind", json_lite::Value::Str("RunStage".to_owned())),
+        ("run", json_lite::Value::Str("r1".to_owned())),
+        ("bead", json_lite::Value::Str("b1".to_owned())),
+        ("host", json_lite::Value::Str("h".to_owned())),
+        ("actor", json_lite::Value::Str("machine".to_owned())),
+    ];
+    assert!(Event::from_line(&json_lite::write_object(&run_stage)).is_ok(), "揃った RunStage は読める");
+    for key in ["role", "anchor", "target", "sid", "launch"] {
+        let mut forged = run_stage.clone();
+        forged.push((key, json_lite::Value::Str("x".to_owned())));
+        let reason = Event::from_line(&json_lite::write_object(&forged)).expect_err("登録の key を持つ RunStage は malformed");
+        assert!(reason.contains(&format!("{key} を持たない")), "{key}: {reason}");
+        let allowance = allowance_line("AllowanceUnmeasured", &[("reason", json_lite::Value::Str("timeout".to_owned())), (key, json_lite::Value::Str("x".to_owned()))]);
+        let reason = Event::from_line(&allowance).expect_err("登録の key を持つ口座残量の行は malformed");
+        assert!(reason.contains(&format!("{key} を持たない")), "{key}: {reason}");
+    }
+    let with_run = line.replacen("\"kind\":\"SeatRegistered\"", "\"kind\":\"SeatRegistered\",\"run\":\"r1\"", 1);
+    assert!(Event::from_line(&with_run).is_err(), "登録の行は run を持たない: {with_run}");
+    let with_window = line.replacen("\"kind\":\"SeatRegistered\"", "\"kind\":\"SeatRegistered\",\"window\":\"five_hour\"", 1);
+    assert!(Event::from_line(&with_window).is_err(), "登録の行は口座残量だけの key を持たない: {with_window}");
+    let unknown = line.replacen("\"role\":\"admin\"", "\"role\":\"Admin\"", 1);
+    assert!(Event::from_line(&unknown).is_err(), "未知の role は malformed: {unknown}");
+    let missing = line.replacen(",\"sid\":\"sid-1\"", "", 1);
+    assert!(Event::from_line(&missing).is_err(), "項目の欠けは malformed: {missing}");
+}
+
+/// 登録の行は便も席も作らず `export` を変えず、`fleet record` からは書けない（書き手は `seat register`）。
+#[test]
+fn fleet_seat_role_registration_rows_do_not_touch_runs_and_record_refuses_the_kind() {
+    let state = replay(&[event(EventKind::RunCreated, "r1", ALLOWANCE_TS), registration_event("s:w")]);
+    assert_eq!(state.runs.len(), 1, "幽霊の便を作らない");
+    assert_eq!(state.seats.len(), 0, "席の現在地にも載らない");
+    assert_eq!(state.registrations.len(), 1, "登録の現在地に載る");
+    let dir = state_dir();
+    let path = dir.display().to_string();
+    let out = run_fleet(&["record", "--kind", "SeatRegistered", "--run", "r1", "--bead", "b1", "--state-dir", &path]);
+    assert_eq!(out.status.code(), Some(1), "書き側で断る: {out:?}");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("record では書けない"));
+    assert!(!store::events_path(&dir).exists(), "行を残さない");
+    fs::remove_dir_all(&dir).ok();
 }
 
 /// allowance の行が在っても `export`（跨版 面 2）は 1 byte も変わらない（歯 (a)(8)）。

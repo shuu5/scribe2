@@ -11,6 +11,7 @@ pub mod store;
 pub mod usage;
 
 use crate::polarity::{OnFailure, Polarity, Timing};
+use crate::seat::role::Role;
 use json_lite::Value;
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
@@ -24,7 +25,7 @@ pub const SCHEMA: u64 = 1;
 /// 段の無い行として通る）。設計 §3 の「それ以外の形は error」に合わせて拒む。
 const KNOWN_KEYS: &[&str] = &[
     "schema", "ts", "kind", "run", "bead", "host", "actor", "stage", "seat", "pid", "detail",
-    "account", "window", "model", "endpoint", "used_pct", "resets_at", "reason",
+    "account", "window", "model", "endpoint", "used_pct", "resets_at", "reason", "role", "anchor", "target", "sid", "launch",
 ];
 
 /// 口座残量の kind だけが持てる key（設計 fleet-usage.md §4）。
@@ -40,6 +41,9 @@ const ALLOWANCE_KEYS: &[&str] = &[
     "resets_at",
     "reason",
 ];
+
+/// 席の登録の kind だけが持てる key（他の kind の行に在れば malformed・`account` は口座残量と共有）。
+const REGISTRATION_KEYS: &[&str] = &["role", "anchor", "target", "sid", "launch"];
 
 /// 起きたことの種類。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -68,6 +72,8 @@ pub enum EventKind {
     AllowanceMeasured,
     /// 残量を読めなかった（理由つき・0 に読み替えない）。**便に紐づかない**。
     AllowanceUnmeasured,
+    /// 席を役割に登録した（FR40・設計 seat-roles.md §2）。**便に紐づかない**。
+    SeatRegistered,
 }
 
 /// [`EventKind`] の全 variant。
@@ -84,6 +90,7 @@ pub const KINDS: &[EventKind] = &[
     EventKind::QuestionAnswered,
     EventKind::AllowanceMeasured,
     EventKind::AllowanceUnmeasured,
+    EventKind::SeatRegistered,
 ];
 
 impl EventKind {
@@ -102,6 +109,7 @@ impl EventKind {
             Self::QuestionAnswered => "QuestionAnswered",
             Self::AllowanceMeasured => "AllowanceMeasured",
             Self::AllowanceUnmeasured => "AllowanceUnmeasured",
+            Self::SeatRegistered => "SeatRegistered",
         }
     }
 
@@ -124,7 +132,8 @@ impl EventKind {
             | Self::QuestionRaised
             | Self::QuestionAnswered
             | Self::AllowanceMeasured
-            | Self::AllowanceUnmeasured => ACTOR_MACHINE,
+            | Self::AllowanceUnmeasured
+            | Self::SeatRegistered => ACTOR_MACHINE,
         }
     }
 
@@ -144,7 +153,8 @@ impl EventKind {
             | Self::ApprovalRequested
             | Self::ApprovalReceived
             | Self::QuestionRaised
-            | Self::QuestionAnswered => false,
+            | Self::QuestionAnswered
+            | Self::SeatRegistered => false,
         }
     }
 }
@@ -478,6 +488,25 @@ pub struct AllowanceLatest {
     pub allowance: Allowance,
 }
 
+/// 席の登録の行の本体（設計 seat-roles.md §2）: 鍵 = `role` × `anchor`（repo の root・hook の cwd と突合しない）、
+/// 項目 = `target`（`session:window`）/ `sid`（打刻から解く）/ `account` / `launch`（雛形の本文）。**pane id は持たない**。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Registration {
+    pub role: Role,
+    pub anchor: String,
+    pub target: String,
+    pub sid: String,
+    pub account: String,
+    pub launch: String,
+}
+
+/// 鍵ごとの最新の登録。`seq` は log の物理順（0 始まり）で、複数の鍵が同じ target なら大きい方が勝つ。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegistrationLatest {
+    pub seq: usize,
+    pub registration: Registration,
+}
+
 /// log の 1 行。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Event {
@@ -506,13 +535,15 @@ pub struct Event {
     pub detail: Option<String>,
     /// 口座残量の本体（口座残量の kind でだけ `Some`）。
     pub allowance: Option<Allowance>,
+    /// 席の登録の本体（[`EventKind::SeatRegistered`] でだけ `Some`）。
+    pub registration: Option<Registration>,
 }
 
 impl Event {
     /// 1 行の JSON にする。
     ///
-    /// 本体は kind ではなく [`Self::allowance`] の有無が決める（`run` / `bead` を持つ行と
-    /// 口座残量の行は同じ並びを共有しない）。食い違った組は [`Self::from_line`] が読み返せず
+    /// 本体は kind ではなく [`Self::allowance`] / [`Self::registration`] の有無が決める（`run` / `bead` を
+    /// 持つ行と口座残量・登録の行は同じ並びを共有しない）。食い違った組は [`Self::from_line`] が読み返せず
     /// malformed になるので、書いた行が読めない形は歯で捕まる。
     pub fn to_line(&self) -> String {
         let mut pairs: Vec<(&str, Value)> = vec![
@@ -520,12 +551,15 @@ impl Event {
             ("ts", Value::Str(self.ts.clone())),
             ("kind", Value::Str(self.kind.as_str().to_owned())),
         ];
-        match &self.allowance {
-            None => {
-                pairs.push(("run", Value::Str(self.run.clone())));
-                pairs.push(("bead", Value::Str(self.bead.clone())));
-            }
-            Some(allowance) => pairs.extend(allowance.pairs()),
+        if self.allowance.is_none() && self.registration.is_none() {
+            pairs.push(("run", Value::Str(self.run.clone())));
+            pairs.push(("bead", Value::Str(self.bead.clone())));
+        }
+        pairs.extend(self.allowance.iter().flat_map(Allowance::pairs));
+        if let Some(found) = &self.registration {
+            let texts = [("anchor", &found.anchor), ("target", &found.target), ("sid", &found.sid), ("account", &found.account), ("launch", &found.launch)];
+            pairs.push(("role", Value::Str(found.role.as_str().to_owned())));
+            pairs.extend(texts.map(|(key, text)| (key, Value::Str(text.clone()))));
         }
         pairs.push(("host", Value::Str(self.host.clone())));
         pairs.push(("actor", Value::Str(self.actor.clone())));
@@ -583,18 +617,22 @@ impl Event {
             pid: optional_num(field(&pairs, "pid"), "pid")?,
             detail: optional_text(field(&pairs, "detail"), "detail")?,
             allowance: body.allowance,
+            registration: body.registration,
         })
     }
 }
 
-/// kind ごとに違う本体（`run` / `bead` を持つ行か、口座残量の行か）。
+/// kind ごとに違う本体（`run` / `bead` を持つ行か、口座残量の行か、登録の行か）。
+#[derive(Default)]
 struct Body {
-    /// 便 id（口座残量の行では空）。
+    /// 便 id（口座残量・登録の行では空）。
     run: String,
-    /// bead id（口座残量の行では空）。
+    /// bead id（口座残量・登録の行では空）。
     bead: String,
     /// 口座残量の本体。
     allowance: Option<Allowance>,
+    /// 席の登録の本体。
+    registration: Option<Registration>,
 }
 
 impl Body {
@@ -609,6 +647,7 @@ impl Body {
             EventKind::AllowanceUnmeasured => {
                 Self::allowance(pairs, Allowance::Unmeasured(unmeasured_of(pairs)?))
             }
+            EventKind::SeatRegistered => Self::registration(pairs),
             EventKind::RunCreated
             | EventKind::RunStage
             | EventKind::RunDone
@@ -619,28 +658,42 @@ impl Body {
             | EventKind::ApprovalReceived
             | EventKind::QuestionRaised
             | EventKind::QuestionAnswered => {
-                for key in ALLOWANCE_KEYS {
-                    absent(field(pairs, key), key)?;
-                }
+                forbid(pairs, ALLOWANCE_KEYS.iter().chain(REGISTRATION_KEYS))?;
                 Ok(Self {
                     run: text_of(field(pairs, "run"), "run")?,
                     bead: text_of(field(pairs, "bead"), "bead")?,
-                    allowance: None,
+                    ..Self::default()
                 })
             }
         }
     }
 
-    /// 口座残量の行の本体。`run` / `bead` は**持たない**（在れば malformed）。
+    /// 口座残量の行の本体。`run` / `bead` と登録の key は**持たない**（在れば malformed）。
     fn allowance(pairs: &[(String, Value)], allowance: Allowance) -> Result<Self, String> {
-        absent(field(pairs, "run"), "run")?;
-        absent(field(pairs, "bead"), "bead")?;
-        Ok(Self {
-            run: String::new(),
-            bead: String::new(),
-            allowance: Some(allowance),
-        })
+        forbid(pairs, ["run", "bead"].iter().chain(REGISTRATION_KEYS))?;
+        Ok(Self { allowance: Some(allowance), ..Self::default() })
     }
+
+    /// 登録の行の本体。`run` / `bead` と口座残量だけの key（`account` 以外）は**持たない**。
+    fn registration(pairs: &[(String, Value)]) -> Result<Self, String> {
+        forbid(pairs, ["run", "bead"].iter().chain(ALLOWANCE_KEYS.iter().filter(|key| **key != "account")))?;
+        let text = |key: &str| text_of(field(pairs, key), key);
+        let role = text("role")?;
+        let registration = Registration {
+            role: Role::parse(&role).ok_or(format!("role {role} は未知である"))?,
+            anchor: text("anchor")?,
+            target: text("target")?,
+            sid: text("sid")?,
+            account: text("account")?,
+            launch: text("launch")?,
+        };
+        Ok(Self { registration: Some(registration), ..Self::default() })
+    }
+}
+
+/// 在ってはならない key の列。1 つでも在れば理由つきで `Err`。
+fn forbid<'a>(pairs: &[(String, Value)], keys: impl IntoIterator<Item = &'a &'a str>) -> Result<(), String> {
+    keys.into_iter().try_for_each(|key| absent(field(pairs, key), key))
 }
 
 /// `AllowanceMeasured` の field を読む。`seven_day_model` の行は `model` も必須。
@@ -798,15 +851,22 @@ pub struct State {
     pub seats: BTreeMap<String, Seat>,
     /// 口座 × 窓 × model → 最新の残量の行（設計 fleet-usage.md §4）。
     pub allowance: BTreeMap<AllowanceKey, AllowanceLatest>,
+    /// (役割, anchor) → 最新の登録（設計 seat-roles.md §2・読み手は [`crate::seat::role`]）。
+    pub registrations: BTreeMap<(Role, String), RegistrationLatest>,
 }
 
 /// event の並びから現在地を導く。物理順で後の event が勝つ。
 pub fn replay(events: &[Event]) -> State {
     let mut state = State::default();
-    for event in events {
+    for (seq, event) in events.iter().enumerate() {
         apply_run(&mut state, event);
         apply_seat(&mut state, event);
         apply_allowance(&mut state, event);
+        // 登録は同じ鍵を後の行が置き換える（前の行は log に残る・append のみ）。
+        if let Some(found) = &event.registration {
+            let latest = RegistrationLatest { seq, registration: found.clone() };
+            state.registrations.insert((found.role, found.anchor.clone()), latest);
+        }
     }
     state
 }
@@ -833,7 +893,7 @@ fn apply_allowance(state: &mut State, event: &Event) {
 fn apply_run(state: &mut State, event: &Event) {
     // 口座残量の行は便に紐づかない（`run` / `bead` を持たない）。ここで通すと id が空の
     // 幽霊の便が 1 つ生まれ、`show` / `export` の件数が実在しない便を数える。
-    if event.kind.is_allowance() {
+    if event.kind.is_allowance() || event.registration.is_some() {
         return;
     }
     let run = state.runs.entry(event.run.clone()).or_insert_with(|| Run {
@@ -892,7 +952,8 @@ fn apply_seat(state: &mut State, event: &Event) {
         | EventKind::QuestionRaised
         | EventKind::QuestionAnswered
         | EventKind::AllowanceMeasured
-        | EventKind::AllowanceUnmeasured => {}
+        | EventKind::AllowanceUnmeasured
+        | EventKind::SeatRegistered => {}
     }
 }
 

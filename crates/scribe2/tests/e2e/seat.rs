@@ -801,14 +801,20 @@ fn seat_inject_sanitizes_dot_targets() {
     fs::remove_dir_all(&dir).ok();
 }
 
-/// `seat` の使い方と rebrief の DATA の 3 形（found / candidate / missing の marker の並び）を
-/// snapshot 1 本に固定する（C12.5）。
+/// `seat` の使い方と rebrief の DATA の 3 形（found / candidate / missing の marker の並び）と、
+/// `doctor --state-dir` の突合の項目（tmux を撃てない周の形）を snapshot 1 本に固定する（C12.5）。
 #[test]
 fn seat_external_form() {
     let mut form = stderr_of(&run_seat(&[]));
     for out in rebrief_forms() {
         form.push_str(&stdout_of(&out));
     }
+    let place = role_doctor_place();
+    if let Some(line) = stdout_of(&role_doctor(&place)).lines().last() {
+        form.push_str(line);
+        form.push('\n');
+    }
+    fs::remove_dir_all(&place.dir).ok();
     insta::assert_snapshot!(form);
 }
 
@@ -4785,7 +4791,7 @@ fn seat_wm_consume_refuses_without_a_stamped_sid() {
 #[test]
 fn seat_wm_consume_is_listed_in_usage_and_refuses_missing_flags() {
     let usage = stderr_of(&run_seat(&[]));
-    assert!(usage.contains("|consume --target T --wm-dir DIR>"), "usage に consume: {usage}");
+    assert!(usage.contains("|consume --target T --wm-dir DIR|"), "usage に consume（後ろに register が続く）: {usage}");
     let out = run_seat(&["consume", "--target", WM_TARGET]);
     assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "--wm-dir 欠けは rc 1");
     assert_eq!(stderr_of(&out), usage, "使い方で断る");
@@ -5209,4 +5215,304 @@ fn seat_wm_rebrief_is_listed_in_usage_and_refuses_missing_flags() {
     assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "--anchor 欠けは rc 1");
     assert_eq!(stderr_of(&out), usage, "使い方で断る");
     assert!(stdout_of(&out).is_empty(), "stdout は空");
+}
+
+// ─────────────────────────── role / register ───────────────────────────
+
+/// 登録の置き場の fixture（state dir・雛形 file・tmux socket）。
+struct RolePlace {
+    /// tmp dir の root。
+    dir: PathBuf,
+    /// event log の置き場。
+    state: PathBuf,
+    /// 起動の雛形の file。
+    launch: String,
+    /// 独立 socket（server は立てない周もある）。
+    socket: String,
+}
+
+/// 雛形の本文（event の `launch` にそのまま載る）。
+const LAUNCH_BODY: &str = "launch {credential-dir}\n\"quoted\" line\n";
+
+/// 登録の置き場を 1 つ作る。
+fn role_place() -> RolePlace {
+    let dir = tmp();
+    let state = dir.join("state");
+    let launch = fixture(&dir, "launch.txt", LAUNCH_BODY);
+    let socket = socket_of(&dir);
+    RolePlace { dir, state, launch, socket }
+}
+
+/// target の打刻を置く（dir 名は契約の字面どおり `:` を `_` に潰す）。`sid` が `None` なら dir だけ作る。
+fn role_stamp(place: &RolePlace, target: &str, sid: Option<&str>) {
+    let seat = place.state.join("seat").join(target.replace(':', "_"));
+    fs::create_dir_all(&seat).ok();
+    if let Some(sid) = sid {
+        fs::write(state_file(&seat), format!("{}\n", stamp_line("idle", "SessionStart", unix_now(), sid))).ok();
+    }
+}
+
+/// `seat register` を 1 回撃つ（`extra` は `--anchor` などの追加 flag）。
+fn role_register(place: &RolePlace, target: &str, role: &str, extra: &[&str]) -> Output {
+    let state = place.state.display().to_string();
+    let mut args = vec![
+        "register", "--state-dir", &state, "--target", target, "--role", role, "--account", "acct-1",
+        "--launch", &place.launch,
+    ];
+    args.extend_from_slice(extra);
+    run_seat(&args)
+}
+
+/// event log の本文（無ければ空）。
+fn role_log(place: &RolePlace) -> String {
+    fs::read_to_string(vessel::fleet::store::events_path(&place.state)).unwrap_or_default()
+}
+
+/// event log を replay した現在地。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn role_state(place: &RolePlace) -> vessel::fleet::State {
+    vessel::fleet::replay(&vessel::fleet::store::read_all(&place.state).expect("event log を読める"))
+}
+
+/// 打刻の在る target の登録は `SeatRegistered` を 1 件追記し、replay で 6 項目が読める（歯 (a)(1)）。
+#[test]
+fn seat_role_register_appends_one_seat_registered_row() {
+    let place = role_place();
+    role_stamp(&place, "rs:planner", Some("sid-a"));
+    let out = role_register(&place, "rs:planner", "planner", &["--anchor", "/repo/anchor"]);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(
+        stdout_of(&out),
+        "seat register: registered role=planner target=rs:planner sid=sid-a account=acct-1 anchor=/repo/anchor\n"
+    );
+    let events = vessel::fleet::store::read_all(&place.state).unwrap_or_default();
+    assert_eq!(events.len(), 1, "1 件だけ: {}", role_log(&place));
+    let event = events.first().cloned().unwrap_or_else(|| panic!("行が在る"));
+    assert_eq!(event.kind, vessel::fleet::EventKind::SeatRegistered);
+    assert!(event.run.is_empty() && event.bead.is_empty(), "便に紐づかない");
+    let registration = event.registration.unwrap_or_else(|| panic!("本体が在る"));
+    assert_eq!(registration.role, vessel::seat::role::Role::Planner);
+    assert_eq!(registration.anchor, "/repo/anchor");
+    assert_eq!(registration.target, "rs:planner");
+    assert_eq!(registration.sid, "sid-a");
+    assert_eq!(registration.account, "acct-1");
+    assert_eq!(registration.launch, LAUNCH_BODY, "雛形の本文がそのまま載る");
+    let state = role_state(&place);
+    assert_eq!(state.runs.len(), 0, "幽霊の便を作らない");
+    assert_eq!(vessel::seat::role::role_of_target(&state, "rs:planner"), Some(vessel::seat::role::Role::Planner));
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// 同じ鍵の再登録は前の row を残したまま最新だけが解ける・別 target へ移すと旧 target では解けない・
+/// 別の anchor に同じ target を登録すると replay の最新が解ける（歯 (a)(2)(8)）。
+#[test]
+fn seat_role_reregister_keeps_old_rows_and_resolves_the_latest() {
+    use vessel::seat::role::{role_of_target, Role};
+    let place = role_place();
+    for target in ["rr:one", "rr:two"] {
+        role_stamp(&place, target, Some("sid-r"));
+    }
+    let register = |target: &str, role: &str, anchor: &str| {
+        let out = role_register(&place, target, role, &["--anchor", anchor]);
+        assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    };
+    register("rr:one", "admin", "/repo/main");
+    register("rr:one", "admin", "/repo/main");
+    assert_eq!(role_log(&place).lines().count(), 2, "前の row は残る（append のみ）");
+    let state = role_state(&place);
+    assert_eq!(state.registrations.len(), 1, "同じ鍵は 1 つに畳む");
+    assert_eq!(state.registrations.values().map(|latest| latest.seq).collect::<Vec<_>>(), vec![1], "2 件目が解決される");
+    assert_eq!(role_of_target(&state, "rr:one"), Some(Role::Admin));
+    register("rr:one", "planner", "/repo/.worktrees/wt");
+    assert_eq!(role_of_target(&role_state(&place), "rr:one"), Some(Role::Planner), "別の anchor の後の row が勝つ");
+    register("rr:two", "planner", "/repo/.worktrees/wt");
+    let moved = role_state(&place);
+    assert_eq!(role_of_target(&moved, "rr:two"), Some(Role::Planner));
+    assert_eq!(role_of_target(&moved, "rr:one"), Some(Role::Admin), "移した鍵の旧 target は解けず、別の鍵の row が残る");
+    register("rr:two", "admin", "/repo/main");
+    assert_eq!(role_of_target(&role_state(&place), "rr:one"), None, "どの鍵も持たない target は解けない");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// 打刻が無い・読めない・sid が空の target は `NoStamp` で rc 1・event を書かない（歯 (a)(3)(4)）。
+#[test]
+fn seat_role_register_refuses_without_a_stamped_sid() {
+    let place = role_place();
+    role_stamp(&place, "rn:nostamp", None);
+    role_stamp(&place, "rn:empty", Some(""));
+    role_stamp(&place, "rn:blank", Some("  "));
+    let unreadable = place.state.join("seat").join("rn_dir");
+    fs::create_dir_all(state_file(&unreadable)).ok();
+    for target in ["rn:absent", "rn:nostamp", "rn:empty", "rn:blank", "rn:dir"] {
+        let out = role_register(&place, target, "planner", &["--anchor", "/repo"]);
+        assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "{target}: stdout={}", stdout_of(&out));
+        assert_eq!(stderr_of(&out), format!("seat register: refused reason=no-stamp target={target}\n"));
+        assert!(stdout_of(&out).is_empty(), "{target}: stdout は空");
+    }
+    assert!(!vessel::fleet::store::events_path(&place.state).exists(), "event log に行が増えない");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// `--anchor` 無しは cwd の repo root が `anchor` に入る（repo の下の dir から撃っても root）（歯 (a)(5)）。
+#[test]
+fn seat_role_register_defaults_anchor_to_the_cwd_repo_root() {
+    let place = role_place();
+    let repo = place.dir.join("repo");
+    let nested = repo.join("sub").join("deeper");
+    fs::create_dir_all(&nested).ok();
+    let init = Command::new("git").arg("-C").arg(&repo).args(["init", "-q"]).output();
+    assert!(init.is_ok_and(|out| out.status.success()), "tmp repo を作れる");
+    let top = Command::new("git").arg("-C").arg(&repo).args(["rev-parse", "--show-toplevel"]).output();
+    let root = top.map(|out| String::from_utf8_lossy(&out.stdout).trim().to_owned()).unwrap_or_default();
+    assert!(!root.is_empty(), "root を実測できる");
+    role_stamp(&place, "ra:anchor", Some("sid-anchor"));
+    let state = place.state.display().to_string();
+    let out = run_seat_in(&nested, &[
+        "register", "--state-dir", &state, "--target", "ra:anchor", "--role", "admin", "--account", "acct-1",
+        "--launch", &place.launch,
+    ]);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    let anchors: Vec<String> = role_state(&place).registrations.values().map(|latest| latest.registration.anchor.clone()).collect();
+    assert_eq!(anchors, vec![root], "cwd の repo root");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// pane id を差し替えても同じ target なら同じ役割・tmux の env は効かない・window を rename すると解けない・
+/// pane 文字列は event log に 0 回（歯 (a)(6)(7)）。
+#[test]
+fn seat_role_resolution_reads_only_rows_on_isolated_tmux() {
+    use vessel::seat::role::{role_of_target, Role};
+    use vessel::seat::target_of_pane;
+    let place = role_place();
+    let seat = start_seat(&place.socket, "rolesess");
+    assert!(seat.ready(), "隔離 seat が立つ");
+    let pane_of = |window: &str, env: &str| {
+        // `-t rolesess:` は session を指す（`rolesess` だけだと同名の window と読まれ index が衝突する）。
+        let out = tmux(&place.socket, &["new-window", "-d", "-P", "-F", "#{pane_id}", "-t", "rolesess:", "-n", window, "-e", env, "sh"]);
+        (String::from_utf8_lossy(&out.stdout).trim().to_owned(), String::from_utf8_lossy(&out.stderr).into_owned())
+    };
+    let (first, why) = pane_of("win", "SCRIBE2_ROLE=admin");
+    assert!(first.starts_with('%'), "pane id: {first} stderr={why}");
+    let target = target_of_pane(Some(&place.socket), &first).unwrap_or_default();
+    assert_eq!(target, "rolesess:win");
+    role_stamp(&place, &target, Some("sid-live"));
+    let out = role_register(&place, &target, "planner", &["--anchor", "/repo"]);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    let resolve = |pane: &str| target_of_pane(Some(&place.socket), pane).and_then(|found| role_of_target(&role_state(&place), &found));
+    assert_eq!(resolve(&first), Some(Role::Planner), "env の値でなく row の役割");
+    assert!(tmux(&place.socket, &["kill-window", "-t", "rolesess:win"]).status.success(), "window を畳める");
+    let (second, why) = pane_of("win", "SCRIBE2_ROLE=admin");
+    assert!(second.starts_with('%') && second != first, "pane id が差し替わる: {second} stderr={why}");
+    assert_eq!(resolve(&second), Some(Role::Planner), "同じ target なら同じ役割");
+    assert!(tmux(&place.socket, &["rename-window", "-t", "rolesess:win", "moved"]).status.success(), "rename できる");
+    assert_eq!(resolve(&second), None, "rename した window は別 target＝解けない");
+    let log = role_log(&place);
+    for pane in [&first, &second] {
+        assert_eq!(log.matches(pane.as_str()).count(), 0, "pane 文字列は event log に現れない: {log}");
+    }
+    assert!(!log.contains("\"%"), "pane の形の値も無い: {log}");
+    drop(seat);
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// 未知の `--role`・値欠けは使い方で断り、usage に register が載る（歯 (a)(9)）。
+#[test]
+fn seat_role_register_refuses_unknown_role_with_usage() {
+    let place = role_place();
+    role_stamp(&place, "ru:x", Some("sid-u"));
+    let usage = stderr_of(&run_seat(&[]));
+    assert!(usage.contains("|register --state-dir S --target T --role R --account L --launch FILE [--anchor DIR]"), "{usage}");
+    for role in ["Planner", "reviewer", ""] {
+        let out = role_register(&place, "ru:x", role, &["--anchor", "/repo"]);
+        assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "role={role:?}");
+        assert_eq!(stderr_of(&out), usage, "role={role:?} は使い方で断る");
+    }
+    let out = run_seat(&["register", "--target", "ru:x", "--role", "planner"]);
+    assert_eq!(stderr_of(&out), usage, "必須 flag の欠けも使い方");
+    assert!(!vessel::fleet::store::events_path(&place.state).exists(), "行を書かない");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// 役割は 2 つで宣言順・variant 名の字面は受けない・受付の極性は in-loop / fail-closed。
+#[test]
+fn seat_role_enum_is_closed_in_declaration_order() {
+    use vessel::polarity::{OnFailure, Timing};
+    use vessel::seat::role::{Role, ALL, POLARITY};
+    assert_eq!(ALL.len(), 2, "記録時点の母集団");
+    assert!(vessel::order::is_declaration_order(ALL, |role| role as usize), "ALL は宣言順: {ALL:?}");
+    assert_eq!(Role::parse("Planner"), None, "variant 名は字面でない");
+    assert_eq!(Role::parse(""), None, "空は役割でない");
+    assert_eq!((POLARITY.timing, POLARITY.on_failure), (Timing::InLoop, OnFailure::FailClosed));
+}
+
+/// 突合の行は畳んだ行を数え、log を読めない周・tmux を撃てない周は 0 と書かない（pure・歯 (d)）。
+#[test]
+fn seat_role_reconcile_line_counts_folded_rows_and_never_writes_zero_for_unmeasured() {
+    use vessel::seat::role::render_reconcile;
+    let place = role_place();
+    for target in ["rc:gone", "rc:live", "rc:away"] {
+        role_stamp(&place, target, Some("sid-rc"));
+    }
+    for (target, role) in [("rc:gone", "planner"), ("rc:live", "planner"), ("rc:away", "admin")] {
+        assert_eq!(rc_of(&role_register(&place, target, role, &["--anchor", "/repo"])), i32::from(RC_OK));
+    }
+    let state = role_state(&place);
+    let live = vec!["rc:live".to_owned(), "rc:gone".to_owned()];
+    assert_eq!(render_reconcile(Some(&state), Some(&live)), "seats: registered=2 live=1 missing=1", "同じ鍵の旧 row は数えない");
+    assert_eq!(render_reconcile(Some(&state), None), "seats: registered=2 live=unmeasurable missing=unmeasurable");
+    assert_eq!(render_reconcile(None, Some(&live)), "seats: registered=unreadable live=unmeasurable missing=unmeasurable");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// `doctor --state-dir` を撃つ。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn role_doctor(place: &RolePlace) -> Output {
+    let state = place.state.display().to_string();
+    Command::new(bin())
+        .args(["doctor", "--state-dir", &state, "--tmux-socket", &place.socket])
+        .output()
+        .expect("binary を起動できる")
+}
+
+/// 登録 2 件（実在の target 1 件）を置いた置き場（tmux の server は呼び側が立てる）。
+fn role_doctor_place() -> RolePlace {
+    let place = role_place();
+    for (target, role) in [("rolesdoc:rolesdoc", "planner"), ("gone:gone", "admin")] {
+        role_stamp(&place, target, Some("sid-doc"));
+        let out = role_register(&place, target, role, &["--anchor", "/repo"]);
+        assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    }
+    place
+}
+
+/// doctor は登録 row と実在の target を突き合わせ、撃てない周は 0 と書かない（歯 (d)）。
+#[test]
+fn seat_role_doctor_reconciles_rows_with_live_targets() {
+    let place = role_doctor_place();
+    let out = role_doctor(&place);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(stdout_of(&out).lines().last(), Some("seats: registered=2 live=unmeasurable missing=unmeasurable"));
+    let seat = start_seat(&place.socket, "rolesdoc");
+    assert!(seat.ready(), "隔離 seat が立つ");
+    let out = role_doctor(&place);
+    let lines: Vec<String> = stdout_of(&out).lines().map(str::to_owned).collect();
+    assert_eq!(lines.len(), 3, "2 行 + 項目 1 行: {lines:?}");
+    assert_eq!(lines.last().map(String::as_str), Some("seats: registered=2 live=1 missing=1"));
+    let doctor = |args: &[&str]| Command::new(bin()).arg("doctor").args(args).output().ok();
+    let bare = doctor(&[]).map(|out| stdout_of(&out)).unwrap_or_default();
+    assert_eq!(bare.lines().count(), 2, "引数無しは従来の 2 行: {bare}");
+    let state = place.state.display().to_string();
+    for bad in [&["--state-dir"][..], &["--state-dir", ""], &["--tmux-socket", "s"], &["--state-dir", &state, "--bogus", "x"], &["--state-dir", &state, "--state-dir", &state]] {
+        let out = doctor(bad);
+        assert_eq!(out.as_ref().map(rc_of), Some(i32::from(RC_REFUSED)), "{bad:?} は使い方で断る");
+        assert!(out.is_some_and(|found| stdout_of(&found).starts_with("usage: ")), "{bad:?}");
+    }
+    drop(seat);
+    fs::remove_dir_all(&place.dir).ok();
 }
