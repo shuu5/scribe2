@@ -381,6 +381,11 @@ pub(crate) fn start_seat(socket: &str, name: &str) -> IsolatedSeat {
 
 /// prompt の字を選んで session を立てる（`❯` を持たない席も作れる）。
 fn start_seat_with(socket: &str, name: &str, ps1: &str, needle: char) -> IsolatedSeat {
+    start_seat_sized(socket, name, ps1, needle, "120")
+}
+
+/// pane 幅（列数）を選んで session を立てる（折り返しの歯が狭い pane を作る）。
+fn start_seat_sized(socket: &str, name: &str, ps1: &str, needle: char, width: &str) -> IsolatedSeat {
     // guard を**先に**作る: `new-session` が通った後で prompt を待つ間に panic しても畳む。
     let mut seat = IsolatedSeat {
         socket: socket.to_owned(),
@@ -390,7 +395,7 @@ fn start_seat_with(socket: &str, name: &str, ps1: &str, needle: char) -> Isolate
     let out = tmux(
         socket,
         &[
-            "new-session", "-d", "-s", name, "-n", name, "-x", "120", "-y", "40", "-e", ps1, "sh", "-i",
+            "new-session", "-d", "-s", name, "-n", name, "-x", width, "-y", "40", "-e", ps1, "sh", "-i",
         ],
     );
     if !out.status.success() {
@@ -688,6 +693,119 @@ fn seat_inject_still_fails_when_payload_never_appears() {
         "送達を確認できない周は記録しない"
     );
     // socket を消す**前**に畳む（消してからでは kill-session が届かない・実測 2026-09-10）。
+    drop(guard);
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// 折り返しの歯の pane 幅（列）。
+const WRAP_WIDTH: &str = "40";
+
+/// 折り返しの歯の目印: pane 幅より長い 1 行（非 ASCII を含む・全角は 2 列）。
+const WRAP_MARKER: &str = ": seat-e2e-wrapped 折り返しの目印は幅を越えて次の行へ割れる";
+
+/// 折り返しを結合した pane 本文（歯の側で「論理行に目印が在る / 無い」を測る）。
+fn capture_joined(socket: &str, target: &str) -> String {
+    String::from_utf8_lossy(&tmux(socket, &["capture-pane", "-p", "-J", "-t", target]).stdout).into_owned()
+}
+
+/// 狭い pane に `inject` を 1 回撃つ。
+fn inject_on(socket: &str, name: &str, state: &Path, payload: &str) -> Output {
+    run_seat(&[
+        "inject", "--target", name, "--tmux-socket", socket,
+        "--state-dir", &state.display().to_string(), "--text", payload,
+    ])
+}
+
+/// pane 幅より長い 1 行は端末で折り返され、結合しない capture では目印が割れる。それでも
+/// **届いた注入は `delivered` rc 0・記録 1 行**（`s2-07l.148`・base では `absent` rc 1）。
+#[test]
+fn seat_inject_wrapped_long_line_is_delivered_and_recorded() {
+    let dir = tmp();
+    let socket = socket_of(&dir);
+    let name = "seat-wrapped";
+    let guard = start_seat_sized(&socket, name, "PS1=❯ ", PROMPT, WRAP_WIDTH);
+    assert!(guard.ready(), "独立 socket に狭い pane の session を立てられる");
+    let state = dir.join("state");
+    stamp_idle(&state, name);
+
+    let out = inject_on(&socket, name, &state, WRAP_MARKER);
+
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(
+        stdout_of(&out),
+        format!(
+            "seat: inject delivered target={name} bytes={} consumed=false{}\n",
+            WRAP_MARKER.len(),
+            provenance(&state, "flag")
+        ),
+        "折り返された目印も現れた＝送達"
+    );
+    // 歯が空虚でないこと: 結合しない capture では目印が割れて当たらず、結合すると当たる。
+    let split = capture(&socket, name);
+    assert!(!split.contains(WRAP_MARKER), "結合しない capture では目印が割れている: {split}");
+    let joined = capture_joined(&socket, name);
+    assert!(joined.contains(WRAP_MARKER), "結合した論理行には目印が在る: {joined}");
+    let recorded = fs::read_to_string(tick_file(&state, name)).unwrap_or_default();
+    assert_eq!(recorded.lines().count(), 1, "記録は 1 行: {recorded}");
+    assert!(recorded.contains(r#""who":"seat-inject""#), "{recorded}");
+    drop(guard);
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// 狭い pane でも幅より短い 1 行は現物どおり `delivered` rc 0（結合しても短い行は変わらない）。
+#[test]
+fn seat_inject_wrapped_short_line_on_narrow_pane_is_delivered() {
+    let dir = tmp();
+    let socket = socket_of(&dir);
+    let name = "seat-wrapshort";
+    let guard = start_seat_sized(&socket, name, "PS1=❯ ", PROMPT, WRAP_WIDTH);
+    assert!(guard.ready(), "独立 socket に狭い pane の session を立てられる");
+    let state = dir.join("state");
+    stamp_idle(&state, name);
+    let payload = ": seat-e2e-short";
+
+    let out = inject_on(&socket, name, &state, payload);
+
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(
+        stdout_of(&out),
+        format!(
+            "seat: inject delivered target={name} bytes={} consumed=false{}\n",
+            payload.len(),
+            provenance(&state, "flag")
+        )
+    );
+    assert!(capture(&socket, name).contains(payload), "短い行は割れずに現れる");
+    let recorded = fs::read_to_string(tick_file(&state, name)).unwrap_or_default();
+    assert_eq!(recorded.lines().count(), 1, "記録は 1 行: {recorded}");
+    drop(guard);
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// 結合して読んでも、**本当に届いていない周は `absent` rc 1 のまま**（極性不変）。echo を切った
+/// 狭い pane には別の字面（`stty -echo`）だけが在り、目印は結合した論理行にも無い——門の断り
+/// （busy / unknown-input）や tmux-failed で「別の理由で」落ちていないことを行の字面で確かめる。
+#[test]
+fn seat_inject_wrapped_absent_line_still_fails_closed() {
+    let dir = tmp();
+    let socket = socket_of(&dir);
+    let name = "seat-wrapabsent";
+    let guard = start_seat_sized(&socket, name, "PS1=❯ ", PROMPT, WRAP_WIDTH);
+    assert!(guard.ready(), "独立 socket に狭い pane の session を立てられる");
+    tmux(&socket, &["send-keys", "-t", name, "-l", "stty -echo"]);
+    tmux(&socket, &["send-keys", "-t", name, "Enter"]);
+    assert!(wait_prompt(&socket, name), "echo を切った後に prompt が戻る");
+    let state = dir.join("state");
+
+    let out = inject_on(&socket, name, &state, WRAP_MARKER);
+
+    assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "stdout={}", stdout_of(&out));
+    assert_eq!(stdout_of(&out), "", "送達を確認できない周は stdout 0 行");
+    assert_eq!(stderr_of(&out), format!("seat: inject unconfirmed reason=absent{}\n", provenance(&state, "flag")));
+    let joined = capture_joined(&socket, name);
+    assert!(joined.contains("stty -echo"), "pane には別の字面が在る: {joined}");
+    assert!(!joined.contains("seat-e2e-wrapped"), "目印は結合した論理行にも無い: {joined}");
+    assert!(!tick_file(&state, name).exists(), "送達を確認できない周は記録しない");
     drop(guard);
     fs::remove_dir_all(&dir).ok();
 }

@@ -12,7 +12,7 @@
 //! `/clear` のような session を作り直す注入はこの便では扱わない。
 
 use crate::polarity::{OnFailure, Polarity, Timing};
-use super::{capture, input_tail, sanitize_target, state, tmux_ok, StateDir};
+use super::{input_tail, sanitize_target, state, tmux_ok, tmux_stdout, StateDir};
 use crate::fleet::store::{self, LockPolicy};
 use crate::hook::{seat_name, InjectionRecord, SCHEMA};
 use std::path::{Path, PathBuf};
@@ -316,6 +316,19 @@ pub fn guard_input(pane: &str) -> Result<(), InputGate> {
         Some(tail) if !tail.is_empty() => Err(InputGate::Busy),
         Some(_) => Ok(()),
     }
+}
+
+/// 送達の面が読む pane 本文（**折り返しを結合した論理行**・`capture-pane -p -J`・`s2-07l.148`）。
+/// 撃てなければ `None`（空文字と区別する）。
+///
+/// 目印（payload の最初の非空行）は 1 論理行で、pane 幅より長いと端末が折り返して capture では
+/// 複数行に割れる——`contains` が当たらず、届いている注入が `absent` rc 1 に倒れた（実測
+/// 2026-09-12・folio2 planner・どちらも打刻の `UserPromptSubmit` で届いていた）。呼出元が再送すると
+/// 二重投函になる。**読み方だけを直す**: 照合・`absent` の極性・「現れた＝送達」・消費の打刻は不変。
+/// 入力欄の門（[`guard_input`]）と修復の門（[`repair_of`]）も同じ本文を読む（送達の面の読みを 1 つにする）。
+/// 目印を先頭 N 字へ切り詰める案は N が規則になり、nonce 案は注入の字面を変えるので採らない。
+fn capture(socket: Option<&str>, target: &str) -> Option<String> {
+    tmux_stdout(socket, &["capture-pane", "-p", "-J", "-t", target])
 }
 
 /// payload を literal で送り、Enter を送る。
