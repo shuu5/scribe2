@@ -41,6 +41,7 @@
 - SessionStart の hook（[vessel-hook.md](./vessel-hook.md)）が pane → target → 登録 row で役割を解き、役割ごとの **tracked な雛形 1 枚**（`headless/runner.txt` と同じ形・binary に埋め込む・`seat/brief/<役割名>.txt`）から生成した指示文を stdout で注入する。登録の無い席は 0 byte（断りも出さない）。
 - **雛形の行の規律**: 行は「穴」か「出所 pointer を持つ行」に限る。穴 = `{capabilities}`（権能の行の値の列）/ `{target}` / `{anchor}` / `{role}`。pointer の形は [working-memory.md](./working-memory.md) §4 の `PointerKind` を再利用（憲法の id・ADR の節・SRS の要件 id・rules 行の id）。**規範文の定義 = pointer を持たない行**（typed・字面の語彙で判定しない）。
 - **雛形が持つもの**（§4 で塞げない振る舞いだけ・短く）: 中継の形・報告の形・裁定の持ち込み先（planner の席）・第一手の復元（`seat rebrief`）・命令行は pointer 付きだけ従う（ADR-0018 §2.2）・席間の連絡の経路（FR44）・3 クラスの発火の pointer。§4 で塞ぐ事項（回答・承認・go・merge・code の Edit）は書かない（二重化しない）。
+- **席間の連絡の行**（FR44・AC19・雛形に置く pointer 付きの行の 1 つ）: planner と管理席の連絡は席の入力欄を経由しない経路＝開発 session の道具が持つ session 間の message（記録時点は Claude Code の `SendMessage` / `ListAgents`・宛先は毎回 `ListAgents` で取る）で送り、届いたことは経路自身の記録（送信結果の message id）で確かめる。器はこの経路を持たず（FR44 の経路設計は ADR-0022 §2.8 の射程外＝道具の機能をそのまま使う）、雛形は「経路の名・宛先の取り方・届いた確認の取り方」を pointer 付きの 3 行で持つだけ。入力欄への注入は器の管理 tick の合図（打刻・退避）と復元の command に限る（FR44）。
 - **xtask の検査**（C14.2・AC17・`cargo xtask check` の 1 項目）: 雛形の穴 ⊆ 定義済みの穴・pointer を持たない行 0・行に在って文に無い権能 0（生成文に権能の名がすべて現れる）。生成文は外形 snapshot（C12.5）。
 - 器は consumer の repo に file を書かない（CLAUDE.md の生成区間を持たない・1 経路）。
 
