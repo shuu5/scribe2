@@ -11,7 +11,7 @@
 
 ## 2. 上限停止の段（ADR-0020 §2.1・FR35）
 
-- **`Stage::RateLimited`**（variant 1 つ・宣言順は `Questioned` の直後・`as_str` は `RateLimited`）。runner が上限の rc（`headless::RC_RATE_LIMIT`・値は現物・ADR-0012 §2.1）で終わった周は `RunStage stage=RateLimited detail=rc:<rc>,status:<観測した上限 status>` を記帳する（status は runner の観測行と同じ出所・ADR-0012 §2.1 末尾）。口座の label は pipe が (c) の `--account-dir` の配線で初めて知るので、(c) が detail に `account:<label>` を足す。窓の種別は上限 record が運ばない（記録時点）ので段には書かず、選定は実測行（FR33）から読む。上限の判定入力は上限 record の status のみ（ADR-0012・本 doc は判定を足さない）。
+- **`Stage::RateLimited`**（variant 1 つ・宣言順は `Questioned` の直後・`as_str` は `RateLimited`）。runner が上限の rc（`headless::RC_RATE_LIMIT`・値は現物・ADR-0012 §2.1）で終わった周は `RunStage stage=RateLimited detail=rc:<rc>,status:<観測した上限 status>` を記帳する（status は runner の停止行と同じ出所・ADR-0012 §2.1 末尾。停止行の形と読み手の純関数は同じ module `headless/runner.rs` に並べる〔質問 record の形と読み手が並ぶのと同型〕・pipe は rc が上限の周だけ読む）。口座の label は pipe が (c) の `--account-dir` の配線で初めて知るので、(c) が detail に `account:<label>` を足す。窓の種別は上限 record が運ばない（記録時点）ので段には書かず、選定は実測行（FR33）から読む。上限の判定入力は上限 record の status のみ（ADR-0012・本 doc は判定を足さない）。
 - Failed に倒さない。worktree・base・commit・質問と回答の event を保つ（N1・C9）。終端ではない＝live な便として intake の排他の母集団に残る（ADR-0019 §2.1）。schema 1 のまま。lens が上限で止まった周は FR9 の既存極性（INCONCLUSIVE）のまま。
 - `pipe show` はこの段を名で出す。`pipe stop --run` は本段の便も止められる（終端手段は stop だけ・§4）。
 
@@ -58,7 +58,7 @@ C1 / C5（R-C9-1 は行・裁定 id）・C2（`Purpose` / `Selection` / `Stage` 
 
 ## 9. 契約（4 便・この順・実装は pipeline）
 
-- **(a) 上限停止の段**（S）: `Stage::RateLimited`・runner の上限の rc → 段の記帳（rc / status）・`pipe show`・排他の母集団・stop。write-set = fleet/mod.rs（`Stage` の variant・`STAGES`・`as_str`）・pipe/mod.rs・pipe/spawn.rs・pipe/cli.rs（段名の表示）・tests/e2e/{pipe,fleet}.rs・snapshot。依存: なし（上限の rc は現物・label は (c) が足す）。
+- **(a) 上限停止の段**（S）: `Stage::RateLimited`・runner の上限の rc → 段の記帳（rc / status）・`pipe show`・排他の母集団・stop。write-set = fleet/mod.rs（`Stage` の variant・`STAGES`・`as_str`）・headless/runner.rs（停止行の読み手・in-file の歯）・pipe/mod.rs・pipe/spawn.rs・pipe/cli.rs（段名の表示・live の集合・stop）・tests/e2e/{pipe,fleet}.rs・snapshot。依存: なし（上限の rc は現物・label は (c) が足す）。
 - **(b) 選定の純関数と R-C9-1**（M）: `fleet/select.rs`・`Purpose` / `Selection` / `NoCandidate`・R-C9-1 の値の型変更（**値と裁定 id は user 裁定**）・`fleet select` subcommand・選定前の計測の呼出し。write-set = fleet/select.rs（新規）・fleet/mod.rs・fleet/cli.rs・rules/mod.rs（値の型）・rules/manifest.toml・tests/e2e/{fleet,rules}.rs・snapshot。依存: s2-07l.187（実測行の値の形）の land 後。
 - **(c) 別口座での途中再開**（M）: `Completion::AccountFree`・`pipe run` / `resume` の RateLimited の経路・「途中再開」節・`--account-dir` の配線・記帳。write-set = pipe/follow.rs・pipe/cli.rs・pipe/spawn.rs（段の detail に `account:<label>`）・fleet/mod.rs・headless/runner.txt・tests/e2e/pipe.rs。依存: (a)(b)・s2-07l.147（land の順序制御・pipe/ と fleet/mod.rs を触るので直列）・[seat-roles.md](./seat-roles.md) 契約 (a)（便用の除外集合 = 登録 row の口座の読み手）。
 - **(d) 席の退避と立て直し**（M）: tick の軸・鮮度で計測・登録 row の口座と雛形・Stop 後の立て直し・登録 row の更新。write-set = seat/tick.rs・seat/cycle.rs・seat/role.rs（登録 row の読み手）・tests/e2e/seat.rs。依存: (b)・[seat-roles.md](./seat-roles.md) 契約 (a)（登録 row）。
