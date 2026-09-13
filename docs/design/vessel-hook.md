@@ -43,8 +43,9 @@ stdout に 1 行 `[<NAME>/SessionStart] served version=<N> root=<root>` を出�
 - **活性化**: 対象 worktree の git dir に policy file `<git-dir>/<NAME>/write-set.txt` が在ること。git dir は `git rev-parse --absolute-git-dir`（worktree なら `<repo>/.git/worktrees/<name>/`）。`--git-dir` は cwd 相対の `.git` を返しうるので、policy の path を組むには絶対 path を返すこちらを撃つ。**env は使わない**（C2.2・ADR-0004 §2.4）。policy file は pipeline の spawn が書く（tracked 面に触れない・`git status` を汚さない）。
 - policy file の形: repo 相対 path 1 行 1 本。末尾 `/` は配下全部。glob 無し。
 - 判定: payload の `tool_name ∈ {Edit, Write, MultiEdit, NotebookEdit}` で `tool_input.file_path` か `notebook_path` を repo 相対へ正規化し（`..` を含む・root 外・絶対 path で root 外 → **deny**）、allowlist の外なら **deny = rc 2 + stderr 1 行 `<NAME>: deny <path> は契約 write-set の外（C16）` + stdout 0 byte**（Claude Code の blocking error の形）。内側なら rc 0・0 byte。
-- **極性**: policy file 不在 → 不活性（rc 0・0 byte＝開発 session が main を直接編集する場面）。policy file が在るのに読めない・空 → **deny（fail-closed・理由 `policy unreadable`）**。`Bash` と他 tool → rc 0・0 byte（interpreter 経路は v3）。
+- **極性**: policy file 不在 → 不活性（rc 0・0 byte＝開発 session が main を直接編集する場面）。policy file が在るのに読めない・空 → **deny（fail-closed・理由 `policy unreadable`）**。`Bash` と他 tool → write-set guard は rc 0・0 byte（interpreter 経路は v3）。`Bash` は次の command guard が見る。
 - guard は C11.2 の極性一覧に `InLoop` / `FailClosed` として載る（一覧の生成と C16.2 の CI は §9 の後続契約）。
+- **command guard（[ADR-0025 §2.2](../../design-intent/decisions/ADR-0025-denied-command-rows-and-bash-command-guard.html#s2-2-command-guard)・契約 = 台帳 `s2-07l.168`）**: `tool_name == "Bash"` の周に `tool_input.command` を shell の区切り（`;` `&&` `||` `|` 改行）で segment に分け、各 segment を空白で語に分け、rules 行 `runner.denied_commands`（語列の配列・[rules-manifest.md](./rules-manifest.md)）の各語列と突合する。当たり = 語列の先頭語が segment の先頭語と一致し、残りの語がすべて segment の語に含まれる（順序不問・`git push origin main --force` と `git push --force origin main` を 1 語列で当てる）。引用符の中身・変数展開・interpreter の引数（`sh -c "…"`）は解かない（v3）。当たれば **deny = rc 2 + stderr 1 行 `<NAME>: deny <語列> は rules 行 runner.denied_commands が禁じる（N1 / C16）— <次の一手>` + stdout 0 byte**・`inject.jsonl` に 1 行（`what=command-deny <語列>`）。通す周は 1 byte も書かない。判定の順序は write-set guard → seat guard → command guard → 権能 guard（閉じた列挙の宣言順・prose の順序注記を持たない）。活性化は marker が自分の NAME を言う repo だけ（FR24）。極性: rules が読めない・行が無い → **deny（fail-closed）**。全席共通（runner / planner / 管理席の弁別をしない・席ごとの例外行を持たない）。極性一覧に `Guard::Command`（`InLoop` / `FailClosed`）として 1 行増える。判定は 1 関数（`hook::command`・intake の unfit と共有・[pipeline.md §5.1](./pipeline.md#51-intakea)）。
 
 ## 6. 注入計測の slot（FR21・NFR5・C6.3）
 
@@ -80,7 +81,7 @@ xtask 側: `crates/xtask/src/genmanifest.rs` の `#[cfg(test)]` に、render の
 - state dir を `.vessel` に書く — tracked file に path が載る（CON2）。git config（local・untracked）に置く。
 - marker 名に版を入れる — 跨版契約は版番号に依らず固定（R-O3）。
 - `hooks.json` を手書き — 名前の字面が散る（C2.2）。
-- Bash command の parse guard — interpreter 経路は v3。
+- Bash command の parse guard — interpreter 経路（`sh -c` / script file / `python -c` の中身の解析）は v3。**語列の照合に限っては ADR-0025 が採用**（§5 の command guard・parse ではなく空白区切りの語の包含）。
 - deny を stdout JSON 形にする — rc 2 + stderr の 1 形に閉じる。
 - 本 repo root へ `.vessel` を leg 5 で置く — 自己ホスト便の手番と分ける（置いた瞬間から本 repo の編集に guard が効く）。
 
