@@ -242,7 +242,7 @@ fn pace_of(args: &[String]) -> Result<Option<(Duration, Duration)>, Vec<RuleErro
 /// `seat tick`。
 fn tick_of(args: &[String]) -> Outcome {
     // 値欠け・空文字の `--rules` は使い方の誤り（他の flag と同じ極性・SRS NFR4）。
-    let (Ok(target), Ok(wm_dir), Ok(pointer), Ok(restore), Ok(_), Ok(common)) = (
+    let (Ok(target), Ok(wm_dir), Ok(pointer), Ok(restore), Ok(rules), Ok(common)) = (
         required_nonempty(args, "--target"),
         required_nonempty(args, "--wm-dir"),
         nonempty(args, "--pointer"),
@@ -252,11 +252,15 @@ fn tick_of(args: &[String]) -> Outcome {
     ) else {
         return refused_usage();
     };
-    let (settle, step) = match pace_of(args) {
-        Ok(Some(pace)) => pace,
-        Ok(None) => return Outcome::failed_line(RC_REFUSED, tick::render_no_rule()),
+    // rules は 1 回だけ開き、確認の刻みと口座の宣言を同じ manifest から解く（`s2-07l.224`・第 2 の parser を作らない）。
+    let manifest = match crate::rules::cli::open(args) {
+        Ok(manifest) => manifest,
         Err(errors) => return broken_rules(&errors, vec![tick::render_no_rule()]),
     };
+    let Some((settle, step)) = cycle::pace_of(&manifest) else {
+        return Outcome::failed_line(RC_REFUSED, tick::render_no_rule());
+    };
+    let accounts = tick::account_labels(&manifest);
     tick::run(&tick::Request {
         target,
         wm_dir,
@@ -267,6 +271,8 @@ fn tick_of(args: &[String]) -> Outcome {
         restore,
         settle,
         step,
+        accounts: &accounts,
+        rules,
     })
 }
 

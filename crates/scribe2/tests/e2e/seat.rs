@@ -6558,7 +6558,12 @@ struct AcctPlace {
     wm: PathBuf,
     /// 独立 socket。
     socket: String,
+    /// `--rules` の写しに宣言する `[[account]]` の label 列（既定は tracked の manifest と同じ a1〜a5）。
+    labels: &'static [&'static str],
 }
+
+/// tracked の manifest の `[[account]]`（`--rules` の写しの既定＝埋め込みと同じ宣言）。
+const ACCT_LABELS: &[&str] = &["a1", "a2", "a3", "a4", "a5"];
 
 /// 置き場を 1 つ作る。
 fn acct_place() -> AcctPlace {
@@ -6567,7 +6572,18 @@ fn acct_place() -> AcctPlace {
     let wm = dir.join("wm");
     fs::create_dir_all(&wm).ok();
     let socket = socket_of(&dir);
-    AcctPlace { dir, state, wm, socket }
+    AcctPlace { dir, state, wm, socket, labels: ACCT_LABELS }
+}
+
+/// host の写しの形の `--rules`（歯の刻み・計測の上限・`labels` の `[[account]]`）を書いて path を返す。
+fn acct_rules(dir: &Path, labels: &[&str]) -> String {
+    let accounts: String = labels.iter().map(|label| format!("\n[[account]]\nlabel = \"{label}\"\n")).collect();
+    let body = format!(
+        "{}\n[[rule]]\nid = \"fleet.usage_timeout_s\"\nkind = \"UsageTimeoutS\"\nvalue = 30\n\
+         enabled = true\nruling = \"user 2026-09-12T02:01Z\"\nruled_at = \"2026-09-12\"\n{accounts}",
+        pace_manifest(FAST_SETTLE_S, FAST_POLL_MS, true)
+    );
+    fixture(dir, "rules.toml", &body)
 }
 
 /// 席を planner として `seat register` の口で登録する（口座は [`ACCT_SEAT`]）。`launch` は起動の雛形の本文。
@@ -6664,7 +6680,7 @@ fn acct_args(place: &AcctPlace, target: &str, pane: Option<&str>) -> Vec<String>
         "--state-dir".to_owned(),
         place.state.display().to_string(),
         "--rules".to_owned(),
-        fast_rules(&place.dir),
+        acct_rules(&place.dir, place.labels),
     ];
     if let Some(found) = pane {
         args.extend(["--capture-file".to_owned(), found.to_owned()]);
@@ -7295,5 +7311,122 @@ fn seat_relaunch_shell_without_a_prompt_tail_is_refused_unknown() {
 
     acct_assert_shell_refused(&place, name, &out, "relaunch-input-unknown");
     drop(guard);
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+// ─────────────────── tick の口座の宣言は開いた rules から（`s2-07l.224`・接頭辞 `seat_tick_rules_accounts_`） ───────────────────
+
+/// host の写しにだけ在る口座（tracked の a1〜a5 を含まない）。
+const HOST_LABELS: &[&str] = &["hostonly", "hostonly2"];
+/// 登録 row の口座（写しの 1 つ目）。
+const HOST_SEAT: &str = "hostonly";
+/// 立て直しの候補（写しの 2 つ目）。
+const HOST_SPARE: &str = "hostonly2";
+
+/// 口座の歯の置き場（`--rules` の写しの `[[account]]` は [`HOST_LABELS`]）。
+fn host_place() -> AcctPlace {
+    AcctPlace { labels: HOST_LABELS, ..acct_place() }
+}
+
+/// (a) `--rules` の写しにだけ在る口座（hostonly = 100・hostonly2 = 30）の席が退避して止まり、pane が shell の周は、
+/// 写しの宣言から選んだ `hostonly2` で立て直す（`relaunch=hostonly2`・穴は hostonly2 の credential dir）。base は
+/// 埋め込みの a1〜a5 から選び `relaunch=none:unmeasured`（RED）。
+#[test]
+fn seat_tick_rules_accounts_relaunch_selects_a_host_only_account() {
+    let place = host_place();
+    let name = "hostrelaunch";
+    let guard = start_seat(&place.socket, name);
+    assert!(guard.ready(), "独立 socket に shell の session を立てられる");
+    let registered = acct_register_as(&place, name, HOST_SEAT, &acct_launcher(&place, name));
+    assert_eq!(rc_of(&registered), i32::from(RC_OK), "stderr={}", stderr_of(&registered));
+    acct_measured(&place.state, HOST_SEAT, 100, &acct_now());
+    acct_measured(&place.state, HOST_SPARE, 30, &acct_now());
+    let first = acct_signal(&place, name);
+    assert_eq!(tick_token(&first, "kind").as_deref(), Some("externalize"), "1 周目は退避の合図: {first}");
+    acct_stop(&place, name, unix_now().saturating_add(1));
+    assert!(acct_shell_prompt(&place, name, ""), "shell の prompt を描ける");
+
+    let out = acct_tick(&place, name, None);
+
+    let line = stdout_of(&out);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stdout={line} stderr={}", stderr_of(&out));
+    for (key, want) in [("decision", "inject"), ("kind", "relaunch"), ("relaunch", HOST_SPARE)] {
+        assert_eq!(tick_token(&line, key).as_deref(), Some(want), "{key}: {line}");
+    }
+    assert_eq!(
+        fs::read_to_string(place.dir.join("launched")).unwrap_or_default(),
+        format!("{}\n", place.state.join("accounts").join(HOST_SPARE).display()),
+        "穴は写しから選んだ口座の credential dir で埋まる"
+    );
+    let rows = acct_rows(&place.state);
+    assert_eq!(rows.last().map(|row| row.account.as_str()), Some(HOST_SPARE), "登録 row の口座が更新される: {rows:?}");
+    drop(guard);
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (b) `--rules` の写しにだけ在る口座の row に実測行が無い周は、tick が同じ `--rules` で計測を 1 回撃ち（偽 curl の
+/// 呼出 1 回）、その label の `AllowanceMeasured` が積まれて判定行は `account=hostonly:50`。base は宣言外として撃たず
+/// `account=hostonly:unmeasured`（RED）。
+#[test]
+fn seat_tick_rules_accounts_measures_a_host_only_account() {
+    use vessel::fleet::{Allowance, EventKind};
+    let place = host_place();
+    let name = "hostmeasure";
+    let registered = acct_register_as(&place, name, HOST_SEAT, ACCT_LAUNCH);
+    assert_eq!(rc_of(&registered), i32::from(RC_OK), "stderr={}", stderr_of(&registered));
+    acct_credential(&place, HOST_SEAT);
+    acct_fake_curl(&place, 50);
+    write_state(&seat_dir_of(&place.state, name), StateFix::Busy { age_s: 0 });
+    let pane = fixture(&place.dir, "pane.txt", IDLE_PANE);
+
+    let (out, touched) = acct_tick_probed(&place, name, &pane);
+
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(
+        stdout_of(&out),
+        acct_line("decision=noop reason=busy", &format!("{ST_BUSY} account={HOST_SEAT}:50"), &place.state)
+    );
+    assert!(!touched, "注入しない");
+    assert_eq!(acct_curl_calls(&place), 1, "写しの口座のために計測を 1 回撃つ");
+    let measured = vessel::fleet::store::read_all(&place.state)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|event| event.kind == EventKind::AllowanceMeasured)
+        .filter_map(|event| event.allowance)
+        .filter(|row| matches!(row, Allowance::Measured(found) if found.account == HOST_SEAT))
+        .count();
+    assert!(measured > 0, "AllowanceMeasured が写しの label で積まれる");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (c) `--rules` 無しの周は従来どおり埋め込みの宣言（a1〜）で判定する: a1 の row の古い実測行（95）は計測を 1 回
+/// 撃って新しい行（50）で読み直す（偽 curl の呼出 1 回・判定行は `account=a1:50`）。
+#[test]
+fn seat_tick_rules_accounts_without_rules_uses_the_embedded_accounts() {
+    let place = acct_place();
+    let name = "embedaccts";
+    let registered = acct_register(&place, name, ACCT_LAUNCH);
+    assert_eq!(rc_of(&registered), i32::from(RC_OK), "stderr={}", stderr_of(&registered));
+    let stale = vessel::fleet::cli::format_utc(unix_now().saturating_sub(STALE_S + 600));
+    acct_measured(&place.state, ACCT_SEAT, 95, &stale);
+    acct_credential(&place, ACCT_SEAT);
+    acct_fake_curl(&place, 50);
+    write_state(&seat_dir_of(&place.state, name), StateFix::Busy { age_s: 0 });
+    let pane = fixture(&place.dir, "pane.txt", IDLE_PANE);
+    let state = place.state.display().to_string();
+    let wm = place.wm.display().to_string();
+
+    let (out, touched) = run_seat_probed(
+        &place.dir,
+        &["tick", "--target", name, "--wm-dir", &wm, "--tmux-socket", &place.socket, "--state-dir", &state, "--capture-file", &pane],
+    );
+
+    let line = stdout_of(&out);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stdout={line} stderr={}", stderr_of(&out));
+    for (key, want) in [("decision", "noop"), ("reason", "busy"), ("account", "a1:50")] {
+        assert_eq!(tick_token(&line, key).as_deref(), Some(want), "{key}: {line}");
+    }
+    assert!(!touched, "注入しない");
+    assert_eq!(acct_curl_calls(&place), 1, "埋め込みの宣言の口座を計測する");
     fs::remove_dir_all(&place.dir).ok();
 }

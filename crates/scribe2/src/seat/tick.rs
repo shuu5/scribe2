@@ -88,6 +88,11 @@ pub struct Request<'a> {
     pub settle: Duration,
     /// cycle を回す周に渡す確認の周期（rules 行 `seat.cycle_poll_ms`）。
     pub step: Duration,
+    /// 口座の軸が使う `[[account]]` の label 列（tick が開いた rules＝`--rules` が在ればその file・無ければ埋め込み・
+    /// [`account_labels`]・`s2-07l.224`）。確認の刻みと同じく [`cli`] が 1 回だけ解く。
+    pub accounts: &'a [String],
+    /// 定期計測（`fleet usage`）へ渡す `--rules` の path（無い周は埋め込み＝計測も埋め込みの宣言を読む）。
+    pub rules: Option<&'a str>,
 }
 
 /// tick 1 回の判定。**bool で持たない**（憲法 C11）。
@@ -617,7 +622,7 @@ enum Turn {
 /// 閾値以上の席へは FR29 と同じ除外の下で idle を待たずに退避の合図を注入して自打刻する（[`account_signal`]）。
 /// 閾値未満・測れない・除外で注入しない周は逼迫度を持って次の条件へ（注入も停止もしない）。
 fn account_turn(request: &Request, place: &super::StateDir, dir: &Path, seen: &Seen) -> Turn {
-    let Some(seated) = seated(place, request.target, seen.stale_s) else {
+    let Some(seated) = seated(request, place, seen.stale_s) else {
         return Turn::Pass(Account::Unevaluated);
     };
     let account = reading(&seated, seen.threshold);
@@ -656,14 +661,19 @@ struct Seated {
 /// （fleet-usage.md §6・FailOpen）——読み直した行が Unmeasured なら逼迫度は測れない側に倒れる。
 ///
 /// manifest の `[[account]]` に無い口座は撃たない: 計測は宣言した口座だけを読むので行が積まれず、撃つと毎周の
-/// 計測に化ける（測れないまま＝逼迫度は `unmeasured`）。
-fn seated(place: &super::StateDir, target: &str, stale_s: u64) -> Option<Seated> {
+/// 計測に化ける（測れないまま＝逼迫度は `unmeasured`）。宣言は tick が開いた rules の label 列で、計測にも同じ
+/// `--rules` を渡す（tick と `fleet usage` が別の宣言を読まない・`s2-07l.224`）。
+fn seated(request: &Request, place: &super::StateDir, stale_s: u64) -> Option<Seated> {
     let state = replay(&store::read_all(&place.path).ok()?);
-    let row = role::registration_of_target(&state, target)?.clone();
-    if is_fresh(&state, &row.account, stale_s) || !account_labels().contains(&row.account) {
+    let row = role::registration_of_target(&state, request.target)?.clone();
+    if is_fresh(&state, &row.account, stale_s) || !request.accounts.contains(&row.account) {
         return Some(Seated { row, state });
     }
-    let _ = crate::fleet::usage::run(&[], &place.path);
+    let args: Vec<String> = request
+        .rules
+        .map(|path| vec!["--rules".to_owned(), path.to_owned()])
+        .unwrap_or_default();
+    let _ = crate::fleet::usage::run(&args, &place.path);
     let state = store::read_all(&place.path).map_or(state, |events| replay(&events));
     Some(Seated { row, state })
 }
@@ -777,7 +787,6 @@ fn relaunch_turn(request: &Request, place: &super::StateDir, dir: &Path, seen: &
     if cycle::lock_is_live(dir, seen.ttl_s) {
         return held(stamp, NoopReason::CycleLive);
     }
-    let labels = account_labels();
     let result = cycle::relaunch(&cycle::Relaunch {
         target: request.target,
         socket: request.socket,
@@ -787,7 +796,7 @@ fn relaunch_turn(request: &Request, place: &super::StateDir, dir: &Path, seen: &
         step: request.step,
         row: &seated.row,
         state: &seated.state,
-        labels: &labels,
+        labels: request.accounts,
         threshold_pct: seen.threshold,
     });
     let (decision, relaunched) = match result {
@@ -802,13 +811,10 @@ fn relaunch_turn(request: &Request, place: &super::StateDir, dir: &Path, seen: &
     Verdict { stamp: Some(stamp), relaunched: Some(relaunched), ..Verdict::of(decision) }
 }
 
-/// manifest の `[[account]]` の label 列（宣言値・`fleet usage` / `fleet select` と同じ埋め込みの口）。読めない周は
-/// 空＝選定は候補なし（測れる口座が無い）に倒れる。
-fn account_labels() -> Vec<String> {
-    Manifest::embedded().map_or_else(
-        |_| Vec::new(),
-        |manifest| manifest.accounts().iter().map(|account| account.label().to_owned()).collect(),
-    )
+/// 開いた manifest の `[[account]]` の label 列（宣言値・`fleet usage` / `fleet select` と同じく `--rules` が在れば
+/// その file の宣言＝host の写しにだけ在る口座も数える・`s2-07l.224`）。宣言が無い manifest は空＝選定は候補なし。
+pub fn account_labels(manifest: &Manifest) -> Vec<String> {
+    manifest.accounts().iter().map(|account| account.label().to_owned()).collect()
 }
 
 /// 注入する 1 行と、それを送る周の席の状態（[`inject_line`] の入力）。
