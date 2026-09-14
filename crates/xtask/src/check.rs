@@ -146,7 +146,94 @@ pub fn inspect(root: &Path) -> Report {
     measured.push(crate::spawn_points::measure(&layout, &files));
     measured.push(crate::polarity::measure(&layout));
     measured.push(crate::prose_gate::measure(&layout));
+    measured.push(measure_seat_brief(&layout));
     fold(measured)
+}
+
+/// rules manifest の相対 path（seat-brief の権能の行と歯の fixture が共有する）。
+pub(crate) const RULES_REL: &str = "rules/manifest.toml";
+/// seat-brief（設計 seat-roles.md §5・憲法 C14.2・AC17）の tag。
+const BRIEF_TAG: &str = "seat-brief";
+/// 席の指示文の雛形の置き場（core の `src` 相対・`<役割名>.txt` が 1 枚ずつ）。
+const BRIEF_DIR: &str = "seat/brief";
+/// 権能の穴（rules 行の値の列で埋める）。
+const BRIEF_CAPABILITIES: &str = "{capabilities}";
+/// 雛形の定義済みの穴（core の `seat::brief::HOLES` と同じ列＝自 workspace の check が drift を捕まえる）。
+const BRIEF_HOLES: &[&str] = &[BRIEF_CAPABILITIES, "{target}", "{anchor}", "{role}"];
+/// 雛形の行の出所 pointer の区切り（退避物の命令行と同じ字面・この後ろの参照だけを pointer と読む）。
+const BRIEF_SSOT: &str = "→ SSOT:";
+/// 役割の rules 行 id の前置き（`role.<役割名>`）。
+const ROLE_ROW: &str = "role.";
+
+/// 席の指示文の雛形を測る（C14.2・AC17）: (i) 穴 ⊆ 定義済み・(ii) pointer を持たない行 0（空行と穴だけの行を除く）・
+/// (iii) rules 行 `role.<役割>` の値に在って生成文に無い権能 0。雛形 0 枚・行の無い役割・雛形の無い行も違反（fail-closed）。
+pub(crate) fn measure_seat_brief(layout: &Layout) -> Measured {
+    let dir = layout.core_dir.join("src").join(BRIEF_DIR);
+    let (manifest, entries) = match (read_text(&layout.root.join(RULES_REL)), read_dir_sorted(&dir)) {
+        (Ok(manifest), Ok(entries)) => (manifest, entries),
+        (Err(reason), _) | (_, Err(reason)) => return failed(BRIEF_TAG, &reason),
+    };
+    let rows = role_rows(&manifest);
+    let stem = |path: &PathBuf| path.file_stem().map(|found| found.to_string_lossy().into_owned()).unwrap_or_default();
+    let txt = entries.iter().filter(|path| path.extension().is_some_and(|ext| ext == "txt"));
+    let templates: Vec<(String, &PathBuf)> = txt.map(|path| (stem(path), path)).collect();
+    let orphan = rows.iter().filter(|(role, _)| !templates.iter().any(|(name, _)| name == role));
+    let missing = |role: &String| format!("{BRIEF_TAG}: rules 行 {ROLE_ROW}{role} の雛形 {}/{role}.txt が無い", dir.display());
+    let mut violations: Vec<String> = orphan.map(|(role, _)| missing(role)).collect();
+    if templates.is_empty() {
+        violations.push(format!("{BRIEF_TAG}: {} に雛形が 0 枚である", dir.display()));
+    }
+    for (role, path) in &templates {
+        let rel = path.strip_prefix(&layout.root).unwrap_or(path).display().to_string();
+        let Ok(text) = read_text(path).map_err(|reason| violations.push(format!("{BRIEF_TAG}: {reason}"))) else {
+            continue;
+        };
+        violations.extend(brief_line_violations(&rel, &text));
+        match rows.iter().find(|(name, _)| name == role) {
+            None => violations.push(format!("{BRIEF_TAG}: {rel}: rules 行 {ROLE_ROW}{role} が無い")),
+            Some((_, names)) => violations.extend(brief_missing_capabilities(&rel, &text, names)),
+        }
+    }
+    let fact = if violations.is_empty() { format!("{BRIEF_TAG}=ok") } else { format!("{BRIEF_TAG}={}", violations.len()) };
+    Measured { fact, violations }
+}
+
+/// manifest の `role.<役割>` の行（役割名と値の列・出現順・`enabled` は見ない＝不発効の行も雛形を要る）。
+fn role_rows(manifest: &str) -> Vec<(String, Vec<String>)> {
+    let rows = crate::toml_lite::sections(manifest).into_iter().filter(|(header, _)| *header == "[rule");
+    rows.filter_map(|(_, pairs)| {
+        let field = |key: &str| pairs.iter().find(|(found, _)| *found == key).map(|(_, value)| *value);
+        let id = field("id").and_then(quoted)?;
+        let role = id.strip_prefix(ROLE_ROW)?.to_owned();
+        Some((role, field("value").map(string_array).unwrap_or_default()))
+    })
+    .collect()
+}
+
+/// 雛形の行の違反（(i) 未知の穴・(ii) pointer を持たない行・`<rel>:<line>` 付き）。空行と穴だけの行は母集団の外で、
+/// 未知の穴は pointer の有無より先に見る（core の `seat::brief::classify_line` と同じ順）。
+fn brief_line_violations(rel: &str, text: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    for (at, line) in text.lines().enumerate() {
+        let stripped = BRIEF_HOLES.iter().fold(line.to_owned(), |text, hole| text.replace(hole, ""));
+        let brace = stripped.find('{').and_then(|open| stripped.get(open..));
+        let unknown = brace.and_then(|tail| tail.get(..=tail.find('}')?));
+        let tail = line.rsplit_once(BRIEF_SSOT).map(|(_, tail)| tail);
+        if let Some(hole) = unknown {
+            found.push(format!("{BRIEF_TAG}: {rel}:{}: unknown-hole {hole}", at.saturating_add(1)));
+        } else if !stripped.trim().is_empty() && tail.is_none_or(|tail| crate::prose_gate::pointer_spans(tail).is_empty()) {
+            let head: String = line.trim().chars().take(40).collect();
+            found.push(format!("{BRIEF_TAG}: {rel}:{}: no-pointer {head}", at.saturating_add(1)));
+        }
+    }
+    found
+}
+
+/// (iii) 権能の穴を rules 行の値で埋めた生成文に現れない権能の名（`<rel>` 付き）。
+fn brief_missing_capabilities(rel: &str, text: &str, names: &[String]) -> Vec<String> {
+    let rendered = text.replace(BRIEF_CAPABILITIES, &names.join("・"));
+    let dropped = names.iter().filter(|name| !rendered.contains(name.as_str()));
+    dropped.map(|name| format!("{BRIEF_TAG}: {rel}: 権能 {name} が生成文に無い（rules 行の値に在る）")).collect()
 }
 
 /// 純関数面（■D1）。`root` 配下を測り違反行の列を返す。`process::exit` はしない。
@@ -345,7 +432,7 @@ pub(crate) fn json_string_field(src: &str, key: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{check, shape, summary};
+    use super::{check, shape, summary, RULES_REL};
     use crate::genmanifest;
     use crate::limits::{ALLOWED_DEPS, MAX_FILE_LINES, REQUIRED_LINTS};
     use std::fs;
@@ -465,15 +552,19 @@ mod tests {
         );
         // 設計 doc も同じ（prose-gate は対象 0 本を違反に倒す）。印を持つ文は pointer 付きで適合。
         write_at(dir, PROSE_DOC_REL, "# 設計\n\n器は失敗を記録しなければならない（C1）。\n");
+        // 席の指示文の雛形も同じ（seat-brief は雛形 0 枚と行の無い役割を違反に倒す・`s2-07l.248`）。
+        write_at(dir, &brief_rel(), "{role} {target} {anchor} → SSOT: ADR-0022 §2.4\n{capabilities}\n");
     }
 
     /// fixture の設計 doc の相対 path。
     const PROSE_DOC_REL: &str = "docs/design/probe-7q.md";
 
-    /// rules manifest の相対 path。
-    const RULES_REL: &str = "rules/manifest.toml";
+    /// fixture の雛形の相対 path（rules manifest の `role.planner` の行と対）。
+    fn brief_rel() -> String {
+        format!("crates/{FIXTURE_CORE}/src/seat/brief/planner.txt")
+    }
 
-    /// fixture の rules manifest。`allow` に与えた path が例外行に載る。
+    /// fixture の rules manifest。`allow` に与えた path が例外行に載る。役割の行は planner 1 つ（権能 2 つ）。
     fn rules_manifest(allow: &[&str]) -> String {
         let items = allow
             .iter()
@@ -482,7 +573,9 @@ mod tests {
             .join(", ");
         format!(
             "[[rule]]\nid = \"repo.non_rust_exec_allow\"\nkind = \"RepoNonRustExecAllow\"\n\
-             value = [{items}]\nruling = \"fixture\"\nruled_at = \"2026-09-11\"\n"
+             value = [{items}]\nruling = \"fixture\"\nruled_at = \"2026-09-11\"\n\n\
+             [[rule]]\nid = \"role.planner\"\nkind = \"RoleCapabilities\"\nvalue = [\"answer\", \"relay\"]\n\
+             ruling = \"fixture\"\nruled_at = \"2026-09-14\"\n"
         )
     }
 
@@ -583,7 +676,7 @@ mod tests {
         lints-set=<v> lints-optin=<v>/<v> deps-empty=<v> toolchain-pin=<v>.<v>.<v> \
         paths-clean=<v> private-clean=<v> non-rust-exec=<v>/<v> allow=<v> ci-shell-lines=<v> \
         claude-md-constitution=<v> enum-slices=<v> claude-spawn-points=<v> polarity=<v>/<v> \
-        prose-gate=<v>/<v>";
+        prose-gate=<v>/<v> seat-brief=<v>";
 
     /// git を要する measure の fact（`.git` の無い木では測れない形になり、副 field も出ない）。
     fn is_git_fact(token: &str) -> bool {
@@ -1213,7 +1306,6 @@ mod tests {
         );
     }
 
-
     /// 例外行の **`[` 〜 `]` の中だけ**を読む（末尾コメントの引用符を拾わない）。
     ///
     /// `value = [...] # 旧 "x" は外した` の**注記が例外を 1 件増やす**形は、例外を減らす
@@ -1305,7 +1397,6 @@ mod tests {
         assert!(line.contains("ci-shell-lines=1"), "検出線の値を判定行へ出す: {line}");
     }
 
-
     /// 拡張子の照合は **大文字小文字を区別しない**（`.PY` は「拡張子 py の file」である）。
     ///
     /// 線引きの問題ではなく**同じ signal の取り落とし**（lens 2026-09-11・planner 裁定で本便の射程）。
@@ -1385,5 +1476,24 @@ mod tests {
         let line = summary(&dir);
         let _ = fs::remove_dir_all(&dir);
         assert!(line.contains(" prose-gate=0/1"), "健全な木は違反 0 / 母集団 1: {line}");
+    }
+
+    /// 雛形の 3 違反（AC17・C14.2・`s2-07l.248`）: pointer の無い行・未知の穴・権能を消した雛形はそれぞれ seat-brief
+    /// だけで落ち、行の違反は file:line を名指す。雛形を消すと行の無い役割 + 雛形 0 枚の 2 件。健全な木は `seat-brief=ok`。
+    #[test]
+    fn seat_brief_rejects_bare_lines_unknown_holes_and_dropped_capabilities() {
+        let bare = check_fixture(|dir| write_at(dir, &brief_rel(), "{capabilities}\n席は lock を確保する\n"));
+        assert_single(&bare, "seat-brief");
+        assert!(bare.first().is_some_and(|line| line.contains(&format!("{}:2: no-pointer", brief_rel()))), "file:line 付き: {bare:?}");
+        let unknown = check_fixture(|dir| write_at(dir, &brief_rel(), "{capabilities} {model} → SSOT: N2\n"));
+        assert_single(&unknown, "seat-brief");
+        assert!(unknown.first().is_some_and(|line| line.contains(":1: unknown-hole {model}")), "{unknown:?}");
+        let dropped = check_fixture(|dir| write_at(dir, &brief_rel(), "権能は answer だけ → SSOT: ADR-0022 §2.2\n"));
+        assert_single(&dropped, "seat-brief");
+        assert!(dropped.first().is_some_and(|line| line.contains("権能 relay が生成文に無い")), "{dropped:?}");
+        let orphan = check_fixture(|dir| drop(fs::remove_file(dir.join(brief_rel()))));
+        assert_eq!(orphan.iter().filter(|line| line.starts_with("seat-brief: ")).count(), 2, "{orphan:?}");
+        let ok = summary_fixture(|_| {});
+        assert!(ok.contains(" seat-brief=ok"), "健全な木: {ok}");
     }
 }

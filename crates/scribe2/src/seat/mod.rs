@@ -11,6 +11,7 @@
 //! 出力は行を組んで返すだけで、stdout / stderr へは bin 側の `emit` / `emit_err` が
 //! 書く（憲法 C2）。
 
+pub mod brief;
 pub mod cli;
 pub mod consume;
 pub mod cycle;

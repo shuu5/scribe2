@@ -11,10 +11,12 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use vessel::cli_outcome::{RC_BROKEN, RC_OK, RC_REFUSED};
-use vessel::fleet::json_lite;
+use vessel::fleet::{json_lite, Registration};
 use vessel::hook::vessel::{Marker, GENERATION, MARKER};
 use vessel::hook::{guard, inject_path, SCHEMA};
 use vessel::name::NAME;
+use vessel::seat::brief;
+use vessel::seat::role::{Capability, Role};
 
 /// binary の path。
 fn bin() -> &'static str {
@@ -2232,4 +2234,139 @@ fn hook_role_reads_the_command_line_through_json_escapes() {
     assert!(text.contains("role.planner"), "{text}");
     drop(admin);
     clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
+// ---- 席の指示文（設計 seat-roles.md §5・ADR-0022 §2.4・FR42 / FR44・AC17・`s2-07l.248`）----
+// 登録済みの席の SessionStart は名乗りの後ろに役割の雛形 + rules 行から生成した指示文を出す。登録の無い席は 0 byte。
+
+/// fixture の権能の名を typed に引く（列に無い名は fixture の欠陥＝落とす）。
+fn brief_caps(names: &[&str]) -> Vec<Capability> {
+    let found: Vec<Capability> = names.iter().filter_map(|name| Capability::parse(name)).collect();
+    assert_eq!(found.len(), names.len(), "fixture の権能の名はすべて列に在る: {names:?}");
+    found
+}
+
+/// 登録 row（`seat register` が積む値と同じ target / anchor・残りは生成文の穴でない）。
+fn brief_registration(role: Role, target: &str, anchor: &str) -> Registration {
+    Registration {
+        role,
+        anchor: anchor.to_owned(),
+        target: target.to_owned(),
+        sid: "sid-brief".to_owned(),
+        account: "a1".to_owned(),
+        launch: "claude\n".to_owned(),
+        model: None,
+    }
+}
+
+/// session-start を撃ち（rc 0・stderr 0 byte）、名乗りの 1 行を確かめて**その後ろの行**を返す。
+fn brief_lines(place: &RolePlace, pane: &str, extra: &[&str]) -> Vec<String> {
+    let mut args = vec!["session-start", "--pane", pane, "--tmux-socket", &place.socket];
+    args.extend_from_slice(extra);
+    let out = run_hook_args(&args, &stamp_payload(&place.repo, "sid-brief"));
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "session-start は rc 0: {}", stderr_text(&out));
+    assert_eq!(stderr_text(&out), "", "指示文を出せる周は stderr 0 byte");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let mut lines = stdout.lines();
+    let header = lines.next().unwrap_or_default();
+    assert!(header.starts_with(&format!("[{NAME}/SessionStart] served version=")), "名乗りは 1 行目のまま: {stdout}");
+    lines.map(str::to_owned).collect()
+}
+
+/// (a) 登録済みの target の SessionStart で生成文が名乗りの後ろに出て、権能の名がすべて含まれる（planner / admin の
+/// 2 fixture）。生成文は `render`（雛形の穴に登録 row の target / anchor と fixture の rules 行の値）と**同じ字面**で、
+/// 記録は名乗り + 指示文の 2 行（指示文の `bytes` は生成文の byte 数・席を名乗る）。`--rules` 無し（埋め込み manifest）
+/// でも同じ経路で出る＝裁定の値が binary に在る。
+#[test]
+fn hook_brief_session_start_emits_the_role_brief_with_every_capability() {
+    let place = role_place();
+    let embedded = vessel::rules::manifest::Manifest::embedded().unwrap_or_else(|errors| panic!("埋め込み manifest: {errors:?}"));
+    for (name, role, caps) in [("briefplanner", Role::Planner, PLANNER_CAPS), ("briefadmin", Role::Admin, ADMIN_CAPS)] {
+        let (seat, pane) = role_seat(&place, name, Some(role.as_str()));
+        let target = format!("{name}:{name}");
+        let registration = brief_registration(role, &target, &place.repo.display().to_string());
+        let before = inject_lines(&place.state).len();
+        let body = brief_lines(&place, &pane, &["--rules", &place.rules]);
+        let expected = brief::render(role, &registration, &brief_caps(caps));
+        assert_eq!(format!("{}\n", body.join("\n")), expected, "{name}: 生成文は render と同じ字面");
+        assert!(body.len() >= 5, "{name}: 設計 §5 の項目を持つ: {body:?}");
+        for cap in caps {
+            assert!(body.iter().any(|line| line.contains(cap)), "{name}: 権能 {cap} の名が生成文に現れる: {body:?}");
+        }
+        assert!(body.iter().any(|line| line.contains(&target) && line.contains(&place.repo.display().to_string())), "{name}: target と anchor の穴: {body:?}");
+        let lines = inject_lines(&place.state);
+        assert_eq!(lines.len(), before + 2, "{name}: 記録は名乗り + 指示文の 2 行: {lines:?}");
+        let last = lines.last().cloned().unwrap_or_default();
+        assert_eq!(what_of(&last), "session-start-brief", "{last}");
+        assert_eq!(value_of(&last, "bytes"), Some(json_lite::Value::Num(expected.len() as u64)), "bytes は生成文の byte 数: {last}");
+        assert_attributed(&last, Some(&format!("{name}_{name}")), "指示文の記録");
+        // 埋め込み manifest（`--rules` 無し）でも同じ経路。
+        let held = brief::capabilities_of(&embedded, role).unwrap_or_else(|| panic!("{name}: 埋め込みに行が在る"));
+        let body = brief_lines(&place, &pane, &[]);
+        assert_eq!(format!("{}\n", body.join("\n")), brief::render(role, &registration, &held), "{name}: 埋め込みの行の値");
+        drop(seat);
+    }
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
+/// (b) 登録の無い target で 0 byte（名乗りの 1 行だけ・断りも出さない・記録は名乗りの 1 行だけ）。`--pane` 無し・
+/// 解けない pane id も同じ（席ではない＝注入しない）。
+#[test]
+fn hook_brief_is_silent_for_an_unregistered_target() {
+    let place = role_place();
+    let (seat, pane) = role_seat(&place, "briefghost", None);
+    let before = inject_lines(&place.state).len();
+    assert_eq!(brief_lines(&place, &pane, &["--rules", &place.rules]), Vec::<String>::new(), "登録の無い席は 0 byte");
+    assert_eq!(brief_lines(&place, "%99999", &["--rules", &place.rules]), Vec::<String>::new(), "解けない pane も 0 byte");
+    let out = run_hook_args(&["session-start", "--rules", &place.rules], &stamp_payload(&place.repo, "sid-brief"));
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)));
+    assert_eq!(String::from_utf8_lossy(&out.stdout).lines().count(), 1, "--pane 無しは名乗りだけ");
+    let lines = inject_lines(&place.state);
+    assert_eq!(lines.len(), before + 3, "記録は名乗りの 3 行だけ（指示文の記録は増えない）: {lines:?}");
+    assert!(lines.iter().skip(before).all(|line| what_of(line) == "session-start-header"), "{lines:?}");
+    drop(seat);
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
+/// 読めない周は黙って 0 byte にしない: event log が壊れている（registry-unreadable）・rules 行が読めない
+/// （rules-unreadable）・行の無い役割（no-row）は名乗りの後ろに指示文を出さず stderr に理由 1 行（rc 0 のまま＝席は止めない）。
+#[test]
+fn hook_brief_names_the_reason_when_it_cannot_resolve_capabilities() {
+    let place = role_place();
+    let (seat, pane) = role_seat(&place, "briefbroken", Some("admin"));
+    let payload = stamp_payload(&place.repo, "sid-brief");
+    let refused = |extra: &[&str], reason: &str| {
+        let mut args = vec!["session-start", "--pane", &pane, "--tmux-socket", &place.socket];
+        args.extend_from_slice(extra);
+        let out = run_hook_args(&args, &payload);
+        assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{reason}: 席は止めない");
+        assert_eq!(String::from_utf8_lossy(&out.stdout).lines().count(), 1, "{reason}: 名乗りだけ");
+        assert_eq!(stderr_lines(&out), 1, "{reason}: 理由 1 行: {}", stderr_text(&out));
+        assert!(stderr_text(&out).contains(&format!("reason={reason}")), "{reason}: {}", stderr_text(&out));
+    };
+    let planner_only = place.sock_dir.join("planner-only.toml");
+    fs::write(&planner_only, role_rules_text(PLANNER_CAPS, None)).unwrap_or_else(|err| panic!("rules: {err}"));
+    refused(&["--rules", &planner_only.display().to_string()], "no-row role.admin");
+    let missing = place.sock_dir.join("missing.toml").display().to_string();
+    refused(&["--rules", &missing], "rules-unreadable");
+    let events = vessel::fleet::store::events_path(&place.state);
+    let mut file = fs::OpenOptions::new().append(true).open(&events).unwrap_or_else(|err| panic!("events: {err}"));
+    writeln!(file, "こわれた行").unwrap_or_else(|err| panic!("events: {err}"));
+    refused(&["--rules", &place.rules], "registry-unreadable");
+    drop(seat);
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
+/// (c) 生成文の外形 snapshot（C12.5・穴は fixture の固定値・権能は裁定の値と同じ fixture の列）。
+#[test]
+fn hook_brief_planner_external_form() {
+    let registration = brief_registration(Role::Planner, "fixture:planner", "/srv/anchor");
+    insta::assert_snapshot!("hook_brief_planner", brief::render(Role::Planner, &registration, &brief_caps(PLANNER_CAPS)));
+}
+
+/// (c) 管理席の生成文の外形 snapshot。
+#[test]
+fn hook_brief_admin_external_form() {
+    let registration = brief_registration(Role::Admin, "fixture:admin", "/srv/anchor");
+    insta::assert_snapshot!("hook_brief_admin", brief::render(Role::Admin, &registration, &brief_caps(ADMIN_CAPS)));
 }

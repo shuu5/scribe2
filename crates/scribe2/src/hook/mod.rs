@@ -23,6 +23,7 @@ use crate::fleet::json_lite::{self, Value};
 use crate::fleet::json_tree;
 use crate::fleet::store::{self, LockPolicy, StoreError};
 use crate::name::NAME;
+use crate::rules::manifest::Manifest;
 use crate::seat::state::Event;
 use guard::Decision;
 use permission::PermissionDecision;
@@ -412,7 +413,53 @@ fn session_start(hooked: &Hooked, version: u64, started: Instant) -> Outcome {
     let entry = record(&emit, hooked, started);
     let mut outcome = Outcome::ok_line(line);
     outcome.err = record_lines(hooked.dir, &entry);
+    brief(hooked, &mut outcome, started);
     outcome
+}
+
+/// 記録の `what`（席の指示文）。
+const WHAT_BRIEF: &str = "session-start-brief";
+
+/// 席の指示文を名乗りの後ろへ出す（設計 seat-roles.md §5・ADR-0022 §2.4・FR42）: pane → target → 登録 row で役割を解き、
+/// 役割の雛形と rules 行 `role.<役割>` の値から生成した文を stdout に足し、記録 1 行（`what` = [`WHAT_BRIEF`]）を残す。
+///
+/// **登録の無い席・pane の無い周・target が解けない周は 0 byte**（断りも出さない・記録も増やさない）。読めない周
+/// （event log・rules 行）は guard と同じ理由の 1 語を stderr に 1 行（席は止めない＝rc は変えない・注入は guard で
+/// はない・設計 §6）。
+fn brief(hooked: &Hooked, outcome: &mut Outcome, started: Instant) {
+    let Some(pane) = hooked.pane.filter(|found| !found.trim().is_empty()) else {
+        return;
+    };
+    let socket = hooked.socket.filter(|found| !found.trim().is_empty());
+    let Some(target) = crate::seat::target_of_pane(socket, pane) else {
+        return;
+    };
+    let Ok(events) = store::read_all(hooked.dir) else {
+        outcome.err.push(brief_refused("registry-unreadable"));
+        return;
+    };
+    let state = crate::fleet::replay(&events);
+    let Some(row) = crate::seat::role::registration_of_target(&state, &target) else {
+        return;
+    };
+    let manifest = hooked.rules.map_or_else(Manifest::embedded, |path| Manifest::load(Path::new(path)));
+    let Ok(manifest) = manifest else {
+        outcome.err.push(brief_refused("rules-unreadable"));
+        return;
+    };
+    let Some(capabilities) = crate::seat::brief::capabilities_of(&manifest, row.role) else {
+        outcome.err.push(brief_refused(&format!("no-row {}", role_guard::row_id(row.role))));
+        return;
+    };
+    let text = crate::seat::brief::render(row.role, row, &capabilities);
+    let emit = Emit { who: EVENT_SESSION_START, what: WHAT_BRIEF, when: "SessionStart", line: text.trim_end_matches('\n') };
+    outcome.err.extend(record_lines(hooked.dir, &record(&emit, hooked, started)));
+    outcome.out.extend(text.lines().map(str::to_owned));
+}
+
+/// 指示文を出せない周の 1 行（理由の 1 語つき・guard の断りと同じ形）。
+fn brief_refused(reason: &str) -> String {
+    format!("{NAME}: 席の指示文を出せない reason={reason}（席の登録 row と rules 行から権能を解けない）")
 }
 
 /// 編集と権能付きの操作を行為の時点で止める。deny は rc 2 + stderr 1 行 + stdout 0 byte。
