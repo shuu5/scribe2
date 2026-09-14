@@ -8077,9 +8077,11 @@ fn seat_exit_refuses_when_the_input_line_is_busy() {
     fs::remove_dir_all(&place.dir).ok();
 }
 
-/// (e) back-off: exit-stamp が `seat.tick_stale_s` 未満の前で前面が shell でない（`/exit` が効かなかった席）なら送らず
-/// （`cycle-recent`）打ち直しもしない（打ち直すと永久に止まる）。stamp が閾値以上前になった周は同じ入口から送る（打ち直す）。
-/// base は exit-stamp を読まず 1 周目に送る（RED・`s2-07l.252` (3d)）。
+/// (e) back-off: exit-stamp が `seat.tick_stale_s` 未満の前で前面が shell でない（`/exit` が効かなかった席）なら `/exit` を
+/// **送り直さず**（席が受ける行は 0・`s2-07l.252` (3d)）stamp も打ち直さない（打ち直すと永久に止まる）。その周は見送りでなく
+/// 第 2 手＝停止（`s2-07l.259`・account-autonomy.md §5「終了の手の第 2 手」）: 前面の `head` を TERM で止めて終了を確定し
+/// （`kind=exit detail=terminated`）、前面は shell へ戻る。stamp が閾値以上前になった周が第 1 手から送り直す極性は
+/// `seat_exit_stop_resends_exit_when_the_stamp_is_stale` が持つ。base（.252 以前）は exit-stamp を読まず 1 周目に送る（RED）。
 #[test]
 fn seat_exit_stamp_recent_does_not_resend_exit() {
     let place = acct_place();
@@ -8092,22 +8094,14 @@ fn seat_exit_stamp_recent_does_not_resend_exit() {
     let first = acct_tick(&place, name, None);
 
     let line = stdout_of(&first);
-    assert_eq!(rc_of(&first), i32::from(RC_OK), "1 周目: stdout={line} stderr={}", stderr_of(&first));
-    for (key, want) in [("decision", "noop"), ("reason", "cycle-recent")] {
-        assert_eq!(tick_token(&line, key).as_deref(), Some(want), "1 周目 {key}: {line}");
+    assert_eq!(rc_of(&first), i32::from(RC_OK), "stdout={line} stderr={}", stderr_of(&first));
+    for (key, want) in [("decision", "inject"), ("kind", "exit"), ("detail", "terminated")] {
+        assert_eq!(tick_token(&line, key).as_deref(), Some(want), "{key}: {line}");
     }
-    assert_eq!(exit_received(&place), "", "1 周目: 1 key も送らない");
-    assert_eq!(mtime_of(&stamp), stamped_at, "1 周目: 見送った周は stamp を打ち直さない");
-    assert_eq!(exit_foreground(&place, name), "head", "1 周目: 席は生きたまま");
-
-    backdate(&stamp, STALE_S + 1);
-    let second = acct_tick(&place, name, None);
-
-    let line = stdout_of(&second);
-    assert_eq!(rc_of(&second), i32::from(RC_OK), "2 周目: stdout={line} stderr={}", stderr_of(&second));
-    assert_eq!(tick_token(&line, "kind").as_deref(), Some("exit"), "2 周目: stamp が古くなれば送る: {line}");
-    assert_eq!(exit_received(&place), "/exit\n", "2 周目: 席が /exit を受ける");
-    assert!(mtime_of(&stamp) > stamped_at, "2 周目: 送った周は stamp を打ち直す");
+    assert_eq!(exit_received(&place), "", "/exit を送り直さない（head は 1 行も受けずに止められた）");
+    assert_eq!(mtime_of(&stamp), stamped_at, "第 2 手の周は stamp を打ち直さない");
+    assert_eq!(acct_sent(&place.state, name).len(), 1, "席の記録は退避の合図だけ（/exit の行は増えない）");
+    assert!(exit_wait_foreground(&place, name, "sh"), "head が止まり前面は shell へ戻る");
     drop(guard);
     fs::remove_dir_all(&place.dir).ok();
 }
@@ -8287,6 +8281,245 @@ fn seat_exit_stamp_cycle_stamp_still_holds_the_relaunch() {
     assert_eq!(tick_token(&line, "kind"), None, "注入していない: {line}");
     assert!(!place.dir.join("launched").exists(), "起動しない");
     assert!(!dir.join("exit-stamp").exists(), "exit-stamp は打たない");
+    drop(guard);
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+// ─────────────────── 終了の手の第 2 手 = 停止（account-autonomy.md §5・`s2-07l.259`・接頭辞 `seat_exit_stop_`） ───────────────────
+
+/// 前面の子が終わった後に pane の shell が写す `$?` の置き場（143 = TERM・137 = KILL・shell の慣習 128 + signal 番号＝
+/// どの signal で止まったかを歯が pane の字面を読まずに知る）。
+const STOP_RC_LOG: &str = "stop-rc.log";
+
+/// pane の shell の pid（`#{pane_pid}`・器の入口と同じ typed な読み・歯の側で撃つ）。
+fn stop_pane_pid(place: &AcctPlace, name: &str) -> Option<u32> {
+    let out = tmux(&place.socket, &["list-panes", "-t", name, "-F", "#{pane_pid}"]);
+    String::from_utf8_lossy(&out.stdout).trim().parse().ok()
+}
+
+/// `parent` の直下の子の pid（`/proc/*/stat` の ppid を**歯の側で**読む＝器の読み手を使わない・複数なら最大）。
+fn stop_child_of(parent: u32) -> Option<u32> {
+    let ppid_of = |pid: u32| {
+        let text = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        text.rsplit_once(')')?.1.split_whitespace().nth(1)?.parse::<u32>().ok()
+    };
+    fs::read_dir("/proc")
+        .ok()?
+        .flatten()
+        .filter_map(|entry| entry.file_name().to_str()?.parse::<u32>().ok())
+        .filter(|pid| ppid_of(*pid) == Some(parent))
+        .max()
+}
+
+/// pane の shell の直下の子（[`stop_pane_pid`] → [`stop_child_of`]）。
+fn stop_child(place: &AcctPlace, name: &str) -> Option<u32> {
+    stop_pane_pid(place, name).and_then(stop_child_of)
+}
+
+/// pid が `/proc` に在るか（回収された process は無い）。
+fn stop_alive(pid: u32) -> bool {
+    Path::new(&format!("/proc/{pid}")).exists()
+}
+
+/// 退避して止まり、`/exit` が通らない席の fixture（dialog の型）: [`exit_parked`] と同じ入口 (1)(2) と退避物の後、pane の
+/// shell に `printf '❯ '; <child>; echo $? >> stop-rc.log` を打つ。`child` は stdin を読まない（`/exit` は tty に溜まり誰も
+/// 読まない＝前面は shell に戻らない）。前面が `sleep` になるまで待つ（`exec` の後を確かめる・撃つ前の待ち）。
+fn stop_parked(place: &AcctPlace, name: &str, child: &str) -> IsolatedSeat {
+    let guard = start_seat(&place.socket, name);
+    assert!(guard.ready(), "独立 socket に session を立てられる");
+    acct_parked(place, name, &acct_launcher(place, name), 30);
+    wm_file(&place.wm, "working-memory.parked.md", name);
+    let line = format!("printf '\\342\\235\\257 '; {child}; echo $? >> '{}'", place.dir.join(STOP_RC_LOG).display());
+    assert!(tmux(&place.socket, &["send-keys", "-t", name, "-l", &line]).status.success());
+    assert!(tmux(&place.socket, &["send-keys", "-t", name, "Enter"]).status.success());
+    assert!(exit_wait_foreground(place, name, "sleep"), "前面が sleep の席を作れる");
+    guard
+}
+
+/// 1 周目（第 1 手）: `/exit` を送るが前面は shell にならず `exit-unconfirmed`（rc 1）・exit-stamp が打たれる。stamp の mtime を返す。
+fn stop_first_round(place: &AcctPlace, name: &str) -> SystemTime {
+    let first = acct_tick(place, name, None);
+    let line = stderr_of(&first);
+    assert_eq!(rc_of(&first), i32::from(RC_REFUSED), "1 周目: stdout={} stderr={line}", stdout_of(&first));
+    assert_eq!(tick_token(&line, "reason").as_deref(), Some("exit-unconfirmed"), "1 周目: {line}");
+    let stamp = seat_dir_of(&place.state, name).join("exit-stamp");
+    assert!(stamp.exists(), "1 周目: exit-stamp を打つ");
+    mtime_of(&stamp)
+}
+
+/// pane の shell が子の `$?` を写すまで待って読む（子が止まった**後**の shell の後始末を待つ・停止そのものの待ちではない）。
+fn stop_rc(place: &AcctPlace) -> String {
+    let path = place.dir.join(STOP_RC_LOG);
+    let deadline = Instant::now().checked_add(PROMPT_WAIT);
+    while deadline.is_some_and(|at| Instant::now() < at) {
+        let text = fs::read_to_string(&path).unwrap_or_default();
+        if !text.is_empty() {
+            return text;
+        }
+        sleep(Duration::from_millis(100));
+    }
+    String::new()
+}
+
+/// 停止して終了を確定した周の判定行と記録: `decision=inject kind=exit detail=terminated consumed=true`・exit-stamp は back-off の
+/// 内側（`none` でない）・`inject.jsonl` の最新行が同じ字面（立て直しの入口 (1) の読み先）。
+fn stop_assert_terminated(place: &AcctPlace, name: &str, out: &Output) {
+    let line = stdout_of(out);
+    assert_eq!(rc_of(out), i32::from(RC_OK), "stdout={line} stderr={}", stderr_of(out));
+    for (key, want) in [("decision", "inject"), ("kind", "exit"), ("detail", "terminated"), ("consumed", "true")] {
+        assert_eq!(tick_token(&line, key).as_deref(), Some(want), "{key}: {line}");
+    }
+    assert!(tick_token(&line, "exit-stamp").is_some_and(|age| age != "none"), "back-off の内側: {line}");
+    assert!(line.contains(" kind=exit detail=terminated "), "detail は kind の直後: {line}");
+    let log = fs::read_to_string(place.state.join("inject.jsonl")).unwrap_or_default();
+    let last = log.lines().last().unwrap_or_default();
+    assert_eq!(acct_text(last, "who").as_deref(), Some("seat-tick"), "{log}");
+    assert_eq!(acct_text(last, "seat").as_deref(), Some(name), "{log}");
+    assert!(acct_text(last, "what").is_some_and(|what| what.contains(" kind=exit detail=terminated ")), "判定行と同じ字面: {log}");
+}
+
+/// (a) `/exit` が通らない席（前面の子 `sleep` は stdin を読まない＝dialog の型）: 1 周目は `exit-unconfirmed`・exit-stamp あり。
+/// 2 周目（stamp が閾値未満・前面が shell でない）は `/exit` を再送せず pane の shell の子を TERM で止め、判定行は
+/// `kind=exit detail=terminated`・子は唯一の wait で待ってから返るので `/proc` に無い（歯は poll しない）・shell が写した
+/// `$?` は 143（= TERM）・exit-stamp は打ち直さない。base は 2 周目が `cycle-recent` の noop で子が生きたまま（RED）。
+#[test]
+fn seat_exit_stop_terminates_the_child_with_term_when_exit_is_unconfirmed() {
+    let place = acct_place();
+    let name = "stopterm";
+    let guard = stop_parked(&place, name, "sleep 30");
+    let child = stop_child(&place, name).unwrap_or_default();
+    assert!(child >= 2, "pane の shell の子 sleep が取れる");
+    let stamped_at = stop_first_round(&place, name);
+    assert!(stop_alive(child), "1 周目: 子は生きている（/exit は通らない）");
+
+    let out = acct_tick(&place, name, None);
+
+    stop_assert_terminated(&place, name, &out);
+    assert!(!stop_alive(child), "2 周目: 子は消えてから返る");
+    assert_eq!(stop_rc(&place), "143\n", "shell が写した $? は 143 = TERM で止まった");
+    assert_eq!(mtime_of(&seat_dir_of(&place.state, name).join("exit-stamp")), stamped_at, "停止の周は exit-stamp を打ち直さない");
+    stop_assert_exit_sent_once(&place, name);
+    drop(guard);
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// 席の記録は 退避の合図 → `/exit` の 2 行のまま（第 2 手は 1 key も送らない＝`/exit` を再送しない）。
+fn stop_assert_exit_sent_once(place: &AcctPlace, name: &str) {
+    let sent = acct_sent(&place.state, name);
+    assert_eq!(sent.len(), 2, "退避の合図・/exit の 2 行だけ: {sent:?}");
+    assert_eq!(sent.get(1).map(String::as_str), Some("/exit"), "2 行目は 1 周目の /exit: {sent:?}");
+}
+
+/// (b) TERM を無視する子（`trap '' TERM` を `exec` で継いだ `sleep`・前面が `sleep` になってから撃つ＝SIG_IGN の継承が確定）:
+/// 2 周目は TERM → 猶予（`pipe.stop_grace_ms`）→ KILL で止め、判定行は同じ `detail=terminated`・shell が写した `$?` は
+/// 137（= KILL）。base は `cycle-recent` の noop（RED）。
+#[test]
+fn seat_exit_stop_kills_the_child_that_ignores_term() {
+    let place = acct_place();
+    let name = "stopkill";
+    let guard = stop_parked(&place, name, "sh -c 'trap \"\" TERM; exec sleep 30'");
+    let child = stop_child(&place, name).unwrap_or_default();
+    assert!(child >= 2, "pane の shell の子 sleep が取れる");
+    let stamped_at = stop_first_round(&place, name);
+    assert!(stop_alive(child), "1 周目: 子は生きている");
+
+    let out = acct_tick(&place, name, None);
+
+    stop_assert_terminated(&place, name, &out);
+    assert!(!stop_alive(child), "2 周目: 子は消えてから返る");
+    assert_eq!(stop_rc(&place), "137\n", "shell が写した $? は 137 = KILL で止まった（TERM は無視された）");
+    assert_eq!(mtime_of(&seat_dir_of(&place.state, name).join("exit-stamp")), stamped_at, "停止の周は exit-stamp を打ち直さない");
+    stop_assert_exit_sent_once(&place, name);
+    drop(guard);
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (c) pane の shell の子が取れない席（shell 自身が `exec sleep` に置き換わり、前面は shell でないが直下の子が無い）: 2 周目は
+/// 撃たず `decision=error reason=exit-pane-missing`（rc 1）・pane の process は生きたまま・`/exit` も再送しない・exit-stamp も
+/// 打ち直さない。base は `cycle-recent` の noop（RED）。
+#[test]
+fn seat_exit_stop_refuses_when_the_pane_has_no_child() {
+    let place = acct_place();
+    let name = "stopnochild";
+    let guard = stop_parked(&place, name, "exec sleep 30");
+    let pane = stop_pane_pid(&place, name).unwrap_or_default();
+    assert!(pane >= 2, "pane の pid が取れる");
+    assert_eq!(stop_child(&place, name), None, "pane の process に子は無い");
+    let stamped_at = stop_first_round(&place, name);
+
+    let out = acct_tick(&place, name, None);
+
+    let line = stderr_of(&out);
+    assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "stdout={} stderr={line}", stdout_of(&out));
+    for (key, want) in [("decision", "error"), ("reason", "exit-pane-missing")] {
+        assert_eq!(tick_token(&line, key).as_deref(), Some(want), "{key}: {line}");
+    }
+    assert!(tick_token(&line, "exit-stamp").is_some_and(|age| age != "none"), "back-off の内側: {line}");
+    assert!(stop_alive(pane), "pane の process は生きたまま");
+    assert_eq!(exit_foreground(&place, name), "sleep", "前面は sleep のまま");
+    assert_eq!(mtime_of(&seat_dir_of(&place.state, name).join("exit-stamp")), stamped_at, "exit-stamp を打ち直さない");
+    stop_assert_exit_sent_once(&place, name);
+    assert!(!place.dir.join(STOP_RC_LOG).exists(), "何も止めていない");
+    drop(guard);
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (d) 2 周目に前面が shell になっている（`/exit` が遅れて通った・exit-stamp は閾値未満）: 停止せず立て直しの入口へ
+/// （`kind=relaunch`・`detail=` 無し・既存 `seat_relaunch_` の歯と同じ結果）。exit-stamp は触られない。
+#[test]
+fn seat_exit_stop_does_not_stop_a_shell_and_relaunches_instead() {
+    let place = acct_place();
+    let name = "stopshell";
+    let guard = start_seat(&place.socket, name);
+    assert!(guard.ready(), "独立 socket に shell の session を立てられる");
+    acct_parked(&place, name, &acct_launcher(&place, name), 30);
+    wm_file(&place.wm, "working-memory.parked.md", name);
+    assert!(acct_shell_prompt(&place, name, ""), "shell の prompt を描ける");
+    let stamp = seat_dir_of(&place.state, name).join("exit-stamp");
+    fs::write(&stamp, "0\n").ok();
+    let stamped_at = mtime_of(&stamp);
+
+    let out = acct_tick(&place, name, None);
+
+    let line = stdout_of(&out);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stdout={line} stderr={}", stderr_of(&out));
+    for (key, want) in [("decision", "inject"), ("kind", "relaunch"), ("relaunch", ACCT_SPARE), ("cycle-stamp", "none")] {
+        assert_eq!(tick_token(&line, key).as_deref(), Some(want), "{key}: {line}");
+    }
+    assert_eq!(tick_token(&line, "detail"), None, "停止していない: {line}");
+    assert_eq!(mtime_of(&stamp), stamped_at, "exit-stamp は触らない");
+    acct_assert_launched_then_restored(&place, name);
+    drop(guard);
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (e) exit-stamp が閾値より古い周は第 1 手 `/exit` から（既存の極性）: 前面の子 `sleep` は止めず、`/exit` を送り直して
+/// `exit-unconfirmed`（rc 1）・stamp は打ち直される・子は生きたまま・`detail=` 無し。
+#[test]
+fn seat_exit_stop_resends_exit_when_the_stamp_is_stale() {
+    let place = acct_place();
+    let name = "stopstale";
+    let guard = stop_parked(&place, name, "sleep 30");
+    let child = stop_child(&place, name).unwrap_or_default();
+    assert!(child >= 2, "pane の shell の子 sleep が取れる");
+    let stamp = seat_dir_of(&place.state, name).join("exit-stamp");
+    fs::write(&stamp, "0\n").ok();
+    backdate(&stamp, STALE_S + 1);
+    let stamped_at = mtime_of(&stamp);
+
+    let out = acct_tick(&place, name, None);
+
+    let line = stderr_of(&out);
+    assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "stdout={} stderr={line}", stdout_of(&out));
+    for (key, want) in [("decision", "error"), ("reason", "exit-unconfirmed")] {
+        assert_eq!(tick_token(&line, key).as_deref(), Some(want), "{key}: {line}");
+    }
+    assert_eq!(tick_token(&line, "detail"), None, "停止していない: {line}");
+    assert!(mtime_of(&stamp) > stamped_at, "第 1 手は stamp を打ち直す");
+    assert!(stop_alive(child), "子は生きたまま");
+    assert_eq!(exit_foreground(&place, name), "sleep", "前面は sleep のまま");
+    assert_eq!(acct_sent(&place.state, name).last().map(String::as_str), Some("/exit"), "/exit を送り直した");
+    assert!(!place.dir.join(STOP_RC_LOG).exists(), "何も止めていない");
     drop(guard);
     fs::remove_dir_all(&place.dir).ok();
 }

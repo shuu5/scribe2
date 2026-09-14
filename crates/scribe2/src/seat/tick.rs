@@ -35,6 +35,9 @@
 //! [`inject::guard_input`]）を通して注入し（`kind=exit`）、exit-stamp を打つ（cycle-stamp と別の 1 本・再送しない・
 //! `s2-07l.252`）。送達は前面が shell になったかで確かめ、次の周は立て直しの入口が立つ（入口 (1) は「直近の注入が
 //! `externalize` か `exit`」・立て直しは cycle-stamp だけを読む）。失うものが無い席（退避済み ∧ Stop）にだけ送る（N1）。
+//! **第 2 手 = 停止**（`s2-07l.259`）: `/exit` が通らない周（背景の仕事を持つ席の終了確認 dialog・実地 2026-09-14）は
+//! exit-stamp の back-off の内側で pane の shell の直下の子を TERM → KILL で止めて終了を確定する（[`stop_seat`]・
+//! 待ちは唯一の wait・記録は `kind=exit detail=terminated`）。人手（Enter）を待たない（C9）。
 //!
 //! **席の busy / idle は hook の打刻（[`state`]）が一次で、pane の字面は判定入力にしない**（憲法 C3.3・
 //! ADR-0015）。打刻が無い・読めない・Busy が古い周は理由を分けて注入しない（fail-closed）。pane を
@@ -72,6 +75,12 @@ const REASON_STATE_DIR: &str = "state-dir";
 const REASON_STAMP: &str = "stamp-unwritable";
 /// `/exit` を送ったが窓の内に前面が shell にならない（`exit-` を前置きして `exit-unconfirmed`・`s2-07l.252`）。
 const REASON_EXIT_UNCONFIRMED: &str = "unconfirmed";
+/// 第 2 手の停止（TERM → KILL）の後も猶予の内に前面の子が消えない（`exit-unstoppable`・`s2-07l.259`・次の周も同じ入口）。
+const REASON_EXIT_UNSTOPPABLE: &str = "unstoppable";
+/// 第 2 手で終了を確定した周に `kind=exit` の判定行へ足す token の値（`detail=terminated`・`InjectKind` は増やさない）。
+const DETAIL_TERMINATED: &str = "terminated";
+/// 第 2 手の停止の猶予（ms）を宣言する rules 行の id（`pipe stop` / `fleet usage` と共用・新しい行を足さない・C5）。
+const ROW_GRACE: &str = "pipe.stop_grace_ms";
 /// 退避を促す 1 行の skill 名（席の中で打つ command）。
 const EXTERNALIZE_SKILL: &str = "/ready-compaction";
 /// 退避して止まった席の session を終える 1 行（Claude Code の正規の終了・SessionEnd hook が走る・account-autonomy.md
@@ -259,6 +268,8 @@ struct Verdict {
     account: Account,
     /// 立て直しを評価した周の結果（選んだ label か `none:<理由>`・評価していない周は `None`）。
     relaunched: Option<String>,
+    /// 注入の判定に添える細目（第 2 手で終了を確定した周の [`DETAIL_TERMINATED`]・それ以外は `None`＝判定行に載らない）。
+    detail: Option<&'static str>,
 }
 
 impl Verdict {
@@ -270,6 +281,7 @@ impl Verdict {
             stamp: None,
             account: Account::Unevaluated,
             relaunched: None,
+            detail: None,
         }
     }
 }
@@ -883,16 +895,53 @@ fn stopped_after(seat_dir: &Path, kind: InjectKind, after: u64) -> bool {
 
 /// 退避後の終了の手（account-autonomy.md §5・`s2-07l.226`）: 入口（[`parked_entry`]）の後は cycle lock（FR29 と同じ
 /// 除外・作り直しの最中の席へ送らない）→ back-off（exit-stamp・閾値は `seat.tick_stale_s`・`s2-07l.252` で cycle-stamp
-/// と分けた）→ [`send_exit`]。見送った周の理由は既存の語（`cycle-live` / `cycle-recent` / `cycle-stamp-unreadable`）。
+/// と分けた）→ 第 1 手 [`send_exit`]。見送った周の理由は既存の語（`cycle-live` / `cycle-stamp-unreadable`）。
+///
+/// **第 2 手 = 停止**（account-autonomy.md §5「終了の手の第 2 手」・`s2-07l.259`）: back-off が `cycle-recent`（exit-stamp
+/// あり＝`/exit` は送った・閾値未満）で見送る周は、入口が終了の手（前面が shell でない・(1)(2) は立っている）なので
+/// 見送らず [`stop_seat`] へ。`/exit` の再送は dialog に効かず（入力欄が無い）、器は描画を読まない（C3.3）ので選択肢も
+/// 押せない——退避済みの席の process を止めて終了を確定する（失うものは無い・A1 非該当・可逆〔立て直す〕）。stamp が
+/// 閾値より古い周は従来どおり第 1 手から（stamp を打ち直す）。
 fn exit_turn(request: &Request, place: &super::StateDir, dir: &Path, seen: &Seen) -> Verdict {
     if cycle::lock_is_live(dir, seen.ttl_s) {
         return Verdict::of(TickDecision::Noop(NoopReason::CycleLive));
     }
     let (stamp, blocked) = back_off(dir, cycle::EXIT_STAMP_FILE, seen.stale_s);
-    if let Some(reason) = blocked {
-        return held(stamp, reason);
+    match blocked {
+        Some(NoopReason::CycleRecent) => stop_seat(request, stamp),
+        Some(reason) => held(stamp, reason),
+        None => Verdict { stamp: Some(stamp), ..Verdict::of(send_exit(request, place, dir)) },
     }
-    Verdict { stamp: Some(stamp), ..Verdict::of(send_exit(request, place, dir)) }
+}
+
+/// 終了の手の第 2 手（順序固定・1 key も送らない）: 猶予（rules 行 [`ROW_GRACE`]・読めない周は `exit-no-rule:<variant>`）→
+/// pane の shell の pid（[`cycle::pane_pid`]）→ その直下の子（[`cycle::foreground_child`]）→ [`cycle::terminate_group`]
+/// （TERM → 唯一の wait → KILL → 同じ wait・pid が 2 未満なら撃たない）。`Gone` / `Killed` は `kind=exit` と同じ判定
+/// （`consumed=true`・立て直しの入口 (1) がそのまま読む）に `detail=terminated` を添え、`Unstoppable` は `exit-unstoppable`
+/// （error・rc 1・back-off の内側で次の周も撃つ＝TERM / KILL は冪等・stop-stamp は持たない）、pane の pid・子が取れない・
+/// 撃たない周は `exit-pane-missing`（既存の語に前置き）。exit-stamp は触らない（打ち直すのは第 1 手だけ）。
+fn stop_seat(request: &Request, stamp: Stamped) -> Verdict {
+    let grace = match super::int_rule(ROW_GRACE) {
+        Ok(found) => Duration::from_millis(found),
+        Err(read) => return held_error(stamp, exit_error(read.no_rule())),
+    };
+    let stopped = cycle::pane_pid(request.socket, request.target)
+        .and_then(cycle::foreground_child)
+        .and_then(|pid| cycle::terminate_group(pid, grace));
+    match stopped {
+        None => held_error(stamp, exit_error(cycle::REASON_PANE_MISSING)),
+        Some(cycle::Stopped::Unstoppable) => held_error(stamp, exit_error(REASON_EXIT_UNSTOPPABLE)),
+        Some(cycle::Stopped::Gone | cycle::Stopped::Killed) => Verdict {
+            stamp: Some(stamp),
+            detail: Some(DETAIL_TERMINATED),
+            ..Verdict::of(TickDecision::Inject(InjectKind::Exit, inject::Settled::Consumed))
+        },
+    }
+}
+
+/// 打刻を読んだ上で撃てなかった周の判定（[`held`] の error 側）。
+fn held_error(stamp: Stamped, decision: TickDecision) -> Verdict {
+    Verdict { stamp: Some(stamp), ..Verdict::of(decision) }
 }
 
 /// [`EXIT`] を 1 行送る（順序固定）: 入力欄の門（cycle の `/clear` と同じ [`inject::guard_input`]・断りは
@@ -903,7 +952,7 @@ fn exit_turn(request: &Request, place: &super::StateDir, dir: &Path, seen: &Seen
 /// 目印が増えない＝成功が `absent` に倒れるためである（実地 2026-09-14・`s2-07l.252`）。Enter の修復
 /// （[`inject::nudge_enter`]）も通さない: 終わった席の pane に残る古い `❯ /exit` 行を入力欄と読んで **shell へ Enter を
 /// 送る**形になる。窓の内に shell にならない周は `exit-unconfirmed` の error（rc 1）で、exit-stamp は打たれたまま
-/// （再送しない・次の周は back-off が見る）。
+/// （再送しない・back-off の内側の次の周は第 2 手 [`stop_seat`] が process を止める・`s2-07l.259`）。
 fn send_exit(request: &Request, place: &super::StateDir, dir: &Path) -> TickDecision {
     let Some(pane) = pane_of(request.socket, request.target, request.capture_file) else {
         return exit_error(cycle::REASON_PANE_MISSING);
@@ -1044,16 +1093,18 @@ fn inject_line(request: &Request, place: &super::StateDir, dir: &Path, signal: &
 /// 別の dir を見ていることを記録から弁別できる・`s2-07l.70`）。
 /// 注入した周は `consumed=<値>` の**直後**に理由（`reason=<語>`・queue と消費の周は無し）を足す
 /// （`seat inject` の行と同じ並び・既存 token の名前と順序は不変・`s2-07l.150`）: 測れない周と
-/// Enter が落ちた周を `false` と同じ顔で流さない（憲法 C10）。
+/// Enter が落ちた周を `false` と同じ顔で流さない（憲法 C10）。第 2 手で終了を確定した周は `kind=` の**直後**に
+/// `detail=terminated`（`s2-07l.259`・それ以外の周は載らない）。
 fn body(target: &str, judged: &Judged, place: &super::StateDir) -> String {
     let verdict = &judged.verdict;
     let head = match verdict.decision {
         TickDecision::Inject(kind, settled) => format!(
-            "decision=inject target={} consumed={}{} kind={}",
+            "decision=inject target={} consumed={}{} kind={}{}",
             sanitize_target(target),
             settled.as_str(),
             settled.reason().map_or_else(String::new, |why| format!(" reason={why}")),
-            kind.as_str()
+            kind.as_str(),
+            verdict.detail.map_or_else(String::new, |found| format!(" detail={found}"))
         ),
         TickDecision::Noop(reason) => format!("decision=noop reason={}", reason.as_str()),
         TickDecision::Error(ref reason) => body_of_error(reason),
