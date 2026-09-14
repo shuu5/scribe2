@@ -105,6 +105,7 @@ ruled_at = "2026-09-07"
 
 - tracked な `rules/manifest.toml` を **build 時に binary へ埋め込む**（`include_str!`）。C1「機械が読む規則はこの manifest 1 file だけ」を、別 repo（toy repo の worktree）で走る `pipe gate` でも path に依存せず満たす。binary は自分を build した manifest の版と一体になる（単一 static binary・ADR-0001 と同じ向き）。
 - `--rules <path>` で file から読む override を全 subcommand に持つ（test が tmp の manifest で `gate.token_cap = 1` 等を撃つため）。override は埋め込みと同じ loader・同じ拒否 5 形。
+- host 固有の宣言値（口座 label・席の plugin dir・起動引数）は manifest の **host の面** `<state_dir>/host.toml` が持ち、同じ loader が読む（rules 行は置けない・[account-lifecycle.md](./account-lifecycle.md) §2・ADR-0026 §2.1）。
 
 ## 6. CLI
 

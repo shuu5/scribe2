@@ -58,7 +58,7 @@
 </ul>
 </details>
 <details>
-<summary>accepted <span class="nav-count">(25)</span></summary>
+<summary>accepted <span class="nav-count">(26)</span></summary>
 <ul>
   <li><a href="decisions/ADR-0001-rust-single-static-binary.html">ADR-0001 — 実装言語と構成 = Rust 単一 static binary (Go / typed Python / TypeScript 却下)</a> <span class="nav-meta">adr</span></li>
   <li><a href="decisions/ADR-0002-test-lint-toolchain.html">ADR-0002 — test / lint toolchain = cargo nextest・粒度 lint は forbid・構造検査は cargo xtask check</a> <span class="nav-meta">adr</span></li>
@@ -85,6 +85,7 @@
   <li><a href="decisions/ADR-0023-contract-source-is-the-design-document-table.html">ADR-0023 — 契約の正本は設計 doc の契約表 1 行で、 器が契約 file を生成し、 審査の段を通してから実装役を起こし、 着地の終端まで器が持つ (write-set の閉包は機械が導出・consumer の要件面は宣言 file の任意 key・ADR-0004 §2.2 / §2.3・ADR-0010 §2.1・ADR-0016 §2.1 / §2.3・ADR-0018 §2.1・ADR-0019 §2.1 / §2.3 を部分 supersede)</a> <span class="nav-meta">adr</span></li>
   <li><a href="decisions/ADR-0024-idle-window-reset-time-is-optional-in-allowance-row.html">ADR-0024 — 実測行の reset 時刻は任意とし、 消費の無い窓 (使用率 0・reset 無し) を「測れた 0%・reset 未定」の Measured として記録し、 選定と逼迫度は reset 無しの行を古くない実測として数える (ADR-0017 §2.1 の一文を部分 supersede)</a> <span class="nav-meta">adr</span></li>
   <li><a href="decisions/ADR-0025-denied-command-rows-and-bash-command-guard.html">ADR-0025 — runner の allowlist は先頭語の許可に加えて「禁じる語列」の rules 行を対で持ち、 hook の command guard が Bash の実行時点で止め、 intake は verify 行に同じ判定を掛ける (ADR-0009 §2.1 / ADR-0010 §2.3 を部分 supersede)</a> <span class="nav-meta">adr</span></li>
+  <li><a href="decisions/ADR-0026-account-lifecycle-host-manifest-and-seat-launch.html">ADR-0026 — 口座の宣言と host 固有の起動値は host の manifest が持ち、 口座の登録・一覧・退役と席の起動を器の口が担う (ADR-0017 §2.3 / ADR-0020 §2.4 / ADR-0022 §2.1 を部分 supersede)</a> <span class="nav-meta">adr</span></li>
 </ul>
 </details>
 </section>

@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="folio-doc-type" content="adr">
+<meta name="folio-layer" content="project">
+<meta name="folio-version" content="0.4.6">
+<meta name="folio-status" content="accepted">
+<meta name="folio-stakeholders" content="Developer, AI Agent, External Reviewer">
+<meta name="folio-adr-id" content="0026">
+<meta name="folio-adr-date" content="2026-09-14">
+<title>ADR-0026 — 口座の宣言と host 固有の起動値は host の manifest が持ち、 口座の登録・一覧・退役と席の起動を器の口が担う (ADR-0017 §2.3 / ADR-0020 §2.4 / ADR-0022 §2.1 を部分 supersede)</title>
+<link rel="stylesheet" href="../../common.css">
+<script type="application/ld+json">
+{
+  "@context": {
+    "dc": "http://purl.org/dc/terms/",
+    "schema": "https://schema.org/",
+    "folio": "https://folio.dev/spec/v1/"
+  },
+  "@id": "./ADR-0026-account-lifecycle-host-manifest-and-seat-launch.html",
+  "@type": "schema:TechArticle",
+  "dc:isPartOf": [
+    { "@id": "./README.html" }
+  ],
+  "dc:title": "ADR-0026 — 口座の宣言と host 固有の起動値は host の manifest が持ち、 口座の登録・一覧・退役と席の起動を器の口が担う (ADR-0017 §2.3 / ADR-0020 §2.4 / ADR-0022 §2.1 を部分 supersede)",
+  "folio:version": "0.4.6",
+  "folio:stakeholders": ["Developer", "AI Agent", "External Reviewer"],
+  "dc:references": [
+    { "@id": "../spec/constitution.html#c1" },
+    { "@id": "../spec/constitution.html#c2" },
+    { "@id": "../spec/constitution.html#c3" },
+    { "@id": "../spec/constitution.html#c9" },
+    { "@id": "../spec/constitution.html#c10" },
+    { "@id": "../spec/constitution.html#c11" },
+    { "@id": "../spec/constitution.html#c16" },
+    { "@id": "../spec/constitution.html#n1" },
+    { "@id": "../spec/constitution.html#a1" },
+    { "@id": "../spec/srs.html#FR33" },
+    { "@id": "../spec/srs.html#FR36" },
+    { "@id": "../spec/srs.html#FR38" },
+    { "@id": "../spec/srs.html#FR40" },
+    { "@id": "../spec/srs.html#AC13" },
+    { "@id": "../spec/srs.html" },
+    { "@id": "./ADR-0004-mvp-persistence-and-cross-version-formats.html" },
+    { "@id": "./ADR-0011-vessel-launches-claude-without-settings.html" },
+    { "@id": "./ADR-0014-polarity-list-is-a-snapshot-rendered-by-core.html" },
+    { "@id": "./ADR-0017-account-allowance-measured-into-event-log.html" },
+    { "@id": "./ADR-0020-account-autonomy-limit-stop-resume-and-selection.html" },
+    { "@id": "./ADR-0022-seat-roles-are-typed-and-enforced-by-hooks.html" }
+  ]
+}
+</script>
+</head>
+<body>
+<!-- folio:chrome-top -->
+<a class="skip-link" href="#s1-context">本文へスキップ</a>
+<nav class="breadcrumb" aria-label="パンくず"><ol>
+  <li><a href="../index.html">design-intent</a></li>
+  <li><a href="./README.html">decisions</a></li>
+  <li aria-current="page">ADR-0026</li>
+</ol></nav>
+<!-- /folio:chrome-top -->
+
+<header class="doc-header">
+  <h1>ADR-0026 — 口座の宣言と host 固有の起動値は host の manifest が持ち、 口座の登録・一覧・退役と席の起動を器の口が担う (ADR-0017 §2.3 / ADR-0020 §2.4 / ADR-0022 §2.1 を部分 supersede)</h1>
+  <div class="meta">Status: accepted &middot; Date: 2026-09-14 &middot; version 0.4.6 (拘束する constitution の版) &middot; C10.2 / C3 / C2.2 / N1.2 の適用を記録し、 ADR-0017 §2.3 の「口座の列挙は tracked の manifest」を「host の manifest の面」に、 ADR-0020 §2.4 の「起動の雛形は登録時に渡す」を「器が導出する (雛形は override)」に、 ADR-0022 §2.1 の「登録の書き手は席の session」を「器の起動の口も書く」形に、 それぞれ限って supersede &middot; 要件は SRS (FR33 / FR36 / FR38 / FR40 / AC13) が正本</div>
+</header>
+<!-- folio:chrome-toc -->
+<nav class="toc" aria-label="ページ内目次">
+<ol>
+  <li><a href="#s1-context">§1. Context</a></li>
+  <li><a href="#s2-decision">§2. Decision</a></li>
+  <li class="toc--sub"><a href="#s2-1-host-manifest">§2.1 口座の宣言と host 固有の起動値は state dir の host の manifest 1 file が持つ (manifest の host の面・C10.2 の読み)</a></li>
+  <li class="toc--sub"><a href="#s2-2-account-commands">§2.2 口座の登録・一覧・退役・復帰は器の口 4 つが担い、 login は user の手番、 退役は event + 可逆 move</a></li>
+  <li class="toc--sub"><a href="#s2-3-seat-launch">§2.3 席の起動は器の口 1 つが担う: 役割は必須、 口座は選定の純関数、 起動行は器が導出し、 登録を同時に書く</a></li>
+  <li class="toc--sub"><a href="#s2-4-supersede">§2.4 ADR-0017 §2.3 / ADR-0020 §2.4 / ADR-0022 §2.1 を部分 supersede する</a></li>
+  <li class="toc--sub"><a href="#s2-5-scope">§2.5 射程外</a></li>
+  <li><a href="#s3-srs">§3. SRS との関係 (正本は SRS)</a></li>
+  <li><a href="#s4-consequences">§4. Consequences</a></li>
+  <li><a href="#s5-alternatives">§5. Alternatives Considered</a></li>
+  <li><a href="#s6-trace">§6. Trace</a></li>
+</ol>
+</nav>
+<!-- /folio:chrome-toc -->
+
+<aside class="informative">
+<p>本 ADR は IETF <strong>RFC 2119</strong> および <strong>RFC 8174 / BCP 14</strong> に定義される MUST / SHALL / SHOULD / MAY のキーワード解釈規約に従う。 ADR は決定時点の記録であり、 改訂は新しい ADR による supersede で行う。 本 ADR の <strong>§2 は user の裁定 (2026-09-14・逐語は台帳が原本で本 file には写さない〔CON2〕)</strong> で、 <strong>§3 は SRS への pointer</strong> である。 本 ADR は要件の文面を 1 字も持たず、 <strong>理由・形・却下案</strong> だけを持つ。 本 ADR は <a href="./ADR-0017-account-allowance-measured-into-event-log.html#s2-3-roster">ADR-0017 §2.3</a> のうち「口座は tracked の manifest に宣言する」の一文を<strong>host の manifest の面に限って</strong>、 <a href="./ADR-0020-account-autonomy-limit-stop-resume-and-selection.html#s2-4-session">ADR-0020 §2.4</a> のうち「立て直しに使う起動行は登録時に渡した雛形」の一文を<strong>器が導出する形に限って</strong>、 <a href="./ADR-0022-seat-roles-are-typed-and-enforced-by-hooks.html#s2-1-role-and-registration">ADR-0022 §2.1</a> のうち「登録は器の hook が走った session からしか受け付けない」の一文を<strong>器自身の起動の口が書く row に限って</strong> supersede する (label の不透明性・credential の場所・計測と選定の形・登録 row の鍵・権能の執行は不変)。</p>
+</aside>
+
+<aside class="machine-readable" aria-hidden="true">
+  <dl>
+    <dt>id</dt><dd>ADR-0026</dd>
+    <dt>doc-type</dt><dd>adr</dd>
+    <dt>status</dt><dd>accepted</dd>
+    <dt>date</dt><dd>2026-09-14</dd>
+    <dt>version</dt><dd>0.4.6 (拘束する constitution の版。 本 ADR は憲法の条文を動かさない。 C10.2 の「host 固有の値は manifest にだけ」を manifest の host の面として読む解釈を記録する)</dd>
+    <dt>decided-by</dt><dd>user (2026-09-14) — planner の提案 (口座の口 4 つ・席の起動の口・host の manifest・持ち込まない範囲 3 つ・順序) を承認。 出所は user の指摘 (口座の登録の口が無い・口座の管理系が器の中に無い・外の wrapper 2 本に割れている) と planner の実測 (台帳 s2-07l.38 / s2-07l.220 / s2-07l.226)。 裁定の逐語は台帳 s2-07l の notes が原本で、 本 file には写さない (CON2)</dd>
+    <dt>stakeholders</dt><dd>Developer, AI Agent, External Reviewer</dd>
+    <dt>supersedes</dt><dd>ADR-0017 §2.3 の「manifest SHALL 口座を [[account]] 行で列挙する」を、 その manifest が state dir の host の面 (host.toml) である形に限って supersede する (tracked の manifest の [[account]] の文法・label の不透明性・credential の場所・走査しない・A1 の対話面は不変)。 ADR-0020 §2.4 の「登録 row が持つ起動の雛形 (登録時に渡す)」を、 器の起動の口が導出した行を row に書く形に限って supersede する (穴 1 つ・fill_launch・立て直しの 3 条件・注入の門は不変)。 ADR-0022 §2.1 の「登録 SHALL 器の hook が走った session からしか受け付けない」を、 器自身の起動の口が書く row (sid 無し) を書き手に足す形に限って supersede する (鍵・置き換え・権能の執行は不変)</dd>
+    <dt>related</dt><dd>ADR-0004 §2.3 / §2.4 (TOML subset・場所は manifest の外) / ADR-0011 §2.1 (器が起こす claude は settings を読まない・runner / lens に限る・不変) / ADR-0014 §2.1 (guard の定義・本 ADR は Guard を増やさない) / ADR-0017 §2.1 / §2.3 (計測・宣言) / ADR-0020 §2.2 / §2.4 (選定・立て直し) / ADR-0022 §2.1 / §2.5 (登録・対話面) / constitution C1 / C2 / C2.2 / C3 / C3.2 / C9 / C10 / C10.2 / C11.3 / C16.2 / N1 / N1.2 / A1 / SRS FR33 / FR36 / FR38 / FR40 / AC13 / CON2</dd>
+  </dl>
+</aside>
+
+<section id="s1-context" class="informative">
+<h2>§1. Context</h2>
+<p class="section-essence" data-audience="human">口座の「生涯」は、 登録 → 準備 → 計測 → 選定 → 席の起動 → 退役、 の順です。 器が持っているのは真ん中の計測・選定・立て直しだけで、 両端は器の外に在ります。 口座を足すには、 設定 dir を作り・login し・設定の前提を仕込み・宣言の行を足し・state dir に link を張る、 の 5 手が user と planner の手作業です。 席を初めて起こすのは、 別 repo の口座切替 wrapper と前の版の launcher に頼っています。 口座の宣言は tracked の manifest と host の私用 manifest (rules 部の写し + 口座節) の 2 か所に割れ、 規則が動くたびに写しを手で作り直しています。 この記録は、 宣言の置き場を 1 つにし、 口座の口 4 つと席の起動の口 1 つを器に足して、 外の wrapper への依存を切ります。</p>
+<p data-audience="machine">記録時点 (2026-09-14) の現物 (main <code>5697a2c</code>): 口座の宣言は tracked の <code>rules/manifest.toml</code> の <code>[[account]]</code> (5 行・<a href="./ADR-0017-account-allowance-measured-into-event-log.html#s2-3-roster">ADR-0017 §2.3</a>) と、 host の私用 manifest (<code>&lt;state_dir&gt;/rules.host.toml</code> = tracked の rules 部の写し + <code>[[account]]</code> 7 行) の 2 面に在り、 rules 行が動く便のたびに写しを手で再生成している (台帳 <code>s2-07l.220</code>・<a href="../spec/constitution.html#c1">C1</a> の外に第 2 の写し)。 <code>seat tick</code> の unit は <code>--rules</code> を渡さないので埋め込みの 5 行を読み、 <code>fleet usage</code> は <code>--rules</code> で 7 行を読む (宣言が 2 つ・台帳 <code>s2-07l.224</code> の懸念の型)。 credential の場所 <code>&lt;state_dir&gt;/accounts/&lt;label&gt;</code> は user と planner が手で張る link で、 2026-09-13〜14 に 7 口座分を planner が手で差し替えた (台帳 <code>s2-07l.226</code> (1)・credential だけの dir では立て直しが落ちる)。 席の起動: 器が起こす claude (runner / lens・<a href="./ADR-0011-vessel-launches-claude-without-settings.html#s2-1-launch-form">ADR-0011 §2.1</a>) と席の立て直し (<a href="./ADR-0020-account-autonomy-limit-stop-resume-and-selection.html#s2-4-session">ADR-0020 §2.4</a>・登録 row の雛形の穴を埋めて shell へ注入) は器の口で、 外の script を呼ばない。 しかし user が席を<strong>初めて</strong>起こす口は器に無く、 別 repo の口座切替 wrapper (台帳から label を引いて <code>CLAUDE_CONFIG_DIR</code> を export し前の版の launcher へ透過) と前の版の launcher (plugin の自動検出・cgroup の防壁) に乗っている。 登録 row の起動の雛形も planner が手で書いた行 (host 固有の絶対 path を含む・state dir 内なので tracked ではない)。 SRS の scope は「席の起動 (v3)」を扱わない側に置く。 一覧 (前提の充足・残量) と退役 (可逆 move) の口も無い (doctor の口座行 <code>s2-07l.233</code> が一覧の半分)。 台帳 <code>s2-07l.38</code> (seat autonomy の memo) は「席の起動と初回の口座選択」を後続に残し、 設計 account-autonomy.md §11 が同じ pointer を持つ。</p>
+<p data-audience="machine">憲法の向き: <a href="../spec/constitution.html#c10">C10.2</a> は host 固有の値を manifest にだけ置く。 <a href="../spec/constitution.html#c1">C1</a> は規則の値を repo の manifest 1 file に置く (口座の宣言は規則ではなく宣言値・ADR-0017 §2.3)。 <a href="../spec/constitution.html#c3">C3</a> は口座と退役の状態を 1 つの DB に置き、 per-host の dir や cache に真実を置かない。 <a href="../spec/constitution.html#c2">C2.2</a> は env を読まず、 名前は NAME 定数から導く。 <a href="../spec/constitution.html#c9">C9.2</a> は口座を窓の終わりまで使い切る (R-C9-1 の選定)。 <a href="../spec/constitution.html#n1">N1.2</a> は退役を可逆 move に限る。 <a href="../spec/constitution.html#a1">A1</a> は「消す / 出す / 使う」で聞く。 先行決定: ADR-0004 §2.3 (TOML subset) / §2.4 (場所は manifest の外に置く経路)・ADR-0017 §2.3 (label は不透明・dir を走査しない)・ADR-0020 §2.2 (選定の純関数・session 用は余裕を残す側) / §2.4 (雛形の穴 1 つ・注入の門)・ADR-0022 §2.1 (登録 row の鍵と書き手)。</p>
+</section>
+
+<section id="s2-decision" class="normative">
+<h2>§2. Decision</h2>
+
+<h3 id="s2-1-host-manifest">§2.1 口座の宣言と host 固有の起動値は state dir の host の manifest 1 file が持つ (manifest の host の面・C10.2 の読み)</h3>
+<p class="section-essence" data-audience="human">「どの口座があるか」「席にどの plugin を積むか」「起動に足す引数」は、 host ごとに違う値です。 これを state dir の 1 つの file (host の manifest) に置きます。 規則の値 (rules 行) は今までどおり repo の manifest だけが持ち、 host の file には規則を 1 行も書きません。 器は両方を同じ読み方・同じ断り方で読みます。 host の file が無い host では口座 0 として動き続け、 在るのに壊れている host では止まります。 この repo の tracked の manifest からは口座の行を外します (公開面の情報が減る側)。</p>
+<p data-audience="machine">manifest SHALL 2 つの面を持つ: tracked の面 (<code>rules/manifest.toml</code>・埋め込み・rules 行の唯一の置き場・<a href="../spec/constitution.html#c1">C1</a>) と host の面 (<code>&lt;state_dir&gt;/host.toml</code>・host 固有の宣言値の唯一の置き場・<a href="../spec/constitution.html#c10">C10.2</a>)。 本 ADR は C10.2 の「manifest」を<strong>この 2 面を合わせた 1 つの文法</strong>と読む (憲法の条文は動かさない・解釈の記録)。 host の面 SHALL TOML subset (ADR-0004 §2.3・同じ reader) の array-of-tables 3 種だけを持つ: <code>[[account]] label</code> (口座の宣言・ADR-0017 §2.3 の意味のまま)・<code>[[plugin]] dir</code> (席に積む plugin dir)・<code>[[launch-arg]] value</code> (起動行に足す引数・宣言順)。 rules 行 (<code>[[rule]]</code>) SHALL NOT host の面に置かない (在れば拒否)。 loader SHALL 1 本で、 未知 key・型違い・label の重複 (面をまたぐ重複を含む)・schema の欠落を行番号付きで全件拒む (既存の拒否形と同じ)。 host の面の場所 SHALL <code>--state-dir</code> からだけ解く (<a href="../spec/constitution.html#c2">C2.2</a>・env を読まない)。 <code>--rules PATH</code> は tracked の面の override のままで、 host の面の override は持たない。 host の面が<strong>無い</strong>周 SHALL 0 宣言として続く (縮退・止めない)。 <strong>読めない</strong>周 (在るが壊れている・権限) SHALL typed に断って止める (FailClosed・manifest の拒否と同じ極性・既存の <code>Guard::Rules</code> の断りに host の面が加わる・Guard の variant は増えない・<a href="./ADR-0014-polarity-list-is-a-snapshot-rendered-by-core.html">ADR-0014 §2.1</a>)。 本 repo の tracked の面 SHALL 口座行を 0 にする (減る側・A1 非該当)。 以後 tracked の面に口座行を足す変更は A1 の対話面で聞く (ADR-0017 §2.3 の規律のまま)。 host の私用 manifest (rules 部の写し) SHALL 退役する (mv・N1)。</p>
+
+<h3 id="s2-2-account-commands">§2.2 口座の登録・一覧・退役・復帰は器の口 4 つが担い、 login は user の手番、 退役は event + 可逆 move</h3>
+<p class="section-essence" data-audience="human">口座を足す口は、 設定 dir を作り・器が起こす席の前提 (agent view を切る) を sett定に書き・host の manifest に宣言を 1 行足し・login のための起動行を tmux の窓へ差し込む (または表示する) ところまでをやります。 login そのものと trust の受け入れは user が行い、 器は credential に触りません。 一覧の口は doctor と同じ行に、 退役中かどうかと最新の残量を足して出します。 退役の口は、 設定 dir を退役用の場所へ動かし (消さない)、 退役の出来事を記録に 1 行残します。 復帰はその逆です。 使っている席がある口座は退役できません。</p>
+<p data-audience="machine">器 SHALL subcommand <code>account</code> に <code>add &lt;label&gt;</code> / <code>ls</code> / <code>retire &lt;label&gt;</code> / <code>restore &lt;label&gt;</code> の 4 口を持つ (<code>--state-dir</code> 必須)。 <code>add</code> SHALL (1) label を検査し宣言済み (退役中を含む) なら断り、 (2) <code>&lt;state_dir&gt;/accounts/&lt;label&gt;/</code> を dir として作り (既存の dir / link は断る・中身を読まない)、 (3) 直下に settings を書き (項目は器が起こす席の前提 = agent view を切る 1 つだけ・user が置いた既存 dir には書かない)、 (4) host の面に <code>[[account]]</code> 行を 1 つ足し (読み → 検査 → 一時 file → rename・部分書きなし)、 (5) login の起動行 (<code>CLAUDE_CONFIG_DIR=&lt;dir&gt; claude</code>・cwd は <code>--anchor</code>・trust を同じ session で通すため) を <code>--target</code> の shell へ §2.3 と同じ注入の門を通して差し込むか、 無ければ stdout に 1 行出す。 器 SHALL NOT credential を読まず・書かず・代筆せず (ADR-0017 §2.3)、 login の完了を待たない (doctor / <code>ls</code> の <code>credential=</code> が示す)。 <code>ls</code> SHALL doctor の口座行 (台帳 <code>s2-07l.233</code>) と<strong>同じ関数</strong>の行に <code>retired=</code> と最新の実測行の要約 (event log を読むだけ・計測は撃たない) を足し、 判定を持たない (<a href="../spec/constitution.html#c10">C10.2</a>)。 <code>retire</code> SHALL 登録 row のいずれかが持つ label を断り (<code>in-use</code>)、 <code>accounts/&lt;label&gt;</code> を <code>accounts/.retired/&lt;label&gt;.&lt;ts&gt;</code> へ mv し (link は link のまま・<a href="../spec/constitution.html#n1">N1.2</a>)、 fleet の event log に <code>AccountRetired</code> を 1 件 (EventKind の新 variant・宣言順の末尾・schema 1 のまま) 書く。 host の面の行 SHALL NOT 消さない (宣言は残る)。 <code>restore</code> SHALL 逆の mv と <code>AccountRestored</code> 1 件。 <strong>有効な口座の集合</strong> SHALL 1 関数 (fleet の replay): 宣言 − 退役中 (最後の Retired の後に Restored が無い label)。 計測・選定・tick の逼迫度・doctor・<code>ls</code> はこの 1 関数を読む (退役中の口座は測らず選ばない・<a href="../spec/constitution.html#c3">C3</a>「退役は DB」)。 前提違反の断りは typed (closed enum・<code>as_str</code>) で、 file も event も書かない。 削除の口 SHALL NOT 持たない (<a href="../spec/constitution.html#n1">N1</a>・退役 dir の削除は A1 の後続)。</p>
+
+<h3 id="s2-3-seat-launch">§2.3 席の起動は器の口 1 つが担う: 役割は必須、 口座は選定の純関数、 起動行は器が導出し、 登録を同時に書く</h3>
+<p class="section-essence" data-audience="human">席を初めて起こす口を器に足します。 「planner か管理席か」は必ず指定します。 口座は指定してもよく、 指定しなければ器が席用の規則 (余裕を残す側・他の席の口座は避ける) で選びます。 起動に使う行は器が組みます: 口座の設定 dir と agent view を切る環境変数、 器自身の plugin、 host の manifest に書かれた plugin と引数です。 手書きの雛形 file は使いません。 器はその行を tmux の窓の shell へ差し込み (窓が無ければ作り)、 同時に席の登録を書きます。 席が立った後に復元の command を差し込むのは、 立て直しと同じ経路です。</p>
+<p data-audience="machine">器 SHALL <code>seat launch --state-dir S --role &lt;Role&gt; --target S:W [--account L] [--anchor DIR] [--model M] [--restore CMD]</code> を持つ。 <code>--role</code> SHALL 閉じた <code>Role</code> の名で必須 (ADR-0022 §2.1)。 口座 SHALL <code>--account</code> (有効な口座でなければ断る) か、 無ければ ADR-0020 §2.2 の session 用の純関数 (model = <code>--model</code>・除外 = 他の席の登録 row の口座・候補なしは断って起こさない)。 起動行 SHALL pure な関数 1 本が導出する: <code>CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CONFIG_DIR={account_dir} claude --plugin-dir &lt;anchor&gt; [--plugin-dir &lt;[[plugin]] dir&gt;…] [&lt;[[launch-arg]] value&gt;…]</code> (穴は <code>{account_dir}</code> 1 つのまま・<code>fill_launch</code> 不変・器自身の plugin = anchor・<code>claude</code> は語で器はその場所を持たない〔ADR-0011 と同じ〕・env は子へ<strong>設定</strong>する側で読まない〔C2.2〕)。 雛形 file SHALL NOT 読まない・書かない。 登録 SHALL <code>SeatRegistered</code> 1 件 (鍵 (role, anchor)・<code>launch</code> = 導出した行・<code>account</code> = 選んだ label・<code>model</code> = <code>--model</code>) を、 起動の<strong>前</strong>に器の内部の同じ 1 関数が書く (書き手は register / tick / launch の 3 つ)。 <code>Registration.sid</code> SHALL 任意 (launch の row は無し・register の row は従来どおり・schema 1 のまま・既存 row は読める)。 起動 SHALL target の tmux session が無ければ断り (session を作らない)、 window が無ければ作り、 ADR-0020 §2.4 の shell への注入の門 (前面 process が shell ∧ prompt 末尾) を通して穴を埋めた行を送る。 門を通らない周 SHALL 1 key も送らない (row は書き終えているので再実行できる)。 <code>--restore</code> は立て直しと同じ関数 (SessionStart の打刻を待って注入)。 経路 SHALL 立て直しと同じ 1 本 (差は「row を先に書く」「window を作れる」の 2 点)。 記録は <code>inject.jsonl</code> に <code>kind=launch</code> 1 行 (InjectKind の新 variant・末尾)。 <code>seat register</code> SHALL 残る (hook の走った session が自分で登録する口・既存 row の更新)。 席 SHALL NOT 器の子 process にしない (shell の子・立て直しと同型・NFR6 の「器の子」に当たらない)。 Guard SHALL 増えない (注入の門は既存の <code>Guard::Inject</code>・前提違反は入力の拒否で guard ではない・<a href="../spec/constitution.html#c16">C16.2</a> の母集団は不変)。</p>
+
+<h3 id="s2-4-supersede">§2.4 ADR-0017 §2.3 / ADR-0020 §2.4 / ADR-0022 §2.1 を部分 supersede する</h3>
+<p class="section-essence" data-audience="human">先行の 3 つの記録のうち、 「口座の宣言は tracked の manifest」の一文を「host の面」に、 「起動の雛形は登録時に渡す」の一文を「器が導出する (register の雛形は残る)」に、 「登録は hook の走った session からだけ」の一文を「器の起動の口も書く」に改めます。 それ以外 (label の不透明性・credential の場所・計測と選定・登録 row の鍵・権能の執行) はそのままです。</p>
+<p data-audience="machine"><a href="./ADR-0017-account-allowance-measured-into-event-log.html#s2-3-roster">ADR-0017 §2.3</a> の「manifest SHALL 口座を <code>[[account]]</code> 行で列挙する」SHALL 「manifest の host の面 (<code>host.toml</code>) が列挙する (tracked の面の文法は残るが本 repo では 0 行)」と読み替える。 <a href="./ADR-0020-account-autonomy-limit-stop-resume-and-selection.html#s2-4-session">ADR-0020 §2.4</a> の「席の登録 row が持つ起動の雛形 (登録時に渡す)」SHALL 「登録 row が持つ起動行 (<code>seat register</code> では渡した雛形・<code>seat launch</code> では器が導出した行)」と読み替える (穴 1 つ・立て直しの 3 条件・注入の門は不変)。 <a href="./ADR-0022-seat-roles-are-typed-and-enforced-by-hooks.html#s2-1-role-and-registration">ADR-0022 §2.1</a> の「登録 SHALL 器の hook が走った session からしか受け付けない」SHALL 「席の session からの登録は打刻を要し、 器自身の口 (tick の口座更新・<code>seat launch</code>) は同じ 1 関数で sid 無しの row を書く」と読み替える (鍵・置き換え・権能の執行は不変)。 ADR-0004 §2.4 「場所は manifest の外」は、 host の面が「場所」(state dir) から解かれる点で整合し、 supersede しない。</p>
+
+<h3 id="s2-5-scope">§2.5 射程外</h3>
+<p class="section-essence" data-audience="human">この記録が決めるのは「宣言の置き場」「口座の口 4 つ」「席の起動の口 1 つ」の 3 つだけです。 user の設定の同期、 別口座への再開の混線を止める仕掛け、 主口座の写像、 credential の再取得、 退役した dir の削除、 起動直後に落ちた席の起こし直しは、 別の便・裁定の領分です。</p>
+<p data-audience="machine">次は本 ADR の決定ではない (MUST NOT be read as such): user-scope MCP 設定の同期・別口座への <code>--resume</code> の混線 fence・primary 口座の写像 (user 裁定 2026-09-14「持ち込まない」・理由は §5 (E))、 login と trust の代筆 (ADR-0017 §2.3・account-autonomy.md §10 で却下済み)、 credential の失効後の再 login (user の手番・doctor が示す)、 退役した dir の削除 (A1・削除の口は持たない)、 launch 直後に止まった席の起こし直し (account-autonomy.md §11 の crash と同じ)、 tracked の面に口座行を戻す形 (A1)、 席の cgroup の防壁 (席は shell の子)、 runner / lens の起動形 (ADR-0011・不変)。</p>
+</section>
+
+<section id="s3-srs" class="informative">
+<h2>§3. SRS との関係 (正本は SRS)</h2>
+<p class="section-essence" data-audience="human">この記録が仕える要件は要件書に在ります。 「口座残量の計測と credential の場所」「口座の選定」「席の退避と立て直し」「席の登録」の 4 つと、 別口座での立て直しの受入基準です。 口座の登録・退役と席の起動そのものを名指す要件は、 次の要件書の改訂 (材料は planner の置き場に用意済み・scope の「席の起動」を扱う側へ移す) で足し、 その id は改訂の後に本 ADR から辿れます。 この記録は要件書を 1 字も変えません。</p>
+<div data-audience="machine">
+<p>本 ADR の §2.1〜§2.3 が仕える要件: <a href="../spec/srs.html#FR33">FR33</a> (口座残量の計測・credential の場所 = state dir 配下の label 名 dir)・<a href="../spec/srs.html#FR36">FR36</a> (口座の選定・session 用の規則)・<a href="../spec/srs.html#FR38">FR38</a> (席の退避と立て直し・注入の門・登録 row の起動行)・<a href="../spec/srs.html#FR40">FR40</a> (席の登録・(役割, anchor) の鍵・起動の雛形は項目)・<a href="../spec/srs.html#AC13">AC13</a> (別口座での立て直し 1 回)。 口座の登録・一覧・退役と席の起動を名指す要件 (FR57 / FR58 相当) と scope の移動 (「席の起動 (v3)」→ 扱う) は SRS v0.10 の改訂で足す (材料 = planner state dir <code>srs-account-lifecycle-fr-ac.md</code>・改訂は user の /folio-architect)。 改訂まで本 ADR は上の 4 要件の境界を指す。 実装手段 (host の面の表 3 種・口の引数・起動行の導出・退役の mv・sid の任意化) は §2 が正本で SRS は持たない。</p>
+</div>
+</section>
+
+<section id="s4-consequences" class="informative">
+<h2>§4. Consequences</h2>
+<p class="section-essence" data-audience="human">良い面は、 口座の宣言が host ごとに 1 file になり写しの再生成が消えること、 口座を足す・外す・席を起こすが器の口で済み、 別 repo の wrapper と前の版の launcher が要らなくなること、 退役が記録に残り可逆であること、 起動行が導出されて手書きの絶対 path が減ることです。 悪い面は、 host の manifest という 2 面目の file が増えること (rules 行は置けないので規則の置き場は 1 つのまま)、 出来事の種類が 2 つ増えて数え直しが要ること、 login と trust は依然 user の手番であること、 host の file が壊れていると計測も tick も止まることです。</p>
+<p data-audience="machine">Positive: 宣言の置き場が 1 つ (host の面) になり、 <code>rules.host.toml</code> の写し (台帳 <code>s2-07l.220</code>) が消える。 tick と <code>fleet usage</code> が同じ宣言を読む (台帳 <code>s2-07l.224</code>)。 外の wrapper 2 本への依存が切れる (器の視野の内側・ADR-0009 §1 の根因の型を再発させない)。 退役が C3 の DB に載る (<code>AccountRetired</code> / <code>AccountRestored</code>)。 起動行の host 固有の値は <code>[[plugin]]</code> / <code>[[launch-arg]]</code> の行に集まり (C10.2)、 手書きの雛形が消える。 Guard・rules 行は増えない。</p>
+<p data-audience="machine">Negative (受け入れるコスト): manifest の面が 2 つ (loader は 1 本・rules 行は tracked だけ・面をまたぐ重複の検査が要る)。 EventKind +2 (KINDS の pin・property の生成器・literal 構築点が動く)。 <code>Registration.sid</code> の任意化 (読み手 3 か所)。 login / trust / 再 login は user の手番のまま (器は代筆しない)。 host の面が壊れている host では計測・選定・tick・doctor が止まる (FailClosed・manifest の拒否と同じ極性・無い host は縮退で続く)。 席の起動は依然 tmux の pane への注入 (tmux の外の起動は持たない)。</p>
+</section>
+
+<section id="s5-alternatives" class="informative">
+<h2>§5. Alternatives Considered</h2>
+<p class="section-essence" data-audience="human">5 つの案を退けました。 口座の宣言を tracked の manifest に残す案は、 公開 repo に host の値を書き続けます。 state dir の dir を数えて口座にする案は、 宣言でなく場所を真実にします。 退役を宣言の行の削除で表す案は、 取り消せません。 起動の雛形 file を口の引数に残す案は、 手書きの絶対 path が戻ります。 外の wrapper が持つ周辺機能 (設定の同期・再開の混線 fence・主口座) を持ち込む案は、 器の構造で不要になっているか、 用途が別 repo の運用です。</p>
+<p data-audience="machine">(A) <strong>口座の宣言を tracked の manifest に残し、 host の私用 manifest を廃止する</strong>。 却下: 公開 repo に host 固有の値 (口座の数・label) を置き続ける (CON2・A1 の対話面が毎回要る)。 plugin dir と起動引数は絶対 path を含み tracked に置けない。 host の面 1 file が C10.2 の読みとして素直。</p>
+<p data-audience="machine">(B) <strong><code>&lt;state_dir&gt;/accounts/</code> を走査して口座の集合を導く</strong>。 却下: ADR-0017 §2.3 (真実は宣言・C3「per-host dir に真実を置かない」)。 dir が在っても宣言の無い口座は「無い」。 退役中の dir を除く判定が場所に依存する。</p>
+<p data-audience="machine">(C) <strong>退役 = host の面の行を消す</strong>。 却下: 退役は状態 (C3「退役は DB」) で、 宣言 file の書き換えは可逆 move にならない (行を失う・N1.2)。 event + mv が復帰の逆操作を持つ。</p>
+<p data-audience="machine">(D) <strong><code>seat launch --launch FILE</code> (雛形 file を渡す)</strong>。 却下: 雛形が手書きに戻り host 固有の絶対 path が file に散る (C10.2)。 host 固有の値は <code>[[plugin]]</code> / <code>[[launch-arg]]</code> の行で持ち、 行は器が組む。 <code>seat register --launch FILE</code> は既存 row の更新のために残す (register の雛形は supersede しない)。</p>
+<p data-audience="machine">(E) <strong>外の wrapper の周辺機能 (user-scope MCP 設定の同期・別口座への <code>--resume</code> の混線 fence・primary 口座の写像) を器に持ち込む</strong>。 却下 (user 裁定 2026-09-14): MCP 同期は別 repo の運用 (器は口座の設定 dir の中身を書かない・agent view の 1 項目を除く)、 <code>--resume</code> の混線は登録 row が口座を持つ器の構造で起きない (席の口座は row・立て直しも row から)、 primary は session 用の選定 (ADR-0020 §2.2) が代替する。</p>
+</section>
+
+<section id="s6-trace" class="informative">
+<h2>§6. Trace</h2>
+<p class="section-essence" data-audience="human">出所は、 user の指摘 (口座の登録の口が無い・管理系が器の中に無い・2 つの command に割れている)、 planner の実測 (外の wrapper 2 本の実体・7 口座の link の手作業・私用 manifest の写し・SRS の scope)、 器の現物 (宣言の読み手・立て直しの経路・登録 row)、 そして user の裁定です。</p>
+<ul data-audience="machine">
+  <li>user の指摘 (2026-09-14・会話面): 席の起動が別 repo の口座切替 wrapper と前の版の launcher に乗っている・口座の登録の口が無い・口座の管理系が器の中に無い・2 command に割れている時点で整理されていない。 逐語は台帳 <code>s2-07l</code> の notes が原本。</li>
+  <li>planner の実測 (2026-09-14): wrapper 2 本の実体 (label → <code>CLAUDE_CONFIG_DIR</code> の export と透過／launcher = plugin の自動検出と cgroup の防壁)・器の現物 (<code>rules/manifest.rs</code> の <code>[[account]]</code> reader・<code>seat/cycle.rs</code> の <code>fill_launch</code> / <code>relaunch</code>・<code>fleet/mod.rs</code> の <code>Registration</code>・<code>seat/tick.rs</code> の計測が <code>--rules</code> を伝える形)・tick の unit が <code>--rules</code> を渡さない・tracked の面に <code>[[account]]</code> 5 行・私用 manifest に 7 行・登録 row の雛形が手書きの絶対 path・SRS scope「席の起動 (v3)」。</li>
+  <li>台帳: <code>s2-07l.38</code> (seat autonomy の memo・「席の起動と初回の口座選択」を後続に残す)・<code>s2-07l.220</code> (私用 manifest の写しの再生成・判定点 <code>.217</code> Landed 済み)・<code>s2-07l.224</code> (tick と usage が同じ宣言を読む)・<code>s2-07l.226</code> (1) (credential だけの dir では立て直しが落ちる・7 口座の link を手で差し替え)・<code>s2-07l.233</code> (doctor の口座行)。</li>
+  <li>user 裁定 (2026-09-14・会話面): 席の起動の口 (役割は必須) / 口座の口 4 つ / host の面 / 持ち込まない範囲 3 つ / 順序 (席の起動の便は <code>.222</code> の後・<code>.208</code> run 5 の前) を承認。 逐語は台帳 <code>s2-07l</code> の notes が原本。</li>
+  <li>先行決定: <a href="./ADR-0004-mvp-persistence-and-cross-version-formats.html">ADR-0004</a> §2.3 / §2.4・<a href="./ADR-0011-vessel-launches-claude-without-settings.html">ADR-0011</a> §2.1・<a href="./ADR-0014-polarity-list-is-a-snapshot-rendered-by-core.html">ADR-0014</a> §2.1・<a href="./ADR-0017-account-allowance-measured-into-event-log.html">ADR-0017</a> §2.1 / §2.3・<a href="./ADR-0020-account-autonomy-limit-stop-resume-and-selection.html">ADR-0020</a> §2.2 / §2.4・<a href="./ADR-0022-seat-roles-are-typed-and-enforced-by-hooks.html">ADR-0022</a> §2.1。</li>
+  <li>設計: <code>docs/design/account-lifecycle.md</code> (§2 host の面 / §3 口座の口 / §4 席の起動 / §10 契約 3 便)・<code>docs/design/fleet-usage.md</code> §2 (pointer)・<code>docs/design/account-autonomy.md</code> §11 (pointer)・<code>docs/design/seat-roles.md</code> §2 (書き手 3 つ)・<code>docs/design/rules-manifest.md</code> §5 (host の面)。 契約は台帳 (本 ADR の land 後に起票)。</li>
+</ul>
+</section>
+
+<!-- folio:chrome-bottom -->
+<nav class="prevnext" aria-label="前後の文書">
+  <a class="prevnext__prev" href="ADR-0025-denied-command-rows-and-bash-command-guard.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">ADR-0025 — runner の allowlist は先頭語の許可に加えて「禁じる語列」の rules 行を対で持ち、 hook の command guard が Bash の実行時点で止め、 intake は verify 行に同じ判定を掛ける (ADR-0009 §2.1 / ADR-0010 §2.3 を部分 supersede)</span></a>
+</nav>
+<script>
+(function () {
+  var openedForPrint = [];
+  window.addEventListener('beforeprint', function () {
+    openedForPrint = [];
+    var ds = document.querySelectorAll('details:not([open])');
+    for (var i = 0; i < ds.length; i++) { ds[i].setAttribute('open', ''); openedForPrint.push(ds[i]); }
+  });
+  window.addEventListener('afterprint', function () {
+    for (var i = 0; i < openedForPrint.length; i++) openedForPrint[i].removeAttribute('open');
+    openedForPrint = [];
+  });
+  if (!document.querySelector('[data-audience]')) return;
+  /* 既定 = 人間プレゼン型 (ADR-0040 / rules §11.3): script 経由で初期 class を付与するため
+     no-JS では付かず全文可視に graceful degrade する。 static DOM は全文を保持 (AI/検索/印刷は不変)。 */
+  document.body.classList.add('audience-human');
+  var bar = document.createElement('nav');
+  bar.className = 'audience-toggle';
+  bar.setAttribute('aria-label', '表示対象の切替');
+  var states = [['both', '両方'], ['human', '人間向け'], ['machine', '機械向け']];
+  for (var s = 0; s < states.length; s++) {
+    (function (mode, label) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      b.setAttribute('aria-pressed', mode === 'human' ? 'true' : 'false');
+      b.addEventListener('click', function () {
+        document.body.classList.remove('audience-human', 'audience-machine');
+        if (mode !== 'both') document.body.classList.add('audience-' + mode);
+        var bs = bar.querySelectorAll('button');
+        for (var j = 0; j < bs.length; j++) bs[j].setAttribute('aria-pressed', bs[j] === b ? 'true' : 'false');
+      });
+      bar.appendChild(b);
+    })(states[s][0], states[s][1]);
+  }
+  var bc = document.querySelector('nav.breadcrumb');
+  if (bc && bc.parentNode) { bc.parentNode.insertBefore(bar, bc.nextSibling); }
+  else { document.body.insertBefore(bar, document.body.firstChild); }
+})();
+</script>
+<!-- /folio:chrome-bottom -->
+</body>
+</html>

@@ -18,7 +18,7 @@
 
 - manifest（`rules/manifest.toml`・schema 1 のまま）に **`[[account]]` 行**を足す。field は `label`（文字列・必須・不透明）だけ。同じ label の重複・未知 key は loader が拒む。`[[rule]]` 行の形と検査（裁定 id 必須）は変えない（account 行は規則の値ではなく宣言値・C10。ADR-0004 D-3 の受理する表の列挙を `[[account]]` へ広げる = ADR-0017 §2.3・C14.2 の参照要件は `[[rule]]` 行のまま）。
 - **label は不透明**（本当の口座の識別子・host 名・path のどれでもない・CON2）。label 行を足す変更は公開面の情報（口座の数）を増やすので、A1 の対話面で user に確認してから行う。本設計は行を足さない。
-- credential の場所 = `<state_dir>/accounts/<label>/`（dir または link・**user が host ごとに置く**）。中の `.credentials.json`（Claude Code の私有形式）から `claudeAiOauth.accessToken` と `claudeAiOauth.expiresAt` だけを読む。他の field（refresh token 等）は読まない・保持しない・出さない。
+- credential の場所 = `<state_dir>/accounts/<label>/`（dir または link・**user が host ごとに置く**〔置く口 = `account add`・宣言の置き場 = host の manifest・[account-lifecycle.md](./account-lifecycle.md) §2 / §3・ADR-0026〕）。中の `.credentials.json`（Claude Code の私有形式）から `claudeAiOauth.accessToken` と `claudeAiOauth.expiresAt` だけを読む。他の field（refresh token 等）は読まない・保持しない・出さない。
 - state dir は ADR-0004 §2.4 の経路（`--state-dir` 必須・fleet の subcommand の既存形）。HOME も env も読まない。
 - 器は `<state_dir>/accounts/` を**走査しない**（真実は manifest の宣言・C3）。label に dir が無い host ではその口座を「測れなかった（credential 不在）」として記録し、コマンドは続く。
 
