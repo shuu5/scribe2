@@ -40,7 +40,7 @@
 | `size` | string | 必須 | `S` / `M` / `L`（NFR2 の見積の目安） |
 | `owner` | string | 必須 | bead id（文字列として持つだけ・台帳は読まない） |
 | `disposition` | string | 必須 | `A-now` / `F` |
-| `write-set` | string 配列 | 必須・1 本以上 | 触ってよい file / dir（末尾 `/`） |
+| `write-set` | string 配列 | 必須・1 本以上 | 触ってよい file / dir（末尾 `/`）。接頭辞 `+`（新規 file）/ `-`（縮む面）は受付の宣言で、guard と allowlist は素の path で持つ（[contract-source.md](./contract-source.md) §3） |
 | `verify` | string 配列 | 必須・1 本以上 | 検証コマンド。**各要素に改行なし**・1 行で完結 |
 | `req` | string 配列 | 必須・1 本以上 | SRS の要件 id（FR2） |
 | `design` | string | 必須 | 設計 doc の repo 相対 path（FR2） |
