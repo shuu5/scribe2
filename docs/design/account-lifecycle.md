@@ -53,7 +53,7 @@
 
 ## 6. 極性（[polarity.md](./polarity.md)）
 
-- host の manifest が読めない（在るが壊れている）: **FailClosed**（`Guard::Rules` の既存の断りに host の面が加わる・manifest の拒否と同じ極性・NFR4）。無い周は縮退（0 宣言・止めない）。
+- host の manifest が読めない（在るが壊れている）: **FailClosed**（既存の fail-closed の断り〔`fleet usage` / `fleet select` は `UsageError::Manifest`・tick は `no-rule:manifest-unreadable` の 1 行〕に host の面が加わる・manifest の拒否と同じ極性・NFR4・Guard の variant は増えない＝極性一覧は不変。ADR-0026 §2.1 の「`Guard::Rules`」は実在しない variant 名で、正しくはこの既存の断りを指す〔.243 run 2 の runner 実測 2026-09-14〕）。無い周は縮退（0 宣言・止めない）。
 - `account add` / `retire` / `restore` の前提違反（`exists` / `in-use` / `unknown` …）: 断って何も書かない（file も event も・部分書きなし）。guard ではない（行為を止めうる判定ではなく入力の拒否・ADR-0014 §2.1）。
 - `seat launch` の門: `Guard::Inject` の既存の極性（送らない側）。新しい Guard variant は足さない＝極性一覧の行数は不変。
 
