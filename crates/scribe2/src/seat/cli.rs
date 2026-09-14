@@ -15,7 +15,7 @@ use std::time::Duration;
 
 /// `seat` の使い方。
 pub fn usage() -> String {
-    "usage: seat <meter --target T [--transcript PATH]|inject --target T (--text S|--file PATH)|heartbeat --target T|tick --target T --wm-dir DIR [--pointer TEXT] [--restore CMD] [--rules PATH]|cycle --target T --wm-dir DIR [--restore CMD] [--rules PATH]|externalize --target T --wm-dir DIR --anchor DIR --plan FILE --directives FILE [--user FILE] [--trigger manual|tick] [--role R] [--rules PATH]|rebrief --target T --wm-dir DIR --anchor DIR [--bd PATH] [--prefix P] [--rules PATH]|consume --target T --wm-dir DIR|register --state-dir S --target T --role R --account L --launch FILE [--anchor DIR]> [--tmux-socket PATH] [--capture-file PATH] [--state-dir PATH]".to_owned()
+    "usage: seat <meter --target T [--transcript PATH]|inject --target T (--text S|--file PATH)|heartbeat --target T|tick --target T --wm-dir DIR [--pointer TEXT] [--restore CMD] [--rules PATH]|cycle --target T --wm-dir DIR [--restore CMD] [--rules PATH]|externalize --target T --wm-dir DIR --anchor DIR --plan FILE --directives FILE [--user FILE] [--retire FILE] [--trigger manual|tick] [--role R] [--rules PATH]|rebrief --target T --wm-dir DIR --anchor DIR [--bd PATH] [--prefix P] [--rules PATH]|consume --target T --wm-dir DIR|register --state-dir S --target T --role R --account L --launch FILE [--anchor DIR]> [--tmux-socket PATH] [--capture-file PATH] [--state-dir PATH]".to_owned()
 }
 
 /// `seat` に続く引数を捌く。
@@ -322,13 +322,14 @@ fn cycle_of(args: &[String]) -> Outcome {
 /// `seat externalize`（設計 working-memory.md §5.1）。
 fn externalize_of(args: &[String]) -> Outcome {
     // 値欠け・空文字は使い方の誤り（他の flag と同じ極性・SRS NFR4）。
-    let (Ok(target), Ok(wm_dir), Ok(anchor), Ok(plan), Ok(directives), Ok(user), Ok(trigger), Ok(role), Ok(_), Ok(state_dir)) = (
+    let (Ok(target), Ok(wm_dir), Ok(anchor), Ok(plan), Ok(directives), Ok(user), Ok(retire), Ok(trigger), Ok(role), Ok(_), Ok(state_dir)) = (
         required_nonempty(args, "--target"),
         required_nonempty(args, "--wm-dir"),
         required_nonempty(args, "--anchor"),
         required_nonempty(args, "--plan"),
         required_nonempty(args, "--directives"),
         nonempty(args, "--user"),
+        nonempty(args, "--retire"),
         nonempty(args, "--trigger"),
         nonempty(args, "--role"),
         nonempty(args, "--rules"),
@@ -363,6 +364,7 @@ fn externalize_of(args: &[String]) -> Outcome {
         plan: Path::new(plan),
         directives: Path::new(directives),
         user: user.map(Path::new),
+        retire: retire.map(Path::new),
         trigger,
         role,
         cap,

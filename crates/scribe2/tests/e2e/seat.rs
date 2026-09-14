@@ -4778,7 +4778,7 @@ fn seat_wm_externalize_names_file_by_stamped_sid_and_refuses_without_stamp() {
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
     assert_eq!(
         stdout_of(&out),
-        "seat: externalized file=working-memory.sid-now-1.md carried=0 dropped_provisional=0 dropped_unresolved=0 directives=1\n",
+        "seat: externalized file=working-memory.sid-now-1.md carried=0 dropped_provisional=0 dropped_unresolved=0 dropped_retired=0 directives=1\n",
         "stdout 1 行"
     );
     assert_eq!(wm_names(&place), vec!["working-memory.sid-now-1.md".to_owned()], "最終行の sid の名義で 1 つだけ");
@@ -4835,7 +4835,7 @@ fn seat_wm_externalize_carries_pointer_lines_and_drops_provisional_in_priority_o
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
     assert_eq!(
         stdout_of(&out),
-        "seat: externalized file=working-memory.sid-3.md carried=3 dropped_provisional=2 dropped_unresolved=0 directives=1\n"
+        "seat: externalized file=working-memory.sid-3.md carried=3 dropped_provisional=2 dropped_unresolved=0 dropped_retired=0 directives=1\n"
     );
     let text = fs::read_to_string(place.wm.join("working-memory.sid-3.md")).unwrap_or_default();
     let section = wm_directive_section(&text);
@@ -4995,11 +4995,106 @@ fn seat_wm_externalize_carries_only_own_seat_and_drops_unresolved_rows() {
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
     assert_eq!(
         stdout_of(&out),
-        "seat: externalized file=working-memory.sid-9.md carried=1 dropped_provisional=0 dropped_unresolved=1 directives=0\n"
+        "seat: externalized file=working-memory.sid-9.md carried=1 dropped_provisional=0 dropped_unresolved=1 dropped_retired=0 directives=0\n"
     );
     let text = fs::read_to_string(place.wm.join("working-memory.sid-9.md")).unwrap_or_default();
     assert!(text.contains("\ncarry_source: working-memory.sid-a.consumed.md\n"), "新しい他席の file は source にならない: {text}");
     assert!(text.contains("在る条") && !text.contains("無い条") && !text.contains("他席の命令"), "{text}");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// 退役の歯の carry 元の節 3（Resolved の pointer 行 3 本）。
+const RETIRE_CARRY: &str = concat!(
+    "- [auto] [P0] since=2026-09-01 prose は規則でない → SSOT: 憲法 N2\n",
+    "- [hard候補] [P1] since=2026-09-01 退避は器の口 → SSOT: ADR-0018 §2.3\n",
+    "- [auto] [P2] since=2026-09-01 repo の現物 → SSOT: src/lib.rs\n",
+);
+
+/// (d-1) `--retire` の行と全文一致した carry 元の行だけ落ち、`dropped_retired` に数えられる（空行・コメントは捨てる）。
+#[test]
+fn seat_wm_externalize_retires_matching_directive_rows_and_counts_them() {
+    let place = wm_place();
+    wm_stamp(&place, &["sid-r1"]);
+    wm_consumed(&place, "working-memory.sid-r0.consumed.md", &format!("seat: {WM_TARGET}\n"), "", RETIRE_CARRY);
+    let retire = fixture(
+        &place.dir,
+        "retire.md",
+        "<!-- 役目を終えた行 -->\n\n- [hard候補] [P1] since=2026-09-01 退避は器の口 → SSOT: ADR-0018 §2.3   \n",
+    );
+    let out = wm_externalize(&place, "", &["--retire", &retire]);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(
+        stdout_of(&out),
+        "seat: externalized file=working-memory.sid-r1.md carried=2 dropped_provisional=0 dropped_unresolved=0 dropped_retired=1 directives=0\n"
+    );
+    let text = fs::read_to_string(place.wm.join("working-memory.sid-r1.md")).unwrap_or_default();
+    let section = wm_directive_section(&text);
+    let lines: Vec<&str> = section.lines().filter(|line| line.starts_with("- ")).collect();
+    assert_eq!(
+        lines,
+        vec![
+            "- [auto] [P0] since=2026-09-01 prose は規則でない → SSOT: 憲法 N2",
+            "- [auto] [P2] since=2026-09-01 repo の現物 → SSOT: src/lib.rs",
+        ],
+        "一致した 1 行だけ落ちる: {text}"
+    );
+    assert!(text.contains("\ncarry_items: 2\n"), "{text}");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (d-2) carry 元に一致しない行（部分一致・暫定行として落ちる行を含む）が在れば rc 1 `retire-unmatched`・行番号付きで全件・退避物を作らない。
+#[test]
+fn seat_wm_externalize_refuses_unmatched_retire_row() {
+    let place = wm_place();
+    wm_stamp(&place, &["sid-r2"]);
+    let carry = format!("{RETIRE_CARRY}- [confirm] [P1] since=2026-09-01 矢印の無い命令\n");
+    wm_consumed(&place, "working-memory.sid-r0.consumed.md", &format!("seat: {WM_TARGET}\n"), "", &carry);
+    let retire = fixture(
+        &place.dir,
+        "retire.md",
+        concat!(
+            "- [auto] [P0] since=2026-09-01 prose は規則でない → SSOT: 憲法 N2\n",
+            "- [auto] [P2] since=2026-09-01 repo の現物\n",
+            "- [confirm] [P1] since=2026-09-01 矢印の無い命令\n",
+            "- [auto] [P0] since=2026-09-01 prose は規則でない → SSOT: 憲法 N2\n",
+        ),
+    );
+    let out = wm_externalize(&place, "", &["--retire", &retire]);
+    assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "stdout={}", stdout_of(&out));
+    assert_eq!(
+        stderr_of(&out),
+        concat!(
+            "seat: externalize refused reason=retire-unmatched lines=3\n",
+            "seat: externalize retire line=2 unmatched\n",
+            "seat: externalize retire line=3 unmatched\n",
+            "seat: externalize retire line=4 unmatched\n",
+        ),
+        "部分一致・落ちる暫定行・同じ行の 2 本目は一致しない"
+    );
+    assert!(stdout_of(&out).is_empty(), "断る周は stdout に書かない");
+    assert!(!place.wm.join("working-memory.sid-r2.md").exists(), "退避物を作らない: {:?}", wm_names(&place));
+    let absent = wm_externalize(&place, "", &["--retire", &place.dir.join("none.md").display().to_string()]);
+    assert!(stderr_of(&absent).contains("reason=input-unreadable flag=--retire"), "{}", stderr_of(&absent));
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (d-3) cap ちょうどの carry 元から 1 行退役すれば新規 1 行を足せる（退役は cap の検査より先に効く）。
+#[test]
+fn seat_wm_externalize_retire_lets_cap_admit_a_new_row() {
+    let place = wm_place();
+    wm_stamp(&place, &["sid-r3"]);
+    wm_consumed(&place, "working-memory.sid-r0.consumed.md", &format!("seat: {WM_TARGET}\n"), "", RETIRE_CARRY);
+    let rules = wm_rules(&place, 3);
+    let fresh = "- [confirm] [P1] since=2026-09-14 新規の命令 → SSOT: docs/design/working-memory.md §5.1\n";
+    let over = wm_externalize(&place, fresh, &["--rules", &rules]);
+    assert_eq!(stderr_of(&over), "seat: externalize refused reason=directive-cap total=4 cap=3\n", "退役無しは上限超え");
+    let retire = fixture(&place.dir, "retire.md", "- [auto] [P2] since=2026-09-01 repo の現物 → SSOT: src/lib.rs\n");
+    let out = wm_externalize(&place, fresh, &["--rules", &rules, "--retire", &retire]);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(
+        stdout_of(&out),
+        "seat: externalized file=working-memory.sid-r3.md carried=2 dropped_provisional=0 dropped_unresolved=0 dropped_retired=1 directives=1\n"
+    );
     fs::remove_dir_all(&place.dir).ok();
 }
 

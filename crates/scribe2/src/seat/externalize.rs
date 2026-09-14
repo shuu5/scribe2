@@ -4,7 +4,8 @@
 //! 退避物 `working-memory.<sid>.md` を**器の口だけが書く**: sid は席の打刻の最終行から得て（env と
 //! pane は読まない）、自席の最新の消費済み退避物から節 1（「完了」「user 撤回」を落とす）と節 3
 //! （暫定行と unresolved の行を落とし `[P0-P3]` で安定 sort）を運び、`--directives` の新規行を文法で
-//! 検査し、上限（rules 行 `seat.wm_directive_cap`）を超えたら止める。**書く前に全部を判定し**、
+//! 検査し、`--retire` の行を carry 元の節 3 と全文一致で突合して落とし（契約 (d)）、上限（rules 行
+//! `seat.wm_directive_cap`）を超えたら止める。**書く前に全部を判定し**、
 //! 1 つでも断る周は file を作らない（FailClosed・[`ExternalizeError`]）。
 
 use super::wm::{self, Anchor, Item, Missing, Pointer, Resolution, WmDoc};
@@ -72,6 +73,8 @@ pub struct Request<'a> {
     pub directives: &'a Path,
     /// 節 1 の追記行の file。
     pub user: Option<&'a Path>,
+    /// 節 3 の退役行の file（契約 (d)）。
+    pub retire: Option<&'a Path>,
     /// 契機。
     pub trigger: Trigger,
     /// 表示用の role（弁別には使わない）。
@@ -116,6 +119,8 @@ pub enum ExternalizeError {
     CarryUnreadable,
     /// `--directives` の新規行が文法に落ちた（全件）。
     Grammar(Vec<GrammarError>),
+    /// `--retire` の行が carry 元の節 3 に一致しない（全件の行番号・黙って残さない）。
+    RetireUnmatched(Vec<usize>),
     /// 節 3 の合計が上限を超えた（黙って切らない）。
     DirectiveCap {
         /// 合計。
@@ -143,6 +148,7 @@ impl ExternalizeError {
             Self::InputUnreadable(_) => "input-unreadable",
             Self::CarryUnreadable => "carry-unreadable",
             Self::Grammar(_) => "directive-grammar",
+            Self::RetireUnmatched(_) => "retire-unmatched",
             Self::DirectiveCap { .. } => "directive-cap",
             Self::Unwritable => "unwritable",
         }
@@ -160,6 +166,8 @@ pub struct Externalized {
     pub dropped_provisional: usize,
     /// carry で落とした unresolved の行の数。
     pub dropped_unresolved: usize,
+    /// carry で落とした退役行の数（`--retire` 無しは 0）。
+    pub dropped_retired: usize,
     /// `--directives` の新規行の数。
     pub directives: usize,
 }
@@ -167,8 +175,8 @@ pub struct Externalized {
 /// 成功の 1 行。
 pub fn render(done: &Externalized) -> String {
     format!(
-        "seat: externalized file={} carried={} dropped_provisional={} dropped_unresolved={} directives={}",
-        done.file, done.carried, done.dropped_provisional, done.dropped_unresolved, done.directives
+        "seat: externalized file={} carried={} dropped_provisional={} dropped_unresolved={} dropped_retired={} directives={}",
+        done.file, done.carried, done.dropped_provisional, done.dropped_unresolved, done.dropped_retired, done.directives
     )
 }
 
@@ -184,6 +192,11 @@ pub fn render_refused(err: &ExternalizeError) -> Vec<String> {
                 let missing: Vec<&str> = error.missing.iter().map(|found| found.as_str()).collect();
                 format!("seat: externalize directive line={} missing={}", error.line, missing.join(","))
             }));
+            lines
+        }
+        ExternalizeError::RetireUnmatched(unmatched) => {
+            let mut lines = vec![format!("{head} lines={}", unmatched.len())];
+            lines.extend(unmatched.iter().map(|line| format!("seat: externalize retire line={line} unmatched")));
             lines
         }
         _ => vec![head],
@@ -211,6 +224,8 @@ struct Carry {
     dropped_provisional: usize,
     /// 落とした unresolved の行。
     dropped_unresolved: usize,
+    /// 落とした退役行。
+    dropped_retired: usize,
 }
 
 /// 入力 file の読み。
@@ -221,6 +236,8 @@ struct Inputs {
     directives: Vec<Item>,
     /// 節 1 の追記行。
     user: Vec<Item>,
+    /// 節 3 の退役行。
+    retire: Vec<Item>,
 }
 
 /// 退避を 1 回行う。**判定を全部済ませてから** `create_new` で 1 回だけ書く。
@@ -233,7 +250,7 @@ pub fn run(request: &Request) -> Result<Externalized, ExternalizeError> {
     }
     let anchor = Anchor::open(request.anchor).ok_or(ExternalizeError::AnchorMissing)?;
     let inputs = read_inputs(request)?;
-    let carry = carry_forward(request.wm_dir, request.target, &anchor)?;
+    let mut carry = carry_forward(request.wm_dir, request.target, &anchor)?;
     let refused: Vec<GrammarError> = inputs
         .directives
         .iter()
@@ -245,6 +262,8 @@ pub fn run(request: &Request) -> Result<Externalized, ExternalizeError> {
     if !refused.is_empty() {
         return Err(ExternalizeError::Grammar(refused));
     }
+    // 退役は cap の前に効く（退役で上限を下回れば新規行を足せる）。
+    retire(&mut carry, &inputs.retire)?;
     let total = carry.directives.len().saturating_add(inputs.directives.len());
     if u64::try_from(total).map_or(true, |count| count > request.cap) {
         return Err(ExternalizeError::DirectiveCap { total, cap: request.cap });
@@ -255,6 +274,7 @@ pub fn run(request: &Request) -> Result<Externalized, ExternalizeError> {
         carried: carry.directives.len(),
         dropped_provisional: carry.dropped_provisional,
         dropped_unresolved: carry.dropped_unresolved,
+        dropped_retired: carry.dropped_retired,
         directives: inputs.directives.len(),
     };
     let doc = compose(request, carry, inputs);
@@ -298,10 +318,15 @@ fn read_inputs(request: &Request) -> Result<Inputs, ExternalizeError> {
         Some(path) => wm::items(&read(path, "--user")?),
         None => Vec::new(),
     };
+    let retire = match request.retire {
+        Some(path) => wm::items(&read(path, "--retire")?),
+        None => Vec::new(),
+    };
     Ok(Inputs {
         plan: wm::strip_comments(&plan).trim_matches('\n').to_owned(),
         directives: wm::items(&directives),
         user,
+        retire,
     })
 }
 
@@ -340,6 +365,7 @@ fn carry_forward(dir: &Path, target: &str, anchor: &Anchor) -> Result<Carry, Ext
         directives: Vec::new(),
         dropped_provisional: 0,
         dropped_unresolved: 0,
+        dropped_retired: 0,
     };
     let Some(path) = latest_consumed(dir, target)? else {
         return Ok(carry);
@@ -359,6 +385,33 @@ fn carry_forward(dir: &Path, target: &str, anchor: &Anchor) -> Result<Carry, Ext
     }
     carry.directives.sort_by_key(wm::priority_of);
     Ok(carry)
+}
+
+/// 退役（契約 (d)）: `--retire` の各行を carry に残った節 3 の項目と**全文一致**（両端の空白だけ無視）で
+/// 突合し、一致した項目を 1 本ずつ落とす。一致しない行が 1 本でも在れば全件の行番号で断る（carry は
+/// 暫定行と unresolved を落とした後なので、落ちる行を書いた周も一致しない側に入る）。
+fn retire(carry: &mut Carry, rows: &[Item]) -> Result<(), ExternalizeError> {
+    let mut matched = vec![false; carry.directives.len()];
+    let mut unmatched = Vec::new();
+    for row in rows {
+        let wanted = row.text.trim();
+        let hit = carry
+            .directives
+            .iter()
+            .zip(matched.iter_mut())
+            .find(|(item, taken)| !**taken && item.text.trim() == wanted);
+        match hit {
+            Some((_, taken)) => *taken = true,
+            None => unmatched.push(row.line),
+        }
+    }
+    if !unmatched.is_empty() {
+        return Err(ExternalizeError::RetireUnmatched(unmatched));
+    }
+    let mut taken = matched.into_iter();
+    carry.directives.retain(|_| !taken.next().unwrap_or(false));
+    carry.dropped_retired = rows.len();
+    Ok(())
 }
 
 /// 書く退避物を組む（節 1 = carry + 追記・節 3 = carry + 新規を P 昇順の安定 sort）。
