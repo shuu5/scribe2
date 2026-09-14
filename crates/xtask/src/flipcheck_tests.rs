@@ -436,3 +436,119 @@ fn flip_check_base_retry_is_color_independent() {
         output.status
     );
 }
+
+// ---- base copy の tracked 集合（s2-07l.280・`git archive` の展開は `.git` を持たない）----
+//
+// base copy の中で `git ls-files` を撃つ歯（`contracts check` の実 repo 母集団）は、copy が
+// git repo でないと外側の repo を見つけ `target/` 配下の 0 本を読む＝main が緑でも毎便
+// `base-not-green`。fixture の base の歯そのものに `git ls-files` を撃たせ、base 段で測れる
+// ことを実 fixture で確かめる。
+
+/// base copy の root（fixture の `CARGO_MANIFEST_DIR` の 2 つ上）で `git ls-files` を撃つ
+/// fixture の歯の共通部（`root` と `listed`＝一覧を持つ）。
+const LS_FILES_SNIPPET: &str = "        let root = std::path::Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"..\").join(\"..\");\n        \
+     let out = std::process::Command::new(\"git\").arg(\"-C\").arg(&root).arg(\"ls-files\").output().expect(\"git ls-files\");\n        \
+     let listed = String::from_utf8_lossy(&out.stdout).into_owned();\n";
+
+/// base copy の index に自分の `src/lib.rs` が載ることを assert する fixture の歯。
+///
+/// copy が git repo でない周は外側（fixture）の repo の `target/flipcheck/base` 配下＝0 本を
+/// 読むので、この歯が base 段で落ち `base-not-green` になる（= base の xtask で RED）。
+fn tracked_lib_test() -> String {
+    format!(
+        "    #[test]\n    fn tracked() {{\n{LS_FILES_SNIPPET}        assert!(listed.lines().any(|line| line == \"{}\"), \"index に lib.rs が無い: {{listed:?}}\");\n    }}\n",
+        lib_rel()
+    )
+}
+
+/// overlay が足す新規 test file の相対 path（base に無い `+` の file）。
+fn extra_rel() -> String {
+    format!("crates/{FIXTURE_MEMBER}/tests/extra.rs")
+}
+
+/// `git ls-files` の一覧・`git rev-parse HEAD`・「working tree に overlay の新規 file が
+/// 在るか」を `probe` へ書く fixture の歯（assert はしない＝overlay 段の RED と混ざらないよう、
+/// 外の歯が読む）。
+///
+/// base 段と overlay 段の 2 回走り、最後に書いた overlay 段の姿が残る。`has-extra=` の行は
+/// 「新規 file が在る周に測った」ことの証拠で、不在の周に通る空虚な負例を塞ぐ。
+fn probe_lib_test(probe: &Path) -> String {
+    format!(
+        "    #[test]\n    fn probe() {{\n{LS_FILES_SNIPPET}        let extra = root.join(\"{}\").is_file();\n        \
+         let head = std::process::Command::new(\"git\").arg(\"-C\").arg(&root).args([\"rev-parse\", \"HEAD\"]).output().expect(\"git rev-parse\");\n        \
+         let head = String::from_utf8_lossy(&head.stdout).trim().to_owned();\n        \
+         std::fs::write(\"{}\", format!(\"{{listed}}has-extra={{extra}}\\nhead={{head}}\\n\")).expect(\"probe を書ける\");\n    }}\n",
+        extra_rel(),
+        probe.display()
+    )
+}
+
+/// (i) base copy は base の tracked 集合を `git ls-files` で読める git repo である——
+/// base の歯が copy の index に自分の `src/lib.rs` を見つけ、base 段が緑・HEAD の flip 1 本で
+/// `RED-on-base ok tests_changed=1`。
+#[test]
+fn flip_check_base_copy_is_a_git_repo_with_the_tracked_set() {
+    let dir = make_tmp_dir();
+    scaffold(&dir);
+    let base_lib = base_lib_with(&tracked_lib_test());
+    let base = seed_fixture(&dir, &base_lib);
+    // HEAD: 既存の歯（holds）の期待値だけを変え、base の src（val() は 1）で赤い flip を 1 本作る。
+    write_at(
+        &dir,
+        &lib_rel(),
+        &base_lib.replace(
+            "        assert_eq!(super::val(), 1);\n",
+            "        assert_eq!(super::val(), 2);\n",
+        ),
+    );
+    head_commit(&dir);
+    let (got, retries) = judge_with_retry_lines(&base, &dir);
+    drop_fixture(&dir);
+    assert_verdict(&got.line, got.code, 0, "RED-on-base ok tests_changed=1");
+    assert!(
+        retries.is_empty(),
+        "tracked 集合の歯は撃ち直し無しで base 緑のはず: {retries:?} / {}",
+        got.line
+    );
+}
+
+/// (ii) overlay で足した新規 file（`+`）は base copy の **index に載らない**（working tree
+/// にだけ在る）——base の歯が overlay 段で読んだ `git ls-files` に `tests/extra.rs` が無く、
+/// `src/lib.rs` は在る。同じ周の `git rev-parse HEAD` は **base の sha**（copy は commit を
+/// 作らず base の commit を HEAD に置く＝`HEAD:<file>` を読む `contracts check` が base で測れる）。
+#[test]
+fn flip_check_base_copy_index_excludes_overlay() {
+    let dir = make_tmp_dir();
+    scaffold(&dir);
+    let probe = dir.join("probe.txt");
+    let base_lib = base_lib_with(&probe_lib_test(&probe));
+    let base = seed_fixture(&dir, &base_lib);
+    // HEAD: 新規の統合 test file 1 本（base の src で赤い）。lib は触らない。
+    write_at(
+        &dir,
+        &extra_rel(),
+        &format!("#[test]\nfn fresh() {{\n    assert_eq!({FIXTURE_MEMBER}::val(), 2);\n}}\n"),
+    );
+    head_commit(&dir);
+    let got = judge(&base, &dir);
+    let seen = std::fs::read_to_string(&probe).unwrap_or_default();
+    drop_fixture(&dir);
+    assert_verdict(&got.line, got.code, 0, "RED-on-base ok tests_changed=1");
+    let lines: Vec<&str> = seen.lines().collect();
+    assert!(
+        lines.contains(&"has-extra=true"),
+        "overlay 段（新規 file が working tree に在る周）の姿が残るはず: {seen:?}"
+    );
+    assert!(
+        lines.contains(&lib_rel().as_str()),
+        "base の tracked file は index に載るはず: {seen:?}"
+    );
+    assert!(
+        !lines.contains(&extra_rel().as_str()),
+        "overlay の新規 file は index に載らないはず: {seen:?}"
+    );
+    assert!(
+        lines.contains(&format!("head={base}").as_str()),
+        "base copy の HEAD は base の sha のはず（commit を捏造しない）: {seen:?}"
+    );
+}

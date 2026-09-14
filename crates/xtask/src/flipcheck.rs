@@ -5,7 +5,7 @@
 //! git と tar の 2 本である（呼出は [`std::process::Command`]）。
 //!
 //! **honest fence**: git / tar / cargo の spawn 失敗と、diff / rev-parse / archive /
-//! tar / base 健全性前段 / runner 不在の rc≠0 は例外なく `reason=infra-error` として
+//! tar / init / update-ref / add / base 健全性前段 / runner 不在の rc≠0 は例外なく `reason=infra-error` として
 //! rc 1 で返し、RED とも skip とも数えない。runner が signal で殺され rc を持たない
 //! ときも RED と数えない（rc≠0 でないので (c) の RED-on-base に当たらない）。
 //! **overlay 後の compile error は RED と数える**（新しい test が古い木で通らないこと
@@ -570,6 +570,14 @@ fn extract_archive(base: &str, root: &Path, dest: &Path) -> Result<(), String> {
 /// `<root>/target/flipcheck/base` へ base tree を実体化する。
 ///
 /// `tar` は truncate を rc 0 で通すので、実体化直後に `Cargo.toml` の存在を確かめる。
+///
+/// 展開の後に **base copy を git repo にする**（[`index_base`]）。`git archive` の展開は
+/// `.git` を持たないので、base copy の中で撃った `git ls-files` / `git show HEAD:…` は
+/// **外側の repo**（`<root>`）を見つけ、`.gitignore` 済み `target/` 配下の tracked file 0 本と
+/// **HEAD（= base ではない）**を返す——tracked 集合を母集団に取り宣言を HEAD から読む歯
+/// （`contracts check` の実 repo 母集団 `≥ 8` 行）が base 段で落ち、main が緑でも毎便
+/// `base-not-green` になる（実測 2026-09-14・s2-07l.271 run 1 以後の全便）。
+/// C12.2 の「base の緑」は実 checkout の緑であって、実体化は tracked 集合と HEAD を保たねばならない。
 fn materialize_base(base: &str, root: &Path) -> Result<PathBuf, String> {
     let dest = work_dir(root).join("base");
     if let Err(err) = fs::remove_dir_all(&dest) {
@@ -586,7 +594,70 @@ fn materialize_base(base: &str, root: &Path) -> Result<PathBuf, String> {
             manifest.display()
         ));
     }
+    index_base(base, root, &dest)?;
     Ok(dest)
+}
+
+/// base copy を **index と HEAD** を持つ git repo にする——commit は作らない。
+///
+/// 3 手: `git init -q` → 共有 object store を alternates で**読む**（`objects/info/alternates`
+/// に `<root>` の objects dir を 1 行）→ `git update-ref --no-deref HEAD <base の sha>`
+/// → `git add -A --force`。
+///
+/// - **HEAD は base の commit そのもの**である。`contracts check` は宣言 file を作業ツリー
+///   でなく `HEAD:<file>` から読む（`pipe/declaration.rs`・「commit されていない宣言は無いのと
+///   同じ」）ので、index だけでは `HEAD を読めない` の 2 件で落ちる（実測 2026-09-14・本便の
+///   1 手目）。commit を作って HEAD を用意すると identity と署名の設定に依存し、しかも
+///   base に無い commit を捏造することになる——alternates で object を読めば、base の
+///   sha を HEAD に置くだけで足りる。
+/// - index に載るのは archive の中身＝base の tracked 集合そのもので、`git ls-files` が
+///   それをそのまま返す。`--force` は外の excludes（`core.excludesFile`）や base 自身の
+///   `.gitignore` に当たる tracked file を index から落とさないため——archive に在る file は
+///   base で tracked だった file だけなので、落とす理由が無い。
+///
+/// overlay（[`write_text`]）は従来どおり working tree にだけ書き、index にも HEAD にも
+/// 触れない——HEAD の test 区間や `+` の新規 file が base の tracked 集合へ紛れると、
+/// tracked 集合を読む歯が base 段と overlay 段で別の母集団を見ることになる。
+///
+/// 共有 `.git`（`<root>/.git`）へは 1 byte も書かない（alternates は読む側の設定で、
+/// 書くのは copy の `.git` の中だけ）。作るのは `.gitignore` 済み `target/` 配下の入れ子
+/// repo で、掃除は [`cleanup`] が dir ごと消す。失敗は infra-error の理由（RED にも skip
+/// にも化けさせない）。
+fn index_base(base: &str, root: &Path, dest: &Path) -> Result<(), String> {
+    let sha = git_stdout(
+        root,
+        "git rev-parse",
+        &["rev-parse", "--verify", &format!("{base}^{{commit}}")],
+    )?;
+    let objects = git_stdout(
+        root,
+        "git rev-parse",
+        &["rev-parse", "--path-format=absolute", "--git-path", "objects"],
+    )?;
+    git_stdout(dest, "git init", &["init", "-q"])?;
+    let alternates = git_stdout(
+        dest,
+        "git rev-parse",
+        &[
+            "rev-parse",
+            "--path-format=absolute",
+            "--git-path",
+            "objects/info/alternates",
+        ],
+    )?;
+    let alternates = Path::new(alternates.trim());
+    if let Some(parent) = alternates.parent() {
+        fs::create_dir_all(parent).map_err(|err| format!("{} を作れない: {err}", parent.display()))?;
+    }
+    fs::write(alternates, format!("{}\n", objects.trim()))
+        .map_err(|err| format!("{} を書けない: {err}", alternates.display()))?;
+    git_stdout(
+        dest,
+        "git update-ref",
+        &["update-ref", "--no-deref", "HEAD", sha.trim()],
+    )?;
+    git_stdout(dest, "git add", &["add", "-A", "--force"])?;
+    Ok(())
 }
 
 /// 作業 dir（`<root>/target/flipcheck`）。
