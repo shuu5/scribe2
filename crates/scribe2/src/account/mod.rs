@@ -616,10 +616,11 @@ fn record(state_dir: &Path, kind: EventKind, label: &str, ts: &str) -> Result<()
 
 #[cfg(test)]
 mod tests {
-    use super::{label_ok, login_line, retired_path, summary, AccountError, ERRORS};
+    use super::{label_ok, login_line, retired_path, stage_host, staged_fits, summary, AccountError, ERRORS};
     use crate::fleet::{Allowance, AllowanceLatest, Measured, State, Unmeasured, UnmeasuredReason, WindowKind};
     use crate::order::is_declaration_order;
-    use std::path::Path;
+    use std::fs;
+    use std::path::{Path, PathBuf};
 
     /// 断りの字面は設計 §7 の 8 語で、宣言順に閉じる（variant を足した周はここの件数が変わる）。
     #[test]
@@ -700,5 +701,62 @@ mod tests {
         assert_eq!(summary(Some(&broken), "a1"), "five_hour=unmeasured seven_day=unmeasured", "古い実測を名乗らない");
         assert_eq!(summary(Some(&fresh), "a2"), "five_hour=unmeasured seven_day=unmeasured", "行の無い口座");
         assert_eq!(summary(None, "a1"), "five_hour=unmeasured seven_day=unmeasured", "log を読めない");
+    }
+
+    /// 歯ごとの空の tmp dir（in-file の歯の置き場・env を読まないのは器の本体の規律〔C2.2〕）。
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("account-stage-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::create_dir_all(&dir);
+        dir
+    }
+
+    /// `body` を一時 file に書いて [`staged_fits`] を撃つ（書けない周は歯を落とす＝空虚に通さない）。
+    fn fits(dir: &Path, body: &str, label: &str) -> bool {
+        let staged = dir.join("host.toml.staged");
+        assert!(fs::write(&staged, body).is_ok(), "一時 file を書ける");
+        staged_fits(&staged, label)
+    }
+
+    // flip-check: retroactive s2-07l.283
+    /// 読める face が `label` を宣言する周だけ true（.245 run 3 の生存 `staged_fits → true` を弁別する）。
+    #[test]
+    fn account_stage_fits_when_the_face_reads_and_declares_the_label() {
+        let dir = scratch("declares");
+        assert!(fits(&dir, "schema = 1\n\n[[account]]\nlabel = \"a1\"\n", "a1"));
+    }
+
+    // flip-check: retroactive s2-07l.283
+    /// 読めても `label` を宣言しない face は false（宣言の行が落ちた周を通さない）。
+    #[test]
+    fn account_stage_does_not_fit_when_the_face_reads_but_lacks_the_label() {
+        let dir = scratch("lacks");
+        assert!(!fits(&dir, "schema = 1\n\n[[account]]\nlabel = \"a1\"\n", "a2"));
+    }
+
+    // flip-check: retroactive s2-07l.283
+    /// 未知 key を持つ face は契約 (a) の loader が断る＝false（label が在っても）。
+    #[test]
+    fn account_stage_does_not_fit_when_the_face_has_an_unknown_key() {
+        let dir = scratch("unknown-key");
+        assert!(!fits(&dir, "schema = 1\n\n[[account]]\nlabel = \"a1\"\nbogus = 1\n", "a1"));
+    }
+
+    // flip-check: retroactive s2-07l.283
+    /// [`stage_host`] は host.toml が**在るのに読めない**（dir）周と、読めても一時 file が face として読めない（未知 key）周の
+    /// どちらも `write-failed` で、一時 file を残さない（`schema = 1` から作り直さず・壊れた面を rename に回さない・NFR4）。
+    /// `add` の口は `rules::read` が先に断るので、この 2 分岐は関数を直接撃つ。
+    #[test]
+    fn account_stage_host_refuses_an_unreadable_or_unparseable_face_without_a_staged_file() {
+        let dir = scratch("host");
+        let host = dir.join(crate::rules::HOST_MANIFEST);
+        let staged = dir.join("host.toml.staged");
+        assert!(fs::create_dir(&host).is_ok(), "host.toml を dir として置ける");
+        assert_eq!(stage_host(&dir, "a1"), Err(AccountError::WriteFailed), "在るのに読めない周は無いに読み替えない");
+        assert!(fs::symlink_metadata(&staged).is_err(), "dir: 一時 file を残さない");
+        assert!(fs::remove_dir(&host).is_ok() && fs::write(&host, "schema = 1\n\n[[account]]\nlabel = \"x\"\nbogus = 1\n").is_ok());
+        assert_eq!(stage_host(&dir, "a1"), Err(AccountError::WriteFailed), "一時 file が face として読めない周");
+        assert!(fs::symlink_metadata(&staged).is_err(), "未知 key: 一時 file を残さない");
+        let _ = fs::remove_dir_all(&dir);
     }
 }

@@ -2583,6 +2583,115 @@ fn account_cmd_refusals_write_no_file_and_no_event() {
     fs::remove_dir_all(&dir).ok();
 }
 
+/// `account` を撃ち、`write-failed`（rc 2・stderr の 1 行・stdout 0 byte）で断られることを確かめる。
+fn account_write_failed(args: &[&str], label: &str) {
+    let out = run_account(args);
+    assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "{args:?}: {out:?}");
+    assert!(out.stdout.is_empty(), "{args:?}: stdout 0 byte");
+    assert_eq!(text(&out.stderr), format!("account: refused reason=write-failed label={label}\n"), "{args:?}");
+}
+
+// flip-check: retroactive s2-07l.283
+/// (a) host の面が**在るのに読めない**（dir である）周は `write-failed` で断り、`schema = 1` から作り直さない（user の宣言を
+/// 「無い」に読み替えない・NFR4）: host.toml は dir のまま・`host.toml.staged` も `accounts/` も現れない（置き場の全 entry が不変）。
+#[test]
+fn account_cmd_add_refuses_when_host_manifest_is_unreadable_without_rewriting() {
+    let dir = state_dir();
+    let path = dir.display().to_string();
+    let host = dir.join(vessel::rules::HOST_MANIFEST);
+    fs::create_dir(&host).expect("host.toml を dir として置ける");
+    let before = tree(&dir);
+    account_write_failed(&["add", "a1", "--state-dir", &path], "a1");
+    assert!(host.is_dir(), "host.toml は dir のまま");
+    assert!(fs::symlink_metadata(dir.join("host.toml.staged")).is_err(), "一時 file を作らない");
+    assert!(fs::symlink_metadata(dir.join("accounts")).is_err(), "口座の dir（親ごと）を作らない");
+    assert_eq!(tree(&dir), before, "置き場の全 entry が不変");
+    fs::remove_dir_all(&dir).ok();
+}
+
+// flip-check: retroactive s2-07l.283
+/// (b) 改行で終わる既存の host.toml（`[[account]]` 1 本）への追記は区切りの空行 1 つ + 2 行＝行数が元 + 3 で、元の本文は
+/// 接頭辞として不変（余分な空行が入らない）。対で、末尾改行の無い host.toml へも同じ形（前の行と `[[account]]` が別の行＝読める）。
+#[test]
+fn account_cmd_add_appends_without_a_blank_line_to_a_newline_terminated_manifest() {
+    for (name, original) in [("改行終端", host_body(&["x"])), ("改行なし", host_body(&["x"]).trim_end().to_owned())] {
+        let dir = state_dir();
+        let path = dir.display().to_string();
+        fs::write(dir.join(vessel::rules::HOST_MANIFEST), &original).expect("host の面を書ける");
+        let before = original.lines().count();
+        let a1 = dir.join("accounts").join("a1");
+        account_ok(&["add", "a1", "--state-dir", &path], &format!("account: prepared a1 next=cd {path} && CLAUDE_CONFIG_DIR={} claude", a1.display()));
+        let after = host_text(&dir);
+        assert_eq!(after.lines().count(), before + 3, "{name}: 区切りの空行 1 つ + 2 行: {after:?}");
+        assert!(after.starts_with(original.trim_end()), "{name}: 元の本文は接頭辞として不変: {after:?}");
+        assert_eq!(after, host_body(&["x", "a1"]), "{name}: 余分な空行が入らない");
+        let lines: Vec<&str> = after.lines().collect();
+        assert_eq!(lines.get(before.saturating_sub(1) + 2), Some(&"[[account]]"), "{name}: 前の行と別の行に [[account]]: {lines:?}");
+        let listed = text(&run_account(&["ls", "--state-dir", &path]).stdout);
+        assert_eq!(listed.lines().filter(|line| line.starts_with("account=")).count(), 2, "{name}: 2 口座とも読める: {listed}");
+        fs::remove_dir_all(&dir).ok();
+    }
+}
+
+// flip-check: retroactive s2-07l.283
+/// (c) 既存の host.toml が未知 key を持つ（host の面として読めない）周は `write-failed` で断り、host.toml の bytes は不変・
+/// `host.toml.staged` が残らず・口座の dir も現れない（壊れた面を rename して上書きしない・NFR4）。
+#[test]
+fn account_cmd_add_refuses_when_the_staged_manifest_does_not_parse_and_keeps_host_toml() {
+    let dir = state_dir();
+    let path = dir.display().to_string();
+    let host = dir.join(vessel::rules::HOST_MANIFEST);
+    let broken = "schema = 1\n\n[[account]]\nlabel = \"x\"\nbogus = 1\n";
+    fs::write(&host, broken).expect("host の面を書ける");
+    let before = tree(&dir);
+    account_write_failed(&["add", "a1", "--state-dir", &path], "a1");
+    assert_eq!(fs::read(&host).unwrap_or_default(), broken.as_bytes(), "host.toml の bytes は不変");
+    assert!(fs::symlink_metadata(dir.join("host.toml.staged")).is_err(), "一時 file が残らない");
+    assert!(fs::symlink_metadata(dir.join("accounts").join("a1")).is_err(), "口座の dir を作らない");
+    assert_eq!(tree(&dir), before, "置き場の全 entry が不変");
+    fs::remove_dir_all(&dir).ok();
+}
+
+// flip-check: retroactive s2-07l.283
+/// (d) 宣言だけ在って `<state>/accounts/<label>` が無い口座の `retire` は、退役先の親（`accounts/.retired/`）を**作る前に**
+/// `write-failed` で断り、event も 0 件（置き場の全 entry が不変）。正例は
+/// [`account_cmd_retire_moves_the_dir_once_and_records_one_event`]。
+#[test]
+fn account_cmd_retire_refuses_a_missing_dir_before_creating_the_retired_parent() {
+    let dir = state_dir();
+    let path = dir.display().to_string();
+    put_host_labels(&dir, &["a1"]);
+    let before = tree(&dir);
+    account_write_failed(&["retire", "a1", "--state-dir", &path], "a1");
+    assert!(fs::symlink_metadata(dir.join("accounts").join(".retired")).is_err(), "退役先の親を作らない");
+    assert!(fs::symlink_metadata(dir.join("accounts")).is_err(), "accounts/ も作らない");
+    assert!(account_events(&dir).is_empty(), "event 0 件");
+    assert_eq!(tree(&dir), before, "置き場の全 entry が不変");
+    fs::remove_dir_all(&dir).ok();
+}
+
+// flip-check: retroactive s2-07l.283
+/// (e) flag の 3 条件はそれぞれ単独で使い方の誤り: 空の値（`--anchor ''`）・`--` で始まる値（`--anchor --target`）・
+/// 未知の flag（`--bogus x`）のどれも usage（rc 1・stderr・stdout 0 byte）で断り、file も event も書かない（3 形を別々に撃つ）。
+#[test]
+fn account_cmd_flags_refuse_empty_value_dashed_value_and_unknown_flag() {
+    let dir = state_dir();
+    let path = dir.display().to_string();
+    let before = tree(&dir);
+    let usage = text(&run_account(&[]).stderr);
+    assert!(usage.starts_with("usage: account <add <label>"), "{usage}");
+    for (name, tail) in [("空の値", &["--anchor", ""][..]), ("-- で始まる値", &["--anchor", "--target"]), ("未知の flag", &["--bogus", "x"])] {
+        let mut call = vec!["add", "a2", "--state-dir", &path];
+        call.extend_from_slice(tail);
+        let out = run_account(&call);
+        assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{name}: {out:?}");
+        assert!(out.stdout.is_empty(), "{name}: stdout 0 byte");
+        assert_eq!(text(&out.stderr), usage, "{name}: 使い方で断る");
+        assert_eq!(tree(&dir), before, "{name}: file も event も不変");
+    }
+    fs::remove_dir_all(&dir).ok();
+}
+
 /// (3a) 期限切れの credential を偽 claude が書き換える周は、読み直して measured になり行の末尾に `refresh=ok`。
 /// 起動は `-p` と `--max-turns 1`・口座の設定 dir を `CLAUDE_CONFIG_DIR` に・cwd は state dir。
 #[test]
