@@ -2249,3 +2249,246 @@ fn pipe_record_show_external_form() {
     settings.bind(|| insta::assert_snapshot!(form));
     clean(&[&repo, &state]);
 }
+
+// ---- 純移動の機械証明（設計 pipeline.md §5.3・`s2-07l.266`・接頭辞 `pipe_gate_move_`）--------------------
+//
+// base の `src/` に item を持つ file を commit し、runner が HEAD の形（置き場へ写した file 群）を `cp` して
+// commit する。lens の入力が要約か diff かは判定行の `lens-input=`・run dir の `lens-input.txt`・fake lens が
+// 読んだ stdin の 3 面で測る（`s2-07l.261` と同型の fixture = 1 file → 複数 file・`pub(super)` 化・module doc・
+// 区切り線・`// flip-check: moved` の札）。
+
+/// 移動前の `src/lib.rs`（helper 3 本 + struct 1 本・module doc・区切り線）。
+const MOVE_BASE_LIB: &str = "//! seed crate.\n\n/// helper one.\nfn one() -> u8 {\n    1\n}\n\n/// helper two.\nfn two() -> u8 {\n    2\n}\n\n#[derive(Debug)]\npub struct Pair {\n    a: u8,\n}\n\n// ── section ──\n\nfn three() -> u8 {\n    3\n}\n";
+
+/// 移動後の `src/lib.rs`（札・`mod` 宣言・`pub(crate)` 化・one は残る）。
+const MOVE_HEAD_LIB: &str = "// flip-check: moved s2-07l.261\n//! seed crate（split）.\n\nmod alpha;\nmod beta;\n\n/// helper one.\npub(crate) fn one() -> u8 {\n    1\n}\n";
+
+/// 移動後の `src/alpha.rs`（two と Pair・`pub(super)` 化・`use`）。
+const MOVE_HEAD_ALPHA: &str = "//! alpha.\n\nuse super::one;\n\n/// helper two.\npub(super) fn two() -> u8 {\n    2\n}\n\n#[derive(Debug)]\npub struct Pair {\n    a: u8,\n}\n";
+
+/// 移動後の `src/beta.rs`（three・区切り線）。
+const MOVE_HEAD_BETA: &str = "//! beta.\n\n// ── section ──\n\npub(super) fn three() -> u8 {\n    3\n}\n";
+
+/// 要約の先頭行（`lens-input.txt` と lens の stdin の先頭が名乗る字面）。
+const SUMMARY_HEADLINE: &str = "これは diff ではなく純移動の要約である";
+
+/// 純移動の fixture の HEAD の 3 file。
+fn move_head() -> Vec<(&'static str, &'static str)> {
+    vec![("lib.rs", MOVE_HEAD_LIB), ("alpha.rs", MOVE_HEAD_ALPHA), ("beta.rs", MOVE_HEAD_BETA)]
+}
+
+/// 純移動の fixture の便を Implemented まで進める: base の file 群を seed の上に commit し、HEAD の file 群を
+/// 置き場へ写して runner に `cp` させる（write-set は 3 file）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn move_run(base: &[(&str, &str)], head: &[(&str, &str)]) -> (PathBuf, PathBuf, String) {
+    let (repo, state) = repo_with_state();
+    for (name, body) in base {
+        fs::write(repo.join("src").join(name), body).expect("base の file を書ける");
+    }
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "move-base"]);
+    let staged = state.join("head");
+    fs::create_dir_all(&staged).expect("HEAD の写しの dir を作れる");
+    for (name, body) in head {
+        fs::write(staged.join(name), body).expect("HEAD の file を書ける");
+    }
+    let contract = write_contract(&repo, &["write-set"], &[r#"write-set = ["src/lib.rs", "src/alpha.rs", "src/beta.rs"]"#]);
+    let id = intake(&repo, &state, &contract);
+    let runner = format!("cp '{}'/*.rs src/ && git add -A && git commit -q -m runner", staged.display());
+    let out = spawn_with(&repo, &state, &id, &runner);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "spawn: {}", stderr_of(&out));
+    (repo, state, id)
+}
+
+/// stdin の全文を `seen` へ写してから PASS を返す fake lens。
+fn recording_lens(seen: &Path) -> String {
+    format!("cat > '{}'; echo '{}'", seen.display(), lens_verdict("PASS"))
+}
+
+/// 判定行の `key=<値>`（無ければ空）。
+fn token_of(line: &str, key: &str) -> String {
+    line.split_whitespace()
+        .find_map(|token| token.strip_prefix(key))
+        .unwrap_or_default()
+        .to_owned()
+}
+
+/// run dir の `lens-input.txt`。
+fn lens_input_path(state: &Path, id: &str) -> PathBuf {
+    state.join("pipe").join(id).join("lens-input.txt")
+}
+
+/// 便の worktree の `git diff <base>..HEAD` の生 byte 数（runner の commit は 1 本＝`HEAD~1..HEAD`）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn raw_diff_len(repo: &Path, id: &str) -> usize {
+    Command::new("git")
+        .arg("-C")
+        .arg(worktree_of(repo, id))
+        .args(["diff", "HEAD~1..HEAD"])
+        .output()
+        .expect("git を起動できる")
+        .stdout
+        .len()
+}
+
+/// (i) 純移動の便は lens の入力が**要約**になる: 判定行 `lens-input=summary bytes=<要約の byte>`・`lens-input.txt` が
+/// 在り先頭行が名乗る・fake lens が読んだ stdin は残した本文そのもの・verdict が読める・`diff_bytes` は diff の byte
+/// のまま・stderr に理由の行は出ない。
+#[test]
+fn pipe_gate_move_proof_pure_move_sends_summary() {
+    let (repo, state, id) = move_run(&[("lib.rs", MOVE_BASE_LIB)], &move_head());
+    let seen = state.join("lens-stdin");
+    let out = gate_once(&repo, &state, &id, Some(&recording_lens(&seen)));
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "PASS: {}", stderr_of(&out));
+    let line = stdout_of(&out);
+    assert_eq!(token_of(&line, "lens-input="), "summary", "判定行: {line}");
+    let kept = fs::read_to_string(lens_input_path(&state, &id)).expect("lens-input.txt が在る");
+    assert_eq!(kept.lines().next(), Some(SUMMARY_HEADLINE), "先頭行が名乗る: {kept}");
+    let received = fs::read_to_string(&seen).expect("lens が読んだ stdin を読める");
+    assert_eq!(received, kept, "lens が読んだ stdin は残した本文そのもの");
+    assert_eq!(received.lines().next(), Some(SUMMARY_HEADLINE), "stdin の先頭行も名乗る");
+    assert_eq!(token_of(&line, "bytes="), kept.len().to_string(), "bytes= は要約の byte: {line}");
+    let pairs = verdict_pairs(&state, &id);
+    assert_eq!(value_of(&pairs, "verdict"), "PASS", "verdict が読める");
+    assert_eq!(value_of(&pairs, "evidence"), "fake", "lens の evidence を写す");
+    assert_eq!(value_of(&pairs, "diff_bytes"), raw_diff_len(&repo, &id).to_string(), "diff_bytes は diff の byte のまま");
+    assert_ne!(value_of(&pairs, "diff_bytes"), kept.len().to_string(), "要約の byte ではない");
+    assert_eq!(stderr_of(&out), "", "純移動の周は理由の行を出さない");
+    assert_summary_moves(&kept);
+    assert_summary_residual(&kept);
+    clean(&[&repo, &state]);
+}
+
+/// 要約の中身 (1): 移動元 → 先と本数・動いた item の名・可視性の変化（残った item も動いた item も）。
+fn assert_summary_moves(kept: &str) {
+    assert!(kept.contains("src/lib.rs -> src/alpha.rs: items=2 lines="), "移動元 → 先: {kept}");
+    assert!(kept.contains("\n  fn two\n  struct Pair\n"), "動いた item の名: {kept}");
+    assert!(kept.contains("src/lib.rs -> src/beta.rs: items=1 lines=3\n  fn three\n"), "{kept}");
+    assert!(kept.contains("src/lib.rs fn one: private -> pub(crate)\n"), "残った item の可視性: {kept}");
+    assert!(kept.contains("src/alpha.rs fn two: private -> pub(super)\n"), "動いた item の可視性: {kept}");
+    assert!(!kept.contains("    1\n"), "item の本文は要約に載らない: {kept}");
+}
+
+/// 要約の中身 (2): 残差分の逐語（札・区切り線・宣言）と判定行。
+fn assert_summary_residual(kept: &str) {
+    assert!(kept.contains("\n+// flip-check: moved s2-07l.261\n"), "札は残差分に逐語: {kept}");
+    assert!(kept.contains("\n-// ── section ──\n"), "区切り線（base 側）: {kept}");
+    assert!(kept.contains("\n+// ── section ──\n"), "区切り線（HEAD 側）: {kept}");
+    assert!(kept.contains("\n+use super::one;\n"), "use の宣言: {kept}");
+    assert!(kept.contains("\n+mod alpha;\n"), "mod の宣言: {kept}");
+    assert!(kept.lines().last().is_some_and(|last| last.starts_with("判定: 名 + 本文の多重集合が一致 ")), "判定行: {kept}");
+}
+
+/// 純移動でない fixture を gate まで通し、lens の入力が diff であることの共通 assert（理由は呼び手が名指す）。
+fn assert_sends_diff(head: &[(&str, &str)], reason: &str) {
+    let (repo, state, id) = move_run(&[("lib.rs", MOVE_BASE_LIB)], head);
+    let seen = state.join("lens-stdin");
+    let out = gate_once(&repo, &state, &id, Some(&recording_lens(&seen)));
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{reason}: lens は diff で呼ばれ PASS: {}", stderr_of(&out));
+    let line = stdout_of(&out);
+    assert_eq!(token_of(&line, "lens-input="), "diff", "{reason}: 判定行: {line}");
+    assert_eq!(token_of(&line, "bytes="), raw_diff_len(&repo, &id).to_string(), "{reason}: bytes= は diff の byte");
+    assert!(!lens_input_path(&state, &id).exists(), "{reason}: 要約を残さない");
+    // 読めない周は空＝下の `diff --git` の assert が落ちる（expect を helper に置かない）。
+    let received = fs::read_to_string(&seen).unwrap_or_default();
+    assert!(received.starts_with("diff --git "), "{reason}: stdin は diff: {received}");
+    assert!(!received.contains(SUMMARY_HEADLINE), "{reason}: 要約を名乗らない");
+    assert_eq!(
+        stderr_of(&out).trim_end(),
+        format!("pipe: lens-input=diff reason={reason}"),
+        "閉じた理由 1 行（typed）"
+    );
+    assert_eq!(value_of(&verdict_pairs(&state, &id), "verdict"), "PASS", "{reason}: 従来どおり lens の verdict");
+    clean(&[&repo, &state]);
+}
+
+/// (ii) 本文を 1 行変えた fixture は純移動でなく diff が渡る（`items-differ`）。
+#[test]
+fn pipe_gate_move_proof_body_change_sends_diff() {
+    let changed = MOVE_HEAD_BETA.replace("    3\n", "    4\n");
+    assert_ne!(changed, MOVE_HEAD_BETA, "fixture は本文が 1 行違う");
+    assert_sends_diff(&[("lib.rs", MOVE_HEAD_LIB), ("alpha.rs", MOVE_HEAD_ALPHA), ("beta.rs", &changed)], "items-differ");
+}
+
+/// (iii) 宣言と札とコメント以外の行が残差分に残る fixture も diff（`residual-line`）。
+#[test]
+fn pipe_gate_move_proof_residual_line_sends_diff() {
+    let noisy = MOVE_HEAD_LIB.replace("mod alpha;\n", "#![allow(dead_code)]\nmod alpha;\n");
+    assert_ne!(noisy, MOVE_HEAD_LIB, "fixture は宣言でない行を 1 つ持つ");
+    assert_sends_diff(&[("lib.rs", &noisy), ("alpha.rs", MOVE_HEAD_ALPHA), ("beta.rs", MOVE_HEAD_BETA)], "residual-line");
+}
+
+/// (iv) 宣言だけの fixture（item は 1 つも動かない）は純移動でない（`nothing-moved`）。
+#[test]
+fn pipe_gate_move_proof_zero_moved_items_sends_diff() {
+    let declared = format!("mod alpha;\nmod beta;\n\n{MOVE_BASE_LIB}");
+    assert_sends_diff(&[("lib.rs", &declared), ("alpha.rs", "//! alpha.\n"), ("beta.rs", "//! beta.\n")], "nothing-moved");
+}
+
+/// (v) `// flip-check: retroactive` の札が残差分に在る fixture は diff（lens v2 medium・`foreign-marker`）。
+#[test]
+fn pipe_gate_move_proof_retroactive_marker_sends_diff() {
+    let marked = MOVE_HEAD_BETA.replace("//! beta.\n\n", "//! beta.\n\n// flip-check: retroactive s2-07l.261\n");
+    assert_ne!(marked, MOVE_HEAD_BETA, "fixture は retroactive の札を持つ");
+    assert_sends_diff(&[("lib.rs", MOVE_HEAD_LIB), ("alpha.rs", MOVE_HEAD_ALPHA), ("beta.rs", &marked)], "foreign-marker");
+}
+
+/// 大きい本文を持つ fn（移動すると diff は本文を 2 度運び、要約は名だけを運ぶ）。
+fn big_fn(visibility: &str) -> String {
+    let mut body = format!("{visibility}fn big() -> u32 {{\n");
+    for number in 0..120 {
+        body.push_str(&format!("    let _ = \"line {number:03} of the moved body, long enough to weigh\";\n"));
+    }
+    body.push_str("    0\n}\n");
+    body
+}
+
+/// (vi) 予算の照合は lens に渡す本文の byte で行う: 要約は cap 内・diff は cap 超の fixture が PASS/FAIL の判定へ
+/// 進み INCONCLUSIVE にならず、`verdict.json` の `diff_bytes` は diff の byte（cap 超）のまま。
+#[test]
+fn pipe_gate_move_proof_budget_uses_summary_bytes() {
+    let base_lib = format!("//! big.\n\n{}", big_fn(""));
+    let head_lib = "//! big.\n\nmod alpha;\n".to_owned();
+    let head_alpha = format!("//! alpha.\n\n{}", big_fn("pub(super) "));
+    let (repo, state, id) = move_run(&[("lib.rs", &base_lib)], &[("lib.rs", &head_lib), ("alpha.rs", &head_alpha), ("beta.rs", "//! beta.\n")]);
+    let cap = 4_000;
+    let diff_len = raw_diff_len(&repo, &id);
+    assert!(diff_len > cap, "前提: diff は cap 超（{diff_len} byte）");
+    let rules = write_rules(&repo, "summary-cap.toml", 1, cap as u64);
+    let marker = state.join("lens-ran");
+    let out = gate_with_rules(&repo, &state, &id, &rules, &fake_lens(&marker, &lens_verdict("PASS")));
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "判定へ進む: {}", stderr_of(&out));
+    let line = stdout_of(&out);
+    assert_eq!(token_of(&line, "verdict="), "PASS", "{line}");
+    assert_eq!(token_of(&line, "lens-input="), "summary", "{line}");
+    let bytes: usize = token_of(&line, "bytes=").parse().unwrap_or(usize::MAX);
+    assert!(bytes <= cap, "要約は cap 内: {line}");
+    assert!(marker.exists(), "lens を起動した");
+    let pairs = verdict_pairs(&state, &id);
+    assert_eq!(value_of(&pairs, "verdict"), "PASS", "INCONCLUSIVE にならない");
+    assert!(!value_of(&pairs, "evidence").contains("cap"), "cap の理由が無い: {}", value_of(&pairs, "evidence"));
+    assert_eq!(value_of(&pairs, "diff_bytes"), diff_len.to_string(), "diff_bytes は diff の byte のまま");
+    let kept = fs::read_to_string(lens_input_path(&state, &id)).expect("lens-input.txt が在る");
+    assert_eq!(kept.len(), bytes, "bytes= は残した要約の byte");
+    assert!(kept.contains("src/lib.rs -> src/alpha.rs: items=1 lines=123\n  fn big\n"), "{kept}");
+    clean(&[&repo, &state]);
+}
+
+/// (vii) 要約の外形（fixture (i) の `lens-input.txt` の全文・置き場は親の `snapshots/`）。
+#[test]
+fn pipe_gate_move_summary_external_form() {
+    let (repo, state, id) = move_run(&[("lib.rs", MOVE_BASE_LIB)], &move_head());
+    let out = gate_once(&repo, &state, &id, Some(&fake_lens(&state.join("lens-ran"), &lens_verdict("PASS"))));
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "PASS: {}", stderr_of(&out));
+    let form = fs::read_to_string(lens_input_path(&state, &id)).expect("lens-input.txt が在る");
+    let mut settings = insta::Settings::clone_current();
+    settings.set_snapshot_path("../snapshots");
+    settings.bind(|| insta::assert_snapshot!(form));
+    clean(&[&repo, &state]);
+}

@@ -20,6 +20,7 @@ pub mod declaration;
 pub mod follow;
 pub mod gate;
 pub mod land;
+pub mod move_proof;
 pub mod refuse;
 pub mod report;
 mod size;

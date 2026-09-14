@@ -15,6 +15,7 @@ guard=approval-gate timing=in-loop on-failure=fail-closed boundary=pipe::approve
 guard=runner-stop timing=in-loop on-failure=fail-open boundary=headless::runner::Decision
 guard=runner-question timing=in-loop on-failure=fail-open boundary=headless::runner::Ending
 guard=gate-check timing=post-hoc on-failure=fail-closed boundary=pipe::gate::Check
+guard=gate-move-proof timing=post-hoc on-failure=fail-open boundary=pipe::move_proof::LensInput
 guard=gate-lens timing=post-hoc on-failure=fail-closed boundary=pipe::gate::Verdict
 guard=land-main-check timing=post-hoc on-failure=fail-closed boundary=pipe::land::MainCheck
 guard=land-anchor-sync timing=in-loop on-failure=fail-closed boundary=pipe::land::AnchorPlan
@@ -25,4 +26,4 @@ guard=inject-refusal timing=in-loop on-failure=fail-closed boundary=seat::inject
 guard=cycle-refusal timing=in-loop on-failure=fail-closed boundary=seat::cycle::Cycle
 guard=externalize-refusal timing=in-loop on-failure=fail-closed boundary=seat::externalize::ExternalizeError
 guard=consume-refusal timing=in-loop on-failure=fail-closed boundary=seat::consume::ConsumeError
-polarity: guards=23 in-loop=19 post-hoc=4 fail-open=3
+polarity: guards=24 in-loop=19 post-hoc=5 fail-open=4

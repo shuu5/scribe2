@@ -1,0 +1,40 @@
+---
+source: crates/scribe2/tests/e2e/pipe/gate.rs
+expression: form
+---
+これは diff ではなく純移動の要約である
+## 移動（元 -> 先: 本数 / 行数）
+src/lib.rs -> src/alpha.rs: items=2 lines=8
+  fn two
+  struct Pair
+src/lib.rs -> src/beta.rs: items=1 lines=3
+  fn three
+## 可視性（名: 前 -> 後）
+src/alpha.rs fn two: private -> pub(super)
+src/beta.rs fn three: private -> pub(super)
+src/lib.rs fn one: private -> pub(crate)
+## 残差分（逐語）
+src/alpha.rs
++//! alpha.
++
++use super::one;
++
++
+src/beta.rs
++//! beta.
++
++// ── section ──
++
+src/lib.rs
+-//! seed crate.
+-
+-
+-
+-// ── section ──
+-
++// flip-check: moved s2-07l.261
++//! seed crate（split）.
++
++mod alpha;
++mod beta;
+判定: 名 + 本文の多重集合が一致 items=4 moved=3 visibility=3

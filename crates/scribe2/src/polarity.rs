@@ -93,6 +93,8 @@ pub enum Guard {
     RunnerQuestion,
     /// gate の機械検証の段（[`crate::pipe::gate::Check`]）。
     GateCheck,
+    /// gate の純移動の機械証明＝lens へ diff でなく要約を渡す判定（[`crate::pipe::move_proof::LensInput`]・FailOpen）。
+    MoveProof,
     /// gate の lens 1 本の判定（[`crate::pipe::gate::Verdict`]）。
     GateLens,
     /// land の main 実測（`pipe::land::MainCheck`）。
@@ -130,6 +132,7 @@ pub const ALL: &[Guard] = &[
     Guard::RunnerStop,
     Guard::RunnerQuestion,
     Guard::GateCheck,
+    Guard::MoveProof,
     Guard::GateLens,
     Guard::LandMain,
     Guard::LandAnchor,
@@ -159,6 +162,7 @@ impl Guard {
             Self::RunnerStop => crate::headless::runner::POLARITY,
             Self::RunnerQuestion => crate::headless::runner::QUESTION_POLARITY,
             Self::GateCheck => crate::pipe::gate::POLARITY,
+            Self::MoveProof => crate::pipe::move_proof::POLARITY,
             Self::GateLens => crate::pipe::gate::LENS_POLARITY,
             Self::LandMain => crate::pipe::land::POLARITY,
             Self::LandAnchor => crate::pipe::land::ANCHOR_POLARITY,
@@ -188,6 +192,7 @@ impl Guard {
             Self::RunnerStop => "headless::runner::Decision",
             Self::RunnerQuestion => "headless::runner::Ending",
             Self::GateCheck => "pipe::gate::Check",
+            Self::MoveProof => "pipe::move_proof::LensInput",
             Self::GateLens => "pipe::gate::Verdict",
             Self::LandMain => "pipe::land::MainCheck",
             Self::LandAnchor => "pipe::land::AnchorPlan",
@@ -217,6 +222,7 @@ impl Guard {
             Self::RunnerStop => "runner-stop",
             Self::RunnerQuestion => "runner-question",
             Self::GateCheck => "gate-check",
+            Self::MoveProof => "gate-move-proof",
             Self::GateLens => "gate-lens",
             Self::LandMain => "land-main-check",
             Self::LandAnchor => "land-anchor-sync",

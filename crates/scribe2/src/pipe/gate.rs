@@ -1,9 +1,10 @@
 //! gate（設計 docs/design/pipeline.md §5.3・FR8 / FR9 / NFR1）。
 //!
 //! 契約の `verify` 各行の逐条 rc（機械検証）と lens 1 本の判定を合わせて 3 値を出す。
-//! **判定は wildcard 無しの順序で決める**: verify に rc≠0 → FAIL ／ diff byte が cap 超
+//! **判定は wildcard 無しの順序で決める**: verify に rc≠0 → FAIL ／ lens に渡す本文の byte が cap 超
 //! → INCONCLUSIVE（lens を呼ばない）／ lens 側の不備 → INCONCLUSIVE ／ それ以外は
-//! lens の verdict。
+//! lens の verdict。lens に渡す本文は閉じた型 [`LensInput`]（diff か、純移動の要約・
+//! [`super::move_proof`]・`s2-07l.266`）で、判定は純関数・file の読みだけをここが担う。
 //!
 //! **偽の PASS を作らない**（AC3）。判定に届かなかった周はすべて INCONCLUSIVE へ倒す
 //! ——「測れなかった」を「通った」に化けさせないためで、極性は fail-closed（C11.2）。
@@ -20,8 +21,9 @@ use super::admission::{self, Grant};
 use super::confine::{self, Confinement, Reason, Released, Usage};
 use super::contract::Contract;
 use super::declaration::{Effective, BASE_HOLE, JOBS_HOLE};
+use super::move_proof::{self, LensInput, NotPure, Side};
 use super::{
-    contract_path, emit, git_bytes, git_line, verdict_path, verify_log_path, vessel_path,
+    contract_path, emit, git_bytes, git_line, run_dir, verdict_path, verify_log_path, vessel_path,
     worktree_path, Emit,
 };
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_OK, RC_REFUSED};
@@ -460,6 +462,8 @@ struct Measured {
     /// INCONCLUSIVE へ倒し、record の `reason=` で外からの kill と弁別する（検出線の行の
     /// `oom_kill` は除く＝道具が吸収して完走した周・[`box_kill`]）。
     killed: Option<Reason>,
+    /// lens に渡す本文の型（純移動の要約か diff か・設計 §5.3・測れなかった周は diff）。
+    input: LensInput,
 }
 
 /// 書き留める判定 1 件。
@@ -505,8 +509,14 @@ pub fn gate(entry: &Gate<'_>) -> Outcome {
     match settle(entry, &decision) {
         Err(reason) => broken(reason),
         Ok(()) => Outcome {
-            out: vec![format!("run={} verdict={}", entry.run, verdict.as_str())],
-            err: Vec::new(),
+            out: vec![format!(
+                "run={} verdict={} lens-input={} bytes={}",
+                entry.run,
+                verdict.as_str(),
+                measured.input.kind(),
+                byte_count(measured.input.body(&measured.diff))
+            )],
+            err: measured.input.notice().into_iter().collect(),
             rc: verdict.rc(),
         },
     }
@@ -540,12 +550,28 @@ fn measure(entry: &Gate<'_>, worktree: &Path, base: &str) -> Result<Measured, St
     if unreadable {
         // 段①が diff を読めない周は同じ range の生 diff も読めない。ここで broken（rc 2・
         // verdict を書かない）にすると便は Implemented のまま「測り直せる便」に見えない。
-        return Ok(Measured { red, diff: Vec::new(), unreadable, killed });
+        let input = LensInput::Diff(NotPure::Unreadable);
+        return Ok(Measured { red, diff: Vec::new(), unreadable, killed, input });
     }
     let range = format!("{base}..HEAD");
     let diff = git_bytes(worktree, &["diff", &range])
         .ok_or_else(|| format!("{} の diff を測れない", worktree.display()))?;
-    Ok(Measured { red, diff, unreadable, killed })
+    let input = lens_input(worktree, base, &diff);
+    Ok(Measured { red, diff, unreadable, killed, input })
+}
+
+/// 純移動の機械証明（設計 §5.3・`s2-07l.266`）: 判定は純関数で、**file の読みだけ**をここが担う
+/// （base 側は `<base>:<path>`・HEAD 側は `HEAD:<path>` を git から読む・読めない周は純移動でない側）。
+fn lens_input(worktree: &Path, base: &str, diff: &[u8]) -> LensInput {
+    let read = |side: Side, path: &str| {
+        let rev = match side {
+            Side::Base => base,
+            Side::Head => "HEAD",
+        };
+        git_bytes(worktree, &["show", &format!("{rev}:{path}")])
+            .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+    };
+    move_proof::judge(&String::from_utf8_lossy(diff), &read)
 }
 
 /// verify 各行を撃ち、行ごとの rc を `verify.jsonl` へ逐条で残す。
@@ -852,12 +878,15 @@ fn decide(entry: &Gate<'_>, worktree: &Path, measured: &Measured) -> (Verdict, S
             None,
         );
     }
-    let size = byte_count(&measured.diff);
+    // **予算の照合は lens に渡す本文の byte で行う**（FR9・純移動の周は要約・`verdict.json` の
+    // `diff_bytes` は従来どおり diff の byte）。
+    let body = measured.input.body(&measured.diff);
+    let size = byte_count(body);
     if size > entry.limits.token_cap {
         // **換算係数を持たない**（NFR1）。byte ≥ token の保守的な読みで直接比べる。
         return (
             Verdict::Inconclusive,
-            format!("diff {size} byte が cap {} を超えた", entry.limits.token_cap),
+            format!("{} {size} byte が cap {} を超えた", measured.input.kind(), entry.limits.token_cap),
             None,
         );
     }
@@ -877,6 +906,12 @@ fn decide(entry: &Gate<'_>, worktree: &Path, measured: &Measured) -> (Verdict, S
     let Some(cmd) = entry.lens else {
         return (Verdict::Inconclusive, "lens が要るのに --lens が無い".to_owned(), None);
     };
+    // 純移動の周は渡した要約を run dir に残す（事後に読める・NFR4）。残せない周は判定に届かない。
+    if let LensInput::Summary(summary) = &measured.input {
+        if let Err(reason) = move_proof::keep(&run_dir(entry.state_dir, entry.run), summary) {
+            return (Verdict::Inconclusive, reason, None);
+        }
+    }
     let contract = contract_path(entry.state_dir, entry.run);
     let unit = confine::unit_name(entry.run, LENS_STAGE, 1);
     let wrap = confine::Wrap {
@@ -885,7 +920,7 @@ fn decide(entry: &Gate<'_>, worktree: &Path, measured: &Measured) -> (Verdict, S
         limit: confine::Limit::HostReserve,
         caps: confine::Caps::embedded(),
     };
-    ask_lens(&substitute(cmd, &contract, worktree), worktree, &measured.diff, &wrap)
+    ask_lens(&substitute(cmd, &contract, worktree), worktree, body, &wrap)
 }
 
 /// lens の scope の unit 名に載せる段の名。
@@ -914,9 +949,10 @@ fn substitute(cmd: &str, contract: &Path, worktree: &Path) -> String {
     )
 }
 
-/// lens へ diff を stdin で渡し、stdout の JSON 1 行を読む。
+/// lens へ本文（diff か純移動の要約・[`LensInput::body`]）を stdin で渡し、stdout の JSON 1 行を読む。
 ///
-/// 契約は cmd の `{contract}`（[`substitute`] が埋めた path）で渡る＝**stdin は diff 専用**。
+/// 契約は cmd の `{contract}`（[`substitute`] が埋めた path）で渡る＝**stdin は本文専用**（FR5・
+/// 要約も同じ 1 つの口で渡る）。
 ///
 /// lens も scope で包む（設計 gate-cost.md §4.1 の 3 つ目）。**箱の中で殺された周は
 /// INCONCLUSIVE** ——FR9 の既存極性そのままで、stdout を parse できない周と同じ経路である
@@ -924,7 +960,7 @@ fn substitute(cmd: &str, contract: &Path, worktree: &Path) -> String {
 fn ask_lens(
     cmd: &str,
     worktree: &Path,
-    diff: &[u8],
+    body: &[u8],
     wrap: &confine::Wrap<'_>,
 ) -> (Verdict, String, Option<Released>) {
     let (mut command, confinement) = confine::wrap_line(cmd, wrap);
@@ -941,7 +977,7 @@ fn ask_lens(
     if let Some(mut stdin) = child.stdin.take() {
         // 読まずに終える lens への write は EPIPE になる。**判定は出力で決める**ので
         // ここの失敗は理由にしない（take で drop され、lens は EOF を見る）。
-        let _ = stdin.write_all(diff);
+        let _ = stdin.write_all(body);
     }
     let waited = child.wait_with_output();
     // **終端で scope を片付ける**（verify 行と同じ・設計 §4.4 errata）。判定は変えない。

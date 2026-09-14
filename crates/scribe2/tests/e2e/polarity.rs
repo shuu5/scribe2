@@ -126,8 +126,8 @@ fn polarity_lists_the_three_added_guards() {
     }
     assert_eq!(
         ALL.len(),
-        23,
-        "母集団は 23（10 + 3 + 質問の口 1・`s2-07l.115` + land の 2・`s2-07l.124` + 入口の排他 1・`s2-07l.145` + 追随の回数 1・`s2-07l.146` + 退避の断り 1・`s2-07l.139` + 消費の断り 1・`s2-07l.141` + 登録の断り 1・`s2-07l.192` + 権能の執行 1・`s2-07l.201` + 契約表の検査 1・`s2-07l.208`）"
+        24,
+        "母集団は 24（10 + 3 + 質問の口 1・`s2-07l.115` + land の 2・`s2-07l.124` + 入口の排他 1・`s2-07l.145` + 追随の回数 1・`s2-07l.146` + 退避の断り 1・`s2-07l.139` + 消費の断り 1・`s2-07l.141` + 登録の断り 1・`s2-07l.192` + 権能の執行 1・`s2-07l.201` + 契約表の検査 1・`s2-07l.208` + 純移動の証明 1・`s2-07l.266`）"
     );
 }
 
@@ -147,7 +147,7 @@ fn runner_question_guard_is_in_loop_fail_open() {
     let stop = names.iter().position(|name| *name == "guard=runner-stop");
     let question = names.iter().position(|name| *name == "guard=runner-question");
     assert!(matches!((stop, question), (Some(s), Some(q)) if q == s + 1), "runner-stop の直後: {names:?}");
-    assert!(text.lines().last().is_some_and(|line| line.contains(" in-loop=19 ") && line.contains(" fail-open=3")), "集計 +1（.124 の 2・.145 の 1・.146 の 1・.139 の 1・.141 の 1・.192 の 1・.201 の 1 を含む）: {text}");
+    assert!(text.lines().last().is_some_and(|line| line.contains(" in-loop=19 ") && line.contains(" fail-open=4")), "集計 +1（.124 の 2・.145 の 1・.146 の 1・.139 の 1・.141 の 1・.192 の 1・.201 の 1・fail-open は .266 の純移動の証明 1 を含む）: {text}");
 }
 
 /// 3 クラスを名乗らない契約。
@@ -224,8 +224,8 @@ fn polarity_lists_land_anchor_sync_and_retire_clean_as_in_loop_fail_closed() {
     let in_loop = text.lines().filter(|line| line.contains(" timing=in-loop ")).count();
     assert_eq!(in_loop, 19, "in-loop の行数: {text}");
     let summary = text.lines().last().unwrap_or_default();
-    assert_eq!(count_of(summary, "in-loop"), Some(19), "集計 +2（+ .145 / .146 / .139 / .141 / .192 / .201 の 各 1）: {summary}");
-    assert_eq!(count_of(summary, "guards"), Some(23), "母集団 +2（+ .145 / .146 / .139 / .141 / .192 / .201 / .208 の 各 1）: {summary}");
+    assert_eq!(count_of(summary, "in-loop"), Some(19), "集計 +2（+ .145 / .146 / .139 / .141 / .192 / .201 の 各 1・.266 は post-hoc ゆえ不変）: {summary}");
+    assert_eq!(count_of(summary, "guards"), Some(24), "母集団 +2（+ .145 / .146 / .139 / .141 / .192 / .201 / .208 / .266 の 各 1）: {summary}");
 }
 
 /// 契約表の検査（`s2-07l.208`・設計 contract-source.md §8・ADR-0014 §2.1）は **post-hoc / fail-closed** で一覧に載る
@@ -250,8 +250,29 @@ fn polarity_lists_contract_table_as_a_post_hoc_fail_closed_guard() {
         "role-guard の直後・intake-unfit の直前: {names:?}"
     );
     let summary = text.lines().last().unwrap_or_default();
-    assert_eq!(count_of(summary, "guards"), Some(23), "母集団 +1: {summary}");
-    assert_eq!(count_of(summary, "post-hoc"), Some(4), "post-hoc +1（gate の 2・land の main 実測・契約表）: {summary}");
+    assert_eq!(count_of(summary, "guards"), Some(24), "母集団 +1: {summary}");
+    assert_eq!(count_of(summary, "post-hoc"), Some(5), "post-hoc +1（gate の 3〔.266 の純移動の証明を含む〕・land の main 実測・契約表）: {summary}");
+}
+
+/// 純移動の機械証明（`s2-07l.266`・設計 pipeline.md §5.3・C11.2 / C16.2）は **post-hoc / fail-open** で一覧に載る
+/// ——誤判定は lens から diff を奪う側（通す側）へ倒れるので FailOpen を隠さない。値は境界の定数
+/// （`pipe::move_proof::POLARITY`）で、一覧はそれを返すだけ。gate-check の**直後**・gate-lens の**直前**に並び、
+/// in-loop の本数は変えない（増えるのは post-hoc と fail-open が各 1）。**生成物（binary の出力）だけで測る**
+/// ＝base の木に重ねても compile が通り、RED の理由が「行が無い」に限られる（flip-check の RED を捏造しない）。
+#[test]
+fn polarity_lists_gate_move_proof_as_post_hoc_fail_open_between_check_and_lens() {
+    let text = output();
+    let expected = "guard=gate-move-proof timing=post-hoc on-failure=fail-open boundary=pipe::move_proof::LensInput";
+    assert_eq!(text.lines().filter(|line| *line == expected).count(), 1, "一覧に 1 行で載る: {expected}\n{text}");
+    let names: Vec<&str> = text.lines().filter_map(|line| line.split(' ').next()).collect();
+    let at = |name: &str| names.iter().position(|found| *found == name);
+    let (check, proof, lens) = (at("guard=gate-check"), at("guard=gate-move-proof"), at("guard=gate-lens"));
+    assert!(
+        matches!((check, proof, lens), (Some(c), Some(p), Some(l)) if p == c + 1 && l == p + 1),
+        "gate-check の直後・gate-lens の直前: {names:?}"
+    );
+    let summary = text.lines().last().unwrap_or_default();
+    assert_eq!(count_of(summary, "fail-open"), Some(4), "fail-open +1（cap guard・runner の 2・純移動の証明）: {summary}");
 }
 
 /// 席の権能の執行（`s2-07l.201`・設計 seat-roles.md §4 / §6・ADR-0022 §2.3）は **in-loop / fail-closed** で一覧に
