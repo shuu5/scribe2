@@ -588,6 +588,27 @@ fn headless_lens_prompt_states_verify_already_ran() {
     assert!(premise < contract, "前提の節は「## 契約」より前: {prompt}");
 }
 
+/// lens の prompt は審査の材料を契約と diff に限り、契約に名指しされていない検査を
+/// 根拠にさせない（`s2-07l.231`・設計 pipeline.md §5.3）。限定が無いと実 lens は rustfmt の
+/// 既定を持ち出して INCONCLUSIVE を出した（.223 run 1 の実測）。
+///
+/// ★文は契約 fixture にも diff fixture にも現れない字面——節を消せば回数が 0 に落ちる。
+#[test]
+fn headless_lens_scope_prompt_forbids_checks_not_named_by_contract() {
+    const SCOPE_RULE: &str =
+        "契約に名指しされていない検査（整形・rustfmt・lint の既定 等）を根拠に INCONCLUSIVE / FAIL を出さない。";
+    const UNREACHED_RULE: &str = "判定に届かない周は、evidence に「契約のどの行を撃てなかったか」を書く。";
+    let prompt = lens_prompt_of_fixed_fixture();
+    assert_eq!(prompt.matches(SCOPE_RULE).count(), 1, "契約外の検査を根拠にしない文がちょうど 1 回在る: {prompt}");
+    assert_eq!(prompt.matches(UNREACHED_RULE).count(), 1, "撃てなかった行を evidence に書く文が在る: {prompt}");
+    let unfired = prompt.find("「verify を自分で撃てなかった」");
+    let scope = prompt.find(SCOPE_RULE);
+    let contract = prompt.find("## 契約");
+    assert!(unfired.is_some() && contract.is_some(), "既存の句と見出しが在る: {prompt}");
+    assert!(unfired < scope, "新しい節は「verify を自分で撃てなかった」の句より後: {prompt}");
+    assert!(scope < contract, "新しい節は「## 契約」より前: {prompt}");
+}
+
 /// lens の prompt の外形（契約と diff の fixture を固定・C12.5）。
 #[test]
 fn headless_lens_prompt_external_form() {

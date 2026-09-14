@@ -24,6 +24,11 @@ diff がそれを満たすかを見る。**足場だけの diff**（実装の変
 - 判定は、下の契約と diff を**読むだけ**で決める。
 - 「verify を自分で撃てなかった」「test を回せなかった」は INCONCLUSIVE の理由にならない。
 
+## 審査の材料（契約と diff だけ）
+- 審査の材料は、下の契約（verify / done / write-set）と diff **だけ**である。
+- 契約に名指しされていない検査（整形・rustfmt・lint の既定 等）を根拠に INCONCLUSIVE / FAIL を出さない。
+- 判定に届かない周は、evidence に「契約のどの行を撃てなかったか」を書く。
+
 ## 契約
 {contract}
 
