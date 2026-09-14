@@ -370,14 +370,22 @@ fn refresh_of(status: ExitStatus) -> Refresh {
     }
 }
 
-/// group 宛てに TERM → 猶予だけ待つ → 残れば KILL → 同じ待ち（`pipe stop` と同じ列・待ちは
-/// [`wait`] の 1 実装を通る・C3.4）。**group id が 2 未満の周は撃たない**（`kill -- -1` は user の全 process・
-/// `kill -- -0` は自分の group）。残った事実は返さない（結果は呼び手の `Timeout` のまま）。
-fn stop_group(group: u32, grace: Duration) {
+/// group 宛ての signal の宛先（`kill -- <宛先>` の引数・pure・in-file の歯の入口）。**group id が 2 未満の周は
+/// `None`**（`kill -- -1` は user の全 process・`kill -- -0` は自分の group・N1: 実 signal の宛先は自分の子だけ）。
+fn group_target(group: u32) -> Option<String> {
     if group < 2 {
-        return;
+        return None;
     }
-    let target = format!("-{group}");
+    Some(format!("-{group}"))
+}
+
+/// group 宛てに TERM → 猶予だけ待つ → 残れば KILL → 同じ待ち（`pipe stop` と同じ列・待ちは
+/// [`wait`] の 1 実装を通る・C3.4）。宛先は [`group_target`] で決め、`None` の周は撃たない。
+/// 残った事実は返さない（結果は呼び手の `Timeout` のまま）。
+fn stop_group(group: u32, grace: Duration) {
+    let Some(target) = group_target(group) else {
+        return;
+    };
     signal_group(&target, "-TERM");
     if wait(Completion::GroupGone(group), grace).is_ok() {
         return;
@@ -727,13 +735,14 @@ fn part(row: &Allowance) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        body_of, client_args, config_of, endpoint, normalize_resets, render, token_of, windows_of,
-        UsageError,
+        body_of, client_args, config_of, endpoint, grace_of, group_target, normalize_resets, render,
+        token_of, windows_of, UsageError, ROW_GRACE,
     };
     use crate::cli_outcome::{RC_BROKEN, RC_REFUSED};
     use crate::fleet::json_tree::parse;
     use crate::fleet::{Allowance, UnmeasuredReason, WindowKind};
     use crate::polarity::OnFailure;
+    use crate::rules::manifest::Manifest;
 
     /// 未来の epoch ms（2100-01-01）。
     const FUTURE_MS: u64 = 4_102_444_800_000;
@@ -916,5 +925,41 @@ mod tests {
         assert_eq!(UsageError::Args(String::new()).rc(), RC_REFUSED);
         assert_eq!(UsageError::Manifest(String::new()).rc(), RC_REFUSED);
         assert_eq!(UsageError::Store(String::new()).rc(), RC_BROKEN);
+    }
+
+    /// (a) 停止の宛先: group id 0 / 1 は撃たない（`None`）・2 以上は `-<group>`（`s2-07l.255`・N1）。
+    /// 境界を `<= 2` に動かす変異は `(2)` で、guard を外す変異は `(0)` / `(1)` で落ちる。
+    #[test]
+    fn usage_stop_group_target_refuses_below_two_and_names_the_group() {
+        assert_eq!(group_target(0), None, "0 は自分の group");
+        assert_eq!(group_target(1), None, "1 は user の全 process");
+        assert_eq!(group_target(2), Some("-2".to_owned()), "2 は撃てる最小の id");
+        assert_eq!(group_target(4242), Some("-4242".to_owned()));
+    }
+
+    /// `pipe.stop_grace_ms` を 1 行だけ持つ manifest の fixture。
+    fn grace_manifest(value: u64) -> Manifest {
+        let text = format!(
+            "schema = 1\n\n[[rule]]\nid = \"{ROW_GRACE}\"\nkind = \"StopGraceMs\"\nvalue = {value}\nenabled = true\nruling = \"r\"\nruled_at = \"d\"\n"
+        );
+        match Manifest::parse(&text) {
+            Ok(found) => found,
+            Err(errors) => panic!("fixture の manifest を読める: {errors:?}"),
+        }
+    }
+
+    /// (b) 猶予は渡された manifest の `pipe.stop_grace_ms` の値（250 → 250・750 → 750＝定数に潰す変異が落ちる）。
+    /// 行の無い manifest は埋め込みの行の値へ倒れる（0 に潰れない）。
+    #[test]
+    fn usage_stop_grace_of_reads_the_manifest_row() {
+        assert_eq!(grace_of(&grace_manifest(250)), 250);
+        assert_eq!(grace_of(&grace_manifest(750)), 750);
+        let absent = match Manifest::parse("schema = 1\n") {
+            Ok(found) => found,
+            Err(errors) => panic!("空の manifest を読める: {errors:?}"),
+        };
+        let embedded = crate::seat::int_rule(ROW_GRACE).unwrap_or(0);
+        assert!(embedded > 0, "埋め込みの行は正の猶予を持つ");
+        assert_eq!(grace_of(&absent), embedded, "行の無い manifest は埋め込みの値");
     }
 }

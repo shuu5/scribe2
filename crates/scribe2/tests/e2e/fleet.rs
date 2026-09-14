@@ -70,6 +70,20 @@ fn run_fleet(args: &[&str]) -> Output {
         .expect("binary を起動できる")
 }
 
+/// PATH を差し替えて `fleet` を binary で 1 回撃つ（`pipe.rs` の `run_pipe_with_path` と同じ型）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn run_fleet_with_env(args: &[&str], path: &str) -> Output {
+    Command::new(bin())
+        .arg("fleet")
+        .args(args)
+        .env("PATH", path)
+        .output()
+        .expect("binary を起動できる")
+}
+
 /// store に生の行を書く（malformed の fixture 用）。
 #[expect(
     clippy::expect_used,
@@ -1690,6 +1704,16 @@ fn run_usage(fx: &UsageFixture, curl: &Path, extra: &[&str]) -> Output {
     run_fleet(&args)
 }
 
+/// `fleet usage` を fixture の置き場・rules・client・偽 claude で、PATH を `path` に差し替えて撃つ。
+fn run_usage_with_claude_on_path(fx: &UsageFixture, curl: &Path, claude: &Path, path: &str) -> Output {
+    let state = fx.state.display().to_string();
+    let rules = fx.rules.display().to_string();
+    let curl = curl.display().to_string();
+    let claude = claude.display().to_string();
+    let args = ["usage", "--state-dir", &state, "--rules", &rules, "--curl", &curl, "--claude", &claude];
+    run_fleet_with_env(&args, path)
+}
+
 /// stdout の行。
 fn out_lines(out: &Output) -> Vec<String> {
     String::from_utf8_lossy(&out.stdout).lines().map(str::to_owned).collect()
@@ -2623,30 +2647,185 @@ fn fleet_usage_refresh_failures_keep_token_expired_and_name_the_refresh() {
     }
 }
 
-/// (3d) 上限を超えて眠る偽 claude（孫を持つ）は group ごと止めて `refresh=timeout`。子と孫の両方が残らない。
-#[test]
-fn fleet_usage_refresh_timeout_stops_the_child_and_its_grandchild() {
+/// refresh の timeout の歯が rules fixture に置く上限（秒）。1 s だと負荷下で子の起動より先に切れる
+/// （.249 run 5 の再 gate 2026-09-14 12:08Z・load avg 17 で (d) が赤・main 単独では緑）ので数秒にする。
+/// fixture の manifest の値であって rules 行の裁定ではない。
+const REFRESH_TIMEOUT_S: u64 = 4;
+
+/// 偽 claude が pid file を書くのを待つ上限（子が起動に達しない周を停止経路の失敗と混同しないための待ち）。
+const PID_FILE_WAIT: Duration = Duration::from_secs(5);
+
+/// 「上限で止める」の余裕（timeout + 猶予 2 回の和に足す・等号は壁時計で pin しない）。
+const STOP_MARGIN_S: u64 = 12;
+
+/// (d)(c)(e)(f) の fixture: 上限を [`REFRESH_TIMEOUT_S`] にした rules・期限切れの a1・偽 curl。偽 claude は呼び手が置く。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn refresh_timeout_fixture() -> (UsageFixture, PathBuf) {
     let fx = usage_fixture(&["a1"]);
-    let short = usage_rules(&["a1"]).replace(&format!("value = {USAGE_TIMEOUT_S}"), "value = 1");
+    let short = usage_rules(&["a1"]).replace(
+        &format!("value = {USAGE_TIMEOUT_S}"),
+        &format!("value = {REFRESH_TIMEOUT_S}"),
+    );
     fs::write(&fx.rules, short).expect("短い上限の rules fixture を書ける");
     put_credential(&fx, "a1", &expired_credential("tok-old"));
     let curl = fake_curl(&fx, LIVE_BODY, "200", 0);
-    let claude = fake_claude(&fx, "sleep 30 &\necho $! > \"{spy}/grandchild\"\necho $$ > \"{spy}/child\"\nwait");
+    (fx, curl)
+}
+
+/// 停止経路が要する壁時計の上限: 上限 + 猶予（埋め込みの `pipe.stop_grace_ms`・TERM 後と KILL 後の 2 回）+ 余裕。
+fn refresh_stop_bound() -> Duration {
+    let grace_ms = Manifest::embedded()
+        .ok()
+        .and_then(|manifest| manifest.get("pipe.stop_grace_ms").map(|row| row.value.clone()))
+        .and_then(|value| match value {
+            vessel::rules::RuleValue::Int(found) => Some(found),
+            _ => None,
+        })
+        .unwrap_or(0);
+    Duration::from_secs(REFRESH_TIMEOUT_S + STOP_MARGIN_S) + Duration::from_millis(grace_ms.saturating_mul(2))
+}
+
+/// 偽 claude が `{spy}/<who>` に書いた 1 行（trim 済み）。上限まで poll し、達しない周は `None`。
+fn spy_line(fx: &UsageFixture, who: &str) -> Option<String> {
     let started = Instant::now();
-    let out = run_usage_with_claude(&fx, &curl, &claude);
-    let elapsed = started.elapsed();
+    loop {
+        if let Ok(text) = fs::read_to_string(fx.spy.join(who)) {
+            let line = text.trim().to_owned();
+            if !line.is_empty() {
+                return Some(line);
+            }
+        }
+        if started.elapsed() >= PID_FILE_WAIT {
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// timeout の歯に共通の外形: rc 0・`refresh=timeout` の 1 行・停止経路の上限の内側で返る。
+fn assert_refresh_timeout(out: &Output, elapsed: Duration) {
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{out:?}");
     assert_eq!(
-        out_lines(&out),
+        out_lines(out),
         vec!["usage: account=a1 unmeasured reason=token_expired refresh=timeout".to_owned()],
         "{out:?}"
     );
-    assert!(elapsed < Duration::from_secs(20), "上限で止める: {elapsed:?}");
+    let bound = refresh_stop_bound();
+    assert!(elapsed < bound, "上限で止める（{bound:?} の内側）: {elapsed:?}");
+}
+
+/// `who`（`child` / `grandchild`）の pid が書かれていて、その `/proc` が無い。書かれていない周は
+/// 「子が起動に達しない」で落ちる（停止経路の失敗と混同しない）。
+#[expect(
+    clippy::panic,
+    reason = "統合 test の helper。clippy の allow-panic-in-tests は #[test] 関数の中だけに効く"
+)]
+fn assert_gone(fx: &UsageFixture, who: &str) {
+    let Some(pid) = spy_line(fx, who) else {
+        panic!("{who}: 子が起動に達しない（pid file が {PID_FILE_WAIT:?} で書かれない・停止経路の失敗ではない）");
+    };
+    assert!(!Path::new(&format!("/proc/{pid}")).exists(), "{who}（pid {pid}）が残らない");
+}
+
+/// `sh` / `sleep` / `kill` だけを引ける PATH（`systemd-run` の**無い** host＝`Unconfined(NoTool)`・scope の release が
+/// 停止を肩代わりしない）。`pipe.rs` の `lean_path` と同じ作りだが、`kill` は sh の builtin なので `command -v` でなく
+/// この process の PATH の dir を直接引く（builtin の名を link にすると自分を指す）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn stop_path(fx: &UsageFixture) -> String {
+    use std::os::unix::fs::PermissionsExt;
+    let bin_dir = fx.spy.join("stop-bin");
+    fs::create_dir_all(&bin_dir).expect("stop dir を作れる");
+    let dirs: Vec<PathBuf> = std::env::var_os("PATH").map(|found| std::env::split_paths(&found).collect()).unwrap_or_default();
+    for name in ["sh", "sleep", "kill"] {
+        let real = dirs
+            .iter()
+            .map(|dir| dir.join(name))
+            .find(|at| fs::metadata(at).is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0));
+        let real = real.expect("PATH の dir に実行 file が在る");
+        std::os::unix::fs::symlink(&real, bin_dir.join(name)).expect("link を置ける");
+    }
+    bin_dir.display().to_string()
+}
+
+/// 孫つきで上限を超えて眠る偽 claude の本文（(d) と (c) で共用）。
+const SLEEPING_GRANDCHILD: &str = "sleep 30 &\necho $! > \"{spy}/grandchild\"\necho $$ > \"{spy}/child\"\nwait";
+
+/// (3d) 上限を超えて眠る偽 claude（孫を持つ）は group ごと止めて `refresh=timeout`。子と孫の両方が残らない
+/// （包める host では scope の release が肩代わりしうる周の歯・停止経路そのものは (c)(e)(f) が測る）。
+#[test]
+fn fleet_usage_refresh_timeout_stops_the_child_and_its_grandchild() {
+    let (fx, curl) = refresh_timeout_fixture();
+    let claude = fake_claude(&fx, SLEEPING_GRANDCHILD);
+    let started = Instant::now();
+    let out = run_usage_with_claude(&fx, &curl, &claude);
+    let elapsed = started.elapsed();
+    assert_refresh_timeout(&out, elapsed);
     for who in ["child", "grandchild"] {
-        let pid = fs::read_to_string(fx.spy.join(who)).expect("偽 claude が pid を写した");
-        let pid = pid.trim();
-        assert!(!pid.is_empty(), "{who} の pid が在る");
-        assert!(!Path::new(&format!("/proc/{pid}")).exists(), "{who}（pid {pid}）が残らない");
+        assert_gone(&fx, who);
+    }
+    drop_fixture(&fx);
+}
+
+/// (c) **包めない PATH**（`systemd-run` 無し・`Unconfined(NoTool)`）で (d) を回す: scope の release が無いので、子と孫を
+/// 消したのは器の停止経路（TERM → 猶予 → KILL）だけである。`.229` run 3 の生存 7 件（`stop_group` / `signal_group` /
+/// `grace_of`）はこの周で落ちる（`s2-07l.255`）。現物の挙動を pin する歯なので base でも通る（retroactive）。
+// flip-check: retroactive s2-07l.255
+#[test]
+fn fleet_usage_refresh_timeout_unconfined_stops_the_child_and_its_grandchild() {
+    let (fx, curl) = refresh_timeout_fixture();
+    let path = stop_path(&fx);
+    let claude = fake_claude(&fx, SLEEPING_GRANDCHILD);
+    let started = Instant::now();
+    let out = run_usage_with_claude_on_path(&fx, &curl, &claude, &path);
+    let elapsed = started.elapsed();
+    assert_refresh_timeout(&out, elapsed);
+    for who in ["child", "grandchild"] {
+        assert_gone(&fx, who);
+    }
+    drop_fixture(&fx);
+}
+
+/// (e) TERM に応じる子（trap で `{spy}/term` を書いて rc 0 で終える）: 包めない PATH で `refresh=timeout`・`term` が在る
+/// （TERM が届いた証拠・`signal_group` を空にすると無い）・子が残らない。実 signal の宛先は器が自分で起こした子の
+/// group だけ（fixture が pid を選ばない・N1）。現物の挙動を pin する歯なので base でも通る（retroactive）。
+// flip-check: retroactive s2-07l.255
+#[test]
+fn fleet_usage_refresh_timeout_unconfined_term_reaches_the_child() {
+    let (fx, curl) = refresh_timeout_fixture();
+    let path = stop_path(&fx);
+    let claude = fake_claude(
+        &fx,
+        "trap 'echo term > \"{spy}/term\"; exit 0' TERM\necho $$ > \"{spy}/child\"\nsleep 30 &\nwait",
+    );
+    let started = Instant::now();
+    let out = run_usage_with_claude_on_path(&fx, &curl, &claude, &path);
+    let elapsed = started.elapsed();
+    assert_refresh_timeout(&out, elapsed);
+    assert_gone(&fx, "child");
+    assert_eq!(spy_line(&fx, "term").as_deref(), Some("term"), "TERM が子に届いた");
+    drop_fixture(&fx);
+}
+
+/// (f) TERM を無視する子（`trap '' TERM` を孫の `sleep` にも継がせる）: 包めない PATH で `refresh=timeout`・子と孫が
+/// 残らない（KILL が届いた証拠・KILL の行を消すと 30 s 眠り続ける）。現物の挙動を pin する歯なので base でも通る（retroactive）。
+// flip-check: retroactive s2-07l.255
+#[test]
+fn fleet_usage_refresh_timeout_unconfined_kills_the_child_that_ignores_term() {
+    let (fx, curl) = refresh_timeout_fixture();
+    let path = stop_path(&fx);
+    let claude = fake_claude(&fx, &format!("trap '' TERM\n{SLEEPING_GRANDCHILD}"));
+    let started = Instant::now();
+    let out = run_usage_with_claude_on_path(&fx, &curl, &claude, &path);
+    let elapsed = started.elapsed();
+    assert_refresh_timeout(&out, elapsed);
+    for who in ["child", "grandchild"] {
+        assert_gone(&fx, who);
     }
     drop_fixture(&fx);
 }
