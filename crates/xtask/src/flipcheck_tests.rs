@@ -10,7 +10,10 @@
 //! base へ写り flip を検査される。名前で見なければ区間判定には src 区間だけの file に
 //! 見え、ここへ足した歯が 1 本も測られないままになる。
 
-use super::{is_test_file, judge, judge_into, parse_base, split_regions, FilePair, Verdict, RETROACTIVE_MARK};
+use super::{
+    failed_tests, is_test_file, judge, judge_into, parse_base, split_regions, FailedTest, FilePair,
+    Verdict, RETROACTIVE_MARK,
+};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -196,3 +199,163 @@ mod declaration;
 
 #[path = "flipcheck_moved_tests.rs"]
 mod moved;
+
+// ---- base 段の撃ち直し（s2-07l.270・負荷下の flaky の検出線）----
+//
+// 子 module を足すと `#[path]` の新規 module は flip されない（not-flippable）ので、
+// この便の歯は親 file のここへ置く。
+
+/// `judge_into` を撃ち、判定と sink の `base-retry` 行だけを返す。
+fn judge_with_retry_lines(base: &str, dir: &Path) -> (Verdict, Vec<String>) {
+    let mut lines: Vec<String> = Vec::new();
+    let got = judge_into(base, dir, &mut |line| lines.push(line.to_owned()));
+    let retries = lines
+        .into_iter()
+        .filter(|line| line.starts_with("flip-check: base-retry "))
+        .collect();
+    (got, retries)
+}
+
+/// [`BASE_LIB`] の `mod checks` へ歯を 1 本足した本文。
+fn base_lib_with(test_fn: &str) -> String {
+    BASE_LIB.replace("mod checks {\n", &format!("mod checks {{\n{test_fn}"))
+}
+
+/// **1 回目だけ落ちる**歯（`CARGO_MANIFEST_DIR` 直下の marker file を作って落ち、2 回目は
+/// marker が在るので通る）。base copy は便ごとに実体化し直すので、1 回目は必ず marker 無し。
+const FLAKY_ONCE: &str = "    #[test]\n    fn settles() {\n        let marker = std::path::Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"settles.marker\");\n        if marker.exists() {\n            return;\n        }\n        std::fs::write(&marker, \"x\").expect(\"marker を書ける\");\n        panic!(\"first run\");\n    }\n";
+
+/// 常に落ちる歯。
+const ALWAYS_RED: &str = "    #[test]\n    fn broken() {\n        panic!(\"always\");\n    }\n";
+
+/// nextest の出力から `FAIL [ <time>] <binary id> <歯の名>` 形の行だけを拾い、末尾の一覧で
+/// 繰り返される同じ歯は 1 本に畳む。`PASS` / `Summary` / `TRY n FAIL` / 語数の崩れた行は拾わない。
+///
+/// 進捗の `(n/m)` は桁を揃える空白を挟む（実測 2026-09-14: `( 288/1146)`——語で割ると
+/// `(` と `288/1146)` の 2 語に化け、1 語として除く実装は本物の FAIL 行を 1 本も拾えず
+/// `base-not-green` へ落ちた）。fixture は実出力の形で pin する。
+#[test]
+fn flip_check_parses_failed_tests_from_nextest_output() {
+    let text = "\
+────────────
+ Nextest run ID 0 with nextest profile: default
+    Starting 3 tests across 2 binaries
+        PASS [   0.012s] (   1/1146) flipdemo checks::holds
+        FAIL [   0.010s] ( 288/1146) flipdemo checks::settles
+  TRY 1 FAIL [   0.010s] ( 289/1146) flipdemo checks::retried
+        FAIL [   0.011s] (3/3) flipdemo::it green
+        FAIL [   0.011s] broken
+     Summary [   0.013s] 3 tests run: 1 passed, 2 failed, 0 skipped
+        FAIL [   0.010s] ( 288/1146) flipdemo checks::settles
+        FAIL [   0.011s] flipdemo::it green
+error: test run failed
+";
+    let got = failed_tests(text);
+    let want = vec![
+        FailedTest {
+            binary: "flipdemo".to_owned(),
+            name: "checks::settles".to_owned(),
+        },
+        FailedTest {
+            binary: "flipdemo::it".to_owned(),
+            name: "green".to_owned(),
+        },
+    ];
+    assert_eq!(got, want, "FAIL 行 2 本を出力順に・重複は畳んで拾うはず");
+    assert!(
+        failed_tests("        PASS [   0.012s] (1/1) flipdemo checks::holds\n     Summary [   0.013s] 1 test run: 1 passed\n").is_empty(),
+        "落ちた歯が無い出力からは 1 本も拾わない"
+    );
+    assert!(
+        failed_tests("error[E0308]: mismatched types\nerror: could not compile `flipdemo`\n").is_empty(),
+        "compile error の出力からは 1 本も拾わない"
+    );
+}
+
+/// base の歯が **1 回目だけ**落ちる周は、その歯だけを 1 回撃ち直して base 緑と読み、判定行に
+/// `base-retried=N` を後置する（負荷下の flaky が `base-not-green` → retire → 再走を踏まない）。
+#[test]
+fn flip_check_retries_flaky_base_test_once_and_reports_count() {
+    let dir = make_tmp_dir();
+    scaffold(&dir);
+    let base_lib = base_lib_with(FLAKY_ONCE);
+    let base = seed_fixture(&dir, &base_lib);
+    // HEAD: 既存の歯（holds）の期待値だけを変え、base の src（val() は 1）で赤い flip を 1 本作る。
+    write_at(
+        &dir,
+        &lib_rel(),
+        &base_lib.replace(
+            "        assert_eq!(super::val(), 1);\n",
+            "        assert_eq!(super::val(), 2);\n",
+        ),
+    );
+    head_commit(&dir);
+    let (got, retries) = judge_with_retry_lines(&base, &dir);
+    drop_fixture(&dir);
+    assert_verdict(&got.line, got.code, 0, "RED-on-base ok tests_changed=1 base-retried=1");
+    assert_eq!(
+        retries,
+        vec![format!("flip-check: base-retry {FIXTURE_MEMBER}::checks::settles")],
+        "撃ち直した歯を binary::name で 1 行ずつ名指すはず"
+    );
+}
+
+/// **2 回目も落ちる**歯は撃ち直しで緑に化けない——従来どおり `base-not-green`（rc 1）。
+/// 撃ち直しは 1 回だけで、その 1 回は sink に残る（極性の pin・補助の歯）。
+#[test]
+fn flip_check_base_retry_does_not_rescue_a_test_that_fails_twice() {
+    let dir = make_tmp_dir();
+    scaffold(&dir);
+    let base_lib = base_lib_with(ALWAYS_RED);
+    let base = seed_fixture(&dir, &base_lib);
+    write_at(
+        &dir,
+        &lib_rel(),
+        &base_lib.replace(
+            "        assert_eq!(super::val(), 1);\n",
+            "        assert_eq!(super::val(), 2);\n",
+        ),
+    );
+    head_commit(&dir);
+    let (got, retries) = judge_with_retry_lines(&base, &dir);
+    drop_fixture(&dir);
+    assert_verdict(&got.line, got.code, 1, "FAIL reason=infra-error base-not-green");
+    assert!(
+        !got.line.contains("base-retried"),
+        "落ちたままの撃ち直しを判定行へ載せない: {}",
+        got.line
+    );
+    assert_eq!(
+        retries,
+        vec![format!("flip-check: base-retry {FIXTURE_MEMBER}::checks::broken")],
+        "撃ち直しは 1 回だけ（2 回目を撃たない）"
+    );
+}
+
+/// 落ちた歯を **名指せない**周（base が compile しない＝rc 101・`FAIL` 行が無い）は撃ち直さず
+/// `base-not-green` で止まる——sink に `base-retry` 行が 0。
+#[test]
+fn flip_check_base_retry_needs_named_failures() {
+    let dir = make_tmp_dir();
+    scaffold(&dir);
+    // src 区間が型を誤り compile できない base（test 区間は BASE_LIB のまま）。
+    let base_lib = BASE_LIB.replace("    1\n}", "    \"one\"\n}");
+    let base = seed_fixture(&dir, &base_lib);
+    write_at(
+        &dir,
+        &lib_rel(),
+        &base_lib.replace(
+            "        assert_eq!(super::val(), 1);\n",
+            "        assert_eq!(super::val(), 2);\n",
+        ),
+    );
+    head_commit(&dir);
+    let (got, retries) = judge_with_retry_lines(&base, &dir);
+    drop_fixture(&dir);
+    assert_verdict(&got.line, got.code, 1, "FAIL reason=infra-error base-not-green");
+    assert!(
+        retries.is_empty(),
+        "名指せない失敗は撃ち直さない（sink に base-retry が {} 行）: {retries:?}",
+        retries.len()
+    );
+}

@@ -596,12 +596,78 @@ fn work_dir(root: &Path) -> PathBuf {
 
 /// base tree で runner を撃つ。env は親を継承し `CARGO_TARGET_DIR` だけ上書きする。
 fn nextest(dir: &Path, target_dir: &Path) -> Result<Output, String> {
+    nextest_with(dir, target_dir, &[])
+}
+
+/// [`nextest`] の本体。`extra` は `--workspace --no-tests=fail` の**後ろ**へ足す引数
+/// （base 段の撃ち直しが filterset を渡す口）。素の撃ちと撃ち直しで起動の形を 2 つ
+/// 持つと、片方だけ `--no-tests=fail` が落ちて rc 4 が緑に化ける。
+fn nextest_with(dir: &Path, target_dir: &Path, extra: &[&str]) -> Result<Output, String> {
     Command::new("cargo")
         .current_dir(dir)
         .env("CARGO_TARGET_DIR", target_dir)
         .args(["nextest", "run", "--workspace", "--no-tests=fail"])
+        .args(extra)
         .output()
         .map_err(|err| format!("cargo nextest を起動できない: {err}"))
+}
+
+/// runner の出力から名指せた、落ちた歯 1 本。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FailedTest {
+    /// nextest の binary id（`<crate>` / `<crate>::<target>` / `<crate>::bin/<name>`）。
+    binary: String,
+    /// 歯の名（module path 込み）。
+    name: String,
+}
+
+impl FailedTest {
+    /// この歯 **1 本だけ**に当たる filterset（binary id と名の**完全一致**）。
+    ///
+    /// 部分一致（`test(foo)`）で名指すと同名を含む隣の歯まで撃ち直し、その rc で base の
+    /// 緑を読むことになる——撃ち直しは緩める側なので、当たる範囲は狭く取る。
+    fn filterset(&self) -> String {
+        format!("(binary_id(={}) & test(={}))", self.binary, self.name)
+    }
+}
+
+/// runner（nextest）の出力から `FAIL [ <time>] <binary id> <歯の名>` 形の行だけを拾う。
+///
+/// 拾うのは行頭（空白は跨ぐ）が `FAIL [` の行だけで、`PASS` / `Summary` / `TRY n FAIL`
+/// の行は拾わない。`]` の後ろは進捗の `(n/m)`（桁を揃える空白を挟む＝`(  12/1146)`・
+/// 1 語には割れない）を挟んで binary id と名の **2 語ちょうど**——語数が違う行（形の
+/// 崩れた行）は拾わない。nextest は落ちた歯を末尾の一覧でもう 1 度出すので、同じ歯は
+/// 1 本に畳む（順序は出力順）。
+fn failed_tests(text: &str) -> Vec<FailedTest> {
+    let mut found: Vec<FailedTest> = Vec::new();
+    for line in text.lines() {
+        let Some(rest) = line.trim_start().strip_prefix("FAIL [") else {
+            continue;
+        };
+        let Some((_, after)) = rest.split_once(']') else {
+            continue;
+        };
+        let after = after.trim_start();
+        let after = match after.strip_prefix('(') {
+            None => after,
+            Some(progress) => match progress.split_once(')') {
+                Some((_, tail)) => tail,
+                None => continue,
+            },
+        };
+        let words: Vec<&str> = after.split_whitespace().collect();
+        let &[binary, name] = words.as_slice() else {
+            continue;
+        };
+        let test = FailedTest {
+            binary: binary.to_owned(),
+            name: name.to_owned(),
+        };
+        if !found.contains(&test) {
+            found.push(test);
+        }
+    }
+    found
 }
 
 /// overlay 1 本を base tree へ書く。写せない pair は書かず `false` を返す。
@@ -681,6 +747,8 @@ struct Counts {
     moved: usize,
     /// 本体 file へ同梱した宣言 file の本数。
     decl: usize,
+    /// base 段で撃ち直して緑と読んだ歯の本数（負荷下の flaky の検出線・`s2-07l.270`）。
+    base_retried: usize,
 }
 
 impl Counts {
@@ -691,8 +759,9 @@ impl Counts {
             removed: pairs.iter().filter(|pair| pair.removed_only()).count(),
             retro: pairs.iter().filter(|pair| pair.retroactive()).count(),
             moved: pairs.iter().filter(|pair| pair.moved()).count(),
-            // 同梱した本数は base を実体化する段（[`run_on_base`]）で決まる。
+            // 同梱した本数と撃ち直した本数は base を実体化する段（[`run_on_base`]）で決まる。
             decl: 0,
+            base_retried: 0,
         }
     }
 }
@@ -711,6 +780,9 @@ fn ok_line(counts: Counts) -> Verdict {
     }
     if counts.decl > 0 {
         line.push_str(&format!(" decl={}", counts.decl));
+    }
+    if counts.base_retried > 0 {
+        line.push_str(&format!(" base-retried={}", counts.base_retried));
     }
     verdict(&line, 0)
 }
@@ -889,36 +961,88 @@ fn plan_of<'a>(pairs: &'a [FilePair], flipping: &[&'a FilePair]) -> Plan<'a> {
 }
 
 /// base tree の健全性前段。overlay を書く前に base のまま runner を撃つ。
-fn base_is_green(dest: &Path, target: &Path) -> Result<(), Verdict> {
-    match nextest(dest, target) {
-        Err(reason) => Err(infra(&reason)),
-        Ok(output) => {
-            relay("base", &output);
-            if output.status.success() {
-                Ok(())
-            } else {
-                Err(infra("base-not-green"))
-            }
+///
+/// 通れば `Ok(撃ち直した歯の本数)`。**base 自身の緑は前提であって判定対象ではない**
+/// （C12.2）——main は常に緑（C12.6）なので、ここで落ちる歯は負荷か環境の赤である。
+/// 落ちた歯を出力から名指せる周だけ [`retry_named`] で **1 回**撃ち直し、通れば base 緑と
+/// 読む。名指せない周（compile error の rc 101・signal で rc 無し・出力の形が読めない）は
+/// 従来どおり `base-not-green`＝名指せない失敗を撃ち直しで緑に化けさせない（C11.2）。
+/// `sink` は `base-retry` の診断行の出口（[`judge_into`] と同じ理由で stderr へ直に書かない）。
+fn base_is_green(dest: &Path, target: &Path, sink: &mut dyn FnMut(&str)) -> Result<usize, Verdict> {
+    let output = match nextest(dest, target) {
+        Err(reason) => return Err(infra(&reason)),
+        Ok(output) => output,
+    };
+    relay("base", &output);
+    match output.status.code() {
+        Some(0) => Ok(0),
+        Some(_) => {
+            let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+            text.push_str(&String::from_utf8_lossy(&output.stderr));
+            retry_named(dest, target, &failed_tests(&text), sink)
         }
+        None => Err(infra("base-not-green")),
+    }
+}
+
+/// 名指せた歯だけを同じ base copy・同じ target dir で **1 回だけ**撃ち直す。
+///
+/// 撃ち直しの rc が 0 のときだけ `Ok(本数)`。0 本（名指せない）・rc≠0（rc 4 = filterset
+/// に該当 0 本を含む）・起動失敗はすべて `base-not-green`——**2 回目は撃たない**。
+/// 撃ち直しは緩める側なので、当たる範囲（完全一致）も回数（1 回）も狭く取る。
+fn retry_named(
+    dest: &Path,
+    target: &Path,
+    failed: &[FailedTest],
+    sink: &mut dyn FnMut(&str),
+) -> Result<usize, Verdict> {
+    if failed.is_empty() {
+        return Err(infra("base-not-green"));
+    }
+    for test in failed {
+        sink(&format!("flip-check: base-retry {}::{}", test.binary, test.name));
+    }
+    let expr = failed
+        .iter()
+        .map(FailedTest::filterset)
+        .collect::<Vec<String>>()
+        .join(" | ");
+    let output = match nextest_with(dest, target, &["-E", &expr]) {
+        Err(reason) => return Err(infra(&reason)),
+        Ok(output) => output,
+    };
+    relay("base-retry", &output);
+    if output.status.success() {
+        Ok(failed.len())
+    } else {
+        Err(infra("base-not-green"))
     }
 }
 
 /// base を実体化し健全性を確かめ overlay を書いて runner を撃つ。
-fn run_on_base(base: &str, root: &Path, pairs: &[FilePair], counts: Counts) -> Verdict {
+fn run_on_base(
+    base: &str,
+    root: &Path,
+    pairs: &[FilePair],
+    counts: Counts,
+    sink: &mut dyn FnMut(&str),
+) -> Verdict {
     let dest = match materialize_base(base, root) {
         Err(reason) => return infra(&reason),
         Ok(found) => found,
     };
     let target = work_dir(root).join("target");
-    if let Err(blocked) = base_is_green(&dest, &target) {
-        return blocked;
-    }
+    let base_retried = match base_is_green(&dest, &target, sink) {
+        Err(blocked) => return blocked,
+        Ok(retried) => retried,
+    };
     // flip した file が 2 本以上なら **1 本ずつ**撃つ（まとめ撃ちは偽の RED を作る）。
     // 1 本のときは従来どおり 1 回で足りる（分ける対象が無い）。
     let flipping: Vec<&FilePair> = pairs.iter().filter(|pair| pair.flips()).collect();
     let plan = plan_of(pairs, &flipping);
     let counts = Counts {
         decl: plan.decls.len(),
+        base_retried,
         ..counts
     };
     if plan.bodies.len() >= 2 || !plan.decls.is_empty() {
@@ -969,12 +1093,13 @@ pub fn judge(base: &str, workdir: &Path) -> Verdict {
     judge_into(base, workdir, &mut emit_err)
 }
 
-/// [`judge`] の本体。効かない札の行（`stale-marker`）を `sink` へ渡す。
+/// [`judge`] の本体。効かない札の行（`stale-marker`）と base 段の撃ち直しの行
+/// （`base-retry`）を `sink` へ渡す。
 ///
 /// stderr へ直に書くと、**出したこと自体を歯から読めない**——`stale-marker` の行は
 /// 判定行にも rc にも載らないので、emit を丸ごと消しても全部の歯が緑のままになる
-/// （実測 2026-09-10・s2-07l.34 の lens F1）。CLI 面の出力は [`judge`] が
-/// `emit_err` を渡すので変わらない。
+/// （実測 2026-09-10・s2-07l.34 の lens F1）。`base-retry` も同じで、「撃ち直していない」
+/// ことは行の不在でしか測れない。CLI 面の出力は [`judge`] が `emit_err` を渡すので変わらない。
 fn judge_into(base: &str, workdir: &Path, sink: &mut dyn FnMut(&str)) -> Verdict {
     let root = match repo_root(workdir) {
         Err(reason) => return infra(&reason),
@@ -1008,7 +1133,7 @@ fn judge_into(base: &str, workdir: &Path, sink: &mut dyn FnMut(&str)) -> Verdict
     if counts.flipped == 0 {
         return no_flip_verdict(&pairs, counts);
     }
-    let outcome = run_on_base(base, &root, &pairs, counts);
+    let outcome = run_on_base(base, &root, &pairs, counts, sink);
     finish(&root, outcome)
 }
 
