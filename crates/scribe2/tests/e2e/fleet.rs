@@ -53,6 +53,7 @@ fn event(kind: EventKind, run: &str, ts: &str) -> Event {
         detail: None,
         allowance: None,
         registration: None,
+        account: None,
     }
 }
 
@@ -591,17 +592,32 @@ fn fleet_external_form() {
     let curl = fake_curl(&fx, LIVE_BODY, "200", 0);
     let claude = fake_claude(&fx, "exit 0");
     let refreshed = run_usage_with_claude(&fx, &curl, &claude);
+    // 口座の口の外形（account-lifecycle.md §3）: 使い方・add の 1 行・断りの 1 行・ls の 1 行・retire の 1 行。
+    let acct = state_dir();
+    let acct_path = acct.display().to_string();
+    let account_usage = run_account(&[]);
+    let prepared = run_account(&["add", "a1", "--state-dir", &acct_path]);
+    let exists = run_account(&["add", "a1", "--state-dir", &acct_path]);
+    let listed = run_account(&["ls", "--state-dir", &acct_path]);
+    let retired = run_account(&["retire", "a1", "--state-dir", &acct_path]);
     let form = format!(
-        "{}{}{}{}{}",
+        "{}{}{}{}{}{}{}{}{}{}",
         String::from_utf8_lossy(&usage.stderr),
         String::from_utf8_lossy(&missing.stderr),
         String::from_utf8_lossy(&empty.stdout),
         String::from_utf8_lossy(&recorded.stdout),
-        String::from_utf8_lossy(&refreshed.stdout)
+        String::from_utf8_lossy(&refreshed.stdout),
+        String::from_utf8_lossy(&account_usage.stderr),
+        String::from_utf8_lossy(&prepared.stdout),
+        String::from_utf8_lossy(&exists.stderr),
+        String::from_utf8_lossy(&listed.stdout),
+        String::from_utf8_lossy(&retired.stdout)
     )
+    .replace(&acct_path, "[state]")
     .replace(&vessel::fleet::cli::host(), "[host]");
     insta::assert_snapshot!(form);
     fs::remove_dir_all(&dir).ok();
+    fs::remove_dir_all(&acct).ok();
     drop_fixture(&fx);
 }
 
@@ -674,6 +690,7 @@ fn pipe_question_kinds_round_trip_on_schema_1() {
             detail: Some("verify 行が矛盾する".to_owned()),
             allowance: None,
             registration: None,
+            account: None,
         };
         let line = event.to_line();
         assert!(line.contains("\"schema\":1"), "{line}");
@@ -898,6 +915,7 @@ fn allowance_event(ts: &str, allowance: Allowance) -> Event {
         detail: None,
         allowance: Some(allowance),
         registration: None,
+        account: None,
     }
 }
 
@@ -1309,12 +1327,21 @@ fn fleet_allowance_windows_round_trip_on_snake_case() {
     assert_eq!(WindowKind::parse("FiveHour"), None, "variant 名は字面でない");
 }
 
-/// `KINDS` は 13 variant で並びは宣言順のまま（歯 (a)(7)・席の登録 1 を末尾に足した）。
+/// (6e) `KINDS` は 15 variant で並びは宣言順のまま（席の登録 1 の後ろに口座の退役・戻しの 2 を末尾に足した・
+/// account-lifecycle.md §3）。base は 13 で落ちる（RED）。
 #[test]
-fn fleet_allowance_kinds_are_thirteen_in_declaration_order() {
-    assert_eq!(KINDS.len(), 13, "母集団（既存 10 + 口座残量 2 + 席の登録 1）");
-    assert_eq!(KINDS.last(), Some(&EventKind::SeatRegistered), "登録は末尾");
-    assert!(!EventKind::SeatRegistered.is_allowance(), "登録は口座残量の kind ではない");
+fn account_cmd_kinds_are_fifteen_with_retire_and_restore_last() {
+    assert_eq!(KINDS.len(), 15, "母集団（既存 10 + 口座残量 2 + 席の登録 1 + 口座の退役・戻し 2）");
+    assert_eq!(
+        KINDS.get(12..),
+        Some(&[EventKind::SeatRegistered, EventKind::AccountRetired, EventKind::AccountRestored][..]),
+        "登録 → 退役 → 戻しが末尾の順"
+    );
+    for kind in [EventKind::SeatRegistered, EventKind::AccountRetired, EventKind::AccountRestored] {
+        assert!(!kind.is_allowance(), "{} は口座残量の kind ではない", kind.as_str());
+        assert_eq!(EventKind::parse(kind.as_str()), Some(kind), "{}", kind.as_str());
+        assert_eq!(kind.default_actor(), "machine", "{} は機械由来", kind.as_str());
+    }
     assert!(
         is_declaration_order(KINDS, |kind| kind as usize),
         "KINDS の並びが宣言順と乖離している（母集団 {} 種）",
@@ -1360,6 +1387,7 @@ fn registration_event_with_model(target: &str, model: Option<&str>) -> Event {
             launch: "line 1\n\"line 2\"\n".to_owned(),
             model: model.map(str::to_owned),
         }),
+        account: None,
     }
 }
 
@@ -2057,6 +2085,478 @@ fn claude_calls(fx: &UsageFixture) -> usize {
 fn run_usage_with_claude(fx: &UsageFixture, curl: &Path, claude: &Path) -> Output {
     let claude = claude.display().to_string();
     run_usage(fx, curl, &["--claude", &claude])
+}
+
+// ─────────────── 口座の口（`account`・account-lifecycle.md §3 / §8・接頭辞 `account_cmd_`） ───────────────
+
+/// `account` を binary で 1 回撃つ。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn run_account(args: &[&str]) -> Output {
+    Command::new(bin()).arg("account").args(args).output().expect("binary を起動できる")
+}
+
+/// 出力の byte を文字列で見る。
+fn text(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes).into_owned()
+}
+
+/// `labels` を宣言順に持つ host の面の本文（`account add` が書く形と同じ）。
+fn host_body(labels: &[&str]) -> String {
+    labels.iter().fold("schema = 1\n".to_owned(), |body, label| format!("{body}\n[[account]]\nlabel = \"{label}\"\n"))
+}
+
+/// 置き場の host の面の本文（無ければ空）。
+fn host_text(dir: &Path) -> String {
+    fs::read_to_string(dir.join(vessel::rules::HOST_MANIFEST)).unwrap_or_default()
+}
+
+/// 置き場に host の面を書く。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn put_host_labels(dir: &Path, labels: &[&str]) {
+    fs::write(dir.join(vessel::rules::HOST_MANIFEST), host_body(labels)).expect("host の面を書ける");
+}
+
+/// `root` の下の全 entry（相対 path・種類・本文〔link は指す先〕）を path の順に（link は辿らない）。
+fn tree(root: &Path) -> Vec<(PathBuf, String, Vec<u8>)> {
+    let mut found = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(path) = stack.pop() {
+        let Ok(meta) = fs::symlink_metadata(&path) else { continue };
+        let rel = path.strip_prefix(root).map(Path::to_path_buf).unwrap_or_default();
+        if meta.file_type().is_symlink() {
+            let to = fs::read_link(&path).map(|found| found.display().to_string()).unwrap_or_default();
+            found.push((rel, "link".to_owned(), to.into_bytes()));
+        } else if meta.is_dir() {
+            found.push((rel, "dir".to_owned(), Vec::new()));
+            let children: Vec<PathBuf> =
+                fs::read_dir(&path).map(|entries| entries.filter_map(|entry| entry.ok().map(|e| e.path())).collect()).unwrap_or_default();
+            stack.extend(children);
+        } else {
+            found.push((rel, "file".to_owned(), fs::read(&path).unwrap_or_default()));
+        }
+    }
+    found.sort();
+    found
+}
+
+/// 置き場の口座の退役・戻しの event（kind・label）を物理順に。
+fn account_events(dir: &Path) -> Vec<(EventKind, Option<String>)> {
+    store::read_all(dir)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|event| matches!(event.kind, EventKind::AccountRetired | EventKind::AccountRestored))
+        .map(|event| (event.kind, event.account))
+        .collect()
+}
+
+/// 退役先（`<state>/accounts/.retired/`）の entry 名（名前の順）。
+fn retired_entries(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = fs::read_dir(dir.join("accounts").join(".retired"))
+        .map(|entries| entries.filter_map(|entry| entry.ok().map(|e| e.file_name().to_string_lossy().into_owned())).collect())
+        .unwrap_or_default();
+    names.sort();
+    names
+}
+
+/// 登録 row を 1 件積む（口座 = `label`・`seat register` は打刻を要るので行を直に積む）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn register_account(dir: &Path, label: &str) {
+    let mut event = registration_event("s:w");
+    event.registration = event.registration.map(|row| Registration { account: label.to_owned(), ..row });
+    store::append(dir, &event, LockPolicy::embedded().expect("lock の規則を読める")).expect("登録 row を積める");
+}
+
+/// (6a) `add` は dir と直下の `settings.json`（agent view を切る 1 項目）と host の面の `[[account]]` 行 1 つを揃え、stdout に
+/// login の起動行を 1 行（cwd は `--anchor`・無ければ置き場）。2 つ目の口座は既存の宣言の後ろに 1 行。
+/// base は `account` の subcommand が無く使い方で断る（RED・機能不在）。
+#[test]
+fn account_cmd_add_prepares_the_dir_settings_and_one_declaration_line() {
+    let dir = state_dir();
+    let path = dir.display().to_string();
+    let out = run_account(&["add", "a1", "--state-dir", &path]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{out:?}");
+    let a1 = dir.join("accounts").join("a1");
+    assert_eq!(text(&out.stdout), format!("account: prepared a1 next=cd {path} && CLAUDE_CONFIG_DIR={} claude\n", a1.display()));
+    assert!(a1.is_dir(), "dir を作る");
+    assert_eq!(fs::read_to_string(a1.join("settings.json")).unwrap_or_default(), "{\"disableAgentView\": true}\n", "1 項目だけ");
+    assert_eq!(fs::read_dir(&a1).map(Iterator::count).unwrap_or_default(), 1, "credential は書かない（settings.json だけ）");
+    assert_eq!(host_text(&dir), host_body(&["a1"]), "schema = 1 から作り行を 1 つ");
+    assert!(!dir.join("host.toml.staged").exists(), "一時 file を残さない");
+    let anchor = dir.join("anchor");
+    let anchored = run_account(&["add", "a3", "--state-dir", &path, "--anchor", &anchor.display().to_string()]);
+    assert_eq!(anchored.status.code(), Some(i32::from(RC_OK)), "{anchored:?}");
+    let a3 = dir.join("accounts").join("a3");
+    assert_eq!(text(&anchored.stdout), format!("account: prepared a3 next=cd {} && CLAUDE_CONFIG_DIR={} claude\n", anchor.display(), a3.display()));
+    assert_eq!(host_text(&dir), host_body(&["a1", "a3"]), "既存の宣言の後ろに 1 行");
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// (6a) 2 回目の `add`（宣言済み）は `exists`・user の既存 dir は `dir-exists` で、どちらも何も書かない（宣言も足さない）。
+#[test]
+fn account_cmd_add_refuses_exists_and_dir_exists_without_writing() {
+    let dir = state_dir();
+    let path = dir.display().to_string();
+    let first = run_account(&["add", "a1", "--state-dir", &path]);
+    assert_eq!(first.status.code(), Some(i32::from(RC_OK)), "{first:?}");
+    let a2 = dir.join("accounts").join("a2");
+    fs::create_dir_all(&a2).expect("user の dir を置ける");
+    fs::write(a2.join("mine"), "user").expect("user の file を置ける");
+    let before = tree(&dir);
+    for (label, reason) in [("a1", "exists"), ("a2", "dir-exists")] {
+        let out = run_account(&["add", label, "--state-dir", &path]);
+        assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{out:?}");
+        assert!(out.stdout.is_empty(), "断りは stdout 0 byte");
+        assert_eq!(text(&out.stderr), format!("account: refused reason={reason} label={label}\n"));
+        assert_eq!(tree(&dir), before, "{label}: 何も書かない");
+    }
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// 偽 claude（`CLAUDE_CONFIG_DIR` と cwd を 1 行で `<dir>/login.log` へ追記する）を置いた shim の dir。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn login_shim(dir: &Path) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let shim = dir.join("shim");
+    fs::create_dir_all(&shim).expect("shim の dir を作れる");
+    let log = dir.join("login.log");
+    let script = format!("#!/bin/sh\nprintf '%s %s\\n' \"$CLAUDE_CONFIG_DIR\" \"$(pwd -P)\" >> \"{}\"\n", log.display());
+    let path = shim.join("claude");
+    fs::write(&path, script).expect("fake を書ける");
+    let mut perm = fs::metadata(&path).expect("fake の権限を読める").permissions();
+    perm.set_mode(0o755);
+    fs::set_permissions(&path, perm).expect("fake を実行可能にできる");
+    shim
+}
+
+/// 独立 socket の session を畳む guard（panic 経路でも drop が走る・socket を消す前に畳む）。
+struct LoginSession {
+    /// 独立 socket の path。
+    socket: String,
+    /// session 名。
+    name: String,
+}
+
+impl Drop for LoginSession {
+    fn drop(&mut self) {
+        let _ = Command::new("tmux").args(["-S", &self.socket, "-f", "/dev/null", "kill-session", "-t", &self.name]).output();
+    }
+}
+
+/// pane 本文（行末の空白は tmux が落とす）。
+fn login_pane(socket: &str, name: &str) -> String {
+    text(&crate::seat::tmux(socket, &["capture-pane", "-p", "-t", name]).stdout)
+}
+
+/// 条件が立つまで 5 秒の窓で 50 ms ごとに見る。
+fn wait_until(mut done: impl FnMut() -> bool) -> bool {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        if done() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    done()
+}
+
+/// shim を PATH の先頭に置いた shell（prompt `$ `）の session を独立 socket に立て、prompt が描かれたかを添えて返す。
+fn login_session(dir: &Path, name: &str, shim: &Path) -> (LoginSession, bool) {
+    let socket = dir.join("sock").display().to_string();
+    let guard = LoginSession { socket: socket.clone(), name: name.to_owned() };
+    let shell = format!("PATH='{}':/usr/bin:/bin; export PATH; exec sh -i", shim.display());
+    let args = ["new-session", "-d", "-s", name, "-n", name, "-x", "200", "-y", "40", "-e", "PS1=$ ", "sh", "-c", &shell];
+    let started = crate::seat::tmux(&socket, &args).status.success();
+    let ready = started && wait_until(|| login_pane(&socket, name).trim_end().ends_with('$'));
+    (guard, ready)
+}
+
+/// (6a) `--target` は契約 (b) と同じ注入の門を通して login の起動行を shell へ 1 回だけ送る（偽 claude が
+/// `CLAUDE_CONFIG_DIR` = 口座の dir・cwd = `--anchor` で 1 回走る）。入力欄に打ちかけの在る shell へは 1 key も送らず
+/// `refused=input-busy` と行を返す（dir と宣言は揃え終えている）。
+#[test]
+fn account_cmd_add_target_injects_the_login_line_once() {
+    let dir = state_dir();
+    let path = dir.display().to_string();
+    let shim = login_shim(&dir);
+    let name = "acctlogin";
+    let (guard, ready) = login_session(&dir, name, &shim);
+    assert!(ready, "独立 socket に shell の session を立てられる: {}", login_pane(&guard.socket, name));
+    let anchor = dir.join("anchor");
+    fs::create_dir_all(&anchor).expect("anchor を作れる");
+    let target = format!("{name}:{name}");
+    let anchor_s = anchor.display().to_string();
+
+    let out = run_account(&["add", "a1", "--state-dir", &path, "--anchor", &anchor_s, "--target", &target, "--tmux-socket", &guard.socket]);
+
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{out:?}");
+    assert_eq!(text(&out.stdout), format!("account: prepared a1 target={name}_{name}\n"));
+    let log = dir.join("login.log");
+    let real = fs::canonicalize(&anchor).expect("anchor を実 path にできる");
+    let want = format!("{} {}\n", dir.join("accounts").join("a1").display(), real.display());
+    assert!(
+        wait_until(|| fs::read_to_string(&log).unwrap_or_default() == want),
+        "偽 claude が口座の dir と anchor で 1 回走る: {:?} pane={}",
+        fs::read_to_string(&log),
+        login_pane(&guard.socket, name)
+    );
+    assert!(wait_until(|| login_pane(&guard.socket, name).trim_end().ends_with('$')), "prompt に戻る");
+    assert!(crate::seat::tmux(&guard.socket, &["send-keys", "-t", &target, "-l", "git st"]).status.success());
+    assert!(wait_until(|| login_pane(&guard.socket, name).trim_end().ends_with("$ git st")), "打ちかけが描かれる");
+    let busy = run_account(&["add", "a2", "--state-dir", &path, "--target", &target, "--tmux-socket", &guard.socket]);
+    assert_eq!(busy.status.code(), Some(i32::from(RC_REFUSED)), "{busy:?}");
+    assert!(text(&busy.stderr).starts_with("account: prepared a2 refused=input-busy next=cd "), "{busy:?}");
+    assert!(dir.join("accounts").join("a2").join("settings.json").is_file(), "dir と宣言は揃え終えている");
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(fs::read_to_string(&log).unwrap_or_default(), want, "門で止まった周は 1 key も送らない＝偽 claude は 1 回だけ");
+    drop(guard);
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// (6b) `ls` の行は doctor の口座行（同じ 1 関数・`retired=` 込み）に最新の実測の要約（実測行あり＝使用率・なし＝
+/// `unmeasured`）を足したもの（label の辞書順・rc 0・計測は撃たない＝event は増えない）。
+#[test]
+fn account_cmd_ls_is_the_doctor_line_plus_retired_and_allowance() {
+    let dir = state_dir();
+    let path = dir.display().to_string();
+    put_host_labels(&dir, &["zeta", "a1"]);
+    let a1 = dir.join("accounts").join("a1");
+    fs::create_dir_all(&a1).expect("口座の dir を作れる");
+    fs::write(a1.join(".credentials.json"), "{}").expect("credential の印を置ける");
+    fs::write(a1.join("settings.json"), "{\"disableAgentView\": true}").expect("settings を置ける");
+    let policy = LockPolicy::embedded().expect("rules 行を引ける");
+    for row in [measured("a1", WindowKind::FiveHour, None, 13), measured("a1", WindowKind::SevenDay, None, 41)] {
+        store::append(&dir, &allowance_event(ALLOWANCE_TS, row), policy).expect("追記できる");
+    }
+    let events = fs::read(store::events_path(&dir)).unwrap_or_default();
+
+    let out = run_account(&["ls", "--state-dir", &path]);
+
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{out:?}");
+    let lines: Vec<String> = text(&out.stdout).lines().map(str::to_owned).collect();
+    assert_eq!(
+        lines,
+        [
+            "account=a1 dir=present credential=present config=present agentview=off trust=n/a retired=no five_hour=13% seven_day=41%",
+            "account=zeta dir=missing credential=missing config=missing agentview=unreadable trust=n/a retired=no five_hour=unmeasured seven_day=unmeasured",
+        ]
+    );
+    assert_eq!(fs::read(store::events_path(&dir)).unwrap_or_default(), events, "計測を撃たない");
+    let socket = dir.join("no-sock").display().to_string();
+    let doctor = Command::new(bin()).args(["doctor", "--state-dir", &path, "--tmux-socket", &socket]).output().expect("binary を起動できる");
+    let doctor_rows: Vec<String> = text(&doctor.stdout).lines().filter(|line| line.starts_with("account=")).map(str::to_owned).collect();
+    let heads: Vec<String> = lines.iter().map(|line| line.split(" five_hour=").next().unwrap_or_default().to_owned()).collect();
+    assert_eq!(doctor_rows, heads, "doctor の口座行と同じ行（要約だけが後ろに足される）");
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// 退役の歯の置き場: host の面に a1 / a2・両口座に読める credential・偽 curl（[`LIVE_BODY`]）。`(fixture, state, curl)`。
+fn retire_place() -> (UsageFixture, String, String) {
+    let fx = usage_fixture(&[]);
+    let state = fx.state.display().to_string();
+    put_host_labels(&fx.state, &["a1", "a2"]);
+    put_credential(&fx, "a1", &live_credential(TOKEN_A1));
+    put_credential(&fx, "a2", &live_credential(TOKEN_A2));
+    let curl = fake_curl(&fx, LIVE_BODY, "200", 0).display().to_string();
+    (fx, state, curl)
+}
+
+/// (6c) `retire` は dir を `.retired/` へ 1 つだけ動かし（中身ごと）・`AccountRetired` を 1 件積み・宣言の行は残す。
+#[test]
+fn account_cmd_retire_moves_the_dir_once_and_records_one_event() {
+    let (fx, state, _) = retire_place();
+    let out = run_account(&["retire", "a1", "--state-dir", &state]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{out:?}");
+    assert_eq!(text(&out.stdout), "account: retired a1\n");
+    assert!(fs::symlink_metadata(fx.state.join("accounts").join("a1")).is_err(), "元の場所から消える");
+    let moved = retired_entries(&fx.state);
+    assert_eq!(moved.len(), 1, "退役先に 1 つだけ: {moved:?}");
+    let name = moved.first().cloned().unwrap_or_default();
+    assert!(name.starts_with("a1."), "{name}");
+    assert!(fx.state.join("accounts").join(".retired").join(&name).join(".credentials.json").is_file(), "中身ごと動く");
+    assert_eq!(account_events(&fx.state), vec![(EventKind::AccountRetired, Some("a1".to_owned()))], "event 1 件");
+    assert_eq!(host_text(&fx.state), host_body(&["a1", "a2"]), "宣言の行は消さない");
+    drop_fixture(&fx);
+}
+
+/// (6c) 退役中の口座は `fleet select` の候補から消え（同点で辞書順の先だった a1 → a2）、`fleet usage` が測らない（a1 の行が
+/// 増えない）。
+#[test]
+fn account_cmd_retired_account_leaves_select_and_usage() {
+    let (fx, state, curl) = retire_place();
+    let select = || text(&run_fleet(&["select", "--purpose", "session", "--state-dir", &state, "--curl", &curl]).stdout);
+    assert_eq!(select(), "select purpose=session chosen=a1\n", "同点は辞書順で a1");
+    assert_eq!(run_account(&["retire", "a1", "--state-dir", &state]).status.code(), Some(i32::from(RC_OK)));
+    let a1_rows = |fx: &UsageFixture| allowances(fx).iter().filter(|row| row.key().account == "a1").count();
+    let measured_a1 = a1_rows(&fx);
+    let usage = run_fleet(&["usage", "--state-dir", &state, "--curl", &curl]);
+    assert_eq!(out_lines(&usage), vec![live_line("a2")], "退役中の a1 は測らない: {usage:?}");
+    assert_eq!(a1_rows(&fx), measured_a1, "a1 の行は増えない");
+    assert_eq!(select(), "select purpose=session chosen=a2\n", "退役中の a1 は候補に入らない");
+    drop_fixture(&fx);
+}
+
+/// (6c) 登録 row のどれかが持つ口座は `in-use` で動かず、event も書かない（置き場の全 entry が不変）。
+#[test]
+fn account_cmd_retire_refuses_an_account_in_use() {
+    let (fx, state, _) = retire_place();
+    register_account(&fx.state, "a2");
+    let before = tree(&fx.state);
+    let used = run_account(&["retire", "a2", "--state-dir", &state]);
+    assert_eq!(used.status.code(), Some(i32::from(RC_REFUSED)), "{used:?}");
+    assert_eq!(text(&used.stderr), "account: refused reason=in-use label=a2\n");
+    assert_eq!(tree(&fx.state), before, "dir も event も不変");
+    drop_fixture(&fx);
+}
+
+/// 戻しの歯の置き場: host の面に a1 / a3・a1 は中身を持つ dir・a3 は実 dir への link。`(置き場, その path, link 先の実 dir)`。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn restore_place() -> (PathBuf, String, PathBuf) {
+    let dir = state_dir();
+    let path = dir.display().to_string();
+    put_host_labels(&dir, &["a1", "a3"]);
+    let a1 = dir.join("accounts").join("a1");
+    fs::create_dir_all(&a1).expect("口座の dir を作れる");
+    fs::write(a1.join("mine"), "kept").expect("中身を置ける");
+    let real = dir.join("real-config");
+    fs::create_dir_all(&real).expect("link 先を作れる");
+    std::os::unix::fs::symlink(&real, dir.join("accounts").join("a3")).expect("link を置ける");
+    (dir, path, real)
+}
+
+/// `at` が `real` を指す link か（link を辿らずに見る）。
+fn is_link_to(at: &Path, real: &Path) -> bool {
+    fs::symlink_metadata(at).is_ok_and(|meta| meta.file_type().is_symlink()) && fs::read_link(at).ok().as_deref() == Some(real)
+}
+
+/// `account` を撃ち、rc 0 と stdout の 1 行（`want`）を確かめる。
+fn account_ok(args: &[&str], want: &str) {
+    let out = run_account(args);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{args:?}: {out:?}");
+    assert_eq!(text(&out.stdout), format!("{want}\n"), "{args:?}");
+}
+
+/// (6d) `restore` は最新の退役先を元へ戻し（中身ごと・link は link のまま）`AccountRestored` を 1 件積む（退役・戻しが 1 件ずつ）。
+#[test]
+fn account_cmd_restore_moves_back_once_and_records_one_event() {
+    let (dir, path, real) = restore_place();
+    for label in ["a1", "a3"] {
+        account_ok(&["retire", label, "--state-dir", &path], &format!("account: retired {label}"));
+    }
+    let link = retired_entries(&dir).into_iter().find(|name| name.starts_with("a3.")).unwrap_or_default();
+    assert!(is_link_to(&dir.join("accounts").join(".retired").join(&link), &real), "link は link のまま動く: {link}");
+    for label in ["a1", "a3"] {
+        account_ok(&["restore", label, "--state-dir", &path], &format!("account: restored {label}"));
+    }
+    assert_eq!(fs::read_to_string(dir.join("accounts").join("a1").join("mine")).unwrap_or_default(), "kept", "中身ごと戻る");
+    assert!(is_link_to(&dir.join("accounts").join("a3"), &real), "link のまま戻る");
+    assert!(retired_entries(&dir).is_empty(), "退役先に残らない");
+    let (a1, a3) = (Some("a1".to_owned()), Some("a3".to_owned()));
+    let want = vec![
+        (EventKind::AccountRetired, a1.clone()),
+        (EventKind::AccountRetired, a3.clone()),
+        (EventKind::AccountRestored, a1),
+        (EventKind::AccountRestored, a3),
+    ];
+    assert_eq!(account_events(&dir), want, "退役・戻しが 1 件ずつ");
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// (6d) `ls` の `retired=` は退役の間だけ `yes`（戻せば `no`）。
+#[test]
+fn account_cmd_ls_names_retired_only_while_retired() {
+    let (dir, path, _) = restore_place();
+    let count = |word: &str| {
+        let listed = text(&run_account(&["ls", "--state-dir", &path]).stdout);
+        listed.lines().filter(|line| line.contains(&format!(" retired={word} "))).count()
+    };
+    assert_eq!(count("no"), 2, "退役前");
+    account_ok(&["retire", "a1", "--state-dir", &path], "account: retired a1");
+    assert_eq!((count("yes"), count("no")), (1, 1), "退役中の a1 だけ yes");
+    account_ok(&["restore", "a1", "--state-dir", &path], "account: restored a1");
+    assert_eq!(count("no"), 2, "戻せば no");
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// (6d) 退役中でない label は `not-retired`・元の場所が埋まっている周は `dir-exists` で、どちらも何も書かない。
+#[test]
+fn account_cmd_restore_refuses_not_retired_and_an_occupied_place() {
+    let (dir, path, _) = restore_place();
+    let refused = |reason: &str| {
+        let before = tree(&dir);
+        let out = run_account(&["restore", "a1", "--state-dir", &path]);
+        assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{out:?}");
+        assert_eq!(text(&out.stderr), format!("account: refused reason={reason} label=a1\n"));
+        assert_eq!(tree(&dir), before, "{reason}: 何も書かない");
+    };
+    refused("not-retired");
+    account_ok(&["retire", "a1", "--state-dir", &path], "account: retired a1");
+    fs::create_dir_all(dir.join("accounts").join("a1")).expect("user が元の場所を作り直す");
+    refused("dir-exists");
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// (6f) 前提違反（label の規則・`exists`・`dir-exists`・`unknown`・`in-use`・`not-retired`）と使い方の誤りは、file も
+/// event も 1 byte も変えずに断る（置き場の全 entry の本文が不変）。
+#[test]
+fn account_cmd_refusals_write_no_file_and_no_event() {
+    let dir = state_dir();
+    let path = dir.display().to_string();
+    put_host_labels(&dir, &["a1"]);
+    fs::create_dir_all(dir.join("accounts").join("a1")).expect("口座の dir を作れる");
+    fs::create_dir_all(dir.join("accounts").join("a9")).expect("宣言の無い dir を置ける");
+    register_account(&dir, "a1");
+    let before = tree(&dir);
+    for (args, reason, label) in [
+        (&["add", "a/b"][..], "label-invalid", "a/b"),
+        (&["add", ".x"], "label-invalid", ".x"),
+        (&["add", "a1"], "exists", "a1"),
+        (&["add", "a9"], "dir-exists", "a9"),
+        (&["retire", "ghost"], "unknown", "ghost"),
+        (&["retire", "a1"], "in-use", "a1"),
+        (&["retire", "../x"], "label-invalid", "../x"),
+        (&["restore", "a1"], "not-retired", "a1"),
+        (&["restore", "ghost"], "unknown", "ghost"),
+    ] {
+        let mut call = args.to_vec();
+        call.extend_from_slice(&["--state-dir", &path]);
+        let out = run_account(&call);
+        assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{args:?}: {out:?}");
+        assert!(out.stdout.is_empty(), "{args:?}: stdout 0 byte");
+        assert_eq!(text(&out.stderr), format!("account: refused reason={reason} label={label}\n"), "{args:?}");
+        assert_eq!(tree(&dir), before, "{args:?}: file も event も不変");
+    }
+    let usage = text(&run_account(&[]).stderr);
+    assert!(usage.starts_with("usage: account <add <label>"), "{usage}");
+    for bad in [
+        &["add"][..],
+        &["add", "a2"],
+        &["ls"],
+        &["ls", "--state-dir"],
+        &["ls", "--state-dir", &path, "--state-dir", &path],
+        &["retire", "a1", "--state-dir", &path, "--target", "x:y"],
+        &["nope", "--state-dir", &path],
+    ] {
+        let out = run_account(bad);
+        assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{bad:?}");
+        assert_eq!(text(&out.stderr), usage, "{bad:?} は使い方で断る");
+    }
+    assert_eq!(tree(&dir), before, "使い方の誤りも何も書かない");
+    fs::remove_dir_all(&dir).ok();
 }
 
 /// (3a) 期限切れの credential を偽 claude が書き換える周は、読み直して measured になり行の末尾に `refresh=ok`。

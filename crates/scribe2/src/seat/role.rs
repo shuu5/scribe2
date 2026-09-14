@@ -180,6 +180,7 @@ pub fn register(state_dir: &Path, registration: Registration) -> Result<Registra
         actor: ACTOR_MACHINE.to_owned(),
         stage: None, seat: None, pid: None, detail: None, allowance: None,
         registration: Some(registration.clone()),
+        account: None,
     };
     let store_err = |err: store::StoreError| RegisterRefusal::Store(err.to_string());
     store::append(state_dir, &event, LockPolicy::embedded().map_err(store_err)?).map_err(store_err)?;

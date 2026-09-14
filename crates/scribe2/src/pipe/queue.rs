@@ -363,6 +363,7 @@ mod tests {
             detail: None,
             allowance: None,
             registration: None,
+            account: None,
         }
     }
 

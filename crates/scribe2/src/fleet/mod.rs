@@ -18,7 +18,7 @@ mod replay;
 mod wait;
 
 pub use event::Event;
-pub use replay::{account_dir, replay, select_for_run, Run, Seat, State};
+pub use replay::{account_dir, effective_accounts, replay, select_for_run, Run, Seat, State};
 pub use wait::{epoch_of, wait, Completion, Timeout};
 
 use crate::polarity::{OnFailure, Polarity, Timing};
@@ -57,6 +57,10 @@ pub enum EventKind {
     AllowanceUnmeasured,
     /// 席を役割に登録した（FR40・設計 seat-roles.md §2）。**便に紐づかない**。
     SeatRegistered,
+    /// 口座を退役させた（FR58・設計 account-lifecycle.md §3・`account` = label）。**便に紐づかない**。
+    AccountRetired,
+    /// 退役させた口座を戻した（FR58・`account` = label）。**便に紐づかない**。
+    AccountRestored,
 }
 
 /// [`EventKind`] の全 variant。
@@ -74,6 +78,8 @@ pub const KINDS: &[EventKind] = &[
     EventKind::AllowanceMeasured,
     EventKind::AllowanceUnmeasured,
     EventKind::SeatRegistered,
+    EventKind::AccountRetired,
+    EventKind::AccountRestored,
 ];
 
 impl EventKind {
@@ -93,6 +99,8 @@ impl EventKind {
             Self::AllowanceMeasured => "AllowanceMeasured",
             Self::AllowanceUnmeasured => "AllowanceUnmeasured",
             Self::SeatRegistered => "SeatRegistered",
+            Self::AccountRetired => "AccountRetired",
+            Self::AccountRestored => "AccountRestored",
         }
     }
 
@@ -116,7 +124,9 @@ impl EventKind {
             | Self::QuestionAnswered
             | Self::AllowanceMeasured
             | Self::AllowanceUnmeasured
-            | Self::SeatRegistered => ACTOR_MACHINE,
+            | Self::SeatRegistered
+            | Self::AccountRetired
+            | Self::AccountRestored => ACTOR_MACHINE,
         }
     }
 
@@ -137,7 +147,9 @@ impl EventKind {
             | Self::ApprovalReceived
             | Self::QuestionRaised
             | Self::QuestionAnswered
-            | Self::SeatRegistered => false,
+            | Self::SeatRegistered
+            | Self::AccountRetired
+            | Self::AccountRestored => false,
         }
     }
 }

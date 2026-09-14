@@ -46,7 +46,7 @@ fn select_account(args: &[String], dir: &Path) -> Outcome {
         Ok(found) => found,
         Err(reason) => return Outcome::failed(RC_REFUSED, vec![format!("fleet: {reason}"), usage()]),
     };
-    let (labels, threshold_pct) = match selection_rules(args, dir) {
+    let (manifest, threshold_pct) = match selection_rules(args, dir) {
         Ok(found) => found,
         Err(lines) => return Outcome::failed(RC_REFUSED, lines),
     };
@@ -58,6 +58,8 @@ fn select_account(args: &[String], dir: &Path) -> Outcome {
         Ok(found) => found,
         Err(lines) => return Outcome::failed(RC_BROKEN, lines),
     };
+    // 候補は有効な口座の集合だけ（退役中の口座を候補に入れない・account-lifecycle.md §3）。
+    let labels = super::effective_accounts(&manifest, &state);
     let now = now_utc();
     let found = select::select(&select::Input {
         labels: &labels,
@@ -98,18 +100,13 @@ fn excludes(args: &[String]) -> Result<BTreeSet<String>, String> {
     Ok(found)
 }
 
-/// manifest の口座 label（宣言順）と R-C9-1 の値。manifest は `fleet usage` と同じ口で読む
+/// 宣言（口座 label の出所）と R-C9-1 の値。manifest は `fleet usage` と同じ口で読む
 /// （`--rules PATH` か埋め込み + `<dir>/host.toml`・env を読まない・[`super::usage::declared`]）。
-fn selection_rules(args: &[String], dir: &Path) -> Result<(Vec<String>, u64), Vec<String>> {
+fn selection_rules(args: &[String], dir: &Path) -> Result<(Manifest, u64), Vec<String>> {
     let rules = optional(args, "--rules").map_err(|reason| vec![format!("fleet: {reason}")])?;
     let manifest = super::usage::declared(rules, dir).map_err(|error| vec![error.to_string()])?;
     let threshold = threshold_of(&manifest).map_err(|error| vec![error.to_string()])?;
-    let labels = manifest
-        .accounts()
-        .iter()
-        .map(|account| account.label().to_owned())
-        .collect();
-    Ok((labels, threshold))
+    Ok((manifest, threshold))
 }
 
 /// R-C9-1 の値（session 用の閾値・使用率の百分率）。無い・不発効・整数でない行は `RuleError`。
@@ -192,8 +189,9 @@ fn build_event(args: &[String]) -> Result<Event, String> {
     // 口座残量の行は**この口から書けない**。`record` は `--run` / `--bead` を要る形なので、
     // 口座の行をここで許すと便に紐づかない行に便 id が付き、必須 field も揃わない
     // （書き手は `fleet usage` の 1 本だけである・設計 fleet-usage.md §5）。
-    // 席の登録の行も同じ（書き手は打刻の条件付きの `seat register` だけ）。
-    if kind.is_allowance() || kind == EventKind::SeatRegistered {
+    // 席の登録の行も同じ（書き手は打刻の条件付きの `seat register` だけ）。口座の退役・戻しの行も同じ
+    // （書き手は mv と対の `account retire` / `restore` だけ・dir を動かさずに状態だけを書く口を作らない）。
+    if kind.is_allowance() || matches!(kind, EventKind::SeatRegistered | EventKind::AccountRetired | EventKind::AccountRestored) {
         return Err(format!("kind {kind_text} は record では書けない"));
     }
     let stage = match optional(args, "--stage")? {
@@ -223,6 +221,7 @@ fn build_event(args: &[String]) -> Result<Event, String> {
         detail: optional(args, "--detail")?.map(str::to_owned),
         allowance: None,
         registration: None,
+        account: None,
     })
 }
 

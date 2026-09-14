@@ -2,7 +2,7 @@
 source: crates/scribe2/tests/e2e/rules.rs
 expression: form
 ---
-usage: scribe2 <name|--version|doctor|rules|fleet|vessel|hook|pipe|runner|lens|seat|polarity|contracts>
+usage: scribe2 <name|--version|doctor|account|rules|fleet|vessel|hook|pipe|runner|lens|seat|polarity|contracts>
 rules: ok rows=47 kinds=46
 rules: no such id
 85

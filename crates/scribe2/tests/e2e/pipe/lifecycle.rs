@@ -798,6 +798,7 @@ fn register_seat_account(state: &Path, account: &str) {
             launch: "launch {credential-dir}\n".to_owned(),
             model: None,
         }),
+        account: None,
     };
     let policy = vessel::fleet::store::LockPolicy::embedded().expect("埋め込みの lock 行を読める");
     vessel::fleet::store::append(state, &event, policy).expect("登録 row を積める");

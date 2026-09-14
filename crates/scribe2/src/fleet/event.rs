@@ -66,6 +66,9 @@ pub struct Event {
     pub allowance: Option<Allowance>,
     /// 席の登録の本体（[`EventKind::SeatRegistered`] でだけ `Some`）。
     pub registration: Option<Registration>,
+    /// 口座の退役・戻しの label（[`EventKind::AccountRetired`] / [`EventKind::AccountRestored`] でだけ `Some`・
+    /// kind ごとの typed payload・`detail`〔自由文〕を判定入力にしない＝憲法 C3.3）。
+    pub account: Option<String>,
 }
 
 impl Event {
@@ -80,10 +83,11 @@ impl Event {
             ("ts", Value::Str(self.ts.clone())),
             ("kind", Value::Str(self.kind.as_str().to_owned())),
         ];
-        if self.allowance.is_none() && self.registration.is_none() {
+        if self.allowance.is_none() && self.registration.is_none() && self.account.is_none() {
             pairs.push(("run", Value::Str(self.run.clone())));
             pairs.push(("bead", Value::Str(self.bead.clone())));
         }
+        pairs.extend(self.account.iter().map(|label| ("account", Value::Str(label.clone()))));
         pairs.extend(self.allowance.iter().flat_map(Allowance::pairs));
         if let Some(found) = &self.registration {
             pairs.push(("role", Value::Str(found.role.as_str().to_owned())));
@@ -153,6 +157,7 @@ impl Event {
             detail: optional_text(field(&pairs, "detail"), "detail")?,
             allowance: body.allowance,
             registration: body.registration,
+            account: body.account,
         })
     }
 }
@@ -168,6 +173,8 @@ struct Body {
     allowance: Option<Allowance>,
     /// 席の登録の本体。
     registration: Option<Registration>,
+    /// 口座の退役・戻しの label。
+    account: Option<String>,
 }
 
 impl Body {
@@ -183,6 +190,7 @@ impl Body {
                 Self::allowance(pairs, Allowance::Unmeasured(unmeasured_of(pairs)?))
             }
             EventKind::SeatRegistered => Self::registration(pairs),
+            EventKind::AccountRetired | EventKind::AccountRestored => Self::account(pairs),
             EventKind::RunCreated
             | EventKind::RunStage
             | EventKind::RunDone
@@ -226,6 +234,13 @@ impl Body {
             model: optional_text(field(pairs, "model"), "model")?,
         };
         Ok(Self { registration: Some(registration), ..Self::default() })
+    }
+
+    /// 口座の退役・戻しの行の本体（`account` = label だけ）。`run` / `bead`・口座残量だけの key・登録の key は**持たない**。
+    fn account(pairs: &[(String, Value)]) -> Result<Self, String> {
+        let foreign = ALLOWANCE_KEYS.iter().filter(|key| **key != "account");
+        forbid(pairs, ["run", "bead"].iter().chain(foreign).chain(REGISTRATION_KEYS))?;
+        Ok(Self { account: Some(text_of(field(pairs, "account"), "account")?), ..Self::default() })
     }
 }
 

@@ -460,6 +460,12 @@ pub fn run(request: &Request) -> Outcome {
     let Ok(accounts) = crate::rules::declared_labels(request.accounts, &place.path) else {
         return Outcome::failed_line(RC_REFUSED, render(&body_of_error(RuleRead::ManifestUnreadable.no_rule())));
     };
+    // 逼迫度と立て直しの宣言は有効な口座の集合（宣言 − 退役中・account-lifecycle.md §3）。log を読めない周は宣言のまま
+    // （口座の軸は同じ log を読む `seated` で評価されない側へ倒れる）。
+    let accounts = match store::read_all(&place.path) {
+        Ok(events) => replay(&events).without_retired(accounts.iter().map(String::as_str)),
+        Err(_) => accounts,
+    };
     let request = &Request { accounts: &accounts, ..*request };
     let dir = super::seat_dir(&place.path, request.target);
     let judged = decide(request, &place, &dir);

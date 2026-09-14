@@ -1102,7 +1102,7 @@ fn doctor_accounts_config_splits_credential_only_dir_from_full_config_dir() {
         ("linked", "dir=present credential=present config=present agentview=off"),
         ("gone", "dir=missing credential=missing config=missing agentview=unreadable"),
     ] {
-        assert_eq!(account_line(&lines, label), format!("account={label} {rest} trust=n/a"), "{lines:?}");
+        assert_eq!(account_line(&lines, label), format!("account={label} {rest} trust=n/a retired=no"), "{lines:?}");
     }
     fs::remove_dir_all(&place.dir).ok();
 }
@@ -1131,7 +1131,7 @@ fn doctor_accounts_trust_reads_the_anchor_key_and_never_folds_unreadable_into_mi
     let labels: Vec<&str> = cases.iter().map(|(label, _, _)| *label).collect();
     let lines = doctor_rows(&place, &account_rules(&labels));
     for (label, _, value) in &cases {
-        let want = format!("account={label} dir=present credential=missing config=missing agentview=unreadable trust={value}");
+        let want = format!("account={label} dir=present credential=missing config=missing agentview=unreadable trust={value} retired=no");
         assert_eq!(account_line(&lines, label), want, "{lines:?}");
     }
     fs::remove_dir_all(&place.dir).ok();
@@ -1146,17 +1146,18 @@ fn doctor_accounts_trust_is_na_without_rows_and_per_anchor_with_many() {
     account_fixture(&place, "multi", &[(".claude.json", body)]);
     let rules = account_rules(&["multi"]);
     let head = "account=multi dir=present credential=missing config=missing agentview=unreadable";
-    assert_eq!(account_line(&doctor_rows(&place, &rules), "multi"), format!("{head} trust=n/a"), "登録 row 0 件");
+    assert_eq!(account_line(&doctor_rows(&place, &rules), "multi"), format!("{head} trust=n/a retired=no"), "登録 row 0 件");
     for (target, role, anchor) in [("mb:x", "planner", "/repo/b"), ("ma:x", "admin", "/repo/a"), ("mc:x", "admin", "/repo/b")] {
         role_stamp(&place, target, Some("sid-t"));
         let out = role_register(&place, target, role, &["--anchor", anchor]);
         assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
     }
     let lines = doctor_rows(&place, &rules);
-    assert_eq!(account_line(&lines, "multi"), format!("{head} trust=_repo_a:accepted trust=_repo_b:missing"), "{lines:?}");
+    assert_eq!(account_line(&lines, "multi"), format!("{head} trust=_repo_a:accepted trust=_repo_b:missing retired=no"), "{lines:?}");
     fs::write(vessel::fleet::store::events_path(&place.state), "not an event\n").expect("log を壊せる");
     let lines = doctor_rows(&place, &rules);
-    assert_eq!(account_line(&lines, "multi"), format!("{head} trust=unreadable"), "{lines:?}");
+    // log を読めない周は退役も読めない（`no` に潰さない・C11）。
+    assert_eq!(account_line(&lines, "multi"), format!("{head} trust=unreadable retired=unreadable"), "{lines:?}");
     assert!(lines.iter().any(|line| line.starts_with("seats: registered=unreadable")), "{lines:?}");
     fs::remove_dir_all(&place.dir).ok();
 }
@@ -1273,7 +1274,7 @@ fn rules_host_doctor_names_the_host_manifest_in_three_values() {
 
 /// 登録 row が anchor `/repo` の置き場で、dir の無い口座 1 つの doctor の行。
 fn account_line_of(label: &str) -> String {
-    format!("account={label} dir=missing credential=missing config=missing agentview=unreadable trust=unreadable")
+    format!("account={label} dir=missing credential=missing config=missing agentview=unreadable trust=unreadable retired=no")
 }
 
 /// (d) 壊れた host の面では `seat tick` が typed に止まる: 判定を回さず stderr 1 行

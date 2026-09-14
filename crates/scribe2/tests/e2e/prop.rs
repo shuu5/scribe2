@@ -124,12 +124,15 @@ mod fleet {
         ]
     }
 
-    /// `run` / `bead` を持つ kind（口座残量の 2 kind と席の登録は本体が別なので別の strategy が作る）。
+    /// `run` / `bead` を持つ kind（口座残量の 2 kind・席の登録・口座の退役と戻しは本体が別なので別の strategy が作る）。
     fn record_kinds() -> Vec<EventKind> {
         KINDS
             .iter()
             .copied()
-            .filter(|kind| !kind.is_allowance() && *kind != EventKind::SeatRegistered)
+            .filter(|kind| {
+                !kind.is_allowance()
+                    && !matches!(kind, EventKind::SeatRegistered | EventKind::AccountRetired | EventKind::AccountRestored)
+            })
             .collect()
     }
 
@@ -170,6 +173,7 @@ mod fleet {
                 detail,
                 allowance: None,
                 registration: None,
+                account: None,
             })
     }
 
@@ -218,6 +222,7 @@ mod fleet {
                 detail: None,
                 allowance: Some(Allowance::Measured(measured)),
                 registration: None,
+                account: None,
             })
     }
 
@@ -264,6 +269,7 @@ mod fleet {
                 detail: None,
                 allowance: None,
                 registration: Some(registration),
+                account: None,
             })
     }
 

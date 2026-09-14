@@ -250,14 +250,12 @@ pub(super) fn declared(rules: Option<&str>, dir: &Path) -> Result<Manifest, Usag
     crate::rules::read(rules.map(Path::new), Some(dir)).map_err(|errors| UsageError::Manifest(joined(&errors)))
 }
 
-/// manifest を読み、宣言した口座の label を宣言順で返す。0 行なら断る。
+/// manifest を読み、**有効な口座の集合**（宣言 − 退役中・[`super::effective_accounts`]）の label を宣言順で返す
+/// （退役中の口座は測らない・account-lifecycle.md §3）。event log を読めない周は [`UsageError::Store`]。
 fn accounts(args: &[String], dir: &Path) -> Result<(Manifest, Vec<String>), UsageError> {
     let manifest = declared(optional(args, "--rules").map_err(UsageError::Args)?, dir)?;
-    let labels: Vec<String> = manifest
-        .accounts()
-        .iter()
-        .map(|account| account.label().to_owned())
-        .collect();
+    let events = store::read_all(dir).map_err(|errors| UsageError::Store(joined(&errors)))?;
+    let labels = super::effective_accounts(&manifest, &replay(&events));
     Ok((manifest, labels))
 }
 
@@ -679,6 +677,7 @@ fn event_of(ts: &str, host: &str, row: &Allowance) -> Event {
         detail: None,
         allowance: Some(row.clone()),
         registration: None,
+        account: None,
     }
 }
 

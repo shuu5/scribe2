@@ -6,6 +6,7 @@
 use super::{
     select, AllowanceKey, AllowanceLatest, Event, EventKind, RegistrationLatest, SeatState, Stage, ACTOR_HUMAN,
 };
+use crate::rules::manifest::Manifest;
 use crate::seat::role::Role;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -52,9 +53,18 @@ pub struct State {
     pub allowance: BTreeMap<AllowanceKey, AllowanceLatest>,
     /// (役割, anchor) → 最新の登録（設計 seat-roles.md §2・読み手は [`crate::seat::role`]）。
     pub registrations: BTreeMap<(Role, String), RegistrationLatest>,
+    /// 退役中の口座 label → その `AccountRetired` の ts（最後の Retired の後に Restored が無い label だけ・
+    /// 設計 account-lifecycle.md §3）。ts は退役先 `.retired/<label>.<ts>` を名指す（dir を走査しない・C3）。
+    pub retired: BTreeMap<String, String>,
 }
 
 impl State {
+    /// `labels`（宣言順）から退役中の label を除いた列（**有効な口座の集合の本体**・[`effective_accounts`] と
+    /// label 列しか持たない呼び手〔tick・便用の選定〕が同じここを通る）。
+    pub fn without_retired<'a>(&self, labels: impl IntoIterator<Item = &'a str>) -> Vec<String> {
+        labels.into_iter().filter(|label| !self.retired.contains_key(*label)).map(str::to_owned).collect()
+    }
+
     /// 席の登録 row が持つ口座 label の集合（便用の選定の除外集合・設計 account-autonomy.md §3）。
     ///
     /// **席の生死を問わない**——登録が在る限りその口座は席のものである（便が席の口座を食い潰す穴を
@@ -73,6 +83,13 @@ pub fn account_dir(state_dir: &std::path::Path, label: &str) -> std::path::PathB
     state_dir.join("accounts").join(label)
 }
 
+/// **有効な口座の集合**（設計 account-lifecycle.md §3・宣言順）= 宣言（tracked + host の面の `[[account]]`）− 退役中。
+/// 計測（`fleet usage`）・選定（`fleet select`）・tick の逼迫度・doctor / `account ls` の `retired=` はここを読む
+/// （退役中の口座は測らず選ばない・宣言の行は消さない＝退役は event log の状態・C3）。
+pub fn effective_accounts(manifest: &Manifest, state: &State) -> Vec<String> {
+    state.without_retired(manifest.accounts().iter().map(|account| account.label()))
+}
+
 /// 便用の規則で口座を 1 つ選ぶ（設計 account-autonomy.md §3 / §4）。**便の再開と待ちの観測が同じ
 /// 1 本を呼ぶ**（[`Completion::AccountFree`] の `is_met` と `pipe resume` の選定が別の入力を組まない）。
 ///
@@ -80,8 +97,9 @@ pub fn account_dir(state_dir: &std::path::Path, label: &str) -> std::path::PathB
 /// 保守側）。除外は登録 row の口座。閾値は便用の規則が持たないので**窓の全量**（[`select::LIMIT_PCT`]）
 /// を置く＝session 用の分岐に届かない値であって、R-C9-1 の値ではない。
 pub fn select_for_run(state: &State, labels: &[String], now: &str) -> select::Selection {
+    let labels = state.without_retired(labels.iter().map(String::as_str));
     select::select(&select::Input {
-        labels,
+        labels: &labels,
         allowance: &state.allowance,
         purpose: select::Purpose::Run,
         model: None,
@@ -98,6 +116,7 @@ pub fn replay(events: &[Event]) -> State {
         apply_run(&mut state, event);
         apply_seat(&mut state, event);
         apply_allowance(&mut state, event);
+        apply_account(&mut state, event);
         // 登録は同じ鍵を後の行が置き換える（前の行は log に残る・append のみ）。
         if let Some(found) = &event.registration {
             let latest = RegistrationLatest { seq, registration: found.clone() };
@@ -125,11 +144,39 @@ fn apply_allowance(state: &mut State, event: &Event) {
     );
 }
 
+/// 1 件の event を退役の集合へ反映する（最後の Retired の後に Restored が無い label だけが残る）。
+fn apply_account(state: &mut State, event: &Event) {
+    let Some(label) = &event.account else {
+        return;
+    };
+    match event.kind {
+        EventKind::AccountRetired => {
+            state.retired.insert(label.clone(), event.ts.clone());
+        }
+        EventKind::AccountRestored => {
+            state.retired.remove(label);
+        }
+        EventKind::RunCreated
+        | EventKind::RunStage
+        | EventKind::RunDone
+        | EventKind::RunStopped
+        | EventKind::SeatSpawned
+        | EventKind::SeatStopped
+        | EventKind::ApprovalRequested
+        | EventKind::ApprovalReceived
+        | EventKind::QuestionRaised
+        | EventKind::QuestionAnswered
+        | EventKind::AllowanceMeasured
+        | EventKind::AllowanceUnmeasured
+        | EventKind::SeatRegistered => {}
+    }
+}
+
 /// 1 件の event を便へ反映する。
 fn apply_run(state: &mut State, event: &Event) {
-    // 口座残量の行は便に紐づかない（`run` / `bead` を持たない）。ここで通すと id が空の
+    // 口座残量・登録・退役の行は便に紐づかない（`run` / `bead` を持たない）。ここで通すと id が空の
     // 幽霊の便が 1 つ生まれ、`show` / `export` の件数が実在しない便を数える。
-    if event.kind.is_allowance() || event.registration.is_some() {
+    if event.kind.is_allowance() || event.registration.is_some() || event.account.is_some() {
         return;
     }
     let run = state.runs.entry(event.run.clone()).or_insert_with(|| Run {
@@ -189,6 +236,8 @@ fn apply_seat(state: &mut State, event: &Event) {
         | EventKind::QuestionAnswered
         | EventKind::AllowanceMeasured
         | EventKind::AllowanceUnmeasured
-        | EventKind::SeatRegistered => {}
+        | EventKind::SeatRegistered
+        | EventKind::AccountRetired
+        | EventKind::AccountRestored => {}
     }
 }
