@@ -6962,6 +6962,68 @@ fn pipe_ratelimit_resume_run_rides_out_repeated_limits_without_a_cap() {
     clean(&[&repo, &state]);
 }
 
+// ───── 別口座での途中再開は host の面の口座も候補にする（`s2-07l.246`・ADR-0026 §2.1・SRS FR57 / FR37 / FR36・接頭辞 `pipe_ratelimit_host_`） ─────
+
+/// 置き場の host の面（`<state>/host.toml`）に `labels` の順で `[[account]]` を宣言する。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn put_host_accounts(state: &Path, labels: &[&str]) {
+    let accounts: String = labels.iter().map(|label| format!("\n[[account]]\nlabel = \"{label}\"\n")).collect();
+    fs::write(state.join(vessel::rules::HOST_MANIFEST), format!("schema = 1\n{accounts}")).expect("host の面を書ける");
+}
+
+/// tracked の面（`--rules`）が 0 口座・host の面が 2 口座の置き場で、上限で止まった便は host の面の余裕の口座で
+/// 起こし直される（runner の argv に `--account-dir <state>/accounts/<label>`・記帳は `account:<label>,resume:rate-limit`）。
+#[test]
+fn pipe_ratelimit_host_resume_respawns_on_a_host_manifest_account() {
+    let (repo, state) = repo_with_state();
+    let (id, runner, rules) = rate_limited_with_accounts(&repo, &state, &[IMPLEMENT.to_owned()], &[]);
+    put_host_accounts(&state, &["h1", "h2"]);
+    put_account(&state, "h1", &[windows(100, 10)]);
+    put_account(&state, "h2", &[windows(40, 10)]);
+    let resumed = resume_with_accounts(&repo, &state, &id, &runner, &rules);
+    assert_eq!(resumed.status.code(), Some(i32::from(RC_OK)), "{} / {}", stdout_of(&resumed), stderr_of(&resumed));
+    assert_eq!(
+        stdout_of(&resumed).trim(),
+        format!("run={id} next=spawn account=h2\nrun={id} stage=Implemented"),
+        "host の面の余裕の口座を選ぶ"
+    );
+    assert_eq!(curl_calls(&state), 2, "計測も host の面の 2 口座を撃つ");
+    assert_eq!(stub_calls(&state), 2, "runner を 1 回起こし直した");
+    assert_eq!(
+        argv_account_dir(&stub_argv(&state, 2)),
+        Some(state.join("accounts").join("h2").display().to_string()),
+        "起こし直しは host の面の label の credential dir を渡す: {:?}",
+        stub_argv(&state, 2)
+    );
+    assert_eq!(
+        spawned_details(&state, &id).get(1).map(String::as_str),
+        Some("account:h2,resume:rate-limit"),
+        "起こし直しの記帳"
+    );
+    clean(&[&repo, &state]);
+}
+
+/// tracked の面が 0 口座で host の面も無い置き場では候補が無い: 起こさず・待つ reset も無いので rc 3 で止まり
+/// （`next=wait reset=-`）、便は `RateLimited` のまま live。
+#[test]
+fn pipe_ratelimit_host_resume_without_host_manifest_has_no_candidate() {
+    let (repo, state) = repo_with_state();
+    let (id, runner, rules) = rate_limited_with_accounts(&repo, &state, &[IMPLEMENT.to_owned()], &[]);
+    put_account(&state, "h1", &[windows(40, 10)]);
+    assert!(!state.join(vessel::rules::HOST_MANIFEST).exists(), "host の面は置かない");
+    let resumed = resume_with_accounts(&repo, &state, &id, &runner, &rules);
+    assert_eq!(resumed.status.code(), Some(i32::from(RC_BLOCKED)), "{} / {}", stdout_of(&resumed), stderr_of(&resumed));
+    assert_eq!(stdout_of(&resumed).trim(), format!("run={id} next=wait reset=-"), "{}", stdout_of(&resumed));
+    assert!(stderr_of(&resumed).contains("候補なし"), "{}", stderr_of(&resumed));
+    assert_eq!(curl_calls(&state), 0, "宣言の無い口座は測らない");
+    assert_eq!(stub_calls(&state), 1, "起こし直さない");
+    assert!(show_line(&repo, &state, &id).contains("stage=RateLimited"), "便は RateLimited のまま");
+    clean(&[&repo, &state]);
+}
+
 // ───── 追随の衝突を runner が解く（`s2-07l.146`・ADR-0019 §2.2 / §2.4 / §2.6・接頭辞 `pipe_follow_`） ─────
 
 /// 偽 runner の置き場（呼出回数と turn ごとの stdin）。

@@ -532,17 +532,16 @@ fn ride_out_rate_limit(
     manifest: &Manifest,
     policy: LockPolicy,
 ) -> Outcome {
-    let labels: Vec<String> = manifest
-        .accounts()
-        .iter()
-        .map(|account| account.label().to_owned())
-        .collect();
+    let state_dir = match state_dir_of(args) {
+        Ok(found) => found,
+        Err(reason) => return refused(reason),
+    };
+    let labels = match declared_labels(manifest, &state_dir) {
+        Ok(found) => found,
+        Err(reason) => return refused(reason),
+    };
     let mut outcome = Outcome::ok(Vec::new());
     loop {
-        let state_dir = match state_dir_of(args) {
-            Ok(found) => found,
-            Err(reason) => return refused(reason),
-        };
         // 置き場を読めない周は rc 2（読めなさを「上限ではない」に読み替えて gate へ流さない）。
         let stage = match current(&state_dir) {
             Ok(state) => state.runs.get(id).map(|run| run.stage),
@@ -563,6 +562,25 @@ fn ride_out_rate_limit(
             return outcome;
         }
     }
+}
+
+/// 便の口座の宣言（設計 account-lifecycle.md §2「読み手」・ADR-0026 §2.1）: tracked の面（`--rules` か埋め込み）の
+/// label に置き場の host の面（`<state_dir>/host.toml`）の label を足す（[`crate::rules::declared_labels`]・計測
+/// `fleet usage` と同じ宣言を読む）。**pipe で口座の宣言を読む口はこの 1 本**。host の面が在るが読めない周は断る
+/// （FailClosed・0 口座に潰さない）。
+fn declared_labels(manifest: &Manifest, state_dir: &Path) -> Result<Vec<String>, String> {
+    let tracked: Vec<String> = manifest
+        .accounts()
+        .iter()
+        .map(|account| account.label().to_owned())
+        .collect();
+    crate::rules::declared_labels(&tracked, state_dir).map_err(|errors| {
+        errors
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<String>>()
+            .join(" / ")
+    })
 }
 
 /// `RateLimited` の便の 1 周（設計 account-autonomy.md §4）: (i) FR33 の計測を 1 回撃つ →
