@@ -536,8 +536,9 @@ pub fn line_count(text: &str) -> u64 {
 /// 上限の余地を測る（**受付だけが撃つ**・pure・I/O は呼び手）。
 ///
 /// `lines` は base の tracked `.rs` の (path, 行数)。write-set の `.rs`（dir は展開した配下・新規 file は 0 行）の
-/// それぞれについて `file_lines − 行数` を余地とし、`size_lines` が余地を超える file を名指す。core（write-set の
-/// `.rs` が在る `crates/<c>/src/` の総行数）は `size_lines × write-set の .rs 本数` を見積として同じ式で 1 回。
+/// うち R-C4-2 の測定範囲（`crates/<c>/src/` 配下＝[`core_of`] が `Some`）のそれぞれについて `file_lines − 行数` を
+/// 余地とし、`size_lines` が余地を超える file を名指す（範囲外の `tests/` 等は門の対象外で測らない）。core（write-set
+/// の `.rs` が在る `crates/<c>/src/` の総行数）は `size_lines × write-set の .rs 本数` を見積として同じ式で 1 回。
 pub fn headroom_shortfalls(items: &[WriteSetItem], lines: &[(String, u64)], caps: Caps) -> Vec<Headroom> {
     let files: Vec<&str> = items
         .iter()
@@ -550,6 +551,7 @@ pub fn headroom_shortfalls(items: &[WriteSetItem], lines: &[(String, u64)], caps
     let lines_of = |path: &str| lines.iter().find(|(found, _)| found == path).map_or(0, |(_, count)| *count);
     let mut found: Vec<Headroom> = files
         .iter()
+        .filter(|path| core_of(path).is_some())
         .filter_map(|path| {
             let headroom = caps.file_lines.saturating_sub(lines_of(path));
             (caps.size_lines > headroom).then(|| Headroom { file: (*path).to_owned(), headroom })
@@ -819,6 +821,50 @@ mod tests {
         assert!(headroom_shortfalls(&only_b, &lines, caps(300, 40_000)).is_empty(), "余地の無い file を持たない行は通る");
         assert_eq!(line_count("a\nb\n"), 2, "行数は改行で区切った行の数");
         assert_eq!(line_count("a\nb"), 2, "末尾改行の有無で差を出さない");
+    }
+
+    /// 門の範囲の外（R-C4-2 は `crates/<c>/src/` 配下だけ）の fixture: 余地 50 の src・余地 0 の tests・`.rs` でない doc。
+    fn outside_the_gate_range() -> (Vec<WriteSetItem>, Vec<(String, u64)>) {
+        let items = vec![
+            WriteSetItem::File("crates/toy/src/a.rs".to_owned()),
+            WriteSetItem::File("crates/toy/tests/e2e/t.rs".to_owned()),
+            WriteSetItem::File("docs/d.md".to_owned()),
+        ];
+        let lines = vec![("crates/toy/src/a.rs".to_owned(), 1_450), ("crates/toy/tests/e2e/t.rs".to_owned(), 2_000)];
+        (items, lines)
+    }
+
+    /// 受付の余地は門（R-C4-2）と同じ範囲だけを測る: `tests/` の歯は行数が上限を超えていても名指さない。
+    #[test]
+    fn declaration_headroom_ignores_files_outside_the_gate_range() {
+        let (items, lines) = outside_the_gate_range();
+        let caps = Caps { file_lines: 1_500, core_lines: 40_000, size_lines: 100 };
+        assert_eq!(
+            headroom_shortfalls(&items, &lines, caps),
+            vec![Headroom { file: "crates/toy/src/a.rs".to_owned(), headroom: 50 }],
+            "名指すのは src の a.rs だけ（tests/e2e/t.rs は門の対象外）"
+        );
+    }
+
+    /// 余地を測る file の集合 = `core_of` が `Some` の file の集合（xtask の file-lines と同じ範囲）。
+    #[test]
+    fn declaration_headroom_range_matches_the_gate_predicate() {
+        let (items, lines) = outside_the_gate_range();
+        // 余地を必ず超える見積で、測られた file が全部名指される形にする（core は余裕）。
+        let caps = Caps { file_lines: 1_500, core_lines: u64::MAX, size_lines: 1_501 };
+        let measured: Vec<String> =
+            headroom_shortfalls(&items, &lines, caps).into_iter().map(|found| found.file).collect();
+        let in_range: Vec<String> = items
+            .iter()
+            .filter_map(|item| match *item {
+                WriteSetItem::File(ref path) | WriteSetItem::New(ref path) => {
+                    super::core_of(path).map(|_| path.clone())
+                }
+                WriteSetItem::Dir(_) => None,
+            })
+            .collect();
+        assert_eq!(measured, in_range, "余地を測る範囲は core_of の述語と同じ");
+        assert_eq!(measured, strings(&["crates/toy/src/a.rs"]), "範囲は空でない（空虚な一致を断つ）");
     }
 
     /// 宣言の共通 verify に置ける穴は**閉じた集合**であり、その外は `Hole` で断る
