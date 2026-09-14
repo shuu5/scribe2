@@ -248,10 +248,10 @@ ruled_at = "2026-09-12"
 [[rule]]
 id = "runner.allowed_commands"
 kind = "RunnerAllowedCommands"
-value = ["cargo", "git"]
+value = ["cargo", "git", "bats"]
 enabled = true
-ruling = "user 裁定 2026-09-10（ADR-0009）"
-ruled_at = "2026-09-10"
+ruling = "user 2026-09-14T13:23Z bats in runner ceiling (uns vessel; bash/sh excluded)"
+ruled_at = "2026-09-14"
 
 [[rule]]
 id = "repo.non_rust_exec_allow"

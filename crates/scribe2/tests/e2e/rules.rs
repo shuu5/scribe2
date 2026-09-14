@@ -178,13 +178,21 @@ fn rules_embedded_manifest_carries_allowlist_and_has_no_common_verify_row() {
         }
     };
     let allowed = manifest.get("runner.allowed_commands").expect("上限の行が在る");
+    // `bats` は uns（ubuntu-note-system）の vessel 宣言のため上限に足した（user 裁定 2026-09-14・
+    // `s2-07l.271`）。`bash` / `sh` は足さない。自 repo の宣言 `.vessel.toml` は `["cargo", "git"]` の
+    // まま（上限は宣言より広くてよい・ADR-0010 §2.2）。
     assert_eq!(
         allowed.value,
-        RuleValue::List(vec!["cargo".to_owned(), "git".to_owned()]),
-        "user 裁定 2026-09-10 の上限"
+        RuleValue::List(vec!["cargo".to_owned(), "git".to_owned(), "bats".to_owned()]),
+        "user 裁定 2026-09-14 の上限（bash / sh は足さない）"
     );
-    assert_eq!(allowed.ruling, "user 裁定 2026-09-10（ADR-0009）", "裁定: {}", allowed.id);
-    assert_eq!(allowed.ruled_at, "2026-09-10", "裁定日: {}", allowed.id);
+    assert_eq!(
+        allowed.ruling,
+        "user 2026-09-14T13:23Z bats in runner ceiling (uns vessel; bash/sh excluded)",
+        "裁定: {}",
+        allowed.id
+    );
+    assert_eq!(allowed.ruled_at, "2026-09-14", "裁定日: {}", allowed.id);
     assert!(allowed.enabled, "既定で効く: {}", allowed.id);
 
     assert!(
@@ -265,8 +273,8 @@ fn rules_list_cli_get_renders_every_element() {
     assert_eq!(outcome.rc, RC_OK, "rc: {outcome:?}");
     assert_eq!(
         outcome.out,
-        vec!["[\"cargo\", \"git\"]".to_owned()],
-        "値の行"
+        vec!["[\"cargo\", \"git\", \"bats\"]".to_owned()],
+        "値の行（3 要素・user 裁定 2026-09-14）"
     );
 }
 

@@ -440,6 +440,10 @@ fn pipe_intake_freezes_effective_vessel_copy() {
 /// 無いと「自己ホストの宣言が壊れた」周も CI は緑のまま通る（lens M3・2026-09-10）。
 /// 併せて manifest の**上限の行**（`runner.allowed_commands`）を宣言が名乗ることを pin する
 /// （共通 verify の行は `s2-07l.57` で廃止済みゆえ 2 面同文の pin は畳んだ）。
+///
+/// 後段の pin は `s2-07l.271` で**宣言 ⊆ 上限**の向きへ直した——base の上限（`["cargo", "git"]`）
+/// でも宣言と同じ 2 要素で緑になる（既に land した挙動へ向きを正す歯＝base で RED にならない）。
+// flip-check: retroactive s2-07l.271
 #[test]
 fn pipe_intake_accepts_self_hosted_declaration_under_embedded_ceiling() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -474,18 +478,49 @@ fn pipe_intake_accepts_self_hosted_declaration_under_embedded_ceiling() {
     assert!(!ceiling.is_empty(), "母集団は上限の行の値（実 {} 本）", ceiling.len());
     // **`allowed-commands` の行だけに当てる**——宣言の本文には共通 verify（`cargo …`）も
     // 在るので、file 全体へ `contains` すると allowlist が空でも通る（字面衝突）。
-    let line = declared
-        .lines()
-        .find(|line| line.trim_start().starts_with("allowed-commands"))
-        .unwrap_or_default();
-    for command in &ceiling {
+    // 向きは **宣言 ⊆ 上限**（ADR-0010 §2.2）。上限の各語が宣言に載ることを求めると、上限を
+    // 広げた周（`bats`・`s2-07l.271`）に自 repo の宣言を変えない限り落ちる＝逆向きの pin。
+    // 母集団 = 宣言の要素数（0 なら落とす）。
+    let declared_commands = declared_allowed_commands(&declared);
+    assert!(
+        !declared_commands.is_empty(),
+        "母集団は宣言の allowed-commands の要素（実 {} 本）",
+        declared_commands.len()
+    );
+    for command in &declared_commands {
         assert!(
-            line.contains(command.as_str()),
-            "自己ホストの宣言は上限の {command:?} を名乗る（母集団 {} 本）: {line}",
+            ceiling.contains(command),
+            "自己ホストの宣言の {command:?} は上限に在る（宣言 {} 本 / 上限 {} 本）: {ceiling:?}",
+            declared_commands.len(),
             ceiling.len()
         );
     }
+    // **上限は宣言より広くてよい**（本便後は 3 >= 2）。
+    assert!(
+        ceiling.len() >= declared_commands.len(),
+        "上限（{} 本）は宣言（{} 本）以上: {ceiling:?} / {declared_commands:?}",
+        ceiling.len(),
+        declared_commands.len()
+    );
     clean(&[&repo, &state]);
+}
+
+/// vessel 宣言の `allowed-commands` の 1 行（string array）を要素に分ける。行が無い・配列の形で
+/// ないなら空（呼び手が母集団 0 で落とす）。helper の中で `panic!` を撃たない（clippy の
+/// `allow-panic-in-tests` は `#[test]` の中だけ）。
+fn declared_allowed_commands(declared: &str) -> Vec<String> {
+    declared
+        .lines()
+        .find(|line| line.trim_start().starts_with("allowed-commands"))
+        .and_then(|line| line.split_once('='))
+        .map(|(_, rest)| rest.trim())
+        .and_then(|rest| rest.strip_prefix('['))
+        .and_then(|rest| rest.strip_suffix(']'))
+        .unwrap_or_default()
+        .split(',')
+        .map(|item| item.trim().trim_matches('"').to_owned())
+        .filter(|item| !item.is_empty())
+        .collect()
 }
 
 #[test]
