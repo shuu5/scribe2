@@ -157,6 +157,13 @@ fn launch(call: &Call<'_>, tools: &str) -> Outcome {
         for line in BufReader::new(out).lines().map_while(Result::ok) {
             seen.records = seen.records.saturating_add(1);
             // **最終 result の text を覚える**（質問 record の置き場・設計 pipeline-question.md §3）。
+            // 種別（`subtype`）と `is_error` も同じ record から読む——claude が失敗で終わった事実は
+            // stream の中にしか無く、覚えないと rc≠0 の理由が事後に読めない（`s2-07l.258`）。
+            if is_result_record(&line) {
+                seen.result_seen = true;
+                seen.result_kind = result_subtype(&line);
+                seen.result_is_error = result_is_error(&line);
+            }
             if let Some(text) = result_text(&line) {
                 seen.last_result = Some(text);
             }
@@ -195,6 +202,12 @@ struct Watched {
     limited: bool,
     /// 最後に見た `result` record の text（質問 record はこの最終行に来る）。
     last_result: Option<String>,
+    /// `result` record を 1 つでも見たか（見ていない周は観測行を出さない＝「無い」を `-` に化けさせない）。
+    result_seen: bool,
+    /// 最後に見た `result` record の種別（`subtype`・key が無い周は `None`）。
+    result_kind: Option<ResultKind>,
+    /// 最後に見た `result` record の `is_error`（key が無い・bool でない周は `None`）。
+    result_is_error: Option<bool>,
 }
 
 /// claude が終わった後の 1 行と rc を決める。
@@ -203,6 +216,11 @@ struct Watched {
 /// result の text の最終行が質問 record だった周だけで、同じ record を stdout の最終行に
 /// **そのまま**写し [`RC_QUESTION`] で終える（観測行はその前・pipeline は最終行を読む）。
 /// record が無い・読めない周は claude の rc（0）を写す（FailOpen・[`QUESTION_POLARITY`]）。
+///
+/// 要約行の**前**に、最終 `result` record の観測行（[`result_line`]）を 1 本出す（`s2-07l.258`）。
+/// rc≠0 の周も同じ——stream は捨てられるので、これが無いと claude が `is_error` で終わった理由は
+/// run dir にも残らない（憲法 C11.2 / NFR4）。`result` record を見ていない周は行を出さない。
+/// **最終行は変えない**（pipeline は最終行だけを読む）。
 fn conclude(status: std::io::Result<ExitStatus>, seen: &Watched) -> Outcome {
     let observed = observed_suffix(seen.status.as_deref());
     if seen.limited {
@@ -213,20 +231,92 @@ fn conclude(status: std::io::Result<ExitStatus>, seen: &Watched) -> Outcome {
         Ok(found) => found,
     };
     let rc = u8::try_from(found.code().unwrap_or(i32::from(RC_BROKEN))).unwrap_or(RC_BROKEN);
-    let line = format!("runner: rc={rc} records={}{observed}", seen.records);
+    let mut out: Vec<String> = Vec::new();
+    if seen.result_seen {
+        out.push(result_line(seen.result_kind, seen.result_is_error, seen.last_result.as_deref()));
+    }
+    out.push(format!("runner: rc={rc} records={}{observed}", seen.records));
     if rc != 0 {
         // 正常終了でない周は最終行を読まない（質問ではなく claude の失敗）。
-        return Outcome { out: vec![line], err: Vec::new(), rc };
+        return Outcome { out, err: Vec::new(), rc };
     }
     match question_ending(seen.last_result.as_deref().unwrap_or_default()) {
-        Ending::Question(record) => Outcome { out: vec![line, record], err: Vec::new(), rc: RC_QUESTION },
+        Ending::Question(record) => {
+            out.push(record);
+            Outcome { out, err: Vec::new(), rc: RC_QUESTION }
+        }
         Ending::Malformed(reason) => Outcome {
-            out: vec![line],
+            out,
             err: vec![format!("runner: 最終行は質問 record の形でない（{reason}）・claude の rc を写す")],
             rc,
         },
-        Ending::Plain => Outcome::ok_line(line),
+        Ending::Plain => Outcome { out, err: Vec::new(), rc },
     }
+}
+
+/// 最終 `result` record の種別（`subtype` の値・**閉じた enum**）。
+///
+/// 未知の値は [`ResultKind::Unknown`] 1 つに潰し、字面は残さない（観測行の語彙を stream の
+/// 語彙に開かない）。採れている値は実 claude の `subtype` から（`success` / `error_max_turns` /
+/// `error_during_execution`）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResultKind {
+    /// 正常に終わった。
+    Success,
+    /// turn 数の上限で終わった。
+    ErrorMaxTurns,
+    /// 実行中の失敗で終わった。
+    ErrorDuringExecution,
+    /// 一覧に無い値。
+    Unknown,
+}
+
+impl ResultKind {
+    /// `subtype` の値から（純関数・一覧に無い値は [`ResultKind::Unknown`]）。
+    pub fn parse(subtype: &str) -> Self {
+        match subtype {
+            "success" => Self::Success,
+            "error_max_turns" => Self::ErrorMaxTurns,
+            "error_during_execution" => Self::ErrorDuringExecution,
+            _ => Self::Unknown,
+        }
+    }
+
+    /// 観測行に載せる字面。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Success => "success",
+            Self::ErrorMaxTurns => "error_max_turns",
+            Self::ErrorDuringExecution => "error_during_execution",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+/// 観測行に載せる `result` の text の上限（**字数**・`s2-07l.258`）。
+///
+/// 観測行の幅であって user 裁定を要する値ではない（rules 行にしない・変えたい周は契約で）。
+pub const RESULT_TEXT_CHARS: usize = 400;
+
+/// 最終 `result` record の観測行（純関数・要約行の前に出す）。
+///
+/// `text` は先頭 [`RESULT_TEXT_CHARS`] 字で切り（`…` は付けない・字数で数える）、改行と tab は空白に
+/// する（1 行に収める）。無いものは `-`（呼び手は record を見ていない周にこの行を出さない）。
+pub fn result_line(kind: Option<ResultKind>, is_error: Option<bool>, text: Option<&str>) -> String {
+    let subtype = kind.map_or("-", ResultKind::as_str);
+    let is_error = match is_error {
+        Some(true) => "true",
+        Some(false) => "false",
+        None => "-",
+    };
+    let text = text.map_or_else(|| "-".to_owned(), |found| {
+        found
+            .chars()
+            .take(RESULT_TEXT_CHARS)
+            .map(|ch| if matches!(ch, '\n' | '\r' | '\t') { ' ' } else { ch })
+            .collect()
+    });
+    format!("runner: result subtype={subtype} is_error={is_error} text={text}")
 }
 
 /// 許す command を `--allowedTools` の 1 本へ組む。
@@ -362,10 +452,51 @@ pub fn question_ending(result: &str) -> Ending {
 /// `"type":"result"` の値の字面には当たらない）。
 pub fn result_text(line: &str) -> Option<String> {
     let body = line.trim_start();
-    if !body.starts_with('{') || !has_pair(body, "type", "result") {
+    if !is_result_record(body) {
         return None;
     }
     top_level_string(body, "result")
+}
+
+/// stream-json の 1 行が `result` record か（top-level の `"type":"result"` の対で見る）。
+pub fn is_result_record(line: &str) -> bool {
+    let body = line.trim_start();
+    body.starts_with('{') && has_pair(body, "type", "result")
+}
+
+/// `result` record の種別（top-level の `subtype`）。record でない・key が無い周は `None`。
+pub fn result_subtype(line: &str) -> Option<ResultKind> {
+    let body = line.trim_start();
+    if !is_result_record(body) {
+        return None;
+    }
+    top_level_string(body, "subtype").map(|subtype| ResultKind::parse(&subtype))
+}
+
+/// `result` record の `is_error`（top-level の bool）。record でない・key が無い・bool でない周は `None`。
+pub fn result_is_error(line: &str) -> Option<bool> {
+    let body = line.trim_start();
+    if !is_result_record(body) {
+        return None;
+    }
+    top_level_bool(body, "is_error")
+}
+
+/// JSON object 1 つの **top-level の** `key` の bool 値を読む（入れ子の同名 key は読まない・
+/// [`find_key`] の深さ guard）。`true` / `false` のどちらでもない周は `None`（parser を足さない）。
+fn top_level_bool(body: &str, key: &str) -> Option<bool> {
+    let at = find_key(body, key)?;
+    let value = body.get(at..)?.trim_start();
+    let (found, rest) = match value.strip_prefix("true") {
+        Some(rest) => (true, rest),
+        None => (false, value.strip_prefix("false")?),
+    };
+    // 語の直後は区切り（`,` `}` 空白）でなければ bool ではない（`trueish` のような字面を読まない）。
+    match rest.chars().next() {
+        None => Some(found),
+        Some(next) if next == ',' || next == '}' || next.is_whitespace() => Some(found),
+        Some(_) => None,
+    }
 }
 
 /// JSON object 1 つの **top-level の** `key` の文字列値を escape を解いて読む（入れ子の同名 key は

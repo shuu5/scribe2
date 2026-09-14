@@ -2005,3 +2005,151 @@ fn runner_question_toplevel_rate_limit_status_ignores_nested_type_keys() {
     let quoted = r#"{"type":"assistant","quoted":{"type":"rate_limit_event","rate_limit_info":{"status":"blocked"}}}"#;
     assert_eq!(rate_limit_status(quoted), None, "引用された上限 record は読まない");
 }
+
+// ── 最終 result の観測行（`s2-07l.258`・設計 pipeline.md §6・SRS FR6 / NFR4） ──────────────
+//
+// claude が `is_error` の result で終わった周、その事実は stream の中にしか無く、stream は捨てられる。
+// runner は要約行の**前**に観測行 1 本（`runner: result subtype=… is_error=… text=…`）を出し、
+// **最終行は変えない**（pipeline は最終行だけを読む）。
+
+/// 観測行の接頭辞。
+const RESULT_LINE_HEAD: &str = "runner: result ";
+
+/// stdout の中の観測行（無ければ `None`・2 本以上は歯が落とす）。
+fn result_line_of(out: &Output) -> Option<String> {
+    let text = stdout_of(out);
+    let found: Vec<&str> = text.lines().filter(|line| line.starts_with(RESULT_LINE_HEAD)).collect();
+    assert!(found.len() <= 1, "観測行は 1 本まで: {text}");
+    found.first().map(|line| (*line).to_owned())
+}
+
+/// (d) `is_error` の result で rc 1 → 観測行が要約行の**前**に在り、最終行は要約行のまま。
+#[test]
+fn headless_runner_result_line_records_error_result_before_the_summary_on_nonzero_rc() {
+    let dir = tmp();
+    let worktree = tmp();
+    let body = "{\"type\":\"system\",\"subtype\":\"init\"}\n\
+                {\"type\":\"result\",\"subtype\":\"error_during_execution\",\"is_error\":true,\"result\":\"boom\\nline2\"}\n";
+    let out = run_question_runner(&dir, &worktree, body, 1, b"goal = \"x\"\n");
+    assert_eq!(out.status.code(), Some(1), "claude の rc を写す: {}", stderr_of(&out));
+    let text = stdout_of(&out);
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(
+        lines.last().copied(),
+        Some("runner: rc=1 records=2"),
+        "最終行は要約行のまま（pipeline が読む面を変えない）: {lines:?}"
+    );
+    assert_eq!(
+        lines.iter().rev().nth(1).copied(),
+        Some("runner: result subtype=error_during_execution is_error=true text=boom line2"),
+        "観測行は要約行の直前・改行は空白に: {lines:?}"
+    );
+    clean(&[&dir, &worktree]);
+}
+
+/// (e) rc 0 ∧ `subtype=success` → `is_error=false`・最終行は要約行のまま。
+#[test]
+fn headless_runner_result_line_records_success_and_keeps_the_summary_last() {
+    let dir = tmp();
+    let worktree = tmp();
+    let body = "{\"type\":\"system\",\"subtype\":\"init\"}\n\
+                {\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"result\":\"done\",\"usage\":{\"is_error\":true}}\n";
+    let out = run_question_runner(&dir, &worktree, body, 0, b"goal = \"x\"\n");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    let text = stdout_of(&out);
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.last().copied(), Some("runner: rc=0 records=2"), "最終行は要約行のまま: {lines:?}");
+    assert_eq!(
+        result_line_of(&out).as_deref(),
+        Some("runner: result subtype=success is_error=false text=done"),
+        "入れ子の is_error は読まない（top-level だけ）: {lines:?}"
+    );
+    clean(&[&dir, &worktree]);
+}
+
+/// (f) result record が無い stream（assistant だけ）→ 観測行が**無い**（「無い」を `-` に化けさせない）。
+/// (d) と対で置く（負例だけで RED を主張しない）。
+#[test]
+fn headless_runner_result_line_is_absent_without_a_result_record() {
+    let dir = tmp();
+    let worktree = tmp();
+    let body = "{\"type\":\"system\",\"subtype\":\"init\"}\n\
+                {\"type\":\"assistant\",\"message\":{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false}}\n";
+    for want in [0_u8, 1] {
+        let out = run_question_runner(&dir, &worktree, body, want, b"goal = \"x\"\n");
+        assert_eq!(out.status.code(), Some(i32::from(want)), "{}", stderr_of(&out));
+        assert_eq!(result_line_of(&out), None, "record を見ていない周は観測行を出さない: {}", stdout_of(&out));
+        assert!(
+            stdout_of(&out).lines().last().is_some_and(|line| line == format!("runner: rc={want} records=2")),
+            "要約行は変わらない: {}",
+            stdout_of(&out)
+        );
+    }
+    clean(&[&dir, &worktree]);
+}
+
+/// (g) 質問 record の周（rc 76）→ 観測行 + 要約行 + 質問 record の 3 行で、最終行は質問 record のまま。
+#[test]
+fn headless_runner_result_line_precedes_the_summary_and_the_question_record() {
+    let dir = tmp();
+    let worktree = tmp();
+    let text = r#"契約を読んだ。\n{\"question\":\"verify 行が矛盾する\",\"about\":\"verify\"}"#;
+    let out = run_question_runner(&dir, &worktree, &stream_with_result(text), 0, b"goal = \"x\"\n");
+    assert_eq!(out.status.code(), Some(i32::from(vessel::pipe::RC_QUESTION)), "{}", stderr_of(&out));
+    let stdout = stdout_of(&out);
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        lines,
+        [
+            "runner: result subtype=- is_error=false text=契約を読んだ。 {\"question\":\"verify 行が矛盾する\",\"about\":\"verify\"}",
+            "runner: rc=0 records=2",
+            QUESTION_RECORD,
+        ],
+        "3 行・最終行は質問 record のまま: {stdout}"
+    );
+    clean(&[&dir, &worktree]);
+}
+
+/// (h) text が上限を超える → 先頭 [`vessel::headless::runner::RESULT_TEXT_CHARS`] 字で切れる（`…` は付けない・字数で数える）。
+#[test]
+fn headless_runner_result_line_cuts_the_text_at_the_char_limit() {
+    use vessel::headless::runner::RESULT_TEXT_CHARS;
+    let dir = tmp();
+    let worktree = tmp();
+    // 多 byte 字で埋める＝byte で切る実装は字数が合わない（字数で数えることを測る）。
+    let long = "字".repeat(RESULT_TEXT_CHARS + 50);
+    let body = format!("{{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"result\":\"{long}\"}}\n");
+    let out = run_question_runner(&dir, &worktree, &body, 0, b"goal = \"x\"\n");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    let line = result_line_of(&out).unwrap_or_default();
+    let text = line.split_once(" text=").map(|(_, text)| text).unwrap_or_default();
+    assert_eq!(text.chars().count(), RESULT_TEXT_CHARS, "先頭 {RESULT_TEXT_CHARS} 字で切る: {line}");
+    assert_eq!(text, "字".repeat(RESULT_TEXT_CHARS), "切った後に `…` を付けない: {line}");
+    // 上限ちょうどは切らない。
+    let exact = "a".repeat(RESULT_TEXT_CHARS);
+    let body = format!("{{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"result\":\"{exact}\"}}\n");
+    let out = run_question_runner(&dir, &worktree, &body, 0, b"goal = \"x\"\n");
+    let line = result_line_of(&out).unwrap_or_default();
+    assert!(line.ends_with(&format!(" text={exact}")), "上限ちょうどは丸ごと: {line}");
+    clean(&[&dir, &worktree]);
+}
+
+/// 純関数の面: 種別は閉じた enum（未知は `unknown` 1 つに潰し字面を残さない）・`is_error` は top-level の bool だけ・
+/// 無いものは `-`・tab と改行は空白。
+#[test]
+fn headless_runner_result_line_pure_readers_and_format() {
+    use vessel::headless::runner::{result_is_error, result_line, result_subtype, ResultKind};
+    assert_eq!(result_subtype(r#"{"type":"result","subtype":"error_max_turns"}"#), Some(ResultKind::ErrorMaxTurns));
+    assert_eq!(result_subtype(r#"{"type":"result","subtype":"something_new"}"#), Some(ResultKind::Unknown), "未知は 1 variant");
+    assert_eq!(result_subtype(r#"{"type":"result","is_error":true}"#), None, "subtype 無し");
+    assert_eq!(result_subtype(r#"{"type":"assistant","subtype":"success"}"#), None, "result record でない");
+    assert_eq!(result_is_error(r#"{"type":"result","is_error":true}"#), Some(true));
+    assert_eq!(result_is_error(r#"{"type":"result","is_error": false ,"x":1}"#), Some(false), "空白に寛容");
+    assert_eq!(result_is_error(r#"{"type":"result","usage":{"is_error":true}}"#), None, "入れ子は読まない");
+    assert_eq!(result_is_error(r#"{"type":"result","is_error":"true"}"#), None, "文字列は bool ではない");
+    assert_eq!(
+        result_line(Some(ResultKind::Unknown), None, Some("a\tb\r\nc")),
+        "runner: result subtype=unknown is_error=- text=a b  c"
+    );
+    assert_eq!(result_line(None, Some(true), None), "runner: result subtype=- is_error=true text=-");
+}
