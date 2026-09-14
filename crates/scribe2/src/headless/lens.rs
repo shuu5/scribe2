@@ -14,11 +14,20 @@
 //! **cap を超えた diff では claude を呼ばない**。呼んでから「長すぎた」と言うのでは、
 //! 上限を置いた意味（NFR1）が無い。判定に届かなかった周はすべて INCONCLUSIVE へ倒す——
 //! 偽の PASS を作らないためである（AC3）。
+//!
+//! **cap の値は rules 行 `gate.token_cap` からだけ読む**（憲法 C1・`s2-07l.272`）。以前は
+//! argv の `--cap` で受けていたので、値の出所が manifest（gate の判定）と launcher の手書き
+//! （lens の判定）の 2 つに割れ、rules 行を上げても lens 側は旧値のまま INCONCLUSIVE を
+//! 返した（実測 2026-09-14・`.265` / `.267`）。`--rules PATH` が在ればその manifest・無ければ
+//! 埋め込み（`pipe::cli` と同じ規約）。`--cap` は**未知の引数として断る**（黙って読み飛ばすと、
+//! 手書きの数が残った launcher が「効いている」ように見える）。
 
 use super::{build, feed, fill, flag, need, read_stdin_bytes, Call, DEFAULT_CLAUDE};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
 use crate::pipe::confine;
 use crate::pipe::contract::Contract;
+use crate::rules::manifest::Manifest;
+use crate::rules::RuleValue;
 use std::path::Path;
 
 /// prompt の文面（tracked な template・絶対 path も口座名も含まない）。
@@ -27,10 +36,16 @@ const TEMPLATE: &str = include_str!("lens.txt");
 /// JSON 行の見出し。
 const JSON_HEAD: char = '{';
 
+/// diff の byte 数の上限を持つ rules 行（gate の判定と同じ 1 行・`pipe::cli::ROW_CAP` と同じ id）。
+const ROW_CAP: &str = "gate.token_cap";
+
+/// lens が受ける flag の全部（この外は未知の引数として断る）。
+const KNOWN_FLAGS: [&str; 6] = ["--contract", "--worktree", "--permission-mode", "--rules", "--account-dir", "--claude"];
+
 /// 使い方の 1 行。
 pub fn usage() -> String {
     format!(
-        "usage: {} lens --contract F --worktree D --cap BYTES --permission-mode M [--account-dir D] [--claude PATH] < diff",
+        "usage: {} lens --contract F --worktree D --permission-mode M [--rules PATH] [--account-dir D] [--claude PATH] < diff",
         crate::name::NAME
     )
 }
@@ -40,19 +55,62 @@ fn inconclusive(reason: &str) -> String {
     format!(r#"{{"verdict":"INCONCLUSIVE","evidence":"{reason}"}}"#)
 }
 
+/// [`KNOWN_FLAGS`] の外の引数を 1 つ名指す（無ければ `None`）。
+///
+/// flag の次の 1 語は値として飛ばす（`--` で始まる語は値でなく次の flag として読む＝値欠けは
+/// [`flag`] が「値が無い」で断る）。撤去した `--cap` をここで捕まえる＝launcher の手書きは構造で止まる。
+fn unknown_arg(args: &[String]) -> Option<&str> {
+    let mut at = 0;
+    while let Some(arg) = args.get(at) {
+        if !KNOWN_FLAGS.contains(&arg.as_str()) {
+            return Some(arg);
+        }
+        at += 1;
+        if args.get(at).is_some_and(|value| !value.starts_with("--")) {
+            at += 1;
+        }
+    }
+    None
+}
+
+/// cap（byte）を rules 行から読む。`--rules PATH` が在ればその manifest・無ければ埋め込み。
+///
+/// 行が無い / 不発効 / 整数でない周は `pipe::cli::int_row` と同じ 3 理由で `Err`（同形の関数を
+/// 2 つ持つのは、`pipe` 側が private で、pub にするには write-set の外へ手を入れるからである）。
+fn cap_of(args: &[String]) -> Result<u64, String> {
+    let loaded = match flag(args, "--rules")? {
+        Some(path) => Manifest::load(Path::new(path)),
+        None => Manifest::embedded(),
+    };
+    let manifest = loaded.map_err(|errors| {
+        let joined = errors.iter().map(ToString::to_string).collect::<Vec<String>>().join(" / ");
+        format!("rules を読めない: {joined}")
+    })?;
+    let row = manifest.get(ROW_CAP).ok_or(format!("{ROW_CAP} が無い"))?;
+    if !row.enabled {
+        return Err(format!("{ROW_CAP} は不発効である"));
+    }
+    match row.value {
+        RuleValue::Int(found) => Ok(found),
+        _ => Err(format!("{ROW_CAP} が整数でない")),
+    }
+}
+
 /// `lens` を 1 回。diff は stdin から byte で読む。
 pub fn dispatch(args: &[String]) -> Outcome {
     let parsed = (|| {
+        if let Some(found) = unknown_arg(args) {
+            return Err(format!("未知の引数 {found}"));
+        }
         Ok::<_, String>((
             need(args, "--contract")?.to_owned(),
             need(args, "--worktree")?.to_owned(),
-            need(args, "--cap")?.to_owned(),
             need(args, "--permission-mode")?.to_owned(),
             flag(args, "--account-dir")?.map(str::to_owned),
             flag(args, "--claude")?.map(str::to_owned),
         ))
     })();
-    let (contract, worktree, cap, mode, account, claude) = match parsed {
+    let (contract, worktree, mode, account, claude) = match parsed {
         Ok(found) => found,
         Err(reason) => return Outcome::failed(RC_REFUSED, vec![format!("lens: {reason}"), usage()]),
     };
@@ -65,11 +123,13 @@ pub fn dispatch(args: &[String]) -> Outcome {
             return Outcome::failed_line(RC_BROKEN, format!("lens: 契約を読めない: {first}"));
         }
     };
-    let Ok(cap) = cap.parse::<usize>() else {
-        return Outcome::failed_line(RC_REFUSED, format!("lens: --cap は byte 数である（{cap}）"));
+    // **cap が解けない周も claude を起こさない**（上限なしで走らせない＝C6）。
+    let cap = match cap_of(args) {
+        Ok(found) => found,
+        Err(reason) => return Outcome::failed_line(RC_BROKEN, format!("lens: {reason}")),
     };
     let diff = read_stdin_bytes();
-    if diff.len() > cap {
+    if u64::try_from(diff.len()).unwrap_or(u64::MAX) > cap {
         // **claude を呼ばずに**返す。呼ばないことが cap の意味である。
         return Outcome::ok_line(inconclusive("diff exceeds cap"));
     }
