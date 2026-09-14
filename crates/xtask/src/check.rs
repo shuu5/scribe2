@@ -78,6 +78,7 @@ pub fn inspect(root: &Path) -> Report {
     measured.push(crate::claude_md::measure(&layout));
     measured.push(crate::enum_slices::measure(&files));
     measured.push(crate::spawn_points::measure(&layout, &files));
+    measured.push(crate::env_reads::measure(&layout, &files));
     measured.push(crate::polarity::measure(&layout));
     measured.push(crate::prose_gate::measure(&layout));
     measured.push(crate::seat_brief::measure(&layout));

@@ -295,7 +295,7 @@ const SUMMARY_PIN: &str = "xtask check: ok core-lines=<v>/<v> file-lines=<v>/<v>
     lints-set=<v> lints-optin=<v>/<v> deps-empty=<v> clippy-thresholds=<v> dep-budget=<v>/<v> \
     toolchain-pin=<v>.<v>.<v> \
     paths-clean=<v> private-clean=<v> non-rust-exec=<v>/<v> allow=<v> ci-shell-lines=<v> \
-    claude-md-constitution=<v> enum-slices=<v> claude-spawn-points=<v> polarity=<v>/<v> \
+    claude-md-constitution=<v> enum-slices=<v> claude-spawn-points=<v> env-reads=<v>/<v> polarity=<v>/<v> \
     prose-gate=<v>/<v> seat-brief=<v> contracts-schema=<v>";
 
 /// git を要する measure の fact（`.git` の無い木では測れない形になり、副 field も出ない）。

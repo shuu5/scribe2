@@ -10,6 +10,7 @@ mod check_facts;
 mod check_sizes;
 mod claude_md;
 mod enum_slices;
+mod env_reads;
 mod flipcheck;
 mod genmanifest;
 mod limits;
