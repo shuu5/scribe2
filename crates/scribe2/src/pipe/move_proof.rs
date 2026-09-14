@@ -931,4 +931,323 @@ mod tests {
             prop_assert_eq!(hashes, widened_hashes);
         }
     }
+
+    // ───────── 純移動の生成器と生存変異の歯（s2-07l.290・.266 run 1 の生存 27 本） ─────────
+
+    /// item の雛形（`@v` = 可視性・`@n` = 番号・`@i` = 本文の識別子・`@x` = 本文の値）。本文は複数行・入れ子 1 段。
+    const TEMPLATES: &[&str] = &[
+        "@vfn f@n() -> u32 {\n    let @i = @x;\n    if @i > 0 {\n        @i\n    } else {\n        0\n    }\n}\n",
+        "@vstruct S@n {\n    @i: [u8; @x],\n}\n",
+        "@venum E@n {\n    @i = @x,\n    B,\n}\n",
+        "impl S@n {\n    fn @i(&self) -> u32 {\n        @x\n    }\n}\n",
+        "@vconst C@n: &[u32] = &[\n    @i(@x),\n];\n",
+        "@vconst K@n: u32 = @i(@x);\n",
+        "@vtype T@n = @i<[u8; @x]>;\n",
+        "@vmod m@n {\n    pub fn @i() -> u32 {\n        @x\n    }\n}\n",
+        "@vfn w@n(\n    @i: u32,\n) -> u32 {\n    @i + @x\n}\n",
+    ];
+
+    /// 可視性（無し + 4 形）。
+    const VISIBILITIES: &[&str] = &["", "pub ", "pub(crate) ", "pub(super) ", "pub(in crate::pipe) "];
+
+    /// item の前に付く行（無し・doc・属性・doc + 複数行の属性）。
+    const PREFIXES: &[&str] = &["", "/// doc\n", "#[inline]\n", "/// doc\n#[expect(\n    dead_code,\n    reason = \"x\"\n)]\n"];
+
+    /// item の後ろの隙間（残差分に許される行だけ: 空行・区切り線・宣言・札）。
+    const GAPS: &[&str] = &["\n", "\n// ── section ──\n\n", "\nuse std::fs;\n\n", "\nmod gen;\n\n", "\n// flip-check: moved s2-07l.290\n\n"];
+
+    /// file の名（base は先頭の 1〜3 本・HEAD は 3 本のどれへでも置ける）。
+    const FILES: &[&str] = &["src/a.rs", "src/b.rs", "src/c.rs"];
+
+    /// (雛形, 番号, 値, 前置き)＝同じ key は同じ (名, 本文の hash) になる。
+    type Key = (usize, usize, u32, usize);
+
+    /// file ごとの本文（無い file は `None`）。
+    type Files = Vec<Option<String>>;
+
+    /// 生成した item 1 本: 本文を決める key と、base / HEAD の置き場。
+    #[derive(Debug, Clone)]
+    struct Placed {
+        /// 本文を決める key。
+        key: Key,
+        /// base の (file, 可視性, 隙間)。
+        base: (usize, usize, usize),
+        /// HEAD の (file, 可視性, 隙間, 並びの key, 字下げを深くするか)。
+        head: (usize, usize, usize, u8, bool),
+    }
+
+    /// item 2〜8 本（4 本に 1 本は直前の item と同じ key＝同じ名と本文の双子）。
+    fn placements() -> impl Strategy<Value = Vec<Placed>> {
+        let one = (
+            (0..TEMPLATES.len(), 1..50_u32, 0..PREFIXES.len(), 0..4_usize),
+            (0..FILES.len(), 0..VISIBILITIES.len(), 0..GAPS.len()),
+            (0..FILES.len(), 0..VISIBILITIES.len(), 0..GAPS.len(), any::<u8>(), any::<bool>()),
+        );
+        prop::collection::vec(one, 2..9).prop_map(|drawn| {
+            let mut items: Vec<Placed> = Vec::new();
+            for (at, ((template, value, prefix, twin), base, head)) in drawn.into_iter().enumerate() {
+                let key = match items.last() {
+                    Some(last) if twin == 0 => last.key,
+                    _ => (template, at, value, prefix),
+                };
+                items.push(Placed { key, base, head });
+            }
+            items
+        })
+    }
+
+    /// 雛形から item を描く（`edit` = 本文を変える周の変え方 0〜3＝値 / 識別子 / 行の挿入 / 行の削除・`None` は変えない）。
+    fn draw_item(key: Key, visibility: usize, indent: bool, edit: Option<usize>) -> String {
+        let (template, number, value, prefix) = key;
+        let value = if edit == Some(0) { value + 1000 } else { value };
+        let ident = if edit == Some(1) { "edited" } else { "value" };
+        let body = TEMPLATES[template]
+            .replace("@v", VISIBILITIES[visibility])
+            .replace("@n", &number.to_string())
+            .replace("@i", ident)
+            .replace("@x", &value.to_string());
+        let mut lines: Vec<String> = body.lines().map(str::to_owned).collect();
+        match edit {
+            Some(3) if lines.len() > 1 => {
+                lines.remove(1);
+            }
+            Some(2 | 3) => lines.insert(1, "    inserted();".to_owned()),
+            _ => {}
+        }
+        let text = format!("{}{}", PREFIXES[prefix], lines.join("\n"));
+        let shown: Vec<String> = text
+            .lines()
+            .map(|line| if indent && line.starts_with(' ') { format!("    {line}") } else { line.to_owned() })
+            .collect();
+        format!("{}\n", shown.join("\n"))
+    }
+
+    /// (base, HEAD) の file 群（`files` = base の file 数・`edit` = (本文を変える item, 変え方)）。
+    fn sides(items: &[Placed], files: usize, edit: Option<(usize, usize)>) -> (Files, Files) {
+        let base = items.iter().enumerate().map(|(at, item)| {
+            let (file, visibility, gap) = item.base;
+            (file % files, at, draw_item(item.key, visibility, false, None), GAPS[gap])
+        });
+        let head = items.iter().enumerate().map(|(at, item)| {
+            let (file, visibility, gap, order, indent) = item.head;
+            let how = edit.filter(|(target, _)| *target == at).map(|(_, how)| how);
+            (file, usize::from(order), draw_item(item.key, visibility, indent, how), GAPS[gap])
+        });
+        (assemble(base.collect(), files), assemble(head.collect(), files))
+    }
+
+    /// file ごとに `//! 見出し` + (item + 隙間) を並びの順に連ねる（base に在る file は item 0 本でも見出しを持つ）。
+    fn assemble(mut placed: Vec<(usize, usize, String, &'static str)>, files: usize) -> Files {
+        placed.sort_by_key(|(file, order, _, _)| (*file, *order));
+        let mut texts: Files = (0..FILES.len()).map(|file| (file < files).then(|| format!("//! {file}\n\n"))).collect();
+        for (file, _, item, gap) in placed {
+            let text = texts[file].get_or_insert_with(|| format!("//! {file}\n\n"));
+            text.push_str(&item);
+            text.push_str(gap);
+        }
+        texts
+    }
+
+    /// base と HEAD の file 群の unified diff（変わった file だけ・HEAD は base の file を全部持つ）。
+    fn unified(base: &Files, head: &Files) -> String {
+        let mut diff = String::new();
+        for (at, path) in FILES.iter().enumerate() {
+            let old = base.get(at).cloned().flatten();
+            let Some(new) = head.get(at).cloned().flatten() else { continue };
+            if old.as_deref() != Some(new.as_str()) {
+                diff.push_str(&hunk(path, old.as_deref(), &new));
+            }
+        }
+        diff
+    }
+
+    /// file 1 本の `git diff` の形（見出し + 共通の頭と尻を落とした 1 hunk・前後 3 行の context・`old` 無しは新規）。
+    fn hunk(path: &str, old: Option<&str>, new: &str) -> String {
+        let before: Vec<&str> = old.unwrap_or_default().lines().collect();
+        let after: Vec<&str> = new.lines().collect();
+        let prefix = before.iter().zip(&after).take_while(|(a, b)| a == b).count();
+        let suffix = before[prefix..].iter().rev().zip(after[prefix..].iter().rev()).take_while(|(a, b)| a == b).count();
+        let from = prefix - prefix.min(3);
+        let (old_end, new_end) = (before.len() - suffix + suffix.min(3), after.len() - suffix + suffix.min(3));
+        let mut out = format!("diff --git a/{path} b/{path}\n");
+        match old {
+            Some(_) => out.push_str(&format!("index 1111111..2222222 100644\n--- a/{path}\n")),
+            None => out.push_str("new file mode 100644\nindex 0000000..2222222\n--- /dev/null\n"),
+        }
+        out.push_str(&format!("+++ b/{path}\n@@ -{},{} +{},{} @@\n", from + 1, old_end - from, from + 1, new_end - from));
+        let lines = before[from..prefix]
+            .iter()
+            .map(|line| format!(" {line}"))
+            .chain(before[prefix..before.len() - suffix].iter().map(|line| format!("-{line}")))
+            .chain(after[prefix..after.len() - suffix].iter().map(|line| format!("+{line}")))
+            .chain(before[before.len() - suffix..old_end].iter().map(|line| format!(" {line}")));
+        for line in lines {
+            out.push_str(&line);
+            out.push('\n');
+        }
+        out
+    }
+
+    /// 生成した file 群の読み（`judge` の `read`）。
+    fn read_from<'a>(base: &'a Files, head: &'a Files) -> impl Fn(Side, &str) -> Option<String> + 'a {
+        move |side, path| {
+            let at = FILES.iter().position(|file| *file == path)?;
+            let files = if side == Side::Base { base } else { head };
+            files.get(at).cloned().flatten()
+        }
+    }
+
+    /// 固定 fixture の読み（(側, path, 本文) の表・表に無い読みは `None`）。
+    fn table<'a>(files: &'a [(Side, &'a str, &'a str)]) -> impl Fn(Side, &str) -> Option<String> + 'a {
+        move |side, path| files.iter().find(|(at, name, _)| *at == side && *name == path).map(|(_, _, text)| (*text).to_owned())
+    }
+
+    /// file を跨いだ item の数（key ごとに同じ file に残せる対を先に取った残り＝設計 §5.3 の「移動」）。
+    fn crossed(items: &[Placed], files: usize) -> usize {
+        let mut count: std::collections::BTreeMap<(Key, usize), (usize, usize)> = std::collections::BTreeMap::new();
+        for item in items {
+            count.entry((item.key, item.base.0 % files)).or_default().0 += 1;
+            count.entry((item.key, item.head.0)).or_default().1 += 1;
+        }
+        items.len() - count.values().map(|(base, head)| (*base).min(*head)).sum::<usize>()
+    }
+
+    /// 判定を (要約の判定行の `moved=` | 理由) へ畳む。
+    fn outcome(input: &LensInput) -> Result<usize, NotPure> {
+        match input {
+            LensInput::Diff(why) => Err(*why),
+            LensInput::Summary(summary) => Ok(summary
+                .text()
+                .lines()
+                .last()
+                .and_then(|line| line.split_whitespace().find_map(|token| token.strip_prefix("moved=")))
+                .and_then(|moved| moved.parse().ok())
+                .unwrap_or(usize::MAX)),
+        }
+    }
+
+    proptest! {
+        #![proptest_config(config())]
+
+        // flip-check: retroactive s2-07l.290
+        /// (a) item の配置だけを変えた HEAD（file 間の移動・file 内の順序・可視性・字下げ・隙間の宣言 / 札 / コメント /
+        /// 空行）は純移動: 要約の `moved=` は file を跨いだ item の数で、0 本なら `NothingMoved`。
+        #[test]
+        fn prop_move_proof_pure_moves_are_judged_pure(items in placements(), files in 1..=3_usize) {
+            let (base, head) = sides(&items, files, None);
+            let moved = crossed(&items, files);
+            let want = if moved == 0 { Err(NotPure::NothingMoved) } else { Ok(moved) };
+            prop_assert_eq!(outcome(&judge(&unified(&base, &head), &read_from(&base, &head))), want);
+        }
+
+        // flip-check: retroactive s2-07l.290
+        /// (b) 同じ配置で 1 item の本文だけを 1 字〜1 行変えた HEAD（値・識別子・行の挿入 / 削除）は要約にならない。
+        #[test]
+        fn prop_move_proof_body_edits_are_not_pure(
+            items in placements(),
+            files in 1..=3_usize,
+            target in any::<prop::sample::Index>(),
+            how in 0..4_usize,
+        ) {
+            let (base, head) = sides(&items, files, Some((target.index(items.len()), how)));
+            let input = judge(&unified(&base, &head), &read_from(&base, &head));
+            prop_assert!(matches!(input, LensInput::Diff(_)));
+        }
+    }
+
+    // flip-check: retroactive s2-07l.290
+    /// `---` / `+++` の無い 100% の rename は `diff --git` の行だけが両側の path を運び、読んで 1 本の移動になる
+    /// （`parse_diff` の base / head の field を消すと片側を読まず `ItemsDiffer`・`split_git_paths` を定数にすると
+    /// 読めず `Unreadable`）。空の path は読まない（`&&` を `||` にすると片側だけ空の行を通す）。
+    #[test]
+    fn move_proof_mutant_parse_diff_pure_rename_reads_both_paths_from_the_git_line() {
+        let (base_lib, head_lib, body) = ("//! lib\n\nmod old;\n", "//! lib\n\nmod new;\n", "fn b() {\n    2\n}\n");
+        let rename = "diff --git a/src/old.rs b/src/new.rs\nsimilarity index 100%\nrename from src/old.rs\nrename to src/new.rs\n";
+        let diff = format!("{}{rename}", hunk("src/lib.rs", Some(base_lib), head_lib));
+        let files = [
+            (Side::Base, "src/lib.rs", base_lib),
+            (Side::Head, "src/lib.rs", head_lib),
+            (Side::Base, "src/old.rs", body),
+            (Side::Head, "src/new.rs", body),
+        ];
+        assert_eq!(outcome(&judge(&diff, &table(&files))), Ok(1), "rename は 1 本の移動: {diff}");
+        assert_eq!(super::split_git_paths("a/src/old.rs b/src/new.rs"), Some(("src/old.rs".to_owned(), "src/new.rs".to_owned())));
+        assert_eq!(super::split_git_paths("a/ b/src/new.rs"), None, "base が空");
+        assert_eq!(super::split_git_paths("a/src/old.rs b/"), None, "HEAD が空");
+    }
+
+    // flip-check: retroactive s2-07l.290
+    /// 行番号は hunk 見出しの開始行から数える: 10 行目からの hunk で書き換えた `macro_rules!` の本文（item でない）は
+    /// `ResidualLine`（`hunk_start` を `Some((1, 1))` にすると 4 行目＝`fn a` の区間に数えられ、本文の書き換えが要約に化ける）。
+    #[test]
+    fn move_proof_mutant_hunk_start_numbers_lines_from_the_hunk_header() {
+        let base_lib = "//! lib\n\nfn a() {\n    1\n    1\n    1\n    1\n    1\n    1\n}\n\nmacro_rules! m {\n    () => {};\n}\n";
+        let head_lib = base_lib.replace("() => {};", "() => { evil() };");
+        let (base_old, head_old, body) = ("//! old\n\nfn b() {\n    2\n}\n", "//! old\n", "fn b() {\n    2\n}\n");
+        let moved = format!("{}{}", hunk("src/old.rs", Some(base_old), head_old), hunk("src/new.rs", None, body));
+        let lib = hunk("src/lib.rs", Some(base_lib), &head_lib);
+        assert!(lib.contains("@@ -10,5 +10,5 @@\n"), "前提: hunk は 10 行目から: {lib}");
+        let files = [
+            (Side::Base, "src/lib.rs", base_lib),
+            (Side::Head, "src/lib.rs", head_lib.as_str()),
+            (Side::Base, "src/old.rs", base_old),
+            (Side::Head, "src/old.rs", head_old),
+            (Side::Head, "src/new.rs", body),
+        ];
+        assert_eq!(outcome(&judge(&format!("{lib}{moved}"), &table(&files))), Err(NotPure::ResidualLine));
+        assert_eq!(outcome(&judge(&moved, &table(&files))), Ok(1), "macro を書き換えない同じ移動は要約（別の理由で赤くならない）");
+    }
+
+    // flip-check: retroactive s2-07l.290
+    /// 同じ (名, 本文) の item が 2 file に 1 本ずつ在り、どちらも動かない周は移動 0＝`NothingMoved`（`pair_items` の
+    /// 同じ file の対を先に取る `==` を `!=` にすると 2 本を交差で対にし、動いていない双子を moved=2 と読んで要約に化ける）。
+    #[test]
+    fn move_proof_mutant_pair_items_twins_in_place_are_not_moves() {
+        let twin = "fn d() {\n    1\n}\n";
+        let (base_a, head_a) = (format!("//! a\n\n{twin}"), format!("//! a\n\n// note\n\n{twin}"));
+        let (base_b, head_b) = (format!("//! b\n\n{twin}"), format!("//! b\n\n// note\n\n{twin}"));
+        let diff = format!("{}{}", hunk("src/a.rs", Some(&base_a), &head_a), hunk("src/b.rs", Some(&base_b), &head_b));
+        let files = [
+            (Side::Base, "src/a.rs", base_a.as_str()),
+            (Side::Head, "src/a.rs", head_a.as_str()),
+            (Side::Base, "src/b.rs", base_b.as_str()),
+            (Side::Head, "src/b.rs", head_b.as_str()),
+        ];
+        assert_eq!(outcome(&judge(&diff, &table(&files))), Err(NotPure::NothingMoved));
+    }
+
+    // flip-check: retroactive s2-07l.290
+    /// `impl` で始まる列 0 の macro 呼び出し（`impl_x! { … }`）は item でない＝別 file へ移すと残差分の行で `ResidualLine`
+    /// （`declaration_of` の `&&` を `||` にすると `impl` の後ろを見ずに item と読み、macro の移動を要約に化ける）。
+    #[test]
+    fn move_proof_mutant_declaration_of_impl_prefixed_macro_is_not_an_item() {
+        assert_eq!(declaration_of("impl_x! {"), None);
+        let base_lib = "//! lib\n\nfn a() {\n    1\n}\n\nimpl_x! {\n    A\n}\n\nfn b() {\n    2\n}\n";
+        let (head_lib, head_m) = ("//! lib\n\nfn a() {\n    1\n}\n", "impl_x! {\n    A\n}\n\nfn b() {\n    2\n}\n");
+        let diff = format!("{}{}", hunk("src/lib.rs", Some(base_lib), head_lib), hunk("src/m.rs", None, head_m));
+        let files = [(Side::Base, "src/lib.rs", base_lib), (Side::Head, "src/lib.rs", head_lib), (Side::Head, "src/m.rs", head_m)];
+        assert_eq!(outcome(&judge(&diff, &table(&files))), Err(NotPure::ResidualLine));
+    }
+
+    // flip-check: retroactive s2-07l.290
+    /// `pub(in <path>)` は path が空でなく空白を含まない周だけ可視性（`is_scope` の `!` を消すと正しい形を剥がさずに
+    /// item を読み落とし、`&&` を `||` にすると空の path と空白入りの path を剥がす）。
+    #[test]
+    fn move_proof_mutant_is_scope_reads_pub_in_with_a_plain_path_only() {
+        assert_eq!(strip_visibility("pub(in crate::pipe) fn a() {"), ("pub(in crate::pipe)".to_owned(), "fn a() {"));
+        for line in ["pub(in ) fn a() {", "pub(in a b) fn a() {"] {
+            assert_eq!(strip_visibility(line), (String::new(), line), "{line}");
+        }
+    }
+
+    // flip-check: retroactive s2-07l.290
+    /// `where` 句で `{` が次の行へ落ちた struct（宣言行に `{` も `;` も無い）は次の item の直前で切れ、末尾の空行を含めない
+    /// （`starts_item` を `false` にすると次の item を呑み、`item_end` の空行の刈り込みを `||` / `==` / `<` にすると
+    /// 宣言行だけか空行込みになる）。
+    #[test]
+    fn move_proof_items_of_cuts_an_open_item_before_the_next_item() {
+        let items = items_of("struct W<T>\nwhere\n    T: Copy,\n{\n    w: T,\n}\n\n\nfn b() {\n    x;\n}\n");
+        let shown: Vec<(&str, (usize, usize))> = items.iter().map(|item| (item.name.as_str(), item.lines)).collect();
+        assert_eq!(shown, [("struct W", (1, 6)), ("fn b", (9, 11))]);
+    }
 }
