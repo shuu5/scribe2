@@ -64,6 +64,30 @@ fn pipe_spawn_writes_write_set_into_git_dir() {
     clean(&[&repo, &state]);
 }
 
+/// 接頭辞は受付の宣言だけの文法（`s2-07l.287`・設計 contract-source.md §3）: `+new.rs` / `-old.rs` / `dir/` / `plain`
+/// の契約を spawn した worktree の policy は接頭辞を剥がした素の 4 行で、dir の末尾 `/` は残る（guard は素の path を読む
+/// ＝管理席が契約 file で手剥がしする手順が要らない）。
+#[test]
+fn pipe_spawn_write_policy_strips_the_item_prefixes() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(
+        &repo,
+        &["write-set"],
+        &[r#"write-set = ["+src/new.rs", "-src/lib.rs", "src/", "verify-ok.sh"]"#],
+    );
+    let id = intake(&repo, &state, &path);
+    run_pipe(&[
+        "spawn", "--run", &id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(), "--runner", "true",
+    ]);
+    let worktree = repo.join(".worktrees").join("scribe2").join(&id);
+    let git_dir = PathBuf::from(git(&worktree, &["rev-parse", "--absolute-git-dir"]));
+    let body = fs::read_to_string(git_dir.join("scribe2").join("write-set.txt")).expect("policy を読める");
+    assert_eq!(body, "src/new.rs\nsrc/lib.rs\nsrc/\nverify-ok.sh\n", "接頭辞が無く末尾 / は残る: {body:?}");
+    assert!(body.lines().all(|line| !line.starts_with(['+', '-'])), "接頭辞は 1 行にも写らない: {body:?}");
+    clean(&[&repo, &state]);
+}
+
 // flip-check: retroactive s2-07l.49
 #[test]
 fn pipe_spawn_substitutes_placeholders_and_adds_no_env() {

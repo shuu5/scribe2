@@ -14,7 +14,7 @@ use super::follow::{self, Turn};
 use super::gate::{Check, Gate, Limits, Verdict, RC_INCONCLUSIVE};
 use super::land::{verdict_of, Land, Retire, REBASE_EMPTY};
 use super::ratelimit::ride_out_rate_limit;
-use super::refuse::{overlaps, Refuse};
+use super::refuse::{overlaps, Refuse, SHRINK_FILE};
 use super::stop::stop;
 use super::{
     contract_path, current, emit, last_stage_detail, question_of_run, run_dir, run_id,
@@ -322,8 +322,10 @@ fn exclude_overlap(state_dir: &Path, contract: &Contract, tracked: &[String]) ->
 /// 合計と R-C4-1 の差に、契約の `size` の見積（rules 行 `pipe.size_<s|m|l>_lines`・数は manifest が持つ・C1）を
 /// 当て、入らない file を名指して断る（file と core の 2 形・先頭の 1 件が理由の 1 行・残りは stderr に並ぶ）。
 ///
-/// dir 項目は base の配下に展開し、`+` の新規 file は 0 行として数える。base に無い項目は数えない（項目の実在は
-/// 契約表の行の検査〔`contracts check` / 設計 pointer の intake〕が名指す）。
+/// dir 項目は base の配下に展開し、`+` の新規 file は 0 行として数え、`-` の縮む面は余地も本数も数えない
+/// （弁別は [`declaration::headroom_shortfalls`] の中）。base に無い項目は数えない（項目の実在は契約表の行の検査
+/// 〔`contracts check` / 設計 pointer の intake〕が名指す）——ただし **`-` の先が base に無い項目は受付で断る**
+/// （`write-set-item-unresolved`）: 落として測ると「余地を求めない」宣言が静かに消え、無い file を減らす便が通る。
 fn exclude_cap_shortfall(repo: &Path, manifest: &Manifest, contract: &Contract, tracked: &[String]) -> Result<(), Outcome> {
     let caps = declaration::Caps {
         file_lines: int_row(manifest, ROW_FILE_LINES).map_err(broken)?,
@@ -333,6 +335,9 @@ fn exclude_cap_shortfall(repo: &Path, manifest: &Manifest, contract: &Contract, 
     let items = match declaration::read_write_set(&contract.write_set, tracked) {
         Ok(found) => found,
         Err(unresolved) => {
+            if let Some(item) = unresolved.iter().find(|item| item.starts_with(SHRINK_FILE)) {
+                return Err(refuse(&Refuse::WriteSetItemUnresolved { item: item.clone() }, &[]));
+            }
             let resolvable: Vec<String> =
                 contract.write_set.iter().filter(|item| !unresolved.contains(item)).cloned().collect();
             declaration::read_write_set(&resolvable, tracked).unwrap_or_default()

@@ -10,6 +10,7 @@ use super::approve::{block, Approval, Approve, RC_BLOCKED};
 use super::confine;
 use super::follow::Resumption;
 use super::gate::last_json_object;
+use super::refuse;
 use super::{
     base_of_run, branch_name, contract_path, emit, git_line, plugin_path, runner_stdout_path, vessel_path,
     worktree_path, Budget, Emit, Question, RC_QUESTION,
@@ -626,13 +627,18 @@ fn add_worktree(repo: &Path, worktree: &Path, run: &str, base: &str) -> Result<(
 }
 
 /// write-set を worktree の git dir の私有 dir へ書く（tracked 面に触れない）。
+///
+/// 各項目は**接頭辞（`+` / `-`）を剥がした素の path** で書く（設計 contract-source.md §3・接頭辞は受付の宣言だけの
+/// 文法で、guard は素の path を読む）。剥がす規則は [`refuse::normalize`] の 1 本で、dir 項目の末尾 `/` はそのまま残る
+/// （guard の dir 判定は既存のまま）。
 fn write_policy(worktree: &Path, write_set: &[String]) -> Result<PathBuf, String> {
     let git_dir = git_line(worktree, &["rev-parse", "--absolute-git-dir"])
         .ok_or_else(|| format!("{} の git dir を読めない", worktree.display()))?;
     let dir = PathBuf::from(git_dir).join(NAME);
     std::fs::create_dir_all(&dir).map_err(|err| format!("{} を作れない: {err}", dir.display()))?;
     let path = dir.join(WRITE_SET_FILE);
-    let body = format!("{}\n", write_set.join("\n"));
+    let plain: Vec<String> = write_set.iter().map(|item| refuse::normalize(item)).collect();
+    let body = format!("{}\n", plain.join("\n"));
     std::fs::write(&path, body).map_err(|err| format!("{} を書けない: {err}", path.display()))?;
     Ok(path)
 }

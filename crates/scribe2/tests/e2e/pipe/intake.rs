@@ -1248,6 +1248,100 @@ fn contract_closure_ext_cap_headroom_refuses_a_size_that_does_not_fit_the_file_o
     clean(&[&repo, &state]);
 }
 
+/// 上限の 2 値を振った tmp manifest の path（[`repo_with_big_file`] の置き場に書く・file の上限は 1500）。
+fn capped_rules(state: &Path, name: &str, core_lines: u64) -> String {
+    let fixture = RulesFixture {
+        gate: (1, 1_000_000),
+        retries: FOLLOW_RETRIES,
+        slots: default_slots(),
+        caps: CapFixture { core_lines, file_lines: 1_500 },
+    };
+    write_rules_capped(state, name, fixture).display().to_string()
+}
+
+/// `size` と `write-set` だけ差し替えた契約 file を repo に書き、その path を返す。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn sized_contract(repo: &Path, name: &str, size: &str, write_set: &str) -> PathBuf {
+    let lines: Vec<String> = contract_body()
+        .into_iter()
+        .filter(|line| !line.starts_with("size") && !line.starts_with("write-set"))
+        .chain([format!("size = \"{size}\""), format!("write-set = [{write_set}]")])
+        .collect();
+    let path = repo.join(name);
+    fs::write(&path, format!("{}\n", lines.join("\n"))).expect("契約 file を書ける");
+    path
+}
+
+/// `--rules` を名指して intake を 1 回撃つ（rc を assert しない形）。
+fn intake_with_rules(repo: &Path, state: &Path, contract: &Path, bead: &str, rules: &str) -> Output {
+    run_pipe(&[
+        "intake", "--contract", &contract.display().to_string(), "--bead", bead,
+        "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
+        "--rules", rules,
+    ])
+}
+
+/// (6) 縮む面（`s2-07l.287`・設計 contract-source.md §3・接頭辞 `contract_closure_ext_shrink_`）: 余地 101 の 1399 行の
+/// `.rs` を `-` で持つ size M（300）の契約は受付を**通り**（run dir と event 1 件）、同じ file を素の path で持つ M は
+/// 従来どおり `cap-headroom`（対で測る＝`-` が効いた証拠）。
+#[test]
+fn contract_closure_ext_shrink_item_is_exempt_from_the_file_headroom() {
+    let (repo, state) = repo_with_big_file();
+    let roomy = capped_rules(&state, "rules-roomy.toml", 40_000);
+    let plain = intake_with_rules(&repo, &state, &sized_contract(&repo, "m.toml", "M", "\"crates/toy/src/big.rs\""), "s2-m", &roomy);
+    let err = stderr_of(&plain);
+    assert_eq!(plain.status.code(), Some(i32::from(RC_REFUSED)), "素の path の M は余地 101 に入らない: {err}");
+    assert!(err.contains("crates/toy/src/big.rs の上限の余地が 101 行") && err.contains("size M"), "cap-headroom: {err}");
+    assert_eq!(event_count(&state), 0, "断った周は event を書かない");
+    assert!(!state.join("pipe").exists(), "run dir も作らない");
+    let shrink = intake_with_rules(&repo, &state, &sized_contract(&repo, "shrink.toml", "M", "\"-crates/toy/src/big.rs\""), "s2-sh", &roomy);
+    assert_eq!(shrink.status.code(), Some(i32::from(RC_OK)), "- の big.rs は余地を求めない: {}", stderr_of(&shrink));
+    let id = run_id_of(&shrink);
+    assert!(state.join("pipe").join(&id).is_dir(), "run dir が作られる: {id}");
+    assert_eq!(event_count(&state), 1, "RunCreated の 1 件");
+    clean(&[&repo, &state]);
+}
+
+/// (6) `-` の先が base に無い項目は **`pipe intake` で** `write-set-item-unresolved` として項目の字面（`-` 込み）を
+/// 名指して断り、run dir も event も作らない（落として測ると「余地を求めない」宣言が静かに消える）。
+#[test]
+fn contract_closure_ext_shrink_item_absent_from_base_is_refused_at_intake() {
+    let (repo, state) = repo_with_big_file();
+    let roomy = capped_rules(&state, "rules-roomy.toml", 40_000);
+    let contract = sized_contract(&repo, "none.toml", "M", "\"-crates/toy/src/none.rs\"");
+    let out = intake_with_rules(&repo, &state, &contract, "s2-n", &roomy);
+    let err = stderr_of(&out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "base に無い file への - は解けない: {err}");
+    assert!(err.contains("write-set の -crates/toy/src/none.rs は base に解けない"), "項目の字面（- 込み）を名指す: {err}");
+    assert!(!err.contains("cap-headroom") && !err.contains("上限の余地"), "理由は解けない項目の 1 つ: {err}");
+    assert_eq!(event_count(&state), 0, "断った周は event を書かない");
+    assert!(!state.join("pipe").exists(), "run dir も作らない");
+    clean(&[&repo, &state]);
+}
+
+/// (6) core の見積: core の余地を「縮む面を数えると超え・数えなければ入る」150（上限 1549・合計 1399）に置く。size S
+/// （100）で `-big.rs` + `+new.rs` は見積 100 × 1 本で通り、素の `big.rs` + `+new.rs` は 100 × 2 本 = 200 が超えて
+/// `core` を名指して断られる（file の余地 101 は S に足りるので、名指すのは core だけ）。
+#[test]
+fn contract_closure_ext_shrink_item_is_not_counted_in_the_core_estimate() {
+    let (repo, state) = repo_with_big_file();
+    let tight = capped_rules(&state, "rules-tight.toml", 1_549);
+    let both = "\"crates/toy/src/big.rs\", \"+crates/toy/src/new.rs\"";
+    let plain = intake_with_rules(&repo, &state, &sized_contract(&repo, "plain.toml", "S", both), "s2-p", &tight);
+    let err = stderr_of(&plain);
+    assert_eq!(plain.status.code(), Some(i32::from(RC_REFUSED)), "2 本の見積 200 は core の余地 150 に入らない: {err}");
+    assert!(err.contains("core の上限の余地が 150 行") && !err.contains("big.rs の上限"), "core を名指す: {err}");
+    assert_eq!(event_count(&state), 0, "断った周は event を書かない");
+    let shrunk = "\"-crates/toy/src/big.rs\", \"+crates/toy/src/new.rs\"";
+    let shrink = intake_with_rules(&repo, &state, &sized_contract(&repo, "shrink.toml", "S", shrunk), "s2-sc", &tight);
+    assert_eq!(shrink.status.code(), Some(i32::from(RC_OK)), "- を数えない 1 本の見積 100 は余地 150 に入る: {}", stderr_of(&shrink));
+    assert_eq!(event_count(&state), 1, "RunCreated の 1 件");
+    clean(&[&repo, &state]);
+}
+
 /// (5) 行の数え方（`s2-07l.254`・設計 rules-manifest.md §4・接頭辞 `contract_closure_ext_width_`）: base の `.rs` が短い
 /// 1399 行と 2000 字を詰めた 1 行を持つとき、余地は改行の数（1400 行 → 100）でなく幅（`--rules` の `R-C4.line-width`）で
 /// 正規化した行数で出て、改行の数なら入る size S（100）が `cap-headroom` で断られる（詰め込みで余地が増えない）。

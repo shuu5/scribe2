@@ -91,7 +91,7 @@ pub(crate) enum Refuse {
     /// 契約表そのものの欠陥（区間・parse・id・section・req・verify・depends・設計 contract-source.md §2）。
     ContractTable(TableError),
     /// write-set の項目が base に解けない（実在する file でも・末尾 `/` の dir でも・`+` 接頭辞の新規 file〔base に
-    /// 無い〕でもない・設計 contract-source.md §3「項目の実在と展開」）。
+    /// 無い〕でも・`-` 接頭辞の縮む file〔base に在る〕でもない・設計 contract-source.md §3「項目の実在と展開」）。
     WriteSetItemUnresolved {
         /// 契約が書いた項目の字面。
         item: String,
@@ -160,7 +160,7 @@ impl Refuse {
             }
             Self::ContractTable(ref found) => found.reason(),
             Self::WriteSetItemUnresolved { ref item } => {
-                format!("write-set の {item} は base に解けない（実在する file・末尾 / の dir・+ 接頭辞の新規 file のどれでもない）")
+                format!("write-set の {item} は base に解けない（実在する file・末尾 / の dir・+ 接頭辞の新規 file・- 接頭辞の縮む file のどれでもない）")
             }
             Self::CapHeadroom { ref file, headroom, ref size } => {
                 format!("{file} の上限の余地が {headroom} 行で size {size} の見積に足りない")
@@ -223,13 +223,20 @@ pub(crate) fn overlaps(left: &[String], right: &[String], tracked: &[String]) ->
 /// 新規 file の項目の接頭辞（設計 contract-source.md §3「項目の実在と展開」）。
 pub(crate) const NEW_FILE: char = '+';
 
+/// 縮む面の項目の接頭辞（設計 contract-source.md §3「項目の実在と展開」・base に在る file を減らす便が宣言する）。
+/// 受付の宣言だけの文法で、guard と交差の照合は素の path で持つ。
+pub(crate) const SHRINK_FILE: char = '-';
+
 /// path 1 本を字面で畳む（write-set guard の `relative_to` と同じ規則）。
 ///
 /// 先頭の `./` を落とす・連続する `/` を 1 つにする・`..` を畳む・**末尾の `/` は dir の印
-/// として残す**・新規 file の接頭辞 `+` は剥がす。root の外へ出る `..`（畳めない分）はそのまま残す＝字面が
-/// 違うものを同じ path に化けさせない。**存在は見ない**ので、まだ無い file を書く契約も同じ規則で測れる。
-fn normalize(raw: &str) -> String {
-    let raw = raw.strip_prefix(NEW_FILE).unwrap_or(raw);
+/// として残す**・接頭辞（新規 file の `+`・縮む面の `-`）は剥がす。root の外へ出る `..`（畳めない分）はそのまま残す
+/// ＝字面が違うものを同じ path に化けさせない。**存在は見ない**ので、まだ無い file を書く契約も同じ規則で測れる。
+///
+/// `pub(crate)` なのは、spawn が guard へ写す policy（`spawn::write_policy`）が**同じ 1 本**で接頭辞を剥がすため
+/// である（剥がす規則を 2 か所に持たない）。
+pub(crate) fn normalize(raw: &str) -> String {
+    let raw = raw.strip_prefix([NEW_FILE, SHRINK_FILE]).unwrap_or(raw);
     let is_dir = raw.ends_with('/');
     let mut parts: Vec<&str> = Vec::new();
     for part in raw.split('/') {
@@ -406,6 +413,9 @@ mod tests {
             ("a/", "a/new.rs", false),
             ("+a/b.rs", "a/b.rs", true),
             ("+a/new.rs", "a/new.rs", true),
+            // 縮む面（`-`）も素の path で照合する＝同じ file を減らす便と書く便は交差する。
+            ("-a/b.rs", "a/b.rs", true),
+            ("a/", "-a/b.rs", true),
         ] {
             let found = !overlaps(&set(left), &set(right), &base).is_empty();
             assert_eq!(found, want, "{left} × {right}");
@@ -421,6 +431,7 @@ mod tests {
         assert_eq!(normalize("./src//../src/x.rs"), "src/x.rs", "正規化の 3 形を畳む");
         assert_eq!(normalize("src/"), "src/", "末尾の / は dir の印として残る");
         assert_eq!(normalize("+src/new.rs"), "src/new.rs", "新規 file の接頭辞は剥がす");
+        assert_eq!(normalize("-src/big.rs"), "src/big.rs", "縮む面の接頭辞も剥がす（交差の照合は素の path）");
     }
 
     /// 交差の全組が返る（1 組で止めない＝stderr に全組を並べる材料）。
