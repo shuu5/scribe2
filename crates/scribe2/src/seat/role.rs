@@ -111,7 +111,8 @@ pub const POLARITY: Polarity = Polarity { timing: Timing::InLoop, on_failure: On
 /// 登録を断る理由（閉じた enum）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RegisterRefusal {
-    /// 撃った target に打刻が無い・読めない・`sid` が空（hooks を積んだ席の証拠が無い）。
+    /// 撃った target に打刻が無い・読めない・`sid` が空（hooks を積んだ席の証拠が無い）。`seat register` の口にだけ掛かる
+    /// （`seat launch` の row は `sid` 無しで積む・account-lifecycle.md §4）。
     NoStamp,
     /// `--launch` の file を読めない・`--anchor` 無しで cwd の repo root を解けない。
     Input,
@@ -131,31 +132,44 @@ impl RegisterRefusal {
     }
 }
 
-/// 登録を 1 件追記する。`draft` の `role` / `target` / `account` / `model` を使い、`sid` は打刻から・`launch` は
-/// file の本文・`anchor` は明示の絶対化か cwd の repo root で埋める。**打刻を先に測る**（断る周は event を書かない）。
-pub fn register(state_dir: &Path, draft: Registration, launch: &Path, anchor: Option<&Path>) -> Result<Registration, RegisterRefusal> {
-    let seat = super::seat_dir(state_dir, &draft.target);
-    let text = std::fs::read_to_string(super::state::path(&seat)).unwrap_or_default();
-    let stamp = text.lines().rev().find(|line| !line.trim().is_empty()).and_then(|line| super::state::Stamp::from_line(line).ok());
-    let sid = stamp.map(|found| found.sid.trim().to_owned()).filter(|sid| !sid.is_empty()).ok_or(RegisterRefusal::NoStamp)?;
-    let cwd_root = || std::env::current_dir().ok().and_then(|cwd| crate::hook::vessel::repo_root(&cwd));
-    let root = anchor.map_or_else(cwd_root, |found| std::path::absolute(found).ok());
-    let (Ok(launch), Some(root)) = (std::fs::read_to_string(launch), root) else {
+/// `seat register` の口の登録（設計 seat-roles.md §2）: `draft` の `role` / `target` / `account` / `model` を使い、`sid` は
+/// 打刻から（`Some`・無ければ [`RegisterRefusal::NoStamp`]＝この口にだけ掛かる条件）・`launch` は file の本文・`anchor` は
+/// [`anchor_of`] で埋めて [`register`] へ渡す。**打刻を先に測る**（断る周は event を書かない）。
+pub fn register_stamped(state_dir: &Path, draft: Registration, launch: &Path, anchor: Option<&Path>) -> Result<Registration, RegisterRefusal> {
+    let sid = stamped_sid(state_dir, &draft.target).ok_or(RegisterRefusal::NoStamp)?;
+    let (Ok(launch), Some(root)) = (std::fs::read_to_string(launch), anchor_of(anchor)) else {
         return Err(RegisterRefusal::Input);
     };
-    append_row(state_dir, Registration { sid, launch, anchor: root.display().to_string(), ..draft })
+    register(state_dir, Registration { sid: Some(sid), launch, anchor: root.display().to_string(), ..draft })
+}
+
+/// target の打刻の最終行の `sid`（hooks を積んだ session の証拠）。打刻が無い・読めない・`sid` が空なら `None`。
+fn stamped_sid(state_dir: &Path, target: &str) -> Option<String> {
+    let seat = super::seat_dir(state_dir, target);
+    let text = std::fs::read_to_string(super::state::path(&seat)).unwrap_or_default();
+    let stamp = text.lines().rev().find(|line| !line.trim().is_empty()).and_then(|line| super::state::Stamp::from_line(line).ok());
+    stamp.map(|found| found.sid.trim().to_owned()).filter(|sid| !sid.is_empty())
+}
+
+/// 登録 row の `anchor`（**`seat register` と `seat launch` の同じ 1 つの解き方**・account-lifecycle.md §4）: 明示の
+/// `--anchor` は絶対化（symlink も存在も見ない）・無ければ cwd の repo root（`current_dir` は syscall であって env では
+/// ない・C2.2）。解けなければ `None`。
+pub fn anchor_of(anchor: Option<&Path>) -> Option<std::path::PathBuf> {
+    let cwd_root = || std::env::current_dir().ok().and_then(|cwd| crate::hook::vessel::repo_root(&cwd));
+    anchor.map_or_else(cwd_root, |found| std::path::absolute(found).ok())
 }
 
 /// 登録 row の口座を `account` に更新する（account-autonomy.md §5 の立て直し・同じ鍵で `SeatRegistered` 1 件）。
 /// `seat register` を経由せず**打刻の条件は課さない**（`sid` は登録時の証拠であって現在の session の識別子では
 /// ない）: `role` / `anchor` / `target` / `sid` / `launch` / `model` は既存 row から写す。
 pub fn relabel(state_dir: &Path, row: &Registration, account: &str) -> Result<Registration, RegisterRefusal> {
-    append_row(state_dir, Registration { account: account.to_owned(), ..row.clone() })
+    register(state_dir, Registration { account: account.to_owned(), ..row.clone() })
 }
 
-/// 登録 row を 1 件積む（**書き手 2 つの同じ 1 関数**・設計 seat-roles.md §2）: `seat register`（打刻の条件を
-/// 先に測る）と tick の口座更新（[`relabel`]）がここを通る。
-fn append_row(state_dir: &Path, registration: Registration) -> Result<Registration, RegisterRefusal> {
+/// 登録 row を 1 件積む（**書き手 3 つの同じ 1 関数**・設計 seat-roles.md §2・account-lifecycle.md §4）: `seat register`
+/// （[`register_stamped`]・打刻の条件を先に測り `sid` は `Some`）・tick の口座更新（[`relabel`]）・`seat launch`
+/// （[`crate::seat::cycle::launch`]・`sid` は `None`・打刻の条件は掛けない）がここを通る。**`sid` は任意**。
+pub fn register(state_dir: &Path, registration: Registration) -> Result<Registration, RegisterRefusal> {
     let event = Event {
         schema: SCHEMA,
         ts: cli::now_utc(),

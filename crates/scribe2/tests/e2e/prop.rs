@@ -221,13 +221,13 @@ mod fleet {
             })
     }
 
-    /// 席の登録の中身 1 つ（役割は全 variant・文字列は改行や `"` を含む任意の字面・`model` は在る / 無いの両方）。
+    /// 席の登録の中身 1 つ（役割は全 variant・文字列は改行や `"` を含む任意の字面・`sid` / `model` は在る / 無いの両方）。
     fn any_registration() -> impl Strategy<Value = Registration> {
         (
             prop::sample::select(ROLES),
             json_text(),
             json_text(),
-            json_text(),
+            prop::option::of(json_text()),
             json_text(),
             json_text(),
             prop::option::of(json_text()),
@@ -270,9 +270,9 @@ mod fleet {
     proptest! {
         #![proptest_config(config())]
 
-        /// 任意の役割 / anchor / target / sid / 口座 / 雛形 / model（在る・無い）で、登録の行は書いて読むと同じ
-        /// event に戻り、`run` / `bead` を持たず、`model` の key は `Some` の row にだけ現れる（`registration` の
-        /// 束の round-trip・契約 (e)）。
+        /// 任意の役割 / anchor / target / sid（在る・無い）/ 口座 / 雛形 / model（在る・無い）で、登録の行は書いて読むと
+        /// 同じ event に戻り、`run` / `bead` を持たず、`sid` / `model` の key は `Some` の row にだけ現れる
+        /// （`registration` の束の round-trip・契約 (e)・`s2-07l.244`）。
         #[test]
         fn prop_seat_registration_round_trips_through_line(event in any_registration_event()) {
             let line = event.to_line();
@@ -280,6 +280,8 @@ mod fleet {
             prop_assert!(!line.contains("\"bead\":"), "{}", line);
             let has_model = event.registration.as_ref().is_some_and(|row| row.model.is_some());
             prop_assert_eq!(line.contains("\"model\":"), has_model, "{}", line);
+            let has_sid = event.registration.as_ref().is_some_and(|row| row.sid.is_some());
+            prop_assert_eq!(line.contains("\"sid\":"), has_sid, "{}", line);
             prop_assert_eq!(FleetEvent::from_line(&line), Ok(event), "{}", line);
         }
 

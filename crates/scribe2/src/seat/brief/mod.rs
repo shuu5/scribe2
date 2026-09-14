@@ -168,7 +168,7 @@ mod tests {
             role,
             anchor: "/srv/anchor".to_owned(),
             target: "fixture:seat".to_owned(),
-            sid: "sid".to_owned(),
+            sid: Some("sid".to_owned()),
             account: "a1".to_owned(),
             launch: "claude\n".to_owned(),
             model: None,

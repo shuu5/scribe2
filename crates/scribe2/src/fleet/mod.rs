@@ -492,14 +492,16 @@ pub struct AllowanceLatest {
 }
 
 /// 席の登録の行の本体（設計 seat-roles.md §2）: 鍵 = `role` × `anchor`（repo の root・hook の cwd と突合しない）、
-/// 項目 = `target`（`session:window`）/ `sid`（打刻から解く）/ `account` / `launch`（雛形の本文）/ `model`（任意・
+/// 項目 = `target`（`session:window`）/ `sid`（任意・`seat register` は打刻から解いた `Some`・`seat launch` が書く row は
+/// `None`＝session の側の証拠を持たない・account-lifecycle.md §4）/ `account` / `launch`（雛形の本文）/ `model`（任意・
 /// 席が使う model の display name・契約 (e)・無い row / 旧 row は `None`＝逼迫度は保守側）。**pane id は持たない**。
+/// `sid` の `None` は key の省略か `null` で読み、書く側は key ごと書かない（schema 1 のまま・既存 row は読める）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Registration {
     pub role: Role,
     pub anchor: String,
     pub target: String,
-    pub sid: String,
+    pub sid: Option<String>,
     pub account: String,
     pub launch: String,
     pub model: Option<String>,
@@ -562,9 +564,13 @@ impl Event {
         }
         pairs.extend(self.allowance.iter().flat_map(Allowance::pairs));
         if let Some(found) = &self.registration {
-            let texts = [("anchor", &found.anchor), ("target", &found.target), ("sid", &found.sid), ("account", &found.account), ("launch", &found.launch)];
             pairs.push(("role", Value::Str(found.role.as_str().to_owned())));
-            pairs.extend(texts.map(|(key, text)| (key, Value::Str(text.clone()))));
+            pairs.push(("anchor", Value::Str(found.anchor.clone())));
+            pairs.push(("target", Value::Str(found.target.clone())));
+            // `sid` は任意（launch の row は `None`・key ごと書かない＝`null` を出さない・schema 1 のまま）。
+            pairs.extend(found.sid.iter().map(|sid| ("sid", Value::Str(sid.clone()))));
+            pairs.push(("account", Value::Str(found.account.clone())));
+            pairs.push(("launch", Value::Str(found.launch.clone())));
             // `model` は任意（schema 1 のまま値の追加・None の row は key ごと書かない＝旧 row と同じ形）。
             pairs.extend(found.model.iter().map(|model| ("model", Value::Str(model.clone()))));
         }
@@ -682,7 +688,8 @@ impl Body {
     }
 
     /// 登録の行の本体。`run` / `bead` と口座残量だけの key（`account` / `model` 以外）は**持たない**。
-    /// `model` は任意（key が無い旧 row は `None`・在って文字列でなければ malformed）。
+    /// `model` は任意（key が無い旧 row は `None`・在って文字列でなければ malformed）。`sid` も任意（key の省略か
+    /// `null` が `None`＝launch の row・在って文字列でなければ malformed）。
     fn registration(pairs: &[(String, Value)]) -> Result<Self, String> {
         forbid(pairs, ["run", "bead"].iter().chain(ALLOWANCE_KEYS.iter().filter(|key| !["account", "model"].contains(key))))?;
         let text = |key: &str| text_of(field(pairs, key), key);
@@ -691,7 +698,7 @@ impl Body {
             role: Role::parse(&role).ok_or(format!("role {role} は未知である"))?,
             anchor: text("anchor")?,
             target: text("target")?,
-            sid: text("sid")?,
+            sid: nullable_text(field(pairs, "sid"), "sid")?,
             account: text("account")?,
             launch: text("launch")?,
             model: optional_text(field(pairs, "model"), "model")?,
@@ -764,6 +771,15 @@ fn optional_text(value: Option<&Value>, key: &str) -> Result<Option<String>, Str
             .as_str()
             .map(|text| Some(text.to_owned()))
             .ok_or(format!("{key} が文字列でない")),
+    }
+}
+
+/// 任意の文字列 field のうち **`null` も「無い」と読む**もの（登録 row の `sid`・account-lifecycle.md §4）。
+/// key が在って文字列でも `null` でもなければ `Err`（[`optional_text`] と同じ極性・型違いを `None` に落とさない）。
+fn nullable_text(value: Option<&Value>, key: &str) -> Result<Option<String>, String> {
+    match value {
+        Some(Value::Null) => Ok(None),
+        other => optional_text(other, key),
     }
 }
 

@@ -5989,7 +5989,7 @@ fn seat_role_register_appends_one_seat_registered_row() {
     assert_eq!(registration.role, vessel::seat::role::Role::Planner);
     assert_eq!(registration.anchor, "/repo/anchor");
     assert_eq!(registration.target, "rs:planner");
-    assert_eq!(registration.sid, "sid-a");
+    assert_eq!(registration.sid.as_deref(), Some("sid-a"), "register の口の row は打刻の sid を持つ");
     assert_eq!(registration.account, "acct-1");
     assert_eq!(registration.launch, LAUNCH_BODY, "雛形の本文がそのまま載る");
     let state = role_state(&place);
@@ -8287,6 +8287,311 @@ fn seat_exit_stamp_cycle_stamp_still_holds_the_relaunch() {
     assert_eq!(tick_token(&line, "kind"), None, "注入していない: {line}");
     assert!(!place.dir.join("launched").exists(), "起動しない");
     assert!(!dir.join("exit-stamp").exists(), "exit-stamp は打たない");
+    drop(guard);
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+// ─────────────────── 席の起動（account-lifecycle.md §4・ADR-0026 §2.3・`s2-07l.244`・接頭辞 `seat_launch_`） ───────────────────
+
+/// host の面（`<state>/host.toml`）に宣言する口座（tracked の manifest に口座は無い）。
+const LAUNCH_LABELS: [&str; 2] = ["l1", "l2"];
+/// host の面の `[[plugin]]` の dir（宣言順＝起動行の順・名前の昇順ではない）。
+const LAUNCH_PLUGINS: [&str; 2] = ["/opt/plug-b", "/opt/plug-a"];
+/// host の面の `[[launch-arg]]` の value（宣言順）。
+const LAUNCH_ARGS: [&str; 2] = ["--permission-mode", "bypassPermissions"];
+/// 起動の歯の shell の prompt（`$ ` で終わる＝shell の門を通る）。
+const LAUNCH_PS1: &str = "PS1=$ ";
+/// 偽 claude が受けた行の置き場。
+const LAUNCH_LOG: &str = "seat.log";
+/// 偽 claude が起動時に写す event log の複製（登録 row が**送る前**に在ったことの証拠）。
+const LAUNCH_EVENTS_SEEN: &str = "events-at-launch";
+/// 包みの tmux が写す argv の置き場。
+const LAUNCH_TMUX_ARGS: &str = "tmux-args";
+
+/// 起動の歯の置き場: [`acct_place`] に host の面（口座 2 つ・plugin 2 つ・引数 2 つ）と anchor の dir を足す。
+fn launch_place() -> AcctPlace {
+    let place = acct_place();
+    fs::create_dir_all(&place.state).ok();
+    fs::create_dir_all(place.dir.join("anchor")).ok();
+    let accounts: String = LAUNCH_LABELS.iter().map(|label| format!("\n[[account]]\nlabel = \"{label}\"\n")).collect();
+    let plugins: String = LAUNCH_PLUGINS.iter().map(|dir| format!("\n[[plugin]]\ndir = \"{dir}\"\n")).collect();
+    let args: String = LAUNCH_ARGS.iter().map(|value| format!("\n[[launch-arg]]\nvalue = \"{value}\"\n")).collect();
+    fs::write(place.state.join(vessel::rules::HOST_MANIFEST), format!("schema = 1\n{accounts}{plugins}{args}")).ok();
+    place
+}
+
+/// anchor の dir（登録 row の `anchor`・起動行の 1 つ目の `--plugin-dir`）。
+fn launch_anchor(place: &AcctPlace) -> String {
+    place.dir.join("anchor").display().to_string()
+}
+
+/// 期待する導出行（穴を埋める前・`launch` の row に載る形）。
+fn launch_derived(place: &AcctPlace) -> String {
+    format!(
+        "CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CONFIG_DIR={{account_dir}} claude --plugin-dir {} --plugin-dir {} --plugin-dir {} {} {}",
+        launch_anchor(place), LAUNCH_PLUGINS[0], LAUNCH_PLUGINS[1], LAUNCH_ARGS[0], LAUNCH_ARGS[1]
+    )
+}
+
+/// 期待する偽 claude の記録（argv を 1 語 1 行・続けて env の 2 行）。
+fn launch_expected_argv(place: &AcctPlace, label: &str) -> String {
+    let account_dir = place.state.join("accounts").join(label).display().to_string();
+    format!(
+        "--plugin-dir\n{}\n--plugin-dir\n{}\n--plugin-dir\n{}\n{}\n{}\nenv:CLAUDE_CONFIG_DIR={account_dir}\nenv:CLAUDE_CODE_DISABLE_AGENT_VIEW=1\n",
+        launch_anchor(place), LAUNCH_PLUGINS[0], LAUNCH_PLUGINS[1], LAUNCH_ARGS[0], LAUNCH_ARGS[1]
+    )
+}
+
+/// test 自身の PATH に在る tmux（包みが exec する実体）。
+fn real_tmux() -> Option<PathBuf> {
+    std::env::var("PATH").ok()?.split(':').map(|dir| Path::new(dir).join("tmux")).find(|path| path.is_file())
+}
+
+/// shim の dir を作る（偽 `claude`・argv を写して実体へ exec する `tmux` の包み）: 偽 claude は argv と env を `launched` へ
+/// 写し、その時点の event log を [`LAUNCH_EVENTS_SEEN`] へ複製し、prompt を描いて `SessionStart` を打ち、以後は受けた行を
+/// [`LAUNCH_LOG`] に積んで `UserPromptSubmit` → `Stop` を打つ（立て直しの偽 session と同じ形）。PATH の字面を返す。
+fn launch_shims(place: &AcctPlace, target: &str) -> String {
+    let bin = place.dir.join("bin");
+    fs::create_dir_all(&bin).ok();
+    let seat = seat_dir_of(&place.state, &target.replace(':', "_"));
+    let file = state_file(&seat);
+    let claude = format!(
+        "#!/bin/sh\nmkdir -p '{seat}'\nprintf '%s\\n' \"$@\" >> '{launched}'\n\
+         printf 'env:CLAUDE_CONFIG_DIR=%s\\nenv:CLAUDE_CODE_DISABLE_AGENT_VIEW=%s\\n' \"$CLAUDE_CONFIG_DIR\" \"$CLAUDE_CODE_DISABLE_AGENT_VIEW\" >> '{launched}'\n\
+         cp '{events}' '{seen}' 2>/dev/null\nprintf '\u{276f} '\n{start}\n\
+         while read -r line; do printf '%s\\n' \"$line\" >> '{log}'; {busy}; {stop}; printf '\u{276f} '; done\n",
+        seat = seat.display(),
+        launched = place.dir.join("launched").display(),
+        events = vessel::fleet::store::events_path(&place.state).display(),
+        seen = place.dir.join(LAUNCH_EVENTS_SEEN).display(),
+        start = stamp_cmd(&file, "idle", "SessionStart", FakeStamp::Now),
+        log = place.dir.join(LAUNCH_LOG).display(),
+        busy = stamp_cmd(&file, "busy", "UserPromptSubmit", FakeStamp::Now),
+        stop = stamp_cmd(&file, "idle", "Stop", FakeStamp::Now),
+    );
+    let tmux = format!(
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\nexec '{}' \"$@\"\n",
+        place.dir.join(LAUNCH_TMUX_ARGS).display(),
+        real_tmux().unwrap_or_default().display()
+    );
+    for (name, body) in [("claude", claude), ("tmux", tmux)] {
+        let path = bin.join(name);
+        fs::write(&path, body).ok();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).ok();
+    }
+    format!("{}:{}", bin.display(), std::env::var("PATH").unwrap_or_default())
+}
+
+/// 独立 socket に session `name`（初期 window も `name`・`sh -i`・prompt `$ `・PATH は shim 先頭）を立て、以後の window も同じ
+/// 形（`default-command` = 同じ shell の command・login shell にしない＝home の profile の PATH / PS1 を継承しない）にする。
+fn launch_session(place: &AcctPlace, name: &str, path: &str) -> IsolatedSeat {
+    let mut seat = IsolatedSeat { socket: place.socket.clone(), name: name.to_owned(), ready: false };
+    // PATH は shell の command の中で据える（session の環境変数 `-e PATH=` は login の profile に上書きされる・実測 2026-09-14）。
+    let shell = format!("PATH='{path}'; export PATH; exec sh -i");
+    let out = tmux(
+        &place.socket,
+        &["new-session", "-d", "-s", name, "-n", name, "-x", "120", "-y", "40", "-e", LAUNCH_PS1, "sh", "-c", &shell],
+    );
+    if !out.status.success() {
+        return seat;
+    }
+    let shell = tmux(&place.socket, &["set-option", "-t", name, "default-command", &shell]);
+    seat.ready = shell.status.success() && acct_wait_pane(place, &format!("{name}:{name}"), |pane| pane.trim_end().ends_with('$'));
+    seat
+}
+
+/// `seat launch` を shim の PATH で 1 回撃つ（`--tmux-socket` は独立 socket・`--anchor` は置き場の anchor）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn launch_run(place: &AcctPlace, path: &str, target: &str, extra: &[&str]) -> Output {
+    let state = place.state.display().to_string();
+    let anchor = launch_anchor(place);
+    let mut args = vec![
+        "seat", "launch", "--state-dir", &state, "--role", "planner", "--target", target, "--anchor", &anchor, "--tmux-socket", &place.socket,
+    ];
+    args.extend_from_slice(extra);
+    Command::new(bin()).args(&args).env("PATH", path).output().expect("binary を起動できる")
+}
+
+/// 包みの tmux が写した argv のうち `verb` で始まる呼出しの数（`-S <socket>` の後ろを見る）。
+fn launch_tmux_calls(place: &AcctPlace, verb: &str) -> usize {
+    fs::read_to_string(place.dir.join(LAUNCH_TMUX_ARGS))
+        .unwrap_or_default()
+        .lines()
+        .filter(|line| line.split_whitespace().nth(2) == Some(verb))
+        .count()
+}
+
+/// `<state>/inject.jsonl` の行のうち `kind=launch` を持つものの `(who, what)`。
+fn launch_inject_rows(place: &AcctPlace) -> Vec<(String, String)> {
+    fs::read_to_string(place.state.join("inject.jsonl"))
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| Some((acct_text(line, "who")?, acct_text(line, "what")?)))
+        .filter(|(_, what)| tick_token(what, "kind").as_deref() == Some("launch"))
+        .collect()
+}
+
+/// 起動しなかったことの 3 面（`case`）: 偽 claude は走らず・`send-keys` は 0 回・登録 row は `rows` 件。
+fn launch_assert_not_sent(place: &AcctPlace, rows: usize, case: &str) {
+    assert!(!place.dir.join("launched").exists(), "{case}: 起動行は届かない");
+    assert_eq!(launch_tmux_calls(place, "send-keys"), 0, "{case}: 1 key も送らない");
+    assert_eq!(acct_rows(&place.state).len(), rows, "{case}: 登録 row の件数");
+    assert!(launch_inject_rows(place).is_empty(), "{case}: inject.jsonl に launch の行は無い");
+}
+
+/// (a)(b) window が無い target へ `--account l2` で起こす: `new-window` が 1 回・導出した行（`CLAUDE_CONFIG_DIR=<state>/accounts/l2`・
+/// agent view off・anchor の `--plugin-dir` → `[[plugin]]` の dir → `[[launch-arg]]` の value の順）が偽 claude に 1 回だけ届き、
+/// `SeatRegistered` は送る**前**に 1 件（`sid` 無し・`launch` = 導出した行〔穴を埋める前〕・account=l2）、`inject.jsonl` に
+/// `kind=launch` 1 行、席の打刻に `SessionStart`。base は `launch` の subcommand が無く使い方で断る（RED）。
+#[test]
+fn seat_launch_creates_the_window_and_injects_the_derived_line_once() {
+    let place = launch_place();
+    let name = "launchnew";
+    let target = format!("{name}:seat");
+    let path = launch_shims(&place, &target);
+    let guard = launch_session(&place, name, &path);
+    assert!(guard.ready(), "独立 socket に shell の session を立てられる");
+
+    let out = launch_run(&place, &path, &target, &["--account", "l2"]);
+
+    let line = stdout_of(&out);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stdout={line} stderr={}", stderr_of(&out));
+    assert_eq!(line, format!("seat launch: launched target={name}_seat account=l2{}\n", provenance(&place.state, "flag")));
+    assert_eq!(launch_tmux_calls(&place, "new-window"), 1, "window を 1 回作る");
+    assert!(
+        fs::read_to_string(place.dir.join(LAUNCH_TMUX_ARGS)).unwrap_or_default().lines().any(|found| found.ends_with(&format!("new-window -t ={name}: -n seat"))),
+        "`new-window -t <session> -n <window>` の形（session は exact の名 + 次の空き index）: {}",
+        fs::read_to_string(place.dir.join(LAUNCH_TMUX_ARGS)).unwrap_or_default()
+    );
+    assert_eq!(fs::read_to_string(place.dir.join("launched")).unwrap_or_default(), launch_expected_argv(&place, "l2"), "導出した行が 1 回だけ届く");
+    launch_assert_registered_before_send(&place, &target, "l2");
+    let stamps = fs::read_to_string(state_file(&seat_dir_of(&place.state, &format!("{name}_seat")))).unwrap_or_default();
+    assert!(stamps.contains("\"event\":\"SessionStart\""), "席が立った打刻: {stamps}");
+    assert!(!place.dir.join(LAUNCH_LOG).exists(), "`--restore` 無しは復元を送らない");
+    drop(guard);
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (b) 登録 row は**送る前**に 1 件（偽 claude が起動時に写した event log に既に在る・`sid` 無し・`launch` = 導出した行・
+/// account = `label`・鍵 = planner × anchor）・`inject.jsonl` に `kind=launch`（`who=seat-launch`）が 1 行。
+fn launch_assert_registered_before_send(place: &AcctPlace, target: &str, label: &str) {
+    let rows = acct_rows(&place.state);
+    let want = vessel::fleet::Registration {
+        role: vessel::seat::role::Role::Planner,
+        anchor: launch_anchor(place),
+        target: target.to_owned(),
+        sid: None,
+        account: label.to_owned(),
+        launch: launch_derived(place),
+        model: None,
+    };
+    assert_eq!(rows, vec![want], "SeatRegistered 1 件・sid 無し・launch は導出した行（穴を埋める前）");
+    let seen_text = fs::read_to_string(place.dir.join(LAUNCH_EVENTS_SEEN)).unwrap_or_default();
+    assert_eq!(seen_text.lines().filter(|found| found.contains("\"kind\":\"SeatRegistered\"")).count(), 1, "row は起動行を送る前に在る: {seen_text}");
+    assert!(!seen_text.contains("\"sid\""), "送る前の row にも sid は無い: {seen_text}");
+    let injected = launch_inject_rows(place);
+    assert_eq!(injected.len(), 1, "inject.jsonl に kind=launch 1 行: {injected:?}");
+    assert_eq!(injected.first().map(|(who, _)| who.as_str()), Some("seat-launch"));
+    assert!(injected.first().is_some_and(|(_, what)| tick_token(what, "account").as_deref() == Some(label)), "{injected:?}");
+}
+
+/// (c) `--account` 無しは session 用の選定: 実測行 2 口座（l1 = 30・l2 = 40・どちらも閾値未満・逼迫度の最小は l1）のうち、
+/// 別席（同じ planner でも別 anchor＝別の鍵）の登録 row が持つ l1 を除外し、残る l2 が選ばれる（既存 window `name:name` へ・
+/// `new-window` は 0 回）。
+#[test]
+fn seat_launch_without_account_selects_excluding_other_seats_accounts() {
+    let place = launch_place();
+    let name = "launchpick";
+    let target = format!("{name}:{name}");
+    let path = launch_shims(&place, &target);
+    let guard = launch_session(&place, name, &path);
+    assert!(guard.ready(), "独立 socket に shell の session を立てられる");
+    acct_measured(&place.state, "l1", 30, &acct_now());
+    acct_measured(&place.state, "l2", 40, &acct_now());
+    let other = acct_register_as(&place, "otherseat", "l1", ACCT_LAUNCH);
+    assert_eq!(rc_of(&other), i32::from(RC_OK), "別席の登録: stderr={}", stderr_of(&other));
+
+    let out = launch_run(&place, &path, &target, &[]);
+
+    let line = stdout_of(&out);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stdout={line} stderr={}", stderr_of(&out));
+    assert!(line.starts_with(&format!("seat launch: launched target={name}_{name} account=l2 ")), "l1 は別席の口座＝除外: {line}");
+    assert_eq!(launch_tmux_calls(&place, "new-window"), 0, "既存 window には作らない");
+    assert_eq!(fs::read_to_string(place.dir.join("launched")).unwrap_or_default(), launch_expected_argv(&place, "l2"));
+    let rows = acct_rows(&place.state);
+    assert_eq!(rows.len(), 2, "別席の row + 自席の row: {rows:?}");
+    assert_eq!(rows.last().map(|row| (row.account.as_str(), row.sid.clone())), Some(("l2", None)));
+    drop(guard);
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (d) typed な断り（rc 1・stderr 1 行・`reason=` を値で名指す）で row も key も書かない: 候補なし（実測行なし＝`no-account`
+/// `detail=unmeasured`）／session 無し（`session-missing`・作らない）／`--account` が宣言に無い（`account-unknown`）。
+/// 入力欄に打ちかけ（`input-busy`）だけは門で止まる周＝row は書き終えているが 1 key も送らない。
+#[test]
+fn seat_launch_refuses_typed_without_sending_or_registering() {
+    for (case, extra, rows) in [
+        ("no-account", &[][..], 0),
+        ("session-missing", &["--account", "l2"][..], 0),
+        ("account-unknown", &["--account", "ghost"][..], 0),
+        ("input-busy", &["--account", "l2"][..], 1),
+    ] {
+        let place = launch_place();
+        let name = "launchrefuse";
+        let target = format!("{name}:{name}");
+        let path = launch_shims(&place, &target);
+        let guard = launch_session(&place, name, &path);
+        assert!(guard.ready(), "{case}: 独立 socket に shell の session を立てられる");
+        if case == "input-busy" {
+            assert!(tmux(&place.socket, &["send-keys", "-t", &target, "-l", "git st"]).status.success());
+            assert!(acct_wait_pane(&place, &target, |pane| pane.trim_end().ends_with("$ git st")), "打ちかけが描かれる");
+        }
+        let aimed = if case == "session-missing" { "nosuch:seat" } else { target.as_str() };
+
+        let out = launch_run(&place, &path, aimed, extra);
+
+        let line = stderr_of(&out);
+        assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "{case}: stdout={}", stdout_of(&out));
+        assert!(stdout_of(&out).is_empty(), "{case}: stdout は空");
+        assert!(line.starts_with("seat launch: refused reason="), "{case}: {line}");
+        assert_eq!(tick_token(&line, "reason").as_deref(), Some(case), "{case}: {line}");
+        if case == "no-account" {
+            assert_eq!(tick_token(&line, "detail").as_deref(), Some("unmeasured"), "{line}");
+        }
+        launch_assert_not_sent(&place, rows, case);
+        assert!(!tmux(&place.socket, &["has-session", "-t", "=nosuch"]).status.success(), "{case}: session を作らない");
+        drop(guard);
+        fs::remove_dir_all(&place.dir).ok();
+    }
+}
+
+/// (e) `--restore /rebrief` は立ち上がり（`SessionStart` の打刻）の**後**に 1 回届く: 偽 claude の受けた行は `/rebrief` だけ・
+/// 打刻の順は SessionStart → UserPromptSubmit・席の記録は 起動行 → `/rebrief` の 2 行・成立の行に `consumed=true`。
+#[test]
+fn seat_launch_restore_is_sent_once_after_session_start() {
+    let place = launch_place();
+    let name = "launchrestore";
+    let target = format!("{name}:{name}");
+    let path = launch_shims(&place, &target);
+    let guard = launch_session(&place, name, &path);
+    assert!(guard.ready(), "独立 socket に shell の session を立てられる");
+
+    let out = launch_run(&place, &path, &target, &["--account", "l1", "--restore", "/rebrief"]);
+
+    let line = stdout_of(&out);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stdout={line} stderr={} pane={}", stderr_of(&out), capture(&place.socket, &target));
+    assert!(line.starts_with(&format!("seat launch: launched target={name}_{name} account=l1 consumed=true ")), "{line}");
+    assert_eq!(fs::read_to_string(place.dir.join(LAUNCH_LOG)).unwrap_or_default(), "/rebrief\n", "復元は 1 回だけ届く");
+    let stamps = fs::read_to_string(state_file(&seat_dir_of(&place.state, &format!("{name}_{name}")))).unwrap_or_default();
+    let events: Vec<String> = stamps.lines().filter_map(|found| acct_text(found, "event")).collect();
+    assert_eq!(events, ["SessionStart", "UserPromptSubmit", "Stop"], "復元は立ち上がりの後: {stamps}");
+    let sent = acct_sent(&place.state, &format!("{name}_{name}"));
+    assert_eq!(sent.len(), 2, "起動行と復元の 2 行: {sent:?}");
+    assert!(sent.first().is_some_and(|what| what.starts_with("CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CONFIG_DIR=")), "{sent:?}");
+    assert_eq!(sent.get(1).map(String::as_str), Some("/rebrief"), "{sent:?}");
     drop(guard);
     fs::remove_dir_all(&place.dir).ok();
 }

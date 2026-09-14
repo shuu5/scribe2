@@ -61,6 +61,9 @@ use std::time::{Duration, Instant};
 pub const STAMP_FILE: &str = "tick-stamp";
 /// 記録の who。
 const WHO: &str = "seat-tick";
+/// `inject.jsonl` に**注入**の行を書く who の列（tick と `seat launch`・hook の記録は含めない）: 立て直しの入口 (1) が
+/// 「直近の注入」を引く母集団（[`last_signal`]）。
+const INJECT_WRITERS: &[&str] = &[WHO, cycle::WHO_LAUNCH];
 /// 記録の when。
 const WHEN: &str = "tick";
 /// 置き場を解けない。
@@ -75,8 +78,8 @@ const EXTERNALIZE_SKILL: &str = "/ready-compaction";
 /// §5 / §10: Ctrl-C ×2 / Ctrl-D ×2 は timing と入力欄の空に依存するので採らない）。
 const EXIT: &str = "/exit";
 /// 口座の逼迫度の閾値（session 用・使用率の百分率）を宣言する rules 行の id（account-autonomy.md §3・値は code に
-/// 焼かない・C5）。
-const ID_THRESHOLD: &str = "R-C9-1";
+/// 焼かない・C5）。`seat launch` の初回の選定（[`cycle::launch`]）も同じ行を読む。
+pub const ID_THRESHOLD: &str = "R-C9-1";
 
 /// tick 1 回の入力。
 pub struct Request<'a> {
@@ -128,8 +131,8 @@ pub enum TickDecision {
 ///
 /// 分けるのは、促す行為が別物だからである——[`Self::Pointer`] は「打刻して続きへ」、
 /// [`Self::Externalize`] は「退避せよ」、[`Self::Relaunch`] は「別口座で立て直した」、[`Self::Exit`] は
-/// 「退避して止まった session を終えよ」。記録に種類が残らないと、席が退避の pointer を何度受けたか
-/// （storm の有無）を後から数えられない。
+/// 「退避して止まった session を終えよ」、[`Self::Launch`] は「席を初めて起こした」。記録に種類が残らないと、席が退避の
+/// pointer を何度受けたか（storm の有無）を後から数えられない。
 #[derive(Clone, Copy)]
 pub enum InjectKind {
     /// 席に自分の打刻を促す 1 行（idle・退避物なし・lock 空きの揃った周）。
@@ -141,6 +144,10 @@ pub enum InjectKind {
     /// 退避して止まった席（退避の合図 → `Stop` → 未 consumed 退避物 → 前面が shell でない）の session を終える
     /// [`EXIT`] の 1 行（account-autonomy.md §5「退避後の終了の手」・立て直しの入口 (3) を人手なしで立てる）。
     Exit,
+    /// `seat launch` が席を初めて起こした（導出した起動行 1 行・account-lifecycle.md §4）。書くのは tick でなく
+    /// [`cycle::launch`]（`who=seat-launch`）で、立て直しの入口 (1) はこれを合図に数えない（launch 直後の停止は
+    /// 器が起こしたのでない停止と同じ扱い）。
+    Launch,
 }
 
 /// [`InjectKind`] の全 variant（宣言順）。
@@ -149,6 +156,7 @@ pub const INJECT_KINDS: &[InjectKind] = &[
     InjectKind::Externalize,
     InjectKind::Relaunch,
     InjectKind::Exit,
+    InjectKind::Launch,
 ];
 
 impl InjectKind {
@@ -159,6 +167,7 @@ impl InjectKind {
             Self::Externalize => "externalize",
             Self::Relaunch => "relaunch",
             Self::Exit => "exit",
+            Self::Launch => "launch",
         }
     }
 }
@@ -823,10 +832,12 @@ fn parked_entry(state_dir: &Path, target: &str, socket: Option<&str>, seat_dir: 
     }
 }
 
-/// (1) `<state_dir>/inject.jsonl` の同じ席の `who=seat-tick` の最新行が tick の合図（`kind=externalize` か `kind=exit`）
-/// なら、その種類と ts。記録の形（判定行の `kind=` の token）は同じ module の [`body`] が書く。inject.jsonl は hook の
-/// 記録（`hook:pre-tool-use` 等）も共有する（vessel-hook.md §6）が、それは注入ではないので飛ばす（`s2-07l.242`・
-/// 退避の後に席が Bash を撃つと最新行が hook 行になり合図が見えなくなっていた）。
+/// (1) `<state_dir>/inject.jsonl` の同じ席の**注入の最新行**（`who=seat-tick` か `seat launch` の `who=seat-launch`・
+/// [`INJECT_WRITERS`]）が tick の合図（`kind=externalize` か `kind=exit`）なら、その種類と ts。記録の形（判定行の
+/// `kind=` の token）は同じ module の [`body`] が書く。inject.jsonl は hook の記録（`hook:pre-tool-use` 等）も共有する
+/// （vessel-hook.md §6）が、それは注入ではないので飛ばす（`s2-07l.242`・退避の後に席が Bash を撃つと最新行が hook 行に
+/// なり合図が見えなくなっていた）。launch の行（`kind=launch`）は注入なので**直近**に数えるが合図ではない＝launch の
+/// 後の停止は起こし直さない（account-lifecycle.md §4・`s2-07l.244`）。
 fn last_signal(state_dir: &Path, target: &str) -> Option<(InjectKind, u64)> {
     let seat = seat_name(target)?;
     let text = std::fs::read_to_string(inject_path(state_dir)).ok()?;
@@ -836,7 +847,7 @@ fn last_signal(state_dir: &Path, target: &str) -> Option<(InjectKind, u64)> {
         .filter_map(|line| json_lite::parse_object(line).ok())
         .find(|pairs| {
             field(pairs, "seat").and_then(Value::as_str) == Some(seat.as_str())
-                && field(pairs, "who").and_then(Value::as_str) == Some(WHO)
+                && field(pairs, "who").and_then(Value::as_str).is_some_and(|who| INJECT_WRITERS.contains(&who))
         })?;
     let what = field(&last, "what").and_then(Value::as_str)?;
     if !what.starts_with("decision=inject ") {
@@ -1135,8 +1146,26 @@ mod tests {
         );
         assert!(is_declaration_order(NOOP_REASONS, |reason| reason as usize));
         let kinds: Vec<&str> = INJECT_KINDS.iter().map(|kind| kind.as_str()).collect();
-        assert_eq!(kinds, ["pointer", "externalize", "relaunch", "exit"]);
+        assert_eq!(kinds, ["pointer", "externalize", "relaunch", "exit", "launch"]);
         assert!(is_declaration_order(INJECT_KINDS, |kind| kind as usize));
+    }
+
+    /// `seat launch` の行（`who=seat-launch`・`kind=launch`）は同じ席の**直近の注入**に数え、合図ではない: 退避の合図の
+    /// 後ろに launch が在れば入口 (1) は立たない（launch の後の停止を起こし直さない・account-lifecycle.md §4）。
+    #[test]
+    fn seat_launch_row_overrides_the_signal_and_is_not_one() {
+        let lines = [
+            inject_line(WHO, "decision=inject account=a1:100 kind=externalize", "seat1", 100),
+            inject_line(crate::seat::cycle::WHO_LAUNCH, "decision=inject target=seat1 kind=launch account=a2", "seat1", 200),
+        ];
+        assert_eq!(signal_of("launch-after", Some(&lines)), None, "launch が直近なら合図なし");
+        let only_launch = [inject_line(crate::seat::cycle::WHO_LAUNCH, "decision=inject target=seat1 kind=launch account=a2", "seat1", 100)];
+        assert_eq!(signal_of("launch-only", Some(&only_launch)), None, "launch だけ");
+        let before = [
+            inject_line(crate::seat::cycle::WHO_LAUNCH, "decision=inject target=seat1 kind=launch account=a2", "seat1", 100),
+            inject_line(WHO, "decision=inject account=a2:100 kind=externalize", "seat1", 200),
+        ];
+        assert_eq!(signal_of("launch-before", Some(&before)), Some(("externalize", 200)), "launch の後の合図は生きる");
     }
 
     /// 実測 1 行。

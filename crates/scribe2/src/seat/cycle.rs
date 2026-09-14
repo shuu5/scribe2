@@ -12,16 +12,22 @@
 //! 隣に**立て直し**（[`relaunch`]・設計 account-autonomy.md §5・SRS FR38）を置く: 退避して止まった席を別口座で
 //! 同じ target に起こし直し、復元の command を注入する。同じ lock・同じ cycle-stamp（再注入の back-off）・同じ
 //! 作り直しの確認（`SessionStart` の打刻）を通る。
+//!
+//! さらに**席の起動**（[`launch`]・設計 account-lifecycle.md §4・ADR-0026 §2.3・SRS FR59）を置く: user が席を初めて
+//! 起こす口で、起動行は host の面の宣言から導き（[`derive_launch`]・雛形 file を持たない）、登録 row を**先に**書き、
+//! 立て直しと**同じ 1 本**（[`boot`]: shell の入力欄の門 → 起動行 → 立ち上がりの確認 → 復元）で shell へ注入する。
+//! 立て直しとの差は「row を先に書く」「window を作れる」の 2 点だけである。
 
 use crate::polarity::{OnFailure, Polarity, Timing};
+use super::role::Role;
 use super::{inject, pane_of, role, sanitize_target, state, tmux_ok, StateDir, WmScan};
 use crate::fleet::json_lite::{self, Value};
 use crate::fleet::select::{self, NoCandidate, Purpose, Selection};
 use crate::fleet::store::{self, LockPolicy};
-use crate::fleet::{Registration, State};
-use crate::headless::{AGENT_VIEW_ENV, AGENT_VIEW_OFF};
+use crate::fleet::{replay, Registration, State};
+use crate::headless::{ACCOUNT_ENV, AGENT_VIEW_ENV, AGENT_VIEW_OFF, DEFAULT_CLAUDE};
 use crate::hook::{seat_name, InjectionRecord, SCHEMA};
-use crate::rules::manifest::Manifest;
+use crate::rules::manifest::{LaunchArg, Manifest, PluginDir};
 use crate::rules::RuleValue;
 use std::collections::BTreeSet;
 use std::fs::OpenOptions;
@@ -58,6 +64,11 @@ const WHEN: &str = "cycle";
 const WHEN_RELAUNCH: &str = "relaunch";
 /// 終了の手の記録の when。
 const WHEN_EXIT: &str = "exit";
+/// 席の起動（`seat launch`）の記録の when（席の `tick.jsonl` と `inject.jsonl`・`kind=` の字面は
+/// [`super::tick::InjectKind::Launch`] が持つ）。
+const WHEN_LAUNCH: &str = "launch";
+/// 席の起動の `inject.jsonl` の記録の who（tick の「直近の注入」の母集団に入る・[`super::tick`] の `INJECT_WRITERS`）。
+pub const WHO_LAUNCH: &str = "seat-launch";
 /// 口座の credential dir の置き場（`<state_dir>/accounts/<label>/`・ADR-0017 §2.3）。
 const ACCOUNTS_DIR: &str = "accounts";
 /// 起動の雛形の穴（設計 account-autonomy.md §5・seat-roles.md §2）: 選んだ口座の credential dir で埋める 1 つ。
@@ -96,8 +107,22 @@ pub const REASON_CLEAR: &str = "clear-unconfirmed";
 pub const REASON_RESTORE: &str = "restore-unconfirmed";
 /// 立て直しの起動 command は送ったが、立ち上がりを確認できない（送達 ts 以後の `SessionStart` の打刻が窓の内に来ない）。
 pub const REASON_LAUNCH: &str = "launch-unconfirmed";
-/// 立て直しの口座の更新（`SeatRegistered`）を書けない。
+/// 立て直しの口座の更新（`SeatRegistered`）・起動の登録 row を書けない。
 pub const REASON_REGISTER: &str = "register-unwritable";
+/// `seat launch` の `--account` が宣言（tracked + host の面の `[[account]]`）に無い（row も key も書かない）。
+pub const REASON_ACCOUNT_UNKNOWN: &str = "account-unknown";
+/// `seat launch` の `--account` 無しの周に session 用の選定で選べる口座が無い（row も key も書かない・理由を添える）。
+pub const REASON_NO_ACCOUNT: &str = "no-account";
+/// `seat launch` の target の tmux session が無い（session は作らない・row も書かない）。
+pub const REASON_SESSION_MISSING: &str = "session-missing";
+/// `seat launch` の window を作れない（`new-window` が失敗・row は書き終えている）。
+pub const REASON_WINDOW: &str = "window-unwritable";
+/// `seat launch` の既存 window の前面 process が shell でない（走っている席へ起動行を送らない・row は書き終えている）。
+pub const REASON_NOT_SHELL: &str = "not-a-shell";
+/// `seat launch` が event log を読めない（選定の除外＝他の席の登録 row を取れない・row も key も書かない）。
+pub const REASON_LOG_UNREADABLE: &str = "log-unreadable";
+/// `seat launch` の `--anchor` 無しで cwd の repo root を解けない（`seat register` の `input-unreadable` と同じ形）。
+pub const REASON_ANCHOR: &str = "anchor-unresolvable";
 
 /// cycle 1 回の入力。
 pub struct Request<'a> {
@@ -551,14 +576,14 @@ pub enum Relaunched {
 /// 1 key も送らない＝立て直しの再注入の back-off は tick が読む既存の 1 本である。選べない・雛形の穴が 1 つでない
 /// 周は lock も打刻も取らない（送っていない）。
 pub fn relaunch(request: &Relaunch) -> Relaunched {
-    let label = match choose(request) {
+    let own = (request.row.role, request.row.anchor.as_str());
+    let label = match choose(own, request.state, request.labels, request.row.model.as_deref(), request.threshold_pct) {
         Selection::Chosen(label) => label,
         Selection::None(found) => return Relaunched::None(found),
     };
-    let account_dir = request.state_dir.path.join(ACCOUNTS_DIR).join(&label);
     // 注入するのは穴を埋めた雛形に agent view off を前置した 1 行（記録にも同じ行が載る）。
-    let launch = match fill_launch(&request.row.launch, &account_dir.display().to_string()) {
-        Ok(found) => with_agent_view_off(&found),
+    let launch = match launch_line(request.state_dir, &request.row.launch, &label) {
+        Ok(found) => found,
         Err(holes) => return Relaunched::Refused(holes.as_str()),
     };
     let ttl = match ttl_s() {
@@ -580,12 +605,11 @@ pub fn relaunch(request: &Relaunch) -> Relaunched {
     held
 }
 
-/// session 用の選定（[`select::select`] の 1 本・model = 登録 row の `model`）。除外は**他の席の**登録 row が持つ
-/// 口座で、自席の row（同じ鍵）は入れない（account-autonomy.md §5）。
-fn choose(request: &Relaunch) -> Selection {
-    let own = (request.row.role, request.row.anchor.as_str());
-    let exclude: BTreeSet<String> = request
-        .state
+/// session 用の選定（[`select::select`] の 1 本・立て直しと `seat launch` の初回の選定が同じ関数を呼ぶ）。`own` は
+/// 自席の鍵 (role, anchor)・`model` は席の model。除外は**他の席の**登録 row が持つ口座で、自席の row（同じ鍵）は
+/// 入れない（account-autonomy.md §5 / account-lifecycle.md §4）。
+fn choose(own: (Role, &str), state: &State, labels: &[String], model: Option<&str>, threshold_pct: u64) -> Selection {
+    let exclude: BTreeSet<String> = state
         .registrations
         .values()
         .map(|latest| &latest.registration)
@@ -594,61 +618,114 @@ fn choose(request: &Relaunch) -> Selection {
         .collect();
     let now = crate::fleet::cli::now_utc();
     select::select(&select::Input {
-        labels: request.labels,
-        allowance: &request.state.allowance,
+        labels,
+        allowance: &state.allowance,
         purpose: Purpose::Session,
-        model: request.row.model.as_deref(),
+        model,
         exclude: &exclude,
-        threshold_pct: request.threshold_pct,
+        threshold_pct,
         now: &now,
     })
 }
 
-/// lock を握っている間の手順（順序固定）: shell の入力欄の門 → 起動の雛形 → 立ち上がりの確認 → 登録 row の更新 → 復元。
-///
-/// 起動は**前面が shell の pane** へ撃つので、門は席の `❯` の行（[`inject::guard_input`]）でなく shell の prompt 末尾
-/// （[`super::shell_input_empty`]・account-autonomy.md §5「shell への注入の門」・`s2-07l.218`）で見る。断りの字面は
-/// cycle の門と同じ `input-busy` / `input-unknown`。立ち上がった後の復元は席の pane なので従来どおり注入の門を通る。
+/// 雛形 `template` の穴を口座 `label` の credential dir（`<state_dir>/accounts/<label>`）で埋め、agent view off を前置した
+/// 起動の 1 行（立て直しと `seat launch` の同じ 1 つ・記録にも同じ行が載る）。
+fn launch_line(state_dir: &StateDir, template: &str, label: &str) -> Result<String, Holes> {
+    let account_dir = state_dir.path.join(ACCOUNTS_DIR).join(label);
+    fill_launch(template, &account_dir.display().to_string()).map(|found| with_agent_view_off(&found))
+}
+
+/// lock を握っている間の手順: 起動の 1 本（[`boot`]）に「立ち上がりの直後の登録 row の更新」を挟む。
 ///
 /// 登録 row は**立ち上がりを確かめた直後**に更新する: 起動が届いた席は選んだ口座で走っており、復元を
 /// 確かめられない周でも row が旧い口座を名乗ると、選定の除外と次の周の逼迫度が別の口座を見る。
 /// 成功と数えるのは復元が**消費された**周だけ（[`send_restore`] と同じ・立ち上がった直後の席に turn は無い）。
 fn relaunch_held(request: &Relaunch, dir: &Path, launch: &str, label: &str) -> Relaunched {
-    let Some(pane) = super::tmux_stdout(request.socket, &["capture-pane", "-p", "-J", "-t", request.target]) else {
-        return Relaunched::Refused(REASON_PANE_MISSING);
+    let common = Boot {
+        target: request.target,
+        socket: request.socket,
+        state_dir: request.state_dir,
+        restore: Some(request.restore.unwrap_or(DEFAULT_RESTORE)),
+        settle: request.settle,
+        step: request.step,
+    };
+    let relabel = || role::relabel(&request.state_dir.path, request.row, label).map(|_| ()).map_err(|_| REASON_REGISTER);
+    match boot(&common, dir, (launch, WHEN_RELAUNCH), relabel) {
+        Booted::Done(Some(inject::Settled::Consumed)) => Relaunched::Done(label.to_owned(), inject::Settled::Consumed),
+        Booted::Done(_) => Relaunched::Failed(REASON_RESTORE),
+        Booted::Refused(reason) => Relaunched::Refused(reason),
+        Booted::Failed(reason) => Relaunched::Failed(reason),
+    }
+}
+
+/// 起動の注入の共通の入力（立て直し [`Relaunch`] と席の起動 [`Launch`] が同じ 1 本 [`boot`] に渡す）。
+struct Boot<'a> {
+    /// tmux target（前面が shell の pane）。
+    target: &'a str,
+    /// tmux の socket。
+    socket: Option<&'a str>,
+    /// 解決済みの置き場（打刻と記録の置き場）。
+    state_dir: &'a StateDir,
+    /// 立ち上がった後に送る復元 command（`None` は送らない＝`seat launch` の `--restore` 無し）。
+    restore: Option<&'a str>,
+    /// 立ち上がりと復元の確認上限（rules 行 `seat.cycle_settle_s`）。
+    settle: Duration,
+    /// 確認の周期（rules 行 `seat.cycle_poll_ms`）。
+    step: Duration,
+}
+
+/// 起動の 1 本の結果（**「送っていない」と「送ったが確かめられない」を分ける**・[`Relaunched`] と同じ極性）。
+enum Booted {
+    /// 起動が届いて立ち上がりを確かめた（復元を送った周はその消費・送らない周は `None`）。
+    Done(Option<inject::Settled>),
+    /// **1 key も送っていない**。
+    Refused(&'static str),
+    /// 送ったが確かめられない。
+    Failed(&'static str),
+}
+
+/// 起動の注入の **1 本**（順序固定・立て直しと `seat launch` の共通の経路・account-lifecycle.md §4）: shell の入力欄の門 →
+/// 起動行（`(line, when)`）を送って記録 → 立ち上がりの確認 → `between`（立て直しは登録 row の更新・起動は何もしない）→
+/// 復元。
+///
+/// 起動は**前面が shell の pane** へ撃つので、門は席の `❯` の行（[`inject::guard_input`]）でなく shell の prompt 末尾
+/// （[`super::shell_input_empty`]・account-autonomy.md §5「shell への注入の門」・`s2-07l.218`）で見る。断りの字面は
+/// cycle の門と同じ `input-busy` / `input-unknown`。立ち上がった後の復元は席の pane なので従来どおり注入の門を通る。
+fn boot(common: &Boot, dir: &Path, (line, when): (&str, &str), between: impl FnOnce() -> Result<(), &'static str>) -> Booted {
+    let Some(pane) = super::tmux_stdout(common.socket, &["capture-pane", "-p", "-J", "-t", common.target]) else {
+        return Booted::Refused(REASON_PANE_MISSING);
     };
     match super::shell_input_empty(&pane) {
         Ok(()) => {}
-        Err(inject::InputGate::Busy) => return Relaunched::Refused(REASON_INPUT_BUSY),
-        Err(inject::InputGate::UnknownInput) => return Relaunched::Refused(REASON_INPUT_UNKNOWN),
+        Err(inject::InputGate::Busy) => return Booted::Refused(REASON_INPUT_BUSY),
+        Err(inject::InputGate::UnknownInput) => return Booted::Refused(REASON_INPUT_UNKNOWN),
     }
     let baseline = state::baseline(dir);
     let since = state::now_secs();
     let started_at = Instant::now();
-    if !send_to(request.socket, request.target, launch) {
-        return Relaunched::Failed(inject::REASON_TMUX_FAILED);
+    if !send_to(common.socket, common.target, line) {
+        return Booted::Failed(inject::REASON_TMUX_FAILED);
     }
-    record_sent(request.state_dir, request.target, (launch, WHEN_RELAUNCH), started_at);
-    if !started(dir, (baseline, since), request.settle, request.step) {
-        return Relaunched::Failed(REASON_LAUNCH);
+    record_sent(common.state_dir, common.target, (line, when), started_at);
+    if !started(dir, (baseline, since), common.settle, common.step) {
+        return Booted::Failed(REASON_LAUNCH);
     }
-    if role::relabel(&request.state_dir.path, request.row, label).is_err() {
-        return Relaunched::Failed(REASON_REGISTER);
+    if let Err(reason) = between() {
+        return Booted::Failed(reason);
     }
-    match restore_when_ready(request) {
-        Some(inject::Settled::Consumed) => Relaunched::Done(label.to_owned(), inject::Settled::Consumed),
-        Some(_) | None => Relaunched::Failed(REASON_RESTORE),
+    match common.restore {
+        None => Booted::Done(None),
+        Some(payload) => restore_when_ready(common, payload).map_or(Booted::Failed(REASON_RESTORE), |settled| Booted::Done(Some(settled))),
     }
 }
 
-/// 復元 command を注入する（FR28・既定 [`DEFAULT_RESTORE`]）。立ち上がった直後の席は入力欄を描き終える前があり、
-/// 入力欄の門は **1 key も送らずに断る**ので、窓（`settle`）の内は刻み（`step`）ごとに送り直す（断りは送って
+/// 復元 command を注入する（FR28・立て直しの既定は [`DEFAULT_RESTORE`]）。立ち上がった直後の席は入力欄を描き終える前が
+/// あり、入力欄の門は **1 key も送らずに断る**ので、窓（`settle`）の内は刻み（`step`）ごとに送り直す（断りは送って
 /// いない＝二重投函にならない）。送達した周の消費を返し、窓の内に送達できない周は `None`。
-fn restore_when_ready(request: &Relaunch) -> Option<inject::Settled> {
-    let payload = request.restore.unwrap_or(DEFAULT_RESTORE);
-    let deadline = Instant::now().checked_add(request.settle);
+fn restore_when_ready(common: &Boot, payload: &str) -> Option<inject::Settled> {
+    let deadline = Instant::now().checked_add(common.settle);
     loop {
-        match inject::deliver_within(&sending(request, payload), request.settle) {
+        match inject::deliver_within(&sending(common, payload), common.settle) {
             inject::Delivery::Delivered(_, settled) => return Some(settled),
             inject::Delivery::Unconfirmed(_) => return None,
             inject::Delivery::Refused(_) => {}
@@ -656,7 +733,7 @@ fn restore_when_ready(request: &Relaunch) -> Option<inject::Settled> {
         if !deadline.is_some_and(|at| Instant::now() < at) {
             return None;
         }
-        sleep(request.step);
+        sleep(common.step);
     }
 }
 
@@ -697,19 +774,258 @@ fn record_sent(state_dir: &StateDir, target: &str, (what, when): (&str, &str), s
 }
 
 /// 復元の 1 行を送る注入の入力（`seat inject` と同じ経路・記録は席の `tick.jsonl`）。
-fn sending<'r>(request: &Relaunch<'r>, payload: &'r str) -> inject::Request<'r> {
+fn sending<'r>(common: &Boot<'r>, payload: &'r str) -> inject::Request<'r> {
     inject::Request {
+        target: common.target,
+        socket: common.socket,
+        payload,
+        state_dir: Some(common.state_dir),
+    }
+}
+
+/// 起動行の導出（**pure**・設計 account-lifecycle.md §4・ADR-0026 §2.3）:
+/// `CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CONFIG_DIR={account_dir} claude --plugin-dir <anchor> [--plugin-dir <dir>…] [<value>…]`。
+///
+/// 穴は [`HOLE`] の 1 つだけ（[`fill_launch`] / [`Holes`] は不変）。`claude` は語（shell の PATH が解く・器は claude の
+/// 場所を持たない）。器自身の plugin は anchor（main checkout・`plugin.json` を持つ）を積み、host 固有の plugin dir と
+/// 起動引数は host の面の宣言（`[[plugin]]` / `[[launch-arg]]`・宣言順）から写す（C10.2）。雛形 file は読まない・
+/// 書かない。値の中の空白は解釈しない（shell が読む字面をそのまま並べる）。
+pub fn derive_launch(anchor: &Path, plugins: &[PluginDir], args: &[LaunchArg]) -> String {
+    let mut words = vec![
+        format!("{AGENT_VIEW_ENV}={AGENT_VIEW_OFF}"),
+        format!("{ACCOUNT_ENV}={HOLE}"),
+        DEFAULT_CLAUDE.to_owned(),
+        "--plugin-dir".to_owned(),
+        anchor.display().to_string(),
+    ];
+    for plugin in plugins {
+        words.push("--plugin-dir".to_owned());
+        words.push(plugin.dir().to_owned());
+    }
+    words.extend(args.iter().map(|arg| arg.value().to_owned()));
+    words.join(" ")
+}
+
+/// 席の起動 1 回の入力（[`launch`]・`seat launch`・account-lifecycle.md §4）。
+pub struct Launch<'a> {
+    /// tmux target（`session:window`・window は無ければ作る・session は作らない）。
+    pub target: &'a str,
+    /// tmux の socket。
+    pub socket: Option<&'a str>,
+    /// 解決済みの置き場（credential dir・event log・打刻の置き場）。
+    pub state_dir: &'a StateDir,
+    /// 立ち上がった後に送る復元 command（`--restore`・無ければ送らない）。
+    pub restore: Option<&'a str>,
+    /// 立ち上がりと復元の確認上限（rules 行 `seat.cycle_settle_s`）。
+    pub settle: Duration,
+    /// 確認の周期（rules 行 `seat.cycle_poll_ms`）。
+    pub step: Duration,
+    /// 席の役割（登録 row の鍵の片方・`--role`）。
+    pub role: Role,
+    /// 登録 row の anchor（絶対 path・`--anchor` か cwd の repo root・起動行の `--plugin-dir` の 1 つ目）。
+    pub anchor: &'a Path,
+    /// 明示の口座（`--account`・無ければ session 用の選定）。
+    pub account: Option<&'a str>,
+    /// 席の model（`--model`・登録 row と選定の両方に渡す）。
+    pub model: Option<&'a str>,
+    /// 開いた manifest（tracked + host の面・`[[account]]` / `[[plugin]]` / `[[launch-arg]]` の出所）。
+    pub manifest: &'a Manifest,
+    /// R-C9-1 の値（session 用の閾値）。
+    pub threshold_pct: u64,
+}
+
+/// 席の起動 1 回の結果。**「送っていない」と「送ったが確かめられない」を分ける**（[`Relaunched`] と同じ）。
+pub enum Launched {
+    /// 起動行を注入して立ち上がりを確かめた（選んだ label・`--restore` を送った周はその消費）。
+    Done(String, Option<inject::Settled>),
+    /// 選べる口座が無い（**1 key も送らず row も書かない**）。
+    None(NoCandidate),
+    /// **1 key も送っていない**（row は理由による: `session-missing` 以前は書かない・門で止まる周は書き終えている）。
+    Refused(&'static str),
+    /// 送ったが確かめられない。
+    Failed(&'static str),
+}
+
+/// 席を起こす（設計 account-lifecycle.md §4・ADR-0026 §2.3・SRS FR59 / FR40 / FR36）: 口座を決め（`--account` か
+/// session 用の選定 [`choose`]）→ session の実在（無ければ `session-missing`・作らない）→ 登録 row を**先に**書く
+/// （[`role::register`]・`sid` 無し・打刻の条件は掛けない・`launch` = 導出した行）→ window（無ければ `new-window`）→
+/// 立て直しと同じ 1 本（[`boot`]）で穴を埋めた起動行を shell へ注入し、`--restore` が在れば復元を送る → `inject.jsonl` に
+/// `kind=launch` を 1 行。lock も cycle-stamp も取らない（tick の back-off は立て直しのもので、起動は user の手番）。
+pub fn launch(request: &Launch) -> Launched {
+    let started_at = Instant::now();
+    let label = match pick_account(request) {
+        Ok(label) => label,
+        Err(refused) => return refused,
+    };
+    let derived = match prepare(request, &label) {
+        Ok(found) => found,
+        Err(reason) => return Launched::Refused(reason),
+    };
+    let line = match launch_line(request.state_dir, &derived, &label) {
+        Ok(found) => found,
+        Err(holes) => return Launched::Refused(holes.as_str()),
+    };
+    let common = Boot {
         target: request.target,
         socket: request.socket,
-        payload,
-        state_dir: Some(request.state_dir),
+        state_dir: request.state_dir,
+        restore: request.restore,
+        settle: request.settle,
+        step: request.step,
+    };
+    let dir = super::seat_dir(&request.state_dir.path, request.target);
+    let booted = boot(&common, &dir, (&line, WHEN_LAUNCH), || Ok(()));
+    if !matches!(booted, Booted::Refused(_)) {
+        record_launch(request, &label, started_at);
+    }
+    match booted {
+        Booted::Done(Some(inject::Settled::Consumed)) => Launched::Done(label, Some(inject::Settled::Consumed)),
+        Booted::Done(None) => Launched::Done(label, None),
+        Booted::Done(Some(_)) => Launched::Failed(REASON_RESTORE),
+        Booted::Refused(reason) => Launched::Refused(reason),
+        Booted::Failed(reason) => Launched::Failed(reason),
+    }
+}
+
+/// 口座を決める: `--account` は宣言（開いた manifest の `[[account]]`）に在る label だけ（無ければ `account-unknown`）・
+/// 無ければ session 用の選定（除外 = 他の席の登録 row の口座・候補なしは [`Launched::None`]）。event log を読めない周は
+/// 選定に入らず断る。**ここまでは row も key も書かない**。
+fn pick_account(request: &Launch) -> Result<String, Launched> {
+    let labels: Vec<String> = request.manifest.accounts().iter().map(|account| account.label().to_owned()).collect();
+    if let Some(label) = request.account {
+        return labels.iter().any(|found| found == label).then(|| label.to_owned()).ok_or(Launched::Refused(REASON_ACCOUNT_UNKNOWN));
+    }
+    let events = store::read_all(&request.state_dir.path).map_err(|_| Launched::Refused(REASON_LOG_UNREADABLE))?;
+    let state = replay(&events);
+    let anchor = request.anchor.display().to_string();
+    match choose((request.role, anchor.as_str()), &state, &labels, request.model, request.threshold_pct) {
+        Selection::Chosen(label) => Ok(label),
+        Selection::None(found) => Err(Launched::None(found)),
+    }
+}
+
+/// 起動行を送る前の 3 手（順序固定）: session の実在（無ければ `session-missing`・**row を書かない**）→ 登録 row を
+/// 先に書く（`sid` 無し・`launch` = 導出した行）→ window（[`open_window`]）。導出した行（穴を埋める前）を返す。
+fn prepare(request: &Launch, label: &str) -> Result<String, &'static str> {
+    let Some((session, window)) = request.target.split_once(':') else {
+        return Err(REASON_SESSION_MISSING);
+    };
+    if super::tmux_stdout(request.socket, &["has-session", "-t", &format!("={session}")]).is_none() {
+        return Err(REASON_SESSION_MISSING);
+    }
+    let derived = derive_launch(request.anchor, request.manifest.plugins(), request.manifest.launch_args());
+    let row = Registration {
+        role: request.role,
+        anchor: request.anchor.display().to_string(),
+        target: request.target.to_owned(),
+        sid: None,
+        account: label.to_owned(),
+        launch: derived.clone(),
+        model: request.model.map(str::to_owned),
+    };
+    role::register(&request.state_dir.path, row).map_err(|_| REASON_REGISTER)?;
+    open_window(request, session, window)?;
+    Ok(derived)
+}
+
+/// window を用意する: 無ければ `new-window -t <session> -n <window>` で作り、shell の prompt が描かれるまで窓（`settle`）の内で
+/// 待つ（作った直後の空の pane は門が `input-unknown` で断るので、門の前に描画を待つ・門の判定そのものは [`boot`]）。
+/// 在れば前面 process が shell であることだけを確かめる（走っている席へ起動行を送らない・`not-a-shell`）。
+///
+/// session は `=<session>:` で名指す: `=` は前方一致でない exact の名・末尾の `:` は「その session の次の空き index」
+/// （`-t <session>` の裸の名は、session と同じ名の window が在る周に **window** として解決され `index in use` で落ちる・
+/// 実測 2026-09-14 tmux 3.6b）。
+fn open_window(request: &Launch, session: &str, window: &str) -> Result<(), &'static str> {
+    let exact = format!("={session}");
+    let windows = super::tmux_stdout(request.socket, &["list-windows", "-t", &exact, "-F", "#{window_name}"]).unwrap_or_default();
+    if windows.lines().any(|found| found == window) {
+        return super::pane_is_shell(request.socket, request.target).then_some(()).ok_or(REASON_NOT_SHELL);
+    }
+    if !tmux_ok(request.socket, &["new-window", "-t", &format!("{exact}:"), "-n", window]) {
+        return Err(REASON_WINDOW);
+    }
+    let deadline = Instant::now().checked_add(request.settle);
+    while deadline.is_some_and(|at| Instant::now() < at) {
+        let pane = super::tmux_stdout(request.socket, &["capture-pane", "-p", "-J", "-t", request.target]);
+        if pane.is_some_and(|found| super::shell_input_empty(&found).is_ok()) {
+            break;
+        }
+        sleep(request.step);
+    }
+    Ok(())
+}
+
+/// 起動を `inject.jsonl` に 1 行記録する（`who=seat-launch`・`what` は tick の判定行と同じ `decision=inject … kind=launch`
+/// の形＝tick の立て直しの入口 (1) が「直近の注入」として読む・`when=launch`）。**置き場へ書けない周も結果を変えない**。
+fn record_launch(request: &Launch, label: &str, started: Instant) {
+    let kind = super::tick::InjectKind::Launch.as_str();
+    let what = format!("decision=inject target={} kind={kind} account={label}", sanitize_target(request.target));
+    let entry = InjectionRecord {
+        schema: SCHEMA,
+        who: WHO_LAUNCH.to_owned(),
+        bytes: what.len() as u64,
+        what,
+        when: WHEN_LAUNCH.to_owned(),
+        // 数えていないことを 0 と書かない。
+        tokens: None,
+        wall_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+        seat: seat_name(request.target),
+        ts: state::now_secs(),
+    };
+    let _ = crate::hook::append(&request.state_dir.path, &entry);
+}
+
+/// `seat launch` の 1 行（成立・断り・失敗）。置き場の 2 語を末尾に載せる（cycle と同じ規律）。
+pub fn render_launched(target: &str, result: &Launched, state: &StateDir) -> String {
+    let suffix = state.suffix();
+    let target = sanitize_target(target);
+    match result {
+        Launched::Done(label, None) => format!("seat launch: launched target={target} account={label}{suffix}"),
+        Launched::Done(label, Some(settled)) => {
+            format!("seat launch: launched target={target} account={label} consumed={}{suffix}", settled.as_str())
+        }
+        Launched::None(found) => {
+            format!("seat launch: refused reason={REASON_NO_ACCOUNT} detail={} target={target}{suffix}", found.reason.as_str())
+        }
+        Launched::Refused(reason) => format!("seat launch: refused reason={reason} target={target}{suffix}"),
+        Launched::Failed(reason) => format!("seat launch: failed reason={reason} target={target}{suffix}"),
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{fill_launch, with_agent_view_off, Holes, HOLES};
+    use super::{derive_launch, fill_launch, with_agent_view_off, Holes, HOLE, HOLES};
     use crate::order::is_declaration_order;
+    use crate::rules::manifest::Manifest;
+    use std::path::Path;
+
+    /// 起動行の導出（契約 (6f)・account-lifecycle.md §4）: 穴は `{account_dir}` の 1 つ（[`fill_launch`] がそのまま埋める）・
+    /// 順序は agent view off → 口座の env → `claude` → anchor の `--plugin-dir` → `[[plugin]]` の dir（宣言順）→
+    /// `[[launch-arg]]` の value（宣言順）。plugin 0 件・引数 0 件は anchor の `--plugin-dir` だけで終わる。
+    #[test]
+    fn seat_launch_derive_line_orders_anchor_plugins_and_args_with_one_hole() {
+        let host = "schema = 1\n\n[[plugin]]\ndir = \"/opt/p2\"\n\n[[launch-arg]]\nvalue = \"--permission-mode\"\n\n\
+                    [[plugin]]\ndir = \"/opt/p1\"\n\n[[launch-arg]]\nvalue = \"bypassPermissions\"\n";
+        let manifest = Manifest::parse(host).unwrap_or_default();
+        assert_eq!(manifest.plugins().len(), 2, "fixture が読める");
+        let line = derive_launch(Path::new("/repo/main"), manifest.plugins(), manifest.launch_args());
+        assert_eq!(
+            line,
+            "CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CONFIG_DIR={account_dir} claude --plugin-dir /repo/main \
+             --plugin-dir /opt/p2 --plugin-dir /opt/p1 --permission-mode bypassPermissions",
+            "宣言順（p2 → p1・--permission-mode → bypassPermissions）"
+        );
+        assert_eq!(line.matches(HOLE).count(), 1, "穴は 1 つ");
+        assert_eq!(
+            fill_launch(&line, "/state/accounts/a2").as_deref(),
+            Ok("CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CONFIG_DIR=/state/accounts/a2 claude --plugin-dir /repo/main \
+                --plugin-dir /opt/p2 --plugin-dir /opt/p1 --permission-mode bypassPermissions"),
+            "穴は既存の fill_launch で埋まる"
+        );
+        assert_eq!(with_agent_view_off(&line), line, "前置は既に在る（二重にしない）");
+        let bare = derive_launch(Path::new("/repo/main"), &[], &[]);
+        assert_eq!(bare, "CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CONFIG_DIR={account_dir} claude --plugin-dir /repo/main");
+    }
 
     /// 起動行の先頭に agent view を切る env を 1 つだけ前置する: 行の中身は変えず、既に前置済みの行は二重にせず、空の行は
     /// そのまま（契約 (c)・`s2-07l.239`）。

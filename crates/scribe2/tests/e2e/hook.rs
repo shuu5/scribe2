@@ -2252,7 +2252,7 @@ fn brief_registration(role: Role, target: &str, anchor: &str) -> Registration {
         role,
         anchor: anchor.to_owned(),
         target: target.to_owned(),
-        sid: "sid-brief".to_owned(),
+        sid: Some("sid-brief".to_owned()),
         account: "a1".to_owned(),
         launch: "claude\n".to_owned(),
         model: None,

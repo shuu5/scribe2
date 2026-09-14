@@ -6729,7 +6729,7 @@ fn register_seat_account(state: &Path, account: &str) {
             role: vessel::seat::role::Role::Planner,
             anchor: "/repo/anchor".to_owned(),
             target: "rs:planner".to_owned(),
-            sid: "sid-a".to_owned(),
+            sid: Some("sid-a".to_owned()),
             account: account.to_owned(),
             launch: "launch {credential-dir}\n".to_owned(),
             model: None,
