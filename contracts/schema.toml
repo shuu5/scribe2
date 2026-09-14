@@ -1,0 +1,62 @@
+# 契約表の行の欄（生成物: `scribe2 contracts schema` の出力・手で直さない・正本は core の pipe/table.rs の FIELDS）
+schema = 1
+
+[[field]]
+name = "id"
+need = "required"
+shape = "text"
+
+[[field]]
+name = "title"
+need = "required"
+shape = "text"
+
+[[field]]
+name = "req"
+need = "required"
+shape = "list"
+
+[[field]]
+name = "section"
+need = "required"
+shape = "text"
+
+[[field]]
+name = "touches"
+need = "optional"
+shape = "list"
+
+[[field]]
+name = "write-set"
+need = "required"
+shape = "list"
+
+[[field]]
+name = "verify"
+need = "required"
+shape = "list"
+
+[[field]]
+name = "size"
+need = "required"
+shape = "text"
+
+[[field]]
+name = "done"
+need = "required"
+shape = "text"
+
+[[field]]
+name = "depends"
+need = "optional"
+shape = "list"
+
+[[field]]
+name = "classes"
+need = "optional"
+shape = "list"
+
+[[field]]
+name = "opens"
+need = "optional"
+shape = "list"

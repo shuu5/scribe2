@@ -126,8 +126,8 @@ fn polarity_lists_the_three_added_guards() {
     }
     assert_eq!(
         ALL.len(),
-        22,
-        "母集団は 22（10 + 3 + 質問の口 1・`s2-07l.115` + land の 2・`s2-07l.124` + 入口の排他 1・`s2-07l.145` + 追随の回数 1・`s2-07l.146` + 退避の断り 1・`s2-07l.139` + 消費の断り 1・`s2-07l.141` + 登録の断り 1・`s2-07l.192` + 権能の執行 1・`s2-07l.201`）"
+        23,
+        "母集団は 23（10 + 3 + 質問の口 1・`s2-07l.115` + land の 2・`s2-07l.124` + 入口の排他 1・`s2-07l.145` + 追随の回数 1・`s2-07l.146` + 退避の断り 1・`s2-07l.139` + 消費の断り 1・`s2-07l.141` + 登録の断り 1・`s2-07l.192` + 権能の執行 1・`s2-07l.201` + 契約表の検査 1・`s2-07l.208`）"
     );
 }
 
@@ -225,7 +225,33 @@ fn polarity_lists_land_anchor_sync_and_retire_clean_as_in_loop_fail_closed() {
     assert_eq!(in_loop, 19, "in-loop の行数: {text}");
     let summary = text.lines().last().unwrap_or_default();
     assert_eq!(count_of(summary, "in-loop"), Some(19), "集計 +2（+ .145 / .146 / .139 / .141 / .192 / .201 の 各 1）: {summary}");
-    assert_eq!(count_of(summary, "guards"), Some(22), "母集団 +2（+ .145 / .146 / .139 / .141 / .192 / .201 の 各 1）: {summary}");
+    assert_eq!(count_of(summary, "guards"), Some(23), "母集団 +2（+ .145 / .146 / .139 / .141 / .192 / .201 / .208 の 各 1）: {summary}");
+}
+
+/// 契約表の検査（`s2-07l.208`・設計 contract-source.md §8・ADR-0014 §2.1）は **post-hoc / fail-closed** で一覧に載る
+/// （本便は CI の `contracts check` だけ・in-loop の側は契約 (b) の intake が同じ関数で担う）。値は境界の定数
+/// （`pipe::table::POLARITY`）で、一覧はそれを返すだけ。権能の執行の**直後**・intake の断りの**直前**に並ぶ。
+#[test]
+fn polarity_lists_contract_table_as_a_post_hoc_fail_closed_guard() {
+    let closed = Polarity { timing: Timing::PostHoc, on_failure: OnFailure::FailClosed };
+    assert_eq!(Guard::ContractTable.polarity(), closed, "CI が測って落とし、読めない表は通さない");
+    let table: Polarity = vessel::pipe::table::POLARITY;
+    assert_eq!(Guard::ContractTable.polarity(), table, "境界の定数と同じ値");
+    let type_name = std::any::type_name::<vessel::pipe::table::TableError>();
+    assert!(type_name.ends_with(Guard::ContractTable.boundary()), "boundary は enum を名指す: {type_name}");
+    let text = output();
+    let expected = "guard=contract-table timing=post-hoc on-failure=fail-closed boundary=pipe::table::TableError";
+    assert_eq!(text.lines().filter(|line| *line == expected).count(), 1, "一覧に 1 行で載る: {expected}\n{text}");
+    let names: Vec<&str> = text.lines().filter_map(|line| line.split(' ').next()).collect();
+    let at = |name: &str| names.iter().position(|found| *found == name);
+    let (role, table, intake) = (at("guard=role-guard"), at("guard=contract-table"), at("guard=intake-unfit"));
+    assert!(
+        matches!((role, table, intake), (Some(r), Some(t), Some(i)) if t == r + 1 && i == t + 1),
+        "role-guard の直後・intake-unfit の直前: {names:?}"
+    );
+    let summary = text.lines().last().unwrap_or_default();
+    assert_eq!(count_of(summary, "guards"), Some(23), "母集団 +1: {summary}");
+    assert_eq!(count_of(summary, "post-hoc"), Some(4), "post-hoc +1（gate の 2・land の main 実測・契約表）: {summary}");
 }
 
 /// 席の権能の執行（`s2-07l.201`・設計 seat-roles.md §4 / §6・ADR-0022 §2.3）は **in-loop / fail-closed** で一覧に

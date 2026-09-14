@@ -6,5 +6,5 @@ scribe2
 scribe2 [version]
 host-manifest=present
 account=acct dir=present credential=present config=missing agentview=unreadable trust=_repo_a:accepted trust=_repo_b:unreadable
-usage: scribe2 <name|--version|doctor|rules|fleet|vessel|hook|pipe|runner|lens|seat|polarity>
+usage: scribe2 <name|--version|doctor|rules|fleet|vessel|hook|pipe|runner|lens|seat|polarity|contracts>
 scribe2 [version]

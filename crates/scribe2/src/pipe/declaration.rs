@@ -25,7 +25,14 @@ pub const CEILING_ROW: &str = "runner.allowed_commands";
 const SCHEMA_VERSION: u64 = 1;
 
 /// 宣言が持つ key（この順で報告する）。
-const DECLARED_KEYS: &[&str] = &["schema", "allowed-commands", "common-verify", DETECTION_KEY];
+const DECLARED_KEYS: &[&str] = &["schema", "allowed-commands", "common-verify", DETECTION_KEY, REQUIREMENTS_KEY];
+
+/// **要件面の path** の key（任意・設計 contract-source.md §2「表の検査」）。契約表の `req` の id をこの file で
+/// 測る。書かない宣言は [`DEFAULT_REQUIREMENTS`] を読む（既存の宣言を 1 行も変えさせない）。
+const REQUIREMENTS_KEY: &str = "requirements";
+
+/// 要件面の既定 path（宣言 `requirements` が無い周）。
+pub const DEFAULT_REQUIREMENTS: &str = "design-intent/spec/srs.html";
 
 /// 便の写しが持つ key（宣言の 4 つ + 出所 3 つ）。
 const EFFECTIVE_KEYS: &[&str] = &[
@@ -47,7 +54,7 @@ const DETECTION_KEY: &str = "detection-verify";
 /// **書かなくてよい** key（無ければ空）。書いた周の空配列は従来どおり不備である（ADR-0010 §2.1）。
 ///
 /// 任意にするのは、検出線を持たない consumer（toy repo 等）の宣言を 1 行も変えさせないためである。
-const OPTIONAL_KEYS: &[&str] = &[DETECTION_KEY];
+const OPTIONAL_KEYS: &[&str] = &[DETECTION_KEY, REQUIREMENTS_KEY];
 
 /// shell が意味を変える文字。**1 行 1 command の粒度**はここで守る——gate と land は行を
 /// `sh -c` で撃つので、先頭語だけを見ても包みや連結を止められない（ADR-0010 §2.3）。
@@ -179,6 +186,8 @@ pub struct Declared {
     common_line: u64,
     /// `detection-verify` が書かれていた行（無ければ 0）。
     detection_line: u64,
+    /// 要件面の repo 相対 path（任意・無ければ `None`）。
+    requirements: Option<String>,
 }
 
 /// 出所つきの宣言。**[`Effective`] はこれを消費してしか作れない**（C10）。
@@ -380,6 +389,7 @@ impl Declared {
         let (allowed, allowed_line) = list_of(&found, "allowed-commands", &mut errors);
         let (common_verify, common_line) = list_of(&found, "common-verify", &mut errors);
         let (detection_verify, detection_line) = list_of(&found, DETECTION_KEY, &mut errors);
+        let requirements = requirements_of(&found, &mut errors);
         if schema != Some(SCHEMA_VERSION) {
             errors.push(DeclError::new(
                 0,
@@ -394,11 +404,55 @@ impl Declared {
                 allowed_line,
                 common_line,
                 detection_line,
+                requirements,
             })
         } else {
             Err(errors)
         }
     }
+}
+
+/// 要件面の path（任意）。書いた周は repo 相対の path の文字列だけを受ける（repo の外を読まない）。
+fn requirements_of(found: &[(String, Raw, u64)], errors: &mut Vec<DeclError>) -> Option<String> {
+    let (_, value, line) = found.iter().find(|(seen, _, _)| seen == REQUIREMENTS_KEY)?;
+    match value {
+        Raw::Text(path) if repo_relative(path) => Some(path.clone()),
+        _ => {
+            errors.push(DeclError::new(
+                *line,
+                format!("{REQUIREMENTS_KEY} は repo 相対の path の文字列である（空・絶対 path・home の短縮記号・.. は書けない）"),
+            ));
+            None
+        }
+    }
+}
+
+/// repo 相対の path か（空でない・絶対 path でない・home の短縮記号も `..` の段も持たない）。
+fn repo_relative(path: &str) -> bool {
+    !path.trim().is_empty() && !path.starts_with('/') && !path.contains('~') && !path.split('/').any(|part| part == "..")
+}
+
+/// 契約表の検査（`contracts check`）が読む宣言の事実（設計 contract-source.md §2「表の検査」）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TableFacts {
+    /// 上限と突き合わせた allowlist（verify 行の先頭語の基準）。
+    pub allowed: Vec<String>,
+    /// 要件面の repo 相対 path（宣言 `requirements`・無ければ [`DEFAULT_REQUIREMENTS`]）。
+    pub requirements: String,
+}
+
+/// HEAD の宣言を読み、上限と突き合わせて契約表の検査の事実にする（intake と同じ読み口・作業ツリーは読まない）。
+pub fn table_facts(repo: &Path, ceiling: &Ceiling<'_>) -> Result<TableFacts, Vec<DeclError>> {
+    let sourced = Sourced::read(repo, ceiling)?;
+    let requirements = sourced.declared.requirements.clone().unwrap_or_else(|| DEFAULT_REQUIREMENTS.to_owned());
+    let effective = sourced.measure(ceiling.commands, &[])?;
+    Ok(TableFacts { allowed: effective.allowed, requirements })
+}
+
+/// 契約の verify 1 行が argv 1 本として撃てない理由（撃てれば `None`）。判定は [`unfit`] の 1 本で、契約の行は
+/// 穴を持てない（intake の契約 verify と同じ字面で断る）。
+pub fn verify_unfit(line: &str, allowed: &[String]) -> Option<String> {
+    unfit(line, allowed, Holes::None).map(|found| found.reason(allowed))
 }
 
 impl Effective {
@@ -666,6 +720,22 @@ mod tests {
         let empty = format!("{}detection-verify = []\n", body(r#"["cargo"]"#, r#"["cargo xtask check"]"#));
         let errors = Declared::parse(&empty).expect_err("書いた空配列は不備");
         assert!(errors.iter().any(|error| error.reason.contains("配列が空である")), "{errors:?}");
+    }
+
+    /// `requirements` は**任意 key**（無い宣言は通り既定の要件面を読む）で、書いた周は repo 相対の path だけを
+    /// 受ける（設計 contract-source.md §2）。綴り違いの key は従来どおり未知 key として断る。
+    #[test]
+    fn declaration_requirements_is_an_optional_repo_relative_path() {
+        let base = body(r#"["cargo"]"#, r#"["cargo xtask check"]"#);
+        assert_eq!(Declared::parse(&base).expect("key 無しは通る").requirements, None, "無い key は None");
+        let set = Declared::parse(&format!("{base}requirements = \"spec/reqs.yaml\"\n")).expect("path は通る");
+        assert_eq!(set.requirements.as_deref(), Some("spec/reqs.yaml"), "書いた path");
+        for bad in ["\"\"", "\"/etc/reqs.yaml\"", "\"../up/srs.html\"", "\"a/~x.html\"", "[\"a\"]", "1"] {
+            let errors = Declared::parse(&format!("{base}requirements = {bad}\n")).expect_err("repo 相対の path でない");
+            assert!(errors.iter().any(|error| error.reason.contains("requirements") && error.line == 4), "{bad}: {errors:?}");
+        }
+        let typo = Declared::parse(&format!("{base}requirement = \"x.html\"\n")).expect_err("綴り違いは未知 key");
+        assert!(typo.iter().any(|error| error.reason.contains("未知の key requirement")), "{typo:?}");
     }
 
     /// schema は 1 だけ。**整数でない schema も断る**（型の取り違えを黙って通さない）。

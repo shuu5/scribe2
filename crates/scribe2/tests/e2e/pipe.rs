@@ -8973,3 +8973,244 @@ fn pipe_detection_intake_refuses_unfit_lines() {
     assert_eq!(ok.status.code(), Some(i32::from(RC_OK)), "検査を通る検出線は読める: {}", stderr_of(&ok));
     clean(&[&repo, &state]);
 }
+
+// ─────────────────── 契約表（設計 docs/design/contract-source.md §2 / §3 / §9・`s2-07l.208`・接頭辞 `contract_`） ───────────────────
+
+/// 契約表の toy repo の要件面（要件 id の anchor 3 つ・引用符は 2 形）。
+const TABLE_SRS: &str = "<html><body>\n<p id=\"FR1\">1</p>\n<p id=\"FR2\">2</p>\n<p id='AC1'>3</p>\n</body></html>\n";
+
+/// toy repo の閉じた型 `crate::tint::Tint`（const slice `TINTS` の宣言 file）。
+const TABLE_TINT: &str = "pub enum Tint {\n    Warm,\n    Cool,\n}\n\npub const TINTS: &[Tint] = &[Tint::Warm, Tint::Cool];\n";
+
+/// toy repo の `Tint` の match の arm を持つ file。
+const TABLE_SHOW: &str =
+    "use crate::tint::Tint;\n\npub fn show(tint: Tint) -> u8 {\n    match tint {\n        Tint::Warm => 1,\n        Tint::Cool => 2,\n    }\n}\n";
+
+/// toy repo の宣言（allowlist は `git` だけ・要件面は既定）。
+const TABLE_VESSEL: &str = "schema = 1\nallowed-commands = [\"git\"]\ncommon-verify = [\"git status\"]\n";
+
+/// 設計 doc（§1・§2 は本文あり・§3 は本文なし）の末尾に `table` を置く。
+fn table_doc(table: &str) -> String {
+    format!("# 設計: toy\n\n## 1. 何を解くか\n\n本文。\n\n## 2. 型\n\n本文。\n\n## 3. 空の節\n\n{table}")
+}
+
+/// 契約表の 1 行。既定の欄（適合する値）を `over` で差し替え、既定に無い key は末尾に足す。
+fn table_row(id: &str, over: &[(&str, &str)]) -> String {
+    let defaults = [
+        ("title", format!("\"行 {id}\"")),
+        ("req", "[\"FR1\"]".to_owned()),
+        ("section", "\"1\"".to_owned()),
+        ("write-set", "[\"src/lib.rs\"]".to_owned()),
+        ("verify", "[\"git status\"]".to_owned()),
+        ("size", "\"S\"".to_owned()),
+        ("done", format!("\"{id} が通る\"")),
+    ];
+    let mut lines = vec!["[[contract]]".to_owned(), format!("id = \"{id}\"")];
+    for (key, value) in &defaults {
+        let chosen = over.iter().find(|(name, _)| name == key).map_or(value.as_str(), |(_, found)| *found);
+        lines.push(format!("{key} = {chosen}"));
+    }
+    let extra = over.iter().filter(|(name, _)| !defaults.iter().any(|(key, _)| key == name));
+    lines.extend(extra.map(|(key, value)| format!("{key} = {value}")));
+    format!("{}\n", lines.join("\n"))
+}
+
+/// 行を区間で囲む（先頭に `schema = 1`）。
+fn table_region(rows: &[String]) -> String {
+    format!("<!-- contracts:begin -->\nschema = 1\n\n{}<!-- contracts:end -->\n", rows.join("\n"))
+}
+
+/// doc の中で行 `id` の見出し（`[[contract]]`・`id` の行の 1 つ上）が在る物理行番号（1 始まり）。
+fn table_line(doc: &str, id: &str) -> usize {
+    let want = format!("id = \"{id}\"");
+    doc.lines().position(|line| line == want).unwrap_or_default()
+}
+
+/// 契約表の toy repo（宣言・要件面・toy の型・設計 doc `docs/design/toy.md`）を作って commit する。`files` は足す /
+/// 上書きする file。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn table_repo(doc: &str, files: &[(&str, &str)]) -> PathBuf {
+    let repo = tmp();
+    git(&repo, &["init", "-q", "-b", "main"]);
+    git(&repo, &["config", "user.name", "e2e"]);
+    git(&repo, &["config", "user.email", "e2e@example.invalid"]);
+    let seeded = [
+        (".vessel.toml", TABLE_VESSEL),
+        ("design-intent/spec/srs.html", TABLE_SRS),
+        ("src/tint.rs", TABLE_TINT),
+        ("src/show.rs", TABLE_SHOW),
+        ("docs/design/toy.md", doc),
+    ];
+    for (path, body) in seeded.iter().chain(files) {
+        let target = repo.join(path);
+        fs::create_dir_all(target.parent().expect("親 dir が在る")).expect("dir を作れる");
+        fs::write(&target, body).expect("file を書ける");
+    }
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "seed"]);
+    repo
+}
+
+/// `contracts check --repo R` を binary で 1 回撃つ（上限は埋め込みの `runner.allowed_commands`）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn contracts_check(repo: &Path) -> Output {
+    Command::new(bin()).args(["contracts", "check", "--repo"]).arg(repo).output().expect("binary を起動できる")
+}
+
+/// findings の行（`contracts: ` で始まる stdout の行）。
+fn findings_of(out: &Output) -> Vec<String> {
+    stdout_of(out).lines().filter(|line| line.starts_with("contracts: ")).map(str::to_owned).collect()
+}
+
+/// (1) 区間 1 つ・3 行（適合 / 型の構築点を write-set が欠く / 節が無い）の doc で、findings 2 件を `file:line` 付きで
+/// 名指し rc 1・判定行 `docs=1 rows=3 findings=2`。適合だけの doc は rc 0（AC21 の表側）。
+#[test]
+fn contract_check_names_the_incomplete_write_set_and_the_missing_section_with_file_line() {
+    let touches = ("touches", "[\"crate::tint::Tint\"]");
+    let rows = [
+        table_row("a", &[]),
+        table_row("b", &[("section", "\"2\""), ("write-set", "[\"src/tint.rs\"]"), touches]),
+        table_row("c", &[("section", "\"9\"")]),
+    ];
+    let doc = table_doc(&table_region(&rows));
+    let repo = table_repo(&doc, &[]);
+    let out = contracts_check(&repo);
+    let (text, found) = (stdout_of(&out), findings_of(&out));
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "違反 ≥ 1 は rc 1: {text}{}", stderr_of(&out));
+    assert_eq!(found.len(), 2, "2 件ちょうど: {text}");
+    let head = |id: &str| format!("contracts: docs/design/toy.md:{} ", table_line(&doc, id));
+    let incomplete = found.iter().find(|line| line.starts_with(&head("b"))).cloned().unwrap_or_default();
+    assert!(incomplete.contains("write-set-incomplete") && incomplete.contains("src/show.rs"), "閉包の足りない file: {text}");
+    assert!(!incomplete.contains("src/tint.rs"), "write-set に在る file は名指さない: {incomplete}");
+    let section = found.iter().find(|line| line.starts_with(&head("c"))).cloned().unwrap_or_default();
+    assert!(section.contains("contract-table:section-missing"), "節の無い行を名指す: {text}");
+    assert_eq!(text.lines().last(), Some("contracts check: docs=1 rows=3 findings=2"), "判定行: {text}");
+    // 適合だけの doc は rc 0（write-set が閉包を覆えば touches を持つ行も通る）。
+    let covering = ("write-set", "[\"src/tint.rs\", \"src/show.rs\"]");
+    let good = table_repo(&table_doc(&table_region(&[table_row("a", &[]), table_row("b", &[covering, touches])])), &[]);
+    let passed = contracts_check(&good);
+    assert_eq!(passed.status.code(), Some(i32::from(RC_OK)), "適合だけの doc は rc 0: {}", stdout_of(&passed));
+    assert_eq!(stdout_of(&passed).lines().collect::<Vec<&str>>(), ["contracts check: docs=1 rows=2 findings=0"]);
+    clean(&[&repo, &good]);
+}
+
+/// (2) 区間の無い doc は findings 0・rows=0（表なしは違反ではない）・区間 2 つは `region-duplicate`（rc 1）・読めない
+/// doc は `unreadable` を行番号 0 で名指して rc 2（黙って飛ばさない・NFR4）。
+#[test]
+fn contract_check_treats_a_doc_without_region_as_zero_rows_and_fails_closed_on_unreadable_docs() {
+    let plain = table_repo(&table_doc(""), &[]);
+    let out = contracts_check(&plain);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "表なしは違反でない: {}", stdout_of(&out));
+    assert_eq!(stdout_of(&out).trim_end(), "contracts check: docs=1 rows=0 findings=0");
+    let region = table_region(&[table_row("a", &[])]);
+    let twice = table_repo(&table_doc(&format!("{region}\n{region}")), &[]);
+    let out = contracts_check(&twice);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "区間 2 つは違反: {}", stdout_of(&out));
+    assert!(findings_of(&out).iter().any(|line| line.contains("contract-table:region-duplicate")), "{}", stdout_of(&out));
+    fs::write(plain.join("docs/design/bad.md"), [0xff, 0xfe, b'\n']).expect("非 UTF-8 の doc を書ける");
+    git(&plain, &["add", "-A"]);
+    git(&plain, &["commit", "-q", "-m", "bad"]);
+    let out = contracts_check(&plain);
+    let text = stdout_of(&out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "読めない doc は rc 2: {text}");
+    assert!(text.contains("contracts: docs/design/bad.md:0 contract-table:unreadable"), "読めない doc を名指す: {text}");
+    assert_eq!(text.lines().last(), Some("contracts check: docs=2 rows=0 findings=1"), "母集団は tracked 設計 doc の全数: {text}");
+    clean(&[&plain, &twice]);
+}
+
+/// (3) `req` が要件面に無い行・`depends` が解決しない行・輪を持つ 2 行・`verify` に `(` を持つ行・末尾 `/` 無しの
+/// dir を指す行を、各 1 件ずつ行番号付きで名指す（全件・1 件目で止めない・輪は 2 行で 1 件）。
+#[test]
+fn contract_check_names_each_row_defect_once_with_its_line() {
+    let rows = [
+        table_row("a", &[("req", "[\"FR1\", \"FR9\"]")]),
+        table_row("b", &[("depends", "[\"zz\"]")]),
+        table_row("c", &[("depends", "[\"d\"]")]),
+        table_row("d", &[("depends", "[\"c\"]")]),
+        table_row("e", &[("verify", "[\"git log (x)\"]")]),
+        table_row("f", &[("write-set", "[\"src\"]")]),
+    ];
+    let doc = table_doc(&table_region(&rows));
+    let repo = table_repo(&doc, &[]);
+    let out = contracts_check(&repo);
+    let (text, found) = (stdout_of(&out), findings_of(&out));
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{text}");
+    for (id, label, needle) in [
+        ("a", "contract-table:requirement-missing", "FR9"),
+        ("b", "contract-table:depends-unresolved", "zz"),
+        ("c", "contract-table:depends-cycle", "c → d → c"),
+        ("e", "contract-table:verify-form", "'('"),
+        ("f", "write-set-dir-without-slash", "src/"),
+    ] {
+        let head = format!("contracts: docs/design/toy.md:{} {label}: ", table_line(&doc, id));
+        let hits: Vec<&String> = found.iter().filter(|line| line.starts_with(&head)).collect();
+        assert_eq!(hits.len(), 1, "行 {id} の {label} を 1 件: {text}");
+        assert!(hits.iter().all(|line| line.contains(needle)), "{needle} を名乗る: {text}");
+    }
+    assert_eq!(found.len(), 5, "他の行は名指さない: {text}");
+    assert_eq!(text.lines().last(), Some("contracts check: docs=1 rows=6 findings=5"), "{text}");
+    clean(&[&repo]);
+}
+
+/// (4) `contracts schema` の出力は tracked の `contracts/schema.toml` と byte で一致し（差分 0）、欄の列は core の
+/// const slice（`FIELDS`）と同じ順。余りの引数は断る。
+#[test]
+fn contract_schema_matches_the_tracked_file_and_the_field_slice() {
+    let out = Command::new(bin()).args(["contracts", "schema"]).output().expect("binary を起動できる");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    assert!(out.stderr.is_empty(), "stderr は 0 byte: {}", stderr_of(&out));
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("..").join("contracts").join("schema.toml");
+    let tracked = fs::read_to_string(&path).expect("tracked の生成物を読める");
+    assert_eq!(stdout_of(&out), tracked, "render と tracked の差分 0（`{NAME} contracts schema` で描き直す）");
+    let names: Vec<&str> =
+        tracked.lines().filter_map(|line| line.strip_prefix("name = \"")?.strip_suffix('"')).collect();
+    let fields: Vec<&str> = vessel::pipe::table::FIELDS.iter().map(|field| field.name).collect();
+    assert_eq!(names, fields, "欄の列は const slice と同じ順");
+    let extra = Command::new(bin()).args(["contracts", "schema", "x"]).output().expect("binary を起動できる");
+    assert_eq!(extra.status.code(), Some(i32::from(RC_REFUSED)), "余りの引数は断る");
+}
+
+/// (6) 宣言 `requirements` が指す要件面（`.yaml`）で req の実在を測り、key 無しの repo は既定の `.html` を読む。
+/// 宣言が指す要件面が無い周は rc 2（既定へ黙って倒さない）。
+#[test]
+fn contract_check_reads_requirements_from_the_declared_face() {
+    let doc = table_doc(&table_region(&[table_row("a", &[("req", "[\"FR7\"]")])]));
+    let with_key = |face: &str| format!("{TABLE_VESSEL}requirements = \"{face}\"\n");
+    let yaml = "requirements:\n  - FR7\n  - id: FR8\n";
+    let declared = table_repo(&doc, &[(".vessel.toml", &with_key("spec/reqs.yaml")), ("spec/reqs.yaml", yaml)]);
+    let out = contracts_check(&declared);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "宣言の要件面に在る req は通る: {}", stdout_of(&out));
+    // 既定の要件面（srs.html）に FR7 は無い＝同じ行が名指される（宣言の path で測っていたことの弁別）。
+    let fallback = table_repo(&doc, &[]);
+    let out = contracts_check(&fallback);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{}", stdout_of(&out));
+    let named = findings_of(&out).iter().any(|line| line.contains("requirement-missing") && line.contains("FR7"));
+    assert!(named, "既定の要件面で測る: {}", stdout_of(&out));
+    let missing = table_repo(&doc, &[(".vessel.toml", &with_key("spec/none.yaml"))]);
+    let out = contracts_check(&missing);
+    assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "宣言が指す要件面が無い周は rc 2: {}", stdout_of(&out));
+    assert!(stdout_of(&out).contains("spec/none.yaml を読めない"), "{}", stdout_of(&out));
+    clean(&[&declared, &fallback, &missing]);
+}
+
+/// 使い方の誤りは rc 1（stderr に理由）・git repo でない `--repo` は判定できないので rc 2（判定行を出さない）。
+#[test]
+fn contract_check_refuses_usage_errors_and_non_repositories() {
+    let bare = Command::new(bin()).args(["contracts", "check"]).output().expect("binary を起動できる");
+    assert_eq!(bare.status.code(), Some(i32::from(RC_REFUSED)), "--repo 無しは rc 1");
+    assert!(stderr_of(&bare).contains("--repo が要る"), "{}", stderr_of(&bare));
+    let none = Command::new(bin()).arg("contracts").output().expect("binary を起動できる");
+    assert_eq!(none.status.code(), Some(i32::from(RC_REFUSED)), "subcommand 無しは rc 1");
+    assert!(stderr_of(&none).contains("contracts <check"), "使い方を出す: {}", stderr_of(&none));
+    let dir = tmp();
+    let out = contracts_check(&dir);
+    assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "git repo でない: {}", stderr_of(&out));
+    assert!(out.stdout.is_empty() && stderr_of(&out).contains("git repo でない"), "{}", stderr_of(&out));
+    clean(&[&dir]);
+}

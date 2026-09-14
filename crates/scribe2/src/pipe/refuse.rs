@@ -11,6 +11,7 @@
 //! 解かず file の存在も見ない。実体が同じ file を別名で持つ 2 契約は入口で見逃す（偽陰性）が、
 //! 編集時の guard が実体名で塞ぐ（ADR-0009 §2.1 の既知の穴はそのまま）。
 
+use super::table::TableError;
 use crate::cli_outcome::{RC_BROKEN, RC_REFUSED};
 use crate::polarity::{OnFailure, Polarity, Timing};
 
@@ -40,6 +41,9 @@ pub(crate) const REFUSALS: &[&str] = &[
     "duplicate-run",
     "write-set-overlap",
     "write-set-unreadable",
+    "write-set-incomplete",
+    "write-set-dir-without-slash",
+    "contract-table",
 ];
 
 /// 契約 file が読めた後の、契約単位の拒否理由。**新しい理由は variant を 1 つ足す**（憲法 C2）。
@@ -67,20 +71,41 @@ pub(crate) enum Refuse {
         /// 読めなかった run id。
         run: String,
     },
+    /// 契約表の行の `touches` の閉包（[`super::closure`]）が write-set に含まれない（設計 contract-source.md §3・
+    /// FR48）。**足りない file を全部**持つ。
+    WriteSetIncomplete {
+        /// write-set に無い閉包の file（repo 相対・辞書順）。
+        missing: Vec<String>,
+    },
+    /// write-set の項目が末尾 `/` 無しで既存の dir を指す（guard は末尾 `/` 無しを字面一致でしか通さず、runner が
+    /// 配下を書けない・設計 contract-source.md §9）。
+    WriteSetDirWithoutSlash {
+        /// 契約が書いた項目の字面。
+        path: String,
+    },
+    /// 契約表そのものの欠陥（区間・parse・id・section・req・verify・depends・設計 contract-source.md §2）。
+    ContractTable(TableError),
 }
 
 impl Refuse {
     /// 一覧と pin が読む名（kebab・宣言順は [`REFUSALS`]）。
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "判別子順 pin の歯だけが読む（[`REFUSALS`] と対）")
-    )]
     pub(crate) fn as_str(&self) -> &'static str {
         match *self {
             Self::NotARepo { .. } => "not-a-repo",
             Self::DuplicateRun { .. } => "duplicate-run",
             Self::WriteSetOverlap { .. } => "write-set-overlap",
             Self::WriteSetUnreadable { .. } => "write-set-unreadable",
+            Self::WriteSetIncomplete { .. } => "write-set-incomplete",
+            Self::WriteSetDirWithoutSlash { .. } => "write-set-dir-without-slash",
+            Self::ContractTable(_) => "contract-table",
+        }
+    }
+
+    /// findings の行の見出し（契約表の欠陥は `contract-table:<理由の名>`・他は [`Self::as_str`]）。
+    pub(crate) fn label(&self) -> String {
+        match *self {
+            Self::ContractTable(ref found) => format!("{}:{}", self.as_str(), found.as_str()),
+            _ => self.as_str().to_owned(),
         }
     }
 
@@ -95,19 +120,37 @@ impl Refuse {
             Self::WriteSetUnreadable { ref run } => {
                 format!("live な run {run} の write-set を読めない")
             }
+            Self::WriteSetIncomplete { ref missing } => {
+                format!("touches の閉包の file が write-set に無い（{}）", missing.join(", "))
+            }
+            Self::WriteSetDirWithoutSlash { ref path } => {
+                format!("write-set の {path} は既存の dir を末尾 / 無しで指す（配下を書くなら {path}/）")
+            }
+            Self::ContractTable(ref found) => found.reason(),
         }
     }
 
     /// **rc は variant が持つ**。読めない周だけが「壊れた store」の rc 2 で、
-    /// 残りは前提違反の rc 1 である（NFR4）。
+    /// 残りは前提違反の rc 1 である（NFR4）。契約表の欠陥は理由の側が持つ（読めない表だけ rc 2）。
     pub(crate) fn rc(&self) -> u8 {
         match *self {
-            Self::NotARepo { .. } | Self::DuplicateRun { .. } | Self::WriteSetOverlap { .. } => {
-                RC_REFUSED
-            }
+            Self::NotARepo { .. }
+            | Self::DuplicateRun { .. }
+            | Self::WriteSetOverlap { .. }
+            | Self::WriteSetIncomplete { .. }
+            | Self::WriteSetDirWithoutSlash { .. } => RC_REFUSED,
             Self::WriteSetUnreadable { .. } => RC_BROKEN,
+            Self::ContractTable(ref found) => found.rc(),
         }
     }
+}
+
+/// `path` が write-set のどれかに含まれるか（dir は配下全部・file は字面の一致・照合は正規化した形）。
+///
+/// 契約表の閉包 ⊆ write-set の判定（設計 contract-source.md §3）が使う。畳み方は [`overlaps`] と同じ 1 本である。
+pub(crate) fn covered(write_set: &[String], path: &str) -> bool {
+    let target = normalize(path);
+    write_set.iter().any(|item| covers(&normalize(item), &target))
 }
 
 /// 2 つの write-set が交差した**全組**（`(左の字面, 右の字面)`・先頭が理由の 1 行に載る）。
@@ -173,8 +216,9 @@ fn covers(left: &str, right: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize, overlaps, Refuse, REFUSALS};
+    use super::{covered, normalize, overlaps, Refuse, REFUSALS};
     use crate::cli_outcome::{RC_BROKEN, RC_REFUSED};
+    use crate::pipe::table::TableError;
     use proptest::prelude::*;
     use proptest::test_runner::Config;
 
@@ -194,7 +238,34 @@ mod tests {
             Refuse::DuplicateRun { run: "r-1".to_owned() },
             Refuse::WriteSetOverlap { run: "r-1".to_owned(), path: "src/lib.rs".to_owned() },
             Refuse::WriteSetUnreadable { run: "r-1".to_owned() },
+            Refuse::WriteSetIncomplete { missing: vec!["src/a.rs".to_owned(), "src/b.rs".to_owned()] },
+            Refuse::WriteSetDirWithoutSlash { path: "src".to_owned() },
+            Refuse::ContractTable(TableError::SectionMissing { line: 3, section: "9".to_owned() }),
         ]
+    }
+
+    /// 契約表の 3 理由（`s2-07l.208`・設計 contract-source.md §2 / §3）: 見出しは契約表の欠陥だけ理由の名を足し、
+    /// 閉包の不足は**足りない file を全部**名乗る。読めない表だけ rc 2（NFR4）。
+    #[test]
+    fn refuse_contract_table_reasons_name_every_missing_file_and_keep_the_rc_of_the_table_error() {
+        let found = samples();
+        let labels: Vec<String> = found.iter().skip(4).map(Refuse::label).collect();
+        assert_eq!(labels, ["write-set-incomplete", "write-set-dir-without-slash", "contract-table:section-missing"]);
+        let incomplete = found.get(4).map(Refuse::reason).unwrap_or_default();
+        assert!(incomplete.contains("src/a.rs, src/b.rs"), "足りない file を全部名乗る: {incomplete}");
+        let unreadable = Refuse::ContractTable(TableError::Unreadable { line: 0, reason: "x を読めない".to_owned() });
+        assert_eq!(unreadable.rc(), RC_BROKEN, "読めない表は rc 2");
+        assert_eq!(unreadable.reason(), "x を読めない", "理由は表の欠陥の字面のまま");
+    }
+
+    /// 閉包の file が write-set に含まれるか: dir（末尾 `/`）は配下全部・file は字面の一致・正規化してから比べる。
+    #[test]
+    fn refuse_covered_follows_the_overlap_folding() {
+        let set = vec!["src/".to_owned(), "docs/a.md".to_owned()];
+        for (path, want) in [("src/x.rs", true), ("src/deep/y.rs", true), ("./docs/a.md", true), ("docs/b.md", false), ("srcx/z.rs", false)] {
+            assert_eq!(covered(&set, path), want, "{path}");
+        }
+        assert!(!covered(&["src".to_owned()], "src/x.rs"), "末尾 / 無しは dir として配下を含まない");
     }
 
     /// 名前の slice は **宣言順**で、`as_str` の網羅 match と 1 対 1 である（ADR-0013 §2.1）。

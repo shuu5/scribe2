@@ -11,8 +11,13 @@
 //! **host の面**（`<state_dir>/host.toml`・設計 account-lifecycle.md §2・ADR-0026 §2.1）も同じ reader で読む:
 //! 持てる表は `[[account]]` / `[[plugin]]` / `[[launch-arg]]` の 3 種だけで、`[[rule]]` は置けない（規則の行は
 //! tracked の面だけ・C1）。無い周は 0 宣言（縮退）・在るが読めない周は欠陥の全件（FailClosed）。
+//!
+//! **契約表の面**（設計 doc の区間・導出の `.toml`・設計 contract-source.md §2・ADR-0023 §2.1）も同じ reader で読む:
+//! 持てる表は `[[contract]]` 1 種だけで（key 集合は `pipe::table::FIELDS`）、rules manifest と host の面は
+//! `[[contract]]` を置けない。値の受理集合と**空の配列の拒否**は他の面と同じ（空の列は key の省略で表す）。
 
 use super::{Rule, RuleError, RuleKind, RuleRow, RuleValue, ValueShape, HOST_MANIFEST};
+use crate::pipe::table::{Need, FIELDS};
 use std::path::Path;
 
 /// build 時に binary へ埋め込む manifest の本文。
@@ -93,10 +98,12 @@ enum Section {
     Plugin,
     /// 席の起動行に足す引数 1 つの宣言（value だけ）。
     LaunchArg,
+    /// 契約表の 1 行（key 集合は `pipe::table::FIELDS`・契約表の面にだけ置く）。
+    Contract,
 }
 
 /// [`Section`] の全 variant（宣言順）。
-const SECTIONS: &[Section] = &[Section::Rule, Section::Account, Section::Plugin, Section::LaunchArg];
+const SECTIONS: &[Section] = &[Section::Rule, Section::Account, Section::Plugin, Section::LaunchArg, Section::Contract];
 
 impl Section {
     /// TOML の section header の字面。
@@ -106,6 +113,7 @@ impl Section {
             Self::Account => "[[account]]",
             Self::Plugin => "[[plugin]]",
             Self::LaunchArg => "[[launch-arg]]",
+            Self::Contract => "[[contract]]",
         }
     }
 
@@ -114,23 +122,25 @@ impl Section {
         SECTIONS.iter().copied().find(|found| found.header() == text)
     }
 
-    /// この section が持てる key の全体。
-    fn known_keys(self) -> &'static [&'static str] {
+    /// この section が持てる key の全体（契約表の行は欄の正本 `FIELDS` から引く＝欄の列を 2 面に書かない）。
+    fn known_keys(self) -> Vec<&'static str> {
         match self {
-            Self::Rule => KNOWN_KEYS,
-            Self::Account => ACCOUNT_KEYS,
-            Self::Plugin => PLUGIN_KEYS,
-            Self::LaunchArg => LAUNCH_ARG_KEYS,
+            Self::Rule => KNOWN_KEYS.to_vec(),
+            Self::Account => ACCOUNT_KEYS.to_vec(),
+            Self::Plugin => PLUGIN_KEYS.to_vec(),
+            Self::LaunchArg => LAUNCH_ARG_KEYS.to_vec(),
+            Self::Contract => FIELDS.iter().map(|field| field.name).collect(),
         }
     }
 
     /// この section に必ず要る key。
-    fn required_keys(self) -> &'static [&'static str] {
+    fn required_keys(self) -> Vec<&'static str> {
         match self {
-            Self::Rule => REQUIRED_KEYS,
-            Self::Account => ACCOUNT_KEYS,
-            Self::Plugin => PLUGIN_KEYS,
-            Self::LaunchArg => LAUNCH_ARG_KEYS,
+            Self::Rule => REQUIRED_KEYS.to_vec(),
+            Self::Account => ACCOUNT_KEYS.to_vec(),
+            Self::Plugin => PLUGIN_KEYS.to_vec(),
+            Self::LaunchArg => LAUNCH_ARG_KEYS.to_vec(),
+            Self::Contract => FIELDS.iter().filter(|field| field.need == Need::Required).map(|field| field.name).collect(),
         }
     }
 }
@@ -142,6 +152,8 @@ enum Face {
     Tracked,
     /// host の manifest（`<state_dir>/host.toml`）。`[[rule]]` を受けない。
     Host,
+    /// 契約表（設計 doc の区間・導出の `.toml`）。`[[contract]]` だけを受ける。
+    Table,
 }
 
 /// section 1 つ分の生の key/value。
@@ -215,6 +227,41 @@ pub struct Manifest {
     accounts: Vec<AccountLabel>,
     plugins: Vec<PluginDir>,
     launch_args: Vec<LaunchArg>,
+    contracts: Vec<TableRow>,
+}
+
+/// `[[contract]]` 1 行の値（key 集合は検査済み・値の形の検査は欄の形を持つ `pipe::table` が行う）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TableRow {
+    line: u64,
+    fields: Vec<(String, TableValue, u64)>,
+}
+
+impl TableRow {
+    /// 本文の中でこの行（`[[contract]]`）が始まる物理行番号。
+    pub fn line(&self) -> u64 {
+        self.line
+    }
+
+    /// key の値と、その key が書かれていた物理行番号。
+    pub fn value(&self, key: &str) -> Option<(&TableValue, u64)> {
+        self.fields.iter().find(|(found, _, _)| found == key).map(|(_, value, line)| (value, *line))
+    }
+}
+
+/// 契約表の 1 つの key が持てる値（単一の値か文字列の列）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TableValue {
+    /// 単一の値。
+    One(Scalar),
+    /// 文字列の列（空は reader が断る）。
+    List(Vec<String>),
+}
+
+/// 契約表の本文を読む（区間の抜き出しは呼び手の `pipe::table`・設計 contract-source.md §2）。受ける表は
+/// `[[contract]]` だけで、先頭の `schema = 1` も要る。欠陥は他の面と同じく全件・行番号付き。
+pub fn contract_rows(text: &str) -> Result<Vec<TableRow>, Vec<RuleError>> {
+    finish(collect(text, Face::Table)).map(|found| found.contracts)
 }
 
 /// host の面（`<state_dir>/host.toml`）の読み（設計 account-lifecycle.md §7 `HostManifest`）。
@@ -377,6 +424,16 @@ fn collect(text: &str, face: Face) -> (Manifest, Vec<RuleError>) {
     let mut found = Manifest::default();
     for raw in &raws {
         match (raw.section, face) {
+            (Section::Contract, Face::Table) => found.contracts.extend(build_table(raw, &mut errors)),
+            // 置けない表は中身を検査しない（1 表 1 件）。規則の面と契約表を混ぜない。
+            (Section::Contract, _) => errors.push(RuleError::new(
+                raw.line,
+                format!("{} は rules manifest に置けない（契約表は設計 doc の区間だけ）", Section::Contract.header()),
+            )),
+            (_, Face::Table) => errors.push(RuleError::new(
+                raw.line,
+                format!("{} は契約表に置けない（契約表は {} だけ）", raw.section.header(), Section::Contract.header()),
+            )),
             (Section::Rule, Face::Tracked) => found.rows.extend(build_row(raw, &mut errors)),
             // 行の中身は検査しない（置けない表の欠陥を重ねて報告しない＝1 表 1 件）。
             (Section::Rule, Face::Host) => errors.push(RuleError::new(
@@ -674,6 +731,23 @@ fn build_single(raw: &RawRow, key: &str, errors: &mut Vec<RuleError>) -> Option<
         return None;
     }
     Some((value, raw.line))
+}
+
+/// `[[contract]]` 1 行を組む。欠けや未知 key は全件 `errors` へ積み、[`build_row`] と同じ形で打ち切る
+/// （読めなかった値は scan が 1 件報告済み）。値の形（文字列か配列か）の検査は欄の形を持つ `pipe::table` が行う。
+fn build_table(raw: &RawRow, errors: &mut Vec<RuleError>) -> Option<TableRow> {
+    let before = errors.len();
+    check_keys(raw, errors);
+    let mut fields = Vec::new();
+    for (key, value, line) in &raw.fields {
+        let kept = match value {
+            RawValue::One(found) => TableValue::One(found.clone()),
+            RawValue::List(items) => TableValue::List(items.clone()),
+            RawValue::Broken => return None,
+        };
+        fields.push((key.clone(), kept, *line));
+    }
+    (errors.len() == before).then_some(TableRow { line: raw.line, fields })
 }
 
 /// label の重複を集める。

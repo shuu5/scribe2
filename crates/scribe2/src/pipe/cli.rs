@@ -93,6 +93,25 @@ pub fn dispatch(args: &[String]) -> Outcome {
     }
 }
 
+/// `contracts` の使い方（設計 contract-source.md §2「表の検査」）。
+pub fn contracts_usage() -> String {
+    format!("usage: {NAME} contracts <check --repo R [--rules PATH]|schema>")
+}
+
+/// `<NAME> contracts <check|schema>`: 契約表の全行の検査（上限は `--rules` か埋め込みの `runner.allowed_commands`）と
+/// 欄の生成物の描画（tracked な `contracts/schema.toml` の出所・設計 contract-source.md §2）。
+pub fn contracts(args: &[String]) -> Outcome {
+    let checked = || -> Result<Outcome, String> {
+        let (repo, commands) = (need(args, "--repo")?, list_row(&manifest_of(args)?, CEILING_ROW)?);
+        Ok(super::table::check_repo(Path::new(repo), &Ceiling { row: CEILING_ROW, commands: &commands }))
+    };
+    match args.first().map(String::as_str) {
+        Some("schema") if args.len() == 1 => Outcome::ok(super::table::render_schema()),
+        Some("check") => checked().unwrap_or_else(|reason| Outcome::failed_line(RC_REFUSED, format!("contracts: {reason}"))),
+        _ => Outcome::failed_line(RC_REFUSED, contracts_usage()),
+    }
+}
+
 /// `--<name> <値>` を読む。値欠けは黙って落とさず `Err`（SRS NFR4）。
 ///
 /// 器の中で 3 本目の flag reader である。4 本目が要るときは 1 本へ畳む

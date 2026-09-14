@@ -13,6 +13,7 @@
 pub mod admission;
 pub mod approve;
 pub mod cli;
+pub mod closure;
 pub mod confine;
 pub mod contract;
 pub mod declaration;
@@ -23,6 +24,7 @@ pub mod refuse;
 pub mod report;
 mod size;
 pub mod spawn;
+pub mod table;
 
 use crate::polarity::{OnFailure, Polarity, Timing};
 use crate::fleet::store::{self, LockPolicy, StoreError};

@@ -1,6 +1,6 @@
 //! `cargo xtask check` の**宣言 file を読む measure**（manifest-name / manifest-version /
-//! lints-set / lints-optin / deps-empty / toolchain-pin）。母集団は `Cargo.toml` /
-//! `rust-toolchain.toml` / 生成物 manifest である。
+//! lints-set / lints-optin / deps-empty / toolchain-pin / contracts-schema）。母集団は `Cargo.toml` /
+//! `rust-toolchain.toml` / 生成物 manifest / 契約表の欄の生成物である。
 //!
 //! `check.rs` から分けたのは憲法 C4（1 file の上限）のためで、**測る内容は 1 つも変えていない**
 //! （`s2-07l.84`・純粋な移動）。判定行の名前・順序・値の書式は不変である。
@@ -341,6 +341,160 @@ pub(crate) fn measure_toolchain_pin(layout: &Layout) -> Measured {
     Measured {
         fact,
         violations: violation.into_iter().collect(),
+    }
+}
+
+/// contracts-schema の tag。
+const SCHEMA_TAG: &str = "contracts-schema";
+
+/// 契約表の欄の生成物（workspace root からの相対・core の `contracts schema` の出力）。
+pub(crate) const SCHEMA_REL: &str = "contracts/schema.toml";
+
+/// 欄の正本を持つ core の file（core crate の dir からの相対）。
+pub(crate) const TABLE_SRC: &str = "src/pipe/table.rs";
+
+/// 正本の const slice の宣言行（この行から `];` までの 1 項目 1 行を読む）。
+const FIELDS_HEAD: &str = "pub const FIELDS: &[Field] = &[";
+
+/// 欄 1 つ（名・必須 / 任意・値の形）。
+type Column = (String, String, String);
+
+/// contracts-schema（設計 contract-source.md §2・hooks.json / 極性一覧と同型）: tracked な生成物の欄の列（名・必須 /
+/// 任意・値の形・順序）が core の `pipe/table.rs` の `FIELDS` と同じ列であること。
+///
+/// xtask は core に依存しない（ADR-0006 / ADR-0013）ので binary を撃たず、2 つの tracked file を字面で読んで比べる。
+/// render と tracked の byte の一致は core の e2e（`contract_schema_`）が測る＝2 つの面を別の歯が受ける。
+/// 読めない・正本の欄を 1 本も読めない周は違反に倒す（fail-closed）。
+pub(crate) fn measure_contracts_schema(layout: &Layout) -> Measured {
+    let faces = (read_text(&layout.root.join(SCHEMA_REL)), read_text(&layout.core_dir.join(TABLE_SRC)));
+    let (schema, table) = match faces {
+        (Ok(schema), Ok(table)) => (schema, table),
+        (Err(reason), _) | (_, Err(reason)) => return failed(SCHEMA_TAG, &reason),
+    };
+    let violations = schema_drift(&schema, &table);
+    let fact = if violations.is_empty() { format!("{SCHEMA_TAG}=ok") } else { format!("{SCHEMA_TAG}=drift") };
+    Measured { fact, violations }
+}
+
+/// 2 面の欄の列の差（違反行の列・一致なら空）。
+fn schema_drift(schema: &str, table: &str) -> Vec<String> {
+    let declared = table_columns(table);
+    if declared.is_empty() {
+        return vec![format!(
+            "{SCHEMA_TAG}: core の {TABLE_SRC} から FIELDS の欄を 1 本も読めない（読めない形を一致に化けさせない）"
+        )];
+    }
+    let tracked = schema_columns(schema);
+    if tracked == declared {
+        return Vec::new();
+    }
+    vec![format!(
+        "{SCHEMA_TAG}: {SCHEMA_REL} の欄の列が core の FIELDS と違う（core の contracts schema で描き直す）: tracked=[{}] FIELDS=[{}]",
+        show(&tracked),
+        show(&declared)
+    )]
+}
+
+/// 生成物の `[[field]]` の列（`name` / `need` / `shape` の 3 key）。
+fn schema_columns(schema: &str) -> Vec<Column> {
+    let mut found: Vec<Column> = Vec::new();
+    for line in schema.lines().map(str::trim) {
+        if line == "[[field]]" {
+            found.push(Default::default());
+            continue;
+        }
+        let (Some(last), Some((key, value))) = (found.last_mut(), line.split_once('=')) else {
+            continue;
+        };
+        let value = value.trim().trim_matches('"').to_owned();
+        match key.trim() {
+            "name" => last.0 = value,
+            "need" => last.1 = value,
+            "shape" => last.2 = value,
+            _ => {}
+        }
+    }
+    found
+}
+
+/// core の `FIELDS` の 1 項目 1 行（`Field { name: "id", need: Need::Required, shape: Shape::Text },`）の列。
+fn table_columns(table: &str) -> Vec<Column> {
+    table
+        .lines()
+        .skip_while(|line| line.trim() != FIELDS_HEAD)
+        .skip(1)
+        .take_while(|line| line.trim() != "];")
+        .filter_map(|line| {
+            let name = line.split_once("name: \"")?.1.split_once('"')?.0.to_owned();
+            Some((name, variant(line, "Need::")?, variant(line, "Shape::")?))
+        })
+        .collect()
+}
+
+/// `Need::Required` の `Required` を小文字にした語（生成物の値の形）。
+fn variant(line: &str, head: &str) -> Option<String> {
+    let word: String = line.split_once(head)?.1.chars().take_while(char::is_ascii_alphanumeric).collect();
+    (!word.is_empty()).then(|| word.to_ascii_lowercase())
+}
+
+/// 欄の列の短い表示（`name:need:shape` の `,` 区切り）。
+fn show(columns: &[Column]) -> String {
+    columns.iter().map(|(name, need, shape)| format!("{name}:{need}:{shape}")).collect::<Vec<String>>().join(",")
+}
+
+/// 健全な擬似 workspace の contracts-schema の 2 面（`(workspace 相対 path, 本文)`・`core` は core crate の dir 名）。
+#[cfg(test)]
+pub(crate) fn contracts_fixture(core: &str) -> Vec<(String, String)> {
+    let table = "pub struct Field;\n\npub const FIELDS: &[Field] = &[\n    Field { name: \"id\", need: Need::Required, shape: Shape::Text },\n];\n";
+    let schema = "schema = 1\n\n[[field]]\nname = \"id\"\nneed = \"required\"\nshape = \"text\"\n";
+    vec![(SCHEMA_REL.to_owned(), schema.to_owned()), (format!("crates/{core}/{TABLE_SRC}"), table.to_owned())]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{contracts_fixture, schema_drift};
+
+    /// 生成物と正本の 2 面（欄は `(名, Need の variant, Shape の variant)`）。
+    fn faces(columns: &[(&str, &str, &str)]) -> (String, String) {
+        let mut schema = "schema = 1\n".to_owned();
+        let mut table = "pub const FIELDS: &[Field] = &[\n".to_owned();
+        for (name, need, shape) in columns {
+            let (low_need, low_shape) = (need.to_lowercase(), shape.to_lowercase());
+            schema.push_str(&format!("\n[[field]]\nname = \"{name}\"\nneed = \"{low_need}\"\nshape = \"{low_shape}\"\n"));
+            table.push_str(&format!("    Field {{ name: \"{name}\", need: Need::{need}, shape: Shape::{shape} }},\n"));
+        }
+        table.push_str("];\n");
+        (schema, table)
+    }
+
+    /// 生成物と正本の欄の列（名・必須 / 任意・値の形・順序）が一致すれば違反 0（健全な擬似 workspace の 2 面も同じ）。
+    #[test]
+    fn contracts_schema_passes_when_the_tracked_columns_match_the_field_slice() {
+        let (schema, table) = faces(&[("id", "Required", "Text"), ("touches", "Optional", "List")]);
+        assert_eq!(schema_drift(&schema, &table), Vec::<String>::new());
+        let fixture = contracts_fixture("demo");
+        let body = |at: usize| fixture.get(at).map(|(_, text)| text.clone()).unwrap_or_default();
+        assert_eq!(schema_drift(&body(0), &body(1)), Vec::<String>::new(), "健全な擬似 workspace の 2 面");
+    }
+
+    /// 並べ替え・必須 / 任意の違い・値の形の違い・欄の欠けはどれも 1 件で落ち、正本を読めない形は一致に化けない。
+    #[test]
+    fn contracts_schema_names_order_need_shape_and_missing_columns() {
+        let (_, table) = faces(&[("id", "Required", "Text"), ("touches", "Optional", "List")]);
+        for columns in [
+            vec![("touches", "Optional", "List"), ("id", "Required", "Text")],
+            vec![("id", "Optional", "Text"), ("touches", "Optional", "List")],
+            vec![("id", "Required", "List"), ("touches", "Optional", "List")],
+            vec![("id", "Required", "Text")],
+        ] {
+            let (schema, _) = faces(&columns);
+            let found = schema_drift(&schema, &table);
+            assert_eq!(found.len(), 1, "{columns:?}: {found:?}");
+            assert!(found.iter().all(|line| line.starts_with("contracts-schema: ")), "{found:?}");
+        }
+        let (schema, _) = faces(&[("id", "Required", "Text")]);
+        let unreadable = schema_drift(&schema, "fn nothing() {}\n");
+        assert!(unreadable.first().is_some_and(|line| line.contains("FIELDS の欄を 1 本も読めない")), "{unreadable:?}");
     }
 }
 

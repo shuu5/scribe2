@@ -147,6 +147,7 @@ pub fn inspect(root: &Path) -> Report {
     measured.push(crate::polarity::measure(&layout));
     measured.push(crate::prose_gate::measure(&layout));
     measured.push(measure_seat_brief(&layout));
+    measured.push(crate::check_facts::measure_contracts_schema(&layout));
     fold(measured)
 }
 
@@ -554,6 +555,8 @@ mod tests {
         write_at(dir, PROSE_DOC_REL, "# 設計\n\n器は失敗を記録しなければならない（C1）。\n");
         // 席の指示文の雛形も同じ（seat-brief は雛形 0 枚と行の無い役割を違反に倒す・`s2-07l.248`）。
         write_at(dir, &brief_rel(), "{role} {target} {anchor} → SSOT: ADR-0022 §2.4\n{capabilities}\n");
+        // 契約表の欄の 2 面も同じ（contracts-schema は不在を違反に倒す・`s2-07l.208`）。
+        crate::check_facts::contracts_fixture(FIXTURE_CORE).iter().for_each(|(rel, body)| write_at(dir, rel, body));
     }
 
     /// fixture の設計 doc の相対 path。
@@ -664,10 +667,7 @@ mod tests {
     fn check_passes_on_workspace() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
         let violations = check(&root);
-        assert!(
-            violations.is_empty(),
-            "自 workspace で違反 0 のはず: {violations:?}"
-        );
+        assert!(violations.is_empty(), "自 workspace で違反 0 のはず: {violations:?}");
     }
 
     /// 判定行の外形の pin（repo root で撃ったときの形）。値は [`shape`] で伏せてある。
@@ -676,7 +676,7 @@ mod tests {
         lints-set=<v> lints-optin=<v>/<v> deps-empty=<v> toolchain-pin=<v>.<v>.<v> \
         paths-clean=<v> private-clean=<v> non-rust-exec=<v>/<v> allow=<v> ci-shell-lines=<v> \
         claude-md-constitution=<v> enum-slices=<v> claude-spawn-points=<v> polarity=<v>/<v> \
-        prose-gate=<v>/<v> seat-brief=<v>";
+        prose-gate=<v>/<v> seat-brief=<v> contracts-schema=<v>";
 
     /// git を要する measure の fact（`.git` の無い木では測れない形になり、副 field も出ない）。
     fn is_git_fact(token: &str) -> bool {

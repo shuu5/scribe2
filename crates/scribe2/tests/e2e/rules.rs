@@ -6,7 +6,7 @@ use crate::make_tmp_dir;
 use std::process::Command;
 use vessel::cli_outcome::{Outcome, RC_OK, RC_REFUSED};
 use vessel::order::is_declaration_order;
-use vessel::rules::manifest::Manifest;
+use vessel::rules::manifest::{contract_rows, Manifest, TableValue};
 use vessel::rules::{Rule, RuleKind, RuleValue, ValueShape, ALL};
 use vessel::seat::role::{Capability, Role, ALL as ROLES, CAPABILITIES};
 
@@ -1157,4 +1157,69 @@ fn declaration_order_rejects_broken_slices() {
         !is_declaration_order(&duplicated, |kind| kind as usize),
         "重複した並びは宣言順ではない"
     );
+}
+
+// ─────────────────── 契約表の `[[contract]]`（設計 contract-source.md §2・ADR-0023 §2.1・`s2-07l.208`） ───────────────────
+
+/// 契約表の最小形（見出し行: 3 / 13・`depends` は 23 行目）。
+const CONTRACT_TABLE: &str = r#"schema = 1
+
+[[contract]]
+id = "a"
+title = "t"
+req = ["FR1"]
+section = "2"
+write-set = ["src/lib.rs"]
+verify = ["cargo test"]
+size = "S"
+done = "d"
+
+[[contract]]
+id = "b"
+title = "t"
+req = ["FR1", "FR2"]
+section = "3"
+touches = ["crate::x::Y"]
+write-set = ["src/"]
+verify = ["cargo test"]
+size = "M"
+done = "d"
+depends = ["a"]
+"#;
+
+/// `[[contract]]` は rules manifest と**同じ reader** で読める（行番号・値の形はそのまま・任意の列は key の省略）。
+#[test]
+fn rules_contract_table_rows_read_through_the_same_reader() {
+    let rows = contract_rows(CONTRACT_TABLE).expect("受理される");
+    assert_eq!(rows.iter().map(|row| row.line()).collect::<Vec<u64>>(), vec![3, 13], "見出しの行");
+    assert_eq!(rows[1].value("depends"), Some((&TableValue::List(vec!["a".to_owned()]), 23)), "配列の値と行");
+    assert_eq!(rows[0].value("depends"), None, "書かない任意の列は無い（空の配列ではない）");
+    assert_eq!(rows[0].value("touches"), None, "touches も同じ");
+}
+
+/// 空の配列の拒否は**緩めない**（空の列は key の省略で表す）。未知 key・必須 key の欠落・schema の欠落は全件・
+/// 行番号付き（rules manifest と同じ拒否形）。
+#[test]
+fn rules_contract_table_keeps_the_empty_array_refusal_and_names_every_defect() {
+    let empty = CONTRACT_TABLE.replace("depends = [\"a\"]", "depends = []");
+    let errors = contract_rows(&empty).expect_err("空の配列は拒む");
+    assert!(errors.iter().any(|error| error.line == 23 && error.to_string().contains("配列が空である")), "{errors:?}");
+    let defects = format!("{}color = \"red\"\n", CONTRACT_TABLE.replacen("title = \"t\"\n", "", 1));
+    let errors = contract_rows(&defects).expect_err("欠陥は拒む");
+    let shown: Vec<(u64, String)> = errors.iter().map(|error| (error.line, error.message.clone())).collect();
+    assert!(shown.contains(&(3, "必須 key title が無い".to_owned())), "{shown:?}");
+    assert!(shown.contains(&(23, "未知の key color".to_owned())), "{shown:?}");
+    let unschema = contract_rows(&CONTRACT_TABLE.replacen("schema = 1\n", "", 1)).expect_err("schema は要る");
+    assert!(unschema.iter().any(|error| error.message.contains("schema = 1 が無い")), "{unschema:?}");
+}
+
+/// 規則の面と契約表を混ぜない: rules manifest に `[[contract]]` は置けず、契約表に `[[rule]]` は置けない。
+#[test]
+fn rules_contract_table_and_the_rules_manifest_refuse_each_others_tables() {
+    let mixed = format!("{GOOD}\n[[contract]]\nid = \"a\"\n");
+    let joined = rejected(&mixed).expect("拒まれるはずの fixture が受理された").join("\n");
+    assert!(joined.contains("[[contract]] は rules manifest に置けない"), "{joined}");
+    let table = format!("{CONTRACT_TABLE}\n[[rule]]\nid = \"R\"\n");
+    let errors = contract_rows(&table).expect_err("契約表に規則の行は置けない");
+    assert!(errors.iter().any(|error| error.message.contains("[[rule]] は契約表に置けない")), "{errors:?}");
 }

@@ -63,7 +63,7 @@ pub struct Polarity {
     pub on_failure: OnFailure,
 }
 
-/// 行為を止めうる判定を返す境界の全数。**宣言順は行為の流れ**（hook → 席の登録 → 権能の執行 → intake → spawn〔予算・承認〕→
+/// 行為を止めうる判定を返す境界の全数。**宣言順は行為の流れ**（hook → 席の登録 → 権能の執行 → 契約表 → intake → spawn〔予算・承認〕→
 /// runner → gate → land〔main 実測・anchor 同期・worktree の clean・追随の起こし直し〕→ store → 注入 → cycle → 退避 → 消費）で、順序に意味は無いが C2 の形（[`ALL`] と判別子順 pin）に合わせる。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Guard {
@@ -77,6 +77,8 @@ pub enum Guard {
     Register,
     /// 席の権能の執行＝役割の行に無い権能付き subcommand と path 種別の編集を止める（[`crate::hook::role_guard`]）。
     Role,
+    /// 契約表の検査＝閉包 ⊄ write-set・区間 / req / section / verify / depends の欠陥（[`crate::pipe::table`]・本便は CI の post-hoc）。
+    ContractTable,
     /// intake の断り＝vessel 宣言の verify 行の不適合（[`crate::pipe::declaration`]）。
     Intake,
     /// intake の排他＝live な便と write-set が交差する契約を受け付けない（[`crate::pipe::refuse`]）。
@@ -120,6 +122,7 @@ pub const ALL: &[Guard] = &[
     Guard::Cap,
     Guard::Register,
     Guard::Role,
+    Guard::ContractTable,
     Guard::Intake,
     Guard::IntakeRefuse,
     Guard::Budget,
@@ -148,6 +151,7 @@ impl Guard {
             Self::Cap => crate::hook::seat_guard::POLARITY,
             Self::Register => crate::seat::role::POLARITY,
             Self::Role => crate::hook::role_guard::POLARITY,
+            Self::ContractTable => crate::pipe::table::POLARITY,
             Self::Intake => crate::pipe::declaration::POLARITY,
             Self::IntakeRefuse => crate::pipe::refuse::POLARITY,
             Self::Budget => crate::pipe::BUDGET_POLARITY,
@@ -176,6 +180,7 @@ impl Guard {
             Self::Cap => "hook::seat_guard::SeatDecision",
             Self::Register => "seat::role::RegisterRefusal",
             Self::Role => "hook::role_guard::RoleDecision",
+            Self::ContractTable => "pipe::table::TableError",
             Self::Intake => "pipe::declaration::Unfit",
             Self::IntakeRefuse => "pipe::refuse::Refuse",
             Self::Budget => "pipe::Budget",
@@ -204,6 +209,7 @@ impl Guard {
             Self::Cap => "cap-guard",
             Self::Register => "register-refusal",
             Self::Role => "role-guard",
+            Self::ContractTable => "contract-table",
             Self::Intake => "intake-unfit",
             Self::IntakeRefuse => "intake-refuse",
             Self::Budget => "spawn-budget",
