@@ -108,6 +108,9 @@ pub struct Call<'a> {
     /// **全行が JSON** ゆえ「最後の JSON 行」が claude 自身の result record になり、
     /// モデルの判定は record の中の文字列へ埋もれる（実測 2026-09-10）。
     pub streaming: bool,
+    /// turn の上限（`--max-turns <n>`）。`Some` の周だけ argv に載る——runner と lens は `None`
+    /// （argv は不変）で、`fleet usage` の token refresh の起動だけが `Some(1)` を渡す（設計 fleet-usage.md §3）。
+    pub max_turns: Option<u32>,
 }
 
 /// template の placeholder を **1 走査**で埋める。
@@ -173,6 +176,9 @@ pub fn build(call: &Call<'_>) -> (Command, confine::Confinement) {
         // （無いと `requires --verbose` で rc 1・実測 2026-09-10）。fake は flag を
         // 読まないので、これを落としても歯は緑のまま通る＝実 claude でだけ死ぬ。
         inner.arg("--output-format").arg("stream-json").arg("--verbose");
+    }
+    if let Some(turns) = call.max_turns {
+        inner.arg("--max-turns").arg(turns.to_string());
     }
     // **`plugin_dir` は plugin の root**（設計 §6）: 配下の dir を名前順に 1 つずつ渡す。root を
     // そのまま渡して claude の folder 展開に任せる形にしないのは、読めない周・0 本の周の極性と
@@ -293,6 +299,7 @@ mod tests {
             account_dir: None,
             cwd: None,
             streaming: true,
+            max_turns: None,
         });
         let args: Vec<String> = command.get_args().map(|arg| arg.to_string_lossy().into_owned()).collect();
         args.windows(2)
@@ -314,9 +321,38 @@ mod tests {
             account_dir: None,
             cwd: None,
             streaming,
+            max_turns: None,
         };
         assert_eq!(claude_place(&call(true)), "runner", "逐次 record を受ける口");
         assert_eq!(claude_place(&call(false)), "lens", "判定を 1 つ受け取る口");
+    }
+
+    /// `max_turns: Some(1)` の call は argv に `--max-turns` `1` が隣り合って並び、`None` の call には
+    /// `--max-turns` が 1 本も現れない（runner / lens の argv は不変）。
+    #[test]
+    fn headless_call_max_turns_is_in_argv_only_when_some() {
+        let args_of = |max_turns: Option<u32>| {
+            let (command, _) = build(&Call {
+                claude: "claude",
+                prompt: "",
+                permission_mode: "plan",
+                plugin_dir: None,
+                account_dir: None,
+                cwd: None,
+                streaming: false,
+                max_turns,
+            });
+            command.get_args().map(|arg| arg.to_string_lossy().into_owned()).collect::<Vec<String>>()
+        };
+        let some = args_of(Some(1));
+        assert_eq!(
+            some.windows(2).filter(|pair| pair == &["--max-turns", "1"]).count(),
+            1,
+            "Some(1) は --max-turns 1 の対が 1 つ: {some:?}"
+        );
+        let none = args_of(None);
+        assert!(!none.iter().any(|arg| arg == "--max-turns"), "None では現れない: {none:?}");
+        assert_eq!(some.len(), none.len() + 2, "足されるのは対の 2 引数だけ: {some:?} / {none:?}");
     }
 
     /// 名前の集合（大小文字を混ぜて byte 順が自明でない形・0〜5 個）。

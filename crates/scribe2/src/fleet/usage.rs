@@ -13,18 +13,22 @@ use super::cli::{host, now_utc, optional};
 use super::json_tree::{self, Tree};
 use super::store::{self, LockPolicy};
 use super::{
-    replay, Allowance, AllowanceKey, AllowanceLatest, Event, EventKind, Measured, Unmeasured,
-    UnmeasuredReason, WindowKind, ACTOR_MACHINE, SCHEMA,
+    replay, wait, Allowance, AllowanceKey, AllowanceLatest, Completion, Event, EventKind, Measured,
+    Unmeasured, UnmeasuredReason, WindowKind, ACTOR_MACHINE, SCHEMA,
 };
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
+use crate::headless::{self, Call, DEFAULT_CLAUDE};
+use crate::pipe::confine;
 use crate::polarity::{OnFailure, Polarity, Timing};
 use crate::rules::manifest::Manifest;
 use crate::rules::RuleValue;
 use std::collections::BTreeMap;
 use std::io::Write;
+use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::process::{Command, ExitStatus, Stdio};
+use std::sync::mpsc;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// 残量を聞く先（host 固有の値ではない・manifest に置かない・設計 §3）。
 pub const URL: &str = "https://api.anthropic.com/api/oauth/usage";
@@ -52,6 +56,58 @@ const NO_DECLARATION: &str = "fleet usage: 宣言なし（[[account]] が 0 行�
 
 /// credential の置き場（`<state_dir>/accounts/<label>/` の下）の file 名。
 const CREDENTIAL_FILE: &str = ".credentials.json";
+
+/// refresh の起動で止め方の猶予を持つ rules 行（`pipe stop` と共用・新しい行を足さない）。
+const ROW_GRACE: &str = "pipe.stop_grace_ms";
+
+/// refresh の起動に渡す prompt（code の定数 1 語・stdin から・設計 §3「token の refresh」）。
+const REFRESH_PROMPT: &str = "ok";
+
+/// refresh の起動の permission mode（lens と同じ定数・毎回明示する）。
+const REFRESH_PERMISSION_MODE: &str = "plan";
+
+/// refresh の起動の turn 上限。
+const REFRESH_MAX_TURNS: u32 = 1;
+
+/// refresh の子が signal で終わった周の rc の底（shell の慣習 128 + signal 番号）。
+const RC_SIGNAL_BASE: i32 = 128;
+
+/// token の refresh を試みた結果（設計 §3・stdout の行の末尾にだけ載る・event には載せない）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Refresh {
+    /// 子が rc 0 で終わった（credential が更新されたかは読み直しで決まる）。
+    Ok,
+    /// 子が rc 非 0 で終わった。
+    Rc(u8),
+    /// 上限（`fleet.usage_timeout_s`）までに終わらず、group ごと止めた。
+    Timeout,
+    /// 子を起こせなかった。
+    Unlaunchable,
+}
+
+impl Refresh {
+    /// 行に載せる字面（`ok` / `rc:<n>` / `timeout` / `unlaunchable`）。
+    pub fn as_str(self) -> String {
+        match self {
+            Self::Ok => "ok".to_owned(),
+            Self::Rc(rc) => format!("rc:{rc}"),
+            Self::Timeout => "timeout".to_owned(),
+            Self::Unlaunchable => "unlaunchable".to_owned(),
+        }
+    }
+}
+
+/// 口座を読むのに要る、口座に依らない材料。
+struct Reader<'a> {
+    /// 残量を聞く client（`--curl`）。
+    client: &'a str,
+    /// refresh に起こす claude（`--claude`）。
+    claude: &'a str,
+    /// 待ちの上限（秒・`fleet.usage_timeout_s`）。
+    timeout_s: u64,
+    /// refresh の子を止めるときの猶予（ms・`pipe.stop_grace_ms`）。
+    grace_ms: u64,
+}
 
 /// `fleet usage` を止める誤り（設計 §6）。極性は fail-closed（[`Self::POLARITY`]）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -114,25 +170,46 @@ fn measure(args: &[String], dir: &Path) -> Result<Outcome, UsageError> {
         .map_err(UsageError::Args)?
         .unwrap_or(DEFAULT_CLIENT)
         .to_owned();
+    let claude = optional(args, "--claude")
+        .map_err(UsageError::Args)?
+        .unwrap_or(DEFAULT_CLAUDE)
+        .to_owned();
     let (manifest, labels) = accounts(args, dir)?;
     if labels.is_empty() {
         return Ok(undeclared());
     }
-    let timeout_s = timeout_of(&manifest)?;
+    let reader = Reader {
+        client: &client,
+        claude: &claude,
+        timeout_s: timeout_of(&manifest)?,
+        grace_ms: grace_of(&manifest),
+    };
     let policy = LockPolicy::embedded().map_err(|err| UsageError::Store(err.to_string()))?;
     let host = host();
     let mut outcome = Outcome::ok(Vec::new());
     for label in &labels {
-        let rows = read_account(dir, label, &client, timeout_s);
+        let (rows, refreshed) = read_account(dir, label, &reader);
         let ts = now_utc();
         for row in &rows {
             let warnings = store::append(dir, &event_of(&ts, &host, row), policy)
                 .map_err(|err| UsageError::Store(err.to_string()))?;
             outcome.err.extend(warnings.iter().map(|w| w.as_str().to_owned()));
         }
-        outcome.out.push(render(label, &rows));
+        let mut line = render(label, &rows);
+        if let Some(refresh) = refreshed {
+            line.push_str(&format!(" refresh={}", refresh.as_str()));
+        }
+        outcome.out.push(line);
     }
     Ok(outcome)
+}
+
+/// rules 行 `pipe.stop_grace_ms` の ms。渡された manifest に発効した整数の行が無ければ埋め込みの行を読む
+/// （`--rules` の fixture は計測の行だけを持ちうる）。どちらも読めない周は 0（猶予なしで KILL へ進む）。
+fn grace_of(manifest: &Manifest) -> u64 {
+    crate::seat::int_rule_of(manifest, ROW_GRACE)
+        .or_else(|_| crate::seat::int_rule(ROW_GRACE))
+        .unwrap_or(0)
 }
 
 /// replay の `allowance` から、口座ごとに最新の 1 回分を同じ 1 行形で出す（lock を取らない）。
@@ -216,15 +293,110 @@ fn joined<E: std::fmt::Display>(errors: &[E]) -> String {
 }
 
 /// 口座 1 つを読む。口座単位の失敗は窓を持たない Unmeasured 1 行になる。
-fn read_account(dir: &Path, label: &str, client: &str, timeout_s: u64) -> Vec<Allowance> {
-    let body = read_credential(&credential_path(dir, label))
-        .and_then(|text| token_of(&text, now_ms()))
-        .and_then(|token| fetch(client, &token, timeout_s))
+///
+/// token が期限切れの周に限り refresh の子を **1 回**起こし、credential を読み直して測る（設計 §3
+/// 「token の refresh」）。読み直してなお期限切れなら `TokenExpired` のまま（loop しない）。試みた周だけ
+/// 結果を返す。
+fn read_account(dir: &Path, label: &str, reader: &Reader<'_>) -> (Vec<Allowance>, Option<Refresh>) {
+    let path = credential_path(dir, label);
+    let mut token = read_credential(&path).and_then(|text| token_of(&text, now_ms()));
+    let mut refreshed = None;
+    if token == Err(UnmeasuredReason::TokenExpired) {
+        refreshed = Some(refresh(dir, label, reader));
+        token = read_credential(&path).and_then(|text| token_of(&text, now_ms()));
+    }
+    let body = token
+        .and_then(|token| fetch(reader.client, &token, reader.timeout_s))
         .and_then(|body| json_tree::parse(&body).map_err(|_| UnmeasuredReason::BodyUnreadable));
-    match body {
+    let rows = match body {
         Ok(tree) => windows_of(label, &tree),
         Err(reason) => vec![unmeasured(label, None, None, reason)],
+    };
+    (rows, refreshed)
+}
+
+/// その口座の設定 dir で claude を 1 回起こし、終わるか上限で止めるまで待つ（credential は書かない・
+/// 書き手は Claude Code・ADR-0017 §2.5）。
+///
+/// 構築点は [`headless::build`] 1 つ。子は process group の leader として起こし（scope の包みの下では
+/// claude は孫になる）、上限を超えたら group ごと止める。子の stdout / stderr は読まない・出さない。
+fn refresh(dir: &Path, label: &str, reader: &Reader<'_>) -> Refresh {
+    // path の形で名指した実行 file が無い周は起こさない（scope の包みの下では spawn が成功してしまい、
+    // 不在が rc に化ける）。裸の名前の解決は子の起動側に任せる（env を読まない）。
+    if reader.claude.contains('/') && !Path::new(reader.claude).is_file() {
+        return Refresh::Unlaunchable;
     }
+    let account = dir.join("accounts").join(label).display().to_string();
+    let (mut command, confinement) = headless::build(&Call {
+        claude: reader.claude,
+        prompt: REFRESH_PROMPT,
+        permission_mode: REFRESH_PERMISSION_MODE,
+        plugin_dir: None,
+        account_dir: Some(&account),
+        cwd: Some(dir),
+        streaming: false,
+        max_turns: Some(REFRESH_MAX_TURNS),
+    });
+    command.stdout(Stdio::null()).stderr(Stdio::null()).process_group(0);
+    let Ok(mut child) = command.spawn() else {
+        return Refresh::Unlaunchable;
+    };
+    headless::feed(&mut child, REFRESH_PROMPT);
+    let group = child.id();
+    // 子の終わりは別 thread の `wait` で受ける（回収まで行うので、group の消滅の判定に zombie が残らない）。
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = sender.send(child.wait());
+    });
+    let result = match receiver.recv_timeout(Duration::from_secs(reader.timeout_s)) {
+        Ok(Ok(status)) => refresh_of(status),
+        Ok(Err(_)) => Refresh::Unlaunchable,
+        Err(_) => {
+            stop_group(group, Duration::from_millis(reader.grace_ms));
+            Refresh::Timeout
+        }
+    };
+    let _ = confine::release_scope(&confinement);
+    result
+}
+
+/// 終わった子の status を結果にする。signal で終わった周は 128 + signal 番号の rc と読む。
+fn refresh_of(status: ExitStatus) -> Refresh {
+    let code = status
+        .code()
+        .or_else(|| status.signal().map(|signal| RC_SIGNAL_BASE.saturating_add(signal)));
+    match code {
+        Some(0) => Refresh::Ok,
+        Some(found) => Refresh::Rc(u8::try_from(found).unwrap_or(u8::MAX)),
+        None => Refresh::Rc(u8::MAX),
+    }
+}
+
+/// group 宛てに TERM → 猶予だけ待つ → 残れば KILL → 同じ待ち（`pipe stop` と同じ列・待ちは
+/// [`wait`] の 1 実装を通る・C3.4）。**group id が 2 未満の周は撃たない**（`kill -- -1` は user の全 process・
+/// `kill -- -0` は自分の group）。残った事実は返さない（結果は呼び手の `Timeout` のまま）。
+fn stop_group(group: u32, grace: Duration) {
+    if group < 2 {
+        return;
+    }
+    let target = format!("-{group}");
+    signal_group(&target, "-TERM");
+    if wait(Completion::GroupGone(group), grace).is_ok() {
+        return;
+    }
+    signal_group(&target, "-KILL");
+    let _ = wait(Completion::GroupGone(group), grace);
+}
+
+/// `kill <name> -- <target>` を撃つ（std に kill は無い・結果は待ちの側で測る）。
+fn signal_group(target: &str, name: &str) {
+    let _ = Command::new("kill")
+        .arg(name)
+        .arg("--")
+        .arg(target)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
 }
 
 /// credential の path。**`<state_dir>/accounts/` を走査しない**（label から 1 本に決まる）。

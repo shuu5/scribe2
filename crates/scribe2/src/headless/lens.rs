@@ -92,6 +92,7 @@ pub fn dispatch(args: &[String]) -> Outcome {
         // 判定を 1 つ受け取るだけなので既定（text）で呼ぶ。stream-json にすると
         // 「最後の JSON 行」が claude の result record になり、判定が取れない。
         streaming: false,
+        max_turns: None,
     })
 }
 

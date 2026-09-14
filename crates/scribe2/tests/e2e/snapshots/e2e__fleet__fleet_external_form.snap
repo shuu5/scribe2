@@ -6,3 +6,4 @@ usage: fleet <record|show|export|usage|select> --state-dir D [flags]
 fleet: no such run
 {"schema":1,"kind":"export","host":"[host]","runs":0,"seats":0}
 fleet: recorded RunCreated run=r1
+usage: account=a1 unmeasured reason=token_expired refresh=ok

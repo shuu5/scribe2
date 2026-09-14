@@ -81,6 +81,7 @@ pub fn dispatch(args: &[String]) -> Outcome {
         cwd: Some(Path::new(&worktree)),
         // rate limit を**途中で**見るので逐次で受ける。
         streaming: true,
+        max_turns: None,
     },
     &tools);
     if let Some(reason) = unsaved {

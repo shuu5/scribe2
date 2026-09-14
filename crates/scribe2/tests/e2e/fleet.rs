@@ -586,16 +586,23 @@ fn fleet_external_form() {
     let recorded = run_fleet(&[
         "record", "--kind", "RunCreated", "--run", "r1", "--bead", "s2-x", "--state-dir", &path,
     ]);
+    let fx = usage_fixture(&["a1"]);
+    put_credential(&fx, "a1", &expired_credential("tok-old"));
+    let curl = fake_curl(&fx, LIVE_BODY, "200", 0);
+    let claude = fake_claude(&fx, "exit 0");
+    let refreshed = run_usage_with_claude(&fx, &curl, &claude);
     let form = format!(
-        "{}{}{}{}",
+        "{}{}{}{}{}",
         String::from_utf8_lossy(&usage.stderr),
         String::from_utf8_lossy(&missing.stderr),
         String::from_utf8_lossy(&empty.stdout),
-        String::from_utf8_lossy(&recorded.stdout)
+        String::from_utf8_lossy(&recorded.stdout),
+        String::from_utf8_lossy(&refreshed.stdout)
     )
     .replace(&vessel::fleet::cli::host(), "[host]");
     insta::assert_snapshot!(form);
     fs::remove_dir_all(&dir).ok();
+    drop_fixture(&fx);
 }
 
 /// `StoreError` の表示が 1 件 1 行で行番号を持つ（読み側の断りの形）。
@@ -1777,13 +1784,15 @@ fn fleet_usage_credential_failures_name_their_reason() {
     put_credential(&fx, "notoken", &format!(r#"{{"claudeAiOauth":{{"expiresAt":{FAR_EXPIRES_MS}}}}}"#));
     put_credential(&fx, "broken", "{ not json");
     let curl = fake_curl(&fx, LIVE_BODY, "200", 0);
-    let out = run_usage(&fx, &curl, &[]);
+    let claude = fake_claude(&fx, "exit 0");
+    let claude = claude.display().to_string();
+    let out = run_usage(&fx, &curl, &["--claude", &claude]);
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{out:?}");
     assert_eq!(
         out_lines(&out),
         vec![
             "usage: account=tomb unmeasured reason=tombstone",
-            "usage: account=old unmeasured reason=token_expired",
+            "usage: account=old unmeasured reason=token_expired refresh=ok",
             "usage: account=notoken unmeasured reason=no_token",
             "usage: account=broken unmeasured reason=shape_mismatch",
         ]
@@ -1972,6 +1981,187 @@ fn fleet_usage_requires_state_dir() {
     assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{out:?}");
     assert!(out.stdout.is_empty(), "stdout は 0 byte");
     assert!(String::from_utf8_lossy(&out.stderr).contains("usage"), "使い方を stderr へ");
+}
+
+/// 期限の過ぎた、読める credential の本文。
+fn expired_credential(token: &str) -> String {
+    format!(r#"{{"claudeAiOauth":{{"accessToken":"{token}","refreshToken":"r-not-read","expiresAt":1000}}}}"#)
+}
+
+/// 偽 claude（偽 curl と同じ型）。
+///
+/// argv を 1 行 1 引数で `claude-args` へ、口座の env を `claude-env` へ、cwd を `claude-cwd` へ**追記**で写し
+/// （口座ごとに 1 回呼ばれる）、`tail` の shell 行を撃つ。`tail` の中の `{spy}` は写しの置き場に、`{fresh}` は
+/// 期限の遠い credential の本文を置いた file に置き換わる。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn fake_claude(fx: &UsageFixture, tail: &str) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let d = fx.spy.display().to_string();
+    let fresh = fx.spy.join("fresh-credential");
+    fs::write(&fresh, live_credential(TOKEN_A1)).expect("fresh な credential を書ける");
+    let tail = tail.replace("{spy}", &d).replace("{fresh}", &fresh.display().to_string());
+    let script = format!(
+        "#!/bin/sh\n\
+         printf '%s\\n' \"$@\" >> \"{d}/claude-args\"\n\
+         printf 'CLAUDE_CONFIG_DIR=%s\\n' \"$CLAUDE_CONFIG_DIR\" >> \"{d}/claude-env\"\n\
+         pwd -P >> \"{d}/claude-cwd\"\n\
+         {tail}\n"
+    );
+    let path = fx.spy.join("fake-claude");
+    fs::write(&path, script).expect("fake を書ける");
+    let mut perm = fs::metadata(&path).expect("fake の権限を読める").permissions();
+    perm.set_mode(0o755);
+    fs::set_permissions(&path, perm).expect("fake を実行可能にできる");
+    path
+}
+
+/// 偽 claude の起動回数（argv の写しの `-p` の数・写しが無ければ 0）。
+fn claude_calls(fx: &UsageFixture) -> usize {
+    fs::read_to_string(fx.spy.join("claude-args"))
+        .unwrap_or_default()
+        .lines()
+        .filter(|arg| *arg == "-p")
+        .count()
+}
+
+/// `fleet usage` を偽 curl・偽 claude で撃つ。
+fn run_usage_with_claude(fx: &UsageFixture, curl: &Path, claude: &Path) -> Output {
+    let claude = claude.display().to_string();
+    run_usage(fx, curl, &["--claude", &claude])
+}
+
+/// (3a) 期限切れの credential を偽 claude が書き換える周は、読み直して measured になり行の末尾に `refresh=ok`。
+/// 起動は `-p` と `--max-turns 1`・口座の設定 dir を `CLAUDE_CONFIG_DIR` に・cwd は state dir。
+#[test]
+fn fleet_usage_refresh_rewritten_credential_is_measured_with_refresh_ok() {
+    let fx = usage_fixture(&["a1"]);
+    put_credential(&fx, "a1", &expired_credential("tok-old"));
+    let curl = fake_curl(&fx, LIVE_BODY, "200", 0);
+    let claude = fake_claude(&fx, "cat \"{fresh}\" > \"$CLAUDE_CONFIG_DIR/.credentials.json\"\nexit 0");
+    let out = run_usage_with_claude(&fx, &curl, &claude);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{out:?}");
+    assert_eq!(out_lines(&out), vec![format!("{} refresh=ok", live_line("a1"))], "{out:?}");
+
+    let args: Vec<String> = fs::read_to_string(fx.spy.join("claude-args"))
+        .expect("偽 claude が argv を写した")
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(args.iter().filter(|arg| *arg == "-p").count(), 1, "-p で 1 回: {args:?}");
+    assert_eq!(args.windows(2).filter(|pair| pair == &["--max-turns", "1"]).count(), 1, "--max-turns 1: {args:?}");
+    let env = fs::read_to_string(fx.spy.join("claude-env")).expect("偽 claude が env を写した");
+    let account = fx.state.join("accounts").join("a1");
+    assert_eq!(env, format!("CLAUDE_CONFIG_DIR={}\n", account.display()), "口座の設定 dir");
+    let cwd = fs::read_to_string(fx.spy.join("claude-cwd")).expect("偽 claude が cwd を写した");
+    let state = fs::canonicalize(&fx.state).expect("state dir を解ける");
+    assert_eq!(cwd, format!("{}\n", state.display()), "cwd は state dir");
+    assert!(
+        allowances(&fx).iter().all(|row| matches!(row, Allowance::Measured(_))),
+        "event は measured の行だけ: {:?}",
+        allowances(&fx)
+    );
+    let events = fs::read_to_string(store::events_path(&fx.state)).expect("event log が在る");
+    assert!(!events.contains("refresh"), "event の行には載せない: {events}");
+    drop_fixture(&fx);
+}
+
+/// (3b)(3c)(3e) 書き換えない偽 claude は rc 0 で `refresh=ok`・rc 7 は `refresh=rc:7`・実行 file 不在は
+/// `refresh=unlaunchable`。いずれも `token_expired` のまま（client は起きない）。
+#[test]
+fn fleet_usage_refresh_failures_keep_token_expired_and_name_the_refresh() {
+    for (name, tail, want) in [
+        ("rc 0", Some("exit 0"), "refresh=ok"),
+        ("rc 7", Some("exit 7"), "refresh=rc:7"),
+        ("不在", None, "refresh=unlaunchable"),
+    ] {
+        let fx = usage_fixture(&["a1"]);
+        put_credential(&fx, "a1", &expired_credential("tok-old"));
+        let curl = fake_curl(&fx, LIVE_BODY, "200", 0);
+        let claude = match tail {
+            Some(tail) => fake_claude(&fx, tail),
+            None => fx.spy.join("no-such-claude"),
+        };
+        let out = run_usage_with_claude(&fx, &curl, &claude);
+        assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{name}: {out:?}");
+        assert_eq!(
+            out_lines(&out),
+            vec![format!("usage: account=a1 unmeasured reason=token_expired {want}")],
+            "{name}"
+        );
+        assert_eq!(claude_calls(&fx), usize::from(tail.is_some()), "{name}: 1 回だけ起こす");
+        assert!(!fx.spy.join("args").exists(), "{name}: 期限切れのままの口座は client を起こさない");
+        drop_fixture(&fx);
+    }
+}
+
+/// (3d) 上限を超えて眠る偽 claude（孫を持つ）は group ごと止めて `refresh=timeout`。子と孫の両方が残らない。
+#[test]
+fn fleet_usage_refresh_timeout_stops_the_child_and_its_grandchild() {
+    let fx = usage_fixture(&["a1"]);
+    let short = usage_rules(&["a1"]).replace(&format!("value = {USAGE_TIMEOUT_S}"), "value = 1");
+    fs::write(&fx.rules, short).expect("短い上限の rules fixture を書ける");
+    put_credential(&fx, "a1", &expired_credential("tok-old"));
+    let curl = fake_curl(&fx, LIVE_BODY, "200", 0);
+    let claude = fake_claude(&fx, "sleep 30 &\necho $! > \"{spy}/grandchild\"\necho $$ > \"{spy}/child\"\nwait");
+    let started = Instant::now();
+    let out = run_usage_with_claude(&fx, &curl, &claude);
+    let elapsed = started.elapsed();
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{out:?}");
+    assert_eq!(
+        out_lines(&out),
+        vec!["usage: account=a1 unmeasured reason=token_expired refresh=timeout".to_owned()],
+        "{out:?}"
+    );
+    assert!(elapsed < Duration::from_secs(20), "上限で止める: {elapsed:?}");
+    for who in ["child", "grandchild"] {
+        let pid = fs::read_to_string(fx.spy.join(who)).expect("偽 claude が pid を写した");
+        let pid = pid.trim();
+        assert!(!pid.is_empty(), "{who} の pid が在る");
+        assert!(!Path::new(&format!("/proc/{pid}")).exists(), "{who}（pid {pid}）が残らない");
+    }
+    drop_fixture(&fx);
+}
+
+/// (3f)(3g) fresh な credential と墓標では偽 claude を起こさない（argv の写しが無い）。
+#[test]
+fn fleet_usage_refresh_is_not_attempted_for_fresh_or_tombstone() {
+    let fx = usage_fixture(&["a1", "tomb"]);
+    put_credential(&fx, "a1", &live_credential(TOKEN_A1));
+    put_credential(&fx, "tomb", r#"{"claudeAiOauth":{"accessToken":"tok-tomb","expiresAt":0}}"#);
+    let curl = fake_curl(&fx, LIVE_BODY, "200", 0);
+    let claude = fake_claude(&fx, "exit 0");
+    let out = run_usage_with_claude(&fx, &curl, &claude);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{out:?}");
+    assert_eq!(
+        out_lines(&out),
+        vec![live_line("a1"), "usage: account=tomb unmeasured reason=tombstone".to_owned()],
+        "試みない周は refresh= を足さない"
+    );
+    assert!(!fx.spy.join("claude-args").exists(), "偽 claude は起こされない");
+    drop_fixture(&fx);
+}
+
+/// (3h) 2 口座のうち 1 つだけ期限切れなら、起動は 1 回（その口座の設定 dir で）。
+#[test]
+fn fleet_usage_refresh_launches_once_for_the_single_expired_account() {
+    let fx = usage_fixture(&["a1", "a2"]);
+    put_credential(&fx, "a1", &live_credential(TOKEN_A1));
+    put_credential(&fx, "a2", &expired_credential("tok-old"));
+    let curl = fake_curl(&fx, LIVE_BODY, "200", 0);
+    let claude = fake_claude(&fx, "exit 0");
+    let out = run_usage_with_claude(&fx, &curl, &claude);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{out:?}");
+    assert_eq!(
+        out_lines(&out),
+        vec![live_line("a1"), "usage: account=a2 unmeasured reason=token_expired refresh=ok".to_owned()]
+    );
+    assert_eq!(claude_calls(&fx), 1, "起動は 1 回");
+    let env = fs::read_to_string(fx.spy.join("claude-env")).expect("偽 claude が env を写した");
+    assert_eq!(env, format!("CLAUDE_CONFIG_DIR={}\n", fx.state.join("accounts").join("a2").display()));
+    drop_fixture(&fx);
 }
 
 /// `fleet select` の歯の 5 時間窓の reset（遠い未来＝どの「いま」でも古くない）。
