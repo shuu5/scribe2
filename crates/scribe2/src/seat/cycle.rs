@@ -19,6 +19,7 @@ use crate::fleet::json_lite::{self, Value};
 use crate::fleet::select::{self, NoCandidate, Purpose, Selection};
 use crate::fleet::store::{self, LockPolicy};
 use crate::fleet::{Registration, State};
+use crate::headless::{AGENT_VIEW_ENV, AGENT_VIEW_OFF};
 use crate::hook::{seat_name, InjectionRecord, SCHEMA};
 use crate::rules::manifest::Manifest;
 use crate::rules::RuleValue;
@@ -470,6 +471,19 @@ pub fn fill_launch(template: &str, account_dir: &str) -> Result<String, Holes> {
     }
 }
 
+/// 起動行の先頭に agent view を切る env（`CLAUDE_CODE_DISABLE_AGENT_VIEW=1 `）を前置する（pure・設計 account-autonomy.md
+/// §5「agent view の前提」・`s2-07l.239`）。器が起こす claude は常に agent view 無しで動く——有効な session は background
+/// work が残る周の `/exit` で dialog を出して止まり、器は描画を読まない（C3.3）ので答えられない。雛形は user の物で
+/// 書き換えず（[`fill_launch`] は不変）、子へ設定するだけで env は読まない（C2.2）。既に同じ前置で始まる行は二重にせず、
+/// 空の行はそのまま返す。
+pub fn with_agent_view_off(line: &str) -> String {
+    let prefix = format!("{AGENT_VIEW_ENV}={AGENT_VIEW_OFF} ");
+    if line.trim().is_empty() || line.trim_start().starts_with(&prefix) {
+        return line.to_owned();
+    }
+    format!("{prefix}{line}")
+}
+
 /// 立て直し 1 回の入力（[`relaunch`]・入口の 3 条件と back-off は tick が見る）。
 pub struct Relaunch<'a> {
     /// tmux target（shell へ戻った pane）。
@@ -519,8 +533,9 @@ pub fn relaunch(request: &Relaunch) -> Relaunched {
         Selection::None(found) => return Relaunched::None(found),
     };
     let account_dir = request.state_dir.path.join(ACCOUNTS_DIR).join(&label);
+    // 注入するのは穴を埋めた雛形に agent view off を前置した 1 行（記録にも同じ行が載る）。
     let launch = match fill_launch(&request.row.launch, &account_dir.display().to_string()) {
-        Ok(found) => found,
+        Ok(found) => with_agent_view_off(&found),
         Err(holes) => return Relaunched::Refused(holes.as_str()),
     };
     let ttl = match ttl_s() {
@@ -657,8 +672,25 @@ fn sending<'r>(request: &Relaunch<'r>, payload: &'r str) -> inject::Request<'r> 
 
 #[cfg(test)]
 mod tests {
-    use super::{fill_launch, Holes, HOLES};
+    use super::{fill_launch, with_agent_view_off, Holes, HOLES};
     use crate::order::is_declaration_order;
+
+    /// 起動行の先頭に agent view を切る env を 1 つだけ前置する: 行の中身は変えず、既に前置済みの行は二重にせず、空の行は
+    /// そのまま（契約 (c)・`s2-07l.239`）。
+    #[test]
+    fn seat_agent_view_off_prefix_is_single_and_keeps_blank_lines() {
+        let line = "CLAUDE_CONFIG_DIR=/state/accounts/a2 claude --resume";
+        let once = with_agent_view_off(line);
+        assert_eq!(once, "CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CONFIG_DIR=/state/accounts/a2 claude --resume");
+        assert_eq!(with_agent_view_off(&once), once, "前置済みの行は二重にしない");
+        assert_eq!(
+            with_agent_view_off("sh l.sh /state/accounts/a2"),
+            "CLAUDE_CODE_DISABLE_AGENT_VIEW=1 sh l.sh /state/accounts/a2",
+            "env で始まらない雛形にも前置する"
+        );
+        assert_eq!(with_agent_view_off(""), "", "空の行はそのまま");
+        assert_eq!(with_agent_view_off("  "), "  ", "空白だけの行もそのまま");
+    }
 
     /// 雛形の穴はちょうど 1 つだけが埋まり（文字列の置換だけ・env の字面も path の字面も解釈しない）、無い・2 つ
     /// 以上は typed に断る（account-autonomy.md §5・契約 (d)）。

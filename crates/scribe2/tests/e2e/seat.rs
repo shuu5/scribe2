@@ -7191,9 +7191,15 @@ fn acct_curl_calls(place: &AcctPlace) -> usize {
 /// 以後は受けた行を `seat.log` に積んで `UserPromptSubmit` → `Stop` を打つ（復元の消費の証拠）。前面は `sh` の
 /// ままなので、立て直した後の周に入口 (3) が立ち続けても (1) が崩れる形を測れる。
 fn acct_launcher(place: &AcctPlace, target: &str) -> String {
+    format!("sh {} {{account_dir}}", acct_launch_script(place, target, "\"$1\""))
+}
+
+/// [`acct_launcher`] の偽の session の script を書き、path を返す。起動時に `words`（sh の語の並び）を 1 語 1 行で
+/// `launched` へ写す（雛形の穴を引数で受ける形は `"$1"`・env で受ける形は `"$CLAUDE_CONFIG_DIR"` など）。
+fn acct_launch_script(place: &AcctPlace, target: &str, words: &str) -> String {
     let file = state_file(&seat_dir_of(&place.state, target));
     let script = format!(
-        "printf '%s\\n' \"$1\" >> '{launched}'\nprintf '\u{276f} '\n{start}\n\
+        "printf '%s\\n' {words} >> '{launched}'\nprintf '\u{276f} '\n{start}\n\
          while read -r line; do printf '%s\\n' \"$line\" >> '{log}'; {busy}; {stop}; printf '\u{276f} '; done\n",
         launched = place.dir.join("launched").display(),
         log = place.dir.join("seat.log").display(),
@@ -7201,8 +7207,7 @@ fn acct_launcher(place: &AcctPlace, target: &str) -> String {
         busy = stamp_cmd(&file, "busy", "UserPromptSubmit", FakeStamp::Now),
         stop = stamp_cmd(&file, "idle", "Stop", FakeStamp::Now),
     );
-    let path = fixture(&place.dir, "l.sh", &script);
-    format!("sh {path} {{account_dir}}")
+    fixture(&place.dir, "l.sh", &script)
 }
 
 /// 退避の合図を実物の tick で 1 回注入させる（打刻 Busy・口座が閾値以上の fixture が前提）。判定行を返す。
@@ -7447,7 +7452,10 @@ fn acct_assert_launched_then_restored(place: &AcctPlace, target: &str) {
     );
     let sent = acct_sent(&place.state, target);
     assert_eq!(sent.len(), 3, "退避の合図・起動・復元の 3 行: {sent:?}");
-    assert!(sent.get(1).is_some_and(|what| what.starts_with("sh ")), "2 行目は起動の雛形: {sent:?}");
+    assert!(
+        sent.get(1).is_some_and(|what| what.starts_with("CLAUDE_CODE_DISABLE_AGENT_VIEW=1 sh ")),
+        "2 行目は agent view off を前置した起動の雛形: {sent:?}"
+    );
     assert_eq!(sent.get(2).map(String::as_str), Some("/rebrief"), "3 行目は復元: {sent:?}");
 }
 
@@ -7719,6 +7727,46 @@ fn seat_relaunch_shell_without_a_prompt_tail_is_refused_unknown() {
     let out = acct_tick(&place, name, None);
 
     acct_assert_shell_refused(&place, name, &out, "relaunch-input-unknown");
+    drop(guard);
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (5) 立て直しの起動行は agent view を切る env を先頭に前置して注入する（`s2-07l.239`・account-autonomy.md §5「agent view
+/// の前提」）: 雛形 `CLAUDE_CONFIG_DIR={account_dir} sh <script>` は書き換えず、席の記録の起動行はちょうど
+/// `CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CONFIG_DIR=<a2 の credential dir> sh <script>`。効果でも測る: shell が export した
+/// 別の値を前置が上書きし、起こした process は `1` を見る。base は雛形のまま `CLAUDE_CONFIG_DIR=` で始まる（RED）。
+#[test]
+fn seat_relaunch_agent_view_off_prefixes_launch_line() {
+    let place = acct_place();
+    let name = "agentviewoff";
+    let guard = start_seat(&place.socket, name);
+    assert!(guard.ready(), "独立 socket に shell の session を立てられる");
+    let script = acct_launch_script(&place, name, "\"$CLAUDE_CONFIG_DIR\" \"$CLAUDE_CODE_DISABLE_AGENT_VIEW\"");
+    acct_parked(&place, name, &format!("CLAUDE_CONFIG_DIR={{account_dir}} sh {script}"), 30);
+    // pane の shell が別の値を持つ（前置が無ければ起こした process はこれを継承する）。
+    assert!(tmux(&place.socket, &["send-keys", "-t", name, "-l", "export CLAUDE_CODE_DISABLE_AGENT_VIEW=inherited"]).status.success());
+    assert!(tmux(&place.socket, &["send-keys", "-t", name, "Enter"]).status.success());
+    assert!(acct_shell_prompt(&place, name, ""), "shell の prompt を描ける");
+
+    let out = acct_tick(&place, name, None);
+
+    let line = stdout_of(&out);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stdout={line} stderr={}", stderr_of(&out));
+    for (key, want) in [("decision", "inject"), ("kind", "relaunch"), ("relaunch", ACCT_SPARE)] {
+        assert_eq!(tick_token(&line, key).as_deref(), Some(want), "{key}: {line}");
+    }
+    let spare = place.state.join("accounts").join(ACCT_SPARE).display().to_string();
+    let sent = acct_sent(&place.state, name);
+    assert_eq!(
+        sent.get(1),
+        Some(&format!("CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CONFIG_DIR={spare} sh {script}")),
+        "起動行は agent view off を 1 つだけ前置した雛形: {sent:?}"
+    );
+    assert_eq!(
+        fs::read_to_string(place.dir.join("launched")).unwrap_or_default(),
+        format!("{spare}\n1\n"),
+        "起こした process は選んだ口座と agent view off を見る"
+    );
     drop(guard);
     fs::remove_dir_all(&place.dir).ok();
 }
@@ -8060,7 +8108,10 @@ fn seat_exit_then_shell_relaunches_on_the_next_round() {
     let sent = acct_sent(&place.state, name);
     assert_eq!(sent.len(), 4, "退避の合図・/exit・起動・復元の 4 行: {sent:?}");
     assert_eq!(sent.get(1).map(String::as_str), Some("/exit"), "2 行目は終了の手: {sent:?}");
-    assert!(sent.get(2).is_some_and(|what| what.starts_with("sh ")), "3 行目は起動の雛形: {sent:?}");
+    assert!(
+        sent.get(2).is_some_and(|what| what.starts_with("CLAUDE_CODE_DISABLE_AGENT_VIEW=1 sh ")),
+        "3 行目は agent view off を前置した起動の雛形: {sent:?}"
+    );
     assert_eq!(sent.get(3).map(String::as_str), Some("/rebrief"), "4 行目は復元: {sent:?}");
     acct_assert_relabelled(&place, name);
     drop(guard);

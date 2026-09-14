@@ -45,6 +45,15 @@ pub const RC_RATE_LIMIT: u8 = 75;
 /// 「読むこと」と「新しい seam を導入すること」で、継承はそのどちらでもない。
 pub const ACCOUNT_ENV: &str = "CLAUDE_CONFIG_DIR";
 
+/// agent view を切る**子 process の**環境変数（設計 account-autonomy.md §5「agent view の前提」・`s2-07l.239`）。
+///
+/// [`ACCOUNT_ENV`] と同じく子へ設定するだけで、自分では読まない（C2.2）。器が起こす claude の構築点（本 module の
+/// [`build`] と `seat::cycle::relaunch` の起動行）が必ず設定する＝settings に依らず構造で切れる。
+pub const AGENT_VIEW_ENV: &str = "CLAUDE_CODE_DISABLE_AGENT_VIEW";
+
+/// [`AGENT_VIEW_ENV`] に設定する値（agent view off）。
+pub const AGENT_VIEW_OFF: &str = "1";
+
 /// 判定に届かなかった周の 1 行（lens の既定）。
 pub const INCONCLUSIVE_HEAD: &str = r#"{"verdict":"INCONCLUSIVE","evidence":"#;
 
@@ -191,6 +200,10 @@ pub fn build(call: &Call<'_>) -> (Command, confine::Confinement) {
     if let Some(dir) = call.account_dir {
         cmd.env(ACCOUNT_ENV, dir);
     }
+    // **agent view は常に切る**（account-autonomy.md §5「agent view の前提」）: 有効な session は background work が残る周の
+    // `/exit` で dialog を出して止まり、器は描画を読まない（C3.3）ので答えられない。runner と lens の唯一の構築点がここ
+    // なので 1 か所で足りる（口座の有無に依らない・親の値は継承させず上書きする）。
+    cmd.env(AGENT_VIEW_ENV, AGENT_VIEW_OFF);
     cmd.stdin(Stdio::piped()).stdout(Stdio::piped());
     (cmd, confinement)
 }

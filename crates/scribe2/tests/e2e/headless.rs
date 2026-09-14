@@ -29,8 +29,8 @@ fn tmp() -> PathBuf {
 
 /// fake claude を 1 本作る。
 ///
-/// 起動されたら `called` を残し、引数を `args`・cwd を `cwd`・口座 env を `account` へ
-/// 写してから `body` を stdout へ出す。
+/// 起動されたら `called` を残し、引数を `args`・cwd を `cwd`・口座 env を `account`・agent view の
+/// env を `agent-view` へ写してから `body` を stdout へ出す。
 ///
 /// `lingering` が真のときだけ、body の後に**眠ってから** `tail-ran` を残す。呼び手が
 /// 途中で殺したかどうかを rc でなく**痕跡の不在**で測るための印で、要る歯は 1 本だけ
@@ -50,6 +50,7 @@ fn fake_claude(dir: &Path, body: &str, lingering: bool, rc: u8) -> PathBuf {
          cat > \"{d}/stdin\"\n\
          pwd > \"{d}/cwd\"\n\
          printf '%s' \"$CLAUDE_CONFIG_DIR\" > \"{d}/account\"\n\
+         printf '%s' \"$CLAUDE_CODE_DISABLE_AGENT_VIEW\" > \"{d}/agent-view\"\n\
          cat \"{d}/body\"\n\
          {tail}exit {rc}\n"
     );
@@ -61,7 +62,13 @@ fn fake_claude(dir: &Path, body: &str, lingering: bool, rc: u8) -> PathBuf {
     path
 }
 
-/// binary を 1 回撃つ。stdin には `input` を流す。
+/// binary へ渡す親の agent view の env の値（`1` でも空でもない字面）。
+///
+/// test を撃つ環境が既に `1` を持っていると、子が**継承しただけ**の周も「切れている」に見える（空虚な歯）。
+/// 親の値を別の字面に固定し、子の写しが `1` なら器が**設定した**と読める形にする。
+const INHERITED_AGENT_VIEW: &str = "inherited-from-parent";
+
+/// binary を 1 回撃つ。stdin には `input` を流す（親の agent view の env は [`INHERITED_AGENT_VIEW`]）。
 #[expect(
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
@@ -69,6 +76,7 @@ fn fake_claude(dir: &Path, body: &str, lingering: bool, rc: u8) -> PathBuf {
 fn run_bin(args: &[&str], input: &[u8]) -> Output {
     let mut child = Command::new(bin())
         .args(args)
+        .env("CLAUDE_CODE_DISABLE_AGENT_VIEW", INHERITED_AGENT_VIEW)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -499,6 +507,36 @@ fn headless_lens_extracts_last_json_line() {
     );
     assert_eq!(stdout_of(&out).lines().count(), 1, "stdout は 1 行だけ");
     clean(&[&dir, &account]);
+}
+
+/// runner と lens の子は常に agent view 無しで起きる（`s2-07l.239`・設計 account-autonomy.md §5「agent view の前提」）:
+/// `build` が子の env へ `CLAUDE_CODE_DISABLE_AGENT_VIEW=1` を設定し、親の値（[`INHERITED_AGENT_VIEW`]）を継承させない。
+/// `--account-dir` を渡さない周でも同じ（口座の env とは別の 1 本）。base は親の値が子へそのまま届く（RED）。
+#[test]
+fn headless_agent_view_off_env_reaches_runner_and_lens() {
+    let dir = tmp();
+    let worktree = tmp();
+    let claude = fake_claude(&dir, "", false, 0);
+    let write_set = dir.join("write-set.txt");
+    let vessel = write_vessel_copy(&dir, r#"["cargo"]"#);
+    fs::write(&write_set, "src/lib.rs\n").expect("write-set を書ける");
+    let out = run_runner(
+        &RunnerCall { dir: &dir, worktree: &worktree, write_set: &write_set, vessel: &vessel, claude: &claude, mode: "plan", account: None },
+        b"goal = \"x\"\n",
+    );
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    assert_eq!(slurp(&dir.join("agent-view")), "1", "runner の子で agent view を切る");
+
+    // lens の周の写しを runner の周の残りと取り違えない（呼ばれた印ごと消してから撃つ）。
+    fs::remove_file(dir.join("agent-view")).expect("runner の周の写しを消せる");
+    fs::remove_file(dir.join("called")).expect("runner の周の印を消せる");
+    let verdict = fake_claude(&dir, "{\"verdict\":\"PASS\",\"evidence\":\"x\"}\n", false, 0);
+    let contract = contract_in(&dir);
+    let out = run_lens(&contract, "4096", "plan", &verdict, b"--- a\n+++ b\n");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    assert!(dir.join("called").exists(), "cap 内なので lens も claude を呼ぶ");
+    assert_eq!(slurp(&dir.join("agent-view")), "1", "lens の子で agent view を切る");
+    clean(&[&dir, &worktree]);
 }
 
 #[test]
