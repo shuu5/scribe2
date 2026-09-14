@@ -19,8 +19,10 @@ mod paths_clean;
 mod polarity;
 mod private_clean;
 mod prose_gate;
+mod seat_brief;
 mod spawn_points;
 mod toml_lite;
+mod workspace;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
