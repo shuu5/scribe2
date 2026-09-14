@@ -754,7 +754,7 @@ fn rules_cli_get_returns_value() {
     let args = ["get".to_owned(), "R-C4-1".to_owned()];
     let outcome = vessel::rules::cli::dispatch(&args);
     assert_eq!(outcome.rc, RC_OK, "rc: {outcome:?}");
-    assert_eq!(outcome.out, vec!["26000".to_owned()], "値の行（裁定 id user 2026-09-13T07:08Z）");
+    assert_eq!(outcome.out, vec!["40000".to_owned()], "値の行（裁定 id user 2026-09-14）");
 }
 
 #[test]

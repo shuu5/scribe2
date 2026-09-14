@@ -5,7 +5,7 @@
 //! ここを参照して機械的に作る（fixture に magic number を書かない）。
 
 /// core crate の `src` 配下 `.rs` の総行数の上限。
-pub const MAX_CORE_LINES: usize = 26_000;
+pub const MAX_CORE_LINES: usize = 40_000;
 
 /// `crates/*/src` 配下 `.rs` 1 file あたりの物理行数の上限。
 pub const MAX_FILE_LINES: usize = 1_500;
