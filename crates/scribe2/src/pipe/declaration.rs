@@ -528,9 +528,10 @@ pub struct Headroom {
 /// core の合計を名指す `file` の字面。
 pub const CORE: &str = "core";
 
-/// 行数（xtask check の file-lines / core-lines と同じ式 = 改行で区切った行の数・幅の正規化は `.254`）。
-pub fn line_count(text: &str) -> u64 {
-    u64::try_from(text.lines().count()).unwrap_or(u64::MAX)
+/// 行数（xtask check の file-lines / core-lines と同じ式 = 幅 `width` で正規化した行数・[`super::closure::weighted_lines`]）。
+pub fn line_count(text: &str, width: u64) -> u64 {
+    let width = usize::try_from(width).unwrap_or(usize::MAX);
+    u64::try_from(super::closure::weighted_lines(text, width)).unwrap_or(u64::MAX)
 }
 
 /// 上限の余地を測る（**受付だけが撃つ**・pure・I/O は呼び手）。
@@ -819,8 +820,9 @@ mod tests {
         );
         let only_b = read_write_set(&strings(&["crates/toy/src/b.rs", "docs/d.md"]), &base()).unwrap_or_default();
         assert!(headroom_shortfalls(&only_b, &lines, caps(300, 40_000)).is_empty(), "余地の無い file を持たない行は通る");
-        assert_eq!(line_count("a\nb\n"), 2, "行数は改行で区切った行の数");
-        assert_eq!(line_count("a\nb"), 2, "末尾改行の有無で差を出さない");
+        assert_eq!(line_count("a\nb\n", 120), 2, "幅に収まる行は改行で区切った行の数");
+        assert_eq!(line_count("a\nb", 120), 2, "末尾改行の有無で差を出さない");
+        assert_eq!(line_count(&format!("{}\nb\n", "a".repeat(250)), 120), 4, "幅を超える行は ceil(250 ÷ 120) = 3 行");
     }
 
     /// 門の範囲の外（R-C4-2 は `crates/<c>/src/` 配下だけ）の fixture: 余地 50 の src・余地 0 の tests・`.rs` でない doc。

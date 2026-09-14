@@ -167,7 +167,7 @@ fn real_limits() -> Limits {
 }
 
 /// fixture の rules manifest。`allow` に与えた path が例外行に載る。役割の行は planner 1 つ（権能 2 つ）。
-/// 閾値の 7 行（R-C4-* / R-C13-1）は現物と同じ値で持つ（`Limits::read` が無い行を拒むので、fixture も
+/// 閾値の 8 行（R-C4-* / R-C4.line-width / R-C13-1）は現物と同じ値で持つ（`Limits::read` が無い行を拒むので、fixture も
 /// 実 repo が持つものを持つ）。
 fn rules_manifest(allow: &[&str]) -> String {
     let items = allow
@@ -183,6 +183,7 @@ fn rules_manifest(allow: &[&str]) -> String {
         ("R-C4-4.fn-lines", "FnLines", limits.fn_lines),
         ("R-C4-4.complexity", "FnComplexity", limits.fn_complexity),
         ("R-C4-4.args", "FnArgs", limits.fn_args),
+        ("R-C4.line-width", "LineWidth", limits.line_width),
         ("R-C13-1", "DepBudget", limits.dep_budget),
     ];
     let mut text = String::from("schema = 1\n");

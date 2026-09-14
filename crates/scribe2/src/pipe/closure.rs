@@ -472,9 +472,24 @@ fn use_statements(text: &str) -> Vec<String> {
     found
 }
 
+/// 行の数え方（設計 rules-manifest.md §4・`R-C4.line-width`・上限の余地が base の行数を数える式）: 各行を
+/// `max(1, ceil(文字数 ÷ width))` と数えた合計。
+///
+/// 1 行に詰め込んでも余地が増えない形。文字数は `chars` の数・末尾改行の有無で差を出さない・`width = 0` は 1 行 1 と
+/// 数える（0 除算の縮退）。xtask の `workspace::weighted_lines` と同じ式（crate は互いに依存しない）で、同じ fixture の
+/// 歯が一致を守る。
+pub fn weighted_lines(text: &str, width: usize) -> usize {
+    text.lines()
+        .map(|line| match width {
+            0 => 1,
+            _ => line.chars().count().div_ceil(width).max(1),
+        })
+        .sum()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{closure, surface_closure, unresolved_names, ClosureError, Source};
+    use super::{closure, surface_closure, unresolved_names, weighted_lines, ClosureError, Source};
     use proptest::prelude::*;
     use proptest::test_runner::Config;
     use std::collections::BTreeSet;
@@ -709,6 +724,34 @@ mod tests {
         let mut broken = sources.clone();
         broken.push(Source { path: "crates/toy/src/x.rs".to_owned(), body: Err("bad".to_owned()) });
         assert!(matches!(unresolved_names(&resolved, &touches, &write_set, &tracked, &broken), Err(ClosureError::Unreadable { .. })));
+    }
+
+    /// 幅 10 の fixture と期待値。**xtask の `workspace` の歯と同じ字面・同じ値**（2 crate の式の一致を守る）。
+    const WIDTH_FIXTURES: &[(&str, usize)] = &[
+        ("ab\ncd\nef\n", 3),
+        ("abcdefghijklmnopqrstuvwxy\n", 3),
+        ("0123456789\n", 1),
+        ("\n", 1),
+        ("ab\ncd\nef", 3),
+        ("abcdefghijklmnopqrstuvwxy", 3),
+        ("あいうえおかきくけこさ\n", 2),
+    ];
+
+    /// 幅 10: 短い 3 行 = 3・25 字の 1 行 = 3・10 字ちょうど = 1・空行 = 1・末尾改行の有無で同値・文字数は byte でなく
+    /// 文字で数える（11 字の和文 = 2）。
+    #[test]
+    fn contract_closure_width_weighs_each_line_by_ceil_of_chars_over_width() {
+        for (text, want) in WIDTH_FIXTURES {
+            assert_eq!(weighted_lines(text, 10), *want, "{text:?}");
+        }
+        assert_eq!(weighted_lines("ab\ncd\nef", 10), weighted_lines("ab\ncd\nef\n", 10), "末尾改行の有無で差を出さない");
+    }
+
+    /// 幅 0 は 1 行 1 と数える（0 除算の縮退）・幅が行より広ければ改行の数と同じ。
+    #[test]
+    fn contract_closure_width_zero_and_wide_width_count_newlines() {
+        assert_eq!(weighted_lines("abcdefghijklmnopqrstuvwxy\nab\n", 0), 2, "幅 0");
+        assert_eq!(weighted_lines("abcdefghijklmnopqrstuvwxy\nab\n", 120), 2, "幅 120");
     }
 
     /// 本文の断片（4 形・別名・無関係な行）。

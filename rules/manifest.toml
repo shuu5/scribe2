@@ -56,6 +56,16 @@ enabled = true
 ruling = "RULING-v2-p1-exit-bundle 論点 2"
 ruled_at = "2026-09-07"
 
+# 行の数え方の正規化（設計 rules-manifest.md §4）。値を超える幅の行は ceil(文字数 ÷ 値) 行に数える。
+# R-C4-1〜3 と契約表の上限の余地が同じ式で数える＝1 行に詰め込んでも上限は逃げない。
+[[rule]]
+id = "R-C4.line-width"
+kind = "LineWidth"
+value = 120
+enabled = true
+ruling = "user 2026-09-14T06:5xZ"
+ruled_at = "2026-09-14"
+
 # 対話面（憲法 C7・ADR-0022 §2.2）。値は Role の名（承認・回答・go の記帳はこの役割の席からだけ・AC15）。
 
 [[rule]]

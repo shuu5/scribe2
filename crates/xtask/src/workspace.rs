@@ -72,19 +72,40 @@ pub(crate) struct SourceFile {
 }
 
 impl SourceFile {
-    /// 物理行数（末尾改行の有無で差を出さない）。
-    pub(crate) fn lines(&self) -> usize {
-        self.text.lines().count()
+    /// 幅 `width` で正規化した行数（[`weighted_lines`]・末尾改行の有無で差を出さない）。
+    ///
+    /// 幅は field に持たず引数で受ける: `SourceFile` は measure の歯が literal で組むので（env_reads /
+    /// spawn_points）、field を足すと write-set の外の歯まで書き換わる（`s2-07l.254`）。
+    pub(crate) fn lines(&self, width: usize) -> usize {
+        weighted_lines(&self.text, width)
     }
 
-    /// 最初に現れる行頭 `#[cfg(test)]` から file 末尾までを test 行、残りを src 行と数える。
-    pub(crate) fn split_test_src(&self) -> (usize, usize) {
+    /// 最初に現れる行頭 `#[cfg(test)]` から file 末尾までを test 行、残りを src 行と数える（幅で正規化）。
+    pub(crate) fn split_test_src(&self, width: usize) -> (usize, usize) {
         let lines: Vec<&str> = self.text.lines().collect();
-        match lines.iter().position(|line| line.starts_with(TEST_MOD_MARK)) {
-            Some(at) => (lines.len().saturating_sub(at), at),
-            None => (0, lines.len()),
-        }
+        let at = lines.iter().position(|line| line.starts_with(TEST_MOD_MARK)).unwrap_or(lines.len());
+        let (src, test) = lines.split_at(at);
+        (sum_weights(test, width), sum_weights(src, width))
     }
+}
+
+/// 行の数え方（設計 rules-manifest.md §4・`R-C4.line-width`）: 各行を `max(1, ceil(文字数 ÷ width))` と数えた合計。
+///
+/// 1 行に詰め込んでも行数が下がらない形。文字数は `chars` の数・末尾改行の有無で差を出さない・`width = 0` は 1 行 1
+/// と数える（0 除算の縮退）。core の `pipe::closure::weighted_lines` と同じ式で、同じ fixture の歯が一致を守る。
+pub(crate) fn weighted_lines(text: &str, width: usize) -> usize {
+    sum_weights(&text.lines().collect::<Vec<&str>>(), width)
+}
+
+/// 行の列の重みの合計（[`weighted_lines`] の式）。
+fn sum_weights(lines: &[&str], width: usize) -> usize {
+    lines
+        .iter()
+        .map(|line| match width {
+            0 => 1,
+            _ => line.chars().count().div_ceil(width).max(1),
+        })
+        .sum()
 }
 
 /// file を読む。読めない理由はそのまま違反本文に出せる形にする。
@@ -187,4 +208,53 @@ pub(crate) fn json_string_field(src: &str, key: &str) -> Option<String> {
     after_open
         .split_once('"')
         .map(|(value, _)| value.to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{weighted_lines, SourceFile};
+    use std::path::PathBuf;
+
+    /// 幅 10 の fixture と期待値。**core の `pipe::closure` の歯と同じ字面・同じ値**（2 crate の式の一致を守る）。
+    const WIDTH_FIXTURES: &[(&str, usize)] = &[
+        ("ab\ncd\nef\n", 3),
+        ("abcdefghijklmnopqrstuvwxy\n", 3),
+        ("0123456789\n", 1),
+        ("\n", 1),
+        ("ab\ncd\nef", 3),
+        ("abcdefghijklmnopqrstuvwxy", 3),
+        ("あいうえおかきくけこさ\n", 2),
+    ];
+
+    /// 幅 10: 短い 3 行 = 3・25 字の 1 行 = 3・10 字ちょうど = 1・空行 = 1・末尾改行の有無で同値・文字数は byte でなく
+    /// 文字で数える（11 字の和文 = 2）。
+    #[test]
+    fn sizes_width_weighs_each_line_by_ceil_of_chars_over_width() {
+        for (text, want) in WIDTH_FIXTURES {
+            assert_eq!(weighted_lines(text, 10), *want, "{text:?}");
+        }
+        assert_eq!(weighted_lines("ab\ncd\nef", 10), weighted_lines("ab\ncd\nef\n", 10), "末尾改行の有無で差を出さない");
+    }
+
+    /// 幅 0 は 1 行 1 と数える（0 除算の縮退）・幅が行より広ければ改行の数と同じ。
+    #[test]
+    fn sizes_width_zero_and_wide_width_count_newlines() {
+        assert_eq!(weighted_lines("abcdefghijklmnopqrstuvwxy\nab\n", 0), 2, "幅 0");
+        assert_eq!(weighted_lines("abcdefghijklmnopqrstuvwxy\nab\n", 120), 2, "幅 120");
+    }
+
+    /// `SourceFile` の 2 つの数え方も同じ式: 詰め込んだ src 行は src 側に、詰め込んだ test 行は test 側に重く載る。
+    #[test]
+    fn sizes_width_split_weighs_both_sides() {
+        let file = SourceFile {
+            path: PathBuf::from("x.rs"),
+            text: "fn a() {}\nabcdefghijklmnopqrstuvwxy\n#[cfg(test)]\nmod t {}\nabcdefghijklmnopqrstuvwxy\n".to_owned(),
+        };
+        // 12 字の `#[cfg(test)]` 自身も幅 10 では 2 行に数える。
+        assert_eq!(file.split_test_src(10), (6, 4), "(test, src) = (2 + 1 + 3, 1 + 3)");
+        assert_eq!(file.split_test_src(120), (3, 2), "幅が広ければ改行の数");
+        assert_eq!(file.lines(10), 10, "file の行数は 2 側の和");
+        let bare = SourceFile { path: PathBuf::from("y.rs"), text: "abcdefghijklmnopqrstuvwxy\n".to_owned() };
+        assert_eq!(bare.split_test_src(10), (0, 3), "test 区間の無い file は全部 src");
+    }
 }

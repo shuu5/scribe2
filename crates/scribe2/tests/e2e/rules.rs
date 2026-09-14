@@ -1006,7 +1006,7 @@ fn rules_embedded_manifest_is_valid_and_covers_all_kinds() {
     // **tracked な `rules/manifest.toml` の全行が受理される**（`parse` は 1 件でも違反が
     // 在れば `Err` を返すので、ここに届いた時点で全行が必須 key を持つ）。母集団を額面に
     // 出すのは、行が黙って落ちた周を「全部読めた」と読み違えないためである。
-    assert_eq!(manifest.rows().len(), 47, "埋め込み manifest の行数（母集団・`.217` で +2・`.249` で +3）");
+    assert_eq!(manifest.rows().len(), 48, "埋め込み manifest の行数（母集団・`.217` で +2・`.249` で +3・`.254` で +1）");
     for kind in ALL {
         let covered = manifest.rows().iter().any(|row| row.kind == *kind);
         assert!(covered, "{} の行が manifest に無い", kind.as_str());
@@ -1143,7 +1143,25 @@ fn rules_embedded_manifest_declares_one_capability_row_per_role() {
     assert!(ALL.contains(&RuleKind::RoleCapabilities), "ALL に在る（末尾は `.249` の PipeSizeLLines）");
     assert_eq!(RuleKind::parse("RoleCapabilities"), Some(RuleKind::RoleCapabilities), "kind を字面から引ける");
     let kinds = ALL.len();
-    assert_eq!(kinds, 46, "kind の母集団（`.201` で +1・`.217` で +2・`.249` で +3）");
+    assert_eq!(kinds, 47, "kind の母集団（`.201` で +1・`.217` で +2・`.249` で +3・`.254` で +1）");
+}
+
+/// 行の数え方の幅の行（`R-C4.line-width`・裁定 id `user 2026-09-14T06:5xZ`・設計 rules-manifest.md §4・`s2-07l.254`）。
+/// **値は manifest が持つ**（C1 / C5）。kind は宣言順で `FnArgs` の直後（R-C4 の行の並び）。
+#[test]
+fn rules_embedded_manifest_declares_the_line_width_row() {
+    let manifest = Manifest::embedded().unwrap_or_else(|errors| panic!("埋め込み manifest が拒まれた: {errors:?}"));
+    let row = manifest.get("R-C4.line-width").expect("行の数え方の幅の行が在る");
+    assert_eq!(row.value, RuleValue::Int(120), "user 裁定 2026-09-14T06:5xZ の値");
+    assert_eq!(row.kind, RuleKind::LineWidth, "kind");
+    assert_eq!(row.kind.shape(), ValueShape::Int, "値の形は Int（文字）");
+    assert!(row.enabled, "既定で効く");
+    assert_eq!(row.ruling, "user 2026-09-14T06:5xZ", "裁定 id");
+    assert_eq!(row.ruled_at, "2026-09-14", "裁定日");
+    assert_eq!(RuleKind::parse("LineWidth"), Some(RuleKind::LineWidth), "kind を字面から引ける");
+    let at = ALL.iter().position(|kind| *kind == RuleKind::LineWidth);
+    let args = ALL.iter().position(|kind| *kind == RuleKind::FnArgs);
+    assert_eq!(at, args.map(|found| found + 1), "宣言順は FnArgs の直後");
 }
 
 /// 台帳の棚卸しの閾値 2 行（`ledger.memo_stale_days` / `ledger.memo_stale_priority`・裁定 id

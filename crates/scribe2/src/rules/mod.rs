@@ -81,6 +81,8 @@ pub enum RuleKind {
     FnComplexity,
     /// 関数 1 本の引数の数の上限。
     FnArgs,
+    /// 行の数え方の幅（文字）。これを超える行は ceil(文字数 ÷ 幅) 行に数える（R-C4-1〜3 と上限の余地が同じ式）。
+    LineWidth,
     /// 承認の受理面の identity。
     DialogueSurface,
     /// 成熟条件（停止・履歴として残す）。
@@ -178,6 +180,7 @@ pub const ALL: &[RuleKind] = &[
     RuleKind::FnLines,
     RuleKind::FnComplexity,
     RuleKind::FnArgs,
+    RuleKind::LineWidth,
     RuleKind::DialogueSurface,
     RuleKind::MaturityCondition,
     RuleKind::AccountSelection,
@@ -230,6 +233,7 @@ impl RuleKind {
             Self::FnLines => "FnLines",
             Self::FnComplexity => "FnComplexity",
             Self::FnArgs => "FnArgs",
+            Self::LineWidth => "LineWidth",
             Self::DialogueSurface => "DialogueSurface",
             Self::MaturityCondition => "MaturityCondition",
             Self::AccountSelection => "AccountSelection",
@@ -282,6 +286,7 @@ impl RuleKind {
             | Self::FnLines
             | Self::FnComplexity
             | Self::FnArgs
+            | Self::LineWidth
             | Self::DepBudget
             | Self::DepPerPr
             | Self::CheckDeltaMs

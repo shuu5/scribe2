@@ -1248,6 +1248,46 @@ fn contract_closure_ext_cap_headroom_refuses_a_size_that_does_not_fit_the_file_o
     clean(&[&repo, &state]);
 }
 
+/// (5) 行の数え方（`s2-07l.254`・設計 rules-manifest.md §4・接頭辞 `contract_closure_ext_width_`）: base の `.rs` が短い
+/// 1399 行と 2000 字を詰めた 1 行を持つとき、余地は改行の数（1400 行 → 100）でなく幅（`--rules` の `R-C4.line-width`）で
+/// 正規化した行数で出て、改行の数なら入る size S（100）が `cap-headroom` で断られる（詰め込みで余地が増えない）。
+#[test]
+fn contract_closure_ext_width_packed_line_does_not_widen_the_headroom() {
+    let (repo, state) = repo_with_state();
+    let dir = repo.join("crates").join("toy").join("src");
+    fs::create_dir_all(&dir).expect("core の dir を作れる");
+    fs::write(dir.join("packed.rs"), format!("{}{}\n", "// x\n".repeat(1399), "x".repeat(2000))).expect("file を書ける");
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "packed"]);
+    let width = embedded_int("R-C4.line-width");
+    let headroom = 1_500 - 1_399 - 2_000_u64.div_ceil(width);
+    assert!(headroom < 100, "幅で数えた余地は改行の数の余地（100）より小さい: {headroom}");
+    let fixture = RulesFixture {
+        gate: (1, 1_000_000),
+        retries: FOLLOW_RETRIES,
+        slots: default_slots(),
+        caps: CapFixture { core_lines: 40_000, file_lines: 1_500 },
+    };
+    let rules = write_rules_capped(&state, "rules-width.toml", fixture).display().to_string();
+    let lines: Vec<String> = contract_body()
+        .into_iter()
+        .filter(|line| !line.starts_with("size") && !line.starts_with("write-set"))
+        .chain(["size = \"S\"".to_owned(), "write-set = [\"crates/toy/src/packed.rs\"]".to_owned()])
+        .collect();
+    let contract = repo.join("s.toml");
+    fs::write(&contract, format!("{}\n", lines.join("\n"))).expect("契約 file を書ける");
+    let out = run_pipe(&[
+        "intake", "--contract", &contract.display().to_string(), "--bead", "s2-w",
+        "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(), "--rules", &rules,
+    ]);
+    let err = stderr_of(&out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "詰め込んだ 1 行は幅で数える: {err}");
+    let named = format!("crates/toy/src/packed.rs の上限の余地が {headroom} 行");
+    assert!(err.contains(&named) && err.contains("size S"), "file と幅で数えた余地と size: {err}");
+    assert_eq!(event_count(&state), 0, "断った周は event を書かない");
+    clean(&[&repo, &state]);
+}
+
 /// (4) 名指しの実在: `title` / `done` / 節の本文の backtick の中身のうち path 形・型の path 形・fn 形が base に解けない
 /// ものを `name-unresolved` で全件・在り処付き（行番号は行の見出し）。`touches` の型の variant・write-set の `+`
 /// 宣言の新規 file・一致しない字面は名指さない。

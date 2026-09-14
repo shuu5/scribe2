@@ -60,6 +60,9 @@ const ROW_FILE_LINES: &str = "R-C4-2";
 /// core の総行数の上限を持つ rules 行（上限の余地・値は読むだけ・C4）。
 const ROW_CORE_LINES: &str = "R-C4-1";
 
+/// 行の数え方の幅を持つ rules 行（上限の余地の行数を xtask check と同じ式で数える・kind `LineWidth`）。
+const ROW_LINE_WIDTH: &str = "R-C4.line-width";
+
 /// 契約の `size` = S の 1 file あたりの増分の見積（行）を持つ rules 行。
 const ROW_SIZE_S: &str = "pipe.size_s_lines";
 
@@ -335,10 +338,12 @@ fn exclude_cap_shortfall(repo: &Path, manifest: &Manifest, contract: &Contract, 
             declaration::read_write_set(&resolvable, tracked).unwrap_or_default()
         }
     };
+    // 行数は幅で正規化して数える（1 行に詰め込んでも余地は増えない・rules-manifest.md §4）。
+    let width = int_row(manifest, ROW_LINE_WIDTH).map_err(broken)?;
     let lines: Vec<(String, u64)> = super::table::read_all(repo, tracked, ".rs")
         .into_iter()
         .map(|source| {
-            let count = source.body.as_deref().map_or(0, declaration::line_count);
+            let count = source.body.as_deref().map_or(0, |text| declaration::line_count(text, width));
             (source.path, count)
         })
         .collect();

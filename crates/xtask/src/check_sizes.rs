@@ -14,13 +14,19 @@ fn as_u64(count: usize) -> u64 {
     u64::try_from(count).unwrap_or(u64::MAX)
 }
 
-/// core crate の `src` 配下の総行数（core-lines）。
+/// 行の数え方の幅（manifest の `R-C4.line-width`）を `SourceFile` の数え方が受ける型へ。
+fn width_of(limits: &Limits) -> usize {
+    usize::try_from(limits.line_width).unwrap_or(usize::MAX)
+}
+
+/// core crate の `src` 配下の総行数（core-lines・幅で正規化）。
 pub(crate) fn measure_core_lines(layout: &Layout, files: &[SourceFile], limits: &Limits) -> Measured {
     let core_src = layout.core_dir.join("src");
+    let width = width_of(limits);
     let total: usize = files
         .iter()
         .filter(|file| file.path.starts_with(&core_src))
-        .map(SourceFile::lines)
+        .map(|file| file.lines(width))
         .sum();
     let max = limits.core_lines;
     let mut violations = Vec::new();
@@ -35,13 +41,14 @@ pub(crate) fn measure_core_lines(layout: &Layout, files: &[SourceFile], limits: 
     }
 }
 
-/// `crates/*/src` 配下 `.rs` の 1 file 行数（file-lines）。
+/// `crates/*/src` 配下 `.rs` の 1 file 行数（file-lines・幅で正規化）。
 pub(crate) fn measure_file_lines(files: &[SourceFile], limits: &Limits) -> Measured {
     let max = limits.file_lines;
+    let width = width_of(limits);
     let mut violations = Vec::new();
     let mut worst = 0;
     for file in files {
-        let lines = file.lines();
+        let lines = file.lines(width);
         worst = worst.max(lines);
         if as_u64(lines) > max {
             violations.push(format!(
@@ -56,12 +63,13 @@ pub(crate) fn measure_file_lines(files: &[SourceFile], limits: &Limits) -> Measu
     }
 }
 
-/// test 行と src 行の比（test-src-ratio）。整数比較で `Σtest × 100 <= Σsrc × pct` を見る。
+/// test 行と src 行の比（test-src-ratio・幅で正規化）。整数比較で `Σtest × 100 <= Σsrc × pct` を見る。
 pub(crate) fn measure_test_src_ratio(files: &[SourceFile], limits: &Limits) -> Measured {
+    let width = width_of(limits);
     let mut test_total = 0;
     let mut src_total = 0;
     for file in files {
-        let (test, src) = file.split_test_src();
+        let (test, src) = file.split_test_src(width);
         test_total += test;
         src_total += src;
     }
