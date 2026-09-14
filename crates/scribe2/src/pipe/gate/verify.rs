@@ -8,6 +8,7 @@ use crate::pipe::confine::{self, Confinement, Reason, Released, Usage};
 use crate::pipe::contract::Contract;
 use crate::pipe::declaration::{BASE_HOLE, JOBS_HOLE};
 use crate::pipe::git_bytes;
+use crate::pipe::refuse;
 use crate::seat::RuleRead;
 use std::path::Path;
 
@@ -280,9 +281,13 @@ fn check_write_set(checks: &Checks<'_>) -> Step {
 }
 
 /// path が write-set のいずれか（file の一致 か dir の prefix）に含まれるか。
+///
+/// 項目は [`refuse::normalize`] に通してから比べる（接頭辞 `+` / `-` は受付の宣言であって path の一部ではない
+/// ＝diff の素の path と照合する・設計 contract-source.md §3・剥がす規則を 2 か所に持たない・`s2-07l.291`）。
 fn listed(path: &str, write_set: &[String]) -> bool {
     write_set.iter().any(|entry| {
-        let trimmed = entry.trim_end_matches('/');
+        let plain = refuse::normalize(entry);
+        let trimmed = plain.trim_end_matches('/');
         path == trimmed || path.starts_with(&format!("{trimmed}/"))
     })
 }
@@ -414,10 +419,23 @@ pub(super) fn byte_count(bytes: &[u8]) -> u64 {
 pub(crate) mod tests {
     // flip-check: moved s2-07l.286
     use super::super::record::USAGE_HEAD;
-    use super::{last_line, run_line_captured};
+    use super::{last_line, listed, run_line_captured};
     use crate::pipe::confine::{read_usage, Limit, Reason, Wrap};
     use crate::seat::RuleRead;
     use std::path::{Path, PathBuf};
+
+    /// write-set の項目は接頭辞（`+` 新規 / `-` 縮む面）を剥がした素の path で照合し、dir 項目（末尾 `/`）は配下を
+    /// segment 境界で含む（`s2-07l.291`）。diff の path に接頭辞の字面は来ない＝`+x` の path は `+x` の項目に当たらない。
+    #[test]
+    fn pipe_gate_write_set_prefixed_items_are_listed_as_plain_paths() {
+        let set = |items: &[&str]| items.iter().map(|item| (*item).to_owned()).collect::<Vec<String>>();
+        assert!(listed("x", &set(&["+x"])), "`+x` は新規 file `x` の宣言");
+        assert!(listed("x", &set(&["-x"])), "`-x` は縮む面 `x` の宣言");
+        assert!(listed("dir/a.rs", &set(&["dir/"])), "dir 項目は配下を含む");
+        assert!(!listed("dir.rs", &set(&["dir/"])), "dir 項目は segment 境界で外れる");
+        assert!(!listed("+x", &set(&["+x"])), "接頭辞は path の一部ではない");
+        assert!(!listed("y", &set(&["+x", "-x", "dir/"])), "剥がしても外の path は外");
+    }
 
     /// record の `line=` は stdout の**末尾の非空 1 行**（設計 gate-cost.md §5.1）: 空 / 空白だけ → `None`・
     /// 末尾改行は区切り・包みの終端行は剥がしてその直前の行・CRLF の `\r` は落ちる・空行を跨いで遡る。

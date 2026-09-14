@@ -98,6 +98,61 @@ fn pipe_gate_fails_when_diff_leaves_write_set() {
     clean(&[&repo, &state]);
 }
 
+/// 接頭辞付きの write-set（`+src/new.rs` 新規 / `-src/old.rs` 縮む面）の便を Implemented まで進める。
+/// runner は `src/new.rs` を足し `src/old.rs` を縮め、`extra` の command も撃つ。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn prefixed_run(extra: &str) -> (PathBuf, PathBuf, String) {
+    let (repo, state) = repo_with_state();
+    // `-` の先は base に在る file（受付が断る）。
+    fs::write(repo.join("src").join("old.rs"), "// old\n// shrink me\n").expect("縮む file を書ける");
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "prefixed-base"]);
+    let contract = write_contract(&repo, &["write-set"], &[r#"write-set = ["+src/new.rs", "-src/old.rs"]"#]);
+    let id = intake(&repo, &state, &contract);
+    let runner = format!(
+        "echo new > src/new.rs && echo '// old' > src/old.rs {extra} && git add -A && git commit -q -m runner"
+    );
+    let out = spawn_with(&repo, &state, &id, &runner);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "spawn: {}", stderr_of(&out));
+    (repo, state, id)
+}
+
+/// **接頭辞は受付の宣言であって path の一部ではない**（設計 contract-source.md §3・`s2-07l.291`）: 段①は
+/// 項目の `+` / `-` を剥がして diff の素の path と照合する。受付と guard を通った契約が gate で落ちない。
+#[test]
+fn pipe_gate_write_set_prefixed_items_match_plain_diff_paths() {
+    let (repo, state, id) = prefixed_run("");
+    let out = gate_once(&repo, &state, &id, Some(&fake_lens(&state.join("lens-ran"), &lens_verdict("PASS"))));
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "接頭辞の項目に収まる便は通る: {}", stderr_of(&out));
+    let rows = verify_rows(&state, &id);
+    assert_eq!(row_value(&rows, 1, "cmd"), "write-set", "段①は先頭（母集団 {} record）", rows.len());
+    assert_eq!(row_value(&rows, 1, "rc"), "0", "`src/new.rs` / `src/old.rs` は write-set の内");
+    clean(&[&repo, &state]);
+}
+
+/// 対: 同じ契約で write-set の外（`src/other.rs`）も足した便は段①が赤く、その path を名指す
+/// （接頭辞の剥がしが照合を緩めていないことの証拠・`s2-07l.291`）。
+#[test]
+fn pipe_gate_write_set_prefixed_items_still_name_outside_paths() {
+    let (repo, state, id) = prefixed_run("&& echo z > src/other.rs");
+    let marker = state.join("lens-ran");
+    let out = gate_once(&repo, &state, &id, Some(&fake_lens(&marker, &lens_verdict("PASS"))));
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "write-set の外は FAIL: {}", stderr_of(&out));
+    let rows = verify_rows(&state, &id);
+    assert_eq!(row_value(&rows, 1, "cmd"), "write-set", "段①は先頭（母集団 {} record）", rows.len());
+    assert_eq!(row_value(&rows, 1, "rc"), "1", "外れた便は段①が赤い");
+    assert!(!marker.exists(), "段①が赤い周は lens を起動しない");
+    let tail = fs::read_to_string(state.join("pipe").join(&id).join("verify.stderr.log"))
+        .expect("verify.stderr.log を読める");
+    assert!(tail.contains("src/other.rs"), "外れた path を名指す: {tail}");
+    assert!(!tail.contains("src/new.rs"), "`+` の項目の path は列挙しない: {tail}");
+    assert!(!tail.contains("src/old.rs"), "`-` の項目の path は列挙しない: {tail}");
+    clean(&[&repo, &state]);
+}
+
 /// **共通 verify は便の写しから撃ち、契約の verify より前に来る**（段②→段③）。
 ///
 /// `{base}` は共通 verify の行だけが置ける穴で、契約の行には置換しない（.56 の intake が
