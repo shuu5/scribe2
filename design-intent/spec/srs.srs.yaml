@@ -11,7 +11,7 @@ meta:
   eyebrow_left: 要件定義書 (SRS)
   eyebrow_right: scribe2 — MVP
   subtitle: 契約は小さく・検証は機械が先・止まるときは記帳して止まる
-  version: "0.8"
+  version: "0.9"
   date: "2026-09-13"
   reader: この器で開発する人と AI（Claude Code の session）。 専門語には必ずやさしい言い換えを併記する
 
@@ -68,8 +68,10 @@ scope:
     - 台帳の lint
     - 設計 doc の散文の門
     - 契約表の検査
+    - 禁じる語列の command の拒否
   out:
     - 席の起動（v3）
+    - interpreter 経路の中身の解析（v3）
     - lane 計画と席の dashboard（v3）
     - 台帳への write（close と notes 1 行の外）
     - 複数の対話面（v3）
@@ -117,6 +119,7 @@ acceptance:
   - { id: AC24, criterion: fixture の台帳（台帳 adapter の偽出力）で設計の中身を持ち pointer の無い open な memo 2 本と契約 id を指さない open な契約 1 本を lint が名指し、 全件揃った fixture では 0 件・rc 0。 加えて実台帳で 1 回撃ち、 名指された件数と母集団を記録に残す, metric_v: 3/3 件 + 実 1 回, metric_l: pointer の欠落の名指し, links: [FR51] }
   - { id: AC25, criterion: fixture の設計 doc（規範の印を持つ文 3 つ = pointer 無し・数 + 単位付き・適合）で散文の門が違反 2 件を file と行付きで名指して非 0、 適合だけの fixture で 0 件・rc 0。 加えて tracked な設計 doc 全件で 0 件, metric_v: 2/2 件 + 全件 0, metric_l: 散文の門の違反の名指し, links: [FR52] }
   - { id: AC26, criterion: fixture の設計 doc の契約表（write-set が閉包に足りない行・設計の節が無い行・適合の行の 3 行）で契約表の検査が違反 2 行を file と行付きで名指して非 0、 適合だけの fixture で 0 件・rc 0。 加えて tracked な設計 doc の契約表全件で 0 件, metric_v: 2/2 行 + 全件 0, metric_l: 契約表の違反の名指し, links: [FR55] }
+  - { id: AC27, criterion: 禁じる語列に当たる Bash の command を席と runner の両方の経路で撃ち、 実行されずに deny され、 断る理由に規則の出所と当たった並びが出る。 禁じる語列に当たる verify 行を持つ契約が intake で行番号付きで断られる。 同じ先頭語で禁じる語列に当たらない command 2 本はこの規則では止まらない, metric_v: deny 2/2 + intake の拒否 1/1 + 通過 2/2, metric_l: 禁じる語列の command の拒否, links: [FR56] }
 
 requirements:
   - id: FR1
@@ -730,6 +733,18 @@ requirements:
       condition: 常時
       response: CI は全 tracked 設計 doc の契約表の全行に、 intake と同じ write-set の閉包の導出（FR48）と設計 pointer の解決（FR54）を回し、 違反する行を file と行で名指して非 0 で止める
 
+  - id: FR56
+    type: FR
+    label: 禁じる語列の command の拒否
+    priority: must
+    vmethod: T
+    rationale_source: N-1
+    trace: { backward: [N-1, N-3], acceptance: [AC27] }
+    ears:
+      pattern: unwanted
+      condition: 席または runner の session が撃つ Bash の command が manifest の禁じる語列のいずれかに当たるとき
+      response: 器は実行の前に deny し、 断る理由に規則の出所と当たった並びを告げ、 intake は契約と対象 repo の宣言 file の verify 各行に同じ判定を掛け、 当たる行を行番号付きで断り便を作らない
+
 nfr:
   - { id: NFR1, type: NFR, label: lens 予算,   category: 性能, target: 1 lens は 0.15M token 以内（目標値）,                                measure: lens 起動時の diff byte と cap の照合を verdict に記録,        vmethod: T, trace: { backward: [N-2], acceptance: [AC3] }, hero: { cat: 予算, big: "0.15", unit: M token, qual: lens 1 本あたりの上限 } }
   - { id: NFR2, type: NFR, label: 契約の大きさ, category: 大きさ, target: 1 契約の diff は 300 行程度・見積は 550 行以内,                      measure: PR の diff 行数と契約の見積を記録して照合,                   vmethod: A, trace: { backward: [N-4], acceptance: [AC2] }, hero: { cat: 小ささ, big: "300", unit: 行, qual: 1 契約の diff の目安 } }
@@ -809,3 +824,4 @@ glossary:
   - { term: 席間の連絡,     en: inter-seat message,     plain_short: 席から席へのやり取り,       def: 開発 session の席どうしの message を、 入力欄を経由しない経路で届け、 経路の記録で着地を確かめること（FR44）。 }
   - { term: 設計 pointer,   en: design pointer,         plain_short: どの設計 doc のどの契約か, def: 設計 doc の path と契約 id の対。 intake の入力（FR53）で、 台帳の bead の受入条件が持つ 1 行でもある（FR2）。 }
   - { term: 台帳 adapter,   en: ledger adapter,         plain_short: 台帳への唯一の口,         def: 器が台帳を読む口（読み取り専用）と close を書く口。 台帳へ触る module はこれ 1 つ（FR50 / FR51）。 }
+  - { term: 禁じる語列,     en: forbidden token sequence, plain_short: 撃ってはいけない語の並び, def: command のうち撃ってはいけない語の並び。 値は manifest の rules 行だけが持ち（並びの例は行を見る）、 器が実行の前に止め、 intake が verify 行に同じ判定を掛ける（FR56）。 }
