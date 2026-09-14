@@ -3348,10 +3348,10 @@ fn pipe_land_exports_verdict_schema1() {
     let pairs = vessel::fleet::json_lite::parse_object(line).expect("1 行の JSON");
     let keys: Vec<&str> = pairs.iter().map(|(key, _)| key.as_str()).collect();
     // `order` は schema 1 のまま末尾に足した任意 field（ADR-0021 §2.6 (iv)・設計 gate-cost.md §6）。
-    // 既存の 7 key の並びは動かない。
+    // 既存の 7 key の並びは動かない。便の規模の 4 field（gate-cost.md §5.1・`s2-07l.189`）は `order` の後ろ。
     assert_eq!(
         keys,
-        vec!["schema", "run", "bead", "sha", "verdict", "evidence", "ts", "order"],
+        vec!["schema", "run", "bead", "sha", "verdict", "evidence", "ts", "order", "size", "files", "lines", "pub_symbols"],
         "面 5 の key 列（ADR-0004 §2.2・版番号に依らず固定）"
     );
     assert_eq!(value_of(&pairs, "schema"), "1");
@@ -3368,6 +3368,81 @@ fn pipe_land_exports_verdict_schema1() {
         value_of(&pairs, "evidence")
     );
     assert!(show_line(&repo, &state, &id).contains("stage=Landed"), "段は Landed");
+    clean(&[&repo, &state]);
+}
+
+/// 便の規模の歯の runner（`s2-07l.189`・設計 gate-cost.md §5.1）: `src/lib.rs` の seed 1 行を 3 行へ置き換え
+/// （行頭が `pub ` の行・字下げした `pub ` の行・`pub(crate)` の行）、binary の `src/blob.bin` を足す。
+/// base..new の実数は files=2・lines=3/1（binary の `-\t-` は数えない）・pub_symbols=2（`pub(crate)` は数えない）。
+const SIZE_RUNNER: &str = "printf 'pub fn a() {}\\n    pub fn b() {}\\npub(crate) fn c() {}\\n' > src/lib.rs \
+                           && printf '\\000\\001\\002' > src/blob.bin && git add -A && git commit -q -m runner";
+
+/// [`SIZE_RUNNER`] の便を PASS の gate まで通す（契約の size は `M`＝fixture の既定 `S` と弁別する）。
+fn gated_size_run(repo: &Path, state: &Path) -> String {
+    let path = write_contract(
+        repo,
+        &["size", "write-set"],
+        &[r#"size = "M""#, r#"write-set = ["src/lib.rs", "src/blob.bin"]"#],
+    );
+    let id = intake(repo, state, &path);
+    let spawned = spawn_with(repo, state, &id, SIZE_RUNNER);
+    assert_eq!(spawned.status.code(), Some(i32::from(RC_OK)), "spawn は rc 0: {}", stderr_of(&spawned));
+    let lens = fake_lens(&state.join("lens-ran"), &lens_verdict("PASS"));
+    let gated = gate_once(repo, state, &id, Some(&lens));
+    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "PASS の gate は rc 0: {}", stderr_of(&gated));
+    id
+}
+
+/// 面 5 の便の行を key/value の並びで読む（行が無ければ空）。
+fn exported_pairs(state: &Path, id: &str) -> Vec<(String, vessel::fleet::json_lite::Value)> {
+    let text = fs::read_to_string(land::verdicts_path(state)).unwrap_or_default();
+    text.lines()
+        .filter_map(|line| vessel::fleet::json_lite::parse_object(line.trim()).ok())
+        .find(|pairs| value_of(pairs, "run") == id)
+        .unwrap_or_default()
+}
+
+/// 面 5 の行に便の規模の 4 field が **`order` の後ろ**にこの順で載り、値が fixture の diff の実数と一致する
+/// （`s2-07l.189`・設計 gate-cost.md §5.1）。size は契約の字面（`M`）で、stdout の land 行は変えない。
+#[test]
+fn pipe_land_size_fields_follow_order_and_match_the_diff() {
+    let (repo, state) = repo_with_state();
+    let id = gated_size_run(&repo, &state);
+    let out = land_once(&repo, &state, &id);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "land は rc 0: {}", stderr_of(&out));
+    let new = git(&repo, &["rev-parse", "refs/heads/main"]);
+    // fixture の前提: blob は binary として `-\t-` で出る（text に化けると lines が 4/1 になり歯が別の理由で落ちる）。
+    let numstat = git(&repo, &["diff", "--numstat", &format!("{new}^..{new}")]);
+    assert_eq!(numstat, "-\t-\tsrc/blob.bin\n3\t1\tsrc/lib.rs", "fixture の diff の実数: {numstat}");
+    let pairs = exported_pairs(&state, &id);
+    let keys: Vec<&str> = pairs.iter().map(|(key, _)| key.as_str()).collect();
+    assert_eq!(
+        keys.get(7..),
+        Some(&["order", "size", "files", "lines", "pub_symbols"][..]),
+        "4 field は order の後ろにこの順: {keys:?}"
+    );
+    for (key, want) in [("size", "M"), ("files", "2"), ("lines", "3/1"), ("pub_symbols", "2")] {
+        assert_eq!(value_of(&pairs, key), want, "{key} の値");
+    }
+    let stdout = stdout_of(&out);
+    assert!(stdout.contains(&format!("landed={new}")), "land 行は在る: {stdout}");
+    for token in ["size=", "files=", "lines=", "pub_symbols="] {
+        assert!(!stdout.contains(token), "stdout の land 行は変えない（{token}）: {stdout}");
+    }
+    clean(&[&repo, &state]);
+}
+
+/// 負例: `git diff --numstat` を読めない周は 4 field を**全部欠く**（0 と書かない）・land は rc 0 のまま
+/// （測れないことは land を止める理由ではない）。
+#[test]
+fn pipe_land_size_fields_are_absent_when_git_cannot_be_read() {
+    let (repo, state) = repo_with_state();
+    let id = gated_size_run(&repo, &state);
+    let out = land_once_with_git_shim(&repo, &state, &id, " diff --numstat ", None);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "land は rc 0: {}", stderr_of(&out));
+    let pairs = exported_pairs(&state, &id);
+    let keys: Vec<&str> = pairs.iter().map(|(key, _)| key.as_str()).collect();
+    assert_eq!(keys.last(), Some(&"order"), "面 5 の行は在り order で終わる: {keys:?}");
     clean(&[&repo, &state]);
 }
 

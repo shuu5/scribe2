@@ -39,7 +39,7 @@ use super::gate::{
     gate, is_unreadable, run_checks, step_record, Check, Checks, Gate, Limits, Step, Verdict,
 };
 use super::{
-    emit, git_bytes, git_line, git_ok, verdict_path, worktree_path, worktrees_dir, Emit,
+    emit, git_bytes, git_line, git_ok, size, verdict_path, worktree_path, worktrees_dir, Emit,
 };
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_OK, RC_REFUSED};
 use crate::fleet::json_lite::{self, Value};
@@ -791,10 +791,10 @@ fn finish(entry: &Land<'_>, worktree: &Path, new: &str, anchor: &AnchorSync, ord
 /// 面 5 の 1 行を `verdicts.jsonl` へ append する（跨版 契約・key 列は固定）。
 ///
 /// `order` は schema 1 のまま足した**任意 field**（ADR-0021 §2.6 (iv)・古い読み手は無視する）で、
-/// 列の後ろに置く（既存の 7 key の並びは動かさない）。
+/// 列の後ろに置く（既存の 7 key の並びは動かさない）。便の規模の 4 field（[`size::fields`]・git を読めない周は欠く）はその後ろ。
 fn export_verdict(entry: &Land<'_>, new: &str, order: Order) -> Result<(), String> {
     let evidence = verdict_path(entry.state_dir, entry.run).display().to_string();
-    let line = json_lite::write_object(&[
+    let mut pairs = vec![
         ("schema", Value::Num(SCHEMA)),
         ("run", Value::Str(entry.run.to_owned())),
         ("bead", Value::Str(entry.bead.to_owned())),
@@ -803,7 +803,10 @@ fn export_verdict(entry: &Land<'_>, new: &str, order: Order) -> Result<(), Strin
         ("evidence", Value::Str(evidence)),
         ("ts", Value::Str(now_utc())),
         ("order", Value::Str(order.as_value())),
-    ]);
+    ];
+    let base = super::base_of_run(entry.state_dir, entry.run);
+    pairs.extend(size::fields(&entry.contract.size, base.as_deref(), new, |args| git_bytes(entry.repo, args)));
+    let line = json_lite::write_object(&pairs);
     append_line(&verdicts_path(entry.state_dir), &line, entry.policy)
         .map(|_| ())
         .map_err(|err| err.to_string())

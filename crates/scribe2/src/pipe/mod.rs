@@ -21,6 +21,7 @@ pub mod gate;
 pub mod land;
 pub mod refuse;
 pub mod report;
+mod size;
 pub mod spawn;
 
 use crate::polarity::{OnFailure, Polarity, Timing};
