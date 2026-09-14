@@ -86,4 +86,4 @@ C1 / C5（R-C9-1 は行・裁定 id）・C2（`Purpose` / `Selection` / `Stage` 
 
 ## 11. 後続
 
-席の起動と初回の口座選択（s2-07l.38）・token の refresh（[fleet-usage.md](./fleet-usage.md) §3・s2-07l.229）・再 login（墓標・user の手番）・crash の起こし直し（§5 の入口 (1) が無い停止）・上限停止の便の一覧画面（v3）・モデル別窓の display name の一致の細部（ADR-0017 §2.5）・SQLite 化（v3・A3）。
+席の起動と初回の口座選択（s2-07l.38 → [account-lifecycle.md](./account-lifecycle.md) §4・ADR-0026）・token の refresh（[fleet-usage.md](./fleet-usage.md) §3・s2-07l.229）・再 login（墓標・user の手番）・crash の起こし直し（§5 の入口 (1) が無い停止）・上限停止の便の一覧画面（v3）・モデル別窓の display name の一致の細部（ADR-0017 §2.5）・SQLite 化（v3・A3）。

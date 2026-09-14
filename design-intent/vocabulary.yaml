@@ -167,8 +167,26 @@ terms:
     flagged_ambiguities: [受付札 (ADR-0021 の受付の印) は lease ではない]
   - canonical: 退役
     domain: consumer
-    definition: host / 席 / 口座を運用から外す操作。 可逆 move で行う (N1)。
-    relationships: [fleet, doctor]
+    definition: host / 席 / 口座を運用から外す操作。 可逆 move で行う (N1)。 口座の退役は account retire (dir の mv + event) で、 復帰は account restore (ADR-0026 §2.2)。
+    relationships: [fleet, doctor, 口座の登録]
+  - canonical: host の manifest
+    domain: consumer
+    definition: manifest の host の面。 state dir の 1 file (host.toml) が host 固有の宣言値 (口座 label・席に積む plugin dir・起動引数) を持ち、 tracked の面と同じ loader が読む。 rules 行は置けない (C10.2 の読み・ADR-0026 §2.1)。
+    forbidden: [私用 manifest, overlay]
+    relationships: [manifest, state dir, 口座]
+  - canonical: 口座の登録
+    domain: consumer
+    definition: 器の口 account add が設定 dir・席の前提の settings・host の manifest の宣言を揃え、 login の起動行を差し込むこと (ADR-0026 §2.2)。 login と trust は user の手番で、 器は credential に触れない。
+    relationships: [口座, host の manifest, 退役, doctor]
+  - canonical: 席の起動
+    domain: consumer
+    definition: 器の口 seat launch が役割 (必須) と口座 (指定か session 用の選定) から起動行を導出し、 席の登録を先に書いて tmux の窓の shell へ差し込むこと (ADR-0026 §2.3)。 立て直しと同じ経路。
+    forbidden: [cla, cld, wrapper 起動]
+    relationships: [席, 席の登録, 起動行の導出, 口座]
+  - canonical: 起動行の導出
+    domain: consumer
+    definition: 席の起動行を pure な関数 1 本が組むこと: 口座の設定 dir と agent view を切る env・器自身の plugin (anchor)・host の manifest の plugin dir と起動引数。 穴は口座の dir 1 つで、 雛形 file は読まない (ADR-0026 §2.3)。
+    relationships: [席の起動, host の manifest]
   - canonical: lane
     domain: consumer
     definition: 口座 1 つの消費枠の中で並走させる作業の流れ (席の列)。 lane 数の決め方は rules 行 (§3 R-C9-1)。
