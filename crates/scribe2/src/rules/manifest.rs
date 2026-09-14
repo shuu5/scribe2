@@ -1,14 +1,18 @@
 //! `rules/manifest.toml` を std だけで読む面（ADR-0004 §2.3・SRS NFR3）。
 //!
-//! 受理するのは TOML の部分集合である: 先頭の `schema = 1`・`[[rule]]` と `[[account]]` の
-//! array-of-tables・値は string / integer / bool と**文字列の配列**（1 行で閉じる）。
+//! 受理するのは TOML の部分集合である: 先頭の `schema = 1`・`[[rule]]` / `[[account]]` / `[[plugin]]` /
+//! `[[launch-arg]]` の array-of-tables・値は string / integer / bool と**文字列の配列**（1 行で閉じる）。
 //! **最初の 1 件で止めず**違反を全件集めて返す（silent drop 禁止・SRS NFR4）。
 //!
 //! `[[account]]` は**規則の値ではなく宣言値**である（口座の列挙・設計 fleet-usage.md §2・
 //! ADR-0017 §2.3）。ゆえに裁定 id を行ごとに持たず、持てる key は `label` 1 つだけで、
 //! `[[rule]]` 行の検査（裁定 id 必須・`enabled` 必須・kind と値の形の一致）は一切変わらない。
+//!
+//! **host の面**（`<state_dir>/host.toml`・設計 account-lifecycle.md §2・ADR-0026 §2.1）も同じ reader で読む:
+//! 持てる表は `[[account]]` / `[[plugin]]` / `[[launch-arg]]` の 3 種だけで、`[[rule]]` は置けない（規則の行は
+//! tracked の面だけ・C1）。無い周は 0 宣言（縮退）・在るが読めない周は欠陥の全件（FailClosed）。
 
-use super::{Rule, RuleError, RuleKind, RuleRow, RuleValue, ValueShape};
+use super::{Rule, RuleError, RuleKind, RuleRow, RuleValue, ValueShape, HOST_MANIFEST};
 use std::path::Path;
 
 /// build 時に binary へ埋め込む manifest の本文。
@@ -28,6 +32,12 @@ const KNOWN_KEYS: &[&str] = &["id", "kind", "value", "enabled", "ruling", "ruled
 /// label しか持たせないのは、口座の識別に使える形（host 名・path・本当の口座 id）を
 /// 公開面へ載せないためである（CON2・設計 fleet-usage.md §2 の「不透明」）。
 const ACCOUNT_KEYS: &[&str] = &["label"];
+
+/// `[[plugin]]` 行が持てる key の全体（必須も同じ 1 つ）。値は席に積む plugin dir。
+const PLUGIN_KEYS: &[&str] = &["dir"];
+
+/// `[[launch-arg]]` 行が持てる key の全体（必須も同じ 1 つ）。値は席の起動行に足す引数 1 つ。
+const LAUNCH_ARG_KEYS: &[&str] = &["value"];
 
 /// 行に必ず要る key。
 ///
@@ -79,10 +89,14 @@ enum Section {
     Rule,
     /// 口座 1 件の宣言（label だけ）。
     Account,
+    /// 席に積む plugin dir 1 つの宣言（dir だけ）。
+    Plugin,
+    /// 席の起動行に足す引数 1 つの宣言（value だけ）。
+    LaunchArg,
 }
 
-/// [`Section`] の全 variant。
-const SECTIONS: &[Section] = &[Section::Rule, Section::Account];
+/// [`Section`] の全 variant（宣言順）。
+const SECTIONS: &[Section] = &[Section::Rule, Section::Account, Section::Plugin, Section::LaunchArg];
 
 impl Section {
     /// TOML の section header の字面。
@@ -90,6 +104,8 @@ impl Section {
         match self {
             Self::Rule => "[[rule]]",
             Self::Account => "[[account]]",
+            Self::Plugin => "[[plugin]]",
+            Self::LaunchArg => "[[launch-arg]]",
         }
     }
 
@@ -103,6 +119,8 @@ impl Section {
         match self {
             Self::Rule => KNOWN_KEYS,
             Self::Account => ACCOUNT_KEYS,
+            Self::Plugin => PLUGIN_KEYS,
+            Self::LaunchArg => LAUNCH_ARG_KEYS,
         }
     }
 
@@ -111,8 +129,19 @@ impl Section {
         match self {
             Self::Rule => REQUIRED_KEYS,
             Self::Account => ACCOUNT_KEYS,
+            Self::Plugin => PLUGIN_KEYS,
+            Self::LaunchArg => LAUNCH_ARG_KEYS,
         }
     }
+}
+
+/// manifest の面（どの file を読んでいるか）。受ける section の集合だけが違う。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Face {
+    /// tracked の manifest（埋め込みか `--rules PATH`）。
+    Tracked,
+    /// host の manifest（`<state_dir>/host.toml`）。`[[rule]]` を受けない。
+    Host,
 }
 
 /// section 1 つ分の生の key/value。
@@ -141,17 +170,161 @@ impl AccountLabel {
     }
 }
 
-/// 読み込み済みの manifest。
+/// `[[plugin]]` 1 行が名乗る plugin dir（host 固有の場所・host の面にだけ書く・設計 account-lifecycle.md §2）。
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginDir {
+    dir: String,
+    line: u64,
+}
+
+impl PluginDir {
+    /// dir の字面。
+    pub fn dir(&self) -> &str {
+        &self.dir
+    }
+
+    /// manifest の中でこの行が始まる物理行番号。
+    pub fn line(&self) -> u64 {
+        self.line
+    }
+}
+
+/// `[[launch-arg]]` 1 行が名乗る起動引数 1 つ（順序 = 宣言順・設計 account-lifecycle.md §2）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LaunchArg {
+    value: String,
+    line: u64,
+}
+
+impl LaunchArg {
+    /// 引数の字面。
+    pub fn value(&self) -> &str {
+        &self.value
+    }
+
+    /// manifest の中でこの行が始まる物理行番号。
+    pub fn line(&self) -> u64 {
+        self.line
+    }
+}
+
+/// 読み込み済みの manifest。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Manifest {
     rows: Vec<RuleRow>,
     accounts: Vec<AccountLabel>,
+    plugins: Vec<PluginDir>,
+    launch_args: Vec<LaunchArg>,
+}
+
+/// host の面（`<state_dir>/host.toml`）の読み（設計 account-lifecycle.md §7 `HostManifest`）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HostManifest {
+    /// file が無い（縮退・0 宣言・止めない）。
+    Absent,
+    /// 読めた（host の面の宣言だけを持つ manifest・`rows()` は空）。
+    Present(Manifest),
+    /// 在るが読めない・壊れている（FailClosed）。欠陥は全件・行番号付き・`host.toml:` の接頭辞で面を名指す。
+    Unreadable(Vec<RuleError>),
+}
+
+impl HostManifest {
+    /// file を読む。**無い**（NotFound）だけが [`Self::Absent`] で、権限・dir・UTF-8 でない等は
+    /// [`Self::Unreadable`]（無いに潰さない・NFR4）。
+    pub fn read(path: &Path) -> Self {
+        let text = match std::fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Self::Absent,
+            Err(err) => {
+                return Self::Unreadable(vec![on_host(RuleError::new(
+                    0,
+                    format!("{} を読めない: {err}", path.display()),
+                ))])
+            }
+        };
+        match finish(collect(&text, Face::Host)) {
+            Ok(face) => Self::Present(face),
+            Err(errors) => Self::Unreadable(errors.into_iter().map(on_host).collect()),
+        }
+    }
+
+    /// doctor の `host-manifest=` の値。
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Absent => "absent",
+            Self::Present(_) => "present",
+            Self::Unreadable(_) => "unreadable",
+        }
+    }
+
+    /// tracked の面の label 列（宣言順）に host の面の label を足す（面をまたぐ重複は拒む）。
+    ///
+    /// 呼び手が tracked の面を label 列でしか持たない周（`seat tick` は cli が開いた manifest の label を受け取る）の
+    /// 口で、[`Manifest::joined`] と同じ規則で合わせる。
+    pub fn labels_over(self, tracked: &[String]) -> Result<Vec<String>, Vec<RuleError>> {
+        let face = match self {
+            Self::Absent => return Ok(tracked.to_vec()),
+            Self::Unreadable(errors) => return Err(errors),
+            Self::Present(face) => face,
+        };
+        let errors = crossed(&face, |label| tracked.iter().any(|found| found == label));
+        if !errors.is_empty() {
+            return Err(errors);
+        }
+        Ok(tracked.iter().cloned().chain(face.accounts.into_iter().map(|account| account.label)).collect())
+    }
+}
+
+/// 欠陥 1 件に host の面の接頭辞を付ける（どの file の行番号かを行の中で名指す）。
+fn on_host(error: RuleError) -> RuleError {
+    RuleError::new(error.line, format!("{HOST_MANIFEST}: {}", error.message))
+}
+
+/// host の面の label のうち、tracked の面にも在るもの（`tracked` が真を返す label）を 1 件ずつ拒む。
+///
+/// 重複を拒む理由は面の中の重複と同じ（同じ口座を 2 度読んで同じ枠へ 2 行書く形を塞ぐ）。
+fn crossed(face: &Manifest, tracked: impl Fn(&str) -> bool) -> Vec<RuleError> {
+    face.accounts
+        .iter()
+        .filter(|account| tracked(&account.label))
+        .map(|account| {
+            on_host(RuleError::new(
+                account.line,
+                format!("label {} が面をまたいで重複する（tracked の manifest にも在る）", account.label),
+            ))
+        })
+        .collect()
 }
 
 impl Manifest {
     /// binary に埋め込んだ manifest を読む。
     pub fn embedded() -> Result<Self, Vec<RuleError>> {
         Self::parse(EMBEDDED)
+    }
+
+    /// tracked の面（`self`）に host の面（`host` の file）を合わせる（設計 account-lifecycle.md §2）。
+    ///
+    /// file が**無い**周はそのまま返す（0 宣言）。**在るが読めない・壊れている**周は欠陥の全件で `Err`
+    /// （`host.toml:` の接頭辞・行番号付き）。`[[rule]]` の混入・面をまたぐ label の重複も拒む。
+    pub fn with_host(self, host: &Path) -> Result<Self, Vec<RuleError>> {
+        self.joined(HostManifest::read(host))
+    }
+
+    /// 読み済みの host の面を合わせる（[`Self::with_host`] の本体・doctor は読みの 3 値を先に取ってから渡す）。
+    pub fn joined(mut self, host: HostManifest) -> Result<Self, Vec<RuleError>> {
+        let face = match host {
+            HostManifest::Absent => return Ok(self),
+            HostManifest::Unreadable(errors) => return Err(errors),
+            HostManifest::Present(face) => face,
+        };
+        let errors = crossed(&face, |label| self.accounts.iter().any(|found| found.label == label));
+        if !errors.is_empty() {
+            return Err(errors);
+        }
+        self.accounts.extend(face.accounts);
+        self.plugins.extend(face.plugins);
+        self.launch_args.extend(face.launch_args);
+        Ok(self)
     }
 
     /// file から読む（`--rules PATH` の override）。
@@ -167,25 +340,7 @@ impl Manifest {
 
     /// 本文を読む。違反は全件集めて返す。
     pub fn parse(text: &str) -> Result<Self, Vec<RuleError>> {
-        let mut errors = Vec::new();
-        let (schema, raws) = scan(text, &mut errors);
-        check_schema(schema, &mut errors);
-        let mut rows = Vec::new();
-        let mut accounts = Vec::new();
-        for raw in &raws {
-            match raw.section {
-                Section::Rule => rows.extend(build_row(raw, &mut errors)),
-                Section::Account => accounts.extend(build_account(raw, &mut errors)),
-            }
-        }
-        check_duplicate_ids(&rows, &mut errors);
-        check_duplicate_labels(&accounts, &mut errors);
-        if errors.is_empty() {
-            Ok(Self { rows, accounts })
-        } else {
-            errors.sort_by_key(|error| error.line);
-            Err(errors)
-        }
+        finish(collect(text, Face::Tracked))
     }
 
     /// 行 id で引く。
@@ -201,6 +356,56 @@ impl Manifest {
     /// 宣言した口座の label を**宣言順**で返す（設計 fleet-usage.md §2）。
     pub fn accounts(&self) -> &[AccountLabel] {
         &self.accounts
+    }
+
+    /// 宣言した plugin dir を**宣言順**で返す（host の面・設計 account-lifecycle.md §2）。
+    pub fn plugins(&self) -> &[PluginDir] {
+        &self.plugins
+    }
+
+    /// 宣言した起動引数を**宣言順**で返す（host の面・設計 account-lifecycle.md §2）。
+    pub fn launch_args(&self) -> &[LaunchArg] {
+        &self.launch_args
+    }
+}
+
+/// 本文を面の規則で読み、組めた宣言と欠陥の全件を返す（`parse` と host の面の共通の本体）。
+fn collect(text: &str, face: Face) -> (Manifest, Vec<RuleError>) {
+    let mut errors = Vec::new();
+    let (schema, raws) = scan(text, &mut errors);
+    check_schema(schema, &mut errors);
+    let mut found = Manifest::default();
+    for raw in &raws {
+        match (raw.section, face) {
+            (Section::Rule, Face::Tracked) => found.rows.extend(build_row(raw, &mut errors)),
+            // 行の中身は検査しない（置けない表の欠陥を重ねて報告しない＝1 表 1 件）。
+            (Section::Rule, Face::Host) => errors.push(RuleError::new(
+                raw.line,
+                format!("{} は host の面に置けない（規則の行は tracked の manifest だけ）", Section::Rule.header()),
+            )),
+            (Section::Account, _) => found.accounts.extend(
+                build_single(raw, "label", &mut errors).map(|(label, line)| AccountLabel { label, line }),
+            ),
+            (Section::Plugin, _) => found
+                .plugins
+                .extend(build_single(raw, "dir", &mut errors).map(|(dir, line)| PluginDir { dir, line })),
+            (Section::LaunchArg, _) => found.launch_args.extend(
+                build_single(raw, "value", &mut errors).map(|(value, line)| LaunchArg { value, line }),
+            ),
+        }
+    }
+    check_duplicate_ids(&found.rows, &mut errors);
+    check_duplicate_labels(&found.accounts, &mut errors);
+    (found, errors)
+}
+
+/// 欠陥が 0 件なら宣言を、在れば行番号の順に並べた欠陥の全件を返す。
+fn finish((found, mut errors): (Manifest, Vec<RuleError>)) -> Result<Manifest, Vec<RuleError>> {
+    if errors.is_empty() {
+        Ok(found)
+    } else {
+        errors.sort_by_key(|error| error.line);
+        Err(errors)
     }
 }
 
@@ -221,14 +426,13 @@ fn scan(text: &str, errors: &mut Vec<RuleError>) -> (Option<(u64, Scalar)>, Vec<
                     line,
                     fields: Vec::new(),
                 }),
-                None => errors.push(RuleError::new(
-                    line,
-                    format!(
-                        "未知の section {trimmed}（受理するのは {} と {} だけ）",
-                        Section::Rule.header(),
-                        Section::Account.header()
-                    ),
-                )),
+                None => {
+                    let taken: Vec<&str> = SECTIONS.iter().map(|found| found.header()).collect();
+                    errors.push(RuleError::new(
+                        line,
+                        format!("未知の section {trimmed}（受理するのは {} だけ）", taken.join(" / ")),
+                    ));
+                }
             }
             continue;
         }
@@ -443,11 +647,12 @@ fn build_row(raw: &RawRow, errors: &mut Vec<RuleError>) -> Option<RuleRow> {
     Some(row)
 }
 
-/// `[[account]]` 1 つ分から label を組む。欠けや未知 key は全件 `errors` へ積む。
+/// 文字列の key 1 つだけを持つ表（`[[account]]` の label・`[[plugin]]` の dir・`[[launch-arg]]` の value）1 つ分から
+/// 値と見出し行を組む。欠けや未知 key は全件 `errors` へ積む。
 ///
 /// `[[rule]]` と同じ形で**打ち切る**（読めなかった値は scan が 1 件報告済み・key の欠けは
 /// [`check_keys`] が 1 件報告済み）——同じ欠陥を 2 行にしないためである。
-fn build_account(raw: &RawRow, errors: &mut Vec<RuleError>) -> Option<AccountLabel> {
+fn build_single(raw: &RawRow, key: &str, errors: &mut Vec<RuleError>) -> Option<(String, u64)> {
     let before = errors.len();
     check_keys(raw, errors);
     if raw
@@ -457,20 +662,18 @@ fn build_account(raw: &RawRow, errors: &mut Vec<RuleError>) -> Option<AccountLab
     {
         return None;
     }
-    let label = text_field(raw, "label", errors)?;
+    let value = text_field(raw, key, errors)?;
     if errors.len() > before {
         return None;
     }
-    // **空の label は受けない**（`[[account]]` が 1 件在ることと、その口座を名指せることは
-    // 別である。空を通すと credential の置き場が `accounts/` そのものに解けてしまう）。
-    if label.is_empty() {
-        errors.push(RuleError::new(raw.line, "label が空である".to_owned()));
+    // **空の値は受けない**（`[[account]]` が 1 件在ることと、その口座を名指せることは
+    // 別である。空を通すと credential の置き場が `accounts/` そのものに解けてしまう。
+    // plugin dir と起動引数も同じく、空は何もしない口が宣言の顔で並ぶ）。
+    if value.is_empty() {
+        errors.push(RuleError::new(raw.line, format!("{key} が空である")));
         return None;
     }
-    Some(AccountLabel {
-        label,
-        line: raw.line,
-    })
+    Some((value, raw.line))
 }
 
 /// label の重複を集める。

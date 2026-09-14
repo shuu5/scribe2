@@ -46,7 +46,7 @@ fn select_account(args: &[String], dir: &Path) -> Outcome {
         Ok(found) => found,
         Err(reason) => return Outcome::failed(RC_REFUSED, vec![format!("fleet: {reason}"), usage()]),
     };
-    let (labels, threshold_pct) = match selection_rules(args) {
+    let (labels, threshold_pct) = match selection_rules(args, dir) {
         Ok(found) => found,
         Err(lines) => return Outcome::failed(RC_REFUSED, lines),
     };
@@ -99,13 +99,10 @@ fn excludes(args: &[String]) -> Result<BTreeSet<String>, String> {
 }
 
 /// manifest の口座 label（宣言順）と R-C9-1 の値。manifest は `fleet usage` と同じ口で読む
-/// （`--rules PATH` か埋め込み・env を読まない）。
-fn selection_rules(args: &[String]) -> Result<(Vec<String>, u64), Vec<String>> {
-    let loaded = match optional(args, "--rules").map_err(|reason| vec![format!("fleet: {reason}")])? {
-        Some(path) => Manifest::load(Path::new(path)),
-        None => Manifest::embedded(),
-    };
-    let manifest = loaded.map_err(|errors| errors.iter().map(RuleError::to_string).collect::<Vec<String>>())?;
+/// （`--rules PATH` か埋め込み + `<dir>/host.toml`・env を読まない・[`super::usage::declared`]）。
+fn selection_rules(args: &[String], dir: &Path) -> Result<(Vec<String>, u64), Vec<String>> {
+    let rules = optional(args, "--rules").map_err(|reason| vec![format!("fleet: {reason}")])?;
+    let manifest = super::usage::declared(rules, dir).map_err(|error| vec![error.to_string()])?;
     let threshold = threshold_of(&manifest).map_err(|error| vec![error.to_string()])?;
     let labels = manifest
         .accounts()

@@ -47,6 +47,9 @@ const SCOPED_KIND: &str = "weekly_scoped";
 /// reset 無しの窓の表示の字面（`resets=none`）。
 const RESETS_NONE: &str = "none";
 
+/// 宣言が 0 件の周に stderr へ出す 1 行（止めない・[`undeclared`]）。
+const NO_DECLARATION: &str = "fleet usage: 宣言なし（[[account]] が 0 行・計測しない）";
+
 /// credential の置き場（`<state_dir>/accounts/<label>/` の下）の file 名。
 const CREDENTIAL_FILE: &str = ".credentials.json";
 
@@ -55,10 +58,8 @@ const CREDENTIAL_FILE: &str = ".credentials.json";
 pub enum UsageError {
     /// 引数の誤り（値欠けの flag）。
     Args(String),
-    /// manifest が読めない・rules 行が引けない。
+    /// manifest が読めない（tracked の面か host の面）・rules 行が引けない。
     Manifest(String),
-    /// `[[account]]` が 1 行も無い。
-    NoAccounts,
     /// store が書けない・読めない。
     Store(String),
 }
@@ -74,7 +75,7 @@ impl UsageError {
     /// 終了コード。
     pub fn rc(&self) -> u8 {
         match self {
-            Self::Args(_) | Self::Manifest(_) | Self::NoAccounts => RC_REFUSED,
+            Self::Args(_) | Self::Manifest(_) => RC_REFUSED,
             Self::Store(_) => RC_BROKEN,
         }
     }
@@ -85,7 +86,6 @@ impl std::fmt::Display for UsageError {
         match self {
             Self::Args(reason) => write!(f, "fleet usage: {reason}"),
             Self::Manifest(reason) => write!(f, "fleet usage: manifest を読めない（{reason}）"),
-            Self::NoAccounts => write!(f, "fleet usage: [[account]] が 1 行も無い"),
             Self::Store(reason) => write!(f, "{reason}"),
         }
     }
@@ -114,7 +114,10 @@ fn measure(args: &[String], dir: &Path) -> Result<Outcome, UsageError> {
         .map_err(UsageError::Args)?
         .unwrap_or(DEFAULT_CLIENT)
         .to_owned();
-    let (manifest, labels) = accounts(args)?;
+    let (manifest, labels) = accounts(args, dir)?;
+    if labels.is_empty() {
+        return Ok(undeclared());
+    }
     let timeout_s = timeout_of(&manifest)?;
     let policy = LockPolicy::embedded().map_err(|err| UsageError::Store(err.to_string()))?;
     let host = host();
@@ -134,7 +137,10 @@ fn measure(args: &[String], dir: &Path) -> Result<Outcome, UsageError> {
 
 /// replay の `allowance` から、口座ごとに最新の 1 回分を同じ 1 行形で出す（lock を取らない）。
 fn show(args: &[String], dir: &Path) -> Result<Outcome, UsageError> {
-    let (_, labels) = accounts(args)?;
+    let (_, labels) = accounts(args, dir)?;
+    if labels.is_empty() {
+        return Ok(undeclared());
+    }
     let events = store::read_all(dir).map_err(|errors| UsageError::Store(joined(&errors)))?;
     let state = replay(&events);
     let lines = labels
@@ -160,22 +166,30 @@ fn latest_line(label: &str, allowance: &BTreeMap<AllowanceKey, AllowanceLatest>)
     Some(render(label, &rows))
 }
 
+/// 宣言を読む: tracked の面（`rules` = `--rules PATH` か埋め込み）に host の面（`<dir>/host.toml`）を合わせる
+/// （[`crate::rules::read`]・設計 account-lifecycle.md §2）。読めない周は [`UsageError::Manifest`]（1 行・FailClosed）。
+/// `fleet select` も同じ口で読む（計測と選定が別の宣言を読まない）。
+pub(super) fn declared(rules: Option<&str>, dir: &Path) -> Result<Manifest, UsageError> {
+    crate::rules::read(rules.map(Path::new), Some(dir)).map_err(|errors| UsageError::Manifest(joined(&errors)))
+}
+
 /// manifest を読み、宣言した口座の label を宣言順で返す。0 行なら断る。
-fn accounts(args: &[String]) -> Result<(Manifest, Vec<String>), UsageError> {
-    let loaded = match optional(args, "--rules").map_err(UsageError::Args)? {
-        Some(path) => Manifest::load(Path::new(path)),
-        None => Manifest::embedded(),
-    };
-    let manifest = loaded.map_err(|errors| UsageError::Manifest(joined(&errors)))?;
+fn accounts(args: &[String], dir: &Path) -> Result<(Manifest, Vec<String>), UsageError> {
+    let manifest = declared(optional(args, "--rules").map_err(UsageError::Args)?, dir)?;
     let labels: Vec<String> = manifest
         .accounts()
         .iter()
         .map(|account| account.label().to_owned())
         .collect();
-    if labels.is_empty() {
-        return Err(UsageError::NoAccounts);
-    }
     Ok((manifest, labels))
+}
+
+/// 宣言が 0 件の周の結果（設計 account-lifecycle.md §2「宣言なしを出す・止めない」）: stdout 0 行・stderr に 1 行・rc 0・
+/// 何も書かない。host の面の無い host（tracked の面は口座を持たない）はここへ来る＝選定は「候補なし」に倒れる。
+fn undeclared() -> Outcome {
+    let mut outcome = Outcome::ok(Vec::new());
+    outcome.err.push(NO_DECLARATION.to_owned());
+    outcome
 }
 
 /// rules 行 `fleet.usage_timeout_s` の秒。無い・不発効・型違いは断る。
@@ -730,7 +744,6 @@ mod tests {
         assert_eq!(UsageError::POLARITY.on_failure, OnFailure::FailClosed);
         assert_eq!(UsageError::Args(String::new()).rc(), RC_REFUSED);
         assert_eq!(UsageError::Manifest(String::new()).rc(), RC_REFUSED);
-        assert_eq!(UsageError::NoAccounts.rc(), RC_REFUSED);
         assert_eq!(UsageError::Store(String::new()).rc(), RC_BROKEN);
     }
 }

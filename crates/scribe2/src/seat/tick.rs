@@ -46,7 +46,7 @@
 //! 退避の合図と cycle の評価はその周も行う（heartbeat の mtime は見ない＝FR27 の合図は席の生存の
 //! 記録でなく「続きを進めろ」の促し）。
 
-use super::{cycle, heartbeat, inject, meter, pane_of, role, sanitize_target, state, WmScan};
+use super::{cycle, heartbeat, inject, meter, pane_of, role, sanitize_target, state, RuleRead, WmScan};
 use crate::cli_outcome::{Outcome, RC_REFUSED};
 use crate::fleet::json_lite::{self, Value};
 use crate::fleet::store::{self, LockPolicy};
@@ -99,10 +99,12 @@ pub struct Request<'a> {
     pub settle: Duration,
     /// cycle を回す周に渡す確認の周期（rules 行 `seat.cycle_poll_ms`）。
     pub step: Duration,
-    /// 口座の軸が使う `[[account]]` の label 列（tick が開いた rules＝`--rules` が在ればその file・無ければ埋め込み・
-    /// [`account_labels`]・`s2-07l.224`）。確認の刻みと同じく [`cli`] が 1 回だけ解く。
+    /// tracked の面の `[[account]]` の label 列（tick が開いた rules＝`--rules` が在ればその file・無ければ埋め込み・
+    /// [`account_labels`]・`s2-07l.224`）。確認の刻みと同じく [`cli`] が 1 回だけ解く。[`run`] が置き場の
+    /// `host.toml` の宣言を足してから口座の軸に使う（[`crate::rules::declared_labels`]・account-lifecycle.md §2）。
     pub accounts: &'a [String],
-    /// 定期計測（`fleet usage`）へ渡す `--rules` の path（無い周は埋め込み＝計測も埋め込みの宣言を読む）。
+    /// 定期計測（`fleet usage`）へ渡す `--rules` の path（無い周は埋め込み）。計測は同じ置き場の `host.toml` も読む
+    /// ＝tick と `fleet usage` は同じ宣言を読む。
     pub rules: Option<&'a str>,
 }
 
@@ -417,6 +419,12 @@ pub fn run(request: &Request) -> Outcome {
         // 置き場が無いと記録も打刻も持てない＝判定を回さない（撃たない側へ倒す）。
         return Outcome::failed_line(RC_REFUSED, render(&body_of_error(REASON_STATE_DIR)));
     };
+    // host の面（`<state_dir>/host.toml`）の宣言を足す。在るが読めない周は判定を回さず記録も残さない（計測も撃たない・
+    // FailClosed・account-lifecycle.md §6）。無い周は tracked の面の宣言のまま（縮退）。
+    let Ok(accounts) = crate::rules::declared_labels(request.accounts, &place.path) else {
+        return Outcome::failed_line(RC_REFUSED, render(&body_of_error(RuleRead::ManifestUnreadable.no_rule())));
+    };
+    let request = &Request { accounts: &accounts, ..*request };
     let dir = super::seat_dir(&place.path, request.target);
     let judged = decide(request, &place, &dir);
     let body = body(request.target, &judged, &place);
@@ -692,8 +700,8 @@ struct Seated {
 /// （fleet-usage.md §6・FailOpen）——読み直した行が Unmeasured なら逼迫度は測れない側に倒れる。
 ///
 /// manifest の `[[account]]` に無い口座は撃たない: 計測は宣言した口座だけを読むので行が積まれず、撃つと毎周の
-/// 計測に化ける（測れないまま＝逼迫度は `unmeasured`）。宣言は tick が開いた rules の label 列で、計測にも同じ
-/// `--rules` を渡す（tick と `fleet usage` が別の宣言を読まない・`s2-07l.224`）。
+/// 計測に化ける（測れないまま＝逼迫度は `unmeasured`）。宣言は tick が開いた rules の label 列 + 置き場の `host.toml`
+/// で、計測にも同じ `--rules` と同じ置き場を渡す（tick と `fleet usage` が別の宣言を読まない・`s2-07l.224`）。
 fn seated(request: &Request, place: &super::StateDir, stale_s: u64) -> Option<Seated> {
     let state = replay(&store::read_all(&place.path).ok()?);
     let row = role::registration_of_target(&state, request.target)?.clone();
@@ -928,8 +936,8 @@ fn relaunch_turn(request: &Request, place: &super::StateDir, dir: &Path, seen: &
     Verdict { stamp: Some(stamp), relaunched: Some(relaunched), ..Verdict::of(decision) }
 }
 
-/// 開いた manifest の `[[account]]` の label 列（宣言値・`fleet usage` / `fleet select` と同じく `--rules` が在れば
-/// その file の宣言＝host の写しにだけ在る口座も数える・`s2-07l.224`）。宣言が無い manifest は空＝選定は候補なし。
+/// 開いた manifest（tracked の面）の `[[account]]` の label 列（宣言値・`--rules` が在ればその file の宣言・
+/// `s2-07l.224`）。host の面の宣言は [`run`] が置き場から足す。宣言が無い manifest は空＝選定は候補なし。
 pub fn account_labels(manifest: &Manifest) -> Vec<String> {
     manifest.accounts().iter().map(|account| account.label().to_owned()).collect()
 }

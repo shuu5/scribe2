@@ -10,17 +10,18 @@ use std::path::Path;
 
 /// `rules` の使い方の行。
 pub fn usage() -> String {
-    "usage: rules <validate|get <id>> [--rules PATH]".to_owned()
+    "usage: rules <validate|get <id>> [--rules PATH] [--state-dir S]".to_owned()
 }
 
-/// `rules` に続く引数を捌く。
+/// `rules` に続く引数を捌く。`--state-dir S` が在れば host の面（`S/host.toml`）も同じ拒否形で読む。
 pub fn dispatch(args: &[String]) -> Outcome {
-    let manifest = match open(args) {
+    let resolved = state_dir(args).and_then(|dir| Ok((super::with_state_dir(open(args)?, dir)?, dir)));
+    let (manifest, dir) = match resolved {
         Ok(found) => found,
         Err(errors) => return Outcome::failed(RC_REFUSED, render_defects(&errors)),
     };
     match args.first().map(String::as_str) {
-        Some("validate") => validate(&manifest),
+        Some("validate") => validate(&manifest, dir),
         Some("get") => match args.get(1) {
             Some(id) if !id.starts_with("--") => get(&manifest, id),
             _ => Outcome::failed_line(RC_REFUSED, usage()),
@@ -68,14 +69,37 @@ pub(crate) fn source(args: &[String]) -> Source<'_> {
     }
 }
 
-/// 読み込みに成功した manifest の要約 1 行。
-fn validate(manifest: &Manifest) -> Outcome {
+/// `--state-dir S` の指定を読む。無ければ `None`・PATH の無い `--state-dir` は `--rules` と同じく断る
+/// （host の面を読んだつもりの呼出しを tracked の面だけで黙って通さない・NFR4）。
+fn state_dir(args: &[String]) -> Result<Option<&Path>, Vec<RuleError>> {
+    let Some(at) = args.iter().position(|arg| arg == "--state-dir") else {
+        return Ok(None);
+    };
+    match args.get(at + 1) {
+        Some(path) if !path.is_empty() && !path.starts_with("--") => Ok(Some(Path::new(path))),
+        _ => Err(vec![RuleError::new(0, "--state-dir に PATH が無い".to_owned())]),
+    }
+}
+
+/// 読み込みに成功した manifest の要約 1 行。`--state-dir` の周は宣言の数と host の面の在る / 無いを足す。
+fn validate(manifest: &Manifest, state_dir: Option<&Path>) -> Outcome {
     let rows = manifest.rows();
     let kinds = super::ALL
         .iter()
         .filter(|kind| rows.iter().any(|row| row.kind == **kind))
         .count();
-    Outcome::ok_line(format!("rules: ok rows={} kinds={kinds}", rows.len()))
+    let head = format!("rules: ok rows={} kinds={kinds}", rows.len());
+    let Some(dir) = state_dir else {
+        return Outcome::ok_line(head);
+    };
+    // 合わせ終えた後なので、file が在る＝読めた（在るが読めない周はここへ来ない）。
+    let host = if super::host_manifest_path(dir).exists() { "present" } else { "absent" };
+    Outcome::ok_line(format!(
+        "{head} accounts={} plugins={} launch-args={} host={host}",
+        manifest.accounts().len(),
+        manifest.plugins().len(),
+        manifest.launch_args().len()
+    ))
 }
 
 /// 1 行の値を返す。無い行と不発効の行は rc 1 にする。

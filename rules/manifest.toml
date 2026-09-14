@@ -382,21 +382,6 @@ enabled = true
 ruling = "user 2026-09-13T14:06Z"
 ruled_at = "2026-09-13"
 
-# 口座の宣言（設計 fleet-usage.md §2・裁定 id 'user 2026-09-12T02:01Z'）。label は**不透明な符丁**で
-# あり、本当の口座の識別子でも host 名でも path でもない（本 repo は PUBLIC・SRS CON2）。credential の
-# 置き場は <state_dir>/accounts/<label>/ で、器はそこを走査せず、この宣言だけを真実として読む（C3）。
-
-[[account]]
-label = "a1"
-
-[[account]]
-label = "a2"
-
-[[account]]
-label = "a3"
-
-[[account]]
-label = "a4"
-
-[[account]]
-label = "a5"
+# 口座の宣言（設計 fleet-usage.md §2・account-lifecycle.md §2・ADR-0026 §2.1）は host の manifest（state dir
+# の host.toml）にだけ置く。この file に口座の表は置かない（文法は残る・足す変更は A1 の対話面で聞く・本 repo
+# は PUBLIC・SRS CON2）。器は credential の置き場を走査せず、宣言だけを真実として読む（C3）。

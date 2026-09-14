@@ -920,7 +920,7 @@ fn seat_inject_sanitizes_dot_targets() {
 }
 
 /// `seat` の使い方と rebrief の DATA の 3 形（found / candidate / missing の marker の並び）と、
-/// `doctor --state-dir` の突合の項目（tmux を撃てない周の形）を snapshot 1 本に固定する（C12.5）。
+/// `doctor --state-dir` の突合の項目（tmux を撃てない周の形）とその直後の host の面の行を snapshot 1 本に固定する（C12.5）。
 #[test]
 fn seat_external_form() {
     let mut form = stderr_of(&run_seat(&[]));
@@ -928,7 +928,7 @@ fn seat_external_form() {
         form.push_str(&stdout_of(&out));
     }
     let place = role_doctor_place();
-    if let Some(line) = stdout_of(&role_doctor(&place)).lines().last() {
+    for line in stdout_of(&role_doctor(&place)).lines().skip_while(|line| !line.starts_with("seats: ")) {
         form.push_str(line);
         form.push('\n');
     }
@@ -6195,13 +6195,14 @@ fn seat_role_doctor_reconciles_rows_with_live_targets() {
     let place = role_doctor_place();
     let out = role_doctor(&place);
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
-    assert_eq!(stdout_of(&out).lines().last(), Some("seats: registered=2 live=unmeasurable missing=unmeasurable"));
+    let tail = |out: &Output| stdout_of(out).lines().rev().take(2).map(str::to_owned).collect::<Vec<String>>();
+    assert_eq!(tail(&out), [HOST_ABSENT, "seats: registered=2 live=unmeasurable missing=unmeasurable"], "突合の行の直後に host の面の行");
     let seat = start_seat(&place.socket, "rolesdoc");
     assert!(seat.ready(), "隔離 seat が立つ");
     let out = role_doctor(&place);
     let lines: Vec<String> = stdout_of(&out).lines().map(str::to_owned).collect();
-    assert_eq!(lines.len(), 5, "2 行 + 登録 row 2 行 + 突合 1 行: {lines:?}");
-    assert_eq!(lines.last().map(String::as_str), Some("seats: registered=2 live=1 missing=1"));
+    assert_eq!(lines.len(), 6, "2 行 + 登録 row 2 行 + 突合 1 行 + host の面 1 行: {lines:?}");
+    assert_eq!(tail(&out), [HOST_ABSENT, "seats: registered=2 live=1 missing=1"]);
     let doctor = |args: &[&str]| Command::new(bin()).arg("doctor").args(args).output().ok();
     let bare = doctor(&[]).map(|out| stdout_of(&out)).unwrap_or_default();
     assert_eq!(bare.lines().count(), 2, "引数無しは従来の 2 行: {bare}");
@@ -6239,14 +6240,15 @@ fn mutant_e2e_doctor_reconciles_against_the_given_tmux_socket_and_refuses_a_dupl
     let live = doctor(&["--state-dir", &state, "--tmux-socket", &place.socket, "--rules", &rules]);
     assert_eq!(live.as_ref().map(rc_of), Some(i32::from(RC_OK)), "{live:?}");
     let lines: Vec<String> = live.map(|out| stdout_of(&out)).unwrap_or_default().lines().map(str::to_owned).collect();
-    assert_eq!(lines.len(), 4, "2 行 + 登録 row 1 行 + 突合 1 行: {lines:?}");
-    assert_eq!(lines.last().map(String::as_str), Some("seats: registered=1 live=1 missing=0"), "席の立つ socket");
+    assert_eq!(lines.len(), 5, "2 行 + 登録 row 1 行 + 突合 1 行 + host の面 1 行: {lines:?}");
+    assert_eq!(lines.get(3..), Some(&["seats: registered=1 live=1 missing=0".to_owned(), HOST_ABSENT.to_owned()][..]), "席の立つ socket");
     let elsewhere = place.dir.join("no-server-sock").display().to_string();
     let away = doctor(&["--state-dir", &state, "--tmux-socket", &elsewhere, "--rules", &rules]);
     assert_eq!(away.as_ref().map(rc_of), Some(i32::from(RC_OK)), "{away:?}");
+    let away_lines: Vec<String> = away.map(|out| stdout_of(&out)).unwrap_or_default().lines().map(str::to_owned).collect();
     assert_eq!(
-        away.map(|out| stdout_of(&out)).unwrap_or_default().lines().last(),
-        Some("seats: registered=1 live=unmeasurable missing=unmeasurable"),
+        away_lines.get(3..),
+        Some(&["seats: registered=1 live=unmeasurable missing=unmeasurable".to_owned(), HOST_ABSENT.to_owned()][..]),
         "server の無い socket は 0 と書かない"
     );
     for dup in [
@@ -6395,6 +6397,7 @@ fn seat_register_model_shows_in_the_doctor_rows_with_dash_for_none() {
             "seat: role=planner anchor=/repo/a target=rm:doc-a account=acct-1 model=Fable".to_owned(),
             "seat: role=admin anchor=/repo/b target=rm:doc-b account=acct-1 model=-".to_owned(),
             "seats: registered=2 live=unmeasurable missing=unmeasurable".to_owned(),
+            HOST_ABSENT.to_owned(),
         ][..]),
         "{lines:?}"
     );
@@ -6407,6 +6410,9 @@ fn seat_register_model_shows_in_the_doctor_rows_with_dash_for_none() {
 
 /// `[[account]]` の無い manifest（口座の行 0 本）。
 const NO_ACCOUNT_RULES: &str = "schema = 1\n";
+
+/// 置き場に `host.toml` の無い周の doctor の host の面の行（突合の行の直後・口座の行の直前）。
+const HOST_ABSENT: &str = "host-manifest=absent";
 
 /// `[[account]]` を `labels` の順に宣言した manifest の本文。
 fn account_rules(labels: &[&str]) -> String {
@@ -6545,36 +6551,44 @@ fn doctor_accounts_lines_follow_the_seat_lines_in_label_order() {
         lines.iter().filter_map(|line| line.strip_prefix("account=")).filter_map(|rest| rest.split(' ').next()).collect();
     assert_eq!(labels, ["alpha", "mid", "zeta"], "{lines:?}");
     let seats = lines.iter().position(|line| line.starts_with("seats: "));
+    let host = lines.iter().position(|line| line == HOST_ABSENT);
     let first = lines.iter().position(|line| line.starts_with("account="));
-    assert_eq!(first, seats.map(|at| at + 1), "突合の行の直後: {lines:?}");
-    assert_eq!(lines.len(), 8, "2 行 + 登録 row 2 行 + 突合 1 行 + 口座 3 行: {lines:?}");
+    assert_eq!(host, seats.map(|at| at + 1), "host の面の行は突合の行の直後: {lines:?}");
+    assert_eq!(first, seats.map(|at| at + 2), "口座の行は host の面の行の直後: {lines:?}");
+    assert_eq!(lines.len(), 9, "2 行 + 登録 row 2 行 + 突合 1 行 + host の面 1 行 + 口座 3 行: {lines:?}");
     fs::remove_dir_all(&place.dir).ok();
 }
 
-/// `[[account]]` の無い manifest は口座の行 0 本で他の行は不変・`--rules` 無しは埋め込みの宣言・読めない manifest は
-/// 1 行で名乗り rc は変えない・`--rules` の誤りは使い方で断る（歯 (e)）。
+/// `[[account]]` の無い manifest は口座の行 0 本で他の行は不変・`--rules` 無しは host の面（置き場の `host.toml`）の宣言・
+/// 宣言なしなら行 0・読めない manifest は 1 行で名乗り rc は変えない・`--rules` の誤りは使い方で断る（歯 (e)・
+/// 埋め込みの宣言に依らない形＝`s2-07l.243` の裁定 (B)）。
 #[test]
 fn doctor_accounts_no_declared_account_adds_no_line_and_keeps_the_rest() {
     let place = role_doctor_place();
     let without = doctor_rows(&place, NO_ACCOUNT_RULES);
     let with = doctor_rows(&place, &account_rules(&["solo"]));
     assert!(!without.iter().any(|line| line.starts_with("account=")), "{without:?}");
-    assert_eq!(without.len(), 5, "2 行 + 登録 row 2 行 + 突合 1 行: {without:?}");
+    assert_eq!(without.len(), 6, "2 行 + 登録 row 2 行 + 突合 1 行 + host の面 1 行: {without:?}");
     let rest: Vec<String> = with.iter().filter(|line| !line.starts_with("account=")).cloned().collect();
     assert_eq!(rest, without, "他の行は不変");
     assert_eq!(with.len(), without.len() + 1, "{with:?}");
     let state = place.state.display().to_string();
     let doctor = |args: &[&str]| Command::new(bin()).arg("doctor").args(args).output().expect("binary を起動できる");
-    let embedded = doctor(&["--state-dir", &state, "--tmux-socket", &place.socket]);
-    assert_eq!(rc_of(&embedded), i32::from(RC_OK), "stderr={}", stderr_of(&embedded));
-    let got: Vec<String> = stdout_of(&embedded)
-        .lines()
-        .filter_map(|line| line.strip_prefix("account=").and_then(|rest| rest.split(' ').next()).map(str::to_owned))
-        .collect();
-    let mut want: Vec<String> = Manifest::embedded().expect("埋め込み manifest").accounts().iter().map(|found| found.label().to_owned()).collect();
-    want.sort();
-    assert!(!want.is_empty(), "埋め込みの宣言が母集団 > 0");
-    assert_eq!(got, want, "--rules 無しは埋め込みの label の辞書順");
+    let labels_of = |out: &Output| -> Vec<String> {
+        stdout_of(out)
+            .lines()
+            .filter_map(|line| line.strip_prefix("account=").and_then(|rest| rest.split(' ').next()).map(str::to_owned))
+            .collect()
+    };
+    let bare = doctor(&["--state-dir", &state, "--tmux-socket", &place.socket]);
+    assert_eq!(rc_of(&bare), i32::from(RC_OK), "stderr={}", stderr_of(&bare));
+    assert_eq!(labels_of(&bare), Vec::<String>::new(), "--rules 無し・host の面も無い周は口座の行 0");
+    assert_eq!(stdout_of(&bare).lines().last(), Some(HOST_ABSENT), "{}", stdout_of(&bare));
+    fs::write(place.state.join(vessel::rules::HOST_MANIFEST), account_rules(&["zhost", "ahost"])).expect("host の面を書ける");
+    let hosted = doctor(&["--state-dir", &state, "--tmux-socket", &place.socket]);
+    assert_eq!(rc_of(&hosted), i32::from(RC_OK), "stderr={}", stderr_of(&hosted));
+    assert_eq!(labels_of(&hosted), ["ahost", "zhost"], "--rules 無しは host の面の label の辞書順");
+    fs::remove_file(place.state.join(vessel::rules::HOST_MANIFEST)).expect("host の面を外せる");
     let absent = place.dir.join("no-such-rules.toml").display().to_string();
     let unreadable = doctor(&["--state-dir", &state, "--tmux-socket", &place.socket, "--rules", &absent]);
     assert_eq!(rc_of(&unreadable), i32::from(RC_OK), "rc は変えない");
@@ -6609,6 +6623,66 @@ fn doctor_accounts_writes_nothing_into_the_account_dirs() {
     assert_eq!(lines.iter().filter(|line| line.starts_with("account=")).count(), 3, "{lines:?}");
     assert_eq!(tree_facts(&accounts), before, "本文・mtime が不変");
     assert!(!accounts.join("w-gone").exists(), "無い口座の dir を作らない");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (f) doctor の `host-manifest=` は 3 値: 無い = `absent`・読める = `present`（口座の行は host の面込みの宣言）・
+/// 壊れている / 面をまたいで重複する = `unreadable`（報告は止めない＝rc 0・口座の行は `accounts: manifest=unreadable`）。
+/// 位置は突合の行の直後・口座の行の直前。
+#[test]
+fn rules_host_doctor_names_the_host_manifest_in_three_values() {
+    let place = role_doctor_place();
+    let host = place.state.join(vessel::rules::HOST_MANIFEST);
+    let tail_of = |lines: &[String]| -> Vec<String> {
+        let seats = lines.iter().position(|line| line.starts_with("seats: ")).unwrap_or(lines.len());
+        lines.iter().skip(seats + 1).cloned().collect()
+    };
+    assert_eq!(tail_of(&doctor_rows(&place, &account_rules(&["tracked"]))), [HOST_ABSENT, account_line_of("tracked").as_str()]);
+    fs::write(&host, account_rules(&["hosted"])).expect("host の面を書ける");
+    assert_eq!(
+        tail_of(&doctor_rows(&place, &account_rules(&["tracked"]))),
+        ["host-manifest=present".to_owned(), account_line_of("hosted"), account_line_of("tracked")],
+        "host の面込みの宣言（label の辞書順）"
+    );
+    let unreadable = ["host-manifest=unreadable", "accounts: manifest=unreadable"];
+    fs::write(&host, "schema = 1\n\n[[account]]\nlabel = \"hosted\"\nbogus = 1\n").expect("host の面を壊せる");
+    assert_eq!(tail_of(&doctor_rows(&place, &account_rules(&["tracked"]))), unreadable, "壊れた host の面");
+    fs::write(&host, account_rules(&["tracked"])).expect("host の面を書ける");
+    assert_eq!(tail_of(&doctor_rows(&place, &account_rules(&["tracked"]))), unreadable, "面をまたぐ重複も読めない側");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// 登録 row が anchor `/repo` の置き場で、dir の無い口座 1 つの doctor の行。
+fn account_line_of(label: &str) -> String {
+    format!("account={label} dir=missing credential=missing config=missing agentview=unreadable trust=unreadable")
+}
+
+/// (d) 壊れた host の面では `seat tick` が typed に止まる: 判定を回さず stderr 1 行
+/// `seat: tick decision=error reason=no-rule:manifest-unreadable`・rc 1・stdout 0 byte・event も記録も書かない・
+/// 計測（client）を撃たない。
+#[test]
+fn rules_host_broken_host_manifest_stops_seat_tick_without_events() {
+    let place = acct_place();
+    let name = "hostbroken";
+    let registered = acct_register(&place, name, ACCT_LAUNCH);
+    assert_eq!(rc_of(&registered), i32::from(RC_OK), "stderr={}", stderr_of(&registered));
+    acct_credential(&place, ACCT_SEAT);
+    acct_fake_curl(&place, 50);
+    write_state(&seat_dir_of(&place.state, name), StateFix::Busy { age_s: 0 });
+    let events = vessel::fleet::store::events_path(&place.state);
+    let before = fs::read(&events).unwrap_or_default();
+    fs::write(place.state.join(vessel::rules::HOST_MANIFEST), "schema = 1\n\n[[launch-arg]]\nvalue = true\n").expect("host の面を壊せる");
+    let pane = fixture(&place.dir, "pane.txt", IDLE_PANE);
+
+    let (out, touched) = acct_tick_probed(&place, name, &pane);
+
+    assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "stdout={} stderr={}", stdout_of(&out), stderr_of(&out));
+    assert_eq!(stdout_of(&out), "", "stdout は 0 byte");
+    assert_eq!(stderr_of(&out), "seat: tick decision=error reason=no-rule:manifest-unreadable\n", "1 行");
+    assert!(!touched, "tmux に触れない");
+    assert_eq!(fs::read(&events).unwrap_or_default(), before, "event を書かない");
+    assert!(!tick_file(&place.state, name).exists(), "tick の記録も書かない");
+    assert_eq!(acct_curl_calls(&place), 0, "計測を撃たない");
     fs::remove_dir_all(&place.dir).ok();
 }
 
@@ -7734,14 +7808,16 @@ fn seat_tick_rules_accounts_measures_a_host_only_account() {
     fs::remove_dir_all(&place.dir).ok();
 }
 
-/// (c) `--rules` 無しの周は従来どおり埋め込みの宣言（a1〜）で判定する: a1 の row の古い実測行（95）は計測を 1 回
-/// 撃って新しい行（50）で読み直す（偽 curl の呼出 1 回・判定行は `account=a1:50`）。
+/// (c) `--rules` 無しの周は置き場の host の面（`host.toml`）の宣言で判定する（埋め込みの宣言に依らない）: a1 の row の
+/// 古い実測行（95）は計測を 1 回撃って新しい行（50）で読み直す（偽 curl の呼出 1 回・判定行は `account=a1:50`）。
 #[test]
-fn seat_tick_rules_accounts_without_rules_uses_the_embedded_accounts() {
+fn seat_tick_rules_accounts_without_rules_uses_the_host_manifest_accounts() {
     let place = acct_place();
-    let name = "embedaccts";
+    let name = "hostaccts";
     let registered = acct_register(&place, name, ACCT_LAUNCH);
     assert_eq!(rc_of(&registered), i32::from(RC_OK), "stderr={}", stderr_of(&registered));
+    let host: String = place.labels.iter().map(|label| format!("\n[[account]]\nlabel = \"{label}\"\n")).collect();
+    fs::write(place.state.join(vessel::rules::HOST_MANIFEST), format!("schema = 1\n{host}")).expect("host の面を書ける");
     let stale = vessel::fleet::cli::format_utc(unix_now().saturating_sub(STALE_S + 600));
     acct_measured(&place.state, ACCT_SEAT, 95, &stale);
     acct_credential(&place, ACCT_SEAT);
@@ -7762,7 +7838,7 @@ fn seat_tick_rules_accounts_without_rules_uses_the_embedded_accounts() {
         assert_eq!(tick_token(&line, key).as_deref(), Some(want), "{key}: {line}");
     }
     assert!(!touched, "注入しない");
-    assert_eq!(acct_curl_calls(&place), 1, "埋め込みの宣言の口座を計測する");
+    assert_eq!(acct_curl_calls(&place), 1, "host の面の宣言の口座を計測する");
     fs::remove_dir_all(&place.dir).ok();
 }
 

@@ -1851,19 +1851,89 @@ fn fleet_usage_client_failures_name_their_reason() {
     drop_fixture(&fx);
 }
 
-/// (7) `[[account]]` 0 行の manifest は rc 1・stdout 0 byte・何も書かない。
+/// (7) 宣言が 0 件（tracked の面にも host の面にも `[[account]]` が無い）の周は「宣言なし」を stderr に 1 行出して
+/// **止めない**（rc 0・stdout 0 byte・何も書かない・client を起こさない・account-lifecycle.md §2）。
 #[test]
-fn fleet_usage_refuses_manifest_without_accounts() {
+fn fleet_usage_without_declaration_says_so_and_writes_nothing() {
     let fx = usage_fixture(&[]);
     let curl = fake_curl(&fx, LIVE_BODY, "200", 0);
     let out = run_usage(&fx, &curl, &[]);
-    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{out:?}");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{out:?}");
     assert!(out.stdout.is_empty(), "stdout は 0 byte");
-    assert!(String::from_utf8_lossy(&out.stderr).contains("[[account]]"), "理由を stderr へ");
+    assert_eq!(
+        String::from_utf8_lossy(&out.stderr),
+        "fleet usage: 宣言なし（[[account]] が 0 行・計測しない）\n",
+        "理由を stderr へ 1 行"
+    );
     assert!(!store::events_path(&fx.state).exists(), "event を書かない");
+    assert!(!fx.spy.join("args").exists(), "client を起こさない");
     let shown = run_usage(&fx, &curl, &["--show"]);
-    assert_eq!(shown.status.code(), Some(i32::from(RC_REFUSED)), "--show も同じく断る");
+    assert_eq!(shown.status.code(), Some(i32::from(RC_OK)), "--show も同じく止めない");
     assert!(shown.stdout.is_empty());
+    assert_eq!(String::from_utf8_lossy(&shown.stderr), String::from_utf8_lossy(&out.stderr), "--show も同じ 1 行");
+    drop_fixture(&fx);
+}
+
+/// 壊れた host の面（未知 key line=5・型違い line=8）。
+const HOST_BROKEN: &str = "schema = 1\n\n[[account]]\nlabel = \"a1\"\nhost = \"x\"\n\n[[plugin]]\ndir = 1\n";
+
+/// `<state>/host.toml` に `text` を置く。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn put_host(fx: &UsageFixture, text: &str) {
+    fs::create_dir_all(&fx.state).expect("置き場を作れる");
+    fs::write(fx.state.join(vessel::rules::HOST_MANIFEST), text).expect("host の面を書ける");
+}
+
+/// (d) 壊れた host の面では `fleet usage` / `fleet select` が typed に止まる（`UsageError::Manifest`・rc 1・stderr 1 行に
+/// `host.toml:` の欠陥を行番号付きで全件・stdout 0 byte・event を書かない・client を起こさない）。
+#[test]
+fn rules_host_broken_host_manifest_stops_fleet_usage_and_select_without_events() {
+    let (fx, curl) = select_fixture(SELECT_THREE, true, Some("85"));
+    put_host(&fx, HOST_BROKEN);
+    let want = "fleet usage: manifest を読めない（rules: host.toml: 未知の key host line=5 / rules: host.toml: dir は文字列でなければならない（実 One(Int(1))） line=8）\n";
+    for (face, out) in [
+        ("usage", run_usage(&fx, &curl, &[])),
+        ("usage --show", run_usage(&fx, &curl, &["--show"])),
+        ("select", run_select(&fx, &curl, &["--purpose", "run"])),
+    ] {
+        assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{face}: {out:?}");
+        assert!(out.stdout.is_empty(), "{face}: stdout は 0 byte");
+        assert_eq!(String::from_utf8_lossy(&out.stderr), want, "{face}: 1 行・全件・面の接頭辞");
+    }
+    assert!(!store::events_path(&fx.state).exists(), "event を書かない");
+    assert_eq!(curl_calls(&fx), 0, "client を起こさない");
+    drop_fixture(&fx);
+}
+
+/// (e) `--rules` 無し（tracked の面 = 埋め込み・口座 0）でも host の面の宣言だけで口座ごとに 1 行を宣言順で出し、
+/// 同じ宣言から `fleet select` が選ぶ。host の面が無い周は「宣言なし」で止めない（候補なし）。
+#[test]
+fn rules_host_fleet_usage_measures_the_host_declared_accounts_without_rules() {
+    let (fx, curl) = select_fixture(SELECT_THREE, true, Some("85"));
+    let state = fx.state.display().to_string();
+    let client = curl.display().to_string();
+    let absent = run_fleet(&["usage", "--state-dir", &state, "--curl", &client]);
+    assert_eq!(absent.status.code(), Some(i32::from(RC_OK)), "{absent:?}");
+    assert!(absent.stdout.is_empty(), "host の面が無い周は 0 行: {absent:?}");
+    assert!(String::from_utf8_lossy(&absent.stderr).contains("宣言なし"), "{absent:?}");
+    let none = run_fleet(&["select", "--state-dir", &state, "--curl", &client, "--purpose", "run"]);
+    assert_eq!(out_lines(&none), vec!["select purpose=run none=unmeasured earliest_reset=-".to_owned()], "{none:?}");
+    assert_eq!(curl_calls(&fx), 0, "宣言なしは client を起こさない");
+
+    put_host(&fx, "schema = 1\n\n[[account]]\nlabel = \"a3\"\n\n[[account]]\nlabel = \"a1\"\n\n[[plugin]]\ndir = \"plugins/p\"\n");
+    let out = run_fleet(&["usage", "--state-dir", &state, "--curl", &client]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{out:?}");
+    let accounts: Vec<String> = out_lines(&out)
+        .iter()
+        .filter_map(|line| line.strip_prefix("usage: account=").and_then(|rest| rest.split(' ').next()).map(str::to_owned))
+        .collect();
+    assert_eq!(accounts, ["a3", "a1"], "host の面の宣言順に口座ごと 1 行（a2 は宣言外）: {out:?}");
+    assert_eq!(curl_calls(&fx), 2, "宣言した口座だけ計測する");
+    let chosen = run_fleet(&["select", "--state-dir", &state, "--curl", &client, "--purpose", "run"]);
+    assert_eq!(out_lines(&chosen), vec!["select purpose=run chosen=a1".to_owned()], "a3 は当たっている: {chosen:?}");
     drop_fixture(&fx);
 }
 

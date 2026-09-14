@@ -529,19 +529,173 @@ fn rules_accounts_do_not_loosen_rule_rows() {
     assert!(joined.contains("未知の key enabled"), "理由: {joined}");
 }
 
-/// 未知の section は受理しない（受ける section は 2 つちょうど）。
+/// 未知の section は受理しない（受ける section は 4 つちょうど）。
 #[test]
 fn rules_manifest_rejects_unknown_section() {
     let text = format!("{GOOD}\n[[seat]]\nlabel = \"a1\"\n");
     let errors = rejected(&text).expect("拒まれるはずの fixture が受理された");
     let joined = errors.join("\n");
     assert!(joined.contains("未知の section [[seat]]"), "理由: {joined}");
-    assert!(joined.contains("[[rule]]") && joined.contains("[[account]]"), "受理する形を名指す: {joined}");
+    for header in ["[[rule]]", "[[account]]", "[[plugin]]", "[[launch-arg]]"] {
+        assert!(joined.contains(header), "受理する形を名指す（{header}）: {joined}");
+    }
 }
 
-/// tracked manifest は口座 5 件と待ち時間の行を持つ（歯 (b)(4)）。
+// ─────────────────── host の面（`<state_dir>/host.toml`・account-lifecycle.md §2・接頭辞 `rules_host_`） ───────────────────
+
+/// 3 種の表を 2 行ずつ持つ host の面（見出し行: account 3・6 / plugin 9・12 / launch-arg 15・18）。
+const HOST_GOOD: &str = r#"schema = 1
+
+[[account]]
+label = "h1"
+
+[[account]]
+label = "h2"
+
+[[plugin]]
+dir = "plugins/one"
+
+[[plugin]]
+dir = "plugins/two"
+
+[[launch-arg]]
+value = "--permission-mode"
+
+[[launch-arg]]
+value = "acceptEdits"
+"#;
+
+/// 欠陥 4 件の host の面（schema 欠落 line=0 / 未知 key line=6 / 型違い line=9 / `[[rule]]` の混入 line=11）。
+const HOST_DEFECTIVE: &str = r#"[[account]]
+label = "shared"
+
+[[plugin]]
+dir = "plugins/one"
+color = "red"
+
+[[launch-arg]]
+value = 3
+
+[[rule]]
+id = "R-C4-1"
+kind = "CoreLines"
+value = 1
+enabled = true
+ruling = "r"
+ruled_at = "d"
+"#;
+
+/// tmp の state dir を作り、`host` が在れば `host.toml` として置く。
+fn host_state_dir(host: Option<&str>) -> Option<std::path::PathBuf> {
+    let dir = make_tmp_dir()?;
+    if let Some(text) = host {
+        std::fs::write(dir.join(vessel::rules::HOST_MANIFEST), text).ok()?;
+    }
+    Some(dir)
+}
+
+/// 引数の列を `rules` に渡す。
+fn rules_dispatch(args: &[&str]) -> Outcome {
+    let owned: Vec<String> = args.iter().map(|arg| (*arg).to_owned()).collect();
+    vessel::rules::cli::dispatch(&owned)
+}
+
+/// 埋め込みの `rules validate` の 1 行（`--state-dir` の無い周の形・行数と種類数）。
+fn embedded_validate_line() -> String {
+    rules_dispatch(&["validate"]).out.join("\n")
+}
+
+/// (a) host の面の 3 種の表を `rules validate --state-dir` が数え `host=present`・宣言順の値と行番号が
+/// `Manifest` の口から読める。base は `--state-dir` を受けず従来の 1 行（RED）。
 #[test]
-fn rules_embedded_manifest_declares_five_accounts_and_usage_timeout() {
+fn rules_host_validate_counts_the_three_tables_and_names_the_host_present() {
+    let dir = host_state_dir(Some(HOST_GOOD)).expect("tmp の state dir を作れる");
+    let state = dir.display().to_string();
+    let outcome = rules_dispatch(&["validate", "--state-dir", &state]);
+    assert_eq!(outcome.rc, RC_OK, "{outcome:?}");
+    assert_eq!(
+        outcome.out,
+        vec![format!("{} accounts=2 plugins=2 launch-args=2 host=present", embedded_validate_line())],
+        "rows / kinds は tracked の面のまま・宣言の数を足す"
+    );
+    let manifest = Manifest::embedded()
+        .and_then(|tracked| vessel::rules::with_state_dir(tracked, Some(dir.as_path())))
+        .expect("host の面を合わせられる");
+    let accounts: Vec<(&str, u64)> = manifest.accounts().iter().map(|found| (found.label(), found.line())).collect();
+    let plugins: Vec<(&str, u64)> = manifest.plugins().iter().map(|found| (found.dir(), found.line())).collect();
+    let args: Vec<(&str, u64)> = manifest.launch_args().iter().map(|found| (found.value(), found.line())).collect();
+    assert_eq!(accounts, [("h1", 3), ("h2", 6)], "口座は宣言順・行番号は host の面の行");
+    assert_eq!(plugins, [("plugins/one", 9), ("plugins/two", 12)], "plugin dir は宣言順");
+    assert_eq!(args, [("--permission-mode", 15), ("acceptEdits", 18)], "起動引数は宣言順");
+    assert_eq!(manifest.rows(), Manifest::embedded().expect("埋め込み").rows(), "rules 行は tracked の面だけ");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// (b) host の面が無い周は `host=absent`・0 宣言（縮退・rc 0）。`--state-dir` の無い周は従来の 1 行のまま、
+/// PATH の無い `--state-dir` は断る（tracked の面だけで黙って通さない）。
+#[test]
+fn rules_host_validate_without_the_host_file_is_absent_with_zero_declarations() {
+    let dir = host_state_dir(None).expect("tmp の state dir を作れる");
+    let state = dir.display().to_string();
+    let outcome = rules_dispatch(&["validate", "--state-dir", &state]);
+    assert_eq!(outcome.rc, RC_OK, "{outcome:?}");
+    assert_eq!(
+        outcome.out,
+        vec![format!("{} accounts=0 plugins=0 launch-args=0 host=absent", embedded_validate_line())]
+    );
+    let bare = embedded_validate_line();
+    assert!(bare.starts_with("rules: ok rows=") && !bare.contains(" accounts="), "--state-dir 無しは従来の 1 行: {bare}");
+    for bad in [&["validate", "--state-dir"][..], &["validate", "--state-dir", ""], &["validate", "--state-dir", "--rules"]] {
+        let refused = rules_dispatch(bad);
+        assert_eq!(refused.rc, RC_REFUSED, "{bad:?}: {refused:?}");
+        assert!(refused.out.is_empty(), "{bad:?}: stdout へは書かない");
+        assert_eq!(refused.err, vec!["rules: --state-dir に PATH が無い line=0".to_owned()], "{bad:?}");
+    }
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// (c) 壊れた host の面は欠陥を**全件**・行番号付き・`host.toml:` の接頭辞で拒む（rc 1・stdout 0 行）: schema 欠落・
+/// 未知 key・型違い・`[[rule]]` の混入。面をまたぐ label の重複（`--rules` の tracked 側と host 側に同じ label）も
+/// host の面の行番号で拒む。
+#[test]
+fn rules_host_rejects_every_defect_with_line_numbers_and_the_face_prefix() {
+    let dir = host_state_dir(Some(HOST_DEFECTIVE)).expect("tmp の state dir を作れる");
+    let state = dir.display().to_string();
+    let outcome = rules_dispatch(&["validate", "--state-dir", &state]);
+    assert_eq!(outcome.rc, RC_REFUSED, "{outcome:?}");
+    assert!(outcome.out.is_empty(), "stdout へは書かない: {outcome:?}");
+    let want = [
+        ("schema = 1 が無い", 0),
+        ("未知の key color", 6),
+        ("value は文字列でなければならない", 9),
+        ("[[rule]] は host の面に置けない", 11),
+    ];
+    assert_eq!(outcome.err.len(), want.len(), "全件・同じ欠陥を 2 行にしない: {:?}", outcome.err);
+    for ((reason, line), got) in want.iter().zip(&outcome.err) {
+        assert!(got.starts_with("rules: host.toml: "), "面を名指す接頭辞: {got}");
+        assert!(got.contains(reason) && got.ends_with(&format!(" line={line}")), "{reason} line={line}: {got}");
+    }
+
+    let tracked = dir.join("tracked.toml");
+    std::fs::write(&tracked, format!("{GOOD}\n[[account]]\nlabel = \"shared\"\n")).expect("tracked の fixture を書ける");
+    std::fs::write(dir.join(vessel::rules::HOST_MANIFEST), "schema = 1\n\n[[account]]\nlabel = \"solo\"\n\n[[account]]\nlabel = \"shared\"\n")
+        .expect("host の面を書ける");
+    let rules = tracked.display().to_string();
+    let crossed = rules_dispatch(&["validate", "--rules", &rules, "--state-dir", &state]);
+    assert_eq!(crossed.rc, RC_REFUSED, "{crossed:?}");
+    assert_eq!(
+        crossed.err,
+        vec!["rules: host.toml: label shared が面をまたいで重複する（tracked の manifest にも在る） line=6".to_owned()],
+        "面をまたぐ重複は host の面の行で 1 件"
+    );
+    let alone = rules_dispatch(&["validate", "--state-dir", &state]);
+    assert_eq!(alone.rc, RC_OK, "埋め込みの面に口座は無い＝同じ host の面が単独では通る: {alone:?}");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// (g) tracked の manifest は口座の表を持たない（宣言は host の面にだけ・公開面の情報が減る側）・待ち時間の行は在る。
+#[test]
+fn rules_host_embedded_manifest_declares_no_account_and_keeps_usage_timeout() {
     let manifest = match Manifest::embedded() {
         Ok(found) => found,
         Err(errors) => {
@@ -549,15 +703,8 @@ fn rules_embedded_manifest_declares_five_accounts_and_usage_timeout() {
             panic!("埋め込み manifest が拒まれた:\n{}", lines.join("\n"))
         }
     };
-    let labels: Vec<&str> = manifest
-        .accounts()
-        .iter()
-        .map(vessel::rules::manifest::AccountLabel::label)
-        .collect();
-    assert_eq!(labels.len(), 5, "宣言した口座の母集団: {labels:?}");
-    for label in &labels {
-        assert!(!label.is_empty(), "label は空でない: {labels:?}");
-    }
+    assert_eq!(manifest.accounts().len(), 0, "tracked の面の口座: {:?}", manifest.accounts());
+    assert!(manifest.plugins().is_empty() && manifest.launch_args().is_empty(), "host 固有の値も持たない");
     let timeout = manifest.get("fleet.usage_timeout_s").expect("待ち時間の行が在る");
     assert_eq!(timeout.value, RuleValue::Int(30), "user 裁定 2026-09-12T02:01Z の値");
     assert_eq!(timeout.kind, RuleKind::UsageTimeoutS, "kind");
@@ -811,13 +958,21 @@ fn rules_external_form() {
         .args(["rules", "get", "R-C9-1"])
         .output()
         .expect("binary を起動できる");
+    // host の面を持つ state dir での validate（3 種の表 2 行ずつ・host=present の形）。
+    let dir = host_state_dir(Some(HOST_GOOD)).expect("tmp の state dir を作れる");
+    let hosted = Command::new(bin)
+        .args(["rules", "validate", "--state-dir", &dir.display().to_string()])
+        .output()
+        .expect("binary を起動できる");
+    std::fs::remove_dir_all(&dir).ok();
     let form = format!(
-        "{}{}{}{}{}",
+        "{}{}{}{}{}{}",
         String::from_utf8_lossy(&usage.stdout),
         String::from_utf8_lossy(&validate.stdout),
         String::from_utf8_lossy(&missing.stderr),
         String::from_utf8_lossy(&selection.stdout),
-        String::from_utf8_lossy(&selection.stderr)
+        String::from_utf8_lossy(&selection.stderr),
+        String::from_utf8_lossy(&hosted.stdout)
     );
     insta::assert_snapshot!(form);
 }

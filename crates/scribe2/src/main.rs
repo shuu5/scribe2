@@ -13,7 +13,7 @@ use std::process::ExitCode;
 use vessel::cli_outcome::{Outcome, RC_REFUSED};
 use vessel::fleet::json_tree::{self, Tree};
 use vessel::name::NAME;
-use vessel::rules::manifest::Manifest;
+use vessel::rules::manifest::{HostManifest, Manifest};
 
 /// 出力層。stdout へ書くのはこの関数だけである。
 #[expect(
@@ -52,8 +52,8 @@ fn render_doctor() -> Vec<String> {
 }
 
 /// `doctor` の出力行。`--state-dir S [--tmux-socket PATH] [--rules FILE]` 付きは登録 row の一覧（`model` の欄
-/// つき・1 row 1 行）と実在の target の突合 1 行（C3.2・seat-roles.md §9 (e)）の後ろに、口座の前提の行
-/// （[`account_lines`]・account-autonomy.md §5）を足す。値欠け・空文字・重複・未知の引数は使い方の誤り（`Err`）。
+/// つき・1 row 1 行）と実在の target の突合 1 行（C3.2・seat-roles.md §9 (e)）の後ろに、host の面の 1 行と口座の
+/// 前提の行（[`account_lines`]・account-autonomy.md §5）を足す。値欠け・空文字・重複・未知の引数は使い方の誤り（`Err`）。
 fn render_doctor_with(rest: &[String]) -> Result<Vec<String>, ()> {
     let (mut lines, mut state_dir, mut socket, mut rules) = (render_doctor(), None, None, None);
     for pair in rest.chunks(2) {
@@ -240,13 +240,25 @@ fn render_account(label: &str, probe: &AccountProbe) -> String {
     cells.iter().fold(head, |line, cell| format!("{line} trust={cell}"))
 }
 
-/// doctor の口座の項目（C3.2 の「口座」の面・account-autonomy.md §5）: manifest（`--rules FILE` か埋め込み・env
-/// を読まない）の `[[account]]` の label の辞書順に 1 行。判定しない（rc を変えず行を出すだけ）。manifest を
-/// 読めない周は 1 行 `accounts: manifest=unreadable`（0 行に潰さない・C11）。
+/// doctor の host の面の 1 行（`host-manifest=<present|absent|unreadable>`・account-lifecycle.md §2・読むだけ）。
+fn render_host_manifest(word: &str) -> String {
+    format!("host-manifest={word}")
+}
+
+/// doctor の口座の項目（C3.2 の「口座」の面・account-autonomy.md §5）: 先頭に host の面の 1 行（[`render_host_manifest`]）、
+/// 続けて宣言（`--rules FILE` か埋め込みの tracked の面 + `<state_dir>/host.toml`・env を読まない）の `[[account]]` の
+/// label の辞書順に 1 行。判定しない（rc を変えず行を出すだけ）。宣言を読めない周は 1 行
+/// `accounts: manifest=unreadable`（0 行に潰さない・C11）。host の面が壊れている周も報告は止めない。
 fn account_lines(state_dir: &Path, rules: Option<&str>) -> Vec<String> {
-    let loaded = rules.map_or_else(Manifest::embedded, |path| Manifest::load(Path::new(path)));
-    let Ok(manifest) = loaded else {
-        return vec!["accounts: manifest=unreadable".to_owned()];
+    let host = HostManifest::read(&vessel::rules::host_manifest_path(state_dir));
+    let word = host.as_str();
+    let declared = rules.map_or_else(Manifest::embedded, |path| Manifest::load(Path::new(path))).map(|tracked| tracked.joined(host));
+    // tracked の面が読めて合わせで落ちた周は host の面の欠陥（面をまたぐ重複を含む）＝file 単体が読めても unreadable。
+    let word = if matches!(declared, Ok(Err(_))) { HostManifest::Unreadable(Vec::new()).as_str() } else { word };
+    let mut lines = vec![render_host_manifest(word)];
+    let Ok(Ok(manifest)) = declared else {
+        lines.push("accounts: manifest=unreadable".to_owned());
+        return lines;
     };
     let labels: BTreeSet<&str> = manifest.accounts().iter().map(|account| account.label()).collect();
     let anchors: Option<BTreeSet<String>> = vessel::fleet::store::read_all(state_dir).ok().map(|events| {
@@ -257,7 +269,8 @@ fn account_lines(state_dir: &Path, rules: Option<&str>) -> Vec<String> {
         let probe = probe_account(&vessel::fleet::account_dir(state_dir, label), anchors.as_ref());
         render_account(label, &probe)
     };
-    labels.iter().map(line).collect()
+    lines.extend(labels.iter().map(line));
+    lines
 }
 
 /// 未知の引数に対する使い方の行。
@@ -334,8 +347,8 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::{
-        render_account, render_doctor, render_name, render_usage, render_version, AccountProbe, AgentView, Presence, Trust,
-        NAME,
+        render_account, render_doctor, render_host_manifest, render_name, render_usage, render_version, AccountProbe,
+        AgentView, Presence, Trust, NAME,
     };
     use std::ffi::OsStr;
     use std::path::PathBuf;
@@ -373,7 +386,7 @@ mod tests {
     }
     /// `doctor` / usage / `--version` の外形を 1 つの snapshot に固定する。
     ///
-    /// 結合の順序は doctor の 2 行 → 口座の行（fixture 1 つ・anchor 2 つの形）→ usage → version で、区切り文字は
+    /// 結合の順序は doctor の 2 行 → host の面の行 → 口座の行（fixture 1 つ・anchor 2 つの形）→ usage → version で、区切り文字は
     /// LF ただ 1 種である。版番号は assert の前に `[version]` へ置換する（`default-features =
     /// false` では `Settings::add_filter` が無いので `filters` feature に頼らない）。
     #[test]
@@ -386,6 +399,7 @@ mod tests {
             agentview: AgentView::Unreadable,
             trust: Some(vec![("/repo/a".to_owned(), Trust::Accepted), ("/repo/b".to_owned(), Trust::Unreadable)]),
         };
+        lines.push(render_host_manifest("present"));
         lines.push(render_account("acct", &probe));
         lines.push(render_usage());
         lines.push(render_version());

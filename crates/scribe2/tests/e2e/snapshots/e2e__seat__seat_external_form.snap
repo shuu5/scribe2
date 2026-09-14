@@ -50,3 +50,4 @@ usage: seat <meter --target T [--transcript PATH]|inject --target T (--text S|--
 [MEMO-STALE-NONE]
 [BD-INPROGRESS-NONE]
 seats: registered=2 live=unmeasurable missing=unmeasurable
+host-manifest=absent

@@ -11,6 +11,36 @@ pub mod cli;
 pub mod manifest;
 
 use crate::seat::role::{Capability, Role, ALL as ROLES, CAPABILITIES};
+use manifest::{HostManifest, Manifest};
+use std::path::{Path, PathBuf};
+
+/// host の面の file 名（`<state_dir>/host.toml`・設計 account-lifecycle.md §2・ADR-0026 §2.1）。
+pub const HOST_MANIFEST: &str = "host.toml";
+
+/// host の面の path。**`--state-dir` からだけ解く**（env を読まない・C2.2）。
+pub fn host_manifest_path(state_dir: &Path) -> PathBuf {
+    state_dir.join(HOST_MANIFEST)
+}
+
+/// tracked の面に、state dir が在れば host の面を合わせる（**呼び手が host の面を読む口はこの 1 か所**）。
+///
+/// state dir を持たない呼び手（hook / polarity 等）は `None` を渡す＝tracked の面だけ（従来どおり）。
+pub fn with_state_dir(tracked: Manifest, state_dir: Option<&Path>) -> Result<Manifest, Vec<RuleError>> {
+    match state_dir {
+        Some(dir) => tracked.with_host(&host_manifest_path(dir)),
+        None => Ok(tracked),
+    }
+}
+
+/// `--rules PATH`（無ければ埋め込み）の tracked の面を読み、[`with_state_dir`] で host の面を合わせる。
+pub fn read(rules: Option<&Path>, state_dir: Option<&Path>) -> Result<Manifest, Vec<RuleError>> {
+    with_state_dir(rules.map_or_else(Manifest::embedded, Manifest::load)?, state_dir)
+}
+
+/// tracked の面の label 列に `<state_dir>/host.toml` の label を足す（[`with_state_dir`] と同じ規則・`seat tick` の口）。
+pub fn declared_labels(tracked: &[String], state_dir: &Path) -> Result<Vec<String>, Vec<RuleError>> {
+    HostManifest::read(&host_manifest_path(state_dir)).labels_over(tracked)
+}
 
 /// 種類が要求する値の形。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
