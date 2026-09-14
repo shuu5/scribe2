@@ -3849,22 +3849,46 @@ fn seat_state_tick_fails_closed_without_readable_fresh_stamp() {
     }
 }
 
+/// 閾値の内側に置く Busy の打刻の余白（秒）。fixture の打刻から tick の now までに負荷下で数秒経っても
+/// stale 側へ越えない幅（`s2-07l.237`）。
+const STALE_MARGIN_S: u64 = 3;
+
+/// Busy の打刻 `age` を 1 周撃ち、判定行と記録が `reason` / `column` になることを確かめる。
+fn assert_stale_side(target: &'static str, age: u64, reason: &'static str, column: &'static str) {
+    let case = TickCase { reason, beat_age_s: None, pane: Some(IDLE_PANE),
+                          wm_seat: Some(target), via_file: true, tmux: false, context: CTX_10,
+                          stamp: StateFix::Busy { age_s: age }, state: column };
+    let dir = tmp();
+    let state = prepare_tick_case(&dir, &case, target);
+    let (out, touched) = run_tick_case(&dir, &case, target, &state);
+    assert_tick_case(&out, touched, &case, usize::try_from(age).unwrap_or_default(), &state);
+    fs::remove_dir_all(&dir).ok();
+}
+
 /// stale の境界は `seat.tick_stale_s`（= 2400）を**共用**する（新しい閾値を足さない・ADR-0015 §2.4）:
-/// Busy の打刻が閾値ちょうど古い周は `busy`、1 秒超で `state-stale`。両側から撃つ＝manifest の値が
-/// 変わると落ちる。
+/// Busy の打刻が閾値の少し手前の周は `busy`、1 秒超で `state-stale`。両側から撃つ＝manifest の値が
+/// 変わると落ちる。壁時計では等号を pin しない（`age == STALE_S` を busy と置くと、打刻から now までの
+/// 1 秒で stale へ反転した・`s2-07l.237`・.118 と同型）＝閾値の内側は境界から離して置く。
+// flip-check: retroactive s2-07l.237
 #[test]
 fn seat_state_tick_stale_boundary_shares_tick_stale_s() {
     let target = "seatstatestale";
-    for (age, reason, column) in [(STALE_S, "busy", ST_BUSY), (STALE_S + 1, "state-stale", ST_STALE)] {
-        let case = TickCase { reason, beat_age_s: None, pane: Some(IDLE_PANE),
-                              wm_seat: Some(target), via_file: true, tmux: false, context: CTX_10,
-                              stamp: StateFix::Busy { age_s: age }, state: column };
-        let dir = tmp();
-        let state = prepare_tick_case(&dir, &case, target);
-        let (out, touched) = run_tick_case(&dir, &case, target, &state);
-        assert_tick_case(&out, touched, &case, usize::try_from(age).unwrap_or_default(), &state);
-        fs::remove_dir_all(&dir).ok();
+    for (age, reason, column) in
+        [(STALE_S - STALE_MARGIN_S, "busy", ST_BUSY), (STALE_S + 1, "state-stale", ST_STALE)]
+    {
+        assert_stale_side(target, age, reason, column);
     }
+}
+
+/// 余白の 2 面: 閾値の 3 秒手前の Busy は `busy` のまま（負荷下で時間が経っても stale へ越えない）、
+/// 閾値 + 1 の Busy は `state-stale`（時間が経っても stale のまま）。どちらの面も壁時計の遅れで
+/// 反転しない側に置く（`s2-07l.237`）。
+// flip-check: retroactive s2-07l.237
+#[test]
+fn seat_state_tick_stale_margin_keeps_busy_below_threshold() {
+    assert_eq!(STALE_MARGIN_S, 3, "busy 側の余白は 3 秒");
+    assert_stale_side("seatstatemarginbusy", STALE_S - STALE_MARGIN_S, "busy", ST_BUSY);
+    assert_stale_side("seatstatemarginstale", STALE_S + 1, "state-stale", ST_STALE);
 }
 
 /// tick が読むのは**最終行**: Busy の後に Idle が在れば idle、Idle の後に Busy なら busy。末尾の
