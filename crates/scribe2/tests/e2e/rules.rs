@@ -1010,7 +1010,7 @@ fn rules_cli_rules_flag_overrides_embedded() {
     let embedded = vessel::rules::cli::dispatch(&["get".to_owned(), "gate.token_cap".to_owned()]);
     assert_eq!(
         embedded.out,
-        vec!["150000".to_owned()],
+        vec!["1000000".to_owned()],
         "override は埋め込みを書き換えない"
     );
     std::fs::remove_dir_all(&dir).ok();

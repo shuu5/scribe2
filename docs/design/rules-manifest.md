@@ -78,7 +78,7 @@ ruled_at = "2026-09-07"
 | `R-C13-2` | CompileShape | Policy（**§3 の逐語**・target 数で数える解釈は §2 に置き manifest には書かない） | true | 同上 |
 | `R-C13-3` | CompileSeconds | Policy（§3 の文） | **false** | 同上（検出線は未配線） |
 | `gate.lens_count` | GateLensCount | 1 | true | grill U3 / 2026-09-07・SRS scope「lens 1 本」 |
-| `gate.token_cap` | GateTokenCap | 150000 | true | grill U3 / 2026-09-07・SRS NFR1（目標値） |
+| `gate.token_cap` | GateTokenCap | 1000000 | true | user 2026-09-14（一時・戻し = s2-07l.267）・純移動の分割便（s2-07l.261 / .264）を lens の門に通すため 150000（grill U3 / 2026-09-07）から一時的に上げる・SRS NFR1（目標値＝本裁定はその目標を一時的に超える） |
 | `hook.budget_ms` | HookBudgetMs | 2000 | true | SRS NFR5 の user 承認 / 2026-09-09・要件カタログ R-K22 |
 | `pipe.stop_grace_ms` | StopGraceMs | 2000 | true | user 2026-09-09T09:08Z / 2026-09-09 |
 | `fleet.lock_retry_ms` | LockRetryMs | 5000 | true | user 2026-09-09T09:08Z / 2026-09-09 |
