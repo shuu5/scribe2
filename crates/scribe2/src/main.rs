@@ -7,9 +7,13 @@
 //! この file は引数の dispatch と出力層だけを持つ。出力は [`emit`] と [`emit_err`]
 //! の 2 つに閉じ、rc は `main` が返す [`ExitCode`] で表す。
 
+use std::collections::BTreeSet;
+use std::path::Path;
 use std::process::ExitCode;
 use vessel::cli_outcome::{Outcome, RC_REFUSED};
+use vessel::fleet::json_tree::{self, Tree};
 use vessel::name::NAME;
+use vessel::rules::manifest::Manifest;
 
 /// 出力層。stdout へ書くのはこの関数だけである。
 #[expect(
@@ -47,24 +51,213 @@ fn render_doctor() -> Vec<String> {
     vec![render_name(), render_version()]
 }
 
-/// `doctor` の出力行。`--state-dir S [--tmux-socket PATH]` 付きは登録 row の一覧（`model` の欄つき・1 row 1 行）
-/// と実在の target の突合 1 行を足す（C3.2・seat-roles.md §9 (e)）。値欠け・空文字・重複・未知の引数は使い方の
-/// 誤り（`Err`）。
+/// `doctor` の出力行。`--state-dir S [--tmux-socket PATH] [--rules FILE]` 付きは登録 row の一覧（`model` の欄
+/// つき・1 row 1 行）と実在の target の突合 1 行（C3.2・seat-roles.md §9 (e)）の後ろに、口座の前提の行
+/// （[`account_lines`]・account-autonomy.md §5）を足す。値欠け・空文字・重複・未知の引数は使い方の誤り（`Err`）。
 fn render_doctor_with(rest: &[String]) -> Result<Vec<String>, ()> {
-    let (mut lines, mut state_dir, mut socket) = (render_doctor(), None, None);
+    let (mut lines, mut state_dir, mut socket, mut rules) = (render_doctor(), None, None, None);
     for pair in rest.chunks(2) {
         match (pair.first().map(String::as_str), pair.get(1).filter(|v| !v.trim().is_empty() && !v.starts_with("--"))) {
             (Some("--state-dir"), Some(found)) if state_dir.is_none() => state_dir = Some(found),
             (Some("--tmux-socket"), Some(found)) if socket.is_none() => socket = Some(found.as_str()),
+            (Some("--rules"), Some(found)) if rules.is_none() => rules = Some(found.as_str()),
             _ => return Err(()),
         }
     }
-    match (state_dir, socket) {
-        (Some(dir), _) => lines.extend(vessel::seat::role::doctor_lines(std::path::Path::new(dir), socket)),
-        (None, Some(_)) => return Err(()),
-        (None, None) => {}
+    match (state_dir, socket, rules) {
+        (Some(dir), _, _) => {
+            lines.extend(vessel::seat::role::doctor_lines(Path::new(dir), socket));
+            lines.extend(account_lines(Path::new(dir), rules));
+        }
+        (None, None, None) => {}
+        (None, _, _) => return Err(()),
     }
     Ok(lines)
+}
+
+/// 口座の dir・credential・config の在る / 無い（`dir=` / `credential=` / `config=` の値・閉じた enum）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Presence {
+    /// 在る。
+    Present,
+    /// 無い。
+    Missing,
+}
+
+impl Presence {
+    /// 真偽から写す。
+    fn of(found: bool) -> Self {
+        if found {
+            Self::Present
+        } else {
+            Self::Missing
+        }
+    }
+
+    /// 行の字面。
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Present => "present",
+            Self::Missing => "missing",
+        }
+    }
+}
+
+/// agent view の読み（`agentview=` の値・account-autonomy.md §5「agent view の前提 (4)」・閉じた enum）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AgentView {
+    /// `settings.json` の `disableAgentView` が `true`。
+    Off,
+    /// key が無い / `false`。
+    On,
+    /// file が無い・読めない・形が違う（`on` に潰さない・C11）。
+    Unreadable,
+}
+
+impl AgentView {
+    /// 真偽の key の読み（[`flag_at`]）から写す。
+    fn of(read: Result<bool, ()>) -> Self {
+        match read {
+            Ok(true) => Self::Off,
+            Ok(false) => Self::On,
+            Err(()) => Self::Unreadable,
+        }
+    }
+
+    /// 行の字面。
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::On => "on",
+            Self::Unreadable => "unreadable",
+        }
+    }
+}
+
+/// 「設定 dir × anchor」の trust の読み（`trust=` の値・account-autonomy.md §5「trust の前提」・閉じた enum）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Trust {
+    /// `.claude.json` の `projects[<anchor>].hasTrustDialogAccepted` が `true`。
+    Accepted,
+    /// key が無い / `false`。
+    Missing,
+    /// file が無い・読めない・形が違う・event log を読めない（`missing` に潰さない・C11）。
+    Unreadable,
+    /// 登録 row が 0 件（突き合わせる anchor が無い）。
+    NotApplicable,
+}
+
+impl Trust {
+    /// 真偽の key の読み（[`flag_at`]）から写す。
+    fn of(read: Result<bool, ()>) -> Self {
+        match read {
+            Ok(true) => Self::Accepted,
+            Ok(false) => Self::Missing,
+            Err(()) => Self::Unreadable,
+        }
+    }
+
+    /// 行の字面。
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Accepted => "accepted",
+            Self::Missing => "missing",
+            Self::Unreadable => "unreadable",
+            Self::NotApplicable => "n/a",
+        }
+    }
+}
+
+/// 口座 1 つの前提の読み（`<state_dir>/accounts/<label>` の直下を読んだ結果・何も書かない）。
+struct AccountProbe {
+    /// dir か（link を辿って dir）。
+    dir: Presence,
+    /// 直下の `.credentials.json` が file か（中身は読まない）。
+    credential: Presence,
+    /// 直下の `settings.json` が file か（Claude Code の設定 dir の印）。
+    config: Presence,
+    /// 直下の `settings.json` の `disableAgentView`。
+    agentview: AgentView,
+    /// 登録 row の anchor ごとの trust（anchor の辞書順・event log を読めない周は `None`）。
+    trust: Option<Vec<(String, Trust)>>,
+}
+
+/// JSON file を入れ子の reader で読む。file が無い・読めない・JSON でない周は `None`。
+fn read_tree(path: &Path) -> Option<Tree> {
+    json_tree::parse(&std::fs::read_to_string(path).ok()?).ok()
+}
+
+/// `path` の key を辿った真偽。途中か末端の key が無い周は `Ok(false)`・読めない file（`None`）と object で
+/// ない途中・真偽でない末端は `Err`（形が違う）。
+fn flag_at(tree: Option<&Tree>, path: &[&str]) -> Result<bool, ()> {
+    let mut node = tree.ok_or(())?;
+    for key in path {
+        let Tree::Object(_) = node else { return Err(()) };
+        match node.get(key) {
+            Some(next) => node = next,
+            None => return Ok(false),
+        }
+    }
+    node.as_bool().ok_or(())
+}
+
+/// 口座の dir を読む（読むだけ・`.claude.json` / credential / settings に書かない）。
+fn probe_account(dir: &Path, anchors: Option<&BTreeSet<String>>) -> AccountProbe {
+    let is_file = |name: &str| std::fs::metadata(dir.join(name)).is_ok_and(|found| found.is_file());
+    let claude = read_tree(&dir.join(".claude.json"));
+    let trust_of = |anchor: &String| {
+        let read = flag_at(claude.as_ref(), &["projects", anchor, "hasTrustDialogAccepted"]);
+        (anchor.clone(), Trust::of(read))
+    };
+    AccountProbe {
+        dir: Presence::of(std::fs::metadata(dir).is_ok_and(|found| found.is_dir())),
+        credential: Presence::of(is_file(".credentials.json")),
+        config: Presence::of(is_file("settings.json")),
+        agentview: AgentView::of(flag_at(read_tree(&dir.join("settings.json")).as_ref(), &["disableAgentView"])),
+        trust: anchors.map(|found| found.iter().map(trust_of).collect()),
+    }
+}
+
+/// 口座 1 行（pure）。trust は anchor が 1 つなら `trust=<値>`・複数なら anchor ごとに `trust=<潰した anchor>:<値>`
+/// を並べる（潰し方は席の dir 名と同じ [`vessel::seat::sanitize_target`]）。
+fn render_account(label: &str, probe: &AccountProbe) -> String {
+    let head = format!(
+        "account={label} dir={} credential={} config={} agentview={}",
+        probe.dir.as_str(),
+        probe.credential.as_str(),
+        probe.config.as_str(),
+        probe.agentview.as_str()
+    );
+    let cells: Vec<String> = match probe.trust.as_deref() {
+        None => vec![Trust::Unreadable.as_str().to_owned()],
+        Some([]) => vec![Trust::NotApplicable.as_str().to_owned()],
+        Some([(_, only)]) => vec![only.as_str().to_owned()],
+        Some(many) => many
+            .iter()
+            .map(|(anchor, found)| format!("{}:{}", vessel::seat::sanitize_target(anchor), found.as_str()))
+            .collect(),
+    };
+    cells.iter().fold(head, |line, cell| format!("{line} trust={cell}"))
+}
+
+/// doctor の口座の項目（C3.2 の「口座」の面・account-autonomy.md §5）: manifest（`--rules FILE` か埋め込み・env
+/// を読まない）の `[[account]]` の label の辞書順に 1 行。判定しない（rc を変えず行を出すだけ）。manifest を
+/// 読めない周は 1 行 `accounts: manifest=unreadable`（0 行に潰さない・C11）。
+fn account_lines(state_dir: &Path, rules: Option<&str>) -> Vec<String> {
+    let loaded = rules.map_or_else(Manifest::embedded, |path| Manifest::load(Path::new(path)));
+    let Ok(manifest) = loaded else {
+        return vec!["accounts: manifest=unreadable".to_owned()];
+    };
+    let labels: BTreeSet<&str> = manifest.accounts().iter().map(|account| account.label()).collect();
+    let anchors: Option<BTreeSet<String>> = vessel::fleet::store::read_all(state_dir).ok().map(|events| {
+        let state = vessel::fleet::replay(&events);
+        state.registrations.values().map(|latest| latest.registration.anchor.clone()).collect()
+    });
+    let line = |label: &&str| {
+        let probe = probe_account(&vessel::fleet::account_dir(state_dir, label), anchors.as_ref());
+        render_account(label, &probe)
+    };
+    labels.iter().map(line).collect()
 }
 
 /// 未知の引数に対する使い方の行。
@@ -140,7 +333,10 @@ fn main() -> ExitCode {
 
 #[cfg(test)]
 mod tests {
-    use super::{render_doctor, render_name, render_usage, render_version, NAME};
+    use super::{
+        render_account, render_doctor, render_name, render_usage, render_version, AccountProbe, AgentView, Presence, Trust,
+        NAME,
+    };
     use std::ffi::OsStr;
     use std::path::PathBuf;
 
@@ -177,12 +373,20 @@ mod tests {
     }
     /// `doctor` / usage / `--version` の外形を 1 つの snapshot に固定する。
     ///
-    /// 結合の順序は doctor の 2 行 → usage → version で、区切り文字は LF ただ 1 種
-    /// である。版番号は assert の前に `[version]` へ置換する（`default-features =
+    /// 結合の順序は doctor の 2 行 → 口座の行（fixture 1 つ・anchor 2 つの形）→ usage → version で、区切り文字は
+    /// LF ただ 1 種である。版番号は assert の前に `[version]` へ置換する（`default-features =
     /// false` では `Settings::add_filter` が無いので `filters` feature に頼らない）。
     #[test]
     fn doctor_external_form() {
         let mut lines = render_doctor();
+        let probe = AccountProbe {
+            dir: Presence::Present,
+            credential: Presence::Present,
+            config: Presence::Missing,
+            agentview: AgentView::Unreadable,
+            trust: Some(vec![("/repo/a".to_owned(), Trust::Accepted), ("/repo/b".to_owned(), Trust::Unreadable)]),
+        };
+        lines.push(render_account("acct", &probe));
         lines.push(render_usage());
         lines.push(render_version());
         let masked = lines.join("\n").replace(env!("CARGO_PKG_VERSION"), "[version]");
