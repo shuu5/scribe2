@@ -599,17 +599,63 @@ fn nextest(dir: &Path, target_dir: &Path) -> Result<Output, String> {
     nextest_with(dir, target_dir, &[])
 }
 
-/// [`nextest`] の本体。`extra` は `--workspace --no-tests=fail` の**後ろ**へ足す引数
-/// （base 段の撃ち直しが filterset を渡す口）。素の撃ちと撃ち直しで起動の形を 2 つ
-/// 持つと、片方だけ `--no-tests=fail` が落ちて rc 4 が緑に化ける。
+/// [`nextest`] の本体。引数の列は [`nextest_args`] が組む（素の撃ちと撃ち直しで起動の
+/// 形を 2 つ持つと、片方だけ `--no-tests=fail` が落ちて rc 4 が緑に化ける）。
 fn nextest_with(dir: &Path, target_dir: &Path, extra: &[&str]) -> Result<Output, String> {
     Command::new("cargo")
         .current_dir(dir)
         .env("CARGO_TARGET_DIR", target_dir)
-        .args(["nextest", "run", "--workspace", "--no-tests=fail"])
-        .args(extra)
+        .args(nextest_args(extra))
         .output()
         .map_err(|err| format!("cargo nextest を起動できない: {err}"))
+}
+
+/// 子の `cargo nextest run` へ渡す引数の列。`extra` は末尾へ足す（base 段の撃ち直しが
+/// filterset を渡す口）。
+///
+/// **`--color never` を常に渡す**。子の出力は [`failed_tests`] が行の字面で読むので、
+/// 親の env（CI の toolchain action が置く `CARGO_TERM_COLOR=always`）を継承して `FAIL`
+/// 行に ANSI 色が付くと、落ちた歯を 1 本も名指せず `base-not-green` へ倒れる（実測
+/// 2026-09-14・s2-07l.276: main が CI だけで赤）。env は読まず設定もしない——子の出力の
+/// 形を親の env に依存させない（C2.2）ための口は、この引数 1 つに閉じる。
+fn nextest_args(extra: &[&str]) -> Vec<String> {
+    [
+        "nextest",
+        "run",
+        "--workspace",
+        "--no-tests=fail",
+        "--color",
+        "never",
+    ]
+    .iter()
+    .chain(extra)
+    .map(|arg| (*arg).to_owned())
+    .collect()
+}
+
+/// ANSI CSI（`ESC [ <parameter bytes> <intermediate bytes> <final byte>`）だけを剥がす。
+///
+/// `--color never` が効かない周（古い nextest・別の runner）の第 2 の守り。剥がすのは
+/// CSI だけで、他の制御文字（裸の `ESC`・改行・tab）は触らない——落ちた歯の名指しに
+/// 要るのは色を外すことだけで、それ以上に出力を書き換えると別の行の形を壊す。
+fn strip_csi(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch != '\x1b' || chars.peek() != Some(&'[') {
+            out.push(ch);
+            continue;
+        }
+        chars.next();
+        // parameter bytes 0x30–0x3F と intermediate bytes 0x20–0x2F を読み飛ばし、
+        // final byte 0x40–0x7E で閉じる。閉じないまま終わればそこまでを落とす。
+        for found in chars.by_ref() {
+            if ('\x40'..='\x7e').contains(&found) {
+                break;
+            }
+        }
+    }
+    out
 }
 
 /// runner の出力から名指せた、落ちた歯 1 本。
@@ -638,7 +684,12 @@ impl FailedTest {
 /// 1 語には割れない）を挟んで binary id と名の **2 語ちょうど**——語数が違う行（形の
 /// 崩れた行）は拾わない。nextest は落ちた歯を末尾の一覧でもう 1 度出すので、同じ歯は
 /// 1 本に畳む（順序は出力順）。
+///
+/// 照合の前に [`strip_csi`] で色を剥がす。子には `--color never` を渡しているが
+/// （[`nextest_args`]）、色が残った周に「名指せない失敗」として `base-not-green` へ
+/// 倒れるのを、parser の側でも塞ぐ。
 fn failed_tests(text: &str) -> Vec<FailedTest> {
+    let text = strip_csi(text);
     let mut found: Vec<FailedTest> = Vec::new();
     for line in text.lines() {
         let Some(rest) = line.trim_start().strip_prefix("FAIL [") else {

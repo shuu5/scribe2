@@ -11,8 +11,8 @@
 //! 見え、ここへ足した歯が 1 本も測られないままになる。
 
 use super::{
-    failed_tests, is_test_file, judge, judge_into, parse_base, split_regions, FailedTest, FilePair,
-    Verdict, RETROACTIVE_MARK,
+    failed_tests, is_test_file, judge, judge_into, nextest_args, parse_base, split_regions,
+    FailedTest, FilePair, Verdict, RETROACTIVE_MARK,
 };
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -357,5 +357,82 @@ fn flip_check_base_retry_needs_named_failures() {
         retries.is_empty(),
         "名指せない失敗は撃ち直さない（sink に base-retry が {} 行）: {retries:?}",
         retries.len()
+    );
+}
+
+// ---- 子の出力の色（s2-07l.276・CI の `CARGO_TERM_COLOR=always` で main が赤）----
+
+/// CI の実出力と同じ色付きの `FAIL` 行（`ESC[31;1m … ESC[0m`・binary と歯の名にも色が付く）
+/// から、色なしの同じ行と同じ 1 本が取れる。base の parser は `FAIL [` 接頭辞が色で隠れて
+/// 0 本＝「名指せない失敗」として `base-not-green` へ倒れる（実測 2026-09-14・run 34856756368）。
+#[test]
+fn flip_check_parses_failed_tests_under_color_escapes() {
+    let colored = "\x1b[31;1m        FAIL\x1b[0m [   0.316s] (1053/1153) \x1b[35;1mflipdemo\x1b[0m \x1b[36mchecks\x1b[0m\x1b[36m::\x1b[0m\x1b[34;1mbroken\x1b[0m\n";
+    let plain = "        FAIL [   0.316s] (1053/1153) flipdemo checks::broken\n";
+    let want = vec![FailedTest {
+        binary: "flipdemo".to_owned(),
+        name: "checks::broken".to_owned(),
+    }];
+    assert_eq!(failed_tests(colored), want, "色付きの FAIL 行から 1 本名指せるはず");
+    assert_eq!(
+        failed_tests(colored),
+        failed_tests(plain),
+        "色付きと色なしで同じ結果になるはず"
+    );
+    assert!(
+        failed_tests("\x1b[32;1m        PASS\x1b[0m [   0.012s] (1/1) \x1b[35;1mflipdemo\x1b[0m checks::holds\n").is_empty(),
+        "色付きでも PASS 行は拾わない"
+    );
+}
+
+/// 子の `cargo nextest run` の引数の列に `--color never` が隣接して在る（親の env に依らず
+/// 出力を機械形にする）。`extra` はその後ろへ足される。
+#[test]
+fn flip_check_child_nextest_disables_color() {
+    let args = nextest_args(&["-E", "test(=x)"]);
+    let at = args
+        .iter()
+        .position(|arg| arg == "--color")
+        .expect("子の引数に --color が在る");
+    assert_eq!(args.get(at + 1).map(String::as_str), Some("never"), "--color の直後は never: {args:?}");
+    assert_eq!(args.first().map(String::as_str), Some("nextest"), "先頭は nextest: {args:?}");
+    assert!(args.contains(&"--no-tests=fail".to_owned()), "--no-tests=fail を落とさない: {args:?}");
+    assert_eq!(
+        &args[args.len() - 2..],
+        ["-E", "test(=x)"],
+        "extra は末尾へ足される: {args:?}"
+    );
+}
+
+/// 実 fixture の撃ち直しの歯 2 本は、子に `CARGO_TERM_COLOR=always` を載せた周でも緑になる。
+///
+/// 親 process の env は触らない——この test binary 自身を `Command` で撃ち、その env にだけ
+/// 色を置く。子の `judge_into` が起動する `cargo nextest` はその env を継承するので、CI と
+/// 同じ「色付きの FAIL 行」を読む周を手元で再現できる（実測 2026-09-14: base ではこの形で
+/// 同じ 2 本が落ちた＝再現 1/1）。
+#[test]
+fn flip_check_base_retry_is_color_independent() {
+    let exe = std::env::current_exe().expect("test binary の path を取れる");
+    // libtest の歯の名は crate 名を含まない（`flipcheck::tests::<name>`）。
+    let prefix = module_path!()
+        .split_once("::")
+        .map(|(_, rest)| rest)
+        .expect("module path に crate 名の後ろが在る");
+    let names = [
+        "flip_check_retries_flaky_base_test_once_and_reports_count",
+        "flip_check_base_retry_does_not_rescue_a_test_that_fails_twice",
+    ];
+    let output = Command::new(exe)
+        .env("CARGO_TERM_COLOR", "always")
+        .arg("--exact")
+        .args(names.iter().map(|name| format!("{prefix}::{name}")))
+        .output()
+        .expect("test binary を撃てる");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success() && stdout.contains("2 passed"),
+        "色ありの子でも撃ち直しの歯 2 本は緑のはず: {}\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}",
+        output.status
     );
 }
