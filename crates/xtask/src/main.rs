@@ -20,6 +20,7 @@ mod paths_clean;
 mod polarity;
 mod private_clean;
 mod prose_gate;
+mod rules_diff;
 mod seat_brief;
 mod spawn_points;
 mod toml_lite;
@@ -29,7 +30,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 /// 使い方の 1 行。
-const USAGE: &str = "usage: cargo xtask <check|gen-manifest|gen-claude-md> [ROOT] | cargo xtask <flip-check|mutants-diff> --base <ref>";
+const USAGE: &str = "usage: cargo xtask <check|gen-manifest|gen-claude-md> [ROOT] | cargo xtask <flip-check|mutants-diff|rules-diff> --base <ref>";
 
 /// stdout 出力層。stdout へ書くのはこの関数だけである。
 #[expect(
@@ -97,6 +98,8 @@ fn main() -> ExitCode {
         Some("flip-check") => return flipcheck::run(tail),
         // mutants-diff も rc 2（測れなかった）を持つので `Err` → rc 1 経路へ流さない。
         Some("mutants-diff") => return mutantsdiff::run(tail),
+        // rules-diff も rc 2（測れなかった）を持つ（設計 rules-manifest.md §4.3・C5 の差分の門）。
+        Some("rules-diff") => return rules_diff::run(tail),
         _ => Err(USAGE.to_owned()),
     };
     match outcome {
@@ -276,6 +279,14 @@ mod tests {
         // 配線（subcommand の入口）にも歯を 1 本置く。`--base` 無しは rc 2（使い方の誤り）。
         assert_eq!(crate::mutantsdiff::run(&[]), ExitCode::from(2), "--base 無しは rc 2");
         assert!(crate::USAGE.contains("mutants-diff"), "usage が subcommand を名指す");
+    }
+
+    /// `rules-diff`（設計 rules-manifest.md §4.3）の配線の歯。本体と判定の歯は `rules_diff.rs` に
+    /// 在るが、入口の 1 本は base に在るこの file へ置く（新規 module の歯だけに頼らない）。
+    #[test]
+    fn rules_diff_entry_point_refuses_without_base() {
+        assert_eq!(crate::rules_diff::run(&[]), ExitCode::from(2), "--base 無しは rc 2");
+        assert!(crate::USAGE.contains("rules-diff"), "usage が subcommand を名指す");
     }
 
     #[test]
