@@ -174,13 +174,14 @@ terms:
     definition: manifest の host の面。 state dir の 1 file (host.toml) が host 固有の宣言値 (口座 label・席に積む plugin dir・起動引数) を持ち、 tracked の面と同じ loader が読む。 rules 行は置けない (C10.2 の読み・ADR-0026 §2.1)。
     forbidden: [私用 manifest, overlay]
     relationships: [manifest, state dir, 口座]
+    flagged_ambiguities: [SRS の用語集では表示名を「host の面」とする (生成器は manifest を部分文字列に持つ用語を term-inline の曖昧化として拒む)。 同一 entity で正本は本 entry]
   - canonical: 口座の登録
     domain: consumer
-    definition: 器の口 account add が設定 dir・席の前提の settings・host の manifest の宣言を揃え、 login の起動行を差し込むこと (ADR-0026 §2.2)。 login と trust は user の手番で、 器は credential に触れない。
+    definition: 器の subcommand account add が口座の設定 dir・席の前提の設定・host の manifest の宣言を揃え、 login 用の起動 command を user へ渡すこと (ADR-0026 §2.2)。 login と trust は user の手番で、 器は credential に触れない。
     relationships: [口座, host の manifest, 退役, doctor]
   - canonical: 席の起動
     domain: consumer
-    definition: 器の口 seat launch が役割 (必須) と口座 (指定か session 用の選定) から起動行を導出し、 席の登録を先に書いて tmux の窓の shell へ差し込むこと (ADR-0026 §2.3)。 立て直しと同じ経路。
+    definition: 器の subcommand seat launch が役割 (必須) と口座 (指定か session 用の選定) から起動行を導出し、 席の登録を先に書いて tmux の窓の shell へ差し込むこと (ADR-0026 §2.3)。 立て直しと同じ経路で、 器の subcommand 以外の起動経路を使わない。
     forbidden: [cla, cld, wrapper 起動]
     relationships: [席, 席の登録, 起動行の導出, 口座]
   - canonical: 起動行の導出

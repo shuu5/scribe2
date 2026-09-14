@@ -11,8 +11,8 @@ meta:
   eyebrow_left: 要件定義書 (SRS)
   eyebrow_right: scribe2 — MVP
   subtitle: 契約は小さく・検証は機械が先・止まるときは記帳して止まる
-  version: "0.9"
-  date: "2026-09-13"
+  version: "0.10"
+  date: "2026-09-14"
   reader: この器で開発する人と AI（Claude Code の session）。 専門語には必ずやさしい言い換えを併記する
 
 approval:
@@ -69,8 +69,11 @@ scope:
     - 設計 doc の散文の門
     - 契約表の検査
     - 禁じる語列の command の拒否
+    - host の面
+    - 口座の登録
+    - 口座の退役
+    - 席の起動
   out:
-    - 席の起動（v3）
     - interpreter 経路の中身の解析（v3）
     - lane 計画と席の dashboard（v3）
     - 台帳への write（close と notes 1 行の外）
@@ -120,6 +123,8 @@ acceptance:
   - { id: AC25, criterion: fixture の設計 doc（規範の印を持つ文 3 つ = pointer 無し・数 + 単位付き・適合）で散文の門が違反 2 件を file と行付きで名指して非 0、 適合だけの fixture で 0 件・rc 0。 加えて tracked な設計 doc 全件で 0 件, metric_v: 2/2 件 + 全件 0, metric_l: 散文の門の違反の名指し, links: [FR52] }
   - { id: AC26, criterion: fixture の設計 doc の契約表（write-set が閉包に足りない行・設計の節が無い行・適合の行の 3 行）で契約表の検査が違反 2 行を file と行付きで名指して非 0、 適合だけの fixture で 0 件・rc 0。 加えて tracked な設計 doc の契約表全件で 0 件, metric_v: 2/2 行 + 全件 0, metric_l: 契約表の違反の名指し, links: [FR55] }
   - { id: AC27, criterion: 禁じる語列に当たる Bash の command を席と runner の両方の経路で撃ち、 実行されずに deny され、 断る理由に規則の出所と当たった並びが出る。 禁じる語列に当たる verify 行を持つ契約が intake で行番号付きで断られる。 同じ先頭語で禁じる語列に当たらない command 2 本はこの規則では止まらない, metric_v: deny 2/2 + intake の拒否 1/1 + 通過 2/2, metric_l: 禁じる語列の command の拒否, links: [FR56] }
+  - { id: AC28, criterion: tmp の state dir に host の面（口座 label・plugin dir・起動引数の 3 種）を置くと器が tracked の manifest と host の面の両方を数え、 両面で重複する口座 label・schema 外の項目・rules 行の混入を行番号付きで全件拒み、 file が無い host では 0 宣言で続き壊れた host では止まる。 口座の登録で口座の設定 dir と席の前提の設定と宣言 1 行が揃い、 既存の dir と宣言済みの口座 label は断られる。 退役で設定 dir が退役先へ動き event が 1 件残り、 復帰で元へ戻り event が 1 件残り、 席の登録 row が持つ口座の退役は断られ、 退役中の口座は選定と計測から外れる。 加えて実 host で 1 回、 口座を登録し user の login の後に doctor が credential の存在を示す, metric_v: 拒否 6/6 + 除外 2/2 + 登録 1/1 + 退役 1/1 + 復帰 1/1 + 実地 1 回, metric_l: host の面と口座の登録・退役, links: [FR57, FR58, FR36] }
+  - { id: AC29, criterion: 偽の tmux と偽の claude（fixture）で席の起動を役割付きで撃つと、 窓が 1 回作られ、 器が導出した起動行が 1 回だけ差し込まれ、 席の登録が差し込みの前に 1 件書かれる。 tmux の session が無い・入力欄に文字が在る・口座の候補が無い・口座が退役中、 のそれぞれで typed に断り key を 1 つも送らない。 加えて実 host で 1 回、 器の subcommand 以外の起動経路を使わずに席が立ち、 SessionStart の打刻と席の登録 row が揃う, metric_v: 起動 1/1 + 拒否 4/4 + 実地 1 回, metric_l: 器の subcommand からの席の起動, links: [FR36, FR40, FR59] }
 
 requirements:
   - id: FR1
@@ -487,7 +492,7 @@ requirements:
     ears:
       pattern: event
       condition: 口座残量の計測が要求されたとき
-      response: manifest に列挙した口座ごとに、 5 時間窓・7 日窓・モデル別 7 日窓の口座残量と reset 時刻を口座の endpoint から 1 コマンドで読み、 出所（口座・endpoint・時刻）付きの実測値（Measured）として fleet の event log に記録し、 読めない回は理由付きで「測れなかった」を記録して 0 の値に読み替えない
+      response: manifest に列挙した口座（退役中の口座を除く・FR58）ごとに、 5 時間窓・7 日窓・モデル別 7 日窓の口座残量と reset 時刻を口座の endpoint から 1 コマンドで読み、 出所（口座・endpoint・時刻）付きの実測値（Measured）として fleet の event log に記録し、 読めない回は理由付きで「測れなかった」を記録して 0 の値に読み替えない
   - id: FR34
     type: FR
     label: 追随
@@ -517,11 +522,11 @@ requirements:
     priority: must
     vmethod: T
     rationale_source: N-1
-    trace: { backward: [N-1, N-2], acceptance: [AC12, AC13] }
+    trace: { backward: [N-1, N-2], acceptance: [AC12, AC13, AC28, AC29] }
     ears:
       pattern: ubiquitous
       condition: 常時
-      response: 口座は、 manifest に宣言した口座（便用は席の登録 row を持つ口座を除く）と実測した口座残量（FR33）だけから決定的に選び、 便用（口座残量を使い切る側）と開発 session 用（余裕を残す側）の 2 つの規則を持ち、 規則の値は rules 行 R-C9-1（user 裁定で発効）だけから取る
+      response: 口座は、 manifest に宣言した口座（退役中の口座は FR58 で候補から外れ、 便用は席の登録 row を持つ口座を除く）と実測した口座残量（FR33）だけから決定的に選び、 便用（口座残量を使い切る側）と開発 session 用（余裕を残す側）の 2 つの規則を持ち、 規則の値は rules 行 R-C9-1（user 裁定で発効）だけから取る
   - id: FR37
     type: FR
     label: 別口座での途中再開
@@ -561,7 +566,7 @@ requirements:
     priority: must
     vmethod: T
     rationale_source: N-3
-    trace: { backward: [N-3, N-1], acceptance: [AC15] }
+    trace: { backward: [N-3, N-1], acceptance: [AC15, AC29] }
     ears:
       pattern: ubiquitous
       condition: 常時
@@ -745,6 +750,42 @@ requirements:
       condition: 席または runner の session が撃つ Bash の command が manifest の禁じる語列のいずれかに当たるとき
       response: 器は実行の前に deny し、 断る理由に規則の出所と当たった並びを告げ、 intake は契約と対象 repo の宣言 file の verify 各行に同じ判定を掛け、 当たる行を行番号付きで断り便を作らない
 
+  - id: FR57
+    type: FR
+    label: host の面
+    priority: must
+    vmethod: T
+    rationale_source: N-3
+    trace: { backward: [N-3, N-1], acceptance: [AC28] }
+    ears:
+      pattern: ubiquitous
+      condition: 常時
+      response: 器は host 固有の宣言値（口座 label・席に積む plugin dir・起動引数）を state dir の host の面 1 file だけから読み、 tracked の manifest と同じ読み手と同じ拒否の形で検査し、 rules 行を持つ file・両面で重複する口座 label・schema 外の項目を行番号付きで typed に拒み、 file が無い host では 0 宣言として続き、 在るが読めない host では typed に止まる
+
+  - id: FR58
+    type: FR
+    label: 口座の登録と退役
+    priority: must
+    vmethod: T
+    rationale_source: N-1
+    trace: { backward: [N-1, N-3], acceptance: [AC28] }
+    ears:
+      pattern: event
+      condition: 口座の登録・退役・復帰が要求されたとき
+      response: 登録では器が口座の設定 dir を state dir の下に作り、 席の前提の設定だけを書き、 host の面に宣言を 1 行足し、 login 用の起動 command を user へ渡し（credential は読まず書かない・既存の dir と宣言済みの口座 label は typed に断る）、 退役と復帰では設定 dir を可逆に動かして event を 1 件記録し、 席の登録 row（FR40）が持つ口座の退役は typed に断り、 退役の後はその口座を計測（FR33）と選定（FR36）の候補から外す（復帰で戻す）
+
+  - id: FR59
+    type: FR
+    label: 席の起動
+    priority: must
+    vmethod: T
+    rationale_source: N-1
+    trace: { backward: [N-1, N-3], acceptance: [AC29] }
+    ears:
+      pattern: event
+      condition: 器の口から席の起動が要求されたとき
+      response: 器は席の役割を必須で受け、 口座を引数か session 用の口座選定（FR36）で決め、 起動行を手書きの起動の雛形を読まずに導出し（起動行の構成は決定記録が正本）、 席の登録（FR40）を起動の前に書き、 立て直し（FR38）と同じ経路で target の窓の shell へ起動行を差し込み、 窓が無ければ作り tmux の session は作らず、 tmux の session が無い・入力欄に文字が在る・口座の候補が無い・口座が退役中のいずれかでは typed に断り key を 1 つも送らない
+
 nfr:
   - { id: NFR1, type: NFR, label: lens 予算,   category: 性能, target: 1 lens は 0.15M token 以内（目標値）,                                measure: lens 起動時の diff byte と cap の照合を verdict に記録,        vmethod: T, trace: { backward: [N-2], acceptance: [AC3] }, hero: { cat: 予算, big: "0.15", unit: M token, qual: lens 1 本あたりの上限 } }
   - { id: NFR2, type: NFR, label: 契約の大きさ, category: 大きさ, target: 1 契約の diff は 300 行程度・見積は 550 行以内,                      measure: PR の diff 行数と契約の見積を記録して照合,                   vmethod: A, trace: { backward: [N-4], acceptance: [AC2] }, hero: { cat: 小ささ, big: "300", unit: 行, qual: 1 契約の diff の目安 } }
@@ -811,7 +852,7 @@ glossary:
   - { term: 衝突,           en: conflict,               plain_short: 追随の rebase でぶつかること, def: 追随の rebase で、 先着の変更と同じ箇所が重なり器が自動では合わせられないこと（FR34 が記帳する）。 契約同士の write-set の交差（ADR-0019）とは別の概念。 }
   - { term: 暫定行,         en: provisional line,       plain_short: 出所の無い命令行,         def: 作業記憶の「命令・制約」行のうち、 出所 pointer（憲法条・ADR・rules 行・裁定 id・user 裁定の時刻）を持たない行（FR23 / AC8）。 }
   - { term: 上限停止,       en: limit stop,             plain_short: 口座の上限で止まること,    def: 便や開発 session が口座の残量の上限に当たって止まること。 便では FR35 の event、 session では退避と立て直しの契機。 }
-  - { term: 口座選定,       en: account selection,      plain_short: どの口座を使うか決める,     def: manifest の口座と実測の残量だけから口座を決定的に選ぶこと（FR36）。 便用と session 用の 2 規則を持つ。 }
+  - { term: 口座選定,       en: account selection,      plain_short: どの口座を使うか決める,     def: manifest の口座（退役中を除く・FR58）と実測の残量だけから口座を決定的に選ぶこと（FR36）。 便用と session 用の 2 規則を持つ。 }
   - { term: 役割,           en: role,                   plain_short: 席の種類,                 def: 開発 session の席の種類。 種類は配送構造（FR30）が定め、 席の登録 row が持つ（FR40）。 }
   - { term: 権能,           en: capability,             plain_short: 役割に許された操作,        def: 役割ごとに許された操作の閉じた一覧。 rules 行が持ち（FR41）、 編集・実行の時点で執行される（FR45）。 }
   - { term: 席の登録,       en: seat registration,      plain_short: 席と役割の記録,            def: 席の役割と anchor を鍵に、 target・口座 label・起動の雛形を項目として fleet の event log に記録すること（FR40）。 記録の無い席は権能を持たない。 }
@@ -825,3 +866,6 @@ glossary:
   - { term: 設計 pointer,   en: design pointer,         plain_short: どの設計 doc のどの契約か, def: 設計 doc の path と契約 id の対。 intake の入力（FR53）で、 台帳の bead の受入条件が持つ 1 行でもある（FR2）。 }
   - { term: 台帳 adapter,   en: ledger adapter,         plain_short: 台帳への唯一の口,         def: 器が台帳を読む口（読み取り専用）と close を書く口。 台帳へ触る module はこれ 1 つ（FR50 / FR51）。 }
   - { term: 禁じる語列,     en: forbidden token sequence, plain_short: 撃ってはいけない語の並び, def: command のうち撃ってはいけない語の並び。 値は manifest の rules 行だけが持ち（並びの例は行を見る）、 器が実行の前に止め、 intake が verify 行に同じ判定を掛ける（FR56）。 }
+  - { term: host の面,       en: host manifest,          plain_short: host ごとの宣言の置き場,   def: manifest の host の面。 state dir の 1 file が host 固有の宣言値を持ち、 tracked の manifest と同じ読み手で読まれる。 rules 行は置けない（FR57・ADR-0026）。 }
+  - { term: 口座の登録,     en: account registration,   plain_short: 口座を器に足すこと,       def: 器の subcommand が口座の設定 dir・席の前提の設定・host の面の宣言を揃え、 login 用の起動 command を user へ渡すこと（FR58）。 login は user の手番で、 器は credential に触れない。 退役と復帰も同じ subcommand が担う。 }
+  - { term: 席の起動,       en: seat launch,            plain_short: 器の subcommand で席を起こすこと, def: 役割を必須に受け、 口座を決め、 起動行を導出し、 席の登録を先に書いて target の窓の shell へ差し込むこと（FR59）。 立て直しと同じ経路で、 器の subcommand 以外の起動経路を使わない。 }
