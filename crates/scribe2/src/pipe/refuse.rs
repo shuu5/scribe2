@@ -7,9 +7,11 @@
 //!
 //! [`Unfit`](super::declaration) は **verify 行 1 本**の理由で境界が違うので触らない。
 //!
-//! 交差の判定は**契約の字面だけ**で閉じる: 正規化して集合の共通部分を見るだけで、symlink は
-//! 解かず file の存在も見ない。実体が同じ file を別名で持つ 2 契約は入口で見逃す（偽陰性）が、
-//! 編集時の guard が実体名で塞ぐ（ADR-0009 §2.1 の既知の穴はそのまま）。
+//! 交差の判定は**契約の字面と base の tracked file の一覧**で閉じる: 正規化して項目ごとに突き合わせ、
+//! dir 項目は base の file 一覧に**展開してから**数える（設計 contract-source.md §3・新規 file〔`+`〕と
+//! dir は交差しない＝dir で書いた snapshot の置き場が配下 1 file の別便と偽の交差を起こさない）。symlink は
+//! 解かない。実体が同じ file を別名で持つ 2 契約は入口で見逃す（偽陰性）が、編集時の guard が実体名で塞ぐ
+//! （ADR-0009 §2.1 の既知の穴はそのまま）。
 
 use super::table::TableError;
 use crate::cli_outcome::{RC_BROKEN, RC_REFUSED};
@@ -44,6 +46,9 @@ pub(crate) const REFUSALS: &[&str] = &[
     "write-set-incomplete",
     "write-set-dir-without-slash",
     "contract-table",
+    "write-set-item-unresolved",
+    "cap-headroom",
+    "name-unresolved",
 ];
 
 /// 契約 file が読めた後の、契約単位の拒否理由。**新しい理由は variant を 1 つ足す**（憲法 C2）。
@@ -85,6 +90,30 @@ pub(crate) enum Refuse {
     },
     /// 契約表そのものの欠陥（区間・parse・id・section・req・verify・depends・設計 contract-source.md §2）。
     ContractTable(TableError),
+    /// write-set の項目が base に解けない（実在する file でも・末尾 `/` の dir でも・`+` 接頭辞の新規 file〔base に
+    /// 無い〕でもない・設計 contract-source.md §3「項目の実在と展開」）。
+    WriteSetItemUnresolved {
+        /// 契約が書いた項目の字面。
+        item: String,
+    },
+    /// 上限の余地（R-C4-2 / R-C4-1 の値と base の行数の差）を `size` の見積が超える（設計 contract-source.md §3
+    /// 「上限の余地」・受付だけが撃つ）。core の合計の周は `file` = `core`。
+    CapHeadroom {
+        /// 余地の足りない file（repo 相対・core の合計は `core`）。
+        file: String,
+        /// 残っている行数。
+        headroom: u64,
+        /// 契約の `size` の字面。
+        size: String,
+    },
+    /// `title` / `done` / 節の本文の名指し（backtick の中身・path 形 / 型の path 形 / fn 形）が base に解けない
+    /// （設計 contract-source.md §3「名指しの実在」・FR54 と同型）。
+    NameUnresolved {
+        /// 名指しの字面。
+        name: String,
+        /// どこに書かれていたか（`title` / `done` / `section <N> line <L>`）。
+        at: String,
+    },
 }
 
 impl Refuse {
@@ -98,6 +127,9 @@ impl Refuse {
             Self::WriteSetIncomplete { .. } => "write-set-incomplete",
             Self::WriteSetDirWithoutSlash { .. } => "write-set-dir-without-slash",
             Self::ContractTable(_) => "contract-table",
+            Self::WriteSetItemUnresolved { .. } => "write-set-item-unresolved",
+            Self::CapHeadroom { .. } => "cap-headroom",
+            Self::NameUnresolved { .. } => "name-unresolved",
         }
     }
 
@@ -127,6 +159,13 @@ impl Refuse {
                 format!("write-set の {path} は既存の dir を末尾 / 無しで指す（配下を書くなら {path}/）")
             }
             Self::ContractTable(ref found) => found.reason(),
+            Self::WriteSetItemUnresolved { ref item } => {
+                format!("write-set の {item} は base に解けない（実在する file・末尾 / の dir・+ 接頭辞の新規 file のどれでもない）")
+            }
+            Self::CapHeadroom { ref file, headroom, ref size } => {
+                format!("{file} の上限の余地が {headroom} 行で size {size} の見積に足りない")
+            }
+            Self::NameUnresolved { ref name, ref at } => format!("名指し {name} が base に無い（{at}）"),
         }
     }
 
@@ -138,7 +177,10 @@ impl Refuse {
             | Self::DuplicateRun { .. }
             | Self::WriteSetOverlap { .. }
             | Self::WriteSetIncomplete { .. }
-            | Self::WriteSetDirWithoutSlash { .. } => RC_REFUSED,
+            | Self::WriteSetDirWithoutSlash { .. }
+            | Self::WriteSetItemUnresolved { .. }
+            | Self::CapHeadroom { .. }
+            | Self::NameUnresolved { .. } => RC_REFUSED,
             Self::WriteSetUnreadable { .. } => RC_BROKEN,
             Self::ContractTable(ref found) => found.rc(),
         }
@@ -158,13 +200,19 @@ pub(crate) fn covered(write_set: &[String], path: &str) -> bool {
 /// **照合は正規化した形で、返すのは契約が書いた字面のまま**である（読み手が自分の契約の
 /// どの行を直せばよいかは、器が畳んだ形ではなく書いた字面でしか分からない）。
 ///
+/// dir 項目は `tracked`（base の tracked file の repo 相対 path）に**展開してから**数える（設計
+/// contract-source.md §3）: dir × dir は段の境目の prefix、dir × file はその file が base に在って配下の周だけ、
+/// file × file は字面の一致（`+` 接頭辞の新規 file は剥がして比べる）。base に無い file と dir は交差しない
+/// （dir で書いた snapshot の置き場が、配下に新規 file 1 つを持つ別便と偽の交差を起こした `s2-07l.243 × .248` の型）。
+///
 /// `pub(crate)` なのは、回答で write-set を広げる周（`.133`）が**同じ 1 本**を呼ぶためである
 /// （本便は口だけを置き、answer への配線は `.133`）。
-pub(crate) fn overlaps(left: &[String], right: &[String]) -> Vec<(String, String)> {
+pub(crate) fn overlaps(left: &[String], right: &[String], tracked: &[String]) -> Vec<(String, String)> {
+    let base: Vec<String> = tracked.iter().map(|path| normalize(path)).collect();
     let mut found = Vec::new();
     for mine in left {
         for theirs in right {
-            if touches(&normalize(mine), &normalize(theirs)) {
+            if touches(&normalize(mine), &normalize(theirs), &base) {
                 found.push((mine.clone(), theirs.clone()));
             }
         }
@@ -172,12 +220,16 @@ pub(crate) fn overlaps(left: &[String], right: &[String]) -> Vec<(String, String
     found
 }
 
+/// 新規 file の項目の接頭辞（設計 contract-source.md §3「項目の実在と展開」）。
+pub(crate) const NEW_FILE: char = '+';
+
 /// path 1 本を字面で畳む（write-set guard の `relative_to` と同じ規則）。
 ///
 /// 先頭の `./` を落とす・連続する `/` を 1 つにする・`..` を畳む・**末尾の `/` は dir の印
-/// として残す**。root の外へ出る `..`（畳めない分）はそのまま残す＝字面が違うものを同じ
-/// path に化けさせない。**存在は見ない**ので、まだ無い file を書く契約も同じ規則で測れる。
+/// として残す**・新規 file の接頭辞 `+` は剥がす。root の外へ出る `..`（畳めない分）はそのまま残す＝字面が
+/// 違うものを同じ path に化けさせない。**存在は見ない**ので、まだ無い file を書く契約も同じ規則で測れる。
 fn normalize(raw: &str) -> String {
+    let raw = raw.strip_prefix(NEW_FILE).unwrap_or(raw);
     let is_dir = raw.ends_with('/');
     let mut parts: Vec<&str> = Vec::new();
     for part in raw.split('/') {
@@ -197,9 +249,20 @@ fn normalize(raw: &str) -> String {
     }
 }
 
-/// 正規化した 2 本が交差するか（**対称**）。
-fn touches(left: &str, right: &str) -> bool {
-    covers(left, right) || covers(right, left)
+/// 正規化した 2 本が交差するか（**対称**）。dir × dir は段の境目の prefix・dir × file は base に在る配下の file
+/// だけ・file × file は字面の一致（`base` は正規化済みの tracked path の列）。
+fn touches(left: &str, right: &str, base: &[String]) -> bool {
+    match (left.ends_with('/'), right.ends_with('/')) {
+        (true, true) => covers(left, right) || covers(right, left),
+        (true, false) => in_base(right, base) && covers(left, right),
+        (false, true) => in_base(left, base) && covers(right, left),
+        (false, false) => left == right,
+    }
+}
+
+/// 正規化した file が base の tracked file に在るか。
+fn in_base(file: &str, base: &[String]) -> bool {
+    base.iter().any(|path| path == file)
 }
 
 /// `left` が `right` を含むか。dir（末尾 `/`）は配下を全部含み、file は字面の一致だけ。
@@ -241,6 +304,9 @@ mod tests {
             Refuse::WriteSetIncomplete { missing: vec!["src/a.rs".to_owned(), "src/b.rs".to_owned()] },
             Refuse::WriteSetDirWithoutSlash { path: "src".to_owned() },
             Refuse::ContractTable(TableError::SectionMissing { line: 3, section: "9".to_owned() }),
+            Refuse::WriteSetItemUnresolved { item: "src/none.rs".to_owned() },
+            Refuse::CapHeadroom { file: "src/big.rs".to_owned(), headroom: 7, size: "M".to_owned() },
+            Refuse::NameUnresolved { name: "Guard::Rules".to_owned(), at: "done".to_owned() },
         ]
     }
 
@@ -249,13 +315,28 @@ mod tests {
     #[test]
     fn refuse_contract_table_reasons_name_every_missing_file_and_keep_the_rc_of_the_table_error() {
         let found = samples();
-        let labels: Vec<String> = found.iter().skip(4).map(Refuse::label).collect();
+        let labels: Vec<String> = found.iter().skip(4).take(3).map(Refuse::label).collect();
         assert_eq!(labels, ["write-set-incomplete", "write-set-dir-without-slash", "contract-table:section-missing"]);
         let incomplete = found.get(4).map(Refuse::reason).unwrap_or_default();
         assert!(incomplete.contains("src/a.rs, src/b.rs"), "足りない file を全部名乗る: {incomplete}");
         let unreadable = Refuse::ContractTable(TableError::Unreadable { line: 0, reason: "x を読めない".to_owned() });
         assert_eq!(unreadable.rc(), RC_BROKEN, "読めない表は rc 2");
         assert_eq!(unreadable.reason(), "x を読めない", "理由は表の欠陥の字面のまま");
+    }
+
+    /// 閉包の拡張の 3 理由（契約 (g)・設計 contract-source.md §3）: 宣言順の末尾に並び、rc 1 で、理由は項目 / file と
+    /// 余地と size / 名指しと在り処を名乗る。
+    #[test]
+    fn refuse_closure_ext_reasons_are_last_and_name_their_payload() {
+        let found = samples();
+        let tail: Vec<&str> = found.iter().skip(7).map(Refuse::as_str).collect();
+        assert_eq!(tail, ["write-set-item-unresolved", "cap-headroom", "name-unresolved"], "宣言順の末尾 3 つ");
+        let reasons: Vec<String> = found.iter().skip(7).map(Refuse::reason).collect();
+        assert!(reasons.first().is_some_and(|line| line.contains("src/none.rs")), "項目を名乗る: {reasons:?}");
+        let headroom = reasons.get(1).cloned().unwrap_or_default();
+        assert!(headroom.contains("src/big.rs") && headroom.contains(" 7 ") && headroom.contains("size M"), "{headroom}");
+        assert!(reasons.get(2).is_some_and(|line| line.contains("Guard::Rules") && line.contains("done")), "{reasons:?}");
+        assert!(found.iter().skip(7).all(|refuse| refuse.rc() == RC_REFUSED), "前提違反は rc 1");
     }
 
     /// 閉包の file が write-set に含まれるか: dir（末尾 `/`）は配下全部・file は字面の一致・正規化してから比べる。
@@ -301,25 +382,37 @@ mod tests {
         assert!(!line.contains('\n'), "理由は 1 行: {line}");
     }
 
-    /// 設計 §2 の表（dir と file・正規化の 3 形）を字面で測る。
+    /// base の tracked file（交差の表の fixture）。
+    fn tracked() -> Vec<String> {
+        ["a/b.rs", "src/x.rs", "src/a.rs", "src/b.rs"].iter().map(|path| (*path).to_owned()).collect()
+    }
+
+    /// 設計 §2 の表（dir と file・正規化の 3 形）と dir の展開（contract-source.md §3・新規 file と dir は交差しない）
+    /// を字面で測る。
     #[test]
     fn refuse_overlap_table_follows_the_design() {
         let set = |item: &str| vec![item.to_owned()];
+        let base = tracked();
         for (left, right, want) in [
             ("a/", "a/b.rs", true),
             ("a/", "ab/", false),
-            ("a", "a/", true),
+            ("a/", "a/c/", true),
             ("./a/b.rs", "a/b.rs", true),
             ("a//b.rs", "a/b.rs", true),
             ("src/../src/x.rs", "src/x.rs", true),
             ("src/a.rs", "src/b.rs", false),
+            // dir は base の file 一覧に展開して数える＝新規 file（`+`）と base に無い file は配下でも交差しない。
+            ("a/", "+a/new.rs", false),
+            ("a/", "a/new.rs", false),
+            ("+a/b.rs", "a/b.rs", true),
+            ("+a/new.rs", "a/new.rs", true),
         ] {
-            let found = !overlaps(&set(left), &set(right)).is_empty();
+            let found = !overlaps(&set(left), &set(right), &base).is_empty();
             assert_eq!(found, want, "{left} × {right}");
             // 返るのは**契約が書いた字面のまま**（器が畳んだ形ではない）。
             if want {
                 assert_eq!(
-                    overlaps(&set(left), &set(right)).first().cloned(),
+                    overlaps(&set(left), &set(right), &base).first().cloned(),
                     Some((left.to_owned(), right.to_owned())),
                     "{left} × {right} の組は字面のまま"
                 );
@@ -327,6 +420,7 @@ mod tests {
         }
         assert_eq!(normalize("./src//../src/x.rs"), "src/x.rs", "正規化の 3 形を畳む");
         assert_eq!(normalize("src/"), "src/", "末尾の / は dir の印として残る");
+        assert_eq!(normalize("+src/new.rs"), "src/new.rs", "新規 file の接頭辞は剥がす");
     }
 
     /// 交差の全組が返る（1 組で止めない＝stderr に全組を並べる材料）。
@@ -334,7 +428,7 @@ mod tests {
     fn refuse_overlap_returns_every_pair() {
         let mine = vec!["src/a.rs".to_owned(), "src/b.rs".to_owned()];
         let theirs = vec!["src/".to_owned(), "docs/x.md".to_owned()];
-        let found = overlaps(&mine, &theirs);
+        let found = overlaps(&mine, &theirs, &tracked());
         assert_eq!(found.len(), 2, "2 組とも返る: {found:?}");
         assert_eq!(found.first().cloned(), Some(("src/a.rs".to_owned(), "src/".to_owned())));
     }
@@ -378,29 +472,31 @@ mod tests {
     proptest! {
         #![proptest_config(config())]
 
-        /// 判定は**対称**である（どちらを新しい契約として撃っても同じ答え）。
+        /// 判定は**対称**である（どちらを新しい契約として撃っても同じ答え）。base は右の file 項目を全部持つ形で振る。
         #[test]
         fn prop_refuse_overlap_is_symmetric(left in write_set(), right in write_set()) {
-            let forward = overlaps(&left, &right).is_empty();
-            let backward = overlaps(&right, &left).is_empty();
+            let base: Vec<String> = right.iter().filter(|item| !item.ends_with('/')).cloned().collect();
+            let forward = overlaps(&left, &right, &base).is_empty();
+            let backward = overlaps(&right, &left, &base).is_empty();
             prop_assert_eq!(forward, backward);
         }
 
-        /// 非空の集合は**自分自身と交差する**（同じ契約の 2 本目は必ず掛かる）。
+        /// 非空の集合は**自分自身と交差する**（同じ契約の 2 本目は必ず掛かる・base が空でも）。
         #[test]
         fn prop_refuse_nonempty_set_overlaps_itself(set in write_set()) {
-            prop_assert!(!overlaps(&set, &set).is_empty());
+            prop_assert!(!overlaps(&set, &set, &[]).is_empty());
         }
 
         /// 正規化で結果が変わらない（`./` 前置・`//` 重複・`x/../` の挿入）。
         #[test]
         fn prop_refuse_normalization_does_not_change_the_answer(left in write_set(), right in write_set()) {
-            let want = overlaps(&left, &right).is_empty();
+            let base: Vec<String> = right.iter().filter(|item| !item.ends_with('/')).cloned().collect();
+            let want = overlaps(&left, &right, &base).is_empty();
             let dotted: Vec<String> = left.iter().map(|item| format!("./{item}")).collect();
             let doubled: Vec<String> = left.iter().map(|item| item.replace('/', "//")).collect();
             let hopped: Vec<String> = left.iter().map(|item| format!("q/../{item}")).collect();
             for decorated in [dotted, doubled, hopped] {
-                prop_assert_eq!(overlaps(&decorated, &right).is_empty(), want);
+                prop_assert_eq!(overlaps(&decorated, &right, &base).is_empty(), want);
             }
         }
 
@@ -409,7 +505,8 @@ mod tests {
         fn prop_refuse_disjoint_prefixes_never_overlap(left in plain_write_set(), right in plain_write_set()) {
             let mine: Vec<String> = left.iter().map(|item| format!("left/{item}")).collect();
             let theirs: Vec<String> = right.iter().map(|item| format!("right/{item}")).collect();
-            prop_assert!(overlaps(&mine, &theirs).is_empty());
+            let base: Vec<String> = mine.iter().chain(&theirs).cloned().collect();
+            prop_assert!(overlaps(&mine, &theirs, &base).is_empty());
         }
     }
 }

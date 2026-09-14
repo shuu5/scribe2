@@ -455,6 +455,128 @@ pub fn verify_unfit(line: &str, allowed: &[String]) -> Option<String> {
     unfit(line, allowed, Holes::None).map(|found| found.reason(allowed))
 }
 
+// ───────── write-set の項目の読み（設計 contract-source.md §3「項目の実在と展開」「上限の余地」・pure） ─────────
+
+/// write-set の 1 項目を base（tracked file の一覧）に対して読んだもの。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WriteSetItem {
+    /// base に実在する file（repo 相対 path）。
+    File(String),
+    /// 末尾 `/` の dir。base の配下の file を**展開した**列で持つ（辞書順）。
+    Dir(Vec<String>),
+    /// `+` 接頭辞で宣言した新規 file（base に無い・接頭辞を剥がした path）。
+    New(String),
+}
+
+/// write-set の各項目を base に対して読む。**解けない項目は全件**（1 件目で止めない）。
+///
+/// 解ける形は 3 つだけ: base に実在する file / 末尾 `/` で base に配下の file を持つ dir / `+` 接頭辞で base に**無い**
+/// 新規 file。それ以外（無い file・空の dir・base に在る file への `+`）は `Err` に項目の字面で積む。
+pub fn read_write_set(write_set: &[String], tracked: &[String]) -> Result<Vec<WriteSetItem>, Vec<String>> {
+    let (mut items, mut unresolved) = (Vec::new(), Vec::new());
+    for item in write_set {
+        match read_item(item, tracked) {
+            Some(found) => items.push(found),
+            None => unresolved.push(item.clone()),
+        }
+    }
+    if unresolved.is_empty() {
+        Ok(items)
+    } else {
+        Err(unresolved)
+    }
+}
+
+/// 1 項目を読む（解けなければ `None`）。
+fn read_item(item: &str, tracked: &[String]) -> Option<WriteSetItem> {
+    if let Some(dir) = item.strip_suffix('/') {
+        let under: Vec<String> = tracked.iter().filter(|path| is_under(path, dir)).cloned().collect();
+        return (!under.is_empty()).then_some(WriteSetItem::Dir(under));
+    }
+    if let Some(new) = item.strip_prefix(super::refuse::NEW_FILE) {
+        let absent = !new.is_empty() && !tracked.iter().any(|path| path == new);
+        return absent.then(|| WriteSetItem::New(new.to_owned()));
+    }
+    tracked.iter().any(|path| path == item).then(|| WriteSetItem::File(item.to_owned()))
+}
+
+/// `path` が dir `dir`（末尾 `/` 無しの字面）の配下か。
+pub(crate) fn is_under(path: &str, dir: &str) -> bool {
+    path.strip_prefix(dir).is_some_and(|rest| rest.starts_with('/'))
+}
+
+/// 上限の余地の入力（rules 行の値・設計 contract-source.md §3「上限の余地」）。数は manifest から読む（C1）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Caps {
+    /// 1 file の行数の上限（R-C4-2）。
+    pub file_lines: u64,
+    /// core の総行数の上限（R-C4-1）。
+    pub core_lines: u64,
+    /// `size` 1 段の 1 file あたりの見積（行・`pipe.size_<s|m|l>_lines` のうち契約の size の行）。
+    pub size_lines: u64,
+}
+
+/// 余地の足りない 1 件（file は repo 相対・core の合計は [`CORE`]）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Headroom {
+    /// 余地の足りない file。
+    pub file: String,
+    /// 残っている行数。
+    pub headroom: u64,
+}
+
+/// core の合計を名指す `file` の字面。
+pub const CORE: &str = "core";
+
+/// 行数（xtask check の file-lines / core-lines と同じ式 = 改行で区切った行の数・幅の正規化は `.254`）。
+pub fn line_count(text: &str) -> u64 {
+    u64::try_from(text.lines().count()).unwrap_or(u64::MAX)
+}
+
+/// 上限の余地を測る（**受付だけが撃つ**・pure・I/O は呼び手）。
+///
+/// `lines` は base の tracked `.rs` の (path, 行数)。write-set の `.rs`（dir は展開した配下・新規 file は 0 行）の
+/// それぞれについて `file_lines − 行数` を余地とし、`size_lines` が余地を超える file を名指す。core（write-set の
+/// `.rs` が在る `crates/<c>/src/` の総行数）は `size_lines × write-set の .rs 本数` を見積として同じ式で 1 回。
+pub fn headroom_shortfalls(items: &[WriteSetItem], lines: &[(String, u64)], caps: Caps) -> Vec<Headroom> {
+    let files: Vec<&str> = items
+        .iter()
+        .flat_map(|item| match *item {
+            WriteSetItem::File(ref path) | WriteSetItem::New(ref path) => vec![path.as_str()],
+            WriteSetItem::Dir(ref under) => under.iter().map(String::as_str).collect(),
+        })
+        .filter(|path| path.ends_with(".rs"))
+        .collect();
+    let lines_of = |path: &str| lines.iter().find(|(found, _)| found == path).map_or(0, |(_, count)| *count);
+    let mut found: Vec<Headroom> = files
+        .iter()
+        .filter_map(|path| {
+            let headroom = caps.file_lines.saturating_sub(lines_of(path));
+            (caps.size_lines > headroom).then(|| Headroom { file: (*path).to_owned(), headroom })
+        })
+        .collect();
+    let estimate = caps.size_lines.saturating_mul(u64::try_from(files.len()).unwrap_or(u64::MAX));
+    let mut cores: Vec<&str> = files.iter().filter_map(|path| core_of(path)).collect();
+    cores.sort_unstable();
+    cores.dedup();
+    for core in cores {
+        let total: u64 = lines.iter().filter(|(path, _)| core_of(path) == Some(core)).map(|(_, count)| *count).sum();
+        let headroom = caps.core_lines.saturating_sub(total);
+        if estimate > headroom {
+            found.push(Headroom { file: CORE.to_owned(), headroom });
+        }
+    }
+    found
+}
+
+/// `.rs` の path が属する core（`crates/<c>/src/…` の `crates/<c>/src`）。その形でなければ `None`。
+fn core_of(path: &str) -> Option<&str> {
+    let rest = path.strip_prefix("crates/")?;
+    let (crate_name, tail) = rest.split_once("/src/")?;
+    let head = path.len().checked_sub(tail.len().saturating_add(1))?;
+    (!crate_name.is_empty() && !crate_name.contains('/')).then(|| path.get(..head)).flatten()
+}
+
 impl Effective {
     /// 許す command。
     pub fn allowed(&self) -> &[String] {
@@ -628,10 +750,76 @@ fn list_of(
 #[cfg(test)]
 mod tests {
     use super::{
-        unfit, Declared, Effective, Holes, Sourced, Unfit, BASE_HOLES, BASE_HOLE, CEILING_ROW,
-        DECL_FILE, JOBS_HOLE,
+        headroom_shortfalls, line_count, read_write_set, unfit, Caps, Declared, Effective, Headroom, Holes, Sourced,
+        Unfit, WriteSetItem, BASE_HOLES, BASE_HOLE, CEILING_ROW, CORE, DECL_FILE, JOBS_HOLE,
     };
     use crate::order::is_declaration_order;
+
+    /// 文字列の列。
+    fn strings(items: &[&str]) -> Vec<String> {
+        items.iter().map(|item| (*item).to_owned()).collect()
+    }
+
+    /// base の tracked file（write-set の項目の fixture）。
+    fn base() -> Vec<String> {
+        strings(&["crates/toy/src/a.rs", "crates/toy/src/b.rs", "snap/x.snap", "docs/d.md", "crates/toy/tests/t.rs"])
+    }
+
+    /// write-set の項目は 3 形（実在する file / 末尾 `/` で配下を持つ dir〔展開される〕/ `+` の新規 file〔base に無い〕）
+    /// だけが解け、それ以外は**全件**項目の字面で返る（設計 contract-source.md §3「項目の実在と展開」）。
+    #[test]
+    fn declaration_write_set_items_resolve_only_the_three_forms_and_name_every_unresolved_item() {
+        let read = read_write_set(&strings(&["crates/toy/src/a.rs", "snap/", "+crates/toy/src/new.rs"]), &base());
+        assert_eq!(
+            read,
+            Ok(vec![
+                WriteSetItem::File("crates/toy/src/a.rs".to_owned()),
+                WriteSetItem::Dir(vec!["snap/x.snap".to_owned()]),
+                WriteSetItem::New("crates/toy/src/new.rs".to_owned()),
+            ]),
+            "3 形が解け dir は配下に展開される"
+        );
+        let unresolved = read_write_set(
+            &strings(&["crates/toy/src/none.rs", "empty/", "+crates/toy/src/a.rs", "+", "snap", "docs/d.md"]),
+            &base(),
+        );
+        assert_eq!(
+            unresolved,
+            Err(strings(&["crates/toy/src/none.rs", "empty/", "+crates/toy/src/a.rs", "+", "snap"])),
+            "無い file・空の dir・base に在る file への +・空の + は解けない（末尾 / 無しの dir も file としては無い）"
+        );
+    }
+
+    /// 上限の余地: write-set の `.rs` ごとに `file_lines − 行数` を余地とし、size の見積が超える file を名指す。core
+    /// （`crates/<c>/src/` の合計）は `見積 × .rs 本数` で 1 回。`.rs` でない項目と別 crate の行は数えない。
+    #[test]
+    fn declaration_headroom_names_the_file_and_the_core_whose_room_is_short() {
+        let lines = vec![
+            ("crates/toy/src/a.rs".to_owned(), 1_400),
+            ("crates/toy/src/b.rs".to_owned(), 100),
+            ("crates/other/src/z.rs".to_owned(), 5_000),
+            ("crates/toy/tests/t.rs".to_owned(), 900),
+        ];
+        let items = read_write_set(&strings(&["crates/toy/src/a.rs", "snap/", "+crates/toy/src/new.rs"]), &base())
+            .unwrap_or_default();
+        let caps = |size_lines: u64, core_lines: u64| Caps { file_lines: 1_500, core_lines, size_lines };
+        assert_eq!(
+            headroom_shortfalls(&items, &lines, caps(300, 40_000)),
+            vec![Headroom { file: "crates/toy/src/a.rs".to_owned(), headroom: 100 }],
+            "M（300）は余地 100 の a.rs に入らない・新規 file は余地いっぱい・core は余裕"
+        );
+        assert!(headroom_shortfalls(&items, &lines, caps(100, 40_000)).is_empty(), "S（100）は余地 100 に入る");
+        // core: 合計 1500（tests/ と別 crate は数えない）・見積 = 100 × 2 本 = 200 > 余地 100。
+        assert_eq!(
+            headroom_shortfalls(&items, &lines, caps(100, 1_600)),
+            vec![Headroom { file: CORE.to_owned(), headroom: 100 }],
+            "core の余地は crates/<c>/src/ の合計で 1 回"
+        );
+        let only_b = read_write_set(&strings(&["crates/toy/src/b.rs", "docs/d.md"]), &base()).unwrap_or_default();
+        assert!(headroom_shortfalls(&only_b, &lines, caps(300, 40_000)).is_empty(), "余地の無い file を持たない行は通る");
+        assert_eq!(line_count("a\nb\n"), 2, "行数は改行で区切った行の数");
+        assert_eq!(line_count("a\nb"), 2, "末尾改行の有無で差を出さない");
+    }
 
     /// 宣言の共通 verify に置ける穴は**閉じた集合**であり、その外は `Hole` で断る
     /// （ADR-0021 §2.1 が ADR-0010 §2.1 を部分 supersede）。

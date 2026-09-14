@@ -886,6 +886,40 @@ fn rules_embedded_manifest_declares_ledger_timeout() {
     assert!(errors.join("\n").contains("未知である"), "行の kind を綴り違えた manifest は読めない");
 }
 
+/// 契約の size ↔ 1 file あたりの増分の見積の 3 行（`pipe.size_<s|m|l>_lines`・裁定 id `user 2026-09-14T06:4xZ`・設計
+/// contract-source.md §3「上限の余地」・rules-manifest.md §4・`s2-07l.249`）。**値は manifest が持ち、設計 doc は
+/// 写さない**（C1 / C5）。kind は宣言順の末尾 3 つで、行と variant を対で足させる（片方だけの manifest は `parse`
+/// できず、片方だけの enum は親 test の `covers_all_kinds` が落ちる）。
+#[test]
+fn rules_embedded_manifest_declares_the_size_lines_rows() {
+    let manifest = match Manifest::embedded() {
+        Ok(found) => found,
+        Err(errors) => {
+            let lines: Vec<String> = errors.iter().map(ToString::to_string).collect();
+            panic!("埋め込み manifest が拒まれた:\n{}", lines.join("\n"))
+        }
+    };
+    let rows: [(&str, RuleKind, u64); 3] = [
+        ("pipe.size_s_lines", RuleKind::PipeSizeSLines, 100),
+        ("pipe.size_m_lines", RuleKind::PipeSizeMLines, 300),
+        ("pipe.size_l_lines", RuleKind::PipeSizeLLines, 800),
+    ];
+    for (id, kind, value) in rows {
+        let row = manifest.get(id).unwrap_or_else(|| panic!("{id} の行が在る"));
+        assert_eq!(row.value, RuleValue::Int(value), "{id} の値");
+        assert_eq!(row.kind, kind, "{id} の kind");
+        assert_eq!(row.kind.shape(), ValueShape::Int, "{id} の値の形は Int（行）");
+        assert!(row.enabled, "{id} は既定で効く");
+        assert_eq!(row.ruling, "user 2026-09-14T06:4xZ", "{id} の裁定 id");
+        assert_eq!(row.ruled_at, "2026-09-14", "{id} の裁定日");
+        assert_eq!(RuleKind::parse(kind.as_str()), Some(kind), "{id} の kind を字面から引ける");
+    }
+    let tail: Vec<RuleKind> = ALL.iter().rev().take(3).rev().copied().collect();
+    assert_eq!(tail, [RuleKind::PipeSizeSLines, RuleKind::PipeSizeMLines, RuleKind::PipeSizeLLines], "宣言順の末尾 3 つ");
+    let errors = rejected(&one_row_raw("PipeSizeXlLines", "1600")).expect("未知の kind の fixture が受理された");
+    assert!(errors.join("\n").contains("未知である"), "4 段目の size は kind として読めない");
+}
+
 /// 口座選定の行（`R-C9-1`・裁定 id `user 2026-09-13T03:14Z`・設計 account-autonomy.md §3）。値は
 /// session 用の閾値（使用率の百分率）で形は `Int`。**散文（Policy）の値を置いた行は形の不一致で拒まれる**
 /// （形は `RuleKind::shape` の 1 箇所が持つ）。
@@ -964,7 +998,7 @@ fn rules_embedded_manifest_is_valid_and_covers_all_kinds() {
     // **tracked な `rules/manifest.toml` の全行が受理される**（`parse` は 1 件でも違反が
     // 在れば `Err` を返すので、ここに届いた時点で全行が必須 key を持つ）。母集団を額面に
     // 出すのは、行が黙って落ちた周を「全部読めた」と読み違えないためである。
-    assert_eq!(manifest.rows().len(), 44, "埋め込み manifest の行数（母集団・`.217` で +2）");
+    assert_eq!(manifest.rows().len(), 47, "埋め込み manifest の行数（母集団・`.217` で +2・`.249` で +3）");
     for kind in ALL {
         let covered = manifest.rows().iter().any(|row| row.kind == *kind);
         assert!(covered, "{} の行が manifest に無い", kind.as_str());
@@ -1098,10 +1132,10 @@ fn rules_embedded_manifest_declares_one_capability_row_per_role() {
             assert!(Capability::parse(name).is_some(), "{id} の値 {name} は Capability の名");
         }
     }
-    assert!(ALL.contains(&RuleKind::RoleCapabilities), "ALL に在る（末尾は `.217` の MemoStalePriority）");
+    assert!(ALL.contains(&RuleKind::RoleCapabilities), "ALL に在る（末尾は `.249` の PipeSizeLLines）");
     assert_eq!(RuleKind::parse("RoleCapabilities"), Some(RuleKind::RoleCapabilities), "kind を字面から引ける");
     let kinds = ALL.len();
-    assert_eq!(kinds, 43, "kind の母集団（`.201` で +1・`.217` で +2）");
+    assert_eq!(kinds, 46, "kind の母集団（`.201` で +1・`.217` で +2・`.249` で +3）");
 }
 
 /// 台帳の棚卸しの閾値 2 行（`ledger.memo_stale_days` / `ledger.memo_stale_priority`・裁定 id
@@ -1123,10 +1157,11 @@ fn rules_embedded_manifest_declares_the_memo_stale_rows() {
         assert_eq!(row.ruled_at, "2026-09-13", "{id} の裁定日");
         assert_eq!(RuleKind::parse(kind.as_str()), Some(kind), "{id} の kind を字面から引ける");
     }
+    // `.249` の size の 3 行が末尾に続く＝この 2 行は末尾から 5 つ目と 4 つ目。
     assert_eq!(
-        ALL.get(ALL.len().saturating_sub(2)..),
+        ALL.get(ALL.len().saturating_sub(5)..ALL.len().saturating_sub(3)),
         Some([RuleKind::MemoStaleDays, RuleKind::MemoStalePriority].as_slice()),
-        "宣言順の末尾 2 つ"
+        "宣言順で size の 3 行の直前に並ぶ 2 つ"
     );
     let errors = rejected(&one_row(RuleKind::MemoStaleDays, "\"3 日\"")).expect("散文の値の fixture が受理された");
     assert!(errors.join("\n").contains("要 Int"), "Int でない値は拒む: {errors:?}");

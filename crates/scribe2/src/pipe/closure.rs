@@ -16,8 +16,34 @@
 //! **下界である**（§3「限界」）: 型の名が別名で現れる形（`use … as`・generic の中）と `Self { … }` の構築は
 //! 見ない。上界は構文木が要り A3 の依存になる（却下・§11）。読めない file と型名の形の違いは `Err`
 //! （fail-closed・NFR4）。
+//!
+//! 閉包の拡張（契約 (g)・§3）も同じ pure な字面走査で持つ: (v) **外形 pin** [`surface_closure`]（`surfaces` の名が
+//! 指す外形 snapshot の file と、その名か subcommand の usage 文字列を歯の区間に literal で持つ `.rs`）と
+//! **名指しの実在** [`unresolved_names`]（backtick の中身のうち path 形 / 型の path 形 / fn 形だけを名指しと読み、
+//! base に解けないものを全件返す）。
 
 use std::collections::BTreeSet;
+
+/// 外形 snapshot の置き場（repo 相対 path の中の dir・`crates/<c>/src/snapshots/` と `crates/<c>/tests/e2e/snapshots/`）。
+const SNAPSHOT_DIRS: &[&str] = &["src/snapshots/", "tests/e2e/snapshots/"];
+
+/// 外形 snapshot の拡張子（insta の `<crate>__<module>__<歯の名>.snap`・名は末尾の `__` の後）。
+const SNAPSHOT_EXT: &str = ".snap";
+
+/// usage 行の書き出し（この後ろの名〔`{NAME}` / `{}` の穴を飛ばした最初の語〕が subcommand の名）。
+const USAGE_HEAD: &str = "usage: ";
+
+/// src の歯の区間の始まり（行頭・以後 file 末尾まで・xtask の test-src-ratio と同じ印）。
+const TEST_MARK: &str = "#[cfg(test)]";
+
+/// 歯の file を置く dir の名（path の段に持てば file 全体が歯の区間）。
+const TESTS_DIR: &str = "tests";
+
+/// path 形の名指しに使える文字（英数字と `_ . / -`）。
+const PATH_CHARS: &[char] = &['_', '.', '/', '-'];
+
+/// path 形の名指しの拡張子。
+const RS: &str = ".rs";
 
 /// `use` 文の書き出し（複数行に跨ぐ `use a::{…};` は `;` まで繋げて 1 文として読む）。
 const USE_HEADS: &[&str] = &["use ", "pub use ", "pub(crate) use "];
@@ -52,6 +78,11 @@ pub enum ClosureError {
         /// 読めなかった理由。
         reason: String,
     },
+    /// `surfaces` の名が外形 snapshot の名にも usage を持つ subcommand の名にも無い。
+    SurfaceUnknown {
+        /// 書かれていた名。
+        name: String,
+    },
 }
 
 impl ClosureError {
@@ -60,8 +91,190 @@ impl ClosureError {
         match *self {
             Self::TypeForm { ref name } => format!("touches の {name} が crate::module::Type の形でない"),
             Self::Unreadable { ref path, ref reason } => format!("閉包を測る {path} を読めない: {reason}"),
+            Self::SurfaceUnknown { ref name } => {
+                format!("surfaces の {name} は外形 snapshot の名にも usage を持つ subcommand の名にも無い")
+            }
         }
     }
+}
+
+/// 読める本文の列にする（読めない file が 1 本でも在れば `Err`・fail-closed）。
+fn texts_of(sources: &[Source]) -> Result<Vec<(&str, &str)>, ClosureError> {
+    sources
+        .iter()
+        .map(|source| match source.body {
+            Ok(ref text) => Ok((source.path.as_str(), text.as_str())),
+            Err(ref reason) => Err(ClosureError::Unreadable { path: source.path.clone(), reason: reason.clone() }),
+        })
+        .collect()
+}
+
+/// 外形 pin（第 5 形・§3）: `surfaces` の各名について、外形 snapshot の file と、その snapshot 名か subcommand の
+/// usage 文字列を歯の区間に literal で持つ `.rs` を集める（path の辞書順）。
+///
+/// 名は 2 種: (a) `snapshots` の file 名の末尾（`<crate>__<module>__<名>.snap` の `<名>`）(b) `sources` の
+/// `usage: ` の行が名乗る subcommand（`{NAME}` / `{}` の穴を飛ばした最初の語）。どちらにも無い名は
+/// [`ClosureError::SurfaceUnknown`]。宣言の無い行は呼ばれない（費用を掛けない）。
+pub fn surface_closure(
+    surfaces: &[String],
+    sources: &[Source],
+    snapshots: &[Source],
+) -> Result<BTreeSet<String>, ClosureError> {
+    let (texts, snaps) = (texts_of(sources)?, texts_of(snapshots)?);
+    let usages = usages(&texts);
+    let mut found = BTreeSet::new();
+    for name in surfaces {
+        let named: Vec<&str> = snaps.iter().filter(|(path, _)| snapshot_name(path) == Some(name)).map(|(path, _)| *path).collect();
+        let literal = match (named.is_empty(), usages.iter().find(|(sub, _)| sub == name)) {
+            (false, _) => name.as_str(),
+            (true, Some((_, usage))) => usage.as_str(),
+            (true, None) => return Err(ClosureError::SurfaceUnknown { name: name.clone() }),
+        };
+        found.extend(named.iter().map(|path| (*path).to_owned()));
+        found.extend(snaps.iter().filter(|(_, text)| text.contains(literal)).map(|(path, _)| (*path).to_owned()));
+        found.extend(
+            texts.iter().filter(|(path, text)| test_region(path, text).contains(literal)).map(|(path, _)| (*path).to_owned()),
+        );
+    }
+    Ok(found)
+}
+
+/// 外形 snapshot の名（置き場の dir に在る `.snap` の file 名の末尾の `__` の後）。置き場の外は `None`。
+fn snapshot_name(path: &str) -> Option<&str> {
+    let placed = SNAPSHOT_DIRS.iter().any(|dir| path.contains(dir));
+    let stem = path.rsplit('/').next()?.strip_suffix(SNAPSHOT_EXT)?;
+    placed.then(|| stem.rsplit("__").next().unwrap_or(stem))
+}
+
+/// `usage: ` の行が名乗る (subcommand の名, usage 文字列〔名から literal の終わりまで〕) の列。
+fn usages(texts: &[(&str, &str)]) -> Vec<(String, String)> {
+    let mut found = Vec::new();
+    for (_, text) in texts {
+        for line in text.lines() {
+            let Some((_, rest)) = line.split_once(USAGE_HEAD) else {
+                continue;
+            };
+            let literal = rest.split('"').next().unwrap_or_default();
+            let mut words = literal.split_whitespace();
+            let first = words.next().unwrap_or_default();
+            let name = if first.starts_with('{') { words.next().unwrap_or_default() } else { first };
+            if name.is_empty() || !name.chars().all(|found| is_ident_char(found) || found == '-') {
+                continue;
+            }
+            if let Some(at) = literal.find(name) {
+                found.push((name.to_owned(), literal.get(at..).unwrap_or_default().to_owned()));
+            }
+        }
+    }
+    found
+}
+
+/// 歯の区間: `tests` dir 配下の file は全体・src の file は行頭の `#[cfg(test)]` から末尾（無ければ空）。
+fn test_region<'t>(path: &str, text: &'t str) -> &'t str {
+    if path.split('/').any(|segment| segment == TESTS_DIR) {
+        return text;
+    }
+    let start = if text.starts_with(TEST_MARK) {
+        Some(0)
+    } else {
+        text.find(&format!("\n{TEST_MARK}")).map(|at| at.saturating_add(1))
+    };
+    start.and_then(|at| text.get(at..)).unwrap_or_default()
+}
+
+/// 名指しの実在（§3）: `texts` の各 (在り処, 本文) の backtick の中身のうち **path 形 / 型の path 形 / fn 形**だけを
+/// 名指しと読み、base に解けないものを (名, 在り処) で**全件**返す（書かれていた順）。
+///
+/// (1) path 形（英数字と `_ . / -` だけ・拡張子 `.rs`）は `tracked` の path と等しいか `/` 区切りの末尾一致、または
+/// その行の write-set の `+` 項目（接頭辞を剥がした path）と同じ照合で解ける。(2) 型の path 形（`::` で結んだ識別子の
+/// 列）は末尾 2 節「型::項目」が `sources` に現れれば解ける。**`touches` に宣言した型の variant は名指しと読まない**
+/// （未来の variant は `touches` が説明する）。(3) fn 形（識別子 + `(`〔`)` は任意〕）は `fn 識別子` の宣言が在れば
+/// 解ける。一致しない字面（struct literal・field 付き variant・glob・属性・散文）は名指しではない。別名・generic は
+/// 下界の外。
+pub fn unresolved_names(
+    texts: &[(String, String)],
+    touches: &[String],
+    write_set: &[String],
+    tracked: &[String],
+    sources: &[Source],
+) -> Result<Vec<(String, String)>, ClosureError> {
+    let bodies = texts_of(sources)?;
+    let new_files: Vec<&str> = write_set.iter().filter_map(|item| item.strip_prefix('+')).collect();
+    let touched: Vec<&str> = touches.iter().filter_map(|raw| raw.rsplit("::").next()).collect();
+    let mut found = Vec::new();
+    for (at, text) in texts {
+        for name in backticked(text) {
+            let resolved = match form_of(name, &touched) {
+                Form::Path => tracked.iter().map(String::as_str).chain(new_files.iter().copied()).any(|path| path_matches(path, name)),
+                Form::Type(tail) => bodies.iter().any(|(_, body)| holds_word(body, &tail)),
+                Form::Fn(ident) => bodies.iter().any(|(_, body)| declares_fn(body, &ident)),
+                Form::Prose => true,
+            };
+            if !resolved {
+                found.push((name.to_owned(), at.clone()));
+            }
+        }
+    }
+    Ok(found)
+}
+
+/// backtick の中身の形。
+enum Form {
+    /// path 形。
+    Path,
+    /// 型の path 形（末尾 2 節「型::項目」）。
+    Type(String),
+    /// fn 形（識別子）。
+    Fn(String),
+    /// 名指しではない字面。
+    Prose,
+}
+
+/// backtick の中身を 3 形に分ける（`touched` の型の variant は散文扱い）。
+fn form_of(name: &str, touched: &[&str]) -> Form {
+    let stem = name.rsplit('/').next().unwrap_or(name).strip_suffix(RS);
+    if name.chars().all(|found| found.is_ascii_alphanumeric() || PATH_CHARS.contains(&found)) && stem.is_some_and(|stem| !stem.is_empty()) {
+        return Form::Path;
+    }
+    let segments: Vec<&str> = name.split("::").collect();
+    if let Some((item, head)) = segments.split_last().filter(|_| segments.iter().all(|segment| is_ident(segment))) {
+        if let Some(ty) = head.last() {
+            return if touched.contains(ty) { Form::Prose } else { Form::Type(format!("{ty}::{item}")) };
+        }
+    }
+    let ident = name.strip_suffix("()").or_else(|| name.strip_suffix('('));
+    match ident {
+        Some(ident) if is_ident(ident) => Form::Fn(ident.to_owned()),
+        _ => Form::Prose,
+    }
+}
+
+/// 1 本の本文の backtick の中身（対になった backtick だけ・空は除く）。
+fn backticked(text: &str) -> Vec<&str> {
+    text.lines()
+        .flat_map(|line| {
+            let pieces: Vec<&str> = line.split('`').collect();
+            let paired = if pieces.len().is_multiple_of(2) { pieces.len().saturating_sub(1) } else { pieces.len() };
+            pieces.into_iter().take(paired).skip(1).step_by(2).filter(|piece| !piece.is_empty()).collect::<Vec<&str>>()
+        })
+        .collect()
+}
+
+/// path 形の名指しが tracked の path に解けるか（等しいか `/` 区切りの末尾一致）。
+fn path_matches(path: &str, name: &str) -> bool {
+    path == name || path.strip_suffix(name).is_some_and(|head| head.ends_with('/'))
+}
+
+/// 本文が `word`（`型::項目`）を語の境界で持つか（前が識別子の文字でなく・後ろも識別子の文字でない）。
+fn holds_word(body: &str, word: &str) -> bool {
+    heads(body, word)
+        .into_iter()
+        .any(|at| !body.get(at.saturating_add(word.len())..).unwrap_or_default().starts_with(is_ident_char))
+}
+
+/// 本文が `fn ident` の宣言を持つか。
+fn declares_fn(body: &str, ident: &str) -> bool {
+    holds_word(body, &format!("fn {ident}"))
 }
 
 /// `touches` の 1 項目を読んだもの。
@@ -77,15 +290,7 @@ struct Touched<'a> {
 /// **読めない file が 1 本でも在れば `Err`**（その file が型を持つかを測れない＝足りない file を見落とす側へ
 /// 倒さない）。
 pub fn closure(types: &[String], sources: &[Source]) -> Result<BTreeSet<String>, ClosureError> {
-    let mut texts: Vec<(&str, &str)> = Vec::new();
-    for source in sources {
-        match source.body {
-            Ok(ref text) => texts.push((source.path.as_str(), text.as_str())),
-            Err(ref reason) => {
-                return Err(ClosureError::Unreadable { path: source.path.clone(), reason: reason.clone() })
-            }
-        }
-    }
+    let texts = texts_of(sources)?;
     let mut found = BTreeSet::new();
     for raw in types {
         let touched = touched(raw).ok_or_else(|| ClosureError::TypeForm { name: raw.clone() })?;
@@ -269,7 +474,7 @@ fn use_statements(text: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{closure, ClosureError, Source};
+    use super::{closure, surface_closure, unresolved_names, ClosureError, Source};
     use proptest::prelude::*;
     use proptest::test_runner::Config;
     use std::collections::BTreeSet;
@@ -394,6 +599,116 @@ mod tests {
         }
         let reason = ClosureError::TypeForm { name: "Hue".to_owned() }.reason();
         assert!(reason.contains("Hue") && !reason.contains('\n'), "理由は型名を名乗る 1 行: {reason}");
+    }
+
+    /// 外形 pin の fixture: 外形 snapshot 2 枚（doctor / pipe）と usage を持つ subcommand `pipe`・歯の file・src の file。
+    fn surface_fixture() -> (Vec<Source>, Vec<Source>) {
+        let sources = vec![
+            // usage 行を持つ subcommand（`{NAME}` の穴を飛ばした語が名）。
+            source("src/pipe/cli.rs", "pub fn usage() -> String {\n    format!(\"usage: {NAME} pipe <intake|show> [--state-dir D]\")\n}\n"),
+            // 歯の file（tests 配下は全体が区間）: snapshot 名と usage 文字列を持つ。
+            source("tests/e2e/pipe.rs", "#[test]\nfn pipe_external_form() {\n    insta::assert_snapshot!(form);\n}\n"),
+            source("tests/e2e/usage.rs", "#[test]\nfn shows_usage() {\n    assert!(err.contains(\"pipe <intake|show> [--state-dir D]\"));\n}\n"),
+            // src の file: `#[cfg(test)]` の区間だけが歯。区間の外の snapshot 名は数えない。
+            source("src/main.rs", "// doctor_external_form を描く\nfn main() {}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn doctor_external_form() {}\n}\n"),
+            source("src/other.rs", "// doctor_external_form は言及だけ（区間の外）\nfn f() {}\n"),
+        ];
+        let snapshots = vec![
+            source("src/snapshots/toy__tests__doctor_external_form.snap", "---\nsource: src/main.rs\n---\ndoctor: ok\n"),
+            source("tests/e2e/snapshots/e2e__pipe__pipe_external_form.snap", "---\n---\nusage: toy pipe <intake|show> [--state-dir D]\n"),
+            // 置き場の外の `.snap` は外形 snapshot ではない。
+            source("fixtures/doctor_external_form.snap", "x\n"),
+        ];
+        (sources, snapshots)
+    }
+
+    /// 外形 pin（第 5 形）: snapshot の名は snapshot の file とその名を歯の区間に持つ `.rs`・subcommand の名は usage
+    /// 文字列を持つ snapshot と `.rs`。src の区間の外の言及と置き場の外の `.snap` は数えず、宣言なしは空、未知の名は
+    /// `SurfaceUnknown`。
+    #[test]
+    fn closure_surfaces_pin_the_snapshot_and_the_teeth_that_hold_its_name_or_usage() {
+        let (sources, snapshots) = surface_fixture();
+        let of = |names: &[&str]| {
+            let owned: Vec<String> = names.iter().map(|found| (*found).to_owned()).collect();
+            surface_closure(&owned, &sources, &snapshots)
+        };
+        assert_eq!(
+            of(&["doctor_external_form"]),
+            Ok(set(&["src/main.rs", "src/snapshots/toy__tests__doctor_external_form.snap"])),
+            "snapshot の file と、名を歯の区間に持つ src（区間の外の other.rs と置き場の外の .snap は数えない）"
+        );
+        assert_eq!(
+            of(&["pipe"]),
+            Ok(set(&["tests/e2e/snapshots/e2e__pipe__pipe_external_form.snap", "tests/e2e/usage.rs"])),
+            "usage 文字列を持つ snapshot と歯（usage() を呼ぶだけの pipe.rs は下界の外）"
+        );
+        assert_eq!(
+            of(&["pipe_external_form"]),
+            Ok(set(&["tests/e2e/pipe.rs", "tests/e2e/snapshots/e2e__pipe__pipe_external_form.snap"])),
+            "snapshot 名で pin する歯"
+        );
+        assert_eq!(of(&[]), Ok(BTreeSet::new()), "宣言なしは (v) を持たない");
+        assert_eq!(
+            of(&["nope_external_form"]),
+            Err(ClosureError::SurfaceUnknown { name: "nope_external_form".to_owned() }),
+            "未知の名は違反"
+        );
+        let mut broken = snapshots.clone();
+        broken.push(Source { path: "src/snapshots/x.snap".to_owned(), body: Err("bad".to_owned()) });
+        assert!(matches!(surface_closure(&["pipe".to_owned()], &sources, &broken), Err(ClosureError::Unreadable { .. })));
+    }
+
+    /// 名指しの実在の fixture: base の tracked path と `.rs` の本文。
+    fn name_fixture() -> (Vec<String>, Vec<Source>) {
+        let tracked = ["crates/toy/src/pipe/closure.rs", "crates/toy/src/polarity.rs", "docs/a.md"]
+            .iter()
+            .map(|found| (*found).to_owned())
+            .collect();
+        let sources = vec![
+            source("crates/toy/src/polarity.rs", "pub enum Guard {\n    Intake,\n}\n\nfn f() -> Guard {\n    Guard::Intake\n}\n"),
+            source("crates/toy/src/pipe/closure.rs", "use crate::polarity::Guard;\n\npub fn overlaps(left: &str) -> bool {\n    left.is_empty()\n}\n"),
+        ];
+        (tracked, sources)
+    }
+
+    /// 名指しの 3 形（path / 型の path / fn）を解き、解けないものを在り処付きで全件返す。`+` 宣言の新規 file は解け
+    /// （write-set に無い同名は解けない）、`touches` の型の variant と一致しない字面（struct literal・field 付き
+    /// variant・glob・属性・散文・単独の語）は名指しと読まない。
+    #[test]
+    fn closure_names_resolve_the_three_forms_and_name_every_unresolved_one() {
+        let (tracked, sources) = name_fixture();
+        let texts = |lines: &[(&str, &str)]| -> Vec<(String, String)> {
+            lines.iter().map(|(at, text)| ((*at).to_owned(), (*text).to_owned())).collect()
+        };
+        let resolved = texts(&[
+            ("title", "`pipe/closure.rs` と `closure.rs` と `crate::polarity::Guard` の `Guard::Intake`"),
+            ("done", "`overlaps(` と `overlaps()` が在る・`Refuse::Nope` は touches の型・`pipe/review.rs` は write-set の + 宣言"),
+            ("section 3 line 9", "`Refuse::WriteSetIncomplete { run, missing }`・`tests/e2e/*.rs`・`#[cfg(test)]`・`Type {`・`Type::`・`touches`・`.rs`・`NAME.len()`・`use … as`"),
+        ]);
+        let write_set = ["crates/toy/src/pipe/closure.rs".to_owned(), "+crates/toy/src/pipe/review.rs".to_owned()];
+        let touches = ["crate::pipe::refuse::Refuse".to_owned()];
+        assert_eq!(unresolved_names(&resolved, &touches, &write_set, &tracked, &sources), Ok(Vec::new()), "全部解ける");
+        let unresolved = texts(&[
+            ("title", "`pipe/none.rs` と `Guard::Rules`"),
+            ("done", "`nope(` と `pipe/review.rs` は write-set に無い・`Refuse::Nope` は touches に無い・`+x.rs` は字面"),
+            ("section 3 line 9", "`crate::fleet::Stage`"),
+        ]);
+        let found = unresolved_names(&unresolved, &[], &["crates/toy/src/pipe/closure.rs".to_owned()], &tracked, &sources);
+        let want: Vec<(String, String)> = [
+            ("pipe/none.rs", "title"),
+            ("Guard::Rules", "title"),
+            ("nope(", "done"),
+            ("pipe/review.rs", "done"),
+            ("Refuse::Nope", "done"),
+            ("crate::fleet::Stage", "section 3 line 9"),
+        ]
+        .iter()
+        .map(|(name, at)| ((*name).to_owned(), (*at).to_owned()))
+        .collect();
+        assert_eq!(found, Ok(want), "解けないものを全件・在り処付き・書かれた順");
+        let mut broken = sources.clone();
+        broken.push(Source { path: "crates/toy/src/x.rs".to_owned(), body: Err("bad".to_owned()) });
+        assert!(matches!(unresolved_names(&resolved, &touches, &write_set, &tracked, &broken), Err(ClosureError::Unreadable { .. })));
     }
 
     /// 本文の断片（4 形・別名・無関係な行）。

@@ -605,17 +605,21 @@ fn pipe_refuse_intake_refuses_a_contract_that_overlaps_a_live_run() {
 }
 
 /// dir と file の交差の表（設計 §2）を **intake の受理 / 拒否**で測る。正規化は write-set
-/// guard と同じ規則（先頭の `./`・連続する `/`・`..` の畳み）で、dir `a/` は `a/…` を含み
-/// `ab/` は含まない。
+/// guard と同じ規則（先頭の `./`・連続する `/`・`..` の畳み）で、dir `src/` は `src/…` を含み
+/// `srcx/` は含まない。dir 項目は base の tracked file に**展開して**数える（契約 (g)・設計 contract-source.md §3）
+/// ＝base に在る `src/lib.rs` は `src/` と交差し、新規 file（`+src/new.rs`）と base に無い file は交差しない。
 #[test]
 fn pipe_refuse_intake_measures_dir_and_file_overlap() {
     for (live_entry, next_entry, refused) in [
-        ("a/", "a/b.rs", true),
-        ("a/", "ab/", false),
-        ("a", "a/", true),
-        ("./a/b.rs", "a/b.rs", true),
-        ("a//b.rs", "a/b.rs", true),
-        ("src/../src/x.rs", "src/x.rs", true),
+        ("src/", "src/lib.rs", true),
+        ("src/", "srcx/", false),
+        ("src/", "src/", true),
+        ("./src/lib.rs", "src/lib.rs", true),
+        ("src//lib.rs", "src/lib.rs", true),
+        ("src/../src/lib.rs", "src/lib.rs", true),
+        ("src/", "+src/new.rs", false),
+        ("src/", "src/new.rs", false),
+        ("+src/new.rs", "src/new.rs", true),
     ] {
         let (repo, state) = repo_with_state();
         let first = write_set_contract(&repo, "first.toml", &[live_entry]);
@@ -832,7 +836,8 @@ fn table_row(id: &str, over: &[(&str, &str)]) -> String {
         ("title", format!("\"行 {id}\"")),
         ("req", "[\"FR1\"]".to_owned()),
         ("section", "\"1\"".to_owned()),
-        ("write-set", "[\"src/lib.rs\"]".to_owned()),
+        // base に実在する file（項目の実在の検査〔契約 (g)〕を既定で通す）。
+        ("write-set", "[\"src/tint.rs\"]".to_owned()),
         ("verify", "[\"git status\"]".to_owned()),
         ("size", "\"S\"".to_owned()),
         ("done", format!("\"{id} が通る\"")),
@@ -1045,4 +1050,218 @@ fn contract_check_refuses_usage_errors_and_non_repositories() {
     assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "git repo でない: {}", stderr_of(&out));
     assert!(out.stdout.is_empty() && stderr_of(&out).contains("git repo でない"), "{}", stderr_of(&out));
     clean(&[&dir]);
+}
+
+// ─────── 閉包の拡張（設計 docs/design/contract-source.md §3 の 4 点・§9・契約 (g)・`s2-07l.249`・接頭辞 `contract_closure_ext_`） ───────
+
+/// toy repo の外形: doctor の外形 snapshot（`src/snapshots/`）と、それを描く歯・subcommand `tint` の usage を持つ
+/// src と、その usage 文字列を持つ歯。
+const SURFACE_FILES: &[(&str, &str)] = &[
+    ("src/snapshots/toy__tests__doctor_external_form.snap", "---\nsource: src/main.rs\n---\ndoctor: ok\n"),
+    ("tests/e2e/doctor.rs", "#[test]\nfn doctor_external_form() {\n    insta::assert_snapshot!(\"doctor: ok\");\n}\n"),
+    ("src/cli.rs", "pub fn usage() -> String {\n    format!(\"usage: {NAME} tint <show|list> [--all]\")\n}\n"),
+    ("tests/e2e/usage.rs", "#[test]\nfn usage_names_show() {\n    assert!(err.contains(\"tint <show|list> [--all]\"));\n}\n"),
+];
+
+/// findings のうち行 `id` の `label` の行（`file:line label: ` の接頭辞で選ぶ）。
+fn findings_for(found: &[String], doc: &str, id: &str, label: &str) -> Vec<String> {
+    let head = format!("contracts: docs/design/toy.md:{} {label}: ", table_line(doc, id));
+    found.iter().filter(|line| line.starts_with(&head)).cloned().collect()
+}
+
+/// (1) `surfaces`（第 5 形）: snapshot の名を宣言した行は snapshot の file とその名を持つ歯が write-set に無いと
+/// `write-set-incomplete` で両方を名指し、subcommand の名を宣言した行は usage 文字列を持つ歯を名指す。未知の名は
+/// `contract-table:surface-unknown`。宣言なしの行と write-set が覆う行は名指さない。base は `surfaces` を読めない（RED）。
+#[test]
+fn contract_closure_ext_surfaces_name_the_snapshot_and_the_teeth_that_pin_it() {
+    let rows = [
+        table_row("a", &[("surfaces", "[\"doctor_external_form\"]")]),
+        table_row("b", &[("surfaces", "[\"tint\"]")]),
+        table_row("c", &[("surfaces", "[\"nope_external_form\"]")]),
+        table_row("d", &[]),
+        table_row(
+            "e",
+            &[
+                ("surfaces", "[\"doctor_external_form\", \"tint\"]"),
+                ("write-set", "[\"src/tint.rs\", \"src/snapshots/\", \"tests/e2e/\"]"),
+            ],
+        ),
+    ];
+    let doc = table_doc(&table_region(&rows));
+    let repo = table_repo(&doc, SURFACE_FILES);
+    let out = contracts_check(&repo);
+    let (text, found) = (stdout_of(&out), findings_of(&out));
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{text}{}", stderr_of(&out));
+    let snapshot = findings_for(&found, &doc, "a", "write-set-incomplete");
+    assert_eq!(snapshot.len(), 1, "行 a は 1 件に全部: {text}");
+    for path in ["src/snapshots/toy__tests__doctor_external_form.snap", "tests/e2e/doctor.rs"] {
+        assert!(snapshot.iter().all(|line| line.contains(path)), "snapshot の file と pin する歯 {path} を名指す: {text}");
+    }
+    assert!(snapshot.iter().all(|line| !line.contains("usage.rs") && !line.contains("cli.rs")), "外形の外は名指さない: {text}");
+    let usage = findings_for(&found, &doc, "b", "write-set-incomplete");
+    assert_eq!(usage.len(), 1, "行 b: {text}");
+    assert!(usage.iter().all(|line| line.contains("tests/e2e/usage.rs") && !line.contains("doctor")), "usage 文字列を持つ歯: {text}");
+    let unknown = findings_for(&found, &doc, "c", "contract-table:surface-unknown");
+    assert_eq!(unknown.len(), 1, "未知の名: {text}");
+    assert!(unknown.iter().all(|line| line.contains("nope_external_form")), "{text}");
+    assert_eq!(found.len(), 3, "宣言なしの行 d と覆う行 e は名指さない: {text}");
+    assert_eq!(text.lines().last(), Some("contracts check: docs=1 rows=5 findings=3"), "{text}");
+    clean(&[&repo]);
+}
+
+/// (2) 項目の実在と dir の展開: 無い file・空の dir・base に在る file への `+` は `write-set-item-unresolved` で
+/// 1 項目 1 件（実在する file・配下を持つ dir・base に無い `+` は通る）。intake の交差は dir を base の file に
+/// 展開して数える＝`src/` の live な便と `+src/new.rs` の便は交差 0 で通り、`src/lib.rs` の便は交差で断られる。
+#[test]
+fn contract_closure_ext_dir_items_expand_and_unresolved_items_are_named() {
+    let write_set = "[\"src/none.rs\", \"empty/\", \"+src/tint.rs\", \"src/tint.rs\", \"src/\", \"+src/new.rs\"]";
+    let doc = table_doc(&table_region(&[table_row("a", &[("write-set", write_set)])]));
+    let repo = table_repo(&doc, &[]);
+    let out = contracts_check(&repo);
+    let (text, found) = (stdout_of(&out), findings_of(&out));
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{text}{}", stderr_of(&out));
+    let unresolved = findings_for(&found, &doc, "a", "write-set-item-unresolved");
+    let named: Vec<&str> = ["src/none.rs", "empty/", "+src/tint.rs"]
+        .into_iter()
+        .filter(|item| unresolved.iter().any(|line| line.contains(&format!("write-set の {item} は"))))
+        .collect();
+    assert_eq!(named.len(), 3, "解けない 3 項目を名指す: {text}");
+    assert_eq!(unresolved.len(), 3, "1 項目 1 件（解ける 3 項目は名指さない）: {text}");
+    assert_eq!(found.len(), 3, "他の理由は出ない: {text}");
+    clean(&[&repo]);
+
+    let (repo, state) = repo_with_state();
+    let dir_run = write_set_contract(&repo, "dir.toml", &["src/"]);
+    let id = intake_bead(&repo, &state, &dir_run, "s2-live");
+    let fresh = write_set_contract(&repo, "fresh.toml", &["+src/new.rs"]);
+    let passed = try_intake(&repo, &state, &fresh, "s2-fresh");
+    assert_eq!(passed.status.code(), Some(i32::from(RC_OK)), "新規 file は dir と交差しない: {}", stderr_of(&passed));
+    let existing = write_set_contract(&repo, "existing.toml", &["src/lib.rs"]);
+    let refused = try_intake(&repo, &state, &existing, "s2-old");
+    assert_eq!(refused.status.code(), Some(i32::from(RC_REFUSED)), "base の file は dir に展開されて交差する");
+    assert!(stderr_of(&refused).contains(&id) && stderr_of(&refused).contains("src/lib.rs"), "{}", stderr_of(&refused));
+    clean(&[&repo, &state]);
+}
+
+/// 1399 行の `.rs` を `crates/toy/src/` に置いて commit した repo と置き場（上限の余地の fixture）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn repo_with_big_file() -> (PathBuf, PathBuf) {
+    let (repo, state) = repo_with_state();
+    let dir = repo.join("crates").join("toy").join("src");
+    fs::create_dir_all(&dir).expect("core の dir を作れる");
+    fs::write(dir.join("big.rs"), "// x\n".repeat(1399)).expect("大きな file を書ける");
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "big"]);
+    (repo, state)
+}
+
+/// (3) 上限の余地（受付だけ）: base の 1399 行の `.rs`（上限 1500・余地 101）を write-set に持つ size M（300）の契約
+/// は `cap-headroom` の理由で file と余地と size を名指して断られ、run dir も event も作らない。size S（100）は
+/// 通り、余地の無い file を write-set に持たない M の契約も通る。core（`crates/toy/src/` の合計 1399・上限 1500）は
+/// 新規 file だけの M でも見積 300 が余地 101 を超えて `core` を名指す。数は `--rules` の manifest から読む。
+#[test]
+fn contract_closure_ext_cap_headroom_refuses_a_size_that_does_not_fit_the_file_or_the_core() {
+    let (repo, state) = repo_with_big_file();
+    let caps = |core_lines: u64| CapFixture { core_lines, file_lines: 1_500 };
+    let rules = |name: &str, core_lines: u64| {
+        let fixture =
+            RulesFixture { gate: (1, 1_000_000), retries: FOLLOW_RETRIES, slots: default_slots(), caps: caps(core_lines) };
+        write_rules_capped(&state, name, fixture).display().to_string()
+    };
+    let roomy = rules("rules-roomy.toml", 40_000);
+    let intake = |contract: &Path, bead: &str, rules: &str| {
+        run_pipe(&[
+            "intake", "--contract", &contract.display().to_string(), "--bead", bead,
+            "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
+            "--rules", rules,
+        ])
+    };
+    let sized = |name: &str, size: &str, write_set: &str| {
+        let lines: Vec<String> = contract_body()
+            .into_iter()
+            .filter(|line| !line.starts_with("size") && !line.starts_with("write-set"))
+            .chain([format!("size = \"{size}\""), format!("write-set = [{write_set}]")])
+            .collect();
+        let path = repo.join(name);
+        fs::write(&path, format!("{}\n", lines.join("\n"))).expect("契約 file を書ける");
+        path
+    };
+    let big = "\"crates/toy/src/big.rs\"";
+    let out = intake(&sized("m.toml", "M", big), "s2-m", &roomy);
+    let err = stderr_of(&out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "余地 101 に M（300）は入らない: {err}");
+    assert!(err.contains("crates/toy/src/big.rs") && err.contains(" 101 ") && err.contains("size M"), "file と余地と size: {err}");
+    assert_eq!(event_count(&state), 0, "断った周は event を書かない");
+    assert!(!state.join("pipe").exists(), "run dir も作らない");
+    let small = intake(&sized("s.toml", "S", big), "s2-s", &roomy);
+    assert_eq!(small.status.code(), Some(i32::from(RC_OK)), "S（100）は余地 101 に入る: {}", stderr_of(&small));
+    stop_run_ok(&state, &run_id_of(&small));
+    let other = intake(&sized("other.toml", "M", "\"src/lib.rs\""), "s2-o", &roomy);
+    assert_eq!(other.status.code(), Some(i32::from(RC_OK)), "余地の無い file を持たない行は通る: {}", stderr_of(&other));
+    stop_run_ok(&state, &run_id_of(&other));
+    // core の形: 上限 1500 に対し合計 1399（余地 101）・新規 file 1 本の M の見積 300 が超える（file の余地は 1500）。
+    let tight = rules("rules-tight.toml", 1_500);
+    let core = intake(&sized("core.toml", "M", "\"+crates/toy/src/new.rs\""), "s2-c", &tight);
+    let err = stderr_of(&core);
+    assert_eq!(core.status.code(), Some(i32::from(RC_REFUSED)), "core の余地 101 に 300 は入らない: {err}");
+    assert!(err.contains("core の上限の余地が 101 行") && !err.contains("big.rs"), "core を名指す: {err}");
+    let fits = intake(&sized("fits.toml", "S", "\"+crates/toy/src/new.rs\""), "s2-f", &tight);
+    assert_eq!(fits.status.code(), Some(i32::from(RC_OK)), "S の見積 100 は core の余地 101 に入る: {}", stderr_of(&fits));
+    clean(&[&repo, &state]);
+}
+
+/// (4) 名指しの実在: `title` / `done` / 節の本文の backtick の中身のうち path 形・型の path 形・fn 形が base に解けない
+/// ものを `name-unresolved` で全件・在り処付き（行番号は行の見出し）。`touches` の型の variant・write-set の `+`
+/// 宣言の新規 file・一致しない字面は名指さない。
+#[test]
+fn contract_closure_ext_unresolved_names_are_named_with_their_place() {
+    let body = "本文。`crate::tint::Tint` と `show(` は在る。`Nope::Thing` と `src/nope.rs` は無い。`Tint::Warm => 1` は字面。";
+    let doc = table_doc(&table_region(&[
+        table_row("a", &[("title", "\"`src/none.rs` を直す\""), ("done", "\"`Tint::Hot` と `frob(` が通る\"")]),
+        table_row("b", &[("done", "\"`Tint::Hot` は touches の型・`src/new.rs` は + 宣言\""), ("touches", "[\"crate::tint::Tint\"]"), ("write-set", "[\"src/tint.rs\", \"src/show.rs\", \"+src/new.rs\"]")]),
+        table_row("c", &[("done", "\"`src/new.rs` は write-set に無い\"")]),
+    ]))
+    .replace("## 1. 何を解くか\n\n本文。", &format!("## 1. 何を解くか\n\n{body}"));
+    let repo = table_repo(&doc, &[]);
+    let out = contracts_check(&repo);
+    let (text, found) = (stdout_of(&out), findings_of(&out));
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{text}{}", stderr_of(&out));
+    let body_line = doc.lines().position(|line| line.starts_with("本文。`crate")).unwrap_or_default() + 1;
+    let row_a = findings_for(&found, &doc, "a", "name-unresolved");
+    let want_a = [
+        ("src/none.rs", "title".to_owned()),
+        ("Tint::Hot", "done".to_owned()),
+        ("frob(", "done".to_owned()),
+        ("Nope::Thing", format!("section 1 line {body_line}")),
+        ("src/nope.rs", format!("section 1 line {body_line}")),
+    ];
+    assert_eq!(row_a.len(), want_a.len(), "行 a は解けない名指しを全件: {text}");
+    for ((name, at), line) in want_a.iter().zip(&row_a) {
+        assert!(line.contains(&format!("名指し {name} が base に無い（{at}）")), "{name} を {at} で名指す: {line}");
+    }
+    let row_b = findings_for(&found, &doc, "b", "name-unresolved");
+    let named_b: Vec<&String> = row_b.iter().filter(|line| line.contains("Tint::Hot") || line.contains("src/new.rs")).collect();
+    assert!(named_b.is_empty(), "touches の型の variant と + 宣言の新規 file は名指さない: {row_b:?}");
+    assert_eq!(row_b.len(), 2, "行 b も節の本文の 2 件は持つ（Nope::Thing / src/nope.rs）: {text}");
+    let row_c = findings_for(&found, &doc, "c", "name-unresolved");
+    assert!(row_c.iter().any(|line| line.contains("名指し src/new.rs が base に無い（done）")), "write-set に無い同名は解けない: {text}");
+    assert!(!text.contains("Tint::Warm"), "一致しない字面（arm の断片）は名指さない: {text}");
+    clean(&[&repo]);
+}
+
+/// (5) 現物の契約表（本 repo の `docs/design/*.md`）は 4 つの拡張（外形 pin・項目の実在と展開・名指しの実在・
+/// 余地は CI で撃たない）を含めて違反 0・rc 0（設計 §9「現物の契約表で 4 つとも違反 0」）。
+#[test]
+fn contract_closure_ext_real_table_has_zero_findings() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().and_then(Path::parent).expect("repo の root を解ける");
+    let out = contracts_check(root);
+    let text = stdout_of(&out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "現物の契約表は違反 0: {text}{}", stderr_of(&out));
+    let last = text.lines().last().unwrap_or_default();
+    assert!(last.starts_with("contracts check: docs=") && last.ends_with(" findings=0"), "判定行: {last}");
+    let rows: u64 = last.split_whitespace().find_map(|token| token.strip_prefix("rows=")?.parse().ok()).unwrap_or_default();
+    assert!(rows >= 8, "母集団は現物の契約表の行（contract-source.md の 8 行以上・空の表で 0 件を名乗らない）: {last}");
 }

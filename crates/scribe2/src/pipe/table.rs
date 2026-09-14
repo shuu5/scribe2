@@ -8,12 +8,14 @@
 //! 2. 行の欄の**正本** [`FIELDS`]（C1）: `<NAME> contracts schema` が tracked な生成物 `contracts/schema.toml` へ
 //!    描き、`xtask check` が生成物と正本の列の一致を測る。
 //! 3. 表の**検査** [`check_table`]: id の一意・`req` の要件面での実在・`section` の節の実在・verify の形・
-//!    `depends` の解決と輪・`touches` の閉包 ⊆ `write-set`（[`super::closure`]）・末尾 `/` 無しの dir。
-//!    **全件・行番号付き**で返し 1 件目で止めない（FR18 と同じ「黙って落とさない」）。intake（契約 (b)）は
-//!    同じ関数を 1 行に撃つ＝1 実装（C2）。
+//!    `depends` の解決と輪・`touches` の閉包と `surfaces` の外形 pin ⊆ `write-set`（[`super::closure`]）・末尾 `/`
+//!    無しの dir・write-set の項目の実在（[`super::declaration::read_write_set`]）・名指しの実在
+//!    （[`super::closure::unresolved_names`]）。**全件・行番号付き**で返し 1 件目で止めない（FR18 と同じ「黙って
+//!    落とさない」）。intake（契約 (b)）は同じ関数を 1 行に撃つ＝1 実装（C2）。上限の余地（§3）は受付時点の事実
+//!    なので CI では撃たない（intake の側・[`super::cli`]）。
 
-use super::closure::{closure, Source};
-use super::declaration::{self, Ceiling};
+use super::closure::{closure, surface_closure, unresolved_names, ClosureError, Source};
+use super::declaration::{self, read_write_set, Ceiling};
 use super::refuse::{covered, Refuse};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_OK, RC_REFUSED};
 use crate::name::NAME;
@@ -95,6 +97,7 @@ pub const FIELDS: &[Field] = &[
     Field { name: "req", need: Need::Required, shape: Shape::List },
     Field { name: "section", need: Need::Required, shape: Shape::Text },
     Field { name: "touches", need: Need::Optional, shape: Shape::List },
+    Field { name: "surfaces", need: Need::Optional, shape: Shape::List },
     Field { name: "write-set", need: Need::Required, shape: Shape::List },
     Field { name: "verify", need: Need::Required, shape: Shape::List },
     Field { name: "size", need: Need::Required, shape: Shape::Text },
@@ -119,6 +122,8 @@ pub struct ContractRow {
     pub section: String,
     /// 閉じた型の宣言の列（`crate::module::Type`）。
     pub touches: Vec<String>,
+    /// 触る外形の名の列（外形 snapshot の名か usage を持つ subcommand の名・§3 の第 5 形・空 = 外形を触らない）。
+    pub surfaces: Vec<String>,
     /// 触ってよい path の列。
     pub write_set: Vec<String>,
     /// positional filter 形の検証行の列。
@@ -206,6 +211,13 @@ pub enum TableError {
         /// 輪を成す行 id。
         cycle: Vec<String>,
     },
+    /// `surfaces` の名が外形 snapshot の名にも usage を持つ subcommand の名にも無い（§3 の第 5 形）。
+    SurfaceUnknown {
+        /// 行番号。
+        line: u64,
+        /// 書かれていた名。
+        name: String,
+    },
 }
 
 impl TableError {
@@ -221,7 +233,8 @@ impl TableError {
             | Self::RequirementMissing { line, .. }
             | Self::VerifyForm { line, .. }
             | Self::DependsUnresolved { line, .. }
-            | Self::DependsCycle { line, .. } => line,
+            | Self::DependsCycle { line, .. }
+            | Self::SurfaceUnknown { line, .. } => line,
         }
     }
 
@@ -238,6 +251,7 @@ impl TableError {
             Self::VerifyForm { .. } => "verify-form",
             Self::DependsUnresolved { .. } => "depends-unresolved",
             Self::DependsCycle { .. } => "depends-cycle",
+            Self::SurfaceUnknown { .. } => "surface-unknown",
         }
     }
 
@@ -261,6 +275,7 @@ impl TableError {
                 let back = cycle.first().map_or_else(String::new, |first| format!(" → {first}"));
                 format!("depends が輪を成す（{}{back}）", cycle.join(" → "))
             }
+            Self::SurfaceUnknown { ref name, .. } => ClosureError::SurfaceUnknown { name: name.clone() }.reason(),
         }
     }
 
@@ -313,8 +328,10 @@ pub struct Context<'a> {
     pub requirements: &'a Result<BTreeSet<String>, String>,
     /// 閉包を測る `.rs` の列。
     pub sources: &'a [Source],
-    /// tracked file の repo 相対 path（write-set の項目が dir かの判定に使う）。
+    /// tracked file の repo 相対 path（write-set の項目の実在・dir の判定・path 形の名指しに使う）。
     pub tracked: &'a [String],
+    /// 外形 snapshot（tracked の `.snap`・`surfaces` の外形 pin に使う）。
+    pub snapshots: &'a [Source],
 }
 
 /// 契約表の置き場の形（path の拡張子で決める）。
@@ -406,6 +423,7 @@ fn typed(raw: &TableRow, offset: u64, errors: &mut Vec<TableError>) -> Option<Co
         req: list_of(raw, "req", offset, errors),
         section: text_of(raw, "section", offset, errors),
         touches: list_of(raw, "touches", offset, errors),
+        surfaces: list_of(raw, "surfaces", offset, errors),
         write_set: list_of(raw, "write-set", offset, errors),
         verify: list_of(raw, "verify", offset, errors),
         size: text_of(raw, "size", offset, errors),
@@ -526,10 +544,60 @@ pub fn check_table(doc: &str, rows: &[ContractRow], ctx: &Context<'_>) -> Vec<Fi
         let unresolved = row.depends.iter().filter(|id| !ids.contains(&id.as_str()));
         found.extend(unresolved.map(|id| Finding::table(TableError::DependsUnresolved { line: row.line, id: id.clone() })));
         found.extend(write_set_findings(row, ctx));
+        // 閉包・外形 pin・名指しは `.rs` / `.snap` の本文を読む。1 本でも読めなければ行ごとに 1 件で名指し、
+        // 測れない検査は撃たない（読めなさを「足りない file なし」に読み替えない・NFR4）。
+        match unreadable_input(ctx) {
+            Some(reason) => found.push(Finding::table(unreadable(row.line, &reason))),
+            None => {
+                found.extend(closure_findings(row, ctx));
+                found.extend(name_findings(doc, row, ctx));
+            }
+        }
     }
     found.extend(cycle_findings(rows));
     found.sort_by_key(|finding| finding.line);
     found
+}
+
+/// 節 `number` の本文の (doc 上の行番号, 行)（見出しの次の行から次の `## ` 見出しの前まで・区間と fence の中は除く）。
+fn section_lines(text: &str, number: &str) -> Vec<(u64, String)> {
+    let mut found = Vec::new();
+    let (mut fenced, mut inside, mut open) = (false, false, false);
+    for (index, line) in text.lines().enumerate() {
+        match line.trim() {
+            BEGIN => inside = true,
+            END => inside = false,
+            _ if inside => {}
+            trimmed => {
+                if trimmed.starts_with("```") {
+                    fenced = !fenced;
+                    continue;
+                }
+                match line.strip_prefix("## ").filter(|_| !fenced) {
+                    Some(title) => open = number_of(title).as_deref() == Some(number),
+                    None if open && !fenced => found.push(((index as u64).saturating_add(1), line.to_owned())),
+                    None => {}
+                }
+            }
+        }
+    }
+    found
+}
+
+/// 名指しの実在（§3）: `title` / `done` と `section` の本文の backtick の中身のうち解けないものを全件（在り処付き）。
+/// 閉包の入力を読めない周は `unreadable`（黙って通さない）。
+fn name_findings(doc: &str, row: &ContractRow, ctx: &Context<'_>) -> Vec<Finding> {
+    let mut texts = vec![("title".to_owned(), row.title.clone()), ("done".to_owned(), row.done.clone())];
+    texts.extend(
+        section_lines(doc, &row.section).into_iter().map(|(at, line)| (format!("section {} line {at}", row.section), line)),
+    );
+    match unresolved_names(&texts, &row.touches, &row.write_set, ctx.tracked, ctx.sources) {
+        Err(error) => vec![Finding::table(unreadable(row.line, &error.reason()))],
+        Ok(names) => names
+            .into_iter()
+            .map(|(name, at)| Finding { line: row.line, refuse: Refuse::NameUnresolved { name, at } })
+            .collect(),
+    }
 }
 
 /// doc の `## ` 見出しの節番号（`## N.` の N・番号の無い見出しは `None`）と、本文が非空か。区間と code fence の
@@ -590,32 +658,60 @@ fn verify_findings(row: &ContractRow, allowed: &[String]) -> Vec<Finding> {
         .collect()
 }
 
-/// write-set の 2 検査: 末尾 `/` 無しで tracked な dir を指す項目と、`touches` の閉包のうち write-set に無い file。
+/// write-set の項目の 2 検査（base の tracked file だけで測る・§3「項目の実在と展開」）: 末尾 `/` 無しで tracked な
+/// dir を指す項目と、base に解けない項目（末尾 `/` 無しの dir として既に名指した項目は重ねて名指さない）。
 fn write_set_findings(row: &ContractRow, ctx: &Context<'_>) -> Vec<Finding> {
-    let mut found: Vec<Finding> = row
+    let without_slash: Vec<&String> = row
         .write_set
         .iter()
-        .filter(|item| !item.ends_with('/') && ctx.tracked.iter().any(|path| is_under(path, item)))
-        .map(|item| Finding { line: row.line, refuse: Refuse::WriteSetDirWithoutSlash { path: item.clone() } })
+        .filter(|item| !item.ends_with('/') && ctx.tracked.iter().any(|path| declaration::is_under(path, item)))
         .collect();
-    if row.touches.is_empty() {
-        return found;
-    }
-    match closure(&row.touches, ctx.sources) {
-        Err(error) => found.push(Finding::table(unreadable(row.line, &error.reason()))),
-        Ok(files) => {
-            let missing: Vec<String> = files.into_iter().filter(|path| !covered(&row.write_set, path)).collect();
-            if !missing.is_empty() {
-                found.push(Finding { line: row.line, refuse: Refuse::WriteSetIncomplete { missing } });
-            }
-        }
+    let mut found: Vec<Finding> = without_slash
+        .iter()
+        .map(|item| Finding { line: row.line, refuse: Refuse::WriteSetDirWithoutSlash { path: (*item).clone() } })
+        .collect();
+    if let Err(items) = read_write_set(&row.write_set, ctx.tracked) {
+        found.extend(
+            items
+                .into_iter()
+                .filter(|item| !without_slash.contains(&item))
+                .map(|item| Finding { line: row.line, refuse: Refuse::WriteSetItemUnresolved { item } }),
+        );
     }
     found
 }
 
-/// `path` が dir `dir`（末尾 `/` 無しの字面）の配下か。
-fn is_under(path: &str, dir: &str) -> bool {
-    path.strip_prefix(dir).is_some_and(|rest| rest.starts_with('/'))
+/// 閉包の入力（`.rs` と `.snap`）のうち読めない 1 本の理由（全部読めれば `None`・行ごとに 1 件で名指す材料）。
+fn unreadable_input(ctx: &Context<'_>) -> Option<String> {
+    ctx.sources.iter().chain(ctx.snapshots).find_map(|source| match source.body {
+        Ok(_) => None,
+        Err(ref reason) => {
+            Some(ClosureError::Unreadable { path: source.path.clone(), reason: reason.clone() }.reason())
+        }
+    })
+}
+
+/// `touches` の閉包と `surfaces` の外形 pin（§3 の 4 形 + 第 5 形）のうち write-set に無い file を 1 件に全部。
+/// 未知の外形の名は [`TableError::SurfaceUnknown`]。読めない入力は呼び手が先に除く。
+fn closure_findings(row: &ContractRow, ctx: &Context<'_>) -> Vec<Finding> {
+    let mut found = Vec::new();
+    let mut files = BTreeSet::new();
+    match closure(&row.touches, ctx.sources) {
+        Ok(paths) => files.extend(paths),
+        Err(error) => found.push(Finding::table(unreadable(row.line, &error.reason()))),
+    }
+    match surface_closure(&row.surfaces, ctx.sources, ctx.snapshots) {
+        Ok(paths) => files.extend(paths),
+        Err(ClosureError::SurfaceUnknown { name }) => {
+            found.push(Finding::table(TableError::SurfaceUnknown { line: row.line, name }));
+        }
+        Err(error) => found.push(Finding::table(unreadable(row.line, &error.reason()))),
+    }
+    let missing: Vec<String> = files.into_iter().filter(|path| !covered(&row.write_set, path)).collect();
+    if !missing.is_empty() {
+        found.push(Finding { line: row.line, refuse: Refuse::WriteSetIncomplete { missing } });
+    }
+    found
 }
 
 /// `depends` の輪（輪 1 つにつき 1 件・輪の中で doc 順が最初の行に置く）。解けない id は辿らない（別の 1 件）。
@@ -721,7 +817,7 @@ pub fn render_schema() -> Vec<String> {
 /// rc = 違反 0 → 0 / 違反 ≥ 1 → 1 / 読めない周 → 2（読めない doc・区間・要件面・閉包の入力も 1 件として名指し、
 /// 判定行も出す）。tracked file の一覧か宣言を読めない周は判定できないので、理由だけを stderr へ出して rc 2。
 pub(crate) fn check_repo(repo: &Path, ceiling: &Ceiling<'_>) -> Outcome {
-    let Some(listed) = super::git_bytes(repo, &["ls-files", "-z"]) else {
+    let Some(tracked) = tracked_files(repo) else {
         let reason = format!("contracts: {} の tracked file を読めない（git repo でない）", repo.display());
         return Outcome::failed_line(RC_BROKEN, reason);
     };
@@ -729,15 +825,16 @@ pub(crate) fn check_repo(repo: &Path, ceiling: &Ceiling<'_>) -> Outcome {
         Ok(found) => found,
         Err(errors) => return Outcome::failed(RC_BROKEN, errors.iter().map(ToString::to_string).collect()),
     };
-    let tracked: Vec<String> =
-        String::from_utf8_lossy(&listed).split('\0').filter(|path| !path.is_empty()).map(str::to_owned).collect();
-    let sources: Vec<Source> = tracked
-        .iter()
-        .filter(|path| path.ends_with(".rs"))
-        .map(|path| Source { path: path.clone(), body: read(repo, path) })
-        .collect();
+    let sources = read_all(repo, &tracked, ".rs");
+    let snapshots = read_all(repo, &tracked, ".snap");
     let requirements = read(repo, &facts.requirements).and_then(|text| requirement_ids(&facts.requirements, &text));
-    let ctx = Context { allowed: &facts.allowed, requirements: &requirements, sources: &sources, tracked: &tracked };
+    let ctx = Context {
+        allowed: &facts.allowed,
+        requirements: &requirements,
+        sources: &sources,
+        tracked: &tracked,
+        snapshots: &snapshots,
+    };
     let docs: Vec<&String> = tracked
         .iter()
         .filter(|path| path.strip_prefix(DESIGN_DIR).is_some_and(|rest| !rest.contains('/') && rest.ends_with(".md")))
@@ -771,6 +868,22 @@ fn read(repo: &Path, path: &str) -> Result<String, String> {
     std::fs::read_to_string(repo.join(path)).map_err(|err| format!("{path} を読めない: {err}"))
 }
 
+/// tracked file の repo 相対 path（`git ls-files -z`・git repo でなければ `None`）。`contracts check` と intake の
+/// 上限の余地・交差の展開が同じ一覧を読む。
+pub(crate) fn tracked_files(repo: &Path) -> Option<Vec<String>> {
+    let listed = super::git_bytes(repo, &["ls-files", "-z"])?;
+    Some(String::from_utf8_lossy(&listed).split('\0').filter(|path| !path.is_empty()).map(str::to_owned).collect())
+}
+
+/// tracked のうち拡張子 `ext` の file を全部読む（読めない周は理由を持つ・黙って落とさない）。
+pub(crate) fn read_all(repo: &Path, tracked: &[String], ext: &str) -> Vec<Source> {
+    tracked
+        .iter()
+        .filter(|path| path.ends_with(ext))
+        .map(|path| Source { path: path.clone(), body: read(repo, path) })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -795,6 +908,7 @@ mod tests {
         "verify-form",
         "depends-unresolved",
         "depends-cycle",
+        "surface-unknown",
     ];
 
     /// 宣言順に 1 つずつ組んだ全 variant（行番号は 1 から順）。
@@ -811,6 +925,7 @@ mod tests {
             TableError::VerifyForm { line: 8, verify: text("v"), reason: text("r") },
             TableError::DependsUnresolved { line: 9, id: text("z") },
             TableError::DependsCycle { line: 10, cycle: vec![text("a"), text("b")] },
+            TableError::SurfaceUnknown { line: 11, name: text("nope_external_form") },
         ]
     }
 
@@ -826,8 +941,10 @@ mod tests {
             let want = if matches!(error, TableError::Unreadable { .. }) { RC_BROKEN } else { RC_REFUSED };
             assert_eq!(error.rc(), want, "{} の rc", error.as_str());
         }
-        let cycle = found.last().map(TableError::reason).unwrap_or_default();
+        let cycle = found.get(9).map(TableError::reason).unwrap_or_default();
         assert!(cycle.contains("a → b → a"), "輪は id を順に名乗り最初へ戻る: {cycle}");
+        let surface = found.last().map(TableError::reason).unwrap_or_default();
+        assert!(surface.contains("nope_external_form"), "未知の外形の名を名乗る: {surface}");
     }
 
     /// 全欄を持つ `.toml` の 1 行（`over` の欄だけ値を差し替える）。
@@ -845,14 +962,17 @@ mod tests {
         text
     }
 
-    /// 欄の列は宣言順に 12（必須 8・任意 4）で、`contracts schema` はその順に描く。欄の形は reader が強制する
+    /// 欄の列は宣言順に 13（必須 8・任意 5）で、`contracts schema` はその順に描く。欄の形は reader が強制する
     /// （文字列の欄に配列・配列の欄に文字列を書くと、その欄を名指して断る）。
     #[test]
     fn table_fields_pin_the_schema_columns_and_the_reader_enforces_their_shapes() {
         let names: Vec<&str> = FIELDS.iter().map(|field| field.name).collect();
-        let want = ["id", "title", "req", "section", "touches", "write-set", "verify", "size", "done", "depends", "classes", "opens"];
+        let want = [
+            "id", "title", "req", "section", "touches", "surfaces", "write-set", "verify", "size", "done", "depends",
+            "classes", "opens",
+        ];
         assert_eq!(names, want, "欄の宣言順");
-        assert_eq!(FIELDS.iter().filter(|field| field.need == Need::Required).count(), 8, "必須 8・任意 4");
+        assert_eq!(FIELDS.iter().filter(|field| field.need == Need::Required).count(), 8, "必須 8・任意 5");
         let rendered = render_schema();
         let listed: Vec<&str> =
             rendered.iter().filter_map(|line| line.strip_prefix("name = \"")?.strip_suffix('"')).collect();
@@ -938,7 +1058,8 @@ mod tests {
             req: one("FR1"),
             section: "1".to_owned(),
             touches: Vec::new(),
-            write_set: one("src/a.rs"),
+            surfaces: Vec::new(),
+            write_set: one("src/kind.rs"),
             verify: one("git status"),
             size: "S".to_owned(),
             done: "d".to_owned(),
@@ -966,7 +1087,7 @@ mod tests {
         let requirements = Ok(["FR1".to_owned()].into_iter().collect::<BTreeSet<String>>());
         let (allowed, sources) = (["git".to_owned()], sources());
         let tracked = ["src/kind.rs".to_owned(), "src/use.rs".to_owned()];
-        let ctx = Context { allowed: &allowed, requirements: &requirements, sources: &sources, tracked: &tracked };
+        let ctx = Context { allowed: &allowed, requirements: &requirements, sources: &sources, tracked: &tracked, snapshots: &[] };
         let mut rows: Vec<ContractRow> = ["a", "a", "c", "d", "e", "f", "g", "h", "i"]
             .iter()
             .enumerate()
@@ -1008,7 +1129,8 @@ mod tests {
         let allowed = ["git".to_owned()];
         let mut sources = sources();
         sources.push(Source { path: "src/broken.rs".to_owned(), body: Err("invalid utf-8".to_owned()) });
-        let ctx = Context { allowed: &allowed, requirements: &requirements, sources: &sources, tracked: &[] };
+        let tracked = ["src/kind.rs".to_owned()];
+        let ctx = Context { allowed: &allowed, requirements: &requirements, sources: &sources, tracked: &tracked, snapshots: &[] };
         let mut touched = row(10, "a");
         touched.touches = vec!["crate::kind::Kind".to_owned()];
         let found = check_table(DOC, &[touched], &ctx);

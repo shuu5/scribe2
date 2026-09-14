@@ -53,6 +53,21 @@ const ROW_RETRIES: &str = "pipe.follow_retries";
 /// land が着地待ちの列で自分の番を待つ上限（秒）を持つ rules 行（設計 gate-cost.md §6）。
 const ROW_LAND_WAIT: &str = "pipe.land_wait_s";
 
+/// 1 file の行数の上限を持つ rules 行（上限の余地の分子・設計 contract-source.md §3・値は読むだけ・C4）。
+const ROW_FILE_LINES: &str = "R-C4-2";
+
+/// core の総行数の上限を持つ rules 行（上限の余地・値は読むだけ・C4）。
+const ROW_CORE_LINES: &str = "R-C4-1";
+
+/// 契約の `size` = S の 1 file あたりの増分の見積（行）を持つ rules 行。
+const ROW_SIZE_S: &str = "pipe.size_s_lines";
+
+/// 契約の `size` = M の見積を持つ rules 行。
+const ROW_SIZE_M: &str = "pipe.size_m_lines";
+
+/// 契約の `size` = L の見積を持つ rules 行。
+const ROW_SIZE_L: &str = "pipe.size_l_lines";
+
 /// `pipe` の使い方。
 pub fn usage() -> String {
     format!(
@@ -225,9 +240,15 @@ fn intake_id(args: &[String], manifest: &Manifest, policy: LockPolicy) -> Result
     // **宣言は上限と突き合わせてから**。ここで断つ周は run dir も event も作らない
     // ——撃てない契約の run が置き場に残ると、続きから引ける便に見えてしまう。
     let effective = freeze(&repo, manifest, &contract)?;
+    // base の tracked file の一覧（交差の dir の展開と上限の余地が読む・設計 contract-source.md §3）。
+    let tracked = super::table::tracked_files(&repo)
+        .ok_or_else(|| refuse(&Refuse::NotARepo { repo: repo.display().to_string() }, &[]))?;
+    // **上限の余地は受付だけが撃つ**（§3「撃つ場所は受付だけ」）: その便を今の base に当てたら入るか、という
+    // 受付時点の事実で、CI の `contracts check` は撃たない（表は履歴を持つ）。
+    exclude_cap_shortfall(&repo, manifest, &contract, &tracked)?;
     // **入口で排他する**（ADR-0019 §2.1）。live な便と write-set が交差する契約は、
     // run dir も event も作らずに断る——後段（land の rebase）で衝突を知るより安い。
-    exclude_overlap(&state_dir, &contract)?;
+    exclude_overlap(&state_dir, &contract, &tracked)?;
     let id = run_id(&bead, &fleet::cli::now_utc());
     // stamp は秒までなので、同じ bead を同じ秒に 2 回 intake すると id が衝突する。
     // 黙って上書きすると **前の便の契約が別物に化ける**ので、何も書かずに断る。
@@ -262,8 +283,9 @@ fn intake_id(args: &[String], manifest: &Manifest, policy: LockPolicy) -> Result
 /// `WriteSetUnreadable`（rc 2）で止まる。読めない store を「交差なし」に読み替えると、
 /// 排他が黙って無効化される（fail-closed・NFR4）。
 ///
-/// 交差した周は**全組を stderr へ並べ**、理由の 1 行は先頭の 1 組を名乗る。
-fn exclude_overlap(state_dir: &Path, contract: &Contract) -> Result<(), Outcome> {
+/// 交差した周は**全組を stderr へ並べ**、理由の 1 行は先頭の 1 組を名乗る。dir 項目は base の tracked file に
+/// 展開してから数える（設計 contract-source.md §3・[`overlaps`]）。
+fn exclude_overlap(state_dir: &Path, contract: &Contract, tracked: &[String]) -> Result<(), Outcome> {
     let state = current(state_dir).map_err(|errors| {
         Outcome::failed(RC_BROKEN, errors.iter().map(StoreError::to_string).collect())
     })?;
@@ -279,7 +301,7 @@ fn exclude_overlap(state_dir: &Path, contract: &Contract) -> Result<(), Outcome>
         let Ok(live_contract) = Contract::load(&contract_path(state_dir, id)) else {
             return Err(refuse(&Refuse::WriteSetUnreadable { run: id.clone() }, &[]));
         };
-        for (mine, theirs) in overlaps(&contract.write_set, &live_contract.write_set) {
+        for (mine, theirs) in overlaps(&contract.write_set, &live_contract.write_set, tracked) {
             if first.is_none() {
                 first = Some(Refuse::WriteSetOverlap { run: id.clone(), path: mine.clone() });
             }
@@ -289,6 +311,56 @@ fn exclude_overlap(state_dir: &Path, contract: &Contract) -> Result<(), Outcome>
     match first {
         None => Ok(()),
         Some(found) => Err(refuse(&found, &lines)),
+    }
+}
+
+/// 上限の余地（設計 contract-source.md §3・受付だけ）: write-set の各 `.rs` の base の行数と R-C4-2 の差、core の
+/// 合計と R-C4-1 の差に、契約の `size` の見積（rules 行 `pipe.size_<s|m|l>_lines`・数は manifest が持つ・C1）を
+/// 当て、入らない file を名指して断る（file と core の 2 形・先頭の 1 件が理由の 1 行・残りは stderr に並ぶ）。
+///
+/// dir 項目は base の配下に展開し、`+` の新規 file は 0 行として数える。base に無い項目は数えない（項目の実在は
+/// 契約表の行の検査〔`contracts check` / 設計 pointer の intake〕が名指す）。
+fn exclude_cap_shortfall(repo: &Path, manifest: &Manifest, contract: &Contract, tracked: &[String]) -> Result<(), Outcome> {
+    let caps = declaration::Caps {
+        file_lines: int_row(manifest, ROW_FILE_LINES).map_err(broken)?,
+        core_lines: int_row(manifest, ROW_CORE_LINES).map_err(broken)?,
+        size_lines: int_row(manifest, size_row(&contract.size).map_err(refused)?).map_err(broken)?,
+    };
+    let items = match declaration::read_write_set(&contract.write_set, tracked) {
+        Ok(found) => found,
+        Err(unresolved) => {
+            let resolvable: Vec<String> =
+                contract.write_set.iter().filter(|item| !unresolved.contains(item)).cloned().collect();
+            declaration::read_write_set(&resolvable, tracked).unwrap_or_default()
+        }
+    };
+    let lines: Vec<(String, u64)> = super::table::read_all(repo, tracked, ".rs")
+        .into_iter()
+        .map(|source| {
+            let count = source.body.as_deref().map_or(0, declaration::line_count);
+            (source.path, count)
+        })
+        .collect();
+    let short: Vec<Refuse> = declaration::headroom_shortfalls(&items, &lines, caps)
+        .into_iter()
+        .map(|found| Refuse::CapHeadroom { file: found.file, headroom: found.headroom, size: contract.size.clone() })
+        .collect();
+    match short.split_first() {
+        None => Ok(()),
+        Some((first, rest)) => {
+            let lines: Vec<String> = rest.iter().map(|found| format!("pipe: {}", found.reason())).collect();
+            Err(refuse(first, &lines))
+        }
+    }
+}
+
+/// 契約の `size` に対応する rules 行の id（S / M / L の 3 段だけ・他は見積を持たない）。
+fn size_row(size: &str) -> Result<&'static str, String> {
+    match size {
+        "S" => Ok(ROW_SIZE_S),
+        "M" => Ok(ROW_SIZE_M),
+        "L" => Ok(ROW_SIZE_L),
+        other => Err(format!("size {other:?} は S / M / L のどれでもない（上限の余地の見積を持てない）")),
     }
 }
 

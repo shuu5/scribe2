@@ -162,6 +162,12 @@ pub enum RuleKind {
     MemoStaleDays,
     /// stale と数える memo の priority field の上限（以下・P0 = 0 … P4 = 4）。
     MemoStalePriority,
+    /// 契約の `size` = S の 1 file あたりの増分の見積（行）。契約表の上限の余地（設計 contract-source.md §3）が読む。
+    PipeSizeSLines,
+    /// 契約の `size` = M の 1 file あたりの増分の見積（行）。
+    PipeSizeMLines,
+    /// 契約の `size` = L の 1 file あたりの増分の見積（行）。
+    PipeSizeLLines,
 }
 
 /// [`RuleKind`] の全 variant。parity test の母集団である。
@@ -209,6 +215,9 @@ pub const ALL: &[RuleKind] = &[
     RuleKind::RoleCapabilities,
     RuleKind::MemoStaleDays,
     RuleKind::MemoStalePriority,
+    RuleKind::PipeSizeSLines,
+    RuleKind::PipeSizeMLines,
+    RuleKind::PipeSizeLLines,
 ];
 
 impl RuleKind {
@@ -258,6 +267,9 @@ impl RuleKind {
             Self::RoleCapabilities => "RoleCapabilities",
             Self::MemoStaleDays => "MemoStaleDays",
             Self::MemoStalePriority => "MemoStalePriority",
+            Self::PipeSizeSLines => "PipeSizeSLines",
+            Self::PipeSizeMLines => "PipeSizeMLines",
+            Self::PipeSizeLLines => "PipeSizeLLines",
         }
     }
 
@@ -298,6 +310,9 @@ impl RuleKind {
             | Self::LedgerTimeoutS
             | Self::MemoStaleDays
             | Self::MemoStalePriority
+            | Self::PipeSizeSLines
+            | Self::PipeSizeMLines
+            | Self::PipeSizeLLines
             | Self::AccountSelection => ValueShape::Int,
             Self::DialogueSurface => ValueShape::Str,
             Self::MaturityCondition

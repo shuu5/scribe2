@@ -27,6 +27,11 @@ need = "optional"
 shape = "list"
 
 [[field]]
+name = "surfaces"
+need = "optional"
+shape = "list"
+
+[[field]]
 name = "write-set"
 need = "required"
 shape = "list"
