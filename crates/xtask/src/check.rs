@@ -11,6 +11,7 @@
 //! 在る（`s2-07l.257` で挙動不変に分割）。外の呼び手の path は再 export で保つ。
 
 pub(crate) use crate::workspace::{json_string_field, read_text, Layout, SourceFile};
+use crate::limits::Limits;
 use crate::workspace::collect_rs_files;
 use std::path::Path;
 
@@ -52,15 +53,23 @@ pub fn inspect(root: &Path) -> Report {
         Ok(found) => found,
         Err(reason) => return blocked(&reason),
     };
+    // 閾値は manifest の 1 面から 1 回だけ読む（憲法 C1・SRS FR17）。読めない周は測れないので
+    // 全体を止める（不備を 1 つでも黙って既定値で埋めない・FR18）。
+    let limits = match read_text(&layout.root.join(RULES_REL)).and_then(|text| Limits::read(&text)) {
+        Ok(found) => found,
+        Err(reason) => return blocked(&reason),
+    };
     let mut measured = vec![
-        crate::check_sizes::measure_core_lines(&layout, &files),
-        crate::check_sizes::measure_file_lines(&files),
-        crate::check_sizes::measure_test_src_ratio(&files),
+        crate::check_sizes::measure_core_lines(&layout, &files, &limits),
+        crate::check_sizes::measure_file_lines(&files, &limits),
+        crate::check_sizes::measure_test_src_ratio(&files, &limits),
         crate::check_sizes::measure_name_literal(&layout, &files),
     ];
     measured.extend(crate::check_facts::measure_manifests(&layout));
     measured.extend(crate::check_facts::measure_lints(&layout));
     measured.push(crate::check_facts::measure_deps_empty(&layout));
+    measured.push(crate::check_facts::measure_clippy_thresholds(&layout, &limits));
+    measured.push(crate::check_facts::measure_dep_budget(&limits));
     measured.push(crate::check_facts::measure_toolchain_pin(&layout));
     measured.push(crate::paths_clean::measure(&layout));
     measured.push(crate::private_clean::measure(&layout));

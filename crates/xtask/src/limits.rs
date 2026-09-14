@@ -1,14 +1,140 @@
-//! `cargo xtask check` が測る閾値と lint 集合の唯一の置き場。
+//! `cargo xtask check` が測る閾値の**読み手**と lint 集合の置き場。
 //!
-//! 数値を .rs の各所へ散らさないための const 置き場である。rules manifest への
-//! 移設は leg 2 の所管なので、本 leg ではここが SSOT でよい。test 側の期待値も
-//! ここを参照して機械的に作る（fixture に magic number を書かない）。
+//! 閾値の正本は `rules/manifest.toml` の 1 面だけである（憲法 C1・SRS FR17）。この file は
+//! 値を持たず、manifest の `[[rule]]` から [`Limits`] を組み立てる（`s2-07l.163`）。lint の
+//! 集合・依存の allowlist・private path の印は値でなく列なのでここに残る。test 側の期待値も
+//! [`Limits::read`] で現物の manifest から機械的に作る（fixture に magic number を書かない）。
 
-/// core crate の `src` 配下 `.rs` の総行数の上限。
-pub const MAX_CORE_LINES: usize = 40_000;
+use crate::toml_lite::{quoted, sections};
 
-/// `crates/*/src` 配下 `.rs` 1 file あたりの物理行数の上限。
-pub const MAX_FILE_LINES: usize = 1_500;
+/// `[[rule]]` の section header を [`sections`] が返す字面。
+///
+/// `sections` は `[` を 1 つだけ剥がすので、array-of-tables は `[rule` になる。
+const RULE_HEADER: &str = "[rule";
+
+/// manifest の行 id ↔ [`Limits`] の field。`read` が要求する 7 本（欠けは Err）。
+const CORE_LINES: &str = "R-C4-1";
+const FILE_LINES: &str = "R-C4-2";
+const TEST_SRC_RATIO_PCT: &str = "R-C4-3";
+const FN_LINES: &str = "R-C4-4.fn-lines";
+const FN_COMPLEXITY: &str = "R-C4-4.complexity";
+const FN_ARGS: &str = "R-C4-4.args";
+const DEP_BUDGET: &str = "R-C13-1";
+
+/// `cargo xtask check` が比べる閾値（manifest の R-C4 / R-C13 行の読み出し）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Limits {
+    /// core crate の `src` 配下 `.rs` の総行数の上限（R-C4-1）。
+    pub(crate) core_lines: u64,
+    /// `crates/*/src` 配下 `.rs` 1 file あたりの物理行数の上限（R-C4-2）。
+    pub(crate) file_lines: u64,
+    /// test 行 / src 行 の比の上限（百分率・R-C4-3）。
+    pub(crate) test_src_ratio_pct: u64,
+    /// 関数 1 本の行数の上限（R-C4-4.fn-lines・clippy `too-many-lines-threshold`）。
+    pub(crate) fn_lines: u64,
+    /// 関数 1 本の認知的複雑度の上限（R-C4-4.complexity・clippy `cognitive-complexity-threshold`）。
+    pub(crate) fn_complexity: u64,
+    /// 関数 1 本の引数の上限（R-C4-4.args・clippy `too-many-arguments-threshold`）。
+    pub(crate) fn_args: u64,
+    /// 直接依存の本数の上限（R-C13-1）。
+    pub(crate) dep_budget: u64,
+}
+
+impl Limits {
+    /// manifest の本文から 7 値を読む。
+    ///
+    /// 7 本のどれかが無い / `value` が整数でない / `enabled = true` でない周は `Err`
+    /// （測れないを緑にしない・SRS FR18）。不備は**全件**を集めて 1 つの reason に畳み、
+    /// 各件が行 id と（本文に在る行なら）行番号を名指す。`enabled` の省略も `false` と
+    /// 同じく拒む——省略を true に埋めると書き忘れた行が黙って効く側へ倒れる。
+    pub(crate) fn read(manifest_text: &str) -> Result<Self, String> {
+        let mut problems = Vec::new();
+        let mut value_of = |id: &str| -> u64 {
+            match int_rule(manifest_text, id) {
+                Ok(value) => value,
+                Err(problem) => {
+                    problems.push(problem);
+                    0
+                }
+            }
+        };
+        let limits = Self {
+            core_lines: value_of(CORE_LINES),
+            file_lines: value_of(FILE_LINES),
+            test_src_ratio_pct: value_of(TEST_SRC_RATIO_PCT),
+            fn_lines: value_of(FN_LINES),
+            fn_complexity: value_of(FN_COMPLEXITY),
+            fn_args: value_of(FN_ARGS),
+            dep_budget: value_of(DEP_BUDGET),
+        };
+        if problems.is_empty() {
+            Ok(limits)
+        } else {
+            Err(format!("rules manifest の閾値を読めない: {}", problems.join("・")))
+        }
+    }
+}
+
+/// 行 id を持つ有効な `[[rule]]` の整数 `value`。不備は行 id（と行番号）を名指す。
+fn int_rule(text: &str, id: &str) -> Result<u64, String> {
+    let at = line_of(text, id).map_or(String::new(), |line| format!("（{line} 行目）"));
+    let Some(raw) = raw_field(text, id, "value") else {
+        return Err(format!("{id} の行か value が無い{at}"));
+    };
+    let Ok(value) = raw.trim().parse::<u64>() else {
+        return Err(format!("{id} の value が整数でない{at}: {raw}"));
+    };
+    match raw_field(text, id, "enabled") {
+        Some(enabled) if enabled.trim() == "true" => Ok(value),
+        Some(enabled) => Err(format!("{id} が enabled = true でない{at}: enabled = {enabled}")),
+        None => Err(format!("{id} に enabled が無い{at}")),
+    }
+}
+
+/// `id = "<id>"` の行の 1 始まりの行番号。
+fn line_of(text: &str, id: &str) -> Option<usize> {
+    text.lines().position(|line| {
+        crate::toml_lite::key_value(line)
+            .filter(|(key, _)| *key == "id")
+            .and_then(|(_, value)| quoted(value))
+            .as_deref()
+            == Some(id)
+    })
+    .map(|zero_based| zero_based.saturating_add(1))
+}
+
+/// 行 id を持つ `[[rule]]` の `field` の生の値を引く（最初の 1 件）。
+pub(crate) fn raw_field(text: &str, id: &str, field: &str) -> Option<String> {
+    for (header, pairs) in sections(text) {
+        if header != RULE_HEADER {
+            continue;
+        }
+        let found = pairs
+            .iter()
+            .find(|(key, _)| *key == "id")
+            .and_then(|(_, value)| quoted(value));
+        if found.as_deref() != Some(id) {
+            continue;
+        }
+        return pairs
+            .iter()
+            .find(|(key, _)| *key == field)
+            .map(|(_, value)| (*value).to_owned());
+    }
+    None
+}
+
+/// 行 id を持つ `[[rule]]` の `value` を整数で引く（`enabled` は見ない・§3 突合の歯の材料）。
+///
+/// 呼ぶのは test 区間だけだが、[`raw_field`] と対で非 test 側に置く（`s2-07l.163`）。非 test
+/// build では未使用になるので、憲法 C11 の口（理由付き expect）で dead_code だけを除く。
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "憲法 §3 の写しと突合する歯だけが呼ぶ（bd s2-07l.163・raw_field と対で src 配置）")
+)]
+pub(crate) fn int_value(text: &str, id: &str) -> Option<u64> {
+    raw_field(text, id, "value").and_then(|value| value.trim().parse::<u64>().ok())
+}
 
 /// workspace root の `Cargo.toml` が持つべき lint の 3 つ組
 /// `(section, lint 名, level)`。section は `workspace.lints.<section>` の後半。
@@ -57,14 +183,9 @@ pub const ALLOWED_DEPS: &[(&str, &str)] = &[
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_CORE_LINES, MAX_FILE_LINES};
-    use crate::toml_lite::{quoted, sections};
+    use super::{int_value, raw_field, Limits};
+    use crate::toml_lite::quoted;
     use std::path::PathBuf;
-
-    /// `[[rule]]` の section header を [`sections`] が返す字面。
-    ///
-    /// `sections` は `[` を 1 つだけ剥がすので、array-of-tables は `[rule` になる。
-    const RULE_HEADER: &str = "[rule";
 
     /// manifest の本文（workspace root は この crate の 2 つ上）。
     fn manifest_text() -> String {
@@ -77,53 +198,77 @@ mod tests {
             .unwrap_or_else(|err| panic!("{} を読めない: {err}", path.display()))
     }
 
-    /// 行 id を持つ `[[rule]]` の `field` の生の値を引く。
-    fn raw_field(text: &str, id: &str, field: &str) -> Option<String> {
-        for (header, pairs) in sections(text) {
-            if header != RULE_HEADER {
-                continue;
-            }
-            let found = pairs
-                .iter()
-                .find(|(key, _)| *key == "id")
-                .and_then(|(_, value)| quoted(value));
-            if found.as_deref() != Some(id) {
-                continue;
-            }
-            return pairs
-                .iter()
-                .find(|(key, _)| *key == field)
-                .map(|(_, value)| (*value).to_owned());
-        }
-        None
-    }
-
-    /// 行 id を持つ `[[rule]]` の `value` を整数で引く。
-    fn int_value(text: &str, id: &str) -> Option<u64> {
-        raw_field(text, id, "value").and_then(|value| value.trim().parse::<u64>().ok())
-    }
-
     /// 行 id を持つ `[[rule]]` の `ruling` を引く。
     fn ruling(text: &str, id: &str) -> Option<String> {
         raw_field(text, id, "ruling").and_then(|value| quoted(&value))
     }
 
-    /// `limits.rs` の const と manifest の行が同じ値である（憲法 C14.2 の最小形）。
-    ///
-    /// const の manifest 移設は後続の便なので、いまは 2 面の写しの一致を歯で守る。
+    /// 現物の manifest で [`Limits::read`] が 7 値を返し、`core_lines` / `file_lines` が
+    /// R-C4-1 / R-C4-2 の行の値と等しい（憲法 C14.2・const を消して読み手 1 本にした形）。
     #[test]
     fn limits_match_rules_manifest() {
         let text = manifest_text();
-        assert_eq!(
-            int_value(&text, "R-C4-1"),
-            Some(MAX_CORE_LINES as u64),
-            "R-C4-1 と MAX_CORE_LINES"
-        );
-        assert_eq!(
-            int_value(&text, "R-C4-2"),
-            Some(MAX_FILE_LINES as u64),
-            "R-C4-2 と MAX_FILE_LINES"
-        );
+        let limits = Limits::read(&text).unwrap_or_else(|reason| panic!("{reason}"));
+        assert_eq!(Some(limits.core_lines), int_value(&text, "R-C4-1"), "R-C4-1 と core_lines");
+        assert_eq!(Some(limits.file_lines), int_value(&text, "R-C4-2"), "R-C4-2 と file_lines");
+        assert_eq!(Some(limits.test_src_ratio_pct), int_value(&text, "R-C4-3"), "R-C4-3");
+        assert_eq!(Some(limits.fn_lines), int_value(&text, "R-C4-4.fn-lines"), "R-C4-4.fn-lines");
+        assert_eq!(Some(limits.fn_complexity), int_value(&text, "R-C4-4.complexity"), "R-C4-4.complexity");
+        assert_eq!(Some(limits.fn_args), int_value(&text, "R-C4-4.args"), "R-C4-4.args");
+        assert_eq!(Some(limits.dep_budget), int_value(&text, "R-C13-1"), "R-C13-1");
+        // 7 値はどれも 0 ではない（`read` が不備を 0 で埋めて Ok に化けていない）。
+        assert!(limits.core_lines > 0 && limits.file_lines > 0 && limits.dep_budget > 0, "{limits:?}");
+    }
+
+    /// 7 行の読み手用 fixture。`drop` に与えた行だけ `value` を落とし、`disabled` の行は
+    /// `enabled = false` にする。
+    fn limits_fixture(drop: Option<&str>, disabled: Option<&str>) -> String {
+        let rows = [
+            ("R-C4-1", 40_000),
+            ("R-C4-2", 1_500),
+            ("R-C4-3", 100),
+            ("R-C4-4.fn-lines", 60),
+            ("R-C4-4.complexity", 15),
+            ("R-C4-4.args", 5),
+            ("R-C13-1", 12),
+        ];
+        let mut text = "schema = 1\n".to_owned();
+        for (id, value) in rows {
+            text.push_str(&format!("\n[[rule]]\nid = \"{id}\"\nkind = \"X\"\n"));
+            if drop != Some(id) {
+                text.push_str(&format!("value = {value}\n"));
+            }
+            let enabled = if disabled == Some(id) { "false" } else { "true" };
+            text.push_str(&format!("enabled = {enabled}\nruling = \"fixture\"\nruled_at = \"2026-09-14\"\n"));
+        }
+        text
+    }
+
+    /// 7 行そろった fixture は読め、`value = 60` を欠いた fixture は `Err` が行 id を名指す。
+    #[test]
+    fn limits_read_names_the_row_missing_its_value() {
+        let whole = Limits::read(&limits_fixture(None, None)).unwrap_or_else(|reason| panic!("{reason}"));
+        assert_eq!(whole.fn_lines, 60);
+        assert_eq!(whole.dep_budget, 12);
+        let missing = Limits::read(&limits_fixture(Some("R-C4-4.fn-lines"), None));
+        let reason = missing.err().unwrap_or_default();
+        assert!(reason.contains("R-C4-4.fn-lines"), "欠いた行 id を名指す: {reason}");
+        assert!(!reason.contains("R-C4-1"), "他の行は名指さない: {reason}");
+        // 行そのものが無い形も同じ（7 本のどれかが無いは Err）。
+        let dropped = limits_fixture(None, None).replace("id = \"R-C13-1\"", "id = \"R-C13-9\"");
+        assert!(Limits::read(&dropped).err().is_some_and(|reason| reason.contains("R-C13-1")));
+    }
+
+    /// `enabled = false` の行は `Err`（発効は書かれた事実・省略も同じ側へ倒す）。
+    #[test]
+    fn limits_read_refuses_a_disabled_row() {
+        let disabled = Limits::read(&limits_fixture(None, Some("R-C4-3")));
+        let reason = disabled.err().unwrap_or_default();
+        assert!(reason.contains("R-C4-3") && reason.contains("enabled"), "{reason}");
+        let omitted = limits_fixture(None, None).replacen("enabled = true\n", "", 1);
+        assert!(Limits::read(&omitted).err().is_some_and(|reason| reason.contains("R-C4-1")), "省略も Err");
+        let text = limits_fixture(None, None).replace("value = 1500", "value = \"1500\"");
+        assert!(Limits::read(&text).err().is_some_and(|reason| reason.contains("R-C4-2")), "整数でない value");
     }
 
     /// 憲法 §3 の閾値セル（写し）を持つ file。

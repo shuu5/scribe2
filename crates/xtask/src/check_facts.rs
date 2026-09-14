@@ -7,8 +7,8 @@
 
 use crate::check::{failed, json_string_field, read_text, Layout, Measured};
 use crate::genmanifest::MANIFEST_REL;
-use crate::limits::{ALLOWED_DEPS, REQUIRED_LINTS};
-use crate::toml_lite::{entries_in, lint_level, quoted, sections};
+use crate::limits::{Limits, ALLOWED_DEPS, REQUIRED_LINTS};
+use crate::toml_lite::{entries_in, key_value, lint_level, quoted, sections};
 use std::collections::BTreeSet;
 use std::path::Path;
 
@@ -285,6 +285,68 @@ fn is_allowed_dep(section: &str, dep: &str) -> bool {
         .any(|(allowed_section, allowed_dep)| *allowed_section == section && *allowed_dep == dep)
 }
 
+/// clippy-thresholds の tag。
+const CLIPPY_TAG: &str = "clippy-thresholds";
+
+/// clippy の設定 file（workspace root からの相対）。
+const CLIPPY_REL: &str = "clippy.toml";
+
+/// `clippy.toml` の key ↔ manifest の行 id（R-C4-4.*）。実効値は clippy が持つので、
+/// manifest の値との一致をここで測る（写しを第 2 正本にしない・憲法 C1 / C14.2）。
+const CLIPPY_KEYS: [(&str, &str); 3] = [
+    ("too-many-lines-threshold", "R-C4-4.fn-lines"),
+    ("cognitive-complexity-threshold", "R-C4-4.complexity"),
+    ("too-many-arguments-threshold", "R-C4-4.args"),
+];
+
+/// `clippy.toml` の 3 閾値が manifest の R-C4-4.* と同じ値であること（clippy-thresholds）。
+///
+/// file が無い / key が無い周は違反（読めなかったを一致に化けさせない）。
+pub(crate) fn measure_clippy_thresholds(layout: &Layout, limits: &Limits) -> Measured {
+    let text = match read_text(&layout.root.join(CLIPPY_REL)) {
+        Ok(text) => text,
+        Err(reason) => return failed(CLIPPY_TAG, &reason),
+    };
+    let violations = clippy_drift(&text, limits);
+    let fact = if violations.is_empty() { format!("{CLIPPY_TAG}=ok") } else { format!("{CLIPPY_TAG}=drift") };
+    Measured { fact, violations }
+}
+
+/// `clippy.toml` と [`Limits`] の差（違反行の列・一致なら空）。key 1 本につき多くとも 1 件。
+fn clippy_drift(clippy: &str, limits: &Limits) -> Vec<String> {
+    let expected = [limits.fn_lines, limits.fn_complexity, limits.fn_args];
+    let mut violations = Vec::new();
+    for ((key, id), want) in CLIPPY_KEYS.iter().zip(expected) {
+        // `clippy.toml` は section を持たないので行ごとに `key = value` で読む。
+        let found = clippy.lines().filter_map(key_value).find(|(found, _)| found == key).map(|(_, value)| value);
+        match found.map(|value| (value, value.trim().parse::<u64>())) {
+            Some((_, Ok(actual))) if actual == want => {}
+            Some((raw, _)) => violations.push(format!("{CLIPPY_TAG}: {key} = {raw} ≠ {id} = {want}")),
+            None => violations.push(format!("{CLIPPY_TAG}: {CLIPPY_REL} に {key} が無い（{id} = {want} の実効値を持たない）")),
+        }
+    }
+    violations
+}
+
+/// dep-budget の tag。
+const DEP_BUDGET_TAG: &str = "dep-budget";
+
+/// [`ALLOWED_DEPS`] の本数が manifest の R-C13-1 の内側であること（dep-budget）。
+pub(crate) fn measure_dep_budget(limits: &Limits) -> Measured {
+    dep_budget(ALLOWED_DEPS.len(), limits.dep_budget)
+}
+
+/// allowlist の本数 `count` と上限 `max` の突合（fact は `dep-budget=<n>/<max>`）。
+fn dep_budget(count: usize, max: u64) -> Measured {
+    let over = u64::try_from(count).unwrap_or(u64::MAX) > max;
+    let violations = if over {
+        vec![format!("{DEP_BUDGET_TAG}: ALLOWED_DEPS が {count} 本で R-C13-1 = {max} を超える")]
+    } else {
+        Vec::new()
+    };
+    Measured { fact: format!("{DEP_BUDGET_TAG}={count}/{max}"), violations }
+}
+
 /// channel が浮動 channel の語を含むならその語を返す。
 fn floating_word(channel: &str) -> Option<&'static str> {
     ["stable", "beta", "nightly"]
@@ -452,7 +514,73 @@ pub(crate) fn contracts_fixture(core: &str) -> Vec<(String, String)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{contracts_fixture, schema_drift};
+    use super::{clippy_drift, contracts_fixture, dep_budget, schema_drift};
+    use crate::limits::{Limits, ALLOWED_DEPS};
+
+    /// 現物の manifest から読んだ [`Limits`]。
+    fn real_limits() -> Limits {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("..").join(crate::check::RULES_REL);
+        let text = std::fs::read_to_string(&path).unwrap_or_else(|err| panic!("{} を読めない: {err}", path.display()));
+        Limits::read(&text).unwrap_or_else(|reason| panic!("{reason}"))
+    }
+
+    /// `clippy.toml` の fixture（3 key・値は与えた順）。
+    fn clippy_toml(lines: u64, complexity: u64, args: u64) -> String {
+        format!(
+            "too-many-arguments-threshold = {args}\ntoo-many-lines-threshold = {lines}\ncognitive-complexity-threshold = {complexity}\nallow-unwrap-in-tests = true\n"
+        )
+    }
+
+    /// manifest と同じ値の fixture は違反 0（現物の `clippy.toml` も同じ）。
+    #[test]
+    fn clippy_thresholds_pass_when_the_three_keys_match_the_manifest() {
+        let limits = real_limits();
+        let same = clippy_toml(limits.fn_lines, limits.fn_complexity, limits.fn_args);
+        assert_eq!(clippy_drift(&same, &limits), Vec::<String>::new());
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+        let real = std::fs::read_to_string(root.join(super::CLIPPY_REL)).unwrap_or_else(|err| panic!("clippy.toml を読めない: {err}"));
+        assert_eq!(clippy_drift(&real, &limits), Vec::<String>::new(), "現物の clippy.toml は manifest と一致");
+    }
+
+    /// `too-many-lines-threshold = 600` は違反 1 件が key と両値を名指し、key 欠落も違反。
+    #[test]
+    fn clippy_thresholds_name_key_and_both_values_on_drift_and_fail_on_missing_key() {
+        let limits = real_limits();
+        let loosened = clippy_toml(600, limits.fn_complexity, limits.fn_args);
+        let found = clippy_drift(&loosened, &limits);
+        assert_eq!(found.len(), 1, "{found:?}");
+        let line = found.first().map(String::as_str).unwrap_or_default();
+        assert!(line.starts_with("clippy-thresholds: too-many-lines-threshold = 600 ≠ R-C4-4.fn-lines = "), "{line}");
+        assert!(line.ends_with(&format!(" = {}", limits.fn_lines)), "manifest の値を名指す: {line}");
+        let without = clippy_toml(limits.fn_lines, limits.fn_complexity, limits.fn_args)
+            .replace("cognitive-complexity-threshold", "cognitive-complexity-thresh0ld");
+        let missing = clippy_drift(&without, &limits);
+        assert_eq!(missing.len(), 1, "{missing:?}");
+        assert!(
+            missing.first().is_some_and(|line| line.contains("cognitive-complexity-threshold が無い")),
+            "{missing:?}"
+        );
+        // 整数でない値も一致には化けない。
+        let quoted_args = format!(
+            "too-many-arguments-threshold = \"{}\"\ntoo-many-lines-threshold = {}\ncognitive-complexity-threshold = {}\n",
+            limits.fn_args, limits.fn_lines, limits.fn_complexity
+        );
+        assert_eq!(clippy_drift(&quoted_args, &limits).len(), 1, "整数でない値は一致に化けない");
+    }
+
+    /// `ALLOWED_DEPS.len()` ≤ R-C13-1 が現物で成り立ち、fixture で超えると違反。
+    #[test]
+    fn dep_budget_holds_on_workspace_and_fails_when_exceeded() {
+        let limits = real_limits();
+        let real = super::measure_dep_budget(&limits);
+        assert_eq!(real.violations, Vec::<String>::new(), "{}", real.fact);
+        assert_eq!(real.fact, format!("dep-budget={}/{}", ALLOWED_DEPS.len(), limits.dep_budget));
+        let over = dep_budget(13, 12);
+        assert_eq!(over.violations.len(), 1, "{:?}", over.violations);
+        assert!(over.violations.first().is_some_and(|line| line.starts_with("dep-budget: ") && line.contains("13")));
+        assert_eq!(over.fact, "dep-budget=13/12");
+        assert_eq!(dep_budget(12, 12).violations, Vec::<String>::new(), "等しいは通る");
+    }
 
     /// 生成物と正本の 2 面（欄は `(名, Need の variant, Shape の variant)`）。
     fn faces(columns: &[(&str, &str, &str)]) -> (String, String) {

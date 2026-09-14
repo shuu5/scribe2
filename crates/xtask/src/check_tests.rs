@@ -13,9 +13,9 @@
 // 純粋な移動（`check.rs` の test 区間から歯を足さずに写した・s2-07l.257）。
 // flip-check: moved s2-07l.257
 
-use super::{check, shape, summary, RULES_REL};
+use super::{check, shape, summary, Layout, RULES_REL};
 use crate::genmanifest;
-use crate::limits::{ALLOWED_DEPS, MAX_FILE_LINES, REQUIRED_LINTS};
+use crate::limits::{Limits, ALLOWED_DEPS, REQUIRED_LINTS};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -119,6 +119,8 @@ fn write_healthy(dir: &Path) {
     // **実 repo が持つものは fixture も持つ**。rules manifest が無い tree を「測れない」
     // 側へ倒す measure（non-rust-exec）が在るので、無いままだと fixture 全体が赤くなる。
     write_at(dir, RULES_REL, &rules_manifest(&[]));
+    // clippy の閾値 file も同じ（clippy-thresholds は不在と key 欠落を違反に倒す・`s2-07l.163`）。
+    write_at(dir, "clippy.toml", &clippy_toml());
     // claude の構築点も同じ（claude-spawn-points は見失った形を違反に倒す・`s2-07l.101`）。
     write_at(
         dir,
@@ -139,6 +141,15 @@ fn write_healthy(dir: &Path) {
     crate::check_facts::contracts_fixture(FIXTURE_CORE).iter().for_each(|(rel, body)| write_at(dir, rel, body));
 }
 
+/// fixture の `clippy.toml`（3 閾値は現物の manifest と同じ値）。
+fn clippy_toml() -> String {
+    let limits = real_limits();
+    format!(
+        "too-many-arguments-threshold = {}\ntoo-many-lines-threshold = {}\ncognitive-complexity-threshold = {}\n",
+        limits.fn_args, limits.fn_lines, limits.fn_complexity
+    )
+}
+
 /// fixture の設計 doc の相対 path。
 const PROSE_DOC_REL: &str = "docs/design/probe-7q.md";
 
@@ -147,19 +158,47 @@ pub(crate) fn brief_rel() -> String {
     format!("crates/{FIXTURE_CORE}/src/seat/brief/planner.txt")
 }
 
+/// 現物の rules manifest から読んだ閾値（fixture の期待値と閾値行はここから機械的に作る＝
+/// magic number を書かない・`s2-07l.163`）。
+fn real_limits() -> Limits {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("..").join(RULES_REL);
+    let text = fs::read_to_string(&path).unwrap_or_else(|err| panic!("{} を読めない: {err}", path.display()));
+    Limits::read(&text).unwrap_or_else(|reason| panic!("{reason}"))
+}
+
 /// fixture の rules manifest。`allow` に与えた path が例外行に載る。役割の行は planner 1 つ（権能 2 つ）。
+/// 閾値の 7 行（R-C4-* / R-C13-1）は現物と同じ値で持つ（`Limits::read` が無い行を拒むので、fixture も
+/// 実 repo が持つものを持つ）。
 fn rules_manifest(allow: &[&str]) -> String {
     let items = allow
         .iter()
         .map(|path| format!("\"{path}\""))
         .collect::<Vec<String>>()
         .join(", ");
-    format!(
-        "[[rule]]\nid = \"repo.non_rust_exec_allow\"\nkind = \"RepoNonRustExecAllow\"\n\
-         value = [{items}]\nruling = \"fixture\"\nruled_at = \"2026-09-11\"\n\n\
+    let limits = real_limits();
+    let rows = [
+        ("R-C4-1", "CoreLines", limits.core_lines),
+        ("R-C4-2", "ModuleLines", limits.file_lines),
+        ("R-C4-3", "TestSrcRatioPct", limits.test_src_ratio_pct),
+        ("R-C4-4.fn-lines", "FnLines", limits.fn_lines),
+        ("R-C4-4.complexity", "FnComplexity", limits.fn_complexity),
+        ("R-C4-4.args", "FnArgs", limits.fn_args),
+        ("R-C13-1", "DepBudget", limits.dep_budget),
+    ];
+    let mut text = String::from("schema = 1\n");
+    for (id, kind, value) in rows {
+        text.push_str(&format!(
+            "\n[[rule]]\nid = \"{id}\"\nkind = \"{kind}\"\nvalue = {value}\nenabled = true\n\
+             ruling = \"fixture\"\nruled_at = \"2026-09-14\"\n"
+        ));
+    }
+    text.push_str(&format!(
+        "\n[[rule]]\nid = \"repo.non_rust_exec_allow\"\nkind = \"RepoNonRustExecAllow\"\n\
+         value = [{items}]\nenabled = true\nruling = \"fixture\"\nruled_at = \"2026-09-11\"\n\n\
          [[rule]]\nid = \"role.planner\"\nkind = \"RoleCapabilities\"\nvalue = [\"answer\", \"relay\"]\n\
-         ruling = \"fixture\"\nruled_at = \"2026-09-14\"\n"
-    )
+         enabled = true\nruling = \"fixture\"\nruled_at = \"2026-09-14\"\n"
+    ));
+    text
 }
 
 /// 健全な擬似 workspace を作り `mutate` で 1 項目だけ壊してから check を回す。
@@ -253,7 +292,8 @@ fn check_passes_on_workspace() {
 /// 判定行の外形の pin（repo root で撃ったときの形）。値は [`shape`] で伏せてある。
 const SUMMARY_PIN: &str = "xtask check: ok core-lines=<v>/<v> file-lines=<v>/<v> \
     test-src-ratio=<v>/<v> name-literal=<v> manifest-name=<v> manifest-version=<v>.<v>.<v> \
-    lints-set=<v> lints-optin=<v>/<v> deps-empty=<v> toolchain-pin=<v>.<v>.<v> \
+    lints-set=<v> lints-optin=<v>/<v> deps-empty=<v> clippy-thresholds=<v> dep-budget=<v>/<v> \
+    toolchain-pin=<v>.<v>.<v> \
     paths-clean=<v> private-clean=<v> non-rust-exec=<v>/<v> allow=<v> ci-shell-lines=<v> \
     claude-md-constitution=<v> enum-slices=<v> claude-spawn-points=<v> polarity=<v>/<v> \
     prose-gate=<v>/<v> seat-brief=<v> contracts-schema=<v>";
@@ -474,14 +514,15 @@ fn enum_slices_refuses_unrecognized_forms_instead_of_counting() {
     assert_single(&element, "enum-slices");
 }
 
-/// 上限 +1 行の .rs は file-lines だけで落ち、上限ちょうどは通る。
+/// 上限 +1 行の .rs は file-lines だけで落ち、上限ちょうどは通る（上限は manifest の R-C4-2）。
 #[test]
 fn check_fails_on_oversized_file() {
+    let max_file_lines = usize::try_from(real_limits().file_lines).unwrap_or(usize::MAX);
     let over = check_fixture(|dir| {
         write_at(
             dir,
             &format!("crates/{FIXTURE_CORE}/src/big.rs"),
-            &filler_rs(MAX_FILE_LINES + 1),
+            &filler_rs(max_file_lines + 1),
         );
     });
     assert_single(&over, "file-lines");
@@ -490,7 +531,7 @@ fn check_fails_on_oversized_file() {
         write_at(
             dir,
             &format!("crates/{FIXTURE_CORE}/src/big.rs"),
-            &filler_rs(MAX_FILE_LINES),
+            &filler_rs(max_file_lines),
         );
     });
     assert!(
@@ -924,17 +965,66 @@ fn non_rust_exec_denies_allow_entries_that_match_nothing() {
 }
 
 /// rules manifest を読めない tree は **fail-closed**（`paths-clean` と同じ極性）。
+///
+/// `check` 全体は閾値を読めない時点で止まる（`layout:` の 1 件・`s2-07l.163`）ので、measure 単体の
+/// 極性は `Layout` を組んで直に撃って測る（check 経由では届かない）。
 #[test]
 fn non_rust_exec_is_unmeasured_when_the_manifest_is_missing() {
-    let violations = check_fixture(|dir| {
-        let _ = fs::remove_file(dir.join(RULES_REL));
-    });
+    let dir = make_tmp_dir();
+    write_healthy(&dir);
+    let _ = fs::remove_file(dir.join(RULES_REL));
+    git_track_all(&dir);
+    let whole = check(&dir);
+    let layout = Layout::discover(&dir);
+    let single = layout.as_ref().ok().map(crate::non_rust_exec::measure);
+    let _ = fs::remove_dir_all(&dir);
     assert!(
-        violations
+        whole.iter().any(|line| line.starts_with("layout: ") && line.contains("manifest.toml")),
+        "閾値を読めない周は check 全体が止まる: {whole:?}"
+    );
+    let single = single.unwrap_or_else(|| panic!("fixture の Layout を組める: {}", layout.err().unwrap_or_default()));
+    assert!(
+        single
+            .violations
             .iter()
             .any(|line| line.starts_with("non-rust-exec:") && line.contains("manifest")),
-        "manifest を読めない周は違反として名乗る: {violations:?}"
+        "manifest を読めない周は違反として名乗る: {:?}",
+        single.violations
     );
+}
+
+/// 閾値の行を 1 本欠いた manifest は `check` 全体を止め、欠いた行 id を名指す（SRS FR18）。
+#[test]
+fn check_is_blocked_when_a_threshold_row_is_missing() {
+    let violations = check_fixture(|dir| {
+        let dropped = rules_manifest(&[]).replace("id = \"R-C4-3\"", "id = \"R-C4-9\"");
+        write_at(dir, RULES_REL, &dropped);
+    });
+    assert_single(&violations, "layout");
+    let head = violations.first().map(String::as_str).unwrap_or_default();
+    assert!(head.contains("R-C4-3"), "欠いた行 id を名指す: {head}");
+}
+
+/// 判定行に clippy-thresholds と dep-budget の fact が並び、`clippy.toml` を緩めると違反が
+/// key と両値を名指す（写しの実効値を manifest が縛る・憲法 C14.2）。
+#[test]
+fn check_fails_when_clippy_toml_loosens_a_manifest_threshold() {
+    let line = summary_fixture(|_| {});
+    assert!(line.contains(" clippy-thresholds=ok "), "{line}");
+    assert!(
+        line.contains(&format!(" dep-budget={}/{} ", ALLOWED_DEPS.len(), real_limits().dep_budget)),
+        "{line}"
+    );
+    let violations = check_fixture(|dir| {
+        let loosened = clippy_toml().replace(
+            &format!("too-many-lines-threshold = {}", real_limits().fn_lines),
+            "too-many-lines-threshold = 600",
+        );
+        write_at(dir, "clippy.toml", &loosened);
+    });
+    assert_single(&violations, "clippy-thresholds");
+    let head = violations.first().map(String::as_str).unwrap_or_default();
+    assert!(head.contains("too-many-lines-threshold = 600") && head.contains("R-C4-4.fn-lines"), "{head}");
 }
 
 /// 分類器の拡張子は**閉じた列**で、`js` を外さない（契約が名指しで禁じた形）。
