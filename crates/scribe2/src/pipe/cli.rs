@@ -13,24 +13,21 @@ use super::declaration::{self, Ceiling, Effective, CEILING_ROW};
 use super::follow::{self, Turn};
 use super::gate::{Gate, Limits, Verdict, RC_INCONCLUSIVE};
 use super::land::{verdict_of, Land, Retire, REBASE_EMPTY};
+use super::ratelimit::ride_out_rate_limit;
 use super::refuse::{overlaps, Refuse};
+use super::stop::stop;
 use super::{
     contract_path, current, emit, last_stage_detail, question_of_run, run_dir, run_id,
     runner_is_idle, vessel_path, worktree_path, Emit,
 };
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_OK, RC_REFUSED};
-use crate::fleet::select::Selection;
 use crate::fleet::store::{LockPolicy, StoreError};
-use crate::fleet::{self, Completion, EventKind, SeatState, Stage, State, Timeout};
+use crate::fleet::{self, EventKind, Stage, State};
 use crate::hook::vessel;
 use crate::name::NAME;
 use crate::rules::manifest::Manifest;
 use crate::rules::RuleValue;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
-
-/// 停止の猶予を持つ rules 行。
-const ROW_GRACE: &str = "pipe.stop_grace_ms";
 
 /// gate が要る lens の本数を持つ rules 行。
 const ROW_LENS: &str = "gate.lens_count";
@@ -116,7 +113,7 @@ pub fn contracts(args: &[String]) -> Outcome {
 ///
 /// 器の中で 3 本目の flag reader である。4 本目が要るときは 1 本へ畳む
 /// （いまは fleet / vessel / pipe がそれぞれ自分の必須 flag だけを見ている）。
-fn flag<'a>(args: &'a [String], name: &str) -> Result<Option<&'a str>, String> {
+pub(super) fn flag<'a>(args: &'a [String], name: &str) -> Result<Option<&'a str>, String> {
     let Some(at) = args.iter().position(|arg| arg == name) else {
         return Ok(None);
     };
@@ -148,7 +145,7 @@ fn manifest_of(args: &[String]) -> Result<Manifest, String> {
 }
 
 /// rules 行の整数値。
-fn int_row(manifest: &Manifest, id: &str) -> Result<u64, String> {
+pub(super) fn int_row(manifest: &Manifest, id: &str) -> Result<u64, String> {
     let row = manifest.get(id).ok_or(format!("{id} が無い"))?;
     if !row.enabled {
         return Err(format!("{id} は不発効である"));
@@ -175,7 +172,7 @@ fn list_row(manifest: &Manifest, id: &str) -> Result<Vec<String>, String> {
 ///
 /// repo の解き方は [`repo_of`] ただ 1 本（`--repo` → cwd の root）。ここで cwd だけを
 /// 見ると、`--repo` を渡した周に**別の repo の置き場**を読んでしまう。
-fn state_dir_of(args: &[String]) -> Result<PathBuf, String> {
+pub(super) fn state_dir_of(args: &[String]) -> Result<PathBuf, String> {
     if let Some(found) = flag(args, "--state-dir")? {
         return Ok(PathBuf::from(found));
     }
@@ -300,7 +297,7 @@ fn exclude_overlap(state_dir: &Path, contract: &Contract) -> Result<(), Outcome>
 /// 終端 = `Landed` / `Failed` / `Stopped`、または `Gated` で verdict が FAIL（pipeline.md §4
 /// 「FAIL は終端」）。`RateLimited` は終端でない（口座の窓の都合で止まっただけ・ADR-0020 §2.1）。`Gated` の判定を読めない周は `None`＝**測れなかった**で、呼び手が
 /// 断る側へ倒す（読めない判定を「終端でない」にも「終端」にも読み替えない）。
-fn live(state_dir: &Path, id: &str, stage: Stage) -> Option<bool> {
+pub(super) fn live(state_dir: &Path, id: &str, stage: Stage) -> Option<bool> {
     match stage {
         Stage::Landed | Stage::Failed | Stage::Stopped => Some(false),
         Stage::Gated => verdict_of(state_dir, id).map(|found| found != Verdict::Fail),
@@ -367,7 +364,7 @@ fn copy_contract(state_dir: &Path, id: &str, from: &Path) -> Result<(), String> 
 }
 
 /// 前提の段を replay から読む。無ければ `Err`。
-fn stage_of(state: &State, id: &str) -> Result<Stage, String> {
+pub(super) fn stage_of(state: &State, id: &str) -> Result<Stage, String> {
     state
         .runs
         .get(id)
@@ -386,9 +383,9 @@ fn start(args: &[String], policy: LockPolicy) -> Outcome {
 }
 
 /// 段を通すのに要る材料（すべて永続面から解いたもの）。
-struct Resolved {
+pub(super) struct Resolved {
     /// 置き場。
-    state_dir: PathBuf,
+    pub(super) state_dir: PathBuf,
     /// 対象 repo。
     repo: PathBuf,
     /// 読み込み済みの契約。
@@ -406,7 +403,7 @@ struct Resolved {
 ///
 /// 同じ段の中で扱いが分かれる面が 2 つ在る——`Gated` は `verdict.json` の 3 値で、`Failed` は
 /// 終端の理由で分かれる。どちらも**段の検査の一部**ゆえ [`resolve`] の中（＝契約より前）に置く。
-enum Extra {
+pub(super) enum Extra {
     /// 段の一致だけで足りる。
     Nothing,
     /// `Gated` を**測り直し**として通してよいか（verdict が INCONCLUSIVE の周だけ）。
@@ -425,7 +422,7 @@ enum Extra {
 /// [`Extra`] は段だけでは決まらない周の弁別を頼む印である。この弁別も段の検査の一部ゆえ
 /// **契約より前**に置く——外へ出すと「段違いなのに rc 2」が特定の段だけで起こり、上の
 /// 不変条件が rc の語彙ごと崩れる（lens 実測 F1）。
-fn resolve(
+pub(super) fn resolve(
     args: &[String],
     id: &str,
     allowed: &[Stage],
@@ -525,7 +522,7 @@ fn launch(
 }
 
 /// turn の材料を解いた面から組む（起動と別口座での起こし直しが同じ 1 本で組む）。
-fn turn_of<'a>(id: &'a str, resolved: &'a Resolved, runner: &'a str, policy: LockPolicy) -> Turn<'a> {
+pub(super) fn turn_of<'a>(id: &'a str, resolved: &'a Resolved, runner: &'a str, policy: LockPolicy) -> Turn<'a> {
     Turn {
         run: id,
         bead: &resolved.bead,
@@ -536,203 +533,6 @@ fn turn_of<'a>(id: &'a str, resolved: &'a Resolved, runner: &'a str, policy: Loc
         approved: resolved.approved,
         policy,
     }
-}
-
-/// `RateLimited` の便を別口座で起こし直す経路（設計 account-autonomy.md §4・ADR-0020 §2.3・FR37）。
-///
-/// 段が `RateLimited` である間、[`resume_rate_limited`] の 1 周（計測 → 選定 → 起こし直し）を
-/// 繰り返す。**回数の上限を持たない**（起こし直した turn がまた上限で止まれば次の口座で続く・窓を
-/// 跨ぐ）。終端は `pipe stop --run` だけで、器は自動では終端しない。段が `RateLimited` でない周は
-/// 何もせず rc 0（`pipe run` が起動の直後に通す形）。
-fn ride_out_rate_limit(
-    args: &[String],
-    id: &str,
-    runner: &str,
-    manifest: &Manifest,
-    policy: LockPolicy,
-) -> Outcome {
-    let state_dir = match state_dir_of(args) {
-        Ok(found) => found,
-        Err(reason) => return refused(reason),
-    };
-    let labels = match declared_labels(manifest, &state_dir) {
-        Ok(found) => found,
-        Err(reason) => return refused(reason),
-    };
-    let mut outcome = Outcome::ok(Vec::new());
-    loop {
-        // 置き場を読めない周は rc 2（読めなさを「上限ではない」に読み替えて gate へ流さない）。
-        let stage = match current(&state_dir) {
-            Ok(state) => state.runs.get(id).map(|run| run.stage),
-            Err(errors) => {
-                outcome.err.extend(errors.iter().map(StoreError::to_string));
-                outcome.rc = RC_BROKEN;
-                return outcome;
-            }
-        };
-        if stage != Some(Stage::RateLimited) {
-            return outcome;
-        }
-        let turn = resume_rate_limited(args, id, runner, &labels, policy);
-        outcome.out.extend(turn.out);
-        outcome.err.extend(turn.err);
-        if turn.rc != RC_OK {
-            outcome.rc = turn.rc;
-            return outcome;
-        }
-    }
-}
-
-/// 便の口座の宣言（設計 account-lifecycle.md §2「読み手」・ADR-0026 §2.1）: tracked の面（`--rules` か埋め込み）の
-/// label に置き場の host の面（`<state_dir>/host.toml`）の label を足す（[`crate::rules::declared_labels`]・計測
-/// `fleet usage` と同じ宣言を読む）。**pipe で口座の宣言を読む口はこの 1 本**。host の面が在るが読めない周は断る
-/// （FailClosed・0 口座に潰さない）。
-fn declared_labels(manifest: &Manifest, state_dir: &Path) -> Result<Vec<String>, String> {
-    let tracked: Vec<String> = manifest
-        .accounts()
-        .iter()
-        .map(|account| account.label().to_owned())
-        .collect();
-    crate::rules::declared_labels(&tracked, state_dir).map_err(|errors| {
-        errors
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<String>>()
-            .join(" / ")
-    })
-}
-
-/// `RateLimited` の便の 1 周（設計 account-autonomy.md §4）: (i) FR33 の計測を 1 回撃つ →
-/// (ii) 便用の規則で口座を選ぶ → (iii) `Chosen` なら同じ worktree・契約・base の runner をその口座で
-/// 起こし直す / (iv) 候補なしなら最も早い reset まで唯一の wait で待ち、成立なら (ii) から・`Timeout`
-/// なら (i) から。
-///
-/// 判定行は `run=<id> next=spawn account=<label>` / `run=<id> next=wait reset=<ts>`（既存の
-/// `next=gate` と同型）。計測の行は stderr 側（`fleet select` と同じ）。走っている runner の隣に
-/// もう 1 つ起こさない（起きている周は断る・fail-closed）。
-fn resume_rate_limited(
-    args: &[String],
-    id: &str,
-    runner: &str,
-    labels: &[String],
-    policy: LockPolicy,
-) -> Outcome {
-    let resolved = match resolve(args, id, &[Stage::RateLimited], &Extra::Nothing) {
-        Ok(found) => found,
-        Err(outcome) => return outcome,
-    };
-    if runner_is_idle(&resolved.state_dir, id) != Some(true) {
-        return refused(format!("run {id} の runner が起きている（隣にもう 1 つ起こさない）"));
-    }
-    let usage_args = match usage_args(args) {
-        Ok(found) => found,
-        Err(reason) => return refused(reason),
-    };
-    let mut outcome = Outcome::ok(Vec::new());
-    let label = loop {
-        // (i) 計測。口座ごとの失敗は `AllowanceUnmeasured` の行のまま（FailOpen・fleet-usage.md §6）で、
-        // command を止めるのは引数・manifest・store の誤りだけ（その rc をそのまま返し、選ばない）。
-        let measured = fleet::usage::run(&usage_args, &resolved.state_dir);
-        if measured.rc != RC_OK {
-            outcome.err.extend(measured.out.into_iter().chain(measured.err));
-            outcome.rc = measured.rc;
-            return outcome;
-        }
-        outcome.err.extend(measured.out.into_iter().chain(measured.err));
-        // (ii) 選定（待ちが成立した周はここから撃ち直す＝計測は待ちの観測が読んだ行のまま）。
-        match choose_or_wait(id, &resolved.state_dir, labels, &mut outcome) {
-            Ok(Some(label)) => break label,
-            Ok(None) => {}
-            // 止まる周も、それまでの判定行（`next=wait …`）と計測の行は残す。
-            Err(stopped) => {
-                outcome.out.extend(stopped.out);
-                outcome.err.extend(stopped.err);
-                outcome.rc = stopped.rc;
-                return outcome;
-            }
-        }
-    };
-    // (iii) 起こし直し。**経路は通常の起動と同じ `spawn_turn` の 1 本**（C6）。
-    outcome.out.push(format!("run={id} next=spawn account={label}"));
-    let turn = follow::spawn_turn(&turn_of(id, &resolved, runner, policy), Some(&label));
-    outcome.out.extend(turn.out);
-    outcome.err.extend(turn.err);
-    outcome.rc = turn.rc;
-    outcome
-}
-
-/// 選定と待ち（(ii) / (iv)）。`Ok(Some)` は選んだ label、`Ok(None)` は `Timeout`（計測から撃ち直す）、
-/// `Err` はこの process が止まる周（便は `RateLimited` のまま live）。
-///
-/// 候補なしで **reset を持たない周**（測れない・除外で空）は待つ時刻が無いので rc 3 で止まる
-/// （便は終端にしない・次の `resume` で選び直す）。待ちの間に段が動いた周（`pipe stop --run` が
-/// 終端した等）は段違いとして断る＝起こし直さない。
-fn choose_or_wait(
-    id: &str,
-    state_dir: &Path,
-    labels: &[String],
-    outcome: &mut Outcome,
-) -> Result<Option<String>, Outcome> {
-    loop {
-        let state = current(state_dir).map_err(|errors| {
-            Outcome::failed(RC_BROKEN, errors.iter().map(StoreError::to_string).collect())
-        })?;
-        let stage = stage_of(&state, id).map_err(refused)?;
-        if stage != Stage::RateLimited {
-            return Err(refused(format!("run {id} の段は {} である（待ちの間に動いた）", stage.as_str())));
-        }
-        let found = match fleet::select_for_run(&state, labels, &fleet::cli::now_utc()) {
-            Selection::Chosen(label) => return Ok(Some(label)),
-            Selection::None(found) => found,
-        };
-        let Some(reset) = found.earliest_reset else {
-            return Err(Outcome {
-                out: vec![format!("run={id} next=wait reset=-")],
-                err: vec![format!(
-                    "pipe: run {id} は口座待ちである（候補なし: {}・待つ reset が無い）",
-                    found.reason.as_str()
-                )],
-                rc: RC_BLOCKED,
-            });
-        };
-        // deadline は reset 時刻から計算した値（rules 行ではない・縮退を持たない）。
-        let Some(deadline) = until(&reset) else {
-            return Err(broken(format!("run {id} の待ち先 reset {reset} を時刻として読めない")));
-        };
-        outcome.out.push(format!("run={id} next=wait reset={reset}"));
-        let waited = fleet::wait(
-            Completion::AccountFree {
-                reset_at: reset,
-                state_dir: state_dir.to_path_buf(),
-                run: id.to_owned(),
-                labels: labels.to_vec(),
-            },
-            deadline,
-        );
-        match waited {
-            Ok(()) => {}
-            Err(Timeout) => return Ok(None),
-        }
-    }
-}
-
-/// いまから `reset`（UTC の `YYYY-MM-DDTHH:MM:SSZ`）までの長さ。過ぎていれば 0。読めない形は `None`。
-fn until(reset: &str) -> Option<Duration> {
-    let target = fleet::epoch_of(reset)?;
-    let now = fleet::epoch_of(&fleet::cli::now_utc())?;
-    Some(Duration::from_secs(target.saturating_sub(now)))
-}
-
-/// 計測（[`fleet::usage::run`]）へ渡す引数: `--rules` と `--curl` だけを写す（他の pipe の flag は
-/// 渡さない）。値欠けは黙って落とさず断る（NFR4）。
-fn usage_args(args: &[String]) -> Result<Vec<String>, String> {
-    let mut found = Vec::new();
-    for name in ["--rules", "--curl"] {
-        if let Some(value) = flag(args, name)? {
-            found.extend([name.to_owned(), value.to_owned()]);
-        }
-    }
-    Ok(found)
 }
 
 /// `pipe approve`。**逐語を event へ写すだけ**で、段は動かさない（resume が進める）。
@@ -1117,382 +917,12 @@ fn follow_pending(state_dir: &Path, id: &str) -> bool {
     conflicted && runner_is_idle(state_dir, id) == Some(true)
 }
 
-/// `pipe stop`。`--run <id>` は便 1 本を外し、`--all` は生きている席を全部止める。
-///
-/// **2 つの口の意味は別である**: `--all` は席の掃除（対象なしは rc 0 の冪等）、`--run` は
-/// 放置された便を排他の母集団から外す管理席の操作（設計 pipeline-conflict.md §2）。
-fn stop(args: &[String], manifest: &Manifest, policy: LockPolicy) -> Outcome {
-    match flag(args, "--run") {
-        Err(reason) => refused(reason),
-        Ok(Some(id)) => stop_run(args, manifest, policy, id),
-        Ok(None) => stop_all(args, manifest, policy),
-    }
-}
-
-/// `pipe stop --run <id>`。終端でない便 1 本に `RunStopped` を書く（席が Live なら先に group 宛てに
-/// 止める・**止め切れなかった周は `RunStopped` を書かず rc 1**＝run は live のまま）。
-///
-/// **終端の便には event を増やさず rc 1**（書込は冪等・rc は冪等でない）。2 回撃った 2 件目が
-/// この経路に落ちる＝events.jsonl は 1 件しか増えない。判定を読めない `Gated` は rc 2 で断る
-/// （読めない周を「終端でない」に読み替えない・fail-closed）。
-fn stop_run(args: &[String], manifest: &Manifest, policy: LockPolicy, id: &str) -> Outcome {
-    let state_dir = match state_dir_of(args) {
-        Ok(found) => found,
-        Err(reason) => return refused(reason),
-    };
-    let state = match current(&state_dir) {
-        Err(errors) => return Outcome::failed(RC_BROKEN, errors.iter().map(StoreError::to_string).collect()),
-        Ok(found) => found,
-    };
-    let Some(run) = state.runs.get(id) else {
-        return refused(format!("run {id} が無い"));
-    };
-    match live(&state_dir, id, run.stage) {
-        None => return broken(format!("run {id} の判定を読めない（終端かを測れない）")),
-        Some(false) => {
-            return refused(format!("run {id} は既に終端である（段 {}）", run.stage.as_str()))
-        }
-        Some(true) => {}
-    }
-    let grace = match int_row(manifest, ROW_GRACE) {
-        Ok(found) => found,
-        Err(reason) => return broken(reason),
-    };
-    // **pid を持たない Live 席も母集団に数える**（`--all` と同じ理由＝止めていない席を
-    // 黙って落とすと「全部止めた」に化ける）。止められた席にだけ `SeatStopped` を書く。
-    let live_seats: Vec<(String, Option<u64>)> = state
-        .seats
-        .values()
-        .filter(|seat| seat.state == SeatState::Live && seat.run == id)
-        .map(|seat| (seat.id.clone(), seat.pid))
-        .collect();
-    let mut stopped = 0_usize;
-    for (seat, pid) in &live_seats {
-        if !pid.is_some_and(|found| terminate(found, grace)) {
-            continue;
-        }
-        stopped = stopped.saturating_add(1);
-        if let Err(err) = record_seat_stop(&state_dir, &state, (seat, id, *pid), policy) {
-            return broken(err);
-        }
-    }
-    let line = format!("stop: run={id} seats={} stopped={stopped}", live_seats.len());
-    // **席を 1 つでも止め切れなかった周は `RunStopped` を書かない**（FailClosed・C9 / C6.2）。
-    // 書くと run は終端として排他の母集団から外れるのに、その runner は走り続ける。
-    if stopped != live_seats.len() {
-        return unstoppable(line, live_seats.len().saturating_sub(stopped));
-    }
-    if let Err(err) = record_run_stopped(&state_dir, &state, id, policy) {
-        return broken(err);
-    }
-    Outcome::ok_line(line)
-}
-
-/// 止め切れなかった周の形（rc 1・run は終端にしない）。
-fn unstoppable(line: String, left: usize) -> Outcome {
-    Outcome {
-        out: vec![line],
-        err: vec![format!("pipe: 止められない席が {left} 残った（run は終端にしない）")],
-        rc: RC_REFUSED,
-    }
-}
-
-/// `pipe stop --all`。生きている席を止める。**冪等**（対象なしは rc 0）。
-fn stop_all(args: &[String], manifest: &Manifest, policy: LockPolicy) -> Outcome {
-    stop_all_with(args, manifest, policy, &terminate)
-}
-
-/// [`stop_all`] の本体。席を止める実装（`terminate`）を受ける＝in-file の歯は実 signal を撃たない stub を渡す。
-fn stop_all_with(
-    args: &[String],
-    manifest: &Manifest,
-    policy: LockPolicy,
-    terminate: &dyn Fn(u64, u64) -> bool,
-) -> Outcome {
-    if !args.iter().any(|arg| arg == "--all") {
-        return refused("--all が要る".to_owned());
-    }
-    let state_dir = match state_dir_of(args) {
-        Ok(found) => found,
-        Err(reason) => return refused(reason),
-    };
-    let state = match current(&state_dir) {
-        // state が読めない周だけ rc 2（stop の rc 語彙 3 値）。
-        Err(errors) => return Outcome::failed(RC_BROKEN, errors.iter().map(StoreError::to_string).collect()),
-        Ok(found) => found,
-    };
-    let grace = match int_row(manifest, ROW_GRACE) {
-        Ok(found) => found,
-        Err(reason) => return broken(reason),
-    };
-    // **pid を持たない Live 席も母集団に数える**。落とすと「対象なし rc 0」に化け、
-    // 止まっていない席が在るのに全クリアを名乗ってしまう。
-    let live: Vec<(String, String, Option<u64>)> = state
-        .seats
-        .values()
-        .filter(|seat| seat.state == SeatState::Live)
-        .map(|seat| (seat.id.clone(), seat.run.clone(), seat.pid))
-        .collect();
-    let mut stopped = 0_usize;
-    // 止めた席の便（記帳順）と、止め切れなかった席を持つ便。
-    let mut stopped_runs: Vec<&str> = Vec::new();
-    let mut unstopped_runs: Vec<&str> = Vec::new();
-    for (id, run, pid) in &live {
-        // 止められなかった席に「止めた」を記帳しない。記帳すると次の周が
-        // 「対象なし」を返し、生きている席が終端として消える（偽の全クリア）。
-        if !pid.is_some_and(|found| terminate(found, grace)) {
-            unstopped_runs.push(run.as_str());
-            continue;
-        }
-        stopped += 1;
-        if let Err(err) = record_seat_stop(&state_dir, &state, (id, run, *pid), policy) {
-            return broken(err);
-        }
-        if !stopped_runs.contains(&run.as_str()) {
-            stopped_runs.push(run);
-        }
-    }
-    // `--run` と同じ極性: **止め切れなかった席を持つ便には `RunStopped` を書かない**。
-    for run in stopped_runs.iter().filter(|run| !unstopped_runs.contains(run)) {
-        if let Err(err) = record_run_stopped(&state_dir, &state, run, policy) {
-            return broken(err);
-        }
-    }
-    let line = format!("stop: seats={} stopped={stopped}", live.len());
-    if stopped == live.len() {
-        Outcome::ok_line(line)
-    } else {
-        unstoppable(line, live.len().saturating_sub(stopped))
-    }
-}
-
-/// TERM → 猶予だけ待つ → 残れば KILL。**待機は fleet の 1 実装を通る**（C3.4）。
-///
-/// 席の pid は `pipe spawn` が立てた process group の leader（= group id）なので、**group 宛て**に
-/// 撃ち、group の全員が消えるのを待つ（wrapper だけが死んで子・孫が残る形を塞ぐ）。group が無い周
-/// （`kill` が rc 非 0 = group leader でない旧 record の席）と pid ≤ 1 は**単一 pid** へ撃つ（互換）。
-/// true を返すのは group（互換の周は pid）が消えた周だけである。
-fn terminate(pid: u64, grace_ms: u64) -> bool {
-    let grace = Duration::from_millis(grace_ms);
-    let Ok(target) = u32::try_from(pid) else {
-        return false;
-    };
-    if let StopPlan::Group(group) = stop_plan(pid) {
-        if signal(&group.target(), "-TERM") {
-            if fleet::wait(Completion::GroupGone(target), grace).is_ok() {
-                return true;
-            }
-            signal(&group.target(), "-KILL");
-            return fleet::wait(Completion::GroupGone(target), grace).is_ok();
-        }
-    }
-    signal(&pid.to_string(), "-TERM");
-    if fleet::wait(Completion::SeatGone(target), grace).is_ok() {
-        return true;
-    }
-    signal(&pid.to_string(), "-KILL");
-    fleet::wait(Completion::SeatGone(target), grace).is_ok()
-}
-
-/// 席の止め方（2 値）。**選ぶのは [`stop_plan`] ただ 1 本**で、実 signal を送らずに pin できる。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum StopPlan {
-    /// process group 宛て（group id = 席の pid）。
-    Group(GroupId),
-    /// 単一 pid 宛て（group 宛てにしてはならない pid）。
-    Single,
-}
-
-/// group 宛ての signal の宛先。**pid ≥ 2 だけを持てる**——`kill -- -1` は user の全 process、
-/// `kill -- -0` は自分の group であり、`-{pid}` の字面はこの型からしか作らない
-/// （guard 1 本の短絡に依らない・2026-09-13 の事故）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct GroupId(u64);
-
-impl GroupId {
-    /// pid ≤ 1 は `None`。
-    fn new(pid: u64) -> Option<Self> {
-        (pid >= 2).then_some(Self(pid))
-    }
-
-    /// `kill` へ渡す負の pid の字面。
-    fn target(self) -> String {
-        format!("-{}", self.0)
-    }
-}
-
-/// 席の pid から止め方を選ぶ（pure）。
-fn stop_plan(pid: u64) -> StopPlan {
-    match GroupId::new(pid) {
-        Some(group) => StopPlan::Group(group),
-        None => StopPlan::Single,
-    }
-}
-
-/// pid へ signal を送る（std に kill は無いので `kill` を撃つ）。rc 0 の周だけ true。
-fn signal(target: &str, name: &str) -> bool {
-    std::process::Command::new("kill")
-        .arg(name)
-        .arg("--")
-        .arg(target)
-        .output()
-        .is_ok_and(|out| out.status.success())
-}
-
-/// 席に「止めた」を記帳する。**止められた席にだけ書く**（偽の全クリアを作らない）。
-fn record_seat_stop(
-    state_dir: &Path,
-    state: &State,
-    seat: (&str, &str, Option<u64>),
-    policy: LockPolicy,
-) -> Result<(), String> {
-    let (id, run, pid) = seat;
-    emit(
-        state_dir,
-        &Emit {
-            kind: EventKind::SeatStopped,
-            run,
-            bead: bead_of(state, run),
-            stage: None,
-            seat: Some(id.to_owned()),
-            pid,
-            detail: None,
-        },
-        policy,
-    )
-    .map_err(|err| err.to_string())
-}
-
-/// 便に「止めた」を記帳する（段 = `Stopped`＝終端＝排他の母集団から外れる）。
-fn record_run_stopped(
-    state_dir: &Path,
-    state: &State,
-    run: &str,
-    policy: LockPolicy,
-) -> Result<(), String> {
-    emit(
-        state_dir,
-        &Emit {
-            kind: EventKind::RunStopped,
-            run,
-            bead: bead_of(state, run),
-            stage: Some(Stage::Stopped),
-            seat: None,
-            pid: None,
-            detail: None,
-        },
-        policy,
-    )
-    .map_err(|err| err.to_string())
-}
-
-/// 便の bead id（replay に無ければ空）。
-fn bead_of<'a>(state: &'a State, run: &str) -> &'a str {
-    state.runs.get(run).map_or("", |found| found.bead.as_str())
-}
-
 /// 前提違反・使い方の誤り（rc 1 + stderr 1 行・何もしない）。
-fn refused(reason: String) -> Outcome {
+pub(super) fn refused(reason: String) -> Outcome {
     Outcome::failed_line(RC_REFUSED, format!("pipe: {reason}"))
 }
 
 /// 対象そのものが壊れている（rc 2）。
-fn broken(reason: String) -> Outcome {
+pub(super) fn broken(reason: String) -> Outcome {
     Outcome::failed_line(RC_BROKEN, format!("pipe: {reason}"))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{stop_all_with, stop_plan, GroupId, StopPlan};
-    use crate::cli_outcome::{RC_OK, RC_REFUSED};
-    use crate::fleet::store::{self, LockPolicy};
-    use crate::fleet::{Event, EventKind};
-    use crate::pipe::fixture::{append_all, event, scratch};
-    use crate::rules::manifest::Manifest;
-    use std::path::Path;
-
-    /// 便 `run` の席 `seat` を pid 付きで起こした event（**実 pid ではない**・stub の kill だけが読む）。
-    fn seat_up(run: &str, seat: &str, pid: u64) -> Event {
-        Event { pid: Some(pid), ..event(run, EventKind::SeatSpawned, None, Some(seat), None) }
-    }
-
-    /// 置き場の `kind` の event を持つ便（物理順）。
-    fn runs_of(state: &Path, kind: EventKind) -> Vec<String> {
-        store::read_all(state)
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|found| found.kind == kind)
-            .map(|found| found.run)
-            .collect()
-    }
-
-    /// `stop --all` を stub の kill で撃つ（`stoppable` に在る pid だけが止まる）。
-    fn stop_with_stub(state: &Path, stoppable: &'static [u64]) -> crate::cli_outcome::Outcome {
-        let args: Vec<String> = ["stop", "--all", "--state-dir"]
-            .iter()
-            .map(|arg| (*arg).to_owned())
-            .chain(std::iter::once(state.display().to_string()))
-            .collect();
-        let Ok(manifest) = Manifest::embedded() else {
-            return crate::cli_outcome::Outcome::failed_line(2, "埋め込みの manifest を読めない".to_owned());
-        };
-        let Ok(policy) = LockPolicy::from_rules(&manifest) else {
-            return crate::cli_outcome::Outcome::failed_line(2, "lock 規則を読めない".to_owned());
-        };
-        stop_all_with(&args, &manifest, policy, &|pid, _grace| stoppable.contains(&pid))
-    }
-
-    // flip-check: retroactive s2-07l.222
-    /// (a) 止め切れた便が複数在る周は**全便**に `RunStopped` を 1 件ずつ書く（同じ便の 2 席目で 2 件目を書かない・
-    /// 記帳済みの判定 `!` を消すと 1 件も書かれない）。席ごとに `SeatStopped` を書き、rc 0・`stopped=` は止めた数。
-    /// 実 signal は撃たない（kill は stub・pid は `/proc` と無関係な字面）。
-    #[test]
-    fn mutant_in_pipe_stop_all_writes_run_stopped_to_every_stopped_run() {
-        let state = scratch("stop-all-every");
-        append_all(&state, &[seat_up("run-a", "seat-a1", 9_001), seat_up("run-a", "seat-a2", 9_002), seat_up("run-b", "seat-b", 9_003)]);
-        let out = stop_with_stub(&state, &[9_001, 9_002, 9_003]);
-        assert_eq!(out.rc, RC_OK, "全席を止めた: {:?}", out.err);
-        assert_eq!(out.out, vec!["stop: seats=3 stopped=3".to_owned()]);
-        assert_eq!(runs_of(&state, EventKind::SeatStopped), vec!["run-a", "run-a", "run-b"], "止めた席ごとに 1 件");
-        assert_eq!(runs_of(&state, EventKind::RunStopped), vec!["run-a", "run-b"], "止めた便の全便に 1 件ずつ");
-        let _ = std::fs::remove_dir_all(&state);
-    }
-
-    // flip-check: retroactive s2-07l.222
-    /// (b) 止め切れなかった席を持つ便には `RunStopped` を書かず、止め切れた便にだけ書く（filter の `!` を消すと
-    /// 逆の便に書く）。止められなかった席には `SeatStopped` も書かず、rc 1・`stopped=` は止めた数だけ
-    /// （`+=` を `*=` にすると 0 のまま・`==` を `!=` にすると rc が反転する）。
-    #[test]
-    fn mutant_in_pipe_stop_all_skips_runs_with_an_unstopped_seat() {
-        let state = scratch("stop-all-partial");
-        append_all(&state, &[seat_up("run-a", "seat-a1", 9_101), seat_up("run-a", "seat-a2", 9_102), seat_up("run-b", "seat-b", 9_103)]);
-        let out = stop_with_stub(&state, &[9_101, 9_103]);
-        assert_eq!(out.rc, RC_REFUSED, "止め切れなかった席が残る: {:?}", out.err);
-        assert_eq!(out.out, vec!["stop: seats=3 stopped=2".to_owned()]);
-        assert_eq!(runs_of(&state, EventKind::SeatStopped), vec!["run-a", "run-b"], "止めた席にだけ書く");
-        assert_eq!(runs_of(&state, EventKind::RunStopped), vec!["run-b"], "止め切れた便にだけ書く");
-        let _ = std::fs::remove_dir_all(&state);
-    }
-
-    /// pid 0 / 1 は単一 pid 宛て・2 以上は group 宛て（実 signal を送らずに止め方の選択を pin する）。
-    #[test]
-    fn pipe_stop_group_plan_never_targets_pid_zero_or_one_as_group() {
-        assert_eq!(stop_plan(0), StopPlan::Single, "pid 0 を group 宛てにしない（自分の group）");
-        assert_eq!(stop_plan(1), StopPlan::Single, "pid 1 を group 宛てにしない（user の全 process）");
-        assert!(matches!(stop_plan(2), StopPlan::Group(found) if found.target() == "-2"), "{:?}", stop_plan(2));
-        assert!(
-            matches!(stop_plan(4242), StopPlan::Group(found) if found.target() == "-4242"),
-            "{:?}",
-            stop_plan(4242)
-        );
-    }
-
-    /// group 宛ての字面は型からしか作れず、型は pid ≤ 1 を持てない。
-    #[test]
-    fn pipe_stop_group_id_rejects_pid_zero_and_one() {
-        assert_eq!(GroupId::new(0), None);
-        assert_eq!(GroupId::new(1), None);
-        assert_eq!(GroupId::new(2).map(GroupId::target), Some("-2".to_owned()));
-        assert_eq!(GroupId::new(u64::MAX).map(GroupId::target), Some(format!("-{}", u64::MAX)));
-    }
 }

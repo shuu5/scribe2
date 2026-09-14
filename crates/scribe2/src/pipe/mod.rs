@@ -25,6 +25,10 @@ pub mod report;
 mod size;
 pub mod spawn;
 pub mod table;
+mod stop;
+mod ratelimit;
+mod queue;
+mod retire;
 
 use crate::polarity::{OnFailure, Polarity, Timing};
 use crate::fleet::store::{self, LockPolicy, StoreError};
