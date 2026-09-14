@@ -36,6 +36,7 @@ C3 は「1 つの DB file（host 列）」と言う。MVP はそれを **append-
 | `stage` | string | 任意 | `Stage` の variant 名 |
 | `seat` | string | 任意 | 席 id（MVP は run id と同じ） |
 | `pid` | u64 | 任意 | runner の pid |
+| `account` | string | 任意 | `SeatSpawned` だけ: 器が選んで runner に渡した口座の label（口座を渡さず親の環境を継承させた周は置かない・口座ごとの走行中の便数の出所・[ADR-0027 §2.3](../../design-intent/decisions/ADR-0027-run-account-order-earliest-reset-and-no-per-account-cap.html#s2-3-inflight)・schema 版は 1 のまま） |
 | `detail` | string | 任意 | 自由文（verdict 名・runner rc・承認の逐語 等） |
 
 - `pub enum EventKind`（閉じた 8 variant）: `RunCreated` / `RunStage` / `RunDone` / `RunStopped` / `SeatSpawned` / `SeatStopped` / `ApprovalRequested` / `ApprovalReceived`。
