@@ -34,6 +34,7 @@
 - **lens の口**: 既存の `<NAME> lens` に雛形を 1 枚足す（`headless/lens-contract.txt`・穴 = `{contract}`〔生成した契約 file〕/ `{design}`〔`section` の本文〕/ `{requirements}`〔`req` の要件本文・SRS から抜く〕・diff は無い）。観点は 3 つ（契約と設計の節の適合・設計が名指す状態遷移の一周〔段・完了 enum・列の所属〕・write-set の連鎖〔§3 の閉包に無い構造の落ち〕）。verdict は既存の 3 値。予算は NFR1 の cap をそのまま使う（契約 + 節 + 要件で cap を超えたら INCONCLUSIVE＝FR9 の極性）。
 - **効き方**: `pipe run` / `pipe resume` は `Reviewed` かつ verdict PASS の run だけを spawn する（現物の `launch(.., &[Stage::Intake])` の入口を `Reviewed` に改める）。FAIL / INCONCLUSIVE は終端（`live` は false・retire 可）。直しは設計 doc の改訂 → PR → 再 intake（run 2）。
 - **人の関与 0**: 審査を人が飛ばす口は無い（`--no-review` を作らない・C16）。
+- **順序**: 契約 (c) は (b) より先に流す（user 裁定 2026-09-14・台帳 s2-07l.197 notes）。生成 (b) が無い間は、受付が読んだ契約 file（設計 pointer 付き・(a) が検査済み）の `section` の節を設計 doc から読んで審査する＝`{design}` の穴の出所は (b) の前後で変わらない（行の pointer）。理由: 契約の不備が入口で止まらず runner と gate の周を費やした実測（2026-09-13〜14: .208 run 1 / 2・.235・.238・.222 の 5 件が (c) の観点で止まる種類）。
 
 ## 5. land の終端（FR50）
 
@@ -122,7 +123,7 @@ write-set = ["crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/mod.rs",
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_intake_design_"]
 size = "M"
 done = "toy repo の設計 doc から契約 file が生成され、--contract は usage で断られる"
-depends = ["a"]
+depends = ["a", "c"]
 
 [[contract]]
 id = "c"
@@ -134,7 +135,7 @@ write-set = ["crates/scribe2/src/fleet/mod.rs", "crates/scribe2/src/pipe/mod.rs"
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_review_"]
 size = "M"
 done = "偽 lens FAIL で構築点の呼出 0・PASS で Spawned"
-depends = ["b"]
+depends = ["a"]
 
 [[contract]]
 id = "d"
