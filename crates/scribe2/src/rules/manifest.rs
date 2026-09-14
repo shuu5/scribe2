@@ -884,3 +884,79 @@ fn check_duplicate_ids(rows: &[RuleRow], errors: &mut Vec<RuleError>) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    // flip-check: retroactive s2-07l.250
+    // host の面の読みの 3 値と `labels_over` の歯（設計 account-lifecycle.md §6 / §7・接頭辞 `rules_host_unit_`）。
+    // 現物の挙動を pin する歯なので base でも通る（`.243` run 3 の生存変異を塞ぐ）。
+
+    use super::{collect, finish, Face, HostManifest};
+
+    /// host の面の本文を読んだ [`HostManifest::Present`]（`[[account]]` を `labels` の順で持つ・見出し行は 3, 6, …）。
+    fn host_of(labels: &[&str]) -> HostManifest {
+        let accounts: String = labels.iter().map(|label| format!("\n[[account]]\nlabel = \"{label}\"\n")).collect();
+        match finish(collect(&format!("schema = 1\n{accounts}"), Face::Host)) {
+            Ok(face) => HostManifest::Present(face),
+            Err(errors) => HostManifest::Unreadable(errors),
+        }
+    }
+
+    /// tracked の面の label 列。
+    fn tracked(labels: &[&str]) -> Vec<String> {
+        labels.iter().map(|label| (*label).to_owned()).collect()
+    }
+
+    /// (a) 在るが読めない（dir を `host.toml` の path に渡す＝権限に依らず読めない）は `Unreadable`（`Absent` に潰さない）。
+    #[test]
+    fn rules_host_unit_read_of_a_directory_is_unreadable_not_absent() {
+        let dir = std::env::temp_dir();
+        let read = HostManifest::read(&dir);
+        assert_eq!(read.as_str(), "unreadable", "{read:?}");
+        let HostManifest::Unreadable(errors) = read else {
+            panic!("Unreadable でない");
+        };
+        assert_eq!(errors.len(), 1, "欠陥 1 件: {errors:?}");
+        let first = errors.first().map(ToString::to_string).unwrap_or_default();
+        assert!(first.starts_with("rules: host.toml: "), "面の接頭辞: {first}");
+        assert!(first.contains(&dir.display().to_string()), "path を名指す: {first}");
+        assert!(first.ends_with(" line=0"), "行番号: {first}");
+    }
+
+    /// (b) 無い path だけが `Absent`（縮退・0 宣言）。
+    #[test]
+    fn rules_host_unit_read_of_a_missing_path_is_absent() {
+        let missing = std::env::temp_dir().join(format!("scribe2-rules-host-unit-missing-{}", std::process::id())).join("host.toml");
+        assert_eq!(HostManifest::read(&missing), HostManifest::Absent);
+    }
+
+    /// (c) 重複の無い host の面は tracked の後ろへ宣言順で足す（順序まで）。
+    #[test]
+    fn rules_host_unit_labels_over_appends_the_host_labels_in_order() {
+        assert_eq!(host_of(&["c"]).labels_over(&tracked(&["a", "b"])), Ok(tracked(&["a", "b", "c"])));
+    }
+
+    /// (d) 面をまたぐ重複は host の面の行番号で 1 件。tracked が重複の label **だけ**の周も同じく拒む
+    /// （重複判定の `==` を `!=` に倒すと、tracked `[a, b]` では `a` が一致しないことで偽の重複が立ち区別がつかない）。
+    #[test]
+    fn rules_host_unit_labels_over_rejects_a_label_crossing_the_faces() {
+        for base in [&["a", "b"][..], &["b"]] {
+            let errors = host_of(&["b"]).labels_over(&tracked(base)).expect_err("面をまたぐ重複は拒む");
+            assert_eq!(errors.len(), 1, "{base:?}: 1 件: {errors:?}");
+            let first = errors.first().map(ToString::to_string).unwrap_or_default();
+            assert_eq!(first, "rules: host.toml: label b が面をまたいで重複する（tracked の manifest にも在る） line=3", "{base:?}");
+        }
+    }
+
+    /// (e) 重複しない label（`d`）は拒まれない＝欠陥はちょうど 1 件。
+    #[test]
+    fn rules_host_unit_labels_over_rejects_only_the_crossing_label() {
+        let errors = host_of(&["b", "d"]).labels_over(&tracked(&["a", "b"])).expect_err("b は重複する");
+        let shown: Vec<(u64, String)> = errors.iter().map(|error| (error.line, error.message.clone())).collect();
+        assert_eq!(
+            shown,
+            vec![(3, "host.toml: label b が面をまたいで重複する（tracked の manifest にも在る）".to_owned())],
+            "d は拒まない"
+        );
+    }
+}

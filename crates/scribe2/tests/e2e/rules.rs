@@ -693,6 +693,81 @@ fn rules_host_rejects_every_defect_with_line_numbers_and_the_face_prefix() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+// ─────────────────── host の面が dir（在るが読めない・`s2-07l.250`・`.243` run 3 の生存変異を塞ぐ） ───────────────────
+// flip-check: retroactive s2-07l.250
+
+/// `S/host.toml` の位置に dir を置いた state dir（権限に依らず読めない＝「無い」に潰れたら縮退の側へ倒れる）。
+fn host_dir_state() -> Option<std::path::PathBuf> {
+    let dir = make_tmp_dir()?;
+    std::fs::create_dir_all(dir.join(vessel::rules::HOST_MANIFEST)).ok()?;
+    Some(dir)
+}
+
+/// (f) dir の host の面で `rules validate --state-dir S` は拒否・stderr は `host.toml:` の 1 行（`absent` に潰れない）。
+#[test]
+fn rules_host_validate_refuses_a_directory_host_manifest() {
+    let dir = host_dir_state().expect("tmp の state dir を作れる");
+    let state = dir.display().to_string();
+    let outcome = rules_dispatch(&["validate", "--state-dir", &state]);
+    assert_eq!(outcome.rc, RC_REFUSED, "{outcome:?}");
+    assert!(outcome.out.is_empty(), "host=absent の行を出さない: {outcome:?}");
+    assert_eq!(outcome.err.len(), 1, "1 行: {:?}", outcome.err);
+    let first = outcome.err.first().map(String::as_str).unwrap_or_default();
+    assert!(first.starts_with("rules: host.toml: "), "面の接頭辞: {first}");
+    assert!(first.contains(&dir.join(vessel::rules::HOST_MANIFEST).display().to_string()), "path を名指す: {first}");
+    assert!(first.ends_with(" line=0"), "行番号: {first}");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// (g) 同じ fixture で `fleet usage` と `seat tick` も typed に止まる（rc 1・stdout 0 byte・event も tick の記録も書かない）。
+#[test]
+fn rules_host_directory_host_manifest_stops_fleet_usage_and_seat_tick_without_events() {
+    let dir = host_dir_state().expect("tmp の state dir を作れる");
+    let state = dir.display().to_string();
+    let host = dir.join(vessel::rules::HOST_MANIFEST).display().to_string();
+    let bin = env!("CARGO_BIN_EXE_scribe2");
+    let wm = dir.join("wm");
+    std::fs::create_dir_all(&wm).expect("wm dir を作れる");
+    let pane = dir.join("pane.txt");
+    std::fs::write(&pane, "❯ \n  10% 100k/1M Opus 5\n").expect("pane を書ける");
+    let socket = dir.join("sock").display().to_string();
+    let tick = Command::new(bin)
+        .args(["seat", "tick", "--target", "hostdir", "--wm-dir", &wm.display().to_string(), "--state-dir", &state])
+        .args(["--tmux-socket", &socket, "--capture-file", &pane.display().to_string()])
+        .output()
+        .expect("binary を起動できる");
+    assert_eq!(tick.status.code(), Some(i32::from(RC_REFUSED)), "{tick:?}");
+    assert!(tick.stdout.is_empty(), "stdout は 0 byte: {tick:?}");
+    assert_eq!(String::from_utf8_lossy(&tick.stderr), "seat: tick decision=error reason=no-rule:manifest-unreadable\n", "1 行");
+    assert!(!dir.join("seat").join("hostdir").join("tick.jsonl").exists(), "tick の記録を書かない");
+
+    let curl = dir.join("no-curl").display().to_string();
+    let usage = Command::new(bin)
+        .args(["fleet", "usage", "--state-dir", &state, "--curl", &curl])
+        .output()
+        .expect("binary を起動できる");
+    assert_eq!(usage.status.code(), Some(i32::from(RC_REFUSED)), "{usage:?}");
+    assert!(usage.stdout.is_empty(), "stdout は 0 byte: {usage:?}");
+    let said = String::from_utf8_lossy(&usage.stderr);
+    assert!(said.starts_with("fleet usage: manifest を読めない（rules: host.toml: "), "typed の 1 行: {said}");
+    assert!(said.contains(&host) && said.ends_with(" line=0）\n") && said.lines().count() == 1, "path と行番号: {said}");
+    assert!(!vessel::fleet::store::events_path(&dir).exists(), "event を書かない");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// (h) `rules` を引数なし・`rules get` を id なしで撃つと usage 1 行で拒否（行は `--rules PATH` と `--state-dir S` を名指す）。
+#[test]
+fn rules_host_usage_line_names_both_rules_and_state_dir_flags() {
+    let want = "usage: rules <validate|get <id>> [--rules PATH] [--state-dir S]";
+    assert!(want.contains("--rules PATH") && want.contains("--state-dir S"), "期待値の自己検査");
+    for args in [&[][..], &["get"]] {
+        let outcome = rules_dispatch(args);
+        assert_eq!(outcome.rc, RC_REFUSED, "{args:?}: {outcome:?}");
+        assert!(outcome.out.is_empty(), "{args:?}: stdout へは書かない");
+        assert_eq!(outcome.err, vec![want.to_owned()], "{args:?}: usage 1 行");
+    }
+}
+
 /// (g) tracked の manifest は口座の表を持たない（宣言は host の面にだけ・公開面の情報が減る側）・待ち時間の行は在る。
 #[test]
 fn rules_host_embedded_manifest_declares_no_account_and_keeps_usage_timeout() {
@@ -965,14 +1040,17 @@ fn rules_external_form() {
         .output()
         .expect("binary を起動できる");
     std::fs::remove_dir_all(&dir).ok();
+    // `rules` を引数なしで撃った usage の行（stderr・`s2-07l.250`）。
+    let bare = Command::new(bin).arg("rules").output().expect("binary を起動できる");
     let form = format!(
-        "{}{}{}{}{}{}",
+        "{}{}{}{}{}{}{}",
         String::from_utf8_lossy(&usage.stdout),
         String::from_utf8_lossy(&validate.stdout),
         String::from_utf8_lossy(&missing.stderr),
         String::from_utf8_lossy(&selection.stdout),
         String::from_utf8_lossy(&selection.stderr),
-        String::from_utf8_lossy(&hosted.stdout)
+        String::from_utf8_lossy(&hosted.stdout),
+        String::from_utf8_lossy(&bare.stderr)
     );
     insta::assert_snapshot!(form);
 }
