@@ -51,7 +51,7 @@ land の追随（pipeline.md §5.4・`follow_main`）で `git rebase <main>` が
 
 - rules 行 `pipe.follow_retries`（kind `FollowRetries`・Int・enabled・裁定 id）。本 doc は値を写さない。manifest に行が載るまでは ADR の**予定行**（C14.2 の相互参照は行が在って成立・ADR-0018 §4 と同じ）。
 - **回数判定は guard**（ADR-0014 §2.1「起動を止めうる判定」）: 新 module `pipe/follow.rs`（land.rs は 977 行ゆえ R-C4-2 の内側に収める分割）に閉じた enum `FollowCheck { Retry, Exhausted, Unreadable }` と極性定数（InLoop / FailClosed）。終端形は variant ごとに固定: `Exhausted` → `Failed detail=rebase-conflict` + rc 1 / `Unreadable` → `Failed detail=follow-unmeasured` + rc 2。`polarity.rs` の `Guard` に variant 1 つ（名 `follow-retry`・境界 `pipe::follow::FollowCheck`）。
-- `pipe retire` の前提を広げる: `Landed` ∨ (`Failed` ∧ 最後の `RunStage` の detail が `rebase-empty` **または `rebase-conflict`**) ∨ (`Gated` ∧ verdict が FAIL) ∧ worktree が在る ∧ clean。move だけ（N1.2）。.132 の memo（gate / lens FAIL の worktree）はここで吸収する。
+- `pipe retire` の前提を広げる: `Landed` ∨ (`Failed` ∧ 最後の `RunStage` の detail が `rebase-empty` **または `rebase-conflict`**) ∨ (`Gated` ∧ verdict が FAIL) ∨ **`Stopped`**（`s2-07l.284`・§2 の `pipe stop --run` で live から外した便は終端して入れ物だけが残る形＝`Landed` の `--pr-cmd` 形と同じ。未 commit の仕事を持つ worktree は既存の clean 検査が断る＝人がまだ読む現物は動かさない・stop した周に器が畳む二役は持たせない〔段の関数は 1 つずつ・C2〕）∧ worktree が在る ∧ clean。move だけ（N1.2）。.132 の memo（gate / lens FAIL の worktree）はここで吸収する。
 - 上限到達後: Failed の便を retire で畳み、planner が契約の write-set を切り直して再 intake（同 bead の再 intake は終端した run とは交差しない・§2）。
 
 ## 6. 極性（一覧は 16 → 18 行）

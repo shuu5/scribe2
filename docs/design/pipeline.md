@@ -60,7 +60,7 @@
 | `Implemented` | `RunStage`（spawn の完了・または land の追随 `detail=rebase:<old>..<new>` で `Gated` から戻る周・§5.4・**予定形（ADR-0019・契約 (b) の land まで現物には無い）**: 衝突からの起こし直し待ち `detail=rebase-conflict:<base>..<main>` と起こし直し後の base 記帳 `detail=rebase:<old>..<merge-base>` も本段＝[pipeline-conflict.md](./pipeline-conflict.md) §3） | gate |
 | `Gated` | `RunStage detail=verdict:<V>` | PASS → land（**base が main の祖先のまま動いていれば** land の前段で worktree の branch を main へ rebase → `RunStage stage=Implemented detail=rebase:<old>..<new>` で段を戻す → gate を同じ関数で撃ち直す → PASS なら新 base で CAS・§5.4）／ **INCONCLUSIVE → 道具を揃えて gate を撃ち直す**（`resume` は `next=gate` で rc 3）／ FAIL は終端（FR10 / FR14・**予定形**: ADR-0019 §2.4 で `pipe retire` が畳める側に入る＝契約 (b) の land まで現物は畳めない） |
 | `Landed` | `RunDone` | 終端。`--pr-cmd` 形は merge の後に `pipe retire --run <id>` で worktree を畳む（`RunStage detail=retired`・段は `Landed` のまま） |
-| `Stopped` | `RunStopped` | 終端（stop --all） |
+| `Stopped` | `RunStopped` | 終端（`stop --all` / `stop --run`）。worktree は `pipe retire --run <id>` で畳める（clean のときだけ・`RunStage detail=retired`・段は `Stopped` のまま・[pipeline-conflict.md](./pipeline-conflict.md) §5・`s2-07l.284`） |
 | `Failed` | `RunStage detail=<理由>` | 終端（resume は rc 1）。`detail=rebase-empty` の便は `pipe retire --run <id>` で worktree を畳める（**予定形**: ADR-0019 §2.4 で `rebase-conflict` も畳める側に入る＝契約 (b) の land まで現物は `rebase-empty` だけ）（`RunStage detail=retired`・**段は `Failed` のまま**・`s2-07l.128`） |
 
 前提違反は **rc 1 + stderr 1 行・何もしない**（event も追記しない）。
