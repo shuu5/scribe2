@@ -807,8 +807,10 @@ fn parked_entry(state_dir: &Path, target: &str, socket: Option<&str>, seat_dir: 
     }
 }
 
-/// (1) `<state_dir>/inject.jsonl` の同じ席の最新行が tick の合図（`who=seat-tick`・`kind=externalize` か `kind=exit`）
-/// なら、その種類と ts。記録の形（判定行の `kind=` の token）は同じ module の [`body`] が書く。
+/// (1) `<state_dir>/inject.jsonl` の同じ席の `who=seat-tick` の最新行が tick の合図（`kind=externalize` か `kind=exit`）
+/// なら、その種類と ts。記録の形（判定行の `kind=` の token）は同じ module の [`body`] が書く。inject.jsonl は hook の
+/// 記録（`hook:pre-tool-use` 等）も共有する（vessel-hook.md §6）が、それは注入ではないので飛ばす（`s2-07l.242`・
+/// 退避の後に席が Bash を撃つと最新行が hook 行になり合図が見えなくなっていた）。
 fn last_signal(state_dir: &Path, target: &str) -> Option<(InjectKind, u64)> {
     let seat = seat_name(target)?;
     let text = std::fs::read_to_string(inject_path(state_dir)).ok()?;
@@ -816,9 +818,12 @@ fn last_signal(state_dir: &Path, target: &str) -> Option<(InjectKind, u64)> {
         .lines()
         .rev()
         .filter_map(|line| json_lite::parse_object(line).ok())
-        .find(|pairs| field(pairs, "seat").and_then(Value::as_str) == Some(seat.as_str()))?;
+        .find(|pairs| {
+            field(pairs, "seat").and_then(Value::as_str) == Some(seat.as_str())
+                && field(pairs, "who").and_then(Value::as_str) == Some(WHO)
+        })?;
     let what = field(&last, "what").and_then(Value::as_str)?;
-    if field(&last, "who").and_then(Value::as_str) != Some(WHO) || !what.starts_with("decision=inject ") {
+    if !what.starts_with("decision=inject ") {
         return None;
     }
     let token = what.split_whitespace().find_map(|token| token.strip_prefix("kind="))?;
@@ -1077,7 +1082,7 @@ fn record(state_dir: &Path, target: &str, entry: &InjectionRecord) {
 
 #[cfg(test)]
 mod tests {
-    use super::{pressure, INJECT_KINDS, NOOP_REASONS};
+    use super::{inject_path, last_signal, pressure, INJECT_KINDS, NOOP_REASONS, WHO};
     use crate::fleet::{Allowance, AllowanceLatest, Measured, State, Unmeasured, UnmeasuredReason, WindowKind};
     use crate::order::is_declaration_order;
 
@@ -1222,5 +1227,57 @@ mod tests {
         ])]);
         assert_eq!(pressure(&same_model, "a1", Some("Opus")), None, "席の model と同じ SevenDayModel 窓の Unmeasured");
         assert_eq!(pressure(&same_model, "a1", None), None, "model の無い row は全 model 窓を数える（保守側）");
+    }
+
+    /// 記録 1 行（`InjectionRecord::to_line` と同じ key の flat JSON）。
+    fn inject_line(who: &str, what: &str, seat: &str, ts: u64) -> String {
+        format!(
+            r#"{{"schema":1,"who":"{who}","what":"{what}","when":"tick","bytes":0,"tokens":null,"wall_ms":0,"seat":"{seat}","ts":{ts}}}"#
+        )
+    }
+
+    /// `inject.jsonl` を `lines` で置いた state dir で [`last_signal`] を読む（`None` の lines は file を置かない）。
+    fn signal_of(name: &str, lines: Option<&[String]>) -> Option<(&'static str, u64)> {
+        let dir = std::env::temp_dir().join(format!("seat-tick-signal-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).ok();
+        if let Some(lines) = lines {
+            std::fs::write(inject_path(&dir), format!("{}\n", lines.join("\n"))).ok();
+        }
+        let found = last_signal(&dir, "seat1").map(|(kind, ts)| (kind.as_str(), ts));
+        std::fs::remove_dir_all(&dir).ok();
+        found
+    }
+
+    /// (a) 退避の合図の後ろに同じ席の hook の記録（role-allow・session-start）が在っても、合図は hook 行に隠れない
+    /// （hook の記録は注入ではない・vessel-hook.md §6）。別の席の tick の行も数えない。
+    #[test]
+    fn seat_exit_signal_skips_hook_rows_after_externalize() {
+        let lines = [
+            inject_line(WHO, "decision=inject account=a1:100 kind=externalize", "seat1", 100),
+            inject_line("hook:pre-tool-use", "decision=role-allow capability=launch", "seat1", 200),
+            inject_line("hook:session-start", "served version=2", "seat1", 300),
+            inject_line(WHO, "decision=inject kind=pointer", "seat2", 400),
+        ];
+        assert_eq!(signal_of("hook-rows", Some(&lines)), Some(("externalize", 100)));
+    }
+
+    /// (b) 退避の合図の後ろに同じ席の tick の別の注入（heartbeat の `kind=pointer`）が在れば、合図は上書きされている。
+    #[test]
+    fn seat_exit_signal_is_overwritten_by_a_later_tick_pointer() {
+        let lines = [
+            inject_line(WHO, "decision=inject account=a1:100 kind=externalize", "seat1", 100),
+            inject_line(WHO, "decision=inject kind=pointer", "seat1", 200),
+            inject_line("hook:pre-tool-use", "decision=role-allow capability=launch", "seat1", 300),
+        ];
+        assert_eq!(signal_of("pointer", Some(&lines)), None);
+    }
+
+    /// (c) 同じ席の tick の行が無い・file が無い周は合図なし。
+    #[test]
+    fn seat_exit_signal_is_none_without_tick_rows() {
+        let hook_only = [inject_line("hook:pre-tool-use", "decision=role-allow capability=launch", "seat1", 100)];
+        assert_eq!(signal_of("hook-only", Some(&hook_only)), None, "hook の行だけ");
+        assert_eq!(signal_of("empty", Some(&[])), None, "空");
+        assert_eq!(signal_of("missing", None), None, "file が無い");
     }
 }

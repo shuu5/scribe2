@@ -7978,6 +7978,38 @@ fn seat_exit_injects_exit_to_the_parked_seat_and_stamps() {
     fs::remove_dir_all(&place.dir).ok();
 }
 
+/// (a′) 退避の合図の後に席が Bash を撃ち、`inject.jsonl` の同じ席の最新行が hook の記録（`hook:pre-tool-use` の
+/// role-allow）になった周も、合図は隠れず終了の手を選ぶ（`s2-07l.242`・.226 の実地 2 回目）。base は最新行だけを読み
+/// 合図が見えない＝退避物の在る周は `/clear` の cycle に落ちる（RED）。
+#[test]
+fn seat_exit_signal_survives_hook_rows_and_sends_exit() {
+    let place = acct_place();
+    let name = "exithookrows";
+    let guard = exit_parked(&place, name);
+    let log = place.state.join("inject.jsonl");
+    let mut text = fs::read_to_string(&log).unwrap_or_default();
+    for what in ["decision=role-allow capability=launch", "decision=role-allow capability=read"] {
+        text.push_str(&format!(
+            r#"{{"schema":1,"who":"hook:pre-tool-use","what":"{what}","when":"PreToolUse","bytes":0,"tokens":null,"wall_ms":0,"seat":"{name}","ts":{}}}"#,
+            unix_now()
+        ));
+        text.push('\n');
+    }
+    fs::write(&log, text).ok();
+
+    let out = acct_tick(&place, name, None);
+
+    let line = stdout_of(&out);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stdout={line} stderr={}", stderr_of(&out));
+    for (key, want) in [("decision", "inject"), ("kind", "exit"), ("account", "a1:100")] {
+        assert_eq!(tick_token(&line, key).as_deref(), Some(want), "{key}: {line}");
+    }
+    assert_eq!(tick_token(&line, "cycle"), None, "/clear の cycle は回さない: {line}");
+    assert_eq!(exit_received(&place), "/exit\n", "席が受けた 1 行は /exit");
+    drop(guard);
+    fs::remove_dir_all(&place.dir).ok();
+}
+
 /// (b) 自席の未 consumed 退避物が無い周は `/exit` を送らない（FR28 と同じ極性）: 閾値以上の口座は (1) の退避の合図の側へ
 /// 落ち、席が受ける 1 行は退避の合図であって `/exit` ではない。cycle-stamp も打たない。
 #[test]
