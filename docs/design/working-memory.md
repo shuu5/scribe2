@@ -76,8 +76,9 @@ pub enum Resolution { Resolved, Unresolved, Unchecked }
 - 冪等: 対象なし かつ 現在 sid の `.consumed.md` が在る → rc 0 `already`。対象なし かつ 無い → rc 1 `wm-missing`。自席の未 consumed が 2 件以上 → rc 1 `wm-ambiguous`（消費しない）。**rename 先が既に在る → rc 1 `consumed-exists`（上書きしない・N1）**。他席の退避物は触らない。削除しない（move だけ・N1.2）。
 - 極性 FailClosed。`wm-ambiguous` / `consumed-exists` は move を止める判定なので `Guard::Consume`（InLoop / FailClosed）として極性一覧に載る。
 
-## 6. 開発 session 側の手順（skill の入口・本 repo の外・形だけ）
+## 6. 開発 session 側の手順（skill の入口・plugin 同梱の skill 2 本・`skills/`）
 
+- skill は plugin root の `skills/<name>/SKILL.md`（`skills/rebrief/` / `skills/ready-compaction/`・名前空間は `<NAME>:rebrief` / `<NAME>:ready-compaction`・憲法 C2.2）に置き、器の口と同じ repo で版を揃える。global 版は退役（別 repo の手番）。skill の本文は手順の散文であって規則ではない（憲法 N2）＝規則を述べる行は pointer を持つ。
 - 退避: skill は計画弧と新規命令行を file に書き（scratchpad）、`<NAME> seat externalize …` を撃つ。退避物を直接 Write / Edit しない。
 - 復元: skill は `<NAME> seat rebrief …` の DATA を読んで brief を組み（俯瞰 4 slot・3 値則は skill 側の手順）、提示の後に `<NAME> seat consume …` を撃つ。rc 2 の周は brief を出さない。
 - tick / cycle が注入する字面（`/ready-compaction` / `/rebrief`）は変えない。
