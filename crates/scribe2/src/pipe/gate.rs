@@ -70,6 +70,14 @@ const STDERR_LOG_FILE: &str = "verify.stderr.log";
 /// 採るのは、落ちた command が理由を最後に出すためである。
 const STDERR_TAIL_LINES: usize = 20;
 
+/// 包みが stdout の終端に出す行の見出し（[`confine`] の `script` が printf する固定形）。
+///
+/// record の `line=` は**この行を剥がした残り**の末尾 1 行である（設計 gate-cost.md §5.1）——包みの
+/// 測定行を「道具の判定行」として書くと、`peak_mb` と同じ数が別の名で 2 度残る。字面は
+/// [`confine::read_usage`] が読む見出しと同じで、in-file の歯が両者の一致を測る（ずれると
+/// 剥がせない＝終端行が `line` に化ける）。
+const USAGE_HEAD: &str = "confine-usage";
+
 /// gate の段の極性（[`Check`]）: 実装の後に測り、判定に届かなかった周は INCONCLUSIVE（≠ PASS・AC3）。
 pub const POLARITY: Polarity = Polarity {
     timing: Timing::PostHoc,
@@ -140,6 +148,11 @@ pub struct Step {
     pub slot_why: Option<admission::Unreadable>,
     /// 行の終端で scope を片付けた結果（record の `scope=`・包めなかった周と `Gone` は `None`）。
     pub scope: Option<Released>,
+    /// 行が stdout に出した末尾の非空 1 行（record の `line=`・逐語・設計 gate-cost.md §5.1）。
+    ///
+    /// **kind と rc を問わず**運ぶ（xtask の検出線の 1 行も flip-check の判定行も、rc 0 で通った周の
+    /// stdout にしか現れない）。無い周は `None`＝field を欠く（空文字を書かない・C10）。
+    pub line: Option<String>,
 }
 
 /// 撃つ process を持たない段（write-set 照合）の封じ込め欄。
@@ -159,6 +172,7 @@ fn unwrapped(cmd: String, rc: i32, stderr: String) -> Step {
         slot: None,
         slot_why: None,
         scope: None,
+        line: None,
     }
 }
 
@@ -289,6 +303,7 @@ fn fire(entry: &Fire<'_>, caps: Result<confine::Caps, RuleRead>, admit: Option<&
         slot,
         slot_why,
         scope: fired.scope,
+        line: fired.stdout_tail,
     }
 }
 
@@ -588,6 +603,10 @@ fn record_verify(entry: &Gate<'_>, worktree: &Path, base: &str) -> Result<Counte
 ///
 /// **schema は 1 のまま任意 field を足す**（古い読み手は未知の field を無視する・
 /// ADR-0017 §2.1 の event と同じ足し方・設計 gate-cost.md §5）。
+///
+/// `line=` は **kind と rc を問わず**、stdout の末尾 1 行が在った step 全部に書く（設計 §5.1・
+/// planner 裁定 2026-09-14）。検出線の行だけに絞ると flip-check の `base-retried=N`（rc 0 の周の
+/// stdout にしか出ない）が残らず、行の種類で分岐する形にもなる（C2）。
 pub fn step_record(number: u64, step: &Step) -> String {
     let mut fields = vec![
         ("schema", Value::Num(SCHEMA)),
@@ -610,6 +629,9 @@ pub fn step_record(number: u64, step: &Step) -> String {
     }
     if let Some(released) = step.scope {
         fields.push(("scope", Value::Str(released.as_str().to_owned())));
+    }
+    if let Some(line) = &step.line {
+        fields.push(("line", Value::Str(line.clone())));
     }
     json_lite::write_object(&fields)
 }
@@ -696,6 +718,11 @@ pub struct Fired {
     pub confinement: Confinement,
     /// 行の終端で scope を片付けた結果（record に書く周だけ `Some`・[`confine::release_scope`]）。
     pub scope: Option<Released>,
+    /// stdout の末尾の非空 1 行（包みの終端行を剥がした残り・逐語・無ければ `None`・[`last_line`]）。
+    ///
+    /// **判定には使わない**（判定は rc である）。record の `line=` へ運ぶだけの値で、起動できなかった
+    /// 周は stdout が器の外に無いので `None`。
+    pub stdout_tail: Option<String>,
 }
 
 impl Fired {
@@ -721,7 +748,7 @@ impl Fired {
 /// 出力の要る側と要らない側で `Command` を 2 本に割ると、gate が通した行と land が
 /// main で撃った行が別の実装になり、意味が静かにずれる。包む口も同じ理由で 1 本である。
 ///
-/// stdout を読むのは**包みの終端行のため**だけで、判定には使わない（判定は rc である）。
+/// stdout を読むのは**包みの終端行と record の `line=` のため**だけで、判定には使わない（判定は rc である）。
 pub fn run_line_captured(worktree: &Path, line: &str, wrap: &confine::Wrap<'_>) -> Fired {
     let (mut command, confinement) = confine::wrap_line(line, wrap);
     let spawned = command.current_dir(worktree).output();
@@ -731,12 +758,20 @@ pub fn run_line_captured(worktree: &Path, line: &str, wrap: &confine::Wrap<'_>) 
     let Ok(out) = spawned else {
         // 起動できなかった周は rc も stderr も**器の外に無い**。空を「何も言わなかった」
         // として返し、極性は従来どおり RED 側（-1）へ倒す。
-        return Fired { rc: -1, stderr: String::new(), usage: Usage::default(), confinement, scope };
+        return Fired {
+            rc: -1,
+            stderr: String::new(),
+            usage: Usage::default(),
+            confinement,
+            scope,
+            stdout_tail: None,
+        };
     };
-    // **包めなかった周の stdout は読まない**。素の行が出した `confine-usage` の字面を
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // **包めなかった周の stdout は測定として読まない**。素の行が出した `confine-usage` の字面を
     // 包みの測定として読むと、撃たれた行が自分の peak を名乗れてしまう。
     let usage = if confinement.confined() {
-        confine::read_usage(&String::from_utf8_lossy(&out.stdout))
+        confine::read_usage(&stdout)
     } else {
         Usage::default()
     };
@@ -746,6 +781,7 @@ pub fn run_line_captured(worktree: &Path, line: &str, wrap: &confine::Wrap<'_>) 
         usage,
         confinement,
         scope,
+        stdout_tail: last_line(&stdout),
     }
 }
 
@@ -754,6 +790,23 @@ fn tail_of(text: &str) -> String {
     let lines: Vec<&str> = text.lines().collect();
     let from = lines.len().saturating_sub(STDERR_TAIL_LINES);
     lines.get(from..).unwrap_or_default().join("\n")
+}
+
+/// stdout の**末尾の非空 1 行**（record の `line=`・設計 gate-cost.md §5.1・pure）。
+///
+/// 包みの終端行（[`USAGE_HEAD`] で始まる行）は**剥がしてから**取る＝道具の判定行が終端行の
+/// 直前に在る周（包めた周の常）にその行を返す。行の中身は逐語（CRLF の `\r` だけ `lines` が
+/// 区切りとして落とす）。空白だけの行は非空に数えない。非空の行が 1 つも無い周は `None`
+/// （空文字を書かない）。
+fn last_line(stdout: &str) -> Option<String> {
+    stdout
+        .lines()
+        .rev()
+        .find(|line| {
+            let head = line.trim_start();
+            !head.is_empty() && !head.starts_with(USAGE_HEAD)
+        })
+        .map(str::to_owned)
 }
 
 /// rc を JSON の非負整数へ写す。`sh` が signal で落ちた周（負）は 255 に畳む。
@@ -1050,10 +1103,41 @@ fn broken(reason: String) -> Outcome {
 
 #[cfg(test)]
 mod tests {
-    use super::{run_line_captured, substitute, write_verdict};
-    use crate::pipe::confine::{Limit, Reason, Wrap};
+    use super::{last_line, run_line_captured, substitute, write_verdict, USAGE_HEAD};
+    use crate::pipe::confine::{read_usage, Limit, Reason, Wrap};
     use crate::seat::RuleRead;
     use std::path::{Path, PathBuf};
+
+    /// record の `line=` は stdout の**末尾の非空 1 行**（設計 gate-cost.md §5.1）: 空 / 空白だけ → `None`・
+    /// 末尾改行は区切り・包みの終端行は剥がしてその直前の行・CRLF の `\r` は落ちる・空行を跨いで遡る。
+    #[test]
+    fn pipe_record_last_line_is_the_trailing_nonblank_line_before_the_usage_line() {
+        assert_eq!(last_line(""), None, "空は None（空文字を書かない）");
+        assert_eq!(last_line("\n  \n"), None, "空白だけの行は非空に数えない");
+        assert_eq!(last_line("one\ntwo\n"), Some("two".to_owned()), "末尾改行は区切り");
+        assert_eq!(last_line("one\ntwo"), Some("two".to_owned()), "末尾改行の無い周も同じ");
+        assert_eq!(
+            last_line("noise\nmutants-diff: total=3 caught=2\nconfine-usage peak_bytes=1048576 oom_kill=0\n"),
+            Some("mutants-diff: total=3 caught=2".to_owned()),
+            "包みの終端行を剥がした直前の行"
+        );
+        assert_eq!(
+            last_line("confine-usage peak_bytes=- oom_kill=0\n"),
+            None,
+            "終端行しか無い周は None（終端行を判定行に化けさせない）"
+        );
+        assert_eq!(last_line("one\r\ntwo\r\n"), Some("two".to_owned()), "CRLF の \\r は落ちる");
+        assert_eq!(last_line("last\n\n\n"), Some("last".to_owned()), "空行を跨いで遡る");
+        assert_eq!(last_line("  padded  \n"), Some("  padded  ".to_owned()), "行の中身は逐語（trim しない）");
+    }
+
+    /// ここで剥がす見出しは [`read_usage`] が読む見出しと**同じ字面**である（ずれると終端行が `line` に化ける）。
+    #[test]
+    fn pipe_record_usage_head_matches_the_confine_reader() {
+        let usage = read_usage(&format!("{USAGE_HEAD} peak_bytes=2097152 oom_kill=1\n"));
+        assert_eq!(usage.peak_mb, Some(2), "同じ見出しを包みの読み手が測定として読む");
+        assert_eq!(usage.oom_kill, 1);
+    }
 
     // flip-check: retroactive s2-07l.222
     /// 起動できなかった行は **rc -1**（RED 側の極性・`-` を消すと rc 1 に化ける）で、stderr は空・scope は撃たない。
@@ -1069,6 +1153,7 @@ mod tests {
         assert_eq!(fired.stderr, "", "器の外に stderr は無い");
         assert_eq!(fired.confinement.reason(), Some(Reason::NoRules), "包まずに撃った");
         assert_eq!(fired.scope, None, "scope を片付けない");
+        assert_eq!(fired.stdout_tail, None, "stdout も器の外に無い");
         let missing = run_line_captured(&root, "scribe2-mutant-no-such-command", &wrap);
         assert_eq!(missing.rc, 127, "PATH に無い command は sh が起動して 127（-1 ではない）");
         let _ = std::fs::remove_dir_all(&root);

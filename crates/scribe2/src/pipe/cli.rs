@@ -11,16 +11,17 @@ use super::approve::{Approve, RC_BLOCKED};
 use super::contract::Contract;
 use super::declaration::{self, Ceiling, Effective, CEILING_ROW};
 use super::follow::{self, Turn};
-use super::gate::{Gate, Limits, Verdict, RC_INCONCLUSIVE};
+use super::gate::{Check, Gate, Limits, Verdict, RC_INCONCLUSIVE};
 use super::land::{verdict_of, Land, Retire, REBASE_EMPTY};
 use super::ratelimit::ride_out_rate_limit;
 use super::refuse::{overlaps, Refuse};
 use super::stop::stop;
 use super::{
     contract_path, current, emit, last_stage_detail, question_of_run, run_dir, run_id,
-    runner_is_idle, vessel_path, worktree_path, Emit,
+    runner_is_idle, verify_log_path, vessel_path, worktree_path, Emit,
 };
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_OK, RC_REFUSED};
+use crate::fleet::json_lite;
 use crate::fleet::store::{LockPolicy, StoreError};
 use crate::fleet::{self, EventKind, Stage, State};
 use crate::hook::vessel;
@@ -871,7 +872,7 @@ fn repo_of(args: &[String]) -> Result<PathBuf, String> {
     vessel::repo_root(&cwd).ok_or("repo の root を解決できない".to_owned())
 }
 
-/// `pipe show`。
+/// `pipe show`。1 行目は便の段、2 行目以降は gate の検出線の判定行（[`detection_lines`]・在る周だけ）。
 fn show(args: &[String]) -> Outcome {
     let id = match need(args, "--run") {
         Ok(found) => found.to_owned(),
@@ -889,14 +890,37 @@ fn show(args: &[String]) -> Outcome {
         return refused(format!("run {id} が無い"));
     };
     let repo = run_repo(args, &state_dir, &id).unwrap_or_else(|_| PathBuf::from("."));
-    Outcome::ok_line(format!(
+    let mut lines = vec![format!(
         "run={} bead={} stage={} approved={} worktree={}",
         run.id,
         run.bead,
         run.stage.as_str(),
         run.approved,
         worktree_path(&repo, &id).display()
-    ))
+    )];
+    lines.extend(detection_lines(&verify_log_path(&state_dir, &id)));
+    Outcome::ok(lines)
+}
+
+/// gate の `verify.jsonl` の **検出線の record の `line=`** を逐語で並べる（設計 gate-cost.md §5.1・
+/// 値の読み手）。他の kind の `line`（flip-check の判定行など）は出さない＝record を読む。
+///
+/// 無い周は空: file が無い（gate 前）・record に `line` が無い（stdout の無い道具・省いた周）。
+/// 測り直しで gate を 2 周した便は record が追記されているので、周の数だけ並ぶ。
+fn detection_lines(path: &Path) -> Vec<String> {
+    let detection = Check::Detection.as_str();
+    std::fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|text| json_lite::parse_object(text.trim()).ok())
+        .filter(|pairs| field(pairs, "kind") == Some(detection))
+        .filter_map(|pairs| field(&pairs, "line").map(str::to_owned))
+        .collect()
+}
+
+/// flat object の文字列 field。
+fn field<'a>(pairs: &'a [(String, json_lite::Value)], key: &str) -> Option<&'a str> {
+    pairs.iter().find(|(found, _)| found == key).and_then(|(_, value)| value.as_str())
 }
 
 /// `pipe resume`。現在の段から続きの段だけを通す。

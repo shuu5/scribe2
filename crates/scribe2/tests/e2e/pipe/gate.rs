@@ -2080,3 +2080,172 @@ fn pipe_detection_intake_refuses_unfit_lines() {
     assert_eq!(ok.status.code(), Some(i32::from(RC_OK)), "検査を通る検出線は読める: {}", stderr_of(&ok));
     clean(&[&repo, &state]);
 }
+
+// ---- 判定行の記録（設計 gate-cost.md §5.1・`s2-07l.206`・接頭辞 `pipe_record_`）--------------------
+//
+// verify 行の stdout の末尾 1 行を record の `line=` に**逐語で**残す（kind と rc を問わず・判定には
+// 使わない）。母集団 = 4 record（write-set 1 + 共通 1 + 検出線 1 + 契約 n）。
+
+/// 検出線の stub が stdout に出す判定行（xtask `mutants-diff` の 1 行の形）。
+const DETECTION_LINE: &str = "mutants-diff: total=3 caught=2 missed=1 unviable=0 timeout=0 scope=x";
+
+/// 共通 verify の stub が **rc 0** で stdout に出す判定行（flip-check の形・`base-retried=` を持つ）。
+const COMMON_LINE: &str = "flip-check: RED-on-base ok tests_changed=1 base-retried=1";
+
+/// rc≠0 の契約 verify の stub が stdout の末尾に出す行（cmd にも stderr にも無い字面）。
+const RED_TAIL: &str = "red-tail-marker total=0";
+
+/// 判定行を出す stub 3 本を repo に置き、共通 verify と検出線をその stub で宣言して commit する。
+///
+/// 検出線の stub は判定行の**前に** noise を 1 行出す（末尾を取っていることを測る）。赤い stub は
+/// stderr にも 1 行出す（`line` が stderr でなく stdout から来ることを弁別する）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn commit_line_vessel(repo: &Path) {
+    for (name, body) in [
+        ("verify-line-detection.sh", format!("printf 'noise\\n{DETECTION_LINE}\\n'\nexit 0\n")),
+        ("verify-line-common.sh", format!("printf '{COMMON_LINE}\\n'\nexit 0\n")),
+        ("verify-line-red.sh", format!("printf '{RED_TAIL}\\n'\nprintf 'why\\n' >&2\nexit 1\n")),
+    ] {
+        fs::write(repo.join(name), body).expect("stub を書ける");
+    }
+    write_vessel(repo, VESSEL_ALLOWED, r#"["sh verify-line-common.sh"]"#);
+    let path = repo.join(".vessel.toml");
+    let body = fs::read_to_string(&path).expect("宣言を読める");
+    fs::write(&path, format!("{body}detection-verify = [\"sh verify-line-detection.sh\"]\n")).expect("宣言を書ける");
+    git(repo, &["add", "-f", ".vessel.toml", "verify-line-detection.sh", "verify-line-common.sh", "verify-line-red.sh"]);
+    git(repo, &["commit", "-q", "-m", "vessel-line"]);
+}
+
+/// 判定行の fixture で便を 1 本 gate まで通す（契約の verify 行は呼び手が選ぶ・rc は測らない）。
+fn line_gate(verify: &str) -> (PathBuf, PathBuf, String, Output) {
+    let (repo, state) = repo_with_state();
+    commit_line_vessel(&repo);
+    let contract = write_contract(&repo, &["verify"], &[&format!("verify = {verify}")]);
+    let id = implemented(&repo, &state, &contract);
+    let marker = state.join("lens-ran");
+    let out = gate_once(&repo, &state, &id, Some(&fake_lens(&marker, &lens_verdict("PASS"))));
+    (repo, state, id, out)
+}
+
+/// `verify.jsonl` の生の本文。
+fn verify_log(state: &Path, id: &str) -> String {
+    fs::read_to_string(vessel::pipe::verify_log_path(state, id)).unwrap_or_default()
+}
+
+/// (a) 検出線の record に `line=<xtask の 1 行>` が逐語で載る（noise の行ではなく**末尾**の行）。
+#[test]
+fn pipe_record_detection_line_is_recorded_verbatim() {
+    let (repo, state, id, out) = line_gate(r#"["sh verify-ok.sh"]"#);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "PASS: {}", stderr_of(&out));
+    let rows = verify_rows(&state, &id);
+    assert_eq!(kinds(&rows), ["write-set", "common", "detection", "contract"], "母集団 4 record: {rows:?}");
+    assert_eq!(row_value(&rows, 3, "kind"), "detection", "③ の record");
+    assert_eq!(row_value(&rows, 3, "rc"), "0", "道具は完走した");
+    assert_eq!(row_value(&rows, 3, "line"), DETECTION_LINE, "末尾の 1 行が逐語で載る: {rows:?}");
+    let log = verify_log(&state, &id);
+    assert!(log.contains(&format!("\"line\":\"{DETECTION_LINE}\"")), "生の record にも逐語: {log}");
+    assert!(!log.contains("\"line\":\"noise\""), "末尾でない行は載らない: {log}");
+    clean(&[&repo, &state]);
+}
+
+/// (b) 共通 verify の record にも `line=` が載る——**rc 0 でも載る**（本便の要点: flip-check の
+/// `base-retried=N` は rc 0 で通った周の stdout にしか現れない）。
+#[test]
+fn pipe_record_common_line_is_recorded_even_when_green() {
+    let (repo, state, id, out) = line_gate(r#"["sh verify-ok.sh"]"#);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "PASS: {}", stderr_of(&out));
+    let rows = verify_rows(&state, &id);
+    assert_eq!(row_value(&rows, 2, "kind"), "common", "② の record");
+    assert_eq!(row_value(&rows, 2, "rc"), "0", "緑の行である（赤い行だけに載るのではない）");
+    assert_eq!(row_value(&rows, 2, "line"), COMMON_LINE, "rc 0 の行にも逐語で載る: {rows:?}");
+    assert!(
+        !state.join("pipe").join(&id).join("verify.stderr.log").exists(),
+        "全行が緑なので診断 file は無い＝緑の判定行の置き場は record の `line` だけである"
+    );
+    clean(&[&repo, &state]);
+}
+
+/// (c) rc≠0 の行にも末尾 1 行が載る（stderr の log と重複してよい・`line` は stdout から来る）。
+#[test]
+fn pipe_record_red_line_keeps_its_stdout_tail() {
+    let (repo, state, id, out) = line_gate(r#"["sh verify-ok.sh", "sh verify-line-red.sh"]"#);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "FAIL の rc は 1: {}", stderr_of(&out));
+    assert!(stdout_of(&out).contains("verdict=FAIL"), "{}", stdout_of(&out));
+    let rows = verify_rows(&state, &id);
+    assert_eq!(rows.len(), 5, "母集団 = write-set 1 + 共通 1 + 検出線 1 + 契約 2: {rows:?}");
+    assert_eq!(row_value(&rows, 5, "cmd"), "sh verify-line-red.sh", "赤いのは契約の 2 本目");
+    assert_eq!(row_value(&rows, 5, "rc"), "1", "赤い行");
+    assert_eq!(row_value(&rows, 5, "line"), RED_TAIL, "赤い行にも stdout の末尾が載る: {rows:?}");
+    let tail = fs::read_to_string(state.join("pipe").join(&id).join("verify.stderr.log")).unwrap_or_default();
+    assert!(tail.contains("why"), "stderr の診断 file は従来どおり: {tail}");
+    assert!(!tail.contains(RED_TAIL), "stdout の行は stderr の診断 file には混ざらない: {tail}");
+    // 判定は stdout で変えない: 赤い行の `line` が在っても FAIL のまま・赤の本数は 1。
+    assert_eq!(value_of(&verdict_pairs(&state, &id), "verify_red"), "1", "赤は 1 本");
+    clean(&[&repo, &state]);
+}
+
+/// (d) stdout の無い行は `line` を**欠く**（`"line":` 不在・空文字を書かない・C10）。
+#[test]
+fn pipe_record_silent_line_has_no_line_field() {
+    let (repo, state, id, out) = line_gate(r#"["sh verify-ok.sh"]"#);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "PASS: {}", stderr_of(&out));
+    let rows = verify_rows(&state, &id);
+    assert_eq!(row_value(&rows, 4, "cmd"), "sh verify-ok.sh", "④ は何も出さない行");
+    assert!(!row_has(&rows, 4, "line"), "stdout の無い行は `line` を欠く: {:?}", rows.get(3));
+    assert!(!row_has(&rows, 1, "line"), "撃つ process を持たない段①も欠く: {:?}", rows.first());
+    let log = verify_log(&state, &id);
+    assert!(!log.contains("\"line\":\"\""), "空文字は書かない: {log}");
+    assert_eq!(
+        log.matches("\"line\":").count(),
+        2,
+        "`line` を持つのは stdout を出した ②③ の 2 record だけ（母集団 {} record）: {log}",
+        rows.len()
+    );
+    clean(&[&repo, &state]);
+}
+
+/// (e) land の main 実測で ③ を省いた周は `verify-main.jsonl` の detection の record に `line` が無い
+/// （撃っていない行の判定行を書かない）。同じ関数で書く ② の record には載る＝省いた段だけが欠ける。
+#[test]
+fn pipe_record_land_skipped_detection_has_no_line() {
+    let (repo, state, id, out) = line_gate(r#"["sh verify-ok.sh"]"#);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "PASS: {}", stderr_of(&out));
+    assert_eq!(row_value(&verify_rows(&state, &id), 3, "line"), DETECTION_LINE, "gate の周には載っている");
+    let landed = land_once(&repo, &state, &id);
+    assert_eq!(landed.status.code(), Some(i32::from(RC_OK)), "land: {}", stderr_of(&landed));
+    let rows = main_rows(&state, &id);
+    assert_eq!(kinds(&rows), ["write-set", "common", "detection", "contract"], "main 実測の母集団: {rows:?}");
+    assert_eq!(row_value(&rows, 3, "skipped"), "detection", "木が同じ周は ③ を省く");
+    assert!(!row_has(&rows, 3, "line"), "省いた段に `line` は無い: {:?}", rows.get(2));
+    assert_eq!(row_value(&rows, 2, "line"), COMMON_LINE, "撃った ② には main 実測でも載る（同じ 1 本で書く）");
+    clean(&[&repo, &state]);
+}
+
+/// (f) `pipe show --run` は 1 行目の段に続けて **検出線の `line` だけ**を逐語で出す（他の kind の
+/// `line` は出さない・gate 前は 1 行目だけ）。外形は snapshot（置き場は親の `snapshots/`）。
+#[test]
+fn pipe_record_show_external_form() {
+    let (repo, state) = repo_with_state();
+    commit_line_vessel(&repo);
+    let contract = write_contract(&repo, &[], &[]);
+    let id = implemented(&repo, &state, &contract);
+    let before = show_line(&repo, &state, &id);
+    assert_eq!(before.lines().count(), 1, "gate 前は段の 1 行だけ: {before}");
+    let marker = state.join("lens-ran");
+    let out = gate_once(&repo, &state, &id, Some(&fake_lens(&marker, &lens_verdict("PASS"))));
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "PASS: {}", stderr_of(&out));
+    let shown = show_line(&repo, &state, &id);
+    let mut lines = shown.lines();
+    let first = lines.next().unwrap_or_default();
+    assert!(first.starts_with(&format!("run={id} ")) && first.contains("stage=Gated"), "1 行目は便の段: {first}");
+    let rest: Vec<&str> = lines.collect();
+    assert!(!rest.iter().any(|line| line.contains("flip-check")), "他の kind の `line` は出さない: {rest:?}");
+    let form = rest.join("\n");
+    let mut settings = insta::Settings::clone_current();
+    settings.set_snapshot_path("../snapshots");
+    settings.bind(|| insta::assert_snapshot!(form));
+    clean(&[&repo, &state]);
+}
