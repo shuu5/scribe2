@@ -29,6 +29,7 @@
 ## 4. 別口座での途中再開（ADR-0020 §2.3・FR37）
 
 - `pipe run` / `pipe resume` が `RateLimited` の段を見た周: 計測 → §3 の便用の規則で口座を選ぶ → 同じ worktree・同じ契約・同じ base で runner を起こし直す（`--account-dir <state_dir>/accounts/<label>`・ADR-0017 §2.3・FR5 の口のまま）。起こし直しの経路は [pipeline-conflict.md](./pipeline-conflict.md) §3 の `spawn_turn` と同じ 1 本（C6 の 1 つの spawn 口）。
+- **初回の起動も同じ選定を通す**（`s2-07l.285`・便が planner 席の登録 row の口座で起きた 2026-09-14 の型＝操作役の launcher が席の口座の除外を手書きの list で運び、席の立て直しに追随しなかった）: `pipe run` / `pipe resume` が runner を**初めて**起こす周（`Intake` / 承認後の `Blocked` / 衝突の起こし直し）も、上と同じ順（計測 → §3 の便用の規則〔除外 = 登録 row の口座〕→ `spawn_turn`）で口座を選び、`Spawned detail=base:<sha>,account:<label>` を記帳して `--account-dir` を渡す。候補なしの周の待ちも上と同じ（`Completion::AccountFree`）。**manifest に口座の宣言が 1 つも無い周だけ**親の環境を継承する（`Spawned detail=base:<sha>`・従来の形＝口座を持たない toy repo の歯と、口座を器に預けていない host）。操作役に口座を選ばせる口（`--account`）は持たない（規則の写しを器の外に作らない・N2）。
 - **prompt**: 契約（再読）+「回答」節（FR32・Questioned の再開と同じ）+「**途中再開**」節（base からの commit の一覧・止まった時刻・`headless/runner.txt` に節の雛形を足す・順序は 契約 → 回答 → 途中再開）。
 - **候補なしの周**: `Completion::AccountFree { reset_at, state_dir }`（variant 1 つ・運ぶ値は pid でなく最も早い reset 時刻と実測行の置き場〔`is_met` が最新の実測行を読んで §3 を再評価する・`SlotFree` が `slots_dir` を運ぶのと同型〕＝現物の完了 enum の `pid()` は 0 を返す形）を足して唯一の wait 実装を通す。deadline は reset 時刻から計算した値（rules 行ではない・縮退を持たない）。Timeout（C11.3 の Result）を受けた周は計測して選び直し、候補なしなら次の reset 時刻で待ち直す。起こし直しの回数に上限を持たない（窓を跨いで続く）。待ちの間も便は live。終端手段は `pipe stop --run` だけ（器は自動では終端しない）。
 - **記帳**: 再開のたびに `RunStage stage=Spawned detail=account:<label>,resume:rate-limit`（既存の段の event・detail で弁別）。人由来の event は 0（FR22）。
