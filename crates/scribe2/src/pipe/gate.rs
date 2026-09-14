@@ -1050,8 +1050,29 @@ fn broken(reason: String) -> Outcome {
 
 #[cfg(test)]
 mod tests {
-    use super::{substitute, write_verdict};
+    use super::{run_line_captured, substitute, write_verdict};
+    use crate::pipe::confine::{Limit, Reason, Wrap};
+    use crate::seat::RuleRead;
     use std::path::{Path, PathBuf};
+
+    // flip-check: retroactive s2-07l.222
+    /// 起動できなかった行は **rc -1**（RED 側の極性・`-` を消すと rc 1 に化ける）で、stderr は空・scope は撃たない。
+    /// 起動を Err にする fixture は**存在しない cwd**である——PATH に無い command 名の行は `sh -c` が起動して
+    /// rc 127 を返す（spawn は Err にならない・下の対で pin する）。包めない `Wrap`（rules の読めない周）で撃つ
+    /// ので `systemd-run` も `systemctl` も起こさない。
+    #[test]
+    fn mutant_in_pipe_run_line_captured_unspawnable_line_is_minus_one() {
+        let root = scratch("unspawnable");
+        let wrap = Wrap { unit: "scribe2-mutant-unit", limit: Limit::HostReserve, caps: Err(RuleRead::Missing) };
+        let fired = run_line_captured(&root.join("absent-worktree"), "true", &wrap);
+        assert_eq!(fired.rc, -1, "起動できない周は -1");
+        assert_eq!(fired.stderr, "", "器の外に stderr は無い");
+        assert_eq!(fired.confinement.reason(), Some(Reason::NoRules), "包まずに撃った");
+        assert_eq!(fired.scope, None, "scope を片付けない");
+        let missing = run_line_captured(&root, "scribe2-mutant-no-such-command", &wrap);
+        assert_eq!(missing.rc, 127, "PATH に無い command は sh が起動して 127（-1 ではない）");
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     /// 歯ごとの空の tmp dir（in-file の歯の置き場・env を読まないのは器の本体の規律〔C2.2〕）。
     fn scratch(name: &str) -> PathBuf {

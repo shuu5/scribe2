@@ -463,7 +463,28 @@ fn write_ticket(dir: &Path, run: &str, jobs: u64) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::{capacity, judge, now_ms, slot_detail, ticket_started_ms, Free, Judged, Sizes, Slot, Ticket};
+    use super::{capacity, judge, now_ms, slot_detail, ticket_started_ms, Free, Judged, Sizes, Slot, Ticket, Unreadable};
+
+    // flip-check: retroactive s2-07l.222
+    /// `Unreadable::as_str` は record の `slot_why=` の字面で、variant ごとに固定である（空や同じ字面に潰すと
+    /// 測れなかった理由を record から弁別できない）。
+    #[test]
+    fn mutant_in_pipe_admission_unreadable_names_are_fixed() {
+        assert_eq!(Unreadable::SlotsDir.as_str(), "slots-dir");
+        assert_eq!(Unreadable::Lock.as_str(), "lock");
+        assert_eq!(Unreadable::Meminfo.as_str(), "meminfo");
+    }
+
+    // flip-check: retroactive s2-07l.222
+    /// `now_ms` は epoch の ms（0 / 1 に潰さない）で、続けて呼ぶと減らない。下限は repo の最初の commit より
+    /// 前の固定時刻（2020-01-01T00:00:00Z = 1577836800000 ms）で、壁時計の境界に等号を置かない。
+    #[test]
+    fn mutant_in_pipe_admission_now_ms_is_epoch_millis() {
+        let first = now_ms();
+        let second = now_ms();
+        assert!(first > 1_577_836_800_000, "epoch の ms: {first}");
+        assert!(second >= first, "減らない: {first} → {second}");
+    }
 
     /// 歯の fixture の 2 線（tracked manifest の値を写さない）。
     const SIZES: Sizes = Sizes { job_mb: 1000, reserve_mb: 2000 };

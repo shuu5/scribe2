@@ -398,3 +398,134 @@ pub fn emit(state_dir: &Path, entry: &Emit<'_>, policy: LockPolicy) -> Result<()
 pub fn current(state_dir: &Path) -> Result<State, Vec<StoreError>> {
     store::read_all(state_dir).map(|events| replay(&events))
 }
+
+/// in-file の歯が共有する置き場の fixture（event の並びを固定 ts で積む・env を読まない〔C2.2〕）。
+#[cfg(test)]
+pub(crate) mod fixture {
+    use super::contract::Contract;
+    use crate::fleet::store::{self, LockPolicy};
+    use crate::fleet::{Event, EventKind, Stage, SCHEMA};
+    use std::path::{Path, PathBuf};
+
+    /// 契約（write-set と 3 クラスの自己申告だけを呼び手が選ぶ）。
+    pub(crate) fn contract(write_set: &[&str], classes: &[&str]) -> Contract {
+        let owned = |items: &[&str]| items.iter().map(|item| (*item).to_owned()).collect();
+        Contract {
+            goal: "g".to_owned(),
+            done: "d".to_owned(),
+            size: "S".to_owned(),
+            owner: "s2-mutant".to_owned(),
+            disposition: "A-now".to_owned(),
+            write_set: owned(write_set),
+            verify: Vec::new(),
+            req: Vec::new(),
+            design: "docs/design/pipeline.md".to_owned(),
+            classes: owned(classes),
+            opens: Vec::new(),
+        }
+    }
+
+    /// 歯ごとの空の tmp dir。
+    pub(crate) fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("pipe-mutant-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::create_dir_all(&dir);
+        dir
+    }
+
+    /// log の 1 行（固定 ts・段と席と pid と detail は呼び手が選ぶ）。
+    pub(crate) fn event(run: &str, kind: EventKind, stage: Option<Stage>, seat: Option<&str>, detail: Option<&str>) -> Event {
+        Event {
+            schema: SCHEMA,
+            ts: "2026-09-14T00:00:00Z".to_owned(),
+            kind,
+            run: run.to_owned(),
+            bead: "b".to_owned(),
+            host: "h".to_owned(),
+            actor: kind.default_actor().to_owned(),
+            stage,
+            seat: seat.map(str::to_owned),
+            pid: None,
+            detail: detail.map(str::to_owned),
+            allowance: None,
+            registration: None,
+        }
+    }
+
+    /// 着地待ちの列に入る便を 1 本置く（`Gated` の event・repo の写し・worktree の dir・判定）。
+    pub(crate) fn gated_run(state_dir: &Path, repo: &Path, run: &str, verdict: &str) {
+        append_all(state_dir, &[event(run, EventKind::RunStage, Some(Stage::Gated), None, None)]);
+        let _ = std::fs::create_dir_all(super::run_dir(state_dir, run));
+        let _ = std::fs::write(super::repo_path(state_dir, run), format!("{}\n", repo.display()));
+        let _ = std::fs::create_dir_all(super::worktree_path(repo, run));
+        let _ = std::fs::write(super::verdict_path(state_dir, run), format!("{{\"verdict\":\"{verdict}\"}}\n"));
+    }
+
+    /// 置き場へ event を順に積む（書けない周は読み手の assert が落ちる）。
+    pub(crate) fn append_all(state_dir: &Path, events: &[Event]) {
+        let Ok(policy) = LockPolicy::embedded() else {
+            return;
+        };
+        for found in events {
+            let _ = store::append(state_dir, found, policy);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fixture::{append_all, event, scratch};
+    use super::{last_stage_detail, runner_is_idle};
+    use crate::fleet::{EventKind, Stage};
+
+    // flip-check: retroactive s2-07l.222
+    /// `runner_is_idle` の 4 分岐を片側ずつ撃つ: 席の event が無い便は `true`（`Some(false)` 固定で落ちる）・
+    /// 起こしただけの便は `false`（`Some(true)` 固定で落ちる）・起こして止めた便は `true`／止めて起こし直した
+    /// 便は `false`（`>` を `==` / `<` にすると片側が落ちる）。他の便の event は数えない（run の `==` を `!=` に
+    /// すると他の便の席を自分の席と読む）。起こしと止めの kind を取り違える変異（`==` → `!=`）は、2 件の並びで
+    /// 位置が入れ替わって落ちる。`>` → `>=` は 1 行が 1 kind ゆえ 2 つの位置が等しくならず equivalent。
+    #[test]
+    fn mutant_in_pipe_runner_is_idle_pins_each_branch() {
+        let root = scratch("runner-idle");
+        let spawned = |run: &str| event(run, EventKind::SeatSpawned, None, Some("seat-1"), None);
+        let stopped = |run: &str| event(run, EventKind::SeatStopped, None, Some("seat-1"), None);
+
+        let none = root.join("none");
+        append_all(&none, &[spawned("other")]);
+        assert_eq!(runner_is_idle(&none, "me"), Some(true), "席の event が無い便（他の便の席は数えない）");
+
+        let up = root.join("up");
+        append_all(&up, &[spawned("me"), stopped("other")]);
+        assert_eq!(runner_is_idle(&up, "me"), Some(false), "起こしただけ（他の便の止めは数えない）");
+
+        let down = root.join("down");
+        append_all(&down, &[spawned("me"), stopped("me")]);
+        assert_eq!(runner_is_idle(&down, "me"), Some(true), "起こした後に止めた");
+
+        let again = root.join("again");
+        append_all(&again, &[stopped("me"), spawned("me")]);
+        assert_eq!(runner_is_idle(&again, "me"), Some(false), "止めた後に起こし直した");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // flip-check: retroactive s2-07l.222
+    /// `last_stage_detail` の `&&` を片側ずつ撃つ: 読むのは**自分の便の** `RunStage` の最後の detail で、後から
+    /// 積まれた他の便の `RunStage`（run の条件を外すと読む）と自分の便の段を持たない event（kind の条件を
+    /// 外す・`&&` を `||` にすると読む）の detail を読まない。`RunStage` を 1 件も持たない便は `None`。
+    #[test]
+    fn mutant_in_pipe_last_stage_detail_needs_both_run_and_kind() {
+        let root = scratch("last-stage");
+        append_all(
+            &root,
+            &[
+                event("me", EventKind::RunStage, Some(Stage::Failed), None, Some("own-stage")),
+                event("other", EventKind::RunStage, Some(Stage::Failed), None, Some("other-stage")),
+                event("me", EventKind::SeatStopped, None, Some("seat-1"), Some("own-seat")),
+                event("seatless", EventKind::SeatStopped, None, Some("seat-2"), Some("no-stage")),
+            ],
+        );
+        assert_eq!(last_stage_detail(&root, "me"), Some("own-stage".to_owned()));
+        assert_eq!(last_stage_detail(&root, "seatless"), None, "RunStage を持たない便");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}

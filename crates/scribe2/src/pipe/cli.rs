@@ -1162,6 +1162,16 @@ fn unstoppable(line: String, left: usize) -> Outcome {
 
 /// `pipe stop --all`。生きている席を止める。**冪等**（対象なしは rc 0）。
 fn stop_all(args: &[String], manifest: &Manifest, policy: LockPolicy) -> Outcome {
+    stop_all_with(args, manifest, policy, &terminate)
+}
+
+/// [`stop_all`] の本体。席を止める実装（`terminate`）を受ける＝in-file の歯は実 signal を撃たない stub を渡す。
+fn stop_all_with(
+    args: &[String],
+    manifest: &Manifest,
+    policy: LockPolicy,
+    terminate: &dyn Fn(u64, u64) -> bool,
+) -> Outcome {
     if !args.iter().any(|arg| arg == "--all") {
         return refused("--all が要る".to_owned());
     }
@@ -1356,7 +1366,76 @@ fn broken(reason: String) -> Outcome {
 
 #[cfg(test)]
 mod tests {
-    use super::{stop_plan, GroupId, StopPlan};
+    use super::{stop_all_with, stop_plan, GroupId, StopPlan};
+    use crate::cli_outcome::{RC_OK, RC_REFUSED};
+    use crate::fleet::store::{self, LockPolicy};
+    use crate::fleet::{Event, EventKind};
+    use crate::pipe::fixture::{append_all, event, scratch};
+    use crate::rules::manifest::Manifest;
+    use std::path::Path;
+
+    /// 便 `run` の席 `seat` を pid 付きで起こした event（**実 pid ではない**・stub の kill だけが読む）。
+    fn seat_up(run: &str, seat: &str, pid: u64) -> Event {
+        Event { pid: Some(pid), ..event(run, EventKind::SeatSpawned, None, Some(seat), None) }
+    }
+
+    /// 置き場の `kind` の event を持つ便（物理順）。
+    fn runs_of(state: &Path, kind: EventKind) -> Vec<String> {
+        store::read_all(state)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|found| found.kind == kind)
+            .map(|found| found.run)
+            .collect()
+    }
+
+    /// `stop --all` を stub の kill で撃つ（`stoppable` に在る pid だけが止まる）。
+    fn stop_with_stub(state: &Path, stoppable: &'static [u64]) -> crate::cli_outcome::Outcome {
+        let args: Vec<String> = ["stop", "--all", "--state-dir"]
+            .iter()
+            .map(|arg| (*arg).to_owned())
+            .chain(std::iter::once(state.display().to_string()))
+            .collect();
+        let Ok(manifest) = Manifest::embedded() else {
+            return crate::cli_outcome::Outcome::failed_line(2, "埋め込みの manifest を読めない".to_owned());
+        };
+        let Ok(policy) = LockPolicy::from_rules(&manifest) else {
+            return crate::cli_outcome::Outcome::failed_line(2, "lock 規則を読めない".to_owned());
+        };
+        stop_all_with(&args, &manifest, policy, &|pid, _grace| stoppable.contains(&pid))
+    }
+
+    // flip-check: retroactive s2-07l.222
+    /// (a) 止め切れた便が複数在る周は**全便**に `RunStopped` を 1 件ずつ書く（同じ便の 2 席目で 2 件目を書かない・
+    /// 記帳済みの判定 `!` を消すと 1 件も書かれない）。席ごとに `SeatStopped` を書き、rc 0・`stopped=` は止めた数。
+    /// 実 signal は撃たない（kill は stub・pid は `/proc` と無関係な字面）。
+    #[test]
+    fn mutant_in_pipe_stop_all_writes_run_stopped_to_every_stopped_run() {
+        let state = scratch("stop-all-every");
+        append_all(&state, &[seat_up("run-a", "seat-a1", 9_001), seat_up("run-a", "seat-a2", 9_002), seat_up("run-b", "seat-b", 9_003)]);
+        let out = stop_with_stub(&state, &[9_001, 9_002, 9_003]);
+        assert_eq!(out.rc, RC_OK, "全席を止めた: {:?}", out.err);
+        assert_eq!(out.out, vec!["stop: seats=3 stopped=3".to_owned()]);
+        assert_eq!(runs_of(&state, EventKind::SeatStopped), vec!["run-a", "run-a", "run-b"], "止めた席ごとに 1 件");
+        assert_eq!(runs_of(&state, EventKind::RunStopped), vec!["run-a", "run-b"], "止めた便の全便に 1 件ずつ");
+        let _ = std::fs::remove_dir_all(&state);
+    }
+
+    // flip-check: retroactive s2-07l.222
+    /// (b) 止め切れなかった席を持つ便には `RunStopped` を書かず、止め切れた便にだけ書く（filter の `!` を消すと
+    /// 逆の便に書く）。止められなかった席には `SeatStopped` も書かず、rc 1・`stopped=` は止めた数だけ
+    /// （`+=` を `*=` にすると 0 のまま・`==` を `!=` にすると rc が反転する）。
+    #[test]
+    fn mutant_in_pipe_stop_all_skips_runs_with_an_unstopped_seat() {
+        let state = scratch("stop-all-partial");
+        append_all(&state, &[seat_up("run-a", "seat-a1", 9_101), seat_up("run-a", "seat-a2", 9_102), seat_up("run-b", "seat-b", 9_103)]);
+        let out = stop_with_stub(&state, &[9_101, 9_103]);
+        assert_eq!(out.rc, RC_REFUSED, "止め切れなかった席が残る: {:?}", out.err);
+        assert_eq!(out.out, vec!["stop: seats=3 stopped=2".to_owned()]);
+        assert_eq!(runs_of(&state, EventKind::SeatStopped), vec!["run-a", "run-b"], "止めた席にだけ書く");
+        assert_eq!(runs_of(&state, EventKind::RunStopped), vec!["run-b"], "止め切れた便にだけ書く");
+        let _ = std::fs::remove_dir_all(&state);
+    }
 
     /// pid 0 / 1 は単一 pid 宛て・2 以上は group 宛て（実 signal を送らずに止め方の選択を pin する）。
     #[test]

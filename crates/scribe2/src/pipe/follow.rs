@@ -427,7 +427,95 @@ fn broken(reason: String) -> Outcome {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_conflict, FollowCheck, EXHAUSTED};
+    use super::{is_conflict, spawn_turn, FollowCheck, Turn, DIRTY, EXHAUSTED};
+    use crate::cli_outcome::{RC_OK, RC_REFUSED};
+    use crate::fleet::store::{self, LockPolicy};
+    use crate::fleet::Stage;
+    use crate::pipe::approve::RC_BLOCKED;
+    use crate::pipe::fixture::{contract, scratch};
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+
+    /// git を 1 回撃つ（失敗は読み手の assert が落とす）。
+    fn git(dir: &Path, args: &[&str]) {
+        let _ = Command::new("git").arg("-C").arg(dir).args(args).output();
+    }
+
+    /// commit を 1 つ持つ tmp の git repo（`<root>/repo`）と置き場（`<root>/state`）。
+    fn repo_with_state(name: &str) -> (PathBuf, PathBuf, PathBuf) {
+        let root = scratch(name);
+        let (repo, state) = (root.join("repo"), root.join("state"));
+        let _ = std::fs::create_dir_all(&repo);
+        let _ = std::fs::create_dir_all(&state);
+        git(&repo, &["init", "-q", "-b", "main"]);
+        git(&repo, &["config", "user.name", "mutant"]);
+        git(&repo, &["config", "user.email", "mutant@example.invalid"]);
+        git(&repo, &["commit", "-q", "--allow-empty", "-m", "seed"]);
+        (root, repo, state)
+    }
+
+    /// 置き場の `RunStage` の段と detail（物理順）。
+    fn stages(state: &Path, run: &str) -> Vec<(Option<Stage>, Option<String>)> {
+        store::read_all(state)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|event| event.run == run && event.stage.is_some())
+            .map(|event| (event.stage, event.detail))
+            .collect()
+    }
+
+    // flip-check: retroactive s2-07l.222
+    /// `spawn_turn` の 2 つの `!=` を、spawn の段が turn の後始末の段と一致する周と違う周の 2 fixture で撃つ。
+    ///
+    /// 1. spawn が起こさずに断った周（承認の関門で `Blocked`・rc 3）は、その rc のまま返り後始末を撃たない
+    ///    （1 つ目の `!=` を `==` にすると、無い worktree を「rebase の途中」と読んで `Failed rebase-dirty` を足す）。
+    /// 2. spawn は通った（`Implemented`・rc 0）が runner が木を rebase の途中で残した周は、後始末の rc 1 と
+    ///    `Failed rebase-dirty` が勝つ（2 つ目の `!=` を `==` にすると rc 0 のまま返る・1 つ目を `==` にすると
+    ///    後始末を撃たずに返る）。
+    #[test]
+    fn mutant_in_pipe_spawn_turn_returns_spawn_or_settle_rc() {
+        let (root, repo, state) = repo_with_state("spawn-turn");
+        let policy = LockPolicy::embedded().expect("埋め込みの lock 規則を読める");
+
+        let gated = contract(&["src/lib.rs"], &["C9"]);
+        let blocked = spawn_turn(
+            &Turn {
+                run: "blocked",
+                bead: "s2-mutant",
+                repo: &repo,
+                state_dir: &state,
+                contract: &gated,
+                runner: Some("true"),
+                approved: false,
+                policy,
+            },
+            None,
+        );
+        assert_eq!(blocked.rc, RC_BLOCKED, "承認の関門の rc のまま: {:?}", blocked.err);
+        assert_eq!(stages(&state, "blocked"), vec![(Some(Stage::Blocked), Some("C9".to_owned()))], "後始末の段を足さない");
+
+        let open = contract(&["src/lib.rs"], &[]);
+        let runner = "git commit -q --allow-empty -m runner && mkdir \"$(git rev-parse --absolute-git-dir)/rebase-merge\"";
+        let dirty = spawn_turn(
+            &Turn {
+                run: "dirty",
+                bead: "s2-mutant",
+                repo: &repo,
+                state_dir: &state,
+                contract: &open,
+                runner: Some(runner),
+                approved: false,
+                policy,
+            },
+            None,
+        );
+        assert_ne!(dirty.rc, RC_OK, "後始末の rc が勝つ: {:?}", dirty.err);
+        assert_eq!(dirty.rc, RC_REFUSED, "rebase の途中は rc 1: {:?}", dirty.err);
+        let trail = stages(&state, "dirty");
+        assert!(trail.contains(&(Some(Stage::Implemented), None)), "spawn は Implemented で終わった: {trail:?}");
+        assert_eq!(trail.last(), Some(&(Some(Stage::Failed), Some(DIRTY.to_owned()))), "後始末の終端: {trail:?}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     /// 上限 N は「**最大 N 回起こし直す**」である（N 回目までは `Retry`・N 回目からは
     /// `Exhausted`）。回数を読めない周は `Unreadable` で、**0 回に読み替えない**。

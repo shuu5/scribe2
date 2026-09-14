@@ -1207,12 +1207,82 @@ fn broken(reason: String) -> Outcome {
 #[cfg(test)]
 mod tests {
     use super::{
-        after_wake, first_gated_at, squash_message, subject_of, turn_in, Next, Order, Queued, Turn, SUBJECT_CHARS,
+        after_wake, await_turn, first_gated_at, next_number, skip_record, squash_message, subject_of, turn_in, Land,
+        Next, Order, Queued, Turn, SUBJECT_CHARS,
     };
+    use crate::fleet::store::LockPolicy;
     use crate::fleet::{wait, Completion, Event, EventKind, Stage};
-    use crate::pipe::gate::Verdict;
-    use std::path::PathBuf;
+    use crate::pipe::contract::Contract;
+    use crate::pipe::fixture::{contract, gated_run, scratch};
+    use crate::pipe::gate::{Limits, Verdict};
+    use crate::pipe::verdict_path;
+    use std::path::{Path, PathBuf};
     use std::time::Duration;
+
+    // flip-check: retroactive s2-07l.222
+    /// `next_number` は record 数の次（1 始まり）で、検出線を省いた record を挟む 2 周分でも単調に増える。
+    #[test]
+    fn mutant_in_pipe_land_next_number_increases_across_two_rounds() {
+        assert_eq!((0..4).map(next_number).collect::<Vec<u64>>(), vec![1, 2, 3, 4], "1 始まりの通し番号");
+        for (len, n) in [(0, 1), (3, 4)] {
+            assert!(skip_record(len, "tree").contains(&format!("\"n\":{n}")), "{}", skip_record(len, "tree"));
+        }
+    }
+
+    // flip-check: retroactive s2-07l.222
+    /// `turn_in` の同時刻 3 便は id の辞書順: 最小は `First`・他は前の最小の id を名指す（`<` → `<=` は id が一意で equivalent）。
+    #[test]
+    fn mutant_in_pipe_land_turn_in_breaks_the_same_ts_by_run_id() {
+        let pass = |run: &str| queued(run, Stage::Gated, Some(Verdict::Pass), EARLY, true);
+        let queue = [pass("b"), pass("a"), pass("c")];
+        assert_eq!(turn_in(Some(&queue), "a"), Turn::First, "最小の id は待たない");
+        assert_eq!(turn_in(Some(&queue), "b"), Turn::After("a".to_owned()), "中の id は最小の id を待つ");
+        assert_eq!(turn_in(Some(&queue), "c"), Turn::After("a".to_owned()), "前の 2 本のうち最小の id");
+    }
+
+    /// 便 `b-me` の待ちの材料（`land_wait_s` だけを呼び手が選ぶ・待ちは契約と線を読まない）。
+    fn land<'a>(state: &'a Path, repo: &'a Path, contract: &'a Contract, policy: LockPolicy, wait_s: u64) -> Land<'a> {
+        let limits =
+            Limits { lens_count: 0, token_cap: 0, mutants_jobs: 0, job_memory_mb: 0, reserve_memory_mb: 0, slot_wait_s: 0 };
+        Land { run: "b-me", bead: "s2-mutant", repo, state_dir: state, contract, pr_cmd: None, lens: None, limits, runner: None, retries: 0, land_wait_s: wait_s, approved: false, policy }
+    }
+
+    // flip-check: retroactive s2-07l.222
+    /// `await_turn` の残り deadline 0 は待ち直さず `Degraded`（前の便が列に居る）・前が空なら `First`・列を導けない
+    /// なら `Unmeasured`（負の deadline は u64 で持てず `saturating_sub` で同じ 0）。deadline 0 では `== Err(Timeout)` の
+    /// 反転・guard の固定・`>=` → `<` も即 Timeout で同じ `Degraded` に着く＝`==` の反転は下の起こされる歯が撃つ。
+    #[test]
+    fn mutant_in_pipe_land_await_turn_with_zero_deadline_degrades() {
+        let root = scratch("await-zero");
+        let (state, repo, absent) = (root.join("state"), root.join("repo"), root.join("absent"));
+        let (policy, contract) = (LockPolicy::embedded().expect("埋め込みの lock 規則を読める"), contract(&[], &[]));
+        ["a-front", "b-me"].iter().for_each(|run| gated_run(&state, &repo, run, "PASS"));
+        assert_eq!(await_turn(&land(&state, &repo, &contract, policy, 0)), Order::Degraded, "前の便が居て上限 0");
+        gated_run(&state, &repo, "a-front", "FAIL");
+        assert_eq!(await_turn(&land(&state, &repo, &contract, policy, 0)), Order::First, "前が空なら待たない");
+        assert_eq!(await_turn(&land(&absent, &repo, &contract, policy, 0)), Order::Unmeasured, "列を導けない");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // flip-check: retroactive s2-07l.222
+    /// 待ちの途中で前の便の判定が FAIL に書き直された周は `wait` が `Ok` で解けて `Waited` で進む（`== Err(Timeout)`
+    /// を `!=` にすると `Degraded` に化ける）。書き直しは 500 ms 後・上限 30 秒＝壁時計の境界に等号を置かない。
+    #[test]
+    fn mutant_in_pipe_land_await_turn_proceeds_when_the_front_leaves() {
+        let root = scratch("await-wake");
+        let (state, repo) = (root.join("state"), root.join("repo"));
+        let (policy, contract) = (LockPolicy::embedded().expect("埋め込みの lock 規則を読める"), contract(&[], &[]));
+        ["a-front", "b-me"].iter().for_each(|run| gated_run(&state, &repo, run, "PASS"));
+        let front = verdict_path(&state, "a-front");
+        let writer = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(500));
+            std::fs::write(front, "{\"verdict\":\"FAIL\"}\n").is_ok()
+        });
+        let order = await_turn(&land(&state, &repo, &contract, policy, 30));
+        assert!(writer.join().unwrap_or(false), "前の便の判定を書き直せた");
+        assert!(matches!(order, Order::Waited(_)), "解けた周は待った秒で進む: {order:?}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     /// 早い方の `Gated` の ts。
     const EARLY: &str = "2026-09-13T01:00:00Z";

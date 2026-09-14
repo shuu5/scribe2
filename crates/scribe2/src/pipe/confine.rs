@@ -386,12 +386,19 @@ fn probe(caps: &Caps, host_mb: u64) -> Result<(), Reason> {
         cmd.args(scope_args(&unit, host_mb, caps));
         cmd.arg("--").arg(SHELL).arg("-c").arg("exit 0");
         cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
-        match cmd.status() {
-            Err(_) => Err(Reason::NoTool),
-            Ok(status) if status.success() => Ok(()),
-            Ok(_) => Err(Reason::NoScope),
-        }
+        probe_outcome(cmd.status())
     })
+}
+
+/// probe の起動結果を読む（pure・in-file の歯が実 process を撃たずに 3 通りを作る）。
+///
+/// 起動できない周は道具が無い・rc 0 は scope を作れた・それ以外は道具は在るが scope を作れない。
+fn probe_outcome(started: std::io::Result<std::process::ExitStatus>) -> Result<(), Reason> {
+    match started {
+        Err(_) => Err(Reason::NoTool),
+        Ok(status) if status.success() => Ok(()),
+        Ok(_) => Err(Reason::NoScope),
+    }
 }
 
 /// `sh -c <line>` の素の起動。
@@ -505,8 +512,8 @@ pub fn read_usage(stdout: &str) -> Usage {
 #[cfg(test)]
 mod tests {
     use super::{
-        limit_mb, limit_of, mem_total_mb, next_seq, read_usage, release_scope, released_of, script, unit_name,
-        wrap_command, wrap_line, Caps, Confinement, Limit, Reason, Released, Wrap, PANE_ENV, REASONS,
+        limit_mb, limit_of, mem_total_mb, next_seq, probe_outcome, read_usage, release_scope, released_of, script,
+        tame, unit_name, wrap_command, wrap_line, Caps, Confinement, Limit, Reason, Released, Wrap, PANE_ENV, REASONS,
     };
     use crate::order::is_declaration_order;
     use crate::rules::manifest::Manifest;
@@ -528,6 +535,31 @@ mod tests {
         let seq = |name: &str| name.strip_prefix(&head).and_then(|tail| tail.parse::<u64>().ok());
         assert!(seq(&first).is_some(), "末尾は通し番号: {first}");
         assert!(seq(&second) > seq(&first), "後の名の番号が大きい: {first} / {second}");
+    }
+
+    // flip-check: retroactive s2-07l.222
+    /// `tame` の 3 分岐を text の境界で片側ずつ撃つ: 英数字・`.`・`_` は各々そのまま残り（`||` を `&&` にすると
+    /// 残らない）、`/`・空白・`-`・非 ASCII は `-` へ畳む（`==` を `!=` にすると畳まれずに残る）。
+    #[test]
+    fn mutant_in_pipe_tame_keeps_only_unit_name_characters() {
+        assert_eq!(tame("aZ9"), "aZ9", "英数字だけ");
+        assert_eq!(tame("."), ".", "`.` だけ");
+        assert_eq!(tame("_"), "_", "`_` だけ");
+        assert_eq!(tame("/"), "-", "`/` は畳む");
+        assert_eq!(tame("s2-07l.222/run 1_x"), "s2-07l.222-run-1_x", "混ぜた字");
+        assert_eq!(tame("便"), "-", "非 ASCII は 1 字 1 本の `-`");
+        assert_eq!(tame(""), "", "空は空");
+    }
+
+    // flip-check: retroactive s2-07l.222
+    /// probe の起動結果の 3 分岐（`probe_outcome`）を実 process を撃たずに撃つ: 起動できない周は `NoTool`・
+    /// rc 0 は包める・rc 1 は `NoScope`（guard を `true` / `false` に固定すると rc 0 と rc 1 の片側が落ちる）。
+    #[test]
+    fn mutant_in_pipe_probe_outcome_reads_the_three_results() {
+        assert_eq!(probe_outcome(Ok(ExitStatus::from_raw(0))), Ok(()), "rc 0 は scope を作れた");
+        assert_eq!(probe_outcome(Ok(ExitStatus::from_raw(256))), Err(Reason::NoScope), "rc 1 は scope を作れない");
+        let missing = std::io::Error::new(std::io::ErrorKind::NotFound, "no systemd-run");
+        assert_eq!(probe_outcome(Err(missing)), Err(Reason::NoTool), "起動できない");
     }
 
     /// 通し番号は呼ぶたびに単調に増える。

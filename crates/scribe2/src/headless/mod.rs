@@ -228,7 +228,7 @@ pub fn feed(child: &mut std::process::Child, prompt: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::{build, plugin_dirs, Call};
+    use super::{build, claude_place, plugin_dirs, Call};
     use proptest::prelude::*;
     use proptest::test_runner::Config;
     use std::collections::BTreeSet;
@@ -286,6 +286,24 @@ mod tests {
             .filter(|pair| pair.first().is_some_and(|flag| flag == "--plugin-dir"))
             .filter_map(|pair| pair.get(1).cloned())
             .collect()
+    }
+
+    // flip-check: retroactive s2-07l.222
+    /// `claude_place` は call の形ごとに scope の unit 名に載る口の名を返す: 逐次 record を受ける call は
+    /// `runner`・受けない call は `lens`（空や別の字面に潰すと、runner と lens の scope が unit 名で弁別できない）。
+    #[test]
+    fn mutant_in_pipe_claude_place_names_runner_and_lens() {
+        let call = |streaming: bool| Call {
+            claude: "claude",
+            prompt: "",
+            permission_mode: "plan",
+            plugin_dir: None,
+            account_dir: None,
+            cwd: None,
+            streaming,
+        };
+        assert_eq!(claude_place(&call(true)), "runner", "逐次 record を受ける口");
+        assert_eq!(claude_place(&call(false)), "lens", "判定を 1 つ受け取る口");
     }
 
     /// 名前の集合（大小文字を混ぜて byte 順が自明でない形・0〜5 個）。
