@@ -34,6 +34,12 @@ use std::time::{Duration, Instant, SystemTime};
 pub const LOCK_FILE: &str = "cycle.lock";
 /// cycle を**評価した**周の打刻の名前（`s2-07l.110`・tick の back-off の根拠）。
 pub const STAMP_FILE: &str = "cycle-stamp";
+/// 退避後の終了の手（`/exit`）を**送ろうとした**周の打刻の名前（`s2-07l.252`・[`STAMP_FILE`] と同じ形）。
+///
+/// cycle-stamp と分けるのは back-off の目的が違うためである: 終了の手の stamp は `/exit` の二重投函を防ぎ、
+/// cycle-stamp は作り直し・起こし直しの二重を防ぐ。1 本を共用すると `/exit` が効いた直後から立て直しが
+/// `seat.tick_stale_s` の間 `cycle-recent` で見送られた（実地 2026-09-14 04:10〜04:38Z）。
+pub const EXIT_STAMP_FILE: &str = "exit-stamp";
 /// TTL を宣言する rules 行の id（**値は code に焼かない**・憲法 C5）。
 const ID_TTL: &str = "seat.cycle_lock_ttl_s";
 /// 作り直しと復元の確認上限（秒）を宣言する rules 行の id（`s2-07l.151`・裁定 id は manifest 行）。
@@ -50,6 +56,8 @@ const WHO: &str = "seat-cycle";
 const WHEN: &str = "cycle";
 /// 立て直しの起動の記録の when。
 const WHEN_RELAUNCH: &str = "relaunch";
+/// 終了の手の記録の when。
+const WHEN_EXIT: &str = "exit";
 /// 口座の credential dir の置き場（`<state_dir>/accounts/<label>/`・ADR-0017 §2.3）。
 const ACCOUNTS_DIR: &str = "accounts";
 /// 起動の雛形の穴（設計 account-autonomy.md §5・seat-roles.md §2）: 選んだ口座の credential dir で埋める 1 つ。
@@ -158,6 +166,11 @@ pub fn stamp_path(seat_dir: &Path) -> PathBuf {
     seat_dir.join(STAMP_FILE)
 }
 
+/// 終了の手の打刻の path（[`EXIT_STAMP_FILE`]）。
+pub fn exit_stamp_path(seat_dir: &Path) -> PathBuf {
+    seat_dir.join(EXIT_STAMP_FILE)
+}
+
 /// 排他 marker の path。
 pub fn lock_path(seat_dir: &Path) -> PathBuf {
     seat_dir.join(LOCK_FILE)
@@ -213,8 +226,18 @@ fn perform(request: &Request, dir: &Path) -> Cycle {
 
 /// cycle を評価した周の打刻（unix 秒を 1 行・mtime は書いた時刻＝tick が経過を読む）。
 fn write_stamp(seat_dir: &Path) -> std::io::Result<()> {
+    write_secs(&stamp_path(seat_dir))
+}
+
+/// 終了の手を送ろうとした周の打刻（cycle-stamp と同じ形・同じ書き方・書くのは tick の終了の手だけ）。
+pub fn write_exit_stamp(seat_dir: &Path) -> std::io::Result<()> {
+    write_secs(&exit_stamp_path(seat_dir))
+}
+
+/// unix 秒を 1 行書く（2 本の打刻の共通の形）。
+fn write_secs(path: &Path) -> std::io::Result<()> {
     let secs = unix_secs(SystemTime::now());
-    std::fs::write(stamp_path(seat_dir), format!("{secs}\n"))
+    std::fs::write(path, format!("{secs}\n"))
 }
 
 /// lock を握っている間の手順（順序固定）: 退避物 → 状態の門 → pane → 入力欄の門 → 送る。
@@ -605,7 +628,7 @@ fn relaunch_held(request: &Relaunch, dir: &Path, launch: &str, label: &str) -> R
     if !send_to(request.socket, request.target, launch) {
         return Relaunched::Failed(inject::REASON_TMUX_FAILED);
     }
-    record_launch(request, launch, started_at);
+    record_sent(request.state_dir, request.target, (launch, WHEN_RELAUNCH), started_at);
     if !started(dir, (baseline, since), request.settle, request.step) {
         return Relaunched::Failed(REASON_LAUNCH);
     }
@@ -637,26 +660,39 @@ fn restore_when_ready(request: &Relaunch) -> Option<inject::Settled> {
     }
 }
 
-/// 立て直しの起動 1 行を席の `tick.jsonl` に記録する（`who=seat-cycle`・`when=relaunch`・`what` は起動の 1 行そのまま）。
-/// 起動は shell の門（[`super::shell_input_empty`]）を通して直に送るので `seat inject` の経路の行ではない（C10）。
+/// 退避後の終了の手の 1 行（`line`）を `target` へ literal で送り、Enter を送る（`s2-07l.252`）。送れた周は席の
+/// `tick.jsonl` に `who=seat-cycle`・`when=exit` の行を積む（立て直しの起動と同じ形）。送達の確認は呼び側
+/// （tick）が前面 process の読みで行う: `/exit` を受けた席は終わって pane が shell に置き換わるので、目印の出現数
+/// （[`inject::deliver`]）では成功が「現れない」に倒れる。
+pub fn send_exit(socket: Option<&str>, target: &str, state_dir: &StateDir, line: &str) -> bool {
+    let started_at = Instant::now();
+    if !send_to(socket, target, line) {
+        return false;
+    }
+    record_sent(state_dir, target, (line, WHEN_EXIT), started_at);
+    true
+}
+
+/// 直に送った 1 行（`(what, when)`）を席の `tick.jsonl` に記録する（`who=seat-cycle`・`what` は送った 1 行そのまま・
+/// `when` は立て直しの起動 `relaunch` か終了の手 `exit`）。直に送るので `seat inject` の経路の行ではない（C10）。
 /// **置き場へ書けない周も結果を変えない**（記録は判定そのものではない）。
-fn record_launch(request: &Relaunch, launch: &str, started: Instant) {
+fn record_sent(state_dir: &StateDir, target: &str, (what, when): (&str, &str), started: Instant) {
     let entry = InjectionRecord {
         schema: SCHEMA,
         who: WHO.to_owned(),
-        what: launch.to_owned(),
-        when: WHEN_RELAUNCH.to_owned(),
-        bytes: launch.len() as u64,
+        what: what.to_owned(),
+        when: when.to_owned(),
+        bytes: what.len() as u64,
         // 数えていないことを 0 と書かない。
         tokens: None,
         wall_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
-        seat: seat_name(request.target),
+        seat: seat_name(target),
         ts: state::now_secs(),
     };
     let Ok(policy) = LockPolicy::embedded() else {
         return;
     };
-    let path = inject::tick_path(&request.state_dir.path, request.target);
+    let path = inject::tick_path(&state_dir.path, target);
     let _ = store::append_line(&path, &entry.to_line(), policy);
 }
 

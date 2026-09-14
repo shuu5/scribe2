@@ -32,9 +32,9 @@
 //! 「前面 process が shell」は誰かが session を終えた後にしか立たない（AC13 実演 2026-09-13 では planner が
 //! `/exit` を送った＝人手に依存）。登録 row の在る席で、直近の注入が退避の合図 ∧ その後の `Stop` ∧ 自席の未
 //! consumed 退避物が在る ∧ 前面が shell でない、の周は器が `/exit` を席の入力欄の門（cycle の `/clear` と同じ
-//! [`inject::guard_input`]）を通して注入し（`kind=exit`）、cycle-stamp を打つ（back-off は `s2-07l.110` の
-//! 既存の 1 本・再送しない）。次の周に前面が shell になれば立て直しの入口が立つ（入口 (1) は「直近の注入が
-//! `externalize` か `exit`」）。失うものが無い席（退避済み ∧ Stop）にだけ送る（N1）。
+//! [`inject::guard_input`]）を通して注入し（`kind=exit`）、exit-stamp を打つ（cycle-stamp と別の 1 本・再送しない・
+//! `s2-07l.252`）。送達は前面が shell になったかで確かめ、次の周は立て直しの入口が立つ（入口 (1) は「直近の注入が
+//! `externalize` か `exit`」・立て直しは cycle-stamp だけを読む）。失うものが無い席（退避済み ∧ Stop）にだけ送る（N1）。
 //!
 //! **席の busy / idle は hook の打刻（[`state`]）が一次で、pane の字面は判定入力にしない**（憲法 C3.3・
 //! ADR-0015）。打刻が無い・読めない・Busy が古い周は理由を分けて注入しない（fail-closed）。pane を
@@ -67,6 +67,8 @@ const WHEN: &str = "tick";
 const REASON_STATE_DIR: &str = "state-dir";
 /// 注入は済んだが自打刻を書けない（次の周も撃つ＝storm になるので断る）。
 const REASON_STAMP: &str = "stamp-unwritable";
+/// `/exit` を送ったが窓の内に前面が shell にならない（`exit-` を前置きして `exit-unconfirmed`・`s2-07l.252`）。
+const REASON_EXIT_UNCONFIRMED: &str = "unconfirmed";
 /// 退避を促す 1 行の skill 名（席の中で打つ command）。
 const EXTERNALIZE_SKILL: &str = "/ready-compaction";
 /// 退避して止まった席の session を終える 1 行（Claude Code の正規の終了・SessionEnd hook が走る・account-autonomy.md
@@ -241,9 +243,9 @@ struct Verdict {
     decision: TickDecision,
     /// cycle を回した周の要約（回していない周は `None`）。
     cycled: Option<String>,
-    /// cycle-stamp の読み（cycle か立て直しの評価まで進まなかった周は `None`＝読んでいない。進んだ周は
-    /// 評価した・見送った・読めなかったのいずれでも `Some`）。
-    stamp: Option<CycleStamp>,
+    /// back-off の打刻の読み（cycle・立て直しは cycle-stamp・終了の手は exit-stamp。評価まで進まなかった周は
+    /// `None`＝読んでいない。進んだ周は評価した・見送った・読めなかったのいずれでも `Some`）。
+    stamp: Option<Stamped>,
     /// 口座の逼迫度。
     account: Account,
     /// 立て直しを評価した周の結果（選んだ label か `none:<理由>`・評価していない周は `None`）。
@@ -276,10 +278,10 @@ enum CycleStamp {
 }
 
 impl CycleStamp {
-    /// `<seat_dir>/cycle-stamp`（[`cycle::STAMP_FILE`]・書くのは cycle 側）を読む。mtime が未来の
+    /// `<seat_dir>/<file>`（[`cycle::STAMP_FILE`] か [`cycle::EXIT_STAMP_FILE`]）を読む。mtime が未来の
     /// 周は経過 0＝評価しない側へ倒す。
-    fn read(seat_dir: &Path) -> Self {
-        match std::fs::metadata(cycle::stamp_path(seat_dir)) {
+    fn read(seat_dir: &Path, file: &str) -> Self {
+        match std::fs::metadata(seat_dir.join(file)) {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Self::None,
             Err(_) => Self::Unreadable,
             Ok(meta) => match meta.modified() {
@@ -288,14 +290,27 @@ impl CycleStamp {
             },
         }
     }
+}
 
-    /// 判定行に足す字面（cycle の評価まで進んだ周だけ＝評価した・back-off で見送った・読めな
-    /// かった、のいずれか）。
+/// back-off が読んだ打刻（どの file か・その読み）。判定行の token の名は file 名そのもの
+/// （`cycle-stamp=` / `exit-stamp=`）＝どちらの back-off を見た周かを記録から弁別できる（`s2-07l.252`）。
+#[derive(Clone, Copy)]
+struct Stamped {
+    /// 読んだ file の名（[`cycle::STAMP_FILE`] か [`cycle::EXIT_STAMP_FILE`]）。
+    file: &'static str,
+    /// その読み。
+    read: CycleStamp,
+}
+
+impl Stamped {
+    /// 判定行に足す字面（cycle・立て直し・終了の手の評価まで進んだ周だけ＝評価した・back-off で見送った・
+    /// 読めなかった、のいずれか）。
     fn suffix(self) -> String {
-        match self {
-            Self::None => " cycle-stamp=none".to_owned(),
-            Self::Age(age) => format!(" cycle-stamp={age}"),
-            Self::Unreadable => " cycle-stamp=unreadable".to_owned(),
+        let file = self.file;
+        match self.read {
+            CycleStamp::None => format!(" {file}=none"),
+            CycleStamp::Age(age) => format!(" {file}={age}"),
+            CycleStamp::Unreadable => format!(" {file}=unreadable"),
         }
     }
 }
@@ -608,7 +623,7 @@ fn parked(request: &Request, place: &super::StateDir, dir: &Path, seen: &Seen) -
     if cycle::lock_is_live(dir, seen.ttl_s) {
         return Verdict::of(noop);
     }
-    let (stamp, blocked) = back_off(dir, seen.stale_s);
+    let (stamp, blocked) = back_off(dir, cycle::STAMP_FILE, seen.stale_s);
     if let Some(reason) = blocked {
         return held(stamp, reason);
     }
@@ -625,21 +640,22 @@ fn parked(request: &Request, place: &super::StateDir, dir: &Path, seen: &Seen) -
     Verdict { cycled: Some(cycle::summary(&result)), stamp: Some(stamp), ..Verdict::of(noop) }
 }
 
-/// cycle-stamp の back-off（`s2-07l.110`）: 読みと、評価しない理由（読めない周は `cycle-stamp-unreadable`、
-/// `seat.tick_stale_s` 未満の前に打った周は `cycle-recent`・評価してよい周は `None`）。cycle と立て直し（どちらも
-/// 二重に撃たない側の口）が同じ 1 本を通る。
-fn back_off(seat_dir: &Path, stale_s: u64) -> (CycleStamp, Option<NoopReason>) {
-    let stamp = CycleStamp::read(seat_dir);
-    let reason = match stamp {
+/// 打刻の back-off（`s2-07l.110`）: 読みと、評価しない理由（読めない周は `cycle-stamp-unreadable`、
+/// `seat.tick_stale_s` 未満の前に打った周は `cycle-recent`・評価してよい周は `None`）。cycle と立て直し（作り直し・
+/// 起こし直しの二重を防ぐ）は cycle-stamp を、終了の手（`/exit` の二重投函を防ぐ）は exit-stamp を読む
+/// （`s2-07l.252`・目的の違う 2 つを 1 本に共用しない）。語と閾値は両方で同じ（語彙も rules 行も増やさない）。
+fn back_off(seat_dir: &Path, file: &'static str, stale_s: u64) -> (Stamped, Option<NoopReason>) {
+    let read = CycleStamp::read(seat_dir, file);
+    let reason = match read {
         CycleStamp::Unreadable => Some(NoopReason::CycleStampUnreadable),
         CycleStamp::Age(age) if age < stale_s => Some(NoopReason::CycleRecent),
         CycleStamp::Age(_) | CycleStamp::None => None,
     };
-    (stamp, reason)
+    (Stamped { file, read }, reason)
 }
 
-/// cycle-stamp を読んだ上で見送った周の判定。
-fn held(stamp: CycleStamp, reason: NoopReason) -> Verdict {
+/// 打刻を読んだ上で見送った周の判定。
+fn held(stamp: Stamped, reason: NoopReason) -> Verdict {
     Verdict { stamp: Some(stamp), ..Verdict::of(TickDecision::Noop(reason)) }
 }
 
@@ -855,27 +871,28 @@ fn stopped_after(seat_dir: &Path, kind: InjectKind, after: u64) -> bool {
 }
 
 /// 退避後の終了の手（account-autonomy.md §5・`s2-07l.226`）: 入口（[`parked_entry`]）の後は cycle lock（FR29 と同じ
-/// 除外・作り直しの最中の席へ送らない）→ back-off（`s2-07l.110` の cycle-stamp・閾値は `seat.tick_stale_s`・立て直しと
-/// 同じ 1 本）→ [`send_exit`]。見送った周の理由は既存の語（`cycle-live` / `cycle-recent` / `cycle-stamp-unreadable`）。
+/// 除外・作り直しの最中の席へ送らない）→ back-off（exit-stamp・閾値は `seat.tick_stale_s`・`s2-07l.252` で cycle-stamp
+/// と分けた）→ [`send_exit`]。見送った周の理由は既存の語（`cycle-live` / `cycle-recent` / `cycle-stamp-unreadable`）。
 fn exit_turn(request: &Request, place: &super::StateDir, dir: &Path, seen: &Seen) -> Verdict {
     if cycle::lock_is_live(dir, seen.ttl_s) {
         return Verdict::of(TickDecision::Noop(NoopReason::CycleLive));
     }
-    let (stamp, blocked) = back_off(dir, seen.stale_s);
+    let (stamp, blocked) = back_off(dir, cycle::EXIT_STAMP_FILE, seen.stale_s);
     if let Some(reason) = blocked {
         return held(stamp, reason);
     }
     Verdict { stamp: Some(stamp), ..Verdict::of(send_exit(request, place, dir)) }
 }
 
-/// [`EXIT`] を 1 行注入する（順序固定）: 入力欄の門（cycle の `/clear` と同じ [`inject::guard_input`]・断りは
-/// `input-busy` / `input-unknown` で **1 key も送らない**）→ cycle-stamp（write-ahead・打てない周は送らない＝次の周も
-/// 送りうる形を作らない）→ `seat inject` と同じ経路で送達を確かめる。
+/// [`EXIT`] を 1 行送る（順序固定）: 入力欄の門（cycle の `/clear` と同じ [`inject::guard_input`]・断りは
+/// `input-busy` / `input-unknown` で **1 key も送らない**）→ exit-stamp（write-ahead・打てない周は送らない＝次の周も
+/// 送りうる形を作らない）→ 送る（[`cycle::send_exit`]）→ 前面 process が shell になるかで送達を確かめる（[`exited`]）。
 ///
-/// Enter の修復（[`inject::nudge_enter`]）は通さない: `/exit` を受けた席は打刻を積まずに終わるので消費は測れず、終わった
-/// 席の pane に残る古い `❯ /exit` 行を入力欄と読んで **shell へ Enter を送る**形になる（人の打ちかけを submit する
-/// 事故の向き）。送れなかった周は `exit-<理由>` の error（rc 1）で記録に `kind=exit` は残らず、次の周は back-off の
-/// 後に同じ入口から送り直す。
+/// 送達を目印の出現数（[`inject::deliver`]）で測らないのは、`/exit` を受けた席は終わって pane が shell に置き換わり
+/// 目印が増えない＝成功が `absent` に倒れるためである（実地 2026-09-14・`s2-07l.252`）。Enter の修復
+/// （[`inject::nudge_enter`]）も通さない: 終わった席の pane に残る古い `❯ /exit` 行を入力欄と読んで **shell へ Enter を
+/// 送る**形になる。窓の内に shell にならない周は `exit-unconfirmed` の error（rc 1）で、exit-stamp は打たれたまま
+/// （再送しない・次の周は back-off が見る）。
 fn send_exit(request: &Request, place: &super::StateDir, dir: &Path) -> TickDecision {
     let Some(pane) = pane_of(request.socket, request.target, request.capture_file) else {
         return exit_error(cycle::REASON_PANE_MISSING);
@@ -885,19 +902,31 @@ fn send_exit(request: &Request, place: &super::StateDir, dir: &Path) -> TickDeci
         Err(inject::InputGate::Busy) => return exit_error(cycle::REASON_INPUT_BUSY),
         Err(inject::InputGate::UnknownInput) => return exit_error(cycle::REASON_INPUT_UNKNOWN),
     }
-    if std::fs::write(cycle::stamp_path(dir), format!("{}\n", state::now_secs())).is_err() {
+    if cycle::write_exit_stamp(dir).is_err() {
         return exit_error(cycle::REASON_STAMP);
     }
-    let sending = inject::Request {
-        target: request.target,
-        socket: request.socket,
-        payload: EXIT,
-        state_dir: Some(place),
-    };
-    match inject::deliver(&sending) {
-        inject::Delivery::Refused(reason) | inject::Delivery::Unconfirmed(reason) => exit_error(reason),
-        inject::Delivery::Delivered(_, settled) => TickDecision::Inject(InjectKind::Exit, settled),
+    if !cycle::send_exit(request.socket, request.target, place, EXIT) {
+        return exit_error(inject::REASON_TMUX_FAILED);
     }
+    if exited(request) {
+        TickDecision::Inject(InjectKind::Exit, inject::Settled::Consumed)
+    } else {
+        exit_error(REASON_EXIT_UNCONFIRMED)
+    }
+}
+
+/// `/exit` の送達の確認: 窓（[`Request::settle`]）の内に刻み（[`Request::step`]）ごとに、target の前面 process が
+/// shell になったか（入口 (3) と同じ [`super::pane_is_shell`]・typed な metadata・字面を読まない）。作り直しの確認
+/// （cycle の `started`）と同じ窓・同じ刻み。
+fn exited(request: &Request) -> bool {
+    let deadline = Instant::now().checked_add(request.settle);
+    while deadline.is_some_and(|at| Instant::now() < at) {
+        std::thread::sleep(request.step);
+        if super::pane_is_shell(request.socket, request.target) {
+            return true;
+        }
+    }
+    false
 }
 
 /// 終了の手を送れなかった周の判定（`exit-` を前置きして注入の断りや noop の語彙と分ける・[`inject_line`] と同型）。
@@ -905,12 +934,13 @@ fn exit_error(reason: &str) -> TickDecision {
     TickDecision::Error(format!("exit-{reason}"))
 }
 
-/// 退避して止まった席の立て直し（account-autonomy.md §5）: back-off（`s2-07l.110` の cycle-stamp・閾値は
-/// `seat.tick_stale_s`）→ cycle lock（FR29 と同じ除外）→ [`cycle::relaunch`]（session 用の選定・雛形の穴埋め・
+/// 退避して止まった席の立て直し（account-autonomy.md §5）: back-off（`s2-07l.110` の cycle-stamp だけ・閾値は
+/// `seat.tick_stale_s`・exit-stamp は読まない＝`/exit` の次の周に評価される・`s2-07l.252`）→ cycle lock（FR29 と同じ
+/// 除外）→ [`cycle::relaunch`]（session 用の選定・雛形の穴埋め・
 /// 起動と復元の注入・登録 row の口座の更新）。候補なしは `account-no-candidate` で注入せず次の tick で選び直し、
 /// 立て直しが送れない・確かめられない周は `relaunch-<理由>` の error（rc 1・次の周は back-off が見る）。
 fn relaunch_turn(request: &Request, place: &super::StateDir, dir: &Path, seen: &Seen, seated: &Seated) -> Verdict {
-    let (stamp, blocked) = back_off(dir, seen.stale_s);
+    let (stamp, blocked) = back_off(dir, cycle::STAMP_FILE, seen.stale_s);
     if let Some(reason) = blocked {
         return held(stamp, reason);
     }
@@ -1023,7 +1053,7 @@ fn body(target: &str, judged: &Judged, place: &super::StateDir) -> String {
         None => with_context,
     };
     let with_state = judged.state.map_or(String::new(), state::Read::suffix);
-    let with_stamp = verdict.stamp.map_or(String::new(), CycleStamp::suffix);
+    let with_stamp = verdict.stamp.map_or(String::new(), Stamped::suffix);
     let with_relaunch = verdict
         .relaunched
         .as_deref()

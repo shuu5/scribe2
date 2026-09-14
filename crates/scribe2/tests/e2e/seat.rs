@@ -7940,17 +7940,18 @@ fn exit_received(place: &AcctPlace) -> String {
     fs::read_to_string(place.dir.join(EXIT_LOG)).unwrap_or_default()
 }
 
-/// 送らなかった周の 3 面: 席は 1 行も受けていない・cycle-stamp を打っていない・前面は `head` のまま（席は生きている）。
+/// 送らなかった周の 3 面: 席は 1 行も受けていない・cycle-stamp も exit-stamp も打っていない・前面は `head` のまま（席は生きている）。
 fn exit_assert_not_sent(place: &AcctPlace, name: &str, case: &str) {
     assert_eq!(exit_received(place), "", "{case}: 1 key も送らない");
     assert!(!seat_dir_of(&place.state, name).join("cycle-stamp").exists(), "{case}: cycle-stamp を打たない");
+    assert!(!seat_dir_of(&place.state, name).join("exit-stamp").exists(), "{case}: exit-stamp を打たない");
     assert_eq!(exit_foreground(place, name), "head", "{case}: 席は生きたまま");
 }
 
 /// (a) 退避の合図 → `Stop` → 自席の未 consumed 退避物 → 前面が shell でない（`head`）の周: 器が `/exit` を入力欄の門を
-/// 通して注入し（判定行 `decision=inject … kind=exit`・席が受けた 1 行は `/exit`）、cycle-stamp を打ち、注入の記録が
-/// `inject.jsonl` の同じ形（`who=seat-tick`・`kind=exit`）で残る。受けた席は終わって前面が shell へ戻る（次の周の
-/// 立て直しの入口 (3)）。base は機能不在＝退避物の在る周は `/clear` の cycle に落ちる（RED）。
+/// 通して送り（判定行 `decision=inject … kind=exit`・席が受けた 1 行は `/exit`）、注入の記録が `inject.jsonl` の同じ形
+/// （`who=seat-tick`・`kind=exit`）で残り、席の記録に送った 1 行（`who=seat-cycle`）が残る。受けた席は終わって前面が
+/// shell へ戻る（次の周の立て直しの入口 (3)）。base は機能不在＝退避物の在る周は `/clear` の cycle に落ちる（RED）。
 #[test]
 fn seat_exit_injects_exit_to_the_parked_seat_and_stamps() {
     let place = acct_place();
@@ -7961,18 +7962,18 @@ fn seat_exit_injects_exit_to_the_parked_seat_and_stamps() {
 
     let line = stdout_of(&out);
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stdout={line} stderr={}", stderr_of(&out));
-    for (key, want) in [("decision", "inject"), ("kind", "exit"), ("consumed", "false"), ("account", "a1:100")] {
+    for (key, want) in [("decision", "inject"), ("kind", "exit"), ("account", "a1:100")] {
         assert_eq!(tick_token(&line, key).as_deref(), Some(want), "{key}: {line}");
     }
     assert_eq!(tick_token(&line, "cycle"), None, "/clear の cycle は回さない: {line}");
     assert_eq!(exit_received(&place), "/exit\n", "席が受けた 1 行は /exit");
-    assert!(seat_dir_of(&place.state, name).join("cycle-stamp").exists(), "cycle-stamp を打つ");
+    assert!(seat_dir_of(&place.state, name).join("exit-stamp").exists(), "exit-stamp を打つ");
     let log = fs::read_to_string(place.state.join("inject.jsonl")).unwrap_or_default();
     let last = log.lines().last().unwrap_or_default();
     assert_eq!(acct_text(last, "who").as_deref(), Some("seat-tick"), "{log}");
     assert_eq!(acct_text(last, "seat").as_deref(), Some(name), "{log}");
     assert!(acct_text(last, "what").is_some_and(|what| what.contains(" kind=exit")), "判定行と同じ字面: {log}");
-    assert_eq!(acct_injected(&place.state, name).last().map(String::as_str), Some("/exit"), "seat inject の経路で送る");
+    assert_eq!(acct_sent(&place.state, name).last().map(String::as_str), Some("/exit"), "席の記録に送った 1 行が残る");
     assert!(exit_wait_foreground(&place, name, "sh"), "受けた席は終わって前面が shell へ戻る");
     drop(guard);
     fs::remove_dir_all(&place.dir).ok();
@@ -8076,14 +8077,15 @@ fn seat_exit_refuses_when_the_input_line_is_busy() {
     fs::remove_dir_all(&place.dir).ok();
 }
 
-/// (e) back-off: cycle-stamp が `seat.tick_stale_s` 未満の前なら送らず（`cycle-recent`）打ち直しもしない（打ち直すと永久に
-/// 止まる）。stamp が閾値以上前になった周は同じ入口から送る（打ち直す）。
+/// (e) back-off: exit-stamp が `seat.tick_stale_s` 未満の前で前面が shell でない（`/exit` が効かなかった席）なら送らず
+/// （`cycle-recent`）打ち直しもしない（打ち直すと永久に止まる）。stamp が閾値以上前になった周は同じ入口から送る（打ち直す）。
+/// base は exit-stamp を読まず 1 周目に送る（RED・`s2-07l.252` (3d)）。
 #[test]
-fn seat_exit_backs_off_by_the_cycle_stamp_without_restamping() {
+fn seat_exit_stamp_recent_does_not_resend_exit() {
     let place = acct_place();
     let name = "exitbackoff";
     let guard = exit_parked(&place, name);
-    let stamp = seat_dir_of(&place.state, name).join("cycle-stamp");
+    let stamp = seat_dir_of(&place.state, name).join("exit-stamp");
     fs::write(&stamp, "0\n").ok();
     let stamped_at = mtime_of(&stamp);
 
@@ -8110,11 +8112,12 @@ fn seat_exit_backs_off_by_the_cycle_stamp_without_restamping() {
     fs::remove_dir_all(&place.dir).ok();
 }
 
-/// (f) 次の周: 直近の注入が `exit` ∧ 前面が shell（席が終わった）なら立て直しの入口が立ち、雛形の穴が選んだ口座（a2）の
-/// credential dir で埋まった起動と復元がこの順で注入される（`kind=relaunch`・席の記録は 退避の合図 → `/exit` → 起動 →
-/// 復元 の 4 行・登録 row の口座は a2 に）。base は入口 (1) が `exit` を読まず立て直さない（RED）。
+/// (f) 次の周（stamp を倒さない＝`/exit` の直後）: 直近の注入が `exit` ∧ 前面が shell（席が終わった）なら立て直しの入口が
+/// 立ち、exit-stamp は立て直しの back-off に効かず（`cycle-stamp=none`）、雛形の穴が選んだ口座（a2）の credential dir で
+/// 埋まった起動と復元がこの順で注入される（`kind=relaunch`・席の記録は 退避の合図 → `/exit` → 起動 → 復元 の 4 行・登録
+/// row の口座は a2 に）。base は `/exit` が cycle-stamp を打つので `cycle-recent` で見送る（RED・`s2-07l.252` (3c)）。
 #[test]
-fn seat_exit_then_shell_relaunches_on_the_next_round() {
+fn seat_exit_stamp_then_shell_relaunches_on_the_next_round() {
     let place = acct_place();
     let name = "exitrelaunch";
     let guard = exit_parked(&place, name);
@@ -8122,13 +8125,13 @@ fn seat_exit_then_shell_relaunches_on_the_next_round() {
     assert_eq!(tick_token(&first, "kind").as_deref(), Some("exit"), "1 周目は終了の手: {first}");
     assert!(exit_wait_foreground(&place, name, "sh"), "席が終わって前面が shell へ戻る");
     assert!(acct_shell_prompt(&place, name, ""), "shell の prompt を描ける");
-    backdate(&seat_dir_of(&place.state, name).join("cycle-stamp"), STALE_S + 1);
 
     let out = acct_tick(&place, name, None);
 
     let line = stdout_of(&out);
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stdout={line} stderr={}", stderr_of(&out));
-    for (key, want) in [("decision", "inject"), ("kind", "relaunch"), ("consumed", "true"), ("relaunch", ACCT_SPARE)] {
+    assert!(seat_dir_of(&place.state, name).join("exit-stamp").exists(), "exit-stamp は閾値未満のまま在る");
+    for (key, want) in [("decision", "inject"), ("kind", "relaunch"), ("consumed", "true"), ("relaunch", ACCT_SPARE), ("cycle-stamp", "none")] {
         assert_eq!(tick_token(&line, key).as_deref(), Some(want), "{key}: {line}");
     }
     assert_eq!(
@@ -8198,6 +8201,92 @@ fn seat_exit_is_not_sent_when_the_seat_resumed_after_stop() {
         assert_eq!(tick_token(&line, key).as_deref(), Some(want), "{key}: {line}");
     }
     exit_assert_not_sent(&place, name, "resumed");
+    drop(guard);
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+// ─────────────────── 終了の手の stamp と送達確認（account-autonomy.md §5 追補・`s2-07l.252`・接頭辞 `seat_exit_stamp_`） ───────────────────
+
+/// (3a) `/exit` を受けて前面が shell に変わる席: 送達は前面 process の読みで確かめ（`decision=inject kind=exit
+/// consumed=true`・`exit-absent` にならない）、打つのは exit-stamp で cycle-stamp は触られない。base は `/exit` の後に
+/// cycle-stamp を打つ（RED）。
+#[test]
+fn seat_exit_stamp_is_separate_and_exit_is_confirmed_by_the_shell() {
+    let place = acct_place();
+    let name = "exitstamp";
+    let guard = exit_parked(&place, name);
+
+    let out = acct_tick(&place, name, None);
+
+    let line = stdout_of(&out);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stdout={line} stderr={}", stderr_of(&out));
+    for (key, want) in [("decision", "inject"), ("kind", "exit"), ("consumed", "true"), ("exit-stamp", "none")] {
+        assert_eq!(tick_token(&line, key).as_deref(), Some(want), "{key}: {line}");
+    }
+    assert_eq!(tick_token(&line, "cycle-stamp"), None, "終了の手は cycle-stamp を読まない: {line}");
+    assert_eq!(exit_received(&place), "/exit\n", "席が受けた 1 行は /exit");
+    let dir = seat_dir_of(&place.state, name);
+    assert!(dir.join("exit-stamp").exists(), "exit-stamp を打つ");
+    assert!(!dir.join("cycle-stamp").exists(), "cycle-stamp は触らない");
+    drop(guard);
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (3b) `/exit` を受けても前面が shell にならない席（`cat` が読み続ける）: 窓の内に確かめられず `decision=error
+/// reason=exit-unconfirmed`（rc 1）・exit-stamp は打たれたまま（再送しない）・cycle-stamp は無い。
+#[test]
+fn seat_exit_stamp_stays_when_the_exit_is_unconfirmed() {
+    let place = acct_place();
+    let name = "exitstuck";
+    let guard = start_seat(&place.socket, name);
+    assert!(guard.ready(), "独立 socket に session を立てられる");
+    acct_parked(&place, name, &acct_launcher(&place, name), 30);
+    wm_file(&place.wm, "working-memory.parked.md", name);
+    let cat = format!("printf '\\342\\235\\257 '; cat >> '{}'", place.dir.join(EXIT_LOG).display());
+    assert!(tmux(&place.socket, &["send-keys", "-t", name, "-l", &cat]).status.success());
+    assert!(tmux(&place.socket, &["send-keys", "-t", name, "Enter"]).status.success());
+    assert!(exit_wait_foreground(&place, name, "cat"), "前面が cat の席を作れる");
+
+    let out = acct_tick(&place, name, None);
+
+    let line = stderr_of(&out);
+    assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "stdout={} stderr={line}", stdout_of(&out));
+    for (key, want) in [("decision", "error"), ("reason", "exit-unconfirmed")] {
+        assert_eq!(tick_token(&line, key).as_deref(), Some(want), "{key}: {line}");
+    }
+    assert_eq!(exit_received(&place), "/exit\n", "/exit は送った");
+    assert_eq!(exit_foreground(&place, name), "cat", "席は終わっていない");
+    let dir = seat_dir_of(&place.state, name);
+    assert!(dir.join("exit-stamp").exists(), "exit-stamp は打たれたまま");
+    assert!(!dir.join("cycle-stamp").exists(), "cycle-stamp は触らない");
+    drop(guard);
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (3e) 直前に立て直した（cycle-stamp が閾値未満）席は、前面が shell でも立て直しを `cycle-recent` で見送る（既存の
+/// 極性は不変・exit-stamp が無くても cycle-stamp は効く）。
+#[test]
+fn seat_exit_stamp_cycle_stamp_still_holds_the_relaunch() {
+    let place = acct_place();
+    let name = "exitcyclerecent";
+    let guard = start_seat(&place.socket, name);
+    assert!(guard.ready(), "独立 socket に shell の session を立てられる");
+    acct_parked(&place, name, &acct_launcher(&place, name), 30);
+    wm_file(&place.wm, "working-memory.parked.md", name);
+    assert!(acct_shell_prompt(&place, name, ""), "shell の prompt を描ける");
+    let dir = seat_dir_of(&place.state, name);
+    fs::write(dir.join("cycle-stamp"), "0\n").ok();
+
+    let out = acct_tick(&place, name, None);
+
+    let line = stdout_of(&out);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stdout={line} stderr={}", stderr_of(&out));
+    for (key, want) in [("decision", "noop"), ("reason", "cycle-recent")] {
+        assert_eq!(tick_token(&line, key).as_deref(), Some(want), "{key}: {line}");
+    }
+    assert_eq!(tick_token(&line, "kind"), None, "注入していない: {line}");
+    assert!(!place.dir.join("launched").exists(), "起動しない");
+    assert!(!dir.join("exit-stamp").exists(), "exit-stamp は打たない");
     drop(guard);
     fs::remove_dir_all(&place.dir).ok();
 }
