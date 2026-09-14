@@ -405,6 +405,119 @@ fn seat_inject_wrapped_absent_line_still_fails_closed() {
     fs::remove_dir_all(&dir).ok();
 }
 
+/// 偽 app が自分で折り返す幅（列）。pane 幅 [`WRAP_WIDTH`] より狭い＝割れるのは app の硬い改行で、
+/// tmux の折り返しではない（`capture-pane -J` は結合しない）。
+const APP_FOLD_WIDTH: &str = "24";
+
+/// 偽 app の歯の目印: ASCII だけ（`fold` は byte 単位で割るので多 byte を途中で割らない字面にする）・
+/// [`APP_FOLD_WIDTH`] より長い 1 行。
+const APP_MARKER: &str = ": seat-e2e-appwrap the app folds this echo into hard lines";
+
+/// 偽 app の script（`s2-07l.296`）: tty の echo を切り、起動の合図（`app-ready`・script の字面には無い形に
+/// 組む＝echo された script 行との衝突を避ける）と prompt を描き、受けた 1 行ごとに `body` を実行して
+/// prompt を描き直す。開発 session の TUI が入力欄と echo を**自分の幅で折り返して描く**形の再現。
+fn folding_app(body: &str) -> String {
+    format!("stty -echo; printf 'app%sready\\n❯ ' -; while IFS= read -r l; do {body}; printf '❯ '; done")
+}
+
+/// 受けた行を [`APP_FOLD_WIDTH`] 列の**硬い改行**で折り返して描く本文。
+fn app_folds_echo() -> String {
+    format!("printf '%s\\n' \"$l\" | fold -w {APP_FOLD_WIDTH}")
+}
+
+/// 受けた行を描かず、別の字面（`app-swallowed`・script の字面には無い形）だけを描く本文。
+const APP_SWALLOWS_ECHO: &str = "printf 'app%sswallowed\\n' -";
+
+/// `sh -i` の席の上に偽 app を立て、起動の合図と prompt が描かれるまで待つ（上限 [`PROMPT_WAIT`]）。
+fn start_folding_app(socket: &str, name: &str, body: &str) -> bool {
+    tmux(socket, &["send-keys", "-t", name, "-l", &folding_app(body)]);
+    tmux(socket, &["send-keys", "-t", name, "Enter"]);
+    let deadline = Instant::now().checked_add(PROMPT_WAIT);
+    while deadline.is_some_and(|at| Instant::now() < at) {
+        let pane = capture(socket, name);
+        if pane.contains("app-ready") && pane.trim_end().ends_with(PROMPT) {
+            return true;
+        }
+        sleep(Duration::from_millis(100));
+    }
+    false
+}
+
+/// 歯の側で「空白を畳んだ字面」を組む（実装の関数を呼ばない・`split_whitespace` で独立に組む）。
+fn squashed(text: &str) -> String {
+    text.split_whitespace().collect()
+}
+
+/// TUI が入力欄と echo を**自分の幅で折り返して描く**周（目印の途中に硬い改行が入る・`-J` で結合しても
+/// 割れたまま）でも、**届いた注入は `delivered` rc 0・記録 1 行**（`s2-07l.296`・base では `absent` rc 1）。
+///
+/// 実害: 打刻の合図（80 cell）が pane 幅 80 の開発 session で 2 行に割れ、2026-09-14 07:45Z 以降の
+/// `kind=pointer` が両席で 1 回も送達しなかった（memo `s2-07l.288`）。
+#[test]
+fn seat_inject_app_wrapped_marker_is_delivered() {
+    let dir = tmp();
+    let socket = socket_of(&dir);
+    let name = "seat-appwrap";
+    let guard = start_seat_sized(&socket, name, "PS1=❯ ", PROMPT, WRAP_WIDTH);
+    assert!(guard.ready(), "独立 socket に狭い pane の session を立てられる");
+    assert!(start_folding_app(&socket, name, &app_folds_echo()), "偽 app が起動の合図と prompt を描く: {}", capture(&socket, name));
+    let state = dir.join("state");
+    stamp_idle(&state, name);
+
+    let out = inject_on(&socket, name, &state, APP_MARKER);
+
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(
+        stdout_of(&out),
+        format!(
+            "seat: inject delivered target={name} bytes={} consumed=false{}\n",
+            APP_MARKER.len(),
+            provenance(&state, "flag")
+        ),
+        "app が折り返して描いた目印も現れた＝送達"
+    );
+    // 歯が空虚でないこと（.148 の歯と同じ二重の確認）: 結合しても目印は割れたまま（TUI の折り返しの再現）で、
+    // 畳んだ字面には在る。
+    let joined = capture_joined(&socket, name);
+    assert!(!joined.contains(APP_MARKER), "結合しても app の硬い改行は残る＝目印は割れている: {joined}");
+    assert!(joined.contains("seat-e2e-appwrap"), "割れた断片は pane に在る: {joined}");
+    assert!(squashed(&joined).contains(&squashed(APP_MARKER)), "畳んだ字面には目印が在る: {joined}");
+    let recorded = fs::read_to_string(tick_file(&state, name)).unwrap_or_default();
+    assert_eq!(recorded.lines().count(), 1, "記録は 1 行: {recorded}");
+    assert!(recorded.contains(r#""who":"seat-inject""#), "{recorded}");
+    drop(guard);
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// 畳んで読んでも、**本当に届いていない周は `absent` rc 1 のまま**（極性不変・base でも PASS の負例）。
+/// 同じ偽 app に目印を描かせない（送った字面と別の字面を echo する）と、目印は結合した論理行にも
+/// 畳んだ字面にも無い——門の断り（busy / unknown-input）や tmux-failed で「別の理由で」落ちていないことを
+/// 行の字面で確かめる。
+#[test]
+fn seat_inject_app_wrapped_absent_line_still_fails_closed() {
+    let dir = tmp();
+    let socket = socket_of(&dir);
+    let name = "seat-appabsent";
+    let guard = start_seat_sized(&socket, name, "PS1=❯ ", PROMPT, WRAP_WIDTH);
+    assert!(guard.ready(), "独立 socket に狭い pane の session を立てられる");
+    assert!(start_folding_app(&socket, name, APP_SWALLOWS_ECHO), "偽 app が起動の合図と prompt を描く: {}", capture(&socket, name));
+    let state = dir.join("state");
+    stamp_idle(&state, name);
+
+    let out = inject_on(&socket, name, &state, APP_MARKER);
+
+    assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "stdout={}", stdout_of(&out));
+    assert_eq!(stdout_of(&out), "", "送達を確認できない周は stdout 0 行");
+    assert_eq!(stderr_of(&out), format!("seat: inject unconfirmed reason=absent{}\n", provenance(&state, "flag")));
+    let joined = capture_joined(&socket, name);
+    assert!(joined.contains("app-swallowed"), "app は受けた行に別の字面を描いた（注入は届いている）: {joined}");
+    assert!(!joined.contains("seat-e2e-appwrap"), "目印は結合した論理行にも無い: {joined}");
+    assert!(!squashed(&joined).contains(&squashed(APP_MARKER)), "畳んだ字面にも無い: {joined}");
+    assert!(!tick_file(&state, name).exists(), "送達を確認できない周は記録しない");
+    drop(guard);
+    fs::remove_dir_all(&dir).ok();
+}
+
 /// prompt 行を特定できない pane へは **1 key も送らない**（fail-closed）。
 #[test]
 fn seat_inject_refuses_when_prompt_is_not_locatable() {

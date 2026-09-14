@@ -7,6 +7,8 @@
 //! pane を読むのは**入力欄の門と送達の目印**（送った字面が現れた = 送達・`.90`）だけで、
 //! **消費（`consumed=`）は席の打刻**で決める（送達 ts 以後の `UserPromptSubmit`・
 //! [`state::evidence_after`]・設計 seat-state.md §6・`s2-07l.112`）。入力欄が空になったかは読まない。
+//! 目印の照合は**空白を畳んだ字面**で行う（[`folded`]・`s2-07l.296`）: 開発 session の TUI は入力欄と
+//! echo を自分の幅で折り返して描くので、pane 幅と同じ長さの目印は硬い改行と字下げで割れて現れる。
 //!
 //! 不可逆の口は持たない（憲法 CON5）: ここが送るのは呼び側が渡した 1 行だけで、
 //! `/clear` のような session を作り直す注入はこの便では扱わない。
@@ -140,9 +142,12 @@ pub enum Repair {
 /// Enter だけが落ちた形である。入力欄に**自分の目印**が在ることを条件に入れるのは、人が後から
 /// 打ちかけた行へ Enter を押して他人の下書きを submit しないため（入力欄の門と同じ fail-closed の
 /// 向き）。目印が空白だけの周は自分の字面を弁別できないので送らない。
+///
+/// 入力欄と目印は**空白を畳んだ字面**で照合する（[`folded`]・`s2-07l.296`）: TUI が入力欄を自分の幅で
+/// 折り返して描いた周は自分の下書きが改行と字下げで割れて見える。畳んで空の目印は弁別できない＝`Keep`。
 pub fn repair_of(settled: Settled, read: state::Read, tail: Option<&str>, marker: &str) -> Repair {
-    let needle = marker.trim();
-    let own_draft = !needle.is_empty() && tail.is_some_and(|found| found.contains(needle));
+    let needle = folded(marker);
+    let own_draft = !needle.is_empty() && tail.is_some_and(|found| folded(found).contains(&needle));
     if matches!(settled, Settled::Queued) && matches!(read, state::Read::Idle(_)) && own_draft {
         Repair::ResendEnter
     } else {
@@ -189,10 +194,10 @@ pub fn deliver_within(request: &Request, window: Duration) -> Delivery {
     }
     // 送る**前**の pane で目印の出現数を数えておく: 同じ字面が先に在る（前周の pointer の写し・
     // tool の出力の引用）と `contains` 1 本では届いていない周が「届いた」に化ける（lens-90 HIGH-1）。
-    let Some(marker) = marker_of(request.payload) else {
+    let Some(marker) = needle_of(request.payload) else {
         return Delivery::Refused(REASON_EMPTY);
     };
-    let before = pane.matches(marker).count();
+    let before = folded(&pane).matches(marker.as_str()).count();
     // 消費の証拠を見る先も送る**前**に取る（基線と送達 ts・設計 §6）。
     let seat = request
         .state_dir
@@ -204,7 +209,7 @@ pub fn deliver_within(request: &Request, window: Duration) -> Delivery {
     if !send(request) {
         return Delivery::Unconfirmed(REASON_TMUX_FAILED);
     }
-    match settle(request, marker, before, tries_within(window), &watch) {
+    match settle(request, &marker, before, tries_within(window), &watch) {
         Ok(settled) => {
             let bytes = request.payload.len() as u64;
             record(request, bytes, started);
@@ -327,8 +332,26 @@ pub fn guard_input(pane: &str) -> Result<(), InputGate> {
 /// 二重投函になる。**読み方だけを直す**: 照合・`absent` の極性・「現れた＝送達」・消費の打刻は不変。
 /// 入力欄の門（[`guard_input`]）と修復の門（[`repair_of`]）も同じ本文を読む（送達の面の読みを 1 つにする）。
 /// 目印を先頭 N 字へ切り詰める案は N が規則になり、nonce 案は注入の字面を変えるので採らない。
+///
+/// `-J` が結合するのは**端末の折り返し**だけである。開発 session の TUI は入力欄と echo を自分の幅で
+/// 折り返して描く（pane の行として硬い改行と字下げが入る）ので結合されず、pane 幅と同じ長さの目印
+/// （打刻の合図 80 cell・pane 幅 80）は 1 回も当たらなかった（実測 2026-09-14: 両席の `tick.jsonl` で
+/// 07:45Z 以降の `kind=pointer` が全部 `inject-absent`・memo `s2-07l.288`）。目印の照合はこの本文を
+/// [`folded`] で畳んで行う（`s2-07l.296`）。
 fn capture(socket: Option<&str>, target: &str) -> Option<String> {
     tmux_stdout(socket, &["capture-pane", "-p", "-J", "-t", target])
+}
+
+/// 送達の面が照合する字面（`s2-07l.296`）: ASCII の whitespace（空白・改行・tab・CR・FF）を**全部落とした**
+/// 1 本の字面。TUI が入力欄と echo を自分の幅で折り返して描いた周（目印の途中に改行と字下げが入る）でも、
+/// 畳めば送った字面と同じ並びになる。**全角空白（U+3000）は落とさない**＝目印の本文の一部で、TUI が
+/// 折り返しで足す字ではない。
+///
+/// 送達の面の 3 か所の照合（送る前の出現数・settle の「増えた」・修復の門の own_draft）は**全部**この
+/// 1 本を通した字面で行う（読みを 1 つにする・`.148` と同じ規律）。入力欄の門（[`guard_input`]）は
+/// 畳まない: 空白だけの入力欄を非空と読む現状の極性を保つ。
+fn folded(text: &str) -> String {
+    text.chars().filter(|ch| !ch.is_ascii_whitespace()).collect()
 }
 
 /// payload を literal で送り、Enter を送る。
@@ -348,8 +371,17 @@ fn marker_of(payload: &str) -> Option<&str> {
     payload.lines().find(|line| !line.trim().is_empty())
 }
 
-/// 送達を確認する。**目印（最初の非空行）の出現数が送る前より増えた**ら成立で、消費（送達 ts 以後の
-/// `UserPromptSubmit` の打刻）が窓の内に来たかを [`Settled`] として添える。
+/// 送達の面が pane と突き合わせる字面 = [`marker_of`] を [`folded`] で畳んだもの。**畳んだ後にも非空を
+/// 掛ける**（`s2-07l.296`）: 畳んだ字面での `matches().count()` は目印が空だと pane の長さに化ける
+/// （lens-90 NEW-1 と同型）ので、畳んで空なら `None`（呼び側は [`REASON_EMPTY`] で 1 key も送らない）。
+fn needle_of(payload: &str) -> Option<String> {
+    let needle = folded(marker_of(payload)?);
+    (!needle.is_empty()).then_some(needle)
+}
+
+/// 送達を確認する。**目印（最初の非空行を畳んだ字面・[`needle_of`]）の出現数が、畳んだ pane 本文で送る前
+/// より増えた**ら成立で、消費（送達 ts 以後の `UserPromptSubmit` の打刻）が窓の内に来たかを [`Settled`]
+/// として添える。
 ///
 /// 「現れた ∧ 消費した」を成立の条件にすると、busy な席へ queue された注入（届いている）を
 /// 失敗と数える（bd `s2-07l.90`・裁定: 現れた ＝ 成功）。失敗は `absent`（現れない）と
@@ -373,7 +405,7 @@ fn settle(
         let Some(pane) = capture(request.socket, request.target) else {
             return Err(REASON_TMUX_FAILED);
         };
-        seen = seen || pane.matches(marker).count() > before;
+        seen = seen || folded(&pane).matches(marker).count() > before;
         evidence = watch.evidence();
         if seen && matches!(evidence, Some(state::Evidence::Found(_))) {
             return Ok(Settled::Consumed);
@@ -478,9 +510,46 @@ pub fn render_unconfirmed(reason: &str, state: Option<&StateDir>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{repair_of, tries_within, Repair, Settled, Unmeasured, SETTLE_STEP, SETTLE_TRIES};
+    use super::{folded, needle_of, repair_of, tries_within, Repair, Settled, Unmeasured, SETTLE_STEP, SETTLE_TRIES};
     use crate::seat::state::{Event, Read};
     use std::time::Duration;
+
+    /// 打刻の合図の現物（80 cell・pane 幅 80 で TUI が折り返す長さ・memo `s2-07l.288`）。
+    const POINTER: &str = "管理 tick: scribe2 seat heartbeat --target s2:admin を撃ち、続きを進めてください";
+
+    /// 修復の門は、TUI が入力欄を自分の幅で折り返して描いた周（自分の目印が改行と字下げで割れて見える）
+    /// でも own_draft と読む（`s2-07l.296`・base は `Keep`）。畳んでも並びが違う下書き（他人の打ちかけ・
+    /// 全角空白の有無）は `Keep` のまま＝畳むのは ASCII の whitespace だけ。
+    #[test]
+    fn seat_attrib_repair_of_matches_wrapped_own_draft() {
+        let idle = Read::Idle(Event::Stop);
+        let wrapped = "管理 tick: scribe2 seat heartbeat --target s2:admin を撃ち、\n  続きを進めてください";
+        assert_eq!(repair_of(Settled::Queued, idle, Some(wrapped), POINTER), Repair::ResendEnter, "改行と字下げで割れた自分の目印");
+        let tabbed = "管理 tick:\n\tscribe2 seat heartbeat\r\n --target s2:admin を撃ち、続きを進めてください";
+        assert_eq!(repair_of(Settled::Queued, idle, Some(tabbed), POINTER), Repair::ResendEnter, "tab / CR も畳む");
+        assert_eq!(
+            repair_of(Settled::Queued, idle, Some("管理 tick: scribe2 seat heartbeat --target s2:planner を撃ち、\n  続きを進めてください"), POINTER),
+            Repair::Keep,
+            "畳んでも並びが違う下書きは他人のもの"
+        );
+        assert_eq!(
+            repair_of(Settled::Queued, idle, Some("a b"), "a\u{3000}b"),
+            Repair::Keep,
+            "全角空白は目印の本文＝落とさない（ASCII 空白と同一視しない）"
+        );
+        assert_eq!(repair_of(Settled::Queued, idle, Some(wrapped), " \n\t "), Repair::Keep, "畳んで空の目印は弁別できない");
+    }
+
+    /// 畳む字面の形: ASCII の whitespace（空白・tab・LF・CR・FF）だけを落とし、全角空白と本文は残す。
+    /// 畳んで空になる payload は目印を持てない（[`needle_of`] は `None`＝`REASON_EMPTY` の側）。
+    #[test]
+    fn seat_attrib_folded_drops_ascii_whitespace_only() {
+        assert_eq!(folded(" a\tb\nc\r\nd\u{c}e "), "abcde");
+        assert_eq!(folded("全角\u{3000}空白"), "全角\u{3000}空白", "U+3000 は本文");
+        assert_eq!(folded(""), "");
+        assert_eq!(needle_of("\n  \n: seat-e2e\n2 行目"), Some(":seat-e2e".to_owned()), "最初の非空行を畳む");
+        assert_eq!(needle_of(" \n\t\n"), None, "非空行が無い payload は目印を持てない");
+    }
 
     /// 修復の門の表（`s2-07l.150`）: **queue ∧ Idle ∧ 入力欄が目印を含む**の 3 つが揃う周だけ送り直す。
     /// どれか 1 つを崩した周（消費済み・Enter 落ち・測れない 3 形／Busy・Stale・Missing・Unreadable／
