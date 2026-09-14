@@ -101,6 +101,15 @@ ruled_at = "2026-09-07"
 
 **最初の違反で止めない**（silent drop 禁止・NFR4）。
 
+### 4.3 差分の門（C5 の「変える」側・`xtask rules-diff`・監査 2026-09-12 塊 4 = `s2-07l.162`）
+
+§4.2 の拒否 5 形は行の**静的な形**（key の在不在・型）だけを見る。値を変えて裁定 id を据え置く便（`value` を動かし `ruling` を古いまま出す）は loader も CI も通り、AI が単独で規則の値を動かせる。C5 は「行を足す / 変える」という **diff の事実**に裁定を結びつける条なので、その面は base との比較でしか測れない。
+
+- 口: `cargo xtask rules-diff --base <sha>`（flip-check / mutants-diff と同じ `--base`・PR job で撃つ＝push(main) には base が無い）。base 側の manifest は `git show <base>:rules/manifest.toml` で読み、HEAD 側は tracked の現物を読む。両方を同じ loader（`toml_lite`）で行に分ける。
+- 判定（行 id で突合・列挙順は HEAD の行順）: (i) base と HEAD の両方に在り `value` か `enabled` が違う行は、`ruling` の字面も違っていなければ **違反**（`ruled_at` だけの打ち直しは変化に数えない・裁定の証拠は id の側）。(ii) HEAD にだけ在る行（新設）は、`ruling` の字面が base の**別の行**の `ruling` と同じなら **違反**（過去の裁定への相乗り）。同じ便で新設した複数の行が 1 つの裁定を共有する形は違反にしない（1 裁定で複数の値を決めた周の通常形・§4.1 の S / M / L）。(iii) base にだけ在る行（除去）は本門の対象外（除去は kind の variant と 1 PR で行い、§4.1 の除去済み行の型で残す）。(iv) `id` / `value` / `enabled` / `ruling` 以外の key の差は見ない。
+- 出力と極性: 判定行 1 本 `rules-diff: base=<sha> rows=<HEAD の行数> changed=<(i)+(ii) の母集団> violations=<件数>` の後に違反 1 件 1 行（`rules/manifest.toml:<line> <id> <(i)|(ii)> ruling=<字面>`）。違反 0 で rc 0・1 件以上で rc 1・base の manifest を読めない / HEAD の manifest が §4.2 で落ちる周は rc 2（**測れないを緑に化けさせない**・flip-check の `base-not-green` と同じ極性）。数値の閾値を持たない（母集団と件数を出すだけ）。
+- 射程外: 裁定 id の**様式**（user ts 形か ADR id か）と、裁定 id が指す裁定が**実在するか**は本門で見ない（裁定の正本は design-intent の側・C14）。値を戻す便（`value` を base の値へ戻す）も (i) の通常形として裁定 id を要る側に倒す。
+
 憲法 §3 rules 表の閾値セルは manifest の**写し**であり（値の正本は manifest 側）、両者の一致は xtask の歯 `constitution_thresholds_match_rules_manifest` が守る（R-C4-1 / R-C4-2 / R-C4-3 と R-C4-4 の 3 値＝計 6 個を順序込みで突合・**閾値の数値を変える手編集は RED**・行の重複や死骸で隠す形も RED・改訂形の `<del>` は落として `<ins>` 側を読む＝整合した改訂は緑で `<ins>` だけ変えた周は RED）。**測っていない面**は 3 つある: 条の向き（`以下` → `以上`）・桁区切りの位置（`20,000` → `2,0000`＝`,` を落として読むため値は同じ）・§3 に**新しい数値行を足した**周（歯が見るのは `r-c4-1`〜`r-c4-4` の 4 行に固定）。数値を持たない prose 行（R-C6-1 以降・R-C13-*）も突合できず射程外である。
 
 ## 5. 実行時に読む manifest の場所
