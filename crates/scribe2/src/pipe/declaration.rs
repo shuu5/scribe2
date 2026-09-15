@@ -578,7 +578,8 @@ pub fn line_count(text: &str, width: u64) -> u64 {
 /// `lines` は base の tracked `.rs` の (path, 行数)。write-set の `.rs`（dir は展開した配下・新規 file は 0 行）の
 /// うち R-C4-2 の測定範囲（`crates/<c>/src/` 配下＝[`core_of`] が `Some`）のそれぞれについて `file_lines − 行数` を
 /// 余地とし、`size_lines` が余地を超える file を名指す（範囲外の `tests/` 等は門の対象外で測らない）。core（write-set
-/// の `.rs` が在る `crates/<c>/src/` の総行数）は `size_lines × write-set の .rs 本数` を見積として同じ式で 1 回。
+/// の `.rs` が在る `crates/<c>/src/` の総行数）は `size_lines × その core に属する write-set の .rs 本数` を見積として
+/// 同じ式で 1 回（母集団は file の余地と同じ [`core_of`] が `Some` の集合＝`tests/` の歯は本数に入れない・C10）。
 /// **縮む面（`-`）は増分が負**なので、file の余地も求めず core の本数にも数えない（満杯の file を割る便を受付が
 /// 断って満杯が固定される型を塞ぐ・§3「上限の余地」）。
 pub fn headroom_shortfalls(items: &[WriteSetItem], lines: &[(String, u64)], caps: Caps) -> Vec<Headroom> {
@@ -600,11 +601,12 @@ pub fn headroom_shortfalls(items: &[WriteSetItem], lines: &[(String, u64)], caps
             (caps.size_lines > headroom).then(|| Headroom { file: (*path).to_owned(), headroom })
         })
         .collect();
-    let estimate = caps.size_lines.saturating_mul(u64::try_from(files.len()).unwrap_or(u64::MAX));
     let mut cores: Vec<&str> = files.iter().filter_map(|path| core_of(path)).collect();
     cores.sort_unstable();
     cores.dedup();
     for core in cores {
+        let members = files.iter().filter(|path| core_of(path) == Some(core)).count();
+        let estimate = caps.size_lines.saturating_mul(u64::try_from(members).unwrap_or(u64::MAX));
         let total: u64 = lines.iter().filter(|(path, _)| core_of(path) == Some(core)).map(|(_, count)| *count).sum();
         let headroom = caps.core_lines.saturating_sub(total);
         if estimate > headroom {
@@ -920,6 +922,24 @@ mod tests {
             headroom_shortfalls(&items, &lines, caps),
             vec![Headroom { file: "crates/toy/src/a.rs".to_owned(), headroom: 50 }],
             "名指すのは src の a.rs だけ（tests/e2e/t.rs は門の対象外）"
+        );
+    }
+
+    /// core の見積の本数も門の範囲だけ: src 1 本 + tests 1 本 + doc の write-set は `size_lines × 1`（tests/ の歯を
+    /// 本数に入れると 2 本で余地を超え、src だけなら通る便を受付が断る＝.303 run 3 の型）。
+    #[test]
+    fn declaration_headroom_core_estimate_counts_only_files_in_the_gate_range() {
+        let (items, _) = outside_the_gate_range();
+        let lines = vec![("crates/toy/src/a.rs".to_owned(), 100), ("crates/toy/tests/e2e/t.rs".to_owned(), 2_000)];
+        let caps = |core_lines: u64| Caps { file_lines: 1_500, core_lines, size_lines: 100 };
+        assert!(
+            headroom_shortfalls(&items, &lines, caps(250)).is_empty(),
+            "core の見積は src 1 本 × 100 = 100 ≤ 余地 150（tests/e2e/t.rs は本数に入れない）"
+        );
+        assert_eq!(
+            headroom_shortfalls(&items, &lines, caps(150)),
+            vec![Headroom { file: CORE.to_owned(), headroom: 50 }],
+            "余地 50 では src 1 本の見積 100 が超える（見積が 0 に潰れていない）"
         );
     }
 
