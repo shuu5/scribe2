@@ -56,6 +56,7 @@ v2 に既に在るもの: FR23（WM の規則）・FR21（`<state_dir>/inject.js
 - 駆動: systemd user timer は **repo に入れない**（起動コマンドを repo に置かない・CLAUDE.md）。unit の雛形は §8 に書き、user の host で有効化する。
 - 記録: 判定と注入は `<state_dir>/seat/<target>/tick.jsonl` に 1 行ずつ（FR21 と同じ schema＝[vessel-hook.md §6](./vessel-hook.md) の `InjectionRecord`）。書き手は tick / inject / cycle の 3 面で、どの行も `seat`（潰した target・潰して空になる周は `null`）と `ts`（1970 年からの秒・UTC・`state.jsonl` の打刻と同じ時計）を持つ（`s2-07l.150`・schema は 1 のまま）。同じ file に 3 種の `who` が混ざるので、席と時刻は行の側で弁別できる。tick の判定行は `consumed=<値>` の直後に、測れない・消費されなかった理由を `reason=<語>` で足す（`seat inject` の行と同じ並び・`enter-lost` / `state-missing` / `state-unreadable` / `state-dir`）。
 - 計測できない理由の弁別（便 2 の実装で決めた読み）: statusline の候補が無い周は、pane 本文が空なら `no-source`・本文が在れば `pane-no-statusline` に分ける（どちらの弁別も **transcript を渡さない周だけ**の話で、明示された周は pane を読まずに jsonl で測る・s2-07l.75）。健全性を外れた候補は `pane-out-of-bound` で**不成立のまま**とし、別の出所で塗り直さない（壊れた面を他の値で隠さない）。**この 3 語はいずれも pane を読む周＝transcript を渡さない周にしか出ない**（渡した周は pane を読まないので到達しない）。
+- 歯の置き場（`s2-07l.327`・[seat-roles.md](./seat-roles.md) §7 が正本）: seat の外形 snapshot は**面ごとに 1 file**（usage / rebrief の DATA / doctor の末尾＝`seat_usage_external_form` / `seat_rebrief_external_form` / `seat_doctor_external_form`・1 本に連結しない）、`tests/e2e/seat/` の歯の file は**接頭辞（責務）ごと**に 1 file。面を触る契約だけがその面の file に当たる形にし、seat 面の契約が snapshot 1 file で全部交差するのを避ける（pipe の外形と同じ割り方）。
 
 ## 4. 憲法・制約との整合
 - R-E12（常駐席は event 駆動で周期起動を張らない）: 管理 tick は席の**外**（host の timer）で回し、席には event（注入）としてしか届かない＝両立。R-G20（管理系の席の watchdog と別口座 respawn）は本設計の tick + cycle が受け皿。

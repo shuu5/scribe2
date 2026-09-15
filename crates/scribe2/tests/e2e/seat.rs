@@ -4,8 +4,9 @@
 //! 歯は題ごとの submodule に置く（`s2-07l.261`・契約の write-set が題の file 単位で交差しないため）:
 //! `wm`（退避 / 消費 / 復元）・`tick`（tick / heartbeat / meter / 証拠）・`cycle`（inject / cycle / 終了 /
 //! 立て直しの shell の門）・`account`（状態 / 役割 / 登録 / 口座 / rules / 起動）。この file には **2 つ以上の
-//! submodule が使う共有 helper と fixture**・外形 snapshot の歯（`seat_external_form`・snapshot 名が module path
-//! を含むので動かさない）・変異生存の検出線の歯（`mutant_e2e_*`）だけを残す。
+//! submodule が使う共有 helper と fixture**・外形 snapshot の歯（面ごとに 1 本＝`seat_usage_external_form` /
+//! `seat_rebrief_external_form` / `seat_doctor_external_form`・`s2-07l.327`・snapshot 名が module path を含む
+//! ので動かさない）・変異生存の検出線の歯（`mutant_e2e_*`）だけを残す。
 //!
 //! tmux は **独立 socket**（`-S <tmp>/sock -f /dev/null`）の server だけを撃ち、開発席の
 //! live な server には 1 度も触れない。pane の読みは `--capture-file` で本文を直に渡す
@@ -203,15 +204,32 @@ fn start_seat_sized(socket: &str, name: &str, ps1: &str, needle: char, width: &s
 /// prompt が描かれるのを待つ上限。
 const PROMPT_WAIT: Duration = Duration::from_secs(5);
 
-/// `seat` の使い方と rebrief の DATA の 3 形（found / candidate / missing の marker の並び）と、
-/// `doctor --state-dir` の突合の項目（tmux を撃てない周の形）・その直後の host の面の行・末尾の導入先の行
-/// （登録 row の anchor・記録なし・consumer-sync.md §4）を snapshot 1 本に固定する（C12.5）。
+// 外形 snapshot は**面ごとに 1 本**（usage / rebrief の DATA / doctor の末尾・`s2-07l.327`・seat-roles.md §7）。
+// 1 本に連結すると seat 面の契約が全部この 1 file で交差する（実測 2026-09-15: 4 便が互いに当たり同時に
+// 出せるのが 2 便）。面を触る契約だけがその面の file に当たる形にする（pipe の外形と同じ割り方）。
+
+/// `seat` の使い方（usage 1 行・全 subcommand）を snapshot に固定する（C12.5）。
 #[test]
-fn seat_external_form() {
-    let mut form = stderr_of(&run_seat(&[]));
+fn seat_usage_external_form() {
+    let form = stderr_of(&run_seat(&[]));
+    insta::assert_snapshot!(form);
+}
+
+/// rebrief の DATA の 3 形（found / candidate / missing の marker の並び）を snapshot に固定する（C12.5）。
+#[test]
+fn seat_rebrief_external_form() {
+    let mut form = String::new();
     for out in rebrief_forms() {
         form.push_str(&stdout_of(&out));
     }
+    insta::assert_snapshot!(form);
+}
+
+/// `doctor --state-dir` の突合の項目（tmux を撃てない周の形）・その直後の host の面の行・末尾の導入先の行
+/// （登録 row の anchor・記録なし・consumer-sync.md §4）を snapshot に固定する（C12.5）。
+#[test]
+fn seat_doctor_external_form() {
+    let mut form = String::new();
     let place = role_doctor_place();
     for line in stdout_of(&role_doctor(&place)).lines().skip_while(|line| !line.starts_with("seats: ")) {
         form.push_str(line);

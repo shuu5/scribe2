@@ -113,7 +113,7 @@ title = "観測 — rebrief の DATA に [DISPATCH] の行（Marker の variant�
 req = ["FR23"]
 section = "6"
 touches = ["crate::seat::rebrief::Marker"]
-also = ["crates/scribe2/tests/e2e/snapshots/e2e__seat__seat_external_form.snap"]
+also = ["crates/scribe2/tests/e2e/snapshots/e2e__seat__seat_rebrief_external_form.snap"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail seat_wm_rebrief_"]
 size = "S"
 done = "偽の列で rebrief が [DISPATCH] を件数付きで出し、読めない周は [DISPATCH-UNMEASURED]"
