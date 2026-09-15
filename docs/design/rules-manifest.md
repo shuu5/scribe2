@@ -242,7 +242,7 @@ title = "private-clean の needle に v1 台帳 id 形と state dir の絶対 pa
 req = ["NFR6"]
 section = "11"
 write-set = ["crates/xtask/src/private_clean.rs", "SPIKE-tooling-report.md", "design-intent/research/SPIKE-folio-report.html", "docs/design/rules-manifest.md"]
-verify = ["cargo nextest run -p xtask --no-tests=fail private_clean_ledger_"]
+verify = ["cargo nextest run -p xtask --no-tests=fail private_clean_ledger_ private_clean_state_dir_ private_clean_relative_state_dir_"]
 size = "S"
 done = "2 形の needle が在り、tracked に該当 0 で cargo xtask check が緑（ADR-0004 の相対形の言及は当てない）"
 <!-- contracts:end -->
