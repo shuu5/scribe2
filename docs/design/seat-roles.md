@@ -133,10 +133,10 @@ done = "席の pane の中から runner / lens を単体起動しても claude �
 [[contract]]
 id = "f"
 title = "壁時計依存の inject の歯を pane の sentinel 待ちに — gate の同時走行で delivered に化ける flaky を fixture の競合の除去で塞ぐ（本体は触らない）"
-req = ["FR21"]
+req = ["FR44", "FR29"]
 section = "12"
 write-set = ["crates/scribe2/tests/e2e/seat/cycle.rs"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail seat_inject_"]
 size = "S"
-done = "pane の script が固定の合図を出してから inject を撃つ形に歯が揃い、同じ file の壁時計依存の歯が同じ形になり（母集団は notes）、負荷下 5 周で赤 0"
+done = "pane の script が固定の合図を出してから inject を撃つ形に歯が揃い、同じ file の壁時計依存の歯が同じ形になり（母集団は notes・改名後の名は全部 seat_inject_ の接頭辞を保つ）、負荷下 5 周で赤 0"
 <!-- contracts:end -->
