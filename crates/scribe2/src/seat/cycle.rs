@@ -22,7 +22,7 @@ use crate::polarity::{OnFailure, Polarity, Timing};
 use super::role::Role;
 use super::{inject, pane_of, role, sanitize_target, state, tmux_ok, StateDir, WmScan};
 use crate::fleet::json_lite::{self, Value};
-use crate::fleet::select::{self, NoCandidate, Purpose, Selection};
+use crate::fleet::select::{self, Model, NoCandidate, Purpose, Selection};
 use crate::fleet::store::{self, LockPolicy};
 use crate::fleet::{replay, wait, Completion, Registration, State};
 use crate::headless::{ACCOUNT_ENV, AGENT_VIEW_ENV, AGENT_VIEW_OFF, DEFAULT_CLAUDE};
@@ -75,6 +75,8 @@ pub const WHO_LAUNCH: &str = "seat-launch";
 const ACCOUNTS_DIR: &str = "accounts";
 /// 起動の雛形の穴（設計 account-autonomy.md §5・seat-roles.md §2）: 選んだ口座の credential dir で埋める 1 つ。
 pub const HOLE: &str = "{account_dir}";
+/// claude CLI の model の flag（起動行が row の `model` を運ぶ語・値は [`Model::alias`]）。
+const MODEL_FLAG: &str = "--model";
 
 /// 他の cycle が走っている。
 pub const REASON_LOCK_HELD: &str = "lock-held";
@@ -125,6 +127,12 @@ pub const REASON_NOT_SHELL: &str = "not-a-shell";
 pub const REASON_LOG_UNREADABLE: &str = "log-unreadable";
 /// `seat launch` の `--anchor` 無しで cwd の repo root を解けない（`seat register` の `input-unreadable` と同じ形）。
 pub const REASON_ANCHOR: &str = "anchor-unresolvable";
+/// `seat launch` の `--model` が表（[`Model::parse`]・表示名か別名）に無い（row も key も書かない）。
+pub const REASON_MODEL_UNKNOWN: &str = "launch-model-unknown";
+/// 起動行に `--model` が 2 つ載る（雛形の literal と器の 1 つ・後勝ちにせず断る・立て直しは `relaunch-` を前置く）。
+pub const REASON_MODEL_DUPLICATED: &str = "launch-model-duplicated";
+/// 立て直す row の `model` が表に無い（tick の前置きで `relaunch-model-unknown`・壊れた宣言値で黙って settings の model で立てない・C10）。
+const REASON_ROW_MODEL_UNKNOWN: &str = "model-unknown";
 
 /// cycle 1 回の入力。
 pub struct Request<'a> {
@@ -583,10 +591,11 @@ pub fn relaunch(request: &Relaunch) -> Relaunched {
         Selection::Chosen(label) => label,
         Selection::None(found) => return Relaunched::None(found),
     };
-    // 注入するのは穴を埋めた雛形に agent view off を前置した 1 行（記録にも同じ行が載る）。
-    let launch = match launch_line(request.state_dir, &request.row.launch, &label) {
+    // 注入するのは row の model を運ばせ穴を埋めた雛形に agent view off を前置した 1 行（記録にも同じ行が載る）。
+    let Ok(model) = model_of(request.row.model.as_deref()) else { return Relaunched::Refused(REASON_ROW_MODEL_UNKNOWN) };
+    let launch = match launch_line(request.state_dir, &with_model(&request.row.launch, model), &label) {
         Ok(found) => found,
-        Err(holes) => return Relaunched::Refused(holes.as_str()),
+        Err(reason) => return Relaunched::Refused(reason),
     };
     let ttl = match ttl_s() {
         Ok(found) => found,
@@ -635,11 +644,30 @@ fn choose(own: (Role, &str, Option<&str>), state: &State, labels: &[String], mod
     })
 }
 
-/// 雛形 `template` の穴を口座 `label` の credential dir（`<state_dir>/accounts/<label>`）で埋め、agent view off を前置した
-/// 起動の 1 行（立て直しと `seat launch` の同じ 1 つ・記録にも同じ行が載る）。
-fn launch_line(state_dir: &StateDir, template: &str, label: &str) -> Result<String, Holes> {
+/// 雛形 `template` の `--model` を高々 1 つと確かめ（[`single_model`]）、穴を口座 `label` の credential dir（`<state_dir>/accounts/<label>`）で埋め、agent view off を前置した起動の 1 行（立て直しと `seat launch` の同じ 1 つ・記録にも同じ行が載る）。断りは字面。
+fn launch_line(state_dir: &StateDir, template: &str, label: &str) -> Result<String, &'static str> {
+    single_model(template)?;
     let account_dir = state_dir.path.join(ACCOUNTS_DIR).join(label);
-    fill_launch(template, &account_dir.display().to_string()).map(|found| with_agent_view_off(&found))
+    fill_launch(template, &account_dir.display().to_string()).map(|found| with_agent_view_off(&found)).map_err(Holes::as_str)
+}
+
+/// 宣言の model（表示名か別名・登録 row の `model` / `--model`）を型にする: 無しは `Ok(None)`・表に無い字面は `Err`。
+fn model_of(text: Option<&str>) -> Result<Option<Model>, ()> {
+    text.map_or(Ok(None), |found| Model::parse(found).map(Some).ok_or(()))
+}
+
+/// 起動行 `line` に model を運ばせる（pure・C10「row の宣言値を起動へ効かせる」・settings の層に依らない C2.2）: `claude` の語の直後に `--model <別名>` を挟む（`claude` の語が無い雛形は末尾）。`None` は行をそのまま（雛形は書き換えない）。
+pub fn with_model(line: &str, model: Option<Model>) -> String {
+    let Some(model) = model else { return line.to_owned() };
+    let mut words: Vec<&str> = line.split(' ').collect();
+    let at = words.iter().position(|word| *word == DEFAULT_CLAUDE).map_or(words.len(), |at| at + 1);
+    words.splice(at..at, [MODEL_FLAG, model.alias()]);
+    words.join(" ")
+}
+
+/// 起動行の `--model` は高々 1 つ: 雛形の literal と器の 1 つが重なる周は後勝ちにせず [`REASON_MODEL_DUPLICATED`]（宣言は row の 1 か所）。
+pub fn single_model(line: &str) -> Result<(), &'static str> {
+    (line.split(' ').filter(|word| *word == MODEL_FLAG).count() <= 1).then_some(()).ok_or(REASON_MODEL_DUPLICATED)
 }
 
 /// lock を握っている間の手順: 起動の 1 本（[`boot`]）に「立ち上がりの直後の登録 row の更新」を挟む。
@@ -924,13 +952,13 @@ fn sending<'r>(common: &Boot<'r>, payload: &'r str) -> inject::Request<'r> {
 }
 
 /// 起動行の導出（**pure**・設計 account-lifecycle.md §4・ADR-0026 §2.3）:
-/// `CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CONFIG_DIR={account_dir} claude --plugin-dir <anchor> [--plugin-dir <dir>…] [<value>…]`。
+/// `CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CONFIG_DIR={account_dir} claude [--model <別名>] --plugin-dir <anchor> [--plugin-dir <dir>…] [<value>…]`。
 ///
 /// 穴は [`HOLE`] の 1 つだけ（[`fill_launch`] / [`Holes`] は不変）。`claude` は語（shell の PATH が解く・器は claude の
-/// 場所を持たない）。器自身の plugin は anchor（main checkout・`plugin.json` を持つ）を積み、host 固有の plugin dir と
-/// 起動引数は host の面の宣言（`[[plugin]]` / `[[launch-arg]]`・宣言順）から写す（C10.2）。雛形 file は読まない・
-/// 書かない。値の中の空白は解釈しない（shell が読む字面をそのまま並べる）。
-pub fn derive_launch(anchor: &Path, plugins: &[PluginDir], args: &[LaunchArg]) -> String {
+/// 場所を持たない）。`model` が在れば `claude` の直後に運ぶ（[`with_model`]・登録 row の雛形は `None`＝model 無し）。器自身の plugin は
+/// anchor（main checkout・`plugin.json` を持つ）を積み、host 固有の plugin dir と起動引数は host の面の宣言（`[[plugin]]` /
+/// `[[launch-arg]]`・宣言順）から写す（C10.2）。雛形 file は読まない・書かない。値の中の空白は解釈しない（shell が読む字面のまま）。
+pub fn derive_launch(anchor: &Path, plugins: &[PluginDir], args: &[LaunchArg], model: Option<Model>) -> String {
     let mut words = vec![
         format!("{AGENT_VIEW_ENV}={AGENT_VIEW_OFF}"),
         format!("{ACCOUNT_ENV}={HOLE}"),
@@ -943,7 +971,7 @@ pub fn derive_launch(anchor: &Path, plugins: &[PluginDir], args: &[LaunchArg]) -
         words.push(plugin.dir().to_owned());
     }
     words.extend(args.iter().map(|arg| arg.value().to_owned()));
-    words.join(" ")
+    with_model(&words.join(" "), model)
 }
 
 /// 席の起動 1 回の入力（[`launch`]・`seat launch`・account-lifecycle.md §4）。
@@ -980,30 +1008,28 @@ pub enum Launched {
     Done(String, Option<inject::Settled>),
     /// 選べる口座が無い（**1 key も送らず row も書かない**）。
     None(NoCandidate),
-    /// **1 key も送っていない**（row は理由による: `session-missing` 以前は書かない・門で止まる周は書き終えている）。
+    /// **1 key も送っていない**（row は理由による: `session-missing` 以前〔model の断りを含む〕は書かない・門で止まる周は書き終えている）。
     Refused(&'static str),
     /// 送ったが確かめられない。
     Failed(&'static str),
 }
 
-/// 席を起こす（設計 account-lifecycle.md §4・ADR-0026 §2.3・SRS FR59 / FR40 / FR36）: 口座を決め（`--account` か
-/// session 用の選定 [`choose`]）→ session の実在（無ければ `session-missing`・作らない）→ 登録 row を**先に**書く
-/// （[`role::register`]・`sid` 無し・打刻の条件は掛けない・`launch` = 導出した行）→ window（無ければ `new-window`）→
-/// 立て直しと同じ 1 本（[`boot`]）で穴を埋めた起動行を shell へ注入し、`--restore` が在れば復元を送る → `inject.jsonl` に
-/// `kind=launch` を 1 行。lock も cycle-stamp も取らない（tick の back-off は立て直しのもので、起動は user の手番）。
+/// 席を起こす（設計 account-lifecycle.md §4・ADR-0026 §2.3・SRS FR59 / FR40 / FR36）: `--model` を型にし（表に無い値は `launch-model-unknown`）
+/// → 口座を決め（`--account` か session 用の選定 [`choose`]）→ 起動行（導出した行に model を運ばせ穴を埋める・二重は `launch-model-duplicated`・
+/// row の雛形は model 無し＝宣言は row の `model` の 1 か所）→ session の実在（無ければ `session-missing`・作らない）→ 登録 row を**先に**
+/// 書く（[`role::register`]・`sid` 無し・打刻の条件は掛けない）→ window（無ければ `new-window`）→ 立て直しと同じ 1 本（[`boot`]）で起動行を
+/// shell へ注入し、`--restore` が在れば復元を送る → `inject.jsonl` に `kind=launch` を 1 行。lock も cycle-stamp も取らない（起動は user の手番）。
 pub fn launch(request: &Launch) -> Launched {
     let started_at = Instant::now();
+    let Ok(model) = model_of(request.model) else { return Launched::Refused(REASON_MODEL_UNKNOWN) };
     let label = match pick_account(request) {
         Ok(label) => label,
         Err(refused) => return refused,
     };
-    let derived = match prepare(request, &label) {
+    let derived = derive_launch(request.anchor, request.manifest.plugins(), request.manifest.launch_args(), None);
+    let line = match launch_line(request.state_dir, &with_model(&derived, model), &label).and_then(|line| prepare(request, &label, derived).map(|()| line)) {
         Ok(found) => found,
         Err(reason) => return Launched::Refused(reason),
-    };
-    let line = match launch_line(request.state_dir, &derived, &label) {
-        Ok(found) => found,
-        Err(holes) => return Launched::Refused(holes.as_str()),
     };
     let common = Boot {
         target: request.target,
@@ -1045,27 +1071,25 @@ fn pick_account(request: &Launch) -> Result<String, Launched> {
 }
 
 /// 起動行を送る前の 3 手（順序固定）: session の実在（無ければ `session-missing`・**row を書かない**）→ 登録 row を
-/// 先に書く（`sid` 無し・`launch` = 導出した行）→ window（[`open_window`]）。導出した行（穴を埋める前）を返す。
-fn prepare(request: &Launch, label: &str) -> Result<String, &'static str> {
+/// 先に書く（`sid` 無し・`launch` = 導出した行 `derived`〔穴を埋める前・model 無し〕）→ window（[`open_window`]）。
+fn prepare(request: &Launch, label: &str, derived: String) -> Result<(), &'static str> {
     let Some((session, window)) = request.target.split_once(':') else {
         return Err(REASON_SESSION_MISSING);
     };
     if super::tmux_stdout(request.socket, &["has-session", "-t", &format!("={session}")]).is_none() {
         return Err(REASON_SESSION_MISSING);
     }
-    let derived = derive_launch(request.anchor, request.manifest.plugins(), request.manifest.launch_args());
     let row = Registration {
         role: request.role,
         anchor: request.anchor.display().to_string(),
         target: request.target.to_owned(),
         sid: None,
         account: label.to_owned(),
-        launch: derived.clone(),
+        launch: derived,
         model: request.model.map(str::to_owned),
     };
     role::register(&request.state_dir.path, row).map_err(|_| REASON_REGISTER)?;
-    open_window(request, session, window)?;
-    Ok(derived)
+    open_window(request, session, window)
 }
 
 /// window を用意する: 無ければ `new-window -t <session> -n <window>` で作り、shell の prompt が描かれるまで窓（`settle`）の内で
@@ -1135,8 +1159,8 @@ pub fn render_launched(target: &str, result: &Launched, state: &StateDir) -> Str
 #[cfg(test)]
 mod tests {
     use super::{
-        child_of, derive_launch, fill_launch, stat_field, terminate_group, with_agent_view_off, Holes, StopTarget, Stopped,
-        HOLE, HOLES, STOPPEDS,
+        child_of, derive_launch, fill_launch, model_of, single_model, stat_field, terminate_group, with_agent_view_off,
+        with_model, Holes, Model, StopTarget, Stopped, HOLE, HOLES, REASON_MODEL_DUPLICATED, STOPPEDS,
     };
     use crate::fleet::Completion;
     use crate::order::is_declaration_order;
@@ -1277,14 +1301,14 @@ mod tests {
 
     /// 起動行の導出（契約 (6f)・account-lifecycle.md §4）: 穴は `{account_dir}` の 1 つ（[`fill_launch`] がそのまま埋める）・
     /// 順序は agent view off → 口座の env → `claude` → anchor の `--plugin-dir` → `[[plugin]]` の dir（宣言順）→
-    /// `[[launch-arg]]` の value（宣言順）。plugin 0 件・引数 0 件は anchor の `--plugin-dir` だけで終わる。
+    /// `[[launch-arg]]` の value（宣言順）。plugin 0 件・引数 0 件は anchor の `--plugin-dir` だけで終わる。後半は model の運び（`s2-07l.313`）。
     #[test]
     fn seat_launch_derive_line_orders_anchor_plugins_and_args_with_one_hole() {
         let host = "schema = 1\n\n[[plugin]]\ndir = \"/opt/p2\"\n\n[[launch-arg]]\nvalue = \"--permission-mode\"\n\n\
                     [[plugin]]\ndir = \"/opt/p1\"\n\n[[launch-arg]]\nvalue = \"bypassPermissions\"\n";
         let manifest = Manifest::parse(host).unwrap_or_default();
         assert_eq!(manifest.plugins().len(), 2, "fixture が読める");
-        let line = derive_launch(Path::new("/repo/main"), manifest.plugins(), manifest.launch_args());
+        let line = derive_launch(Path::new("/repo/main"), manifest.plugins(), manifest.launch_args(), None);
         assert_eq!(
             line,
             "CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CONFIG_DIR={account_dir} claude --plugin-dir /repo/main \
@@ -1299,8 +1323,14 @@ mod tests {
             "穴は既存の fill_launch で埋まる"
         );
         assert_eq!(with_agent_view_off(&line), line, "前置は既に在る（二重にしない）");
-        let bare = derive_launch(Path::new("/repo/main"), &[], &[]);
+        let bare = derive_launch(Path::new("/repo/main"), &[], &[], None);
         assert_eq!(bare, "CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CONFIG_DIR={account_dir} claude --plugin-dir /repo/main");
+        // model（C10）: `claude` の直後に別名で 1 つ・None は従来の行と同一・雛形へ挟むのも同じ位置（`claude` の語が無い雛形は末尾）・2 つの行だけを断る。
+        let fable = derive_launch(Path::new("/repo/main"), &[], &[], Some(Model::Fable));
+        assert_eq!(fable, "CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CONFIG_DIR={account_dir} claude --model fable --plugin-dir /repo/main");
+        assert_eq!(with_model("sh l.sh {account_dir}", Some(Model::Opus)), "sh l.sh {account_dir} --model opus", "`claude` の語が無い雛形は末尾");
+        assert_eq!((single_model(&fable), single_model(&with_model(&fable, Some(Model::Opus)))), (Ok(()), Err(REASON_MODEL_DUPLICATED)));
+        assert_eq!((model_of(None), model_of(Some("Fable")), model_of(Some("opus")), model_of(Some("nope"))), (Ok(None), Ok(Some(Model::Fable)), Ok(Some(Model::Opus)), Err(())));
     }
 
     /// 起動行の先頭に agent view を切る env を 1 つだけ前置する: 行の中身は変えず、既に前置済みの行は二重にせず、空の行は

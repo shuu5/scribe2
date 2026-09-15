@@ -9,6 +9,7 @@ use super::externalize::{self, ExternalizeError, Trigger};
 use super::rebrief::{self, RebriefError};
 use super::{heartbeat, inject, meter, role, tick};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_OK, RC_REFUSED};
+use crate::fleet::select::Model;
 use crate::rules::RuleError;
 use std::path::Path;
 use std::time::Duration;
@@ -419,7 +420,8 @@ fn rebrief_of(args: &[String]) -> Outcome {
 }
 
 /// `seat register`（設計 seat-roles.md §2）。未知の `--role` は使い方の誤りとして断る。`--model M` は任意
-/// （席が使う model の display name・`--account` と同じ受け方＝空文字は使い方の誤り・契約 (e)）。
+/// （席が使う model の表示名か別名・[`Model::parse`] の表に無い値は `--role` と同じく使い方の誤り＝未知の値を row に書かない・
+/// `--account` と同じ受け方＝空文字も使い方の誤り・契約 (e) / `s2-07l.313`）。
 fn register_of(args: &[String]) -> Outcome {
     let [state_dir, target, role, account, launch] = ["--state-dir", "--target", "--role", "--account", "--launch"].map(|name| required_nonempty(args, name));
     let (Ok(state_dir), Ok(target), Ok(Some(role)), Ok(account), Ok(launch), Ok(anchor), Ok(model)) =
@@ -427,6 +429,9 @@ fn register_of(args: &[String]) -> Outcome {
     else {
         return refused_usage();
     };
+    if model.is_some_and(|found| Model::parse(found).is_none()) {
+        return refused_usage();
+    }
     let draft = crate::fleet::Registration {
         role,
         target: target.to_owned(),
@@ -458,7 +463,8 @@ struct LaunchFlags<'a> {
     target: &'a str,
     /// `--role`（必須・閉じた [`role::Role`]）。
     role: role::Role,
-    /// `--account` / `--anchor` / `--model` / `--restore` / `--tmux-socket`（任意・空文字は使い方の誤り）。
+    /// `--account` / `--anchor` / `--model` / `--restore` / `--tmux-socket`（任意・空文字は使い方の誤り・`--model` の表に無い
+    /// 値は [`cycle::launch`] が `launch-model-unknown` で断る）。
     account: Option<&'a str>,
     anchor: Option<&'a str>,
     model: Option<&'a str>,

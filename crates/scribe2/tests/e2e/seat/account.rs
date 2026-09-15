@@ -2031,6 +2031,109 @@ fn seat_account_relaunch_leaves_the_current_account_at_threshold() {
     fs::remove_dir_all(&place.dir).ok();
 }
 
+/// 席を planner として口座 [`ACCT_SEAT`] と `--model <model>` で `seat register` の口で登録する（[`acct_register_as`] と同じ
+/// 打刻の前提・`model` は表示名か別名）。
+fn acct_register_with_model(place: &AcctPlace, target: &str, launch: &str, model: &str) -> Output {
+    let seat = seat_dir_of(&place.state, target);
+    fs::create_dir_all(&seat).ok();
+    fs::write(state_file(&seat), format!("{}\n", stamp_line("idle", "SessionStart", unix_now(), ACCT_SID))).ok();
+    let launch_file = fixture(&place.dir, "launch.txt", launch);
+    let state = place.state.display().to_string();
+    run_seat(&[
+        "register", "--state-dir", &state, "--target", target, "--role", "planner", "--account", ACCT_SEAT,
+        "--launch", &launch_file, "--anchor", ACCT_ANCHOR, "--model", model,
+    ])
+}
+
+/// 退避して止まった席の fixture（[`acct_parked`] と同じ・登録は済んでいる周・a1 = 100・a2 = 30・退避の合図 → `Stop` → shell）。
+fn acct_park_registered(place: &AcctPlace, target: &str) {
+    acct_measured(&place.state, ACCT_SEAT, 100, &acct_now());
+    acct_measured(&place.state, ACCT_SPARE, 30, &acct_now());
+    let first = acct_signal(place, target);
+    assert_eq!(tick_token(&first, "kind").as_deref(), Some("externalize"), "1 周目は退避の合図: {first}");
+    acct_stop(place, target, unix_now().saturating_add(1));
+    assert!(acct_shell_prompt(place, target, ""), "席の終了後の pane は shell の prompt で終わる");
+}
+
+/// (12) 起動行は row の model を typed に運ぶ（`s2-07l.313`・C10 / SRS FR36 / FR38・account-lifecycle.md §4）: `--model Opus`
+/// （表示名）で登録した席を立て直すと、注入する起動行は雛形の末尾（`claude` の語を持たない雛形）に**別名** `--model opus` を
+/// ちょうど 1 つ持つ。雛形（row の `launch`）は書き換えず（写した row にも `--model` の語は無い・`model` は `Opus` のまま写す）、
+/// 穴は a2 の credential dir で埋まり復元も届く。base の起動行は `--model` を持たない（RED）。
+#[test]
+fn seat_account_relaunch_carries_the_row_model() {
+    let place = acct_place();
+    let name = "acctmodel";
+    let guard = start_seat(&place.socket, name);
+    assert!(guard.ready(), "独立 socket に shell の session を立てられる");
+    let launch = acct_launcher(&place, name);
+    let registered = acct_register_with_model(&place, name, &launch, "Opus");
+    assert_eq!(rc_of(&registered), i32::from(RC_OK), "stderr={}", stderr_of(&registered));
+    assert!(stdout_of(&registered).trim_end().ends_with(" model=Opus"), "表示名で登録できる: {}", stdout_of(&registered));
+    acct_park_registered(&place, name);
+
+    let out = acct_tick(&place, name, None);
+
+    let line = stdout_of(&out);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stdout={line} stderr={}", stderr_of(&out));
+    for (key, want) in [("decision", "inject"), ("kind", "relaunch"), ("consumed", "true"), ("relaunch", ACCT_SPARE)] {
+        assert_eq!(tick_token(&line, key).as_deref(), Some(want), "{key}: {line}");
+    }
+    acct_assert_launched_then_restored(&place, name);
+    acct_assert_relabelled(&place, name);
+    let spare_dir = place.state.join("accounts").join(ACCT_SPARE).display().to_string();
+    let sent = acct_sent(&place.state, name);
+    assert_eq!(
+        sent.get(1).map(String::as_str),
+        Some(format!("CLAUDE_CODE_DISABLE_AGENT_VIEW=1 {} --model opus", launch.replace("{account_dir}", &spare_dir)).as_str()),
+        "起動行は row の model を別名で 1 つ運ぶ（`claude` の語が無い雛形は末尾）: {sent:?}"
+    );
+    let rows = acct_rows(&place.state);
+    assert!(rows.iter().all(|row| row.model.as_deref() == Some("Opus")), "row の model は表示名のまま: {rows:?}");
+    assert!(rows.iter().all(|row| !row.launch.split(' ').any(|word| word == "--model")), "雛形に `--model` は書かない: {rows:?}");
+    drop(guard);
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (13) row の `model` が表に無い（`nope`）席は立て直さない: `relaunch-model-unknown`（rc 1・decision=error）・注入 0・
+/// `SeatRegistered` 0・cycle-stamp なし（壊れた宣言値で黙って settings の model で立てない・C10）。`seat register --model nope`
+/// 自体は使い方で断り row を書かない（未知の値を row に書かない）ので、壊れた row は `role::register` で直に積む。base は黙って
+/// 起こす（RED）。
+#[test]
+fn seat_account_relaunch_refuses_an_unknown_row_model() {
+    let place = acct_place();
+    let name = "acctnomodel";
+    let guard = start_seat(&place.socket, name);
+    assert!(guard.ready(), "独立 socket に shell の session を立てられる");
+    let launch = acct_launcher(&place, name);
+    let via_cli = acct_register_with_model(&place, name, &launch, "nope");
+    assert_eq!(rc_of(&via_cli), i32::from(RC_REFUSED), "表に無い --model は使い方で断る: stdout={}", stdout_of(&via_cli));
+    assert_eq!(stderr_of(&via_cli), stderr_of(&run_seat(&[])), "使い方の 1 本と同じ字面");
+    assert!(stdout_of(&via_cli).is_empty(), "stdout は空");
+    assert!(acct_rows(&place.state).is_empty(), "未知の値は row に書かない");
+    let broken = vessel::fleet::Registration {
+        role: vessel::seat::role::Role::Planner,
+        anchor: ACCT_ANCHOR.to_owned(),
+        target: name.to_owned(),
+        sid: Some(ACCT_SID.to_owned()),
+        account: ACCT_SEAT.to_owned(),
+        launch,
+        model: Some("nope".to_owned()),
+    };
+    assert!(vessel::seat::role::register(&place.state, broken).is_ok(), "壊れた row を直に積める");
+    acct_park_registered(&place, name);
+
+    let out = acct_tick(&place, name, None);
+
+    let line = stderr_of(&out);
+    assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "stdout={}", stdout_of(&out));
+    assert_eq!(tick_token(&line, "decision").as_deref(), Some("error"), "{line}");
+    assert_eq!(tick_token(&line, "reason").as_deref(), Some("relaunch-model-unknown"), "{line}");
+    acct_assert_not_relaunched(&place, name, "model-unknown");
+    assert_eq!(acct_injected(&place.state, name).len(), 1, "1 周目の退避の合図だけ");
+    drop(guard);
+    fs::remove_dir_all(&place.dir).ok();
+}
+
 // ─────────────────── 席の起動（account-lifecycle.md §4・ADR-0026 §2.3・`s2-07l.244`・接頭辞 `seat_launch_`） ───────────────────
 
 /// host の面（`<state>/host.toml`）に宣言する口座（tracked の manifest に口座は無い）。
@@ -2332,6 +2435,132 @@ fn seat_launch_restore_is_sent_once_after_session_start() {
     assert_eq!(sent.len(), 2, "起動行と復元の 2 行: {sent:?}");
     assert!(sent.first().is_some_and(|what| what.starts_with("CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CONFIG_DIR=")), "{sent:?}");
     assert_eq!(sent.get(1).map(String::as_str), Some("/rebrief"), "{sent:?}");
+    drop(guard);
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// 送った行のうち `--model` の語の数（起動行が model を**ちょうど 1 つ**運ぶことの計測）。
+fn launch_model_words(line: &str) -> usize {
+    line.split(' ').filter(|word| *word == "--model").count()
+}
+
+/// (f) 起動行は `--model` を typed に運ぶ（`s2-07l.313`・C2.2 / C10・SRS FR59 / FR36）: `--model Fable`（表示名）で起こすと偽
+/// claude の argv は `--model fable`（別名）で**始まり**（`claude` の直後・anchor の `--plugin-dir` より前）、送った行に
+/// `--model` の語は 1 つ・登録 row は `model=Fable` を持ち **`launch`（雛形）に `--model` の語は無い**（model 無しの導出行のまま）。
+/// 表に無い `--model nope` は `launch-model-unknown` で row も key も書かない。base は `--model` を運ばず黙って settings の
+/// model で立てる（RED）。
+#[test]
+fn seat_launch_carries_the_model_alias_in_the_launch_line() {
+    let place = launch_place();
+    let name = "launchmodel";
+    let target = format!("{name}:{name}");
+    let path = launch_shims(&place, &target);
+    let guard = launch_session(&place, name, &path);
+    assert!(guard.ready(), "独立 socket に shell の session を立てられる");
+
+    let unknown = launch_run(&place, &path, &target, &["--account", "l2", "--model", "nope"]);
+    assert_eq!(rc_of(&unknown), i32::from(RC_REFUSED), "stdout={}", stdout_of(&unknown));
+    assert_eq!(tick_token(&stderr_of(&unknown), "reason").as_deref(), Some("launch-model-unknown"), "{}", stderr_of(&unknown));
+    launch_assert_not_sent(&place, 0, "model-unknown");
+
+    let out = launch_run(&place, &path, &target, &["--account", "l2", "--model", "Fable"]);
+
+    let line = stdout_of(&out);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stdout={line} stderr={}", stderr_of(&out));
+    assert_eq!(
+        fs::read_to_string(place.dir.join("launched")).unwrap_or_default(),
+        format!("--model\nfable\n{}", launch_expected_argv(&place, "l2")),
+        "別名の `--model fable` が `claude` の直後に 1 回だけ届く"
+    );
+    let sent = acct_sent(&place.state, &format!("{name}_{name}"));
+    assert_eq!(sent.len(), 1, "起動行の 1 行: {sent:?}");
+    assert!(sent.first().is_some_and(|what| what.contains(" claude --model fable --plugin-dir ") && launch_model_words(what) == 1), "{sent:?}");
+    let rows = acct_rows(&place.state);
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows.first().map(|row| row.model.as_deref()), Some(Some("Fable")), "row の model は表示名のまま: {rows:?}");
+    assert_eq!(rows.first().map(|row| row.launch.as_str()), Some(launch_derived(&place).as_str()), "雛形は model 無しの導出行: {rows:?}");
+    drop(guard);
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (d) 雛形に literal の `--model` が在る（host の面の `[[launch-arg]]` に `--model` / `opus`＝暫定の再登録の形）周に `--model Fable`
+/// で起こすと、器の 1 つと二重になるので後勝ちにせず `launch-model-duplicated` で断る（row も key も書かない）。`--model` 無しなら
+/// literal の 1 つだけが載って起こせる（二重**だけ**を断る）。
+#[test]
+fn seat_launch_refuses_a_duplicated_model_in_the_template() {
+    let place = launch_place();
+    let name = "launchdup";
+    let target = format!("{name}:{name}");
+    let host = place.state.join(vessel::rules::HOST_MANIFEST);
+    let literal = format!("{}\n[[launch-arg]]\nvalue = \"--model\"\n\n[[launch-arg]]\nvalue = \"opus\"\n", fs::read_to_string(&host).unwrap_or_default());
+    fs::write(&host, literal).ok();
+    let path = launch_shims(&place, &target);
+    let guard = launch_session(&place, name, &path);
+    assert!(guard.ready(), "独立 socket に shell の session を立てられる");
+
+    let out = launch_run(&place, &path, &target, &["--account", "l2", "--model", "Fable"]);
+
+    let line = stderr_of(&out);
+    assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "stdout={}", stdout_of(&out));
+    assert_eq!(tick_token(&line, "reason").as_deref(), Some("launch-model-duplicated"), "{line}");
+    launch_assert_not_sent(&place, 0, "model-duplicated");
+
+    let single = launch_run(&place, &path, &target, &["--account", "l2"]);
+    assert_eq!(rc_of(&single), i32::from(RC_OK), "stdout={} stderr={}", stdout_of(&single), stderr_of(&single));
+    let argv = fs::read_to_string(place.dir.join("launched")).unwrap_or_default();
+    assert_eq!(argv, launch_expected_argv(&place, "l2").replacen("\nenv:", "\n--model\nopus\nenv:", 1), "literal の 1 つだけが載る: {argv}");
+    drop(guard);
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (f) `--model Fable` で起こした席の立て直しは同じ model を運ぶ（`s2-07l.313`・row の `launch` は model 無しの雛形・model は
+/// row の `model` の 1 か所）: 偽 claude を `seat launch --model Fable --account l1` で起こし → 退避の合図（l1 = 100）→ `Stop` →
+/// 偽 claude を終えて shell へ戻す → tick が l2 で立て直す。立て直しの起動行は `claude --model fable` を**ちょうど 1 つ**持ち
+/// （`launch-model-duplicated` にならない）、偽 claude の 2 回目の argv も `--model fable` で始まり、写した row の `launch` に
+/// `--model` の語は無い。run 1 の実装（雛形に `--model` を書く）は二重で断る（RED）。
+#[test]
+fn seat_account_relaunch_keeps_the_model_of_a_seat_launched_with_model() {
+    let place = launch_place();
+    let name = "launchkeep";
+    let target = format!("{name}:{name}");
+    let seat = format!("{name}_{name}");
+    let path = launch_shims(&place, &target);
+    let guard = launch_session(&place, name, &path);
+    assert!(guard.ready(), "独立 socket に shell の session を立てられる");
+    let launched = launch_run(&place, &path, &target, &["--account", "l1", "--model", "Fable"]);
+    assert_eq!(rc_of(&launched), i32::from(RC_OK), "stdout={} stderr={}", stdout_of(&launched), stderr_of(&launched));
+    acct_measured(&place.state, "l1", 100, &acct_now());
+    acct_measured(&place.state, "l2", 30, &acct_now());
+    write_state(&seat_dir_of(&place.state, &seat), StateFix::Busy { age_s: 0 });
+    let first = stdout_of(&acct_tick(&place, &target, None));
+    assert_eq!(tick_token(&first, "kind").as_deref(), Some("externalize"), "1 周目は退避の合図: {first}");
+    acct_stop(&place, &seat, unix_now().saturating_add(1));
+    assert!(tmux(&place.socket, &["send-keys", "-t", &target, "C-d"]).status.success(), "偽 claude を終える");
+    assert!(acct_shell_prompt(&place, &target, ""), "席の終了後の pane は shell の prompt で終わる");
+
+    let out = acct_tick(&place, &target, None);
+
+    let line = stdout_of(&out);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stdout={line} stderr={}", stderr_of(&out));
+    for (key, want) in [("decision", "inject"), ("kind", "relaunch"), ("consumed", "true"), ("account", "l1:100"), ("relaunch", "l2")] {
+        assert_eq!(tick_token(&line, key).as_deref(), Some(want), "{key}: {line}");
+    }
+    assert_eq!(
+        fs::read_to_string(place.dir.join("launched")).unwrap_or_default(),
+        format!("--model\nfable\n{}--model\nfable\n{}", launch_expected_argv(&place, "l1"), launch_expected_argv(&place, "l2")),
+        "起動と立て直しの argv はどちらも `--model fable` で始まる"
+    );
+    let sent = acct_sent(&place.state, &seat);
+    assert_eq!(sent.len(), 4, "起動・退避の合図・立て直し・復元の 4 行: {sent:?}");
+    let l2_dir = place.state.join("accounts").join("l2").display().to_string();
+    assert!(
+        sent.get(2).is_some_and(|what| what.starts_with(&format!("CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CONFIG_DIR={l2_dir} claude --model fable --plugin-dir ")) && launch_model_words(what) == 1),
+        "立て直しの起動行は model を 1 つ運ぶ: {sent:?}"
+    );
+    assert_eq!(sent.get(3).map(String::as_str), Some("/rebrief"), "{sent:?}");
+    let rows = acct_rows(&place.state);
+    assert_eq!(rows.len(), 2, "SeatRegistered は 1 件増える: {rows:?}");
+    assert!(rows.iter().all(|row| row.model.as_deref() == Some("Fable") && launch_model_words(&row.launch) == 0), "雛形に `--model` は無い: {rows:?}");
     drop(guard);
     fs::remove_dir_all(&place.dir).ok();
 }
