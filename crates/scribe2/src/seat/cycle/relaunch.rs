@@ -2,7 +2,7 @@
 //! 1 本（[`boot`]）・退避後の終了の手（[`send_exit`]・`s2-07l.252`）。[`super`] から純移動（`s2-07l.319`）。判定順・注入の
 //! 字面・記録の行は不変で、lock・cycle-stamp・立ち上がりの確認（[`super::started`]）は親の 1 本を使う。
 
-use super::launch::{fill_launch, model_of, single_model, with_agent_view_off, with_model, Holes};
+use super::launch::{before_deadline, fill_launch, model_of, single_model, with_agent_view_off, with_model, Holes};
 use super::{
     lock_path, send_to, started, take_lock, ttl_s, write_stamp, Lock, ACCOUNTS_DIR, DEFAULT_RESTORE, REASON_INPUT_BUSY,
     REASON_INPUT_UNKNOWN, REASON_LAUNCH, REASON_LOCK_HELD, REASON_PANE_MISSING, REASON_REGISTER, REASON_RESTORE,
@@ -223,11 +223,18 @@ fn restore_when_ready(common: &Boot, payload: &str) -> Option<inject::Settled> {
             inject::Delivery::Unconfirmed(_) => return None,
             inject::Delivery::Refused(_) => {}
         }
-        if !deadline.is_some_and(|at| Instant::now() < at) {
+        if restore_window_closed(Instant::now(), deadline) {
             return None;
         }
         sleep(common.step);
     }
+}
+
+/// 復元の窓が閉じたか（**pure**・[`restore_when_ready`] の送り直しを止める側・`s2-07l.344`）: 測った `now` が `deadline`
+/// の手前（[`before_deadline`]）で**ない**周に true＝窓に達した・過ぎた・窓が無い周は送り直さず `None` へ倒れる。手前の
+/// 周だけ false（負例＝送り直す）。呼び手は `Instant::now()` を渡す。
+fn restore_window_closed(now: Instant, deadline: Option<Instant>) -> bool {
+    !before_deadline(now, deadline)
 }
 
 /// 退避後の終了の手の 1 行（`line`）を `target` へ literal で送り、Enter を送る（`s2-07l.252`）。送れた周は席の
@@ -273,5 +280,24 @@ fn sending<'r>(common: &Boot<'r>, payload: &'r str) -> inject::Request<'r> {
         socket: common.socket,
         payload,
         state_dir: Some(common.state_dir),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::restore_window_closed;
+    use std::time::{Duration, Instant};
+
+    /// 復元の送り直しを止めるのは窓の**外**だけ（`s2-07l.344`・.319 の検出線の生存 `!` の削除を潰す）: 窓の手前は
+    /// 閉じていない（負例＝送り直す）・窓に達した周・過ぎた周・窓が無い周は閉じている（`None` へ倒れる）。
+    /// `now` は測定値を 1 回だけ取り、表は Instant の算術だけで作る（sleep しない）。
+    #[test]
+    fn cycle_relaunch_fires_only_after_the_deadline() {
+        let now = Instant::now();
+        let later = now + Duration::from_millis(1);
+        assert!(!restore_window_closed(now, Some(later)), "窓の手前は送り直す（負例）");
+        assert!(restore_window_closed(now, Some(now)), "窓に達した周は止める");
+        assert!(restore_window_closed(later, Some(now)), "窓を過ぎた周は止める");
+        assert!(restore_window_closed(now, None), "窓が無い周は止める");
     }
 }

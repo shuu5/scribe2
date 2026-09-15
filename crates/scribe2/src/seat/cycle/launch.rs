@@ -242,7 +242,7 @@ fn open_window(request: &Launch, session: &str, window: &str) -> Result<(), &'st
         return Err(REASON_WINDOW);
     }
     let deadline = Instant::now().checked_add(request.settle);
-    while deadline.is_some_and(|at| Instant::now() < at) {
+    while before_deadline(Instant::now(), deadline) {
         let pane = crate::seat::tmux_stdout(request.socket, &["capture-pane", "-p", "-J", "-t", request.target]);
         if pane.is_some_and(|found| crate::seat::shell_input_empty(&found).is_ok()) {
             break;
@@ -250,6 +250,13 @@ fn open_window(request: &Launch, session: &str, window: &str) -> Result<(), &'st
         sleep(request.step);
     }
     Ok(())
+}
+
+/// 窓の判定（**pure**・C10「時計は測定値・判定は pure」・`s2-07l.344`）: 測った `now` が `deadline` の**手前**なら true。
+/// 等しい周は手前ではない（`<` は strict・境界は歯で pin する）。`deadline` が無い（`checked_add` が溢れた）周は窓が
+/// 閉じている側（false）＝待たない。呼び手（[`open_window`] / [`super::relaunch`] の復元の窓）は `Instant::now()` を渡す。
+pub(super) fn before_deadline(now: Instant, deadline: Option<Instant>) -> bool {
+    deadline.is_some_and(|at| now < at)
 }
 
 /// 起動を `inject.jsonl` に 1 行記録する（`who=seat-launch`・`what` は tick の判定行と同じ `decision=inject … kind=launch`
@@ -291,14 +298,27 @@ pub fn render_launched(target: &str, result: &Launched, state: &StateDir) -> Str
 
 #[cfg(test)]
 mod tests {
-    // flip-check: moved s2-07l.319
     use super::{
-        derive_launch, fill_launch, model_of, single_model, with_agent_view_off, with_model, Holes, Model, HOLE, HOLES,
-        REASON_MODEL_DUPLICATED,
+        before_deadline, derive_launch, fill_launch, model_of, single_model, with_agent_view_off, with_model, Holes, Model,
+        HOLE, HOLES, REASON_MODEL_DUPLICATED,
     };
     use crate::order::is_declaration_order;
     use crate::rules::manifest::Manifest;
     use std::path::Path;
+    use std::time::{Duration, Instant};
+
+    /// 窓の判定は pure な 4 値表（`s2-07l.344`・.319 の検出線の生存 `<` × 3 を潰す）: `now < at` は手前（true）・
+    /// `now == at` は手前ではない（strict・壁時計の等号を待って測らない）・`now > at` は過ぎている・`deadline = None`
+    /// は窓が無い（false）。`now` は測定値を 1 回だけ取り、表は Instant の算術だけで作る（sleep しない）。
+    #[test]
+    fn cycle_deadline_before_is_strict_and_none_is_expired() {
+        let now = Instant::now();
+        let later = now + Duration::from_millis(1);
+        assert!(before_deadline(now, Some(later)), "now < at は手前");
+        assert!(!before_deadline(now, Some(now)), "now == at は手前ではない（strict）");
+        assert!(!before_deadline(later, Some(now)), "now > at は過ぎている");
+        assert!(!before_deadline(now, None), "deadline が無い周は待たない");
+    }
 
     /// 起動行の導出（契約 (6f)・account-lifecycle.md §4）: 穴は `{account_dir}` の 1 つ（[`fill_launch`] がそのまま埋める）・
     /// 順序は agent view off → 口座の env → `claude` → anchor の `--plugin-dir` → `[[plugin]]` の dir（宣言順）→

@@ -142,7 +142,7 @@ fn signal(target: &str, name: &str) {
 
 #[cfg(test)]
 mod tests {
-    // flip-check: moved s2-07l.319
+    // flip-check: retroactive s2-07l.344
     use super::{child_of, stat_field, terminate_group, StopTarget, Stopped, STOPPEDS};
     use crate::fleet::Completion;
     use crate::order::is_declaration_order;
@@ -194,6 +194,16 @@ mod tests {
         assert_eq!(stat_field("4242 (sleep) S 4200 4100 4100 0", 2), Some(4100), "pgid");
         assert_eq!(stat_field("4242 (sleep) S 4200", 2), None, "欄が足りない");
         assert_eq!(stat_field("4242 sleep S 4200 4100", 1), None, "comm の閉じが無い");
+    }
+
+    /// pane の pid の guard の境界（`s2-07l.344`・.319 の検出線の生存 `pane_pid < 2` → `<=` を潰す）: pid 1 は子が在っても
+    /// 断り（`None`）、pid 2 は通す（直下の子を返す）。境界の両側を同じ fixture で測る。
+    #[test]
+    fn cycle_stop_refuses_pid_below_two() {
+        let root = proc_fixture("boundary", &[("60", "init-child", 1, 60), ("50", "sh", 2, 50)], &[]);
+        assert_eq!(child_of(&root, 1), None, "pid 1 は子（60）が在っても断る");
+        assert_eq!(child_of(&root, 2), Some(50), "pid 2 は通す（直下の子 50）");
+        std::fs::remove_dir_all(&root).ok();
     }
 
     /// 宛先は pure に決まる: pgid == pid は group 宛て（`-<pid>` / `GroupGone`）、それ以外と pgid が読めない周は単体宛て
