@@ -1877,7 +1877,9 @@ fn seat_exit_signal_survives_hook_rows_and_sends_exit() {
 }
 
 /// (b) 自席の未 consumed 退避物が無い周は `/exit` を送らない（FR28 と同じ極性）: 閾値以上の口座は (1) の退避の合図の側へ
-/// 落ち、席が受ける 1 行は退避の合図であって `/exit` ではない。cycle-stamp も打たない。
+/// 落ち、席が受ける 1 行は退避の合図であって `/exit` ではない。cycle-stamp も打たない。直近の合図の記録は
+/// `seat.signal_backoff_s` の窓の外へ出してから撃つ（再送が起きる側・brake 自体の歯は `seat_tick_signal_backoff_*`・
+/// `s2-07l.315`）。
 #[test]
 fn seat_exit_is_not_sent_without_an_unconsumed_wm() {
     let place = acct_place();
@@ -1885,6 +1887,7 @@ fn seat_exit_is_not_sent_without_an_unconsumed_wm() {
     let guard = start_seat(&place.socket, name);
     assert!(guard.ready(), "独立 socket に session を立てられる");
     acct_parked(&place, name, &acct_launcher(&place, name), 30);
+    super::tick::backdate_signal(&place.state, name, super::tick::SIGNAL_BACKOFF_S.saturating_add(1));
     assert!(exit_seat(&place, name), "前面が head の席を作れる");
 
     let out = acct_tick(&place, name, None);

@@ -3,7 +3,7 @@
 
 use super::exit::{exit_turn, parked_entry, relaunch_turn, Entry};
 use super::render::{inject_line, Signal};
-use super::{account_pointer, Account, InjectKind, Request, Seen, SignalOrigin, Verdict};
+use super::{account_pointer, Account, InjectKind, Request, Seen, SignalOrigin, TickDecision, Verdict};
 use crate::fleet::store;
 use crate::fleet::{cli as fleet_cli, replay, Allowance, AllowanceLatest, Registration, State, WindowKind};
 use crate::rules::manifest::Manifest;
@@ -22,8 +22,9 @@ pub(super) enum Turn {
 /// 古い周は計測を 1 回撃ってから逼迫度を読み（[`seated`]）、退避して止まった席は前面が shell なら立て直し
 /// （[`relaunch_turn`]）・shell でなく合図が口座由来（`origin=account`・`s2-07l.307`）なら終了の手（[`exit_turn`]・
 /// [`parked_entry`]）、閾値以上の席へは FR29 と
-/// 同じ除外の下で idle を待たずに退避の合図を注入して自打刻する（[`account_signal`]）。閾値未満・測れない・除外で
-/// 注入しない周は逼迫度を持って次の条件へ（注入も停止もしない）。
+/// 同じ除外の下で idle を待たずに退避の合図を注入して自打刻する（[`account_signal`]・直近の合図から
+/// `seat.signal_backoff_s` 未満の周は [`super::signal_brake`] が `signal-recent` で止める・`s2-07l.315`）。閾値未満・
+/// 測れない・除外で注入しない周は逼迫度を持って次の条件へ（注入も停止もしない）。
 pub(super) fn account_turn(request: &Request, place: &super::StateDir, dir: &Path, seen: &Seen) -> Turn {
     let Some(seated) = seated(request, place, seen.stale_s) else {
         return Turn::Pass(Account::Unevaluated);
@@ -39,6 +40,10 @@ pub(super) fn account_turn(request: &Request, place: &super::StateDir, dir: &Pat
     let Some(payload) = account_signal(&account, seen, dir) else {
         return Turn::Pass(account);
     };
+    // 退避の合図の brake（context の軸と同じ 1 関数・`s2-07l.315`）: 直近の合図から back-off 未満の周は再送しない。
+    if let Some(reason) = super::signal_brake(place, request.target, seen.backoff_s) {
+        return Turn::Settled(Verdict { account, ..Verdict::of(TickDecision::Noop(reason)) });
+    }
     let signal = Signal {
         kind: InjectKind::Externalize,
         origin: Some(SignalOrigin::Account),

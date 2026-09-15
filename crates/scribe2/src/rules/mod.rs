@@ -207,6 +207,9 @@ pub enum RuleKind {
     /// runner / lens が claude に**毎回**渡す model（設計 pipeline.md §6・`s2-07l.297`）。値は claude CLI の別名
     /// （閉じた表は [`crate::fleet::select::Model`]）。便用の口座選定はこの model のモデル別窓だけを数える。
     RunnerModel,
+    /// 退避の合図（`kind=externalize`）を同じ席へ**再送するまでの back-off**（秒・設計 seat-autonomy.md §3 / §8・
+    /// `s2-07l.315`）。直近の合図の記録からこれ未満の周は再送しない（打刻の合図の brake [`Self::SeatTickStaleS`] とは別）。
+    SeatSignalBackoffS,
 }
 
 /// [`RuleKind`] の全 variant。parity test の母集団である。
@@ -260,6 +263,7 @@ pub const ALL: &[RuleKind] = &[
     RuleKind::PipeSizeMLines,
     RuleKind::PipeSizeLLines,
     RuleKind::RunnerModel,
+    RuleKind::SeatSignalBackoffS,
 ];
 
 impl RuleKind {
@@ -315,6 +319,7 @@ impl RuleKind {
             Self::PipeSizeMLines => "PipeSizeMLines",
             Self::PipeSizeLLines => "PipeSizeLLines",
             Self::RunnerModel => "RunnerModel",
+            Self::SeatSignalBackoffS => "SeatSignalBackoffS",
         }
     }
 
@@ -359,6 +364,7 @@ impl RuleKind {
             | Self::PipeSizeSLines
             | Self::PipeSizeMLines
             | Self::PipeSizeLLines
+            | Self::SeatSignalBackoffS
             | Self::AccountSelection => ValueShape::Int,
             Self::DialogueSurface | Self::RunnerModel => ValueShape::Str,
             Self::MaturityCondition

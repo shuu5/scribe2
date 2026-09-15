@@ -231,6 +231,16 @@ enabled = true
 ruling = "user 2026-09-10T00:00Z"
 ruled_at = "2026-09-10"
 
+# 退避の合図（kind=externalize）を同じ席へ再送するまでの back-off（秒・設計 seat-autonomy.md §3 / §8）。
+# timer を短くしても compaction 中の席の queue に合図が積まれない。打刻の合図の brake（seat.tick_stale_s）とは別。
+[[rule]]
+id = "seat.signal_backoff_s"
+kind = "SeatSignalBackoffS"
+value = 300
+enabled = true
+ruling = "user 2026-09-15T02:30Z externalize re-signal back-off"
+ruled_at = "2026-09-15"
+
 [[rule]]
 id = "seat.cycle_settle_s"
 kind = "SeatCycleSettleS"

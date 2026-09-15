@@ -593,13 +593,15 @@ fn seat_tick_injects_externalize_pointer_when_context_reaches_cap_while_busy() {
             "{pct}%: 記録にも kind と合図の出所と context と state と置き場の出所が載る: {recorded}"
         );
 
-        // 退避の合図には brake を掛けない（planner 裁定 2026-09-12 案 A・`s2-07l.109`）: 自打刻の直後の
-        // 周も cap 以上なら再び送る（cap を超えたままの席を次の周で拾う＝盲点は tick の周期だけ）。
+        // 退避の合図には tick-stamp の brake を掛けない（planner 裁定 2026-09-12 案 A・`s2-07l.109`）: 自打刻の直後の
+        // 周も cap 以上なら再び送る（cap を超えたままの席を次の周で拾う＝盲点は tick の周期だけ）。再送を抑えるのは
+        // 直近の合図の記録の ts（`seat.signal_backoff_s`・`s2-07l.315`）だけなので、記録を窓の外へ出してから撃つ。
+        backdate_signal(&state, name, SIGNAL_BACKOFF_S.saturating_add(1));
         let out = run_seat(&args);
         assert_eq!(
             stdout_of(&out),
             format!("seat: tick decision=inject target={name} consumed=false kind=externalize origin=context context={pct}{ST_BUSY}{}\n", provenance(&state, "flag")),
-            "{pct}%: 自打刻の直後でも退避の合図は送る（brake は打刻の合図だけ）"
+            "{pct}%: 自打刻の直後でも退避の合図は送る（tick-stamp の brake は打刻の合図だけ）"
         );
         // socket を消す**前**に畳む（消してからでは kill-session が届かない・実測 2026-09-10）。
         drop(guard);
@@ -1863,5 +1865,220 @@ fn seat_tick_rules_accounts_without_rules_uses_the_host_manifest_accounts() {
     }
     assert!(!touched, "注入しない");
     assert_eq!(acct_curl_calls(&place), 1, "host の面の宣言の口座を計測する");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+// ─────────────────── 退避の合図の brake（`seat.signal_backoff_s`・設計 seat-autonomy.md §3 / §8・`s2-07l.315`・接頭辞 `seat_tick_signal_`） ───────────────────
+
+/// `seat.signal_backoff_s` の宣言値（`rules/manifest.toml`・退避の合図の再送の back-off・`s2-07l.315`）。歯はこの値の
+/// **両側**を撃つ（窓の内側は再送しない・窓の外は再送する）。終了の手の歯（`cycle.rs`）も同じ値で記録を窓の外へ出す。
+pub(super) const SIGNAL_BACKOFF_S: u64 = 300;
+
+/// `<state>/inject.jsonl` の同じ席の退避の合図の記録（`kind=externalize`）の ts を `secs` 秒だけ過去へ倒す（brake の窓の
+/// 外＝再送が起きる側の fixture・`s2-07l.315`）。記録の形（`"ts":<秒>` が末尾）は契約の字面から読む。合図を 2 回撃つ
+/// 既存の歯（この file と `cycle.rs` の終了の手）はこれで窓の外へ出す（歯の意味は保ち、期待を `signal-recent` に変えない）。
+pub(super) fn backdate_signal(state: &Path, target: &str, secs: u64) {
+    let path = state.join("inject.jsonl");
+    let seat = format!("\"seat\":\"{target}\"");
+    let text: String = fs::read_to_string(&path)
+        .unwrap_or_default()
+        .lines()
+        .map(|line| {
+            let ts = json_value(line, "ts").and_then(|value| value.as_num());
+            match ts {
+                Some(found) if line.contains(&seat) && line.contains("kind=externalize") => {
+                    format!("{}\n", line.replace(&format!("\"ts\":{found}"), &format!("\"ts\":{}", found.saturating_sub(secs))))
+                }
+                _ => format!("{line}\n"),
+            }
+        })
+        .collect();
+    fs::write(&path, text).ok();
+}
+
+/// 退避の合図の brake の歯の席: 独立 socket の `sh -i` の席（受けた行を消費しない＝queue の形）・打刻 Busy・退避物なし・
+/// pane は `--capture-file` で cap 以上（96%）。判定は file の pane で通し、送信だけ独立 socket の席へ通す。
+struct SignalSeat {
+    /// tmp dir（wm / pane / state の親）。
+    dir: PathBuf,
+    /// 独立 socket。
+    socket: String,
+    /// 置き場。
+    state: PathBuf,
+    /// 席の guard（drop で畳む）。
+    guard: IsolatedSeat,
+}
+
+/// 席を 1 つ立てる。
+fn signal_seat(name: &str) -> SignalSeat {
+    let dir = tmp();
+    let socket = socket_of(&dir);
+    let guard = start_seat(&socket, name);
+    assert!(guard.ready(), "独立 socket に prompt 付きの session を立てられる");
+    let state = dir.join("state");
+    fs::create_dir_all(dir.join("wm")).ok();
+    write_state(&seat_dir_of(&state, name), StateFix::Busy { age_s: 0 });
+    fs::write(dir.join("pane.txt"), busy_pane_at(96)).ok();
+    SignalSeat { dir, socket, state, guard }
+}
+
+/// tick を 1 回撃つ。
+fn signal_tick(seat: &SignalSeat, name: &str) -> Output {
+    let (wm_s, state_s, pane_s) = (
+        seat.dir.join("wm").display().to_string(),
+        seat.state.display().to_string(),
+        seat.dir.join("pane.txt").display().to_string(),
+    );
+    run_seat(&[
+        "tick", "--target", name, "--wm-dir", &wm_s, "--tmux-socket", &seat.socket,
+        "--state-dir", &state_s, "--capture-file", &pane_s,
+    ])
+}
+
+/// context 由来の退避の合図を送った周の判定行（busy な席は queue＝`consumed=false`）。
+fn signal_sent_line(seat: &SignalSeat, name: &str) -> String {
+    format!(
+        "seat: tick decision=inject target={name} consumed=false kind=externalize origin=context context=96{ST_BUSY}{}\n",
+        provenance(&seat.state, "flag")
+    )
+}
+
+/// 席が受けた退避の合図の数（pane に現れた退避 skill の名の出現数）。
+fn signal_count(seat: &SignalSeat, name: &str) -> usize {
+    capture(&seat.socket, name).matches("/ready-compaction").count()
+}
+
+/// (a) cap 以上の席へ退避の合図を送った直後の周は、直近の合図の記録（`inject.jsonl`・ts）から `seat.signal_backoff_s`
+/// 未満なので**再送しない**（`decision=noop reason=signal-recent`・context と state の列はそのまま載る・rc 0・席が受けた
+/// 合図は 1 本のまま・注入の記録も 1 行のまま）。1 周目は従来どおり `kind=externalize origin=context`。base は brake が
+/// 無く 2 周とも注入する（RED）。timer を 1 分に縮めても compaction 中の席の queue に合図が積まれない形。
+#[test]
+fn seat_tick_signal_backoff_skips_the_second_externalize_within_the_window() {
+    let name = "seatsigskip";
+    let seat = signal_seat(name);
+
+    let first = signal_tick(&seat, name);
+    assert_eq!(rc_of(&first), i32::from(RC_OK), "stderr={}", stderr_of(&first));
+    assert_eq!(stdout_of(&first), signal_sent_line(&seat, name), "1 周目は退避の合図");
+    assert_eq!(signal_count(&seat, name), 1, "席が受けた合図は 1 本");
+
+    let second = signal_tick(&seat, name);
+    assert_eq!(rc_of(&second), i32::from(RC_OK), "再送しない周は正常の noop: stderr={}", stderr_of(&second));
+    assert_eq!(
+        stdout_of(&second),
+        format!("seat: tick decision=noop reason=signal-recent context=96{ST_BUSY}{}\n", provenance(&seat.state, "flag")),
+        "2 周目は直近の合図の記録が窓の内＝再送しない（context と state は載る・口座の軸は評価しない）"
+    );
+    assert_eq!(signal_count(&seat, name), 1, "席が受けた合図は 1 本のまま");
+    let log = fs::read_to_string(seat.state.join("inject.jsonl")).unwrap_or_default();
+    assert_eq!(log.lines().count(), 1, "注入の記録は 1 周目の 1 行だけ: {log}");
+    assert!(log.contains(" kind=externalize origin=context "), "記録は退避の合図: {log}");
+    drop(seat.guard);
+    fs::remove_dir_all(&seat.dir).ok();
+}
+
+/// (b) 極性の対: 直近の合図の記録の ts が `seat.signal_backoff_s` **以上**前（境界は未満＝ちょうどの周は送る）なら
+/// 再送する（`kind=externalize`・席が受けた合図は 2 本）。窓の内側で止め、外側で送る＝brake は永久には止まらない。
+#[test]
+fn seat_tick_signal_backoff_resends_after_the_window() {
+    let name = "seatsigresend";
+    let seat = signal_seat(name);
+    let first = signal_tick(&seat, name);
+    assert_eq!(stdout_of(&first), signal_sent_line(&seat, name), "1 周目は退避の合図");
+    backdate_signal(&seat.state, name, SIGNAL_BACKOFF_S);
+
+    let second = signal_tick(&seat, name);
+
+    assert_eq!(rc_of(&second), i32::from(RC_OK), "stderr={}", stderr_of(&second));
+    assert_eq!(stdout_of(&second), signal_sent_line(&seat, name), "記録が窓の外（経過 = back-off）なら再送する");
+    assert_eq!(signal_count(&seat, name), 2, "席が受けた合図は 2 本");
+    let log = fs::read_to_string(seat.state.join("inject.jsonl")).unwrap_or_default();
+    assert_eq!(log.lines().count(), 2, "注入の記録は 2 行: {log}");
+    drop(seat.guard);
+    fs::remove_dir_all(&seat.dir).ok();
+}
+
+/// 記録 1 行（`InjectionRecord::to_line` と同じ key の flat JSON・契約の字面から組む）。
+fn signal_record(name: &str, what: &str) -> String {
+    format!(
+        r#"{{"schema":1,"who":"seat-tick","what":"{what}","when":"tick","bytes":0,"tokens":null,"wall_ms":0,"seat":"{name}","ts":{}}}"#,
+        unix_now()
+    )
+}
+
+/// (c) 記録が**無い**（`inject.jsonl` を消した）・**読めない**（file の位置に dir）周は brake を掛けず送る（合図を止める側に
+/// 倒さない＝退避が遅れる方が失うものが大きい・N1）。直近の注入が退避の合図でない（打刻の合図 `kind=pointer` の行を
+/// 後ろに足した）周も送る（直近の 1 行だけを読む・終了の手の入口 (1) と同じ母集団）。
+#[test]
+fn seat_tick_signal_backoff_does_not_brake_without_a_record() {
+    for case in ["missing", "unreadable", "pointer-after"] {
+        let name = "seatsignorec";
+        let seat = signal_seat(name);
+        let first = signal_tick(&seat, name);
+        assert_eq!(stdout_of(&first), signal_sent_line(&seat, name), "{case}: 1 周目は退避の合図");
+        let log = seat.state.join("inject.jsonl");
+        let placed = match case {
+            "missing" => fs::remove_file(&log).is_ok(),
+            "unreadable" => fs::remove_file(&log).is_ok() && fs::create_dir_all(&log).is_ok(),
+            _ => {
+                let mut text = fs::read_to_string(&log).unwrap_or_default();
+                text.push_str(&signal_record(name, &format!("decision=inject target={name} consumed=false kind=pointer")));
+                text.push('\n');
+                fs::write(&log, text).is_ok()
+            }
+        };
+        assert!(placed, "{case}: fixture を置ける");
+
+        let second = signal_tick(&seat, name);
+
+        assert_eq!(rc_of(&second), i32::from(RC_OK), "{case}: stderr={}", stderr_of(&second));
+        assert_eq!(stdout_of(&second), signal_sent_line(&seat, name), "{case}: 記録を読めない周は brake を掛けない");
+        assert_eq!(signal_count(&seat, name), 2, "{case}: 席が受けた合図は 2 本");
+        drop(seat.guard);
+        fs::remove_dir_all(&seat.dir).ok();
+    }
+}
+
+/// (d) 口座の軸（登録 row の口座が閾値以上・`origin=account`）の合図にも同じ brake（同じ 1 関数・同じ rules 行）: 1 周目は
+/// `kind=externalize origin=account`、2 周目は `noop reason=signal-recent`（口座の軸は評価した＝`account=a1:90` が載る・
+/// 席が受けた合図は 1 本のまま）、記録を窓の外へ出した 3 周目は再送する。pane は cap 未満（`IDLE_PANE`＝context 10）なので
+/// context の軸は立たない。base は口座の軸に brake が無く 2 周目も注入する（RED）。
+#[test]
+fn seat_tick_signal_backoff_applies_to_the_account_axis_too() {
+    let place = acct_place();
+    let name = "seatsigacct";
+    let guard = start_seat(&place.socket, name);
+    assert!(guard.ready(), "独立 socket に prompt 付きの session を立てられる");
+    let registered = acct_register(&place, name, ACCT_LAUNCH);
+    assert_eq!(rc_of(&registered), i32::from(RC_OK), "stderr={}", stderr_of(&registered));
+    acct_measured(&place.state, ACCT_SEAT, 90, &acct_now());
+    write_state(&seat_dir_of(&place.state, name), StateFix::Busy { age_s: 0 });
+    let pane = fixture(&place.dir, "pane.txt", IDLE_PANE);
+    let sent = acct_line(
+        &format!("decision=inject target={name} consumed=false kind=externalize origin=account"),
+        &format!("{ST_BUSY} account=a1:90"),
+        &place.state,
+    );
+    let received = || capture(&place.socket, name).matches("/ready-compaction").count();
+
+    let first = acct_tick(&place, name, Some(&pane));
+    assert_eq!(rc_of(&first), i32::from(RC_OK), "stderr={}", stderr_of(&first));
+    assert_eq!(stdout_of(&first), sent, "1 周目は口座由来の退避の合図");
+    assert_eq!(received(), 1, "席が受けた合図は 1 本");
+
+    let second = acct_tick(&place, name, Some(&pane));
+    assert_eq!(rc_of(&second), i32::from(RC_OK), "stderr={}", stderr_of(&second));
+    assert_eq!(
+        stdout_of(&second),
+        acct_line("decision=noop reason=signal-recent", &format!("{ST_BUSY} account=a1:90"), &place.state),
+        "2 周目は口座の軸でも再送しない（逼迫度は評価した）"
+    );
+    assert_eq!(received(), 1, "席が受けた合図は 1 本のまま");
+
+    backdate_signal(&place.state, name, SIGNAL_BACKOFF_S.saturating_add(1));
+    let third = acct_tick(&place, name, Some(&pane));
+    assert_eq!(stdout_of(&third), sent, "記録が窓の外なら口座の軸でも再送する");
+    assert_eq!(received(), 2, "席が受けた合図は 2 本");
+    drop(guard);
     fs::remove_dir_all(&place.dir).ok();
 }

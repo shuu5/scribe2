@@ -50,6 +50,14 @@
 //! （`pointer-recent`・`.110` の `cycle-recent` と同型・閾値は共用）。brake が掛かるのは合図だけで、
 //! 退避の合図と cycle の評価はその周も行う（heartbeat の mtime は見ない＝FR27 の合図は席の生存の
 //! 記録でなく「続きを進めろ」の促し）。
+//!
+//! **退避の合図の再送は自席への直近の合図の記録で抑える**（`s2-07l.315`・user 裁定 2026-09-15T02:30Z・設計 §3 / §8）:
+//! context の軸と口座の軸の両方で、`Signal { kind: Externalize }` の直前に `inject.jsonl` の自席への直近の注入を読み
+//! （終了の手の入口 (1) と同じ母集団・出所は問わない）、それが退避の合図で ts から `seat.signal_backoff_s` 未満なら
+//! 注入せず `signal-recent`（[`signal_brake`]）。記録が無い・読めない周は brake を掛けない（退避が遅れる方が失うものが
+//! 大きい・N1）。timer を 1 分に縮めても compaction 中の席の queue に合図が積まれない（実地 2026-09-15: planner へ
+//! 00:55 / 01:00 / 01:05 の 3 連投・`.150` / `.288` の入力欄の門の事故の型）。打刻の合図の brake（tick-stamp）と cycle の
+//! back-off は不変。
 
 mod account;
 mod exit;
@@ -62,6 +70,7 @@ use super::{cycle, inject, meter, pane_of, state, RuleRead, WmScan};
 // 子 module の本文が `super::` で読む seat の項目（純移動＝本文の path を書き換えない・`s2-07l.279`）。
 use super::{int_rule, pane_is_shell, StateDir};
 use crate::cli_outcome::{Outcome, RC_REFUSED};
+use crate::fleet::json_lite::{self, Value};
 use crate::fleet::replay;
 use crate::fleet::store;
 use crate::name::NAME;
@@ -99,6 +108,9 @@ pub(super) const EXIT: &str = "/exit";
 /// 口座の逼迫度の閾値（session 用・使用率の百分率）を宣言する rules 行の id（account-autonomy.md §3・値は code に
 /// 焼かない・C5）。`seat launch` の初回の選定（[`cycle::launch`]）も同じ行を読む。
 pub const ID_THRESHOLD: &str = "R-C9-1";
+/// 退避の合図を同じ席へ再送するまでの back-off（秒）を宣言する rules 行の id（`s2-07l.315`・user 裁定 2026-09-15T02:30Z・
+/// 値は code に焼かない・C5）。context の軸と口座の軸の両方の合図が同じ 1 行を読む（[`signal_brake`]）。
+pub const ID_SIGNAL_BACKOFF: &str = "seat.signal_backoff_s";
 
 /// tick 1 回の入力。
 pub struct Request<'a> {
@@ -394,6 +406,8 @@ pub(super) struct Seen {
     stale_s: u64,
     /// 口座の逼迫度の閾値（rules 行 R-C9-1 の値・使用率の百分率）。
     threshold: u64,
+    /// 退避の合図の再送の back-off（秒・rules 行 `seat.signal_backoff_s`・[`signal_brake`]）。
+    backoff_s: u64,
 }
 
 /// 撃たなかった理由。**順序固定の条件のうち最初に立たなかったもの**を表す。
@@ -425,6 +439,9 @@ pub enum NoopReason {
     AccountUnmeasured,
     /// 口座: 退避して止まった席の立て直しに選べる口座が無い（注入せず次の tick で選び直す・0 口座で起こさない）。
     AccountNoCandidate,
+    /// context / 口座: 自席への直近の注入が退避の合図で、その ts から `seat.signal_backoff_s` 未満（再送しない・
+    /// `s2-07l.315`）。記録が無い・読めない周はこの理由にならない（brake を掛けない側）。
+    SignalRecent,
 }
 
 /// [`NoopReason`] の全 variant（宣言順）。
@@ -442,6 +459,7 @@ pub const NOOP_REASONS: &[NoopReason] = &[
     NoopReason::PointerRecent,
     NoopReason::AccountUnmeasured,
     NoopReason::AccountNoCandidate,
+    NoopReason::SignalRecent,
 ];
 
 impl NoopReason {
@@ -461,6 +479,7 @@ impl NoopReason {
             Self::PointerRecent => "pointer-recent",
             Self::AccountUnmeasured => "account-unmeasured",
             Self::AccountNoCandidate => "account-no-candidate",
+            Self::SignalRecent => "signal-recent",
         }
     }
 }
@@ -535,10 +554,11 @@ pub fn run(request: &Request) -> Outcome {
 /// 使うためである（cycle を回す周だけは cycle 側が自分の入口でもう 1 度走査する＝lock の内側で
 /// 確かめ直す）。読めない周を「在る」に読み替えない。
 fn decide(request: &Request, place: &super::StateDir, dir: &Path) -> Judged {
-    // 3 行のどれかが読めない周は判定に入らない（理由は最初に読めなかった行の variant 付き・`s2-07l.205`）。
-    let (stale_s, ttl_s, threshold) = match (state::stale_s(), cycle::ttl_s(), super::int_rule(ID_THRESHOLD)) {
-        (Ok(stale_s), Ok(ttl_s), Ok(threshold)) => (stale_s, ttl_s, threshold),
-        (Err(read), _, _) | (_, Err(read), _) | (_, _, Err(read)) => {
+    // 4 行のどれかが読めない周は判定に入らない（理由は最初に読めなかった行の variant 付き・`s2-07l.205`）。
+    let rows = (state::stale_s(), cycle::ttl_s(), super::int_rule(ID_THRESHOLD), super::int_rule(ID_SIGNAL_BACKOFF));
+    let (stale_s, ttl_s, threshold, backoff_s) = match rows {
+        (Ok(stale_s), Ok(ttl_s), Ok(threshold), Ok(backoff_s)) => (stale_s, ttl_s, threshold, backoff_s),
+        (Err(read), ..) | (_, Err(read), ..) | (_, _, Err(read), _) | (.., Err(read)) => {
             return Judged::bare(TickDecision::Error(read.no_rule().to_owned()));
         }
     };
@@ -558,6 +578,7 @@ fn decide(request: &Request, place: &super::StateDir, dir: &Path) -> Judged {
         state: read,
         stale_s,
         threshold,
+        backoff_s,
     };
     Judged {
         verdict: judge(request, place, dir, &seen),
@@ -572,6 +593,9 @@ fn judge(request: &Request, place: &super::StateDir, dir: &Path, seen: &Seen) ->
     // 行を queue しても、届く先は消えるか作り直された席である（排他は cycle 側と同じ 1 本の lock）。
     // 退避の合図は**状態の門の外**（FR29「idle を待たずに」・busy な席へは queue の形で届く）。
     if let Some((pct, cap)) = over_cap(seen).filter(|_| !cycle::lock_is_live(dir, seen.ttl_s)) {
+        if let Some(reason) = signal_brake(place, request.target, seen.backoff_s) {
+            return Verdict::of(TickDecision::Noop(reason));
+        }
         let payload = externalize_pointer(pct, cap);
         let signal = Signal {
             kind: InjectKind::Externalize,
@@ -635,6 +659,48 @@ fn pointer_recent(seat_dir: &Path, stale_s: u64) -> bool {
     std::fs::metadata(stamp_path(seat_dir))
         .and_then(|meta| meta.modified())
         .is_ok_and(|at| at.elapsed().map_or(true, |age| age.as_secs() < stale_s))
+}
+
+/// 退避の合図の brake（`s2-07l.315`・user 裁定 2026-09-15T02:30Z・設計 seat-autonomy.md §3 / §8）: 自席への直近の注入
+/// （[`last_externalize_at`]）が退避の合図で、その ts から `seat.signal_backoff_s`（`backoff_s`）**未満**なら、この周は
+/// 合図を送らない（`signal-recent`）。context の軸（[`judge`]）と口座の軸（[`account::account_turn`]）の両方の
+/// `Signal { kind: Externalize }` の直前で同じ 1 関数を通す。記録が無い・読めない・直近が別の注入の周は送る側
+/// （合図を止める側に倒さない＝退避が遅れる方が失うものが大きい・N1）。境界は未満＝経過が back-off ちょうどの周は送る。
+/// ts が未来の記録は経過 0（経過を負に読まない・[`pointer_recent`] と同じ極性）。
+pub(super) fn signal_brake(place: &super::StateDir, target: &str, backoff_s: u64) -> Option<NoopReason> {
+    last_externalize_at(&place.path, target)
+        .filter(|signalled| state::now_secs().saturating_sub(*signalled) < backoff_s)
+        .map(|_| NoopReason::SignalRecent)
+}
+
+/// `<state_dir>/inject.jsonl` の同じ席の**注入の最新行**（`who` が [`INJECT_WRITERS`]・終了の手の入口 (1) と同じ母集団・
+/// hook の記録は飛ばす）が退避の合図（`decision=inject … kind=externalize`・出所は問わない）なら、その ts。記録が無い・
+/// 読めない・直近が別の注入（打刻の合図・launch・終了の合図）の周は `None`。
+fn last_externalize_at(state_dir: &Path, target: &str) -> Option<u64> {
+    let seat = crate::hook::seat_name(target)?;
+    let text = std::fs::read_to_string(crate::hook::inject_path(state_dir)).ok()?;
+    let last = text
+        .lines()
+        .rev()
+        .filter_map(|line| json_lite::parse_object(line).ok())
+        .find(|pairs| {
+            field(pairs, "seat").and_then(Value::as_str) == Some(seat.as_str())
+                && field(pairs, "who").and_then(Value::as_str).is_some_and(|who| INJECT_WRITERS.contains(&who))
+        })?;
+    let what = field(&last, "what").and_then(Value::as_str)?;
+    let signalled = what.starts_with("decision=inject ")
+        && what
+            .split_whitespace()
+            .any(|token| token.strip_prefix("kind=") == Some(InjectKind::Externalize.as_str()));
+    if !signalled {
+        return None;
+    }
+    field(&last, "ts").and_then(Value::as_num)
+}
+
+/// 記録 1 行の key の値。
+fn field<'a>(pairs: &'a [(String, Value)], key: &str) -> Option<&'a Value> {
+    pairs.iter().find(|(found, _)| found == key).map(|(_, value)| value)
 }
 
 /// 状態の門（ADR-0015 §2.3・fail-closed）: **Idle だけが通る**。Busy・打刻なし・読めない・Busy が
@@ -750,7 +816,7 @@ mod tests {
             [
                 "pane-missing", "busy", "state-missing", "state-unreadable", "state-stale", "wm-unconsumed",
                 "wm-unreadable", "cycle-live", "cycle-recent", "cycle-stamp-unreadable", "pointer-recent",
-                "account-unmeasured", "account-no-candidate",
+                "account-unmeasured", "account-no-candidate", "signal-recent",
             ]
         );
         assert!(is_declaration_order(NOOP_REASONS, |reason| reason as usize));
