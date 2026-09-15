@@ -115,14 +115,14 @@ scribe2 を載せる consumer が pipe を通すのに要る面は 3 つで、�
 ## 14. pipe/declaration.rs の分割（契約表の行 n・純移動）
 
 - 何が起きているか: `pipe/declaration.rs`（約 1280 行・src 818 + in-file の歯 458）は R-C4-2 の余地が 213 行しか無く、size M の便（.170）を受付が断る。責務のうち「write-set の項目の読みと上限の余地」の群（WriteSetItem / NewFilePolicy / read_write_set / read_item / is_under / Caps / Headroom / CORE / line_count / headroom_shortfalls / core_of・src 160 行 + 対応する歯 172 行）は宣言 parse（`.vessel.toml`）と Effective の写しの群に依存しない閉じた集合（agent の実測 2026-09-16・grep で確認）。
-- 形（§3 の .363 と同型）: 子 module declaration/write_set.rs へその群と歯をそのまま移す。親は mod 宣言と `pub use`（headroom_shortfalls / line_count / read_write_set / Caps / Headroom / NewFilePolicy / WriteSetItem / CORE）と `pub(crate) use`（is_under）で呼び手（`pipe/table.rs`・`pipe/cli/intake.rs`）を無傷に保つ。移動に伴う唯一の書き換えは子から 1 段深くなる 3 参照（`super::refuse::…` 2 つ・`super::closure::weighted_lines` 1 つ）を crate からの path に直すこと。札 `// flip-check: moved <bead>` は親と子の歯の区間に対で置く。
+- 形（§3 の .363 と同型）: 子 module declaration/write_set.rs へその群と歯をそのまま移す。親は mod 宣言と `pub use`（headroom_shortfalls / line_count / read_write_set / Caps / Headroom / NewFilePolicy / WriteSetItem / CORE）と `pub(crate) use`（is_under）で呼び手（`pipe/table.rs`・`pipe/cli/intake.rs`）を無傷に保つ。移動に伴う唯一の書き換えは子から 1 段深くなる 3 参照（`super::refuse::…` 2 つ・`super::closure::weighted_lines` 1 つ）を crate からの path に直すこと。親に残る私有 item を子が呼ぶ周は可視性を `pub(super)` に上げる＝可視性の 1 語と mod 宣言・`pub use`・`use` の path は移動の一部（純移動の残差として許す・.363 と同じ）。札 `// flip-check: moved <bead>` は親と子の歯の区間に対で置く。
 - 見積: 親 約 948 行・子 約 340 行。
 
 ## 15. pipe/table.rs の分割（契約表の行 o・純移動）
 
 - 何が起きているか: `pipe/table.rs`（約 1275 行・src 908 + in-file の歯 367）は R-C4-2 の余地が 213 行しか無く、契約表を触る便（.277 / .354 ほか）が S しか置けない。責務は 6 群（schema 正本 / 区間の抜き出しと TOML の parse / findings の語彙 / check_table の本体 / 要件面の読み / CLI の駆動）。
 - 決定的な制約（実測）: `TableError` は `tests/e2e/polarity.rs` が `std::any::type_name` の字面（`pipe::table::TableError`）を pin しており、`pub use` の再輸出では型名が変わらない＝**TableError / Finding / Context / unreadable は親に残す**（子へ実体を移すと極性一覧の snapshot が割れる）。
-- 形（§3 の .363 と同型）: 子 module 2 つ。table/parse.rs = 区間の抜き出しと TOML の parse の群（Form / form_of / region / shift / read_rows / typed / text_of / list_of / find_row / Pointer / PointerError / parse_pointer / contract_id / doc_id・181 行 + 歯 2 本）。table/check.rs = 検査の本体と要件面の読みと CLI の駆動（check_table から read_all まで 21 item・326 行 + 歯 5 本と fixture）。親は mod 宣言 2 つと名指しの `pub use` で呼び手（`pipe/cli.rs`・`pipe/cli/intake.rs`・`pipe/review.rs`・`rules/manifest.rs`・歯）を無傷に保つ。共有 fixture（full_row）は親の歯に `pub(super)` で残し子は `super::super::tests::` で読む（複製しない）。札は 3 file の歯の区間に対で置く。
+- 形（§3 の .363 と同型）: 子 module 2 つ。table/parse.rs = 区間の抜き出しと TOML の parse の群（Form / form_of / region / shift / read_rows / typed / text_of / list_of / find_row / Pointer / PointerError / parse_pointer / contract_id / doc_id・181 行 + 歯 2 本）。table/check.rs = 検査の本体と要件面の読みと CLI の駆動（check_table から read_all まで 21 item・326 行 + 歯 5 本と fixture）。親は mod 宣言 2 つと名指しの `pub use` で呼び手（`pipe/cli.rs`・`pipe/cli/intake.rs`・`pipe/review.rs`・`rules/manifest.rs`・歯）を無傷に保つ。共有 fixture（full_row）は親の歯に `pub(super)` で残し子は `super::super::tests::` で読む（複製しない）。親に残る私有の helper（typed / text_of / list_of 等）を子が呼ぶ周は可視性を `pub(super)` に上げる＝**可視性の 1 語と mod 宣言・`pub use`・`use` の path は移動の一部**（純移動の残差として許す・.363 と同じ）。札は 3 file の歯の区間に対で置く。外形（極性一覧の snapshot）は verify で `polarity_external_form` を名指して不変を測る。
 - 見積: 親 約 354 行・parse 約 181 行・check 約 326 行。
 
 <!-- contracts:begin -->
@@ -288,7 +288,7 @@ title = "pipe/table.rs を table/parse.rs（区間と TOML の parse）と table
 req = ["FR47"]
 section = "15"
 write-set = ["-crates/scribe2/src/pipe/table.rs", "+crates/scribe2/src/pipe/table/parse.rs", "+crates/scribe2/src/pipe/table/check.rs"]
-verify = ["cargo nextest run -p scribe2 --no-tests=fail table_"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail table_ polarity_external_form"]
 size = "S"
 done = "parse と check の群が子 module に在り、TableError / Finding / Context は親に残って極性一覧の snapshot が不変、親は mod 宣言と pub use だけが増えて呼び手の import は不変、既存の table_ と contract_ の歯が全部緑で純移動の機械証明の残差が use と path だけ"
 <!-- contracts:end -->
