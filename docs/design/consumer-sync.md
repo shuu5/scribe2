@@ -31,12 +31,14 @@
 
 ## 4. doctor の導入先の行（ADR-0028 §2.3・FR61・台帳 `s2-07l.303` (a)）
 
-- **母集団**（1 関数・和集合・順序 = 発見順を sort）: (i) 口座の設定 dir（`<state_dir>/accounts/<label>/`・[account-lifecycle.md](./account-lifecycle.md) §2 の有効な口座）ごとの `plugins/installed_plugins.json` の `plugins["<NAME>@<NAME>"][*]`（`projectPath` / `scope` / `installPath` / `gitCommitSha`・読むだけ・書かない・無い口座は飛ばす・壊れている周は `ledger=unreadable` の 1 行）(ii) 席の登録 row（[seat-roles.md](./seat-roles.md) §2）の anchor。同じ path は 1 行に畳む。
+- **導入の形（user 裁定 2026-09-15T03:52Z・台帳 `s2-07l.303` notes）**: 器が起こす席（`seat launch` / 立て直し / 役割なしの起動・[account-lifecycle.md](./account-lifecycle.md) §4）は、器の plugin を **checkout（`[[vessel]] repo` の dir・下の「vessel repo」）を host の manifest の `[[plugin]]` 行に書いて `--plugin-dir` で積む**。marketplace の add / `claude plugin install`（口座 × project の掛け算）は器の席には要らず、要件にしない。帳簿（`installed_plugins.json`）が要るのは **user が手で起こす session だけ**で、doctor は下の `source=` でその区別を名指す。同じ器を `--plugin-dir` と帳簿の両方で積んだ session は hook が二重に走るので `drift=dual` で名指す（器は帳簿を書かない・直すのは user の手番）。
+- **母集団**（1 関数・和集合・順序 = 発見順を sort）: (i) 席の登録 row（[seat-roles.md](./seat-roles.md) §2）の anchor（`source=launch`・読み込み元は §3 の記録の `root`）(ii) 口座の設定 dir（`<state_dir>/accounts/<label>/`・[account-lifecycle.md](./account-lifecycle.md) §2 の有効な口座）ごとの `plugins/installed_plugins.json` の `plugins["<NAME>@<NAME>"][*]`（`projectPath` / `scope` / `installPath` / `gitCommitSha`・`source=install`・読むだけ・書かない・無い口座は飛ばす・壊れている周は `ledger=unreadable` の 1 行）。同じ path は 1 行に畳む（両方に在れば `source=launch+install`）。
 - **行の形**（consumer 1 つに 1 行・`doctor --state-dir S` の口座行の後ろ・値は全部実測か `unknown` / `unrecorded`）:
-  `consumer=<path> scope=<project|local|user|-> binary=<記録の build 元 commit|unrecorded> plugin=<記録の root>:<hooks digest|unrecorded> ledger=<gitCommitSha|-> cache=<installPath の hooks.json の digest|absent> head=<vessel repo の HEAD|undeclared> drift=<none|binary|plugin|ledger|binary+plugin|…>`
+  `consumer=<path> source=<launch|install|launch+install> scope=<project|local|user|-> binary=<記録の build 元 commit|unrecorded> plugin=<記録の root>:<hooks digest|unrecorded> ledger=<gitCommitSha|-> cache=<installPath の hooks.json の digest|absent> head=<vessel repo の HEAD|undeclared> drift=<none|binary|plugin|ledger|dual|binary+plugin|…>`
   - `binary` の食い違い = 記録の build 元 commit ≠ doctor 自身の build 元 commit（§2・doctor は PATH の binary そのもの）。
-  - `plugin` の食い違い = 記録の digest ≠ 記録の root に今在る hooks.json の digest（同じ場所の file が変わった＝作業ツリーの前進か cache の上書き）。
-  - `ledger` の食い違い = 帳簿の `gitCommitSha` ≠ vessel repo の HEAD（帳簿が古い＝`claude plugin install` の打ち直しが要る周を名指す・器は帳簿を書かない）。
+  - `plugin` の食い違い = 記録の digest ≠ 記録の root に今在る hooks.json の digest（同じ場所の file が変わった＝作業ツリーの前進か cache の上書き）。`source=launch` の行では root は checkout そのもの＝食い違いは「checkout が前に進んだのに席が古い snapshot のまま」を意味し、§6 の作り直しが直す。
+  - `ledger` の食い違い = 帳簿の `gitCommitSha` ≠ vessel repo の HEAD（`source=install` の行だけ・帳簿が古い＝`claude plugin install` の打ち直しが要る周を名指す・器は帳簿を書かない）。`source=launch` だけの行は `ledger=-` で、この語は出ない。
+  - `dual` = 記録の `root` が checkout で、かつ同じ path の帳簿にも器が在る（hook が二重に走る）。
   - `drift=` は該当する語を `+` で繋ぐ（閉じた列・宣言順）。記録が無い consumer は `unrecorded` で「none」に潰さない。
 - **vessel repo**: `head=` と §5 の更新は器自身の checkout を要る。host 固有の path なので **host の manifest**（[account-lifecycle.md](./account-lifecycle.md) §2 の `host.toml`）に array-of-tables を 1 種足す: `[[vessel]] repo = "<dir>"`（最大 1 行・2 行目は重複として拒む・同じ loader・同じ拒否形）。無い周は `head=undeclared`（doctor は止めない）。
 - **判定しない**: doctor は行を出すだけ（C10.2・verified の手書きは無い）。何をすべきかは `drift=` の語が名指し、更新は §5 の口が行う。
