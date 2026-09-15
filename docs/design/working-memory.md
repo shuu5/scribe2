@@ -1,6 +1,6 @@
 # 設計: 作業記憶の退避・復元・消費 — 器の subcommand 3 つが機械層を担い、命令行の出所 pointer を形で検査する
 
-- 要件: [FR23](../../design-intent/spec/srs.html#FR23) 作業記憶の作法 6 本 + subcommand + 暫定行 / [AC8](../../design-intent/spec/srs.html#AC8) / [FR26](../../design-intent/spec/srs.html#FR26) cap guard（不変）/ [FR27](../../design-intent/spec/srs.html#FR27) [FR29](../../design-intent/spec/srs.html#FR29) 合図（不変）/ [FR28](../../design-intent/spec/srs.html#FR28) cycle（不変）/ [NFR4](../../design-intent/spec/srs.html#NFR4) fail-closed。制約: CON2（PUBLIC）
+- 要件: [FR23](../../design-intent/spec/srs.html#FR23) 作業記憶の作法 9 本 + subcommand + 暫定行 / [AC8](../../design-intent/spec/srs.html#AC8) / [FR26](../../design-intent/spec/srs.html#FR26) cap guard（不変）/ [FR27](../../design-intent/spec/srs.html#FR27) [FR29](../../design-intent/spec/srs.html#FR29) 合図（不変）/ [FR28](../../design-intent/spec/srs.html#FR28) cycle（不変）/ [NFR4](../../design-intent/spec/srs.html#NFR4) fail-closed。制約: CON2（PUBLIC）
 - 憲法: [N2](../../design-intent/spec/constitution.html#n2) prose の規則は規則でない / [C2](../../design-intent/spec/constitution.html#c2) 宣言順・C2.2 env 不読 / [C3](../../design-intent/spec/constitution.html#c3) C3.3 typed / [C8](../../design-intent/spec/constitution.html#c8) 前の版を oracle にしない / [C11](../../design-intent/spec/constitution.html#c11) C11.2 極性 / [C12](../../design-intent/spec/constitution.html#c12) 歯は Rust / [C15](../../design-intent/spec/constitution.html#c15) 台帳に規律を置かない
 - 決定: [ADR-0018](../../design-intent/decisions/ADR-0018-working-memory-subcommands-and-pointer-required-directives.html) / [ADR-0015](../../design-intent/decisions/ADR-0015-seat-state-is-stamped-by-hooks-not-read-from-pane.html)（sid は打刻から）/ [ADR-0013](../../design-intent/decisions/ADR-0013-machine-holds-enumerations-docs-hold-pointers.html) §2.2（enum の 4 つ組）/ [ADR-0004](../../design-intent/decisions/ADR-0004-mvp-persistence-and-cross-version-formats.html) §2.4 / §2.5 / [ADR-0031](../../design-intent/decisions/ADR-0031-working-memory-is-held-by-the-vessel-directives-status-and-hooks.html)（§12・器が持つ側を広げる: 直命の表・現在地 DATA・hook 強制と自動退避・置き場は state dir）
 - 土台: [seat-autonomy.md](./seat-autonomy.md)（tick / cycle・退避物の走査 `scan_wm`・置き場）/ [seat-state.md](./seat-state.md)（打刻の schema・`sid`）。crate の形は [rules-manifest.md §2](./rules-manifest.md)。brief の user 面は [dialogue-surface.md](./dialogue-surface.md) §3。
@@ -12,9 +12,9 @@
 
 やさしく言うと: 「退避して・作り直して・思い出す」のうち、file を作る・事実を並べる・使い終えた file を移す、の 3 つを器がやる。「今どこで次に何をするか」を考えて文章にするのは session のまま。命令の各行には「規則はここ」という矢印を必ず付け、矢印の無い行は次の周に持ち越さない。
 
-## 2. 置き場と名前（記録時点は SRS FR23 が anchor 配下を固定・ADR-0031 §2.4 で state dir へ改める＝要件書の改訂は user の手番・それまで本節の置き場が現行）
+## 2. 置き場と名前（SRS FR23 v0.13 と ADR-0031 §2.4 が state dir を固定・器の現物は契約 (e)〔§12.7〕の Landed まで anchor 配下の `--wm-dir` で動く＝本節は両方を書き分ける）
 
-- 退避物 = `<wm_dir>/working-memory.<sid>.md`（`<wm_dir>` は `--wm-dir` で受ける・既存の tick / cycle と同じ・anchor 配下の `.claude-session/` を user が指す）。消費済み = `working-memory.<sid>.consumed.md`（move）。**改訂後（§12.4）**: `<state_dir>/seat/<潰した target>/wm/` に置き `--wm-dir` は廃止。旧置き場の退避物は doctor が `wm-legacy=<n>` で名指す（器は読まない・消さない）。
+- 退避物 = `<wm_dir>/working-memory.<sid>.md`（`<wm_dir>` は `--wm-dir` で受ける・既存の tick / cycle と同じ・anchor 配下の `.claude-session/` を user が指す）。消費済み = `working-memory.<sid>.consumed.md`（move）。**契約 (e) 以後（§12.4・要件 FR23 の定める形）**: `<state_dir>/seat/<潰した target>/wm/` に置き `--wm-dir` は廃止。旧置き場の退避物は doctor が `wm-legacy=<n>` で名指す（器は読まない・消さない）。
 - 自席の弁別 = frontmatter の `seat:` が `--target` と一致（`scan_wm` と同じ・file 名の sid ではない）。
 - 現在の sid = `<state_dir>/seat/<潰した target>/state.jsonl` の**最終打刻行の `sid`**（[seat-state.md](./seat-state.md) §2・hook の `session_id`）。打刻が無い / 読めない / **sid が空**の周は rc 非 0（`sid-missing` / `sid-unreadable` / `sid-empty`・hook は `session_id` 欠落を空で打刻する現物があるため・env と pane は読まない）。
 - frontmatter（YAML 風の `key: value` 行・`---` で囲む）: `schema: 1`（新規・**任意**・無ければ 1 相当として読む＝前の版の skill が書いた退避物をそのまま読む・2 以上は Err）/ `seat:` / `role:`（表示用・弁別には使わない）/ `externalized_at:`（UTC）/ `trigger:` / `carry_source:` / `carry_items:` / `carry_user_directives:` / `consumed-from:`（consume が current sid 名義へ移すときだけ）。未知 key は拒まない（開発 session の注記を許す）が、`seat` が無い file は自席として数えない（`scan_wm` と同じ）。
@@ -155,7 +155,7 @@ AC8 の確認（SRS の FR23 の検証手法は I = 目視確認・2 つの開�
 
 - `<state_dir>/seat/<潰した target>/wm/working-memory.<sid>.md`（打刻・tick・heartbeat と同じ席の dir）。`--wm-dir` は廃止し置き場は state dir から解く（unit は [seat-autonomy.md](./seat-autonomy.md) §8 の再生成で追随）。
 - 同 sid の未 consumed が在る周の再退避 = 旧 file を `working-memory.<sid>.superseded.<ts>.md` へ rename して置き換える（台帳 s2-07l.289 の吸収・削除しない・N1.2）。
-- 要件書 FR23 の置き場の文面は user の `/folio-architect` で改める。それまで契約 (e) は dispatch しない。
+- 要件書 FR23（v0.13）が置き場を state dir に固定し、作法に可逆置換（上の rename）を持つ。契約 (e) の acceptance は FR23 の作法の本数を指す。
 
 ### 12.5 役割の既定（ADR-0031 §2.5）
 
