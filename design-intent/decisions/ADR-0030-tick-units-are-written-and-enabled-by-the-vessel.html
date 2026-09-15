@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="folio-doc-type" content="adr">
+<meta name="folio-layer" content="project">
+<meta name="folio-version" content="0.4.6">
+<meta name="folio-status" content="accepted">
+<meta name="folio-stakeholders" content="Developer, AI Agent, External Reviewer">
+<meta name="folio-adr-id" content="0030">
+<meta name="folio-adr-date" content="2026-09-15">
+<title>ADR-0030 — 管理 tick の unit は器が書いて有効化する (席ごとの service / timer を導出して host へ書く・間隔は rules 行・有効化は 3 クラス非該当)</title>
+<link rel="stylesheet" href="../../common.css">
+<script type="application/ld+json">
+{
+  "@context": {
+    "dc": "http://purl.org/dc/terms/",
+    "schema": "https://schema.org/",
+    "folio": "https://folio.dev/spec/v1/"
+  },
+  "@id": "./ADR-0030-tick-units-are-written-and-enabled-by-the-vessel.html",
+  "@type": "schema:TechArticle",
+  "dc:isPartOf": [
+    { "@id": "./README.html" }
+  ],
+  "dc:title": "ADR-0030 — 管理 tick の unit は器が書いて有効化する (席ごとの service / timer を導出して host へ書く・間隔は rules 行・有効化は 3 クラス非該当)",
+  "folio:version": "0.4.6",
+  "folio:stakeholders": ["Developer", "AI Agent", "External Reviewer"],
+  "dc:references": [
+    { "@id": "../spec/constitution.html#c1" },
+    { "@id": "../spec/constitution.html#c2" },
+    { "@id": "../spec/constitution.html#c5" },
+    { "@id": "../spec/constitution.html#c10" },
+    { "@id": "../spec/constitution.html#c11" },
+    { "@id": "../spec/constitution.html#c13" },
+    { "@id": "../spec/constitution.html#a1" },
+    { "@id": "../spec/constitution.html#n1" },
+    { "@id": "../spec/constitution.html#n2" },
+    { "@id": "../spec/constitution.html#n3" },
+    { "@id": "../spec/srs.html#FR27" },
+    { "@id": "../spec/srs.html#FR29" },
+    { "@id": "../spec/srs.html#FR40" },
+    { "@id": "../spec/srs.html#FR61" },
+    { "@id": "../spec/srs.html" },
+    { "@id": "./ADR-0020-account-autonomy-limit-stop-resume-and-selection.html" },
+    { "@id": "./ADR-0022-seat-roles-are-typed-and-enforced-by-hooks.html" },
+    { "@id": "./ADR-0026-account-lifecycle-host-manifest-and-seat-launch.html" },
+    { "@id": "./ADR-0028-consumer-sync-is-measured-and-updated-by-the-vessel.html" }
+  ]
+}
+</script>
+</head>
+<body>
+<!-- folio:chrome-top -->
+<a class="skip-link" href="#s1-context">本文へスキップ</a>
+<nav class="breadcrumb" aria-label="パンくず"><ol>
+  <li><a href="../index.html">design-intent</a></li>
+  <li><a href="./README.html">decisions</a></li>
+  <li aria-current="page">ADR-0030</li>
+</ol></nav>
+<!-- /folio:chrome-top -->
+
+<header class="doc-header">
+  <h1>ADR-0030 — 管理 tick の unit は器が書いて有効化する (席ごとの service / timer を導出して host へ書く・間隔は rules 行・有効化は 3 クラス非該当)</h1>
+  <div class="meta">Status: accepted &middot; Date: 2026-09-15 &middot; version 0.4.6 (拘束する constitution の版) &middot; C1 / C2.2 / C5 / A1 / N1.2 の適用を記録し、 設計 seat-autonomy §8「器はこの unit を書き出さない・有効化は user の手番」を器の口に置き換える (憲法は動かさない・設計 doc の版を上げる) &middot; 要件は SRS が正本 (FR27 / FR29 / FR40 / FR61)</div>
+</header>
+<!-- folio:chrome-toc -->
+<nav class="toc" aria-label="ページ内目次">
+<ol>
+  <li><a href="#s1-context">§1. Context</a></li>
+  <li><a href="#s2-decision">§2. Decision</a></li>
+  <li class="toc--sub"><a href="#s2-1-derive">§2.1 席ごとの service / timer の 2 file を 1 関数で導出し、 unit dir と binary は引数で受ける</a></li>
+  <li class="toc--sub"><a href="#s2-2-interval">§2.2 間隔は rules 行 1 つ (秒) で、 timer は単調時計で回す</a></li>
+  <li class="toc--sub"><a href="#s2-3-write">§2.3 書きは一時 file と rename、 器の生成物でない既存 file は上書きしない、 有効化は子 process</a></li>
+  <li class="toc--sub"><a href="#s2-4-approval">§2.4 unit の有効化と停止は 3 クラス非該当で、 撤去は退役 dir への移動</a></li>
+  <li class="toc--sub"><a href="#s2-5-doctor">§2.5 doctor は登録 row のある席ごとに unit の有無と一致を名指す</a></li>
+  <li class="toc--sub"><a href="#s2-6-scope">§2.6 射程外</a></li>
+  <li><a href="#s3-srs">§3. SRS との関係 (正本は SRS)</a></li>
+  <li><a href="#s4-consequences">§4. Consequences</a></li>
+  <li><a href="#s5-alternatives">§5. Alternatives Considered</a></li>
+  <li><a href="#s6-trace">§6. Trace</a></li>
+</ol>
+</nav>
+<!-- /folio:chrome-toc -->
+
+<aside class="informative">
+<p>本 ADR は IETF <strong>RFC 2119</strong> および <strong>RFC 8174 / BCP 14</strong> に定義される MUST / SHALL / SHOULD / MAY のキーワード解釈規約に従う。 ADR は決定時点の記録であり、 改訂は新しい ADR による supersede で行う。 本 ADR の §2 は設計判断で、 その向き (unit を器が書く) は user の裁定 1 件 (2026-09-15T03:52Z 問 3) が、 間隔の値 (1 分) は user の裁定 1 件 (2026-09-15T02:30Z) が定めた。 §2.4 は憲法 A1 の適用の記録 (解釈の記録であって条文の改訂ではない)。</p>
+</aside>
+
+<aside class="machine-readable" aria-hidden="true">
+  <dl>
+    <dt>id</dt><dd>ADR-0030</dd>
+    <dt>doc-type</dt><dd>adr</dd>
+    <dt>status</dt><dd>accepted</dd>
+    <dt>date</dt><dd>2026-09-15</dd>
+    <dt>version</dt><dd>0.4.6 (拘束する constitution の版。 本 ADR は憲法の条文を動かさない)</dd>
+    <dt>decided-by</dt><dd>planner (2026-09-15・設計判断) — 向きは user の裁定 2 件 (2026-09-15T03:52Z 問 3「unit を器が書く」= よい・2026-09-15T02:30Z「timer を 1 分へ」= それでよい) が定めた。 逐語は台帳 <code>s2-07l.321</code> / <code>s2-07l.315</code> の notes (本 file には写さない)。</dd>
+    <dt>stakeholders</dt><dd>Developer, AI Agent, External Reviewer</dd>
+    <dt>supersedes</dt><dd>なし (追補)。 設計 doc seat-autonomy §8 の「器はこの unit を書き出さない・有効化と停止は user の手番」の 2 文を器の口に置き換える (設計 doc の版で記録・C8.3)。 rules 行を 1 つ足す (§2.2・C5 の裁定 id 付き)。 既存の rules 行・口・行は不変。</dd>
+    <dt>related</dt><dd>ADR-0020 §2.4 (退避の合図と立て直し = tick が駆動する動作) / ADR-0022 §2.1 (席の登録 row = unit を持つ席の母集団) / ADR-0026 §2.1 / §2.2 (host の manifest・口座の口が host の file を一時 file と rename で書く形) / ADR-0028 §2.3 (器が host に書く口 vessel update・子 process の形) / constitution C1 / C2.2 / C5 / C10.2 / C11 / C13.3 / A1 / N1 / N1.2 / N2 / N3</dd>
+  </dl>
+</aside>
+
+<section id="s1-context" class="informative">
+<h2>§1. Context</h2>
+<p class="section-essence" data-audience="human">管理 tick は席の外から周期で回ります。 その周期を作る systemd の unit は、 記録時点では人が host ごとに手で書いています。 project が増えるたびに service と timer を 1 組ずつ写し、 間隔を変えるには全部の file を直します。 器は unit を書かず、 有効化も人の手番に置いていました。 user は「unit を器が書いてよい」「間隔は 1 分でよい」と裁定しました。</p>
+<p data-audience="machine">記録時点 (2026-09-15) の現物 (main <code>1206210</code>): 設計 <code>docs/design/seat-autonomy.md</code> §8 は unit の雛形 (template unit・<code>%i</code> = tmux target・<code>OnCalendar=*:0/5</code>) を示し、 「器はこの unit を書き出さない・有効化と停止は user の手番 (A1)」と定める。 host の実物は project (導入先) ごとに service / timer の対を手で写した 3 組 (器・ubuntu-note-system・folio2) で、 各 file が state dir・作業記憶 dir・binary の場所を <code>%h</code> 相対で持ち、 間隔は全部 5 分。 間隔の裁定 (1 分・台帳 <code>s2-07l.315</code>) を host に写す手順は器の外に在る。 tick の判定 (<code>seat/tick.rs</code>) と退避の合図の brake (<code>seat.tick_stale_s</code>・<code>seat.signal_backoff_s</code>) は rules 行で持つのに、 それを撃つ周期だけが手書きの file に在る。</p>
+<p data-audience="machine">憲法の向き: <a href="../spec/constitution.html#c1">C1</a> は閾値を manifest の行 1 つで持つ。 <a href="../spec/constitution.html#c2">C2.2</a> は env を読まず、 host 固有の値を manifest か引数で受ける。 <a href="../spec/constitution.html#c5">C5</a> は rules 行に裁定 id を要する。 <a href="../spec/constitution.html#a1">A1</a> は消す / 出す / 使う の 3 クラスにだけ承認を要する。 <a href="../spec/constitution.html#n1">N1.2</a> は退役を可逆な移動でだけ行う。 <a href="../spec/constitution.html#n3">N3</a> は host 固有の値で分岐しない。</p>
+</section>
+
+<section id="s2-decision" class="normative">
+<h2>§2. Decision</h2>
+
+<h3 id="s2-1-derive">§2.1 席ごとの service / timer の 2 file を 1 関数で導出し、 unit dir と binary は引数で受ける</h3>
+<p class="section-essence" data-audience="human">器の口 1 つで、 席 1 つ分の service と timer の中身を器が組みます。 中身に入る場所 (状態の置き場・作業記憶の置き場・器の実行 file・unit を置く dir) は、 全部 command の引数で受け取ります。 器は home の場所も環境変数も読みません。 unit の名前は席の target から機械的に決まります。</p>
+<p data-audience="machine">器 SHALL subcommand <code>&lt;NAME&gt; seat tick install --state-dir S --target S:W --wm-dir D --unit-dir U --binary PATH [--rules PATH]</code> を 1 つ持つ。 unit の中身 SHALL pure な関数 1 本 (<code>derive_units</code>・入力 = NAME・target・state dir・wm dir・binary・間隔) で導出し、 file 名 SHALL <code>&lt;NAME&gt;-seat-tick-&lt;潰した target&gt;.service</code> / <code>.timer</code> (潰し方は打刻の dir と同じ 1 関数・template unit と <code>%i</code> は使わない・§5 (B))。 service SHALL <code>Type=oneshot</code> と <code>ExecStart=&lt;binary&gt; seat tick --target &lt;target&gt; --wm-dir &lt;wm dir&gt; --state-dir &lt;state dir&gt; [--rules &lt;path&gt;]</code> を持ち、 <code>Environment=</code>・<code>WorkingDirectory=</code>・<code>%h</code> を持たない (path は全部引数の値・C2.2・N3)。 器 SHALL NOT env・home・自分の実行 file の場所を読まない (env-reads の禁止集合・<code>--binary</code> は shell が解いて渡す)。</p>
+
+<h3 id="s2-2-interval">§2.2 間隔は rules 行 1 つ (秒) で、 timer は単調時計で回す</h3>
+<p class="section-essence" data-audience="human">timer の間隔は器の規則の表に 1 行で持ちます (user の裁定 id 付き)。 timer は「前回の実行から n 秒後」の形で回し、 時刻の割り算はしません。 起動直後も同じ n 秒後に最初の 1 回が来ます。</p>
+<p data-audience="machine">間隔 SHALL rules 行 <code>seat.tick_interval_s</code> (整数の秒・裁定 id = user 2026-09-15T02:30Z・C1 / C5) で持ち、 timer SHALL <code>OnBootSec=&lt;n&gt;s</code> と <code>OnUnitActiveSec=&lt;n&gt;s</code> (単調時計・<code>Persistent=false</code>・<code>WantedBy=timers.target</code>) で組む。 <code>OnCalendar</code> の割り算 (<code>*:0/5</code>) は使わない (60 の約数でない値で毎時の頭に揃わなくなる・§5 (F))。 rules 行が読めない周 SHALL <code>no-rule</code> で断る (既定値に倒さない・C10)。</p>
+
+<h3 id="s2-3-write">§2.3 書きは一時 file と rename、 器の生成物でない既存 file は上書きしない、 有効化は子 process</h3>
+<p class="section-essence" data-audience="human">file は途中の状態を残さない書き方で置きます。 同じ名前の file がすでに在って、 それが器の作った中身と違うなら (人が手で書いた unit など)、 器は上書きせずに断ります。 中身が同じなら何もしません。 置いた後は systemd に読み直させ、 timer を有効化して起動します。 どこかで失敗したら、 何が失敗したかを 1 語で名指します。</p>
+<p data-audience="machine">書き SHALL 一時 file → rename (口座の口が host の manifest を書く形と同じ・ADR-0026 §2.2) で、 部分書きを残さない。 既存 file SHALL 導出の結果と bytes で比べ、 一致 → <code>unchanged</code> (書かない・有効化は撃つ)・不一致 → <code>unit-exists</code> で断る (人の手書きを上書きしない・N1・書き換えは §2.4 の撤去の後に入れ直す手番)。 有効化 SHALL 子 process <code>systemctl --user daemon-reload</code> → <code>systemctl --user enable --now &lt;timer&gt;</code> の順序固定で撃ち、 timeout は既存の唯一の wait、 失敗は typed (<code>reload-failed</code> / <code>enable-failed</code>・rc を添える)。 <code>systemctl</code> は host の道具 (git / tmux と同種) で、 crate の依存は足さない (C13)。 記録 SHALL 器の inject の記録と同じ置き場に <code>kind=tick-install</code> の 1 行 (書いた file 名・結果の語)。</p>
+
+<h3 id="s2-4-approval">§2.4 unit の有効化と停止は 3 クラス非該当で、 撤去は退役 dir への移動</h3>
+<p class="section-essence" data-audience="human">timer を有効にすることは、 何かを消す・外に出す・お金を使うのどれでもありません。 器の tick は器の管理する席にだけ働き、 課金も送信もしません。 だから器が自分で有効化してよく、 人の承認は要りません (この判断は user の裁定で確かめました)。 止めるときも消さず、 file を退役 dir に移すだけにします。 元に戻せます。</p>
+<p data-audience="machine">unit の有効化 SHALL 3 クラス (消す / 出す / 使う・A1) の**いずれにも当たらない**と読む: 書くのは host の user unit dir の file 2 つ (作る)・有効化は host の timer (課金・送信なし)・tick が撃つのは器の既存の口 (FR27 / FR29 の合図・A1 の判定は合図の側で済んでいる)。 設計 seat-autonomy §8 の「有効化と停止は user の手番 (A1)」は本 ADR で置き換える (user 裁定 2026-09-15T03:52Z 問 3 が向きを定めた)。 撤去 SHALL <code>seat tick uninstall --target S:W --unit-dir U</code> = <code>systemctl --user disable --now &lt;timer&gt;</code> → 2 file を <code>&lt;unit dir&gt;/.retired/&lt;name&gt;.&lt;ts&gt;</code> へ **mv** (N1.2・削除しない・器の生成物でない file は動かさず <code>unit-foreign</code> で断る)。 前の版の timer SHALL 止めない (器の管理物でない・切替は seat-autonomy §5 の便 5 の user 裁定)。</p>
+
+<h3 id="s2-5-doctor">§2.5 doctor は登録 row のある席ごとに unit の有無と一致を名指す</h3>
+<p class="section-essence" data-audience="human">doctor は、 登録されている席ごとに「timer の file が在るか・器が今組む中身と同じか」を 1 語で示します。 有効化されているかは systemd に聞かないと分からないので、 doctor はそこまでは言いません。 判定もしません。</p>
+<p data-audience="machine">doctor (<code>--state-dir S --unit-dir U</code>) SHALL 登録 row (ADR-0022 §2.1) のある席ごとに語 <code>tick=&lt;installed|drift|absent|unreadable&gt;</code> を持つ (<code>installed</code> = 2 file が在り導出と bytes で一致・<code>drift</code> = 在るが違う〔間隔の裁定が変わった後の古い file を含む〕・<code>absent</code> = 無い・<code>unreadable</code> = 読めない・<code>absent</code> に潰さない)。 <code>--unit-dir</code> が無い周は語を出さず <code>tick=-</code> (評価していない印)。 <code>systemctl</code> は doctor から呼ばない (file の読みだけ・C10.2 の生成物)。 判定はしない。</p>
+
+<h3 id="s2-6-scope">§2.6 射程外</h3>
+<p class="section-essence" data-audience="human">この記録が決めるのは、 unit の導出・間隔の持ち方・書きと有効化・承認の扱い・doctor の語の 5 つです。 前の版の timer を止めること、 他の host へ unit を配ること、 tick を常駐 process で回すこと、 systemd 以外の駆動は決めません。</p>
+<p data-audience="machine">次は本 ADR の決定ではない (MUST NOT be read as such): 前の版の timer の停止 (user の手番・消す)・host をまたぐ unit の配布 (doctor が host ごとに名指すだけ・C3.2)・器が常駐して tick を回す形 (§5 (D))・systemd の無い host の駆動 (cron 等・別の ADR)・<code>enabled</code> 状態の実測 (systemctl を doctor から呼ぶ形)。</p>
+</section>
+
+<section id="s3-srs" class="informative">
+<h2>§3. SRS との関係 (正本は SRS)</h2>
+<p class="section-essence" data-audience="human">この記録が仕える要件は要件書 (SRS v0.11) に在ります。 要件の文面はここには置かず、 当該行を指すだけにします。 「打刻の合図」「退避の合図」を撃つ管理 tick の駆動を器の口に入れ、 doctor が席ごとに名指せるようにします。 駆動そのものを名指す要件は記録時点の要件書に無く、 要件書の改訂 (user の手番) で 1 本足します。</p>
+<div data-audience="machine">
+<p>本 ADR が仕える要件は SRS v0.11 が正本である: <a href="../spec/srs.html#FR27">FR27 打刻の合図</a> と <a href="../spec/srs.html#FR29">FR29 退避の合図</a> (管理 tick の判定と注入 = 本 ADR の unit が周期で撃つもの)・<a href="../spec/srs.html#FR40">FR40 席の登録</a> (unit を持つ席の母集団 = 登録 row)・<a href="../spec/srs.html#FR61">FR61 導入先の同期</a> (doctor の行に語を足す)。 「管理 tick の駆動 (unit) を器が導出して書き、 間隔を rules 行で持つ」を名指す FR は記録時点の SRS に無く、 要件書の改訂 (<code>/folio-architect</code>・user の手番) で 1 本足す。 それまで契約は FR27 / FR29 を指す。 要件書は本 ADR では 1 字も変えない。</p>
+</div>
+</section>
+
+<section id="s4-consequences" class="informative">
+<h2>§4. Consequences</h2>
+<p class="section-essence" data-audience="human">良い面は、 project を足すときに unit を手で写さなくてよいこと、 間隔の裁定が規則の表 1 行で全席に効くこと (doctor が古い file を名指す)、 人の手番が「切替の裁定」だけに減ることです。 悪い面は、 command の引数が増えること (置き場を全部渡す)、 systemd のある host にしか効かないこと、 既存の手書き unit を一度退役させてから入れ直す手番が要ることです。</p>
+<p data-audience="machine">Positive: 駆動の値が manifest の 1 行 (C1・C5)。 導出が pure な 1 関数で snapshot に pin できる (C12.5)。 host 固有の値は引数だけ (C2.2・N3)。 撤去が可逆 (N1.2)。 doctor が席ごとに名指す (C3.2・C10.2)。 手順の散文が消える (N2)。 依存を足さない (C13)。</p>
+<p data-audience="machine">Negative (受け入れるコスト): 引数 5 つ (<code>--unit-dir</code> と <code>--binary</code> は shell が解いて渡す)。 systemd user session の無い host では <code>reload-failed</code> で断るだけ (代替の駆動は §2.6)。 既存の手書き unit (3 組) は <code>unit-exists</code> で断られ、 退役 → 入れ直しの手番が 1 回 (user が前の版の timer を止める便と同時が自然)。 <code>--unit-dir</code> の無い doctor は <code>tick=-</code> (評価していない) で、 導入先ごとの実測は引数を渡した周だけ。</p>
+</section>
+
+<section id="s5-alternatives" class="informative">
+<h2>§5. Alternatives Considered</h2>
+<p class="section-essence" data-audience="human">6 つの案を退けました。 「雛形を人が写す」は今の形で、 間隔の変更が手順に頼ります。 「template unit に席名を渡す」は名前の記号の扱いが host 側の作法になり、 置き場が違う project ごとに template が増えます。 「home 相対で書く」は器が home を知らないと file の場所を決められません。 「器を常駐させて回す」は監視する物が増えます。 「器が自分の実行 file の場所を読む」は禁じられた読みです。 「時刻の割り算で回す」は 1 分以外の値で揃わなくなります。</p>
+<p data-audience="machine">(A) <strong>雛形を人が写す</strong> (記録時点の seat-autonomy §8)。 却下: project ごとに 2 file の手書きが増え、 間隔の裁定 (<code>s2-07l.315</code>) が host の手順に依存する (N2 の向き)。 §2.1〜§2.3 で器の口に置く。</p>
+<p data-audience="machine">(B) <strong>template unit (<code>@.service</code> + <code>%i</code> = tmux target)</strong>。 却下: <code>:</code> を含む instance 名の escape が host 側の作法になり、 state dir が違う導入先ごとに template が増える (現物は 3 組)。 席ごとの非 template unit なら名前は潰した target 1 つで決まり、 中身は全部引数の値。</p>
+<p data-audience="machine">(C) <strong><code>%h</code> (home 相対) で書く</strong> (現物の手書き unit の形)。 却下: file を置く場所 (<code>--unit-dir</code>) を決めるのに home が要り、 器は env も home も読まない (C2.2)。 引数で受けた絶対 path をそのまま書く。</p>
+<p data-audience="machine">(D) <strong>器が常駐 process で tick を回す</strong> (timer を持たない)。 却下: 常駐の監視・再起動・多重起動の防止が要り、 core に async も loop も持ち込む (C13.3)。 駆動は host の systemd に任せ、 器は oneshot のまま。</p>
+<p data-audience="machine">(E) <strong>binary の場所を器が自分で読む</strong> (<code>current_exe</code>)。 却下: env-reads の禁止集合 (C2.2 の字面の門) に在る。 <code>--binary PATH</code> を必須の引数で受ける (shell の <code>command -v</code> が解く)。</p>
+<p data-audience="machine">(F) <strong><code>OnCalendar</code> の割り算で回す</strong> (<code>*:0/&lt;n&gt;</code>)。 却下: n が 60 の約数でないと毎時の頭で不揃いになり、 秒の単位を持たない。 <code>OnUnitActiveSec</code> の単調時計なら秒の値をそのまま写せる。</p>
+</section>
+
+<section id="s6-trace" class="informative">
+<h2>§6. Trace</h2>
+<p class="section-essence" data-audience="human">出所は、 user の裁定 2 件 (unit を器が書く・間隔は 1 分)、 host の手書き unit の現物、 設計 doc の §8、 器の rules 行です。</p>
+<ul data-audience="machine">
+  <li>user の裁定 (2026-09-15T03:52Z 問 3・報告書「マルチアカウント管理の現状と対策」§7): unit を器が書く = よい。 逐語は台帳 <code>s2-07l.321</code> の notes。</li>
+  <li>user の裁定 (2026-09-15T02:30Z): 退避の合図の再送 back-off と timer を 1 分へ = それでよい。 逐語は台帳 <code>s2-07l.315</code> の notes (rules 行 <code>seat.signal_backoff_s</code> の裁定と同じ 1 件)。</li>
+  <li>host の現物 (2026-09-15・planner 実測): user unit dir に project ごとの service / timer の対が 3 組 (手書き・<code>%h</code> 相対・<code>OnCalendar=*:0/5</code>・template unit と <code>%i</code>)。</li>
+  <li>器の現物 (main <code>1206210</code>): <code>rules/manifest.toml</code> の <code>seat.*</code> 行 (<code>tick_stale_s</code> / <code>cycle_lock_ttl_s</code> / <code>cycle_settle_s</code> / <code>cycle_poll_ms</code>・間隔の行は無い)・<code>seat/cli.rs</code> の <code>seat tick</code> の口・<code>xtask</code> の env-reads の禁止集合 (<code>current_exe</code> を含む)。</li>
+  <li>先行決定: <a href="./ADR-0026-account-lifecycle-host-manifest-and-seat-launch.html">ADR-0026</a> §2.1 / §2.2・<a href="./ADR-0028-consumer-sync-is-measured-and-updated-by-the-vessel.html">ADR-0028</a> §2.3・<a href="./ADR-0022-seat-roles-are-typed-and-enforced-by-hooks.html">ADR-0022</a> §2.1・<a href="./ADR-0020-account-autonomy-limit-stop-resume-and-selection.html">ADR-0020</a> §2.4。</li>
+  <li>設計: <code>docs/design/seat-autonomy.md</code> §5 (便 5) / §8 (駆動・本 PR で書き換え)。 契約は台帳 <code>s2-07l.321</code> (本 ADR の land 後・<code>s2-07l.315</code> Landed 後に dispatch)。</li>
+</ul>
+</section>
+
+<!-- folio:chrome-bottom -->
+<nav class="prevnext" aria-label="前後の文書">
+  <a class="prevnext__prev" href="ADR-0029-statusline-is-rendered-by-the-vessel-and-written-into-account-settings.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">ADR-0029 — statusline は器の口が描き、 口座の設定の statusLine は器が書く (計測の入力の字面は器の中に 1 つ・machine が違っても同じ形)</span></a>
+</nav>
+<script>
+(function () {
+  var openedForPrint = [];
+  window.addEventListener('beforeprint', function () {
+    openedForPrint = [];
+    var ds = document.querySelectorAll('details:not([open])');
+    for (var i = 0; i < ds.length; i++) { ds[i].setAttribute('open', ''); openedForPrint.push(ds[i]); }
+  });
+  window.addEventListener('afterprint', function () {
+    for (var i = 0; i < openedForPrint.length; i++) openedForPrint[i].removeAttribute('open');
+    openedForPrint = [];
+  });
+  if (!document.querySelector('[data-audience]')) return;
+  /* 既定 = 人間プレゼン型 (ADR-0040 / rules §11.3): script 経由で初期 class を付与するため
+     no-JS では付かず全文可視に graceful degrade する。 static DOM は全文を保持 (AI/検索/印刷は不変)。 */
+  document.body.classList.add('audience-human');
+  var bar = document.createElement('nav');
+  bar.className = 'audience-toggle';
+  bar.setAttribute('aria-label', '表示対象の切替');
+  var states = [['both', '両方'], ['human', '人間向け'], ['machine', '機械向け']];
+  for (var s = 0; s < states.length; s++) {
+    (function (mode, label) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      b.setAttribute('aria-pressed', mode === 'human' ? 'true' : 'false');
+      b.addEventListener('click', function () {
+        document.body.classList.remove('audience-human', 'audience-machine');
+        if (mode !== 'both') document.body.classList.add('audience-' + mode);
+        var bs = bar.querySelectorAll('button');
+        for (var j = 0; j < bs.length; j++) bs[j].setAttribute('aria-pressed', bs[j] === b ? 'true' : 'false');
+      });
+      bar.appendChild(b);
+    })(states[s][0], states[s][1]);
+  }
+  var bc = document.querySelector('nav.breadcrumb');
+  if (bc && bc.parentNode) { bc.parentNode.insertBefore(bar, bc.nextSibling); }
+  else { document.body.insertBefore(bar, document.body.firstChild); }
+})();
+</script>
+<!-- /folio:chrome-bottom -->
+</body>
+</html>

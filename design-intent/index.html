@@ -58,7 +58,7 @@
 </ul>
 </details>
 <details>
-<summary>accepted <span class="nav-count">(29)</span></summary>
+<summary>accepted <span class="nav-count">(30)</span></summary>
 <ul>
   <li><a href="decisions/ADR-0001-rust-single-static-binary.html">ADR-0001 — 実装言語と構成 = Rust 単一 static binary (Go / typed Python / TypeScript 却下)</a> <span class="nav-meta">adr</span></li>
   <li><a href="decisions/ADR-0002-test-lint-toolchain.html">ADR-0002 — test / lint toolchain = cargo nextest・粒度 lint は forbid・構造検査は cargo xtask check</a> <span class="nav-meta">adr</span></li>
@@ -89,6 +89,7 @@
   <li><a href="decisions/ADR-0027-run-account-order-earliest-reset-and-no-per-account-cap.html">ADR-0027 — 便用の口座は reset が最も近い口座から選び、 同点は走行中の便が少ない口座に倒し、 1 口座あたりの便数で候補を絞らない (ADR-0020 §2.2 の便用の規則を supersede)</a> <span class="nav-meta">adr</span></li>
   <li><a href="decisions/ADR-0028-consumer-sync-is-measured-and-updated-by-the-vessel.html">ADR-0028 — 導入先の同期は器が測って器が更新する (build 元 commit・読み込み元の記録・install の event・hook 集合の食い違いは席の作り直し) と役割なしの起動行</a> <span class="nav-meta">adr</span></li>
   <li><a href="decisions/ADR-0029-statusline-is-rendered-by-the-vessel-and-written-into-account-settings.html">ADR-0029 — statusline は器の口が描き、 口座の設定の statusLine は器が書く (計測の入力の字面は器の中に 1 つ・machine が違っても同じ形)</a> <span class="nav-meta">adr</span></li>
+  <li><a href="decisions/ADR-0030-tick-units-are-written-and-enabled-by-the-vessel.html">ADR-0030 — 管理 tick の unit は器が書いて有効化する (席ごとの service / timer を導出して host へ書く・間隔は rules 行・有効化は 3 クラス非該当)</a> <span class="nav-meta">adr</span></li>
 </ul>
 </details>
 </section>
