@@ -141,7 +141,7 @@ acceptance:
 
   - { id: AC35, criterion: 偽の event log に直命を 5 件（確認候補になる 3 件 = 発令から rules 行の日数を超えたもの・前提の bead が閉じたもの・前提の決定記録が置き換わったもの、 候補でない有効な直命 1 件、 裁定 id 付きで閉じた直命 1 件）足して復元を撃つと、 有効な直命 4 件が逐語で列挙され（閉じた 1 件は列挙されない）、 確認候補が理由の語（経過 / 前提の終端 / 前提の置換）付きで 3 件だけ印され（候補でない 1 件に印は無い）、 器は直命の状態を変えない。 直命の追加では器が時刻を打ち逐語を保ち、 閉じる記録は結果と裁定 id を伴う, metric_v: 列挙 4/4 + 閉じた不在 1/1 + 候補 3/3 + 非候補の印 0/1 + 逐語 1/1 + 時刻 1/1 + 裁定 id 1/1, metric_l: 直命の表と確認候補, links: [FR65] }
   - { id: AC36, criterion: hook の入力の fixture で復元 skill の起動を渡すと復元の DATA が文脈への注入として返り、 退避 skill の起動では現在地の DATA が返り、 session の開始では退避物の状態（found / missing / unreadable の 3 語）の 1 行が返る。 自動圧縮の直前の hook で自席の退避物が無ければ現在地と持ち越し分だけの退避物が書かれて圧縮は止まらず、 在れば何も書かれず、 読めなければ何も書かずに理由の 1 行が返る。 session の終端の理由が席の状態に打刻され、 退避物の無いまま終わった session の件数が doctor の席の行に出る, metric_v: 注入 3/3 + 状態の語 3/3 + 自動退避 3/3 + 打刻 1/1 + doctor 1/1, metric_l: 取得の強制と自動退避, links: [FR23, FR66] }
-  - { id: AC37, criterion: 登録 row のある planner の席の指示文に、 雛形が設計 doc を指す pointer 付き 4 行のうち対話面の作法の行 3 本（文の形・信頼度・brief の 5 slot）が在り、 管理席の指示文にはその行が 0 本（走査した行数を母集団として出す）で、 pointer の無い行（規範文）が指示文で 0（走査した行数を母集団として出す）で、 復元 skill の本文は brief の 5 slot の名と設計 doc への pointer を持ち作法の則の本文を持たず（則の名の出現 0・走査した行数を母集団として出す）、 rules manifest に対話面の作法の行が 0（rules 行数を母集団として出す）である, metric_v: 行 3/4 + 管理席 0/N + 指示文の規範文 0/N + skill の 5 slot 5/5 + skill の pointer 1/1 + skill の則の本文 0/M + rules 行 0/R, metric_l: 対話面の作法, links: [FR30, FR67] }
+  - { id: AC37, criterion: 登録 row のある planner の席の指示文に、 雛形が設計 doc を指す pointer 付き 4 行のうち対話面の作法の行 3 本（文の形・信頼度・brief の 5 slot）が在り、 管理席の指示文にはその行が 0 本（走査した行数を母集団として出す）で、 pointer の無い行（規範文）が指示文で 0（走査した行数を母集団として出す）で、 復元 skill の本文は brief の 5 slot の名（対話面の設計 doc §3 の宣言順の id）と対話面の設計 doc §3 への pointer を持ち作法の則の本文を持たず（skill の非空行は見出し・番号付きの手順・code block・pointer 付きの行・5 slot の名の行のいずれかに分類され、 どれでもない行が 0・走査した非空行数を母集団として出す）、 rules manifest に対話面の作法の行が 0（rules 行数を母集団として出す）である, metric_v: 行 3/4 + 管理席 0/N + 指示文の規範文 0/N + skill の 5 slot 5/5 + skill の pointer（設計 doc §3）1/1 + skill の分類外の行 0/M + rules 行 0/R, metric_l: 対話面の作法, links: [FR30, FR67] }
 requirements:
   - id: FR1
     type: FR
@@ -884,7 +884,7 @@ requirements:
     ears:
       pattern: ubiquitous
       condition: 常時
-      response: 器は hook を 4 つ備える。 復元 skill の起動に反応して復元の DATA を、 退避 skill の起動に反応して現在地の DATA（anchor の先端・走行中の便・席の状態・前回の退避からの着地）を開発 session の文脈へ注入する hook（skill は止めない）、 session の開始で自席の退避物の状態（found / missing / unreadable の 3 語・復元の DATA が持つ退避物の marker とは別の面の 1 行）を 1 行注入する hook、 自動圧縮の直前に自席の退避物が無ければ現在地と持ち越し分だけの退避物を自動で書いて圧縮は止めない hook、 session の終端の理由を席の状態に打刻する hook である。 doctor は退避物の無いまま終わった session の件数を席ごとに名指す
+      response: 器は hook を 4 つ備える。 復元 skill の起動に反応して復元の DATA を、 退避 skill の起動に反応して現在地の DATA（anchor の先端・走行中の便・席の状態・前回の退避からの着地）を開発 session の文脈へ注入する hook（skill は止めない）、 session の開始で自席の退避物の状態（found / missing / unreadable の 3 語・別 sid の退避物だけの周は found・自席の退避物が一意でない周は unreadable・復元の DATA が出す退避物の状態の行とは別の面の 1 行）を 1 行注入する hook、 自動圧縮の直前に自席の退避物が無ければ現在地と持ち越し分だけの退避物を自動で書いて圧縮は止めない hook、 session の終端の理由を席の状態に打刻する hook である。 doctor は退避物の無いまま終わった session の件数を席ごとに名指す
 
   - id: FR67
     type: FR
