@@ -6,71 +6,43 @@
 //!
 //! 前提違反は **rc 1 + stderr 1 行で何もしない**（event も追記しない・設計 §4）。
 //! 契約 file が読めない周は「対象そのものが壊れている」ので rc 2 で、理由を全件出す。
+//!
+//! 本 file は入口（[`dispatch`] / [`contracts`] / [`usage`]）と共通の材料（flag の読み・規則の値・置き場・段の
+//! 前提の解き [`resolve`]）と表示（[`show`]）と再開（[`resume`]）を持つ。受付は [`intake`]、段の手は [`step`]、
+//! 起動と連鎖は [`run`]（`s2-07l.295` の純移動・外から呼ぶ path は本 file の再輸出で不変）。
+//! 子 module の本文は兄弟 module を `super::approve` / `super::gate` / `super::land` / `super::table` の
+//! path で呼ぶ（本文を書き換えない）ので、その名は本 file の `use` が親として持つ。
 
-use super::approve::{Approve, RC_BLOCKED};
+mod intake;
+mod run;
+mod step;
+
+pub(super) use run::turn_of;
+
+use super::approve::{self, RC_BLOCKED};
 use super::contract::Contract;
-use super::declaration::{self, Ceiling, Effective, CEILING_ROW, DENIED_ROW};
-use super::follow::{self, Turn};
-use super::gate::{Check, Gate, Limits, Verdict, RC_INCONCLUSIVE};
-use super::land::{verdict_of, Land, Retire, REBASE_EMPTY};
+use super::declaration::{Ceiling, CEILING_ROW, DENIED_ROW};
+use super::follow;
+use super::gate::{self, Check, Verdict, RC_INCONCLUSIVE};
+use super::land::{self, verdict_of, REBASE_EMPTY};
 use super::ratelimit::ride_out_rate_limit;
-use super::refuse::{overlaps, Refuse, SHRINK_FILE};
 use super::stop::stop;
 use super::{
-    contract_path, current, emit, last_stage_detail, question_of_run, run_dir, run_id,
-    runner_is_idle, verify_log_path, vessel_path, worktree_path, Emit,
+    contract_path, current, head_of, last_stage_detail, question_of_run, repo_of_run, repo_path,
+    runner_is_idle, table, verify_log_path, worktree_path,
 };
-use crate::cli_outcome::{Outcome, RC_BROKEN, RC_OK, RC_REFUSED};
+use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
 use crate::fleet::json_lite;
 use crate::fleet::store::{LockPolicy, StoreError};
-use crate::fleet::{self, EventKind, Stage, State};
+use crate::fleet::{Stage, State};
 use crate::hook::vessel;
 use crate::name::NAME;
 use crate::rules::manifest::Manifest;
 use crate::rules::RuleValue;
+use intake::{intake, run_repo};
+use run::{launch, run_all, start};
 use std::path::{Path, PathBuf};
-
-/// gate が要る lens の本数を持つ rules 行。
-const ROW_LENS: &str = "gate.lens_count";
-
-/// gate の diff 上限（byte）を持つ rules 行。
-const ROW_CAP: &str = "gate.token_cap";
-
-/// 変異検査の並列度の上限を持つ rules 行（受付の宣言値）。
-const ROW_MUTANTS_JOBS: &str = "gate.mutants_jobs";
-
-/// job 1 つが要る memory（MiB）を持つ rules 行（受付の分母）。
-const ROW_JOB_MEMORY: &str = "gate.job_memory_mb";
-
-/// 席と host のために残す memory（MiB）を持つ rules 行（受付の差引）。
-const ROW_RESERVE_MEMORY: &str = "host.reserve_memory_mb";
-
-/// 受付で枠が空くのを待つ上限（秒）を持つ rules 行。
-const ROW_SLOT_WAIT: &str = "gate.slot_wait_s";
-
-/// 追随が衝突した便を起こし直す回数の上限を持つ rules 行。
-const ROW_RETRIES: &str = "pipe.follow_retries";
-
-/// land が着地待ちの列で自分の番を待つ上限（秒）を持つ rules 行（設計 gate-cost.md §6）。
-const ROW_LAND_WAIT: &str = "pipe.land_wait_s";
-
-/// 1 file の行数の上限を持つ rules 行（上限の余地の分子・設計 contract-source.md §3・値は読むだけ・C4）。
-const ROW_FILE_LINES: &str = "R-C4-2";
-
-/// core の総行数の上限を持つ rules 行（上限の余地・値は読むだけ・C4）。
-const ROW_CORE_LINES: &str = "R-C4-1";
-
-/// 行の数え方の幅を持つ rules 行（上限の余地の行数を xtask check と同じ式で数える・kind `LineWidth`）。
-const ROW_LINE_WIDTH: &str = "R-C4.line-width";
-
-/// 契約の `size` = S の 1 file あたりの増分の見積（行）を持つ rules 行。
-const ROW_SIZE_S: &str = "pipe.size_s_lines";
-
-/// 契約の `size` = M の見積を持つ rules 行。
-const ROW_SIZE_M: &str = "pipe.size_m_lines";
-
-/// 契約の `size` = L の見積を持つ rules 行。
-const ROW_SIZE_L: &str = "pipe.size_l_lines";
+use step::{answer_run, approve_run, gate_run, land_run, retire_run};
 
 /// `pipe` の使い方。
 pub fn usage() -> String {
@@ -202,181 +174,6 @@ pub(super) fn state_dir_of(args: &[String]) -> Result<PathBuf, String> {
         .ok_or_else(|| format!("{} に置き場が紐づいていない（vessel init）", root.display()))
 }
 
-/// 契約 file を読み込み、置き場へ写して run を起こす。
-fn intake(args: &[String], manifest: &Manifest, policy: LockPolicy) -> Outcome {
-    match intake_id(args, manifest, policy) {
-        Ok(id) => Outcome::ok_line(intake_line(args, &id)),
-        Err(outcome) => outcome,
-    }
-}
-
-/// intake の 1 行。`--rules` で上限を差し替えて通した周は**その事実を同じ行に残す**
-/// （`ceiling-overridden=<path>`・値は渡した path の字面そのもの・`s2-07l.65`）。
-///
-/// `--rules` は test の seam で、上限（`runner.allowed_commands`）を無条件に差し替える。
-/// 差し替えた周が通常の周と同じ 1 行しか出さないと、review は「埋め込みの上限で通った便」と
-/// 区別できない（`.56` lens M1）。差し替えていない周は出さない＝不在が既定。
-fn intake_line(args: &[String], id: &str) -> String {
-    match flag(args, "--rules") {
-        Ok(Some(path)) => format!("run={id} ceiling-overridden={path}"),
-        _ => format!("run={id}"),
-    }
-}
-
-/// intake の本体。**id を返す**のは `run` が続きの段へ渡すためである
-/// （自分の stdout を読み直して id を取る形にすると、表示を変えた瞬間に連鎖が壊れる）。
-fn intake_id(args: &[String], manifest: &Manifest, policy: LockPolicy) -> Result<String, Outcome> {
-    let parsed = (|| {
-        Ok::<_, String>((
-            PathBuf::from(need(args, "--contract")?),
-            need(args, "--bead")?.to_owned(),
-            PathBuf::from(need(args, "--repo")?),
-        ))
-    })();
-    let (path, bead, repo) = parsed.map_err(refused)?;
-    // repo は spawn まで使わないが、**intake の時点で** git repo かを確かめる。
-    // 後段で初めて落ちると、契約は受理されたのに進めない run が残る。
-    if super::head_of(&repo).is_none() {
-        return Err(refuse(&Refuse::NotARepo { repo: repo.display().to_string() }, &[]));
-    }
-    let state_dir = state_dir_of(args).map_err(refused)?;
-    let contract = Contract::load(&path).map_err(|errors| {
-        Outcome::failed(RC_BROKEN, errors.iter().map(ToString::to_string).collect())
-    })?;
-    // **宣言は上限と突き合わせてから**。ここで断つ周は run dir も event も作らない
-    // ——撃てない契約の run が置き場に残ると、続きから引ける便に見えてしまう。
-    let effective = freeze(&repo, manifest, &contract)?;
-    // base の tracked file の一覧（交差の dir の展開と上限の余地が読む・設計 contract-source.md §3）。
-    let tracked = super::table::tracked_files(&repo)
-        .ok_or_else(|| refuse(&Refuse::NotARepo { repo: repo.display().to_string() }, &[]))?;
-    // **上限の余地は受付だけが撃つ**（§3「撃つ場所は受付だけ」）: その便を今の base に当てたら入るか、という
-    // 受付時点の事実で、CI の `contracts check` は撃たない（表は履歴を持つ）。
-    exclude_cap_shortfall(&repo, manifest, &contract, &tracked)?;
-    // **入口で排他する**（ADR-0019 §2.1）。live な便と write-set が交差する契約は、
-    // run dir も event も作らずに断る——後段（land の rebase）で衝突を知るより安い。
-    exclude_overlap(&state_dir, &contract, &tracked)?;
-    let id = run_id(&bead, &fleet::cli::now_utc());
-    // stamp は秒までなので、同じ bead を同じ秒に 2 回 intake すると id が衝突する。
-    // 黙って上書きすると **前の便の契約が別物に化ける**ので、何も書かずに断る。
-    if run_dir(&state_dir, &id).exists() {
-        return Err(refuse(&Refuse::DuplicateRun { run: id.clone() }, &[]));
-    }
-    copy_contract(&state_dir, &id, &path).map_err(broken)?;
-    copy_vessel(&state_dir, &id, &effective).map_err(broken)?;
-    remember_repo(&state_dir, &id, &repo).map_err(broken)?;
-    let emitted = emit(
-        &state_dir,
-        &Emit {
-            kind: EventKind::RunCreated,
-            run: &id,
-            bead: &bead,
-            stage: Some(Stage::Intake),
-            seat: None,
-            pid: None,
-            detail: Some(format!("classes:{}", contract.classes.join("+"))),
-        },
-        policy,
-    );
-    match emitted {
-        Err(err) => Err(broken(err.to_string())),
-        Ok(()) => Ok(id),
-    }
-}
-
-/// live な便（終端でない run）と write-set が交差する契約を断る（設計 pipeline-conflict.md §2）。
-///
-/// **読めない側が勝つ**: live な便の写しを 1 つでも読めなければ、交差の有無に関わらず
-/// `WriteSetUnreadable`（rc 2）で止まる。読めない store を「交差なし」に読み替えると、
-/// 排他が黙って無効化される（fail-closed・NFR4）。
-///
-/// 交差した周は**全組を stderr へ並べ**、理由の 1 行は先頭の 1 組を名乗る。dir 項目は base の tracked file に
-/// 展開してから数える（設計 contract-source.md §3・[`overlaps`]）。
-fn exclude_overlap(state_dir: &Path, contract: &Contract, tracked: &[String]) -> Result<(), Outcome> {
-    let state = current(state_dir).map_err(|errors| {
-        Outcome::failed(RC_BROKEN, errors.iter().map(StoreError::to_string).collect())
-    })?;
-    let mut first: Option<Refuse> = None;
-    let mut lines: Vec<String> = Vec::new();
-    for (id, run) in &state.runs {
-        let Some(alive) = live(state_dir, id, run.stage) else {
-            return Err(refuse(&Refuse::WriteSetUnreadable { run: id.clone() }, &[]));
-        };
-        if !alive {
-            continue;
-        }
-        let Ok(live_contract) = Contract::load(&contract_path(state_dir, id)) else {
-            return Err(refuse(&Refuse::WriteSetUnreadable { run: id.clone() }, &[]));
-        };
-        for (mine, theirs) in overlaps(&contract.write_set, &live_contract.write_set, tracked) {
-            if first.is_none() {
-                first = Some(Refuse::WriteSetOverlap { run: id.clone(), path: mine.clone() });
-            }
-            lines.push(format!("pipe: overlap run={id} contract={mine} live={theirs}"));
-        }
-    }
-    match first {
-        None => Ok(()),
-        Some(found) => Err(refuse(&found, &lines)),
-    }
-}
-
-/// 上限の余地（設計 contract-source.md §3・受付だけ）: write-set の各 `.rs` の base の行数と R-C4-2 の差、core の
-/// 合計と R-C4-1 の差に、契約の `size` の見積（rules 行 `pipe.size_<s|m|l>_lines`・数は manifest が持つ・C1）を
-/// 当て、入らない file を名指して断る（file と core の 2 形・先頭の 1 件が理由の 1 行・残りは stderr に並ぶ）。
-///
-/// dir 項目は base の配下に展開し、`+` の新規 file は 0 行として数え、`-` の縮む面は余地も本数も数えない
-/// （弁別は [`declaration::headroom_shortfalls`] の中）。base に無い項目は数えない（項目の実在は契約表の行の検査
-/// 〔`contracts check` / 設計 pointer の intake〕が名指す）——ただし **`-` の先が base に無い項目は受付で断る**
-/// （`write-set-item-unresolved`）: 落として測ると「余地を求めない」宣言が静かに消え、無い file を減らす便が通る。
-fn exclude_cap_shortfall(repo: &Path, manifest: &Manifest, contract: &Contract, tracked: &[String]) -> Result<(), Outcome> {
-    let caps = declaration::Caps {
-        file_lines: int_row(manifest, ROW_FILE_LINES).map_err(broken)?,
-        core_lines: int_row(manifest, ROW_CORE_LINES).map_err(broken)?,
-        size_lines: int_row(manifest, size_row(&contract.size).map_err(refused)?).map_err(broken)?,
-    };
-    let items = match declaration::read_write_set(&contract.write_set, tracked) {
-        Ok(found) => found,
-        Err(unresolved) => {
-            if let Some(item) = unresolved.iter().find(|item| item.starts_with(SHRINK_FILE)) {
-                return Err(refuse(&Refuse::WriteSetItemUnresolved { item: item.clone() }, &[]));
-            }
-            let resolvable: Vec<String> =
-                contract.write_set.iter().filter(|item| !unresolved.contains(item)).cloned().collect();
-            declaration::read_write_set(&resolvable, tracked).unwrap_or_default()
-        }
-    };
-    // 行数は幅で正規化して数える（1 行に詰め込んでも余地は増えない・rules-manifest.md §4）。
-    let width = int_row(manifest, ROW_LINE_WIDTH).map_err(broken)?;
-    let lines: Vec<(String, u64)> = super::table::read_all(repo, tracked, ".rs")
-        .into_iter()
-        .map(|source| {
-            let count = source.body.as_deref().map_or(0, |text| declaration::line_count(text, width));
-            (source.path, count)
-        })
-        .collect();
-    let short: Vec<Refuse> = declaration::headroom_shortfalls(&items, &lines, caps)
-        .into_iter()
-        .map(|found| Refuse::CapHeadroom { file: found.file, headroom: found.headroom, size: contract.size.clone() })
-        .collect();
-    match short.split_first() {
-        None => Ok(()),
-        Some((first, rest)) => {
-            let lines: Vec<String> = rest.iter().map(|found| format!("pipe: {}", found.reason())).collect();
-            Err(refuse(first, &lines))
-        }
-    }
-}
-
-/// 契約の `size` に対応する rules 行の id（S / M / L の 3 段だけ・他は見積を持たない）。
-fn size_row(size: &str) -> Result<&'static str, String> {
-    match size {
-        "S" => Ok(ROW_SIZE_S),
-        "M" => Ok(ROW_SIZE_M),
-        "L" => Ok(ROW_SIZE_L),
-        other => Err(format!("size {other:?} は S / M / L のどれでもない（上限の余地の見積を持てない）")),
-    }
-}
-
 /// 便が live（終端でない）か。**段の網羅 match で書く**（段が増えたら compile で気付く）。
 ///
 /// 終端 = `Landed` / `Failed` / `Stopped`、または `Gated` で verdict が FAIL（pipeline.md §4
@@ -395,60 +192,6 @@ pub(super) fn live(state_dir: &Path, id: &str, stage: Stage) -> Option<bool> {
     }
 }
 
-/// 契約単位の拒否（**rc は理由の variant が持つ**）。`extra` は理由の後ろに並べる行。
-fn refuse(found: &Refuse, extra: &[String]) -> Outcome {
-    let mut err = vec![format!("pipe: {}", found.reason())];
-    err.extend(extra.iter().cloned());
-    Outcome::failed(found.rc(), err)
-}
-
-/// 対象 repo の HEAD から vessel 宣言を読み、器の上限と突き合わせて有効値にする。
-///
-/// **外れは rc 1**（前提違反）で、宣言が読めない周も同じ極性である——「宣言が無い」と
-/// 「宣言が壊れている」で扱いを変えると、器の視野の外の verify 行が片方から入る。
-fn freeze(repo: &Path, manifest: &Manifest, contract: &Contract) -> Result<Effective, Outcome> {
-    let commands = list_row(manifest, CEILING_ROW).map_err(refused)?;
-    let denied = list_row(manifest, DENIED_ROW).map_err(refused)?;
-    let ceiling = Ceiling { row: CEILING_ROW, commands: &commands, denied: &denied };
-    declaration::measure(repo, &ceiling, &contract.verify).map_err(|errors| {
-        Outcome::failed(RC_REFUSED, errors.iter().map(ToString::to_string).collect())
-    })
-}
-
-/// 有効値を便の写し面へ凍結する（以後の段は repo の宣言を読み直さない）。
-fn copy_vessel(state_dir: &Path, id: &str, effective: &Effective) -> Result<(), String> {
-    let path = vessel_path(state_dir, id);
-    std::fs::write(&path, effective.render())
-        .map_err(|err| format!("{} を書けない: {err}", path.display()))
-}
-
-/// 便の対象 repo を写し面へ書き留める（現在地を cwd に依らせない）。
-fn remember_repo(state_dir: &Path, id: &str, repo: &Path) -> Result<(), String> {
-    let path = super::repo_path(state_dir, id);
-    std::fs::write(&path, format!("{}\n", repo.display()))
-        .map_err(|err| format!("{} を書けない: {err}", path.display()))
-}
-
-/// 便の repo。`--repo` が上書きし、無ければ写し面 → cwd の順で解く。
-fn run_repo(args: &[String], state_dir: &Path, id: &str) -> Result<PathBuf, String> {
-    if let Some(found) = flag(args, "--repo")? {
-        return Ok(PathBuf::from(found));
-    }
-    match super::repo_of_run(state_dir, id) {
-        Some(found) => Ok(found),
-        None => repo_of(args),
-    }
-}
-
-/// 契約 file を置き場へ写す（process 間で持ち越す面は event log とこの写しだけ）。
-fn copy_contract(state_dir: &Path, id: &str, from: &Path) -> Result<(), String> {
-    let dir = run_dir(state_dir, id);
-    std::fs::create_dir_all(&dir).map_err(|err| format!("{} を作れない: {err}", dir.display()))?;
-    let to = contract_path(state_dir, id);
-    std::fs::copy(from, &to).map_err(|err| format!("{} を写せない: {err}", to.display()))?;
-    Ok(())
-}
-
 /// 前提の段を replay から読む。無ければ `Err`。
 pub(super) fn stage_of(state: &State, id: &str) -> Result<Stage, String> {
     state
@@ -456,16 +199,6 @@ pub(super) fn stage_of(state: &State, id: &str) -> Result<Stage, String> {
         .get(id)
         .map(|run| run.stage)
         .ok_or(format!("run {id} が無い"))
-}
-
-/// `pipe spawn`。前提 stage = Intake。
-fn start(args: &[String], policy: LockPolicy) -> Outcome {
-    let parsed = (|| Ok::<_, String>((need(args, "--run")?.to_owned(), need(args, "--runner")?.to_owned())))();
-    let (id, runner) = match parsed {
-        Ok(found) => found,
-        Err(reason) => return refused(reason),
-    };
-    launch(args, &id, &runner, policy, &[Stage::Intake])
 }
 
 /// 段を通すのに要る材料（すべて永続面から解いたもの）。
@@ -588,292 +321,12 @@ fn gated_is(state_dir: &Path, id: &str, want: Verdict) -> Result<(), Outcome> {
     }
 }
 
-/// 段を確かめてから turn の口を通す。
-///
-/// **runner を起こす経路はここ 1 本**で、材料を解いた後は `pipe::follow` の turn へ渡す
-/// （Precheck → spawn → 追随の後始末が 1 本に収まる＝起こし直しと通常の起動で後始末が
-/// 分かれない）。
-fn launch(
-    args: &[String],
-    id: &str,
-    runner: &str,
-    policy: LockPolicy,
-    allowed: &[Stage],
-) -> Outcome {
-    let resolved = match resolve(args, id, allowed, &Extra::Nothing) {
-        Ok(found) => found,
-        Err(outcome) => return outcome,
-    };
-    follow::spawn_turn(&turn_of(id, &resolved, runner, policy), None)
-}
-
-/// turn の材料を解いた面から組む（起動と別口座での起こし直しが同じ 1 本で組む）。
-pub(super) fn turn_of<'a>(id: &'a str, resolved: &'a Resolved, runner: &'a str, policy: LockPolicy) -> Turn<'a> {
-    Turn {
-        run: id,
-        bead: &resolved.bead,
-        repo: &resolved.repo,
-        state_dir: &resolved.state_dir,
-        contract: &resolved.contract,
-        runner: Some(runner),
-        approved: resolved.approved,
-        policy,
-    }
-}
-
-/// `pipe approve`。**逐語を event へ写すだけ**で、段は動かさない（resume が進める）。
-fn approve_run(args: &[String], id: &str, policy: LockPolicy) -> Outcome {
-    let words = match need(args, "--words") {
-        Ok(found) => found.to_owned(),
-        Err(reason) => return refused(reason),
-    };
-    // 段は問わない（承認は「これから起こすこと」への許しで、遅れて来ても記帳する）が、
-    // 便が在ることは確かめる＝無い run へ承認を書くと宛先の無い記録が残る。
-    let state_dir = match state_dir_of(args) {
-        Ok(found) => found,
-        Err(reason) => return refused(reason),
-    };
-    let state = match current(&state_dir) {
-        Ok(found) => found,
-        Err(errors) => {
-            return Outcome::failed(RC_BROKEN, errors.iter().map(StoreError::to_string).collect())
-        }
-    };
-    let Some(run) = state.runs.get(id) else {
-        return refused(format!("run {id} が無い"));
-    };
-    super::approve::approve(&Approve {
-        run: id,
-        bead: &run.bead,
-        state_dir: &state_dir,
-        words: &words,
-        policy,
-    })
-}
-
-/// `pipe answer`。**`Questioned` の run にだけ**逐語を event へ写す（段は動かさない・resume が進める）。
-///
-/// 承認（[`approve_run`]）と同型だが、段は問う——質問の無い便へ回答を書くと、後で来た質問の
-/// 関門が前の回答で開く。段違いは `Blocked` の未承認と同じ **rc 3 で何も書かない**。
-fn answer_run(args: &[String], id: &str, policy: LockPolicy) -> Outcome {
-    let words = match need(args, "--words") {
-        Ok(found) => found.to_owned(),
-        Err(reason) => return refused(reason),
-    };
-    let state_dir = match state_dir_of(args) {
-        Ok(found) => found,
-        Err(reason) => return refused(reason),
-    };
-    let state = match current(&state_dir) {
-        Ok(found) => found,
-        Err(errors) => {
-            return Outcome::failed(RC_BROKEN, errors.iter().map(StoreError::to_string).collect())
-        }
-    };
-    let Some(run) = state.runs.get(id) else {
-        return refused(format!("run {id} が無い"));
-    };
-    if run.stage != Stage::Questioned {
-        return Outcome::failed_line(
-            RC_BLOCKED,
-            format!("pipe: run {id} は質問で止まっていない（段 {}）", run.stage.as_str()),
-        );
-    }
-    super::approve::answer(&Approve {
-        run: id,
-        bead: &run.bead,
-        state_dir: &state_dir,
-        words: &words,
-        policy,
-    })
-}
-
 /// `--run` を読んでから段の関数へ渡す。
 fn by_run(args: &[String], step: impl FnOnce(&str) -> Outcome) -> Outcome {
     match need(args, "--run") {
         Err(reason) => refused(reason),
         Ok(id) => step(id),
     }
-}
-
-/// 規則から gate の線（判定の 2 行と受付の 4 行）を読む。**数値を .rs へ焼かない**（憲法 C1 / C5）。
-///
-/// 受付の 4 行も `--rules` の manifest から読む（埋め込みから直に読まない）——待ちの上限を
-/// 振る歯が fixture の値を gate へ届ける口はここだけである。
-fn limits_of(manifest: &Manifest) -> Result<Limits, String> {
-    Ok(Limits {
-        lens_count: int_row(manifest, ROW_LENS)?,
-        token_cap: int_row(manifest, ROW_CAP)?,
-        mutants_jobs: int_row(manifest, ROW_MUTANTS_JOBS)?,
-        job_memory_mb: int_row(manifest, ROW_JOB_MEMORY)?,
-        reserve_memory_mb: int_row(manifest, ROW_RESERVE_MEMORY)?,
-        slot_wait_s: int_row(manifest, ROW_SLOT_WAIT)?,
-    })
-}
-
-/// `pipe gate`。前提 stage = `Implemented` ∨ (`Gated` ∧ verdict が INCONCLUSIVE)。
-///
-/// **測り直せるのは「測れなかった」周だけ**である。INCONCLUSIVE は道具が足りなくて
-/// 判定に届かなかった印（`--lens` 無し / diff が cap 超 / lens の不備）なので、道具を
-/// 揃えれば同じ便を撃ち直せる。PASS / FAIL は判定に届いた周ゆえ**終端のまま**で、
-/// 段違いの一般則どおり何もせず rc 1 を返す——FAIL から撃ち直す口を開けると、契約の
-/// verify が赤い便が「壊れたまま進む」経路になる。
-fn gate_run(args: &[String], id: &str, manifest: &Manifest, policy: LockPolicy) -> Outcome {
-    let resolved = match resolve(args, id, &[Stage::Implemented, Stage::Gated], &Extra::Regate) {
-        Ok(found) => found,
-        Err(outcome) => return outcome,
-    };
-    let limits = match limits_of(manifest) {
-        Ok(found) => found,
-        Err(reason) => return broken(reason),
-    };
-    let lens = match flag(args, "--lens") {
-        Ok(found) => found,
-        Err(reason) => return refused(reason),
-    };
-    super::gate::gate(&Gate {
-        run: id,
-        bead: &resolved.bead,
-        repo: &resolved.repo,
-        state_dir: &resolved.state_dir,
-        contract: &resolved.contract,
-        lens,
-        limits,
-        policy,
-    })
-}
-
-/// `pipe land`。前提 stage = Gated（PASS の検査は land 側が持つ）。
-///
-/// `--pr-cmd` は自 repo への PR の口ゆえ**承認 event を前提としない**（A4.3・ADR-0008）。
-/// `--lens` と規則の線は main が動いた便の追随（rebase → gate の撃ち直し・設計 §5.4）で
-/// gate へ渡すために読む（land 自身は数値を見ない）。
-fn land_run(args: &[String], id: &str, manifest: &Manifest, policy: LockPolicy) -> Outcome {
-    let resolved = match resolve(args, id, &[Stage::Gated], &Extra::Nothing) {
-        Ok(found) => found,
-        Err(outcome) => return outcome,
-    };
-    let limits = match limits_of(manifest) {
-        Ok(found) => found,
-        Err(reason) => return broken(reason),
-    };
-    let pr_cmd = match flag(args, "--pr-cmd") {
-        Ok(found) => found,
-        Err(reason) => return refused(reason),
-    };
-    let lens = match flag(args, "--lens") {
-        Ok(found) => found,
-        Err(reason) => return refused(reason),
-    };
-    // 追随が衝突した周は実装役を起こし直す（設計 pipeline-conflict.md §3）。`pipe run` は
-    // 自分の runner をそのまま渡し、`--runner` を持たない `pipe land` は起こし直せない
-    // ——衝突の記帳だけ残して断り、`pipe resume --runner` で続けられる。
-    let runner = match flag(args, "--runner") {
-        Ok(found) => found,
-        Err(reason) => return refused(reason),
-    };
-    let retries = match int_row(manifest, ROW_RETRIES) {
-        Ok(found) => found,
-        Err(reason) => return broken(reason),
-    };
-    // 着地の順番を待つ上限（設計 gate-cost.md §6）。`--rules` の manifest から読む＝上限を振る歯の
-    // fixture が land へ届く口はここだけである。
-    let land_wait_s = match int_row(manifest, ROW_LAND_WAIT) {
-        Ok(found) => found,
-        Err(reason) => return broken(reason),
-    };
-    super::land::land(&Land {
-        run: id,
-        bead: &resolved.bead,
-        repo: &resolved.repo,
-        state_dir: &resolved.state_dir,
-        contract: &resolved.contract,
-        pr_cmd,
-        lens,
-        limits,
-        runner,
-        retries,
-        land_wait_s,
-        approved: resolved.approved,
-        policy,
-    })
-}
-
-/// `pipe retire`。前提 stage = `Landed` ∨ (`Failed` ∧ 最後の `RunStage` の detail が
-/// `rebase-empty` / `rebase-conflict`) ∨ (`Gated` ∧ verdict が FAIL)（worktree 在り・clean の
-/// 検査は retire 側が持つ）。
-///
-/// **段を動かさない口である**。`--pr-cmd` 形の便は main を動かさず worktree も残して
-/// `Landed` で終端するので、merge の後に入れ物だけを畳む段が要る。同一変更の便が
-/// `rebase-empty` で終端した周も**成果は既に main に在る**ので入れ物だけが残る形は同じで、
-/// 畳める側に数える（`s2-07l.128`）。起こし直しの上限に達した便（`rebase-conflict`）と
-/// 判定に届いた `Gated(FAIL)` も、終端して入れ物だけが残る形は同じである（設計
-/// pipeline-conflict.md §5）。走っている便・他の理由で落ちた便を通すと「まだ読まれて
-/// いない現物を動かす」経路になるため、段違いは一般則どおり rc 1。
-///
-/// 残す event の段は [`Resolved::stage`] のまま＝**`Landed` に決め打ちしない**（終端を動かさない）。
-fn retire_run(args: &[String], id: &str, policy: LockPolicy) -> Outcome {
-    let allowed = [Stage::Landed, Stage::Failed, Stage::Gated];
-    let resolved = match resolve(args, id, &allowed, &Extra::Retire) {
-        Ok(found) => found,
-        Err(outcome) => return outcome,
-    };
-    super::land::retire(&Retire {
-        run: id,
-        bead: &resolved.bead,
-        repo: &resolved.repo,
-        state_dir: &resolved.state_dir,
-        stage: resolved.stage,
-        policy,
-    })
-}
-
-/// `pipe run`。intake → spawn → gate → land を 1 process で連続させる。
-///
-/// 各段は永続面を読み書きするので、途中で落ちても `resume` が続きを引ける。
-fn run_all(args: &[String], manifest: &Manifest, policy: LockPolicy) -> Outcome {
-    let runner = match need(args, "--runner") {
-        Ok(found) => found.to_owned(),
-        Err(reason) => return refused(reason),
-    };
-    let id = match intake_id(args, manifest, policy) {
-        Ok(found) => found,
-        Err(outcome) => return outcome,
-    };
-    // **run id は落ちた周も stdout に出す**。`resume` がこの id を要るためで、
-    // ここで黙ると続きから引けない便が置き場に残る。
-    let mut lines = vec![intake_line(args, &id)];
-    let spawned = launch(args, &id, &runner, policy, &[Stage::Intake]);
-    if let Some(stopped) = chain(&mut lines, spawned) {
-        return stopped;
-    }
-    // runner が口座の上限で止まった周は別口座で起こし直してから gate へ（設計 account-autonomy.md §4）。
-    let ridden = ride_out_rate_limit(args, &id, &runner, manifest, policy);
-    if let Some(stopped) = chain(&mut lines, ridden) {
-        return stopped;
-    }
-    let gated = gate_run(args, &id, manifest, policy);
-    if let Some(stopped) = chain(&mut lines, gated) {
-        return stopped;
-    }
-    let landed = land_run(args, &id, manifest, policy);
-    if let Some(stopped) = chain(&mut lines, landed) {
-        return stopped;
-    }
-    Outcome::ok(lines)
-}
-
-/// 段の結果を畳む。rc≠0 ならそこまでの行を載せて**止める形**を返す。
-fn chain(lines: &mut Vec<String>, outcome: Outcome) -> Option<Outcome> {
-    if outcome.rc == RC_OK {
-        lines.extend(outcome.out);
-        return None;
-    }
-    let mut stopped = outcome;
-    let mut out = std::mem::take(lines);
-    out.extend(stopped.out);
-    stopped.out = out;
-    Some(stopped)
 }
 
 /// 対象 repo。`--repo` が無ければ cwd の repo root。
