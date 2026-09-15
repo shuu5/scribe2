@@ -245,4 +245,24 @@ write-set = ["crates/xtask/src/private_clean.rs", "SPIKE-tooling-report.md", "de
 verify = ["cargo nextest run -p xtask --no-tests=fail private_clean_ledger_ private_clean_state_dir_ private_clean_relative_state_dir_"]
 size = "S"
 done = "2 形の needle が在り、tracked に該当 0 で cargo xtask check が緑（ADR-0004 の相対形の言及は当てない）"
+
+[[contract]]
+id = "h"
+title = "gate.token_cap を 150000 → 400000 に一時的に上げる — 純移動でない 169 KB の diff（.209）を lens に通す・裁定 id 付き・戻しは行 i"
+req = ["FR9"]
+section = "4"
+write-set = ["rules/manifest.toml", "crates/scribe2/tests/e2e/rules.rs", "docs/design/rules-manifest.md"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail rules_"]
+size = "S"
+done = "manifest の行の値と裁定 id が新しく、埋め込み値の pin が 400000 で緑、§4.1 の表が同じ値と裁定を写し、src は不変"
+
+[[contract]]
+id = "i"
+title = "gate.token_cap を 400000 → 150000 に戻す — .209 Landed 後・行 h の対・裁定 id は行 h と同じ承認"
+req = ["FR9"]
+section = "4"
+write-set = ["rules/manifest.toml", "crates/scribe2/tests/e2e/rules.rs", "docs/design/rules-manifest.md"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail rules_"]
+size = "S"
+done = "manifest の行の値が 150000 に戻り裁定 id が戻しの字面で、埋め込み値の pin が 150000 で緑、§4.1 の表が同じ値と裁定を写し、src は不変"
 <!-- contracts:end -->
