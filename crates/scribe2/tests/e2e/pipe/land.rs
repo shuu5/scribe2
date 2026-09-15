@@ -1860,7 +1860,8 @@ fn stub_runner(state: &Path, second: &str) -> String {
     stub_runner_turns(state, IMPLEMENT, second)
 }
 
-/// [`stub_runner`] の turn 1 の本文も振る形（`first` = turn 1・`second` = turn 2 以降）。
+/// [`stub_runner`] の turn 1 の本文も振る形（`first` = turn 1・`second` = turn 2 以降）。argv も turn ごとに
+/// `argv-<n>`（1 行 1 引数）へ写す（どの口座で起こされたかを `lifecycle::stub_argv` で読む）。
 #[expect(
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
@@ -1871,6 +1872,7 @@ fn stub_runner_turns(state: &Path, first: &str, second: &str) -> String {
     let path = state.join("stub-runner.sh");
     let body = format!(
         "#!/bin/sh\nD='{}'\nprintf 'call\\n' >> \"$D/calls\"\nN=$(wc -l < \"$D/calls\" | tr -d ' ')\n\
+         printf '%s\\n' \"$@\" > \"$D/argv-$N\"\n\
          cat > \"$D/stdin-$N\"\nif [ \"$N\" = 1 ]; then\n{first}\nfi\n\
          SHA=$(sed -n 's/^- main が \\(.*\\) へ進んだ$/\\1/p' \"$D/stdin-$N\" | head -1)\n{second}\n",
         dir.display()
@@ -2005,6 +2007,44 @@ fn pipe_follow_records_the_conflict_without_failing_the_run() {
     assert!(!mid_rebase(&repo, &id), "木は rebase の途中でない");
     assert!(git(&worktree_of(&repo, &id), &["status", "--porcelain"]).is_empty(), "木は clean");
     assert_eq!(stub_calls(&state), 2, "実装役を 1 回起こし直した");
+    clean(&[&repo, &state]);
+}
+
+/// (e) 衝突の起こし直しの周も初回の起動と同じ選定を通る（`s2-07l.285`・設計 account-autonomy.md §4「初回の起動も
+/// 同じ選定を通す」の列挙 = 衝突の起こし直し・FR36）: 口座 a1 / a2 を宣言し a1 を席の登録 row に置いた置き場で
+/// `--runner` 付きの land が衝突を起こし直すと、起こし直しの stub の argv に a2 の `--account-dir` が渡り、
+/// `Spawned` の detail が `base:<sha>,account:a2` を持つ（turn 1 は宣言 0 の spawn＝`base:<sha>`・`Inherit` の
+/// ままなら detail に `account:` が無く argv にも `--account-dir` が無い＝RED）。偽 curl は起こし直しの直前に
+/// 口座 2 つ分呼ばれる。
+#[test]
+fn pipe_spawn_account_conflict_retry_runs_on_the_chosen_account() {
+    use super::lifecycle::{argv_account_dir, curl_calls, fake_usage_curl, put_account, register_seat_account, resume_rules, spawned_details, stub_argv, windows};
+    let (repo, state) = repo_with_state();
+    let marker = state.join("lens-ran");
+    let runner = stub_runner(&state, KEEP_CONFLICT);
+    let (id, base, _moved) = conflicting_run(&repo, &state, &marker, &runner);
+    let rules = resume_rules(&state, &["a1", "a2"]);
+    put_account(&state, "a1", &[windows(10, 10)]);
+    put_account(&state, "a2", &[windows(40, 10)]);
+    register_seat_account(&state, "a1");
+    let out = land_extra(&repo, &state, &id, &["--runner", &runner, "--rules", &rules, "--curl", &fake_usage_curl(&state)]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_INCONCLUSIVE)), "起こし直した周は rc 3: {} / {}", stdout_of(&out), stderr_of(&out));
+    assert!(stdout_of(&out).contains(&format!("run={id} next=gate")), "次に撃つ段: {}", stdout_of(&out));
+    assert!(!stdout_of(&out).contains("next=spawn account="), "起こし直しは判定行を持たない: {}", stdout_of(&out));
+    assert_eq!(stub_calls(&state), 2, "実装役を 1 回起こし直した");
+    assert_eq!(curl_calls(&state), 2, "起こし直しの直前に計測を 1 回（口座 2 つ）");
+    assert_eq!(argv_account_dir(&stub_argv(&state, 1)), None, "turn 1 は宣言 0 の spawn＝継承");
+    assert_eq!(
+        argv_account_dir(&stub_argv(&state, 2)),
+        Some(state.join("accounts").join("a2").display().to_string()),
+        "起こし直しは登録 row の a1 を除いた a2 で起きる: {:?}",
+        stub_argv(&state, 2)
+    );
+    assert_eq!(
+        spawned_details(&state, &id),
+        vec![format!("base:{base}"), format!("base:{base},account:a2")],
+        "起こし直しの記帳は base と選んだ口座を名乗る"
+    );
     clean(&[&repo, &state]);
 }
 

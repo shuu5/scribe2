@@ -75,11 +75,38 @@ pub struct Launch<'a> {
     /// account-autonomy.md §4）。在る周は同じ run の worktree と base を使い、runner の stdin に
     /// 「途中再開」節を付ける。値の出所は [`super::follow::resumption`] ただ 1 本である。
     pub resumed: Option<Resumption>,
-    /// runner を起こす口座の label（器が選んだ周だけ `Some`・ADR-0017 §2.3）。在る周は runner の行に
-    /// `--account-dir <state_dir>/accounts/<label>` を足し、無い周は親の環境をそのまま継承させる。
-    pub account: Option<&'a str>,
+    /// runner を起こす口座（閉じた 3 値・ADR-0017 §2.3・設計 account-autonomy.md §4）。label を持つ周は runner の
+    /// 行に `--account-dir <state_dir>/accounts/<label>` を足し、[`Account::Inherit`] は親の環境をそのまま継承させる。
+    pub account: Account<'a>,
     /// lock の待ち方。
     pub policy: LockPolicy,
+}
+
+/// runner を起こす口座（**閉じた 3 値**・設計 account-autonomy.md §4・FR36 / FR37）。
+///
+/// 段の detail の形は variant ごとに固定である: [`Inherit`](Self::Inherit) は `base:<sha>`、
+/// [`Chosen`](Self::Chosen) は `base:<sha>,account:<label>`、[`Resumed`](Self::Resumed) は
+/// `account:<label>,resume:rate-limit`（base は初回の行が持ったまま）。読み手（`base_of_run`）は `base:` の
+/// 直後から最初の `,` までを sha と読む。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Account<'a> {
+    /// 口座の宣言が無い周: 親の環境をそのまま継承させる（どの口座かを器は知らない）。
+    Inherit,
+    /// 初回の起動・承認後・回答後・衝突の起こし直しで器が便用の規則で選んだ口座。
+    Chosen(&'a str),
+    /// 上限で止まった便の別口座での起こし直し（途中再開）で器が選んだ口座。
+    Resumed(&'a str),
+}
+
+impl<'a> Account<'a> {
+    /// 器が選んだ label（[`Self::Inherit`] は `None`）。`--account-dir` を足すかと `RateLimited` の detail の
+    /// label はこの 1 本で決まる（選んだ経路の違いは見ない）。
+    fn label(self) -> Option<&'a str> {
+        match self {
+            Self::Inherit => None,
+            Self::Chosen(label) | Self::Resumed(label) => Some(label),
+        }
+    }
 }
 
 /// 口座を渡していない周に段の detail へ書く label の代わり（閉じた 1 つ）。
@@ -112,9 +139,11 @@ pub fn spawn(budget: Budget, launch: &Launch<'_>) -> Outcome {
     };
     // 別口座での起こし直しは `account:<label>,resume:rate-limit` を名乗る（設計 account-autonomy.md §4）。
     // base は初回の `base:<sha>` が持ったままで、読み手（`base_of_run`）は接頭辞の違う行を飛ばす。
+    // 器が選んだ口座での起動は `base:<sha>,account:<label>`（読み手は最初の `,` までを sha と読む）。
     let detail = match launch.account {
-        Some(label) => format!("account:{label},{RESUME_RATE_LIMIT}"),
-        None => format!("base:{base}"),
+        Account::Inherit => format!("base:{base}"),
+        Account::Chosen(label) => format!("base:{base},account:{label}"),
+        Account::Resumed(label) => format!("account:{label},{RESUME_RATE_LIMIT}"),
     };
     if let Err(err) = emit(
         launch.state_dir,
@@ -258,9 +287,9 @@ fn keep_stdout(launch: &Launch<'_>, rc: i32, stdout: &str) -> Result<(), String>
 ///
 /// placeholder でなく**末尾に足す**——runner の雛形は口座を知らず（口座は便でなく器が選ぶ）、穴を
 /// 雛形に要ると、穴の無い雛形の便が黙って親の口座で起きる。渡していない周は行を変えない（親の
-/// 環境をそのまま継承させる・C2.2）。
+/// 環境をそのまま継承させる・C2.2）。label の有無だけを見る（選んだ経路が初回か再開かは見ない）。
 fn with_account(launch: &Launch<'_>, cmd: String) -> String {
-    match launch.account {
+    match launch.account.label() {
         None => cmd,
         Some(label) => format!(
             "{cmd} --account-dir {}",
@@ -337,7 +366,7 @@ fn settle(launch: &Launch<'_>, worktree: &Path, base: &str, rc: i32) -> Outcome 
 /// 停止行を読めない周は `status:unknown` で、段は変えない（読めないを `Failed` に倒さない）。
 fn settle_rate_limit(launch: &Launch<'_>, rc: i32, stdout: &str) -> Outcome {
     let status = stdout.lines().rev().find_map(stop_status).unwrap_or(UNKNOWN_STATUS);
-    let account = launch.account.unwrap_or(INHERITED_ACCOUNT);
+    let account = launch.account.label().unwrap_or(INHERITED_ACCOUNT);
     record_stage(launch, Stage::RateLimited, Some(format!("rc:{rc},status:{status},account:{account}")))
 }
 

@@ -153,8 +153,9 @@ pub struct Land<'a> {
     pub lens: Option<&'a str>,
     /// 規則から読んだ線（撃ち直しの gate へ渡す・land 自身は数値を見ない）。
     pub limits: Limits,
-    /// 追随が衝突した周に runner を起こし直すコマンド（`--runner`）。**無い周は起こし直さない**。
-    pub runner: Option<&'a str>,
+    /// 追随が衝突した周に runner を起こし直すコマンド（`--runner`）と、その turn の口座を選ぶ入力
+    /// （[`follow::Runner`]・設計 account-autonomy.md §4）。**無い周は起こし直さない**。
+    pub runner: Option<follow::Runner<'a>>,
     /// 起こし直しの上限（rules 行 `pipe.follow_retries`・land 自身は数値を見ない）。
     pub retries: u64,
     /// 着地待ちの列で自分の番を待つ上限（秒・rules 行 `pipe.land_wait_s`）。超えた周は待たずに進む。

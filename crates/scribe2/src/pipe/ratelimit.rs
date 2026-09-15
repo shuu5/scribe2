@@ -1,10 +1,16 @@
-//! rate-limit の途中再開の列（設計 account-autonomy.md §4・FR37・`pipe::cli` の `run` / `resume` から呼ぶ）。
+//! rate-limit の途中再開の列と、便用の口座の選定（設計 account-autonomy.md §3 / §4・FR36 / FR37・`pipe::cli` の
+//! `run` / `resume` と `pipe::follow` から呼ぶ）。
 //!
 //! **env も HOME も読まない**（憲法 C2.2）。置き場と規則の値は `pipe::cli` と同じ口から解く。
+//!
+//! 便用の選定（計測 → 選定 → 候補なしの待ち）は [`choose_account`] の **1 関数**で、初回の起動・承認後・回答後・
+//! 衝突の起こし直し・上限で止まった便の再開の**すべて**がそれを通る（規則を器の外の散文〔launcher の固定 list〕で
+//! 運ばない・憲法 N2 / C2 / C9.2）。
 
 use super::approve::RC_BLOCKED;
 use super::cli::{broken, flag, refused, resolve, stage_of, state_dir_of, turn_of, Extra};
-use super::follow;
+use super::follow::{self, Runner};
+use super::spawn::Account;
 use super::{current, runner_is_idle};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_OK};
 use crate::fleet::select::{Model, Selection};
@@ -16,16 +22,32 @@ use crate::rules::str_row;
 use std::path::Path;
 use std::time::Duration;
 
-/// 便用の選定の入力のうち置き場を持たない宣言値: 口座 label の列と便が使う model（`s2-07l.297`）。
+/// 便用の選定の入力（設計 account-autonomy.md §3・`s2-07l.297` / `s2-07l.285`）: 計測の引数と、置き場を持たない
+/// 宣言値（口座 label の列・便が使う model）。
 ///
 /// model は rules 行 `runner.model` の値の**字面のまま**運ぶ（型にするのは選定の `counts` の中）。runner / lens が
 /// 同じ行の model を `--model` で毎回明示するので、便が消費するのはその model のモデル別窓だけ＝選定もその窓だけを
 /// 数える（他の model の窓が 100 でも候補から外さない・設計 account-autonomy.md §3）。
-struct Pool<'a> {
-    /// manifest の `[[account]]` の label 列（tracked + host の面）。
-    labels: &'a [String],
+pub struct Pool {
+    /// 計測（[`fleet::usage::run`]）へ渡す引数（`--rules` / `--curl` の写し・[`usage_args`]）。
+    args: Vec<String>,
+    /// manifest の `[[account]]` の label 列（tracked + host の面・[`declared_labels`]）。
+    labels: Vec<String>,
     /// rules 行 `runner.model` の値。
-    model: &'a str,
+    model: String,
+}
+
+impl Pool {
+    /// 初回の起動（`pipe::cli::run::launch`）と衝突の起こし直し（`pipe land`）の入力: 宣言した口座が **1 つ以上
+    /// 在る周だけ** `Some`。0 の周は `None`（runner は親の環境を継承・model の行も読まない＝口座を宣言しない
+    /// 置き場に `runner.model` の行を要求しない）。宣言の読み手は [`declared_labels`] の 1 本。
+    pub(in crate::pipe) fn declared(args: &[String], manifest: &Manifest, state_dir: &Path) -> Result<Option<Self>, String> {
+        let labels = declared_labels(manifest, state_dir)?;
+        if labels.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(Self { args: usage_args(args)?, labels, model: runner_model_of(manifest)?.to_owned() }))
+    }
 }
 
 /// `RateLimited` の便を別口座で起こし直す経路（設計 account-autonomy.md §4・ADR-0020 §2.3・FR37）。
@@ -65,11 +87,14 @@ pub(super) fn ride_out_rate_limit(
         }
         // 便が使う model は上限で止まった周にだけ要る（`pipe run` は段が動かない周にこの行を読まない）。
         // 行が無い / 不発効 / 文字列でない / 閉じた表に無い周は typed に断り、claude を呼ばず再開もしない。
-        let model = match runner_model_of(manifest) {
+        // 宣言が 0 の置き場でも組む（候補なしを名乗って口座待ちで止まる＝初回の起動の「継承」とは違う）。
+        let pool = match runner_model_of(manifest).and_then(|model| {
+            Ok(Pool { args: usage_args(args)?, labels: labels.clone(), model: model.to_owned() })
+        }) {
             Ok(found) => found,
             Err(reason) => return refused(reason),
         };
-        let turn = resume_rate_limited(args, id, runner, &Pool { labels: &labels, model }, policy);
+        let turn = resume_rate_limited(args, id, runner, &pool, policy);
         outcome.out.extend(turn.out);
         outcome.err.extend(turn.err);
         if turn.rc != RC_OK {
@@ -109,10 +134,8 @@ fn runner_model_of(manifest: &Manifest) -> Result<&str, String> {
     Ok(text)
 }
 
-/// `RateLimited` の便の 1 周（設計 account-autonomy.md §4）: (i) FR33 の計測を 1 回撃つ →
-/// (ii) 便用の規則で口座を選ぶ → (iii) `Chosen` なら同じ worktree・契約・base の runner をその口座で
-/// 起こし直す / (iv) 候補なしなら最も早い reset まで唯一の wait で待ち、成立なら (ii) から・`Timeout`
-/// なら (i) から。
+/// `RateLimited` の便の 1 周（設計 account-autonomy.md §4）: [`choose_account`]（計測 → 選定 → 候補なしの
+/// 待ち）で口座を選び、同じ worktree・契約・base の runner をその口座で起こし直す。
 ///
 /// 判定行は `run=<id> next=spawn account=<label>` / `run=<id> next=wait reset=<ts>`（既存の
 /// `next=gate` と同型）。計測の行は stderr 側（`fleet select` と同じ）。走っている runner の隣に
@@ -121,7 +144,7 @@ fn resume_rate_limited(
     args: &[String],
     id: &str,
     runner: &str,
-    pool: &Pool<'_>,
+    pool: &Pool,
     policy: LockPolicy,
 ) -> Outcome {
     let resolved = match resolve(args, id, &[Stage::RateLimited], &Extra::Nothing) {
@@ -131,53 +154,71 @@ fn resume_rate_limited(
     if runner_is_idle(&resolved.state_dir, id) != Some(true) {
         return refused(format!("run {id} の runner が起きている（隣にもう 1 つ起こさない）"));
     }
-    let usage_args = match usage_args(args) {
-        Ok(found) => found,
-        Err(reason) => return refused(reason),
-    };
     let mut outcome = Outcome::ok(Vec::new());
-    let label = loop {
-        // (i) 計測。口座ごとの失敗は `AllowanceUnmeasured` の行のまま（FailOpen・fleet-usage.md §6）で、
-        // command を止めるのは引数・manifest・store の誤りだけ（その rc をそのまま返し、選ばない）。
-        let measured = fleet::usage::run(&usage_args, &resolved.state_dir);
-        if measured.rc != RC_OK {
-            outcome.err.extend(measured.out.into_iter().chain(measured.err));
-            outcome.rc = measured.rc;
+    // 宣言が 0 でも選定を通す（候補なし → 口座待ちで止まる・親の環境を継承して起こし直さない）。
+    let label = match choose_account(pool, id, &resolved.state_dir, Stage::RateLimited, &mut outcome) {
+        Ok(label) => label,
+        // 止まる周も、それまでの判定行（`next=wait …`）と計測の行は残す。
+        Err(stopped) => {
+            outcome.out.extend(stopped.out);
+            outcome.err.extend(stopped.err);
+            outcome.rc = stopped.rc;
             return outcome;
-        }
-        outcome.err.extend(measured.out.into_iter().chain(measured.err));
-        // (ii) 選定（待ちが成立した周はここから撃ち直す＝計測は待ちの観測が読んだ行のまま）。
-        match choose_or_wait(id, &resolved.state_dir, pool, &mut outcome) {
-            Ok(Some(label)) => break label,
-            Ok(None) => {}
-            // 止まる周も、それまでの判定行（`next=wait …`）と計測の行は残す。
-            Err(stopped) => {
-                outcome.out.extend(stopped.out);
-                outcome.err.extend(stopped.err);
-                outcome.rc = stopped.rc;
-                return outcome;
-            }
         }
     };
     // (iii) 起こし直し。**経路は通常の起動と同じ `spawn_turn` の 1 本**（C6）。
     outcome.out.push(format!("run={id} next=spawn account={label}"));
-    let turn = follow::spawn_turn(&turn_of(id, &resolved, runner, policy), Some(&label));
+    let runner = Runner { cmd: runner, pool: Some(pool) };
+    let turn = follow::spawn_turn(&turn_of(id, &resolved, runner, policy), Account::Resumed(&label));
     outcome.out.extend(turn.out);
     outcome.err.extend(turn.err);
     outcome.rc = turn.rc;
     outcome
 }
 
-/// 選定と待ち（(ii) / (iv)）。`Ok(Some)` は選んだ label、`Ok(None)` は `Timeout`（計測から撃ち直す）、
-/// `Err` はこの process が止まる周（便は `RateLimited` のまま live）。
+/// 便用の口座の選定（**1 関数**・設計 account-autonomy.md §3 / §4「初回の起動も同じ選定を通す」・FR36）:
+/// (i) FR33 の計測を 1 回撃つ → (ii) 便用の規則（[`fleet::select_for_run`]・席の登録 row の口座は除外）で選ぶ →
+/// (iii) 候補なしなら最も早い reset まで唯一の wait で待ち、成立なら (ii) から・`Timeout` なら (i) から。
+///
+/// `Ok` は選んだ label。`Err` はこの process が止まる周（計測の引数・manifest・store の誤り、待つ reset の
+/// 無い候補なし、待ちの間に段が動いた）で、便の段は動かさない。口座の宣言が 0 の周（[`Pool::declared`] が
+/// `None`）の分岐は呼び手（`follow::spawn_selected`）が持ち、ここへは来ない（再開は宣言 0 でも通す＝候補なし）。
+///
+/// `expected` は待ちの間に便が居るはずの段（再開なら `RateLimited`・初回なら起動前の段・衝突の起こし直しなら
+/// `Implemented`）。待ちの観測（[`Completion::AccountFree`]）も同じ段を運ぶ＝段が動いた周は待ちから抜けて断る。
+pub(super) fn choose_account(
+    pool: &Pool,
+    id: &str,
+    state_dir: &Path,
+    expected: Stage,
+    outcome: &mut Outcome,
+) -> Result<String, Outcome> {
+    loop {
+        // (i) 計測。口座ごとの失敗は `AllowanceUnmeasured` の行のまま（FailOpen・fleet-usage.md §6）で、
+        // command を止めるのは引数・manifest・store の誤りだけ（その rc をそのまま返し、選ばない）。
+        let measured = fleet::usage::run(&pool.args, state_dir);
+        if measured.rc != RC_OK {
+            return Err(Outcome::failed(measured.rc, measured.out.into_iter().chain(measured.err).collect()));
+        }
+        outcome.err.extend(measured.out.into_iter().chain(measured.err));
+        // (ii) 選定（待ちが成立した周はここから撃ち直す＝計測は待ちの観測が読んだ行のまま）。
+        if let Some(label) = choose_or_wait(id, state_dir, pool, expected, outcome)? {
+            return Ok(label);
+        }
+    }
+}
+
+/// 選定と待ち（(ii) / (iii)）。`Ok(Some)` は選んだ label、`Ok(None)` は `Timeout`（計測から撃ち直す）、
+/// `Err` はこの process が止まる周（便は `expected` の段のまま live）。
 ///
 /// 候補なしで **reset を持たない周**（測れない・除外で空）は待つ時刻が無いので rc 3 で止まる
 /// （便は終端にしない・次の `resume` で選び直す）。待ちの間に段が動いた周（`pipe stop --run` が
-/// 終端した等）は段違いとして断る＝起こし直さない。
+/// 終端した等）は段違いとして断る＝起こさない。
 fn choose_or_wait(
     id: &str,
     state_dir: &Path,
-    pool: &Pool<'_>,
+    pool: &Pool,
+    expected: Stage,
     outcome: &mut Outcome,
 ) -> Result<Option<String>, Outcome> {
     loop {
@@ -185,11 +226,11 @@ fn choose_or_wait(
             Outcome::failed(RC_BROKEN, errors.iter().map(StoreError::to_string).collect())
         })?;
         let stage = stage_of(&state, id).map_err(refused)?;
-        if stage != Stage::RateLimited {
+        if stage != expected {
             return Err(refused(format!("run {id} の段は {} である（待ちの間に動いた）", stage.as_str())));
         }
         // 便用の選定は便が使う model の窓だけを数える（待ちの観測 `AccountFree` も同じ model を運ぶ・C3.4）。
-        let found = match fleet::select_for_run(&state, pool.labels, Some(pool.model), &fleet::cli::now_utc()) {
+        let found = match fleet::select_for_run(&state, &pool.labels, Some(&pool.model), &fleet::cli::now_utc()) {
             Selection::Chosen(label) => return Ok(Some(label)),
             Selection::None(found) => found,
         };
@@ -213,8 +254,9 @@ fn choose_or_wait(
                 reset_at: reset,
                 state_dir: state_dir.to_path_buf(),
                 run: id.to_owned(),
-                labels: pool.labels.to_vec(),
-                model: Some(pool.model.to_owned()),
+                expected,
+                labels: pool.labels.clone(),
+                model: Some(pool.model.clone()),
             },
             deadline,
         );

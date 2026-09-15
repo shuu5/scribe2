@@ -17,7 +17,8 @@
 use super::contract::Contract;
 use super::gate::RC_INCONCLUSIVE;
 use super::land::MAIN_REF;
-use super::spawn::{spawn, Launch};
+use super::ratelimit::{choose_account, Pool};
+use super::spawn::{spawn, Account, Launch};
 use super::{base_of_run, emit, git_line, git_ok, question_of_run, worktree_path, Emit, Precheck};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_OK, RC_REFUSED};
 use crate::fleet::store::{self, LockPolicy};
@@ -101,12 +102,25 @@ pub(crate) struct Turn<'a> {
     pub state_dir: &'a Path,
     /// 読み込み済みの契約。
     pub contract: &'a Contract,
-    /// runner のコマンド。**無い周は起こせない**（起こし直しには `--runner` が要る）。
-    pub runner: Option<&'a str>,
+    /// runner のコマンドと、その turn の口座を選ぶ入力。**無い周は起こせない**（起こし直しには `--runner` が要る）。
+    pub runner: Option<Runner<'a>>,
     /// 承認 event が在るか（replay の導出値）。
     pub approved: bool,
     /// lock の待ち方。
     pub policy: LockPolicy,
+}
+
+/// runner を起こす材料のうち `--runner` に紐づくもの（設計 account-autonomy.md §4・`s2-07l.285`）。
+///
+/// 口座の選定の入力（[`Pool`]）は runner と**対**で運ぶ——runner を持たない口（`pipe land` の素の形）は
+/// 起こし直さないので選定も要らず、runner を持つ口（`pipe run` / `resume` / `--runner` 付きの `land`）は
+/// 宣言を 1 回解いてここへ載せる。`pool` が `None` の周は口座の宣言が 0＝親の環境を継承する。
+#[derive(Clone, Copy)]
+pub struct Runner<'a> {
+    /// runner のコマンド（placeholder を含む）。
+    pub cmd: &'a str,
+    /// 便用の選定の入力（宣言した口座が 1 つ以上在る周だけ・[`Pool::declared`]）。
+    pub pool: Option<&'a Pool>,
 }
 
 /// 衝突 1 回分の材料（land の追随が渡す）。
@@ -183,8 +197,11 @@ fn retried(state_dir: &Path, run: &str) -> Option<u64> {
 }
 
 /// 上限の内の周: runner をもう 1 turn 起こし、**次に撃つ段（gate）を名乗って止まる**。
+///
+/// 口座は初回の起動と同じ選定（[`spawn_selected`]・設計 account-autonomy.md §4「初回の起動も同じ選定を通す」の
+/// 列挙 = 衝突の起こし直し）で選ぶ。待ちの間に便が居るはずの段は、いま記帳した `Implemented`。
 fn retry(entry: &Conflict<'_>) -> Outcome {
-    let mut outcome = spawn_turn(&entry.turn, None);
+    let mut outcome = spawn_selected(&entry.turn, Stage::Implemented);
     if outcome.rc != RC_OK {
         return outcome;
     }
@@ -211,17 +228,60 @@ fn retry(entry: &Conflict<'_>) -> Outcome {
     outcome
 }
 
+/// 便用の選定を通した口座で runner を 1 turn 起こす（設計 account-autonomy.md §4「初回の起動も同じ選定を通す」・
+/// FR36）。**初回の起動（Intake の審査後・承認後の `Blocked`・回答後の `Questioned`・`Reviewed` の起こし直し）と
+/// 衝突の起こし直しはすべてこの 1 本を通る**——操作役の口座で起きる周を残さない。
+///
+/// 宣言した口座が 1 つ以上在る周（[`Runner::pool`] が `Some`）は [`choose_account`]（計測 → 便用の規則 → 候補なしの
+/// 待ち）で label を選んで [`Account::Chosen`]、0 の周は [`Account::Inherit`]（親の環境を継承・stderr に 1 行）。
+/// 候補なしの止まり方（rc 3 `run=<id> next=wait reset=…`）は `RateLimited` の再開と同じ字面。初回の起動は
+/// `next=spawn account=` の判定行を持たない（名乗るのは再開だけ）。`expected` は待ちの間に便が居るはずの段。
+pub(crate) fn spawn_selected(entry: &Turn<'_>, expected: Stage) -> Outcome {
+    let Some(runner) = entry.runner else {
+        return missing_runner(entry);
+    };
+    let mut outcome = Outcome::ok(Vec::new());
+    let chosen = match runner.pool {
+        None => {
+            outcome.err.push("pipe: 口座の宣言が無い＝親の環境を継承".to_owned());
+            None
+        }
+        Some(pool) => match choose_account(pool, entry.run, entry.state_dir, expected, &mut outcome) {
+            Ok(label) => Some(label),
+            // 止まる周も、それまでの判定行（`next=wait …`）と計測の行は残す。
+            Err(stopped) => {
+                outcome.out.extend(stopped.out);
+                outcome.err.extend(stopped.err);
+                outcome.rc = stopped.rc;
+                return outcome;
+            }
+        },
+    };
+    let account = chosen.as_deref().map_or(Account::Inherit, Account::Chosen);
+    let turn = spawn_turn(entry, account);
+    outcome.out.extend(turn.out);
+    outcome.err.extend(turn.err);
+    outcome.rc = turn.rc;
+    outcome
+}
+
+/// `--runner` を持たない周の断り（1 行も書かない・[`spawn_selected`] と [`spawn_turn`] が同じ字面で断る）。
+fn missing_runner(entry: &Turn<'_>) -> Outcome {
+    refused(format!("run {} の起こし直しに --runner が要る", entry.run))
+}
+
 /// runner を 1 turn 起こし、終わったら追随の後始末まで見る。
 ///
 /// **[`super::spawn::spawn`] への呼び手はこの 1 本だけ**である（起動口そのものは spawn で、
 /// ここはその唯一の経路＝C6 の形を崩さない）。`--runner` を持たない周は 1 行も書かずに断る
 /// ——起こし直しの口（`pipe land` / `pipe resume`）は runner を渡す責務を持つ。
 ///
-/// `account` は器が選んだ口座の label（上限で止まった便の別口座での起こし直し・設計
-/// account-autonomy.md §4）で、通常の起動と衝突の起こし直しは `None`（親の環境を継承）。
-pub(crate) fn spawn_turn(entry: &Turn<'_>, account: Option<&str>) -> Outcome {
+/// `account` は runner を起こす口座（閉じた 3 値・設計 account-autonomy.md §4）: 初回の起動と衝突の起こし直しは
+/// [`spawn_selected`] が選んだ [`Account::Chosen`]（宣言 0 なら [`Account::Inherit`]）、上限で止まった便の
+/// 別口座での起こし直しは [`Account::Resumed`]。
+pub(crate) fn spawn_turn(entry: &Turn<'_>, account: Account<'_>) -> Outcome {
     let Some(runner) = entry.runner else {
-        return refused(format!("run {} の起こし直しに --runner が要る", entry.run));
+        return missing_runner(entry);
     };
     let budget = match Precheck::measure(entry.contract, entry.repo) {
         Ok(found) => found.into_budget(),
@@ -243,7 +303,7 @@ pub(crate) fn spawn_turn(entry: &Turn<'_>, account: Option<&str>) -> Outcome {
             repo: entry.repo,
             state_dir: entry.state_dir,
             contract: entry.contract,
-            runner,
+            runner: runner.cmd,
             approved: entry.approved,
             answered,
             follow,
@@ -427,12 +487,13 @@ fn broken(reason: String) -> Outcome {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_conflict, spawn_turn, FollowCheck, Turn, DIRTY, EXHAUSTED};
+    use super::{is_conflict, spawn_turn, FollowCheck, Runner, Turn, DIRTY, EXHAUSTED};
     use crate::cli_outcome::{RC_OK, RC_REFUSED};
     use crate::fleet::store::{self, LockPolicy};
     use crate::fleet::Stage;
     use crate::pipe::approve::RC_BLOCKED;
     use crate::pipe::fixture::{contract, scratch};
+    use crate::pipe::spawn::Account;
     use std::path::{Path, PathBuf};
     use std::process::Command;
 
@@ -485,11 +546,11 @@ mod tests {
                 repo: &repo,
                 state_dir: &state,
                 contract: &gated,
-                runner: Some("true"),
+                runner: Some(Runner { cmd: "true", pool: None }),
                 approved: false,
                 policy,
             },
-            None,
+            Account::Inherit,
         );
         assert_eq!(blocked.rc, RC_BLOCKED, "承認の関門の rc のまま: {:?}", blocked.err);
         assert_eq!(stages(&state, "blocked"), vec![(Some(Stage::Blocked), Some("C9".to_owned()))], "後始末の段を足さない");
@@ -503,11 +564,11 @@ mod tests {
                 repo: &repo,
                 state_dir: &state,
                 contract: &open,
-                runner: Some(runner),
+                runner: Some(Runner { cmd: runner, pool: None }),
                 approved: false,
                 policy,
             },
-            None,
+            Account::Inherit,
         );
         assert_ne!(dirty.rc, RC_OK, "後始末の rc が勝つ: {:?}", dirty.err);
         assert_eq!(dirty.rc, RC_REFUSED, "rebase の途中は rc 1: {:?}", dirty.err);

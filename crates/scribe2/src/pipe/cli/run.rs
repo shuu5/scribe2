@@ -7,12 +7,12 @@
 
 use super::intake::{intake_id, intake_line};
 use super::step::{gate_run, land_run};
-use super::{need, refused, resolve, review_then_launch, Extra, Resolved};
+use super::{manifest_of, need, refused, resolve, review_then_launch, Extra, Resolved};
 use crate::cli_outcome::{Outcome, RC_OK};
 use crate::fleet::store::LockPolicy;
 use crate::fleet::Stage;
-use crate::pipe::follow::{self, Turn};
-use crate::pipe::ratelimit::ride_out_rate_limit;
+use crate::pipe::follow::{self, Runner, Turn};
+use crate::pipe::ratelimit::{ride_out_rate_limit, Pool};
 use crate::rules::manifest::Manifest;
 
 /// `pipe spawn`。前提 stage = `Reviewed`（verdict PASS）。
@@ -30,6 +30,12 @@ pub(super) fn start(args: &[String], policy: LockPolicy) -> Outcome {
 /// **runner を起こす経路はここ 1 本**で、材料を解いた後は `pipe::follow` の turn へ渡す
 /// （Precheck → spawn → 追随の後始末が 1 本に収まる＝起こし直しと通常の起動で後始末が
 /// 分かれない）。`Reviewed` の便は verdict が PASS の周だけ通る（[`Extra::Spawn`]・他の段は段の一致だけ）。
+///
+/// 口座は器が選ぶ（設計 account-autonomy.md §4「初回の起動も同じ選定を通す」・FR36）: 口座の宣言（`--rules` の
+/// tracked の面 + 置き場の host の面・[`Pool::declared`]）が 1 つ以上在る周は `RateLimited` の再開と同じ 1 関数で
+/// label を選び、0 の周は親の環境を継承する。操作役に口座を選ばせる flag は無い。待ちの間に便が居るはずの段は
+/// 解いた現在の段（[`Resolved::stage`]）。manifest は `resume` の各段の口（`cli.rs` の `relaunch`）が渡さないので、
+/// `--rules`（無ければ埋め込み）から同じ 1 本（[`manifest_of`]）で読み直す。
 pub(super) fn launch(
     args: &[String],
     id: &str,
@@ -41,11 +47,16 @@ pub(super) fn launch(
         Ok(found) => found,
         Err(outcome) => return outcome,
     };
-    follow::spawn_turn(&turn_of(id, &resolved, runner, policy), None)
+    let pool = match manifest_of(args).and_then(|manifest| Pool::declared(args, &manifest, &resolved.state_dir)) {
+        Ok(found) => found,
+        Err(reason) => return refused(reason),
+    };
+    let runner = Runner { cmd: runner, pool: pool.as_ref() };
+    follow::spawn_selected(&turn_of(id, &resolved, runner, policy), resolved.stage)
 }
 
 /// turn の材料を解いた面から組む（起動と別口座での起こし直しが同じ 1 本で組む）。
-pub(in crate::pipe) fn turn_of<'a>(id: &'a str, resolved: &'a Resolved, runner: &'a str, policy: LockPolicy) -> Turn<'a> {
+pub(in crate::pipe) fn turn_of<'a>(id: &'a str, resolved: &'a Resolved, runner: Runner<'a>, policy: LockPolicy) -> Turn<'a> {
     Turn {
         run: id,
         bead: &resolved.bead,

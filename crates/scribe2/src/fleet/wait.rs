@@ -50,9 +50,13 @@ pub enum Completion {
         reset_at: String,
         /// 実測行の置き場（`SlotFree` が `slots_dir` を運ぶのと同型）。
         state_dir: std::path::PathBuf,
-        /// 待つ便の id。**便が `RateLimited` でなくなった周は満たされた側**（`pipe stop --run` が待ちの
-        /// 途中の便を終端した周に待ちから抜ける・呼び手が段を読み直す）。
+        /// 待つ便の id。**便が [`expected`](Self::AccountFree::expected) の段でなくなった周は満たされた側**
+        /// （`pipe stop --run` が待ちの途中の便を終端した周に待ちから抜ける・呼び手が段を読み直す）。
         run: String,
+        /// 待ちの間、便が居るはずの段（`RateLimited` の再開なら `RateLimited`・初回の起動なら `Reviewed` /
+        /// `Blocked` / `Questioned`・衝突の起こし直しなら `Implemented`・設計 account-autonomy.md §4）。
+        /// 呼び手が自分の段を運ぶ＝この variant は段を決め打たない（初回の起動の待ちが busy loop に化けない）。
+        expected: Stage,
         /// manifest の `[[account]]` の label 列（宣言値・置き場は持たないので運ぶ）。
         labels: Vec<String>,
         /// 便が使う model（rules 行 `runner.model` の値・字面のまま運び [`select_for_run`] へ渡す・`s2-07l.297`）。
@@ -84,8 +88,8 @@ impl Completion {
                 )
             }
             Self::LandTurn { .. } => self.round(None).met,
-            Self::AccountFree { state_dir, run, labels, model, .. } => {
-                account_free(state_dir, run, labels, model.as_deref())
+            Self::AccountFree { state_dir, run, expected, labels, model, .. } => {
+                account_free(state_dir, run, *expected, labels, model.as_deref())
             }
         }
     }
@@ -180,16 +184,22 @@ fn observe(mark: Option<Mark>, state_dir: &Path, run: &str) -> Glance {
 
 /// [`Completion::AccountFree`] の 1 周分の観測。
 ///
-/// 置き場を replay し、便がまだ `RateLimited` なら最新の実測行で便用の規則（[`select_for_run`]）を
-/// 再評価して `Chosen` の周だけ満たされる。便が `RateLimited` でなくなった周（stop で終端した・別の
+/// 置き場を replay し、便がまだ `expected` の段なら最新の実測行で便用の規則（[`select_for_run`]）を
+/// 再評価して `Chosen` の周だけ満たされる。便が `expected` の段でなくなった周（stop で終端した・別の
 /// process が起こし直した）は**満たされた側**＝待ち続ける理由が無い。置き場を読めない周は満たされない
 /// （読めなさで起こし直さない・期限で Timeout に倒れて計測から撃ち直す）。
-fn account_free(state_dir: &std::path::Path, run: &str, labels: &[String], model: Option<&str>) -> bool {
+fn account_free(
+    state_dir: &std::path::Path,
+    run: &str,
+    expected: Stage,
+    labels: &[String],
+    model: Option<&str>,
+) -> bool {
     let Ok(events) = store::read_all(state_dir) else {
         return false;
     };
     let state = replay(&events);
-    if state.runs.get(run).map(|found| found.stage) != Some(Stage::RateLimited) {
+    if state.runs.get(run).map(|found| found.stage) != Some(expected) {
         return true;
     }
     matches!(
@@ -485,6 +495,7 @@ mod tests {
             reset_at: "2026-09-13T06:00:00Z".to_owned(),
             state_dir: std::path::PathBuf::from("state"),
             run: "r".to_owned(),
+            expected: Stage::RateLimited,
             labels: Vec::new(),
             model: Some("opus".to_owned()),
         };
@@ -525,6 +536,7 @@ mod tests {
                 reset_at: "2026-09-13T06:00:00Z".to_owned(),
                 state_dir: std::path::PathBuf::from("state"),
                 run: "r".to_owned(),
+                expected: Stage::RateLimited,
                 labels: Vec::new(),
                 model: None,
             },

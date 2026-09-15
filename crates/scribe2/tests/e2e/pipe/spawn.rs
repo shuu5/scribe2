@@ -1724,3 +1724,141 @@ fn pipe_question_run_stops_with_question_token() {
     assert!(show_line(&repo, &state, &id).contains("stage=Questioned"));
     clean(&[&repo, &state]);
 }
+
+// ───── 初回の起動も器が口座を選ぶ（`s2-07l.285`・設計 account-autonomy.md §3 / §4・SRS FR36 / FR37・接頭辞 `pipe_spawn_account_`） ─────
+//
+// 口座の fixture（manifest・credential・偽 curl・argv を写す偽 runner）は `lifecycle.rs` の再開の歯と同じ物を引く
+// （初回の起動と再開が**同じ 1 関数**の選定を通ることを、同じ fixture で測る）。
+
+use super::lifecycle::{
+    argv_account_dir, assert_lands_without_human, curl_calls, fake_usage_curl, limited_for, put_account,
+    register_seat_account, resume_rules, spawned_details, spy_reset, stub_argv, turn_runner, windows,
+};
+
+/// (a) 口座 a1 / a2 を宣言し、a1 を席の登録 row に置いた置き場で `pipe run` を撃つと、**初回の turn から**器が便用の
+/// 規則で選んだ a2 で runner が起きる: 偽 curl が口座 2 つ分呼ばれ（計測 1 回）・runner の argv に
+/// `--account-dir <state>/accounts/a2`・`Spawned detail=base:<sha>,account:a2`・stdout に `next=spawn account=` は
+/// **出ない**（初回は判定行を持たない・名乗るのは `RateLimited` の再開だけ）。a1 の方が余裕が大きい（逼迫度で勝つ）
+/// ので、a2 が選ばれるのは登録 row の除外が効いた証拠。便はそのまま gate → land まで通る（人由来の event 0）。
+#[test]
+fn pipe_spawn_account_first_turn_runs_on_the_chosen_free_account() {
+    let (repo, state) = repo_with_state();
+    let base = git(&repo, &["rev-parse", "refs/heads/main"]);
+    let first = write_set_contract(&repo, "first.toml", &["src/lib.rs"]);
+    let runner = turn_runner(&state, &[IMPLEMENT.to_owned()]);
+    let rules = resume_rules(&state, &["a1", "a2"]);
+    put_account(&state, "a1", &[windows(10, 10)]);
+    put_account(&state, "a2", &[windows(40, 10)]);
+    register_seat_account(&state, "a1");
+    let marker = state.join("lens-ran");
+    let lens = fake_lens(&marker, &lens_verdict("PASS"));
+    let out = run_pipe(&[
+        "run", "--contract", &first.display().to_string(), "--bead", "s2-acct",
+        "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
+        "--rules", &rules, "--curl", &fake_usage_curl(&state), "--runner", &runner, "--lens", &lens,
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{} / {}", stdout_of(&out), stderr_of(&out));
+    let id = run_id_of(&out);
+    let stdout = stdout_of(&out);
+    assert!(!stdout.contains("next=spawn account="), "初回は判定行を持たない: {stdout}");
+    assert!(!stdout.contains("next=wait"), "候補が在るので待たない: {stdout}");
+    assert_eq!(curl_calls(&state), 2, "起動の前に FR33 の計測を 1 回（口座 2 つ）");
+    assert_eq!(stub_calls(&state), 1, "runner は 1 回起きる");
+    assert_eq!(
+        argv_account_dir(&stub_argv(&state, 1)),
+        Some(state.join("accounts").join("a2").display().to_string()),
+        "初回の turn から選んだ口座の credential dir を渡す: {:?}",
+        stub_argv(&state, 1)
+    );
+    assert_eq!(spawned_details(&state, &id), vec![format!("base:{base},account:a2")], "base と選んだ口座を名乗る");
+    assert!(show_line(&repo, &state, &id).contains("stage=Landed"), "1 process で Landed まで: {stdout}");
+    assert!(!events(&state).iter().any(|event| event.actor == "human"), "人由来の event は 0");
+    clean(&[&repo, &state]);
+}
+
+/// (b) 口座の宣言が 0 の置き場（既存の fixture のまま）では runner は親の環境を継承する: argv に `--account-dir` 無し・
+/// `Spawned detail=base:<sha>`（口座の接尾辞なし）・stderr に継承の 1 行・計測は撃たない。既存の `pipe_spawn_` /
+/// `pipe_five_` / `pipe_e2e_` の歯が名を変えず緑＝継承の形は不変。
+#[test]
+fn pipe_spawn_account_inherits_when_no_account_is_declared() {
+    let (repo, state) = repo_with_state();
+    let base = git(&repo, &["rev-parse", "refs/heads/main"]);
+    let path = write_contract(&repo, &[], &[]);
+    let id = intake(&repo, &state, &path);
+    let runner = turn_runner(&state, &[IMPLEMENT.to_owned()]);
+    let out = spawn_with(&repo, &state, &id, &runner);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{} / {}", stdout_of(&out), stderr_of(&out));
+    assert!(stderr_of(&out).contains("口座の宣言が無い＝親の環境を継承"), "継承の 1 行: {}", stderr_of(&out));
+    assert_eq!(argv_account_dir(&stub_argv(&state, 1)), None, "宣言 0 は --account-dir を渡さない: {:?}", stub_argv(&state, 1));
+    assert_eq!(spawned_details(&state, &id), vec![format!("base:{base}")], "detail は base だけ");
+    assert_eq!(curl_calls(&state), 0, "宣言の無い置き場は測らない");
+    clean(&[&repo, &state]);
+}
+
+/// (c) 宣言あり・全口座が当たっている周は `run=<id> next=wait reset=<ts>` を出して唯一の wait で待ち、reset を過ぎて
+/// `Timeout` を受けた周は計測から撃ち直して（偽 curl の 2 回目は a1 に余裕）a1 で起こす
+/// （`pipe_ratelimit_resume_waits_for_the_earliest_reset_then_remeasures` と同型・reset は偽 curl の呼ばれた瞬間から相対）。
+/// 待ちの間の段は起動前の段（`Reviewed`）のまま＝`RateLimited` 固定の観測なら即「満たされた」になり待たずに選び直し
+/// 続ける（計測 2 回で a1 を選ぶが待ち時間 0 ＝ busy loop）。
+#[test]
+fn pipe_spawn_account_waits_for_the_earliest_reset_then_remeasures() {
+    let (repo, state) = repo_with_state();
+    let first = write_set_contract(&repo, "first.toml", &["src/lib.rs"]);
+    let runner = turn_runner(&state, &[IMPLEMENT.to_owned()]);
+    let rules = resume_rules(&state, &["a1", "a2"]);
+    // a1 は計測の 2 秒後に開き直る（最も早い reset）・a2 は 4 秒後。2 回目の計測では a1 に余裕が戻る。
+    put_account(&state, "a1", &[limited_for(2), windows(50, 10)]);
+    put_account(&state, "a2", &[limited_for(4), limited_for(4)]);
+    let marker = state.join("lens-ran");
+    let lens = fake_lens(&marker, &lens_verdict("PASS"));
+    let started = Instant::now();
+    let out = run_pipe(&[
+        "run", "--contract", &first.display().to_string(), "--bead", "s2-acct",
+        "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
+        "--rules", &rules, "--curl", &fake_usage_curl(&state), "--runner", &runner, "--lens", &lens,
+    ]);
+    let waited = started.elapsed();
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{} / {}", stdout_of(&out), stderr_of(&out));
+    let id = run_id_of(&out);
+    let stdout = stdout_of(&out);
+    let soon = spy_reset(&state, "a1", 1);
+    assert!(vessel::fleet::epoch_of(&soon).is_some(), "偽 curl が a1 の 1 回目に相対 reset を埋めた: {soon:?}");
+    assert!(stdout.contains(&format!("run={id} next=wait reset={soon}")), "最も早い reset を名乗って待つ: {stdout}");
+    assert!(!stdout.contains("next=spawn account="), "初回は判定行を持たない: {stdout}");
+    assert!(waited >= Duration::from_secs(1), "reset まで待った（{waited:?}）");
+    assert_eq!(curl_calls(&state), 4, "Timeout の後に計測を撃ち直す（口座 2 つ × 2 回）");
+    assert_eq!(stub_calls(&state), 1, "runner は 1 回起きる");
+    assert_eq!(
+        argv_account_dir(&stub_argv(&state, 1)),
+        Some(state.join("accounts").join("a1").display().to_string()),
+        "reset の後の計測で a1 を選ぶ: {:?}",
+        stub_argv(&state, 1)
+    );
+    assert_eq!(spawned_details(&state, &id).first().map(|found| found.ends_with(",account:a1")), Some(true));
+    assert!(show_line(&repo, &state, &id).contains("stage=Landed"), "{stdout}");
+    clean(&[&repo, &state]);
+}
+
+/// (d) `Spawned detail=base:<sha>,account:a2` の便を gate → land まで通す: base の読み手（`base_of_run`）が `,` の
+/// 手前までを sha と読む（読めないと land が「base が無い」で断る・sha に接尾辞が残ると CAS が外れる）。
+#[test]
+fn pipe_spawn_account_base_with_account_suffix_lands() {
+    let (repo, state) = repo_with_state();
+    let base = git(&repo, &["rev-parse", "refs/heads/main"]);
+    let first = write_set_contract(&repo, "first.toml", &["src/lib.rs"]);
+    let id = intake_bead(&repo, &state, &first, "s2-acct");
+    let runner = turn_runner(&state, &[IMPLEMENT.to_owned()]);
+    let rules = resume_rules(&state, &["a2"]);
+    put_account(&state, "a2", &[windows(40, 10)]);
+    let out = run_pipe(&[
+        "spawn", "--run", &id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(), "--runner", &runner,
+        "--rules", &rules, "--curl", &fake_usage_curl(&state),
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{} / {}", stdout_of(&out), stderr_of(&out));
+    assert_eq!(spawned_details(&state, &id), vec![format!("base:{base},account:a2")]);
+    // gate の `{base}` と land の CAS が接尾辞の手前の sha を読む＝そのまま Landed まで通る。
+    assert_lands_without_human(&repo, &state, &id);
+    assert_eq!(git(&repo, &["rev-list", "--count", &format!("{base}..refs/heads/main")]), "1", "base の上に 1 便が載る");
+    clean(&[&repo, &state]);
+}

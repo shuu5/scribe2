@@ -525,7 +525,7 @@ fn ask_turn() -> String {
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
-fn turn_runner(state: &Path, turns: &[String]) -> String {
+pub(super) fn turn_runner(state: &Path, turns: &[String]) -> String {
     let dir = stub_dir(state);
     fs::create_dir_all(&dir).expect("stub の置き場を作れる");
     let mut cases = String::new();
@@ -543,7 +543,7 @@ fn turn_runner(state: &Path, turns: &[String]) -> String {
 }
 
 /// n turn 目（1 始まり）に渡された argv（1 行 1 引数・無ければ空）。
-fn stub_argv(state: &Path, turn: usize) -> Vec<String> {
+pub(super) fn stub_argv(state: &Path, turn: usize) -> Vec<String> {
     fs::read_to_string(stub_dir(state).join(format!("argv-{turn}")))
         .unwrap_or_default()
         .lines()
@@ -563,7 +563,7 @@ const FAR_WEEK_RESET: &str = "2099-01-07T00:00:00Z";
 /// 計測時点で未来。窓を揃えるのは、5 時間窓だけが古くなる周に 7 日窓の実測で計測なしに選ばれないため）。
 /// `models` は `limits[]` の `weekly_scoped` 要素（usage API の**表示名**・`Opus` / `Fable` …・使用率）。
 #[derive(Debug, Clone)]
-struct Windows {
+pub(super) struct Windows {
     five: u64,
     seven: u64,
     reset_in: Option<u64>,
@@ -571,12 +571,12 @@ struct Windows {
 }
 
 /// 5 時間窓が `five`%・7 日窓が `seven`%（reset はどちらも遠い未来・モデル別の行なし）の fixture。
-fn windows(five: u64, seven: u64) -> Windows {
+pub(super) fn windows(five: u64, seven: u64) -> Windows {
     Windows { five, seven, reset_in: None, models: Vec::new() }
 }
 
 /// 5 時間窓が当たっている（100%・7 日窓は 10%）口座で、reset は偽 curl の呼出しから `secs` 秒後。
-fn limited_for(secs: u64) -> Windows {
+pub(super) fn limited_for(secs: u64) -> Windows {
     Windows { five: 100, seven: 10, reset_in: Some(secs), models: Vec::new() }
 }
 
@@ -626,7 +626,7 @@ const RUNNER_MODEL: &str = "opus";
 
 /// `pipe resume` / `pipe run` に渡す manifest: [`write_rules`] の写しに計測の待ち時間の行・便が使う model の行
 /// （値は [`RUNNER_MODEL`]）と `[[account]]` を `labels` の順で足したもの。
-fn resume_rules(state: &Path, labels: &[&str]) -> String {
+pub(super) fn resume_rules(state: &Path, labels: &[&str]) -> String {
     resume_rules_with_model(state, labels, RUNNER_MODEL)
 }
 
@@ -657,7 +657,7 @@ fn resume_rules_with_model(state: &Path, labels: &[&str], model: &str) -> String
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
-fn put_account(state: &Path, label: &str, rounds: &[Windows]) {
+pub(super) fn put_account(state: &Path, label: &str, rounds: &[Windows]) {
     let dir = state.join("accounts").join(label);
     fs::create_dir_all(&dir).expect("credential の dir を作れる");
     let credential = format!(
@@ -685,7 +685,7 @@ fn curl_spy(state: &Path) -> PathBuf {
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
-fn fake_usage_curl(state: &Path) -> String {
+pub(super) fn fake_usage_curl(state: &Path) -> String {
     use std::os::unix::fs::PermissionsExt;
     let spy = curl_spy(state);
     fs::create_dir_all(&spy).expect("偽 curl の置き場を作れる");
@@ -722,12 +722,12 @@ fn fake_usage_curl(state: &Path) -> String {
 }
 
 /// 偽 curl が口座 `label` の `round` 回目（1 始まり）の応答に埋めた相対 reset の ts（埋めていなければ空）。
-fn spy_reset(state: &Path, label: &str, round: usize) -> String {
+pub(super) fn spy_reset(state: &Path, label: &str, round: usize) -> String {
     fs::read_to_string(curl_spy(state).join(format!("reset-tok-{label}-{round}"))).unwrap_or_default()
 }
 
 /// 偽 curl が呼ばれた回数（口座 1 つの計測につき 1 回）。
-fn curl_calls(state: &Path) -> usize {
+pub(super) fn curl_calls(state: &Path) -> usize {
     fs::read_to_string(curl_spy(state).join("curl-args"))
         .unwrap_or_default()
         .lines()
@@ -745,7 +745,7 @@ fn resume_with_accounts(repo: &Path, state: &Path, id: &str, runner: &str, rules
 }
 
 /// 便の `Spawned` の detail の列（物理順）。
-fn spawned_details(state: &Path, id: &str) -> Vec<String> {
+pub(super) fn spawned_details(state: &Path, id: &str) -> Vec<String> {
     stages(state, id)
         .into_iter()
         .filter(|(stage, _)| *stage == Some(Stage::Spawned))
@@ -763,7 +763,7 @@ fn rate_limited_details(state: &Path, id: &str) -> Vec<String> {
 }
 
 /// `argv` に `--account-dir <dir>` の 2 引数が並ぶか。
-fn argv_account_dir(argv: &[String]) -> Option<String> {
+pub(super) fn argv_account_dir(argv: &[String]) -> Option<String> {
     argv.windows(2)
         .find(|pair| pair.first().is_some_and(|flag| flag == "--account-dir"))
         .and_then(|pair| pair.get(1).cloned())
@@ -784,7 +784,7 @@ fn rate_limited_with_accounts(repo: &Path, state: &Path, rest: &[String], labels
 }
 
 /// 便を gate（PASS の偽 lens）→ land で Landed まで通し、人由来の event が 0 であることを測る。
-fn assert_lands_without_human(repo: &Path, state: &Path, id: &str) {
+pub(super) fn assert_lands_without_human(repo: &Path, state: &Path, id: &str) {
     let marker = state.join("lens-ran");
     let gated = gate_once(repo, state, id, Some(&fake_lens(&marker, &lens_verdict("PASS"))));
     assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "gate: {}", stderr_of(&gated));
@@ -812,7 +812,7 @@ fn sections_in_order(prompt: &str, with_answer: bool) -> bool {
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
-fn register_seat_account(state: &Path, account: &str) {
+pub(super) fn register_seat_account(state: &Path, account: &str) {
     let event = Event {
         schema: vessel::fleet::SCHEMA,
         ts: vessel::fleet::cli::now_utc(),
@@ -1029,14 +1029,18 @@ fn pipe_ratelimit_resume_prompt_lists_commits_after_the_answer() {
 }
 
 /// 起こし直した turn がまた上限で止まった周も回数の上限なく続く（`pipe run` の 1 process で
-/// intake → 上限 → 別口座 → 上限（detail に `account:<label>`）→ 別の口座 → gate → land）。
+/// intake → 器が選んだ口座で初回 → 上限（detail に `account:<label>`）→ 別口座 → 上限 → 別の口座 → gate → land）。
+///
+/// 初回の起動も同じ選定を通る（`s2-07l.285`・設計 account-autonomy.md §4）ので、1 回目の計測は初回の起動の前で、
+/// 上限で止まった段の detail は初回から `account:<label>`（`inherited` は宣言 0 の周だけ）。初回は判定行
+/// （`next=spawn account=`）を持たない（名乗るのは再開だけ）。
 #[test]
 fn pipe_ratelimit_resume_run_rides_out_repeated_limits_without_a_cap() {
     let (repo, state) = repo_with_state();
     let first = write_set_contract(&repo, "first.toml", &["src/lib.rs"]);
     let runner = turn_runner(&state, &[limit_turn(), limit_turn(), IMPLEMENT.to_owned()]);
     let rules = resume_rules(&state, &["a1", "a2"]);
-    // 1 回目の計測: a1 は当たっている・a2 に余裕。2 回目: a2 が当たり・a1 に余裕が戻る。
+    // 1 回目の計測（初回の起動の前）: a1 は当たっている・a2 に余裕。2 回目以降: a2 が当たり・a1 に余裕が戻る。
     put_account(&state, "a1", &[windows(100, 10), windows(60, 10)]);
     put_account(&state, "a2", &[windows(40, 10), windows(100, 10)]);
     let marker = state.join("lens-ran");
@@ -1049,22 +1053,32 @@ fn pipe_ratelimit_resume_run_rides_out_repeated_limits_without_a_cap() {
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{} / {}", stdout_of(&out), stderr_of(&out));
     let id = run_id_of(&out);
     let stdout = stdout_of(&out);
-    assert!(stdout.contains(&format!("run={id} next=spawn account=a2")), "{stdout}");
-    assert!(stdout.contains(&format!("run={id} next=spawn account=a1")), "{stdout}");
+    assert!(!stdout.contains("next=spawn account=a2"), "初回（a2）は判定行を持たない: {stdout}");
+    assert_eq!(stdout.matches("next=spawn account=a1").count(), 2, "再開 2 回はどちらも a1 を名乗る: {stdout}");
     assert_eq!(
         rate_limited_details(&state, &id),
         vec![
-            "rc:75,status:allowed_warning,account:inherited".to_owned(),
             "rc:75,status:allowed_warning,account:a2".to_owned(),
+            "rc:75,status:allowed_warning,account:a1".to_owned(),
         ],
-        "上限の段の detail は起こした口座を運ぶ"
+        "上限の段の detail は起こした口座を運ぶ（初回から器が選ぶ）"
     );
     let details = spawned_details(&state, &id);
     assert_eq!(details.len(), 3, "{details:?}");
-    assert_eq!(details[1], "account:a2,resume:rate-limit");
+    assert!(
+        details[0].starts_with("base:") && details[0].ends_with(",account:a2"),
+        "初回は base と選んだ口座を名乗る: {details:?}"
+    );
+    assert_eq!(details[1], "account:a1,resume:rate-limit");
     assert_eq!(details[2], "account:a1,resume:rate-limit");
     assert_eq!(stub_calls(&state), 3);
-    assert_eq!(curl_calls(&state), 4, "起こし直しのたびに計測（2 口座 × 2 回）");
+    assert_eq!(
+        argv_account_dir(&stub_argv(&state, 1)),
+        Some(state.join("accounts").join("a2").display().to_string()),
+        "初回の turn から選んだ口座の credential dir を渡す: {:?}",
+        stub_argv(&state, 1)
+    );
+    assert_eq!(curl_calls(&state), 6, "初回の起動と起こし直しのたびに計測（2 口座 × 3 回）");
     assert!(show_line(&repo, &state, &id).contains("stage=Landed"), "1 process で Landed まで: {stdout}");
     assert!(!events(&state).iter().any(|event| event.actor == "human"), "人由来の event は 0");
     clean(&[&repo, &state]);

@@ -11,8 +11,10 @@ use crate::fleet::Stage;
 use crate::pipe::approve::{Approve, RC_BLOCKED};
 use crate::pipe::current;
 use crate::pipe::declaration::{self, Ceiling, CEILING_ROW, DENIED_ROW};
+use crate::pipe::follow::Runner;
 use crate::pipe::gate::{Gate, Limits};
 use crate::pipe::land::{Land, Retire};
+use crate::pipe::ratelimit::Pool;
 use crate::pipe::review::{review, Review};
 use crate::rules::manifest::Manifest;
 use std::path::Path;
@@ -224,6 +226,13 @@ pub(super) fn land_run(args: &[String], id: &str, manifest: &Manifest, policy: L
         Ok(found) => found,
         Err(reason) => return refused(reason),
     };
+    // 起こし直しの口座は器が選ぶ（設計 account-autonomy.md §4）。宣言は runner を持つ周だけ解く（runner の無い
+    // `pipe land` は起こし直さない＝選定の入力も要らず、宣言の読めなさで land を止めない）。
+    let pool = match runner.map(|_| Pool::declared(args, manifest, &resolved.state_dir)).transpose() {
+        Ok(found) => found.flatten(),
+        Err(reason) => return refused(reason),
+    };
+    let runner = runner.map(|cmd| Runner { cmd, pool: pool.as_ref() });
     let retries = match int_row(manifest, ROW_RETRIES) {
         Ok(found) => found,
         Err(reason) => return broken(reason),

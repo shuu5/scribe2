@@ -226,6 +226,9 @@ pub fn head_of(repo: &Path) -> Option<String> {
 /// gate が `verdict:<V>` を書いた時点で `base:<sha>` は上書きされて消える。base は
 /// land の CAS と stale 判定の両方が要る値ゆえ、追記だけの log を遡って原本を読む。
 /// **読み手はこの 1 本だけ**——spawn の再開・gate の `{base}`・land の CAS が同じ値を見る。
+///
+/// `Spawned` の行は `base:<sha>` か `base:<sha>,account:<label>`（器が口座を選んで起こした周・設計
+/// account-autonomy.md §4）で、sha は `base:` の直後から**最初の `,` まで**（無ければ末尾まで）。
 pub fn base_of_run(state_dir: &Path, id: &str) -> Option<String> {
     let events = store::read_all(state_dir).ok()?;
     events
@@ -235,7 +238,9 @@ pub fn base_of_run(state_dir: &Path, id: &str) -> Option<String> {
         .find_map(|event| {
             let detail = event.detail.as_deref()?;
             match event.stage {
-                Some(Stage::Spawned) => detail.strip_prefix("base:").map(str::to_owned),
+                Some(Stage::Spawned) => detail
+                    .strip_prefix("base:")
+                    .map(|rest| rest.split_once(',').map_or(rest, |(sha, _)| sha).to_owned()),
                 Some(Stage::Implemented) => detail
                     .strip_prefix("rebase:")
                     .and_then(|range| range.split_once(".."))
@@ -506,8 +511,34 @@ pub(crate) mod fixture {
 #[cfg(test)]
 mod tests {
     use super::fixture::{append_all, event, scratch};
-    use super::{last_stage_detail, question_of_run, questions_of_run, runner_is_idle, Question};
+    use super::{base_of_run, last_stage_detail, question_of_run, questions_of_run, runner_is_idle, Question};
     use crate::fleet::{EventKind, Stage};
+
+    /// `base_of_run` は `Spawned` の `base:<sha>` と `base:<sha>,account:<label>`（器が口座を選んで起こした周）の
+    /// 両方から sha を読む（`,` の手前まで・`s2-07l.285`）。`account:<label>,resume:rate-limit` の行は飛ばし、
+    /// `rebase:<old>..<new>` の新しい側が物理順で後なら勝つ。
+    #[test]
+    fn pipe_spawn_account_base_of_run_reads_sha_before_the_account_suffix() {
+        let root = scratch("base-of-run");
+        let spawned = |run: &str, detail: &str| event(run, EventKind::RunStage, Some(Stage::Spawned), None, Some(detail));
+        append_all(
+            &root,
+            &[
+                spawned("plain", "base:aaa111"),
+                spawned("chosen", "base:bbb222,account:a2"),
+                spawned("resumed", "base:ccc333,account:a1"),
+                spawned("resumed", "account:a2,resume:rate-limit"),
+                spawned("moved", "base:ddd444,account:a1"),
+                event("moved", EventKind::RunStage, Some(Stage::Implemented), None, Some("rebase:ddd444..eee555")),
+            ],
+        );
+        assert_eq!(base_of_run(&root, "plain"), Some("aaa111".to_owned()), "従来の base:<sha>");
+        assert_eq!(base_of_run(&root, "chosen"), Some("bbb222".to_owned()), "`,account:` の手前まで");
+        assert_eq!(base_of_run(&root, "resumed"), Some("ccc333".to_owned()), "再開の行は飛ばす");
+        assert_eq!(base_of_run(&root, "moved"), Some("eee555".to_owned()), "追随の新しい側が勝つ");
+        assert_eq!(base_of_run(&root, "none"), None, "行の無い便");
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     /// `questions_of_run` は対を**発生順に全部**返し、`question_of_run` はその末尾である（`s2-07l.309`）。
     /// 1 対の区間は次の `QuestionRaised` の直前まで＝1 つ目の回答は 2 つ目の質問に付かず、`about` の無い対は
