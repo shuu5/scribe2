@@ -40,6 +40,7 @@
   - `ledger` の食い違い = 帳簿の `gitCommitSha` ≠ vessel repo の HEAD（`source=install` の行だけ・帳簿が古い＝`claude plugin install` の打ち直しが要る周を名指す・器は帳簿を書かない）。`source=launch` だけの行は `ledger=-` で、この語は出ない。
   - `dual` = 記録の `root` が checkout で、かつ同じ path の帳簿にも器が在る（hook が二重に走る）。
   - `drift=` は該当する語を `+` で繋ぐ（閉じた列・宣言順）。記録が無い consumer は `unrecorded` で「none」に潰さない。
+  - `statusline=<vessel|other|absent|unreadable>`（ADR-0029 §2.3・台帳 `s2-07l.320`）= consumer の project scope の `.claude/settings.json` の `statusLine.command` が器の行と一致するか。口座行の同名の語と同じ 1 関数で読む（`vessel` 以外は口座の設定を上書きしている印・判定はしない）。行の末尾に足す。
 - **vessel repo**: `head=` と §5 の更新は器自身の checkout を要る。host 固有の path なので **host の manifest**（[account-lifecycle.md](./account-lifecycle.md) §2 の `host.toml`）に array-of-tables を 1 種足す: `[[vessel]] repo = "<dir>"`（最大 1 行・2 行目は重複として拒む・同じ loader・同じ拒否形）。無い周は `head=undeclared`（doctor は止めない）。
 - **判定しない**: doctor は行を出すだけ（C10.2・verified の手書きは無い）。何をすべきかは `drift=` の語が名指し、更新は §5 の口が行う。
 
