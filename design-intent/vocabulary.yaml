@@ -681,3 +681,11 @@ terms:
     domain: consumer
     definition: squash commit の message の末尾に器が書く行 (契約 id と要件 id の 2 行を、 既存の便 id の行と 1 組にしたもの)。 着地の事実の record からの導出面で、 外部の道具が読む唯一の口 (ADR-0023 §2.5)。 trailer を持たない commit は「まだ分からない」と読む。
     relationships: [land の終端, 契約 id, 便, event log]
+  - canonical: 直命の表
+    domain: consumer
+    definition: user が対話面で言った発言を器が 1 件ずつ持つ記録 (event log の DirectiveIssued / DirectiveClosed・発令時刻は器が打つ・前提 pointer と状態を typed に持つ・ADR-0031 §2.1)。 復元の DATA が有効な直命を逐語で並べ、 経過日数か前提の終端で確認候補を印付きで出す。
+    relationships: [event log, 出所 pointer, 作業記憶, 対話面]
+  - canonical: 対話面の作法
+    domain: consumer
+    definition: planner の席が user に向けて出す文の形の規則 (信頼度 4 段を上位に読み手本位の 8 則を 1 体系にしたもの・ADR-0032 §2.2)。 正本は設計 doc dialogue-surface.md で、 planner の雛形は pointer 付きの行で指す。
+    relationships: [対話面, 役割, 作業記憶]

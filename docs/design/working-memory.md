@@ -2,9 +2,9 @@
 
 - 要件: [FR23](../../design-intent/spec/srs.html#FR23) 作業記憶の作法 6 本 + subcommand + 暫定行 / [AC8](../../design-intent/spec/srs.html#AC8) / [FR26](../../design-intent/spec/srs.html#FR26) cap guard（不変）/ [FR27](../../design-intent/spec/srs.html#FR27) [FR29](../../design-intent/spec/srs.html#FR29) 合図（不変）/ [FR28](../../design-intent/spec/srs.html#FR28) cycle（不変）/ [NFR4](../../design-intent/spec/srs.html#NFR4) fail-closed。制約: CON2（PUBLIC）
 - 憲法: [N2](../../design-intent/spec/constitution.html#n2) prose の規則は規則でない / [C2](../../design-intent/spec/constitution.html#c2) 宣言順・C2.2 env 不読 / [C3](../../design-intent/spec/constitution.html#c3) C3.3 typed / [C8](../../design-intent/spec/constitution.html#c8) 前の版を oracle にしない / [C11](../../design-intent/spec/constitution.html#c11) C11.2 極性 / [C12](../../design-intent/spec/constitution.html#c12) 歯は Rust / [C15](../../design-intent/spec/constitution.html#c15) 台帳に規律を置かない
-- 決定: [ADR-0018](../../design-intent/decisions/ADR-0018-working-memory-subcommands-and-pointer-required-directives.html) / [ADR-0015](../../design-intent/decisions/ADR-0015-seat-state-is-stamped-by-hooks-not-read-from-pane.html)（sid は打刻から）/ [ADR-0013](../../design-intent/decisions/ADR-0013-machine-holds-enumerations-docs-hold-pointers.html) §2.2（enum の 4 つ組）/ [ADR-0004](../../design-intent/decisions/ADR-0004-mvp-persistence-and-cross-version-formats.html) §2.4 / §2.5
-- 土台: [seat-autonomy.md](./seat-autonomy.md)（tick / cycle・退避物の走査 `scan_wm`・置き場）/ [seat-state.md](./seat-state.md)（打刻の schema・`sid`）。crate の形は [rules-manifest.md §2](./rules-manifest.md)。
-- この設計から出る契約: §9（3 便・順序あり）。
+- 決定: [ADR-0018](../../design-intent/decisions/ADR-0018-working-memory-subcommands-and-pointer-required-directives.html) / [ADR-0015](../../design-intent/decisions/ADR-0015-seat-state-is-stamped-by-hooks-not-read-from-pane.html)（sid は打刻から）/ [ADR-0013](../../design-intent/decisions/ADR-0013-machine-holds-enumerations-docs-hold-pointers.html) §2.2（enum の 4 つ組）/ [ADR-0004](../../design-intent/decisions/ADR-0004-mvp-persistence-and-cross-version-formats.html) §2.4 / §2.5 / [ADR-0031](../../design-intent/decisions/ADR-0031-working-memory-is-held-by-the-vessel-directives-status-and-hooks.html)（§12・器が持つ側を広げる: 直命の表・現在地 DATA・hook 強制と自動退避・置き場は state dir）
+- 土台: [seat-autonomy.md](./seat-autonomy.md)（tick / cycle・退避物の走査 `scan_wm`・置き場）/ [seat-state.md](./seat-state.md)（打刻の schema・`sid`）。crate の形は [rules-manifest.md §2](./rules-manifest.md)。brief の user 面は [dialogue-surface.md](./dialogue-surface.md) §3。
+- この設計から出る契約: §9（3 便・順序あり・Landed 済み）+ §12.7（ADR-0031 の便・段 1 の 4 便は並列）。
 
 ## 1. 何を解くか
 
@@ -12,9 +12,9 @@
 
 やさしく言うと: 「退避して・作り直して・思い出す」のうち、file を作る・事実を並べる・使い終えた file を移す、の 3 つを器がやる。「今どこで次に何をするか」を考えて文章にするのは session のまま。命令の各行には「規則はここ」という矢印を必ず付け、矢印の無い行は次の周に持ち越さない。
 
-## 2. 置き場と名前（SRS FR23 が固定・変えない）
+## 2. 置き場と名前（記録時点は SRS FR23 が anchor 配下を固定・ADR-0031 §2.4 で state dir へ改める＝要件書の改訂は user の手番・それまで本節の置き場が現行）
 
-- 退避物 = `<wm_dir>/working-memory.<sid>.md`（`<wm_dir>` は `--wm-dir` で受ける・既存の tick / cycle と同じ・anchor 配下の `.claude-session/` を user が指す）。消費済み = `working-memory.<sid>.consumed.md`（move）。
+- 退避物 = `<wm_dir>/working-memory.<sid>.md`（`<wm_dir>` は `--wm-dir` で受ける・既存の tick / cycle と同じ・anchor 配下の `.claude-session/` を user が指す）。消費済み = `working-memory.<sid>.consumed.md`（move）。**改訂後（§12.4）**: `<state_dir>/seat/<潰した target>/wm/` に置き `--wm-dir` は廃止。旧置き場の退避物は doctor が `wm-legacy=<n>` で名指す（器は読まない・消さない）。
 - 自席の弁別 = frontmatter の `seat:` が `--target` と一致（`scan_wm` と同じ・file 名の sid ではない）。
 - 現在の sid = `<state_dir>/seat/<潰した target>/state.jsonl` の**最終打刻行の `sid`**（[seat-state.md](./seat-state.md) §2・hook の `session_id`）。打刻が無い / 読めない / **sid が空**の周は rc 非 0（`sid-missing` / `sid-unreadable` / `sid-empty`・hook は `session_id` 欠落を空で打刻する現物があるため・env と pane は読まない）。
 - frontmatter（YAML 風の `key: value` 行・`---` で囲む）: `schema: 1`（新規・**任意**・無ければ 1 相当として読む＝前の版の skill が書いた退避物をそのまま読む・2 以上は Err）/ `seat:` / `role:`（表示用・弁別には使わない）/ `externalized_at:`（UTC）/ `trigger:` / `carry_source:` / `carry_items:` / `carry_user_directives:` / `consumed-from:`（consume が current sid 名義へ移すときだけ）。未知 key は拒まない（開発 session の注記を許す）が、`seat` が無い file は自席として数えない（`scan_wm` と同じ）。
@@ -116,7 +116,75 @@ AC8 の確認（SRS の FR23 の検証手法は I = 目視確認・2 つの開�
 
 ## 11. 後続
 
-- transcript からの user 逐語の抽出（前の版の digest・config dir を要する）→ hook の payload 経由か v3。
-- auto-compact の検出（PreCompact hook の打刻 → rebrief の `[MODE] force-recovery`）。
+- transcript からの user 逐語の抽出（前の版の digest・config dir を要する）→ hook の payload 経由か v3（§12.1 の口は発言を受けた席が撃つ形で、抽出ではない）。
 - 飛行中の Agent / Workflow の列挙（前の版の overlay）。
 - cap guard の退避物編集の口の撤去（skill 退役後）。
+- GitHub（PR・CI）を現在地 DATA に足す（A3 の裁定・ADR-0031 §5 (E)）。
+
+## 12. 器が持つ側を広げる（ADR-0031・要件書の改訂の後に契約化）
+
+やさしく言うと: 退避物に AI が手で写していた 3 つ（user の発言・今どこか・役割の既定）を器の記録と規則の表に移し、復元と退避の取得を hook で撃ち忘れられなくする。auto compaction が来ても器が最低限の退避物を残す。
+
+### 12.1 直命の表（ADR-0031 §2.1）
+
+- 記録 = event log の variant 2 つ: `DirectiveIssued { id, target, issued_at（器が打つ UTC）, text（逐語）, premise: Vec<Pointer>（§4 の `PointerKind` の再利用） }` / `DirectiveClosed { id, outcome: Done | Withdrawn | Expired, ruling }`。`EventKind` の末尾に宣言順で足す（`KINDS` の件数 pin・literal 構築点の歯・property の生成器が write-set）。
+- 口 = `<NAME> seat directive add --state-dir S --target T --text "<逐語>" [--premise <pointer>]…`（発言を受けた席が 1 回撃つ・時刻は推定しない）/ `seat directive close <id> --outcome done|withdrawn|expired --ruling <id>` / `seat directive ls`（有効な直命の一覧・逐語）。
+- rebrief の marker（宣言順・§5.2 の `Marker` enum に足す・外形 snapshot が動く）: `[DIRECTIVE] id=… issued=… premise=<kind:resolution>… line=<逐語>` / `[DIRECTIVE-COUNT] total=<n>` / `[DIRECTIVE-NONE]` / `[DIRECTIVE-REVIEW] id=… reason=<age|premise-closed|premise-superseded>` / `[DIRECTIVE-REVIEW-COUNT]` / `[DIRECTIVE-REVIEW-NONE]`。`age` の閾値 = rules 行 `directive.review_after_days`（新 kind `DirectiveReviewAfterDays`・`ValueShape::Int`・裁定 id = user 2026-09-15T07:22Z 問 1・値は manifest が持つ）。`premise-closed` は前提の台帳 id の status（rebrief の bd 読みと同じ 1 本の口）、`premise-superseded` は前提の ADR の `folio-status`（§4 の Adr の実在検査と同じ file を読む）。
+- 退避物の節 1 は廃止（`--user` の引数を外す・carry-forward の対象外・`schema: 1` のまま「節が空」として読む）。器は直命の意味を判定しない（印を出すだけ）。
+
+### 12.2 現在地の DATA（ADR-0031 §2.2）
+
+- marker 4 種（各 3 形: 列挙 / `-COUNT` / `-NONE`）: `[MAIN] sha=<短 sha> origin=<same|ahead|behind|unknown> porcelain=<n>`（anchor の git・既存の git の子 process）/ `[RUN] id=<run> stage=<Stage> account=<label> base=<sha> updated=<ts>`（event log の `RunStage` の最終値・終端〔Landed / Failed / Retired〕を除く）/ `[SEAT] target=… role=… state=<idle|busy> account=… model=…`（`SeatRegistered` の最終 row + state.jsonl の最終打刻）/ `[WIN] id=<bead> landed=<ts> sha=<短 sha>`（直近の自席の `.consumed.md` の `externalized_at` より後の Landed）。
+- 読めない周は `-NONE` に潰さず `unknown` / `unreadable` の語で出す（C10）。GitHub は読まない（§11）。
+
+### 12.3 hook による強制と自動退避（ADR-0031 §2.3・[vessel-hook.md](./vessel-hook.md) の面に 4 つ足す）
+
+| hook | matcher | 器の口 | 注入 / 記録 | 極性 |
+|---|---|---|---|---|
+| `UserPromptExpansion` | 復元 skill 名 | `hook prompt-expansion` → `seat rebrief` | DATA 全行を `additionalContext` に（rc 2 は理由 1 行） | FailOpen（skill を止めない） |
+| `UserPromptExpansion` | 退避 skill 名 | 同上 → §12.2 + §12.1 | 現在地 DATA と `[DIRECTIVE]` を注入（突合の強制） | FailOpen |
+| `PreToolUse` | `Skill`（同じ 2 skill 名） | 同じ口 | AI が Skill tool で呼んだ周も同じ注入 | FailOpen |
+| `SessionStart` | 既存（全 matcher） | `hook session-start` に 1 行 | `[WM] found\|missing\|unreadable`（実測） | 既存のまま |
+| `PreCompact` | `auto` | `seat externalize --trigger auto` | 現在地 DATA + carry-forward だけの退避物（`trigger: auto`・入力 file なし）。`wm-exists` は成功の側 | FailOpen（exit 2 を返さない・user 裁定 2026-09-15T07:22Z 問 2） |
+| `SessionEnd` | 全 | `hook session-end` | `reason` を state.jsonl に打刻（[seat-state.md](./seat-state.md) の schema・判定なし） | 記録のみ |
+
+- 極性一覧に 4 面を載せる（in-loop の注入・C11.2 / C16.2）。hook の歯は stdin JSON の fixture で測る（既存の `hook_` の歯と同じ形・Claude Code は起こさない）。
+- tick との融合: cycle の駆動は tick が既に持つ（[seat-autonomy.md](./seat-autonomy.md) §3・`wm-unconsumed` → `/clear` → 復元）。externalize の stdout に `next=/clear` を 1 行足し、skill は cycle 案内の散文を持たない。doctor は席ごとに「退避物の無いまま終わった session の件数」を名指す。
+
+### 12.4 置き場（ADR-0031 §2.4・user 裁定 2026-09-15T07:22Z 問 3）
+
+- `<state_dir>/seat/<潰した target>/wm/working-memory.<sid>.md`（打刻・tick・heartbeat と同じ席の dir）。`--wm-dir` は廃止し置き場は state dir から解く（unit は [seat-autonomy.md](./seat-autonomy.md) §8 の再生成で追随）。
+- 同 sid の未 consumed が在る周の再退避 = 旧 file を `working-memory.<sid>.superseded.<ts>.md` へ rename して置き換える（台帳 s2-07l.289 の吸収・削除しない・N1.2）。
+- 要件書 FR23 の置き場の文面は user の `/folio-architect` で改める。それまで契約 (e) は dispatch しない。
+
+### 12.5 役割の既定（ADR-0031 §2.5）
+
+- rules 行 `role.<役割>.model`（kind `RoleModel`・値は `Model` の別名）/ `role.<役割>.effort`（kind `RoleEffort`・閉じた enum）。値は裁定 id 付きで manifest が持つ（本 doc は写さない）。
+- 起動行（[account-lifecycle.md](./account-lifecycle.md) §4・`derive_launch`）: 登録 row の `model`（s2-07l.313）が在ればそれ、無ければ行の既定を `--model` に、effort は行から。settings.json は読まない。
+
+### 12.6 skill 2 本の縮小（ADR-0031 §2.6・[dialogue-surface.md](./dialogue-surface.md) §7 (h)）
+
+- ready-compaction = `--plan`（次の 1 手・列の裁定・bead id）と `--directives`（作業中だけの制約・pointer 付き）の 2 file + 口 1 回。直命は §12.1 の口、現在地は §12.2、役割の既定は §12.5。
+- rebrief = DATA から user 面 5 slot を組む手順 + consume。AI 面は表示しない。
+
+### 12.7 契約（要件書の改訂の後・段の中は並列）
+
+| 段 | 契約 | size | 依存 | write-set の芯 |
+|---|---|---|---|---|
+| 1 | (a) 直命の表: event variant 2 + `seat directive` 3 口 | M | SRS | `fleet/mod.rs`（`EventKind` + `KINDS` pin）/ `seat/directive.rs`（新）/ `seat/cli.rs` / `Event` の literal 構築点（歯・property）/ seat 外形 snap |
+| 1 | (c) 現在地 DATA: `[MAIN][RUN][SEAT][WIN]` | S | SRS | `seat/rebrief.rs`（`Marker` + `ALL`）/ rebrief 外形 snap / `tests/e2e/seat/wm.rs` |
+| 1 | (f) 役割の既定: rules 行 2 種 + 起動行 | S | .313 .322 Landed | `rules/mod.rs` / `rules/manifest.toml` / `seat/cycle.rs`（`derive_launch`）/ rules 外形 snap |
+| 1 | (g) planner の雛形 +4 行（dialogue-surface §7） | S | ADR-0032 | `seat/brief/planner.txt` / `hook_brief_planner` snap |
+| 2 | (b) `[DIRECTIVE-REVIEW]` + rules 行 `directive.review_after_days` | S | (a) | `seat/rebrief.rs` / `rules/*` / snap |
+| 2 | (d) hooks 4 面 + PreToolUse Skill | M | (c)・.303 / .304 と `hooks/hooks.json` で直列 | `hooks/hooks.json` / `hook/mod.rs`（event 名の enum）/ `hook/prompt_expansion.rs`（新）/ `polarity.rs` + 極性 snap / `tests/e2e/hook.rs` |
+| 3 | (e) 置き場を state dir へ + supersede + doctor 行 | M | SRS FR23 改訂・(d) | `seat/externalize.rs` / `seat/consume.rs` / `seat/tick.rs`（`--wm-dir` の撤去）/ `main.rs`（doctor 欄）/ snap |
+| 3 | (h) skills 2 本の縮小 | docs | (a)(b)(c)(d) | `skills/*/SKILL.md` |
+| 3 | (i) global の痩身（別 repo） | 外 | (g)(h) | — |
+
+検証の形（base で RED）: (a) `seat_directive_add_records_issued_event` / (b) `seat_rebrief_marks_a_directive_for_review_after_the_threshold` / (c) `seat_rebrief_lists_live_runs_and_seats` / (d) `hook_prompt_expansion_injects_rebrief_data` + `hook_pre_compact_auto_writes_a_minimal_wm` / (e) `seat_externalize_writes_under_the_state_dir` / (f) `seat_launch_defaults_model_and_effort_from_the_role_rule` / (g) `hook_brief_planner`（snapshot + 4 行を名指す歯 1 本）。
+
+### 12.8 却下案（設計固有・ADR-0031 §5 の写しは持たない）
+
+- 直命の表を台帳（bead）で持つ: 台帳は task と裁定（C15）で、発言の逐語と前提 pointer の typed な列を持たない。event log は既に承認 event で逐語を持つ（C7.2）＝同じ側に置く。
+- `[WIN]` を git log から取る: 便の Landed は event log が持ち、commit の subject の grep は偽陽性（bead id の `.` が regex）。event log だけを読む。
+- PreCompact(auto) の退避物に AI の文を求める: hook の中で開発 session は動かない。器が持つ事実（現在地 + carry）だけで書き、`trigger: auto` で弁別する。
