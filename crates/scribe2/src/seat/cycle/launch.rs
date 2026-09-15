@@ -1,6 +1,6 @@
 //! 席の**起動**（`seat launch`・[`launch`]・設計 account-lifecycle.md §4・ADR-0026 §2.3・SRS FR59）と、起動行の純関数
-//! （[`derive_launch`] / [`fill_launch`] / [`with_agent_view_off`] / [`with_model`]・雛形 file を持たない）。[`super`] から
-//! 純移動（`s2-07l.319`）。起動の注入は立て直しと**同じ 1 本**（[`super::relaunch::boot`]）を通る。
+//! （[`derive_launch`] / [`fill_launch`] / [`with_agent_view_off`] / [`with_anchor_cd`] / [`with_model`]・雛形 file を持たない）。
+//! [`super`] から純移動（`s2-07l.319`）。起動の注入は立て直しと**同じ 1 本**（[`super::relaunch::boot`]）を通る。
 
 use super::relaunch::{boot, choose, launch_line, Boot, Booted};
 use super::{
@@ -59,6 +59,19 @@ pub fn fill_launch(template: &str, account_dir: &str) -> Result<String, Holes> {
 /// 空の行はそのまま返す。
 pub fn with_agent_view_off(line: &str) -> String {
     let prefix = format!("{AGENT_VIEW_ENV}={AGENT_VIEW_OFF} ");
+    if line.trim().is_empty() || line.trim_start().starts_with(&prefix) {
+        return line.to_owned();
+    }
+    format!("{prefix}{line}")
+}
+
+/// 起動行の先頭に登録 row の anchor への `cd '<anchor>' && ` を前置する（pure・account-lifecycle.md §4・`s2-07l.324`）。
+/// 起こす claude の cwd は pane の shell の cwd を継ぐ（project の CLAUDE.md と hook は cwd 由来）ので、pane の cwd
+/// （host の再起動後の復元で home に戻る・真実でない C3）でなく row の `anchor` から写す（env も cwd も読まない・C2.2）。
+/// agent view の前置（[`with_agent_view_off`]）より**前**＝`cd … && ENV=… claude …` の順。既に同じ前置で始まる行は
+/// 二重にせず、空の行はそのまま返す。
+pub(super) fn with_anchor_cd(line: &str, anchor: &str) -> String {
+    let prefix = format!("cd '{anchor}' && ");
     if line.trim().is_empty() || line.trim_start().starts_with(&prefix) {
         return line.to_owned();
     }
@@ -148,8 +161,8 @@ pub enum Launched {
 }
 
 /// 席を起こす（設計 account-lifecycle.md §4・ADR-0026 §2.3・SRS FR59 / FR40 / FR36）: `--model` を型にし（表に無い値は `launch-model-unknown`）
-/// → 口座を決め（`--account` か session 用の選定 [`choose`]）→ 起動行（導出した行に model を運ばせ穴を埋める・二重は `launch-model-duplicated`・
-/// row の雛形は model 無し＝宣言は row の `model` の 1 か所）→ session の実在（無ければ `session-missing`・作らない）→ 登録 row を**先に**
+/// → 口座を決め（`--account` か session 用の選定 [`choose`]）→ 起動行（導出した行に model を運ばせ穴を埋め row の anchor への `cd` を前置・
+/// 二重は `launch-model-duplicated`・row の雛形は model 無し＝宣言は row の `model` の 1 か所）→ session の実在（無ければ `session-missing`・作らない）→ 登録 row を**先に**
 /// 書く（[`role::register`]・`sid` 無し・打刻の条件は掛けない）→ window（無ければ `new-window`）→ 立て直しと同じ 1 本（[`boot`]）で起動行を
 /// shell へ注入し、`--restore` が在れば復元を送る → `inject.jsonl` に `kind=launch` を 1 行。lock も cycle-stamp も取らない（起動は user の手番）。
 pub fn launch(request: &Launch) -> Launched {
@@ -160,7 +173,8 @@ pub fn launch(request: &Launch) -> Launched {
         Err(refused) => return refused,
     };
     let derived = derive_launch(request.anchor, request.manifest.plugins(), request.manifest.launch_args(), None);
-    let line = match launch_line(request.state_dir, &with_model(&derived, model), &label).and_then(|line| prepare(request, &label, derived).map(|()| line)) {
+    let anchor = request.anchor.display().to_string();
+    let line = match launch_line(request.state_dir, &with_model(&derived, model), &label, &anchor).and_then(|line| prepare(request, &label, derived).map(|()| line)) {
         Ok(found) => found,
         Err(reason) => return Launched::Refused(reason),
     };
@@ -299,8 +313,8 @@ pub fn render_launched(target: &str, result: &Launched, state: &StateDir) -> Str
 #[cfg(test)]
 mod tests {
     use super::{
-        before_deadline, derive_launch, fill_launch, model_of, single_model, with_agent_view_off, with_model, Holes, Model,
-        HOLE, HOLES, REASON_MODEL_DUPLICATED,
+        before_deadline, derive_launch, fill_launch, model_of, single_model, with_agent_view_off, with_anchor_cd, with_model,
+        Holes, Model, HOLE, HOLES, REASON_MODEL_DUPLICATED,
     };
     use crate::order::is_declaration_order;
     use crate::rules::manifest::Manifest;
@@ -369,6 +383,20 @@ mod tests {
         );
         assert_eq!(with_agent_view_off(""), "", "空の行はそのまま");
         assert_eq!(with_agent_view_off("  "), "  ", "空白だけの行もそのまま");
+    }
+
+    /// 起動行の先頭に row の anchor への `cd '<anchor>' && ` を 1 つだけ前置する（`s2-07l.324`）: agent view の env より前
+    /// （`cd … && ENV=… claude …` の順）・行の中身は変えず・既に同じ前置で始まる行は二重にせず・空の行はそのまま。
+    /// anchor は引数の値をそのまま写す（env も cwd も読まない・C2.2）。
+    #[test]
+    fn seat_launch_anchor_cd_prefix_is_single_and_keeps_blank_lines() {
+        let line = with_agent_view_off("CLAUDE_CONFIG_DIR=/state/accounts/a2 claude --plugin-dir /repo/main");
+        let once = with_anchor_cd(&line, "/repo/main");
+        assert_eq!(once, "cd '/repo/main' && CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CONFIG_DIR=/state/accounts/a2 claude --plugin-dir /repo/main");
+        assert_eq!(with_anchor_cd(&once, "/repo/main"), once, "前置済みの行は二重にしない");
+        assert_eq!(with_anchor_cd("sh l.sh /state/accounts/a2", "/repo/acct"), "cd '/repo/acct' && sh l.sh /state/accounts/a2", "env で始まらない雛形にも前置する");
+        assert_eq!(with_anchor_cd("", "/repo/main"), "", "空の行はそのまま");
+        assert_eq!(with_anchor_cd("  ", "/repo/main"), "  ", "空白だけの行もそのまま");
     }
 
     /// 雛形の穴はちょうど 1 つだけが埋まり（文字列の置換だけ・env の字面も path の字面も解釈しない）、無い・2 つ

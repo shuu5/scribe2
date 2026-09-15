@@ -1741,8 +1741,8 @@ fn seat_relaunch_agent_view_off_prefixes_launch_line() {
     let sent = acct_sent(&place.state, name);
     assert_eq!(
         sent.get(1),
-        Some(&format!("CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CONFIG_DIR={spare} sh {script}")),
-        "起動行は agent view off を 1 つだけ前置した雛形: {sent:?}"
+        Some(&acct_launch_prefix(&acct_anchor(&place), &format!("CLAUDE_CONFIG_DIR={spare} sh {script}"))),
+        "起動行は row の anchor への cd と agent view off を 1 つずつ前置した雛形: {sent:?}"
     );
     assert_eq!(
         fs::read_to_string(place.dir.join("launched")).unwrap_or_default(),
@@ -2006,8 +2006,8 @@ fn seat_exit_stamp_then_shell_relaunches_on_the_next_round() {
     assert_eq!(sent.len(), 4, "退避の合図・/exit・起動・復元の 4 行: {sent:?}");
     assert_eq!(sent.get(1).map(String::as_str), Some("/exit"), "2 行目は終了の手: {sent:?}");
     assert!(
-        sent.get(2).is_some_and(|what| what.starts_with("CLAUDE_CODE_DISABLE_AGENT_VIEW=1 sh ")),
-        "3 行目は agent view off を前置した起動の雛形: {sent:?}"
+        sent.get(2).is_some_and(|what| what.starts_with(&acct_launch_prefix(&acct_anchor(&place), "sh "))),
+        "3 行目は row の anchor への cd と agent view off を前置した起動の雛形: {sent:?}"
     );
     assert_eq!(sent.get(3).map(String::as_str), Some("/rebrief"), "4 行目は復元: {sent:?}");
     acct_assert_relabelled(&place, name);
@@ -2345,8 +2345,8 @@ fn stop_assert_relaunched_after_termination(place: &AcctPlace, name: &str, out: 
     assert_eq!(sent.len(), 4, "退避の合図・/exit・起動・復元の 4 行: {sent:?}");
     assert_eq!(sent.get(1).map(String::as_str), Some("/exit"), "2 行目は第 1 手: {sent:?}");
     assert!(
-        sent.get(2).is_some_and(|what| what.starts_with("CLAUDE_CODE_DISABLE_AGENT_VIEW=1 sh ")),
-        "3 行目は agent view off を前置した起動の雛形: {sent:?}"
+        sent.get(2).is_some_and(|what| what.starts_with(&acct_launch_prefix(&acct_anchor(place), "sh "))),
+        "3 行目は row の anchor への cd と agent view off を前置した起動の雛形: {sent:?}"
     );
     assert_eq!(sent.get(3).map(String::as_str), Some("/rebrief"), "4 行目は復元: {sent:?}");
     acct_assert_relabelled(place, name);

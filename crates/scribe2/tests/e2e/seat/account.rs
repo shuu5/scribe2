@@ -2338,7 +2338,7 @@ fn acct_register_with_model(place: &AcctPlace, target: &str, launch: &str, model
     let state = place.state.display().to_string();
     run_seat(&[
         "register", "--state-dir", &state, "--target", target, "--role", "planner", "--account", ACCT_SEAT,
-        "--launch", &launch_file, "--anchor", ACCT_ANCHOR, "--model", model,
+        "--launch", &launch_file, "--anchor", &acct_anchor(place), "--model", model,
     ])
 }
 
@@ -2381,7 +2381,7 @@ fn seat_account_relaunch_carries_the_row_model() {
     let sent = acct_sent(&place.state, name);
     assert_eq!(
         sent.get(1).map(String::as_str),
-        Some(format!("CLAUDE_CODE_DISABLE_AGENT_VIEW=1 {} --model opus", launch.replace("{account_dir}", &spare_dir)).as_str()),
+        Some(acct_launch_prefix(&acct_anchor(&place), &format!("{} --model opus", launch.replace("{account_dir}", &spare_dir))).as_str()),
         "起動行は row の model を別名で 1 つ運ぶ（`claude` の語が無い雛形は末尾）: {sent:?}"
     );
     let rows = acct_rows(&place.state);
@@ -2409,7 +2409,7 @@ fn seat_account_relaunch_refuses_an_unknown_row_model() {
     assert!(acct_rows(&place.state).is_empty(), "未知の値は row に書かない");
     let broken = vessel::fleet::Registration {
         role: vessel::seat::role::Role::Planner,
-        anchor: ACCT_ANCHOR.to_owned(),
+        anchor: acct_anchor(&place),
         target: name.to_owned(),
         sid: Some(ACCT_SID.to_owned()),
         account: ACCT_SEAT.to_owned(),
@@ -2730,8 +2730,51 @@ fn seat_launch_restore_is_sent_once_after_session_start() {
     assert_eq!(events, ["SessionStart", "UserPromptSubmit", "Stop"], "復元は立ち上がりの後: {stamps}");
     let sent = acct_sent(&place.state, &format!("{name}_{name}"));
     assert_eq!(sent.len(), 2, "起動行と復元の 2 行: {sent:?}");
-    assert!(sent.first().is_some_and(|what| what.starts_with("CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CONFIG_DIR=")), "{sent:?}");
+    assert!(sent.first().is_some_and(|what| what.starts_with(&acct_launch_prefix(&launch_anchor(&place), "CLAUDE_CONFIG_DIR="))), "{sent:?}");
     assert_eq!(sent.get(1).map(String::as_str), Some("/rebrief"), "{sent:?}");
+    drop(guard);
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (g) 起動行は登録 row の anchor への `cd` を先頭に前置する（`s2-07l.324`・account-lifecycle.md §4・C3「真実は row の anchor」）:
+/// pane の shell の cwd が anchor でない（host の再起動後の復元で home に戻った pane の形）まま `seat launch --anchor <dir>` で
+/// 起こすと、席の記録の起動行はちょうど `cd '<anchor>' && CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CONFIG_DIR=<l2> claude …`
+/// （cd → agent view の env → claude の順）で、効果でも測る: 起こした偽 claude の cwd（pane の前面 process の cwd）は anchor。
+/// 登録 row の `launch`（雛形）と偽 claude の argv に `cd` は載らない（雛形不変・`--plugin-dir` の列も不変）。base は pane の
+/// cwd のまま起こす（RED）。
+#[test]
+fn seat_launch_injects_cd_to_the_row_anchor_before_the_line() {
+    let place = launch_place();
+    let name = "launchcd";
+    let target = format!("{name}:{name}");
+    let path = launch_shims(&place, &target);
+    let guard = launch_session(&place, name, &path);
+    assert!(guard.ready(), "独立 socket に shell の session を立てられる");
+    let anchor = launch_anchor(&place);
+    let elsewhere = place.dir.display().to_string();
+    assert!(tmux(&place.socket, &["send-keys", "-t", &target, "-l", &format!("cd '{elsewhere}'")]).status.success());
+    assert!(tmux(&place.socket, &["send-keys", "-t", &target, "Enter"]).status.success());
+    let cwd_of = || stdout_of(&tmux(&place.socket, &["display-message", "-p", "-t", &target, "#{pane_current_path}"])).trim_end().to_owned();
+    assert!(
+        acct_wait_pane(&place, &target, |pane| pane.trim_end().ends_with('$') && cwd_of() == elsewhere),
+        "前提: 起こす前の pane の cwd は anchor ではない: {}",
+        cwd_of()
+    );
+
+    let out = launch_run(&place, &path, &target, &["--account", "l2"]);
+
+    let line = stdout_of(&out);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stdout={line} stderr={} pane={}", stderr_of(&out), capture(&place.socket, &target));
+    let l2_dir = place.state.join("accounts").join("l2").display().to_string();
+    let sent = acct_sent(&place.state, &format!("{name}_{name}"));
+    assert_eq!(
+        sent,
+        vec![format!("cd '{anchor}' && {}", launch_derived(&place).replace("{account_dir}", &l2_dir))],
+        "起動行は row の anchor への cd → agent view の env → claude の順の 1 行"
+    );
+    assert_eq!(cwd_of(), anchor, "起こした席の cwd は row の anchor（pane の cwd ではない）");
+    assert_eq!(fs::read_to_string(place.dir.join("launched")).unwrap_or_default(), launch_expected_argv(&place, "l2"), "argv に cd は載らない");
+    launch_assert_registered_before_send(&place, &target, "l2");
     drop(guard);
     fs::remove_dir_all(&place.dir).ok();
 }
@@ -2851,7 +2894,7 @@ fn seat_account_relaunch_keeps_the_model_of_a_seat_launched_with_model() {
     assert_eq!(sent.len(), 4, "起動・退避の合図・立て直し・復元の 4 行: {sent:?}");
     let l2_dir = place.state.join("accounts").join("l2").display().to_string();
     assert!(
-        sent.get(2).is_some_and(|what| what.starts_with(&format!("CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CONFIG_DIR={l2_dir} claude --model fable --plugin-dir ")) && launch_model_words(what) == 1),
+        sent.get(2).is_some_and(|what| what.starts_with(&acct_launch_prefix(&launch_anchor(&place), &format!("CLAUDE_CONFIG_DIR={l2_dir} claude --model fable --plugin-dir "))) && launch_model_words(what) == 1),
         "立て直しの起動行は model を 1 つ運ぶ: {sent:?}"
     );
     assert_eq!(sent.get(3).map(String::as_str), Some("/rebrief"), "{sent:?}");

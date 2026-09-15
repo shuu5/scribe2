@@ -2,7 +2,7 @@
 //! 1 本（[`boot`]）・退避後の終了の手（[`send_exit`]・`s2-07l.252`）。[`super`] から純移動（`s2-07l.319`）。判定順・注入の
 //! 字面・記録の行は不変で、lock・cycle-stamp・立ち上がりの確認（[`super::started`]）は親の 1 本を使う。
 
-use super::launch::{before_deadline, fill_launch, model_of, single_model, with_agent_view_off, with_model, Holes};
+use super::launch::{before_deadline, fill_launch, model_of, single_model, with_agent_view_off, with_anchor_cd, with_model, Holes};
 use super::{
     lock_path, send_to, started, take_lock, ttl_s, write_stamp, Lock, ACCOUNTS_DIR, DEFAULT_RESTORE, REASON_INPUT_BUSY,
     REASON_INPUT_UNKNOWN, REASON_LAUNCH, REASON_LOCK_HELD, REASON_PANE_MISSING, REASON_REGISTER, REASON_RESTORE,
@@ -68,9 +68,9 @@ pub fn relaunch(request: &Relaunch) -> Relaunched {
         Selection::Chosen(label) => label,
         Selection::None(found) => return Relaunched::None(found),
     };
-    // 注入するのは row の model を運ばせ穴を埋めた雛形に agent view off を前置した 1 行（記録にも同じ行が載る）。
+    // 注入するのは row の model を運ばせ穴を埋めた雛形に agent view off と row の anchor への cd を前置した 1 行（記録にも同じ行が載る）。
     let Ok(model) = model_of(request.row.model.as_deref()) else { return Relaunched::Refused(REASON_ROW_MODEL_UNKNOWN) };
-    let launch = match launch_line(request.state_dir, &with_model(&request.row.launch, model), &label) {
+    let launch = match launch_line(request.state_dir, &with_model(&request.row.launch, model), &label, &request.row.anchor) {
         Ok(found) => found,
         Err(reason) => return Relaunched::Refused(reason),
     };
@@ -121,11 +121,12 @@ pub(super) fn choose(own: (Role, &str, Option<&str>), state: &State, labels: &[S
     })
 }
 
-/// 雛形 `template` の `--model` を高々 1 つと確かめ（[`single_model`]）、穴を口座 `label` の credential dir（`<state_dir>/accounts/<label>`）で埋め、agent view off を前置した起動の 1 行（立て直しと `seat launch` の同じ 1 つ・記録にも同じ行が載る）。断りは字面。
-pub(super) fn launch_line(state_dir: &StateDir, template: &str, label: &str) -> Result<String, &'static str> {
+/// 雛形 `template` の `--model` を高々 1 つと確かめ（[`single_model`]）、穴を口座 `label` の credential dir（`<state_dir>/accounts/<label>`）で埋め、agent view off と
+/// 登録 row の `anchor` への `cd` を前置した起動の 1 行（`cd '<anchor>' && ENV=… claude …`・立て直しと `seat launch` の同じ 1 つ・記録にも同じ行が載る・`s2-07l.324`）。断りは字面。
+pub(super) fn launch_line(state_dir: &StateDir, template: &str, label: &str, anchor: &str) -> Result<String, &'static str> {
     single_model(template)?;
     let account_dir = state_dir.path.join(ACCOUNTS_DIR).join(label);
-    fill_launch(template, &account_dir.display().to_string()).map(|found| with_agent_view_off(&found)).map_err(Holes::as_str)
+    fill_launch(template, &account_dir.display().to_string()).map(|found| with_anchor_cd(&with_agent_view_off(&found), anchor)).map_err(Holes::as_str)
 }
 
 /// lock を握っている間の手順: 起動の 1 本（[`boot`]）に「立ち上がりの直後の登録 row の更新」を挟む。

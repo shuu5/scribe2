@@ -950,8 +950,8 @@ const ACCT_SPARE: &str = "a2";
 const ACCT_RESET: &str = "2099-01-01T05:00:00Z";
 /// 登録を撃った session の sid（打刻から解かれて row に載る）。
 const ACCT_SID: &str = "sid-acct";
-/// 登録 row の anchor。
-const ACCT_ANCHOR: &str = "/repo/acct";
+/// 登録 row の anchor（置き場の配下に実在する dir・[`acct_anchor`]・起動行の `cd` 先＝`s2-07l.324`）。
+const ACCT_ANCHOR_DIR: &str = "acct";
 /// 立て直さない歯の起動の雛形（穴 1 つ・実行はされない）。
 const ACCT_LAUNCH: &str = "cld {account_dir}";
 
@@ -972,14 +972,20 @@ struct AcctPlace {
 /// tracked の manifest の `[[account]]`（`--rules` の写しの既定＝埋め込みと同じ宣言）。
 const ACCT_LABELS: &[&str] = &["a1", "a2", "a3", "a4", "a5"];
 
-/// 置き場を 1 つ作る。
+/// 置き場を 1 つ作る（登録 row の anchor の dir も実在させる＝起動行の `cd` が通る）。
 fn acct_place() -> AcctPlace {
     let dir = tmp();
     let state = dir.join("state");
     let wm = dir.join("wm");
     fs::create_dir_all(&wm).ok();
+    fs::create_dir_all(dir.join(ACCT_ANCHOR_DIR)).ok();
     let socket = socket_of(&dir);
     AcctPlace { dir, state, wm, socket, labels: ACCT_LABELS }
+}
+
+/// 登録 row の anchor（置き場の配下の実在する dir・絶対 path）。
+fn acct_anchor(place: &AcctPlace) -> String {
+    place.dir.join(ACCT_ANCHOR_DIR).display().to_string()
 }
 
 /// host の写しの形の `--rules`（歯の刻み・計測の上限・`labels` の `[[account]]`）を書いて path を返す。
@@ -1007,7 +1013,7 @@ fn acct_register_as(place: &AcctPlace, target: &str, account: &str, launch: &str
     let state = place.state.display().to_string();
     run_seat(&[
         "register", "--state-dir", &state, "--target", target, "--role", "planner", "--account", account,
-        "--launch", &launch_file, "--anchor", ACCT_ANCHOR,
+        "--launch", &launch_file, "--anchor", &acct_anchor(place),
     ])
 }
 
@@ -1214,8 +1220,15 @@ fn acct_parked(place: &AcctPlace, target: &str, launch: &str, spare: u64) {
     acct_stop(place, target, unix_now().saturating_add(1));
 }
 
+/// 立て直しと起動の起動行の前置（`s2-07l.324`・account-lifecycle.md §4）: `cd '<row の anchor>' && ` が agent view の env より
+/// **前**に来る＝`cd … && CLAUDE_CODE_DISABLE_AGENT_VIEW=1 <tail>`。`tail` は前置の後の字面の先頭（雛形か `CLAUDE_CONFIG_DIR=`）。
+fn acct_launch_prefix(anchor: &str, tail: &str) -> String {
+    format!("cd '{anchor}' && CLAUDE_CODE_DISABLE_AGENT_VIEW=1 {tail}")
+}
+
 /// 立て直した周の注入: 雛形の穴が選んだ口座の credential dir で埋まって起動が走り、その後に立ち上がった席が復元の
-/// command を受けた（席の記録でも 退避の合図 → 起動 → 復元 の順）。
+/// command を受けた（席の記録でも 退避の合図 → 起動 → 復元 の順）。起動行は row の anchor への `cd` → agent view off →
+/// 雛形の順（`s2-07l.324`）。
 fn acct_assert_launched_then_restored(place: &AcctPlace, target: &str) {
     let spare_dir = place.state.join("accounts").join(ACCT_SPARE);
     assert_eq!(
@@ -1231,8 +1244,8 @@ fn acct_assert_launched_then_restored(place: &AcctPlace, target: &str) {
     let sent = acct_sent(&place.state, target);
     assert_eq!(sent.len(), 3, "退避の合図・起動・復元の 3 行: {sent:?}");
     assert!(
-        sent.get(1).is_some_and(|what| what.starts_with("CLAUDE_CODE_DISABLE_AGENT_VIEW=1 sh ")),
-        "2 行目は agent view off を前置した起動の雛形: {sent:?}"
+        sent.get(1).is_some_and(|what| what.starts_with(&acct_launch_prefix(&acct_anchor(place), "sh "))),
+        "2 行目は row の anchor への cd と agent view off を前置した起動の雛形: {sent:?}"
     );
     assert_eq!(sent.get(2).map(String::as_str), Some("/rebrief"), "3 行目は復元: {sent:?}");
 }
