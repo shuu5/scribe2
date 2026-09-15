@@ -1,7 +1,7 @@
 //! tick の口座の軸（登録 row の口座の逼迫度・定期計測・閾値以上の席への退避の合図・account-autonomy.md §3 / §5・
 //! [`super`] から純移動・`s2-07l.279`）。判定の順（context の直後・状態の門の外）は親（[`super::judge`]）が持つ。
 
-use super::exit::{exit_turn, parked_entry, relaunch_turn, Entry};
+use super::exit::{exit_turn, parked_entry, relaunch_turn, restore_turn, Entry};
 use super::render::{inject_line, Signal};
 use super::{account_pointer, Account, InjectKind, Request, Seen, SignalOrigin, TickDecision, Verdict};
 use crate::fleet::store;
@@ -21,7 +21,7 @@ pub(super) enum Turn {
 /// 口座の軸（account-autonomy.md §5・context の直後＝状態の門の外）: 登録 row の在る席だけ評価する。実測行が
 /// 古い周は計測を 1 回撃ってから逼迫度を読み（[`seated`]）、退避して止まった席は前面が shell なら立て直し
 /// （[`relaunch_turn`]）・shell でなく合図が口座由来（`origin=account`・`s2-07l.307`）なら終了の手（[`exit_turn`]・
-/// [`parked_entry`]）、閾値以上の席へは FR29 と
+/// [`parked_entry`]）・起動したが 1 turn も始めていない席なら復元の第 2 手（[`restore_turn`]・`s2-07l.318`）、閾値以上の席へは FR29 と
 /// 同じ除外の下で idle を待たずに退避の合図を注入して自打刻する（[`account_signal`]・直近の合図から
 /// `seat.signal_backoff_s` 未満の周は [`super::signal_brake`] が `signal-recent` で止める・`s2-07l.315`）。閾値未満・
 /// 測れない・除外で注入しない周は逼迫度を持って次の条件へ（注入も停止もしない）。
@@ -35,6 +35,7 @@ pub(super) fn account_turn(request: &Request, place: &super::StateDir, dir: &Pat
             return Turn::Settled(Verdict { account, ..relaunch_turn(request, place, dir, seen, &seated) });
         }
         Entry::Exit => return Turn::Settled(Verdict { account, ..exit_turn(request, place, dir, seen) }),
+        Entry::Restore => return Turn::Settled(Verdict { account, ..restore_turn(request, place, dir, seen) }),
         Entry::None => {}
     }
     let Some(payload) = account_signal(&account, seen, dir) else {

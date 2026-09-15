@@ -1,4 +1,4 @@
-//! tick の退避後の終了の手と立て直し（入口の 3 値・`/exit` の第 1 手・停止の第 2 手・別口座での立て直し・
+//! tick の退避後の終了の手と立て直し（入口の 4 値・`/exit` の第 1 手・停止の第 2 手・別口座での立て直し・復元の第 2 手・
 //! account-autonomy.md §5・[`super`] から純移動・`s2-07l.279`）。口座の軸の中の順は [`super::account`] が持つ。
 
 use super::account::Seated;
@@ -15,15 +15,31 @@ use crate::seat::{cycle, inject, pane_of, role, state, WmScan};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-/// 退避して止まった席の入口（account-autonomy.md §5）。**閉じた 3 値**（憲法 C11・bool で持たない）: 立て直しと
-/// 終了の手は同じ (1)(2) を共有し、前面 process の読みで分かれる。
+/// 復元の第 2 手を**送ろうとした**周の打刻の名前（exit-stamp と同じ形・閾値は `seat.signal_backoff_s`・`s2-07l.318`）。
+pub(super) const RESTORE_STAMP_FILE: &str = "restore-stamp";
+/// restore-stamp を書けない＝復元を送る前に断る（`restore-stamp-unwritable`・write-ahead・N1）。
+const REASON_RESTORE_STAMP: &str = "stamp-unwritable";
+
+/// 退避して止まった席の入口（account-autonomy.md §5）。**閉じた 4 値**（憲法 C11・bool で持たない）: 立て直しと
+/// 終了の手は同じ (1)(2) を共有し、前面 process の読みで分かれる。復元の第 2 手はどちらも立たない周だけ。
 pub(super) enum Entry {
     /// 立て直し（前面が shell＝session は終わっている）。
     Relaunch,
     /// 終了の手（前面が shell でない ∧ 直近の合図が口座由来か hook 由来の退避の合図 ∧ 自席の未 consumed 退避物が在る）。
     Exit,
-    /// どちらも立たない（以後は既存の順序へ）。
+    /// 復元の第 2 手（起動したが 1 turn も始めていない・[`booted_without_a_turn`]・`s2-07l.318`）。
+    Restore,
+    /// どれも立たない（以後は既存の順序へ）。
     None,
+}
+
+/// 入口（順序固定・`s2-07l.318`）: 立て直し・終了の手（[`signalled_entry`]）の**後**、どれにも当たらない周だけ復元の
+/// 第 2 手の (1)(2)（[`booted_without_a_turn`]）。(3) 状態の門と (4) restore-stamp の back-off は [`restore_turn`]。
+pub(super) fn parked_entry(state_dir: &Path, target: &str, socket: Option<&str>, seat_dir: &Path, wm: &WmScan) -> Entry {
+    match signalled_entry(state_dir, target, socket, seat_dir, wm) {
+        Entry::None if booted_without_a_turn(seat_dir) => Entry::Restore,
+        found => found,
+    }
 }
 
 /// 入口の条件（順序固定・tmux を撃つ前面の読みは最後）: (1) 自席への直近の注入の記録が tick の合図（退避の合図か
@@ -35,7 +51,7 @@ pub(super) enum Entry {
 /// 出所不明（`origin=` の無い旧 binary の記録・読めない値）は終了の手を立てず、以後は既存の順序（状態の門 → 退避物 →
 /// `/clear` の cycle・同じ口座）へ——不可逆の `/exit` を出所不明の合図に送らない（N1）。(1) の無い停止（user の終了・
 /// crash）は起こし直しも終了もしない（器が起こしたのでない停止に器が手を出さない）。
-pub(super) fn parked_entry(state_dir: &Path, target: &str, socket: Option<&str>, seat_dir: &Path, wm: &WmScan) -> Entry {
+fn signalled_entry(state_dir: &Path, target: &str, socket: Option<&str>, seat_dir: &Path, wm: &WmScan) -> Entry {
     let Some((kind, origin, signalled)) = last_signal(state_dir, target) else {
         return Entry::None;
     };
@@ -96,14 +112,23 @@ fn field<'a>(pairs: &'a [(String, Value)], key: &str) -> Option<&'a Value> {
 /// 条件そのもの（退避の合図 → その後の `Stop` → `/exit`）で、席が続きを始めた周は最終行が `UserPromptSubmit` に
 /// なるので偽。
 fn stopped_after(seat_dir: &Path, kind: InjectKind, after: u64) -> bool {
-    let text = std::fs::read_to_string(state::path(seat_dir)).unwrap_or_default();
-    text.lines()
-        .rev()
-        .find(|line| !line.trim().is_empty())
-        .and_then(|line| state::Stamp::from_line(line).ok())
-        .is_some_and(|stamp| {
-            stamp.event == state::Event::Stop && (matches!(kind, InjectKind::Exit) || stamp.ts > after)
-        })
+    last_stamp(seat_dir)
+        .is_some_and(|stamp| stamp.event == state::Event::Stop && (matches!(kind, InjectKind::Exit) || stamp.ts > after))
+}
+
+/// 打刻の最終行（読めない・無い・壊れている周は `None`）。入口 (2) と復元の第 2 手の (2) の同じ読み。
+fn last_stamp(seat_dir: &Path) -> Option<state::Stamp> {
+    let text = std::fs::read_to_string(state::path(seat_dir)).ok()?;
+    text.lines().rev().find(|line| !line.trim().is_empty()).and_then(|line| state::Stamp::from_line(line).ok())
+}
+
+/// 復元の第 2 手の入口 (1)(2)（account-autonomy.md §5「復元の第 2 手」・`s2-07l.318`）: (1) cycle-stamp（[`cycle::STAMP_FILE`]・
+/// 中身は unix 秒・立て直しか作り直しが起きた証拠）が読め、(2) 打刻の最終行が `SessionStart` でその ts が stamp 以上（起動
+/// したが 1 turn も始めていない＝復元が消費されていない typed な証拠・C3.3）。それ以外と読めない・無い周は偽（起こさない側）。
+fn booted_without_a_turn(seat_dir: &Path) -> bool {
+    let stamped = std::fs::read_to_string(cycle::stamp_path(seat_dir)).ok();
+    let Some(since) = stamped.and_then(|text| text.trim().parse::<u64>().ok()) else { return false };
+    last_stamp(seat_dir).is_some_and(|stamp| stamp.event == state::Event::SessionStart && stamp.ts >= since)
 }
 
 /// 退避後の終了の手（account-autonomy.md §5・`s2-07l.226`）: 入口（[`parked_entry`]）の後は cycle lock（FR29 と同じ
@@ -273,6 +298,41 @@ fn exit_error(reason: &str) -> TickDecision {
     TickDecision::Error(format!("exit-{reason}"))
 }
 
+/// 復元の第 2 手（account-autonomy.md §5「復元の第 2 手」・`s2-07l.318`・[`exit_turn`] と同じ形）: 立て直しと `seat launch`
+/// は復元の消費を settle の窓の内で確かめ、確かめられなければ `restore-unconfirmed` で終端する（SessionStart hook の所要が
+/// 窓を食う周ほど刺さらない・実地 2026-09-15 03:15Z: planner が復元されないまま 16 分放置）。入口の (1)(2) の後は (3) 状態の
+/// 門（[`super::gate_of`]）→ cycle lock → (4) restore-stamp の back-off（`seat.signal_backoff_s` 未満なら `restore-recent`）→
+/// [`send_restore`]。消費されなかった周は記録だけで**終端しない**（次の周が back-off の後にもう一度）。
+pub(super) fn restore_turn(request: &Request, place: &super::StateDir, dir: &Path, seen: &Seen) -> Verdict {
+    let live = || cycle::lock_is_live(dir, seen.ttl_s).then_some(NoopReason::CycleLive);
+    if let Some(reason) = super::gate_of(seen.state).or_else(live) {
+        return Verdict::of(TickDecision::Noop(reason));
+    }
+    let (stamp, blocked) = back_off(dir, RESTORE_STAMP_FILE, seen.backoff_s);
+    match blocked {
+        Some(NoopReason::CycleRecent) => held(stamp, NoopReason::RestoreRecent),
+        Some(reason) => held(stamp, reason),
+        None => stamped(stamp, send_restore(request, place, dir)),
+    }
+}
+
+/// 復元の command（`--restore`・既定 [`cycle::DEFAULT_RESTORE`]）を 1 行送る（順序固定・cycle の復元と同じ経路）: restore-stamp
+/// （write-ahead・打てない周は 1 key も送らない）→ [`inject::deliver_within`]（入力欄の門は中・断りは送っていない・窓は
+/// cycle の復元と同じ [`Request::settle`]）。断りは `restore-` を前置きして注入の断りや noop の語彙と分ける（[`exit_error`] と同型）。
+fn send_restore(request: &Request, place: &super::StateDir, dir: &Path) -> TickDecision {
+    if std::fs::write(dir.join(RESTORE_STAMP_FILE), format!("{}\n", state::now_secs())).is_err() {
+        return TickDecision::Error(format!("restore-{REASON_RESTORE_STAMP}"));
+    }
+    let payload = request.restore.unwrap_or(cycle::DEFAULT_RESTORE);
+    let sending = inject::Request { target: request.target, socket: request.socket, payload, state_dir: Some(place) };
+    match inject::deliver_within(&sending, request.settle) {
+        inject::Delivery::Delivered(_, settled) => TickDecision::Inject(InjectKind::Restore, settled),
+        inject::Delivery::Refused(reason) | inject::Delivery::Unconfirmed(reason) => {
+            TickDecision::Error(format!("restore-{reason}"))
+        }
+    }
+}
+
 /// 退避して止まった席の立て直し（account-autonomy.md §5）: back-off（`s2-07l.110` の cycle-stamp だけ・閾値は
 /// `seat.tick_stale_s`・exit-stamp は読まない＝`/exit` の次の周に評価される・`s2-07l.252`）→ cycle lock（FR29 と同じ
 /// 除外）→ [`cycle::relaunch`]（session 用の選定・雛形の穴埋め・
@@ -435,5 +495,25 @@ mod tests {
         assert_eq!(found, Some(("a3".to_owned(), 2)), "自席の最新の row と replay の現在地（鍵 2 つ）");
         std::fs::remove_dir_all(&dir).ok();
         assert!(super::reseat(&dir, "seat1").is_none(), "置き場が無い");
+    }
+
+    /// 復元の第 2 手の入口 (1)(2)（[`booted_without_a_turn`]・`s2-07l.318`）: stamp 以上の `SessionStart` だけ真（境界は
+    /// 以上＝同じ秒は真）。stamp 無し・打刻無し・`Stop` / `UserPromptSubmit`・stamp より前は偽。base は関数が無い（RED）。
+    #[test]
+    fn seat_restore_entry_needs_a_cycle_stamp_and_a_session_start_after_it() {
+        use crate::seat::state::{path, Event, Stamp};
+        let dir = std::env::temp_dir().join(format!("seat-tick-restore-entry-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).ok();
+        assert!(!super::booted_without_a_turn(&dir), "打刻が無い");
+        let booted = |event: Event, ts: u64| {
+            std::fs::write(path(&dir), format!("{}\n", Stamp { ts, ..Stamp::now(event, "sid") }.to_line())).ok();
+            super::booted_without_a_turn(&dir)
+        };
+        assert!(!booted(Event::SessionStart, 200), "cycle-stamp が無い");
+        std::fs::write(crate::seat::cycle::stamp_path(&dir), "200\n").ok();
+        assert!(booted(Event::SessionStart, 200), "stamp と同じ秒の SessionStart（以上）");
+        assert!(!booted(Event::SessionStart, 199), "stamp より前の SessionStart（起動に届かなかった周）");
+        assert!(!booted(Event::UserPromptSubmit, 300) && !booted(Event::Stop, 300), "turn を始めた席");
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

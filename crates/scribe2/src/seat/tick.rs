@@ -179,6 +179,9 @@ pub enum InjectKind {
     /// [`cycle::launch`]（`who=seat-launch`）で、立て直しの入口 (1) はこれを合図に数えない（launch 直後の停止は
     /// 器が起こしたのでない停止と同じ扱い）。
     Launch,
+    /// 起動したが 1 turn も始めていない席（打刻の最終行が `SessionStart` のまま＝復元が消費されていない）へ復元の
+    /// command をもう一度送った（復元の第 2 手・account-autonomy.md §5・[`exit::restore_turn`]・`s2-07l.318`）。
+    Restore,
 }
 
 /// [`InjectKind`] の全 variant（宣言順）。
@@ -188,6 +191,7 @@ pub const INJECT_KINDS: &[InjectKind] = &[
     InjectKind::Relaunch,
     InjectKind::Exit,
     InjectKind::Launch,
+    InjectKind::Restore,
 ];
 
 impl InjectKind {
@@ -199,6 +203,7 @@ impl InjectKind {
             Self::Relaunch => "relaunch",
             Self::Exit => "exit",
             Self::Launch => "launch",
+            Self::Restore => "restore",
         }
     }
 }
@@ -442,6 +447,8 @@ pub enum NoopReason {
     /// context / 口座: 自席への直近の注入が退避の合図で、その ts から `seat.signal_backoff_s` 未満（再送しない・
     /// `s2-07l.315`）。記録が無い・読めない周はこの理由にならない（brake を掛けない側）。
     SignalRecent,
+    /// 口座: 復元の第 2 手（restore-stamp）を `seat.signal_backoff_s` 未満の前に送った（二重送信の brake・`s2-07l.318`）。
+    RestoreRecent,
 }
 
 /// [`NoopReason`] の全 variant（宣言順）。
@@ -460,6 +467,7 @@ pub const NOOP_REASONS: &[NoopReason] = &[
     NoopReason::AccountUnmeasured,
     NoopReason::AccountNoCandidate,
     NoopReason::SignalRecent,
+    NoopReason::RestoreRecent,
 ];
 
 impl NoopReason {
@@ -480,6 +488,7 @@ impl NoopReason {
             Self::AccountUnmeasured => "account-unmeasured",
             Self::AccountNoCandidate => "account-no-candidate",
             Self::SignalRecent => "signal-recent",
+            Self::RestoreRecent => "restore-recent",
         }
     }
 }
@@ -816,12 +825,12 @@ mod tests {
             [
                 "pane-missing", "busy", "state-missing", "state-unreadable", "state-stale", "wm-unconsumed",
                 "wm-unreadable", "cycle-live", "cycle-recent", "cycle-stamp-unreadable", "pointer-recent",
-                "account-unmeasured", "account-no-candidate", "signal-recent",
+                "account-unmeasured", "account-no-candidate", "signal-recent", "restore-recent",
             ]
         );
         assert!(is_declaration_order(NOOP_REASONS, |reason| reason as usize));
         let kinds: Vec<&str> = INJECT_KINDS.iter().map(|kind| kind.as_str()).collect();
-        assert_eq!(kinds, ["pointer", "externalize", "relaunch", "exit", "launch"]);
+        assert_eq!(kinds, ["pointer", "externalize", "relaunch", "exit", "launch", "restore"]);
         assert!(is_declaration_order(INJECT_KINDS, |kind| kind as usize));
         let origins: Vec<&str> = SIGNAL_ORIGINS.iter().map(|origin| origin.as_str()).collect();
         assert_eq!(origins, ["context", "account", "hook"]);

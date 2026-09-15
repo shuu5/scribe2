@@ -2031,6 +2031,168 @@ fn seat_account_relaunch_leaves_the_current_account_at_threshold() {
     fs::remove_dir_all(&place.dir).ok();
 }
 
+// ─────────────────── 復元の第 2 手（account-autonomy.md §5「復元の第 2 手」・`s2-07l.318`・接頭辞 `seat_restore_`） ───────────────────
+
+/// 起動したが 1 turn も始めていない席の fixture（立て直しが `restore-unconfirmed` で終端した直後の形・実地 2026-09-15
+/// 03:15Z）: 受けた行を `seat.log` に積んで `UserPromptSubmit` → `Stop` を打つ偽の席（[`start_clearing_seat`]・入力欄は
+/// 空）を独立 socket に立て、planner として口座 a1（50%・閾値未満＝退避の合図は出ない）で登録し（打刻は `SessionStart`・
+/// いま）、cycle-stamp（中身は `stamp_ts`＝立て直しが起きた秒）を置く。`inject.jsonl` は無い（立て直しの失敗は注入の
+/// 記録を残さない）。
+fn restore_seat(place: &AcctPlace, name: &str, stamp_ts: u64) -> IsolatedSeat {
+    let seat = seat_dir_of(&place.state, name);
+    let log = place.dir.join("seat.log");
+    let guard = start_clearing_seat(&place.socket, name, &log, &state_file(&seat), (FakeStamp::Now, FakeStamp::Now));
+    assert!(guard.ready(), "独立 socket に偽の席を立てられる");
+    let registered = acct_register(place, name, ACCT_LAUNCH);
+    assert_eq!(rc_of(&registered), i32::from(RC_OK), "stderr={}", stderr_of(&registered));
+    acct_measured(&place.state, ACCT_SEAT, 50, &acct_now());
+    fs::write(seat.join("cycle-stamp"), format!("{stamp_ts}\n")).ok();
+    guard
+}
+
+/// 席が受けた `/rebrief` の数（`seat.log` の行）。
+fn restore_received(place: &AcctPlace) -> usize {
+    fs::read_to_string(place.dir.join("seat.log")).unwrap_or_default().lines().filter(|line| *line == "/rebrief").count()
+}
+
+/// 打刻の 1 行を末尾に足す（`state` / `event` は契約の字面・時刻はいま）。
+fn restore_append_stamp(place: &AcctPlace, name: &str, state: &str, event: &str) {
+    let file = state_file(&seat_dir_of(&place.state, name));
+    let mut text = fs::read_to_string(&file).unwrap_or_default();
+    text.push_str(&stamp_line(state, event, unix_now(), ACCT_SID));
+    text.push('\n');
+    fs::write(&file, text).ok();
+}
+
+/// (a) 復元の第 2 手（`s2-07l.318`）: cycle-stamp が在り、打刻の最終行が `SessionStart`（ts ≥ stamp）・idle・入力欄が空の
+/// 席（立て直しが `restore-unconfirmed` で終端した次の周の形）には、tick が復元の command をもう一度注入する
+/// （`decision=inject … kind=restore consumed=true`・判定行に `restore-stamp=none` と口座・席が受けた行は `/rebrief` 1 回・
+/// restore-stamp が打たれる・`inject.jsonl` に `kind=restore` の 1 行）。次の周は最終行が `Stop`（turn を始めた）なので
+/// 第 2 手は立たない（`/rebrief` は 1 回のまま）。base は入口が 3 値で `kind=pointer` の打刻の合図（RED）。
+#[test]
+fn seat_restore_resends_when_the_seat_booted_without_a_turn() {
+    let place = acct_place();
+    let name = "acctrestore";
+    let guard = restore_seat(&place, name, unix_now().saturating_sub(5));
+
+    let out = acct_tick(&place, name, None);
+
+    let line = stdout_of(&out);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stdout={line} stderr={}", stderr_of(&out));
+    for (key, want) in [
+        ("decision", "inject"), ("kind", "restore"), ("consumed", "true"), ("state", "idle"),
+        ("event", "SessionStart"), ("restore-stamp", "none"), ("account", "a1:50"),
+    ] {
+        assert_eq!(tick_token(&line, key).as_deref(), Some(want), "{key}: {line}");
+    }
+    assert_eq!(fs::read_to_string(place.dir.join("seat.log")).unwrap_or_default(), "/rebrief\n", "席が受けた行は復元 1 回");
+    assert!(seat_dir_of(&place.state, name).join("restore-stamp").exists(), "送る前に restore-stamp を打つ");
+    let log = fs::read_to_string(place.state.join("inject.jsonl")).unwrap_or_default();
+    assert_eq!(log.lines().count(), 1, "注入の記録は 1 行: {log}");
+    assert!(log.contains(" kind=restore "), "記録は復元の第 2 手: {log}");
+
+    let again = stdout_of(&acct_tick(&place, name, None));
+    assert_ne!(tick_token(&again, "kind").as_deref(), Some("restore"), "turn を始めた席には立たない: {again}");
+    assert_eq!(restore_received(&place), 1, "/rebrief は 1 回のまま");
+    drop(guard);
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (b) 復元の第 2 手の brake（`s2-07l.318`・同じ rules 行 `seat.signal_backoff_s`・`.315` の読み口）: restore-stamp が
+/// `seat.signal_backoff_s` 未満の前に打たれた周は送らない（`decision=noop reason=restore-recent`・判定行に
+/// `restore-stamp=<経過>` と口座・rc 0・席は `/rebrief` を受けない）。stamp を窓の外（経過 = back-off・境界は未満）へ倒した
+/// 次の周は送る（`kind=restore consumed=true`・`/rebrief` 1 回）＝brake は永久には止まらない。base に語が無い（RED）。
+#[test]
+fn seat_restore_backs_off_within_signal_backoff() {
+    let place = acct_place();
+    let name = "acctrestorebrake";
+    let guard = restore_seat(&place, name, unix_now().saturating_sub(5));
+    let stamp = seat_dir_of(&place.state, name).join("restore-stamp");
+    fs::write(&stamp, format!("{}\n", unix_now())).ok();
+
+    let first = acct_tick(&place, name, None);
+
+    let line = stdout_of(&first);
+    assert_eq!(rc_of(&first), i32::from(RC_OK), "再送しない周は正常の noop: stderr={}", stderr_of(&first));
+    for (key, want) in [("decision", "noop"), ("reason", "restore-recent"), ("state", "idle"), ("event", "SessionStart"), ("account", "a1:50")] {
+        assert_eq!(tick_token(&line, key).as_deref(), Some(want), "{key}: {line}");
+    }
+    assert!(tick_token(&line, "restore-stamp").is_some_and(|age| age != "none"), "back-off を読んだ周は経過が載る: {line}");
+    assert_eq!(restore_received(&place), 0, "窓の内は席が受けない");
+
+    backdate(&stamp, super::tick::SIGNAL_BACKOFF_S);
+    let second = acct_tick(&place, name, None);
+
+    let line = stdout_of(&second);
+    assert_eq!(rc_of(&second), i32::from(RC_OK), "stderr={}", stderr_of(&second));
+    for (key, want) in [("decision", "inject"), ("kind", "restore"), ("consumed", "true")] {
+        assert_eq!(tick_token(&line, key).as_deref(), Some(want), "{key}: {line}");
+    }
+    assert_eq!(restore_received(&place), 1, "stamp が窓の外（経過 = back-off）なら送る");
+    drop(guard);
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (c) 負例（(a) と 1 点だけ違える・別の理由で通らない形）: 最終行が `UserPromptSubmit` / `Stop`（turn を始めた席）・
+/// cycle-stamp が無い（立て直しが起きていない）・`SessionStart` が stamp より前（起動に届かなかった周）は、いずれも
+/// 第 2 手を送らない（判定行に `kind=restore` は出ず、席は `/rebrief` を受けず、restore-stamp も打たれない）。
+#[test]
+fn seat_restore_stays_quiet_after_the_first_turn() {
+    for case in ["after-prompt", "after-stop", "no-cycle-stamp", "start-before-stamp"] {
+        let place = acct_place();
+        let name = "acctnorestore";
+        let stamp_ts = if case == "start-before-stamp" { unix_now().saturating_add(100) } else { unix_now().saturating_sub(5) };
+        let guard = restore_seat(&place, name, stamp_ts);
+        let seat = seat_dir_of(&place.state, name);
+        match case {
+            "after-prompt" => restore_append_stamp(&place, name, "busy", "UserPromptSubmit"),
+            "after-stop" => restore_append_stamp(&place, name, "idle", "Stop"),
+            "no-cycle-stamp" => assert!(fs::remove_file(seat.join("cycle-stamp")).is_ok(), "{case}: stamp を消せる"),
+            _ => {}
+        }
+
+        let out = acct_tick(&place, name, None);
+
+        let line = format!("{}{}", stdout_of(&out), stderr_of(&out));
+        assert_ne!(tick_token(&line, "kind").as_deref(), Some("restore"), "{case}: 第 2 手は立たない: {line}");
+        assert_eq!(tick_token(&line, "restore-stamp"), None, "{case}: 第 2 手を評価しない: {line}");
+        assert_eq!(restore_received(&place), 0, "{case}: 席は復元を受けない");
+        assert!(!seat.join("restore-stamp").exists(), "{case}: restore-stamp を打たない");
+        drop(guard);
+        fs::remove_dir_all(&place.dir).ok();
+    }
+}
+
+/// (d) restore-stamp を**打てない**周は 1 key も送らず断る（`decision=error reason=restore-stamp-unwritable`・rc 1・
+/// write-ahead・N1）: stamp の位置に dir を置き、その mtime を back-off の外へ倒す（`restore-recent` でなく書き口で
+/// 落ちる形）。pane は `--capture-file` で通し、tmux の shim で「触れていない」を測る。
+#[test]
+fn seat_restore_writes_the_stamp_before_sending() {
+    let place = acct_place();
+    let name = "acctrestorero";
+    let guard = restore_seat(&place, name, unix_now().saturating_sub(5));
+    let blocker = seat_dir_of(&place.state, name).join("restore-stamp");
+    let old = SystemTime::now()
+        .checked_sub(Duration::from_secs(super::tick::SIGNAL_BACKOFF_S.saturating_add(60)))
+        .unwrap_or(SystemTime::UNIX_EPOCH);
+    let placed = fs::create_dir_all(&blocker).and_then(|()| fs::File::open(&blocker)).and_then(|dir| dir.set_modified(old));
+    assert!(placed.is_ok(), "stamp の位置に古い dir を置ける: {placed:?}");
+    let pane = fixture(&place.dir, "pane.txt", IDLE_PANE);
+
+    let (out, touched) = acct_tick_probed(&place, name, &pane);
+
+    let line = stderr_of(&out);
+    assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "stdout={}", stdout_of(&out));
+    for (key, want) in [("decision", "error"), ("reason", "restore-stamp-unwritable"), ("state", "idle"), ("event", "SessionStart")] {
+        assert_eq!(tick_token(&line, key).as_deref(), Some(want), "{key}: {line}");
+    }
+    assert!(tick_token(&line, "restore-stamp").is_some_and(|age| age != "none"), "back-off は読んだ: {line}");
+    assert!(!touched, "tmux に触れない＝1 key も送らない");
+    assert_eq!(restore_received(&place), 0, "席は復元を受けない");
+    drop(guard);
+    fs::remove_dir_all(&place.dir).ok();
+}
+
 /// 席を planner として口座 [`ACCT_SEAT`] と `--model <model>` で `seat register` の口で登録する（[`acct_register_as`] と同じ
 /// 打刻の前提・`model` は表示名か別名）。
 fn acct_register_with_model(place: &AcctPlace, target: &str, launch: &str, model: &str) -> Output {
