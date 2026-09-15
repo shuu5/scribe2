@@ -64,7 +64,7 @@
 - 注入（hook.rs）: 登録済みの target の SessionStart で生成文が出て権能の名がすべて含まれる・登録の無い target で 0 byte・雛形に pointer の無い行を置いた fixture で xtask check が落ちる（AC17）・行に在って文に無い権能を作った fixture で落ちる・生成文の外形 snapshot。
 - 極性一覧 snapshot に `Register`（(a)）と `Role`（(b)）の 2 行（件数 +2・N = K + M の pin）・doctor の項目 1 行（`--state-dir` 付きの外形 snapshot）。
 - property（`prop_role_`・in-file）: `Role` / `Capability` / `PathKind` の `as_str` ↔ parse が往復し、列に無い名は必ず Err。
-- **外形 snapshot と歯の file の置き場**（`s2-07l.327`）: seat の外形 snapshot は面ごとに 1 file（usage / rebrief の DATA / doctor の末尾＝`seat_usage_external_form` / `seat_rebrief_external_form` / `seat_doctor_external_form`・旧 `seat_external_form` は消す）、`tests/e2e/seat/` の歯の file は接頭辞（責務）ごとに 1 file（`account.rs` = `seat_account_` + `seat_tick_`・`launch.rs` = `seat_launch_` + `seat_restore_` + `seat_attrib_`・`register.rs` = `seat_register_` + `seat_role_` + `seat_state_`・`rules.rs` = `seat_rules_`）。共有 helper は `seat.rs` の `pub(super)` に置き複製しない。pipe が外形を面ごとに分けている形と同じ。
+- **外形 snapshot と歯の file の置き場**（`s2-07l.327`）: seat の外形 snapshot は面ごとに 1 file（usage / rebrief の DATA / doctor の末尾＝`seat_usage_external_form` / `seat_rebrief_external_form` / `seat_doctor_external_form`・旧 `seat_external_form` は消す）、`tests/e2e/seat/` の歯の file は接頭辞（責務）ごとに 1 file（module `account` = `seat_account_` + `seat_tick_`・module `launch` = `seat_launch_` + `seat_restore_` + `seat_attrib_`・module `register` = `seat_register_` + `seat_role_` + `seat_state_`・module `rules` = `seat_rules_`・分割は `s2-07l.361`・契約表の行 b）。共有 helper は `seat.rs` の `pub(super)` に置き複製しない。pipe が外形を面ごとに分けている形と同じ。
 
 ## 8. 憲法・制約との整合
 
