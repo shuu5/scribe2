@@ -1,7 +1,7 @@
 # 設計: 口座の生涯 — 口座の宣言は host の manifest が持ち、登録・一覧・退役・席の起動を器の口が担う（外の wrapper に頼らない）
 
-- 決定: [ADR-0026](../../design-intent/decisions/ADR-0026-account-lifecycle-host-manifest-and-seat-launch.html)（§2.1 host の manifest / §2.2 口座の口 / §2.3 席の起動 / §2.4 supersede）
-- 要件: SRS FR33（口座残量の計測・credential の場所）/ FR36（口座の選定）/ FR38（席の退避と立て直し）/ FR40（席の登録）/ AC13（別口座での立て直し）が正本。口座の登録・退役と席の起動そのものを名指す要件は SRS の次の改訂で足す（材料は planner の置き場・改訂は user の folio-architect）。改訂までは本設計の契約は上の id を指す。
+- 決定: [ADR-0026](../../design-intent/decisions/ADR-0026-account-lifecycle-host-manifest-and-seat-launch.html)（§2.1 host の manifest / §2.2 口座の口 / §2.3 席の起動 / §2.4 supersede）・[ADR-0028](../../design-intent/decisions/ADR-0028-consumer-sync-is-measured-and-updated-by-the-vessel.html) §2.5（役割なしの起動行・本 doc §4.5）
+- 要件: SRS FR33（口座残量の計測・credential の場所）/ FR36（口座の選定）/ FR38（席の退避と立て直し）/ FR40（席の登録）/ FR59（役割付きの起動）/ [FR60](../../design-intent/spec/srs.html#FR60)（役割なしの起動・§4.5）/ AC13（別口座での立て直し）/ [AC30](../../design-intent/spec/srs.html#AC30) が正本。口座の登録・退役そのものを名指す要件は SRS の次の改訂で足す（材料は planner の置き場・改訂は user の folio-architect）。改訂までは (a)〜(c) の契約は上の id を指す。
 - 土台: [fleet-usage.md](./fleet-usage.md) §2（口座の列挙と credential の場所・本設計が §2 を改める）・[account-autonomy.md](./account-autonomy.md) §3（選定）/ §5（立て直し・雛形の穴）/ §11（後続「席の起動と初回の口座選択」= 本設計）・[seat-roles.md](./seat-roles.md) §2（登録 row）・[rules-manifest.md](./rules-manifest.md) §5（実行時に読む manifest の場所・本設計が host の面を足す）
 - 語彙: `design-intent/vocabulary.yaml`（host の manifest・口座の登録・席の起動・起動行の導出）
 
@@ -47,6 +47,15 @@
 - **`seat register` の扱い**: 残す（hook の走った session が自分で登録する口・AC13 の実演と既存 row の更新に使う）。launch で立てた席は登録済みなので `seat register` を撃つ必要が無い。
 - **外の wrapper との関係**: 前の版の launcher が持つ cgroup の防壁は席には持ち込まない（席は shell の子で器の子ではない・立て直しと同じ・NFR6 の「器の子 process」に当たらない）。plugin の自動検出は `[[plugin]]` 行の宣言で置き換える（走査しない・C3）。
 
+## 4.5 役割なしの起動（ADR-0028 §2.5・SRS FR60 / AC30・`<NAME> account shell`・台帳 `s2-07l.268`）
+
+- **何を解くか**: 席の起動は §4 の `seat launch`（役割必須）だけで、役割を持たない素の対話 session（前の版の口座切替 wrapper `cla <label> [--resume <sid>]` 相当・不測の事態に planner / admin が立たないときの手動の入口）は器の外に在る。user 裁定 2026-09-14「役割なしにも対応しておいてほしい」。
+- **口**: `account shell <label> [--state-dir S] [--anchor DIR] [--resume SID] [--target S:W]`。label は必須（口座の選定は使わない・FR36 の外）。`--anchor` の既定は cwd の repo root（`seat launch` と同じ・env を読まない）。
+- **起動行の導出**: §4 の `derive_launch` と**同じ 1 関数**から、役割に依る 3 要素（役割・登録 row・権能）を除いた形。`CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CONFIG_DIR={account_dir} <claude> [--resume <sid>] --plugin-dir <anchor> [--plugin-dir <[[plugin]] dir>…] [<[[launch-arg]] value>…]`。`--resume <sid>` は同じ口座でその session を再開する行（sid が別口座の session かは器に判別できない＝断らない・混線の fence は §12 の後続のまま）。
+- **登録・権能**: `SeatRegistered` を書かない（役割が無いので権能も無い・role guard は `unregistered` で code の編集を止める＝素の session は repo の外と design-intent / docs/design も書けない・意図どおり）。`inject.jsonl` には `kind=launch` を 1 行（§4 と同じ variant・役割の有無は記録の `role=` の欄が `-`）。
+- **起動**: `--target` が在れば §4 (1)(2) と同じ経路（session が無ければ `session-missing`・window が無ければ作る・shell への注入の門）で穴を埋めた起動行を注入する。`--target` が無ければ stdout に起動行を 1 行出して自分では起動しない（`account add` の login 用の行と同じ形）。口座が宣言に無い・退役中・設定 dir が無い周は typed に断り key を 1 つも送らない（`account-unknown` / `account-retired` / `account-dir-missing`）。
+- **前の版の wrapper**: 本便の Landed 後に消費者側（wrapper の repo）で退役する（s2 の便ではない）。
+
 ## 5. 注入の門（共通・値を持たない）
 
 [account-autonomy.md](./account-autonomy.md) §5 の「shell への注入の門」をそのまま使う（前面 process が shell・prompt 末尾の閉じた列・特定できない周は送らない）。`account add --target` と `seat launch` と立て直しの 3 つが同じ関数を呼ぶ（新しい判定を足さない）。
@@ -61,7 +70,7 @@
 
 - `HostManifest`: `Absent`（縮退）/ `Unreadable`（FailClosed）/ 検査の error は manifest の `RuleError`（行番号付き）をそのまま使う。
 - `AccountError`（closed enum・`as_str`）: `exists` / `dir-exists` / `unknown` / `already-retired` / `not-retired` / `in-use` / `label-invalid` / `write-failed`。
-- `LaunchError`（closed enum・`as_str`）: `no-account` / `account-unknown` / `account-retired` / `session-missing` / `input-busy` / `input-unknown` / `register-failed`。
+- `LaunchError`（closed enum・`as_str`）: `no-account` / `account-unknown` / `account-retired` / `session-missing` / `input-busy` / `input-unknown` / `register-failed`。§4.5 の役割なしの起動は同じ enum に `account-dir-missing` を 1 つ足す（宣言順の末尾）。
 - すべて Result で呼び手に分岐を強いる（C11.3）。
 
 ## 8. 歯（`crates/<NAME>/tests/e2e/` に `rules_host_` / `account_` / `seat_launch_` 接頭辞・名前の列は現物が SSOT）
@@ -82,7 +91,9 @@ C1（rules 行の値は tracked の manifest のまま・host の面は宣言値
 - **(b) 席の起動**（M）: §4 / §5。write-set = `seat/cli.rs`（`launch` の flag と usage）・`seat/cycle.rs`（`derive_launch`・launch と relaunch の共通経路・`new-window`）・`seat/inject.rs`（`InjectKind::Launch`）・`fleet/mod.rs`（`Registration.sid: Option<String>`・literal 構築点・KINDS は不変）・`seat/role.rs`（sid の読み手）・`tests/e2e/seat.rs`・seat の外形 snapshot。依存: (a)。base で RED = `seat launch` の偽 tmux の歯 + `derive_launch` の in-file の歯（機能不在）。
 - **(c) 口座の口**（M）: §3。write-set = 新 module `account/`（`mod.rs` / `cli.rs`・歯は in-file `#[cfg(test)]` + `tests/e2e/account.rs` は足さない〔統合 test target の上限・`fleet.rs` に置く〕）・`main.rs`（dispatch と usage）・`fleet/mod.rs`（`EventKind::AccountRetired` / `AccountRestored`・replay の退役集合・`KINDS` +2）・`fleet/select.rs` / `fleet/usage.rs`（有効な口座の集合を読む）・`main.rs` の doctor の行（`retired=`）・`tests/e2e/fleet.rs`・外形 snapshot。依存: (a)・(b) と `fleet/mod.rs` で交差するので直列（(b) の後）。base で RED = `KINDS.len()` の pin を 15 にする歯 + `account add` の歯（機能不在）。
 
-順序の理由: (a) は `.220` の穴を塞ぐ土台で他の 2 便が読む。(b) が user 裁定 2026-09-14 の「席の起動を `.222` の後・`.208` run 5 の前」の便。(c) は (b) と `fleet/mod.rs` で交差するので後。
+- **(d) 役割なしの起動**（S・`s2-07l.268`・ADR-0028 §2.5）: §4.5。write-set = `account/cli.rs`（`shell` の flag と usage）・`account/mod.rs`（`login_line` の隣に役割なしの起動行の導出・`derive_launch` を呼ぶ側）・`seat/cycle.rs`（`derive_launch` の役割なしの形＝役割に依る 3 要素を外す引数・`LaunchError::AccountDirMissing`）・`seat/inject.rs`（`kind=launch` の記録の `role=` 欄）・`tests/e2e/fleet.rs`（`account_` の歯の置き場・現物の module）・`tests/e2e/seat.rs`（`derive_launch` の歯）・account / seat の外形 snapshot。依存: (c) Landed（済み）。base で RED = 偽 tmux + 偽 `claude` で `account shell` を撃つと登録 row 0 のまま起動行が 1 回だけ差し込まれる歯（機能不在・AC30 の 5 件 = 差し込み 1/1 + stdout 1/1 + resume 1/1 + 拒否 2/2）。
+
+順序の理由: (a) は `.220` の穴を塞ぐ土台で他の 2 便が読む。(b) が user 裁定 2026-09-14 の「席の起動を `.222` の後・`.208` run 5 の前」の便。(c) は (b) と `fleet/mod.rs` で交差するので後。(d) は (a)〜(c) の Landed 後で、`seat/cycle.rs` を触るので `.279`（tick の分割・cycle.rs は触らない）とは交差しないが `.307`（relaunch の口座）とは交差する＝直列。
 
 ## 11. 却下案（ADR-0026 §5 の写しは持たない・設計固有のもの）
 
