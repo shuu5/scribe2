@@ -94,11 +94,21 @@ schema = 1
 
 [[contract]]
 id = "a"
-title = "seat の外形 snapshot を usage / rebrief / doctor の 3 面に割り、e2e/seat/account.rs を接頭辞ごとの module に割る（純移動）"
+title = "seat の外形 snapshot を usage / rebrief / doctor の 3 面に割る（旧 snapshot は消し、他 doc の行の名指しを面ごとの file 名へ）"
 req = ["FR23", "FR59"]
 section = "7"
-write-set = ["crates/scribe2/tests/e2e/seat.rs", "crates/scribe2/tests/e2e/seat/account.rs", "+crates/scribe2/tests/e2e/seat/launch.rs", "+crates/scribe2/tests/e2e/seat/register.rs", "+crates/scribe2/tests/e2e/seat/rules.rs", "crates/scribe2/tests/e2e/snapshots/e2e__seat__seat_external_form.snap", "+crates/scribe2/tests/e2e/snapshots/e2e__seat__seat_usage_external_form.snap", "+crates/scribe2/tests/e2e/snapshots/e2e__seat__seat_rebrief_external_form.snap", "+crates/scribe2/tests/e2e/snapshots/e2e__seat__seat_doctor_external_form.snap", "docs/design/seat-roles.md", "docs/design/seat-autonomy.md", "docs/design/dispatcher.md", "docs/design/working-memory.md"]
+write-set = ["crates/scribe2/tests/e2e/seat.rs", "crates/scribe2/tests/e2e/snapshots/e2e__seat__seat_external_form.snap", "+crates/scribe2/tests/e2e/snapshots/e2e__seat__seat_usage_external_form.snap", "+crates/scribe2/tests/e2e/snapshots/e2e__seat__seat_rebrief_external_form.snap", "+crates/scribe2/tests/e2e/snapshots/e2e__seat__seat_doctor_external_form.snap", "docs/design/seat-roles.md", "docs/design/seat-autonomy.md", "docs/design/dispatcher.md", "docs/design/working-memory.md"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail seat_usage_external_form seat_rebrief_external_form seat_doctor_external_form"]
 size = "S"
-done = "seat の外形 snapshot が 3 file・account.rs が 2 群・歯の本数が不変・旧 snapshot は消えて未参照 0"
+done = "seat の外形 snapshot が 3 file・歯の本数は移動前 + 2・旧 snapshot は消えて未参照 0・他 doc の行が面ごとの file 名を名指す"
+
+[[contract]]
+id = "b"
+title = "e2e/seat/account.rs を接頭辞ごとの 3 module（launch / register / rules）に割る — 純移動・lens には move_proof の要約が渡る"
+req = ["FR23", "FR59"]
+section = "7"
+write-set = ["crates/scribe2/tests/e2e/seat.rs", "-crates/scribe2/tests/e2e/seat/account.rs", "+crates/scribe2/tests/e2e/seat/launch.rs", "+crates/scribe2/tests/e2e/seat/register.rs", "+crates/scribe2/tests/e2e/seat/rules.rs"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail seat_launch_ seat_register_ seat_rules_"]
+size = "S"
+done = "account.rs が seat_account_ と seat_tick_ だけになり、3 module に歯が移って本数と中身が不変、gate の lens 入力が diff でなく要約"
 <!-- contracts:end -->
