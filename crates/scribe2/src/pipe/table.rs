@@ -15,7 +15,7 @@
 //!    なので CI では撃たない（intake の側・[`super::cli`]）。
 
 use super::closure::{closure, surface_closure, unresolved_names, ClosureError, Source};
-use super::declaration::{self, read_write_set, Basis, Ceiling};
+use super::declaration::{self, read_write_set, Basis, Ceiling, NewFilePolicy};
 use super::refuse::{covered, Refuse};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_OK, RC_REFUSED};
 use crate::name::NAME;
@@ -676,7 +676,9 @@ fn verify_findings(row: &ContractRow, basis: &Basis<'_>) -> Vec<Finding> {
 }
 
 /// write-set の項目の 2 検査（base の tracked file だけで測る・§3「項目の実在と展開」）: 末尾 `/` 無しで tracked な
-/// dir を指す項目と、base に解けない項目（末尾 `/` 無しの dir として既に名指した項目は重ねて名指さない）。
+/// dir を指す項目と、base に解けない項目（末尾 `/` 無しの dir として既に名指した項目は重ねて名指さない）。契約表の
+/// 行は履歴を持つので、`+` の項目が tracked に在れば land 済みの実在 file と読む（[`NewFilePolicy::MayBeLanded`]・
+/// intake は在れば断る・`s2-07l.346`）。
 fn write_set_findings(row: &ContractRow, ctx: &Context<'_>) -> Vec<Finding> {
     let without_slash: Vec<&String> = row
         .write_set
@@ -687,7 +689,7 @@ fn write_set_findings(row: &ContractRow, ctx: &Context<'_>) -> Vec<Finding> {
         .iter()
         .map(|item| Finding { line: row.line, refuse: Refuse::WriteSetDirWithoutSlash { path: (*item).clone() } })
         .collect();
-    if let Err(items) = read_write_set(&row.write_set, ctx.tracked) {
+    if let Err(items) = read_write_set(&row.write_set, ctx.tracked, NewFilePolicy::MayBeLanded) {
         found.extend(
             items
                 .into_iter()

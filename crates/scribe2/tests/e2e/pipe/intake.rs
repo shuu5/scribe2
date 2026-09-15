@@ -1142,9 +1142,10 @@ fn contract_closure_ext_surfaces_name_the_snapshot_and_the_teeth_that_pin_it() {
     clean(&[&repo]);
 }
 
-/// (2) 項目の実在と dir の展開: 無い file・空の dir・base に在る file への `+` は `write-set-item-unresolved` で
-/// 1 項目 1 件（実在する file・配下を持つ dir・base に無い `+` は通る）。intake の交差は dir を base の file に
-/// 展開して数える＝`src/` の live な便と `+src/new.rs` の便は交差 0 で通り、`src/lib.rs` の便は交差で断られる。
+/// (2) 項目の実在と dir の展開: 無い file・空の dir は `write-set-item-unresolved` で 1 項目 1 件（実在する file・
+/// 配下を持つ dir・base に無い `+`・**base に在る file への `+`〔契約表の検査は land 済みの実在 file と読む・
+/// `s2-07l.346`〕** は通る）。intake の交差は dir を base の file に展開して数える＝`src/` の live な便と
+/// `+src/new.rs` の便は交差 0 で通り、`src/lib.rs` の便は交差で断られる。
 #[test]
 fn contract_closure_ext_dir_items_expand_and_unresolved_items_are_named() {
     let write_set = "[\"src/none.rs\", \"empty/\", \"+src/tint.rs\", \"src/tint.rs\", \"src/\", \"+src/new.rs\"]";
@@ -1154,13 +1155,13 @@ fn contract_closure_ext_dir_items_expand_and_unresolved_items_are_named() {
     let (text, found) = (stdout_of(&out), findings_of(&out));
     assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{text}{}", stderr_of(&out));
     let unresolved = findings_for(&found, &doc, "a", "write-set-item-unresolved");
-    let named: Vec<&str> = ["src/none.rs", "empty/", "+src/tint.rs"]
+    let named: Vec<&str> = ["src/none.rs", "empty/"]
         .into_iter()
         .filter(|item| unresolved.iter().any(|line| line.contains(&format!("write-set の {item} は"))))
         .collect();
-    assert_eq!(named.len(), 3, "解けない 3 項目を名指す: {text}");
-    assert_eq!(unresolved.len(), 3, "1 項目 1 件（解ける 3 項目は名指さない）: {text}");
-    assert_eq!(found.len(), 3, "他の理由は出ない: {text}");
+    assert_eq!(named.len(), 2, "解けない 2 項目を名指す: {text}");
+    assert_eq!(unresolved.len(), 2, "1 項目 1 件（解ける 4 項目は名指さない）: {text}");
+    assert_eq!(found.len(), 2, "他の理由は出ない: {text}");
     clean(&[&repo]);
 
     let (repo, state) = repo_with_state();
@@ -1425,6 +1426,70 @@ fn contract_closure_ext_real_table_has_zero_findings() {
     assert!(last.starts_with("contracts check: docs=") && last.ends_with(" findings=0"), "判定行: {last}");
     let rows: u64 = last.split_whitespace().find_map(|token| token.strip_prefix("rows=")?.parse().ok()).unwrap_or_default();
     assert!(rows >= 8, "母集団は現物の契約表の行（contract-source.md の 8 行以上・空の表で 0 件を名乗らない）: {last}");
+}
+
+// ─────── land 済みの `+`（設計 docs/design/contract-source.md §3・契約 (i)・`s2-07l.346`・接頭辞 `contract_table_landed_plus_`） ───────
+
+/// 行 `i` の write-set の項目（`+` 付きの新規 file の宣言・land すると base に実在する）。
+const LANDED_PLUS_ITEM: &str = "+crates/toy/src/new.rs";
+
+/// `+` の項目を 1 つ持つ行 `i` の契約表を載せた設計 doc。
+fn landed_plus_doc() -> String {
+    table_doc(&table_region(&[table_row("i", &[("write-set", &format!("[\"{LANDED_PLUS_ITEM}\"]"))])]))
+}
+
+/// 設計 pointer `docs/design/toy.md#i` と行と同じ write-set（`+` 付き）を持つ契約 file。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn landed_plus_contract(repo: &Path) -> PathBuf {
+    let lines: Vec<String> = contract_body()
+        .into_iter()
+        .filter(|line| !line.starts_with("design") && !line.starts_with("write-set"))
+        .chain(["design = \"docs/design/toy.md#i\"".to_owned(), format!("write-set = [\"{LANDED_PLUS_ITEM}\"]")])
+        .collect();
+    let path = repo.join("landed.toml");
+    fs::write(&path, format!("{}\n", lines.join("\n"))).expect("契約 file を書ける");
+    path
+}
+
+/// (a) 契約表の行が `+crates/toy/src/new.rs` を持ち、その file を commit した base（land 後の main の形）で `contracts check`
+/// を撃つと findings 0・rc 0（base は `write-set-item-unresolved` 1 件 → RED）。対: 同じ行で file がまだ無い base も 0
+/// （新規 file の宣言として解ける＝land の前後で行の字面を変えずに緑）。
+#[test]
+fn contract_table_landed_plus_item_resolves_as_file() {
+    let landed = table_repo(&landed_plus_doc(), &[("crates/toy/src/new.rs", "pub fn landed() {}\n")]);
+    let out = contracts_check(&landed);
+    let text = stdout_of(&out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "land 済みの + は実在 file と読む: {text}{}", stderr_of(&out));
+    assert!(!text.contains("write-set-item-unresolved"), "解けない項目として名指さない: {text}");
+    assert_eq!(text.trim_end(), "contracts check: docs=1 rows=1 findings=0", "判定行: {text}");
+    let fresh = table_repo(&landed_plus_doc(), &[]);
+    let out = contracts_check(&fresh);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "land 前の + は新規 file として解ける: {}", stdout_of(&out));
+    assert_eq!(stdout_of(&out).trim_end(), "contracts check: docs=1 rows=1 findings=0");
+    clean(&[&landed, &fresh]);
+}
+
+/// (b) 同じ契約（行 `i` を指し `+crates/toy/src/new.rs` を write-set に持つ）を、その file が base に在る repo の intake に
+/// 出すと `write-set-item-unresolved` で項目の字面（`+` 込み）を名指して断り、run dir も event も作らない（intake は
+/// `MustBeAbsent`・契約表の検査を緩めても入口は緩まない＝退行の pin）。対: file の無い base では通る。
+#[test]
+fn contract_table_landed_plus_intake_still_refuses() {
+    let (landed, state) = derive_repo_with(&landed_plus_doc(), &[("crates/toy/src/new.rs", "pub fn landed() {}\n")]);
+    let out = intake_raw(&landed, &state, &landed_plus_contract(&landed), "s2-landed");
+    let err = stderr_of(&out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "base に在る file への + は受付で断る: {err}");
+    assert!(err.contains(&format!("write-set の {LANDED_PLUS_ITEM} は base に解けない")), "項目の字面（+ 込み）を名指す: {err}");
+    assert_eq!(event_count(&state), 0, "断った周は event を書かない");
+    assert!(!state.join("pipe").exists(), "run dir も作らない");
+    clean(&[&landed, &state]);
+    let (fresh, state) = derive_repo(&landed_plus_doc());
+    let out = intake_raw(&fresh, &state, &landed_plus_contract(&fresh), "s2-fresh");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "base に無い file への + は通る: {}", stderr_of(&out));
+    stop_run_ok(&state, &run_id_of(&out));
+    clean(&[&fresh, &state]);
 }
 
 // ─────── write-set の導出（設計 docs/design/contract-source.md §3「write-set の導出」・契約 (h)・`s2-07l.311`・接頭辞 `contract_derive_`） ───────

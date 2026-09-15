@@ -502,15 +502,31 @@ pub enum WriteSetItem {
     Shrink(String),
 }
 
+/// `+` の項目（新規 file の**宣言**）を base（tracked の**実測**）に対して読む場面（設計 contract-source.md §3・C10）。
+/// 場面の違いはこの閉じた型の値 1 つで渡し、読む関数は [`read_write_set`] の 1 本（C2）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NewFilePolicy {
+    /// 受付（intake）: base に在れば解けない＝planner の `+` の誤りは入口で止まる（FR39）。
+    MustBeAbsent,
+    /// 契約表の検査（`contracts check`・land 後の main）: tracked に在れば land 済みの実在 file（[`WriteSetItem::File`]）
+    /// と読む（契約表の行は履歴を持つ＝land のたびに `+` が解けなくなる罠を塞ぐ・`s2-07l.346`）。
+    MayBeLanded,
+}
+
 /// write-set の各項目を base に対して読む。**解けない項目は全件**（1 件目で止めない）。
 ///
 /// 解ける形は 4 つだけ: base に実在する file / 末尾 `/` で base に配下の file を持つ dir / `+` 接頭辞で base に**無い**
 /// 新規 file / `-` 接頭辞で base に**在る**縮む file。それ以外（無い file・空の dir・base に在る file への `+`・base に
-/// 無い file への `-`）は `Err` に項目の字面で積む。
-pub fn read_write_set(write_set: &[String], tracked: &[String]) -> Result<Vec<WriteSetItem>, Vec<String>> {
+/// 無い file への `-`）は `Err` に項目の字面で積む。base に在る file への `+` だけは `policy` で読みが変わる
+/// （[`NewFilePolicy::MayBeLanded`] は [`WriteSetItem::File`] に解く）。
+pub fn read_write_set(
+    write_set: &[String],
+    tracked: &[String],
+    policy: NewFilePolicy,
+) -> Result<Vec<WriteSetItem>, Vec<String>> {
     let (mut items, mut unresolved) = (Vec::new(), Vec::new());
     for item in write_set {
-        match read_item(item, tracked) {
+        match read_item(item, tracked, policy) {
             Some(found) => items.push(found),
             None => unresolved.push(item.clone()),
         }
@@ -523,14 +539,20 @@ pub fn read_write_set(write_set: &[String], tracked: &[String]) -> Result<Vec<Wr
 }
 
 /// 1 項目を読む（解けなければ `None`）。
-fn read_item(item: &str, tracked: &[String]) -> Option<WriteSetItem> {
+fn read_item(item: &str, tracked: &[String], policy: NewFilePolicy) -> Option<WriteSetItem> {
     if let Some(dir) = item.strip_suffix('/') {
         let under: Vec<String> = tracked.iter().filter(|path| is_under(path, dir)).cloned().collect();
         return (!under.is_empty()).then_some(WriteSetItem::Dir(under));
     }
     if let Some(new) = item.strip_prefix(super::refuse::NEW_FILE) {
-        let absent = !new.is_empty() && !tracked.iter().any(|path| path == new);
-        return absent.then(|| WriteSetItem::New(new.to_owned()));
+        if new.is_empty() {
+            return None;
+        }
+        return match (tracked.iter().any(|path| path == new), policy) {
+            (false, _) => Some(WriteSetItem::New(new.to_owned())),
+            (true, NewFilePolicy::MayBeLanded) => Some(WriteSetItem::File(new.to_owned())),
+            (true, NewFilePolicy::MustBeAbsent) => None,
+        };
     }
     if let Some(old) = item.strip_prefix(super::refuse::SHRINK_FILE) {
         let present = !old.is_empty() && tracked.iter().any(|path| path == old);
@@ -798,7 +820,8 @@ fn list_of(
 mod tests {
     use super::{
         headroom_shortfalls, line_count, read_write_set, unfit, Basis, Caps, Ceiling, Declared, Effective, Headroom,
-        Holes, Sourced, Unfit, WriteSetItem, BASE_HOLES, BASE_HOLE, CEILING_ROW, CORE, DECL_FILE, DENIED_ROW, JOBS_HOLE,
+        Holes, NewFilePolicy, Sourced, Unfit, WriteSetItem, BASE_HOLES, BASE_HOLE, CEILING_ROW, CORE, DECL_FILE,
+        DENIED_ROW, JOBS_HOLE,
     };
     use crate::order::is_declaration_order;
 
@@ -830,6 +853,7 @@ mod tests {
         let read = read_write_set(
             &strings(&["crates/toy/src/a.rs", "snap/", "+crates/toy/src/new.rs", "-crates/toy/src/b.rs"]),
             &base(),
+            NewFilePolicy::MustBeAbsent,
         );
         assert_eq!(
             read,
@@ -853,12 +877,35 @@ mod tests {
                 "docs/d.md",
             ]),
             &base(),
+            NewFilePolicy::MustBeAbsent,
         );
         assert_eq!(
             unresolved,
             Err(strings(&["crates/toy/src/none.rs", "empty/", "+crates/toy/src/a.rs", "+", "snap", "-crates/toy/src/none.rs", "-"])),
             "無い file・空の dir・base に在る file への +・空の +・base に無い file への -・空の - は解けない（末尾 / 無しの dir も file としては無い）"
         );
+    }
+
+    /// `+` の 2 場面（`s2-07l.346`・設計 contract-source.md §3）の表: tracked / untracked × [`NewFilePolicy`] の 4 組。
+    /// 違うのは「tracked な `+`」の 1 組だけ（`MustBeAbsent` は解けない・`MayBeLanded` は実在 file に解く）。untracked な
+    /// `+` はどちらも `New`・空の `+` はどちらも解けない・`+` の無い項目は policy を見ない。
+    #[test]
+    fn declaration_write_set_landed_plus_resolves_as_file_only_when_the_policy_allows_it() {
+        let (landed, fresh) = ("+crates/toy/src/a.rs", "+crates/toy/src/new.rs");
+        let table = [
+            (NewFilePolicy::MustBeAbsent, landed, Err(strings(&[landed]))),
+            (NewFilePolicy::MayBeLanded, landed, Ok(vec![WriteSetItem::File("crates/toy/src/a.rs".to_owned())])),
+            (NewFilePolicy::MustBeAbsent, fresh, Ok(vec![WriteSetItem::New("crates/toy/src/new.rs".to_owned())])),
+            (NewFilePolicy::MayBeLanded, fresh, Ok(vec![WriteSetItem::New("crates/toy/src/new.rs".to_owned())])),
+        ];
+        for (policy, item, want) in table {
+            assert_eq!(read_write_set(&strings(&[item]), &base(), policy), want, "{policy:?} × {item}");
+        }
+        for policy in [NewFilePolicy::MustBeAbsent, NewFilePolicy::MayBeLanded] {
+            assert_eq!(read_write_set(&strings(&["+"]), &base(), policy), Err(strings(&["+"])), "空の + は {policy:?} でも解けない");
+            let plain = read_write_set(&strings(&["crates/toy/src/none.rs", "-crates/toy/src/a.rs"]), &base(), policy);
+            assert_eq!(plain, Err(strings(&["crates/toy/src/none.rs"])), "+ の無い項目は {policy:?} を見ない");
+        }
     }
 
     /// 上限の余地: write-set の `.rs` ごとに `file_lines − 行数` を余地とし、size の見積が超える file を名指す。core
@@ -871,7 +918,8 @@ mod tests {
             ("crates/other/src/z.rs".to_owned(), 5_000),
             ("crates/toy/tests/t.rs".to_owned(), 900),
         ];
-        let items = read_write_set(&strings(&["crates/toy/src/a.rs", "snap/", "+crates/toy/src/new.rs"]), &base())
+        let policy = NewFilePolicy::MustBeAbsent;
+        let items = read_write_set(&strings(&["crates/toy/src/a.rs", "snap/", "+crates/toy/src/new.rs"]), &base(), policy)
             .unwrap_or_default();
         let caps = |size_lines: u64, core_lines: u64| Caps { file_lines: 1_500, core_lines, size_lines };
         assert_eq!(
@@ -886,10 +934,11 @@ mod tests {
             vec![Headroom { file: CORE.to_owned(), headroom: 100 }],
             "core の余地は crates/<c>/src/ の合計で 1 回"
         );
-        let only_b = read_write_set(&strings(&["crates/toy/src/b.rs", "docs/d.md"]), &base()).unwrap_or_default();
+        let only_b = read_write_set(&strings(&["crates/toy/src/b.rs", "docs/d.md"]), &base(), policy).unwrap_or_default();
         assert!(headroom_shortfalls(&only_b, &lines, caps(300, 40_000)).is_empty(), "余地の無い file を持たない行は通る");
         // 縮む面（`-`）: 満杯の a.rs を減らす便は file の余地を求めず、core の見積の本数にも数えない（新規 1 本だけ）。
-        let shrink = read_write_set(&strings(&["-crates/toy/src/a.rs", "+crates/toy/src/new.rs"]), &base()).unwrap_or_default();
+        let shrink =
+            read_write_set(&strings(&["-crates/toy/src/a.rs", "+crates/toy/src/new.rs"]), &base(), policy).unwrap_or_default();
         assert!(headroom_shortfalls(&shrink, &lines, caps(300, 40_000)).is_empty(), "- の a.rs は余地 100 でも M を通す");
         assert!(headroom_shortfalls(&shrink, &lines, caps(100, 1_600)).is_empty(), "core の見積は 100 × 1 本 = 100 ≤ 余地 100");
         assert_eq!(

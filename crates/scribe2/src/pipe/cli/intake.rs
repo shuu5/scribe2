@@ -17,8 +17,8 @@ use crate::fleet::{self, EventKind, Stage};
 use crate::name::NAME;
 use crate::pipe::closure::{self, ClosureError, Source};
 use crate::pipe::contract::Contract;
-use crate::pipe::declaration::{self, Ceiling, Effective, CEILING_ROW, DENIED_ROW};
-use crate::pipe::refuse::{overlaps, Refuse, SHRINK_FILE};
+use crate::pipe::declaration::{self, Ceiling, Effective, NewFilePolicy, CEILING_ROW, DENIED_ROW};
+use crate::pipe::refuse::{overlaps, Refuse, NEW_FILE, SHRINK_FILE};
 use crate::pipe::table::{self, ContractRow, TableError};
 use crate::pipe::{contract_path, current, emit, run_dir, run_id, vessel_path, Emit};
 use crate::rules::manifest::Manifest;
@@ -292,23 +292,26 @@ fn exclude_overlap(state_dir: &Path, contract: &Contract, tracked: &[String]) ->
 ///
 /// dir 項目は base の配下に展開し、`+` の新規 file は 0 行として数え、`-` の縮む面は余地も本数も数えない
 /// （弁別は [`declaration::headroom_shortfalls`] の中）。base に無い項目は数えない（項目の実在は契約表の行の検査
-/// 〔`contracts check` / 設計 pointer の intake〕が名指す）——ただし **`-` の先が base に無い項目は受付で断る**
-/// （`write-set-item-unresolved`）: 落として測ると「余地を求めない」宣言が静かに消え、無い file を減らす便が通る。
+/// 〔`contracts check` / 設計 pointer の intake〕が名指す）——ただし **接頭辞付きで解けない項目は受付で断る**
+/// （`write-set-item-unresolved`）: `-` の先が base に無い項目を落として測ると「余地を求めない」宣言が静かに消え、
+/// 無い file を減らす便が通る。`+` の先が base に在る項目（[`NewFilePolicy::MustBeAbsent`]）も同じ＝契約表の検査は
+/// land 済みの `+` を実在 file と読む（`MayBeLanded`・`s2-07l.346`）ので、入口で止めないと満杯の file を `+` で
+/// 書いた便が余地を測られずに通る。
 fn exclude_cap_shortfall(manifest: &Manifest, contract: &Contract, tracked: &[String], sources: &[Source]) -> Result<(), Outcome> {
     let caps = declaration::Caps {
         file_lines: int_row(manifest, ROW_FILE_LINES).map_err(broken)?,
         core_lines: int_row(manifest, ROW_CORE_LINES).map_err(broken)?,
         size_lines: int_row(manifest, size_row(&contract.size).map_err(refused)?).map_err(broken)?,
     };
-    let items = match declaration::read_write_set(&contract.write_set, tracked) {
+    let items = match declaration::read_write_set(&contract.write_set, tracked, NewFilePolicy::MustBeAbsent) {
         Ok(found) => found,
         Err(unresolved) => {
-            if let Some(item) = unresolved.iter().find(|item| item.starts_with(SHRINK_FILE)) {
+            if let Some(item) = unresolved.iter().find(|item| item.starts_with([NEW_FILE, SHRINK_FILE])) {
                 return Err(refuse(&Refuse::WriteSetItemUnresolved { item: item.clone() }, &[]));
             }
             let resolvable: Vec<String> =
                 contract.write_set.iter().filter(|item| !unresolved.contains(item)).cloned().collect();
-            declaration::read_write_set(&resolvable, tracked).unwrap_or_default()
+            declaration::read_write_set(&resolvable, tracked, NewFilePolicy::MustBeAbsent).unwrap_or_default()
         }
     };
     // 行数は幅で正規化して数える（1 行に詰め込んでも余地は増えない・rules-manifest.md §4）。
