@@ -1099,7 +1099,7 @@ fn rules_cli_rules_flag_overrides_embedded() {
     let embedded = vessel::rules::cli::dispatch(&["get".to_owned(), "gate.token_cap".to_owned()]);
     assert_eq!(
         embedded.out,
-        vec!["1000000".to_owned()],
+        vec!["150000".to_owned()],
         "override は埋め込みを書き換えない"
     );
     std::fs::remove_dir_all(&dir).ok();
@@ -1431,7 +1431,7 @@ fn rules_manifest_carries_seat_signal_backoff() {
 fn rules_row_readers_return_the_value_or_one_of_three_reasons() {
     let manifest = Manifest::embedded().expect("埋め込み manifest を読める");
     assert_eq!(str_row(&manifest, "runner.model"), Ok("opus"), "文字列の行の読み手");
-    assert_eq!(int_row(&manifest, "gate.token_cap"), Ok(1_000_000), "整数の行の読み手");
+    assert_eq!(int_row(&manifest, "gate.token_cap"), Ok(150_000), "整数の行の読み手");
     assert_eq!(str_row(&manifest, "gate.token_cap"), Err("gate.token_cap が文字列でない".to_owned()), "整数の行");
     assert_eq!(int_row(&manifest, "runner.model"), Err("runner.model が整数でない".to_owned()), "文字列の行");
     assert_eq!(str_row(&manifest, "nope"), Err("nope が無い".to_owned()), "無い行");

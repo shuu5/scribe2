@@ -154,9 +154,9 @@ ruled_at = "2026-09-07"
 [[rule]]
 id = "gate.token_cap"
 kind = "GateTokenCap"
-value = 1000000
+value = 150000
 enabled = true
-ruling = "user 2026-09-14T12:3xZ pure-move split cap (temporary; revert = s2-07l.267)"
+ruling = "user 2026-09-14T20:35Z restore cap after pure-move proof (s2-07l.266; raise = s2-07l.265)"
 ruled_at = "2026-09-14"
 
 [[rule]]
