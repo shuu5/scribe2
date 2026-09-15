@@ -13,6 +13,7 @@ src/lib.rs -> src/beta.rs: items=1 lines=3
 src/alpha.rs fn two: private -> pub(super)
 src/beta.rs fn three: private -> pub(super)
 src/lib.rs fn one: private -> pub(crate)
+## コメント行の差（名: 行数）
 ## 残差分（逐語）
 src/alpha.rs
 +//! alpha.

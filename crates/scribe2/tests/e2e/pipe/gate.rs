@@ -2547,3 +2547,51 @@ fn pipe_gate_move_summary_external_form() {
     settings.bind(|| insta::assert_snapshot!(form));
     clean(&[&repo, &state]);
 }
+
+// ---- item の中のコメント行（`s2-07l.294`・.286 = module を跨ぐ移動の doc link 書き換えが本文差と読まれた型）----
+
+/// `two` の doc に intra-doc link を持つ形（`from` の path を `to` へ書き換える）。
+fn linked(text: &str, path: &str) -> String {
+    let linked = text.replace("/// helper two.\n", &format!("/// helper two (see [`{path}`]).\n"));
+    assert_ne!(linked, text, "fixture は two の doc を持つ");
+    linked
+}
+
+/// (viii) 移した item の doc コメントの link path だけを書き換えた便（`[`super::one`]` → `[`crate::one`]`）は
+/// 純移動: 判定行 `lens-input=summary`・要約に「コメント行の差」の節（該当 item の名と行数だけ）・コメントの
+/// 字面は要約に載らない・他の面（移動・可視性・stderr）は (i) と同じ。
+#[test]
+fn pipe_gate_move_proof_comment_only_diff_inside_items_sends_summary() {
+    let (base, alpha) = (linked(MOVE_BASE_LIB, "super::one"), linked(MOVE_HEAD_ALPHA, "crate::one"));
+    let (repo, state, id) = move_run(&[("lib.rs", &base)], &[("lib.rs", MOVE_HEAD_LIB), ("alpha.rs", &alpha), ("beta.rs", MOVE_HEAD_BETA)]);
+    let seen = state.join("lens-stdin");
+    let out = gate_once(&repo, &state, &id, Some(&recording_lens(&seen)));
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "PASS: {}", stderr_of(&out));
+    let line = stdout_of(&out);
+    assert_eq!(token_of(&line, "lens-input="), "summary", "判定行: {line}");
+    let kept = fs::read_to_string(lens_input_path(&state, &id)).expect("lens-input.txt が在る");
+    assert_eq!(fs::read_to_string(&seen).unwrap_or_default(), kept, "lens が読んだ stdin は残した本文そのもの");
+    assert!(kept.contains("\n## コメント行の差（名: 行数）\nsrc/alpha.rs fn two: 1\n## 残差分（逐語）\n"), "該当 item の名と行数だけ: {kept}");
+    assert!(!kept.contains("helper two") && !kept.contains("[`"), "コメントの字面は要約に載らない: {kept}");
+    assert_eq!(stderr_of(&out), "", "純移動の周は理由の行を出さない");
+    assert_summary_moves(&kept);
+    assert_summary_residual(&kept);
+    clean(&[&repo, &state]);
+}
+
+/// (ix) 移した item の中に `// flip-check: retroactive` の札を足した便は diff（`foreign-marker`）＝コメント行の除外が
+/// 札まで緩めていない対（(v) の札は残差分・本 fixture の札は fn の本文の中）。
+#[test]
+fn pipe_gate_move_proof_comment_marker_inside_item_sends_diff() {
+    let marked = MOVE_HEAD_ALPHA.replace("    2\n", "    // flip-check: retroactive s2-07l.294\n    2\n");
+    assert_ne!(marked, MOVE_HEAD_ALPHA, "fixture は item の中に retroactive の札を持つ");
+    assert_sends_diff(&[("lib.rs", MOVE_HEAD_LIB), ("alpha.rs", &marked), ("beta.rs", MOVE_HEAD_BETA)], "foreign-marker");
+}
+
+/// (x) コメント行の書き換え + 本文 1 行の書き換えは diff（`items-differ`）＝除外はコメント行だけに閉じる。
+#[test]
+fn pipe_gate_move_proof_comment_and_body_change_sends_diff() {
+    let changed = linked(MOVE_HEAD_ALPHA, "crate::one").replace("    2\n", "    3\n");
+    assert!(changed.contains("    3\n"), "fixture は本文も 1 行違う");
+    assert_sends_diff(&[("lib.rs", MOVE_HEAD_LIB), ("alpha.rs", &changed), ("beta.rs", MOVE_HEAD_BETA)], "items-differ");
+}

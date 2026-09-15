@@ -414,10 +414,12 @@ struct Item {
     name: String,
     /// 可視性の prefix（無ければ空）。
     visibility: String,
-    /// 正規化した本文の hash（可視性を剥がし・行頭の indent を落とし・末尾の空行を除く）。
+    /// 正規化した本文の hash（可視性を剥がし・行頭の indent を落とし・コメント行を除き・末尾の空行を除く）。
     hash: u64,
     /// 行の区間（1 始まり・両端含む）。
     lines: (usize, usize),
+    /// hash から除いたコメント行（indent を落とした字面・区間の順・要約の「コメント行の差」の元）。
+    comments: Vec<String>,
 }
 
 /// file に置かれた item。
@@ -502,11 +504,22 @@ fn item_end(lines: &[&str], decl_index: usize, decl: &Declaration) -> usize {
     end
 }
 
-/// 区間から item を組む（本文の正規化 = 宣言行の可視性の剥がし + 行頭の indent の除去）。
+/// 区間から item を組む（本文の正規化 = 宣言行の可視性の剥がし + 行頭の indent の除去 + コメント行の除外）。
+///
+/// コメント行（`//` / `///` / `//!`・indent の後）は挙動を持たないので hash に入れず [`Item::comments`] へ写す
+/// （module を跨ぐ移動で常に要る doc の intra-doc link の path 書き換えを本文差と読まない・`s2-07l.294`）。
+/// 札（`// flip-check:`）の行もここでは hash に入れず、[`residual_lines`] が item の中の札を残差と同じ規則で
+/// 検査する（札を先に hash へ入れると `ItemsDiffer` が `ForeignMarker` を隠す）。文字列 literal の行（`"// …"`）は
+/// `"` で始まるので本文。
 fn build_item(lines: &[&str], span: (usize, usize), decl_index: usize, decl: &Declaration) -> Item {
     let mut hasher = DefaultHasher::new();
+    let mut comments = Vec::new();
     for (offset, line) in lines.iter().enumerate().take(span.1.saturating_add(1)).skip(span.0) {
         let shown = if offset == decl_index { decl.stripped.as_str() } else { line.trim_start() };
+        if offset != decl_index && shown.starts_with("//") {
+            comments.push(shown.to_owned());
+            continue;
+        }
         shown.hash(&mut hasher);
         '\n'.hash(&mut hasher);
     }
@@ -515,7 +528,14 @@ fn build_item(lines: &[&str], span: (usize, usize), decl_index: usize, decl: &De
         visibility: decl.visibility.clone(),
         hash: hasher.finish(),
         lines: (span.0.saturating_add(1), span.1.saturating_add(1)),
+        comments,
     }
+}
+
+/// 除いたコメント行の差（位置ごとに違う行数 + 行数の差・0 なら差なし）。
+fn comment_diff(base: &[String], head: &[String]) -> usize {
+    let differ = base.iter().zip(head).filter(|(old, new)| old != new).count();
+    differ.saturating_add(base.len().abs_diff(head.len()))
 }
 
 /// `use` の宣言のうち複数行に渡る区間（列 0 の `use …{` から `;` で終わる行まで・1 始まり・両端含む）。
@@ -575,6 +595,17 @@ struct Visibility {
     after: String,
 }
 
+/// コメント行の差を持つ item（hash から除いた行の差・0 の item は持たない）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CommentDiff {
+    /// HEAD 側の file。
+    file: String,
+    /// 名。
+    name: String,
+    /// 違う行数。
+    lines: usize,
+}
+
 /// 多重集合の照合の結果。
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Matched {
@@ -582,6 +613,8 @@ struct Matched {
     moves: Vec<Move>,
     /// 可視性の変化（HEAD の file・行の順）。
     visibility: Vec<Visibility>,
+    /// コメント行の差（HEAD の file・行の順）。
+    comments: Vec<CommentDiff>,
     /// 動いた item の本数。
     moved: usize,
 }
@@ -618,10 +651,11 @@ fn pair_items(base: &[Located], head: &[Located]) -> Result<Matched, NotPure> {
     Ok(matched_of(&pairs, base, head))
 }
 
-/// 対の列から移動と可視性の変化を集める。
+/// 対の列から移動と可視性の変化とコメント行の差を集める。
 fn matched_of(pairs: &[(usize, usize)], base: &[Located], head: &[Located]) -> Matched {
     let mut moves: Vec<Move> = Vec::new();
     let mut visibility = Vec::new();
+    let mut comments = Vec::new();
     let mut moved: usize = 0;
     for (old, new) in pairs {
         let (Some(from), Some(to)) = (base.get(*old), head.get(*new)) else { continue };
@@ -632,6 +666,10 @@ fn matched_of(pairs: &[(usize, usize)], base: &[Located], head: &[Located]) -> M
                 before: from.item.visibility.clone(),
                 after: to.item.visibility.clone(),
             });
+        }
+        let differ = comment_diff(&from.item.comments, &to.item.comments);
+        if differ > 0 {
+            comments.push(CommentDiff { file: to.file.clone(), name: to.item.name.clone(), lines: differ });
         }
         if from.file == to.file {
             continue;
@@ -646,7 +684,7 @@ fn matched_of(pairs: &[(usize, usize)], base: &[Located], head: &[Located]) -> M
             None => moves.push(Move { from: from.file.clone(), to: to.file.clone(), names: vec![to.item.name.clone()], lines }),
         }
     }
-    Matched { moves, visibility, moved }
+    Matched { moves, visibility, comments, moved }
 }
 
 /// 残差分（どの item の区間にも入らない diff 行）を file ごとに集め、許されない行が在れば理由を返す。
@@ -665,6 +703,12 @@ fn residual_lines(
             let in_use = spans.get(&(side, path.clone())).map(Vec::as_slice).unwrap_or_default();
             for (number, text) in changed {
                 if items.iter().any(|found| found.file == *path && covers(found.item.lines, *number)) {
+                    // item の中の行は hash が照合済み。札だけは残差と同じ規則で検査する（コメント行の除外が
+                    // `retroactive` を item の中に隠さない・indent の後の字面で見る）。
+                    let shown = text.trim_start();
+                    if shown.starts_with(FLIP_MARK) {
+                        marker_allowed(shown)?;
+                    }
                     continue;
                 }
                 residual_allowed(text, in_use.iter().any(|span| covers(*span, *number)))?;
@@ -690,14 +734,18 @@ fn residual_allowed(text: &str, in_use_span: bool) -> Result<(), NotPure> {
         return Ok(());
     }
     if text.starts_with(FLIP_MARK) {
-        return text
-            .strip_prefix(MOVED_MARK)
-            .is_some_and(|id| !id.trim().is_empty())
-            .then_some(())
-            .ok_or(NotPure::ForeignMarker);
+        return marker_allowed(text);
     }
     let declaration = is_use_head(text) || is_mod_declaration(text) || text.starts_with("#[path") || text == "#[cfg(test)]";
     (text.starts_with("//") || declaration).then_some(()).ok_or(NotPure::ResidualLine)
+}
+
+/// 札の 1 行（`// flip-check:` で始まる）が許される形か: `moved <id>` だけ・他は `ForeignMarker`。
+fn marker_allowed(text: &str) -> Result<(), NotPure> {
+    text.strip_prefix(MOVED_MARK)
+        .is_some_and(|id| !id.trim().is_empty())
+        .then_some(())
+        .ok_or(NotPure::ForeignMarker)
 }
 
 // ───────── 要約 ─────────
@@ -727,6 +775,10 @@ fn render(matched: &Matched, residual: &[(String, Vec<String>)], total: usize) -
             shown_visibility(&found.before),
             shown_visibility(&found.after)
         ));
+    }
+    lines.push("## コメント行の差（名: 行数）".to_owned());
+    for found in &matched.comments {
+        lines.push(format!("{} {}: {}", found.file, found.name, found.lines));
     }
     lines.push("## 残差分（逐語）".to_owned());
     for (file, changed) in residual {
@@ -819,6 +871,8 @@ mod tests {
     }
 
     /// indent の正規化と可視性: 同じ本文を字下げ・可視性だけ変えても hash は同じで、本文が 1 字違えば異なる。
+    /// コメント行（doc・行内）の差は hash を動かさず [`super::Item::comments`] に写り、`//` で始まる文字列 literal
+    /// の行（`"// …"`）は本文＝動かす。
     #[test]
     fn move_proof_hash_ignores_indent_and_visibility_but_not_the_body() {
         let plain = items_of("fn a() {\n    1\n}\n");
@@ -829,6 +883,36 @@ mod tests {
         assert_eq!(hash(&plain), hash(&shifted), "indent と可視性は hash に入らない");
         assert_ne!(hash(&plain), hash(&changed), "本文の差は hash に出る");
         assert_eq!(shifted.first().map(|item| item.visibility.as_str()), Some("pub(super)"));
+        let commented = items_of("/// see [`super::a`]\nfn a() {\n    // note\n    1\n}\n");
+        assert_eq!(hash(&plain), hash(&commented), "コメント行の差は hash を動かさない");
+        assert_eq!(commented.first().map(|item| item.comments.clone()), Some(vec!["/// see [`super::a`]".to_owned(), "// note".to_owned()]));
+        let quoted = items_of("fn a() {\n    \"// x\"\n}\n");
+        assert_ne!(hash(&quoted), hash(&items_of("fn a() {\n    \"// y\"\n}\n")), "文字列 literal の `//` は本文");
+        assert!(quoted.first().is_some_and(|item| item.comments.is_empty()), "literal はコメント行に数えない");
+    }
+
+    /// item の中のコメント行: doc の link path の書き換えだけの便は純移動で要約に「コメント行の差」（該当 item の
+    /// 名と行数だけ）・item の中の札は残差と同じ規則（`moved` は許し `retroactive` は `ForeignMarker`）。
+    #[test]
+    fn move_proof_comment_diff_inside_items_is_counted_and_markers_inside_items_are_checked() {
+        let base_lib = "//! lib\n\n/// see [`super::a`]\nfn b() {\n    2\n}\n\nfn c() {\n    3\n}\n";
+        let head_lib = "//! lib\n\nmod m;\n\nfn c() {\n    3\n}\n";
+        let head_m = "/// see [`crate::a`]\npub(super) fn b() {\n    2\n}\n";
+        let read = |m: &str| -> (String, [(Side, &'static str, String); 3]) {
+            let diff = format!("{}{}", hunk("src/lib.rs", Some(base_lib), head_lib), hunk("src/m.rs", None, m));
+            (diff, [(Side::Base, "src/lib.rs", base_lib.to_owned()), (Side::Head, "src/lib.rs", head_lib.to_owned()), (Side::Head, "src/m.rs", m.to_owned())])
+        };
+        let (diff, files) = read(head_m);
+        let shown: Vec<(Side, &str, &str)> = files.iter().map(|(side, path, text)| (*side, *path, text.as_str())).collect();
+        let LensInput::Summary(summary) = judge(&diff, &table(&shown)) else {
+            panic!("doc の link だけの差は純移動");
+        };
+        assert!(summary.text().contains("\n## コメント行の差（名: 行数）\nsrc/m.rs fn b: 1\n## 残差分"), "{}", summary.text());
+        for (marker, want) in [("moved s2-07l.294", Ok(1)), ("retroactive s2-07l.294", Err(NotPure::ForeignMarker))] {
+            let (diff, files) = read(&head_m.replace("    2\n", &format!("    // flip-check: {marker}\n    2\n")));
+            let shown: Vec<(Side, &str, &str)> = files.iter().map(|(side, path, text)| (*side, *path, text.as_str())).collect();
+            assert_eq!(outcome(&judge(&diff, &table(&shown))), want, "{marker}");
+        }
     }
 
     /// 残差分の弁別: 宣言と札とコメントと空行だけを許し、`moved` 以外の札は `ForeignMarker`、他は `ResidualLine`。
