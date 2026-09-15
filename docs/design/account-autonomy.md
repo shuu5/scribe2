@@ -111,7 +111,7 @@ id = "h"
 title = "初回 spawn の口座を器が選ぶ — pipe run / resume の初回の起動も計測 → 便用の選定 → spawn_turn の 1 本を通り、口座の宣言が無い周だけ親の環境を継承する"
 req = ["FR36", "FR4"]
 section = "4"
-write-set = ["crates/scribe2/src/pipe/cli/run.rs", "crates/scribe2/src/pipe/ratelimit.rs", "crates/scribe2/src/pipe/follow.rs", "crates/scribe2/src/pipe/spawn.rs", "crates/scribe2/src/pipe/mod.rs", "crates/scribe2/tests/e2e/pipe/spawn.rs", "crates/scribe2/tests/e2e/pipe/lifecycle.rs", "crates/scribe2/tests/e2e/pipe/land.rs"]
+write-set = ["crates/scribe2/src/pipe/cli/run.rs", "crates/scribe2/src/pipe/ratelimit.rs", "crates/scribe2/src/pipe/follow.rs", "crates/scribe2/src/pipe/spawn.rs", "crates/scribe2/src/pipe/mod.rs", "crates/scribe2/src/pipe/land.rs", "crates/scribe2/src/pipe/cli/step.rs", "crates/scribe2/tests/e2e/pipe/spawn.rs", "crates/scribe2/tests/e2e/pipe/lifecycle.rs", "crates/scribe2/tests/e2e/pipe/land.rs"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_spawn_account_"]
 size = "M"
 done = "初回の起動が器の選んだ口座の credential dir で起き Spawned の detail に label が載り、口座の宣言が無い toy だけが親の環境を継承する"
