@@ -578,6 +578,21 @@ terms:
     domain: consumer
     definition: manifest の口座と実測の口座残量から 1 本の純関数が口座を選ぶこと (SRS FR36・ADR-0020 §2.2)。 便用 (使い切る側・reset が最も近い口座から・同点は走行中の便が少ない口座・1 口座あたりの便数で候補を絞らない・ADR-0027 §2.1 / §2.2) と session 用 (余裕を残す側) の 2 規則を持ち、 値は rules 行 R-C9-1。
     relationships: [口座, 口座残量, rules 行, 上限停止]
+  - canonical: 導入先
+    domain: consumer
+    definition: scribe2 の plugin を install した利用側の repo と worktree（install 帳簿が指す場所）と、 席の登録 row の anchor（SRS FR61）。 folio の語彙 schema の domain tag consumer（scribe2 所有の語の印）とは別物。
+    relationships: [install 帳簿, plugin の読み込み元, doctor, anchor]
+    flagged_ambiguities: [folio の domain tag consumer は語彙の所有者の印であって導入先ではない]
+  - canonical: install 帳簿
+    domain: consumer
+    definition: 開発 session の harness が plugin の install を記録する帳簿（記録 sha・install 先・scope）。 台帳（beads）でも event log でもない外部の記録で、 器は読むだけで書かない（SRS FR61）。
+    relationships: [導入先, plugin の読み込み元, 台帳, event log]
+    flagged_ambiguities: [台帳（beads）と install 帳簿は別物]
+  - canonical: plugin の読み込み元
+    domain: consumer
+    definition: 開発 session が hook 宣言（hooks.json）と skill を実際に読む場所（path と hook 集合の digest で実測する値・SRS FR61 / FR62）。 host の面が宣言する plugin dir（Declared）とは別で、 実測でだけ分かる。
+    relationships: [導入先, install 帳簿, plugin dir, 管理 tick]
+    flagged_ambiguities: [plugin dir（宣言値）と plugin の読み込み元（実測値）は別物]
   - canonical: anchor
     domain: consumer
     definition: 対象 repo の main checkout。 席と便の鍵の一部で、 1 つの anchor に planner 1 席・管理席 1 席 (SRS FR40・ADR-0022 §2.1)。 便の worktree はここから切る。
