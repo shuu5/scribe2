@@ -1111,6 +1111,39 @@ mod tests {
         assert!(reason.contains("missing: -") && reason.contains("extra: docs/a.md"), "空の側は - で名乗る: {reason}");
     }
 
+    // flip-check: retroactive s2-07l.333
+
+    /// 余分**だけ**（不足 0）でも断る（FR39・触らない file を挙げる偽の交差の根）。`.311` の検出線で生き残った
+    /// `&&` → `||` の変異は、不足と余分が両方在る fixture では落ちないので、片側だけの象限を歯で閉じる。
+    #[test]
+    fn contract_derive_drift_refuses_extra_only() {
+        let derived = set(&["+crates/toy/src/new.rs", "crates/toy/src/paint.rs", "rules/manifest.toml"]);
+        let extra_only = strings(&["crates/toy/src/new.rs", "crates/toy/src/paint.rs", "rules/manifest.toml", "docs/a.md"]);
+        let got = check_drift(&extra_only, &derived);
+        assert_eq!(
+            got,
+            Err(ClosureError::WriteSetDrift { missing: Vec::new(), extra: strings(&["docs/a.md"]) }),
+            "余分だけでも断る（不足は空）"
+        );
+        let reason = got.map_err(|error| error.reason()).err().unwrap_or_default();
+        assert!(reason.contains("missing: -") && reason.contains("extra: docs/a.md"), "不足の側は - で名乗る: {reason}");
+    }
+
+    /// 不足**だけ**（余分 0）でも断る（FR48・閉包の見落とし）。対は [`contract_derive_drift_refuses_extra_only`]。
+    #[test]
+    fn contract_derive_drift_refuses_missing_only() {
+        let derived = set(&["+crates/toy/src/new.rs", "crates/toy/src/paint.rs", "rules/manifest.toml"]);
+        let missing_only = strings(&["crates/toy/src/new.rs", "crates/toy/src/paint.rs"]);
+        let got = check_drift(&missing_only, &derived);
+        assert_eq!(
+            got,
+            Err(ClosureError::WriteSetDrift { missing: strings(&["rules/manifest.toml"]), extra: Vec::new() }),
+            "不足だけでも断る（余分は空）"
+        );
+        let reason = got.map_err(|error| error.reason()).err().unwrap_or_default();
+        assert!(reason.contains("missing: rules/manifest.toml") && reason.contains("extra: -"), "余分の側は - で名乗る: {reason}");
+    }
+
     /// 幅 10 の fixture と期待値。**xtask の `workspace` の歯と同じ字面・同じ値**（2 crate の式の一致を守る）。
     const WIDTH_FIXTURES: &[(&str, usize)] = &[
         ("ab\ncd\nef\n", 3),
@@ -1170,8 +1203,37 @@ mod tests {
         prop::collection::vec(prop::sample::select(TYPES).prop_map(str::to_owned), 0..4)
     }
 
+    /// 導出値の候補（正規化済み・辞書順）。
+    const DERIVED_POOL: &[&str] = &["crates/toy/src/a.rs", "crates/toy/src/b.rs", "docs/c.md", "rules/d.toml", "tests/e.rs"];
+
+    /// 足す候補（導出値の候補と交わらない）。
+    const EXTRA_POOL: &[&str] = &["docs/x.md", "src/y.rs", "z.toml"];
+
+    /// path の集合（候補から 0〜n 本）。
+    fn picked(pool: &'static [&'static str], low: usize) -> impl Strategy<Value = BTreeSet<String>> {
+        prop::collection::btree_set(prop::sample::select(pool).prop_map(str::to_owned), low..=pool.len())
+    }
+
     proptest! {
         #![proptest_config(config())]
+
+        /// `check_drift` が `Ok` ⇔ 欠き 0 ∧ 足し 0（片側だけでも `Err`・`missing` は欠いた集合・`extra` は足した集合）。
+        #[test]
+        fn prop_contract_derive_drift_is_ok_iff_nothing_missing_and_nothing_extra(
+            derived in picked(DERIVED_POOL, 1),
+            dropped in picked(DERIVED_POOL, 0),
+            added in picked(EXTRA_POOL, 0),
+        ) {
+            let missing: Vec<String> = derived.intersection(&dropped).cloned().collect();
+            let extra: Vec<String> = added.iter().cloned().collect();
+            let written: Vec<String> = derived.difference(&dropped).chain(added.iter()).cloned().collect();
+            let want = if missing.is_empty() && extra.is_empty() {
+                Ok(())
+            } else {
+                Err(ClosureError::WriteSetDrift { missing, extra })
+            };
+            prop_assert_eq!(check_drift(&written, &derived), want);
+        }
 
         /// 出力の path 集合は入力の path 集合の部分集合である（閉包は入力に無い file を作らない）。
         #[test]
