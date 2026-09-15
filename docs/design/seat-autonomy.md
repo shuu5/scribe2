@@ -25,7 +25,7 @@ v2 に既に在るもの: FR23（WM の規則）・FR21（`<state_dir>/inject.js
 - `seat meter --target <tmux target> [--sid S]` … (a) の port。**transcript が名指された周は transcript・名指されない周は pane**（出所は入力で決まる 1 本道・s2-07l.75）。**空文字や空白だけの `--transcript` は「渡していない」と同じ**に扱う（渡し忘れを `unreadable` に化けさせない・guard の項と同じ読み）。Measured 型で返す（C10）。
 - `seat statusline` … pane の経路の**入力の字面の正本**（ADR-0029 §2.1 / §2.2・台帳 `s2-07l.320`）。stdin の Claude Code の statusline payload（JSON）だけから 1 行を組んで stdout へ書く pure な関数 1 本で、file・env・子 process を読まない。先頭の segment は meter の `parse_statusline` の逆像（`<pct>% <used>[kM]/<window>[kM]`）で、続く segment は model・effort・口座の窓（`5h:` / `7d:`）の順（閉じた enum の宣言順）。値が無い segment は描かない（`0%` に化けない・C10）。payload が JSON でない周は空行 + rc 0（計測は `pane-no-statusline` に落ちる）。色は付けない。描いた行を `parse_statusline` が読むと組んだ値が戻る往復を property で pin し、行の外形は snapshot で pin する。読み手は変えない（前の版の行も読める）。口座の設定へ書くのは口座の口（[account-lifecycle.md](./account-lifecycle.md) §3）。
 - `seat guard` … hook `pre-tool-use` の内側に組み込む（新 hook は増やさない）。cap は manifest 行 `seat.context_cap_pct`（初期値 60・裁定 id 付き）。deny の極性は既存 guard と同じ fail-closed。**計測不能は deny しない**（context が読めないだけで編集を止めると開発 session が詰む＝理由を inject.jsonl に記録して allow）。
-  - **計測の出所**: 使用 token は payload の `transcript_path` が名指す jsonl を便 2 の parse（末尾 10 MiB・最後の有効 usage 和・`seat::meter::used_from_transcript`）で読む。分母は manifest 行 `seat.context_window_tokens` の**宣言値**で、pane の statusline は読まない（hook から tmux を呼ばない・憲法 C2.2）。使用率は整数の切り捨てで、`pct >= cap` を止める。
+  - **計測の出所**: 使用 token は payload の `transcript_path` が名指す jsonl を便 2 の parse（末尾 10 MiB・最後の有効 usage 和・`seat::meter::used_from_transcript_pct`）で読む。分母は manifest 行 `seat.context_window_tokens` の**宣言値**で、pane の statusline は読まない（hook から tmux を呼ばない・憲法 C2.2）。使用率は整数の切り捨てで、`pct >= cap` を止める。
   - **通す口は 2 つ**（`SeatDecision::{Allow, Externalize}`・bool で持たない＝憲法 C11）。`Externalize` は `<root>/.claude-session/working-memory.*.md` **ちょうど 2 段**の編集で、使用率に関わらず通す（止めると席は退避すらできない・FR23）。口は狭く取る＝同じ dir でも別名の編集は上限に掛かる。判定は**字句と実体の 2 段**で、`working-memory.*.md` という名前の symlink が口の外を指していれば通さない（通す側の口を字句 1 段で持つと link 1 本で上限を越えられる）。**まだ無い退避物は link ではありえない**ので在るときだけ実体を見る＝これから作る周は通る。`transcript_path` の空文字は「渡されていない」と同じに扱う（`unreadable` に化けさせない）。
   - **測れない理由は 4 語で弁別する**（`no-transcript-path` / `unreadable` / `no-usage` / `no-rule`）。1 語へ潰すと「transcript を渡し忘れている」のか「usage の形が変わった」のかを記録から後で分けられない。対象 tool は write-set guard と**同じ集合**（`hook::guard::GUARDED`）を参照する＝`Bash` は見ない。
 - `seat heartbeat --target T` … 裁定 (a) の口。席の**中**から打刻する（`<state_dir>/seat/<潰した target>/heartbeat`）。tick が注入する 1 行がこの打刻を促す＝「席が生きている」は**席が自分で打った**ことでしか測らない。置き場を anchor 配下の `.claude-session/` に取らないのは、v1 の timer と場所を分けて併走できるようにするためである。
@@ -156,3 +156,34 @@ repo に入れない）。
 `tick.jsonl` と v1 の log で突き合わせる（AC9）。**v1 timer の停止は user 裁定**（憲法 A1「消す」）
 であり、器は自分で止めない。切替の条件そのものは本 doc でなく **bd `s2-07l.38` の notes** が持つ
 （規範を doc へ写さない＝憲法 C1 / N2）。
+
+## 10. 入力欄の門の 3 値と cycle-stamp の位置（契約表の行 a・`s2-07l.288`）
+
+- 何が起きているか: 入力欄の門（`seat/inject.rs` の `guard_input`）は入力欄の残りが非空なら一律 Busy で、器自身の注入文が折り返して残っている周を弁別しない（呼び手は `seat/inject.rs` の deliver・`seat/cycle.rs`・`seat/tick/exit.rs` の 3 か所）。加えて `seat/cycle.rs` の perform は lock の直後・門の前に cycle-stamp を打つので、1 key も送らずに断った周も stamp が立ち `seat.tick_stale_s` の back-off に入る＝入力欄の文が消えない限り同じ拒否を繰り返し、席が cap 超えのまま止まる（admin 席 2026-09-14 18:45Z〜・.296 の (a) は Landed 済みで本 § は残りの (b)(c)）。
+- 形: (1) 門の戻りを閉じた 3 値（Clear / OwnQueued / Foreign）にする。OwnQueued = 入力欄の残り（folded で畳んだ字面）が直近の自席注入の記録（tick.jsonl の最後の decision=inject の record の what）に前方一致する周。Foreign（人間の打ちかけ）と UnknownInput は従来どおり 1 key も送らない（判定は器自身の記録との一致だけ・pane の字面の規則を散文に持たない・C3.3 / N2）。(2) OwnQueued の周は 3 呼び手とも Enter を 1 回だけ送って再確認する（text は再送しない・残れば Foreign と同じ断り）。断りの字面に 1 つ足す（record 用）。(3) cycle-stamp は全部の門を通り /clear を送る直前に打つ（write-ahead の意図は保つ・lock は二重投函の防止で残す・打刻は back-off の根拠にだけ使う）。門で断った周は stamp を打たない。
+- 触らない: tick の判定の列（exit.rs は門の呼出 1 か所だけ）・`seat.tick_stale_s` / `seat.cycle_ttl_s` の行・nudge_enter の中身。
+- 却下: 入力欄の字面を「器の注入文らしい」で判定する（字面の規則が散文に生まれる・N2）／refused の周に lock も取らない（二重投函の防止が要る）／入力欄の文を器が消す（人間の打ちかけと弁別できない周に破壊的・N1）。
+
+<!-- contracts:begin -->
+schema = 1
+
+[[contract]]
+id = "a"
+title = "管理 tick の入力欄の門を 3 値（Clear / OwnQueued / Foreign）にし、自席の注入文は Enter 1 回で着地させ、cycle-stamp は /clear の直前に打つ — 断った周に back-off を課さない"
+req = ["FR38", "FR28"]
+section = "10"
+write-set = ["crates/scribe2/src/seat/inject.rs", "crates/scribe2/src/seat/cycle.rs", "crates/scribe2/src/seat/tick/exit.rs", "crates/scribe2/tests/e2e/seat/cycle.rs", "crates/scribe2/tests/e2e/seat/tick.rs", "crates/scribe2/tests/e2e/snapshots/e2e__seat__seat_usage_external_form.snap"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail seat_cycle_own_queued_"]
+size = "S"
+done = "自席の注入文が入力欄に残った周は Enter 1 回で着地して cycle が進み、人間の文の周は断って stamp が立たず次の tick が再評価する"
+
+[[contract]]
+id = "b"
+title = "statusline を器の口に — seat statusline（stdin JSON → 1 行）を account add が口座 dir の settings.json に書き、account statusline で置換し、口座行に statusline= の語を足す"
+req = ["FR63", "FR25", "FR29", "FR59"]
+section = "3"
+write-set = ["+crates/scribe2/src/seat/statusline.rs", "crates/scribe2/src/seat/mod.rs", "crates/scribe2/src/seat/cli.rs", "crates/scribe2/src/seat/meter.rs", "crates/scribe2/src/account/mod.rs", "crates/scribe2/src/account/cli.rs", "crates/scribe2/src/fleet/json_tree.rs", "crates/scribe2/tests/e2e/seat/tick.rs", "crates/scribe2/tests/e2e/fleet.rs", "crates/scribe2/tests/e2e/snapshots/e2e__seat__seat_usage_external_form.snap", "+crates/scribe2/tests/e2e/snapshots/e2e__seat__tick__seat_statusline_external_form.snap", "crates/scribe2/tests/e2e/snapshots/e2e__polarity__polarity_external_form.snap"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail seat_statusline_", "cargo nextest run -p scribe2 --no-tests=fail statusline_round_trips", "cargo nextest run -p scribe2 --no-tests=fail account_cmd_statusline_", "cargo nextest run -p scribe2 --no-tests=fail json_tree_render_"]
+size = "M"
+done = "描画は pure 関数 1 本で segment は閉じた enum の宣言順・無い値の segment は描かず非 JSON は空行 rc 0・口座の settings.json に statusLine が書かれ置換の口は他の key を保ち・口座行に statusline=vessel|other|absent|unreadable の語が出て、描いた行を tick の読み手が往復で読める"
+<!-- contracts:end -->
