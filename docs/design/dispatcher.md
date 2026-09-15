@@ -79,7 +79,7 @@ dispatcher は「起こす」側で行為を止める判定を持たない（起
 
 ## 11. 後続
 
-- SRS FR30 の response（「管理席は契約を pipeline に流す」）を「dispatcher が起こす・管理席は質問と判定の中継と着地」に改め、FR49 の condition（「便が intake を通ったとき」）を「契約が出来た直後」に改める（どちらも user の /folio-architect の周・AC の追加）。
+- SRS FR30 の response と FR49 の condition の改訂・AC38 / AC39 の追加は SRS v0.14 で反映済み（FR68 の起動の形・lock・glossary の 受付 / priority / Reviewed は v0.15）。
 - QUESTION と Gated FAIL の裁定（planner の手番）を速くする形は別設計（契約の改訂を器の口で持つ .133 の系）。
 
 <!-- contracts:begin -->
