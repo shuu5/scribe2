@@ -232,7 +232,7 @@ terms:
     relationships: [席, admin lane, planner, 質問 record]
   - canonical: planner
     domain: consumer
-    definition: 席の役割の 1 つ (設計協調)。 契約・裁定・land の go を担い、 runner の質問に契約の修正か回答 event で応える (SRS FR30 / FR32・ADR-0016 §2.1 / §2.3)。 対話面の identity は rules 行 R-C7-1 が持ち (ADR-0003)、 その値は planner の席 (ADR-0022 §2.5)。 anchor ごとに 1 席 (SRS FR40)。
+    definition: 席の役割の 1 つ (設計協調)。 契約・契約の priority・介入・裁定・land の go を書き、 runner の質問に契約の修正か回答 event で応える (SRS FR30 / FR32 / FR68・ADR-0016 §2.1 / §2.3・ADR-0034)。 対話面の identity は rules 行 R-C7-1 が持ち (ADR-0003)、 その値は planner の席 (ADR-0022 §2.5)。 anchor ごとに 1 席 (SRS FR40)。
     forbidden: [プランナー]
     relationships: [対話面, 席, 開発 session]
   - canonical: 対話面
@@ -578,22 +578,23 @@ terms:
     domain: consumer
     definition: land の追随が衝突した run で、 同じ worktree と契約に「追随」節を添えて runner をもう 1 回 spawn すること。 回数は rules 行 pipe.follow_retries が上限で、 その判定は guard (ADR-0019 §2.2 / §2.4)。
     relationships: [追随, runner, guard]
-  - canonical: 受付の枠
+  - canonical: 並列の枠
     domain: consumer
-    definition: host 単位の受付が便の変異検査に配る並列の枠。 置き場は state dir の親の下の host 用 dir で project をまたぎ、 枠 1 組は受付札 1 つで表す (ADR-0021 §2.3)。 器が管理する状態ではなく受付の一時的な印。
+    aliases: [受付の枠]
+    definition: host 単位で便の変異検査に配る並列の枠 (SRS NFR6)。 契約を便にする前の検査の段 (受付) とは別。 置き場は state dir の親の下の host 用 dir で project をまたぎ、 枠 1 組は受付札 1 つで表す (ADR-0021 §2.3)。 器が管理する状態ではなく受付の一時的な印。
     relationships: [受付札, 実効 jobs, 封じ込め, 検出線]
   - canonical: 受付札
     domain: consumer
     definition: 受付が配った枠を表す file (pid・run・jobs・時刻を持つ)。 生きている process の札だけを数え、 死んだ札と読めない札は回収する (ADR-0021 §2.3)。 fleet の lease (席の期限付き割当) とは別の実体。
-    relationships: [受付の枠, 実効 jobs]
+    relationships: [並列の枠, 実効 jobs]
   - canonical: 封じ込め
     domain: consumer
     definition: 器が起こす子 process (verify 行・runner・lens) を memory の上限付きの cgroup scope の内側で走らせること。 溢れて止められるのは scope の内側だけで、 封じられない host では並列度を下げて進む (ADR-0021 §2.2)。
-    relationships: [受付の枠, 極性一覧, runner]
+    relationships: [並列の枠, 極性一覧, runner]
   - canonical: 実効 jobs
     domain: consumer
     definition: 変異検査に実際に渡す並列度。 rules 行の上限 (宣言値) と受付が測った枠 (測定値) の小さい方で、 vessel 宣言の検出線の穴に器が埋める (ADR-0021 §2.1)。
-    relationships: [受付の枠, 変異検出線, vessel 宣言]
+    relationships: [並列の枠, 変異検出線, vessel 宣言]
   - canonical: 役割
     domain: consumer
     definition: 開発 session の席の種類。 閉じた enum の値で (列挙は core が持ち文書は写さない・ADR-0013 §2.1)、 席の登録 row が持つ。 窓名や env の慣習では決めない (SRS FR40・ADR-0022 §2.1)。
@@ -709,14 +710,28 @@ terms:
     relationships: [作業記憶, 席, 対話面]
   - canonical: dispatcher
     domain: consumer
-    definition: 審査を通った契約の起動の列を持ち、 台帳の依存・live 便との write-set の交差・受付 (余地・host の memory) を満たす便を管理 tick と land の直後に自動で起こす器の口 (SRS FR68・ADR-0034・設計 docs/design/dispatcher.md)。 planner → 管理席 → launcher の起動の中継を置き換える (質問と判定の中継は管理席に残る)。
+    definition: 審査を通った契約の起動の列を持ち、 台帳の依存・live 便との write-set の交差・受付 (余地・host の memory) を満たす便を管理 tick と land の直後に自動で起こす器の口 (SRS FR68・ADR-0034・設計 docs/design/dispatcher.md)。 便の起動は dispatcher が持ち、 質問と判定の中継は管理席が持つ。
     relationships: [起動の列, 介入, 便, 契約の審査, write-set, 受付]
   - canonical: 起動の列
     domain: consumer
     aliases: [dispatch queue]
-    definition: 契約が出来た直後の審査 (現在の契約の sha に対する verdict) が PASS の契約のうちまだ起こしていないものの並び。 順序は介入 first → 契約の priority → 起票順で、 各便は「まだ出ていない理由」(依存 / 交差 / 受付 / hold) を閉じた型で持つ。 着地の列 (land の順序) とは別の実体。
+    definition: 契約が出来た直後の審査 (現在の契約の sha に対する verdict) が PASS の契約のうちまだ起こしていないものの並び。 並び・順序・待ちの理由は SRS FR68 が定める。 land の順序 (SRS FR50) とは別の実体。
     relationships: [dispatcher, 介入, 着地]
     flagged_ambiguities: ["列: 起動の列 (dispatcher・起動を待つ契約) と着地の列 (pipe/queue.rs・push の順序) は別義"]
+  - canonical: 受付
+    domain: consumer
+    aliases: [contract intake]
+    definition: 契約 file を便にする前に器が撃つ検査の段。 必須 field・verify の形・allowlist・write-set の余地・host の memory の枠を通った契約だけが便になる (交差の排他は SRS FR39)。 変異検査の並列の枠 (SRS NFR6) とは別。
+    relationships: [dispatcher, 並列の枠, write-set, 便]
+  - canonical: priority
+    domain: consumer
+    aliases: [契約の priority]
+    definition: 台帳の bead が持つ契約の優先度 (P0〜P4)。 起動の列の順序の 2 番目の鍵 (SRS FR68)。 SRS の要件の priority 欄 (必須 / 推奨) とは別。
+    relationships: [起動の列, 介入, planner, 台帳]
+  - canonical: Reviewed
+    domain: consumer
+    definition: 便の段の 1 つ。 契約の審査 (SRS FR49) の verdict を持ち、 PASS でない契約は便にならない。
+    relationships: [契約の審査, 便, dispatcher]
   - canonical: 介入
     domain: consumer
     aliases: [planner intervention]
