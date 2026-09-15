@@ -145,6 +145,7 @@ subcommand と helper は責務ごとに 1 file に置く——入口（usage / 
 - `<NAME> lens --contract <f> --worktree <dir> --permission-mode <mode> [--rules PATH] [--account-dir] [--claude <path>]`: **`--contract` と `--worktree` は必須**で、無ければ claude を呼ばずに rc 1（前提違反）・読めない契約は rc 2。起動形は runner と同じ `build` を通る＝user / project / local の settings を読まない（上の bullet・[ADR-0011 §2.1](../../design-intent/decisions/ADR-0011-vessel-launches-claude-without-settings.html#s2-1-launch-form)）。lens は `--allowedTools` も `--plugin-dir` も渡さない（権限の出所は `--permission-mode` と headless の既定だけ・[ADR-0011 §2.2](../../design-intent/decisions/ADR-0011-vessel-launches-claude-without-settings.html#s2-2-supersede)）。**cap は rules 行 `gate.token_cap`（埋め込み / `--rules`）から読む＝値の出所は manifest 1 つ・launcher は数を書かない**（`s2-07l.272`・憲法 C1・FR17。以前の argv `--cap <bytes>` は撤去し、渡された周は未知の引数として rc 1 で断る＝手書きの数が黙って効き続ける経路を構造で塞ぐ。行が無い / 不発効 / 整数でない周は claude を呼ばず rc 2）。stdin の diff が cap を超えたら **claude を呼ばずに** `{"verdict":"INCONCLUSIVE","evidence":"diff exceeds cap"}`。それ以外は診断 prompt（契約の goal / done / verify 各行 / write-set 各行を `{contract}` 穴へ差し込み、diff と併せて PASS / FAIL / INCONCLUSIVE を JSON 1 行で返せ。**契約 file を丸写ししない**——owner や disposition は判定の材料にならず、渡すほど cap を食う。穴は `{contract}` と `{diff}` を **1 走査**で埋める＝契約本文の中の `{diff}` が展開されない）で `claude -p` を **`--output-format` を渡さず既定（text）で・prompt は stdin で**呼び、出力の最後の JSON 行を stdout 1 行に写す（stream-json にすると全行が JSON になり、最後の JSON 行は claude 自身の result record になって判定が取れない）。parse 不能は INCONCLUSIVE。
 - 両 wrapper は `pipe` の seam にそのまま渡せる 1 行（例: `--runner "<NAME> runner --worktree {worktree} --write-set {write_set} --vessel {vessel} --plugin-dir {plugin_dir} --permission-mode acceptEdits"`＝**`< {contract}` は書かない**: 契約本文は §5.2 手順 6 のとおり `pipe` が runner の stdin へ流す〔再 spawn では「## 回答」節付き〕。shell の redirect は piped stdin を上書きするので、seam に書くと回答節が包みへ届かない〔`s2-07l.114` lens〕。包みを単体で叩くときだけ `< contract` を使う）。**`--plugin-dir` には repo でなく `{plugin_dir}`（§5.2 の写し）を渡す**——Claude Code は読み込んだ plugin dir 配下の file を acceptEdits の自動承認から外す（sensitive）ので、repo を渡すと便の worktree（`<repo>/.worktrees/<NAME>/<run>`）はその内側になり、runner は write-set 内の 1 file も Edit / Write できない（実測 2026-09-10・`s2-07l.39` の Failed）。
 - `--claude <path>` は test の seam（fake の実行 file が引数と stdin を file に写す）。prompt の文面は tracked な template file（`crates/<NAME>/src/headless/*.txt`）で持ち、絶対 path・口座名を含めない。
+- **prompt 本文の外形**（`s2-07l.176`）: runner と lens の prompt は fixture の契約 / write-set / diff で組んだ**全文**を外形 snapshot で pin する（`headless_runner_prompt_external_form` / `headless_lens_prompt_external_form`・lens-contract と同じ型）。本文の 1 字の変更は `.snap` の差分として PR に現れ、review の入口になる（C12.5）。
 
 ## 7. FR7（入口の flip check）の置き場
 
@@ -251,4 +252,14 @@ write-set = ["rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "crates/s
 verify = ["cargo nextest run -p xtask --no-tests=fail flip_docs_only_ flip_marks_ provenance_", "cargo nextest run -p scribe2 --no-tests=fail declaration_kind_"]
 size = "M"
 done = "rules 行だけの便が no-test-diff で落ち、札は形と上限で止まり、push(main) の CI が出所を測り、入口の flip を撃たない宣言が intake で断られる"
+
+[[contract]]
+id = "d"
+title = "runner / lens の prompt 全文を外形 snapshot 2 本で pin する"
+req = ["FR5"]
+section = "6"
+write-set = ["crates/scribe2/src/headless/runner.rs", "crates/scribe2/src/headless/lens.rs", "crates/scribe2/tests/e2e/headless.rs", "+crates/scribe2/tests/e2e/snapshots/e2e__headless__headless_runner_prompt_external_form.snap", "+crates/scribe2/tests/e2e/snapshots/e2e__headless__headless_lens_prompt_external_form.snap", "docs/design/pipeline.md"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail headless_runner_prompt_external_form headless_lens_prompt_external_form"]
+size = "S"
+done = "prompt 全文の snapshot 2 本が在り、本文の変更が .snap 差分として PR に現れる"
 <!-- contracts:end -->
