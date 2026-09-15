@@ -36,7 +36,7 @@
 | `host.reserve_memory_mb` | `HostReserveMemoryMb`（Int） | 席と host のために常に残す memory。受付はこれを差し引いた空きしか配らない。 |
 | `gate.slot_wait_s` | `GateSlotWaitS`（Int） | 受付で枠が空くのを待つ上限。超えたら並列度 1 で進む（縮退・止めない）。 |
 | `gate.cpu_weight` | `GateCpuWeight`（Int） | 便の scope に付ける CPU の重み（席は既定の重み）。 |
-| `gate.tmux_test_threads` | `GateTmuxTestThreads`（Int） | tmux を立てる歯（e2e の isolated seat）の同時本数。値の写しは nextest の test-group `tmux` の `max-threads`（`.config/nextest.toml`・新規）で、`cargo xtask check` が写しの一致と配線（tmux を立てる歯の file の `#[test]` が全部 group の filter に入る）を測る（clippy.toml ↔ R-C4-4.* と同型・C10.3）。並列 gate 下の負荷で tmux の歯が落ちる flake（`s2-07l.360`・契約表の行 b）の解＝並列度そのものは下げない。 |
+| `gate.tmux_test_threads` | `GateTmuxTestThreads`（Int） | tmux を立てる歯（e2e の isolated seat）の同時本数。値の写しは nextest の test-group `tmux` の `max-threads`（`.config/nextest.toml`・新規）で、`cargo xtask check` が写しの一致と配線（tmux を立てる歯＝本文が席の fixture の道具を名指すか、それを名指す e2e の木の関数を呼ぶ `#[test]`・閉包は器が関数名の固定点で決め、filter はその歯を module 付きの名で全部列挙する固定形＝file 単位や接頭辞では決めない〔.360 run 2 の QUESTION・helper 越しの歯 21 本を接頭辞が拾えない〕）を測る（clippy.toml ↔ R-C4-4.* と同型・C10.3）。並列 gate 下の負荷で tmux の歯が落ちる flake（`s2-07l.360`・契約表の行 b）の解＝並列度そのものは下げない。 |
 
 manifest に行が載るまでは ADR-0021 の予定行（C14.2 の相互参照は行が在って成立・ADR-0018 §4 と同じ）。
 
