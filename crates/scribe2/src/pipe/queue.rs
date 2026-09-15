@@ -248,8 +248,11 @@ mod tests {
     }
 
     // flip-check: retroactive s2-07l.222
+    // flip-check: retroactive s2-07l.357
     /// 待ちの途中で前の便の判定が FAIL に書き直された周は `wait` が `Ok` で解けて `Waited` で進む（`== Err(Timeout)`
     /// を `!=` にすると `Degraded` に化ける）。書き直しは 500 ms 後・上限 30 秒＝壁時計の境界に等号を置かない。
+    /// 書き直しは本番の `write_verdict` と同じ `.partial` → `rename` の 2 手（素の write は truncate の瞬間を poll が
+    /// 読み `Unmeasured` に化ける＝遅い runner でだけ開く窓・gate-cost.md §6.1）。
     #[test]
     fn mutant_in_pipe_land_await_turn_proceeds_when_the_front_leaves() {
         let root = scratch("await-wake");
@@ -259,7 +262,8 @@ mod tests {
         let front = verdict_path(&state, "a-front");
         let writer = std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(500));
-            std::fs::write(front, "{\"verdict\":\"FAIL\"}\n").is_ok()
+            let partial = front.with_extension("json.partial");
+            std::fs::write(&partial, "{\"verdict\":\"FAIL\"}\n").and_then(|()| std::fs::rename(&partial, &front)).is_ok()
         });
         let order = await_turn(&land(&state, &repo, &contract, policy, 30));
         assert!(writer.join().unwrap_or(false), "前の便の判定を書き直せた");
