@@ -707,3 +707,18 @@ terms:
     domain: consumer
     definition: 開発 session の文脈が上限に達したときに harness が自動で行う要約。 直前の hook で器が現在地と持ち越し分だけの退避物を書く (SRS FR66・ADR-0031 §2.3)。
     relationships: [作業記憶, 席, 対話面]
+  - canonical: dispatcher
+    domain: consumer
+    definition: 審査を通った契約の起動の列を持ち、 台帳の依存・live 便との write-set の交差・受付 (余地・host の memory) を満たす便を tick と land の直後に自動で起こす器の口 (ADR-0034・設計 docs/design/dispatcher.md)。 planner → 管理席 → launcher の中継を置き換える。
+    relationships: [起動の列, 介入, 便, 契約の審査, write-set, 受付]
+  - canonical: 起動の列
+    domain: consumer
+    aliases: [dispatch queue]
+    definition: 契約が出来た直後の審査 (現在の契約の sha に対する verdict) が PASS の契約のうちまだ起こしていないものの並び。 順序は介入 first → 契約の priority → 起票順で、 各便は「まだ出ていない理由」(依存 / 交差 / 受付 / hold) を閉じた型で持つ。 着地の列 (land の順序) とは別の実体。
+    relationships: [dispatcher, 介入, 着地]
+    flagged_ambiguities: ["列: 起動の列 (dispatcher・起動を待つ契約) と着地の列 (pipe/queue.rs・push の順序) は別義"]
+  - canonical: 介入
+    domain: consumer
+    aliases: [planner intervention]
+    definition: planner が起動の列の順番を動かす typed な印。 first (最優先へ)・hold (止める)・release (戻す) の 3 つで、 user の直命の対として記録され、 散文の順序を持たない (ADR-0034 §2)。
+    relationships: [dispatcher, 起動の列, 直命の表]
