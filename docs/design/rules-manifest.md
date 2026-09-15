@@ -165,7 +165,7 @@ xtask 側の drift 歯（最小形）: `crates/xtask/src/limits.rs` の `#[cfg(t
 ## 11. private-clean の needle の追加（契約表の行 g・`s2-07l.174`）
 
 - 何が起きているか: `crates/xtask/src/private_clean.rs` の needle は Email / UsersPath の 2 形だけで、PUBLIC 面へ出てはいけない v1 台帳 id 形（`sc-` + 英数 5 字）と state dir の絶対 path 形（home 直下から state dir へ至る接頭・字面は `concat!` で分けて private_clean.rs に置く）を機械が止めない（監査 2026-09-12 塊 20・NFR6）。tracked で当たるのは `SPIKE-tooling-report.md`（3 行）と `design-intent/research/SPIKE-folio-report.html`（1 行）＝needle を入れると赤になる 2 file は同じ便で掃除する（user 裁定 2026-09-15 18:2xZ）。
-- 形: 閉じた enum に variant 2 つ（as_str = ledger-id-v1 / state-dir-path）。字面は `concat!` で分けて自分を撃たない。state dir は絶対形だけ（相対形 `.local/state/` は ADR-0004 が持つ＝当てない）。掃除は id を「v1 の台帳の便」の語に置き換える（文の意味は残す・research html が folio の生成物なら contract 側を直して再生成）。
+- 形: 閉じた enum に variant 2 つ（as_str = ledger-id-v1 / state-dir-path）。字面は `concat!` で分けて自分を撃たない。state dir は絶対形だけ（相対形 `.local/state/` は ADR-0004 が持つ＝当てない）。掃除は id を「v1 の台帳の便」の語に置き換える（文の意味は残す・research html に生成元 file は無い＝掃除の後に folio build の drift 検査が無差分であれば足りる）。要件は暫定で FR52（CI が tracked file を検査し違反を file と行で名指して非 0 で止める形）を当てる: PUBLIC 面の門を名指す要件は SRS の制約 CON2 だけで契約の req に取れないため、次版の SRS 改訂周で「PUBLIC 面の門」の FR を足して差し替える。
 - 却下: 免除 list（散文・N2）／相対形も当てる（frozen の ADR-0004 が赤になる）。digest 方式と token の newtype は別便。
 
 <!-- contracts:begin -->
@@ -239,7 +239,7 @@ done = "check_tests.rs の余地が 600 行以上に戻り、歯が 2 つの子 
 [[contract]]
 id = "g"
 title = "private-clean の needle に v1 台帳 id 形と state dir の絶対 path 形を足し、該当する tracked 2 file を掃除する — needle は閉じた enum の variant 1 つずつ"
-req = ["NFR6"]
+req = ["FR52"]
 section = "11"
 write-set = ["crates/xtask/src/private_clean.rs", "SPIKE-tooling-report.md", "design-intent/research/SPIKE-folio-report.html", "docs/design/rules-manifest.md"]
 verify = ["cargo nextest run -p xtask --no-tests=fail private_clean_ledger_ private_clean_state_dir_ private_clean_relative_state_dir_"]
