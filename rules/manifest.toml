@@ -275,6 +275,19 @@ enabled = true
 ruling = "user 2026-09-14"
 ruled_at = "2026-09-14"
 
+# runner / lens が claude に毎回渡す model（設計 pipeline.md §6・account-autonomy.md §3・`s2-07l.297`）。値は claude CLI の
+# 別名（`opus` …・閉じた表は crates 側の fleet::select::Model）。便用の口座選定はこの model のモデル別 7 日窓だけを
+# 数える（他の model の窓が 100 でも便の候補から外さない）。初期値は実測の既定（`--model` 無しの runner / lens は
+# Opus 5 で走っていた）＝挙動は変えずに選定の窓だけを合わせる。
+
+[[rule]]
+id = "runner.model"
+kind = "RunnerModel"
+value = "opus"
+enabled = true
+ruling = "user 2026-09-14T21:59Z runner/lens model pin (measured default Opus 5; run selection counts this model window only)"
+ruled_at = "2026-09-14"
+
 [[rule]]
 id = "repo.non_rust_exec_allow"
 kind = "RepoNonRustExecAllow"

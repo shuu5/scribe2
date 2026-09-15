@@ -52,6 +52,8 @@ pub enum Completion {
         run: String,
         /// manifest の `[[account]]` の label 列（宣言値・置き場は持たないので運ぶ）。
         labels: Vec<String>,
+        /// 便が使う model（rules 行 `runner.model` の値・字面のまま運び [`select_for_run`] へ渡す・`s2-07l.297`）。
+        model: Option<String>,
     },
 }
 
@@ -82,7 +84,9 @@ impl Completion {
                 crate::pipe::land::turn_now(state_dir, run),
                 crate::pipe::land::Turn::After(_)
             ),
-            Self::AccountFree { state_dir, run, labels, .. } => account_free(state_dir, run, labels),
+            Self::AccountFree { state_dir, run, labels, model, .. } => {
+                account_free(state_dir, run, labels, model.as_deref())
+            }
         }
     }
 }
@@ -93,7 +97,7 @@ impl Completion {
 /// 再評価して `Chosen` の周だけ満たされる。便が `RateLimited` でなくなった周（stop で終端した・別の
 /// process が起こし直した）は**満たされた側**＝待ち続ける理由が無い。置き場を読めない周は満たされない
 /// （読めなさで起こし直さない・期限で Timeout に倒れて計測から撃ち直す）。
-fn account_free(state_dir: &std::path::Path, run: &str, labels: &[String]) -> bool {
+fn account_free(state_dir: &std::path::Path, run: &str, labels: &[String], model: Option<&str>) -> bool {
     let Ok(events) = store::read_all(state_dir) else {
         return false;
     };
@@ -102,7 +106,7 @@ fn account_free(state_dir: &std::path::Path, run: &str, labels: &[String]) -> bo
         return true;
     }
     matches!(
-        select_for_run(&state, labels, &cli::now_utc()),
+        select_for_run(&state, labels, model, &cli::now_utc()),
         select::Selection::Chosen(_)
     )
 }
@@ -229,6 +233,7 @@ mod tests {
             state_dir: std::path::PathBuf::from("state"),
             run: "r".to_owned(),
             labels: Vec::new(),
+            model: Some("opus".to_owned()),
         };
         assert_eq!(found.pid(), 0);
     }
@@ -268,6 +273,7 @@ mod tests {
                 state_dir: std::path::PathBuf::from("state"),
                 run: "r".to_owned(),
                 labels: Vec::new(),
+                model: None,
             },
         ];
         let names: Vec<&str> = all

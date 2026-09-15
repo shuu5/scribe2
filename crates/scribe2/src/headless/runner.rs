@@ -3,9 +3,18 @@
 //! 止める条件はただ 1 つ、**上限 record（`rate_limit_event`）の status が「止める側」の集合に
 //! 属すること**である（ADR-0012 §2.1）。それ以外の失敗は claude の rc をそのまま写す——包みが
 //! 独自の判定を足すと、呼出側は「誰が止めたか」を見失う。
+//!
+//! **model は rules 行 `runner.model` から読み、claude に毎回渡す**（`s2-07l.297`・設計 pipeline.md §6）。
+//! `--rules PATH` が在ればその manifest・無ければ埋め込み（lens と同じ読み口 [`super::rules_of`]）。
+//! manifest から読むのは **model の 1 行だけ**で、allowlist と common-verify は従来どおり便の写し
+//! （`--vessel`）から読む（ADR-0010 §2.4 は動かない）。行が解けない周は claude を呼ばず rc 2（lens の
+//! cap と同じ極性・版の既定へ黙って倒れない）。
 
 use crate::polarity::{OnFailure, Polarity, Timing};
-use super::{build, feed, fill, flag, need, plugin_dirs, read_stdin_bytes, Call, DEFAULT_CLAUDE, RC_RATE_LIMIT};
+use super::{
+    build, feed, fill, flag, need, plugin_dirs, read_stdin_bytes, rules_of, runner_model, Call, DEFAULT_CLAUDE,
+    RC_RATE_LIMIT,
+};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
 use crate::pipe::confine;
 use crate::pipe::declaration::Effective;
@@ -22,7 +31,7 @@ const TEMPLATE: &str = include_str!("runner.txt");
 /// 使い方の 1 行。
 pub fn usage() -> String {
     format!(
-        "usage: {} runner --worktree D --write-set F --vessel F --plugin-dir D --permission-mode M [--account-dir D] [--claude PATH] < contract",
+        "usage: {} runner --worktree D --write-set F --vessel F --plugin-dir D --permission-mode M [--rules PATH] [--account-dir D] [--claude PATH] < contract",
         crate::name::NAME
     )
 }
@@ -30,6 +39,8 @@ pub fn usage() -> String {
 /// `runner` を 1 回。契約本文は stdin から読む。
 pub fn dispatch(args: &[String]) -> Outcome {
     let parsed = (|| {
+        // `--rules` の値欠けはここで断る（値は [`rules_of`] が後で読む）。
+        flag(args, "--rules")?;
         Ok::<_, String>((
             need(args, "--worktree")?.to_owned(),
             need(args, "--write-set")?.to_owned(),
@@ -54,6 +65,13 @@ pub fn dispatch(args: &[String]) -> Outcome {
             return Outcome::failed(RC_BROKEN, lines);
         }
     };
+    // **model は manifest の 1 行だけ**（`--rules` か埋め込み・権限は写しのまま）。行が無い / 不発効 / 文字列でない /
+    // 閉じた表に無い周は claude を起こさず rc 2（lens の cap と同じ極性）——版の既定へ黙って倒すと、便が消費する
+    // モデル別窓と便用の口座選定が数える窓がずれる。
+    let model = match rules_of(args).and_then(|manifest| runner_model(&manifest)) {
+        Ok(found) => found,
+        Err(reason) => return Outcome::failed_line(RC_BROKEN, format!("runner: {reason}")),
+    };
     let tools = allowed_tools(granted.allowed());
     let contract = String::from_utf8_lossy(&read_stdin_bytes()).into_owned();
     if contract.trim().is_empty() {
@@ -76,6 +94,8 @@ pub fn dispatch(args: &[String]) -> Outcome {
         claude: claude.as_deref().unwrap_or(DEFAULT_CLAUDE),
         prompt: &prompt,
         permission_mode: &mode,
+        // rules 行の model を**毎回**渡す（claude CLI の別名・lens と同じ行）。
+        model: Some(model.alias()),
         plugin_dir: Some(&plugin_dir),
         account_dir: account.as_deref(),
         cwd: Some(Path::new(&worktree)),

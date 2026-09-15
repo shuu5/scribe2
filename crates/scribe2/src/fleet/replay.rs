@@ -93,16 +93,18 @@ pub fn effective_accounts(manifest: &Manifest, state: &State) -> Vec<String> {
 /// 便用の規則で口座を 1 つ選ぶ（設計 account-autonomy.md §3 / §4）。**便の再開と待ちの観測が同じ
 /// 1 本を呼ぶ**（[`Completion::AccountFree`] の `is_met` と `pipe resume` の選定が別の入力を組まない）。
 ///
-/// model は渡さない（runner の起動形は model を渡さず claude の既定＝モデル別窓すべての最大を数える
-/// 保守側）。除外は登録 row の口座。閾値は便用の規則が持たないので**窓の全量**（[`select::LIMIT_PCT`]）
-/// を置く＝session 用の分岐に届かない値であって、R-C9-1 の値ではない。
-pub fn select_for_run(state: &State, labels: &[String], now: &str) -> select::Selection {
+/// `model` は rules 行 `runner.model` の値（runner / lens が `--model` で毎回明示する model・設計 §3・`s2-07l.297`）
+/// ＝便が消費するのはその model のモデル別窓だけなので、他の model の窓が 100 でも候補から外さない。字面のまま
+/// 渡し、型にするのは `select` の中（別名 × 表示名の照合）。`None` は全 model 窓の最大（保守側）。除外は登録 row の
+/// 口座。閾値は便用の規則が持たないので**窓の全量**（[`select::LIMIT_PCT`]）を置く＝session 用の分岐に届かない
+/// 値であって、R-C9-1 の値ではない。
+pub fn select_for_run(state: &State, labels: &[String], model: Option<&str>, now: &str) -> select::Selection {
     let labels = state.without_retired(labels.iter().map(String::as_str));
     select::select(&select::Input {
         labels: &labels,
         allowance: &state.allowance,
         purpose: select::Purpose::Run,
-        model: None,
+        model,
         exclude: &state.registered_accounts(),
         threshold_pct: select::LIMIT_PCT,
         now,

@@ -5,9 +5,10 @@
 use crate::make_tmp_dir;
 use std::process::Command;
 use vessel::cli_outcome::{Outcome, RC_OK, RC_REFUSED};
+use vessel::fleet::select::Model;
 use vessel::order::is_declaration_order;
 use vessel::rules::manifest::{contract_rows, Manifest, TableValue};
-use vessel::rules::{Rule, RuleKind, RuleValue, ValueShape, ALL};
+use vessel::rules::{int_row, str_row, Rule, RuleKind, RuleValue, ValueShape, ALL};
 use vessel::seat::role::{Capability, Role, ALL as ROLES, CAPABILITIES};
 
 /// 受理される最小の manifest（2 行）。`enabled` は**全行に書く**（必須 key）。
@@ -922,8 +923,9 @@ fn rules_embedded_manifest_declares_the_size_lines_rows() {
         assert_eq!(row.ruled_at, "2026-09-14", "{id} の裁定日");
         assert_eq!(RuleKind::parse(kind.as_str()), Some(kind), "{id} の kind を字面から引ける");
     }
-    let tail: Vec<RuleKind> = ALL.iter().rev().take(3).rev().copied().collect();
-    assert_eq!(tail, [RuleKind::PipeSizeSLines, RuleKind::PipeSizeMLines, RuleKind::PipeSizeLLines], "宣言順の末尾 3 つ");
+    // `.297` で `RunnerModel` が末尾に足されたので、size の 3 つはその直前に並ぶ。
+    let tail: Vec<RuleKind> = ALL.iter().rev().skip(1).take(3).rev().copied().collect();
+    assert_eq!(tail, [RuleKind::PipeSizeSLines, RuleKind::PipeSizeMLines, RuleKind::PipeSizeLLines], "宣言順の末尾から 2 つ目までの 3 つ");
     let errors = rejected(&one_row_raw("PipeSizeXlLines", "1600")).expect("未知の kind の fixture が受理された");
     assert!(errors.join("\n").contains("未知である"), "4 段目の size は kind として読めない");
 }
@@ -1006,7 +1008,7 @@ fn rules_embedded_manifest_is_valid_and_covers_all_kinds() {
     // **tracked な `rules/manifest.toml` の全行が受理される**（`parse` は 1 件でも違反が
     // 在れば `Err` を返すので、ここに届いた時点で全行が必須 key を持つ）。母集団を額面に
     // 出すのは、行が黙って落ちた周を「全部読めた」と読み違えないためである。
-    assert_eq!(manifest.rows().len(), 49, "埋め込み manifest の行数（母集団・`.217` で +2・`.249` で +3・`.254` で +1・`.168` で +1）");
+    assert_eq!(manifest.rows().len(), 50, "埋め込み manifest の行数（母集団・`.217` で +2・`.249` で +3・`.254` で +1・`.168` で +1・`.297` で +1）");
     for kind in ALL {
         let covered = manifest.rows().iter().any(|row| row.kind == *kind);
         assert!(covered, "{} の行が manifest に無い", kind.as_str());
@@ -1140,10 +1142,10 @@ fn rules_embedded_manifest_declares_one_capability_row_per_role() {
             assert!(Capability::parse(name).is_some(), "{id} の値 {name} は Capability の名");
         }
     }
-    assert!(ALL.contains(&RuleKind::RoleCapabilities), "ALL に在る（末尾は `.249` の PipeSizeLLines）");
+    assert!(ALL.contains(&RuleKind::RoleCapabilities), "ALL に在る（末尾は `.297` の RunnerModel）");
     assert_eq!(RuleKind::parse("RoleCapabilities"), Some(RuleKind::RoleCapabilities), "kind を字面から引ける");
     let kinds = ALL.len();
-    assert_eq!(kinds, 48, "kind の母集団（`.201` で +1・`.217` で +2・`.249` で +3・`.254` で +1・`.168` で +1）");
+    assert_eq!(kinds, 49, "kind の母集団（`.201` で +1・`.217` で +2・`.249` で +3・`.254` で +1・`.168` で +1・`.297` で +1）");
 }
 
 /// 禁じる語列の行（`runner.denied_commands`・`RuleKind::RunnerDeniedCommands`・裁定 id `user 2026-09-14`・ADR-0025 §2.1・
@@ -1222,9 +1224,9 @@ fn rules_embedded_manifest_declares_the_memo_stale_rows() {
         assert_eq!(row.ruled_at, "2026-09-13", "{id} の裁定日");
         assert_eq!(RuleKind::parse(kind.as_str()), Some(kind), "{id} の kind を字面から引ける");
     }
-    // `.249` の size の 3 行が末尾に続く＝この 2 行は末尾から 5 つ目と 4 つ目。
+    // `.249` の size の 3 行と `.297` の RunnerModel が末尾に続く＝この 2 行は末尾から 6 つ目と 5 つ目。
     assert_eq!(
-        ALL.get(ALL.len().saturating_sub(5)..ALL.len().saturating_sub(3)),
+        ALL.get(ALL.len().saturating_sub(6)..ALL.len().saturating_sub(4)),
         Some([RuleKind::MemoStaleDays, RuleKind::MemoStalePriority].as_slice()),
         "宣言順で size の 3 行の直前に並ぶ 2 つ"
     );
@@ -1315,6 +1317,54 @@ fn rules_dialogue_surface_value_must_be_a_role_name() {
             .expect("Role の名は受理される");
         assert_eq!(healed.get("probe").map(|row| row.value.clone()), Some(RuleValue::Str(role.as_str().to_owned())));
     }
+}
+
+/// (f) `runner.model`（runner / lens が claude に毎回渡す model・裁定 id `user 2026-09-14T21:59Z`・設計 pipeline.md §6・
+/// `s2-07l.297`）: 埋め込み manifest の行は発効 ∧ `Str("opus")`（claude CLI の別名・閉じた表 `Model` で引ける）・kind は
+/// 宣言順の末尾 `RunnerModel`（形は `Str`）・`str_row` が同じ値を返し、不発効 / 整数の行は 3 理由で `Err`。
+/// base は行も kind も無いので RED。
+#[test]
+fn rules_manifest_carries_runner_model() {
+    let manifest = match Manifest::embedded() {
+        Ok(found) => found,
+        Err(errors) => {
+            let lines: Vec<String> = errors.iter().map(ToString::to_string).collect();
+            panic!("埋め込み manifest が拒まれた:\n{}", lines.join("\n"))
+        }
+    };
+    let row = manifest.get("runner.model").expect("runner.model の行が在る");
+    assert_eq!(row.kind, RuleKind::RunnerModel, "kind");
+    assert_eq!(row.value, RuleValue::Str("opus".to_owned()), "値は claude CLI の別名（実測の既定 = Opus）");
+    assert!(row.enabled, "発効している");
+    assert!(row.ruling.starts_with("user 2026-09-14T21:59Z"), "裁定 id: {}", row.ruling);
+    assert_eq!(row.ruled_at, "2026-09-14", "裁定日");
+    assert_eq!(Model::parse("opus"), Some(Model::Opus), "値は閉じた表で引ける");
+    assert_eq!(RuleKind::RunnerModel.shape(), ValueShape::Str, "形は識別子");
+    assert_eq!(ALL.last(), Some(&RuleKind::RunnerModel), "宣言順の末尾");
+    assert_eq!(RuleKind::parse("RunnerModel"), Some(RuleKind::RunnerModel));
+    let healed = parsed(&one_row(RuleKind::RunnerModel, "\"sonnet\"")).expect("文字列の値は受理される");
+    assert_eq!(healed.get("probe").map(|row| row.value.clone()), Some(RuleValue::Str("sonnet".to_owned())));
+    let errors = rejected(&one_row(RuleKind::RunnerModel, "5")).expect("整数の値は形が合わない");
+    assert!(errors.join("\n").contains("形と合わない"), "{errors:?}");
+}
+
+/// 行の読み手 `str_row` / `int_row`（`rules::` の 1 本・headless と `pipe::ratelimit` が読む・`s2-07l.297`）: 発効した
+/// 文字列 / 整数の行の値を返し、無い / 不発効 / 形違いは 3 理由の `Err`（lens の cap の字面と同じ）。
+#[test]
+fn rules_row_readers_return_the_value_or_one_of_three_reasons() {
+    let manifest = Manifest::embedded().expect("埋め込み manifest を読める");
+    assert_eq!(str_row(&manifest, "runner.model"), Ok("opus"), "文字列の行の読み手");
+    assert_eq!(int_row(&manifest, "gate.token_cap"), Ok(1_000_000), "整数の行の読み手");
+    assert_eq!(str_row(&manifest, "gate.token_cap"), Err("gate.token_cap が文字列でない".to_owned()), "整数の行");
+    assert_eq!(int_row(&manifest, "runner.model"), Err("runner.model が整数でない".to_owned()), "文字列の行");
+    assert_eq!(str_row(&manifest, "nope"), Err("nope が無い".to_owned()), "無い行");
+    assert_eq!(int_row(&manifest, "nope"), Err("nope が無い".to_owned()), "無い行");
+    let disabled = parsed(
+        "schema = 1\n\n[[rule]]\nid = \"runner.model\"\nkind = \"RunnerModel\"\nvalue = \"opus\"\nenabled = false\nruling = \"r\"\nruled_at = \"d\"\n\n[[rule]]\nid = \"gate.token_cap\"\nkind = \"GateTokenCap\"\nvalue = 7\nenabled = false\nruling = \"r\"\nruled_at = \"d\"\n",
+    )
+    .expect("不発効の行は読める");
+    assert_eq!(str_row(&disabled, "runner.model"), Err("runner.model は不発効である".to_owned()), "不発効");
+    assert_eq!(int_row(&disabled, "gate.token_cap"), Err("gate.token_cap は不発効である".to_owned()), "不発効");
 }
 
 /// 述語が**真を返すだけ**でないこと（非空虚性）。3 つの壊し方をすべて false で返す。

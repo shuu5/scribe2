@@ -12,7 +12,10 @@
 pub mod lens;
 pub mod runner;
 
+use crate::fleet::select::{Model, MODELS};
 use crate::pipe::confine;
+use crate::rules::manifest::Manifest;
+use crate::rules::str_row;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -77,6 +80,35 @@ pub fn need<'a>(args: &'a [String], name: &str) -> Result<&'a str, String> {
     flag(args, name)?.ok_or(format!("{name} が要る"))
 }
 
+/// runner / lens が claude に毎回渡す model を持つ rules 行（設計 pipeline.md §6・`s2-07l.297`）。
+pub const ROW_MODEL: &str = "runner.model";
+
+/// `--rules PATH` が在ればその manifest・無ければ埋め込み（`pipe::cli` と同じ規約）。読めない周は理由つきで `Err`。
+///
+/// **runner と lens の manifest の読み口はここ 1 つ**（lens の cap と両者の model が同じ manifest から来る）。
+/// runner が manifest から読むのは model の 1 行だけで、allowlist と common-verify は従来どおり便の写し
+/// （`--vessel`）から読む（ADR-0010 §2.4 は動かない）。
+pub fn rules_of(args: &[String]) -> Result<Manifest, String> {
+    let loaded = match flag(args, "--rules")? {
+        Some(path) => Manifest::load(Path::new(path)),
+        None => Manifest::embedded(),
+    };
+    loaded.map_err(|errors| {
+        let joined = errors.iter().map(ToString::to_string).collect::<Vec<String>>().join(" / ");
+        format!("rules を読めない: {joined}")
+    })
+}
+
+/// rules 行 [`ROW_MODEL`] の model。行が無い / 不発効 / 文字列でない / 閉じた表（[`Model::parse`]）に無い周は
+/// 理由つきで `Err`＝呼び手は claude を呼ばず rc 2（cap と同じ極性・版の既定へ黙って倒れない）。
+pub fn runner_model(manifest: &Manifest) -> Result<Model, String> {
+    let text = str_row(manifest, ROW_MODEL)?;
+    Model::parse(text).ok_or_else(|| {
+        let taken: Vec<&str> = MODELS.iter().map(|model| model.alias()).collect();
+        format!("{ROW_MODEL} の値 {text} は未知の model（取るのは {}）", taken.join(" / "))
+    })
+}
+
 /// stdin をすべて **byte のまま**読む。
 ///
 /// diff は UTF-8 とは限らず、cap の判定は byte 数で行う（文字数に直すと、同じ diff が
@@ -95,6 +127,10 @@ pub struct Call<'a> {
     pub prompt: &'a str,
     /// **毎回明示する** permission mode（既定に頼らない＝既定は版で動く）。
     pub permission_mode: &'a str,
+    /// claude に渡す model（`--model <値>`・claude CLI の別名）。runner と lens は rules 行 `runner.model` の値を
+    /// **毎回**渡す（`Some`・permission mode と同じ理由＝版の既定に従うと便が消費するモデル別窓が黙って変わり、
+    /// 便用の口座選定が数える窓とずれる・`s2-07l.297`）。`fleet usage` の token refresh は `None`（argv は不変）。
+    pub model: Option<&'a str>,
     /// 本 repo の plugin を載せる dir。
     pub plugin_dir: Option<&'a str>,
     /// 口座の設定 dir（子の環境変数へ書く値）。
@@ -159,7 +195,14 @@ pub fn build(call: &Call<'_>) -> (Command, confine::Confinement) {
         // permission mode は**毎回**渡す。省くと版の既定に従い、同じ 1 行が
         // 環境ごとに違う権限で走る。
         .arg("--permission-mode")
-        .arg(call.permission_mode)
+        .arg(call.permission_mode);
+    // model も**毎回**渡す（`Some` の周・設計 pipeline.md §6）。permission mode と同じ理由で、省くと版の
+    // 既定に従い、便が消費するモデル別窓と便用の口座選定が数える窓がずれる。置き場は呼出側でなくここ
+    // （runner と lens の唯一の構築点）。
+    if let Some(model) = call.model {
+        inner.arg("--model").arg(model);
+    }
+    inner
         // **settings を 1 つも読まない**（ADR-0011 §2.1）。空の値は user / project / local の
         // **どれも読まない**という意味で、`project` に絞る形では対象 repo の
         // `.claude/settings.json` の allow 規則が残る——便ごとに凍結した allowlist
@@ -295,6 +338,7 @@ mod tests {
             claude: "claude",
             prompt: "",
             permission_mode: "plan",
+            model: None,
             plugin_dir: Some(&text),
             account_dir: None,
             cwd: None,
@@ -317,6 +361,7 @@ mod tests {
             claude: "claude",
             prompt: "",
             permission_mode: "plan",
+            model: None,
             plugin_dir: None,
             account_dir: None,
             cwd: None,
@@ -336,6 +381,7 @@ mod tests {
                 claude: "claude",
                 prompt: "",
                 permission_mode: "plan",
+                model: None,
                 plugin_dir: None,
                 account_dir: None,
                 cwd: None,
@@ -352,6 +398,38 @@ mod tests {
         );
         let none = args_of(None);
         assert!(!none.iter().any(|arg| arg == "--max-turns"), "None では現れない: {none:?}");
+        assert_eq!(some.len(), none.len() + 2, "足されるのは対の 2 引数だけ: {some:?} / {none:?}");
+    }
+
+    /// `model: Some("opus")` の call は argv に `--model` `opus` が隣り合って並び、`None` の call には `--model` が
+    /// 1 本も現れない（`fleet usage` の refresh の argv は不変・`s2-07l.297`）。置き場は `--permission-mode` の対の直後。
+    #[test]
+    fn headless_call_model_is_in_argv_only_when_some() {
+        let args_of = |model: Option<&str>| {
+            let (command, _) = build(&Call {
+                claude: "claude",
+                prompt: "",
+                permission_mode: "plan",
+                model,
+                plugin_dir: None,
+                account_dir: None,
+                cwd: None,
+                streaming: false,
+                max_turns: None,
+            });
+            command.get_args().map(|arg| arg.to_string_lossy().into_owned()).collect::<Vec<String>>()
+        };
+        let some = args_of(Some("opus"));
+        assert_eq!(
+            some.windows(2).filter(|pair| pair == &["--model", "opus"]).count(),
+            1,
+            "Some は --model opus の対が 1 つ: {some:?}"
+        );
+        let at_mode = some.iter().position(|arg| arg == "--permission-mode");
+        let at_model = some.iter().position(|arg| arg == "--model");
+        assert_eq!(at_model, at_mode.map(|at| at + 2), "permission mode の対の直後: {some:?}");
+        let none = args_of(None);
+        assert!(!none.iter().any(|arg| arg == "--model"), "None では現れない: {none:?}");
         assert_eq!(some.len(), none.len() + 2, "足されるのは対の 2 引数だけ: {some:?} / {none:?}");
     }
 

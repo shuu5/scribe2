@@ -42,6 +42,60 @@ impl Purpose {
     }
 }
 
+/// claude の model（**閉じた enum**・`s2-07l.297`・憲法 C2 / C10「宣言値と実測値を型で分ける」）。
+///
+/// model には**2 つの語彙**が在る: rules 行 `runner.model` と claude CLI の `--model` が使う**別名**
+/// （[`Model::alias`]・`opus` …）と、口座残量の実測行 `SevenDayModel` の `model` が持つ usage API の
+/// **表示名**（[`Model::display`]・`Opus` …）。字面で比べると本番の組（`opus` × `Opus`）が 1 行も
+/// 一致せず、便用の選定が「その model の窓」を数え損ねる（run 1 の Gated FAIL 2026-09-15）。比較は
+/// [`Model::parse`] の**閉じた表 1 つ**で両側を型にしてから行う（大小文字の無視・字面の寄せは採らない）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Model {
+    /// Opus。
+    Opus,
+    /// Fable。
+    Fable,
+    /// Sonnet。
+    Sonnet,
+    /// Haiku。
+    Haiku,
+}
+
+/// [`Model`] の全 variant（宣言順）。
+pub const MODELS: &[Model] = &[
+    Model::Opus,
+    Model::Fable,
+    Model::Sonnet,
+    Model::Haiku,
+];
+
+impl Model {
+    /// claude CLI の別名（`--model` の値・rules 行 `runner.model` の語彙）。
+    pub fn alias(self) -> &'static str {
+        match self {
+            Self::Opus => "opus",
+            Self::Fable => "fable",
+            Self::Sonnet => "sonnet",
+            Self::Haiku => "haiku",
+        }
+    }
+
+    /// 口座残量の実測行の表示名（usage API の `scope.model.display_name` の語彙・席の登録 row の `model`）。
+    pub fn display(self) -> &'static str {
+        match self {
+            Self::Opus => "Opus",
+            Self::Fable => "Fable",
+            Self::Sonnet => "Sonnet",
+            Self::Haiku => "Haiku",
+        }
+    }
+
+    /// 別名か表示名との**完全一致**で引く（case-fold しない）。表に無い字面は `None`。
+    pub fn parse(text: &str) -> Option<Self> {
+        MODELS.iter().copied().find(|found| found.alias() == text || found.display() == text)
+    }
+}
+
 /// 候補なしの理由。**複数が当てはまる周は宣言順で前の variant が勝つ**（1 つに畳む）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum NoCandidateReason {
@@ -109,7 +163,8 @@ pub struct Input<'a> {
     pub allowance: &'a BTreeMap<AllowanceKey, AllowanceLatest>,
     /// 用途。
     pub purpose: Purpose,
-    /// 使う model の display name（与えられた周はモデル別窓のうちその model の行だけを数える）。
+    /// 使う model（別名か表示名・[`Model::parse`] の語彙・与えられた周はモデル別窓のうちその model の行だけを
+    /// 数える）。字面のまま運び、型にするのは [`counts`] の中（構築点は `fleet select` / 便用 / 席の 3 つ）。
     pub model: Option<&'a str>,
     /// 候補から外す label。
     pub exclude: &'a BTreeSet<String>,
@@ -249,9 +304,16 @@ fn latest_round<'a>(
 
 /// その行を逼迫度に数えるか。model が与えられた周のモデル別窓はその model の行だけを数える
 /// （model の分からない行は保守側で数える）。
+///
+/// **型の境目はここ**: 与えられた model（別名か表示名）と行の表示名を [`Model::parse`] で型にしてから比べる
+/// （字面比較を `counts` の外に残さない）。与えられた model が表に無い周は**保守側で数える**（`model = None`
+/// と同じ・fail-open にしない）。行の表示名が表に無い周は数えない（別 model の窓・従来どおり）。
 fn counts(model: Option<&str>, window: Option<WindowKind>, row_model: Option<&str>) -> bool {
     match (window, model, row_model) {
-        (Some(WindowKind::SevenDayModel), Some(want), Some(found)) => want == found,
+        (Some(WindowKind::SevenDayModel), Some(want), Some(found)) => match Model::parse(want) {
+            Some(want) => Model::parse(found) == Some(want),
+            None => true,
+        },
         _ => true,
     }
 }
@@ -259,8 +321,8 @@ fn counts(model: Option<&str>, window: Option<WindowKind>, row_model: Option<&st
 #[cfg(test)]
 mod tests {
     use super::{
-        line, select, Input, NoCandidate, NoCandidateReason, Purpose, Selection, LIMIT_PCT,
-        NO_CANDIDATE_REASONS, PURPOSES,
+        line, select, Input, Model, NoCandidate, NoCandidateReason, Purpose, Selection, LIMIT_PCT,
+        MODELS, NO_CANDIDATE_REASONS, PURPOSES,
     };
     use crate::fleet::{
         Allowance, AllowanceKey, AllowanceLatest, Measured, Unmeasured, UnmeasuredReason,
@@ -538,6 +600,73 @@ mod tests {
         ])]);
         assert_eq!(choose(&["a1"], &limited, &Ask { model: Some("Opus"), ..run() }), chosen("a1"), "他の model の 100 は数えない");
         assert_eq!(choose(&["a1"], &limited, &run()), none(NoCandidateReason::AllLimited, Some(WEEK_RESET)));
+    }
+
+    /// `Model::parse` は別名（`opus`）と表示名（`Opus`）の**完全一致**で同じ variant を引き、大小文字を寄せない
+    /// （`OPUS` は `None`）。表は 4 つで宣言順（`s2-07l.297`）。
+    #[test]
+    fn model_parse_accepts_alias_and_display_exactly() {
+        assert_eq!(Model::parse("opus"), Some(Model::Opus), "別名");
+        assert_eq!(Model::parse("Opus"), Some(Model::Opus), "表示名");
+        assert_eq!(Model::parse("opus"), Model::parse("Opus"), "2 つの語彙が同じ型に落ちる");
+        assert_eq!(Model::parse("OPUS"), None, "case-fold しない");
+        assert_eq!(Model::parse("claude-opus-5"), None, "model id は表に無い");
+        assert_eq!(Model::parse(""), None);
+        assert_eq!(MODELS.len(), 4, "閉じた表は 4 つ");
+        assert!(is_declaration_order(MODELS, |model| model as usize));
+        for model in MODELS {
+            assert_eq!(Model::parse(model.alias()), Some(*model), "{}", model.alias());
+            assert_eq!(Model::parse(model.display()), Some(*model), "{}", model.display());
+            assert_ne!(model.alias(), model.display(), "2 つの語彙は別の字面");
+        }
+        assert_eq!(MODELS.iter().map(|model| model.alias()).collect::<Vec<_>>(), ["opus", "fable", "sonnet", "haiku"]);
+        assert_eq!(MODELS.iter().map(|model| model.display()).collect::<Vec<_>>(), ["Opus", "Fable", "Sonnet", "Haiku"]);
+    }
+
+    /// 本番の組: `Input.model` は rules 行の**別名**（`opus`）・実測行の model は usage API の**表示名**（`Opus`）。
+    /// `counts` が両側を型にして比べるので、Opus の窓 100 の口座は候補から外れ、Fable の窓 100 だけの口座は残る
+    /// （run 1 の fixture は両側を `Opus` に揃えて隠していた）。表に無い model は保守側（全 model 窓の最大）。
+    #[test]
+    fn select_counts_the_runner_model_window_across_the_two_faces() {
+        let rows = table(&[(TS, vec![
+            // a1: Opus の窓が当たっている（5h / 7d は余裕）。
+            measured("a1", WindowKind::FiveHour, None, 0, FIVE_RESET),
+            measured("a1", WindowKind::SevenDay, None, 81, WEEK_RESET),
+            measured("a1", WindowKind::SevenDayModel, Some("Opus"), 100, WEEK_RESET),
+            // a2: Fable の窓だけが当たっている（便には無関係の窓）。
+            measured("a2", WindowKind::FiveHour, None, 0, FIVE_RESET),
+            measured("a2", WindowKind::SevenDay, None, 50, WEEK_RESET),
+            measured("a2", WindowKind::SevenDayModel, Some("Fable"), 100, WEEK_RESET),
+        ])]);
+        let pair = ["a1", "a2"];
+        assert_eq!(
+            choose(&pair, &rows, &Ask { model: Some("opus"), ..run() }),
+            chosen("a2"),
+            "別名 × 表示名: Opus 100 の a1 は外れ・Fable 100 だけの a2 は残る"
+        );
+        assert_eq!(
+            choose(&["a1"], &rows, &Ask { model: Some("opus"), ..run() }),
+            none(NoCandidateReason::AllLimited, Some(WEEK_RESET)),
+            "a1 の Opus の窓 100 を数える（字面が違っても同じ model）"
+        );
+        assert_eq!(choose(&pair, &rows, &Ask { model: Some("Opus"), ..run() }), chosen("a2"), "表示名で与えても同じ");
+        assert_eq!(choose(&pair, &rows, &Ask { model: Some("fable"), ..run() }), chosen("a1"), "fable なら a2 が外れ a1 = 81");
+        assert_eq!(
+            choose(&pair, &rows, &run()),
+            none(NoCandidateReason::AllLimited, Some(WEEK_RESET)),
+            "model なしは全 model 窓の最大＝両方 100"
+        );
+        assert_eq!(
+            choose(&pair, &rows, &Ask { model: Some("nope"), ..run() }),
+            none(NoCandidateReason::AllLimited, Some(WEEK_RESET)),
+            "表に無い model は保守側（model なしと同じ・fail-open にしない）"
+        );
+        let unknown_row = table(&[(TS, vec![
+            measured("a3", WindowKind::FiveHour, None, 10, FIVE_RESET),
+            measured("a3", WindowKind::SevenDayModel, Some("Nope"), 100, WEEK_RESET),
+        ])]);
+        assert_eq!(choose(&["a3"], &unknown_row, &Ask { model: Some("opus"), ..run() }), chosen("a3"), "表に無い表示名の行は別 model の窓＝数えない");
+        assert_eq!(choose(&["a3"], &unknown_row, &run()), none(NoCandidateReason::AllLimited, Some(WEEK_RESET)), "model なしなら数える");
     }
 
     #[test]

@@ -174,29 +174,47 @@ fn contract_in(dir: &Path) -> PathBuf {
     path
 }
 
-/// lens の `--rules` に渡す最小の manifest（`[[rule]]` 1 行だけ・`row` は id / kind / value / enabled の 4 key）を
-/// `name` で書く。
+/// runner / lens の `--rules` に渡す最小の manifest（`rows` の各要素は id / kind / value / enabled の 4 key の
+/// `[[rule]]` 1 行）を `name` で書く。
 ///
-/// lens が読むのは `gate.token_cap` だけなので、pipe の歯が使う受付の 10 行は載せない（あちらの
-/// helper は `pipe.rs` の private で、こちらへ写すと変更の理由が 2 つの file に割れる）。
+/// runner / lens が読むのは `gate.token_cap`（lens）と `runner.model`（両方）だけなので、pipe の歯が使う受付の
+/// 10 行は載せない（あちらの helper は `pipe.rs` の private で、こちらへ写すと変更の理由が 2 つの file に割れる）。
 #[expect(
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
-fn rules_with_row(dir: &Path, name: &str, row: &str) -> PathBuf {
-    let body = format!("schema = 1\n\n[[rule]]\n{row}ruling = \"t\"\nruled_at = \"d\"\n");
+fn rules_with_rows(dir: &Path, name: &str, rows: &[String]) -> PathBuf {
+    let body: String = rows
+        .iter()
+        .map(|row| format!("\n[[rule]]\n{row}ruling = \"t\"\nruled_at = \"d\"\n"))
+        .collect();
     let path = dir.join(name);
-    fs::write(&path, body).expect("tmp manifest を書ける");
+    fs::write(&path, format!("schema = 1\n{body}")).expect("tmp manifest を書ける");
     path
 }
 
+/// [`rules_with_rows`] の 1 行の形。
+fn rules_with_row(dir: &Path, name: &str, row: &str) -> PathBuf {
+    rules_with_rows(dir, name, &[row.to_owned()])
+}
+
+/// `gate.token_cap` の行（`cap` byte・発効）。
+fn cap_row(cap: u64) -> String {
+    format!("id = \"gate.token_cap\"\nkind = \"GateTokenCap\"\nvalue = {cap}\nenabled = true\n")
+}
+
+/// `runner.model` の行（値は文字列 `value`・発効）。
+fn model_row(value: &str) -> String {
+    format!("id = \"runner.model\"\nkind = \"RunnerModel\"\nvalue = \"{value}\"\nenabled = true\n")
+}
+
+/// 埋め込み manifest と同じ `runner.model` の値（claude CLI の別名・裁定 id `user 2026-09-14T21:59Z`）。
+const RUNNER_MODEL: &str = "opus";
+
 /// `gate.token_cap` を `cap` byte にした manifest（file 名に値を含む＝同じ dir で cap を変えて撃ち直せる）。
+/// `runner.model` は埋め込みと同じ値で載せる（lens は cap と model の 2 行を同じ manifest から読む）。
 fn rules_with_cap(dir: &Path, cap: u64) -> PathBuf {
-    rules_with_row(
-        dir,
-        &format!("rules-cap-{cap}.toml"),
-        &format!("id = \"gate.token_cap\"\nkind = \"GateTokenCap\"\nvalue = {cap}\nenabled = true\n"),
-    )
+    rules_with_rows(dir, &format!("rules-cap-{cap}.toml"), &[cap_row(cap), model_row(RUNNER_MODEL)])
 }
 
 /// lens を 1 回撃つ（引数の並びが複数の歯で同じなので畳む）。cap は **`--rules` の manifest** で
@@ -280,6 +298,22 @@ fn run_runner(call: &RunnerCall<'_>, input: &[u8]) -> Output {
 
 /// runner を 1 回撃つ（plugin root を名指す形・root の中身は呼び手が作る）。
 fn run_runner_in(call: &RunnerCall<'_>, root: &Path, input: &[u8]) -> Output {
+    let args = runner_args(call, root);
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    run_bin(&refs, input)
+}
+
+/// runner を `--rules` の manifest つきで 1 回撃つ（plugin root = [`RunnerCall::dir`]・model の行の歯）。
+fn run_runner_with_rules(call: &RunnerCall<'_>, rules: &Path, input: &[u8]) -> Output {
+    plugin_leaf(call.dir);
+    let mut args = runner_args(call, call.dir);
+    args.extend(["--rules".to_owned(), rules.display().to_string()]);
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    run_bin(&refs, input)
+}
+
+/// runner の argv（plugin root を名指す形）。
+fn runner_args(call: &RunnerCall<'_>, root: &Path) -> Vec<String> {
     let mut args = vec![
         "runner".to_owned(),
         "--worktree".to_owned(),
@@ -299,8 +333,7 @@ fn run_runner_in(call: &RunnerCall<'_>, root: &Path, input: &[u8]) -> Output {
         args.push("--account-dir".to_owned());
         args.push(found.display().to_string());
     }
-    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-    run_bin(&refs, input)
+    args
 }
 
 /// runner が claude へ渡した引数と prompt を測る（歯 1 が mode ごとに 2 度使う）。
@@ -308,6 +341,7 @@ fn assert_runner_call(dir: &Path, worktree: &Path, account: &Path, mode: &str) {
     let args = slurp(&dir.join("args"));
     let lines: Vec<&str> = args.lines().collect();
     assert!(pair(&args, "--permission-mode", mode), "permission mode を毎回明示する: {args}");
+    assert!(pair(&args, "--model", RUNNER_MODEL), "model も毎回明示する（`--rules` 無しは埋め込みの行）: {args}");
     assert!(pair(&args, "--output-format", "stream-json"), "stream-json で回す: {args}");
     assert!(lines.contains(&"--verbose"), "stream-json には --verbose が要る: {args}");
     // root（`dir`）そのものではなく、配下の dir が 1 本だけ渡る（root 直下の file は plugin でない）。
@@ -602,6 +636,142 @@ fn headless_lens_refuses_unreadable_cap_row() {
         assert!(err.contains(&format!("lens: {want}")), "理由を 1 行で名乗る: {err}");
         assert_eq!(err.lines().count(), 1, "stderr は理由の 1 行だけ: {err}");
         assert!(stdout_of(&out).is_empty(), "判定の面には何も出さない: {}", stdout_of(&out));
+    }
+    clean(&[&dir]);
+}
+
+/// runner が claude へ渡す argv に `--model` の対が在るか（値つき・fake が写した argv）。
+fn model_arg(dir: &Path) -> Option<String> {
+    let args = slurp(&dir.join("args"));
+    let lines: Vec<&str> = args.lines().collect();
+    lines
+        .windows(2)
+        .find(|w| w.first() == Some(&"--model"))
+        .and_then(|w| w.get(1).map(|value| (*value).to_owned()))
+}
+
+/// (a) runner は rules 行 `runner.model` の model を claude に**毎回**渡す（`s2-07l.297`・設計 pipeline.md §6・FR5）:
+/// `--rules` の manifest の値が `opus` なら argv に `--model opus` の対・値を `sonnet` に変えると対の値も変わる
+/// （値は行から来る＝定数ではない）・表示名 `Opus` で書いた行も CLI の別名 `opus` で渡る（[`Model::parse`] →
+/// `alias`）・`--rules` 無しは埋め込みの行（`opus`）。base は `--model` を渡さないので RED。
+#[test]
+fn headless_runner_passes_model_from_rules_row() {
+    let dir = tmp();
+    let worktree = tmp();
+    let claude = fake_claude(&dir, "", false, 0);
+    let write_set = dir.join("write-set.txt");
+    let vessel = write_vessel_copy(&dir, r#"["cargo", "git"]"#);
+    fs::write(&write_set, "src/lib.rs\n").expect("write-set を書ける");
+    let call = RunnerCall { dir: &dir, worktree: &worktree, write_set: &write_set, vessel: &vessel, claude: &claude, mode: "plan", account: None };
+    for (value, want) in [("opus", "opus"), ("sonnet", "sonnet"), ("Opus", "opus"), ("Fable", "fable")] {
+        let rules = rules_with_rows(&dir, &format!("rules-model-{value}.toml"), &[model_row(value)]);
+        let out = run_runner_with_rules(&call, &rules, b"goal = \"x\"\n");
+        assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{value}: {}", stderr_of(&out));
+        assert_eq!(model_arg(&dir), Some(want.to_owned()), "{value}: 行の値を CLI の別名で渡す: {}", slurp(&dir.join("args")));
+        let args = slurp(&dir.join("args"));
+        assert_eq!(args.lines().filter(|line| *line == "--model").count(), 1, "{value}: 対は 1 つ: {args}");
+        assert!(!has_arg(&args, "--rules"), "{value}: --rules は claude へ渡らない: {args}");
+        fs::remove_file(dir.join("args")).expect("前の周の写しを消せる");
+    }
+    // `--rules` 無しは埋め込みの manifest の行（`fleet usage` の refresh とは違い、runner は必ず渡す）。
+    let out = run_runner(&call, b"goal = \"x\"\n");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    assert_eq!(model_arg(&dir), Some(RUNNER_MODEL.to_owned()), "埋め込みの行: {}", slurp(&dir.join("args")));
+    clean(&[&dir, &worktree]);
+}
+
+/// (b) lens も同じ行の model を claude に毎回渡す（runner と同じ構築点 `build`）: `--rules` の manifest の値ごとに
+/// `--model` の対が変わり、`--rules` 無しは埋め込みの行。base は渡さないので RED。
+#[test]
+fn headless_lens_passes_model_from_rules_row() {
+    let dir = tmp();
+    let claude = fake_claude(&dir, "{\"verdict\":\"PASS\",\"evidence\":\"model の歯\"}\n", false, 0);
+    let contract = contract_in(&dir);
+    for (value, want) in [("opus", "opus"), ("haiku", "haiku"), ("Sonnet", "sonnet")] {
+        let rules = rules_with_rows(&dir, &format!("rules-model-{value}.toml"), &[cap_row(4096), model_row(value)]);
+        let out = run_bin_owned(&lens_args(&contract, &dir, &["--rules", &rules.display().to_string()], &claude), b"--- a\n+++ b\n");
+        assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{value}: {}", stderr_of(&out));
+        assert_eq!(stdout_of(&out).trim(), r#"{"verdict":"PASS","evidence":"model の歯"}"#, "{value}: 判定は claude の行");
+        assert_eq!(model_arg(&dir), Some(want.to_owned()), "{value}: 行の値を CLI の別名で渡す: {}", slurp(&dir.join("args")));
+        fs::remove_file(dir.join("args")).expect("前の周の写しを消せる");
+    }
+    let out = run_bin_owned(&lens_args(&contract, &dir, &[], &claude), b"--- a\n+++ b\n");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    assert_eq!(model_arg(&dir), Some(RUNNER_MODEL.to_owned()), "埋め込みの行: {}", slurp(&dir.join("args")));
+    clean(&[&dir]);
+}
+
+/// (c) `runner.model` の行が解けない周（無い / 不発効 / 文字列でない / 閉じた表に無い値）は runner が **claude を
+/// 呼ばず rc 2** で理由を 1 行（`runner: runner.model …`・lens の cap と同じ極性）。
+///
+/// base の断りと弁別する: base は `--rules` を知らずに読み飛ばし claude を起こす（argv の写しが**生成される**）。
+/// 本歯は写しの不在と stderr の字面（`runner.model が無い`＝「未知の flag」ではない）の両方で測る。
+#[test]
+fn headless_runner_refuses_when_model_row_is_missing() {
+    let dir = tmp();
+    let worktree = tmp();
+    let claude = fake_claude(&dir, "", false, 0);
+    let write_set = dir.join("write-set.txt");
+    let vessel = write_vessel_copy(&dir, r#"["cargo", "git"]"#);
+    fs::write(&write_set, "src/lib.rs\n").expect("write-set を書ける");
+    let call = RunnerCall { dir: &dir, worktree: &worktree, write_set: &write_set, vessel: &vessel, claude: &claude, mode: "plan", account: None };
+    let absent = rules_with_rows(&dir, "absent.toml", &[cap_row(4096)]);
+    let disabled = rules_with_row(&dir, "disabled.toml", "id = \"runner.model\"\nkind = \"RunnerModel\"\nvalue = \"opus\"\nenabled = false\n");
+    // id は同じで kind が整数の行（manifest は id と kind の対応を照合しない）＝値が文字列でない形。
+    let int = rules_with_row(&dir, "int.toml", "id = \"runner.model\"\nkind = \"GateTokenCap\"\nvalue = 5\nenabled = true\n");
+    let unknown = rules_with_rows(&dir, "unknown.toml", &[model_row("nope")]);
+    let missing = dir.join("no-such-rules.toml");
+    for (rules, want) in [
+        (&absent, "runner.model が無い"),
+        (&disabled, "runner.model は不発効である"),
+        (&int, "runner.model が文字列でない"),
+        (&unknown, "runner.model の値 nope は未知の model"),
+        (&missing, "rules を読めない"),
+    ] {
+        let out = run_runner_with_rules(&call, rules, b"goal = \"x\"\n");
+        assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "{want}: rc 2 / {}", stderr_of(&out));
+        assert!(!dir.join("called").exists(), "{want}: claude を 1 度も起動しない");
+        assert!(!dir.join("args").exists(), "{want}: argv の写しは生成されない");
+        let err = stderr_of(&out);
+        assert!(err.contains(&format!("runner: {want}")), "{want}: 理由を 1 行で名乗る: {err}");
+        assert!(!err.contains("未知の引数") && !err.contains("usage: "), "{want}: 未知の flag の断りではない: {err}");
+        assert_eq!(err.lines().count(), 1, "{want}: stderr は理由の 1 行だけ: {err}");
+        assert!(stdout_of(&out).is_empty(), "{want}: stdout には何も出さない: {}", stdout_of(&out));
+    }
+    // `--rules` の値欠けは前提違反（rc 1・usage）。
+    let mut args = runner_args(&call, &dir);
+    args.push("--rules".to_owned());
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let out = run_bin(&refs, b"goal = \"x\"\n");
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "値欠け: {}", stderr_of(&out));
+    assert!(stderr_of(&out).contains("--rules に値が無い"), "{}", stderr_of(&out));
+    assert!(stderr_of(&out).contains("[--rules PATH]"), "usage は --rules を載せる: {}", stderr_of(&out));
+    assert!(!dir.join("called").exists(), "claude を 1 度も起動しない");
+    clean(&[&dir, &worktree]);
+}
+
+/// lens の `runner.model` の行も同じ極性（claude を呼ばず rc 2・理由 1 行）。cap の行が解けない周は cap の理由が先
+/// （[`headless_lens_refuses_unreadable_cap_row`] の字面は不変）。
+#[test]
+fn headless_lens_refuses_when_model_row_is_missing() {
+    let dir = tmp();
+    let claude = fake_claude(&dir, "{\"verdict\":\"PASS\",\"evidence\":\"呼ばれてはならない\"}\n", false, 0);
+    let contract = contract_in(&dir);
+    let absent = rules_with_rows(&dir, "absent.toml", &[cap_row(4096)]);
+    let unknown = rules_with_rows(&dir, "unknown.toml", &[cap_row(4096), model_row("Opus 5")]);
+    let both_missing = rules_with_row(&dir, "both.toml", "id = \"gate.lens_count\"\nkind = \"GateLensCount\"\nvalue = 1\nenabled = true\n");
+    for (rules, want) in [
+        (&absent, "runner.model が無い"),
+        (&unknown, "runner.model の値 Opus 5 は未知の model"),
+        (&both_missing, "gate.token_cap が無い"),
+    ] {
+        let out = run_bin_owned(&lens_args(&contract, &dir, &["--rules", &rules.display().to_string()], &claude), b"--- a\n+++ b\n");
+        assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "{want}: rc 2 / {}", stderr_of(&out));
+        assert!(!dir.join("called").exists(), "{want}: claude を 1 度も起動しない");
+        let err = stderr_of(&out);
+        assert!(err.contains(&format!("lens: {want}")), "{want}: 理由を 1 行で名乗る: {err}");
+        assert_eq!(err.lines().count(), 1, "{want}: stderr は理由の 1 行だけ: {err}");
+        assert!(stdout_of(&out).is_empty(), "{want}: 判定の面には何も出さない");
     }
     clean(&[&dir]);
 }

@@ -76,10 +76,17 @@ fn select_account(args: &[String], dir: &Path) -> Outcome {
 }
 
 /// `--purpose`（必須）・`--model`・`--exclude`（複数可）を読む。
+///
+/// `--model` は閉じた表（[`select::Model::parse`]・別名か表示名）で受け、表に無い値は typed に断る（字面は
+/// そのまま選定へ渡し、型にするのは選定の中・`s2-07l.297`）。
 fn select_flags(args: &[String]) -> Result<(select::Purpose, Option<&str>, BTreeSet<String>), String> {
     let text = required(args, "--purpose")?;
     let purpose = select::Purpose::parse(text).ok_or(format!("purpose {text} は run でも session でもない"))?;
     let model = optional(args, "--model")?;
+    if let Some(found) = model.filter(|found| select::Model::parse(found).is_none()) {
+        let taken: Vec<&str> = select::MODELS.iter().map(|model| model.display()).collect();
+        return Err(format!("model {found} は未知である（取るのは {}）", taken.join(" / ")));
+    }
     Ok((purpose, model, excludes(args)?))
 }
 

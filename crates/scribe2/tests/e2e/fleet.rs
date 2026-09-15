@@ -3310,6 +3310,31 @@ fn fleet_select_refuses_unknown_purpose_with_usage() {
     drop_fixture(&fx);
 }
 
+/// `--model` は閉じた表（`Model::parse`・別名か表示名・`s2-07l.297`）で受ける: 表に無い値（`OPUS` / `claude-opus-5` /
+/// `nope`）は usage で typed に断り（rc 1・値を名指す・計測しない）、別名 `opus` と表示名 `Opus` はどちらも通って
+/// 同じ選定になる（usage の 1 行は不変＝fleet の外形 snapshot は動かない）。
+#[test]
+fn fleet_select_model_must_be_in_the_closed_table() {
+    let (fx, curl) = select_fixture(SELECT_THREE, true, Some("85"));
+    for bad in ["OPUS", "claude-opus-5", "nope"] {
+        let out = run_select(&fx, &curl, &["--purpose", "run", "--model", bad]);
+        assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{bad}: {out:?}");
+        assert!(out.stdout.is_empty(), "{bad}: 選ばない");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(stderr.contains(&format!("fleet: model {bad} は未知である")), "{bad}: 値を名指す: {stderr}");
+        assert!(stderr.contains("Opus") && stderr.contains("Fable"), "{bad}: 取る名を名指す: {stderr}");
+        assert!(stderr.contains("usage: fleet"), "{bad}: 使い方を stderr へ: {stderr}");
+    }
+    assert_eq!(curl_calls(&fx), 0, "断った周は計測しない");
+    assert!(!store::events_path(&fx.state).exists(), "event を書かない");
+    for good in ["opus", "Opus", "fable", "Sonnet", "haiku"] {
+        let out = run_select(&fx, &curl, &["--purpose", "run", "--model", good]);
+        assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{good}: {out:?}");
+        assert_eq!(out_lines(&out), vec!["select purpose=run chosen=a2".to_owned()], "{good}: モデル別の行が無い表では model に依らない");
+    }
+    drop_fixture(&fx);
+}
+
 /// (7) R-C9-1 の欠落・散文の値は `RuleError` で断る（計測しない）。
 #[test]
 fn fleet_select_refuses_rules_without_the_selection_row() {

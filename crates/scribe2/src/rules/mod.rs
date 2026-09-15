@@ -42,6 +42,36 @@ pub fn declared_labels(tracked: &[String], state_dir: &Path) -> Result<Vec<Strin
     HostManifest::read(&host_manifest_path(state_dir)).labels_over(tracked)
 }
 
+/// 発効した行を 1 つ引く。無い / 不発効の周は理由つきで `Err`（行の無さを既定に倒さない・C1）。
+fn enabled_row<'a>(manifest: &'a Manifest, id: &str) -> Result<&'a RuleRow, String> {
+    let row = manifest.get(id).ok_or(format!("{id} が無い"))?;
+    if !row.enabled {
+        return Err(format!("{id} は不発効である"));
+    }
+    Ok(row)
+}
+
+/// 整数の行の値。行が無い / 不発効 / 整数でない周は 3 理由の `Err`（`pipe::cli::int_row` と同じ字面）。
+///
+/// 読み手は headless（lens の cap）。`pipe::cli` の同形は private で、pub にするには `pipe` 側へ手を入れる
+/// ことになる（`s2-07l.272` の柵）——**行の読み手の正本はこちら**で、`pipe` 側は後続で寄せる。
+pub fn int_row(manifest: &Manifest, id: &str) -> Result<u64, String> {
+    match enabled_row(manifest, id)?.value {
+        RuleValue::Int(found) => Ok(found),
+        _ => Err(format!("{id} が整数でない")),
+    }
+}
+
+/// 文字列の行の値。行が無い / 不発効 / 文字列でない周は 3 理由の `Err`（[`int_row`] と同じ極性）。
+///
+/// 読み手は headless（runner / lens の `runner.model`）と `pipe::ratelimit`（便用の選定の model）の **1 本**。
+pub fn str_row<'a>(manifest: &'a Manifest, id: &str) -> Result<&'a str, String> {
+    match &enabled_row(manifest, id)?.value {
+        RuleValue::Str(found) => Ok(found),
+        _ => Err(format!("{id} が文字列でない")),
+    }
+}
+
 /// 種類が要求する値の形。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ValueShape {
@@ -174,6 +204,9 @@ pub enum RuleKind {
     PipeSizeMLines,
     /// 契約の `size` = L の 1 file あたりの増分の見積（行）。
     PipeSizeLLines,
+    /// runner / lens が claude に**毎回**渡す model（設計 pipeline.md §6・`s2-07l.297`）。値は claude CLI の別名
+    /// （閉じた表は [`crate::fleet::select::Model`]）。便用の口座選定はこの model のモデル別窓だけを数える。
+    RunnerModel,
 }
 
 /// [`RuleKind`] の全 variant。parity test の母集団である。
@@ -226,6 +259,7 @@ pub const ALL: &[RuleKind] = &[
     RuleKind::PipeSizeSLines,
     RuleKind::PipeSizeMLines,
     RuleKind::PipeSizeLLines,
+    RuleKind::RunnerModel,
 ];
 
 impl RuleKind {
@@ -280,6 +314,7 @@ impl RuleKind {
             Self::PipeSizeSLines => "PipeSizeSLines",
             Self::PipeSizeMLines => "PipeSizeMLines",
             Self::PipeSizeLLines => "PipeSizeLLines",
+            Self::RunnerModel => "RunnerModel",
         }
     }
 
@@ -325,7 +360,7 @@ impl RuleKind {
             | Self::PipeSizeMLines
             | Self::PipeSizeLLines
             | Self::AccountSelection => ValueShape::Int,
-            Self::DialogueSurface => ValueShape::Str,
+            Self::DialogueSurface | Self::RunnerModel => ValueShape::Str,
             Self::MaturityCondition
             | Self::MutationSurvivalLine
             | Self::CompileShape

@@ -7,12 +7,26 @@ use super::cli::{broken, flag, refused, resolve, stage_of, state_dir_of, turn_of
 use super::follow;
 use super::{current, runner_is_idle};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_OK};
-use crate::fleet::select::Selection;
+use crate::fleet::select::{Model, Selection};
 use crate::fleet::store::{LockPolicy, StoreError};
 use crate::fleet::{self, Completion, Stage, Timeout};
+use crate::headless::ROW_MODEL;
 use crate::rules::manifest::Manifest;
+use crate::rules::str_row;
 use std::path::Path;
 use std::time::Duration;
+
+/// 便用の選定の入力のうち置き場を持たない宣言値: 口座 label の列と便が使う model（`s2-07l.297`）。
+///
+/// model は rules 行 `runner.model` の値の**字面のまま**運ぶ（型にするのは選定の `counts` の中）。runner / lens が
+/// 同じ行の model を `--model` で毎回明示するので、便が消費するのはその model のモデル別窓だけ＝選定もその窓だけを
+/// 数える（他の model の窓が 100 でも候補から外さない・設計 account-autonomy.md §3）。
+struct Pool<'a> {
+    /// manifest の `[[account]]` の label 列（tracked + host の面）。
+    labels: &'a [String],
+    /// rules 行 `runner.model` の値。
+    model: &'a str,
+}
 
 /// `RateLimited` の便を別口座で起こし直す経路（設計 account-autonomy.md §4・ADR-0020 §2.3・FR37）。
 ///
@@ -49,7 +63,13 @@ pub(super) fn ride_out_rate_limit(
         if stage != Some(Stage::RateLimited) {
             return outcome;
         }
-        let turn = resume_rate_limited(args, id, runner, &labels, policy);
+        // 便が使う model は上限で止まった周にだけ要る（`pipe run` は段が動かない周にこの行を読まない）。
+        // 行が無い / 不発効 / 文字列でない / 閉じた表に無い周は typed に断り、claude を呼ばず再開もしない。
+        let model = match runner_model_of(manifest) {
+            Ok(found) => found,
+            Err(reason) => return refused(reason),
+        };
+        let turn = resume_rate_limited(args, id, runner, &Pool { labels: &labels, model }, policy);
         outcome.out.extend(turn.out);
         outcome.err.extend(turn.err);
         if turn.rc != RC_OK {
@@ -78,6 +98,17 @@ fn declared_labels(manifest: &Manifest, state_dir: &Path) -> Result<Vec<String>,
     })
 }
 
+/// rules 行 `runner.model` の値（runner / lens が `--model` で毎回明示する model・設計 pipeline.md §6）。読み手は
+/// [`str_row`] の 1 本（headless と同じ）で、値は閉じた表（[`Model::parse`]）で検査してから**字面のまま**返す
+/// （選定へ渡す値を書き換えない・型にするのは選定の中）。表に無い値は行が無いのと同じ typed な断り。
+fn runner_model_of(manifest: &Manifest) -> Result<&str, String> {
+    let text = str_row(manifest, ROW_MODEL)?;
+    if Model::parse(text).is_none() {
+        return Err(format!("{ROW_MODEL} の値 {text} は未知の model である"));
+    }
+    Ok(text)
+}
+
 /// `RateLimited` の便の 1 周（設計 account-autonomy.md §4）: (i) FR33 の計測を 1 回撃つ →
 /// (ii) 便用の規則で口座を選ぶ → (iii) `Chosen` なら同じ worktree・契約・base の runner をその口座で
 /// 起こし直す / (iv) 候補なしなら最も早い reset まで唯一の wait で待ち、成立なら (ii) から・`Timeout`
@@ -90,7 +121,7 @@ fn resume_rate_limited(
     args: &[String],
     id: &str,
     runner: &str,
-    labels: &[String],
+    pool: &Pool<'_>,
     policy: LockPolicy,
 ) -> Outcome {
     let resolved = match resolve(args, id, &[Stage::RateLimited], &Extra::Nothing) {
@@ -116,7 +147,7 @@ fn resume_rate_limited(
         }
         outcome.err.extend(measured.out.into_iter().chain(measured.err));
         // (ii) 選定（待ちが成立した周はここから撃ち直す＝計測は待ちの観測が読んだ行のまま）。
-        match choose_or_wait(id, &resolved.state_dir, labels, &mut outcome) {
+        match choose_or_wait(id, &resolved.state_dir, pool, &mut outcome) {
             Ok(Some(label)) => break label,
             Ok(None) => {}
             // 止まる周も、それまでの判定行（`next=wait …`）と計測の行は残す。
@@ -146,7 +177,7 @@ fn resume_rate_limited(
 fn choose_or_wait(
     id: &str,
     state_dir: &Path,
-    labels: &[String],
+    pool: &Pool<'_>,
     outcome: &mut Outcome,
 ) -> Result<Option<String>, Outcome> {
     loop {
@@ -157,7 +188,8 @@ fn choose_or_wait(
         if stage != Stage::RateLimited {
             return Err(refused(format!("run {id} の段は {} である（待ちの間に動いた）", stage.as_str())));
         }
-        let found = match fleet::select_for_run(&state, labels, &fleet::cli::now_utc()) {
+        // 便用の選定は便が使う model の窓だけを数える（待ちの観測 `AccountFree` も同じ model を運ぶ・C3.4）。
+        let found = match fleet::select_for_run(&state, pool.labels, Some(pool.model), &fleet::cli::now_utc()) {
             Selection::Chosen(label) => return Ok(Some(label)),
             Selection::None(found) => found,
         };
@@ -181,7 +213,8 @@ fn choose_or_wait(
                 reset_at: reset,
                 state_dir: state_dir.to_path_buf(),
                 run: id.to_owned(),
-                labels: labels.to_vec(),
+                labels: pool.labels.to_vec(),
+                model: Some(pool.model.to_owned()),
             },
             deadline,
         );

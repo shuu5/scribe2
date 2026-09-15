@@ -557,25 +557,39 @@ const FAR_RESET: &str = "2099-01-01T05:00:00Z";
 /// 遠い未来の 7 日窓の reset。
 const FAR_WEEK_RESET: &str = "2099-01-07T00:00:00Z";
 
-/// 口座 1 つの窓の fixture（5 時間窓の使用率・7 日窓の使用率・reset）。reset は `None` なら遠い未来
+/// 口座 1 つの窓の fixture（5 時間窓の使用率・7 日窓の使用率・reset・モデル別 7 日窓）。reset は `None` なら遠い未来
 /// （[`FAR_RESET`] / [`FAR_WEEK_RESET`]）、`Some(secs)` なら**偽 curl が呼ばれた瞬間**から `secs` 秒後を
-/// **両窓に**置く（[`fake_usage_curl`] が応答の直前に `date -u` で作って埋める＝process の起動遅れに依らず
-/// 計測時点で未来。両窓を揃えるのは、5 時間窓だけが古くなる周に 7 日窓の実測で計測なしに選ばれないため）。
+/// **全窓に**置く（[`fake_usage_curl`] が応答の直前に `date -u` で作って埋める＝process の起動遅れに依らず
+/// 計測時点で未来。窓を揃えるのは、5 時間窓だけが古くなる周に 7 日窓の実測で計測なしに選ばれないため）。
+/// `models` は `limits[]` の `weekly_scoped` 要素（usage API の**表示名**・`Opus` / `Fable` …・使用率）。
 #[derive(Debug, Clone)]
 struct Windows {
     five: u64,
     seven: u64,
     reset_in: Option<u64>,
+    models: Vec<(&'static str, u64)>,
 }
 
-/// 5 時間窓が `five`%・7 日窓が `seven`%（reset はどちらも遠い未来）の fixture。
+/// 5 時間窓が `five`%・7 日窓が `seven`%（reset はどちらも遠い未来・モデル別の行なし）の fixture。
 fn windows(five: u64, seven: u64) -> Windows {
-    Windows { five, seven, reset_in: None }
+    Windows { five, seven, reset_in: None, models: Vec::new() }
 }
 
 /// 5 時間窓が当たっている（100%・7 日窓は 10%）口座で、reset は偽 curl の呼出しから `secs` 秒後。
 fn limited_for(secs: u64) -> Windows {
-    Windows { five: 100, seven: 10, reset_in: Some(secs) }
+    Windows { five: 100, seven: 10, reset_in: Some(secs), models: Vec::new() }
+}
+
+/// `found` にモデル別 7 日窓（表示名 `model`・`pct`%）を 1 行足す。
+fn with_model(found: Windows, model: &'static str, pct: u64) -> Windows {
+    let mut models = found.models;
+    models.push((model, pct));
+    Windows { models, ..found }
+}
+
+/// `found` の reset を偽 curl の呼出しから `secs` 秒後にする（全窓）。
+fn resetting_in(found: Windows, secs: u64) -> Windows {
+    Windows { reset_in: Some(secs), ..found }
 }
 
 /// 偽 curl が呼出時刻から相対で埋める reset の穴（`@RESET+<secs>@`・穴はこの 1 種だけ）。
@@ -583,30 +597,53 @@ fn reset_hole(secs: u64) -> String {
     format!("@RESET+{secs}@")
 }
 
-/// 口座残量の応答の本文（`fleet usage` が読む形・モデル別の行なし）。
+/// 口座残量の応答の本文（`fleet usage` が読む形・モデル別の行は `models` の順に `limits[]` へ）。
 fn usage_body(found: &Windows) -> String {
     let (five_reset, week_reset) = match found.reset_in {
         Some(secs) => (reset_hole(secs), reset_hole(secs)),
         None => (FAR_RESET.to_owned(), FAR_WEEK_RESET.to_owned()),
     };
+    let limits: Vec<String> = found
+        .models
+        .iter()
+        .map(|(model, pct)| {
+            format!(
+                r#"{{"kind":"weekly_scoped","percent":{pct},"resets_at":"{week_reset}","scope":{{"model":{{"display_name":"{model}"}}}}}}"#
+            )
+        })
+        .collect();
     format!(
-        r#"{{"five_hour":{{"utilization":{},"resets_at":"{five_reset}"}},"seven_day":{{"utilization":{},"resets_at":"{week_reset}"}},"limits":[]}}"#,
-        found.five, found.seven
+        r#"{{"five_hour":{{"utilization":{},"resets_at":"{five_reset}"}},"seven_day":{{"utilization":{},"resets_at":"{week_reset}"}},"limits":[{}]}}"#,
+        found.five,
+        found.seven,
+        limits.join(",")
     )
 }
 
-/// `pipe resume` / `pipe run` に渡す manifest: [`write_rules`] の写しに計測の待ち時間の行と `[[account]]` を
-/// `labels` の順で足したもの。
+/// 便が使う model の rules 行 `runner.model` の値（本番と同じ claude CLI の**別名**・埋め込みの行と同じ・`s2-07l.297`）。
+/// 実測行の表示名（`Opus`）とは**字面が違う**＝歯は 2 つの語彙の組で本番の照合を測る（揃えて隠さない）。
+const RUNNER_MODEL: &str = "opus";
+
+/// `pipe resume` / `pipe run` に渡す manifest: [`write_rules`] の写しに計測の待ち時間の行・便が使う model の行
+/// （値は [`RUNNER_MODEL`]）と `[[account]]` を `labels` の順で足したもの。
+fn resume_rules(state: &Path, labels: &[&str]) -> String {
+    resume_rules_with_model(state, labels, RUNNER_MODEL)
+}
+
+/// [`resume_rules`] の `runner.model` の値を `model` にした形（未知の値の歯だけが振る）。
 #[expect(
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
-fn resume_rules(state: &Path, labels: &[&str]) -> String {
+fn resume_rules_with_model(state: &Path, labels: &[&str], model: &str) -> String {
     let path = write_rules(state, "rules-resume.toml", 1, 1_000_000);
     let mut body = fs::read_to_string(&path).expect("写しを読める");
     body.push_str(
         "\n[[rule]]\nid = \"fleet.usage_timeout_s\"\nkind = \"UsageTimeoutS\"\nvalue = 13\nenabled = true\nruling = \"t\"\nruled_at = \"d\"\n",
     );
+    body.push_str(&format!(
+        "\n[[rule]]\nid = \"runner.model\"\nkind = \"RunnerModel\"\nvalue = \"{model}\"\nenabled = true\nruling = \"t\"\nruled_at = \"d\"\n"
+    ));
     for label in labels {
         body.push_str(&format!("\n[[account]]\nlabel = \"{label}\"\n"));
     }
@@ -1024,6 +1061,90 @@ fn pipe_ratelimit_resume_run_rides_out_repeated_limits_without_a_cap() {
     assert_eq!(curl_calls(&state), 4, "起こし直しのたびに計測（2 口座 × 2 回）");
     assert!(show_line(&repo, &state, &id).contains("stage=Landed"), "1 process で Landed まで: {stdout}");
     assert!(!events(&state).iter().any(|event| event.actor == "human"), "人由来の event は 0");
+    clean(&[&repo, &state]);
+}
+
+// ───── 便用の選定は便が使う model の窓だけを数える（`s2-07l.297`・設計 account-autonomy.md §3・SRS FR36 / FR33 / FR5） ─────
+
+/// (d) 候補の口座が **Fable の窓 100 / 7 日 50 / 5 時間 0** でも、便が使う model（rules 行 `runner.model` = `opus`）の
+/// 窓ではないので候補に残り、再開は待たずに `Chosen(a1)` で runner を起こす（`next=spawn account=a1`・計測は 1 回・
+/// `next=wait` は出ない）。
+///
+/// base は model を渡さず全 model 窓の最大（Fable の 100）で `all-limited` に倒れ、reset（5 秒後）まで待ってから
+/// 2 回目の計測（Fable の行なし）で選ぶ＝`next=wait` が出て計測が 2 回になる → RED。2 回目の本文を置くのは
+/// base で歯が永久に待たないため（RED を timeout でなく assert で測る）。
+#[test]
+fn pipe_ratelimit_resume_counts_only_the_runner_model_window() {
+    let (repo, state) = repo_with_state();
+    let (id, runner, rules) = rate_limited_with_accounts(&repo, &state, &[IMPLEMENT.to_owned()], &["a1"]);
+    put_account(&state, "a1", &[resetting_in(with_model(windows(0, 50), "Fable", 100), 5), windows(0, 50)]);
+    let resumed = resume_with_accounts(&repo, &state, &id, &runner, &rules);
+    assert_eq!(resumed.status.code(), Some(i32::from(RC_OK)), "{} / {}", stdout_of(&resumed), stderr_of(&resumed));
+    let stdout = stdout_of(&resumed);
+    assert_eq!(
+        stdout.trim(),
+        format!("run={id} next=spawn account=a1\nrun={id} stage=Implemented"),
+        "Fable の窓 100 は便に無関係＝待たずに a1 を選ぶ: {stdout}"
+    );
+    assert!(!stdout.contains("next=wait"), "待ちに入らない: {stdout}");
+    assert_eq!(curl_calls(&state), 1, "計測は 1 回（待ちからの撃ち直しが無い）");
+    assert_eq!(stub_calls(&state), 2, "runner を 1 回起こし直した");
+    assert_eq!(
+        argv_account_dir(&stub_argv(&state, 2)),
+        Some(state.join("accounts").join("a1").display().to_string()),
+        "{:?}",
+        stub_argv(&state, 2)
+    );
+    let stderr = stderr_of(&resumed);
+    assert!(stderr.contains("model=Fable:100%"), "計測の行は Fable の窓を写している（数えないだけ）: {stderr}");
+    clean(&[&repo, &state]);
+}
+
+/// (e) 負例（極性不変・base でも PASS）: 候補の口座の **Opus の窓 100**（実測行の表示名 `Opus`・rules 行は本番と同じ
+/// 別名 `opus`＝字面を揃えて隠さない）は便が使う model の窓なので候補から外れ、余裕の別口座 a2 が選ばれる。
+#[test]
+fn pipe_ratelimit_resume_still_skips_the_runner_model_window_at_100() {
+    let (repo, state) = repo_with_state();
+    let (id, runner, rules) = rate_limited_with_accounts(&repo, &state, &[IMPLEMENT.to_owned()], &["a1", "a2"]);
+    // a1 は 5h / 7d に余裕（逼迫度なら a1 = 50 > a2 = 40 で a1 が勝つ）が Opus の窓が当たっている。
+    put_account(&state, "a1", &[with_model(windows(0, 50), "Opus", 100)]);
+    put_account(&state, "a2", &[windows(40, 10)]);
+    let resumed = resume_with_accounts(&repo, &state, &id, &runner, &rules);
+    assert_eq!(resumed.status.code(), Some(i32::from(RC_OK)), "{} / {}", stdout_of(&resumed), stderr_of(&resumed));
+    assert_eq!(
+        stdout_of(&resumed).trim(),
+        format!("run={id} next=spawn account=a2\nrun={id} stage=Implemented"),
+        "Opus の窓 100 の a1 は外れ・a2 を選ぶ"
+    );
+    assert_eq!(stub_calls(&state), 2, "runner を 1 回起こし直した");
+    assert_eq!(
+        argv_account_dir(&stub_argv(&state, 2)),
+        Some(state.join("accounts").join("a2").display().to_string()),
+        "{:?}",
+        stub_argv(&state, 2)
+    );
+    let stderr = stderr_of(&resumed);
+    assert!(stderr.contains("model=Opus:100%"), "計測の行は Opus の窓を写している: {stderr}");
+    clean(&[&repo, &state]);
+}
+
+/// (e') rules 行 `runner.model` の値が閉じた表に無い（`nope`）manifest での再開は **typed に断り**（rc 1・理由に行 id と
+/// 値を名指す）、計測も runner の起こし直しもしない（便は `RateLimited` のまま live）。base は字面比較で黙って全 model
+/// 窓の最大に倒れる（断らない）→ RED。
+#[test]
+fn pipe_ratelimit_refuses_unknown_runner_model_value() {
+    let (repo, state) = repo_with_state();
+    let (id, runner, _) = rate_limited_with_accounts(&repo, &state, &[IMPLEMENT.to_owned()], &["a1"]);
+    let rules = resume_rules_with_model(&state, &["a1"], "nope");
+    put_account(&state, "a1", &[windows(40, 10)]);
+    let resumed = resume_with_accounts(&repo, &state, &id, &runner, &rules);
+    assert_eq!(resumed.status.code(), Some(i32::from(RC_REFUSED)), "{} / {}", stdout_of(&resumed), stderr_of(&resumed));
+    let stderr = stderr_of(&resumed);
+    assert!(stderr.contains("runner.model の値 nope は未知の model"), "行 id と値を名指す: {stderr}");
+    assert!(stdout_of(&resumed).is_empty(), "判定行を出さない: {}", stdout_of(&resumed));
+    assert_eq!(curl_calls(&state), 0, "計測しない");
+    assert_eq!(stub_calls(&state), 1, "runner を起こし直さない");
+    assert!(show_line(&repo, &state, &id).contains("stage=RateLimited"), "便は RateLimited のまま live");
     clean(&[&repo, &state]);
 }
 
