@@ -134,7 +134,7 @@ AC8 の確認（SRS の FR23 の検証手法は I = 目視確認・2 つの開�
 
 ### 12.2 現在地の DATA（ADR-0031 §2.2）
 
-- marker 4 種（各 3 形: 列挙 / `-COUNT` / `-NONE`）: `[MAIN] sha=<短 sha> origin=<same|ahead|behind|unknown> porcelain=<n>`（anchor の git・既存の git の子 process）/ `[RUN] id=<run> stage=<Stage> account=<label> base=<sha> updated=<ts>`（event log の `RunStage` の最終値・終端〔Landed / Failed / Retired〕を除く）/ `[SEAT] target=… role=… state=<idle|busy> account=… model=…`（`SeatRegistered` の最終 row + state.jsonl の最終打刻）/ `[WIN] id=<bead> landed=<ts> sha=<短 sha>`（直近の自席の `.consumed.md` の `externalized_at` より後の Landed）。
+- marker 4 種（`[RUN]` / `[SEAT]` / `[WIN]` は各 3 形: 列挙 / `-COUNT` / `-NONE`。`[MAIN]` は値 1 行ゆえ列挙だけで、`[WIN]` は着地を読めない周の `-UNKNOWN` 形を持つ＝variant は 11）: `[MAIN] sha=<短 sha> origin=<same|ahead|behind|unknown> porcelain=<n>`（anchor の git・既存の git の子 process）/ `[RUN] id=<run> stage=<Stage> account=<label> base=<sha> updated=<ts>`（event log の `RunStage` の最終値・終端〔Landed / Failed / Retired〕を除く）/ `[SEAT] target=… role=… state=<idle|busy> account=… model=…`（`SeatRegistered` の最終 row + state.jsonl の最終打刻）/ `[WIN] id=<bead> landed=<ts> sha=<短 sha>`（直近の自席の `.consumed.md` の `externalized_at` より後の Landed）。
 - 読めない周は `-NONE` に潰さず `unknown` / `unreadable` の語で出す（C10）。GitHub は読まない（§11）。
 
 ### 12.3 hook による強制と自動退避（ADR-0031 §2.3・[vessel-hook.md](./vessel-hook.md) の面に 4 つ足す）

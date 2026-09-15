@@ -56,6 +56,8 @@ ruled_at = "2026-09-07"
 
 **書かない key**: user 逐語（PUBLIC・CON2）。**置かない行**: 値が未定の行（§3 R-C6-1）・実装が無い seam の行（rtk / graphify のモード・C10.3「未 wire の設定」）・AI が置いただけで裁定の無い行。
 
+**行の読み手と 2 面の突合**（`cargo xtask check` の検出線・deny 化は rules 行と裁定 id で行う）: enabled な行のうち `crates/*/src` に const の値として現れ使われる読み手が無い行は `rules-wired` が名指す（`s2-07l.160`）。憲法 §3 の `<tr id="r-…">` の id 集合と manifest の `R-…` 行の接頭辞集合は `rules-parity` が双方向に突合し、片側だけの id を名指す（`s2-07l.164`・運用行は母集団外・HTML の読み手は `claude_md.rs` を共有する）。`R-C13-1.per-pr` / `R-C13-1` の読み手は `xtask deps-delta`（`--base` との直接依存の差分・超えれば PR の入口で落ちる）で、依存を足した便の `check-delta-ms` は検出線として判定行に残る（`s2-07l.161`）。
+
 ### 4.1 初期行（§3 の写し + MVP の運用値・全行に裁定 id）
 
 | id | kind | value | enabled | 裁定（ruling / ruled_at）・design-intent 側の出所 |
@@ -150,3 +152,39 @@ xtask 側の drift 歯（最小形）: `crates/xtask/src/limits.rs` の `#[cfg(t
 - C1.2 の生成 doc: enum の doc コメント + manifest から人向け doc を生成し、手書き規範文 0 行を CI が数える。
 - xtask `check` が閾値を manifest から読む（`limits.rs` の const を消す）。R-C4-3 の母集団は現状 `crates/*/src` だけで `tests/` を数えない（統合 test は比の外）。母集団を広げる判断は裁定材料として残す。
 - property test（C12.7）は `proptest` が A3 に当たるため、依存の裁定を通す周まで後続。
+
+<!-- contracts:begin -->
+schema = 1
+
+[[contract]]
+id = "a"
+title = "読み手の無い enabled な rules 行を xtask check の検出線 rules-wired が名指す"
+req = ["FR17"]
+section = "4"
+write-set = ["+crates/xtask/src/rules_wired.rs", "crates/xtask/src/check.rs", "crates/xtask/src/main.rs", "crates/xtask/src/check_tests.rs", "docs/design/rules-manifest.md"]
+verify = ["cargo nextest run -p xtask --no-tests=fail rules_wired_"]
+size = "S"
+done = "xtask check の判定行に rules-wired の fact（unwired の本数と id）が出て rc は変わらない"
+
+[[contract]]
+id = "b"
+title = "憲法 §3 の行 id と manifest の R-* 行を双方向に突合する検出線 rules-parity・設計 doc の手書きの件数の撤去"
+req = ["FR17", "FR18"]
+section = "4"
+write-set = ["+crates/xtask/src/rules_parity.rs", "crates/xtask/src/check.rs", "crates/xtask/src/main.rs", "crates/xtask/src/claude_md.rs", "crates/xtask/src/check_tests.rs", "docs/design/rules-manifest.md"]
+verify = ["cargo nextest run -p xtask --no-tests=fail rules_parity_"]
+size = "S"
+done = "判定行に doc-only / manifest-only の id が出て、設計 doc から手書きの variant の件数が消える"
+depends = ["a"]
+
+[[contract]]
+id = "c"
+title = "1 便あたりの依存の増分を R-C13-1.per-pr と突合する xtask deps-delta・依存を足した便の check-delta-ms を検出線に記録"
+req = ["FR7", "FR17", "NFR3"]
+section = "4"
+write-set = ["+crates/xtask/src/deps_delta.rs", "crates/xtask/src/main.rs", "crates/xtask/src/limits.rs", "crates/xtask/src/check_tests.rs", ".github/workflows/ci.yml", "docs/design/rules-manifest.md", "docs/design/pipeline.md"]
+verify = ["cargo nextest run -p xtask --no-tests=fail deps_delta_"]
+size = "S"
+done = "per-pr を超えて依存を足す PR が CI の入口で落ち、足した便の check-delta-ms が判定行に残る"
+depends = ["a"]
+<!-- contracts:end -->
