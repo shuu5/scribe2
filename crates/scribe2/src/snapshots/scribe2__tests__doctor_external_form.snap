@@ -3,8 +3,8 @@ source: crates/scribe2/src/main.rs
 expression: masked
 ---
 scribe2
-scribe2 [version]
+scribe2 [version] ([commit])
 host-manifest=present
 account=acct dir=present credential=present config=missing agentview=unreadable trust=_repo_a:accepted trust=_repo_b:unreadable retired=no
 usage: scribe2 <name|--version|doctor|account|rules|fleet|vessel|hook|pipe|runner|lens|seat|polarity|contracts>
-scribe2 [version]
+scribe2 [version] ([commit])

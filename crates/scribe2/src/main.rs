@@ -38,9 +38,12 @@ fn render_name() -> String {
     NAME.to_owned()
 }
 
-/// `--version` が出力する行を組み立てる。
+/// `--version` が出力する行を組み立てる（`<NAME> <version> (<build 元 commit>)`・設計 consumer-sync.md §2）。
+///
+/// 括弧の中身は `build.rs` が compile time に焼いた `SCRIBE2_BUILD_COMMIT`（`<sha12>` / `<sha12>+dirty` /
+/// 測れない周は `unknown`・C10）。実行時に env を読まない（C2.2）。doctor の 2 行目も同じ関数（FR51・FR61）。
 fn render_version() -> String {
-    format!("{NAME} {}", env!("CARGO_PKG_VERSION"))
+    format!("{NAME} {} ({})", env!("CARGO_PKG_VERSION"), env!("SCRIBE2_BUILD_COMMIT"))
 }
 
 /// `doctor` が出力する行を組み立てる（骨格の stub: NAME と version を 1 行ずつ）。
@@ -186,11 +189,48 @@ mod tests {
         assert_eq!(render_name(), manifest_name, "出力層へ渡る文字列と [package] name");
         assert_eq!(plugin_name, manifest_name, "plugin.json の name と [package] name");
     }
+
+    /// 括弧の中身が build 元 commit の 3 形（`<sha12>` / `<sha12>+dirty` / `unknown`）のどれかか（手書きの分岐 3 本・regex を足さない）。
+    fn is_build_commit_form(inner: &str) -> bool {
+        let is_sha12 = |text: &str| text.len() == 12 && text.chars().all(|ch| matches!(ch, '0'..='9' | 'a'..='f'));
+        if inner == "unknown" {
+            return true;
+        }
+        match inner.strip_suffix("+dirty") {
+            Some(sha) => is_sha12(sha),
+            None => is_sha12(inner),
+        }
+    }
+
+    /// `--version` の行が `<NAME> <version> (<build 元 commit>)` の形で、括弧の中身が 3 形のどれか（FR61・C10）。
+    #[test]
+    fn version_line_carries_build_commit_or_unknown() {
+        let line = render_version();
+        let prefix = format!("{NAME} {} (", env!("CARGO_PKG_VERSION"));
+        assert!(line.starts_with(&prefix), "先頭は NAME + version + ` (`: {line}");
+        assert!(line.ends_with(')'), "末尾は `)`: {line}");
+        let inner = line.strip_prefix(&prefix).and_then(|rest| rest.strip_suffix(')')).unwrap_or_default();
+        assert!(!inner.is_empty(), "括弧の中身が空: {line}");
+        assert!(is_build_commit_form(inner), "括弧の中身が sha12 / sha12+dirty / unknown のどれでもない: {line}");
+        assert_eq!(line.matches('(').count(), 1, "括弧は 1 組: {line}");
+        assert!(!is_build_commit_form(""), "空は 3 形の外");
+        assert!(!is_build_commit_form("0123456789ab+other"), "未知の接尾辞は 3 形の外");
+        assert!(!is_build_commit_form("0123456789ABC"), "大文字・13 桁は 3 形の外");
+        assert!(is_build_commit_form("0123456789ab+dirty"), "sha12+dirty は 3 形の内");
+    }
+
+    /// doctor の 2 行目は `--version` の行そのもの（同じ 1 関数・FR51）。
+    #[test]
+    fn version_line_is_shared_by_doctor() {
+        assert_eq!(render_doctor().get(1), Some(&render_version()), "doctor の 2 行目 == --version の行");
+    }
+
     /// `doctor` / usage / `--version` の外形を 1 つの snapshot に固定する。
     ///
     /// 結合の順序は doctor の 2 行 → host の面の行 → 口座の行（fixture 1 つ・anchor 2 つ・退役していない形）→ usage → version で、
-    /// 区切り文字は LF ただ 1 種である。版番号は assert の前に `[version]` へ置換する（`default-features =
-    /// false` では `Settings::add_filter` が無いので `filters` feature に頼らない）。
+    /// 区切り文字は LF ただ 1 種である。版番号は assert の前に `[version]` へ、build 元 commit（build ごとに変わる）は
+    /// `[commit]` へ置換する 2 段の mask（`default-features = false` では `Settings::add_filter` が無いので `filters`
+    /// feature に頼らない・regex も足さない＝`env!` の実値を置換する）。
     #[test]
     fn doctor_external_form() {
         let mut lines = render_doctor();
@@ -205,7 +245,10 @@ mod tests {
         lines.push(render_account("acct", &probe, Retired::No));
         lines.push(render_usage());
         lines.push(render_version());
-        let masked = lines.join("\n").replace(env!("CARGO_PKG_VERSION"), "[version]");
+        let masked = lines
+            .join("\n")
+            .replace(env!("CARGO_PKG_VERSION"), "[version]")
+            .replace(&format!("({})", env!("SCRIBE2_BUILD_COMMIT")), "([commit])");
         insta::assert_snapshot!(masked);
     }
 
