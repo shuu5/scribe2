@@ -29,7 +29,7 @@
 - `pub struct RuleRow { id, kind, value, enabled, ruling: String, ruled_at: String, line: u64 }`。
 - `RuleError` は `Display` で **1 件 1 行・`line=<N>` を含む**。
 - **閉じた enum と const slice の突合**（`s2-07l.177`）: xtask の enum-slices は集合の一致に加えて**順序**（同じ添字で同じ名）も測り、順序違いを添字付きで名指す。極性を持つ境界（`pub const POLARITY: Polarity` の宣言 site）は `Guard` の網羅 match が参照する集合と両方向で突合し、guard でない境界は `polarity.rs` の閉じた const slice（`NOT_A_GUARD`）に載せる（doc コメントで除外しない）。
-- **CLAUDE.md の生成区間**（`s2-07l.173`）: 憲法の区間に加えて「done の定義」も `.github/workflows/ci.yml` の `run: cargo …` 行から xtask が生成する区間にし、tracked との差分を xtask check が落とす。生成区間の外の規範行（散文の門と同じ印・pointer 無し）は検出線 `claude-md-prose` が件数を出す。
+- **CLAUDE.md の生成区間**（`s2-07l.173`）: 憲法の区間に加えて「done の定義」も `.github/workflows/ci.yml` の `run: cargo …` 行（job の宣言順・`${{ … }}` の穴は引用符ごと `<base>`）から xtask が生成する区間（`<!-- done:begin -->` … `<!-- done:end -->`）にし、tracked との差分を xtask check の `claude-md-done` が落とす（違う行を両側の字面で名指す）。正本を CI の側に置くのは、CI の定義が job の条件と cache の行を持ち逆向きの生成にならないからである。生成区間の外の規範行（散文の門と同じ印・pointer 無し）は検出線 `claude-md-prose=<該当行>/<区間外の非空行>` が件数を出す（rc は変えない・deny 化は C12.4 の型で裁定を経る）。
 
 ## 4. manifest（`rules/manifest.toml`・tracked・repo root 直下）
 

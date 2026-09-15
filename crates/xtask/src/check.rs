@@ -76,6 +76,8 @@ pub fn inspect(root: &Path) -> Report {
     measured.push(crate::non_rust_exec::measure(&layout));
     measured.push(crate::non_rust_exec::ci_shell_lines(&layout));
     measured.push(crate::claude_md::measure(&layout));
+    measured.push(crate::claude_md::measure_done(&layout));
+    measured.push(crate::claude_md::measure_prose(&layout));
     measured.push(crate::enum_slices::measure(&files));
     measured.push(crate::spawn_points::measure(&layout, &files));
     measured.push(crate::env_reads::measure(&layout, &files));

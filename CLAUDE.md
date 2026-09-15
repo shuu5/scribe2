@@ -24,12 +24,18 @@ scribe2 は scribe v1 を捨てて作り直す「次の器」（Rust・単一 bi
 5. **land**: PR → CI 緑 → squash merge → `bd close <id> --reason "…"`。**1 bead = 1 PR**。close は merge の後。
 
 ## done の定義（1 つでも赤なら close しない）
+<!-- 本区間は `cargo xtask gen-claude-md` の生成物である。手で編集しない（`cargo xtask check` の claude-md-done が drift を落とす）。正本は `.github/workflows/ci.yml` の `run: cargo …` 行。 -->
+<!-- done:begin -->
 ```
 cargo nextest run --workspace --no-tests=fail
 cargo clippy --workspace --all-targets -- -D warnings
 cargo xtask check
-cargo deny check bans licenses sources
+cargo xtask flip-check --base <base>
+cargo xtask rules-diff --base <base>
+cargo deny check
+cargo insta test --test-runner nextest --unreferenced reject --check --workspace
 ```
+<!-- done:end -->
 - `design-intent/` を触った便は追加で `folio validate` が clean・`folio build --check` が drift 無し。
 - `git status --porcelain` が空 ∧ PR が merge 済み ∧ main の CI が緑。
 - **working tree の緑は緑ではない**（未 commit の緑を成果と数えない）。

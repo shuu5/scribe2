@@ -14,8 +14,18 @@
 //! 旧規範文が CLAUDE.md へ載る**（実測: C8.2 / C8.3 / A4 / A4.2 の 4 段落が該当）。
 //!
 //! parse 不能は loud（rc≠0）である——「読めなかった」を「規範文 0 本」に化けさせない。
+//!
+//! **2 つ目の生成区間は「done の定義」**である（`s2-07l.173`・設計 rules-manifest.md §3）。
+//! 正本は `.github/workflows/ci.yml` の `run: cargo …` 行（job の宣言順・`${{ … }}` の穴は
+//! `<base>`）で、CI を正本にする——CI の定義は `if:` と cache の行を持ち、逆向きの生成に
+//! ならない。measure `claude-md-done` は区間の byte 一致を測る（deny・憲法区間と同じ極性）。
+//!
+//! 2 つの区間の**外**は手書きの面で、散文の門（`prose_gate.rs`）と同じ印を持ち pointer を
+//! 持たない行の数を検出線 `claude-md-prose` が判定行へ出す（rc は変えない・C12.4 の型）。
+//! 印と pointer の判定は散文の門の 1 本を呼ぶ（2 本目の判定を作らない・C2）。
 
 use crate::check::{failed, Layout, Measured};
+use crate::prose_gate::Reason;
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -390,30 +400,299 @@ pub fn body_of(lines: &[String]) -> String {
     lines.join("\n\n")
 }
 
-/// `CLAUDE.md` の生成区間の中身を返す（marker の間・両端の marker は含まない）。
-pub fn region_of(text: &str) -> Result<&str, String> {
-    for (marker, count) in [(BEGIN, text.matches(BEGIN).count()), (END, text.matches(END).count())]
-    {
-        if count != 1 {
-            return Err(format!("{TARGET_REL} の {marker} が 1 本でない（{count} 本）"));
-        }
-    }
-    let from = text.find(BEGIN).ok_or("開始 marker が無い")?.saturating_add(BEGIN.len());
-    let to = text.find(END).ok_or("終了 marker が無い")?;
-    if to < from {
-        return Err(format!("{TARGET_REL} の marker が逆順である"));
-    }
-    text.get(from..to).ok_or_else(|| "区間を切り出せない".to_owned())
+/// 生成区間 1 つの印の対。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Markers {
+    /// 始まりの印。
+    pub(crate) begin: &'static str,
+    /// 終わりの印。
+    pub(crate) end: &'static str,
 }
 
-/// 生成区間だけを差し替えた `CLAUDE.md` の全文を組む。**区間外は 1 byte も触らない**。
-pub fn splice(text: &str, body: &str) -> Result<String, String> {
-    let region = region_of(text)?;
-    let from = text.find(BEGIN).ok_or("開始 marker が無い")?.saturating_add(BEGIN.len());
-    let to = from.saturating_add(region.len());
-    let before = text.get(..from).ok_or("marker の前を切り出せない")?;
-    let after = text.get(to..).ok_or("marker の後ろを切り出せない")?;
+/// 憲法の区間。
+pub(crate) const CONSTITUTION: Markers = Markers { begin: BEGIN, end: END };
+
+/// 「done の定義」の区間（正本は [`CI_REL`] の `run: cargo …` 行）。
+pub(crate) const DONE: Markers = Markers {
+    begin: "<!-- done:begin -->",
+    end: "<!-- done:end -->",
+};
+
+/// 生成区間の全部（区間外の散文を測るときに外す）。
+const REGIONS: &[Markers] = &[CONSTITUTION, DONE];
+
+/// 生成区間を切り出せない理由。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum RegionError {
+    /// 印が 1 本も無い。
+    Missing(&'static str),
+    /// 印が 2 本以上在る（印・本数）。
+    Duplicated(&'static str, usize),
+    /// 終わりの印が始まりの印より前に在る。
+    Reversed,
+}
+
+impl std::fmt::Display for RegionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Missing(marker) => write!(f, "{TARGET_REL} に {marker} が無い"),
+            Self::Duplicated(marker, count) => {
+                write!(f, "{TARGET_REL} の {marker} が 1 本でない（{count} 本）")
+            }
+            Self::Reversed => write!(f, "{TARGET_REL} の marker が逆順である"),
+        }
+    }
+}
+
+/// 区間の中身の byte 範囲（両端の印は含まない）。
+fn locate(text: &str, markers: Markers) -> Result<(usize, usize), RegionError> {
+    for marker in [markers.begin, markers.end] {
+        match text.matches(marker).count() {
+            1 => {}
+            0 => return Err(RegionError::Missing(marker)),
+            count => return Err(RegionError::Duplicated(marker, count)),
+        }
+    }
+    let from = text
+        .find(markers.begin)
+        .map_or(0, |at| at.saturating_add(markers.begin.len()));
+    let to = text.find(markers.end).unwrap_or(0);
+    if to < from {
+        return Err(RegionError::Reversed);
+    }
+    Ok((from, to))
+}
+
+/// `markers` の区間の中身を返す（印の間・両端の印は含まない）。
+pub(crate) fn region_between(text: &str, markers: Markers) -> Result<&str, RegionError> {
+    let (from, to) = locate(text, markers)?;
+    Ok(text.get(from..to).unwrap_or_default())
+}
+
+/// `markers` の区間だけを差し替えた全文を組む。**区間外は 1 byte も触らない**。
+pub(crate) fn splice_between(text: &str, markers: Markers, body: &str) -> Result<String, RegionError> {
+    let (from, to) = locate(text, markers)?;
+    let before = text.get(..from).unwrap_or_default();
+    let after = text.get(to..).unwrap_or_default();
     Ok(format!("{before}\n{body}\n{after}"))
+}
+
+/// `CLAUDE.md` の憲法区間の中身を返す（marker の間・両端の marker は含まない）。
+pub fn region_of(text: &str) -> Result<&str, String> {
+    region_between(text, CONSTITUTION).map_err(|err| err.to_string())
+}
+
+/// 憲法区間だけを差し替えた `CLAUDE.md` の全文を組む。**区間外は 1 byte も触らない**。
+pub fn splice(text: &str, body: &str) -> Result<String, String> {
+    splice_between(text, CONSTITUTION, body).map_err(|err| err.to_string())
+}
+
+/// done の定義の正本（repo root からの相対）。
+const CI_REL: &str = ".github/workflows/ci.yml";
+
+/// done の区間の判定行の tag。
+const DONE_TAG: &str = "claude-md-done";
+
+/// 区間外の規範行の検出線の tag。
+const PROSE_TAG: &str = "claude-md-prose";
+
+/// done の定義に写す `run:` 行の頭。
+const CARGO_HEAD: &str = "cargo ";
+
+/// `${{ … }}` の穴の始まりと終わり。
+const HOLE_OPEN: &str = "${{";
+const HOLE_CLOSE: &str = "}}";
+
+/// 穴を置き換える字面。
+const HOLE: &str = "<base>";
+
+/// done の区間を包む code fence。
+const FENCE: &str = "```";
+
+/// `${{ … }}` の穴を [`HOLE`] に正規化する。穴を包む引用符（`"…"` / `'…'`）は穴の一部として落とす。
+fn normalize_holes(value: &str) -> Result<String, String> {
+    let mut out = String::new();
+    let mut rest = value;
+    while let Some(at) = rest.find(HOLE_OPEN) {
+        let close = rest
+            .get(at..)
+            .and_then(|tail| tail.find(HOLE_CLOSE))
+            .ok_or_else(|| format!("{CI_REL} に閉じない {HOLE_OPEN} が在る: {value}"))?;
+        let end = at.saturating_add(close).saturating_add(HOLE_CLOSE.len());
+        let quote = rest
+            .get(..at)
+            .and_then(|head| head.chars().last())
+            .filter(|ch| matches!(ch, '"' | '\''));
+        let quoted = quote.is_some_and(|ch| rest.get(end..).is_some_and(|tail| tail.starts_with(ch)));
+        let (head_end, tail_from) = if quoted {
+            (at.saturating_sub(1), end.saturating_add(1))
+        } else {
+            (at, end)
+        };
+        out.push_str(rest.get(..head_end).unwrap_or_default());
+        out.push_str(HOLE);
+        rest = rest.get(tail_from..).unwrap_or_default();
+    }
+    out.push_str(rest);
+    Ok(out)
+}
+
+/// 1 行が `run:` の 1 行形なら値を返す（`- run:` も同じ・block scalar の継続行は写さない）。
+fn run_value(line: &str) -> Option<&str> {
+    let trimmed = line.trim_start();
+    let rest = trimmed
+        .strip_prefix("- run:")
+        .or_else(|| trimmed.strip_prefix("run:"))?;
+    Some(rest.trim())
+}
+
+/// ci.yml の本文から done の区間の本文（fence で包んだ 1 行 1 command）と行数を組む。
+///
+/// 写すのは `run: cargo …` 行だけで、並びは file の出現順（＝job の宣言順）である。
+pub(crate) fn done_body(ci: &str) -> Result<(String, usize), String> {
+    let lines = ci
+        .lines()
+        .filter_map(run_value)
+        .filter(|value| value.starts_with(CARGO_HEAD))
+        .map(normalize_holes)
+        .collect::<Result<Vec<String>, String>>()?;
+    if lines.is_empty() {
+        return Err(format!("{CI_REL} に `run: cargo …` の行が 1 本も無い"));
+    }
+    Ok((format!("{FENCE}\n{}\n{FENCE}", lines.join("\n")), lines.len()))
+}
+
+/// tracked の区間と生成の区間の最初に違う行を名指す（一致なら `None`）。
+fn first_difference(tracked: &str, rendered: &str) -> Option<String> {
+    let have: Vec<&str> = tracked.split('\n').collect();
+    let want: Vec<&str> = rendered.split('\n').collect();
+    (0..have.len().max(want.len()))
+        .find(|at| have.get(*at) != want.get(*at))
+        .map(|at| {
+            format!(
+                "区間の {} 行目 tracked=`{}` 生成=`{}`",
+                at.saturating_add(1),
+                have.get(at).copied().unwrap_or("<無い>"),
+                want.get(at).copied().unwrap_or("<無い>")
+            )
+        })
+}
+
+/// done の区間を生成と突き合わせ、一致なら行数を返す。
+fn judge_done(ci: &Path, target: &Path) -> Result<usize, String> {
+    let (body, count) = done_body(&read(ci)?)?;
+    let text = read(target)?;
+    let region = region_between(&text, DONE).map_err(|err| err.to_string())?;
+    match first_difference(region, &format!("\n{body}\n")) {
+        None => Ok(count),
+        Some(diff) => Err(format!(
+            "{TARGET_REL} の done 区間が {CI_REL} と食い違う: {diff}（cargo xtask gen-claude-md で直す）"
+        )),
+    }
+}
+
+/// ci.yml が無い木の扱い。**書き先に done 区間が残っていれば deny**（[`no_source`] と同じ型）。
+fn no_ci(target: &Path) -> Measured {
+    let orphan = read(target).is_ok_and(|text| region_between(&text, DONE).is_ok());
+    if orphan {
+        return failed(
+            DONE_TAG,
+            &format!("{CI_REL} が無いのに {TARGET_REL} に done 区間が在る（正本を失った done の定義である）"),
+        );
+    }
+    Measured {
+        fact: format!("{DONE_TAG}=n/a(no-ci)"),
+        violations: Vec::new(),
+    }
+}
+
+/// `cargo xtask check` の measure `claude-md-done`。区間が ci.yml からの生成と byte 一致しなければ deny。
+pub(crate) fn measure_done(layout: &Layout) -> Measured {
+    let ci = layout.root.join(CI_REL);
+    let (_, target) = paths(&layout.root);
+    match absent(&ci) {
+        Ok(true) => return no_ci(&target),
+        Ok(false) => {}
+        Err(reason) => return failed(DONE_TAG, &reason),
+    }
+    match judge_done(&ci, &target) {
+        Ok(count) => Measured {
+            fact: format!("{DONE_TAG}={count}"),
+            violations: Vec::new(),
+        },
+        Err(reason) => failed(DONE_TAG, &reason),
+    }
+}
+
+/// 生成区間（両端の印の行を含む）を空行に置き換えた本文。行番号は保つ。
+///
+/// 印が 1 本も無い区間は外すものが無いだけで、片方だけ / 2 本以上 / 逆順は型で断る。
+fn outside_regions(text: &str) -> Result<String, RegionError> {
+    let present: Vec<Markers> = REGIONS
+        .iter()
+        .copied()
+        .filter(|markers| text.contains(markers.begin) || text.contains(markers.end))
+        .collect();
+    for markers in &present {
+        locate(text, *markers)?;
+    }
+    let mut open: Option<&str> = None;
+    let kept: Vec<&str> = text
+        .lines()
+        .map(|line| {
+            if open.is_none() {
+                open = present
+                    .iter()
+                    .find(|markers| line.contains(markers.begin))
+                    .map(|markers| markers.end);
+            }
+            let inside = open.is_some();
+            if open.is_some_and(|end| line.contains(end)) {
+                open = None;
+            }
+            if inside {
+                ""
+            } else {
+                line
+            }
+        })
+        .collect();
+    Ok(kept.join("\n"))
+}
+
+/// 区間外の規範行を数える: (印を持ち pointer を持たない行の数, 区間外の非空行の数)。
+///
+/// 行の判定は散文の門の [`crate::prose_gate::violations`] の `no-pointer` をそのまま使う。
+pub(crate) fn prose_count(text: &str) -> Result<(usize, usize), RegionError> {
+    let outside = outside_regions(text)?;
+    let population = outside.lines().filter(|line| !line.trim().is_empty()).count();
+    let mut lines: Vec<usize> = crate::prose_gate::violations(&outside)
+        .into_iter()
+        .filter(|found| found.reason == Reason::NoPointer)
+        .map(|found| found.line)
+        .collect();
+    lines.dedup();
+    Ok((lines.len(), population))
+}
+
+/// `cargo xtask check` の検出線 `claude-md-prose=<違反行>/<区間外の非空行>`（**違反行を立てない**）。
+///
+/// 読めない / 印が壊れた周は `?` を出す（区間の印の破損は `claude-md-constitution` と
+/// `claude-md-done` が deny で落とす）。`CLAUDE.md` が無い木は `n/a`。
+pub(crate) fn measure_prose(layout: &Layout) -> Measured {
+    let (_, target) = paths(&layout.root);
+    let value = match fs::read_to_string(&target) {
+        Err(err) if err.kind() == ErrorKind::NotFound => "n/a(no-claude-md)".to_owned(),
+        Err(_) => "?".to_owned(),
+        Ok(text) => prose_count(&text).map_or_else(
+            |_| "?".to_owned(),
+            |(found, population)| format!("{found}/{population}"),
+        ),
+    };
+    Measured {
+        fact: format!("{PROSE_TAG}={value}"),
+        violations: Vec::new(),
+    }
 }
 
 /// file を読む（読めない理由を逐語で載せる）。
@@ -438,13 +717,24 @@ fn rendered(root: &Path) -> Result<(String, usize), String> {
 }
 
 /// `gen-claude-md` subcommand の本体。`CLAUDE.md` の生成区間を書き直す。
+///
+/// done の区間は [`CI_REL`] が在る木でだけ書く（無い木で区間が残る形は measure が deny で落とす）。
 pub fn generate(root: &Path) -> Result<String, String> {
     let (_, target) = paths(root);
     let (body, count) = rendered(root)?;
     let text = read(&target)?;
-    let next = splice(&text, &body)?;
+    let spliced = splice(&text, &body)?;
+    let line = format!("{TAG}: ok paragraphs={count} bytes={}", body.len());
+    let ci = root.join(CI_REL);
+    let (next, line) = if absent(&ci)? {
+        (spliced, line)
+    } else {
+        let (done, lines) = done_body(&read(&ci)?)?;
+        let next = splice_between(&spliced, DONE, &done).map_err(|err| err.to_string())?;
+        (next, format!("{line}\n{DONE_TAG}: ok lines={lines}"))
+    };
     fs::write(&target, &next).map_err(|err| format!("{} を書けない: {err}", target.display()))?;
-    Ok(format!("{TAG}: ok paragraphs={count} bytes={}", body.len()))
+    Ok(line)
 }
 
 /// 憲法を持たない workspace か（xtask の歯が組む骨格だけの木がこれである）。
