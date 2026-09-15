@@ -12,3 +12,7 @@ expression: "brief::render(Role::Planner, &registration, &brief_caps(PLANNER_CAP
 席間の連絡の経路: 開発 session の道具が持つ session 間の message（SendMessage）で送り、席の入力欄へは注入しない → SSOT: docs/design/seat-roles.md §5 / ADR-0022 §2.8
 席間の連絡の宛先: 送るたびに ListAgents で取る → SSOT: docs/design/seat-roles.md §5 / ADR-0022 §2.8
 席間の連絡の確認: 届いたことは端末の描画でなく経路自身の記録（送信結果）で確かめる → SSOT: docs/design/seat-roles.md §5 / 憲法 C3.3
+user に向けて出す文の形は対話面の作法（信頼度が上位・次の 1 手が先頭）に従う → SSOT: docs/design/dialogue-surface.md §2 / ADR-0032 §2.2
+事実と結論は verified / deduced / inferred / uncertain のいずれかを負う → SSOT: docs/design/dialogue-surface.md §2 / 憲法 C10
+復元の brief の user 面は 5 slot（next / wins / status / plan / risks） → SSOT: docs/design/dialogue-surface.md §3 / ADR-0032 §2.3
+並列に出す agent は model と token 予算を明示し、出力は file へ落として path を返す → SSOT: docs/design/dialogue-surface.md §5 / ADR-0032 §2.4

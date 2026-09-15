@@ -2733,6 +2733,35 @@ fn hook_brief_planner_external_form() {
     insta::assert_snapshot!("hook_brief_planner", brief::render(Role::Planner, &registration, &brief_caps(PLANNER_CAPS)));
 }
 
+/// (d) 対話面の作法（設計 dialogue-surface.md §4・ADR-0032 §2.1 / §2.2・FR67・`s2-07l.326.2`）: 登録 row のある planner の
+/// 席の `session-start` の生成文に、作法の SSOT（`docs/design/dialogue-surface.md`）を指す行が §2 で 2 本・§3 で 1 本・
+/// §5 で 1 本在り、いずれも `→ SSOT:` を持つ（pointer の無い行 0）。負例: 管理席の生成文にはこれらの行が無い
+/// （ADR-0032 §2.5・admin の雛形は不変）。
+#[test]
+fn hook_brief_planner_carries_the_dialogue_surface_lines() {
+    let place = role_place();
+    let ssot = "docs/design/dialogue-surface.md";
+    let counts = |body: &[String], section: &str| body.iter().filter(|line| line.contains(&format!("{ssot} {section}"))).count();
+    let (planner, planner_pane) = role_seat(&place, "briefsurface", Some("planner"));
+    let body = brief_lines(&place, &planner_pane, &["--rules", &place.rules]);
+    let surface: Vec<&String> = body.iter().filter(|line| line.contains(ssot)).collect();
+    assert_eq!(surface.len(), 4, "planner: 作法の SSOT を指す行は 4 本: {body:?}");
+    assert!(surface.iter().all(|line| line.contains("→ SSOT:")), "planner: 作法の行はすべて pointer を持つ: {surface:?}");
+    assert_eq!(counts(&body, "§2"), 2, "planner: §2（作法・信頼度）の行は 2 本: {surface:?}");
+    assert_eq!(counts(&body, "§3"), 1, "planner: §3（復元の brief の 5 slot）の行は 1 本: {surface:?}");
+    assert_eq!(counts(&body, "§5"), 1, "planner: §5（並列 agent）の行は 1 本: {surface:?}");
+    assert!(body.iter().any(|line| line.contains("verified / deduced / inferred / uncertain")), "planner: 信頼度の 4 語: {body:?}");
+    assert!(body.iter().any(|line| line.contains("next / wins / status / plan / risks")), "planner: 5 slot の名: {body:?}");
+    drop(planner);
+    // 負例: 管理席の生成文にはこれらの行が無い（雛形は admin.txt のまま）。
+    let (admin, admin_pane) = role_seat(&place, "briefsurfaceadmin", Some("admin"));
+    let body = brief_lines(&place, &admin_pane, &["--rules", &place.rules]);
+    assert!(!body.is_empty(), "admin: 登録済みの席は生成文を出す");
+    assert!(body.iter().all(|line| !line.contains(ssot)), "admin: 作法の SSOT を指す行は無い: {body:?}");
+    drop(admin);
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
 /// (c) 管理席の生成文の外形 snapshot。
 #[test]
 fn hook_brief_admin_external_form() {
