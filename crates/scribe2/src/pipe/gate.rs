@@ -1,7 +1,8 @@
 //! gate（設計 docs/design/pipeline.md §5.3・FR8 / FR9 / NFR1）。
 //!
 //! 契約の `verify` 各行の逐条 rc（機械検証）と lens 1 本の判定を合わせて 3 値を出す。
-//! **判定は wildcard 無しの順序で決める**: verify に rc≠0 → FAIL ／ lens に渡す本文の byte が cap 超
+//! **判定は wildcard 無しの順序で決める**: 測れなかった（段①が読めない・箱の中の死・検出線の rc 2）
+//! → INCONCLUSIVE ／ verify に rc≠0 → FAIL ／ lens に渡す本文の byte が cap 超
 //! → INCONCLUSIVE（lens を呼ばない）／ lens 側の不備 → INCONCLUSIVE ／ それ以外は
 //! lens の verdict。lens に渡す本文は閉じた型 [`LensInput`]（diff か、純移動の要約・
 //! [`super::move_proof`]・`s2-07l.266`）で、判定は純関数・file の読みだけをここが担う。
@@ -174,6 +175,12 @@ struct Measured {
     /// INCONCLUSIVE へ倒し、record の `reason=` で外からの kill と弁別する（検出線の行の
     /// `oom_kill` は除く＝道具が吸収して完走した周・`record::box_kill`）。
     killed: Option<Reason>,
+    /// 検出線が rc 2（測れなかった）で終えた行の `n`（在れば・`s2-07l.331`・設計 §5.3）。
+    ///
+    /// `cargo xtask mutants-diff` の rc 2 は「生存も時間切れも無いが測れていない」（baseline が
+    /// 落ちた等）で、赤（rc 1 = deny 昇格後）ではない。赤に数えると測れなかった便が FAIL で終端し
+    /// 測り直せない（C10）。rc 1 の検出線と検出線以外の rc 2 は従来どおり赤（`record::detection_unmeasured`）。
+    detection_unmeasured: Option<u64>,
     /// lens に渡す本文の型（純移動の要約か diff か・設計 §5.3・測れなかった周は diff）。
     input: LensInput,
 }
@@ -262,17 +269,18 @@ fn precheck(worktree: &Path, base: &str) -> Option<String> {
 fn measure(entry: &Gate<'_>, worktree: &Path, base: &str) -> Result<Measured, String> {
     let counted = record_verify(entry, worktree, base)?;
     let (red, unreadable, killed) = (counted.red, counted.unreadable, counted.killed);
+    let detection_unmeasured = counted.detection_unmeasured;
     if unreadable {
         // 段①が diff を読めない周は同じ range の生 diff も読めない。ここで broken（rc 2・
         // verdict を書かない）にすると便は Implemented のまま「測り直せる便」に見えない。
         let input = LensInput::Diff(NotPure::Unreadable);
-        return Ok(Measured { red, diff: Vec::new(), unreadable, killed, input });
+        return Ok(Measured { red, diff: Vec::new(), unreadable, killed, detection_unmeasured, input });
     }
     let range = format!("{base}..HEAD");
     let diff = git_bytes(worktree, &["diff", &range])
         .ok_or_else(|| format!("{} の diff を測れない", worktree.display()))?;
     let input = lens_input(worktree, base, &diff);
-    Ok(Measured { red, diff, unreadable, killed, input })
+    Ok(Measured { red, diff, unreadable, killed, detection_unmeasured, input })
 }
 
 /// 判定順を 1 か所に閉じる（**wildcard 無し・上から順に効く**）。
@@ -283,31 +291,25 @@ fn decide(entry: &Gate<'_>, worktree: &Path, measured: &Measured) -> Result<(Ver
     // **測れなかったは赤より先**（C10・AC3）。段①の diff が読めない周は判定に届いていない
     // ので lens も呼ばず INCONCLUSIVE（測り直せる側・FR14）。
     if measured.unreadable {
-        return Ok((
-            Verdict::Inconclusive,
-            "diff の path を読めない（write-set を照合できない＝測れなかった）".to_owned(),
-            None,
-        ));
+        return inconclusive("diff の path を読めない（write-set を照合できない＝測れなかった）".to_owned());
     }
     // **箱の中で殺された行も赤より先**（設計 gate-cost.md §4.2）。溢れた箱の中で死んだ行は
     // 内容が赤いのではなく測れていない——赤に化けさせると、host の memory が足りない周ほど
     // 便が FAIL（終端）で落ちる。
     if let Some(reason) = measured.killed {
-        return Ok((
-            Verdict::Inconclusive,
-            format!(
-                "verify の行が scope の中で死んだ（reason={}・測れなかった）",
-                reason.as_str()
-            ),
-            None,
+        return inconclusive(format!(
+            "verify の行が scope の中で死んだ（reason={}・測れなかった）",
+            reason.as_str()
         ));
     }
+    // **検出線の rc 2（測れなかった）も赤より先**（`s2-07l.331`・設計 §5.3 の③・FR14）。道具が
+    // 「測れていない」と言った周を FAIL にすると、便は終端して測り直せない。Gated に留め、
+    // 検出線を撃ち直せる側へ倒す（PASS には決してならない・C10）。
+    if let Some(n) = measured.detection_unmeasured {
+        return inconclusive(format!("検出線（n={n}）が測れなかった（rc 2・赤ではない）"));
+    }
     if measured.red > 0 {
-        return Ok((
-            Verdict::Fail,
-            format!("verify の {} 行が rc≠0", measured.red),
-            None,
-        ));
+        return Ok((Verdict::Fail, format!("verify の {} 行が rc≠0", measured.red), None));
     }
     // **予算の照合は lens に渡す本文の byte で行う**（FR9・純移動の周は要約・`verdict.json` の
     // `diff_bytes` は従来どおり diff の byte）。
@@ -315,32 +317,28 @@ fn decide(entry: &Gate<'_>, worktree: &Path, measured: &Measured) -> Result<(Ver
     let size = byte_count(body);
     if size > entry.limits.token_cap {
         // **換算係数を持たない**（NFR1）。byte ≥ token の保守的な読みで直接比べる。
-        return Ok((
-            Verdict::Inconclusive,
-            format!("{} {size} byte が cap {} を超えた", measured.input.kind(), entry.limits.token_cap),
-            None,
+        return inconclusive(format!(
+            "{} {size} byte が cap {} を超えた",
+            measured.input.kind(),
+            entry.limits.token_cap
         ));
     }
     // **本数は照合する**。0 本（lens を呼ばずに通す）も 2 本以上（1 本で足りたことに
     // する）も「lens の verdict」を得ていないので、判定順の 4 番目は成立しない。
     // どちらも判定できていない周ゆえ INCONCLUSIVE へ倒す（AC3・C11.2）。
     if entry.limits.lens_count != 1 {
-        return Ok((
-            Verdict::Inconclusive,
-            format!(
-                "規則は lens {} 本を定める（通せるのは 1 本だけ）",
-                entry.limits.lens_count
-            ),
-            None,
+        return inconclusive(format!(
+            "規則は lens {} 本を定める（通せるのは 1 本だけ）",
+            entry.limits.lens_count
         ));
     }
     let Some(cmd) = entry.lens else {
-        return Ok((Verdict::Inconclusive, "lens が要るのに --lens が無い".to_owned(), None));
+        return inconclusive("lens が要るのに --lens が無い".to_owned());
     };
     // 純移動の周は渡した要約を run dir に残す（事後に読める・NFR4）。残せない周は判定に届かない。
     if let LensInput::Summary(summary) = &measured.input {
         if let Err(reason) = move_proof::keep(&run_dir(entry.state_dir, entry.run), summary) {
-            return Ok((Verdict::Inconclusive, reason, None));
+            return inconclusive(reason);
         }
     }
     // **裁定の写しは lens を起こす直前に書く**（`s2-07l.309`）。書けない周は lens を「裁定なし」で
@@ -355,6 +353,14 @@ fn decide(entry: &Gate<'_>, worktree: &Path, measured: &Measured) -> Result<(Ver
         caps: confine::Caps::embedded(),
     };
     Ok(ask_lens(&substitute(cmd, &contract, worktree), worktree, body, &wrap))
+}
+
+/// 判定に届かなかった腕の戻り（[`decide`] の INCONCLUSIVE・lens を撃たない周なので scope は `None`）。
+///
+/// 腕ごとに 3 つ組を書くと [`decide`] が C4 の線（`too_many_lines`）に当たる。**判定順は動かさない**
+/// （腕の並びは [`decide`] が 1 か所で持つ・C2）。
+fn inconclusive(reason: String) -> Result<(Verdict, String, Option<Released>), String> {
+    Ok((Verdict::Inconclusive, reason, None))
 }
 
 /// 便の裁定（質問と planner の回答の対・発生順・[`super::questions_of_run`]）を run dir の

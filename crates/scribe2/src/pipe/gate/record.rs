@@ -70,10 +70,16 @@ pub(super) fn record_verify(entry: &Gate<'_>, worktree: &Path, base: &str) -> Re
     // ある（rc に依らず「測れなかった」・設計 gate-cost.md §4.2）。
     let unreadable = steps.iter().any(is_unreadable);
     let killed = steps.iter().find_map(box_kill);
+    // 検出線が rc 2（測れなかった）で終えた周も同じ極性（`s2-07l.331`・設計 pipeline.md §5.3）。
+    // 最初にそうなった行の `n` を持つ（理由に名指す・record は残す）。
+    let unmeasured = steps
+        .iter()
+        .position(detection_unmeasured)
+        .map(|index| index as u64 + 1);
     for (index, step) in steps.iter().enumerate() {
         let number = index as u64 + 1;
         if step.rc != 0 {
-            if !is_unreadable(step) && box_kill(step).is_none() {
+            if !is_unreadable(step) && box_kill(step).is_none() && !detection_unmeasured(step) {
                 red += 1;
             }
             let head = format!("## n={number} rc={} cmd={}", step.rc, step.cmd);
@@ -81,7 +87,7 @@ pub(super) fn record_verify(entry: &Gate<'_>, worktree: &Path, base: &str) -> Re
         }
         append_line(&path, &step_record(number, step), entry.policy).map_err(|err| err.to_string())?;
     }
-    Ok(Counted { red, unreadable, killed })
+    Ok(Counted { red, unreadable, killed, detection_unmeasured: unmeasured })
 }
 
 /// 撃った 1 段の record（`verify.jsonl` と land の `verify-main.jsonl` が**同じ形**で書く）。
@@ -129,6 +135,18 @@ pub(super) struct Counted {
     pub(super) unreadable: bool,
     /// 箱の中で殺された行の理由（在れば）。
     pub(super) killed: Option<Reason>,
+    /// 検出線が rc 2（測れなかった）で終えた行の `n`（最初の 1 行・在れば）。
+    pub(super) detection_unmeasured: Option<u64>,
+}
+
+/// 検出線（`Check::Detection`）の **rc 2 = 測れなかった**か（`s2-07l.331`・設計 pipeline.md §5.3）。
+///
+/// `cargo xtask mutants-diff` の rc は 3 値である: 0 = 測定・1 = deny 昇格後の赤（R-C12-1・裁定後だけ）・
+/// 2 = 測れなかった（baseline が落ちた・道具が起こせない）。段を問わず rc≠0 を赤に数えると、2 が
+/// FAIL（判定に届いた便の終端）に化ける（`s2-07l.329` run 1 の実測）。**rc 1 の検出線と、検出線以外の
+/// rc 2 は従来どおり赤**——除外は「検出線 ∧ rc 2」の 1 点だけで、rc の意味は道具の側が持つ。
+fn detection_unmeasured(step: &Step) -> bool {
+    step.stage == Check::Detection && step.rc == 2
 }
 
 /// peak の字面。**読めない周は `-`**（0 と書かない＝「測って 0」と弁別する）。
