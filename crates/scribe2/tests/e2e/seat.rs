@@ -1,24 +1,29 @@
 //! 席の歯の module root（設計 docs/design/seat-roles.md・seat-autonomy.md §3・working-memory.md §8・
 //! account-lifecycle.md §8）。
 //!
-//! 歯は題ごとの submodule に置く（`s2-07l.261`・契約の write-set が題の file 単位で交差しないため）:
-//! `wm`（退避 / 消費 / 復元）・`tick`（tick / heartbeat / meter / 証拠）・`cycle`（inject / cycle / 終了 /
-//! 立て直しの shell の門）・`account`（状態 / 役割 / 登録 / 口座 / rules / 起動）。この file には **2 つ以上の
-//! submodule が使う共有 helper と fixture**・外形 snapshot の歯（面ごとに 1 本＝`seat_usage_external_form` /
-//! `seat_rebrief_external_form` / `seat_doctor_external_form`・`s2-07l.327`・snapshot 名が module path を含む
-//! ので動かさない）・変異生存の検出線の歯（`mutant_e2e_*`）だけを残す。
+//! 歯は題ごとの submodule に置く（`s2-07l.261`・契約の write-set が題の file 単位で交差しないため・接頭辞ごとの
+//! 固定した組は seat-roles.md §7・`s2-07l.361`）: `wm`（退避 / 消費 / 復元）・`tick`（tick / heartbeat / meter /
+//! 証拠）・`cycle`（inject / cycle / 終了 / 立て直しの shell の門）・`account`（口座の退避と立て直し / hook 集合の
+//! 食い違い / doctor の口座の行）・`launch`（起動 / 復元の第 2 手 / Enter 落ちの修復）・`register`（状態 / 役割 /
+//! 登録）・`rules`（host の面 / 壊れた `--rules`）。この file には **2 つ以上の submodule が使う共有 helper と
+//! fixture**・外形 snapshot の歯（面ごとに 1 本＝`seat_usage_external_form` / `seat_rebrief_external_form` /
+//! `seat_doctor_external_form`・`s2-07l.327`・snapshot 名が module path を含むので動かさない）・変異生存の検出線の
+//! 歯（`mutant_e2e_*`）だけを残す。
 //!
 //! tmux は **独立 socket**（`-S <tmp>/sock -f /dev/null`）の server だけを撃ち、開発席の
 //! live な server には 1 度も触れない。pane の読みは `--capture-file` で本文を直に渡す
 //! ので、meter 側の歯は tmux を 1 度も起動しない。
 // flip-check: moved s2-07l.261
+// flip-check: moved s2-07l.361
 
 mod account;
 mod cycle;
+mod launch;
+mod register;
+mod rules;
 mod tick;
 mod wm;
 
-use self::account::{role_doctor, role_doctor_place, role_place, role_register, role_stamp, CONSUMER_REPO, HOST_ABSENT, NO_ACCOUNT_RULES};
 use self::wm::rebrief_forms;
 use crate::make_tmp_dir;
 use std::fs;
@@ -1304,4 +1309,226 @@ fn acct_wait_pane(place: &AcctPlace, target: &str, ready: impl Fn(&str) -> bool)
         sleep(Duration::from_millis(100));
     }
     false
+}
+
+// ─────────────────── role / register の共有 fixture（`register` / `account` / `rules` と外形 snapshot が使う） ───────────────────
+
+/// 登録の置き場の fixture（state dir・雛形 file・tmux socket）。
+pub(super) struct RolePlace {
+    /// tmp dir の root。
+    pub(super) dir: PathBuf,
+    /// event log の置き場。
+    pub(super) state: PathBuf,
+    /// 起動の雛形の file。
+    launch: String,
+    /// 独立 socket（server は立てない周もある）。
+    pub(super) socket: String,
+}
+
+/// 雛形の本文（event の `launch` にそのまま載る）。
+const LAUNCH_BODY: &str = "launch {credential-dir}\n\"quoted\" line\n";
+
+/// 登録の置き場を 1 つ作る。
+pub(super) fn role_place() -> RolePlace {
+    let dir = tmp();
+    let state = dir.join("state");
+    let launch = fixture(&dir, "launch.txt", LAUNCH_BODY);
+    let socket = socket_of(&dir);
+    RolePlace { dir, state, launch, socket }
+}
+
+/// target の打刻を置く（dir 名は契約の字面どおり `:` を `_` に潰す）。`sid` が `None` なら dir だけ作る。
+pub(super) fn role_stamp(place: &RolePlace, target: &str, sid: Option<&str>) {
+    let seat = place.state.join("seat").join(target.replace(':', "_"));
+    fs::create_dir_all(&seat).ok();
+    if let Some(sid) = sid {
+        fs::write(state_file(&seat), format!("{}\n", stamp_line("idle", "SessionStart", unix_now(), sid))).ok();
+    }
+}
+
+/// `seat register` を 1 回撃つ（`extra` は `--anchor` などの追加 flag）。
+pub(super) fn role_register(place: &RolePlace, target: &str, role: &str, extra: &[&str]) -> Output {
+    let state = place.state.display().to_string();
+    let mut args = vec![
+        "register", "--state-dir", &state, "--target", target, "--role", role, "--account", "acct-1",
+        "--launch", &place.launch,
+    ];
+    args.extend_from_slice(extra);
+    run_seat(&args)
+}
+
+/// `doctor --state-dir` を撃つ（manifest は `[[account]]` の無い `--rules`＝口座の行 0 本・突合までの外形）。
+pub(super) fn role_doctor(place: &RolePlace) -> Output {
+    role_doctor_rules(place, NO_ACCOUNT_RULES)
+}
+
+/// `doctor --state-dir --tmux-socket --rules` を撃つ（`body` の manifest を置き場の dir に書いて渡す）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn role_doctor_rules(place: &RolePlace, body: &str) -> Output {
+    let state = place.state.display().to_string();
+    let rules = fixture(&place.dir, "doctor-rules.toml", body);
+    Command::new(bin())
+        .args(["doctor", "--state-dir", &state, "--tmux-socket", &place.socket, "--rules", &rules])
+        .output()
+        .expect("binary を起動できる")
+}
+
+/// 登録 2 件（実在の target 1 件）を置いた置き場（tmux の server は呼び側が立てる）。
+pub(super) fn role_doctor_place() -> RolePlace {
+    let place = role_place();
+    for (target, role) in [("rolesdoc:rolesdoc", "planner"), ("gone:gone", "admin")] {
+        role_stamp(&place, target, Some("sid-doc"));
+        let out = role_register(&place, target, role, &["--anchor", "/repo"]);
+        assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    }
+    place
+}
+
+// ─────────────────── doctor の口座の行の共有 fixture（s2-07l.233・account-autonomy.md §5・`account` / `rules` が使う） ───────────────────
+
+/// `[[account]]` の無い manifest（口座の行 0 本）。
+pub(super) const NO_ACCOUNT_RULES: &str = "schema = 1\n";
+
+/// 置き場に `host.toml` の無い周の doctor の host の面の行（突合の行の直後・口座の行の直前）。
+pub(super) const HOST_ABSENT: &str = "host-manifest=absent";
+
+/// 登録 row の anchor `/repo` が導入先として出る 1 行（口座の行の後ろ・記録なし・帳簿なし・`[[vessel]]` なし・
+/// consumer-sync.md §4・`s2-07l.303`）。
+pub(super) const CONSUMER_REPO: &str =
+    "consumer=/repo source=launch scope=- binary=unrecorded plugin=unrecorded ledger=- cache=absent head=undeclared drift=unrecorded";
+
+/// `[[account]]` を `labels` の順に宣言した manifest の本文。
+fn account_rules(labels: &[&str]) -> String {
+    labels.iter().fold(NO_ACCOUNT_RULES.to_owned(), |body, label| format!("{body}\n[[account]]\nlabel = \"{label}\"\n"))
+}
+
+/// doctor を撃ち、rc 0 を確かめて stdout の行を返す。
+fn doctor_rows(place: &RolePlace, rules: &str) -> Vec<String> {
+    let out = role_doctor_rules(place, rules);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    stdout_of(&out).lines().map(str::to_owned).collect()
+}
+
+// ─────────────────── 席の起動の共有 fixture（account-lifecycle.md §4・`s2-07l.244`・`launch` / `account` が使う） ───────────────────
+
+/// host の面（`<state>/host.toml`）に宣言する口座（tracked の manifest に口座は無い）。
+const LAUNCH_LABELS: [&str; 2] = ["l1", "l2"];
+/// host の面の `[[plugin]]` の dir（宣言順＝起動行の順・名前の昇順ではない）。
+const LAUNCH_PLUGINS: [&str; 2] = ["/opt/plug-b", "/opt/plug-a"];
+/// host の面の `[[launch-arg]]` の value（宣言順）。
+const LAUNCH_ARGS: [&str; 2] = ["--permission-mode", "bypassPermissions"];
+/// 起動の歯の shell の prompt（`$ ` で終わる＝shell の門を通る）。
+const LAUNCH_PS1: &str = "PS1=$ ";
+/// 偽 claude が受けた行の置き場。
+const LAUNCH_LOG: &str = "seat.log";
+/// 偽 claude が起動時に写す event log の複製（登録 row が**送る前**に在ったことの証拠）。
+const LAUNCH_EVENTS_SEEN: &str = "events-at-launch";
+/// 包みの tmux が写す argv の置き場。
+const LAUNCH_TMUX_ARGS: &str = "tmux-args";
+
+/// 起動の歯の置き場: [`acct_place`] に host の面（口座 2 つ・plugin 2 つ・引数 2 つ）と anchor の dir を足す。
+fn launch_place() -> AcctPlace {
+    let place = acct_place();
+    fs::create_dir_all(&place.state).ok();
+    fs::create_dir_all(place.dir.join("anchor")).ok();
+    let accounts: String = LAUNCH_LABELS.iter().map(|label| format!("\n[[account]]\nlabel = \"{label}\"\n")).collect();
+    let plugins: String = LAUNCH_PLUGINS.iter().map(|dir| format!("\n[[plugin]]\ndir = \"{dir}\"\n")).collect();
+    let args: String = LAUNCH_ARGS.iter().map(|value| format!("\n[[launch-arg]]\nvalue = \"{value}\"\n")).collect();
+    fs::write(place.state.join(vessel::rules::HOST_MANIFEST), format!("schema = 1\n{accounts}{plugins}{args}")).ok();
+    place
+}
+
+/// anchor の dir（登録 row の `anchor`・起動行の 1 つ目の `--plugin-dir`）。
+fn launch_anchor(place: &AcctPlace) -> String {
+    place.dir.join("anchor").display().to_string()
+}
+
+/// 期待する偽 claude の記録（argv を 1 語 1 行・続けて env の 2 行）。
+fn launch_expected_argv(place: &AcctPlace, label: &str) -> String {
+    let account_dir = place.state.join("accounts").join(label).display().to_string();
+    format!(
+        "--plugin-dir\n{}\n--plugin-dir\n{}\n--plugin-dir\n{}\n{}\n{}\nenv:CLAUDE_CONFIG_DIR={account_dir}\nenv:CLAUDE_CODE_DISABLE_AGENT_VIEW=1\n",
+        launch_anchor(place), LAUNCH_PLUGINS[0], LAUNCH_PLUGINS[1], LAUNCH_ARGS[0], LAUNCH_ARGS[1]
+    )
+}
+
+/// test 自身の PATH に在る tmux（包みが exec する実体）。
+fn real_tmux() -> Option<PathBuf> {
+    std::env::var("PATH").ok()?.split(':').map(|dir| Path::new(dir).join("tmux")).find(|path| path.is_file())
+}
+
+/// shim の dir を作る（偽 `claude`・argv を写して実体へ exec する `tmux` の包み）: 偽 claude は argv と env を `launched` へ
+/// 写し、その時点の event log を [`LAUNCH_EVENTS_SEEN`] へ複製し、prompt を描いて `SessionStart` を打ち、以後は受けた行を
+/// [`LAUNCH_LOG`] に積んで `UserPromptSubmit` → `Stop` を打つ（立て直しの偽 session と同じ形）。PATH の字面を返す。
+fn launch_shims(place: &AcctPlace, target: &str) -> String {
+    let bin = place.dir.join("bin");
+    fs::create_dir_all(&bin).ok();
+    let seat = seat_dir_of(&place.state, &target.replace(':', "_"));
+    let file = state_file(&seat);
+    let claude = format!(
+        "#!/bin/sh\nmkdir -p '{seat}'\nprintf '%s\\n' \"$@\" >> '{launched}'\n\
+         printf 'env:CLAUDE_CONFIG_DIR=%s\\nenv:CLAUDE_CODE_DISABLE_AGENT_VIEW=%s\\n' \"$CLAUDE_CONFIG_DIR\" \"$CLAUDE_CODE_DISABLE_AGENT_VIEW\" >> '{launched}'\n\
+         cp '{events}' '{seen}' 2>/dev/null\nprintf '\u{276f} '\n{start}\n\
+         while read -r line; do printf '%s\\n' \"$line\" >> '{log}'; {busy}; {stop}; printf '\u{276f} '; done\n",
+        seat = seat.display(),
+        launched = place.dir.join("launched").display(),
+        events = vessel::fleet::store::events_path(&place.state).display(),
+        seen = place.dir.join(LAUNCH_EVENTS_SEEN).display(),
+        start = stamp_cmd(&file, "idle", "SessionStart", FakeStamp::Now),
+        log = place.dir.join(LAUNCH_LOG).display(),
+        busy = stamp_cmd(&file, "busy", "UserPromptSubmit", FakeStamp::Now),
+        stop = stamp_cmd(&file, "idle", "Stop", FakeStamp::Now),
+    );
+    let tmux = format!(
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\nexec '{}' \"$@\"\n",
+        place.dir.join(LAUNCH_TMUX_ARGS).display(),
+        real_tmux().unwrap_or_default().display()
+    );
+    for (name, body) in [("claude", claude), ("tmux", tmux)] {
+        let path = bin.join(name);
+        fs::write(&path, body).ok();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).ok();
+    }
+    format!("{}:{}", bin.display(), std::env::var("PATH").unwrap_or_default())
+}
+
+/// 独立 socket に session `name`（初期 window も `name`・`sh -i`・prompt `$ `・PATH は shim 先頭）を立て、以後の window も同じ
+/// 形（`default-command` = 同じ shell の command・login shell にしない＝home の profile の PATH / PS1 を継承しない）にする。
+fn launch_session(place: &AcctPlace, name: &str, path: &str) -> IsolatedSeat {
+    let mut seat = IsolatedSeat { socket: place.socket.clone(), name: name.to_owned(), ready: false };
+    // PATH は shell の command の中で据える（session の環境変数 `-e PATH=` は login の profile に上書きされる・実測 2026-09-14）。
+    let shell = format!("PATH='{path}'; export PATH; exec sh -i");
+    let out = tmux(
+        &place.socket,
+        &["new-session", "-d", "-s", name, "-n", name, "-x", "120", "-y", "40", "-e", LAUNCH_PS1, "sh", "-c", &shell],
+    );
+    if !out.status.success() {
+        return seat;
+    }
+    let shell = tmux(&place.socket, &["set-option", "-t", name, "default-command", &shell]);
+    seat.ready = shell.status.success() && acct_wait_pane(place, &format!("{name}:{name}"), |pane| pane.trim_end().ends_with('$'));
+    seat
+}
+
+/// `seat launch` を shim の PATH で 1 回撃つ（`--tmux-socket` は独立 socket・`--anchor` は置き場の anchor）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn launch_run(place: &AcctPlace, path: &str, target: &str, extra: &[&str]) -> Output {
+    let state = place.state.display().to_string();
+    let anchor = launch_anchor(place);
+    let mut args = vec![
+        "seat", "launch", "--state-dir", &state, "--role", "planner", "--target", target, "--anchor", &anchor, "--tmux-socket", &place.socket,
+    ];
+    args.extend_from_slice(extra);
+    Command::new(bin()).args(&args).env("PATH", path).output().expect("binary を起動できる")
+}
+
+/// 送った行のうち `--model` の語の数（起動行が model を**ちょうど 1 つ**運ぶことの計測）。
+fn launch_model_words(line: &str) -> usize {
+    line.split(' ').filter(|word| *word == "--model").count()
 }
