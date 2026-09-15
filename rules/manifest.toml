@@ -154,10 +154,10 @@ ruled_at = "2026-09-07"
 [[rule]]
 id = "gate.token_cap"
 kind = "GateTokenCap"
-value = 150000
+value = 400000
 enabled = true
-ruling = "user 2026-09-14T20:35Z restore cap after pure-move proof (s2-07l.266; raise = s2-07l.265)"
-ruled_at = "2026-09-14"
+ruling = "user 2026-09-15T23:31Z temporary raise for non-pure-move 169 KB diff (s2-07l.209; revert = s2-07l.376; precedent = s2-07l.265 / .267)"
+ruled_at = "2026-09-15"
 
 [[rule]]
 id = "hook.budget_ms"
