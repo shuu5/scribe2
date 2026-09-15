@@ -92,7 +92,7 @@ id = "a"
 title = "着地の列の待ち（Completion::LandTurn）は event log の長さと mtime が不変の周は replay を省く"
 req = ["FR50", "NFR3"]
 section = "4"
-write-set = ["crates/scribe2/src/fleet/wait.rs", "crates/scribe2/src/pipe/queue.rs", "crates/scribe2/tests/e2e/fleet.rs", "docs/design/gate-cost.md", "docs/design/fleet-event-log.md"]
+write-set = ["crates/scribe2/src/fleet/wait.rs", "docs/design/gate-cost.md", "docs/design/fleet-event-log.md"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail fleet_wait_land_turn_"]
 size = "S"
 done = "log が変わらない周は replay が呼ばれず、追記のあった周は読み直して列の判定が変わる"

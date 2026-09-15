@@ -143,6 +143,7 @@ manifest に行が載るまでは ADR-0021 の予定行（C14.2 の相互参照�
 - **atomic な書きは gate.rs `write_verdict`**（`verdict.json.partial` へ書いて rename・落ちた周は書きかけを消して本 file を作らない）。`settle` の書きはこの 1 本だけを通る。
 - **面 5 の `order` は key 列の末尾**（既存の 7 key の並びは動かさない）。`order=` は land が成立した周（main 実測が緑）の record と stdout にだけ載る。
 - **衝突の起こし直し中の run も列に残る**: 追随の rebase が衝突して実装役を起こし直した run（`Implemented detail=rebase-conflict:`・pipeline-conflict.md §3）も、前の周の PASS が残り終端でない間は列の定義を満たす。起こし直しの間、後続は上限まで待ってから縮退しうる（上の「置き去りの run」と同じ箱・本便では解かない）。
+- **歯の fixture も atomic に書く**（`s2-07l.357`・契約表の行 a）: 列の歯が別 thread から前の便の判定を書き換える fixture は `write_verdict` と同じ形（`.partial` へ書いて rename）で書く。素の write（truncate → write）は 20 ms の poll に書きかけを読ませ、`Unmeasurable` → `order=unmeasured` の flake になる（main 201b2ef の CI nextest が 1 度赤・測り直しで緑・local 44 回は全部緑＝遅い runner でだけ開く窓）。assert は緩めない（`Unmeasured` を `Waited` と同じにすると歯が空虚になる）。
 - **やさしく言うと**: 審査を通った順に 1 本ずつ main へ載せる。前が詰まっていたら決まった時間だけ待ち、それでも空かなければ待たずに進む（その場合は main が動いて 1 回余分に審査し直すかもしれない）。
 
 ## 7. 歯（契約ごと・in-file の unit と `tests/e2e/` の e2e の分担）
@@ -194,3 +195,17 @@ e2e は binary を spawn し外部 command は PATH 先頭の stub で差し替�
 - `gate.job_memory_mb` の宣言値を peak の測定で置き換える裁定（C10）。
 - state root の運用（同じ host の state dir は 1 つの親）を doctor（C3.2・移行後の epic）の検査項目に足す。
 - SRS v0.7 に NFR（host の資源を枯渇させない）を足す材料は planner state dir に置いた（user の /folio-architect 手番）。
+
+<!-- contracts:begin -->
+schema = 1
+
+[[contract]]
+id = "a"
+title = "着地の列の歯の fixture が verdict.json を素の write で書く flake — 器の write_verdict と同じ atomic な形（.partial へ書いて rename）にする"
+req = ["FR50"]
+section = "6"
+tests = ["crates/scribe2/src/pipe/queue.rs"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail mutant_in_pipe_land_await_turn_"]
+size = "S"
+done = "fixture の書き換えが atomic になり、await_turn の poll が書きかけを読む窓が無い（歯の中身と assert は不変・test だけの差分ゆえ札 retroactive）"
+<!-- contracts:end -->

@@ -33,6 +33,7 @@
 - **prompt**: 契約（再読）+「回答」節（FR32・Questioned の再開と同じ）+「**途中再開**」節（base からの commit の一覧・止まった時刻・`headless/runner.txt` に節の雛形を足す・順序は 契約 → 回答 → 途中再開）。
 - **候補なしの周**: `Completion::AccountFree { reset_at, state_dir }`（variant 1 つ・運ぶ値は pid でなく最も早い reset 時刻と実測行の置き場〔`is_met` が最新の実測行を読んで §3 を再評価する・`SlotFree` が `slots_dir` を運ぶのと同型〕＝現物の完了 enum の `pid()` は 0 を返す形）を足して唯一の wait 実装を通す。deadline は reset 時刻から計算した値（rules 行ではない・縮退を持たない）。Timeout（C11.3 の Result）を受けた周は計測して選び直し、候補なしなら次の reset 時刻で待ち直す。起こし直しの回数に上限を持たない（窓を跨いで続く）。待ちの間も便は live。終端手段は `pipe stop --run` だけ（器は自動では終端しない）。
 - **記帳**: 再開のたびに `RunStage stage=Spawned detail=account:<label>,resume:rate-limit`（既存の段の event・detail で弁別）。人由来の event は 0（FR22）。
+- **runner が死んだ便の起こし直し**（`s2-07l.323`・C9 の便版・FR37 / AC39・契約表の行 g）: `pipe resume` が `Spawned` の段を見た周は、まず最後の `SeatSpawned` の pid を唯一の wait（`Completion::SeatGone`・deadline 0＝`Timeout` が「生きている」）で測る（pane の字面は読まない・C3.3・生存の関数を新設しない）。生きていれば typed に断って runner を 2 本にしない（判定行 `run=<id> runner=alive pid=<pid>`・rc 1・event 0 件）。死んでいれば（host の再起動・OOM・kill で `SeatStopped` が書かれないまま消えた形）`SeatStopped detail=runner-dead` を記帳してから、上の 1 本（計測 → §3 の便用の規則 → `spawn_turn`）で同じ worktree・同じ契約・同じ base に runner を起こし直す（前の口座が候補ならそれで良い・候補なしの待ちも上と同じ）。「途中再開」節は上限の周と同じ場所に付き、止まった理由（`runner-dead`）と base からの commit の一覧に加えて**前の runner が残した未 commit の変更の一覧**（worktree の `git status --porcelain` の行・無ければ `なし`）を載せる（未 commit の file は消さない・N1・runner は続きから commit する）。記帳は `RunStage stage=Spawned detail=account:<label>,resume:runner-dead`（`resume:rate-limit` と同じ形・detail で弁別）。却下案: runner に定期 commit（WIP）を課す＝歯の RED→GREEN の順序と flip-check を壊し、契約の外の commit が増える／stop → run N+1 のまま＝結果を保たない（C9・2026-09-15 04:38Z の再起動で 2 便 × 45 分の実装を捨てた型）。
 
 ## 5. 席の退避と立て直し（ADR-0020 §2.4・FR38）
 
@@ -91,3 +92,17 @@ C1 / C5（R-C9-1 は行・裁定 id）・C2（`Purpose` / `Selection` / `Stage` 
 ## 11. 後続
 
 席の起動と初回の口座選択（s2-07l.38 → [account-lifecycle.md](./account-lifecycle.md) §4・ADR-0026）・token の refresh（[fleet-usage.md](./fleet-usage.md) §3・s2-07l.229）・再 login（墓標・user の手番）・crash の起こし直し（§5 の入口 (1) が無い停止）・上限停止の便の一覧画面（v3）・モデル別窓の display name の一致の細部（ADR-0017 §2.5）・SQLite 化（v3・A3）。
+
+<!-- contracts:begin -->
+schema = 1
+
+[[contract]]
+id = "g"
+title = "runner が死んだ便の起こし直し — pipe resume が Spawned の便の runner の生死を唯一の wait で測り、死んでいれば同じ worktree で起こし直す（途中再開の節に未 commit の一覧）"
+req = ["FR37", "FR14"]
+section = "4"
+write-set = ["crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/ratelimit.rs", "crates/scribe2/src/pipe/follow.rs", "crates/scribe2/src/pipe/spawn.rs", "crates/scribe2/src/headless/runner.txt", "crates/scribe2/tests/e2e/pipe/spawn.rs"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_resume_kill_"]
+size = "M"
+done = "Spawned で runner が死んだ便に resume を撃つと同じ worktree で runner が起き直り途中再開の節に未 commit の file 名が載り、生きている runner の便は typed に断られて runner が 2 本にならない"
+<!-- contracts:end -->

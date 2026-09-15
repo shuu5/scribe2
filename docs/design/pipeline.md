@@ -258,8 +258,8 @@ id = "d"
 title = "runner / lens の prompt 全文を外形 snapshot 2 本で pin する"
 req = ["FR5"]
 section = "6"
-write-set = ["crates/scribe2/src/headless/runner.rs", "crates/scribe2/src/headless/lens.rs", "crates/scribe2/tests/e2e/headless.rs", "+crates/scribe2/tests/e2e/snapshots/e2e__headless__headless_runner_prompt_external_form.snap", "+crates/scribe2/tests/e2e/snapshots/e2e__headless__headless_lens_prompt_external_form.snap", "docs/design/pipeline.md"]
+write-set = ["crates/scribe2/src/headless/runner.rs", "crates/scribe2/tests/e2e/headless.rs", "+crates/scribe2/tests/e2e/snapshots/e2e__headless__headless_runner_prompt_external_form.snap", "docs/design/pipeline.md"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail headless_runner_prompt_external_form headless_lens_prompt_external_form"]
 size = "S"
-done = "prompt 全文の snapshot 2 本が在り、本文の変更が .snap 差分として PR に現れる"
+done = "runner の prompt 全文の snapshot が足され（lens 側は既存の named snapshot lens_prompt_external_form）、prompt 本文の変更が .snap 差分として PR に現れる"
 <!-- contracts:end -->
