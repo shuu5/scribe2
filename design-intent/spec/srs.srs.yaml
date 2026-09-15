@@ -11,14 +11,14 @@ meta:
   eyebrow_left: 要件定義書 (SRS)
   eyebrow_right: scribe2 — MVP
   subtitle: 契約は小さく・検証は機械が先・止まるときは記帳して止まる
-  version: "0.13"
+  version: "0.14"
   date: "2026-09-15"
   reader: この器で開発する人と AI（Claude Code の session）。 専門語には必ずやさしい言い換えを併記する
 
 approval:
   - role: 承認 (user)
     who: user
-    when: 2026-09-15（版 0.13。 版ごとの裁定 id は台帳が持つ）
+    when: 2026-09-15（版 0.14。 版ごとの裁定 id は台帳が持つ）
     stamp: 裁定済
   - role: レビュー (folio review lens)
     who: spec-review 5 軸 + SRS ceiling 3 lens
@@ -63,6 +63,7 @@ scope:
     - 受付の枠
     - 契約表からの契約 file の生成
     - 契約の審査
+    - 便の自動起動
     - write-set の閉包
     - land の終端
     - 台帳の lint
@@ -113,7 +114,7 @@ acceptance:
   - { id: AC7, criterion: write-set の外への Edit / Write は編集の時点で deny され、 hook は marker が自分を言うときだけ仕える,    metric_v: 0 件,  metric_l: 素通り,           links: [FR19, FR20, FR21, FR24, NFR5] }
   - { id: AC8, criterion: 開発 session の作業記憶の退避と復元が器の subcommand として実在し、 FR23 の作法 9 本を満たし、 復元の DATA に暫定行が印付きで列挙されて次の cycle に引き継がれない, metric_v: 11/11,   metric_l: 作法と復元 DATA,   links: [FR23] }
   - { id: AC9, criterion: planner と管理席の 2 つの開発 session で、 context 使用量が取れない周は rc ≠ 0 になり、 上限到達で退避以外の編集が deny され、 測れない周は deny 0 件で理由が注入計測の記録に 1 件残り、 管理 tick が規則どおりに判定し（同じ入力には同じ inject / noop）、 上限以上で idle でない周にも退避の合図が 1 件注入され、 測れない周と退避物が在る周は 0 件で、 cycle が 1 回完走する, metric_v: 2 session + 1 回, metric_l: 判定が規則どおり,   links: [FR25, FR26, FR27, FR28, FR29] }
-  - { id: AC10, criterion: toy repo で verify 行が矛盾する契約 1 本を管理席が pipeline に流し、 runner の質問 record → Questioned → planner の回答 event（機械由来）→ resume → Landed まで通り、 人由来の event が 0 件・席が自分の手で実装した commit が 0 件, metric_v: 1 便, metric_l: 質問で止まり回答で再開, links: [FR5, FR14, FR22, FR30, FR31, FR32] }
+  - { id: AC10, criterion: toy repo で verify 行が矛盾する契約 1 本を pipeline に流し、 runner の質問 record → Questioned → planner の回答 event（機械由来）→ resume → Landed まで通り、 人由来の event が 0 件・席が自分の手で実装した commit が 0 件, metric_v: 1 便, metric_l: 質問で止まり回答で再開, links: [FR5, FR14, FR22, FR30, FR31, FR32] }
   - { id: AC11, criterion: live な口座 2 つ以上を持つ host で口座残量の計測を 1 回要求すると、 口座ごとの口座残量が出所付きで fleet の event log に 1 行ずつ増え、 器の外で同じ endpoint を読む独立した手段の値と残量が一致し（reset は 1 分以内）、 認証情報の無い口座は理由付きの「測れなかった」の行になる（0 の値の行にならない）, metric_v: 2 口座, metric_l: 実測値が一致, links: [FR33] }
   - { id: AC12, criterion: 偽の runner が上限 record で止まった便を、 器が別の口座（fixture）で resume して Landed まで通す。 実便で上限に当たった記録が 1 件以上得られたら、 別口座で Landed になった事実を記録に残す,   metric_v: 1 便,  metric_l: 別口座で完走,       links: [FR14, FR33, FR35, FR36, FR37] }
   - { id: AC13, criterion: 2 つの開発 session のうち 1 つで口座の使用率が閾値以上のとき、 管理 tick が退避の合図を 1 件注入し、 退避後に別口座で session が立ち上がり復元が走る,                    metric_v: 1 回,  metric_l: 別口座で立て直し,   links: [FR28, FR29, FR36, FR38] }
@@ -125,7 +126,7 @@ acceptance:
   - { id: AC19, criterion: 席間の連絡 1 件が入力欄を経由せず届き、 届いた事実が経路の記録から取れる,                                                                                        metric_v: 1 件,  metric_l: 記録で確認,         links: [FR44] }
   - { id: AC20, criterion: 変異検査の verify 行が memory 上限付きの箱の中で撃たれ、 箱や受付が使えない fixture では並列度 1 で進んで便が断られない,                                metric_v: 0 件,  metric_l: 資源不足での拒否,   links: [FR8, FR46, NFR6] }
   - { id: AC21, criterion: toy repo の設計 doc に契約表 3 行（正常・型の宣言に対して write-set が足りない・設計の節が無い）を置き、 intake が正常の 1 行から契約 file を生成して便を作り、 残りの 2 行を typed な理由（足りない file・無い節）で断って便が増えず、 契約 file を直接渡す形は受け付けない, metric_v: 1/3 便, metric_l: 契約表からの生成と拒否, links: [FR47, FR48, FR53, FR54] }
-  - { id: AC22, criterion: 偽の lens が FAIL を返す契約は契約の審査の段で止まり runner の process が 1 度も起きず、 PASS を返す契約は Spawned へ進んで verdict が便の記録に残る。 加えて実 lens で scribe2 自身の契約 1 本を審査し verdict と所要を記録に残す, metric_v: 0 件 + 実 1 本, metric_l: 審査を通らない便の runner 起動, links: [FR49] }
+  - { id: AC22, criterion: 契約 file が出来た直後に偽の lens が 1 回撃たれ verdict が契約の中身（sha）に紐づいて記帳され、 同じ中身の契約の便の起動では lens の呼出が 0 で Reviewed が記帳した verdict で埋まり、 中身（sha）が変わった契約では lens が撃ち直される。 偽の lens が FAIL を返す契約は起動の列に入らず理由付きで列挙され runner の process が 1 度も起きず、 PASS を返す契約は Spawned へ進んで verdict が便の記録に残る。 加えて実 lens で scribe2 自身の契約 1 本を審査し verdict と所要を記録に残す, metric_v: 審査 1/1 + 同 sha の呼出 0/N + 撃ち直し 1/1 + 0 件 + 実 1 本, metric_l: 契約の審査と verdict の再利用, links: [FR49, FR68] }
   - { id: AC23, criterion: fixture の remote と偽の CI の結果と偽の台帳 adapter で、 Landed の後に push・CI の結果の照合・close の 1 行が typed な event として記帳され、 CI が赤の fixture では close されず失敗が記帳される。 加えて実便 1 本で land の終端が席の手順なしに close まで通る（人由来の event 0）, metric_v: 1 便 + 実 1 本, metric_l: 終端が席の手順なしに通る, links: [FR22, FR50] }
   - { id: AC24, criterion: fixture の台帳（台帳 adapter の偽出力）で設計の中身を持ち pointer の無い open な memo 2 本と契約 id を指さない open な契約 1 本を lint が名指し、 全件揃った fixture では 0 件・rc 0。 加えて実台帳で 1 回撃ち、 名指された件数と母集団を記録に残す, metric_v: 3/3 件 + 実 1 回, metric_l: pointer の欠落の名指し, links: [FR51] }
   - { id: AC25, criterion: fixture の設計 doc（規範の印を持つ文 3 つ = pointer 無し・数 + 単位付き・適合）で散文の門が違反 2 件を file と行付きで名指して非 0、 適合だけの fixture で 0 件・rc 0。 加えて tracked な設計 doc 全件で 0 件, metric_v: 2/2 件 + 全件 0, metric_l: 散文の門の違反の名指し, links: [FR52] }
@@ -142,6 +143,8 @@ acceptance:
   - { id: AC35, criterion: 偽の event log に直命を 5 件（確認候補になる 3 件 = 発令から rules 行の日数を超えたもの・前提の bead が閉じたもの・前提の決定記録が置き換わったもの、 候補でない有効な直命 1 件、 裁定 id 付きで閉じた直命 1 件）足して復元を撃つと、 有効な直命 4 件が逐語で列挙され（閉じた 1 件は列挙されない）、 確認候補が理由の語（経過 / 前提の終端 / 前提の置換）付きで 3 件だけ印され（候補でない 1 件に印は無い）、 器は直命の状態を変えない。 直命の追加では器が時刻を打ち逐語を保ち、 閉じる記録は結果と裁定 id を伴う, metric_v: 列挙 4/4 + 閉じた不在 1/1 + 候補 3/3 + 非候補の印 0/1 + 逐語 1/1 + 時刻 1/1 + 裁定 id 1/1, metric_l: 直命の表と確認候補, links: [FR65] }
   - { id: AC36, criterion: hook の入力の fixture で復元 skill の起動を渡すと復元の DATA が文脈への注入として返り、 退避 skill の起動では現在地の DATA が返り、 session の開始では退避物の状態（found / missing / unreadable の 3 語）の 1 行が返る。 自動圧縮の直前の hook で自席の退避物が無ければ現在地と持ち越し分だけの退避物が書かれて圧縮は止まらず、 在れば何も書かれず、 読めなければ何も書かずに理由の 1 行が返る。 session の終端の理由が席の状態に打刻され、 退避物の無いまま終わった session の件数が doctor の席の行に出る, metric_v: 注入 3/3 + 状態の語 3/3 + 自動退避 3/3 + 打刻 1/1 + doctor 1/1, metric_l: 取得の強制と自動退避, links: [FR23, FR66] }
   - { id: AC37, criterion: 登録 row のある planner の席の指示文に、 雛形が設計 doc を指す pointer 付き 4 行のうち対話面の作法の行 3 本（文の形・信頼度・brief の 5 slot）が在り、 管理席の指示文にはその行が 0 本（走査した行数を母集団として出す）で、 pointer の無い行（規範文）が指示文で 0（走査した行数を母集団として出す）で、 復元 skill の本文は brief の 5 slot の名（対話面の設計 doc §3 の宣言順の id）と対話面の設計 doc §3 への pointer を持ち作法の則の本文を持たず（skill の frontmatter〔先頭の --- 区間〕を除く非空行は見出し・番号付きの手順・code block・pointer 付きの行・5 slot の名の行のいずれかに分類され、 どれでもない行が 0・frontmatter を除く非空行数を母集団として出す）、 rules manifest に対話面の作法の行が 0（rules 行数を母集団として出す）である, metric_v: 行 3/4 + 管理席 0/N + 指示文の規範文 0/N + skill の 5 slot 5/5 + skill の pointer（設計 doc §3）1/1 + skill の分類外の行 0/M + rules 行 0/R, metric_l: 対話面の作法, links: [FR30, FR67] }
+  - { id: AC38, criterion: 偽の台帳と偽の走行中の便で、 審査 PASS ∧ 依存 closed ∧ write-set の交差 0 ∧ 受付を通る契約が、 席の操作なしに次の管理 tick か land の直後に Spawned になり、 条件を満たす契約が N 本なら同じ契機で N 本起き、 交差する契約は理由 Overlap で起動の列に留まり、 typed な介入（first / hold / release）のうち first の印を持つ契約が priority の高い契約より先に起き、 同じ介入と priority の契約は起票順に起き、 hold の契約は起きず release で戻り、 台帳が読めない周は 1 本も起こさず unmeasured の 1 行が出る（列挙した契約数と起こした便数を母集団として出す）, metric_v: 自動起動 1/1 + 同じ契機 N/N + 交差の待ち 1/1 + first 1/1 + 起票順 1/1 + hold / release 2/2 + unmeasured 1/1, metric_l: dispatcher の自動起動, links: [FR68] }
+  - { id: AC39, criterion: Spawned の段で偽の runner を kill した便に resume を撃つと、 同じ worktree で runner が起き直り途中再開の節に前の runner の未 commit の変更の file 名が載り、 生きている偽の runner を持つ便は typed に断られて runner が 2 本にならない（試行した便数を母集団として出す）, metric_v: 起こし直し 1/1 + 未 commit の一覧 1/1 + 生存の断り 1/1, metric_l: runner が死んだ便の起こし直し, links: [FR37] }
 requirements:
   - id: FR1
     type: FR
@@ -474,7 +477,7 @@ requirements:
     ears:
       pattern: ubiquitous
       condition: 常時
-      response: 便の配送構造は planner と管理席の 2 役割の席からなり（席数と一意性は FR40）、 口座は便ごとに FR36 が選び、 管理席は契約を pipeline に流す・runner の質問を planner へ中継する・go の後に land する の 3 つを担い、 自分の手で実装するのは pipeline が回せない便だけとする
+      response: 便の配送構造は planner と管理席の 2 役割の席からなり（席数と一意性は FR40）、 口座は便ごとに FR36 が選び、 便の起動は席でなく器の dispatcher が行い（起動の条件・順序・契機は FR68）、 planner は契約と priority と typed な介入（first / hold / release）だけを書き、 管理席は runner の質問と gate の判定を planner へ中継する・go の後に land する の 2 つを担い、 自分の手で実装するのは pipeline が回せない便だけとする
   - id: FR31
     type: FR
     label: 質問の停止
@@ -549,11 +552,11 @@ requirements:
     priority: must
     vmethod: T
     rationale_source: N-1
-    trace: { backward: [N-1], acceptance: [AC12] }
+    trace: { backward: [N-1], acceptance: [AC12, AC39] }
     ears:
       pattern: event
-      condition: FR35 で記帳された便の再開が要求されたとき（この便の再開は FR14 に優先する）
-      response: 器は FR36 で別の口座を選び、 同じ worktree と同じ契約（回答済みの質問を添えて・FR32）で runner を起こし直し、 記帳した段から Landed まで続ける。 候補となる口座が無い周は便を Failed にせず、 いずれかの口座の窓が最も早く reset する時刻まで待ってから再開する
+      condition: FR35 で記帳された便、 または Spawned の段の便の再開が要求されたとき（この便の再開は FR14 に優先する）
+      response: 器は runner の process が生きているかを測り（生きている便は typed に断り、 runner を 2 本にしない）、 FR36 で口座を選び（上限で止まった便は別の口座）、 同じ worktree と同じ契約（回答済みの質問と、 前の runner が残した未 commit の変更の一覧を添えて・FR32）で runner を起こし直し、 記帳した段から Landed まで続ける。 候補となる口座が無い周は便を Failed にせず、 いずれかの口座の窓が最も早く reset する時刻まで待ってから再開する
   - id: FR38
     type: FR
     label: 開発 session の上限前の退避
@@ -685,8 +688,8 @@ requirements:
     trace: { backward: [N-2, N-1], acceptance: [AC22] }
     ears:
       pattern: event
-      condition: 便が intake を通ったとき
-      response: 器は runner を起こす前に、 契約とそれが実装する設計と要件を lens に読ませて verdict を採り、 その verdict を便の段として記帳し、 verdict が PASS でない便の runner を起こさない
+      condition: 契約 file が出来たとき（設計 doc の契約表からの生成、 または契約の改訂で契約の中身（sha）が変わったとき）
+      response: 器はその直後に、 契約とそれが実装する設計と要件を lens に読ませて verdict を採り、 その verdict を契約の中身（sha）に紐づけて記帳し、 verdict が PASS でない契約を起動の列に入れず理由付きで列挙する（同じ中身の契約の便の起動で記帳した verdict を再利用する形は FR68）
   - id: FR50
     type: FR
     label: land の終端
@@ -897,6 +900,17 @@ requirements:
       pattern: ubiquitous
       condition: 常時
       response: 器は planner の席の指示文に user に向けて出す文の形（信頼度を上位に置く 1 体系の作法・本文は設計 doc 1 本が正本）を pointer 付きの行で運び（指示文・skill・rules 行には作法の則の本文を置かない）、 復元 skill は brief の user 面を 5 slot（次の 1 手・成果・現在地・計画・危険）で組み、 planner の席でない席には適用しない
+  - id: FR68
+    type: FR
+    label: 便の自動起動
+    priority: must
+    vmethod: T
+    rationale_source: N-1
+    trace: { backward: [N-1, N-3], acceptance: [AC22, AC38] }
+    ears:
+      pattern: event
+      condition: 管理 tick が撃たれたとき（FR64・席の判定とは独立に 1 周）、 または便が Landed に達したとき（FR50）
+      response: 器の dispatcher は起動の列（審査（FR49）の verdict が現在の契約の中身（sha）で PASS の契約の並び）を planner の介入 first → 契約の priority → 起票順で評価し、 台帳の依存が閉じ ∧ 走行中の便と write-set が交差せず（FR39 と同じ判定）∧ 受付（契約の write-set の余地と host の memory の枠）を通る便を、 席の操作なしに条件を満たす本数だけ起こし（同時本数の数値上限は持たず、 縮退は受付が行う・FR46）、 同じ周で起こした便の write-set を次の候補の交差の相手に数え、 交差する便は理由 Overlap で列に留め、 hold の便は起こさず release で戻し、 介入を起動の列の記録として残し、 起動では同じ中身の契約の記帳した verdict で便の段（Reviewed）を埋めて lens を撃ち直さず、 verdict が PASS でない便の runner を起こさず、 台帳が読めない周は 1 本も起こさず測れなかったことを記帳する
 
 nfr:
   - { id: NFR1, type: NFR, label: lens 予算,   category: 性能, target: 1 lens は 0.15M token 以内（目標値）,                                measure: lens 起動時の diff byte と cap の照合を verdict に記録,        vmethod: T, trace: { backward: [N-2], acceptance: [AC3] }, hero: { cat: 予算, big: "0.15", unit: M token, qual: lens 1 本あたりの上限 } }
@@ -918,6 +932,9 @@ glossary:
   - { term: 契約,           en: contract,               plain_short: bead 1 本の約束,          def: 何を作り・何ができたら終わりかを表す 1 単位。 正本は設計 doc の契約表 1 行で、 器が便の契約 file を生成する。 台帳（beads）の 1 issue に対応する。 }
   - { term: runner,         en: runner,                 plain_short: 実装役の Claude,          def: 契約 1 本を worktree で実装する headless の Claude process。 席ではなく使い捨て。 }
   - { term: lens,           en: lens,                   plain_short: 審査役の Claude,          def: diff を読んで PASS / FAIL / INCONCLUSIVE を返す headless の Claude process。 }
+  - { term: dispatcher,     en: dispatcher,             plain_short: 便を自動で起こす器の口,   def: 審査を通った契約の起動の列を持ち、 依存・write-set の交差・受付を満たす便を管理 tick と land の直後に自動で起こす器の口（規範は FR68・ADR-0034）。 席ではなく、 席に向けた dispatch（FR43・席の queue）とは別。 }
+  - { term: 起動の列,       en: dispatch queue,         plain_short: 起動を待つ契約の並び,     def: 審査（現在の契約の中身に対する verdict）が PASS の契約のうちまだ起こしていないものの並び。 順序は介入 first → 契約の priority → 起票順で、 各便はまだ出ていない理由（依存 / 交差 / 受付 / hold）を閉じた型で持つ。 着地の列（land の順序）とは別の実体。 }
+  - { term: 介入,           en: planner intervention,   plain_short: planner が順番を動かす印, def: first（最優先へ）・hold（止める）・release（戻す）の 3 つの typed な印。 user の直命の対として記録され、 台帳の priority は書き換えず、 起動の列の記録として残る（FR68）。 }
   - { term: gate,           en: gate,                   plain_short: 機械検証と審査の段,       def: 契約の verify を実走し lens 1 本の verdict を採る段。 PASS でなければ land しない。 }
   - { term: land,           en: land,                   plain_short: main への着地,            def: worktree の成果を squash 1 commit で main に載せ、 main で歯を再実走すること。 }
   - { term: fleet,          en: fleet,                  plain_short: 便と席の状態の全体,       def: 正定義は複数 host にまたがる席・口座・lease・退役の全体（憲法 C3）。 MVP では便と席の現在地の全体を指し、 実体は event log 1 file。 }
@@ -958,7 +975,7 @@ glossary:
   - { term: 作業記憶,       en: working memory,         plain_short: session をまたぐと消える一時メモ, def: 開発 session が一連の作業の間だけ持つ状態。 session の作り直しで消えるので、 cycle の前に退避物へ書き出す。 }
   - { term: 退避物,         en: externalized memory,    plain_short: 作業記憶を書き出した file, def: cycle の前に作業記憶を書き出した file。 session id で一意で、 消費済みは同じ suffix で表す。 }
   - { term: planner,        en: planner,                plain_short: 契約と裁定を持つ席,     def: 席の役割の 1 つ。 契約・裁定・merge の go を担い、 runner の質問に契約の修正か回答で応える。 対話面の identity は rules 行 R-C7-1 が持つ。 }
-  - { term: 管理席,         en: admin seat,             plain_short: 便を流す係の席,         def: 役割 管理席 を持つ席。 既定の配送構造では契約を pipeline に流し、 runner の質問を planner へ中継し、 go の後に land する。 自分の手で実装するのは pipeline が回せない便だけ。 }
+  - { term: 管理席,         en: admin seat,             plain_short: 便を見守る席,           def: 役割 管理席 を持つ席。 既定の配送構造では runner の質問と gate の判定を planner へ中継し、 go の後に land する。 自分の手で実装するのは pipeline が回せない便だけ。 }
   - { term: 質問 record,    en: question record,        plain_short: 実装役が返す質問の合図, def: runner が契約の不足を返して止まるときの typed な合図。 形式は ADR-0016 §2.2 が正本。 }
   - { term: Questioned,     en: questioned,             plain_short: 質問中の段,               def: 便の段の 1 つ。 runner の質問 record を受けて回答 event を待っている状態。 }
   - { term: Blocked,        en: blocked,                plain_short: 承認待ちの段,             def: 便の段の 1 つ。 3 クラスを名乗る契約が spawn の手前で承認 event を待っている状態。 }

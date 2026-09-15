@@ -227,7 +227,7 @@ terms:
     relationships: [lane, 管理席, dolt push, gate]
   - canonical: 管理席
     domain: consumer
-    definition: 役割 管理席 を持つ席 (Role の variant 名は core が持つ)。 anchor ごとに 1 席 (SRS FR30 / FR40・ADR-0022 §2.6)。 停止の検知と再起動の規範は C9。 配送構造での仕事 (契約を pipeline に流す・runner の質問を planner へ中継する・go の後に land する) は SRS FR30 (ADR-0016 §2.1) で、 権能の執行は ADR-0022 §2.3。
+    definition: 役割 管理席 を持つ席 (Role の variant 名は core が持つ)。 anchor ごとに 1 席 (SRS FR30 / FR40・ADR-0022 §2.6)。 停止の検知と再起動の規範は C9。 配送構造での仕事 (runner の質問と gate の判定を planner へ中継する・go の後に land する) は SRS FR30 (ADR-0016 §2.1・便の起動は dispatcher = SRS FR68・ADR-0034) で、 権能の執行は ADR-0022 §2.3。
     forbidden: [運転席]
     relationships: [席, admin lane, planner, 質問 record]
   - canonical: planner
@@ -486,7 +486,7 @@ terms:
     relationships: [管理 tick, 開発 session]
   - canonical: 配送構造
     domain: consumer
-    definition: 便を誰が流し、 runner の質問に誰が答え、 誰が land するかの席の配置。 既定は planner 1 席 + 管理席 N 席 (SRS FR30・ADR-0016 §2.1)。
+    definition: runner の質問に誰が答え、 誰が land するかの席の配置 (便を起こすのは席でなく dispatcher・SRS FR68・ADR-0034)。 既定は anchor ごとに planner 1 席 + 管理席 1 席 (SRS FR30 / FR40・ADR-0016 §2.1)。
     relationships: [planner, 管理席, 便]
   - canonical: Blocked
     domain: consumer
@@ -709,7 +709,7 @@ terms:
     relationships: [作業記憶, 席, 対話面]
   - canonical: dispatcher
     domain: consumer
-    definition: 審査を通った契約の起動の列を持ち、 台帳の依存・live 便との write-set の交差・受付 (余地・host の memory) を満たす便を tick と land の直後に自動で起こす器の口 (ADR-0034・設計 docs/design/dispatcher.md)。 planner → 管理席 → launcher の中継を置き換える。
+    definition: 審査を通った契約の起動の列を持ち、 台帳の依存・live 便との write-set の交差・受付 (余地・host の memory) を満たす便を管理 tick と land の直後に自動で起こす器の口 (SRS FR68・ADR-0034・設計 docs/design/dispatcher.md)。 planner → 管理席 → launcher の起動の中継を置き換える (質問と判定の中継は管理席に残る)。
     relationships: [起動の列, 介入, 便, 契約の審査, write-set, 受付]
   - canonical: 起動の列
     domain: consumer
