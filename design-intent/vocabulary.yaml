@@ -683,10 +683,23 @@ terms:
     relationships: [land の終端, 契約 id, 便, event log]
   - canonical: 直命の表
     domain: consumer
-    definition: user が対話面で言った発言を器が 1 件ずつ持つ記録 (event log の DirectiveIssued / DirectiveClosed・発令時刻は器が打つ・前提 pointer と状態を typed に持つ・ADR-0031 §2.1)。 復元の DATA が有効な直命を逐語で並べ、 経過日数か前提の終端で確認候補を印付きで出す。
-    relationships: [event log, 出所 pointer, 作業記憶, 対話面]
+    definition: user が対話面で言った発言を器が 1 件ずつ持つ記録 (event log の DirectiveIssued / DirectiveClosed・発令時刻は器が打つ・前提 pointer と状態を typed に持つ・ADR-0031 §2.1)。 復元の DATA が有効な直命を逐語で並べ、 理由の語 (経過 / 前提の終端 / 前提の置換) 付きで確認候補を印す。 閉じる記録は結果 (完了 / 撤回 / 失効) と裁定 id を伴う。
+    relationships: [event log, 出所 pointer, 作業記憶, 対話面, 直命, 決定記録]
+  - canonical: 直命
+    domain: consumer
+    definition: user が対話面 (planner の席) で言った発言のうち、 席の行動を拘束するもの。 器が直命の表に 1 件ずつ typed に持ち、 逐語は書き換えない (SRS FR65)。 続くかどうかの判定は器でなく user が行う。
+    relationships: [直命の表, 対話面, 承認 event]
+  - canonical: 決定記録
+    domain: consumer
+    aliases: [ADR]
+    definition: design-intent/decisions/ 配下の 1 決定 1 file の記録 (frozen・改訂は supersede する新 file)。 直命や契約の前提 pointer の宛先の 1 種で、 置き換わった (superseded) ことが直命の確認候補の理由になる (SRS FR65)。
+    relationships: [直命の表, 出所 pointer, 憲法]
   - canonical: 対話面の作法
     domain: consumer
-    definition: planner の席が user に向けて出す文の形の規則 (信頼度を上位に置いた 9 則 1 体系・うち読み手本位 8 則・ADR-0032 §2.2)。 正本は設計 doc dialogue-surface.md で、 planner の雛形が pointer 付きの行で指し、 生成された指示文が運ぶ (SRS FR67)。
+    definition: planner の席が user に向けて出す文の形の規則 (信頼度を上位に置く 1 体系・ADR-0032 §2.2)。 則の本文も数も設計 doc dialogue-surface.md が正本で、 planner の雛形が pointer 付きの行で指し、 生成された指示文が運ぶ (SRS FR67)。
     relationships: [対話面, 役割, 作業記憶, 席の指示文]
     flagged_ambiguities: ["作法: 作業記憶の作法 (FR23・器が守る機械の作法の列) と対話面の作法 (FR67・文の形) は別義"]
+  - canonical: 自動圧縮
+    domain: consumer
+    definition: 開発 session の文脈が上限に達したときに harness が自動で行う要約。 直前の hook で器が現在地と持ち越し分だけの退避物を書く (SRS FR66・ADR-0031 §2.3)。
+    relationships: [作業記憶, 席, 対話面]
