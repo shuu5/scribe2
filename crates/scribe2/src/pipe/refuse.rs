@@ -13,6 +13,7 @@
 //! 解かない。実体が同じ file を別名で持つ 2 契約は入口で見逃す（偽陰性）が、編集時の guard が実体名で塞ぐ
 //! （ADR-0009 §2.1 の既知の穴はそのまま）。
 
+use super::closure::ClosureError;
 use super::table::TableError;
 use crate::cli_outcome::{RC_BROKEN, RC_REFUSED};
 use crate::polarity::{OnFailure, Polarity, Timing};
@@ -49,6 +50,10 @@ pub(crate) const REFUSALS: &[&str] = &[
     "write-set-item-unresolved",
     "cap-headroom",
     "name-unresolved",
+    "write-set-drift",
+    "teeth-place-unresolved",
+    "also-names-rust",
+    "tests-not-a-teeth-file",
 ];
 
 /// 契約 file が読めた後の、契約単位の拒否理由。**新しい理由は variant を 1 つ足す**（憲法 C2）。
@@ -114,6 +119,30 @@ pub(crate) enum Refuse {
         /// どこに書かれていたか（`title` / `done` / `section <N> line <L>`）。
         at: String,
     },
+    /// 契約表の行の手書きの write-set が導出値（[`super::closure::derive_write_set`]）と集合として一致しない
+    /// （設計 contract-source.md §3「手書きの write-set の扱い」・受付だけが撃つ）。**不足も余分も全部**持つ。
+    WriteSetDrift {
+        /// 導出値に在って手書きに無い項目。
+        missing: Vec<String>,
+        /// 手書きに在って導出値に無い項目。
+        extra: Vec<String>,
+    },
+    /// verify の filter 語を含む `#[test]` の fn が base に無く、行の `tests` 欄も無い（歯の置き場を解けない・§3
+    /// 「write-set の導出」(ii)）。
+    TeethPlaceUnresolved {
+        /// 解けなかった filter 語。
+        filter: String,
+    },
+    /// 行の `also` に `.rs` が書かれた（Rust の面は `touches` と `tests` から導く・§3 (v)）。
+    AlsoNamesRust {
+        /// 書かれていた項目。
+        item: String,
+    },
+    /// 行の `tests` の項目が歯の file（`tests/` 配下か test 区間を持つ `.rs`）でない（§3「限界」）。
+    TestsNotATeethFile {
+        /// 書かれていた項目。
+        item: String,
+    },
 }
 
 impl Refuse {
@@ -130,6 +159,10 @@ impl Refuse {
             Self::WriteSetItemUnresolved { .. } => "write-set-item-unresolved",
             Self::CapHeadroom { .. } => "cap-headroom",
             Self::NameUnresolved { .. } => "name-unresolved",
+            Self::WriteSetDrift { .. } => "write-set-drift",
+            Self::TeethPlaceUnresolved { .. } => "teeth-place-unresolved",
+            Self::AlsoNamesRust { .. } => "also-names-rust",
+            Self::TestsNotATeethFile { .. } => "tests-not-a-teeth-file",
         }
     }
 
@@ -166,6 +199,13 @@ impl Refuse {
                 format!("{file} の上限の余地が {headroom} 行で size {size} の見積に足りない")
             }
             Self::NameUnresolved { ref name, ref at } => format!("名指し {name} が base に無い（{at}）"),
+            // 4 理由の字面は導出の側（`ClosureError`）と同じ 1 本（受付が写すだけ・2 面に書かない）。
+            Self::WriteSetDrift { ref missing, ref extra } => {
+                ClosureError::WriteSetDrift { missing: missing.clone(), extra: extra.clone() }.reason()
+            }
+            Self::TeethPlaceUnresolved { ref filter } => ClosureError::TeethPlaceUnresolved { filter: filter.clone() }.reason(),
+            Self::AlsoNamesRust { ref item } => ClosureError::AlsoNamesRust { item: item.clone() }.reason(),
+            Self::TestsNotATeethFile { ref item } => ClosureError::TestsNotATeethFile { item: item.clone() }.reason(),
         }
     }
 
@@ -180,7 +220,11 @@ impl Refuse {
             | Self::WriteSetDirWithoutSlash { .. }
             | Self::WriteSetItemUnresolved { .. }
             | Self::CapHeadroom { .. }
-            | Self::NameUnresolved { .. } => RC_REFUSED,
+            | Self::NameUnresolved { .. }
+            | Self::WriteSetDrift { .. }
+            | Self::TeethPlaceUnresolved { .. }
+            | Self::AlsoNamesRust { .. }
+            | Self::TestsNotATeethFile { .. } => RC_REFUSED,
             Self::WriteSetUnreadable { .. } => RC_BROKEN,
             Self::ContractTable(ref found) => found.rc(),
         }
@@ -314,7 +358,26 @@ mod tests {
             Refuse::WriteSetItemUnresolved { item: "src/none.rs".to_owned() },
             Refuse::CapHeadroom { file: "src/big.rs".to_owned(), headroom: 7, size: "M".to_owned() },
             Refuse::NameUnresolved { name: "Guard::Rules".to_owned(), at: "done".to_owned() },
+            Refuse::WriteSetDrift { missing: vec!["src/a.rs".to_owned()], extra: vec!["docs/x.md".to_owned()] },
+            Refuse::TeethPlaceUnresolved { filter: "fresh_".to_owned() },
+            Refuse::AlsoNamesRust { item: "src/a.rs".to_owned() },
+            Refuse::TestsNotATeethFile { item: "src/a.rs".to_owned() },
         ]
+    }
+
+    /// write-set の導出の 4 理由（契約 (h)・設計 contract-source.md §3「write-set の導出」）: 宣言順の末尾に並び、rc 1 で、
+    /// 理由は不足と余分 / filter 語 / 項目を名乗る（字面は導出の側と同じ 1 本）。
+    #[test]
+    fn refuse_derive_reasons_are_last_and_name_their_payload() {
+        let found = samples();
+        let tail: Vec<&str> = found.iter().skip(10).map(Refuse::as_str).collect();
+        assert_eq!(tail, ["write-set-drift", "teeth-place-unresolved", "also-names-rust", "tests-not-a-teeth-file"], "宣言順の末尾 4 つ");
+        let reasons: Vec<String> = found.iter().skip(10).map(Refuse::reason).collect();
+        assert!(reasons.first().is_some_and(|line| line.contains("missing: src/a.rs") && line.contains("extra: docs/x.md")), "{reasons:?}");
+        assert!(reasons.get(1).is_some_and(|line| line.contains("fresh_") && line.contains("tests")), "{reasons:?}");
+        assert!(reasons.get(2).is_some_and(|line| line.contains("also の src/a.rs")), "{reasons:?}");
+        assert!(reasons.get(3).is_some_and(|line| line.contains("tests の src/a.rs")), "{reasons:?}");
+        assert!(found.iter().skip(10).all(|refuse| refuse.rc() == RC_REFUSED && !refuse.reason().contains('\n')), "rc 1・1 行");
     }
 
     /// 契約表の 3 理由（`s2-07l.208`・設計 contract-source.md §2 / §3）: 見出しは契約表の欠陥だけ理由の名を足し、
@@ -331,19 +394,19 @@ mod tests {
         assert_eq!(unreadable.reason(), "x を読めない", "理由は表の欠陥の字面のまま");
     }
 
-    /// 閉包の拡張の 3 理由（契約 (g)・設計 contract-source.md §3）: 宣言順の末尾に並び、rc 1 で、理由は項目 / file と
-    /// 余地と size / 名指しと在り処を名乗る。
+    /// 閉包の拡張の 3 理由（契約 (g)・設計 contract-source.md §3）: 導出の 4 理由の前に並び、rc 1 で、理由は項目 / file
+    /// と余地と size / 名指しと在り処を名乗る。
     #[test]
     fn refuse_closure_ext_reasons_are_last_and_name_their_payload() {
         let found = samples();
-        let tail: Vec<&str> = found.iter().skip(7).map(Refuse::as_str).collect();
-        assert_eq!(tail, ["write-set-item-unresolved", "cap-headroom", "name-unresolved"], "宣言順の末尾 3 つ");
-        let reasons: Vec<String> = found.iter().skip(7).map(Refuse::reason).collect();
+        let tail: Vec<&str> = found.iter().skip(7).take(3).map(Refuse::as_str).collect();
+        assert_eq!(tail, ["write-set-item-unresolved", "cap-headroom", "name-unresolved"], "(g) の 3 つ");
+        let reasons: Vec<String> = found.iter().skip(7).take(3).map(Refuse::reason).collect();
         assert!(reasons.first().is_some_and(|line| line.contains("src/none.rs")), "項目を名乗る: {reasons:?}");
         let headroom = reasons.get(1).cloned().unwrap_or_default();
         assert!(headroom.contains("src/big.rs") && headroom.contains(" 7 ") && headroom.contains("size M"), "{headroom}");
         assert!(reasons.get(2).is_some_and(|line| line.contains("Guard::Rules") && line.contains("done")), "{reasons:?}");
-        assert!(found.iter().skip(7).all(|refuse| refuse.rc() == RC_REFUSED), "前提違反は rc 1");
+        assert!(found.iter().skip(7).take(3).all(|refuse| refuse.rc() == RC_REFUSED), "前提違反は rc 1");
     }
 
     /// 閉包の file が write-set に含まれるか: dir（末尾 `/`）は配下全部・file は字面の一致・正規化してから比べる。

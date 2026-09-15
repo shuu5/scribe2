@@ -33,7 +33,22 @@ shape = "list"
 
 [[field]]
 name = "write-set"
-need = "required"
+need = "optional"
+shape = "list"
+
+[[field]]
+name = "creates"
+need = "optional"
+shape = "list"
+
+[[field]]
+name = "tests"
+need = "optional"
+shape = "list"
+
+[[field]]
+name = "also"
+need = "optional"
 shape = "list"
 
 [[field]]

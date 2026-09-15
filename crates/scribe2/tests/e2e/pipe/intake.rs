@@ -1434,3 +1434,258 @@ fn contract_closure_ext_real_table_has_zero_findings() {
     let rows: u64 = last.split_whitespace().find_map(|token| token.strip_prefix("rows=")?.parse().ok()).unwrap_or_default();
     assert!(rows >= 8, "母集団は現物の契約表の行（contract-source.md の 8 行以上・空の表で 0 件を名乗らない）: {last}");
 }
+
+// ─────── write-set の導出（設計 docs/design/contract-source.md §3「write-set の導出」・契約 (h)・`s2-07l.311`・接頭辞 `contract_derive_`） ───────
+
+/// 導出の toy repo の宣言（`cargo` を許す＝行の verify に nextest の行を書ける・要件面は既定）。
+const DERIVE_VESSEL: &str = "schema = 1\nallowed-commands = [\"git\", \"sh\", \"cargo\"]\ncommon-verify = [\"git status\"]\n";
+
+/// 導出の toy repo の file: crate `toy` の型 `crate::tint::Tint`（宣言 file と arm の file）・`derive_` の歯（tests と
+/// src の test 区間に 1 本ずつ）・helper と別接頭辞の歯・非 `.rs` の面。
+const DERIVE_FILES: &[(&str, &str)] = &[
+    ("crates/toy/src/tint.rs", TABLE_TINT),
+    ("crates/toy/src/show.rs", TABLE_SHOW),
+    ("crates/toy/src/other.rs", "pub fn derive_outside() {}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn derive_in_src() {}\n}\n"),
+    ("crates/toy/tests/e2e.rs", "#[test]\nfn derive_ok() {}\n"),
+    ("crates/toy/tests/helper.rs", "fn derive_helper() {}\n\n#[test]\nfn other_case() {\n    derive_helper();\n}\n"),
+    ("rules/manifest.toml", "schema = 1\n"),
+];
+
+/// 導出の toy repo（[`repo_with_state`] の repo に [`DERIVE_FILES`]・要件面・設計 doc `docs/design/toy.md` を足して
+/// commit）と置き場。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn derive_repo(doc: &str) -> (PathBuf, PathBuf) {
+    let (repo, state) = repo_with_state();
+    let seeded = [(".vessel.toml", DERIVE_VESSEL), ("design-intent/spec/srs.html", TABLE_SRS), ("docs/design/toy.md", doc)];
+    for (path, body) in seeded.iter().chain(DERIVE_FILES) {
+        let target = repo.join(path);
+        fs::create_dir_all(target.parent().expect("親 dir が在る")).expect("dir を作れる");
+        fs::write(&target, body).expect("file を書ける");
+    }
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "derive"]);
+    (repo, state)
+}
+
+/// 導出の形の行（[`table_row`] から既定の `write-set` を落とす・`over` が `write-set` を持てばそれを載せる）。
+fn derive_row(id: &str, over: &[(&str, &str)]) -> String {
+    let keeps = over.iter().any(|(name, _)| *name == "write-set");
+    table_row(id, over).lines().filter(|line| keeps || !line.starts_with("write-set")).map(|line| format!("{line}\n")).collect()
+}
+
+/// 設計 pointer `docs/design/toy.md#<id>` を持つ契約 file（残りの欄は [`contract_body`]・write-set は仮の `src/lib.rs`
+/// ＝写しの差し替えを測る対）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn pointed_contract(repo: &Path, name: &str, id: &str) -> PathBuf {
+    let lines: Vec<String> = contract_body()
+        .into_iter()
+        .filter(|line| !line.starts_with("design"))
+        .chain([format!("design = \"docs/design/toy.md#{id}\"")])
+        .collect();
+    let path = repo.join(name);
+    fs::write(&path, format!("{}\n", lines.join("\n"))).expect("契約 file を書ける");
+    path
+}
+
+/// 便の写しの契約の write-set。
+#[expect(
+    clippy::panic,
+    reason = "統合 test の helper。clippy の allow-panic-in-tests は #[test] 関数の中だけに効く"
+)]
+fn copied_write_set(state: &Path, id: &str) -> Vec<String> {
+    vessel::pipe::contract::Contract::load(&state.join("pipe").join(id).join("contract.toml"))
+        .map(|contract| contract.write_set)
+        .unwrap_or_else(|errors| panic!("写しを読める: {errors:?}"))
+}
+
+/// intake の判定行（1 行目）の token。
+fn intake_tokens(out: &Output) -> Vec<String> {
+    stdout_of(out).lines().next().unwrap_or_default().split_whitespace().map(str::to_owned).collect()
+}
+
+/// (a) `write-set` の無い行（`touches` + `verify` + `creates` + `tests` + `also`）は intake を通り、写しの契約の write-set に
+/// 導出値（閉包 ∪ 歯の置き場 ∪ tests ∪ creates〔`+` 付き〕∪ also・辞書順）が載る・判定行 `write-set=derived files=<N>`・
+/// 他の欄は逐語。base は `write-set` 必須で断る（RED）。
+#[test]
+fn contract_derive_fills_write_set_for_a_row_without_one() {
+    let row = derive_row(
+        "a",
+        &[
+            ("touches", "[\"crate::tint::Tint\"]"),
+            ("verify", "[\"cargo nextest run -p toy --no-tests=fail derive_\"]"),
+            ("creates", "[\"crates/toy/src/new.rs\"]"),
+            ("tests", "[\"crates/toy/tests/helper.rs\"]"),
+            ("also", "[\"rules/manifest.toml\"]"),
+        ],
+    );
+    let (repo, state) = derive_repo(&table_doc(&table_region(&[row])));
+    let out = intake_raw(&repo, &state, &pointed_contract(&repo, "a.toml", "a"), "s2-a");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "導出値で通る: {}", stderr_of(&out));
+    let tokens = intake_tokens(&out);
+    assert!(tokens.first().is_some_and(|token| token.starts_with("run=")), "既存 token が先頭のまま: {tokens:?}");
+    assert!(tokens.contains(&"write-set=derived".to_owned()) && tokens.contains(&"files=7".to_owned()), "判定行: {tokens:?}");
+    let id = run_id_of(&out);
+    let want = [
+        "+crates/toy/src/new.rs",
+        "crates/toy/src/other.rs",
+        "crates/toy/src/show.rs",
+        "crates/toy/src/tint.rs",
+        "crates/toy/tests/e2e.rs",
+        "crates/toy/tests/helper.rs",
+        "rules/manifest.toml",
+    ];
+    assert_eq!(copied_write_set(&state, &id), want, "写しの write-set は導出値（閉包 ∪ 歯の置き場 ∪ tests ∪ creates ∪ also）");
+    let copied = fs::read_to_string(state.join("pipe").join(&id).join("contract.toml")).unwrap_or_default();
+    assert!(copied.contains("verify = [\"sh verify-ok.sh\"]") && !copied.contains("creates"), "他の欄は逐語・新欄は写さない: {copied}");
+    assert_eq!(event_count(&state), 1, "RunCreated の 1 件");
+    clean(&[&repo, &state]);
+}
+
+/// (b) 手書きの `write-set` が導出値とずれた行は `write-set-drift` で不足（閉包の show.rs）と余分（src/lib.rs）を両方名指して
+/// 断られ、run dir も event も作らない。`+x` と `x` は同じ項目（new.rs は名指さない）。対: 一致する行は通り、写しの
+/// write-set は契約 file のまま（差し替えは write-set の無い行だけ）。
+#[test]
+fn contract_derive_refuses_drift_naming_missing_and_extra() {
+    let touches = ("touches", "[\"crate::tint::Tint\"]");
+    let creates = ("creates", "[\"crates/toy/src/new.rs\"]");
+    let rows = [
+        derive_row("b", &[touches, creates, ("write-set", "[\"crates/toy/src/tint.rs\", \"+crates/toy/src/new.rs\", \"src/lib.rs\"]")]),
+        derive_row("c", &[touches, creates, ("write-set", "[\"crates/toy/src/new.rs\", \"crates/toy/src/show.rs\", \"crates/toy/src/tint.rs\"]")]),
+    ];
+    let (repo, state) = derive_repo(&table_doc(&table_region(&rows)));
+    let out = intake_raw(&repo, &state, &pointed_contract(&repo, "b.toml", "b"), "s2-b");
+    let err = stderr_of(&out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "ずれは rc 1: {err}");
+    assert!(err.contains("write-set が導出値と一致しない"), "理由: {err}");
+    assert!(err.contains("missing: crates/toy/src/show.rs") && err.contains("extra: src/lib.rs"), "不足と余分を両方名指す: {err}");
+    assert!(!err.contains("new.rs") && !err.contains("tint.rs"), "一致する項目（+ の有無は同じ）は名指さない: {err}");
+    assert_eq!(event_count(&state), 0, "断った周は event を書かない");
+    assert!(!state.join("pipe").exists(), "run dir も作らない");
+    let passed = intake_raw(&repo, &state, &pointed_contract(&repo, "c.toml", "c"), "s2-c");
+    assert_eq!(passed.status.code(), Some(i32::from(RC_OK)), "一致する手書きは通る: {}", stderr_of(&passed));
+    let tokens = intake_tokens(&passed);
+    assert!(tokens.contains(&"write-set=derived".to_owned()) && tokens.contains(&"files=3".to_owned()), "{tokens:?}");
+    assert_eq!(copied_write_set(&state, &run_id_of(&passed)), ["src/lib.rs"], "手書きの在る行は写しを差し替えない");
+    clean(&[&repo, &state]);
+}
+
+/// (c) `also` の `.rs`・`tests` の歯でない file・新しい接頭辞で `tests` 無し、はそれぞれ typed に断られ run を作らない。
+/// 新しい接頭辞は `tests` 欄（`creates` の新規 file）が置き場で、write-set には creates の側（`+` 付き）だけが載る。
+#[test]
+fn contract_derive_refuses_also_rs_and_tests_non_teeth_and_unresolved_filter() {
+    let fresh = ("verify", "[\"cargo nextest run -p toy --no-tests=fail fresh_\"]");
+    let rows = [
+        derive_row("r", &[("also", "[\"crates/toy/src/tint.rs\"]")]),
+        derive_row("t", &[("tests", "[\"crates/toy/src/tint.rs\"]")]),
+        derive_row("f", &[fresh]),
+        derive_row("p", &[fresh, ("creates", "[\"crates/toy/tests/fresh.rs\"]"), ("tests", "[\"crates/toy/tests/fresh.rs\"]")]),
+    ];
+    let (repo, state) = derive_repo(&table_doc(&table_region(&rows)));
+    for (id, want) in [
+        ("r", "also の crates/toy/src/tint.rs は .rs である"),
+        ("t", "tests の crates/toy/src/tint.rs は歯の file でない"),
+        ("f", "filter 語 fresh_ を含む #[test] の fn が base に無く tests 欄も無い"),
+    ] {
+        let out = intake_raw(&repo, &state, &pointed_contract(&repo, &format!("{id}.toml"), id), &format!("s2-{id}"));
+        let err = stderr_of(&out);
+        assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "行 {id} は rc 1: {err}");
+        assert!(err.contains(want), "行 {id} の理由: {err}");
+        assert_eq!(event_count(&state), 0, "断った周は event を書かない");
+        assert!(!state.join("pipe").exists(), "run dir も作らない");
+    }
+    let placed = intake_raw(&repo, &state, &pointed_contract(&repo, "p.toml", "p"), "s2-p");
+    assert_eq!(placed.status.code(), Some(i32::from(RC_OK)), "tests 欄が置き場になる: {}", stderr_of(&placed));
+    assert_eq!(copied_write_set(&state, &run_id_of(&placed)), ["+crates/toy/tests/fresh.rs"], "creates の側だけが載る");
+    clean(&[&repo, &state]);
+}
+
+/// (d) 新欄なし + `write-set` あり = `Declared`: 閉包の file（show.rs）を欠く write-set でも導出も drift も撃たず (g) までの
+/// 検査だけで通り（判定行 `write-set=declared files=<N>`・写しは契約 file のまま）、pointer でない `design`（(b) の前の
+/// 契約 file）は弁別を持たず token を出さない。解けない pointer（区間に無い行 id）は契約表の欠陥として断る。
+#[test]
+fn contract_derive_declared_rows_skip_derivation() {
+    let row = table_row("d", &[("touches", "[\"crate::tint::Tint\"]"), ("write-set", "[\"crates/toy/src/tint.rs\"]")]);
+    let (repo, state) = derive_repo(&table_doc(&table_region(&[row])));
+    let out = intake_raw(&repo, &state, &pointed_contract(&repo, "d.toml", "d"), "s2-d");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "Declared は導出しない: {}", stderr_of(&out));
+    let tokens = intake_tokens(&out);
+    assert!(tokens.contains(&"write-set=declared".to_owned()) && tokens.contains(&"files=1".to_owned()), "{tokens:?}");
+    let id = run_id_of(&out);
+    assert_eq!(copied_write_set(&state, &id), ["src/lib.rs"], "写しは契約 file のまま");
+    stop_run_ok(&state, &id);
+    let plain = intake_raw(&repo, &state, &write_contract(&repo, &[], &[]), "s2-plain");
+    assert_eq!(plain.status.code(), Some(i32::from(RC_OK)), "pointer でない design は従来どおり: {}", stderr_of(&plain));
+    assert!(!stdout_of(&plain).contains("write-set="), "弁別の token を出さない: {}", stdout_of(&plain));
+    stop_run_ok(&state, &run_id_of(&plain));
+    let missing = intake_raw(&repo, &state, &pointed_contract(&repo, "z.toml", "zz"), "s2-z");
+    assert_eq!(missing.status.code(), Some(i32::from(RC_REFUSED)), "区間に無い行 id は rc 1: {}", stderr_of(&missing));
+    assert!(stderr_of(&missing).contains("行 id zz が区間に無い"), "{}", stderr_of(&missing));
+    clean(&[&repo, &state]);
+}
+
+/// (e) `contracts schema` の出力は tracked の `contracts/schema.toml` と一致し、`creates` / `tests` / `also` を任意の list として
+/// 持ち `write-set` は任意である。表の読み手も同じ: `write-set` の無い行を持つ doc は `contracts check` で違反 0（base は
+/// 必須の欠落で断る → RED）。
+#[test]
+fn contract_schema_lists_creates_tests_also_and_write_set_is_optional() {
+    let out = Command::new(bin()).args(["contracts", "schema"]).output().expect("binary を起動できる");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("..").join("contracts").join("schema.toml");
+    let tracked = fs::read_to_string(&path).expect("tracked の生成物を読める");
+    assert_eq!(stdout_of(&out), tracked, "render と tracked の差分 0");
+    let mut fields: Vec<(String, String, String)> = Vec::new();
+    for line in tracked.lines() {
+        if line == "[[field]]" {
+            fields.push((String::new(), String::new(), String::new()));
+        }
+        let Some(last) = fields.last_mut() else {
+            continue;
+        };
+        if let Some(name) = line.strip_prefix("name = ") {
+            last.0 = name.trim_matches('"').to_owned();
+        } else if let Some(need) = line.strip_prefix("need = ") {
+            last.1 = need.trim_matches('"').to_owned();
+        } else if let Some(shape) = line.strip_prefix("shape = ") {
+            last.2 = shape.trim_matches('"').to_owned();
+        }
+    }
+    let field = |name: &str| fields.iter().find(|(found, _, _)| found == name).cloned().unwrap_or_default();
+    for name in ["write-set", "creates", "tests", "also"] {
+        assert_eq!(field(name), (name.to_owned(), "optional".to_owned(), "list".to_owned()), "{name} は任意の list");
+    }
+    assert_eq!(field("verify").1, "required", "verify は必須のまま");
+    let doc = table_doc(&table_region(&[derive_row("a", &[("creates", "[\"src/new.rs\"]")])]));
+    let repo = table_repo(&doc, &[]);
+    let checked = contracts_check(&repo);
+    assert_eq!(checked.status.code(), Some(i32::from(RC_OK)), "write-set の無い行は読める: {}", stdout_of(&checked));
+    assert_eq!(stdout_of(&checked).trim_end(), "contracts check: docs=1 rows=1 findings=0");
+    clean(&[&repo]);
+}
+
+/// (f) 歯の置き場は base の `#[test]` の直下の fn 名で解く: `derive_` は tests の歯（e2e.rs）と src の test 区間の歯（other.rs）
+/// の 2 file で、helper の fn（`derive_helper`）を持つ file は数えない・`other_` は fn 名（`other_case`）で helper.rs に解け、
+/// file 名（other.rs）では解かない。
+#[test]
+fn contract_derive_teeth_place_uses_base_test_names() {
+    let rows = [
+        derive_row("a", &[("verify", "[\"cargo nextest run -p toy --no-tests=fail derive_\"]")]),
+        derive_row("b", &[("verify", "[\"cargo nextest run -p toy --no-tests=fail other_\"]")]),
+    ];
+    let (repo, state) = derive_repo(&table_doc(&table_region(&rows)));
+    let out = intake_raw(&repo, &state, &pointed_contract(&repo, "a.toml", "a"), "s2-a");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    let id = run_id_of(&out);
+    assert_eq!(copied_write_set(&state, &id), ["crates/toy/src/other.rs", "crates/toy/tests/e2e.rs"], "helper は数えない");
+    assert!(intake_tokens(&out).contains(&"files=2".to_owned()), "{}", stdout_of(&out));
+    stop_run_ok(&state, &id);
+    let other = intake_raw(&repo, &state, &pointed_contract(&repo, "b.toml", "b"), "s2-b");
+    assert_eq!(other.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&other));
+    assert_eq!(copied_write_set(&state, &run_id_of(&other)), ["crates/toy/tests/helper.rs"], "fn 名で解く（file 名ではない）");
+    clean(&[&repo, &state]);
+}

@@ -10,8 +10,8 @@
 //! 本 file は入口（[`dispatch`] / [`contracts`] / [`usage`]）と共通の材料（flag の読み・規則の値・置き場・段の
 //! 前提の解き [`resolve`]）と表示（[`show`]）と再開（[`resume`]）を持つ。受付は [`intake`]、段の手は [`step`]、
 //! 起動と連鎖は [`run`]（`s2-07l.295` の純移動・外から呼ぶ path は本 file の再輸出で不変）。
-//! 子 module の本文は兄弟 module を `super::approve` / `super::gate` / `super::land` / `super::table` の
-//! path で呼ぶ（本文を書き換えない）ので、その名は本 file の `use` が親として持つ。
+//! 子 module の本文は兄弟 module を `super::approve` / `super::gate` / `super::land` の path で呼ぶ（本文を
+//! 書き換えない）ので、その名は本 file の `use` が親として持つ（`table` は受付が `crate::pipe::table` で直に引く）。
 
 mod intake;
 mod run;
@@ -29,7 +29,7 @@ use super::ratelimit::ride_out_rate_limit;
 use super::stop::stop;
 use super::{
     contract_path, current, head_of, last_stage_detail, question_of_run, repo_of_run, repo_path,
-    runner_is_idle, table, verify_log_path, worktree_path,
+    runner_is_idle, verify_log_path, worktree_path,
 };
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
 use crate::fleet::json_lite;

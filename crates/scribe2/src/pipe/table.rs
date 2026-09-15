@@ -98,7 +98,10 @@ pub const FIELDS: &[Field] = &[
     Field { name: "section", need: Need::Required, shape: Shape::Text },
     Field { name: "touches", need: Need::Optional, shape: Shape::List },
     Field { name: "surfaces", need: Need::Optional, shape: Shape::List },
-    Field { name: "write-set", need: Need::Required, shape: Shape::List },
+    Field { name: "write-set", need: Need::Optional, shape: Shape::List },
+    Field { name: "creates", need: Need::Optional, shape: Shape::List },
+    Field { name: "tests", need: Need::Optional, shape: Shape::List },
+    Field { name: "also", need: Need::Optional, shape: Shape::List },
     Field { name: "verify", need: Need::Required, shape: Shape::List },
     Field { name: "size", need: Need::Required, shape: Shape::Text },
     Field { name: "done", need: Need::Required, shape: Shape::Text },
@@ -124,8 +127,14 @@ pub struct ContractRow {
     pub touches: Vec<String>,
     /// 触る外形の名の列（外形 snapshot の名か usage を持つ subcommand の名・§3 の第 5 形・空 = 外形を触らない）。
     pub surfaces: Vec<String>,
-    /// 触ってよい path の列。
+    /// 触ってよい path の列（§3「write-set の導出」以後は任意: 無い行は受付が導出値を write-set にする）。
     pub write_set: Vec<String>,
+    /// 新設する file の列（`+` を付けずに書く・§3 (iv)・空 = 新設しない）。
+    pub creates: Vec<String>,
+    /// 歯の新しい置き場の列（base の歯の file か `creates` の新規 file・§3 (ii)・空 = base の歯の名で解く）。
+    pub tests: Vec<String>,
+    /// Rust の外で触る file の列（base に実在する非 `.rs`・§3 (v)・空 = 触らない）。
+    pub also: Vec<String>,
     /// positional filter 形の検証行の列。
     pub verify: Vec<String>,
     /// 見積の目安。
@@ -427,6 +436,9 @@ fn typed(raw: &TableRow, offset: u64, errors: &mut Vec<TableError>) -> Option<Co
         touches: list_of(raw, "touches", offset, errors),
         surfaces: list_of(raw, "surfaces", offset, errors),
         write_set: list_of(raw, "write-set", offset, errors),
+        creates: list_of(raw, "creates", offset, errors),
+        tests: list_of(raw, "tests", offset, errors),
+        also: list_of(raw, "also", offset, errors),
         verify: list_of(raw, "verify", offset, errors),
         size: text_of(raw, "size", offset, errors),
         done: text_of(raw, "done", offset, errors),
@@ -587,13 +599,16 @@ fn section_lines(text: &str, number: &str) -> Vec<(u64, String)> {
 }
 
 /// 名指しの実在（§3）: `title` / `done` と `section` の本文の backtick の中身のうち解けないものを全件（在り処付き）。
-/// 閉包の入力を読めない周は `unreadable`（黙って通さない）。
+/// 閉包の入力を読めない周は `unreadable`（黙って通さない）。新規 file は write-set の `+` 項目と `creates` の欄
+/// （導出の形・`+` 無しで書く）の両方から解く。
 fn name_findings(doc: &str, row: &ContractRow, ctx: &Context<'_>) -> Vec<Finding> {
     let mut texts = vec![("title".to_owned(), row.title.clone()), ("done".to_owned(), row.done.clone())];
     texts.extend(
         section_lines(doc, &row.section).into_iter().map(|(at, line)| (format!("section {} line {at}", row.section), line)),
     );
-    match unresolved_names(&texts, &row.touches, &row.write_set, ctx.tracked, ctx.sources) {
+    let mut new_files = row.write_set.clone();
+    new_files.extend(row.creates.iter().map(|item| format!("{}{item}", super::refuse::NEW_FILE)));
+    match unresolved_names(&texts, &row.touches, &new_files, ctx.tracked, ctx.sources) {
         Err(error) => vec![Finding::table(unreadable(row.line, &error.reason()))],
         Ok(names) => names
             .into_iter()
@@ -694,7 +709,9 @@ fn unreadable_input(ctx: &Context<'_>) -> Option<String> {
 }
 
 /// `touches` の閉包と `surfaces` の外形 pin（§3 の 4 形 + 第 5 形）のうち write-set に無い file を 1 件に全部。
-/// 未知の外形の名は [`TableError::SurfaceUnknown`]。読めない入力は呼び手が先に除く。
+/// 未知の外形の名は [`TableError::SurfaceUnknown`]。読めない入力は呼び手が先に除く。**write-set の無い行**（§3
+/// 「write-set の導出」の形・受付が導出値を write-set にする）は閉包 ⊆ write-set を持たず、型と外形の名の形だけを
+/// 見る（CI は drift も撃たない＝表は履歴を持つ）。
 fn closure_findings(row: &ContractRow, ctx: &Context<'_>) -> Vec<Finding> {
     let mut found = Vec::new();
     let mut files = BTreeSet::new();
@@ -710,7 +727,7 @@ fn closure_findings(row: &ContractRow, ctx: &Context<'_>) -> Vec<Finding> {
         Err(error) => found.push(Finding::table(unreadable(row.line, &error.reason()))),
     }
     let missing: Vec<String> = files.into_iter().filter(|path| !covered(&row.write_set, path)).collect();
-    if !missing.is_empty() {
+    if !missing.is_empty() && !row.write_set.is_empty() {
         found.push(Finding { line: row.line, refuse: Refuse::WriteSetIncomplete { missing } });
     }
     found
@@ -866,8 +883,8 @@ fn judge_doc(repo: &Path, doc: &str, ctx: &Context<'_>) -> (usize, Vec<Finding>)
     }
 }
 
-/// repo 相対の file を読む（読めない理由は path を名乗る 1 行）。
-fn read(repo: &Path, path: &str) -> Result<String, String> {
+/// repo 相対の file を読む（読めない理由は path を名乗る 1 行）。intake が設計 pointer の doc を読む口でもある。
+pub(crate) fn read(repo: &Path, path: &str) -> Result<String, String> {
     std::fs::read_to_string(repo.join(path)).map_err(|err| format!("{path} を読めない: {err}"))
 }
 
@@ -965,17 +982,20 @@ mod tests {
         text
     }
 
-    /// 欄の列は宣言順に 13（必須 8・任意 5）で、`contracts schema` はその順に描く。欄の形は reader が強制する
-    /// （文字列の欄に配列・配列の欄に文字列を書くと、その欄を名指して断る）。
+    /// 欄の列は宣言順に 16（必須 7・任意 9）で、`contracts schema` はその順に描く。欄の形は reader が強制する
+    /// （文字列の欄に配列・配列の欄に文字列を書くと、その欄を名指して断る）。`write-set` は任意（契約 (h)・§3
+    /// 「write-set の導出」: 無い行は受付が導出値を写す）。
     #[test]
     fn table_fields_pin_the_schema_columns_and_the_reader_enforces_their_shapes() {
         let names: Vec<&str> = FIELDS.iter().map(|field| field.name).collect();
         let want = [
-            "id", "title", "req", "section", "touches", "surfaces", "write-set", "verify", "size", "done", "depends",
-            "classes", "opens",
+            "id", "title", "req", "section", "touches", "surfaces", "write-set", "creates", "tests", "also", "verify",
+            "size", "done", "depends", "classes", "opens",
         ];
         assert_eq!(names, want, "欄の宣言順");
-        assert_eq!(FIELDS.iter().filter(|field| field.need == Need::Required).count(), 8, "必須 8・任意 5");
+        assert_eq!(FIELDS.iter().filter(|field| field.need == Need::Required).count(), 7, "必須 7・任意 9");
+        let optional = |name: &str| FIELDS.iter().any(|field| field.name == name && field.need == Need::Optional);
+        assert!(["write-set", "creates", "tests", "also"].iter().all(|name| optional(name)), "導出の 4 欄は任意");
         let rendered = render_schema();
         let listed: Vec<&str> =
             rendered.iter().filter_map(|line| line.strip_prefix("name = \"")?.strip_suffix('"')).collect();
@@ -1063,6 +1083,9 @@ mod tests {
             touches: Vec::new(),
             surfaces: Vec::new(),
             write_set: one("src/kind.rs"),
+            creates: Vec::new(),
+            tests: Vec::new(),
+            also: Vec::new(),
             verify: one("git status"),
             size: "S".to_owned(),
             done: "d".to_owned(),
@@ -1130,6 +1153,38 @@ mod tests {
         assert_eq!(found.last().map(|finding| &finding.refuse), Some(&missing), "足りない file だけを名指す");
         let cycle = found.iter().find(|finding| finding.line == 70).map(|finding| finding.refuse.reason());
         assert_eq!(cycle.as_deref(), Some("depends が輪を成す（g → h → g）"), "輪は 1 件で 2 行を名乗る");
+    }
+
+    /// 導出の形の行（契約 (h)・§3）: `write-set` の無い行は読め（`creates` / `tests` / `also` は欄として持つ）、CI の検査は
+    /// 閉包 ⊆ write-set を撃たない（受付が導出値を write-set にする）が、型の形と外形の名は従来どおり名指す。
+    /// `creates` の新規 file は名指しの実在で解ける（write-set の `+` 項目と同じ）。write-set を持つ行は従来どおり。
+    #[test]
+    fn table_check_skips_the_closure_subset_for_rows_without_a_write_set() {
+        let requirements = Ok(["FR1".to_owned()].into_iter().collect::<BTreeSet<String>>());
+        let (allowed, sources) = (["git".to_owned()], sources());
+        let tracked = ["src/kind.rs".to_owned(), "src/use.rs".to_owned()];
+        let ctx = Context {
+            allowed: &allowed,
+            denied: &[],
+            requirements: &requirements,
+            sources: &sources,
+            tracked: &tracked,
+            snapshots: &[],
+        };
+        let text = format!("# t\n\n{BEGIN}\nschema = 1\n\n[[contract]]\nid = \"a\"\ntitle = \"t\"\nreq = [\"FR1\"]\nsection = \"1\"\ntouches = [\"crate::kind::Kind\"]\ncreates = [\"src/new.rs\"]\ntests = [\"tests/t.rs\"]\nalso = [\"docs/d.md\"]\nverify = [\"git status\"]\nsize = \"S\"\ndone = \"`src/new.rs` が通る\"\n{END}\n");
+        let rows = read_rows("docs/design/t.md", &text).unwrap_or_else(|errors| panic!("write-set の無い行は読める: {errors:?}"));
+        let row = rows.first().cloned().unwrap_or_else(|| panic!("1 行"));
+        assert!(row.write_set.is_empty(), "write-set は無い");
+        assert_eq!((row.creates.len(), row.tests.len(), row.also.len()), (1, 1, 1), "導出の 3 欄を欄として持つ");
+        assert!(check_table(DOC, &rows, &ctx).is_empty(), "閉包 ⊆ write-set と名指しは撃たない・creates の新規 file は解ける");
+        let mut malformed = row.clone();
+        malformed.touches = vec!["Kind".to_owned()];
+        let labels: Vec<String> = check_table(DOC, &[malformed], &ctx).iter().map(|finding| finding.refuse.label()).collect();
+        assert_eq!(labels, vec!["contract-table:unreadable".to_owned()], "型の形は従来どおり名指す");
+        let mut declared = row;
+        declared.write_set = vec!["src/kind.rs".to_owned()];
+        let labels: Vec<String> = check_table(DOC, &[declared], &ctx).iter().map(|finding| finding.refuse.label()).collect();
+        assert_eq!(labels, vec!["write-set-incomplete".to_owned()], "write-set を持つ行は閉包 ⊆ write-set を撃つ");
     }
 
     /// 契約表の verify 行にも intake と同じ禁じる語列の判定が掛かる（ADR-0025 §2.3・FR55「intake と同じ検査を表の全行に」）:
