@@ -354,9 +354,152 @@ pub fn doctor_lines(state_dir: &Path, rules: Option<&str>) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{drift_of, render_consumer, Consumer, Drift, Head, Source, DRIFTS};
-    use crate::hook::vessel::digest::PluginRecord;
+    use super::{drift_of, head_of, read_ledger, record_of, render_consumer, same_dir, Consumer, Drift, Head, Ledger, Source, DRIFTS};
+    use crate::hook::vessel::digest::{self, PluginRecord};
     use crate::order::is_declaration_order;
+    use crate::seat::seat_dir;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+
+    /// 歯ごとの空の tmp dir（in-file の歯の置き場・env を読まないのは器の本体の規律〔C2.2〕）。
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("account-consumers-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::create_dir_all(&dir);
+        dir
+    }
+
+    /// 席 `target` の記録 file に `sid` / `ts` の読める記録を書く（形は `digest.rs` の書き手 [`PluginRecord::to_line`]）。
+    fn record(state_dir: &Path, target: &str, sid: &str, ts: u64) -> PluginRecord {
+        let found = PluginRecord::Recorded {
+            root: "/r".to_owned(),
+            hooks: Some("0".repeat(16)),
+            binary: "b".repeat(12),
+            sid: sid.to_owned(),
+            ts,
+        };
+        let seat = seat_dir(state_dir, target);
+        let _ = fs::create_dir_all(&seat);
+        let _ = fs::write(digest::record_path(&seat), format!("{}\n", found.to_line().unwrap_or_default()));
+        found
+    }
+
+    /// 席 `target` の記録 file を読めない形（2 行）にする。
+    fn unreadable(state_dir: &Path, target: &str) {
+        let seat = seat_dir(state_dir, target);
+        let _ = fs::create_dir_all(&seat);
+        let _ = fs::write(digest::record_path(&seat), "schema=1 sid=s root=/r hooks=x binary=b ts=1\nextra\n");
+    }
+
+    /// `targets` の字面を列に。
+    fn targets(names: &[&str]) -> Vec<String> {
+        names.iter().map(|name| (*name).to_owned()).collect()
+    }
+
+    /// git を 1 回撃つ（失敗は読み手の assert が落とす）。
+    fn git(dir: &Path, args: &[&str]) {
+        let _ = Command::new("git").arg("-C").arg(dir).args(args).output();
+    }
+
+    // flip-check: retroactive s2-07l.338
+    /// ts の異なる 2 本は、targets のどちらの順でも ts の大きい方（`>` を `<` / `==` に替えると先に見た方が残る）。
+    #[test]
+    fn consumers_record_of_picks_the_newest_regardless_of_target_order() {
+        let state = scratch("newest");
+        let _ = record(&state, "old", "sid-old", 10);
+        let newest = record(&state, "new", "sid-new", 20);
+        assert_eq!(record_of(&state, &targets(&["old", "new"])), newest, "古→新の順");
+        assert_eq!(record_of(&state, &targets(&["new", "old"])), newest, "新→古の順");
+    }
+
+    /// ts が同じ 2 本は先に見つけた方が残る（`>` を `>=` に替えると後の方に置き換わる）。
+    #[test]
+    fn consumers_record_of_keeps_the_first_on_equal_ts() {
+        let state = scratch("equal");
+        let first = record(&state, "one", "sid-one", 5);
+        let second = record(&state, "two", "sid-two", 5);
+        assert_ne!(first, second, "sid で区別できる");
+        assert_eq!(record_of(&state, &targets(&["one", "two"])), first, "one が先");
+        assert_eq!(record_of(&state, &targets(&["two", "one"])), second, "two が先");
+    }
+
+    /// 読めた記録 > 読めない記録 > 不在（順序に依らない・全部無ければ `Absent`・読めないが 1 本でも在れば `Unreadable`）。
+    #[test]
+    fn consumers_record_of_prefers_readable_over_unreadable_and_unreadable_over_absent() {
+        let state = scratch("prefers");
+        unreadable(&state, "broken");
+        let readable = record(&state, "fine", "sid-fine", 3);
+        assert_eq!(record_of(&state, &targets(&[])), PluginRecord::Absent, "targets 0 本");
+        assert_eq!(record_of(&state, &targets(&["none-a", "none-b"])), PluginRecord::Absent, "全部無い");
+        assert_eq!(record_of(&state, &targets(&["broken", "none-a"])), PluginRecord::Unreadable, "読めない→無い");
+        assert_eq!(record_of(&state, &targets(&["none-a", "broken"])), PluginRecord::Unreadable, "無い→読めない");
+        assert_eq!(record_of(&state, &targets(&["broken", "fine"])), readable, "読めない→読めた");
+        assert_eq!(record_of(&state, &targets(&["fine", "broken"])), readable, "読めた→読めない");
+        assert_eq!(record_of(&state, &targets(&["none-a", "fine", "broken"])), readable, "無い→読めた→読めない");
+    }
+
+    /// 帳簿は NotFound だけが `Absent`・他の失敗（dir を渡す）と形違いは `Unreadable`・読めた周は導入先の列。
+    #[test]
+    fn consumers_read_ledger_tells_not_found_from_unreadable() {
+        let dir = scratch("ledger");
+        assert!(matches!(read_ledger(&dir.join("missing.json")), Ledger::Absent), "無い file");
+        assert!(matches!(read_ledger(&dir), Ledger::Unreadable), "dir は NotFound でない失敗");
+        let broken = dir.join("broken.json");
+        let _ = fs::write(&broken, "{\"other\": {}}\n");
+        assert!(matches!(read_ledger(&broken), Ledger::Unreadable), "plugins key が無い");
+        let empty = dir.join("empty.json");
+        let _ = fs::write(&empty, "{\"plugins\": {}}\n");
+        assert!(matches!(read_ledger(&empty), Ledger::Entries(entries) if entries.is_empty()), "器の key が無い");
+        let filled = dir.join("filled.json");
+        let name = crate::name::NAME;
+        let _ = fs::write(&filled, format!("{{\"plugins\": {{\"{name}@{name}\": [{{\"projectPath\": \"/p\", \"scope\": \"project\"}}]}}}}\n"));
+        let Ledger::Entries(entries) = read_ledger(&filled) else {
+            panic!("読める帳簿");
+        };
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].project, "/p");
+        assert_eq!(entries[0].scope.as_deref(), Some("project"));
+        assert_eq!((entries[0].install.as_deref(), entries[0].sha.as_deref()), (None, None), "無い key は None");
+    }
+
+    /// symlink とその実体は同じ・別々に実在する 2 dir は違う・解けない周は字面で比べる。
+    #[test]
+    fn consumers_same_dir_compares_real_paths_and_falls_back_to_literal() {
+        let dir = scratch("same-dir");
+        let (real, other) = (dir.join("real"), dir.join("other"));
+        let _ = fs::create_dir_all(&real);
+        let _ = fs::create_dir_all(&other);
+        let link = dir.join("link");
+        assert!(std::os::unix::fs::symlink(&real, &link).is_ok(), "symlink を作れる");
+        assert!(same_dir(&link, &real), "symlink と実体");
+        assert!(same_dir(&real, &link), "実体と symlink");
+        assert!(same_dir(&real, &real), "同じ実体");
+        assert!(!same_dir(&real, &other), "別々に実在する 2 dir");
+        assert!(!same_dir(&link, &other), "symlink と別の dir");
+        let (gone_a, gone_b) = (dir.join("gone"), dir.join("gone"));
+        assert!(same_dir(&gone_a, &gone_b), "存在しない同じ字面");
+        assert!(!same_dir(&gone_a, &dir.join("gone-b")), "存在しない別の字面");
+        assert!(!same_dir(&gone_a, &real), "存在しない path と実在する dir");
+    }
+
+    /// commit の無い repo（init だけ）は `Unknown`・宣言が無ければ `Undeclared`・commit が在れば全桁の sha。
+    #[test]
+    fn consumers_head_of_is_unknown_without_a_commit() {
+        let repo = scratch("head-of");
+        git(&repo, &["init", "-q", "-b", "main"]);
+        assert_eq!(head_of(Some(&repo)), Head::Unknown, "commit が無い");
+        assert_eq!(head_of(None), Head::Undeclared, "宣言が無い");
+        assert_eq!(head_of(Some(&repo.join("missing"))), Head::Unknown, "repo が無い");
+        git(&repo, &["config", "user.name", "consumer"]);
+        git(&repo, &["config", "user.email", "consumer@example.invalid"]);
+        git(&repo, &["commit", "-q", "--allow-empty", "-m", "seed"]);
+        let Head::Sha(sha) = head_of(Some(&repo)) else {
+            panic!("commit の後は sha");
+        };
+        assert_eq!(sha.len(), 40, "全桁: {sha}");
+        assert!(sha.chars().all(|ch| ch.is_ascii_hexdigit()), "hex: {sha}");
+    }
 
     /// 語は 5 つで宣言順に閉じる（variant を足した周はここの件数が変わる）。
     #[test]
