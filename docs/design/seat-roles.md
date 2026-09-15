@@ -64,7 +64,7 @@
 - 注入（hook.rs）: 登録済みの target の SessionStart で生成文が出て権能の名がすべて含まれる・登録の無い target で 0 byte・雛形に pointer の無い行を置いた fixture で xtask check が落ちる（AC17）・行に在って文に無い権能を作った fixture で落ちる・生成文の外形 snapshot。
 - 極性一覧 snapshot に `Register`（(a)）と `Role`（(b)）の 2 行（件数 +2・N = K + M の pin）・doctor の項目 1 行（`--state-dir` 付きの外形 snapshot）。
 - property（`prop_role_`・in-file）: `Role` / `Capability` / `PathKind` の `as_str` ↔ parse が往復し、列に無い名は必ず Err。
-- **外形 snapshot と歯の file の置き場**（`s2-07l.327`）: seat の外形 snapshot は面ごとに 1 file（usage / rebrief の DATA / doctor の末尾＝`seat_usage_external_form` / `seat_rebrief_external_form` / `seat_doctor_external_form`・旧 `seat_external_form` は消す）、`tests/e2e/seat/` の歯の file は接頭辞（責務）ごとに 1 file（module `account` = `seat_account_` + `seat_tick_`・module `launch` = `seat_launch_` + `seat_restore_` + `seat_attrib_`・module `register` = `seat_register_` + `seat_role_` + `seat_state_`・module `rules` = `seat_rules_`・分割は `s2-07l.361`・契約表の行 b）。共有 helper は `seat.rs` の `pub(super)` に置き複製しない。pipe が外形を面ごとに分けている形と同じ。
+- **外形 snapshot と歯の file の置き場**（`s2-07l.327`）: seat の外形 snapshot は面ごとに 1 file（usage / rebrief の DATA / doctor の末尾＝`seat_usage_external_form` / `seat_rebrief_external_form` / `seat_doctor_external_form`・旧 `seat_external_form` は消す）、`tests/e2e/seat/` の歯の file は接頭辞（責務）ごとに 1 file（module `account` = `seat_account_` + `seat_tick_` + `doctor_accounts_`〔doctor が口座を照合する歯・口座の面〕・module `launch` = `seat_launch_` + `seat_restore_` + `seat_attrib_`・module `register` = `seat_register_` + `seat_role_` + `seat_state_`・module `rules` = `seat_rules_` + `rules_host_` + nested module `rules_prop`・分割は `s2-07l.361`・契約表の行 b。母集団は移す前の `seat::account::` の本数を `cargo nextest list` の module 名義で数え、移した後は 4 module の合計がそれと一致する＝接頭辞で数えない）。共有 helper は `seat.rs` の `pub(super)` に置き複製しない。pipe が外形を面ごとに分けている形と同じ。
 
 ## 8. 憲法・制約との整合
 
@@ -108,7 +108,7 @@ title = "e2e/seat/account.rs を接頭辞ごとの 3 module（launch / register 
 req = ["FR23", "FR59"]
 section = "7"
 write-set = ["crates/scribe2/tests/e2e/seat.rs", "-crates/scribe2/tests/e2e/seat/account.rs", "+crates/scribe2/tests/e2e/seat/launch.rs", "+crates/scribe2/tests/e2e/seat/register.rs", "+crates/scribe2/tests/e2e/seat/rules.rs"]
-verify = ["cargo nextest run -p scribe2 --no-tests=fail seat_launch_ seat_register_ seat_rules_"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail seat::launch:: seat::register:: seat::rules::"]
 size = "S"
-done = "account.rs が seat_account_ と seat_tick_ だけになり、3 module に歯が移って本数と中身が不変、gate の lens 入力が diff でなく要約"
+done = "account.rs が seat_account_ と seat_tick_ と doctor_accounts_ だけになり、3 module に歯が移って 4 module の合計が移す前の seat::account:: の本数と一致し中身も不変、gate の lens 入力が diff でなく要約"
 <!-- contracts:end -->
