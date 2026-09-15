@@ -1511,6 +1511,111 @@ fn pipe_retire_rebase_empty_refuses_other_failed_reasons() {
     clean(&[&repo, &state]);
 }
 
+/// `pipe stop --run` で終端した便（段 `Stopped`・commit 0・clean の worktree が残る形）の id。
+///
+/// 偽 runner は commit を 1 本も作らず前景で眠るだけなので、spawn を**背景で**起こして席が Live に
+/// なるまで待つ（`lifecycle.rs` の `pipe_stop_all_terminates_live_runner` と同じ「生きた席を止める」形）。
+/// spawn の process は stop の前に外す——外さないと runner の終了を見届けた spawn が自分の記帳を
+/// 足し、stop の event と数が混ざる。runner は席の group ごと stop が止める。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn stopped_run(repo: &Path, state: &Path) -> String {
+    let contract = write_contract(repo, &[], &[]);
+    let id = intake(repo, state, &contract);
+    let mut spawner = Command::new(bin())
+        .args(["pipe", "spawn", "--run", &id, "--repo", &repo.display().to_string()])
+        .args(["--state-dir", &state.display().to_string(), "--runner", "sleep 300"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("binary を起動できる");
+    let begun = Instant::now();
+    while kind_count(state, &id, EventKind::SeatSpawned) < 1 {
+        assert!(spawner.try_wait().ok().flatten().is_none(), "spawn が席を立てる前に終わった");
+        assert!(begun.elapsed() < Duration::from_secs(60), "席が Live にならない");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    spawner.kill().ok();
+    spawner.wait().ok();
+    stop_run_ok(state, &id);
+    assert!(show_line(repo, state, &id).contains("stage=Stopped"), "終端の段は Stopped");
+    let live = worktree_of(repo, &id);
+    assert!(live.is_dir(), "止めた便の worktree は残る（retire の入口の前提）");
+    assert!(git(&live, &["status", "--porcelain"]).trim().is_empty(), "commit 0 の木は clean のまま");
+    id
+}
+
+/// `Stopped` の便を `pipe retire` が畳む（`s2-07l.284`・設計 pipeline-conflict.md §5）。stop は
+/// 畳まない（C2）ので、止めた便の commit 0・clean の worktree はこの口でしか動かせない。畳み方は
+/// 他の終端と同じ 1 本（move・branch は残す・main 不変）で、残す event の段は **`Stopped` のまま**。
+#[test]
+fn pipe_retire_stopped_folds_a_clean_stopped_run_and_keeps_stage() {
+    let (repo, state) = repo_with_state();
+    let main_before = git(&repo, &["rev-parse", "refs/heads/main"]);
+    let id = stopped_run(&repo, &state);
+    let live = worktree_of(&repo, &id);
+
+    let out = retire_once(&repo, &state, &id);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "Stopped の便も畳める: {}", stderr_of(&out));
+    let retired = repo.join(".worktrees").join("scribe2").join("retired").join(&id);
+    assert!(
+        stdout_of(&out).contains(&format!("retired={}", retired.display())),
+        "畳んだ先を名乗る: {}",
+        stdout_of(&out)
+    );
+    assert!(retired.join("src").join("lib.rs").exists(), "中身ごと運ぶ（消さない）");
+    assert!(!live.exists(), "元の場所が空く");
+    let branches = git(&repo, &["branch", "--list", &format!("scribe2/{id}")]);
+    assert!(!branches.trim().is_empty(), "branch は消さない: {branches}");
+    assert_eq!(git(&repo, &["rev-parse", "refs/heads/main"]), main_before, "main は 1 byte も動かない");
+    let log = fs::read_to_string(state.join("fleet").join("events.jsonl")).expect("event log");
+    let last = log.lines().rfind(|line| !line.is_empty()).unwrap_or_default();
+    assert!(
+        last.contains("\"stage\":\"Stopped\"") && last.contains("\"detail\":\"retired\""),
+        "最終行は Stopped detail=retired（段を Landed へ動かさない）: {last}"
+    );
+    assert!(show_line(&repo, &state, &id).contains("stage=Stopped"), "畳んだ後も段は Stopped");
+    let after = event_count(&state);
+
+    // 2 度目は前提（worktree が在る）を満たさない＝rc 1 で何も書かない。
+    let again = retire_once(&repo, &state, &id);
+    assert_eq!(again.status.code(), Some(i32::from(RC_REFUSED)), "2 度目は rc 1");
+    assert_eq!(event_count(&state), after, "前提違反は event を 1 件も書かない");
+    assert!(retired.exists(), "畳んだ先は在るまま");
+    clean(&[&repo, &state]);
+}
+
+/// 負例: `Stopped` でも worktree が dirty なら畳まない（rc 1・worktree 不動・event 0 増）。
+/// 負例を**clean 検査で断る位置**に置く＝段の検査は通っている（上の歯との対で、`Stopped` に
+/// `Extra::Retire` の clean 検査が同じく効くことを担保する・untracked も数える）。
+#[test]
+fn pipe_retire_stopped_refuses_a_dirty_worktree() {
+    let (repo, state) = repo_with_state();
+    let id = stopped_run(&repo, &state);
+    let live = worktree_of(&repo, &id);
+    let stray = live.join("dirty.txt");
+    fs::write(&stray, "x\n").expect("worktree を汚せる");
+    let before = event_count(&state);
+
+    let out = retire_once(&repo, &state, &id);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "dirty な worktree は rc 1: {}", stdout_of(&out));
+    assert!(live.exists(), "断った周は worktree を動かさない");
+    assert!(stray.exists(), "汚れもそのまま残す（掃除しない）");
+    let retired = repo.join(".worktrees").join("scribe2").join("retired").join(&id);
+    assert!(!retired.exists(), "retired/<run> を作らない");
+    assert_eq!(event_count(&state), before, "event を 1 件も書かない");
+    assert!(show_line(&repo, &state, &id).contains("stage=Stopped"), "段は Stopped のまま");
+    // 汚れだけを拭うと同じ便が通る＝上の rc 1 は**clean**を理由にしている（段ではない）。
+    fs::remove_file(&stray).expect("汚れを拭える");
+    let cleaned = retire_once(&repo, &state, &id);
+    assert_eq!(cleaned.status.code(), Some(i32::from(RC_OK)), "clean なら通る: {}", stderr_of(&cleaned));
+    assert!(retired.exists(), "畳んだ先が出来る");
+    clean(&[&repo, &state]);
+}
+
 // ─────────────────── land の後の anchor 同期（`s2-07l.120`・N1・接頭辞 `pipe_land_anchor_`） ───────────────────
 
 /// land（squash 形）の後、anchor（`--repo`）の HEAD が main を指す checkout なら **index と working tree を

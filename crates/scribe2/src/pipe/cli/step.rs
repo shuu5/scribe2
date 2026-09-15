@@ -252,20 +252,23 @@ pub(super) fn land_run(args: &[String], id: &str, manifest: &Manifest, policy: L
 }
 
 /// `pipe retire`。前提 stage = `Landed` ∨ (`Failed` ∧ 最後の `RunStage` の detail が
-/// `rebase-empty` / `rebase-conflict`) ∨ (`Gated` ∧ verdict が FAIL)（worktree 在り・clean の
-/// 検査は retire 側が持つ）。
+/// `rebase-empty` / `rebase-conflict`) ∨ (`Gated` ∧ verdict が FAIL) ∨ `Stopped`（worktree 在り・
+/// clean の検査は retire 側が持つ）。
 ///
 /// **段を動かさない口である**。`--pr-cmd` 形の便は main を動かさず worktree も残して
 /// `Landed` で終端するので、merge の後に入れ物だけを畳む段が要る。同一変更の便が
 /// `rebase-empty` で終端した周も**成果は既に main に在る**ので入れ物だけが残る形は同じで、
 /// 畳める側に数える（`s2-07l.128`）。起こし直しの上限に達した便（`rebase-conflict`）と
 /// 判定に届いた `Gated(FAIL)` も、終端して入れ物だけが残る形は同じである（設計
-/// pipeline-conflict.md §5）。走っている便・他の理由で落ちた便を通すと「まだ読まれて
-/// いない現物を動かす」経路になるため、段違いは一般則どおり rc 1。
+/// pipeline-conflict.md §5）。`pipe stop --run` で終端した `Stopped` も同じ——stop は畳まない
+/// （C2・段の関数は 1 つずつ）ので、commit 0 の clean な worktree が残る唯一の畳み口が
+/// ここである（`s2-07l.284`・理由の弁別は持たず `Landed` と同じ扱い）。走っている便・
+/// 他の理由で落ちた便を通すと「まだ読まれていない現物を動かす」経路になるため、段違いは
+/// 一般則どおり rc 1。
 ///
 /// 残す event の段は [`super::Resolved::stage`] のまま＝**`Landed` に決め打ちしない**（終端を動かさない）。
 pub(super) fn retire_run(args: &[String], id: &str, policy: LockPolicy) -> Outcome {
-    let allowed = [Stage::Landed, Stage::Failed, Stage::Gated];
+    let allowed = [Stage::Landed, Stage::Failed, Stage::Gated, Stage::Stopped];
     let resolved = match resolve(args, id, &allowed, &Extra::Retire) {
         Ok(found) => found,
         Err(outcome) => return outcome,
