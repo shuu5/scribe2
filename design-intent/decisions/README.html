@@ -53,7 +53,8 @@
     { "@id": "./ADR-0029-statusline-is-rendered-by-the-vessel-and-written-into-account-settings.html" },
     { "@id": "./ADR-0030-tick-units-are-written-and-enabled-by-the-vessel.html" },
     { "@id": "./ADR-0031-working-memory-is-held-by-the-vessel-directives-status-and-hooks.html" },
-    { "@id": "./ADR-0032-dialogue-surface-rules-live-in-one-design-doc-and-planner-brief.html" }
+    { "@id": "./ADR-0032-dialogue-surface-rules-live-in-one-design-doc-and-planner-brief.html" },
+    { "@id": "./ADR-0033-core-lines-count-source-only-and-io-lives-in-a-boundary-crate.html" }
   ]
 }
 </script>
@@ -130,6 +131,7 @@
     <tr><td>ADR-0030</td><td><a href="./ADR-0030-tick-units-are-written-and-enabled-by-the-vessel.html">管理 tick の unit は器が書いて有効化する (席ごとの service / timer を導出して host へ書く・間隔は rules 行・有効化は 3 クラス非該当)</a></td><td>accepted</td><td>2026-09-15</td></tr>
     <tr><td>ADR-0031</td><td><a href="./ADR-0031-working-memory-is-held-by-the-vessel-directives-status-and-hooks.html">作業記憶は器が持つ側を広げる (user 直命の表・現在地の DATA・skill と compaction の hook による強制と自動退避・退避物の置き場は state dir)</a></td><td>accepted</td><td>2026-09-15</td></tr>
     <tr><td>ADR-0032</td><td><a href="./ADR-0032-dialogue-surface-rules-live-in-one-design-doc-and-planner-brief.html">対話面の作法は設計 doc 1 本が持ち、 planner の雛形は pointer 付きの行で運ぶ (信頼度 4 段を上位に読み手本位の 8 則を融合・harness 一般の規律は global CLAUDE.md から器へ)</a></td><td>accepted</td><td>2026-09-15</td></tr>
+    <tr><td>ADR-0033</td><td><a href="./ADR-0033-core-lines-count-source-only-and-io-lives-in-a-boundary-crate.html">core の行数は本体だけを数え、 子 process を撃つ I/O 面は境界 crate へ分ける (上限 40,000 は上げない・binary は 1 つ・境界 crate にも上限)</a></td><td>accepted</td><td>2026-09-15</td></tr>
   </tbody>
 </table>
 <p data-audience="machine">新しい決定を記録したら本表と JSON-LD の <code>dc:hasPart</code> に追記する。 ADR は frozen (改訂は supersede する新 ADR で行う)。</p>

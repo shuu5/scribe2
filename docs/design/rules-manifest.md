@@ -60,7 +60,7 @@ ruled_at = "2026-09-07"
 
 | id | kind | value | enabled | 裁定（ruling / ruled_at）・design-intent 側の出所 |
 |---|---|---|---|---|
-| `R-C4-1` | CoreLines | 40000 | true | user 裁定 2026-09-14（A2・s2-07l notes）・refactor は .198（初期値 20000 = 論点 2 / 2026-09-07・憲法 §3） |
+| `R-C4-1` | CoreLines | 40000 | true | user 裁定 2026-09-14（A2・s2-07l notes）・refactor は .198（初期値 20000 = 論点 2 / 2026-09-07・憲法 §3）・**母集団は core crate の src の本体だけ**（in-file の歯〔`#[cfg(test)]` 区間〕は数えない＝R-C4-3 が数える側・user 裁定 2026-09-15・ADR-0033・[core-boundary.md](./core-boundary.md) §2） |
 | `R-C4-2` | ModuleLines | 1500 | true | 同上 |
 | `R-C4-3` | TestSrcRatioPct | 100 | true | 同上（比 1.0 = 100%） |
 | `R-C4-4.fn-lines` | FnLines | 60 | true | 同上 |
