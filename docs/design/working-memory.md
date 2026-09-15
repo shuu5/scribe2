@@ -171,12 +171,12 @@ AC8 の確認（SRS の FR23 の検証手法は I = 目視確認・2 つの開�
 
 | 段 | 契約 | size | 依存 | write-set の芯 |
 |---|---|---|---|---|
-| 1 | (a) 直命の表: event variant 2 + `seat directive` 3 口 | M | SRS | `fleet/mod.rs`（`EventKind` + `KINDS` pin）/ `seat/directive.rs`（新）/ `seat/cli.rs` / `Event` の literal 構築点（歯・property）/ seat 外形 snap |
+| 1 | (a) 直命の表: event variant 2 + `seat directive` 3 口 | M | SRS | `fleet/mod.rs`（`EventKind` + `KINDS` pin）/ `+seat/directive.rs`（新）/ `seat/cli.rs` / `Event` の literal 構築点（歯・property）/ seat 外形 snap |
 | 1 | (c) 現在地 DATA: `[MAIN][RUN][SEAT][WIN]` | S | SRS | `seat/rebrief.rs`（`Marker` + `ALL`）/ rebrief 外形 snap / `tests/e2e/seat/wm.rs` |
 | 1 | (f) 役割の既定: rules 行 2 種 + 起動行 | S | .313 .322 Landed | `rules/mod.rs` / `rules/manifest.toml` / `seat/cycle.rs`（`derive_launch`）/ rules 外形 snap |
 | 1 | (g) planner の雛形 +4 行（dialogue-surface §7） | S | ADR-0032 | `seat/brief/planner.txt` / `hook_brief_planner` snap |
 | 2 | (b) `[DIRECTIVE-REVIEW]` + rules 行 `directive.review_after_days` | S | (a) | `seat/rebrief.rs` / `rules/*` / snap |
-| 2 | (d) hooks 4 面 + PreToolUse Skill | M | (c)・.303 / .304 と `hooks/hooks.json` で直列 | `hooks/hooks.json` / `hook/mod.rs`（event 名の enum）/ `hook/prompt_expansion.rs`（新）/ `polarity.rs` + 極性 snap / `tests/e2e/hook.rs` |
+| 2 | (d) hooks 4 面 + PreToolUse Skill | M | (c)・.303 / .304 と `hooks/hooks.json` で直列 | `hooks/hooks.json` / `hook/mod.rs`（event 名の enum）/ `+hook/prompt_expansion.rs`（新）/ `polarity.rs` + 極性 snap / `tests/e2e/hook.rs` |
 | 3 | (e) 置き場を state dir へ + supersede + doctor 行 | M | SRS FR23 改訂・(d) | `seat/externalize.rs` / `seat/consume.rs` / `seat/tick.rs`（`--wm-dir` の撤去）/ `main.rs`（doctor 欄）/ snap |
 | 3 | (h) skills 2 本の縮小 | docs | (a)(b)(c)(d) | `skills/*/SKILL.md` |
 | 3 | (i) global の痩身（別 repo） | 外 | (g)(h) | — |
@@ -188,3 +188,30 @@ AC8 の確認（SRS の FR23 の検証手法は I = 目視確認・2 つの開�
 - 直命の表を台帳（bead）で持つ: 台帳は task と裁定（C15）で、発言の逐語と前提 pointer の typed な列を持たない。event log は既に承認 event で逐語を持つ（C7.2）＝同じ側に置く。
 - `[WIN]` を git log から取る: 便の Landed は event log が持ち、commit の subject の grep は偽陽性（bead id の `.` が regex）。event log だけを読む。
 - PreCompact(auto) の退避物に AI の文を求める: hook の中で開発 session は動かない。器が持つ事実（現在地 + carry）だけで書き、`trigger: auto` で弁別する。
+
+<!-- contracts:begin -->
+schema = 1
+
+[[contract]]
+id = "a"
+title = "直命の表 — EventKind の variant 2（DirectiveIssued / DirectiveClosed）と seat directive add / close / ls の 3 口・fleet record は直命の kind を断る"
+req = ["FR65"]
+section = "12"
+touches = ["crate::fleet::EventKind", "crate::fleet::event::Event"]
+write-set = ["+crates/scribe2/src/seat/directive.rs", "crates/scribe2/src/seat/mod.rs", "crates/scribe2/src/seat/cli.rs", "crates/scribe2/src/fleet/mod.rs", "crates/scribe2/src/fleet/event.rs", "crates/scribe2/src/fleet/replay.rs", "crates/scribe2/src/fleet/cli.rs", "crates/scribe2/src/account/mod.rs", "crates/scribe2/src/fleet/usage.rs", "crates/scribe2/src/pipe/mod.rs", "crates/scribe2/src/pipe/queue.rs", "crates/scribe2/src/pipe/stop.rs", "crates/scribe2/src/seat/role.rs", "crates/scribe2/src/seat/state.rs", "crates/scribe2/tests/e2e/fleet.rs", "crates/scribe2/tests/e2e/prop.rs", "crates/scribe2/tests/e2e/seat.rs", "crates/scribe2/tests/e2e/pipe/lifecycle.rs", "crates/scribe2/tests/e2e/snapshots/e2e__seat__seat_external_form.snap", "crates/scribe2/tests/e2e/snapshots/e2e__fleet__fleet_external_form.snap"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail seat_directive_", "cargo nextest run -p scribe2 --no-tests=fail fleet_record_refuses_directive_"]
+size = "M"
+done = "seat directive add が DirectiveIssued を逐語で 1 行記し、close が閉じて未知と二重を typed に断り、ls が有効な直命を件数付きで列挙し、fleet record は直命の kind を断る"
+
+[[contract]]
+id = "c"
+title = "現在地の DATA — seat rebrief が [MAIN][RUN][SEAT][WIN] を自分の記録と git から出す"
+req = ["FR23"]
+section = "12"
+touches = ["crate::seat::rebrief::Marker"]
+creates = ["crates/scribe2/src/seat/rebrief/status.rs"]
+also = ["crates/scribe2/tests/e2e/snapshots/e2e__seat__seat_external_form.snap"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail seat_wm_rebrief_"]
+size = "S"
+done = "偽の event log と state.jsonl から [RUN][SEAT][WIN] が件数付きで出て、git の無い anchor では [MAIN] が unknown で rc 0"
+<!-- contracts:end -->

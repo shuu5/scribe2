@@ -94,3 +94,17 @@ admin の雛形には足さない（対話面でない・ADR-0032 §2.5）。
 - 「対話面の作法」を名指す FR と AC（user の /folio-architect）。
 - global の痩身の後、host 固有の残り（破壊的操作の hook・提示面）を器の guard / report の口へ移すか（別の ADR）。
 - runner / lens の出力の形（headless）は本 doc の対象外＝要るなら別 doc。
+
+<!-- contracts:begin -->
+schema = 1
+
+[[contract]]
+id = "g"
+title = "planner の雛形に §4 の 4 行を足す（pointer 付き・規範文 0）+ 外形 snapshot"
+req = ["FR30", "FR67"]
+section = "4"
+also = ["crates/scribe2/src/seat/brief/planner.txt", "crates/scribe2/tests/e2e/snapshots/e2e__hook__hook_brief_planner.snap"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail hook_brief_planner_"]
+size = "S"
+done = "planner の生成文に dialogue-surface.md §2 を指す行 2 本と §3 / §5 を指す行 1 本ずつが → SSOT: 付きで在り、admin の生成文には無い"
+<!-- contracts:end -->
