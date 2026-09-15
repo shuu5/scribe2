@@ -11,14 +11,14 @@ meta:
   eyebrow_left: 要件定義書 (SRS)
   eyebrow_right: scribe2 — MVP
   subtitle: 契約は小さく・検証は機械が先・止まるときは記帳して止まる
-  version: "0.10"
-  date: "2026-09-14"
+  version: "0.11"
+  date: "2026-09-15"
   reader: この器で開発する人と AI（Claude Code の session）。 専門語には必ずやさしい言い換えを併記する
 
 approval:
   - role: 承認 (user)
     who: user
-    when: 2026-09-13（版 0.8。 版ごとの裁定 id は台帳が持つ）
+    when: 2026-09-15（版 0.11。 版ごとの裁定 id は台帳が持つ）
     stamp: 裁定済
   - role: レビュー (folio review lens)
     who: spec-review 5 軸 + SRS ceiling 3 lens
@@ -73,6 +73,9 @@ scope:
     - 口座の登録
     - 口座の退役
     - 席の起動
+    - 役割なしの起動
+    - 導入先の同期
+    - hook 集合の食い違い
   out:
     - interpreter 経路の中身の解析（v3）
     - lane 計画と席の dashboard（v3）
@@ -125,6 +128,9 @@ acceptance:
   - { id: AC27, criterion: 禁じる語列に当たる Bash の command を席と runner の両方の経路で撃ち、 実行されずに deny され、 断る理由に規則の出所と当たった並びが出る。 禁じる語列に当たる verify 行を持つ契約が intake で行番号付きで断られる。 同じ先頭語で禁じる語列に当たらない command 2 本はこの規則では止まらない, metric_v: deny 2/2 + intake の拒否 1/1 + 通過 2/2, metric_l: 禁じる語列の command の拒否, links: [FR56] }
   - { id: AC28, criterion: tmp の state dir に host の面（口座 label・plugin dir・起動引数の 3 種）を置くと器が tracked の manifest と host の面の両方を数え、 両面で重複する口座 label・schema 外の項目・rules 行の混入を行番号付きで全件拒み、 file が無い host では 0 宣言で続き壊れた host では止まる。 口座の登録で口座の設定 dir と席の前提の設定と宣言 1 行が揃い、 既存の dir と宣言済みの口座 label は断られる。 退役で設定 dir が退役先へ動き event が 1 件残り、 復帰で元へ戻り event が 1 件残り、 席の登録 row が持つ口座の退役は断られ、 退役中の口座は選定と計測から外れる。 加えて実 host で 1 回、 口座を登録し user の login の後に doctor が credential の存在を示す, metric_v: 拒否 6/6 + 除外 2/2 + 登録 1/1 + 退役 1/1 + 復帰 1/1 + 実地 1 回, metric_l: host の面と口座の登録・退役, links: [FR57, FR58, FR36] }
   - { id: AC29, criterion: 偽の tmux と偽の claude（fixture）で席の起動を役割付きで撃つと、 窓が 1 回作られ、 器が導出した起動行が 1 回だけ差し込まれ、 席の登録が差し込みの前に 1 件書かれる。 tmux の session が無い・入力欄に文字が在る・口座の候補が無い・口座が退役中、 のそれぞれで typed に断り key を 1 つも送らない。 加えて実 host で 1 回、 器の subcommand 以外の起動経路を使わずに席が立ち、 SessionStart の打刻と席の登録 row が揃う, metric_v: 起動 1/1 + 拒否 4/4 + 実地 1 回, metric_l: 器の subcommand からの席の起動, links: [FR36, FR40, FR59] }
+  - { id: AC30, criterion: 偽の tmux と偽の claude（fixture）で役割なしの起動を撃つと、 席の登録 row が 0 件のまま起動行が 1 回だけ差し込まれ、 窓を与えない周は stdout に起動行 1 行が出て key は 0、 再開する session の id を与えた周は起動行に同じ口座とその id が載り、 宣言に無い口座・退役中の口座・設定 dir の無い口座では typed に断り key は 0。 加えて実 host で 1 回、 器の subcommand だけで役割なしの対話 session が立つ, metric_v: 差し込み 1/1 + stdout 1/1 + 再開 1/1 + 拒否 3/3 + 実地 1 回, metric_l: 役割なしの対話 session の起動, links: [FR58, FR59, FR60] }
+  - { id: AC31, criterion: fixture の install 帳簿と偽の導入先 2 つ（片方は worktree）で doctor を撃つと、 導入先ごとに 1 行が出て食い違いの語が none / binary / plugin / install のそれぞれで出る。 build 元 commit は版の表示口と同じ値で、 build 元を測れない build では unknown と出て失敗にしない。 1 つの口の更新が偽の上流へ前進のみで揃えて偽の build 器で install の記録を 1 行残し、 揃えられない周は typed に断る, metric_v: 行 2/2 + 食い違い 4/4 + unknown 1/1 + 記録 1/1 + 拒否 1/1, metric_l: 導入先の同期の測定と 1 つの口の更新, links: [FR57, FR61] }
+  - { id: AC32, criterion: 偽の tmux で席を立て、 SessionStart の記録に hook 集合の digest A を持たせた後に読み込み元の digest を B へ変えると、 管理 tick が退避の合図を注入し、 退避して止まった後に立て直しが同じ target・同じ口座で走る。 hook 集合が同じで binary だけ変えた周は noop。 復元の DATA に plugin の版の 1 行が出る, metric_v: 注入 1/1 + 立て直し 1/1 + noop 1/1 + DATA 1/1, metric_l: hook 集合の食い違いでの席の作り直し, links: [FR23, FR29, FR38, FR62] }
 
 requirements:
   - id: FR1
@@ -375,7 +381,7 @@ requirements:
     priority: should
     vmethod: I
     rationale_source: N-3
-    trace: { backward: [N-3], acceptance: [AC8] }
+    trace: { backward: [N-3], acceptance: [AC8, AC32] }
     ears:
       pattern: ubiquitous
       condition: 常時
@@ -442,7 +448,7 @@ requirements:
     priority: should
     vmethod: T
     rationale_source: N-1
-    trace: { backward: [N-1, N-2], acceptance: [AC9, AC13] }
+    trace: { backward: [N-1, N-2], acceptance: [AC9, AC13, AC32] }
     ears:
       pattern: state
       condition: 開発 session の context 使用量が rules 行の上限以上で、 自 session の未 consumed の退避物が無く、 cycle が走っていない間
@@ -544,7 +550,7 @@ requirements:
     priority: should
     vmethod: T
     rationale_source: N-1
-    trace: { backward: [N-1, N-3], acceptance: [AC13] }
+    trace: { backward: [N-1, N-3], acceptance: [AC13, AC32] }
     ears:
       pattern: state
       condition: 開発 session の口座の窓（5 時間・7 日・モデル別 7 日）の使用率が session 用の rules 行の閾値以上である間
@@ -756,7 +762,7 @@ requirements:
     priority: must
     vmethod: T
     rationale_source: N-3
-    trace: { backward: [N-3, N-1], acceptance: [AC28] }
+    trace: { backward: [N-3, N-1], acceptance: [AC28, AC31] }
     ears:
       pattern: ubiquitous
       condition: 常時
@@ -768,7 +774,7 @@ requirements:
     priority: must
     vmethod: T
     rationale_source: N-1
-    trace: { backward: [N-1, N-3], acceptance: [AC28] }
+    trace: { backward: [N-1, N-3], acceptance: [AC28, AC30] }
     ears:
       pattern: event
       condition: 口座の登録・退役・復帰が要求されたとき
@@ -780,11 +786,47 @@ requirements:
     priority: must
     vmethod: T
     rationale_source: N-1
-    trace: { backward: [N-1, N-3], acceptance: [AC29] }
+    trace: { backward: [N-1, N-3], acceptance: [AC29, AC30] }
     ears:
       pattern: event
       condition: 器の口から席の起動が要求されたとき
       response: 器は席の役割を必須で受け、 口座を引数か session 用の口座選定（FR36）で決め、 起動行を手書きの起動の雛形を読まずに導出し（起動行の構成は決定記録が正本）、 席の登録（FR40）を起動の前に書き、 立て直し（FR38）と同じ経路で target の窓の shell へ起動行を差し込み、 窓が無ければ作り tmux の session は作らず、 tmux の session が無い・入力欄に文字が在る・口座の候補が無い・口座が退役中のいずれかでは typed に断り key を 1 つも送らない
+
+  - id: FR60
+    type: FR
+    label: 役割なしの起動
+    priority: must
+    vmethod: T
+    rationale_source: N-1
+    trace: { backward: [N-1, N-3], acceptance: [AC30] }
+    ears:
+      pattern: event
+      condition: 器の口から役割なしの対話 session の起動が要求されたとき
+      response: 器は口座 label を必須で受け（役割は受けず、 席の登録（FR40）を書かず、 権能を与えない）、 口座の設定 dir を session の設定の出所として起動行に載せ、 cwd を anchor（省略時は現在の repo）に置き、 再開する session の id が在れば同じ口座でその session を再開する起動行を席の起動（FR59）と同じ導出で組み、 target の窓が与えられた周は FR59 と同じ経路で差し込み、 与えられない周は起動行を stdout に 1 行出して自分では起動せず、 口座が宣言に無い・退役中・設定 dir が無いのいずれかでは typed に断り key を 1 つも送らない
+
+  - id: FR61
+    type: FR
+    label: 導入先の同期
+    priority: must
+    vmethod: T
+    rationale_source: N-1
+    trace: { backward: [N-1, N-3], acceptance: [AC31] }
+    ears:
+      pattern: ubiquitous
+      condition: 常時
+      response: 器は doctor の 1 項目として、 この host の導入先（install 帳簿が指す repo と worktree・席の登録 row の anchor）ごとに、 呼ばれる binary が自己申告する build 元 commit（測れない周は unknown）・plugin の読み込み元と hook 集合の digest・install 帳簿の記録・共有 cache の実体・scribe2 repo の HEAD を実測して 1 行に並べ、 食い違いを typed な語（none / binary / plugin / install）で名指し、 推測で埋めず、 自分の checkout を上流の既定 branch へ前進のみで揃え（揃えられない周は typed に断る）そこから binary を build して呼ばれる場所へ入れ、 その install を記録（sha・時刻・host）に残す 1 つの口を提供する
+
+  - id: FR62
+    type: FR
+    label: hook 集合の食い違い
+    priority: must
+    vmethod: T
+    rationale_source: N-1
+    trace: { backward: [N-1], acceptance: [AC32] }
+    ears:
+      pattern: state
+      condition: 席が起動時に受けた hook 集合の digest と、 現在の plugin の読み込み元の hook 集合の digest（導入先の同期（FR61）の測定値）が違う間
+      response: 管理 tick は退避の合図（FR29）と同じ除外の下でその席に退避の合図を注入し、 席が退避して止まった後は立て直し（FR38）と同じ経路で同じ target に同じ口座で席を作り直し、 復元の DATA（FR23）に plugin の版（hook 集合の digest・build 元 commit・食い違いの語）を 1 行載せる
 
 nfr:
   - { id: NFR1, type: NFR, label: lens 予算,   category: 性能, target: 1 lens は 0.15M token 以内（目標値）,                                measure: lens 起動時の diff byte と cap の照合を verdict に記録,        vmethod: T, trace: { backward: [N-2], acceptance: [AC3] }, hero: { cat: 予算, big: "0.15", unit: M token, qual: lens 1 本あたりの上限 } }
