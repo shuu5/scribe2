@@ -714,11 +714,15 @@ fn pipe_resume_continues_from_implemented_in_new_process() {
 /// diff を読み切って marker を置き、`sleep` を背景に起こして pid を書き、前景で待ち続ける fake lens
 /// （`pipe_stop_group_*` の runner と同型）。gate は lens の stdout の EOF を待つので、この lens が
 /// 生きている間 `pipe run` は gate の途中に留まる＝殺す窓を作る。
+///
+/// 同じ `--lens` は intake 直後の**審査の段**（FR49）にも 1 回撃たれる。その 1 回目（marker が無い周）は
+/// 偽 PASS を返して便を spawn へ進め、2 回目（gate）だけが塞ぐ＝審査で塞ぐと `Implemented` に届かない。
 fn blocking_lens(marker: &Path, pid_file: &Path) -> String {
     format!(
-        "cat >/dev/null; touch '{}'; sleep 300 & echo $! > '{}'; wait",
-        marker.display(),
-        pid_file.display()
+        "cat >/dev/null; if [ -e '{marker}' ]; then sleep 300 & echo $! > '{pid}'; wait; else touch '{marker}'; echo '{pass}'; fi",
+        marker = marker.display(),
+        pid = pid_file.display(),
+        pass = lens_verdict("PASS"),
     )
 }
 
@@ -1158,11 +1162,7 @@ fn pipe_approval_unlisted_class_value_is_rejected_at_intake() {
     assert_eq!(event_count(&state), 0, "断った便は 1 行も記帳しない");
     // **弁別**: 断っているのは「classes が在ること」ではなく **値**である。
     let listed = write_contract(&repo, &[], &[r#"classes = ["publish"]"#]);
-    let ok = run_pipe(&[
-        "intake", "--contract", &listed.display().to_string(), "--bead", "b",
-        "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
-        "--rules", &ceiling_rules(&state),
-    ]);
+    let ok = intake_raw(&repo, &state, &listed, "b");
     assert_eq!(ok.status.code(), Some(i32::from(RC_OK)), "名簿に在る値は通す: {}", stderr_of(&ok));
     clean(&[&repo, &state]);
 }
@@ -1180,7 +1180,7 @@ fn pipe_approval_blocks_in_one_shot_run() {
         "--repo", &repo.display().to_string(),
         "--state-dir", &state.display().to_string(),
         "--rules", &ceiling_rules(&state),
-        "--runner", &runner_cmd(&marker),
+        "--runner", &runner_cmd(&marker), "--lens", &review_lens_pass(&state),
     ]);
     assert_eq!(
         out.status.code(),
@@ -1716,7 +1716,7 @@ fn pipe_question_run_stops_with_question_token() {
     let out = run_pipe(&[
         "run", "--contract", &path.display().to_string(), "--bead", "s2-2e5",
         "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
-        "--rules", &rules, "--runner", &question_runner(),
+        "--rules", &rules, "--runner", &question_runner(), "--lens", &review_lens_pass(&state),
     ]);
     assert_eq!(out.status.code(), Some(i32::from(RC_BLOCKED)), "{}", stderr_of(&out));
     let id = run_id_of(&out);

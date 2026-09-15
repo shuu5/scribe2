@@ -74,7 +74,9 @@ struct Intaken {
     write_set: Option<(WriteSet, usize)>,
 }
 
-/// 契約 file を読み込み、置き場へ写して run を起こす。
+/// 契約 file を読み込み、置き場へ写して run を起こし、**直後に審査の段を通す**（FR49・設計 contract-source.md
+/// §4）。1 行目は受付の判定行・2 行目は審査の判定行で、rc は審査の verdict（PASS = 0 / FAIL = 1 /
+/// INCONCLUSIVE = 3）＝受付は通っても PASS でない便は終端で、`run=<id>` は落ちた周も出す。
 pub(super) fn intake(args: &[String], manifest: &Manifest, policy: LockPolicy) -> Outcome {
     match intake_run(args, manifest, policy) {
         Ok(found) => {
@@ -82,7 +84,9 @@ pub(super) fn intake(args: &[String], manifest: &Manifest, policy: LockPolicy) -
             if let Some((kind, files)) = found.write_set {
                 line.push_str(&format!(" write-set={} files={files}", kind.as_str()));
             }
-            Outcome::ok_line(line)
+            let mut reviewed = super::step::review_run(args, &found.id, manifest, policy);
+            reviewed.out.insert(0, line);
+            reviewed
         }
         Err(outcome) => outcome,
     }

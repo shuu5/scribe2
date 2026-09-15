@@ -712,10 +712,10 @@ fn pipe_gate_refuses_wrong_stage() {
     let before = event_count(&state);
     let marker = state.join("lens-ran");
     let lens = fake_lens(&marker, &lens_verdict("PASS"));
-    // Intake の便に gate は掛からない。**段違いは何もせず rc 1**（Failed で終端させない）。
+    // 審査を通っただけ（Reviewed）の便に gate は掛からない。**段違いは何もせず rc 1**（Failed で終端させない）。
     let out = gate_once(&repo, &state, &id, Some(&lens));
     assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "段違いは rc 1");
-    assert!(stderr_of(&out).contains("段は Intake である"), "理由: {}", stderr_of(&out));
+    assert!(stderr_of(&out).contains("段は Reviewed である"), "理由: {}", stderr_of(&out));
     assert_eq!(event_count(&state), before, "段違いは event を 1 件も書かない");
     assert!(!marker.exists(), "lens を起動しない");
     // 終端していないので、正しい段まで進めれば通る（resume できる）。

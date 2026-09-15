@@ -656,12 +656,12 @@ fn fleet_stages_follow_declaration_order() {
     );
 }
 
-/// `RateLimited` は `Questioned` の直後に並び（母集団 10 段）、字面が往復する（`s2-07l.190`・
-/// 設計 account-autonomy.md §2）。
+/// `RateLimited` は `Questioned` の直後に並び（母集団 11 段・`Reviewed` は `s2-07l.241` が `Intake` の直後に
+/// 足した）、字面が往復する（`s2-07l.190`・設計 account-autonomy.md §2）。
 #[test]
 fn fleet_stages_place_rate_limited_after_questioned() {
     let at = |want: Stage| STAGES.iter().position(|stage| *stage == want);
-    assert_eq!(STAGES.len(), 10, "段は 10 個");
+    assert_eq!(STAGES.len(), 11, "段は 11 個");
     assert_eq!(
         at(Stage::RateLimited),
         at(Stage::Questioned).map(|found| found.saturating_add(1)),

@@ -63,7 +63,7 @@ pub struct Polarity {
     pub on_failure: OnFailure,
 }
 
-/// 行為を止めうる判定を返す境界の全数。**宣言順は行為の流れ**（hook → 席の登録 → 権能の執行 → 契約表 → intake → spawn〔予算・承認〕→
+/// 行為を止めうる判定を返す境界の全数。**宣言順は行為の流れ**（hook → 席の登録 → 権能の執行 → 契約表 → intake → 審査 → spawn〔予算・承認〕→
 /// runner → gate → land〔main 実測・anchor 同期・worktree の clean・追随の起こし直し〕→ store → 注入 → cycle → 退避 → 消費）で、順序に意味は無いが C2 の形（[`ALL`] と判別子順 pin）に合わせる。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Guard {
@@ -86,6 +86,9 @@ pub enum Guard {
     Intake,
     /// intake の排他＝live な便と write-set が交差する契約を受け付けない（[`crate::pipe::refuse`]）。
     IntakeRefuse,
+    /// 契約の審査の段＝lens の verdict が PASS でない便（と判定を読めない便）を spawn しない
+    /// （[`crate::pipe::review::ReviewCheck`]・FR49・設計 contract-source.md §8）。
+    Review,
     /// spawn の予算＝実測を経ずに起動できない口（[`crate::pipe::Budget`]）。
     Budget,
     /// A1 の承認関門＝3 クラスを名乗る契約を承認 event 無しに起動しない（[`crate::pipe::approve`]）。
@@ -131,6 +134,7 @@ pub const ALL: &[Guard] = &[
     Guard::ContractTable,
     Guard::Intake,
     Guard::IntakeRefuse,
+    Guard::Review,
     Guard::Budget,
     Guard::Approval,
     Guard::RunnerStop,
@@ -162,6 +166,7 @@ impl Guard {
             Self::ContractTable => crate::pipe::table::POLARITY,
             Self::Intake => crate::pipe::declaration::POLARITY,
             Self::IntakeRefuse => crate::pipe::refuse::POLARITY,
+            Self::Review => crate::pipe::review::POLARITY,
             Self::Budget => crate::pipe::BUDGET_POLARITY,
             Self::Approval => crate::pipe::approve::POLARITY,
             Self::RunnerStop => crate::headless::runner::POLARITY,
@@ -193,6 +198,7 @@ impl Guard {
             Self::ContractTable => "pipe::table::TableError",
             Self::Intake => "pipe::declaration::Unfit",
             Self::IntakeRefuse => "pipe::refuse::Refuse",
+            Self::Review => "pipe::review::ReviewCheck",
             Self::Budget => "pipe::Budget",
             Self::Approval => "pipe::approve::Approval",
             Self::RunnerStop => "headless::runner::Decision",
@@ -224,6 +230,7 @@ impl Guard {
             Self::ContractTable => "contract-table",
             Self::Intake => "intake-unfit",
             Self::IntakeRefuse => "intake-refuse",
+            Self::Review => "review-gate",
             Self::Budget => "spawn-budget",
             Self::Approval => "approval-gate",
             Self::RunnerStop => "runner-stop",

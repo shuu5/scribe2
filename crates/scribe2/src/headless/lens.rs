@@ -31,6 +31,14 @@
 //! から同じ名で引く（env も flag も足さない＝`lens.cmd` の穴は不変）。無ければ「裁定なし」を prompt に明示し
 //! （C10・空を黙らせない）、在るのに読めない周は claude を呼ばず rc 2——裁定を落として審査すると、回答で
 //! 認めた逸脱が契約違反に読まれ、同じ diff で判定が揺れる（実測 2026-09-15・`.295` の追随周）。
+//!
+//! **契約の審査（`Stage::Reviewed`・FR49・設計 contract-source.md §4）も同じ口である**。`pipe intake` の直後の
+//! 審査は契約の写しを run dir の `review/` に置き、その隣に `{design}` / `{requirements}` の本文
+//! （[`DESIGN_FILE`] / [`REQUIREMENTS_FILE`]）を置いて `{contract}` にその写しを渡す。契約の隣にこの 2 file が
+//! 在る周は雛形を [`CONTRACT_TEMPLATE`]（diff 無し・観点 3 つ）に切り替え、stdin は読まない（裁定の写しと
+//! 同じ「隣の file」の形＝`lens.cmd` の穴も flag も不変で 1 つの `--lens` が 2 つの段に効く）。片方だけ在る周は
+//! 材料が壊れているので claude を呼ばず rc 2。cap は契約 + 節 + 要件の byte で照合する（NFR1・超えたら
+//! INCONCLUSIVE）。
 
 use super::{build, feed, fill, flag, need, read_stdin_bytes, rules_of, runner_model, Call, DEFAULT_CLAUDE};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
@@ -38,12 +46,16 @@ use crate::fleet::select::Model;
 use crate::pipe::confine;
 use crate::pipe::contract::Contract;
 use crate::pipe::move_proof::RULINGS_FILE;
+use crate::pipe::review::{DESIGN_FILE, REQUIREMENTS_FILE};
 use crate::rules::int_row;
 use std::io::ErrorKind;
 use std::path::Path;
 
 /// prompt の文面（tracked な template・絶対 path も口座名も含まない）。
 const TEMPLATE: &str = include_str!("lens.txt");
+
+/// 契約の審査の prompt の文面（穴 = `{contract}` / `{design}` / `{requirements}`・diff は無い）。
+const CONTRACT_TEMPLATE: &str = include_str!("lens-contract.txt");
 
 /// 裁定の file が無い周に `{rulings}` の穴へ入れる 1 行（「裁定なし」を明示する・C10）。
 const NO_RULINGS: &str = "（裁定なし）";
@@ -141,18 +153,10 @@ pub fn dispatch(args: &[String]) -> Outcome {
         Ok(found) => found,
         Err(reason) => return Outcome::failed_line(RC_BROKEN, format!("lens: {reason}")),
     };
-    let diff = read_stdin_bytes();
-    if u64::try_from(diff.len()).unwrap_or(u64::MAX) > cap {
-        // **claude を呼ばずに**返す。呼ばないことが cap の意味である。
-        return Outcome::ok_line(inconclusive("diff exceeds cap"));
-    }
-    // **1 走査で埋める**。重ねて replace すると、先に埋めた契約本文の中の `{diff}` まで
-    // 展開され、外から来る text が prompt の構造へ触れられる（runner と同じ理由・裁定も同じ走査）。
-    let stated = state(&contract);
-    let prompt = fill(
-        TEMPLATE,
-        &[("{contract}", &stated), ("{rulings}", &rulings), ("{diff}", &String::from_utf8_lossy(&diff))],
-    );
+    let prompt = match prompt_of(contract_path, &state(&contract), &rulings, cap) {
+        Ok(found) => found,
+        Err(outcome) => return outcome,
+    };
     ask(&Call {
         claude: claude.as_deref().unwrap_or(DEFAULT_CLAUDE),
         prompt: &prompt,
@@ -169,6 +173,61 @@ pub fn dispatch(args: &[String]) -> Outcome {
         streaming: false,
         max_turns: None,
     })
+}
+
+/// 審査の材料と prompt（**どちらの審査かは契約の隣の材料で決まる**）。
+///
+/// 材料が無い周は従来の diff の審査: stdin の diff を byte で読み、cap を超えたら claude を呼ばず INCONCLUSIVE。
+/// 材料が在る周は契約の審査: stdin は読まず、契約 + 節 + 要件の byte で cap を照合する（同じ極性）。片方だけ
+/// 在る・読めない周は `Err(rc 2)`（材料を落として審査しない）。**1 走査で埋める**——重ねて replace すると、
+/// 先に埋めた契約本文の中の `{diff}` / `{design}` まで展開され、外から来る text が prompt の構造へ触れられる
+/// （runner と同じ理由・裁定も同じ走査）。
+fn prompt_of(contract: &Path, stated: &str, rulings: &str, cap: u64) -> Result<String, Outcome> {
+    let material = material_of(contract).map_err(|reason| Outcome::failed_line(RC_BROKEN, format!("lens: {reason}")))?;
+    let over = |bytes: usize| u64::try_from(bytes).unwrap_or(u64::MAX) > cap;
+    match material {
+        None => {
+            let diff = read_stdin_bytes();
+            if over(diff.len()) {
+                // **claude を呼ばずに**返す。呼ばないことが cap の意味である。
+                return Err(Outcome::ok_line(inconclusive("diff exceeds cap")));
+            }
+            Ok(fill(
+                TEMPLATE,
+                &[("{contract}", stated), ("{rulings}", rulings), ("{diff}", &String::from_utf8_lossy(&diff))],
+            ))
+        }
+        Some((design, requirements)) => {
+            if over(stated.len().saturating_add(design.len()).saturating_add(requirements.len())) {
+                return Err(Outcome::ok_line(inconclusive("contract material exceeds cap")));
+            }
+            Ok(fill(
+                CONTRACT_TEMPLATE,
+                &[("{contract}", stated), ("{design}", &design), ("{requirements}", &requirements)],
+            ))
+        }
+    }
+}
+
+/// 契約の写しの隣の [`DESIGN_FILE`] / [`REQUIREMENTS_FILE`]（契約の審査の材料・`pipe::review` が置く）。
+///
+/// 2 つとも無ければ `None`（diff の審査）・2 つとも在れば本文の対・片方だけ在る周と在るのに読めない周は `Err`
+/// （呼び手が claude を起こさず rc 2 で止まる＝材料を落とした審査は偽の判定を出す側）。
+fn material_of(contract: &Path) -> Result<Option<(String, String)>, String> {
+    let read = |name: &str| -> Result<Option<String>, String> {
+        let path = contract.with_file_name(name);
+        match std::fs::read_to_string(&path) {
+            Ok(found) => Ok(Some(found)),
+            Err(err) if err.kind() == ErrorKind::NotFound => Ok(None),
+            Err(err) => Err(format!("{}: {err}", path.display())),
+        }
+    };
+    match (read(DESIGN_FILE)?, read(REQUIREMENTS_FILE)?) {
+        (None, None) => Ok(None),
+        (Some(design), Some(requirements)) => Ok(Some((design, requirements))),
+        (Some(_), None) => Err(format!("契約の隣に {DESIGN_FILE} だけが在る（{REQUIREMENTS_FILE} が無い）")),
+        (None, Some(_)) => Err(format!("契約の隣に {REQUIREMENTS_FILE} だけが在る（{DESIGN_FILE} が無い）")),
+    }
 }
 
 /// 契約の写しの隣の [`RULINGS_FILE`] を読む（path の導出はこの 1 か所）。

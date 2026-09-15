@@ -975,6 +975,135 @@ fn headless_lens_prompt_external_form() {
     insta::assert_snapshot!("lens_prompt_external_form", prompt);
 }
 
+// ───── 契約の審査の雛形（`s2-07l.241`・設計 contract-source.md §4・FR49・接頭辞 `headless_lens_contract_`） ─────
+
+/// 契約の審査の材料 `{design}`（★契約 fixture にも diff fixture にも lens-contract.txt にも現れない字面）。
+const CONTRACT_DESIGN: &str = "docs/design/unlikely.md#z §4\n設計の節の本文 DESIGN-SECTION-MARK";
+/// 契約の審査の材料 `{requirements}`（[`CONTRACT_DESIGN`] と同じ理由の字面）。
+const CONTRACT_REQUIREMENTS: &str = "FR9: 要件の本文 REQUIREMENT-MARK";
+/// 契約の審査の周に stdin へ流す diff（**prompt に載ってはならない**面＝契約の審査は stdin を読まない）。
+const CONTRACT_STDIN: &[u8] = b"--- a/stdin-unread.txt\n+++ b/stdin-unread.txt\n+STDIN-MARK\n";
+
+/// 契約の隣に審査の材料の 2 file（`design.txt` / `requirements.txt`・`pipe::review` が置く形）を書く。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn material_in(dir: &Path, design: Option<&str>, requirements: Option<&str>) {
+    for (name, body) in [("design.txt", design), ("requirements.txt", requirements)] {
+        if let Some(text) = body {
+            fs::write(dir.join(name), format!("{text}\n")).expect("材料を書ける");
+        }
+    }
+}
+
+/// 契約の審査の lens を固定の契約と材料で 1 回撃ち、claude の stdin に渡った prompt を返す。
+fn lens_contract_prompt_of_fixed_fixture() -> String {
+    let dir = tmp();
+    let claude = fake_claude(&dir, "{\"verdict\":\"PASS\",\"evidence\":\"fake\"}\n", false, 0);
+    let contract = contract_in(&dir);
+    material_in(&dir, Some(CONTRACT_DESIGN), Some(CONTRACT_REQUIREMENTS));
+    let out = run_lens(&contract, 4096, "plan", &claude, CONTRACT_STDIN);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    assert!(dir.join("called").exists(), "材料が揃えば claude を呼ぶ");
+    let prompt = slurp(&dir.join("stdin"));
+    clean(&[&dir]);
+    prompt
+}
+
+/// 契約の隣に材料の 2 file が在る周は雛形が契約の審査（`lens-contract.txt`）に切り替わる: 契約の各面と設計の節と
+/// 要件本文がそれぞれの見出しの下に載り（順は 契約 → 設計の節 → 要件）、観点は 3 つで出力の形は diff の審査と同じ。
+#[test]
+fn headless_lens_contract_prompt_places_material_under_its_headings() {
+    let prompt = lens_contract_prompt_of_fixed_fixture();
+    let heading = |text: &str| prompt.find(text);
+    let (design, requirements, contract) = (heading("## 契約が実装する設計の節"), heading("## 契約が満たす要件"), heading("## 契約"));
+    assert!(contract.is_some() && design.is_some() && requirements.is_some(), "3 つの見出し: {prompt}");
+    assert!(contract < design && design < requirements, "見出しの順は 契約 → 設計の節 → 要件: {prompt}");
+    let mark = prompt.find("DESIGN-SECTION-MARK");
+    assert!(mark > design && mark < requirements, "設計の節は自分の見出しの下: {prompt}");
+    assert!(prompt.find("REQUIREMENT-MARK") > requirements, "要件本文は自分の見出しの下: {prompt}");
+    assert!(prompt.contains(&format!("goal: {CONTRACT_GOAL}")) && prompt.contains(&format!("done: {CONTRACT_DONE}")), "契約の面: {prompt}");
+    for want in [CONTRACT_VERIFY, CONTRACT_VERIFY_2, CONTRACT_WRITE_SET, CONTRACT_WRITE_SET_2] {
+        assert!(prompt.contains(&format!("- {want}")), "契約の {want} が行として載る: {prompt}");
+    }
+    assert_eq!(prompt.matches("## 審査の観点").count(), 1, "観点の節がちょうど 1 回: {prompt}");
+    for point in ["1. **契約と設計の節の適合**", "2. **設計が名指す状態遷移の一周**", "3. **write-set の連鎖**"] {
+        assert_eq!(prompt.matches(point).count(), 1, "観点 {point} がちょうど 1 回: {prompt}");
+    }
+    assert!(prompt.contains(r#"{"verdict":"PASS|FAIL|INCONCLUSIVE","evidence":"<根拠を 1 行で>"}"#), "出力の形は同じ: {prompt}");
+}
+
+/// 契約の審査の prompt は diff の節と裁定の節を持たず **stdin は読まれない**（stdin の字面は prompt に載らない）。
+/// 穴は 3 つとも埋まり、diff の穴の字面も残らない。
+#[test]
+fn headless_lens_contract_prompt_ignores_stdin_and_fills_every_hole() {
+    let prompt = lens_contract_prompt_of_fixed_fixture();
+    assert!(!prompt.contains("## diff") && !prompt.contains("STDIN-MARK"), "diff の節は無く stdin は読まない: {prompt}");
+    assert!(!prompt.contains("## 契約への裁定"), "裁定の節は diff の審査だけ: {prompt}");
+    for hole in ["{contract}", "{design}", "{requirements}", "{diff}"] {
+        assert!(!prompt.contains(hole), "穴 {hole} が埋まっている: {prompt}");
+    }
+}
+
+/// 契約の審査の prompt の外形（契約と材料の fixture を固定・C12.5）。
+#[test]
+fn headless_lens_contract_prompt_external_form() {
+    let prompt = lens_contract_prompt_of_fixed_fixture();
+    insta::assert_snapshot!("lens_contract_prompt_external_form", prompt);
+}
+
+/// 材料が片方だけ在る周は壊れた材料として claude を呼ばず rc 2（無い方を名指す）。2 つとも無ければ従来の diff の
+/// 審査（stdin が載る・対）。
+#[test]
+fn headless_lens_contract_half_material_is_refused_without_calling_claude() {
+    for (design, requirements, missing) in [
+        (Some(CONTRACT_DESIGN), None, "requirements.txt"),
+        (None, Some(CONTRACT_REQUIREMENTS), "design.txt"),
+    ] {
+        let dir = tmp();
+        let claude = fake_claude(&dir, "{\"verdict\":\"PASS\",\"evidence\":\"fake\"}\n", false, 0);
+        let contract = contract_in(&dir);
+        material_in(&dir, design, requirements);
+        let out = run_lens(&contract, 4096, "plan", &claude, CONTRACT_STDIN);
+        assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "片方だけは rc 2: {}", stderr_of(&out));
+        assert!(stderr_of(&out).contains(missing), "無い方を名指す: {}", stderr_of(&out));
+        assert!(!dir.join("called").exists(), "claude を起動しない");
+        clean(&[&dir]);
+    }
+    let dir = tmp();
+    let claude = fake_claude(&dir, "{\"verdict\":\"PASS\",\"evidence\":\"fake\"}\n", false, 0);
+    let contract = contract_in(&dir);
+    let out = run_lens(&contract, 4096, "plan", &claude, CONTRACT_STDIN);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    let prompt = slurp(&dir.join("stdin"));
+    assert!(prompt.contains("STDIN-MARK") && prompt.contains("## diff"), "材料が無ければ diff の審査: {prompt}");
+    clean(&[&dir]);
+}
+
+/// cap は契約 + 節 + 要件の byte で照合する（NFR1・FR9）: 材料が cap を超える周は claude を呼ばず INCONCLUSIVE。
+/// 同じ cap で stdin が空の diff の審査は呼ばれる（対＝cap を測っているのは材料の byte）。
+#[test]
+fn headless_lens_contract_material_over_cap_is_inconclusive_without_calling_claude() {
+    let dir = tmp();
+    let claude = fake_claude(&dir, "{\"verdict\":\"PASS\",\"evidence\":\"fake\"}\n", false, 0);
+    let contract = contract_in(&dir);
+    material_in(&dir, Some(CONTRACT_DESIGN), Some(CONTRACT_REQUIREMENTS));
+    let out = run_lens(&contract, 64, "plan", &claude, b"");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    assert!(stdout_of(&out).contains(r#""verdict":"INCONCLUSIVE""#), "cap 超は INCONCLUSIVE: {}", stdout_of(&out));
+    assert!(stdout_of(&out).contains("contract material exceeds cap"), "理由は材料の cap 超: {}", stdout_of(&out));
+    assert!(!dir.join("called").exists(), "claude を起動しない");
+    clean(&[&dir]);
+    let dir = tmp();
+    let claude = fake_claude(&dir, "{\"verdict\":\"PASS\",\"evidence\":\"fake\"}\n", false, 0);
+    let contract = contract_in(&dir);
+    let out = run_lens(&contract, 64, "plan", &claude, b"");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    assert!(dir.join("called").exists(), "材料が無い周は diff（0 byte）が cap の内側＝呼ぶ");
+    clean(&[&dir]);
+}
+
 /// lens の prompt に載る裁定の節の見出し（`s2-07l.309`）。
 ///
 /// ★契約 fixture にも diff fixture にも裁定 fixture にも現れない字面（節を消せば回数が 0 に落ちる）。

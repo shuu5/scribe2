@@ -11,6 +11,7 @@ guard=role-guard timing=in-loop on-failure=fail-closed boundary=hook::role_guard
 guard=contract-table timing=post-hoc on-failure=fail-closed boundary=pipe::table::TableError
 guard=intake-unfit timing=in-loop on-failure=fail-closed boundary=pipe::declaration::Unfit
 guard=intake-refuse timing=in-loop on-failure=fail-closed boundary=pipe::refuse::Refuse
+guard=review-gate timing=in-loop on-failure=fail-closed boundary=pipe::review::ReviewCheck
 guard=spawn-budget timing=in-loop on-failure=fail-closed boundary=pipe::Budget
 guard=approval-gate timing=in-loop on-failure=fail-closed boundary=pipe::approve::Approval
 guard=runner-stop timing=in-loop on-failure=fail-open boundary=headless::runner::Decision
@@ -27,4 +28,4 @@ guard=inject-refusal timing=in-loop on-failure=fail-closed boundary=seat::inject
 guard=cycle-refusal timing=in-loop on-failure=fail-closed boundary=seat::cycle::Cycle
 guard=externalize-refusal timing=in-loop on-failure=fail-closed boundary=seat::externalize::ExternalizeError
 guard=consume-refusal timing=in-loop on-failure=fail-closed boundary=seat::consume::ConsumeError
-polarity: guards=25 in-loop=20 post-hoc=5 fail-open=4
+polarity: guards=26 in-loop=21 post-hoc=5 fail-open=4

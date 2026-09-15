@@ -261,28 +261,25 @@ pub(super) fn run_id_of(out: &Output) -> String {
         .unwrap_or_default()
 }
 
-/// intake を 1 回通して run id を返す。
+/// intake を 1 回通して run id を返す（審査の段は**偽 PASS の lens**で 1 回通す・FR49・設計 contract-source.md §4
+/// 「人の関与 0」＝審査を飛ばす flag は歯にも無い）。
 pub(super) fn intake(repo: &Path, state: &Path, contract: &Path) -> String {
     intake_bead(repo, state, contract, "s2-2e5")
 }
 
+/// 審査の段（`pipe intake` の直後の lens 1 回）を通す偽 PASS の lens（gate の [`fake_lens`] と同じ作り）。
+/// marker は置き場の [`REVIEW_MARKER`]＝「審査の lens が起きた」を効果で測れる（gate の marker とは別名）。
+pub(super) fn review_lens_pass(state: &Path) -> String {
+    fake_lens(&state.join(REVIEW_MARKER), &lens_verdict("PASS"))
+}
+
+/// 審査の偽 lens が置く marker の名（置き場の直下）。
+pub(super) const REVIEW_MARKER: &str = "review-lens-ran";
+
 /// bead を選んで intake を 1 回通す。**run id は `<bead>-<秒>`** なので、同じ秒に
 /// 2 便を起こす歯は bead を分ける（同 bead だと id が衝突して 2 便目が断られる）。
 pub(super) fn intake_bead(repo: &Path, state: &Path, contract: &Path, bead: &str) -> String {
-    let rules = ceiling_rules(state);
-    let out = run_pipe(&[
-        "intake",
-        "--contract",
-        &contract.display().to_string(),
-        "--bead",
-        bead,
-        "--repo",
-        &repo.display().to_string(),
-        "--state-dir",
-        &state.display().to_string(),
-        "--rules",
-        &rules,
-    ]);
+    let out = intake_raw(repo, state, contract, bead);
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "intake は rc 0: {}", stderr_of(&out));
     run_id_of(&out)
 }
@@ -329,13 +326,13 @@ pub(super) fn event_count(state: &Path) -> usize {
         .unwrap_or(0)
 }
 
-/// intake を 1 回撃つ（rc を assert しない形）。
+/// intake を 1 回撃つ（rc を assert しない形・審査の lens は偽 PASS）。
 pub(super) fn intake_raw(repo: &Path, state: &Path, contract: &Path, bead: &str) -> Output {
     let rules = ceiling_rules(state);
     run_pipe(&[
         "intake", "--contract", &contract.display().to_string(), "--bead", bead,
         "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
-        "--rules", &rules,
+        "--rules", &rules, "--lens", &review_lens_pass(state),
     ])
 }
 
@@ -376,6 +373,8 @@ fn pipe_external_form() {
     lines.extend(vessel::pipe::cli::dispatch(&args(&["show"])).err);
     lines.extend(vessel::pipe::cli::dispatch(&args(&["stop"])).err);
     lines.extend(vessel::pipe::cli::dispatch(&args(&["nope"])).err);
+    // 審査の段を飛ばす口は無い（`--no-review` は usage で断る・AC22・設計 contract-source.md §4）。
+    lines.extend(vessel::pipe::cli::dispatch(&args(&["run", "--no-review"])).err);
     let form = lines.join("\n");
     insta::assert_snapshot!(form);
 }
@@ -829,13 +828,9 @@ pub(super) fn write_set_contract(dir: &Path, name: &str, entries: &[&str]) -> Pa
     path
 }
 
-/// intake を 1 回撃つ（**rc を測らない**＝断られる周の歯が使う）。
+/// intake を 1 回撃つ（**rc を測らない**＝断られる周の歯が使う・[`intake_raw`] と同じ形）。
 pub(super) fn try_intake(repo: &Path, state: &Path, contract: &Path, bead: &str) -> Output {
-    run_pipe(&[
-        "intake", "--contract", &contract.display().to_string(), "--bead", bead,
-        "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
-        "--rules", &ceiling_rules(state),
-    ])
+    intake_raw(repo, state, contract, bead)
 }
 
 /// 便の `RunStage` のうち段が `want` の件数。

@@ -203,6 +203,9 @@ pub fn parse_actor(text: &str) -> Option<&'static str> {
 pub enum Stage {
     /// 取り込み。
     Intake,
+    /// 契約の審査を通した（verdict は `review.json` と detail・PASS だけが spawn へ進む・FR49・設計
+    /// contract-source.md §4）。
+    Reviewed,
     /// 人の承認待ちで止まっている。
     Blocked,
     /// 席を立てた。
@@ -227,6 +230,7 @@ pub enum Stage {
 /// [`Stage`] の全 variant。
 pub const STAGES: &[Stage] = &[
     Stage::Intake,
+    Stage::Reviewed,
     Stage::Blocked,
     Stage::Spawned,
     Stage::Questioned,
@@ -243,6 +247,7 @@ impl Stage {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Intake => "Intake",
+            Self::Reviewed => "Reviewed",
             Self::Blocked => "Blocked",
             Self::Spawned => "Spawned",
             Self::Questioned => "Questioned",

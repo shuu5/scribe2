@@ -4,15 +4,18 @@
 //! `pipe::land`）へ渡す。`s2-07l.295` で `cli.rs` から純移動した（本文は不変・各段の手順は宣言順のまま）。
 //! 規則の値は rules 行から読む（数値を焼かない・C1 / C5）。
 
-use super::{broken, flag, int_row, need, refused, resolve, state_dir_of, Extra};
+use super::{broken, flag, int_row, list_row, need, refused, resolve, state_dir_of, Extra};
 use crate::cli_outcome::{Outcome, RC_BROKEN};
 use crate::fleet::store::{LockPolicy, StoreError};
 use crate::fleet::Stage;
 use crate::pipe::approve::{Approve, RC_BLOCKED};
 use crate::pipe::current;
+use crate::pipe::declaration::{self, Ceiling, CEILING_ROW, DENIED_ROW};
 use crate::pipe::gate::{Gate, Limits};
 use crate::pipe::land::{Land, Retire};
+use crate::pipe::review::{review, Review};
 use crate::rules::manifest::Manifest;
+use std::path::Path;
 
 /// gate が要る lens の本数を持つ rules 行。
 const ROW_LENS: &str = "gate.lens_count";
@@ -118,6 +121,46 @@ fn limits_of(manifest: &Manifest) -> Result<Limits, String> {
         reserve_memory_mb: int_row(manifest, ROW_RESERVE_MEMORY)?,
         slot_wait_s: int_row(manifest, ROW_SLOT_WAIT)?,
     })
+}
+
+/// 契約の審査の段（`pipe intake` の直後・`resume` の `Intake`・前提 stage = `Intake`・FR49・設計
+/// contract-source.md §4）。
+///
+/// lens は gate と同じ `--lens`（無ければ INCONCLUSIVE＝終端・fail-closed）。要件面の path は HEAD の宣言から
+/// 読む（`contracts check` と同じ読み口・無ければ既定）。読めない周は判定に届かず rc 2（判定を書かない）。
+pub(super) fn review_run(args: &[String], id: &str, manifest: &Manifest, policy: LockPolicy) -> Outcome {
+    let resolved = match resolve(args, id, &[Stage::Intake], &Extra::Nothing) {
+        Ok(found) => found,
+        Err(outcome) => return outcome,
+    };
+    let lens = match flag(args, "--lens") {
+        Ok(found) => found,
+        Err(reason) => return refused(reason),
+    };
+    let requirements = match requirements_of(&resolved.repo, manifest) {
+        Ok(found) => found,
+        Err(reason) => return broken(reason),
+    };
+    review(&Review {
+        run: id,
+        bead: &resolved.bead,
+        repo: &resolved.repo,
+        state_dir: &resolved.state_dir,
+        contract: &resolved.contract,
+        requirements: &requirements,
+        lens,
+        policy,
+    })
+}
+
+/// 要件面の repo 相対 path（HEAD の宣言 `requirements`・無ければ既定・[`declaration::table_facts`] の 1 本）。
+fn requirements_of(repo: &Path, manifest: &Manifest) -> Result<String, String> {
+    let commands = list_row(manifest, CEILING_ROW)?;
+    let denied = list_row(manifest, DENIED_ROW)?;
+    let ceiling = Ceiling { row: CEILING_ROW, commands: &commands, denied: &denied };
+    declaration::table_facts(repo, &ceiling)
+        .map(|facts| facts.requirements)
+        .map_err(|errors| errors.iter().map(ToString::to_string).collect::<Vec<String>>().join(" / "))
 }
 
 /// `pipe gate`。前提 stage = `Implemented` ∨ (`Gated` ∧ verdict が INCONCLUSIVE)。

@@ -23,6 +23,7 @@ pub mod land;
 pub mod move_proof;
 pub mod refuse;
 pub mod report;
+pub mod review;
 mod size;
 pub mod spawn;
 pub mod table;

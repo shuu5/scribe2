@@ -81,11 +81,11 @@ fn pipe_intake_records_run_in_fleet() {
         state.join("pipe").join(&id).join("contract.toml").exists(),
         "契約の写しが置き場に在る"
     );
-    // 現在地は event log から読める。
+    // 現在地は event log から読める（受付の直後に審査の段を通るので、現在地は `Reviewed`・FR49）。
     let out = run_pipe(&["show", "--run", &id, "--state-dir", &state.display().to_string(),
                          "--repo", &repo.display().to_string()]);
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "show は rc 0");
-    assert!(stdout_of(&out).contains("stage=Intake"), "{}", stdout_of(&out));
+    assert!(stdout_of(&out).contains("stage=Reviewed"), "{}", stdout_of(&out));
     clean(&[&repo, &state]);
 }
 
@@ -99,7 +99,7 @@ fn pipe_state_survives_process_restart() {
         .arg(&path)
         .args(["--bead", "s2-2e5", "--repo"])
         .arg(&repo)
-        .args(["--rules", &ceiling_rules(&state)])
+        .args(["--rules", &ceiling_rules(&state), "--lens", &review_lens_pass(&state)])
         .output()
         .expect("binary を起動できる");
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
@@ -111,7 +111,7 @@ fn pipe_state_survives_process_restart() {
         .output()
         .expect("binary を起動できる");
     assert_eq!(shown.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&shown));
-    assert!(stdout_of(&shown).contains("stage=Intake"), "{}", stdout_of(&shown));
+    assert!(stdout_of(&shown).contains("stage=Reviewed"), "{}", stdout_of(&shown));
     assert!(stdout_of(&shown).contains(&id), "{}", stdout_of(&shown));
     clean(&[&repo, &state]);
 }
@@ -123,11 +123,7 @@ fn pipe_intake_refuses_duplicate_run_id() {
     let id = intake(&repo, &state, &first);
     // stamp は秒までなので、同じ秒の再 intake は id が衝突する。**黙って上書きしない**。
     let second = write_contract(&repo, &["write-set"], &[r#"write-set = ["src/B.rs"]"#]);
-    let out = run_pipe(&[
-        "intake", "--contract", &second.display().to_string(), "--bead", "s2-2e5",
-        "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
-        "--rules", &ceiling_rules(&state),
-    ]);
+    let out = intake_raw(&repo, &state, &second, "s2-2e5");
     if out.status.code() == Some(i32::from(RC_OK)) {
         // 秒をまたいだ周は id が違う＝衝突していない。そのときは上書きが起きていない
         // ことだけを測る（時計に依存して flaky にしない）。
@@ -460,6 +456,7 @@ fn pipe_intake_accepts_self_hosted_declaration_under_embedded_ceiling() {
     let out = run_pipe(&[
         "intake", "--contract", &path.display().to_string(), "--bead", "s2-2e5",
         "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
+        "--lens", &review_lens_pass(&state),
     ]);
     assert_eq!(
         out.status.code(),
@@ -552,7 +549,7 @@ fn pipe_intake_names_ceiling_override_in_stdout() {
     let out = run_pipe(&[
         "intake", "--contract", &path.display().to_string(), "--bead", "s2-2e5",
         "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
-        "--rules", &rules,
+        "--rules", &rules, "--lens", &review_lens_pass(&state),
     ]);
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
     let line = stdout_of(&out).lines().next().unwrap_or_default().to_owned();
@@ -573,6 +570,7 @@ fn pipe_intake_names_ceiling_override_in_stdout() {
     let out = run_pipe(&[
         "intake", "--contract", &contract.display().to_string(), "--bead", "s2-2e5",
         "--repo", &plain.display().to_string(), "--state-dir", &plain_state.display().to_string(),
+        "--lens", &review_lens_pass(&plain_state),
     ]);
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
     assert!(!stdout_of(&out).contains("ceiling-overridden"), "差し替えていない周は出さない: {}", stdout_of(&out));
@@ -1207,13 +1205,7 @@ fn contract_closure_ext_cap_headroom_refuses_a_size_that_does_not_fit_the_file_o
         write_rules_capped(&state, name, fixture).display().to_string()
     };
     let roomy = rules("rules-roomy.toml", 40_000);
-    let intake = |contract: &Path, bead: &str, rules: &str| {
-        run_pipe(&[
-            "intake", "--contract", &contract.display().to_string(), "--bead", bead,
-            "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
-            "--rules", rules,
-        ])
-    };
+    let intake = |contract: &Path, bead: &str, rules: &str| intake_with_rules(&repo, &state, contract, bead, rules);
     let sized = |name: &str, size: &str, write_set: &str| {
         let lines: Vec<String> = contract_body()
             .into_iter()
@@ -1275,12 +1267,12 @@ fn sized_contract(repo: &Path, name: &str, size: &str, write_set: &str) -> PathB
     path
 }
 
-/// `--rules` を名指して intake を 1 回撃つ（rc を assert しない形）。
+/// `--rules` を名指して intake を 1 回撃つ（rc を assert しない形・審査の lens は偽 PASS）。
 fn intake_with_rules(repo: &Path, state: &Path, contract: &Path, bead: &str, rules: &str) -> Output {
     run_pipe(&[
         "intake", "--contract", &contract.display().to_string(), "--bead", bead,
         "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
-        "--rules", rules,
+        "--rules", rules, "--lens", &review_lens_pass(state),
     ])
 }
 
@@ -1301,7 +1293,7 @@ fn contract_closure_ext_shrink_item_is_exempt_from_the_file_headroom() {
     assert_eq!(shrink.status.code(), Some(i32::from(RC_OK)), "- の big.rs は余地を求めない: {}", stderr_of(&shrink));
     let id = run_id_of(&shrink);
     assert!(state.join("pipe").join(&id).is_dir(), "run dir が作られる: {id}");
-    assert_eq!(event_count(&state), 1, "RunCreated の 1 件");
+    assert_eq!(event_count(&state), 2, "RunCreated と審査の段（Reviewed）の 2 件");
     clean(&[&repo, &state]);
 }
 
@@ -1338,7 +1330,7 @@ fn contract_closure_ext_shrink_item_is_not_counted_in_the_core_estimate() {
     let shrunk = "\"-crates/toy/src/big.rs\", \"+crates/toy/src/new.rs\"";
     let shrink = intake_with_rules(&repo, &state, &sized_contract(&repo, "shrink.toml", "S", shrunk), "s2-sc", &tight);
     assert_eq!(shrink.status.code(), Some(i32::from(RC_OK)), "- を数えない 1 本の見積 100 は余地 150 に入る: {}", stderr_of(&shrink));
-    assert_eq!(event_count(&state), 1, "RunCreated の 1 件");
+    assert_eq!(event_count(&state), 2, "RunCreated と審査の段（Reviewed）の 2 件");
     clean(&[&repo, &state]);
 }
 
@@ -1543,7 +1535,7 @@ fn contract_derive_fills_write_set_for_a_row_without_one() {
     assert_eq!(copied_write_set(&state, &id), want, "写しの write-set は導出値（閉包 ∪ 歯の置き場 ∪ tests ∪ creates ∪ also）");
     let copied = fs::read_to_string(state.join("pipe").join(&id).join("contract.toml")).unwrap_or_default();
     assert!(copied.contains("verify = [\"sh verify-ok.sh\"]") && !copied.contains("creates"), "他の欄は逐語・新欄は写さない: {copied}");
-    assert_eq!(event_count(&state), 1, "RunCreated の 1 件");
+    assert_eq!(event_count(&state), 2, "RunCreated と審査の段（Reviewed）の 2 件");
     clean(&[&repo, &state]);
 }
 
@@ -1687,5 +1679,302 @@ fn contract_derive_teeth_place_uses_base_test_names() {
     let other = intake_raw(&repo, &state, &pointed_contract(&repo, "b.toml", "b"), "s2-b");
     assert_eq!(other.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&other));
     assert_eq!(copied_write_set(&state, &run_id_of(&other)), ["crates/toy/tests/helper.rs"], "fn 名で解く（file 名ではない）");
+    clean(&[&repo, &state]);
+}
+
+// ───── 契約の審査の段（`s2-07l.241`・設計 contract-source.md §4・SRS FR49 / FR9 / AC22・接頭辞 `pipe_review_`） ─────
+
+/// 起こされたら marker を置く fake runner（**構築点の呼出**を効果で測る面）。
+fn marker_runner(marker: &Path) -> String {
+    format!("touch '{}'; exit 0", marker.display())
+}
+
+/// 便の `review.json` を key/value の並びとして読む（無ければ空）。
+fn review_pairs(state: &Path, id: &str) -> Vec<(String, vessel::fleet::json_lite::Value)> {
+    let text = fs::read_to_string(state.join("pipe").join(id).join("review.json")).unwrap_or_default();
+    vessel::fleet::json_lite::parse_object(text.trim()).unwrap_or_default()
+}
+
+/// 便の審査の材料の dir（`<run_dir>/review/`）。
+fn review_dir(state: &Path, id: &str) -> PathBuf {
+    state.join("pipe").join(id).join("review")
+}
+
+/// 偽 lens が FAIL を返す契約を `pipe run` で流し、`Reviewed(FAIL)` で止まった便の id と runner の marker（**置かれて
+/// いない**）を返す。runner は起きていない（構築点の呼出 0）ことをここで assert する。
+fn reviewed_fail(repo: &Path, state: &Path) -> (String, PathBuf) {
+    let path = write_contract(repo, &[], &[]);
+    let lens_marker = state.join("review-fail-lens-ran");
+    let runner_marker = state.join("runner-ran");
+    let out = run_pipe(&[
+        "run", "--contract", &path.display().to_string(), "--bead", "s2-2e5",
+        "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
+        "--rules", &ceiling_rules(state), "--runner", &marker_runner(&runner_marker),
+        "--lens", &fake_lens(&lens_marker, &lens_verdict("FAIL")),
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "FAIL は rc 1: {}", stderr_of(&out));
+    assert!(lens_marker.exists(), "審査の lens は 1 回起きた");
+    assert!(!runner_marker.exists(), "runner は起きない（構築点の呼出 0）");
+    let id = run_id_of(&out);
+    assert!(!id.is_empty(), "止まった周も run id を出す: {}", stdout_of(&out));
+    assert!(
+        stdout_of(&out).contains(&format!("run={id} stage=Reviewed verdict=FAIL")),
+        "審査の判定行: {}",
+        stdout_of(&out)
+    );
+    (id, runner_marker)
+}
+
+/// (a) 偽 lens が FAIL を返す契約は `Reviewed(FAIL)` で止まり **runner は 1 度も起きない**（構築点の呼出 0・AC22）:
+/// `pipe run` は rc 1 で intake の判定行と `stage=Reviewed verdict=FAIL` を出し、trail は `RunCreated(Intake)` →
+/// `RunStage(Reviewed, verdict:FAIL)` で終わる（Spawned 無し・worktree 無し）。`review.json` に verdict と evidence が
+/// 残り、`show` は `Reviewed` を名乗る。
+#[test]
+fn pipe_review_fail_stops_before_spawn() {
+    let (repo, state) = repo_with_state();
+    let (id, _) = reviewed_fail(&repo, &state);
+    assert_eq!(
+        trail(&state, &id),
+        vec![
+            (EventKind::RunCreated, Some(Stage::Intake), Some("classes:".to_owned())),
+            (EventKind::RunStage, Some(Stage::Reviewed), Some("verdict:FAIL".to_owned())),
+        ],
+        "Reviewed(FAIL) が終端（Spawned 無し）"
+    );
+    assert!(!worktree_of(&repo, &id).exists(), "worktree を作らない");
+    let pairs = review_pairs(&state, &id);
+    assert_eq!(value_of(&pairs, "verdict"), "FAIL", "review.json の verdict");
+    assert_eq!(value_of(&pairs, "evidence"), "fake", "lens の evidence を写す");
+    assert_eq!(value_of(&pairs, "run"), id, "run id を持つ");
+    assert!(show_line(&repo, &state, &id).contains("stage=Reviewed"), "段は Reviewed");
+    clean(&[&repo, &state]);
+}
+
+/// (a'') `Reviewed(FAIL)` は終端: `spawn` / `resume` は段違いとして rc 1 で何も書かず runner を起こさず、`stop` は
+/// 終端として断る。終端ゆえ同じ write-set の 2 本目の intake は交差で断られない（`live` は偽）。
+#[test]
+fn pipe_review_fail_is_terminal_for_spawn_resume_stop_and_overlap() {
+    let (repo, state) = repo_with_state();
+    let (id, runner_marker) = reviewed_fail(&repo, &state);
+    let before = event_count(&state);
+    let spawned = spawn_with(&repo, &state, &id, &marker_runner(&runner_marker));
+    assert_eq!(spawned.status.code(), Some(i32::from(RC_REFUSED)), "spawn は段違い: {}", stderr_of(&spawned));
+    assert!(stderr_of(&spawned).contains("Reviewed") && stderr_of(&spawned).contains("verdict=FAIL"), "{}", stderr_of(&spawned));
+    let resumed = run_pipe(&[
+        "resume", "--run", &id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(), "--runner", &marker_runner(&runner_marker),
+    ]);
+    assert_eq!(resumed.status.code(), Some(i32::from(RC_REFUSED)), "resume も起こさない: {}", stderr_of(&resumed));
+    assert!(!runner_marker.exists(), "spawn / resume のどちらでも runner は起きない");
+    assert_eq!(event_count(&state), before, "段違いは event を 1 件も書かない");
+    let stopped = run_pipe(&["stop", "--run", &id, "--state-dir", &state.display().to_string()]);
+    assert_eq!(stopped.status.code(), Some(i32::from(RC_REFUSED)), "終端の便は stop で断る: {}", stderr_of(&stopped));
+    assert!(stderr_of(&stopped).contains("終端"), "{}", stderr_of(&stopped));
+    // 終端ゆえ交差の母集団に入らない（`live` は偽）。
+    let next = write_set_contract(&repo, "next.toml", &["src/lib.rs"]);
+    let again = try_intake(&repo, &state, &next, "s2-next");
+    assert_eq!(again.status.code(), Some(i32::from(RC_OK)), "FAIL の便と交差しても受理: {}", stderr_of(&again));
+    clean(&[&repo, &state]);
+}
+
+/// (a') lens が無い・出力を読めない周は INCONCLUSIVE（FR9・偽の PASS を作らない）で、終端として spawn を断る。
+/// `--lens` 無しの intake は rc 3 で `verdict:INCONCLUSIVE` を記帳し evidence が `--lens` を名指す。
+#[test]
+fn pipe_review_inconclusive_without_lens_or_unreadable_output_is_terminal() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let rules = ceiling_rules(&state);
+    let out = run_pipe(&[
+        "intake", "--contract", &path.display().to_string(), "--bead", "s2-none",
+        "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(), "--rules", &rules,
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_INCONCLUSIVE)), "lens 無しは rc 3: {}", stderr_of(&out));
+    let id = run_id_of(&out);
+    assert_eq!(stages(&state, &id), vec![(Some(Stage::Reviewed), Some("verdict:INCONCLUSIVE".to_owned()))]);
+    assert!(value_of(&review_pairs(&state, &id), "evidence").contains("--lens"), "{:?}", review_pairs(&state, &id));
+    let marker = state.join("runner-ran");
+    let spawned = spawn_with(&repo, &state, &id, &marker_runner(&marker));
+    assert_eq!(spawned.status.code(), Some(i32::from(RC_REFUSED)), "INCONCLUSIVE は起こさない: {}", stderr_of(&spawned));
+    assert!(stderr_of(&spawned).contains("verdict=INCONCLUSIVE"), "{}", stderr_of(&spawned));
+    assert!(!marker.exists(), "runner は起きない");
+    // 読めない出力（JSON 行が無い）・3 値の外・rc≠0 の lens も INCONCLUSIVE。
+    for (bead, lens, want) in [
+        ("s2-nojson", "cat >/dev/null; echo not-json".to_owned(), "JSON 行が無い"),
+        ("s2-3v", format!("cat >/dev/null; echo '{}'", lens_verdict("MAYBE")), "3 値でない"),
+        ("s2-rc", "cat >/dev/null; exit 7".to_owned(), "rc 7"),
+    ] {
+        let out = run_pipe(&[
+            "intake", "--contract", &path.display().to_string(), "--bead", bead,
+            "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
+            "--rules", &rules, "--lens", &lens,
+        ]);
+        assert_eq!(out.status.code(), Some(i32::from(RC_INCONCLUSIVE)), "{bead}: {}", stderr_of(&out));
+        let pairs = review_pairs(&state, &run_id_of(&out));
+        assert_eq!(value_of(&pairs, "verdict"), "INCONCLUSIVE", "{bead}");
+        assert!(value_of(&pairs, "evidence").contains(want), "{bead}: {pairs:?}");
+    }
+    clean(&[&repo, &state]);
+}
+
+/// (b) PASS の契約は `Reviewed(PASS)` を経て Spawned へ進み、verdict が便の記録（`review.json` と event）に残る（AC22）。
+/// 審査の材料は run dir の `review/`（契約の写し・設計の節・要件本文）に置かれ、lens の `{contract}` はその写しの
+/// path・`{worktree}` は base の repo で埋まる。pointer でない `design` と読めない要件面は材料の本文に明示される。
+#[test]
+fn pipe_review_pass_spawns() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let seen = state.join("lens-holes");
+    let lens = format!(
+        "cat >/dev/null; printf '%s\\n' '{{contract}}' '{{worktree}}' > '{}'; echo '{}'",
+        seen.display(),
+        lens_verdict("PASS")
+    );
+    let out = run_pipe(&[
+        "intake", "--contract", &path.display().to_string(), "--bead", "s2-2e5",
+        "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
+        "--rules", &ceiling_rules(&state), "--lens", &lens,
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "PASS は rc 0: {}", stderr_of(&out));
+    let id = run_id_of(&out);
+    assert!(stdout_of(&out).contains(&format!("run={id} stage=Reviewed verdict=PASS")), "{}", stdout_of(&out));
+    assert_eq!(stages(&state, &id), vec![(Some(Stage::Reviewed), Some("verdict:PASS".to_owned()))]);
+    assert_eq!(event_count(&state), 2, "RunCreated + Reviewed");
+    assert_eq!(value_of(&review_pairs(&state, &id), "verdict"), "PASS");
+    let dir = review_dir(&state, &id);
+    let holes = fs::read_to_string(&seen).unwrap_or_default();
+    assert_eq!(
+        holes.lines().collect::<Vec<&str>>(),
+        [dir.join("contract.toml").display().to_string(), repo.display().to_string()],
+        "{{contract}} は審査の写し・{{worktree}} は base の repo"
+    );
+    assert_eq!(dir_names(&dir), ["contract.toml", "design.txt", "requirements.txt"], "材料の 3 file");
+    assert_eq!(
+        fs::read(dir.join("contract.toml")).ok(),
+        fs::read(state.join("pipe").join(&id).join("contract.toml")).ok(),
+        "契約の写しは byte で同じ"
+    );
+    let design = fs::read_to_string(dir.join("design.txt")).unwrap_or_default();
+    assert!(design.contains("設計 pointer でない") && design.contains("docs/design/pipeline.md"), "{design}");
+    let requirements = fs::read_to_string(dir.join("requirements.txt")).unwrap_or_default();
+    assert!(requirements.contains("要件面を読めない") && requirements.contains("design-intent/spec/srs.html"), "{requirements}");
+    // PASS の便だけが起こせる。
+    let spawned = spawn_with(&repo, &state, &id, TOY_COMMIT);
+    assert_eq!(spawned.status.code(), Some(i32::from(RC_OK)), "PASS → Spawned: {}", stderr_of(&spawned));
+    let listed: Vec<Option<Stage>> = stages(&state, &id).into_iter().map(|(stage, _)| stage).collect();
+    assert_eq!(listed, vec![Some(Stage::Reviewed), Some(Stage::Spawned), Some(Stage::Implemented)], "Reviewed → Spawned → Implemented");
+    assert!(show_line(&repo, &state, &id).contains("stage=Implemented"));
+    clean(&[&repo, &state]);
+}
+
+/// (b') 設計 pointer の契約は base の設計 doc からその行の `section` の節の本文を、要件面（`.html` の `id=`）から `req` の
+/// 各 id の本文（tag 無し）を材料に写す。無い id はその旨を行に明示する（§4「順序」: 生成 (b) の前でも穴の出所は行の pointer）。
+#[test]
+fn pipe_review_reads_design_section_and_requirements_from_base() {
+    let row = derive_row("a", &[("write-set", "[\"crates/toy/src/tint.rs\"]"), ("section", "\"2\"")]);
+    let doc = table_doc(&table_region(&[row])).replace("## 2. 型\n\n本文。", "## 2. 型\n\n節二の本文 SECTION-TWO-MARK。");
+    let (repo, state) = derive_repo(&doc);
+    let lines: Vec<String> = contract_body()
+        .into_iter()
+        .filter(|line| !line.starts_with("design") && !line.starts_with("req"))
+        .chain(["design = \"docs/design/toy.md#a\"".to_owned(), "req = [\"FR2\", \"FR9\"]".to_owned()])
+        .collect();
+    let contract = repo.join("a.toml");
+    fs::write(&contract, format!("{}\n", lines.join("\n"))).expect("契約 file を書ける");
+    let out = intake_raw(&repo, &state, &contract, "s2-a");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    let dir = review_dir(&state, &run_id_of(&out));
+    let design = fs::read_to_string(dir.join("design.txt")).unwrap_or_default();
+    assert!(design.starts_with("docs/design/toy.md#a §2\n"), "節の出所を名乗る: {design}");
+    assert!(design.contains("SECTION-TWO-MARK"), "節 2 の本文: {design}");
+    assert!(!design.contains("何を解くか") && !design.contains("[[contract]]"), "他の節と契約表は写さない: {design}");
+    let requirements = fs::read_to_string(dir.join("requirements.txt")).unwrap_or_default();
+    assert_eq!(requirements.trim_end(), "FR2: 2\nFR9: （要件面 design-intent/spec/srs.html に無い）", "{requirements}");
+    clean(&[&repo, &state]);
+}
+
+/// (c) 審査を飛ばす口は無い: `--no-review` は `intake` / `run` / `resume` のどれでも usage で断り（rc 1）、event も
+/// run dir も作らない（AC22・C16）。
+#[test]
+fn pipe_review_has_no_skip_flag() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let rules = ceiling_rules(&state);
+    let (contract, repo_text, state_text) = (path.display().to_string(), repo.display().to_string(), state.display().to_string());
+    let common: [&str; 12] = [
+        "--contract", &contract, "--bead", "s2-2e5", "--repo", &repo_text,
+        "--state-dir", &state_text, "--rules", &rules, "--runner", TOY_COMMIT,
+    ];
+    for head in ["intake", "run", "resume"] {
+        let mut args = vec![head, "--no-review"];
+        args.extend(common.iter().copied());
+        let out = run_pipe(&args);
+        assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{head} --no-review は rc 1: {}", stderr_of(&out));
+        let err = stderr_of(&out);
+        assert!(err.contains("--no-review"), "{head}: 断った引数を名指す: {err}");
+        assert!(err.contains("usage: "), "{head}: usage を出す: {err}");
+        assert!(out.stdout.is_empty(), "{head}: stdout 0 byte");
+    }
+    assert_eq!(event_count(&state), 0, "event を 1 件も書かない");
+    assert!(!state.join("pipe").exists(), "run dir も作らない");
+    clean(&[&repo, &state]);
+}
+
+/// (d) `Stage::Reviewed` は `Intake` の直後（母集団 11 段・字面が往復する）・`Guard::Review` は `IntakeRefuse` の直後
+/// （in-loop / fail-closed・境界は `pipe::review::ReviewCheck`）で、極性一覧の行に載る（C2 / C11.2 / C16.2）。
+#[test]
+fn pipe_review_stage_and_guard_are_pinned_in_declaration_order() {
+    use vessel::fleet::STAGES;
+    use vessel::polarity::{Guard, OnFailure, Timing, ALL};
+    let at = |want: Stage| STAGES.iter().position(|stage| *stage == want);
+    assert_eq!(STAGES.len(), 11, "段は 11 個: {STAGES:?}");
+    assert_eq!(at(Stage::Reviewed), at(Stage::Intake).map(|found| found + 1), "Reviewed は Intake の直後");
+    assert!(is_declaration_order(STAGES, |stage| stage as usize), "STAGES は宣言順");
+    assert_eq!(Stage::Reviewed.as_str(), "Reviewed");
+    assert_eq!(Stage::parse("Reviewed"), Some(Stage::Reviewed), "as_str ↔ parse の往復");
+    let guard_at = |want: Guard| ALL.iter().position(|guard| *guard == want);
+    assert_eq!(guard_at(Guard::Review), guard_at(Guard::IntakeRefuse).map(|found| found + 1), "Review は IntakeRefuse の直後");
+    assert!(is_declaration_order(ALL, |guard| guard as usize), "ALL は宣言順");
+    assert_eq!(Guard::Review.polarity().timing, Timing::InLoop, "spawn の前に止める");
+    assert_eq!(Guard::Review.polarity().on_failure, OnFailure::FailClosed, "読めない判定は起こさない");
+    assert_eq!(Guard::Review.boundary(), "pipe::review::ReviewCheck");
+    assert_eq!(Guard::Review.line(), "guard=review-gate timing=in-loop on-failure=fail-closed boundary=pipe::review::ReviewCheck");
+    let listed = Command::new(bin()).arg("polarity").output().expect("binary を起動できる");
+    assert!(stdout_of(&listed).lines().any(|line| line == Guard::Review.line()), "極性一覧に載る: {}", stdout_of(&listed));
+}
+
+/// (e) `Intake` で止まった便（`RunCreated` の直後に process が落ちた形）の `resume` は**先に審査**し、PASS なら
+/// 起こし・FAIL なら起こさない（同じ形で 2 便を対で測る）。
+#[test]
+fn pipe_review_resume_from_intake_reviews_before_spawning() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let seeded = intake(&repo, &state, &path);
+    stop_run_ok(&state, &seeded);
+    for (id, verdict, want_rc, spawned) in [("s2-pass-1", "PASS", RC_OK, true), ("s2-fail-1", "FAIL", RC_REFUSED, false)] {
+        // 受付だけ済んだ便を組む: 写し面（契約・vessel・repo）は seed の便から写し、event は `RunCreated` 1 件。
+        let dir = state.join("pipe").join(id);
+        fs::create_dir_all(&dir).expect("run dir を作れる");
+        for name in ["contract.toml", "vessel.toml", "repo"] {
+            fs::copy(state.join("pipe").join(&seeded).join(name), dir.join(name)).expect("写しを置ける");
+        }
+        let out = Command::new(bin())
+            .args(["fleet", "record", "--kind", "RunCreated", "--stage", "Intake", "--run", id, "--bead", "s2-live", "--state-dir"])
+            .arg(&state)
+            .output()
+            .expect("binary を起動できる");
+        assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "fleet record: {}", stderr_of(&out));
+        assert!(show_line(&repo, &state, id).contains("stage=Intake"), "前提: 審査前の便");
+        let marker = state.join(format!("runner-ran-{id}"));
+        let out = run_pipe(&[
+            "resume", "--run", id, "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
+            "--rules", &ceiling_rules(&state), "--runner", &marker_runner(&marker),
+            "--lens", &fake_lens(&state.join(format!("lens-{id}")), &lens_verdict(verdict)),
+        ]);
+        assert_eq!(out.status.code(), Some(i32::from(want_rc)), "{verdict}: {}", stderr_of(&out));
+        assert_eq!(stage_count(&state, id, Stage::Reviewed), 1, "{verdict}: 審査の段が 1 件");
+        assert_eq!(marker.exists(), spawned, "{verdict}: runner が起きたか");
+        assert_eq!(stage_count(&state, id, Stage::Spawned), usize::from(spawned), "{verdict}: Spawned の件数");
+        assert_eq!(value_of(&review_pairs(&state, id), "verdict"), verdict);
+    }
     clean(&[&repo, &state]);
 }

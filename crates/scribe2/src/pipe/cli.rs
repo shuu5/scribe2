@@ -26,6 +26,7 @@ use super::follow;
 use super::gate::{self, Check, Verdict, RC_INCONCLUSIVE};
 use super::land::{self, verdict_of, REBASE_EMPTY};
 use super::ratelimit::ride_out_rate_limit;
+use super::review::ReviewCheck;
 use super::stop::stop;
 use super::{
     contract_path, current, head_of, last_stage_detail, question_of_run, repo_of_run, repo_path,
@@ -40,9 +41,9 @@ use crate::name::NAME;
 use crate::rules::manifest::Manifest;
 use crate::rules::RuleValue;
 use intake::{intake, run_repo};
-use run::{launch, run_all, start};
+use run::{chain, launch, run_all, start};
 use std::path::{Path, PathBuf};
-use step::{answer_run, approve_run, gate_run, land_run, retire_run};
+use step::{answer_run, approve_run, gate_run, land_run, retire_run, review_run};
 
 /// `pipe` の使い方。
 pub fn usage() -> String {
@@ -51,8 +52,15 @@ pub fn usage() -> String {
     )
 }
 
+/// **作らない口**の字面（設計 contract-source.md §4「人の関与 0」・AC22・C16）。審査の段を人が飛ばす flag は
+/// 無い——黙って読み飛ばすと「効いている」ように見える launcher が残るので、usage で断る（lens の `--cap` と同型）。
+const REFUSED_FLAGS: [&str; 1] = ["--no-review"];
+
 /// `pipe` に続く引数を捌く。
 pub fn dispatch(args: &[String]) -> Outcome {
+    if let Some(found) = args.iter().find(|arg| REFUSED_FLAGS.contains(&arg.as_str())) {
+        return Outcome::failed(RC_REFUSED, vec![format!("pipe: 未知の引数 {found}（審査の段を飛ばす口は無い）"), usage()]);
+    }
     let manifest = match manifest_of(args) {
         Ok(found) => found,
         Err(reason) => return refused(reason),
@@ -177,12 +185,15 @@ pub(super) fn state_dir_of(args: &[String]) -> Result<PathBuf, String> {
 /// 便が live（終端でない）か。**段の網羅 match で書く**（段が増えたら compile で気付く）。
 ///
 /// 終端 = `Landed` / `Failed` / `Stopped`、または `Gated` で verdict が FAIL（pipeline.md §4
-/// 「FAIL は終端」）。`RateLimited` は終端でない（口座の窓の都合で止まっただけ・ADR-0020 §2.1）。`Gated` の判定を読めない周は `None`＝**測れなかった**で、呼び手が
-/// 断る側へ倒す（読めない判定を「終端でない」にも「終端」にも読み替えない）。
+/// 「FAIL は終端」）、または `Reviewed` で verdict が PASS でない（contract-source.md §4「FAIL / INCONCLUSIVE は
+/// 終端」）。`RateLimited` は終端でない（口座の窓の都合で止まっただけ・ADR-0020 §2.1）。`Gated` / `Reviewed` の
+/// 判定を読めない周は `None`＝**測れなかった**で、呼び手が断る側へ倒す（読めない判定を「終端でない」にも
+/// 「終端」にも読み替えない）。
 pub(super) fn live(state_dir: &Path, id: &str, stage: Stage) -> Option<bool> {
     match stage {
         Stage::Landed | Stage::Failed | Stage::Stopped => Some(false),
         Stage::Gated => verdict_of(state_dir, id).map(|found| found != Verdict::Fail),
+        Stage::Reviewed => ReviewCheck::judge(state_dir, id).live(),
         Stage::Intake
         | Stage::Blocked
         | Stage::Spawned
@@ -230,6 +241,9 @@ pub(super) enum Extra {
     /// **畳んで**よいか（`Failed` は detail が `rebase-empty` / `rebase-conflict` の周だけ・
     /// `Gated` は verdict が FAIL の周だけ）。
     Retire,
+    /// **起こして**よいか（`Reviewed` は `review.json` の verdict が PASS の周だけ・FR49・[`ReviewCheck`]）。
+    /// 他の段（`Blocked` / `Questioned` / `Implemented` からの起こし直し）は段の一致だけで足りる。
+    Spawn,
 }
 
 /// 段の前提を確かめ、材料を永続面から解く。**3 つの段（spawn / gate / land）が共有する**。
@@ -285,6 +299,8 @@ pub(super) fn resolve(
 ///   畳める理由に読み替えない・fail-closed）。
 /// - `Gated`: **畳めるのは verdict が FAIL の周だけ**（判定に届いた終端・`.132` の memo）。
 ///   PASS はまだ land が残っており、INCONCLUSIVE は測り直せる側ゆえ断る。
+/// - `Reviewed`: **起こせるのは verdict が PASS の周だけ**（FR49・設計 contract-source.md §4「効き方」）。
+///   FAIL / INCONCLUSIVE は終端で、判定を読めない周も起こさない（fail-closed・[`ReviewCheck`]）。
 ///
 /// **理由も名乗る**: 段違いの一般則で断っている事実と、その便が通らない理由は別の情報で、
 /// 片方だけだと読み手に届かない。
@@ -292,6 +308,10 @@ fn discriminate(extra: &Extra, state_dir: &Path, id: &str, stage: Stage) -> Resu
     match (extra, stage) {
         (&Extra::Regate, Stage::Gated) => gated_is(state_dir, id, Verdict::Inconclusive),
         (&Extra::Retire, Stage::Gated) => gated_is(state_dir, id, Verdict::Fail),
+        (&Extra::Spawn, Stage::Reviewed) => match ReviewCheck::judge(state_dir, id) {
+            ReviewCheck::Passed => Ok(()),
+            found => Err(refused(format!("run {id} の段は Reviewed である（verdict={}）", found.as_str()))),
+        },
         (&Extra::Retire, Stage::Failed) => {
             let detail = last_stage_detail(state_dir, id);
             let foldable = detail.as_deref().is_some_and(|found| {
@@ -305,7 +325,7 @@ fn discriminate(extra: &Extra, state_dir: &Path, id: &str, stage: Stage) -> Resu
                 ))),
             }
         }
-        (&Extra::Nothing | &Extra::Regate | &Extra::Retire, _) => Ok(()),
+        (&Extra::Nothing | &Extra::Regate | &Extra::Retire | &Extra::Spawn, _) => Ok(()),
     }
 }
 
@@ -411,10 +431,7 @@ fn resume(args: &[String], manifest: &Manifest, policy: LockPolicy) -> Outcome {
         // それ以外の `Implemented` は従来どおり gate。
         Ok(Stage::Implemented) => match follow_pending(&state_dir, &id) {
             false => gate_run(args, &id, manifest, policy),
-            true => match need(args, "--runner") {
-                Err(reason) => refused(reason),
-                Ok(runner) => launch(args, &id, runner, policy, &[Stage::Implemented]),
-            },
+            true => relaunch(args, &id, policy, Stage::Implemented),
         },
         // Gated の先は判定で分かれる。**INCONCLUSIVE は land を試さない**——測れて
         // いない便に land の「PASS でない」を返すのは、吸収状態を言い換えただけである。
@@ -429,10 +446,14 @@ fn resume(args: &[String], manifest: &Manifest, policy: LockPolicy) -> Outcome {
             },
             _ => land_run(args, &id, manifest, policy),
         },
+        // 審査を通っていない便（`RunCreated` の直後に process が落ちた周）は**先に審査**し、PASS の周だけ
+        // 起こす（FR49・設計 contract-source.md §4「効き方」）。審査の段の event と `review.json` はここで残る。
         Ok(Stage::Intake) => match need(args, "--runner") {
             Err(reason) => refused(reason),
-            Ok(runner) => launch(args, &id, runner, policy, &[Stage::Intake]),
+            Ok(runner) => review_then_launch(args, &id, runner, manifest, policy),
         },
+        // `Reviewed` から起こせるのは verdict が PASS の周だけ（[`Extra::Spawn`] が弁別する）。
+        Ok(Stage::Reviewed) => relaunch(args, &id, policy, Stage::Reviewed),
         // Blocked から先へ進めるのは承認 event が在る周だけ。未承認は **rc 3 のまま
         // 何も書かない**——待っている事実は既に Blocked が記帳しており、resume の
         // たびに ApprovalRequested を積むと「何回聞いたか」が事実と食い違う。
@@ -441,10 +462,7 @@ fn resume(args: &[String], manifest: &Manifest, policy: LockPolicy) -> Outcome {
                 RC_BLOCKED,
                 format!("pipe: run {id} は承認待ちである（pipe approve --words \"<user の逐語>\"）"),
             ),
-            true => match need(args, "--runner") {
-                Err(reason) => refused(reason),
-                Ok(runner) => launch(args, &id, runner, policy, &[Stage::Blocked]),
-            },
+            true => relaunch(args, &id, policy, Stage::Blocked),
         },
         // Questioned から先へ進めるのは**最新の質問への回答**が在る周だけ（`Blocked` と同型・
         // FR32）。無ければ rc 3 で何も書かない（待っている事実は Questioned が既に持つ）。
@@ -453,10 +471,7 @@ fn resume(args: &[String], manifest: &Manifest, policy: LockPolicy) -> Outcome {
                 RC_BLOCKED,
                 format!("pipe: run {id} は回答待ちである（pipe answer --run {id} --words \"<回答の逐語>\"）"),
             ),
-            true => match need(args, "--runner") {
-                Err(reason) => refused(reason),
-                Ok(runner) => launch(args, &id, runner, policy, &[Stage::Questioned]),
-            },
+            true => relaunch(args, &id, policy, Stage::Questioned),
         },
         // 上限で止まった便は器が別口座を選んで起こし直す（設計 account-autonomy.md §4・FR37）。人の
         // 操作は要らない（候補なしは reset まで待つ・終端は stop だけ）。
@@ -466,6 +481,33 @@ fn resume(args: &[String], manifest: &Manifest, policy: LockPolicy) -> Outcome {
         },
         Ok(stage) => refused(format!("run {id} の段 {} からは再開しない", stage.as_str())),
     }
+}
+
+/// `--runner` を読んで、その段の便を起こし直す（`resume` の各段が共有する形・`--runner` 欠けは rc 1）。
+fn relaunch(args: &[String], id: &str, policy: LockPolicy, stage: Stage) -> Outcome {
+    match need(args, "--runner") {
+        Err(reason) => refused(reason),
+        Ok(runner) => launch(args, id, runner, policy, &[stage]),
+    }
+}
+
+/// 審査（`Intake` → `Reviewed`）を通してから起こす（`pipe run` と `resume` が共有する 1 本・FR49）。
+///
+/// 審査が PASS でない周はその判定行と rc（FAIL = 1 / INCONCLUSIVE = 3）で止まり、**runner を起こさない**。
+/// PASS の周だけ [`launch`] へ進む（[`Extra::Spawn`] が `review.json` を読み直す＝判定の読み手は 1 本）。
+pub(super) fn review_then_launch(
+    args: &[String],
+    id: &str,
+    runner: &str,
+    manifest: &Manifest,
+    policy: LockPolicy,
+) -> Outcome {
+    let mut lines = Vec::new();
+    if let Some(stopped) = chain(&mut lines, review_run(args, id, manifest, policy)) {
+        return stopped;
+    }
+    let spawned = launch(args, id, runner, policy, &[Stage::Reviewed]);
+    chain(&mut lines, spawned).unwrap_or_else(|| Outcome::ok(lines))
 }
 
 /// `Implemented` の便が**起こし直しの続き**か（設計 pipeline-conflict.md §3 の `resume`）。
