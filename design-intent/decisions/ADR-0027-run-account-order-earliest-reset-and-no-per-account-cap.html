@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="folio-doc-type" content="adr">
+<meta name="folio-layer" content="project">
+<meta name="folio-version" content="0.4.6">
+<meta name="folio-status" content="accepted">
+<meta name="folio-stakeholders" content="Developer, AI Agent, External Reviewer">
+<meta name="folio-adr-id" content="0027">
+<meta name="folio-adr-date" content="2026-09-14">
+<title>ADR-0027 — 便用の口座は reset が最も近い口座から選び、 同点は走行中の便が少ない口座に倒し、 1 口座あたりの便数で候補を絞らない (ADR-0020 §2.2 の便用の規則を supersede)</title>
+<link rel="stylesheet" href="../../common.css">
+<script type="application/ld+json">
+{
+  "@context": {
+    "dc": "http://purl.org/dc/terms/",
+    "schema": "https://schema.org/",
+    "folio": "https://folio.dev/spec/v1/"
+  },
+  "@id": "./ADR-0027-run-account-order-earliest-reset-and-no-per-account-cap.html",
+  "@type": "schema:TechArticle",
+  "dc:isPartOf": [
+    { "@id": "./README.html" }
+  ],
+  "dc:title": "ADR-0027 — 便用の口座は reset が最も近い口座から選び、 同点は走行中の便が少ない口座に倒し、 1 口座あたりの便数で候補を絞らない (ADR-0020 §2.2 の便用の規則を supersede)",
+  "folio:version": "0.4.6",
+  "folio:stakeholders": ["Developer", "AI Agent", "External Reviewer"],
+  "dc:references": [
+    { "@id": "../spec/constitution.html#c2" },
+    { "@id": "../spec/constitution.html#c7" },
+    { "@id": "../spec/constitution.html#c9" },
+    { "@id": "../spec/constitution.html#c10" },
+    { "@id": "../spec/constitution.html#n2" },
+    { "@id": "../spec/srs.html#FR4" },
+    { "@id": "../spec/srs.html#FR33" },
+    { "@id": "../spec/srs.html#FR36" },
+    { "@id": "../spec/srs.html#FR37" },
+    { "@id": "../spec/srs.html" },
+    { "@id": "./ADR-0004-mvp-persistence-and-cross-version-formats.html" },
+    { "@id": "./ADR-0017-account-allowance-measured-into-event-log.html" },
+    { "@id": "./ADR-0020-account-autonomy-limit-stop-resume-and-selection.html" },
+    { "@id": "./ADR-0022-seat-roles-are-typed-and-enforced-by-hooks.html" },
+    { "@id": "./ADR-0024-idle-window-reset-time-is-optional-in-allowance-row.html" }
+  ]
+}
+</script>
+</head>
+<body>
+<!-- folio:chrome-top -->
+<a class="skip-link" href="#s1-context">本文へスキップ</a>
+<nav class="breadcrumb" aria-label="パンくず"><ol>
+  <li><a href="../index.html">design-intent</a></li>
+  <li><a href="./README.html">decisions</a></li>
+  <li aria-current="page">ADR-0027</li>
+</ol></nav>
+<!-- /folio:chrome-top -->
+
+<header class="doc-header">
+  <h1>ADR-0027 — 便用の口座は reset が最も近い口座から選び、 同点は走行中の便が少ない口座に倒し、 1 口座あたりの便数で候補を絞らない (ADR-0020 §2.2 の便用の規則を supersede)</h1>
+  <div class="meta">Status: accepted &middot; Date: 2026-09-14 &middot; version 0.4.6 (拘束する constitution の版) &middot; C9.2 / C2 / C10 / N2 の適用を記録し、 ADR-0020 §2.2 の便用の規則 (逼迫度が最大の口座) を supersede &middot; 要件は SRS v0.10 (FR36 / FR37 / FR33 / FR4) が正本</div>
+</header>
+<!-- folio:chrome-toc -->
+<nav class="toc" aria-label="ページ内目次">
+<ol>
+  <li><a href="#s1-context">§1. Context</a></li>
+  <li><a href="#s2-decision">§2. Decision</a></li>
+  <li class="toc--sub"><a href="#s2-1-candidates">§2.1 便用の候補は口座の状態だけで決め、 走行中の便の数で絞らない</a></li>
+  <li class="toc--sub"><a href="#s2-2-order">§2.2 便用の順序は reset が最も近い口座から。 同点は走行中の便が少ない口座、 さらに同点は label 順</a></li>
+  <li class="toc--sub"><a href="#s2-3-inflight">§2.3 走行中の便数の出所は spawn の event が持つ口座 label (schema 版 1 のまま・任意 field)</a></li>
+  <li class="toc--sub"><a href="#s2-4-unchanged">§2.4 不変のもの (session 用の規則・別口座での途中再開・R-C9-1)</a></li>
+  <li class="toc--sub"><a href="#s2-5-scope">§2.5 射程外</a></li>
+  <li><a href="#s3-srs">§3. SRS との関係 (正本は SRS)</a></li>
+  <li><a href="#s4-consequences">§4. Consequences</a></li>
+  <li><a href="#s5-alternatives">§5. Alternatives Considered</a></li>
+  <li><a href="#s6-trace">§6. Trace</a></li>
+</ol>
+</nav>
+<!-- /folio:chrome-toc -->
+
+<aside class="informative">
+<p>本 ADR は IETF <strong>RFC 2119</strong> および <strong>RFC 8174 / BCP 14</strong> に定義される MUST / SHALL / SHOULD / MAY のキーワード解釈規約に従う。 ADR は決定時点の記録であり、 改訂は新しい ADR による supersede で行う。 本 ADR の <strong>§2 は user の裁定 (2026-09-14・対話面 = planner の席〔<a href="../spec/constitution.html#c7">C7</a>・R-C7-1〕・逐語は台帳 <code>s2-07l.299</code> の notes が原本で本 file には写さない〔CON2〕)</strong> で、 <strong>§3 は SRS への pointer</strong> である。 本 ADR は要件の文面を 1 字も持たず、 <strong>理由・形・却下案</strong> だけを持つ。 本 ADR は <a href="./ADR-0020-account-autonomy-limit-stop-resume-and-selection.html#s2-2-selection">ADR-0020 §2.2</a> のうち<strong>便用の規則</strong>「当たっていない口座のうち逼迫度が最大の口座を選ぶ」を supersede する (純関数 1 本・入力の形・当たっている口座の定義・席の登録 row の口座の除外・session 用の規則・R-C9-1 の意味は不変)。</p>
+</aside>
+
+<aside class="machine-readable" aria-hidden="true">
+  <dl>
+    <dt>id</dt><dd>ADR-0027</dd>
+    <dt>doc-type</dt><dd>adr</dd>
+    <dt>status</dt><dd>accepted</dd>
+    <dt>date</dt><dd>2026-09-14</dd>
+    <dt>version</dt><dd>0.4.6 (拘束する constitution の版。 本 ADR は憲法の条文を動かさない)</dd>
+    <dt>decided-by</dt><dd>user (2026-09-14・対話面 = planner の席・裁定 id = user 2026-09-14T22:38Z) — 承認 SSOT の 3 クラスに非該当の設計判断だが、 前の決定 (ADR-0020 §2.2) の supersede であり user の直命 (並列を口座数で絞らない・reset が近い口座から使い切る・均等に配る) を規則にするため裁定を取った。 逐語は台帳が原本で、 本 file には写さない (CON2)</dd>
+    <dt>stakeholders</dt><dd>Developer, AI Agent, External Reviewer</dd>
+    <dt>supersedes</dt><dd>ADR-0020 §2.2 の便用の規則「当たっていない口座のうち逼迫度が最大の口座を選ぶ (使い切る側)」を、 §2.1 / §2.2 の候補と順序で supersede する (純関数 1 本・当たっている口座の定義・登録 row の口座の除外・session 用の規則・R-C9-1 は不変)</dd>
+    <dt>related</dt><dd>ADR-0004 §2.5 (schema 版・既存の行はすべて読める) / ADR-0017 §2.1 (実測行の形) / ADR-0020 §2.2 / §2.3 (選定の純関数・別口座での途中再開・候補なしの周は最も早い reset まで待つ) / ADR-0022 §2.1 (席の登録 row) / ADR-0024 §2.2 / §2.3 (reset 無しの行の数え方・前方互換の非対称の受け方) / constitution C2 / C7 / C9.2 / C10 / N2 / SRS FR4 / FR33 / FR36 / FR37 / CON2</dd>
+  </dl>
+</aside>
+
+<section id="s1-context" class="informative">
+<h2>§1. Context</h2>
+<p class="section-essence" data-audience="human">便に渡す口座は、 これまで「まだ当たっていない口座のうち、 いちばん残りが少ないもの」を選んでいました (ADR-0020 §2.2)。 実際の運用では 2 つのことが起きました。 1 つ目は、 器の外の起動 script が「走行中の便が使っている口座は次の便に使わない」という規則を勝手に持ち、 便に使える口座が 3 つに見えて並列が 3 便で頭打ちになったことです。 器の規則にそんな除外は無く、 便は途中で上限に当たっても別の口座で続きから再開できるので、 1 つの口座に何便重ねても失うものはありません。 2 つ目は、 「残りが少ない口座から」という順序が、 いつ元に戻る (reset) かを見ていないことです。 使い残した分は reset で消えるので、 まもなく reset する口座の残りを先に使う方が、 全体で使える量が増えます。 この記録は、 候補を口座の状態だけで決め (走行中の便の数では絞らない)、 順序を「reset が近い口座から・同点なら走行中の便が少ない口座へ」に改めます。</p>
+<p data-audience="machine">記録時点 (2026-09-14) の現物 (main <code>aef685a</code>): 便用の選定は <code>fleet/select.rs</code> の純関数 1 本 (<code>Purpose::Run</code> = 逼迫度が最大の候補・同点は label 順・<code>select.rs:170</code>)。 除外の入力は <code>fleet/replay.rs</code> <code>select_for_run</code> が渡す <code>state.registered_accounts()</code> (席の登録 row の口座) だけで、 走行中の便の口座は器のどこでも除外していない。 実害 1: 管理席の起動 script (器の外・scratchpad の launch.sh) が「走行中の便の口座を <code>--exclude</code> に足す (同じ口座に 2 便を重ねない)」を持ち、 2026-09-14 21:5xZ に候補が <code>none=all-limited</code> となって契約 <code>s2-07l.294</code> が起動できなかった (走行中 3 便の口座 3 つを除くと、 残る 2 口座は Fable 窓 100 と 7 日窓 100)。 user の直命 (2026-09-14 05:1xZ「1 口座 1 便の除外は無い」) に反する散文規則 (<a href="../spec/constitution.html#n2">N2</a>) が器の外に在った形。 実害 2: 逼迫度が最大の口座を選ぶ順序は reset 時刻を見ないので、 reset が遠い口座 (7 日窓 73%) に便を集め、 reset が近い口座 (5 時間窓の残り) を使い残す。 event の側: <code>SeatSpawned</code> は <code>run</code> / <code>seat</code> / <code>pid</code> を持ち、 便が起きた口座の label を持たない (<code>fleet/mod.rs</code>) ため、 器は「口座ごとの走行中の便数」を知らない。</p>
+<p data-audience="machine">憲法の向き: <a href="../spec/constitution.html#c9">C9.2</a> は各口座を allowance 窓の終わりまで使い切ると定める (使い残しが reset で消える窓を先に使うのはその直接の形)。 <a href="../spec/constitution.html#c2">C2</a> は選定を 1 つの純関数で持ち、 新しい理由は variant で表す。 <a href="../spec/constitution.html#c10">C10</a> は実測値で判定する (走行中の便数は event の記録＝実測から導く)。 <a href="../spec/constitution.html#n2">N2</a> は散文だけの規則を規則と認めない (起動 script の除外は規則ではなく、 器の出力が正)。 先行決定: <a href="./ADR-0020-account-autonomy-limit-stop-resume-and-selection.html#s2-2-selection">ADR-0020 §2.2</a> (便用は逼迫度最大・session 用は逼迫度最小)・<a href="./ADR-0020-account-autonomy-limit-stop-resume-and-selection.html#s2-3-resume">§2.3</a> (上限に当たった便は別口座で途中再開・候補なしは最も早い reset まで待つ)・<a href="./ADR-0024-idle-window-reset-time-is-optional-in-allowance-row.html#s2-2-counting">ADR-0024 §2.2</a> (reset 無しの行は古くない実測・最も早い reset の導出には数えない)・<a href="./ADR-0004-mvp-persistence-and-cross-version-formats.html#s2-5-schema-version">ADR-0004 §2.5</a> D-5 (同じ schema 番号なら既存の行はすべて読める＝任意 field を足すのはその内側)。</p>
+</section>
+
+<section id="s2-decision" class="normative">
+<h2>§2. Decision</h2>
+
+<h3 id="s2-1-candidates">§2.1 便用の候補は口座の状態だけで決め、 走行中の便の数で絞らない</h3>
+<p class="section-essence" data-audience="human">便に渡せる口座は、 manifest に書いた口座から、 退役中の口座・planner や admin の席が使っている口座・上限に当たっている口座・測れていない口座を除いたものです。 その口座で今いくつの便が走っているかは、 候補から外す理由にしません。 1 つの口座に何便重ねてもよく、 途中で上限に当たった便は別の口座で続きから再開します。</p>
+<p data-audience="machine">便用の候補 SHALL manifest の口座 (<a href="./ADR-0017-account-allowance-measured-into-event-log.html">ADR-0017 §2.3</a>) から、 退役中の口座・席の登録 row (<a href="./ADR-0022-seat-roles-are-typed-and-enforced-by-hooks.html">ADR-0022 §2.1</a>) が持つ口座・当たっている口座 (用途が使う model の窓のいずれかの使用率が 100)・測れない口座 (ADR-0020 §2.2・ADR-0024 §2.2 の読み) を除いた集合とする。 器 SHALL NOT 走行中の便の数・口座あたりの便数の上限・直前に選んだ口座であることを候補から外す理由にしない (rules 行にもそのような閾値を置かない)。 器の外の起動手順 SHALL NOT 器の選定に除外を足さない (除外の入力は登録 row の口座だけ・<a href="../spec/constitution.html#n2">N2</a>)。</p>
+
+<h3 id="s2-2-order">§2.2 便用の順序は reset が最も近い口座から。 同点は走行中の便が少ない口座、 さらに同点は label 順</h3>
+<p class="section-essence" data-audience="human">候補の中から渡す口座は、 「いちばん早く元に戻る (reset する) 口座」です。 口座の窓 (5 時間・7 日・便が使う model の 7 日) のうち最も早い reset 時刻で比べます。 まだ使っていない口座 (どの窓にも reset の予定が無い口座) は失うものが無いので最後に回します。 reset 時刻が同じなら、 走行中の便が少ない口座に渡して均等にし、 それも同じなら名前順です。</p>
+<p data-audience="machine">便用の規則 SHALL 候補を次の 3 つの鍵で辞書順に並べ、 先頭を選ぶ: (1) その口座の窓 (5 時間窓・7 日窓・用途が使う model のモデル別 7 日窓) の最新の実測行が持つ reset 時刻のうち<strong>最も早い時刻</strong> (昇順・reset 時刻を持つ窓が 1 つも無い口座〔消費の無い窓だけ・ADR-0024 §2.1〕は<strong>最後</strong>)、 (2) その口座で<strong>走行中の便の数</strong> (昇順・§2.3)、 (3) label の辞書順。 逼迫度 (使用率の最大) SHALL 当たっている口座の判定と session 用の規則にだけ使い、 便用の順序には使わない。 同じ周 (同じ実測行・同じ走行中の便数) で 2 便を続けて選ぶと同じ口座が選ばれうる——これは意図した形であり (1 口座に何便でも重ねる)、 便数は spawn の event で増えるので 3 便目からは (2) が働く。 純関数の形 (入力 = 宣言値・実測行・用途・model・除外・rules 行の値 + <strong>口座ごとの走行中の便数</strong>、 出力 = <code>Selection</code>) は ADR-0020 §2.2 のまま 1 本 (<a href="../spec/constitution.html#c2">C2</a>)。</p>
+
+<h3 id="s2-3-inflight">§2.3 走行中の便数の出所は spawn の event が持つ口座 label (schema 版 1 のまま・任意 field)</h3>
+<p class="section-essence" data-audience="human">「その口座でいくつの便が走っているか」は、 器が便を起こしたときの記録 (spawn の event) に「どの口座で起こしたか」を残して数えます。 記録 file の版番号は変えず、 欄を 1 つ足すだけです。 以前の記録 (口座の欄が無い便) は 0 と数えます。 走行中とは、 起こした後まだ終わっていない (着地・失敗・停止・退役のどれにも達していない) 便です。</p>
+<p data-audience="machine">器 SHALL 便を起こす event (<code>SeatSpawned</code>・ADR-0020 §2.1) に、 器が選んで渡した口座の label を<strong>任意 field</strong> (<code>account</code>) として記録する (口座を渡さず親の環境を継承させた周は field を置かない)。 口座ごとの走行中の便数 SHALL event log の replay から導く: 非終端の段 (Landed / Failed / Stopped / retired のいずれでもない) に在る便のうち、 最新の <code>SeatSpawned</code> が当該 label を持つものの数。 field を持たない便 (本 ADR より前の記録) SHALL 数えない (0)。 event log の schema 版 SHALL 1 のまま (<a href="./ADR-0004-mvp-persistence-and-cross-version-formats.html#s2-5-schema-version">ADR-0004 §2.5</a> D-5・既存の行の読みは変えない)。 前方互換の非対称 (本 ADR より前の reader は新しい field を持つ行を Err にする) は <a href="./ADR-0024-idle-window-reset-time-is-optional-in-allowance-row.html#s2-3-schema">ADR-0024 §2.3</a> と同じ理由 (host-local・host の器は 1 つの binary に揃える) で受け入れ、 新しい形の行を書く器は書き始める前に host の binary を揃える (運用の順序・ADR-0024 §2.3 の前例)。</p>
+
+<h3 id="s2-4-unchanged">§2.4 不変のもの (session 用の規則・別口座での途中再開・R-C9-1)</h3>
+<p class="section-essence" data-audience="human">planner や admin の席に渡す口座の選び方 (いちばん余裕のある口座・閾値は規則の行 R-C9-1) は変えません。 上限に当たった便を別の口座で続きから再開する仕組みも、 候補が無いときにいちばん早い reset まで待つ仕組みも変えません。 規則の行は足しません。 順序は「決定」であって「閾値」ではないからです。</p>
+<p data-audience="machine">session 用の規則 (逼迫度が最小で R-C9-1 未満・ADR-0020 §2.2)・上限停止と別口座での途中再開 (ADR-0020 §2.1 / §2.3)・候補なしの周に最も早い reset まで待つ形 (ADR-0020 §2.3・<code>Completion::AccountFree</code>) は不変。 rules 行 SHALL 足さない (順序は閾値でなく決定であり、 その裁定 id は本 ADR が持つ・<a href="../spec/constitution.html#c14">C14.2</a>)。 R-C9-1 の意味 (session 用の閾値) は不変。</p>
+
+<h3 id="s2-5-scope">§2.5 射程外</h3>
+<p class="section-essence" data-audience="human">この記録が決めるのは便用の候補と順序だけです。 runner と lens がどの model で走るか (規則の行 runner.model) は別の設計と契約の領分です。 席の立て直しの口座の選び方も変えません。</p>
+<p data-audience="machine">次は本 ADR の決定ではない (MUST NOT be read as such): runner / lens の model を rules 行 <code>runner.model</code> で固定し便用の選定にその model を与えること (設計 <code>docs/design/account-autonomy.md</code> §3 / <code>pipeline.md</code> §6・台帳 <code>s2-07l.297</code>・user 裁定 2026-09-14T21:59Z・本 ADR は「用途が使う model の窓」をそのまま受ける)、 席の立て直しの口座 (session 用の規則・ADR-0020 §2.4)、 便の並列数の上限 (器は持たない・ADR-0019)、 起動 script の形 (器の外・本 ADR は除外を足さないことだけを定める)。</p>
+</section>
+
+<section id="s3-srs" class="informative">
+<h2>§3. SRS との関係 (正本は SRS)</h2>
+<p class="section-essence" data-audience="human">この記録が仕える要件は要件書 (SRS v0.10) に在ります。 要件の文面はここには置かず、 当該行を指すだけにします。 要件書の「便用は口座残量を使い切る側」は、 reset で消える残りから先に使うことで満たします。 要件書は 1 字も変えません。</p>
+<div data-audience="machine">
+<p>本 ADR の §2.1〜§2.3 が仕える要件は SRS v0.10 が正本である: <a href="../spec/srs.html#FR36">FR36 口座の選定</a> (manifest の口座と実測だけから決定的に選ぶ・便用は使い切る側・便用は登録 row の口座を除く＝本 ADR は「使い切る」の順序を reset の近さで定め、 除外の集合を変えない)・<a href="../spec/srs.html#FR37">FR37 別口座での途中再開</a> (1 口座に何便重ねても上限で失うものが無い前提)・<a href="../spec/srs.html#FR33">FR33 口座残量の計測</a> (reset 時刻を持つ実測行が順序の入力)・<a href="../spec/srs.html#FR4">FR4 spawn</a> (便を起こす event に口座を記録する)。 SRS の改訂は不要: FR36 の「使い切る側」は順序の原則であって順序の鍵を持たず、 鍵は本 ADR §2.2 が正本である。</p>
+</div>
+</section>
+
+<section id="s4-consequences" class="informative">
+<h2>§4. Consequences</h2>
+<p class="section-essence" data-audience="human">良い面は、 並列の便数が口座の数で頭打ちにならないこと、 reset で消える残りから使うので全体で使える量が増えること、 走行中の便数で均等に配れることです。 悪い面は、 1 つの口座に便が重なると途中で上限に当たる便が増え、 別口座での再開 (1 周) が増えること、 spawn の event に欄が増えるので古い器がその行を読めないこと (host ごとに器を揃える運用で受ける) です。</p>
+<p data-audience="machine">Positive: 候補が口座の状態だけで決まり、 器の外の除外が入る余地が無い (N2)。 reset が近い窓の残りを先に使う (C9.2)。 (2) の鍵で口座ごとの便数が均等に寄る。 rules 行を足さない (C5 非該当)。</p>
+<p data-audience="machine">Negative (受け入れるコスト): 同じ口座に便が重なる分だけ上限停止 → 別口座での途中再開 (ADR-0020 §2.3) が増える (user が受け入れた代償)。 <code>SeatSpawned</code> の任意 field による前方互換の非対称 (§2.3)。 選定の入力に走行中の便数が加わる分の replay の導出と歯。</p>
+</section>
+
+<section id="s5-alternatives" class="informative">
+<h2>§5. Alternatives Considered</h2>
+<p class="section-essence" data-audience="human">4 つの案を退けました。 「残りが少ない口座から」(これまでの規則) は reset を見ないので、 まもなく消える残りを使い残します。 「残りが多い口座から」は使い切る側に倒れません。 「1 口座 1 便」の上限は並列を口座の数で絞り、 しかも器の外の散文規則として実際に事故を起こしました。 「順番に回すだけ」は reset の近さを見ません。</p>
+<p data-audience="machine">(A) <strong>逼迫度が最大の口座 (ADR-0020 §2.2・現行)</strong>。 却下: reset 時刻を見ないので、 7 日窓が高い口座に集中し、 5 時間窓の残りが reset で消える口座を使い残す。 「使い切る」の近似としては reset の近さの方が直接である。</p>
+<p data-audience="machine">(B) <strong>逼迫度が最小の口座 (余裕を残す側)</strong>。 却下: session 用の規則と同じ向きで、 便が使い切る側 (C9.2・FR36) に倒れない。</p>
+<p data-audience="machine">(C) <strong>口座あたりの便数に上限 (1 口座 1 便を含む)</strong>。 却下: 並列を口座数で絞る。 便は途中再開できるので上限で失うものが無く、 上限は保護でなく浪費になる。 器の外の起動 script がこの規則を散文で持ち、 実際に候補を 3 つに見せて並列を止めた (N2 の型)。</p>
+<p data-audience="machine">(D) <strong>走行中の便数だけで均等に回す (round-robin)</strong>。 却下: reset の近さを見ないので、 まもなく消える残りと遠い残りを同じに扱う。 均等は同点の解消に使う (§2.2 の (2))。</p>
+</section>
+
+<section id="s6-trace" class="informative">
+<h2>§6. Trace</h2>
+<p class="section-essence" data-audience="human">出所は、 便が起動できなかった管理席の実測と起動 script の現物、 器の選定の現物、 そして user の直命と裁定です。</p>
+<ul data-audience="machine">
+  <li>user の直命 (2026-09-14 22:2xZ・planner の席): 便は 1 口座に複数打ってよく、 それを禁じる規則は無い。 全便を planner / admin の保護の無い口座へ均等に投げ、 できれば reset 時間の短いものから消費する。 選定を根本から作り直す。 裁定 (2026-09-14T22:38Z): 本 ADR §2 の形を承認。 逐語は台帳 <code>s2-07l.299</code> の notes が原本。</li>
+  <li>管理席の実測 (2026-09-14 21:52Z): <code>select purpose=run none=all-limited earliest_reset=2026-09-17T07:59:59Z</code>。 起動 script が走行中 3 便の口座を <code>--exclude</code> に足していた (scratchpad の launch.sh・:4「同じ口座に 2 便を重ねない」・:37-55 走行中の scan・:71「選んだ口座を次の便から外す」)。 撤去後 (22:36Z) は走行中の便と同じ口座が選ばれ、 2 便が 1 口座に重なった。 台帳 <code>s2-07l</code> の notes 22:2xZ が原本。</li>
+  <li>器の現物 (main <code>aef685a</code>): <code>fleet/select.rs:170</code> (<code>Purpose::Run</code> = 逼迫度最大・同点 label 順)・<code>fleet/replay.rs</code> <code>select_for_run</code> (除外 = <code>registered_accounts()</code> だけ・model は None)・<code>fleet/mod.rs</code> <code>SeatSpawned</code> (口座 label を持たない)。</li>
+  <li>先行決定: <a href="./ADR-0020-account-autonomy-limit-stop-resume-and-selection.html">ADR-0020</a> §2.2 / §2.3・<a href="./ADR-0024-idle-window-reset-time-is-optional-in-allowance-row.html">ADR-0024</a> §2.2 / §2.3・<a href="./ADR-0004-mvp-persistence-and-cross-version-formats.html">ADR-0004</a> §2.5。</li>
+  <li>設計: <code>docs/design/account-autonomy.md</code> §3 (便用の候補と順序・走行中の便数の入力)。 契約は台帳 <code>s2-07l.299</code> (順序と event の field・本 ADR の land 後に dispatch)。</li>
+</ul>
+</section>
+
+<!-- folio:chrome-bottom -->
+<nav class="prevnext" aria-label="前後の文書">
+  <a class="prevnext__prev" href="ADR-0026-account-lifecycle-host-manifest-and-seat-launch.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">ADR-0026 — 口座の宣言と host 固有の起動値は host の manifest が持ち、 口座の登録・一覧・退役と席の起動を器の口が担う (ADR-0017 §2.3 / ADR-0020 §2.4 / ADR-0022 §2.1 を部分 supersede)</span></a>
+</nav>
+<script>
+(function () {
+  var openedForPrint = [];
+  window.addEventListener('beforeprint', function () {
+    openedForPrint = [];
+    var ds = document.querySelectorAll('details:not([open])');
+    for (var i = 0; i < ds.length; i++) { ds[i].setAttribute('open', ''); openedForPrint.push(ds[i]); }
+  });
+  window.addEventListener('afterprint', function () {
+    for (var i = 0; i < openedForPrint.length; i++) openedForPrint[i].removeAttribute('open');
+    openedForPrint = [];
+  });
+  if (!document.querySelector('[data-audience]')) return;
+  /* 既定 = 人間プレゼン型 (ADR-0040 / rules §11.3): script 経由で初期 class を付与するため
+     no-JS では付かず全文可視に graceful degrade する。 static DOM は全文を保持 (AI/検索/印刷は不変)。 */
+  document.body.classList.add('audience-human');
+  var bar = document.createElement('nav');
+  bar.className = 'audience-toggle';
+  bar.setAttribute('aria-label', '表示対象の切替');
+  var states = [['both', '両方'], ['human', '人間向け'], ['machine', '機械向け']];
+  for (var s = 0; s < states.length; s++) {
+    (function (mode, label) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      b.setAttribute('aria-pressed', mode === 'human' ? 'true' : 'false');
+      b.addEventListener('click', function () {
+        document.body.classList.remove('audience-human', 'audience-machine');
+        if (mode !== 'both') document.body.classList.add('audience-' + mode);
+        var bs = bar.querySelectorAll('button');
+        for (var j = 0; j < bs.length; j++) bs[j].setAttribute('aria-pressed', bs[j] === b ? 'true' : 'false');
+      });
+      bar.appendChild(b);
+    })(states[s][0], states[s][1]);
+  }
+  var bc = document.querySelector('nav.breadcrumb');
+  if (bc && bc.parentNode) { bc.parentNode.insertBefore(bar, bc.nextSibling); }
+  else { document.body.insertBefore(bar, document.body.firstChild); }
+})();
+</script>
+<!-- /folio:chrome-bottom -->
+</body>
+</html>
