@@ -882,20 +882,25 @@ pub(super) fn role_doctor_place() -> RolePlace {
     place
 }
 
-/// doctor は登録 row と実在の target を突き合わせ、撃てない周は 0 と書かない（歯 (d)）。
+/// doctor は登録 row と実在の target を突き合わせ、撃てない周は 0 と書かない（歯 (d)）。末尾は登録 row の anchor の
+/// 導入先の行（consumer-sync.md §4・`s2-07l.303`）。
 #[test]
 fn seat_role_doctor_reconciles_rows_with_live_targets() {
     let place = role_doctor_place();
     let out = role_doctor(&place);
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
-    let tail = |out: &Output| stdout_of(out).lines().rev().take(2).map(str::to_owned).collect::<Vec<String>>();
-    assert_eq!(tail(&out), [HOST_ABSENT, "seats: registered=2 live=unmeasurable missing=unmeasurable"], "突合の行の直後に host の面の行");
+    let tail = |out: &Output| stdout_of(out).lines().rev().take(3).map(str::to_owned).collect::<Vec<String>>();
+    assert_eq!(
+        tail(&out),
+        [CONSUMER_REPO, HOST_ABSENT, "seats: registered=2 live=unmeasurable missing=unmeasurable"],
+        "突合の行の直後に host の面の行・末尾に導入先の行"
+    );
     let seat = start_seat(&place.socket, "rolesdoc");
     assert!(seat.ready(), "隔離 seat が立つ");
     let out = role_doctor(&place);
     let lines: Vec<String> = stdout_of(&out).lines().map(str::to_owned).collect();
-    assert_eq!(lines.len(), 6, "2 行 + 登録 row 2 行 + 突合 1 行 + host の面 1 行: {lines:?}");
-    assert_eq!(tail(&out), [HOST_ABSENT, "seats: registered=2 live=1 missing=1"]);
+    assert_eq!(lines.len(), 7, "2 行 + 登録 row 2 行 + 突合 1 行 + host の面 1 行 + 導入先 1 行: {lines:?}");
+    assert_eq!(tail(&out), [CONSUMER_REPO, HOST_ABSENT, "seats: registered=2 live=1 missing=1"]);
     let doctor = |args: &[&str]| Command::new(bin()).arg("doctor").args(args).output().ok();
     let bare = doctor(&[]).map(|out| stdout_of(&out)).unwrap_or_default();
     assert_eq!(bare.lines().count(), 2, "引数無しは従来の 2 行: {bare}");
@@ -1017,6 +1022,8 @@ fn seat_register_model_shows_in_the_doctor_rows_with_dash_for_none() {
             "seat: role=admin anchor=/repo/b target=rm:doc-b account=acct-1 model=-".to_owned(),
             "seats: registered=2 live=unmeasurable missing=unmeasurable".to_owned(),
             HOST_ABSENT.to_owned(),
+            consumer_line_of("/repo/a"),
+            consumer_line_of("/repo/b"),
         ][..]),
         "{lines:?}"
     );
@@ -1032,6 +1039,16 @@ pub(super) const NO_ACCOUNT_RULES: &str = "schema = 1\n";
 
 /// 置き場に `host.toml` の無い周の doctor の host の面の行（突合の行の直後・口座の行の直前）。
 pub(super) const HOST_ABSENT: &str = "host-manifest=absent";
+
+/// 登録 row の anchor `/repo` が導入先として出る 1 行（口座の行の後ろ・記録なし・帳簿なし・`[[vessel]]` なし・
+/// consumer-sync.md §4・`s2-07l.303`）。
+pub(super) const CONSUMER_REPO: &str =
+    "consumer=/repo source=launch scope=- binary=unrecorded plugin=unrecorded ledger=- cache=absent head=undeclared drift=unrecorded";
+
+/// 登録 row の anchor `anchor` の導入先の行（[`CONSUMER_REPO`] と同じ形）。
+fn consumer_line_of(anchor: &str) -> String {
+    CONSUMER_REPO.replacen("/repo", anchor, 1)
+}
 
 /// `[[account]]` を `labels` の順に宣言した manifest の本文。
 fn account_rules(labels: &[&str]) -> String {
@@ -1175,7 +1192,8 @@ fn doctor_accounts_lines_follow_the_seat_lines_in_label_order() {
     let first = lines.iter().position(|line| line.starts_with("account="));
     assert_eq!(host, seats.map(|at| at + 1), "host の面の行は突合の行の直後: {lines:?}");
     assert_eq!(first, seats.map(|at| at + 2), "口座の行は host の面の行の直後: {lines:?}");
-    assert_eq!(lines.len(), 9, "2 行 + 登録 row 2 行 + 突合 1 行 + host の面 1 行 + 口座 3 行: {lines:?}");
+    assert_eq!(lines.len(), 10, "2 行 + 登録 row 2 行 + 突合 1 行 + host の面 1 行 + 口座 3 行 + 導入先 1 行: {lines:?}");
+    assert_eq!(lines.last().map(String::as_str), Some(CONSUMER_REPO), "導入先の行は口座の行の後ろ: {lines:?}");
     fs::remove_dir_all(&place.dir).ok();
 }
 
@@ -1188,7 +1206,7 @@ fn doctor_accounts_no_declared_account_adds_no_line_and_keeps_the_rest() {
     let without = doctor_rows(&place, NO_ACCOUNT_RULES);
     let with = doctor_rows(&place, &account_rules(&["solo"]));
     assert!(!without.iter().any(|line| line.starts_with("account=")), "{without:?}");
-    assert_eq!(without.len(), 6, "2 行 + 登録 row 2 行 + 突合 1 行 + host の面 1 行: {without:?}");
+    assert_eq!(without.len(), 7, "2 行 + 登録 row 2 行 + 突合 1 行 + host の面 1 行 + 導入先 1 行: {without:?}");
     let rest: Vec<String> = with.iter().filter(|line| !line.starts_with("account=")).cloned().collect();
     assert_eq!(rest, without, "他の行は不変");
     assert_eq!(with.len(), without.len() + 1, "{with:?}");
@@ -1203,7 +1221,9 @@ fn doctor_accounts_no_declared_account_adds_no_line_and_keeps_the_rest() {
     let bare = doctor(&["--state-dir", &state, "--tmux-socket", &place.socket]);
     assert_eq!(rc_of(&bare), i32::from(RC_OK), "stderr={}", stderr_of(&bare));
     assert_eq!(labels_of(&bare), Vec::<String>::new(), "--rules 無し・host の面も無い周は口座の行 0");
-    assert_eq!(stdout_of(&bare).lines().last(), Some(HOST_ABSENT), "{}", stdout_of(&bare));
+    let bare_out = stdout_of(&bare);
+    let bare_tail: Vec<&str> = bare_out.lines().rev().take(2).collect();
+    assert_eq!(bare_tail, [CONSUMER_REPO, HOST_ABSENT], "口座の行 0 でも導入先の行は出る: {bare_out}");
     fs::write(place.state.join(vessel::rules::HOST_MANIFEST), account_rules(&["zhost", "ahost"])).expect("host の面を書ける");
     let hosted = doctor(&["--state-dir", &state, "--tmux-socket", &place.socket]);
     assert_eq!(rc_of(&hosted), i32::from(RC_OK), "stderr={}", stderr_of(&hosted));
@@ -1257,11 +1277,15 @@ fn rules_host_doctor_names_the_host_manifest_in_three_values() {
         let seats = lines.iter().position(|line| line.starts_with("seats: ")).unwrap_or(lines.len());
         lines.iter().skip(seats + 1).cloned().collect()
     };
-    assert_eq!(tail_of(&doctor_rows(&place, &account_rules(&["tracked"]))), [HOST_ABSENT, account_line_of("tracked").as_str()]);
+    assert_eq!(
+        tail_of(&doctor_rows(&place, &account_rules(&["tracked"]))),
+        [HOST_ABSENT, account_line_of("tracked").as_str(), CONSUMER_REPO],
+        "口座の行の後ろに導入先の行"
+    );
     fs::write(&host, account_rules(&["hosted"])).expect("host の面を書ける");
     assert_eq!(
         tail_of(&doctor_rows(&place, &account_rules(&["tracked"]))),
-        ["host-manifest=present".to_owned(), account_line_of("hosted"), account_line_of("tracked")],
+        ["host-manifest=present".to_owned(), account_line_of("hosted"), account_line_of("tracked"), CONSUMER_REPO.to_owned()],
         "host の面込みの宣言（label の辞書順）"
     );
     let unreadable = ["host-manifest=unreadable", "accounts: manifest=unreadable"];

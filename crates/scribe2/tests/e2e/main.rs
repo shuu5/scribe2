@@ -1,5 +1,8 @@
 //! 統合 test の唯一の target（憲法 R-C13-2「統合 test file 3 以下」は cargo の
 //! integration test **target** の数で数える。以後の leg は module で足す）。
+//!
+//! doctor の導入先の行（consumer-sync.md §4・AC31・接頭辞 `doctor_consumer_`・`s2-07l.303`）の歯はこの file が持つ
+//! （登録は core の `register` で積み、tmux を立てない）。
 
 mod fleet;
 mod headless;
@@ -10,9 +13,15 @@ mod prop;
 mod rules;
 mod seat;
 
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+use vessel::fleet::Registration;
+use vessel::hook::vessel::digest::{self, PluginRecord};
+use vessel::name::NAME;
+use vessel::seat::role::Role;
 
 /// 同一 process 内での dir 名衝突を避ける連番。
 static SEQ: AtomicU32 = AtomicU32::new(0);
@@ -35,4 +44,300 @@ pub fn make_tmp_dir() -> Option<PathBuf> {
         }
     }
     None
+}
+
+// ─────────────────── doctor の導入先の行（consumer-sync.md §4・AC31・`s2-07l.303`） ───────────────────
+
+/// 導入先の歯の置き場（tmp の root・state dir・vessel repo とその HEAD・plugin root とその hooks.json の digest）。
+struct ConsumerPlace {
+    dir: PathBuf,
+    state: PathBuf,
+    vessel: PathBuf,
+    head: String,
+    root: PathBuf,
+    digest: String,
+}
+
+/// git を 1 回撃ち、rc 0 なら stdout を返す。
+fn git_out(dir: &Path, args: &[&str]) -> Option<String> {
+    let out = Command::new("git").arg("-C").arg(dir).args(args).output().ok()?;
+    out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_owned())
+}
+
+/// commit を 1 つ持つ git repo を `dir` に作り、HEAD の sha（全桁）を返す。
+fn git_repo_at(dir: &Path) -> Option<String> {
+    fs::create_dir_all(dir).ok()?;
+    git_out(dir, &["init", "-q"])?;
+    git_out(dir, &["config", "user.name", "e2e"])?;
+    git_out(dir, &["config", "user.email", "e2e@example.invalid"])?;
+    fs::write(dir.join("seed"), "seed\n").ok()?;
+    git_out(dir, &["add", "-A"])?;
+    git_out(dir, &["commit", "-q", "-m", "seed"])?;
+    git_out(dir, &["rev-parse", "HEAD"])
+}
+
+/// `hooks/hooks.json` を `body` で持つ dir を `dir` に作り、その digest を返す。
+fn hooks_at(dir: &Path, body: &str) -> Option<String> {
+    fs::create_dir_all(dir.join("hooks")).ok()?;
+    fs::write(digest::hooks_path(dir), body).ok()?;
+    digest::hooks_digest(dir)
+}
+
+/// 置き場を 1 つ作る（vessel repo は `[[vessel]]` を書く周だけ読まれる・plugin root は記録の `root=` に使う）。
+fn consumer_place() -> Option<ConsumerPlace> {
+    let dir = make_tmp_dir()?.canonicalize().ok()?;
+    let state = dir.join("state");
+    fs::create_dir_all(&state).ok()?;
+    let vessel = dir.join("vessel");
+    let head = git_repo_at(&vessel)?;
+    let root = dir.join("plugin-root");
+    let digest = hooks_at(&root, "{\"hooks\":{}}\n")?;
+    Some(ConsumerPlace { dir, state, vessel, head, root, digest })
+}
+
+/// host の面を書く（`[[account]]` を `labels` の順に・`vessel` が在れば `[[vessel]] repo` を 1 行）。
+fn write_host(place: &ConsumerPlace, labels: &[&str], vessel: Option<&str>) {
+    let mut body = "schema = 1\n".to_owned();
+    for label in labels {
+        body.push_str(&format!("\n[[account]]\nlabel = \"{label}\"\n"));
+    }
+    if let Some(repo) = vessel {
+        body.push_str(&format!("\n[[vessel]]\nrepo = \"{repo}\"\n"));
+    }
+    fs::write(place.state.join(vessel::rules::HOST_MANIFEST), body).ok();
+}
+
+/// 帳簿の導入先 1 つ（`projectPath` / `scope` / `installPath` / `gitCommitSha`・`None` は key を書かない）。
+struct LedgerRow<'a> {
+    project: &'a str,
+    scope: Option<&'a str>,
+    install: Option<&'a str>,
+    sha: Option<&'a str>,
+}
+
+/// 口座 `label` の帳簿を書く（`plugins["<NAME>@<NAME>"]` に `rows`・他の key は Claude Code の実物の形を写す）。
+fn write_ledger(place: &ConsumerPlace, label: &str, rows: &[LedgerRow]) -> PathBuf {
+    let items: Vec<String> = rows
+        .iter()
+        .map(|row| {
+            let mut pairs = vec![format!("\"projectPath\":\"{}\"", row.project)];
+            for (key, value) in [("scope", row.scope), ("installPath", row.install), ("gitCommitSha", row.sha)] {
+                if let Some(found) = value {
+                    pairs.push(format!("\"{key}\":\"{found}\""));
+                }
+            }
+            pairs.push("\"version\":\"0.1.0\",\"installedAt\":\"2026-09-15T00:00:00Z\"".to_owned());
+            format!("{{{}}}", pairs.join(","))
+        })
+        .collect();
+    let body = format!("{{\"version\":2,\"plugins\":{{\"{NAME}@{NAME}\":[{}]}}}}", items.join(","));
+    write_ledger_text(place, label, &body)
+}
+
+/// 口座 `label` の帳簿を本文そのままで書く（壊れた帳簿の周）。
+fn write_ledger_text(place: &ConsumerPlace, label: &str, body: &str) -> PathBuf {
+    let path = vessel::account::consumers::ledger_path(&place.state, label);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).ok();
+    }
+    fs::write(&path, body).ok();
+    path
+}
+
+/// 登録 row を 1 件積む（planner・`anchor` = 導入先の path・tmux は立てない）。
+fn register_anchor(place: &ConsumerPlace, anchor: &str, target: &str) {
+    let row = Registration {
+        role: Role::Planner,
+        anchor: anchor.to_owned(),
+        target: target.to_owned(),
+        sid: None,
+        account: "acct-1".to_owned(),
+        launch: String::new(),
+        model: None,
+    };
+    assert!(vessel::seat::role::register(&place.state, row).is_ok(), "登録 row を積める");
+}
+
+/// 席 `target` の読み込み元の記録を置く（`hooks` は digest か `None` = unreadable・`binary` は build 元 commit の字面）。
+fn write_record(place: &ConsumerPlace, target: &str, root: &Path, hooks: Option<&str>, binary: &str) {
+    let seat = vessel::seat::seat_dir(&place.state, target);
+    fs::create_dir_all(&seat).ok();
+    let record = PluginRecord::Recorded {
+        root: root.display().to_string(),
+        hooks: hooks.map(str::to_owned),
+        binary: binary.to_owned(),
+        sid: "sid-fix".to_owned(),
+        ts: 1_800_000_000,
+    };
+    fs::write(digest::record_path(&seat), format!("{}\n", record.to_line().unwrap_or_default())).ok();
+}
+
+/// `doctor --state-dir` を撃ち（socket は server の無い path）、rc 0 と「導入先の行は口座の行の後ろ」を確かめて
+/// `consumer=` の行だけを返す。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn consumer_lines(place: &ConsumerPlace) -> Vec<String> {
+    let socket = place.dir.join("no-server-sock").display().to_string();
+    let out = Command::new(env!("CARGO_BIN_EXE_scribe2"))
+        .args(["doctor", "--state-dir", &place.state.display().to_string(), "--tmux-socket", &socket])
+        .output()
+        .expect("binary を起動できる");
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert_eq!(out.status.code(), Some(0), "doctor は判定しない（rc 0）: {stderr}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let all: Vec<&str> = stdout.lines().collect();
+    let accounts = all.iter().rposition(|line| line.starts_with("account=")).unwrap_or(0);
+    let first = all.iter().position(|line| line.starts_with("consumer="));
+    assert!(first.is_none_or(|at| at > accounts), "導入先の行は口座の行の後ろ: {stdout}");
+    all.iter().filter(|line| line.starts_with("consumer=")).map(|line| (*line).to_owned()).collect()
+}
+
+/// `head=` に載る HEAD の先頭 12 桁。
+fn head12(place: &ConsumerPlace) -> String {
+    place.head.chars().take(12).collect()
+}
+
+/// (d・AC31) 口座 2 つ（帳簿に導入先 2 つと 3 つ・1 つは worktree の path）と `[[vessel]] repo` を置き、登録 row の席の
+/// 記録を 5 形で置く → 導入先ごとに 1 行・path の辞書順・`drift=` が `none` / `binary` / `plugin` / `ledger` / `dual` を
+/// それぞれ名指す（1 行の全欄を字面で pin）。base は行が無い（RED）。
+#[test]
+fn doctor_consumer_lines_name_each_drift_word() {
+    let place = consumer_place().unwrap_or_else(|| panic!("置き場を作れる"));
+    let (head, sha12, digest) = (place.head.as_str(), head12(&place), place.digest.as_str());
+    let vessel = place.vessel.display().to_string();
+    write_host(&place, &["acc-a", "acc-b"], Some(&vessel));
+    let cache = place.dir.join("cache");
+    let cache_digest = hooks_at(&cache, "{\"hooks\":{\"Stop\":[]}}\n").unwrap_or_default();
+    let (cache_s, missing) = (cache.display().to_string(), place.dir.join("no-cache").display().to_string());
+    let stale = "0".repeat(40);
+    write_ledger(
+        &place,
+        "acc-a",
+        &[
+            LedgerRow { project: "/c/none", scope: Some("project"), install: Some(&cache_s), sha: Some(head) },
+            LedgerRow { project: "/c/binary", scope: Some("local"), install: Some(&cache_s), sha: Some(head) },
+        ],
+    );
+    write_ledger(
+        &place,
+        "acc-b",
+        &[
+            LedgerRow { project: "/c/plugin", scope: Some("user"), install: None, sha: Some(head) },
+            LedgerRow { project: "/c/ledger/.worktrees/w", scope: Some("project"), install: Some(&missing), sha: Some(&stale) },
+            LedgerRow { project: "/c/dual", scope: Some("project"), install: Some(&cache_s), sha: Some(head) },
+        ],
+    );
+    let build = env!("SCRIBE2_BUILD_COMMIT");
+    let other = "f".repeat(16);
+    for (anchor, target, root, hooks, binary) in [
+        ("/c/none", "n:n", &place.root, Some(digest), build),
+        ("/c/binary", "b:b", &place.root, Some(digest), "000000000000"),
+        ("/c/plugin", "p:p", &place.root, Some(other.as_str()), build),
+        ("/c/ledger/.worktrees/w", "l:l", &place.root, Some(digest), build),
+        ("/c/dual", "d:d", &place.vessel, None, build),
+    ] {
+        register_anchor(&place, anchor, target);
+        write_record(&place, target, root, hooks, binary);
+    }
+    let root = place.root.display().to_string();
+    let lines = consumer_lines(&place);
+    let want = [
+        format!("consumer=/c/binary source=launch+install scope=local binary=000000000000 plugin={root}:{digest} ledger={head} cache={cache_digest} head={sha12} drift=binary"),
+        format!("consumer=/c/dual source=launch+install scope=project binary={build} plugin={vessel}:unreadable ledger={head} cache={cache_digest} head={sha12} drift=dual"),
+        format!("consumer=/c/ledger/.worktrees/w source=launch+install scope=project binary={build} plugin={root}:{digest} ledger={stale} cache=absent head={sha12} drift=ledger"),
+        format!("consumer=/c/none source=launch+install scope=project binary={build} plugin={root}:{digest} ledger={head} cache={cache_digest} head={sha12} drift=none"),
+        format!("consumer=/c/plugin source=launch+install scope=user binary={build} plugin={root}:{other} ledger={head} cache=absent head={sha12} drift=plugin"),
+    ];
+    assert_eq!(lines, want, "導入先ごとに 1 行・path の辞書順・語は 1 つずつ");
+    assert_ne!(cache_digest, digest, "cache は installPath の hooks.json（記録の root とは別の file）");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (e) 記録の無い導入先は `unrecorded`（`none` に潰さない）: 登録 row だけ（`source=launch`・`ledger=-`）・帳簿だけ
+/// （`source=install`・記録の置き場が無い）・記録の位置に dir（読めない＝不在に潰さない）。帳簿の食い違いは記録が
+/// 無くても測り、宣言順に `+` で繋ぐ（`ledger+unrecorded`）。
+#[test]
+fn doctor_consumer_unrecorded_is_not_none() {
+    let place = consumer_place().unwrap_or_else(|| panic!("置き場を作れる"));
+    let (head, sha12) = (place.head.as_str(), head12(&place));
+    let vessel = place.vessel.display().to_string();
+    write_host(&place, &["acc-a"], Some(&vessel));
+    let stale = "1".repeat(40);
+    write_ledger(
+        &place,
+        "acc-a",
+        &[
+            LedgerRow { project: "/u/install", scope: Some("project"), install: None, sha: Some(head) },
+            LedgerRow { project: "/u/stale", scope: None, install: None, sha: Some(&stale) },
+        ],
+    );
+    register_anchor(&place, "/u/launch", "u:launch");
+    register_anchor(&place, "/u/broken", "u:broken");
+    let seat = vessel::seat::seat_dir(&place.state, "u:broken");
+    fs::create_dir_all(digest::record_path(&seat)).expect("記録の位置に dir を置ける");
+    let lines = consumer_lines(&place);
+    let tail = |source: &str, ledger: &str, drift: &str| {
+        format!("source={source} scope=- binary=unrecorded plugin=unrecorded ledger={ledger} cache=absent head={sha12} drift={drift}")
+    };
+    let want = [
+        format!("consumer=/u/broken {}", tail("launch", "-", "unrecorded")),
+        format!("consumer=/u/install source=install scope=project binary=unrecorded plugin=unrecorded ledger={head} cache=absent head={sha12} drift=unrecorded"),
+        format!("consumer=/u/launch {}", tail("launch", "-", "unrecorded")),
+        format!("consumer=/u/stale {}", tail("install", &stale, "ledger+unrecorded")),
+    ];
+    assert_eq!(lines, want, "記録の無い導入先は unrecorded");
+    assert!(!lines.iter().any(|line| line.ends_with("drift=none")), "none に潰さない: {lines:?}");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (f) 壊れた帳簿の口座は `ledger=unreadable` の 1 行（帳簿の path を名指す・末尾）で、他の口座の行は出る。器の key の無い
+/// 帳簿・帳簿の無い口座は行 0。doctor は帳簿を書かない（bytes 不変）。
+#[test]
+fn doctor_consumer_survives_a_broken_ledger() {
+    let place = consumer_place().unwrap_or_else(|| panic!("置き場を作れる"));
+    write_host(&place, &["acc-broken", "acc-good", "acc-other", "acc-none"], None);
+    let broken = write_ledger_text(&place, "acc-broken", "{\"plugins\":");
+    write_ledger(&place, "acc-good", &[LedgerRow { project: "/g/one", scope: Some("project"), install: None, sha: None }]);
+    write_ledger_text(&place, "acc-other", "{\"version\":2,\"plugins\":{\"other@other\":[{\"projectPath\":\"/o/x\"}]}}");
+    let before = fs::read(&broken).unwrap_or_default();
+    let lines = consumer_lines(&place);
+    let want = [
+        "consumer=/g/one source=install scope=project binary=unrecorded plugin=unrecorded ledger=- cache=absent head=undeclared drift=unrecorded".to_owned(),
+        format!(
+            "consumer={} source=install scope=- binary=unrecorded plugin=unrecorded ledger=unreadable cache=absent head=undeclared drift=unrecorded",
+            broken.display()
+        ),
+    ];
+    assert_eq!(lines, want, "壊れた帳簿は 1 行・他の行は出る・器の無い帳簿は行 0");
+    assert_eq!(fs::read(&broken).unwrap_or_default(), before, "帳簿を書かない");
+    assert!(!vessel::account::consumers::ledger_path(&place.state, "acc-none").exists(), "無い口座の帳簿を作らない");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (g) `[[vessel]]` が無ければ `head=undeclared`（止めない・帳簿の食い違いは測れない＝`ledger` の語は出ない）。宣言が git の
+/// repo でなければ `head=unknown`。宣言が在れば同じ帳簿で `ledger` を名指す。
+#[test]
+fn doctor_consumer_head_is_undeclared_without_vessel_row() {
+    let place = consumer_place().unwrap_or_else(|| panic!("置き場を作れる"));
+    write_host(&place, &["acc-a"], None);
+    let stale = "2".repeat(40);
+    write_ledger(&place, "acc-a", &[LedgerRow { project: "/h/one", scope: Some("project"), install: None, sha: Some(&stale) }]);
+    register_anchor(&place, "/h/one", "h:one");
+    write_record(&place, "h:one", &place.root, Some(&place.digest), env!("SCRIBE2_BUILD_COMMIT"));
+    let plugin = format!("{}:{}", place.root.display(), place.digest);
+    let build = env!("SCRIBE2_BUILD_COMMIT");
+    let line = |head: &str| {
+        format!("consumer=/h/one source=launch+install scope=project binary={build} plugin={plugin} ledger={stale} cache=absent head={head} drift=none")
+    };
+    assert_eq!(consumer_lines(&place), [line("undeclared")], "[[vessel]] 無し");
+    let not_git = place.dir.join("not-a-repo");
+    fs::create_dir_all(&not_git).ok();
+    write_host(&place, &["acc-a"], Some(&not_git.display().to_string()));
+    assert_eq!(consumer_lines(&place), [line("unknown")], "git の repo でない宣言");
+    write_host(&place, &["acc-a"], Some(&place.vessel.display().to_string()));
+    let sha12 = head12(&place);
+    assert_eq!(consumer_lines(&place), [line(&sha12).replace("drift=none", "drift=ledger")], "宣言が在れば帳簿の食い違いを測る");
+    fs::remove_dir_all(&place.dir).ok();
 }

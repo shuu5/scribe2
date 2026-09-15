@@ -53,7 +53,8 @@ fn render_doctor() -> Vec<String> {
 
 /// `doctor` の出力行。`--state-dir S [--tmux-socket PATH] [--rules FILE]` 付きは登録 row の一覧（`model` の欄
 /// つき・1 row 1 行）と実在の target の突合 1 行（C3.2・seat-roles.md §9 (e)）の後ろに、host の面の 1 行と口座の
-/// 前提の行（`account ls` と同じ 1 関数・`retired=` つき・[`vessel::account::doctor_lines`]・account-lifecycle.md §3）を
+/// 前提の行（`account ls` と同じ 1 関数・`retired=` つき・[`vessel::account::doctor_lines`]・account-lifecycle.md §3）、
+/// さらに導入先の行（1 導入先 1 行・[`vessel::account::consumers::doctor_lines`]・consumer-sync.md §4・FR61）を
 /// 足す。値欠け・空文字・重複・未知の引数は使い方の誤り（`Err`）。
 fn render_doctor_with(rest: &[String]) -> Result<Vec<String>, ()> {
     let (mut lines, mut state_dir, mut socket, mut rules) = (render_doctor(), None, None, None);
@@ -69,6 +70,7 @@ fn render_doctor_with(rest: &[String]) -> Result<Vec<String>, ()> {
         (Some(dir), _, _) => {
             lines.extend(vessel::seat::role::doctor_lines(Path::new(dir), socket));
             lines.extend(vessel::account::doctor_lines(Path::new(dir), rules));
+            lines.extend(vessel::account::consumers::doctor_lines(Path::new(dir), rules));
         }
         (None, None, None) => {}
         (None, _, _) => return Err(()),
@@ -156,7 +158,9 @@ mod tests {
     use super::{render_doctor, render_name, render_usage, render_version, NAME};
     use std::ffi::OsStr;
     use std::path::PathBuf;
+    use vessel::account::consumers::{drift_of, render_consumer, Consumer, Head, Source};
     use vessel::account::{render_account, render_host_manifest, AccountProbe, AgentView, Presence, Retired, Trust};
+    use vessel::hook::vessel::digest::PluginRecord;
 
     /// workspace root（この crate の 2 つ上）。
     fn workspace_root() -> PathBuf {
@@ -227,7 +231,8 @@ mod tests {
 
     /// `doctor` / usage / `--version` の外形を 1 つの snapshot に固定する。
     ///
-    /// 結合の順序は doctor の 2 行 → host の面の行 → 口座の行（fixture 1 つ・anchor 2 つ・退役していない形）→ usage → version で、
+    /// 結合の順序は doctor の 2 行 → host の面の行 → 口座の行（fixture 1 つ・anchor 2 つ・退役していない形）→ 導入先の行
+    /// （記録の無い launch+install の形・帳簿は HEAD と食い違う・consumer-sync.md §4）→ usage → version で、
     /// 区切り文字は LF ただ 1 種である。版番号は assert の前に `[version]` へ、build 元 commit（build ごとに変わる）は
     /// `[commit]` へ置換する 2 段の mask（`default-features = false` では `Settings::add_filter` が無いので `filters`
     /// feature に頼らない・regex も足さない＝`env!` の実値を置換する）。
@@ -243,6 +248,15 @@ mod tests {
         };
         lines.push(render_host_manifest("present"));
         lines.push(render_account("acct", &probe, Retired::No));
+        let consumer = Consumer {
+            source: Source::Both,
+            scope: Some("project".to_owned()),
+            record: PluginRecord::Absent,
+            ledger: Some("0123456789abcdef0123456789abcdef01234567".to_owned()),
+            cache: Some("cbf29ce484222325".to_owned()),
+        };
+        let head = Head::Sha("fedcba9876543210fedcba9876543210fedcba98".to_owned());
+        lines.push(render_consumer("/repo/a", &consumer, &head, &drift_of(&consumer, &head, None)));
         lines.push(render_usage());
         lines.push(render_version());
         let masked = lines

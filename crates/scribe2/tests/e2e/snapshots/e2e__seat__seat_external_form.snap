@@ -51,3 +51,4 @@ usage: seat <meter --target T [--transcript PATH]|inject --target T (--text S|--
 [BD-INPROGRESS-NONE]
 seats: registered=2 live=unmeasurable missing=unmeasurable
 host-manifest=absent
+consumer=/repo source=launch scope=- binary=unrecorded plugin=unrecorded ledger=- cache=absent head=undeclared drift=unrecorded

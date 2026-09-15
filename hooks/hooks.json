@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${SCRIBE2_BIN:-scribe2}\" hook session-start --pane \"$TMUX_PANE\" --project \"$CLAUDE_PROJECT_DIR\"",
+            "command": "\"${SCRIBE2_BIN:-scribe2}\" hook session-start --pane \"$TMUX_PANE\" --project \"$CLAUDE_PROJECT_DIR\" --plugin-root \"$CLAUDE_PLUGIN_ROOT\"",
             "timeout": 10
           }
         ]
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${SCRIBE2_BIN:-scribe2}\" hook pre-tool-use --pane \"$TMUX_PANE\" --project \"$CLAUDE_PROJECT_DIR\"",
+            "command": "\"${SCRIBE2_BIN:-scribe2}\" hook pre-tool-use --pane \"$TMUX_PANE\" --project \"$CLAUDE_PROJECT_DIR\" --plugin-root \"$CLAUDE_PLUGIN_ROOT\"",
             "timeout": 10
           }
         ]
@@ -29,7 +29,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${SCRIBE2_BIN:-scribe2}\" hook permission-request --pane \"$TMUX_PANE\" --project \"$CLAUDE_PROJECT_DIR\"",
+            "command": "\"${SCRIBE2_BIN:-scribe2}\" hook permission-request --pane \"$TMUX_PANE\" --project \"$CLAUDE_PROJECT_DIR\" --plugin-root \"$CLAUDE_PLUGIN_ROOT\"",
             "timeout": 10
           }
         ]
@@ -40,7 +40,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${SCRIBE2_BIN:-scribe2}\" hook user-prompt-submit --pane \"$TMUX_PANE\" --project \"$CLAUDE_PROJECT_DIR\"",
+            "command": "\"${SCRIBE2_BIN:-scribe2}\" hook user-prompt-submit --pane \"$TMUX_PANE\" --project \"$CLAUDE_PROJECT_DIR\" --plugin-root \"$CLAUDE_PLUGIN_ROOT\"",
             "timeout": 10
           }
         ]
@@ -51,7 +51,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${SCRIBE2_BIN:-scribe2}\" hook stop --pane \"$TMUX_PANE\" --project \"$CLAUDE_PROJECT_DIR\"",
+            "command": "\"${SCRIBE2_BIN:-scribe2}\" hook stop --pane \"$TMUX_PANE\" --project \"$CLAUDE_PROJECT_DIR\" --plugin-root \"$CLAUDE_PLUGIN_ROOT\"",
             "timeout": 10
           }
         ]

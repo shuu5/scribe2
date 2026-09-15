@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use vessel::cli_outcome::{RC_BROKEN, RC_OK, RC_REFUSED};
 use vessel::fleet::{json_lite, Registration};
+use vessel::hook::vessel::digest::{self, PluginRecord};
 use vessel::hook::vessel::{Marker, GENERATION, MARKER};
 use vessel::hook::{guard, inject_path, SCHEMA};
 use vessel::name::NAME;
@@ -1821,6 +1822,145 @@ fn seat_state_hooks_json_carries_stamp_entries() {
         assert_eq!(body.matches(&format!("hook {sub}{pane_arg}")).count(), 1, "{sub} の command 行に --pane");
     }
     assert_eq!(body.matches("\"type\": \"command\"").count(), 5, "entry は 5 つ: {body}");
+}
+
+// ─────────────────── 読み込み元の記録（consumer-sync.md §3・`s2-07l.303`・接頭辞 `hook_plugin_record_`） ───────────────────
+
+/// 独立 socket の席を 1 つ立てた置き場（repo・state dir・socket の dir・pane id）。
+struct PluginPlace {
+    repo: PathBuf,
+    state: PathBuf,
+    sock_dir: PathBuf,
+    socket: String,
+    pane: String,
+    guard: IsolatedSeat,
+}
+
+/// 席を 1 つ立てる（`name` は session = window の名）。
+fn plugin_place(name: &str) -> PluginPlace {
+    let repo = git_repo();
+    let state = linked(&repo);
+    let sock_dir = tmp();
+    let socket = socket_of(&sock_dir);
+    let guard = start_seat(&socket, name);
+    assert!(guard.ready(), "独立 socket に session を立てられる");
+    let pane = pane_id_of(&socket, name);
+    PluginPlace { repo, state, sock_dir, socket, pane, guard }
+}
+
+/// plugin の root を tmp に作る（`hooks/hooks.json` は `body` が在る周だけ置く）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn plugin_root(body: Option<&str>) -> PathBuf {
+    let root = tmp();
+    if let Some(text) = body {
+        fs::create_dir_all(root.join("hooks")).expect("hooks dir を作れる");
+        fs::write(digest::hooks_path(&root), text).expect("hooks.json を書ける");
+    }
+    root
+}
+
+/// `session-start` を `--plugin-root` 付きで撃つ（rc 0・名乗りは不変・stderr 0 byte）。
+fn run_session_start(place: &PluginPlace, extra: &[&str], sid: &str) -> Output {
+    let mut args = vec!["session-start", "--pane", &place.pane, "--tmux-socket", &place.socket];
+    args.extend_from_slice(extra);
+    let out = run_hook_args(&args, &stamp_payload(&place.repo, sid));
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "session-start は rc 0: {}", stderr_text(&out));
+    assert!(String::from_utf8_lossy(&out.stdout).contains(&format!("[{NAME}/SessionStart]")), "名乗りは不変");
+    assert_eq!(stderr_text(&out), "", "stderr 0 byte");
+    out
+}
+
+/// (a) `--plugin-root <tmp>` 付きの session-start が `seat/<target>/plugin` に 1 行を書く: `hooks=` は tmp の hooks.json の
+/// FNV-1a 64・`binary=` は `env!` の build 元 commit・`sid=` は payload・`root=` は渡した path。2 回目は上書き（1 行のまま・
+/// 新しい digest）。base は file が無い（RED）。
+#[test]
+fn hook_plugin_record_is_written_with_the_digest_of_hooks_json() {
+    let place = plugin_place("hookplug");
+    let root = plugin_root(Some("{\"hooks\":{}}\n"));
+    let root_s = root.display().to_string();
+    run_session_start(&place, &["--plugin-root", &root_s], "sid-plug");
+    let seat_dir = place.state.join("seat").join("hookplug_hookplug");
+    let path = digest::record_path(&seat_dir);
+    let text = fs::read_to_string(&path).unwrap_or_default();
+    assert_eq!(text.lines().count(), 1, "1 file 1 行: {}: {text:?}", path.display());
+    assert!(text.starts_with("schema=1 sid=sid-plug root="), "key の順: {text}");
+    let want = digest::fnv1a_64(b"{\"hooks\":{}}\n");
+    let PluginRecord::Recorded { root: found_root, hooks, binary, sid, ts } = PluginRecord::read(&seat_dir) else {
+        panic!("記録が読める: {text}");
+    };
+    assert_eq!(found_root, root_s, "root は渡した path");
+    assert_eq!(hooks.as_deref(), Some(want.as_str()), "hooks は hooks.json の FNV-1a 64: {text}");
+    assert_eq!(binary, env!("SCRIBE2_BUILD_COMMIT"), "binary は build 元 commit: {text}");
+    assert_eq!(sid, "sid-plug");
+    assert!(ts > 1_700_000_000, "ts は 1970 年からの秒: {text}");
+    assert_eq!(digest::hooks_digest(&root).as_deref(), Some(want.as_str()), "読み手も同じ digest");
+    fs::write(digest::hooks_path(&root), "{\"hooks\":{\"Stop\":[]}}\n").expect("hooks.json を変えられる");
+    run_session_start(&place, &["--plugin-root", &root_s], "sid-plug2");
+    let again = fs::read_to_string(&path).unwrap_or_default();
+    assert_eq!(again.lines().count(), 1, "上書き（追記しない）: {again:?}");
+    let PluginRecord::Recorded { hooks: newer, sid: newer_sid, .. } = PluginRecord::read(&seat_dir) else {
+        panic!("記録が読める: {again}");
+    };
+    assert_eq!(newer.as_deref(), Some(digest::fnv1a_64(b"{\"hooks\":{\"Stop\":[]}}\n").as_str()), "新しい digest");
+    assert_eq!(newer_sid, "sid-plug2", "最新 session の値");
+    assert!(state_file(&place.state, "hookplug").exists(), "打刻は従来どおり");
+    drop(place.guard);
+    clean(&[&place.repo, &place.state, &place.sock_dir, &root]);
+}
+
+/// (b) `--plugin-root` 無し・空・pane が空（tmux の外）は記録しない（file 無し・rc 0・名乗りは出る）＝極性の対。
+#[test]
+fn hook_plugin_record_is_skipped_without_a_root() {
+    let place = plugin_place("hooknoroot");
+    let root = plugin_root(Some("{}\n"));
+    let root_s = root.display().to_string();
+    let seat_dir = place.state.join("seat").join("hooknoroot_hooknoroot");
+    run_session_start(&place, &[], "sid-none");
+    run_session_start(&place, &["--plugin-root", ""], "sid-empty");
+    run_session_start(&place, &["--plugin-root", "  "], "sid-blank");
+    assert!(!digest::record_path(&seat_dir).exists(), "root が無い・空の周は記録しない");
+    assert_eq!(PluginRecord::read(&seat_dir), PluginRecord::Absent, "読み手は不在");
+    let out = run_hook_args(&["session-start", "--pane", "", "--tmux-socket", &place.socket, "--plugin-root", &root_s], &stamp_payload(&place.repo, "sid-nopane"));
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "pane が空でも rc 0");
+    assert!(String::from_utf8_lossy(&out.stdout).contains(&format!("[{NAME}/SessionStart]")), "名乗りは出る");
+    let seats: Vec<String> = fs::read_dir(place.state.join("seat"))
+        .map(|entries| entries.flatten().map(|entry| entry.file_name().to_string_lossy().into_owned()).collect())
+        .unwrap_or_default();
+    assert_eq!(seats, ["hooknoroot_hooknoroot"], "pane の無い周は席の dir を作らない（打刻の dir だけ）: {seats:?}");
+    assert!(!digest::record_path(&seat_dir).exists(), "pane が空の周も記録しない");
+    drop(place.guard);
+    clean(&[&place.repo, &place.state, &place.sock_dir, &root]);
+}
+
+/// (c) root に hooks.json が無い周は `hooks=unreadable` で記録する（記録はする＝doctor が名指す・不在に潰さない）。
+/// 記録 file の位置に dir が在って書けない周は名乗りを出し rc 0 のまま stderr 1 行。
+#[test]
+fn hook_plugin_record_marks_unreadable_when_hooks_json_is_missing() {
+    let place = plugin_place("hookunread");
+    let root = plugin_root(None);
+    let root_s = root.display().to_string();
+    let seat_dir = place.state.join("seat").join("hookunread_hookunread");
+    run_session_start(&place, &["--plugin-root", &root_s], "sid-unread");
+    let text = fs::read_to_string(digest::record_path(&seat_dir)).unwrap_or_default();
+    assert!(text.contains(&format!(" hooks={} ", digest::UNREADABLE)), "hooks=unreadable: {text}");
+    let PluginRecord::Recorded { hooks, root: found_root, .. } = PluginRecord::read(&seat_dir) else {
+        panic!("記録が読める: {text}");
+    };
+    assert_eq!(hooks, None, "読めない digest は None: {text}");
+    assert_eq!(found_root, root_s);
+    fs::remove_file(digest::record_path(&seat_dir)).expect("記録を外せる");
+    fs::create_dir_all(digest::record_path(&seat_dir)).expect("記録の位置に dir を置ける");
+    let args = ["session-start", "--pane", &place.pane, "--tmux-socket", &place.socket, "--plugin-root", &root_s];
+    let out = run_hook_args(&args, &stamp_payload(&place.repo, "sid-broken"));
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "書けなくても rc 0（席を止めない）");
+    assert!(String::from_utf8_lossy(&out.stdout).contains(&format!("[{NAME}/SessionStart]")), "名乗りは出る");
+    assert_eq!(stderr_lines(&out), 1, "書けなかったことを 1 行だけ surface する: {}", stderr_text(&out));
+    assert_eq!(PluginRecord::read(&seat_dir), PluginRecord::Unreadable, "dir は読めない側（不在に潰さない）");
+    drop(place.guard);
+    clean(&[&place.repo, &place.state, &place.sock_dir, &root]);
 }
 
 // ─────────────────── 記録の席の列（`seat` / `ts`・`s2-07l.150`・接頭辞 `seat_attrib_`） ───────────────────

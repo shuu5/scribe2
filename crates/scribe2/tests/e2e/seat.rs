@@ -17,7 +17,7 @@ mod cycle;
 mod tick;
 mod wm;
 
-use self::account::{role_doctor, role_doctor_place, role_place, role_register, role_stamp, HOST_ABSENT, NO_ACCOUNT_RULES};
+use self::account::{role_doctor, role_doctor_place, role_place, role_register, role_stamp, CONSUMER_REPO, HOST_ABSENT, NO_ACCOUNT_RULES};
 use self::wm::rebrief_forms;
 use crate::make_tmp_dir;
 use std::fs;
@@ -204,7 +204,8 @@ fn start_seat_sized(socket: &str, name: &str, ps1: &str, needle: char, width: &s
 const PROMPT_WAIT: Duration = Duration::from_secs(5);
 
 /// `seat` の使い方と rebrief の DATA の 3 形（found / candidate / missing の marker の並び）と、
-/// `doctor --state-dir` の突合の項目（tmux を撃てない周の形）とその直後の host の面の行を snapshot 1 本に固定する（C12.5）。
+/// `doctor --state-dir` の突合の項目（tmux を撃てない周の形）・その直後の host の面の行・末尾の導入先の行
+/// （登録 row の anchor・記録なし・consumer-sync.md §4）を snapshot 1 本に固定する（C12.5）。
 #[test]
 fn seat_external_form() {
     let mut form = stderr_of(&run_seat(&[]));
@@ -884,15 +885,19 @@ fn mutant_e2e_doctor_reconciles_against_the_given_tmux_socket_and_refuses_a_dupl
     let live = doctor(&["--state-dir", &state, "--tmux-socket", &place.socket, "--rules", &rules]);
     assert_eq!(live.as_ref().map(rc_of), Some(i32::from(RC_OK)), "{live:?}");
     let lines: Vec<String> = live.map(|out| stdout_of(&out)).unwrap_or_default().lines().map(str::to_owned).collect();
-    assert_eq!(lines.len(), 5, "2 行 + 登録 row 1 行 + 突合 1 行 + host の面 1 行: {lines:?}");
-    assert_eq!(lines.get(3..), Some(&["seats: registered=1 live=1 missing=0".to_owned(), HOST_ABSENT.to_owned()][..]), "席の立つ socket");
+    assert_eq!(lines.len(), 6, "2 行 + 登録 row 1 行 + 突合 1 行 + host の面 1 行 + 導入先 1 行: {lines:?}");
+    assert_eq!(
+        lines.get(3..),
+        Some(&["seats: registered=1 live=1 missing=0".to_owned(), HOST_ABSENT.to_owned(), CONSUMER_REPO.to_owned()][..]),
+        "席の立つ socket"
+    );
     let elsewhere = place.dir.join("no-server-sock").display().to_string();
     let away = doctor(&["--state-dir", &state, "--tmux-socket", &elsewhere, "--rules", &rules]);
     assert_eq!(away.as_ref().map(rc_of), Some(i32::from(RC_OK)), "{away:?}");
     let away_lines: Vec<String> = away.map(|out| stdout_of(&out)).unwrap_or_default().lines().map(str::to_owned).collect();
     assert_eq!(
         away_lines.get(3..),
-        Some(&["seats: registered=1 live=unmeasurable missing=unmeasurable".to_owned(), HOST_ABSENT.to_owned()][..]),
+        Some(&["seats: registered=1 live=unmeasurable missing=unmeasurable".to_owned(), HOST_ABSENT.to_owned(), CONSUMER_REPO.to_owned()][..]),
         "server の無い socket は 0 と書かない"
     );
     for dup in [

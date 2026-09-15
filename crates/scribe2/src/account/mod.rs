@@ -5,8 +5,10 @@
 //! （一覧を 2 面に書かない・C10.2）。**env も HOME も読まない**（C2.2）: 置き場は `--state-dir` だけで、口座の dir を
 //! **走査しない**（宣言が真実・C3）。退役は可逆な move と event 1 件で、削除の口を持たない（N1 / N1.2）。前提違反は file も
 //! event も書かずに typed に断る（[`AccountError`]・C11.3）。credential には触れない（読まない・書かない・login を待たない）。
+//! doctor の導入先の行（口座の行の後ろ・consumer-sync.md §4）は [`consumers`]。
 
 pub mod cli;
+pub mod consumers;
 
 use crate::fleet::json_tree::{self, Tree};
 use crate::fleet::store::{self, LockPolicy};

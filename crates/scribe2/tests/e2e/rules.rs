@@ -702,6 +702,51 @@ fn rules_host_rejects_every_defect_with_line_numbers_and_the_face_prefix() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// (h・`s2-07l.303`) `[[vessel]] repo` 1 行は host の面から読める（`validate --state-dir` が rc 0 で数え、`Manifest::vessel`
+/// が dir と見出し行を運ぶ・tracked の面は持たない）。2 行目は**行番号付きで重複として拒む**（`host.toml:` の接頭辞・
+/// stdout 0 行・1 行目の値は読まない）。`repo` 欠け・空・未知 key は他の表と同じ拒否形。面をまたぐ 2 行（`--rules` の
+/// tracked 側と host 側）も host の面の行番号で拒む。base は `[[vessel]]` を未知の section として拒む（RED）。
+#[test]
+fn rules_host_vessel_row_is_read_and_duplicates_are_refused() {
+    let one = "schema = 1\n\n[[account]]\nlabel = \"h1\"\n\n[[vessel]]\nrepo = \"/srv/vessel\"\n";
+    let dir = host_state_dir(Some(one)).expect("tmp の state dir を作れる");
+    let state = dir.display().to_string();
+    let outcome = rules_dispatch(&["validate", "--state-dir", &state]);
+    assert_eq!(outcome.rc, RC_OK, "{outcome:?}");
+    assert_eq!(outcome.out, vec![format!("{} accounts=1 plugins=0 launch-args=0 host=present", embedded_validate_line())]);
+    let manifest = Manifest::embedded()
+        .and_then(|tracked| vessel::rules::with_state_dir(tracked, Some(dir.as_path())))
+        .expect("host の面を合わせられる");
+    let found = manifest.vessel().expect("[[vessel]] が読める");
+    assert_eq!((found.repo(), found.line()), ("/srv/vessel", 6), "dir と見出し行");
+    assert_eq!(Manifest::embedded().expect("埋め込み").vessel(), None, "tracked の面は持たない");
+    let host = dir.join(vessel::rules::HOST_MANIFEST);
+    std::fs::write(&host, format!("{one}\n[[vessel]]\nrepo = \"/srv/other\"\n")).expect("host の面を書ける");
+    let dup = rules_dispatch(&["validate", "--state-dir", &state]);
+    assert_eq!(dup.rc, RC_REFUSED, "{dup:?}");
+    assert!(dup.out.is_empty(), "stdout へは書かない: {dup:?}");
+    assert_eq!(dup.err, vec!["rules: host.toml: [[vessel]] が重複する（最大 1 行） line=9".to_owned()], "2 行目を行番号で名指す");
+    for (body, want) in [
+        ("schema = 1\n\n[[vessel]]\n", "rules: host.toml: 必須 key repo が無い line=3"),
+        ("schema = 1\n\n[[vessel]]\nrepo = \"\"\n", "rules: host.toml: repo が空である line=3"),
+        ("schema = 1\n\n[[vessel]]\nrepo = \"/x\"\nbranch = \"main\"\n", "rules: host.toml: 未知の key branch line=5"),
+        ("schema = 1\n\n[[vessel]]\nrepo = 3\n", "rules: host.toml: repo は文字列でなければならない（実 One(Int(3))） line=4"),
+    ] {
+        std::fs::write(&host, body).expect("host の面を書ける");
+        let refused = rules_dispatch(&["validate", "--state-dir", &state]);
+        assert_eq!(refused.rc, RC_REFUSED, "{body:?}: {refused:?}");
+        assert_eq!(refused.err, vec![want.to_owned()], "{body:?}: 他の表と同じ拒否形・1 件");
+    }
+    let tracked = dir.join("tracked.toml");
+    std::fs::write(&tracked, format!("{GOOD}\n[[vessel]]\nrepo = \"/srv/tracked\"\n")).expect("tracked の fixture を書ける");
+    std::fs::write(&host, one).expect("host の面を書ける");
+    let rules = tracked.display().to_string();
+    let crossed = rules_dispatch(&["validate", "--rules", &rules, "--state-dir", &state]);
+    assert_eq!(crossed.rc, RC_REFUSED, "{crossed:?}");
+    assert_eq!(crossed.err, vec!["rules: host.toml: [[vessel]] が面をまたいで重複する（最大 1 行） line=6".to_owned()], "面をまたぐ 2 行");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 // ─────────────────── host の面が dir（在るが読めない・`s2-07l.250`・`.243` run 3 の生存変異を塞ぐ） ───────────────────
 // flip-check: retroactive s2-07l.250
 

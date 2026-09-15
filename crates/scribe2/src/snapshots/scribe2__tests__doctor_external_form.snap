@@ -6,5 +6,6 @@ scribe2
 scribe2 [version] ([commit])
 host-manifest=present
 account=acct dir=present credential=present config=missing agentview=unreadable trust=_repo_a:accepted trust=_repo_b:unreadable retired=no
+consumer=/repo/a source=launch+install scope=project binary=unrecorded plugin=unrecorded ledger=0123456789abcdef0123456789abcdef01234567 cache=cbf29ce484222325 head=fedcba987654 drift=ledger+unrecorded
 usage: scribe2 <name|--version|doctor|account|rules|fleet|vessel|hook|pipe|runner|lens|seat|polarity|contracts>
 scribe2 [version] ([commit])

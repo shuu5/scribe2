@@ -78,6 +78,11 @@ const FLAG_SOCKET: &str = "--tmux-socket";
 const FLAG_PROJECT: &str = "--project";
 /// rules manifest を差し替える flag（役割の行の歯の seam・`rules get --rules` と同じ形）。
 const FLAG_RULES: &str = "--rules";
+/// plugin の root（hooks.json の在る場所）を渡す flag。生成 hooks.json の shell 行が `$CLAUDE_PLUGIN_ROOT` から渡す
+/// （設計 consumer-sync.md §3・器は env を読まない・C2.2）。無い・空の周（plugin の外から撃った hook・fixture）は記録しない。
+const FLAG_PLUGIN_ROOT: &str = "--plugin-root";
+/// payload から拾う key（この session の id・読み込み元の記録の `sid=`）。
+const KEY_SESSION_ID: &str = "session_id";
 
 /// 注入 1 回の記録（FR21: who / what / when / bytes / tokens / wall）。
 ///
@@ -168,6 +173,8 @@ pub fn dispatch(args: &[String], payload: &str) -> Outcome {
             let mut outcome = session_start(&hooked, version, started);
             // 名乗りの後に打刻（Idle）。打刻の失敗は名乗りの行も rc も変えない（席を止めない）。
             outcome.err.extend(stamp::stamp(args, payload, Event::SessionStart, &dir));
+            // 打刻の後に読み込み元の記録（設計 consumer-sync.md §3・同じく席を止めない）。
+            outcome.err.extend(plugin_record(args, payload, &dir));
             outcome
         }
         Some(EVENT_PRE_TOOL_USE) => pre_tool_use(&hooked, payload, started),
@@ -256,6 +263,29 @@ fn stamped(args: &[String], payload: &str, event: Event, dir: &Path) -> Outcome 
     let mut outcome = Outcome::ok(Vec::new());
     outcome.err = stamp::stamp(args, payload, event, dir);
     outcome
+}
+
+/// 読み込み元の記録（設計 consumer-sync.md §3・ADR-0028 §2.2）: `--plugin-root` が在り空でなく、`--pane` から
+/// target を解けた周だけ `seat/<target>/plugin` を 1 行で上書きする（digest は [`vessel::digest`]・binary は
+/// compile time の `env!`・C2.2）。無い・空・解けない周は記録しない（黙る・止めない）。書けなかった周は席を止めず
+/// stderr に 1 行（黙って消さない）。
+fn plugin_record(args: &[String], payload: &str, state_dir: &Path) -> Vec<String> {
+    let Some(root) = flag_of(args, FLAG_PLUGIN_ROOT).filter(|found| !found.trim().is_empty()) else {
+        return Vec::new();
+    };
+    let Some(pane) = flag_of(args, FLAG_PANE).filter(|found| !found.trim().is_empty()) else {
+        return Vec::new();
+    };
+    let socket = flag_of(args, FLAG_SOCKET).filter(|found| !found.trim().is_empty());
+    let Some(target) = crate::seat::target_of_pane(socket, pane) else {
+        return Vec::new();
+    };
+    let sid = field(payload, KEY_SESSION_ID).unwrap_or_default();
+    let seat_dir = crate::seat::seat_dir(state_dir, &target);
+    match vessel::digest::write(&seat_dir, Path::new(root), &sid, env!("SCRIBE2_BUILD_COMMIT")) {
+        Ok(()) => Vec::new(),
+        Err(reason) => vec![format!("{NAME}: 読み込み元の記録を書けない reason={reason}")],
+    }
 }
 
 /// 記録の置き場。`--state-dir` が上書きし、無ければ repo の git 設定から読む。

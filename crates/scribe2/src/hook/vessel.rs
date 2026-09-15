@@ -5,6 +5,10 @@
 //! NAME を言わないとき hook は黙る（FR24）ので、この module の判定はすべて
 //! **黙る側へ倒す**（不在・読めない・parse 不能・非 repo はいずれも
 //! [`Served::Absent`]）。名前の字面はこの file に書かず [`NAME`] から組む。
+//!
+//! hook 集合の digest と読み込み元の記録は [`digest`]（設計 consumer-sync.md §3）。
+
+pub mod digest;
 
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
 use crate::name::NAME;

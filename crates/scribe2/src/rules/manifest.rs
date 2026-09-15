@@ -1,7 +1,7 @@
 //! `rules/manifest.toml` を std だけで読む面（ADR-0004 §2.3・SRS NFR3）。
 //!
 //! 受理するのは TOML の部分集合である: 先頭の `schema = 1`・`[[rule]]` / `[[account]]` / `[[plugin]]` /
-//! `[[launch-arg]]` の array-of-tables・値は string / integer / bool と**文字列の配列**（1 行で閉じる）。
+//! `[[launch-arg]]` / `[[vessel]]` の array-of-tables・値は string / integer / bool と**文字列の配列**（1 行で閉じる）。
 //! **最初の 1 件で止めず**違反を全件集めて返す（silent drop 禁止・SRS NFR4）。
 //!
 //! `[[account]]` は**規則の値ではなく宣言値**である（口座の列挙・設計 fleet-usage.md §2・
@@ -9,8 +9,9 @@
 //! `[[rule]]` 行の検査（裁定 id 必須・`enabled` 必須・kind と値の形の一致）は一切変わらない。
 //!
 //! **host の面**（`<state_dir>/host.toml`・設計 account-lifecycle.md §2・ADR-0026 §2.1）も同じ reader で読む:
-//! 持てる表は `[[account]]` / `[[plugin]]` / `[[launch-arg]]` の 3 種だけで、`[[rule]]` は置けない（規則の行は
-//! tracked の面だけ・C1）。無い周は 0 宣言（縮退）・在るが読めない周は欠陥の全件（FailClosed）。
+//! 持てる表は `[[account]]` / `[[plugin]]` / `[[launch-arg]]` / `[[vessel]]`（器自身の checkout・最大 1 行・
+//! 設計 consumer-sync.md §4）の 4 種だけで、`[[rule]]` は置けない（規則の行は tracked の面だけ・C1）。無い周は
+//! 0 宣言（縮退）・在るが読めない周は欠陥の全件（FailClosed）。
 //!
 //! **契約表の面**（設計 doc の区間・導出の `.toml`・設計 contract-source.md §2・ADR-0023 §2.1）も同じ reader で読む:
 //! 持てる表は `[[contract]]` 1 種だけで（key 集合は `pipe::table::FIELDS`）、rules manifest と host の面は
@@ -43,6 +44,10 @@ const PLUGIN_KEYS: &[&str] = &["dir"];
 
 /// `[[launch-arg]]` 行が持てる key の全体（必須も同じ 1 つ）。値は席の起動行に足す引数 1 つ。
 const LAUNCH_ARG_KEYS: &[&str] = &["value"];
+
+/// `[[vessel]]` 行が持てる key の全体（必須も同じ 1 つ）。値は器自身の checkout の dir（host 固有・host の面にだけ・
+/// **最大 1 行**・設計 consumer-sync.md §4）。
+const VESSEL_KEYS: &[&str] = &["repo"];
 
 /// 行に必ず要る key。
 ///
@@ -100,10 +105,19 @@ enum Section {
     LaunchArg,
     /// 契約表の 1 行（key 集合は `pipe::table::FIELDS`・契約表の面にだけ置く）。
     Contract,
+    /// 器自身の checkout の宣言（repo だけ・最大 1 行・doctor の `head=` と `vessel update` が読む）。
+    Vessel,
 }
 
 /// [`Section`] の全 variant（宣言順）。
-const SECTIONS: &[Section] = &[Section::Rule, Section::Account, Section::Plugin, Section::LaunchArg, Section::Contract];
+const SECTIONS: &[Section] = &[
+    Section::Rule,
+    Section::Account,
+    Section::Plugin,
+    Section::LaunchArg,
+    Section::Contract,
+    Section::Vessel,
+];
 
 impl Section {
     /// TOML の section header の字面。
@@ -114,6 +128,7 @@ impl Section {
             Self::Plugin => "[[plugin]]",
             Self::LaunchArg => "[[launch-arg]]",
             Self::Contract => "[[contract]]",
+            Self::Vessel => "[[vessel]]",
         }
     }
 
@@ -130,6 +145,7 @@ impl Section {
             Self::Plugin => PLUGIN_KEYS.to_vec(),
             Self::LaunchArg => LAUNCH_ARG_KEYS.to_vec(),
             Self::Contract => FIELDS.iter().map(|field| field.name).collect(),
+            Self::Vessel => VESSEL_KEYS.to_vec(),
         }
     }
 
@@ -141,6 +157,7 @@ impl Section {
             Self::Plugin => PLUGIN_KEYS.to_vec(),
             Self::LaunchArg => LAUNCH_ARG_KEYS.to_vec(),
             Self::Contract => FIELDS.iter().filter(|field| field.need == Need::Required).map(|field| field.name).collect(),
+            Self::Vessel => VESSEL_KEYS.to_vec(),
         }
     }
 }
@@ -220,6 +237,25 @@ impl LaunchArg {
     }
 }
 
+/// `[[vessel]]` 1 行が名乗る器自身の checkout（host 固有の場所・host の面にだけ書く・設計 consumer-sync.md §4）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VesselRepo {
+    repo: String,
+    line: u64,
+}
+
+impl VesselRepo {
+    /// checkout の dir の字面。
+    pub fn repo(&self) -> &str {
+        &self.repo
+    }
+
+    /// manifest の中でこの行が始まる物理行番号。
+    pub fn line(&self) -> u64 {
+        self.line
+    }
+}
+
 /// 読み込み済みの manifest。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Manifest {
@@ -228,6 +264,7 @@ pub struct Manifest {
     plugins: Vec<PluginDir>,
     launch_args: Vec<LaunchArg>,
     contracts: Vec<TableRow>,
+    vessel: Option<VesselRepo>,
 }
 
 /// `[[contract]]` 1 行の値（key 集合は検査済み・値の形の検査は欄の形を持つ `pipe::table` が行う）。
@@ -364,13 +401,18 @@ impl Manifest {
             HostManifest::Unreadable(errors) => return Err(errors),
             HostManifest::Present(face) => face,
         };
-        let errors = crossed(&face, |label| self.accounts.iter().any(|found| found.label == label));
+        let mut errors = crossed(&face, |label| self.accounts.iter().any(|found| found.label == label));
+        // `[[vessel]]` は最大 1 行（面をまたいでも同じ）。
+        if let (Some(_), Some(host)) = (&self.vessel, &face.vessel) {
+            errors.push(on_host(RuleError::new(host.line, format!("{} が面をまたいで重複する（最大 1 行）", Section::Vessel.header()))));
+        }
         if !errors.is_empty() {
             return Err(errors);
         }
         self.accounts.extend(face.accounts);
         self.plugins.extend(face.plugins);
         self.launch_args.extend(face.launch_args);
+        self.vessel = self.vessel.take().or(face.vessel);
         Ok(self)
     }
 
@@ -414,6 +456,11 @@ impl Manifest {
     pub fn launch_args(&self) -> &[LaunchArg] {
         &self.launch_args
     }
+
+    /// 宣言した器自身の checkout（host の面・最大 1 行・無ければ `None`＝doctor は `head=undeclared`・設計 consumer-sync.md §4）。
+    pub fn vessel(&self) -> Option<&VesselRepo> {
+        self.vessel.as_ref()
+    }
 }
 
 /// 本文を面の規則で読み、組めた宣言と欠陥の全件を返す（`parse` と host の面の共通の本体）。
@@ -422,6 +469,7 @@ fn collect(text: &str, face: Face) -> (Manifest, Vec<RuleError>) {
     let (schema, raws) = scan(text, &mut errors);
     check_schema(schema, &mut errors);
     let mut found = Manifest::default();
+    let mut vessel_rows = 0_usize;
     for raw in &raws {
         match (raw.section, face) {
             (Section::Contract, Face::Table) => found.contracts.extend(build_table(raw, &mut errors)),
@@ -449,6 +497,15 @@ fn collect(text: &str, face: Face) -> (Manifest, Vec<RuleError>) {
             (Section::LaunchArg, _) => found.launch_args.extend(
                 build_single(raw, "value", &mut errors).map(|(value, line)| LaunchArg { value, line }),
             ),
+            // 2 行目以降は重複として拒む（行番号付き・1 行目の欠陥は build_single が別件で報告する）。
+            (Section::Vessel, _) if vessel_rows > 0 => errors.push(RuleError::new(
+                raw.line,
+                format!("{} が重複する（最大 1 行）", Section::Vessel.header()),
+            )),
+            (Section::Vessel, _) => {
+                vessel_rows = vessel_rows.saturating_add(1);
+                found.vessel = build_single(raw, "repo", &mut errors).map(|(repo, line)| VesselRepo { repo, line });
+            }
         }
     }
     check_duplicate_ids(&found.rows, &mut errors);
