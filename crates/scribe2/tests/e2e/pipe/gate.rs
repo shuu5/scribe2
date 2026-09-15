@@ -2657,6 +2657,7 @@ fn pipe_gate_move_proof_pure_move_sends_summary() {
     assert_eq!(stderr_of(&out), "", "純移動の周は理由の行を出さない");
     assert_summary_moves(&kept);
     assert_summary_residual(&kept);
+    assert!(!kept.contains("carried markers"), "持ち越した札 0 の周は行を出さない: {kept}");
     clean(&[&repo, &state]);
 }
 
@@ -2682,7 +2683,12 @@ fn assert_summary_residual(kept: &str) {
 
 /// 純移動でない fixture を gate まで通し、lens の入力が diff であることの共通 assert（理由は呼び手が名指す）。
 fn assert_sends_diff(head: &[(&str, &str)], reason: &str) {
-    let (repo, state, id) = move_run(&[("lib.rs", MOVE_BASE_LIB)], head);
+    assert_sends_diff_from(&[("lib.rs", MOVE_BASE_LIB)], head, reason);
+}
+
+/// [`assert_sends_diff`] の base も呼び手が渡す形（base に札を持つ fixture・`s2-07l.362`）。
+fn assert_sends_diff_from(base: &[(&str, &str)], head: &[(&str, &str)], reason: &str) {
+    let (repo, state, id) = move_run(base, head);
     let seen = state.join("lens-stdin");
     let out = gate_once(&repo, &state, &id, Some(&recording_lens(&seen)));
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{reason}: lens は diff で呼ばれ PASS: {}", stderr_of(&out));
@@ -2834,4 +2840,51 @@ fn pipe_gate_move_proof_comment_and_body_change_sends_diff() {
     let changed = linked(MOVE_HEAD_ALPHA, "crate::one").replace("    2\n", "    3\n");
     assert!(changed.contains("    3\n"), "fixture は本文も 1 行違う");
     assert_sends_diff(&[("lib.rs", MOVE_HEAD_LIB), ("alpha.rs", &changed), ("beta.rs", MOVE_HEAD_BETA)], "items-differ");
+}
+
+// ---- 持ち越しの札（`s2-07l.362`・.361 run 2 = base に元から在る `retroactive` の札が item ごと移り新規と読まれた型）----
+
+/// `two` の本文の中に `// flip-check: retroactive <id>` の札を持つ形（base と HEAD の両側に同じ字面で置く）。
+fn carried(text: &str, id: &str) -> String {
+    let marked = text.replace("    2\n", &format!("    // flip-check: retroactive {id}\n    2\n"));
+    assert_ne!(marked, text, "fixture は two の本文を持つ");
+    marked
+}
+
+/// (xi) base の item に元から在る `retroactive` の札を、その item ごと別 file へ移した便は純移動: 判定行
+/// `lens-input=summary`・要約が持ち越した札の本数を 1 行で名乗る（判定行の直前）・札の字面は残差分に載らない
+/// （item の中の行）・他の面（移動・可視性・stderr）は (i) と同じ。
+#[test]
+fn pipe_gate_move_proof_carried_retroactive_marker_sends_summary() {
+    let (base, alpha) = (carried(MOVE_BASE_LIB, "s2-07l.1"), carried(MOVE_HEAD_ALPHA, "s2-07l.1"));
+    let (repo, state, id) = move_run(&[("lib.rs", &base)], &[("lib.rs", MOVE_HEAD_LIB), ("alpha.rs", &alpha), ("beta.rs", MOVE_HEAD_BETA)]);
+    let seen = state.join("lens-stdin");
+    let out = gate_once(&repo, &state, &id, Some(&recording_lens(&seen)));
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "PASS: {}", stderr_of(&out));
+    let line = stdout_of(&out);
+    assert_eq!(token_of(&line, "lens-input="), "summary", "判定行: {line}");
+    let kept = fs::read_to_string(lens_input_path(&state, &id)).expect("lens-input.txt が在る");
+    assert_eq!(fs::read_to_string(&seen).unwrap_or_default(), kept, "lens が読んだ stdin は残した本文そのもの");
+    assert!(kept.contains("\ncarried markers: 1\n判定: 名 + 本文の多重集合が一致 "), "持ち越した札の本数を判定行の直前で名乗る: {kept}");
+    assert_eq!(kept.matches("carried markers").count(), 1, "1 行だけ: {kept}");
+    assert!(!kept.contains("retroactive"), "item の中の札の字面は要約に載らない: {kept}");
+    assert_eq!(stderr_of(&out), "", "純移動の周は理由の行を出さない");
+    assert_summary_moves(&kept);
+    assert_summary_residual(&kept);
+    clean(&[&repo, &state]);
+}
+
+/// (xii) 同じ base で HEAD 側の札の id だけを変えた便は diff（`foreign-marker`）＝対は id まで含む字面で取る
+/// （持ち越しを装って別の id の札を足す形を通さない・退行の pin）。
+#[test]
+fn pipe_gate_move_proof_carried_marker_with_a_different_id_sends_diff() {
+    let (base, alpha) = (carried(MOVE_BASE_LIB, "s2-07l.1"), carried(MOVE_HEAD_ALPHA, "s2-07l.2"));
+    assert_sends_diff_from(&[("lib.rs", &base)], &[("lib.rs", MOVE_HEAD_LIB), ("alpha.rs", &alpha), ("beta.rs", MOVE_HEAD_BETA)], "foreign-marker");
+}
+
+/// (xiii) base に在る札を HEAD で落とした便は diff（`foreign-marker`）＝消えた札も対が無い（札を消す変更は純移動でない）。
+#[test]
+fn pipe_gate_move_proof_carried_dropped_marker_sends_diff() {
+    let base = carried(MOVE_BASE_LIB, "s2-07l.1");
+    assert_sends_diff_from(&[("lib.rs", &base)], &move_head(), "foreign-marker");
 }

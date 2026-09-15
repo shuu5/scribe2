@@ -178,8 +178,8 @@ fn prove(diff: &str, read: &dyn Fn(Side, &str) -> Option<String>) -> Result<Move
     if matched.moved == 0 {
         return Err(NotPure::NothingMoved);
     }
-    let residual = residual_lines(&files, &base, &head, &spans)?;
-    Ok(render(&matched, &residual, base.len()))
+    let (residual, carried) = residual_lines(&files, &base, &head, &spans)?;
+    Ok(render(&matched, &residual, base.len(), carried))
 }
 
 // ───────── diff の読み ─────────
@@ -693,14 +693,23 @@ fn matched_of(pairs: &[(usize, usize)], base: &[Located], head: &[Located]) -> M
     Matched { moves, visibility, comments, moved }
 }
 
+/// 残差分（file ごとの逐語の行・`-` / `+` 付き）。
+type Residual = Vec<(String, Vec<String>)>;
+
 /// 残差分（どの item の区間にも入らない diff 行）を file ごとに集め、許されない行が在れば理由を返す。
+///
+/// 札（`// flip-check:`）は item の中の行も残差の行も同じ規則で見る（コメント行の除外が `retroactive` を item の
+/// 中に隠さない・indent の後の字面で見る）: `moved <id>` はその場で許し、他は両側の**多重集合の対**で見る
+/// （持ち越し・`s2-07l.362`）＝base 側と head 側で同じ字面（id まで）の札は対にして外し、対の無い札
+/// （head だけの新規・id 違い・base だけの消えた札）は `ForeignMarker`。返す組は (残差, 持ち越した札の本数)。
 fn residual_lines(
     files: &[FileDiff],
     base: &[Located],
     head: &[Located],
     spans: &BTreeMap<(Side, String), Vec<(usize, usize)>>,
-) -> Result<Vec<(String, Vec<String>)>, NotPure> {
-    let mut residual = Vec::new();
+) -> Result<(Residual, usize), NotPure> {
+    let mut residual = Residual::new();
+    let mut markers: BTreeMap<String, (usize, usize)> = BTreeMap::new();
     for file in files {
         let mut lines = Vec::new();
         let sides = [(Side::Base, &file.base, &file.removed, '-', base), (Side::Head, &file.head, &file.added, '+', head)];
@@ -708,17 +717,17 @@ fn residual_lines(
             let Some(path) = path else { continue };
             let in_use = spans.get(&(side, path.clone())).map(Vec::as_slice).unwrap_or_default();
             for (number, text) in changed {
-                if items.iter().any(|found| found.file == *path && covers(found.item.lines, *number)) {
-                    // item の中の行は hash が照合済み。札だけは残差と同じ規則で検査する（コメント行の除外が
-                    // `retroactive` を item の中に隠さない・indent の後の字面で見る）。
-                    let shown = text.trim_start();
-                    if shown.starts_with(FLIP_MARK) {
-                        marker_allowed(shown)?;
-                    }
-                    continue;
+                // item の中の行は hash が照合済み（札だけ見る）。残差の札は列 0 の形だけ札と読む（従来どおり）。
+                let in_item = items.iter().any(|found| found.file == *path && covers(found.item.lines, *number));
+                let shown = if in_item { text.trim_start() } else { text.as_str() };
+                if shown.starts_with(FLIP_MARK) {
+                    tally_marker(shown, side, &mut markers)?;
+                } else if !in_item {
+                    residual_allowed(text, in_use.iter().any(|span| covers(*span, *number)))?;
                 }
-                residual_allowed(text, in_use.iter().any(|span| covers(*span, *number)))?;
-                lines.push(format!("{sign}{text}"));
+                if !in_item {
+                    lines.push(format!("{sign}{text}"));
+                }
             }
         }
         if !lines.is_empty() {
@@ -726,7 +735,21 @@ fn residual_lines(
             residual.push((shown, lines));
         }
     }
-    Ok(residual)
+    let carried = markers.values().try_fold(0_usize, |sum, (old, new)| (old == new).then(|| sum.saturating_add(*old)).ok_or(NotPure::ForeignMarker))?;
+    Ok((residual, carried))
+}
+
+/// 札の 1 行を数える: `moved <id>` はその場で判定し（id 無しは `ForeignMarker`）、他は字面ごとに側の本数へ足す。
+fn tally_marker(shown: &str, side: Side, markers: &mut BTreeMap<String, (usize, usize)>) -> Result<(), NotPure> {
+    if shown.starts_with(MOVED_MARK.trim_end()) {
+        return marker_allowed(shown);
+    }
+    let counts = markers.entry(shown.to_owned()).or_default();
+    match side {
+        Side::Base => counts.0 = counts.0.saturating_add(1),
+        Side::Head => counts.1 = counts.1.saturating_add(1),
+    }
+    Ok(())
 }
 
 /// 区間（両端含む）が行番号を含むか。
@@ -765,8 +788,8 @@ fn shown_visibility(visibility: &str) -> &str {
     }
 }
 
-/// 要約の本文を描く（外形は snapshot・C12.5）。
-fn render(matched: &Matched, residual: &[(String, Vec<String>)], total: usize) -> MoveSummary {
+/// 要約の本文を描く（外形は snapshot・C12.5）。持ち越した札の本数 `carried` は 1 以上の周だけ 1 行で名乗る。
+fn render(matched: &Matched, residual: &Residual, total: usize, carried: usize) -> MoveSummary {
     let mut lines = vec![HEADLINE.to_owned(), "## 移動（元 -> 先: 本数 / 行数）".to_owned()];
     for found in &matched.moves {
         lines.push(format!("{} -> {}: items={} lines={}", found.from, found.to, found.names.len(), found.lines));
@@ -790,6 +813,9 @@ fn render(matched: &Matched, residual: &[(String, Vec<String>)], total: usize) -
     for (file, changed) in residual {
         lines.push(file.clone());
         lines.extend(changed.iter().cloned());
+    }
+    if carried > 0 {
+        lines.push(format!("carried markers: {carried}"));
     }
     lines.push(format!(
         "判定: 名 + 本文の多重集合が一致 items={total} moved={} visibility={}",
