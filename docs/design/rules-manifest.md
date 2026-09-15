@@ -155,6 +155,19 @@ xtask 側の drift 歯（最小形）: `crates/xtask/src/limits.rs` の `#[cfg(t
 - xtask `check` が閾値を manifest から読む（`limits.rs` の const を消す）。R-C4-3 の母集団は現状 `crates/*/src` だけで `tests/` を数えない（統合 test は比の外）。母集団を広げる判断は裁定材料として残す。
 - property test（C12.7）は `proptest` が A3 に当たるため、依存の裁定を通す周まで後続。
 
+## 10. xtask の check_tests.rs の分割（契約表の行 f・`s2-07l.370`）
+
+- 何が起きているか: `crates/xtask/src/check_tests.rs`（`check.rs` の `#[path]` mod・約 1320 行）は xtask 系の便 4 本（.161 / .164 / .170 / .177）が同時に write-set に持つ hub で、R-C4-2 の余地が 176 行しか無く size M の便を受付が断る（.161 の受付拒否 2026-09-15）。.363（`pipe/closure.rs` → `pipe/closure/derive.rs`）と同型の純移動で余地を作る。
+- 形: 歯を 2 つの子 module へそのまま移す（名・本文・assert・順序を変えない）: (a) check_nonrust_tests.rs = non_rust_exec_ と ci_shell_lines_ の歯 (b) check_prose_tests.rs = prose_gate_ と claude_md_ の歯と専用 fixture。宣言は check_tests.rs の末尾に `flipcheck_tests.rs` と同じ `#[path]` の形。共有 helper（make_tmp_dir / write_at / check_fixture / summary_fixture / assert_single 等）は親に残し、子は `use super::…` で読む（可視性を pub(super) に上げる以外は触らない・複製しない）。
+- 札: `// flip-check: moved s2-07l.370` を 3 file の test 区間に 1 行ずつ（親は mod tests の中・子は file 先頭の module doc の直後）。既存の `.257` の札は持ち越し。純移動の機械証明は [pipeline.md](./pipeline.md) §5.3。
+- 触らない: `check.rs` の本体・xtask の他 file・歯の中身。
+
+## 11. private-clean の needle の追加（契約表の行 g・`s2-07l.174`）
+
+- 何が起きているか: `crates/xtask/src/private_clean.rs` の needle は Email / UsersPath の 2 形だけで、PUBLIC 面へ出てはいけない v1 台帳 id 形（`sc-` + 英数 5 字）と state dir の絶対 path 形（home 直下から state dir へ至る接頭・字面は `concat!` で分けて private_clean.rs に置く）を機械が止めない（監査 2026-09-12 塊 20・NFR6）。tracked で当たるのは `SPIKE-tooling-report.md`（3 行）と `design-intent/research/SPIKE-folio-report.html`（1 行）＝needle を入れると赤になる 2 file は同じ便で掃除する（user 裁定 2026-09-15 18:2xZ）。
+- 形: 閉じた enum に variant 2 つ（as_str = ledger-id-v1 / state-dir-path）。字面は `concat!` で分けて自分を撃たない。state dir は絶対形だけ（相対形 `.local/state/` は ADR-0004 が持つ＝当てない）。掃除は id を「v1 の台帳の便」の語に置き換える（文の意味は残す・research html が folio の生成物なら contract 側を直して再生成）。
+- 却下: 免除 list（散文・N2）／相対形も当てる（frozen の ADR-0004 が赤になる）。digest 方式と token の newtype は別便。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -217,9 +230,19 @@ depends = ["a"]
 id = "f"
 title = "xtask の check_tests.rs（1319 行・xtask 便の hub）を子 module 2 つ（nonrust / prose）に割る — 純移動・札 moved"
 req = ["FR17"]
-section = "7"
+section = "10"
 write-set = ["-crates/xtask/src/check_tests.rs", "+crates/xtask/src/check_nonrust_tests.rs", "+crates/xtask/src/check_prose_tests.rs"]
 verify = ["cargo nextest run -p xtask --no-tests=fail check::tests::nonrust:: check::tests::prose::"]
 size = "S"
 done = "check_tests.rs の余地が 600 行以上に戻り、歯が 2 つの子 module に移って本数と中身が不変"
+
+[[contract]]
+id = "g"
+title = "private-clean の needle に v1 台帳 id 形と state dir の絶対 path 形を足し、該当する tracked 2 file を掃除する — needle は閉じた enum の variant 1 つずつ"
+req = ["NFR6"]
+section = "11"
+write-set = ["crates/xtask/src/private_clean.rs", "SPIKE-tooling-report.md", "design-intent/research/SPIKE-folio-report.html", "docs/design/rules-manifest.md"]
+verify = ["cargo nextest run -p xtask --no-tests=fail private_clean_ledger_"]
+size = "S"
+done = "2 形の needle が在り、tracked に該当 0 で cargo xtask check が緑（ADR-0004 の相対形の言及は当てない）"
 <!-- contracts:end -->

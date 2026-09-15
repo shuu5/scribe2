@@ -107,3 +107,17 @@ C1（rules 行を足さない・閾値は無い）・C2 / C2.2（`EventKind` / `
 ## 13. 後続
 
 `claude plugin install` の打ち直しを器が撃つ形（帳簿は他人のもの＝当面は doctor が名指すだけ）／consumer 側の state dir の一覧を host の manifest に宣言する形（今は口座の帳簿と登録 row から導く）／`vessel update` が消費者の席へ結果を報せる形（通知でなく tick が測る側に倒したので当面は無し）／binary の食い違いだけの席を軽く直す形（今は次の hook の起動に任せる）。
+
+<!-- contracts:begin -->
+schema = 1
+
+[[contract]]
+id = "e"
+title = "vessel update — ff → build → install を 1 つの口で行い InstallRecorded を event log に 1 件記す（§12 (b) からの切り出し）"
+req = ["FR61"]
+section = "5"
+write-set = ["crates/scribe2/src/hook/vessel.rs", "crates/scribe2/src/fleet/mod.rs", "crates/scribe2/src/fleet/event.rs", "crates/scribe2/src/fleet/replay.rs", "crates/scribe2/src/fleet/cli.rs", "crates/scribe2/src/account/mod.rs", "crates/scribe2/src/fleet/usage.rs", "crates/scribe2/src/pipe/mod.rs", "crates/scribe2/src/pipe/queue.rs", "crates/scribe2/src/seat/role.rs", "crates/scribe2/tests/e2e/hook.rs", "crates/scribe2/tests/e2e/fleet.rs", "crates/scribe2/tests/e2e/prop.rs", "crates/scribe2/tests/e2e/pipe/lifecycle.rs", "crates/scribe2/tests/e2e/seat.rs", "crates/scribe2/tests/e2e/snapshots/e2e__hook__vessel_external_form.snap"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail vessel_update_"]
+size = "M"
+done = "偽 git と偽 cargo で ff → build → install の順序の argv が写り InstallRecorded が 1 件記され、dirty / not-fast-forward / install の失敗は typed に断って event 0、fleet record はこの kind を拒む"
+<!-- contracts:end -->

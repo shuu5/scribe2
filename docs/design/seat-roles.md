@@ -90,6 +90,12 @@ C1 / C5（権能の値は行・裁定 id）・C1.2（生成文に手書きの規
 
 席の起動と登録の自動化（s2-07l.38）・plugin を積まない session の guard（s2-07l.149）・席の model の割当（別の裁定）・役割ごとの権能の値の改訂（裁定 id 付きの行の変更）。
 
+## 12. 壁時計依存の inject の歯（契約表の行 f・`s2-07l.342`）
+
+- 何が起きているか: `crates/scribe2/tests/e2e/seat/cycle.rs` の inject の歯は、pane の script が `stty -echo` を終える前に inject が届くと tty の echo で「届いた」に化ける（gate 3 本同時の負荷で timing が動き、単独では緑・.304 run 1 の変異 baseline で 1 本落ちた・s2-07l.334 と同じ型）。壁時計の等号を pin する fixture は flaky（C12.6）。
+- 形: pane の script は `stty -echo` の後に固定の合図（1 行の sentinel）を出し、歯は capture-pane の polling（上限付き・壁時計の等号を pin しない）で合図を見てから inject を撃つ。同じ file の壁時計依存の歯（sleep を pane の script に持ち送達の有無を時間で測るもの）を同じ形に揃える（母集団 = 該当した歯の本数を notes へ）。本体（`seat/inject.rs` 等）は触らない。
+- 検証の形: 歯の内容が変わる便ゆえ flip は「変更された歯が base で違う挙動」の形。base で RED を作れない周は歯を新設の名に改名して旧名を消す。負荷下の再現は `--test-threads 8` で 5 周回して赤 0（母集団 = 5 周 × 本数）を notes へ。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -123,4 +129,14 @@ tests = ["crates/scribe2/tests/e2e/headless.rs"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail headless_runner_drops_tmux_pane headless_lens_drops_tmux_pane"]
 size = "S"
 done = "席の pane の中から runner / lens を単体起動しても claude の env に TMUX_PANE が無く、PATH は継承され、wrap_command と wrap_line の両方が同じ 1 点で外す"
+
+[[contract]]
+id = "f"
+title = "壁時計依存の inject の歯を pane の sentinel 待ちに — gate の同時走行で delivered に化ける flaky を fixture の競合の除去で塞ぐ（本体は触らない）"
+req = ["FR21"]
+section = "12"
+write-set = ["crates/scribe2/tests/e2e/seat/cycle.rs"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail seat_inject_"]
+size = "S"
+done = "pane の script が固定の合図を出してから inject を撃つ形に歯が揃い、同じ file の壁時計依存の歯が同じ形になり（母集団は notes）、負荷下 5 周で赤 0"
 <!-- contracts:end -->
