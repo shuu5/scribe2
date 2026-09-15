@@ -2,14 +2,16 @@
 //! account-autonomy.md §5・[`super`] から純移動・`s2-07l.279`）。口座の軸の中の順は [`super::account`] が持つ。
 
 use super::account::Seated;
+use super::render::DETAIL_AFTER_TERMINATED;
 use super::{
     back_off, held, InjectKind, NoopReason, Request, Seen, SignalOrigin, Stamped, TickDecision, Verdict,
     DETAIL_TERMINATED, EXIT, INJECT_WRITERS, REASON_EXIT_UNCONFIRMED, REASON_EXIT_UNSTOPPABLE, ROW_GRACE,
     SIGNAL_ORIGINS,
 };
 use crate::fleet::json_lite::{self, Value};
+use crate::fleet::{replay, store};
 use crate::hook::{inject_path, seat_name};
-use crate::seat::{cycle, inject, pane_of, state, WmScan};
+use crate::seat::{cycle, inject, pane_of, role, state, WmScan};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -113,6 +115,11 @@ fn stopped_after(seat_dir: &Path, kind: InjectKind, after: u64) -> bool {
 /// 見送らず [`stop_seat`] へ。`/exit` の再送は dialog に効かず（入力欄が無い）、器は描画を読まない（C3.3）ので選択肢も
 /// 押せない——退避済みの席の process を止めて終了を確定する（失うものは無い・A1 非該当・可逆〔立て直す〕）。stamp が
 /// 閾値より古い周は従来どおり第 1 手から（stamp を打ち直す）。
+///
+/// **同じ周で畳む**（`s2-07l.314`・C9「止まった席を人手なしで作り直す」の空白を最小に）: 第 1 手を送って窓の内に前面が
+/// shell にならない周は error で終えず、続けて第 2 手 → 前面が shell に戻れば立て直し（[`stop_and_relaunch`]）。実地
+/// 2026-09-15（admin・tick.jsonl）では `/exit` → `exit-unconfirmed` → 次の周の停止 → さらに次の周の立て直し、と 3 手が
+/// 3 周（約 10 分）に割れていた。
 pub(super) fn exit_turn(request: &Request, place: &super::StateDir, dir: &Path, seen: &Seen) -> Verdict {
     if cycle::lock_is_live(dir, seen.ttl_s) {
         return Verdict::of(TickDecision::Noop(NoopReason::CycleLive));
@@ -121,38 +128,99 @@ pub(super) fn exit_turn(request: &Request, place: &super::StateDir, dir: &Path, 
     match blocked {
         Some(NoopReason::CycleRecent) => stop_seat(request, stamp),
         Some(reason) => held(stamp, reason),
-        None => Verdict { stamp: Some(stamp), ..Verdict::of(send_exit(request, place, dir)) },
+        None => match send_exit(request, place, dir) {
+            Sent::Confirmed => stamped(stamp, exit_settled()),
+            Sent::Unconfirmed => stop_and_relaunch(request, place, dir, seen, stamp),
+            Sent::Refused(reason) => stamped(stamp, exit_error(reason)),
+        },
     }
 }
 
-/// 終了の手の第 2 手（順序固定・1 key も送らない）: 猶予（rules 行 [`ROW_GRACE`]・読めない周は `exit-no-rule:<variant>`）→
-/// pane の shell の pid（[`cycle::pane_pid`]）→ その直下の子（[`cycle::foreground_child`]）→ [`cycle::terminate_group`]
-/// （TERM → 唯一の wait → KILL → 同じ wait・pid が 2 未満なら撃たない）。`Gone` / `Killed` は `kind=exit` と同じ判定
-/// （`consumed=true`・立て直しの入口 (1) がそのまま読む）に `detail=terminated` を添え、`Unstoppable` は `exit-unstoppable`
-/// （error・rc 1・back-off の内側で次の周も撃つ＝TERM / KILL は冪等・stop-stamp は持たない）、pane の pid・子が取れない・
-/// 撃たない周は `exit-pane-missing`（既存の語に前置き）。exit-stamp は触らない（打ち直すのは第 1 手だけ）。
+/// 終了の手の第 2 手だけの周（back-off の内側＝`/exit` は前の周に送った・1 key も送らない）: 止まれば `kind=exit` と同じ
+/// 判定（`consumed=true`・立て直しの入口 (1) がそのまま読む）に `detail=terminated` を添え（[`terminated`]）、撃てない・
+/// 止まらない周は [`terminate_front`] の error。exit-stamp は触らない（打ち直すのは第 1 手だけ）。次の周は入口 (3)
+/// 「前面が shell」で立て直しへ進む。
 fn stop_seat(request: &Request, stamp: Stamped) -> Verdict {
+    match terminate_front(request) {
+        Ok(()) => terminated(stamp),
+        Err(decision) => stamped(stamp, decision),
+    }
+}
+
+/// 第 1 手が窓の内に通らなかった周の続き（`s2-07l.314`・順序固定・1 関数の列）: 第 2 手（[`terminate_front`]）→ 止まれば
+/// 前面が shell に戻るのを第 1 手と同じ窓・同じ刻みで待つ（[`exited`]・子の回収の後の shell の prompt の描き直しは唯一の
+/// wait の外で起きる）→ 口座の軸の材料を読み直し（[`reseat`]）→ 立て直し（[`relaunch_turn`]・cycle-stamp の back-off と
+/// lock は従来どおり）に `detail=after-terminated` を添える（判定行は `kind=relaunch detail=after-terminated`・C10）。
+///
+/// 止まらない・pane の子が取れない周は既存の error（`exit-unstoppable` / `exit-pane-missing`・次の周は back-off の内側で
+/// [`stop_seat`] が撃ち直す）。止めたのに窓の内に前面が shell にならない周（撃った子が前面の子でなかった等）は
+/// `exit-unconfirmed`（`/exit` は送ったが shell を見ていない＝終了を確定したと書かない）。登録 row を読み直せない周は
+/// 停止だけの判定（[`terminated`]・次の周が入口 (3) で立て直す）。exit-stamp は第 1 手で打ったまま（再送しない・N1）。
+fn stop_and_relaunch(request: &Request, place: &super::StateDir, dir: &Path, seen: &Seen, stamp: Stamped) -> Verdict {
+    if let Err(decision) = terminate_front(request) {
+        return stamped(stamp, decision);
+    }
+    if !exited(request) {
+        return stamped(stamp, exit_error(REASON_EXIT_UNCONFIRMED));
+    }
+    let Some(seated) = reseat(&place.path, request.target) else {
+        return terminated(stamp);
+    };
+    Verdict { detail: Some(DETAIL_AFTER_TERMINATED), ..relaunch_turn(request, place, dir, seen, &seated) }
+}
+
+/// 第 2 手の本体（順序固定・1 key も送らない・`s2-07l.259`）: 猶予（rules 行 [`ROW_GRACE`]・読めない周は
+/// `exit-no-rule:<variant>`）→ pane の shell の pid（[`cycle::pane_pid`]）→ その直下の子（[`cycle::foreground_child`]）→
+/// [`cycle::terminate_group`]（TERM → 唯一の wait → KILL → 同じ wait・pid が 2 未満なら撃たない）。`Gone` / `Killed` は
+/// `Ok`、`Unstoppable` は `exit-unstoppable`（error・rc 1・back-off の内側で次の周も撃つ＝TERM / KILL は冪等・stop-stamp
+/// は持たない）、pane の pid・子が取れない・撃たない周は `exit-pane-missing`（既存の語に前置き）。
+fn terminate_front(request: &Request) -> Result<(), TickDecision> {
     let grace = match super::int_rule(ROW_GRACE) {
         Ok(found) => Duration::from_millis(found),
-        Err(read) => return held_error(stamp, exit_error(read.no_rule())),
+        Err(read) => return Err(exit_error(read.no_rule())),
     };
     let stopped = cycle::pane_pid(request.socket, request.target)
         .and_then(cycle::foreground_child)
         .and_then(|pid| cycle::terminate_group(pid, grace));
     match stopped {
-        None => held_error(stamp, exit_error(cycle::REASON_PANE_MISSING)),
-        Some(cycle::Stopped::Unstoppable) => held_error(stamp, exit_error(REASON_EXIT_UNSTOPPABLE)),
-        Some(cycle::Stopped::Gone | cycle::Stopped::Killed) => Verdict {
-            stamp: Some(stamp),
-            detail: Some(DETAIL_TERMINATED),
-            ..Verdict::of(TickDecision::Inject(InjectKind::Exit, inject::Settled::Consumed))
-        },
+        None => Err(exit_error(cycle::REASON_PANE_MISSING)),
+        Some(cycle::Stopped::Unstoppable) => Err(exit_error(REASON_EXIT_UNSTOPPABLE)),
+        Some(cycle::Stopped::Gone | cycle::Stopped::Killed) => Ok(()),
     }
 }
 
-/// 打刻を読んだ上で撃てなかった周の判定（[`held`] の error 側）。
-fn held_error(stamp: Stamped, decision: TickDecision) -> Verdict {
+/// 同じ周で立て直しへ続く周の口座の軸の材料（[`Seated`]・登録 row と replay の現在地）。入口で読んだものを持ち回らず
+/// 置き場を読み直す（[`exit_turn`] の引数を増やさない・C4）: 実測行の鮮度は同じ周の入口の計測が保っている。log を
+/// 読めない・自席の登録 row が無い周は `None`（停止だけで周を終える側）。
+fn reseat(state_dir: &Path, target: &str) -> Option<Seated> {
+    let state = replay(&store::read_all(state_dir).ok()?);
+    let row = role::registration_of_target(&state, target)?.clone();
+    Some(Seated { row, state })
+}
+
+/// 終了を確定した判定（`kind=exit consumed=true`・第 1 手が通った周と第 2 手で止めた周の同じ形・立て直しの入口 (1) が読む）。
+fn exit_settled() -> TickDecision {
+    TickDecision::Inject(InjectKind::Exit, inject::Settled::Consumed)
+}
+
+/// 第 2 手で終了を確定した周の判定（[`exit_settled`] に `detail=terminated`）。
+fn terminated(stamp: Stamped) -> Verdict {
+    Verdict { stamp: Some(stamp), detail: Some(DETAIL_TERMINATED), ..Verdict::of(exit_settled()) }
+}
+
+/// 打刻を読んだ上での判定（[`held`] と同型・判定は呼び側が決める）。
+fn stamped(stamp: Stamped, decision: TickDecision) -> Verdict {
     Verdict { stamp: Some(stamp), ..Verdict::of(decision) }
+}
+
+/// 第 1 手の結果（**閉じた 3 値**・憲法 C11・bool で持たない）。
+enum Sent {
+    /// 送って、窓の内に前面が shell になった（`/exit` が通った）。
+    Confirmed,
+    /// 送ったが、窓の内に前面が shell にならない（背景の仕事を持つ席の終了確認 dialog・実地 2026-09-14）。
+    Unconfirmed,
+    /// 送っていない（門の断り・stamp・tmux・pane が取れない・理由の語）。
+    Refused(&'static str),
 }
 
 /// [`EXIT`] を 1 行送る（順序固定）: 入力欄の門（cycle の `/clear` と同じ [`inject::guard_input`]・断りは
@@ -162,33 +230,33 @@ fn held_error(stamp: Stamped, decision: TickDecision) -> Verdict {
 /// 送達を目印の出現数（[`inject::deliver`]）で測らないのは、`/exit` を受けた席は終わって pane が shell に置き換わり
 /// 目印が増えない＝成功が `absent` に倒れるためである（実地 2026-09-14・`s2-07l.252`）。Enter の修復
 /// （[`inject::nudge_enter`]）も通さない: 終わった席の pane に残る古い `❯ /exit` 行を入力欄と読んで **shell へ Enter を
-/// 送る**形になる。窓の内に shell にならない周は `exit-unconfirmed` の error（rc 1）で、exit-stamp は打たれたまま
-/// （再送しない・back-off の内側の次の周は第 2 手 [`stop_seat`] が process を止める・`s2-07l.259`）。
-fn send_exit(request: &Request, place: &super::StateDir, dir: &Path) -> TickDecision {
+/// 送る**形になる。窓の内に shell にならない周は [`Sent::Unconfirmed`] で、exit-stamp は打たれたまま（再送しない・
+/// 同じ周の続きは [`stop_and_relaunch`]・`s2-07l.314`）。
+fn send_exit(request: &Request, place: &super::StateDir, dir: &Path) -> Sent {
     let Some(pane) = pane_of(request.socket, request.target, request.capture_file) else {
-        return exit_error(cycle::REASON_PANE_MISSING);
+        return Sent::Refused(cycle::REASON_PANE_MISSING);
     };
     match inject::guard_input(&pane) {
         Ok(()) => {}
-        Err(inject::InputGate::Busy) => return exit_error(cycle::REASON_INPUT_BUSY),
-        Err(inject::InputGate::UnknownInput) => return exit_error(cycle::REASON_INPUT_UNKNOWN),
+        Err(inject::InputGate::Busy) => return Sent::Refused(cycle::REASON_INPUT_BUSY),
+        Err(inject::InputGate::UnknownInput) => return Sent::Refused(cycle::REASON_INPUT_UNKNOWN),
     }
     if cycle::write_exit_stamp(dir).is_err() {
-        return exit_error(cycle::REASON_STAMP);
+        return Sent::Refused(cycle::REASON_STAMP);
     }
     if !cycle::send_exit(request.socket, request.target, place, EXIT) {
-        return exit_error(inject::REASON_TMUX_FAILED);
+        return Sent::Refused(inject::REASON_TMUX_FAILED);
     }
     if exited(request) {
-        TickDecision::Inject(InjectKind::Exit, inject::Settled::Consumed)
+        Sent::Confirmed
     } else {
-        exit_error(REASON_EXIT_UNCONFIRMED)
+        Sent::Unconfirmed
     }
 }
 
 /// `/exit` の送達の確認: 窓（[`Request::settle`]）の内に刻み（[`Request::step`]）ごとに、target の前面 process が
 /// shell になったか（入口 (3) と同じ [`super::pane_is_shell`]・typed な metadata・字面を読まない）。作り直しの確認
-/// （cycle の `started`）と同じ窓・同じ刻み。
+/// （cycle の `started`）と同じ窓・同じ刻み。第 2 手で止めた後の前面の読みも同じ 1 本（[`stop_and_relaunch`]）。
 fn exited(request: &Request) -> bool {
     let deadline = Instant::now().checked_add(request.settle);
     while deadline.is_some_and(|at| Instant::now() < at) {
@@ -336,5 +404,36 @@ mod tests {
         assert_eq!(signal_of("hook-only", Some(&hook_only)), None, "hook の行だけ");
         assert_eq!(signal_of("empty", Some(&[])), None, "空");
         assert_eq!(signal_of("missing", None), None, "file が無い");
+    }
+
+    /// 登録 row 1 件（役割 planner・口座 `account`・target `target`）。
+    fn row(target: &str, account: &str) -> crate::fleet::Registration {
+        crate::fleet::Registration {
+            role: crate::seat::role::Role::Planner,
+            anchor: format!("/repo/{target}"),
+            target: target.to_owned(),
+            sid: None,
+            account: account.to_owned(),
+            launch: "cld {account_dir}".to_owned(),
+            model: None,
+        }
+    }
+
+    /// 同じ周で立て直しへ続く周の材料の読み直し（[`reseat`]・`s2-07l.314`）: 自席の登録 row が在る置き場はその row
+    /// （同じ target の後の行が勝つ）と replay の現在地を返し、別の target の row だけ・row の無い置き場・置き場そのものが
+    /// 無い周は `None`（停止だけで周を終える側）。base は関数が無く compile で落ちる（RED）。
+    #[test]
+    fn seat_exit_reseat_reads_the_own_registration_row_or_none() {
+        let dir = std::env::temp_dir().join(format!("seat-tick-reseat-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).ok();
+        assert!(super::reseat(&dir, "seat1").is_none(), "row の無い置き場");
+        assert!(crate::seat::role::register(&dir, row("seat2", "a2")).is_ok(), "別の席の row を積める");
+        assert!(super::reseat(&dir, "seat1").is_none(), "別の target の row だけ");
+        assert!(crate::seat::role::register(&dir, row("seat1", "a1")).is_ok(), "自席の row を積める");
+        assert!(crate::seat::role::register(&dir, row("seat1", "a3")).is_ok(), "自席の row の更新（同じ鍵）");
+        let found = super::reseat(&dir, "seat1").map(|seated| (seated.row.account, seated.state.registrations.len()));
+        assert_eq!(found, Some(("a3".to_owned(), 2)), "自席の最新の row と replay の現在地（鍵 2 つ）");
+        std::fs::remove_dir_all(&dir).ok();
+        assert!(super::reseat(&dir, "seat1").is_none(), "置き場が無い");
     }
 }

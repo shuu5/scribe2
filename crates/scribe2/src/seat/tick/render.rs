@@ -8,6 +8,10 @@ use crate::seat::{heartbeat, inject, meter, sanitize_target, state};
 use std::path::Path;
 use std::time::Instant;
 
+/// 第 1 手が通らず同じ周で第 2 手（停止）→ 立て直しまで進んだ周に `kind=relaunch` の判定行へ足す `detail` の語
+/// （`s2-07l.314`・停止だけで終えた周の [`super::DETAIL_TERMINATED`] と同じ欄に語を 1 つ足す・`InjectKind` は増やさない）。
+pub(super) const DETAIL_AFTER_TERMINATED: &str = "after-terminated";
+
 /// 注入する 1 行と、それを送る周の席の状態（[`inject_line`] の入力）。
 ///
 /// 畳むのは憲法 C4 の引数上限（R-C4-4.args = 5）ゆえ: 修復の門（[`inject::repair_of`]）が席の状態を
@@ -69,7 +73,8 @@ pub(super) fn inject_line(request: &Request, place: &super::StateDir, dir: &Path
 /// （`seat inject` の行と同じ並び・既存 token の名前と順序は不変・`s2-07l.150`）: 測れない周と
 /// Enter が落ちた周を `false` と同じ顔で流さない（憲法 C10）。退避の合図を送った周は `kind=` の**直後**に出所
 /// （`origin=<context|account|hook>`・`s2-07l.307`・それ以外の kind の周は載らない）、第 2 手で終了を確定した周は
-/// 同じ位置に `detail=terminated`（`s2-07l.259`・それ以外の周は載らない）。
+/// 同じ位置に `detail=terminated`（`s2-07l.259`）、第 1 手が通らず同じ周で停止 → 立て直しまで進んだ周は `kind=relaunch` の
+/// 同じ位置に `detail=after-terminated`（[`DETAIL_AFTER_TERMINATED`]・`s2-07l.314`・それ以外の周は載らない）。
 pub(super) fn body(target: &str, judged: &Judged, place: &super::StateDir) -> String {
     let verdict = &judged.verdict;
     let head = match verdict.decision {
