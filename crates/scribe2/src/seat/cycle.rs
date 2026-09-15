@@ -625,6 +625,8 @@ fn choose(own: (Role, &str), state: &State, labels: &[String], model: Option<&st
         purpose: Purpose::Session,
         model,
         exclude: &exclude,
+        // session 用は走行中の便数を読まない（便用の鍵・ADR-0027 §2.2）。
+        inflight: &std::collections::BTreeMap::new(),
         threshold_pct,
         now: &now,
     })

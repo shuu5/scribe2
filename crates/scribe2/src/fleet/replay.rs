@@ -25,6 +25,17 @@ pub struct Run {
     pub detail: Option<String>,
     /// 承認 event が在るか（導出値・状態 enum ではない）。
     pub approved: bool,
+    /// 便を起こした口座（最新の `SeatSpawned` の `account`・ADR-0027 §2.3）。field の無い行で起こした便は `None`
+    /// ＝走行中の便数に数えない。
+    pub account: Option<String>,
+}
+
+impl Run {
+    /// 走行中か（終端の段 `Landed` / `Failed` / `Stopped` でなく、畳まれても〔`detail=retired`〕いない・pipeline.md §4）。
+    pub fn is_inflight(&self) -> bool {
+        let terminal = matches!(self.stage, Stage::Landed | Stage::Failed | Stage::Stopped);
+        !terminal && self.detail.as_deref() != Some("retired")
+    }
 }
 
 /// 席の現在地。
@@ -75,6 +86,16 @@ impl State {
             .map(|latest| latest.registration.account.clone())
             .collect()
     }
+
+    /// 口座 label → 走行中の便数（**導出値**・憲法 C10・ADR-0027 §2.3）。数えるのは [`Run::is_inflight`] な便のうち
+    /// [`Run::account`] を持つものだけ（口座不明の便は 0）。便用の選定の 2 つ目の鍵（設計 account-autonomy.md §3）。
+    pub fn inflight_by_account(&self) -> BTreeMap<String, usize> {
+        let mut found = BTreeMap::new();
+        for label in self.runs.values().filter(|run| run.is_inflight()).filter_map(|run| run.account.as_ref()) {
+            *found.entry(label.clone()).or_insert(0) += 1;
+        }
+        found
+    }
 }
 
 /// 口座 label の credential dir（`<state_dir>/accounts/<label>`・ADR-0017 §2.3）。runner の `--account-dir`
@@ -96,8 +117,8 @@ pub fn effective_accounts(manifest: &Manifest, state: &State) -> Vec<String> {
 /// `model` は rules 行 `runner.model` の値（runner / lens が `--model` で毎回明示する model・設計 §3・`s2-07l.297`）
 /// ＝便が消費するのはその model のモデル別窓だけなので、他の model の窓が 100 でも候補から外さない。字面のまま
 /// 渡し、型にするのは `select` の中（別名 × 表示名の照合）。`None` は全 model 窓の最大（保守側）。除外は登録 row の
-/// 口座。閾値は便用の規則が持たないので**窓の全量**（[`select::LIMIT_PCT`]）を置く＝session 用の分岐に届かない
-/// 値であって、R-C9-1 の値ではない。
+/// 口座。走行中の便数は state から導く（[`State::inflight_by_account`]・呼び手は渡さない）。閾値は便用の規則が
+/// 持たないので**窓の全量**（[`select::LIMIT_PCT`]）を置く＝session 用の分岐に届かない値であって、R-C9-1 の値ではない。
 pub fn select_for_run(state: &State, labels: &[String], model: Option<&str>, now: &str) -> select::Selection {
     let labels = state.without_retired(labels.iter().map(String::as_str));
     select::select(&select::Input {
@@ -106,6 +127,7 @@ pub fn select_for_run(state: &State, labels: &[String], model: Option<&str>, now
         purpose: select::Purpose::Run,
         model,
         exclude: &state.registered_accounts(),
+        inflight: &state.inflight_by_account(),
         threshold_pct: select::LIMIT_PCT,
         now,
     })
@@ -177,8 +199,9 @@ fn apply_account(state: &mut State, event: &Event) {
 /// 1 件の event を便へ反映する。
 fn apply_run(state: &mut State, event: &Event) {
     // 口座残量・登録・退役の行は便に紐づかない（`run` / `bead` を持たない）。ここで通すと id が空の
-    // 幽霊の便が 1 つ生まれ、`show` / `export` の件数が実在しない便を数える。
-    if event.kind.is_allowance() || event.registration.is_some() || event.account.is_some() {
+    // 幽霊の便が 1 つ生まれ、`show` / `export` の件数が実在しない便を数える。退役は kind で見分ける
+    // （`account` の有無ではない＝口座つきの `SeatSpawned` は便に紐づく行・ADR-0027 §2.3）。
+    if event.kind.is_allowance() || event.registration.is_some() || event.kind.is_account_lifecycle() {
         return;
     }
     let run = state.runs.entry(event.run.clone()).or_insert_with(|| Run {
@@ -188,6 +211,7 @@ fn apply_run(state: &mut State, event: &Event) {
         updated: event.ts.clone(),
         detail: None,
         approved: false,
+        account: None,
     });
     run.bead = event.bead.clone();
     run.updated = event.ts.clone();
@@ -196,6 +220,10 @@ fn apply_run(state: &mut State, event: &Event) {
     }
     if event.detail.is_some() {
         run.detail = event.detail.clone();
+    }
+    // 便を起こした口座は最新の `SeatSpawned` が持つ値（field の無い行で起こし直した周は不明に戻る）。
+    if event.kind == EventKind::SeatSpawned {
+        run.account = event.account.clone();
     }
     // **承認は event に残った逐語だけである**（憲法 C7.2）。kind だけで関門を開けると、
     // `fleet record --kind ApprovalReceived` で積んだ逐語 0 字の機械 event でも開いてしまい、

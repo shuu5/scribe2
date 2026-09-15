@@ -320,6 +320,7 @@ mod fleet {
                 purpose: Purpose::Run,
                 model: None,
                 exclude: &BTreeSet::new(),
+                inflight: &BTreeMap::new(),
                 threshold_pct: 85,
                 now,
             });

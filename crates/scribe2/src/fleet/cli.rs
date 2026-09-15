@@ -61,12 +61,14 @@ fn select_account(args: &[String], dir: &Path) -> Outcome {
     // 候補は有効な口座の集合だけ（退役中の口座を候補に入れない・account-lifecycle.md §3）。
     let labels = super::effective_accounts(&manifest, &state);
     let now = now_utc();
+    // 走行中の便数は便用の 2 つ目の鍵（`select_for_run` と同じ導出・ADR-0027 §2.3）。
     let found = select::select(&select::Input {
         labels: &labels,
         allowance: &state.allowance,
         purpose,
         model,
         exclude: &exclude,
+        inflight: &state.inflight_by_account(),
         threshold_pct,
         now: &now,
     });
@@ -214,6 +216,12 @@ fn build_event(args: &[String]) -> Result<Event, String> {
         Some(text) => super::parse_actor(text)
             .ok_or(format!("actor {text} は machine でも human でもない"))?,
     };
+    // `--account` は席を立てた行の任意 field（便を起こした口座・ADR-0027 §2.3）。他の kind に渡されたら読み手が
+    // malformed にする行なので、書く前に断る（読めない行を append-only の log に残さない）。
+    let account = optional(args, "--account")?.map(str::to_owned);
+    if account.is_some() && kind != EventKind::SeatSpawned {
+        return Err(format!("kind {kind_text} は --account を持たない"));
+    }
     Ok(Event {
         schema: SCHEMA,
         ts: now_utc(),
@@ -228,7 +236,7 @@ fn build_event(args: &[String]) -> Result<Event, String> {
         detail: optional(args, "--detail")?.map(str::to_owned),
         allowance: None,
         registration: None,
-        account: None,
+        account,
     })
 }
 

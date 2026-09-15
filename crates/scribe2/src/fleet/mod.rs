@@ -152,6 +152,30 @@ impl EventKind {
             | Self::AccountRestored => false,
         }
     }
+
+    /// 口座の退役・戻しの kind か（`account` = label が本体で、`run` / `bead` を**持たない**側・設計
+    /// account-lifecycle.md §3）。
+    ///
+    /// `account` の有無では見分けない——`SeatSpawned` も任意 field として `account`（便を起こした口座・ADR-0027
+    /// §2.3）を持つので、field の有無で「便に紐づかない行」を判定すると口座つきの spawn が幽霊の便に化ける。
+    pub fn is_account_lifecycle(self) -> bool {
+        match self {
+            Self::AccountRetired | Self::AccountRestored => true,
+            Self::RunCreated
+            | Self::RunStage
+            | Self::RunDone
+            | Self::RunStopped
+            | Self::SeatSpawned
+            | Self::SeatStopped
+            | Self::ApprovalRequested
+            | Self::ApprovalReceived
+            | Self::QuestionRaised
+            | Self::QuestionAnswered
+            | Self::AllowanceMeasured
+            | Self::AllowanceUnmeasured
+            | Self::SeatRegistered => false,
+        }
+    }
 }
 
 /// 機械が起こした event の actor。
