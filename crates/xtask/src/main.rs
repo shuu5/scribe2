@@ -121,7 +121,10 @@ fn main() -> ExitCode {
 /// 「1 行の形」と「rc の極性」で、材料は `outcomes.json` の fixture 3 種である。
 #[cfg(test)]
 mod tests {
-    use crate::mutantsdiff::{deny_line_enabled, measure_args, measured, parse_outcomes, verdict, without_outcomes, Counts};
+    use crate::mutantsdiff::{
+        baseline_tail, deny_line_enabled, diagnosed, measure_args, measured, parse_outcomes, verdict,
+        without_outcomes, Counts, BASELINE_TAIL_LINES,
+    };
     use std::path::Path;
     use std::process::ExitCode;
 
@@ -272,6 +275,62 @@ mod tests {
         let survivors = Counts { total: 18, caught: 12, missed: 6, unviable: 0, timeout: 0 };
         assert!(measured(survivors, false).is_ok(), "生存が在る非 0 は正常な測定");
         assert!(measured(Counts::default(), true).is_ok(), "rc 0 は測定として受ける");
+    }
+
+    /// rc 2 の周の診断（`s2-07l.332`）: `baseline.log` の末尾は**末尾 N 行だけ・順序不変**で、
+    /// 空 file は「空」だと名乗る（空文字で写すと「末尾が無い」と「写していない」が同じ字面）。
+    #[test]
+    fn mutants_diff_baseline_tail_keeps_the_last_lines_and_names_an_empty_log() {
+        // 30 行の fixture。行の字面は入力にしか無い形（`probe-line-NN`）にして、末尾の**どの**行が
+        // 残ったかを番号で読む。
+        let log: String = (1..=30).map(|n| format!("probe-line-{n:02}\n")).collect();
+        let tail = baseline_tail(&log, BASELINE_TAIL_LINES);
+        let kept: Vec<&str> = tail.lines().collect();
+        assert_eq!(kept.len(), 20, "末尾 20 行だけ: {tail}");
+        assert_eq!(kept.first().copied(), Some("probe-line-11"), "先頭 10 行は落ちる: {tail}");
+        assert_eq!(kept.last().copied(), Some("probe-line-30"), "最終行は残る: {tail}");
+        // 順序不変（逆順で写すと `850 passed / 1 failed` の要約行が名前の前に来て読めない）。
+        let expected: Vec<String> = (11..=30).map(|n| format!("probe-line-{n:02}")).collect();
+        assert_eq!(kept, expected, "順序はそのまま");
+        assert!(!tail.contains("probe-line-10"), "21 行目より前は写さない: {tail}");
+        // 行数が閾値未満なら全行（切り詰めない）。
+        assert_eq!(baseline_tail("a\nb\n", BASELINE_TAIL_LINES), "a\nb", "短い log は丸ごと");
+        // 空 file は「空」と名乗る（空文字ではない）。
+        assert_eq!(baseline_tail("", BASELINE_TAIL_LINES), "baseline.log は空");
+        assert_eq!(baseline_tail("\n \n", BASELINE_TAIL_LINES), "baseline.log は空", "空白だけも空");
+    }
+
+    /// 「測れなかった」（`Err`・rc 2）周**だけ**に `baseline.log` の末尾が付く（`s2-07l.332`・
+    /// 設計 pipeline.md §5.3 の診断・憲法 C10）。測れた周（`Ok`）の緑に診断を残さない。
+    #[test]
+    fn mutants_diff_unmeasured_reason_carries_the_baseline_tail_only_when_the_tool_failed() {
+        // 字面は入力にしか無い形（実在の歯の名ではない）。
+        let tail = || "probe-tail-3e9: 850 passed / 1 failed\nprobe-tail-3e9: pipe::probe_test".to_owned();
+        // rc 非 0・生存も時間切れも無い＝baseline が落ちた疑い（`measured` の Err）。
+        let failed = diagnosed(measured(Counts::default(), false), tail);
+        let body = failed.expect_err("道具が落ちた周は Err のまま（rc 2 の極性は変えない）");
+        // 理由行 → 見出し → 末尾、の順（理由行が先頭に残る＝既存の 1 行が読める）。
+        assert!(
+            body.starts_with("cargo mutants が非 0 で終えたが"),
+            "理由行は先頭に据え置き: {body}"
+        );
+        let heading_at = body.find("\nmutants-diff: baseline.log の末尾:\n").expect("見出しが在る");
+        let tail_at = body.find("probe-tail-3e9: 850 passed").expect("末尾が在る");
+        assert!(heading_at < tail_at, "見出しの後に末尾: {body}");
+        assert!(body.ends_with("probe-tail-3e9: pipe::probe_test"), "末尾は最後まで写す: {body}");
+        // outcomes.json 不在で非 0 の周（`without_outcomes` の Err）も同じ形で付く。
+        let missing = diagnosed(without_outcomes(false), tail).expect_err("非 0 は Err");
+        assert!(missing.contains("mutants-diff: baseline.log の末尾:"), "{missing}");
+        // **負例**: 測れた周（rc 0・生存が在る非 0）には見出しも末尾も付かない＝`tail` は呼ばれない。
+        let never = || -> String { panic!("測れた周に baseline.log を読まない") };
+        let ok = diagnosed(measured(Counts::default(), true), never).expect("rc 0 は測定");
+        assert_eq!(ok, Counts::default(), "Ok の中身は不変");
+        let survivors = Counts { total: 18, caught: 12, missed: 6, unviable: 0, timeout: 0 };
+        let ok = diagnosed(measured(survivors, false), never).expect("生存が在る非 0 は測定");
+        assert_eq!(ok.missed, 6, "Ok の中身は不変");
+        let none = diagnosed(without_outcomes(true), never).expect("rc 0 は測る対象が無いだけ");
+        assert_eq!(none.line(&scope_of(PROBE_SCOPE)), Counts::default().line(&scope_of(PROBE_SCOPE)));
+        assert!(!none.line(&scope_of(PROBE_SCOPE)).contains("baseline.log"), "緑の行に診断は載らない");
     }
 
     #[test]

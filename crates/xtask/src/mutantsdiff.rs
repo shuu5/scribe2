@@ -201,6 +201,35 @@ pub fn without_outcomes(tool_succeeded: bool) -> Result<Counts, String> {
     Err("outcomes.json を読めない（測れていない）".to_owned())
 }
 
+/// rc 2 の周に stderr へ写す `baseline.log` の末尾の行数（設計 pipeline.md §5.3 の
+/// 「stderr の末尾 20 行」と同じ値・rules 行ではない）。
+pub const BASELINE_TAIL_LINES: usize = 20;
+
+/// `baseline.log` の末尾 `lines` 行（順序はそのまま）。空なら「空」だと 1 行で名乗る
+/// ——空 file を空文字で写すと「末尾が無い」と「写していない」が同じ字面になる。
+pub fn baseline_tail(log: &str, lines: usize) -> String {
+    if log.trim().is_empty() {
+        return "baseline.log は空".to_owned();
+    }
+    let mut tail: Vec<&str> = log.lines().rev().take(lines).collect();
+    tail.reverse();
+    tail.join("\n")
+}
+
+/// stderr へ写す見出し（この行の次から `baseline.log` の末尾）。
+const BASELINE_TAIL_HEADING: &str = "mutants-diff: baseline.log の末尾:";
+
+/// 「測れなかった」周（`Err`）**だけ**に `baseline.log` の末尾を添える（憲法 C10: 測れなかった
+/// 理由を測定値として残す・設計 pipeline.md §5.3: 診断は `verify.stderr.log` に載る）。
+///
+/// `s2-07l.329` run 1 の rc 2 は理由の 1 行だけが残り、原因（baseline の 1 本の歯が落ちた）は
+/// 退避 worktree の `baseline.log` を手で開くまで読めなかった。**測れた周（`Ok`）には何も
+/// 足さない**——緑の行に診断を残すと、緑と赤の stderr が同じ形になる。`tail` は `Err` の周に
+/// だけ呼ぶ（file を読むのは理由が立った後）。
+pub fn diagnosed(outcome: Result<Counts, String>, tail: impl FnOnce() -> String) -> Result<Counts, String> {
+    outcome.map_err(|reason| format!("{reason}\n{BASELINE_TAIL_HEADING}\n{}", tail()))
+}
+
 /// `"key": <整数>` の形を 1 つ読む。数でなければ `None`（文字列や object は数えない）。
 fn top_level_number(rest: &str) -> Option<(&str, u64)> {
     let after_quote = rest.strip_prefix('"')?;
@@ -339,7 +368,9 @@ pub fn run(args: &[String]) -> ExitCode {
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => without_outcomes(status.success()),
         Err(err) => Err(format!("outcomes.json を読めない: {err}（測れていない）")),
     };
-    let counts = match counts {
+    // **rc 2 の周だけ** cargo-mutants が書いた `baseline.log` の末尾を理由行の後ろに写す
+    // （`Stdio::null()` で起こしているので、出力は file 経由でしか読めない）。
+    let counts = match diagnosed(counts, || baseline_log_tail(&out)) {
         Ok(found) => found,
         Err(reason) => return unmeasured(&format!("mutants-diff: {reason}")),
     };
@@ -352,6 +383,19 @@ pub fn run(args: &[String]) -> ExitCode {
         return unmeasured("mutants-diff: R-C12-1 の enabled を読めない（極性が決まらない・測れていない・rc 2）");
     };
     verdict(&counts, deny)
+}
+
+/// `out/mutants.out/log/baseline.log`（cargo-mutants が書く）の末尾。無い・読めない周はその
+/// 理由を 1 行で（診断が無いことも診断として残す）。
+fn baseline_log_tail(out: &Path) -> String {
+    let log = out.join("mutants.out").join("log").join("baseline.log");
+    match std::fs::read_to_string(&log) {
+        Ok(text) => baseline_tail(&text, BASELINE_TAIL_LINES),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            "baseline.log が無い（cargo-mutants が baseline に届いていない）".to_owned()
+        }
+        Err(err) => format!("baseline.log を読めない: {err}"),
+    }
 }
 
 /// cargo-mutants が居るか（`--version` が rc 0 を返すか）。
