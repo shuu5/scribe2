@@ -1445,14 +1445,19 @@ const DERIVE_FILES: &[(&str, &str)] = &[
 
 /// 導出の toy repo（[`repo_with_state`] の repo に [`DERIVE_FILES`]・要件面・設計 doc `docs/design/toy.md` を足して
 /// commit）と置き場。
+fn derive_repo(doc: &str) -> (PathBuf, PathBuf) {
+    derive_repo_with(doc, &[])
+}
+
+/// [`derive_repo`] に `files` を足した toy repo と置き場。
 #[expect(
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
-fn derive_repo(doc: &str) -> (PathBuf, PathBuf) {
+fn derive_repo_with(doc: &str, files: &[(&str, &str)]) -> (PathBuf, PathBuf) {
     let (repo, state) = repo_with_state();
     let seeded = [(".vessel.toml", DERIVE_VESSEL), ("design-intent/spec/srs.html", TABLE_SRS), ("docs/design/toy.md", doc)];
-    for (path, body) in seeded.iter().chain(DERIVE_FILES) {
+    for (path, body) in seeded.iter().chain(DERIVE_FILES).chain(files) {
         let target = repo.join(path);
         fs::create_dir_all(target.parent().expect("親 dir が在る")).expect("dir を作れる");
         fs::write(&target, body).expect("file を書ける");
@@ -1680,6 +1685,69 @@ fn contract_derive_teeth_place_uses_base_test_names() {
     assert_eq!(other.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&other));
     assert_eq!(copied_write_set(&state, &run_id_of(&other)), ["crates/toy/tests/helper.rs"], "fn 名で解く（file 名ではない）");
     clean(&[&repo, &state]);
+}
+
+// ───── 閉包の同名衝突（設計 docs/design/contract-source.md §3「閉包の同名衝突」・行 j・`s2-07l.347`・接頭辞 `contract_closure_ext_same_name_`） ─────
+
+/// 同名の struct `Marker` を持つ module の本文（`Marker {` の構築点・`Marker::HEAD` の arm・`const ALL: &[Marker]` の
+/// 3 形＝現物の `hook::vessel::Marker` の形）。`crate::a::Marker` と `crate::b::Marker`・`crate::hook::vessel::Marker` が
+/// 同じ字面で持つ。
+const SAME_NAME_STRUCT: &str = "pub struct Marker {\n    pub generation: u32,\n}\n\nimpl Marker {\n    pub const HEAD: &'static str = \"marker\";\n\n    pub fn parse(text: &str) -> Marker {\n        Marker { generation: text.len() as u32 }\n    }\n}\n\npub const ALL: &[Marker] = &[Marker { generation: 0 }];\n\npub fn kind(head: &str) -> u8 {\n    match head {\n        Marker::HEAD => 1,\n        _ => 0,\n    }\n}\n";
+
+/// 多段 module の enum `Marker`（`crate::seat::rebrief::Marker`・`Marker::` の arm と `const ALL: &[Marker]`＝現物の
+/// `seat::rebrief::Marker` の形）。
+const SAME_NAME_ENUM: &str = "pub enum Marker {\n    Sid,\n    Wm,\n}\n\npub const ALL: &[Marker] = &[Marker::Sid, Marker::Wm];\n\npub fn name(marker: Marker) -> &'static str {\n    match marker {\n        Marker::Sid => \"sid\",\n        Marker::Wm => \"wm\",\n    }\n}\n";
+
+/// 同名の型の toy: `a` / `b`（同名の struct・同じ 3 形）と `a` から取り込んで構築する `build.rs`・多段 module の
+/// `seat::rebrief`（enum）と同名の `hook::vessel`（struct・同じ 3 形）と `rebrief` から取り込んで分岐する `seat/tick.rs`。
+const SAME_NAME_FILES: &[(&str, &str)] = &[
+    ("src/a.rs", SAME_NAME_STRUCT),
+    ("src/b.rs", SAME_NAME_STRUCT),
+    ("src/build.rs", "use crate::a::Marker;\n\npub fn build() -> Marker {\n    Marker { generation: 1 }\n}\n"),
+    ("src/seat/rebrief.rs", SAME_NAME_ENUM),
+    ("src/hook/vessel.rs", SAME_NAME_STRUCT),
+    ("src/seat/tick.rs", "use crate::seat::rebrief::Marker;\n\npub fn tick(marker: Marker) -> u8 {\n    match marker {\n        Marker::Sid => 1,\n        _ => 0,\n    }\n}\n"),
+];
+
+/// 同名の型の toy repo に `touches` だけの行 `id` を置き、intake の導出値（写しの契約の write-set）を返す。
+fn same_name_write_set(id: &str, touches: &str) -> Vec<String> {
+    let touches = format!("[\"{touches}\"]");
+    let row = derive_row(id, &[("touches", touches.as_str())]);
+    let (repo, state) = derive_repo_with(&table_doc(&table_region(&[row])), SAME_NAME_FILES);
+    let out = intake_raw(&repo, &state, &pointed_contract(&repo, &format!("{id}.toml"), id), &format!("s2-{id}"));
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "導出値で通る: {}", stderr_of(&out));
+    let found = copied_write_set(&state, &run_id_of(&out));
+    clean(&[&repo, &state]);
+    found
+}
+
+/// (a) `crate::a::Marker` と `crate::b::Marker`（同名・同じ 3 形）を置いた toy で、`touches = ["crate::a::Marker"]` の行の
+/// 導出値は `a` 側（宣言 file と、そこから取り込んで構築する file）だけを持つ（base は裸の型名で照合し `b` 側と
+/// 同名の `rebrief` / `vessel` / `tick` も入る → RED）。
+#[test]
+fn contract_closure_ext_same_name_type_in_another_module_is_not_widened() {
+    let found = same_name_write_set("a", "crate::a::Marker");
+    assert_eq!(found, ["src/a.rs", "src/build.rs"], "a 側だけ（b・同名の他 module は入らない）");
+}
+
+/// (b) `use crate::a::Marker` で取り込んで `Marker {` を構築する file は導出値に入ったまま（退行の pin・`sees` の (b)）。
+/// 対: `b` 側の行は `b` の宣言 file だけを持ち、`a` から取り込む `build.rs` を持たない。
+#[test]
+fn contract_closure_ext_same_name_import_still_widens() {
+    let found = same_name_write_set("a", "crate::a::Marker");
+    assert!(found.iter().any(|path| path == "src/build.rs"), "取り込んで構築する file は入る: {found:?}");
+    let other = same_name_write_set("b", "crate::b::Marker");
+    assert_eq!(other, ["src/b.rs"], "b 側は宣言 file だけ（a から取り込む build.rs は入らない）");
+}
+
+/// (d) 多段 module: `crate::seat::rebrief::Marker`（`src/seat/rebrief.rs`・enum）と同名の `crate::hook::vessel::Marker`
+/// （`src/hook/vessel.rs`・struct・同じ 3 形）と `rebrief` から取り込む `src/seat/tick.rs` を置いた toy で、`touches =
+/// ["crate::seat::rebrief::Marker"]` の行の導出値は `rebrief.rs` と `tick.rs` を持ち `vessel.rs` を持たない（goal の実物と
+/// 同じ 2 段の形・module は最後の段で弁別する）。
+#[test]
+fn contract_closure_ext_same_name_in_nested_module_keeps_the_declaring_file() {
+    let found = same_name_write_set("d", "crate::seat::rebrief::Marker");
+    assert_eq!(found, ["src/seat/rebrief.rs", "src/seat/tick.rs"], "宣言 file と取り込む file だけ（同名の vessel.rs は入らない）");
 }
 
 // ───── 契約の審査の段（`s2-07l.241`・設計 contract-source.md §4・SRS FR49 / FR9 / AC22・接頭辞 `pipe_review_`） ─────

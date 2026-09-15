@@ -1098,12 +1098,14 @@ mod tests {
     /// 節の fixture（§1 = 本文あり / §2 = 本文なし / fence の中の `## 4.` は見出しでない）。
     const DOC: &str = "# t\n\n## 1. 本文の在る節\n\n本文。\n\n## 2. 空の節\n\n## 3. fence\n\n```\n## 4. 見出しではない\n```\n";
 
-    /// 閉包の fixture（`crate::kind::Kind` の宣言 file と arm を持つ file）。
+    /// 閉包の fixture（`crate::kind::Kind` の宣言 file と、`use` で取り込んで arm を持つ file＝閉包は「その file から型が
+    /// 見えているか」を先に判定する〔closure.rs の `sees`・`s2-07l.347`〕ので、素の `Kind::A` は現実の Rust と同じに
+    /// scope に無い）。
     fn sources() -> Vec<Source> {
         let source = |path: &str, body: &str| Source { path: path.to_owned(), body: Ok(body.to_owned()) };
         vec![
             source("src/kind.rs", "pub enum Kind {\n    A,\n}\n\npub const KINDS: &[Kind] = &[Kind::A];\n"),
-            source("src/use.rs", "fn f(kind: Kind) -> u8 {\n    match kind {\n        Kind::A => 1,\n    }\n}\n"),
+            source("src/use.rs", "use crate::kind::Kind;\n\nfn f(kind: Kind) -> u8 {\n    match kind {\n        Kind::A => 1,\n    }\n}\n"),
         ]
     }
 
@@ -1153,6 +1155,33 @@ mod tests {
         assert_eq!(found.last().map(|finding| &finding.refuse), Some(&missing), "足りない file だけを名指す");
         let cycle = found.iter().find(|finding| finding.line == 70).map(|finding| finding.refuse.reason());
         assert_eq!(cycle.as_deref(), Some("depends が輪を成す（g → h → g）"), "輪は 1 件で 2 行を名乗る");
+    }
+
+    /// 閉包は「その file から型が見えているか」を先に判定する（closure.rs の `sees`・§3「閉包の同名衝突」・`s2-07l.347`）:
+    /// 取り込みも修飾も無い素の `Kind::A` の arm を持つ file（別 module の同名の型を指す形）は閉包に入らず、write-set が
+    /// その file を欠いても `write-set-incomplete` で名指されない。取り込む fixture（[`sources`]）は従来どおり名指す。
+    #[test]
+    fn contract_closure_ext_same_name_table_check_skips_a_file_that_cannot_see_the_type() {
+        let requirements = Ok(["FR1".to_owned()].into_iter().collect::<BTreeSet<String>>());
+        let allowed = ["git".to_owned()];
+        let tracked = ["src/kind.rs".to_owned(), "src/use.rs".to_owned()];
+        let mut blind = sources();
+        blind[1].body = Ok("fn f(kind: Kind) -> u8 {\n    match kind {\n        Kind::A => 1,\n    }\n}\n".to_owned());
+        let ctx = |sources: &[Source]| -> Vec<String> {
+            let ctx = Context {
+                allowed: &allowed,
+                denied: &[],
+                requirements: &requirements,
+                sources,
+                tracked: &tracked,
+                snapshots: &[],
+            };
+            let mut touched = row(10, "a");
+            touched.touches = vec!["crate::kind::Kind".to_owned()];
+            check_table(DOC, &[touched], &ctx).iter().map(|finding| finding.refuse.label()).collect()
+        };
+        assert!(ctx(&blind).is_empty(), "型が見えていない file は閉包に入らない");
+        assert_eq!(ctx(&sources()), vec!["write-set-incomplete".to_owned()], "取り込む file は従来どおり名指す");
     }
 
     /// 導出の形の行（契約 (h)・§3）: `write-set` の無い行は読め（`creates` / `tests` / `also` は欄として持つ）、CI の検査は

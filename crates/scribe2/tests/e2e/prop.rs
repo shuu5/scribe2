@@ -875,3 +875,95 @@ mod seat_attrib {
         }
     }
 }
+
+/// 閉包の同名衝突の性質（(8) pipe/closure.rs の `sees`・設計 contract-source.md §3「閉包の同名衝突」・`s2-07l.347`）。
+mod closure_same_name {
+    use super::config;
+    use proptest::prelude::*;
+    use std::collections::BTreeSet;
+    use vessel::pipe::closure::{closure, Source};
+
+    /// 同名の struct `Marker` を宣言し 3 形（構築点・arm・const slice）を持つ module の本文（`a` と `b` が同じ字面で持つ）。
+    const DECLARING: &str = "pub struct Marker {\n    pub n: u32,\n}\n\nimpl Marker {\n    pub const HEAD: &'static str = \"m\";\n}\n\npub const ALL: &[Marker] = &[Marker { n: 0 }];\n\npub fn kind(head: &str) -> u8 {\n    match head {\n        Marker::HEAD => 1,\n        _ => 0,\n    }\n}\n";
+
+    /// 型を持つ形の断片（構築点・arm・const slice の宣言）。
+    const FORMS: &[&str] = &[
+        "    let marker = Marker { n: 1 };\n",
+        "        Marker::HEAD => 1,\n",
+        "pub const MORE: &[Marker] = &[];\n",
+    ];
+
+    /// 1 本の toy file: どちらの module の `Marker` を名指すか × どう名指すか（import / 修飾 / 名指さない）× 持つ形の集合。
+    #[derive(Debug, Clone)]
+    struct Toy {
+        side: &'static str,
+        link: Link,
+        forms: BTreeSet<usize>,
+    }
+
+    /// file が module の型を名指す形（`Super` = `<side>/` の直下の子 file から `use super::Marker`）。
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum Link {
+        Import,
+        Qualify,
+        Super,
+        None,
+    }
+
+    impl Toy {
+        /// 本文（名指しの行 + 形の断片・順は固定）。
+        fn text(&self) -> String {
+            let head = match self.link {
+                Link::Import => format!("use crate::{}::Marker;\n\n", self.side),
+                Link::Qualify => format!("pub fn head() -> &'static str {{\n    crate::{}::Marker::HEAD\n}}\n\n", self.side),
+                Link::Super => "use super::Marker;\n\n".to_owned(),
+                Link::None => String::new(),
+            };
+            let body: String = FORMS.iter().enumerate().filter(|(index, _)| self.forms.contains(index)).map(|(_, form)| *form).collect();
+            format!("{head}{body}")
+        }
+
+        /// 置き場（`Super` は `src/<side>/f<index>.rs`・他は `src/f<index>.rs`）。
+        fn path(&self, index: usize) -> String {
+            match self.link {
+                Link::Super => format!("src/{}/f{index}.rs", self.side),
+                _ => format!("src/f{index}.rs"),
+            }
+        }
+    }
+
+    /// toy file の strategy。
+    fn toy() -> impl Strategy<Value = Toy> {
+        (
+            prop::sample::select(vec!["a", "b"]),
+            prop::sample::select(vec![Link::Import, Link::Qualify, Link::Super, Link::None]),
+            prop::collection::btree_set(0..FORMS.len(), 0..=FORMS.len()),
+        )
+            .prop_map(|(side, link, forms)| Toy { side, link, forms })
+    }
+
+    proptest! {
+        #![proptest_config(config())]
+
+        /// 同名の `Marker` を `a` と `b` が宣言する toy で、`crate::a::Marker` の閉包 = `src/a.rs` ∪ {`a` の型を import か
+        /// 修飾か子 file の `super` で名指し、形を 1 つ以上持つ file}（`b` を名指す file・名指さない file は、同じ形を
+        /// 持っても入らない）。
+        #[test]
+        fn prop_contract_closure_ext_same_name_closure_holds_only_files_that_see_the_module(toys in prop::collection::vec(toy(), 0..6)) {
+            let mut sources = vec![
+                Source { path: "src/a.rs".to_owned(), body: Ok(DECLARING.to_owned()) },
+                Source { path: "src/b.rs".to_owned(), body: Ok(DECLARING.to_owned()) },
+            ];
+            let mut want: BTreeSet<String> = ["src/a.rs".to_owned()].into_iter().collect();
+            for (index, toy) in toys.iter().enumerate() {
+                let path = toy.path(index);
+                if toy.side == "a" && toy.link != Link::None && !toy.forms.is_empty() {
+                    want.insert(path.clone());
+                }
+                sources.push(Source { path, body: Ok(toy.text()) });
+            }
+            let found = closure(&["crate::a::Marker".to_owned()], &sources);
+            prop_assert_eq!(found, Ok(want), "{:?}", toys);
+        }
+    }
+}

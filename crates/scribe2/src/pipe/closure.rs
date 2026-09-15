@@ -8,14 +8,19 @@
 //!    戻り型なので除く）
 //! 2. **match の arm**（`Type::` を `=>` の左に持つ行）
 //! 3. **件数 pin**（その型の const slice `NAME` の `NAME.len()` が整数 literal と `,` / `==` / `!=` で突き合わ
-//!    される箇所）。件数を文言へ写すだけの `.len()` は型を足しても壊れないので pin に数えない。`NAME` は
-//!    `<module>::NAME` の修飾か、宣言 file か、`use` で `<module>::` から同名で取り込んだ file でだけ解く
-//!    （別の module の同名 const を拾わない）
+//!    される箇所）。件数を文言へ写すだけの `.len()` は型を足しても壊れないので pin に数えない。`NAME` の出現は
+//!    `<module>::NAME` の修飾か、`use` で `<module>::` から同名で取り込んだ file でだけ解く（別の module の同名
+//!    const を拾わない）
 //! 4. **const slice の宣言 file**（`const NAME: &[Type]`）
 //!
-//! **下界である**（§3「限界」）: 型の名が別名で現れる形（`use … as`・generic の中）と `Self { … }` の構築は
-//! 見ない。上界は構文木が要り A3 の依存になる（却下・§11）。読めない file と型名の形の違いは `Err`
-//! （fail-closed・NFR4）。
+//! 4 形はどれも、先に**その file から `touches` の型が見えているか**（[`sees`]・§3「閉包の同名衝突」）を 1 関数で
+//! 判定してから数える: (a) file が型を宣言し path が `touches` の module に当たる (b) `use <module>::Name` で取り込む
+//! (c) 本文に `<module>::Name` の修飾が在る。裸の型名だけで照合すると、別 module の同名の型（`hook::vessel::Marker` と
+//! `seat::rebrief::Marker`）の file へ閉包が広がり、導出値の偽の交差が並列度を下げる。
+//!
+//! **下界である**（§3「限界」）: 型の名が別名で現れる形（`use … as`・generic の中）と `Self { … }` の構築、glob
+//! （`use m::*` / `use super::*`）越しの取り込みは見ない。上界は構文木が要り A3 の依存になる（却下・§11）。読めない
+//! file と型名の形の違いは `Err`（fail-closed・NFR4）。
 //!
 //! 閉包の拡張（契約 (g)・§3）も同じ pure な字面走査で持つ: (v) **外形 pin** [`surface_closure`]（`surfaces` の名が
 //! 指す外形 snapshot の file と、その名か subcommand の usage 文字列を歯の区間に literal で持つ `.rs`）と
@@ -68,6 +73,24 @@ const USE_HEADS: &[&str] = &["use ", "pub use ", "pub(crate) use "];
 
 /// `Type {` の直前にこの語が在る行は宣言・実装の行である（literal 構築ではない）。
 const DECLARING: &[&str] = &["struct", "enum", "union", "trait", "impl", "for"];
+
+/// 型の宣言の語（`enum Name` / `struct Name` の行＝[`sees`] の (a)「この file がその型を宣言する」）。
+const TYPE_DECLARING: &[&str] = &["enum", "struct"];
+
+/// src の dir 名（[`sees`] の (a) は path をこの段からの相対で module に当てる・`crates/<c>/` の接頭辞は任意）。
+const SRC_DIR: &str = "src";
+
+/// `crate` 直下の型（`crate::Type`・module の無い型）の修飾の段の名。
+const CRATE_ROOT: &str = "crate";
+
+/// `crate` 直下の型を宣言する file の stem（`lib.rs` / `main.rs`）。
+const CRATE_ROOT_STEMS: &[&str] = &["lib", "main"];
+
+/// 親 module の修飾の段（`<module>/` の直下の子 file から `use super::Name` / `super::Name` は `<module>::Name` を指す）。
+const SUPER: &str = "super";
+
+/// dir 形の module 自身の file の stem（`<module>/mod.rs`・この file の `super` は親を指す）。
+const MOD_STEM: &str = "mod";
 
 /// 件数 pin の突き合わせの口（`assert_eq!(NAME.len(), 3` の `,`・`NAME.len() == 3` の `==`）。
 const COMPARES: &[&str] = &[",", "==", "!="];
@@ -387,13 +410,15 @@ fn is_ident_char(found: char) -> bool {
     found.is_ascii_alphanumeric() || found == '_'
 }
 
-/// 1 つの型の閉包（4 形のどれかを持つ file）。
+/// 1 つの型の閉包（型が見えている file〔[`sees`]〕のうち 4 形のどれかを持つもの）。const slice の宣言 file も
+/// 見えている file だけ＝別 module の同名 const slice（別の同名の型の slice）を拾わない。
 fn files_of(touched: &Touched<'_>, texts: &[(&str, &str)]) -> BTreeSet<String> {
     let mut names: BTreeSet<&str> = BTreeSet::new();
     let mut declaring: BTreeSet<&str> = BTreeSet::new();
+    let none = BTreeSet::new();
     for &(path, text) in texts {
         let found = slice_names(text, touched.name);
-        if !found.is_empty() {
+        if !found.is_empty() && sees(path, text, touched, &none) {
             declaring.insert(path);
             names.extend(found);
         }
@@ -401,13 +426,75 @@ fn files_of(touched: &Touched<'_>, texts: &[(&str, &str)]) -> BTreeSet<String> {
     texts
         .iter()
         .filter(|&&(path, text)| {
-            declaring.contains(path)
-                || constructs(text, touched.name)
-                || matches_arm(text, touched.name)
-                || pins(text, touched, &names, declaring.contains(path))
+            sees(path, text, touched, &names)
+                && (declaring.contains(path)
+                    || constructs(text, touched.name)
+                    || matches_arm(text, touched.name)
+                    || pins(text, &scopes(path, touched.module), &names))
         })
         .map(|&(path, _)| path.to_owned())
         .collect()
+}
+
+/// この file から `touches` の型が見えているか（§3「閉包の同名衝突」・4 形は全部この 1 関数を通ってから数える・C2）:
+/// (a) この file が型を宣言し（`enum` / `struct` の宣言行）path が `touches` の module に当たる（[`in_module`]）
+/// (b) `use <module>::Name` で取り込む（[`imports`]）(c) 本文に `<module>::Name` の修飾が在る（[`qualifies`]）。
+/// `<module>` の段は [`scopes`]（子 file からは `super` も同じ module）。`names` はその型の const slice の名で、(b)(c) は
+/// 型名と同じに読む（`crate::paint::HUES.len()` の件数 pin は型を名指さずに型の構造を持つ＝第 3 形）。
+fn sees(path: &str, text: &str, touched: &Touched<'_>, names: &BTreeSet<&str>) -> bool {
+    let scopes = scopes(path, touched.module);
+    (declares_type(text, touched.name) && in_module(path, touched.module))
+        || std::iter::once(touched.name)
+            .chain(names.iter().copied())
+            .any(|name| scopes.iter().any(|scope| imports(text, scope, name) || qualifies(text, scope, name)))
+}
+
+/// 本文が `enum ty` / `struct ty` の宣言行を持つか。
+fn declares_type(text: &str, ty: &str) -> bool {
+    TYPE_DECLARING.iter().any(|word| holds_word(text, &format!("{word} {ty}")))
+}
+
+/// path の `src/` からの相対の (file の stem, 直上の dir の名)。`src/` の段が無ければ `None`。
+fn placed(path: &str) -> Option<(&str, Option<&str>)> {
+    let segments: Vec<&str> = path.split('/').collect();
+    let at = segments.iter().position(|segment| *segment == SRC_DIR)?;
+    let (file, dirs) = segments.get(at.saturating_add(1)..)?.split_last()?;
+    Some((file.strip_suffix(RS).unwrap_or(file), dirs.last().copied()))
+}
+
+/// path が module の file か: `src/` からの相対で `<module>.rs` か `<module>/` の直下（多段 module は最後の段で弁別し
+/// 親 dir は見ない＝`crate::seat::rebrief::Marker` は `src/seat/rebrief.rs`）・`crate` 直下の型は `lib.rs` / `main.rs`。
+fn in_module(path: &str, module: Option<&str>) -> bool {
+    match (placed(path), module) {
+        (Some((stem, dir)), Some(module)) => stem == module || dir == Some(module),
+        (Some((stem, _)), None) => CRATE_ROOT_STEMS.contains(&stem),
+        (None, _) => false,
+    }
+}
+
+/// この file から `touches` の module を指す修飾の段: `<module>`（`crate` 直下の型は `crate`）と、この file が
+/// `<module>/` の直下の子 file（`mod.rs` と `lib.rs` / `main.rs` は module 自身）なら `super` も。
+fn scopes<'m>(path: &str, module: Option<&'m str>) -> Vec<&'m str> {
+    let mut found = vec![module.unwrap_or(CRATE_ROOT)];
+    let child = placed(path).is_some_and(|(stem, dir)| dir == module && stem != MOD_STEM && !CRATE_ROOT_STEMS.contains(&stem));
+    if child {
+        found.push(SUPER);
+    }
+    found
+}
+
+/// 本文が `<scope>::name` の修飾を語の境界で持つか（[`qualified`] と同じ照合）。
+fn qualifies(text: &str, scope: &str, name: &str) -> bool {
+    heads(text, name).into_iter().any(|at| {
+        let (before, rest) = text.split_at(at);
+        let after = rest.get(name.len()..).unwrap_or_default();
+        !after.starts_with(is_ident_char) && before.strip_suffix("::").is_some_and(|path| qualified(path, scope))
+    })
+}
+
+/// `::` の前の字面の末尾の段が `scope` か。
+fn qualified(path: &str, scope: &str) -> bool {
+    path.rsplit(|found: char| !is_ident_char(found)).next() == Some(scope)
 }
 
 /// 本文が宣言する `ty` の const slice の名（`const NAME: &[Type]` / `&'static [Type]`）。
@@ -456,24 +543,24 @@ fn matches_arm(text: &str, ty: &str) -> bool {
         .any(|(left, _)| !heads(left, &needle).is_empty())
 }
 
-/// const slice の件数 pin（`NAME.len()` を整数 literal と突き合わせる箇所）を持つか。
-fn pins(text: &str, touched: &Touched<'_>, names: &BTreeSet<&str>, declaring: bool) -> bool {
+/// const slice の件数 pin（`NAME.len()` を整数 literal と突き合わせる箇所）を持つか（`scopes` は [`scopes`]）。
+fn pins(text: &str, scopes: &[&str], names: &BTreeSet<&str>) -> bool {
     names.iter().any(|name| {
-        let imported = declaring || imports(text, touched.module, name);
         let needle = format!("{name}.len()");
         heads(text, &needle).into_iter().any(|at| {
             let (before, rest) = text.split_at(at);
             let after = rest.get(needle.len()..).unwrap_or_default();
-            resolves(before, touched.module, imported) && compared(before, after)
+            resolves(before, text, scopes, name) && compared(before, after)
         })
     })
 }
 
-/// `NAME` の出現が目的の module の const を指すか（`<module>::NAME` の修飾・無修飾なら取り込み済みか）。
-fn resolves(before: &str, module: Option<&str>, imported: bool) -> bool {
+/// `NAME` の 1 出現が目的の module の const を指すか＝[`sees`] の (b)(c) を出現に当てる（`<module>::NAME` の修飾は
+/// [`qualified`]・無修飾なら [`imports`] で取り込み済みか）。
+fn resolves(before: &str, text: &str, scopes: &[&str], name: &str) -> bool {
     match before.strip_suffix("::") {
-        Some(path) => module.is_some_and(|found| path.rsplit(|c: char| !is_ident_char(c)).next() == Some(found)),
-        None => imported,
+        Some(path) => scopes.iter().any(|scope| qualified(path, scope)),
+        None => scopes.iter().any(|scope| imports(text, scope, name)),
     }
 }
 
@@ -501,12 +588,9 @@ fn literal_before(lead: &str) -> bool {
     })
 }
 
-/// 本文が `<module>::` から `name` を同名で取り込む `use` 文を持つか（`as` の別名は下界の外）。
-fn imports(text: &str, module: Option<&str>, name: &str) -> bool {
-    let Some(module) = module else {
-        return false;
-    };
-    let path = format!("{module}::");
+/// 本文が `<scope>::` から `name` を同名で取り込む `use` 文を持つか（`as` の別名は下界の外）。
+fn imports(text: &str, scope: &str, name: &str) -> bool {
+    let path = format!("{scope}::");
     use_statements(text)
         .iter()
         .any(|statement| !heads(statement, &path).is_empty() && names_word(statement, name))
@@ -742,8 +826,8 @@ fn also_files(items: &[String], tracked: &[String]) -> Result<BTreeSet<String>, 
 #[cfg(test)]
 mod tests {
     use super::{
-        check_drift, closure, derive_write_set, surface_closure, unresolved_names, weighted_lines, Base, ClosureError,
-        Fields, Source,
+        check_drift, closure, derive_write_set, sees, surface_closure, touched, unresolved_names, weighted_lines, Base,
+        ClosureError, Fields, Source,
     };
     use proptest::prelude::*;
     use proptest::test_runner::Config;
@@ -849,6 +933,71 @@ mod tests {
             let found = of(&["crate::paint::Hue"], &[source("src/paint.rs", PAINT), source("src/pin.rs", body)]);
             assert_eq!(found.contains("src/pin.rs"), pinned, "{body}");
         }
+    }
+
+    /// 「その file から型が見えているか」の 1 関数（§3「閉包の同名衝突」）の 4 組: (a) 宣言（自 module の file・
+    /// `<module>/` の直下・多段 module は最後の段で弁別・module の path に在るだけの file は宣言が無ければ見えない）/
+    /// (b) import（`<module>/` の直下の子 file は `use super::Name` も・`mod.rs` と別 dir の `super` は違う module）/
+    /// (c) 修飾のどれかで見え、どれも無い file（別 module の同名の宣言・別 module からの import・別 module の修飾・型名を
+    /// 前置きに持つ別の名）は見えない。`crate` 直下の型は `lib.rs` / `main.rs` の宣言と `crate::` の修飾で見える。
+    #[test]
+    fn contract_closure_ext_same_name_sees_by_declaration_import_or_qualification_only() {
+        let none = BTreeSet::new();
+        for (ty, path, text, want) in [
+            ("crate::paint::Hue", "src/paint.rs", "pub enum Hue {\n    Red,\n}\n", true),
+            ("crate::paint::Hue", "crates/toy/src/paint/mod.rs", "pub struct Hue;\n", true),
+            ("crate::paint::Hue", "src/paint.rs", "pub fn f() {}\n", false),
+            ("crate::paint::Hue", "src/tone.rs", "pub enum Hue {\n    Red,\n}\n", false),
+            ("crate::fleet::Stage", "crates/toy/src/fleet/cli.rs", "use super::{replay, Stage};\n", true),
+            ("crate::fleet::Stage", "crates/toy/src/fleet/cli.rs", "fn f() -> u8 {\n    super::Stage::Spawned as u8\n}\n", true),
+            ("crate::fleet::Stage", "crates/toy/src/fleet/mod.rs", "use super::Stage;\n", false),
+            ("crate::fleet::Stage", "crates/toy/src/pipe/cli.rs", "use super::Stage;\n", false),
+            ("crate::paint::Hue", "src/a.rs", "use crate::paint::Hue;\n", true),
+            ("crate::paint::Hue", "src/a.rs", "use crate::paint::{Hue, HUES};\n", true),
+            ("crate::paint::Hue", "src/a.rs", "use crate::tone::Hue;\n", false),
+            ("crate::paint::Hue", "src/a.rs", "fn f() -> u8 {\n    crate::paint::Hue::Red as u8\n}\n", true),
+            ("crate::paint::Hue", "src/a.rs", "fn f() -> u8 {\n    crate::tone::Hue::Red as u8\n}\n", false),
+            ("crate::paint::Hue", "src/a.rs", "fn f() -> usize {\n    crate::paint::Hues::len()\n}\n", false),
+            ("crate::paint::Hue", "src/a.rs", "fn f(hue: Hue) -> u8 {\n    match hue {\n        Hue::Red => 1,\n    }\n}\n", false),
+            ("crate::seat::rebrief::Marker", "crates/toy/src/seat/rebrief.rs", "pub enum Marker {\n    Sid,\n}\n", true),
+            ("crate::seat::rebrief::Marker", "crates/toy/src/hook/vessel.rs", "pub struct Marker {\n    pub n: u32,\n}\n", false),
+            ("crate::seat::rebrief::Marker", "tests/e2e/tick.rs", "use vessel::seat::rebrief::Marker;\n", true),
+            ("crate::seat::rebrief::Marker", "tests/e2e/hook.rs", "use vessel::hook::vessel::Marker;\n", false),
+            ("crate::Mood", "src/lib.rs", "pub enum Mood {\n    Up,\n}\n", true),
+            ("crate::Mood", "src/mood.rs", "pub enum Mood {\n    Up,\n}\n", false),
+            ("crate::Mood", "src/a.rs", "use crate::Mood;\n", true),
+            ("crate::Mood", "src/a.rs", "use super::Mood;\n", true),
+            ("crate::Mood", "src/paint/a.rs", "use super::Mood;\n", false),
+        ] {
+            let target = touched(ty).unwrap_or_else(|| panic!("{ty} は crate::module::Type の形"));
+            assert_eq!(sees(path, text, &target, &none), want, "{ty} を {path} から: {text}");
+        }
+        let hue = touched("crate::paint::Hue").unwrap_or_else(|| panic!("形は正しい"));
+        let names: BTreeSet<&str> = ["HUES"].into_iter().collect();
+        let pin = "fn f() {\n    assert_eq!(crate::paint::HUES.len(), 2);\n}\n";
+        assert!(!sees("src/pin.rs", pin, &hue, &none), "型名だけでは const slice の修飾を見ない");
+        assert!(sees("src/pin.rs", pin, &hue, &names), "const slice の名は型名と同じに読む（第 3 形）");
+    }
+
+    /// 別 module に同名の型を置いた toy: 閉包は `touches` の module 側（宣言 file・そこから取り込んで構築 / 分岐する
+    /// file）だけを持ち、同名の型を宣言し同じ 3 形（`Hue {`・`Hue::` の arm・`const NAME: &[Hue]`）を持つ別 module の
+    /// file と、そちらから取り込む file は持たない。const slice の宣言 file も見えている file だけ（別 module の同名
+    /// slice `HUES` の宣言も、その `HUES.len()` の pin も拾わない）。
+    #[test]
+    fn contract_closure_ext_same_name_forms_and_const_slice_stay_on_the_module_side() {
+        let tone = "pub enum Hue {\n    Soft,\n}\n\npub struct Swatch {\n    pub hue: u8,\n}\n\npub const HUES: &[Hue] = &[Hue::Soft];\n\npub fn name(hue: Hue) -> u8 {\n    match hue {\n        Hue::Soft => 1,\n    }\n}\n\npub fn make() -> Swatch {\n    Swatch { hue: 0 }\n}\n";
+        let sources = vec![
+            source("src/paint.rs", PAINT),
+            source("src/tone.rs", tone),
+            source("src/from_paint.rs", "use crate::paint::{Hue, Swatch};\n\npub fn f(hue: Hue) -> Swatch {\n    match hue {\n        Hue::Red => Swatch { hue: 1 },\n        _ => Swatch { hue: 0 },\n    }\n}\n"),
+            source("src/from_tone.rs", "use crate::tone::{Hue, Swatch};\n\npub fn f(hue: Hue) -> Swatch {\n    match hue {\n        Hue::Soft => Swatch { hue: 1 },\n    }\n}\n"),
+            source("tests/tone_count.rs", "use crate::tone::HUES;\n\n#[test]\nfn count() {\n    assert_eq!(HUES.len(), 1);\n}\n"),
+            source("tests/paint_count.rs", "use crate::paint::HUES;\n\n#[test]\nfn count() {\n    assert_eq!(HUES.len(), 2);\n}\n"),
+        ];
+        assert_eq!(of(&["crate::paint::Hue"], &sources), set(&["src/from_paint.rs", "src/paint.rs", "tests/paint_count.rs"]));
+        assert_eq!(of(&["crate::tone::Hue"], &sources), set(&["src/from_tone.rs", "src/tone.rs", "tests/tone_count.rs"]));
+        assert_eq!(of(&["crate::paint::Swatch"], &sources), set(&["src/from_paint.rs"]), "構築点も module 側だけ");
+        assert_eq!(of(&["crate::tone::Swatch"], &sources), set(&["src/from_tone.rs", "src/tone.rs"]));
     }
 
     /// 読めない file は `Err`（fail-closed・その file が型を持つかを測れない）・型名の形が違えば `Err`。
