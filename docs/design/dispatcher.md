@@ -105,7 +105,7 @@ write-set = ["+crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2/src/seat/ti
 verify = ["cargo nextest run -p scribe2 --no-tests=fail seat_tick_dispatch_", "cargo nextest run -p scribe2 --no-tests=fail pipe_terminal_dispatch_"]
 size = "S"
 done = "tick が decision=dispatch を記録し、偽 remote の toy repo で land の直後に列が 1 周撃たれる"
-depends = ["a"]
+depends = ["a", "r"]
 
 [[contract]]
 id = "c"
@@ -118,4 +118,26 @@ verify = ["cargo nextest run -p scribe2 --no-tests=fail seat_wm_rebrief_"]
 size = "S"
 done = "偽の列で rebrief が [DISPATCH] を件数付きで出し、読めない周は [DISPATCH-UNMEASURED]"
 depends = ["a"]
+
+[[contract]]
+id = "r"
+title = "審査の時点 — 契約 file が出来た直後に審査を撃ち ContractReviewed を記録し、pipe run は同じ sha の PASS を再利用する"
+req = ["FR49", "FR68"]
+section = "2"
+write-set = ["+crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2/src/pipe/review.rs", "crates/scribe2/src/pipe/cli/intake.rs", "crates/scribe2/src/pipe/cli/run.rs", "crates/scribe2/tests/e2e/pipe/intake.rs", "+crates/scribe2/tests/e2e/pipe/dispatch.rs"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_review_contract_"]
+size = "S"
+done = "契約 file が出来た直後に偽 lens が 1 回撃たれ verdict が sha に紐づいて記帳され、同じ sha の pipe run は lens の呼出 0 で Reviewed が埋まり、sha が変わると撃ち直す"
+depends = ["a"]
+
+[[contract]]
+id = "d"
+title = "driver の死亡 — 札の書き・消し、turn 関数の起こし直し（pipe resume）、record token resumed:<m>、base_of_run の typed 化"
+req = ["FR68", "FR14", "FR50"]
+section = "5"
+write-set = ["+crates/scribe2/src/pipe/dispatch.rs", "+crates/scribe2/src/seat/tick/dispatch.rs", "crates/scribe2/src/pipe/cli/run.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/admission.rs", "crates/scribe2/src/pipe/mod.rs", "+crates/scribe2/tests/e2e/pipe/dispatch.rs", "crates/scribe2/tests/e2e/pipe/spawn.rs"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_dispatch_driver_"]
+size = "M"
+done = "driver を殺した便に dispatch の 1 周を撃つと pipe resume が 1 回起きて Landed まで通り record に resumed:1、札の無い live 便は起こし直さない"
+depends = ["a", "b"]
 <!-- contracts:end -->
