@@ -328,18 +328,9 @@ fn tame(text: &str) -> String {
 /// 包めた周だけ終端行の epilogue を足す（設計 §4.3）——scope の外で `/proc/self/cgroup` を
 /// 読んでも、それは自分の箱ではない別の cgroup の数である。
 ///
-/// **子の env から [`PANE_ENV`] だけを外す**（設計 seat-roles.md §4・ADR-0022 §2.3）。runner /
-/// lens / verify 行の 3 経路はすべてこの関数を通るので、この 1 点で覆う。env は足さない（C2.2）。
+/// 子の env から [`PANE_ENV`] を外すのは [`wrap_command`] と同じ 1 点（[`wrap`]）である。
 pub fn wrap_line(line: &str, entry: &Wrap<'_>) -> (Command, Confinement) {
-    let (mut cmd, confinement) = match fitting(entry) {
-        Err(reason) => (shell(line), Confinement::Unconfined(reason)),
-        Ok((caps, mb)) => (
-            scope(shell(&script(line, entry.unit)), mb, entry, &caps),
-            Confinement::Confined { unit: entry.unit.to_owned() },
-        ),
-    };
-    cmd.env_remove(PANE_ENV);
-    (cmd, confinement)
+    wrap(entry, |confined| if confined { shell(&script(line, entry.unit)) } else { shell(line) })
 }
 
 /// 起動した席の pane を指す tmux の変数。
@@ -353,14 +344,25 @@ const PANE_ENV: &str = "TMUX_PANE";
 /// ＝peak は測らない・設計 §4.3 の記録先は verify 行と runner の 2 面である）。
 ///
 /// cwd・env・stdio は `Command` から読み戻せないので、**包んだ後に**外側へ付けること。
+/// 子の env から [`PANE_ENV`] を外すのは [`wrap_line`] と同じ 1 点（[`wrap`]）である——`pipe` の外で
+/// 席の pane から `runner` / `lens` を単体起動する周（headless の `build`）もここを通る。
 pub fn wrap_command(cmd: Command, entry: &Wrap<'_>) -> (Command, Confinement) {
-    match fitting(entry) {
-        Err(reason) => (cmd, Confinement::Unconfined(reason)),
+    wrap(entry, |_| cmd)
+}
+
+/// 起動の包みの 2 口の本体（設計 seat-roles.md §4）。`inner` は包める周（`true`）と包めない周で別の
+/// 起動を組める（`wrap_line` は包める周だけ終端行を足す）。**子の env から [`PANE_ENV`] だけを外す
+/// 唯一の点**（ADR-0022 §2.3）——runner / lens / verify 行のどの経路もここを通る。env は足さない（C2.2）。
+fn wrap(entry: &Wrap<'_>, inner: impl FnOnce(bool) -> Command) -> (Command, Confinement) {
+    let (mut cmd, confinement) = match fitting(entry) {
+        Err(reason) => (inner(false), Confinement::Unconfined(reason)),
         Ok((caps, mb)) => (
-            scope(cmd, mb, entry, &caps),
+            scope(inner(true), mb, entry, &caps),
             Confinement::Confined { unit: entry.unit.to_owned() },
         ),
-    }
+    };
+    cmd.env_remove(PANE_ENV);
+    (cmd, confinement)
 }
 
 /// 箱の大きさ（MiB）を決める。包めない周は閉じた理由を返す。
@@ -616,6 +618,16 @@ mod tests {
             "外すのは TMUX_PANE だけで、足す env は無い"
         );
         assert_eq!(PANE_ENV, "TMUX_PANE", "外す名は tmux の pane の変数");
+    }
+
+    /// `wrap_command`（argv の包み・headless の `build` が通る口）も `TMUX_PANE` を**外す**指定を持ち、
+    /// ほかの env を足さない（`wrap_line` と同じ 1 点・設計 seat-roles.md §4 行 c）。base は空で RED。
+    #[test]
+    fn pipe_spawn_drops_tmux_pane_in_wrap_command() {
+        let entry = Wrap { unit: "scribe2-probe-unit", limit: Limit::HostReserve, caps: Err(RuleRead::Missing) };
+        let (cmd, _) = wrap_command(Command::new("true"), &entry);
+        let envs: Vec<(&OsStr, Option<&OsStr>)> = cmd.get_envs().collect();
+        assert_eq!(envs, vec![(OsStr::new(PANE_ENV), None)], "外すのは TMUX_PANE だけで、足す env は無い");
     }
 
     /// 歯の fixture の 3 線（tracked manifest の値を写さない＝値が動いても歯は動かない）。

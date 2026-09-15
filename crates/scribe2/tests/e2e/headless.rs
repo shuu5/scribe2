@@ -30,7 +30,7 @@ fn tmp() -> PathBuf {
 /// fake claude を 1 本作る。
 ///
 /// 起動されたら `called` を残し、引数を `args`・cwd を `cwd`・口座 env を `account`・agent view の
-/// env を `agent-view` へ写してから `body` を stdout へ出す。
+/// env を `agent-view`・env の全行を `env` へ写してから `body` を stdout へ出す。
 ///
 /// `lingering` が真のときだけ、body の後に**眠ってから** `tail-ran` を残す。呼び手が
 /// 途中で殺したかどうかを rc でなく**痕跡の不在**で測るための印で、要る歯は 1 本だけ
@@ -51,6 +51,7 @@ fn fake_claude(dir: &Path, body: &str, lingering: bool, rc: u8) -> PathBuf {
          pwd > \"{d}/cwd\"\n\
          printf '%s' \"$CLAUDE_CONFIG_DIR\" > \"{d}/account\"\n\
          printf '%s' \"$CLAUDE_CODE_DISABLE_AGENT_VIEW\" > \"{d}/agent-view\"\n\
+         env > \"{d}/env\"\n\
          cat \"{d}/body\"\n\
          {tail}exit {rc}\n"
     );
@@ -68,7 +69,14 @@ fn fake_claude(dir: &Path, body: &str, lingering: bool, rc: u8) -> PathBuf {
 /// 親の値を別の字面に固定し、子の写しが `1` なら器が**設定した**と読める形にする。
 const INHERITED_AGENT_VIEW: &str = "inherited-from-parent";
 
-/// binary を 1 回撃つ。stdin には `input` を流す（親の agent view の env は [`INHERITED_AGENT_VIEW`]）。
+/// binary を撃つ側（席の pane の中）の `TMUX_PANE`。
+///
+/// 席の管理席が `pipe` の外で `runner` / `lens` を単体起動する周を作る。子（claude）に届くと hook が
+/// `--pane` でこの席の打刻へ書く（他 process の打刻の混入・設計 seat-roles.md §4）。
+const PARENT_PANE: &str = "%99";
+
+/// binary を 1 回撃つ。stdin には `input` を流す（親の agent view の env は [`INHERITED_AGENT_VIEW`]・
+/// 親の pane は [`PARENT_PANE`]）。
 #[expect(
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
@@ -77,6 +85,7 @@ fn run_bin(args: &[&str], input: &[u8]) -> Output {
     let mut child = Command::new(bin())
         .args(args)
         .env("CLAUDE_CODE_DISABLE_AGENT_VIEW", INHERITED_AGENT_VIEW)
+        .env("TMUX_PANE", PARENT_PANE)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -858,6 +867,52 @@ fn headless_agent_view_off_env_reaches_runner_and_lens() {
     assert!(dir.join("called").exists(), "cap 内なので lens も claude を呼ぶ");
     assert_eq!(slurp(&dir.join("agent-view")), "1", "lens の子で agent view を切る");
     clean(&[&dir, &worktree]);
+}
+
+/// fake が写した claude の env に起動側の [`PARENT_PANE`] が**無い**。
+///
+/// 母集団を先に測る——写しが空なら「無い」は空虚に通るので、行数 > 0 と親から継承した `PATH` を見る。
+fn assert_pane_dropped(dir: &Path, who: &str) {
+    let text = slurp(&dir.join("env"));
+    let keys: Vec<&str> = text.lines().filter_map(|line| line.split_once('=')).map(|(key, _)| key).collect();
+    assert!(!keys.is_empty(), "{who}: claude の env の写しが空（母集団 0）");
+    assert!(keys.contains(&"PATH"), "{who}: 写しは親の env を継承している（{} 行）", keys.len());
+    assert!(!keys.contains(&"TMUX_PANE"), "{who}: TMUX_PANE を継承しない: {keys:?}");
+}
+
+/// 席の pane の中から `runner` を**単体起動**（`pipe spawn` を通さない・裁定 (E)）しても claude の env に
+/// `TMUX_PANE` が無く `PATH` は継承される（設計 seat-roles.md §4 行 c・ADR-0022 §2.3・FR40 / FR21）。
+/// base は `wrap_command` が外さないので [`PARENT_PANE`] が写しに在る（RED）。
+#[test]
+fn headless_runner_drops_tmux_pane() {
+    let dir = tmp();
+    let worktree = tmp();
+    let claude = fake_claude(&dir, "", false, 0);
+    let write_set = dir.join("write-set.txt");
+    let vessel = write_vessel_copy(&dir, r#"["cargo"]"#);
+    fs::write(&write_set, "src/lib.rs\n").expect("write-set を書ける");
+    let out = run_runner(
+        &RunnerCall { dir: &dir, worktree: &worktree, write_set: &write_set, vessel: &vessel, claude: &claude, mode: "plan", account: None },
+        b"goal = \"x\"\n",
+    );
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    assert!(dir.join("called").exists(), "runner は claude を呼ぶ");
+    assert_pane_dropped(&dir, "runner");
+    clean(&[&dir, &worktree]);
+}
+
+/// 席の pane の中から `lens` を**単体起動**しても claude の env に `TMUX_PANE` が無く `PATH` は継承される
+/// （runner と同じ `wrap_command` の 1 点で外す）。base は RED。
+#[test]
+fn headless_lens_drops_tmux_pane() {
+    let dir = tmp();
+    let claude = fake_claude(&dir, "{\"verdict\":\"PASS\",\"evidence\":\"pane の歯\"}\n", false, 0);
+    let contract = contract_in(&dir);
+    let out = run_lens(&contract, 4096, "plan", &claude, b"--- a\n+++ b\n");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    assert!(dir.join("called").exists(), "cap 内なので lens は claude を呼ぶ");
+    assert_pane_dropped(&dir, "lens");
+    clean(&[&dir]);
 }
 
 #[test]
