@@ -186,8 +186,32 @@ terms:
     relationships: [席, 席の登録, 起動行の導出, 口座]
   - canonical: 起動行の導出
     domain: consumer
-    definition: 席の起動行を pure な関数 1 本が組むこと: 口座の設定 dir と agent view を切る env・器自身の plugin (anchor)・host の manifest の plugin dir と起動引数。 穴は口座の dir 1 つで、 雛形 file は読まない (ADR-0026 §2.3)。
-    relationships: [席の起動, host の manifest]
+    definition: 席の起動行を pure な関数 1 本が組むこと: 口座の設定 dir と agent view を切る env・器自身の plugin (anchor)・host の manifest の plugin dir と起動引数。 穴は口座の dir 1 つで、 雛形 file は読まない (ADR-0026 §2.3)。 役割なしの起動 (SRS FR60・ADR-0028 §2.5) は同じ関数から役割・席の登録・権能の 3 要素を除いた形。
+    relationships: [席の起動, host の manifest, 役割なしの起動]
+  - canonical: 役割なしの起動
+    domain: consumer
+    definition: 器の subcommand account shell が口座 label (必須) から役割を持たない対話 session の起動行を導出し、 窓が与えられれば差し込み、 与えられなければ 1 行を出すこと (SRS FR60・ADR-0028 §2.5)。 席の登録は書かず権能は無い。 前の版の口座切替 wrapper の後継。
+    forbidden: [cla, wrapper 起動, 素起動]
+    relationships: [席の起動, 起動行の導出, 口座, 席の登録]
+  - canonical: 導入先
+    domain: consumer
+    definition: 本 repo 以外で器の plugin (hook の配線) と binary を積む project とその worktree (SRS FR61)。 母集団は口座の設定 dir の install 帳簿と席の登録 row の anchor から導く。 帳簿と cache は読むだけで書かない (ADR-0028 §2.3)。
+    forbidden: [consumer project, 利用側 repo]
+    relationships: [doctor, 読み込み元, build 元 commit, 席の登録]
+  - canonical: build 元 commit
+    domain: consumer
+    definition: binary が build 時に焼いた source の HEAD の sha (12 桁・tracked の変更が在れば +dirty・測れなければ unknown)。 --version と doctor が名乗り、 SessionStart の記録と doctor の導入先の行が比べる (SRS FR61・ADR-0028 §2.1)。
+    relationships: [導入先, 読み込み元, doctor]
+  - canonical: 読み込み元
+    domain: consumer
+    definition: 席が起動時に受けた plugin root と、 そこに在る hooks.json の digest (依存なしの決定的な関数) の対。 SessionStart の hook が席の打刻の置き場に 1 行で記録する (SRS FR61・ADR-0028 §2.2)。 cache か作業ツリーかを器は推測しない。
+    forbidden: [plugin cache, 配線の出所]
+    relationships: [導入先, hook 集合の食い違い, build 元 commit]
+  - canonical: hook 集合の食い違い
+    domain: consumer
+    definition: 席の読み込み元の記録の digest と、 同じ場所に今在る hooks.json の digest が違う状態 (SRS FR62)。 管理 tick が退避の合図を注入し、 退避後の終了の手と立て直しの既存の経路で同じ target・同じ口座に席を作り直す (ADR-0028 §2.4)。 binary だけの食い違いでは作り直さない。
+    forbidden: [hook drift, plugin の古さ]
+    relationships: [読み込み元, 退避の合図, cycle, 管理 tick, 作業記憶]
   - canonical: lane
     domain: consumer
     definition: 口座 1 つの消費枠の中で並走させる作業の流れ (席の列)。 lane 数の決め方は rules 行 (§3 R-C9-1)。

@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="folio-doc-type" content="adr">
+<meta name="folio-layer" content="project">
+<meta name="folio-version" content="0.4.6">
+<meta name="folio-status" content="accepted">
+<meta name="folio-stakeholders" content="Developer, AI Agent, External Reviewer">
+<meta name="folio-adr-id" content="0028">
+<meta name="folio-adr-date" content="2026-09-15">
+<title>ADR-0028 — 導入先の同期は器が測って器が更新する (build 元 commit・読み込み元の記録・install の event・hook 集合の食い違いは席の作り直し) と役割なしの起動行</title>
+<link rel="stylesheet" href="../../common.css">
+<script type="application/ld+json">
+{
+  "@context": {
+    "dc": "http://purl.org/dc/terms/",
+    "schema": "https://schema.org/",
+    "folio": "https://folio.dev/spec/v1/"
+  },
+  "@id": "./ADR-0028-consumer-sync-is-measured-and-updated-by-the-vessel.html",
+  "@type": "schema:TechArticle",
+  "dc:isPartOf": [
+    { "@id": "./README.html" }
+  ],
+  "dc:title": "ADR-0028 — 導入先の同期は器が測って器が更新する (build 元 commit・読み込み元の記録・install の event・hook 集合の食い違いは席の作り直し) と役割なしの起動行",
+  "folio:version": "0.4.6",
+  "folio:stakeholders": ["Developer", "AI Agent", "External Reviewer"],
+  "dc:references": [
+    { "@id": "../spec/constitution.html#c2" },
+    { "@id": "../spec/constitution.html#c3" },
+    { "@id": "../spec/constitution.html#c6" },
+    { "@id": "../spec/constitution.html#c9" },
+    { "@id": "../spec/constitution.html#c10" },
+    { "@id": "../spec/constitution.html#c11" },
+    { "@id": "../spec/constitution.html#n1" },
+    { "@id": "../spec/constitution.html#n2" },
+    { "@id": "../spec/srs.html#FR60" },
+    { "@id": "../spec/srs.html#FR61" },
+    { "@id": "../spec/srs.html#FR62" },
+    { "@id": "../spec/srs.html#FR19" },
+    { "@id": "../spec/srs.html#FR23" },
+    { "@id": "../spec/srs.html#FR29" },
+    { "@id": "../spec/srs.html#FR38" },
+    { "@id": "../spec/srs.html#FR51" },
+    { "@id": "../spec/srs.html#FR59" },
+    { "@id": "../spec/srs.html" },
+    { "@id": "./ADR-0004-mvp-persistence-and-cross-version-formats.html" },
+    { "@id": "./ADR-0015-seat-state-is-stamped-by-hooks-not-read-from-pane.html" },
+    { "@id": "./ADR-0017-account-allowance-measured-into-event-log.html" },
+    { "@id": "./ADR-0018-working-memory-subcommands-and-pointer-required-directives.html" },
+    { "@id": "./ADR-0020-account-autonomy-limit-stop-resume-and-selection.html" },
+    { "@id": "./ADR-0022-seat-roles-are-typed-and-enforced-by-hooks.html" },
+    { "@id": "./ADR-0026-account-lifecycle-host-manifest-and-seat-launch.html" }
+  ]
+}
+</script>
+</head>
+<body>
+<!-- folio:chrome-top -->
+<a class="skip-link" href="#s1-context">本文へスキップ</a>
+<nav class="breadcrumb" aria-label="パンくず"><ol>
+  <li><a href="../index.html">design-intent</a></li>
+  <li><a href="./README.html">decisions</a></li>
+  <li aria-current="page">ADR-0028</li>
+</ol></nav>
+<!-- /folio:chrome-top -->
+
+<header class="doc-header">
+  <h1>ADR-0028 — 導入先の同期は器が測って器が更新する (build 元 commit・読み込み元の記録・install の event・hook 集合の食い違いは席の作り直し) と役割なしの起動行</h1>
+  <div class="meta">Status: accepted &middot; Date: 2026-09-15 &middot; version 0.4.6 (拘束する constitution の版) &middot; C3.2 / C6.3 / C9 / C10 / N2 の適用を記録し、 ADR-0026 §2.1 の host の manifest に表を 1 種、 ADR-0017 §2.1 の event に kind を 1 つ、 ADR-0026 §2.3 の起動行に役割なしの形を 1 つ足す (supersede しない・追補) &middot; 要件は SRS v0.11 (FR60 / FR61 / FR62 / AC30 / AC31 / AC32) が正本</div>
+</header>
+<!-- folio:chrome-toc -->
+<nav class="toc" aria-label="ページ内目次">
+<ol>
+  <li><a href="#s1-context">§1. Context</a></li>
+  <li><a href="#s2-decision">§2. Decision</a></li>
+  <li class="toc--sub"><a href="#s2-1-build-commit">§2.1 binary は build 元 commit を焼き、 測れない周は unknown と名乗る</a></li>
+  <li class="toc--sub"><a href="#s2-2-load-source">§2.2 SessionStart は読み込み元 (plugin root と hooks.json の digest) と binary の版を席ごとに記録する</a></li>
+  <li class="toc--sub"><a href="#s2-3-install-event">§2.3 更新は 1 つの口 (ff → build → install) で行い、 install は event として残し、 器の repo は host の manifest が宣言する</a></li>
+  <li class="toc--sub"><a href="#s2-4-hook-drift">§2.4 hook 集合の食い違いは退避 → 終了の手 → 立て直しの既存の経路で席を作り直す。 binary だけの食い違いでは作り直さない</a></li>
+  <li class="toc--sub"><a href="#s2-5-roleless-launch">§2.5 役割なしの起動行は FR59 の導出から役割・登録・権能の 3 要素を除いた形</a></li>
+  <li class="toc--sub"><a href="#s2-6-scope">§2.6 射程外</a></li>
+  <li><a href="#s3-srs">§3. SRS との関係 (正本は SRS)</a></li>
+  <li><a href="#s4-consequences">§4. Consequences</a></li>
+  <li><a href="#s5-alternatives">§5. Alternatives Considered</a></li>
+  <li><a href="#s6-trace">§6. Trace</a></li>
+</ol>
+</nav>
+<!-- /folio:chrome-toc -->
+
+<aside class="informative">
+<p>本 ADR は IETF <strong>RFC 2119</strong> および <strong>RFC 8174 / BCP 14</strong> に定義される MUST / SHALL / SHOULD / MAY のキーワード解釈規約に従う。 ADR は決定時点の記録であり、 改訂は新しい ADR による supersede で行う。 本 ADR の §2 は設計判断 (承認 SSOT の 3 クラスに非該当) で、 その向きを定めた user の裁定 2 件 (2026-09-14「役割なしにも対応する」・2026-09-15「更新の範囲は ff してから build + install」) と user の直命 (複数の導入先の管理方法を構造で既定する・逐語は台帳 <code>s2-07l.268</code> / <code>s2-07l.303</code> の notes) を出所とする。</p>
+</aside>
+
+<aside class="machine-readable" aria-hidden="true">
+  <dl>
+    <dt>id</dt><dd>ADR-0028</dd>
+    <dt>doc-type</dt><dd>adr</dd>
+    <dt>status</dt><dd>accepted</dd>
+    <dt>date</dt><dd>2026-09-15</dd>
+    <dt>version</dt><dd>0.4.6 (拘束する constitution の版。 本 ADR は憲法の条文を動かさない)</dd>
+    <dt>decided-by</dt><dd>planner (2026-09-15・設計判断) — 向きは user の裁定 2 件 (2026-09-14 12:5xZ 役割なしの起動・2026-09-15 01:0xZ 更新の範囲 = ff → build + install) と user の直命 (導入先の管理方法を構造で既定) が定めた。 逐語は台帳 <code>s2-07l.268</code> / <code>s2-07l.303</code> の notes (本 file には写さない)。</dd>
+    <dt>stakeholders</dt><dd>Developer, AI Agent, External Reviewer</dd>
+    <dt>supersedes</dt><dd>なし (追補)。 ADR-0026 §2.1 の host の manifest の表 (3 種) に <code>[[vessel]]</code> を 1 種、 ADR-0017 §2.1 の event の kind に <code>InstallRecorded</code> を 1 つ、 ADR-0026 §2.3 の起動行の導出に役割なしの形を 1 つ足す。 既存の表・kind・導出は不変。</dd>
+    <dt>related</dt><dd>ADR-0004 §2.5 (schema 版・既存の行はすべて読める) / ADR-0015 §2.1 (hook の打刻の置き場) / ADR-0017 §2.1 (event の形) / ADR-0018 §2.3 (rebrief の DATA の marker) / ADR-0020 §2.4 (席の退避と立て直し) / ADR-0022 §2.1 (席の登録 row) / ADR-0026 §2.1 / §2.3 (host の manifest・起動行の導出) / constitution C2 / C2.2 / C3 / C3.2 / C6.3 / C9 / C10 / C10.2 / C11.3 / N1 / N2</dd>
+  </dl>
+</aside>
+
+<section id="s1-context" class="informative">
+<h2>§1. Context</h2>
+<p class="section-essence" data-audience="human">器は 2 つの顔で他の project に入ります。 hook の配線 (plugin) と本体 (PATH の binary) です。 記録時点では、 どちらも「どの版で動いているか」を器が自分で測れませんでした。 本体は版番号しか名乗らず、 配線はどこから読まれたかを残しません。 更新は人が手順を覚えて行い、 更新しても走行中の席には新しい配線が載りません。 4 つの穴はどれも「黙って古くなる」型です。 加えて、 役割を持たない素の対話 session を起こす口が器に無く、 前の版の wrapper に頼っていました。</p>
+<p data-audience="machine">記録時点 (2026-09-15) の現物 (main <code>d849870</code>): <code>&lt;NAME&gt; --version</code> は <code>CARGO_PKG_VERSION</code> だけ (<code>main.rs</code> <code>render_version</code>) で build 元 commit を持たず、 install 済み binary の古さは mtime の推測でしか分からない (auto-memory の事故: event schema の追加で PATH の binary が静かに古くなり hook が events を読めなくなった)。 Claude Code の directory source の plugin は cache (<code>installed_plugins.json</code> の <code>installPath</code>) でなく repo の作業ツリーを直接読む (実測 2 例・保証なし) ため、 帳簿の <code>gitCommitSha</code> と cache の写しは install 時刻で止まり、 読み込み元が cache に切り替わる版が来ると黙って古い配線に戻る。 cache は口座の設定 dir ごとに 1 つを全導入先・全 worktree が共有し、 最後の install が上書きする。 hook 集合は session 起動時の snapshot で <code>/clear</code> では更新されない (実測)。 更新の手順 (ff → <code>cargo install --path crates/&lt;NAME&gt; --locked</code> → 導入先の planner へ 1 行通知) は planner の作業記憶の行で規則ではない (N2)。 役割なしの対話 session の起動は前の版の口座切替 wrapper (<code>cla &lt;label&gt; [--resume &lt;sid&gt;]</code>) だけが持つ。</p>
+<p data-audience="machine">憲法の向き: <a href="../spec/constitution.html#c3">C3.2</a> は doctor が版を全 host で突合すると定める。 <a href="../spec/constitution.html#c10">C10</a> は宣言値と出所付きの実測値を型で分け、 C10.2 は host 固有の値を manifest にだけ置く。 <a href="../spec/constitution.html#c6">C6.3</a> は記録を append-only の 1 store に置く。 <a href="../spec/constitution.html#c9">C9</a> は止まった席を人手なしで作り直す。 <a href="../spec/constitution.html#n2">N2</a> は散文だけの規則を規則としない。 <a href="../spec/constitution.html#c2">C2.2</a> は env を読まず NAME 定数から導く。 user の直命 (2026-09-15): 「再現性の高い複数の他の project における適切な管理方法を構造で既定する」。</p>
+</section>
+
+<section id="s2-decision" class="normative">
+<h2>§2. Decision</h2>
+
+<h3 id="s2-1-build-commit">§2.1 binary は build 元 commit を焼き、 測れない周は unknown と名乗る</h3>
+<p class="section-essence" data-audience="human">本体は「どの commit から build されたか」を自分の中に持ち、 <code>--version</code> と doctor で名乗ります。 git が無いなど測れないときは「不明」と名乗り、 それらしい値をでっち上げません。</p>
+<p data-audience="machine">器 SHALL build 時に build script (<code>build.rs</code>・依存なし) で source の HEAD の sha (12 桁) と tracked の変更の有無 (<code>+dirty</code>) を読み、 compile time の値として binary に焼く。 読めない周 (git が無い・repo でない・失敗) の値 SHALL <code>unknown</code> とし、 成功に倒さない (C10)。 <code>--version</code> と doctor の版の行 SHALL 同じ 1 関数からこの値を <code>(&lt;sha12&gt;[+dirty])</code> / <code>(unknown)</code> の形で出す。 実行時に env を読む形 (C2.2) は採らない (compile time の <code>env!</code> だけ)。</p>
+
+<h3 id="s2-2-load-source">§2.2 SessionStart は読み込み元 (plugin root と hooks.json の digest) と binary の版を席ごとに記録する</h3>
+<p class="section-essence" data-audience="human">席が起動するたび、 hook は「この配線はどこから読まれ、 中身はどんな指紋で、 本体はどの版か」を席の記録に 1 行で残します。 器は配線が cache から読まれるのか作業ツリーから読まれるのかを推測せず、 実際に渡された場所を記録します。</p>
+<p data-audience="machine">hook の全 command SHALL plugin root を引数 (<code>--plugin-root</code>・shell が <code>$CLAUDE_PLUGIN_ROOT</code> を展開する・器は env を読まない・C2.2) で受ける。 <code>session-start</code> SHALL 名乗りの後に、 席の打刻の置き場 (<a href="./ADR-0015-seat-state-is-stamped-by-hooks-not-read-from-pane.html">ADR-0015 §2.1</a>) へ 1 file 1 行の記録 (<code>schema</code>・<code>sid</code>・<code>root</code>・<code>hooks</code> = <code>&lt;root&gt;/hooks/hooks.json</code> の bytes の digest・<code>binary</code> = §2.1 の値・<code>ts</code>) を書き、 SessionStart ごとに上書きする。 digest SHALL 依存なしの決定的な関数 (FNV-1a 64・16 hex) で、 release を跨いで値が変わりうる std の hasher を persist する値に使わない。 plugin root が空の周は記録せず黙る (止めない)。 hooks.json が読めない周は <code>unreadable</code> と記録する (無いと読み替えない)。</p>
+
+<h3 id="s2-3-install-event">§2.3 更新は 1 つの口 (ff → build → install) で行い、 install は event として残し、 器の repo は host の manifest が宣言する</h3>
+<p class="section-essence" data-audience="human">本体の更新は 1 つの命令で行います。 器は自分の checkout を上流に「前に進めるだけ」で揃え (揃えられなければ断る)、 build して PATH に入れ、 「いつ・どの sha を・どこに入れたか」を記録に 1 件残します。 checkout の場所は host ごとの設定 file に書きます。 導入先の帳簿 (Claude Code の install 記録) や cache は書きません。 doctor は導入先ごとに 1 行で「本体・配線・帳簿」の食い違いを名指しますが、 判定はしません。</p>
+<p data-audience="machine">host の manifest (<a href="./ADR-0026-account-lifecycle-host-manifest-and-seat-launch.html">ADR-0026 §2.1</a>) SHALL array-of-tables を 1 種足す: <code>[[vessel]] repo = "&lt;dir&gt;"</code> (最大 1 行・同じ loader・同じ拒否形・host 固有の path はこの file にだけ・C10.2)。 更新の口 SHALL 順序固定で (1) 作業ツリーに tracked の変更が在れば <code>dirty</code> で断り (2) fetch の後 fast-forward だけで上流の既定 branch に揃え、 揃わない周は <code>not-fast-forward</code> で断り (rebase も reset も撃たない・N1) (3) <code>cargo install --path crates/&lt;NAME&gt; --locked</code> で PATH の binary を入れ替え (4) fleet の event log (<a href="./ADR-0017-account-allowance-measured-into-event-log.html">ADR-0017 §2.1</a>) に kind <code>InstallRecorded</code> (新 variant・宣言順の末尾・schema 版 1 のまま・<a href="./ADR-0004-mvp-persistence-and-cross-version-formats.html">ADR-0004 §2.5</a>) を 1 件 (<code>sha</code>・<code>host</code>・<code>path</code>) 積む。 器 SHALL NOT 導入先の帳簿 (<code>installed_plugins.json</code>) も cache も書かない。 doctor SHALL 導入先 (口座の設定 dir の帳簿の <code>projectPath</code> と席の登録 row の anchor の和集合) ごとに 1 行を出し、 §2.1 / §2.2 の記録と帳簿と <code>[[vessel]]</code> の HEAD を比べて食い違いを閉じた語 (<code>binary</code> / <code>plugin</code> / <code>ledger</code>・宣言順・無ければ <code>none</code>) で名指し、 記録の無い導入先は <code>unrecorded</code> と出す (「none」に潰さない・C10)。 doctor SHALL NOT 判定も更新もしない (C10.2)。</p>
+
+<h3 id="s2-4-hook-drift">§2.4 hook 集合の食い違いは退避 → 終了の手 → 立て直しの既存の経路で席を作り直す。 binary だけの食い違いでは作り直さない</h3>
+<p class="section-essence" data-audience="human">配線 (hooks.json) が起動時と変わった席は、 <code>/clear</code> では直りません。 管理 tick はその席を見つけて退避させ、 いったん終了させてから同じ窓・同じ口座で作り直します。 本体だけが新しくなった場合は作り直しません (次の hook から新しい本体が動くため)。 復元のときに「どの版で動いているか」が 1 行見えます。</p>
+<p data-audience="machine">管理 tick SHALL 登録 row の在る席ごとに §2.2 の記録の digest と、 記録の root に今在る hooks.json の digest を比べ、 違う周は退避の合図 (FR29 と同じ除外の下・busy でも送る) を注入する。 退避の合図の記録 SHALL 出所を閉じた enum (<code>context</code> / <code>account</code> / <code>hook</code>) で持ち、 退避後の終了の手 (<a href="./ADR-0020-account-autonomy-limit-stop-resume-and-selection.html">ADR-0020 §2.4</a> の実装 = 台帳 <code>s2-07l.226</code>) SHALL <code>account</code> / <code>hook</code> 由来の合図にだけ立つ (<code>context</code> 由来は従来どおり <code>/clear</code> の cycle)。 立て直し SHALL 既存の経路 (前面が shell → relaunch) で、 <code>hook</code> 由来の周は登録 row の口座が閾値 (R-C9-1) 未満ならその口座を優先する。 binary の版だけが違う席 (digest が同じ) SHALL 作り直さない。 復元の DATA (<a href="./ADR-0018-working-memory-subcommands-and-pointer-required-directives.html">ADR-0018 §2.3</a>) SHALL marker <code>[PLUGIN]</code> の 1 行 (root・digest・binary の版・食い違いの語) を持つ。 記録が無い・読めない席は注入しない (理由 1 つ・縮退・止めない)。</p>
+
+<h3 id="s2-5-roleless-launch">§2.5 役割なしの起動行は FR59 の導出から役割・登録・権能の 3 要素を除いた形</h3>
+<p class="section-essence" data-audience="human">役割を持たない素の対話 session を、 器の口で起こせるようにします。 口座を 1 つ指定すると、 その口座の設定で claude を起動する 1 行を器が組みます (役割付きの起動と同じ組み立てから、 役割・席の登録・権能の 3 つを抜いたもの)。 窓を指定すれば差し込み、 指定しなければ 1 行を表示するだけです。 席の登録は書かないので権能はありません。</p>
+<p data-audience="machine">役割なしの起動 (FR60) の起動行 SHALL FR59 の導出 (<a href="./ADR-0026-account-lifecycle-host-manifest-and-seat-launch.html">ADR-0026 §2.3</a>・同じ 1 関数) から役割・登録 row・権能の 3 要素を除いた形とし、 口座 label を必須で受け (選定は使わない)、 <code>--resume &lt;sid&gt;</code> が在れば同じ口座でその session を再開する行を組む。 器 SHALL NOT 登録 row (<code>SeatRegistered</code>) を書かない (権能は無い・role guard は未登録として code の編集を止める)。 target が与えられた周 SHALL FR59 と同じ注入の門を通して差し込み、 与えられない周 SHALL 起動行を stdout に 1 行出して起動しない。 口座が宣言に無い・退役中・設定 dir が無い周 SHALL typed に断り key を 1 つも送らない。 雛形 file は持たない (ADR-0026 §2.3 と同じ)。</p>
+
+<h3 id="s2-6-scope">§2.6 射程外</h3>
+<p class="section-essence" data-audience="human">この記録が決めるのは、 版の名乗り・読み込み元の記録・更新の口と記録・配線の食い違いでの作り直し・役割なしの起動行だけです。 Claude Code の帳簿を器が書き換えること、 導入先の一覧を宣言に持つこと、 本体だけが古い席を軽く直すことは決めません。</p>
+<p data-audience="machine">次は本 ADR の決定ではない (MUST NOT be read as such): 導入先の帳簿 (<code>installed_plugins.json</code>) や cache を器が書く形 (§5 (C))・導入先の state dir の一覧を host の manifest に宣言する形 (今は帳簿と登録 row から導く)・<code>claude plugin install</code> の打ち直しを器が撃つ形 (doctor が <code>ledger</code> の語で名指すだけ)・binary だけが古い席を作り直さずに直す形・合図の出所の enum を退避の合図以外の記録へ広げる形。 これらは設計 <code>docs/design/consumer-sync.md</code> §13 の後続。</p>
+</section>
+
+<section id="s3-srs" class="informative">
+<h2>§3. SRS との関係 (正本は SRS)</h2>
+<p class="section-essence" data-audience="human">この記録が仕える要件は要件書 (SRS v0.11) に在ります。 要件の文面はここには置かず、 当該行を指すだけにします。 要件書の「導入先の同期の測定と更新の口」「配線の食い違いで席を作り直す」「役割なしの起動」を、 §2.1〜§2.5 の形で満たします。 要件書は 1 字も変えません。</p>
+<div data-audience="machine">
+<p>本 ADR の §2.1〜§2.3 が仕える要件は SRS v0.11 が正本である: <a href="../spec/srs.html#FR61">FR61 導入先の同期</a> (doctor の 1 項目として導入先ごとに build 元 commit・読み込み元・帳簿・HEAD を実測して食い違いを typed な語で名指す・1 つの口で build と install を行い event に append する・散文の手順を規則としない) と <a href="../spec/srs.html#AC31">AC31</a> (行 2/2 + drift 4 語 + unknown 1/1 + event 1/1)。 §2.4 は <a href="../spec/srs.html#FR62">FR62 hook 集合の食い違い</a> (退避の合図 → FR38 と同じ経路で同じ target・同じ口座で作り直す・binary だけの周は作り直さない・DATA に plugin の版 1 行) と <a href="../spec/srs.html#AC32">AC32</a>。 §2.5 は <a href="../spec/srs.html#FR60">FR60 役割なしの起動</a> と <a href="../spec/srs.html#AC30">AC30</a>。 土台は <a href="../spec/srs.html#FR51">FR51</a> (doctor の項目)・<a href="../spec/srs.html#FR19">FR19</a> (SessionStart の名乗り)・<a href="../spec/srs.html#FR29">FR29</a> / <a href="../spec/srs.html#FR38">FR38</a> (退避と立て直しの既存経路)・<a href="../spec/srs.html#FR23">FR23</a> (復元の DATA)・<a href="../spec/srs.html#FR59">FR59</a> (役割付きの起動)。 SRS は本 ADR で 1 字も変えない。</p>
+</div>
+</section>
+
+<section id="s4-consequences" class="informative">
+<h2>§4. Consequences</h2>
+<p class="section-essence" data-audience="human">良い面は、 複数の project で「黙って古くなる」版が無くなること (器が測り、 器が名指し、 器が作り直す)、 更新の手順を人が覚えなくてよいこと、 素の session の起動が器の視野に入り前の版の wrapper を退役できることです。 悪い面は、 hook の引数と席の記録が 1 つずつ増えること、 配線が変わるたびに planner / admin の席が作り直される (数分の空白) こと、 更新の口が git と cargo を子 process として呼ぶことです。</p>
+<p data-audience="machine">Positive: 版の provenance が型で在る (C10)。 doctor が全導入先を 1 関数で突合する (C3.2)。 install の記録が append-only の 1 store (C6.3)。 配線の食い違いを人手なしで直す (C9)。 通知の散文が消える (N2)。 wrapper への依存が切れる (ADR-0009 §1 の根因と同型の外部 script を 1 本減らす)。 rules 行を足さない (C5 非該当)。</p>
+<p data-audience="machine">Negative (受け入れるコスト): hooks.json の全 command に引数 1 つ (生成物の drift 検査が守る)。 席の記録 file 1 つ (打刻の置き場の隣)。 配線が変わるたびに登録席の作り直し (退避 → /exit → 立て直し・数分の空白・退避物は保たれる)。 更新の口が <code>git</code> と <code>cargo</code> を子 process で呼ぶ (timeout は唯一の wait・失敗は typed)。 <code>[[vessel]]</code> の宣言が無い host では <code>head=undeclared</code> と更新の拒否 (宣言は user の 1 回の準備)。 digest の実装 (FNV-1a) を器が持つ (10 行・依存なし)。</p>
+</section>
+
+<section id="s5-alternatives" class="informative">
+<h2>§5. Alternatives Considered</h2>
+<p class="section-essence" data-audience="human">5 つの案を退けました。 「更新のたびに planner が導入先へ 1 行通知する」は散文の手順で、 忘れれば黙って古くなります。 「Claude Code の cache の写しを正とし器が同期する」は読み込み元が版で変わる挙動に依存します。 「Claude Code の帳簿を器が書く」は他人の帳簿で形が変わります。 「配線の食い違いを /reload-plugins で直す」は効くかどうかを器が確かめられません。 「役割なしの起動は wrapper のまま」は器の視野の外に起動経路を残します。</p>
+<p data-audience="machine">(A) <strong>通知の散文</strong> (install ごとに planner が導入先の planner へ 1 行送る・記録時点の暫定運用)。 却下: 器の視野の外の作法 (N2)。 忘れた周を器が検知できない。 tick が測って動く形 (§2.4) に置き換える。</p>
+<p data-audience="machine">(B) <strong>Claude Code の cache の写しを正とし、 器が cache と作業ツリーを同期する</strong>。 却下: 読み込み元 (cache か作業ツリーか) が Claude Code の版で変わる挙動に器が依存する。 器は読み込み元を推測せず、 hook が受けた root を記録して比べる (§2.2)。</p>
+<p data-audience="machine">(C) <strong><code>installed_plugins.json</code> を器が書く</strong> (帳簿の <code>gitCommitSha</code> を進める)。 却下: 他人の帳簿 (Claude Code の所有・形が版で変わる・上書きで壊れる)。 食い違いを <code>ledger</code> の語で名指し (§2.3)、 打ち直しは user / 導入先の planner の手番に置く。</p>
+<p data-audience="machine">(D) <strong>hook 集合の食い違いを <code>/reload-plugins</code> で解く</strong>。 却下: 走行中の hook 登録を差し替えるかは未確認 (uncertain) で、 器は描画も結果も読めない (C3.3)。 作り直しは既存の経路で確実に効き、 退避物は保たれる (C9)。</p>
+<p data-audience="machine">(E) <strong>役割なしの起動は前の版の wrapper に残す</strong>。 却下: 起動経路が器の視野の外に残り (ADR-0009 §1 の根因と同型)、 不測の事態の入口が host 固有の script に依存する。 FR59 と同じ導出から 3 要素を除くだけで器が持てる (§2.5)。</p>
+<p data-audience="machine">(F) <strong>digest に std の <code>DefaultHasher</code></strong> (純移動の機械証明が同じ process 内で使う形)。 却下: std の hasher は release で変わりうると明記されており、 persist して別の binary が読む値には使えない (偽の食い違いで席が作り直される)。 決定的で依存なしの FNV-1a 64 を器が持つ。</p>
+</section>
+
+<section id="s6-trace" class="informative">
+<h2>§6. Trace</h2>
+<p class="section-essence" data-audience="human">出所は、 導入先 (folio2・ubuntu-note-system) の planner からの問い合わせと実測、 器の現物、 そして user の裁定と直命です。</p>
+<ul data-audience="machine">
+  <li>user の直命 (2026-09-15・planner の席): 「再現性の高い複数の他の project における適切な管理方法を構造で既定する」「plugin が更新されても新しく入った hook は clear + rebrief では適用されない可能性」。 裁定 (2026-09-15 01:0xZ・grill): 更新の範囲 = ff してから build + install。 逐語は台帳 <code>s2-07l.303</code> の notes。</li>
+  <li>user の裁定 (2026-09-14 12:5xZ): 役割なしの起動にも対応する (不測の事態のため)。 逐語は台帳 <code>s2-07l.268</code> の notes。</li>
+  <li>導入先の実測 (2026-09-15・folio2 planner の問い合わせ Q1〜Q5・ubuntu-note-system planner の実測): directory source の plugin は cache でなく作業ツリーを読む (2 例)・帳簿の sha は install 時刻で止まる・cache は口座 dir ごとに 1 つを全導入先が共有し最後の install が上書きする・hook 集合は起動時の snapshot で <code>/clear</code> では更新されない。</li>
+  <li>器の現物 (main <code>d849870</code>): <code>main.rs</code> <code>render_version</code> (版番号だけ)・<code>hooks/hooks.json</code> (全 command が <code>$TMUX_PANE</code> / <code>$CLAUDE_PROJECT_DIR</code> を引数で受ける形)・<code>hook/mod.rs</code> <code>session_start</code> (名乗りと打刻)・<code>fleet/mod.rs</code> <code>EventKind</code> (15 variant)・<code>seat/tick.rs</code> <code>parked_entry</code> (終了の手の入口は合図の出所を持たない = 台帳 <code>s2-07l.307</code>)・<code>account/mod.rs</code> <code>login_line</code> / <code>seat/cycle.rs</code> <code>derive_launch</code> (起動行の導出)。</li>
+  <li>先行決定: <a href="./ADR-0026-account-lifecycle-host-manifest-and-seat-launch.html">ADR-0026</a> §2.1 / §2.3・<a href="./ADR-0020-account-autonomy-limit-stop-resume-and-selection.html">ADR-0020</a> §2.4・<a href="./ADR-0017-account-allowance-measured-into-event-log.html">ADR-0017</a> §2.1・<a href="./ADR-0015-seat-state-is-stamped-by-hooks-not-read-from-pane.html">ADR-0015</a> §2.1・<a href="./ADR-0018-working-memory-subcommands-and-pointer-required-directives.html">ADR-0018</a> §2.3・<a href="./ADR-0004-mvp-persistence-and-cross-version-formats.html">ADR-0004</a> §2.5。</li>
+  <li>設計: <code>docs/design/consumer-sync.md</code> (§2〜§6・契約 (a)〜(d))・<code>docs/design/account-lifecycle.md</code> §4.5 (役割なしの起動・契約 (d))。 契約は台帳 <code>s2-07l.302</code> / <code>s2-07l.303</code> / <code>s2-07l.307</code> / <code>s2-07l.304</code> / <code>s2-07l.268</code> (本 ADR の land 後に dispatch)。</li>
+</ul>
+</section>
+
+<!-- folio:chrome-bottom -->
+<nav class="prevnext" aria-label="前後の文書">
+  <a class="prevnext__prev" href="ADR-0027-run-account-order-earliest-reset-and-no-per-account-cap.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">ADR-0027 — 便用の口座は reset が最も近い口座から選び、 同点は走行中の便が少ない口座に倒し、 1 口座あたりの便数で候補を絞らない (ADR-0020 §2.2 の便用の規則を supersede)</span></a>
+</nav>
+<script>
+(function () {
+  var openedForPrint = [];
+  window.addEventListener('beforeprint', function () {
+    openedForPrint = [];
+    var ds = document.querySelectorAll('details:not([open])');
+    for (var i = 0; i < ds.length; i++) { ds[i].setAttribute('open', ''); openedForPrint.push(ds[i]); }
+  });
+  window.addEventListener('afterprint', function () {
+    for (var i = 0; i < openedForPrint.length; i++) openedForPrint[i].removeAttribute('open');
+    openedForPrint = [];
+  });
+  if (!document.querySelector('[data-audience]')) return;
+  /* 既定 = 人間プレゼン型 (ADR-0040 / rules §11.3): script 経由で初期 class を付与するため
+     no-JS では付かず全文可視に graceful degrade する。 static DOM は全文を保持 (AI/検索/印刷は不変)。 */
+  document.body.classList.add('audience-human');
+  var bar = document.createElement('nav');
+  bar.className = 'audience-toggle';
+  bar.setAttribute('aria-label', '表示対象の切替');
+  var states = [['both', '両方'], ['human', '人間向け'], ['machine', '機械向け']];
+  for (var s = 0; s < states.length; s++) {
+    (function (mode, label) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      b.setAttribute('aria-pressed', mode === 'human' ? 'true' : 'false');
+      b.addEventListener('click', function () {
+        document.body.classList.remove('audience-human', 'audience-machine');
+        if (mode !== 'both') document.body.classList.add('audience-' + mode);
+        var bs = bar.querySelectorAll('button');
+        for (var j = 0; j < bs.length; j++) bs[j].setAttribute('aria-pressed', bs[j] === b ? 'true' : 'false');
+      });
+      bar.appendChild(b);
+    })(states[s][0], states[s][1]);
+  }
+  var bc = document.querySelector('nav.breadcrumb');
+  if (bc && bc.parentNode) { bc.parentNode.insertBefore(bar, bc.nextSibling); }
+  else { document.body.insertBefore(bar, document.body.firstChild); }
+})();
+</script>
+<!-- /folio:chrome-bottom -->
+</body>
+</html>

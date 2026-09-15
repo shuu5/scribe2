@@ -1,0 +1,106 @@
+# 設計: 導入先の同期 — 器が版を測り、器が更新し、hook 集合の食い違いは席を作り直す（散文の手順を持たない）
+
+- 決定: [ADR-0028](../../design-intent/decisions/ADR-0028-consumer-sync-is-measured-and-updated-by-the-vessel.html)（§2.1 build 元 commit / §2.2 読み込み元の記録 / §2.3 install の event と repo の宣言 / §2.4 hook 集合の食い違い / §2.5 役割なしの起動行）
+- 要件: SRS [FR61](../../design-intent/spec/srs.html#FR61)（導入先の同期の測定と更新の口）/ [FR62](../../design-intent/spec/srs.html#FR62)（hook 集合の食い違いで席を作り直す）/ [AC31](../../design-intent/spec/srs.html#AC31) / [AC32](../../design-intent/spec/srs.html#AC32) が正本。役割なしの起動（FR60 / AC30）は [account-lifecycle.md](./account-lifecycle.md) §4.5 が持つ（同じ ADR の §2.5）。土台 = FR51（doctor の項目）/ FR19（SessionStart の名乗り）/ FR29 / FR38（退避と立て直しの既存経路）/ FR23（復元の DATA）/ FR57（host の面）。
+- 土台: [vessel-hook.md](./vessel-hook.md) §4（`session-start`）・[seat-state.md](./seat-state.md) §2（席の打刻の置き場）・[seat-autonomy.md](./seat-autonomy.md) §3（tick の判定の軸）・[account-autonomy.md](./account-autonomy.md) §5（退避後の終了の手と立て直し）・[account-lifecycle.md](./account-lifecycle.md) §2（host の manifest の表）・[fleet-event-log.md](./fleet-event-log.md) §3（event の schema）・[working-memory.md](./working-memory.md) §5.2（rebrief の DATA）
+- 語彙: `design-intent/vocabulary.yaml`（導入先・build 元 commit・読み込み元・hook 集合の食い違い）
+
+## 1. 何を解くか
+
+器は plugin（hooks.json・skill）と binary（PATH の `<NAME>`）の 2 つの面で導入先（consumer = 本 repo 以外の repo で器の hook を積む project と、その worktree）に入る。記録時点（2026-09-15・実測）の穴は 4 つで、どれも「黙って古くなる」型である:
+
+- **binary の出所が測れない**: `<NAME> --version` は `CARGO_PKG_VERSION` だけ（`main.rs` `render_version`）で build 元 commit を持たない。install した binary が古いかは file の mtime の推測でしか分からず（auto-memory の事故: event schema の追加で PATH の binary が静かに古くなり hook が events を読めなくなった）、C10 の provenance が無い。
+- **plugin の読み込み元が測れない**: Claude Code の directory source の plugin は cache（`installed_plugins.json` の `installPath`）でなく **repo の作業ツリーを直接読む**（実測 2 例・保証なし）。install の帳簿（`gitCommitSha`）と cache の写しは install 時刻のまま止まり、読み込み元が cache へ切り替わる版が来ると黙って古い hook 集合に戻る。cache は口座の設定 dir ごとに 1 つを全 consumer・全 worktree が共有し、最後の install が上書きする。
+- **更新の手順が散文**: 「ff → `cargo install --path crates/<NAME> --locked` → consumer の planner へ 1 行通知」は planner の作業記憶の行で、規則ではない（N2）。誰が・いつ・どの sha を入れたかの記録も無い（C6.3 の append-only の外）。
+- **hook 集合は session の起動時の snapshot**: `/clear` は session を作り直さないので、hooks.json に event / matcher が増えた版は走行中の席に載らない（実測）。席が古い配線のまま動く期間を器が測れず、直せない。
+
+本設計は、(1) build 元 commit を binary に焼き、(2) SessionStart が読み込み元（hooks.json の path と digest）を席ごとに記録し、(3) doctor が consumer ごとに 1 行で食い違いを名指し、(4) 1 つの口 `vessel update` が ff → build → install を行って event を 1 件残し、(5) tick が hook 集合の食い違いを見つけたら既存の経路（退避 → 終了の手 → 立て直し）で席を作り直す。散文の手順は残さない。
+
+## 2. build 元 commit（ADR-0028 §2.1・台帳 `s2-07l.302`）
+
+- **焼く場所**: `crates/<NAME>/build.rs`（新規・依存なし）。`std::process::Command` で `git rev-parse HEAD` と `git status --porcelain`（tracked の変更の有無）を読み、`cargo:rustc-env=<ENV_PREFIX>_BUILD_COMMIT=<sha12>[+dirty]` を出す。git が無い・repo でない・失敗した周は `unknown`（失敗を成功に倒さない・C10）。`cargo:rerun-if-changed=.git/HEAD` と `.git/refs/heads/` を出して stale を避ける。
+- **読む場所**: 実行時は `env!(…)`（compile time の値・実行時に env を読まない＝C2.2 の外・xtask の `env-reads` は `std::env` の参照だけを数えるので母集団に入らない〔契約化時に fact で実測する〕）。
+- **外形**: `<NAME> --version` = `<NAME> <CARGO_PKG_VERSION> (<sha12>[+dirty])`（`unknown` は `(unknown)`）。doctor の 2 行目も同じ関数（`render_version`）。外形 snapshot の `[version]` の mask は sha と `+dirty` と `unknown` の 3 形を受ける。
+- **意味**: この値は「どの source から build したか」の宣言値で、install 済みかどうか・最新かどうかは言わない（比べるのは §4 の doctor）。
+
+## 3. 読み込み元の記録（ADR-0028 §2.2・台帳 `s2-07l.303` / `.304` の土台）
+
+- **hook の引数**: hooks.json の全 command に `--plugin-root "$CLAUDE_PLUGIN_ROOT"` を足す（`$TMUX_PANE` / `$CLAUDE_PROJECT_DIR` と同じく shell が展開し器は引数で受ける＝器は env を読まない・C2.2。plugin.json / hooks.json は tracked の生成物ゆえ xtask check の drift が守る）。値が空の周（plugin の外から撃った hook・fixture）は記録しない（黙る・止めない）。
+- **記録**: `session-start` は名乗りの後に、席の打刻 dir（[seat-state.md](./seat-state.md) §2 の `<state_dir>/seat/<target>/`）へ **`plugin` 1 file 1 行**を書く（毎 SessionStart に上書き＝最新 session の値・write-ahead は要らない〔読めない周は「未記録」〕）: `schema=1 sid=<sid> root=<plugin root> hooks=<digest> binary=<build 元 commit> ts=<秒>`。`hooks=` の digest は `<root>/hooks/hooks.json` の bytes の **FNV-1a 64**（16 hex・std だけ・release を跨いで不変・persist する値に `DefaultHasher` は使わない〔std の hasher は版で変わりうる〕）。file が無い・読めない周は `hooks=unreadable`（記録はする＝doctor が名指す）。
+- **意味**: 「この session は、この場所の、この hooks.json で起動した」の実測値（provenance 付き・C10）。cache か作業ツリーかを器が推測しない（Claude Code の挙動に依存しない）。
+
+## 4. doctor の導入先の行（ADR-0028 §2.3・FR61・台帳 `s2-07l.303` (a)）
+
+- **母集団**（1 関数・和集合・順序 = 発見順を sort）: (i) 口座の設定 dir（`<state_dir>/accounts/<label>/`・[account-lifecycle.md](./account-lifecycle.md) §2 の有効な口座）ごとの `plugins/installed_plugins.json` の `plugins["<NAME>@<NAME>"][*]`（`projectPath` / `scope` / `installPath` / `gitCommitSha`・読むだけ・書かない・無い口座は飛ばす・壊れている周は `ledger=unreadable` の 1 行）(ii) 席の登録 row（[seat-roles.md](./seat-roles.md) §2）の anchor。同じ path は 1 行に畳む。
+- **行の形**（consumer 1 つに 1 行・`doctor --state-dir S` の口座行の後ろ・値は全部実測か `unknown` / `unrecorded`）:
+  `consumer=<path> scope=<project|local|user|-> binary=<記録の build 元 commit|unrecorded> plugin=<記録の root>:<hooks digest|unrecorded> ledger=<gitCommitSha|-> cache=<installPath の hooks.json の digest|absent> head=<vessel repo の HEAD|undeclared> drift=<none|binary|plugin|ledger|binary+plugin|…>`
+  - `binary` の食い違い = 記録の build 元 commit ≠ doctor 自身の build 元 commit（§2・doctor は PATH の binary そのもの）。
+  - `plugin` の食い違い = 記録の digest ≠ 記録の root に今在る hooks.json の digest（同じ場所の file が変わった＝作業ツリーの前進か cache の上書き）。
+  - `ledger` の食い違い = 帳簿の `gitCommitSha` ≠ vessel repo の HEAD（帳簿が古い＝`claude plugin install` の打ち直しが要る周を名指す・器は帳簿を書かない）。
+  - `drift=` は該当する語を `+` で繋ぐ（閉じた列・宣言順）。記録が無い consumer は `unrecorded` で「none」に潰さない。
+- **vessel repo**: `head=` と §5 の更新は器自身の checkout を要る。host 固有の path なので **host の manifest**（[account-lifecycle.md](./account-lifecycle.md) §2 の `host.toml`）に array-of-tables を 1 種足す: `[[vessel]] repo = "<dir>"`（最大 1 行・2 行目は重複として拒む・同じ loader・同じ拒否形）。無い周は `head=undeclared`（doctor は止めない）。
+- **判定しない**: doctor は行を出すだけ（C10.2・verified の手書きは無い）。何をすべきかは `drift=` の語が名指し、更新は §5 の口が行う。
+
+## 5. 1 つの口 `vessel update`（ADR-0028 §2.3・FR61・台帳 `s2-07l.303` (b)・user 裁定 2026-09-15「ff してから build + install」）
+
+- **口**: `<NAME> vessel update --state-dir S [--remote R] [--branch B]`。`[[vessel]] repo` が無ければ `vessel-repo-undeclared` で断る。
+- **順序固定**: (1) `git -C <repo> status --porcelain` が非空なら `dirty` で断る（作業ツリーを動かさない・N1）。(2) `git fetch <remote>` → `git merge --ff-only <remote>/<branch>`（既定 = `origin` / `main`・ff できない周は `not-fast-forward` で断る・rebase も reset もしない）。(3) `cargo install --path crates/<NAME> --locked`（PATH の binary を入れ替える・`--locked` は nextest と同じ前提）。(4) fleet の event log に **`InstallRecorded`**（`EventKind` の新 variant・宣言順の末尾・`KINDS` +1・schema 1 のまま）を 1 件: `{ sha: <install した HEAD の sha12>, host: <hostname>, path: <cargo が報告した binary の path> }`。(5) stdout に 1 行 `vessel: installed sha=<sha12> path=<path>`。
+- **何を書かないか**: consumer の帳簿（`installed_plugins.json`）も cache も書かない（他人の帳簿・ADR-0028 §5）。consumer の席への通知も送らない（§6 の tick が食い違いを測って動く＝通知の散文を無くす）。
+- **子 process**: `git` と `cargo` は器の子（`std::process::Command`・timeout は既存の唯一の wait・出力は `--color never` で読む〔auto-memory の CI 色の型〕）。失敗は typed（`fetch-failed` / `install-failed` に rc を添える）。
+- **A1**: 消す / 出す / 使う のどれでもない（local の build と install・push しない・課金しない）。
+
+## 6. hook 集合の食い違いで席を作り直す（ADR-0028 §2.4・FR62・台帳 `s2-07l.304`）
+
+- **tick の軸を 1 つ足す**（[seat-autonomy.md](./seat-autonomy.md) §3 の judge・inject / noop の判定であって guard ではない・極性一覧に載せない・置き場は口座の軸の**後**〔逼迫の席を先に逃がす〕・状態の門の前）: 登録 row の在る席ごとに §3 の `plugin` 記録を読み、記録の root に今在る hooks.json の digest と比べる。違えば **退避の合図**を注入する（FR29 と同じ除外 = 退避物が在る周・cycle lock が live な周は送らない・busy でも送る〔context cap と同じ運び〕・payload の理由は `hook-drift`）。記録が無い・読めない席・root の file が無い周は注入せず `NoopReason` に理由 1 つ（縮退・止めない）。
+- **合図の出所を typed に**（台帳 `s2-07l.307` と同じ穴）: 退避の合図の記録（`inject.jsonl`）は出所を持たず、終了の手（[account-autonomy.md](./account-autonomy.md) §5）は「直近の合図が退避の合図」だけで立つ。本節の合図は **口座由来と同じく終了の手 → 立て直し**へ進ませたい（`/clear` では新しい hook が載らない）ので、合図の記録に closed enum の `origin=<context|account|hook>` を足し、終了の手は `account` / `hook` 由来の合図にだけ立つ（`context` 由来は従来どおり `/clear` の cycle）。**`.307` が先**（同じ 1 変更・.304 は .307 に依存する）。
+- **立て直し**: 既存の経路そのもの（退避 → Stop → `/exit` → 前面が shell → relaunch）。口座は §3 の session 用の規則で選ぶが、**hook 由来の周は登録 row の口座が閾値未満ならその口座を優先**（`.307` の「閾値未満なら現在の口座を優先」と同じ規則・planner を 1 口座に固定する user 直命 2026-09-14）。
+- **binary だけの食い違い**（hooks の digest が同じ）: 作り直さない（次の hook の起動で新しい binary が走る）。doctor の行と rebrief の DATA に載せるだけ。
+- **rebrief の DATA**: [working-memory.md](./working-memory.md) §5.2 の marker に **`[PLUGIN]`** を 1 行足す: `[PLUGIN] root=<root> hooks=<digest> binary=<sha> drift=<none|hooks|binary|hooks+binary|unrecorded>`（判断材料・規則ではない・外形 snapshot に載る）。
+
+## 7. 極性（[polarity.md](./polarity.md)）
+
+- Guard は増やさない（極性一覧の行数は不変）。§6 の軸は judge（inject / noop）で、§4 の doctor は行を出すだけ、§5 は入力の拒否（typed な断り・書く前に断る）。
+- `plugin` 記録が読めない周: 記録の**不在**として扱う（doctor は `unrecorded`・tick は noop の理由 1 つ）。「無い」と「読めない」は語で分ける（`unreadable`）。
+- `vessel update` の断り（`dirty` / `not-fast-forward` / `fetch-failed` / `install-failed` / `vessel-repo-undeclared`）は何も動かさない（(1)(2) は作業ツリーを変えない・(3) が失敗した周は旧 binary が残る・event は (3) 成功の後だけ）。
+
+## 8. 失敗の型
+
+- `UpdateError`（closed enum・`as_str`）: `vessel-repo-undeclared` / `dirty` / `not-fast-forward` / `fetch-failed` / `install-failed` / `record-failed`。
+- `PluginRecord`（読み）: `Recorded(…)` / `Absent` / `Unreadable`。
+- `Drift`（doctor・closed・宣言順 = 出力順）: `Binary` / `Plugin` / `Ledger`。空 = `none`。
+- すべて Result で呼び手に分岐を強いる（C11.3）。
+
+## 9. 歯（`crates/<NAME>/tests/e2e/` に `vessel_version_` / `hook_plugin_record_` / `doctor_consumer_` / `vessel_update_` / `seat_tick_hook_drift_` 接頭辞・名前の列は現物が SSOT）
+
+- §2: `--version` の行が `(<sha12>)` か `(<sha12>+dirty)` か `(unknown)` の 3 形のどれか（外形 snapshot の mask）／`build.rs` の関数は in-file の歯（git の無い tmp で `unknown`）。
+- §3: fixture の hook を `--plugin-root <tmp>` 付きで撃つと `seat/<target>/plugin` に 1 行・digest は tmp の hooks.json の FNV-1a と一致／`--plugin-root` 無し・空は file を書かない／hooks.json が無い周は `hooks=unreadable`。
+- §4（AC31）: tmp の state dir に口座 2 つ（片方の `plugins/installed_plugins.json` に consumer 2 つ・片方は worktree の path）と `[[vessel]] repo` を置き `doctor --state-dir` を撃つ → consumer ごとに 1 行・`drift=` が `none` / `binary` / `plugin` / `ledger` の 4 語をそれぞれ出す fixture 4 つ／記録の無い consumer は `unrecorded`／帳簿が壊れていれば `ledger=unreadable` の 1 行で他の行は出る／`[[vessel]]` 無しは `head=undeclared`。
+- §5（AC31）: 偽 `git`・偽 `cargo`（argv を写す stub・PATH の先頭）で `vessel update` を撃つと順序 (1)→(4) の argv が写り `InstallRecorded` が 1 件・stdout 1 行／dirty な repo・ff できない repo・cargo が rc 101 の周はそれぞれ typed に断り event 0／`KINDS.len()` の pin が +1。
+- §6（AC32）: 偽 tmux で席を立て `plugin` 記録に digest A を置いた後 root の hooks.json を B に変える → tick が `kind=externalize origin=hook` を注入／退避 → Stop の後に `/exit` → 立て直しが同じ target・同じ口座（閾値未満）で走る／hooks 同じで binary だけ違う周は noop（理由 1 つ）／`seat rebrief` の DATA に `[PLUGIN]` 1 行（外形 snapshot）。
+- 実地（done の一部・歯にしない）: 本 host で `vessel update` を 1 回撃ち、consumer（folio2 / ubuntu-note-system）の doctor 行が `drift=none` になり、hooks.json を変えた便の後に consumer の planner 席が器の手で作り直されること。
+
+## 10. 憲法・制約との整合
+
+C1（rules 行を足さない・閾値は無い）・C2 / C2.2（`EventKind` / `Drift` / `UpdateError` は variant で増やす・env は hook の引数と compile time だけ・NAME から crate と ENV_PREFIX を導く）・C3（真実は event log と席の記録・帳簿と cache は読むだけ）・C3.2（doctor が版を全 consumer で突合）・C6.3（install の記録は append-only の 1 store）・C9（止まった席を人手なしで作り直す）・C10 / C10.2（実測と `unknown` / `unrecorded` を型で分ける・host 固有の path は host の manifest にだけ）・C11.2 / C11.3（typed な断り・Guard は増減なし）・N1（ff-only・作業ツリーを動かさない）・N2（手順の散文を持たない＝本 doc の「暫定運用」は §12 の契約 Landed で消える）・A1 非該当（§5 は local の build・push しない）。
+
+## 11. 却下案（ADR-0028 §5 の写しは持たない・設計固有のもの）
+
+- 通知の散文（install ごとに planner が consumer の planner へ 1 行送る）。却下: 器の視野の外の作法（N2）。tick が測って動く形に置き換える。
+- Claude Code の cache の写しを正とし、器が cache と作業ツリーを同期する。却下: 読み込み元が版で変わる挙動に器が依存する。器は読み込み元を**記録**して比べるだけ。
+- `installed_plugins.json` を器が書く（帳簿の `gitCommitSha` を進める）。却下: 他人の帳簿（Claude Code の所有）で、形が版で変わる。食い違いを `ledger` の語で名指し、打ち直しは user / consumer の planner の手番。
+- hook 集合の食い違いを `/reload-plugins` で解く。却下: 走行中の hook 登録を差し替えるかは未確認（uncertain）で、器は描画も結果も読めない（C3.3）。作り直しは既存の経路で確実に効く。
+- digest に `DefaultHasher`。却下: std の hasher は release で変わりうる（persist する値に使うと偽の食い違い）。FNV-1a 64 は 10 行の pure 関数で依存なし。
+- `vessel update` が `git pull`（merge を含む）や `reset --hard` を撃つ。却下: 作業ツリーを動かす（N1）。ff-only で揃わない周は人の手番として断る。
+
+## 12. 契約（4 便・この順・実装は pipeline）
+
+- **(a) build 元 commit**（S・`s2-07l.302`）: §2。write-set = `+crates/<NAME>/build.rs` / `crates/<NAME>/src/main.rs`（`render_version`）/ `crates/<NAME>/src/snapshots/`（doctor / version の外形）/ `crates/<NAME>/tests/e2e/`（version の歯の置き場は現物の module）。依存: なし。base で RED = `--version` の行に `(` が在る歯（機能不在）。
+- **(b) 読み込み元の記録 + doctor の導入先の行 + `vessel update`**（M・`s2-07l.303`）: §3 / §4 / §5。write-set = `hooks/hooks.json`（`--plugin-root`）/ `crates/<NAME>/src/hook/mod.rs`（引数・記録の書き手）/ `crates/<NAME>/src/hook/vessel.rs`（`update`）/ `crates/<NAME>/src/rules/manifest.rs`（`[[vessel]]`）/ `crates/<NAME>/src/fleet/mod.rs`（`InstallRecorded`・`KINDS` +1）/ `crates/<NAME>/src/main.rs`（doctor の行）/ `crates/<NAME>/src/vessel/`（消費者の母集団・`Drift`・digest の pure 関数の置き場は現物で決める）/ `tests/e2e/hook.rs` / `tests/e2e/fleet.rs`（`KINDS` の pin）/ `tests/e2e/rules.rs` / doctor と hook の外形 snapshot。依存: (a)（記録に build 元 commit を載せる）。base で RED = `--plugin-root` の記録の歯 + `doctor` の consumer 行の歯（機能不在）。
+- **(c) 合図の出所と終了の手の弁別 + 立て直しの口座の優先**（M・`s2-07l.307`）: §6 の 2 点目・3 点目。write-set = `seat/tick.rs`（`.279` の分割後の file 名で焼く）/ `seat/inject.rs`（`origin`）/ `seat/cycle.rs`（relaunch の口座）/ `tests/e2e/seat.rs` / seat の外形 snapshot。依存: `.279` Landed。base で RED = context 由来の合図の後に `/exit` が出ない歯（現物は出る）。
+- **(d) hook 集合の食い違いの軸 + `[PLUGIN]` の DATA**（M・`s2-07l.304`）: §6。write-set = `seat/tick.rs`（分割後）/ `seat/rebrief` の module（`[PLUGIN]`）/ `tests/e2e/seat.rs` / seat の外形 snapshot。依存: (b)（記録）と (c)（出所）。base で RED = digest の違う席へ `origin=hook` の合図が出る歯（機能不在）。
+
+順序の理由: (a) は (b) の記録が載せる値。(b) は独立に Landed できる（tick を触らない＝`.279` と交差 0）。(c) は `.279` の分割を待つ tick の便で、(d) は (b)(c) の両方を読む。
+
+## 13. 後続
+
+`claude plugin install` の打ち直しを器が撃つ形（帳簿は他人のもの＝当面は doctor が名指すだけ）／consumer 側の state dir の一覧を host の manifest に宣言する形（今は口座の帳簿と登録 row から導く）／`vessel update` が消費者の席へ結果を報せる形（通知でなく tick が測る側に倒したので当面は無し）／binary の食い違いだけの席を軽く直す形（今は次の hook の起動に任せる）。
