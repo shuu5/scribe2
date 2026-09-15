@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="folio-doc-type" content="adr">
+<meta name="folio-layer" content="project">
+<meta name="folio-version" content="0.4.6">
+<meta name="folio-status" content="accepted">
+<meta name="folio-stakeholders" content="Developer, AI Agent, External Reviewer">
+<meta name="folio-adr-id" content="0032">
+<meta name="folio-adr-date" content="2026-09-15">
+<title>ADR-0032 — 対話面の作法は設計 doc 1 本が持ち、 planner の雛形は pointer 付きの行で運ぶ (信頼度 4 段を上位に読み手本位の 8 則を融合・harness 一般の規律は global CLAUDE.md から器へ)</title>
+<link rel="stylesheet" href="../../common.css">
+<script type="application/ld+json">
+{
+  "@context": {
+    "dc": "http://purl.org/dc/terms/",
+    "schema": "https://schema.org/",
+    "folio": "https://folio.dev/spec/v1/"
+  },
+  "@id": "./ADR-0032-dialogue-surface-rules-live-in-one-design-doc-and-planner-brief.html",
+  "@type": "schema:TechArticle",
+  "dc:isPartOf": [
+    { "@id": "./README.html" }
+  ],
+  "dc:title": "ADR-0032 — 対話面の作法は設計 doc 1 本が持ち、 planner の雛形は pointer 付きの行で運ぶ (信頼度 4 段を上位に読み手本位の 8 則を融合・harness 一般の規律は global CLAUDE.md から器へ)",
+  "folio:version": "0.4.6",
+  "folio:stakeholders": ["Developer", "AI Agent", "External Reviewer"],
+  "dc:references": [
+    { "@id": "../spec/constitution.html#c1" },
+    { "@id": "../spec/constitution.html#c2" },
+    { "@id": "../spec/constitution.html#c7" },
+    { "@id": "../spec/constitution.html#c10" },
+    { "@id": "../spec/constitution.html#c12" },
+    { "@id": "../spec/constitution.html#c14" },
+    { "@id": "../spec/constitution.html#a1" },
+    { "@id": "../spec/constitution.html#n2" },
+    { "@id": "../spec/srs.html#FR23" },
+    { "@id": "../spec/srs.html#FR30" },
+    { "@id": "../spec/srs.html#FR44" },
+    { "@id": "../spec/srs.html" },
+    { "@id": "./ADR-0013-machine-holds-enumerations-docs-hold-pointers.html" },
+    { "@id": "./ADR-0018-working-memory-subcommands-and-pointer-required-directives.html" },
+    { "@id": "./ADR-0022-seat-roles-are-typed-and-enforced-by-hooks.html" },
+    { "@id": "./ADR-0031-working-memory-is-held-by-the-vessel-directives-status-and-hooks.html" }
+  ]
+}
+</script>
+</head>
+<body>
+<!-- folio:chrome-top -->
+<a class="skip-link" href="#s1-context">本文へスキップ</a>
+<nav class="breadcrumb" aria-label="パンくず"><ol>
+  <li><a href="../index.html">design-intent</a></li>
+  <li><a href="./README.html">decisions</a></li>
+  <li aria-current="page">ADR-0032</li>
+</ol></nav>
+<!-- /folio:chrome-top -->
+
+<header class="doc-header">
+  <h1>ADR-0032 — 対話面の作法は設計 doc 1 本が持ち、 planner の雛形は pointer 付きの行で運ぶ (信頼度 4 段を上位に読み手本位の 8 則を融合・harness 一般の規律は global CLAUDE.md から器へ)</h1>
+  <div class="meta">Status: accepted &middot; Date: 2026-09-15 &middot; version 0.4.6 (拘束する constitution の版) &middot; ADR-0022 §2.4 の生成文に「user に向けて出す文の形」の行を足し、 その規則の置き場を設計 doc 1 本に定める (憲法は動かさない・雛形の規範文は 0 のまま) &middot; 要件は SRS が正本 (FR23 / FR30 / FR44)</div>
+</header>
+<!-- folio:chrome-toc -->
+<nav class="toc" aria-label="ページ内目次">
+<ol>
+  <li><a href="#s1-context">§1. Context</a></li>
+  <li><a href="#s2-decision">§2. Decision</a></li>
+  <li class="toc--sub"><a href="#s2-1-place">§2.1 作法の置き場は設計 doc 1 本で、 雛形は pointer 付きの行だけを持つ</a></li>
+  <li class="toc--sub"><a href="#s2-2-rules">§2.2 作法は 9 則 1 体系で、 信頼度が上位に在る</a></li>
+  <li class="toc--sub"><a href="#s2-3-brief">§2.3 復元の brief の user 面は 5 slot 固定で、 AI 面は表示しない</a></li>
+  <li class="toc--sub"><a href="#s2-4-global">§2.4 global CLAUDE.md の harness 一般の節は器へ移り、 host 固有の節だけが残る</a></li>
+  <li class="toc--sub"><a href="#s2-5-admin">§2.5 対話面でない席には適用しない</a></li>
+  <li class="toc--sub"><a href="#s2-6-scope">§2.6 射程外</a></li>
+  <li><a href="#s3-srs">§3. SRS との関係 (正本は SRS)</a></li>
+  <li><a href="#s4-consequences">§4. Consequences</a></li>
+  <li><a href="#s5-alternatives">§5. Alternatives Considered</a></li>
+  <li><a href="#s6-trace">§6. Trace</a></li>
+</ol>
+</nav>
+<!-- /folio:chrome-toc -->
+
+<aside class="informative">
+<p>本 ADR は IETF <strong>RFC 2119</strong> および <strong>RFC 8174 / BCP 14</strong> に定義される MUST / SHALL / SHOULD / MAY のキーワード解釈規約に従う。 ADR は決定時点の記録であり、 改訂は新しい ADR による supersede で行う。 本 ADR の §2 は user の直命 2 件 (2026-09-15・brief の表示面と、 読み手本位の skill の導入・global CLAUDE.md の移行) と user の裁定 1 件 (2026-09-15T07:22Z 問 3 の後段・「時間見積と『不確かなら適用』の 2 則を外し、 信頼度の規則を残りの 8 則と融合する」) を受けた設計判断である。 憲法の条文は動かさない。</p>
+</aside>
+
+<aside class="machine-readable" aria-hidden="true">
+  <dl>
+    <dt>id</dt><dd>ADR-0032</dd>
+    <dt>doc-type</dt><dd>adr</dd>
+    <dt>status</dt><dd>accepted</dd>
+    <dt>date</dt><dd>2026-09-15</dd>
+    <dt>version</dt><dd>0.4.6 (拘束する constitution の版。 本 ADR は憲法の条文を動かさない)</dd>
+    <dt>decided-by</dt><dd>planner (2026-09-15・設計判断) — 向きは user の直命 2 件 (2026-09-15 06:5xZ「brief が冗長過ぎる…現在の進捗や前セッションの成果、 計画と次の 1 手を簡潔に」/ 07:0xZ「i-have-adhd を参考に rebrief と planner の対話面へ・global CLAUDE.md と整合して昇華・global を痩せさせる」) と user の裁定 (2026-09-15T07:22Z 問 3 後段) が定めた。 逐語は台帳 <code>s2-07l.326</code> の notes (本 file には写さない)。</dd>
+    <dt>stakeholders</dt><dd>Developer, AI Agent, External Reviewer</dd>
+    <dt>supersedes</dt><dd>なし (ADR-0022 §2.4 の追補)。 雛形の行の規律 (穴か pointer 付きの行・規範文 0・xtask の検査) は不変で、 pointer の先に設計 doc <code>docs/design/dialogue-surface.md</code> を 1 本足す。 rules 行は足さない (作法は機械が enforce する値を持たない・C14)。</dd>
+    <dt>related</dt><dd>ADR-0013 §2.2 (機械は enum・文書は pointer) / ADR-0018 §2.1 (brief の文章と判断は開発 session) / ADR-0022 §2.4 (SessionStart の生成文・雛形の行の規律) / ADR-0031 §2.2 / §2.6 (現在地 DATA・skill の縮小＝brief の材料) / constitution C1.2 / C2.2 / C7 / C10 / C12.5 / C14 / A1 / N2</dd>
+  </dl>
+</aside>
+
+<section id="s1-context" class="informative">
+<h2>§1. Context</h2>
+<p class="section-essence" data-audience="human">planner は user と話す唯一の席です。 その席が user に向けて出す文の形 (要点を先に・平易に・信頼度を分けて・承認は冒頭で) は、 記録時点では user の global CLAUDE.md (host の 1 file・7 口座が共有) が持っています。 器の生成文 (SessionStart の雛形) は役割と権能と連絡の経路を持つだけで、 文の形を持ちません。 復元の brief は定型 4 節 + 判定根拠 + hygiene で 30 行を超え、 user は「見る気がしない」と言いました。 user は読み手本位の公開 skill (i-have-adhd・MIT) を参考に「この 2 つを昇華して融合し、 global CLAUDE.md の harness 一般の内容を器へ移して global を痩せさせよ」と指示しました。</p>
+<p data-audience="machine">記録時点 (2026-09-15) の現物: global CLAUDE.md = ubuntu-note-system の tracked file 1 本 (52 行・8 節: 言語・伝え方 / 回答の方針 / タスク開始時 / ファイル編集後 / multi-agent 実行 / 破壊的操作の禁止 / 記憶 / ホスト・コンテナ) を口座 dir 7 つが symlink で共有し、 前の版 (v1 plugin) の docs への pointer を 4 本持つ (file は在るが v1 は積んでいない)。 planner の雛形 <code>seat/brief/planner.txt</code> は pointer 付きの行 10 本 (役割・権能・第一手・裁定の持ち込み先・3 クラス・中継・報告・連絡 3 行) で、 文の形の行は無い。 rebrief skill (134 行) の brief は全体像 4 slot + 判定根拠 + 推奨 + 次のアクション + hygiene の 5 節。</p>
+<p data-audience="machine">i-have-adhd (skills/i-have-adhd/SKILL.md・記録時点): 10 則 (1 次の行動を先頭に / 2 多段は番号 / 3 末尾は具体の 1 手 / 4 脇道を抑える / 5 毎 turn 状態を言い直す / 6 具体の時間見積 / 7 成果を見せる / 8 事実だけの error 表現 / 9 一覧は 5 件 / 10 前置き・要約・締めなし) + Persistence (「不確かなら適用」) + When to break (explain・破壊的操作・debug spiral・曖昧・規則と課題の衝突・harness 優先) + Pre-send check (前置き・締め・脇道・hedge・慣用句の削除)。 評価 rubric は Correctness 35% / Autonomy 25% / Actionability 20% / Safety 10% / Concision 10%。</p>
+<p data-audience="machine">憲法の向き: <a href="../spec/constitution.html#c7">C7</a> は対話面を 1 つに定める (R-C7-1 = planner の席)。 <a href="../spec/constitution.html#c10">C10</a> は宣言・実測・導出を型で分ける (信頼度の語の根)。 <a href="../spec/constitution.html#c14">C14</a> は規律を文書と manifest の 2 面に持つ。 <a href="../spec/constitution.html#n2">N2</a> は prose・memory・chat だけの規則を規則としない (雛形の規範文は 0・ADR-0022 §2.4)。 <a href="../spec/constitution.html#c2">C2.2</a> は名前と置き場を NAME から導く (skill・雛形は plugin に同梱)。</p>
+</section>
+
+<section id="s2-decision" class="normative">
+<h2>§2. Decision</h2>
+
+<h3 id="s2-1-place">§2.1 作法の置き場は設計 doc 1 本で、 雛形は pointer 付きの行だけを持つ</h3>
+<p class="section-essence" data-audience="human">「user に向けて出す文の形」の規則は、 設計 doc 1 本 (dialogue-surface.md) に書きます。 planner の生成文には「文の形はこの doc」と矢印を付けた行を数本足すだけで、 規則の本文は生成文に書きません。 規則の表 (manifest) にも入れません。 機械が測って止められる値ではないからです。</p>
+<p data-audience="machine">対話面の作法の SSOT SHALL <code>docs/design/dialogue-surface.md</code> 1 本 (設計 doc・C14 の文書面・版で記録・C8.3)。 planner の雛形 SHALL 作法の行を pointer 付きで持ち (ADR-0022 §2.4 の規律・穴か pointer 付きの行・規範文 0・xtask の検査は不変)、 行の本文は作法の名 (「文の形」「信頼度」「brief の 5 slot」) と pointer だけとする。 rules 行 SHALL 足さない (作法は閾値でも enabled flag でもなく、 機械が enforce できない値を manifest に置かない・C14 の「manifest は enforce する規則の正本」)。 skill (rebrief) SHALL 作法の本文を持たず、 手順と pointer だけを持つ (N2)。</p>
+
+<h3 id="s2-2-rules">§2.2 作法は 9 則 1 体系で、 信頼度が上位に在る</h3>
+<p class="section-essence" data-audience="human">作法は 9 つの決まりを 1 つの体系にします。 いちばん上は「信頼度」で、 言い切る文には必ず「実測した / 型や文書から導いた / 推測 / 分からない」のどれかが付きます。 その下に読み手本位の 8 つ (次の 1 手を先頭に・手順は番号・末尾は 1 手・脇道は分けて末尾に・状態を言い直す・成果を見せる・error は事実だけ・一覧は 5 件まで + 前置きと締めなし) が来ます。 参考にした skill の「時間の見積」と「不確かでも適用」は外し、 それぞれ「便の段と残り件数」と「生成文が固定するので自己判断しない」に置き換えます。</p>
+<p data-audience="machine">作法 SHALL 次の 9 則を 1 体系として設計 doc に持つ (番号は設計 doc の宣言順・本 ADR は形だけを定め、 文面は設計 doc が正本):</p>
+<ol data-audience="machine">
+  <li><strong>信頼度</strong> (上位・他の 8 則に優先): 事実・結論の各文 SHALL <code>verified</code> (実行して確かめた) / <code>deduced</code> (型・文書・記録から導いた) / <code>inferred</code> (推測) / <code>uncertain</code> (分からない) のいずれかを負う。 hedge の副詞 SHALL この 4 語に置き換え、 削って断定に化けさせない。 時間の見積 SHALL 書かない (AI の見積は inferred にしかならず、 読み手には uniform に響く)。 代わりに便の段 (Spawned / Implemented / Gated / Landed) と残り件数 (母集団付き) を書く。</li>
+  <li><strong>先頭は次の 1 手</strong>: 1 行目 SHALL user が今できること (承認・裁定・入力) か、 無ければ「planner が次にすること」。 承認要求は冒頭 (front-load)・材料 (やりたいこと / 理由 / 代替 / コスト / 推奨) 付き・質問形。</li>
+  <li><strong>手順は番号</strong>: 2 段以上の手順 SHALL 番号付き・1 項目 1 動作。</li>
+  <li><strong>末尾は 1 手</strong>: 最終行 SHALL 次に起きること 1 つ (planner の次の行為 か user の手番)。 締めの挨拶・要約の反復は持たない。</li>
+  <li><strong>脇道は分けて末尾に</strong>: 本筋の後に「別件:」で 1 行ずつ。 列挙義務 (乖離・orphan・危険・件数と母集団) は脇道ではなく本筋の slot に載せ、 省略しない。</li>
+  <li><strong>状態を言い直す</strong>: 毎 turn 現在地 (器の DATA <code>[MAIN]</code> / <code>[RUN]</code> / <code>[SEAT]</code>・ADR-0031 §2.2) を 1〜2 行。 user に「覚えておいて」を頼まない (直命の表が持つ・ADR-0031 §2.1)。</li>
+  <li><strong>成果を見せる</strong>: 前 session からの Landed を id と sha で (器の <code>[WIN]</code>)。 作文で膨らませない。</li>
+  <li><strong>error は事実だけ</strong>: 原因・修正・出所 (bead / run id / file:line)。 感嘆や謝罪の語を持たない。</li>
+  <li><strong>一覧は 5 件・前置きと締めなし</strong>: 表示は 5 件まで・母集団の件数を併記・全件は file へ落として path を返す。 前置き (「〜します」の宣言)・要約の反復・締めの挨拶は持たない。 「詳細版で」と言われたら本文の長さの上限を外す (形は保つ)。</li>
+</ol>
+<p data-audience="machine">外す 2 則: (a) 具体の時間見積 → 則 1 に吸収 (段と残り件数)。 (b) Persistence「不確かなら適用」 → 採らない (生成文が固定するので自己判断の余地を持たない・断定の温床)。 When to break のうち採るもの: explain (「詳細版で」・則 9)・破壊的操作 (A1 の 3 クラスが既に上位)・debug spiral (3 周「まだ壊れている」で手を止め疑う前提を 1 つ名指して 1 問)・曖昧 (1 論点 1 質問・推奨 1 つ・既存)・規則と課題の衝突 (課題が勝ち形は保つ)。 Pre-send check SHALL 則 9 と則 1 に分けて持つ (前置き・締め・脇道の削除は則 9・hedge の置換は則 1)。</p>
+
+<h3 id="s2-3-brief">§2.3 復元の brief の user 面は 5 slot 固定で、 AI 面は表示しない</h3>
+<p class="section-essence" data-audience="human">復元 (rebrief) が user に見せるのは 5 行です: ① 次の 1 手 (user の手番があればそれ) ② 前 session の成果 ③ 現在地 ④ 進行中の計画の上位 3 件 ⑤ 危険と乖離 (あれば)。 ②③④の材料は器の DATA から来ます。 AI が復元のために読む判定 (矢印の種類・3 値則・他席の退避物) は context には入りますが、 user には見せません。</p>
+<p data-audience="machine">rebrief の user 面 SHALL 5 slot 固定 (宣言順): (1) <code>next</code> = user の手番 (承認・裁定・入力・<code>[DIRECTIVE-REVIEW]</code> の確認候補) か planner の次の行為 / (2) <code>wins</code> = <code>[WIN]</code> の列 / (3) <code>status</code> = <code>[MAIN]</code> <code>[RUN]</code> <code>[SEAT]</code> / (4) <code>plan</code> = 計画弧の上位 3 件 (bead id 付き・母集団の件数) / (5) <code>risks</code> = 乖離・orphan・危険 (無ければ「なし」・判定不能はその理由)。 各 slot SHALL 1〜2 行。 AI 面 (pointer の kind / resolution・3 値則・consume の可否) SHALL context に在って表示しない。 brief の後の consume SHALL 不変 (ADR-0018 §2.1)。</p>
+
+<h3 id="s2-4-global">§2.4 global CLAUDE.md の harness 一般の節は器へ移り、 host 固有の節だけが残る</h3>
+<p class="section-essence" data-audience="human">global CLAUDE.md の 8 節のうち、 「言語・伝え方」「回答の方針」「multi-agent 実行」の 3 節の中身は対話面の作法 (設計 doc + 雛形の行) へ移り、 「タスク開始時」は器の hook と DATA が代替し、 「ファイル編集後」と「記憶」は 1 行に縮みます。 「破壊的操作の禁止」と「ホスト・コンテナ」は host 固有なので global に残ります。 前の版 (v1) の docs への矢印は外します。 器は user の global file を書きません。 痩せさせるのは global を持つ側 (別 repo) の手番です。</p>
+<p data-audience="machine">移す先 SHALL 設計 doc §5 の表が持つ (節ごとに「器の作法へ」「hook / DATA が代替」「縮小」「残す」の 4 値)。 器 SHALL consumer の repo にも user の global file にも file を書かない (ADR-0022 §2.4「1 経路」・不変)。 global の痩身 SHALL global を持つ repo の便 (本 repo の外・user の手番ではなく AI の便・3 クラス非該当)。 前の版の docs への pointer SHALL 外す (scribe2 では憲法 A1 の 3 クラスが SSOT)。 他 user への一般化 SHALL 雛形と設計 doc と skill が plugin に同梱されることで成立する (C2.2)。</p>
+
+<h3 id="s2-5-admin">§2.5 対話面でない席には適用しない</h3>
+<p class="section-essence" data-audience="human">この作法は user と話す席 (planner) のものです。 管理席 (admin) は user と話さず中継だけをするので、 生成文に作法の行を足しません。 runner や lens の出力の形も別です。</p>
+<p data-audience="machine">作法の行 SHALL planner の雛形にだけ足す (R-C7-1 の対話面・C7)。 admin の雛形 SHALL 不変 (中継の形は ADR-0016 §2.1)。 runner / lens の出力 (headless) SHALL 本 ADR の対象外。</p>
+
+<h3 id="s2-6-scope">§2.6 射程外</h3>
+<p class="section-essence" data-audience="human">決めるのは、 作法の置き場・9 則の形・brief の 5 slot・global の行き先・適用する席、 の 5 つです。 作法の文面の細部は設計 doc が持ちます。 folio が生成する文書の文体、 他の role、 rubric による自動評価は決めません。</p>
+<p data-audience="machine">次は本 ADR の決定ではない (MUST NOT be read as such): 作法の各則の文面 (設計 doc が正本・版で改訂)・folio の生成 doc の文体 (folio の領分)・runner / lens / admin の出力・i-have-adhd の rubric による自動評価 (歯にしない・作法は機械が測れない)・global CLAUDE.md の具体の差分 (別 repo の便)。</p>
+</section>
+
+<section id="s3-srs" class="informative">
+<h2>§3. SRS との関係 (正本は SRS)</h2>
+<p class="section-essence" data-audience="human">この記録が仕える要件は要件書 (SRS v0.12) に在ります。 「対話面の作法を設計 doc が持ち planner の生成文が pointer で運ぶ」を名指す要件は記録時点の要件書に無く、 要件書の改訂 (user の手番) で 1 本足します。</p>
+<div data-audience="machine">
+<p>本 ADR が仕える要件は SRS v0.12 が正本である: <a href="../spec/srs.html#FR23">FR23 作業記憶の退避と復元</a> (brief の user 面は復元の一部)・<a href="../spec/srs.html#FR30">FR30 便の配送構造</a> (planner が唯一の対話面)・<a href="../spec/srs.html#FR44">FR44 席間の連絡</a> (不変)。 「対話面の作法 (信頼度 4 段 + 読み手本位の 8 則) を設計 doc が持ち、 planner の生成文が pointer 付きの行で運ぶ」を名指す FR は記録時点の SRS に無く、 要件書の改訂 (<code>/folio-architect</code>・user の手番) で足す。 それまで契約は FR23 / FR30 を指す。 要件書は本 ADR では 1 字も変えない。</p>
+</div>
+</section>
+
+<section id="s4-consequences" class="informative">
+<h2>§4. Consequences</h2>
+<p class="section-essence" data-audience="human">良い面は、 user が読む文の形が 1 か所で決まり、 どの host・どの口座でも同じ生成文で planner に届くこと、 brief が 5 行になること、 global CLAUDE.md が host 固有だけに痩せることです。 悪い面は、 作法は機械が測れないので歯で守れないこと (雛形の pointer と 5 slot の形だけ snapshot で pin する)、 global を痩せさせる便が別 repo に要ることです。</p>
+<p data-audience="machine">Positive: 作法の SSOT が文書面 1 本 (C14)。 雛形の規範文 0 のまま (N2・xtask)。 他 user への一般化 (plugin 同梱・C2.2)。 brief の材料が器の DATA (C10.2)。 信頼度の語が C10 の型の分類と対応する。</p>
+<p data-audience="machine">Negative (受け入れるコスト): 作法の遵守は歯にできない (snapshot で pin するのは雛形の行と brief の slot の形だけ・C12.5)。 planner の雛形が +4 行 (生成文の snapshot が動く)。 global の痩身は別 repo の便 (本 repo からは pointer の撤去を依頼するだけ)。 rebrief skill の書き換えは器の DATA (ADR-0031 §2.2) の land 後。</p>
+</section>
+
+<section id="s5-alternatives" class="informative">
+<h2>§5. Alternatives Considered</h2>
+<p class="section-essence" data-audience="human">4 つの案を退けました。 「公開 skill をそのまま積む」は断定と時間見積の危険が残り、 plugin の外に規則が増えます。 「global CLAUDE.md に書き続ける」は user ごとの file で他 user に届かず、 prose だけの規則です。 「雛形に規範文を直書きする」は生成文の規律に反します。 「manifest の行に作法を持つ」は機械が enforce できない値を規則の表に入れます。</p>
+<p data-audience="machine">(A) <strong>i-have-adhd を skill としてそのまま積む</strong>。 却下: 10 則のうち時間見積と Persistence が信頼度 4 段と衝突し (§2.2)、 常時適用は SessionStart の hook で本文を注入する形 (plugin の外の規則・N2)。 形を借りて設計 doc に融合する。</p>
+<p data-audience="machine">(B) <strong>global CLAUDE.md に作法を書き続ける</strong> (記録時点の形)。 却下: user ごと・host ごとの file で、 他 user の planner に届かない。 前の版の docs への pointer が残る。 規則の置き場としては prose (N2)。 host 固有の 2 節だけを残す。</p>
+<p data-audience="machine">(C) <strong>planner の雛形に作法の本文を直書きする</strong>。 却下: 雛形の行は穴か pointer 付きの行に限る (ADR-0022 §2.4・xtask が規範文 0 を検査)。 pointer の先 (設計 doc) に本文を置く。</p>
+<p data-audience="machine">(D) <strong>rules 行に作法を持つ</strong> (例: <code>dialogue.list_cap = 5</code>)。 却下: 読み手が居ない行になる (C10.3 の未 wire)。 manifest は機械が enforce する規則の正本で、 文の形は測れない (C14)。 5 件の cap も設計 doc の文面で持つ。</p>
+</section>
+
+<section id="s6-trace" class="informative">
+<h2>§6. Trace</h2>
+<p class="section-essence" data-audience="human">出所は、 user の直命 2 件と裁定 1 件、 global CLAUDE.md の現物、 planner の雛形の現物、 参考にした公開 skill です。</p>
+<ul data-audience="machine">
+  <li>user の直命 (2026-09-15 06:5xZ): 「brief が冗長過ぎて全く見る気がしない。 …現在の進捗や前セッションの『成果』、 現在取り書かている計画と次の 1 手を簡潔にまとめて書くべきだ」。 逐語は台帳 <code>s2-07l.326</code> の notes。</li>
+  <li>user の直命 (2026-09-15 07:0xZ): i-have-adhd を参考に rebrief の出力と planner の対話面へ・global CLAUDE.md と整合して昇華・planner 側へ移して global を痩せさせる・harness 一般の内容の移行を兼ねる。 逐語は同 notes。</li>
+  <li>user の裁定 (2026-09-15T07:22Z 問 3 後段): 信頼度も planner へ移す・時間見積と「不確かなら適用」の 2 則を外し、 信頼度の規則を残り 8 則と融合する。 逐語は同 notes。</li>
+  <li>現物 (2026-09-15): global CLAUDE.md (ubuntu-note-system <code>claude/CLAUDE.md</code>・52 行・8 節・7 口座が symlink)・<code>crates/scribe2/src/seat/brief/planner.txt</code> (10 行)・<code>skills/rebrief/SKILL.md</code> (134 行)。</li>
+  <li>参考: i-have-adhd (MIT・skills/i-have-adhd/SKILL.md の 10 則・When to break・Pre-send check・evals/rubric.md)。 本 ADR は文面を写さず形を借りる。</li>
+  <li>先行決定: <a href="./ADR-0022-seat-roles-are-typed-and-enforced-by-hooks.html">ADR-0022</a> §2.4・<a href="./ADR-0018-working-memory-subcommands-and-pointer-required-directives.html">ADR-0018</a> §2.1・<a href="./ADR-0013-machine-holds-enumerations-docs-hold-pointers.html">ADR-0013</a> §2.2・<a href="./ADR-0031-working-memory-is-held-by-the-vessel-directives-status-and-hooks.html">ADR-0031</a> §2.2 / §2.6。</li>
+  <li>設計: <code>docs/design/dialogue-surface.md</code> (本 PR で新設)。 契約は台帳 <code>s2-07l.326</code> の配下 (雛形の行 + xtask / skill の縮小 / global の痩身は別 repo)。</li>
+</ul>
+</section>
+
+<!-- folio:chrome-bottom -->
+<nav class="prevnext" aria-label="前後の文書">
+  <a class="prevnext__prev" href="ADR-0031-working-memory-is-held-by-the-vessel-directives-status-and-hooks.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">ADR-0031 — 作業記憶は器が持つ側を広げる (user 直命の表・現在地の DATA・skill と compaction の hook による強制と自動退避・退避物の置き場は state dir)</span></a>
+</nav>
+<script>
+(function () {
+  var openedForPrint = [];
+  window.addEventListener('beforeprint', function () {
+    openedForPrint = [];
+    var ds = document.querySelectorAll('details:not([open])');
+    for (var i = 0; i < ds.length; i++) { ds[i].setAttribute('open', ''); openedForPrint.push(ds[i]); }
+  });
+  window.addEventListener('afterprint', function () {
+    for (var i = 0; i < openedForPrint.length; i++) openedForPrint[i].removeAttribute('open');
+    openedForPrint = [];
+  });
+  if (!document.querySelector('[data-audience]')) return;
+  /* 既定 = 人間プレゼン型 (ADR-0040 / rules §11.3): script 経由で初期 class を付与するため
+     no-JS では付かず全文可視に graceful degrade する。 static DOM は全文を保持 (AI/検索/印刷は不変)。 */
+  document.body.classList.add('audience-human');
+  var bar = document.createElement('nav');
+  bar.className = 'audience-toggle';
+  bar.setAttribute('aria-label', '表示対象の切替');
+  var states = [['both', '両方'], ['human', '人間向け'], ['machine', '機械向け']];
+  for (var s = 0; s < states.length; s++) {
+    (function (mode, label) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      b.setAttribute('aria-pressed', mode === 'human' ? 'true' : 'false');
+      b.addEventListener('click', function () {
+        document.body.classList.remove('audience-human', 'audience-machine');
+        if (mode !== 'both') document.body.classList.add('audience-' + mode);
+        var bs = bar.querySelectorAll('button');
+        for (var j = 0; j < bs.length; j++) bs[j].setAttribute('aria-pressed', bs[j] === b ? 'true' : 'false');
+      });
+      bar.appendChild(b);
+    })(states[s][0], states[s][1]);
+  }
+  var bc = document.querySelector('nav.breadcrumb');
+  if (bc && bc.parentNode) { bc.parentNode.insertBefore(bar, bc.nextSibling); }
+  else { document.body.insertBefore(bar, document.body.firstChild); }
+})();
+</script>
+<!-- /folio:chrome-bottom -->
+</body>
+</html>
