@@ -42,6 +42,7 @@
 - **tick**: `seat/tick.rs` の `judge` の列に dispatch の段を 1 つ足す（s2-07l.304 の「hook 集合の軸」と同じ形・置き場は新 module `seat/tick/dispatch.rs`・宣言順の末尾＝席の判定の後）。席の状態と無関係に列を 1 周評価して起こせる便を起こし、`TickDecision` の variant は増やさず record 行に token `dispatch=started:<n>,waiting:<m>` か `dispatch=unmeasured` を 1 つ足す（`account=` の隣・C10）。どの席の tick が撃っても同じ関数で冪等（起こした便は live になり次の周の交差の相手になる）。
 - **land の直後**: `pipe land` が Landed を記帳した直後に同じ関数を 1 周撃つ（着地で交差が解けた便を待たせない）。
 - どちらも同じ 1 関数（dispatch module の turn 関数）を撃つ（C2）。lock は着地の列と同じ store の lock（fleet の store が持つ acquire）を使い、二重起動を防ぐ。
+- **driver の死亡**（`s2-07l.352`・契約 (d)・C9 の便版の driver 側）: `pipe run` / `pipe resume` の process（driver）は入口で `<state_dir>/pipe/<run>/driver` に受付札と同じ本文（pid + 起動時刻・[gate-cost.md](./gate-cost.md) §3.2）を書き、終端で消す。turn 関数は live 便のうち札の所有者が死んでいる便（lock の所有者と同じ probe・`Owner::Dead`）を (a) と同じ引数の `pipe resume` で起こし直し、record token に `resumed:<m>` を足す（`dispatch=started:<n>,resumed:<m>,waiting:<k>`）。札が無い / 読めない便は触らない（測れないを「死んだ」に読み替えない・fail-closed）。schema を広げた便の Landed で古い binary の driver が typed に死ぬ周（NFR4・.160 の座礁 2026-09-15）も次の周に現在の binary で続く＝写し binary の refresh は要らない（走行中の process の code は変わらないので refresh は座礁を防がない）。`base_of_run` の読めなさは typed に呼び手へ返す（C10・「base が無い」と分ける）。
 
 ## 6. 観測
 
@@ -67,6 +68,7 @@ dispatcher は「起こす」側で行為を止める判定を持たない（起
 - **(r)** 審査の時点: 契約 file が出来た直後に審査を撃つ口（.209 の生成の直後 + dispatcher の 1 周）・`ContractReviewed` の記録・`pipe run` の同 sha 再利用。依存: (a)。**行 (r) は契約表に s2-07l.241 Landed 後に足す**（write-set が .241 の新設 file `pipe/review.rs` を編集するため、tracked になる前は行が解けない＝s2-07l.346 の罠）。
 - **(b)** 契機: tick の軸 `dispatch` + `pipe land` の直後の 1 周。依存: (a)・(r)（列に PASS の便が無いと契機が空回りするだけなので (r) の Landed を待つ・行の `depends` は行 (r) と同時に足す）。
 - **(c)** 観測: rebrief の DATA に `[DISPATCH]` の行（`Marker` の variant）。依存: (a)・s2-07l.326.1（現在地の DATA）Landed。
+- **(d)** driver の死亡（§5・s2-07l.352）: 札の書き・消し（`pipe run` / `resume` の入口と終端）・turn 関数の起こし直し・record token・`base_of_run` の typed 化。依存: (a)・(b)。
 
 ## 10. 却下案（ADR-0034 §5 の写しは持たない・設計固有のもの）
 

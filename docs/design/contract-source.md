@@ -39,7 +39,7 @@
 ## 4. 契約の審査の段（FR49）
 
 - **段**: `Stage::Reviewed`（宣言順は `Intake` の直後・`as_str` = `Reviewed`）。`pipe intake` の直後に器が lens を 1 回撃ち、verdict を run dir の `review.json`（gate の `verdict.json` と同型・tmp → rename の atomic 書き）と `RunStage stage=Reviewed detail=verdict:<PASS|FAIL|INCONCLUSIVE>` に残す。
-- **lens の口**: 既存の `<NAME> lens` に雛形を 1 枚足す（`headless/lens-contract.txt`・穴 = `{contract}`〔生成した契約 file〕/ `{design}`〔`section` の本文〕/ `{requirements}`〔`req` の要件本文・SRS から抜く〕・diff は無い）。観点は 3 つ（契約と設計の節の適合・設計が名指す状態遷移の一周〔段・完了 enum・列の所属〕・write-set の連鎖〔§3 の閉包に無い構造の落ち〕）。verdict は既存の 3 値。予算は NFR1 の cap をそのまま使う（契約 + 節 + 要件で cap を超えたら INCONCLUSIVE＝FR9 の極性）。
+- **lens の口**: 既存の `<NAME> lens` に雛形を 1 枚足す（`headless/lens-contract.txt`・穴 = `{contract}`〔生成した契約 file〕/ `{design}`〔`section` の本文〕/ `{requirements}`〔`req` の要件本文・SRS から抜く〕・diff は無い）。観点は 3 つ（契約と設計の節の適合・設計が名指す状態遷移の一周〔段・完了 enum・列の所属〕・write-set の連鎖〔§3 の閉包に無い構造の落ち〕）。verdict は既存の 3 値。予算は NFR1 の cap をそのまま使う（契約 + 節 + 要件で cap を超えたら INCONCLUSIVE＝FR9 の極性）。要件本文の読み手は要件面の形ごとに 1 関数（html の anchor / yaml の `id` + `text` / md の見出し・`s2-07l.354`・契約表の行 k・id の集合の読み手 `requirement_ids` と同じ拡張子の 1 match）で、読めない形・本文の無い id は理由の 1 行を材料に載せる（黙って空にしない・NFR4）。
 - **効き方**: `pipe run` / `pipe resume` は `Reviewed` かつ verdict PASS の run だけを spawn する（現物の `launch(.., &[Stage::Intake])` の入口を `Reviewed` に改める）。FAIL / INCONCLUSIVE は終端（`live` は false・retire 可）。直しは設計 doc の改訂 → PR → 再 intake（run 2）。
 - **人の関与 0**: 審査を人が飛ばす口は無い（`--no-review` を作らない・C16）。歯の側も同じ: `tests/e2e/pipe.rs` の helper（`intake` → `spawn_with` / `implemented` / `gated_pass` / `questioned`・pipe/gate.rs・land.rs・lifecycle.rs の約 100 か所が使う）は lens 無しで intake → spawn を通しているので、helper の中で**偽 PASS の lens**（gate の `fake_lens` と同じ作り）による審査を 1 回通す形に改める（呼び出し側は不変・審査の段を飛ばす flag を歯にも作らない）。intake 直後の event 数を pin する歯（`event_count == 1`）は審査の段の event を数に入れる。行 (c) の write-set はこの 5 file を含む（.241 run 1 の QUESTION 2026-09-14・planner 裁定 (a)）。
 - **順序**: 契約 (c) は (b) より先に流す（user 裁定 2026-09-14・台帳 s2-07l.197 notes）。生成 (b) が無い間は、受付が読んだ契約 file（設計 pointer 付き・(a) が検査済み）の `section` の節を設計 doc から読んで審査する＝`{design}` の穴の出所は (b) の前後で変わらない（行の pointer）。理由: 契約の不備が入口で止まらず runner と gate の周を費やした実測（2026-09-13〜14: .208 run 1 / 2・.235・.238・.222 の 5 件が (c) の観点で止まる種類）。
@@ -107,6 +107,10 @@ C15 / C15.2（台帳は task と裁定・pointer の欠落は lint）・C16 / C1
 - **folio2 の grill G-f / G-h（scribe2 側の立場）**: G-f（folio2 文書の pack 分割）は scribe2 の所掌外＝所見なし。G-h（folio2 の文書が席へ届く経路）は scribe2 の役割注入（seat-roles (c) の雛形の pointer 行）が carrier で、(c) の land までは planner 間の file 交換で代替する。
 - **folio2 への移行（M1）**: 契約表の正本を設計ノート YAML へ移し (ii) の導出 file を読む（順序は folio2 planner の G-g・推奨 (a) 今の形で land → M1 で移す）。移行の費用の実測（2026-09-13）: 設計 doc 15 本 = 約 210k 字・表 118・fence 12・link 254。
 binary の世代で起動を断る（§5 4.）・契約表から台帳の bead を起票する口（台帳 write の 2 種目・A1 の「出す」に当たらないが scope の改訂が要る）・`Reviewed` の lens の観点を rules 行にする（.176）・memo 40 本の設計内容を各設計 doc の「未契約の機構」表へ移す（planner の一括作業・§6 の lint が残りを名指す）。
+
+## 13. consumer の最小の整え方（`s2-07l.354`・pointer だけ）
+
+scribe2 を載せる consumer が pipe を通すのに要る面は 3 つで、いずれも既存の口の pointer だけを持つ（本節は規則を持たない）: (1) **要件面** = `.vessel.toml` の任意 key `requirements`（repo 相対 path・無ければ既定 path・`pipe/declaration.rs`）。形は `.html`（`id="FR1"` の anchor）/ `.yaml`（`- id: FR1` と同じ mapping の `text:`）/ `.md`（行頭 `#` 見出しの先頭 token が要件 id・本文は次の見出しの直前まで）の 3 つで、id の集合と本文の読み手は §4「lens の口」の同じ 1 本。(2) **契約表** = 設計 doc の末尾の区間に行 1 つ（欄の正本は `contracts schema` の出力・§2）。(3) **契約の `req`** = 要件 id の形（英大文字 + 数字・台帳の id は通らない・憲法 C15.2）。初例 = uns の照会（2026-09-15・台帳 s2-07l.354）。
 
 <!-- contracts:begin -->
 schema = 1
@@ -224,4 +228,14 @@ verify = ["cargo nextest run -p scribe2 --no-tests=fail contract_closure_ext_sam
 size = "S"
 done = "別 module の同名の型を持つ toy で閉包が広がらず、見えている file だけが導出値に入る"
 depends = ["a"]
+
+[[contract]]
+id = "k"
+title = "要件本文の読み手を要件面の形ごとに — yaml の id + text と md の見出しを lens の材料に載せ、consumer の審査が要件面を読めないで終端しない"
+req = ["FR49", "FR2"]
+section = "4"
+write-set = ["crates/scribe2/src/pipe/table.rs", "crates/scribe2/src/pipe/review.rs", "crates/scribe2/tests/e2e/pipe/intake.rs"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail contract_check_reads_requirements_ pipe_review_reads_requirements_"]
+size = "S"
+done = "yaml / md の要件面を宣言した toy で contracts check の id 検査と lens の要件本文が同じ読み手を通り、本文の無い id は理由付きで材料に載る"
 <!-- contracts:end -->
