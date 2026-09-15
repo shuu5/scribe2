@@ -36,6 +36,7 @@
 | `host.reserve_memory_mb` | `HostReserveMemoryMb`（Int） | 席と host のために常に残す memory。受付はこれを差し引いた空きしか配らない。 |
 | `gate.slot_wait_s` | `GateSlotWaitS`（Int） | 受付で枠が空くのを待つ上限。超えたら並列度 1 で進む（縮退・止めない）。 |
 | `gate.cpu_weight` | `GateCpuWeight`（Int） | 便の scope に付ける CPU の重み（席は既定の重み）。 |
+| `gate.tmux_test_threads` | `GateTmuxTestThreads`（Int） | tmux を立てる歯（e2e の isolated seat）の同時本数。値の写しは nextest の test-group `tmux` の `max-threads`（`.config/nextest.toml`・新規）で、`cargo xtask check` が写しの一致と配線（tmux を立てる歯の file の `#[test]` が全部 group の filter に入る）を測る（clippy.toml ↔ R-C4-4.* と同型・C10.3）。並列 gate 下の負荷で tmux の歯が落ちる flake（`s2-07l.360`・契約表の行 b）の解＝並列度そのものは下げない。 |
 
 manifest に行が載るまでは ADR-0021 の予定行（C14.2 の相互参照は行が在って成立・ADR-0018 §4 と同じ）。
 
@@ -54,7 +55,7 @@ manifest に行が載るまでは ADR-0021 の予定行（C14.2 の相互参照�
 
 #### 3.2.1 errata（現物との差・s2-07l.158・規範は上の §3.2 のまま）
 
-- **module は `pipe/admission.rs`**（§7 は `pipe/slots.rs`）。code の識別子は admission / Ticket 系で、hook の注入計測の slot（FR21）と intake の「受付」との字面衝突を避ける。file 名の `.slot` と record の `slot=` は ADR-0021 §2.3 の字面のまま。置き場は seat/mod.rs `host_slots_dir`（`StateDir::slots_dir` はその委譲）。
+- **module は `pipe/admission.rs`**（§7 の旧名は slots.rs・その file は無い）。code の識別子は admission / Ticket 系で、hook の注入計測の slot（FR21）と intake の「受付」との字面衝突を避ける。file 名の `.slot` と record の `slot=` は ADR-0021 §2.3 の字面のまま。置き場は seat/mod.rs `host_slots_dir`（`StateDir::slots_dir` はその委譲）。
 - **札の中身は 1 行 JSON**（`schema` / `pid` / `run` / `jobs` / `ts`・§3.2 は「state dir と同じ TOML subset」と書いた）。ADR-0004 §2.3 D-3 の TOML subset の列挙を広げないためである。`ts` は UNIX epoch の ms で、生きている判定の起動時刻は `/proc/stat` の `btime` + `/proc/<pid>/stat` の starttime ÷ `USER_HZ`（ABI の 100）で組む（`btime` の秒の切り捨ては持ち主を死んだと読まない側へ寄る）。札は `.partial` に書いて rename する＝読み手は半端な札を見ない。
 - **`Completion::SlotFree { slots_dir, want, job_mb, reserve_mb, cap }`**（§3.2 の分担の宿題の決着）。variant はデータだけを運び、meminfo と札の読み手は wait の内側（`admission::has_room`）が持つ。待ちの間の観測は lock を取らず札も消さない（回収と記録は lock の内側の受付だけ）。`Completion::pid()` は pid を見張らない本 variant で 0 を返す（`/proc/0` は無い）。
 - **`slot=` の値**: `granted` / `degraded` / `unmeasured`、回収が在った周は `reclaimed:<n>`（枠を配れた周）か `<degraded|unmeasured>,reclaimed:<n>`（縮退と重なった周）。測れなかった理由は閉じた enum で `slot_why=<slots-dir|lock|meminfo>` に残す。meminfo が読めない周は札を回収しない（回収の数を残す前に縮退するため）。縮退（`degraded`）の周も 1 枠の札を置く。
@@ -208,4 +209,14 @@ tests = ["crates/scribe2/src/pipe/queue.rs"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail mutant_in_pipe_land_await_turn_"]
 size = "S"
 done = "fixture の書き換えが atomic になり、await_turn の poll が書きかけを読む窓が無い（歯の中身と assert は不変・test だけの差分ゆえ札 retroactive）"
+
+[[contract]]
+id = "b"
+title = "tmux を立てる歯を nextest の test-group で同時本数 = rules 行 gate.tmux_test_threads に絞る — 値の写し（.config/nextest.toml）と配線を xtask check が manifest と突合する"
+req = ["FR8", "NFR3"]
+section = "3"
+write-set = ["rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "crates/scribe2/tests/e2e/rules.rs", "crates/scribe2/tests/e2e/snapshots/e2e__rules__rules_external_form.snap", "crates/xtask/src/limits.rs", "crates/xtask/src/check_facts.rs", "crates/xtask/src/check_tests.rs", "+.config/nextest.toml", "docs/design/gate-cost.md"]
+verify = ["cargo nextest run -p xtask --no-tests=fail nextest_tmux_group_"]
+size = "S"
+done = "tmux を立てる歯が test-group tmux で同時本数 1 に絞られ、値の写しと配線を cargo xtask check が測り、写しの値違い・file 無し・group の外の tmux 歯・固定形でない filter を名指して落とす"
 <!-- contracts:end -->
