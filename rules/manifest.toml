@@ -263,6 +263,18 @@ enabled = true
 ruling = "user 2026-09-14T13:23Z bats in runner ceiling (uns vessel; bash/sh excluded)"
 ruled_at = "2026-09-14"
 
+# 禁じる語列（ADR-0025 §2.1・設計 vessel-hook.md §5「command guard」/ pipeline.md §5.1 (4)）。runner.allowed_commands
+# と対で読む**上限側の禁止**で、vessel 宣言は緩められない（C14）。hook の command guard が Bash の実行時点で止め、
+# intake が verify 行に同じ判定（先頭語一致 + 残りの語の包含・順序不問）を掛ける。
+
+[[rule]]
+id = "runner.denied_commands"
+kind = "RunnerDeniedCommands"
+value = ["cargo mutants", "cargo publish", "git push --force", "git push -f", "git reset --hard", "git branch -D", "git clean -f", "git stash drop", "git stash clear"]
+enabled = true
+ruling = "user 2026-09-14"
+ruled_at = "2026-09-14"
+
 [[rule]]
 id = "repo.non_rust_exec_allow"
 kind = "RepoNonRustExecAllow"

@@ -11,6 +11,7 @@
 //! する append-only store 1 つ」である。書き込みは fleet と**同じ lock 実装**
 //! （[`store::append_line`]）を通す。
 
+pub mod command;
 pub mod guard;
 pub mod permission;
 pub mod role_guard;
@@ -25,6 +26,7 @@ use crate::fleet::store::{self, LockPolicy, StoreError};
 use crate::name::NAME;
 use crate::rules::manifest::Manifest;
 use crate::seat::state::Event;
+use command::CommandDecision;
 use guard::Decision;
 use permission::PermissionDecision;
 use role_guard::{Operation, RoleDecision, Seat};
@@ -462,12 +464,12 @@ fn brief_refused(reason: &str) -> String {
     format!("{NAME}: 席の指示文を出せない reason={reason}（席の登録 row と rules 行から権能を解けない）")
 }
 
-/// 編集と権能付きの操作を行為の時点で止める。deny は rc 2 + stderr 1 行 + stdout 0 byte。
+/// 編集・Bash の command・権能付きの操作を行為の時点で止める。deny は rc 2 + stderr 1 行 + stdout 0 byte。
 ///
-/// 門の順は write-set guard → seat guard → role guard（既存の順のまま末尾に足す・**deny 文は先の門が先**＝
-/// 2 つの門が同時に落ちる周に、直す側がどちらを直せばよいか読めなくならないため）。前 2 つは cwd の
-/// git dir が要る（cwd が repo の外なら測れない＝従来どおり通す側）が、role guard は anchor から解くので
-/// cwd に依らず評価する。
+/// 門の順は [`crate::polarity::Guard`] の宣言順（hook の門はその先頭に並ぶ・**deny 文は先の門が先**＝
+/// 2 つの門が同時に落ちる周に、直す側がどちらを直せばよいか読めなくならないため）。write-set guard と
+/// seat guard は cwd の git dir が要る（cwd が repo の外なら測れない＝従来どおり通す側）が、command guard と
+/// role guard は anchor から解くので cwd に依らず評価する。
 fn pre_tool_use(hooked: &Hooked, payload: &str, started: Instant) -> Outcome {
     let (root, cwd) = (hooked.root, hooked.cwd);
     let tool = field(payload, KEY_TOOL).unwrap_or_default();
@@ -483,6 +485,12 @@ fn pre_tool_use(hooked: &Hooked, payload: &str, started: Instant) -> Outcome {
         }
     }
     let command = command_of(payload);
+    if tool == command::BASH {
+        let decided = command::decide(command.as_deref().unwrap_or_default(), hooked.rules.map(Path::new));
+        if let CommandDecision::Deny { what, line } = decided {
+            return denied(hooked, &format!("command-deny {what}"), line, started);
+        }
+    }
     let op = Operation { tool: &tool, command: command.as_deref(), path: path.as_deref(), root: Some(root), cwd };
     role_outcome(hooked, &op, started)
 }

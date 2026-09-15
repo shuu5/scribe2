@@ -1006,7 +1006,7 @@ fn rules_embedded_manifest_is_valid_and_covers_all_kinds() {
     // **tracked な `rules/manifest.toml` の全行が受理される**（`parse` は 1 件でも違反が
     // 在れば `Err` を返すので、ここに届いた時点で全行が必須 key を持つ）。母集団を額面に
     // 出すのは、行が黙って落ちた周を「全部読めた」と読み違えないためである。
-    assert_eq!(manifest.rows().len(), 48, "埋め込み manifest の行数（母集団・`.217` で +2・`.249` で +3・`.254` で +1）");
+    assert_eq!(manifest.rows().len(), 49, "埋め込み manifest の行数（母集団・`.217` で +2・`.249` で +3・`.254` で +1・`.168` で +1）");
     for kind in ALL {
         let covered = manifest.rows().iter().any(|row| row.kind == *kind);
         assert!(covered, "{} の行が manifest に無い", kind.as_str());
@@ -1143,7 +1143,46 @@ fn rules_embedded_manifest_declares_one_capability_row_per_role() {
     assert!(ALL.contains(&RuleKind::RoleCapabilities), "ALL に在る（末尾は `.249` の PipeSizeLLines）");
     assert_eq!(RuleKind::parse("RoleCapabilities"), Some(RuleKind::RoleCapabilities), "kind を字面から引ける");
     let kinds = ALL.len();
-    assert_eq!(kinds, 47, "kind の母集団（`.201` で +1・`.217` で +2・`.249` で +3・`.254` で +1）");
+    assert_eq!(kinds, 48, "kind の母集団（`.201` で +1・`.217` で +2・`.249` で +3・`.254` で +1・`.168` で +1）");
+}
+
+/// 禁じる語列の行（`runner.denied_commands`・`RuleKind::RunnerDeniedCommands`・裁定 id `user 2026-09-14`・ADR-0025 §2.1・
+/// 設計 rules-manifest.md / vessel-hook.md §5・`s2-07l.168`）: **値は manifest が持つ**（C1 / C5）＝初期値 9 語列を名指す。
+/// kind は宣言順で `RunnerAllowedCommands` の直後（対で読む行）・値の形は List・各要素は語を 1 つ以上持つ（空白だけの
+/// 語列は validate が断る）。
+#[test]
+fn rules_embedded_manifest_declares_the_denied_commands_row() {
+    let manifest = Manifest::embedded().unwrap_or_else(|errors| panic!("埋め込み manifest が拒まれた: {errors:?}"));
+    let row = manifest.get("runner.denied_commands").expect("禁じる語列の行が在る");
+    let want: Vec<String> = [
+        "cargo mutants",
+        "cargo publish",
+        "git push --force",
+        "git push -f",
+        "git reset --hard",
+        "git branch -D",
+        "git clean -f",
+        "git stash drop",
+        "git stash clear",
+    ]
+    .iter()
+    .map(|item| (*item).to_owned())
+    .collect();
+    assert_eq!(row.value, RuleValue::List(want), "ADR-0025 §2.1 の初期値 9 語列（user 裁定 2026-09-14）");
+    assert_eq!(row.kind, RuleKind::RunnerDeniedCommands, "kind");
+    assert_eq!(row.kind.shape(), ValueShape::List, "値の形は List（語列の配列）");
+    assert!(row.enabled, "既定で効く");
+    assert_eq!(row.ruling, "user 2026-09-14", "裁定 id");
+    assert_eq!(row.ruled_at, "2026-09-14", "裁定日");
+    assert_eq!(RuleKind::parse("RunnerDeniedCommands"), Some(RuleKind::RunnerDeniedCommands), "kind を字面から引ける");
+    let at = ALL.iter().position(|kind| *kind == RuleKind::RunnerDeniedCommands);
+    let allowed = ALL.iter().position(|kind| *kind == RuleKind::RunnerAllowedCommands);
+    assert_eq!(at, allowed.map(|found| found + 1), "宣言順は RunnerAllowedCommands の直後（対で読む）");
+    // 空白だけの語列は validate が断る（何にも当たらず黙って効かない要素を持たせない）。
+    let blank = one_row(RuleKind::RunnerDeniedCommands, r#"["cargo mutants", " "]"#);
+    let errors = parsed(&blank).expect_err("語を持たない語列は不備");
+    assert!(errors.contains("語を持たない語列"), "{errors}");
+    assert!(parsed(&one_row(RuleKind::RunnerDeniedCommands, r#"["cargo mutants"]"#)).is_ok(), "語を持つ語列は通る");
 }
 
 /// 行の数え方の幅の行（`R-C4.line-width`・裁定 id `user 2026-09-14T06:5xZ`・設計 rules-manifest.md §4・`s2-07l.254`）。

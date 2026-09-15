@@ -9,7 +9,7 @@
 
 use super::approve::{Approve, RC_BLOCKED};
 use super::contract::Contract;
-use super::declaration::{self, Ceiling, Effective, CEILING_ROW};
+use super::declaration::{self, Ceiling, Effective, CEILING_ROW, DENIED_ROW};
 use super::follow::{self, Turn};
 use super::gate::{Check, Gate, Limits, Verdict, RC_INCONCLUSIVE};
 use super::land::{verdict_of, Land, Retire, REBASE_EMPTY};
@@ -114,12 +114,14 @@ pub fn contracts_usage() -> String {
     format!("usage: {NAME} contracts <check --repo R [--rules PATH]|schema>")
 }
 
-/// `<NAME> contracts <check|schema>`: 契約表の全行の検査（上限は `--rules` か埋め込みの `runner.allowed_commands`）と
-/// 欄の生成物の描画（tracked な `contracts/schema.toml` の出所・設計 contract-source.md §2）。
+/// `<NAME> contracts <check|schema>`: 契約表の全行の検査（上限は `--rules` か埋め込みの `runner.allowed_commands` と
+/// 対の `runner.denied_commands`）と欄の生成物の描画（tracked な `contracts/schema.toml` の出所・設計 contract-source.md §2）。
 pub fn contracts(args: &[String]) -> Outcome {
     let checked = || -> Result<Outcome, String> {
-        let (repo, commands) = (need(args, "--repo")?, list_row(&manifest_of(args)?, CEILING_ROW)?);
-        Ok(super::table::check_repo(Path::new(repo), &Ceiling { row: CEILING_ROW, commands: &commands }))
+        let (repo, manifest) = (need(args, "--repo")?, manifest_of(args)?);
+        let (commands, denied) = (list_row(&manifest, CEILING_ROW)?, list_row(&manifest, DENIED_ROW)?);
+        let ceiling = Ceiling { row: CEILING_ROW, commands: &commands, denied: &denied };
+        Ok(super::table::check_repo(Path::new(repo), &ceiling))
     };
     match args.first().map(String::as_str) {
         Some("schema") if args.len() == 1 => Outcome::ok(super::table::render_schema()),
@@ -406,7 +408,8 @@ fn refuse(found: &Refuse, extra: &[String]) -> Outcome {
 /// 「宣言が壊れている」で扱いを変えると、器の視野の外の verify 行が片方から入る。
 fn freeze(repo: &Path, manifest: &Manifest, contract: &Contract) -> Result<Effective, Outcome> {
     let commands = list_row(manifest, CEILING_ROW).map_err(refused)?;
-    let ceiling = Ceiling { row: CEILING_ROW, commands: &commands };
+    let denied = list_row(manifest, DENIED_ROW).map_err(refused)?;
+    let ceiling = Ceiling { row: CEILING_ROW, commands: &commands, denied: &denied };
     declaration::measure(repo, &ceiling, &contract.verify).map_err(|errors| {
         Outcome::failed(RC_REFUSED, errors.iter().map(ToString::to_string).collect())
     })

@@ -15,7 +15,7 @@
 //!    なので CI では撃たない（intake の側・[`super::cli`]）。
 
 use super::closure::{closure, surface_closure, unresolved_names, ClosureError, Source};
-use super::declaration::{self, read_write_set, Ceiling};
+use super::declaration::{self, read_write_set, Basis, Ceiling};
 use super::refuse::{covered, Refuse};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_OK, RC_REFUSED};
 use crate::name::NAME;
@@ -324,6 +324,8 @@ impl Finding {
 pub struct Context<'a> {
     /// 宣言の allowlist（verify 行の先頭語の基準）。
     pub allowed: &'a [String],
+    /// 禁じる語列（rules 行 `runner.denied_commands`・verify 行に intake と同じ判定を掛ける・ADR-0025 §2.3）。
+    pub denied: &'a [String],
     /// 要件面の id の集合（読めない周は理由）。
     pub requirements: &'a Result<BTreeSet<String>, String>,
     /// 閉包を測る `.rs` の列。
@@ -540,7 +542,7 @@ pub fn check_table(doc: &str, rows: &[ContractRow], ctx: &Context<'_>) -> Vec<Fi
             found.push(Finding::table(TableError::SectionMissing { line: row.line, section: row.section.clone() }));
         }
         found.extend(requirement_findings(row, ctx.requirements));
-        found.extend(verify_findings(row, ctx.allowed));
+        found.extend(verify_findings(row, &Basis { allowed: ctx.allowed, denied: ctx.denied }));
         let unresolved = row.depends.iter().filter(|id| !ids.contains(&id.as_str()));
         found.extend(unresolved.map(|id| Finding::table(TableError::DependsUnresolved { line: row.line, id: id.clone() })));
         found.extend(write_set_findings(row, ctx));
@@ -647,12 +649,12 @@ fn requirement_findings(row: &ContractRow, requirements: &Result<BTreeSet<String
     }
 }
 
-/// verify 行の形（判定は宣言の 1 本 [`declaration::verify_unfit`]・契約の行は穴を持てない）。
-fn verify_findings(row: &ContractRow, allowed: &[String]) -> Vec<Finding> {
+/// verify 行の形（判定は宣言の 1 本 [`declaration::verify_unfit`]・契約の行は穴を持てず、禁じる語列にも当たれない）。
+fn verify_findings(row: &ContractRow, basis: &Basis<'_>) -> Vec<Finding> {
     row.verify
         .iter()
         .filter_map(|line| {
-            let reason = declaration::verify_unfit(line, allowed)?;
+            let reason = declaration::verify_unfit(line, basis)?;
             Some(Finding::table(TableError::VerifyForm { line: row.line, verify: line.clone(), reason }))
         })
         .collect()
@@ -830,6 +832,7 @@ pub(crate) fn check_repo(repo: &Path, ceiling: &Ceiling<'_>) -> Outcome {
     let requirements = read(repo, &facts.requirements).and_then(|text| requirement_ids(&facts.requirements, &text));
     let ctx = Context {
         allowed: &facts.allowed,
+        denied: &facts.denied,
         requirements: &requirements,
         sources: &sources,
         tracked: &tracked,
@@ -1087,7 +1090,14 @@ mod tests {
         let requirements = Ok(["FR1".to_owned()].into_iter().collect::<BTreeSet<String>>());
         let (allowed, sources) = (["git".to_owned()], sources());
         let tracked = ["src/kind.rs".to_owned(), "src/use.rs".to_owned()];
-        let ctx = Context { allowed: &allowed, requirements: &requirements, sources: &sources, tracked: &tracked, snapshots: &[] };
+        let ctx = Context {
+            allowed: &allowed,
+            denied: &[],
+            requirements: &requirements,
+            sources: &sources,
+            tracked: &tracked,
+            snapshots: &[],
+        };
         let mut rows: Vec<ContractRow> = ["a", "a", "c", "d", "e", "f", "g", "h", "i"]
             .iter()
             .enumerate()
@@ -1122,6 +1132,35 @@ mod tests {
         assert_eq!(cycle.as_deref(), Some("depends が輪を成す（g → h → g）"), "輪は 1 件で 2 行を名乗る");
     }
 
+    /// 契約表の verify 行にも intake と同じ禁じる語列の判定が掛かる（ADR-0025 §2.3・FR55「intake と同じ検査を表の全行に」）:
+    /// 先頭語が allowlist に在っても `runner.denied_commands` の語列に当たる行は `verify-form` で行番号付きに名指し、
+    /// 理由は行 id と語列を持つ。語列を持たない文脈（`denied = []`）では同じ行が通る＝判定の出所は行の値である。
+    #[test]
+    fn table_check_names_a_verify_line_that_hits_a_denied_sequence() {
+        let requirements = Ok(["FR1".to_owned()].into_iter().collect::<BTreeSet<String>>());
+        let (allowed, sources) = (["git".to_owned()], sources());
+        let denied = ["git push --force".to_owned()];
+        let tracked = ["src/kind.rs".to_owned(), "src/use.rs".to_owned()];
+        let mut forced = row(10, "a");
+        forced.verify = vec!["git push origin main --force".to_owned()];
+        let closed = Context {
+            allowed: &allowed,
+            denied: &denied,
+            requirements: &requirements,
+            sources: &sources,
+            tracked: &tracked,
+            snapshots: &[],
+        };
+        let found = check_table(DOC, &[forced.clone()], &closed);
+        let labels: Vec<String> = found.iter().map(|finding| finding.refuse.label()).collect();
+        assert_eq!(labels, vec!["contract-table:verify-form".to_owned()], "禁じる語列の行は verify-form の 1 件: {labels:?}");
+        let rendered = found.first().map(|finding| finding.render("docs/design/t.md")).unwrap_or_default();
+        assert!(rendered.starts_with("contracts: docs/design/t.md:10 "), "行番号付き: {rendered}");
+        assert!(rendered.contains("runner.denied_commands") && rendered.contains("git push --force"), "行 id と語列: {rendered}");
+        let open = Context { denied: &[], ..closed };
+        assert!(check_table(DOC, &[forced], &open).is_empty(), "語列の無い文脈では通る（判定の出所は行の値）");
+    }
+
     /// 要件面を読めない周・閉包の入力を読めない周は、黙って通さず行ごとに `unreadable`（rc 2）で名指す。
     #[test]
     fn table_check_fails_closed_when_the_requirement_face_or_a_source_is_unreadable() {
@@ -1130,7 +1169,14 @@ mod tests {
         let mut sources = sources();
         sources.push(Source { path: "src/broken.rs".to_owned(), body: Err("invalid utf-8".to_owned()) });
         let tracked = ["src/kind.rs".to_owned()];
-        let ctx = Context { allowed: &allowed, requirements: &requirements, sources: &sources, tracked: &tracked, snapshots: &[] };
+        let ctx = Context {
+            allowed: &allowed,
+            denied: &[],
+            requirements: &requirements,
+            sources: &sources,
+            tracked: &tracked,
+            snapshots: &[],
+        };
         let mut touched = row(10, "a");
         touched.touches = vec!["crate::kind::Kind".to_owned()];
         let found = check_table(DOC, &[touched], &ctx);

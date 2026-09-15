@@ -380,6 +380,38 @@ fn pipe_external_form() {
     insta::assert_snapshot!(form);
 }
 
+/// (e) 契約の verify 行に禁じる語列（rules 行 `runner.denied_commands`・ADR-0025 §2.3・`s2-07l.168`）が当たれば intake は
+/// rc 1 で断り、何本目の行かと行 id・語列を名指す（event を書かない・run dir も作らない）。判定は hook の command
+/// guard と同じ 1 関数＝順序不問（`git branch -D x` も `git branch x -D` も当たる）。先頭語が宣言の allowlist に在る
+/// 行でも止まる（先頭語だけの判定では `git` の破壊形が入口を通る＝監査 `.168` の穴）。当たらない行は従来どおり受理。
+#[test]
+fn pipe_intake_rejects_verify_line_with_denied_sequence() {
+    let (repo, state) = repo_with_state();
+    for (add, sequence) in [
+        (r#"verify = ["git branch -D x"]"#, "git branch -D"),
+        (r#"verify = ["git branch x -D"]"#, "git branch -D"),
+        (r#"verify = ["sh verify-ok.sh", "git push origin main --force"]"#, "git push --force"),
+    ] {
+        let path = write_contract(&repo, &["verify"], &[add]);
+        let out = intake_raw(&repo, &state, &path, "b");
+        let err = stderr_of(&out);
+        assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{add} は rc 1: {err}");
+        assert!(err.contains("契約の verify"), "どちらの面かを言う: {err}");
+        assert!(err.contains("runner.denied_commands") && err.contains(sequence), "行 id と語列を名指す: {err}");
+        assert!(!err.contains("allowed-commands"), "先頭語は宣言の内＝断る理由は語列だけ: {err}");
+    }
+    let two = write_contract(&repo, &["verify"], &[r#"verify = ["sh verify-ok.sh", "git push origin main --force"]"#]);
+    let err = stderr_of(&intake_raw(&repo, &state, &two, "b"));
+    assert!(err.contains("契約の verify 2 本目"), "何本目かを名指す: {err}");
+    assert_eq!(event_count(&state), 0, "断った周は event を書かない");
+    assert!(!state.join("pipe").exists(), "run dir も作らない");
+    // 対: 当たらない行（`git branch -d x`・語が違う）は受理される。
+    let fine = write_contract(&repo, &["verify"], &[r#"verify = ["git branch -d x"]"#]);
+    let out = intake_raw(&repo, &state, &fine, "b");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "当たらない行は受理: {}", stderr_of(&out));
+    clean(&[&repo, &state]);
+}
+
 // ── (b) gate → land → verdict export → e2e（設計 §8 (b)） ──────────────────
 
 /// 便を Implemented まで進める（intake → spawn）。
@@ -503,8 +535,13 @@ pub(super) fn write_rules_capped(dir: &Path, name: &str, fixture: RulesFixture) 
     };
     // **上限の行も載せる**。intake は宣言をこの行と突き合わせるので、上限を持たない
     // manifest を渡した周は「上限が無い」で断られる（`--rules` は全 subcommand に効く）。
+    // 禁じる語列の行（`runner.denied_commands`・ADR-0025 §2.3・`s2-07l.168`）も対で載せる＝intake は verify 行に
+    // hook の command guard と同じ判定を掛け、行の無い manifest では受付が断られる。
     let ceiling = "[[rule]]\nid = \"runner.allowed_commands\"\nkind = \"RunnerAllowedCommands\"\n\
-                   value = [\"cargo\", \"git\", \"sh\"]\nenabled = true\nruling = \"t\"\nruled_at = \"d\"\n";
+                   value = [\"cargo\", \"git\", \"sh\"]\nenabled = true\nruling = \"t\"\nruled_at = \"d\"\n\n\
+                   [[rule]]\nid = \"runner.denied_commands\"\nkind = \"RunnerDeniedCommands\"\n\
+                   value = [\"cargo mutants\", \"git push --force\", \"git push -f\", \"git branch -D\"]\n\
+                   enabled = true\nruling = \"t\"\nruled_at = \"d\"\n";
     // 受付の 4 行: 並列度の上限は埋め込みの値を写し、残る 3 行は [`SlotFixture`] の値。
     // 着地の順番の上限は [`LAND_WAIT_S`]（前の便が列に残る歯で 90 分待たない）。
     // 上限の余地の 6 行（設計 contract-source.md §3）: 上限の 2 行は [`CapFixture`]・size の 3 行と行の数え方の幅は

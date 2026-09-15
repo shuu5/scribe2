@@ -11,6 +11,7 @@
 //!
 //! 値の受理集合と配列の層は [`crate::rules::manifest`] と共有する（第 2 の parser を作らない）。
 
+use crate::hook::command::denied_in;
 use crate::polarity::{OnFailure, Polarity, Timing};
 use crate::rules::manifest::{list, scalar, Scalar};
 use std::path::Path;
@@ -20,6 +21,9 @@ pub const DECL_FILE: &str = ".vessel.toml";
 
 /// 上限を持つ rules 行の id。
 pub const CEILING_ROW: &str = "runner.allowed_commands";
+
+/// 禁じる語列を持つ rules 行の id（上限と**対**で読む・ADR-0025 §2.1・判定は hook の command guard と同じ 1 関数）。
+pub const DENIED_ROW: &str = crate::hook::command::ROW;
 
 /// 宣言 file の schema。
 const SCHEMA_VERSION: u64 = 1;
@@ -82,12 +86,23 @@ impl std::fmt::Display for DeclError {
     }
 }
 
-/// 器が持つ上限（rules 行）。
+/// 器が持つ上限（rules 行）。**組み立ては `pipe::cli` の 2 か所だけ**（intake の `freeze` と `contracts check`）＝値は
+/// `--rules` の経路で読んだ manifest から来る（C2.2・埋め込みを直に読まない）。
 pub struct Ceiling<'a> {
     /// 上限を持つ行の id（出所として写しへ残る）。
     pub row: &'a str,
     /// 許す command の上限。
     pub commands: &'a [String],
+    /// 禁じる語列（rules 行 [`DENIED_ROW`]・上限と対で読む）。
+    pub denied: &'a [String],
+}
+
+/// verify 行を測る基準（宣言の allowlist と禁じる語列）。
+pub struct Basis<'a> {
+    /// 先頭語の基準（**宣言の** allowlist・上限ではない）。
+    pub allowed: &'a [String],
+    /// 禁じる語列（rules 行 [`DENIED_ROW`]）。
+    pub denied: &'a [String],
 }
 
 /// 便の base を置く穴。
@@ -137,6 +152,8 @@ enum Unfit {
     Outside(String),
     /// 置けない穴を含む。
     Hole(String),
+    /// 禁じる語列（rules 行 [`DENIED_ROW`]）に当たる（ADR-0025 §2.3・hook の command guard と同じ判定）。
+    Denied(String),
 }
 
 impl Unfit {
@@ -154,6 +171,9 @@ impl Unfit {
                 format!("repo の外を指す語 {word} を含む（絶対 path・home の短縮記号・.. で遡る path）")
             }
             Self::Hole(ref hole) => format!("置けない穴 {hole} を含む"),
+            Self::Denied(ref sequence) => {
+                format!("禁じる語列 {sequence} に当たる（rules 行 {DENIED_ROW}・N1 / C16・gate と land が sh -c で実走する行）")
+            }
         }
     }
 
@@ -167,6 +187,7 @@ impl Unfit {
             Self::Command(_) => 2,
             Self::Outside(_) => 3,
             Self::Hole(_) => 4,
+            Self::Denied(_) => 5,
         }
     }
 }
@@ -237,7 +258,7 @@ pub fn measure(
     ceiling: &Ceiling<'_>,
     contract_verify: &[String],
 ) -> Result<Effective, Vec<DeclError>> {
-    Sourced::read(repo, ceiling)?.measure(ceiling.commands, contract_verify)
+    Sourced::read(repo, ceiling)?.measure(ceiling, contract_verify)
 }
 
 impl Sourced {
@@ -262,31 +283,32 @@ impl Sourced {
         })
     }
 
-    /// 上限・宣言 allowlist・契約 verify と突き合わせる。
+    /// 上限・宣言 allowlist・禁じる語列・契約 verify と突き合わせる。
     fn measure(
         self,
-        ceiling: &[String],
+        ceiling: &Ceiling<'_>,
         contract_verify: &[String],
     ) -> Result<Effective, Vec<DeclError>> {
         let declared = &self.declared;
         let mut errors = Vec::new();
         for command in &declared.allowed {
-            if !ceiling.iter().any(|top| top == command) {
+            if !ceiling.commands.iter().any(|top| top == command) {
                 errors.push(DeclError::new(
                     declared.allowed_line,
                     format!(
                         "allowed-commands の {command} が上限 {}（{}）の外である",
                         self.ceiling,
-                        ceiling.join(" / ")
+                        ceiling.commands.join(" / ")
                     ),
                 ));
             }
         }
-        check_lines("common-verify", &declared.common_verify, declared.common_line, declared, &mut errors);
+        let basis = Basis { allowed: &declared.allowed, denied: ceiling.denied };
+        check_lines("common-verify", &declared.common_verify, declared.common_line, &basis, &mut errors);
         // **検出線の行にも同じ検査を掛ける**（ADR-0010 §2.3 (2)・ADR-0021 §2.6・lens-132d H1）。
         // 掛けないと、共通 verify で断った迂回行を検出線の側へ置くだけで撃たせられる。
-        check_lines(DETECTION_KEY, &declared.detection_verify, declared.detection_line, declared, &mut errors);
-        check_contract(contract_verify, declared, &mut errors);
+        check_lines(DETECTION_KEY, &declared.detection_verify, declared.detection_line, &basis, &mut errors);
+        check_contract(contract_verify, &basis, &mut errors);
         if !errors.is_empty() {
             return Err(errors);
         }
@@ -302,27 +324,27 @@ impl Sourced {
 }
 
 /// 宣言の行の列（共通 verify・検出線）を全件見る。**どちらも [`BASE_HOLES`] の穴を置ける**。
-fn check_lines(key: &str, lines: &[String], at: u64, declared: &Declared, errors: &mut Vec<DeclError>) {
+fn check_lines(key: &str, lines: &[String], at: u64, basis: &Basis<'_>, errors: &mut Vec<DeclError>) {
     for line in lines {
-        if let Some(found) = unfit(line, &declared.allowed, Holes::Base) {
+        if let Some(found) = unfit(line, basis, Holes::Base) {
             errors.push(DeclError::new(
                 at,
-                format!("{key} {line:?}: {}", found.reason(&declared.allowed)),
+                format!("{key} {line:?}: {}", found.reason(basis.allowed)),
             ));
         }
     }
 }
 
 /// 契約の verify を全件見る。**基準は宣言の allowlist**（上限ではない）で、契約行は穴を持てない。
-fn check_contract(lines: &[String], declared: &Declared, errors: &mut Vec<DeclError>) {
+fn check_contract(lines: &[String], basis: &Basis<'_>, errors: &mut Vec<DeclError>) {
     for (index, line) in lines.iter().enumerate() {
-        if let Some(found) = unfit(line, &declared.allowed, Holes::None) {
+        if let Some(found) = unfit(line, basis, Holes::None) {
             errors.push(DeclError::new(
                 0,
                 format!(
                     "契約の verify {} 本目 {line:?}: {}",
                     index.saturating_add(1),
-                    found.reason(&declared.allowed)
+                    found.reason(basis.allowed)
                 ),
             ));
         }
@@ -330,7 +352,8 @@ fn check_contract(lines: &[String], declared: &Declared, errors: &mut Vec<DeclEr
 }
 
 /// 1 行が **argv 1 本**として撃てるかを見る。**この 1 本が唯一の判定**である。
-fn unfit(line: &str, allowed: &[String], holes: Holes) -> Option<Unfit> {
+fn unfit(line: &str, basis: &Basis<'_>, holes: Holes) -> Option<Unfit> {
+    let allowed = basis.allowed;
     if let Some(found) = line
         .chars()
         .find(|found| METACHARS.contains(found) || found.is_ascii_control())
@@ -354,10 +377,15 @@ fn unfit(line: &str, allowed: &[String], holes: Holes) -> Option<Unfit> {
         return Some(Unfit::Outside(word.to_owned()));
     }
     // **置ける穴は閉じた集合**（[`BASE_HOLES`]）であって `{base}` 1 つではない（ADR-0021 §2.1）。
-    holes_in(line)
+    if let Some(hole) = holes_in(line)
         .into_iter()
         .find(|hole| !(holes == Holes::Base && BASE_HOLES.contains(&hole.as_str())))
-        .map(Unfit::Hole)
+    {
+        return Some(Unfit::Hole(hole));
+    }
+    // **禁じる語列**（ADR-0025 §2.3）: hook の command guard と同じ 1 関数。verify 行は argv 1 本（制御文字なし）
+    // なので segment は 1 つである。
+    denied_in(line, basis.denied).map(|hit| Unfit::Denied(hit.sequence))
 }
 
 /// 行の中の穴を全部拾う。**閉じない `{` も穴として拾う**（黙って通さない）。
@@ -437,6 +465,8 @@ fn repo_relative(path: &str) -> bool {
 pub struct TableFacts {
     /// 上限と突き合わせた allowlist（verify 行の先頭語の基準）。
     pub allowed: Vec<String>,
+    /// 禁じる語列（rules 行 [`DENIED_ROW`]・verify 行に intake と同じ判定を掛ける基準）。
+    pub denied: Vec<String>,
     /// 要件面の repo 相対 path（宣言 `requirements`・無ければ [`DEFAULT_REQUIREMENTS`]）。
     pub requirements: String,
 }
@@ -445,14 +475,14 @@ pub struct TableFacts {
 pub fn table_facts(repo: &Path, ceiling: &Ceiling<'_>) -> Result<TableFacts, Vec<DeclError>> {
     let sourced = Sourced::read(repo, ceiling)?;
     let requirements = sourced.declared.requirements.clone().unwrap_or_else(|| DEFAULT_REQUIREMENTS.to_owned());
-    let effective = sourced.measure(ceiling.commands, &[])?;
-    Ok(TableFacts { allowed: effective.allowed, requirements })
+    let effective = sourced.measure(ceiling, &[])?;
+    Ok(TableFacts { allowed: effective.allowed, denied: ceiling.denied.to_vec(), requirements })
 }
 
 /// 契約の verify 1 行が argv 1 本として撃てない理由（撃てれば `None`）。判定は [`unfit`] の 1 本で、契約の行は
-/// 穴を持てない（intake の契約 verify と同じ字面で断る）。
-pub fn verify_unfit(line: &str, allowed: &[String]) -> Option<String> {
-    unfit(line, allowed, Holes::None).map(|found| found.reason(allowed))
+/// 穴を持てない（intake の契約 verify と同じ字面で断る・禁じる語列も同じ）。
+pub fn verify_unfit(line: &str, basis: &Basis<'_>) -> Option<String> {
+    unfit(line, basis, Holes::None).map(|found| found.reason(basis.allowed))
 }
 
 // ───────── write-set の項目の読み（設計 contract-source.md §3「項目の実在と展開」「上限の余地」・pure） ─────────
@@ -765,14 +795,24 @@ fn list_of(
 #[cfg(test)]
 mod tests {
     use super::{
-        headroom_shortfalls, line_count, read_write_set, unfit, Caps, Declared, Effective, Headroom, Holes, Sourced,
-        Unfit, WriteSetItem, BASE_HOLES, BASE_HOLE, CEILING_ROW, CORE, DECL_FILE, JOBS_HOLE,
+        headroom_shortfalls, line_count, read_write_set, unfit, Basis, Caps, Ceiling, Declared, Effective, Headroom,
+        Holes, Sourced, Unfit, WriteSetItem, BASE_HOLES, BASE_HOLE, CEILING_ROW, CORE, DECL_FILE, DENIED_ROW, JOBS_HOLE,
     };
     use crate::order::is_declaration_order;
 
     /// 文字列の列。
     fn strings(items: &[&str]) -> Vec<String> {
         items.iter().map(|item| (*item).to_owned()).collect()
+    }
+
+    /// 禁じる語列の fixture（ADR-0025 §2.1 の初期値の一部）。
+    fn denied() -> Vec<String> {
+        strings(&["cargo mutants", "git push --force", "git branch -D"])
+    }
+
+    /// 上限の fixture（`cargo` / `git` を許し [`denied`] を禁じる）。
+    fn ceiling<'a>(commands: &'a [String], denied: &'a [String]) -> Ceiling<'a> {
+        Ceiling { row: CEILING_ROW, commands, denied }
     }
 
     /// base の tracked file（write-set の項目の fixture）。
@@ -910,13 +950,14 @@ mod tests {
     /// 両向きを 1 本で撃つ: 集合を空にする変異も、逆に全部の穴を通す変異も、ここで落ちる。
     #[test]
     fn declaration_accepts_only_the_closed_set_of_holes_in_common_verify() {
-        let allowed = ["cargo".to_owned()];
+        let (allowed, denied) = (strings(&["cargo"]), denied());
+        let basis = Basis { allowed: &allowed, denied: &denied };
         assert_eq!(BASE_HOLES, [BASE_HOLE, JOBS_HOLE], "集合は 2 つちょうど");
         for hole in BASE_HOLES {
             let line = format!("cargo xtask mutants-diff --base {hole}");
-            assert_eq!(unfit(&line, &allowed, Holes::Base), None, "{hole} は共通 verify に置ける");
+            assert_eq!(unfit(&line, &basis, Holes::Base), None, "{hole} は共通 verify に置ける");
             assert_eq!(
-                unfit(&line, &allowed, Holes::None),
+                unfit(&line, &basis, Holes::None),
                 Some(Unfit::Hole((*hole).to_owned())),
                 "{hole} も契約の verify には置けない"
             );
@@ -925,17 +966,41 @@ mod tests {
         for outside in ["{jobz}", "{job}", "{jobs", "{JOBS}"] {
             let line = format!("cargo xtask mutants-diff --jobs {outside}");
             assert_eq!(
-                unfit(&line, &allowed, Holes::Base),
+                unfit(&line, &basis, Holes::Base),
                 Some(Unfit::Hole(outside.to_owned())),
                 "{outside} は置けない穴である"
             );
         }
         // 2 つを同じ行に置ける（scribe2 自身の宣言の形）。
         assert_eq!(
-            unfit("cargo xtask mutants-diff --base {base} --jobs {jobs}", &allowed, Holes::Base),
+            unfit("cargo xtask mutants-diff --base {base} --jobs {jobs}", &basis, Holes::Base),
             None,
             "2 つの穴を同じ行に置ける"
         );
+    }
+
+    /// 禁じる語列（ADR-0025 §2.3）は unfit の 6 つ目の理由: 先頭語が allowlist に在っても、rules 行 `runner.denied_commands`
+    /// の語列（先頭語一致 + 残りの語の包含・順序不問）に当たる行は `Denied` で断り、理由は行 id と語列を名指す。
+    /// 語列を 1 つも持たない基準（`denied = []`）では同じ行が通る（判定の出所は行の値である）。
+    #[test]
+    fn declaration_unfit_names_the_denied_sequence_from_the_rules_row() {
+        let (allowed, denied) = (strings(&["cargo", "git"]), denied());
+        let basis = Basis { allowed: &allowed, denied: &denied };
+        for (line, sequence) in [
+            ("cargo mutants --in-diff x", "cargo mutants"),
+            ("git push origin main --force", "git push --force"),
+            ("git branch -D feat", "git branch -D"),
+        ] {
+            let found = unfit(line, &basis, Holes::None);
+            assert_eq!(found, Some(Unfit::Denied(sequence.to_owned())), "{line}");
+            let reason = found.map(|found| found.reason(&allowed)).unwrap_or_default();
+            assert!(reason.contains(DENIED_ROW) && reason.contains(sequence), "行 id と語列を名指す: {reason}");
+        }
+        assert_eq!(unfit("cargo nextest run -p x", &basis, Holes::None), None, "当たらない行は通る");
+        assert_eq!(unfit("git push origin feat/x", &basis, Holes::Base), None, "共通 verify も同じ判定");
+        let none: Vec<String> = Vec::new();
+        let open = Basis { allowed: &allowed, denied: &none };
+        assert_eq!(unfit("cargo mutants --in-diff x", &open, Holes::None), None, "語列の無い基準では通る");
     }
 
     /// 宣言の本文。
@@ -946,14 +1011,14 @@ mod tests {
     /// 上限を通った有効値を **実経路と同じ 3 段**で組む。
     fn effective(allowed: &str, common: &str) -> Effective {
         let declared = Declared::parse(&body(allowed, common)).expect("宣言を読める");
-        let ceiling = ["cargo".to_owned(), "git".to_owned()];
+        let (commands, denied) = (strings(&["cargo", "git"]), denied());
         Sourced {
             declared,
             commit: "c0ffee".to_owned(),
             source: DECL_FILE.to_owned(),
             ceiling: CEILING_ROW.to_owned(),
         }
-        .measure(&ceiling, &[])
+        .measure(&ceiling(&commands, &denied), &[])
         .expect("上限の内側の宣言は通る")
     }
 
@@ -981,8 +1046,9 @@ mod tests {
 
         let text = format!("{}detection-verify = [\"cargo xtask mutants-diff --base {{base}} --jobs {{jobs}}\"]\n", body(r#"["cargo"]"#, r#"["cargo xtask check"]"#));
         let declared = Declared::parse(&text).expect("検出線の在る宣言を読める");
+        let (commands, denied) = (strings(&["cargo"]), denied());
         let made = Sourced { declared, commit: "c0ffee".to_owned(), source: DECL_FILE.to_owned(), ceiling: CEILING_ROW.to_owned() }
-            .measure(&["cargo".to_owned()], &[])
+            .measure(&ceiling(&commands, &denied), &[])
             .expect("穴 2 つの検出線は通る");
         assert_eq!(made.detection_verify().len(), 1, "検出線を 1 行持つ");
         let read = Effective::parse(&made.render()).expect("写しを読み戻せる");
@@ -1096,6 +1162,7 @@ mod tests {
             Unfit::Command(String::new()),
             Unfit::Outside(String::new()),
             Unfit::Hole(String::new()),
+            Unfit::Denied(String::new()),
         ];
         let order: Vec<&Unfit> = declared.iter().collect();
         assert!(
@@ -1103,8 +1170,9 @@ mod tests {
             "rank は宣言順に 0.. である（並べ替え・重複・中間の欠番を落とす）: {declared:?}"
         );
 
-        // 母集団 = 2 つ以上の理由に同時に当たる行 3 本（当たる理由は fixture が持つ）。
-        let allowed = ["cargo".to_owned()];
+        // 母集団 = 2 つ以上の理由に同時に当たる行 4 本（当たる理由は fixture が持つ）。
+        let (allowed, denied) = (strings(&["cargo"]), denied());
+        let basis = Basis { allowed: &allowed, denied: &denied };
         for (line, holes, hit) in [
             (
                 "rm -rf; echo",
@@ -1121,11 +1189,16 @@ mod tests {
                 Holes::None,
                 vec![Unfit::Outside("../up".to_owned()), Unfit::Hole("{base}".to_owned())],
             ),
+            (
+                "cargo mutants --baseline {base}",
+                Holes::None,
+                vec![Unfit::Hole("{base}".to_owned()), Unfit::Denied("cargo mutants".to_owned())],
+            ),
         ] {
             assert!(hit.len() >= 2, "{line:?} は複数の理由に当たる形である: {hit:?}");
             let first = hit.iter().min_by_key(|found| found.rank()).cloned();
             assert_eq!(
-                unfit(line, &allowed, holes),
+                unfit(line, &basis, holes),
                 first,
                 "{line:?} が当たる理由 {hit:?} のうち宣言順で最初のものを返す"
             );

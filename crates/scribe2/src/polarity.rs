@@ -73,6 +73,9 @@ pub enum Guard {
     Permission,
     /// 席の context 上限の cap guard（[`crate::hook::seat_guard`]・FailOpen）。
     Cap,
+    /// Bash の command guard＝rules 行 `runner.denied_commands` の語列に当たる command を実行の時点で止める
+    /// （[`crate::hook::command`]・ADR-0025 §2.2）。
+    Command,
     /// 席の登録の受付＝打刻の無い session からの登録を断る（[`crate::seat::role`]）。
     Register,
     /// 席の権能の執行＝役割の行に無い権能付き subcommand と path 種別の編集を止める（[`crate::hook::role_guard`]）。
@@ -122,6 +125,7 @@ pub const ALL: &[Guard] = &[
     Guard::WriteSet,
     Guard::Permission,
     Guard::Cap,
+    Guard::Command,
     Guard::Register,
     Guard::Role,
     Guard::ContractTable,
@@ -152,6 +156,7 @@ impl Guard {
             Self::WriteSet => crate::hook::guard::POLARITY,
             Self::Permission => crate::hook::permission::POLARITY,
             Self::Cap => crate::hook::seat_guard::POLARITY,
+            Self::Command => crate::hook::command::POLARITY,
             Self::Register => crate::seat::role::POLARITY,
             Self::Role => crate::hook::role_guard::POLARITY,
             Self::ContractTable => crate::pipe::table::POLARITY,
@@ -182,6 +187,7 @@ impl Guard {
             Self::WriteSet => "hook::guard::Decision",
             Self::Permission => "hook::permission::PermissionDecision",
             Self::Cap => "hook::seat_guard::SeatDecision",
+            Self::Command => "hook::command::CommandDecision",
             Self::Register => "seat::role::RegisterRefusal",
             Self::Role => "hook::role_guard::RoleDecision",
             Self::ContractTable => "pipe::table::TableError",
@@ -212,6 +218,7 @@ impl Guard {
             Self::WriteSet => "write-set-guard",
             Self::Permission => "permission-deny",
             Self::Cap => "cap-guard",
+            Self::Command => "command-guard",
             Self::Register => "register-refusal",
             Self::Role => "role-guard",
             Self::ContractTable => "contract-table",

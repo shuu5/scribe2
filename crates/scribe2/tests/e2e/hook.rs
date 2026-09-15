@@ -636,6 +636,137 @@ fn hook_guard_allows_bash_when_policy_unreadable() {
     clean(&[&repo, &state]);
 }
 
+// ─────────────── Bash の command guard（`s2-07l.168`・ADR-0025 §2.2・設計 vessel-hook.md §5・接頭辞 `hook_command_`） ───────────────
+//
+// rules 行 `runner.denied_commands` の語列に当たる Bash を実行の時点で止める。席の弁別はしない（`--pane` 無しの runner
+// にも同じ判定）ので、偽 tmux は要らない。
+
+/// 記録のうち command guard の行（`what` が `command-deny` で始まる）。
+fn command_records(state: &Path) -> Vec<String> {
+    inject_lines(state).into_iter().filter(|line| what_of(line).starts_with("command-deny")).collect()
+}
+
+/// deny の外形（rc 2・stdout 0 byte・stderr 1 行）を見て、stderr が rules 行 id と語列を名指すことを確かめる。
+fn assert_command_deny(out: &Output, sequence: &str, why: &str) -> String {
+    assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "{why}: deny は rc 2: {}", stderr_text(out));
+    assert!(out.stdout.is_empty(), "{why}: deny でも stdout は 0 byte");
+    assert_eq!(stderr_lines(out), 1, "{why}: deny の stderr は 1 行: {}", stderr_text(out));
+    let text = stderr_text(out);
+    assert!(text.starts_with(&format!("{NAME}: deny ")), "{why}: 器が名乗る: {text}");
+    assert!(text.contains("runner.denied_commands"), "{why}: rules 行 id を名指す: {text}");
+    assert!(text.contains(sequence), "{why}: 当たった語列 {sequence:?} を名指す: {text}");
+    text
+}
+
+/// (a) marker を持つ repo で `git push --force origin main` の Bash → rc 2・stderr 1 行（行 id・語列・次の一手）・
+/// stdout 0 byte・`inject.jsonl` に `who=hook:pre-tool-use` / `what=command-deny <語列>` の 1 行（席は無し＝null）。
+/// 埋め込み manifest（`--rules` 無し）と fixture の `--rules` の両方で同じ deny＝裁定の値が binary に在る。
+#[test]
+fn hook_command_guard_denies_a_denied_sequence_from_bash() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    let payload = bash_payload(&repo, "git push --force origin main");
+
+    let before = command_records(&state).len();
+    let out = run_hook("pre-tool-use", &payload);
+    let text = assert_command_deny(&out, "git push --force", "埋め込み manifest の deny");
+    assert!(text.contains("N1 / C16") && text.contains("書き直す"), "次の一手を含む: {text}");
+    let lines = command_records(&state);
+    assert_eq!(lines.len(), before + 1, "記録は 1 行増える: {lines:?}");
+    let line = lines.last().cloned().unwrap_or_default();
+    assert_eq!(what_of(&line), "command-deny git push --force", "記録の what: {line}");
+    assert_eq!(value_of(&line, "who"), Some(json_lite::Value::Str("hook:pre-tool-use".to_owned())), "{line}");
+    assert_eq!(value_of(&line, "when"), Some(json_lite::Value::Str("PreToolUse".to_owned())), "{line}");
+    assert_eq!(value_of(&line, "seat"), Some(json_lite::Value::Null), "席ではない周の seat は null: {line}");
+    assert_eq!(value_of(&line, "bytes"), Some(json_lite::Value::Num(text.len() as u64)), "出した 1 行の byte 数: {line}");
+
+    // fixture の manifest（`--rules`）でも同じ deny（値は行から来る）。
+    let rules = state.join("rules.toml");
+    fs::write(&rules, role_rules_text(PLANNER_CAPS, Some(ADMIN_CAPS))).expect("rules を書ける");
+    let out = run_hook_args(&["pre-tool-use", "--rules", &rules.display().to_string()], &payload);
+    assert_command_deny(&out, "git push --force", "fixture の manifest の deny");
+    // 語列の先頭語が segment の先頭語でない command（`echo git push --force`）は当たらない。
+    let out = run_hook("pre-tool-use", &bash_payload(&repo, "echo git push --force"));
+    assert_silent(&out, "先頭語が違う segment は当たらない");
+    clean(&[&repo, &state]);
+}
+
+/// (b) 当たらない Bash（`cargo nextest run -p x`）→ rc 0・0 byte・記録なし（hook budget・write-set guard と同じ沈黙）。
+/// marker を持たない repo では当たる command でも 0 byte（FR24・他の repo を汚さない）。
+#[test]
+fn hook_command_guard_passes_allowed_command_silently() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    let before = inject_lines(&state).len();
+    let out = run_hook("pre-tool-use", &bash_payload(&repo, "cargo nextest run -p x"));
+    assert_silent(&out, "当たらない command は通す");
+    assert_eq!(inject_lines(&state).len(), before, "通す周は記録も残さない");
+    let out = run_hook("pre-tool-use", &bash_payload(&repo, "git push origin feat/x"));
+    assert_silent(&out, "force の無い push は通す");
+
+    let bare = git_repo();
+    let out = run_hook("pre-tool-use", &bash_payload(&bare, "git push --force origin main"));
+    assert_silent(&out, "marker の無い repo では仕えない（FR24）");
+    clean(&[&repo, &state, &bare]);
+}
+
+/// (c) rules が読めない（`--rules` に dir・無い file）→ deny（FailClosed・`reason=rules-unreadable`）／行の無い manifest →
+/// deny（`reason=no-row runner.denied_commands`）。当たらない command でも止まる＝禁じる語列を解けない周は通さない。
+#[test]
+fn hook_command_guard_denies_when_rules_unreadable() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    let payload = bash_payload(&repo, "cargo nextest run -p x");
+    let dir = state.join("rules-dir");
+    fs::create_dir_all(&dir).expect("dir を作れる");
+    for (rules, why) in [(dir.display().to_string(), "dir"), (state.join("nope.toml").display().to_string(), "無い file")] {
+        let before = command_records(&state).len();
+        let out = run_hook_args(&["pre-tool-use", "--rules", &rules], &payload);
+        assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "{why}: 読めない rules は deny: {}", stderr_text(&out));
+        assert!(out.stdout.is_empty(), "{why}: stdout 0 byte");
+        let text = stderr_text(&out);
+        assert_eq!(text.lines().count(), 1, "{why}: stderr 1 行: {text}");
+        assert!(text.contains("runner.denied_commands") && text.contains("reason=rules-unreadable"), "{why}: {text}");
+        let lines = command_records(&state);
+        assert_eq!(lines.len(), before + 1, "{why}: 記録 1 行: {lines:?}");
+        assert_eq!(what_of(&lines.last().cloned().unwrap_or_default()), "command-deny reason=rules-unreadable", "{why}");
+    }
+    // 行の無い manifest（読めるが `runner.denied_commands` が無い）も deny。
+    let rowless = state.join("rowless.toml");
+    fs::write(&rowless, format!("schema = 1\n{}", role_rows_text(PLANNER_CAPS, Some(ADMIN_CAPS)))).expect("rules を書ける");
+    let out = run_hook_args(&["pre-tool-use", "--rules", &rowless.display().to_string()], &payload);
+    assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "行の無い manifest は deny: {}", stderr_text(&out));
+    assert!(stderr_text(&out).contains("reason=no-row runner.denied_commands"), "{}", stderr_text(&out));
+    // Edit は command guard の対象でない（rules が読めなくても write-set guard の判定のまま）。
+    let out = run_hook_args(&["pre-tool-use", "--rules", &dir.display().to_string()], &tool_payload(&repo, "Edit", "src/lib.rs"));
+    assert_silent(&out, "Edit は command guard を通らない（policy 不在＝write-set guard は不活性）");
+    clean(&[&repo, &state]);
+}
+
+/// (d) 語列は**順序不問**で当たる: `git push origin main --force` も `git push origin main -f` も deny。連結（`;` / `&&`）
+/// の後ろの segment も見る。`--force-with-lease` は語が違う＝当たらない（語の包含であって前方一致ではない）。
+#[test]
+fn hook_command_guard_matches_sequence_regardless_of_flag_order() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    for (line, sequence) in [
+        ("git push origin main --force", "git push --force"),
+        ("git push origin main -f", "git push -f"),
+        ("cargo build && git push --force origin main", "git push --force"),
+        ("echo x; git branch -D feat", "git branch -D"),
+        ("cargo mutants --in-diff x.diff", "cargo mutants"),
+    ] {
+        let out = run_hook("pre-tool-use", &bash_payload(&repo, line));
+        let text = assert_command_deny(&out, sequence, line);
+        assert!(text.contains(&format!("deny {sequence} は")), "当たった語列は表の字面: {text}");
+    }
+    for line in ["git push --force-with-lease origin feat/x", "git branch -d feat", "git stash list"] {
+        let out = run_hook("pre-tool-use", &bash_payload(&repo, line));
+        assert_silent(&out, line);
+    }
+    clean(&[&repo, &state]);
+}
+
 #[test]
 fn hook_is_silent_for_unknown_event_and_outside_repo() {
     let repo = git_repo();
@@ -1853,8 +1984,21 @@ const PLANNER_CAPS: &[&str] =
 /// 管理席の権能（同じ 2 つの裁定）。
 const ADMIN_CAPS: &[&str] = &["launch", "relay", "merge", "edit-outside"];
 
-/// 役割ごとの行を持つ rules manifest の本文（`admin` が `None` なら管理席の行を置かない）。
-fn role_rules_text(planner: &[&str], admin: Option<&[&str]>) -> String {
+/// 禁じる語列の fixture（rules 行 `runner.denied_commands`・ADR-0025 §2.1 の初期値の一部・`s2-07l.168`）。
+const DENIED_SEQUENCES: &[&str] = &["cargo mutants", "git push --force", "git push -f", "git branch -D"];
+
+/// 禁じる語列の行の本文（[`DENIED_SEQUENCES`]）。Bash の command guard はこの行が無い manifest では全 Bash を止める
+/// （FailClosed）ので、Bash を撃つ fixture の manifest は必ずこの行を持つ。
+fn denied_row_text() -> String {
+    let quoted: Vec<String> = DENIED_SEQUENCES.iter().map(|item| format!("\"{item}\"")).collect();
+    format!(
+        "\n[[rule]]\nid = \"runner.denied_commands\"\nkind = \"RunnerDeniedCommands\"\nvalue = [{}]\nenabled = true\nruling = \"r\"\nruled_at = \"2026-09-14\"\n",
+        quoted.join(", ")
+    )
+}
+
+/// 役割ごとの行の本文（`admin` が `None` なら管理席の行を置かない・`schema` 行と禁じる語列の行は持たない）。
+fn role_rows_text(planner: &[&str], admin: Option<&[&str]>) -> String {
     let row = |id: &str, names: &[&str]| {
         let quoted: Vec<String> = names.iter().map(|name| format!("\"{name}\"")).collect();
         format!(
@@ -1862,11 +2006,16 @@ fn role_rules_text(planner: &[&str], admin: Option<&[&str]>) -> String {
             quoted.join(", ")
         )
     };
-    let mut text = format!("schema = 1\n{}", row("role.planner", planner));
+    let mut text = row("role.planner", planner);
     if let Some(names) = admin {
         text.push_str(&row("role.admin", names));
     }
     text
+}
+
+/// 役割ごとの行と禁じる語列の行を持つ rules manifest の本文（`admin` が `None` なら管理席の行を置かない）。
+fn role_rules_text(planner: &[&str], admin: Option<&[&str]>) -> String {
+    format!("schema = 1\n{}{}", denied_row_text(), role_rows_text(planner, admin))
 }
 
 /// 置き場を 1 つ作る（rules は裁定の値と同じ 2 行）。
@@ -2178,9 +2327,11 @@ fn hook_role_fails_closed_on_missing_rows_and_requires_every_capability_on_the_l
     let args = ["pre-tool-use", "--pane", &admin_pane, "--tmux-socket", &place.socket, "--rules", &missing];
     let text = assert_role_deny(&run_hook_args(&args, &launch), "読めない manifest");
     assert!(text.contains("reason=rules-unreadable"), "{text}");
-    // 不発効の行も権能なし（値は写すが機械は効かせない）。
+    // 不発効の行も権能なし（値は写すが機械は効かせない）。不発効にするのは役割の行だけ（禁じる語列の行は発効の
+    // まま＝先に立つ command guard の門で止まらない）。
     let disabled = place.sock_dir.join("disabled.toml");
-    let body = role_rules_text(PLANNER_CAPS, Some(ADMIN_CAPS)).replace("enabled = true", "enabled = false");
+    let roles = role_rows_text(PLANNER_CAPS, Some(ADMIN_CAPS)).replace("enabled = true", "enabled = false");
+    let body = format!("schema = 1\n{}{roles}", denied_row_text());
     fs::write(&disabled, body).unwrap_or_else(|err| panic!("{err}"));
     let args = ["pre-tool-use", "--pane", &admin_pane, "--tmux-socket", &place.socket, "--rules", &disabled.display().to_string()];
     let text = assert_role_deny(&run_hook_args(&args, &launch), "不発効の行");

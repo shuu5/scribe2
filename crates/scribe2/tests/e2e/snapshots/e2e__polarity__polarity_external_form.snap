@@ -5,6 +5,7 @@ expression: form
 guard=write-set-guard timing=in-loop on-failure=fail-closed boundary=hook::guard::Decision
 guard=permission-deny timing=in-loop on-failure=fail-closed boundary=hook::permission::PermissionDecision
 guard=cap-guard timing=in-loop on-failure=fail-open boundary=hook::seat_guard::SeatDecision
+guard=command-guard timing=in-loop on-failure=fail-closed boundary=hook::command::CommandDecision
 guard=register-refusal timing=in-loop on-failure=fail-closed boundary=seat::role::RegisterRefusal
 guard=role-guard timing=in-loop on-failure=fail-closed boundary=hook::role_guard::RoleDecision
 guard=contract-table timing=post-hoc on-failure=fail-closed boundary=pipe::table::TableError
@@ -26,4 +27,4 @@ guard=inject-refusal timing=in-loop on-failure=fail-closed boundary=seat::inject
 guard=cycle-refusal timing=in-loop on-failure=fail-closed boundary=seat::cycle::Cycle
 guard=externalize-refusal timing=in-loop on-failure=fail-closed boundary=seat::externalize::ExternalizeError
 guard=consume-refusal timing=in-loop on-failure=fail-closed boundary=seat::consume::ConsumeError
-polarity: guards=24 in-loop=19 post-hoc=5 fail-open=4
+polarity: guards=25 in-loop=20 post-hoc=5 fail-open=4

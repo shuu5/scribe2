@@ -126,6 +126,10 @@ pub enum RuleKind {
     /// **宣言が名乗れる上限**（ADR-0010 §2.2）。対象 repo の vessel 宣言
     /// `allowed-commands` はこの部分集合でなければ intake が便を起こさない。
     RunnerAllowedCommands,
+    /// **禁じる語列**（ADR-0025 §2.1）。[`Self::RunnerAllowedCommands`] と対で読む**上限側の禁止**で、値は
+    /// 空白区切りの語列の配列（先頭語が一致し残りの語をすべて含む command を hook の command guard と intake が
+    /// 止める）。vessel 宣言は緩められない（C14）。
+    RunnerDeniedCommands,
     /// **tracked な非 Rust 実行物の例外**（ADR-0009 §2.5）。分類器（shebang / 実行 bit /
     /// 拡張子）に当たる path のうち、この列に**完全一致**で載るものだけを `xtask check` が
     /// 通す。定義を緩める代わりに例外を 1 面へ集めるための行である。
@@ -202,6 +206,7 @@ pub const ALL: &[RuleKind] = &[
     RuleKind::SeatTickStaleS,
     RuleKind::SeatCycleLockTtlS,
     RuleKind::RunnerAllowedCommands,
+    RuleKind::RunnerDeniedCommands,
     RuleKind::RepoNonRustExecAllow,
     RuleKind::SeatCycleSettleS,
     RuleKind::SeatCyclePollMs,
@@ -255,6 +260,7 @@ impl RuleKind {
             Self::SeatTickStaleS => "SeatTickStaleS",
             Self::SeatCycleLockTtlS => "SeatCycleLockTtlS",
             Self::RunnerAllowedCommands => "RunnerAllowedCommands",
+            Self::RunnerDeniedCommands => "RunnerDeniedCommands",
             Self::RepoNonRustExecAllow => "RepoNonRustExecAllow",
             Self::SeatCycleSettleS => "SeatCycleSettleS",
             Self::SeatCyclePollMs => "SeatCyclePollMs",
@@ -324,9 +330,10 @@ impl RuleKind {
             | Self::MutationSurvivalLine
             | Self::CompileShape
             | Self::CompileSeconds => ValueShape::Policy,
-            Self::RunnerAllowedCommands | Self::RepoNonRustExecAllow | Self::RoleCapabilities => {
-                ValueShape::List
-            }
+            Self::RunnerAllowedCommands
+            | Self::RunnerDeniedCommands
+            | Self::RepoNonRustExecAllow
+            | Self::RoleCapabilities => ValueShape::List,
         }
     }
 
@@ -434,6 +441,7 @@ impl RuleRow {
     /// 値が**閉じた名の集合**を指す kind は、名を core の enum で引けることまで検査する（設計
     /// seat-roles.md §3・ADR-0022 §2.2）: `RoleCapabilities` の列は [`Capability`] の名、`DialogueSurface`
     /// の値は [`Role`] の名。綴り違いを黙って「権能なし」「対話面なし」に倒さない（NFR4）。
+    /// `RunnerDeniedCommands` の各要素は語を 1 つ以上持つ（空白だけの語列は何にも当たらず黙って効かない・ADR-0025 §2.1）。
     fn names_are_known(&self) -> Result<(), RuleError> {
         let unknown = |what: &str, name: &str, taken: &[&str]| {
             RuleError::new(
@@ -452,6 +460,15 @@ impl RuleRow {
             (RuleKind::DialogueSurface, RuleValue::Str(name)) if Role::parse(name).is_none() => {
                 let taken: Vec<&str> = ROLES.iter().map(|found| found.as_str()).collect();
                 Err(unknown("役割", name, &taken))
+            }
+            (RuleKind::RunnerDeniedCommands, RuleValue::List(sequences)) => {
+                match sequences.iter().find(|sequence| sequence.split_whitespace().next().is_none()) {
+                    Some(blank) => Err(RuleError::new(
+                        self.line,
+                        format!("{} の value に語を持たない語列 {blank:?}（各要素は空白区切りの語 1 つ以上）", self.id),
+                    )),
+                    None => Ok(()),
+                }
             }
             _ => Ok(()),
         }
