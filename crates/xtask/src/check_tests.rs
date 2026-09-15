@@ -33,8 +33,8 @@ const FIXTURE_CHANNEL: &str = "1.98.1";
 /// 同一 process 内での dir 名衝突を避ける連番。
 static SEQ: AtomicU32 = AtomicU32::new(0);
 
-/// repo の外に一意な tmp dir を作る。
-fn make_tmp_dir() -> PathBuf {
+/// repo の外に一意な tmp dir を作る（`rules_wired::tests` も manifest の fixture を置くのに使う）。
+pub(crate) fn make_tmp_dir() -> PathBuf {
     let base = std::env::temp_dir();
     for _ in 0..8 {
         let nanos = SystemTime::now()
@@ -297,13 +297,26 @@ const SUMMARY_PIN: &str = "xtask check: ok core-lines=<v>/<v> file-lines=<v>/<v>
     toolchain-pin=<v>.<v>.<v> \
     paths-clean=<v> private-clean=<v> non-rust-exec=<v>/<v> allow=<v> ci-shell-lines=<v> \
     claude-md-constitution=<v> claude-md-done=<v> claude-md-prose=<v>/<v> enum-slices=<v> claude-spawn-points=<v> env-reads=<v>/<v> polarity=<v>/<v> \
-    prose-gate=<v>/<v> seat-brief=<v> contracts-schema=<v>";
+    prose-gate=<v>/<v> seat-brief=<v> contracts-schema=<v> rules-wired=<v>/<v>";
 
 /// git を要する measure の fact（`.git` の無い木では測れない形になり、副 field も出ない）。
 fn is_git_fact(token: &str) -> bool {
     ["paths-clean=", "private-clean=", "non-rust-exec=", "allow=", "prose-gate="]
         .iter()
         .any(|prefix| token.starts_with(prefix))
+}
+
+/// `rules-wired` の副 field `ids=`（読み手の無い行 id の列）。値の**中身**が形を決める（`R-C7-1` の `-` や
+/// `hook.budget_ms` の `.` `_` は [`shape`] が残す区切り）ので、wire の便が列を縮めるたびに形が変わる。
+/// 検出線の値であって判定行の形ではないので、[`SUMMARY_PIN`] との突合からはこの 1 token だけを外す
+/// （1 つだけ在ること・`rules-wired=` の直後に来ることは別に見る・`s2-07l.160`）。
+fn is_wired_ids(token: &str) -> bool {
+    token.starts_with("ids=")
+}
+
+/// `ids=` の副 field を除いた並び。
+fn without_wired_ids(shaped: &str) -> String {
+    shaped.split(' ').filter(|token| !is_wired_ids(token)).collect::<Vec<&str>>().join(" ")
 }
 
 /// 判定行の**名前・並び・値の書式**を外形として pin する（ADR-0013 §2.1・`s2-07l.87`）。
@@ -331,11 +344,18 @@ fn check_summary_shape_pins_names_order_and_value_forms() {
     for token in facts.split(' ').filter(|token| !token.is_empty()) {
         assert!(token.contains('='), "fact の token は k=v 形のはず: {token} in {line}");
     }
+    // `rules-wired` の副 field `ids=` は **1 つだけ・`rules-wired=` の直後**に在る（列の中身は pin しない・
+    // [`is_wired_ids`]）。token ごと消える実装と、別の場所へ動く実装はここで落ちる。
+    let tokens: Vec<&str> = facts.split(' ').collect();
+    assert_eq!(tokens.iter().filter(|token| is_wired_ids(token)).count(), 1, "ids= は 1 つ: {line}");
+    let ids_at = tokens.iter().position(|token| is_wired_ids(token));
+    let before_ids = ids_at.and_then(|at| at.checked_sub(1)).and_then(|at| tokens.get(at));
+    assert!(before_ids.is_some_and(|token| token.starts_with("rules-wired=")), "ids= は rules-wired= の直後: {line}");
     if root.join(".git").exists() {
-        assert_eq!(shape(&line), SUMMARY_PIN, "判定行の現物: {line}");
+        assert_eq!(without_wired_ids(&shape(&line)), SUMMARY_PIN, "判定行の現物: {line}");
     } else {
         let without_git = |shaped: &str| {
-            shaped
+            without_wired_ids(shaped)
                 .split(' ')
                 .filter(|token| !is_git_fact(token))
                 .collect::<Vec<&str>>()

@@ -85,6 +85,7 @@ pub fn inspect(root: &Path) -> Report {
     measured.push(crate::prose_gate::measure(&layout));
     measured.push(crate::seat_brief::measure(&layout));
     measured.push(crate::check_facts::measure_contracts_schema(&layout));
+    measured.push(crate::rules_wired::measure(&layout, &files));
     fold(measured)
 }
 

@@ -58,7 +58,7 @@ ruled_at = "2026-09-07"
 
 **書かない key**: user 逐語（PUBLIC・CON2）。**置かない行**: 値が未定の行（§3 R-C6-1）・実装が無い seam の行（rtk / graphify のモード・C10.3「未 wire の設定」）・AI が置いただけで裁定の無い行。
 
-**行の読み手と 2 面の突合**（`cargo xtask check` の検出線・deny 化は rules 行と裁定 id で行う）: enabled な行のうち `crates/*/src` に const の値として現れ使われる読み手が無い行は `rules-wired` が名指す（`s2-07l.160`）。憲法 §3 の `<tr id="r-…">` の id 集合と manifest の `R-…` 行の接頭辞集合は `rules-parity` が双方向に突合し、片側だけの id を名指す（`s2-07l.164`・運用行は母集団外・HTML の読み手は `claude_md.rs` を共有する）。`R-C13-1.per-pr` / `R-C13-1` の読み手は `xtask deps-delta`（`--base` との直接依存の差分・超えれば PR の入口で落ちる）で、依存を足した便の `check-delta-ms` は検出線として判定行に残る（`s2-07l.161`）。
+**行の読み手と 2 面の突合**（`cargo xtask check` の検出線・deny 化は rules 行と裁定 id で行う）: enabled な行のうち `crates/*/src` に const の値として現れ使われる読み手が無い行は `rules-wired` が名指す（`s2-07l.160`・fact は `rules-wired=<読み手の無い本数>/<enabled の本数> ids=<列>`・宣言側の 4 file〔`rules/mod.rs` / `rules/manifest.rs` / `genmanifest.rs` / `rules_diff.rs`〕・test 区間・`enabled = false` の行は母集団外・rc は変えない）。憲法 §3 の `<tr id="r-…">` の id 集合と manifest の `R-…` 行の接頭辞集合は `rules-parity` が双方向に突合し、片側だけの id を名指す（`s2-07l.164`・運用行は母集団外・HTML の読み手は `claude_md.rs` を共有する）。`R-C13-1.per-pr` / `R-C13-1` の読み手は `xtask deps-delta`（`--base` との直接依存の差分・超えれば PR の入口で落ちる）で、依存を足した便の `check-delta-ms` は検出線として判定行に残る（`s2-07l.161`）。
 
 ### 4.1 初期行（§3 の写し + MVP の運用値・全行に裁定 id）
 
@@ -163,7 +163,7 @@ id = "a"
 title = "読み手の無い enabled な rules 行を xtask check の検出線 rules-wired が名指す"
 req = ["FR17"]
 section = "4"
-write-set = ["+crates/xtask/src/rules_wired.rs", "crates/xtask/src/check.rs", "crates/xtask/src/main.rs", "crates/xtask/src/check_tests.rs", "docs/design/rules-manifest.md"]
+write-set = ["crates/xtask/src/rules_wired.rs", "crates/xtask/src/check.rs", "crates/xtask/src/main.rs", "crates/xtask/src/check_tests.rs", "docs/design/rules-manifest.md"]
 verify = ["cargo nextest run -p xtask --no-tests=fail rules_wired_"]
 size = "S"
 done = "xtask check の判定行に rules-wired の fact（unwired の本数と id）が出て rc は変わらない"
