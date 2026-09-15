@@ -36,6 +36,7 @@
 - **解く順**: anchor → pane → target → 登録 row → role → 行 → 権能。**anchor（repo root・state dir）は payload の `cwd` でなく、生成 hooks.json の shell 行が渡す `--project`（session の起動 dir・Claude Code が hook の command に与える project dir・席が `cd` しても変わらない・`--pane` と同型で binary は env を読まない〔C2.2〕）から解く**。`--project` が無い周（旧 hooks.json）は `cwd` で解く（互換・生成物の更新で消える）。pane が空（tmux の外・runner / lens）は席ではなく本 guard の対象外（ADR-0009 の write-set guard と allowlist がそのまま担う）。**pane が在るのに anchor が解けない（root が無い・`served` が `ByMe` でない・state dir が無い）周と、登録 row が無い・target が解けない周は権能なし＝権能付きの操作を deny（FailClosed・理由を stderr に 1 行・記録 1 行）**。[vessel-hook.md](./vessel-hook.md) の「仕えない周は黙る」（FR24）は pane が無い周にだけ当たる（席が repo の外へ `cd` しても guard は外れない）。止めるのは権能付きの操作だけで、それ以外の Bash / Edit は通す。
 - **deny 文**: 権能を持つ役割の名を含む（例の形: `<NAME>: この操作は <役割名> 席の権能（rules 行 <id>）`・字面は現物が正本）。**記録行**: allow の周も target と command の種別を 1 行（hook の消費記録と同じ置き場 `<state_dir>/inject.jsonl`・[vessel-hook.md](./vessel-hook.md)。打刻の `state.jsonl` には書かない）。
 - **subcommand は役割を検査しない**（引数の identity は偽装できる）。発話は監視しない。
+- **runner / lens は pane を持たない（起動の包みの 2 口で同じ）**: 便の runner / lens / verify 行は行の包み（`confine::wrap_line`）が起動側の `TMUX_PANE` を外す（s2-07l.216）。`headless/mod.rs` の `build`（runner と lens の唯一の構築点・pipe の外から `<NAME> runner` / `<NAME> lens` を単体起動した周もここを通る）は command の包み（`confine::wrap_command`）を通り、こちらは `TMUX_PANE` を外していなかった＝席の pane の中から単体起動した runner の hook が `--pane` で**その席の打刻と読み込み元の記録**に混入する（2026-09-15 15:23Z・別 repo の管理席が run の plugin 写しで runner を単体起動し、席の `plugin` 記録が run dir を指した）。**2 つの包みは同じ 1 点で `TMUX_PANE` を外す**（`wrap_command` に置き `wrap_line` はそれを通る・外す名は 1 つの const・足す env は無い・C2.2）。runner は席ではない（FR40）ので hook は `--pane` 空で黙る（既存）。
 
 ## 5. 注入（ADR-0022 §2.4）
 
@@ -111,4 +112,15 @@ write-set = ["crates/scribe2/tests/e2e/seat.rs", "-crates/scribe2/tests/e2e/seat
 verify = ["cargo nextest run -p scribe2 --no-tests=fail seat::launch:: seat::register:: seat::rules::"]
 size = "S"
 done = "account.rs が seat_account_ と seat_tick_ と doctor_accounts_ だけになり、3 module に歯が移って 4 module の合計が移す前の seat::account:: の本数と一致し中身も不変、gate の lens 入力が diff でなく要約"
+
+[[contract]]
+id = "c"
+title = "runner / lens の起動の包み 2 口で TMUX_PANE を外す — pipe の外の単体起動でも席の打刻と plugin 記録に混入しない"
+req = ["FR40", "FR21"]
+section = "4"
+touches = ["crate::pipe::confine::Confinement"]
+tests = ["crates/scribe2/tests/e2e/headless.rs"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail headless_runner_drops_tmux_pane headless_lens_drops_tmux_pane"]
+size = "S"
+done = "席の pane の中から runner / lens を単体起動しても claude の env に TMUX_PANE が無く、PATH は継承され、wrap_command と wrap_line の両方が同じ 1 点で外す"
 <!-- contracts:end -->
