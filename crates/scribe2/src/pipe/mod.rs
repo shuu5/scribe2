@@ -291,30 +291,50 @@ pub struct Question {
     pub answer: Option<String>,
 }
 
-/// 便の**最新の**質問を event log から読む。質問が 1 件も無ければ `None`。
+/// 便の質問と回答の対を event log から**発生順に全部**読む。質問が 1 件も無ければ空（log を
+/// 読めない周も空＝呼び手が「質問なし」の側へ倒す）。
 ///
 /// replay の `Run::detail` からは読めない（最後に見た自由文しか残らない）ので、追記だけの
-/// log を遡って原本を読む（[`base_of_run`] と同じ理由）。回答は最新の質問より後の行だけを
-/// 数える＝前の質問への回答で次の質問の関門が開かない。
-pub fn question_of_run(state_dir: &Path, id: &str) -> Option<Question> {
-    let events = store::read_all(state_dir).ok()?;
+/// log を遡って原本を読む（[`base_of_run`] と同じ理由）。1 対の区間は `QuestionRaised` から
+/// 次の `QuestionRaised` の直前までで、`about` と回答はその区間の行だけを数える＝前の質問への
+/// 回答で次の質問の関門が開かない。gate はこの列を裁定の写し（`rulings.txt`）に写して lens へ
+/// 渡す（`s2-07l.309`・設計 pipeline-question.md）。
+pub fn questions_of_run(state_dir: &Path, id: &str) -> Vec<Question> {
+    let Ok(events) = store::read_all(state_dir) else {
+        return Vec::new();
+    };
     let own: Vec<&Event> = events.iter().filter(|event| event.run == id).collect();
-    let raised = own
+    let starts: Vec<usize> = own
         .iter()
-        .rposition(|event| event.kind == EventKind::QuestionRaised)?;
-    let after = own.get(raised..)?;
-    let question = after.first()?.detail.clone().unwrap_or_default();
-    let about = after
+        .enumerate()
+        .filter(|(_, event)| event.kind == EventKind::QuestionRaised)
+        .map(|(at, _)| at)
+        .collect();
+    starts
         .iter()
-        .find(|event| event.kind == EventKind::RunStage && event.stage == Some(Stage::Questioned))
-        .and_then(|event| event.detail.as_deref())
-        .and_then(|detail| detail.strip_prefix("about:"))
-        .map(str::to_owned);
-    let answer = after
-        .iter()
-        .filter(|event| event.kind == EventKind::QuestionAnswered)
-        .find_map(|event| event.detail.clone().filter(|words| !words.trim().is_empty()));
-    Some(Question { question, about, answer })
+        .enumerate()
+        .filter_map(|(nth, raised)| {
+            let end = starts.get(nth.saturating_add(1)).copied().unwrap_or(own.len());
+            let span = own.get(*raised..end)?;
+            let question = span.first()?.detail.clone().unwrap_or_default();
+            let about = span
+                .iter()
+                .find(|event| event.kind == EventKind::RunStage && event.stage == Some(Stage::Questioned))
+                .and_then(|event| event.detail.as_deref())
+                .and_then(|detail| detail.strip_prefix("about:"))
+                .map(str::to_owned);
+            let answer = span
+                .iter()
+                .filter(|event| event.kind == EventKind::QuestionAnswered)
+                .find_map(|event| event.detail.clone().filter(|words| !words.trim().is_empty()));
+            Some(Question { question, about, answer })
+        })
+        .collect()
+}
+
+/// 便の**最新の**質問（[`questions_of_run`] の末尾）。質問が 1 件も無ければ `None`。
+pub fn question_of_run(state_dir: &Path, id: &str) -> Option<Question> {
+    questions_of_run(state_dir, id).pop()
 }
 
 /// git を 1 回撃って stdout を byte のまま得る。rc≠0 は `None`。
@@ -485,8 +505,46 @@ pub(crate) mod fixture {
 #[cfg(test)]
 mod tests {
     use super::fixture::{append_all, event, scratch};
-    use super::{last_stage_detail, runner_is_idle};
+    use super::{last_stage_detail, question_of_run, questions_of_run, runner_is_idle, Question};
     use crate::fleet::{EventKind, Stage};
+
+    /// `questions_of_run` は対を**発生順に全部**返し、`question_of_run` はその末尾である（`s2-07l.309`）。
+    /// 1 対の区間は次の `QuestionRaised` の直前まで＝1 つ目の回答は 2 つ目の質問に付かず、`about` の無い対は
+    /// `None`・空白だけの回答は数えない。他の便の質問は数えず、質問の無い便は空 / `None`。
+    #[test]
+    fn pipe_mod_questions_of_returns_all_pairs_and_question_of_is_the_last() {
+        let root = scratch("questions-of");
+        append_all(
+            &root,
+            &[
+                event("me", EventKind::QuestionRaised, None, None, Some("q1")),
+                event("me", EventKind::RunStage, Some(Stage::Questioned), None, Some("about:verify")),
+                event("me", EventKind::QuestionAnswered, None, None, Some("a1")),
+                event("other", EventKind::QuestionRaised, None, None, Some("not-mine")),
+                event("me", EventKind::QuestionRaised, None, None, Some("q2")),
+                event("me", EventKind::RunStage, Some(Stage::Questioned), None, None),
+                event("me", EventKind::QuestionAnswered, None, None, Some("  ")),
+                event("me", EventKind::QuestionAnswered, None, None, Some("a2")),
+                event("me", EventKind::QuestionRaised, None, None, Some("q3")),
+                event("me", EventKind::RunStage, Some(Stage::Questioned), None, Some("about:done")),
+            ],
+        );
+        let pair = |question: &str, about: Option<&str>, answer: Option<&str>| Question {
+            question: question.to_owned(),
+            about: about.map(str::to_owned),
+            answer: answer.map(str::to_owned),
+        };
+        let all = questions_of_run(&root, "me");
+        assert_eq!(
+            all,
+            vec![pair("q1", Some("verify"), Some("a1")), pair("q2", None, Some("a2")), pair("q3", Some("done"), None)],
+            "発生順に全部・区間は次の質問の直前まで"
+        );
+        assert_eq!(question_of_run(&root, "me"), all.last().cloned(), "最新は列の末尾");
+        assert_eq!(questions_of_run(&root, "none"), Vec::new(), "質問の無い便は空");
+        assert_eq!(question_of_run(&root, "none"), None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     // flip-check: retroactive s2-07l.222
     /// `runner_is_idle` の 4 分岐を片側ずつ撃つ: 席の event が無い便は `true`（`Some(false)` 固定で落ちる）・

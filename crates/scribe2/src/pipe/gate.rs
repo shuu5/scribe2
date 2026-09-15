@@ -209,7 +209,10 @@ pub fn gate(entry: &Gate<'_>) -> Outcome {
         Ok(found) => found,
         Err(reason) => return broken(reason),
     };
-    let (verdict, evidence, scope) = decide(entry, &worktree, &measured);
+    let (verdict, evidence, scope) = match decide(entry, &worktree, &measured) {
+        Ok(found) => found,
+        Err(reason) => return broken(reason),
+    };
     let decision = Decision {
         verdict,
         evidence,
@@ -275,35 +278,36 @@ fn measure(entry: &Gate<'_>, worktree: &Path, base: &str) -> Result<Measured, St
 /// 判定順を 1 か所に閉じる（**wildcard 無し・上から順に効く**）。
 ///
 /// 3 つ目は lens の scope を片付けた結果（record に書く周だけ `Some`・lens を撃たない周は `None`）。
-fn decide(entry: &Gate<'_>, worktree: &Path, measured: &Measured) -> (Verdict, String, Option<Released>) {
+/// `Err` は裁定の写しを書けなかった周（判定に届かず gate を止める＝rc 2・verdict を書かない）。
+fn decide(entry: &Gate<'_>, worktree: &Path, measured: &Measured) -> Result<(Verdict, String, Option<Released>), String> {
     // **測れなかったは赤より先**（C10・AC3）。段①の diff が読めない周は判定に届いていない
     // ので lens も呼ばず INCONCLUSIVE（測り直せる側・FR14）。
     if measured.unreadable {
-        return (
+        return Ok((
             Verdict::Inconclusive,
             "diff の path を読めない（write-set を照合できない＝測れなかった）".to_owned(),
             None,
-        );
+        ));
     }
     // **箱の中で殺された行も赤より先**（設計 gate-cost.md §4.2）。溢れた箱の中で死んだ行は
     // 内容が赤いのではなく測れていない——赤に化けさせると、host の memory が足りない周ほど
     // 便が FAIL（終端）で落ちる。
     if let Some(reason) = measured.killed {
-        return (
+        return Ok((
             Verdict::Inconclusive,
             format!(
                 "verify の行が scope の中で死んだ（reason={}・測れなかった）",
                 reason.as_str()
             ),
             None,
-        );
+        ));
     }
     if measured.red > 0 {
-        return (
+        return Ok((
             Verdict::Fail,
             format!("verify の {} 行が rc≠0", measured.red),
             None,
-        );
+        ));
     }
     // **予算の照合は lens に渡す本文の byte で行う**（FR9・純移動の周は要約・`verdict.json` の
     // `diff_bytes` は従来どおり diff の byte）。
@@ -311,34 +315,37 @@ fn decide(entry: &Gate<'_>, worktree: &Path, measured: &Measured) -> (Verdict, S
     let size = byte_count(body);
     if size > entry.limits.token_cap {
         // **換算係数を持たない**（NFR1）。byte ≥ token の保守的な読みで直接比べる。
-        return (
+        return Ok((
             Verdict::Inconclusive,
             format!("{} {size} byte が cap {} を超えた", measured.input.kind(), entry.limits.token_cap),
             None,
-        );
+        ));
     }
     // **本数は照合する**。0 本（lens を呼ばずに通す）も 2 本以上（1 本で足りたことに
     // する）も「lens の verdict」を得ていないので、判定順の 4 番目は成立しない。
     // どちらも判定できていない周ゆえ INCONCLUSIVE へ倒す（AC3・C11.2）。
     if entry.limits.lens_count != 1 {
-        return (
+        return Ok((
             Verdict::Inconclusive,
             format!(
                 "規則は lens {} 本を定める（通せるのは 1 本だけ）",
                 entry.limits.lens_count
             ),
             None,
-        );
+        ));
     }
     let Some(cmd) = entry.lens else {
-        return (Verdict::Inconclusive, "lens が要るのに --lens が無い".to_owned(), None);
+        return Ok((Verdict::Inconclusive, "lens が要るのに --lens が無い".to_owned(), None));
     };
     // 純移動の周は渡した要約を run dir に残す（事後に読める・NFR4）。残せない周は判定に届かない。
     if let LensInput::Summary(summary) = &measured.input {
         if let Err(reason) = move_proof::keep(&run_dir(entry.state_dir, entry.run), summary) {
-            return (Verdict::Inconclusive, reason, None);
+            return Ok((Verdict::Inconclusive, reason, None));
         }
     }
+    // **裁定の写しは lens を起こす直前に書く**（`s2-07l.309`）。書けない周は lens を「裁定なし」で
+    // 起こさない——回答で認めた逸脱が契約違反に読まれ、偽 FAIL / 偽 INCONCLUSIVE へ倒れる。
+    keep_rulings(entry)?;
     let contract = contract_path(entry.state_dir, entry.run);
     let unit = confine::unit_name(entry.run, LENS_STAGE, 1);
     let wrap = confine::Wrap {
@@ -347,7 +354,29 @@ fn decide(entry: &Gate<'_>, worktree: &Path, measured: &Measured) -> (Verdict, S
         limit: confine::Limit::HostReserve,
         caps: confine::Caps::embedded(),
     };
-    ask_lens(&substitute(cmd, &contract, worktree), worktree, body, &wrap)
+    Ok(ask_lens(&substitute(cmd, &contract, worktree), worktree, body, &wrap))
+}
+
+/// 便の裁定（質問と planner の回答の対・発生順・[`super::questions_of_run`]）を run dir の
+/// [`move_proof::RULINGS_FILE`] へ写す（設計 pipeline-question.md・C3「真実は event log」）。
+///
+/// 1 対 = `question:` / `about:` / `answer:` の 3 行（無い `about` は `-`）・対の間は空行。対が 0 の周は
+/// 書かない（[`move_proof::keep`] と同じ・無いことが「裁定なし」・C10）。
+fn keep_rulings(entry: &Gate<'_>) -> Result<(), String> {
+    let questions = super::questions_of_run(entry.state_dir, entry.run);
+    if questions.is_empty() {
+        return Ok(());
+    }
+    let shown: Vec<String> = questions
+        .iter()
+        .map(|found| {
+            let about = found.about.as_deref().unwrap_or("-");
+            let answer = found.answer.as_deref().unwrap_or("-");
+            format!("question: {}\nabout: {about}\nanswer: {answer}\n", found.question)
+        })
+        .collect();
+    let path = run_dir(entry.state_dir, entry.run).join(move_proof::RULINGS_FILE);
+    std::fs::write(&path, shown.join("\n")).map_err(|err| format!("{} を書けない: {err}", path.display()))
 }
 
 /// 判定を `verdict.json` へ書き、`Gated` を 1 件追記する。

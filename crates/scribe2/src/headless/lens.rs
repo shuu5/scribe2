@@ -25,17 +25,28 @@
 //! **model も同じ manifest の rules 行 `runner.model` から読み、claude に毎回渡す**（`s2-07l.297`・
 //! 設計 pipeline.md §6）。読み口は [`super::rules_of`] / [`super::runner_model`]（runner と共通）で、
 //! 行が解けない周は cap と同じ極性＝claude を呼ばず rc 2。
+//!
+//! **裁定（便の質問と planner の回答の対）は契約の写しの隣の [`RULINGS_FILE`] から読む**（`s2-07l.309`・
+//! 設計 pipeline-question.md）。gate が event log から写す file で、lens は `{contract}` の path の同じ dir
+//! から同じ名で引く（env も flag も足さない＝`lens.cmd` の穴は不変）。無ければ「裁定なし」を prompt に明示し
+//! （C10・空を黙らせない）、在るのに読めない周は claude を呼ばず rc 2——裁定を落として審査すると、回答で
+//! 認めた逸脱が契約違反に読まれ、同じ diff で判定が揺れる（実測 2026-09-15・`.295` の追随周）。
 
 use super::{build, feed, fill, flag, need, read_stdin_bytes, rules_of, runner_model, Call, DEFAULT_CLAUDE};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
 use crate::fleet::select::Model;
 use crate::pipe::confine;
 use crate::pipe::contract::Contract;
+use crate::pipe::move_proof::RULINGS_FILE;
 use crate::rules::int_row;
+use std::io::ErrorKind;
 use std::path::Path;
 
 /// prompt の文面（tracked な template・絶対 path も口座名も含まない）。
 const TEMPLATE: &str = include_str!("lens.txt");
+
+/// 裁定の file が無い周に `{rulings}` の穴へ入れる 1 行（「裁定なし」を明示する・C10）。
+const NO_RULINGS: &str = "（裁定なし）";
 
 /// JSON 行の見出し。
 const JSON_HEAD: char = '{';
@@ -110,12 +121,19 @@ pub fn dispatch(args: &[String]) -> Outcome {
     };
     // **読めない契約で claude を起こさない**。材料が無いまま問えば返るのは
     // INCONCLUSIVE だけで、払った 1 回分は捨て金になる。
-    let contract = match Contract::load(Path::new(&contract)) {
+    let contract_path = Path::new(&contract);
+    let contract = match Contract::load(contract_path) {
         Ok(found) => found,
         Err(errors) => {
             let first = errors.first().map_or_else(String::new, |err| err.reason.clone());
             return Outcome::failed_line(RC_BROKEN, format!("lens: 契約を読めない: {first}"));
         }
+    };
+    // **裁定は契約の写しの隣から読む**。在るのに読めない周は claude を起こさない（裁定を落とした
+    // 審査は判定が揺れる側＝fail-closed）。
+    let rulings = match rulings_of(contract_path) {
+        Ok(found) => found,
+        Err(reason) => return Outcome::failed_line(RC_BROKEN, format!("lens: 裁定を読めない: {reason}")),
     };
     // **cap が解けない周も claude を起こさない**（上限なしで走らせない＝C6）。model も同じ極性（版の既定へ
     // 黙って倒れない）。
@@ -129,11 +147,11 @@ pub fn dispatch(args: &[String]) -> Outcome {
         return Outcome::ok_line(inconclusive("diff exceeds cap"));
     }
     // **1 走査で埋める**。重ねて replace すると、先に埋めた契約本文の中の `{diff}` まで
-    // 展開され、外から来る text が prompt の構造へ触れられる（runner と同じ理由）。
+    // 展開され、外から来る text が prompt の構造へ触れられる（runner と同じ理由・裁定も同じ走査）。
     let stated = state(&contract);
     let prompt = fill(
         TEMPLATE,
-        &[("{contract}", &stated), ("{diff}", &String::from_utf8_lossy(&diff))],
+        &[("{contract}", &stated), ("{rulings}", &rulings), ("{diff}", &String::from_utf8_lossy(&diff))],
     );
     ask(&Call {
         claude: claude.as_deref().unwrap_or(DEFAULT_CLAUDE),
@@ -151,6 +169,19 @@ pub fn dispatch(args: &[String]) -> Outcome {
         streaming: false,
         max_turns: None,
     })
+}
+
+/// 契約の写しの隣の [`RULINGS_FILE`] を読む（path の導出はこの 1 か所）。
+///
+/// 無ければ [`NO_RULINGS`] の 1 行（「裁定なし」を明示する）。在るのに読めない周（dir が置かれている・
+/// UTF-8 でない・権限が無い）は `Err`＝呼び手が claude を起こさず rc 2 で止まる。
+fn rulings_of(contract: &Path) -> Result<String, String> {
+    let path = contract.with_file_name(RULINGS_FILE);
+    match std::fs::read_to_string(&path) {
+        Ok(found) => Ok(found),
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(NO_RULINGS.to_owned()),
+        Err(err) => Err(format!("{}: {err}", path.display())),
+    }
 }
 
 /// 契約を prompt へ差し込む形に組む（goal / done / verify 各行 / write-set 各行）。

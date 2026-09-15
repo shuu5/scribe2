@@ -975,6 +975,96 @@ fn headless_lens_prompt_external_form() {
     insta::assert_snapshot!("lens_prompt_external_form", prompt);
 }
 
+/// lens の prompt に載る裁定の節の見出し（`s2-07l.309`）。
+///
+/// ★契約 fixture にも diff fixture にも裁定 fixture にも現れない字面（節を消せば回数が 0 に落ちる）。
+const LENS_RULINGS_HEADING: &str = "## 契約への裁定（planner の回答・逐語）";
+
+/// 裁定の file の本文（gate が書く形・1 対 = 3 行）。`{diff}` の字面を持たせ、穴が同じ 1 走査で埋まること
+/// （裁定の中の穴は展開されない）も測る。
+const RULINGS_FIXTURE: &str = "question: verify 行が矛盾する {diff}\nabout: verify\nanswer: verify は 1 行目だけを撃つ\n";
+
+/// lens は `{contract}` の path の**同じ dir** の `rulings.txt` を読み、本文をそのまま `{rulings}` の穴へ埋める
+/// （`s2-07l.309`・設計 pipeline-question.md）。節は `## 契約` の後・`## diff` の前。base は穴も節も無いので RED。
+#[test]
+fn lens_rulings_are_filled_into_the_prompt_from_the_sibling_file() {
+    let dir = tmp();
+    let claude = fake_claude(&dir, "{\"verdict\":\"PASS\",\"evidence\":\"裁定を読めた\"}\n", false, 0);
+    let contract = contract_in(&dir);
+    fs::write(dir.join("rulings.txt"), RULINGS_FIXTURE).expect("裁定の file を書ける");
+    let out = run_lens(&contract, 4096, "plan", &claude, b"DIFF-BODY-MARKER\n");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    assert!(dir.join("called").exists(), "裁定が在る周も claude を呼ぶ");
+    let prompt = slurp(&dir.join("stdin"));
+    assert_eq!(prompt.matches(LENS_RULINGS_HEADING).count(), 1, "裁定の節の見出しがちょうど 1 回在る: {prompt}");
+    // **本文はそのまま**（見出しの直下・逐語・穴は展開されない）。
+    assert!(
+        prompt.contains(&format!("{LENS_RULINGS_HEADING}\n{RULINGS_FIXTURE}")),
+        "裁定の本文が見出しの直下に逐語で載る: {prompt}"
+    );
+    assert_eq!(prompt.matches("DIFF-BODY-MARKER").count(), 1, "裁定の中の {{diff}} は展開されない: {prompt}");
+    assert!(!prompt.contains("{rulings}"), "裁定の穴が埋まっている: {prompt}");
+    assert!(!prompt.contains("（裁定なし）"), "裁定が在る周に「裁定なし」を出さない: {prompt}");
+    let contract_at = prompt.find("## 契約\n");
+    let rulings_at = prompt.find(LENS_RULINGS_HEADING);
+    let diff_at = prompt.find("## diff");
+    assert!(contract_at.is_some() && diff_at.is_some(), "既存の見出しが在る: {prompt}");
+    assert!(contract_at < rulings_at, "裁定の節は「## 契約」より後: {prompt}");
+    assert!(rulings_at < diff_at, "裁定の節は「## diff」より前: {prompt}");
+    // 読み方の 1 行は「審査の材料」の節に在り、裁定の節より前。
+    const RULING_RULE: &str = "裁定の節に在る逸脱（回答で planner が認めた形）は契約の一部として読む。裁定に無い逸脱だけを契約違反と読む。";
+    assert_eq!(prompt.matches(RULING_RULE).count(), 1, "読み方の行がちょうど 1 回在る: {prompt}");
+    assert!(prompt.find(RULING_RULE) < contract_at, "読み方の行は「## 契約」より前: {prompt}");
+    clean(&[&dir]);
+}
+
+/// 裁定の file が無い周は `（裁定なし）` の 1 行を穴へ埋める（「裁定なし」を明示する・C10・空を黙らせない）。
+#[test]
+fn lens_rulings_absent_reads_as_none() {
+    let dir = tmp();
+    let claude = fake_claude(&dir, "{\"verdict\":\"PASS\",\"evidence\":\"裁定なし\"}\n", false, 0);
+    let contract = contract_in(&dir);
+    assert!(!dir.join("rulings.txt").exists(), "fixture: 裁定の file は無い");
+    let out = run_lens(&contract, 4096, "plan", &claude, b"--- a\n+++ b\n");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    assert!(dir.join("called").exists(), "裁定が無くても claude を呼ぶ");
+    let prompt = slurp(&dir.join("stdin"));
+    assert_eq!(prompt.matches(LENS_RULINGS_HEADING).count(), 1, "裁定の節の見出しは在る: {prompt}");
+    assert!(
+        prompt.contains(&format!("{LENS_RULINGS_HEADING}\n（裁定なし）\n")),
+        "見出しの直下に「裁定なし」の 1 行: {prompt}"
+    );
+    assert_eq!(prompt.matches("（裁定なし）").count(), 1, "「裁定なし」はちょうど 1 回: {prompt}");
+    assert!(!prompt.contains("{rulings}"), "裁定の穴が埋まっている: {prompt}");
+    clean(&[&dir]);
+}
+
+/// 裁定の file が**在るのに読めない**周（file の場所に dir が置かれている・UTF-8 でない）は claude を呼ばず rc 2
+/// で理由を 1 行（`lens: 裁定を読めない`）。「無い」と「読めない」で極性を変える＝読めない裁定を「裁定なし」に
+/// 倒すと、回答で認めた逸脱が契約違反に読まれる。
+#[test]
+fn lens_rulings_unreadable_is_broken() {
+    let dir = tmp();
+    let claude = fake_claude(&dir, "{\"verdict\":\"PASS\",\"evidence\":\"呼ばれてはならない\"}\n", false, 0);
+    let contract = contract_in(&dir);
+    fs::create_dir(dir.join("rulings.txt")).expect("file の場所に dir を置ける");
+    let out = run_lens(&contract, 4096, "plan", &claude, b"--- a\n+++ b\n");
+    assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "読めない裁定は rc 2: {}", stderr_of(&out));
+    assert!(!dir.join("called").exists(), "claude を 1 度も起動しない");
+    assert!(!dir.join("stdin").exists(), "prompt の写しも生成されない");
+    assert!(stderr_of(&out).contains("lens: 裁定を読めない"), "理由を名乗る: {}", stderr_of(&out));
+    assert!(stderr_of(&out).contains("rulings.txt"), "読めなかった path を名指す: {}", stderr_of(&out));
+    // UTF-8 でない本文も同じ極性（「在るが読めない」）。
+    let bad = tmp();
+    let quiet = fake_claude(&bad, "{\"verdict\":\"PASS\",\"evidence\":\"呼ばれてはならない\"}\n", false, 0);
+    let bad_contract = contract_in(&bad);
+    fs::write(bad.join("rulings.txt"), [0xff_u8, 0xfe, 0x00]).expect("壊れた本文を書ける");
+    let out = run_lens(&bad_contract, 4096, "plan", &quiet, b"--- a\n+++ b\n");
+    assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "UTF-8 でない裁定も rc 2: {}", stderr_of(&out));
+    assert!(!bad.join("called").exists(), "claude を 1 度も起動しない");
+    clean(&[&dir, &bad]);
+}
+
 #[test]
 fn headless_lens_fills_holes_in_one_pass() {
     let dir = tmp();

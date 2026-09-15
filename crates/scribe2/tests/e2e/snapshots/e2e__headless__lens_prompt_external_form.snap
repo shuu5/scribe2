@@ -31,6 +31,7 @@ diff がそれを満たすかを見る。**足場だけの diff**（実装の変
 ## 審査の材料（契約と diff だけ）
 - 審査の材料は、下の契約（verify / done / write-set）と diff **だけ**である。
 - 契約に名指しされていない検査（整形・rustfmt・lint の既定 等）を根拠に INCONCLUSIVE / FAIL を出さない。
+- 裁定の節に在る逸脱（回答で planner が認めた形）は契約の一部として読む。裁定に無い逸脱だけを契約違反と読む。
 - 判定に届かない周は、evidence に「契約のどの行を撃てなかったか」を書く。
 
 ## 契約
@@ -42,6 +43,9 @@ verify:
 write-set:
 - crates/vessel-unlikely/src/only-here.rs
 - crates/vessel-unlikely/src/second-only.rs
+
+## 契約への裁定（planner の回答・逐語）
+（裁定なし）
 
 ## diff
 以下が stdin から渡された diff である。

@@ -624,6 +624,85 @@ fn pipe_gate_substitutes_worktree_placeholder_in_lens_cmd() {
     clean(&[&repo, &state]);
 }
 
+/// run dir の `rulings.txt`（gate が書く裁定の写し・`s2-07l.309`）。
+fn rulings_path(state: &Path, id: &str) -> PathBuf {
+    state.join("pipe").join(id).join("rulings.txt")
+}
+
+/// 契約の写しの隣の `rulings.txt` を **lens が起きた時点で** `seen` へ写す fake lens（無ければ写さない）。
+fn rulings_copying_lens(seen: &Path) -> String {
+    format!(
+        "cat >/dev/null; r=\"$(dirname '{{contract}}')/rulings.txt\"; if [ -e \"$r\" ]; then cp \"$r\" '{}'; fi; echo '{}'",
+        seen.display(),
+        lens_verdict("PASS")
+    )
+}
+
+/// 2 つ目の質問 record（`about` 無し・1 つ目と字面が違う）。
+const SECOND_QUESTION: &str = "write-set の外の file を触ってよいか";
+
+/// 2 つ目の質問で止まる fake runner（`about` を持たない record・commit は作らない）。
+fn second_question_runner() -> String {
+    format!("printf '%s\\n' '{{\"question\":\"{SECOND_QUESTION}\"}}'; exit 76")
+}
+
+/// 便を QUESTION ×2（各 answer + resume）で運び、3 周目で実装して Implemented にする。回答の逐語を返す。
+fn implemented_after_two_questions(repo: &Path, state: &Path) -> (String, [&'static str; 2]) {
+    let answers = ["verify は 1 行目だけを撃つ", "触ってよい（裁定 (b)）"];
+    let id = questioned(repo, state);
+    // 1 周目の resume は 2 つ目の質問で止まり（rc 3）、2 周目の resume は実装して Implemented（rc 0）。
+    let turns = [(second_question_runner(), RC_BLOCKED), (TOY_COMMIT.to_owned(), RC_OK)];
+    for (answer, (runner, rc)) in answers.iter().zip(&turns) {
+        let answered = run_pipe(&["answer", "--run", &id, "--words", answer, "--state-dir", &state.display().to_string()]);
+        assert_eq!(answered.status.code(), Some(i32::from(RC_OK)), "回答は rc 0: {}", stderr_of(&answered));
+        let out = run_pipe(&[
+            "resume", "--run", &id, "--repo", &repo.display().to_string(),
+            "--state-dir", &state.display().to_string(), "--runner", runner,
+        ]);
+        assert_eq!(out.status.code(), Some(i32::from(*rc)), "resume の rc: {}", stderr_of(&out));
+    }
+    assert_eq!(stage_count(state, &id, Stage::Questioned), 2, "QUESTION を 2 回通った: {:?}", stages(state, &id));
+    assert!(show_line(repo, state, &id).contains("stage=Implemented"), "{}", show_line(repo, state, &id));
+    (id, answers)
+}
+
+/// (a) QUESTION ×2（answer 付き）の便を gate に通すと run dir に `rulings.txt` が在り、対 2 つが**発生順**に
+/// `question:` / `about:` / `answer:` の 3 行（`about` の無い対は `-`・対の間は空行）で逐語に載り、lens が起きた
+/// 時点で契約の写しの隣に在る（`s2-07l.309`・設計 pipeline-question.md）。base は file を書かないので RED。
+#[test]
+fn pipe_gate_rulings_file_lists_every_question_answer_pair_in_order() {
+    let (repo, state) = repo_with_state();
+    let (id, [first, second]) = implemented_after_two_questions(&repo, &state);
+    let seen = state.join("rulings-at-lens");
+    let out = gate_once(&repo, &state, &id, Some(&rulings_copying_lens(&seen)));
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "PASS: {}", stderr_of(&out));
+    let kept = fs::read_to_string(rulings_path(&state, &id)).expect("run dir に rulings.txt が在る");
+    let want = format!(
+        "question: verify 行が矛盾する\nabout: verify\nanswer: {first}\n\nquestion: {SECOND_QUESTION}\nabout: -\nanswer: {second}\n"
+    );
+    assert_eq!(kept, want, "対 2 つが発生順・3 行の形・逐語");
+    let at_lens = fs::read_to_string(&seen).expect("lens が起きた時点で契約の隣に rulings.txt が在る");
+    assert_eq!(at_lens, kept, "lens が読んだ写しは run dir のものと同じ");
+    assert_eq!(value_of(&verdict_pairs(&state, &id), "verdict"), "PASS", "従来どおり lens の verdict");
+    clean(&[&repo, &state]);
+}
+
+/// (b) 質問 0 の便は `rulings.txt` を書かない（無いことが「裁定なし」・空の file を書かない・(a) の極性の対）。
+#[test]
+fn pipe_gate_rulings_file_is_absent_without_questions() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let id = implemented(&repo, &state, &path);
+    let seen = state.join("rulings-at-lens");
+    let out = gate_once(&repo, &state, &id, Some(&rulings_copying_lens(&seen)));
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "PASS: {}", stderr_of(&out));
+    assert!(state.join("pipe").join(&id).join("contract.toml").exists(), "run dir は在る（不在は dir の不在ではない）");
+    assert!(!rulings_path(&state, &id).exists(), "質問の無い便に rulings.txt を書かない");
+    assert!(!seen.exists(), "lens が起きた時点でも契約の隣に無い");
+    assert_eq!(value_of(&verdict_pairs(&state, &id), "verdict"), "PASS", "従来どおり lens の verdict");
+    clean(&[&repo, &state]);
+}
+
 
 #[test]
 fn pipe_gate_refuses_wrong_stage() {
