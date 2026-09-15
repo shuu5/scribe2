@@ -136,11 +136,11 @@ manifest に行が載るまでは ADR-0021 の予定行（C14.2 の相互参照�
 
 ### 6.1 errata（現物との差・s2-07l.147・規範は上の §6 のまま）
 
-- **module は `pipe/land.rs`**（判定の pure 関数 `turn_in`・最初の `Gated` の ts を選ぶ pure 関数 `first_gated_at`・列の導出 `queue_of`・待ち `await_turn`）。`Completion::LandTurn` の観測は `land::turn_now` の 1 本を通る（wait の内側が読み手を持つ・`SlotFree` と同じ分担）。上限の読み口は pipe/cli.rs `land_run`（`--rules` の manifest から読む・env を読まない）。
+- **module は `pipe/queue.rs`**（判定の pure 関数 `turn_in`・最初の `Gated` の ts を選ぶ pure 関数 `first_gated_at`・列の導出 `queue_of`・待ち `await_turn`・起票時は `pipe/land.rs` に在り .349 系の分割で移った＝.357 の審査の申し送り 2026-09-15）。`Completion::LandTurn` の観測は `queue::turn_now` の 1 本を通る（wait の内側が読み手を持つ・`SlotFree` と同じ分担）。上限の読み口は pipe/cli.rs `land_run`（`--rules` の manifest から読む・env を読まない）。
 - **撃ち直し中の「最新の verdict」は前の周の PASS**: gate は判定の確定時にだけ `verdict.json` を上書きする（gate.rs `settle`）ので、追随して `Implemented` へ戻った run は撃ち直しの間 PASS のまま列に残り、撃ち直しが FAIL / INCONCLUSIVE を確定した時点で外れる（FAIL の run は段が `Gated` のまま＝§6 の「終端で外れる」は verdict で外れる形）。
 - **読めない判定も `Unmeasurable`**: 列に入りうる run（終端でない ∧ `Gated` を一度でも持つ ∧ worktree が実在）で `verdict.json` を読めない run が 1 本でも在る周は列を導けない（PASS かを測れない run を列から外すと、読めないを「列なし」に読み替えることになる）。worktree の実在を判じる repo（便の写し面 `repo`）を読めない run が在る周も同じ。store が読めない周は land の前提検査（replay）が先に rc 2 で断り、main 実測の材料（`base_of_run`）も同じ store を読むので、e2e の歯は events.jsonl を壊す形でなく「前の便の判定を壊した fixture」で `order=unmeasured` を測る。
 - **`after_wake` は待った秒も受ける**（`after_wake(&Turn, waited_s) -> Next`・`First` の周の `Waited(<秒>)` を組むため・pure のまま）。`await_turn` は解けるたびに `after_wake` を通し、`KeepWaiting` なら残りの上限（`land_wait_s` − 経過）で同じ `Completion::LandTurn` を `fleet::wait` へ再投入する。残りが 0 の周の `KeepWaiting` は `degraded`（上限で進む）。
-- **atomic な書きは gate.rs `write_verdict`**（`verdict.json.partial` へ書いて rename・落ちた周は書きかけを消して本 file を作らない）。`settle` の書きはこの 1 本だけを通る。
+- **atomic な書きは `pipe/gate/lens.rs` の `write_verdict`**（`verdict.json.partial` へ書いて rename・落ちた周は書きかけを消して本 file を作らない）。gate.rs の `settle` の書きはこの 1 本だけを通る。
 - **面 5 の `order` は key 列の末尾**（既存の 7 key の並びは動かさない）。`order=` は land が成立した周（main 実測が緑）の record と stdout にだけ載る。
 - **衝突の起こし直し中の run も列に残る**: 追随の rebase が衝突して実装役を起こし直した run（`Implemented detail=rebase-conflict:`・pipeline-conflict.md §3）も、前の周の PASS が残り終端でない間は列の定義を満たす。起こし直しの間、後続は上限まで待ってから縮退しうる（上の「置き去りの run」と同じ箱・本便では解かない）。
 - **歯の fixture も atomic に書く**（`s2-07l.357`・契約表の行 a）: 列の歯が別 thread から前の便の判定を書き換える fixture は `write_verdict` と同じ形（`.partial` へ書いて rename）で書く。素の write（truncate → write）は 20 ms の poll に書きかけを読ませ、`Unmeasurable` → `order=unmeasured` の flake になる（main 201b2ef の CI nextest が 1 度赤・測り直しで緑・local 44 回は全部緑＝遅い runner でだけ開く窓）。assert は緩めない（`Unmeasured` を `Waited` と同じにすると歯が空虚になる）。

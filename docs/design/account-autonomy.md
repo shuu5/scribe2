@@ -105,4 +105,14 @@ write-set = ["crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/ratelimi
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_resume_kill_"]
 size = "M"
 done = "Spawned で runner が死んだ便に resume を撃つと同じ worktree で runner が起き直り途中再開の節に未 commit の file 名が載り、生きている runner の便は typed に断られて runner が 2 本にならない"
+
+[[contract]]
+id = "h"
+title = "初回 spawn の口座を器が選ぶ — pipe run / resume の初回の起動も計測 → 便用の選定 → spawn_turn の 1 本を通り、口座の宣言が無い周だけ親の環境を継承する"
+req = ["FR36", "FR4"]
+section = "4"
+write-set = ["crates/scribe2/src/pipe/cli/run.rs", "crates/scribe2/src/pipe/ratelimit.rs", "crates/scribe2/src/pipe/follow.rs", "crates/scribe2/src/pipe/spawn.rs", "crates/scribe2/src/pipe/mod.rs", "crates/scribe2/tests/e2e/pipe/spawn.rs", "crates/scribe2/tests/e2e/pipe/lifecycle.rs"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_spawn_account_"]
+size = "M"
+done = "初回の起動が器の選んだ口座の credential dir で起き Spawned の detail に label が載り、口座の宣言が無い toy だけが親の環境を継承する"
 <!-- contracts:end -->

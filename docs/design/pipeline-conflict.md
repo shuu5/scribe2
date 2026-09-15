@@ -86,3 +86,17 @@ land の追随（pipeline.md §5.4・`follow_main`）で `git rebase <main>` が
 - 同時に流す本数の上限と口座の枠との連動（.142 の口座の自律制御）。
 - 排他で断られた契約の待ち行列（tick か管理席の運用・別途）。
 - 放置された非終端 run の自動掃除（`stop --run` は管理席の操作・自動化は別途）。
+
+<!-- contracts:begin -->
+schema = 1
+
+[[contract]]
+id = "a"
+title = "pipe retire の許す段に Stopped を足す — stop --run で live から外した便の入れ物を可逆 move で畳む（段は Stopped のまま・clean 検査は既存）"
+req = ["FR13", "FR14"]
+section = "5"
+write-set = ["crates/scribe2/src/pipe/cli/step.rs", "crates/scribe2/tests/e2e/pipe/land.rs"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_retire_stopped_"]
+size = "S"
+done = "Stopped の便が retire で畳めて段は Stopped のまま残り、未 commit の仕事を持つ worktree は既存の clean 検査が断る"
+<!-- contracts:end -->
