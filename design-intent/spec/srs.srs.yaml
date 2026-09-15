@@ -139,9 +139,9 @@ acceptance:
   - { id: AC33, criterion: fixture の payload を器の描画に渡して得た 1 行を context 計測の pane 経路に読ませると組んだ値（使用率・使用量・窓）が戻り、 値の無い payload では当該 segment が無く 0% の字面も無く、 payload でない入力は空行と rc 0。 口座の登録で設定に器の描画 command が入り、 既存の設定は同じ key だけが置換されて他の key と順序が保たれ、 読めない設定は断って bytes が変わらない。 doctor の口座行と導入先の行が描画の出所を vessel / other / absent / unreadable の 4 語で出す, metric_v: 往復 1/1 + 欠落 1/1 + 空行 1/1 + 設定 1/1 + 置換 1/1 + 拒否 1/1 + 口座行 4/4 + 導入先の行 1/1, metric_l: statusline の描画と口座の設定, links: [FR25, FR29, FR58, FR59, FR61, FR63] }
   - { id: AC34, criterion: 偽の unit の置き場と偽の駆動機構（fixture）で席の tick の unit の導入を撃つと、 席ごとの 2 file が導出と bytes で一致して置かれ、 反映と有効化が順序どおり 1 回ずつ撃たれ、 器の生成物でない同名の file は上書きされず typed に断られ、 間隔の rules 行が無い周は既定値に倒れず断られる。 撤去は無効化の後に 2 file を退役 dir へ移して削除しない。 doctor が登録 row のある席ごとに installed / drift / absent / unreadable を出す, metric_v: file 2/2 + 反映と有効化 2/2 + 拒否 2/2 + 退役 1/1 + 4 語 4/4, metric_l: tick の unit の導入と撤去, links: [FR27, FR29, FR61, FR64] }
 
-  - { id: AC35, criterion: 偽の event log に直命を 2 件（1 件は前提の台帳 id が閉じている）足し、 発令から rules 行の日数を超えた時計で復元を撃つと、 有効な直命が逐語で列挙され、 確認候補が理由の語（経過 / 前提の終端 / 前提の置換）付きで印され、 器は直命の状態を変えない。 直命の追加では器が時刻を打ち逐語を保つ, metric_v: 列挙 2/2 + 候補 2/2 + 逐語 1/1 + 時刻 1/1, metric_l: 直命の表と確認候補, links: [FR65] }
-  - { id: AC36, criterion: hook の stdin fixture で復元 skill の起動を渡すと復元の DATA が文脈への差し込みとして返り、 退避 skill の起動では現在地の DATA が返り、 session の開始では退避物の有無の 1 行が返る。 自動要約の直前の hook で自席の退避物が無ければ現在地と持ち越し分だけの退避物が書かれて要約は止まらず、 在れば何も書かれない。 session の終端の理由が席の状態に打刻される, metric_v: 差し込み 3/3 + 自動退避 2/2 + 打刻 1/1, metric_l: 取得の強制と自動退避, links: [FR23, FR29, FR66] }
-  - { id: AC37, criterion: 登録 row のある planner の席の指示文に対話面の作法の行（文の形・信頼度・brief の 5 slot・並列 agent の条件）が pointer 付きで在り、 管理席の指示文には無く、 pointer の無い行が 0 で、 実 host の session で復元の brief が 5 slot で出る（実 host で 1 回）, metric_v: 行 4/4 + 管理席 0 + 規範文 0 + brief 1/1, metric_l: 対話面の作法, links: [FR30, FR67] }
+  - { id: AC35, criterion: 偽の event log に直命を 3 件（発令から rules 行の日数を超えたもの・前提の bead が閉じたもの・前提の決定記録が置き換わったもの）足して復元を撃つと、 有効な直命が逐語で列挙され、 確認候補が理由の語（経過 / 前提の終端 / 前提の置換）付きで 3 件印され、 器は直命の状態を変えない。 直命の追加では器が時刻を打ち逐語を保つ, metric_v: 列挙 3/3 + 候補 3/3 + 逐語 1/1 + 時刻 1/1, metric_l: 直命の表と確認候補, links: [FR65] }
+  - { id: AC36, criterion: hook の入力の fixture で復元 skill の起動を渡すと復元の DATA が文脈への注入として返り、 退避 skill の起動では現在地の DATA が返り、 session の開始では退避物の有無の 1 行が返る。 自動圧縮の直前の hook で自席の退避物が無ければ現在地と持ち越し分だけの退避物が書かれて圧縮は止まらず、 在れば何も書かれない。 session の終端の理由が席の状態に打刻され、 退避物の無いまま終わった session の件数が doctor の席の行に出る, metric_v: 注入 3/3 + 自動退避 2/2 + 打刻 1/1 + doctor 1/1, metric_l: 取得の強制と自動退避, links: [FR23, FR66] }
+  - { id: AC37, criterion: 登録 row のある planner の席の指示文に対話面の作法の行（文の形・信頼度・brief の 5 slot。 行の集合の正本は設計 doc）が pointer 付きで在り、 管理席の指示文には無く、 pointer の無い行（規範文）が 0 で、 実 host の session で復元の brief が 5 slot で出る（実 host で 1 回）, metric_v: 行 3/3 + 管理席 0 + 規範文 0 + brief 1/1, metric_l: 対話面の作法, links: [FR30, FR67] }
 requirements:
   - id: FR1
     type: FR
@@ -395,7 +395,7 @@ requirements:
     ears:
       pattern: ubiquitous
       condition: 常時
-      response: 退避と復元を器の subcommand として提供し、 作法 7 本（退避物は session id で一意、 消費済みは同一 suffix で表し、 消費は move、 DATA が無い周は brief を出さず、 別 session の退避物は自動消費せず、 重複起動は冪等、 退避物の置き場は状態の置き場の席ごとの dir で repo の作業ツリーには置かない）を満たし、 復元の DATA は出所 pointer を持たない行（暫定行）を印付きで列挙して次の cycle に引き継がない
+      response: 退避と復元を器の subcommand として提供し、 作法 7 本（退避物は session id で一意、 消費済みは同一 suffix で表し、 消費は move、 DATA が無い周は brief を出さず、 別 session の退避物は自動消費せず、 重複起動は冪等、 退避物の置き場は state dir の席ごとの dir で repo の作業ツリーには置かず旧置き場に残る退避物は doctor が数える）を満たし、 復元の DATA は出所 pointer を持たない行（暫定行）を印付きで列挙して次の cycle に引き継がない
   - id: FR24
     type: FR
     label: 管轄外での沈黙
@@ -458,7 +458,7 @@ requirements:
     priority: should
     vmethod: T
     rationale_source: N-1
-    trace: { backward: [N-1, N-2], acceptance: [AC9, AC13, AC32, AC33, AC34, AC36] }
+    trace: { backward: [N-1, N-2], acceptance: [AC9, AC13, AC32, AC33, AC34] }
     ears:
       pattern: state
       condition: 開発 session の context 使用量が rules 行の上限以上で、 自 session の未 consumed の退避物が無く、 cycle が走っていない間
@@ -872,7 +872,7 @@ requirements:
     ears:
       pattern: ubiquitous
       condition: 常時
-      response: 器は対話面で user が言った発言（直命）を器の記録（event log）に 1 件ずつ typed に持ち（発令時刻は器が打ち、 逐語は書き換えず、 前提の pointer と状態〔有効 / 完了 / 撤回 / 失効〕を運ぶ）、 復元の DATA に有効な直命を逐語で列挙し、 発令から rules 行の日数が経った直命・前提の台帳 id が閉じた直命・前提の決定記録が置き換わった直命を確認候補として理由の語付きで印し、 直命が続くかの判定は器が行わず対話面の user が行う
+      response: 器は planner の席で user が言った発言（直命）を器の event log に 1 件ずつ typed に持ち（発令時刻は器が打ち、 逐語は書き換えず、 前提の pointer と状態〔有効 / 完了 / 撤回 / 失効〕を運ぶ）、 復元の DATA に有効な直命を逐語で列挙し、 発令から rules 行の日数が経った直命・前提の bead が閉じた直命・前提の決定記録が置き換わった直命を確認候補として理由の語付きで印し、 直命が続くかの判定は器が行わず対話面の user が行う
 
   - id: FR66
     type: FR
@@ -884,7 +884,7 @@ requirements:
     ears:
       pattern: ubiquitous
       condition: 常時
-      response: 器は復元と退避の skill の起動に反応する hook で復元の DATA と現在地の DATA（anchor の先端・走行中の便・席の状態・前回の退避からの着地）を開発 session の文脈へ差し込み（skill は止めない）、 session の開始で自席の退避物の有無を 1 行差し込み、 自動要約の直前に自席の退避物が無ければ現在地と持ち越し分だけの退避物を器が自動で書いて要約は止めず、 session の終端の理由を席の状態に打刻し、 doctor が退避物の無いまま終わった session の件数を席ごとに名指す
+      response: 器は復元と退避の skill の起動に反応する hook で復元の DATA と現在地の DATA（anchor の先端・走行中の便・席の状態・前回の退避からの着地）を開発 session の文脈へ注入し（skill は止めない）、 session の開始で自席の退避物の有無を 1 行注入し、 自動圧縮の直前に自席の退避物が無ければ現在地と持ち越し分だけの退避物を器が自動で書いて圧縮は止めず、 session の終端の理由を席の状態に打刻し、 doctor が退避物の無いまま終わった session の件数を席ごとに名指す
 
   - id: FR67
     type: FR
@@ -896,7 +896,7 @@ requirements:
     ears:
       pattern: ubiquitous
       condition: 常時
-      response: 器は対話面の席（planner）の指示文に user に向けて出す文の形（信頼度 4 段を上位に、 次の 1 手が先頭・手順は番号・末尾は 1 手・脇道は分けて末尾・状態の言い直し・成果の可視化・error は事実だけ・一覧は 5 件までで前置きと締めを持たない、 の 9 則）を pointer 付きの行で運び、 規則の本文は設計 doc 1 本だけが持ち（指示文・skill・rules 行には規範文を置かない）、 復元の brief の user 面を 5 slot（次の 1 手・成果・現在地・計画・危険）で組み、 対話面でない席には適用しない
+      response: 器は planner の席の指示文に user に向けて出す文の形（信頼度を上位に置く 1 体系の作法・本文は設計 doc 1 本が正本）を pointer 付きの行で運び（指示文・skill・rules 行には規範文を置かない）、 復元の brief の user 面を 5 slot（次の 1 手・成果・現在地・計画・危険）で組み、 planner の席でない席には適用しない
 
 nfr:
   - { id: NFR1, type: NFR, label: lens 予算,   category: 性能, target: 1 lens は 0.15M token 以内（目標値）,                                measure: lens 起動時の diff byte と cap の照合を verdict に記録,        vmethod: T, trace: { backward: [N-2], acceptance: [AC3] }, hero: { cat: 予算, big: "0.15", unit: M token, qual: lens 1 本あたりの上限 } }
@@ -942,8 +942,9 @@ glossary:
   - { term: CI,             en: continuous integration, plain_short: PR ごとの自動検査,        def: PR を出すたびに自動で走る検査（test・lint・xtask）。 緑でなければ merge しない。 }
   - { term: marker,         en: marker,                 plain_short: 所属の目印 file,          def: repo root に置く .vessel のこと。 中身が name と version を言い、 hook はこれを見て仕えるかを決める。 }
   - { term: commit,         en: commit,                 plain_short: 変更の 1 区切りの記録,    def: git に残す変更の 1 単位。 runner の完了判定は base からの commit が 1 件以上あるかで測る。 }
-  - { term: 直命の表,       en: directive log,          plain_short: user の発言の typed な記録, def: user が対話面で言った発言を器が event log に 1 件ずつ持つ記録。 発令時刻は器が打ち、 逐語・前提の pointer・状態を運ぶ。 復元の DATA が有効な直命を列挙し、 経過日数か前提の終端で確認候補を印す（FR65）。 }
-  - { term: 対話面の作法,   en: dialogue surface rules, plain_short: user への言い方の決まり,   def: 対話面の席（planner）が user に向けて出す文の形の規則。 信頼度を上位に読み手本位の 8 則を 1 体系にしたもので、 正本は設計 doc 1 本、 指示文は pointer 付きの行で指す（FR67）。 }
+  - { term: 直命の表,       en: directive log,          plain_short: user の発言の typed な記録, def: 直命を器が event log に 1 件ずつ持つ記録。 発令時刻は器が打ち、 逐語・前提の pointer・状態を運ぶ。 復元の DATA が有効な直命を列挙し、 経過日数・前提の bead の終端・前提の決定記録の置換で確認候補を印す（FR65）。 }
+  - { term: 対話面の作法,   en: dialogue surface rules, plain_short: user への言い方の決まり,   def: planner の席が user に向けて出す文の形の規則。 信頼度を上位に置いた 9 則 1 体系（うち読み手本位 8 則）で、 正本は設計 doc 1 本。 雛形が pointer 付きの行で指し、 生成された指示文が運ぶ（FR67）。 }
+  - { term: 自動圧縮,       en: auto compaction,        plain_short: 文脈が満杯で自動で要約されること, def: 開発 session の文脈が上限に達したときに harness が自動で行う要約。 直前の hook で器が現在地と持ち越し分だけの退避物を書く（FR66）。 }
   - { term: 歯,             en: test,                   plain_short: 落ちるべきときに落ちる test, def: 器を守る自動 test の総称（Rust の 1 framework・憲法 C12）。 「歯が落とす」= test が失敗して変更を止めること。 }
   - { term: RED,            en: red,                    plain_short: test が落ちる状態,        def: test が失敗する状態。 対は GREEN（全部通る）。 flip check は「base で RED・HEAD で GREEN」を確かめる。 }
   - { term: PR,             en: pull request,           plain_short: 取り込みの申請,           def: 変更を main に取り込むための申請。 CI が緑になってから squash merge する。 }

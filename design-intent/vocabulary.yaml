@@ -687,5 +687,6 @@ terms:
     relationships: [event log, 出所 pointer, 作業記憶, 対話面]
   - canonical: 対話面の作法
     domain: consumer
-    definition: planner の席が user に向けて出す文の形の規則 (信頼度 4 段を上位に読み手本位の 8 則を 1 体系にしたもの・ADR-0032 §2.2)。 正本は設計 doc dialogue-surface.md で、 planner の雛形は pointer 付きの行で指す。
-    relationships: [対話面, 役割, 作業記憶]
+    definition: planner の席が user に向けて出す文の形の規則 (信頼度を上位に置いた 9 則 1 体系・うち読み手本位 8 則・ADR-0032 §2.2)。 正本は設計 doc dialogue-surface.md で、 planner の雛形が pointer 付きの行で指し、 生成された指示文が運ぶ (SRS FR67)。
+    relationships: [対話面, 役割, 作業記憶, 席の指示文]
+    flagged_ambiguities: ["作法: 作業記憶の作法 (FR23・器が守る機械の作法の列) と対話面の作法 (FR67・文の形) は別義"]
