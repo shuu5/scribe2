@@ -452,6 +452,10 @@ terms:
     domain: consumer
     definition: 開発 session が黙っていないかを周期で見て、 条件が揃ったときだけ打刻の合図か退避の合図を 1 行注入する仕組み (SRS FR27 / FR29)。
     relationships: [開発 session, cycle, 打刻の合図, 退避の合図]
+  - canonical: tick の unit
+    domain: consumer
+    definition: 管理 tick を席ごとに周期で撃つ host の systemd user unit (service と timer の対)。 器の口 (seat tick install) が NAME・target・置き場・binary・rules 行の間隔から 1 関数で導出して書き、 有効化まで撃つ (ADR-0030 §2.1〜§2.4)。 撤去は退役 dir への移動で、 doctor が席ごとに有無と一致を名指す (ADR-0030 §2.5)。
+    relationships: [管理 tick, 席の登録, doctor, manifest]
   - canonical: 席の状態
     domain: consumer
     definition: 開発 session が turn を走らせているか (Busy) 止めているか (Idle) の閉じた enum。 出所は hook の打刻 (UserPromptSubmit → Busy・Stop / SessionStart → Idle) で、 pane の字面は判定入力にしない (憲法 C3.3・ADR-0015 §2.1)。

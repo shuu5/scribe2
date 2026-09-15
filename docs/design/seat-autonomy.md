@@ -69,7 +69,7 @@ v2 に既に在るもの: FR23（WM の規則）・FR21（`<state_dir>/inject.js
 2. `seat meter` + `seat inject`（歯: fixture の statusline 文字列 / jsonl から used_pct・send-keys は tmux 独立 socket で実測）。
 3. `seat guard`（hook 内・manifest 行の追加は裁定 id 付き）。
 4. `seat tick` + `seat cycle`（歯: 4 条件の真理値表・lock の排他・WM 不在では /clear を撃たない）。
-5. 切替便: 開発 session へ器を載せる面を揃える——`marketplace.json` を gen-manifest の生成物に足し（手書きしない・冪等）、導入と切替の手順を §9 に書く。そのうえで v1 timer と**併走 1 日**→ 判定一致を tick.jsonl で示す → user 裁定で v1 timer を stop（消す = A1・user 手番）。host での install・timer 有効化・v1 停止は**器の外**（planner と user の手番）である。
+5. 切替便: 開発 session へ器を載せる面を揃える——`marketplace.json` を gen-manifest の生成物に足し（手書きしない・冪等）、導入と切替の手順を §9 に書く。そのうえで v1 timer と**併走 1 日**→ 判定一致を tick.jsonl で示す → user 裁定で v1 timer を stop（消す = A1・user 手番）。host での binary の install は §9 (a)・timer の書きと有効化は器の口（§8・ADR-0030）・v1 停止は**器の外**（user の手番・消す）である。
 
 ## 6. 却下案
 - (i) in-session の CronCreate だけで tick を回す: respawn / 口座切替で死に、死んだことを誰も検知しない（v1 の case A 裁定と同じ理由）。
@@ -81,45 +81,36 @@ v2 に既に在るもの: FR23（WM の規則）・FR21（`<state_dir>/inject.js
 - cap の初期値 = 60（user 裁定 2026-09-10・manifest 行 `seat.context_cap_pct` に裁定 id 付きで置く・C4 / C13 の閾値ではないので A2 非該当）。
 - 切替の判定 = 併走 1 日 + cycle 完走 1 回（AC9）。v1 の timer を止めるのは user 手番（A1「消す」）。
 
-## 8. 駆動（systemd user の雛形・**unit は repo に入れない**）
+## 8. 駆動（systemd user の unit は**器が導出して host へ書く**・ADR-0030・台帳 `s2-07l.321`・**unit は repo に入れない**）
 
-管理 tick は席の**外**から回る（憲法 R-E12）。host 側に template unit を 1 組置き、席ごとに tmux target を
-instance 名で渡す。**host 固有の path・target 名・口座名は書かない**（本 repo は PUBLIC・CLAUDE.md
-「やらないこと」）ので、以下は雛形であって設定ではない——`<binary>` / `<anchor>` / `<state dir>` は user が
-自分の host で埋める。
+管理 tick は席の**外**から回る（憲法 R-E12）。unit は host 固有の値（path・target 名）を持つので repo には
+入れない（本 repo は PUBLIC）が、その中身は**器の口が 1 関数で導出して host の user unit dir へ書く**
+（ADR-0030 §2.1・手書きの雛形を写す形は ADR-0030 §5 (A) で却下）。
 
-`<NAME>-seat-tick@.service`:
-
-```ini
-[Unit]
-Description=seat tick for %i
-
-[Service]
-Type=oneshot
-ExecStart=<binary> seat tick --target %i --wm-dir <anchor>/.claude-session --state-dir <state dir>
-# %i は hook の打刻が解く target と同じ `session:window` の字面（[seat-state.md §3](./seat-state.md)）。window は `-n` で明示して名付ける
-# （名無しの window は automatic-rename で前景 process の名になり、打刻の dir が席の一生の間に散る＝tick は永久に state-missing）。
-```
-
-`<NAME>-seat-tick@.timer`:
-
-```ini
-[Unit]
-Description=seat tick timer for %i
-
-[Timer]
-OnCalendar=*:0/5
-Persistent=false
-
-[Install]
-WantedBy=timers.target
-```
-
-- `%i` は systemd の instance 名で、tmux target をそのまま渡す（`:` を含む形の escape は host 側で解く）。
-- 周期を 5 分に取るのは、裁定 (b) が cycle の駆動を tick に載せた結果、退避から作り直しまでの遅れが最大
-  1 周期になるためである。短くすると遅れは縮むが、席が静かな間も capture が増える。
-- 有効化と停止は **user の手番**である（憲法 A1「使う」/「消す」）。器はこの unit を書き出さないし、
-  v1 の timer を止めもしない（切替は §5 の便 5 で、判定一致を tick.jsonl で示してから user が裁定する）。
+- **口**: `<NAME> seat tick install --state-dir S --target S:W --wm-dir D --unit-dir U --binary PATH [--rules PATH]`。
+  置き場・binary・unit dir は全部引数で受ける（器は env・home・自分の実行 file の場所を読まない・C2.2・
+  `current_exe` は env-reads の禁止集合）。`--unit-dir` と `--binary` は shell が解いて渡す（home の展開や `command -v`）。
+- **導出**（pure な 1 関数 `derive_units`・入力 = NAME・target・state dir・wm dir・binary・間隔）: file 名は
+  `<NAME>-seat-tick-<潰した target>.service` / `.timer`（潰し方は打刻の dir と同じ 1 関数・template unit と `%i` は
+  使わない）。service = `Type=oneshot` + `ExecStart=<binary> seat tick --target <target> --wm-dir <wm dir> --state-dir <state dir> [--rules <path>]`
+  （`Environment=` / `WorkingDirectory=` / `%h` を持たない）。timer = `OnBootSec=<n>s` + `OnUnitActiveSec=<n>s` +
+  `Persistent=false` + `WantedBy=timers.target`（単調時計・`OnCalendar` の割り算は使わない）。外形は snapshot で pin する（C12.5）。
+- **間隔**: rules 行 `seat.tick_interval_s`（秒・裁定 id = user 2026-09-15T02:30Z・C5）。読めない周は `no-rule` で断る（既定値に倒さない）。
+  周期を短くすると退避から作り直しまでの遅れが縮む（cycle の駆動は tick に載っている）。退避の合図の再送は
+  `seat.signal_backoff_s` の brake が抑える（`s2-07l.315`）ので、周期を縮めても queue に溜まらない。
+- **書き**: 一時 file → rename（部分書きを残さない・[account-lifecycle.md](./account-lifecycle.md) §3 の host.toml と同じ形）。
+  既存 file は導出の結果と bytes で比べ、一致 → `unchanged`（有効化だけ撃つ）・不一致 → `unit-exists` で断る
+  （人の手書きを上書きしない・N1）。有効化 = 子 process `systemctl --user daemon-reload` → `systemctl --user enable --now <timer>`
+  （順序固定・timeout は既存の唯一の wait・失敗は `reload-failed` / `enable-failed` に rc を添える）。
+  記録は inject の記録と同じ置き場に `kind=tick-install` の 1 行。
+- **撤去**: `seat tick uninstall --target S:W --unit-dir U` = `disable --now` → 2 file を `<unit dir>/.retired/<name>.<ts>` へ mv
+  （N1.2・削除しない・器の生成物でない file は `unit-foreign` で断る）。
+- **承認**: 有効化・撤去は 3 クラス（消す / 出す / 使う）のいずれにも当たらない（ADR-0030 §2.4・user 裁定 2026-09-15T03:52Z 問 3）
+  ＝器が撃つ。**v1 の timer は器が止めない**（器の管理物でない・切替は §5 の便 5 で user が裁定する）。
+- **doctor**: `--unit-dir U` を渡した周だけ、登録 row のある席ごとに `tick=<installed|drift|absent|unreadable>`
+  （bytes の一致・`absent` に潰さない・`systemctl` は呼ばない・`--unit-dir` 無しは `tick=-`）。
+- target の window は `-n` で明示して名付ける（名無しの window は automatic-rename で前景 process の名になり、
+  打刻の dir が席の一生の間に散る＝tick は永久に state-missing・[seat-state.md §3](./seat-state.md)）。
 
 ## 9. 導入と切替（手順の**形**だけ・host 固有の値は書かない）
 
