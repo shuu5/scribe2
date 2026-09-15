@@ -28,6 +28,11 @@
 //! まま上限に当たって止まり、planner / admin の仕事が他の便まで詰まらせるためである（user 直命 2026-09-12）。
 //! 測れない周は注入も停止もせず、打刻の合図だけを送らない（FR27 の条件に「使用率が閾値未満」が在る）。
 //!
+//! **hook 集合の軸**（consumer-sync.md §6・SRS FR62・`s2-07l.304`・[`plugin`]）: 口座の軸の**後**・状態の門の**前**
+//! （逼迫の席を先に逃がし、context cap と同じく busy でも送る）。登録 row の在る席だけ、`.303` の読み込み元の記録と
+//! 今の hooks.json の digest を比べ、違えば `origin=hook` の退避の合図（→ 終了の手 → 同じ口座の立て直し）。判定行の
+//! `plugin=<same|drift|unrecorded|unreadable>` は `account=` の隣（測れないことを黙らせない・C10）。
+//!
 //! **退避後の終了の手**（account-autonomy.md §5「退避後の終了の手」・`s2-07l.226`・憲法 C9）: 立て直しの入口 (3)
 //! 「前面 process が shell」は誰かが session を終えた後にしか立たない（AC13 実演 2026-09-13 では planner が
 //! `/exit` を送った＝人手に依存）。登録 row の在る席で、直近の注入が**口座由来か hook 由来**の退避の合図
@@ -61,9 +66,11 @@
 
 mod account;
 mod exit;
+mod plugin;
 mod render;
 
 pub use account::account_labels;
+pub use plugin::{hook_pointer, REASON_HOOK_DRIFT};
 pub use render::render_no_rule;
 
 use super::{cycle, inject, meter, pane_of, state, RuleRead, WmScan};
@@ -75,6 +82,7 @@ use crate::fleet::replay;
 use crate::fleet::store;
 use crate::name::NAME;
 use account::{account_turn, Turn};
+use plugin::{plugin_turn, Axis, Plugin};
 use render::{body, body_of_error, entry_of, inject_line, record, render, Signal};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -322,6 +330,8 @@ pub(super) struct Verdict {
     stamp: Option<Stamped>,
     /// 口座の逼迫度。
     account: Account,
+    /// hook 集合の読み（登録 row の在る席で軸まで進んだ周だけ・`s2-07l.304`）。
+    plugin: Plugin,
     /// 立て直しを評価した周の結果（選んだ label か `none:<理由>`・評価していない周は `None`）。
     relaunched: Option<String>,
     /// 注入の判定に添える細目（第 2 手で終了を確定した周の [`DETAIL_TERMINATED`]・それ以外は `None`＝判定行に載らない）。
@@ -339,6 +349,7 @@ impl Verdict {
             cycled: None,
             stamp: None,
             account: Account::Unevaluated,
+            plugin: Plugin::Unevaluated,
             relaunched: None,
             detail: None,
             origin: None,
@@ -618,8 +629,13 @@ fn judge(request: &Request, place: &super::StateDir, dir: &Path, seen: &Seen) ->
         Turn::Settled(verdict) => return verdict,
         Turn::Pass(account) => account,
     };
+    // hook 集合の軸（`s2-07l.304`・consumer-sync.md §6）: 口座の軸が評価した席だけ・逼迫の席を先に逃がした後。
+    let plugin = match plugin_turn(request, place, dir, seen, &account) {
+        Axis::Settled(verdict) => return Verdict { account, ..verdict },
+        Axis::Pass(plugin) => plugin,
+    };
     let rest = after_account(request, place, dir, seen, &account);
-    Verdict { account, ..rest }
+    Verdict { account, plugin, ..rest }
 }
 
 /// 口座の軸の後の条件（状態の門 → 退避物 → lock → 合図の brake → 打刻の合図）。

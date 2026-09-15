@@ -67,6 +67,8 @@ pub(super) fn inject_line(request: &Request, place: &super::StateDir, dir: &Path
 /// cycle-stamp（`s2-07l.110`）は**その後ろ**（先に land した側の token が前・後から land した側が
 /// その後ろ・planner 裁定 2026-09-12）で、cycle の評価まで進んだ周だけ載る。口座（`account=<label>:<pct>`）と
 /// 立て直し（`relaunch=<label|none:理由>`・`s2-07l.211`）は同じ規律で**さらに後ろ**・評価した周だけ載る。
+/// hook 集合の読み（`plugin=<same|drift|unrecorded|unreadable>`・`s2-07l.304`）は `account=` の**直後**（登録 row の
+/// 在る席で hook 集合の軸まで進んだ周だけ載る・既存 token の名前と順序は不変）。
 /// **置き場と出所は最後**（置き場が解けた周は判定に依らず載せる＝席側の打刻行と並べるだけで、
 /// 別の dir を見ていることを記録から弁別できる・`s2-07l.70`）。
 /// 注入した周は `consumed=<値>` の**直後**に理由（`reason=<語>`・queue と消費の周は無し）を足す
@@ -102,8 +104,9 @@ pub(super) fn body(target: &str, judged: &Judged, place: &super::StateDir) -> St
         .as_deref()
         .map_or_else(String::new, |found| format!(" relaunch={found}"));
     format!(
-        "{with_cycle}{with_state}{with_stamp}{}{with_relaunch}{}",
+        "{with_cycle}{with_state}{with_stamp}{}{}{with_relaunch}{}",
         verdict.account.suffix(),
+        verdict.plugin.suffix(),
         place.suffix()
     )
 }

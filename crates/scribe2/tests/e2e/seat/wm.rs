@@ -703,6 +703,7 @@ const REBRIEF_DIRECTIVES: &str = concat!(
 const REBRIEF_FOUND: &str = concat!(
     "[SID] sid-now\n",
     "[WM] found file=working-memory.sid-now.md\n",
+    "[PLUGIN] drift=unrecorded\n",
     "[WM-PLAN] - 次は rebrief の land\n",
     "[WM-USER-DIRECTIVE] - [2026-09-12 10:00] 「A を  そのまま、直せ。」 → 状態: 未着手\n",
     "[WM-USER-DIRECTIVE]   補足の従属行（逐語・全角　空白）\n",
@@ -826,7 +827,8 @@ pub(super) fn rebrief_forms() -> Vec<Output> {
     outs
 }
 
-/// (1) found の周は全段を marker の宣言順に出す（stdout 全体を契約の字面で照合）・bd は `--readonly` で撃つ。
+/// (1) found の周は全段を marker の宣言順に出す（stdout 全体を契約の字面で照合・記録の無い席の `[PLUGIN]` は
+/// `drift=unrecorded` の 1 行・`s2-07l.304`）・bd は `--readonly` で撃つ。marker の母集団は 25（`.304` で `[PLUGIN]` +1）。
 #[test]
 fn seat_wm_rebrief_lists_found_wm_with_every_stage_in_marker_order() {
     let (place, bd) = rebrief_found();
@@ -834,11 +836,72 @@ fn seat_wm_rebrief_lists_found_wm_with_every_stage_in_marker_order() {
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
     assert!(stderr_of(&out).is_empty(), "stderr は空: {}", stderr_of(&out));
     assert_eq!(stdout_of(&out), REBRIEF_FOUND, "DATA 全体");
+    assert_eq!(vessel::seat::rebrief::ALL.len(), 25, "marker の母集団（`[PLUGIN]` で 24 → 25）");
     assert_eq!(
         fs::read_to_string(place.dir.join("bd.args")).unwrap_or_default(),
         "--readonly\nlist\n--limit\n0\n--json\n",
         "台帳は --readonly の子 process で読む"
     );
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// 席の打刻 dir に読み込み元の記録（`.303` の `plugin` 1 行・`hooks=` は root の hooks.json の digest・`binary=` は `binary`）を
+/// 書く。root は `<place.dir>/plugin-root`（`hooks/hooks.json` = `body`・無ければ file を置かない）。
+fn rebrief_plugin_record(place: &WmPlace, body: Option<&str>, binary: &str) -> PathBuf {
+    use vessel::hook::vessel::digest;
+    let root = place.dir.join("plugin-root");
+    fs::create_dir_all(root.join("hooks")).ok();
+    match body {
+        Some(text) => fs::write(digest::hooks_path(&root), text).ok(),
+        None => fs::remove_file(digest::hooks_path(&root)).ok(),
+    };
+    let written = digest::write(&seat_dir_of(&place.state, WM_SEAT_DIR), &root, "sid-now", binary);
+    assert_eq!(written, Ok(()), "記録を書ける");
+    root
+}
+
+/// (1′) DATA の `[PLUGIN]` は `[WM]` の**直後**に 1 行（consumer-sync.md §6・`s2-07l.304`）: 記録が在れば `root=<root>
+/// hooks=<記録の digest> binary=<記録の sha> drift=<語>`——root の hooks.json を記録の後に変えた席は `drift=hooks`・binary
+/// だけ違えば `drift=binary`・両方は `hooks+binary`・どちらも同じは `none`・hooks.json を外せば `unreadable`。記録を外した周は
+/// `[PLUGIN] drift=unrecorded`（「無い」を黙らせない・rc 0）。base に marker が無い（RED）。
+#[test]
+fn seat_wm_rebrief_carries_the_plugin_line_in_marker_order() {
+    use vessel::hook::vessel::digest;
+    let (place, bd) = rebrief_found();
+    let built = env!("SCRIBE2_BUILD_COMMIT");
+    let (body_a, body_b) = ("{\"hooks\":{}}\n", "{\"hooks\":{\"Stop\":[]}}\n");
+    let digest_a = digest::fnv1a_64(body_a.as_bytes());
+    let root = rebrief_plugin_record(&place, Some(body_a), built);
+    fs::write(digest::hooks_path(&root), body_b).ok();
+    let root_s = root.display().to_string();
+    let plugin_line_of = |case: &str| -> String {
+        let out = wm_rebrief(&place, &bd, &[]);
+        assert_eq!(rc_of(&out), i32::from(RC_OK), "{case}: stderr={}", stderr_of(&out));
+        let text = stdout_of(&out);
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.get(1).copied(), Some("[WM] found file=working-memory.sid-now.md"), "{case}: {text}");
+        assert_eq!(lines.iter().filter(|line| line.starts_with("[PLUGIN]")).count(), 1, "{case}: 1 行だけ: {text}");
+        lines.get(2).map(|line| (*line).to_owned()).unwrap_or_default()
+    };
+    assert_eq!(
+        plugin_line_of("hooks"),
+        format!("[PLUGIN] root={root_s} hooks={digest_a} binary={built} drift=hooks"),
+        "記録の digest と今の digest が違う"
+    );
+    rebrief_plugin_record(&place, Some(body_a), "000000000000");
+    assert_eq!(
+        plugin_line_of("binary"),
+        format!("[PLUGIN] root={root_s} hooks={digest_a} binary=000000000000 drift=binary"),
+        "binary だけの食い違い"
+    );
+    fs::write(digest::hooks_path(&root), body_b).ok();
+    assert!(plugin_line_of("hooks+binary").ends_with(" binary=000000000000 drift=hooks+binary"), "両方");
+    rebrief_plugin_record(&place, Some(body_a), built);
+    assert_eq!(plugin_line_of("none"), format!("[PLUGIN] root={root_s} hooks={digest_a} binary={built} drift=none"));
+    fs::remove_file(digest::hooks_path(&root)).ok();
+    assert!(plugin_line_of("unreadable").ends_with(&format!(" hooks={digest_a} binary={built} drift=unreadable")), "hooks.json が無い");
+    fs::remove_file(digest::record_path(&seat_dir_of(&place.state, WM_SEAT_DIR))).ok();
+    assert_eq!(plugin_line_of("unrecorded"), "[PLUGIN] drift=unrecorded", "記録が無い周は 1 語");
     fs::remove_dir_all(&place.dir).ok();
 }
 
@@ -873,6 +936,7 @@ fn seat_wm_rebrief_marks_other_sid_as_candidate_and_other_seat_as_orphan() {
         concat!(
             "[SID] sid-new\n",
             "[WM] missing\n",
+            "[PLUGIN] drift=unrecorded\n",
             "[ORPHAN-WM] file=working-memory.sid-x.md seat=other:1\n",
             "[BD-COUNT] open=0 in_progress=0 blocked=0\n",
             "[MEMO-DUE-COUNT] n=0 of=0\n",
@@ -1046,6 +1110,7 @@ fn seat_wm_rebrief_reads_schemaless_wm_and_marks_empty_sections() {
         concat!(
             "[SID] sid-l\n",
             "[WM] found file=working-memory.sid-l.md\n",
+            "[PLUGIN] drift=unrecorded\n",
             "[WM-PLAN] - 続き\n",
             "[WM-USER-DIRECTIVE-EMPTY]\n",
             "[WM-DIRECTIVE-EMPTY]\n",

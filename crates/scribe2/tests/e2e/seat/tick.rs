@@ -1819,7 +1819,7 @@ fn seat_tick_rules_accounts_measures_a_host_only_account() {
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
     assert_eq!(
         stdout_of(&out),
-        acct_line("decision=noop reason=busy", &format!("{ST_BUSY} account={HOST_SEAT}:50"), &place.state)
+        acct_line("decision=noop reason=busy", &format!("{ST_BUSY} account={HOST_SEAT}:50 plugin=unrecorded"), &place.state)
     );
     assert!(!touched, "注入しない");
     assert_eq!(acct_curl_calls(&place), 1, "写しの口座のために計測を 1 回撃つ");
@@ -2081,4 +2081,196 @@ fn seat_tick_signal_backoff_applies_to_the_account_axis_too() {
     assert_eq!(received(), 2, "席が受けた合図は 2 本");
     drop(guard);
     fs::remove_dir_all(&place.dir).ok();
+}
+
+// ─────────────────── hook 集合の食い違いの軸（consumer-sync.md §6・ADR-0028 §2.4・SRS FR62 / AC32・`s2-07l.304`・接頭辞 `seat_tick_hook_drift_`） ───────────────────
+
+/// 記録に載せる hooks.json の本文（digest A）。
+pub(super) const DRIFT_HOOKS_A: &str = "{\"hooks\":{}}\n";
+/// 記録の後に変えた本文（digest B・event が 1 つ増えた版）。
+pub(super) const DRIFT_HOOKS_B: &str = "{\"hooks\":{\"Stop\":[]}}\n";
+
+/// plugin の root（`<place.dir>/plugin-root`・`hooks/hooks.json` = `body`・`None` なら file を置かない）を作り、席の打刻 dir に
+/// 読み込み元の記録（`.303` の `plugin` 1 行・`hooks=` は body の digest・`binary=` は `binary`）を書く。root を返す
+/// （呼び側が hooks.json を変えて食い違いを作る）。
+pub(super) fn drift_record(place: &AcctPlace, target: &str, body: Option<&str>, binary: &str) -> PathBuf {
+    use vessel::hook::vessel::digest;
+    let root = place.dir.join("plugin-root");
+    fs::create_dir_all(root.join("hooks")).ok();
+    match body {
+        Some(text) => fs::write(digest::hooks_path(&root), text).ok(),
+        None => fs::remove_file(digest::hooks_path(&root)).ok(),
+    };
+    let written = digest::write(&seat_dir_of(&place.state, target), &root, ACCT_SID, binary);
+    assert_eq!(written, Ok(()), "記録を書ける");
+    root
+}
+
+/// 登録 row の席（口座 a1 = 50・閾値未満＝口座の軸は通る）を独立 socket に立て、打刻 Busy・退避物なし・pane は
+/// `--capture-file`（context 10）にする。
+fn drift_seat(place: &AcctPlace, name: &str) -> (IsolatedSeat, String) {
+    let guard = start_seat(&place.socket, name);
+    assert!(guard.ready(), "独立 socket に prompt 付きの session を立てられる");
+    let registered = acct_register(place, name, ACCT_LAUNCH);
+    assert_eq!(rc_of(&registered), i32::from(RC_OK), "stderr={}", stderr_of(&registered));
+    acct_measured(&place.state, ACCT_SEAT, 50, &acct_now());
+    write_state(&seat_dir_of(place.state.as_path(), name), StateFix::Busy { age_s: 0 });
+    (guard, fixture(&place.dir, "pane.txt", IDLE_PANE))
+}
+
+/// (a) 記録（digest A）の後に root の hooks.json を B に変えた席へは、打刻が Busy でも idle を待たずに退避の合図 1 行を
+/// 注入する（判定行 `decision=inject … kind=externalize origin=hook`・`account=` の隣に `plugin=drift`・注入の 1 行は
+/// `hook-drift` と記録 / 今の digest を含む・打刻の合図は出ない・自打刻する）。注入の記録は `inject.jsonl` に同じ席の行として
+/// 残る（終了の手の入口が `origin=hook` を読む）。2 周目は直近の合図から back-off 未満なので `signal-recent`（同じ 1 関数）。
+/// base は軸が無く `noop reason=busy`（RED）。
+#[test]
+fn seat_tick_hook_drift_injects_the_externalize_signal_with_origin_hook() {
+    use vessel::hook::vessel::digest;
+    let place = acct_place();
+    let name = "hookdrift";
+    let (guard, pane) = drift_seat(&place, name);
+    let root = drift_record(&place, name, Some(DRIFT_HOOKS_A), env!("SCRIBE2_BUILD_COMMIT"));
+    fs::write(digest::hooks_path(&root), DRIFT_HOOKS_B).ok();
+
+    let out = acct_tick(&place, name, Some(&pane));
+
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(
+        stdout_of(&out),
+        acct_line(
+            &format!("decision=inject target={name} consumed=false kind=externalize origin=hook"),
+            &format!("{ST_BUSY} account=a1:50 plugin=drift"),
+            &place.state
+        ),
+        "busy でも退避の合図・判定行に出所（hook）と plugin=drift"
+    );
+    let seen = capture(&place.socket, name);
+    let (a, b) = (digest::fnv1a_64(DRIFT_HOOKS_A.as_bytes()), digest::fnv1a_64(DRIFT_HOOKS_B.as_bytes()));
+    assert!(
+        seen.contains("hook-drift") && seen.contains(&format!("{a}→{b}")) && seen.contains("/ready-compaction"),
+        "理由の語・記録と今の digest・退避 skill が届く: {seen}"
+    );
+    assert!(!seen.contains("seat heartbeat"), "打刻の合図は出ない: {seen}");
+    assert!(seat_dir_of(&place.state, name).join("tick-stamp").exists(), "自打刻する");
+    let log = fs::read_to_string(place.state.join("inject.jsonl")).unwrap_or_default();
+    let rows: Vec<&str> = log.lines().collect();
+    assert_eq!(rows.len(), 1, "注入 1 件の記録: {log}");
+    let row = rows.first().copied().unwrap_or_default();
+    assert_eq!(acct_text(row, "seat").as_deref(), Some(name), "{log}");
+    assert!(
+        acct_text(row, "what").is_some_and(|what| what.contains(" kind=externalize origin=hook ") && what.contains(" plugin=drift")),
+        "判定行と同じ字面（出所は kind の直後）: {log}"
+    );
+
+    let second = acct_tick(&place, name, Some(&pane));
+    assert_eq!(rc_of(&second), i32::from(RC_OK), "stderr={}", stderr_of(&second));
+    assert_eq!(
+        stdout_of(&second),
+        acct_line("decision=noop reason=signal-recent", &format!("{ST_BUSY} account=a1:50 plugin=drift"), &place.state),
+        "2 周目は再送しない（読みは載る）"
+    );
+    assert_eq!(capture(&place.socket, name).matches("/ready-compaction").count(), 1, "席が受けた合図は 1 本のまま");
+    drop(guard);
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (c) hooks の digest が同じで `binary=` だけ doctor / tick 自身の build 元 commit と違う席には注入しない（次の hook の起動で
+/// 新しい本体が走る・作り直さない）: 判定行は `plugin=same` を載せて以後は既存の順序（Busy なら `busy`・tmux に触れない・
+/// 注入の記録なし）。Idle なら打刻の合図（`plugin=same` のまま）。
+#[test]
+fn seat_tick_hook_drift_is_noop_when_only_the_binary_differs() {
+    let place = acct_place();
+    let name = "hookbinary";
+    let (guard, pane) = drift_seat(&place, name);
+    drift_record(&place, name, Some(DRIFT_HOOKS_A), "000000000000");
+
+    let (out, touched) = acct_tick_probed(&place, name, &pane);
+
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(stdout_of(&out), acct_line("decision=noop reason=busy", &format!("{ST_BUSY} account=a1:50 plugin=same"), &place.state));
+    assert!(!touched, "注入しない周は tmux に触れない");
+    assert!(!place.state.join("inject.jsonl").exists(), "注入の記録なし");
+
+    write_state(&seat_dir_of(&place.state, name), StateFix::Idle);
+    let out = acct_tick(&place, name, Some(&pane));
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(
+        stdout_of(&out),
+        acct_line(&format!("decision=inject target={name} consumed=false kind=pointer"), &format!("{ST_IDLE} account=a1:50 plugin=same"), &place.state),
+        "Idle な席には打刻の合図（退避の合図ではない）"
+    );
+    assert!(capture(&place.socket, name).contains("seat heartbeat"), "打刻の合図が届く");
+    drop(guard);
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (d) 極性の対・「無い」と「読めない」を黙らせない: 記録が無い（`plugin=unrecorded`）・記録の位置に壊れた行（`unreadable`）・
+/// 記録の `hooks=unreadable`（root に hooks.json が無かった session）・記録の後に root の hooks.json が消えた（どちらも
+/// `unreadable`）のいずれも注入せず（tmux に触れない・注入の記録なし）、以後は既存の順序（`busy`）。
+#[test]
+fn seat_tick_hook_drift_is_noop_without_a_record() {
+    use vessel::hook::vessel::digest;
+    for (case, want) in [("absent", "unrecorded"), ("broken-record", "unreadable"), ("recorded-unreadable", "unreadable"), ("hooks-json-gone", "unreadable")] {
+        let place = acct_place();
+        let name = "hooknorec";
+        let (guard, pane) = drift_seat(&place, name);
+        match case {
+            "broken-record" => {
+                fs::write(digest::record_path(&seat_dir_of(&place.state, name)), "schema=9 broken\n").ok();
+            }
+            "recorded-unreadable" => {
+                drift_record(&place, name, None, env!("SCRIBE2_BUILD_COMMIT"));
+            }
+            "hooks-json-gone" => {
+                let root = drift_record(&place, name, Some(DRIFT_HOOKS_A), env!("SCRIBE2_BUILD_COMMIT"));
+                fs::remove_file(digest::hooks_path(&root)).ok();
+            }
+            _ => {}
+        }
+
+        let (out, touched) = acct_tick_probed(&place, name, &pane);
+
+        assert_eq!(rc_of(&out), i32::from(RC_OK), "{case}: stderr={}", stderr_of(&out));
+        assert_eq!(
+            stdout_of(&out),
+            acct_line("decision=noop reason=busy", &format!("{ST_BUSY} account=a1:50 plugin={want}"), &place.state),
+            "{case}: 注入せず読みを載せる"
+        );
+        assert!(!touched, "{case}: tmux に触れない");
+        assert!(!place.state.join("inject.jsonl").exists(), "{case}: 注入の記録なし");
+        drop(guard);
+        fs::remove_dir_all(&place.dir).ok();
+    }
+}
+
+/// (a′) 食い違いが在っても FR29 と同じ除外の周は注入しない: 自席の未 consumed 退避物が在る・cycle lock が live（Busy の席は
+/// 以後の順序どおり `busy`・`plugin=drift` は載る・tmux に触れない・注入の記録なし）。除外が無ければ (a) のとおり注入する。
+#[test]
+fn seat_tick_hook_drift_keeps_the_fr29_exclusions() {
+    use vessel::hook::vessel::digest;
+    for case in ["wm-unconsumed", "cycle-live"] {
+        let place = acct_place();
+        let name = "hookexcluded";
+        let (guard, pane) = drift_seat(&place, name);
+        let root = drift_record(&place, name, Some(DRIFT_HOOKS_A), env!("SCRIBE2_BUILD_COMMIT"));
+        fs::write(digest::hooks_path(&root), DRIFT_HOOKS_B).ok();
+        if case == "wm-unconsumed" {
+            wm_file(&place.wm, "working-memory.parked.md", name);
+        } else {
+            fs::write(seat_dir_of(&place.state, name).join("cycle.lock"), "{}\n").ok();
+        }
+
+        let (out, touched) = acct_tick_probed(&place, name, &pane);
+
+        assert_eq!(rc_of(&out), i32::from(RC_OK), "{case}: stderr={}", stderr_of(&out));
+        assert_eq!(
+            stdout_of(&out),
+            acct_line("decision=noop reason=busy", &format!("{ST_BUSY} account=a1:50 plugin=drift"), &place.state),
+            "{case}: 食い違いが在っても注入しない"
+        );
+        assert!(!touched, "{case}: tmux に触れない");
+        assert!(!place.state.join("inject.jsonl").exists(), "{case}: 注入の記録なし");
+        drop(guard);
+        fs::remove_dir_all(&place.dir).ok();
+    }
 }

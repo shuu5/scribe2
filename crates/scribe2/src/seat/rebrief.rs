@@ -12,6 +12,7 @@
 use super::wm::{Anchor, Item, Pointer, PointerKind, Resolution, WmDoc};
 use super::{is_unconsumed_name, seat_dir, seat_of, state, StateDir, WM_PREFIX, WM_SUFFIX};
 use crate::fleet::json_tree::{self, Tree};
+use crate::hook::vessel::digest::{self, PluginRecord};
 use crate::polarity::{OnFailure, Polarity, Timing};
 use crate::rules::manifest::Manifest;
 use crate::rules::RuleValue;
@@ -43,6 +44,14 @@ const HARD_CANDIDATE: &str = "[hard候補]";
 const NONE: &str = "none";
 /// 台帳に無い id の status の字面。
 const UNKNOWN: &str = "unknown";
+/// 読み込み元の記録が無い周の `[PLUGIN] drift=` の字面（doctor の導入先の行と同じ語・`none` に潰さない）。
+const UNRECORDED: &str = "unrecorded";
+/// `[PLUGIN] drift=` の食い違い 0 語の字面。
+const DRIFT_NONE: &str = "none";
+/// `[PLUGIN] drift=` の語（記録の digest ≠ 今の hooks.json の digest）。
+const DRIFT_HOOKS: &str = "hooks";
+/// `[PLUGIN] drift=` の語（記録の build 元 commit ≠ この binary の build 元 commit）。
+const DRIFT_BINARY: &str = "binary";
 /// 子 process の終了を見に行く刻み。
 const POLL: Duration = Duration::from_millis(10);
 
@@ -60,6 +69,9 @@ pub enum Marker {
     Sid,
     /// 退避物の採否（found / candidate / missing / ambiguous / unreadable）。
     Wm,
+    /// 読み込み元の記録（`.303` の `seat/<target>/plugin`）と今の hooks.json / この binary の食い違い（席の同一性の隣・
+    /// consumer-sync.md §6・`s2-07l.304`）。判断材料であって規則ではない。
+    Plugin,
     /// 節 2 の 1 行。
     WmPlan,
     /// 節 2 が不在か空。
@@ -110,6 +122,7 @@ pub enum Marker {
 pub const ALL: &[Marker] = &[
     Marker::Sid,
     Marker::Wm,
+    Marker::Plugin,
     Marker::WmPlan,
     Marker::WmPlanEmpty,
     Marker::WmUserDirective,
@@ -140,6 +153,7 @@ impl Marker {
         match self {
             Self::Sid => "[SID]",
             Self::Wm => "[WM]",
+            Self::Plugin => "[PLUGIN]",
             Self::WmPlan => "[WM-PLAN]",
             Self::WmPlanEmpty => "[WM-PLAN-EMPTY]",
             Self::WmUserDirective => "[WM-USER-DIRECTIVE]",
@@ -346,10 +360,12 @@ struct Row<'a> {
 /// DATA を組む。**全部を読み終えてから**行を返す（途中で断る周は 1 行も返さない）。
 pub fn run(request: &Request) -> Result<Vec<String>, RebriefError> {
     let scan = scan(request.wm_dir, request.target)?;
-    let sid = sid_of(&seat_dir(&request.state_dir.path, request.target))?;
+    let seat = seat_dir(&request.state_dir.path, request.target);
+    let sid = sid_of(&seat)?;
     let anchor = anchor_of(request.anchor, request.prefix)?;
     let issues = read_ledger(request.bd, request.timeout)?;
-    let mut lines: Vec<(Marker, String)> = vec![(Marker::Sid, sid.clone())];
+    let plugin = plugin_line(&PluginRecord::read(&seat), env!("SCRIBE2_BUILD_COMMIT"));
+    let mut lines: Vec<(Marker, String)> = vec![(Marker::Sid, sid.clone()), (Marker::Plugin, plugin)];
     let doc = adopt(request.wm_dir, &scan.own, &sid, &mut lines);
     if let Some(doc) = &doc {
         let rows: Vec<Row> = doc
@@ -397,6 +413,34 @@ fn scan(dir: &Path, target: &str) -> Result<Scan, RebriefError> {
     found.own.sort();
     found.orphans.sort();
     Ok(found)
+}
+
+/// `[PLUGIN]` の本文（consumer-sync.md §6・判断材料であって規則ではない）: 記録が在れば `root=<root> hooks=<digest|unreadable>
+/// binary=<sha> drift=<語>`（`built` はこの binary の build 元 commit・[`plugin_drift`]）。記録が**無い**周は
+/// `drift=unrecorded`・**読めない**周は `drift=unreadable` の 1 行（「無い」を黙らせず、「読めない」を「無い」に潰さない・C10）。
+fn plugin_line(record: &PluginRecord, built: &str) -> String {
+    let PluginRecord::Recorded { root, hooks, binary, .. } = record else {
+        let word = if *record == PluginRecord::Absent { UNRECORDED } else { digest::UNREADABLE };
+        return format!("drift={word}");
+    };
+    let current = digest::hooks_digest(Path::new(root));
+    let drift = plugin_drift(hooks.as_deref(), current.as_deref(), binary, built);
+    format!("root={root} hooks={} binary={binary} drift={drift}", hooks.as_deref().unwrap_or(digest::UNREADABLE))
+}
+
+/// 食い違いの語（closed・`none` / `hooks` / `binary` / `hooks+binary` / `unreadable`・doctor の `Drift` の列を席の側に写す）:
+/// `hooks` は記録の digest（`recorded`）と今の hooks.json の digest（`current`）の不一致、`binary` は記録の build 元
+/// commit と この binary の不一致。どちらかの digest が読めない周は `unreadable`（比べられないことを `none` に潰さない・
+/// binary の語も重ねない＝語は closed の 5 つ）。
+fn plugin_drift(recorded: Option<&str>, current: Option<&str>, binary: &str, built: &str) -> String {
+    let (Some(recorded), Some(current)) = (recorded, current) else {
+        return digest::UNREADABLE.to_owned();
+    };
+    let words: Vec<&str> = [(recorded != current, DRIFT_HOOKS), (binary != built, DRIFT_BINARY)]
+        .into_iter()
+        .filter_map(|(holds, word)| holds.then_some(word))
+        .collect();
+    if words.is_empty() { DRIFT_NONE.to_owned() } else { words.join("+") }
 }
 
 /// 打刻の最終行の `sid`（不在 / 読めない / 空 を分けて断る・externalize と同じ読み）。
@@ -799,8 +843,8 @@ fn finish(child: &mut Child, deadline: Option<Instant>) -> Option<ExitStatus> {
 #[cfg(test)]
 mod tests {
     use super::{
-        adopt, anchor_of, epoch_of_ts, finish, issues_of, ledger_ids, orphan_lines, render_unavailable, sid_of, triage, Dep, Issue,
-        Marker, RebriefError, Thresholds, ALL,
+        adopt, anchor_of, epoch_of_ts, finish, issues_of, ledger_ids, orphan_lines, plugin_drift, plugin_line, render_unavailable,
+        sid_of, triage, Dep, Issue, Marker, PluginRecord, RebriefError, Thresholds, ALL,
     };
     use crate::order::is_declaration_order;
     use crate::seat::state;
@@ -820,6 +864,7 @@ mod tests {
             [
                 "[SID]",
                 "[WM]",
+                "[PLUGIN]",
                 "[WM-PLAN]",
                 "[WM-PLAN-EMPTY]",
                 "[WM-USER-DIRECTIVE]",
@@ -846,7 +891,36 @@ mod tests {
             "宣言順 = 出力順"
         );
         assert_eq!(Marker::Sid as usize, 0, "先頭の判別子");
-        assert_eq!(Marker::TicketCandidateNone as usize, 23, "末尾の判別子");
+        assert_eq!(Marker::Plugin as usize, 2, "席の同一性の隣（`[WM]` の直後・`s2-07l.304`）");
+        assert_eq!(Marker::TicketCandidateNone as usize, 24, "末尾の判別子");
+    }
+
+    /// `[PLUGIN]` の食い違いの語は closed の 5 つ（consumer-sync.md §6）: hooks の digest の不一致は `hooks`・build 元 commit の
+    /// 不一致は `binary`・両方は `hooks+binary`・どちらも同じは `none`・digest のどちらかが読めない周は `unreadable`
+    /// （binary が違っても重ねない）。記録の無い / 読めない周の本文は `drift=unrecorded` / `drift=unreadable` の 1 語だけ。
+    #[test]
+    fn seat_wm_rebrief_plugin_drift_words_are_closed() {
+        let (a, b, built) = ("aaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbb", "0123456789ab");
+        assert_eq!(plugin_drift(Some(a), Some(a), built, built), "none");
+        assert_eq!(plugin_drift(Some(a), Some(b), built, built), "hooks");
+        assert_eq!(plugin_drift(Some(a), Some(a), "ffffffffffff", built), "binary");
+        assert_eq!(plugin_drift(Some(a), Some(b), "ffffffffffff", built), "hooks+binary");
+        assert_eq!(plugin_drift(None, Some(a), "ffffffffffff", built), "unreadable", "記録の digest が unreadable");
+        assert_eq!(plugin_drift(Some(a), None, built, built), "unreadable", "今の hooks.json が無い");
+        assert_eq!(plugin_line(&PluginRecord::Absent, built), "drift=unrecorded");
+        assert_eq!(plugin_line(&PluginRecord::Unreadable, built), "drift=unreadable");
+        let recorded = PluginRecord::Recorded {
+            root: "/no/such/root".to_owned(),
+            hooks: Some(a.to_owned()),
+            binary: built.to_owned(),
+            sid: "s".to_owned(),
+            ts: 1,
+        };
+        assert_eq!(
+            plugin_line(&recorded, built),
+            format!("root=/no/such/root hooks={a} binary={built} drift=unreadable"),
+            "root に hooks.json が無い周は記録の値を写して drift=unreadable"
+        );
     }
 
     /// 判定の閾値（`s2-07l.217` の歯で使う値＝裁定 id `user 2026-09-13T14:06Z` の 3 日 / P2）。

@@ -1626,7 +1626,7 @@ fn seat_account_tick_never_measures_an_undeclared_account() {
     let (out, touched) = acct_tick_probed(&place, name, &pane);
 
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
-    assert_eq!(stdout_of(&out), acct_line("decision=noop reason=busy", &format!("{ST_BUSY} account=ghost:unmeasured"), &place.state));
+    assert_eq!(stdout_of(&out), acct_line("decision=noop reason=busy", &format!("{ST_BUSY} account=ghost:unmeasured plugin=unrecorded"), &place.state));
     assert!(!touched, "注入しない");
     assert_eq!(acct_curl_calls(&place), 0, "宣言外の口座のために計測を撃たない");
     fs::remove_dir_all(&place.dir).ok();
@@ -1694,7 +1694,7 @@ fn seat_account_tick_below_threshold_keeps_the_existing_order() {
 
     let (out, touched) = acct_tick_probed(&place, name, &pane);
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
-    assert_eq!(stdout_of(&out), acct_line("decision=noop reason=busy", &format!("{ST_BUSY} account=a1:50"), &place.state));
+    assert_eq!(stdout_of(&out), acct_line("decision=noop reason=busy", &format!("{ST_BUSY} account=a1:50 plugin=unrecorded"), &place.state));
     assert!(!touched, "注入しない周は tmux に触れない");
 
     let guard = start_seat(&place.socket, name);
@@ -1706,7 +1706,7 @@ fn seat_account_tick_below_threshold_keeps_the_existing_order() {
         stdout_of(&out),
         acct_line(
             &format!("decision=inject target={name} consumed=false kind=pointer"),
-            &format!("{ST_IDLE} account=a1:50"),
+            &format!("{ST_IDLE} account=a1:50 plugin=unrecorded"),
             &place.state
         ),
         "閾値未満の Idle な席には打刻の合図"
@@ -1734,7 +1734,7 @@ fn seat_account_tick_unmeasured_account_is_a_typed_noop() {
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
     assert_eq!(
         stdout_of(&out),
-        acct_line("decision=noop reason=account-unmeasured", &format!("{ST_IDLE} account=a1:unmeasured"), &place.state)
+        acct_line("decision=noop reason=account-unmeasured", &format!("{ST_IDLE} account=a1:unmeasured plugin=unrecorded"), &place.state)
     );
     assert!(!touched, "注入しない（tmux に触れない）");
     assert!(!place.state.join("inject.jsonl").exists(), "注入の記録なし");
@@ -1765,7 +1765,7 @@ fn seat_account_tick_measures_once_when_the_latest_row_is_stale() {
     acct_fake_curl(&place, 50);
     write_state(&seat_dir_of(&place.state, name), StateFix::Busy { age_s: 0 });
     let pane = fixture(&place.dir, "pane.txt", IDLE_PANE);
-    let want = acct_line("decision=noop reason=busy", &format!("{ST_BUSY} account=a1:50"), &place.state);
+    let want = acct_line("decision=noop reason=busy", &format!("{ST_BUSY} account=a1:50 plugin=unrecorded"), &place.state);
 
     for round in [1_u32, 2] {
         let (out, touched) = acct_tick_probed(&place, name, &pane);
@@ -1801,7 +1801,7 @@ fn seat_account_tick_keeps_the_fr29_exclusions_over_threshold() {
         assert_eq!(rc_of(&out), i32::from(RC_OK), "{case}: stderr={}", stderr_of(&out));
         assert_eq!(
             stdout_of(&out),
-            acct_line("decision=noop reason=busy", &format!("{ST_BUSY} account=a1:90"), &place.state),
+            acct_line("decision=noop reason=busy", &format!("{ST_BUSY} account=a1:90 plugin=unrecorded"), &place.state),
             "{case}: 閾値以上でも注入しない"
         );
         assert!(!touched, "{case}: tmux に触れない");
@@ -2053,6 +2053,117 @@ fn seat_account_relaunch_leaves_the_current_account_at_threshold() {
     acct_assert_relabelled(&place, name);
     drop(guard);
     fs::remove_dir_all(&place.dir).ok();
+}
+
+// ─────────────────── hook 集合の食い違いの後の終了の手と立て直し（consumer-sync.md §6・AC32・`s2-07l.304`・接頭辞 `seat_tick_hook_drift_`） ───────────────────
+
+/// 終了の手を受けた席が写す 1 行の置き場（名に `/exit` を含めない＝送達の目印の出現数を pane の echo で汚さない）。
+const DRIFT_LOG: &str = "drift-received.log";
+
+/// pane の前面 process の名（`#{pane_current_command}`・器の入口 (3) と同じ typed な読み）。
+fn drift_front(place: &AcctPlace, name: &str) -> String {
+    let out = tmux(&place.socket, &["list-panes", "-t", name, "-F", "#{pane_current_command}"]);
+    String::from_utf8_lossy(&out.stdout).trim().to_owned()
+}
+
+/// 前面が `want` になるまで待つ（上限 [`PROMPT_WAIT`]）。
+fn drift_wait_front(place: &AcctPlace, name: &str, want: &str) -> bool {
+    let deadline = Instant::now().checked_add(PROMPT_WAIT);
+    while deadline.is_some_and(|at| Instant::now() < at) {
+        if drift_front(place, name) == want {
+            return true;
+        }
+        sleep(Duration::from_millis(100));
+    }
+    false
+}
+
+/// 前面が shell でない偽の席にする（終了の手の歯と同じ形）: `sh -i` の session に prompt `❯ ` を描いて **1 行だけ読む `head`**
+/// を走らせる。前面は `head`（入口 (3) は立たない）で、受けた 1 行を [`DRIFT_LOG`] に写して終わり、shell へ戻る
+/// （`/exit` を受けた席が終わる形）。前面が `head` になったかを返す。
+fn drift_seat_head(place: &AcctPlace, name: &str) -> bool {
+    let line = format!("printf '\\342\\235\\257 '; head -n 1 >> '{}'", place.dir.join(DRIFT_LOG).display());
+    tmux(&place.socket, &["send-keys", "-t", name, "-l", &line]).status.success()
+        && tmux(&place.socket, &["send-keys", "-t", name, "Enter"]).status.success()
+        && drift_wait_front(place, name, "head")
+}
+
+/// (b) 経路の統合: hook 由来の退避の合図（記録 A ≠ 今 B・口座 a1 = 13 は閾値未満・候補 a2 = 5 はさらに低い）→ 退避 → `Stop` →
+/// 前面が shell でない席には次の周に `/exit`（`.307` の入口・`origin=hook` は口座由来と同じ側）→ 席が終わって前面が shell →
+/// 次の周に立て直しが**同じ target・同じ口座 a1**（閾値未満なら自席の口座を優先・`.312`）で走り、起動の後に `/rebrief` が
+/// 注入される（席の記録は 退避の合図 → `/exit` → 起動 → 復元 の 4 行・登録 row は a1 のまま 1 件増える）。base は軸が無く
+/// 合図が出ない（RED）。
+#[test]
+fn seat_tick_hook_drift_then_exit_and_relaunch_on_the_same_account() {
+    let place = acct_place();
+    let name = "hookrelaunch";
+    let guard = drift_parked(&place, name);
+
+    let second = acct_tick(&place, name, None);
+    let line = stdout_of(&second);
+    assert_eq!(rc_of(&second), i32::from(RC_OK), "2 周目: stdout={line} stderr={}", stderr_of(&second));
+    for (key, want) in [("decision", "inject"), ("kind", "exit"), ("account", "a1:13")] {
+        assert_eq!(tick_token(&line, key).as_deref(), Some(want), "2 周目は終了の手: {key}: {line}");
+    }
+    assert_eq!((tick_token(&line, "cycle"), tick_token(&line, "plugin")), (None, None), "/clear の cycle は回さず hook の軸は評価しない: {line}");
+    assert_eq!(fs::read_to_string(place.dir.join(DRIFT_LOG)).unwrap_or_default(), "/exit\n", "席が受けた 1 行は /exit");
+    assert!(drift_wait_front(&place, name, "sh"), "受けた席は終わって前面が shell へ戻る");
+    assert!(acct_shell_prompt(&place, name, ""), "shell の prompt を描ける");
+
+    let third = acct_tick(&place, name, None);
+    let line = stdout_of(&third);
+    assert_eq!(rc_of(&third), i32::from(RC_OK), "3 周目: stdout={line} stderr={}", stderr_of(&third));
+    for (key, want) in [("decision", "inject"), ("kind", "relaunch"), ("consumed", "true"), ("account", "a1:13"), ("relaunch", ACCT_SEAT)] {
+        assert_eq!(tick_token(&line, key).as_deref(), Some(want), "3 周目は同じ口座で立て直し: {key}: {line}");
+    }
+    drift_assert_relaunched_on_own_account(&place, name);
+    drop(guard);
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// hook 由来の退避で止まり、前面が shell でない席の fixture: 登録 row（起動の雛形は偽の session の script）・口座 a1 = 13
+/// （閾値未満）・候補 a2 = 5（さらに低い＝逼迫度最小は a2）・記録 A ≠ 今 B → 実物の tick の合図（判定行
+/// `kind=externalize origin=hook … plugin=drift`）→ `Stop` → 自席の未 consumed 退避物 → 前面を `head` に。
+fn drift_parked(place: &AcctPlace, name: &str) -> IsolatedSeat {
+    use vessel::hook::vessel::digest;
+    let guard = start_seat(&place.socket, name);
+    assert!(guard.ready(), "独立 socket に session を立てられる");
+    let registered = acct_register(place, name, &acct_launcher(place, name));
+    assert_eq!(rc_of(&registered), i32::from(RC_OK), "stderr={}", stderr_of(&registered));
+    acct_measured(&place.state, ACCT_SEAT, 13, &acct_now());
+    acct_measured(&place.state, ACCT_SPARE, 5, &acct_now());
+    let root = super::tick::drift_record(place, name, Some(super::tick::DRIFT_HOOKS_A), env!("SCRIBE2_BUILD_COMMIT"));
+    fs::write(digest::hooks_path(&root), super::tick::DRIFT_HOOKS_B).ok();
+    write_state(&seat_dir_of(&place.state, name), StateFix::Busy { age_s: 0 });
+    let pane = fixture(&place.dir, "pane.txt", IDLE_PANE);
+    let first = stdout_of(&acct_tick(place, name, Some(&pane)));
+    for (key, want) in [("decision", "inject"), ("kind", "externalize"), ("origin", "hook"), ("account", "a1:13"), ("plugin", "drift")] {
+        assert_eq!(tick_token(&first, key).as_deref(), Some(want), "1 周目は hook 由来の退避の合図: {key}: {first}");
+    }
+    acct_stop(place, name, unix_now().saturating_add(1));
+    wm_file(&place.wm, "working-memory.parked.md", name);
+    assert!(drift_seat_head(place, name), "前面が head の席を作れる");
+    guard
+}
+
+/// 立て直した周の 4 面: 雛形の穴は自席の口座（a1）の credential dir・立ち上がった席が `/rebrief` を受けた・席の記録は
+/// 退避の合図（`hook-drift`）→ `/exit` → 起動 → 復元 の 4 行・登録 row は a1 のまま 1 件増える（既存 row の写し）。
+fn drift_assert_relaunched_on_own_account(place: &AcctPlace, name: &str) {
+    let own_dir = place.state.join("accounts").join(ACCT_SEAT);
+    assert_eq!(
+        fs::read_to_string(place.dir.join("launched")).unwrap_or_default(),
+        format!("{}\n", own_dir.display()),
+        "穴は自席の口座（a1）の credential dir で埋まる（a2 ではない）"
+    );
+    assert_eq!(fs::read_to_string(place.dir.join("seat.log")).unwrap_or_default(), "/rebrief\n", "立ち上がった席が復元を受けた");
+    let sent = acct_sent(&place.state, name);
+    assert_eq!(sent.len(), 4, "退避の合図・/exit・起動・復元の 4 行: {sent:?}");
+    assert!(sent.first().is_some_and(|what| what.contains("hook-drift")), "1 行目は hook 由来の退避の合図: {sent:?}");
+    assert_eq!(sent.get(1).map(String::as_str), Some("/exit"), "2 行目は終了の手: {sent:?}");
+    assert_eq!(sent.get(3).map(String::as_str), Some("/rebrief"), "4 行目は復元: {sent:?}");
+    let rows = acct_rows(&place.state);
+    assert_eq!(rows.len(), 2, "SeatRegistered は 1 件増える: {rows:?}");
+    assert_eq!(rows.last(), rows.first(), "row は既存 row の写し（口座 a1 も含めて同じ）: {rows:?}");
 }
 
 // ─────────────────── 復元の第 2 手（account-autonomy.md §5「復元の第 2 手」・`s2-07l.318`・接頭辞 `seat_restore_`） ───────────────────
