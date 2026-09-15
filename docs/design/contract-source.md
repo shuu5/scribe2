@@ -59,7 +59,7 @@ Landed（gate-cost.md §6 の CAS の後）に続けて器が行う。各段は 
 ## 6. 台帳 adapter（FR50 / FR51）
 
 - **置き場**: 新 module `ledger/`（core）。読み = `bd --readonly show <id> --json` / `bd --readonly list --status open --limit 0 --json`（子 process・git / tmux と同型・crate 依存なし・出力は既存の `json_lite` で読む）。書き = `bd close <id> --reason <text>` の **1 種だけ**（起票・acceptance・裁定は席）。binary の名は const・path は PATH 解決（env を読まない・C2.2）。
-- **lint**（`<NAME> doctor --state-dir S --repo R` の項目 1 行・C3.2）: open の bead を全件読み、(i) 契約（acceptance が `design =` で始まる bead）で pointer が解けない（doc が無い・区間に id が無い）(ii) memo（label `intake:memo`）で本文に機械が読む設計の見出し（固定の 1 つ・`## memo`）が在り `design =` / `research =` の pointer 行が無い、を名指す。件数と母集団を同じ行に出す（`ledger: open=N contracts=K unresolved=U memos=M unpointed=P`）。管理 tick の pointer 注入（FR43）は doctor のこの行を席へ渡す。
+- **lint**（`<NAME> doctor --state-dir S --repo R` の項目 1 行・C3.2）: open の bead を全件読み、(i) 契約（acceptance が `design =` で始まる bead）で pointer が解けない（doc が無い・区間に id が無い）(ii) memo（label `intake:memo`）で本文に機械が読む設計の見出し（固定の 1 つ・`## memo`）が在り `design =` / `research =` の pointer 行が無い (iii) 契約で acceptance が pointer の 1 行を超える本文を持つ（§2「台帳の bead」・生成 (b) の Landed 後は本文を機械が読まず、lens と実装役が読む契約は行と節だけ＝本文は写しの矛盾の置き場になる・.209 が審査で 7 周止まった型）、を名指す。件数と母集団を同じ行に出す（`ledger: open=N contracts=K unresolved=U bodied=B memos=M unpointed=P`）。管理 tick の pointer 注入（FR43）は doctor のこの行を席へ渡す。
 - **CI は撃たない**（private な台帳に届かない）。
 
 ## 7. 質問と契約の改訂（.133 の解消）
@@ -167,7 +167,7 @@ id = "e"
 title = "台帳 lint（doctor の項目）"
 req = ["FR51"]
 section = "6"
-write-set = ["+crates/scribe2/src/ledger/mod.rs", "+crates/scribe2/src/ledger/lint.rs", "crates/scribe2/src/main.rs", "+crates/scribe2/tests/e2e/ledger.rs", "crates/scribe2/src/snapshots/"]
+write-set = ["+crates/scribe2/src/ledger/mod.rs", "+crates/scribe2/src/ledger/lint.rs", "crates/scribe2/src/lib.rs", "crates/scribe2/src/main.rs", "crates/scribe2/src/seat/rebrief.rs", "+crates/scribe2/tests/e2e/ledger.rs", "crates/scribe2/src/snapshots/scribe2__tests__doctor_external_form.snap"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail ledger_lint_"]
 size = "S"
 done = "偽 adapter の出力で doctor の行が件数と母集団を出す"
