@@ -254,7 +254,7 @@ id = "m"
 title = "pipe/closure.rs の write-set の導出（weighted_lines / Fields / Base / derive_write_set / check_drift / teeth_places）を pipe/closure/derive.rs へ割る — 純移動・呼び手は pub use で不変"
 req = ["FR48", "FR39"]
 section = "3"
-write-set = ["crates/scribe2/src/pipe/closure.rs", "+crates/scribe2/src/pipe/closure/derive.rs"]
+write-set = ["-crates/scribe2/src/pipe/closure.rs", "+crates/scribe2/src/pipe/closure/derive.rs"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe::closure::derive::"]
 size = "S"
 done = "closure.rs の余地が 400 行以上に戻り、導出の関数と歯が derive.rs に移って本数と中身が不変、呼び手の use は動かず、gate の lens 入力が要約"
