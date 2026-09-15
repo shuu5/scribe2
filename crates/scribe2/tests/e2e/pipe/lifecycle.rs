@@ -943,6 +943,13 @@ fn pipe_ratelimit_resume_excludes_the_registered_seat_account() {
 }
 
 /// (4) 待ちの途中の便を `pipe stop --run` が止める: `RunStopped` が書かれ、待ちから抜けて起こさない。
+///
+/// 待ちの判定行（`next=wait reset=…`）の有無は見ない: 判定行は process の終了時にだけ stdout へ出て、待ちに
+/// 入ったことを走行中に観測する線が無いので、stop が待ちの前に着いた周（負荷下で選定が伸びる）は判定行を
+/// 書かずに `Stopped` で断る＝順序に依る。壁時計で「待ちに入った」を仮定する sleep は置かない
+/// （s2-07l.329 run 1 の baseline で 1/2 落ちた）。判定行は
+/// [`pipe_ratelimit_resume_waits_for_the_earliest_reset_then_remeasures`] が担保する。
+// flip-check: retroactive s2-07l.334
 #[test]
 fn pipe_ratelimit_resume_stop_breaks_the_wait() {
     let (repo, state) = repo_with_state();
@@ -960,20 +967,19 @@ fn pipe_ratelimit_resume_stop_breaks_the_wait() {
         .stderr(Stdio::piped())
         .spawn()
         .expect("resume を背景で起こせる");
-    // 計測が終わる（口座 2 つの行が置き場に載る）まで待ってから止める＝待ちの途中で止める形。
+    // 計測が終わる（口座 2 つの行が置き場に載る）まで待ってから止める。stop は待ちの前に着いても後に着いても
+    // 便を Stopped で断る（以下の assert はどちらの順序でも成り立つ）。
     let deadline = Instant::now() + Duration::from_secs(20);
     while curl_calls(&state) < 2 && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(20));
     }
     assert_eq!(curl_calls(&state), 2, "計測が撃たれた");
-    std::thread::sleep(Duration::from_millis(100));
-    assert!(child.try_wait().expect("状態を読める").is_none(), "待ちの間は process が生きている（reset は 2099 年）");
+    assert!(child.try_wait().expect("状態を読める").is_none(), "止める前は process が生きている（reset は 2099 年）");
     stop_run_ok(&state, &id);
     let finished = child.wait_with_output().expect("resume の終了を待てる");
     let stdout = String::from_utf8_lossy(&finished.stdout);
     let stderr = String::from_utf8_lossy(&finished.stderr);
     assert_eq!(finished.status.code(), Some(i32::from(RC_REFUSED)), "止められた便は段違いで断る: {stdout} / {stderr}");
-    assert!(stdout.contains(&format!("run={id} next=wait reset={FAR_RESET}")), "待ちの判定行: {stdout}");
     assert!(stderr.contains("段は Stopped である"), "{stderr}");
     assert_eq!(stub_calls(&state), 1, "止めた後に起こさない");
     assert!(show_line(&repo, &state, &id).contains("stage=Stopped"), "便は Stopped で終端");
