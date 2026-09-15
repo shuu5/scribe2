@@ -71,6 +71,8 @@ fn select_account(args: &[String], dir: &Path) -> Outcome {
         inflight: &state.inflight_by_account(),
         threshold_pct,
         now: &now,
+        // 留まる口座は席の立て直しだけが渡す（`fleet select` の外形は不変・`s2-07l.312`）。
+        prefer: None,
     });
     let mut outcome = Outcome::ok(vec![select::line(purpose, &found)]);
     outcome.err = measured.out.into_iter().chain(measured.err).collect();

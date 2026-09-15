@@ -323,6 +323,7 @@ mod fleet {
                 inflight: &BTreeMap::new(),
                 threshold_pct: 85,
                 now,
+                prefer: None,
             });
             let fresh = found.resets_at.as_deref().is_none_or(|resets_at| resets_at >= now);
             let want = if !fresh {

@@ -130,6 +130,8 @@ pub fn select_for_run(state: &State, labels: &[String], model: Option<&str>, now
         inflight: &state.inflight_by_account(),
         threshold_pct: select::LIMIT_PCT,
         now,
+        // 便用は留まる口座を読まない（session 用の規則・`s2-07l.312`）。
+        prefer: None,
     })
 }
 

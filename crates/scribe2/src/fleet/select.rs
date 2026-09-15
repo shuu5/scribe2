@@ -8,6 +8,10 @@
 //! 便用の順序（ADR-0027 §2.2・C9.2「窓の終わりまで使い切る」）: 候補を **(1) 数える窓の reset の最も早いもの**
 //! （昇順・reset を持つ窓が無い口座は最後）→ **(2) 走行中の便数**（昇順）→ **(3) label** で並べた先頭。
 //! 逼迫度（使用率の最大）は当たっている判定と session 用にだけ残る。
+//!
+//! session 用は並べ替えの**前**に [`Input::prefer`]（自席の登録 row の口座）を見る（ADR-0028 §2.4・`s2-07l.312`）:
+//! それが候補（除外に無く・測れていて・当たっておらず・R-C9-1 未満）ならその口座に留まる。planner / admin の席が
+//! 立て直しのたびに逼迫度最小の別口座へ動く形（2026-09-15 01:15Z 実測）を閉じる。便用は `prefer` を読まない。
 
 use super::{Allowance, AllowanceKey, AllowanceLatest, Measured, WindowKind};
 use crate::polarity::{OnFailure, Polarity, Timing};
@@ -22,7 +26,7 @@ pub enum Purpose {
     /// 便用: 当たっていない口座のうち reset が最も早い → 走行中の便数が最少 → label（reset で消える残りから
     /// 使う側・C9.2・ADR-0027 §2.2）。閾値を持たない。
     Run,
-    /// session 用: 逼迫度が最小かつ R-C9-1 の値未満（余裕を残す側）。
+    /// session 用: [`Input::prefer`] が候補ならそれ・でなければ逼迫度が最小かつ R-C9-1 の値未満（余裕を残す側）。
     Session,
 }
 
@@ -180,6 +184,10 @@ pub struct Input<'a> {
     pub threshold_pct: u64,
     /// いまの UTC（`YYYY-MM-DDTHH:MM:SSZ`）。reset を過ぎた行を古いと読むのに使う。
     pub now: &'a str,
+    /// session 用が留まる口座（自席の登録 row の口座・ADR-0028 §2.4）。候補（除外に無く・測れていて・当たっておらず・
+    /// 閾値未満）ならその口座を選び、候補でなければ逼迫度の最小へ。`seat launch` の初回（row が無い）・`fleet select`・
+    /// 便用は `None`（便用は与えられても読まない）。
+    pub prefer: Option<&'a str>,
 }
 
 /// 候補 1 つ（並べる鍵を全部持つ）。
@@ -212,7 +220,7 @@ pub fn select(input: &Input<'_>) -> Selection {
             Standing::Out(reason, reopens) => outs.push((reason, reopens)),
         }
     }
-    match pick(input.purpose, &candidates) {
+    match pick(input.purpose, input.prefer, &candidates) {
         Some(label) => Selection::Chosen(label.to_owned()),
         None => Selection::None(NoCandidate {
             reason: outs
@@ -238,12 +246,17 @@ pub fn line(purpose: Purpose, selection: &Selection) -> String {
     }
 }
 
-/// 候補の中から用途の規則で 1 つ選ぶ。便用は [`run_key`] の昇順の先頭・session 用は逼迫度の最小（同点は label）。
-fn pick<'a>(purpose: Purpose, candidates: &[Candidate<'a>]) -> Option<&'a str> {
+/// 候補の中から用途の規則で 1 つ選ぶ。便用は [`run_key`] の昇順の先頭・session 用は `prefer` が候補ならそれ・
+/// でなければ逼迫度の最小（同点は label）。候補に無い `prefer`（除外・測れない・当たっている・閾値以上・宣言に
+/// 無い）は [`standing`] で既に外れているので、ここでは候補の列に在るかだけを見る。
+fn pick<'a>(purpose: Purpose, prefer: Option<&str>, candidates: &[Candidate<'a>]) -> Option<&'a str> {
     let ranked = candidates.iter();
     let found = match purpose {
         Purpose::Run => ranked.min_by(|a, b| run_key(a).cmp(&run_key(b))),
-        Purpose::Session => ranked.min_by(|a, b| a.pressure.cmp(&b.pressure).then(a.label.cmp(b.label))),
+        Purpose::Session => candidates
+            .iter()
+            .find(|found| Some(found.label) == prefer)
+            .or_else(|| ranked.min_by(|a, b| a.pressure.cmp(&b.pressure).then(a.label.cmp(b.label)))),
     };
     found.map(|found| found.label)
 }
@@ -451,10 +464,11 @@ mod tests {
         exclude: &'a [&'a str],
         inflight: &'a [(&'a str, usize)],
         threshold_pct: u64,
+        prefer: Option<&'a str>,
     }
 
     fn run() -> Ask<'static> {
-        Ask { purpose: Purpose::Run, model: None, exclude: &[], inflight: &[], threshold_pct: THRESHOLD }
+        Ask { purpose: Purpose::Run, model: None, exclude: &[], inflight: &[], threshold_pct: THRESHOLD, prefer: None }
     }
 
     fn session() -> Ask<'static> {
@@ -474,6 +488,7 @@ mod tests {
             inflight: &inflight,
             threshold_pct: ask.threshold_pct,
             now: NOW,
+            prefer: ask.prefer,
         })
     }
 
@@ -610,6 +625,59 @@ mod tests {
         );
         assert_eq!(choose(&["a1", "a2"], &edge, &session()), chosen("a2"), "閾値未満は候補");
         assert_eq!(choose(&["a1"], &edge, &run()), chosen("a1"), "便用は閾値を持たない");
+    }
+
+    /// (a) session 用は `prefer`（自席の登録 row の口座）が候補ならそれに留まる（ADR-0028 §2.4・`s2-07l.312`）:
+    /// a1（13%・prefer）と a2（5%）→ a1。base（逼迫度最小）は a2 → RED。`prefer` 無しは従来どおり最小の a2。
+    #[test]
+    fn select_session_prefers_the_given_account_below_threshold() {
+        let rows = table(&[(TS, [round("a1", 13, 0), round("a2", 5, 0)].concat())]);
+        let pair = ["a1", "a2"];
+        assert_eq!(choose(&pair, &rows, &Ask { prefer: Some("a1"), ..session() }), chosen("a1"), "13% でも自席の口座に留まる");
+        assert_eq!(choose(&["a2", "a1"], &rows, &Ask { prefer: Some("a1"), ..session() }), chosen("a1"), "入力順に依らない");
+        assert_eq!(choose(&pair, &rows, &session()), chosen("a2"), "prefer 無しは逼迫度の最小");
+        assert_eq!(choose(&pair, &rows, &Ask { prefer: Some("a2"), ..session() }), chosen("a2"), "prefer が最小と同じなら同じ答え");
+        // 候補でない prefer は読まない: 除外・宣言に無い・測れない・当たっている。
+        assert_eq!(choose(&pair, &rows, &Ask { prefer: Some("a1"), exclude: &["a1"], ..session() }), chosen("a2"), "除外が先");
+        assert_eq!(choose(&pair, &rows, &Ask { prefer: Some("a9"), ..session() }), chosen("a2"), "宣言に無い口座は候補でない");
+        assert_eq!(choose(&["a1", "a2", "a3"], &rows, &Ask { prefer: Some("a3"), ..session() }), chosen("a2"), "実測行の無い口座");
+        let limited = table(&[(TS, [round("a1", 100, 0), round("a2", 5, 0)].concat())]);
+        assert_eq!(choose(&pair, &limited, &Ask { prefer: Some("a1"), ..session() }), chosen("a2"), "当たっている口座には留まらない");
+        assert_eq!(
+            choose(&["a1"], &limited, &Ask { prefer: Some("a1"), ..session() }),
+            none(NoCandidateReason::AllLimited, Some(FIVE_RESET)),
+            "prefer だけで候補なしなら候補なし"
+        );
+    }
+
+    /// (b) 極性の対: `prefer` の口座が閾値以上（85 ≥ 85）なら留まらず別口座（a2 = 5%）へ。閾値の 1 つ下（84）なら留まる。
+    #[test]
+    fn select_session_leaves_the_preferred_account_at_threshold() {
+        let pair = ["a1", "a2"];
+        let at = table(&[(TS, [round("a1", THRESHOLD, 0), round("a2", 5, 0)].concat())]);
+        assert_eq!(choose(&pair, &at, &Ask { prefer: Some("a1"), ..session() }), chosen("a2"), "閾値ちょうどは留まらない");
+        let over = table(&[(TS, [round("a1", THRESHOLD + 10, 0), round("a2", 5, 0)].concat())]);
+        assert_eq!(choose(&pair, &over, &Ask { prefer: Some("a1"), ..session() }), chosen("a2"), "閾値以上は留まらない");
+        let under = table(&[(TS, [round("a1", THRESHOLD - 1, 0), round("a2", 5, 0)].concat())]);
+        assert_eq!(choose(&pair, &under, &Ask { prefer: Some("a1"), ..session() }), chosen("a1"), "閾値未満は留まる");
+        assert_eq!(
+            choose(&["a1"], &at, &Ask { prefer: Some("a1"), ..session() }),
+            none(NoCandidateReason::OverThreshold, None),
+            "prefer だけで閾値以上なら候補なし（理由は従来どおり）"
+        );
+    }
+
+    /// (c) 便用は `prefer` を読まない: 同じ表・同じ prefer で `Purpose::Run` の答えは prefer 無しと同じ（reset →
+    /// 便数 → label の順・a1 に便 1 本なら a2）。
+    #[test]
+    fn select_run_ignores_prefer() {
+        let rows = table(&[(TS, [round("a1", 13, 0), round("a2", 5, 0)].concat())]);
+        let pair = ["a1", "a2"];
+        let busy = [("a1", 1)];
+        assert_eq!(choose(&pair, &rows, &Ask { prefer: Some("a1"), inflight: &busy, ..run() }), chosen("a2"), "便数が先・prefer は無視");
+        assert_eq!(choose(&pair, &rows, &Ask { inflight: &busy, ..run() }), chosen("a2"), "prefer 無しと同じ");
+        assert_eq!(choose(&pair, &rows, &Ask { prefer: Some("a2"), ..run() }), chosen("a1"), "同じ reset・便数 0 → label の先頭");
+        assert_eq!(choose(&pair, &rows, &Ask { prefer: Some("a9"), ..run() }), choose(&pair, &rows, &run()), "宣言に無い prefer も同じ");
     }
 
     #[test]
@@ -968,6 +1036,7 @@ mod tests {
             inflight: &inflight,
             threshold_pct: threshold,
             now: NOW,
+            prefer: None,
         })
     }
 

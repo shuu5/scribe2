@@ -3097,6 +3097,7 @@ fn fleet_select_run_prints_the_earliest_reset_unlimited_account() {
         inflight: &BTreeMap::new(),
         threshold_pct: 85,
         now: "2026-09-13T00:00:00Z",
+        prefer: None,
     });
     assert_eq!(found, Selection::Chosen("a1".to_owned()), "純関数の答え");
     assert_eq!(out_lines(&out), vec![select::line(Purpose::Run, &found)], "stdout は純関数の 1 行");

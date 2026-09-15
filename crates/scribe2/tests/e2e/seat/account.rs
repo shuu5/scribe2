@@ -1960,6 +1960,77 @@ fn seat_account_relaunch_runs_after_a_context_signal_when_the_front_is_a_shell()
     fs::remove_dir_all(&place.dir).ok();
 }
 
+/// (10) 立て直しは**自席の登録 row の口座に留まる**（ADR-0028 §2.4・consumer-sync.md §6・`s2-07l.312`）: context 由来の
+/// 退避 → `Stop` → 前面が shell の席で、自席の口座 a1 = 13%（閾値未満）・他候補 a2 = 5% → 立て直しは a1（判定行
+/// `account=a1:13 relaunch=a1`・雛形の穴は a1 の credential dir・`SeatRegistered` は口座 a1 のまま 1 件増える）。
+/// base（逼迫度最小の a2）→ RED。planner / admin が立て直しのたびに別口座へ動いた形（2026-09-15 01:15Z 実測）の対。
+#[test]
+fn seat_account_relaunch_keeps_the_current_account_below_threshold() {
+    let place = acct_place();
+    let name = "acctstay";
+    let guard = start_seat(&place.socket, name);
+    assert!(guard.ready(), "独立 socket に shell の session を立てられる");
+    let registered = acct_register(&place, name, &acct_launcher(&place, name));
+    assert_eq!(rc_of(&registered), i32::from(RC_OK), "stderr={}", stderr_of(&registered));
+    acct_measured(&place.state, ACCT_SEAT, 13, &acct_now());
+    acct_measured(&place.state, ACCT_SPARE, 5, &acct_now());
+    acct_context_signal(&place, name);
+    acct_stop(&place, name, unix_now().saturating_add(1));
+    assert!(acct_shell_prompt(&place, name, ""), "席の終了後の pane は shell の prompt で終わる");
+
+    let out = acct_tick(&place, name, None);
+
+    let line = stdout_of(&out);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stdout={line} stderr={}", stderr_of(&out));
+    for (key, want) in [("decision", "inject"), ("kind", "relaunch"), ("consumed", "true"), ("account", "a1:13"), ("relaunch", ACCT_SEAT)] {
+        assert_eq!(tick_token(&line, key).as_deref(), Some(want), "{key}: {line}");
+    }
+    let own_dir = place.state.join("accounts").join(ACCT_SEAT);
+    assert_eq!(
+        fs::read_to_string(place.dir.join("launched")).unwrap_or_default(),
+        format!("{}\n", own_dir.display()),
+        "穴は自席の口座（a1）の credential dir で埋まる（a2 ではない）"
+    );
+    assert_eq!(fs::read_to_string(place.dir.join("seat.log")).unwrap_or_default(), "/rebrief\n", "立ち上がった席が復元を受けた");
+    let rows = acct_rows(&place.state);
+    assert_eq!(rows.len(), 2, "SeatRegistered は 1 件増える: {rows:?}");
+    assert_eq!(rows.last().map(|row| row.account.as_str()), Some(ACCT_SEAT), "口座は a1 のまま: {rows:?}");
+    assert_eq!(rows.last(), rows.first(), "row は既存 row の写し（口座も含めて同じ）");
+    drop(guard);
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (11) (10) の極性の対: 自席の口座が閾値以上（85 ≥ R-C9-1 の 85）なら留まらず別口座（a2 = 5%）へ（口座由来の退避 →
+/// `Stop` → 前面が shell）。判定行は `account=a1:85 relaunch=a2`・穴は a2 の credential dir・row の口座は a2 に
+/// （base でも PASS＝極性不変）。
+#[test]
+fn seat_account_relaunch_leaves_the_current_account_at_threshold() {
+    let place = acct_place();
+    let name = "acctleave";
+    let guard = start_seat(&place.socket, name);
+    assert!(guard.ready(), "独立 socket に shell の session を立てられる");
+    let registered = acct_register(&place, name, &acct_launcher(&place, name));
+    assert_eq!(rc_of(&registered), i32::from(RC_OK), "stderr={}", stderr_of(&registered));
+    acct_measured(&place.state, ACCT_SEAT, 85, &acct_now());
+    acct_measured(&place.state, ACCT_SPARE, 5, &acct_now());
+    let first = acct_signal(&place, name);
+    assert_eq!(tick_token(&first, "kind").as_deref(), Some("externalize"), "閾値ちょうどは退避の合図: {first}");
+    acct_stop(&place, name, unix_now().saturating_add(1));
+    assert!(acct_shell_prompt(&place, name, ""), "席の終了後の pane は shell の prompt で終わる");
+
+    let out = acct_tick(&place, name, None);
+
+    let line = stdout_of(&out);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stdout={line} stderr={}", stderr_of(&out));
+    for (key, want) in [("decision", "inject"), ("kind", "relaunch"), ("consumed", "true"), ("account", "a1:85"), ("relaunch", ACCT_SPARE)] {
+        assert_eq!(tick_token(&line, key).as_deref(), Some(want), "{key}: {line}");
+    }
+    acct_assert_launched_then_restored(&place, name);
+    acct_assert_relabelled(&place, name);
+    drop(guard);
+    fs::remove_dir_all(&place.dir).ok();
+}
+
 // ─────────────────── 席の起動（account-lifecycle.md §4・ADR-0026 §2.3・`s2-07l.244`・接頭辞 `seat_launch_`） ───────────────────
 
 /// host の面（`<state>/host.toml`）に宣言する口座（tracked の manifest に口座は無い）。

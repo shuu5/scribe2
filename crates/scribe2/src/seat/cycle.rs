@@ -578,7 +578,7 @@ pub enum Relaunched {
 /// 1 key も送らない＝立て直しの再注入の back-off は tick が読む既存の 1 本である。選べない・雛形の穴が 1 つでない
 /// 周は lock も打刻も取らない（送っていない）。
 pub fn relaunch(request: &Relaunch) -> Relaunched {
-    let own = (request.row.role, request.row.anchor.as_str());
+    let own = (request.row.role, request.row.anchor.as_str(), Some(request.row.account.as_str()));
     let label = match choose(own, request.state, request.labels, request.row.model.as_deref(), request.threshold_pct) {
         Selection::Chosen(label) => label,
         Selection::None(found) => return Relaunched::None(found),
@@ -608,14 +608,16 @@ pub fn relaunch(request: &Relaunch) -> Relaunched {
 }
 
 /// session 用の選定（[`select::select`] の 1 本・立て直しと `seat launch` の初回の選定が同じ関数を呼ぶ）。`own` は
-/// 自席の鍵 (role, anchor)・`model` は席の model。除外は**他の席の**登録 row が持つ口座で、自席の row（同じ鍵）は
+/// 自席の鍵 (role, anchor) と留まる口座（立て直しは自席の row の口座・初回の起動は row が無いので `None`・
+/// ADR-0028 §2.4・`s2-07l.312`）・`model` は席の model。除外は**他の席の**登録 row が持つ口座で、自席の row（同じ鍵）は
 /// 入れない（account-autonomy.md §5 / account-lifecycle.md §4）。
-fn choose(own: (Role, &str), state: &State, labels: &[String], model: Option<&str>, threshold_pct: u64) -> Selection {
+fn choose(own: (Role, &str, Option<&str>), state: &State, labels: &[String], model: Option<&str>, threshold_pct: u64) -> Selection {
+    let (role, anchor, prefer) = own;
     let exclude: BTreeSet<String> = state
         .registrations
         .values()
         .map(|latest| &latest.registration)
-        .filter(|found| (found.role, found.anchor.as_str()) != own)
+        .filter(|found| (found.role, found.anchor.as_str()) != (role, anchor))
         .map(|found| found.account.clone())
         .collect();
     let now = crate::fleet::cli::now_utc();
@@ -629,6 +631,7 @@ fn choose(own: (Role, &str), state: &State, labels: &[String], model: Option<&st
         inflight: &std::collections::BTreeMap::new(),
         threshold_pct,
         now: &now,
+        prefer,
     })
 }
 
@@ -1035,7 +1038,7 @@ fn pick_account(request: &Launch) -> Result<String, Launched> {
     let events = store::read_all(&request.state_dir.path).map_err(|_| Launched::Refused(REASON_LOG_UNREADABLE))?;
     let state = replay(&events);
     let anchor = request.anchor.display().to_string();
-    match choose((request.role, anchor.as_str()), &state, &labels, request.model, request.threshold_pct) {
+    match choose((request.role, anchor.as_str(), None), &state, &labels, request.model, request.threshold_pct) {
         Selection::Chosen(label) => Ok(label),
         Selection::None(found) => Err(Launched::None(found)),
     }
