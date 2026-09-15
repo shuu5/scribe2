@@ -226,7 +226,7 @@ id = "a"
 title = "pipe/cli.rs を cli/args.rs / state.rs / show.rs / resume.rs に、e2e/pipe/lifecycle.rs を ratelimit.rs / stop.rs に割る（純移動）"
 req = ["FR30"]
 section = "5"
-write-set = ["crates/scribe2/src/pipe/cli.rs", "+crates/scribe2/src/pipe/cli/args.rs", "+crates/scribe2/src/pipe/cli/state.rs", "+crates/scribe2/src/pipe/cli/show.rs", "+crates/scribe2/src/pipe/cli/resume.rs", "crates/scribe2/tests/e2e/pipe.rs", "crates/scribe2/tests/e2e/pipe/lifecycle.rs", "+crates/scribe2/tests/e2e/pipe/ratelimit.rs", "+crates/scribe2/tests/e2e/pipe/stop.rs", "docs/design/pipeline.md"]
+write-set = ["crates/scribe2/src/pipe/cli.rs", "+crates/scribe2/src/pipe/cli/args.rs", "+crates/scribe2/src/pipe/cli/state.rs", "+crates/scribe2/src/pipe/cli/show.rs", "+crates/scribe2/src/pipe/cli/resume.rs", "crates/scribe2/tests/e2e/pipe.rs", "crates/scribe2/tests/e2e/pipe/lifecycle.rs", "+crates/scribe2/tests/e2e/pipe/ratelimit.rs", "+crates/scribe2/tests/e2e/pipe/stop.rs", "docs/design/pipeline.md", "docs/design/dispatcher.md", "docs/design/working-memory.md", "docs/design/contract-source.md"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_"]
 size = "S"
 done = "pipe/cli.rs が入口と shim だけになり、lifecycle.rs が ratelimit.rs / stop.rs に割れて、歯の本数と外形 snapshot が不変"
