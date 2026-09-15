@@ -238,4 +238,14 @@ write-set = ["crates/scribe2/src/pipe/table.rs", "crates/scribe2/src/pipe/review
 verify = ["cargo nextest run -p scribe2 --no-tests=fail contract_check_reads_requirements_ pipe_review_reads_requirements_"]
 size = "S"
 done = "yaml / md の要件面を宣言した toy で contracts check の id 検査と lens の要件本文が同じ読み手を通り、本文の無い id は理由付きで材料に載る"
+
+[[contract]]
+id = "l"
+title = "受付の門の判定式に検出線の生存 9 本を潰す歯を足す — 余地の境界・閉包の usages・core の合計の条件を in-file と e2e で赤にする（歯だけ・門は動かさない）"
+req = ["FR48", "FR47"]
+section = "3"
+write-set = ["crates/scribe2/src/pipe/cli/intake.rs", "crates/scribe2/src/pipe/closure.rs", "crates/scribe2/src/pipe/declaration.rs", "crates/scribe2/src/pipe/table.rs", "crates/scribe2/tests/e2e/pipe/intake.rs"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail contract_closure_ext_survivor_"]
+size = "S"
+done = "生存 9 本の判定式それぞれに赤になる歯が在り、変異の A/B で撃墜される（門の判定は不変）"
 <!-- contracts:end -->
