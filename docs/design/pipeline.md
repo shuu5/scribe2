@@ -225,6 +225,13 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
 - 形: retire が許す段の列挙に Reviewed を足し、弁別は判定の読み手の 3 値で分ける（FAIL / INCONCLUSIVE = 畳む・PASS = 断る〔live・起こす側〕・読めない = 断る〔読めない判定を終端に読み替えない・fail-closed〕）。畳んだ後の段は Reviewed のまま（Failed / Gated と同じ・可逆 move の 1 本は不変・N1.2）。worktree の無い Reviewed 終端の便は畳む物が無い＝既存の断りのまま。
 - 却下: 審査の段の中で自動で畳む（終端の後始末は go を挟む retire の 1 口に揃える）／live が false の段を全部畳める側にする（Failed の理由ごとの弁別が消える）。
 
+## 13. xtask の flipcheck.rs の分割（契約表の行 j・純移動）
+
+- 何が起きているか: `crates/xtask/src/flipcheck.rs`（約 1320 行・上限 1500）は R-C4-2 の余地が 177 行しか無く、size M の便（.170 の行 c）を受付が断る（admin の実測 2026-09-16: src の満杯面 6 つのうちの 1 つ）。責務は 10 群あり、git / tar で base を取り出す群（parse_base / git_stdout / changed_rs / show / load_pairs / repo_root / extract_archive / materialize_base / index_base / work_dir・231 行）は他群から独立している（呼び手は run と judge の側だけ）。
+- 形（.363 の `pipe/closure.rs` → `pipe/closure/derive.rs` と同型）: flipcheck.rs は残し、同名の新規 dir に子 module flipcheck/git.rs を置いてその群をそのまま移す（名・本文・順序を変えない）。親は mod 宣言と名指しの `pub use` で呼び手（`main.rs` の run・歯の `use super::{…}` 11 個）を無傷に保つ。歯（`flipcheck_tests.rs` と子 5 file）は動かさず、`super::` で読む private item のうち移す 4 つ（parse_base / failed_tests / nextest_args / FailedTest のうち git 群に当たるもの）は pub 化 + 再輸出で解く。札 `// flip-check: moved <bead>` は親の歯の区間（flipcheck_tests.rs の先頭）と子の歯の区間に対で置く（純移動の機械証明は §5.3）。
+- 触らない: FilePair / is_test_file / split_regions（fan-out が大きい）・cargo 実行の群（後続の便で runner.rs へ）・歯の中身。
+- 見積: 親 1323 → 約 1100 行・子 約 235 行。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -289,4 +296,14 @@ write-set = ["crates/scribe2/src/pipe/cli.rs", "crates/scribe2/tests/e2e/pipe/la
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_retire_"]
 size = "S"
 done = "Reviewed の FAIL / INCONCLUSIVE で終端した便が pipe retire で畳め（段は Reviewed のまま・可逆 move）、PASS は断られ、読めない判定は終端に読み替えない"
+
+[[contract]]
+id = "j"
+title = "xtask の flipcheck.rs から git / tar で base を取り出す群を flipcheck/git.rs へ割る — 純移動・呼び手は pub use で不変・札 moved"
+req = ["FR7"]
+section = "13"
+write-set = ["-crates/xtask/src/flipcheck.rs", "+crates/xtask/src/flipcheck/git.rs", "crates/xtask/src/flipcheck_tests.rs"]
+verify = ["cargo nextest run -p xtask --no-tests=fail flip_"]
+size = "S"
+done = "git 群 10 関数が子 module に在り、親は mod 宣言と pub use だけが増えて呼び手と歯の import は不変、既存の flip_ の歯が全部緑で純移動の機械証明が残差 0"
 <!-- contracts:end -->
