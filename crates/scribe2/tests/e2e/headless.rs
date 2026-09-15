@@ -1823,6 +1823,29 @@ fn headless_runner_prompt_does_not_expand_allowed_placeholder_from_contract() {
     clean(&[&dir, &worktree]);
 }
 
+/// runner の prompt の外形（契約 / write-set / 写しの fixture を固定・C12.5・`s2-07l.176`・設計 §6）。
+///
+/// 上の 2 本は断片（allowlist の節・穴の不展開）を見る歯で、本文の他の節の改変は素通しする
+/// （部分集合の罠・全体監査 2026-09-12 塊 23）。**全文**を pin し、prompt の 1 字の変更を `.snap` の
+/// 差分として PR に出す（隣の `headless_lens_prompt_external_form` と同じ型）。
+#[test]
+fn headless_runner_prompt_external_form() {
+    let dir = tmp();
+    let worktree = tmp();
+    let write_set = dir.join("write-set.txt");
+    fs::write(&write_set, format!("{CONTRACT_WRITE_SET}\n{CONTRACT_WRITE_SET_2}\n")).expect("write-set を書ける");
+    let claude = fake_claude(&dir, "", false, 0);
+    let vessel = write_vessel_copy(&dir, r#"["cargo", "git"]"#);
+    let out = run_runner(
+        &RunnerCall { dir: &dir, worktree: &worktree, write_set: &write_set, vessel: &vessel, claude: &claude, mode: "acceptEdits", account: None },
+        contract_text(CONTRACT_GOAL).as_bytes(),
+    );
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    let prompt = slurp(&dir.join("stdin"));
+    clean(&[&dir, &worktree]);
+    insta::assert_snapshot!(prompt);
+}
+
 /// **上限 record でも、集合に無い status では止めない**（`s2-07l.77`・ADR-0012 §2.1）。
 ///
 /// 実測で採れた唯一の status は `allowed_warning`（許可されつつ警告）で、これは**止める側では
