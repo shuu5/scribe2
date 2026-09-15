@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="folio-doc-type" content="adr">
+<meta name="folio-layer" content="project">
+<meta name="folio-version" content="0.4.6">
+<meta name="folio-status" content="accepted">
+<meta name="folio-stakeholders" content="Developer, AI Agent, External Reviewer">
+<meta name="folio-adr-id" content="0029">
+<meta name="folio-adr-date" content="2026-09-15">
+<title>ADR-0029 — statusline は器の口が描き、 口座の設定の statusLine は器が書く (計測の入力の字面は器の中に 1 つ・machine が違っても同じ形)</title>
+<link rel="stylesheet" href="../../common.css">
+<script type="application/ld+json">
+{
+  "@context": {
+    "dc": "http://purl.org/dc/terms/",
+    "schema": "https://schema.org/",
+    "folio": "https://folio.dev/spec/v1/"
+  },
+  "@id": "./ADR-0029-statusline-is-rendered-by-the-vessel-and-written-into-account-settings.html",
+  "@type": "schema:TechArticle",
+  "dc:isPartOf": [
+    { "@id": "./README.html" }
+  ],
+  "dc:title": "ADR-0029 — statusline は器の口が描き、 口座の設定の statusLine は器が書く (計測の入力の字面は器の中に 1 つ・machine が違っても同じ形)",
+  "folio:version": "0.4.6",
+  "folio:stakeholders": ["Developer", "AI Agent", "External Reviewer"],
+  "dc:references": [
+    { "@id": "../spec/constitution.html#c2" },
+    { "@id": "../spec/constitution.html#c3" },
+    { "@id": "../spec/constitution.html#c10" },
+    { "@id": "../spec/constitution.html#c11" },
+    { "@id": "../spec/constitution.html#c12" },
+    { "@id": "../spec/constitution.html#c13" },
+    { "@id": "../spec/constitution.html#n2" },
+    { "@id": "../spec/constitution.html#n3" },
+    { "@id": "../spec/srs.html#FR25" },
+    { "@id": "../spec/srs.html#FR29" },
+    { "@id": "../spec/srs.html#FR38" },
+    { "@id": "../spec/srs.html#FR59" },
+    { "@id": "../spec/srs.html#FR61" },
+    { "@id": "../spec/srs.html#NFR5" },
+    { "@id": "../spec/srs.html" },
+    { "@id": "./ADR-0011-vessel-launches-claude-without-settings.html" },
+    { "@id": "./ADR-0015-seat-state-is-stamped-by-hooks-not-read-from-pane.html" },
+    { "@id": "./ADR-0017-account-allowance-measured-into-event-log.html" },
+    { "@id": "./ADR-0026-account-lifecycle-host-manifest-and-seat-launch.html" },
+    { "@id": "./ADR-0028-consumer-sync-is-measured-and-updated-by-the-vessel.html" }
+  ]
+}
+</script>
+</head>
+<body>
+<!-- folio:chrome-top -->
+<a class="skip-link" href="#s1-context">本文へスキップ</a>
+<nav class="breadcrumb" aria-label="パンくず"><ol>
+  <li><a href="../index.html">design-intent</a></li>
+  <li><a href="./README.html">decisions</a></li>
+  <li aria-current="page">ADR-0029</li>
+</ol></nav>
+<!-- /folio:chrome-top -->
+
+<header class="doc-header">
+  <h1>ADR-0029 — statusline は器の口が描き、 口座の設定の statusLine は器が書く (計測の入力の字面は器の中に 1 つ・machine が違っても同じ形)</h1>
+  <div class="meta">Status: accepted &middot; Date: 2026-09-15 &middot; version 0.4.6 (拘束する constitution の版) &middot; C2 / C2.2 / C3.3 / C10 / N3 の適用を記録し、 ADR-0026 §2.2 の口座の口が書く設定に項目を 1 つ、 器の subcommand に描画の口を 1 つ足す (supersede しない・追補) &middot; 要件は SRS が正本 (FR25 / FR29 / FR38 / NFR5)</div>
+</header>
+<!-- folio:chrome-toc -->
+<nav class="toc" aria-label="ページ内目次">
+<ol>
+  <li><a href="#s1-context">§1. Context</a></li>
+  <li><a href="#s2-decision">§2. Decision</a></li>
+  <li class="toc--sub"><a href="#s2-1-render">§2.1 描画は器の subcommand 1 つで、 stdin の payload だけから 1 行を組む</a></li>
+  <li class="toc--sub"><a href="#s2-2-shape">§2.2 行の形は計測の読み手の逆像で、 往復を property で pin する</a></li>
+  <li class="toc--sub"><a href="#s2-3-settings">§2.3 口座の口が settings の statusLine を器の行に書き、 doctor が口座ごと・導入先ごとに名指す</a></li>
+  <li class="toc--sub"><a href="#s2-4-enforce">§2.4 器が管理する口座では表示の形を器が固定する (machine が違っても同じ)</a></li>
+  <li class="toc--sub"><a href="#s2-5-scope">§2.5 射程外</a></li>
+  <li><a href="#s3-srs">§3. SRS との関係 (正本は SRS)</a></li>
+  <li><a href="#s4-consequences">§4. Consequences</a></li>
+  <li><a href="#s5-alternatives">§5. Alternatives Considered</a></li>
+  <li><a href="#s6-trace">§6. Trace</a></li>
+</ol>
+</nav>
+<!-- /folio:chrome-toc -->
+
+<aside class="informative">
+<p>本 ADR は IETF <strong>RFC 2119</strong> および <strong>RFC 8174 / BCP 14</strong> に定義される MUST / SHALL / SHOULD / MAY のキーワード解釈規約に従う。 ADR は決定時点の記録であり、 改訂は新しい ADR による supersede で行う。 本 ADR の §2 は設計判断 (承認 SSOT の 3 クラスに非該当) で、 その向き (statusline の管理を器へ持ってくる・表示の形を machine を跨いで固定してよい) は user の裁定 1 件 (2026-09-15T03:52Z) が定めた。 憲法の条文は動かさない。</p>
+</aside>
+
+<aside class="machine-readable" aria-hidden="true">
+  <dl>
+    <dt>id</dt><dd>ADR-0029</dd>
+    <dt>doc-type</dt><dd>adr</dd>
+    <dt>status</dt><dd>accepted</dd>
+    <dt>date</dt><dd>2026-09-15</dd>
+    <dt>version</dt><dd>0.4.6 (拘束する constitution の版。 本 ADR は憲法の条文を動かさない)</dd>
+    <dt>decided-by</dt><dd>planner (2026-09-15・設計判断) — 向きは user の裁定 1 件 (2026-09-15T03:52Z・報告書「マルチアカウント管理の現状と対策」§7 問 1 への回答: statusline の管理を器へ持ってくる・器の口にするなら user ごと machine ごとの表示の違いを許さず固定してよい) が定めた。 逐語は台帳 <code>s2-07l.320</code> の notes (本 file には写さない)。</dd>
+    <dt>stakeholders</dt><dd>Developer, AI Agent, External Reviewer</dd>
+    <dt>supersedes</dt><dd>なし (追補)。 ADR-0026 §2.2 の口座の口 (<code>account add</code>) が書く <code>settings.json</code> の項目に <code>statusLine</code> を 1 つ、 器の subcommand に <code>seat statusline</code> を 1 つ、 doctor の口座行と導入先の行に語を 1 つずつ足す。 既存の項目・口・行は不変。</dd>
+    <dt>related</dt><dd>ADR-0011 §2.1 (起動形は Command を組む 1 か所・claude の語は PATH が解き器は場所を持たない) / ADR-0015 §2.1 (席の状態は打刻で持ち描画を判定に使わない) / ADR-0017 §2.2 (口座残量の計測は host の HTTP client・statusline は使わない) / ADR-0026 §2.2 (口座の口・settings.json の書き) / ADR-0028 §2.3 (doctor の導入先の行) / constitution C2 / C2.2 / C3.3 / C10 / C11 / C12.5 / C12.7 / N2 / N3</dd>
+  </dl>
+</aside>
+
+<section id="s1-context" class="informative">
+<h2>§1. Context</h2>
+<p class="section-essence" data-audience="human">管理 tick は、 席の画面に出ている 1 行 (statusline) を読んで「context がどれだけ埋まっているか」を知ります。 ところがその 1 行を描く script は器の外 (前の版の repo) にあり、 それを各口座の設定に配る手順もまた別の repo が持っています。 器の計測の入力の形を、 器でない 2 つの repo が決めている状態です。 user ごと・machine ごとに表示を変えられると、 計測は黙って「測れない」に落ちます。</p>
+<p data-audience="machine">記録時点 (2026-09-15) の現物 (main <code>1206210</code>): 管理 tick の context 計測 (<code>seat/meter.rs</code> <code>used_from_pane_pct</code>) は transcript が名指されない周に pane の statusline を読み、 候補行の形は <code>parse_statusline</code> が定める (<code>&lt;pct&gt;% &lt;used&gt;[kM]?/&lt;window&gt;[kM]</code>・後ろは行末か空白・v1 の statusline と同じ規則)。 候補が無い周は <code>pane-no-statusline</code> で <code>context=unmeasured</code> となり、 退避も <code>/clear</code> も起きない (FR25 の「0% に化けない」極性)。 描画側は前の版の <code>scripts/statusline-command.py</code> (user の Claude Code の設定 dir から symlink で指される) で、 各口座の <code>settings.json</code> の <code>statusLine.command</code> (7 口座すべて同じ python の行) は ubuntu-note-system の配備 script が書く。 器の口座の口 (<code>account/mod.rs</code> <code>SETTINGS_BODY</code>) は agent view を切る 1 項目しか書かない。 導入先の project scope の <code>.claude/settings.json</code> にも <code>statusLine</code> が在り、 Claude Code の設定の優先順位では口座の設定より前に来る。</p>
+<p data-audience="machine">憲法の向き: <a href="../spec/constitution.html#c2">C2.2</a> は器の名 (<code>NAME</code>) から派生する識別子を 1 定数に集め、 env を読まない。 <a href="../spec/constitution.html#c3">C3.3</a> は描画を判定の入力にしない (本 ADR は描画の形を器が持つことで、 描画を読む計測の入力を器の中に閉じる・判定の入力は typed のまま)。 <a href="../spec/constitution.html#c10">C10</a> は測れない値を成功に倒さない。 <a href="../spec/constitution.html#n3">N3</a> は host 固有の値で分岐しない。 <a href="../spec/constitution.html#c12">C12.5 / C12.7</a> は外形を snapshot し、 場合を property で量産する。</p>
+</section>
+
+<section id="s2-decision" class="normative">
+<h2>§2. Decision</h2>
+
+<h3 id="s2-1-render">§2.1 描画は器の subcommand 1 つで、 stdin の payload だけから 1 行を組む</h3>
+<p class="section-essence" data-audience="human">画面の 1 行は器自身が描きます。 Claude Code が渡してくる JSON を標準入力から読み、 それだけから 1 行を組んで返します。 file も環境変数も読まず、 他の command も起こしません。 値が取れないときはその部分を描かず、 「0%」のような嘘の値は出しません。</p>
+<p data-audience="machine">器 SHALL subcommand <code>&lt;NAME&gt; seat statusline</code> を 1 つ持ち、 stdin の Claude Code の statusline payload (JSON) を読み、 stdout へ 1 行を書く。 描画 SHALL pure な関数 1 本 (payload → 行) で、 file・env・子 process・network を読まない (C2.2・NFR5 の「重い I/O を持たない」と同じ極性)。 payload に無い・形が違う値の segment SHALL 描かない (空文字も <code>0%</code> も <code>-</code> も出さない・C10)。 payload が JSON でない周 SHALL 空行を書いて rc 0 で終わる (statusline の失敗で claude を止めない・空行は計測の「候補なし」に落ちる = 偽の値を作らない)。 色 (ANSI escape) SHALL 付けない (1 形・snapshot・計測は tmux の <code>capture-pane</code> の素の本文を読む)。 JSON の読みは器が持つ std だけの reader (ADR-0017 §2.2 の <code>Tree</code>) を使い、 依存を足さない (C13)。</p>
+
+<h3 id="s2-2-shape">§2.2 行の形は計測の読み手の逆像で、 往復を property で pin する</h3>
+<p class="section-essence" data-audience="human">描く形と読む形は同じ 1 つの規則です。 器が描いた行を器の計測が読むと、 描いたときの値がそのまま戻ります。 この往復を、 たくさんの値で自動生成した検査が守ります。 行の先頭は「使用率% 使用量/窓」で、 その後ろにモデル名と口座の窓の使用率が続きます。</p>
+<p data-audience="machine">行 SHALL 先頭の segment を context (<code>&lt;pct&gt;% &lt;used&gt;[kM]/&lt;window&gt;[kM]</code>・pct は整数 (切り捨て)・used / window は <code>k</code> (×1000) か <code>M</code> (×1000000) で丸めた整数・payload の <code>context_window.used_percentage</code> / <code>current_usage の和</code> / <code>context_window_size</code> から組む) とし、 続く segment を model (<code>display_name</code>・末尾の「(… context)」を落とした語)・effort (<code>[&lt;effort&gt;]</code>)・口座の窓 (<code>5h:&lt;pct&gt;%</code> / <code>7d:&lt;pct&gt;%</code>・<code>rate_limits</code> の <code>used_percentage</code>) の順に空白 2 つで繋ぐ。 segment の順序 SHALL 閉じた enum の宣言順 (C2)。 描き手 SHALL 読み手 <code>parse_statusline</code> の逆像で、 「描いた行を読むと (pct, used の丸め, window の丸め) が戻る」往復を property test で pin する (C12.7)。 行の外形 SHALL snapshot で pin する (C12.5)。 読み手 (<code>parse_statusline</code>) SHALL NOT 変えない (前の版の行もそのまま読める・移行の間に両方が混在してよい)。</p>
+
+<h3 id="s2-3-settings">§2.3 口座の口が settings の statusLine を器の行に書き、 doctor が口座ごと・導入先ごとに名指す</h3>
+<p class="section-essence" data-audience="human">口座を器で作ると、 その口座の設定に「画面の 1 行はこの器の command で描く」と書き込まれます。 前の版の script も、 別 repo の配備手順も要りません。 すでに在る口座については doctor が「器の行か・別の物か・無いか」を口座ごとに 1 語で示し、 器の口で書き換えられます。 導入先の project の設定が口座の設定を上書きしていないかも doctor が名指します。</p>
+<p data-audience="machine">口座の口 <code>account add</code> (ADR-0026 §2.2) SHALL <code>settings.json</code> に <code>statusLine</code> を 1 項目書く: <code>{"type": "command", "command": "&lt;NAME&gt; seat statusline"}</code>。 <code>command</code> の語 SHALL <code>NAME</code> 定数から導き (C2.2)、 binary の path は書かない (PATH が解く・ADR-0011 と同じ)。 <code>refreshInterval</code> SHALL 書かない (Claude Code の既定に従う・器の rules 行にしない = 数値を持たない)。 器 SHALL 既存の口座 dir の設定を書き換える口を 1 つ持ち (<code>account statusline &lt;label&gt;</code>)、 その書きは <code>statusLine</code> の key 1 つの置換で他の key を保ち、 読めない設定 (JSON でない・object でない) は断って上書きしない (C11)。 doctor の口座行と <code>account ls</code> (同じ 1 関数) SHALL 語 <code>statusline=&lt;vessel|other|absent|unreadable&gt;</code> を持つ (<code>vessel</code> = command が器の行と一致・<code>other</code> = 在るが違う・<code>absent</code> = key が無い・<code>unreadable</code> = file が無い / 読めない / 形が違う・<code>absent</code> に潰さない)。 doctor の導入先の行 (ADR-0028 §2.3) SHALL 同じ語で導入先の project scope の <code>.claude/settings.json</code> の <code>statusLine</code> を名指す (<code>vessel</code> 以外は口座の設定を上書きしている印)。 判定はしない (C10.2)。</p>
+
+<h3 id="s2-4-enforce">§2.4 器が管理する口座では表示の形を器が固定する (machine が違っても同じ)</h3>
+<p class="section-essence" data-audience="human">器が作った口座では、 画面の 1 行の形は器が決めた 1 つだけです。 user が machine ごと・口座ごとに別の描き方を設定することは想定しません (設定されていれば doctor がそれを名指します)。 これは user の裁定で、 計測の入力を 1 つに保つための固定です。</p>
+<p data-audience="machine">器が起こす席 (<code>seat launch</code> / 立て直し / 役割なしの起動) の口座 dir では、 statusline の形 SHALL §2.2 の 1 形とし、 器 SHALL NOT 口座ごと・host ごとの表示の変種を manifest にも code にも持たない (N3・C1.2 の「規範文は生成」と同じ向きで、 表示の規則は code の enum に 1 つ)。 <code>statusline=other</code> の口座・導入先は doctor が名指すだけで、 器は黙って上書きしない (書き換えは §2.3 の口を撃つ手番)。 前の版の script SHALL 残してよい (器が指す先が変わるだけ・退役は前の版の repo の手番)。</p>
+
+<h3 id="s2-5-scope">§2.5 射程外</h3>
+<p class="section-essence" data-audience="human">この記録が決めるのは、 描く口・行の形・設定への書き込み・doctor の語・形の固定の 5 つだけです。 画面の 1 行に載る口座の残量を器の記録へ写すこと、 git の branch や PR の状態を描くこと、 導入先の project の設定を器が書き換えること、 前の版の script を消すことは決めません。</p>
+<p data-audience="machine">次は本 ADR の決定ではない (MUST NOT be read as such): payload の <code>rate_limits</code> を口座残量の実測 (<code>AllowanceMeasured</code>・ADR-0017 §2.1) として event log へ写す形 (計測の出所が 2 つになる・ADR-0017 §2.2 の curl の経路との整合は別の ADR)・git の branch / dirty / PR の segment (子 process と file の読みを要する・NFR5 の極性に反する)・導入先の project scope の <code>.claude/settings.json</code> を器が書く形 (他の repo の tracked file・ADR-0028 §5 (C) と同型)・前の版の script と配備 script の撤去 (前の版の repo と ubuntu-note-system の手番・consumer 通知で伝える)・<code>refreshInterval</code> を rules 行に持つ形 (§5 (D))。</p>
+</section>
+
+<section id="s3-srs" class="informative">
+<h2>§3. SRS との関係 (正本は SRS)</h2>
+<p class="section-essence" data-audience="human">この記録が仕える要件は要件書 (SRS v0.11) に在ります。 要件の文面はここには置かず、 当該行を指すだけにします。 「context 使用量を出所付きで返し、 取れない周は取れないと言う」「context の閾値で退避の合図を注入する」を、 計測の入力の字面を器の中に閉じることで安定させます。 計測の入力を器が自足する旨の要件 1 本は、 要件書の改訂 (user の手番) で足します。</p>
+<div data-audience="machine">
+<p>本 ADR の §2.1〜§2.2 が仕える要件は SRS v0.11 が正本である: <a href="../spec/srs.html#FR25">FR25 context 使用量の計測</a> (出所付きで 1 件・取れない周は rc ≠ 0・0% に化けない) と <a href="../spec/srs.html#FR29">FR29 退避の合図</a> (context 使用量が rules 行の上限以上の周に注入) と <a href="../spec/srs.html#FR38">FR38</a> (口座の窓の閾値・同じ tick の判定)。 §2.3 は <a href="../spec/srs.html#FR59">FR59</a> (席の起動・口座 dir の前提) と <a href="../spec/srs.html#FR61">FR61 導入先の同期</a> (doctor の導入先の行) に語を足す。 §2.1 の「重い I/O を持たない」は <a href="../spec/srs.html#NFR5">NFR5</a> と同じ極性。 計測の入力の自足 (statusline の字面の正本が器の中に 1 つ在ること) を名指す FR は記録時点の SRS に無く、 要件書の改訂 (<code>/folio-architect</code>・user の手番) で 1 本足す。 それまで契約は FR25 / FR29 を指す。 要件書は本 ADR では 1 字も変えない。</p>
+</div>
+</section>
+
+<section id="s4-consequences" class="informative">
+<h2>§4. Consequences</h2>
+<p class="section-essence" data-audience="human">良い面は、 計測の入力の形を器の中の 1 つの規則が決め、 描き手と読み手の往復が自動検査で守られること、 口座を作れば画面の 1 行が自動で揃い、 別 repo の配備手順が要らないこと、 machine が違っても同じ形で測れることです。 悪い面は、 前の版の 1 行に在った git や PR の情報が器の行には無いこと、 既存の口座と導入先の project の設定を 1 回ずつ書き換える手番が要ることです。</p>
+<p data-audience="machine">Positive: 計測の入力の字面が code の 1 か所 (描き手 = 読み手の逆像・C2)。 往復の property と外形の snapshot (C12.5 / C12.7)。 口座の口 1 つで設定が揃う (ADR-0026 §2.2 の延長・散文の配備手順が消える・N2)。 host 固有の値も分岐も無い (N3・C10.2)。 依存を足さない (C13)。 rules 行を足さない (C5 非該当)。</p>
+<p data-audience="machine">Negative (受け入れるコスト): 器の行は前の版の行より情報が少ない (git・PR・時間の残り・色を持たない・§2.5)。 既存の 7 口座の設定と導入先の project scope の設定は doctor が <code>other</code> で名指し、 書き換えは §2.3 の口と導入先の手番 (1 回)。 Claude Code の settings の優先順位 (project &gt; user) は器の外の挙動で、 project scope の上書きは名指すだけで止められない。 statusline の payload の形は Claude Code の版で変わりうる (読めない周は空行・計測は <code>pane-no-statusline</code> に落ちて嘘を作らない)。</p>
+</section>
+
+<section id="s5-alternatives" class="informative">
+<h2>§5. Alternatives Considered</h2>
+<p class="section-essence" data-audience="human">5 つの案を退けました。 「前の版の script と別 repo の配備のまま」は計測の入力を器の外が決める今の状態です。 「計測を画面でなく記録 file から読む」は hook の無い席で入力が無くなります。 「導入先の project の設定に書く」は repo ごとに複製が散ります。 「更新間隔を器の規則にする」は器の規則でない数を manifest に持ち込みます。 「前の版の script を器の repo に写す」は Rust でない歯と script を器に持ち込みます。</p>
+<p data-audience="machine">(A) <strong>現状維持</strong> (前の版の <code>statusline-command.py</code> + ubuntu-note-system の配備が <code>statusLine</code> を書く)。 却下: 計測の入力の形を器の外の 2 repo が決める (読み手だけ器に在る)。 user ごと・machine ごとの変種が計測を <code>unmeasured</code> に落とす。 §2.1〜§2.3 で器の中に閉じる。</p>
+<p data-audience="machine">(B) <strong>計測を pane でなく transcript だけから読む</strong> (<code>seat meter --transcript</code> の経路を tick の既定にする)。 却下: tick は transcript の path を hook の打刻からしか知らず、 hook の無い席 (cwd が repo 外で立った席・前の版の wrapper で立った席) では入力が無い。 pane の経路は hook に依らない唯一の経路で、 その入力の形を器が持つのが本 ADR。 transcript の経路は残す (出所は入力で決まる 1 本道・seat-autonomy §3)。</p>
+<p data-audience="machine">(C) <strong>導入先の project scope の <code>.claude/settings.json</code> に <code>statusLine</code> を書く</strong>。 却下: 導入先ごとに複製が散り、 他の repo の tracked file を器が書く (ADR-0028 §5 (C) と同型)。 口座 dir は器の管理下 (state dir 配下) で 1 か所。 project scope は doctor が名指すだけ (§2.3)。</p>
+<p data-audience="machine">(D) <strong><code>refreshInterval</code> を rules 行に持つ</strong> (前の版の 10 秒を写す)。 却下: 器の規則でない数 (Claude Code の描画の間隔) を manifest に持ち込む (C1 の manifest は器の規則の値のため・C5 の裁定 id も要る)。 Claude Code の既定 (会話の更新ごと) で計測には足りる (context は会話の更新でしか動かない)。</p>
+<p data-audience="machine">(E) <strong>前の版の python script を器の repo に写して配る</strong>。 却下: Rust でない実行物と歯を器に持ち込む (C12・C11 の lint の外)。 git / PR の segment は子 process と file の読みを要し NFR5 の極性に反する。 描画は pure な関数 1 本で足りる (§2.1)。</p>
+</section>
+
+<section id="s6-trace" class="informative">
+<h2>§6. Trace</h2>
+<p class="section-essence" data-audience="human">出所は、 マルチアカウント管理の報告書と user の裁定、 器の現物、 前の版の script と別 repo の配備手順の実測です。</p>
+<ul data-audience="machine">
+  <li>user の裁定 (2026-09-15T03:52Z・planner の席・報告書「マルチアカウント管理の現状と対策」§7 問 1 への回答): statusline の管理を器へ持ってくる・器の口にするなら表示の形を machine を跨いで固定してよい。 逐語は台帳 <code>s2-07l.320</code> の notes。</li>
+  <li>器の現物 (main <code>1206210</code>): <code>seat/meter.rs</code> <code>parse_statusline</code> / <code>used_from_pane_pct</code> (読み手・<code>pane-no-statusline</code>)・<code>account/mod.rs</code> <code>SETTINGS_BODY</code> (agent view の 1 項目)・<code>account/mod.rs</code> <code>AgentView</code> (settings の読みの閉じた enum・<code>statusline=</code> の語の同型)・<code>headless</code> の <code>DEFAULT_CLAUDE</code> (語を PATH に解かせる形)。</li>
+  <li>前の版と別 repo の実測 (2026-09-15・planner): 描画 script = 前の版の repo の <code>scripts/statusline-command.py</code> (symlink 経由)・7 口座の <code>settings.json</code> の <code>statusLine.command</code> は同じ python の行 (<code>refreshInterval</code> 10)・書き手は ubuntu-note-system の配備 script・器の repo の project scope の <code>.claude/settings.json</code> にも <code>statusLine</code> が在る。</li>
+  <li>先行決定: <a href="./ADR-0026-account-lifecycle-host-manifest-and-seat-launch.html">ADR-0026</a> §2.2・<a href="./ADR-0028-consumer-sync-is-measured-and-updated-by-the-vessel.html">ADR-0028</a> §2.3 / §5 (C)・<a href="./ADR-0017-account-allowance-measured-into-event-log.html">ADR-0017</a> §2.1 / §2.2・<a href="./ADR-0015-seat-state-is-stamped-by-hooks-not-read-from-pane.html">ADR-0015</a> §2.1・<a href="./ADR-0011-vessel-launches-claude-without-settings.html">ADR-0011</a> §2.1。</li>
+  <li>設計: <code>docs/design/seat-autonomy.md</code> §3 (計測の入力の字面)・<code>docs/design/account-lifecycle.md</code> §3 (口座の口が書く設定)・<code>docs/design/consumer-sync.md</code> §4 (導入先の行の語)。 契約は台帳 <code>s2-07l.320</code> (本 ADR の land 後・<code>s2-07l.313</code> Landed 後に dispatch)。</li>
+</ul>
+</section>
+
+<!-- folio:chrome-bottom -->
+<nav class="prevnext" aria-label="前後の文書">
+  <a class="prevnext__prev" href="ADR-0028-consumer-sync-is-measured-and-updated-by-the-vessel.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">ADR-0028 — 導入先の同期は器が測って器が更新する (build 元 commit・読み込み元の記録・install の event・hook 集合の食い違いは席の作り直し) と役割なしの起動行</span></a>
+  <a class="prevnext__next" href="ADR-0030-tick-units-are-written-and-enabled-by-the-vessel.html"><span class="prevnext__dir">次 &rarr;</span><span class="prevnext__title">ADR-0030 — 管理 tick の unit は器が書いて有効化する (席ごとの service / timer を導出して host へ書く・間隔は rules 行・有効化は 3 クラス非該当)</span></a>
+</nav>
+<script>
+(function () {
+  var openedForPrint = [];
+  window.addEventListener('beforeprint', function () {
+    openedForPrint = [];
+    var ds = document.querySelectorAll('details:not([open])');
+    for (var i = 0; i < ds.length; i++) { ds[i].setAttribute('open', ''); openedForPrint.push(ds[i]); }
+  });
+  window.addEventListener('afterprint', function () {
+    for (var i = 0; i < openedForPrint.length; i++) openedForPrint[i].removeAttribute('open');
+    openedForPrint = [];
+  });
+  if (!document.querySelector('[data-audience]')) return;
+  /* 既定 = 人間プレゼン型 (ADR-0040 / rules §11.3): script 経由で初期 class を付与するため
+     no-JS では付かず全文可視に graceful degrade する。 static DOM は全文を保持 (AI/検索/印刷は不変)。 */
+  document.body.classList.add('audience-human');
+  var bar = document.createElement('nav');
+  bar.className = 'audience-toggle';
+  bar.setAttribute('aria-label', '表示対象の切替');
+  var states = [['both', '両方'], ['human', '人間向け'], ['machine', '機械向け']];
+  for (var s = 0; s < states.length; s++) {
+    (function (mode, label) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      b.setAttribute('aria-pressed', mode === 'human' ? 'true' : 'false');
+      b.addEventListener('click', function () {
+        document.body.classList.remove('audience-human', 'audience-machine');
+        if (mode !== 'both') document.body.classList.add('audience-' + mode);
+        var bs = bar.querySelectorAll('button');
+        for (var j = 0; j < bs.length; j++) bs[j].setAttribute('aria-pressed', bs[j] === b ? 'true' : 'false');
+      });
+      bar.appendChild(b);
+    })(states[s][0], states[s][1]);
+  }
+  var bc = document.querySelector('nav.breadcrumb');
+  if (bc && bc.parentNode) { bc.parentNode.insertBefore(bar, bc.nextSibling); }
+  else { document.body.insertBefore(bar, document.body.firstChild); }
+})();
+</script>
+<!-- /folio:chrome-bottom -->
+</body>
+</html>

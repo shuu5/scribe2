@@ -3,7 +3,7 @@
 //! 置き場は毎回 tmp dir を `--state-dir` で指す（env も HOME も読まない形の裏返し）。
 
 use crate::make_tmp_dir;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::mem::discriminant;
 use std::path::{Path, PathBuf};
@@ -3073,13 +3073,14 @@ fn curl_calls(fx: &UsageFixture) -> usize {
         .count()
 }
 
-/// (1) 便用は最も逼迫した当たっていない口座を出し、stdout は同じ log を渡した純関数の 1 行と一致する。
+/// (1) 便用は当たっていない口座のうち reset が最も早いもの（`SELECT_THREE` は全口座が同じ reset → 便数 0 → label の
+/// 先頭 a1・ADR-0027 §2.2）を出し、stdout は同じ log を渡した純関数の 1 行と一致する。
 #[test]
-fn fleet_select_run_prints_the_most_pressed_unlimited_account() {
+fn fleet_select_run_prints_the_earliest_reset_unlimited_account() {
     let (fx, curl) = select_fixture(SELECT_THREE, true, Some("85"));
     let out = run_select(&fx, &curl, &["--purpose", "run"]);
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{out:?}");
-    assert_eq!(out_lines(&out), vec!["select purpose=run chosen=a2".to_owned()], "a3 は 100 で当たっている");
+    assert_eq!(out_lines(&out), vec!["select purpose=run chosen=a1".to_owned()], "同じ reset → label・a3 は 100 で当たっている");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("usage: account=a2 five_hour=20%"), "計測の行は stderr へ: {stderr}");
 
@@ -3093,12 +3094,154 @@ fn fleet_select_run_prints_the_most_pressed_unlimited_account() {
         purpose: Purpose::Run,
         model: None,
         exclude: &exclude,
+        inflight: &BTreeMap::new(),
         threshold_pct: 85,
         now: "2026-09-13T00:00:00Z",
     });
-    assert_eq!(found, Selection::Chosen("a2".to_owned()), "純関数の答え");
+    assert_eq!(found, Selection::Chosen("a1".to_owned()), "純関数の答え");
     assert_eq!(out_lines(&out), vec![select::line(Purpose::Run, &found)], "stdout は純関数の 1 行");
     drop_fixture(&fx);
+}
+
+/// 5 時間窓の reset を口座ごとに変えた本文（`select_body` の reset 違い）。
+fn select_body_resetting(five: u64, seven: u64, five_reset: &str) -> String {
+    format!(
+        r#"{{"five_hour":{{"utilization":{five},"resets_at":"{five_reset}"}},"seven_day":{{"utilization":{seven},"resets_at":"2099-01-07T00:00:00+00:00"}},"limits":[]}}"#
+    )
+}
+
+/// (h) CLI の便用は逼迫度でなく **reset が最も近い口座**を選ぶ（ADR-0027 §2.2・C9.2）: a1（5h 20%・reset 2099-01-01T01Z）と
+/// a2（5h 80%・reset 2099-01-01T04Z）→ `chosen=a1`。base（逼迫度最大）は a2 → RED。実測行は `fleet select` が撃つ
+/// 計測（偽 curl の口座ごとの本文）で置く。
+#[test]
+fn fleet_select_run_prefers_earliest_reset_over_pressure() {
+    let (fx, curl) = select_fixture(&[("a1", 20, 10), ("a2", 80, 10)], true, Some("85"));
+    fs::write(fx.spy.join("body-tok-a1"), select_body_resetting(20, 10, "2099-01-01T01:00:00+00:00")).expect("本文を書ける");
+    fs::write(fx.spy.join("body-tok-a2"), select_body_resetting(80, 10, "2099-01-01T04:00:00+00:00")).expect("本文を書ける");
+    let out = run_select(&fx, &curl, &["--purpose", "run"]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{out:?}");
+    assert_eq!(out_lines(&out), vec!["select purpose=run chosen=a1".to_owned()], "reset が近い a1（逼迫度なら a2）: {out:?}");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("usage: account=a1 five_hour=20% resets=2099-01-01T01:00:00Z"), "a1 の reset: {stderr}");
+    assert!(stderr.contains("usage: account=a2 five_hour=80% resets=2099-01-01T04:00:00Z"), "a2 の reset: {stderr}");
+    let out = run_select(&fx, &curl, &["--purpose", "session"]);
+    assert_eq!(out_lines(&out), vec!["select purpose=session chosen=a1".to_owned()], "session 用は逼迫度の最小（同じ答えだが鍵が違う）");
+    // 逆に a2 の reset を近くすれば a2（逼迫度 80 でも当たってはいない）。
+    fs::write(fx.spy.join("body-tok-a2"), select_body_resetting(80, 10, "2099-01-01T00:30:00+00:00")).expect("本文を書ける");
+    let out = run_select(&fx, &curl, &["--purpose", "run"]);
+    assert_eq!(out_lines(&out), vec!["select purpose=run chosen=a2".to_owned()], "reset が近い側へ動く: {out:?}");
+    drop_fixture(&fx);
+}
+
+/// 便の event 1 件（`event` の run と bead に段・席・口座を足す）。
+fn run_event(kind: EventKind, run: &str, stage: Option<Stage>, account: Option<&str>) -> Event {
+    Event {
+        stage,
+        seat: Some(format!("seat-{run}")),
+        account: account.map(str::to_owned),
+        ..event(kind, run, "2026-09-15T00:00:00Z")
+    }
+}
+
+/// (g) `State::inflight_by_account` は終端でない便のうち `account` を持つものを label ごとに数える（ADR-0027 §2.3）:
+/// SeatSpawned(account=a1) ×2（1 本は Landed 済み）+ SeatSpawned(account 無し) → `{a1: 1}`。Stopped / Failed /
+/// `detail=retired` も数えず、最新の `SeatSpawned` の値が勝つ（起こし直しで口座が変わる）。
+#[test]
+fn fleet_replay_counts_inflight_runs_per_account() {
+    let mut events = vec![
+        run_event(EventKind::SeatSpawned, "r1", Some(Stage::Spawned), Some("a1")),
+        run_event(EventKind::SeatSpawned, "r2", Some(Stage::Spawned), Some("a1")),
+        run_event(EventKind::RunDone, "r2", Some(Stage::Landed), None),
+        run_event(EventKind::SeatSpawned, "r3", Some(Stage::Spawned), None),
+    ];
+    let state = replay(&events);
+    assert_eq!(state.inflight_by_account(), BTreeMap::from([("a1".to_owned(), 1)]), "r2 は Landed・r3 は口座不明");
+    assert_eq!(state.runs.get("r1").and_then(|run| run.account.clone()), Some("a1".to_owned()));
+    assert_eq!(state.runs.get("r2").and_then(|run| run.account.clone()), Some("a1".to_owned()), "終端でも口座は残る");
+    assert_eq!(state.runs.get("r3").and_then(|run| run.account.clone()), None);
+    assert_eq!(state.runs.len(), 3, "口座つきの SeatSpawned は便に紐づく行（幽霊の便を作らない）");
+    // 段が進んでも走行中（Implemented / Gated / RateLimited）・終端（Stopped / Failed）と retired は数えない。
+    events.push(run_event(EventKind::RunStage, "r1", Some(Stage::Gated), None));
+    events.push(run_event(EventKind::SeatSpawned, "r4", Some(Stage::Spawned), Some("a2")));
+    events.push(run_event(EventKind::RunStopped, "r4", Some(Stage::Stopped), None));
+    events.push(run_event(EventKind::SeatSpawned, "r5", Some(Stage::Spawned), Some("a2")));
+    events.push(run_event(EventKind::RunStage, "r5", Some(Stage::Failed), None));
+    events.push(run_event(EventKind::SeatSpawned, "r6", Some(Stage::RateLimited), Some("a2")));
+    events.push(run_event(EventKind::SeatSpawned, "r7", Some(Stage::Spawned), Some("a3")));
+    events.push(Event { detail: Some("retired".to_owned()), ..run_event(EventKind::RunStage, "r7", None, None) });
+    let state = replay(&events);
+    assert_eq!(
+        state.inflight_by_account(),
+        BTreeMap::from([("a1".to_owned(), 1), ("a2".to_owned(), 1)]),
+        "Gated の r1・RateLimited の r6 は走行中・Stopped / Failed / retired は数えない"
+    );
+    // 起こし直しで口座が変わる: 最新の SeatSpawned の値。
+    events.push(run_event(EventKind::SeatSpawned, "r1", Some(Stage::Spawned), Some("a3")));
+    let state = replay(&events);
+    assert_eq!(state.inflight_by_account(), BTreeMap::from([("a2".to_owned(), 1), ("a3".to_owned(), 1)]), "r1 は a3 へ");
+    assert_eq!(replay(&[]).inflight_by_account(), BTreeMap::new(), "便 0 は空");
+}
+
+/// (f) `fleet record --kind SeatSpawned --account x` は行に `"account":"x"` を書き、読み返した便が口座を持つ。
+/// `--kind RunStage --account x` は rc 1（他の kind の `account` は malformed のまま・書かない）。`--account` の
+/// 値欠けも rc 1。field の無い SeatSpawned はこれまでどおり書けて `account` 無しで読める（schema 1 のまま）。
+#[test]
+fn fleet_record_seat_spawned_carries_account() {
+    let dir = state_dir();
+    let path = dir.display().to_string();
+    let spawned = run_fleet(&[
+        "record", "--kind", "SeatSpawned", "--run", "r1", "--bead", "s2-x", "--seat", "s1", "--account", "x",
+        "--state-dir", &path,
+    ]);
+    assert_eq!(spawned.status.code(), Some(i32::from(RC_OK)), "{spawned:?}");
+    let log = fs::read_to_string(store::events_path(&dir)).expect("event log が在る");
+    assert_eq!(log.lines().count(), 1);
+    assert!(log.contains(r#""account":"x""#), "{log}");
+    assert!(log.contains(r#""run":"r1""#) && log.contains(r#""bead":"s2-x""#), "便に紐づく行のまま: {log}");
+    for bad in [
+        &["record", "--kind", "RunStage", "--run", "r1", "--bead", "s2-x", "--stage", "Gated", "--account", "x", "--state-dir", &path][..],
+        &["record", "--kind", "RunCreated", "--run", "r2", "--bead", "s2-x", "--account", "x", "--state-dir", &path][..],
+        &["record", "--kind", "SeatStopped", "--run", "r1", "--bead", "s2-x", "--account", "x", "--state-dir", &path][..],
+        &["record", "--kind", "SeatSpawned", "--run", "r1", "--bead", "s2-x", "--account", "--state-dir", &path][..],
+    ] {
+        let refused = run_fleet(bad);
+        assert_eq!(refused.status.code(), Some(i32::from(RC_REFUSED)), "{bad:?}: {refused:?}");
+        assert!(refused.stdout.is_empty(), "{bad:?}: 書かない");
+        let stderr = String::from_utf8_lossy(&refused.stderr);
+        assert!(stderr.contains("--account"), "{bad:?}: 理由は flag を名指す: {stderr}");
+    }
+    let plain = run_fleet(&["record", "--kind", "SeatSpawned", "--run", "r2", "--bead", "s2-x", "--state-dir", &path]);
+    assert_eq!(plain.status.code(), Some(i32::from(RC_OK)), "{plain:?}");
+    let events = store::read_all(&dir).expect("全行を読める");
+    assert_eq!(events.len(), 2, "断った周は書いていない");
+    assert_eq!(events.first().and_then(|found| found.account.clone()), Some("x".to_owned()));
+    assert_eq!(events.get(1).and_then(|found| found.account.clone()), None, "field の無い行は None");
+    assert_eq!(replay(&events).inflight_by_account(), BTreeMap::from([("x".to_owned(), 1)]));
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// 読み手: `account` の例外は `SeatSpawned` だけ——他の便の kind の生の行に在れば malformed のまま・`SeatSpawned` でも
+/// 文字列でなければ malformed・key の無い旧い行は `None`（schema 1 のまま値の追加・ADR-0004 §2.5 D-5）。
+#[test]
+fn fleet_seat_spawned_account_is_the_only_exception_for_run_kinds() {
+    let line = |kind: &str, account: &str| {
+        format!(r#"{{"schema":1,"ts":"2026-09-15T00:00:00Z","kind":"{kind}","run":"r1","bead":"s2-x",{account}"host":"h","actor":"machine"}}"#)
+    };
+    let spawned = Event::from_line(&line("SeatSpawned", r#""account":"x","#)).expect("SeatSpawned の account は読める");
+    assert_eq!(spawned.account, Some("x".to_owned()));
+    assert_eq!(spawned.run, "r1");
+    assert_eq!(spawned.to_line(), line("SeatSpawned", r#""account":"x","#), "書いて読んで同じ行（account は run / bead の後）");
+    let old = Event::from_line(&line("SeatSpawned", "")).expect("旧い行は読める");
+    assert_eq!(old.account, None);
+    assert_eq!(old.to_line(), line("SeatSpawned", ""), "None は key ごと書かない");
+    for kind in ["SeatStopped", "RunStage", "RunCreated", "RunDone", "RunStopped", "ApprovalRequested", "QuestionRaised"] {
+        let reason = Event::from_line(&line(kind, r#""account":"x","#)).expect_err(kind);
+        assert!(reason.contains("account を持たない"), "{kind}: {reason}");
+    }
+    let reason = Event::from_line(&line("SeatSpawned", r#""account":7,"#)).expect_err("文字列でない account");
+    assert!(reason.contains("account"), "{reason}");
+    let reason = Event::from_line(&line("SeatSpawned", r#""account":"x","window":"five_hour","#)).expect_err("口座残量の key");
+    assert!(reason.contains("window を持たない"), "{reason}");
 }
 
 /// 5 時間窓に消費の無い口座 a1（`five_hour` の reset が null）と、使用中の口座 a2（5h 50%）の置き場。
@@ -3156,7 +3299,7 @@ fn fleet_usage_idle_window_null_reset_is_measured_zero_and_a_run_candidate() {
     assert!(idle_line.contains(r#""kind":"AllowanceMeasured""#), "{idle_line}");
     assert!(!idle_line.contains("resets_at"), "reset 無しの周は key を出さない: {idle_line}");
     let out = run_select(&fx, &curl, &["--purpose", "run"]);
-    assert_eq!(out_lines(&out), vec!["select purpose=run chosen=a2".to_owned()], "便用は逼迫度の最大（a2 = 50）");
+    assert_eq!(out_lines(&out), vec!["select purpose=run chosen=a2".to_owned()], "便用は reset が早い側（a2 の 5h・a1 は 7d の reset だけ）");
     drop_fixture(&fx);
 }
 
@@ -3260,7 +3403,7 @@ fn fleet_select_session_keeps_headroom_and_names_the_threshold_reason() {
     assert_eq!(lines, vec!["select purpose=session none=over-threshold earliest_reset=-".to_owned()], "閾値ちょうども候補外");
     assert!(lines.iter().all(|line| !line.contains("all-limited")), "当たってはいない: {lines:?}");
     let out = run_select(&fx, &curl, &["--purpose", "run"]);
-    assert_eq!(out_lines(&out), vec!["select purpose=run chosen=a3".to_owned()], "便用は閾値を持たない");
+    assert_eq!(out_lines(&out), vec!["select purpose=run chosen=a1".to_owned()], "便用は閾値を持たない（同じ reset → label）");
     drop_fixture(&fx);
 }
 
@@ -3330,7 +3473,7 @@ fn fleet_select_model_must_be_in_the_closed_table() {
     for good in ["opus", "Opus", "fable", "Sonnet", "haiku"] {
         let out = run_select(&fx, &curl, &["--purpose", "run", "--model", good]);
         assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{good}: {out:?}");
-        assert_eq!(out_lines(&out), vec!["select purpose=run chosen=a2".to_owned()], "{good}: モデル別の行が無い表では model に依らない");
+        assert_eq!(out_lines(&out), vec!["select purpose=run chosen=a1".to_owned()], "{good}: モデル別の行が無い表では model に依らない");
     }
     drop_fixture(&fx);
 }

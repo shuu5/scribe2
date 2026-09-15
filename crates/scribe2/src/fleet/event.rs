@@ -22,7 +22,8 @@ const KNOWN_KEYS: &[&str] = &[
 /// 口座残量の kind だけが持てる key（設計 fleet-usage.md §4）。
 ///
 /// 既存 kind の行にこれが在れば malformed である。口座の field を持った `RunStage` の行を
-/// 通すと、`run` を持つ行と持たない行の区別が kind から読めなくなる。
+/// 通すと、`run` を持つ行と持たない行の区別が kind から読めなくなる。例外は `account` を label として持つ
+/// 退役・戻しの kind と、任意 field として持つ `SeatSpawned`（[`Body::spawned`]・ADR-0027 §2.3）だけ。
 const ALLOWANCE_KEYS: &[&str] = &[
     "account",
     "window",
@@ -66,24 +67,27 @@ pub struct Event {
     pub allowance: Option<Allowance>,
     /// 席の登録の本体（[`EventKind::SeatRegistered`] でだけ `Some`）。
     pub registration: Option<Registration>,
-    /// 口座の退役・戻しの label（[`EventKind::AccountRetired`] / [`EventKind::AccountRestored`] でだけ `Some`・
-    /// kind ごとの typed payload・`detail`〔自由文〕を判定入力にしない＝憲法 C3.3）。
+    /// 口座 label。[`EventKind::AccountRetired`] / [`EventKind::AccountRestored`] では退役・戻しの本体（必須）、
+    /// [`EventKind::SeatSpawned`] では**便を起こした口座**（任意・ADR-0027 §2.3・走行中の便数の出所・field の無い
+    /// 旧い行は「口座不明」＝数えない）。他の kind に在れば malformed。kind ごとの typed payload・`detail`〔自由文〕を
+    /// 判定入力にしない＝憲法 C3.3。
     pub account: Option<String>,
 }
 
 impl Event {
     /// 1 行の JSON にする。
     ///
-    /// 本体は kind ではなく [`Self::allowance`] / [`Self::registration`] の有無が決める（`run` / `bead` を
-    /// 持つ行と口座残量・登録の行は同じ並びを共有しない）。食い違った組は [`Self::from_line`] が読み返せず
-    /// malformed になるので、書いた行が読めない形は歯で捕まる。
+    /// 本体は [`Self::allowance`] / [`Self::registration`] の有無と、退役・戻しの kind（[`EventKind::is_account_lifecycle`]）
+    /// が決める（`run` / `bead` を持つ行と口座残量・登録・退役の行は同じ並びを共有しない）。`account` の有無では
+    /// 決めない（`SeatSpawned` は `run` / `bead` と `account` を両方持つ）。食い違った組は [`Self::from_line`] が
+    /// 読み返せず malformed になるので、書いた行が読めない形は歯で捕まる。
     pub fn to_line(&self) -> String {
         let mut pairs: Vec<(&str, Value)> = vec![
             ("schema", Value::Num(self.schema)),
             ("ts", Value::Str(self.ts.clone())),
             ("kind", Value::Str(self.kind.as_str().to_owned())),
         ];
-        if self.allowance.is_none() && self.registration.is_none() && self.account.is_none() {
+        if self.allowance.is_none() && self.registration.is_none() && !self.kind.is_account_lifecycle() {
             pairs.push(("run", Value::Str(self.run.clone())));
             pairs.push(("bead", Value::Str(self.bead.clone())));
         }
@@ -191,11 +195,11 @@ impl Body {
             }
             EventKind::SeatRegistered => Self::registration(pairs),
             EventKind::AccountRetired | EventKind::AccountRestored => Self::account(pairs),
+            EventKind::SeatSpawned => Self::spawned(pairs),
             EventKind::RunCreated
             | EventKind::RunStage
             | EventKind::RunDone
             | EventKind::RunStopped
-            | EventKind::SeatSpawned
             | EventKind::SeatStopped
             | EventKind::ApprovalRequested
             | EventKind::ApprovalReceived
@@ -241,6 +245,20 @@ impl Body {
         let foreign = ALLOWANCE_KEYS.iter().filter(|key| **key != "account");
         forbid(pairs, ["run", "bead"].iter().chain(foreign).chain(REGISTRATION_KEYS))?;
         Ok(Self { account: Some(text_of(field(pairs, "account"), "account")?), ..Self::default() })
+    }
+
+    /// 席を立てた行の本体: `run` / `bead` に加えて `account`（便を起こした口座）を**任意**で持つ（ADR-0027 §2.3・
+    /// schema 1 のまま値の追加＝key の無い旧い行は `None`・在って文字列でなければ malformed）。口座残量だけの key と
+    /// 登録の key は持たない（`account` の例外を開けるのはこの kind だけ）。
+    fn spawned(pairs: &[(String, Value)]) -> Result<Self, String> {
+        let foreign = ALLOWANCE_KEYS.iter().filter(|key| **key != "account");
+        forbid(pairs, foreign.chain(REGISTRATION_KEYS))?;
+        Ok(Self {
+            run: text_of(field(pairs, "run"), "run")?,
+            bead: text_of(field(pairs, "bead"), "bead")?,
+            account: optional_text(field(pairs, "account"), "account")?,
+            ..Self::default()
+        })
     }
 }
 

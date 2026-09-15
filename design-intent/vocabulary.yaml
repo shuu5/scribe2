@@ -452,6 +452,10 @@ terms:
     domain: consumer
     definition: 開発 session が黙っていないかを周期で見て、 条件が揃ったときだけ打刻の合図か退避の合図を 1 行注入する仕組み (SRS FR27 / FR29)。
     relationships: [開発 session, cycle, 打刻の合図, 退避の合図]
+  - canonical: statusline
+    domain: consumer
+    definition: 開発 session の画面の下に Claude Code が描く 1 行。 器の口 (seat statusline) が stdin の payload だけから組み、 管理 tick の context 計測が pane から読む入力でもある (SRS FR25 / FR29・ADR-0029 §2.1 / §2.2)。 描く形と読む形は同じ 1 つの規則で、 口座の設定の statusLine は器の口座の口が書く (ADR-0029 §2.3)。
+    relationships: [管理 tick, 開発 session, 口座, doctor]
   - canonical: tick の unit
     domain: consumer
     definition: 管理 tick を席ごとに周期で撃つ host の systemd user unit (service と timer の対)。 器の口 (seat tick install) が NAME・target・置き場・binary・rules 行の間隔から 1 関数で導出して書き、 有効化まで撃つ (ADR-0030 §2.1〜§2.4)。 撤去は退役 dir への移動で、 doctor が席ごとに有無と一致を名指す (ADR-0030 §2.5)。
