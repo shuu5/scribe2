@@ -207,9 +207,19 @@ title = "enum-slices を順序一致に強め、極性の宣言 site と Guard �
 req = ["FR17"]
 section = "3"
 touches = ["crate::polarity::Guard"]
-write-set = ["crates/xtask/src/enum_slices.rs", "crates/xtask/src/polarity.rs", "crates/xtask/src/check.rs", "crates/xtask/src/check_tests.rs", "crates/scribe2/src/polarity.rs", "crates/scribe2/src/fleet/mod.rs", "crates/scribe2/tests/e2e/polarity.rs", "crates/scribe2/tests/e2e/snapshots/", "docs/design/polarity.md", "docs/design/rules-manifest.md"]
+write-set = ["crates/xtask/src/enum_slices.rs", "crates/xtask/src/polarity.rs", "crates/xtask/src/check.rs", "crates/xtask/src/check_tests.rs", "crates/scribe2/src/polarity.rs", "crates/scribe2/src/fleet/mod.rs", "crates/scribe2/tests/e2e/polarity.rs", "crates/scribe2/tests/e2e/snapshots/e2e__polarity__polarity_external_form.snap", "docs/design/polarity.md", "docs/design/rules-manifest.md"]
 verify = ["cargo nextest run -p xtask --no-tests=fail enum_slices_order_ polarity_sites_"]
 size = "S"
 done = "順序違いの slice が添字付きで落ち、Guard に無い極性 site と site の無い Guard が両方向で名指され、免除は closed slice 1 本"
 depends = ["a"]
+
+[[contract]]
+id = "f"
+title = "xtask の check_tests.rs（1319 行・xtask 便の hub）を子 module 2 つ（nonrust / prose）に割る — 純移動・札 moved"
+req = ["FR17"]
+section = "7"
+write-set = ["-crates/xtask/src/check_tests.rs", "+crates/xtask/src/check_nonrust_tests.rs", "+crates/xtask/src/check_prose_tests.rs"]
+verify = ["cargo nextest run -p xtask --no-tests=fail check::tests::nonrust:: check::tests::prose::"]
+size = "S"
+done = "check_tests.rs の余地が 600 行以上に戻り、歯が 2 つの子 module に移って本数と中身が不変"
 <!-- contracts:end -->
