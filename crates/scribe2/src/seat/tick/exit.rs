@@ -3,8 +3,9 @@
 
 use super::account::Seated;
 use super::{
-    back_off, held, InjectKind, NoopReason, Request, Seen, Stamped, TickDecision, Verdict, DETAIL_TERMINATED, EXIT,
-    INJECT_WRITERS, REASON_EXIT_UNCONFIRMED, REASON_EXIT_UNSTOPPABLE, ROW_GRACE,
+    back_off, held, InjectKind, NoopReason, Request, Seen, SignalOrigin, Stamped, TickDecision, Verdict,
+    DETAIL_TERMINATED, EXIT, INJECT_WRITERS, REASON_EXIT_UNCONFIRMED, REASON_EXIT_UNSTOPPABLE, ROW_GRACE,
+    SIGNAL_ORIGINS,
 };
 use crate::fleet::json_lite::{self, Value};
 use crate::hook::{inject_path, seat_name};
@@ -17,7 +18,7 @@ use std::time::{Duration, Instant};
 pub(super) enum Entry {
     /// 立て直し（前面が shell＝session は終わっている）。
     Relaunch,
-    /// 終了の手（前面が shell でない ∧ 直近の合図が退避の合図 ∧ 自席の未 consumed 退避物が在る）。
+    /// 終了の手（前面が shell でない ∧ 直近の合図が口座由来か hook 由来の退避の合図 ∧ 自席の未 consumed 退避物が在る）。
     Exit,
     /// どちらも立たない（以後は既存の順序へ）。
     None,
@@ -25,12 +26,15 @@ pub(super) enum Entry {
 
 /// 入口の条件（順序固定・tmux を撃つ前面の読みは最後）: (1) 自席への直近の注入の記録が tick の合図（退避の合図か
 /// 終了の合図・[`last_signal`]）(2) 打刻の最終行が `Stop`（[`stopped_after`]・退避の合図の周はその ts が (1) より後）
-/// (3) pane の前面 process が shell（[`super::pane_is_shell`]）なら立て直し。shell でない周は、直近が退避の合図
-/// （終了の合図の後は再送しない・back-off は送れなかった周のためにある）∧ 自席の未 consumed 退避物が在る
-/// （FR28「退避物が無い session には撃たない」と同じ極性）なら終了の手。(1) の無い停止（user の終了・crash）は
-/// 起こし直しも終了もしない（器が起こしたのでない停止に器が手を出さない）。
+/// (3) pane の前面 process が shell（[`super::pane_is_shell`]）なら立て直し（**出所を問わない**＝user が手で終えた席も
+/// 起こす）。shell でない周は、直近が退避の合図（終了の合図の後は再送しない・back-off は送れなかった周のためにある）
+/// ∧ その**出所が口座か hook**（`origin=account|hook`・席を別口座で作り直す合図・`s2-07l.307`）∧ 自席の未 consumed
+/// 退避物が在る（FR28「退避物が無い session には撃たない」と同じ極性）なら終了の手。context 由来（`origin=context`）と
+/// 出所不明（`origin=` の無い旧 binary の記録・読めない値）は終了の手を立てず、以後は既存の順序（状態の門 → 退避物 →
+/// `/clear` の cycle・同じ口座）へ——不可逆の `/exit` を出所不明の合図に送らない（N1）。(1) の無い停止（user の終了・
+/// crash）は起こし直しも終了もしない（器が起こしたのでない停止に器が手を出さない）。
 pub(super) fn parked_entry(state_dir: &Path, target: &str, socket: Option<&str>, seat_dir: &Path, wm: &WmScan) -> Entry {
-    let Some((kind, signalled)) = last_signal(state_dir, target) else {
+    let Some((kind, origin, signalled)) = last_signal(state_dir, target) else {
         return Entry::None;
     };
     if !stopped_after(seat_dir, kind, signalled) {
@@ -39,19 +43,21 @@ pub(super) fn parked_entry(state_dir: &Path, target: &str, socket: Option<&str>,
     if super::pane_is_shell(socket, target) {
         return Entry::Relaunch;
     }
-    match (kind, wm) {
-        (InjectKind::Externalize, WmScan::Unconsumed(_)) => Entry::Exit,
+    match (kind, origin, wm) {
+        (InjectKind::Externalize, Some(SignalOrigin::Account | SignalOrigin::Hook), WmScan::Unconsumed(_)) => Entry::Exit,
         _ => Entry::None,
     }
 }
 
 /// (1) `<state_dir>/inject.jsonl` の同じ席の**注入の最新行**（`who=seat-tick` か `seat launch` の `who=seat-launch`・
-/// [`INJECT_WRITERS`]）が tick の合図（`kind=externalize` か `kind=exit`）なら、その種類と ts。記録の形（判定行の
-/// `kind=` の token）は同じ module の [`body`] が書く。inject.jsonl は hook の記録（`hook:pre-tool-use` 等）も共有する
-/// （vessel-hook.md §6）が、それは注入ではないので飛ばす（`s2-07l.242`・退避の後に席が Bash を撃つと最新行が hook 行に
-/// なり合図が見えなくなっていた）。launch の行（`kind=launch`）は注入なので**直近**に数えるが合図ではない＝launch の
-/// 後の停止は起こし直さない（account-lifecycle.md §4・`s2-07l.244`）。
-fn last_signal(state_dir: &Path, target: &str) -> Option<(InjectKind, u64)> {
+/// [`INJECT_WRITERS`]）が tick の合図（`kind=externalize` か `kind=exit`）なら、その種類・出所・ts。記録の形（判定行の
+/// `kind=` / `origin=` の token）は同じ module の [`body`] が書く。出所は退避の合図の周だけ載り（`s2-07l.307`）、無い行
+/// （旧 binary の記録・終了の合図）と [`SIGNAL_ORIGINS`] に無い値は `None`（出所不明＝呼び側は終了の手を立てない）。
+/// inject.jsonl は hook の記録（`hook:pre-tool-use` 等）も共有する（vessel-hook.md §6）が、それは注入ではないので飛ばす
+/// （`s2-07l.242`・退避の後に席が Bash を撃つと最新行が hook 行になり合図が見えなくなっていた）。launch の行
+/// （`kind=launch`）は注入なので**直近**に数えるが合図ではない＝launch の後の停止は起こし直さない
+/// （account-lifecycle.md §4・`s2-07l.244`）。
+fn last_signal(state_dir: &Path, target: &str) -> Option<(InjectKind, Option<SignalOrigin>, u64)> {
     let seat = seat_name(target)?;
     let text = std::fs::read_to_string(inject_path(state_dir)).ok()?;
     let last = text
@@ -70,7 +76,11 @@ fn last_signal(state_dir: &Path, target: &str) -> Option<(InjectKind, u64)> {
     let kind = [InjectKind::Externalize, InjectKind::Exit]
         .into_iter()
         .find(|kind| kind.as_str() == token)?;
-    Some((kind, field(&last, "ts").and_then(Value::as_num)?))
+    let origin = what
+        .split_whitespace()
+        .find_map(|token| token.strip_prefix("origin="))
+        .and_then(|found| SIGNAL_ORIGINS.iter().copied().find(|origin| origin.as_str() == found));
+    Some((kind, origin, field(&last, "ts").and_then(Value::as_num)?))
 }
 
 /// 記録 1 行の key の値。
@@ -253,7 +263,25 @@ mod tests {
             inject_line(crate::seat::cycle::WHO_LAUNCH, "decision=inject target=seat1 kind=launch account=a2", "seat1", 100),
             inject_line(WHO, "decision=inject account=a2:100 kind=externalize", "seat1", 200),
         ];
-        assert_eq!(signal_of("launch-before", Some(&before)), Some(("externalize", 200)), "launch の後の合図は生きる");
+        assert_eq!(signal_of("launch-before", Some(&before)), Some(("externalize", None, 200)), "launch の後の合図は生きる");
+    }
+
+    /// (g) 退避の合図の行の `origin=` の token は typed に返る（`context` / `account` / `hook`・[`SIGNAL_ORIGINS`] の
+    /// 全数）。token の無い行（旧 binary の記録）と列に無い値は `None`（出所不明・終了の手は立たない側）。終了の合図
+    /// （`kind=exit`）は出所を持たない。base は型が無く compile で落ちる（RED・`s2-07l.307`）。
+    #[test]
+    fn seat_exit_signal_carries_the_origin_token() {
+        for origin in super::SIGNAL_ORIGINS {
+            let name = origin.as_str();
+            let lines = [inject_line(WHO, &format!("decision=inject account=a1:100 kind=externalize origin={name}"), "seat1", 100)];
+            assert_eq!(signal_of(&format!("origin-{name}"), Some(&lines)), Some(("externalize", Some(name), 100)), "{name}");
+        }
+        let bare = [inject_line(WHO, "decision=inject account=a1:100 kind=externalize", "seat1", 100)];
+        assert_eq!(signal_of("origin-none", Some(&bare)), Some(("externalize", None, 100)), "token の無い行は出所不明");
+        let unknown = [inject_line(WHO, "decision=inject kind=externalize origin=mars", "seat1", 100)];
+        assert_eq!(signal_of("origin-unknown", Some(&unknown)), Some(("externalize", None, 100)), "列に無い値は出所不明");
+        let exit = [inject_line(WHO, "decision=inject consumed=true kind=exit", "seat1", 300)];
+        assert_eq!(signal_of("origin-exit", Some(&exit)), Some(("exit", None, 300)), "終了の合図は出所を持たない");
     }
 
     /// 記録 1 行（`InjectionRecord::to_line` と同じ key の flat JSON）。
@@ -264,13 +292,15 @@ mod tests {
     }
 
     /// `inject.jsonl` を `lines` で置いた state dir で [`last_signal`] を読む（`None` の lines は file を置かない）。
-    fn signal_of(name: &str, lines: Option<&[String]>) -> Option<(&'static str, u64)> {
+    /// 返りは `(kind, origin, ts)` の字面。
+    fn signal_of(name: &str, lines: Option<&[String]>) -> Option<(&'static str, Option<&'static str>, u64)> {
         let dir = std::env::temp_dir().join(format!("seat-tick-signal-{name}-{}", std::process::id()));
         std::fs::create_dir_all(&dir).ok();
         if let Some(lines) = lines {
             std::fs::write(inject_path(&dir), format!("{}\n", lines.join("\n"))).ok();
         }
-        let found = last_signal(&dir, "seat1").map(|(kind, ts)| (kind.as_str(), ts));
+        let found =
+            last_signal(&dir, "seat1").map(|(kind, origin, ts)| (kind.as_str(), origin.map(super::SignalOrigin::as_str), ts));
         std::fs::remove_dir_all(&dir).ok();
         found
     }
@@ -285,7 +315,7 @@ mod tests {
             inject_line("hook:session-start", "served version=2", "seat1", 300),
             inject_line(WHO, "decision=inject kind=pointer", "seat2", 400),
         ];
-        assert_eq!(signal_of("hook-rows", Some(&lines)), Some(("externalize", 100)));
+        assert_eq!(signal_of("hook-rows", Some(&lines)), Some(("externalize", None, 100)));
     }
 
     /// (b) 退避の合図の後ろに同じ席の tick の別の注入（heartbeat の `kind=pointer`）が在れば、合図は上書きされている。

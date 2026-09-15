@@ -3,7 +3,7 @@
 
 use super::exit::{exit_turn, parked_entry, relaunch_turn, Entry};
 use super::render::{inject_line, Signal};
-use super::{account_pointer, Account, InjectKind, Request, Seen, Verdict};
+use super::{account_pointer, Account, InjectKind, Request, Seen, SignalOrigin, Verdict};
 use crate::fleet::store;
 use crate::fleet::{cli as fleet_cli, replay, Allowance, AllowanceLatest, Registration, State, WindowKind};
 use crate::rules::manifest::Manifest;
@@ -20,7 +20,8 @@ pub(super) enum Turn {
 
 /// 口座の軸（account-autonomy.md §5・context の直後＝状態の門の外）: 登録 row の在る席だけ評価する。実測行が
 /// 古い周は計測を 1 回撃ってから逼迫度を読み（[`seated`]）、退避して止まった席は前面が shell なら立て直し
-/// （[`relaunch_turn`]）・shell でなければ終了の手（[`exit_turn`]・[`parked_entry`]）、閾値以上の席へは FR29 と
+/// （[`relaunch_turn`]）・shell でなく合図が口座由来（`origin=account`・`s2-07l.307`）なら終了の手（[`exit_turn`]・
+/// [`parked_entry`]）、閾値以上の席へは FR29 と
 /// 同じ除外の下で idle を待たずに退避の合図を注入して自打刻する（[`account_signal`]）。閾値未満・測れない・除外で
 /// 注入しない周は逼迫度を持って次の条件へ（注入も停止もしない）。
 pub(super) fn account_turn(request: &Request, place: &super::StateDir, dir: &Path, seen: &Seen) -> Turn {
@@ -38,8 +39,13 @@ pub(super) fn account_turn(request: &Request, place: &super::StateDir, dir: &Pat
     let Some(payload) = account_signal(&account, seen, dir) else {
         return Turn::Pass(account);
     };
-    let signal = Signal { kind: InjectKind::Externalize, payload: &payload, state: seen.state };
-    Turn::Settled(Verdict { account, ..Verdict::of(inject_line(request, place, dir, &signal)) })
+    let signal = Signal {
+        kind: InjectKind::Externalize,
+        origin: Some(SignalOrigin::Account),
+        payload: &payload,
+        state: seen.state,
+    };
+    Turn::Settled(Verdict { account, origin: signal.origin, ..Verdict::of(inject_line(request, place, dir, &signal)) })
 }
 
 /// 閾値以上の席へ送る退避の合図の 1 行。**FR29 と同じ除外**（[`over_cap`] と同じ極性）: 自席の未 consumed

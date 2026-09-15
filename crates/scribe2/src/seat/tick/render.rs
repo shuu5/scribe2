@@ -1,7 +1,7 @@
 //! tick の注入の本文と記録（1 行の注入と自打刻・判定行の字面・席の記録への 1 行・[`super`] から純移動・
 //! `s2-07l.279`）。token の名前と順序は判定の産物（[`super::Judged`]）から作る。
 
-use super::{stamp_path, InjectKind, Judged, Request, Stamped, TickDecision, REASON_STAMP, WHEN, WHO};
+use super::{stamp_path, InjectKind, Judged, Request, SignalOrigin, Stamped, TickDecision, REASON_STAMP, WHEN, WHO};
 use crate::fleet::store::{self, LockPolicy};
 use crate::hook::{seat_name, InjectionRecord, SCHEMA};
 use crate::seat::{heartbeat, inject, meter, sanitize_target, state};
@@ -15,6 +15,9 @@ use std::time::Instant;
 pub(super) struct Signal<'a> {
     /// 何を注入するか。
     pub(super) kind: InjectKind,
+    /// 退避の合図の出所（`kind` が [`InjectKind::Externalize`] の周だけ `Some`・打刻の合図は `None`・`s2-07l.307`）。
+    /// 判定行の `origin=<…>` を経て終了の手の入口（[`super::exit::parked_entry`]）が読む。
+    pub(super) origin: Option<SignalOrigin>,
     /// 注入する 1 行。
     pub(super) payload: &'a str,
     /// 席の状態の読み（typed・pane の字面ではない）。
@@ -64,17 +67,19 @@ pub(super) fn inject_line(request: &Request, place: &super::StateDir, dir: &Path
 /// 別の dir を見ていることを記録から弁別できる・`s2-07l.70`）。
 /// 注入した周は `consumed=<値>` の**直後**に理由（`reason=<語>`・queue と消費の周は無し）を足す
 /// （`seat inject` の行と同じ並び・既存 token の名前と順序は不変・`s2-07l.150`）: 測れない周と
-/// Enter が落ちた周を `false` と同じ顔で流さない（憲法 C10）。第 2 手で終了を確定した周は `kind=` の**直後**に
-/// `detail=terminated`（`s2-07l.259`・それ以外の周は載らない）。
+/// Enter が落ちた周を `false` と同じ顔で流さない（憲法 C10）。退避の合図を送った周は `kind=` の**直後**に出所
+/// （`origin=<context|account|hook>`・`s2-07l.307`・それ以外の kind の周は載らない）、第 2 手で終了を確定した周は
+/// 同じ位置に `detail=terminated`（`s2-07l.259`・それ以外の周は載らない）。
 pub(super) fn body(target: &str, judged: &Judged, place: &super::StateDir) -> String {
     let verdict = &judged.verdict;
     let head = match verdict.decision {
         TickDecision::Inject(kind, settled) => format!(
-            "decision=inject target={} consumed={}{} kind={}{}",
+            "decision=inject target={} consumed={}{} kind={}{}{}",
             sanitize_target(target),
             settled.as_str(),
             settled.reason().map_or_else(String::new, |why| format!(" reason={why}")),
             kind.as_str(),
+            verdict.origin.map_or_else(String::new, |found| format!(" origin={}", found.as_str())),
             verdict.detail.map_or_else(String::new, |found| format!(" detail={found}"))
         ),
         TickDecision::Noop(reason) => format!("decision=noop reason={}", reason.as_str()),

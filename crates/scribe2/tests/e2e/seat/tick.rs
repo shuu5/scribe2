@@ -574,8 +574,8 @@ fn seat_tick_injects_externalize_pointer_when_context_reaches_cap_while_busy() {
         assert_eq!(rc_of(&out), i32::from(RC_OK), "{pct}%: stderr={}", stderr_of(&out));
         assert_eq!(
             stdout_of(&out),
-            format!("seat: tick decision=inject target={name} consumed=false kind=externalize context={pct}{ST_BUSY}{}\n", provenance(&state, "flag")),
-            "{pct}%: 打刻が Busy でも退避の合図は送る（state の列は busy のまま載る・busy な席は queue＝consumed=false）"
+            format!("seat: tick decision=inject target={name} consumed=false kind=externalize origin=context context={pct}{ST_BUSY}{}\n", provenance(&state, "flag")),
+            "{pct}%: 打刻が Busy でも退避の合図は送る（state の列は busy のまま載る・busy な席は queue＝consumed=false・出所は kind の直後）"
         );
         let seen = capture(&socket, name);
         assert!(seen.contains("/ready-compaction"), "{pct}%: 退避 skill の名が届く: {seen}");
@@ -587,10 +587,10 @@ fn seat_tick_injects_externalize_pointer_when_context_reaches_cap_while_busy() {
         let recorded = fs::read_to_string(tick_file(&state, name)).unwrap_or_default();
         assert!(
             recorded.contains(&format!(
-                r#""what":"decision=inject target=seatovercap consumed=false kind=externalize context={pct}{ST_BUSY}{}""#,
+                r#""what":"decision=inject target=seatovercap consumed=false kind=externalize origin=context context={pct}{ST_BUSY}{}""#,
                 provenance(&state, "flag")
             )),
-            "{pct}%: 記録にも kind と context と state と置き場の出所が載る: {recorded}"
+            "{pct}%: 記録にも kind と合図の出所と context と state と置き場の出所が載る: {recorded}"
         );
 
         // 退避の合図には brake を掛けない（planner 裁定 2026-09-12 案 A・`s2-07l.109`）: 自打刻の直後の
@@ -598,7 +598,7 @@ fn seat_tick_injects_externalize_pointer_when_context_reaches_cap_while_busy() {
         let out = run_seat(&args);
         assert_eq!(
             stdout_of(&out),
-            format!("seat: tick decision=inject target={name} consumed=false kind=externalize context={pct}{ST_BUSY}{}\n", provenance(&state, "flag")),
+            format!("seat: tick decision=inject target={name} consumed=false kind=externalize origin=context context={pct}{ST_BUSY}{}\n", provenance(&state, "flag")),
             "{pct}%: 自打刻の直後でも退避の合図は送る（brake は打刻の合図だけ）"
         );
         // socket を消す**前**に畳む（消してからでは kill-session が届かない・実測 2026-09-10）。
@@ -1207,7 +1207,7 @@ fn seat_tick_without_freshness_gate_sends_externalize_when_over_cap_while_fresh(
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
     assert_eq!(
         stdout_of(&out),
-        format!("seat: tick decision=inject target={name} consumed=false kind=externalize context=96{ST_IDLE}{}\n", provenance(&state, "flag")),
+        format!("seat: tick decision=inject target={name} consumed=false kind=externalize origin=context context=96{ST_IDLE}{}\n", provenance(&state, "flag")),
         "打刻の直後でも cap 以上なら退避の合図（盲点の消滅）"
     );
     assert!(capture(&socket, name).contains("/ready-compaction"), "退避 skill の名が届く");

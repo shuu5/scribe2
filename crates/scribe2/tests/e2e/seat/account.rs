@@ -338,7 +338,7 @@ fn seat_state_tick_sends_externalize_pointer_regardless_of_stamp() {
         assert_eq!(rc_of(&out), i32::from(RC_OK), "組 {at}: stderr={}", stderr_of(&out));
         assert_eq!(
             stdout_of(&out),
-            format!("seat: tick decision=inject target={name} consumed={consumed} kind=externalize context=96{column}{}\n", provenance(&state, "flag")),
+            format!("seat: tick decision=inject target={name} consumed={consumed} kind=externalize origin=context context=96{column}{}\n", provenance(&state, "flag")),
             "組 {at}: 退避の合図は打刻に依らず送る（state の列は打刻のまま・consumed は打刻由来）"
         );
         assert!(capture(&socket, name).contains("/ready-compaction"), "組 {at}: 退避 skill の名が届く");
@@ -502,7 +502,7 @@ fn seat_attrib_tick_busy_seat_is_not_nudged() {
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
     assert_eq!(
         stdout_of(&out),
-        format!("seat: tick decision=inject target={name} consumed=false kind=externalize context=96{ST_BUSY}{}\n", provenance(&dir.join("state"), "flag")),
+        format!("seat: tick decision=inject target={name} consumed=false kind=externalize origin=context context=96{ST_BUSY}{}\n", provenance(&dir.join("state"), "flag")),
         "Busy の席は修復の門を通らない"
     );
     assert!(tick_stamp_of(&dir, name).exists(), "修復しない周は従来どおり自打刻する");
@@ -530,7 +530,7 @@ fn seat_attrib_tick_names_the_unmeasured_reason() {
         let out = attrib_tick(&dir, name, &socket);
 
         assert_eq!(rc_of(&out), i32::from(RC_OK), "{reason}: stderr={}", stderr_of(&out));
-        let body = format!("decision=inject target={name} consumed=unknown reason={reason} kind=externalize context=96{column}");
+        let body = format!("decision=inject target={name} consumed=unknown reason={reason} kind=externalize origin=context context=96{column}");
         assert_eq!(stdout_of(&out), format!("seat: tick {body}{}\n", provenance(&state, "flag")), "{reason}");
         let recorded = fs::read_to_string(tick_file(&state, name)).unwrap_or_default();
         assert!(
@@ -1609,8 +1609,9 @@ fn seat_account_tick_never_measures_an_undeclared_account() {
 }
 
 /// (1) 登録 row の口座が閾値以上（90 ≥ 85）の席は、打刻が Busy でも idle を待たずに退避の合図 1 行を注入する
-/// （`kind=externalize`・判定行に `account=a1:90`・打刻の合図は出ない）。注入の記録は `<state_dir>/inject.jsonl`
-/// にも同じ席の行として残る（立て直しの入口 (1) の読み先）。base は口座を見ず `noop reason=busy`（RED）。
+/// （`kind=externalize origin=account`・判定行に `account=a1:90`・打刻の合図は出ない）。注入の記録は
+/// `<state_dir>/inject.jsonl` にも同じ席の行として残る（立て直しの入口 (1) の読み先・出所は終了の手の入口が読む・
+/// `s2-07l.307`）。base は口座を見ず `noop reason=busy`（RED）。
 #[test]
 fn seat_account_tick_signals_externalize_over_threshold_while_busy() {
     let place = acct_place();
@@ -1629,11 +1630,11 @@ fn seat_account_tick_signals_externalize_over_threshold_while_busy() {
     assert_eq!(
         stdout_of(&out),
         acct_line(
-            &format!("decision=inject target={name} consumed=false kind=externalize"),
+            &format!("decision=inject target={name} consumed=false kind=externalize origin=account"),
             &format!("{ST_BUSY} account=a1:90"),
             &place.state
         ),
-        "busy でも退避の合図・判定行に口座と逼迫度"
+        "busy でも退避の合図・判定行に出所（口座）と口座と逼迫度"
     );
     let seen = capture(&place.socket, name);
     assert!(
@@ -1648,8 +1649,8 @@ fn seat_account_tick_signals_externalize_over_threshold_while_busy() {
     assert_eq!(acct_text(row, "who").as_deref(), Some("seat-tick"), "{log}");
     assert_eq!(acct_text(row, "seat").as_deref(), Some(name), "{log}");
     assert!(
-        acct_text(row, "what").is_some_and(|what| what.contains(" kind=externalize ") && what.contains(" account=a1:90")),
-        "判定行と同じ字面: {log}"
+        acct_text(row, "what").is_some_and(|what| what.contains(" kind=externalize origin=account ") && what.contains(" account=a1:90")),
+        "判定行と同じ字面（出所は kind の直後）: {log}"
     );
     drop(guard);
     fs::remove_dir_all(&place.dir).ok();
@@ -1913,6 +1914,50 @@ fn seat_account_relaunch_refuses_templates_without_exactly_one_hole() {
         drop(guard);
         fs::remove_dir_all(&place.dir).ok();
     }
+}
+
+/// context 由来の退避の合図を実物の tick で 1 回注入させる（`--capture-file` の pane が cap 以上・打刻 Busy・登録 row の
+/// 口座は閾値未満でも送る＝context の軸は口座の軸より前）。判定行が `kind=externalize origin=context` であることを
+/// 確かめる。口座の軸の合図（[`acct_signal`]・`origin=account`）との対（`s2-07l.307`）。
+pub(super) fn acct_context_signal(place: &AcctPlace, name: &str) {
+    write_state(&seat_dir_of(&place.state, name), StateFix::Busy { age_s: 0 });
+    let pane = fixture(&place.dir, "pane.txt", &busy_pane_at(96));
+    let line = stdout_of(&acct_tick(place, name, Some(&pane)));
+    for (key, want) in [("kind", "externalize"), ("origin", "context")] {
+        assert_eq!(tick_token(&line, key).as_deref(), Some(want), "context 由来の合図: {key}: {line}");
+    }
+}
+
+/// (9) 立て直しの入口 (3)「前面が shell」は合図の**出所を問わない**（`s2-07l.307`・極性不変の対・base でも PASS）:
+/// context 由来の退避（記録の合図の行が `kind=externalize origin=context`・[`acct_context_signal`]）→ `Stop` の後に
+/// user が手で session を終えた席（前面が shell）は、口座由来と同じく別口座で立て直す（`kind=relaunch`・起動 → 復元・
+/// 登録 row の口座は a2 に）。終了の手（`/exit`）だけが出所で分かれる。
+#[test]
+fn seat_account_relaunch_runs_after_a_context_signal_when_the_front_is_a_shell() {
+    let place = acct_place();
+    let name = "acctctxshell";
+    let guard = start_seat(&place.socket, name);
+    assert!(guard.ready(), "独立 socket に shell の session を立てられる");
+    let registered = acct_register(&place, name, &acct_launcher(&place, name));
+    assert_eq!(rc_of(&registered), i32::from(RC_OK), "stderr={}", stderr_of(&registered));
+    acct_measured(&place.state, ACCT_SEAT, 100, &acct_now());
+    acct_measured(&place.state, ACCT_SPARE, 30, &acct_now());
+    acct_context_signal(&place, name);
+    acct_stop(&place, name, unix_now().saturating_add(1));
+    assert!(acct_shell_prompt(&place, name, ""), "席の終了後の pane は shell の prompt で終わる");
+
+    let out = acct_tick(&place, name, None);
+
+    let line = stdout_of(&out);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stdout={line} stderr={}", stderr_of(&out));
+    for (key, want) in [("decision", "inject"), ("kind", "relaunch"), ("consumed", "true"), ("account", "a1:100"), ("relaunch", ACCT_SPARE)] {
+        assert_eq!(tick_token(&line, key).as_deref(), Some(want), "{key}: {line}");
+    }
+    assert_eq!(tick_token(&line, "origin"), None, "立て直しの判定行に出所は載らない: {line}");
+    acct_assert_launched_then_restored(&place, name);
+    acct_assert_relabelled(&place, name);
+    drop(guard);
+    fs::remove_dir_all(&place.dir).ok();
 }
 
 // ─────────────────── 席の起動（account-lifecycle.md §4・ADR-0026 §2.3・`s2-07l.244`・接頭辞 `seat_launch_`） ───────────────────

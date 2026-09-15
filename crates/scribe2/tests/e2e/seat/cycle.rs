@@ -1786,8 +1786,10 @@ fn exit_seat(place: &AcctPlace, name: &str) -> bool {
         && exit_wait_foreground(place, name, "head")
 }
 
-/// 退避して止まり、前面が shell でない席の fixture: [`start_seat`] → 退避の合図 → `Stop`（[`acct_parked`]・候補 a2 = 30）→
-/// 自席の未 consumed 退避物 → 前面を `head` に（退避の合図は前の `sh -i` が受ける＝`head` は 1 行も読んでいない）。
+/// 退避して止まり、前面が shell でない席の fixture: [`start_seat`] → 口座由来の退避の合図（実物の tick の判定行
+/// `kind=externalize origin=account`・a1 = 100）→ `Stop`（[`acct_parked`]・候補 a2 = 30）→ 自席の未 consumed 退避物 →
+/// 前面を `head` に（退避の合図は前の `sh -i` が受ける＝`head` は 1 行も読んでいない）。context 由来の対は
+/// [`exit_parked_by_context`]（`s2-07l.307`）。
 fn exit_parked(place: &AcctPlace, name: &str) -> IsolatedSeat {
     let guard = start_seat(&place.socket, name);
     assert!(guard.ready(), "独立 socket に session を立てられる");
@@ -2058,6 +2060,101 @@ fn seat_exit_is_not_sent_when_the_seat_resumed_after_stop() {
         assert_eq!(tick_token(&line, key).as_deref(), Some(want), "{key}: {line}");
     }
     exit_assert_not_sent(&place, name, "resumed");
+    drop(guard);
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+// ─────────────────── 終了の手と合図の出所（consumer-sync.md §6・ADR-0028 §2.4・`s2-07l.307`） ───────────────────
+
+/// context 由来の退避で止まり、前面が shell でない席の fixture（実地 2026-09-15 の形）: 登録 row の口座 a1 = 13
+/// （閾値未満・候補 a2 = 30）→ context 由来の合図（[`super::account::acct_context_signal`]）→ `Stop` → 自席の未 consumed
+/// 退避物 → 前面を `head` に（[`exit_parked`] と同じ席の形・違うのは合図の出所と口座の逼迫度だけ）。
+fn exit_parked_by_context(place: &AcctPlace, name: &str) -> IsolatedSeat {
+    let guard = start_seat(&place.socket, name);
+    assert!(guard.ready(), "独立 socket に session を立てられる");
+    let registered = acct_register(place, name, &acct_launcher(place, name));
+    assert_eq!(rc_of(&registered), i32::from(RC_OK), "stderr={}", stderr_of(&registered));
+    acct_measured(&place.state, ACCT_SEAT, 13, &acct_now());
+    acct_measured(&place.state, ACCT_SPARE, 30, &acct_now());
+    super::account::acct_context_signal(place, name);
+    acct_stop(place, name, unix_now().saturating_add(1));
+    wm_file(&place.wm, "working-memory.parked.md", name);
+    assert!(exit_seat(place, name), "前面が head の席を作れる");
+    assert_eq!(exit_received(place), "", "head はまだ 1 行も読んでいない");
+    guard
+}
+
+/// 終了の手を立てずに既存の順序で `/clear` の cycle に進んだ周（rc 0・口座の軸は評価した〔`account`〕）の 4 面: `/exit`
+/// は出ず（席が受けた 1 行は `/clear`・exit-stamp なし）・判定行は注入でなく退避物の noop に cycle の評価が載る
+/// （`kind=` なし・`cycle=` あり）・cycle-stamp は cycle 側が打つ（同じ口座のまま作り直す側へ倒れた証拠）。
+fn exit_assert_cycled_instead(place: &AcctPlace, name: &str, out: &Output, account: &str) {
+    let line = stdout_of(out);
+    assert_eq!(rc_of(out), i32::from(RC_OK), "stdout={line} stderr={}", stderr_of(out));
+    assert_eq!(tick_token(&line, "kind"), None, "/exit を注入しない: {line}");
+    for (key, want) in [("decision", "noop"), ("reason", "wm-unconsumed"), ("account", account)] {
+        assert_eq!(tick_token(&line, key).as_deref(), Some(want), "{key}: {line}");
+    }
+    assert!(tick_token(&line, "cycle").is_some(), "/clear の cycle を評価した: {line}");
+    assert_eq!(exit_received(place), "/clear\n", "席が受けた 1 行は /clear（/exit ではない）");
+    assert!(!seat_dir_of(&place.state, name).join("exit-stamp").exists(), "exit-stamp を打たない");
+    assert!(seat_dir_of(&place.state, name).join("cycle-stamp").exists(), "cycle-stamp は cycle 側が打つ");
+}
+
+/// (a) context 由来の退避（判定行 `kind=externalize origin=context`・口座は 13% で閾値未満）→ 退避 → `Stop` の席には
+/// `/exit` を送らない: 入口は立たず、既存の順序で同じ口座の `/clear` の cycle に進む。base は出所を見ず `/exit` を送って
+/// 別口座の立て直しに倒れる（RED・実地 2026-09-15: planner の口座が動いた・user 直命 2026-09-14「planner は同じ口座に固定」）。
+#[test]
+fn seat_exit_is_not_sent_after_a_context_signal() {
+    let place = acct_place();
+    let name = "exitctx";
+    let guard = exit_parked_by_context(&place, name);
+
+    let out = acct_tick(&place, name, None);
+
+    exit_assert_cycled_instead(&place, name, &out, "a1:13");
+    drop(guard);
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (b) 極性の対: 口座由来の退避（記録の合図の行が `kind=externalize origin=account`・[`exit_parked`]）→ `Stop` の席には
+/// 従来どおり `/exit` を送る（席が受けた 1 行は `/exit`・終了の手の判定行に出所は載らない・`/clear` の cycle は回さない）。
+#[test]
+fn seat_exit_is_sent_after_an_account_signal() {
+    let place = acct_place();
+    let name = "exitacct";
+    let guard = exit_parked(&place, name);
+    let log = fs::read_to_string(place.state.join("inject.jsonl")).unwrap_or_default();
+    assert!(log.contains(" kind=externalize origin=account "), "合図の記録は出所を持つ（kind の直後）: {log}");
+
+    let out = acct_tick(&place, name, None);
+
+    let line = stdout_of(&out);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stdout={line} stderr={}", stderr_of(&out));
+    for (key, want) in [("decision", "inject"), ("kind", "exit"), ("account", "a1:100")] {
+        assert_eq!(tick_token(&line, key).as_deref(), Some(want), "{key}: {line}");
+    }
+    assert_eq!((tick_token(&line, "origin"), tick_token(&line, "cycle")), (None, None), "出所も cycle も載らない: {line}");
+    assert_eq!(exit_received(&place), "/exit\n", "席が受けた 1 行は /exit");
+    drop(guard);
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (c) 出所の無い合図（旧 binary の記録＝`origin=` の token を持たない行・fixture は口座由来の合図の記録から
+/// ` origin=account` を落とした行）には `/exit` を送らない（出所不明の合図に不可逆の手を送らない・N1）: (a) と同じく
+/// 既存の順序で `/clear` の cycle に進む。base は `kind=externalize` だけを読んで送る（RED）。
+#[test]
+fn seat_exit_ignores_a_signal_without_origin() {
+    let place = acct_place();
+    let name = "exitnoorigin";
+    let guard = exit_parked(&place, name);
+    let log = place.state.join("inject.jsonl");
+    let text = fs::read_to_string(&log).unwrap_or_default();
+    assert!(text.contains(" origin=account "), "実物の合図は出所を持つ: {text}");
+    fs::write(&log, text.replace(" origin=account", "")).ok();
+
+    let out = acct_tick(&place, name, None);
+
+    exit_assert_cycled_instead(&place, name, &out, "a1:100");
     drop(guard);
     fs::remove_dir_all(&place.dir).ok();
 }

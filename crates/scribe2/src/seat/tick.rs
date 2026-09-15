@@ -30,7 +30,9 @@
 //!
 //! **退避後の終了の手**（account-autonomy.md §5「退避後の終了の手」・`s2-07l.226`・憲法 C9）: 立て直しの入口 (3)
 //! 「前面 process が shell」は誰かが session を終えた後にしか立たない（AC13 実演 2026-09-13 では planner が
-//! `/exit` を送った＝人手に依存）。登録 row の在る席で、直近の注入が退避の合図 ∧ その後の `Stop` ∧ 自席の未
+//! `/exit` を送った＝人手に依存）。登録 row の在る席で、直近の注入が**口座由来か hook 由来**の退避の合図
+//! （判定行の `origin=account|hook`・[`SignalOrigin`]・`s2-07l.307`: context 由来の退避は同じ口座の `/clear` の cycle へ
+//! 進み `/exit` を送らない）∧ その後の `Stop` ∧ 自席の未
 //! consumed 退避物が在る ∧ 前面が shell でない、の周は器が `/exit` を席の入力欄の門（cycle の `/clear` と同じ
 //! [`inject::guard_input`]）を通して注入し（`kind=exit`）、exit-stamp を打つ（cycle-stamp と別の 1 本・再送しない・
 //! `s2-07l.252`）。送達は前面が shell になったかで確かめ、次の周は立て直しの入口が立つ（入口 (1) は「直近の注入が
@@ -189,6 +191,35 @@ impl InjectKind {
     }
 }
 
+/// 退避の合図（[`InjectKind::Externalize`]）の**出所**（consumer-sync.md §6「合図の出所を typed に」・ADR-0028 §2.4・
+/// `s2-07l.307`）。**閉じた enum**（憲法 C2 / C10・bool で持たない）: 終了の手の入口（[`exit::parked_entry`]）は
+/// 出所で分かれる——口座由来の退避は別口座で立て直すので `/exit` の側、context 由来の退避は同じ口座の `/clear` の
+/// cycle の側（不可逆の `/exit` を口座の動かない合図に送らない・N1）。実地 2026-09-15: context の退避の後に判定行の
+/// `kind=externalize` だけを読んで `/exit` + 別口座の立て直しに倒れ、planner の口座が動いた。
+#[derive(Clone, Copy)]
+pub enum SignalOrigin {
+    /// context が cap 以上（[`judge`] の context の軸）。
+    Context,
+    /// 登録 row の口座が閾値以上（口座の軸・[`account::account_turn`]）。
+    Account,
+    /// hook 集合の食い違い（FR62・consumer-sync.md §6）。構築点は `s2-07l.304` が置く（本便では無い）。
+    Hook,
+}
+
+/// [`SignalOrigin`] の全 variant（宣言順）。
+pub const SIGNAL_ORIGINS: &[SignalOrigin] = &[SignalOrigin::Context, SignalOrigin::Account, SignalOrigin::Hook];
+
+impl SignalOrigin {
+    /// 記録と表示に使う字面（判定行の `origin=<…>`）。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Context => "context",
+            Self::Account => "account",
+            Self::Hook => "hook",
+        }
+    }
+}
+
 /// pane から読んだ context 使用率。**pane を取得した周だけ評価する**——取得しない周は
 /// [`Self::Unevaluated`]（`cycle=` と同じ「評価していない」の印＝判定行に載らない）。
 ///
@@ -278,6 +309,9 @@ pub(super) struct Verdict {
     relaunched: Option<String>,
     /// 注入の判定に添える細目（第 2 手で終了を確定した周の [`DETAIL_TERMINATED`]・それ以外は `None`＝判定行に載らない）。
     detail: Option<&'static str>,
+    /// 退避の合図の出所（[`InjectKind::Externalize`] を送った周だけ `Some`・打刻の合図・終了の手・立て直しは `None`
+    /// ＝判定行に載らない・`s2-07l.307`）。
+    origin: Option<SignalOrigin>,
 }
 
 impl Verdict {
@@ -290,6 +324,7 @@ impl Verdict {
             account: Account::Unevaluated,
             relaunched: None,
             detail: None,
+            origin: None,
         }
     }
 }
@@ -538,8 +573,13 @@ fn judge(request: &Request, place: &super::StateDir, dir: &Path, seen: &Seen) ->
     // 退避の合図は**状態の門の外**（FR29「idle を待たずに」・busy な席へは queue の形で届く）。
     if let Some((pct, cap)) = over_cap(seen).filter(|_| !cycle::lock_is_live(dir, seen.ttl_s)) {
         let payload = externalize_pointer(pct, cap);
-        let signal = Signal { kind: InjectKind::Externalize, payload: &payload, state: seen.state };
-        return Verdict::of(inject_line(request, place, dir, &signal));
+        let signal = Signal {
+            kind: InjectKind::Externalize,
+            origin: Some(SignalOrigin::Context),
+            payload: &payload,
+            state: seen.state,
+        };
+        return Verdict { origin: signal.origin, ..Verdict::of(inject_line(request, place, dir, &signal)) };
     }
     let account = match account_turn(request, place, dir, seen) {
         Turn::Settled(verdict) => return verdict,
@@ -568,7 +608,7 @@ fn after_account(request: &Request, place: &super::StateDir, dir: &Path, seen: &
     let payload = request
         .pointer
         .map_or_else(|| default_pointer(request.target), str::to_owned);
-    let signal = Signal { kind: InjectKind::Pointer, payload: &payload, state: seen.state };
+    let signal = Signal { kind: InjectKind::Pointer, origin: None, payload: &payload, state: seen.state };
     Verdict::of(inject_line(request, place, dir, &signal))
 }
 
@@ -697,10 +737,11 @@ pub(super) fn held(stamp: Stamped, reason: NoopReason) -> Verdict {
 #[cfg(test)]
 mod tests {
     // flip-check: moved s2-07l.279
-    use super::{INJECT_KINDS, NOOP_REASONS};
+    use super::{INJECT_KINDS, NOOP_REASONS, SIGNAL_ORIGINS};
     use crate::order::is_declaration_order;
 
-    /// `NoopReason` / `InjectKind` の字面は宣言順で全数を pin する（variant を足した周はここの件数が変わる・C2）。
+    /// `NoopReason` / `InjectKind` / `SignalOrigin` の字面は宣言順で全数を pin する（variant を足した周はここの件数が
+    /// 変わる・C2）。
     #[test]
     fn seat_account_noop_reasons_and_kinds_are_pinned_in_declaration_order() {
         let reasons: Vec<&str> = NOOP_REASONS.iter().map(|reason| reason.as_str()).collect();
@@ -716,5 +757,8 @@ mod tests {
         let kinds: Vec<&str> = INJECT_KINDS.iter().map(|kind| kind.as_str()).collect();
         assert_eq!(kinds, ["pointer", "externalize", "relaunch", "exit", "launch"]);
         assert!(is_declaration_order(INJECT_KINDS, |kind| kind as usize));
+        let origins: Vec<&str> = SIGNAL_ORIGINS.iter().map(|origin| origin.as_str()).collect();
+        assert_eq!(origins, ["context", "account", "hook"]);
+        assert!(is_declaration_order(SIGNAL_ORIGINS, |origin| origin as usize));
     }
 }
