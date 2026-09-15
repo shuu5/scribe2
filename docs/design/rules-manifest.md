@@ -28,6 +28,8 @@
 - `pub trait Rule { fn kind(&self) -> RuleKind; fn validate(&self) -> Result<(), RuleError>; }` を `RuleRow` に実装。kind ごとの値型の対応は **`match kind { … }` 1 箇所・wildcard `_` 無し**。
 - `pub struct RuleRow { id, kind, value, enabled, ruling: String, ruled_at: String, line: u64 }`。
 - `RuleError` は `Display` で **1 件 1 行・`line=<N>` を含む**。
+- **閉じた enum と const slice の突合**（`s2-07l.177`）: xtask の enum-slices は集合の一致に加えて**順序**（同じ添字で同じ名）も測り、順序違いを添字付きで名指す。極性を持つ境界（`pub const POLARITY: Polarity` の宣言 site）は `Guard` の網羅 match が参照する集合と両方向で突合し、guard でない境界は `polarity.rs` の閉じた const slice（`NOT_A_GUARD`）に載せる（doc コメントで除外しない）。
+- **CLAUDE.md の生成区間**（`s2-07l.173`）: 憲法の区間に加えて「done の定義」も `.github/workflows/ci.yml` の `run: cargo …` 行から xtask が生成する区間にし、tracked との差分を xtask check が落とす。生成区間の外の規範行（散文の門と同じ印・pointer 無し）は検出線 `claude-md-prose` が件数を出す。
 
 ## 4. manifest（`rules/manifest.toml`・tracked・repo root 直下）
 
@@ -186,5 +188,28 @@ write-set = ["+crates/xtask/src/deps_delta.rs", "crates/xtask/src/main.rs", "cra
 verify = ["cargo nextest run -p xtask --no-tests=fail deps_delta_"]
 size = "S"
 done = "per-pr を超えて依存を足す PR が CI の入口で落ち、足した便の check-delta-ms が判定行に残る"
+depends = ["a"]
+
+[[contract]]
+id = "d"
+title = "CLAUDE.md の done の定義を ci.yml から生成する区間にし、生成区間の外の規範行を検出線 claude-md-prose で数える"
+req = ["FR17"]
+section = "3"
+write-set = ["crates/xtask/src/claude_md.rs", "crates/xtask/src/check.rs", "crates/xtask/src/prose_gate.rs", "crates/xtask/src/genmanifest.rs", "crates/xtask/src/check_tests.rs", "CLAUDE.md", "docs/design/rules-manifest.md"]
+verify = ["cargo nextest run -p xtask --no-tests=fail claude_md_done_ claude_md_prose_"]
+size = "S"
+done = "done の定義が ci.yml から生成され drift が xtask check で落ち、区間外の規範行の件数が判定行に出る"
+depends = ["a"]
+
+[[contract]]
+id = "e"
+title = "enum-slices を順序一致に強め、極性の宣言 site と Guard の網羅を両方向で突合する（免除は NOT_A_GUARD の closed slice）"
+req = ["FR17"]
+section = "3"
+touches = ["crate::polarity::Guard"]
+write-set = ["crates/xtask/src/enum_slices.rs", "crates/xtask/src/polarity.rs", "crates/xtask/src/check.rs", "crates/xtask/src/check_tests.rs", "crates/scribe2/src/polarity.rs", "crates/scribe2/src/fleet/mod.rs", "crates/scribe2/tests/e2e/polarity.rs", "crates/scribe2/tests/e2e/snapshots/", "docs/design/polarity.md", "docs/design/rules-manifest.md"]
+verify = ["cargo nextest run -p xtask --no-tests=fail enum_slices_order_ polarity_sites_"]
+size = "S"
+done = "順序違いの slice が添字付きで落ち、Guard に無い極性 site と site の無い Guard が両方向で名指され、免除は closed slice 1 本"
 depends = ["a"]
 <!-- contracts:end -->

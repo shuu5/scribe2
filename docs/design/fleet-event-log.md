@@ -52,6 +52,7 @@ C3 は「1 つの DB file（host 列）」と言う。MVP はそれを **append-
 - `read_all(dir) -> Result<Vec<Event>, Vec<StoreError>>`: **malformed 行（parse 不能・`schema` が 1 以外）は skip せず `line=<N>` 付きの error に全件集めて `Err`**（NFR4）。file 不在は `Ok(vec![])`。
 - **待機は 1 実装**（C3.4）: `pub enum Completion { RunnerExited(pid), SeatGone(pid) }` と `pub fn wait(c: Completion, deadline: Duration) -> Result<(), Timeout>` の 1 本。任意の述語を受ける口は作らない。pipeline の「runner の終了待ち」「TERM 後の消滅待ち」はこの 2 値で表す。
 - 失敗は境界ごとの enum（`StoreError` / `Timeout`）で持ち、極性は `FailClosed`（C11.2）。
+- **着地の列の待ちの費用**（`s2-07l.300`）: `Completion::LandTurn` の 1 周の観測は event log の全行 replay で、列に並ぶ便の数だけ core を焼く。wait は event log の長さと mtime を前回の観測と比べ、変わらない周は replay を省いて前回の判定を使う（周期の数値は新設しない・材料が変われば必ず読み直す・`Completion` の値と wait の 1 実装は不変）。
 
 ## 5. CLI（`<NAME> fleet …`・`--state-dir D` 必須・出力は `emit` / `emit_err` 経由のみ）
 
@@ -82,3 +83,17 @@ C3 は「1 つの DB file（host 列）」と言う。MVP はそれを **append-
 - doctor の fleet 面（host ごとの event 件数と schema 版の照合・C3.2）。口座・lease・退役の表（v3・C3 / C9）。
 - SQLite 化は A3 を通した上で **同じ event を投影する**形にし、event log は消さない（跨版 面 2 は event log の path で固定）。
 - event の圧縮・rotation（MVP は無限追記・1 便あたり 10 行程度）。cross-host の lock（MVP は同 host 内のみ）。
+
+<!-- contracts:begin -->
+schema = 1
+
+[[contract]]
+id = "a"
+title = "着地の列の待ち（Completion::LandTurn）は event log の長さと mtime が不変の周は replay を省く"
+req = ["FR50", "NFR3"]
+section = "4"
+write-set = ["crates/scribe2/src/fleet/wait.rs", "crates/scribe2/src/pipe/queue.rs", "crates/scribe2/tests/e2e/fleet.rs", "docs/design/gate-cost.md", "docs/design/fleet-event-log.md"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail fleet_wait_land_turn_"]
+size = "S"
+done = "log が変わらない周は replay が呼ばれず、追記のあった周は読み直して列の判定が変わる"
+<!-- contracts:end -->
