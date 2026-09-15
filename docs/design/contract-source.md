@@ -219,7 +219,7 @@ id = "j"
 title = "閉包の 4 形が同名の型の file へ広がる — sees() 1 関数で「その file から型が見えているか」を判定してから数える"
 req = ["FR48", "FR39"]
 section = "3"
-write-set = ["crates/scribe2/src/pipe/closure.rs", "crates/scribe2/tests/e2e/pipe/intake.rs", "crates/scribe2/tests/e2e/prop.rs", "docs/design/contract-source.md"]
+write-set = ["crates/scribe2/src/pipe/closure.rs", "crates/scribe2/src/pipe/table.rs", "crates/scribe2/tests/e2e/pipe/intake.rs", "crates/scribe2/tests/e2e/prop.rs", "docs/design/contract-source.md"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail contract_closure_ext_same_name_"]
 size = "S"
 done = "別 module の同名の型を持つ toy で閉包が広がらず、見えている file だけが導出値に入る"
