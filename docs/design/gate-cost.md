@@ -215,7 +215,7 @@ id = "b"
 title = "tmux を立てる歯を nextest の test-group で同時本数 = rules 行 gate.tmux_test_threads に絞る — 値の写し（.config/nextest.toml）と配線を xtask check が manifest と突合する"
 req = ["FR8", "NFR3"]
 section = "3"
-write-set = ["rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "crates/scribe2/tests/e2e/rules.rs", "crates/scribe2/tests/e2e/snapshots/e2e__rules__rules_external_form.snap", "crates/xtask/src/limits.rs", "crates/xtask/src/check_facts.rs", "crates/xtask/src/check_tests.rs", "+.config/nextest.toml", "docs/design/gate-cost.md"]
+write-set = ["rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "crates/scribe2/tests/e2e/rules.rs", "crates/scribe2/tests/e2e/snapshots/e2e__rules__rules_external_form.snap", "crates/xtask/src/limits.rs", "crates/xtask/src/check.rs", "crates/xtask/src/check_facts.rs", "crates/xtask/src/check_tests.rs", "+.config/nextest.toml", "docs/design/gate-cost.md"]
 verify = ["cargo nextest run -p xtask --no-tests=fail nextest_tmux_group_"]
 size = "S"
 done = "tmux を立てる歯が test-group tmux で同時本数 1 に絞られ、値の写しと配線を cargo xtask check が測り、写しの値違い・file 無し・group の外の tmux 歯・固定形でない filter を名指して落とす"
