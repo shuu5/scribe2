@@ -9,27 +9,36 @@
 //! （`/clear` の送達 ts 以後に足された `SessionStart`・[`state::evidence_after`]・設計 seat-state.md §6・
 //! `s2-07l.112`）で行う。echo の字面は読まない。
 //!
-//! 隣に**立て直し**（[`relaunch`]・設計 account-autonomy.md §5・SRS FR38）を置く: 退避して止まった席を別口座で
+//! 隣に**立て直し**（[`relaunch()`]・[`relaunch`] module・設計 account-autonomy.md §5・SRS FR38）を置く: 退避して止まった席を別口座で
 //! 同じ target に起こし直し、復元の command を注入する。同じ lock・同じ cycle-stamp（再注入の back-off）・同じ
 //! 作り直しの確認（`SessionStart` の打刻）を通る。
 //!
-//! さらに**席の起動**（[`launch`]・設計 account-lifecycle.md §4・ADR-0026 §2.3・SRS FR59）を置く: user が席を初めて
+//! さらに**席の起動**（[`launch()`]・[`launch`] module・設計 account-lifecycle.md §4・ADR-0026 §2.3・SRS FR59）を置く: user が席を初めて
 //! 起こす口で、起動行は host の面の宣言から導き（[`derive_launch`]・雛形 file を持たない）、登録 row を**先に**書き、
-//! 立て直しと**同じ 1 本**（[`boot`]: shell の入力欄の門 → 起動行 → 立ち上がりの確認 → 復元）で shell へ注入する。
+//! 立て直しと**同じ 1 本**（[`relaunch::boot`]: shell の入力欄の門 → 起動行 → 立ち上がりの確認 → 復元）で shell へ注入する。
 //! 立て直しとの差は「row を先に書く」「window を作れる」の 2 点だけである。
+//!
+//! 停止（[`stop`] module・[`terminate_group`]）を含む 4 つの題は子 module に分け（`s2-07l.319`・純移動）、この file には
+//! 作り直しと、4 題が共有する定数・型を残す。外から呼ぶ path は再輸出で不変である。
+
+mod launch;
+mod relaunch;
+mod stop;
+
+pub use launch::{
+    derive_launch, fill_launch, launch, render_launched, single_model, with_agent_view_off, with_model, Holes, Launch,
+    Launched, HOLES,
+};
+pub use relaunch::{relaunch, send_exit, Relaunch, Relaunched};
+pub use stop::{foreground_child, pane_pid, terminate_group, Stopped, STOPPEDS};
 
 use crate::polarity::{OnFailure, Polarity, Timing};
-use super::role::Role;
-use super::{inject, pane_of, role, sanitize_target, state, tmux_ok, StateDir, WmScan};
+use super::{inject, pane_of, sanitize_target, state, tmux_ok, StateDir, WmScan};
 use crate::fleet::json_lite::{self, Value};
-use crate::fleet::select::{self, Model, NoCandidate, Purpose, Selection};
 use crate::fleet::store::{self, LockPolicy};
-use crate::fleet::{replay, wait, Completion, Registration, State};
-use crate::headless::{ACCOUNT_ENV, AGENT_VIEW_ENV, AGENT_VIEW_OFF, DEFAULT_CLAUDE};
 use crate::hook::{seat_name, InjectionRecord, SCHEMA};
-use crate::rules::manifest::{LaunchArg, Manifest, PluginDir};
+use crate::rules::manifest::Manifest;
 use crate::rules::RuleValue;
-use std::collections::BTreeSet;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -57,26 +66,26 @@ const CLEAR: &str = "/clear";
 /// 復元の既定 command。
 pub const DEFAULT_RESTORE: &str = "/rebrief";
 /// 記録の who。
-const WHO: &str = "seat-cycle";
+pub(super) const WHO: &str = "seat-cycle";
 /// 記録の when。
 const WHEN: &str = "cycle";
-/// `/proc` の置き場（[`foreground_child`] と [`StopTarget::of`] の読み先・歯は fixture の dir を渡す）。
-const PROC: &str = "/proc";
+/// `/proc` の置き場（[`foreground_child`] と `StopTarget::of` の読み先・歯は fixture の dir を渡す）。
+pub(super) const PROC: &str = "/proc";
 /// 立て直しの起動の記録の when。
-const WHEN_RELAUNCH: &str = "relaunch";
+pub(super) const WHEN_RELAUNCH: &str = "relaunch";
 /// 終了の手の記録の when。
-const WHEN_EXIT: &str = "exit";
+pub(super) const WHEN_EXIT: &str = "exit";
 /// 席の起動（`seat launch`）の記録の when（席の `tick.jsonl` と `inject.jsonl`・`kind=` の字面は
 /// [`super::tick::InjectKind::Launch`] が持つ）。
-const WHEN_LAUNCH: &str = "launch";
+pub(super) const WHEN_LAUNCH: &str = "launch";
 /// 席の起動の `inject.jsonl` の記録の who（tick の「直近の注入」の母集団に入る・[`super::tick`] の `INJECT_WRITERS`）。
 pub const WHO_LAUNCH: &str = "seat-launch";
 /// 口座の credential dir の置き場（`<state_dir>/accounts/<label>/`・ADR-0017 §2.3）。
-const ACCOUNTS_DIR: &str = "accounts";
+pub(super) const ACCOUNTS_DIR: &str = "accounts";
 /// 起動の雛形の穴（設計 account-autonomy.md §5・seat-roles.md §2）: 選んだ口座の credential dir で埋める 1 つ。
 pub const HOLE: &str = "{account_dir}";
-/// claude CLI の model の flag（起動行が row の `model` を運ぶ語・値は [`Model::alias`]）。
-const MODEL_FLAG: &str = "--model";
+/// claude CLI の model の flag（起動行が row の `model` を運ぶ語・値は [`crate::fleet::select::Model::alias`]）。
+pub(super) const MODEL_FLAG: &str = "--model";
 
 /// 他の cycle が走っている。
 pub const REASON_LOCK_HELD: &str = "lock-held";
@@ -127,12 +136,12 @@ pub const REASON_NOT_SHELL: &str = "not-a-shell";
 pub const REASON_LOG_UNREADABLE: &str = "log-unreadable";
 /// `seat launch` の `--anchor` 無しで cwd の repo root を解けない（`seat register` の `input-unreadable` と同じ形）。
 pub const REASON_ANCHOR: &str = "anchor-unresolvable";
-/// `seat launch` の `--model` が表（[`Model::parse`]・表示名か別名）に無い（row も key も書かない）。
+/// `seat launch` の `--model` が表（[`crate::fleet::select::Model::parse`]・表示名か別名）に無い（row も key も書かない）。
 pub const REASON_MODEL_UNKNOWN: &str = "launch-model-unknown";
 /// 起動行に `--model` が 2 つ載る（雛形の literal と器の 1 つ・後勝ちにせず断る・立て直しは `relaunch-` を前置く）。
 pub const REASON_MODEL_DUPLICATED: &str = "launch-model-duplicated";
 /// 立て直す row の `model` が表に無い（tick の前置きで `relaunch-model-unknown`・壊れた宣言値で黙って settings の model で立てない・C10）。
-const REASON_ROW_MODEL_UNKNOWN: &str = "model-unknown";
+pub(super) const REASON_ROW_MODEL_UNKNOWN: &str = "model-unknown";
 
 /// cycle 1 回の入力。
 pub struct Request<'a> {
@@ -260,7 +269,7 @@ fn perform(request: &Request, dir: &Path) -> Cycle {
 }
 
 /// cycle を評価した周の打刻（unix 秒を 1 行・mtime は書いた時刻＝tick が経過を読む）。
-fn write_stamp(seat_dir: &Path) -> std::io::Result<()> {
+pub(super) fn write_stamp(seat_dir: &Path) -> std::io::Result<()> {
     write_secs(&stamp_path(seat_dir))
 }
 
@@ -322,7 +331,7 @@ fn gate_of(read: state::Read) -> Option<&'static str> {
 ///
 /// 混ぜると、置き場が壊れている周も `lock-held` を名乗る＝timer の記録から「他の cycle が
 /// 走っていた」と「書けない」を分けられない（実測 2026-09-10・lens-384 M-8）。
-enum Lock {
+pub(super) enum Lock {
     /// 取れた。
     Taken,
     /// live な lock が在る＝譲る。
@@ -332,7 +341,7 @@ enum Lock {
 }
 
 /// lock を `O_EXCL` で取る。失効した residue は取り除いてから取り直す。
-fn take_lock(seat_dir: &Path, ttl_s: u64) -> Lock {
+pub(super) fn take_lock(seat_dir: &Path, ttl_s: u64) -> Lock {
     match create_lock(seat_dir, ttl_s) {
         Ok(()) => Lock::Taken,
         Err(Lock::Held) => reclaim(seat_dir, ttl_s),
@@ -404,7 +413,7 @@ fn send_clear(request: &Request, dir: &Path) -> bool {
 
 /// 送る前に取った基線と送達 ts（`(baseline, since)`）より後ろに `SessionStart` の打刻が窓（`settle`）の内に
 /// 足されるか（作り直しと立て直しの確認の 1 本・設計 seat-state.md §6）。刻みは `step`。
-fn started(dir: &Path, (baseline, since): (state::Baseline, u64), settle: Duration, step: Duration) -> bool {
+pub(super) fn started(dir: &Path, (baseline, since): (state::Baseline, u64), settle: Duration, step: Duration) -> bool {
     let deadline = Instant::now().checked_add(settle);
     while deadline.is_some_and(|at| Instant::now() < at) {
         sleep(step);
@@ -451,7 +460,7 @@ fn send_line(request: &Request, text: &str) -> bool {
 }
 
 /// `target` へ 1 行を literal で送り、Enter を送る（cycle の `/clear` と立て直しの起動の 1 本）。
-fn send_to(socket: Option<&str>, target: &str, text: &str) -> bool {
+pub(super) fn send_to(socket: Option<&str>, target: &str, text: &str) -> bool {
     tmux_ok(socket, &["send-keys", "-t", target, "-l", text]) && tmux_ok(socket, &["send-keys", "-t", target, "Enter"])
 }
 
@@ -495,881 +504,4 @@ fn record(request: &Request, result: &Cycle, started: Instant) {
     };
     let path = inject::tick_path(&request.state_dir.path, request.target);
     let _ = store::append_line(&path, &entry.to_line(), policy);
-}
-
-/// 起動の雛形の穴の数えが 1 でない理由（**閉じた 2 値**・憲法 C11）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Holes {
-    /// 穴が無い（口座を渡せない雛形）。
-    Missing,
-    /// 穴が 2 つ以上（どれを埋めるか決まらない）。
-    Many,
-}
-
-/// [`Holes`] の全 variant（宣言順）。
-pub const HOLES: &[Holes] = &[Holes::Missing, Holes::Many];
-
-impl Holes {
-    /// 断りの字面（tick の判定行は `relaunch-` を前置きする）。
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Missing => "launch-no-hole",
-            Self::Many => "launch-many-holes",
-        }
-    }
-}
-
-/// 起動の雛形の穴 [`HOLE`] **ちょうど 1 つ**を `account_dir` で埋める（pure・文字列の置換だけ）。env を読まず、
-/// 雛形の中の host 名や絶対 path を解釈しない（C2.2）: 器が知るのは穴の位置だけである。
-pub fn fill_launch(template: &str, account_dir: &str) -> Result<String, Holes> {
-    match template.matches(HOLE).count() {
-        0 => Err(Holes::Missing),
-        1 => Ok(template.replacen(HOLE, account_dir, 1)),
-        _ => Err(Holes::Many),
-    }
-}
-
-/// 起動行の先頭に agent view を切る env（`CLAUDE_CODE_DISABLE_AGENT_VIEW=1 `）を前置する（pure・設計 account-autonomy.md
-/// §5「agent view の前提」・`s2-07l.239`）。器が起こす claude は常に agent view 無しで動く——有効な session は background
-/// work が残る周の `/exit` で dialog を出して止まり、器は描画を読まない（C3.3）ので答えられない。雛形は user の物で
-/// 書き換えず（[`fill_launch`] は不変）、子へ設定するだけで env は読まない（C2.2）。既に同じ前置で始まる行は二重にせず、
-/// 空の行はそのまま返す。
-pub fn with_agent_view_off(line: &str) -> String {
-    let prefix = format!("{AGENT_VIEW_ENV}={AGENT_VIEW_OFF} ");
-    if line.trim().is_empty() || line.trim_start().starts_with(&prefix) {
-        return line.to_owned();
-    }
-    format!("{prefix}{line}")
-}
-
-/// 立て直し 1 回の入力（[`relaunch`]・入口の 3 条件と back-off は tick が見る）。
-pub struct Relaunch<'a> {
-    /// tmux target（shell へ戻った pane）。
-    pub target: &'a str,
-    /// tmux の socket。
-    pub socket: Option<&'a str>,
-    /// 解決済みの置き場（credential dir と event log の置き場）。
-    pub state_dir: &'a StateDir,
-    /// 復元 command（既定 [`DEFAULT_RESTORE`]＝FR28）。
-    pub restore: Option<&'a str>,
-    /// 立ち上がりと復元の確認上限（rules 行 `seat.cycle_settle_s`）。
-    pub settle: Duration,
-    /// 確認の周期（rules 行 `seat.cycle_poll_ms`）。
-    pub step: Duration,
-    /// 自席の登録 row（雛形・`model`・更新で写す項目の出所）。
-    pub row: &'a Registration,
-    /// replay の現在地（実測行と他の席の登録 row）。
-    pub state: &'a State,
-    /// 口座 label の列（manifest の `[[account]]`・宣言値）。
-    pub labels: &'a [String],
-    /// R-C9-1 の値（session 用の閾値）。
-    pub threshold_pct: u64,
-}
-
-/// 立て直し 1 回の結果。**「送っていない」と「送ったが確かめられない」を分ける**（[`Cycle`] と同じ）。
-pub enum Relaunched {
-    /// 起動と復元を注入して復元の消費を確かめ、登録 row の口座を更新した（選んだ label・復元の消費）。
-    Done(String, inject::Settled),
-    /// 選べる口座が無い（**1 key も送っていない**・次の tick で選び直す）。
-    None(NoCandidate),
-    /// **1 key も送っていない**。
-    Refused(&'static str),
-    /// 送ったが確かめられない。
-    Failed(&'static str),
-}
-
-/// 席を別口座で立て直す（設計 account-autonomy.md §5）: session 用の規則で口座を選び（[`choose`]）、雛形の穴を
-/// 選んだ口座の credential dir（`<state_dir>/accounts/<label>`）で埋めて同じ target の shell へ注入し、立ち上がりを
-/// 打刻で確かめて登録 row の口座を更新し、復元の command を注入する。
-///
-/// **cycle と同じ lock と cycle-stamp**（`s2-07l.110`・write-ahead）: lock を取った周は送る前に打刻し、打てない周は
-/// 1 key も送らない＝立て直しの再注入の back-off は tick が読む既存の 1 本である。選べない・雛形の穴が 1 つでない
-/// 周は lock も打刻も取らない（送っていない）。
-pub fn relaunch(request: &Relaunch) -> Relaunched {
-    let own = (request.row.role, request.row.anchor.as_str(), Some(request.row.account.as_str()));
-    let label = match choose(own, request.state, request.labels, request.row.model.as_deref(), request.threshold_pct) {
-        Selection::Chosen(label) => label,
-        Selection::None(found) => return Relaunched::None(found),
-    };
-    // 注入するのは row の model を運ばせ穴を埋めた雛形に agent view off を前置した 1 行（記録にも同じ行が載る）。
-    let Ok(model) = model_of(request.row.model.as_deref()) else { return Relaunched::Refused(REASON_ROW_MODEL_UNKNOWN) };
-    let launch = match launch_line(request.state_dir, &with_model(&request.row.launch, model), &label) {
-        Ok(found) => found,
-        Err(reason) => return Relaunched::Refused(reason),
-    };
-    let ttl = match ttl_s() {
-        Ok(found) => found,
-        Err(read) => return Relaunched::Refused(read.no_rule()),
-    };
-    let dir = super::seat_dir(&request.state_dir.path, request.target);
-    match take_lock(&dir, ttl) {
-        Lock::Taken => {}
-        Lock::Held => return Relaunched::Refused(REASON_LOCK_HELD),
-        Lock::Broken => return Relaunched::Refused(REASON_STATE_DIR),
-    }
-    let held = if write_stamp(&dir).is_ok() {
-        relaunch_held(request, &dir, &launch, &label)
-    } else {
-        Relaunched::Refused(REASON_STAMP)
-    };
-    std::fs::remove_file(lock_path(&dir)).ok();
-    held
-}
-
-/// session 用の選定（[`select::select`] の 1 本・立て直しと `seat launch` の初回の選定が同じ関数を呼ぶ）。`own` は
-/// 自席の鍵 (role, anchor) と留まる口座（立て直しは自席の row の口座・初回の起動は row が無いので `None`・
-/// ADR-0028 §2.4・`s2-07l.312`）・`model` は席の model。除外は**他の席の**登録 row が持つ口座で、自席の row（同じ鍵）は
-/// 入れない（account-autonomy.md §5 / account-lifecycle.md §4）。
-fn choose(own: (Role, &str, Option<&str>), state: &State, labels: &[String], model: Option<&str>, threshold_pct: u64) -> Selection {
-    let (role, anchor, prefer) = own;
-    let exclude: BTreeSet<String> = state
-        .registrations
-        .values()
-        .map(|latest| &latest.registration)
-        .filter(|found| (found.role, found.anchor.as_str()) != (role, anchor))
-        .map(|found| found.account.clone())
-        .collect();
-    let now = crate::fleet::cli::now_utc();
-    select::select(&select::Input {
-        labels,
-        allowance: &state.allowance,
-        purpose: Purpose::Session,
-        model,
-        exclude: &exclude,
-        // session 用は走行中の便数を読まない（便用の鍵・ADR-0027 §2.2）。
-        inflight: &std::collections::BTreeMap::new(),
-        threshold_pct,
-        now: &now,
-        prefer,
-    })
-}
-
-/// 雛形 `template` の `--model` を高々 1 つと確かめ（[`single_model`]）、穴を口座 `label` の credential dir（`<state_dir>/accounts/<label>`）で埋め、agent view off を前置した起動の 1 行（立て直しと `seat launch` の同じ 1 つ・記録にも同じ行が載る）。断りは字面。
-fn launch_line(state_dir: &StateDir, template: &str, label: &str) -> Result<String, &'static str> {
-    single_model(template)?;
-    let account_dir = state_dir.path.join(ACCOUNTS_DIR).join(label);
-    fill_launch(template, &account_dir.display().to_string()).map(|found| with_agent_view_off(&found)).map_err(Holes::as_str)
-}
-
-/// 宣言の model（表示名か別名・登録 row の `model` / `--model`）を型にする: 無しは `Ok(None)`・表に無い字面は `Err`。
-fn model_of(text: Option<&str>) -> Result<Option<Model>, ()> {
-    text.map_or(Ok(None), |found| Model::parse(found).map(Some).ok_or(()))
-}
-
-/// 起動行 `line` に model を運ばせる（pure・C10「row の宣言値を起動へ効かせる」・settings の層に依らない C2.2）: `claude` の語の直後に `--model <別名>` を挟む（`claude` の語が無い雛形は末尾）。`None` は行をそのまま（雛形は書き換えない）。
-pub fn with_model(line: &str, model: Option<Model>) -> String {
-    let Some(model) = model else { return line.to_owned() };
-    let mut words: Vec<&str> = line.split(' ').collect();
-    let at = words.iter().position(|word| *word == DEFAULT_CLAUDE).map_or(words.len(), |at| at + 1);
-    words.splice(at..at, [MODEL_FLAG, model.alias()]);
-    words.join(" ")
-}
-
-/// 起動行の `--model` は高々 1 つ: 雛形の literal と器の 1 つが重なる周は後勝ちにせず [`REASON_MODEL_DUPLICATED`]（宣言は row の 1 か所）。
-pub fn single_model(line: &str) -> Result<(), &'static str> {
-    (line.split(' ').filter(|word| *word == MODEL_FLAG).count() <= 1).then_some(()).ok_or(REASON_MODEL_DUPLICATED)
-}
-
-/// lock を握っている間の手順: 起動の 1 本（[`boot`]）に「立ち上がりの直後の登録 row の更新」を挟む。
-///
-/// 登録 row は**立ち上がりを確かめた直後**に更新する: 起動が届いた席は選んだ口座で走っており、復元を
-/// 確かめられない周でも row が旧い口座を名乗ると、選定の除外と次の周の逼迫度が別の口座を見る。
-/// 成功と数えるのは復元が**消費された**周だけ（[`send_restore`] と同じ・立ち上がった直後の席に turn は無い）。
-fn relaunch_held(request: &Relaunch, dir: &Path, launch: &str, label: &str) -> Relaunched {
-    let common = Boot {
-        target: request.target,
-        socket: request.socket,
-        state_dir: request.state_dir,
-        restore: Some(request.restore.unwrap_or(DEFAULT_RESTORE)),
-        settle: request.settle,
-        step: request.step,
-    };
-    let relabel = || role::relabel(&request.state_dir.path, request.row, label).map(|_| ()).map_err(|_| REASON_REGISTER);
-    match boot(&common, dir, (launch, WHEN_RELAUNCH), relabel) {
-        Booted::Done(Some(inject::Settled::Consumed)) => Relaunched::Done(label.to_owned(), inject::Settled::Consumed),
-        Booted::Done(_) => Relaunched::Failed(REASON_RESTORE),
-        Booted::Refused(reason) => Relaunched::Refused(reason),
-        Booted::Failed(reason) => Relaunched::Failed(reason),
-    }
-}
-
-/// 起動の注入の共通の入力（立て直し [`Relaunch`] と席の起動 [`Launch`] が同じ 1 本 [`boot`] に渡す）。
-struct Boot<'a> {
-    /// tmux target（前面が shell の pane）。
-    target: &'a str,
-    /// tmux の socket。
-    socket: Option<&'a str>,
-    /// 解決済みの置き場（打刻と記録の置き場）。
-    state_dir: &'a StateDir,
-    /// 立ち上がった後に送る復元 command（`None` は送らない＝`seat launch` の `--restore` 無し）。
-    restore: Option<&'a str>,
-    /// 立ち上がりと復元の確認上限（rules 行 `seat.cycle_settle_s`）。
-    settle: Duration,
-    /// 確認の周期（rules 行 `seat.cycle_poll_ms`）。
-    step: Duration,
-}
-
-/// 起動の 1 本の結果（**「送っていない」と「送ったが確かめられない」を分ける**・[`Relaunched`] と同じ極性）。
-enum Booted {
-    /// 起動が届いて立ち上がりを確かめた（復元を送った周はその消費・送らない周は `None`）。
-    Done(Option<inject::Settled>),
-    /// **1 key も送っていない**。
-    Refused(&'static str),
-    /// 送ったが確かめられない。
-    Failed(&'static str),
-}
-
-/// 起動の注入の **1 本**（順序固定・立て直しと `seat launch` の共通の経路・account-lifecycle.md §4）: shell の入力欄の門 →
-/// 起動行（`(line, when)`）を送って記録 → 立ち上がりの確認 → `between`（立て直しは登録 row の更新・起動は何もしない）→
-/// 復元。
-///
-/// 起動は**前面が shell の pane** へ撃つので、門は席の `❯` の行（[`inject::guard_input`]）でなく shell の prompt 末尾
-/// （[`super::shell_input_empty`]・account-autonomy.md §5「shell への注入の門」・`s2-07l.218`）で見る。断りの字面は
-/// cycle の門と同じ `input-busy` / `input-unknown`。立ち上がった後の復元は席の pane なので従来どおり注入の門を通る。
-fn boot(common: &Boot, dir: &Path, (line, when): (&str, &str), between: impl FnOnce() -> Result<(), &'static str>) -> Booted {
-    let Some(pane) = super::tmux_stdout(common.socket, &["capture-pane", "-p", "-J", "-t", common.target]) else {
-        return Booted::Refused(REASON_PANE_MISSING);
-    };
-    match super::shell_input_empty(&pane) {
-        Ok(()) => {}
-        Err(inject::InputGate::Busy) => return Booted::Refused(REASON_INPUT_BUSY),
-        Err(inject::InputGate::UnknownInput) => return Booted::Refused(REASON_INPUT_UNKNOWN),
-    }
-    let baseline = state::baseline(dir);
-    let since = state::now_secs();
-    let started_at = Instant::now();
-    if !send_to(common.socket, common.target, line) {
-        return Booted::Failed(inject::REASON_TMUX_FAILED);
-    }
-    record_sent(common.state_dir, common.target, (line, when), started_at);
-    if !started(dir, (baseline, since), common.settle, common.step) {
-        return Booted::Failed(REASON_LAUNCH);
-    }
-    if let Err(reason) = between() {
-        return Booted::Failed(reason);
-    }
-    match common.restore {
-        None => Booted::Done(None),
-        Some(payload) => restore_when_ready(common, payload).map_or(Booted::Failed(REASON_RESTORE), |settled| Booted::Done(Some(settled))),
-    }
-}
-
-/// 復元 command を注入する（FR28・立て直しの既定は [`DEFAULT_RESTORE`]）。立ち上がった直後の席は入力欄を描き終える前が
-/// あり、入力欄の門は **1 key も送らずに断る**ので、窓（`settle`）の内は刻み（`step`）ごとに送り直す（断りは送って
-/// いない＝二重投函にならない）。送達した周の消費を返し、窓の内に送達できない周は `None`。
-fn restore_when_ready(common: &Boot, payload: &str) -> Option<inject::Settled> {
-    let deadline = Instant::now().checked_add(common.settle);
-    loop {
-        match inject::deliver_within(&sending(common, payload), common.settle) {
-            inject::Delivery::Delivered(_, settled) => return Some(settled),
-            inject::Delivery::Unconfirmed(_) => return None,
-            inject::Delivery::Refused(_) => {}
-        }
-        if !deadline.is_some_and(|at| Instant::now() < at) {
-            return None;
-        }
-        sleep(common.step);
-    }
-}
-
-/// 退避後の終了の手の 1 行（`line`）を `target` へ literal で送り、Enter を送る（`s2-07l.252`）。送れた周は席の
-/// `tick.jsonl` に `who=seat-cycle`・`when=exit` の行を積む（立て直しの起動と同じ形）。送達の確認は呼び側
-/// （tick）が前面 process の読みで行う: `/exit` を受けた席は終わって pane が shell に置き換わるので、目印の出現数
-/// （[`inject::deliver`]）では成功が「現れない」に倒れる。
-pub fn send_exit(socket: Option<&str>, target: &str, state_dir: &StateDir, line: &str) -> bool {
-    let started_at = Instant::now();
-    if !send_to(socket, target, line) {
-        return false;
-    }
-    record_sent(state_dir, target, (line, WHEN_EXIT), started_at);
-    true
-}
-
-/// 直に送った 1 行（`(what, when)`）を席の `tick.jsonl` に記録する（`who=seat-cycle`・`what` は送った 1 行そのまま・
-/// `when` は立て直しの起動 `relaunch` か終了の手 `exit`）。直に送るので `seat inject` の経路の行ではない（C10）。
-/// **置き場へ書けない周も結果を変えない**（記録は判定そのものではない）。
-fn record_sent(state_dir: &StateDir, target: &str, (what, when): (&str, &str), started: Instant) {
-    let entry = InjectionRecord {
-        schema: SCHEMA,
-        who: WHO.to_owned(),
-        what: what.to_owned(),
-        when: when.to_owned(),
-        bytes: what.len() as u64,
-        // 数えていないことを 0 と書かない。
-        tokens: None,
-        wall_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
-        seat: seat_name(target),
-        ts: state::now_secs(),
-    };
-    let Ok(policy) = LockPolicy::embedded() else {
-        return;
-    };
-    let path = inject::tick_path(&state_dir.path, target);
-    let _ = store::append_line(&path, &entry.to_line(), policy);
-}
-
-/// target の pane の shell の pid（`list-panes -F '#{pane_pid}'`・[`super::pane_is_shell`] と同じ typed な metadata・
-/// 端末描画の字面ではない＝C3.3 の外）。撃てない・pane が 1 つでない・数でない周は `None`（「取れない」の側＝撃たない）。
-pub fn pane_pid(socket: Option<&str>, target: &str) -> Option<u32> {
-    let out = super::tmux_stdout(socket, &["list-panes", "-t", target, "-F", "#{pane_pid}"])?;
-    let mut pids = out.lines().map(str::trim).filter(|line| !line.is_empty());
-    let first = pids.next()?.parse().ok()?;
-    pids.next().is_none().then_some(first)
-}
-
-/// pane の shell（[`pane_pid`]）の**直下の子** 1 つ（`/proc/<pid>/stat` の ppid を走査・複数なら最も若い pid＝最大・
-/// [`crate::fleet::wait`] の group の読みと同じ `/proc` の読み方）。子が無い・`/proc` を読めない周は `None`。
-/// **`pane_pid` が 2 未満の周も `None`**（pid 0 / 1 の子を「pane の子」と読まない＝撃たない側・N1）。
-pub fn foreground_child(pane_pid: u32) -> Option<u32> {
-    child_of(Path::new(PROC), pane_pid)
-}
-
-/// [`foreground_child`] の本体（`proc` は `/proc` か歯の fixture・読むだけ）。読む間に消えた process の stat は飛ばす。
-fn child_of(proc: &Path, pane_pid: u32) -> Option<u32> {
-    if pane_pid < 2 {
-        return None;
-    }
-    let entries = std::fs::read_dir(proc).ok()?;
-    entries
-        .flatten()
-        .filter_map(|entry| {
-            let name = entry.file_name();
-            let pid = name.to_str().filter(|name| name.bytes().all(|b| b.is_ascii_digit()))?.parse::<u32>().ok()?;
-            let ppid = stat_field(&std::fs::read_to_string(entry.path().join("stat")).ok()?, 1)?;
-            (ppid == pane_pid).then_some(pid)
-        })
-        .max()
-}
-
-/// `/proc/<pid>/stat` の 1 行の、**最後の `)`** の後ろから数えた `index` 番目の欄（0 = state・1 = ppid・2 = pgid・pure）。
-/// `comm` は空白も `)` も含みうるので前から数えない（[`crate::fleet::wait`] の pgid の読みと同じ）。欄が足りない・数でない周は `None`。
-fn stat_field(stat_text: &str, index: usize) -> Option<u32> {
-    let (_, rest) = stat_text.rsplit_once(')')?;
-    rest.split_whitespace().nth(index)?.parse().ok()
-}
-
-/// 停止の結果（**閉じた 3 値**・憲法 C11・結果の enum であって Guard ではない＝極性一覧には載らない）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Stopped {
-    /// TERM で消えた。
-    Gone,
-    /// TERM では残り、KILL で消えた。
-    Killed,
-    /// KILL の後も猶予の内に消えない。
-    Unstoppable,
-}
-
-/// [`Stopped`] の全 variant（宣言順）。
-pub const STOPPEDS: &[Stopped] = &[Stopped::Gone, Stopped::Killed, Stopped::Unstoppable];
-
-impl Stopped {
-    /// 記録と表示に使う字面。
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Gone => "gone",
-            Self::Killed => "killed",
-            Self::Unstoppable => "unstoppable",
-        }
-    }
-}
-
-/// `pid` の process group へ TERM → **唯一の wait**（[`Completion::GroupGone`]・猶予 `grace`）→ 残れば KILL → 同じ wait
-/// （`pipe stop` / `fleet usage` の停止と同じ列・C3.4・新しい sleep loop を持たない）。group が無い（pgid ≠ pid）周は
-/// pid 単体へ同じ列（[`Completion::SeatGone`]）。**pid が 2 未満の周は撃たない**（`None`＝「取れない」の側・
-/// `kill -- -1` は user の全 process・`kill -- -0` は自分の group・宛先は [`StopTarget`] からしか作らない・N1）。
-pub fn terminate_group(pid: u32, grace: Duration) -> Option<Stopped> {
-    let target = StopTarget::of(Path::new(PROC), pid)?;
-    signal(&target.arg(), "-TERM");
-    if wait(target.completion(), grace).is_ok() {
-        return Some(Stopped::Gone);
-    }
-    signal(&target.arg(), "-KILL");
-    Some(if wait(target.completion(), grace).is_ok() { Stopped::Killed } else { Stopped::Unstoppable })
-}
-
-/// 撃つ宛先（2 値）。**pid ≥ 2 だけを持てる**（[`StopTarget::plan`] が唯一の作り口・`pipe/stop.rs` の `GroupId` と同じ guard）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum StopTarget {
-    /// process group 宛て（pgid == pid・値は group id）。
-    Group(u32),
-    /// 単一 pid 宛て（group の leader でない pid）。
-    Single(u32),
-}
-
-impl StopTarget {
-    /// `/proc/<pid>/stat` の pgid を読んで決める（読めない周は単体宛て・pid が 2 未満は `None`）。
-    fn of(proc: &Path, pid: u32) -> Option<Self> {
-        let pgid = std::fs::read_to_string(proc.join(pid.to_string()).join("stat"))
-            .ok()
-            .and_then(|text| stat_field(&text, 2));
-        Self::plan(pid, pgid)
-    }
-
-    /// pid と読めた pgid から宛先を決める（**pure**・pid < 2 は `None`）。
-    fn plan(pid: u32, pgid: Option<u32>) -> Option<Self> {
-        if pid < 2 {
-            return None;
-        }
-        Some(if pgid == Some(pid) { Self::Group(pid) } else { Self::Single(pid) })
-    }
-
-    /// `kill` へ渡す宛先の字面（group は負の pid）。
-    fn arg(self) -> String {
-        match self {
-            Self::Group(group) => format!("-{group}"),
-            Self::Single(pid) => pid.to_string(),
-        }
-    }
-
-    /// 待つ対象（唯一の wait 実装へ渡す data）。
-    fn completion(self) -> Completion {
-        match self {
-            Self::Group(group) => Completion::GroupGone(group),
-            Self::Single(pid) => Completion::SeatGone(pid),
-        }
-    }
-}
-
-/// `kill <name> -- <target>` を撃つ（std に kill は無い・結果は待ちの側で測る・`fleet usage` の停止と同じ）。
-fn signal(target: &str, name: &str) {
-    let _ = std::process::Command::new("kill")
-        .arg(name)
-        .arg("--")
-        .arg(target)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status();
-}
-
-/// 復元の 1 行を送る注入の入力（`seat inject` と同じ経路・記録は席の `tick.jsonl`）。
-fn sending<'r>(common: &Boot<'r>, payload: &'r str) -> inject::Request<'r> {
-    inject::Request {
-        target: common.target,
-        socket: common.socket,
-        payload,
-        state_dir: Some(common.state_dir),
-    }
-}
-
-/// 起動行の導出（**pure**・設計 account-lifecycle.md §4・ADR-0026 §2.3）:
-/// `CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CONFIG_DIR={account_dir} claude [--model <別名>] --plugin-dir <anchor> [--plugin-dir <dir>…] [<value>…]`。
-///
-/// 穴は [`HOLE`] の 1 つだけ（[`fill_launch`] / [`Holes`] は不変）。`claude` は語（shell の PATH が解く・器は claude の
-/// 場所を持たない）。`model` が在れば `claude` の直後に運ぶ（[`with_model`]・登録 row の雛形は `None`＝model 無し）。器自身の plugin は
-/// anchor（main checkout・`plugin.json` を持つ）を積み、host 固有の plugin dir と起動引数は host の面の宣言（`[[plugin]]` /
-/// `[[launch-arg]]`・宣言順）から写す（C10.2）。雛形 file は読まない・書かない。値の中の空白は解釈しない（shell が読む字面のまま）。
-pub fn derive_launch(anchor: &Path, plugins: &[PluginDir], args: &[LaunchArg], model: Option<Model>) -> String {
-    let mut words = vec![
-        format!("{AGENT_VIEW_ENV}={AGENT_VIEW_OFF}"),
-        format!("{ACCOUNT_ENV}={HOLE}"),
-        DEFAULT_CLAUDE.to_owned(),
-        "--plugin-dir".to_owned(),
-        anchor.display().to_string(),
-    ];
-    for plugin in plugins {
-        words.push("--plugin-dir".to_owned());
-        words.push(plugin.dir().to_owned());
-    }
-    words.extend(args.iter().map(|arg| arg.value().to_owned()));
-    with_model(&words.join(" "), model)
-}
-
-/// 席の起動 1 回の入力（[`launch`]・`seat launch`・account-lifecycle.md §4）。
-pub struct Launch<'a> {
-    /// tmux target（`session:window`・window は無ければ作る・session は作らない）。
-    pub target: &'a str,
-    /// tmux の socket。
-    pub socket: Option<&'a str>,
-    /// 解決済みの置き場（credential dir・event log・打刻の置き場）。
-    pub state_dir: &'a StateDir,
-    /// 立ち上がった後に送る復元 command（`--restore`・無ければ送らない）。
-    pub restore: Option<&'a str>,
-    /// 立ち上がりと復元の確認上限（rules 行 `seat.cycle_settle_s`）。
-    pub settle: Duration,
-    /// 確認の周期（rules 行 `seat.cycle_poll_ms`）。
-    pub step: Duration,
-    /// 席の役割（登録 row の鍵の片方・`--role`）。
-    pub role: Role,
-    /// 登録 row の anchor（絶対 path・`--anchor` か cwd の repo root・起動行の `--plugin-dir` の 1 つ目）。
-    pub anchor: &'a Path,
-    /// 明示の口座（`--account`・無ければ session 用の選定）。
-    pub account: Option<&'a str>,
-    /// 席の model（`--model`・登録 row と選定の両方に渡す）。
-    pub model: Option<&'a str>,
-    /// 開いた manifest（tracked + host の面・`[[account]]` / `[[plugin]]` / `[[launch-arg]]` の出所）。
-    pub manifest: &'a Manifest,
-    /// R-C9-1 の値（session 用の閾値）。
-    pub threshold_pct: u64,
-}
-
-/// 席の起動 1 回の結果。**「送っていない」と「送ったが確かめられない」を分ける**（[`Relaunched`] と同じ）。
-pub enum Launched {
-    /// 起動行を注入して立ち上がりを確かめた（選んだ label・`--restore` を送った周はその消費）。
-    Done(String, Option<inject::Settled>),
-    /// 選べる口座が無い（**1 key も送らず row も書かない**）。
-    None(NoCandidate),
-    /// **1 key も送っていない**（row は理由による: `session-missing` 以前〔model の断りを含む〕は書かない・門で止まる周は書き終えている）。
-    Refused(&'static str),
-    /// 送ったが確かめられない。
-    Failed(&'static str),
-}
-
-/// 席を起こす（設計 account-lifecycle.md §4・ADR-0026 §2.3・SRS FR59 / FR40 / FR36）: `--model` を型にし（表に無い値は `launch-model-unknown`）
-/// → 口座を決め（`--account` か session 用の選定 [`choose`]）→ 起動行（導出した行に model を運ばせ穴を埋める・二重は `launch-model-duplicated`・
-/// row の雛形は model 無し＝宣言は row の `model` の 1 か所）→ session の実在（無ければ `session-missing`・作らない）→ 登録 row を**先に**
-/// 書く（[`role::register`]・`sid` 無し・打刻の条件は掛けない）→ window（無ければ `new-window`）→ 立て直しと同じ 1 本（[`boot`]）で起動行を
-/// shell へ注入し、`--restore` が在れば復元を送る → `inject.jsonl` に `kind=launch` を 1 行。lock も cycle-stamp も取らない（起動は user の手番）。
-pub fn launch(request: &Launch) -> Launched {
-    let started_at = Instant::now();
-    let Ok(model) = model_of(request.model) else { return Launched::Refused(REASON_MODEL_UNKNOWN) };
-    let label = match pick_account(request) {
-        Ok(label) => label,
-        Err(refused) => return refused,
-    };
-    let derived = derive_launch(request.anchor, request.manifest.plugins(), request.manifest.launch_args(), None);
-    let line = match launch_line(request.state_dir, &with_model(&derived, model), &label).and_then(|line| prepare(request, &label, derived).map(|()| line)) {
-        Ok(found) => found,
-        Err(reason) => return Launched::Refused(reason),
-    };
-    let common = Boot {
-        target: request.target,
-        socket: request.socket,
-        state_dir: request.state_dir,
-        restore: request.restore,
-        settle: request.settle,
-        step: request.step,
-    };
-    let dir = super::seat_dir(&request.state_dir.path, request.target);
-    let booted = boot(&common, &dir, (&line, WHEN_LAUNCH), || Ok(()));
-    if !matches!(booted, Booted::Refused(_)) {
-        record_launch(request, &label, started_at);
-    }
-    match booted {
-        Booted::Done(Some(inject::Settled::Consumed)) => Launched::Done(label, Some(inject::Settled::Consumed)),
-        Booted::Done(None) => Launched::Done(label, None),
-        Booted::Done(Some(_)) => Launched::Failed(REASON_RESTORE),
-        Booted::Refused(reason) => Launched::Refused(reason),
-        Booted::Failed(reason) => Launched::Failed(reason),
-    }
-}
-
-/// 口座を決める: `--account` は宣言（開いた manifest の `[[account]]`）に在る label だけ（無ければ `account-unknown`）・
-/// 無ければ session 用の選定（除外 = 他の席の登録 row の口座・候補なしは [`Launched::None`]）。event log を読めない周は
-/// 選定に入らず断る。**ここまでは row も key も書かない**。
-fn pick_account(request: &Launch) -> Result<String, Launched> {
-    let labels: Vec<String> = request.manifest.accounts().iter().map(|account| account.label().to_owned()).collect();
-    if let Some(label) = request.account {
-        return labels.iter().any(|found| found == label).then(|| label.to_owned()).ok_or(Launched::Refused(REASON_ACCOUNT_UNKNOWN));
-    }
-    let events = store::read_all(&request.state_dir.path).map_err(|_| Launched::Refused(REASON_LOG_UNREADABLE))?;
-    let state = replay(&events);
-    let anchor = request.anchor.display().to_string();
-    match choose((request.role, anchor.as_str(), None), &state, &labels, request.model, request.threshold_pct) {
-        Selection::Chosen(label) => Ok(label),
-        Selection::None(found) => Err(Launched::None(found)),
-    }
-}
-
-/// 起動行を送る前の 3 手（順序固定）: session の実在（無ければ `session-missing`・**row を書かない**）→ 登録 row を
-/// 先に書く（`sid` 無し・`launch` = 導出した行 `derived`〔穴を埋める前・model 無し〕）→ window（[`open_window`]）。
-fn prepare(request: &Launch, label: &str, derived: String) -> Result<(), &'static str> {
-    let Some((session, window)) = request.target.split_once(':') else {
-        return Err(REASON_SESSION_MISSING);
-    };
-    if super::tmux_stdout(request.socket, &["has-session", "-t", &format!("={session}")]).is_none() {
-        return Err(REASON_SESSION_MISSING);
-    }
-    let row = Registration {
-        role: request.role,
-        anchor: request.anchor.display().to_string(),
-        target: request.target.to_owned(),
-        sid: None,
-        account: label.to_owned(),
-        launch: derived,
-        model: request.model.map(str::to_owned),
-    };
-    role::register(&request.state_dir.path, row).map_err(|_| REASON_REGISTER)?;
-    open_window(request, session, window)
-}
-
-/// window を用意する: 無ければ `new-window -t <session> -n <window>` で作り、shell の prompt が描かれるまで窓（`settle`）の内で
-/// 待つ（作った直後の空の pane は門が `input-unknown` で断るので、門の前に描画を待つ・門の判定そのものは [`boot`]）。
-/// 在れば前面 process が shell であることだけを確かめる（走っている席へ起動行を送らない・`not-a-shell`）。
-///
-/// session は `=<session>:` で名指す: `=` は前方一致でない exact の名・末尾の `:` は「その session の次の空き index」
-/// （`-t <session>` の裸の名は、session と同じ名の window が在る周に **window** として解決され `index in use` で落ちる・
-/// 実測 2026-09-14 tmux 3.6b）。
-fn open_window(request: &Launch, session: &str, window: &str) -> Result<(), &'static str> {
-    let exact = format!("={session}");
-    let windows = super::tmux_stdout(request.socket, &["list-windows", "-t", &exact, "-F", "#{window_name}"]).unwrap_or_default();
-    if windows.lines().any(|found| found == window) {
-        return super::pane_is_shell(request.socket, request.target).then_some(()).ok_or(REASON_NOT_SHELL);
-    }
-    if !tmux_ok(request.socket, &["new-window", "-t", &format!("{exact}:"), "-n", window]) {
-        return Err(REASON_WINDOW);
-    }
-    let deadline = Instant::now().checked_add(request.settle);
-    while deadline.is_some_and(|at| Instant::now() < at) {
-        let pane = super::tmux_stdout(request.socket, &["capture-pane", "-p", "-J", "-t", request.target]);
-        if pane.is_some_and(|found| super::shell_input_empty(&found).is_ok()) {
-            break;
-        }
-        sleep(request.step);
-    }
-    Ok(())
-}
-
-/// 起動を `inject.jsonl` に 1 行記録する（`who=seat-launch`・`what` は tick の判定行と同じ `decision=inject … kind=launch`
-/// の形＝tick の立て直しの入口 (1) が「直近の注入」として読む・`when=launch`）。**置き場へ書けない周も結果を変えない**。
-fn record_launch(request: &Launch, label: &str, started: Instant) {
-    let kind = super::tick::InjectKind::Launch.as_str();
-    let what = format!("decision=inject target={} kind={kind} account={label}", sanitize_target(request.target));
-    let entry = InjectionRecord {
-        schema: SCHEMA,
-        who: WHO_LAUNCH.to_owned(),
-        bytes: what.len() as u64,
-        what,
-        when: WHEN_LAUNCH.to_owned(),
-        // 数えていないことを 0 と書かない。
-        tokens: None,
-        wall_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
-        seat: seat_name(request.target),
-        ts: state::now_secs(),
-    };
-    let _ = crate::hook::append(&request.state_dir.path, &entry);
-}
-
-/// `seat launch` の 1 行（成立・断り・失敗）。置き場の 2 語を末尾に載せる（cycle と同じ規律）。
-pub fn render_launched(target: &str, result: &Launched, state: &StateDir) -> String {
-    let suffix = state.suffix();
-    let target = sanitize_target(target);
-    match result {
-        Launched::Done(label, None) => format!("seat launch: launched target={target} account={label}{suffix}"),
-        Launched::Done(label, Some(settled)) => {
-            format!("seat launch: launched target={target} account={label} consumed={}{suffix}", settled.as_str())
-        }
-        Launched::None(found) => {
-            format!("seat launch: refused reason={REASON_NO_ACCOUNT} detail={} target={target}{suffix}", found.reason.as_str())
-        }
-        Launched::Refused(reason) => format!("seat launch: refused reason={reason} target={target}{suffix}"),
-        Launched::Failed(reason) => format!("seat launch: failed reason={reason} target={target}{suffix}"),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{
-        child_of, derive_launch, fill_launch, model_of, single_model, stat_field, terminate_group, with_agent_view_off,
-        with_model, Holes, Model, StopTarget, Stopped, HOLE, HOLES, REASON_MODEL_DUPLICATED, STOPPEDS,
-    };
-    use crate::fleet::Completion;
-    use crate::order::is_declaration_order;
-    use crate::rules::manifest::Manifest;
-    use std::os::unix::process::CommandExt;
-    use std::path::{Path, PathBuf};
-    use std::process::{Child, Command, Stdio};
-    use std::time::{Duration, Instant};
-
-    /// 歯の `/proc` fixture: `<root>/<name>/stat` を `(name, comm, ppid, pgid)` で置く（`stat` の無い dir も置ける）。
-    fn proc_fixture(label: &str, rows: &[(&str, &str, u32, u32)], bare: &[&str]) -> PathBuf {
-        let root = std::env::temp_dir().join(format!("seat-cycle-proc-{label}-{}", std::process::id()));
-        for (name, comm, ppid, pgid) in rows {
-            std::fs::create_dir_all(root.join(name)).ok();
-            std::fs::write(root.join(name).join("stat"), format!("{name} ({comm}) S {ppid} {pgid} {pgid} 0 -1 4194560 0\n")).ok();
-        }
-        for name in bare {
-            std::fs::create_dir_all(root.join(name)).ok();
-        }
-        root
-    }
-
-    /// 前面の子は pane の shell の**直下**の子で、複数なら最も若い pid（最大）。孫・別の親の子・数でない名・stat の無い
-    /// dir は数えず、子の無い pid と `/proc` を読めない周は `None`。**pane の pid が 2 未満なら子が在っても `None`**
-    /// （pid 1 の子を pane の子と読まない・N1）。欄は最後の `)` の後ろから数える（`)` 入りの comm）。
-    #[test]
-    fn cycle_stop_foreground_child_is_the_youngest_direct_child_of_the_pane() {
-        let root = proc_fixture(
-            "tree",
-            &[
-                ("100", "sh", 7, 100),
-                ("200", "sleep", 100, 200),
-                ("300", "Web Content", 100, 300),
-                ("250", "cat", 200, 200),
-                ("400", "x)y", 7, 400),
-                ("600", "init-child", 1, 600),
-            ],
-            &["abc", "500"],
-        );
-        std::fs::write(root.join("abc").join("stat"), "abc (sleep) S 100 100 100\n").ok();
-        assert_eq!(child_of(&root, 100), Some(300), "直下の子 200 / 300 のうち最も若い 300（孫 250 は数えない）");
-        assert_eq!(child_of(&root, 200), Some(250), "孫は自分の親からは子");
-        assert_eq!(child_of(&root, 7), Some(400), "`)` 入りの comm でも ppid が読める");
-        assert_eq!(child_of(&root, 300), None, "子が無い");
-        assert_eq!(child_of(&root, 1), None, "pid 1 の子（600）は pane の子と読まない");
-        assert_eq!(child_of(&root, 0), None, "pid 0 も同じ");
-        assert_eq!(child_of(&root.join("missing"), 100), None, "/proc を読めない");
-        std::fs::remove_dir_all(&root).ok();
-        assert_eq!(stat_field("4242 (a) S 1 2 (b)) R 9 31 32 0", 1), Some(9), "最後の `)` の後ろの ppid");
-        assert_eq!(stat_field("4242 (sleep) S 4200 4100 4100 0", 2), Some(4100), "pgid");
-        assert_eq!(stat_field("4242 (sleep) S 4200", 2), None, "欄が足りない");
-        assert_eq!(stat_field("4242 sleep S 4200 4100", 1), None, "comm の閉じが無い");
-    }
-
-    /// 宛先は pure に決まる: pgid == pid は group 宛て（`-<pid>` / `GroupGone`）、それ以外と pgid が読めない周は単体宛て
-    /// （`<pid>` / `SeatGone`）、**pid < 2 は `None`**（`kill -- -1` / `-0` の字面をこの型から作れない）。[`Stopped`] の
-    /// 3 値の字面は宣言順で pin する（C2）。
-    #[test]
-    fn cycle_stop_target_is_pure_and_refuses_pid_below_two() {
-        assert_eq!(StopTarget::plan(0, Some(0)), None);
-        assert_eq!(StopTarget::plan(1, Some(1)), None);
-        assert_eq!(StopTarget::plan(1, None), None);
-        assert_eq!(StopTarget::plan(2, Some(2)), Some(StopTarget::Group(2)));
-        assert_eq!(StopTarget::plan(4242, Some(4100)), Some(StopTarget::Single(4242)), "leader でない pid は単体");
-        assert_eq!(StopTarget::plan(4242, None), Some(StopTarget::Single(4242)), "pgid を読めない周も単体");
-        assert_eq!(StopTarget::Group(2).arg(), "-2");
-        assert_eq!(StopTarget::Single(4242).arg(), "4242");
-        assert_eq!(StopTarget::Group(2).completion(), Completion::GroupGone(2));
-        assert_eq!(StopTarget::Single(4242).completion(), Completion::SeatGone(4242));
-    }
-
-    /// 宛先の `/proc` の読み: pgid == pid は group、違えば単体、stat が無ければ単体（撃って wait が決める）、guard は
-    /// `/proc` を読む前。[`Stopped`] の 3 値の字面は宣言順で pin する（C2）。
-    #[test]
-    fn cycle_stop_target_reads_pgid_from_proc_and_stopped_is_pinned() {
-        let root = proc_fixture("plan", &[("4242", "sleep", 4200, 4242), ("4243", "sleep", 4200, 4200)], &[]);
-        assert_eq!(StopTarget::of(&root, 4242), Some(StopTarget::Group(4242)), "/proc の pgid から group");
-        assert_eq!(StopTarget::of(&root, 4243), Some(StopTarget::Single(4243)), "/proc の pgid が違えば単体");
-        assert_eq!(StopTarget::of(&root, 4244), Some(StopTarget::Single(4244)), "stat が無ければ単体（撃って wait が決める）");
-        assert_eq!(StopTarget::of(&root, 1), None, "guard は /proc を読む前");
-        std::fs::remove_dir_all(&root).ok();
-        let names: Vec<&str> = STOPPEDS.iter().map(|stopped| stopped.as_str()).collect();
-        assert_eq!(names, ["gone", "killed", "unstoppable"]);
-        assert!(is_declaration_order(STOPPEDS, |stopped| stopped as usize));
-    }
-
-    /// 実子を起こし、`/proc/<pid>/comm` が `sleep` になるまで待つ（上限 2 s・10 ms 刻み・**撃つ前**の fixture 側の待ち）。
-    /// `sh -c 'trap "" TERM; exec sleep N'` は sh が `trap` を実行する前に TERM が届くと sh が死んで `Gone` に化ける
-    /// （run 1 の cargo-mutants baseline で顕在化）ので、`exec` の後（= `trap` の後）を comm で確かめる。達しない周は `None`。
-    fn sleeper(args: &[&str], own_group: bool) -> Option<Child> {
-        let mut command = Command::new(args.first().copied().unwrap_or("sleep"));
-        command.args(args.iter().skip(1)).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
-        if own_group {
-            command.process_group(0);
-        }
-        let child = command.spawn().ok()?;
-        let deadline = Instant::now().checked_add(Duration::from_secs(2))?;
-        while Instant::now() < deadline {
-            let comm = std::fs::read_to_string(format!("/proc/{}/comm", child.id())).unwrap_or_default();
-            if comm.trim() == "sleep" {
-                return Some(child);
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        None
-    }
-
-    /// 子の終わりを別 thread で回収する（回収まで行うので group の消滅の判定に zombie が残らない・`fleet usage` と同型）。
-    fn reap(mut child: Child) -> u32 {
-        let pid = child.id();
-        std::thread::spawn(move || child.wait());
-        pid
-    }
-
-    /// 実 signal の 3 値（自分の group の実子へ・pid は実子のもの＝2 未満にならない）: TERM で消える子は `Gone`、TERM を
-    /// 無視する子（`trap '' TERM` を exec で継いだ `sleep`）は `Killed`、回収されない子（zombie が group に残る）は KILL の後も
-    /// 消えず `Unstoppable`。group の leader でない子（自分の group で起こす）は単体宛てで `Gone`。撃った後の待ちは
-    /// 唯一の wait のまま（歯は結果を poll しない）。
-    #[test]
-    fn cycle_stop_terminate_group_reports_gone_killed_and_unstoppable() {
-        let grace = Duration::from_millis(300);
-        let gone = sleeper(&["sleep", "20"], true).map(reap).expect("子が exec に達しない");
-        assert_eq!(terminate_group(gone, grace), Some(Stopped::Gone), "TERM で消える");
-        assert!(!Path::new(&format!("/proc/{gone}")).exists(), "wait は消えるまで待ってから返る");
-
-        let killed = sleeper(&["sh", "-c", "trap '' TERM; exec sleep 20"], true).map(reap).expect("子が exec に達しない");
-        assert_eq!(terminate_group(killed, grace), Some(Stopped::Killed), "TERM を無視する子は KILL で消える");
-        assert!(!Path::new(&format!("/proc/{killed}")).exists());
-
-        let mut zombie = sleeper(&["sleep", "20"], true).expect("子が exec に達しない");
-        assert_eq!(terminate_group(zombie.id(), grace), Some(Stopped::Unstoppable), "回収されない zombie は group に残る");
-        let _ = zombie.wait();
-
-        let single = sleeper(&["sleep", "20"], false).map(reap).expect("子が exec に達しない");
-        assert_eq!(terminate_group(single, grace), Some(Stopped::Gone), "leader でない pid は単体宛てで消える");
-        assert!(!Path::new(&format!("/proc/{single}")).exists());
-    }
-
-    /// 起動行の導出（契約 (6f)・account-lifecycle.md §4）: 穴は `{account_dir}` の 1 つ（[`fill_launch`] がそのまま埋める）・
-    /// 順序は agent view off → 口座の env → `claude` → anchor の `--plugin-dir` → `[[plugin]]` の dir（宣言順）→
-    /// `[[launch-arg]]` の value（宣言順）。plugin 0 件・引数 0 件は anchor の `--plugin-dir` だけで終わる。後半は model の運び（`s2-07l.313`）。
-    #[test]
-    fn seat_launch_derive_line_orders_anchor_plugins_and_args_with_one_hole() {
-        let host = "schema = 1\n\n[[plugin]]\ndir = \"/opt/p2\"\n\n[[launch-arg]]\nvalue = \"--permission-mode\"\n\n\
-                    [[plugin]]\ndir = \"/opt/p1\"\n\n[[launch-arg]]\nvalue = \"bypassPermissions\"\n";
-        let manifest = Manifest::parse(host).unwrap_or_default();
-        assert_eq!(manifest.plugins().len(), 2, "fixture が読める");
-        let line = derive_launch(Path::new("/repo/main"), manifest.plugins(), manifest.launch_args(), None);
-        assert_eq!(
-            line,
-            "CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CONFIG_DIR={account_dir} claude --plugin-dir /repo/main \
-             --plugin-dir /opt/p2 --plugin-dir /opt/p1 --permission-mode bypassPermissions",
-            "宣言順（p2 → p1・--permission-mode → bypassPermissions）"
-        );
-        assert_eq!(line.matches(HOLE).count(), 1, "穴は 1 つ");
-        assert_eq!(
-            fill_launch(&line, "/state/accounts/a2").as_deref(),
-            Ok("CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CONFIG_DIR=/state/accounts/a2 claude --plugin-dir /repo/main \
-                --plugin-dir /opt/p2 --plugin-dir /opt/p1 --permission-mode bypassPermissions"),
-            "穴は既存の fill_launch で埋まる"
-        );
-        assert_eq!(with_agent_view_off(&line), line, "前置は既に在る（二重にしない）");
-        let bare = derive_launch(Path::new("/repo/main"), &[], &[], None);
-        assert_eq!(bare, "CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CONFIG_DIR={account_dir} claude --plugin-dir /repo/main");
-        // model（C10）: `claude` の直後に別名で 1 つ・None は従来の行と同一・雛形へ挟むのも同じ位置（`claude` の語が無い雛形は末尾）・2 つの行だけを断る。
-        let fable = derive_launch(Path::new("/repo/main"), &[], &[], Some(Model::Fable));
-        assert_eq!(fable, "CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CONFIG_DIR={account_dir} claude --model fable --plugin-dir /repo/main");
-        assert_eq!(with_model("sh l.sh {account_dir}", Some(Model::Opus)), "sh l.sh {account_dir} --model opus", "`claude` の語が無い雛形は末尾");
-        assert_eq!((single_model(&fable), single_model(&with_model(&fable, Some(Model::Opus)))), (Ok(()), Err(REASON_MODEL_DUPLICATED)));
-        assert_eq!((model_of(None), model_of(Some("Fable")), model_of(Some("opus")), model_of(Some("nope"))), (Ok(None), Ok(Some(Model::Fable)), Ok(Some(Model::Opus)), Err(())));
-    }
-
-    /// 起動行の先頭に agent view を切る env を 1 つだけ前置する: 行の中身は変えず、既に前置済みの行は二重にせず、空の行は
-    /// そのまま（契約 (c)・`s2-07l.239`）。
-    #[test]
-    fn seat_agent_view_off_prefix_is_single_and_keeps_blank_lines() {
-        let line = "CLAUDE_CONFIG_DIR=/state/accounts/a2 claude --resume";
-        let once = with_agent_view_off(line);
-        assert_eq!(once, "CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CONFIG_DIR=/state/accounts/a2 claude --resume");
-        assert_eq!(with_agent_view_off(&once), once, "前置済みの行は二重にしない");
-        assert_eq!(
-            with_agent_view_off("sh l.sh /state/accounts/a2"),
-            "CLAUDE_CODE_DISABLE_AGENT_VIEW=1 sh l.sh /state/accounts/a2",
-            "env で始まらない雛形にも前置する"
-        );
-        assert_eq!(with_agent_view_off(""), "", "空の行はそのまま");
-        assert_eq!(with_agent_view_off("  "), "  ", "空白だけの行もそのまま");
-    }
-
-    /// 雛形の穴はちょうど 1 つだけが埋まり（文字列の置換だけ・env の字面も path の字面も解釈しない）、無い・2 つ
-    /// 以上は typed に断る（account-autonomy.md §5・契約 (d)）。
-    #[test]
-    fn seat_account_fill_launch_fills_exactly_one_hole() {
-        let dir = "/state/accounts/a2";
-        assert_eq!(
-            fill_launch("CLAUDE_CONFIG_DIR={account_dir} claude --resume", dir),
-            Ok("CLAUDE_CONFIG_DIR=/state/accounts/a2 claude --resume".to_owned())
-        );
-        assert_eq!(
-            fill_launch("$CONFIG_ROOT/cld --host box {account_dir}", dir),
-            Ok("$CONFIG_ROOT/cld --host box /state/accounts/a2".to_owned()),
-            "env の字面と host 名は解釈しない（そのまま残す）"
-        );
-        assert_eq!(fill_launch("claude --resume", dir), Err(Holes::Missing));
-        assert_eq!(fill_launch("{account-dir} {credential-dir}", dir), Err(Holes::Missing), "似た字面は穴ではない");
-        assert_eq!(fill_launch("{account_dir} {account_dir}", dir), Err(Holes::Many));
-        assert_eq!(fill_launch("{account_dir}{account_dir}{account_dir}", dir), Err(Holes::Many));
-        let names: Vec<&str> = HOLES.iter().map(|holes| holes.as_str()).collect();
-        assert_eq!(names, ["launch-no-hole", "launch-many-holes"]);
-        assert!(is_declaration_order(HOLES, |holes| holes as usize));
-    }
 }
