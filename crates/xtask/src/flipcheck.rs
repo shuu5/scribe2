@@ -464,12 +464,17 @@ fn nextest_with(dir: &Path, target_dir: &Path, extra: &[&str]) -> Result<Output,
 /// 行に ANSI 色が付くと、落ちた歯を 1 本も名指せず `base-not-green` へ倒れる（実測
 /// 2026-09-14・s2-07l.276: main が CI だけで赤）。env は読まず設定もしない——子の出力の
 /// 形を親の env に依存させない（C2.2）ための口は、この引数 1 つに閉じる。
+///
+/// **`--no-fail-fast` も常に渡す**（設計 gate-cost.md §19・憲法 C10）。既定の fail-fast では
+/// 歯 1 本の flaky で残りが未実行のまま終わり、[`failed_tests`] が名指せる歯が 1 本に縮む
+/// ＝`retry_named` の撃ち直しが「落ちた歯の全数」でなく先頭の 1 本しか救えない。
 fn nextest_args(extra: &[&str]) -> Vec<String> {
     [
         "nextest",
         "run",
         "--workspace",
         "--no-tests=fail",
+        "--no-fail-fast",
         "--color",
         "never",
     ]

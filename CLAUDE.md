@@ -27,7 +27,7 @@ scribe2 は scribe v1 を捨てて作り直す「次の器」（Rust・単一 bi
 <!-- 本区間は `cargo xtask gen-claude-md` の生成物である。手で編集しない（`cargo xtask check` の claude-md-done が drift を落とす）。正本は `.github/workflows/ci.yml` の `run: cargo …` 行。 -->
 <!-- done:begin -->
 ```
-cargo nextest run --workspace --no-tests=fail
+cargo nextest run --workspace --no-tests=fail --no-fail-fast
 cargo clippy --workspace --all-targets -- -D warnings
 cargo xtask check
 cargo xtask flip-check --base <base>

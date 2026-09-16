@@ -22,7 +22,9 @@ jobs:
       - uses: taiki-e/install-action@84f5ac3124727fb3d284d4d22ee9ab3654fd09a6
         with:
           tool: cargo-nextest
-      - run: cargo nextest run --workspace --no-tests=fail
+      # `--no-fail-fast`: 歯 1 本の flaky で残りが未実行のまま終わると、落ちた歯の全数を
+      # 名指せない（憲法 C10・設計 gate-cost.md §19）。`.vessel.toml` / `CLAUDE.md` と同文。
+      - run: cargo nextest run --workspace --no-tests=fail --no-fail-fast
 
   clippy:
     runs-on: ubuntu-latest

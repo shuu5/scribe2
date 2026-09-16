@@ -78,6 +78,10 @@ mod scope {
     ///
     /// **並列度の値はこの道具が持たない**（設計 gate-cost.md §3.3）。器が受付で導いた実効値を
     /// 宣言 file の `{jobs}` 経由で受け取り、cargo-mutants の `--jobs` へそのまま渡すだけである。
+    ///
+    /// 末尾の `-- --no-fail-fast` は cargo-mutants が baseline と各変異の `cargo test` へ
+    /// そのまま渡す引数（設計 gate-cost.md §19・憲法 C10）。既定の fail-fast では baseline の
+    /// 歯 1 本の flaky で残りが未実行のまま「baseline 失敗」へ倒れ、落ちた歯の全数を名指せない。
     pub fn measure_args(diff: &Path, out: &Path, scope: &str, jobs: u64) -> (Vec<String>, Scope) {
         let mut args: Vec<String> = ["mutants", "--in-diff"].iter().map(|s| (*s).to_owned()).collect();
         args.push(diff.display().to_string());
@@ -87,6 +91,7 @@ mod scope {
         args.push(out.display().to_string());
         args.push("--jobs".to_owned());
         args.push(jobs.to_string());
+        args.extend(["--", "--no-fail-fast"].iter().map(|s| (*s).to_owned()));
         (args, Scope(scope.to_owned()))
     }
 }
@@ -420,4 +425,37 @@ fn write_diff(root: &Path, base: &str, path: &Path) -> Result<(), String> {
         return Err(format!("git diff が失敗した（base={base}）"));
     }
     std::fs::write(path, &output.stdout).map_err(|err| format!("diff を書けない: {err}"))
+}
+
+/// [`measure_args`] の歯。本体と同じ file に置く（設計 gate-cost.md §19・行 j の write-set）。
+/// 他の `mutants_*` の歯は `main.rs` の test 区間に在り、そちらは触らない。
+#[cfg(test)]
+mod tests {
+    use super::measure_args;
+    use std::path::Path;
+
+    /// cargo-mutants が baseline と各変異の `cargo test` へ渡す引数の末尾が `-- --no-fail-fast`
+    /// （憲法 C10: 歯 1 本の flaky で残りを未実行のまま終えず、落ちた歯の全数を名指す）。
+    /// `-p <scope>` / `--jobs N` / `--in-diff` / `-o` の対は不変で、`--` は 1 つだけ。
+    #[test]
+    fn no_fail_fast_is_passed_to_cargo_test_by_mutants() {
+        for (scope, jobs) in [("probe-pkg-3f", 3_u64), ("other-pkg-7a", 1)] {
+            let (args, bound) = measure_args(Path::new("probe.diff"), Path::new("probe-out"), scope, jobs);
+            assert_eq!(&args[args.len() - 2..], ["--", "--no-fail-fast"], "末尾は -- --no-fail-fast: {args:?}");
+            assert_eq!(args.iter().filter(|a| *a == "--").count(), 1, "-- は 1 つだけ: {args:?}");
+            let value_after = |flag: &str| args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1)).map(String::as_str);
+            assert_eq!(value_after("-p"), Some(scope), "{args:?}");
+            assert_eq!(value_after("--jobs"), Some(jobs.to_string().as_str()), "{args:?}");
+            assert_eq!(value_after("--in-diff"), Some("probe.diff"), "{args:?}");
+            assert_eq!(value_after("-o"), Some("probe-out"), "{args:?}");
+            assert_eq!(bound.name(), scope, "-p へ渡した名前が Scope");
+            // `--` の前に cargo-mutants 自身の引数が全部在る（`--` の後ろへ漏れた引数は
+            // cargo test へ渡って意味を失う）。
+            let dashes = args.iter().position(|a| a == "--").expect("-- が在る");
+            for flag in ["--in-diff", "-p", "--no-shuffle", "--copy-vcs", "-o", "--jobs"] {
+                let at = args.iter().position(|a| a == flag).expect("cargo-mutants の引数が在る");
+                assert!(at < dashes, "{flag} は -- の前: {args:?}");
+            }
+        }
+    }
 }

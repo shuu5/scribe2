@@ -407,6 +407,31 @@ fn flip_check_child_nextest_disables_color() {
     );
 }
 
+/// 子の `cargo nextest run` の引数の列に `--no-fail-fast` が **1 つ**在る（設計 gate-cost.md §19・
+/// 憲法 C10: 歯 1 本の flaky で残りを未実行のまま終えず、落ちた歯の全数を名指す）。
+/// `--color never` の隣接・`--no-tests=fail`・先頭の `nextest` は不変。
+#[test]
+fn no_fail_fast_is_in_flipcheck_nextest_args() {
+    let args = nextest_args(&[]);
+    assert_eq!(
+        args.iter().filter(|arg| *arg == "--no-fail-fast").count(),
+        1,
+        "--no-fail-fast は 1 つだけ: {args:?}"
+    );
+    let at = args
+        .iter()
+        .position(|arg| arg == "--color")
+        .expect("子の引数に --color が在る");
+    assert_eq!(args.get(at + 1).map(String::as_str), Some("never"), "--color の直後は never のまま: {args:?}");
+    assert_eq!(args.first().map(String::as_str), Some("nextest"), "先頭は nextest のまま: {args:?}");
+    assert!(args.contains(&"--no-tests=fail".to_owned()), "--no-tests=fail を落とさない: {args:?}");
+    // extra は `--no-fail-fast` より後ろ（filterset の撃ち直しでも fail-fast に戻らない）。
+    let with_extra = nextest_args(&["-E", "test(=x)"]);
+    let flag = with_extra.iter().position(|arg| arg == "--no-fail-fast").expect("撃ち直しの列にも在る");
+    let extra = with_extra.iter().position(|arg| arg == "-E").expect("extra が在る");
+    assert!(flag < extra, "--no-fail-fast は extra の前: {with_extra:?}");
+}
+
 /// 実 fixture の撃ち直しの歯 2 本は、子に `CARGO_TERM_COLOR=always` を載せた周でも緑になる。
 ///
 /// 親 process の env は触らない——この test binary 自身を `Command` で撃ち、その env にだけ

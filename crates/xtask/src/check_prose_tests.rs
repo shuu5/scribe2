@@ -153,6 +153,51 @@ fn claude_md_done_denies_orphan_region_without_ci() {
     assert!(line.contains(" claude-md-prose=n/a(no-claude-md) "), "{line}");
 }
 
+/// 3 面の現物から「`cargo nextest run` で始まる行」を字面で 1 本ずつ取る（`claude_md.rs` の
+/// 読み手は使わない＝独立の pin）。`prefix` は行頭の飾り（yaml の `- run: ` 等）。
+fn nextest_line_of(text: &str, prefix: &str) -> Option<String> {
+    let mut found = text
+        .lines()
+        .map(str::trim_start)
+        .filter_map(|line| line.strip_prefix(prefix))
+        .filter(|line| line.starts_with("cargo nextest run "));
+    let line = found.next()?;
+    assert!(found.next().is_none(), "nextest の行は 1 面に 1 本のはず");
+    Some(line.to_owned())
+}
+
+/// `.vessel.toml` の `common-verify` の nextest 行・`ci.yml` の `run:` の nextest 行・`CLAUDE.md`
+/// の done 区間の nextest 行が **3 面同文**で `--no-fail-fast` を持つ（設計 gate-cost.md §19・
+/// 憲法 C10）。`xtask check` の `claude-md-done` は ci.yml ↔ CLAUDE.md の一致しか見ないので、
+/// `.vessel.toml` を含む 3 面と flag の在ることは、ここが現物を字面で読んで pin する。
+#[test]
+fn no_fail_fast_done_line_is_the_same_on_three_faces() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+    let read = |rel: &str| fs::read_to_string(root.join(rel)).unwrap_or_else(|err| panic!("{rel} を読める: {err}"));
+    // `.vessel.toml`: `common-verify = [ "…", "cargo nextest run …", … ]` の要素を引用符で切る。
+    let vessel = read(".vessel.toml");
+    let common = vessel
+        .lines()
+        .find_map(|line| line.strip_prefix("common-verify = ["))
+        .expect(".vessel.toml に common-verify が在る");
+    let vessel_line = common
+        .split('"')
+        .find(|item| item.starts_with("cargo nextest run "))
+        .expect("common-verify に nextest の行が在る")
+        .to_owned();
+    let ci_line = nextest_line_of(&read(".github/workflows/ci.yml"), "- run: ").expect("ci.yml に run: の nextest 行が在る");
+    let claude_md = read("CLAUDE.md");
+    let (_, after_begin) = claude_md.split_once("<!-- done:begin -->").expect("CLAUDE.md に done:begin が在る");
+    let (region, _) = after_begin.split_once("<!-- done:end -->").expect("CLAUDE.md に done:end が在る");
+    let claude_line = nextest_line_of(region, "").expect("done 区間に nextest の行が在る");
+    assert_eq!(vessel_line, ci_line, ".vessel.toml と ci.yml は同文");
+    assert_eq!(ci_line, claude_line, "ci.yml と CLAUDE.md は同文");
+    let tokens: Vec<&str> = ci_line.split(' ').collect();
+    assert_eq!(tokens.iter().filter(|t| **t == "--no-fail-fast").count(), 1, "--no-fail-fast を 1 つ持つ: {ci_line}");
+    assert!(tokens.contains(&"--no-tests=fail"), "--no-tests=fail は落とさない: {ci_line}");
+    assert!(tokens.contains(&"--workspace"), "--workspace は落とさない: {ci_line}");
+}
+
 /// 区間外の 5 行（印 2 行・pointer 付きの印 1 行・印なし 2 行）。
 const PROSE_OUTSIDE: [&str; 5] = [
     "器は席を確保しなければならない。",
