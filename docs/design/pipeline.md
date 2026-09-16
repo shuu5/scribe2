@@ -408,6 +408,14 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
 - 歯（`pipe_verify_failed_` 接頭辞・`pipe/gate/record.rs` の in-file の pure な歯 + `tests/e2e/pipe/land.rs` の既存の main-red の fixture の型）: nextest 形の stderr（Summary の後に `FAIL [` 2 本・各歯の `--- STDERR:` 区間・落ちた歯が末尾から遠い位置）から `failed=` が最初の 1 本を指し、区間が歯ごとに上限行数で残る／`FAIL [` の無い stderr は `failed=` を持たず末尾 N 行だけ／main-red の便の `verify-main.jsonl` に `failed=` と区間が載る（e2e）。
 - 却下: 末尾の行数を増やす（歯の数に比例して膨らみ、位置の問題は残る）／nextest の JSON 出力を読む（出力形式の依存が 1 つ増え、共通 verify の行の字面を器が縛る・ADR-0010 の宣言の外）／runner の stdout に写す（主実測は runner が居ない）。
 
+## 36. 着地の列が driver の死んだ便を先頭に数えない — 札の所有者が死んだ便を `skipped-dead` で外し、段は動かさない（契約表の行 ad・`s2-07l.388`）
+
+- 何が起きているか（admin の実測 2026-09-16 04:0xZ・verified）: 着地の列（`pipe/queue.rs` の `turn_in`・`gated_at` 順・[gate-cost.md](./gate-cost.md) §6）の先頭の便が host の再起動で driver（`pipe run` の process）ごと死に Implemented のまま止まると（Gated PASS の判定と worktree は在る）、後続の便は `await_turn` で先頭が退くのを rules 行 `pipe.land_wait_s` の上限（90 分）まで待ち `unmeasured` に倒れる＝再起動・oom・stop の失敗のたびに「上限 × 後続の本数」を失う。現物（main a620600）: `turn_in` は自分より鍵の小さい PASS の便を「終端でない ∧ Gated を 1 度通った ∧ worktree が在る」で数え、その便を進める者が生きているかを見ない。driver の生死は [dispatcher.md](./dispatcher.md) §5（行 d・`s2-07l.352`）の**札**（`<state_dir>/pipe/<run>/driver`・pid + 起動時刻・lock の所有者と同じ probe・`Owner::Dead`）が typed に持つ＝本 § はその読みを列に足すだけで、生死の判定を 2 本にしない（C2・C3.3）。
+- 形: (1) `Queued` に driver の生死（closed 3 値: 生きている / 死んでいる / 札が無い・読めない）を足し、`queue_of` が行 d の札の読み手（同じ関数・pub(crate)）で埋める。(2) `turn_in` は**死んでいる**便だけを `ahead` の候補から外す。札が無い・読めない便は従来どおり数える（測れないを「死んだ」に読み替えない・fail-closed・行 d の「札の無い便は触らない」と同じ極性）。自分の便の札は見ない（自分は生きている）。(3) 外した便を黙らせない（C10）: `Turn` の 3 値は不変で、`await_turn` の記録（面 5 `verdicts.jsonl` の `order` の隣）に任意 field `skipped_dead=<run,…>`（外した便 id の列・鍵の順・外した周だけ）を足し、`pipe land` の stdout の `order=` の行に `skipped-dead=<n>` を後置する（0 の周は書かない）。(4) 外すだけで段は動かさない（死んだ便は Implemented / Gated のまま・resume 可・N1）。起こし直しは行 d（dispatch の turn 関数の `pipe resume`）の領分＝本 § は列の側だけ。
+- 触らない: `Turn` の 3 値と `Order` の 4 値・列の鍵（最初の `Gated` の ts）・`may_queue` の条件・`pipe.land_wait_s`・札の書き・消し・probe（行 d）・起こし直しの上限と間隔（行 d の側で rules 行か閉じた定数）・追随で Implemented に戻った便が PASS のまま列に残る規則（仕様）。
+- 歯（`pipe_order_dead_` 接頭辞・`tests/e2e/pipe/land.rs` の `pipe_order_` の隣・in-file は `queue.rs` の `turn_in` の pure な歯）: 先頭の便の札の pid を死んだ process（`sh -c true` を wait した pid）にした fixture で、後続の `pipe land` が `first` で進み `order=first skipped-dead=1` と `verdicts.jsonl` の `skipped_dead` にその便 id／先頭の札が生きている周は従来どおり `After`／札の無い先頭は従来どおり待つ（`After`）／死んだ便の段と worktree は不変（`pipe show` の段が動かない）／pure: 3 値 × 鍵の順の表で `ahead` の選び方が変わらない。
+- 却下: `pipe.land_wait_s` を短くする（gate の所要が長い便で偽の `unmeasured`）／席の pid や pane で生死を測る（driver は席ではない・C3.3・札 1 本で足りる）／死んだ便を列から外すと同時に Stopped へ倒す（成果を捨てる・N1・起こし直しは行 d）／admin の daemon で先頭を監視する（散文の運用・器の列の外）／札の無い便も死んだと読む（行 d の前の便や読めない周を全部外す＝fail-open）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -703,4 +711,15 @@ write-set = ["crates/scribe2/src/pipe/gate/record.rs", "crates/scribe2/src/pipe/
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_verify_failed_"]
 size = "S"
 done = "nextest 形の stderr から failed= が最初の落ちた歯を指し、落ちた歯ごとの区間が上限行数で record に残り、FAIL 行の無い stderr は従来どおり末尾だけ、gate と主実測が同じ関数を通り、MainCheck の 3 値と末尾行数の定数は不変"
+
+[[contract]]
+id = "ad"
+title = "着地の列が driver の死んだ便を先頭に数えない — Queued に札の生死の 3 値を足し、死んでいる便だけを ahead から外して skipped-dead で名指し、段は動かさない"
+req = ["FR11", "FR14"]
+section = "36"
+touches = ["crate::pipe::queue::Queued"]
+tests = ["crates/scribe2/tests/e2e/pipe/land.rs"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_order_dead_"]
+size = "S"
+done = "先頭の便の札が死んだ pid の fixture で後続の pipe land が first で進み order= の行に skipped-dead=1 と verdicts.jsonl に skipped_dead が載り、札が生きている先頭と札の無い先頭は従来どおり待ち、死んだ便の段と worktree は不変"
 <!-- contracts:end -->
