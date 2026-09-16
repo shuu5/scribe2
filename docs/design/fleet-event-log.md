@@ -29,17 +29,17 @@ C3 は「1 つの DB file（host 列）」と言う。MVP はそれを **append-
 | `schema` | u64 | 必須 | 1。非互換な変更は版を上げる（ADR-0004 §2.5） |
 | `ts` | string | 必須 | UTC `YYYY-MM-DDTHH:MM:SSZ` |
 | `kind` | string | 必須 | `EventKind` の variant 名 |
-| `run` | string | 必須 | run id（`<bead>-<UTC stamp>`） |
-| `bead` | string | 必須 | 契約の bead id（台帳は読まない・文字列として持つだけ） |
+| `run` | string | kind ごと | run id（`<bead>-<UTC stamp>`）。便の kind では必須・run を持たない kind（口座残量 2・`SeatRegistered`・`AccountRetired` / `AccountRestored`・`RulingReceived`〔§9〕）では在れば malformed |
+| `bead` | string | kind ごと | 契約の bead id（台帳は読まない・文字列として持つだけ）。便の kind では必須・run を持たない kind では禁止（`RulingReceived` だけ任意） |
 | `host` | string | 必須 | host 名（C3 の host 列）。`/etc/hostname` → `hostname` コマンド → `"unknown"` の順。env は読まない |
-| `actor` | string | 必須 | `"machine"` / `"human"`。人由来 event を数える面（FR22）。`ApprovalReceived` だけが `human` |
+| `actor` | string | 必須 | `"machine"` / `"human"`。人由来 event を数える面（FR22）。`human` は `ApprovalReceived` と `RulingReceived`（§9）の 2 kind |
 | `stage` | string | 任意 | `Stage` の variant 名 |
 | `seat` | string | 任意 | 席 id（MVP は run id と同じ） |
 | `pid` | u64 | 任意 | runner の pid |
 | `account` | string | 任意 | `SeatSpawned` だけ: 器が選んで runner に渡した口座の label（口座を渡さず親の環境を継承させた周は置かない・口座ごとの走行中の便数の出所・[ADR-0027 §2.3](../../design-intent/decisions/ADR-0027-run-account-order-earliest-reset-and-no-per-account-cap.html#s2-3-inflight)・schema 版は 1 のまま） |
 | `detail` | string | 任意 | 自由文（verdict 名・runner rc・承認の逐語 等） |
 
-- `pub enum EventKind`（閉じた 8 variant）: `RunCreated` / `RunStage` / `RunDone` / `RunStopped` / `SeatSpawned` / `SeatStopped` / `ApprovalRequested` / `ApprovalReceived`。
+- `pub enum EventKind`（閉じた enum・variant の列挙は core が持ち文書は写さない。記録時点の 8 = `RunCreated` / `RunStage` / `RunDone` / `RunStopped` / `SeatSpawned` / `SeatStopped` / `ApprovalRequested` / `ApprovalReceived`・以後は各 ADR が末尾に足す）。
 - `pub enum Stage`（閉じた 8 variant）: `Intake` / `Blocked` / `Spawned` / `Implemented` / `Gated` / `Landed` / `Stopped` / `Failed`。遷移は pipeline 側（[pipeline.md §4](./pipeline.md)）。
 - `pub enum SeatState { Live, Stopped }`（C3.3: 席の状態は typed enum・bool で持たない）。
 - 字面変換は **wildcard 無しの `match`** 1 箇所ずつ。
@@ -84,6 +84,14 @@ C3 は「1 つの DB file（host 列）」と言う。MVP はそれを **append-
 - SQLite 化は A3 を通した上で **同じ event を投影する**形にし、event log は消さない（跨版 面 2 は event log の path で固定）。
 - event の圧縮・rotation（MVP は無限追記・1 便あたり 10 行程度）。cross-host の lock（MVP は同 host 内のみ）。
 
+## 9. run 無しの裁定を承認 event として持つ — kind `RulingReceived`・対話面の席の口 `seat ruling`・doctor の突合（契約表の行 b・`s2-07l.386`）
+
+- 何が起きているか（admin の実測 2026-09-16 03:35Z・verified・母集団 = event log の全 kind の件数・決定は [ADR-0037](../../design-intent/decisions/ADR-0037-rulings-without-a-run-are-approval-events.html)）: `ApprovalRequested` / `ApprovalReceived` は 0 件・`pipe report` の human_events=0。同日の user 裁定（rules 行の値・A2 の閾値・方針）は台帳の散文にだけ在る＝憲法 C7.2 の穴。現物: `ApprovalReceived` は `run` / `bead` を要り（`pipe approve --words`・`fleet record`）、run の無い裁定を書く口が無い。run を持たない kind は既に 5 つ（口座残量 2・`SeatRegistered`・`AccountRetired` / `AccountRestored`・`event.rs` の `forbid` が kind ごとに `run` / `bead` を断る形）＝§3 の表の「`run` 必須」は kind ごとの規則に読み替える（本節で表を直す・現物に合わせる）。
+- 形: (1) `EventKind` の末尾に variant 1 つ `RulingReceived`（actor = `human`・`run` を持たない kind〔行に在れば malformed〕・`bead` は任意・新しい key `rule`〔rules 行の id・任意・文字列〕・`detail` = user の逐語で**空なら 1 byte も書かない**〔`pipe approve` と同じ `record_words` の型〕・schema 版 1 のまま）。読み手（`event.rs` の kind ごとの `forbid` の arm・`replay` はこの kind で run を作らない）。(2) 口 = `<NAME> seat ruling add --state-dir S --target T --words "<逐語>" [--bead B] [--rule ID]`（1 件書く・ts は器が打つ＝**裁定 id**）/ `seat ruling ls --state-dir S`（ts・bead・rule・逐語を 1 件 1 行）。`T` の登録 row（[seat-roles.md](./seat-roles.md) §2 の解決）の役割が rules 行 `R-C7-1` の値でない周は `not-dialogue-surface` で断る（row が無い・読めない周も断る・FailClosed）。書き手はこの口だけ（`fleet record` はこの kind を従来どおり断る＝`run` を要る口）。(3) `pipe report` の行に `rulings=<n>` を足し、`human_events_other_than_approval` の「承認」の kind を `ApprovalReceived` と `RulingReceived` の 2 つにする（FR22）。(4) doctor（`doctor --state-dir S`）の 1 行 `rulings=<n> rule-rulings=<matched>/<of> unmatched=<id,…>`: manifest（tracked + `--rules`）の `[[rule]]` のうち `ruling` 欄が `user <UTC の分までの ts>` の形の行を母集団とし、同じ分の `ts` を持つ `RulingReceived` が在る行を matched・無い行を id で名指す（読むだけ・判定しない・C10.2・分が曖昧な形〔`4xZ`〕は母集団に入らず `skipped=<n>` で数える・同じ分に event が複数在る行は matched に数え件数を `matched=<n>` の内訳に持たない＝1 行が 1 件を一意に指すことは保証しない）。
+- 触らない: `ApprovalRequested` / `ApprovalReceived` / `QuestionRaised` / `QuestionAnswered` の形と読み手・`pipe approve` / `pipe answer`・resume の経路・直命の表（[working-memory.md](./working-memory.md) §12.1・別 kind）・schema 版。
+- 歯（`fleet_ruling_` 接頭辞・`tests/e2e/fleet.rs` と `tests/e2e/seat/ruling.rs`〔新規〕・`prop.rs` の生成器は variant を足すだけ）: 対話面の役割の登録 row を持つ target で `seat ruling add` が `RulingReceived` を 1 件（`actor=human`・`run` 無し・逐語が detail に逐語で）書く／逐語が空なら書かず rc 1／登録 row の役割が R-C7-1 の値でない target は `not-dialogue-surface` で書かない／`fleet record --kind RulingReceived` は断る／`pipe report` の `rulings=` が数え `human_events_other_than_approval` が増えない／doctor が manifest の `user <ts>` 行に対して同じ分の event の有無で matched / unmatched を出す／外形 snapshot（seat usage・doctor・pipe）が更新される。
+- 却下: ADR-0037 §3（写しは持たない）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -96,4 +104,14 @@ write-set = ["crates/scribe2/src/fleet/wait.rs", "docs/design/gate-cost.md", "do
 verify = ["cargo nextest run -p scribe2 --no-tests=fail fleet_wait_land_turn_"]
 size = "S"
 done = "log が変わらない周は replay が呼ばれず、追記のあった周は読み直して列の判定が変わる"
+
+[[contract]]
+id = "b"
+title = "run 無しの裁定を承認 event として持つ — EventKind に RulingReceived を足し、対話面の席の口 seat ruling add / ls が逐語付きで書き、pipe report が rulings を数え、doctor が manifest の裁定 id と突合する"
+req = ["FR41", "FR22"]
+section = "9"
+write-set = ["crates/scribe2/src/fleet/mod.rs", "crates/scribe2/src/fleet/event.rs", "crates/scribe2/src/fleet/replay.rs", "crates/scribe2/src/fleet/cli.rs", "crates/scribe2/src/account/mod.rs", "crates/scribe2/src/fleet/usage.rs", "crates/scribe2/src/pipe/mod.rs", "crates/scribe2/src/pipe/queue.rs", "crates/scribe2/src/pipe/stop.rs", "crates/scribe2/src/pipe/report.rs", "crates/scribe2/src/seat/role.rs", "crates/scribe2/src/seat/state.rs", "crates/scribe2/src/seat/cli.rs", "crates/scribe2/src/seat/mod.rs", "+crates/scribe2/src/seat/ruling.rs", "crates/scribe2/src/main.rs", "crates/scribe2/tests/e2e/fleet.rs", "crates/scribe2/tests/e2e/prop.rs", "crates/scribe2/tests/e2e/seat.rs", "+crates/scribe2/tests/e2e/seat/ruling.rs", "crates/scribe2/tests/e2e/pipe/ratelimit.rs", "crates/scribe2/tests/e2e/pipe/stop.rs", "crates/scribe2/tests/e2e/snapshots/e2e__seat__seat_usage_external_form.snap", "crates/scribe2/tests/e2e/snapshots/e2e__seat__seat_doctor_external_form.snap", "crates/scribe2/tests/e2e/snapshots/e2e__fleet__fleet_external_form.snap", "crates/scribe2/tests/e2e/snapshots/e2e__pipe__pipe_external_form.snap"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail fleet_ruling_"]
+size = "M"
+done = "対話面の席の口が RulingReceived を逐語付き run 無しで 1 件書き、空の逐語と対話面でない席は typed に断られ、fleet record はこの kind を断り、pipe report が rulings を数えて approval 以外の人由来が増えず、doctor が manifest の user <ts> の裁定 id ごとに同じ分の event の有無を matched / unmatched で出し、既存の承認と質問の event は不変"
 <!-- contracts:end -->

@@ -57,6 +57,12 @@ user に向けて出す文の形は対話面の作法（信頼度が上位・次
 
 admin の雛形には足さない（対話面でない・ADR-0032 §2.5）。
 
+5 本目（契約表の行 h・`s2-07l.386`・[ADR-0037](../../design-intent/decisions/ADR-0037-rulings-without-a-run-are-approval-events.html)・[fleet-event-log.md](./fleet-event-log.md) §9 の口が Landed の後）:
+
+```
+user の裁定を受けた turn の中で対話面の席の口（seat ruling add・逐語・bead / rules 行 id）を撃ち、裁定 id はその event の ts とする → SSOT: docs/design/fleet-event-log.md §9 / ADR-0037 / 憲法 C7.2
+```
+
 ## 5. global CLAUDE.md の行き先（ADR-0032 §2.4）
 
 | global の節 | 行き先 | 本 doc / 器の側 |
@@ -107,4 +113,15 @@ also = ["crates/scribe2/src/seat/brief/planner.txt", "crates/scribe2/tests/e2e/s
 verify = ["cargo nextest run -p scribe2 --no-tests=fail hook_brief_planner_"]
 size = "S"
 done = "planner の生成文に dialogue-surface.md §2 を指す行 2 本と §3 / §5 を指す行 1 本ずつが → SSOT: 付きで在り、admin の生成文には無い"
+
+[[contract]]
+id = "h"
+title = "planner の雛形に §4 の 5 本目（裁定を受けた turn で seat ruling add を撃つ・pointer 付き・規範文 0）を足す + 外形 snapshot"
+req = ["FR41", "FR67"]
+section = "4"
+depends = ["g"]
+also = ["crates/scribe2/src/seat/brief/planner.txt", "crates/scribe2/tests/e2e/snapshots/e2e__hook__hook_brief_planner.snap"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail hook_brief_planner_"]
+size = "S"
+done = "planner の生成文に fleet-event-log.md §9 と ADR-0037 を指す裁定の行が → SSOT: 付きで 1 本増え、admin の生成文には無く、既存の 4 行は不変"
 <!-- contracts:end -->

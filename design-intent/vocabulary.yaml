@@ -136,8 +136,13 @@ terms:
     relationships: [manifest, 裁定 id, 検出線]
   - canonical: 裁定 id
     domain: consumer
-    definition: user 裁定を一意に指す id (transcript の ts)。 rules 行の変更 (C5)、 閾値変更 (A2)、 憲法改訂 (N4) が要求する。
-    relationships: [rules 行, 対話面, 承認 event]
+    definition: user 裁定を一意に指す id。 器が打った裁定 event (RulingReceived) の ts (UTC・ADR-0037) で、 rules 行の ruling 欄が user <ts> の形で指し、 doctor が同じ分の event の有無を読む。 rules 行の変更 (C5)、 閾値変更 (A2)、 憲法改訂 (N4) が要求する。
+    relationships: [rules 行, 対話面, 承認 event, 裁定 event]
+  - canonical: 裁定 event
+    domain: consumer
+    aliases: [RulingReceived]
+    definition: 便 (run) を持たない裁定 (rules 行の値・閾値・方針) を逐語付きで残す event の kind (actor = human・bead と rules 行 id は任意)。 対話面の席の口 seat ruling add だけが書く (ADR-0037・設計 docs/design/fleet-event-log.md §9)。 便の不可逆操作の承認 (承認 event・ApprovalReceived) とは別の kind で、 到達点の計測では承認と同じ側に数える。
+    relationships: [裁定 id, 承認 event, 対話面, 直命の表, rules 行]
   - canonical: RuleKind
     domain: consumer
     definition: 規則の種類を閉じた列挙で表す enum。 網羅 match 必須で、 未実装は compile error (C1)。

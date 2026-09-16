@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="generator" content="folio ADR-pack assembler (folio-bwc / instance#2) — deterministic structure, prose slots unfilled">
-<title>便の起動は器の dispatcher が行う (審査を通った契約を列に入れ、 依存・交差・受付を満たす便を自動で起こす・planner の手動介入は typed な口)</title>
+<title>run 無しの裁定も承認 event として器が持つ (event kind RulingReceived・逐語は detail・裁定 id は器が打つ ts・書き手は対話面の席の口 1 つ・manifest の裁定 id との突合は doctor)</title>
 <style>
 /* ===========================================================================
    folio human-layer design system — core.css (S3 / folio-8oc プロトタイプ)
@@ -455,14 +455,14 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
     "schema": "https://schema.org/",
     "folio": "https://folio.dev/spec/v1/"
   },
-  "@id": "./ADR-0034-dispatcher-starts-reviewed-contracts-automatically.html",
+  "@id": "./ADR-0037-rulings-without-a-run-are-approval-events.html",
   "@type": "schema:TechArticle",
   "dc:isPartOf": [
     {
       "@id": "./README.html"
     }
   ],
-  "dc:title": "便の起動は器の dispatcher が行う (審査を通った契約を列に入れ、 依存・交差・受付を満たす便を自動で起こす・planner の手動介入は typed な口)",
+  "dc:title": "run 無しの裁定も承認 event として器が持つ (event kind RulingReceived・逐語は detail・裁定 id は器が打つ ts・書き手は対話面の席の口 1 つ・manifest の裁定 id との突合は doctor)",
   "folio:version": "0.1.0",
   "folio:stakeholders": [
     "Developer",
@@ -471,43 +471,34 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
   ],
   "dc:references": [
     {
-      "@id": "../spec/constitution.html#c2"
+      "@id": "../spec/constitution.html#c7"
     },
     {
-      "@id": "../spec/constitution.html#c10"
+      "@id": "../spec/constitution.html#c5"
     },
     {
       "@id": "../spec/constitution.html#c15"
     },
     {
-      "@id": "../spec/constitution.html#c16"
+      "@id": "../spec/constitution.html#c3"
     },
     {
-      "@id": "../spec/constitution.html#n2"
+      "@id": "../spec/constitution.html#n1"
     },
     {
-      "@id": "../spec/constitution.html#a4"
+      "@id": "../spec/srs.html#FR41"
     },
     {
-      "@id": "../spec/srs.html#FR30"
+      "@id": "../spec/srs.html#FR22"
     },
     {
-      "@id": "../spec/srs.html#FR36"
-    },
-    {
-      "@id": "../spec/srs.html#FR39"
-    },
-    {
-      "@id": "../spec/srs.html#FR49"
-    },
-    {
-      "@id": "../spec/srs.html#NFR4"
+      "@id": "./ADR-0004-mvp-persistence-and-cross-version-formats.html"
     },
     {
       "@id": "./ADR-0016-default-delivery-structure-and-typed-question-record.html"
     },
     {
-      "@id": "./ADR-0019-parallel-runs-exclude-overlap-at-intake-and-runner-resolves-conflicts.html"
+      "@id": "./ADR-0031-working-memory-is-held-by-the-vessel-directives-status-and-hooks.html"
     }
   ]
 }
@@ -519,165 +510,165 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
 <nav class="breadcrumb" aria-label="パンくず"><ol>
   <li><a href="../index.html">design-intent</a></li>
   <li><a href="./README.html">decisions</a></li>
-  <li aria-current="page">ADR-0034</li>
+  <li aria-current="page">ADR-0037</li>
 </ol></nav>
 <!-- /folio:chrome-top -->
 <div class="page" data-component="requirement-type-color-tokens">
 <header data-component="doc-cover-band">
-<p class="cover-eyebrow"><span class="doc-type">設計判断記録 (ADR)</span> <span>scribe2 — dispatcher</span></p>
-<h1>便の起動は器の dispatcher が行う (審査を通った契約を列に入れ、 依存・交差・受付を満たす便を自動で起こす・planner の手動介入は typed な口)</h1>
-<p class="cover-sub">便の起動を planner → 管理席 → launcher の中継 (席の手番) から外し、 契約が出来た直後の審査と器が既に持つ判定 (台帳の依存・write-set の交差・受付) だけで自動的に起こす。 順序は planner の介入 first → 契約の priority → 起票順で決める (hold は止め、 release で戻す)。</p>
-<div class="summary-card"><span class="ic"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#ffe8a8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span><div><p class="lab">この判断が約束すること (1 文サマリ)</p><p class="txt" data-prose-slot="cover-summary" data-slot-id="cover-summary">便を起こす仕事を、planner と管理席の中継から器へ移します。契約が出来た直後に審査し、通った契約は自動で列に入り、依存と write-set の交差と受付を満たしたものから器が起こします。順番は planner の印 first、契約の priority、起票順で決め、管理席は質問と判定の中継と着地だけを担います。</p></div></div>
-<div class="cover-meta"><span class="m"><span class="k">状態</span><span class="v">accepted</span></span><span class="m"><span class="k">選択肢</span><span class="v">5件 (OPT1–OPT5)</span></span><span class="m"><span class="k">結果</span><span class="v">良い 3 / トレードオフ 3</span></span><span class="m"><span class="k">版</span><span class="v">v0.1.0 / 2026-09-15</span></span></div>
-<div class="reader-chip" data-component="cross-doc-ref-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 正当化する要件: <b>SRS-SCRIBE2-MVP</b> の <b>FR30・FR39・FR49・FR36</b></div>
+<p class="cover-eyebrow"><span class="doc-type">設計判断記録 (ADR)</span> <span>scribe2 — 裁定の記帳</span></p>
+<h1>run 無しの裁定も承認 event として器が持つ (event kind RulingReceived・逐語は detail・裁定 id は器が打つ ts・書き手は対話面の席の口 1 つ・manifest の裁定 id との突合は doctor)</h1>
+<p class="cover-sub">憲法 C7.2 は受け取った承認をすべて逐語付きの承認 event として持てと言うが、 便 (run) の無い裁定 (rules 行の値・閾値・方針) は台帳の散文にしか無く器の event は 0 件だった。 run を持たない event kind を 1 つ足し、 対話面の席の口 1 つで書き、 rules 行の裁定 id と突合できるようにする。</p>
+<div class="summary-card"><span class="ic"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#ffe8a8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span><div><p class="lab">この判断が約束すること (1 文サマリ)</p><p class="txt" data-prose-slot="cover-summary" data-slot-id="cover-summary">user から受けた「値や方針の裁定」を、便（pipeline の 1 走行）が無くても器の記録に逐語で残します。記録の種類を 1 つ足し、書けるのは user と話す席（対話面）の口 1 つだけにします。裁定の印（id）は器が打った時刻で、規則の表の裁定 id と突き合わせられるようにし、突き合わせは doctor が読んで名指します。</p></div></div>
+<div class="cover-meta"><span class="m"><span class="k">状態</span><span class="v">accepted</span></span><span class="m"><span class="k">選択肢</span><span class="v">5件 (OPT1–OPT5)</span></span><span class="m"><span class="k">結果</span><span class="v">良い 3 / トレードオフ 3</span></span><span class="m"><span class="k">版</span><span class="v">v0.1.0 / 2026-09-16</span></span></div>
+<div class="reader-chip" data-component="cross-doc-ref-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 正当化する要件: <b>SRS-SCRIBE2-MVP</b> の <b>FR41・FR67・FR22</b></div>
 <div data-component="approval-block">
-<div class="sign"><span class="role">裁定 (user)</span><span class="who">user</span><span class="when">2026-09-15 裁定 (対話面・逐語は台帳 s2-07l notes 12:5xZ)</span><span class="stamp self">裁定済</span></div>
-<div class="sign"><span class="role">設計 (planner)</span><span class="who">planner</span><span class="when">2026-09-15 起票 (docs/design/dispatcher.md)</span><span class="stamp self">作成</span></div>
+<div class="sign"><span class="role">裁定 (user)</span><span class="who">user</span><span class="when">2026-09-16 (対話面・本 ADR は C7.2 の適用の記録で憲法の条文と閾値を動かさない・裁定の逐語は台帳 s2-07l.386 の notes)</span><span class="stamp self">裁定済</span></div>
+<div class="sign"><span class="role">設計 (planner)</span><span class="who">planner</span><span class="when">2026-09-16 起票 (docs/design/fleet-event-log.md §9・契約表の行 b / dialogue-surface.md §4・行 h)</span><span class="stamp self">作成</span></div>
 </div>
-<div class="reader-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 想定読者: scribe2 の開発 session (planner / admin) と user — pipeline の内部構造の専門知識は不要 (専門語はやさしい言葉を併記)</div>
+<div class="reader-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 想定読者: scribe2 の開発 session (planner / admin) と user — event log の内部構造の専門知識は不要 (専門語はやさしい言葉を併記)</div>
 </header>
 <!-- folio:chrome-toc -->
 <!-- /folio:chrome-toc -->
-<section data-component="chapter-deck-band" class="tint-info"><span class="num">01</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 2v6m0 0L9 5m3 3l3-3"/><circle cx="12" cy="14" r="6"/></svg> 背景 / なぜこの判断が要るか</span><h2>いま何が問題か (確定方式を決める力学)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-01">なぜ今この判断が要るのかを、当日の実測から説明します。便の起動が planner → 管理席 → launcher の中継に乗っていて、着地から次の起動まで席の手番の待ちが乗り、優先便の後回しと器に無い上限の散文が事故として出ました。判定はすべて器が持っています。</p></section>
+<section data-component="chapter-deck-band" class="tint-info"><span class="num">01</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 2v6m0 0L9 5m3 3l3-3"/><circle cx="12" cy="14" r="6"/></svg> 背景 / なぜこの判断が要るか</span><h2>いま何が問題か (確定方式を決める力学)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-01">なぜこの判断が要るのかを、実測と現物から説明します。器の記録に承認の event が 1 件も無く、その日の裁定はすべて台帳の散文にだけ在りました。既存の承認 event は便の id を必ず要り、便の無い裁定を書く口がありません。一方で便を持たない記録の種類は既に 5 つ在り、規則の表には裁定 id の形も在ります。</p></section>
 <div class="chapbody">
 <div data-component="adr-context-list">
-<div data-component="adr-context-row"><span class="cxid">CTX1</span><div class="cxbody"><p class="cxh">便の起動が 2 席の中継に乗っている</p><p class="cxd">ADR-0016 §2.1 は管理席の仕事の 1 つ目を「dispatch された契約を pipe run で流す」と定め、 planner が便ごとに dispatch を書き、 管理席が交差を手で測って launcher を撃つ。 2026-09-15 の実測では、 着地から次の起動まで数分〜十数分の待ちが便ごとに乗り、 planner が順序を誤って user が名指した優先便を後回しにする事故 (11:47Z) と、 器に無い「同時 3 便」の上限を席の散文で持っていた事故 (11:5xZ) が起きた。</p></div></div>
-<div data-component="adr-context-row"><span class="cxid">CTX2</span><div class="cxbody"><p class="cxh">起動に要る判定は器が全部持っている</p><p class="cxd">台帳の依存 (bd ready)・live 便との write-set の交差 (FR39・intake の 1 関数)・受付の余地と host の memory (contract-source.md §3 / gate-cost.md §3.2)・契約の審査 (FR49・審査の段)。 席がしているのは、 これらの値を読み直して launcher を撃つことだけである。 前提が 2 つ = 審査の段 (設計 contract-source.md の契約表の行 (c)・s2-07l.241) と、 設計 doc の契約表の行から intake が契約 file を生成する口 (同 契約表の行 (b)・s2-07l.209)。 後者が無いと便の契約 file は管理席の手順 (bead の acceptance を写す script) でしか作れず、 器は起動を組めない。</p></div></div>
-<div data-component="adr-context-row"><span class="cxid">CTX3</span><div class="cxbody"><p class="cxh">user の裁定</p><p class="cxd">2026-09-15 12:5xZ に user は「審査を通った契約は write-set が被っていなければどんどん dispatch の列<span class="term" data-component="plain-language-term-inline" data-term="列">起動を待つ契約の並び</span>に自動的に入るべき」「優先度は契約のときに planner が設定し、 それをもとに自動的に dispatcher<span class="term" data-component="plain-language-term-inline" data-term="dispatcher">便を自動で起こす係</span> に入り、 管理席は仕事を pipeline に委譲する仕組みを器として作るべき」「user が最優先を言ったら planner が後から手動で順番を入れ替えられるように」と裁定した (逐語は台帳)。 同日 13:4xZ に「planner が作ったらその直後に lens は審査すべき」と裁定し (審査の時点 = 契約が出来た直後・起動の瞬間ではない)、 13:5xZ に残りの論点 (first が priority より上・介入は 3 つ・契機は tick と land・FR30 の改訂は /folio-architect の周) を planner の推奨どおりと裁定した。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX1</span><div class="cxbody"><p class="cxh">承認 event が器に 0 件で、 裁定は台帳の散文にしか無い</p><p class="cxd">管理席の実測 (2026-09-16 03:35Z・母集団 = event log の全 kind の件数) で ApprovalRequested と ApprovalReceived は 0 件、 pipe report も human_events=0。 同日の user 裁定 (rules 行の値・憲法 A2 の閾値・口座選定の方針) はすべて台帳の acceptance / notes の散文にだけ在る。 憲法 C15.2 (rule を変える PR と台帳項目は裁定 id<span class="term" data-component="plain-language-term-inline" data-term="裁定 id">その裁定を指す時刻の印</span> を参照) は満たすが、 C7.2 (受け取った承認はすべて逐語付きの承認 event) は満たしていない。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX2</span><div class="cxbody"><p class="cxh">現物 — 承認 event は run を必須に持ち、 run の無い裁定を書く口が無い</p><p class="cxd">EventKind::ApprovalReceived (actor = human) は在り、 pipe approve --words と fleet record で書けるが、 どちらも run と bead を要る形である。 run が立つ前に対話面<span class="term" data-component="plain-language-term-inline" data-term="対話面">user と話す唯一の席</span> (planner の席・rules 行 R-C7-1) で受ける裁定 (契約の rules 行の値・A2 の閾値・方針) を記す口は無い。 run を持たない event kind は既に 5 つ在る (口座残量 2・席の登録・口座の退役と復帰・schema 版は 1 のまま・ADR-0017 の口座残量と ADR-0026 の登録と退役の前例) ので、 run の有無は kind ごとに決まる形が現物である。 直命の表 (ADR-0031 §2.1・FR65) も run を持たず逐語を運ぶ kind として設計されている。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX3</span><div class="cxbody"><p class="cxh">裁定 id の形は manifest の行に既に在る</p><p class="cxd">rules 行の ruling 欄は「user &lt;UTC の時刻&gt;」の形 (例 = 分までの ts) で裁定を名指す。 裁定が event に無いと、 この id が指す先 (逐語) が台帳の散文にしか無く、 憲法 C14.2 の向き (文書と manifest の drift を機械が見る) の裁定版が無い。 CI は private な台帳と host の event log に届かないので、 突合は doctor の面 (FR51 の台帳 lint と同じ置き場) になる。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX4</span><div class="cxbody"><p class="cxh">憲法の向き</p><p class="cxd">C7 は承認を対話面 1 つ (R-C7-1) を通して受け、 C7.2 は受け取った承認をすべて逐語付きの承認 event として記録する。 本 ADR は C7.2 の「承認」を、 A2 の user ruling と C5 の裁定 id が指す裁定を含むと読む解釈の記録である (憲法の条文は動かさない・解釈が要る変更は ADR を書く条件)。 C5 は rules 行の変更に裁定 id を要する。 C15 は台帳を task と裁定だけに使う (裁定の記帳先は台帳でよいが、 C7.2 の event はそれとは別に要る)。 C3 は状態を 1 つの DB (event log) に置く。 N1 は不可逆な削除をしない (append-only の log に偽の run id を書いて後から消す形は取れない)。 ADR-0004 §2.5 は schema の非互換な変更で版を上げる (kind の追加は既存の行をすべて読める側)。</p></div></div>
 </div>
 </div>
-<section data-component="chapter-deck-band" class="tint-brand"><span class="num">02</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3v18"/><path d="M5 7l-3 6h6z"/><path d="M19 7l-3 6h6z"/><path d="M3 21h18"/></svg> 判断を縛る力 / 評価の軸</span><h2>選択肢を測るものさし (安全・速さ)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-02">判断を評価する 4 本のものさしです。並列度を席の手番に依存させないこと、判定は器の既存の実装を使うこと、planner の産物は契約と priority と介入だけにすること、起動は可逆でも止める口と観測は typed に持つことです。</p></section>
+<section data-component="chapter-deck-band" class="tint-brand"><span class="num">02</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3v18"/><path d="M5 7l-3 6h6z"/><path d="M19 7l-3 6h6z"/><path d="M3 21h18"/></svg> 判断を縛る力 / 評価の軸</span><h2>選択肢を測るものさし (安全・速さ)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-02">判断を評価する 4 本のものさしです。受けた裁定を便の有無で漏らさないこと、既存の承認 event の意味と読み手を変えないこと、書き手を対話面の席の口 1 つに限ること、規則の表の裁定 id と突き合わせられることです。</p></section>
 <div class="chapbody">
 <table data-component="adr-driver-table"><tbody>
-<tr data-component="adr-driver-row"><td class="drid">DR1</td><td>並列度を席の手番に依存させない (user 直命 = 並列度を下げる判断は承認が要る) <span class="drg">台帳 s2-07l notes 2026-09-15T11:5xZ / SRS FR30</span></td></tr>
-<tr data-component="adr-driver-row"><td class="drid">DR2</td><td>判定は器の既存の 1 実装を使い、 席が読み直さない <span class="drg">憲法 C2 / C3.3 / ADR-0019 (交差は入口で排他・待ち行列と同時本数の上限は別途送り = 本 ADR が引き取る)</span></td></tr>
-<tr data-component="adr-driver-row"><td class="drid">DR3</td><td>planner の産物は契約と priority と typed な介入<span class="term" data-component="plain-language-term-inline" data-term="介入">planner が順番を動かす印</span>だけ (散文の順序を持たない) <span class="drg">憲法 N2 / C15 (台帳は task と裁定)</span></td></tr>
-<tr data-component="adr-driver-row"><td class="drid">DR4</td><td>起動は可逆 (承認は要らない) だが止める口と観測は typed に持つ <span class="drg">憲法 A4.3 / C10 / NFR4</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR1</td><td>受け取った裁定はすべて逐語付きの event になる (run の有無で漏らさない) <span class="drg">憲法 C7.2 / SRS FR41</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR2</td><td>既存の承認 event (run の不可逆操作の承認・FR15 / FR16) の意味と読み手を変えない <span class="drg">SRS FR15 / FR16 / ADR-0016 §2.2 / §2.3 / ADR-0004 §2.5</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR3</td><td>書き手は対話面の席の口 1 つ (R-C7-1 の役割の席からしか書けない・偽の run id を要らない) <span class="drg">憲法 C7 / N1 / SRS FR41</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR4</td><td>rules 行の裁定 id と event が突合できる (裁定 id は 器が打つ ts・突合は doctor が読むだけ) <span class="drg">憲法 C5 / C14.2 の向き / C10.2 (doctor は判定しない)</span></td></tr>
 </tbody></table>
 </div>
-<section data-component="chapter-deck-band" class="tint-violet"><span class="num">03</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M8.5 6H13a3 3 0 0 1 3 3v.5M8.5 18H13a3 3 0 0 0 3-3v-.5"/></svg> 検討した選択肢 / 3 つの確定方式</span><h2>それぞれの利点と欠点を並べる</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-03">候補を 5 つ並べます。器に dispatcher を持つ案、管理席の手順を自動化する案、現行の中継のままの案、台帳の側で自動化する案、そして審査を起動の瞬間まで遅らせる案です。</p></section>
+<section data-component="chapter-deck-band" class="tint-violet"><span class="num">03</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M8.5 6H13a3 3 0 0 1 3 3v.5M8.5 18H13a3 3 0 0 0 3-3v-.5"/></svg> 検討した選択肢 / 3 つの確定方式</span><h2>それぞれの利点と欠点を並べる</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-03">候補を 5 つ並べます。便を持たない記録の種類を 1 つ足す案、既存の承認 event の便 id を任意にする案、偽の便 id で既存の口に書く案、台帳の散文を正本にする今の形、規則の表に逐語を書く案です。</p></section>
 <div class="chapbody">
 <div class="opt-grid">
 <div data-component="adr-option-card" class="chosen">
-<div class="opt-head"><span class="opt-id">OPT1</span><span class="opt-name">器の dispatcher — 審査 PASS の契約を列に入れ、 tick と land の直後に条件を満たす便を自動で起こす</span><span class="opt-verdict chosen">採用</span></div>
-<p class="opt-sum">列の入力は「台帳の依存が閉じた ∧ 現在の契約の sha に対する審査が PASS」の契約。 審査は契約が出来た直後に 1 回撃ち、 verdict を契約の sha に紐づけて記録し、 起動の pipe run は同じ sha の PASS を再利用する。 起動条件は「live 便との write-set の交差 0 ∧ 受付 (余地・memory) を通る」。 順序は planner の介入 first → priority → 起票順 (hold は起こさない・release で戻す)。 契機は tick と land の直後。 列と理由 (なぜまだ出ていないか) を typed に列挙する口を持つ。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT1">契約が出来た直後に lens が審査し、通った契約だけが「起動を待つ契約の並び」に入ります。器は条件がそろった便から自動で起こし、起動のときに同じ契約を審査し直しません。planner は契約に priority を付け、急ぐときは first、止めたいときは hold の印を付けるだけです。列の口を見れば、どの便が何を待っているかが 1 行ずつ分かります。</span>
+<div class="opt-head"><span class="opt-id">OPT1</span><span class="opt-name">run を持たない event kind RulingReceived を 1 つ足し、 対話面の席の口 seat ruling add が書く</span><span class="opt-verdict chosen">採用</span></div>
+<p class="opt-sum">EventKind の末尾に RulingReceived (actor = human・run と bead は kind の規則で run 無し・bead と rule は任意・detail = 逐語で空なら書かない・schema 版 1 のまま) を足す。 書く口は seat ruling add --target T --words &lt;逐語&gt; [--bead B] [--rule ID] の 1 つで、 T の登録 row の役割が R-C7-1 の役割でなければ typed に断る。 裁定 id は器が打った event の ts。 pipe report は rulings=&lt;n&gt; を出し、 人由来 event のうち承認と見なす kind に RulingReceived を足す。 doctor は manifest の ruling 欄が user &lt;ts&gt; の形の行ごとに同じ分の ts の RulingReceived が在るかを読んで名指す (判定しない)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT1">記録の種類に「裁定を受けた」を 1 つ足します。便の id は持たず、user の言葉をそのまま持ち、空なら書きません。書けるのは user と話す席の口 1 つだけで、その席でなければ断られます。印は器が打った時刻です。到達点の計測では承認と同じ側に数え、doctor は規則の表の裁定 id ごとに同じ時刻の記録が在るかを読んで名指します。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>着地から次の起動までの待ちが席の手番から消える</li>
-<li>順序が器の 1 関数で決まり、 席が優先便を後回しにする誤りが構造で消える</li>
-<li>介入 (first / hold) が記録に残り、 rebrief と tick の DATA で見える</li>
+<li>C7.2 が run の無い裁定にも成立し、 rules 行の裁定 id が指す逐語を器から引ける</li>
+<li>既存の ApprovalReceived (run の承認) の意味・読み手・FR16 の再開の経路を 1 字も変えない</li>
+<li>run 無しの kind<span class="term" data-component="plain-language-term-inline" data-term="run 無しの kind">便に属さない記録の種類</span> の前例 (口座残量・登録・退役) と同じ読み手の形で、 schema 版を上げない</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>器が台帳 (bd) を子 process で読む面が 1 つ増える (rebrief の read_ledger を共用・timeout は rules 行)</li>
-<li>審査の段 (s2-07l.241) と契約表からの intake (s2-07l.209) が前提で、 その 2 便の後にしか入らない</li>
-<li>QUESTION と Gated FAIL の裁定は依然 planner の手番 (本 ADR の対象外)</li>
+<li>EventKind の variant と key (rule) が増え、 literal 構築点・件数 pin・property の生成器・snapshot が契約に載る</li>
+<li>裁定を受けた turn で口を撃つ作法が planner の雛形に 1 行増える (撃ち忘れは doctor の名指しで見える)</li>
+<li>manifest の古い裁定 id (分が曖昧な形) は突合の母集団に入らず、 doctor は skipped の件数で数えるだけになる</li>
 </ul></div></div>
 </div>
 <div data-component="adr-option-card" class="rejected">
-<div class="opt-head"><span class="opt-id">OPT2</span><span class="opt-name">管理席が tick ごとに台帳の ready を漁って出す (手順の自動化)</span><span class="opt-verdict rejected">不採用</span></div>
-<p class="opt-sum">器は変えず、 管理席の tick の手順に「ready を読み交差を測って launcher を撃つ」を足す。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT2">器は変えず、管理席が定期的に台帳を読んで起動する手順を足します。手順が散文のまま残り、席が止まると起動も止まります。</span>
+<div class="opt-head"><span class="opt-id">OPT2</span><span class="opt-name">ApprovalReceived の run を任意にし、 run 無しの承認も同じ kind で書く</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">既存の kind の run 必須を緩め、 run の無い行を承認として読む。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT2">既存の承認 event の便 id を任意にする案です。記録の種類は増えませんが、便の操作の承認と値の裁定が 1 つの種類に混ざり、古い読み手が壊れた行と読みます。</span>
+<div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
+<li>kind を増やさない</li>
+</ul></div><div class="cons"><h4>− 欠点</h4><ul>
+<li>「run の不可逆操作の承認」(FR15 / FR16・resume の経路が読む) と「値や方針の裁定」が 1 つの kind に混ざり、 読み手が run の有無で分岐する</li>
+<li>旧い読み手は run の無い ApprovalReceived を malformed と読む。 旧い読み手が読めない点は kind の追加 (未知の kind と未知の key) でも同じで、 違いは既存 kind の意味と読み手を動かさずに済むかどうか</li>
+</ul></div></div>
+</div>
+<div data-component="adr-option-card" class="rejected">
+<div class="opt-head"><span class="opt-id">OPT3</span><span class="opt-name">fleet record に bead 名義の偽の run id を渡して ApprovalReceived を書く</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">口を足さず、 run id の欄に bead id や印を入れて既存の口で書く。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT3">既存の口に偽の便 id を渡して書く案です。器を変えずに済みますが、消せない記録に作り物の id が残り、便の数が狂います。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
 <li>器の変更が無い</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>判定が席の散文の手順に残り、 順序と交差の読み直しが席ごとに揺れる (N2)</li>
-<li>席が止まると起動も止まる (自律の穴が席の生存に縛られる)</li>
+<li>append-only の log に捏造の run id が残り、 N1 で消せない</li>
+<li>replay が偽の run を便として数える (report の runs が汚れる)</li>
 </ul></div></div>
 </div>
 <div data-component="adr-option-card" class="rejected">
-<div class="opt-head"><span class="opt-id">OPT3</span><span class="opt-name">planner の dispatch file と管理席の中継 (現行・ADR-0016 §2.1)</span><span class="opt-verdict rejected">不採用</span></div>
-<p class="opt-sum">planner が便ごとに dispatch を書き、 管理席が受けて起動する。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT3">今の形です。planner が便ごとに dispatch を書き、管理席が交差を測って起動します。当日の実測で、待ちと順序の誤りがここで起きました。</span>
+<div class="opt-head"><span class="opt-id">OPT4</span><span class="opt-name">台帳の notes を裁定の正本とし、 event は持たない (現行)</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">裁定は台帳の散文に書き、 rules 行は裁定 id で台帳を指す。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT4">今の形です。台帳の散文に裁定を書き、規則の表が裁定 id で台帳を指します。運用は回っていますが、憲法が求める逐語付きの event が無く、id の指す先を機械が確かめられません。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>契約の所有者が起動の瞬間を見ている</li>
+<li>既に運用されている</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>2026-09-15 の実測どおり、 待ちと順序の誤りが席の手番に乗る</li>
-<li>「上限 3」のような器に無い制限が散文で入り込む</li>
+<li>憲法 C7.2 (承認 event) に反する。 台帳は規律を持たない (C15) が、 逐語の唯一の置き場が台帳では器から引けない</li>
+<li>裁定 id の指す先を機械が確かめられない</li>
 </ul></div></div>
 </div>
 <div data-component="adr-option-card" class="rejected">
-<div class="opt-head"><span class="opt-id">OPT4</span><span class="opt-name">台帳 (bd) の側で自動化する (台帳の hook が起動を撃つ)</span><span class="opt-verdict rejected">不採用</span></div>
-<p class="opt-sum">bd の hook や外部 script が ready を検知して launcher を撃つ。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT4">台帳の仕組みに起動を任せます。台帳に規律と実行を置くことになり、Rust の外の経路が増えます。</span>
+<div class="opt-head"><span class="opt-id">OPT5</span><span class="opt-name">裁定の逐語を rules manifest の行に持つ</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">manifest の ruling 欄に逐語を書き、 event を持たない。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT5">規則の表の行に逐語を書く案です。裁定と値が同じ行に並びますが、公開されている file に user の言葉を写すことになり、値を持たない裁定の置き場もありません。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>器の変更が小さい</li>
+<li>裁定と値が同じ行に在る</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>台帳に規律と実行を置く (憲法 C15 に反する)・Rust の外の経路 (C12 / ADR-0009)</li>
-</ul></div></div>
-</div>
-<div data-component="adr-option-card" class="rejected">
-<div class="opt-head"><span class="opt-id">OPT5</span><span class="opt-name">審査は起動の瞬間 (pipe run の中) に撃ち、 列の入力に審査を持たない (planner の初案)</span><span class="opt-verdict rejected">不採用</span></div>
-<p class="opt-sum">列には依存が閉じた契約が全部入り、 dispatcher が起こす瞬間の pipe run の中で審査 (intake の直後) を撃つ。 FAIL の便は次の周から理由付きで待つ。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT5">審査を、契約が出来たときではなく便を起こす瞬間まで遅らせる案です。審査の段の位置を変えずに済み、verdict の置き場も増えませんが、契約の不備が起動の順番が回ってくるまで見えず、planner が手空きのうちに直せる時間を捨ててしまいます。</span>
-<div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>審査の段 (s2-07l.241) の位置を変えず、 verdict の置き場が増えない</li>
-</ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>契約の不備が起動が回ってきた時まで見えず、 planner の待ち時間が捨てられる (user 裁定 2026-09-15 13:4xZ = 時間の使い方)</li>
-<li>FAIL の便が run N+1 まで列を塞ぎ、 lens を run ごとに撃つ</li>
+<li>tracked で公開の manifest に user の逐語を写す (本 repo は公開面で、 口座名や user の逐語を tracked file に書かない制約に反する)</li>
+<li>値を持たない裁定 (方針・却下) の置き場が無い</li>
 </ul></div></div>
 </div>
 </div>
 </div>
-<section data-component="chapter-deck-band" class="tint-ok"><span class="num">04</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14 4l6 6-3 3-6-6z"/><path d="M11 7L4 14l3 3 7-7"/><path d="M3 21h10"/></svg> 採用した判断 / どの方式を選ぶか</span><h2>選んだ方式と、 それが守る要件 (cross-doc 照会)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-04">選んだ案と、それが要件書のどの要件を支えるかを示します。契約が出来た直後に審査し、通った契約を器の列に入れ、依存・交差・受付を満たす便を tick と land の直後に自動で起こします。数字の上限は持ちません。</p></section>
+<section data-component="chapter-deck-band" class="tint-ok"><span class="num">04</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14 4l6 6-3 3-6-6z"/><path d="M11 7L4 14l3 3 7-7"/><path d="M3 21h10"/></svg> 採用した判断 / どの方式を選ぶか</span><h2>選んだ方式と、 それが守る要件 (cross-doc 照会)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-04">選んだ案と、それが要件書のどの要件を支えるかを示します。便を持たない裁定の記録の種類を 1 つ足し、対話面の席の口 1 つで書き、印は器が打った時刻にします。到達点の計測ではこれを承認と同じ側に数え、doctor が規則の表の裁定 id と突き合わせて名指します。</p></section>
 <div class="chapbody">
 <div data-component="adr-decision-panel" id="decision">
 <p class="dec-kick">採用 — OPT1</p>
-<p class="dec-state">器 SHALL 契約が出来た直後に審査 (FR49) を 1 回撃ち、 verdict を契約の sha に紐づけて記録し、 現在の sha が PASS の契約 (細目 = 設計 doc §2・依存が閉じ、 acceptance が非空で memo でなく、 設計 pointer を持つ) を dispatcher の列に入れ、 列外の便も理由付きで列挙し、 tick と land の直後に、 台帳の依存が閉じ ∧ live 便との write-set の交差が 0 ∧ 受付 (余地・host の memory) を通る便を、 planner の typed な介入 first → priority → 起票順で自動的に起こす (起動は既存の pipe run = intake → Reviewed → spawn をそのまま撃ち、 Reviewed は同じ sha の PASS を再利用して lens を撃ち直さない)。 器 SHALL NOT 便の同時本数の数値上限を持つ。 planner SHALL 契約と priority と介入だけを書き、 管理席 SHALL 質問と gate の判定の中継と着地の運びだけを担う。 器 SHALL 列の各便に「まだ出ていない理由」を閉じた型で付けて列挙する口を持つ。</p>
-<span class="dec-plain" data-prose-slot="plain" data-slot-id="decision-plain">契約が出来た直後に審査し、通った契約は器の列に入り、依存・交差・受付を満たす便から器が自動で起こします。順番は planner の印 first、契約の priority、起票順の順で決まり、同時に何本という数字の上限は持ちません。planner は契約と priority と印だけを書き、管理席は質問と判定の中継と着地だけを担います。</span>
-<span class="dec-why" data-prose-slot="rationale" data-slot-id="decision-rationale">起動に要る判定は台帳の依存・write-set の交差・受付のどれも器が既に持っていて、席がしていたのはそれを読み直して launcher を撃つことだけでした。読み直しは待ちと誤りを生み、器に無い上限を散文で持ち込みました。判定と行為を器の同じ関数に置けば、待ちは交差と受付だけで決まり、介入も記録に残ります。</span>
+<p class="dec-state">本 ADR は C7.2 の「承認」に裁定 (A2 / C5) を含めて読む。 その上で器 SHALL 便を持たない裁定を承認 event として持つ = EventKind に RulingReceived (actor = human・run を持たない kind・bead と rule は任意の key・detail = user の逐語で空なら 1 byte も書かない・schema 版 1 のまま・既存の行はすべて読める) を末尾に足し、 裁定 id SHALL 器が打った event の ts とする。 器 SHALL この kind を対話面の席の口 1 つ (seat ruling add --state-dir S --target T --words &lt;逐語&gt; [--bead B] [--rule ID]) からだけ書き、 T の登録 row の役割が rules 行 R-C7-1 の役割でない周は typed に断り、 seat ruling ls で逐語付きに列挙する。 pipe report SHALL rulings の件数を出し、 人由来 event のうち承認と見なす kind を ApprovalReceived と RulingReceived の 2 つとする。 doctor SHALL manifest の ruling 欄が user &lt;ts&gt; の形の行ごとに、 同じ分の ts を持つ RulingReceived の有無を読んで名指し (母集団と対・判定しない)、 CI は撃たない。 既存の ApprovalReceived (run の不可逆操作の承認) と ApprovalRequested の意味・読み手・resume の経路 SHALL NOT 変わらない。 planner の雛形 SHALL 「裁定を受けた turn の中で seat ruling add を撃つ」の 1 行 (pointer 付き・規範文 0) を持つ。</p>
+<span class="dec-plain" data-prose-slot="plain" data-slot-id="decision-plain">便の無い裁定は、便を持たない記録の種類「裁定を受けた」として器に残します。user の言葉をそのまま持ち、空なら書きません。書けるのは user と話す席の口 1 つだけで、印は器が打った時刻です。到達点の計測では承認と同じ側に数え、doctor は規則の表の裁定 id ごとに同じ時刻の記録が在るかを読んで名指します。一覧の口で逐語付きに並べられます。突き合わせは doctor が読むだけで CI では撃ちません。既存の承認 event（要求と受領）の意味は変えず、planner の手引きに「裁定を受けた周にその口を撃つ」の 1 行を足します。</span>
+<span class="dec-why" data-prose-slot="rationale" data-slot-id="decision-rationale">憲法は受けた承認をすべて逐語付きの event として持てと言い、実測ではその event が 0 件でした。既存の承認 event は便の承認のために便 id を要り、そこを緩めると意味と読み手が混ざります。便を持たない記録の種類は既に在り、同じ形で 1 つ足せば既存を壊さずに済みます。印を器が打つ時刻にすれば、規則の表の裁定 id と同じ形になり、doctor が突き合わせて名指せます。</span>
 <div class="justify-box"><p class="jh">この判断が正当化する要件 (cross-doc 照会 → SRS-SCRIBE2-MVP)</p>
-<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR30" data-justifies-req="FR30" data-justifies-role="claim">FR30</a><span class="justify-role">claim</span><span class="justify-note">配送構造のうち「管理席が契約を pipeline に流す」の担い手が器の dispatcher に移る。 SRS への反映 (FR30 の response の 1 句) は user の /folio-architect の周で行う。</span></div>
-<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR39" data-justifies-req="FR39" data-justifies-role="claim">FR39</a><span class="justify-role">claim</span><span class="justify-note">intake の排他 (live 便との write-set の交差) を dispatcher が起動条件として同じ 1 関数で読む。</span></div>
-<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR49" data-justifies-req="FR49" data-justifies-role="claim">FR49</a><span class="justify-role">claim</span><span class="justify-note">現在の契約の sha に対する審査 PASS が列に入る条件になる (PASS でない便は起こさない、 の対)。 FR49 の condition「便が intake を通ったとき」は「契約が出来た直後」へ改める (SRS への反映は FR30 と同じ user の /folio-architect の周)。</span></div>
-<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR36" data-justifies-req="FR36" data-justifies-role="claim">FR36</a><span class="justify-role">claim</span><span class="justify-note">dispatcher は口座選定を再実装せず、 起こす便ごとに FR36 の既存経路 (便用の選定) を通す = 自動起動でも口座の選定と除外が満たされる。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR41" data-justifies-req="FR41" data-justifies-role="claim">FR41</a><span class="justify-role">claim</span><span class="justify-note">承認の記帳が R-C7-1 の対話面の役割の権能であることを、 run 無しの裁定にも同じ口で通す (役割は FR40 の登録 row から解き、 違えば断る)。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR67" data-justifies-req="FR67" data-justifies-role="claim">FR67</a><span class="justify-role">claim</span><span class="justify-note">planner の雛形に「裁定を受けた turn で口を撃つ」の 1 行を pointer 付きで足す = 対話面の作法の行が 1 本増える (契約表の行 h)。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR22" data-justifies-req="FR22" data-justifies-role="claim">FR22</a><span class="justify-role">claim</span><span class="justify-note">到達点の計測で人由来 event のうち承認と見なす kind に RulingReceived を足す。 「approval 以外が 0 件」の免除集合が 1 kind から 2 kind になる = 指標の意味を広げる変更であって、 裁定を書いても 0 件が保たれるのはその広げ方による。</span></div>
 <p class="justify-tgt">照会先: SRS-SCRIBE2-MVP — SRS: 設計 → 契約 → 実装 → 検証 → land を、 人の手を借りずに 1 本通す器（MVP）</p>
 </div>
 </div>
 </div>
-<section data-component="chapter-deck-band" class="tint-warn"><span class="num">05</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg> 結果 / 良い面とトレードオフ</span><h2>この判断で何が良くなり、 何を引き受けるか</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-05">この判断で良くなることと、代わりに引き受けることです。起動の待ちと順序の誤りが消える一方、器が台帳を読む面が増え、質問と判定の裁定は依然 planner の手番に残ります。</p></section>
+<section data-component="chapter-deck-band" class="tint-warn"><span class="num">05</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg> 結果 / 良い面とトレードオフ</span><h2>この判断で何が良くなり、 何を引き受けるか</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-05">この判断で良くなることと、代わりに引き受けることです。裁定の逐語を器から引けるようになり、書き手が 1 つに揃う一方、記録の種類が増えた分の連鎖が契約に載り、裁定を受けた周に口を撃つ手が 1 つ増え、過去の裁定は突き合わせに残ります。</p></section>
 <div class="chapbody">
 <div data-component="scope-summary-panel"><div class="scol in"><h3>✓ 良い結果</h3><ul>
-<li data-component="adr-consequence-pos"><span class="b">●</span>着地から次の起動までの待ちが 0 に近づき、 並列度が席の手番でなく交差と受付だけで決まる</li>
-<li data-component="adr-consequence-pos"><span class="b">●</span>順序の誤り (優先便の後回し) と散文の上限が構造で消え、 介入は記録として残る</li>
-<li data-component="adr-consequence-pos"><span class="b">●</span>rebrief と tick の DATA に列の状態 (何が何を待っているか) が typed に出る</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>rules 行の裁定 id が指す逐語を器の event から引け、 台帳の散文に頼らない (C7.2 の穴が閉じる)</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>裁定の書き手が対話面の席の口 1 つに揃い、 偽の run id や台帳の写しを持たない</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>doctor が「裁定 id は在るが event が無い rules 行」を名指し、 撃ち忘れが見える</li>
 </ul></div><div class="scol out"><h3>⚖ トレードオフ・代償</h3><ul>
-<li data-component="adr-consequence-neg"><span class="b">●</span>器が台帳を子 process で読む面が増える (timeout と読めない周の扱いは rebrief と同じ型で持つ)</li>
-<li data-component="adr-consequence-neg"><span class="b">●</span>質問 (FR31) と gate FAIL の裁定は依然 planner の手番で、 そこは本 ADR では速くならない</li>
-<li data-component="adr-consequence-neg"><span class="b">●</span>便の起動条件を判定する関数 (交差・余地・受付札) は intake の既存の関数を記帳せずに呼ぶ形にする必要があり、 その可視性の変更が契約に載る</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>EventKind の variant・key・件数 pin・literal 構築点・property の生成器・snapshot の連鎖が契約 1 本の write-set に載る</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>planner の作法が 1 行増え、 裁定を受けた turn で口を撃つ手が要る (撃ち忘れは doctor の名指しでしか見えない)</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>過去の裁定は突合に残る (event の無い rules 行は名指され、 分が曖昧な裁定 id は母集団に入らず件数だけ、 同じ分に複数の裁定 event<span class="term" data-component="plain-language-term-inline" data-term="裁定 event">user が決めた値や方針の答えの記録</span> が在る行は 1 件を一意に指せない)</li>
 </ul></div></div>
 </div>
-<section data-component="chapter-deck-band" class="tint-info"><span class="num">06</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg> 改訂関係と原則 / この判断の位置づけ</span><h2>版の系譜と、 行き着く原則 (照会終端)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-06">この ADR が版の系譜のどこに在るかと、判断が最後に行き着く原則です。ADR-0016 の管理席の仕事「dispatch された契約を pipe run で流す」の句を置き換え、ADR-0019 が別途送りにした待ち行列と同時本数の上限を引き取ります。他の節はそのままです。</p></section>
+<section data-component="chapter-deck-band" class="tint-info"><span class="num">06</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg> 改訂関係と原則 / この判断の位置づけ</span><h2>版の系譜と、 行き着く原則 (照会終端)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-06">この ADR が版の系譜のどこに在るかと、判断が最後に行き着く原則です。既存の決定記録は置き換えず、便の承認と直命の記録はそのままです。設計 doc の「便 id は必須」の記述だけを、記録の種類ごとの規則に読み替えます。</p></section>
 <div class="chapbody">
 <div data-component="adr-supersession">
 <p class="ss-row"><span class="ss-k">改訂状態</span>current</p>
 <p class="ss-row"><span class="ss-k">置き換える ADR</span>なし (新規)</p>
 <p class="ss-row"><span class="ss-k">置き換えられた</span>なし (現行)</p>
-<p class="ss-row">本 ADR は現行。 ADR-0016 §2.1 の管理席の仕事 (1)「dispatch された契約を pipe run で流す」の句は本 ADR が置き換える (担い手が器の dispatcher に移る・部分的な上書き・ADR-0016 の質問 record と中継の節は現行のまま)。 ADR-0019 が「本 ADR の決定ではない」として別途送りにした「排他で断られた契約の待ち行列と再投入」「同時に流す便の本数の上限」を本 ADR が引き取る (交差の排他は ADR-0019 のまま・数値上限を持たない判断は本 ADR の新規決定)。</p>
+<p class="ss-row">本 ADR は現行。 既存の ADR を置き換えない。 ADR-0016 §2.2 / §2.3 の承認 (run の Blocked からの再開・逐語は承認 event にだけ載る) と ADR-0031 §2.1 の直命の表 (user の発言の記録) はそのまま。 裁定は直命 (発言) とは別の kind で、 直命を閉じる記録が持つ裁定 id (FR65) は本 ADR の event の ts を指せる。 設計 fleet-event-log.md §3 の「run は必須」の記述は kind ごとの規則に読み替える (現物の前例に合わせる)。</p>
 </div>
 <div data-component="adr-principle">
-<p class="prin-id">照会終端 — PRIN-MACHINE-JUDGES-MACHINE-ACTS</p>
-<p class="prin-text">器が持つ判定を席が読み直して行為に変えない。 判定と行為を同じ器の 1 関数に置き、 席は判定の入力 (契約・priority・介入) だけを書く。</p>
+<p class="prin-id">照会終端 — PRIN-EVERY-RULING-IS-AN-EVENT</p>
+<p class="prin-text">user から受け取った承認と裁定は、 便の有無に関わらず、 逐語を持つ event として器の 1 つの log に残す。 台帳や散文は event の写しであって正本ではない。</p>
 <p class="prin-note">本 ADR の判断はこの原則に行き着く (これ以上は遡らない照会終端)。</p>
 </div>
 </div>
 <section data-component="chapter-deck-band" class="tint-brand"><span class="num">07</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg> 用語集 / この文書で使う専門語</span><h2>本文に出てくる専門語のやさしい説明</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-07">本文に出てくる専門語を、やさしい言葉で説明します。</p></section>
 <div class="chapbody">
 <div data-component="glossary-term-table">
-<div class="grow"><div class="gword">dispatcher<span class="en">dispatcher</span></div><div class="gdef">審査を通った契約の列を持ち、 依存・交差・受付を満たす便を tick と land の直後に自動で起こす器の口。 席の中継を置き換える。</div></div>
-<div class="grow"><div class="gword">列<span class="en">dispatch queue</span></div><div class="gdef">現在の sha の審査が PASS の契約のうちまだ起こしていないもの。 順序は first → priority → 起票順。</div></div>
-<div class="grow"><div class="gword">介入<span class="en">planner intervention</span></div><div class="gdef">first (最優先)・hold (止める)・release (戻す) の 3 つの typed な印。 user の直命の対で、 散文でなく列の状態として記録される。</div></div>
-<div class="grow"><div class="gword">まだ出ていない理由<span class="en">wait reason</span></div><div class="gdef">依存 (台帳)・交差 (相手の便)・受付 (余地・memory)・hold と、 列外の理由 (審査が無い / 審査 FAIL / 設計 pointer 無し) のどれかを閉じた型で持つ。 列の口が 1 便 1 行で列挙する。</div></div>
+<div class="grow"><div class="gword">裁定 event<span class="en">ruling event</span></div><div class="gdef">対話面で user が返した決定 (rules 行の値・閾値・方針・却下)。 便の不可逆操作の承認 (ApprovalReceived) とは別の kind RulingReceived で、 逐語を detail に持つ。</div></div>
+<div class="grow"><div class="gword">裁定 id<span class="en">ruling id</span></div><div class="gdef">器が打った裁定 event の ts (UTC)。 rules 行の ruling 欄が user &lt;ts&gt; の形で指し、 doctor が同じ分の event の有無を読む。</div></div>
+<div class="grow"><div class="gword">対話面<span class="en">dialogue surface</span></div><div class="gdef">承認と裁定を受ける唯一の席。 rules 行 R-C7-1 が役割を名指し、 その役割の登録 row を持つ席だけが裁定の event を書ける (憲法 C7)。</div></div>
+<div class="grow"><div class="gword">run 無しの kind<span class="en">run-less event kind</span></div><div class="gdef">便 id を持たない event の kind (口座残量・席の登録・口座の退役と復帰・裁定)。 読み手は kind ごとに run の有無を決め、 schema 版は 1 のまま。</div></div>
 </div>
 </div>
 </div>
 <footer class="foot" data-component="fidelity-sync-meta"><div class="ft-grid">
 <div class="ft-plain">このページは、大もとの機械データ (正本) から自動で組み立てられています。構造は機械が自動で検査し、内容が元データに忠実かは独立のレビューで確かめます。</div>
-<div data-audience="machine">機械SSoT: <b>ADR-0034.build.adr.yaml</b> &middot; 生成: <b>2026-09-15 13:44</b> &middot; 検証状態: <b>structure ✓ fabrication-free / prose ✓ 充填済 (fidelity ceiling → S5 対象)</b></div>
+<div data-audience="machine">機械SSoT: <b>ADR-0037.build.adr.yaml</b> &middot; 生成: <b>2026-09-16 18:12</b> &middot; 検証状態: <b>structure ✓ fabrication-free / prose ✓ 充填済 (fidelity ceiling → S5 対象)</b></div>
 <div class="tags" data-audience="machine"><span>folio design system</span><span>ADR-pack</span><span>folio engine B1 (instance#2)</span><span>cross-doc 照会</span></div>
 </div></footer>
 <!-- folio:chrome-bottom -->
 <nav class="prevnext" aria-label="前後の文書">
-  <a class="prevnext__prev" href="ADR-0033-core-lines-count-source-only-and-io-lives-in-a-boundary-crate.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">ADR-0033 — core の行数は本体だけを数え、 子 process を撃つ I/O 面は境界 crate へ分ける (上限 40,000 は上げない・binary は 1 つ・境界 crate にも上限)</span></a>
-  <a class="prevnext__next" href="ADR-0037-rulings-without-a-run-are-approval-events.html"><span class="prevnext__dir">次 &rarr;</span><span class="prevnext__title">run 無しの裁定も承認 event として器が持つ (event kind RulingReceived・逐語は detail・裁定 id は器が打つ ts・書き手は対話面の席の口 1 つ・manifest の裁定 id との突合は doctor)</span></a>
+  <a class="prevnext__prev" href="ADR-0034-dispatcher-starts-reviewed-contracts-automatically.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">便の起動は器の dispatcher が行う (審査を通った契約を列に入れ、 依存・交差・受付を満たす便を自動で起こす・planner の手動介入は typed な口)</span></a>
 </nav>
 <script>
 (function () {
