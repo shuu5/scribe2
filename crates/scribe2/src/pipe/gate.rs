@@ -32,6 +32,7 @@ pub use verify::{is_unreadable, run_checks, Check, Checks, Step, CHECKS};
 use crate::polarity::{OnFailure, Polarity, Timing};
 use super::confine::{self, Reason, Released};
 use super::contract::Contract;
+use super::lens_record::LensSource;
 use super::move_proof::{self, LensInput, NotPure};
 use super::{
     contract_path, emit, git_bytes, git_line, run_dir, verdict_path, worktree_path, Emit,
@@ -149,8 +150,8 @@ pub struct Gate<'a> {
     pub state_dir: &'a Path,
     /// 読み込み済みの契約。
     pub contract: &'a Contract,
-    /// lens のコマンド（無ければ `None`）。
-    pub lens: Option<&'a str>,
+    /// lens のコマンドの出所（`--lens` か run dir の写し・無い / 読めないは別の値・[`super::lens_record`]・§26）。
+    pub lens: &'a LensSource,
     /// 規則から読んだ線。
     pub limits: Limits,
     /// lock の待ち方。
@@ -332,8 +333,13 @@ fn decide(entry: &Gate<'_>, worktree: &Path, measured: &Measured) -> Result<(Ver
             entry.limits.lens_count
         ));
     }
-    let Some(cmd) = entry.lens else {
-        return inconclusive("lens が要るのに --lens が無い".to_owned());
+    // **無いと読めないは別の理由**（設計 §26・C10）: 写しの無い周は従来の字面・在って読めない周は path と理由。
+    let cmd = match entry.lens {
+        LensSource::Cmd(cmd) => cmd.as_str(),
+        LensSource::Absent => return inconclusive("lens が要るのに --lens が無い".to_owned()),
+        LensSource::Unreadable { path, reason } => {
+            return inconclusive(format!("lens の写し {} を読めない（{reason}）", path.display()));
+        }
     };
     // 純移動の周は渡した要約を run dir に残す（事後に読める・NFR4）。残せない周は判定に届かない。
     if let LensInput::Summary(summary) = &measured.input {

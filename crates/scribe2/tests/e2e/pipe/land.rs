@@ -6,6 +6,12 @@
 
 use super::*;
 use vessel::pipe::land;
+use vessel::pipe::run_dir;
+
+/// 審査が run dir に残す lens の cmd の写し（設計 pipeline.md §26・名は字面で持つ＝写しの名の変化も歯が測る）。
+fn lens_record_of(state: &Path, id: &str) -> PathBuf {
+    run_dir(state, id).join("lens.toml")
+}
 
 #[test]
 fn pipe_land_refuses_without_pass() {
@@ -117,8 +123,10 @@ fn pipe_land_rebase_without_lens_stops_inconclusive_and_keeps_main() {
     git(&repo, &["add", "-A"]);
     git(&repo, &["commit", "-q", "-m", "other"]);
     let moved = git(&repo, &["rev-parse", "refs/heads/main"]);
-    // `--lens` 無しの land: 追随（rebase）は済むが撃ち直しの gate は lens を得られず
-    // INCONCLUSIVE＝**land しない**（測れなかったを通ったに化けさせない・FR14 で測り直せる）。
+    // `--lens` 無しの land（審査が残した写し `lens.toml` も外す＝写しも flag も無い世界・§26）: 追随（rebase）は
+    // 済むが撃ち直しの gate は lens を得られず INCONCLUSIVE＝**land しない**（測れなかったを通ったに化けさせない・
+    // FR14 で測り直せる）。
+    fs::remove_file(lens_record_of(&state, &id)).expect("審査の写しを外せる");
     let out = land_once(&repo, &state, &id);
     assert_eq!(out.status.code(), Some(i32::from(RC_INCONCLUSIVE)), "lens 無しの撃ち直しは rc 3: {}", stderr_of(&out));
     let stdout = stdout_of(&out);
@@ -131,6 +139,139 @@ fn pipe_land_rebase_without_lens_stops_inconclusive_and_keeps_main() {
         "断った周は main を動かさない"
     );
     assert!(show_line(&repo, &state, &id).contains("stage=Gated"), "段は Gated（測り直せる側）");
+    clean(&[&repo, &state]);
+}
+
+// ───── lens の cmd の写し（設計 pipeline.md §26・`s2-07l.378`・接頭辞 `pipe_lens_record_`） ─────
+
+/// 審査（`pipe intake … --lens <cmd>`）は受けた cmd を `<run_dir>/lens.toml` に `schema = 1` / `cmd = "<逐語>"` の
+/// 2 行で写す。cmd の中の `"` と `'` は escape しない（素通し）。`--lens` の無い審査は写しを残さない（INCONCLUSIVE）。
+#[test]
+fn pipe_lens_record_review_writes_lens_toml() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    // 対: `--lens` の無い intake は審査が INCONCLUSIVE（終端）で写しを残さない。
+    let bare = run_pipe(&[
+        "intake", "--contract", &path.display().to_string(), "--bead", "b-bare",
+        "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
+        "--rules", &ceiling_rules(&state),
+    ]);
+    assert_eq!(bare.status.code(), Some(i32::from(RC_INCONCLUSIVE)), "lens 無しの審査は rc 3: {}", stderr_of(&bare));
+    let bare_id = run_id_of(&bare);
+    assert!(!lens_record_of(&state, &bare_id).exists(), "`--lens` の無い周は写しを書かない");
+    // 本命: `--lens` 付きの intake（helper は審査の偽 PASS lens を渡す）。
+    let id = intake(&repo, &state, &path);
+    let cmd = review_lens_pass(&state);
+    assert!(cmd.contains('"') && cmd.contains('\''), "fixture の cmd は両方の引用符を含む（escape しないを測る）: {cmd}");
+    let text = fs::read_to_string(lens_record_of(&state, &id)).expect("lens.toml が在る");
+    assert_eq!(text, format!("schema = 1\ncmd = \"{cmd}\"\n"), "2 行・二重引用符・逐語");
+    clean(&[&repo, &state]);
+}
+
+/// main が動いた便を `--lens` 無しで land → 写しの lens（審査の偽 PASS）で再 gate が起動して着地する
+/// （base は「lens が要るのに --lens が無い」で INCONCLUSIVE＝RED）。
+#[test]
+fn pipe_lens_record_land_regate_reads_it_when_flag_absent() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let marker = state.join("lens-ran");
+    let base = git(&repo, &["rev-parse", "refs/heads/main"]);
+    let id = gated_pass(&repo, &state, &path, &marker);
+    fs::write(repo.join("other.txt"), "other\n").expect("別便の変更を書ける");
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "other"]);
+    let moved = git(&repo, &["rev-parse", "refs/heads/main"]);
+    // 2 つの marker を外して「どの lens が起きたか」を効果で測る: gate の flag の lens（`lens-ran`）は起きず、
+    // 審査が写した lens（[`REVIEW_MARKER`]）が起きる。
+    fs::remove_file(&marker).expect("gate の marker を消せる");
+    fs::remove_file(state.join(REVIEW_MARKER)).expect("審査の marker を消せる");
+    let out = land_once(&repo, &state, &id);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "写しの lens で再 gate が通り land する: {}", stderr_of(&out));
+    let stdout = stdout_of(&out);
+    assert!(stdout.contains(&format!("rebase={base}..{moved}")), "追随は済む: {stdout}");
+    assert!(stdout.contains("verdict=PASS"), "撃ち直しの判定行: {stdout}");
+    assert!(stdout.contains("landed="), "land した: {stdout}");
+    assert!(state.join(REVIEW_MARKER).exists(), "起きたのは写しの lens");
+    assert!(!marker.exists(), "前の gate の flag の lens は起きない（record に無い）");
+    let new = git(&repo, &["rev-parse", "refs/heads/main"]);
+    assert_ne!(new, moved, "main が便の squash で進む");
+    assert_eq!(git(&repo, &["rev-parse", &format!("{new}^")]), moved, "squash の親は動いた main");
+    assert!(show_line(&repo, &state, &id).contains("stage=Landed"), "段は Landed");
+    clean(&[&repo, &state]);
+}
+
+/// 同じく gate: `--lens` 無しの gate が写しの lens を起動して PASS（base は INCONCLUSIVE＝RED）。`resume`
+/// （`Implemented` → 同じ gate の関数）も同じ写しを読む。
+#[test]
+fn pipe_lens_record_gate_reads_it_when_flag_absent() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let id = implemented(&repo, &state, &path);
+    fs::remove_file(state.join(REVIEW_MARKER)).expect("審査の marker を消せる");
+    let out = gate_once(&repo, &state, &id, None);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "写しの lens で PASS: {}", stderr_of(&out));
+    assert!(stdout_of(&out).contains("verdict=PASS"), "{}", stdout_of(&out));
+    assert!(state.join(REVIEW_MARKER).exists(), "起きたのは写しの lens");
+    let pairs = verdict_pairs(&state, &id);
+    assert_eq!(value_of(&pairs, "verdict"), "PASS");
+    assert!(!value_of(&pairs, "evidence").contains("--lens が無い"), "理由は「無い」ではない: {}", value_of(&pairs, "evidence"));
+    // 対: `resume` も同じ関数を通る（`Implemented` の 2 便目を `--lens` 無しで resume → 写しの lens で PASS → land）。
+    stop_run_ok(&state, &id);
+    let second = intake_bead(&repo, &state, &path, "b-two");
+    let spawned = spawn_with(&repo, &state, &second, TOY_COMMIT);
+    assert_eq!(spawned.status.code(), Some(i32::from(RC_OK)), "spawn は rc 0: {}", stderr_of(&spawned));
+    fs::remove_file(state.join(REVIEW_MARKER)).expect("審査の marker を消せる");
+    let resumed = run_pipe(&[
+        "resume", "--run", &second, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(),
+    ]);
+    assert_eq!(resumed.status.code(), Some(i32::from(RC_OK)), "resume も写しの lens で gate を通す: {}", stderr_of(&resumed));
+    assert!(stdout_of(&resumed).contains("verdict=PASS"), "{}", stdout_of(&resumed));
+    assert!(state.join(REVIEW_MARKER).exists(), "resume が起こしたのも写しの lens");
+    clean(&[&repo, &state]);
+}
+
+/// `--lens` が在れば flag の cmd が起動する（写しは別の cmd＝審査の偽 PASS）。判定も flag の lens のもの（FAIL）。
+#[test]
+fn pipe_lens_record_flag_overrides_the_record() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let id = implemented(&repo, &state, &path);
+    assert!(lens_record_of(&state, &id).exists(), "写しは在る（審査が書いた）");
+    fs::remove_file(state.join(REVIEW_MARKER)).expect("審査の marker を消せる");
+    let marker = state.join("lens-flag");
+    let lens = fake_lens(&marker, &lens_verdict("FAIL"));
+    let out = gate_once(&repo, &state, &id, Some(&lens));
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "flag の lens の FAIL: {}", stderr_of(&out));
+    assert_eq!(value_of(&verdict_pairs(&state, &id), "verdict"), "FAIL", "判定は flag の lens のもの");
+    assert!(marker.exists(), "flag の lens が起きた");
+    assert!(!state.join(REVIEW_MARKER).exists(), "写しの lens は起きない（flag が勝つ）");
+    clean(&[&repo, &state]);
+}
+
+/// 壊れた `lens.toml` → INCONCLUSIVE の理由が写しの path と読めなかった理由を持ち、「--lens が無い」ではない
+/// （読めなさを「無い」に潰さない・C10）。lens は起きない。land の再 gate も同じ 3 値で倒れ main を動かさない。
+#[test]
+fn pipe_lens_record_unreadable_is_not_absent() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let id = implemented(&repo, &state, &path);
+    let record = lens_record_of(&state, &id);
+    fs::write(&record, "schema = 1\ncmd = 3\n").expect("壊れた写しを書ける");
+    fs::remove_file(state.join(REVIEW_MARKER)).expect("審査の marker を消せる");
+    let out = gate_once(&repo, &state, &id, None);
+    assert_eq!(out.status.code(), Some(i32::from(RC_INCONCLUSIVE)), "読めない写しは rc 3: {}", stderr_of(&out));
+    assert!(stdout_of(&out).contains("verdict=INCONCLUSIVE"), "{}", stdout_of(&out));
+    let evidence = value_of(&verdict_pairs(&state, &id), "evidence");
+    assert!(evidence.contains(&record.display().to_string()), "理由は写しの path を持つ: {evidence}");
+    assert!(evidence.contains("cmd が文字列でない"), "理由は読めなかった訳を持つ: {evidence}");
+    assert!(!evidence.contains("--lens が無い"), "「無い」に潰さない: {evidence}");
+    assert!(!state.join(REVIEW_MARKER).exists(), "lens は起きない");
+    // 対: 写しを直せば `--lens` 無しの測り直しが通る（読めない周は終端でなく Gated＝測り直せる側）。
+    fs::write(&record, format!("schema = 1\ncmd = \"{}\"\n", review_lens_pass(&state))).expect("写しを直せる");
+    let again = gate_once(&repo, &state, &id, None);
+    assert_eq!(again.status.code(), Some(i32::from(RC_OK)), "直した写しで PASS: {}", stderr_of(&again));
+    assert!(state.join(REVIEW_MARKER).exists(), "直した写しの lens が起きた");
     clean(&[&repo, &state]);
 }
 

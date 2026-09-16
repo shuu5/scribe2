@@ -38,6 +38,7 @@ use super::follow::{self, Conflict};
 use super::gate::{
     gate, is_unreadable, run_checks, step_record, Check, Checks, Gate, Limits, Step, Verdict,
 };
+use super::lens_record::LensSource;
 use super::{
     emit, git_bytes, git_line, git_ok, size, verdict_path, worktree_path, worktrees_dir, Emit,
 };
@@ -148,9 +149,9 @@ pub struct Land<'a> {
     pub contract: &'a Contract,
     /// PR を作る seam（`--pr-cmd`）。`None` なら squash して main を進める。
     pub pr_cmd: Option<&'a str>,
-    /// main が動いた便の追随で gate を撃ち直す周の lens（`--lens`・無ければ `None`＝
-    /// 撃ち直しは INCONCLUSIVE へ倒れ land しない）。
-    pub lens: Option<&'a str>,
+    /// main が動いた便の追随で gate を撃ち直す周の lens の出所（`--lens` か run dir の写し・無い / 読めないは
+    /// 撃ち直しが INCONCLUSIVE へ倒れ land しない・[`super::lens_record`]・設計 §26）。land 自身は読まず再 gate へ渡す。
+    pub lens: &'a LensSource,
     /// 規則から読んだ線（撃ち直しの gate へ渡す・land 自身は数値を見ない）。
     pub limits: Limits,
     /// 追随が衝突した周に runner を起こし直すコマンド（`--runner`）と、その turn の口座を選ぶ入力

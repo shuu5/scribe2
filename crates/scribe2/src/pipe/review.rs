@@ -18,6 +18,7 @@
 
 use super::contract::Contract;
 use super::gate::{last_json_object, Verdict};
+use super::lens_record::LensSource;
 use super::{confine, contract_path, emit, run_dir, table, Emit};
 use crate::cli_outcome::{Outcome, RC_BROKEN};
 use crate::fleet::json_lite::{self, Value};
@@ -134,8 +135,8 @@ pub struct Review<'a> {
     pub contract: &'a Contract,
     /// 要件面の repo 相対 path（宣言 `requirements`・無ければ既定）。
     pub requirements: &'a str,
-    /// lens のコマンド（無ければ `None`＝INCONCLUSIVE）。
-    pub lens: Option<&'a str>,
+    /// lens のコマンドの出所（`--lens`・無い / 読めないは別の値＝どちらも INCONCLUSIVE・[`super::lens_record`]）。
+    pub lens: &'a LensSource,
     /// lock の待ち方。
     pub policy: LockPolicy,
 }
@@ -295,8 +296,13 @@ fn keep(entry: &Review<'_>, material: &Material) -> Result<PathBuf, String> {
 ///
 /// 3 つ目は lens の scope を片付けた結果（record に書く周だけ `Some`）。
 fn decide(entry: &Review<'_>, contract: &Path) -> (Verdict, String, Option<confine::Released>) {
-    let Some(cmd) = entry.lens else {
-        return (Verdict::Inconclusive, "lens が要るのに --lens が無い".to_owned(), None);
+    // **無いと読めないは別の理由**（設計 pipeline.md §26・C10・gate の判定順と同じ 3 値の match）。
+    let cmd = match entry.lens {
+        LensSource::Cmd(cmd) => cmd.as_str(),
+        LensSource::Absent => return (Verdict::Inconclusive, "lens が要るのに --lens が無い".to_owned(), None),
+        LensSource::Unreadable { path, reason } => {
+            return (Verdict::Inconclusive, format!("lens の写し {} を読めない（{reason}）", path.display()), None);
+        }
     };
     // **渡すのは path であって本文ではない**（cmd は `sh -c` の 1 行）。穴は gate と同じ 2 つで、`{worktree}` は
     // 便の worktree がまだ無いので base の repo（lens が憲法を読む cwd）を置く。**1 走査で埋める**。

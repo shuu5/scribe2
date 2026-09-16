@@ -907,6 +907,8 @@ fn pipe_resume_reports_next_gate_on_inconclusive() {
     let (repo, state) = repo_with_state();
     let path = write_contract(&repo, &[], &[]);
     let id = implemented(&repo, &state, &path);
+    // 審査が残した lens の写し（`lens.toml`・設計 pipeline.md §26）も外す＝写しも flag も無い世界。
+    fs::remove_file(vessel::pipe::run_dir(&state, &id).join("lens.toml")).expect("審査の写しを外せる");
     let first = gate_once(&repo, &state, &id, None);
     assert_eq!(first.status.code(), Some(3), "測れなかった周の rc は 3");
 

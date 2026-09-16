@@ -20,6 +20,7 @@ pub mod declaration;
 pub mod follow;
 pub mod gate;
 pub mod land;
+pub mod lens_record;
 pub mod move_proof;
 pub mod refuse;
 pub mod report;

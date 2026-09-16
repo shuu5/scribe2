@@ -14,8 +14,10 @@ use crate::pipe::declaration::{self, Ceiling, CEILING_ROW, DENIED_ROW};
 use crate::pipe::follow::Runner;
 use crate::pipe::gate::{Gate, Limits};
 use crate::pipe::land::{Land, Retire};
+use crate::pipe::lens_record::{self, LensSource};
 use crate::pipe::ratelimit::Pool;
 use crate::pipe::review::{review, Review};
+use crate::pipe::run_dir;
 use crate::rules::manifest::Manifest;
 use std::path::Path;
 
@@ -128,15 +130,22 @@ fn limits_of(manifest: &Manifest) -> Result<Limits, String> {
 /// 契約の審査の段（`pipe intake` の直後・`resume` の `Intake`・前提 stage = `Intake`・FR49・設計
 /// contract-source.md §4）。
 ///
-/// lens は gate と同じ `--lens`（無ければ INCONCLUSIVE＝終端・fail-closed）。要件面の path は HEAD の宣言から
-/// 読む（`contracts check` と同じ読み口・無ければ既定）。読めない周は判定に届かず rc 2（判定を書かない）。
+/// lens は gate と同じ `--lens`（無ければ INCONCLUSIVE＝終端・fail-closed）。**受けた cmd は run dir の写し
+/// （`lens.toml`・[`lens_record::keep`]）に残す**——gate / land / resume が `--lens` 無しで同じ lens を読む面で
+/// あり（設計 pipeline.md §26）、写せない周（改行を含む cmd・書けない dir）は判定に届かず rc 2（fail-closed）。
+/// 要件面の path は HEAD の宣言から読む（`contracts check` と同じ読み口・無ければ既定）。読めない周は判定に
+/// 届かず rc 2（判定を書かない）。
 pub(super) fn review_run(args: &[String], id: &str, manifest: &Manifest, policy: LockPolicy) -> Outcome {
     let resolved = match resolve(args, id, &[Stage::Intake], &Extra::Nothing) {
         Ok(found) => found,
         Err(outcome) => return outcome,
     };
     let lens = match flag(args, "--lens") {
-        Ok(found) => found,
+        Ok(Some(cmd)) => match lens_record::keep(&run_dir(&resolved.state_dir, id), cmd) {
+            Ok(()) => LensSource::Cmd(cmd.to_owned()),
+            Err(reason) => return broken(reason),
+        },
+        Ok(None) => LensSource::Absent,
         Err(reason) => return refused(reason),
     };
     let requirements = match requirements_of(&resolved.repo, manifest) {
@@ -150,7 +159,7 @@ pub(super) fn review_run(args: &[String], id: &str, manifest: &Manifest, policy:
         state_dir: &resolved.state_dir,
         contract: &resolved.contract,
         requirements: &requirements,
-        lens,
+        lens: &lens,
         policy,
     })
 }
@@ -172,6 +181,8 @@ fn requirements_of(repo: &Path, manifest: &Manifest) -> Result<String, String> {
 /// 揃えれば同じ便を撃ち直せる。PASS / FAIL は判定に届いた周ゆえ**終端のまま**で、
 /// 段違いの一般則どおり何もせず rc 1 を返す——FAIL から撃ち直す口を開けると、契約の
 /// verify が赤い便が「壊れたまま進む」経路になる。
+///
+/// lens は `--lens` が在れば flag、無ければ審査が残した run dir の写し（[`lens_source`]・設計 pipeline.md §26）。
 pub(super) fn gate_run(args: &[String], id: &str, manifest: &Manifest, policy: LockPolicy) -> Outcome {
     let resolved = match resolve(args, id, &[Stage::Implemented, Stage::Gated], &Extra::Regate) {
         Ok(found) => found,
@@ -181,7 +192,7 @@ pub(super) fn gate_run(args: &[String], id: &str, manifest: &Manifest, policy: L
         Ok(found) => found,
         Err(reason) => return broken(reason),
     };
-    let lens = match flag(args, "--lens") {
+    let lens = match lens_source(args, id, &resolved.state_dir) {
         Ok(found) => found,
         Err(reason) => return refused(reason),
     };
@@ -191,17 +202,25 @@ pub(super) fn gate_run(args: &[String], id: &str, manifest: &Manifest, policy: L
         repo: &resolved.repo,
         state_dir: &resolved.state_dir,
         contract: &resolved.contract,
-        lens,
+        lens: &lens,
         limits,
         policy,
     })
 }
 
+/// gate / land（と `resume` が通る同じ関数）の lens の出所: `--lens` が在れば flag が勝ち、無ければ審査が残した
+/// run dir の写しを読む（[`lens_record::resolve`] の 1 本・設計 pipeline.md §26）。写しの無い / 読めないは判定側が
+/// 3 値で分ける（ここで INCONCLUSIVE へ先回りしない＝再 gate の要らない land まで倒さない）。`Err` は flag の値欠け。
+fn lens_source(args: &[String], id: &str, state_dir: &Path) -> Result<LensSource, String> {
+    let flagged = flag(args, "--lens")?;
+    Ok(lens_record::resolve(flagged, &run_dir(state_dir, id)))
+}
+
 /// `pipe land`。前提 stage = Gated（PASS の検査は land 側が持つ）。
 ///
 /// `--pr-cmd` は自 repo への PR の口ゆえ**承認 event を前提としない**（A4.3・ADR-0008）。
-/// `--lens` と規則の線は main が動いた便の追随（rebase → gate の撃ち直し・設計 §5.4）で
-/// gate へ渡すために読む（land 自身は数値を見ない）。
+/// lens（`--lens` か run dir の写し・[`lens_source`]）と規則の線は main が動いた便の追随（rebase → gate の
+/// 撃ち直し・設計 §5.4）で gate へ渡すために読む（land 自身は数値を見ない）。
 pub(super) fn land_run(args: &[String], id: &str, manifest: &Manifest, policy: LockPolicy) -> Outcome {
     let resolved = match resolve(args, id, &[Stage::Gated], &Extra::Nothing) {
         Ok(found) => found,
@@ -215,7 +234,7 @@ pub(super) fn land_run(args: &[String], id: &str, manifest: &Manifest, policy: L
         Ok(found) => found,
         Err(reason) => return refused(reason),
     };
-    let lens = match flag(args, "--lens") {
+    let lens = match lens_source(args, id, &resolved.state_dir) {
         Ok(found) => found,
         Err(reason) => return refused(reason),
     };
@@ -250,7 +269,7 @@ pub(super) fn land_run(args: &[String], id: &str, manifest: &Manifest, policy: L
         state_dir: &resolved.state_dir,
         contract: &resolved.contract,
         pr_cmd,
-        lens,
+        lens: &lens,
         limits,
         runner,
         retries,

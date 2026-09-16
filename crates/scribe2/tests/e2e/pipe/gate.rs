@@ -4,6 +4,7 @@
 //! 共有 helper は親（`tests/e2e/pipe.rs`）に在り `use super::*` で引く（歯の本文は移しただけ・`s2-07l.264`）。
 
 use super::*;
+use vessel::pipe::run_dir;
 
 #[test]
 fn pipe_gate_refuses_dirty_worktree() {
@@ -286,7 +287,9 @@ fn pipe_gate_inconclusive_without_lens_when_required() {
     let (repo, state) = repo_with_state();
     let path = write_contract(&repo, &[], &[]);
     let id = implemented(&repo, &state, &path);
-    // 規則は lens を 1 本要る（gate.lens_count = 1）が `--lens` が無い。
+    // 規則は lens を 1 本要る（gate.lens_count = 1）が `--lens` が無い。審査が残した写し（`lens.toml`・§26）も外す
+    // ＝写しも flag も無い世界。
+    fs::remove_file(run_dir(&state, &id).join("lens.toml")).expect("審査の写しを外せる");
     let out = gate_once(&repo, &state, &id, None);
     assert_eq!(out.status.code(), Some(3), "判定できない周の rc は 3");
     assert!(stdout_of(&out).contains("verdict=INCONCLUSIVE"), "{}", stdout_of(&out));
@@ -748,8 +751,9 @@ fn pipe_gate_regates_after_inconclusive() {
     let (repo, state) = repo_with_state();
     let path = write_contract(&repo, &[], &[]);
     let id = implemented(&repo, &state, &path);
-    // 道具が足りない周（`--lens` を渡し忘れた便）。INCONCLUSIVE は「測れなかった」で
+    // 道具が足りない周（`--lens` を渡し忘れた便・審査の写しも無い）。INCONCLUSIVE は「測れなかった」で
     // あって「落ちた」ではないので、**ここで終端しない**。
+    fs::remove_file(run_dir(&state, &id).join("lens.toml")).expect("審査の写しを外せる");
     let first = gate_once(&repo, &state, &id, None);
     assert_eq!(first.status.code(), Some(3), "測れなかった周の rc は 3");
     assert_eq!(value_of(&verdict_pairs(&state, &id), "verdict"), "INCONCLUSIVE");
@@ -884,6 +888,7 @@ fn pipe_gate_fails_regate_on_dirty_worktree() {
     let (repo, state) = repo_with_state();
     let path = write_contract(&repo, &[], &[]);
     let id = implemented(&repo, &state, &path);
+    fs::remove_file(run_dir(&state, &id).join("lens.toml")).expect("審査の写しを外せる（写しも flag も無い世界）");
     let first = gate_once(&repo, &state, &id, None);
     assert_eq!(first.status.code(), Some(3), "測れなかった周の rc は 3");
 
@@ -965,6 +970,7 @@ fn pipe_gate_refuses_regate_without_readable_verdict() {
     let (repo, state) = repo_with_state();
     let path = write_contract(&repo, &[], &[]);
     let id = implemented(&repo, &state, &path);
+    fs::remove_file(run_dir(&state, &id).join("lens.toml")).expect("審査の写しを外せる（写しも flag も無い世界）");
     let first = gate_once(&repo, &state, &id, None);
     assert_eq!(first.status.code(), Some(3), "測れなかった周の rc は 3");
 
