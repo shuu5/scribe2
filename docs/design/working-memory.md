@@ -196,6 +196,14 @@ AC8 の確認（SRS の FR23 の検証手法は I = 目視確認・2 つの開�
 - 触らない: carry-forward・命令行の cap・consume の move。
 - 却下案: 2 通目を consume → 書き直しで通す（「同 sid の consumed が在る」で断られる・consume は復元の合図であって更新ではない）／旧 file を上書き（不可逆・N1）。
 
+## 14. `[DIFF]` の母集団に閉じた bead を含める — 「無い」と「閉じた」を同じ語で名乗らない（契約表の行 e・`s2-07l.406`）
+
+- 何が起きているか: `[DIFF] <id> bd=<status>` は退避物が言及する bead の台帳の現在値で、`unknown` は「台帳に無い」の意味。現物（verified・main 24ddd46）: `seat/rebrief.rs` の diff_lines は台帳を `--readonly list --limit 0 --json`（`BD_ARGS`）で読むが、台帳の既定の一覧は **closed を含まない**ので、閉じた bead も `unknown` と出る。ipatho2 の rebrief 2 周（2026-09-16）で 14 件中 6 件・20 件中 19 件が unknown＝実態は全部 closed で乖離 0。読み手（skill）は unknown を乖離の材料と読むので、閉じただけの bead が毎周の偽の乖離候補になり、planner が 1 件ずつ裏取りする（§5.2 の「判定不能 / なし / 実データ」の 3 値則に「閉じた」を写せない）。
+- 形: (1) `BD_ARGS` に台帳の `--all`（closed を含む一覧）を足す＝母集団を「台帳の全 bead」にし、閉じた bead は `bd=closed` と出る。`unknown` は本当に台帳に無い id だけ。(2) 状態語は台帳の `status` の字面をそのまま写す（既存どおり・新しい語彙を器に持たない）。(3) 台帳の子 process の待ち上限（rules 行 `seat.ledger_timeout_s`）は不変・`--all` で件数が増えても 1 回の呼出しのまま。
+- 触らない: `Marker` の variant（`Diff` / `DiffNone` は不変・外形 snapshot は動かない）・`[MEMO-*]` / `[BD-*]` の母集団（open の判定はそれぞれの読み手が status で行う＝`--all` にしても open の件数は変わらないことを歯で pin）・skill 側の読み方の行。
+- 歯（`seat_wm_rebrief_diff_` 接頭辞・`tests/e2e/seat/wm.rs`・偽 bd は既存の `fake_bd` の型で argv を写しに残す）: 偽 bd が closed の issue を含む JSON を返す fixture で、退避物が言及する閉じた id が `bd=closed`・無い id が `bd=unknown`・open の id が `bd=open` と出る／偽 bd の argv の写しに `--all` が 1 回だけ載る／`[BD-COUNT]` の open の件数と `[MEMO-STALE]` の母集団が closed を数えない（既存の歯の期待は不変）。
+- 却下: unknown の周だけ `bd --readonly show <id>` を 1 回ずつ撃つ（子 process が id の数だけ増え待ち上限を超える）／`closed` を `[DIFF]` から落とす（乖離の突合が「閉じた」を見られない）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -232,4 +240,14 @@ write-set = ["crates/scribe2/src/seat/externalize.rs", "crates/scribe2/src/seat/
 verify = ["cargo nextest run -p scribe2 --no-tests=fail seat_wm_externalize_supersede_"]
 size = "S"
 done = "同 sid の退避が置き換えられ、旧版は superseded として残る"
+
+[[contract]]
+id = "e"
+title = "[DIFF] の母集団に閉じた bead を含める — 台帳の一覧に --all を渡し、閉じた bead は bd=closed・無い id だけ unknown"
+req = ["FR23"]
+section = "14"
+write-set = ["crates/scribe2/src/seat/rebrief.rs", "crates/scribe2/tests/e2e/seat/wm.rs"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail seat_wm_rebrief_diff_"]
+size = "S"
+done = "偽 bd の closed の issue が [DIFF] に bd=closed と出て、無い id だけ unknown、[BD-COUNT] と [MEMO-STALE] の母集団は closed を数えず、偽 bd の argv に --all が 1 回だけ載る"
 <!-- contracts:end -->
