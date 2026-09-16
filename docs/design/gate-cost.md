@@ -207,9 +207,15 @@ e2e は binary を spawn し外部 command は PATH 先頭の stub で差し替�
 ## 13. runner / lens が起こす claude の子の peak memory を record に残す（契約表の行 d・`s2-07l.273`）
 
 - **出所・現物**: planner の実測（2026-09-14）で、runner の record の confine-usage peak_bytes は包みそのものの数 MB しか持たず、claude の子（`crates/scribe2/src/headless/mod.rs` の build が起こす別 scope）は 5000 MB を超えても記録されていなかった。gate-cost.md §4.3「測定の環」の runner 面が空振りし、gate.job_memory_mb の宣言値を測定で置き換える材料が溜まらない。現物: `crates/scribe2/src/pipe/confine.rs` の終端行は包みの末尾で memory.peak を読み、`crates/scribe2/src/headless/mod.rs` の build は claude の scope の unit 名を返して終端で `release_scope` を呼ぶ。
-- **形（何を作るか）**: `release_scope` が scope を止める前に、その scope の cgroup の memory.peak を読み（読めなければ欠落を表す記号を返す）、呼び手に返す。runner / lens の record に claude の scope の peak を表す語を 1 つ足す。
-- **触らない**: 包みの形・上限・sh -c 側の終端行。
-- **却下案**: claude も同じ包みで起こして終端行を出させる案は、直接起動の裁定に触れ permission の境界を動かすため不採用。記録しないままにする案は、宣言値が測定を通って実効に上がる環（C10）が閉じないため不採用。
+- **形（何を作るか・run 1 審査 INCONCLUSIVE 2026-09-16「§13 に write-set / seam の材料が無い」の解として書き直し）**:
+  1. **読む時機 = 走行中の sample**（release の直前ではない）: transient scope は最後の process が終わると消える（`confine.rs` の `Released::Gone` の doc「unit が既に無い（最後の process の終了で消えた・正常）」・verified）ので、`child.wait()` の後に読む形は大半の周で `Gone` になり測れない。claude の scope の cgroup dir は起動直後に 1 回 `systemctl --user show <unit>.scope -p ControlGroup --value`（子 process・`SYSTEMCTL` 定数・PATH 解決）で解き、`<cgroup root>/<ControlGroup>/memory.peak` を走行中に周期で読む（high-water mark なので最後に読めた値が peak・値は単調）。読めない周（file 無し・parse 不能・`show` の失敗）は欠落の記号 `-` を保つ（0 と融合しない・C10）。
+  2. **cgroup root は typed な値**: `confine.rs` の定数（`/sys/fs/cgroup`）を既定にし、`runner` / `lens` の口の flag `--cgroup-root DIR`（optional・`KNOWN_FLAGS` に 1 つ・env は読まない・C2.2）で差し替える。歯はこの flag に偽 dir を渡す（`/sys/fs/cgroup` 固定 path への注入 seam は持たない）。
+  3. **書く面 = 既存の stderr 1 行**（`headless/runner.rs` の `runner: scope=<…>`・`headless/lens.rs` の `lens: scope=<…>`・record と呼んでいるのはこの行）。同じ行に `claude_peak_bytes=<n|->` を 1 語足す。stdout（判定の面）と rc は変えない。`spawn.rs` の `pipe: runner scope=` は包みの側で本便の外。
+  4. **sample の置き場**: runner は stream の行を読む loop（`headless/runner.rs`）の各周で 1 回読む（file の read 1 回・追加の待ちは無い）。lens は `wait_with_output` を `try_wait` の poll（1 秒・`std::thread::sleep`・async 無し C13.3）に替え、各周で読む。閉じた型 `Peak { Bytes(u64), Unreadable }` と読み手 1 関数（pure な parse + I/O）は `confine.rs` に置く。
+  5. **systemd 無しの host**: `Confinement::Unconfined` の周は scope が無い＝`show` を撃たず、行に `claude_peak_bytes` の語を**出さない**（現物と同じく `scope=` も出ない・stub は不要＝PATH から `systemd-run` を外した fixture がそのまま「無い host」）。
+- **歯の seam（write-set に数える）**: `crates/scribe2/tests/e2e/headless.rs` に偽 `systemd-run`（内側の command をそのまま exec）と偽 `systemctl`（`show … -p ControlGroup --value` に fixture の path を返し、`kill` に rc 0）を PATH の先頭に置く shim を歯の中で書く（`e2e/pipe/gate.rs` の shim は流用しない＝module の可視性を触らない）。`--cgroup-root` に tmp dir を渡し、`<tmp>/<ControlGroup>/memory.peak` を歯が書く。usage の外形 snapshot `e2e__headless__headless_external_form.snap` は flag の追加で動く。
+- **触らない**: 包みの形・上限・`sh -c` 側の終端行（`confine-usage` の epilogue）・`release_scope` の型と `Released` の variant・`Call` の field・`spawn.rs` / `gate/verify.rs` / `review.rs` / `gate/lens.rs` / `fleet/usage.rs` の `release_scope` の呼び手。
+- **却下案**: claude も同じ包みで起こして終端行を出させる案は、直接起動の裁定に触れ permission の境界を動かすため不採用。記録しないままにする案は、宣言値が測定を通って実効に上がる環（C10）が閉じないため不採用。release の直前に 1 回読む案（run 1 までの形）は scope が既に消えている周が正常系なので不採用。`release_scope` の戻り値に peak を載せる案は呼び手 6 か所の型が動き write-set が倍になるため不採用（peak は別の 1 関数）。
 
 ## 14. 純移動と証明された行を検出線の母集団から外す（契約表の行 e・`s2-07l.292`）
 
@@ -284,10 +290,10 @@ id = "d"
 title = "runner / lens が起こす claude の子の peak memory を record に残す"
 req = ["FR46", "NFR3"]
 section = "13"
-write-set = ["crates/scribe2/src/pipe/confine.rs", "crates/scribe2/src/headless/mod.rs", "crates/scribe2/src/pipe/spawn.rs", "crates/scribe2/tests/e2e/headless.rs", "docs/design/gate-cost.md"]
+write-set = ["crates/scribe2/src/pipe/confine.rs", "crates/scribe2/src/headless/runner.rs", "crates/scribe2/src/headless/lens.rs", "crates/scribe2/tests/e2e/headless.rs", "crates/scribe2/tests/e2e/snapshots/e2e__headless__headless_external_form.snap", "docs/design/gate-cost.md"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail headless_claude_peak_"]
-size = "S"
-done = "claude の scope の peak が release の直前に読まれ runner / lens の record に残り、読めない周は 0 でなく欠落の記号になる"
+size = "M"
+done = "claude の scope の memory.peak が走行中に sample され runner / lens の stderr の scope= の行に claude_peak_bytes= で残り、読めない周は 0 でなく - になり、systemd 無しの host では語が出ない"
 
 [[contract]]
 id = "e"
