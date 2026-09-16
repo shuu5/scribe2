@@ -163,6 +163,20 @@ scribe2 を載せる consumer が pipe を通すのに要る面は 3 つで、�
 - 触らない: Derived の経路（導出・drift・`TeethPlaceUnresolved` の条件）・Declared の弁別（3 欄の不在 ∧ `write-set` の存在）・契約表の schema・`nextest_filter` / `test_fns` の判定・歯が読む読み手の module（例: `claude_md.rs`）まで追うこと（型の閉包の領分＝審査に残す）。
 - 却下案: 審査に任せる（1 周 = 数十分の損失が続く・本日 3 例）／Declared を廃止して全部 Derived にする（§17〜§19 の未 Landed の形が残るうちは Declared が要る・行 r の型）／新しい filter 語の周も断る（新設の歯の置き場は planner が write-set に書く以外に無い・歯の file が 1 つ在れば通す）。
 
+## 21. 器の口 pipe preflight — 受付と同じ判定を run を作らず撃ち、契約の実態突合を planner が edit time に測る（契約表の行 u・`s2-07l.394`）
+
+- 何が起きているか: user の相談 2026-09-16 06:0xZ「planner が契約を実態に測定するためのツールや突き返された修正を適切に行うためのツールをもっときっちり用意したほうが良いのでは」。本日の実例: `.164`（審査 4 周・毎回別の理由）/ `.209`（10 周・7 周が字面の不一致）/ `.392`（verify の歯が write-set の外）/ #249（§ が base に無い名を名指し CI 赤）。現物（verified・main c3f2fdb）: 契約の実態突合は **受付**（`cli/intake.rs` の `intake_run` = 契約 file の読み → `freeze`〔宣言の写し〕→ `settle_write_set`〔行の pointer・§3 の導出・§20 の歯の門〕→ `exclude_cap_shortfall`〔余地〕→ `exclude_overlap`〔live との交差〕→ run dir の作成と `RunCreated`）と **CI の歯**（`contracts check` の行の形と § の名指し）に在り、どちらも planner が契約を書いた時点で撃てる口ではない。planner の点検は state dir の script（design-of / section-of / candidates.py）と admin の preflight.sh / preflight-ws.py に散っている＝器の外の散文の作法（N2）で、怠った周が審査へ届いて 1 周（数十分）払う。
+- 形: `pipe` に subcommand **`preflight`**（`--contract F --bead B --repo R [--state-dir S]`・intake と同じ引数）を足す。中身は `intake_run` を **判定（`judge`・pure に近い・run を作らない）と作成（`create`・run dir と event）の 2 段に割り**、`intake` = judge → create、`preflight` = judge だけ（C2・判定関数は 1 本・2 本目を作らない）。judge は断る理由を **最初の 1 件で止めず全部集めて**返し（`Refuse` の列・受付は従来どおり先頭の 1 件で断る）、preflight は stdout に 1 行 1 事実で並べる: `design=<doc>#<id> section=<n> material=<本文の行数>` / `write-set=<declared|derived> files=<n>` / `teeth=<filter>:<本数>@<file,…>`（verify の nextest 行ごと）/ `headroom=<file>:<余地>/<size の上限>`（余地の小さい順）/ `overlap=<live run>:<file,…>`（在れば）/ `refuse=<名>:<理由>`（judge の断り・全部）/ 末尾に `preflight: <ok|refused n=<件数>|broken>`。rc = 0（断り 0）/ 1（断り ≥ 1・全部列挙）/ 2（読めない・受付と同じ `RC_BROKEN` の周）。宣言の写し（`freeze`）は読むだけで書かない・event は書かない・state dir は交差の読みにだけ使う（無ければ交差の行を `overlap=unmeasured` と出して rc は他の断りで決める＝測れないを 0 に潰さない・C10）。usage の外形 snapshot に subcommand 1 語が増える（C12.5）。
+- 触らない: 受付の判定の中身（`settle_write_set` / 余地 / 交差の順序と極性）・`Refuse` の variant と rc・契約 file の schema・`contracts check`（§ の名指しは CI の歯のまま・preflight は契約 file 側の名指し `NameUnresolved` を judge の中で従来どおり撃つ）・dispatcher（`.345` の入口が同じ judge を呼ぶのは行 a の便の側）。
+- 却下案: planner の state dir の script を増やす（器の外・host 固有・散文の作法）／`pipe intake --dry-run`（intake の引数に既定と逆の flag が増え、flag の有無で run が出来たり出来なかったりする口になる・subcommand で分ける方が typed）／審査（lens）に任せる（1 周 = 数十分・本日の審査 FAIL 19/42 便）／judge を複製して preflight 専用にする（受付と preflight が静かにずれる・C2）。
+
+## 22. 審査 FAIL の理由を閉じた型（FindingKind）で review.json と event に残し、report が型別に数える（契約表の行 v・`s2-07l.395`）
+
+- 何が起きているか: user の相談 2026-09-16 06:0xZ「今までのミスの型を DB に登録していって潰していく」。本日の実例: 審査の終端 19/42 便（admin の手集計）・`.209` の 10 周のうち 7 周が同型「字面が現物と合わない」。現物（verified・main c3f2fdb）: 審査の段（§4・`pipe/review.rs`）は lens の最終行の JSON `{"verdict":…,"evidence":…}` を `parse_lens` が読み、`settle` が `review.json`（schema / run / verdict / evidence / scope / ts）と `RunStage stage=Reviewed detail=verdict:<V>` を書く。理由は `evidence` の自由文だけで**型を持たない**＝型別に数える口が無く、「どの型が残っているか」を機械が示せない。手戻りの型は本日 4 つ（(a) 検証行の歯が write-set の外 / (b) goal と done の矛盾 / (c) 空虚な assert / (d) 字面が現物と合わない）+ 材料の欠け（§ の本文が無い）。
+- 形: (1) lens の雛形 `headless/lens-contract.txt` の最終行の JSON に **`kind`**（閉じた語の 1 つ: `teeth-outside-write-set` / `goal-done-contradiction` / `vacuous-assert` / `literal-mismatch` / `section-material-missing` / `other`・FAIL と INCONCLUSIVE の周は必須・PASS の周は無し）と **`at`**（指した場所の列・path か識別子か §・自由文でなく `,` 区切りの語）を足す。(2) `review.rs` に閉じた enum `FindingKind`（上の 6 語・`as_str` / `parse`・宣言順の const slice・網羅 match）を置き、`parse_lens` が `kind` を読む（FAIL / INCONCLUSIVE で `kind` が無い・読めない周は **`unparsed`** の 7 語目に倒し verdict は lens の値のまま＝理由の欠けを INCONCLUSIVE や `other` に化けさせない・C10）。`settle` は `review.json` に `kind` と `at` を任意 field で足し（schema 1 のまま・古い読み手は無視・§5 の足し方）、event の detail を `verdict:<V> kind:<k>`（PASS は従来どおり `verdict:PASS`）にする。(3) `pipe report` の 1 行に **`review_fail=<本数> by_kind=<k1>:<n1>,…`**（母集団 = 本日の Reviewed の event・kind 別の内訳を宣言順に全部・0 も出す）を足す。「潰す」= kind ごとに §21 の preflight の門が 1 つ増え、report の内訳でその kind が 0 に落ちたことを機械で見る。同型の回数で run N+1 を止める線（rules 行 `review.same_kind_stop` = **2**・user 裁定 2026-09-16T05:53Z「２論点とも推奨で進めて」）と、焼き直しが前回の指摘（`at`）に対応する差分を持たない周を受付が断る門は、この kind と `at` を入力にする**別の行**（後続・§23 予定・rules 行を足すので変異と生成物の一覧が同じ PR）。
+- 触らない: verdict の 3 値と rc・`review.json` の既存 key・lens の起動の形（`{contract}` / `{design}` / `{requirements}`）・審査の観点 3 つ・gate の verdict.json（審査の段だけ）・`report` の既存 token（`runs=` / `landed=` / `human_events=`）。
+- 却下案: memory / notes の散文で型を数える（N2・母集団が測れない）／`evidence` の字面を grep して型を推定する（自由文の字面判定・C3.3）／型を rules 行に置く（型は理由の語彙であって閾値でも極性でもない・閉じた enum の領分）／`kind` を PASS にも必須にする（PASS に理由の型は無い・空の値を作らない）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -379,4 +393,24 @@ write-set = ["crates/scribe2/src/pipe/closure.rs", "crates/scribe2/src/pipe/clos
 verify = ["cargo nextest run -p scribe2 --no-tests=fail contract_declared_teeth_"]
 size = "S"
 done = "Declared 行の verify の歯の file が write-set の外に在る契約を受付が file を全部名指して断り、中に在る契約と nextest 形でない verify の契約は従来どおり通る"
+
+[[contract]]
+id = "u"
+title = "pipe preflight — 受付の判定を judge / create に割り、judge だけを run を作らず撃って断りと事実を全部 1 行 1 事実で出す口"
+req = ["FR48"]
+section = "21"
+write-set = ["+crates/scribe2/src/pipe/cli/preflight.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/cli/intake.rs", "crates/scribe2/tests/e2e/pipe/intake.rs", "crates/scribe2/tests/e2e/snapshots/e2e__pipe__pipe_external_form.snap"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_preflight_"]
+size = "M"
+done = "preflight が run dir も event も作らずに受付と同じ断りを全部列挙して rc 0 / 1 / 2 を返し、intake の断りの先頭 1 件と一致し、usage に preflight が載る"
+
+[[contract]]
+id = "v"
+title = "審査の理由を閉じた型 FindingKind で review.json と event に残し、pipe report が by_kind で数える"
+req = ["FR49"]
+section = "22"
+write-set = ["crates/scribe2/src/pipe/review.rs", "crates/scribe2/src/headless/lens-contract.txt", "crates/scribe2/src/pipe/report.rs", "crates/scribe2/tests/e2e/pipe/intake.rs", "crates/scribe2/tests/e2e/pipe/lifecycle.rs", "crates/scribe2/tests/e2e/pipe/spawn.rs"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_review_kind_"]
+size = "M"
+done = "FAIL / INCONCLUSIVE の review.json と event が kind を持ち、kind の無い lens 出力は unparsed に倒れ、report の 1 行に review_fail= と by_kind= が宣言順に出る"
 <!-- contracts:end -->
