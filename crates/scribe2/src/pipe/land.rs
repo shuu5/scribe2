@@ -732,8 +732,34 @@ fn skip_record(len: usize, tree: &str) -> String {
     ])
 }
 
+/// 終端で `refs/heads/main` を読めなかった周の実測値の字面（`main=unknown` / `main:unknown`）。
+///
+/// 読めないを「一致した」にも「動いた」にも化けさせない（C10）。land 自体は成立している
+/// （ref は既に進み実測も緑）ので落とさず、理由は stderr 1 行に残す。
+const MAIN_UNKNOWN: &str = "unknown";
+
+/// 終端の直前に `refs/heads/main` を 1 回実測する（設計 §27・`s2-07l.379`）。
+///
+/// `landed=` / verdicts.jsonl の `sha` は **宣言値**（squash で main に載せた `new`）で、
+/// CAS の後に main がさらに動いた周（追随の chain・別の便・手の操作）をそこからは見分けられない。
+/// 実測値は宣言値と**別の列**に置く（一致する周も省かない）。読めない周は
+/// [`MAIN_UNKNOWN`] と stderr の理由 1 行。
+fn measure_main(repo: &Path) -> (String, Vec<String>) {
+    match git_line(repo, &["rev-parse", MAIN_REF]) {
+        Some(found) => (found, Vec::new()),
+        None => (
+            MAIN_UNKNOWN.to_owned(),
+            vec![format!("pipe: 終端で {MAIN_REF} を読めない（main={MAIN_UNKNOWN}・land は成立している）")],
+        ),
+    }
+}
+
 /// export → `Landed` → 後始末。ここまで来た周は land が成立している（anchor は呼び手が揃え済み）。
+///
+/// export の前に main を実測し、stdout の `main=` と `Landed` の detail の `main:` に写す
+/// （`sha:` は宣言値のまま・verdicts.jsonl の key 列は触らない）。
 fn finish(entry: &Land<'_>, worktree: &Path, new: &str, anchor: &AnchorSync, order: Order) -> Outcome {
+    let (measured, mut err) = measure_main(entry.repo);
     if let Err(reason) = export_verdict(entry, new, order) {
         return broken(reason);
     }
@@ -746,7 +772,7 @@ fn finish(entry: &Land<'_>, worktree: &Path, new: &str, anchor: &AnchorSync, ord
             stage: Some(Stage::Landed),
             seat: None,
             pid: None,
-            detail: Some(format!("sha:{new}")),
+            detail: Some(format!("sha:{new} main:{measured}")),
         },
         entry.policy,
     );
@@ -754,10 +780,15 @@ fn finish(entry: &Land<'_>, worktree: &Path, new: &str, anchor: &AnchorSync, ord
         return broken(err.to_string());
     }
     // 後始末の失敗は land を取り消さない（**rc 0 のまま stderr 1 行**）。anchor の warning も同じ列。
-    let mut err = retire_worktree(entry.repo, entry.run, worktree);
+    err.extend(retire_worktree(entry.repo, entry.run, worktree));
     err.extend(anchor.warning());
     Outcome {
-        out: vec![format!("run={} landed={new} {} order={}", entry.run, anchor.token(), order.as_value())],
+        out: vec![format!(
+            "run={} landed={new} main={measured} {} order={}",
+            entry.run,
+            anchor.token(),
+            order.as_value()
+        )],
         // 後始末の失敗は land を取り消さない（**rc 0 のまま stderr**）。
         err,
         rc: RC_OK,

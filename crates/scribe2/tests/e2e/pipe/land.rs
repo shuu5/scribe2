@@ -446,6 +446,111 @@ fn landed_token(out: &Output) -> String {
         .unwrap_or_default()
 }
 
+/// land の stdout の `main=` の値（終端で実測した `refs/heads/main`・無ければ空）。
+fn main_token(out: &Output) -> String {
+    stdout_of(out)
+        .split_whitespace()
+        .find_map(|word| word.strip_prefix("main="))
+        .map(str::to_owned)
+        .unwrap_or_default()
+}
+
+/// 便の `RunDone stage=Landed` の detail（無ければ空）。
+fn landed_detail(state: &Path, id: &str) -> String {
+    trail(state, id)
+        .into_iter()
+        .rev()
+        .find(|(kind, stage, _)| *kind == EventKind::RunDone && *stage == Some(Stage::Landed))
+        .and_then(|(_, _, detail)| detail)
+        .unwrap_or_default()
+}
+
+/// toy repo の `reference-transaction` hook: `committed` の段で `refs/heads/main` を旧 sha へ戻す
+/// （**1 度だけ**・自分の `update-ref` で再帰しない印を `marker` に置く）。CAS の後に main が
+/// 動いた周（追随の chain・別の便・手の操作）を、land の外の手で作る。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn install_main_rewind_hook(repo: &Path, marker: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let hook = repo.join(".git").join("hooks").join("reference-transaction");
+    fs::create_dir_all(hook.parent().expect("hooks の親 dir")).expect("hooks dir を作れる");
+    let body = format!(
+        "#!/bin/sh\n[ \"$1\" = committed ] || exit 0\n[ -f '{marker}' ] && exit 0\n\
+         while read -r old new ref; do\n  if [ \"$ref\" = refs/heads/main ]; then\n    touch '{marker}'\n    \
+         git update-ref refs/heads/main \"$old\"\n    exit 0\n  fi\ndone\nexit 0\n",
+        marker = marker.display()
+    );
+    fs::write(&hook, body).expect("hook を書ける");
+    fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).expect("hook に実行権を付ける");
+}
+
+/// 通常の land（main は CAS の後に動かない）: stdout の `main=` は `landed=` と等しく、`Landed` の detail は
+/// `sha:<new> main:<new>`（一致する周も**省かない**・C10 の実測値・設計 §27）。
+#[test]
+fn pipe_land_main_measured_matches_landed_when_main_is_still() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let marker = state.join("lens-ran");
+    let id = gated_pass(&repo, &state, &path, &marker);
+    let out = land_once(&repo, &state, &id);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "land は rc 0: {}", stderr_of(&out));
+    let new = git(&repo, &["rev-parse", "refs/heads/main"]);
+    assert_eq!(landed_token(&out), new, "`landed=` は squash の sha: {}", stdout_of(&out));
+    assert_eq!(main_token(&out), new, "`main=` は終端で実測した main: {}", stdout_of(&out));
+    assert_eq!(
+        landed_detail(&state, &id),
+        format!("sha:{new} main:{new}"),
+        "`Landed` の detail は宣言値と実測値を空白区切りで並べる"
+    );
+    assert!(
+        !stderr_of(&out).contains("読めない"),
+        "読めた周は stderr に理由を出さない: {}",
+        stderr_of(&out)
+    );
+    clean(&[&repo, &state]);
+}
+
+/// CAS の後に hook が main を旧 sha へ戻す周: land は rc 0 のまま（終端を偽らない）、`main=` は実測の
+/// 旧 sha で `landed=` と**違う**——宣言値と実測値が別の列に在るから見分けられる。
+#[test]
+fn pipe_land_main_measured_differs_when_a_hook_moves_main() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let marker = state.join("lens-ran");
+    let old = git(&repo, &["rev-parse", "refs/heads/main"]);
+    let id = gated_pass(&repo, &state, &path, &marker);
+    install_main_rewind_hook(&repo, &state.join("main-rewound"));
+    let out = land_once(&repo, &state, &id);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "main が動いても land は成立: {}", stderr_of(&out));
+    assert_eq!(git(&repo, &["rev-parse", "refs/heads/main"]), old, "hook が main を旧 sha へ戻している");
+    let landed = landed_token(&out);
+    assert!(!landed.is_empty() && landed != old, "`landed=` は squash の sha のまま: {}", stdout_of(&out));
+    assert_eq!(main_token(&out), old, "`main=` は実測の旧 sha: {}", stdout_of(&out));
+    assert_eq!(
+        landed_detail(&state, &id),
+        format!("sha:{landed} main:{old}"),
+        "detail の `main:` も実測の旧 sha"
+    );
+    clean(&[&repo, &state]);
+}
+
+/// `--pr-cmd` の形は main を動かさない＝実測の列を持たない（stdout に `main=` が無い・detail は `pr` のまま）。
+#[test]
+fn pipe_land_main_measured_is_absent_for_pr_cmd() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let marker = state.join("lens-ran");
+    let id = gated_pass(&repo, &state, &path, &marker);
+    let out = land_extra(&repo, &state, &id, &["--pr-cmd", "true"]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "PR 形の land は rc 0: {}", stderr_of(&out));
+    assert!(stdout_of(&out).contains("landed=pr"), "{}", stdout_of(&out));
+    assert!(main_token(&out).is_empty(), "PR 形は `main=` を持たない: {}", stdout_of(&out));
+    assert_eq!(landed_detail(&state, &id), "pr", "PR 形の detail は `pr` のまま");
+    clean(&[&repo, &state]);
+}
+
 /// land を背景で撃つ（列で待つ歯の材料・stdout / stderr は `wait_with_output` で読む）。
 #[expect(
     clippy::expect_used,
@@ -1631,7 +1736,7 @@ fn pipe_land_anchor_syncs_index_and_working_tree_to_new_main() {
     let out = land_once(&repo, &state, &id);
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "land は rc 0: {}", stderr_of(&out));
     let new = git(&repo, &["rev-parse", "refs/heads/main"]);
-    assert!(stdout_of(&out).contains(&format!("landed={new} anchor=synced")), "判定行に anchor=synced: {}", stdout_of(&out));
+    assert!(stdout_of(&out).contains(&format!("landed={new} main={new} anchor=synced")), "判定行に anchor=synced: {}", stdout_of(&out));
     assert_eq!(git(&repo, &["rev-parse", "HEAD"]), new, "anchor の HEAD は新 main");
     assert_eq!(
         git(&repo, &["status", "--porcelain", "--untracked-files=no"]).trim(),
@@ -1657,7 +1762,7 @@ fn pipe_land_anchor_skips_dirty_anchor_and_keeps_local_change() {
     let out = land_once(&repo, &state, &id);
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "land 自体は成立（rc 0）: {}", stderr_of(&out));
     let new = git(&repo, &["rev-parse", "refs/heads/main"]);
-    assert!(stdout_of(&out).contains(&format!("landed={new} anchor=skipped:dirty")), "{}", stdout_of(&out));
+    assert!(stdout_of(&out).contains(&format!("landed={new} main={new} anchor=skipped:dirty")), "{}", stdout_of(&out));
     assert!(stderr_of(&out).contains("anchor"), "warning の 1 行を stderr に出す: {}", stderr_of(&out));
     assert_eq!(
         fs::read_to_string(repo.join("src").join("lib.rs")).unwrap_or_default(),
@@ -1682,7 +1787,7 @@ fn pipe_land_anchor_skips_when_head_is_not_main() {
         assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{label}: land は rc 0: {}", stderr_of(&out));
         let new = git(&repo, &["rev-parse", "refs/heads/main"]);
         assert_ne!(new, before, "{label}: main は進む");
-        assert!(stdout_of(&out).contains(&format!("landed={new} anchor=skipped:not-main")), "{label}: {}", stdout_of(&out));
+        assert!(stdout_of(&out).contains(&format!("landed={new} main={new} anchor=skipped:not-main")), "{label}: {}", stdout_of(&out));
         assert_eq!(git(&repo, &["rev-parse", "HEAD"]), before, "{label}: anchor の HEAD は動かない");
         assert_eq!(git(&repo, &["status", "--porcelain", "--untracked-files=no"]).trim(), "", "{label}: working tree は不変で clean");
         clean(&[&repo, &state]);
@@ -1833,7 +1938,7 @@ fn pipe_land_anchor_before_verify_records_clean_anchor_during_main_check() {
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "land は rc 0: {}", stderr_of(&out));
     let new = git(&repo, &["rev-parse", "refs/heads/main"]);
     assert_ne!(new, base, "main は進む");
-    assert!(stdout_of(&out).contains(&format!("landed={new} anchor=synced")), "判定行: {}", stdout_of(&out));
+    assert!(stdout_of(&out).contains(&format!("landed={new} main={new} anchor=synced")), "判定行: {}", stdout_of(&out));
     assert!(show_line(&repo, &state, &id).contains("stage=Landed"), "{}", show_line(&repo, &state, &id));
     // 1. record が**在る**（無いを clean に化けさせない）。
     let text = fs::read_to_string(&record).expect("main 実測の verify が record を書いている");
