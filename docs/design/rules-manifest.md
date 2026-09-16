@@ -168,6 +168,13 @@ xtask 側の drift 歯（最小形）: `crates/xtask/src/limits.rs` の `#[cfg(t
 - 形: 閉じた enum に variant 2 つ（as_str = ledger-id-v1 / state-dir-path）。字面は `concat!` で分けて自分を撃たない。state dir は絶対形だけ（相対形 `.local/state/` は ADR-0004 が持つ＝当てない）。掃除は id を「v1 の台帳の便」の語に置き換える（文の意味は残す・research html に生成元 file は無い＝掃除の後に folio build の drift 検査が無差分であれば足りる）。要件は暫定で FR52（CI が tracked file を検査し違反を file と行で名指して非 0 で止める形）を当てる: PUBLIC 面の門を名指す要件は SRS の制約 CON2 だけで契約の req に取れないため、次版の SRS 改訂周で「PUBLIC 面の門」の FR を足して差し替える。
 - 却下: 免除 list（散文・N2）／相対形も当てる（frozen の ADR-0004 が赤になる）。digest 方式と token の newtype は別便。
 
+## 12. rules_wired の字下げ #[cfg(test)] を test 区間の印に数えない（契約表の行 j・`s2-07l.350`）
+
+- 何が起きているか: admin の 1 行当て A/B（2026-09-15 14:3xZ・`.160` run 2）で撃墜 10 / 生存 1（母集団 11）。生存 = `crates/xtask/src/rules_wired.rs` の `line.starts_with(TEST_MOD_MARK)` → `contains` への変異で、字下げした `    #[cfg(test)]`（行頭でない）を test 区間の印に誤って数える（no-op でないことは実測済み: 元 rc 0・変異 rc 100）。
+- 形: `rules_wired.rs` の in-file の歯に「字下げした `#[cfg(test)]`（行頭でない）は test 区間の印に数えない」fixture を 1 本足す（実装は変えない・module doc の「行頭の印」を pin する）。`// flip-check: retroactive s2-07l.350` の札を付ける。
+- 触らない: `rules_wired.rs` の実装本体。
+- 依存: `.160` Landed 後。Landed 後に admin が同じ変異（`starts_with` → `contains`）を A/B して撃墜 1/1 を notes に写す（歯にしない）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -265,4 +272,14 @@ write-set = ["rules/manifest.toml", "crates/scribe2/tests/e2e/rules.rs", "docs/d
 verify = ["cargo nextest run -p scribe2 --no-tests=fail rules_"]
 size = "S"
 done = "manifest の行の値が 150000 に戻り裁定 id が戻しの字面で、埋め込み値の pin が 150000 で緑、§4.1 の表が同じ値と裁定を写し、src は不変"
+
+[[contract]]
+id = "j"
+title = "rules_wired の in-file の歯に「字下げした #[cfg(test)] は test 区間の印に数えない」fixture を足す — 実装は不変・retroactive 札"
+req = ["FR17"]
+section = "12"
+write-set = ["crates/xtask/src/rules_wired.rs"]
+verify = ["cargo nextest run -p xtask --no-tests=fail rules_wired_indented_"]
+size = "S"
+done = "変異 starts_with → contains が赤になる歯が在る"
 <!-- contracts:end -->
