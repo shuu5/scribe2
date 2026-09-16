@@ -87,7 +87,7 @@ req = ["FR23"]
 section = "11"
 touches = ["crate::seat::rebrief::Marker"]
 tests = ["crates/scribe2/tests/e2e/seat/wm.rs"]
-also = ["crates/scribe2/tests/e2e/snapshots/e2e__seat__seat_rebrief_external_form.snap"]
+also = ["crates/scribe2/src/seat/rebrief.rs", "crates/scribe2/tests/e2e/snapshots/e2e__seat__seat_rebrief_external_form.snap"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail seat_rebrief_memo_queue_"]
 size = "S"
 done = "偽 bd の memo 3 本で [MEMO-QUEUE] が着手可能な 2 本を priority 順に出し、open の依存を持つ memo は出ず、齢の測れない memo は末尾に age_days=- で載り、件数行の of= が母集団と一致し、0 件は -NONE"
