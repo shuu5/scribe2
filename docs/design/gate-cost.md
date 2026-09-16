@@ -384,7 +384,7 @@ title = "e2e/seat.rs の PROMPT_WAIT を 5 s → 60 s（負荷下で tmux fixtur
 req = ["FR46"]
 section = "20"
 write-set = ["crates/scribe2/tests/e2e/seat.rs"]
-verify = ["cargo nextest run -p scribe2 --no-tests=fail hook_brief_planner_carries_the_dialogue_surface_lines"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail seat_isolated_session_is_torn_down_when_guard_drops"]
 size = "S"
 done = "PROMPT_WAIT が 60 秒で、assert の字面・ready() の型・new-session 失敗時の即返しが不変"
 
