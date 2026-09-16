@@ -1,5 +1,6 @@
 // flip-check: moved s2-07l.264
 // flip-check: moved s2-07l.295
+// flip-check: retroactive s2-07l.417
 //! land の歯: `pipe_land_` / `pipe_order_`（順番待ち）/ `pipe_follow_`（追随）/ `pipe_retire_`。
 //!
 //! 共有 helper は親（`tests/e2e/pipe.rs`）に在り `use super::*` で引く（歯の本文は移しただけ・`s2-07l.264`）。
@@ -1006,8 +1007,10 @@ fn pipe_order_three_runs_follow_once_each_and_land_in_gated_order() {
     clean(&[&repo, &state]);
 }
 
-/// 撃ち直しが FAIL になった便（`Gated` のまま verdict が FAIL）は列から外れ、後続は待たずに進む
-/// （`order=first`・上限の 30 秒を待たない）。
+/// 撃ち直しが FAIL になった便（`Gated` のまま verdict が FAIL）は列から外れ、後続は待たずに進む。
+/// 「待たなかった」は**待ちの record** で pin する（設計 gate-cost.md §23 形 (1)）: stdout の `order=first` と
+/// 面 5（`verdicts.jsonl`）の `order` = `first`（待った周は `waited:<s>`）。壁時計は測らない——負荷下では
+/// land 自体（rebase + 再 gate + 主実測）が上限を超えて偽に落ちる。
 #[test]
 fn pipe_order_regate_fail_leaves_the_queue() {
     let (repo, state) = repo_with_state();
@@ -1022,16 +1025,18 @@ fn pipe_order_regate_fail_leaves_the_queue() {
     assert_eq!(follow_count(&state, &id_b), 1, "b は追随して撃ち直した: {:?}", stages(&state, &id_b));
     assert!(show_line(&repo, &state, &id_b).contains("stage=Gated"), "b は Gated(FAIL) のまま");
     let pass = fake_lens(&marker, &lens_verdict("PASS"));
-    let started = Instant::now();
     let out = land_extra(&repo, &state, &id_c, &["--rules", &rules, "--lens", &pass]);
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "c の land: {}", stderr_of(&out));
     assert_eq!(order_token(&out), "first", "FAIL の b は列に居ない: {}", stdout_of(&out));
-    assert!(started.elapsed() < Duration::from_secs(30), "上限まで待たない");
+    assert_eq!(exported_order(&state, &id_c), "first", "面 5 の record も `first`（待った周は waited:<s>）");
     assert!(show_line(&repo, &state, &id_c).contains("stage=Landed"), "c は Landed");
     clean(&[&repo, &state]);
 }
 
 /// `--pr-cmd` の形は列を見ない（main を動かさない）: 前の便が列に居ても待たず、`order=` を出さない。
+/// 列を見ない形は面 5 へも `order` を書かないので、「待たなかった」の pin は stdout に `order=` が無いこと
+/// だけである（設計 gate-cost.md §23 形 (1)・記録を書かない面に空文字の pin を置いても RED を作れない）。
+/// 壁時計は測らない（負荷下で偽に落ちる）。
 #[test]
 fn pipe_order_pr_cmd_does_not_look_at_the_queue() {
     let (repo, state) = repo_with_state();
@@ -1039,12 +1044,10 @@ fn pipe_order_pr_cmd_does_not_look_at_the_queue() {
     let (_id_a, id_b) = two_gated_runs(&repo, &state, &marker);
     let rules = write_rules_land_wait(&state, "rules-order.toml", Some(30));
     let main = git(&repo, &["rev-parse", "refs/heads/main"]);
-    let started = Instant::now();
     let out = land_extra(&repo, &state, &id_b, &["--rules", &rules, "--pr-cmd", "true"]);
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "PR の口: {}", stderr_of(&out));
     assert!(stdout_of(&out).contains("landed=pr"), "{}", stdout_of(&out));
     assert!(!stdout_of(&out).contains("order="), "列を見ない形は order= を出さない: {}", stdout_of(&out));
-    assert!(started.elapsed() < Duration::from_secs(30), "上限まで待たない");
     assert_eq!(git(&repo, &["rev-parse", "refs/heads/main"]), main, "main は動かない");
     clean(&[&repo, &state]);
 }

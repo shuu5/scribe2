@@ -2758,8 +2758,9 @@ fn fleet_usage_refresh_failures_keep_token_expired_and_name_the_refresh() {
 
 /// refresh の timeout の歯が rules fixture に置く上限（秒）。1 s だと負荷下で子の起動より先に切れる
 /// （.249 run 5 の再 gate 2026-09-14 12:08Z・load avg 17 で (d) が赤・main 単独では緑）ので数秒にする。
-/// fixture の manifest の値であって rules 行の裁定ではない。
-const REFRESH_TIMEOUT_S: u64 = 4;
+/// 4 s でも走行 9〜11 の下では偽 claude が `{spy}/child` を書く前に切れた（gate の log 5 便・2026-09-16・
+/// 設計 gate-cost.md §23 形 (2)(c)）ので 15 s にする。fixture の manifest の値であって rules 行の裁定ではない。
+const REFRESH_TIMEOUT_S: u64 = 15;
 
 /// 偽 claude が pid file を書くのを待つ上限（子が起動に達しない周を停止経路の失敗と混同しないための待ち）。
 // flip-check: retroactive s2-07l.385
@@ -2785,8 +2786,8 @@ fn refresh_timeout_fixture() -> (UsageFixture, PathBuf) {
     (fx, curl)
 }
 
-/// 停止経路が要する壁時計の上限: 上限 + 猶予（埋め込みの `pipe.stop_grace_ms`・TERM 後と KILL 後の 2 回）+ 余裕。
-fn refresh_stop_bound() -> Duration {
+/// 停止の猶予 1 回分（埋め込み manifest の `pipe.stop_grace_ms`・読めない周は 0）。
+fn stop_grace() -> Duration {
     let grace_ms = Manifest::embedded()
         .ok()
         .and_then(|manifest| manifest.get("pipe.stop_grace_ms").map(|row| row.value.clone()))
@@ -2795,7 +2796,42 @@ fn refresh_stop_bound() -> Duration {
             _ => None,
         })
         .unwrap_or(0);
-    Duration::from_secs(REFRESH_TIMEOUT_S + STOP_MARGIN_S) + Duration::from_millis(grace_ms.saturating_mul(2))
+    Duration::from_millis(grace_ms)
+}
+
+/// 停止経路が要する壁時計の上限: 上限 + 猶予（[`stop_grace`]・TERM 後と KILL 後の 2 回）+ 余裕。
+fn refresh_stop_bound() -> Duration {
+    Duration::from_secs(REFRESH_TIMEOUT_S + STOP_MARGIN_S) + stop_grace().saturating_mul(2)
+}
+
+/// 器を 1 回起こした周の材料: 出力と、時刻 2 つ（起動から返るまでの経過・返った時刻）。起動の段の判定は
+/// 「返ってから」を自分の時計で測るので、歯は壁時計の assert を持たない（設計 gate-cost.md §23 形 (2)）。
+struct RefreshRun {
+    /// `fleet usage` の出力。
+    out: Output,
+    /// 起動から返るまでの経過。
+    elapsed: Duration,
+    /// 器が返った時刻（「返ってから判定まで」の基点）。
+    returned: Instant,
+}
+
+/// 偽 claude つきで `fleet usage` を 1 回撃ち、時刻 2 つを測って返す（`path` が在れば PATH を差し替える）。
+fn run_refresh(fx: &UsageFixture, curl: &Path, claude: &Path, path: Option<&str>) -> RefreshRun {
+    let started = Instant::now();
+    let out = match path {
+        Some(found) => run_usage_with_claude_on_path(fx, curl, claude, found),
+        None => run_usage_with_claude(fx, curl, claude),
+    };
+    let returned = Instant::now();
+    RefreshRun { out, elapsed: returned.saturating_duration_since(started), returned }
+}
+
+/// `/proc/loadavg` の 1 分値（読めない周は `-`）。落ちた周の文に載せる provenance（C10）。
+fn loadavg_1min() -> String {
+    fs::read_to_string("/proc/loadavg")
+        .ok()
+        .and_then(|text| text.split_whitespace().next().map(str::to_owned))
+        .unwrap_or_else(|| "-".to_owned())
 }
 
 /// 偽 claude が `{spy}/<who>` に書いた 1 行（trim 済み）。上限まで poll し、達しない周は `None`。
@@ -2816,28 +2852,84 @@ fn spy_line(fx: &UsageFixture, who: &str) -> Option<String> {
 }
 
 /// timeout の歯に共通の外形: rc 0・`refresh=timeout` の 1 行・停止経路の上限の内側で返る。
-fn assert_refresh_timeout(out: &Output, elapsed: Duration) {
-    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{out:?}");
+/// 超えた周の文は段 `return` と経過・上限・猶予を名乗る（bound の式は不変・§23 形 (2)(d)）。
+fn assert_refresh_timeout(run: &RefreshRun) {
+    assert_eq!(run.out.status.code(), Some(i32::from(RC_OK)), "{:?}", run.out);
     assert_eq!(
-        out_lines(out),
+        out_lines(&run.out),
         vec!["usage: account=a1 unmeasured reason=token_expired refresh=timeout".to_owned()],
-        "{out:?}"
+        "{:?}",
+        run.out
     );
     let bound = refresh_stop_bound();
-    assert!(elapsed < bound, "上限で止める（{bound:?} の内側）: {elapsed:?}");
+    assert!(
+        run.elapsed < bound,
+        "stage=return 上限で止めない elapsed_ms={} bound_ms={} timeout_s={REFRESH_TIMEOUT_S} grace_ms={}",
+        run.elapsed.as_millis(),
+        bound.as_millis(),
+        stop_grace().as_millis()
+    );
 }
 
-/// `who`（`child` / `grandchild`）の pid が書かれていて、その `/proc` が無い。書かれていない周は
-/// 「子が起動に達しない」で落ちる（停止経路の失敗と混同しない）。
+/// 起動の段（`launch`）の判定: **器が返った後**に `{spy}/<who>` の pid を読む。無い周は [`PID_FILE_WAIT`] を
+/// poll せず、未達の文——段・経過 2 値（起動から返るまで `run_ms` / 返ってから判定まで `judged_after_return_ms`）・
+/// fixture の上限・load——を返す。返る**前**の待ち（`term` の到着など）は [`spy_line`] のまま（§23 形 (2)(a)）。
+fn launched_pid(fx: &UsageFixture, who: &str, run: &RefreshRun) -> Result<String, String> {
+    if let Ok(text) = fs::read_to_string(fx.spy.join(who)) {
+        let line = text.trim().to_owned();
+        if !line.is_empty() {
+            return Ok(line);
+        }
+    }
+    Err(format!(
+        "{who}: stage=launch 起動に達しない（器が返った後は待たない・停止経路の失敗ではない） \
+         run_ms={} judged_after_return_ms={} timeout_s={REFRESH_TIMEOUT_S} load1={}",
+        run.elapsed.as_millis(),
+        run.returned.elapsed().as_millis(),
+        loadavg_1min()
+    ))
+}
+
+/// `/proc/<pid>/stat` の state（最後の `)` の後ろの第 1 欄）。`/proc` が無い・読めない周は `None`。
+fn proc_state(pid: &str) -> Option<char> {
+    let text = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let after = text.rsplit_once(')')?.1;
+    after.split_whitespace().next()?.chars().next()
+}
+
+/// pid が「残っていない」か: `/proc/<pid>` が無いか、state が `Z`（回収待ち＝既に死んでいて親の wait を待つだけ・
+/// KILL の直後はこの形で `/proc` に残る）。
+fn is_gone(pid: &str) -> bool {
+    !Path::new(&format!("/proc/{pid}")).exists() || proc_state(pid) == Some('Z')
+}
+
+/// `who`（`child` / `grandchild`）の pid が器の返る前に書かれていて、その process が残っていない。
+/// 消えるのは停止経路の後なので猶予（[`stop_grace`]）まで poll する。落ちた周の文は段（`launch` / `stop`）を名乗る。
 #[expect(
     clippy::panic,
     reason = "統合 test の helper。clippy の allow-panic-in-tests は #[test] 関数の中だけに効く"
 )]
-fn assert_gone(fx: &UsageFixture, who: &str) {
-    let Some(pid) = spy_line(fx, who) else {
-        panic!("{who}: 子が起動に達しない（pid file が {PID_FILE_WAIT:?} で書かれない・停止経路の失敗ではない）");
+fn assert_gone(fx: &UsageFixture, who: &str, run: &RefreshRun) {
+    let pid = match launched_pid(fx, who, run) {
+        Ok(found) => found,
+        Err(line) => panic!("{line}"),
     };
-    assert!(!Path::new(&format!("/proc/{pid}")).exists(), "{who}（pid {pid}）が残らない");
+    let grace = stop_grace();
+    let started = Instant::now();
+    loop {
+        if is_gone(&pid) {
+            return;
+        }
+        if started.elapsed() >= grace {
+            panic!(
+                "{who}: stage=stop 残っている pid={pid} state={} elapsed_ms={} grace_ms={}",
+                proc_state(&pid).unwrap_or('-'),
+                started.elapsed().as_millis(),
+                grace.as_millis()
+            );
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
 }
 
 /// `sh` / `sleep` / `kill` だけを引ける PATH（`systemd-run` の**無い** host＝`Unconfined(NoTool)`・scope の release が
@@ -2872,12 +2964,10 @@ const SLEEPING_GRANDCHILD: &str = "sleep 30 &\necho $! > \"{spy}/grandchild\"\ne
 fn fleet_usage_refresh_timeout_stops_the_child_and_its_grandchild() {
     let (fx, curl) = refresh_timeout_fixture();
     let claude = fake_claude(&fx, SLEEPING_GRANDCHILD);
-    let started = Instant::now();
-    let out = run_usage_with_claude(&fx, &curl, &claude);
-    let elapsed = started.elapsed();
-    assert_refresh_timeout(&out, elapsed);
+    let run = run_refresh(&fx, &curl, &claude, None);
+    assert_refresh_timeout(&run);
     for who in ["child", "grandchild"] {
-        assert_gone(&fx, who);
+        assert_gone(&fx, who, &run);
     }
     drop_fixture(&fx);
 }
@@ -2891,12 +2981,10 @@ fn fleet_usage_refresh_timeout_unconfined_stops_the_child_and_its_grandchild() {
     let (fx, curl) = refresh_timeout_fixture();
     let path = stop_path(&fx);
     let claude = fake_claude(&fx, SLEEPING_GRANDCHILD);
-    let started = Instant::now();
-    let out = run_usage_with_claude_on_path(&fx, &curl, &claude, &path);
-    let elapsed = started.elapsed();
-    assert_refresh_timeout(&out, elapsed);
+    let run = run_refresh(&fx, &curl, &claude, Some(&path));
+    assert_refresh_timeout(&run);
     for who in ["child", "grandchild"] {
-        assert_gone(&fx, who);
+        assert_gone(&fx, who, &run);
     }
     drop_fixture(&fx);
 }
@@ -2913,11 +3001,9 @@ fn fleet_usage_refresh_timeout_unconfined_term_reaches_the_child() {
         &fx,
         "trap 'echo term > \"{spy}/term\"; exit 0' TERM\necho $$ > \"{spy}/child\"\nsleep 30 &\nwait",
     );
-    let started = Instant::now();
-    let out = run_usage_with_claude_on_path(&fx, &curl, &claude, &path);
-    let elapsed = started.elapsed();
-    assert_refresh_timeout(&out, elapsed);
-    assert_gone(&fx, "child");
+    let run = run_refresh(&fx, &curl, &claude, Some(&path));
+    assert_refresh_timeout(&run);
+    assert_gone(&fx, "child", &run);
     assert_eq!(spy_line(&fx, "term").as_deref(), Some("term"), "TERM が子に届いた");
     drop_fixture(&fx);
 }
@@ -2930,14 +3016,63 @@ fn fleet_usage_refresh_timeout_unconfined_kills_the_child_that_ignores_term() {
     let (fx, curl) = refresh_timeout_fixture();
     let path = stop_path(&fx);
     let claude = fake_claude(&fx, &format!("trap '' TERM\n{SLEEPING_GRANDCHILD}"));
-    let started = Instant::now();
-    let out = run_usage_with_claude_on_path(&fx, &curl, &claude, &path);
-    let elapsed = started.elapsed();
-    assert_refresh_timeout(&out, elapsed);
+    let run = run_refresh(&fx, &curl, &claude, Some(&path));
+    assert_refresh_timeout(&run);
     for who in ["child", "grandchild"] {
-        assert_gone(&fx, who);
+        assert_gone(&fx, who, &run);
     }
     drop_fixture(&fx);
+}
+
+/// 文の `<key><数>` の値（ms）。token が無い・数でない周は [`u128::MAX`]（上限の pin に落ちる側）。
+fn token_ms(line: &str, key: &str) -> u128 {
+    line.split_whitespace()
+        .find_map(|word| word.strip_prefix(key))
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(u128::MAX)
+}
+
+/// (n-a) 起動の段の未達は器が返った後に待たない（設計 gate-cost.md §23 形 (2)(a)）: pid を書かずに上限を超えて
+/// 眠る偽 claude で `refresh=timeout` の後、[`launched_pid`] が段 `launch` の文（経過 2 値・上限・load つき）を返し、
+/// その「返ってから判定まで」は [`PID_FILE_WAIT`] に届かない——返った後も poll する形はこの pin で落ちる。
+// flip-check: retroactive s2-07l.417
+#[test]
+fn gate_flaky_bound_launch_miss_is_reported_without_the_pid_wait() {
+    let (fx, curl) = refresh_timeout_fixture();
+    let claude = fake_claude(&fx, "sleep 30");
+    let run = run_refresh(&fx, &curl, &claude, None);
+    assert_refresh_timeout(&run);
+    let line = launched_pid(&fx, "child", &run).expect_err("pid file を書かない周は起動に達しない");
+    assert!(line.contains("stage=launch"), "段を名乗る: {line}");
+    assert!(line.contains(&format!("timeout_s={REFRESH_TIMEOUT_S}")), "fixture の上限を載せる: {line}");
+    assert!(line.contains("load1="), "load の provenance を載せる: {line}");
+    assert!(token_ms(&line, "run_ms=") < u128::MAX, "起動から返るまでの経過を載せる: {line}");
+    let after = token_ms(&line, "judged_after_return_ms=");
+    assert!(after < PID_FILE_WAIT.as_millis(), "返ってから判定まで待たない（{PID_FILE_WAIT:?} 未満）: {line}");
+    drop_fixture(&fx);
+}
+
+/// (n-b) 回収していない子（state `Z`）は「残っていない」に数える（設計 gate-cost.md §23 形 (2)(b)）: 歯が起こして
+/// wait しない `sh` は終えた後も回収まで `/proc/<pid>` に残るので、`/proc` の存在だけで見る判定は停止経路の全長で
+/// 「残った」と読む。器を起こさない pure な判定の歯。
+// flip-check: retroactive s2-07l.417
+#[test]
+fn gate_flaky_bound_zombie_counts_as_gone() {
+    let mut child = Command::new("sh").args(["-c", "exit 0"]).spawn().expect("子を起こせる");
+    let pid = child.id().to_string();
+    let started = Instant::now();
+    let mut state = proc_state(&pid);
+    while state != Some('Z') && started.elapsed() < Duration::from_secs(10) {
+        std::thread::sleep(Duration::from_millis(10));
+        state = proc_state(&pid);
+    }
+    assert_eq!(state, Some('Z'), "回収していない子は Z で残る（pid {pid}）");
+    assert!(
+        Path::new(&format!("/proc/{pid}")).exists(),
+        "回収の前は /proc に残る（存在だけを見る判定は「残った」と読む・pid {pid}）"
+    );
+    assert!(is_gone(&pid), "state Z は「残っていない」に数える（pid {pid}）");
+    child.wait().expect("子を回収できる");
 }
 
 /// (3f)(3g) fresh な credential と墓標では偽 claude を起こさない（argv の写しが無い）。
