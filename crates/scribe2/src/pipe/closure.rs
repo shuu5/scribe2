@@ -31,6 +31,11 @@
 //! `surfaces` / `creates` / `tests` / `also`）から write-set を**導出値**として作る = 閉包 ∪ 歯の置き場（base の
 //! `#[test]` の fn 名が verify の filter 語を含む file）∪ 外形 pin ∪ 新規 file ∪ Rust の外の file。手書きの
 //! write-set は [`check_drift`] で導出値との集合一致だけを認める（接頭辞 `+` は剥がして比べる）。
+//!
+//! **fn 形の touches**（§18・行 r）: `touches` の項目の末尾が小文字始まりの識別子（`crate::pipe::cli::resume`）なら
+//! 型でなく fn の名指しで、閉包はその module の段（[`in_module`]）で `fn <識別子>` を宣言する file（[`declares_fn`]・
+//! 下界・呼び手は数えない）。宣言する file が 0 の周は [`ClosureError::FnUndeclared`]（空集合に潰さない・C10）。型形の
+//! 4 形の判定は不変。
 
 use std::collections::BTreeSet;
 
@@ -115,6 +120,13 @@ pub enum ClosureError {
         /// 書かれていた字面。
         name: String,
     },
+    /// fn 形の `touches`（`crate::<module>::<snake_ident>`）の fn を宣言する file が base に無い（§18・空集合に潰さない）。
+    FnUndeclared {
+        /// module の段の字面（`crate::` を除いた `pipe::cli`・`crate` 直下は `crate`）。
+        module: String,
+        /// fn の名。
+        name: String,
+    },
     /// `.rs` を読めない。
     Unreadable {
         /// 読めなかった file の repo 相対 path。
@@ -162,6 +174,7 @@ impl ClosureError {
     pub fn reason(&self) -> String {
         match *self {
             Self::TypeForm { ref name } => format!("touches の {name} が crate::module::Type の形でない"),
+            Self::FnUndeclared { ref module, ref name } => format!("touches の {module}::{name} を宣言する file が base に無い"),
             Self::Unreadable { ref path, ref reason } => format!("閉包を測る {path} を読めない: {reason}"),
             Self::SurfaceUnknown { ref name } => {
                 format!("surfaces の {name} は外形 snapshot の名にも usage を持つ subcommand の名にも無い")
@@ -373,34 +386,49 @@ fn declares_fn(body: &str, ident: &str) -> bool {
 
 /// `touches` の 1 項目を読んだもの。
 struct Touched<'a> {
-    /// 型の名（最後の segment）。
+    /// 型か fn の名（最後の segment）。
     name: &'a str,
-    /// 型を置く module の名（`crate` 直下の型は `None`）。
+    /// 型か fn を置く module の名（`crate` 直下は `None`）。
     module: Option<&'a str>,
+    /// fn 形か（末尾が小文字始まりの識別子・§18）。型形は `false`。
+    fn_form: bool,
 }
 
-/// `touches` の型ごとに閉包を求め、和集合を返す（path の辞書順）。
+/// `touches` の型 / fn ごとに閉包を求め、和集合を返す（path の辞書順）。
 ///
 /// **読めない file が 1 本でも在れば `Err`**（その file が型を持つかを測れない＝足りない file を見落とす側へ
-/// 倒さない）。
+/// 倒さない）。fn 形で宣言する file が 0 の周も `Err`（[`ClosureError::FnUndeclared`]・空集合に潰さない）。
 pub fn closure(types: &[String], sources: &[Source]) -> Result<BTreeSet<String>, ClosureError> {
     let texts = texts_of(sources)?;
     let mut found = BTreeSet::new();
     for raw in types {
         let touched = touched(raw).ok_or_else(|| ClosureError::TypeForm { name: raw.clone() })?;
-        found.extend(files_of(&touched, &texts));
+        let files = files_of(&touched, &texts);
+        if touched.fn_form && files.is_empty() {
+            return Err(ClosureError::FnUndeclared { module: module_path(raw), name: touched.name.to_owned() });
+        }
+        found.extend(files);
     }
     Ok(found)
 }
 
-/// `crate::module::Type` を読む。形が違えば `None`。
+/// `crate::module::Type`（型形）か `crate::module::snake_ident`（fn 形）を読む。形が違えば `None`。
 fn touched(raw: &str) -> Option<Touched<'_>> {
     let segments: Vec<&str> = raw.split("::").collect();
     let (name, head) = segments.split_last()?;
+    let fn_form = name.starts_with(|found: char| found.is_ascii_lowercase());
     let formed = head.first() == Some(&"crate")
         && segments.iter().all(|segment| is_ident(segment))
-        && name.starts_with(|found: char| found.is_ascii_uppercase());
-    formed.then(|| Touched { name, module: head.last().copied().filter(|found| *found != "crate") })
+        && (fn_form || name.starts_with(|found: char| found.is_ascii_uppercase()));
+    formed.then(|| Touched { name, module: head.last().copied().filter(|found| *found != "crate"), fn_form })
+}
+
+/// `touches` の 1 項目の module の段の字面（`crate::pipe::cli::resume` → `pipe::cli`・`crate` 直下は `crate`）。
+fn module_path(raw: &str) -> String {
+    raw.strip_prefix(CRATE_ROOT)
+        .and_then(|rest| rest.strip_prefix("::"))
+        .and_then(|rest| rest.rsplit_once("::"))
+        .map_or_else(|| CRATE_ROOT.to_owned(), |(head, _)| head.to_owned())
 }
 
 /// 識別子の字面か（ASCII の英数字と `_`・先頭は数字でない）。
@@ -415,7 +443,17 @@ fn is_ident_char(found: char) -> bool {
 
 /// 1 つの型の閉包（型が見えている file〔[`sees`]〕のうち 4 形のどれかを持つもの）。const slice の宣言 file も
 /// 見えている file だけ＝別 module の同名 const slice（別の同名の型の slice）を拾わない。
+///
+/// fn 形（§18）は module の段（[`in_module`]）で `fn <名>` を宣言する file だけ（呼び手と別 module の同名の fn は
+/// 数えない・下界）。
 fn files_of(touched: &Touched<'_>, texts: &[(&str, &str)]) -> BTreeSet<String> {
+    if touched.fn_form {
+        return texts
+            .iter()
+            .filter(|&&(path, text)| in_module(path, touched.module) && declares_fn(text, touched.name))
+            .map(|&(path, _)| path.to_owned())
+            .collect();
+    }
     let mut names: BTreeSet<&str> = BTreeSet::new();
     let mut declaring: BTreeSet<&str> = BTreeSet::new();
     let none = BTreeSet::new();
@@ -812,7 +850,7 @@ mod tests {
             closure(&["crate::paint::Hue".to_owned()], &sources),
             Err(ClosureError::Unreadable { path: "src/broken.rs".to_owned(), reason: "invalid utf-8".to_owned() })
         );
-        for name in ["Hue", "paint::Hue", "crate::paint::hue", "crate::pa-int::Hue", "crate::"] {
+        for name in ["Hue", "paint::Hue", "crate::paint::_hue", "crate::pa-int::Hue", "crate::"] {
             assert_eq!(
                 closure(&[name.to_owned()], &fixture()),
                 Err(ClosureError::TypeForm { name: name.to_owned() }),
@@ -821,6 +859,39 @@ mod tests {
         }
         let reason = ClosureError::TypeForm { name: "Hue".to_owned() }.reason();
         assert!(reason.contains("Hue") && !reason.contains('\n'), "理由は型名を名乗る 1 行: {reason}");
+    }
+
+    /// fn 形の touches（§18）: `crate::<module>::<snake_ident>` は module の段で `fn <名>` を宣言する file だけを持ち
+    /// （呼び手・別 module の同名の fn・同 module の別の fn は持たない）、宣言する file が 0 の周は `FnUndeclared`
+    /// （module の段と名を名乗る 1 行・`TypeForm` とは別の字面）。`crate` 直下の fn は `lib.rs` / `main.rs` の宣言。
+    #[test]
+    fn contract_derive_fn_form_collects_declaring_files_in_the_module_only() {
+        let sources = vec![
+            source("crates/toy/src/pipe/cli.rs", "pub fn resume(state: &str) -> usize {\n    state.len()\n}\n\npub fn stop() {}\n"),
+            source("crates/toy/src/pipe/cli/run.rs", "pub(super) fn resume(at: usize) -> usize {\n    at\n}\n"),
+            source("crates/toy/src/main.rs", "fn main() {\n    let _ = crate::pipe::cli::resume(\"x\");\n}\n\npub fn boot() {}\n"),
+            source("crates/toy/src/tone.rs", "pub fn resume() -> usize {\n    0\n}\n"),
+        ];
+        assert_eq!(
+            of(&["crate::pipe::cli::resume"], &sources),
+            set(&["crates/toy/src/pipe/cli.rs", "crates/toy/src/pipe/cli/run.rs"]),
+            "module の段で宣言する file だけ（呼び手の main.rs と別 module の tone.rs は入らない）"
+        );
+        assert_eq!(of(&["crate::boot"], &sources), set(&["crates/toy/src/main.rs"]), "crate 直下の fn は main.rs の宣言");
+        let missing = closure(&["crate::pipe::cli::missing".to_owned()], &sources);
+        assert_eq!(
+            missing,
+            Err(ClosureError::FnUndeclared { module: "pipe::cli".to_owned(), name: "missing".to_owned() }),
+            "宣言する file が 0 なら typed に断る（空集合に潰さない）"
+        );
+        assert_eq!(
+            closure(&["crate::missing".to_owned()], &sources),
+            Err(ClosureError::FnUndeclared { module: "crate".to_owned(), name: "missing".to_owned() }),
+            "crate 直下の module の段は crate"
+        );
+        let reason = missing.map_err(|error| error.reason()).err().unwrap_or_default();
+        assert_eq!(reason, "touches の pipe::cli::missing を宣言する file が base に無い");
+        assert!(!reason.contains("crate::module::Type の形でない"), "TypeForm とは別の字面: {reason}");
     }
 
     /// 外形 pin の fixture: 外形 snapshot 2 枚（doctor / pipe）と usage を持つ subcommand `pipe`・歯の file・src の file。

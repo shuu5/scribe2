@@ -1752,6 +1752,80 @@ fn contract_derive_teeth_place_uses_base_test_names() {
     clean(&[&repo, &state]);
 }
 
+// ───── fn 形の touches（設計 docs/design/contract-source.md §18・行 r・`s2-07l.358`・接頭辞 `contract_derive_fn_`） ─────
+
+/// fn 形の toy（歯の中で組む・base の file ではない）: module `pipe::cli` の file が `fn resume(` を宣言し、呼び手
+/// （`main.rs`）と別 module の同名の fn（`tone.rs`）を置く。型形の退行 pin のために**型を持つ file**も同じ toy に置く:
+/// `paint.rs` に `pub enum Hue`（と const slice `HUES`＝宣言 file が第 4 形で閉包に入る・[`TABLE_TINT`] と同じ形）・
+/// `arm.rs` に `Hue::Red =>` の arm。
+const FN_FORM_FILES: &[(&str, &str)] = &[
+    ("crates/toy/src/pipe/cli.rs", "pub fn resume(state: &str) -> usize {\n    state.len()\n}\n"),
+    ("crates/toy/src/main.rs", "fn main() {\n    let _ = crate::pipe::cli::resume(\"x\");\n}\n"),
+    ("crates/toy/src/tone.rs", "pub fn resume() -> usize {\n    0\n}\n"),
+    ("crates/toy/src/paint.rs", "pub enum Hue {\n    Red,\n    Blue,\n}\n\npub const HUES: &[Hue] = &[Hue::Red, Hue::Blue];\n"),
+    ("crates/toy/src/arm.rs", "use crate::paint::Hue;\n\npub fn name(hue: Hue) -> u8 {\n    match hue {\n        Hue::Red => 1,\n        _ => 0,\n    }\n}\n"),
+];
+
+/// fn 形の toy repo に `touches` だけの行 `id` を置いて intake を 1 回撃つ（repo と置き場は呼び手が畳む）。
+fn fn_form_intake(id: &str, touches: &[&str]) -> (PathBuf, PathBuf, Output) {
+    let quoted: Vec<String> = touches.iter().map(|item| format!("\"{item}\"")).collect();
+    let touches = format!("[{}]", quoted.join(", "));
+    let row = derive_row(id, &[("touches", touches.as_str())]);
+    let (repo, state) = derive_repo_with(&table_doc(&table_region(&[row])), FN_FORM_FILES);
+    let out = intake_raw(&repo, &state, &pointed_contract(&repo, &format!("{id}.toml"), id), &format!("s2-{id}"));
+    (repo, state, out)
+}
+
+/// (a) `touches = ["crate::pipe::cli::resume"]`（toy の `src/pipe/cli.rs` が `fn resume(` を宣言）の行は intake を通り、
+/// 導出値に宣言する file が入る。呼び手（`main.rs`）と別 module の同名の fn（`tone.rs`）は入らない（下界）。base は
+/// 型の形でないと断る（RED）。
+#[test]
+fn contract_derive_fn_touches_names_the_declaring_file() {
+    let (repo, state, out) = fn_form_intake("a", &["crate::pipe::cli::resume"]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "fn 形の行は導出値で通る: {}", stderr_of(&out));
+    let tokens = intake_tokens(&out);
+    assert!(tokens.contains(&"write-set=derived".to_owned()) && tokens.contains(&"files=1".to_owned()), "判定行: {tokens:?}");
+    let found = copied_write_set(&state, &run_id_of(&out));
+    assert_eq!(found, ["crates/toy/src/pipe/cli.rs"], "宣言する file だけ（呼び手の main.rs・別 module の tone.rs は入らない）");
+    clean(&[&repo, &state]);
+}
+
+/// (b) `touches = ["crate::pipe::cli::missing"]`（どの file も `fn missing(` を宣言しない）は受付で断られ（rc 1）、
+/// 断りの字面は新 variant のもの（`TypeForm` の「crate::module::Type の形でない」ではない）。run dir も
+/// event も作らない＝導出値を空集合に潰さない。
+#[test]
+fn contract_derive_fn_refuses_when_no_file_declares_it() {
+    let (repo, state, out) = fn_form_intake("b", &["crate::pipe::cli::missing"]);
+    let err = stderr_of(&out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "宣言する file が無い周は rc 1: {err}");
+    assert!(err.contains("touches の pipe::cli::missing を宣言する file が base に無い"), "新 variant の字面で断る: {err}");
+    assert!(!err.contains("crate::module::Type の形でない"), "TypeForm の字面ではない: {err}");
+    assert_eq!(event_count(&state), 0, "断った周は event を書かない");
+    assert!(!state.join("pipe").exists(), "run dir も作らない（導出値を空集合にしない）");
+    clean(&[&repo, &state]);
+}
+
+/// (c) 型を持つ同じ toy で、型形の行 `touches = ["crate::paint::Hue"]` の導出値は宣言 file（paint.rs）と arm の file
+/// （arm.rs）の 2 つのまま（fn 形の追加で型形が動かない退行の pin）で、fn 形と型形を同じ行に並べた `touches` の導出値は
+/// 両者の和集合。
+#[test]
+fn contract_derive_fn_keeps_type_closure_unchanged() {
+    let (repo, state, out) = fn_form_intake("c", &["crate::paint::Hue"]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "型形の行は通る: {}", stderr_of(&out));
+    let typed = copied_write_set(&state, &run_id_of(&out));
+    assert_eq!(typed, ["crates/toy/src/arm.rs", "crates/toy/src/paint.rs"], "型形の閉包は宣言 file と arm の file の 2 つのまま");
+    clean(&[&repo, &state]);
+    let (repo, state, out) = fn_form_intake("d", &["crate::paint::Hue", "crate::pipe::cli::resume"]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "型形と fn 形を並べた行は通る: {}", stderr_of(&out));
+    let both = copied_write_set(&state, &run_id_of(&out));
+    assert_eq!(
+        both,
+        ["crates/toy/src/arm.rs", "crates/toy/src/paint.rs", "crates/toy/src/pipe/cli.rs"],
+        "型形の閉包 ∪ fn 形の宣言 file"
+    );
+    clean(&[&repo, &state]);
+}
+
 // ───── 閉包の同名衝突（設計 docs/design/contract-source.md §3「閉包の同名衝突」・行 j・`s2-07l.347`・接頭辞 `contract_closure_ext_same_name_`） ─────
 
 /// 同名の struct `Marker` を持つ module の本文（`Marker {` の構築点・`Marker::HEAD` の arm・`const ALL: &[Marker]` の

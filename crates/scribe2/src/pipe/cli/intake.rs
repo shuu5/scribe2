@@ -246,6 +246,7 @@ fn refuse_of(error: ClosureError, row: &ContractRow) -> Refuse {
         ClosureError::AlsoNamesRust { item } => Refuse::AlsoNamesRust { item },
         ClosureError::TestsNotATeethFile { item } => Refuse::TestsNotATeethFile { item },
         ClosureError::ItemUnresolved { item } => Refuse::WriteSetItemUnresolved { item },
+        ClosureError::FnUndeclared { module, name } => Refuse::FnUndeclared { module, name },
     }
 }
 

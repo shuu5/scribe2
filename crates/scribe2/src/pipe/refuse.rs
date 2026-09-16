@@ -54,6 +54,7 @@ pub(crate) const REFUSALS: &[&str] = &[
     "teeth-place-unresolved",
     "also-names-rust",
     "tests-not-a-teeth-file",
+    "fn-undeclared",
 ];
 
 /// 契約 file が読めた後の、契約単位の拒否理由。**新しい理由は variant を 1 つ足す**（憲法 C2）。
@@ -143,6 +144,14 @@ pub(crate) enum Refuse {
         /// 書かれていた項目。
         item: String,
     },
+    /// 行の fn 形の `touches`（`crate::<module>::<snake_ident>`）の fn を宣言する file が base に無い（§18・行 r・
+    /// 導出値を空集合に潰さない）。
+    FnUndeclared {
+        /// module の段の字面（`pipe::cli`・`crate` 直下は `crate`）。
+        module: String,
+        /// fn の名。
+        name: String,
+    },
 }
 
 impl Refuse {
@@ -163,6 +172,7 @@ impl Refuse {
             Self::TeethPlaceUnresolved { .. } => "teeth-place-unresolved",
             Self::AlsoNamesRust { .. } => "also-names-rust",
             Self::TestsNotATeethFile { .. } => "tests-not-a-teeth-file",
+            Self::FnUndeclared { .. } => "fn-undeclared",
         }
     }
 
@@ -199,13 +209,16 @@ impl Refuse {
                 format!("{file} の上限の余地が {headroom} 行で size {size} の見積に足りない")
             }
             Self::NameUnresolved { ref name, ref at } => format!("名指し {name} が base に無い（{at}）"),
-            // 4 理由の字面は導出の側（`ClosureError`）と同じ 1 本（受付が写すだけ・2 面に書かない）。
+            // 5 理由の字面は導出の側（`ClosureError`）と同じ 1 本（受付が写すだけ・2 面に書かない）。
             Self::WriteSetDrift { ref missing, ref extra } => {
                 ClosureError::WriteSetDrift { missing: missing.clone(), extra: extra.clone() }.reason()
             }
             Self::TeethPlaceUnresolved { ref filter } => ClosureError::TeethPlaceUnresolved { filter: filter.clone() }.reason(),
             Self::AlsoNamesRust { ref item } => ClosureError::AlsoNamesRust { item: item.clone() }.reason(),
             Self::TestsNotATeethFile { ref item } => ClosureError::TestsNotATeethFile { item: item.clone() }.reason(),
+            Self::FnUndeclared { ref module, ref name } => {
+                ClosureError::FnUndeclared { module: module.clone(), name: name.clone() }.reason()
+            }
         }
     }
 
@@ -224,7 +237,8 @@ impl Refuse {
             | Self::WriteSetDrift { .. }
             | Self::TeethPlaceUnresolved { .. }
             | Self::AlsoNamesRust { .. }
-            | Self::TestsNotATeethFile { .. } => RC_REFUSED,
+            | Self::TestsNotATeethFile { .. }
+            | Self::FnUndeclared { .. } => RC_REFUSED,
             Self::WriteSetUnreadable { .. } => RC_BROKEN,
             Self::ContractTable(ref found) => found.rc(),
         }
@@ -362,21 +376,30 @@ mod tests {
             Refuse::TeethPlaceUnresolved { filter: "fresh_".to_owned() },
             Refuse::AlsoNamesRust { item: "src/a.rs".to_owned() },
             Refuse::TestsNotATeethFile { item: "src/a.rs".to_owned() },
+            Refuse::FnUndeclared { module: "pipe::cli".to_owned(), name: "missing".to_owned() },
         ]
     }
 
-    /// write-set の導出の 4 理由（契約 (h)・設計 contract-source.md §3「write-set の導出」）: 宣言順の末尾に並び、rc 1 で、
-    /// 理由は不足と余分 / filter 語 / 項目を名乗る（字面は導出の側と同じ 1 本）。
+    /// write-set の導出の 5 理由（契約 (h)・設計 contract-source.md §3「write-set の導出」・§18 の fn 形）: 宣言順の末尾に
+    /// 並び、rc 1 で、理由は不足と余分 / filter 語 / 項目 / module の段と fn の名を名乗る（字面は導出の側と同じ 1 本）。
     #[test]
     fn refuse_derive_reasons_are_last_and_name_their_payload() {
         let found = samples();
         let tail: Vec<&str> = found.iter().skip(10).map(Refuse::as_str).collect();
-        assert_eq!(tail, ["write-set-drift", "teeth-place-unresolved", "also-names-rust", "tests-not-a-teeth-file"], "宣言順の末尾 4 つ");
+        assert_eq!(
+            tail,
+            ["write-set-drift", "teeth-place-unresolved", "also-names-rust", "tests-not-a-teeth-file", "fn-undeclared"],
+            "宣言順の末尾 5 つ"
+        );
         let reasons: Vec<String> = found.iter().skip(10).map(Refuse::reason).collect();
         assert!(reasons.first().is_some_and(|line| line.contains("missing: src/a.rs") && line.contains("extra: docs/x.md")), "{reasons:?}");
         assert!(reasons.get(1).is_some_and(|line| line.contains("fresh_") && line.contains("tests")), "{reasons:?}");
         assert!(reasons.get(2).is_some_and(|line| line.contains("also の src/a.rs")), "{reasons:?}");
         assert!(reasons.get(3).is_some_and(|line| line.contains("tests の src/a.rs")), "{reasons:?}");
+        assert!(
+            reasons.get(4).is_some_and(|line| line.contains("pipe::cli::missing を宣言する file が base に無い")),
+            "{reasons:?}"
+        );
         assert!(found.iter().skip(10).all(|refuse| refuse.rc() == RC_REFUSED && !refuse.reason().contains('\n')), "rc 1・1 行");
     }
 
