@@ -179,7 +179,7 @@ id = "a"
 title = "管理 tick の入力欄の門を 3 値（Clear / OwnQueued / Foreign）にし、自席の注入文は Enter 1 回で着地させ、cycle-stamp は /clear の直前に打つ — 断った周に back-off を課さない"
 req = ["FR38", "FR28"]
 section = "10"
-write-set = ["crates/scribe2/src/seat/inject.rs", "crates/scribe2/src/seat/cycle.rs", "crates/scribe2/src/seat/tick/exit.rs", "crates/scribe2/tests/e2e/seat/cycle.rs", "crates/scribe2/tests/e2e/snapshots/e2e__seat__seat_usage_external_form.snap"]
+write-set = ["crates/scribe2/src/seat/inject.rs", "crates/scribe2/src/seat/cycle.rs", "crates/scribe2/src/seat/tick/exit.rs", "crates/scribe2/tests/e2e/seat/cycle.rs"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail seat_cycle_own_queued_"]
 size = "S"
 done = "自席の注入文が入力欄に残った周は Enter 1 回で着地して cycle が進み、人間の文の周は断って stamp が立たず次の tick が再評価する"
