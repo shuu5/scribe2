@@ -178,6 +178,14 @@ scribe2 を載せる consumer が pipe を通すのに要る面は 3 つで、�
 - 触らない: verdict の 3 値と rc・`review.json` の既存 key・lens の起動の形（`{contract}` / `{design}` / `{requirements}`）・審査の観点 3 つ・gate の verdict.json（審査の段だけ）・`report` の既存 token（`runs=` / `landed=` / `human_events=`）。
 - 却下案: memory / notes の散文で型を数える（N2・母集団が測れない）／`evidence` の字面を grep して型を推定する（自由文の字面判定・C3.3）／型を rules 行に置く（型は理由の語彙であって閾値でも極性でもない・閉じた enum の領分）／`kind` を PASS にも必須にする（PASS に理由の型は無い・空の値を作らない）。
 
+## 23. 同型の審査 FAIL が N 回目で材料不変の run N+1 を受付が断り、直前の指摘（at）に対応する差分の無い焼き直しを受付が断る（契約表の行 w・`s2-07l.396`）
+
+- 何が起きているか: §22 の後続（user 裁定 2026-09-16T05:53Z・同型の停止の回数 N = 2・逐語は台帳 `s2-07l.395` notes）。§22 が Landed すると `review.json` と event に kind と at が残るが、受付（`cli/intake.rs` の `intake_run`・§21 の judge の側）は同じ bead の前の便の判定を読まない＝同じ kind の FAIL が何周続いても run N+1 は無限に出せ、焼き直しが前回の指摘（at）に触れていなくても通る（本日の実測: `.209` の 10 周のうち 7 周が同型「字面が現物と合わない」）。現物（verified・main a620600）: 受付の断りは write-set の弁別（§3）・上限の余地・live な便との交差（`exclude_overlap`）だけで、便の履歴を読む口は無い。審査の材料は run dir の `review/` に残る（`keep`・契約の写し + `design.txt`〔行の section の本文〕+ `requirements.txt`）。lens の verdict は同じ材料でも揺れる（`.380` で PASS ↔ FAIL）ので、材料不変の再 intake を 1 回も許さない形は採らない＝回数の線は rules 行。
+- 形: (1) **rules 行** `review.same_kind_stop`（`RuleKind` の variant `ReviewSameKindStop`・Int・**値 = 2**・裁定 id `user 2026-09-16T05:53Z`・C5・宣言順の末尾・値は manifest だけが持ち本節は写さない）。行の無い manifest は受付を 1 byte も動かさない（rc 2・行を名指す・`pipe.land_wait_s` と同じ極性）。(2) **同型の停止（受付の門・run dir も event も作らない・write-set の弁別の後・余地と交差の前）**: 受付は置き場の replay から同じ bead の便を id の新しい順に並べ、段が Reviewed 以降の便の `review.json` を読み（読めない便は `WriteSetUnreadable` と同じ断り＝`live` と同じ読み手・段が Intake の便は数えない）、先頭の便の kind と同じ kind が verdict PASS で途切れるまで連続する本数を数える（kind が unparsed の便は数えず連鎖も切らない＝lens の欠けを契約の型に化けさせない・C10）。本数が値に達し、かつ先頭の便の材料（`review/` の契約の写しと `design.txt`）が今回の材料（受付が写す形の契約 file〔導出値を置いた後〕と base から読む節の本文〔§4 の `design_text`・同じ 1 本〕）と両方とも同じ字面の周は、`Refuse` の新 variant `SameKindRepeated { kind, runs }`（名 `same-kind-repeated`・rc 1・runs = 数えた便 id の列・新しい順・理由の 1 行に kind と本数と行の値）で断る。契約か節のどちらかが変わっていれば通す（「焼き直しは書き直し」を器の線にする・§7 の形）。(3) **焼き直しの門（受付の門・同じ場所・停止の後）**: 同じ bead の直前の便（新しい順の先頭）の verdict が PASS でない周、その `review.json` の kind と at の各項目に「対応する差分」が在るかを **kind ごとに 1 関数**（`review.rs`・閉じた型 FindingKind〔§22〕の網羅 match）で測る: teeth-outside-write-set → at の各 path が今回の write-set（弁別済み・dir 項目はその配下）に在る／literal-mismatch → at の各識別子が今回の契約 file と節の本文に無い、または base に解ける（`NameUnresolved` の名指しの読み手と同じ 1 本）／section-material-missing → 節の本文が直前の便の `design.txt` と異なる。対応の無い項目が 1 つでも在る周は `Refuse` の新 variant `FindingUnaddressed { kind, at }`（名 `finding-unaddressed`・rc 1・at = 対応の無かった項目だけ・辞書順）で断る。goal-done-contradiction / vacuous-assert / other / unparsed と at の空な周は測れない＝通す（判断を要する型は planner に残す・裁定の (2) の線）。(4) 断りは §21 の preflight にもそのまま出る（judge の側に置く＝run を作らずに撃てる・planner が edit time に測る）。
+- 触らない: 審査の段（§4）と lens の起動・§22 の kind / at の書き方と `review.json` の既存 key・verdict の 3 値と rc・回数の値（manifest だけが持つ）・交差と余地の判定・`.394`（§21）の judge / create の割り方（先に Landed なら judge の中に置き、後なら `exclude_overlap` の隣に置いて `.394` が寄せる）・台帳（受付は run を作らないので QUESTION event の宿主が無い＝断りの 1 行と preflight で planner に届く）。
+- 歯（`pipe_intake_repeat_` 接頭辞・`tests/e2e/pipe/intake.rs`・偽 lens が最終行の JSON に kind と at を書く §22 の fixture・toy repo の設計 doc と契約 file を歯が書き換えて commit する）: 同じ kind の FAIL 2 便の後、契約 file と節の本文がともに不変の 3 便目は `same-kind-repeated` と 2 便の id を名指す／節の本文か契約 file のどちらかを変えると通る／kind が違う 2 便は通る／unparsed 2 便は通る／PASS を挟むと数え直す／teeth-outside-write-set at=path の便の後、write-set に path の無い契約は `finding-unaddressed` と path・在れば通る／literal-mismatch at=識別子 の便の後、識別子を書いたままで base に無い契約は断られ・消すか base に足すと通る／section-material-missing の便の後、節の本文が不変の契約は断られ・変えると通る／行の無い manifest は rc 2 で行を名指す。rules 行は `rules_review_same_kind_` 接頭辞（`tests/e2e/rules.rs`・値と kind と裁定 id と宣言順の pin・行と variant を対で足させる）。
+- 却下案: 回数を散文の作法にする（N2）／at を `evidence` の自由文から grep する（C3.3）／回数に達したら台帳へ QUESTION event を書く（受付は run を作らない・宿主が無い）／全 kind に門を撃つ（測れない型を偽の「対応済み」に倒す・C10）／同型の停止を契約 file の sha の差だけで解く（節の本文を見ない＝acceptance の言い換えだけで通り §7 の線に反する）／材料不変の再 intake を 1 回目から断る（lens の揺れの再測を塞ぐ・回数の線は裁定の値）／停止を段（Stage）の variant にする（受付の断りは段の遷移でない・run が無い）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -414,4 +422,16 @@ write-set = ["crates/scribe2/src/pipe/review.rs", "crates/scribe2/src/headless/l
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_review_kind_"]
 size = "M"
 done = "FAIL / INCONCLUSIVE の review.json と event が kind を持ち、kind の無い lens 出力は unparsed に倒れ、report の 1 行に review_fail= と by_kind= が宣言順に出る"
+
+[[contract]]
+id = "w"
+title = "同型の審査 FAIL が rules 行 review.same_kind_stop の回数に達した bead の材料不変の run N+1 を same-kind-repeated で断り、直前の at に対応する差分の無い焼き直しを finding-unaddressed で断る"
+req = ["FR49"]
+section = "23"
+touches = ["crate::pipe::refuse::Refuse", "crate::rules::RuleKind"]
+write-set = ["crates/scribe2/src/pipe/cli/intake.rs", "crates/scribe2/src/pipe/refuse.rs", "crates/scribe2/src/pipe/review.rs", "rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "crates/scribe2/tests/e2e/rules.rs", "crates/scribe2/tests/e2e/pipe.rs", "crates/scribe2/tests/e2e/pipe/intake.rs"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_intake_repeat_", "cargo nextest run -p scribe2 --no-tests=fail rules_review_same_kind_"]
+size = "M"
+done = "同じ kind の FAIL が行の値の本数続いた bead の材料不変の intake は same-kind-repeated で断られ、直前の at に対応する差分の無い契約は finding-unaddressed で断られ、材料か対応を変えた契約は通り、行の無い manifest は rc 2、rules 行が裁定 id 付きで 1 本増える"
+depends = ["v"]
 <!-- contracts:end -->
