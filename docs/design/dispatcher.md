@@ -15,7 +15,7 @@
 
 - **入力** = 台帳の open な bead のうち「依存が全部 closed ∧ acceptance が非空 ∧ `intake:memo` の label が無い ∧ acceptance に設計 pointer の行 `design = docs/design/<題>.md#<id>` が在る ∧ **現在の契約の sha に対する審査の verdict が PASS**」もの（.209 の `--design` と同じ字面・pointer の無い便は理由 `NoDesignPointer`・verdict の無い便は `NotReviewed { sha }`・FAIL / INCONCLUSIVE の便は `ReviewFailed { sha }`。列外の便も `dispatch ls` には理由付きで出す＝planner が直すべき契約が見える）。台帳の読みは rebrief と同じ子 process と同じ関数（`seat/rebrief.rs` の `read_ledger`・`bd --readonly list --limit 0 --json`・待ち上限は rules 行 `seat.ledger_timeout_s`）を共用し、読めない周は列を空と読まず `unmeasured` で止まる（NFR4・C10）。
 - **審査の時点 = 契約が出来た直後**（user 裁定 2026-09-15 13:4xZ「planner が作ったらその直後に lens は審査すべき」・逐語は台帳 s2-07l notes）。審査の段（[contract-source.md](./contract-source.md) §4・契約 (c) = s2-07l.241 の `Stage::Reviewed`・同じ lens・同じ雛形 `headless/lens-contract.txt`・同じ観点 3 つ）を起動の瞬間でなく、契約 file が出来た直後に 1 回撃つ。verdict は契約 file の sha に紐づく event log の 1 kind `ContractReviewed { bead, sha, verdict }`（append-only・replay で bead ごとの最新 sha の verdict を導く・C6.3 と同じ store）。契機は 2 つ: (1) .209 の生成の口が契約 file を書いた直後（planner の焼き直しで acceptance の sha が変われば生成が走り直し、審査も走り直す）(2) dispatcher の 1 周が「現 sha に verdict の無い便」を見つけた時（取りこぼしを次の tick で埋める）。`pipe run` は intake の直後、同じ sha の PASS が在れば Reviewed をその記録で埋めて lens を撃ち直さず、sha が違えば .241 のとおり撃つ（C2 の 1 実装・審査を飛ばす flag は作らない・C16）。理由: 契約の不備は planner の手空きのうちに返す（起動の瞬間まで見えないと planner の待ち時間が捨てられ、FAIL が列を塞ぐ）。
-- **順序** = 1 関数 `order(rows) -> Vec<Candidate>`: (1) 介入 `first` の便 (2) 台帳の `priority`（P0 → P4）(3) 起票順（id の数字）。同順は起票順。**散文の順序を持たない**（憲法 C2）。
+- **順序** = 1 関数 `order`（行の列 → 候補 `Candidate` の列）: (1) 介入 `first` の便 (2) 台帳の `priority`（P0 → P4）(3) 起票順（id の数字）。同順は起票順。**散文の順序を持たない**（憲法 C2）。
 - **hold** の便は列に載るが起こさない（理由 = `Hold`）。
 
 ## 3. 起動条件（器の判定の再利用・1 実装）
