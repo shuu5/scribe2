@@ -43,6 +43,25 @@ fn base_commit_with_e2e() -> (PathBuf, String) {
     (dir, base)
 }
 
+/// base 側に**子 module を持つ宣言 file**（`tests/e2e/seat.rs` が `mod inner;` を宣言し、
+/// 本体は `tests/e2e/seat/inner.rs`）を持つ fixture を作る。
+///
+/// `main.rs` / `mod.rs` でない宣言 file の子 module は Rust の規則で `<stem>/<name>.rs` に
+/// 置かれる。この形の便は [`base_commit_with_e2e`] の同じ dir の 2 形では作れない。
+fn base_commit_with_nested_e2e() -> (PathBuf, String) {
+    let (dir, _) = base_commit_with_e2e();
+    write_at(&dir, &e2e_rel("main.rs"), "mod seed;\nmod seat;\n");
+    write_at(&dir, &e2e_rel("seat.rs"), "mod inner;\n");
+    write_at(
+        &dir,
+        &e2e_rel("seat/inner.rs"),
+        &format!("#[test]\nfn inner_holds() {{\n    assert_eq!({FIXTURE_MEMBER}::val(), 1);\n}}\n"),
+    );
+    head_commit(&dir);
+    let base = head_sha(&dir);
+    (dir, base)
+}
+
 /// 新規 module の**宣言 file は単独で撃たず**、本体 file を撃つ木へ同梱する。
 ///
 /// 割れた 2 file を単独で撃つと、どちらの判定も意味を持たない——宣言だけなら本体不在の
@@ -414,6 +433,46 @@ fn flip_check_sees_body_placed_as_module_dir() {
     assert!(
         got.line.contains("decl=1"),
         "<name>/mod.rs 形の本体も同梱するはず: {}",
+        got.line
+    );
+}
+
+/// 本体が `<stem>/<name>.rs` に置かれた新規 module も同梱する（在処判定の第 3 形・§31）。
+///
+/// `tests/e2e/seat.rs` が足す `mod probe;` の本体は Rust の規則で `tests/e2e/seat/probe.rs`
+/// に在る。同じ dir の 2 形（`<name>.rs` / `<name>/mod.rs`）しか見ない実装は、この宣言行を
+/// 落として本体を compile 対象から外し、base で赤い歯なのに `green-on-base` で落とす
+/// （実測 2026-09-16・s2-07l.320 run 110459Z）。本体は base で赤いので PASS `decl=1` になる。
+#[test]
+fn flipcheck_declaration_nested_child_module_is_kept() {
+    let (dir, base) = base_commit_with_nested_e2e();
+    write_at(&dir, &e2e_rel("seat.rs"), "mod inner;\nmod probe;\n");
+    write_at(&dir, &e2e_rel("seat/probe.rs"), &red_body());
+    head_commit(&dir);
+    let got = judge(&base, &dir);
+    drop_fixture(&dir);
+    assert_verdict(&got.line, got.code, 0, "RED-on-base ok");
+    assert!(
+        got.line.contains("decl=1"),
+        "<stem>/<name>.rs 形の本体も同梱するはず: {}",
+        got.line
+    );
+}
+
+/// 第 3 形の同梱も **RED を捏造しない**——本体が base で緑なら FAIL のまま
+/// （[`flipcheck_declaration_nested_child_module_is_kept`] の対）。
+#[test]
+fn flipcheck_declaration_nested_green_child_still_fails() {
+    let (dir, base) = base_commit_with_nested_e2e();
+    write_at(&dir, &e2e_rel("seat.rs"), "mod inner;\nmod probe;\n");
+    write_at(&dir, &e2e_rel("seat/probe.rs"), &green_body());
+    head_commit(&dir);
+    let got = judge(&base, &dir);
+    drop_fixture(&dir);
+    assert_verdict(&got.line, got.code, 1, "reason=green-on-base");
+    assert!(
+        got.line.contains(&e2e_rel("seat/probe.rs")),
+        "緑だった子 module の本体を名指すはず: {}",
         got.line
     );
 }

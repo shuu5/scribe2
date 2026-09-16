@@ -809,7 +809,9 @@ fn bundle_decls(dest: &Path, decls: &[&FilePair]) -> Result<(), String> {
 ///
 /// `mod` 行**以外は 1 行も触らない**（宣言 file は `use` や helper を持ちうる。落とすと
 /// 本体が compile できず、これも捏造 RED になる）。本体の在処は宣言 file と同じ dir の
-/// `<name>.rs` か `<name>/mod.rs` で見る。
+/// `<name>.rs` か `<name>/mod.rs`、または宣言 file が `main.rs` / `mod.rs` でない周の
+/// `<stem>/<name>.rs`（`tests/e2e/seat.rs` → `tests/e2e/seat/statusline.rs`・Rust の規則）
+/// の 3 形で見る（§31・s2-07l.410）。
 ///
 /// **base に既に在った宣言行は落とさない**——base が緑である以上（[`base_is_green`]）
 /// その本体は必ず在り、落とす理由が無い。`#[path = "…"]` 付きの宣言まで落とすと属性行
@@ -822,7 +824,10 @@ fn bundle_decls(dest: &Path, decls: &[&FilePair]) -> Result<(), String> {
 /// **救済はしない**——path 属性の指す先は字面から追えず、追うには parser が要る。
 /// この便が `#[path]` 付きの新規 module を足した周は従来どおり測れない（M4・記録のみ）。
 fn present_mods_only(dest: &Path, rel: &str, body: &str, base: &str) -> String {
-    let dir = dest.join(Path::new(rel).parent().unwrap_or(Path::new("")));
+    let rel = Path::new(rel);
+    let dir = dest.join(rel.parent().unwrap_or(Path::new("")));
+    // 宣言 file が `<stem>.rs` なら子 module は `<stem>/<name>.rs` に置かれる。
+    let nested = dir.join(rel.file_stem().unwrap_or_default());
     let carried: Vec<&str> = base.lines().filter_map(mod_name).collect();
     body.split_inclusive('\n')
         .filter(|line| match mod_name(line) {
@@ -831,6 +836,7 @@ fn present_mods_only(dest: &Path, rel: &str, body: &str, base: &str) -> String {
                 carried.contains(&name)
                     || dir.join(format!("{name}.rs")).is_file()
                     || dir.join(name).join("mod.rs").is_file()
+                    || nested.join(format!("{name}.rs")).is_file()
             }
         })
         .collect()
