@@ -864,8 +864,13 @@ fn headless_lens_passes_effort_from_rules_row() {
 /// (c) `runner.effort` の行が解けない周（無い / 不発効 / 文字列でない）は runner が **claude を呼ばず rc 2** で理由を
 /// 1 行（`runner: runner.effort …`・model と同じ極性）。読む順は model → effort＝両方欠けた manifest では model の
 /// 理由だけが出る（既存の歯の字面は不変）。base は行が無くても claude を起こす（argv の写しが生成される）ので RED。
+/// 名の接頭辞 `headless_effort_row_refuses_` は新歯だけに当たる（`headless_runner_refuses_` は既存の歯 3 本に当たり
+/// base が rc 4 にならない・planner 2026-09-16 10:4xZ）。
+// 名の改めは run 1（5279b90・main に在る）が land した挙動の歯を後から動かす便＝base で緑になる。逃がしは下の 1 行で
+// 明示し、非空虚性は run 1 の RED-on-base（効く歯 4 本）が示す。
+// flip-check: retroactive s2-07l.322
 #[test]
-fn headless_runner_refuses_when_effort_row_is_missing() {
+fn headless_effort_row_refuses_when_missing() {
     let dir = tmp();
     let worktree = tmp();
     let claude = fake_claude(&dir, "", false, 0);
@@ -909,7 +914,7 @@ fn headless_runner_refuses_when_effort_row_is_missing() {
 /// (d) 閉じた表に無い `runner.effort` の値（`max` / `High` / 空）は runner が claude を呼ばず rc 2 で、理由に行 id と
 /// 値と**取る 4 つの字面**を名指す（case-fold しない＝`High` も未知）。lens も同じ極性。base は行を読まないので RED。
 #[test]
-fn headless_runner_refuses_unknown_effort_value() {
+fn headless_effort_row_refuses_unknown_value() {
     let dir = tmp();
     let worktree = tmp();
     let claude = fake_claude(&dir, "", false, 0);
