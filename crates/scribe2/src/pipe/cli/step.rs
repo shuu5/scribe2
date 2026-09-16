@@ -12,7 +12,7 @@ use crate::pipe::approve::{Approve, RC_BLOCKED};
 use crate::pipe::current;
 use crate::pipe::declaration::{self, Ceiling, CEILING_ROW, DENIED_ROW};
 use crate::pipe::follow::Runner;
-use crate::pipe::gate::{Gate, Limits};
+use crate::pipe::gate::{Detection, Gate, Limits};
 use crate::pipe::land::{Land, Retire};
 use crate::pipe::lens_record::{self, LensSource};
 use crate::pipe::ratelimit::Pool;
@@ -183,6 +183,7 @@ fn requirements_of(repo: &Path, manifest: &Manifest) -> Result<String, String> {
 /// verify が赤い便が「壊れたまま進む」経路になる。
 ///
 /// lens は `--lens` が在れば flag、無ければ審査が残した run dir の写し（[`lens_source`]・設計 pipeline.md §26）。
+/// 検出線は**常に撃つ**（省けるのは main が動いた便の追随の再 gate だけ・設計 §30）。
 pub(super) fn gate_run(args: &[String], id: &str, manifest: &Manifest, policy: LockPolicy) -> Outcome {
     let resolved = match resolve(args, id, &[Stage::Implemented, Stage::Gated], &Extra::Regate) {
         Ok(found) => found,
@@ -204,6 +205,7 @@ pub(super) fn gate_run(args: &[String], id: &str, manifest: &Manifest, policy: L
         contract: &resolved.contract,
         lens: &lens,
         limits,
+        detection: Detection::Run,
         policy,
     })
 }

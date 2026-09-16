@@ -26,7 +26,7 @@ mod record;
 mod verify;
 
 pub(crate) use lens::last_json_object;
-pub use record::step_record;
+pub use record::{next_number, records_of, skip_record, step_record, Record, Skipped};
 pub use verify::{is_unreadable, run_checks, Check, Checks, Step, CHECKS};
 
 use crate::polarity::{OnFailure, Polarity, Timing};
@@ -138,6 +138,39 @@ pub struct Limits {
     pub slot_wait_s: u64,
 }
 
+/// 検出線（変異検査）を撃つか（**閉じた enum**・設計 §30・`s2-07l.397`）。
+///
+/// literal の構築点は 2 つ——`pipe gate`（[`super::cli`]・常に [`Run`](Self::Run)）と、main が動いた便の追随
+/// （[`super::land`]・`<base>..<main>` の path が検出線の面に 1 つも触れない周だけ [`Skip`](Self::Skip)）。
+/// 撃たない周も `verify.jsonl` に `kind=detection skipped=detection reason=<理由>` の record を残す
+/// （**撃たなかった事実を黙って落とさない**・[`skip_record`]）。共通 verify と契約 verify は従来どおり撃つ。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Detection {
+    /// 撃つ（従来の形・読めない周もこちら＝fail-closed）。
+    Run,
+    /// 撃たない（理由は record の `reason=`）。
+    Skip(DetectionSkip),
+}
+
+/// 検出線を撃たない理由（record の `reason=`・閉じた enum・憲法 C11）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DetectionSkip {
+    /// 差分の path が検出線の面（[`super::land::DETECTION_SCOPE`]）に 1 つも触れない。
+    OutsideScope,
+    /// gate を撃った木と land した木が同じ（主実測だけ・ADR-0021 §2.4）。
+    SameTree,
+}
+
+impl DetectionSkip {
+    /// record の字面。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::OutsideScope => "outside-scope",
+            Self::SameTree => "same-tree",
+        }
+    }
+}
+
 /// gate 1 回の材料。
 pub struct Gate<'a> {
     /// 便 id。
@@ -154,6 +187,8 @@ pub struct Gate<'a> {
     pub lens: &'a LensSource,
     /// 規則から読んだ線。
     pub limits: Limits,
+    /// 検出線を撃つか（設計 §30・追随の再 gate だけが [`Detection::Skip`] を渡しうる）。
+    pub detection: Detection,
     /// lock の待ち方。
     pub policy: LockPolicy,
 }

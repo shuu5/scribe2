@@ -1916,7 +1916,7 @@ fn pipe_slots_ticket_lives_only_during_the_jobs_line() {
 }
 
 /// 検出線の stub の行（`{base}` を印に埋める＝置換されたことを撃たれた側で読める）。
-const DETECTION_COUNT: &str = r#"["sh verify-count.sh detection-{base}"]"#;
+pub(super) const DETECTION_COUNT: &str = r#"["sh verify-count.sh detection-{base}"]"#;
 
 /// `detection-verify` を持つ宣言を commit する（共通 verify も stub・`allowed-commands` は toy のまま）。
 fn commit_detection_vessel(repo: &Path, detection: &str) {
@@ -1929,7 +1929,7 @@ fn commit_detection_vessel(repo: &Path, detection: &str) {
 }
 
 /// 検出線を持つ toy repo と、契約 verify も stub にした契約 file。
-fn detection_repo(detection: &str) -> (PathBuf, PathBuf, PathBuf) {
+pub(super) fn detection_repo(detection: &str) -> (PathBuf, PathBuf, PathBuf) {
     let (repo, state) = repo_with_state();
     commit_detection_vessel(&repo, detection);
     let contract = write_contract(&repo, &["verify"], &[r#"verify = ["sh verify-count.sh contract"]"#]);
@@ -1937,7 +1937,7 @@ fn detection_repo(detection: &str) -> (PathBuf, PathBuf, PathBuf) {
 }
 
 /// 呼出回数 file の行（撃たれた順）。
-fn detection_calls(repo: &Path) -> Vec<String> {
+pub(super) fn detection_calls(repo: &Path) -> Vec<String> {
     fs::read_to_string(repo.join(".git").join("detection-calls"))
         .unwrap_or_default()
         .lines()
@@ -1946,7 +1946,7 @@ fn detection_calls(repo: &Path) -> Vec<String> {
 }
 
 /// land の main 実測の record を全部読む。
-fn main_rows(state: &Path, id: &str) -> Vec<Vec<(String, vessel::fleet::json_lite::Value)>> {
+pub(super) fn main_rows(state: &Path, id: &str) -> Vec<Vec<(String, vessel::fleet::json_lite::Value)>> {
     fs::read_to_string(state.join("pipe").join(id).join("verify-main.jsonl"))
         .unwrap_or_default()
         .lines()
@@ -1955,8 +1955,15 @@ fn main_rows(state: &Path, id: &str) -> Vec<Vec<(String, vessel::fleet::json_lit
 }
 
 /// record 列の `kind` の並び。
-fn kinds(rows: &[Vec<(String, vessel::fleet::json_lite::Value)>]) -> Vec<String> {
+pub(super) fn kinds(rows: &[Vec<(String, vessel::fleet::json_lite::Value)>]) -> Vec<String> {
     rows.iter().map(|row| value_of(row, "kind")).collect()
+}
+
+/// record 列のうち `skipped=` を持つもの（検出線を省いた record）。
+pub(super) fn skip_rows(
+    rows: &[Vec<(String, vessel::fleet::json_lite::Value)>],
+) -> Vec<&Vec<(String, vessel::fleet::json_lite::Value)>> {
+    rows.iter().filter(|row| !value_of(row, "skipped").is_empty()).collect()
 }
 
 /// [`detection_land`] の結果。
@@ -1975,24 +1982,39 @@ struct DetectionLand {
     id: String,
 }
 
-/// PASS まで通し、`verdict.json` を `edit(本文, tree)` で差し替えてから land する。
+/// PASS まで通し、`verdict.json` を `edit(本文, tree, base の木)` で差し替えてから land する。
+fn detection_land(edit: fn(&str, &str, &str) -> String) -> DetectionLand {
+    detection_land_shimmed(edit, None)
+}
+
+/// [`detection_land`] の本体。`shim` が在れば、引数列にその字面を含む git だけを rc 1 で落とす偽 git を
+/// PATH の先頭に置いて land する（読めない周の極性を測る口・[`land_once_with_git_shim`]）。
 #[expect(
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
-fn detection_land(edit: fn(&str, &str) -> String) -> DetectionLand {
+fn detection_land_shimmed(edit: fn(&str, &str, &str) -> String, shim: Option<&str>) -> DetectionLand {
     let (repo, state, contract) = detection_repo(DETECTION_COUNT);
+    let base_tree = git(&repo, &["rev-parse", "HEAD^{tree}"]);
     let id = gated_pass(&repo, &state, &contract, &state.join("lens-ran"));
     let before = detection_calls(&repo).len();
     let verdict = state.join("pipe").join(&id).join("verdict.json");
     let text = fs::read_to_string(&verdict).expect("verdict.json を読める");
     let tree = value_of(&verdict_pairs(&state, &id), "tree");
     assert!(!tree.is_empty(), "差し替える前の verdict は tree を持つ: {text}");
-    fs::write(&verdict, edit(&text, &tree)).expect("verdict.json を差し替えられる");
-    let out = land_once(&repo, &state, &id);
+    fs::write(&verdict, edit(&text, &tree, &base_tree)).expect("verdict.json を差し替えられる");
+    let out = match shim {
+        None => land_once(&repo, &state, &id),
+        Some(failing) => land_once_with_git_shim(&repo, &state, &id, failing, None),
+    };
     let added = detection_calls(&repo).split_off(before);
     let rows = main_rows(&state, &id);
     DetectionLand { added, rows, out, repo, state, id }
+}
+
+/// verdict の `tree` を**便の base の木**（実在する別の木・差分は便の `src/lib.rs` だけ＝面の外）へ差し替える。
+fn verdict_tree_to_base(text: &str, tree: &str, base_tree: &str) -> String {
+    text.replace(&format!("\"tree\":\"{tree}\""), &format!("\"tree\":\"{base_tree}\""))
 }
 
 /// (1) `detection-verify` が読めて、gate が **① write-set → ② common → ③ detection → ④ 契約** の順で撃つ。
@@ -2027,7 +2049,7 @@ fn pipe_detection_verdict_carries_tree_of_gated_head() {
 /// (3) 木が gate と同じ main 実測は **③ だけを撃たず** `skipped=detection tree=<sha>` を記す（②④は撃つ）。
 #[test]
 fn pipe_detection_land_skips_detection_when_tree_matches() {
-    let landed = detection_land(|text, _| text.to_owned());
+    let landed = detection_land(|text, _, _| text.to_owned());
     let (rows, out) = (&landed.rows, &landed.out);
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "land は rc 0: {}", stderr_of(out));
     assert_eq!(landed.added, ["common", "contract"], "main 実測は ②④ だけを撃つ");
@@ -2036,6 +2058,69 @@ fn pipe_detection_land_skips_detection_when_tree_matches() {
     assert_eq!(row_value(rows, 3, "tree"), git(&landed.repo, &["rev-parse", "refs/heads/main^{tree}"]), "tree=<land した木>");
     assert_eq!(row_value(rows, 4, "rc"), "0", "④ は撃って緑");
     clean(&[&landed.repo, &landed.state]);
+}
+
+// ---- 検出線の面（設計 pipeline.md §30・`s2-07l.397`・接頭辞 `pipe_detection_scope_`）------------
+//
+// 追随の再 gate 側（docs だけ / crates が動いた周）は `land.rs` の歯（同じ接頭辞）が持つ。ここは主実測の側。
+
+/// (d) main が動いていない周の主実測は `skipped=detection tree=<land した木> reason=same-tree`（理由が載る・
+/// base は `reason` を書かない＝RED）。record の key 列も pin する。
+#[test]
+fn pipe_detection_scope_same_tree_records_reason() {
+    let landed = detection_land(|text, _, _| text.to_owned());
+    let (rows, out) = (&landed.rows, &landed.out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "land は rc 0: {}", stderr_of(out));
+    assert_eq!(landed.added, ["common", "contract"], "主実測は ②④ だけを撃つ");
+    let skip = rows.get(2).cloned().unwrap_or_default();
+    let keys: Vec<&str> = skip.iter().map(|(key, _)| key.as_str()).collect();
+    assert_eq!(keys, ["schema", "n", "kind", "skipped", "tree", "reason"], "skip record の key 列: {skip:?}");
+    assert_eq!(value_of(&skip, "n"), "3", "③ の位置");
+    assert_eq!(value_of(&skip, "skipped"), "detection");
+    assert_eq!(value_of(&skip, "tree"), git(&landed.repo, &["rev-parse", "refs/heads/main^{tree}"]), "tree=<land した木>");
+    assert_eq!(value_of(&skip, "reason"), "same-tree", "理由は木の一致");
+    assert_eq!(row_value(rows, 4, "n"), "4", "④ の `n` は skip record の次");
+    clean(&[&landed.repo, &landed.state]);
+}
+
+/// (f) gate を撃った木と land した木が**違っても**、`diff-tree` の path が面に 1 つも触れなければ省く
+/// （`reason=outside-scope`・設計 §30 (ii)）。fixture は verdict の `tree` を便の base の木に差し替える＝差分は
+/// 便が触った `src/lib.rs` だけで、toy repo では面の外である。base は木の不一致で撃つ＝RED。
+#[test]
+fn pipe_detection_scope_main_skips_detection_when_tree_differs_outside_scope() {
+    let landed = detection_land(verdict_tree_to_base);
+    let (rows, out) = (&landed.rows, &landed.out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "land は rc 0: {}", stderr_of(out));
+    let gated = value_of(&verdict_pairs(&landed.state, &landed.id), "tree");
+    let main_tree = git(&landed.repo, &["rev-parse", "refs/heads/main^{tree}"]);
+    assert_ne!(gated, main_tree, "fixture: gate の木と land した木は違う");
+    assert_eq!(
+        git(&landed.repo, &["diff-tree", "-r", "--name-only", &gated, &main_tree]),
+        "src/lib.rs",
+        "fixture: 差分は面の外の 1 path"
+    );
+    assert_eq!(landed.added, ["common", "contract"], "主実測は ②④ だけを撃つ: {:?}", landed.added);
+    assert_eq!(kinds(rows), ["write-set", "common", "detection", "contract"], "省いた段も位置に record が在る: {rows:?}");
+    assert_eq!(row_value(rows, 3, "skipped"), "detection");
+    assert_eq!(row_value(rows, 3, "tree"), main_tree, "tree=<land した木>（gate の木ではない）");
+    assert_eq!(row_value(rows, 3, "reason"), "outside-scope", "理由は面の外");
+    clean(&[&landed.repo, &landed.state]);
+}
+
+/// (c) **読めない周は撃つ**（fail-closed・設計 §30）: verdict の `tree` を落とした形（木を比べられない）と、
+/// 木は違うが `diff-tree` を読めない形（偽 git がその 1 呼出しだけ rc 1）の 2 つ。どちらも ③ を撃ち skip record を
+/// 残さない（省く側へ倒すと、測っていない検出線を main で通したことになる）。
+#[test]
+fn pipe_detection_scope_unreadable_diff_fires_detection() {
+    // 木を比べられない: `tree` の無い verdict（既存 (5) の型）。
+    let no_tree = detection_land(|text, tree, _| text.replace(&format!(",\"tree\":\"{tree}\""), ""));
+    assert!(verdict_pairs(&no_tree.state, &no_tree.id).iter().all(|(key, _)| key != "tree"), "fixture は tree の無い形");
+    assert_detection_fired(&no_tree);
+    clean(&[&no_tree.repo, &no_tree.state]);
+    // 木は違う（(f) と同じ fixture＝偽 git が無ければ省く周）が diff を読めない。
+    let unreadable = detection_land_shimmed(verdict_tree_to_base, Some(" diff-tree -r --name-only -z "));
+    assert_detection_fired(&unreadable);
+    clean(&[&unreadable.repo, &unreadable.state]);
 }
 
 /// ③ を撃った main 実測の共通 assert（(4) / (5)）。
@@ -2048,10 +2133,10 @@ fn assert_detection_fired(landed: &DetectionLand) {
     assert!(rows.iter().all(|row| value_of(row, "skipped").is_empty()), "省いた record は無い: {rows:?}");
 }
 
-/// (4) verdict の `tree` が land した木と違えば **③ も撃つ**。
+/// (4) verdict の `tree` が land した木と違い**比べられない**（実在しない木＝`diff-tree` を読めない）周は **③ も撃つ**。
 #[test]
 fn pipe_detection_land_fires_detection_when_tree_differs() {
-    let landed = detection_land(|text, tree| {
+    let landed = detection_land(|text, tree, _| {
         text.replace(&format!("\"tree\":\"{tree}\""), "\"tree\":\"0000000000000000000000000000000000000000\"")
     });
     let verdict = verdict_pairs(&landed.state, &landed.id);
@@ -2063,7 +2148,7 @@ fn pipe_detection_land_fires_detection_when_tree_differs() {
 /// (5) `tree` の無い verdict（旧 gate の形）でも **③ を撃つ**。
 #[test]
 fn pipe_detection_land_fires_detection_when_verdict_has_no_tree() {
-    let landed = detection_land(|text, tree| text.replace(&format!(",\"tree\":\"{tree}\""), ""));
+    let landed = detection_land(|text, tree, _| text.replace(&format!(",\"tree\":\"{tree}\""), ""));
     let verdict = verdict_pairs(&landed.state, &landed.id);
     assert!(verdict.iter().all(|(key, _)| key != "tree"), "fixture は tree の無い旧形: {verdict:?}");
     assert_eq!(value_of(&verdict, "verdict"), "PASS", "fixture の verdict は読める形のまま");

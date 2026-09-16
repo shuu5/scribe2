@@ -2876,3 +2876,129 @@ fn pipe_follow_self_rebase_mid_rebase_turn_fails_dirty_without_a_follow_section(
     assert!(show_line(&repo, &state, &id).contains("stage=Failed"), "段は Failed");
     clean(&[&repo, &state]);
 }
+
+// ───── 検出線の面（設計 pipeline.md §30・`s2-07l.397`・FR46・接頭辞 `pipe_detection_scope_`） ─────
+//
+// 追随の再 gate の側。主実測の側（same-tree / outside-scope / 読めない周）は `gate.rs` の同じ接頭辞の歯が持つ。
+
+/// 検出線を持つ便を Gated PASS まで通し、呼出行の母集団と base を返す（[`super::gate::detection_repo`] の型）。
+fn detection_gated() -> (PathBuf, PathBuf, String, String, usize) {
+    let (repo, state, contract) = super::gate::detection_repo(super::gate::DETECTION_COUNT);
+    let base = git(&repo, &["rev-parse", "refs/heads/main"]);
+    let id = gated_pass(&repo, &state, &contract, &state.join("lens-ran"));
+    let before = super::gate::detection_calls(&repo).len();
+    (repo, state, id, base, before)
+}
+
+/// main を **1 file だけ**の commit で進める（`git add <path>`＝契約 file や他の untracked を混ぜない）。
+/// 返すのは進んだ main の sha。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn advance_main_with(repo: &Path, path: &str) -> String {
+    let file = repo.join(path);
+    if let Some(parent) = file.parent() {
+        fs::create_dir_all(parent).expect("別便の dir を作れる");
+    }
+    fs::write(&file, "moved\n").expect("別便の変更を書ける");
+    git(repo, &["add", path]);
+    git(repo, &["commit", "-q", "-m", "other"]);
+    let moved = git(repo, &["rev-parse", "refs/heads/main"]);
+    assert_eq!(
+        git(repo, &["diff", "--name-only", &format!("{moved}^..{moved}")]),
+        path,
+        "fixture: main が進んだ差分はその 1 path だけ"
+    );
+    moved
+}
+
+/// (a) docs だけで main が動いた便の追随: 再 gate は検出線を撃たず（呼出 +0・共通 verify +1）`verify.jsonl` に
+/// `kind=detection skipped=detection reason=outside-scope` の record を 1 本置き、主実測も撃たず（木は同じ）、
+/// Landed まで進む。base は docs だけの周も撃つ（呼出 +1）＝RED。
+#[test]
+fn pipe_detection_scope_main_skips_detection_when_only_docs_moved() {
+    let (repo, state, id, base, before) = detection_gated();
+    let moved = advance_main_with(&repo, "docs/design/toy.md");
+    let out = land_once(&repo, &state, &id);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "land は rc 0: {}", stderr_of(&out));
+    let stdout = stdout_of(&out);
+    assert!(stdout.contains(&format!("rebase={base}..{moved}")), "追随は済む: {stdout}");
+    assert!(stdout.contains("verdict=PASS"), "撃ち直しの判定行: {stdout}");
+    let added = super::gate::detection_calls(&repo).split_off(before);
+    assert_eq!(
+        added,
+        ["common", "contract", "common", "contract"],
+        "再 gate（②④）と主実測（②④）のどちらも ③ を撃たない（母集団 = 前 {before} 行）"
+    );
+    assert_regate_skip_record(&verify_rows(&state, &id));
+    // 主実測: rebase 後の木 = land した木なので same-tree で省く。
+    let main = super::gate::main_rows(&state, &id);
+    assert_eq!(row_value(&main, 3, "skipped"), "detection", "主実測も ③ を省く: {main:?}");
+    assert_eq!(row_value(&main, 3, "reason"), "same-tree", "主実測の理由は木の一致");
+    assert!(show_line(&repo, &state, &id).contains("stage=Landed"), "段は Landed: {}", show_line(&repo, &state, &id));
+    assert_eq!(value_of(&verdict_pairs(&state, &id), "verdict"), "PASS", "再 gate の verdict");
+    clean(&[&repo, &state]);
+}
+
+/// (a) の `verify.jsonl`: 1 度目の gate の 4 本の後ろに、③ の位置へ `reason=outside-scope` の skip record を
+/// 挟んだ再 gate の 4 本（`n` は通し・木は持たない）。
+fn assert_regate_skip_record(rows: &[Vec<(String, vessel::fleet::json_lite::Value)>]) {
+    assert_eq!(
+        super::gate::kinds(rows),
+        ["write-set", "common", "detection", "contract", "write-set", "common", "detection", "contract"],
+        "省いた段も位置に record が在る: {rows:?}"
+    );
+    let skips = super::gate::skip_rows(rows);
+    assert_eq!(skips.len(), 1, "skip record は再 gate の 1 本だけ（1 度目の gate は撃っている）: {rows:?}");
+    let skip = skips.first().copied().cloned().unwrap_or_default();
+    assert_eq!(value_of(&skip, "kind"), "detection");
+    assert_eq!(value_of(&skip, "skipped"), "detection");
+    assert_eq!(value_of(&skip, "reason"), "outside-scope", "理由は面の外");
+    assert!(skip.iter().all(|(key, _)| key != "tree"), "再 gate の skip record は木を持たない: {skip:?}");
+    assert_eq!(row_value(rows, 7, "n"), "3", "skip record は ③ の `n`");
+    assert_eq!(row_value(rows, 8, "n"), "4", "④ の `n` は skip record の次");
+    assert_eq!(row_value(rows, 8, "rc"), "0", "④ は撃って緑");
+}
+
+/// (b) 対: `crates/` 配下で main が動いた周の再 gate は**従来どおり ③ を撃つ**（呼出 +1・穴は新しい base）
+/// ・skip record 無し。
+#[test]
+fn pipe_detection_scope_main_fires_detection_when_crates_moved() {
+    let (repo, state, id, base, before) = detection_gated();
+    let moved = advance_main_with(&repo, "crates/toy/src/other.rs");
+    let out = land_once(&repo, &state, &id);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "land は rc 0: {}", stderr_of(&out));
+    assert!(stdout_of(&out).contains(&format!("rebase={base}..{moved}")), "追随は済む: {}", stdout_of(&out));
+    let added = super::gate::detection_calls(&repo).split_off(before);
+    assert_eq!(
+        added,
+        ["common".to_owned(), format!("detection-{moved}"), "contract".to_owned(), "common".to_owned(), "contract".to_owned()],
+        "再 gate は ②③④（③ の穴は rebase 後の base）・主実測は ②④（木は同じ）"
+    );
+    let rows = verify_rows(&state, &id);
+    assert_eq!(rows.len(), 8, "1 度目 4 本 + 再 gate 4 本: {rows:?}");
+    assert!(super::gate::skip_rows(&rows).is_empty(), "撃った周に skip record は無い: {rows:?}");
+    assert_eq!(row_value(&rows, 7, "kind"), "detection", "再 gate の ③ は撃った record");
+    assert_eq!(row_value(&rows, 7, "rc"), "0");
+    assert!(show_line(&repo, &state, &id).contains("stage=Landed"), "段は Landed");
+    clean(&[&repo, &state]);
+}
+
+/// 対: docs だけで main が動いても `<base>..<main>` の diff を**読めない**周は撃つ（fail-closed・設計 §30）。
+/// 偽 git はその range の `diff --name-only -z` だけを rc 1 で落とす（段①の `<base>..HEAD` は落とさない）。
+#[test]
+fn pipe_detection_scope_unreadable_follow_diff_fires_detection() {
+    let (repo, state, id, base, before) = detection_gated();
+    let moved = advance_main_with(&repo, "docs/design/toy.md");
+    let out = land_once_with_git_shim(&repo, &state, &id, &format!(" diff --name-only -z {base}..{moved}"), None);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "land は rc 0: {}", stderr_of(&out));
+    assert!(stdout_of(&out).contains(&format!("rebase={base}..{moved}")), "追随は済む: {}", stdout_of(&out));
+    let added = super::gate::detection_calls(&repo).split_off(before);
+    assert_eq!(added.len(), 5, "再 gate は ②③④・主実測は ②④: {added:?}");
+    assert_eq!(added.get(1).cloned().unwrap_or_default(), format!("detection-{moved}"), "読めない周は ③ を撃つ: {added:?}");
+    let rows = verify_rows(&state, &id);
+    assert!(super::gate::skip_rows(&rows).is_empty(), "撃った周に skip record は無い: {rows:?}");
+    assert_eq!(row_value(&rows, 5, "rc"), "0", "再 gate の段①（`<base>..HEAD`）は読めている: {rows:?}");
+    clean(&[&repo, &state]);
+}

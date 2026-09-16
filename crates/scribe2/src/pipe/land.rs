@@ -30,13 +30,19 @@
 //! 自分より前の便が居る間は待つ。待ちは完了 enum の variant 1 つ（[`Completion::LandTurn`]）で唯一の
 //! wait 実装を通り、上限（rules 行 `pipe.land_wait_s`）を超えた周と列を導けない周は**待たずに進む**
 //! （断らない・止めない）。どの周だったかは land の record と stdout の `order=` が残す。
+//!
+//! **検出線（変異検査）は差分が検出線の面に触れた周だけ撃つ**（`s2-07l.397`・設計 §30・FR46）。追随の
+//! 再 gate は `<base>..<main>` の path、主実測は gate を撃った木と land した木の `diff-tree` の path を
+//! [`DETECTION_SCOPE`] と照らし、1 つも触れない周は検出線を省いて理由付きの record を残す（[`detection_needed`]
+//! の 1 本を両方が通す）。読めない周は撃つ（fail-closed）。共通 verify と契約 verify は従来どおり撃つ。
 
 use crate::polarity::{OnFailure, Polarity, Timing};
 use super::contract::Contract;
 use super::declaration::Effective;
 use super::follow::{self, Conflict};
 use super::gate::{
-    gate, is_unreadable, run_checks, step_record, Check, Checks, Gate, Limits, Step, Verdict,
+    gate, is_unreadable, records_of, run_checks, Checks, Detection, DetectionSkip, Gate, Limits, Skipped,
+    Step, Verdict,
 };
 use super::lens_record::LensSource;
 use super::{
@@ -114,6 +120,39 @@ const RUN_TRAILER: &str = "run: ";
 /// 便の worktree と同じ repo 配下から導く。run id は `<bead>-<stamp>` なのでこの名と
 /// 衝突しない。
 const CHECK_DIR: &str = "verify";
+
+/// 検出線（変異検査）の面（**閉じた集合**・設計 §30・`s2-07l.397`）。末尾 `/` の項目は dir の接頭辞、
+/// それ以外は file の完全一致。検出線の行の出所（`.vessel.toml`）と、変異検査が読む面（crate の source・
+/// Cargo の manifest / lock・rules）である。docs / design-intent / README / .github はこの外＝検出線の
+/// 結果を変えない（共通 verify は従来どおり撃つので、docs を読む歯が赤になる経路は残る）。
+///
+/// **rules 行にしない**（値でなく閉じた path の集合・variant の領分・§30 却下案）。
+pub const DETECTION_SCOPE: &[&str] = &["crates/", "Cargo.toml", "Cargo.lock", "rules/", ".vessel.toml"];
+
+/// path の列 → 検出線の要否（**pure**・追随の再 gate と主実測の両方がこの 1 本を通す・設計 §30）。
+///
+/// 1 つでも [`DETECTION_SCOPE`] に触れれば真。**空の列は偽**（差分が無い周は撃たない）——読めない周を
+/// 空に読み替えない責任は呼び手（[`follow_detection`] / [`main_detection`]）が持つ。
+pub fn detection_needed<'a>(paths: impl IntoIterator<Item = &'a str>) -> bool {
+    paths.into_iter().any(|path| DETECTION_SCOPE.iter().any(|face| in_face(path, face)))
+}
+
+/// path が面の 1 項目に触れるか（dir は接頭辞・file は完全一致）。`cratesx/a.rs` は `crates/` に触れない。
+fn in_face(path: &str, face: &str) -> bool {
+    if face.ends_with('/') {
+        return path.starts_with(face);
+    }
+    path == face
+}
+
+/// `-z`（NUL 区切り）の git 出力を path の列にする（空の要素は落とす）。
+fn nul_paths(bytes: &[u8]) -> Vec<String> {
+    bytes
+        .split(|byte| *byte == 0)
+        .filter(|path| !path.is_empty())
+        .map(|path| String::from_utf8_lossy(path).into_owned())
+        .collect()
+}
 
 /// この境界の極性（`MainCheck`）: main を進めた後に実測し、測れなかった周は `Failed detail=main-unmeasured` で止める（緑に化けさせない）。
 pub const POLARITY: Polarity = Polarity {
@@ -326,10 +365,9 @@ fn anchor_has_collision(repo: &Path, old: &str, new: &str) -> bool {
     let Some(bytes) = git_bytes(repo, &["diff", "--name-only", "--diff-filter=A", "-z", old, new]) else {
         return true;
     };
-    bytes
-        .split(|byte| *byte == 0)
-        .filter(|path| !path.is_empty())
-        .any(|path| repo.join(String::from_utf8_lossy(path).as_ref()).symlink_metadata().is_ok())
+    nul_paths(&bytes)
+        .iter()
+        .any(|path| repo.join(path).symlink_metadata().is_ok())
 }
 
 /// anchor の index と working tree を `old` の tree から `new` の tree へ揃える。
@@ -369,6 +407,8 @@ fn with_lines(mut lines: Vec<String>, mut outcome: Outcome) -> Outcome {
 ///   （[`super::base_of_run`]）はこの行から新しい base を読む。
 /// - 撃ち直しが PASS でない周は gate の判定行と rc で止まる（FAIL は `Gated` のまま
 ///   land しない・INCONCLUSIVE は測り直せる側）。
+/// - 撃ち直しの検出線は `<base>..<main>` の path が [`DETECTION_SCOPE`] に 1 つも触れない周は省く
+///   （[`follow_detection`]・rebase の**前**に読む・設計 §30 (i)）。共通 verify と契約 verify は撃つ。
 fn follow_main(entry: &Land<'_>, worktree: &Path, base: &str, main: &str) -> Follow {
     if !git_ok(entry.repo, &["merge-base", "--is-ancestor", base, main]) {
         return Follow::Stopped(refused(format!(
@@ -383,6 +423,7 @@ fn follow_main(entry: &Land<'_>, worktree: &Path, base: &str, main: &str) -> Fol
             check.as_str()
         )));
     }
+    let detection = follow_detection(entry.repo, base, main);
     if let Err(stopped) = rebase_onto(entry, worktree, base, main) {
         return Follow::Stopped(stopped);
     }
@@ -411,6 +452,7 @@ fn follow_main(entry: &Land<'_>, worktree: &Path, base: &str, main: &str) -> Fol
         contract: entry.contract,
         lens: entry.lens,
         limits: entry.limits,
+        detection,
         policy: entry.policy,
     });
     lines.extend(regated.out);
@@ -418,6 +460,23 @@ fn follow_main(entry: &Land<'_>, worktree: &Path, base: &str, main: &str) -> Fol
         return Follow::Stopped(Outcome { out: lines, err: regated.err, rc: regated.rc });
     }
     Follow::Ready(lines)
+}
+
+/// 追随の再 gate で検出線を撃つか（設計 §30 (i)）。
+///
+/// main が便の base から進んだ差分（`git diff --name-only -z <base>..<main>`）の path が [`DETECTION_SCOPE`] に
+/// 1 つも触れない周だけ省く（便自身の差分は gate で既に検出線を通っている）。**diff を読めない周は撃つ**
+/// （読めないを「触れていない」に読み替えない・fail-closed）。
+fn follow_detection(repo: &Path, base: &str, main: &str) -> Detection {
+    let range = format!("{base}..{main}");
+    let Some(bytes) = git_bytes(repo, &["diff", "--name-only", "-z", &range]) else {
+        return Detection::Run;
+    };
+    let paths = nul_paths(&bytes);
+    if detection_needed(paths.iter().map(String::as_str)) {
+        return Detection::Run;
+    }
+    Detection::Skip(DetectionSkip::OutsideScope)
 }
 
 /// worktree の branch を main へ rebase する（追随の (iii)・(iii′)）。**main は動かさない**。
@@ -631,7 +690,7 @@ fn verify_main(entry: &Land<'_>, new: &str) -> MainCheck {
             return MainCheck::Unmeasurable(reason);
         }
     };
-    let skipped = same_tree(entry, new);
+    let skipped = main_detection(entry, new);
     let steps = run_checks(&Checks {
         worktree: &tmp,
         base: &base,
@@ -642,7 +701,10 @@ fn verify_main(entry: &Land<'_>, new: &str) -> MainCheck {
     // 成果は `new` に載っているので、この tmp だけは remove してよい（設計 §5.4）。
     // `--force` は verify が tmp に生んだ中間物ごと畳むためで、履歴・データは触らない。
     let _ = git_ok(entry.repo, &["worktree", "remove", "--force", &path]);
-    if let Err(reason) = record_main(entry, &steps, skipped.as_deref()) {
+    let record = skipped
+        .as_ref()
+        .map(|(reason, tree)| Skipped { reason: *reason, tree: Some(tree.as_str()) });
+    if let Err(reason) = record_main(entry, &steps, record) {
         return MainCheck::Unmeasurable(reason);
     }
     // 段①を読めなかった周（gate と**同じ 1 本の判定**・rc だけでは見ない）は**赤の集計より先に**
@@ -681,56 +743,35 @@ fn materials(entry: &Land<'_>) -> Result<(String, Effective), String> {
 /// 別 file にするのは、gate の周の `n` と main 実測の `n` を重ねないためである（設計 gate-cost.md §5）。
 const VERIFY_MAIN_FILE: &str = "verify-main.jsonl";
 
-/// 検出線を省いた段の名（record の `skipped=`）。
-const SKIPPED_DETECTION: &str = "detection";
-
-/// land した木が **gate を撃った木と同じ**なら、その sha を返す（検出線を撃ち直さない周）。
+/// 主実測で検出線を省くか（省く周はその理由と land した木の sha・設計 §30 (ii)・ADR-0021 §2.4）。
 ///
-/// `tree` の無い verdict（旧 gate）・読めない木・不一致はどれも `None`＝全段を撃つ側へ倒す
-/// （省く側へ倒すと、測っていない検出線を main で通したことになる・ADR-0021 §2.4）。
-fn same_tree(entry: &Land<'_>, new: &str) -> Option<String> {
+/// gate を撃った木（verdict の `tree`）と land した木が**同じ**なら `same-tree`。違う周は
+/// `git diff-tree -r --name-only -z <gated> <landed>` の path を [`DETECTION_SCOPE`] と照らし、1 つも触れなければ
+/// `outside-scope`。`tree` の無い verdict（旧 gate）・読めない木・読めない diff はどれも `None`＝全段を撃つ側へ
+/// 倒す（省く側へ倒すと、測っていない検出線を main で通したことになる）。
+fn main_detection(entry: &Land<'_>, new: &str) -> Option<(DetectionSkip, String)> {
     let gated = verdict_field(entry.state_dir, entry.run, "tree")?;
     let landed = git_line(entry.repo, &["rev-parse", &format!("{new}^{{tree}}")])?;
-    (landed == gated).then_some(landed)
+    if landed == gated {
+        return Some((DetectionSkip::SameTree, landed));
+    }
+    let bytes = git_bytes(entry.repo, &["diff-tree", "-r", "--name-only", "-z", &gated, &landed])?;
+    let paths = nul_paths(&bytes);
+    if detection_needed(paths.iter().map(String::as_str)) {
+        return None;
+    }
+    Some((DetectionSkip::OutsideScope, landed))
 }
 
 /// main 実測の段を `verify-main.jsonl` へ逐条で残す。検出線を省いた周は、その段の位置に
-/// `skipped=detection tree=<sha>` の record を 1 件置く（**撃たなかった事実を黙って落とさない**）。
-fn record_main(entry: &Land<'_>, steps: &[Step], skipped: Option<&str>) -> Result<(), String> {
+/// `skipped=detection tree=<sha> reason=<理由>` の record を 1 件置く（**撃たなかった事実を黙って落とさない**・
+/// 形と位置は gate の `verify.jsonl` と同じ [`records_of`] の 1 本）。
+fn record_main(entry: &Land<'_>, steps: &[Step], skipped: Option<Skipped<'_>>) -> Result<(), String> {
     let path = super::verify_log_path(entry.state_dir, entry.run).with_file_name(VERIFY_MAIN_FILE);
-    let mut records = Vec::new();
-    let mut pending = skipped;
-    for step in steps {
-        if step.stage == Check::Contract {
-            if let Some(tree) = pending.take() {
-                records.push(skip_record(records.len(), tree));
-            }
-        }
-        records.push(step_record(next_number(records.len()), step));
-    }
-    if let Some(tree) = pending {
-        records.push(skip_record(records.len(), tree));
-    }
-    for record in &records {
-        append_line(&path, record, entry.policy).map_err(|err| err.to_string())?;
+    for record in records_of(steps, skipped) {
+        append_line(&path, &record.body, entry.policy).map_err(|err| err.to_string())?;
     }
     Ok(())
-}
-
-/// 既に積んだ record 数から次の `n`（1 始まり）。
-fn next_number(len: usize) -> u64 {
-    u64::try_from(len).unwrap_or(u64::MAX).saturating_add(1)
-}
-
-/// 検出線を省いた段の record。
-fn skip_record(len: usize, tree: &str) -> String {
-    json_lite::write_object(&[
-        ("schema", Value::Num(SCHEMA)),
-        ("n", Value::Num(next_number(len))),
-        ("kind", Value::Str(Check::Detection.as_str().to_owned())),
-        ("skipped", Value::Str(SKIPPED_DETECTION.to_owned())),
-        ("tree", Value::Str(tree.to_owned())),
-    ])
 }
 
 /// 終端で `refs/heads/main` を読めなかった周の実測値の字面（`main=unknown` / `main:unknown`）。
@@ -968,16 +1009,41 @@ pub(super) fn broken(reason: String) -> Outcome {
 #[cfg(test)]
 mod tests {
     // flip-check: moved s2-07l.253
-    use super::{next_number, skip_record, squash_message, subject_of, SUBJECT_CHARS};
+    use super::super::gate::{next_number, skip_record, DetectionSkip, Skipped};
+    use super::{detection_needed, squash_message, subject_of, SUBJECT_CHARS};
 
     // flip-check: retroactive s2-07l.222
     /// `next_number` は record 数の次（1 始まり）で、検出線を省いた record を挟む 2 周分でも単調に増える。
     #[test]
     fn mutant_in_pipe_land_next_number_increases_across_two_rounds() {
         assert_eq!((0..4).map(next_number).collect::<Vec<u64>>(), vec![1, 2, 3, 4], "1 始まりの通し番号");
+        let skipped = Skipped { reason: DetectionSkip::SameTree, tree: Some("tree") };
         for (len, n) in [(0, 1), (3, 4)] {
-            assert!(skip_record(len, "tree").contains(&format!("\"n\":{n}")), "{}", skip_record(len, "tree"));
+            let record = skip_record(next_number(len), skipped);
+            assert!(record.contains(&format!("\"n\":{n}")), "{record}");
         }
+    }
+
+    // flip-check: retroactive s2-07l.397
+    /// (e) 検出線の要否は**閉じた接頭辞集合**で決まる（設計 §30）: dir は接頭辞・file は完全一致・空の列は偽。
+    /// `cratesx/a.rs` は `crates/` に触れない（`/` を落とす変異を外す）。
+    #[test]
+    fn pipe_detection_scope_needed_is_a_closed_prefix_set() {
+        let table: [(&[&str], bool); 7] = [
+            (&["docs/design/pipeline.md"], false),
+            (&["crates/toy/src/a.rs"], true),
+            (&["Cargo.lock"], true),
+            (&["rules/manifest.toml"], true),
+            (&[".vessel.toml"], true),
+            (&["cratesx/a.rs"], false),
+            (&[], false),
+        ];
+        for (paths, want) in table {
+            assert_eq!(detection_needed(paths.iter().copied()), want, "paths={paths:?}");
+        }
+        // 列の中に 1 つでも触れる path が在れば真（docs と crates が混ざった周は撃つ）。
+        assert!(detection_needed(["README.md", "Cargo.toml"]), "混ざった周は撃つ");
+        assert!(!detection_needed(["README.md", ".github/workflows/ci.yml", "docs/toy.md"]), "面の外だけなら省く");
     }
 
     /// 複数行の goal は **本文に逐語**（改行ごと）で載り、件名は先頭の文だけを持つ。

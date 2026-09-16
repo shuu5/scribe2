@@ -2,7 +2,7 @@
 //! 便の写しの読み・[`super`] から純移動・`s2-07l.286`）。判定の順と終端は親（[`super::gate`]）が持つ。
 
 use super::verify::{is_unreadable, recorded_rc, run_checks_admitted, Admit, Check, Checks, Step};
-use super::Gate;
+use super::{Detection, DetectionSkip, Gate};
 use crate::fleet::json_lite::{self, Value};
 use crate::fleet::store::{append_line, LockPolicy};
 use crate::fleet::SCHEMA;
@@ -39,6 +39,10 @@ pub(super) const USAGE_HEAD: &str = "confine-usage";
 /// rc だけでは「何がどう赤いか」が便の外から読めず、gate が落ちるたびに人が同じ行を
 /// 手で撃ち直して理由を取り直すことになる（実測 2026-09-10・`s2-07l.49`）。緑の行は
 /// 残さない——読む理由が無い出力で診断 file を埋めると、赤い行の見出しが埋もれる。
+///
+/// 検出線を撃たない周（[`Detection::Skip`]・設計 pipeline.md §30）は写しの検出線の代わりに**空の列**を渡し
+/// （行を撃つ実装は 1 本のまま）、その段の位置に skip record を 1 本置く（[`records_of`]・main 実測と同じ形）。
+/// 撃っていないので `detection_unmeasured` は `None` のままである。
 pub(super) fn record_verify(entry: &Gate<'_>, worktree: &Path, base: &str) -> Result<Counted, String> {
     let frozen = frozen_copy(entry)?;
     let admit = Admit {
@@ -54,12 +58,16 @@ pub(super) fn record_verify(entry: &Gate<'_>, worktree: &Path, base: &str) -> Re
             policy: entry.policy,
         },
     };
+    let (detection, skipped): (&[String], Option<Skipped<'_>>) = match entry.detection {
+        Detection::Run => (frozen.detection_verify(), None),
+        Detection::Skip(reason) => (&[], Some(Skipped { reason, tree: None })),
+    };
     let checks = Checks {
         worktree,
         base,
         contract: entry.contract,
         common: frozen.common_verify(),
-        detection: frozen.detection_verify(),
+        detection,
     };
     let steps = run_checks_admitted(&checks, Some(&admit));
     let path = verify_log_path(entry.state_dir, entry.run);
@@ -71,23 +79,89 @@ pub(super) fn record_verify(entry: &Gate<'_>, worktree: &Path, base: &str) -> Re
     let unreadable = steps.iter().any(is_unreadable);
     let killed = steps.iter().find_map(box_kill);
     // 検出線が rc 2（測れなかった）で終えた周も同じ極性（`s2-07l.331`・設計 pipeline.md §5.3）。
-    // 最初にそうなった行の `n` を持つ（理由に名指す・record は残す）。
+    // 最初にそうなった行の `n` を持つ（理由に名指す・record は残す）。skip record は検出線の段の
+    // 位置＝検出線の行より後ろにしか入らないので、この `n` は record の `n` と一致する。
     let unmeasured = steps
         .iter()
         .position(detection_unmeasured)
         .map(|index| index as u64 + 1);
-    for (index, step) in steps.iter().enumerate() {
-        let number = index as u64 + 1;
-        if step.rc != 0 {
+    for record in records_of(&steps, skipped) {
+        if let Some(step) = record.step.filter(|step| step.rc != 0) {
             if !is_unreadable(step) && box_kill(step).is_none() && !detection_unmeasured(step) {
                 red += 1;
             }
-            let head = format!("## n={number} rc={} cmd={}", step.rc, step.cmd);
+            let head = format!("## n={} rc={} cmd={}", record.n, step.rc, step.cmd);
             append_stderr(&tail_path, entry.policy, &head, &step.stderr)?;
         }
-        append_line(&path, &step_record(number, step), entry.policy).map_err(|err| err.to_string())?;
+        append_line(&path, &record.body, entry.policy).map_err(|err| err.to_string())?;
     }
     Ok(Counted { red, unreadable, killed, detection_unmeasured: unmeasured })
+}
+
+/// 検出線を省いた周の材料（record の `reason=` と、主実測だけが持つ `tree=`）。
+#[derive(Debug, Clone, Copy)]
+pub struct Skipped<'a> {
+    /// 省いた理由。
+    pub reason: DetectionSkip,
+    /// land した木（主実測の record だけ・gate の再撃ちは木を持たない＝field を書かない）。
+    pub tree: Option<&'a str>,
+}
+
+/// 書く record 1 本（通し番号 `n`・本文・撃った段なら元の [`Step`]）。
+pub struct Record<'a> {
+    /// `verify.jsonl` の `n`（1 始まり・skip record も数える）。
+    pub n: u64,
+    /// 1 行の JSON。
+    pub body: String,
+    /// 撃った段（skip record は `None`）。
+    pub step: Option<&'a Step>,
+}
+
+/// 撃った段の record 列を組む（`verify.jsonl` と land の `verify-main.jsonl` が**同じ形・同じ位置**で書く）。
+///
+/// 検出線を省いた周は、その段の位置（[`Check::Contract`] の直前・契約の行が無ければ末尾）に skip record を
+/// 1 本挟み、`n` は挟んだ record も含めて通しで振る（**撃たなかった事実を黙って落とさない**・設計 §30）。
+pub fn records_of<'a>(steps: &'a [Step], skipped: Option<Skipped<'_>>) -> Vec<Record<'a>> {
+    let mut records: Vec<Record<'a>> = Vec::new();
+    let mut pending = skipped;
+    for step in steps {
+        if step.stage == Check::Contract {
+            if let Some(skip) = pending.take() {
+                let n = next_number(records.len());
+                records.push(Record { n, body: skip_record(n, skip), step: None });
+            }
+        }
+        let n = next_number(records.len());
+        records.push(Record { n, body: step_record(n, step), step: Some(step) });
+    }
+    if let Some(skip) = pending {
+        let n = next_number(records.len());
+        records.push(Record { n, body: skip_record(n, skip), step: None });
+    }
+    records
+}
+
+/// 既に積んだ record 数から次の `n`（1 始まり）。
+pub fn next_number(len: usize) -> u64 {
+    u64::try_from(len).unwrap_or(u64::MAX).saturating_add(1)
+}
+
+/// 検出線を省いた段の名（record の `skipped=`）。
+const SKIPPED_DETECTION: &str = "detection";
+
+/// 検出線を省いた段の record（`kind=detection skipped=detection [tree=<sha>] reason=<理由>`・schema は 1 のまま）。
+pub fn skip_record(number: u64, skipped: Skipped<'_>) -> String {
+    let mut fields = vec![
+        ("schema", Value::Num(SCHEMA)),
+        ("n", Value::Num(number)),
+        ("kind", Value::Str(Check::Detection.as_str().to_owned())),
+        ("skipped", Value::Str(SKIPPED_DETECTION.to_owned())),
+    ];
+    if let Some(tree) = skipped.tree {
+        fields.push(("tree", Value::Str(tree.to_owned())));
+    }
+    fields.push(("reason", Value::Str(skipped.reason.as_str().to_owned())));
+    json_lite::write_object(&fields)
 }
 
 /// 撃った 1 段の record（`verify.jsonl` と land の `verify-main.jsonl` が**同じ形**で書く）。
