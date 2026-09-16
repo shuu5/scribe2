@@ -257,7 +257,8 @@ e2e は binary を spawn し外部 command は PATH 先頭の stub で差し替�
 - 何が起きているか: admin の実測 2026-09-16（`.354` run 2 / `.247` run 1）。gate の共通 verify `cargo nextest run --workspace --no-tests=fail`（`.vessel.toml` の `common-verify`）と検出線 `cargo xtask mutants-diff`（`detection-verify`）の baseline は fail-fast で、負荷で歯 1 本が落ちると残りが未実行のまま便が Gated INCONCLUSIVE で 1 周を払う（`.354` run 2: 1448 本中 915 passed / 1 failed / **992 未実行**・738 秒）。落ちた歯が 1 本しか名指されないので、flaky か本物かの弁別も 1 本ずつしか進まない。
 - 現物（verified・main 43706fe）: (i) `.vessel.toml:6` の `common-verify` の nextest 行に `--no-fail-fast` は無い。同じ行は `CLAUDE.md` の done 区間（`<!-- done:begin -->`〜・`ci.yml` から生成・`claude-md-done` の検出線が drift を見る）と `.github/workflows/ci.yml:13` にも在る＝3 面が同文。(ii) `crates/xtask/src/mutantsdiff.rs` の `measure_args` は `cargo mutants --in-diff … -p … --no-shuffle --copy-vcs true -o … --jobs N` で、cargo-mutants の baseline は `cargo test` を既定で撃つ（`--` の後ろの引数を持たない＝失敗した test binary の後ろは走らない）。(iii) `crates/xtask/src/flipcheck.rs` の `nextest_args` は `nextest run --workspace --no-tests=fail --color never` + extra（base 段の `failed_tests` は落ちた歯を列で読み `retry_named` が名指せた歯だけ 1 回撃ち直す＝名指せる本数が増えるほど撃ち直しが効く）。
 - 形: 3 か所とも **`--no-fail-fast`** を足す。判定は不変（落ちた歯が 1 本でも赤・rc の意味は変えない）。(i) `.vessel.toml` / `ci.yml` / `CLAUDE.md` の done 区間の nextest 行を `cargo nextest run --workspace --no-tests=fail --no-fail-fast` に（3 面同文・`claude-md-done` の検出線が一致を見る）。(ii) `measure_args` の末尾に `--` `--no-fail-fast` を足す（cargo-mutants が `cargo test` へ渡す引数・baseline と変異の両方に効く・`Scope` の束縛は不変）。(iii) `nextest_args` の固定引数に `--no-fail-fast` を 1 つ足す（`--color never` の隣接は不変）。
-- 触らない: 検証行の順序・`R-C12-1` の極性・`retry_named` の回数（1 回）と範囲（名指せた歯だけ）・`gate.job_memory_mb` 等の値。値の線は増えない（flag 1 つ）。
+- 歯の置き場（run 1 = 審査 FAIL 2026-09-16「3 面同文の歯が write-set の外の読み手を要る」の解）: (a) `nextest_args` の pin は `crates/xtask/src/flipcheck_tests.rs`（既存の `--color never` の pin と同型）。(b) `measure_args` の pin は `crates/xtask/src/mutantsdiff.rs` の in-file の歯。(c) 3 面同文の pin は `crates/xtask/src/check_prose_tests.rs` に置き、既存の歯と同じく `CARGO_MANIFEST_DIR` から repo root を解いて `.vessel.toml` / `ci.yml` / `CLAUDE.md` の 3 file を**字面で読む**（`common-verify` の nextest 行・`run:` の nextest 行・done 区間の nextest 行が同文で `--no-fail-fast` を持つ）。`xtask check` の `claude-md-done` の読み手（`claude_md.rs`）は触らない＝(c) は同じ読み手を使わず、3 file を直接読む独立の pin。
+- 触らない: 検証行の順序・`R-C12-1` の極性・`retry_named` の回数（1 回）と範囲（名指せた歯だけ）・`gate.job_memory_mb` 等の値・`claude_md.rs`。値の線は増えない（flag 1 つ）。
 - 却下案: gate の nextest だけ直す（検出線の baseline と flip-check の base 段で同じ 1 本が同じ損失を出す・`.247` は両方で落ちた）／`--no-fail-fast` を rules 行にする（極性でも閾値でもない・argv の形）／CI は fail-fast のまま残す（CLAUDE.md の done 区間が ci.yml から生成される＝3 面が割れる）。
 
 <!-- contracts:begin -->
@@ -358,7 +359,7 @@ id = "j"
 title = "gate の共通 verify・検出線の baseline（cargo mutants の cargo test）・flip-check の base 段を --no-fail-fast にし、落ちた歯の全数を 1 周で名指す"
 req = ["FR46"]
 section = "19"
-write-set = [".vessel.toml", ".github/workflows/ci.yml", "CLAUDE.md", "crates/xtask/src/flipcheck.rs", "crates/xtask/src/flipcheck_tests.rs", "crates/xtask/src/mutantsdiff.rs"]
+write-set = [".vessel.toml", ".github/workflows/ci.yml", "CLAUDE.md", "crates/xtask/src/flipcheck.rs", "crates/xtask/src/flipcheck_tests.rs", "crates/xtask/src/mutantsdiff.rs", "crates/xtask/src/check_prose_tests.rs"]
 verify = ["cargo nextest run -p xtask --no-tests=fail no_fail_fast_"]
 size = "S"
 done = "3 面同文の nextest 行と measure_args と nextest_args が --no-fail-fast を持ち、判定の極性と rc の意味は不変"
