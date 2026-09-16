@@ -300,6 +300,14 @@ e2e は binary を spawn し外部 command は PATH 先頭の stub で差し替�
 - 歯（`pipe_intake_max_live_` 接頭辞・`tests/e2e/pipe/intake.rs`・toy repo・tmp の manifest を `--rules` で渡す）: `pipe.max_live = 1` で live 1 本の下の 2 本目の intake が slug `max-live` と `live=1 cap=1` の 1 行で断られ、run dir も event も増えない／その live の便を `stop --run` で終端に倒すと同じ契約が通る／Gated で verdict FAIL の便は live に数えず上限 1 でも通る／写しを読めない live の便が在る周は `write-set-unreadable`（rc 2）で断る。rules 行は kind 件数の pin + 外形の歯（行 j と同型）。
 - 却下: ADR-0035 §3（写しは持たない）。
 
+## 25. 一時 scope を終端で unload する — `--collect` と kill の後の `reset-failed`（契約表の行 p・`s2-07l.421`）
+
+- 何が起きているか（別 project の planner の relay 2026-09-16・planner 再実測・verified）: host の `systemctl --user --failed` に器の一時 scope が 239 件残っていた（probe 85 / review 60 / common 48 / contract 14 / lens 11 / runner 10 / lens-claude 4 / toy 1）。sample の state は `ActiveState=failed SubState=failed Result=success`＝process は正常終了しているのに unit が failed で残る（transient scope は `--collect` が無いと終了後に unit を残す周がある）。同じ host の他 project の観察（failed unit 0）を汚す。現物: `pipe/confine.rs` の `scope_args` に `--collect` が無く、`release`（`systemctl --user kill --signal=SIGKILL`）は残った unit を `reset-failed` しない。probe（`sh -c exit 0` の scope）は起動結果だけ読む。
+- 形: (1) `scope_args` に `--collect` を 1 語足す（systemd の `-G`・全部の scope に効く・終了後に unit を unload・失敗した周も）。(2) `release` は kill の後に `systemctl --user reset-failed <unit>.scope` を 1 回撃つ（unit が無い周の字面は `Gone` と同じ扱い・reset の rc は record に写さない＝`Released` の閉じた 4 値は不変）。(3) probe の scope は (1) で消える（後始末の口を足さない）。
+- 触らない: 箱の大きさ（`MemoryMax` / `CPUWeight` / `OOMPolicy`）・`Released` の variant と `as_str`・record の `confined=` / `reason=` の語彙・封じ込めの 3 線。
+- 歯（`confine_collect_` 接頭辞・`pipe/confine.rs` の in-file の pure な歯 + `tests/e2e/pipe/gate.rs`）: `scope_args` の列に `--collect` が 1 回在り既存の引数の順序が不変／偽 `systemctl` の呼出の写しに `kill` の後 `reset-failed` が 1 回在る／unit が無い周（`reset-failed` が「not loaded」の字面で断る）も `Gone` として record が変わらない。
+- 却下: 定期の `reset-failed` を管理 tick に置く（掃除の 2 本目・原因の側を直さない）／`--collect` だけ（release で kill した周は failed のまま残る）／人が `systemctl --user reset-failed` を撃つ運用（散文の手順・N2）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -452,4 +460,14 @@ write-set = ["rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "crates/s
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_intake_max_live_"]
 size = "S"
 done = "rules 行 pipe.max_live が裁定 id 付きで 1 本増え、live な便が値以上の周の intake は max-live の 1 行で断られて run dir も event も増えず、live の便を止めれば同じ契約が通り、Gated FAIL の便は数えられず、写しを読めない周は write-set-unreadable で止まり、走行中の便と受付の memory の枠は不変"
+
+[[contract]]
+id = "p"
+title = "一時 scope を終端で unload する — scope_args に --collect を足し、release は kill の後に reset-failed を 1 回撃つ（Released の 4 値と record の語彙は不変）"
+req = ["NFR6"]
+section = "25"
+write-set = ["crates/scribe2/src/pipe/confine.rs", "crates/scribe2/tests/e2e/pipe/gate.rs", "crates/scribe2/tests/e2e/pipe.rs"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail confine_collect_"]
+size = "S"
+done = "scope_args の列に --collect が 1 回在り、release が kill の後に reset-failed を 1 回撃ち、unit の無い周は Gone のまま record が変わらず、箱の大きさと Released の 4 値は不変"
 <!-- contracts:end -->
