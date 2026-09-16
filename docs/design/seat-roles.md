@@ -96,6 +96,13 @@ C1 / C5（権能の値は行・裁定 id）・C1.2（生成文に手書きの規
 - 形: pane の script は `stty -echo` の後に固定の合図（1 行の sentinel）を出し、歯は capture-pane の polling（上限付き・壁時計の等号を pin しない）で合図を見てから inject を撃つ。同じ file の壁時計依存の歯（sleep を pane の script に持ち送達の有無を時間で測るもの）を同じ形に揃える（母集団 = 該当した歯の本数を notes へ）。本体（`seat/inject.rs` 等）は触らない。
 - 検証の形: 歯の内容が変わる便ゆえ flip は「変更された歯が base で違う挙動」の形。base で RED を作れない周は歯を新設の名に改名して旧名を消す。負荷下の再現は `--test-threads 8` で 5 周回して赤 0（母集団 = 5 周 × 本数）を notes へ。
 
+## 13. role guard の断りの理由を閉じた enum に・代替ルートを添える（契約表の行 g・`s2-07l.308`）
+
+- 何が起きているか: 未登録の席の Write が reason=unregistered で deny され、deny 文が seat register を名指さないので source を読まないと解けなかった（folio2 planner の観測 2026-09-15）。止めるのは設計どおり（fail-closed・ADR-0022 §2.1）で、代替ルートを持たないのが穴。現物: `crates/scribe2/src/hook/role_guard.rs` の decide の断りの理由は素の文字列 6 種（target-unresolved / registry-unreadable / unregistered / rules-unreadable / no-row / no-anchor）・deny 文は 1 形。
+- 形: 断りの理由を閉じた enum RefuseReason（TargetUnresolved / RegistryUnreadable / Unregistered / RulesUnreadable / NoRow / NoAnchor・宣言順の const slice・as_str = 現行の字面）にし decide は variant を返す。各 variant が代替ルートの 1 行 route を持ち（Unregistered = seat register の形・NoAnchor = anchor の解決の口・RegistryUnreadable / RulesUnreadable = doctor の口）、deny 文の末尾に route= の 1 句を足す。
+- 触らない: 判定の順序と極性（fail-closed）・登録の口・deny 文の前半（理由の字面は不変）。
+- 却下: deny 文に散文で手順を書く（理由ごとに違う route を 1 形の文に押し込むと散文の規則になる・N2）／未登録を allow に倒す（fail-closed を崩す）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -139,4 +146,14 @@ write-set = ["crates/scribe2/tests/e2e/seat/cycle.rs"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail seat_inject_"]
 size = "S"
 done = "pane の script が固定の合図を出してから inject を撃つ形に歯が揃い、同じ file の壁時計依存の歯が同じ形になり（母集団は notes・改名後の名は全部 seat_inject_ の接頭辞を保つ）、負荷下 5 周で赤 0"
+
+[[contract]]
+id = "g"
+title = "role guard の断りの理由を閉じた enum RefuseReason にし、各 variant が代替ルートの 1 行を持って deny 文の末尾に route= を添える"
+req = ["FR45", "FR40"]
+section = "13"
+write-set = ["crates/scribe2/src/hook/role_guard.rs", "crates/scribe2/tests/e2e/hook.rs", "docs/design/seat-roles.md"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail hook_role_guard_route_"]
+size = "S"
+done = "role guard の deny 文が理由ごとの代替ルートを 1 行で名指し、理由の字面と判定の順序と極性は不変、6 variant の宣言順が pin され route が全部非空"
 <!-- contracts:end -->
