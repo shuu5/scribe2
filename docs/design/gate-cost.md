@@ -456,7 +456,7 @@ id = "o"
 title = "host で同時に走る便の本数の最大値 — rules 行 pipe.max_live を足し、受付が live な便を交差と同じ判定で数えて値以上の周は typed に断る（走行中の便は止めない・dispatcher の列の理由は行 a の後）"
 req = ["FR68", "FR39"]
 section = "24"
-write-set = ["rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "crates/scribe2/tests/e2e/rules.rs", "crates/scribe2/tests/e2e/snapshots/e2e__rules__rules_external_form.snap", "docs/design/rules-manifest.md", "crates/scribe2/src/pipe/refuse.rs", "crates/scribe2/src/pipe/cli/intake.rs", "crates/scribe2/tests/e2e/pipe/intake.rs"]
+write-set = ["rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "crates/scribe2/tests/e2e/rules.rs", "crates/scribe2/tests/e2e/snapshots/e2e__rules__rules_external_form.snap", "docs/design/rules-manifest.md", "crates/scribe2/src/pipe/refuse.rs", "crates/scribe2/src/pipe/cli/intake.rs", "crates/scribe2/tests/e2e/pipe.rs", "crates/scribe2/tests/e2e/pipe/intake.rs"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_intake_max_live_"]
 size = "S"
 done = "rules 行 pipe.max_live が裁定 id 付きで 1 本増え、live な便が値以上の周の intake は max-live の 1 行で断られて run dir も event も増えず、live の便を止めれば同じ契約が通り、Gated FAIL の便は数えられず、写しを読めない周は write-set-unreadable で止まり、走行中の便と受付の memory の枠は不変"
