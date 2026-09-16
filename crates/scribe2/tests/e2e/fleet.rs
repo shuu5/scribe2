@@ -2762,7 +2762,8 @@ fn fleet_usage_refresh_failures_keep_token_expired_and_name_the_refresh() {
 const REFRESH_TIMEOUT_S: u64 = 4;
 
 /// 偽 claude が pid file を書くのを待つ上限（子が起動に達しない周を停止経路の失敗と混同しないための待ち）。
-const PID_FILE_WAIT: Duration = Duration::from_secs(5);
+// flip-check: retroactive s2-07l.385
+const PID_FILE_WAIT: Duration = Duration::from_secs(60);
 
 /// 「上限で止める」の余裕（timeout + 猶予 2 回の和に足す・等号は壁時計で pin しない）。
 const STOP_MARGIN_S: u64 = 12;
