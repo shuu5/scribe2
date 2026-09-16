@@ -132,7 +132,7 @@ done = "偽 git と偽 cargo で ff → build → install の順序の argv が�
 [[contract]]
 id = "f"
 title = "doctor の consumer 行に statusline=<vessel|other|absent|unreadable> を足す — 口座行と同じ 1 関数で読む"
-req = ["FR61", "FR25"]
+req = ["FR61", "FR63"]
 section = "14"
 write-set = ["crates/scribe2/src/account/consumers.rs", "+crates/scribe2/src/seat/statusline.rs", "crates/scribe2/tests/e2e/seat.rs", "crates/scribe2/tests/e2e/snapshots/e2e__seat__seat_doctor_external_form.snap"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail doctor_consumer_statusline_"]
