@@ -42,6 +42,7 @@ use std::collections::BTreeSet;
 mod derive;
 
 pub use derive::{check_drift, derive_write_set, weighted_lines, Base, Fields};
+pub(crate) use derive::declared_teeth;
 
 /// nextest の行の書き出し（この後ろの語から crate と filter 語を読む）。
 const NEXTEST_HEAD: &[&str] = &["cargo", "nextest", "run"];
@@ -167,6 +168,12 @@ pub enum ClosureError {
         /// 書かれていた項目。
         item: String,
     },
+    /// Declared 行（§20・行 t）の verify の歯の file（base の `#[test]` の fn 名が filter 語を含む file）が行の
+    /// write-set に無い。**足りない file を全部**持つ（辞書順）。
+    TeethOutsideWriteSet {
+        /// write-set に無い歯の file（repo 相対・辞書順）。
+        files: Vec<String>,
+    },
 }
 
 impl ClosureError {
@@ -191,6 +198,9 @@ impl ClosureError {
             }
             Self::ItemUnresolved { ref item } => {
                 format!("{item} は base に解けない（creates は + 無しで base に無い path・tests / also は base に在る file）")
+            }
+            Self::TeethOutsideWriteSet { ref files } => {
+                format!("verify の歯の file が write-set に無い（{}）", listed(files))
             }
         }
     }

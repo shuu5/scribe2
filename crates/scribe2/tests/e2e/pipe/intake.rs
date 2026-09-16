@@ -1691,6 +1691,70 @@ fn contract_derive_declared_rows_skip_derivation() {
     clean(&[&repo, &state]);
 }
 
+// ───── Declared 行の歯の置き場の門（設計 docs/design/contract-source.md §20・行 t・`s2-07l.391`・接頭辞 `contract_declared_teeth_`） ─────
+
+/// Declared 行（新欄なし + `write-set` あり）で `verify` が nextest 形の行。`write-set` だけを差し替える。
+fn declared_teeth_row(id: &str, filter: &str, write_set: &str) -> String {
+    let verify = format!("[\"cargo nextest run -p toy --no-tests=fail {filter}\"]");
+    table_row(id, &[("write-set", write_set), ("verify", verify.as_str())])
+}
+
+/// (a) Declared 行の `verify` の歯（`derive_` = other.rs と e2e.rs）が `write-set`（tint.rs だけ）の外に在る契約は受付が
+/// `teeth-outside-write-set`（rc 1）で**両方**を辞書順に名指して断り（helper の fn だけの helper.rs は出ない）、run dir は
+/// 撃つ前と同数（便を作らない）。base は Declared を導出も門も無しで通す（rc 0 → RED）。
+#[test]
+fn contract_declared_teeth_outside_write_set_is_refused() {
+    let row = declared_teeth_row("t", "derive_", "[\"crates/toy/src/tint.rs\"]");
+    let (repo, state) = derive_repo(&table_doc(&table_region(&[row])));
+    let before = run_dirs(&state);
+    let out = intake_raw(&repo, &state, &pointed_contract(&repo, "t.toml", "t"), "s2-t");
+    let err = stderr_of(&out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "write-set の外の歯は rc 1: {err}");
+    assert!(err.contains("verify の歯の file が write-set に無い"), "teeth-outside-write-set の理由: {err}");
+    assert!(err.contains("crates/toy/src/other.rs, crates/toy/tests/e2e.rs"), "両方を辞書順に名指す: {err}");
+    assert!(!err.contains("helper.rs"), "helper の fn だけの file は歯の file でない: {err}");
+    assert!(!err.contains("write-set が導出値と一致しない"), "drift は撃たない: {err}");
+    assert_eq!(run_dirs(&state), before, "便を作らない（run dir は撃つ前と同数）");
+    assert_eq!(event_count(&state), 0, "断った周は event を書かない");
+    clean(&[&repo, &state]);
+}
+
+/// (b) 同じ行の `write-set` に歯の 2 file を足した形（3 項目）は通る: rc 0・判定行 `write-set=declared` ∧ `files=3`・
+/// 写しの write-set は契約 file のまま（Declared は差し替えない）。
+#[test]
+fn contract_declared_teeth_inside_write_set_passes() {
+    let write_set = "[\"crates/toy/src/tint.rs\", \"crates/toy/src/other.rs\", \"crates/toy/tests/e2e.rs\"]";
+    let row = declared_teeth_row("u", "derive_", write_set);
+    let (repo, state) = derive_repo(&table_doc(&table_region(&[row])));
+    let out = intake_raw(&repo, &state, &pointed_contract(&repo, "u.toml", "u"), "s2-u");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "歯が write-set の中なら通る: {}", stderr_of(&out));
+    let tokens = intake_tokens(&out);
+    assert!(tokens.contains(&"write-set=declared".to_owned()) && tokens.contains(&"files=3".to_owned()), "{tokens:?}");
+    assert_eq!(copied_write_set(&state, &run_id_of(&out)), ["src/lib.rs"], "写しは契約 file のまま");
+    clean(&[&repo, &state]);
+}
+
+/// (c) base で 0 本の filter 語（`fresh_`）: Declared 行に `tests` 欄は無いので、`write-set` が歯の file を 1 つも持たなければ
+/// 従来の `teeth-place-unresolved`（rc 1・字面不変）で断り、歯の file（e2e.rs）を足せばそれを置き場と読んで通る（rc 0）。
+/// 母集団 = 2 回の intake の rc。
+#[test]
+fn contract_declared_teeth_new_filter_needs_a_teeth_file_in_write_set() {
+    let rows = [
+        declared_teeth_row("v", "fresh_", "[\"crates/toy/src/tint.rs\"]"),
+        declared_teeth_row("w", "fresh_", "[\"crates/toy/src/tint.rs\", \"crates/toy/tests/e2e.rs\"]"),
+    ];
+    let (repo, state) = derive_repo(&table_doc(&table_region(&rows)));
+    let bare = intake_raw(&repo, &state, &pointed_contract(&repo, "v.toml", "v"), "s2-v");
+    let err = stderr_of(&bare);
+    assert_eq!(bare.status.code(), Some(i32::from(RC_REFUSED)), "歯の file の無い write-set は rc 1: {err}");
+    assert!(err.contains("filter 語 fresh_ を含む #[test] の fn が base に無く tests 欄も無い"), "teeth-place-unresolved の字面のまま: {err}");
+    assert!(!state.join("pipe").exists(), "run dir を作らない");
+    let placed = intake_raw(&repo, &state, &pointed_contract(&repo, "w.toml", "w"), "s2-w");
+    assert_eq!(placed.status.code(), Some(i32::from(RC_OK)), "write-set の歯の file が置き場: {}", stderr_of(&placed));
+    assert!(intake_tokens(&placed).contains(&"write-set=declared".to_owned()), "{}", stdout_of(&placed));
+    clean(&[&repo, &state]);
+}
+
 /// (e) `contracts schema` の出力は tracked の `contracts/schema.toml` と一致し、`creates` / `tests` / `also` を任意の list として
 /// 持ち `write-set` は任意である。表の読み手も同じ: `write-set` の無い行を持つ doc は `contracts check` で違反 0（base は
 /// 必須の欠落で断る → RED）。
