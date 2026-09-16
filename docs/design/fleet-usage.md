@@ -19,7 +19,7 @@
 - manifest（`rules/manifest.toml`・schema 1 のまま）に **`[[account]]` 行**を足す。field は `label`（文字列・必須・不透明）だけ。同じ label の重複・未知 key は loader が拒む。`[[rule]]` 行の形と検査（裁定 id 必須）は変えない（account 行は規則の値ではなく宣言値・C10。ADR-0004 D-3 の受理する表の列挙を `[[account]]` へ広げる = ADR-0017 §2.3・C14.2 の参照要件は `[[rule]]` 行のまま）。
 - **label は不透明**（本当の口座の識別子・host 名・path のどれでもない・CON2）。label 行を足す変更は公開面の情報（口座の数）を増やすので、A1 の対話面で user に確認してから行う。本設計は行を足さない。
 - credential の場所 = `<state_dir>/accounts/<label>/`（dir または link・**user が host ごとに置く**〔置く口 = `account add`・宣言の置き場 = host の manifest・[account-lifecycle.md](./account-lifecycle.md) §2 / §3・ADR-0026〕）。中の `.credentials.json`（Claude Code の私有形式）から `claudeAiOauth.accessToken` と `claudeAiOauth.expiresAt` だけを読む。他の field（refresh token 等）は読まない・保持しない・出さない。
-- state dir は ADR-0004 §2.4 の経路（`--state-dir` 必須・fleet の subcommand の既存形）。HOME も env も読まない。
+- state dir は ADR-0004 §2.4 の経路（`--state-dir`・無ければ `seat` と同じ 1 関数で git 設定から解く・§11）。HOME も env も読まない。
 - 器は `<state_dir>/accounts/` を**走査しない**（真実は manifest の宣言・C3）。label に dir が無い host ではその口座を「測れなかった（credential 不在）」として記録し、コマンドは続く。
 
 ## 3. 計測（子 process と応答）
@@ -58,7 +58,7 @@
 - replay: `State` に `allowance: BTreeMap<(account, window), AllowanceLatest>` を足す（口座 × 窓ごとの物理順で最後の行・Measured / Unmeasured のどちらでも最新が勝つ＝古い実測値を新しい「測れなかった」が覆う）。runs / seats は触らない（allowance 行は run を作らない）。
 - `fleet export`（跨版 面 2）は**変えない**（header の件数・run 行・seat 行のまま）。allowance の外形は §5 の 1 行表示。
 
-## 5. CLI（`<NAME> fleet …`・`--state-dir D` 必須・出力は emit 経由）
+## 5. CLI（`<NAME> fleet …`・置き場は `--state-dir D` か git 設定〔§11〕・出力は emit 経由）
 
 - `fleet usage [--curl PATH]` → manifest の全 `[[account]]` を順に読み、口座 × 窓ごとに event を append し、**口座ごとに 1 行**を stdout へ:
   - 全窓 Measured: `usage: account=<label> five_hour=<pct>% resets=<ts> seven_day=<pct>% resets=<ts> [model=<name>:<pct>% resets=<ts> …]`
@@ -103,3 +103,25 @@
 - doctor の面: manifest の label と event log の実測（host 列）を全 host で突き合わせ、dir の無い label・実測の無い host を 1 行ずつ出す（C3.2・v3）。
 - tick からの定期計測（seat-autonomy の領分）。選ぶ規則（R-C9-1・A2）。
 - refresh を model 呼出の無い command で誘発する形（§3・§9）: Claude Code の版で「refresh に届く非 model の command」が確かめられたら、`Call` の prompt を落としてその command に差し替える（外形は `refresh=` の値のまま・歯は偽 claude のまま）。再 login（墓標）は user の手番のまま。
+
+## 11. `fleet` の置き場の既定と人が読む表（契約表の行 a・`s2-07l.403`）
+
+- 何が起きているか: `fleet` の口は `--state-dir` を必須で受け（`fleet/cli.rs` の dispatch）、無い周は使い方だけを出す。`seat` の口は `seat/mod.rs` の state_dir_of（`--state-dir` > git 設定の 2 経路・出所付き・C10）で解く＝口ごとに解き方が違い、人が手で `fleet usage --show` を撃てない（user 直命 2026-09-16 08:1xZ・逐語は台帳 `s2-07l.403`）。1 行形（`usage: account=…`）は機械の読み手（tick・選定・歯）の面で、人が口座の状況を一目で見る形が無い。
+- 形: (1) `fleet` の dispatch は `--state-dir` を任意にし、無い周は `seat` と**同じ 1 関数**（state_dir_of）で解く（第 2 の解決を書かない・env は読まない・C2.2）。解けない周は `fleet: refused reason=state-dir` の 1 行 + 使い方で rc 1（store を作らない）。全 verb（record / show / export / usage / select）が同じ入口を通る。**1 行形の字面は不変**（出所は表の見出し行に載せ、1 行形には足さない＝機械の読み手を動かさない）。(2) `fleet usage --table`: **出力の形**の指定で、計測か表示か（`--show`）とは直交（`--show --table` = read-only の表・`--table` だけ = 計測してから表）。表は pure 関数 1 本が組む: 1 行目 = `state_dir=<path> source=<flag|git-config>`、2 行目 = 見出し（account / 5h / 7d / model / seat / resets）、以下は口座ごとに 1 行。値は 1 行形と同じ replay の `allowance` から取り、Unmeasured の窓は `unmeasured:<reason>`、model 窓は名と % を `Fable:75%` の形、seat 列は登録 row が持つ口座ならその役割の名・無ければ `-`、resets は 5 時間窓の reset 時刻。列幅は値の最大幅で揃える（数を code に書かない）。
+- 触らない: 1 行形の字面・event の形・`select` の判定・state_dir_of の中身・`--curl` / `--claude` の経路・極性一覧（Guard を足さない・§6）。
+- 歯（`fleet_usage_statedir_` / `fleet_usage_table_` 接頭辞・`crates/scribe2/tests/e2e/fleet.rs` と `fleet/usage.rs` の in-file）: tmp repo の git 設定から解いた周は flag 無しで計測し store がその dir に出来る／git の無い tmp cwd で flag 無しは typed に断り store を作らない（**cwd は tmp**＝repo の cwd で撃つと本物の置き場を解く）／`--show --table` が見出し 2 行 + 口座行を出し seat 列が登録 row の役割を映す／pure な表の歯（Unmeasured 混在・列幅・口座 0 件）。既存の flag 必須の歯（`--state-dir` 無し = rc 1）は前者 2 本に置き換える。
+- 却下: 1 行形に `source=` を足す（tick と選定の歯が字面を読む・機械面を動かす）／`--table` を既定にする（機械の読み手が表を parse する）／fleet に第 2 の解決関数を書く（seat と食い違う）／表の列幅を定数で持つ（数を code に焼く）。
+
+<!-- contracts:begin -->
+schema = 1
+
+[[contract]]
+id = "a"
+title = "fleet の置き場を seat と同じ 1 関数で解き、fleet usage --table が人の読む表を出す — 1 行形と event は不変"
+req = ["FR33", "FR57"]
+section = "11"
+write-set = ["crates/scribe2/src/fleet/cli.rs", "crates/scribe2/src/fleet/usage.rs", "crates/scribe2/tests/e2e/fleet.rs", "crates/scribe2/tests/e2e/snapshots/e2e__fleet__fleet_external_form.snap"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail fleet_usage_statedir_", "cargo nextest run -p scribe2 --no-tests=fail fleet_usage_table_"]
+size = "S"
+done = "flag 無しの fleet usage --show --table が git 設定の置き場から見出し 2 行と口座行を出し、git の無い cwd では typed に断って store を作らず、1 行形の字面と event の形は不変"
+<!-- contracts:end -->
