@@ -377,7 +377,11 @@ fn pipe_gate_records_structured_verdict() {
     let keys: Vec<&str> = pairs.iter().map(|(key, _)| key.as_str()).collect();
     assert_eq!(
         keys,
-        vec!["schema", "run", "verdict", "evidence", "verify_red", "diff_bytes", "tree", "scope", "ts"],
+        vec![
+            "schema", "run", "verdict", "evidence", "verify_red", "diff_bytes", "tree", "scope",
+            // 判定に届いた周は findings の件数と母集団も同じ record に載る（`s2-07l.188`）。
+            "findings", "population", "ts",
+        ],
         "verdict.json の key 列（設計 §5.3・包めた周は lens の片付けの `scope` が載る）"
     );
     assert_eq!(value_of(&pairs, "scope"), "killed", "lens の scope に残りを殺した周");
@@ -443,6 +447,123 @@ fn pipe_gate_inconclusive_on_unlisted_lens_verdict() {
         "INCONCLUSIVE",
         "未知の verdict を通さない"
     );
+    clean(&[&repo, &state]);
+}
+
+// ── lens の findings の閉じた category と母集団（`s2-07l.188`・設計 §6 / §17）──────────
+
+/// 2 key を振れる偽 lens の本文（`extra` は `verdict` / `evidence` の後ろに足す字面・key の
+/// **無い**形も作れる＝必須 key の歯は「書かない」を入力にする）。
+fn findings_body(extra: &str) -> String {
+    format!("{{\"verdict\":\"PASS\",\"evidence\":\"fake\"{extra}}}")
+}
+
+/// 8 category を 0 件で並べた字面（宣言順）。
+///
+/// **歯の側で字面を持つ**（共有 helper の [`FAKE_FINDINGS`] を引かない）——引くと base の木では
+/// この file が compile できず、機能の不在が rc でなく compile error で「赤い」ことになる。
+const ZERO_FINDINGS: &str = "contract-fit:0,teeth-nonvacuous:0,constitution:0,delete:0,stdlib:0,native:0,yagni:0,shrink:0";
+
+/// 0 でない母集団（lens が読んだ周・[`ZERO_FINDINGS`] と同じ理由で歯の側に持つ）。
+const READ_POPULATION: &str = "files:1,lines:1";
+
+/// **2 key を持たない lens の verdict は INCONCLUSIVE**（`s2-07l.188`・C10・C11.2）。
+///
+/// 件数と母集団の無い判定は「見て 0 件だった」と「見ていない」を弁別できない。**PASS を
+/// 名乗っていても倒す**（AC3「偽の PASS 0 件」）。欠けた key は理由が名指す。
+#[test]
+fn pipe_gate_findings_missing_population_is_inconclusive() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let id = implemented(&repo, &state, &path);
+    let marker = state.join("lens-ran");
+    // 母集団だけが無い（findings の 8 category は在る）。
+    let body = findings_body(&format!(",\"findings\":\"{ZERO_FINDINGS}\""));
+    let out = gate_once(&repo, &state, &id, Some(&fake_lens(&marker, &body)));
+    assert_eq!(out.status.code(), Some(i32::from(RC_INCONCLUSIVE)), "母集団の無い PASS は rc 3: {}", stdout_of(&out));
+    assert!(marker.exists(), "lens 自体は呼んでいる（判定だけが届かない）");
+    let pairs = verdict_pairs(&state, &id);
+    assert_eq!(value_of(&pairs, "verdict"), "INCONCLUSIVE", "PASS を名乗っても通さない");
+    assert!(value_of(&pairs, "evidence").contains("population が無い"), "欠けた key を名指す: {pairs:?}");
+    assert_eq!(value_of(&pairs, "findings"), "", "測れていない周は field を書かない");
+
+    // 対（findings が無い側）: INCONCLUSIVE は終端でないので同じ便を撃ち直せる。
+    let body = findings_body(&format!(",\"population\":\"{READ_POPULATION}\""));
+    let again = gate_once(&repo, &state, &id, Some(&fake_lens(&marker, &body)));
+    assert_eq!(again.status.code(), Some(i32::from(RC_INCONCLUSIVE)), "findings の無い PASS も rc 3");
+    let pairs = verdict_pairs(&state, &id);
+    assert!(value_of(&pairs, "evidence").contains("findings が無い"), "欠けた key を名指す: {pairs:?}");
+    assert!(!value_of(&pairs, "evidence").contains("population が無い"), "無いのは findings の側だけ: {pairs:?}");
+
+    // **弁別**: 2 key が揃えば同じ便が PASS で通る（歯が「常に INCONCLUSIVE」を測っていない）。
+    let ok = gate_once(&repo, &state, &id, Some(&fake_lens(&marker, &lens_verdict("PASS"))));
+    assert_eq!(ok.status.code(), Some(i32::from(RC_OK)), "2 key が揃えば通る: {}", stderr_of(&ok));
+    clean(&[&repo, &state]);
+}
+
+/// **8 category の件数と母集団が判定の record に載る**（0 件も 0 と書く・`s2-07l.188`）。
+///
+/// lens の stdout の verdict record（`parse_lens` の入力）が**宣言順でない並び**で出しても、
+/// `verdict.json` の字面は宣言順 1 つに正規化される（集計の順は器の表が持つ・C2）。`Gated` の
+/// detail は verdict だけで**不変**である。
+#[test]
+fn pipe_gate_findings_counts_are_recorded_per_category() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let id = implemented(&repo, &state, &path);
+    let shuffled = "shrink:5,constitution:2,contract-fit:1,yagni:4,stdlib:3,delete:0,native:0,teeth-nonvacuous:0";
+    let body = findings_body(&format!(",\"findings\":\"{shuffled}\",\"population\":\"files:7,lines:42\""));
+    // lens の **stdout** の record を歯が読めるように写してから、同じ 1 行を gate へ流す。
+    let record = state.join("lens-stdout.json");
+    let lens = format!(
+        "cat >/dev/null; printf '%s\\n' '{body}' > '{}'; cat '{}'",
+        record.display(),
+        record.display()
+    );
+    let out = gate_once(&repo, &state, &id, Some(&lens));
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "2 key が揃えば通る: {}", stderr_of(&out));
+    let written = fs::read_to_string(&record).expect("lens の stdout を読める");
+    assert!(written.contains(shuffled), "lens の record が 8 category の件数を持つ: {written}");
+    assert!(written.contains("\"population\":\"files:7,lines:42\""), "母集団も持つ: {written}");
+    let pairs = verdict_pairs(&state, &id);
+    assert_eq!(
+        value_of(&pairs, "findings"),
+        "contract-fit:1,teeth-nonvacuous:0,constitution:2,delete:0,stdlib:3,native:0,yagni:4,shrink:5",
+        "8 category を宣言順で（0 件も 0 と）書く: {pairs:?}"
+    );
+    assert_eq!(value_of(&pairs, "population"), "files:7,lines:42", "母集団も同じ record に載る");
+    assert_eq!(value_of(&pairs, "verdict"), "PASS", "3 値は動かない");
+    let seen = trail(&state, &id);
+    assert!(
+        seen.contains(&(EventKind::RunStage, Some(Stage::Gated), Some("verdict:PASS".to_owned()))),
+        "`Gated` の detail は verdict だけ（不変）: {seen:?}"
+    );
+    clean(&[&repo, &state]);
+}
+
+/// **母集団 0 は INCONCLUSIVE**（監査 2026-09-12 塊 21 の `.175` の指摘そのもの・C10）。
+///
+/// 「読んでいない」を「穴が無い」と読むと、lens を呼んだ事実だけで PASS が出る。file 数と
+/// 行数の**どちらが 0 でも**倒す。
+#[test]
+fn pipe_gate_findings_zero_population_is_inconclusive() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let id = implemented(&repo, &state, &path);
+    let marker = state.join("lens-ran");
+    for empty in ["files:0,lines:42", "files:7,lines:0"] {
+        let body = findings_body(&format!(",\"findings\":\"{ZERO_FINDINGS}\",\"population\":\"{empty}\""));
+        let out = gate_once(&repo, &state, &id, Some(&fake_lens(&marker, &body)));
+        assert_eq!(out.status.code(), Some(i32::from(RC_INCONCLUSIVE)), "母集団 {empty} は rc 3: {}", stdout_of(&out));
+        let pairs = verdict_pairs(&state, &id);
+        assert_eq!(value_of(&pairs, "verdict"), "INCONCLUSIVE", "母集団 {empty} を通さない");
+        assert!(value_of(&pairs, "evidence").contains("population が 0"), "理由が残る（{empty}）: {pairs:?}");
+        assert_eq!(value_of(&pairs, "population"), "", "測れていない周は field を書かない");
+    }
+    assert!(marker.exists(), "lens は呼んでいる（判定だけが届かない）");
+    // **弁別**: 母集団が 1 以上なら同じ便が PASS で通る。
+    let ok = gate_once(&repo, &state, &id, Some(&fake_lens(&marker, &lens_verdict("PASS"))));
+    assert_eq!(ok.status.code(), Some(i32::from(RC_OK)), "母集団が 0 でなければ通る: {}", stderr_of(&ok));
     clean(&[&repo, &state]);
 }
 
@@ -1651,20 +1772,26 @@ fn pipe_gate_verdict_scope_is_a_closed_name_or_absent() {
         let keys: Vec<&str> = pairs.iter().map(|(key, _)| key.as_str()).collect();
         assert_eq!(
             keys,
-            vec!["schema", "run", "verdict", "evidence", "verify_red", "diff_bytes", "tree", "scope", "ts"],
-            "包めた周は 9 key（{want}）"
+            vec![
+                "schema", "run", "verdict", "evidence", "verify_red", "diff_bytes", "tree", "scope",
+                "findings", "population", "ts",
+            ],
+            "包めた周は 11 key（{want}）"
         );
         let scope = value_of(&pairs, "scope");
         assert!(names.contains(&scope.as_str()), "閉じた集合の名: {scope} ∉ {names:?}");
         assert_eq!(scope, want, "片付けの道具の答えの名");
         assert_eq!(value_of(&pairs, "verdict"), "PASS", "片付けの結果で判定は変えない");
     }
-    // 包めない面: `scope` の key が欠ける（8 key）。
+    // 包めない面: `scope` の key が欠ける（10 key）。
     let pairs = verdict_under(lean_path);
     let keys: Vec<&str> = pairs.iter().map(|(key, _)| key.as_str()).collect();
     assert_eq!(
         keys,
-        vec!["schema", "run", "verdict", "evidence", "verify_red", "diff_bytes", "tree", "ts"],
+        vec![
+            "schema", "run", "verdict", "evidence", "verify_red", "diff_bytes", "tree",
+            "findings", "population", "ts",
+        ],
         "包めない周は `scope` を欠く（測れなかった値は書かない）"
     );
     assert_eq!(value_of(&pairs, "verdict"), "PASS", "包めなくても便は流れる");

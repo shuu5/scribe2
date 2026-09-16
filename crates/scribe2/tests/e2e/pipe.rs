@@ -592,9 +592,38 @@ pub(super) fn gate_with_rules(repo: &Path, state: &Path, id: &str, rules: &Path,
     ])
 }
 
-/// 3 値を返す fake lens の本文。
+/// 偽 lens が出す findings の 8 category（宣言順・**0 件も 0 と書く**・`s2-07l.188`）。
+pub(super) const FAKE_FINDINGS: &str =
+    "contract-fit:0,teeth-nonvacuous:0,constitution:0,delete:0,stdlib:0,native:0,yagni:0,shrink:0";
+
+/// 偽 lens が出す母集団（**0 でない**＝読んだ・0 は「見ていない」で INCONCLUSIVE へ倒る）。
+pub(super) const FAKE_POPULATION: &str = "files:1,lines:1";
+
+/// 3 値を返す fake lens の本文（必須 key の 2 つも出す・`s2-07l.188`）。
 pub(super) fn lens_verdict(verdict: &str) -> String {
-    format!("{{\"verdict\":\"{verdict}\",\"evidence\":\"fake\"}}")
+    format!(
+        "{{\"verdict\":\"{verdict}\",\"evidence\":\"fake\",\"findings\":\"{FAKE_FINDINGS}\",\"population\":\"{FAKE_POPULATION}\"}}"
+    )
+}
+
+/// **偽 lens が出す 2 key は、器が必須とする 2 key と同じ 1 つである**（`s2-07l.188`）。
+///
+/// [`lens_verdict`] は e2e のほぼ全部が使う lens の本文である。器が `findings` / `population` を
+/// 必須にした以上、この helper の字面がそのまま判定の record へ載ることをここで測る——載らない
+/// 形（helper と器の要求が割れた周）では、全 e2e の gate が INCONCLUSIVE で静かに止まる。
+#[test]
+fn pipe_gate_findings_fake_lens_keys_reach_the_verdict_record() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let id = implemented(&repo, &state, &path);
+    let marker = state.join("lens-ran");
+    let out = gate_once(&repo, &state, &id, Some(&fake_lens(&marker, &lens_verdict("PASS"))));
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "偽 lens の 2 key で通る: {}", stderr_of(&out));
+    assert!(marker.exists(), "lens を起動した周（判定に届いている）");
+    let pairs = verdict_pairs(&state, &id);
+    assert_eq!(value_of(&pairs, "findings"), FAKE_FINDINGS, "8 category の件数が record に載る: {pairs:?}");
+    assert_eq!(value_of(&pairs, "population"), FAKE_POPULATION, "母集団も同じ record に載る: {pairs:?}");
+    clean(&[&repo, &state]);
 }
 
 /// 便の worktree。
