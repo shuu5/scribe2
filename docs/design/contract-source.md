@@ -147,6 +147,14 @@ scribe2 を載せる consumer が pipe を通すのに要る面は 3 つで、�
 - 触らない: `unresolved_names` の fn 形（名指しの検査は別の面）・`Form` / `Touched` の型名・契約表の schema（`touches` の値の形が 1 つ増えるだけで field は増えない）。
 - 却下案: 入口の match を dispatch の閉じた enum に寄せる（§17 の (vii) が同じ向きで担う・分岐の追加が variant の追加になる大きい形）／`also` に `.rs` を許す（Rust の面を手書きに戻す＝Declared の再来）／呼び手まで閉包に入れる（上界に化ける・`Stage::` と同じ全木の広がり）。
 
+## 19. write-set の導出に enum の variant 構築の形を足す（契約表の行 s・`s2-07l.387`）
+
+- 何が起きているか: `.358` run 2（2026-09-16 03:45Z）が審査 FAIL。行 r（touches = `Touched` + `ClosureError`）から受付が焼いた write-set は 4 面で、`ClosureError` を名指す 5 file（母集団 = `crates/scribe2/src` の grep・main 43706fe）のうち `pipe/refuse.rs` と `pipe/closure/derive.rs` が落ちた。現物（verified・admin と planner が別々に読んで一致）: `pipe/closure.rs` の `files_of` は「見えている」file（`sees`）のうち **4 形**＝宣言（`declaring`）・literal 構築 `constructs`（needle = `<Type> {`）・match の arm `matches_arm`（`<Type>::` が `=>` の**左**）・const slice の件数 pin `pins` のどれかを持つ file だけを導出値に入れる。落ちた 2 file は **enum の variant 構築**（`refuse.rs:204` = `Self::WriteSetDrift { .. } => ClosureError::WriteSetDrift { … }.reason()`〔`=>` の右辺〕・`derive.rs:84` = `Err(ClosureError::WriteSetDrift { missing, extra })`〔戻りの中〕）しか持たず、4 形のどれにも当たらない。拾われた `table.rs` / `cli/intake.rs` は `ClosureError::X =>` の arm を持つ。§3「閉包の同名衝突」の 4 形と §16 の第 5 形（外形 pin）はこの形を持たない＝FR48「閉じた型を構造として持つ file を含む」の穴。
+- 形: `files_of` の述語に **第 6 形 = variant 構築** を 1 つ足す（C2・述語 1 つ）: 本文に `<Type>::<Variant> {` または `<Type>::<Variant>(` の出現（`<Variant>` = 大文字始まりの識別子・`{` / `(` の前の空白は任意）が在り、その出現が **`=>` の左のパターン側でない**（`matches_arm` が数える面と重ねない＝行を `=>` で割った右側・または `=>` の無い行）file。`sees` の門（型が見えている file だけ）は同じ 1 関数を通す（同名の型の衝突は §3 のまま）。`Self::<Variant> {` は数えない（`Self` は型名でない＝宣言 file は `declaring` が持つ）。
+- 触らない: `constructs` / `matches_arm` / `pins` の判定・`sees` の 3 形・`Touched` / `Form` の型名・契約表の schema・fn 形（§18・.358）・外形 pin（§16）。
+- 却下案: `matches_arm` を「`<Type>::` の出現全部」に広げる（`use` 文や doc コメントの `[`ClosureError::Unreadable`]` まで拾い上界に化ける）／`also` に `.rs` を許す（`AlsoNamesRust`・Declared の再来）／行 r を恒久に Declared にする（手書きの write-set は数え落とす＝.303 の型）。
+- 着地後: 行 r（§18）の暫定 Declared を `touches` / `tests` の Derived に戻す（docs PR・planner）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -343,4 +351,14 @@ write-set = ["crates/scribe2/src/pipe/closure.rs", "crates/scribe2/src/pipe/clos
 verify = ["cargo nextest run -p scribe2 --no-tests=fail contract_derive_fn_"]
 size = "S"
 done = "touches に fn 形を書いた契約の導出値にその fn を宣言する file が入り、宣言する file が無い周は typed に断られ、型形の閉包は不変"
+
+[[contract]]
+id = "s"
+title = "write-set の導出に enum の variant 構築（<Type>::<Variant> { / ( を => の右辺や Err(…) の中で作る file）の第 6 形を足す"
+req = ["FR48"]
+section = "19"
+write-set = ["crates/scribe2/src/pipe/closure.rs"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail closure_variant_construction_"]
+size = "S"
+done = "variant 構築だけを持つ file が導出値に入り、=> の左のパターンだけの file・Self:: の構築・doc コメントの名指しは数えず、既存 4 形の導出値は不変"
 <!-- contracts:end -->
