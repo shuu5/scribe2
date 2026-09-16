@@ -326,6 +326,7 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
 
 - 何が起きているか: `.372` run 1 が Gated INCONCLUSIVE（2026-09-16・admin の逐語実測）。純移動の要約（§5.3 の機械証明・`pipe/move_proof.rs`）は item の中のコメント行の差を `CommentDiff { file, name, lines }`（件数だけ）で `render` の「## コメント行の差（名: 行数）」に出し、逐語を持たない。lens は「契約の『移動以外 0 行』を満たすか材料から確かめられない」で判定不能にする。`.361` の要約は通った（残差が use / path だけで「## 残差分（逐語）」に逐語が載る）＝差の種類によって材料が足りなくなる。
 - 形: `Item::comments`（hash から除いたコメント行の字面・区間の順）は既に在るので、`CommentDiff` に base 側と head 側の逐語（indent を落とした字面・区間の順）を持たせ、`render` が各項目の件数の行の下に base 側を `-`・head 側を `+` の接頭辞で逐語のまま並べる。件数の行は残す（母集団と対）。要約の byte は既存の予算の照合（§5.3「lens に渡す本文の byte で行う」・要約 > cap → INCONCLUSIVE で理由に kind と byte が載る）に乗り、**新しい cap を持たない**。
+- 既存の歯の書き直し（run 1 = Questioned 2026-09-16・runner の逐語「本便の新外形と正面から矛盾して必ず RED になる」・admin が現物で確認）: `crates/scribe2/tests/e2e/pipe/gate.rs` の `pipe_gate_move_proof_comment_only_diff_inside_items_sends_summary` は旧外形を字面で pin する（件数の行の直後が `## 残差分（逐語）`・コメントの字面 `helper two` は要約に載らない）。本便はその歯を新外形（件数の行の直後に `-` / `+` の逐語が並び、コメントの字面が要約に載る）へ書き直す。歯の名・`lens-input=summary`・rc・stderr 空の pin は不変＝write-set はこの e2e file を含む。
 - 触らない: item の切り出し・hash・多重集合の照合・残差の判定（`NotPure` の理由）・`keep` の置き場・lens の口。
 - 却下案: コメント行の差を `NotPure` に倒す（doc コメントの path 書き換えは純移動の残差として許す既存の裁定・`.362`）／逐語に cap を別に持つ（数値の線が増える・既存の照合で足りる）。
 
@@ -333,7 +334,8 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
 
 - 何が起きているか: admin の実測 2026-09-16（`.372` の着地を `pipe land --run` で撃ち、rebase 後の再 gate が lens を要するのに「lens が要るのに --lens が無い」で INCONCLUSIVE・`pipe gate --run … --lens` の撃ち直しで回復）。現物（verified）: `--lens` は `pipe/cli/step.rs` の `review_run` / `gate_run` / `land_run` が毎回 flag から読み、run dir（`contract.toml` / `vessel.toml` / `review.json` …）には lens の cmd が残らない。操作役が land を手で撃つ周（Gated PASS の run を後から着地・admin の常道）は毎回同じ cmd を渡さないと必ず踏む。
 - 形: `pipe review --lens <cmd>`（run の最初に lens を受ける口）が cmd を `<run_dir>/lens.toml`（`schema = 1` / `cmd = "<逐語>"`・rules manifest と同じ parser の subset・run dir の一時物で跨版契約ではない）に写す。`gate` / `land` / `resume` は `--lens` が無い周にその写しを読む（`--lens` が在れば flag が勝つ＝上書きの手は残す）。写しが**無い**周は従来どおり INCONCLUSIVE（「lens が要るのに --lens が無い」）、写しが**読めない**周は理由を変えて INCONCLUSIVE（`lens.toml` の path と読めなかった理由・「無い」に潰さない・C10）。読み書きは新 module `pipe/lens_record.rs`（pure な parse + I/O 2 関数）に置き、3 つの口は同じ 1 関数で読む（C2）。
-- 触らない: lens の起動の形（`{contract}` / `{worktree}` の穴・stdin の diff）・gate の判定順・`pipe run` の引数（run は lens を受けない＝現物のまま）。
+- 分岐の置き場（run 1 = 審査 INCONCLUSIVE 2026-09-16「verdict の生成箇所に依存し文面から確定できない」の解・admin の現物実測: 「lens が要るのに --lens が無い」を出すのは `pipe/gate.rs` の `gate`（`let Some(cmd) = entry.lens else`）と `pipe/review.rs` の `decide` の **2 か所**・母集団 = `crates/scribe2/src` の grep・`pipe/land.rs` は自分では出さず再 gate に `entry.lens` を渡すだけ）: 読みの 3 値は `lens_record.rs` の閉じた型 1 つ（flag か写しから得た cmd / 無い / 読めない〔path と理由〕）で表し、`Gate` / `Review` / `Land` の `lens` field（現物は `Option<&str>`）をその型に置き換える。step.rs は `--lens` が在れば cmd を、無ければ写しを読んだ結果をその型で渡す。INCONCLUSIVE の理由の分岐は既存の 2 か所が 3 値を match して行う（無い = 字面不変・読めない = path と理由）。`pipe/land.rs` は field の型と再 gate への pass-through だけが変わり、追随の要否判定は触らない。step.rs で先回りする形（写しが読めない周に gate / land を呼ばず INCONCLUSIVE を書く）は採らない＝land の再 gate が要らない周まで INCONCLUSIVE に倒す挙動変化になる。
+- 触らない: lens の起動の形（`{contract}` / `{worktree}` の穴・stdin の diff）・gate の判定順・land の追随の要否判定・`pipe run` の引数（run は lens を受けない＝現物のまま）。
 - 却下案: `pipe land --lens` を必須にする（毎回手で渡す seam が残る・記録に残らない）／event log の detail に cmd を書く（detail は自由文で typed に読めない・cmd に空白と引用符が入る）／`vessel.toml` の写しに足す（写しは tracked な宣言の写しで、操作役の入力を混ぜると出所が割れる）。
 
 ## 27. land の終端に main の実測 sha を写す（契約表の行 u・`s2-07l.379`）
@@ -534,7 +536,7 @@ title = "純移動の要約（MoveSummary）のコメント行の差に base 側
 req = ["FR9"]
 section = "25"
 touches = ["crate::pipe::move_proof::CommentDiff"]
-tests = ["crates/scribe2/src/pipe/move_proof.rs"]
+tests = ["crates/scribe2/src/pipe/move_proof.rs", "crates/scribe2/tests/e2e/pipe/gate.rs"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail move_proof_comment_verbatim_"]
 size = "S"
 done = "コメント行だけが違う純移動の要約に、違う行の逐語が - / + 付きで件数の行の下に並ぶ"
@@ -544,7 +546,7 @@ id = "t"
 title = "pipe review が受けた lens の cmd を run dir の lens.toml に写し、gate / land / resume が --lens の無い周にそれを読む"
 req = ["FR10", "FR9"]
 section = "26"
-write-set = ["+crates/scribe2/src/pipe/lens_record.rs", "crates/scribe2/src/pipe/mod.rs", "crates/scribe2/src/pipe/cli/step.rs", "crates/scribe2/tests/e2e/pipe/land.rs"]
+write-set = ["+crates/scribe2/src/pipe/lens_record.rs", "crates/scribe2/src/pipe/mod.rs", "crates/scribe2/src/pipe/cli/step.rs", "crates/scribe2/src/pipe/gate.rs", "crates/scribe2/src/pipe/review.rs", "crates/scribe2/src/pipe/land.rs", "crates/scribe2/tests/e2e/pipe/land.rs"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_lens_record_"]
 size = "S"
 done = "review で渡した lens だけで land の再 gate が lens を起動して着地し、写しが読めない周は「無い」と別の理由で INCONCLUSIVE"
