@@ -132,7 +132,7 @@ id = "a"
 title = "役割なしの起動 — account shell が derive_launch を再利用し登録 row を書かずに起動行を注入する"
 req = ["FR60", "FR59", "FR58"]
 section = "13"
-write-set = ["crates/scribe2/src/account/cli.rs", "crates/scribe2/src/account/mod.rs", "crates/scribe2/src/seat/cycle.rs", "crates/scribe2/src/seat/inject.rs", "crates/scribe2/tests/e2e/fleet.rs", "crates/scribe2/tests/e2e/seat/cycle.rs", "crates/scribe2/tests/e2e/snapshots/e2e__fleet__fleet_external_form.snap", "crates/scribe2/tests/e2e/snapshots/e2e__seat__seat_usage_external_form.snap"]
+write-set = ["crates/scribe2/src/account/cli.rs", "crates/scribe2/src/account/mod.rs", "crates/scribe2/src/seat/cycle/launch.rs", "crates/scribe2/src/seat/inject.rs", "crates/scribe2/tests/e2e/fleet.rs", "crates/scribe2/tests/e2e/seat/launch.rs", "crates/scribe2/tests/e2e/snapshots/e2e__fleet__fleet_external_form.snap"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail account_cmd_shell_", "cargo nextest run -p scribe2 --no-tests=fail seat_launch_"]
 size = "S"
 done = "偽 tmux と偽 claude で account shell が登録 row 0 のまま起動行を 1 回だけ差し込み、resume と拒否 2/2 が typed に出る"
