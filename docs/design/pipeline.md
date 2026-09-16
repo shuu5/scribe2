@@ -128,7 +128,7 @@
 `pipe report`: event log を replay し `runs=<N> landed=<N> human_events=<N> human_events_other_than_approval=<N>` の 1 行。到達点の「人由来の event が approval 以外に 0 件」を機械で示す面（AC1）。`landed` は **終端（`Landed`）まで通った便の数**で「main に載った数」ではない（`--pr-cmd` の便は main を動かさず終端に達する。main へ載った数は面 5 の行数で読む）。**便の数と land の数は replay から、人由来の event は生の行から**数える——replay は便ごとに最後の段しか残さないので、承認の後に手で段を動かした周が replay 上は「機械だけで進んだ便」に見える。承認だけを例外にする判定は **kind**（`ApprovalReceived`）で行う（`actor` は誰が起こしたか・`kind` は何が起きたかで、例外は後者である）。
 
 ### 5.9 `pipe/cli/` の置き場（`s2-07l.349`）
-subcommand と helper は責務ごとに 1 file に置く——入口（usage / dispatch / contracts）は `cli.rs`、引数と rules 行の helper は `cli/args.rs`、便の状態の helper は `cli/state.rs`、`show` は `cli/show.rs`、`resume` は `cli/resume.rs`。`cli.rs` は `mod` 宣言と再輸出の shim だけを持ち、`intake.rs` / `run.rs` / `step.rs` の `use super::…` は shim で解く（既存の subcommand の file を触らずに割る）。usage の字面と歯の本数は移動の前後で変えない。
+subcommand と helper は責務ごとに 1 file に置く——入口（usage / dispatch / contracts）は `cli.rs`、引数と rules 行の helper は `cli/args.rs`、便の状態の helper は `cli/state.rs`、`show` は `cli/show.rs`、`resume` は `cli/resume.rs`。`cli.rs` は `mod` 宣言と再輸出の shim だけを持ち、`intake.rs` / `run.rs` / `step.rs` の `use super::…` は shim で解く（既存の subcommand の file を触らずに割る）。材料の型（`Resolved` / `Extra`）は `cli.rs` に残す（子 module が private field を読む＝型を動かすと field の可視性が変わり純移動でなくなる）。usage の字面と歯の本数は移動の前後で変えない。歯の側（旧 lifecycle.rs → `tests/e2e/pipe/ratelimit.rs` / `tests/e2e/pipe/stop.rs`）も同じ型で、`tests/e2e/pipe/spawn.rs` / `tests/e2e/pipe/land.rs` が `super::lifecycle::` で引く口座の fixture は親 `tests/e2e/pipe.rs` の `use ratelimit as lifecycle;` の別名で解く（呼び手を触らない）。
 
 ## 6. headless runner と lens（(d)・FR5・CON6・NFR1）
 - runner / lens の子 process の封じ込め（cgroup scope）は [gate-cost.md](./gate-cost.md) §4（ADR-0021 §2.2）。
@@ -376,7 +376,7 @@ id = "a"
 title = "pipe/cli.rs を cli/args.rs / state.rs / show.rs / resume.rs に、e2e/pipe/lifecycle.rs を ratelimit.rs / stop.rs に割る（純移動）"
 req = ["FR30"]
 section = "5"
-write-set = ["crates/scribe2/src/pipe/cli.rs", "+crates/scribe2/src/pipe/cli/args.rs", "+crates/scribe2/src/pipe/cli/state.rs", "+crates/scribe2/src/pipe/cli/show.rs", "+crates/scribe2/src/pipe/cli/resume.rs", "crates/scribe2/tests/e2e/pipe.rs", "crates/scribe2/tests/e2e/pipe/lifecycle.rs", "+crates/scribe2/tests/e2e/pipe/ratelimit.rs", "+crates/scribe2/tests/e2e/pipe/stop.rs", "docs/design/pipeline.md", "docs/design/dispatcher.md", "docs/design/working-memory.md", "docs/design/contract-source.md", "docs/design/account-autonomy.md", "docs/design/consumer-sync.md"]
+write-set = ["crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/cli/args.rs", "crates/scribe2/src/pipe/cli/state.rs", "crates/scribe2/src/pipe/cli/show.rs", "crates/scribe2/src/pipe/cli/resume.rs", "crates/scribe2/tests/e2e/pipe.rs", "crates/scribe2/tests/e2e/pipe/ratelimit.rs", "crates/scribe2/tests/e2e/pipe/stop.rs", "docs/design/pipeline.md", "docs/design/dispatcher.md", "docs/design/working-memory.md", "docs/design/contract-source.md", "docs/design/account-autonomy.md", "docs/design/consumer-sync.md"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_"]
 size = "S"
 done = "pipe/cli.rs が入口と shim だけになり、lifecycle.rs が ratelimit.rs / stop.rs に割れて、歯の本数と外形 snapshot が不変"
@@ -488,7 +488,7 @@ id = "l"
 title = "land の stale base を同じ経路で人手なしで追随し直し、resume が Gated(PASS) の便を受ける"
 req = ["FR30", "FR50"]
 section = "18"
-write-set = ["crates/scribe2/src/pipe/cli/run.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/follow.rs", "crates/scribe2/src/pipe/land.rs", "crates/scribe2/tests/e2e/pipe/land.rs", "crates/scribe2/tests/e2e/pipe/lifecycle.rs", "docs/design/pipeline.md"]
+write-set = ["crates/scribe2/src/pipe/cli/run.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/follow.rs", "crates/scribe2/src/pipe/land.rs", "crates/scribe2/tests/e2e/pipe/land.rs", "crates/scribe2/tests/e2e/pipe/ratelimit.rs", "crates/scribe2/tests/e2e/pipe/stop.rs", "docs/design/pipeline.md"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_land_stale_"]
 size = "S"
 done = "toy repo で stale base の便が人手なしで追随して Landed し、上限は typed な Failed"
@@ -518,7 +518,7 @@ id = "o"
 title = "gate の段の通知行を rc に依らず record と run の stderr に残す"
 req = ["FR8", "FR22"]
 section = "21"
-write-set = ["crates/scribe2/src/pipe/cli/run.rs", "crates/scribe2/src/pipe/gate.rs", "crates/scribe2/src/pipe/gate/record.rs", "crates/scribe2/tests/e2e/pipe/gate.rs", "crates/scribe2/tests/e2e/pipe/lifecycle.rs", "docs/design/pipeline.md"]
+write-set = ["crates/scribe2/src/pipe/cli/run.rs", "crates/scribe2/src/pipe/gate.rs", "crates/scribe2/src/pipe/gate/record.rs", "crates/scribe2/tests/e2e/pipe/gate.rs", "crates/scribe2/tests/e2e/pipe/ratelimit.rs", "crates/scribe2/tests/e2e/pipe/stop.rs", "docs/design/pipeline.md"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_gate_notice_"]
 size = "S"
 done = "成功した便でも要約にならなかった理由が record と stderr に残る"
@@ -538,7 +538,7 @@ id = "q"
 title = "pipe stop 起因の終端を oom-kill に誤分類せず、kernel の証拠が無い kill は unknown に倒す"
 req = ["FR22", "FR46"]
 section = "23"
-write-set = ["crates/scribe2/src/pipe/stop.rs", "crates/scribe2/src/pipe/spawn.rs", "crates/scribe2/src/pipe/confine.rs", "crates/scribe2/src/pipe/gate/lens.rs", "crates/scribe2/tests/e2e/pipe/spawn.rs", "crates/scribe2/tests/e2e/pipe/lifecycle.rs", "docs/design/pipeline.md"]
+write-set = ["crates/scribe2/src/pipe/stop.rs", "crates/scribe2/src/pipe/spawn.rs", "crates/scribe2/src/pipe/confine.rs", "crates/scribe2/src/pipe/gate/lens.rs", "crates/scribe2/tests/e2e/pipe/spawn.rs", "crates/scribe2/tests/e2e/pipe/ratelimit.rs", "crates/scribe2/tests/e2e/pipe/stop.rs", "docs/design/pipeline.md"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_spawn_terminal_reason_"]
 size = "S"
 done = "stop した便が oom-kill に分類されず、証拠の無い kill は unknown"

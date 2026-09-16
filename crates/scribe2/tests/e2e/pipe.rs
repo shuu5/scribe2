@@ -1,4 +1,4 @@
-// flip-check: moved s2-07l.264
+// flip-check: moved s2-07l.349
 //! 縦 1 本 (a) / (b) の歯（設計 docs/design/pipeline.md §8 (a) / (b)）。
 //!
 //! tmp の git repo を作り `vessel init --state-dir` で置き場を紐づけてから撃つ。
@@ -25,8 +25,13 @@ use vessel::rules::RuleValue;
 mod gate;
 mod intake;
 mod land;
-mod lifecycle;
+mod ratelimit;
 mod spawn;
+mod stop;
+
+// `lifecycle.rs` の跡地（`s2-07l.349` で `ratelimit.rs` / `stop.rs` に割った）: `spawn.rs` / `land.rs` は口座の
+// fixture を `super::lifecycle::` の path で引くので、その名を `ratelimit` の別名として残す（呼び手は不変）。
+use ratelimit as lifecycle;
 
 /// binary の path。
 pub(super) fn bin() -> &'static str {

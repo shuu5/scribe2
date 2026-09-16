@@ -1,0 +1,102 @@
+//! 引数と規則の行の helper（設計 §5「subcommand の置き場」・`s2-07l.349` で `cli.rs` から純移動・本文は不変）。
+//!
+//! flag の読み（[`flag`] / [`need`]）・規則の値（[`manifest_of`] / [`int_row`] / [`list_row`]）・置き場と repo の
+//! 解き（[`state_dir_of`] / [`repo_of`]）・断りの 2 形（[`refused`] = rc 1 / [`broken`] = rc 2）。外から呼ぶ path は
+//! `cli` の再輸出で不変（`super::flag` 等）。
+
+use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
+use crate::hook::vessel;
+use crate::rules::manifest::Manifest;
+use crate::rules::RuleValue;
+use std::path::{Path, PathBuf};
+
+/// `--<name> <値>` を読む。値欠けは黙って落とさず `Err`（SRS NFR4）。
+///
+/// 器の中で 3 本目の flag reader である。4 本目が要るときは 1 本へ畳む
+/// （いまは fleet / vessel / pipe がそれぞれ自分の必須 flag だけを見ている）。
+pub(in crate::pipe) fn flag<'a>(args: &'a [String], name: &str) -> Result<Option<&'a str>, String> {
+    let Some(at) = args.iter().position(|arg| arg == name) else {
+        return Ok(None);
+    };
+    match args.get(at + 1) {
+        Some(found) if !found.starts_with("--") => Ok(Some(found)),
+        _ => Err(format!("{name} に値が無い")),
+    }
+}
+
+/// 必須の flag。
+pub(super) fn need<'a>(args: &'a [String], name: &str) -> Result<&'a str, String> {
+    flag(args, name)?.ok_or(format!("{name} が要る"))
+}
+
+/// 規則の値。`--rules` が在ればその file、無ければ埋め込み。
+pub(super) fn manifest_of(args: &[String]) -> Result<Manifest, String> {
+    let path = flag(args, "--rules")?;
+    let loaded = match path {
+        Some(found) => Manifest::load(Path::new(found)),
+        None => Manifest::embedded(),
+    };
+    loaded.map_err(|errors| {
+        errors
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<String>>()
+            .join(" / ")
+    })
+}
+
+/// rules 行の整数値。
+pub(in crate::pipe) fn int_row(manifest: &Manifest, id: &str) -> Result<u64, String> {
+    let row = manifest.get(id).ok_or(format!("{id} が無い"))?;
+    if !row.enabled {
+        return Err(format!("{id} は不発効である"));
+    }
+    match row.value {
+        RuleValue::Int(found) => Ok(found),
+        _ => Err(format!("{id} が整数でない")),
+    }
+}
+
+/// rules 行の文字列の列。
+pub(super) fn list_row(manifest: &Manifest, id: &str) -> Result<Vec<String>, String> {
+    let row = manifest.get(id).ok_or(format!("{id} が無い"))?;
+    if !row.enabled {
+        return Err(format!("{id} は不発効である"));
+    }
+    match row.value {
+        RuleValue::List(ref found) => Ok(found.clone()),
+        _ => Err(format!("{id} が文字列の列でない")),
+    }
+}
+
+/// 置き場。`--state-dir` が上書きし、無ければ repo に紐づいた git 設定から読む。
+///
+/// repo の解き方は [`repo_of`] ただ 1 本（`--repo` → cwd の root）。ここで cwd だけを
+/// 見ると、`--repo` を渡した周に**別の repo の置き場**を読んでしまう。
+pub(in crate::pipe) fn state_dir_of(args: &[String]) -> Result<PathBuf, String> {
+    if let Some(found) = flag(args, "--state-dir")? {
+        return Ok(PathBuf::from(found));
+    }
+    let root = repo_of(args)?;
+    vessel::state_dir(&root)
+        .ok_or_else(|| format!("{} に置き場が紐づいていない（vessel init）", root.display()))
+}
+
+/// 対象 repo。`--repo` が無ければ cwd の repo root。
+pub(super) fn repo_of(args: &[String]) -> Result<PathBuf, String> {
+    if let Some(found) = flag(args, "--repo")? {
+        return Ok(PathBuf::from(found));
+    }
+    let cwd = std::env::current_dir().map_err(|err| format!("cwd を解決できない: {err}"))?;
+    vessel::repo_root(&cwd).ok_or("repo の root を解決できない".to_owned())
+}
+
+/// 前提違反・使い方の誤り（rc 1 + stderr 1 行・何もしない）。
+pub(in crate::pipe) fn refused(reason: String) -> Outcome {
+    Outcome::failed_line(RC_REFUSED, format!("pipe: {reason}"))
+}
+
+/// 対象そのものが壊れている（rc 2）。
+pub(in crate::pipe) fn broken(reason: String) -> Outcome {
+    Outcome::failed_line(RC_BROKEN, format!("pipe: {reason}"))
+}

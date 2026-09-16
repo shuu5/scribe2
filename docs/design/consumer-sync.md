@@ -124,7 +124,7 @@ id = "e"
 title = "vessel update — ff → build → install を 1 つの口で行い InstallRecorded を event log に 1 件記す（§12 (b) からの切り出し）"
 req = ["FR61"]
 section = "5"
-write-set = ["crates/scribe2/src/hook/vessel.rs", "crates/scribe2/src/fleet/mod.rs", "crates/scribe2/src/fleet/event.rs", "crates/scribe2/src/fleet/replay.rs", "crates/scribe2/src/fleet/cli.rs", "crates/scribe2/src/account/mod.rs", "crates/scribe2/src/fleet/usage.rs", "crates/scribe2/src/pipe/mod.rs", "crates/scribe2/src/pipe/queue.rs", "crates/scribe2/src/seat/role.rs", "crates/scribe2/tests/e2e/hook.rs", "crates/scribe2/tests/e2e/fleet.rs", "crates/scribe2/tests/e2e/prop.rs", "crates/scribe2/tests/e2e/pipe/lifecycle.rs", "crates/scribe2/tests/e2e/seat.rs", "crates/scribe2/tests/e2e/snapshots/e2e__hook__vessel_external_form.snap"]
+write-set = ["crates/scribe2/src/hook/vessel.rs", "crates/scribe2/src/fleet/mod.rs", "crates/scribe2/src/fleet/event.rs", "crates/scribe2/src/fleet/replay.rs", "crates/scribe2/src/fleet/cli.rs", "crates/scribe2/src/account/mod.rs", "crates/scribe2/src/fleet/usage.rs", "crates/scribe2/src/pipe/mod.rs", "crates/scribe2/src/pipe/queue.rs", "crates/scribe2/src/seat/role.rs", "crates/scribe2/tests/e2e/hook.rs", "crates/scribe2/tests/e2e/fleet.rs", "crates/scribe2/tests/e2e/prop.rs", "crates/scribe2/tests/e2e/pipe/ratelimit.rs", "crates/scribe2/tests/e2e/pipe/stop.rs", "crates/scribe2/tests/e2e/seat.rs", "crates/scribe2/tests/e2e/snapshots/e2e__hook__vessel_external_form.snap"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail vessel_update_ fleet_kinds_pin fleet_record_refuses_"]
 size = "M"
 done = "偽 git と偽 cargo で ff → build → install の順序の argv が写り InstallRecorded が 1 件記され、dirty / not-fast-forward / install の失敗は typed に断って event 0、fleet record はこの kind を拒む"
