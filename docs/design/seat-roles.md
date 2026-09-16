@@ -52,7 +52,7 @@
 | guard | 段 | 極性 | 何を止めるか |
 |---|---|---|---|
 | `Register` | in-loop（`seat register` の受付） | FailClosed | 打刻の無い session からの登録（`RegisterRefusal::NoStamp`・打刻が読めない周も断る）。`IntakeRefuse` と同型（受付で止める） |
-| `Role` | in-loop（PreToolUse・Bash / Edit 系） | FailClosed | 権能の無い役割の席からの権能付き subcommand と、権能の無い path 種別の編集（登録 row が無い・target が解けない周も deny） |
+| `Role` | in-loop（PreToolUse・Bash / Edit 系） | FailClosed | 権能の無い役割の席からの権能付き subcommand と、権能の無い path 種別の編集（登録 row が無い・target が解けない周も deny・権能を解けない断りは `RefuseReason` の variant ごとの代替ルート `route=` を deny 文の末尾に添える・§13） |
 
 §2 の登録の拒否は行為（登録）を止める判定を返すので guard（ADR-0014 §2.1）＝`Guard::Register`（variant 1 つ・宣言順は `Cap` の直後・極性の定数は `seat/role.rs`）。§5 の注入は guard ではない（行為を止めうる判定を返さない）。
 

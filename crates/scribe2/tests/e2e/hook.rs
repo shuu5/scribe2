@@ -2315,6 +2315,41 @@ fn hook_role_denies_unregistered_pane_and_is_inactive_without_pane() {
     clean(&[&place.repo, &place.state, &place.sock_dir]);
 }
 
+/// 契約表の行 g（`s2-07l.308`・§13）: 未登録の席の deny 文は理由の字面（`reason=unregistered`）を保ったまま末尾に
+/// 代替ルート `route=<NAME> seat register …` の 1 句を持つ（FR45・止められた席が source を読まずに登録の口へ行ける）。
+/// 解けない pane（`reason=target-unresolved`）と anchor の解けない席（`reason=no-anchor`）も理由ごとの route を持つ。
+/// 外形は不変（rc 2・stdout 0 byte・stderr 1 行・記録 1 行）。
+#[test]
+fn hook_role_guard_route_unregistered_names_seat_register() {
+    let place = role_place();
+    let (seat, pane) = role_seat(&place, "roleroute", None);
+    let payload = bash_payload(&place.repo, &answer_line());
+
+    let before = role_records(&place.state).len();
+    let out = run_role_hook(&place, &pane, &[], &payload);
+    let text = assert_role_deny(&out, "登録の無い pane");
+    assert!(text.contains("reason=unregistered（"), "理由の字面は不変: {text}");
+    let (_, route) = text.trim_end().split_once(" route=").unwrap_or_default();
+    assert!(route.starts_with(&format!("{NAME} seat register ")), "代替ルートは登録の口: {text}");
+    for flag in ["--state-dir", "--target", "--role"] {
+        assert!(route.contains(flag), "登録の口の引数 {flag}: {text}");
+    }
+    assert_eq!(text.matches("route=").count(), 1, "route は 1 句: {text}");
+    assert_role_record(&place.state, before, "role-deny capability=answer", "roleroute_roleroute");
+
+    // 解けない pane → 理由は不変で route は登録の口ではない（席の起動の口）。
+    let text = assert_role_deny(&run_role_hook(&place, "%99999", &[], &payload), "解けない pane");
+    assert!(text.contains("reason=target-unresolved（"), "{text}");
+    assert!(text.contains(&format!(" route={NAME} seat launch ")), "{text}");
+    // anchor の解けない席 → 仕える repo を作る口。
+    let bare = tmp();
+    let text = assert_role_deny(&run_role_hook(&place, &pane, &["--project", &bare.display().to_string()], &payload), "anchor 無し");
+    assert!(text.contains("reason=no-anchor（"), "{text}");
+    assert!(text.contains(&format!(" route={NAME} vessel init ")), "{text}");
+    drop(seat);
+    clean(&[&place.repo, &place.state, &place.sock_dir, &bare]);
+}
+
 /// (5)(7)(10): Edit 系は path 種別で判定する: 管理席の code path → deny・planner の design-intent → allow・
 /// planner の code path → deny・`README.md`（Code）は両役割とも deny（裁定: code は誰も持たない）・
 /// `docs/design/x.md` は planner だけ allow。権能付きでない Bash（`ls`）は通す（記録なし・write-set の policy が

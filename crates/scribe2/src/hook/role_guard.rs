@@ -354,6 +354,73 @@ fn within_write_set(write_set: &[String], rel: &Path) -> bool {
     })
 }
 
+/// 権能を解けない周の断りの理由（closed enum・宣言順 = 解く順・設計 seat-roles.md §13・憲法 C2 / C11）。
+///
+/// 理由の字面（[`RefuseReason::as_str`]）は deny 文の `reason=` に載る 1 語で、variant ごとに**代替ルートの 1 行**
+/// （[`RefuseReason::route`]・器の subcommand の形）を持つ＝止められた席が source を読まずに次の手を取れる（FR45）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum RefuseReason {
+    /// pane → target（`session:window`）が解けない（tmux が撃てない・名が空）。
+    TargetUnresolved,
+    /// 登録 row（event log）が読めない。
+    RegistryUnreadable,
+    /// target の登録 row が無い（FR40・席は役割の記録が無ければどの権能も持たない）。
+    Unregistered,
+    /// rules manifest が読めない。
+    RulesUnreadable,
+    /// 役割の rules 行（`role.<役割名>`）が無い・不発効。
+    NoRow(Role),
+    /// anchor（repo root・state dir）が解けない（pane は在る＝席なのに仕える repo が無い）。
+    NoAnchor,
+}
+
+impl RefuseReason {
+    /// 全 variant（宣言順）。`NoRow` は先頭の役割で代表する（字面と route は役割に依らない）。
+    pub const ALL: [Self; 6] = [
+        Self::TargetUnresolved,
+        Self::RegistryUnreadable,
+        Self::Unregistered,
+        Self::RulesUnreadable,
+        Self::NoRow(Role::Planner),
+        Self::NoAnchor,
+    ];
+
+    /// deny 文の `reason=` の 1 語（`NoRow` は行 id を [`RefuseReason::render`] が続ける）。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::TargetUnresolved => "target-unresolved",
+            Self::RegistryUnreadable => "registry-unreadable",
+            Self::Unregistered => "unregistered",
+            Self::RulesUnreadable => "rules-unreadable",
+            Self::NoRow(_) => "no-row",
+            Self::NoAnchor => "no-anchor",
+        }
+    }
+
+    /// deny 文に載る理由の字面（`no-row <row>` だけが行 id を伴う）。
+    pub fn render(self) -> String {
+        match self {
+            Self::NoRow(role) => format!("{} {}", self.as_str(), row_id(role)),
+            _ => self.as_str().to_owned(),
+        }
+    }
+
+    /// 代替ルートの 1 行（器の subcommand の形・deny 文が `<NAME>` を前置する）。理由ごとに 1 形で、散文の手順は
+    /// 持たない（N2）。
+    pub fn route(self) -> &'static str {
+        match self {
+            Self::TargetUnresolved => "seat launch --state-dir <S> --role <planner|admin> --target <session:window>",
+            Self::RegistryUnreadable => "doctor --state-dir <S>",
+            Self::Unregistered => {
+                "seat register --state-dir <S> --target <session:window> --role <planner|admin> --account <L> --launch <FILE>"
+            }
+            Self::RulesUnreadable => "doctor --state-dir <S> --rules <PATH>",
+            Self::NoRow(_) => "rules get <row> --rules <PATH>",
+            Self::NoAnchor => "vessel init --state-dir <S> <ROOT>",
+        }
+    }
+}
+
 /// 権能付きの操作を判定する（解く順 = pane → target → 登録 row → role → 行 → 権能）。
 pub fn decide(subject: &Subject, seat: &Seat) -> RoleDecision {
     let Some(pane) = seat.pane.filter(|found| !found.trim().is_empty()) else {
@@ -361,17 +428,17 @@ pub fn decide(subject: &Subject, seat: &Seat) -> RoleDecision {
     };
     let socket = seat.socket.filter(|found| !found.trim().is_empty());
     let Some(target) = crate::seat::target_of_pane(socket, pane) else {
-        return RoleDecision::Deny(refused(subject, "target-unresolved"));
+        return RoleDecision::Deny(refused(subject, RefuseReason::TargetUnresolved));
     };
     let Ok(events) = store::read_all(seat.state_dir) else {
-        return RoleDecision::Deny(refused(subject, "registry-unreadable"));
+        return RoleDecision::Deny(refused(subject, RefuseReason::RegistryUnreadable));
     };
     let Some(role) = role_of_target(&replay(&events), &target) else {
-        return RoleDecision::Deny(refused(subject, "unregistered"));
+        return RoleDecision::Deny(refused(subject, RefuseReason::Unregistered));
     };
     let manifest = seat.rules.map_or_else(Manifest::embedded, Manifest::load);
     let Ok(manifest) = manifest else {
-        return RoleDecision::Deny(refused(subject, "rules-unreadable"));
+        return RoleDecision::Deny(refused(subject, RefuseReason::RulesUnreadable));
     };
     judge(subject, role, &manifest)
 }
@@ -379,7 +446,7 @@ pub fn decide(subject: &Subject, seat: &Seat) -> RoleDecision {
 /// 役割と rules 行だけから判定する（pure・tmux も file も撃たない）。行が無い・不発効の役割は権能なし。
 pub fn judge(subject: &Subject, role: Role, manifest: &Manifest) -> RoleDecision {
     let Some(held) = held_by(manifest, role) else {
-        return RoleDecision::Deny(refused(subject, &format!("no-row {}", row_id(role))));
+        return RoleDecision::Deny(refused(subject, RefuseReason::NoRow(role)));
     };
     let missing: Vec<Capability> = match subject {
         Subject::Capabilities(needed) => needed.iter().copied().filter(|cap| !held.contains(cap)).collect(),
@@ -432,19 +499,27 @@ fn denied(role: Role, missing: &[Capability], manifest: &Manifest) -> String {
     }
 }
 
-/// 権能を解けない周の 1 行（FailClosed・理由の 1 語つき）。
-fn refused(subject: &Subject, reason: &str) -> String {
-    format!("{NAME}: この操作（{}）は権能なし reason={reason}（席の登録 row と rules 行から権能を解けない）", subject.render())
+/// 権能を解けない周の 1 行（FailClosed・理由の 1 語つき・末尾に代替ルート `route=<NAME> <1 行>`・§13）。
+fn refused(subject: &Subject, reason: RefuseReason) -> String {
+    format!(
+        "{NAME}: この操作（{}）は権能なし reason={}（席の登録 row と rules 行から権能を解けない） route={NAME} {}",
+        subject.render(),
+        reason.render(),
+        reason.route()
+    )
 }
 
 /// anchor（repo root・state dir）を解けない周の 1 行（pane は在る＝席なのに仕える repo が無い）。
 pub fn unanchored_line(subject: &Subject) -> String {
-    refused(subject, "no-anchor")
+    refused(subject, RefuseReason::NoAnchor)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{capabilities_of, judge, locate, PathKind, RoleDecision, Subject, CAPABILITY_COMMANDS, PATH_KINDS};
+    use super::{
+        capabilities_of, judge, locate, refused, unanchored_line, PathKind, RefuseReason, RoleDecision, Subject,
+        CAPABILITY_COMMANDS, PATH_KINDS,
+    };
     use crate::name::NAME;
     use crate::rules::manifest::Manifest;
     use crate::seat::role::{Capability, Role, CAPABILITIES};
@@ -611,6 +686,74 @@ mod tests {
         };
         assert!(line.contains("planner 席の権能（rules 行 role.planner）"), "権能を持つ役割と行 id: {line}");
         assert!(line.contains("admin 席は持たない"), "{line}");
+    }
+
+    /// 理由の字面 6 種（現行のまま・宣言順）。
+    const REASON_WORDS: [&str; 6] =
+        ["target-unresolved", "registry-unreadable", "unregistered", "rules-unreadable", "no-row", "no-anchor"];
+
+    /// (b) `RefuseReason::ALL` は 6 variant を判別子順（宣言順 = 解く順）に持ち、字面は 6 種で重複しない。
+    #[test]
+    fn hook_role_guard_route_all_pins_discriminant_order() {
+        assert_eq!(RefuseReason::ALL.len(), REASON_WORDS.len(), "断りの理由は 6 種");
+        let words: Vec<&str> = RefuseReason::ALL.iter().map(|reason| reason.as_str()).collect();
+        assert_eq!(words, REASON_WORDS, "字面は宣言順");
+        for pair in RefuseReason::ALL.windows(2) {
+            assert!(pair[0] < pair[1], "判別子順に並ぶ: {pair:?}");
+        }
+        assert_eq!(RefuseReason::ALL[0], RefuseReason::TargetUnresolved, "先頭は target の段");
+        assert_eq!(RefuseReason::ALL[5], RefuseReason::NoAnchor, "末尾は anchor の段");
+        assert_eq!(RefuseReason::NoRow(Role::Admin).render(), "no-row role.admin", "行 id を伴う");
+        assert_eq!(RefuseReason::Unregistered.render(), "unregistered", "行 id を伴わない");
+    }
+
+    /// (c) 各 variant の route は非空で器の subcommand の形（先頭は subcommand の名・散文でない）・理由に応じた口
+    /// （未登録 = `seat register`・anchor = `vessel`・読めない周 = `doctor`・行なし = `rules`）を名指す。
+    #[test]
+    fn hook_role_guard_route_every_variant_is_non_empty() {
+        for reason in RefuseReason::ALL {
+            let route = reason.route();
+            assert!(!route.trim().is_empty(), "{reason:?} の route は非空");
+            assert!(!route.starts_with(NAME), "{reason:?}: 器の名は deny 文が前置する: {route}");
+            assert_eq!(route.lines().count(), 1, "{reason:?}: route は 1 行: {route}");
+            let head = route.split(' ').next().unwrap_or_default();
+            assert!(["seat", "doctor", "rules", "vessel"].contains(&head), "{reason:?}: subcommand の形: {route}");
+        }
+        assert!(RefuseReason::Unregistered.route().starts_with("seat register "), "{}", RefuseReason::Unregistered.route());
+        for flag in ["--state-dir", "--target", "--role"] {
+            assert!(RefuseReason::Unregistered.route().contains(flag), "登録の口の引数 {flag}");
+        }
+        assert!(RefuseReason::NoAnchor.route().starts_with("vessel init "), "{}", RefuseReason::NoAnchor.route());
+        assert!(RefuseReason::RegistryUnreadable.route().starts_with("doctor "), "{}", RefuseReason::RegistryUnreadable.route());
+        assert!(RefuseReason::RulesUnreadable.route().starts_with("doctor "), "{}", RefuseReason::RulesUnreadable.route());
+        assert!(RefuseReason::NoRow(Role::Planner).route().starts_with("rules get "), "{}", RefuseReason::NoRow(Role::Planner).route());
+        assert!(RefuseReason::TargetUnresolved.route().starts_with("seat launch "), "{}", RefuseReason::TargetUnresolved.route());
+    }
+
+    /// (d) deny 文は 1 形: 前半（器の名・種別・`reason=<字面>`・括弧の句）は不変で、末尾に `route=<NAME> <1 行>` を持つ。
+    /// `unanchored_line` は `NoAnchor` の同じ形・`judge` の行なしは `no-row <row>` の同じ形。
+    #[test]
+    fn hook_role_guard_route_deny_line_ends_with_route() {
+        let subject = Subject::Capabilities(vec![Capability::Answer]);
+        for (reason, word) in RefuseReason::ALL.into_iter().zip(REASON_WORDS) {
+            let line = refused(&subject, reason);
+            assert_eq!(line.lines().count(), 1, "deny 文は 1 行: {line}");
+            let head = format!("{NAME}: この操作（capability=answer）は権能なし reason={}（席の登録 row と rules 行から権能を解けない）", reason.render());
+            assert!(line.starts_with(&head), "前半は不変: {line}");
+            assert!(line.contains(&format!("reason={word}")), "理由の字面 {word}: {line}");
+            let tail = format!(" route={NAME} {}", reason.route());
+            assert!(line.ends_with(&tail), "末尾に代替ルート: {line}");
+            assert_eq!(line.matches("route=").count(), 1, "route は 1 句: {line}");
+            assert_eq!(line, format!("{head}{tail}"), "前半と route の間に他の句を持たない");
+        }
+        assert_eq!(unanchored_line(&subject), refused(&subject, RefuseReason::NoAnchor));
+        assert!(unanchored_line(&subject).contains("reason=no-anchor（"), "{}", unanchored_line(&subject));
+        let RoleDecision::Deny(line) = judge(&subject, Role::Admin, &manifest_with(&[Capability::Answer])) else {
+            panic!("行の無い役割は権能なし");
+        };
+        assert_eq!(line, refused(&subject, RefuseReason::NoRow(Role::Admin)));
+        assert!(line.contains("reason=no-row role.admin（"), "{line}");
+        assert!(line.ends_with(&format!(" route={NAME} {}", RefuseReason::NoRow(Role::Admin).route())), "{line}");
     }
 
     /// 記録の種別の字面。
