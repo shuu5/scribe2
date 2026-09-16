@@ -376,6 +376,14 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
 - 歯（`flipcheck_declaration_nested_` 接頭辞・`crates/xtask/src/flipcheck_declaration_tests.rs`・既存の fixture〔`base_commit_with_e2e` / `red_body` / `green_body`〕の型）: 宣言 file `tests/e2e/seat.rs` の子（seat/ 配下の probe の module・新規）を足す diff で flip が RED-on-base ok を出す（base は宣言が落ちて歯が走らず green-on-base FAIL → RED）／同じ dir の `<name>.rs` と `<name>/mod.rs` の既存の 2 形は不変（既存の歯が緑のまま）／`#[path]` 付きは従来どおり測れない（既存の期待を変えない）。
 - 却下: `.320` の新歯を `tests/e2e/seat.rs` の test 区間に置く（seat.rs の余地を食い、子 module の置き場を禁じる運用が散文に生まれる・N2）／`.320` の write-set に xtask を足す（seat と xtask を 1 便に混ぜる）／parser を足して `#[path]` も追う（A3 の依存・§5.3 で却下済み）。
 
+## 32. flip-check の base-not-green に経路の弁別子を後置する — 負荷・環境・本物の赤を判定行で分ける（契約表の行 z・`s2-07l.380`）
+
+- 何が起きているか: `.354` run 1（Gated FAIL）の verify は `cargo xtask flip-check` の 1 行だけ `FAIL reason=infra-error base-not-green` で、他の行は rc 0・main CI は同じ base で success。現物（verified）: `crates/xtask/src/flipcheck.rs` の `base_is_green` / `retry_named` は「名指せない失敗」を 3 つの経路——(i) base の nextest が rc を持たない（signal）(ii) rc≠0 で `failed_tests` が 0 本（compile error の rc 101・出力の形が読めない）(iii) 名指した歯の撃ち直しが rc≠0——で**同じ字面** `base-not-green` に倒す。撃ち直さないのは設計どおり（§5.3・C11.2）だが、操作役が負荷 / 環境 / 本物の赤を判定行から弁別できず、retire か run N+1 かを推測で決めている（C10: 測れない理由を潰さない）。
+- 形: 理由を閉じた enum（3 variant・`as_str`・宣言順 = 上の (i)(ii)(iii)）で持ち、`infra` の字面に後置する: `base-not-green:signal` / `base-not-green:unnamed rc=<rc>` / `base-not-green:retry-failed rc=<rc>`。極性一覧の行（`infra-error`）は不変・判定行の先頭 `flip-check: FAIL reason=infra-error` も不変（後置だけ）。理由の出口は既存の `relay` / `sink` / 判定行で、新しい seam を足さない。
+- 触らない: 撃ち直しの回数（1 回）と範囲（完全一致）・`failed_tests` の読み・head 段・`retroactive` の札・§31 の宣言の扱い。
+- 歯（`flipcheck_base_reason_` 接頭辞・`crates/xtask/src/flipcheck_tests.rs`）: (i) 理由の純関数（rc の有無・名指した本数・撃ち直しの rc → variant）の 3 通りを in-file で pin（base では関数が無く RED）／(ii) 既存の toy fixture で base を compile error にした周の判定行が `base-not-green:unnamed rc=101` を含む（base の字面は `base-not-green` で終わる → RED）／signal と retry-failed は純関数の歯で足りる（実 signal の fixture は壁時計と環境に依る・§5.3 の型）。
+- 却下: 経路ごとに別の `reason=` を立てる（極性一覧の行が増え infra-error の意味が割れる）／撃ち直しを 2 回に増やす（緩める側・C11.2）／stderr の relay だけに理由を書く（判定行を読む操作役に届かない・gate の evidence は判定行）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -631,4 +639,14 @@ write-set = ["crates/xtask/src/flipcheck.rs", "crates/xtask/src/flipcheck_declar
 verify = ["cargo nextest run -p xtask --no-tests=fail flipcheck_declaration_nested_"]
 size = "S"
 done = "宣言 file の子 dir に新規 module を足す diff で flip が RED-on-base ok を出し、同じ dir の 2 形と #[path] の扱いは不変"
+
+[[contract]]
+id = "z"
+title = "flip-check の base-not-green に経路の弁別子（signal / unnamed rc=<rc> / retry-failed rc=<rc>）を後置する — 閉じた enum 1 つ・極性一覧と判定行の先頭は不変"
+req = ["FR7"]
+section = "32"
+write-set = ["crates/xtask/src/flipcheck.rs", "crates/xtask/src/flipcheck_tests.rs"]
+verify = ["cargo nextest run -p xtask --no-tests=fail flipcheck_base_reason_"]
+size = "S"
+done = "base が compile error の周の判定行が base-not-green:unnamed rc=101 を含み、理由の純関数が 3 経路を宣言順の variant に写し、極性一覧の行と判定行の先頭は不変"
 <!-- contracts:end -->

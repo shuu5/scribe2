@@ -179,6 +179,14 @@ repo に入れない）。
 - 歯（`seat_tmux_timeout_` 接頭辞・`tests/e2e/seat/tick.rs`）: PATH の先頭に置いた偽 `tmux`（読んで返らない script）の下で `seat tick` が rules 行の上限で返り、rc は従来の失敗側で記録に `reason=tmux-timeout` が在る／上限内に返る偽 tmux は従来どおり通る／rules 行は kind 件数の pin と外形の歯（`seat.tick_interval_s` と同型）。
 - 却下: 呼び手 17 か所に個別の timeout（線が散る・C2）／thread で `output()` を包んで放置（器が自分の子を回収しない）／systemd の `TimeoutStartSec` だけで止める（unit を入れない環境で線が無い）。
 
+## 13. e2e の fixture が自分の残骸を畳む — tmp dir を guard で消し、死んだ process の隔離 server と dir を次の fixture が掃く（契約表の行 e・`s2-07l.402`）
+
+- 何が起きているか（planner の実測 2026-09-16 08:0xZ・verified）: e2e の fixture が立てる隔離 socket の tmux server が 31 本・`/tmp/e2e-*` の dir が 31,185 本残存し、user の tmux-continuum が「他の server が居る」と判定して自動保存を止めた。現物: `tests/e2e/main.rs` の `make_tmp_dir` は裸の `PathBuf` を返し、消すのは各歯の成功経路の `remove_dir_all` だけ（panic / timeout の経路は飛ぶ）。`tests/e2e/seat.rs` の `IsolatedSeat` は `Drop` で `kill-session` を撃つ（panic 経路は畳める）が、nextest の timeout（SIGKILL）で process ごと落ちた周は `Drop` 自体が走らず server も dir も残る。
+- 形: (1) `make_tmp_dir` の戻りを **`Drop` で `remove_dir_all` する guard**（`TmpDir`・`Deref<Target = Path>`・名は現物で決める）にする＝panic 経路でも消える。既存の呼び手は型だけ合わせる（明示の `remove_dir_all` は残してよい・二重は無害）。(2) **死んだ持ち主の残骸を次の fixture が掃く**: `make_tmp_dir` は dir を作る前に `<temp_dir>/e2e-<pid>-*` を列挙し、`<pid>` が生きていない（`kill -0` 相当＝`/proc/<pid>` の有無・std だけ）entry だけを対象に、中に socket が在れば `tmux -S <sock> kill-server`（隔離 server・live server の socket ではない）を撃ってから `remove_dir_all` する。生きている pid の dir と自分の dir は触らない（並列の歯と競合しない）。(3) 対象は **fixture 自身が作った scratch**（`e2e-<pid>-` の接頭辞・`temp_dir` 直下）だけで、器の管理物（state dir・退避先）ではない＝N1 の対象外・A1 の「消す」にも当たらない（歯の一時物を歯が畳む）。
+- 触らない: `IsolatedSeat` の `Drop`（kill-session）・fixture の socket の置き方・nextest の timeout の値・器の本体。
+- 歯（`e2e_fixture_sweep_` 接頭辞・`tests/e2e/main.rs` の隣の新 file `tests/e2e/fixture.rs`）: (a) 死んだ pid（`sh -c true` を spawn して wait した pid）名義の `e2e-<pid>-x` dir に隔離 server を立てておき、`make_tmp_dir` を呼ぶと dir が無く `tmux -S <sock> ls` が断る（base は残る → RED）／(b) 自分の pid 名義の dir は掃かれない／(c) guard を drop すると dir が消える（panic を捕まえる std の口の中で drop し、panic 経路でも消えることを pin）。
+- 却下: `tempfile` crate（直接依存の追加・A3・`make_tmp_dir` の doc comment に既に却下の記録）／nextest の `leak-timeout` / 外部の掃除 script（歯の外の散文運用・C12）／fixture 作成時に全 `e2e-*` を消す（並列の歯の dir を壊す）／`kill-server` を生きている pid の server にも撃つ（同上）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -221,4 +229,14 @@ write-set = ["rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "crates/s
 verify = ["cargo nextest run -p scribe2 --no-tests=fail seat_tmux_timeout_"]
 size = "M"
 done = "返らない偽 tmux の下で seat tick が rules 行の上限で戻り reason=tmux-timeout を記録し、返る偽 tmux は従来どおり通り、rules 行が裁定 id 付きで 1 本増える"
+
+[[contract]]
+id = "e"
+title = "e2e の fixture が自分の残骸を畳む — make_tmp_dir を Drop 付きの guard にし、死んだ pid 名義の e2e-<pid>-* の隔離 server と dir を次の fixture が掃く（歯の一時物を歯が畳む・器の管理物は触らない）"
+req = ["NFR6"]
+section = "13"
+write-set = ["crates/scribe2/tests/e2e/main.rs", "+crates/scribe2/tests/e2e/fixture.rs", "crates/scribe2/tests/e2e/seat.rs", "crates/scribe2/tests/e2e/hook.rs", "crates/scribe2/tests/e2e/fleet.rs", "crates/scribe2/tests/e2e/pipe.rs", "crates/scribe2/tests/e2e/headless.rs", "crates/scribe2/tests/e2e/rules.rs", "crates/scribe2/tests/e2e/polarity.rs"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail e2e_fixture_sweep_"]
+size = "S"
+done = "死んだ pid 名義の隔離 server と dir が次の make_tmp_dir で消え、生きている pid の dir は残り、guard の drop で dir が消える"
 <!-- contracts:end -->
