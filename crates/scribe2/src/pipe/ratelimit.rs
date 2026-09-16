@@ -56,6 +56,10 @@ impl Pool {
 /// 繰り返す。**回数の上限を持たない**（起こし直した turn がまた上限で止まれば次の口座で続く・窓を
 /// 跨ぐ）。終端は `pipe stop --run` だけで、器は自動では終端しない。段が `RateLimited` でない周は
 /// 何もせず rc 0（`pipe run` が起動の直後に通す形）。
+///
+/// 例外は 1 つ——runner が死んだ便（`Spawned` の段で runner が起きていない＝`pipe resume` が生死を唯一の wait で
+/// 測って `SeatStopped detail=runner-dead` を記帳した後・設計 §4「runner が死んだ便の起こし直し」）も**同じ 1 周**
+/// を通す（起こし直しの経路を増やさない・C6）。その turn がまた上限で止まれば上と同じ loop で続く。
 pub(super) fn ride_out_rate_limit(
     args: &[String],
     id: &str,
@@ -82,9 +86,15 @@ pub(super) fn ride_out_rate_limit(
                 return outcome;
             }
         };
-        if stage != Some(Stage::RateLimited) {
+        // `Spawned` は runner が起きていない周（死んで記帳済み）だけ通す。`pipe run` の直後は turn の結果の段に
+        // 居るので `Spawned` には来ない＝従来の「RateLimited でなければ返る」は不変。
+        let expected = if stage == Some(Stage::RateLimited) {
+            Stage::RateLimited
+        } else if stage == Some(Stage::Spawned) && runner_is_idle(&state_dir, id) == Some(true) {
+            Stage::Spawned
+        } else {
             return outcome;
-        }
+        };
         // 便が使う model は上限で止まった周にだけ要る（`pipe run` は段が動かない周にこの行を読まない）。
         // 行が無い / 不発効 / 文字列でない / 閉じた表に無い周は typed に断り、claude を呼ばず再開もしない。
         // 宣言が 0 の置き場でも組む（候補なしを名乗って口座待ちで止まる＝初回の起動の「継承」とは違う）。
@@ -94,7 +104,7 @@ pub(super) fn ride_out_rate_limit(
             Ok(found) => found,
             Err(reason) => return refused(reason),
         };
-        let turn = resume_rate_limited(args, id, runner, &pool, policy);
+        let turn = resume_rate_limited(args, id, Runner { cmd: runner, pool: Some(&pool) }, policy, expected);
         outcome.out.extend(turn.out);
         outcome.err.extend(turn.err);
         if turn.rc != RC_OK {
@@ -134,8 +144,9 @@ fn runner_model_of(manifest: &Manifest) -> Result<&str, String> {
     Ok(text)
 }
 
-/// `RateLimited` の便の 1 周（設計 account-autonomy.md §4）: [`choose_account`]（計測 → 選定 → 候補なしの
-/// 待ち）で口座を選び、同じ worktree・契約・base の runner をその口座で起こし直す。
+/// 途中再開の 1 周（設計 account-autonomy.md §4）: [`choose_account`]（計測 → 選定 → 候補なしの
+/// 待ち）で口座を選び、同じ worktree・契約・base の runner をその口座で起こし直す。`stage` は便が居る段
+/// （上限で止まった `RateLimited`・runner が死んだ `Spawned`）で、待ちの間もその段に居ることを求める。
 ///
 /// 判定行は `run=<id> next=spawn account=<label>` / `run=<id> next=wait reset=<ts>`（既存の
 /// `next=gate` と同型）。計測の行は stderr 側（`fleet select` と同じ）。走っている runner の隣に
@@ -143,11 +154,11 @@ fn runner_model_of(manifest: &Manifest) -> Result<&str, String> {
 fn resume_rate_limited(
     args: &[String],
     id: &str,
-    runner: &str,
-    pool: &Pool,
+    runner: Runner<'_>,
     policy: LockPolicy,
+    stage: Stage,
 ) -> Outcome {
-    let resolved = match resolve(args, id, &[Stage::RateLimited], &Extra::Nothing) {
+    let resolved = match resolve(args, id, &[stage], &Extra::Nothing) {
         Ok(found) => found,
         Err(outcome) => return outcome,
     };
@@ -155,8 +166,12 @@ fn resume_rate_limited(
         return refused(format!("run {id} の runner が起きている（隣にもう 1 つ起こさない）"));
     }
     let mut outcome = Outcome::ok(Vec::new());
-    // 宣言が 0 でも選定を通す（候補なし → 口座待ちで止まる・親の環境を継承して起こし直さない）。
-    let label = match choose_account(pool, id, &resolved.state_dir, Stage::RateLimited, &mut outcome) {
+    // 宣言が 0 でも選定を通す（候補なし → 口座待ちで止まる・親の環境を継承して起こし直さない）。宣言 0 の周も
+    // 呼び手が `pool` を組んで渡す（`None` は無い＝初回の起動の「継承」とは違う）。
+    let Some(pool) = runner.pool else {
+        return refused(format!("run {id} の再開に便用の選定の入力が要る"));
+    };
+    let label = match choose_account(pool, id, &resolved.state_dir, stage, &mut outcome) {
         Ok(label) => label,
         // 止まる周も、それまでの判定行（`next=wait …`）と計測の行は残す。
         Err(stopped) => {
@@ -168,7 +183,6 @@ fn resume_rate_limited(
     };
     // (iii) 起こし直し。**経路は通常の起動と同じ `spawn_turn` の 1 本**（C6）。
     outcome.out.push(format!("run={id} next=spawn account={label}"));
-    let runner = Runner { cmd: runner, pool: Some(pool) };
     let turn = follow::spawn_turn(&turn_of(id, &resolved, runner, policy), Account::Resumed(&label));
     outcome.out.extend(turn.out);
     outcome.err.extend(turn.err);
@@ -184,8 +198,8 @@ fn resume_rate_limited(
 /// 無い候補なし、待ちの間に段が動いた）で、便の段は動かさない。口座の宣言が 0 の周（[`Pool::declared`] が
 /// `None`）の分岐は呼び手（`follow::spawn_selected`）が持ち、ここへは来ない（再開は宣言 0 でも通す＝候補なし）。
 ///
-/// `expected` は待ちの間に便が居るはずの段（再開なら `RateLimited`・初回なら起動前の段・衝突の起こし直しなら
-/// `Implemented`）。待ちの観測（[`Completion::AccountFree`]）も同じ段を運ぶ＝段が動いた周は待ちから抜けて断る。
+/// `expected` は待ちの間に便が居るはずの段（再開なら `RateLimited`・runner が死んだ便の起こし直しなら `Spawned`・
+/// 初回なら起動前の段・衝突の起こし直しなら `Implemented`）。待ちの観測（[`Completion::AccountFree`]）も同じ段を運ぶ＝段が動いた周は待ちから抜けて断る。
 pub(super) fn choose_account(
     pool: &Pool,
     id: &str,

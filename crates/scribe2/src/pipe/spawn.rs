@@ -8,7 +8,7 @@
 
 use super::approve::{block, Approval, Approve, RC_BLOCKED};
 use super::confine;
-use super::follow::Resumption;
+use super::follow::{Halt, Resumption};
 use super::gate::last_json_object;
 use super::refuse;
 use super::{
@@ -71,9 +71,10 @@ pub struct Launch<'a> {
     /// pipeline-conflict.md §3）。在る周は同じ run の worktree と base を使い、runner の
     /// stdin に「追随」節を付ける。値の出所は [`super::follow::section`] ただ 1 本である。
     pub follow: Option<String>,
-    /// **上限で止まった便の途中再開**（`RateLimited` からの再 spawn だけが持つ・設計
-    /// account-autonomy.md §4）。在る周は同じ run の worktree と base を使い、runner の stdin に
-    /// 「途中再開」節を付ける。値の出所は [`super::follow::resumption`] ただ 1 本である。
+    /// **途中再開**（上限で止まった `RateLimited` からの再 spawn と、runner が死んだ `Spawned` からの再 spawn
+    /// だけが持つ・設計 account-autonomy.md §4）。在る周は同じ run の worktree と base を使い、runner の stdin に
+    /// 「途中再開」節を付ける。値の出所は [`super::follow::resumption`] ただ 1 本で、止まった理由（[`Halt`]）も
+    /// そこから来る（[`Account::Resumed`] の detail の印はこの理由で分かれる）。
     pub resumed: Option<Resumption>,
     /// runner を起こす口座（閉じた 3 値・ADR-0017 §2.3・設計 account-autonomy.md §4）。label を持つ周は runner の
     /// 行に `--account-dir <state_dir>/accounts/<label>` を足し、[`Account::Inherit`] は親の環境をそのまま継承させる。
@@ -86,15 +87,15 @@ pub struct Launch<'a> {
 ///
 /// 段の detail の形は variant ごとに固定である: [`Inherit`](Self::Inherit) は `base:<sha>`、
 /// [`Chosen`](Self::Chosen) は `base:<sha>,account:<label>`、[`Resumed`](Self::Resumed) は
-/// `account:<label>,resume:rate-limit`（base は初回の行が持ったまま）。読み手（`base_of_run`）は `base:` の
-/// 直後から最初の `,` までを sha と読む。
+/// `account:<label>,resume:rate-limit` / `account:<label>,resume:runner-dead`（印は止まった理由 [`Halt`] で
+/// 分かれる・base は初回の行が持ったまま）。読み手（`base_of_run`）は `base:` の直後から最初の `,` までを sha と読む。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Account<'a> {
     /// 口座の宣言が無い周: 親の環境をそのまま継承させる（どの口座かを器は知らない）。
     Inherit,
     /// 初回の起動・承認後・回答後・衝突の起こし直しで器が便用の規則で選んだ口座。
     Chosen(&'a str),
-    /// 上限で止まった便の別口座での起こし直し（途中再開）で器が選んだ口座。
+    /// 途中再開（上限で止まった便の別口座での起こし直し・runner が死んだ便の起こし直し）で器が選んだ口座。
     Resumed(&'a str),
 }
 
@@ -112,8 +113,19 @@ impl<'a> Account<'a> {
 /// 口座を渡していない周に段の detail へ書く label の代わり（閉じた 1 つ）。
 const INHERITED_ACCOUNT: &str = "inherited";
 
-/// 別口座での起こし直しを段の detail に名乗る印（`Spawned detail=account:<label>,resume:rate-limit`）。
+/// 上限で止まった便の別口座での起こし直しを段の detail に名乗る印（`Spawned detail=account:<label>,resume:rate-limit`）。
 const RESUME_RATE_LIMIT: &str = "resume:rate-limit";
+
+/// runner が死んだ便の起こし直しを段の detail に名乗る印（`Spawned detail=account:<label>,resume:runner-dead`）。
+const RESUME_RUNNER_DEAD: &str = "resume:runner-dead";
+
+/// 途中再開の印（閉じた 2 つ・理由 [`Halt`] の値ごとに固定）。
+fn resume_mark(halt: Halt) -> &'static str {
+    match halt {
+        Halt::RateLimit => RESUME_RATE_LIMIT,
+        Halt::RunnerDead => RESUME_RUNNER_DEAD,
+    }
+}
 
 /// runner を起動して結果まで見届ける。**これが唯一の起動口である**。
 pub fn spawn(budget: Budget, launch: &Launch<'_>) -> Outcome {
@@ -137,13 +149,15 @@ pub fn spawn(budget: Budget, launch: &Launch<'_>) -> Outcome {
         Ok(path) => path,
         Err(reason) => return broken(reason),
     };
-    // 別口座での起こし直しは `account:<label>,resume:rate-limit` を名乗る（設計 account-autonomy.md §4）。
+    // 途中再開は `account:<label>,resume:<理由>` を名乗る（設計 account-autonomy.md §4・印は止まった理由で分かれる）。
     // base は初回の `base:<sha>` が持ったままで、読み手（`base_of_run`）は接頭辞の違う行を飛ばす。
     // 器が選んだ口座での起動は `base:<sha>,account:<label>`（読み手は最初の `,` までを sha と読む）。
-    let detail = match launch.account {
-        Account::Inherit => format!("base:{base}"),
-        Account::Chosen(label) => format!("base:{base},account:{label}"),
-        Account::Resumed(label) => format!("account:{label},{RESUME_RATE_LIMIT}"),
+    // 理由を読めない途中再開（節の材料が無い）は起こさない（印を推量しない・fail-closed）。
+    let detail = match (launch.account, launch.resumed.as_ref()) {
+        (Account::Inherit, _) => format!("base:{base}"),
+        (Account::Chosen(label), _) => format!("base:{base},account:{label}"),
+        (Account::Resumed(label), Some(resumed)) => format!("account:{label},{}", resume_mark(resumed.halt)),
+        (Account::Resumed(_), None) => return refused(format!("run {} の途中再開の理由を読めない", launch.run)),
     };
     if let Err(err) = emit(
         launch.state_dir,
@@ -308,9 +322,11 @@ fn prompt(launch: &Launch<'_>) -> String {
     }
     if let Some(resumed) = &launch.resumed {
         body.push_str(&format!(
-            "\n## 途中再開\n- 前の turn は {} に口座の上限で止まった\n- base からの commit（worktree に在る・やり直さない）: {}\n",
+            "\n## 途中再開\n- 前の turn は {} {}\n- base からの commit（worktree に在る・やり直さない）: {}\n- 未 commit の変更（worktree に在る・消さない・続きから commit する）: {}\n",
             resumed.stopped_at,
-            commit_list(&resumed.commits)
+            resumed.halt.as_stop_clause(),
+            item_list(&resumed.commits),
+            item_list(&resumed.uncommitted)
         ));
     }
     if let Some(main) = &launch.follow {
@@ -319,13 +335,13 @@ fn prompt(launch: &Launch<'_>) -> String {
     body
 }
 
-/// 「途中再開」節の commit 一覧（1 行 1 commit・無ければ `なし`）。
-fn commit_list(commits: &[String]) -> String {
-    if commits.is_empty() {
+/// 「途中再開」節の一覧（commit / 未 commit の変更・1 行 1 項目・無ければ `なし`）。
+fn item_list(items: &[String]) -> String {
+    if items.is_empty() {
         return "なし".to_owned();
     }
     let mut text = String::new();
-    for line in commits {
+    for line in items {
         text.push_str("\n  - ");
         text.push_str(line);
     }

@@ -293,7 +293,7 @@ pub(crate) fn spawn_turn(entry: &Turn<'_>, account: Account<'_>) -> Outcome {
     // 「追随」節の有無は **stdin の組立にだけ**効く。turn の後始末（[`settle`]）は節の有無に
     // 依らず同じ 1 本である（設計 §3 手順 5）。
     let follow = section(entry.state_dir, entry.repo, entry.run);
-    // 「途中再開」節も同じく stdin の組立にだけ効く（`RateLimited` の便だけが持つ）。
+    // 「途中再開」節も同じく stdin の組立にだけ効く（上限で止まった便と runner が死んだ便だけが持つ）。
     let resumed = resumption(entry.state_dir, entry.repo, entry.run);
     let mut outcome = spawn(
         budget,
@@ -338,37 +338,79 @@ pub(crate) fn section(state_dir: &Path, repo: &Path, run: &str) -> Option<String
     git_ok(repo, &["merge-base", "--is-ancestor", &base, &main]).then_some(main)
 }
 
-/// 「途中再開」節の材料（設計 account-autonomy.md §4）: 止まった時刻と base からの commit の一覧。
+/// runner が死んだ便に `pipe resume` が記帳する `SeatStopped` の理由（設計 account-autonomy.md §4「runner が
+/// 死んだ便の起こし直し」）。書き手は `pipe::cli::resume`、読み手は [`resumption`] の 1 本。
+pub(crate) const RUNNER_DEAD: &str = "runner-dead";
+
+/// 前の turn が止まった理由（**閉じた 2 値**・設計 account-autonomy.md §4）。「途中再開」節の理由の行と
+/// `Spawned` の detail の印（`resume:rate-limit` / `resume:runner-dead`）はこの値で分かれる。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Halt {
+    /// 口座の上限で止まった（`RunStage(RateLimited)`）。別口座で続く。
+    RateLimit,
+    /// runner の process が消えた（host の再起動・OOM・kill で `SeatStopped` が書かれないまま死んだ形・
+    /// `pipe resume` が `SeatStopped detail=runner-dead` を記帳した周）。
+    RunnerDead,
+}
+
+impl Halt {
+    /// 「途中再開」節の理由の行の述部（`- 前の turn は <ts> ` に続く字面・理由の語を runner が読む）。
+    pub fn as_stop_clause(self) -> &'static str {
+        match self {
+            Self::RateLimit => "に口座の上限で止まった",
+            Self::RunnerDead => "に runner の死亡で止まった（process が消えた）",
+        }
+    }
+}
+
+/// 「途中再開」節の材料（設計 account-autonomy.md §4）: 止まった理由と時刻・base からの commit の一覧・前の turn が
+/// worktree に残した未 commit の変更の一覧。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Resumption {
-    /// 上限で止まった時刻（`RunStage(RateLimited)` の event の `ts`）。
+    /// 止まった理由。
+    pub halt: Halt,
+    /// 止まった時刻（上限なら `RunStage(RateLimited)`・runner の死亡なら `SeatStopped detail=runner-dead` の event の `ts`）。
     pub stopped_at: String,
     /// base から便が積んだ commit（`git log --oneline <base>..HEAD` の行・古い順）。
     pub commits: Vec<String>,
+    /// 未 commit の変更（`git status --porcelain` の行・消さない＝runner が続きから commit する・N1）。
+    pub uncommitted: Vec<String>,
 }
 
-/// 便が途中再開すべきか（`RateLimited` の段に在る周だけ `Some`・[`section`] と同型の組み立て）。
+/// 便が途中再開すべきか（[`section`] と同型の組み立て）。`Some` になるのは 2 つの周だけ——`RateLimited` の段に
+/// 在る周（[`Halt::RateLimit`]）と、`Spawned` の段で最後の席の event が `SeatStopped detail=runner-dead` の周
+/// （[`Halt::RunnerDead`]・`pipe resume` が生死を測って記帳した後）。
 ///
 /// 決めるのは runner の stdin の「途中再開」節（[`super::spawn`]）**だけ**である。止まった時刻は
-/// 追記だけの log の原本から読む（最後の `RateLimited` の行・replay の `updated` は後の event で
-/// 動く）。commit の一覧を読めない周は空（節は付く・一覧だけ無い）。
+/// 追記だけの log の原本から読む（最後の該当の行・replay の `updated` は後の event で動く）。
+/// commit / 未 commit の一覧を読めない周は空（節は付く・一覧だけ無い）。どちらの理由でも一覧の読み手は同じ 1 本。
 pub(crate) fn resumption(state_dir: &Path, repo: &Path, run: &str) -> Option<Resumption> {
     let events = store::read_all(state_dir).ok()?;
     let stage = crate::fleet::replay(&events).runs.get(run).map(|found| found.stage);
-    if stage != Some(Stage::RateLimited) {
+    let mut own = events.iter().rev().filter(|event| event.run == run);
+    let (halt, stopped_at) = if stage == Some(Stage::RateLimited) {
+        let stopped = own.find(|event| event.kind == EventKind::RunStage && event.stage == Some(Stage::RateLimited))?;
+        (Halt::RateLimit, stopped.ts.clone())
+    } else if stage == Some(Stage::Spawned) {
+        let last = own.find(|event| event.kind == EventKind::SeatSpawned || event.kind == EventKind::SeatStopped)?;
+        if last.kind != EventKind::SeatStopped || last.detail.as_deref() != Some(RUNNER_DEAD) {
+            return None;
+        }
+        (Halt::RunnerDead, last.ts.clone())
+    } else {
         return None;
-    }
-    let stopped_at = events
-        .iter()
-        .rev()
-        .find(|event| event.run == run && event.kind == EventKind::RunStage && event.stage == Some(Stage::RateLimited))?
-        .ts
-        .clone();
+    };
+    let worktree = worktree_path(repo, run);
     let commits = base_of_run(state_dir, run)
-        .and_then(|base| {
-            let range = format!("{base}..HEAD");
-            super::git_bytes(&worktree_path(repo, run), &["log", "--oneline", "--reverse", &range])
-        })
+        .map(|base| git_lines(&worktree, &["log", "--oneline", "--reverse", &format!("{base}..HEAD")]))
+        .unwrap_or_default();
+    let uncommitted = git_lines(&worktree, &["status", "--porcelain"]);
+    Some(Resumption { halt, stopped_at, commits, uncommitted })
+}
+
+/// git を 1 回撃って stdout の非空行を得る（失敗は空・[`super::git_bytes`] の上で行に切る）。
+fn git_lines(dir: &Path, args: &[&str]) -> Vec<String> {
+    super::git_bytes(dir, args)
         .map(|bytes| {
             String::from_utf8_lossy(&bytes)
                 .lines()
@@ -376,8 +418,7 @@ pub(crate) fn resumption(state_dir: &Path, repo: &Path, run: &str) -> Option<Res
                 .map(str::to_owned)
                 .collect()
         })
-        .unwrap_or_default();
-    Some(Resumption { stopped_at, commits })
+        .unwrap_or_default()
 }
 
 /// **すべての turn** の後始末（設計 §3 の手順 5 / 6）。「追随」節を渡したかは見ない。

@@ -6,18 +6,19 @@
 
 use super::run::{chain, launch};
 use super::step::{gate_run, land_run, review_run};
-use super::{need, refused, stage_of, state_dir_of};
-use crate::cli_outcome::{Outcome, RC_BROKEN};
-use crate::fleet::store::{LockPolicy, StoreError};
-use crate::fleet::Stage;
+use super::{broken, need, refused, stage_of, state_dir_of};
+use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
+use crate::fleet::store::{self, LockPolicy, StoreError};
+use crate::fleet::{self, Completion, EventKind, Stage, Timeout};
 use crate::pipe::approve::RC_BLOCKED;
 use crate::pipe::follow;
 use crate::pipe::gate::{Verdict, RC_INCONCLUSIVE};
 use crate::pipe::land::verdict_of;
 use crate::pipe::ratelimit::ride_out_rate_limit;
-use crate::pipe::{current, last_stage_detail, question_of_run, runner_is_idle};
+use crate::pipe::{current, emit, last_stage_detail, question_of_run, runner_is_idle, Emit};
 use crate::rules::manifest::Manifest;
 use std::path::Path;
+use std::time::Duration;
 
 /// `pipe resume`。現在の段から続きの段だけを通す。
 pub(super) fn resume(args: &[String], manifest: &Manifest, policy: LockPolicy) -> Outcome {
@@ -89,8 +90,66 @@ pub(super) fn resume(args: &[String], manifest: &Manifest, policy: LockPolicy) -
             Err(reason) => refused(reason),
             Ok(runner) => ride_out_rate_limit(args, &id, runner, manifest, policy),
         },
+        // `Spawned` から再開できるのは **runner が死んだ便だけ**（host の再起動・OOM・kill で `SeatStopped` が
+        // 書かれないまま消えた形・設計 account-autonomy.md §4「runner が死んだ便の起こし直し」・C9）。生死は
+        // 唯一の wait で測り、生きている便は断る（runner を 2 本にしない）。
+        Ok(Stage::Spawned) => match need(args, "--runner") {
+            Err(reason) => refused(reason),
+            Ok(runner) => revive(args, &id, runner, manifest, policy),
+        },
         Ok(stage) => refused(format!("run {id} の段 {} からは再開しない", stage.as_str())),
     }
+}
+
+/// `Spawned` の便の runner の生死を測り、死んでいれば起こし直す（設計 account-autonomy.md §4・FR37 / AC39）。
+///
+/// 測るのは最後の `SeatSpawned` の pid で、唯一の wait（[`Completion::SeatGone`]・deadline 0）に問う——`Timeout` が
+/// 「生きている」で、typed に断って runner を 2 本にしない（判定行 `run=<id> runner=alive pid=<pid>`・rc 1・event 0 件・
+/// C3.3 / C3.4）。`SeatSpawned` / pid が無い周も断る（測れないを「死んだ」に読み替えない・fail-closed）。死んでいれば
+/// `SeatStopped detail=runner-dead`（pid 付き）を 1 件記帳してから、上限の周と同じ起こし直しの 1 本
+/// （[`ride_out_rate_limit`]: 計測 → 便用の選定 → `spawn_turn`）へ流す。未 commit の file は消さない（N1）。
+fn revive(args: &[String], id: &str, runner: &str, manifest: &Manifest, policy: LockPolicy) -> Outcome {
+    let state_dir = match state_dir_of(args) {
+        Ok(found) => found,
+        Err(reason) => return refused(reason),
+    };
+    let events = match store::read_all(&state_dir) {
+        Ok(found) => found,
+        Err(errors) => return Outcome::failed(RC_BROKEN, errors.iter().map(StoreError::to_string).collect()),
+    };
+    // 最後の `SeatSpawned` の行から pid と bead を読む（席の event の原本・replay の `Run` は pid を持たない）。
+    let seated = events
+        .iter()
+        .rev()
+        .find(|event| event.run == id && event.kind == EventKind::SeatSpawned)
+        .and_then(|event| Some((u32::try_from(event.pid?).ok()?, event.bead.as_str())));
+    let Some((pid, bead)) = seated else {
+        return refused(format!("run {id} の runner の pid を読めない（Spawned から再開できるのは runner が死んだ便だけ）"));
+    };
+    if fleet::wait(Completion::SeatGone(pid), Duration::ZERO) == Err(Timeout) {
+        return Outcome {
+            out: vec![format!("run={id} runner=alive pid={pid}")],
+            err: vec![format!("pipe: run {id} の runner が起きている（pid {pid}・隣にもう 1 つ起こさない）")],
+            rc: RC_REFUSED,
+        };
+    }
+    let stopped = emit(
+        &state_dir,
+        &Emit {
+            kind: EventKind::SeatStopped,
+            run: id,
+            bead,
+            stage: None,
+            seat: Some(id.to_owned()),
+            pid: Some(u64::from(pid)),
+            detail: Some(follow::RUNNER_DEAD.to_owned()),
+        },
+        policy,
+    );
+    if let Err(err) = stopped {
+        return broken(err.to_string());
+    }
+    ride_out_rate_limit(args, id, runner, manifest, policy)
 }
 
 /// `--runner` を読んで、その段の便を起こし直す（`resume` の各段が共有する形・`--runner` 欠けは rc 1）。

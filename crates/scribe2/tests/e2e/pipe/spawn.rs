@@ -734,15 +734,13 @@ fn blocking_lens(marker: &Path, pid_file: &Path) -> String {
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
-fn spawn_run_child(repo: &Path, state: &Path, contract: &Path, lens: &str) -> Child {
+fn spawn_run_child(repo: &Path, state: &Path, contract: &Path, runner: &str, lens: &str) -> Child {
     use std::os::unix::process::CommandExt;
     Command::new(bin())
         .args([
             "pipe", "run", "--contract", &contract.display().to_string(), "--bead", "s2-kill",
             "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
-            "--rules", &ceiling_rules(state),
-            "--runner", "echo x >> src/lib.rs && git add -A && git commit -q -m runner",
-            "--lens", lens,
+            "--rules", &ceiling_rules(state), "--runner", runner, "--lens", lens,
         ])
         .process_group(0)
         .stdin(Stdio::null())
@@ -798,7 +796,7 @@ fn killed_at_implemented(repo: &Path, state: &Path, contract: &Path) -> (String,
     let marker = state.join("lens-ran");
     let pid_file = state.join("lens-sleep.pid");
     let lens = blocking_lens(&marker, &pid_file);
-    let mut child = spawn_run_child(repo, state, contract, &lens);
+    let mut child = spawn_run_child(repo, state, contract, TOY_COMMIT, &lens);
     let pid = child.id();
     let id = wait_for_implemented(state, &mut child);
     kill_group(pid);
@@ -899,6 +897,199 @@ fn pipe_resume_kill_dead_owner_lock_does_not_block_resume() {
     assert!(stdout_of(&landed).contains("landed="), "{}", stdout_of(&landed));
     assert!(show_line(&repo, &state, &id).contains("stage=Landed"), "段は Landed");
     assert!(!lock.exists(), "land の後も lock は残らない");
+    clean(&[&repo, &state]);
+}
+
+// ───── runner が死んだ便の起こし直し（`s2-07l.323`・設計 account-autonomy.md §4・SRS FR37 / AC39・接頭辞 `pipe_resume_kill_at_spawned_`） ─────
+//
+// `Spawned` の段で runner の process が消えた便（host の再起動・OOM・kill で `SeatStopped` が書かれないまま死んだ形）に
+// `resume --runner` を撃つ。生死は唯一の wait（`Completion::SeatGone`）で測り、死んでいれば `SeatStopped detail=runner-dead`
+// を記帳して**同じ worktree** で起こし直す（途中再開の節に未 commit の一覧）。生きていれば typed に断って runner を
+// 2 本にしない。実 signal は自分が起こした子の group にだけ送る（上の `kill_group` の前提 assert のまま）。
+
+/// 前の turn が worktree に残す未 commit の file（契約の write-set に `+` で宣言する新規 file）。
+const WIP_FILE: &str = "src/wip.rs";
+
+/// turn 1 つ分の本文: write-set の file を 1 つ書き（**commit しない**）、`sleep` を背景に起こして pid を書き、前景で
+/// 待つ（作業の途中で止まっている runner＝殺す窓・`blocking_lens` と同型）。pid file は「file を書き終えた」印でもある。
+fn wip_then_wait_turn(pid_file: &Path) -> String {
+    format!(
+        "printf 'wip\\n' > {WIP_FILE}\nsleep 300 </dev/null >/dev/null 2>&1 &\necho $! > '{}'\nwait\n",
+        pid_file.display()
+    )
+}
+
+/// `SeatSpawned` と turn 1 の pid file が揃うまで 20ms 間隔で読む（上限 60s・その間 `child` が終わっていないことを
+/// 毎周 assert・読めない行は飛ばす＝[`wait_for_implemented`] と同型）。返すのは（便 id・`SeatSpawned` の pid〔runner の
+/// group leader〕・turn 1 の `sleep` の pid）。
+fn wait_for_seat_spawned(state: &Path, child: &mut Child, pid_file: &Path) -> (String, u32, u32) {
+    let begun = Instant::now();
+    loop {
+        let seated = fs::read_to_string(state.join("fleet").join("events.jsonl"))
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|line| Event::from_line(line).ok())
+            .find(|event| event.kind == EventKind::SeatSpawned)
+            .and_then(|event| Some((event.run, u32::try_from(event.pid?).ok()?)));
+        let sleeper = fs::read_to_string(pid_file).ok().and_then(|text| text.trim().parse::<u32>().ok());
+        if let (Some((id, pid)), Some(sleeper)) = (seated, sleeper) {
+            return (id, pid, sleeper);
+        }
+        assert!(child.try_wait().ok().flatten().is_none(), "pipe run が SeatSpawned の前に終わった");
+        assert!(begun.elapsed() < Duration::from_secs(60), "SeatSpawned にならない");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// `/proc/<pid>` が消えるまで待つ（上限 10s・親を殺した後の zombie が init に回収されるのを待つ形）。
+fn wait_gone(pid: u32) {
+    let begun = Instant::now();
+    while proc_alive(pid) {
+        assert!(begun.elapsed() < Duration::from_secs(10), "pid {pid} が消えない");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// 未 commit の file を書いて待つ runner で `pipe run` を子として起こし、`SeatSpawned` が出た時点で **`pipe run` の group →
+/// runner の group** の順に SIGKILL する（host の再起動で両方が消えた形）。`pipe run` を先に殺すのは、runner が先に
+/// 消えると生きている `pipe run` がその終了を見届けて `SeatStopped` と `Failed` を記帳し、作りたい「`SeatStopped` の無い
+/// `Spawned`」にならないため。返すのは（便 id・runner の pid・turn 2 以降の本文を持つ runner cmd）。
+fn killed_at_spawned(repo: &Path, state: &Path, rest: &[String]) -> (String, u32, String) {
+    let contract = write_set_contract(repo, "wip.toml", &["src/lib.rs", &format!("+{WIP_FILE}")]);
+    let pid_file = state.join("wip-sleep.pid");
+    let mut turns = vec![wip_then_wait_turn(&pid_file)];
+    turns.extend(rest.iter().cloned());
+    let runner = turn_runner(state, &turns);
+    let marker = state.join("lens-ran");
+    let lens = fake_lens(&marker, &lens_verdict("PASS"));
+    let mut child = spawn_run_child(repo, state, &contract, &runner, &lens);
+    let (id, runner_pid, sleeper) = wait_for_seat_spawned(state, &mut child, &pid_file);
+    kill_group(child.id());
+    child.wait().ok();
+    kill_group(runner_pid);
+    reap_own(sleeper);
+    wait_gone(runner_pid);
+    assert_eq!(kind_count(state, &id, EventKind::SeatStopped), 0, "前提: SeatStopped の無い Spawned");
+    assert!(show_line(repo, state, &id).contains("stage=Spawned"), "前提: 段は Spawned");
+    assert!(worktree_of(repo, &id).join(WIP_FILE).exists(), "前提: 未 commit の file が worktree に在る");
+    (id, runner_pid, runner)
+}
+
+/// 便の `SeatStopped` のうち detail が `runner-dead` の件数。
+fn runner_dead_count(state: &Path, id: &str) -> usize {
+    events(state)
+        .iter()
+        .filter(|found| {
+            found.run == id && found.kind == EventKind::SeatStopped && found.detail.as_deref() == Some("runner-dead")
+        })
+        .count()
+}
+
+/// runner が死んだ便に口座 a1 の置き場で `resume --runner` を撃つ（計測は偽 curl・選定は §3 の便用の規則）。
+fn resume_dead_runner(repo: &Path, state: &Path, id: &str, runner: &str) -> Output {
+    let rules = resume_rules(state, &["a1"]);
+    put_account(state, "a1", &[windows(30, 30)]);
+    run_pipe(&[
+        "resume", "--run", id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(), "--runner", runner,
+        "--rules", &rules, "--curl", &fake_usage_curl(state),
+    ])
+}
+
+/// (a) runner が死んだ `Spawned` の便に `resume --runner` を撃つと rc 0 で、`SeatStopped detail=runner-dead` を 1 件・
+/// `Spawned detail=account:a1,resume:runner-dead` を 1 件記帳し、**同じ worktree**（`worktree=` の path が不変）で
+/// 2 回目の runner が起きて `Implemented` に至る。1 回目が書いた未 commit の file は worktree に残る（N1）。
+#[test]
+fn pipe_resume_kill_at_spawned_respawns_in_same_worktree() {
+    let (repo, state) = repo_with_state();
+    let base = git(&repo, &["rev-parse", "refs/heads/main"]);
+    let (id, _runner_pid, runner) = killed_at_spawned(&repo, &state, &[IMPLEMENT.to_owned()]);
+    let before = show_line(&repo, &state, &id);
+
+    let resumed = resume_dead_runner(&repo, &state, &id, &runner);
+    assert_eq!(resumed.status.code(), Some(i32::from(RC_OK)), "{} / {}", stdout_of(&resumed), stderr_of(&resumed));
+    assert!(stdout_of(&resumed).contains(&format!("run={id} next=spawn account=a1")), "{}", stdout_of(&resumed));
+    assert!(stdout_of(&resumed).contains(&format!("run={id} stage=Implemented")), "{}", stdout_of(&resumed));
+    assert_eq!(runner_dead_count(&state, &id), 1, "runner の死亡を 1 件記帳する");
+    assert_eq!(
+        spawned_details(&state, &id),
+        vec![format!("base:{base}"), "account:a1,resume:runner-dead".to_owned()],
+        "起こし直しの記帳は理由を runner-dead と名乗る"
+    );
+    assert_eq!(stub_calls(&state), 2, "runner を 1 回起こし直した");
+    let after = show_line(&repo, &state, &id);
+    assert!(after.contains("stage=Implemented"), "2 回目の runner で Implemented: {after}");
+    let worktree_of_line = |line: &str| line.split("worktree=").nth(1).map(str::to_owned);
+    assert_eq!(worktree_of_line(&before), worktree_of_line(&after), "同じ worktree で起き直る: {before} / {after}");
+    let worktree = worktree_of(&repo, &id);
+    assert!(worktree.join(WIP_FILE).exists(), "1 回目の未 commit の file を消さない（N1）");
+    assert_eq!(git(&worktree, &["rev-list", "--count", "refs/heads/main..HEAD"]), "1", "2 回目の commit が同じ worktree に載る");
+    assert!(!events(&state).iter().any(|event| event.actor == "human"), "人手なしで継いだ（C9）");
+    clean(&[&repo, &state]);
+}
+
+/// (b) (a) の 2 回目の stdin: 「途中再開」節が契約の後に在り、理由の行（runner の死亡）と未 commit の file 名の行
+/// （`git status --porcelain` の形）が載る。止まった時刻は `SeatStopped detail=runner-dead` の ts。
+#[test]
+fn pipe_resume_kill_at_spawned_lists_uncommitted_in_prompt() {
+    let (repo, state) = repo_with_state();
+    let (id, _runner_pid, runner) = killed_at_spawned(&repo, &state, &[IMPLEMENT.to_owned()]);
+    let resumed = resume_dead_runner(&repo, &state, &id, &runner);
+    assert_eq!(resumed.status.code(), Some(i32::from(RC_OK)), "{} / {}", stdout_of(&resumed), stderr_of(&resumed));
+    // 2 回目の runner の行儀よい `SeatStopped` が後ろに在るので、理由つきの行を名指して読む。
+    let stopped_at = events(&state)
+        .into_iter()
+        .filter(|event| {
+            event.run == id && event.kind == EventKind::SeatStopped && event.detail.as_deref() == Some("runner-dead")
+        })
+        .map(|event| event.ts)
+        .next_back()
+        .unwrap_or_default();
+    let prompt = stub_stdin(&state, 2);
+    let (contract_at, resume_at) = (prompt.find("goal = "), prompt.find("## 途中再開"));
+    assert!(matches!((contract_at, resume_at), (Some(c), Some(r)) if c < r), "契約 → 途中再開 の順: {prompt}");
+    assert!(!prompt.contains("## 回答") && !prompt.contains("## 追随"), "質問も追随も無い便: {prompt}");
+    let reason = format!("- 前の turn は {stopped_at} に runner の死亡で止まった（process が消えた）");
+    assert!(!stopped_at.is_empty() && prompt.contains(&reason), "理由の行（SeatStopped の ts）: {prompt}");
+    assert!(prompt.contains("未 commit の変更（worktree に在る・消さない・続きから commit する）:"), "一覧の見出し: {prompt}");
+    assert!(prompt.contains(&format!("\n  - ?? {WIP_FILE}")), "未 commit の file 名の行: {prompt}");
+    assert!(prompt.contains("base からの commit（worktree に在る・やり直さない）: なし"), "commit の無い便は なし: {prompt}");
+    assert!(!stub_stdin(&state, 1).contains("## 途中再開"), "初回の turn には節が無い");
+    clean(&[&repo, &state]);
+}
+
+/// (c) `pipe run` の group だけを殺して runner を生かした周: `resume --runner` は rc 1・判定行 `runner=alive pid=<pid>`・
+/// event 0 件（母集団 = 撃つ前後の event 数）で、runner を 2 本にしない。その後 `reap_own` で runner を畳む。
+#[test]
+fn pipe_resume_kill_at_spawned_refuses_while_runner_alive() {
+    let (repo, state) = repo_with_state();
+    let contract = write_set_contract(&repo, "wip.toml", &["src/lib.rs", &format!("+{WIP_FILE}")]);
+    let pid_file = state.join("wip-sleep.pid");
+    let runner = turn_runner(&state, &[wip_then_wait_turn(&pid_file), IMPLEMENT.to_owned()]);
+    let marker = state.join("lens-ran");
+    let lens = fake_lens(&marker, &lens_verdict("PASS"));
+    let mut child = spawn_run_child(&repo, &state, &contract, &runner, &lens);
+    let (id, runner_pid, sleeper) = wait_for_seat_spawned(&state, &mut child, &pid_file);
+    kill_group(child.id());
+    child.wait().ok();
+    assert!(proc_alive(runner_pid), "前提: runner {runner_pid} は生きている");
+
+    let before = event_count(&state);
+    let resumed = resume_dead_runner(&repo, &state, &id, &runner);
+    let alive = proc_alive(runner_pid);
+    let calls = stub_calls(&state);
+    let after = event_count(&state);
+    // 片付け: 自分の子孫の `sleep` を止める → runner の script が `wait` から戻って畳まれる。
+    reap_own(sleeper);
+    wait_gone(runner_pid);
+
+    assert_eq!(resumed.status.code(), Some(i32::from(RC_REFUSED)), "生きている runner の便は断る: {}", stdout_of(&resumed));
+    assert!(stdout_of(&resumed).contains(&format!("run={id} runner=alive pid={runner_pid}")), "判定行: {}", stdout_of(&resumed));
+    assert!(stderr_of(&resumed).contains("起きている"), "理由を名乗る: {}", stderr_of(&resumed));
+    assert!(alive, "runner を殺さない");
+    assert_eq!(calls, 1, "runner を 2 本にしない");
+    assert_eq!(after, before, "event 0 件");
+    assert_eq!(runner_dead_count(&state, &id), 0, "生きている便に runner-dead を書かない");
     clean(&[&repo, &state]);
 }
 
