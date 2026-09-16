@@ -94,7 +94,7 @@ C1 / C5（権能の値は行・裁定 id）・C1.2（生成文に手書きの規
 
 - 何が起きているか: `crates/scribe2/tests/e2e/seat/cycle.rs` の inject の歯は、pane の script が `stty -echo` を終える前に inject が届くと tty の echo で「届いた」に化ける（gate 3 本同時の負荷で timing が動き、単独では緑・.304 run 1 の変異 baseline で 1 本落ちた・s2-07l.334 と同じ型）。壁時計の等号を pin する fixture は flaky（C12.6）。
 - 形: pane の script は `stty -echo` の後に固定の合図（1 行の sentinel）を出し、歯は capture-pane の polling（上限付き・壁時計の等号を pin しない）で合図を見てから inject を撃つ。同じ file の壁時計依存の歯（sleep を pane の script に持ち送達の有無を時間で測るもの）を同じ形に揃える（母集団 = 該当した歯の本数を notes へ）。本体（`seat/inject.rs` 等）は触らない。
-- 検証の形: 歯の内容が変わる便ゆえ flip は「変更された歯が base で違う挙動」の形。base で RED を作れない周は歯を新設の名に改名して旧名を消す。負荷下の再現は `--test-threads 8` で 5 周回して赤 0（母集団 = 5 周 × 本数）を notes へ。
+- 検証の形: 本体不変の歯だけの便＝base で RED を作れないので `// flip-check: retroactive s2-07l.342` の札で flip-check を通す（pipeline.md §5.3 の対の規則・account-autonomy.md §12 / gate-cost.md §20 と同じ型）。改名は RED の根拠にしない（名は `seat_inject_` の接頭辞を保つ）。負荷下の再現は `--test-threads 8` で 5 周回して赤 0（母集団 = 5 周 × 本数）を notes へ。
 
 ## 13. role guard の断りの理由を閉じた enum に・代替ルートを添える（契約表の行 g・`s2-07l.308`）
 
