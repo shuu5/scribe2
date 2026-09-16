@@ -118,6 +118,22 @@ C1 / C5（R-C9-1 は行・裁定 id）・C2（`Purpose` / `Selection` / `Stage` 
 - 歯（`fleet_select_anchor_` 接頭辞・`tests/e2e/fleet.rs`）: 2 anchor の登録 row を置いた置き場で `--anchor` に片方を渡すと他方の席の口座が候補に入る（`chosen` がその口座）／`--anchor` 無しは従来どおり両方外れる／`pipe run` が便の repo を渡して他 repo の席の口座を `Spawned` の account に記す 1 本。
 - 却下: 除外を host の全 vessel の席へ広げる（`.328` の (a)(b)・user 裁定で却下）／launcher が `--exclude` で席を足す（ADR-0027「器の外の起動手順は除外を足さない」・N2）／登録 row を消して席の口座を候補に入れる（席の立て直しの口座が消える・N1.2）。
 
+## 15. lens の口座も器が選ぶ — gate の lens 起動に便用の選定を通し記帳する（契約表の行 l・`s2-07l.412`）
+
+- 何が起きているか（admin の実測 2026-09-16 11:5xZ・verified）: gate の lens 起動（`pipe/gate.rs` → `gate/lens.rs` の `ask_lens`）には `pipe/spawn.rs` の `with_account` が無く、器は lens の口座を選ばず記帳もしない。操作役の launcher（器の外）が前置きの select の口座を lens の起動行に書いて補っている（N2 の散文運用・§3「器の外の起動手順が除外を足すのは散文規則」と同型）。lens は runner と同じ `runner.model` の窓を消費する（[pipeline.md](./pipeline.md) §6）ので、選定なしでは席の口座や当たった口座で走りうる。
+- 形: (1) `pipe gate` は lens を起こす直前に §3 の便用の規則で口座を選ぶ（計測 → `select_for_run`〔便の repo・§14〕）。入力は `Pool::declared`（`--rules` / `--curl` は gate の引数から・`pipe/ratelimit.rs` の既存の口）。宣言 0 の周は従来どおり親の環境を継承する。(2) 起動行の末尾に `--account-dir <state_dir>/accounts/<label>` を足す口は `with_account` の **1 関数**を共有する（gate から呼べる可視性に変えるだけ・中身は不変）。(3) 記帳: `RunStage stage=Gated detail=verdict:<V>` の detail に `account:<label>` を足す（`Spawned` の detail と同じ語彙・人由来の event は 0）。(4) 候補なしの周は lens を起こさず INCONCLUSIVE（理由 `account:none=<reason>`）＝gate は待ちの口を持たない（`resume` が撃ち直す・`AccountFree` の待ちは §4 の runner 側だけ）。
+- 触らない: 純関数 `select` / `Pool` の形・runner の起動行と選定（§4）・lens の prompt と cap・launcher。
+- 歯（`pipe_gate_lens_account_` 接頭辞・`tests/e2e/pipe/gate.rs`）: 宣言口座 + 当たっていない実測を置いた置き場で、偽 lens が argv を写し、起動行の末尾に選んだ口座の `--account-dir` が在り `Gated` の detail に `account:<label>` が在る／宣言 0 の周は従来どおり `--account-dir` 無し／全口座が当たっている周は lens を呼ばず INCONCLUSIVE に `account:none` の理由。
+- 却下: launcher が lens の起動行に口座を書く（N2・記帳と実体が食い違う）／lens を runner と同じ口座に固定する（runner の口座が当たった直後の lens が同じ窓で落ちる）／gate で `AccountFree` を待つ（gate は段の判定で待ちを持たない・resume の撃ち直しで足りる）。
+
+## 16. 同じ flag の二重を断る — `--account-dir` が 2 つ在る起動行で器の選定が黙って無効になる穴（契約表の行 m・`s2-07l.411`）
+
+- 何が起きているか（admin の実測 2026-09-16 11:5xZ・verified）: headless の `flag()`（`headless/mod.rs`）は**最初の出現**を採る。launcher が runner の起動行に `--account-dir` を書き、器（`with_account`）が末尾に選んだ口座を足すと 2 つ並び、器の選定が黙って無効・`Spawned` の記帳（account:<label>）と実行の口座（子 claude の設定 dir）が食い違った（C10 の実測の出所が偽になる）。
+- 形: (1) `flag`（`headless/mod.rs`）は同名の flag が 2 回以上在る周を typed に断る（`Err`・理由に両方の値）＝runner / lens の全 flag に効く（読み手は 1 関数・C2）。(2) `with_account` は起動行に既に `--account-dir` が在れば足さずに spawn を断る（typed・理由に既存の値・N2 の混入を受付で止める・FailClosed）。(3) `Spawned` の `account:<label>` は器が足した口座だけ＝記帳と実行の一致は (1)(2) で構造的に成り、歯で pin する。
+- 触らない: `flag` の値の読み方（次の token・`--` 始まりは値でない）・runner / lens の他の引数・launcher。
+- 歯（`headless_flag_duplicate_` 接頭辞・`tests/e2e/headless.rs` と `tests/e2e/pipe/spawn.rs`）: runner の argv に `--account-dir` ×2 → claude を呼ばず引数不正の rc で断る（偽 claude の呼出 0）／lens も同じ／`with_account` は起動行に `--account-dir` が既に在ると足さずに断る（spawn の e2e・Spawned が記録されない）。
+- 却下: 最後の出現を採る（launcher の混入を黙って上書きする＝散文運用を器が受け入れる）／runner だけ直す（lens も同じ読み手）／`with_account` が既存の値を置換する（どちらが正か器に分からない・C10）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -170,4 +186,24 @@ write-set = ["crates/scribe2/src/fleet/replay.rs", "crates/scribe2/src/fleet/wai
 verify = ["cargo nextest run -p scribe2 --no-tests=fail fleet_select_anchor_"]
 size = "S"
 done = "他 repo の席の口座を持つ置き場で本 repo の便の選定がその口座を chosen に出し、--anchor 無しの fleet select は従来どおり全 row を外す"
+
+[[contract]]
+id = "l"
+title = "lens の口座も器が選ぶ — pipe gate が lens を起こす直前に便用の選定を通し、with_account の 1 関数で起動行に足し、Gated の detail に account:<label> を記帳する（候補なしは INCONCLUSIVE）"
+req = ["FR36", "FR33"]
+section = "15"
+write-set = ["crates/scribe2/src/pipe/gate.rs", "crates/scribe2/src/pipe/gate/lens.rs", "crates/scribe2/src/pipe/spawn.rs", "crates/scribe2/src/pipe/ratelimit.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/tests/e2e/pipe/gate.rs"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_gate_lens_account_"]
+size = "S"
+done = "宣言口座のある置き場で gate の lens 起動行の末尾に選んだ口座の --account-dir が在り Gated の detail に account:<label> が出て、宣言 0 は従来どおり、候補なしは lens を呼ばず INCONCLUSIVE"
+
+[[contract]]
+id = "m"
+title = "同じ flag の二重を断る — headless の flag（headless/mod.rs）が同名 2 回以上を typed に断り、with_account は起動行に既に --account-dir が在れば足さずに spawn を断る（記帳の口座と実行の口座の一致を歯で pin）"
+req = ["NFR4", "FR36"]
+section = "16"
+write-set = ["crates/scribe2/src/headless/mod.rs", "crates/scribe2/src/headless/runner.rs", "crates/scribe2/src/headless/lens.rs", "crates/scribe2/src/pipe/spawn.rs", "crates/scribe2/tests/e2e/headless.rs", "crates/scribe2/tests/e2e/pipe/spawn.rs"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail headless_flag_duplicate_"]
+size = "S"
+done = "runner / lens の argv に同じ flag が 2 つ在ると claude を呼ばずに断り、with_account は既に --account-dir を持つ起動行を足さずに断って Spawned を記録しない"
 <!-- contracts:end -->
