@@ -251,6 +251,77 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
 - 形: rules 行 runner.effort（kind RunnerEffort・Str・値 high・裁定 id 付き・C5）を `rules/manifest.toml` に足し `rules/mod.rs` の閉じた enum に variant 1 つ。effort の型は headless に置く（閉じた enum Effort = Low / Medium / High / Xhigh・宣言順の const slice・alias = CLI の字面・parse は完全一致）。読み口は runner_model と同じ形の runner_effort（行が無い / 不発効 / 文字列でない / 表に無いの 4 理由）。Call に effort を足し build が `--model` の直後に `--effort <値>` を毎回渡す。runner と lens は同じ manifest から読み、読めない周は claude を呼ばず rc 2（model と同じ極性・順序 = cap → model → effort）。計測の Call（`fleet/usage.rs`）は None で挙動不変。歯の fixture の manifest には effort の行を同じ helper で足す。
 - 触らない: `pipe/`・`seat/`・headless の雛形 txt・`.vessel.toml`。依存を足さない。
 
+## 17. lens の verdict に findings の閉じた category と母集団を必須にする（契約表の行 k・`s2-07l.188`）
+
+- 出所: research ponytail §4 (1)・監査 2026-09-12 塊 21（`.175`: lens の verdict に母集団が無く「0 件」と「未測」を弁別できない）。`.175` は本便に統合する（同じ record・同じ雛形）。
+- 現物: lens の雛形は `crates/scribe2/src/headless/lens.txt`（`crates/scribe2/src/headless/lens.rs` の `include_str!`）で、verdict は `pipe/gate.rs` が `verdict.json` に書き `Gated` を記帳する。`pipe/gate/lens.rs` の `parse_lens` が拾う key は verdict と evidence の 2 つだけである。
+- 形: findings の観点を閉じた enum にする（`pipe/gate.rs` か新規 module `pipe/gate/findings.rs`）。variant は既存の観点 3 つ（contract-fit / teeth-nonvacuous / constitution）と過剰設計 5 種（delete / stdlib / native / yagni / shrink）の 8 つで、宣言順の一覧と字面変換を 1 箇所に閉じる。
+- `parse_lens` に `findings=<category:件数,…>`（8 category を 0 も含めて全部）と `population=<files:<n>,lines:<n>>` を必須 key として足し、欠落・母集団 0 の周は `Verdict` を Inconclusive に倒す（既存の測り直し経路をそのまま使う）。`verdict.json` にも同じ field を持たせ、`Gated` の detail は変えない。
+- 雛形 `lens.txt` に観点 8 行（pointer 付き・判断は lens に残す）と出力の形（2 key の字面）を足し、外形を snapshot で pin する。歯の偽 lens（`fake_lens`）は 2 key を出す形に改める。
+- 触らない: verdict の 3 値・lens の本数と予算（rules 行）・runner の雛形。
+
+## 18. land の stale base を人手なしで追随し直し、resume が Gated(PASS) を受ける（契約表の行 l・`s2-07l.335`）
+
+- 出所: admin 報告（`.329` run 2）: 追随の撃ち直し中に main が動くと `pipe land` が stale base の rc 1 で抜け、`pipe run` はそこで終了する＝段は `Gated`（PASS）のまま次の land を撃つ主体が無い。user 直命: dispatcher の仕組みを最優先にし、admin が手で撃ち直す穴を器で塞ぐ。
+- 現物: `pipe/land.rs` の `land` 関数が stale base を refused で返す。`pipe/cli.rs` の `resume` は `Stage::Gated` の周を `verdict_of` の値で分けている。`pipe/follow.rs` は起こし直しの上限を rules 行 `pipe.follow_retries` で持ち、回数は replay から導く（`EXHAUSTED`）。
+- 形: `pipe run` の着地の段で land が stale base を返した周は `RunStage`（`stage=Gated detail=stale:<base>..<main>`）を記帳し、同じ追随の経路（rebase → gate の撃ち直し → 順番待ち → land）へ戻る。回数は既存の `pipe.follow_retries` の判定に「起こし直し 1 回」として数え、上限に当たれば typed な `Failed` で終端する（既存の終端の型を使い新しい理由の variant は増やさない）。
+- `pipe resume` が `Stage::Gated` かつ `Verdict::Pass` の便を受け、同じ追随の経路へ入れるようにする（`verdict_of` が読む値・land の CAS・stale の判定は不変）。verdict が Pass でない周は従来どおり断る。
+- 触らない: `land` の CAS と stale の判定・`follow_retries` の値・`pipe/queue.rs`。
+- 却下: stale を state dir に記録するだけで撃ち直しは人に任せる（撃つ主体が席のまま残る）／新しい rules 行を作る（既存の `pipe.follow_retries` で足りる）。
+
+## 19. pipeline 外の merge のための着地列の待ち口（契約表の行 m・`s2-07l.212`）
+
+- 出所: planner の実測: docs PR の squash merge が `Gated`（PASS）の便の追随を 1 周誘発する。いまは「Gated PASS の便が 0 の窓か Landed の直後に merge」を席の運用（散文）で守っている＝規則ではない。
+- 現物: 着地の列は `pipe/queue.rs` の `turn_in` / `await_turn` が読む。唯一の wait は `fleet/wait.rs` の `Completion`（`LandTurn` / `SlotFree` / `AccountFree` は pid を見張らない variant）。
+- 形: `Completion` に pid を見張らない variant を 1 つ足す（窓の待ち）。判定条件は、着地の列に PASS の便が 0 本かつ `Landed` の記帳から追随中の便が無いこと。既存の deadline・唯一の wait の経路をそのまま通す。
+- 新しい subcommand の口（`pipe land-window`）を足す。窓が開いていれば rc 0 で `clear` を、待ちが切れれば rc 1 で列の便を名指した `busy` を返す。席の docs merge はこの口を前置して撃ち、散文の窓判断を消す。
+- 触らない: `gh pr merge` 自体（器は merge を撃たない）・列の順序・`LandTurn`。
+- 却下: docs-only PR も器が `gh` を撃って merge する（外部 binary を撃つ面が増える）／運用のまま据え置く（規則が散文のまま）。
+
+## 20. runner の雛形に終端の規律を足し片付けで殺した子の数を記録する（契約表の行 n・`s2-07l.275`）
+
+- 出所: admin の観測（`.270` run 1）: runner が「flip-check を背景で回している・完了通知を待つ」と言って turn を閉じ（rc 0）、背景の task が scope の片付けで止められた。
+- 現物: `crates/scribe2/src/headless/runner.txt` に「背景実行で turn を閉じない」の規律は無い。`headless/mod.rs` の片付けは `pipe/confine.rs` の `release_scope` が行い、片付けで殺した子の数は record に残らない。
+- 形: 雛形 `runner.txt` に「検証は前面で完走させてから turn を閉じる（背景実行を残して終えない・残した task は片付けで止められ done に数えない）」の 1 行を足し、雛形の外形を snapshot で pin する。
+- `release_scope` が scope を止める直前に scope に残った process の数を読み、record に `orphans=<n|->` として残す（0 も書く・読めなければ `-`）。
+- 触らない: 片付けの極性（止める）・runner の権限。
+- 却下: 背景 task を待ってから片付ける（turn の終端の規律が曖昧になる）／雛形だけ直す（殺した事実が記録に残らない）。
+
+## 21. gate の段の通知行を rc に依らず record と stderr に残す（契約表の行 o・`s2-07l.293`）
+
+- 出所: `.286` の gate が 2 周とも lens への入力が diff だったのに理由語が残らなかった（run.stderr 0 bytes）。同じ形は precheck の注意行・追随の rebase の行にも当たる。
+- 現物: gate は理由を `notice()`（`pipe/move_proof.rs`）で出すが、`pipe/cli/run.rs` の `chain` 関数は rc 0 の段の err を捨てて out だけを繋ぐ。run dir にも書かれない（`lens-input.txt` は要約の周だけ残る）。
+- 形: `chain` が rc 0 の段の err を保持し、`pipe run` の stderr に段の順で出す（stdout の判定行は不変）。
+- gate の record（`pipe/gate/record.rs`）の step 行と同じ log に `lens-input=<kind> reason=<語>` を追記する（要約の周も diff の周も・run dir に残る）。
+- 触らない: 判定の極性・`notice()` の語彙・lens の入力の選び方。
+- 却下: stderr にだけ出す（run dir に残らず事後に読めない）／record にだけ書く（席が run の場で読めない）。
+
+## 22. 撃ち直しの間も着地の番を先頭に保つ（契約表の行 p・`s2-07l.305`）
+
+- 出所: admin の現物確認: `.294` が `.279` を追い抜き、`.279` が撃ち直し 1 周分を余計に払った。
+- 現物: `pipe/queue.rs` の `turn_in` は「最初の `Gated` の ts が自分より小さい PASS の便」だけを前に数える。`pipe/land.rs` は `await_turn` を追随の前に 1 回だけ撃ち、撃ち直しの後は番を読み直さない。鍵の早い便が Inconclusive で一度列を離れて戻ると先頭が 2 つになる。
+- 形: `await_turn` が「自分の番」と判定した周に `RunStage`（`stage=Gated detail=turn:taken`）を 1 行追記する（既存の段の event・detail で弁別・新しい kind は足さない）。
+- `turn_in` は「鍵が自分より小さい PASS の便」に加えて「`turn:taken` を記帳済みで終端でない便」も前に数える（自分自身は除く・`Queued` に導出の field を 1 つ足す）。番を取った便が `Landed` / `Stopped` / `Failed` で終端すれば外れる（既存の条件）。
+- 触らない: 鍵（最初の `Gated` の ts）の定義・stale base の判定・`await_turn` の待ち（唯一の wait）。
+- 却下: 撃ち直しの後に番を読み直す（払う側が入れ替わるだけで 1 周の損失は消えない）／受容する（dispatcher で便が増えると追い抜きの頻度が上がる）。
+
+## 23. stop 起因の終端を oom-kill に誤分類しない（契約表の行 q・`s2-07l.340`）
+
+- 出所: admin 実測: `.336` run 2 を `pipe stop` した同じ秒に `RunStage`（`stage=Failed detail=oom-kill`）が記録され、その後 `RunStopped` で最終的に `Stopped` になった（直後の available memory は圧迫なし）。
+- 現物: `pipe/spawn.rs` の `OOM_DETAIL`（"oom-kill"）・`pipe/confine.rs` の `Reason::OomKill`（終端行の `oom_kill` ≥ 1 で判定・`pipe/gate/lens.rs`）・`pipe/stop.rs` は席を止め切ってから `RunStopped` を書く。stop の終端検出が「runner が消えた」を oom-kill に倒す経路が疑われる（kernel の証拠は権限で未確認）。
+- 形: `pipe stop` は signal を送る前に、その run の「停止中」の印を書く。runner の消滅を見た経路（`pipe/spawn.rs` の終端検出）は、その run が停止中なら `Failed detail=oom-kill` を書かず `RunStopped` の経路に任せる。
+- oom-kill は `Reason::OomKill` の既存の判定条件（終端行の `oom_kill` ≥ 1）が在る周だけに限る。終端行が無い / 読めない周は `Reason` に variant を 1 つ足し（unknown・`as_str`）、`Failed detail=unknown` に倒す（0 と「測れない」を融合しない）。
+- 触らない: stop の極性（止め切れなければ `RunStopped` を書かない）・oom の閾値。
+- 却下: dmesg / journalctl を読む（権限と host 依存）／stop 後の `Failed` を後から書き換える（append-only の log を汚す）。
+
+## 24. pipe retire が受ける終端の段を広げる（契約表の行 r・`s2-07l.132`）
+
+- 出所: `s2-07l.127` phase 1 / 2 の実測: gate FAIL で終端した run の worktree が live のまま残り、`pipe retire` は限られた段しか受けないので操作役が畳めない。dispatcher で便が増えると FAIL 終端の worktree が積む。
+- 現物: `pipe/retire.rs` の `retire` 関数は「在るか・clean か」だけを検査し段を動かさず `retired/` へ move する。受ける段の弁別は呼び手（`pipe/cli.rs` の `discriminate`）が持ち、`Extra::Retire` は現状 `Stage::Gated`（verdict が `Verdict::Fail`）と `Stage::Failed`（detail が `REBASE_EMPTY` か `follow::EXHAUSTED`）だけを受ける。
+- 形: `discriminate` が `Extra::Retire` に対して受ける便の条件を「終端の段（`Stage` の終端＝`Landed` / `Stopped` / `Failed`〔detail を問わない〕）∧ `Gated` で最新 verdict が `Fail`」に広げる。clean の検査と `retired/` への move は不変。段は動かさない（`RunStage detail=retired` の記帳も不変）。
+- 触らない: 非終端（`Spawned` / `Implemented` / `Gated`(PASS)）の便は断る（退行の pin）・`stop` の極性。
+- 却下: 手で `git worktree remove`（pipeline の外・不可逆）／段を新しい `Retired` の variant に動かす（`.128` の裁定に反する）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -355,4 +426,84 @@ write-set = ["rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "crates/s
 verify = ["cargo nextest run -p scribe2 --no-tests=fail headless_runner_passes_effort_ headless_lens_passes_effort_ headless_runner_refuses_"]
 size = "S"
 done = "偽 claude で runner と lens を撃つと argv に effort の値が rules 行のとおり載り、行の無い manifest と表に無い値は rc 2 で claude の呼出 0"
+
+[[contract]]
+id = "k"
+title = "lens の verdict に findings の閉じた category と件数・母集団を必須 key にする — 欠落と母集団 0 は INCONCLUSIVE"
+req = ["FR9", "NFR1"]
+section = "17"
+write-set = ["crates/scribe2/src/pipe/gate.rs", "+crates/scribe2/src/pipe/gate/findings.rs", "crates/scribe2/src/headless/lens.txt", "crates/scribe2/src/headless/lens.rs", "crates/scribe2/tests/e2e/pipe.rs", "crates/scribe2/tests/e2e/pipe/gate.rs", "crates/scribe2/tests/e2e/headless.rs", "crates/scribe2/tests/e2e/snapshots/e2e__headless__lens_prompt_external_form.snap", "crates/scribe2/tests/e2e/snapshots/e2e__pipe__pipe_external_form.snap", "docs/design/pipeline.md"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_gate_findings_"]
+size = "M"
+done = "lens の verdict が category ごとの件数と母集団を必ず持ち、欠落は INCONCLUSIVE"
+
+[[contract]]
+id = "l"
+title = "land の stale base を同じ経路で人手なしで追随し直し、resume が Gated(PASS) の便を受ける"
+req = ["FR30", "FR50"]
+section = "18"
+write-set = ["crates/scribe2/src/pipe/cli/run.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/follow.rs", "crates/scribe2/src/pipe/land.rs", "crates/scribe2/tests/e2e/pipe/land.rs", "crates/scribe2/tests/e2e/pipe/lifecycle.rs", "docs/design/pipeline.md"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_land_stale_"]
+size = "S"
+done = "toy repo で stale base の便が人手なしで追随して Landed し、上限は typed な Failed"
+
+[[contract]]
+id = "m"
+title = "着地列の窓の待ちを Completion に足し、pipeline 外の docs merge が pipe land-window を前置して撃つ"
+req = ["FR30", "FR50"]
+section = "19"
+write-set = ["crates/scribe2/src/fleet/wait.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/queue.rs", "crates/scribe2/tests/e2e/pipe/land.rs", "crates/scribe2/tests/e2e/fleet.rs", "crates/scribe2/tests/e2e/snapshots/e2e__pipe__pipe_external_form.snap", "docs/design/pipeline.md"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_land_window_"]
+size = "S"
+done = "偽の列で窓の開閉が rc と 1 行で判り、席の docs merge が散文の窓判断を持たない"
+
+[[contract]]
+id = "n"
+title = "runner の雛形に turn 終端の規律を足し、片付けで殺した子の数を record に残す"
+req = ["FR5", "FR22"]
+section = "20"
+write-set = ["crates/scribe2/src/headless/runner.txt", "crates/scribe2/src/pipe/confine.rs", "crates/scribe2/src/headless/mod.rs", "crates/scribe2/tests/e2e/headless.rs", "crates/scribe2/tests/e2e/snapshots/e2e__headless__headless_runner_prompt_external_form.snap", "docs/design/pipeline.md"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail headless_release_orphans_ headless_runner_prompt_"]
+size = "S"
+done = "runner の雛形が終端の規律を持ち、片付けで殺した子の数が record に残る"
+
+[[contract]]
+id = "o"
+title = "gate の段の通知行を rc に依らず record と run の stderr に残す"
+req = ["FR8", "FR22"]
+section = "21"
+write-set = ["crates/scribe2/src/pipe/cli/run.rs", "crates/scribe2/src/pipe/gate.rs", "crates/scribe2/src/pipe/gate/record.rs", "crates/scribe2/tests/e2e/pipe/gate.rs", "crates/scribe2/tests/e2e/pipe/lifecycle.rs", "docs/design/pipeline.md"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_gate_notice_"]
+size = "S"
+done = "成功した便でも要約にならなかった理由が record と stderr に残る"
+
+[[contract]]
+id = "p"
+title = "着地の番を取った事実を記帳し、撃ち直しの間も番を鍵の順と独立に列の先頭に残す"
+req = ["FR50", "FR30"]
+section = "22"
+write-set = ["crates/scribe2/src/pipe/queue.rs", "crates/scribe2/src/pipe/land.rs", "crates/scribe2/tests/e2e/pipe/land.rs", "docs/design/pipeline.md"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_land_turn_"]
+size = "S"
+done = "偽の列で番を取った便が鍵の順と独立に先頭に残る"
+
+[[contract]]
+id = "q"
+title = "pipe stop 起因の終端を oom-kill に誤分類せず、kernel の証拠が無い kill は unknown に倒す"
+req = ["FR22", "FR46"]
+section = "23"
+write-set = ["crates/scribe2/src/pipe/stop.rs", "crates/scribe2/src/pipe/spawn.rs", "crates/scribe2/src/pipe/confine.rs", "crates/scribe2/src/pipe/gate/lens.rs", "crates/scribe2/tests/e2e/pipe/spawn.rs", "crates/scribe2/tests/e2e/pipe/lifecycle.rs", "docs/design/pipeline.md"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_spawn_terminal_reason_"]
+size = "S"
+done = "stop した便が oom-kill に分類されず、証拠の無い kill は unknown"
+
+[[contract]]
+id = "r"
+title = "pipe retire が受ける終端の段を Stage の終端全部（detail 不問）と Gated(FAIL) に広げる"
+req = ["FR34"]
+section = "24"
+write-set = ["crates/scribe2/src/pipe/retire.rs", "crates/scribe2/tests/e2e/pipe/gate.rs", "docs/design/pipeline.md"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_retire_failed_"]
+size = "S"
+done = "FAIL 終端の便の worktree を器の口で可逆に畳める"
 <!-- contracts:end -->

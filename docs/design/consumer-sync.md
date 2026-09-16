@@ -108,6 +108,14 @@ C1（rules 行を足さない・閾値は無い）・C2 / C2.2（`EventKind` / `
 
 `claude plugin install` の打ち直しを器が撃つ形（帳簿は他人のもの＝当面は doctor が名指すだけ）／consumer 側の state dir の一覧を host の manifest に宣言する形（今は口座の帳簿と登録 row から導く）／`vessel update` が消費者の席へ結果を報せる形（通知でなく tick が測る側に倒したので当面は無し）／binary の食い違いだけの席を軽く直す形（今は次の hook の起動に任せる）。
 
+## 14. doctor の consumer 行に statusline= を足す（契約表の行 f・`s2-07l.325`）
+
+- 何が起きているか: ADR-0029 §2.3（doctor の導入先の行に `statusline=<vessel|other|absent|unreadable>`）と本 doc §4 の行の末尾の語仕様を承け、`.320`（`StatusLine` の enum と口座行の語）から切り出した便。現物（verified）: consumer 行は `crates/scribe2/src/account/consumers.rs` の 2 形（記録あり・unrecorded）で組まれ in-file の歯が近くに在るが、`statusline=` の語は src に 0 件。
+- 形: consumer 行（2 形とも）の末尾に `statusline=<vessel|other|absent|unreadable>` を足す。値は consumer の project scope の `.claude/settings.json` の `statusLine.command` を、口座行と**同じ 1 関数**（seat/statusline.rs の読み・`.320` が新設）で読む。`unrecorded` の行でも settings.json は読めるので語は出す。
+- 触らない: `drift=` の語の列（`statusline` は drift の語ではない・判定しない）・口座行・`.320` の関数の中身・`docs/`。
+- 依存: `.320` Landed が前提（seat/statusline.rs は本便の受付時点でまだ着地していない＝行の write-set では + で名指し、.320 Landed 後に素の path へ焼き直す）。
+- 却下案: consumer 行で settings.json を独自に読む（口座行と 2 実装になる・C2）／`statusline` を `drift=` の語に入れる（上書きの有無は判定でなく事実の名指し・C10.2・設計 §4「判定しない」）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -120,4 +128,14 @@ write-set = ["crates/scribe2/src/hook/vessel.rs", "crates/scribe2/src/fleet/mod.
 verify = ["cargo nextest run -p scribe2 --no-tests=fail vessel_update_ fleet_kinds_pin fleet_record_refuses_"]
 size = "M"
 done = "偽 git と偽 cargo で ff → build → install の順序の argv が写り InstallRecorded が 1 件記され、dirty / not-fast-forward / install の失敗は typed に断って event 0、fleet record はこの kind を拒む"
+
+[[contract]]
+id = "f"
+title = "doctor の consumer 行に statusline=<vessel|other|absent|unreadable> を足す — 口座行と同じ 1 関数で読む"
+req = ["FR61", "FR25"]
+section = "14"
+write-set = ["crates/scribe2/src/account/consumers.rs", "+crates/scribe2/src/seat/statusline.rs", "crates/scribe2/tests/e2e/seat.rs", "crates/scribe2/tests/e2e/snapshots/e2e__seat__seat_doctor_external_form.snap"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail doctor_consumer_statusline_"]
+size = "S"
+done = "doctor の consumer 行が statusline= を 4 値で出し、口座行と同じ関数を通る"
 <!-- contracts:end -->

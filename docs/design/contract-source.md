@@ -125,6 +125,20 @@ scribe2 を載せる consumer が pipe を通すのに要る面は 3 つで、�
 - 形（§3 の .363 と同型）: 子 module 2 つ。table/parse.rs = 区間の抜き出しと TOML の parse の群（Form / form_of / region / shift / read_rows / typed / text_of / list_of / find_row / Pointer / PointerError / parse_pointer / contract_id / doc_id・181 行 + 歯 2 本）。table/check.rs = 検査の本体と要件面の読みと CLI の駆動（check_table から read_all まで 21 item・326 行 + 歯 5 本と fixture）。親は mod 宣言 2 つと名指しの `pub use` で呼び手（`pipe/cli.rs`・`pipe/cli/intake.rs`・`pipe/review.rs`・`rules/manifest.rs`・歯）を無傷に保つ。共有 fixture（full_row）は親の歯に `pub(super)` で残し子は `super::super::tests::` で読む（複製しない）。親に残る私有の helper（typed / text_of / list_of 等）を子が呼ぶ周は可視性を `pub(super)` に上げる＝**可視性の 1 語と mod 宣言・`pub use`・`use` の path・移動で生じた可視性の制約を説明する doc コメント行は移動の一部**（純移動の残差として許す・.363 / .372 と同じ）。札は 3 file の歯の区間に対で置く。外形（極性一覧の snapshot）は verify で `polarity_external_form` を名指して不変を測る。割った型を `touches` に持つ他の行（行 h の ContractRow 等）の閉包は新 file へ広がるので、契約表の検査の歯が名指す行の write-set に新 file を同じ PR で足す（本 doc が write-set に在る理由・純移動の便は自分が消す file を名乗る他の行を同じ PR で直す）。
 - 見積: 親 約 354 行・parse 約 181 行・check 約 326 行。
 
+## 16. write-set の外形 pin（第 5 形）の探索域を歯の区間に限る（契約表の行 p・`s2-07l.282`）
+
+- 何が起きているか: planner の実測 2026-09-14 17:2xZ（#176）で、契約表の `surfaces` を宣言すると `write-set-incomplete` になる（`pipe/closure.rs` が閉包の file に数えられる）。第 5 形（外形 pin）の探索が「その snapshot 名か usage 文字列を literal に持つ file」を src 全体で数え、導出の実装 file 自身と fixture を pin file に数える自己言及の偽陽性が起きる。結果、外形を触る契約が閉包の便との偽の交差を起こす（dispatcher の交差判定に直結）。現物（verified）: `pipe/closure.rs` の `surface_closure`（第 5 形）と `test_region`（歯の区間 = `tests/` 配下は全体・src は `#[cfg(test)]` 以降）は既に在る。
+- 形: `surface_closure` の literal 探索を**歯の区間**（既存の `test_region`）に限る。`tests/e2e/*.rs` は全体・src の file は `#[cfg(test)]` 以降だけを数え、実装の本文（`closure.rs` の導出・fixture の const）は数えない。
+- 触らない: 第 1〜4 形・`surfaces` の名の検査（snapshot 名 / usage を持つ subcommand の名）・`test_region` の定義。
+- 却下案: `closure.rs` を固定で除外（字面の特例・C2）／`surfaces` を snapshot の path で宣言（宣言の形が変わり既存の行を書き直す＝この案で足りる）。
+
+## 17. write-set の導出に creates の親 mod と subcommand の閉じた enum を足す（契約表の行 q・`s2-07l.337`）
+
+- 何が起きているか: planner 実測 2026-09-15 10:4xZ で、契約 (a) の直命の表を Derived で書けなかった。write-set の導出（`pipe/closure.rs`）は Rust の面を `touches` の型の閉包と `tests` からしか導かず、subcommand を足す便が触る 2 面（`seat/cli.rs` の文字列 match `Some("rebrief") =>`・`seat/mod.rs` の `pub mod <新 module>;`）が写らない。`also` は非 `.rs` 限定・`creates` は新規のみ・`surfaces` は歯の区間だけ＝「口を 1 つ足す」契約は Declared に戻る（`.303` が 4 回 QUESTION した型）。現物（verified）: `seat/cli.rs` の分岐は `Some("…") =>` が 10 本・`seat/mod.rs` の mod 宣言 14 本・`pipe/cli.rs` / `seat/cli.rs` に subcommand の enum は無い。
+- 形: (vi) `creates` の各 `.rs` について、その親 module の file（`<dir>/mod.rs` か `<dir>.rs`）を導出値に足す。(vii) `seat/cli.rs` と `pipe/cli.rs` の文字列 match を閉じた enum（`SeatCommand` / `PipeCommand`・`as_str` / `parse`・宣言順・`ALL` の件数 pin）にし、以後「口を足す」契約は `touches = ["crate::seat::cli::SeatCommand"]` で cli.rs が閉包（match の arm）に入る。
+- 触らない: 各 subcommand の実装関数・usage の字面（`ALL` から組んで同じ字面になることを外形 snapshot で pin）。
+- 却下案: 導出に「usage 行を持つ .rs」の形を足す（字面の形が増える・閉じた enum で既存の第 2 形に乗せる方が C2）／Declared のまま（`.303` の型の QUESTION が再発する）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -291,4 +305,24 @@ write-set = ["-crates/scribe2/src/pipe/table.rs", "+crates/scribe2/src/pipe/tabl
 verify = ["cargo nextest run -p scribe2 --no-tests=fail table_ polarity_external_form"]
 size = "S"
 done = "parse と check の群が子 module に在り、TableError / Finding / Context は親に残って極性一覧の snapshot が不変、親は mod 宣言と pub use だけが増えて呼び手の import は不変、既存の table_ と contract_ の歯が全部緑で純移動の機械証明の残差が use と path だけ"
+
+[[contract]]
+id = "p"
+title = "surface_closure の literal 探索を歯の区間だけに限る — 導出の実装 file 自身を pin file に数える自己言及を止める"
+req = ["FR48"]
+section = "16"
+write-set = ["crates/scribe2/src/pipe/closure.rs", "crates/scribe2/tests/e2e/pipe/intake.rs", "docs/design/contract-source.md"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail contract_closure_ext_surfaces_"]
+size = "S"
+done = "外形を触る契約の導出値に導出の実装 file が入らず、閉包の便との偽の交差が消える"
+
+[[contract]]
+id = "q"
+title = "write-set の導出に (vi) creates の親 mod の宣言 file と (vii) subcommand の閉じた enum（SeatCommand / PipeCommand）を足す"
+req = ["FR48"]
+section = "17"
+write-set = ["crates/scribe2/src/pipe/closure.rs", "crates/scribe2/src/seat/cli.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/tests/e2e/pipe/intake.rs", "crates/scribe2/tests/e2e/seat.rs", "crates/scribe2/tests/e2e/pipe.rs", "docs/design/contract-source.md"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail contract_derive_creates_parent_"]
+size = "M"
+done = "口を足す契約が Derived で書け、導出値に cli.rs と親 mod.rs が入る"
 <!-- contracts:end -->

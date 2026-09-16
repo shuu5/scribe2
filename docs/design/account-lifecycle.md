@@ -107,3 +107,24 @@ C1（rules 行の値は tracked の manifest のまま・host の面は宣言値
 ## 12. 後続
 
 user-scope MCP 設定の同期・別口座への `--resume` の混線 fence・primary 口座の写像（user 裁定 2026-09-14「持ち込まない」）／再 login（credential の失効・user の手番・doctor が示す）／退役した口座の dir の削除（A1・削除の口は持たない）／launch 直後に止まった席の起こし直し（[account-autonomy.md](./account-autonomy.md) §11 の crash と同じ）／tracked の manifest に口座行を戻す形（A1）。
+
+## 13. 役割なしの起動の口 account shell（契約表の行 a・`s2-07l.268`）
+
+- 何が起きているか: user の問い 2026-09-14「cla は今のところ消さないが、最終的には scribe v2 にどこかで完全に互換機能が搭載されるよね？」への **user 裁定 2026-09-14 12:5xZ**「まあ確かに役割なしにも対応しておいてほしいかな。何か不測の事態のときのために。」を承けた便。現物: 席の起動は `seat launch --role`（役割必須・`.244` Landed）だけで、役割を持たない対話 session（前の版の口座切替 wrapper `cla` 相当）は器の外に在る。`account add` は login 用の起動行 `login_line`（`account/mod.rs`）を既に持つ。設計は §4.5「役割なしの起動」が正本（ADR-0028 §2.5）。
+- 形: 口 `account shell <label> [--state-dir S] [--anchor DIR] [--resume SID] [--target S:W] [--tmux-socket P]` を `account/cli.rs` の verb に足す（`SHELL_FLAGS` の閉じた列）。起動行の導出は §4 の `derive_launch` と**同じ 1 関数**に `resume: Option<&str>` を足して得る（`None` は従来の行）。`--target` 無しは穴を埋めた起動行を stdout に 1 行、在れば `seat launch` と同じ shell への注入の門を通して注入する。`inject.jsonl` の `kind=launch` 行に `role=` 欄を足し、役割なしは `role=-`。**登録 row（`SeatRegistered`）は書かない**（権能なし・role guard が `unregistered` で編集を止める）。断りは `AccountError` に variant を足す（`account-dir-missing`）。
+- 触らない: `seat/tick*`・`fleet/mod.rs`（event の形は不変）・`hook/`・`account/mod.rs` の `add` / `ls` / `retire` / `restore`・`docs/`・`design-intent/`・`prop.rs`（共有）。
+- 依存: docs PR #185 merged ∧ `.307`（合図の出所と立て直しの口座優先）Landed 後（`seat/cycle.rs` で交差）。`.303` / `.304` とは交差 0（`hook/` / `seat/tick*` / `fleet/mod.rs` を触らない）。
+
+<!-- contracts:begin -->
+schema = 1
+
+[[contract]]
+id = "a"
+title = "役割なしの起動 — account shell が derive_launch を再利用し登録 row を書かずに起動行を注入する"
+req = ["FR60", "FR59", "FR58"]
+section = "13"
+write-set = ["crates/scribe2/src/account/cli.rs", "crates/scribe2/src/account/mod.rs", "crates/scribe2/src/seat/cycle.rs", "crates/scribe2/src/seat/inject.rs", "crates/scribe2/tests/e2e/fleet.rs", "crates/scribe2/tests/e2e/seat/cycle.rs", "crates/scribe2/tests/e2e/snapshots/e2e__fleet__fleet_external_form.snap", "crates/scribe2/tests/e2e/snapshots/e2e__seat__seat_usage_external_form.snap"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail account_cmd_shell_", "cargo nextest run -p scribe2 --no-tests=fail seat_launch_"]
+size = "S"
+done = "偽 tmux と偽 claude で account shell が登録 row 0 のまま起動行を 1 回だけ差し込み、resume と拒否 2/2 が typed に出る"
+<!-- contracts:end -->

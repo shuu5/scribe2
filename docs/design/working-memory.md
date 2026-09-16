@@ -189,6 +189,13 @@ AC8 の確認（SRS の FR23 の検証手法は I = 目視確認・2 つの開�
 - `[WIN]` を git log から取る: 便の Landed は event log が持ち、commit の subject の grep は偽陽性（bead id の `.` が regex）。event log だけを読む。
 - PreCompact(auto) の退避物に AI の文を求める: hook の中で開発 session は動かない。器が持つ事実（現在地 + carry）だけで書き、`trigger: auto` で弁別する。
 
+## 13. 退避の supersede — 同 sid の未 consumed を置き換える（契約表の行 d・`s2-07l.289`）
+
+- 何が起きているか: admin 2026-09-14 19:05Z の退避 → cycle が input-busy で 40 分 back-off し、席は仕事を続けたが 2 通目の退避が `wm-exists` で断られ、差分を planner に散文で預けた（退避の一次面が席の外へ漏れる）。現物（verified）: `crates/scribe2/src/seat/externalize.rs` は `WmScan::Unconsumed(_)` を一律 `WmExists` にする（§5 手順 1「二重退避を取り合わない」）。consume は `working-memory.<sid>.consumed.md` へ move する形（`crates/scribe2/src/seat/consume.rs`）。
+- 形: `externalize` が `Unconsumed` の退避物を見た周、その file の frontmatter の sid が**現在の sid と同じ**なら `working-memory.<sid>.superseded.<ts>.md` へ rename（write → rename の順・部分書きを残さない）してから新 file を書く。別 sid（`/clear` 後の候補・別席）は従来どおり `wm-exists`。記録の 1 行に `superseded=<旧 file>` を添える。`rebrief` / `consume` は superseded を走査から外す（`[WM]` の候補にしない）。
+- 触らない: carry-forward・命令行の cap・consume の move。
+- 却下案: 2 通目を consume → 書き直しで通す（「同 sid の consumed が在る」で断られる・consume は復元の合図であって更新ではない）／旧 file を上書き（不可逆・N1）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -214,4 +221,14 @@ also = ["crates/scribe2/tests/e2e/snapshots/e2e__seat__seat_rebrief_external_for
 verify = ["cargo nextest run -p scribe2 --no-tests=fail seat_wm_rebrief_"]
 size = "S"
 done = "偽の event log と state.jsonl から [RUN][SEAT][WIN] が件数付きで出て、git の無い anchor では [MAIN] が unknown で rc 0"
+
+[[contract]]
+id = "d"
+title = "自席・同 sid の未 consumed 退避物は superseded へ rename して置き換える — 別 sid は従来どおり wm-exists"
+req = ["FR38", "FR23"]
+section = "13"
+write-set = ["crates/scribe2/src/seat/externalize.rs", "crates/scribe2/src/seat/rebrief.rs", "crates/scribe2/tests/e2e/seat/wm.rs", "docs/design/working-memory.md"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail seat_wm_externalize_supersede_"]
+size = "S"
+done = "同 sid の退避が置き換えられ、旧版は superseded として残る"
 <!-- contracts:end -->
