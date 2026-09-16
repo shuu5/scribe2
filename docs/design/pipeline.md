@@ -322,6 +322,27 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
 - 触らない: 非終端（`Spawned` / `Implemented` / `Gated`(PASS)）の便は断る（退行の pin）・`stop` の極性。
 - 却下: 手で `git worktree remove`（pipeline の外・不可逆）／段を新しい `Retired` の variant に動かす（`.128` の裁定に反する）。
 
+## 25. 純移動の要約にコメント行の差の逐語を載せる（契約表の行 s・`s2-07l.377`）
+
+- 何が起きているか: `.372` run 1 が Gated INCONCLUSIVE（2026-09-16・admin の逐語実測）。純移動の要約（§5.3 の機械証明・`pipe/move_proof.rs`）は item の中のコメント行の差を `CommentDiff { file, name, lines }`（件数だけ）で `render` の「## コメント行の差（名: 行数）」に出し、逐語を持たない。lens は「契約の『移動以外 0 行』を満たすか材料から確かめられない」で判定不能にする。`.361` の要約は通った（残差が use / path だけで「## 残差分（逐語）」に逐語が載る）＝差の種類によって材料が足りなくなる。
+- 形: `Item::comments`（hash から除いたコメント行の字面・区間の順）は既に在るので、`CommentDiff` に base 側と head 側の逐語（indent を落とした字面・区間の順）を持たせ、`render` が各項目の件数の行の下に base 側を `-`・head 側を `+` の接頭辞で逐語のまま並べる。件数の行は残す（母集団と対）。要約の byte は既存の予算の照合（§5.3「lens に渡す本文の byte で行う」・要約 > cap → INCONCLUSIVE で理由に kind と byte が載る）に乗り、**新しい cap を持たない**。
+- 触らない: item の切り出し・hash・多重集合の照合・残差の判定（`NotPure` の理由）・`keep` の置き場・lens の口。
+- 却下案: コメント行の差を `NotPure` に倒す（doc コメントの path 書き換えは純移動の残差として許す既存の裁定・`.362`）／逐語に cap を別に持つ（数値の線が増える・既存の照合で足りる）。
+
+## 26. lens の cmd を run の record に残し gate / land / resume が同じ 1 か所から読む（契約表の行 t・`s2-07l.378`）
+
+- 何が起きているか: admin の実測 2026-09-16（`.372` の着地を `pipe land --run` で撃ち、rebase 後の再 gate が lens を要するのに「lens が要るのに --lens が無い」で INCONCLUSIVE・`pipe gate --run … --lens` の撃ち直しで回復）。現物（verified）: `--lens` は `pipe/cli/step.rs` の `review_run` / `gate_run` / `land_run` が毎回 flag から読み、run dir（`contract.toml` / `vessel.toml` / `review.json` …）には lens の cmd が残らない。操作役が land を手で撃つ周（Gated PASS の run を後から着地・admin の常道）は毎回同じ cmd を渡さないと必ず踏む。
+- 形: `pipe review --lens <cmd>`（run の最初に lens を受ける口）が cmd を `<run_dir>/lens.toml`（`schema = 1` / `cmd = "<逐語>"`・rules manifest と同じ parser の subset・run dir の一時物で跨版契約ではない）に写す。`gate` / `land` / `resume` は `--lens` が無い周にその写しを読む（`--lens` が在れば flag が勝つ＝上書きの手は残す）。写しが**無い**周は従来どおり INCONCLUSIVE（「lens が要るのに --lens が無い」）、写しが**読めない**周は理由を変えて INCONCLUSIVE（`lens.toml` の path と読めなかった理由・「無い」に潰さない・C10）。読み書きは新 module `pipe/lens_record.rs`（pure な parse + I/O 2 関数）に置き、3 つの口は同じ 1 関数で読む（C2）。
+- 触らない: lens の起動の形（`{contract}` / `{worktree}` の穴・stdin の diff）・gate の判定順・`pipe run` の引数（run は lens を受けない＝現物のまま）。
+- 却下案: `pipe land --lens` を必須にする（毎回手で渡す seam が残る・記録に残らない）／event log の detail に cmd を書く（detail は自由文で typed に読めない・cmd に空白と引用符が入る）／`vessel.toml` の写しに足す（写しは tracked な宣言の写しで、操作役の入力を混ぜると出所が割れる）。
+
+## 27. land の終端に main の実測 sha を写す（契約表の行 u・`s2-07l.379`）
+
+- 何が起きているか: admin の実測 2026-09-16 00:4xZ（`.373` の着地: chain の log は `landed=9ad8b8f…` と出したが、その object は repo に無く、main に載った squash は `2d25ce3`〔親 `6519b39`〕）。現物（verified）: `pipe/land.rs` の `finish` は `new`（`commit-tree` で作り `update-ref` の CAS で main に載せた sha・§5.4 の手順 1）を verdict export（`sha`）・`RunDone stage=Landed detail=sha:<new>`・stdout `landed=<new>` に**宣言値のまま**写し、終端の時点で `refs/heads/main` を読み直さない。CAS の後に main が動いた周（追随の chain・別の便・手の操作）を land の記録から見分けられない。
+- 形: `finish` の直前（export の前）に `git rev-parse refs/heads/main` を 1 回実測し、**stdout に `main=<実測>`・event の detail に `main:<実測>`（`sha:` の後ろ・空白区切り）** を足す。`new` と一致する周も書く（一致を「省略」で表さない・C10 の実測値）。読めない周は `main=unknown`（land は成立している＝落とさない・理由は stderr 1 行）。`landed=` / verdicts.jsonl の `sha`（squash の sha・key 列は跨版契約で不変）の意味は不変。
+- 触らない: squash・CAS・anchor の同期・main 実測（手順 3）・retire・verdicts.jsonl の key 列・`--pr-cmd` の形（main を動かさない形は `main=` を持たない）。
+- 却下案: 不一致を `Failed` に倒す（main は既に進んでいる＝終端を偽らない・記録して loud に留める）／push 後の `origin/main` を読む（land は push しない・remote は器の外）／verdicts.jsonl に key を足す（跨版契約の改訂＝ADR が要る・本便の射程外）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -506,4 +527,35 @@ write-set = ["crates/scribe2/src/pipe/retire.rs", "crates/scribe2/tests/e2e/pipe
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_retire_failed_"]
 size = "S"
 done = "FAIL 終端の便の worktree を器の口で可逆に畳める"
+
+[[contract]]
+id = "s"
+title = "純移動の要約（MoveSummary）のコメント行の差に base 側 - / head 側 + の逐語を載せ、件数は母集団と対で残す"
+req = ["FR9"]
+section = "25"
+touches = ["crate::pipe::move_proof::CommentDiff"]
+tests = ["crates/scribe2/src/pipe/move_proof.rs"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail move_proof_comment_verbatim_"]
+size = "S"
+done = "コメント行だけが違う純移動の要約に、違う行の逐語が - / + 付きで件数の行の下に並ぶ"
+
+[[contract]]
+id = "t"
+title = "pipe review が受けた lens の cmd を run dir の lens.toml に写し、gate / land / resume が --lens の無い周にそれを読む"
+req = ["FR10", "FR9"]
+section = "26"
+write-set = ["+crates/scribe2/src/pipe/lens_record.rs", "crates/scribe2/src/pipe/mod.rs", "crates/scribe2/src/pipe/cli/step.rs", "crates/scribe2/tests/e2e/pipe/land.rs"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_lens_record_"]
+size = "S"
+done = "review で渡した lens だけで land の再 gate が lens を起動して着地し、写しが読めない周は「無い」と別の理由で INCONCLUSIVE"
+
+[[contract]]
+id = "u"
+title = "pipe land の終端が refs/heads/main を実測し、stdout の main= と Landed の detail の main: に写す"
+req = ["FR50"]
+section = "27"
+write-set = ["crates/scribe2/src/pipe/land.rs", "crates/scribe2/tests/e2e/pipe/land.rs"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_land_main_measured_"]
+size = "S"
+done = "reference-transaction hook で main を動かす toy repo の land が、landed= と違う main= を stdout と detail に写し rc 0 で終端する"
 <!-- contracts:end -->
