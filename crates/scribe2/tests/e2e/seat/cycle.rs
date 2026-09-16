@@ -1409,30 +1409,63 @@ fn seat_cycle_confirms_rebuild_when_session_start_stamp_arrives_late() {
     fs::remove_dir_all(&dir).ok();
 }
 
+/// 凍結席（echo を切った席）が **`stty -echo` の後に**描く合図。payload の目印とも `tock` とも別の字面。
+///
+/// 合図の**前**に注入が届く周は tty の echo が送った字面を pane に描き、「現れない」はずの負例が
+/// 「届いた」に化ける（`.304` run 1 Gated INCONCLUSIVE・2026-09-15 12:10:29Z: gate 3 本同時の負荷で
+/// `wait_prompt` が `stty -echo` より**先に**描かれた prompt を見て撃ち、left=0 / right=1）。合図は
+/// `stty -echo` の後に出るので、見えた時点で echo は切れている——壁時計でなく**順序**で塞ぐ（`s2-07l.342`）。
+const ECHO_OFF_SENTINEL: &str = "seat-e2e-echo-off";
+
+/// pane が `ready` を満たすまで polling で待つ（上限 [`PROMPT_WAIT`]・壁時計の等号は pin しない）。
+fn wait_sentinel(socket: &str, name: &str, ready: impl Fn(&str) -> bool) -> bool {
+    let deadline = Instant::now().checked_add(PROMPT_WAIT);
+    while deadline.is_some_and(|at| Instant::now() < at) {
+        if ready(&capture(socket, name)) {
+            return true;
+        }
+        sleep(Duration::from_millis(100));
+    }
+    false
+}
+
+/// `stty -echo` → 合図（[`ECHO_OFF_SENTINEL`]）→ prompt の**順に**描く凍結席を立て、合図と prompt が pane に
+/// 現れるまで待つ。`before` は合図の前に描く字面（先在の行・空でもよい）、`after` は prompt の後に走る
+/// 本文（stdin を読まない席の形）。`sh -c` の script は echo されないので、合図の字面が script 由来で
+/// pane に出ることはない。
+fn start_echo_off_seat(socket: &str, name: &str, before: &str, after: &str) -> IsolatedSeat {
+    let script = format!("stty -echo 2>/dev/null; printf '{before}{ECHO_OFF_SENTINEL}\\n\u{276f} '; {after}");
+    let mut seat = IsolatedSeat {
+        socket: socket.to_owned(),
+        name: name.to_owned(),
+        ready: false,
+    };
+    let out = tmux(
+        socket,
+        &["new-session", "-d", "-s", name, "-x", "120", "-y", "40", "sh", "-c", &script],
+    );
+    seat.ready = out.status.success()
+        && wait_sentinel(socket, name, |pane| pane.contains(ECHO_OFF_SENTINEL) && pane.contains(PROMPT));
+    seat
+}
+
 /// **送る前から同じ字面が pane に在る**周は送達の根拠にならない（`absent`・rc 1・記録なし）。
 ///
 /// 席は打鍵を表示も実行もしない（`stty -echo` + `cat > /dev/null`）ので pane は 1 byte も
 /// 変わらない。差は先在の字面だけで、`contains` 1 本の判定はこれを「届いた」と読む（lens-90
 /// HIGH-1）。tick の pointer は target ごとに固定なので、2 周目以降は常にこの条件下に在る。
+///
+/// 席は `stty -echo` の**後に**合図を描き、歯は合図を見てから撃つ（[`start_echo_off_seat`]・`s2-07l.342`）:
+/// 合図の前に届くと echo された字面が先在の 1 つに足され「届いた」に化ける（`.342` の歯と同じ競合）。
+// flip-check: retroactive s2-07l.342
 #[test]
-fn seat_inject_does_not_count_preexisting_text_as_delivery() {
+fn seat_inject_preexisting_text_after_the_pane_sentinel_is_not_delivery() {
     let dir = tmp();
     let socket = socket_of(&dir);
     let name = "seat-stale";
     let marker = ": seat-e2e-stale-marker";
-    let mut seat = IsolatedSeat {
-        socket: socket.clone(),
-        name: name.to_owned(),
-        ready: false,
-    };
-    let script =
-        format!("printf '{marker}\\n\u{276f} '; stty -echo 2>/dev/null; exec cat > /dev/null");
-    let out = tmux(
-        &socket,
-        &["new-session", "-d", "-s", name, "-x", "120", "-y", "40", "sh", "-c", &script],
-    );
-    seat.ready = out.status.success() && wait_prompt(&socket, name);
-    assert!(seat.ready, "先在の字面つきの凍結席を立てられる");
+    let seat = start_echo_off_seat(&socket, name, &format!("{marker}\\n"), "exec cat > /dev/null");
+    assert!(seat.ready(), "先在の字面つきの凍結席を立てられる: {}", capture(&socket, name));
     let state = dir.join("state");
 
     let out = run_seat(&[
@@ -1568,24 +1601,21 @@ fn seat_cycle_restores_after_seat_consumes_queued_restore() {
 /// 先頭行が**空**の payload でも、送達の目印は最初の非空行＝pane が伸びただけでは成立しない
 /// （lens-90 再確認 NEW-1: 目印が空文字だと出現数が pane の長さに化け、stdin を読まない席でも
 /// `consumed=true` になっていた）。
+///
+/// 席は `stty -echo` の**後に**合図を描き、歯は合図を見てから撃つ（[`start_echo_off_seat`]・`s2-07l.342`）。
+/// 旧形（`printf '❯ '; stty -echo; …` を `wait_prompt` で待つ）は prompt が echo を切る**前**に描かれ、
+/// gate 3 本同時の負荷で注入が `stty -echo` より先に届き、echo された字面で `delivered` rc 0 に化けた
+/// （`.304` run 1・left=0 / right=1・同じ周の単独 run では緑＝timing の flaky）。合図を待つ形は壁時計を
+/// pin しない（`tock` の 0.3 s は pane が伸びる速さであって送達の判定には掛からない）。
+// flip-check: retroactive s2-07l.342
 #[test]
-fn seat_inject_uses_first_nonblank_line_as_marker() {
+fn seat_inject_waits_for_the_pane_sentinel_before_sending() {
     let dir = tmp();
     let socket = socket_of(&dir);
     let name = "seat-blankfirst";
-    let mut seat = IsolatedSeat {
-        socket: socket.clone(),
-        name: name.to_owned(),
-        ready: false,
-    };
     // stdin を読まず、0.3 秒ごとに 1 行足す席（pane は伸びるが送った字面は現れない）。
-    let script = "printf '\u{276f} '; stty -echo 2>/dev/null; while :; do sleep 0.3; printf '\\ntock'; done";
-    let out = tmux(
-        &socket,
-        &["new-session", "-d", "-s", name, "-x", "120", "-y", "40", "sh", "-c", script],
-    );
-    seat.ready = out.status.success() && wait_prompt(&socket, name);
-    assert!(seat.ready, "pane が伸びる席を立てられる");
+    let seat = start_echo_off_seat(&socket, name, "", "while :; do sleep 0.3; printf '\\ntock'; done");
+    assert!(seat.ready(), "pane が伸びる席を立てられる: {}", capture(&socket, name));
     let state = dir.join("state");
 
     let out = run_seat(&[
