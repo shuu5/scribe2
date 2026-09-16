@@ -232,6 +232,25 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
 - 触らない: FilePair / is_test_file / split_regions（fan-out が大きい）・cargo 実行の群（後続の便で runner.rs へ）・歯の中身。
 - 見積: 親 1323 → 約 1100 行・子 約 235 行。
 
+## 14. 引数の reader を 1 本に（契約表の行 f・`s2-07l.306`）
+
+- 何が起きているか: flag の reader が 6 本（`pipe/cli.rs` の flag / need・`fleet/cli.rs`・`seat/cli.rs`・`headless/mod.rs`・`hook/vessel.rs` の flag_value）あり、どれも argv 全体が既知の集合に閉じているかを見ない（名指しの flag を拾うだけ）＝未知の flag と `--help` を黙って無視する fail-open。`pipe land --run <id> --help` が help を出さず land を完走した（uns planner の実測 2026-09-15）。`account/cli.rs` の flags だけが allowed の集合で断る形（[account-lifecycle.md](./account-lifecycle.md) §4）。
+- 形: 共通の reader 1 本（新 module cli_args・`lib.rs` に宣言）= `parse(args, allowed) -> Result<Parsed, ArgsError>`。Parsed は名指しの flag の値（value / need）と positional の列。ArgsError は閉じた enum（Help / Unknown / Missing / Duplicate・as_str）。`--help` / `-h` は allowed に無くても Help で返し呼び手は usage を出して rc 0。Unknown は rc 2（usage 1 行）で state / ref を 1 本も動かさない。6 本の reader を parse の呼出に置き換え、各 subcommand の allowed を const 配列（宣言順）で持つ。挙動の差は「未知の flag と --help を断る」だけ（既存の flag の意味・usage の文は不変＝外形 snapshot を動かさない）。
+- 触らない: subcommand の本体・rules・docs。依存を足さない。
+
+## 15. pipe の `--repo` / `--state-dir` の cwd fallback を落とす（契約表の行 g・`s2-07l.310`）
+
+- 何が起きているか: `pipe/cli.rs` の repo_of は `--repo` が無いと cwd の repo root へ落ちる（呼び手 = state_dir_of と `pipe/cli/intake.rs` の run_repo の最終枝）。cargo-mutants の一時コピーは worktree の `.git`（file・本物の gitdir を指す）を持つので、コピーの中で cwd から解いた repo に便を起こすと worktree と branch が本物の repo に登録される（prunable 47 件・fixture 名の branch 44 本・admin の実測 2026-09-15・prune は user 承認 event 02:5xZ）。
+- 形: repo_of から cwd の枝を落とし、`--repo` が無ければ flag 不在の断り（`--run が要る` と同じ作り・Refuse は契約単位の拒否ゆえ variant を足さない）。run_repo の最終枝（写し面が無い周）と state_dir_of（`--state-dir` も `--repo` も無い周）も同じ断り。usage に `--repo` の要件を 1 句（外形 snapshot が動く）。歯の helper（`tests/e2e/pipe.rs` と `pipe/*.rs`）で `--repo` / `--state-dir` を渡していない呼出には tmp の fixture repo を渡す。
+- 触らない: `hook/vessel.rs` の repo_root（cwd から解くのは hook の領分）・契約 file の schema・写し面の読み。
+- 却下: 変異の一時コピーの `.git` を切る hook（cargo-mutants に口が無い）／歯が必ず `--repo` を渡すだけで器を変えない（規律が歯の散文に残る・N2 / C16）／写し面が無い spawn を cwd で救う（壊れた run は断る側・C10）。
+
+## 16. runner / lens の effort を rules 行から毎回渡す（契約表の行 h・`s2-07l.322`）
+
+- 何が起きているか: `headless/mod.rs` の build は `--model` を毎回渡すが `--effort` は渡さない＝runner / lens の effort は口座 dir の settings の値で決まり口座ごとにばらばら（席の model 事故と同じ根因）。user 裁定 2026-09-15T03:52Z = effort は high・model は既存の rules 行 runner.model のまま。
+- 形: rules 行 runner.effort（kind RunnerEffort・Str・値 high・裁定 id 付き・C5）を `rules/manifest.toml` に足し `rules/mod.rs` の閉じた enum に variant 1 つ。effort の型は headless に置く（閉じた enum Effort = Low / Medium / High / Xhigh・宣言順の const slice・alias = CLI の字面・parse は完全一致）。読み口は runner_model と同じ形の runner_effort（行が無い / 不発効 / 文字列でない / 表に無いの 4 理由）。Call に effort を足し build が `--model` の直後に `--effort <値>` を毎回渡す。runner と lens は同じ manifest から読み、読めない周は claude を呼ばず rc 2（model と同じ極性・順序 = cap → model → effort）。計測の Call（`fleet/usage.rs`）は None で挙動不変。歯の fixture の manifest には effort の行を同じ helper で足す。
+- 触らない: `pipe/`・`seat/`・headless の雛形 txt・`.vessel.toml`。依存を足さない。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -306,4 +325,34 @@ write-set = ["-crates/xtask/src/flipcheck.rs", "+crates/xtask/src/flipcheck/git.
 verify = ["cargo nextest run -p xtask --no-tests=fail flip_"]
 size = "S"
 done = "git 群 10 関数が子 module に在り、親は mod 宣言と pub use だけが増えて呼び手と歯の import は不変、既存の flip_ の歯が全部緑で純移動の機械証明が残差 0"
+
+[[contract]]
+id = "f"
+title = "未知の flag と --help を全 subcommand が typed に断る — 引数の reader を 1 module に集め、land が unknown flag で何も動かさない"
+req = ["NFR4", "FR12"]
+section = "14"
+write-set = ["+crates/scribe2/src/cli_args.rs", "crates/scribe2/src/lib.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/fleet/cli.rs", "crates/scribe2/src/seat/cli.rs", "crates/scribe2/src/headless/mod.rs", "crates/scribe2/src/hook/vessel.rs", "crates/scribe2/src/account/cli.rs", "crates/scribe2/tests/e2e/pipe/land.rs", "crates/scribe2/tests/e2e/fleet.rs", "crates/scribe2/tests/e2e/seat.rs", "crates/scribe2/tests/e2e/headless.rs", "crates/scribe2/tests/e2e/hook.rs", "crates/scribe2/tests/e2e/seat/account.rs"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail cli_args_", "cargo nextest run -p scribe2 --no-tests=fail pipe_terminal_land_refuses_unknown_flag"]
+size = "M"
+done = "偽 remote の toy repo で pipe land に未知の flag か --help を渡すと main の ref・event log・worktree が 1 つも動かず、fleet / seat / headless / vessel の 1 口ずつが未知の flag を rc 2 で断り、usage の外形 snapshot は不変"
+
+[[contract]]
+id = "g"
+title = "pipe の --repo と --state-dir の cwd fallback を落とす — 写し面を消した run に --repo 無しで spawn しても cwd の repo に落ちない"
+req = ["FR4", "FR39"]
+section = "15"
+write-set = ["crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/cli/intake.rs", "crates/scribe2/tests/e2e/pipe.rs", "crates/scribe2/tests/e2e/pipe/intake.rs", "crates/scribe2/tests/e2e/pipe/spawn.rs", "crates/scribe2/tests/e2e/snapshots/e2e__pipe__pipe_external_form.snap"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_repo_required_"]
+size = "S"
+done = "--repo 無しの spawn と --state-dir 無しの置き場解決が断りの 1 行で止まり worktree を作らず、通常の nextest と変異の周で本物の repo の worktree と branch が増えない"
+
+[[contract]]
+id = "h"
+title = "runner / lens の effort を rules 行 runner.effort から毎回渡す — build が --model と同じ場所で --effort を渡し、行が無い・表に無い値は rc 2"
+req = ["FR5", "FR9"]
+section = "16"
+write-set = ["rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "crates/scribe2/src/headless/mod.rs", "crates/scribe2/src/headless/runner.rs", "crates/scribe2/src/headless/lens.rs", "crates/scribe2/src/fleet/usage.rs", "crates/scribe2/tests/e2e/headless.rs", "crates/scribe2/tests/e2e/rules.rs", "crates/scribe2/tests/e2e/snapshots/e2e__rules__rules_external_form.snap"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail headless_runner_passes_effort_ headless_lens_passes_effort_ headless_runner_refuses_"]
+size = "S"
+done = "偽 claude で runner と lens を撃つと argv に effort の値が rules 行のとおり載り、行の無い manifest と表に無い値は rc 2 で claude の呼出 0"
 <!-- contracts:end -->
