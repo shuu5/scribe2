@@ -742,3 +742,23 @@ terms:
     aliases: [planner intervention]
     definition: planner が起動の列の順番を動かす typed な印。 first (最優先へ)・hold (止める)・release (戻す) の 3 つで、 user の直命の対として記録され、 散文の順序を持たない (ADR-0034 §2)。
     relationships: [dispatcher, 起動の列, 直命の表]
+  - canonical: plugin の実体
+    domain: consumer
+    aliases: [plugin payload]
+    definition: Claude Code に渡す plugin の中身 = plugin.json (名乗り)・hooks.json (hook の一覧)・skills (復元と退避の作法) の 3 つ。 前 2 つは gen-manifest の生成物、 skills は tracked の実体。 生成 dir に置く (ADR-0038・設計 docs/design/seat-autonomy.md §14)。
+    relationships: [生成 dir, marketplace の source, hook, 導入先の同期]
+  - canonical: 生成 dir
+    domain: consumer
+    aliases: [generated plugin dir]
+    definition: plugin の実体を置く repo 内の dir。 置き場は core の定数 1 つが正本 (xtask は tracked の core から読む・NAME と同じ形) で、 gen-manifest が中身を起こし、 xtask check が tracked との drift 0 を測る。 器の作業物 (worktree 群・build 生成物・台帳) と同じ木に置かない (ADR-0038)。
+    relationships: [plugin の実体, marketplace の source, 席の起動]
+  - canonical: marketplace の source
+    domain: consumer
+    aliases: [marketplace source]
+    definition: marketplace.json の plugins[].source。 plugin の install はこの dir を丸ごと cache へ写す。 repo 全体 (./) でなく生成 dir を指す (ADR-0038)。 marketplace.json 自体は repo root の .claude-plugin に残る。
+    relationships: [生成 dir, plugin の実体, 再 install]
+  - canonical: 再 install
+    domain: consumer
+    aliases: [reinstall]
+    definition: marketplace の source が変わった後、 各口座 × project で plugin を入れ直す user の手番。 器は代筆せず、 古い install は doctor の導入先の行に古い root として出る (ADR-0038・SRS FR61)。
+    relationships: [marketplace の source, 導入先の同期, doctor]

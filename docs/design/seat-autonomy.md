@@ -147,7 +147,8 @@ v2 に既に在るもの: FR23（WM の規則）・FR21（`<state_dir>/inject.js
 
 cache の写しは plugin source を丸ごと写す（`target/` や `.worktrees/` を含み大きくなりうる）が、hook の読込には
 使われないので動作には影響しない。軽くするには plugin root を小さな dir に分けて marketplace の `source` を変える
-（再 install が要る＝user 手番）。本 doc はそれを決めない。
+（再 install が要る＝user 手番）。その形は [ADR-0038](../../design-intent/decisions/ADR-0038-plugin-payload-lives-in-a-generated-dir.html)
+が決め、機構は §14 が持つ。
 
 **(c) 管理 tick の timer を有効にする。** §8 の雛形を user が埋めて有効化する（§8 のとおり unit は
 repo に入れない）。
@@ -186,6 +187,14 @@ repo に入れない）。
 - 触らない: `make_tmp_dir` の戻りの型と呼び手（guard 化は別の行）・`IsolatedSeat` の `Drop`（kill-session）・fixture の socket の置き方（`socket_of`）・nextest の timeout の値・器の本体。
 - 歯（`e2e_fixture_sweep_` 接頭辞・`tests/e2e/main.rs` の隣の新 file `tests/e2e/fixture.rs`）: (a) 死んだ pid（`sh -c true` を spawn して wait した pid）名義の `e2e-<pid>-x` dir に隔離 server を立てておき、`make_tmp_dir` を呼ぶと dir が無く `tmux -S <sock> ls` が断る（base は残る → RED）／(b) 自分の pid 名義の dir は掃かれない（server も生きている）。
 - 却下: `tempfile` crate（直接依存の追加・A3・`make_tmp_dir` の doc comment に既に却下の記録）／nextest の `leak-timeout` / 外部の掃除 script（歯の外の散文運用・C12）／fixture 作成時に全 `e2e-*` を消す（並列の歯の dir を壊す）／`kill-server` を生きている pid の server にも撃つ（同上）。
+
+## 14. plugin の実体を生成 dir plugin/ に置き、marketplace の `source` をその dir にする（契約表の行 f・`s2-07l.365`・[ADR-0038](../../design-intent/decisions/ADR-0038-plugin-payload-lives-in-a-generated-dir.html)）
+
+- 何が起きているか（別 project の席の照会 2026-09-16・verified）: plugin の install は marketplace の `source` を丸ごと cache へ写す実装で、本 repo の `source` は repo 全体（./・gen-manifest の生成値）ゆえ、git-ignored の `.worktrees/`（実測 174 GB）と `target/` を含んで写しが 120 秒で終わらず、その host の cache が 91 GB に膨らんだ（plugin の実体は 32 MB）。現物: plugin の実体 = `.claude-plugin/plugin.json` + `hooks/hooks.json`（gen-manifest の生成物）+ `skills/`（tracked の実体・2 skill）で全部 root 直下。plugin root = checkout root を前提にする現物は 5 つ＝(1) `genmanifest.rs` の 3 定数（生成物の置き場）と marketplace の `source` (2) `derive_launch` の 1 つ目の `--plugin-dir` が anchor そのもの (3) `pipe/spawn.rs` の include_str の path と写す dir の列（便の worktree への consumer の写し） (4) `main.rs` の歯が workspace root の `plugin.json` を読む (5) 導入先の同期（`account/consumers.rs`）が登録 row の anchor 直下の `hooks/hooks.json` を読み込み元とする。hook の `--plugin-root`（起動元の env 由来）と `digest` の root 相対 path と install 帳簿の比較（記録値どうし）は不変。
+- 形（ADR-0038 §2）: (1) core に置き場の定数 1 つ（`name.rs` の `NAME` の隣・値 `plugin`・相対 path）を持ち、xtask は tracked の core からその値を読む（xtask は core に依存しない＝`NAME` と同じ形）。(2) gen-manifest の生成物は plugin/.claude-plugin/plugin.json と plugin/hooks/hooks.json（生成 dir の配下・未 land の path ゆえ backtick なし）、marketplace.json は repo root の `.claude-plugin/` に残り `source` は ./plugin。`skills/` は plugin/skills/ へ純移動（生成の対象は 3 file のまま）。xtask check の drift（render == tracked）は置き場が変わるだけで型は不変。(3) `derive_launch` の 1 つ目の `--plugin-dir` は anchor の下の plugin/（外形 snapshot が動く）。(4) `pipe/spawn.rs` の include_str の path と写す dir の列は plugin/ 配下を指し、写す先も worktree の plugin/ 配下。(5) `main.rs` の歯と導入先の同期の読み込み元（anchor から hooks.json へ）は同じ定数から解く。(6) headless の runner / lens が渡す `--plugin-dir` も worktree の plugin/。(7) 再 install は user 手番（口座 × project）。古い install は doctor の導入先の行に古い root として出る。
+- 触らない: hook の `--plugin-root` と `$CLAUDE_PLUGIN_ROOT` の展開・`digest` の root 相対 path・install 帳簿の形と比較・`.worktrees/` と `target/` と台帳の置き場（ADR-0038 OPT2 は却下）・退避の worktree 群の削除（A1・user 手番）。依存を足さない。
+- 歯（接頭辞 `plugin_dir_` を含む名・xtask は `genmanifest_plugin_dir_`）: (a) xtask in-file `genmanifest_plugin_dir_places_three_files_under_plugin_and_points_source_there` = fixture の root で generate すると 3 生成物が plugin/ 配下（marketplace は root）に在り `source` が ./plugin（base は root 直下 → RED）。(b) `seat_launch_plugin_dir_is_anchor_plugin`（`tests/e2e/seat/launch.rs`）= 起動行の 1 つ目の `--plugin-dir` が anchor の下の plugin/。(c) `pipe_spawn_plugin_dir_copies_under_plugin`（`tests/e2e/pipe/spawn.rs`）= 便の worktree の plugin/ 配下に plugin.json と hooks.json が写される。(d) `doctor_consumers_plugin_dir_reads_hooks_under_plugin`（`tests/e2e/seat/account.rs`）= anchor の plugin/ 配下の hooks.json の digest が読み込み元の行に出る。
+- 却下: ADR-0038 §3（`.worktrees` を repo 外へ／除外 file／現行のまま／別 repo）。
 
 <!-- contracts:begin -->
 schema = 1
@@ -239,4 +248,14 @@ write-set = ["crates/scribe2/tests/e2e/main.rs", "+crates/scribe2/tests/e2e/fixt
 verify = ["cargo nextest run -p scribe2 --no-tests=fail e2e_fixture_sweep_"]
 size = "S"
 done = "死んだ pid 名義の隔離 server と dir が次の make_tmp_dir で消え、生きている pid の dir と server は残り、make_tmp_dir の戻りの型と呼び手は不変"
+
+[[contract]]
+id = "f"
+title = "plugin の実体を生成 dir plugin/ に置き marketplace の source を ./plugin にする — 置き場は core の定数 1 つ（xtask は tracked から読む）・derive_launch / spawn の写し / main.rs の歯 / 導入先の同期の読み込み元が追随・skills は純移動"
+req = ["FR59", "FR61", "FR62"]
+section = "14"
+write-set = ["crates/scribe2/src/name.rs", "crates/xtask/src/genmanifest.rs", "crates/xtask/src/check_facts.rs", "crates/xtask/src/check_tests.rs", "crates/xtask/src/rules_diff.rs", ".claude-plugin/marketplace.json", "-.claude-plugin/plugin.json", "+plugin/.claude-plugin/plugin.json", "-hooks/hooks.json", "+plugin/hooks/hooks.json", "-skills/ready-compaction/SKILL.md", "+plugin/skills/ready-compaction/SKILL.md", "-skills/rebrief/SKILL.md", "+plugin/skills/rebrief/SKILL.md", "crates/scribe2/src/seat/cycle/launch.rs", "crates/scribe2/src/pipe/spawn.rs", "crates/scribe2/src/main.rs", "crates/scribe2/src/account/consumers.rs", "crates/scribe2/src/headless/mod.rs", "crates/scribe2/src/headless/runner.rs", "crates/scribe2/src/headless/lens.rs", "crates/scribe2/tests/e2e/main.rs", "crates/scribe2/tests/e2e/headless.rs", "crates/scribe2/tests/e2e/hook.rs", "crates/scribe2/tests/e2e/pipe/spawn.rs", "crates/scribe2/tests/e2e/seat.rs", "crates/scribe2/tests/e2e/seat/account.rs", "crates/scribe2/tests/e2e/seat/launch.rs", "crates/scribe2/tests/e2e/seat/tick.rs", "crates/scribe2/tests/e2e/seat/wm.rs", "crates/scribe2/tests/e2e/snapshots/e2e__headless__headless_external_form.snap", "docs/design/account-lifecycle.md", "docs/design/consumer-sync.md", "docs/design/pipeline.md"]
+verify = ["cargo nextest run -p xtask --no-tests=fail genmanifest_plugin_dir_", "cargo nextest run -p scribe2 --no-tests=fail plugin_dir_"]
+size = "M"
+done = "gen-manifest の 3 生成物が plugin/ 配下（marketplace は root・source は ./plugin）に出て xtask check の drift が 0、起動行の 1 つ目の --plugin-dir が anchor/plugin、便の worktree へ plugin/ 配下が写され、導入先の同期が anchor/plugin の hooks.json を読み、hook の --plugin-root と digest の root 相対 path と帳簿の比較は不変"
 <!-- contracts:end -->
