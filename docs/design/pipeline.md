@@ -361,6 +361,13 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
 - 触らない: squash の message の形（§5.4・trailer の字面 `run: `）・CAS・追随の要否判定と衝突の経路・§27 の `main=` の実測・`verify_main` の中身と skip の判定・verdicts.jsonl の key 列・`retire_worktree`・`--pr-cmd` の形（main を動かさないので本節は通らない）。
 - 却下案: admin の chain が trailer を見て手で push / close する（器の外の運用・台帳と event の段が食い違ったまま）／`Failed` のまま notes で補う（同上・C3）／trailer でなく tree の一致で同定する（同じ tree を持つ別の便〔純移動の再 land 等〕を自分の squash と誤認する・trailer は便 1 つに 1 つ）／主実測を撃たずに `Landed` にする（前の周が実測の前に死んだ周を緑と読む・C10）。
 
+## 30. 検出線（変異検査）は main の差分が検出線の面に触れた周だけ撃つ — 追随の再 gate と主実測の両方（契約表の行 x・`s2-07l.397`）
+
+- 何が起きているか: admin の実測 2026-09-16 06:1xZ（本日の着地側 8 便を event log から集計）: Gated PASS 27 回・INCONCLUSIVE 12 回（§26 の穴）・rebase 15 回。rebase の 15 回は走行中の land の下で main が動いた周で、動かしたのは docs merge 26 本 + 着地 5 本。1 周ごとに再 gate（全件 + 変異検査）が走り、`.322` は Gated PASS 6 回で 2 時間 20 分未着地。user の観測（同日）「CPU に負荷がかかって温度が上がっている」の主因（1 周 ≒ 変異検査 75 分・gate-cost.md §5 の実測）。現物（verified・main e45019c）: `pipe/land.rs` の `follow_main` は rebase の後に `gate(&Gate { .. })` を撃ち、gate の `record_verify`（`pipe/gate/record.rs`）は写しの `detection_verify()` を**必ず**撃つ。主実測 `verify_main` は `same_tree`（verdict の `tree` = 便の HEAD の `^{tree}` **全体**と一致）の周だけ検出線を飛ばすので、docs だけの merge で main が動いた周も tree が変わり検出線を撃ち直す。動いた差分が変異検査の入力（source と歯・依存の pin）に触れていない周まで、変異検査 1 周を払っている。
+- 形: **検出線の要否を「差分が検出線の面に触れたか」で決める 1 関数**（pure・`land.rs` か `gate` の隣・C2）: 閉じた path 集合 `DETECTION_SCOPE` = `crates/` 配下・`Cargo.toml` / `Cargo.lock`・`rules/` 配下・`.vessel.toml`（検出線の行の出所）。(i) **追随の再 gate**: `follow_main` が rebase の前に `git diff --name-only -z <base>..<main>` を取り、path が 1 つも `DETECTION_SCOPE` に無ければ `Gate` に「検出線を撃たない」印（閉じた型 `Detection::Skip { reason: OutsideScope }` / `Detection::Run`・`Gate` の field 1 つ）を渡し、`record_verify` は検出線の行を撃たず `verify.jsonl` に `kind=detection skipped=detection reason=outside-scope` の record を 1 本置く（主実測の `skip_record` と同じ形・`tree` の代わりに `reason`）。共通 verify（全件 nextest・clippy・xtask check・deny）と契約 verify は**従来どおり撃つ**（xtask check と契約表の歯は docs を読むので飛ばさない＝偽 PASS を作らない）。(ii) **主実測**: `same_tree` を「tree 全体の一致」から「`git diff-tree -r --name-only -z <gated tree> <landed tree>` の path が 1 つも `DETECTION_SCOPE` に無い」に改める（tree id どうしを diff-tree で比べる・一致の周は差分 0 で従来と同じ結果）。record は従来の `skipped=detection tree=<landed>` に `reason=outside-scope|same-tree` を足す。読めない周（diff が取れない・tree が無い・verdict に `tree` が無い）は**撃つ**（fail-closed・0 に読み替えない）。(i)(ii) は同じ 1 関数（path の列 → 要否）を通す。
+- 触らない: 追随の要否判定（`old != base` なら rebase）・rebase と衝突の経路・共通 verify と契約 verify の行・検出線の行の中身と `{jobs}` の受付・verdict の 3 値と rc・`DETECTION_SCOPE` の外の変更（docs / design-intent / README / .github）が共通 verify で赤になる経路（従来どおり赤）。
+- 却下案: docs だけの周は再 gate ごと飛ばす（xtask check の prose gate と契約表の歯 `contract_closure_ext_real_table_has_zero_findings` が docs を読む＝偽 PASS の経路・#249 の型）／`DETECTION_SCOPE` を rules 行にする（値でなく閉じた path の集合・variant の領分）／docs merge を止める（新契約の投入が遅れる・運用は Landed 直後に束ねる形〔planner 裁定 06:2xZ〕で別に手当て）／変異検査を着地の直前 1 回だけにする（gate の検出線を捨てる設計変更＝ADR-0021 §2.4 の改訂・本便の後に残る重さで判定）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -596,4 +603,14 @@ write-set = ["crates/scribe2/src/pipe/land.rs", "crates/scribe2/tests/e2e/pipe/l
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_land_already_landed_"]
 size = "S"
 done = "自分の trailer を持つ squash が main に在る便の land が main を動かさず主実測を撃って Landed で終端し stdout と detail に already-landed を持ち、trailer が無い周と別の便の trailer の周は従来どおり rebase-empty"
+
+[[contract]]
+id = "x"
+title = "検出線は main の差分が DETECTION_SCOPE に触れた周だけ撃つ — 追随の再 gate は Gate の印で、主実測は diff-tree で判定し、飛ばした周は reason 付きで record する"
+req = ["FR46"]
+section = "30"
+write-set = ["crates/scribe2/src/pipe/land.rs", "crates/scribe2/src/pipe/gate.rs", "crates/scribe2/src/pipe/gate/record.rs", "crates/scribe2/tests/e2e/pipe/land.rs", "crates/scribe2/tests/e2e/pipe/gate.rs"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_detection_scope_"]
+size = "M"
+done = "docs だけで main が動いた便の追随の再 gate と主実測が検出線を撃たず reason=outside-scope の record を残し、crates が動いた周と読めない周は従来どおり撃つ"
 <!-- contracts:end -->
