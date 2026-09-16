@@ -868,6 +868,49 @@ fn plan_of<'a>(pairs: &'a [FilePair], flipping: &[&'a FilePair]) -> Plan<'a> {
     Plan { pairs, decls, bodies }
 }
 
+/// base 段が「名指せない失敗」へ倒れた経路（設計 docs/design/pipeline.md §32・`s2-07l.380`）。
+///
+/// 宣言順は (i) signal（rc 無し）(ii) 名指し 0（compile error の rc 101・出力の形が読めない）
+/// (iii) 名指した歯の撃ち直しが rc≠0。**判定クラスは増えない**——3 つとも `infra-error` の
+/// `base-not-green` で、後置の弁別子だけが違う（極性一覧の行は不変）。操作役はこの後置で
+/// 負荷 / 環境 / 本物の赤を判定行から分け、retire か run N+1 かを推測で決めない（C10）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BaseNotGreen {
+    /// base の runner が rc を持たない（signal で死んだ）。
+    Signal,
+    /// rc≠0 だが落ちた歯を 1 本も名指せない。
+    Unnamed { rc: i32 },
+    /// 名指した歯の撃ち直しが rc≠0（rc 4 = filterset に該当 0 本を含む）。
+    RetryFailed { rc: i32 },
+}
+
+impl BaseNotGreen {
+    /// [`infra`] の理由に置く字面（先頭 `flip-check: FAIL reason=infra-error ` は `infra` のまま）。
+    fn label(self) -> String {
+        match self {
+            Self::Signal => "base-not-green:signal".to_owned(),
+            Self::Unnamed { rc } => format!("base-not-green:unnamed rc={rc}"),
+            Self::RetryFailed { rc } => format!("base-not-green:retry-failed rc={rc}"),
+        }
+    }
+}
+
+/// 「名指せない失敗」を経路へ写す純関数（base 段の 3 か所はここを通る）。
+///
+/// 入力は base の rc（`None` = signal）・名指した歯の本数・撃ち直しの rc（撃っていない周と
+/// 撃ち直しが signal で死んだ周は `None`）。撃っていない周は名指し 0 の側で決まるので、
+/// 名指しが在って撃ち直しの rc が無い形だけが signal へ倒れる。
+fn base_not_green(base_rc: Option<i32>, named: usize, retry_rc: Option<i32>) -> BaseNotGreen {
+    match (base_rc, named) {
+        (None, _) => BaseNotGreen::Signal,
+        (Some(rc), 0) => BaseNotGreen::Unnamed { rc },
+        (Some(_), _) => match retry_rc {
+            None => BaseNotGreen::Signal,
+            Some(rc) => BaseNotGreen::RetryFailed { rc },
+        },
+    }
+}
+
 /// base tree の健全性前段。overlay を書く前に base のまま runner を撃つ。
 ///
 /// 通れば `Ok(撃ち直した歯の本数)`。**base 自身の緑は前提であって判定対象ではない**
@@ -875,6 +918,7 @@ fn plan_of<'a>(pairs: &'a [FilePair], flipping: &[&'a FilePair]) -> Plan<'a> {
 /// 落ちた歯を出力から名指せる周だけ [`retry_named`] で **1 回**撃ち直し、通れば base 緑と
 /// 読む。名指せない周（compile error の rc 101・signal で rc 無し・出力の形が読めない）は
 /// 従来どおり `base-not-green`＝名指せない失敗を撃ち直しで緑に化けさせない（C11.2）。
+/// どの経路で倒れたかは [`base_not_green`] が写し、字面の後置で名指す。
 /// `sink` は `base-retry` の診断行の出口（[`judge_into`] と同じ理由で stderr へ直に書かない）。
 fn base_is_green(dest: &Path, target: &Path, sink: &mut dyn FnMut(&str)) -> Result<usize, Verdict> {
     let output = match nextest(dest, target) {
@@ -884,12 +928,12 @@ fn base_is_green(dest: &Path, target: &Path, sink: &mut dyn FnMut(&str)) -> Resu
     relay("base", &output);
     match output.status.code() {
         Some(0) => Ok(0),
-        Some(_) => {
+        Some(rc) => {
             let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
             text.push_str(&String::from_utf8_lossy(&output.stderr));
-            retry_named(dest, target, &failed_tests(&text), sink)
+            retry_named(dest, target, rc, &failed_tests(&text), sink)
         }
-        None => Err(infra("base-not-green")),
+        None => Err(infra(&base_not_green(None, 0, None).label())),
     }
 }
 
@@ -898,14 +942,16 @@ fn base_is_green(dest: &Path, target: &Path, sink: &mut dyn FnMut(&str)) -> Resu
 /// 撃ち直しの rc が 0 のときだけ `Ok(本数)`。0 本（名指せない）・rc≠0（rc 4 = filterset
 /// に該当 0 本を含む）・起動失敗はすべて `base-not-green`——**2 回目は撃たない**。
 /// 撃ち直しは緩める側なので、当たる範囲（完全一致）も回数（1 回）も狭く取る。
+/// `base_rc` は素の撃ちの rc で、経路の弁別子（`unnamed rc=<rc>`）にだけ使う。
 fn retry_named(
     dest: &Path,
     target: &Path,
+    base_rc: i32,
     failed: &[FailedTest],
     sink: &mut dyn FnMut(&str),
 ) -> Result<usize, Verdict> {
     if failed.is_empty() {
-        return Err(infra("base-not-green"));
+        return Err(infra(&base_not_green(Some(base_rc), 0, None).label()));
     }
     for test in failed {
         sink(&format!("flip-check: base-retry {}::{}", test.binary, test.name));
@@ -923,7 +969,8 @@ fn retry_named(
     if output.status.success() {
         Ok(failed.len())
     } else {
-        Err(infra("base-not-green"))
+        let reason = base_not_green(Some(base_rc), failed.len(), output.status.code());
+        Err(infra(&reason.label()))
     }
 }
 
