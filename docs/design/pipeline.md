@@ -469,7 +469,7 @@ title = "runner / lens の effort を rules 行 runner.effort から毎回渡す
 req = ["FR5", "FR9"]
 section = "16"
 write-set = ["rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "crates/scribe2/src/headless/mod.rs", "crates/scribe2/src/headless/runner.rs", "crates/scribe2/src/headless/lens.rs", "crates/scribe2/src/fleet/usage.rs", "crates/scribe2/tests/e2e/headless.rs", "crates/scribe2/tests/e2e/rules.rs", "crates/scribe2/tests/e2e/snapshots/e2e__rules__rules_external_form.snap"]
-verify = ["cargo nextest run -p scribe2 --no-tests=fail headless_runner_passes_effort_ headless_lens_passes_effort_ headless_runner_refuses_"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail headless_runner_passes_effort_ headless_lens_passes_effort_ headless_effort_row_refuses_"]
 size = "S"
 done = "偽 claude で runner と lens を撃つと argv に effort の値が rules 行のとおり載り、行の無い manifest と表に無い値は rc 2 で claude の呼出 0"
 
