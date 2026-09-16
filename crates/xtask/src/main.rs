@@ -21,6 +21,7 @@ mod polarity;
 mod private_clean;
 mod prose_gate;
 mod rules_diff;
+mod rules_parity;
 mod rules_wired;
 mod seat_brief;
 mod spawn_points;

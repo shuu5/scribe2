@@ -297,7 +297,8 @@ const SUMMARY_PIN: &str = "xtask check: ok core-lines=<v>/<v> file-lines=<v>/<v>
     toolchain-pin=<v>.<v>.<v> \
     paths-clean=<v> private-clean=<v> non-rust-exec=<v>/<v> allow=<v> ci-shell-lines=<v> \
     claude-md-constitution=<v> claude-md-done=<v> claude-md-prose=<v>/<v> enum-slices=<v> claude-spawn-points=<v> env-reads=<v>/<v> polarity=<v>/<v> \
-    prose-gate=<v>/<v> seat-brief=<v> contracts-schema=<v> rules-wired=<v>/<v>";
+    prose-gate=<v>/<v> seat-brief=<v> contracts-schema=<v> rules-wired=<v>/<v> \
+    rules-parity=<v>/<v> doc-only=<v> manifest-only=<v> population=<v>/<v>";
 
 /// git を要する measure の fact（`.git` の無い木では測れない形になり、副 field も出ない）。
 fn is_git_fact(token: &str) -> bool {
@@ -306,10 +307,14 @@ fn is_git_fact(token: &str) -> bool {
         .any(|prefix| token.starts_with(prefix))
 }
 
-/// `rules-wired` の副 field `ids=`（読み手の無い行 id の列）。値の**中身**が形を決める（`R-C7-1` の `-` や
-/// `hook.budget_ms` の `.` `_` は [`shape`] が残す区切り）ので、wire の便が列を縮めるたびに形が変わる。
-/// 検出線の値であって判定行の形ではないので、[`SUMMARY_PIN`] との突合からはこの 1 token だけを外す
-/// （1 つだけ在ること・`rules-wired=` の直後に来ることは別に見る・`s2-07l.160`）。
+/// 副 field `ids=`（id の列）を持つ token の頭（判定行での並び順）。`rules-wired` の読み手の無い行
+/// （`s2-07l.160`）と、`rules-parity` の片側だけの id 2 列 `doc-only` / `manifest-only`（`s2-07l.164`）。
+const IDS_OWNERS: &[&str] = &["rules-wired=", "doc-only=", "manifest-only="];
+
+/// 副 field `ids=`（id の列）。値の**中身**が形を決める（`R-C7-1` の `-` や `hook.budget_ms` の `.` `_` は
+/// [`shape`] が残す区切り）ので、wire の便が列を縮めるたびに形が変わる。検出線の値であって判定行の形では
+/// ないので、[`SUMMARY_PIN`] との突合からはこの token だけを外す（本数と、[`IDS_OWNERS`] の直後に来ることは
+/// 別に見る・`s2-07l.160` / `s2-07l.164`）。
 fn is_wired_ids(token: &str) -> bool {
     token.starts_with("ids=")
 }
@@ -344,13 +349,19 @@ fn check_summary_shape_pins_names_order_and_value_forms() {
     for token in facts.split(' ').filter(|token| !token.is_empty()) {
         assert!(token.contains('='), "fact の token は k=v 形のはず: {token} in {line}");
     }
-    // `rules-wired` の副 field `ids=` は **1 つだけ・`rules-wired=` の直後**に在る（列の中身は pin しない・
+    // 副 field `ids=` は [`IDS_OWNERS`] の本数だけ・**それぞれの直後**に在る（列の中身は pin しない・
     // [`is_wired_ids`]）。token ごと消える実装と、別の場所へ動く実装はここで落ちる。
     let tokens: Vec<&str> = facts.split(' ').collect();
-    assert_eq!(tokens.iter().filter(|token| is_wired_ids(token)).count(), 1, "ids= は 1 つ: {line}");
-    let ids_at = tokens.iter().position(|token| is_wired_ids(token));
-    let before_ids = ids_at.and_then(|at| at.checked_sub(1)).and_then(|at| tokens.get(at));
-    assert!(before_ids.is_some_and(|token| token.starts_with("rules-wired=")), "ids= は rules-wired= の直後: {line}");
+    let owners: Vec<&str> = tokens
+        .iter()
+        .enumerate()
+        .filter(|(_, token)| is_wired_ids(token))
+        .map(|(at, _)| at.checked_sub(1).and_then(|before| tokens.get(before)).copied().unwrap_or_default())
+        .collect();
+    assert_eq!(owners.len(), IDS_OWNERS.len(), "ids= は {} つ: {line}", IDS_OWNERS.len());
+    for (owner, head) in owners.iter().zip(IDS_OWNERS) {
+        assert!(owner.starts_with(head), "ids= は {head} の直後: {line}");
+    }
     if root.join(".git").exists() {
         assert_eq!(without_wired_ids(&shape(&line)), SUMMARY_PIN, "判定行の現物: {line}");
     } else {
@@ -863,6 +874,176 @@ fn entrance_paths_clean_is_unnumbered_outside_repo() {
     let _ = fs::remove_dir_all(&dir);
     assert!(paths_clean_unnumbered(&line), "非 repo root の値: {line}");
     assert_eq!(paths_clean_scanned(&line), None, "走査数は数えられない: {line}");
+}
+
+/// `rules-parity`（`s2-07l.164`・設計 rules-manifest.md §4）の fixture の憲法 HTML。§3 の行 3 つ
+/// （`r-c1-1` / `r-c2-1` / `r-c3-1`）に加え、**読んではいけない 2 形**を置く: comment の中の `<tr>` と、
+/// `<` を含む script 本文（現物の憲法も持つ形・`claude_md.rs` の読み手を共有しない実装はここで落ちる）。
+const PARITY_HTML: &str = concat!(
+    "<!DOCTYPE html>\n<html><head><meta charset=\"UTF-8\">\n",
+    "<script>if (a < b) { probe(); }</script>\n",
+    "<!-- <tr id=\"r-c9-9\"><td>OMITTED</td></tr> -->\n",
+    "</head><body>\n<table>\n",
+    "<tr id=\"r-c1-1\"><td>R-C1-1</td><td>C1</td></tr>\n",
+    "<tr id=\"r-c2-1\"><td>R-C2-1</td><td>C2</td></tr>\n",
+    "<tr id=\"r-c3-1\"><td>R-C3-1</td><td>C3</td></tr>\n",
+    "<tr data-delta-id=\"r-c8-8\"><td>id の無い行（改訂 marker は id でない）</td></tr>\n",
+    "</table>\n</body></html>\n",
+);
+
+/// 同じ fixture の憲法から `r-c3-1` の行だけを除いた HTML（(c) の両側一致の周）。
+const PARITY_HTML_TWO: &str = concat!(
+    "<!DOCTYPE html>\n<html><body>\n<table>\n",
+    "<tr id=\"r-c1-1\"><td>R-C1-1</td></tr>\n",
+    "<tr id=\"r-c2-1\"><td>R-C2-1</td></tr>\n",
+    "</table>\n</body></html>\n",
+);
+
+/// fixture の manifest の 1 行（`rules_diff::rows` が要る 4 key を持つ）。
+fn parity_row(id: &str) -> String {
+    format!(
+        "\n[[rule]]\nid = \"{id}\"\nkind = \"Probe\"\nvalue = 1\nenabled = true\n\
+         ruling = \"fixture\"\nruled_at = \"2026-09-16\"\n"
+    )
+}
+
+/// `ids` の行を持つ fixture の manifest。
+fn parity_manifest(ids: &[&str]) -> String {
+    let mut text = String::from("schema = 1\n");
+    for id in ids {
+        text.push_str(&parity_row(id));
+    }
+    text
+}
+
+/// (a) の manifest: 畳む compound 行・形に当たるが文書に無い行・形を持たない `R-` 行・運用行。
+const PARITY_ROWS: &[&str] = &["R-C1-1", "R-C2-1.fn-lines", "R-C4.line", "R-C9-9", "gate.x"];
+
+/// tmp の root に fixture の憲法（`None` なら置かない）と manifest を置いて `rules-parity` を測る。
+fn parity_fixture(html: Option<&str>, manifest: &str) -> super::Measured {
+    let root = make_tmp_dir();
+    if let Some(text) = html {
+        write_at(&root, crate::claude_md::SOURCE_REL, text);
+    }
+    write_at(&root, RULES_REL, manifest);
+    let layout = Layout {
+        root: root.clone(),
+        core_dir: root.join("crates").join(FIXTURE_CORE),
+        member_dirs: Vec::new(),
+        name: FIXTURE_CORE.to_owned(),
+    };
+    let got = crate::rules_parity::measure(&layout);
+    let _ = fs::remove_dir_all(&root);
+    got
+}
+
+/// fact から `<tag>=<n> ids=<列>` の列を取る（`-` は 0 本）。
+fn parity_ids<'a>(fact: &'a str, tag: &str) -> Vec<&'a str> {
+    let listed = fact
+        .split_once(&format!(" {tag}="))
+        .and_then(|(_, rest)| rest.split_once(" ids="))
+        .map(|(_, rest)| rest.split(' ').next().unwrap_or_default())
+        .unwrap_or_else(|| panic!("fact に {tag}= と ids= が在るはず: {fact}"));
+    if listed == "-" {
+        Vec::new()
+    } else {
+        listed.split(',').collect()
+    }
+}
+
+/// (a) compound 行は §3 の行 id へ畳み、形に当たるが文書に無い行と形を持たない `R-` 行は manifest-only、
+/// 文書だけの行は doc-only、運用行は母集団外（母集団 = 文書側 3 / manifest 側 R-* 4 を同じ行に）。
+#[test]
+fn rules_parity_folds_compound_rows_to_the_section_id() {
+    let got = parity_fixture(Some(PARITY_HTML), &parity_manifest(PARITY_ROWS));
+    assert!(got.violations.is_empty(), "検出線は違反を立てない: {:?}", got.violations);
+    assert_eq!(
+        got.fact,
+        "rules-parity=1/2 doc-only=1 ids=R-C3-1 manifest-only=2 ids=R-C4.line,R-C9-9 population=3/4",
+        "畳んだ 2 面の差と母集団"
+    );
+}
+
+/// (b) `R-C4.line`（`R-<条>-<番号>` の形を持たない）は `R-C4` に**畳まない**（run 1 の誤畳みの退行 pin）:
+/// manifest-only の列に `R-C4.line` が自身の id のまま残り、`R-C4` は現れない。
+#[test]
+fn rules_parity_does_not_fold_non_section_ids_to_the_article() {
+    let got = parity_fixture(Some(PARITY_HTML), &parity_manifest(PARITY_ROWS));
+    let manifest_only = parity_ids(&got.fact, "manifest-only");
+    assert_eq!(manifest_only, ["R-C4.line", "R-C9-9"], "形を持たない行は自身の id のまま: {}", got.fact);
+    assert!(!manifest_only.contains(&"R-C4"), "条だけへ畳んだ id が現れた: {}", got.fact);
+    assert_eq!(parity_ids(&got.fact, "doc-only"), ["R-C3-1"], "文書だけの行: {}", got.fact);
+    // 条に小数点を持つ行 id（`R-C1.2-3`）は形に当たり、その compound 行は畳む。`R-C4-`（番号無し）は畳まない。
+    let dotted = parity_fixture(
+        Some("<table><tr id=\"r-c1.2-3\"></tr></table>"),
+        &parity_manifest(&["R-C1.2-3.args", "R-C4-"]),
+    );
+    assert_eq!(
+        dotted.fact,
+        "rules-parity=0/1 doc-only=0 ids=- manifest-only=1 ids=R-C4- population=1/2",
+        "小数点付きの条は畳み、番号の無い id は畳まない"
+    );
+}
+
+/// (c) 両側が一致する周は `0` と母集団を同じ行に出す（0 と「測れない」を融合しない）: 憲法の無い木は
+/// `n/a`・行に分けられない manifest は `?` + 違反 1 件。
+#[test]
+fn rules_parity_reports_zero_with_population_when_both_sides_match() {
+    let got = parity_fixture(Some(PARITY_HTML_TWO), &parity_manifest(&["R-C1-1", "R-C2-1.fn-lines", "gate.x"]));
+    assert!(got.violations.is_empty(), "検出線は違反を立てない: {:?}", got.violations);
+    assert_eq!(
+        got.fact,
+        "rules-parity=0/0 doc-only=0 ids=- manifest-only=0 ids=- population=2/2",
+        "0 本でも母集団は出る"
+    );
+    let absent = parity_fixture(None, &parity_manifest(&["R-C1-1"]));
+    assert!(absent.violations.is_empty(), "憲法の無い木は測る対象が無い: {:?}", absent.violations);
+    assert_eq!(absent.fact, "rules-parity=n/a(no-constitution)", "n/a は 0 と別の字面");
+    let broken = parity_fixture(Some(PARITY_HTML_TWO), "schema = 1\n\n[[rule]]\nid = \"R-C1-1\"\n");
+    assert_eq!(broken.fact, "rules-parity=?", "行に分けられない manifest は ?");
+    assert_eq!(broken.violations.len(), 1, "測れない周だけ違反: {:?}", broken.violations);
+}
+
+/// (d) 判定行の形（[`SUMMARY_PIN`]）に token `rules-parity=<doc-only>/<manifest-only>` が在り、現物の repo で
+/// 撃った判定行がその形に一致する。`ids=` の 2 列は [`without_wired_ids`] で突合から外し、本数と対で見る。
+#[test]
+fn rules_parity_token_is_in_summary_pin() {
+    assert!(
+        SUMMARY_PIN.contains(" rules-parity=<v>/<v> doc-only=<v> manifest-only=<v> population=<v>/<v>"),
+        "pin に rules-parity の token が在る: {SUMMARY_PIN}"
+    );
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+    let line = summary(&root);
+    let tokens: Vec<&str> = line.split(' ').collect();
+    let at = tokens
+        .iter()
+        .position(|token| token.starts_with("rules-parity="))
+        .unwrap_or_else(|| panic!("判定行に rules-parity= が在るはず: {line}"));
+    let heads: Vec<String> = tokens
+        .iter()
+        .skip(at)
+        .take(6)
+        .map(|token| token.split_once('=').map(|(head, _)| head).unwrap_or_default().to_owned())
+        .collect();
+    assert_eq!(
+        heads,
+        ["rules-parity", "doc-only", "ids", "manifest-only", "ids", "population"],
+        "現物の判定行の token の並び: {line}"
+    );
+    let shaped = without_wired_ids(&shape(&line));
+    assert!(
+        shaped.contains(" rules-parity=<v>/<v> doc-only=<v> manifest-only=<v> population=<v>/<v>"),
+        "現物の判定行が pin の形に一致する: {shaped}"
+    );
+    // 本数と列は対（`doc-only=<n>` の n と `ids=` の要素数）。現物の値は pin しない（Landed 後に admin が実測）。
+    for tag in ["doc-only", "manifest-only"] {
+        let count: usize = tokens
+            .iter()
+            .find_map(|token| token.strip_prefix(&format!("{tag}=")))
+            .and_then(|value| value.parse().ok())
+            .unwrap_or_else(|| panic!("{tag}= は数のはず: {line}"));
+        assert_eq!(parity_ids(&line, tag).len(), count, "{tag} の本数と列は対: {line}");
+    }
 }
 
 // 非 Rust 実行物と散文の門の歯は主題ごとの子 module（`check_<主題>_tests.rs`・`#[path]` で

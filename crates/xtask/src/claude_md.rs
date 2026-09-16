@@ -23,6 +23,10 @@
 //! 2 つの区間の**外**は手書きの面で、散文の門（`prose_gate.rs`）と同じ印を持ち pointer を
 //! 持たない行の数を検出線 `claude-md-prose` が判定行へ出す（rc は変えない・C12.4 の型）。
 //! 印と pointer の判定は散文の門の 1 本を呼ぶ（2 本目の判定を作らない・C2）。
+//!
+//! tag 読み（[`read_tag`] / [`attr`] / [`skip_ignorable`] / [`skip_raw`]）は憲法 HTML の**唯一の
+//! 読み手**で、§3 の行 id を集める `rules_parity.rs` も同じ 4 本を呼ぶ（2 本目の HTML parser を
+//! 作らない・`s2-07l.164`）。可視性は `pub(crate)` だけで、挙動は変えない。
 
 use crate::check::{failed, Layout, Measured};
 use crate::prose_gate::Reason;
@@ -31,7 +35,7 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 /// 抽出元（repo root からの相対）。
-const SOURCE_REL: &str = "design-intent/spec/constitution.html";
+pub(crate) const SOURCE_REL: &str = "design-intent/spec/constitution.html";
 
 /// 書き先（repo root からの相対）。
 const TARGET_REL: &str = "CLAUDE.md";
@@ -64,7 +68,7 @@ const ID_CLASS: &str = "ears-id";
 const DROPPED: &str = "del";
 
 /// 中身を tag として読まない要素（`<` `>` を含む script 本文で tag を誤読しない）。
-const RAW: &[&str] = &["script", "style"];
+pub(crate) const RAW: &[&str] = &["script", "style"];
 
 /// 閉じ tag を持たない要素。stack へ積むと以降の入れ子が 1 段ずれる。
 const VOID: &[&str] = &[
@@ -85,15 +89,15 @@ const ENTITIES: &[(&str, &str)] = &[
 ];
 
 /// 読み取った tag 1 つ。
-struct Tag<'a> {
+pub(crate) struct Tag<'a> {
     /// 要素名（小文字化しない＝本 file は小文字で書かれている）。
-    name: &'a str,
+    pub(crate) name: &'a str,
     /// `<name` と `>` の間（属性の並び）。
-    attrs: &'a str,
+    pub(crate) attrs: &'a str,
     /// 閉じ tag か。
-    closing: bool,
+    pub(crate) closing: bool,
     /// `/>` で閉じているか。
-    self_closing: bool,
+    pub(crate) self_closing: bool,
 }
 
 /// 開いている要素 1 つ。
@@ -152,7 +156,7 @@ struct Walk<'a> {
 ///
 /// **名前の前は境界でなければならない**——`id="…"` で素朴に探すと
 /// `data-delta-id="…"` に当たる（実測: 憲法の改訂 marker が全部それである）。
-fn attr<'a>(attrs: &'a str, name: &str) -> Option<&'a str> {
+pub(crate) fn attr<'a>(attrs: &'a str, name: &str) -> Option<&'a str> {
     let needle = format!("{name}=\"");
     let mut from = 0_usize;
     loop {
@@ -181,7 +185,7 @@ fn flatten(raw: &str) -> String {
 }
 
 /// `<` から始まる 1 tag を読む。返すのは tag と**その後ろ**である。
-fn read_tag(rest: &str) -> Result<(Tag<'_>, &str), String> {
+pub(crate) fn read_tag(rest: &str) -> Result<(Tag<'_>, &str), String> {
     let inner = rest.get(1..).unwrap_or_default();
     let end = inner
         .find('>')
@@ -217,7 +221,7 @@ fn head(rest: &str) -> String {
 }
 
 /// comment / doctype を読み飛ばす。読み飛ばしたら**その後ろ**を返す。
-fn skip_ignorable(rest: &str) -> Result<Option<&str>, String> {
+pub(crate) fn skip_ignorable(rest: &str) -> Result<Option<&str>, String> {
     for (open, close) in [("<!--", "-->"), ("<!", ">")] {
         if !rest.starts_with(open) {
             continue;
@@ -232,7 +236,7 @@ fn skip_ignorable(rest: &str) -> Result<Option<&str>, String> {
 }
 
 /// `script` / `style` の中身を tag として読まずに飛ばす。
-fn skip_raw<'a>(rest: &'a str, name: &str) -> Result<&'a str, String> {
+pub(crate) fn skip_raw<'a>(rest: &'a str, name: &str) -> Result<&'a str, String> {
     let close = format!("</{name}>");
     let end = rest
         .find(&close)

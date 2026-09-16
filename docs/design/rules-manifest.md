@@ -93,7 +93,7 @@ ruled_at = "2026-09-07"
 | `repo.non_rust_exec_allow` | RepoNonRustExecAllow | `["scripts/bdw", "design-intent/assets/mermaid.min.js"]` | true | user 裁定 2026-09-10（`s2-07l` notes 10:4xZ (2)・[ADR-0009 §2.5](../../design-intent/decisions/ADR-0009-vessel-grants-runner-permissions-and-mutation-proof.html)）。**tracked な非 Rust 実行物の例外**＝`cargo xtask check` の measure `non-rust-exec` が、閉じた分類器（先頭 2 byte `#!` / index の mode 100755 / 拡張子 sh bash zsh py bats pl rb js ts mjs）に当たる path のうち**この列に完全一致で載るものだけ**を通す（載らない 1 件で rc≠0・母集団 0 は「測れなかった」で rc≠0）。**分類器を緩めず例外を 1 面へ集める**のが趣旨で、`js` を分類器から外すと次の asset が黙って通る。同じ便で足した `ci-shell-lines` は `.github/workflows/*.yml` の `run:` 行（block scalar の継続行を含む）を数える**検出線**で、deny しない |
 | ~~`gate.common_verify`~~ | ~~GateCommonVerify~~ | — | — | **除去済み**（`s2-07l.57`・ADR-0010 §2.2・裁定 id = ADR-0010）＝共通 verify の値は対象 repo の vessel 宣言 `common-verify` が持ち、gate と land は**便の写し** `vessel.toml` から読む。行・variant・`ALL` の 3 点を 1 PR で除いた |
 
-`RuleKind` の variant は **28**（`rules::ALL` が母集団・`GateCommonVerify` の除去で 28 → 27・`RepoNonRustExecAllow` の追加で 27 → 28）で、この表が値を持つのは **24 種**である（除去済みの行は値を持たない）。差の 4 種（`SeatContextCapPct` / `SeatContextWindowTokens` / `SeatTickStaleS` / `SeatCycleLockTtlS`）は seat autonomy の便で足されたまま**この表へ未追加**＝既知の drift である（数え直した・2026-09-10 / `s2-07l.59` で 1 行足して 2026-09-11 に取り直した）。§3 の行 id は manifest の行 id の**接頭辞**として一致する（compound 行は `.` で枝分かれ）。後続の drift 歯は接頭辞で group 化して突合する。
+variant の母集団は `rules::ALL`（`crates/scribe2/src/rules/mod.rs`）・行の一覧は tracked の現物 `rules/manifest.toml` が正本（この表は写しで、件数はここに書かない＝2 面の drift は `cargo xtask check` の `rules-wired` / `rules-parity` が判定行に出す・§4）・§3 の行 id は manifest の行 id の接頭辞（畳み方は §4）。
 
 ### 4.2 拒否 5 形（FR18・AC6・すべて `line=<N>` 付き・全件を集めて返す）
 
@@ -193,7 +193,7 @@ id = "b"
 title = "憲法 §3 の行 id と manifest の R-* 行を双方向に突合する検出線 rules-parity・設計 doc の手書きの件数の撤去"
 req = ["FR17", "FR18"]
 section = "4"
-write-set = ["+crates/xtask/src/rules_parity.rs", "crates/xtask/src/check.rs", "crates/xtask/src/main.rs", "crates/xtask/src/claude_md.rs", "crates/xtask/src/check_tests.rs", "docs/design/rules-manifest.md"]
+write-set = ["crates/xtask/src/rules_parity.rs", "crates/xtask/src/check.rs", "crates/xtask/src/main.rs", "crates/xtask/src/claude_md.rs", "crates/xtask/src/check_tests.rs", "docs/design/rules-manifest.md"]
 verify = ["cargo nextest run -p xtask --no-tests=fail rules_parity_"]
 size = "S"
 done = "判定行に doc-only / manifest-only の id が出て、設計 doc から手書きの variant の件数が消える"
