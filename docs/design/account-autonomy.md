@@ -172,7 +172,7 @@ id = "j"
 title = "選定の前計測の鮮度 — rules 行 fleet.usage_fresh_s の内側の実測を測り直さず、計測自身の 429 / timeout では直前の新しい実測を保つ（fleet usage の口は不変）"
 req = ["FR36", "FR33"]
 section = "13"
-write-set = ["rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "crates/scribe2/tests/e2e/rules.rs", "docs/design/rules-manifest.md", "crates/scribe2/src/fleet/usage.rs", "crates/scribe2/src/fleet/cli.rs", "crates/scribe2/tests/e2e/fleet.rs"]
+write-set = ["rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "crates/scribe2/tests/e2e/rules.rs", "docs/design/rules-manifest.md", "crates/scribe2/src/fleet/select.rs", "crates/scribe2/src/fleet/usage.rs", "crates/scribe2/src/fleet/cli.rs", "crates/scribe2/tests/e2e/fleet.rs"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail fleet_select_fresh_"]
 size = "S"
 done = "新しい実測を持つ口座は選定で測り直されず、測り直した口座が 429 / timeout を返す周も最新の実測が上書きされず候補に残り、fleet usage は全口座を測り、rules 行が裁定 id 付きで 1 本増える"
