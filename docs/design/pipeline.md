@@ -478,8 +478,8 @@ id = "k"
 title = "lens の verdict に findings の閉じた category と件数・母集団を必須 key にする — 欠落と母集団 0 は INCONCLUSIVE"
 req = ["FR9", "NFR1"]
 section = "17"
-write-set = ["crates/scribe2/src/pipe/gate.rs", "+crates/scribe2/src/pipe/gate/findings.rs", "crates/scribe2/src/headless/lens.txt", "crates/scribe2/src/headless/lens.rs", "crates/scribe2/tests/e2e/pipe.rs", "crates/scribe2/tests/e2e/pipe/gate.rs", "crates/scribe2/tests/e2e/headless.rs", "crates/scribe2/tests/e2e/snapshots/e2e__headless__lens_prompt_external_form.snap", "crates/scribe2/tests/e2e/snapshots/e2e__pipe__pipe_external_form.snap", "docs/design/pipeline.md"]
-verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_gate_findings_"]
+write-set = ["crates/scribe2/src/pipe/gate.rs", "crates/scribe2/src/pipe/gate/lens.rs", "+crates/scribe2/src/pipe/gate/findings.rs", "crates/scribe2/src/headless/lens.txt", "crates/scribe2/src/headless/lens.rs", "crates/scribe2/tests/e2e/pipe.rs", "crates/scribe2/tests/e2e/pipe/gate.rs", "crates/scribe2/tests/e2e/headless.rs", "crates/scribe2/tests/e2e/snapshots/e2e__headless__lens_prompt_external_form.snap", "crates/scribe2/tests/e2e/snapshots/e2e__pipe__pipe_external_form.snap", "docs/design/pipeline.md"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_gate_findings_", "cargo nextest run -p scribe2 --no-tests=fail lens_prompt_external_form"]
 size = "M"
 done = "lens の verdict が category ごとの件数と母集団を必ず持ち、欠落は INCONCLUSIVE"
 

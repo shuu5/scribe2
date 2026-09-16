@@ -118,7 +118,7 @@ id = "g"
 title = "runner が死んだ便の起こし直し — pipe resume が Spawned の便の runner の生死を唯一の wait で測り、死んでいれば同じ worktree で起こし直す（途中再開の節に未 commit の一覧）"
 req = ["FR37", "FR14"]
 section = "4"
-write-set = ["crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/ratelimit.rs", "crates/scribe2/src/pipe/follow.rs", "crates/scribe2/src/pipe/spawn.rs", "crates/scribe2/src/headless/runner.txt", "crates/scribe2/tests/e2e/pipe/spawn.rs"]
+write-set = ["crates/scribe2/src/pipe/cli/resume.rs", "crates/scribe2/src/pipe/ratelimit.rs", "crates/scribe2/src/pipe/follow.rs", "crates/scribe2/src/pipe/spawn.rs", "crates/scribe2/src/headless/runner.txt", "crates/scribe2/tests/e2e/pipe/spawn.rs", "crates/scribe2/tests/e2e/snapshots/e2e__headless__headless_runner_prompt_external_form.snap"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_resume_kill_"]
 size = "M"
 done = "Spawned で runner が死んだ便に resume を撃つと同じ worktree で runner が起き直り途中再開の節に未 commit の file 名が載り、生きている runner の便は typed に断られて runner が 2 本にならない"
