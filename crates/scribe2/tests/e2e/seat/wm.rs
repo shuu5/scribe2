@@ -714,6 +714,12 @@ const REBRIEF_FOUND: &str = concat!(
     "[WM-DIRECTIVE] kind=none resolution=none line=- [hard候補] [P1] since=2026-09-01 矢印の無い命令 s2-07l.140 を見る\n",
     "[WM-DIRECTIVE] kind=none resolution=none line=- [auto] [P2] since=2026-09-01 裁定だけ → SSOT: user 裁定 2026-09-12T02:01Z\n",
     "[WM-DIRECTIVE-COUNT] total=5 provisional=2 unresolved=1\n",
+    "[MAIN] sha=unknown origin=unknown porcelain=unknown reason=head-unreadable\n",
+    "[RUN-COUNT] n=0\n",
+    "[RUN-NONE]\n",
+    "[SEAT-COUNT] n=0\n",
+    "[SEAT-NONE]\n",
+    "[WIN-UNKNOWN] reason=consumed-unreadable\n",
     "[ORPHAN-WM] file=working-memory.sid-other.md seat=other:1\n",
     "[BD-COUNT] open=2 in_progress=1 blocked=1\n",
     "[MEMO-DUE-COUNT] n=0 of=0\n",
@@ -828,7 +834,8 @@ pub(super) fn rebrief_forms() -> Vec<Output> {
 }
 
 /// (1) found の周は全段を marker の宣言順に出す（stdout 全体を契約の字面で照合・記録の無い席の `[PLUGIN]` は
-/// `drift=unrecorded` の 1 行・`s2-07l.304`）・bd は `--readonly` で撃つ。marker の母集団は 25（`.304` で `[PLUGIN]` +1）。
+/// `drift=unrecorded` の 1 行・`s2-07l.304`・現在地の段は anchor が repo でなく log も消費済みの退避時刻も無い形・
+/// `s2-07l.326`）・bd は `--readonly` で撃つ。marker の母集団は 36（`.304` で `[PLUGIN]` +1・`.326` で現在地 +11）。
 #[test]
 fn seat_wm_rebrief_lists_found_wm_with_every_stage_in_marker_order() {
     let (place, bd) = rebrief_found();
@@ -836,7 +843,7 @@ fn seat_wm_rebrief_lists_found_wm_with_every_stage_in_marker_order() {
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
     assert!(stderr_of(&out).is_empty(), "stderr は空: {}", stderr_of(&out));
     assert_eq!(stdout_of(&out), REBRIEF_FOUND, "DATA 全体");
-    assert_eq!(vessel::seat::rebrief::ALL.len(), 25, "marker の母集団（`[PLUGIN]` で 24 → 25）");
+    assert_eq!(vessel::seat::rebrief::ALL.len(), 36, "marker の母集団（`[PLUGIN]` で 24 → 25・現在地の 11 で 36）");
     assert_eq!(
         fs::read_to_string(place.dir.join("bd.args")).unwrap_or_default(),
         "--readonly\nlist\n--limit\n0\n--json\n",
@@ -937,6 +944,12 @@ fn seat_wm_rebrief_marks_other_sid_as_candidate_and_other_seat_as_orphan() {
             "[SID] sid-new\n",
             "[WM] missing\n",
             "[PLUGIN] drift=unrecorded\n",
+            "[MAIN] sha=unknown origin=unknown porcelain=unknown reason=head-unreadable\n",
+            "[RUN-COUNT] n=0\n",
+            "[RUN-NONE]\n",
+            "[SEAT-COUNT] n=0\n",
+            "[SEAT-NONE]\n",
+            "[WIN-UNKNOWN] reason=no-consumed\n",
             "[ORPHAN-WM] file=working-memory.sid-x.md seat=other:1\n",
             "[BD-COUNT] open=0 in_progress=0 blocked=0\n",
             "[MEMO-DUE-COUNT] n=0 of=0\n",
@@ -1115,6 +1128,12 @@ fn seat_wm_rebrief_reads_schemaless_wm_and_marks_empty_sections() {
             "[WM-USER-DIRECTIVE-EMPTY]\n",
             "[WM-DIRECTIVE-EMPTY]\n",
             "[WM-DIRECTIVE-COUNT] total=0 provisional=0 unresolved=0\n",
+            "[MAIN] sha=unknown origin=unknown porcelain=unknown reason=head-unreadable\n",
+            "[RUN-COUNT] n=0\n",
+            "[RUN-NONE]\n",
+            "[SEAT-COUNT] n=0\n",
+            "[SEAT-NONE]\n",
+            "[WIN-UNKNOWN] reason=no-consumed\n",
             "[ORPHAN-NONE]\n",
             "[BD-COUNT] open=2 in_progress=1 blocked=1\n",
             "[MEMO-DUE-COUNT] n=0 of=0\n",
@@ -1323,5 +1342,227 @@ fn seat_rebrief_memo_rows_follow_bd_count_directly() {
         ["[MEMO-DUE]", "[MEMO-DUE-COUNT]", "[MEMO-STALE]", "[MEMO-STALE-COUNT]", "[BD-INPROGRESS-NONE]"],
         "{text}"
     );
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+// ─────────────────── 現在地の DATA（`[MAIN]` / `[RUN]` / `[SEAT]` / `[WIN]`・設計 §12.2・ADR-0031 §2.2・`s2-07l.326`） ───────────────────
+
+/// 現在地の歯の全桁 sha（`base:` / `sha:` の detail に書く）。
+const STATUS_SHA: &str = "abcdef0123456789abcdef0123456789abcdef01";
+/// 上の短 sha（12 桁・`[PLUGIN] binary=` と同じ桁）。
+const STATUS_SHORT: &str = "abcdef012345";
+
+/// 便の event 1 件（`run` / `bead` 付き・`bead` は `s2-<run>`・`account` は呼び手が struct update で足す）。
+fn status_event(ts: &str, kind: vessel::fleet::EventKind, run: &str, stage: Option<vessel::fleet::Stage>, detail: Option<&str>) -> vessel::fleet::Event {
+    vessel::fleet::Event {
+        schema: vessel::fleet::SCHEMA,
+        ts: ts.to_owned(),
+        kind,
+        run: run.to_owned(),
+        bead: format!("s2-{run}"),
+        host: "h".to_owned(),
+        actor: "machine".to_owned(),
+        stage,
+        seat: None,
+        pid: None,
+        detail: detail.map(str::to_owned),
+        allowance: None,
+        registration: None,
+        account: None,
+    }
+}
+
+/// 登録 row の event 1 件（鍵 = role × anchor ゆえ anchor は `<place.anchor>/<target>`・口座 a1）。
+fn status_registered(place: &WmPlace, target: &str, role: vessel::seat::role::Role, model: Option<&str>) -> vessel::fleet::Event {
+    let registration = vessel::fleet::Registration {
+        role,
+        anchor: place.anchor.join(target).display().to_string(),
+        target: target.to_owned(),
+        sid: None,
+        account: "a1".to_owned(),
+        launch: "cld".to_owned(),
+        model: model.map(str::to_owned),
+    };
+    vessel::fleet::Event {
+        registration: Some(registration),
+        ..status_event("2026-09-16T00:00:00Z", vessel::fleet::EventKind::SeatRegistered, "", None, None)
+    }
+}
+
+/// event log を置く（`<state>/fleet/events.jsonl`・1 行 1 event・lock は取らない＝歯の fixture）。
+fn status_log(place: &WmPlace, events: &[vessel::fleet::Event]) {
+    let dir = place.state.join("fleet");
+    fs::create_dir_all(&dir).ok();
+    let body: String = events.iter().map(|event| format!("{}\n", event.to_line())).collect();
+    fs::write(dir.join("events.jsonl"), body).ok();
+}
+
+/// 現在地の歯の場所（打刻 1・自席の退避物なし・空の台帳の偽 bd）。
+fn status_place() -> (WmPlace, String) {
+    let place = wm_place();
+    wm_stamp(&place, &["sid-now"]);
+    let bd = fake_bd(&place.dir, "bd", "[]", 0, 0);
+    (place, bd)
+}
+
+/// 行頭が `head` の行（出現順）。
+fn status_rows(text: &str, head: &str) -> Vec<String> {
+    text.lines().filter(|line| line.starts_with(head)).map(str::to_owned).collect()
+}
+
+/// 行頭の marker の列（`from` の行から `to` の行まで・両端を含む）。
+fn status_heads(text: &str, from: &str, to: &str) -> Vec<String> {
+    text.lines()
+        .skip_while(|line| !line.starts_with(from))
+        .take_while(|line| !line.starts_with(to))
+        .filter_map(|line| line.split(' ').next())
+        .map(str::to_owned)
+        .chain(std::iter::once(to.to_owned()))
+        .collect()
+}
+
+/// (a) 設計 §12.7 が名指す歯: 偽の event log に Spawned 1 便（`SeatSpawned account=x`・detail `base:<sha>`）と Landed 1 便を
+/// 書くと、`[RUN]` には Spawned の 1 便だけが `account=x base=<短 sha>` 付きで出て `[RUN-COUNT] n=1`（`-NONE` は出ない）、
+/// 登録 row の席が `[SEAT]` に打刻の state 付きで出る。現在地の段は `[WM-DIRECTIVE-COUNT]`〜`[ORPHAN-*]` の間に
+/// marker の宣言順で並ぶ。base に marker が無い（RED）。
+#[test]
+fn seat_rebrief_lists_live_runs_and_seats() {
+    use vessel::fleet::{EventKind, Stage};
+    use vessel::seat::role::Role;
+    let (place, bd) = status_place();
+    let base = format!("base:{STATUS_SHA}");
+    status_log(
+        &place,
+        &[
+            status_event("2026-09-16T01:00:00Z", EventKind::RunStage, "r1", Some(Stage::Spawned), Some(&base)),
+            vessel::fleet::Event {
+                account: Some("x".to_owned()),
+                ..status_event("2026-09-16T01:00:01Z", EventKind::SeatSpawned, "r1", None, None)
+            },
+            status_event("2026-09-16T01:00:02Z", EventKind::RunStage, "r2", Some(Stage::Landed), None),
+            status_registered(&place, WM_TARGET, Role::Planner, Some("Opus")),
+        ],
+    );
+    let out = wm_rebrief(&place, &bd, &[]);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    let text = stdout_of(&out);
+    assert_eq!(
+        status_rows(&text, "[RUN"),
+        [
+            format!("[RUN] id=r1 stage=Spawned account=x base={STATUS_SHORT} updated=2026-09-16T01:00:01Z"),
+            "[RUN-COUNT] n=1".to_owned(),
+        ],
+        "Landed の r2 は出ない・-NONE は出ない: {text}"
+    );
+    assert_eq!(
+        status_rows(&text, "[SEAT"),
+        ["[SEAT] target=wm:1 role=planner state=idle account=a1 model=Opus", "[SEAT-COUNT] n=1"],
+        "{text}"
+    );
+    assert_eq!(
+        status_heads(&text, "[MAIN]", "[ORPHAN-NONE]"),
+        ["[MAIN]", "[RUN]", "[RUN-COUNT]", "[SEAT]", "[SEAT-COUNT]", "[WIN-UNKNOWN]", "[ORPHAN-NONE]"],
+        "現在地の段は宣言順で `[ORPHAN-*]` の前: {text}"
+    );
+    assert!(text.starts_with("[SID] sid-now\n[WM] missing\n"), "他の段は不変: {text}");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (b) 登録 row 2 席 + state.jsonl（idle / busy）→ `[SEAT]` 2 行に打刻の state が写り、打刻の無い 3 席目は `state=unknown`
+/// （`model` の無い row も `unknown`・ハイフンの値を使わない）。`[SEAT-COUNT] n=3`。
+#[test]
+fn seat_wm_status_lists_seats_with_state_from_the_stamp() {
+    use vessel::seat::role::Role;
+    let (place, bd) = status_place();
+    write_state(&seat_dir_of(&place.state, "other_2"), StateFix::Busy { age_s: 0 });
+    status_log(
+        &place,
+        &[
+            status_registered(&place, WM_TARGET, Role::Planner, Some("Opus")),
+            status_registered(&place, "other:2", Role::Admin, None),
+            status_registered(&place, "third:3", Role::Admin, Some("Sonnet")),
+        ],
+    );
+    let out = wm_rebrief(&place, &bd, &[]);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    let text = stdout_of(&out);
+    let mut seats = status_rows(&text, "[SEAT] ");
+    seats.sort();
+    assert_eq!(
+        seats,
+        [
+            "[SEAT] target=other:2 role=admin state=busy account=a1 model=unknown",
+            "[SEAT] target=third:3 role=admin state=unknown account=a1 model=Sonnet",
+            "[SEAT] target=wm:1 role=planner state=idle account=a1 model=Opus",
+        ],
+        "{text}"
+    );
+    assert_eq!(status_rows(&text, "[SEAT-"), ["[SEAT-COUNT] n=3"], "{text}");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (c) anchor が git repo でない周は `[MAIN] sha=unknown origin=unknown porcelain=unknown` で rc 0（DATA の他の段は出る・
+/// rc 2 に倒さない）。同じ anchor を repo にすると `sha=<短 sha> porcelain=0`・origin/main が無ければ `origin=unknown`・
+/// origin/main を HEAD に置けば `same`・未追跡 file 1 つで `porcelain=1`・commit を積めば `ahead`。
+#[test]
+fn seat_wm_status_reports_main_as_unknown_when_git_is_absent() {
+    let (place, bd) = status_place();
+    let main_of = |case: &str| -> String {
+        let out = wm_rebrief(&place, &bd, &[]);
+        assert_eq!(rc_of(&out), i32::from(RC_OK), "{case}: stderr={}", stderr_of(&out));
+        let text = stdout_of(&out);
+        assert!(text.starts_with("[SID] sid-now\n"), "{case}: DATA は出る: {text}");
+        status_rows(&text, "[MAIN]").join("\n")
+    };
+    assert_eq!(main_of("非 repo"), "[MAIN] sha=unknown origin=unknown porcelain=unknown reason=head-unreadable");
+    let Some(head) = crate::git_repo_at(&place.anchor) else {
+        panic!("anchor を repo にできる");
+    };
+    let short = head.get(..12).unwrap_or_default();
+    assert_eq!(main_of("origin/main なし"), format!("[MAIN] sha={short} origin=unknown porcelain=0"));
+    assert!(crate::git_out(&place.anchor, &["update-ref", "refs/remotes/origin/main", "HEAD"]).is_some());
+    assert_eq!(main_of("same"), format!("[MAIN] sha={short} origin=same porcelain=0"));
+    fs::write(place.anchor.join("dirty"), "x\n").ok();
+    assert_eq!(main_of("未追跡 1"), format!("[MAIN] sha={short} origin=same porcelain=1"));
+    assert!(crate::git_out(&place.anchor, &["add", "-A"]).is_some());
+    assert!(crate::git_out(&place.anchor, &["commit", "-q", "-m", "next"]).is_some());
+    let next = crate::git_out(&place.anchor, &["rev-parse", "HEAD"]).unwrap_or_default();
+    assert_ne!(next, head, "commit が積めた");
+    assert_eq!(main_of("ahead"), format!("[MAIN] sha={} origin=ahead porcelain=0", next.get(..12).unwrap_or_default()));
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (d) 自席の消費済み退避物の `externalized_at` の**前**に Landed 1 便・**後**に Landed 2 便（detail `sha:<sha> main:<sha>` の
+/// 1 便と `--pr-cmd` 形〔detail `pr`・sha を持たない〕の 1 便）を偽の event log に書くと、`[WIN]` は後の 2 便だけが時刻順に
+/// 出て（`sha=<短 sha>` と `sha=unknown` の両分岐）、前の 1 便は出ない（`[WIN-COUNT] n=2`・母集団 3 便）。
+/// `externalized_at` の無い古い消費済みは起点に数えない（読めた最大を取る）。
+#[test]
+fn seat_wm_status_lists_wins_landed_after_the_last_consumed() {
+    use vessel::fleet::{EventKind, Stage};
+    let (place, bd) = status_place();
+    wm_consumed(&place, "working-memory.sid-1.consumed.md", "schema: 1\nseat: wm:1\nexternalized_at: 2026-09-16T01:00:00Z\n", "", "");
+    wm_consumed(&place, "working-memory.sid-0.consumed.md", "schema: 1\nseat: wm:1\n", "", "");
+    let landed = format!("sha:{STATUS_SHA} main:{STATUS_SHA}");
+    let events = [
+        status_event("2026-09-16T00:30:00Z", EventKind::RunDone, "w0", Some(Stage::Landed), Some(&landed)),
+        status_event("2026-09-16T02:00:00Z", EventKind::RunDone, "w2", Some(Stage::Landed), Some("pr")),
+        status_event("2026-09-16T01:30:00Z", EventKind::RunDone, "w1", Some(Stage::Landed), Some(&landed)),
+    ];
+    assert_eq!(events.iter().filter(|event| event.stage == Some(Stage::Landed)).count(), 3, "母集団 3 便");
+    status_log(&place, &events);
+    let out = wm_rebrief(&place, &bd, &[]);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    let text = stdout_of(&out);
+    assert_eq!(
+        status_rows(&text, "[WIN"),
+        [
+            format!("[WIN] id=s2-w1 landed=2026-09-16T01:30:00Z sha={STATUS_SHORT}"),
+            "[WIN] id=s2-w2 landed=2026-09-16T02:00:00Z sha=unknown".to_owned(),
+            "[WIN-COUNT] n=2".to_owned(),
+        ],
+        "前の w0 は出ない・-NONE / -UNKNOWN は出ない: {text}"
+    );
+    assert!(!text.contains("s2-w0"), "起点より前の便: {text}");
+    assert_eq!(status_rows(&text, "[RUN"), ["[RUN-COUNT] n=0", "[RUN-NONE]"], "Landed は走行中でない: {text}");
     fs::remove_dir_all(&place.dir).ok();
 }

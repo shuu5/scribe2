@@ -22,6 +22,9 @@ use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
+/// 現在地の段（`[MAIN]` / `[RUN]` / `[SEAT]` / `[WIN]`・設計 §12.2）。
+pub mod status;
+
 /// 台帳の待ち上限を宣言する rules 行の id（**値は code に焼かない**・憲法 C5）。
 pub const ID_TIMEOUT: &str = "seat.ledger_timeout_s";
 /// 判定点を持たない memo を stale と数える日数（以上）の rules 行の id（設計 ledger-triage.md §4）。
@@ -86,6 +89,28 @@ pub enum Marker {
     WmDirectiveEmpty,
     /// 節 3 の件数（列挙との対）。
     WmDirectiveCount,
+    /// anchor の HEAD・origin/main との関係・porcelain の行数（設計 §12.2・読めない値は `unknown`）。
+    Main,
+    /// 走行中の便の 1 件（終端でない・`detail=retired` でない）。
+    Run,
+    /// 走行中の便の件数（log を読めない周は `n=unknown`）。
+    RunCount,
+    /// 確認した上で走行中の便が 0。
+    RunNone,
+    /// 登録 row の席の 1 件（打刻の最終行の state 付き）。
+    Seat,
+    /// 登録 row の件数（log を読めない周は `n=unknown`）。
+    SeatCount,
+    /// 確認した上で登録 row が 0。
+    SeatNone,
+    /// 自席の直近の退避より後に Landed した便の 1 件。
+    Win,
+    /// 同・件数。
+    WinCount,
+    /// 確認した上で後に Landed した便が 0。
+    WinNone,
+    /// 着地を読めない（消費済みが無い・退避時刻が読めない・log が読めない）＝`-NONE` に潰さない。
+    WinUnknown,
     /// 別席の未 consumed 退避物（消費しない）。
     OrphanWm,
     /// 確認した上で別席の未 consumed が 0。
@@ -130,6 +155,17 @@ pub const ALL: &[Marker] = &[
     Marker::WmDirective,
     Marker::WmDirectiveEmpty,
     Marker::WmDirectiveCount,
+    Marker::Main,
+    Marker::Run,
+    Marker::RunCount,
+    Marker::RunNone,
+    Marker::Seat,
+    Marker::SeatCount,
+    Marker::SeatNone,
+    Marker::Win,
+    Marker::WinCount,
+    Marker::WinNone,
+    Marker::WinUnknown,
     Marker::OrphanWm,
     Marker::OrphanNone,
     Marker::BdCount,
@@ -161,6 +197,17 @@ impl Marker {
             Self::WmDirective => "[WM-DIRECTIVE]",
             Self::WmDirectiveEmpty => "[WM-DIRECTIVE-EMPTY]",
             Self::WmDirectiveCount => "[WM-DIRECTIVE-COUNT]",
+            Self::Main => "[MAIN]",
+            Self::Run => "[RUN]",
+            Self::RunCount => "[RUN-COUNT]",
+            Self::RunNone => "[RUN-NONE]",
+            Self::Seat => "[SEAT]",
+            Self::SeatCount => "[SEAT-COUNT]",
+            Self::SeatNone => "[SEAT-NONE]",
+            Self::Win => "[WIN]",
+            Self::WinCount => "[WIN-COUNT]",
+            Self::WinNone => "[WIN-NONE]",
+            Self::WinUnknown => "[WIN-UNKNOWN]",
             Self::OrphanWm => "[ORPHAN-WM]",
             Self::OrphanNone => "[ORPHAN-NONE]",
             Self::BdCount => "[BD-COUNT]",
@@ -377,6 +424,7 @@ pub fn run(request: &Request) -> Result<Vec<String>, RebriefError> {
         diff_lines(&rows, &issues, anchor.prefixes(), &mut lines);
         ticket_lines(&rows, &mut lines);
     }
+    status::push_lines(request, &mut lines);
     orphan_lines(&scan.orphans, &mut lines);
     ledger_lines(&issues, &mut lines);
     memo_lines(&triage(&issues, request.thresholds, &crate::fleet::cli::now_utc()), &mut lines);
@@ -872,6 +920,17 @@ mod tests {
                 "[WM-DIRECTIVE]",
                 "[WM-DIRECTIVE-EMPTY]",
                 "[WM-DIRECTIVE-COUNT]",
+                "[MAIN]",
+                "[RUN]",
+                "[RUN-COUNT]",
+                "[RUN-NONE]",
+                "[SEAT]",
+                "[SEAT-COUNT]",
+                "[SEAT-NONE]",
+                "[WIN]",
+                "[WIN-COUNT]",
+                "[WIN-NONE]",
+                "[WIN-UNKNOWN]",
                 "[ORPHAN-WM]",
                 "[ORPHAN-NONE]",
                 "[BD-COUNT]",
@@ -892,7 +951,8 @@ mod tests {
         );
         assert_eq!(Marker::Sid as usize, 0, "先頭の判別子");
         assert_eq!(Marker::Plugin as usize, 2, "席の同一性の隣（`[WM]` の直後・`s2-07l.304`）");
-        assert_eq!(Marker::TicketCandidateNone as usize, 24, "末尾の判別子");
+        assert_eq!((Marker::Main as usize, Marker::WinUnknown as usize), (10, 20), "現在地の 11 は `Wm` 群の直後・`Orphan` の前（`s2-07l.326`）");
+        assert_eq!(Marker::TicketCandidateNone as usize, 35, "末尾の判別子");
     }
 
     /// `[PLUGIN]` の食い違いの語は closed の 5 つ（consumer-sync.md §6）: hooks の digest の不一致は `hooks`・build 元 commit の

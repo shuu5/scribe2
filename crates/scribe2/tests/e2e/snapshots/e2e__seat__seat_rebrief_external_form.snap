@@ -15,6 +15,12 @@ expression: form
 [WM-DIRECTIVE] kind=none resolution=none line=- [hard候補] [P1] since=2026-09-01 矢印の無い命令 s2-07l.140 を見る
 [WM-DIRECTIVE] kind=none resolution=none line=- [auto] [P2] since=2026-09-01 裁定だけ → SSOT: user 裁定 2026-09-12T02:01Z
 [WM-DIRECTIVE-COUNT] total=5 provisional=2 unresolved=1
+[MAIN] sha=unknown origin=unknown porcelain=unknown reason=head-unreadable
+[RUN-COUNT] n=0
+[RUN-NONE]
+[SEAT-COUNT] n=0
+[SEAT-NONE]
+[WIN-UNKNOWN] reason=consumed-unreadable
 [ORPHAN-WM] file=working-memory.sid-other.md seat=other:1
 [BD-COUNT] open=2 in_progress=1 blocked=1
 [MEMO-DUE-COUNT] n=0 of=0
@@ -32,6 +38,12 @@ expression: form
 [WM-USER-DIRECTIVE-EMPTY]
 [WM-DIRECTIVE-EMPTY]
 [WM-DIRECTIVE-COUNT] total=0 provisional=0 unresolved=0
+[MAIN] sha=unknown origin=unknown porcelain=unknown reason=head-unreadable
+[RUN-COUNT] n=0
+[RUN-NONE]
+[SEAT-COUNT] n=0
+[SEAT-NONE]
+[WIN-UNKNOWN] reason=no-consumed
 [ORPHAN-NONE]
 [BD-COUNT] open=0 in_progress=0 blocked=0
 [MEMO-DUE-COUNT] n=0 of=0
@@ -44,6 +56,12 @@ expression: form
 [SID] sid-new
 [WM] missing
 [PLUGIN] drift=unrecorded
+[MAIN] sha=unknown origin=unknown porcelain=unknown reason=head-unreadable
+[RUN-COUNT] n=0
+[RUN-NONE]
+[SEAT-COUNT] n=0
+[SEAT-NONE]
+[WIN-UNKNOWN] reason=no-consumed
 [ORPHAN-NONE]
 [BD-COUNT] open=0 in_progress=0 blocked=0
 [MEMO-DUE-COUNT] n=0 of=0
