@@ -49,7 +49,7 @@
 - **口**: `<NAME> vessel update --state-dir S [--remote R] [--branch B]`。`[[vessel]] repo` が無ければ `vessel-repo-undeclared` で断る。
 - **順序固定**: (1) `git -C <repo> status --porcelain` が非空なら `dirty` で断る（作業ツリーを動かさない・N1）。(2) `git fetch <remote>` → `git merge --ff-only <remote>/<branch>`（既定 = `origin` / `main`・ff できない周は `not-fast-forward` で断る・rebase も reset もしない）。(3) `cargo install --path crates/<NAME> --locked`（PATH の binary を入れ替える・`--locked` は nextest と同じ前提）。(4) fleet の event log に **`InstallRecorded`**（`EventKind` の新 variant・宣言順の末尾・`KINDS` +1・schema 1 のまま）を 1 件: `{ sha: <install した HEAD の sha12>, host: <hostname>, path: <cargo が報告した binary の path> }`。(5) stdout に 1 行 `vessel: installed sha=<sha12> path=<path>`。
 - **何を書かないか**: consumer の帳簿（`installed_plugins.json`）も cache も書かない（他人の帳簿・ADR-0028 §5）。consumer の席への通知も送らない（§6 の tick が食い違いを測って動く＝通知の散文を無くす）。
-- **子 process**: `git` と `cargo` は器の子（`std::process::Command`・timeout は既存の唯一の wait・出力は `--color never` で読む〔auto-memory の CI 色の型〕）。失敗は typed（`fetch-failed` / `install-failed` に rc を添える）。
+- **子 process**: `git` と `cargo` は器の子（`std::process::Command`・timeout は既存の唯一の wait・出力は `--color never` で読む〔auto-memory の CI 色の型〕）。失敗は typed（`fetch-failed` / `install-failed` に rc を添える）。(4) の追記に失敗した周（store が書けない）は `record-failed` で断る（install は済んでいる＝binary は新しく `InstallRecorded` は 0 件・§6 の tick が食い違いを測る側・rc は 2）。
 - **A1**: 消す / 出す / 使う のどれでもない（local の build と install・push しない・課金しない）。
 
 ## 6. hook 集合の食い違いで席を作り直す（ADR-0028 §2.4・FR62・台帳 `s2-07l.304`）
