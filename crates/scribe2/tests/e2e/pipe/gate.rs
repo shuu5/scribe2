@@ -2804,8 +2804,8 @@ fn linked(text: &str, path: &str) -> String {
 }
 
 /// (viii) 移した item の doc コメントの link path だけを書き換えた便（`[`super::one`]` → `[`crate::one`]`）は
-/// 純移動: 判定行 `lens-input=summary`・要約に「コメント行の差」の節（該当 item の名と行数だけ）・コメントの
-/// 字面は要約に載らない・他の面（移動・可視性・stderr）は (i) と同じ。
+/// 純移動: 判定行 `lens-input=summary`・要約に「コメント行の差」の節（該当 item の名と行数の直後に base 側 `-` /
+/// head 側 `+` の逐語・設計 §25・`s2-07l.377`）・他の面（移動・可視性・stderr）は (i) と同じ。
 #[test]
 fn pipe_gate_move_proof_comment_only_diff_inside_items_sends_summary() {
     let (base, alpha) = (linked(MOVE_BASE_LIB, "super::one"), linked(MOVE_HEAD_ALPHA, "crate::one"));
@@ -2817,8 +2817,11 @@ fn pipe_gate_move_proof_comment_only_diff_inside_items_sends_summary() {
     assert_eq!(token_of(&line, "lens-input="), "summary", "判定行: {line}");
     let kept = fs::read_to_string(lens_input_path(&state, &id)).expect("lens-input.txt が在る");
     assert_eq!(fs::read_to_string(&seen).unwrap_or_default(), kept, "lens が読んだ stdin は残した本文そのもの");
-    assert!(kept.contains("\n## コメント行の差（名: 行数）\nsrc/alpha.rs fn two: 1\n## 残差分（逐語）\n"), "該当 item の名と行数だけ: {kept}");
-    assert!(!kept.contains("helper two") && !kept.contains("[`"), "コメントの字面は要約に載らない: {kept}");
+    assert!(
+        kept.contains("\n## コメント行の差（名: 行数）\nsrc/alpha.rs fn two: 1\n-/// helper two (see [`super::one`]).\n+/// helper two (see [`crate::one`]).\n## 残差分（逐語）\n"),
+        "件数の行の直後に base 側 - / head 側 + の逐語: {kept}"
+    );
+    assert_eq!(kept.matches("helper two").count(), 2, "コメントの字面は - / + の 2 行だけに載る: {kept}");
     assert_eq!(stderr_of(&out), "", "純移動の周は理由の行を出さない");
     assert_summary_moves(&kept);
     assert_summary_residual(&kept);

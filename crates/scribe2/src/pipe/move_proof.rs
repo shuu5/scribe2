@@ -538,10 +538,23 @@ fn build_item(lines: &[&str], span: (usize, usize), decl_index: usize, decl: &De
     }
 }
 
-/// 除いたコメント行の差（位置ごとに違う行数 + 行数の差・0 なら差なし）。
-fn comment_diff(base: &[String], head: &[String]) -> usize {
-    let differ = base.iter().zip(head).filter(|(old, new)| old != new).count();
-    differ.saturating_add(base.len().abs_diff(head.len()))
+/// 除いたコメント行の差の逐語（位置ごとに違う行 + 片側にしか無い行・区間の順・両側とも空なら差なし）。
+///
+/// 返す組は (base 側の行, head 側の行)。件数（位置ごとに違う行数 + 行数の差）は両側の多い方に等しい
+/// （要約の件数の行と逐語の本数が対になる・C10）。
+fn comment_diff(base: &[String], head: &[String]) -> (Vec<String>, Vec<String>) {
+    let mut old_lines = Vec::new();
+    let mut new_lines = Vec::new();
+    for (old, new) in base.iter().zip(head) {
+        if old != new {
+            old_lines.push(old.clone());
+            new_lines.push(new.clone());
+        }
+    }
+    let common = base.len().min(head.len());
+    old_lines.extend(base.iter().skip(common).cloned());
+    new_lines.extend(head.iter().skip(common).cloned());
+    (old_lines, new_lines)
 }
 
 /// `use` の宣言のうち複数行に渡る区間（列 0 の `use …{` から `;` で終わる行まで・1 始まり・両端含む）。
@@ -601,15 +614,19 @@ struct Visibility {
     after: String,
 }
 
-/// コメント行の差を持つ item（hash から除いた行の差・0 の item は持たない）。
+/// コメント行の差を持つ item（hash から除いた行の差・0 の item は持たない・設計 §25）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CommentDiff {
     /// HEAD 側の file。
     file: String,
     /// 名。
     name: String,
-    /// 違う行数。
+    /// 違う行数（`base` / `head` の多い方＝逐語の本数と対）。
     lines: usize,
+    /// base 側の違う行の逐語（indent を落とした字面・区間の順・要約に `-` で載る）。
+    base: Vec<String>,
+    /// head 側の違う行の逐語（indent を落とした字面・区間の順・要約に `+` で載る）。
+    head: Vec<String>,
 }
 
 /// 多重集合の照合の結果。
@@ -673,9 +690,16 @@ fn matched_of(pairs: &[(usize, usize)], base: &[Located], head: &[Located]) -> M
                 after: to.item.visibility.clone(),
             });
         }
-        let differ = comment_diff(&from.item.comments, &to.item.comments);
+        let (old_lines, new_lines) = comment_diff(&from.item.comments, &to.item.comments);
+        let differ = old_lines.len().max(new_lines.len());
         if differ > 0 {
-            comments.push(CommentDiff { file: to.file.clone(), name: to.item.name.clone(), lines: differ });
+            comments.push(CommentDiff {
+                file: to.file.clone(),
+                name: to.item.name.clone(),
+                lines: differ,
+                base: old_lines,
+                head: new_lines,
+            });
         }
         if from.file == to.file {
             continue;
@@ -808,6 +832,8 @@ fn render(matched: &Matched, residual: &Residual, total: usize, carried: usize) 
     lines.push("## コメント行の差（名: 行数）".to_owned());
     for found in &matched.comments {
         lines.push(format!("{} {}: {}", found.file, found.name, found.lines));
+        lines.extend(found.base.iter().map(|line| format!("-{line}")));
+        lines.extend(found.head.iter().map(|line| format!("+{line}")));
     }
     lines.push("## 残差分（逐語）".to_owned());
     for (file, changed) in residual {
@@ -924,7 +950,7 @@ mod tests {
     }
 
     /// item の中のコメント行: doc の link path の書き換えだけの便は純移動で要約に「コメント行の差」（該当 item の
-    /// 名と行数だけ）・item の中の札は残差と同じ規則（`moved` は許し `retroactive` は `ForeignMarker`）。
+    /// 名と行数・直下に逐語）・item の中の札は残差と同じ規則（`moved` は許し `retroactive` は `ForeignMarker`）。
     #[test]
     fn move_proof_comment_diff_inside_items_is_counted_and_markers_inside_items_are_checked() {
         let base_lib = "//! lib\n\n/// see [`super::a`]\nfn b() {\n    2\n}\n\nfn c() {\n    3\n}\n";
@@ -939,12 +965,85 @@ mod tests {
         let LensInput::Summary(summary) = judge(&diff, &table(&shown)) else {
             panic!("doc の link だけの差は純移動");
         };
-        assert!(summary.text().contains("\n## コメント行の差（名: 行数）\nsrc/m.rs fn b: 1\n## 残差分"), "{}", summary.text());
+        assert!(summary.text().contains("\n## コメント行の差（名: 行数）\nsrc/m.rs fn b: 1\n-/// see [`super::a`]\n+/// see [`crate::a`]\n## 残差分"), "{}", summary.text());
         for (marker, want) in [("moved s2-07l.294", Ok(1)), ("retroactive s2-07l.294", Err(NotPure::ForeignMarker))] {
             let (diff, files) = read(&head_m.replace("    2\n", &format!("    // flip-check: {marker}\n    2\n")));
             let shown: Vec<(Side, &str, &str)> = files.iter().map(|(side, path, text)| (*side, *path, text.as_str())).collect();
             assert_eq!(outcome(&judge(&diff, &table(&shown))), want, "{marker}");
         }
+    }
+
+    /// 上の歯と同じ fixture（`/// see [`super::a`]` → `/// see [`crate::a`]`）で `judge` した要約の本文
+    /// （純移動でない周は理由の名＝歯の assert で割れる）。
+    fn comment_only_summary() -> String {
+        let base_lib = "//! lib\n\n/// see [`super::a`]\nfn b() {\n    2\n}\n\nfn c() {\n    3\n}\n";
+        let head_lib = "//! lib\n\nmod m;\n\nfn c() {\n    3\n}\n";
+        let head_m = "/// see [`crate::a`]\npub(super) fn b() {\n    2\n}\n";
+        let diff = format!("{}{}", hunk("src/lib.rs", Some(base_lib), head_lib), hunk("src/m.rs", None, head_m));
+        let files = [(Side::Base, "src/lib.rs", base_lib), (Side::Head, "src/lib.rs", head_lib), (Side::Head, "src/m.rs", head_m)];
+        let input = judge(&diff, &table(&files));
+        match input {
+            LensInput::Summary(summary) => summary.text().to_owned(),
+            LensInput::Diff(why) => why.as_str().to_owned(),
+        }
+    }
+
+    /// 「## コメント行の差」の節の本文（見出しの次の行から「## 残差分」の直前まで）。
+    fn comment_section(text: &str) -> Vec<&str> {
+        text.lines()
+            .skip_while(|line| *line != "## コメント行の差（名: 行数）")
+            .skip(1)
+            .take_while(|line| *line != "## 残差分（逐語）")
+            .collect()
+    }
+
+    /// (a) 逐語は件数の行の直後: `src/m.rs fn b: 1` の次が `-/// see [`super::a`]`・その次が `+/// see [`crate::a`]`
+    /// （設計 §25・base は件数だけ）。
+    #[test]
+    fn move_proof_comment_verbatim_lines_follow_the_count() {
+        let text = comment_only_summary();
+        assert_eq!(
+            comment_section(&text),
+            ["src/m.rs fn b: 1", "-/// see [`super::a`]", "+/// see [`crate::a`]"],
+            "{text}"
+        );
+    }
+
+    /// (b) 件数の行の n は逐語の本数（base 側 `-` と head 側 `+` の多い方）と一致（C10・母集団と対）: 位置ごとに
+    /// 違う行 1 + head 側だけの行 1 = n 2 で `-` 1 本・`+` 2 本。
+    #[test]
+    fn move_proof_comment_verbatim_count_matches_the_lines() {
+        let text = comment_only_summary();
+        let section = comment_section(&text);
+        let count = |sign: char| section.iter().filter(|line| line.starts_with(sign)).count();
+        let n: usize = section.first().and_then(|line| line.rsplit(": ").next()).and_then(|n| n.parse().ok()).expect("件数の行");
+        assert_eq!(n, count('-').max(count('+')), "{text}");
+        assert_eq!(count('-'), 1, "{text}");
+        assert_eq!(count('+'), 1, "{text}");
+        let base = ["/// see [`super::a`]".to_owned(), "// same".to_owned()];
+        let head = ["/// see [`crate::a`]".to_owned(), "// same".to_owned(), "// added".to_owned()];
+        let (old_lines, new_lines) = super::comment_diff(&base, &head);
+        assert_eq!(old_lines, ["/// see [`super::a`]"], "位置ごとに違う行だけ（同じ行は載らない）");
+        assert_eq!(new_lines, ["/// see [`crate::a`]", "// added"], "違う行 + head 側だけの行");
+        assert_eq!(old_lines.len().max(new_lines.len()), 2, "件数 = 違う行 1 + 行数の差 1");
+        let (old_lines, new_lines) = super::comment_diff(&head, &base);
+        assert_eq!((old_lines.len(), new_lines.len()), (2, 1), "base 側が長い周は `-` が多い");
+    }
+
+    /// (c) コメント差 0 の純移動（`move_proof_judge_pins_each_reason` と同じ fixture）では節が空＝`-` / `+` の行が出ない。
+    #[test]
+    fn move_proof_comment_verbatim_is_absent_when_comments_match() {
+        let base_lib = "/// doc b\nfn a() {\n    1\n}\n\n/// doc b\nfn b() {\n    2\n}\n";
+        let head_lib = "mod m;\n\n/// doc b\nfn a() {\n    1\n}\n";
+        let head_m = "/// doc b\npub(super) fn b() {\n    2\n}\n";
+        let diff = format!("{}{}", hunk("src/lib.rs", Some(base_lib), head_lib), hunk("src/m.rs", None, head_m));
+        let files = [(Side::Base, "src/lib.rs", base_lib), (Side::Head, "src/lib.rs", head_lib), (Side::Head, "src/m.rs", head_m)];
+        let LensInput::Summary(summary) = judge(&diff, &table(&files)) else {
+            panic!("コメント差 0 の移動は純移動");
+        };
+        assert!(summary.text().contains("\n## コメント行の差（名: 行数）\n## 残差分（逐語）\n"), "{}", summary.text());
+        assert_eq!(comment_section(summary.text()), Vec::<&str>::new(), "{}", summary.text());
+        assert_eq!(super::comment_diff(&["// x".to_owned()], &["// x".to_owned()]), (Vec::new(), Vec::new()));
     }
 
     /// 残差分の弁別: 宣言と札とコメントと空行だけを許し、`moved` 以外の札は `ForeignMarker`、他は `ResidualLine`。
