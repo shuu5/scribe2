@@ -458,7 +458,7 @@ req = ["FR48", "FR55"]
 section = "24"
 touches = ["crate::pipe::declaration::write_set::WriteSetItem"]
 tests = ["crates/scribe2/tests/e2e/pipe/intake.rs"]
-also = ["crates/scribe2/src/pipe/closure.rs"]
+also = ["crates/scribe2/src/pipe/closure.rs", "crates/scribe2/src/pipe/closure/derive.rs"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail contract_closure_ext_delete_"]
 size = "S"
 done = "~ の項目が base に在る行は受付を通り契約 file の write-set は素の path になり、無い行は write-set-item-unresolved で断られ、契約表の検査は tracked に無い ~ の項目を持つ行で findings 0、節の本文のその path の名指しは着地の後も解ける"
