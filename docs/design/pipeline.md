@@ -354,6 +354,13 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
 - 触らない: `state_dir_of` / `repo_of` / `vessel::state_dir` の解決順・`vessel init` の呼出し（`--state-dir` と root を明示済み）・`fleet` / `seat` / `hook` の e2e の helper（本便の射程外・同じ型は別便で数える）・汚れた 1 件の処分（消さず `retired/` へ移す = N1.2・admin の運用）。
 - 却下案: 書く口（intake / run）に `--repo` を必須にして cwd の fallback を消す（変異の下では必須の検査も壊れる＝歯の側で cwd を固定しないと閉じない・admin の launcher の引数も変わる）／CI に `<NAME>.stateDir` の config を足して再現する（露出の面を増やすだけ）／本番の置き場を手で掃除する（不可逆・N1）。
 
+## 29. 既に main に squash が在る便の land は rebase-empty の Failed でなく Landed（冪等）で終端する（契約表の行 w・`s2-07l.389`）
+
+- 何が起きているか: admin の実測 2026-09-16 04:2xZ（`.379` run 012455Z）。器の段は `Failed detail=rebase-empty`・`verify-main.jsonl` は無いが、成果は main に在った（squash の本文に `run: <run id>` の trailer・便の worktree の HEAD の tree と squash の tree が同一・gate 3 周目 8/8 rc 0）。admin が tree の一致と gate の緑を根拠に sha 名指しで push した＝push / close / verify-main の終端の手順が器の外に落ちた。見立て（deduced）: 再起動 → resume → 着地の chain の周回で、前の周が local main に squash を載せた後（§5.4 手順 1 の CAS の後・手順 2 の実測の前）に死に、次の周の land が同じ便を rebase したので commit が 0 本になった。現物（verified・main d214c43）: `pipe/land.rs` の `rebase_onto` は `commits_after_rebase == Some(0)` を一律に `follow_failed(REBASE_EMPTY)` へ倒し、「main に既にこの便の squash が在る」（`squash_message` が本文の末尾に置く trailer `run: <run id>` で同定できる）と「本当に空の便」（先に land した別の便と同じ patch）を弁別しない。結果、台帳と event の段が実態（着地済み）と食い違う（C3・C10）。
+- 形: `rebase_onto` が commit 0 本を見た周、`Failed` に倒す前に **`refs/heads/main` の log をこの便の trailer 1 行（`run: <run id>`・run id は時刻付きで一意）で 1 回だけ探す**（`git log <main> -n 1 --fixed-strings --grep=<trailer> --format=%H`・`.` を regex に読ませない・main の祖先だけが母集団）。**在れば** `Follow` に新 variant **`AlreadyLanded(sha)`**（`Stopped` / `Ready` の隣）で返し、`land` はその周に squash と CAS を撃たず（main は動かさない・anchor の同期は `old → old` の no-op）、**主実測（`verify_main`）はその sha に対して従来どおり撃ち**（前の周が実測の前に死んだ可能性が在る＝記録が無いものを緑と読まない・C10・木が gate と同じ周は検出線を撃たない §5）、緑なら `finish` を **`new = 見つけた sha`** で通す。`finish` の stdout は `landed=<見つけた sha> main=<実測> … order=<…>` に **`already-landed=1`** を後置し、`RunDone stage=Landed` の detail は `sha:<見つけた sha> main:<実測> already-landed`（§27 の `main:` の後ろ・空白区切り）、verdicts.jsonl の行は従来の key 列（`sha` = 見つけた sha）で書く（跨版契約は不変・任意 field を足さない）。**無ければ**従来どおり `rebase-empty` で終端する（本当に空の便の意味は不変）。commit 数を読めない周の扱い（0 に読み替えない）も不変。
+- 触らない: squash の message の形（§5.4・trailer の字面 `run: `）・CAS・追随の要否判定と衝突の経路・§27 の `main=` の実測・`verify_main` の中身と skip の判定・verdicts.jsonl の key 列・`retire_worktree`・`--pr-cmd` の形（main を動かさないので本節は通らない）。
+- 却下案: admin の chain が trailer を見て手で push / close する（器の外の運用・台帳と event の段が食い違ったまま）／`Failed` のまま notes で補う（同上・C3）／trailer でなく tree の一致で同定する（同じ tree を持つ別の便〔純移動の再 land 等〕を自分の squash と誤認する・trailer は便 1 つに 1 つ）／主実測を撃たずに `Landed` にする（前の周が実測の前に死んだ周を緑と読む・C10）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -579,4 +586,14 @@ write-set = ["crates/scribe2/tests/e2e/pipe.rs", "crates/scribe2/tests/e2e/pipe/
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_hermetic_"]
 size = "S"
 done = "--state-dir も --repo も無い pipe の呼出しが helper 経由では「repo の root を解決できない」で rc 1 に断られ、既存の e2e は全部緑のまま"
+
+[[contract]]
+id = "w"
+title = "pipe land が rebase-empty の周に main の log を run: trailer で探し、在れば squash と CAS を撃たず主実測の後に Landed（already-landed）で終端する"
+req = ["FR50"]
+section = "29"
+write-set = ["crates/scribe2/src/pipe/land.rs", "crates/scribe2/tests/e2e/pipe/land.rs"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_land_already_landed_"]
+size = "S"
+done = "自分の trailer を持つ squash が main に在る便の land が main を動かさず主実測を撃って Landed で終端し stdout と detail に already-landed を持ち、trailer が無い周と別の便の trailer の周は従来どおり rebase-empty"
 <!-- contracts:end -->
