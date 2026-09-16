@@ -222,7 +222,7 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
 ## 12. retire の終端の列挙（契約表の行 i・`s2-07l.353`）
 
 - 審査の段（[contract-source.md](./contract-source.md) §4）が足した終端 Reviewed の FAIL / INCONCLUSIVE は live を持たない（判定の読み手は `pipe/review.rs` の 1 本）が、retire の入口（`pipe/cli.rs` の段の列挙と弁別）は Gated の FAIL と Failed の一部しか畳めない＝審査の段で終端した便が前の周の worktree を残すと畳めず、run N+1 が別 worktree で立つ（.209 run 1 の実測 2026-09-15）。
-- 形: retire が許す段の列挙に Reviewed を足し、弁別は判定の読み手の 3 値で分ける（FAIL / INCONCLUSIVE = 畳む・PASS = 断る〔live・起こす側〕・読めない = 断る〔読めない判定を終端に読み替えない・fail-closed〕）。畳んだ後の段は Reviewed のまま（Failed / Gated と同じ・可逆 move の 1 本は不変・N1.2）。worktree の無い Reviewed 終端の便は畳む物が無い＝既存の断りのまま。
+- 形: retire が許す段の列挙（`pipe/cli/step.rs` の `retire_run` の `allowed`）に Reviewed を足し、弁別は段の中の弁別 1 本（`pipe/cli/state.rs` の `discriminate`）に Retire × Reviewed の arm を足して判定の読み手（`ReviewCheck`）の 3 値で分ける（FAIL / INCONCLUSIVE = 畳む・PASS = 断る〔live・起こす側〕・読めない = 断る〔読めない判定を終端に読み替えない・fail-closed〕）。断りの字面は Spawn × Reviewed の既存の arm と同じ形 `run <id> の段は Reviewed である（verdict=<V>）`＝段違いの一般則の字面（`run <id> の段は Reviewed である`・verdict 無し）と区別が付き、歯はこの逐語で新 arm を pin する。畳んだ後の段は Reviewed のまま（Failed / Gated と同じ・可逆 move の 1 本は不変・N1.2）。worktree の無い Reviewed 終端の便は畳む物が無い＝既存の断りのまま。
 - 却下: 審査の段の中で自動で畳む（終端の後始末は go を挟む retire の 1 口に揃える）／live が false の段を全部畳める側にする（Failed の理由ごとの弁別が消える）。
 
 ## 13. xtask の flipcheck.rs の分割（契約表の行 j・純移動）
@@ -387,7 +387,7 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
 ## 33. 追随の再 gate を main の差分が検出線の面の外だけの周は省く — docs の merge ごとに先頭が 1 周払わない（契約表の行 aa・`s2-07l.416`）
 
 - 何が起きているか（admin の実測 2026-09-16 12:50Z・13:25Z・verified）: 11:25Z 以降 85 分着地 0。列の先頭 `.389` は Gated PASS → 追随 rebase → 再 gate を 3 周し（main を動かしたのは docs-only の PR 5 本）、3 周目の再 gate で全件 nextest の 2 本 / 1490 本が負荷 flaky で落ちて Gated FAIL → retire＝実装 1 本を喪失。§30 は検出線だけを面の外で省いたが、共通 verify（全件 nextest ほか）と lens は差分の内容を見ずに毎周撃つ。同じ Rust の木に対して gate は前周で PASS 済みで、着地の直前には主実測 `verify_main` が最終の木で全行を撃つ（§5.4）＝再 gate の全件は二重。
-- 形: `follow_main` は rebase の前に §30 と**同じ 1 関数**（`detection_needed`・`DETECTION_SCOPE`）で main の差分を測り、面に 1 つも触れない周は **再 gate を撃たず** `RunStage stage=Implemented detail=rebase:<old>..<new>` の直後に `RunStage stage=Gated detail=verdict:PASS` を器が記帳して着地へ進む（前周の PASS を新 base へ引き継ぐ・verdict の 3 値と detail の形は不変）。引き継いだ事実は `verify.jsonl` に §30 の `skip_record` と同じ形の record 1 本（`kind=gate skipped=regate reason=outside-scope`）で残す（C10）。面に触れる周・diff を読めない周は従来どおり再 gate（fail-closed）。主実測 `verify_main` は従来どおり最終の木で全行を撃つ（push の前の唯一の全件・C12.6 の緑はここが担う）。
+- 形: `follow_main` は rebase の前に §30 と**同じ 1 関数**（`detection_needed`・`DETECTION_SCOPE`）で main の差分を測り、面に 1 つも触れない周は **再 gate を撃たず** `RunStage stage=Implemented detail=rebase:<old>..<new>` の直後に `RunStage stage=Gated detail=verdict:PASS` を器が記帳して着地へ進む（前周の PASS を新 base へ引き継ぐ・verdict の 3 値と detail の形は不変）。引き継いだ事実は `verify.jsonl` に §30 の `skip_record` と同じ形の record 1 本（`kind=gate skipped=regate reason=outside-scope`）で残す（C10）。`skipped=` の値は `pipe/gate/record.rs` に閉じた 2 値（`detection` / `regate`）で、`reason` は既存の `DetectionSkip::OutsideScope` のまま＝`pipe/gate.rs` の enum に variant を足さない（`Skipped` の構築点は `land.rs` の主実測と `record.rs` の gate の 2 つと `tests/e2e/pipe/land.rs` の歯＝行 aa の write-set の中に閉じる）。面に触れる周・diff を読めない周は従来どおり再 gate（fail-closed）。主実測 `verify_main` は従来どおり最終の木で全行を撃つ（push の前の唯一の全件・C12.6 の緑はここが担う）。
 - 触らない: 追随の要否判定（`old != base` なら rebase）・rebase と衝突の経路（pipeline-conflict.md §3）・`DETECTION_SCOPE` の中身・gate の判定順と verdict・主実測の行・`gate_run`（`pipe gate` を人が撃つ周は常に撃つ）。
 - 歯（`pipe_follow_docs_only_` 接頭辞・`tests/e2e/pipe/land.rs`・既存の追随の fixture〔`gated_pass` + 別便の commit + 偽 lens〕の型）: (a) main が docs だけの commit で進んだ周は land が偽 lens を呼ばず（写し 0）verify の record が増えず、`Gated verdict:PASS` の record と `skipped=regate reason=outside-scope` の record が在って着地する／(b) main が `crates/` の file で進んだ周は従来どおり再 gate（偽 lens 1 回・既存の歯）。diff を読めない周の fail-closed は既存の `follow_detection`（変更しない）が持ち、FR34 の前提（base が main の祖先）を通した上で diff だけを失敗させる seam が無いので歯は置かない（空虚な歯を避ける）。record の形（`Skipped` / `skip_record`）の定義は `pipe/gate/record.rs` に閉じる。
 - 却下: docs-only の周は主実測も省く（push の前に最終の木で全行を撃つ唯一の線が消える・C12.6）／共通 verify のうち docs を読む行だけ撃つ（行の意味を字面で分類する散文規則・N2）／docs merge を止める運用だけで凌ぐ（planner 裁定 12:5xZ の暫定・器に無い規則）。
@@ -452,7 +452,7 @@ id = "i"
 title = "pipe retire の終端の列挙に Reviewed の非 PASS（FAIL / INCONCLUSIVE）を足す — 審査の段で終端した便の残った worktree を可逆 move で畳み、PASS と読めない判定は断る"
 req = ["FR49", "FR14"]
 section = "12"
-write-set = ["crates/scribe2/src/pipe/cli.rs", "crates/scribe2/tests/e2e/pipe/land.rs"]
+write-set = ["crates/scribe2/src/pipe/cli/step.rs", "crates/scribe2/src/pipe/cli/state.rs", "crates/scribe2/tests/e2e/pipe/land.rs"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_retire_"]
 size = "S"
 done = "Reviewed の FAIL / INCONCLUSIVE で終端した便が pipe retire で畳め（段は Reviewed のまま・可逆 move）、PASS は断られ、読めない判定は終端に読み替えない"
