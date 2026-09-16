@@ -173,7 +173,7 @@ mod tests {
 
     /// 名前から [`crate::mutantsdiff::Scope`] を得る唯一の道＝`-p` へ渡す引数を組むこと。
     fn scope_of(name: &str) -> crate::mutantsdiff::Scope {
-        measure_args(Path::new("in.diff"), Path::new("out"), name, 1).1
+        measure_args(Path::new("in.diff"), Path::new("out"), name, 1, Some(16)).1
     }
 
     /// 変異の行は**何を測ったか**を末尾の `scope=` で名乗り、その値は呼び手が渡した名前
@@ -202,7 +202,7 @@ mod tests {
         // `-p` の直後に来るのは渡した名前そのもの（literal でも core の NAME でもない）。
         // `--in-diff` と `-o` も対のまま在る（落とすと測った結果を読まずに total=0 へ化ける）。
         for scope in [PROBE_SCOPE, other] {
-            let (args, _) = measure_args(Path::new("probe.diff"), Path::new("probe-out"), scope, 3);
+            let (args, _) = measure_args(Path::new("probe.diff"), Path::new("probe-out"), scope, 3, Some(16));
             let value_after = |flag: &str| args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1)).map(String::as_str);
             assert_eq!(value_after("-p"), Some(scope), "{args:?}");
             assert_eq!(args.iter().filter(|a| *a == "-p").count(), 1, "package は 1 つだけ: {args:?}");
@@ -227,6 +227,7 @@ mod tests {
                 Path::new("o"),
                 "p",
                 crate::mutantsdiff::jobs_of(&args(line)),
+                Some(16),
             );
             built
                 .iter()
@@ -240,6 +241,70 @@ mod tests {
         assert_eq!(jobs_in("--base main --jobs x"), "1", "数でない字面は 1");
         assert_eq!(jobs_in("--base main --jobs 0"), "1", "0 の並列度では走らせない");
         assert_eq!(jobs_in("--base main --jobs"), "1", "値の無い --jobs は 1");
+    }
+
+    /// 各 job の `cargo test` は既定で全 core に広がる（libtest の test-threads = core 数）ので、
+    /// `--jobs 4` の gate 1 本が 4 × 16 並列になる（設計 gate-cost.md §22・行 m・2026-09-16 の
+    /// load 57 / 16 core）。末尾に `-- --test-threads <t>` を足して jobs × t ≤ cores に閉じる。
+    ///
+    /// 末尾 5 語は `-- --no-fail-fast -- --test-threads <t>`（1 つ目の `--` で cargo-mutants から
+    /// cargo test へ、2 つ目で cargo test から test binary へ）。`--jobs` の値・`-p` / `--in-diff` /
+    /// `-o` の対はそのまま（`--jobs` を `t` で上書きする誤配線との弁別）。
+    #[test]
+    fn mutants_diff_test_threads_tail_is_two_dashes_then_test_threads() {
+        let (args, bound) = measure_args(Path::new("probe.diff"), Path::new("probe-out"), PROBE_SCOPE, 4, Some(16));
+        assert_eq!(
+            &args[args.len() - 5..],
+            ["--", "--no-fail-fast", "--", "--test-threads", "4"],
+            "末尾 5 語: {args:?}"
+        );
+        assert_eq!(args.iter().filter(|a| *a == "--").count(), 2, "-- は 2 つ: {args:?}");
+        let value_after = |flag: &str| args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1)).map(String::as_str);
+        assert_eq!(value_after("--jobs"), Some("4"), "--jobs は器から来た値のまま: {args:?}");
+        assert_eq!(value_after("-p"), Some(PROBE_SCOPE), "{args:?}");
+        assert_eq!(args.iter().filter(|a| *a == "-p").count(), 1, "package は 1 つだけ: {args:?}");
+        assert_eq!(value_after("--in-diff"), Some("probe.diff"), "{args:?}");
+        assert_eq!(value_after("-o"), Some("probe-out"), "{args:?}");
+        assert_eq!(bound.name(), PROBE_SCOPE, "-p へ渡した名前が Scope");
+        // 1 つ目の `--` の前に cargo-mutants 自身の引数が全部在る。
+        let dashes = args.iter().position(|a| a == "--").expect("-- が在る");
+        for flag in ["--in-diff", "-p", "--no-shuffle", "--copy-vcs", "-o", "--jobs"] {
+            let at = args.iter().position(|a| a == flag).expect("cargo-mutants の引数が在る");
+            assert!(at < dashes, "{flag} は -- の前: {args:?}");
+        }
+    }
+
+    /// `t` は **注入された cores** から導く（`--jobs` の字面を echo する誤配線と、cores を読まずに
+    /// 固定値を書く配線の両方を撃つ・run 1 Reviewed FAIL「配線を測る歯が無い」への答え）。
+    /// `--jobs` の値は cores を変えても動かない。
+    #[test]
+    fn mutants_diff_test_threads_follows_injected_cores_not_jobs() {
+        let tail_of = |cores: Option<usize>| {
+            let (args, _) = measure_args(Path::new("probe.diff"), Path::new("probe-out"), PROBE_SCOPE, 4, cores);
+            let jobs = args.iter().position(|a| a == "--jobs").and_then(|i| args.get(i + 1)).cloned();
+            (args.last().cloned().unwrap_or_default(), jobs.unwrap_or_default())
+        };
+        assert_eq!(tail_of(Some(8)), ("2".to_owned(), "4".to_owned()), "8 core / jobs 4 → 2");
+        assert_eq!(tail_of(None), ("1".to_owned(), "4".to_owned()), "cores が読めない周は 1");
+        assert_eq!(tail_of(Some(16)), ("4".to_owned(), "4".to_owned()), "16 core / jobs 4 → 4");
+    }
+
+    /// `t = max(1, cores / jobs)` の表（pure 関数・rules 行ではない導出値・C10）。cores が読めない
+    /// 周は 1＝速い側へ倒さない（`JOBS_FLOOR` と同じ向き）。
+    #[test]
+    fn mutants_diff_test_threads_is_cores_over_jobs_floored_at_one() {
+        use crate::mutantsdiff::test_threads;
+        let table: [(Option<usize>, u64, u64); 6] = [
+            (Some(16), 4, 4),
+            (Some(16), 3, 5),
+            (Some(16), 32, 1),
+            (Some(2), 4, 1),
+            (None, 4, 1),
+            (Some(16), 1, 16),
+        ];
+        for (cores, jobs, want) in table {
+            assert_eq!(test_threads(cores, jobs), want, "cores={cores:?} jobs={jobs}");
+        }
     }
 
     #[test]

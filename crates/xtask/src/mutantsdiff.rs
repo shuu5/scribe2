@@ -50,6 +50,9 @@ impl Counts {
 }
 
 pub use scope::{measure_args, Scope};
+/// 本体では [`measure_args`] だけが呼ぶ（表の歯が `main.rs` から引くための再輸出）。
+#[cfg(test)]
+pub use scope::test_threads;
 
 /// [`Scope`] を作れる場所を **この module の内側だけ**にする。親（[`run`] を含む）からは field が
 /// 見えないので、`-p` へ渡した名前と別の値で行を組む形は compile できない（lens-82 再確認の残余:
@@ -79,10 +82,23 @@ mod scope {
     /// **並列度の値はこの道具が持たない**（設計 gate-cost.md §3.3）。器が受付で導いた実効値を
     /// 宣言 file の `{jobs}` 経由で受け取り、cargo-mutants の `--jobs` へそのまま渡すだけである。
     ///
-    /// 末尾の `-- --no-fail-fast` は cargo-mutants が baseline と各変異の `cargo test` へ
+    /// 1 つ目の `--` の後ろ `--no-fail-fast` は cargo-mutants が baseline と各変異の `cargo test` へ
     /// そのまま渡す引数（設計 gate-cost.md §19・憲法 C10）。既定の fail-fast では baseline の
     /// 歯 1 本の flaky で残りが未実行のまま「baseline 失敗」へ倒れ、落ちた歯の全数を名指せない。
-    pub fn measure_args(diff: &Path, out: &Path, scope: &str, jobs: u64) -> (Vec<String>, Scope) {
+    ///
+    /// 2 つ目の `--` の後ろ `--test-threads <t>` は cargo test が test binary へ渡す引数
+    /// （設計 gate-cost.md §22・行 m）。cargo-mutants は 1 つ目の `--` より後ろを 2 つ目の `--`
+    /// ごと逐語で cargo test へ渡す。libtest の既定は core 数の thread なので、`--jobs` の各 job
+    /// が全 core に広がり gate 1 本で jobs × cores 並列になる（2026-09-16 の load 57 / 16 core）。
+    /// `t` は [`test_threads`]（cores / jobs・導出値・rules 行ではない）で、`cores` は呼び手
+    /// （[`run`]）が 1 回読んで渡す＝歯が cores を注入できる。
+    pub fn measure_args(
+        diff: &Path,
+        out: &Path,
+        scope: &str,
+        jobs: u64,
+        cores: Option<usize>,
+    ) -> (Vec<String>, Scope) {
         let mut args: Vec<String> = ["mutants", "--in-diff"].iter().map(|s| (*s).to_owned()).collect();
         args.push(diff.display().to_string());
         args.push("-p".to_owned());
@@ -91,8 +107,20 @@ mod scope {
         args.push(out.display().to_string());
         args.push("--jobs".to_owned());
         args.push(jobs.to_string());
-        args.extend(["--", "--no-fail-fast"].iter().map(|s| (*s).to_owned()));
+        args.extend(["--", "--no-fail-fast", "--", "--test-threads"].iter().map(|s| (*s).to_owned()));
+        args.push(test_threads(cores, jobs).to_string());
         (args, Scope(scope.to_owned()))
+    }
+
+    /// 各 job の `cargo test` に許す test thread 数 = `max(1, cores / jobs)`（設計 gate-cost.md
+    /// §22）。jobs × t ≤ cores に閉じるので、変異検査の入れ子の並列が core 数を超えない。
+    ///
+    /// `cores` が読めない周（`None`）は **1**（速い側へ倒さない・`JOBS_FLOOR` と同じ向き）。
+    /// `jobs` は [`super::jobs_of`] の値で 1 以上だが、0 が来ても 1 で割る（0 除算で落とさない）。
+    /// pure 関数＝`available_parallelism` はここでは読まない。
+    pub fn test_threads(cores: Option<usize>, jobs: u64) -> u64 {
+        let cores = cores.and_then(|n| u64::try_from(n).ok()).unwrap_or(1);
+        cores.checked_div(jobs).unwrap_or(1).max(1)
     }
 }
 
@@ -352,7 +380,9 @@ pub fn run(args: &[String]) -> ExitCode {
         Err(reason) => return unmeasured(&format!("mutants-diff: {reason}")),
     };
     // **測る範囲は 1 つの束縛**: `-p` へ渡した名前を [`Scope`] として受け取り、行はそれでしか組めない。
-    let (args, scope) = measure_args(&diff_path, &out, &layout.name, jobs_of(args));
+    // core 数は **ここで 1 回だけ読む**（`measure_args` は pure・設計 gate-cost.md §22）。
+    let cores = std::thread::available_parallelism().ok().map(usize::from);
+    let (args, scope) = measure_args(&diff_path, &out, &layout.name, jobs_of(args), cores);
     let status = Command::new("cargo")
         .args(args)
         .current_dir(&root)
@@ -434,24 +464,35 @@ mod tests {
     use super::measure_args;
     use std::path::Path;
 
-    /// cargo-mutants が baseline と各変異の `cargo test` へ渡す引数の末尾が `-- --no-fail-fast`
-    /// （憲法 C10: 歯 1 本の flaky で残りを未実行のまま終えず、落ちた歯の全数を名指す）。
-    /// `-p <scope>` / `--jobs N` / `--in-diff` / `-o` の対は不変で、`--` は 1 つだけ。
+    /// cargo-mutants が baseline と各変異の `cargo test` へ渡す引数の 1 つ目の `--` の直後が
+    /// `--no-fail-fast`（憲法 C10: 歯 1 本の flaky で残りを未実行のまま終えず、落ちた歯の全数を
+    /// 名指す）。`-p <scope>` / `--jobs N` / `--in-diff` / `-o` の対は不変。`--` は 2 つで、
+    /// 2 つ目の直後が `--test-threads`（§22・行 m: cargo test から test binary へ渡る側）。
     #[test]
     fn no_fail_fast_is_passed_to_cargo_test_by_mutants() {
         for (scope, jobs) in [("probe-pkg-3f", 3_u64), ("other-pkg-7a", 1)] {
-            let (args, bound) = measure_args(Path::new("probe.diff"), Path::new("probe-out"), scope, jobs);
-            assert_eq!(&args[args.len() - 2..], ["--", "--no-fail-fast"], "末尾は -- --no-fail-fast: {args:?}");
-            assert_eq!(args.iter().filter(|a| *a == "--").count(), 1, "-- は 1 つだけ: {args:?}");
+            let (args, bound) = measure_args(Path::new("probe.diff"), Path::new("probe-out"), scope, jobs, Some(16));
+            let dashes_at: Vec<usize> = args.iter().enumerate().filter(|(_, a)| *a == "--").map(|(i, _)| i).collect();
+            assert_eq!(dashes_at.len(), 2, "-- は 2 つ: {args:?}");
+            assert_eq!(
+                args.get(dashes_at[0] + 1).map(String::as_str),
+                Some("--no-fail-fast"),
+                "1 つ目の -- の直後は --no-fail-fast: {args:?}"
+            );
+            assert_eq!(
+                args.get(dashes_at[1] + 1).map(String::as_str),
+                Some("--test-threads"),
+                "2 つ目の -- の直後は --test-threads: {args:?}"
+            );
             let value_after = |flag: &str| args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1)).map(String::as_str);
             assert_eq!(value_after("-p"), Some(scope), "{args:?}");
             assert_eq!(value_after("--jobs"), Some(jobs.to_string().as_str()), "{args:?}");
             assert_eq!(value_after("--in-diff"), Some("probe.diff"), "{args:?}");
             assert_eq!(value_after("-o"), Some("probe-out"), "{args:?}");
             assert_eq!(bound.name(), scope, "-p へ渡した名前が Scope");
-            // `--` の前に cargo-mutants 自身の引数が全部在る（`--` の後ろへ漏れた引数は
+            // 1 つ目の `--` の前に cargo-mutants 自身の引数が全部在る（`--` の後ろへ漏れた引数は
             // cargo test へ渡って意味を失う）。
-            let dashes = args.iter().position(|a| a == "--").expect("-- が在る");
+            let dashes = dashes_at[0];
             for flag in ["--in-diff", "-p", "--no-shuffle", "--copy-vcs", "-o", "--jobs"] {
                 let at = args.iter().position(|a| a == flag).expect("cargo-mutants の引数が在る");
                 assert!(at < dashes, "{flag} は -- の前: {args:?}");
