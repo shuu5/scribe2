@@ -268,6 +268,13 @@ e2e は binary を spawn し外部 command は PATH 先頭の stub で差し替�
 - 触らない: 器の src・`ready()` の呼び手 100 箇所・並列度（並列の上限は write-set の重複と直列依存だけ・user 直命 2026-09-16）・`PROMPT` の字と `PS1`。
 - 却下案: 起動を 1 回だけ再試行する（memo の案・`new-session` が通った後の遅さには効かず、通らなかった周の再試行は server の二重起動と socket の取り合いを生む＝待ちを伸ばす方が 1 定数で閉じる）／並列度を下げる（user の許しが要る側・歯を直せば要らない）／歯を `#[ignore]` にする（対話面の行の pin を失う）／CI の再実行で凌ぐ（1 周の損失が続く・#246 で実測）。
 
+## 21. 検出線が rc 2（測れなかった）で終えた周は同じ gate の中でその行だけ 1 回撃ち直す（契約表の行 l・`s2-07l.390`）
+
+- 何が起きているか: admin の実測 2026-09-16 04:2xZ（`.247` / `.377`・母集団 = 本日 gate に到達した便）。検出線 `cargo xtask mutants-diff`（宣言の `detection-verify`・`{jobs}` の穴）が負荷下（load average 10 前後・並列 10 便）で rc 2（測れなかった・赤ではない）で終わると gate は INCONCLUSIVE に倒し、便は 1 周（追随 → 再 gate = workspace 全件 + 変異）を丸ごと払う。`.247` は再 gate 1 回で PASS＝時間切れの型で、並列を上げるほど頻度が上がる。現物（verified・main aee95a3）: `pipe/gate/verify.rs` の `run_checks_admitted` が `CHECKS` の宣言順に全行を `fire` 1 本で撃ち、`pipe/gate/record.rs` の `detection_unmeasured`（`Check::Detection ∧ rc 2`）を `Counted.detection_unmeasured` に数え、`pipe/gate.rs` の判定が INCONCLUSIVE に倒す。flip-check の base 段には名指せた歯だけの撃ち直し（xtask の `retry_named`・`base-retried=N`）が在るが、検出線には撃ち直しの口が無い。
+- 形: `run_checks_admitted` の **`Check::Detection` の行だけ**、`fire` の結果が `detection_unmeasured` なら**同じ行を同じ受付の形（穴の値・箱・枠）でもう 1 回** `fire` し、2 回目の `Step` を採る（1 行につき撃ち直しは 1 回・3 回目は撃たない）。撃ち直した `Step` は `retried = true` を持ち（`Step` に field 1 つ・`unwrapped` / `check_write_set` / 1 回目の `fire` は false）、`record.rs` の `step_record` が `verify.jsonl` の record に **`retried=1`** を任意 field で足す（schema 1 のまま・§5 の足し方・C10 = 撃ち直した事実を 0 に潰さない）。1 回目の stderr の末尾は従来どおり stderr の log に残す（1 回目の `Step` は `Counted` に数えない＝「測れなかった → 測れた」の向きだけが変わる）。2 回目も rc 2 なら従来どおり `detection_unmeasured` → INCONCLUSIVE（`retried=1 rc=2` の record が残る）。rc 1 の検出線（deny 昇格後の赤）と検出線以外の rc 2 は撃ち直さない（`detection_unmeasured` の 1 点だけ・C11.2 の極性は不変）。land の main 実測（`run_checks`・§5）は同じ 1 本を通るので同じ挙動になる（木が同じ周は検出線を撃たないので実際には gate だけ）。
+- 触らない: `fire` の中身（受付・箱・`run_line_captured`）・`CHECKS` の順序・`detection_unmeasured` の判定・`Counted` の形・gate の verdict の 3 値と rc・common-verify / 契約 verify の行（撃ち直さない）・xtask の `retry_named`・`mutants-diff` の rc の意味（道具の側が持つ）。
+- 却下案: 検出線の rc 2 を PASS 扱いにする（測れないを緑にする・C10 違反）／並列度を下げる（user の許しが要る側・user 直命 2026-09-16）／gate 全体を撃ち直す（1 周と同じ費用）／撃ち直しの回数を rules 行にする（値の線が増える・1 回で足りる＝2 回目も rc 2 なら負荷でなく道具の側）／1 回目の `Step` も `Counted` に残す（`position` が 1 回目の rc 2 を拾って INCONCLUSIVE に倒す＝撃ち直しが効かない）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -380,4 +387,14 @@ write-set = ["crates/scribe2/tests/e2e/seat.rs"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail hook_brief_planner_carries_the_dialogue_surface_lines"]
 size = "S"
 done = "PROMPT_WAIT が 60 秒で、assert の字面・ready() の型・new-session 失敗時の即返しが不変"
+
+[[contract]]
+id = "l"
+title = "検出線が rc 2（測れなかった）で終えた周は同じ gate の中でその行だけ 1 回撃ち直し、record に retried=1 を残す"
+req = ["FR46"]
+section = "21"
+write-set = ["crates/scribe2/src/pipe/gate/verify.rs", "crates/scribe2/src/pipe/gate/record.rs", "crates/scribe2/tests/e2e/pipe/gate.rs"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_detection_retry_"]
+size = "S"
+done = "rc 2 → rc 0 の検出線を持つ toy の gate が PASS で終わり record に retried=1 を持ち、rc 2 が 2 回の周は従来どおり INCONCLUSIVE、rc 1 の検出線と共通 verify の rc 2 は撃ち直されない"
 <!-- contracts:end -->
