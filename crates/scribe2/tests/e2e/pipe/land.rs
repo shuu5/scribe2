@@ -524,6 +524,171 @@ fn pipe_land_rebase_empty_does_not_fire_for_distinct_changes() {
     clean(&[&repo, &state]);
 }
 
+// ───── 既に main に自分の squash が在る便の land（設計 §29・`s2-07l.389`・FR50・接頭辞 `pipe_land_already_landed_`） ─────
+
+/// 既着地の fixture: 便 A を PASS の gate まで通し、A の worktree の HEAD の tree から
+/// `git commit-tree <tree> -p <main> -m "<件名>\n\n<goal>\n\n<body>"` で squash を作って `refs/heads/main` を進める
+/// （前の周が CAS の後・実測の前に死んだ形を再現＝A の段は Gated のまま・`verify-main.jsonl` は無い）。
+/// `body` は A の id から本文の末尾（trailer の行）を組む——**trailer の有無と字面は歯が選ぶ**。
+/// 返すのは A の id と作った squash の sha。
+fn gated_run_squashed_on_main(repo: &Path, state: &Path, marker: &Path, body: impl Fn(&str) -> String) -> (String, String) {
+    let contract = write_contract(repo, &[], &[]);
+    let id = gated_pass(repo, state, &contract, marker);
+    let tree = git(&worktree_of(repo, &id), &["rev-parse", "HEAD^{tree}"]);
+    let old = git(repo, &["rev-parse", "refs/heads/main"]);
+    let message = format!("s2-2e5: 縦 1 本を通す\n\n縦 1 本を通す\n\n{}", body(&id));
+    let squash = git(repo, &["commit-tree", &tree, "-p", &old, "-m", &message]);
+    git(repo, &["update-ref", "refs/heads/main", &squash, &old]);
+    assert_eq!(git(repo, &["rev-parse", "refs/heads/main"]), squash, "fixture: main は作った squash を指す");
+    assert!(show_line(repo, state, &id).contains("stage=Gated"), "fixture: 便の段は Gated のまま");
+    (id, squash)
+}
+
+/// 便の trailer の 1 行（[`vessel::pipe::land`] の `squash_message` が本文の末尾に置く字面）。
+fn run_trailer(id: &str) -> String {
+    format!("run: {id}")
+}
+
+/// run id の**末尾 1 字**だけを変えた id（別の便の trailer の形・接頭辞は A と同じ）。
+fn altered_id(id: &str) -> String {
+    let mut chars: Vec<char> = id.chars().collect();
+    let last = chars.pop().unwrap_or('0');
+    chars.push(if last == '0' { '1' } else { '0' });
+    chars.into_iter().collect()
+}
+
+/// (a) 自分の trailer を持つ squash が main に在る便の land: **main を動かさず**（sha も `rev-list --count` も同じ）、
+/// 主実測を撃って（`verify-main.jsonl`）Landed で終端し、stdout に `landed=<sha>` / `main=<sha>` / `already-landed=1`、
+/// `RunDone stage=Landed` の detail に `sha:<sha>` と `already-landed`、verdicts.jsonl に A の行（`sha` = 見つけた sha・
+/// key 列は従来）、A の worktree は退役する。gate は撃ち直さない（lens は走らない）。
+#[test]
+fn pipe_land_already_landed_finishes_without_moving_main() {
+    let (repo, state) = repo_with_state();
+    let marker = state.join("lens-ran");
+    let (id, squash) = gated_run_squashed_on_main(&repo, &state, &marker, run_trailer);
+    fs::remove_file(&marker).expect("lens の marker を消せる");
+    let count_before = git(&repo, &["rev-list", "--count", "refs/heads/main"]);
+    let out = land_once(&repo, &state, &id);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "既着地の land は rc 0: {}", stderr_of(&out));
+    assert_eq!(git(&repo, &["rev-parse", "refs/heads/main"]), squash, "main は撃つ前と同じ sha（squash を作らない）");
+    assert_eq!(
+        git(&repo, &["rev-list", "--count", "refs/heads/main"]),
+        count_before,
+        "main の commit 数も同じ（母集団＝1 commit も足していない）"
+    );
+    assert!(!marker.exists(), "gate を撃ち直さない（lens は走らない）");
+    assert_already_landed_terminal(&state, &id, &squash, &out);
+    assert_already_landed_side_effects(&repo, &state, &id, &squash);
+    clean(&[&repo, &state]);
+}
+
+/// (a) の終端の字面: stdout の `landed=` / `main=` / 後置の `already-landed=1` と、末尾 event の
+/// `RunDone stage=Landed detail=sha:<found> main:<実測> already-landed`。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn assert_already_landed_terminal(state: &Path, id: &str, squash: &str, out: &Output) {
+    let stdout = stdout_of(out);
+    assert_eq!(landed_token(out), squash, "`landed=` は見つけた squash の sha: {stdout}");
+    assert_eq!(main_token(out), squash, "`main=` は終端で実測した main（= 作った sha）: {stdout}");
+    assert!(
+        stdout.split_whitespace().any(|word| word == "already-landed=1"),
+        "stdout の末尾に `already-landed=1` を後置する: {stdout}"
+    );
+    let (kind, stage, detail) = trail(state, id).pop().expect("便の event が在る");
+    assert_eq!((kind, stage), (EventKind::RunDone, Some(Stage::Landed)), "events の末尾は RunDone stage=Landed");
+    assert_eq!(
+        detail.unwrap_or_default(),
+        format!("sha:{squash} main:{squash} already-landed"),
+        "detail は `sha:<found> main:<実測> already-landed`（§27 の `main:` の後ろ・空白区切り）"
+    );
+}
+
+/// (a) の永続面: 面 5 の行（従来の key 列・`sha` = 見つけた squash）・worktree の退役・主実測の記録・段。
+fn assert_already_landed_side_effects(repo: &Path, state: &Path, id: &str, squash: &str) {
+    let pairs = exported_pairs(state, id);
+    let keys: Vec<&str> = pairs.iter().map(|(key, _)| key.as_str()).collect();
+    assert_eq!(
+        keys,
+        vec!["schema", "run", "bead", "sha", "verdict", "evidence", "ts", "order", "size", "files", "lines", "pub_symbols"],
+        "verdicts.jsonl の行は従来の key 列（任意 field を足さない）"
+    );
+    assert_eq!(value_of(&pairs, "sha"), squash, "面 5 の `sha` は見つけた squash");
+    assert_eq!(value_of(&pairs, "verdict"), "PASS");
+    assert!(!worktree_of(repo, id).exists(), "A の worktree は退役する（元の場所に残らない）");
+    assert!(
+        repo.join(".worktrees").join("scribe2").join("retired").join(id).exists(),
+        "retired/ へ move されている"
+    );
+    assert!(
+        state.join("pipe").join(id).join("verify-main.jsonl").exists(),
+        "主実測を撃った証拠（verify-main.jsonl）が在る"
+    );
+    assert!(show_line(repo, state, id).contains("stage=Landed"), "段は Landed");
+}
+
+/// squash の本文の末尾（trailer の行）を A の id から組む形。
+type TrailerBody = fn(&str) -> String;
+
+/// (b) 負例: squash の trailer が**別の run id**（A の id の末尾 1 字違い）の周と、trailer の行そのものを
+/// **持たない**周は、どちらも従来の `Failed detail=rebase-empty`（main は不変・`already-landed` は出ない）。
+/// 母集団 = 2 回の land の rc と detail。
+#[test]
+fn pipe_land_already_landed_needs_the_exact_trailer() {
+    let bodies: [(&str, TrailerBody); 2] = [
+        ("別の便の trailer", |id| run_trailer(&altered_id(id))),
+        ("trailer の行が無い", |_| String::new()),
+    ];
+    for (name, body) in bodies {
+        let (repo, state) = repo_with_state();
+        let marker = state.join("lens-ran");
+        let (id, squash) = gated_run_squashed_on_main(&repo, &state, &marker, body);
+        let out = land_once(&repo, &state, &id);
+        assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{name}: 従来どおり rc 1: {}", stderr_of(&out));
+        assert!(stderr_of(&out).contains("既に main に在る"), "{name}: 理由は rebase-empty の字面: {}", stderr_of(&out));
+        assert!(!stdout_of(&out).contains("already-landed"), "{name}: `already-landed` は出ない: {}", stdout_of(&out));
+        assert_eq!(git(&repo, &["rev-parse", "refs/heads/main"]), squash, "{name}: main は不変");
+        let (kind, stage, detail) = trail(&state, &id).pop().expect("便の event が在る");
+        assert_eq!((kind, stage), (EventKind::RunStage, Some(Stage::Failed)), "{name}: 末尾は Failed");
+        assert_eq!(detail.as_deref(), Some("rebase-empty"), "{name}: detail は従来の rebase-empty");
+        assert!(!land::verdicts_path(&state).exists(), "{name}: 面 5 へ書かない");
+        assert!(worktree_of(&repo, &id).exists(), "{name}: worktree は退役しない");
+        clean(&[&repo, &state]);
+    }
+}
+
+/// (c) (a) の形で main の**共通 verify の写し**を赤（`sh verify-red.sh`）にする: 従来の `main_red` の終端
+/// （Landed にならない・stdout に `already-landed` は無い・面 5 へ書かない）＝**主実測を飛ばしていない**証拠。
+/// main は見つけた sha のまま（この land は動かしていないので revert の対象も無い）。
+#[test]
+fn pipe_land_already_landed_red_main_is_not_landed() {
+    let (repo, state) = repo_with_state();
+    let marker = state.join("lens-ran");
+    let (id, squash) = gated_run_squashed_on_main(&repo, &state, &marker, run_trailer);
+    // 主実測は**写しからしか読まない**（ADR-0010 §2.4）ので、gate の後に写しの共通 verify だけを赤へ差し替える。
+    let frozen = vessel::pipe::vessel_path(&state, &id);
+    let text = fs::read_to_string(&frozen).expect("宣言の写しを読める");
+    let common = format!("common-verify = {VESSEL_COMMON}\n");
+    assert!(text.contains(&common), "fixture: 写しに既定の共通 verify が在る: {text}");
+    fs::write(&frozen, text.replace(&common, "common-verify = [\"sh verify-red.sh\"]\n")).expect("写しを書ける");
+    let out = land_once(&repo, &state, &id);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "main が赤ければ rc 1: {}", stderr_of(&out));
+    assert!(stderr_of(&out).contains("main が赤い"), "理由: {}", stderr_of(&out));
+    assert!(!stdout_of(&out).contains("already-landed"), "赤い周に `already-landed` は出ない: {}", stdout_of(&out));
+    let (kind, stage, detail) = trail(&state, &id).pop().expect("便の event が在る");
+    assert_eq!((kind, stage), (EventKind::RunStage, Some(Stage::Failed)), "末尾は Failed（Landed にならない）");
+    assert_eq!(detail.as_deref(), Some("main-red"), "detail は従来の main-red");
+    assert!(
+        state.join("pipe").join(&id).join("verify-main.jsonl").exists(),
+        "主実測は撃っている（verify-main.jsonl が在る）"
+    );
+    assert!(!land::verdicts_path(&state).exists(), "赤い周は面 5 へ export しない");
+    assert_eq!(git(&repo, &["rev-parse", "refs/heads/main"]), squash, "main は見つけた sha のまま");
+    assert!(show_line(&repo, &state, &id).contains("stage=Failed"), "段は Failed");
+    clean(&[&repo, &state]);
+}
+
 /// [`write_rules`] の `pipe.land_wait_s` の行だけを差し替えた tmp manifest（`None` = 行を落とす）。
 #[expect(
     clippy::expect_used,

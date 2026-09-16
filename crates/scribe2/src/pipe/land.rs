@@ -35,6 +35,12 @@
 //! 再 gate は `<base>..<main>` の path、主実測は gate を撃った木と land した木の `diff-tree` の path を
 //! [`DETECTION_SCOPE`] と照らし、1 つも触れない周は検出線を省いて理由付きの record を残す（[`detection_needed`]
 //! の 1 本を両方が通す）。読めない周は撃つ（fail-closed）。共通 verify と契約 verify は従来どおり撃つ。
+//!
+//! **既に main に自分の squash が在る便は Landed で終端する**（`s2-07l.389`・設計 §29・FR50・C3 / C10）。追随の
+//! rebase で commit が 0 本になった周、`rebase-empty` に倒す前に main の log を便の trailer（`run: <run id>`）で
+//! 1 回だけ探す。在れば前の周が CAS の後・実測の前に死んだ形＝squash と CAS を撃たず、主実測はその sha に対して
+//! 従来どおり撃ち（記録が無いものを緑と読まない）、緑なら `already-landed` の印を持って Landed にする。無ければ
+//! 本当に空の便として従来どおり `rebase-empty`。
 
 use crate::polarity::{OnFailure, Polarity, Timing};
 use super::contract::Contract;
@@ -206,12 +212,61 @@ pub struct Land<'a> {
     pub policy: LockPolicy,
 }
 
-/// main が動いた便の追随の結果（設計 §5.4）。
+/// main が動いた便の追随の結果（設計 §5.4・§29）。
 enum Follow {
     /// rebase と gate の撃ち直しを通した。stdout に載せる行（`rebase=` と撃ち直しの判定行）。
     Ready(Vec<String>),
     /// 追随できなかった・撃ち直しが PASS でない。呼び手はこの Outcome をそのまま返す。
     Stopped(Outcome),
+    /// 便の commit は 0 本で、main に**この便の trailer を持つ squash**が在る（前の周が CAS の後・実測の前に
+    /// 死んだ形・設計 §29）。値はその squash の sha。呼び手は squash と CAS を撃たず、主実測をこの sha に撃つ。
+    AlreadyLanded(String),
+}
+
+/// 追随の rebase の後の便の形（[`rebase_onto`] の戻り・**閉じた enum**・設計 §29）。
+enum Rebased {
+    /// 便の commit が main の上に残った。gate を撃ち直す。
+    Pending,
+    /// 便の commit は 0 本で、main の log に便の trailer を持つ squash が在る（sha）。
+    AlreadyLanded(String),
+}
+
+/// 着地の形と main に載った squash の sha（[`finish`] の印・**閉じた enum**・設計 §29）。stdout の末尾と
+/// `Landed` の detail に写す。
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Landing {
+    /// この land が squash を作り CAS で main を進めた（従来の形・stdout と detail は不変）。
+    Fresh(String),
+    /// squash は前の周が既に main に載せていた（見つけた sha）。この land は主実測と終端だけを通した。
+    AlreadyLanded(String),
+}
+
+/// `already-landed` の印の字面（stdout は `already-landed=1`・detail は `already-landed`・**書き手はこの 1 本**）。
+const ALREADY_LANDED: &str = "already-landed";
+
+impl Landing {
+    /// main に載った squash の sha（`landed=` / `sha:` / 面 5 の `sha` の宣言値）。
+    fn sha(&self) -> &str {
+        match self {
+            Self::Fresh(sha) | Self::AlreadyLanded(sha) => sha,
+        }
+    }
+
+    /// stdout の 1 行の末尾に後置する token（`Fresh` は何も足さない）。
+    fn stdout_suffix(&self) -> String {
+        match self {
+            Self::Fresh(_) => String::new(),
+            Self::AlreadyLanded(_) => format!(" {ALREADY_LANDED}=1"),
+        }
+    }
+
+    /// `RunDone stage=Landed` の detail の末尾（`main:<実測>` の後ろ・空白区切り・`Fresh` は何も足さない）。
+    fn detail_suffix(&self) -> String {
+        match self {
+            Self::Fresh(_) => String::new(),
+            Self::AlreadyLanded(_) => format!(" {ALREADY_LANDED}"),
+        }
+    }
 }
 
 /// 面 5 の export 先。
@@ -245,12 +300,15 @@ pub fn land(entry: &Land<'_>) -> Outcome {
         return refused(format!("{MAIN_REF} を読めない"));
     };
     let mut lines = Vec::new();
+    // 前の周が既に main に載せた squash（設計 §29）。`Some` の周は squash と CAS を撃たない。
+    let mut already = None;
     if old != base {
         // **CAS の old が動いている**。base が main の祖先なら追随する（rebase → gate の
         // 撃ち直し・設計 §5.4）。追随の形が無い周はここで断る（何も書かない）。
         match follow_main(entry, &worktree, &base, &old) {
             Follow::Stopped(outcome) => return outcome,
             Follow::Ready(followed) => lines = followed,
+            Follow::AlreadyLanded(found) => already = Some(found),
         }
     }
     // 撃ち直しの間に main がさらに動いた周は断る。次の land が同じ経路で追随する＝
@@ -269,10 +327,18 @@ pub fn land(entry: &Land<'_>) -> Outcome {
     // anchor の見立ては **ref を進める前**に読む: 進めた後の `git status` は index の遅れを
     // 「変更」として出すので、人の未 commit と区別できない。
     let plan = anchor_plan(entry.repo);
-    let new = match squash(entry, &worktree, &old) {
-        Ok(found) => found,
-        Err(reason) => return broken(reason),
+    // **既着地の周は squash と CAS を撃たない**（設計 §29・main は 1 byte も動かさない）。anchor は
+    // `old → old` の no-op を通す（同期の判定行は従来どおり出る・ref は動いていないので揃える差分も無い）。
+    // 主実測は見つけた sha に対して**従来どおり撃つ**——前の周が実測の前に死んだ可能性が在り、記録が
+    // 無いものを緑と読まない（C10）。木が gate と同じ周は検出線を省く（[`main_detection`]・§30）。
+    let landing = match already {
+        Some(found) => Landing::AlreadyLanded(found),
+        None => match squash(entry, &worktree, &old) {
+            Ok(found) => Landing::Fresh(found),
+            Err(reason) => return broken(reason),
+        },
     };
+    let new = landing.sha();
     // **squash の直後に揃える**（`s2-07l.131`）。ref を進めてから anchor を揃えるまでの窓——
     // `git status` に landed 変更が staged の逆向きで見える時間——は、実測の後に揃えると
     // **main 実測の長さだけ**開く（人が anchor を触れば `.117` の経路がその間ずっと開いている）。
@@ -281,10 +347,14 @@ pub fn land(entry: &Land<'_>) -> Outcome {
     //
     // 同期が `Skipped(SyncFailed)` の周も実測は続ける（ref は既に進んでいる＝同期の失敗で land を
     // 止めない・極性は不変）。結果は従来どおり [`finish`] / [`main_red`] / [`main_unmeasured`] へ渡す。
-    let anchor = sync_anchor(entry.repo, &plan, &old, &new);
-    let check = verify_main(entry, &new);
+    let synced_to = match &landing {
+        Landing::Fresh(_) => new,
+        Landing::AlreadyLanded(_) => old.as_str(),
+    };
+    let anchor = sync_anchor(entry.repo, &plan, &old, synced_to);
+    let check = verify_main(entry, new);
     let outcome = match check {
-        MainCheck::Green => finish(entry, &worktree, &new, &anchor, order),
+        MainCheck::Green => finish(entry, &worktree, &landing, &anchor, order),
         MainCheck::Red(reason) => main_red(entry, &reason, &anchor),
         MainCheck::Unmeasurable(reason) => main_unmeasured(entry, &reason, &anchor),
     };
@@ -424,8 +494,12 @@ fn follow_main(entry: &Land<'_>, worktree: &Path, base: &str, main: &str) -> Fol
         )));
     }
     let detection = follow_detection(entry.repo, base, main);
-    if let Err(stopped) = rebase_onto(entry, worktree, base, main) {
-        return Follow::Stopped(stopped);
+    match rebase_onto(entry, worktree, base, main) {
+        Err(stopped) => return Follow::Stopped(stopped),
+        // 既着地（設計 §29）: gate を撃ち直さず（lens を起こさない）・追随の event も書かない
+        // （便の変更は既に main に載っている＝段は実装の戻りでなく終端へ向かう・C3）。
+        Ok(Rebased::AlreadyLanded(found)) => return Follow::AlreadyLanded(found),
+        Ok(Rebased::Pending) => {}
     }
     let rebased = emit(
         entry.state_dir,
@@ -485,11 +559,13 @@ fn follow_detection(repo: &Path, base: &str, main: &str) -> Detection {
 ///   衝突を `Implemented detail=rebase-conflict:<base>..<main>` で記帳して**実装役を起こし直す**
 ///   ——便を終端にするのは上限に達した周だけである。どの形でも land はここで止まり、続きは
 ///   `gate` から撃ち直す（起こし直した turn の後は、次の land の追随で再び rebase が走る）。
-/// - **同一変更の便**: rebase で commit が 0 本になった周は便の変更が既に main に在る（先に land した
-///   便と同じ patch）ので gate を撃ち直さず（lens を起動しない）`rebase-empty` で終端する。commit 数を
-///   読めない周は 0 に読み替えず、従来どおり撃ち直しの precheck へ流す（fail-closed の向きを変えない・
-///   `s2-07l.125`）。
-fn rebase_onto(entry: &Land<'_>, worktree: &Path, base: &str, main: &str) -> Result<(), Outcome> {
+/// - **既着地の便**（設計 §29）: rebase で commit が 0 本になった周、`rebase-empty` に倒す**前に** main の log を
+///   この便の trailer（`run: <run id>`）で 1 回だけ探す（[`landed_squash_of`]）。在れば [`Rebased::AlreadyLanded`]
+///   ——前の周が CAS の後・実測の前に死んだ形で、便の squash は既に main に載っている。
+/// - **同一変更の便**: trailer が無い周は便の変更が別の便で main に在る（先に land した便と同じ patch）ので
+///   gate を撃ち直さず（lens を起動しない）`rebase-empty` で終端する。commit 数を読めない周は 0 に読み替えず、
+///   従来どおり撃ち直しの precheck へ流す（fail-closed の向きを変えない・`s2-07l.125`）。
+fn rebase_onto(entry: &Land<'_>, worktree: &Path, base: &str, main: &str) -> Result<Rebased, Outcome> {
     if !git_ok(worktree, &["rebase", main]) {
         return Err(follow::on_conflict(&Conflict {
             turn: turn_of(entry),
@@ -498,17 +574,38 @@ fn rebase_onto(entry: &Land<'_>, worktree: &Path, base: &str, main: &str) -> Res
             limit: entry.retries,
         }));
     }
-    if commits_after_rebase(worktree, main) == Some(0) {
-        return Err(follow_failed(
-            entry,
-            REBASE_EMPTY,
-            format!(
-                "run {} の変更は既に main に在る（rebase で commit が空・base={base} main={main}）・main は動かさない",
-                entry.run
-            ),
-        ));
+    if commits_after_rebase(worktree, main) != Some(0) {
+        return Ok(Rebased::Pending);
     }
-    Ok(())
+    if let Some(found) = landed_squash_of(entry.repo, main, entry.run) {
+        return Ok(Rebased::AlreadyLanded(found));
+    }
+    Err(follow_failed(
+        entry,
+        REBASE_EMPTY,
+        format!(
+            "run {} の変更は既に main に在る（rebase で commit が空・base={base} main={main}）・main は動かさない",
+            entry.run
+        ),
+    ))
+}
+
+/// main の祖先に**この便の trailer**（`run: <run id>`・[`squash_message`] が本文の末尾に置く 1 行）を持つ
+/// squash が在ればその sha（設計 §29）。
+///
+/// 探すのは 1 回だけ（`git log <main> -n 1 --fixed-strings --grep=<trailer> --format=%H`・run id の `.` を
+/// regex に読ませない・母集団は `main` の祖先）。`--grep` は行の部分一致なので、当たった commit の本文に
+/// **trailer と字面が等しい行**が在ることを確かめてから返す（別の便の id が接頭辞で重なる周を自分と読まない）。
+/// 読めない周・無い周はどちらも `None`（呼び手は従来どおり `rebase-empty` へ倒す＝在ると読み替えない）。
+fn landed_squash_of(repo: &Path, main: &str, run: &str) -> Option<String> {
+    let trailer = format!("{RUN_TRAILER}{run}");
+    let grep = format!("--grep={trailer}");
+    let found = git_line(repo, &["log", main, "-n", "1", "--fixed-strings", &grep, "--format=%H"])?;
+    let body = git_bytes(repo, &["log", "-n", "1", "--format=%B", &found])?;
+    String::from_utf8_lossy(&body)
+        .lines()
+        .any(|line| line == trailer)
+        .then_some(found)
 }
 
 /// 起こし直しの材料（land が持つ面から組む・**組み立てはこの 1 本**）。
@@ -800,7 +897,12 @@ fn measure_main(repo: &Path) -> (String, Vec<String>) {
 ///
 /// export の前に main を実測し、stdout の `main=` と `Landed` の detail の `main:` に写す
 /// （`sha:` は宣言値のまま・verdicts.jsonl の key 列は触らない）。
-fn finish(entry: &Land<'_>, worktree: &Path, new: &str, anchor: &AnchorSync, order: Order) -> Outcome {
+///
+/// `landing` は着地の形と宣言値の sha（設計 §29）: [`Landing::AlreadyLanded`] の周は stdout の末尾に
+/// `already-landed=1`、detail の `main:` の後ろに `already-landed` を後置する。[`Landing::Fresh`] の周の stdout と
+/// detail は不変。verdicts.jsonl の行はどちらも従来の key 列（`sha` = 宣言値・任意 field を足さない）。
+fn finish(entry: &Land<'_>, worktree: &Path, landing: &Landing, anchor: &AnchorSync, order: Order) -> Outcome {
+    let new = landing.sha();
     let (measured, mut err) = measure_main(entry.repo);
     if let Err(reason) = export_verdict(entry, new, order) {
         return broken(reason);
@@ -814,7 +916,7 @@ fn finish(entry: &Land<'_>, worktree: &Path, new: &str, anchor: &AnchorSync, ord
             stage: Some(Stage::Landed),
             seat: None,
             pid: None,
-            detail: Some(format!("sha:{new} main:{measured}")),
+            detail: Some(format!("sha:{new} main:{measured}{}", landing.detail_suffix())),
         },
         entry.policy,
     );
@@ -826,10 +928,11 @@ fn finish(entry: &Land<'_>, worktree: &Path, new: &str, anchor: &AnchorSync, ord
     err.extend(anchor.warning());
     Outcome {
         out: vec![format!(
-            "run={} landed={new} main={measured} {} order={}",
+            "run={} landed={new} main={measured} {} order={}{}",
             entry.run,
             anchor.token(),
-            order.as_value()
+            order.as_value(),
+            landing.stdout_suffix()
         )],
         // 後始末の失敗は land を取り消さない（**rc 0 のまま stderr**）。
         err,
