@@ -5,7 +5,7 @@ bd `s2-07l.2`（[v2][spike][P1][S] tooling spike-2）の成果物。
 置いたまま未定義だった K 指標を、実測値つきの候補として定義できる状態にすること**である。
 
 測定対象は leg 0 の land commit `9fe8d55`（cargo workspace 骨格・Rust 1,059 行 / `.rs` 7 本）。
-v1 の実測（`sc-ol6t9` の bash corpus / `sc-a1nex` の Python 自リポ micro-bench）は**持ち越していない**。
+v1 の実測（v1 の台帳の便が取った bash corpus / Python 自リポ micro-bench）は**持ち越していない**。
 本書の数字はすべて本 spike が Rust workspace + cargo 出力に対して取り直したものである。
 
 ---
@@ -108,7 +108,7 @@ worker cell は自 worktree から出ない規律も同じ方向に効く。
 - **キャッシュの平準化**: 各計測の前に同じコマンドを 1 回空回しして cargo の増分状態を揃える
   （初回コンパイルの `Compiling …` 行が A/B の片側にだけ乗るのを防ぐ）。
 - **filtered 側 = `rtk <cmd>` の直叩き**。hook 形（`rtk init -g`）は host を汚すため踏まない
-  （v1 `sc-brjbv` で hook 形 arm は機械確定 NG 済み）。
+  （v1 の台帳の便で hook 形 arm は機械確定 NG 済み）。
 - **red の作り方**: leg 0 land commit から生やした使い捨て branch 5 本（`spike/red-*`・**push しない**）に
   scratch commit を 1 本ずつ置いた。欠陥は `out/red-apply.py` が機械的に注入する。
   この注入器は **tracked source を壊す道具なので既定で refuse する** — `--target <path>`（temp copy へ書く）か
@@ -392,7 +392,7 @@ K3（rc 透過 100%）と K2（rtk 帰責 loss 0・サブコマンド単位）�
 ## 9. (iv) 測れなかった項目
 
 1. **token 実測**（K7）。byte 代理で通した。tokenizer を入れると被験でない依存が増えるため。
-2. **hook 形の rtk**（`rtk init -g`）。host の設定を書くため踏めない（v1 `sc-brjbv` で arm は機械確定 NG）。
+2. **hook 形の rtk**（`rtk init -g`）。host の設定を書くため踏めない（v1 の台帳の便で arm は機械確定 NG）。
    よって「banner が消えた後の実効削減率」は未測定で、本書の `rtk_net` 列は**上限の推定**にすぎない。
    加えて hook 形の対応表 `rtk rewrite` が nextest を返さない（§3）ため、hook を入れても nextest が
    filter されるかは未確認である。

@@ -3,9 +3,11 @@
 //!
 //! paths-clean は path 形（home dir の接頭形と短縮展開記号）しか見ない。本 measure は同じ母集団
 //! （index）・同じ読み口（[`crate::paths_clean::body_of`]）・同じ免除（[`crate::paths_clean::exempt`]）
-//! の上で、**形だけで判る** 2 種を数える: (a) メールアドレス形のうち RFC 2606 の予約 domain で
+//! の上で、**形だけで判る** 4 種を数える: (a) メールアドレス形のうち RFC 2606 の予約 domain で
 //! **ない**もの（`example.com` / `example.net` / `example.org` と TLD `test` / `example` /
-//! `invalid` / `localhost` は fixture の常套なので許す）・(b) macOS / Windows の home path 形。
+//! `invalid` / `localhost` は fixture の常套なので許す）・(b) macOS / Windows の home path 形・
+//! (c) v1 台帳の id 形（`sc-` + 英数 5 字・語境界・`s2-07l.174`）・(d) state dir の**絶対** path 形
+//! （home 直下の user dir から state dir へ至る接頭・相対形は ADR-0004 が持つので当てない）。
 //! host 名・口座名・user の逐語は tracked に needle を置けない（自分自身を撃つ）ので機械の外＝
 //! review の領分のまま（planner 裁定 2026-09-11）。
 //!
@@ -35,6 +37,18 @@ const RESERVED_DOMAINS: &[&str] = &["example.com", "example.net", "example.org"]
 /// RFC 2606 が予約する TLD（末尾 label の完全一致・大文字小文字を区別しない）。
 const RESERVED_TLDS: &[&str] = &["test", "example", "invalid", "localhost"];
 
+/// (c) v1 台帳 id 形の接頭（この後に英数 5 字が続き、前後が語境界のものを当てる）。
+const LEDGER_ID_V1_PREFIX: &str = concat!("sc", "-");
+
+/// (c) v1 台帳 id 形の接頭の後に続く英数（小文字と数字）の字数。
+const LEDGER_ID_V1_BODY_LEN: usize = 5;
+
+/// (d) state dir の絶対 path 形の頭（Linux の home dir の接頭・この後に user dir が 1 段続く）。
+const STATE_DIR_HOME_PREFIX: &str = concat!("/", "home", "/");
+
+/// (d) state dir の絶対 path 形の尾（user dir の直後から state dir へ至る接頭）。
+const STATE_DIR_SUFFIX: &str = concat!("/", ".local", "/", "state", "/");
+
 /// 違反として数える形の名（違反行に載せる）。
 #[derive(Clone, Copy)]
 enum Form {
@@ -42,6 +56,10 @@ enum Form {
     Email,
     /// (b) macOS / Windows の home path 形。
     UsersPath,
+    /// (c) v1 台帳の id 形（`sc-` + 英数 5 字・語境界）。
+    LedgerIdV1,
+    /// (d) state dir の絶対 path 形（home 直下の user dir から `.local/state/` へ至る接頭）。
+    StateDirPath,
 }
 
 impl Form {
@@ -50,6 +68,8 @@ impl Form {
         match self {
             Self::Email => "email",
             Self::UsersPath => "users-path",
+            Self::LedgerIdV1 => "ledger-id-v1",
+            Self::StateDirPath => "state-dir-path",
         }
     }
 }
@@ -103,6 +123,12 @@ fn violating_lines(rel: &str, bytes: &[u8]) -> Vec<(usize, Form)> {
         for at in find_all(bytes, mark.as_bytes()) {
             by_line.entry(line_of(bytes, at)).or_insert(Form::UsersPath);
         }
+    }
+    for at in ledger_id_v1_offsets(bytes) {
+        by_line.entry(line_of(bytes, at)).or_insert(Form::LedgerIdV1);
+    }
+    for at in state_dir_path_offsets(bytes) {
+        by_line.entry(line_of(bytes, at)).or_insert(Form::StateDirPath);
     }
     let kept = exempt(rel, bytes, by_line.keys().copied().collect());
     kept.into_iter()
@@ -180,9 +206,81 @@ fn is_reserved(domain: &str) -> bool {
             .is_some_and(|tld| RESERVED_TLDS.contains(&tld))
 }
 
+/// 語を成す byte（英数と `_`・regex の `\w` と同じ集合）。語境界の判定に使う。
+fn is_word_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_'
+}
+
+/// v1 台帳 id の本体に使える byte（小文字英字と数字）。
+fn is_ledger_body_byte(byte: u8) -> bool {
+    byte.is_ascii_lowercase() || byte.is_ascii_digit()
+}
+
+/// `at` の直前が語境界か（先頭か、直前の byte が語を成さない）。
+fn word_starts_at(bytes: &[u8], at: usize) -> bool {
+    at.checked_sub(1)
+        .and_then(|before| bytes.get(before))
+        .is_none_or(|byte| !is_word_byte(*byte))
+}
+
+/// `end` の直後が語境界か（末尾か、直後の byte が語を成さない）。
+fn word_ends_at(bytes: &[u8], end: usize) -> bool {
+    bytes.get(end).is_none_or(|byte| !is_word_byte(*byte))
+}
+
+/// (c) v1 台帳 id 形（[`LEDGER_ID_V1_PREFIX`] + 英数 5 字・前後が語境界）の先頭 offset を昇順で返す。
+///
+/// leg 付き（5 字の後に `.1`）は `.` が境界なので当たる。`misc-abcde`（接頭の前に語が続く）と
+/// 4 字 / 6 字の本体は当てない（v1 の台帳が振った形だけを名指す）。
+fn ledger_id_v1_offsets(bytes: &[u8]) -> Vec<usize> {
+    let prefix = LEDGER_ID_V1_PREFIX.as_bytes();
+    find_all(bytes, prefix)
+        .into_iter()
+        .filter(|at| word_starts_at(bytes, *at))
+        .filter(|at| {
+            let body_at = at + prefix.len();
+            let end = body_at + LEDGER_ID_V1_BODY_LEN;
+            bytes
+                .get(body_at..end)
+                .is_some_and(|body| body.iter().all(|byte| is_ledger_body_byte(*byte)))
+                && word_ends_at(bytes, end)
+        })
+        .collect()
+}
+
+/// (d) state dir の絶対 path 形（[`STATE_DIR_HOME_PREFIX`] + user dir 1 段 + [`STATE_DIR_SUFFIX`]）の
+/// 先頭 offset を昇順で返す。user dir は `/` を含まない 1 byte 以上の列。
+///
+/// 相対形（`$HOME/.local/state/` や `.local/state/` 単独）は当てない（ADR-0004 の本文が持つ形・
+/// frozen）。home 接頭だけの行は paths-clean の領分で、本形では数えない。
+fn state_dir_path_offsets(bytes: &[u8]) -> Vec<usize> {
+    find_all(bytes, STATE_DIR_HOME_PREFIX.as_bytes())
+        .into_iter()
+        .filter(|at| state_dir_follows_user_dir(bytes, at + STATE_DIR_HOME_PREFIX.len()))
+        .collect()
+}
+
+/// `user_at` から user dir 1 段（`/` を含まない 1 byte 以上）が続き、その直後が
+/// [`STATE_DIR_SUFFIX`] で始まるか。
+fn state_dir_follows_user_dir(bytes: &[u8], user_at: usize) -> bool {
+    let Some(tail) = bytes.get(user_at..) else {
+        return false;
+    };
+    let Some(user_len) = tail.iter().position(|byte| *byte == b'/') else {
+        return false;
+    };
+    user_len > 0
+        && tail
+            .get(user_len..)
+            .is_some_and(|rest| rest.starts_with(STATE_DIR_SUFFIX.as_bytes()))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{measure, scan, violating_lines, Form};
+    use super::{
+        measure, scan, violating_lines, Form, LEDGER_ID_V1_PREFIX, STATE_DIR_HOME_PREFIX,
+        STATE_DIR_SUFFIX,
+    };
     use crate::paths_clean::TrackedFile;
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -444,6 +542,92 @@ mod tests {
         let head = measured.violations.first().map(String::as_str).unwrap_or_default();
         assert!(head.contains("vanished.md") && head.contains("読めない"), "{head}");
         assert!(!head.contains("readable.md"), "読めた file を違反にしないはず: {head}");
+    }
+
+    /// needle の字面を**実行時に連結**して作る（歯の source に完成形を置くと本 measure が自分を撃つ）。
+    fn ledger_id(body: &str) -> String {
+        format!("{LEDGER_ID_V1_PREFIX}{body}")
+    }
+
+    /// state dir の絶対 path 形を**実行時に連結**して作る（同上）。
+    fn state_dir(user: &str) -> String {
+        format!("{STATE_DIR_HOME_PREFIX}{user}{STATE_DIR_SUFFIX}")
+    }
+
+    /// (c) v1 台帳 id 形（`sc-` + 英数 5 字・語境界）は `ledger-id-v1` で名指される。
+    /// leg 付き（`.1`）・行頭・括弧の中は当たり、接頭の前に語が続く形・4 字 / 6 字・大文字・
+    /// v2 の id 形（`s2-…`）は当たらない（1 行 1 件で行番号に 1 対 1 に見る）。
+    #[test]
+    fn private_clean_ledger_id_v1_form_is_flagged() {
+        let dirty = format!(
+            "v1 の実測（`{}` の corpus）\n{}.1 leg\n(`{}`)\n",
+            ledger_id("ol6t9"),
+            ledger_id("e8o34"),
+            ledger_id("brjbv"),
+        );
+        let clean = format!(
+            "mi{}\n{}\n{}\n{}\n{}_x\ns2-07l.174\n",
+            ledger_id("abcde"),
+            ledger_id("abcd"),
+            ledger_id("abcdef"),
+            ledger_id("ABCDE"),
+            ledger_id("abcde"),
+        );
+        let measured = scan_fixture(&[("dirty.md", dirty), ("clean.md", clean)]);
+
+        assert_eq!(measured.fact, "private-clean=2");
+        assert_eq!(
+            measured.violations,
+            vec![
+                "private-clean: dirty.md:1 ledger-id-v1".to_owned(),
+                "private-clean: dirty.md:2 ledger-id-v1".to_owned(),
+                "private-clean: dirty.md:3 ledger-id-v1".to_owned(),
+            ],
+            "語境界つきの 5 字の形だけが違反のはず"
+        );
+    }
+
+    /// (d) state dir の絶対 path 形（home 直下の user dir から state dir へ至る接頭）は
+    /// `state-dir-path` で名指される。user dir の無い形（home の直後に state dir）と home 接頭だけの
+    /// 行（paths-clean の領分）は本形では当てない。
+    #[test]
+    fn private_clean_state_dir_absolute_path_is_flagged() {
+        let dirty = format!(
+            "state = {}scribe2-v2-state\nls {}\n",
+            state_dir("someone"),
+            state_dir("o-ther_1"),
+        );
+        let clean = format!(
+            "{}\n{}someone/x\n",
+            state_dir(""),
+            STATE_DIR_HOME_PREFIX,
+        );
+        let measured = scan_fixture(&[("dirty.toml", dirty), ("clean.md", clean)]);
+
+        assert_eq!(measured.fact, "private-clean=2");
+        assert_eq!(
+            measured.violations,
+            vec![
+                "private-clean: dirty.toml:1 state-dir-path".to_owned(),
+                "private-clean: dirty.toml:2 state-dir-path".to_owned(),
+            ],
+            "user dir 1 段を挟む絶対形だけが違反のはず"
+        );
+    }
+
+    /// 相対形（ADR-0004 が持つ `$HOME/.local/state/<NAME>/` と `.local/state/` 単独）は通る
+    /// （frozen の ADR を赤にしない退行の pin・絶対形だけを当てる）。
+    #[test]
+    fn private_clean_relative_state_dir_is_not_flagged() {
+        let body = format!(
+            "既定 = $HOME{}<NAME>/\n相対 = {}\n",
+            STATE_DIR_SUFFIX,
+            STATE_DIR_SUFFIX.trim_start_matches('/'),
+        );
+        let measured = scan_fixture(&[("adr.html", body)]);
+
+        assert_eq!(measured.fact, "private-clean=1");
+        assert!(measured.violations.is_empty(), "相対形は違反でないはず: {:?}", measured.violations);
     }
 
     /// 同じ行に 2 形が在れば 1 行 1 件（先に見つけた形）・複数行は行ごとに数える。
