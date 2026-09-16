@@ -139,6 +139,13 @@ scribe2 を載せる consumer が pipe を通すのに要る面は 3 つで、�
 - 触らない: 各 subcommand の実装関数・usage の字面（`ALL` から組んで同じ字面になることを外形 snapshot で pin）。
 - 却下案: 導出に「usage 行を持つ .rs」の形を足す（字面の形が増える・閉じた enum で既存の第 2 形に乗せる方が C2）／Declared のまま（`.303` の型の QUESTION が再発する）。
 
+## 18. write-set の導出に fn 形の touches を足す（契約表の行 r・`s2-07l.358`）
+
+- 何が起きているか: planner の `.323` の契約化（2026-09-15 16:5xZ・実測）で、Derived 形の write-set が subcommand の入口 file（`pipe/cli.rs` の `resume` の match・`ratelimit.rs` の段の分岐）に届かない。導出（`pipe/closure.rs` の `closure`）は `touches` を型の path（`crate::module::Type`・末尾が大文字始まり・`touched`）としか読まず、分岐を 1 本足す契約が触る入口の file を型で表せない（届く型は `Stage` / `Outcome` / `Verdict` で全木に広がる）＝Declared に戻るか全木へ広がるかの二択。現物（verified・main 797389f）: 名指しの検査（`unresolved_names`）は fn 形（`Form::Fn`・`declares_fn`）を既に読むが、導出の `touched` は大文字始まりの名だけを受け、fn 形は `ClosureError::TypeForm` で断る。§17（行 q）の (vi)(vii) は creates の親 mod と subcommand の閉じた enum を足す形で、fn の名指しは持たない。
+- 形: 導出の第 8 項として **fn 形の touches**（`crate::<module>::<snake_case の識別子>`・末尾が小文字始まり）を足す。閉包 = その module の段（`scopes` / `in_module`・型形と同じ 1 関数を通す）で `fn <識別子>(` を宣言する file（`declares_fn`・下界のまま・呼び手は数えない）。宣言する file が 0 の周は typed に断る（`ClosureError` の variant 1 つ・空集合に潰さない・C10）。型形の 4 形・§16 の第 5 形・§17 の (vi)(vii) は不変。
+- 触らない: `unresolved_names` の fn 形（名指しの検査は別の面）・`Form` / `Touched` の型名・契約表の schema（`touches` の値の形が 1 つ増えるだけで field は増えない）。
+- 却下案: 入口の match を dispatch の閉じた enum に寄せる（§17 の (vii) が同じ向きで担う・分岐の追加が variant の追加になる大きい形）／`also` に `.rs` を許す（Rust の面を手書きに戻す＝Declared の再来）／呼び手まで閉包に入れる（上界に化ける・`Stage::` と同じ全木の広がり）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -325,4 +332,15 @@ write-set = ["crates/scribe2/src/pipe/closure.rs", "crates/scribe2/src/seat/cli.
 verify = ["cargo nextest run -p scribe2 --no-tests=fail contract_derive_creates_parent_"]
 size = "M"
 done = "口を足す契約が Derived で書け、導出値に cli.rs と親 mod.rs が入る"
+
+[[contract]]
+id = "r"
+title = "write-set の導出に fn 形の touches（crate::module::snake_ident）を足し、その fn を宣言する file を閉包に入れる"
+req = ["FR48"]
+section = "18"
+touches = ["crate::pipe::closure::Touched"]
+tests = ["crates/scribe2/tests/e2e/pipe/intake.rs"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail contract_derive_fn_"]
+size = "S"
+done = "touches に fn 形を書いた契約の導出値にその fn を宣言する file が入り、宣言する file が無い周は typed に断られ、型形の閉包は不変"
 <!-- contracts:end -->
