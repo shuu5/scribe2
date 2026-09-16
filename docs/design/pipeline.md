@@ -384,6 +384,14 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
 - 歯（`flipcheck_base_reason_` 接頭辞・`crates/xtask/src/flipcheck_tests.rs`）: (i) 理由の純関数（rc の有無・名指した本数・撃ち直しの rc → variant）の 3 通りを in-file で pin（base では関数が無く RED）／(ii) 既存の toy fixture で base を compile error にした周の判定行が `base-not-green:unnamed rc=101` を含む（base の字面は `base-not-green` で終わる → RED）／signal と retry-failed は純関数の歯で足りる（実 signal の fixture は壁時計と環境に依る・§5.3 の型）。
 - 却下: 経路ごとに別の `reason=` を立てる（極性一覧の行が増え infra-error の意味が割れる）／撃ち直しを 2 回に増やす（緩める側・C11.2）／stderr の relay だけに理由を書く（判定行を読む操作役に届かない・gate の evidence は判定行）。
 
+## 33. 追随の再 gate を main の差分が検出線の面の外だけの周は省く — docs の merge ごとに先頭が 1 周払わない（契約表の行 aa・`s2-07l.416`）
+
+- 何が起きているか（admin の実測 2026-09-16 12:50Z・13:25Z・verified）: 11:25Z 以降 85 分着地 0。列の先頭 `.389` は Gated PASS → 追随 rebase → 再 gate を 3 周し（main を動かしたのは docs-only の PR 5 本）、3 周目の再 gate で全件 nextest の 2 本 / 1490 本が負荷 flaky で落ちて Gated FAIL → retire＝実装 1 本を喪失。§30 は検出線だけを面の外で省いたが、共通 verify（全件 nextest ほか）と lens は差分の内容を見ずに毎周撃つ。同じ Rust の木に対して gate は前周で PASS 済みで、着地の直前には主実測 `verify_main` が最終の木で全行を撃つ（§5.4）＝再 gate の全件は二重。
+- 形: `follow_main` は rebase の前に §30 と**同じ 1 関数**（`detection_needed`・`DETECTION_SCOPE`）で main の差分を測り、面に 1 つも触れない周は **再 gate を撃たず** `RunStage stage=Implemented detail=rebase:<old>..<new>` の直後に `RunStage stage=Gated detail=verdict:PASS` を器が記帳して着地へ進む（前周の PASS を新 base へ引き継ぐ・verdict の 3 値と detail の形は不変）。引き継いだ事実は `verify.jsonl` に §30 の `skip_record` と同じ形の record 1 本（`kind=gate skipped=regate reason=outside-scope`）で残す（C10）。面に触れる周・diff を読めない周は従来どおり再 gate（fail-closed）。主実測 `verify_main` は従来どおり最終の木で全行を撃つ（push の前の唯一の全件・C12.6 の緑はここが担う）。
+- 触らない: 追随の要否判定（`old != base` なら rebase）・rebase と衝突の経路（pipeline-conflict.md §3）・`DETECTION_SCOPE` の中身・gate の判定順と verdict・主実測の行・`gate_run`（`pipe gate` を人が撃つ周は常に撃つ）。
+- 歯（`pipe_follow_docs_only_` 接頭辞・`tests/e2e/pipe/land.rs`・既存の追随の fixture〔`gated_pass` + 別便の commit + 偽 lens〕の型）: (a) main が docs だけの commit で進んだ周は land が偽 lens を呼ばず（写し 0）verify の record が増えず、`Gated verdict:PASS` の record と `skipped=regate reason=outside-scope` の record が在って着地する／(b) main が `crates/` の file で進んだ周は従来どおり再 gate（偽 lens 1 回・既存の歯）／(c) diff を読めない周（base の sha が無い）は再 gate（fail-closed）。
+- 却下: docs-only の周は主実測も省く（push の前に最終の木で全行を撃つ唯一の線が消える・C12.6）／共通 verify のうち docs を読む行だけ撃つ（行の意味を字面で分類する散文規則・N2）／docs merge を止める運用だけで凌ぐ（planner 裁定 12:5xZ の暫定・器に無い規則）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -649,4 +657,14 @@ write-set = ["crates/xtask/src/flipcheck.rs", "crates/xtask/src/flipcheck_tests.
 verify = ["cargo nextest run -p xtask --no-tests=fail flipcheck_base_reason_"]
 size = "S"
 done = "base が compile error の周の判定行が base-not-green:unnamed rc=101 を含み、理由の純関数が 3 経路を宣言順の variant に写し、極性一覧の行と判定行の先頭は不変"
+
+[[contract]]
+id = "aa"
+title = "追随の再 gate を main の差分が検出線の面の外だけの周は省く — 前周の Gated PASS を新 base へ引き継ぎ skipped=regate reason=outside-scope を記録し、主実測は従来どおり全行"
+req = ["FR14", "FR34"]
+section = "33"
+write-set = ["crates/scribe2/src/pipe/land.rs", "crates/scribe2/src/pipe/gate/record.rs", "crates/scribe2/tests/e2e/pipe/land.rs"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_follow_docs_only_"]
+size = "S"
+done = "docs だけで main が進んだ周は land が lens を呼ばず再 gate せずに Gated PASS を引き継いで着地し、crates/ が進んだ周と diff を読めない周は従来どおり再 gate する"
 <!-- contracts:end -->
