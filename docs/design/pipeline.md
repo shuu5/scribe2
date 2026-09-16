@@ -393,6 +393,14 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
 - 歯（`pipe_follow_docs_only_` 接頭辞・`tests/e2e/pipe/land.rs`・既存の追随の fixture〔`gated_pass` + 別便の commit + 偽 lens〕の型）: (a) main が docs だけの commit で進んだ周は land が偽 lens を呼ばず（写し 0）verify の record が増えず、`Gated verdict:PASS` の record と `skipped=regate reason=outside-scope` の record が在って着地する／(b) main が `crates/` の file で進んだ周は従来どおり再 gate（偽 lens 1 回・既存の歯）。diff を読めない周の fail-closed は既存の `follow_detection`（変更しない）が持ち、FR34 の前提（base が main の祖先）を通した上で diff だけを失敗させる seam が無いので歯は置かない（空虚な歯を避ける）。record の形（`Skipped` / `skip_record`）の定義は `pipe/gate/record.rs` に閉じる。既存の歯の閉包は `tests/e2e/pipe/land.rs` の「main を便の base から動かす fixture」に加えて `tests/e2e/pipe/gate.rs` の `pipe_confine_release_regate_in_one_process_uses_distinct_unit_names`（repo 直下の `other.txt` を別便の変更として置き、追随の再 gate と主実測の 2 周が別名の unit で撃たれたことを数える）も含む＝その fixture の path は面の外なので本節の形で再 gate が省かれ 1 周になって反転する。歯の趣旨（2 周の unit 名が異なる）を保つため fixture を `crates/other.txt`（面の内）に替え、期待は不変＝write-set はこの e2e file を含む（run 4 = QUESTION 2026-09-17 の解）。閉包の母集団は pipe の e2e 全 file（`tests/e2e/pipe.rs` + `tests/e2e/pipe/*.rs`）で「便の base の後に main へ commit を積んでから land を撃つ fixture」を掃いたもの＝`land.rs` の 7 本と `gate.rs` のこの 1 本だけ（他の file は main を動かさない・`gate.rs` の他の再 gate の歯は同じ base で撃ち直すだけ）。
 - 却下: docs-only の周は主実測も省く（push の前に最終の木で全行を撃つ唯一の線が消える・C12.6）／共通 verify のうち docs を読む行だけ撃つ（行の意味を字面で分類する散文規則・N2）／docs merge を止める運用だけで凌ぐ（planner 裁定 12:5xZ の暫定・器に無い規則）。
 
+## 34. 追随で入った契約表の行が便の消した path を名指す周は runner を起こし直す — Gated のまま誰も直せない穴を衝突と同じ経路で塞ぐ（契約表の行 ab・`s2-07l.400`）
+
+- 何が起きているか（`s2-07l.349` run 010919Z・`.288`・2026-09-16・verified）: 純移動の便（e2e の lifecycle.rs を ratelimit.rs / stop.rs へ割る）が Gated PASS を 4 回通した後、追随の rebase で docs PR の行 v（`.395`）が便の木に入り、その write-set が便の消した file を名指したまま。契約表の検査の歯 `contract_closure_ext_real_table_has_zero_findings` が便の木で赤（write-set-item-unresolved）→ 変異検査の baseline が落ちて検出線 rc 2（測れない）→ Gated INCONCLUSIVE を 5 回繰り返し、待ち手の back-off が尽きた。穴は 2 つ: (1) 追随の rebase は木を動かすが runner を呼び戻さない＝行と便の食い違いは Questioned でないので answer も効かず、Gated のまま誰も直せない。(2) 検出線の rc 2 は「測れない」であって便の赤ではないのに、resume は同じ検出線だけを撃ち直す（原因は木に在る）。§33 の後は docs だけの周の再 gate が省かれるので、同じ食い違いは主実測 `verify_main`（§5.4）の赤＝main-red の記録へ移るだけで、直す手は依然無い。
+- 形（衝突の機械解消 [pipeline-conflict.md](./pipeline-conflict.md) §3 と同じ経路・新しい経路を持たない）: (1) `follow_main`（`land.rs`）は rebase が通った直後・§33 の省略の判定と再 gate の**前**に、契約表の検査（`contracts check` と同じ 1 関数 `check_repo`・`table.rs`）を便の木に撃つ。findings が 0 なら従来どおり。(2) findings が在り、そのすべてが write-set の項目の未解決で、名指された path が**便自身の diff で消えた・改名した path**（`git diff --name-status <base>..HEAD` の D / R の旧 path・写しの write-set の `-` の項目とは別の実測）に含まれる周は、`RunStage stage=Implemented detail=rebase-stale-rows:<base>..<main>` を記帳し（終端にしない・§3 の手順 2 と同型）、runner を起こし直す（同じ worktree・同じ契約・stdin の「追随」節に行の一覧〔`<doc>#<id>` と未解決の項目〕を足す・`spawn.rs` の節の出所は `follow.rs` の `section` の 1 本のまま）。回数は衝突の回数と**同じ 1 つの上限**（rules 行 `pipe.follow_retries`・`is_conflict` の読み手を `rebase-stale-rows:` の接頭辞も数える 1 本にする・resume の弁別も同じ 1 本）で、上限に達した周は `Failed detail=rebase-stale-rows`。(3) 起こし直しの turn が行を直せるよう、写しの write-set（run dir の `contract.toml`・`contract_path`）に findings の行を持つ設計 doc（`docs/design/<doc>.md`）を器が**追記する**（追記だけ・既存の項目は動かさない・追記した項目は同じ event の stderr の行に写す＝gate の照合と runner の guard が同じ写しを読むので食い違わない・`.133` の「契約の改訂を器の口で持つ」の最小形）。(4) それ以外の findings（便が消していない path・行の形の誤り）は便の責任ではない＝従来どおり再 gate へ進み、赤なら gate の判定で止まる（本行は「便が消した path を名指す行」だけを拾う・fail-closed の向きは変えない）。契約表の検査を撃てない周（repo を読めない）は従来どおり再 gate（読めないを「行なし」に読み替えない・NFR4）。
+- 触らない: 追随の要否判定・rebase と衝突の経路・§33 の省略の判定（本検査はその前に撃つ）・検出線の rc 2 の扱い（穴 (2) は原因を木から取り除くことで到達しなくなる・resume の形は不変）・純移動の便が契約時に他の行を直す義務（contract-source.md §15 の型・本行は契約の後に入った行だけを拾う）。
+- 歯（`pipe_follow_stale_rows_` 接頭辞・`tests/e2e/pipe/land.rs`・既存の追随の fixture〔`gated_pass` + 別便の commit + 偽 runner〕の型）: (a) 便が file を消した後、main が「消えた path を write-set に持つ行」を足す docs の commit で進んだ周は、land が `Implemented detail=rebase-stale-rows:` を記帳して偽 runner を 1 回起こし、写しの write-set にその設計 doc が追記され、再 gate は撃たれない（偽 lens の写し 0）／(b) 行が便と無関係の path を名指す周は起こし直さず従来どおり再 gate へ進む／(c) 上限 `pipe.follow_retries` に達した周は `Failed detail=rebase-stale-rows` で終端する／(d) `--runner` の無い land は `rebase-stale-rows:` を記帳して rc 1 で止まり resume で続けられる（§3 の手順 4 と同型）。
+- 却下: 器が行を書き換えて着地する（land が write-set の外の doc を触る＝gate の照合と runner の guard の外の変更・C16）／stale な行を INCONCLUSIVE の理由の 1 つとして記帳するだけ（記帳は在っても直す手が無い・穴 (1) そのもの）／検出線の rc 2 の周に resume が全 verify を撃ち直す（原因が木に在る間は何回撃っても同じ・費用だけ増える）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -668,4 +676,14 @@ write-set = ["crates/scribe2/src/pipe/land.rs", "crates/scribe2/src/pipe/gate/re
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_follow_docs_only_"]
 size = "S"
 done = "docs だけで main が進んだ周は land が lens を呼ばず再 gate せずに Gated PASS を引き継いで着地し、crates/ が進んだ周と diff を読めない周は従来どおり再 gate する"
+
+[[contract]]
+id = "ab"
+title = "追随で入った契約表の行が便の消した path を名指す周は rebase-stale-rows で記帳して runner を起こし直す — 写しの write-set にその設計 doc を追記し、回数は衝突と同じ上限、他の findings は従来どおり再 gate"
+req = ["FR34", "FR47"]
+section = "34"
+write-set = ["crates/scribe2/src/pipe/land.rs", "crates/scribe2/src/pipe/follow.rs", "crates/scribe2/src/pipe/spawn.rs", "crates/scribe2/src/pipe/cli/resume.rs", "crates/scribe2/src/pipe/table.rs", "crates/scribe2/tests/e2e/pipe/land.rs"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_follow_stale_rows_"]
+size = "M"
+done = "便が消した path を名指す行が追随で入った周は land が rebase-stale-rows を記帳して runner を起こし直し、写しの write-set にその設計 doc が追記され再 gate は撃たれず、無関係の findings は従来どおり再 gate へ進み、上限に達した周は Failed で終端し、--runner の無い land は記帳して rc 1 で止まる"
 <!-- contracts:end -->
