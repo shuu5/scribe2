@@ -37,6 +37,7 @@
 | `gate.slot_wait_s` | `GateSlotWaitS`（Int） | 受付で枠が空くのを待つ上限。超えたら並列度 1 で進む（縮退・止めない）。 |
 | `gate.cpu_weight` | `GateCpuWeight`（Int） | 便の scope に付ける CPU の重み（席は既定の重み）。 |
 | `gate.tmux_test_threads` | `GateTmuxTestThreads`（Int） | tmux を立てる歯（e2e の isolated seat）の同時本数。値の写しは nextest の test-group `tmux` の `max-threads`（`.config/nextest.toml`・新規）で、`cargo xtask check` が写しの一致と配線（tmux を立てる歯＝本文が席の fixture の道具を名指すか、それを名指す e2e の木の関数を呼ぶ `#[test]`・閉包は器が関数名の固定点で決め、filter はその歯を module 付きの名で全部列挙する固定形＝file 単位や接頭辞では決めない〔.360 run 2 の QUESTION・helper 越しの歯 21 本を接頭辞が拾えない〕）を測る（clippy.toml ↔ R-C4-4.* と同型・C10.3）。並列 gate 下の負荷で tmux の歯が落ちる flake（`s2-07l.360`・契約表の行 b）の解＝並列度そのものは下げない。 |
+| `pipe.max_live` | `PipeMaxLive`（Int） | host で同時に走る便（live な便）の本数の**最大値**（[ADR-0035](../../design-intent/decisions/ADR-0035-live-run-cap-is-one-rules-row.html)・値は user 裁定 id 付き）。受付が便を作る前に live な便を数え、値以上の周は typed に断る（§24）。変異検査の並列度（`gate.mutants_jobs`）や memory の枠（§3.2）とは別の軸で、走行中の便には効かない。 |
 
 manifest に行が載るまでは ADR-0021 の予定行（C14.2 の相互参照は行が在って成立・ADR-0018 §4 と同じ）。
 
@@ -291,6 +292,14 @@ e2e は binary を spawn し外部 command は PATH 先頭の stub で差し替�
 - 歯（`gate_flaky_bound_` 接頭辞・`tests/e2e/fleet.rs`）: (a) `gate_flaky_bound_launch_miss_is_reported_without_the_pid_wait` = pid を書かずに上限を超えて眠る偽 claude で `refresh=timeout` の後、起動の helper が段 `launch` の未達を返す（poll しない）。(b) `gate_flaky_bound_zombie_counts_as_gone` = 歯が起こして回収しない子（std の Command で `exit 0` の sh を spawn し wait しない）を `/proc/<pid>/stat` の `Z` で「残っていない」に数える（歯の側の pure な判定）。両方とも helper の変更と同じ file に在り base では該当 0 本（verify 行が rc 4 = RED）＝本体不変の歯だけの便として `// flip-check: retroactive s2-07l.417` の札（pipeline.md §5.3 の型・`.342` と同じ）。既存の歯 6 本（列 2 本・family 4 本）は改名しない。
 - 却下: 壁時計の bound だけ伸ばす（起動の段を測れず、落ちた周の文が経過時間のまま）／`PID_FILE_WAIT` を伸ばす（返った後に待つ意味が無い）／歯を `#[ignore]`（列の順序と停止経路の pin を失う）／並列度を下げる（user 直命）／偽 claude が pid を書くまで器の上限を止める（器の src に歯の都合を入れる）。
 
+## 24. host で同時に走る便の本数の最大値 — rules 行 `pipe.max_live` を受付が live な便の本数で撃つ（契約表の行 o・`s2-07l.398`）
+
+- 何が起きているか（user 直命 2026-09-16 05:5xZ / 裁定 06:39Z・11:14Z・逐語は台帳 `s2-07l` notes・決定は [ADR-0035](../../design-intent/decisions/ADR-0035-live-run-cap-is-one-rules-row.html)）: 並列度を上げた周の実測（ThinkPad・16 core）は load 18〜26・CPU 81 ℃で memory は 10 / 62 GB＝受付（§3.2）は memory の枠だけで本数を絞るので CPU と温度の逼迫が受付に映らない。user は「並列数を最大 8 本まで（走っている分は止めない・次に走らせる分から）」→「最大値を 1 つ設定する・値は 16」と裁定した（裁定 id = user 2026-09-16T11:14Z）。暫定の上限は admin の launcher の変数と live を数え直す script（器の外・C2.2 / N2・ADR-0034 §1 が事故として挙げた型）に在り、器には無い。ADR-0034 の決定文と SRS FR68 の「数値上限を持たない」句は ADR-0035 が部分 supersede する（SRS の同句は user の /folio-architect の周）。
+- 形: (1) rules 行 `pipe.max_live`（kind `PipeMaxLive`・Int・本・**値は user 裁定**・C5）を §3.1 の表と manifest に足す（連鎖は行 j〔[account-autonomy.md](./account-autonomy.md) §13〕と同型: `RuleKind` の variant・Int の列・manifest の行・[rules-manifest.md](./rules-manifest.md) §4 の表・歯の kind 件数）。(2) 受付（`pipe/cli/intake.rs`・交差の判定 `exclude_overlap` と同じ段・`--design` / 従来形の両方が通る同じ関数）が、交差と同じ live の判定（`pipe/cli/state.rs` の `live`・終端でない run・段の網羅 match）で state dir の live な便を数え、本数 ≥ 値の周は `Refuse` に足す variant 1 つ（live の本数と上限を運ぶ・slug `max-live`・stderr の 1 行 `pipe: max-live live=<n> cap=<c>`）で断る（run を作らず event を書かない・rc は既存の拒否と同じ 1）。live を読めない便が 1 つでも在れば交差と同じく `WriteSetUnreadable` 側（rc 2・fail-closed・NFR4）。数える順は交差の前（上限で断る周は交差の全組を並べない）。(3) 数えるのは便を作る前だけ＝走行中の便には効かず、`pipe resume` と追随の起こし直しは新しい便を作らないので数えない。(4) dispatcher の列の理由（[dispatcher.md](./dispatcher.md) §3 の閉じた型）に「上限で待つ」variant 1 つを足すのは行 a の Landed 後の別の行（本行は受付だけ）。(5) 一時的な引き下げは rules 行の値の改訂（裁定 id 付きの PR）でだけ行い、env・launcher の変数・host.toml から読まない（C1 / C2.2）。
+- 触らない: 受付の memory の枠（§3.2）と `gate.mutants_jobs`・交差の判定 `overlaps`・`pipe run` / `pipe intake` の外形（usage）・段の enum・`Refuse` の既存 variant と rc の語彙。
+- 歯（`pipe_intake_max_live_` 接頭辞・`tests/e2e/pipe/intake.rs`・toy repo・tmp の manifest を `--rules` で渡す）: `pipe.max_live = 1` で live 1 本の下の 2 本目の intake が slug `max-live` と `live=1 cap=1` の 1 行で断られ、run dir も event も増えない／その live の便を `stop --run` で終端に倒すと同じ契約が通る／Gated で verdict FAIL の便は live に数えず上限 1 でも通る／写しを読めない live の便が在る周は `write-set-unreadable`（rc 2）で断る。rules 行は kind 件数の pin + 外形の歯（行 j と同型）。
+- 却下: ADR-0035 §3（写しは持たない）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -433,4 +442,14 @@ write-set = ["crates/scribe2/tests/e2e/pipe/land.rs", "crates/scribe2/tests/e2e/
 verify = ["cargo nextest run -p scribe2 --no-tests=fail gate_flaky_bound_"]
 size = "S"
 done = "列の歯 2 本が壁時計を持たず、列を通る歯は order_token の first と面 5 の exported_order の first で、面 5 へ書かない pr_cmd の歯は stdout に order= が無いことだけで「待たなかった」を pin し、refresh の helper は器が返った後の起動未達を PID_FILE_WAIT を待たず段 launch と経過・load で落とし、assert_gone は state Z を残存に数えず、REFRESH_TIMEOUT_S は 15、bound の式と器の src は不変"
+
+[[contract]]
+id = "o"
+title = "host で同時に走る便の本数の最大値 — rules 行 pipe.max_live を足し、受付が live な便を交差と同じ判定で数えて値以上の周は typed に断る（走行中の便は止めない・dispatcher の列の理由は行 a の後）"
+req = ["FR68", "FR39"]
+section = "24"
+write-set = ["rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "crates/scribe2/tests/e2e/rules.rs", "docs/design/rules-manifest.md", "crates/scribe2/src/pipe/refuse.rs", "crates/scribe2/src/pipe/cli/intake.rs", "crates/scribe2/tests/e2e/pipe/intake.rs"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_intake_max_live_"]
+size = "S"
+done = "rules 行 pipe.max_live が裁定 id 付きで 1 本増え、live な便が値以上の周の intake は max-live の 1 行で断られて run dir も event も増えず、live の便を止めれば同じ契約が通り、Gated FAIL の便は数えられず、写しを読めない周は write-set-unreadable で止まり、走行中の便と受付の memory の枠は不変"
 <!-- contracts:end -->
