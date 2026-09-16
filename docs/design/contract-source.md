@@ -410,7 +410,7 @@ id = "v"
 title = "審査の理由を閉じた型 FindingKind で review.json と event に残し、pipe report が by_kind で数える"
 req = ["FR49"]
 section = "22"
-write-set = ["crates/scribe2/src/pipe/review.rs", "crates/scribe2/src/headless/lens-contract.txt", "crates/scribe2/src/pipe/report.rs", "crates/scribe2/tests/e2e/pipe/intake.rs", "crates/scribe2/tests/e2e/pipe/ratelimit.rs", "crates/scribe2/tests/e2e/pipe/stop.rs", "crates/scribe2/tests/e2e/pipe/spawn.rs"]
+write-set = ["crates/scribe2/src/pipe/review.rs", "crates/scribe2/src/headless/lens-contract.txt", "crates/scribe2/src/pipe/report.rs", "crates/scribe2/tests/e2e/pipe/intake.rs", "crates/scribe2/tests/e2e/pipe/ratelimit.rs", "crates/scribe2/tests/e2e/pipe/stop.rs", "crates/scribe2/tests/e2e/pipe/spawn.rs", "crates/scribe2/tests/e2e/headless.rs", "crates/scribe2/tests/e2e/snapshots/e2e__headless__lens_contract_prompt_external_form.snap"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_review_kind_"]
 size = "M"
 done = "FAIL / INCONCLUSIVE の review.json と event が kind を持ち、kind の無い lens 出力は unparsed に倒れ、report の 1 行に review_fail= と by_kind= が宣言順に出る"
