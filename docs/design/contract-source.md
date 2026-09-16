@@ -196,10 +196,10 @@ scribe2 を載せる consumer が pipe を通すのに要る面は 3 つで、�
 
 ## 25. 契約表の名指し検査が struct-like variant の literal 形と引数付きの呼出し形を先頭の token で読む（契約表の行 y・`s2-07l.399`）
 
-- 何が起きているか（verified・2026-09-16 06:4xZ・#255）: 名指しの実在（§3・`pipe/closure.rs` の `unresolved_names` → `form_of`）は backtick の中身**全体**を path / 型の path / fn / 散文の 4 形に分ける。未 land の名を 2 つ backtick で書いた節で、素の 型::項目 の字面は型の path 形で `name-unresolved` になったが、`Type::Variant { field: X }` は `{` を含むため散文に落ちて通った（findings=1 であって 2 ではない）。関数呼出しに引数が付く形（`f(x)`）も同じ穴＝名指しなのに散文扱いの偽陰性で、未 land の名が検査を黙って抜ける。
-- 形: `form_of` は backtick の中身の**先頭の token**（最初の `{` / `(` / 空白の手前まで・末尾の `::` は落とす）を取り出して 3 形（path / 型の path / fn）に当て、残りは捨てる: `Type::Variant { field: X }` → 型の path 形の 型::項目（先頭の token）／`f(x)` → fn 形の識別子 f／識別子 + ( の形（末尾が ( か () ）は従来どおり fn 形／先頭の token がどの形にも合わない周だけ散文。`touches` に宣言した型の variant の除外（§3）は先頭の token に対して従来どおり効く。path 形の判定は先頭の token でなく中身全体のまま（path に空白や括弧は無い・変えない）。判定は 1 関数のまま（受付と CI が同じ関数を撃つ・C2）。
-- 触らない: 3 形の解き方（tracked の path・`型::項目` の出現・`fn` の宣言）・`Refuse::NameUnresolved` の形と `at` の字面・backtick の対の取り方・散文の欄の語彙検査（§2）。
-- 歯（`contract_name_form_` 接頭辞・`pipe/closure.rs` の in-file の歯）: `Detection::Skip { reason: OutsideScope }` の字面が型の path 形 `Detection::Skip` に読まれ base に無ければ `name-unresolved`／`parse_pointer(design)` が fn 形 `parse_pointer` に読まれ base に在れば解ける／`f(x)` で `f` が無ければ解けない／`use m::*` と `#[test]` は従来どおり散文／既存の `contract_closure_ext_` の歯と現物の契約表（findings 0）は緑のまま。
+- 何が起きているか（verified・2026-09-16 06:4xZ・#255）: 名指しの実在（§3・`pipe/closure.rs` の `unresolved_names` → `form_of`）は backtick の中身**全体**を path / 型の path / fn / 散文の 4 形に分ける。未 land の名を 2 つ backtick で書いた節で、素の 型::項目 の字面は型の path 形で `name-unresolved` になったが、型::項目 { 欄: 値 } の形（struct-like variant の literal・本節の例示は backtick を持たない＝走査に掛けない）は { を含むため散文に落ちて通った（findings=1 であって 2 ではない）。関数呼出しに引数が付く形（識別子(引数)）も同じ穴＝名指しなのに散文扱いの偽陰性で、未 land の名が検査を黙って抜ける。
+- 形: `form_of` は backtick の中身の**先頭の token**（最初の `{` / `(` / 空白の手前まで・末尾の `::` は落とす）を取り出して 3 形（path / 型の path / fn）に当て、残りは捨てる: 型::項目 { 欄: 値 } → 型の path 形の 型::項目（先頭の token）／識別子(引数) → fn 形の識別子／識別子 + ( の形（末尾が ( か () ）は従来どおり fn 形／先頭の token がどの形にも合わない周だけ散文。`touches` に宣言した型の variant の除外（§3）は先頭の token に対して従来どおり効く。path 形の判定は先頭の token でなく中身全体のまま（path に空白や括弧は無い・変えない）。判定は 1 関数のまま（受付と CI が同じ関数を撃つ・C2）。
+- 触らない: 3 形の解き方（tracked の path・型::項目 の出現・fn の宣言）・`Refuse::NameUnresolved` の形と `at` の字面・backtick の対の取り方・散文の欄の語彙検査（§2）。
+- 歯（`contract_name_form_` 接頭辞・`pipe/closure.rs` の in-file の歯）: fixture の未 land の型の 型::項目 { 欄: 値 } の字面が型の path 形（先頭の token）に読まれ base に無ければ `name-unresolved`／既存 fn `parse_pointer` に引数を付けた呼出し形が fn 形に読まれ base に在れば解ける／無い識別子の呼出し形は解けない／glob の use と属性の字面は従来どおり散文／既存の `contract_closure_ext_` の歯と現物の契約表（findings 0）は緑のまま。
 - 却下案: 中身全体を正規表現で 3 形に当てる（形の数が増えるたびに regex が育つ・先頭の token の 1 規則で足りる）／`{` を含む字面を型の path 形として丸ごと解く（field 名まで base に求める・literal の中身は名指しでない）／散文の欄の語彙検査（folio2 の床）に任せる（未 land の名は語彙にも無い＝別の理由で赤になり planner が根を読めない）。
 
 <!-- contracts:begin -->
@@ -458,6 +458,7 @@ req = ["FR48", "FR55"]
 section = "24"
 touches = ["crate::pipe::declaration::write_set::WriteSetItem"]
 tests = ["crates/scribe2/tests/e2e/pipe/intake.rs"]
+also = ["crates/scribe2/src/pipe/closure.rs"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail contract_closure_ext_delete_"]
 size = "S"
 done = "~ の項目が base に在る行は受付を通り契約 file の write-set は素の path になり、無い行は write-set-item-unresolved で断られ、契約表の検査は tracked に無い ~ の項目を持つ行で findings 0、節の本文のその path の名指しは着地の後も解ける"
