@@ -275,6 +275,13 @@ e2e は binary を spawn し外部 command は PATH 先頭の stub で差し替�
 - 触らない: `fire` の中身（受付・箱・`run_line_captured`）・`CHECKS` の順序・`detection_unmeasured` の判定・`Counted` の形・gate の verdict の 3 値と rc・common-verify / 契約 verify の行（撃ち直さない）・xtask の `retry_named`・`mutants-diff` の rc の意味（道具の側が持つ）。
 - 却下案: 検出線の rc 2 を PASS 扱いにする（測れないを緑にする・C10 違反）／並列度を下げる（user の許しが要る側・user 直命 2026-09-16）／gate 全体を撃ち直す（1 周と同じ費用）／撃ち直しの回数を rules 行にする（値の線が増える・1 回で足りる＝2 回目も rc 2 なら負荷でなく道具の側）／1 回目の `Step` も `Counted` に残す（`position` が 1 回目の rc 2 を拾って INCONCLUSIVE に倒す＝撃ち直しが効かない）。
 
+## 22. 変異検査の中の test 走行に thread の上限を渡し、入れ子の並列で core を溢れさせない（契約表の行 m・`s2-07l.393`）
+
+- 何が起きているか: user の観測 2026-09-16 05:5xZ「メモリは大丈夫な割に CPU に負荷がかかって温度が上がっている」。planner / admin の実測（同時刻・verified）: load average 57 / 16 core・CPU 81℃・memory 9 / 62 GB・`cargo-mutants` 2 本（`.322` / `.349` の gate・各 `--jobs 4`）・e2e の test binary 42 本同時・rustc 0。読み（deduced）: 検出線は `cargo-mutants --jobs 4` で変異 4 本を同時に build + test し、各 job の `cargo test` は既定で全 core に広がる（libtest の test-threads = core 数）＝gate 1 本で最大 4 × 16 並列、2 本同時で 128 並列相当。受付の枠（§3・`admission.rs` の `capacity`）は memory だけを数えるので、62 GB の host ではこの入れ子を止めない。同じ周に `.247` が負荷由来の flaky 2 本（tmux fixture の prompt 待ち・usage refresh の 65.9 秒）で Gated FAIL した＝温度と CPU が便の周を焼いている。
+- 形: xtask `mutants-diff` の `measure_args` が **cargo-mutants の引数の末尾に `-- -- --test-threads <t>` を足す**（1 つ目の `--` で cargo-mutants から `cargo test` へ、2 つ目の `--` で test binary へ渡る・現物 = `cargo-mutants mutants --help` の usage `[-- <CARGO_TEST_ARGS>...]`「Pass remaining arguments to cargo test」）。`t = max(1, floor(cores / jobs))`・`cores` = `std::thread::available_parallelism()`（読めない周は **1**＝速い側へ倒さない・`JOBS_FLOOR` と同じ向き）・`jobs` は §3.3 のとおり器から来た値。これで gate 1 本の test 並列は jobs × t ≤ cores に閉じる（例: 16 core・jobs 4 → t 4・16 並列）。値は rules 行にしない（cores と jobs から決まる導出値・線が増えない・C10 の derived）。`--jobs` / `-p` / `--in-diff` / `-o` の対と `--no-shuffle` / `--copy-vcs` は不変。
+- 触らない: 受付の枠（`capacity`・memory の項）・`gate.mutants_jobs` の値・baseline の撃ち方（cargo-mutants の側）・共通 verify の `cargo nextest run --workspace`（gate 1 本につき 1 回で入れ子ではない）・flip-check。受付の枠に CPU の項を足すか（rules 行 = user 裁定）は本便の実測の後に別便で判定する。
+- 却下案: `NEXTEST_TEST_THREADS` / `RUST_TEST_THREADS` を env で渡す（§3.3「env で渡さない」・C2.2 の seam）／`--jobs` を下げる（変異 1 本ずつの費用は上がり総時間が伸びる・入れ子は残る）／`.cargo/mutants.toml` の `additional_cargo_test_args` に固定値を置く（host の core 数で決まる値を repo に焼く・N3 の向き）／変異検査を全便で直列化する（枠の話であって入れ子の話ではない・別便）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -397,4 +404,14 @@ write-set = ["crates/scribe2/src/pipe/gate/verify.rs", "crates/scribe2/src/pipe/
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_detection_retry_"]
 size = "S"
 done = "rc 2 → rc 0 の検出線を持つ toy の gate が PASS で終わり record に retried=1 を持ち、rc 2 が 2 回の周は従来どおり INCONCLUSIVE、rc 1 の検出線と共通 verify の rc 2 は撃ち直されない"
+
+[[contract]]
+id = "m"
+title = "xtask mutants-diff が cargo-mutants の末尾に -- -- --test-threads <cores / jobs> を足し、変異検査の入れ子の並列を core 数に閉じる"
+req = ["NFR6"]
+section = "22"
+write-set = ["crates/xtask/src/mutantsdiff.rs", "crates/xtask/src/main.rs"]
+verify = ["cargo nextest run -p xtask --no-tests=fail mutants_diff_test_threads_"]
+size = "S"
+done = "measure_args の末尾が -- -- --test-threads <t> で t = max(1, cores / jobs)、cores が読めない周は 1、既存の対（--in-diff / -p / -o / --jobs）と順序は不変"
 <!-- contracts:end -->
