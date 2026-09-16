@@ -136,7 +136,7 @@ id = "d"
 title = "driver の死亡 — 札の書き・消し、turn 関数の起こし直し（pipe resume）、record token resumed:<m>、base_of_run の typed 化"
 req = ["FR68", "FR14", "FR50"]
 section = "5"
-write-set = ["+crates/scribe2/src/pipe/dispatch.rs", "+crates/scribe2/src/seat/tick/dispatch.rs", "crates/scribe2/src/pipe/cli/run.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/admission.rs", "crates/scribe2/src/pipe/mod.rs", "crates/scribe2/src/pipe/spawn.rs", "crates/scribe2/src/pipe/gate.rs", "crates/scribe2/src/pipe/follow.rs", "crates/scribe2/src/pipe/land.rs", "+crates/scribe2/tests/e2e/pipe/dispatch.rs", "crates/scribe2/tests/e2e/pipe/spawn.rs"]
+write-set = ["+crates/scribe2/src/pipe/dispatch.rs", "+crates/scribe2/src/seat/tick/dispatch.rs", "crates/scribe2/src/pipe/cli/run.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/cli/resume.rs", "crates/scribe2/src/pipe/admission.rs", "crates/scribe2/src/pipe/mod.rs", "crates/scribe2/src/pipe/spawn.rs", "crates/scribe2/src/pipe/gate.rs", "crates/scribe2/src/pipe/follow.rs", "crates/scribe2/src/pipe/land.rs", "+crates/scribe2/tests/e2e/pipe/dispatch.rs", "crates/scribe2/tests/e2e/pipe/spawn.rs"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_dispatch_driver_"]
 size = "M"
 done = "driver を殺した便に dispatch の 1 周を撃つと pipe resume が 1 回起きて Landed まで通り record に resumed:1、札の無い live 便は起こし直さない"
