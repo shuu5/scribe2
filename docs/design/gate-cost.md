@@ -282,6 +282,14 @@ e2e は binary を spawn し外部 command は PATH 先頭の stub で差し替�
 - 触らない: 受付の枠（`capacity`・memory の項）・`gate.mutants_jobs` の値・baseline の撃ち方（cargo-mutants の側）・共通 verify の `cargo nextest run --workspace`（gate 1 本につき 1 回で入れ子ではない）・flip-check。受付の枠に CPU の項を足すか（rules 行 = user 裁定）は本便の実測の後に別便で判定する。
 - 却下案: `NEXTEST_TEST_THREADS` / `RUST_TEST_THREADS` を env で渡す（§3.3「env で渡さない」・C2.2 の seam）／`--jobs` を下げる（変異 1 本ずつの費用は上がり総時間が伸びる・入れ子は残る）／`.cargo/mutants.toml` の `additional_cargo_test_args` に固定値を置く（host の core 数で決まる値を repo に焼く・N3 の向き）／変異検査を全便で直列化する（枠の話であって入れ子の話ではない・別便）。
 
+## 23. 負荷下で落ちる歯 2 本 — 壁時計の assert を記録の pin に替え、停止経路の歯は段の時刻を assert に載せる（契約表の行 n・`s2-07l.417`）
+
+- 何が起きているか（admin の実測 2026-09-16 13:25Z / 13:52Z・verified）: 走行 9〜11・load 5〜12 の下で全件 nextest の 2 本が落ち、`.389` の追随の再 gate を Gated FAIL（retire・実装喪失）に、`.188` の gate を INCONCLUSIVE にした。(1) `tests/e2e/pipe/land.rs` の `pipe_order_regate_fail_leaves_the_queue`（195 s）は `assert!(started.elapsed() < Duration::from_secs(30), "上限まで待たない")`＝「列に居ない便を待たない」を壁時計で測っており、負荷下では land 自体（rebase + 再 gate + 主実測）が 30 s を超えて偽に落ちる。同じ歯の `order_token(&out) == "first"` が「待たなかった」を記録で既に pin している。(2) `tests/e2e/fleet.rs` の `fleet_usage_refresh_timeout_stops_the_child_and_its_grandchild`（71 s・2 回）は `assert_refresh_timeout` の壁時計 bound（`REFRESH_TIMEOUT_S + STOP_MARGIN_S + 2 × pipe.stop_grace_ms` = 20 s）を超え、落ちた周の evidence は経過時間だけで、停止経路のどの段（子の起動・TERM・猶予・KILL・回収）が伸びたかが名指せない（C10）。
+- 形: (1) `pipe_order_regate_fail_leaves_the_queue` の壁時計 assert を外し、「待たなかった」は `order_token` と `pipe.land_wait_s` の待ちの record が無いこと（既存の record の形）で pin する（同じ形の壁時計 assert が `pipe_order_*` の他の歯に在れば同じに直す）。(2) `assert_refresh_timeout` は経過時間だけで落とさず、fixture の spy（`{spy}/child` / `grandchild` の書かれた時刻・器の stderr の停止の行）から**段ごとの時刻**を集めて assert の文に載せる（どの段が bound を超えたかが gate の log から読める・C10）。bound の式は不変（rules 由来）。段の時刻から器の停止経路の欠陥（例: 包める host で scope の release が届かず子の終了を待つ）が見えた周は本便で直さず memo に切る（歯の側の便・器の src は触らない）。
+- 触らない: 器の src・他の歯の bound・並列度（user 直命）・fixture の socket と偽 claude の形。
+- 歯（`gate_flaky_bound_` 接頭辞・`tests/e2e/pipe/land.rs` と `tests/e2e/fleet.rs`）: (a) `pipe_order_regate_fail_leaves_the_queue` を改名せず本体を直す＝本体不変の歯だけの便で base で RED を作れない → `// flip-check: retroactive s2-07l.417` の札（pipeline.md §5.3 の型・`.342` と同じ）。(b) `gate_flaky_bound_refresh_timeout_names_the_phase` = 上限を超えて眠る偽 claude の周に落ちた assert の文が段の名（child / term / grace / kill / reap のどれか）と時刻を含む（base の文は経過時間だけ → RED）。
+- 却下: 壁時計の bound を伸ばす（負荷の上限が無い・.385 と同型でも「待たない」の意味を測れない）／歯を `#[ignore]`（列の順序と停止経路の pin を失う）／並列度を下げる（user 直命）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -414,4 +422,14 @@ write-set = ["crates/xtask/src/mutantsdiff.rs", "crates/xtask/src/main.rs"]
 verify = ["cargo nextest run -p xtask --no-tests=fail mutants_diff_test_threads_"]
 size = "S"
 done = "measure_args の末尾が -- -- --test-threads <t> で t = max(1, cores / jobs)、cores が読めない周は 1、既存の対（--in-diff / -p / -o / --jobs）と順序は不変"
+
+[[contract]]
+id = "n"
+title = "負荷下で落ちる歯 2 本 — pipe_order_regate_fail_leaves_the_queue の壁時計 assert を記録の pin に替え、fleet_usage_refresh_timeout_stops_the_child_and_its_grandchild は段ごとの時刻を assert の文に載せる"
+req = ["NFR6"]
+section = "23"
+write-set = ["crates/scribe2/tests/e2e/pipe/land.rs", "crates/scribe2/tests/e2e/fleet.rs"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail gate_flaky_bound_"]
+size = "S"
+done = "列の歯が壁時計でなく order_token と待ちの record の不在で「待たなかった」を pin し、停止経路の歯は落ちた周に段の名と時刻を assert の文に出し、bound の式と器の src は不変"
 <!-- contracts:end -->
