@@ -252,6 +252,14 @@ e2e は binary を spawn し外部 command は PATH 先頭の stub で差し替�
 - **形（何を作るか）**: `started_ms_in` の内側で使う純粋な変換（tick と Hz から ms を出す計算）に、境界値（0・1・Hz−1・Hz・Hz+1）を pin する歯と、任意の tick で計算が一致することを確かめる property の歯を足す。/proc を読まない純粋な内側の関数がまだ無ければ 1 つ切り出し、`started_ms_in` はそれを呼ぶ形にする（挙動は変えない純粋な移動）。
 - **触らない**: `started_ms_in` の外形・戻り値の意味。
 
+## 19. gate の歯・検出線の baseline・flip-check の base 段を fail-fast にしない（契約表の行 j・`s2-07l.383`）
+
+- 何が起きているか: admin の実測 2026-09-16（`.354` run 2 / `.247` run 1）。gate の共通 verify `cargo nextest run --workspace --no-tests=fail`（`.vessel.toml` の `common-verify`）と検出線 `cargo xtask mutants-diff`（`detection-verify`）の baseline は fail-fast で、負荷で歯 1 本が落ちると残りが未実行のまま便が Gated INCONCLUSIVE で 1 周を払う（`.354` run 2: 1448 本中 915 passed / 1 failed / **992 未実行**・738 秒）。落ちた歯が 1 本しか名指されないので、flaky か本物かの弁別も 1 本ずつしか進まない。
+- 現物（verified・main 43706fe）: (i) `.vessel.toml:6` の `common-verify` の nextest 行に `--no-fail-fast` は無い。同じ行は `CLAUDE.md` の done 区間（`<!-- done:begin -->`〜・`ci.yml` から生成・`claude-md-done` の検出線が drift を見る）と `.github/workflows/ci.yml:13` にも在る＝3 面が同文。(ii) `crates/xtask/src/mutantsdiff.rs` の `measure_args` は `cargo mutants --in-diff … -p … --no-shuffle --copy-vcs true -o … --jobs N` で、cargo-mutants の baseline は `cargo test` を既定で撃つ（`--` の後ろの引数を持たない＝失敗した test binary の後ろは走らない）。(iii) `crates/xtask/src/flipcheck.rs` の `nextest_args` は `nextest run --workspace --no-tests=fail --color never` + extra（base 段の `failed_tests` は落ちた歯を列で読み `retry_named` が名指せた歯だけ 1 回撃ち直す＝名指せる本数が増えるほど撃ち直しが効く）。
+- 形: 3 か所とも **`--no-fail-fast`** を足す。判定は不変（落ちた歯が 1 本でも赤・rc の意味は変えない）。(i) `.vessel.toml` / `ci.yml` / `CLAUDE.md` の done 区間の nextest 行を `cargo nextest run --workspace --no-tests=fail --no-fail-fast` に（3 面同文・`claude-md-done` の検出線が一致を見る）。(ii) `measure_args` の末尾に `--` `--no-fail-fast` を足す（cargo-mutants が `cargo test` へ渡す引数・baseline と変異の両方に効く・`Scope` の束縛は不変）。(iii) `nextest_args` の固定引数に `--no-fail-fast` を 1 つ足す（`--color never` の隣接は不変）。
+- 触らない: 検証行の順序・`R-C12-1` の極性・`retry_named` の回数（1 回）と範囲（名指せた歯だけ）・`gate.job_memory_mb` 等の値。値の線は増えない（flag 1 つ）。
+- 却下案: gate の nextest だけ直す（検出線の baseline と flip-check の base 段で同じ 1 本が同じ損失を出す・`.247` は両方で落ちた）／`--no-fail-fast` を rules 行にする（極性でも閾値でもない・argv の形）／CI は fail-fast のまま残す（CLAUDE.md の done 区間が ci.yml から生成される＝3 面が割れる）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -344,4 +352,14 @@ write-set = ["crates/scribe2/src/fleet/store.rs"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail fleet_store_started_ms_"]
 size = "S"
 done = "started_ms_in の内側の変換に境界と property の歯が在り、挙動を変えない純粋な移動として flip-check は retroactive 札で通る"
+
+[[contract]]
+id = "j"
+title = "gate の共通 verify・検出線の baseline（cargo mutants の cargo test）・flip-check の base 段を --no-fail-fast にし、落ちた歯の全数を 1 周で名指す"
+req = ["FR46"]
+section = "19"
+write-set = [".vessel.toml", ".github/workflows/ci.yml", "CLAUDE.md", "crates/xtask/src/flipcheck.rs", "crates/xtask/src/flipcheck_tests.rs", "crates/xtask/src/mutantsdiff.rs"]
+verify = ["cargo nextest run -p xtask --no-tests=fail no_fail_fast_"]
+size = "S"
+done = "3 面同文の nextest 行と measure_args と nextest_args が --no-fail-fast を持ち、判定の極性と rc の意味は不変"
 <!-- contracts:end -->
