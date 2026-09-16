@@ -329,8 +329,10 @@ fn refresh(dir: &Path, label: &str, reader: &Reader<'_>) -> Refresh {
         claude: reader.claude,
         prompt: REFRESH_PROMPT,
         permission_mode: REFRESH_PERMISSION_MODE,
-        // 計測の起動は model を渡さない（argv は不変・rules 行 `runner.model` は runner / lens の行）。
+        // 計測の起動は model も effort も渡さない（argv は不変・rules 行 `runner.model` / `runner.effort` は
+        // runner / lens の行）。
         model: None,
+        effort: None,
         plugin_dir: None,
         account_dir: Some(&account),
         cwd: Some(dir),

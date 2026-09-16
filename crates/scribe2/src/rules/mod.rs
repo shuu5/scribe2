@@ -207,6 +207,9 @@ pub enum RuleKind {
     /// runner / lens が claude に**毎回**渡す model（設計 pipeline.md §6・`s2-07l.297`）。値は claude CLI の別名
     /// （閉じた表は [`crate::fleet::select::Model`]）。便用の口座選定はこの model のモデル別窓だけを数える。
     RunnerModel,
+    /// runner / lens が claude に**毎回**渡す effort（設計 pipeline.md §6・`s2-07l.322`）。値は claude CLI の字面
+    /// （閉じた表は [`crate::headless::Effort`]）。省くと口座の設定 dir の `settings.json` の値で決まる。
+    RunnerEffort,
     /// 退避の合図（`kind=externalize`）を同じ席へ**再送するまでの back-off**（秒・設計 seat-autonomy.md §3 / §8・
     /// `s2-07l.315`）。直近の合図の記録からこれ未満の周は再送しない（打刻の合図の brake [`Self::SeatTickStaleS`] とは別）。
     SeatSignalBackoffS,
@@ -263,6 +266,7 @@ pub const ALL: &[RuleKind] = &[
     RuleKind::PipeSizeMLines,
     RuleKind::PipeSizeLLines,
     RuleKind::RunnerModel,
+    RuleKind::RunnerEffort,
     RuleKind::SeatSignalBackoffS,
 ];
 
@@ -319,6 +323,7 @@ impl RuleKind {
             Self::PipeSizeMLines => "PipeSizeMLines",
             Self::PipeSizeLLines => "PipeSizeLLines",
             Self::RunnerModel => "RunnerModel",
+            Self::RunnerEffort => "RunnerEffort",
             Self::SeatSignalBackoffS => "SeatSignalBackoffS",
         }
     }
@@ -366,7 +371,7 @@ impl RuleKind {
             | Self::PipeSizeLLines
             | Self::SeatSignalBackoffS
             | Self::AccountSelection => ValueShape::Int,
-            Self::DialogueSurface | Self::RunnerModel => ValueShape::Str,
+            Self::DialogueSurface | Self::RunnerModel | Self::RunnerEffort => ValueShape::Str,
             Self::MaturityCondition
             | Self::MutationSurvivalLine
             | Self::CompileShape

@@ -9,13 +9,18 @@
 //! manifest から読むのは **model の 1 行だけ**で、allowlist と common-verify は従来どおり便の写し
 //! （`--vessel`）から読む（ADR-0010 §2.4 は動かない）。行が解けない周は claude を呼ばず rc 2（lens の
 //! cap と同じ極性・版の既定へ黙って倒れない）。
+//!
+//! **effort も同じ manifest の rules 行 `runner.effort` から読み、claude に毎回渡す**（`s2-07l.322`）。省くと
+//! 口座の設定 dir の `settings.json` が決め、同じ便が口座ごとに違う深さで走る。読む順は model → effort
+//! （先に落ちた理由 1 つだけを出す）。
 
 use crate::polarity::{OnFailure, Polarity, Timing};
 use super::{
-    build, feed, fill, flag, need, plugin_dirs, read_stdin_bytes, rules_of, runner_model, Call, DEFAULT_CLAUDE,
-    RC_RATE_LIMIT,
+    build, feed, fill, flag, need, plugin_dirs, read_stdin_bytes, rules_of, runner_effort, runner_model, Call, Effort,
+    DEFAULT_CLAUDE, RC_RATE_LIMIT,
 };
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
+use crate::fleet::select::Model;
 use crate::pipe::confine;
 use crate::pipe::declaration::Effective;
 use crate::pipe::gate::last_json_object;
@@ -34,6 +39,17 @@ pub fn usage() -> String {
         "usage: {} runner --worktree D --write-set F --vessel F --plugin-dir D --permission-mode M [--rules PATH] [--account-dir D] [--claude PATH] < contract",
         crate::name::NAME
     )
+}
+
+/// runner が rules 行から読む 2 つ: model（`runner.model`）と effort（`runner.effort`）。manifest は `--rules PATH`
+/// が在ればそれ・無ければ埋め込み（[`rules_of`]・lens と同じ読み口）。
+///
+/// **model を先に読む**（model の 4 理由の字面は不変）。どちらも解けない周は先に落ちた理由 1 つだけが出る。
+fn rows_of(args: &[String]) -> Result<(Model, Effort), String> {
+    let manifest = rules_of(args)?;
+    let model = runner_model(&manifest)?;
+    let effort = runner_effort(&manifest)?;
+    Ok((model, effort))
 }
 
 /// `runner` を 1 回。契約本文は stdin から読む。
@@ -65,10 +81,10 @@ pub fn dispatch(args: &[String]) -> Outcome {
             return Outcome::failed(RC_BROKEN, lines);
         }
     };
-    // **model は manifest の 1 行だけ**（`--rules` か埋め込み・権限は写しのまま）。行が無い / 不発効 / 文字列でない /
-    // 閉じた表に無い周は claude を起こさず rc 2（lens の cap と同じ極性）——版の既定へ黙って倒すと、便が消費する
-    // モデル別窓と便用の口座選定が数える窓がずれる。
-    let model = match rules_of(args).and_then(|manifest| runner_model(&manifest)) {
+    // **model と effort は manifest の 2 行だけ**（`--rules` か埋め込み・権限は写しのまま）。行が無い / 不発効 /
+    // 文字列でない / 閉じた表に無い周は claude を起こさず rc 2（lens の cap と同じ極性）——版の既定や口座の
+    // settings へ黙って倒すと、便が消費するモデル別窓と口座選定の窓がずれ、深さも口座ごとにばらばらになる。
+    let (model, effort) = match rows_of(args) {
         Ok(found) => found,
         Err(reason) => return Outcome::failed_line(RC_BROKEN, format!("runner: {reason}")),
     };
@@ -94,8 +110,9 @@ pub fn dispatch(args: &[String]) -> Outcome {
         claude: claude.as_deref().unwrap_or(DEFAULT_CLAUDE),
         prompt: &prompt,
         permission_mode: &mode,
-        // rules 行の model を**毎回**渡す（claude CLI の別名・lens と同じ行）。
+        // rules 行の model と effort を**毎回**渡す（claude CLI の字面・lens と同じ 2 行）。
         model: Some(model.alias()),
+        effort: Some(effort.alias()),
         plugin_dir: Some(&plugin_dir),
         account_dir: account.as_deref(),
         cwd: Some(Path::new(&worktree)),

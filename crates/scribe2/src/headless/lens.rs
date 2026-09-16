@@ -24,7 +24,8 @@
 //!
 //! **model も同じ manifest の rules 行 `runner.model` から読み、claude に毎回渡す**（`s2-07l.297`・
 //! 設計 pipeline.md §6）。読み口は [`super::rules_of`] / [`super::runner_model`]（runner と共通）で、
-//! 行が解けない周は cap と同じ極性＝claude を呼ばず rc 2。
+//! 行が解けない周は cap と同じ極性＝claude を呼ばず rc 2。**effort も同じ manifest の rules 行 `runner.effort`
+//! から読み、毎回渡す**（`s2-07l.322`・読む順は cap → model → effort）。
 //!
 //! **裁定（便の質問と planner の回答の対）は契約の写しの隣の [`RULINGS_FILE`] から読む**（`s2-07l.309`・
 //! 設計 pipeline-question.md）。gate が event log から写す file で、lens は `{contract}` の path の同じ dir
@@ -40,7 +41,7 @@
 //! 材料が壊れているので claude を呼ばず rc 2。cap は契約 + 節 + 要件の byte で照合する（NFR1・超えたら
 //! INCONCLUSIVE）。
 
-use super::{build, feed, fill, flag, need, read_stdin_bytes, rules_of, runner_model, Call, DEFAULT_CLAUDE};
+use super::{build, feed, fill, flag, need, read_stdin_bytes, rules_of, runner_effort, runner_model, Call, Effort, DEFAULT_CLAUDE};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
 use crate::fleet::select::Model;
 use crate::pipe::confine;
@@ -100,17 +101,18 @@ fn unknown_arg(args: &[String]) -> Option<&str> {
     None
 }
 
-/// lens が rules 行から読む 2 つ: cap（byte・`gate.token_cap`）と model（`runner.model`）。manifest は
-/// `--rules PATH` が在ればそれ・無ければ埋め込み（[`rules_of`]・runner と同じ読み口）。
+/// lens が rules 行から読む 3 つ: cap（byte・`gate.token_cap`）と model（`runner.model`）と effort（`runner.effort`）。
+/// manifest は `--rules PATH` が在ればそれ・無ければ埋め込み（[`rules_of`]・runner と同じ読み口）。
 ///
 /// cap の行が無い / 不発効 / 整数でない周は `pipe::cli::int_row` と同じ 3 理由で `Err`（[`int_row`]）。
-/// model の行も同じ極性で、閉じた表に無い値も `Err`（[`runner_model`]）。cap を先に読む（cap の 3 理由の
-/// 字面は不変）。
-fn rows_of(args: &[String]) -> Result<(u64, Model), String> {
+/// model と effort の行も同じ極性で、閉じた表に無い値も `Err`（[`runner_model`] / [`runner_effort`]）。順は
+/// cap → model → effort（先に落ちた理由 1 つだけを出す＝cap と model の字面は不変）。
+fn rows_of(args: &[String]) -> Result<(u64, Model, Effort), String> {
     let manifest = rules_of(args)?;
     let cap = int_row(&manifest, ROW_CAP)?;
     let model = runner_model(&manifest)?;
-    Ok((cap, model))
+    let effort = runner_effort(&manifest)?;
+    Ok((cap, model, effort))
 }
 
 /// `lens` を 1 回。diff は stdin から byte で読む。
@@ -149,7 +151,7 @@ pub fn dispatch(args: &[String]) -> Outcome {
     };
     // **cap が解けない周も claude を起こさない**（上限なしで走らせない＝C6）。model も同じ極性（版の既定へ
     // 黙って倒れない）。
-    let (cap, model) = match rows_of(args) {
+    let (cap, model, effort) = match rows_of(args) {
         Ok(found) => found,
         Err(reason) => return Outcome::failed_line(RC_BROKEN, format!("lens: {reason}")),
     };
@@ -161,8 +163,9 @@ pub fn dispatch(args: &[String]) -> Outcome {
         claude: claude.as_deref().unwrap_or(DEFAULT_CLAUDE),
         prompt: &prompt,
         permission_mode: &mode,
-        // rules 行の model を**毎回**渡す（claude CLI の別名・runner と同じ行）。
+        // rules 行の model と effort を**毎回**渡す（claude CLI の字面・runner と同じ 2 行）。
         model: Some(model.alias()),
+        effort: Some(effort.alias()),
         plugin_dir: None,
         account_dir: account.as_deref(),
         // **便の worktree で起こす**（anchor の repo は渡さない）。判定に載る憲法は

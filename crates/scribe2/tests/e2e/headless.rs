@@ -220,10 +220,23 @@ fn model_row(value: &str) -> String {
 /// 埋め込み manifest と同じ `runner.model` の値（claude CLI の別名・裁定 id `user 2026-09-14T21:59Z`）。
 const RUNNER_MODEL: &str = "opus";
 
+/// `runner.effort` の行（値は文字列 `value`・発効・`s2-07l.322`）。
+fn effort_row(value: &str) -> String {
+    format!("id = \"runner.effort\"\nkind = \"RunnerEffort\"\nvalue = \"{value}\"\nenabled = true\n")
+}
+
+/// 埋め込み manifest と同じ `runner.effort` の値（claude CLI の字面・裁定 id `user 2026-09-15T03:52Z`）。
+const RUNNER_EFFORT: &str = "high";
+
 /// `gate.token_cap` を `cap` byte にした manifest（file 名に値を含む＝同じ dir で cap を変えて撃ち直せる）。
-/// `runner.model` は埋め込みと同じ値で載せる（lens は cap と model の 2 行を同じ manifest から読む）。
+/// `runner.model` / `runner.effort` は埋め込みと同じ値で載せる（lens は cap と model と effort の 3 行を
+/// 同じ manifest から読む）。
 fn rules_with_cap(dir: &Path, cap: u64) -> PathBuf {
-    rules_with_rows(dir, &format!("rules-cap-{cap}.toml"), &[cap_row(cap), model_row(RUNNER_MODEL)])
+    rules_with_rows(
+        dir,
+        &format!("rules-cap-{cap}.toml"),
+        &[cap_row(cap), model_row(RUNNER_MODEL), effort_row(RUNNER_EFFORT)],
+    )
 }
 
 /// lens を 1 回撃つ（引数の並びが複数の歯で同じなので畳む）。cap は **`--rules` の manifest** で
@@ -649,14 +662,24 @@ fn headless_lens_refuses_unreadable_cap_row() {
     clean(&[&dir]);
 }
 
-/// runner が claude へ渡す argv に `--model` の対が在るか（値つき・fake が写した argv）。
-fn model_arg(dir: &Path) -> Option<String> {
+/// runner / lens が claude へ渡した argv の `flag` の対の値（値つき・fake が写した argv）。
+fn arg_value(dir: &Path, flag: &str) -> Option<String> {
     let args = slurp(&dir.join("args"));
     let lines: Vec<&str> = args.lines().collect();
     lines
         .windows(2)
-        .find(|w| w.first() == Some(&"--model"))
+        .find(|w| w.first() == Some(&flag))
         .and_then(|w| w.get(1).map(|value| (*value).to_owned()))
+}
+
+/// runner が claude へ渡す argv に `--model` の対が在るか（値つき・fake が写した argv）。
+fn model_arg(dir: &Path) -> Option<String> {
+    arg_value(dir, "--model")
+}
+
+/// 同じく `--effort` の対（rules 行 `runner.effort`・`s2-07l.322`）。
+fn effort_arg(dir: &Path) -> Option<String> {
+    arg_value(dir, "--effort")
 }
 
 /// (a) runner は rules 行 `runner.model` の model を claude に**毎回**渡す（`s2-07l.297`・設計 pipeline.md §6・FR5）:
@@ -673,7 +696,7 @@ fn headless_runner_passes_model_from_rules_row() {
     fs::write(&write_set, "src/lib.rs\n").expect("write-set を書ける");
     let call = RunnerCall { dir: &dir, worktree: &worktree, write_set: &write_set, vessel: &vessel, claude: &claude, mode: "plan", account: None };
     for (value, want) in [("opus", "opus"), ("sonnet", "sonnet"), ("Opus", "opus"), ("Fable", "fable")] {
-        let rules = rules_with_rows(&dir, &format!("rules-model-{value}.toml"), &[model_row(value)]);
+        let rules = rules_with_rows(&dir, &format!("rules-model-{value}.toml"), &[model_row(value), effort_row(RUNNER_EFFORT)]);
         let out = run_runner_with_rules(&call, &rules, b"goal = \"x\"\n");
         assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{value}: {}", stderr_of(&out));
         assert_eq!(model_arg(&dir), Some(want.to_owned()), "{value}: 行の値を CLI の別名で渡す: {}", slurp(&dir.join("args")));
@@ -697,7 +720,7 @@ fn headless_lens_passes_model_from_rules_row() {
     let claude = fake_claude(&dir, "{\"verdict\":\"PASS\",\"evidence\":\"model の歯\"}\n", false, 0);
     let contract = contract_in(&dir);
     for (value, want) in [("opus", "opus"), ("haiku", "haiku"), ("Sonnet", "sonnet")] {
-        let rules = rules_with_rows(&dir, &format!("rules-model-{value}.toml"), &[cap_row(4096), model_row(value)]);
+        let rules = rules_with_rows(&dir, &format!("rules-model-{value}.toml"), &[cap_row(4096), model_row(value), effort_row(RUNNER_EFFORT)]);
         let out = run_bin_owned(&lens_args(&contract, &dir, &["--rules", &rules.display().to_string()], &claude), b"--- a\n+++ b\n");
         assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{value}: {}", stderr_of(&out));
         assert_eq!(stdout_of(&out).trim(), r#"{"verdict":"PASS","evidence":"model の歯"}"#, "{value}: 判定は claude の行");
@@ -783,6 +806,138 @@ fn headless_lens_refuses_when_model_row_is_missing() {
         assert!(stdout_of(&out).is_empty(), "{want}: 判定の面には何も出さない");
     }
     clean(&[&dir]);
+}
+
+/// (a) runner は rules 行 `runner.effort` の effort を claude に**毎回**渡す（`s2-07l.322`・設計 pipeline.md §6・FR5）:
+/// `--rules` の manifest の値ごとに argv の `--effort` の対の値が変わり（値は行から来る＝定数ではない）、対は 1 つ・
+/// 置き場は `--model` の対の直後・`--rules` 無しは埋め込みの行（`high`）。base は `--effort` を渡さないので RED。
+#[test]
+fn headless_runner_passes_effort_from_rules_row() {
+    let dir = tmp();
+    let worktree = tmp();
+    let claude = fake_claude(&dir, "", false, 0);
+    let write_set = dir.join("write-set.txt");
+    let vessel = write_vessel_copy(&dir, r#"["cargo", "git"]"#);
+    fs::write(&write_set, "src/lib.rs\n").expect("write-set を書ける");
+    let call = RunnerCall { dir: &dir, worktree: &worktree, write_set: &write_set, vessel: &vessel, claude: &claude, mode: "plan", account: None };
+    for value in ["high", "low", "xhigh", "medium"] {
+        let rules = rules_with_rows(&dir, &format!("rules-effort-{value}.toml"), &[model_row(RUNNER_MODEL), effort_row(value)]);
+        let out = run_runner_with_rules(&call, &rules, b"goal = \"x\"\n");
+        assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{value}: {}", stderr_of(&out));
+        assert_eq!(effort_arg(&dir), Some(value.to_owned()), "{value}: 行の値を渡す: {}", slurp(&dir.join("args")));
+        let args = slurp(&dir.join("args"));
+        assert_eq!(args.lines().filter(|line| *line == "--effort").count(), 1, "{value}: 対は 1 つ: {args}");
+        let lines: Vec<&str> = args.lines().collect();
+        let at_model = lines.iter().position(|line| *line == "--model");
+        let at_effort = lines.iter().position(|line| *line == "--effort");
+        assert_eq!(at_effort, at_model.map(|at| at + 2), "{value}: model の対の直後: {args}");
+        fs::remove_file(dir.join("args")).expect("前の周の写しを消せる");
+    }
+    // `--rules` 無しは埋め込みの manifest の行（裁定 `user 2026-09-15T03:52Z` の high）。
+    let out = run_runner(&call, b"goal = \"x\"\n");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    assert_eq!(effort_arg(&dir), Some(RUNNER_EFFORT.to_owned()), "埋め込みの行: {}", slurp(&dir.join("args")));
+    clean(&[&dir, &worktree]);
+}
+
+/// (b) lens も同じ行の effort を claude に毎回渡す（runner と同じ構築点 `build`）: `--rules` の manifest の値ごとに
+/// `--effort` の対が変わり、`--rules` 無しは埋め込みの行。base は渡さないので RED。
+#[test]
+fn headless_lens_passes_effort_from_rules_row() {
+    let dir = tmp();
+    let claude = fake_claude(&dir, "{\"verdict\":\"PASS\",\"evidence\":\"effort の歯\"}\n", false, 0);
+    let contract = contract_in(&dir);
+    for value in ["high", "medium", "xhigh"] {
+        let rules = rules_with_rows(&dir, &format!("rules-effort-{value}.toml"), &[cap_row(4096), model_row(RUNNER_MODEL), effort_row(value)]);
+        let out = run_bin_owned(&lens_args(&contract, &dir, &["--rules", &rules.display().to_string()], &claude), b"--- a\n+++ b\n");
+        assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{value}: {}", stderr_of(&out));
+        assert_eq!(stdout_of(&out).trim(), r#"{"verdict":"PASS","evidence":"effort の歯"}"#, "{value}: 判定は claude の行");
+        assert_eq!(effort_arg(&dir), Some(value.to_owned()), "{value}: 行の値を渡す: {}", slurp(&dir.join("args")));
+        fs::remove_file(dir.join("args")).expect("前の周の写しを消せる");
+    }
+    let out = run_bin_owned(&lens_args(&contract, &dir, &[], &claude), b"--- a\n+++ b\n");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    assert_eq!(effort_arg(&dir), Some(RUNNER_EFFORT.to_owned()), "埋め込みの行: {}", slurp(&dir.join("args")));
+    clean(&[&dir]);
+}
+
+/// (c) `runner.effort` の行が解けない周（無い / 不発効 / 文字列でない）は runner が **claude を呼ばず rc 2** で理由を
+/// 1 行（`runner: runner.effort …`・model と同じ極性）。読む順は model → effort＝両方欠けた manifest では model の
+/// 理由だけが出る（既存の歯の字面は不変）。base は行が無くても claude を起こす（argv の写しが生成される）ので RED。
+#[test]
+fn headless_runner_refuses_when_effort_row_is_missing() {
+    let dir = tmp();
+    let worktree = tmp();
+    let claude = fake_claude(&dir, "", false, 0);
+    let write_set = dir.join("write-set.txt");
+    let vessel = write_vessel_copy(&dir, r#"["cargo", "git"]"#);
+    fs::write(&write_set, "src/lib.rs\n").expect("write-set を書ける");
+    let call = RunnerCall { dir: &dir, worktree: &worktree, write_set: &write_set, vessel: &vessel, claude: &claude, mode: "plan", account: None };
+    let absent = rules_with_rows(&dir, "effort-absent.toml", &[model_row(RUNNER_MODEL)]);
+    let disabled = rules_with_rows(
+        &dir,
+        "effort-disabled.toml",
+        &[model_row(RUNNER_MODEL), "id = \"runner.effort\"\nkind = \"RunnerEffort\"\nvalue = \"high\"\nenabled = false\n".to_owned()],
+    );
+    // id は同じで kind が整数の行（manifest は id と kind の対応を照合しない）＝値が文字列でない形。
+    let int = rules_with_rows(
+        &dir,
+        "effort-int.toml",
+        &[model_row(RUNNER_MODEL), "id = \"runner.effort\"\nkind = \"GateTokenCap\"\nvalue = 5\nenabled = true\n".to_owned()],
+    );
+    // model も effort も無い manifest（順は model が先）。
+    let neither = rules_with_rows(&dir, "effort-neither.toml", &[cap_row(4096)]);
+    for (rules, want) in [
+        (&absent, "runner.effort が無い"),
+        (&disabled, "runner.effort は不発効である"),
+        (&int, "runner.effort が文字列でない"),
+        (&neither, "runner.model が無い"),
+    ] {
+        let out = run_runner_with_rules(&call, rules, b"goal = \"x\"\n");
+        assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "{want}: rc 2 / {}", stderr_of(&out));
+        assert!(!dir.join("called").exists(), "{want}: claude を 1 度も起動しない");
+        assert!(!dir.join("args").exists(), "{want}: argv の写しは生成されない");
+        let err = stderr_of(&out);
+        assert!(err.contains(&format!("runner: {want}")), "{want}: 理由を 1 行で名乗る: {err}");
+        assert!(!err.contains("未知の引数") && !err.contains("usage: "), "{want}: 未知の flag の断りではない: {err}");
+        assert_eq!(err.lines().count(), 1, "{want}: stderr は理由の 1 行だけ: {err}");
+        assert!(stdout_of(&out).is_empty(), "{want}: stdout には何も出さない: {}", stdout_of(&out));
+    }
+    clean(&[&dir, &worktree]);
+}
+
+/// (d) 閉じた表に無い `runner.effort` の値（`max` / `High` / 空）は runner が claude を呼ばず rc 2 で、理由に行 id と
+/// 値と**取る 4 つの字面**を名指す（case-fold しない＝`High` も未知）。lens も同じ極性。base は行を読まないので RED。
+#[test]
+fn headless_runner_refuses_unknown_effort_value() {
+    let dir = tmp();
+    let worktree = tmp();
+    let claude = fake_claude(&dir, "", false, 0);
+    let write_set = dir.join("write-set.txt");
+    let vessel = write_vessel_copy(&dir, r#"["cargo", "git"]"#);
+    fs::write(&write_set, "src/lib.rs\n").expect("write-set を書ける");
+    let call = RunnerCall { dir: &dir, worktree: &worktree, write_set: &write_set, vessel: &vessel, claude: &claude, mode: "plan", account: None };
+    for value in ["max", "High", ""] {
+        let rules = rules_with_rows(&dir, &format!("bad-effort-{value}.toml"), &[model_row(RUNNER_MODEL), effort_row(value)]);
+        let out = run_runner_with_rules(&call, &rules, b"goal = \"x\"\n");
+        assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "{value}: rc 2 / {}", stderr_of(&out));
+        assert!(!dir.join("called").exists(), "{value}: claude を 1 度も起動しない");
+        assert!(!dir.join("args").exists(), "{value}: argv の写しは生成されない");
+        let err = stderr_of(&out);
+        assert!(err.contains(&format!("runner: runner.effort の値 {value} は未知の effort")), "{value}: 行 id と値: {err}");
+        assert!(err.contains("low / medium / high / xhigh"), "{value}: 取る字面を全部名指す: {err}");
+        assert_eq!(err.lines().count(), 1, "{value}: stderr は理由の 1 行だけ: {err}");
+    }
+    // lens も同じ極性（cap と model は解ける manifest で effort だけが表に無い）。
+    let contract = contract_in(&dir);
+    let lens_claude = fake_claude(&dir, "{\"verdict\":\"PASS\",\"evidence\":\"呼ばれてはならない\"}\n", false, 0);
+    let rules = rules_with_rows(&dir, "lens-bad-effort.toml", &[cap_row(4096), model_row(RUNNER_MODEL), effort_row("max")]);
+    let out = run_bin_owned(&lens_args(&contract, &dir, &["--rules", &rules.display().to_string()], &lens_claude), b"--- a\n+++ b\n");
+    assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "lens: rc 2 / {}", stderr_of(&out));
+    assert!(!dir.join("called").exists(), "lens: claude を 1 度も起動しない");
+    assert!(stderr_of(&out).contains("lens: runner.effort の値 max は未知の effort"), "lens: {}", stderr_of(&out));
+    assert!(stdout_of(&out).is_empty(), "lens: 判定の面には何も出さない: {}", stdout_of(&out));
+    clean(&[&dir, &worktree]);
 }
 
 #[test]

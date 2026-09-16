@@ -298,6 +298,19 @@ enabled = true
 ruling = "user 2026-09-14T21:59Z runner/lens model pin (measured default Opus 5; run selection counts this model window only)"
 ruled_at = "2026-09-14"
 
+# runner / lens が claude に毎回渡す effort（設計 pipeline.md §6・`s2-07l.322`）。値は claude CLI の字面
+# （`low` / `medium` / `high` / `xhigh`・閉じた表は crates 側の headless::Effort）。省くと口座の設定 dir の
+# settings.json（`effortLevel`）の値で決まり、同じ便が口座ごとに違う深さで走る（席の model 事故と同じ根因）。
+# model は `runner.model` のまま（この行は effort だけを持つ）。
+
+[[rule]]
+id = "runner.effort"
+kind = "RunnerEffort"
+value = "high"
+enabled = true
+ruling = "user 2026-09-15T03:52Z runner/lens effort pin (high; model stays runner.model)"
+ruled_at = "2026-09-15"
+
 [[rule]]
 id = "repo.non_rust_exec_allow"
 kind = "RepoNonRustExecAllow"

@@ -83,6 +83,45 @@ pub fn need<'a>(args: &'a [String], name: &str) -> Result<&'a str, String> {
 /// runner / lens が claude に毎回渡す model を持つ rules 行（設計 pipeline.md §6・`s2-07l.297`）。
 pub const ROW_MODEL: &str = "runner.model";
 
+/// 同じく effort を持つ rules 行（設計 pipeline.md §6・`s2-07l.322`）。
+pub const ROW_EFFORT: &str = "runner.effort";
+
+/// claude に**毎回**渡す effort（`--effort` の値・rules 行 [`ROW_EFFORT`] の語彙・閉じた表）。
+///
+/// 省くと口座の設定 dir の `settings.json`（`effortLevel`）の値で決まり、同じ便が口座ごとに違う深さで走る
+/// （席の model 事故と同じ根因）。置き場が `fleet::select` でなく headless なのは、口座選定が effort を読まないため。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Effort {
+    /// low。
+    Low,
+    /// medium。
+    Medium,
+    /// high。
+    High,
+    /// xhigh。
+    Xhigh,
+}
+
+/// [`Effort`] の全 variant（宣言順）。
+pub const EFFORTS: &[Effort] = &[Effort::Low, Effort::Medium, Effort::High, Effort::Xhigh];
+
+impl Effort {
+    /// claude CLI の字面（`--effort` の値）。
+    pub fn alias(self) -> &'static str {
+        match self {
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+            Self::Xhigh => "xhigh",
+        }
+    }
+
+    /// 字面との**完全一致**で引く（case-fold しない）。表に無い字面は `None`。
+    pub fn parse(text: &str) -> Option<Self> {
+        EFFORTS.iter().copied().find(|found| found.alias() == text)
+    }
+}
+
 /// `--rules PATH` が在ればその manifest・無ければ埋め込み（`pipe::cli` と同じ規約）。読めない周は理由つきで `Err`。
 ///
 /// **runner と lens の manifest の読み口はここ 1 つ**（lens の cap と両者の model が同じ manifest から来る）。
@@ -109,6 +148,15 @@ pub fn runner_model(manifest: &Manifest) -> Result<Model, String> {
     })
 }
 
+/// rules 行 [`ROW_EFFORT`] の effort。4 理由の `Err` は [`runner_model`] と同じ極性＝呼び手は claude を呼ばず rc 2。
+pub fn runner_effort(manifest: &Manifest) -> Result<Effort, String> {
+    let text = str_row(manifest, ROW_EFFORT)?;
+    Effort::parse(text).ok_or_else(|| {
+        let taken: Vec<&str> = EFFORTS.iter().map(|effort| effort.alias()).collect();
+        format!("{ROW_EFFORT} の値 {text} は未知の effort（取るのは {}）", taken.join(" / "))
+    })
+}
+
 /// stdin をすべて **byte のまま**読む。
 ///
 /// diff は UTF-8 とは限らず、cap の判定は byte 数で行う（文字数に直すと、同じ diff が
@@ -131,6 +179,10 @@ pub struct Call<'a> {
     /// **毎回**渡す（`Some`・permission mode と同じ理由＝版の既定に従うと便が消費するモデル別窓が黙って変わり、
     /// 便用の口座選定が数える窓とずれる・`s2-07l.297`）。`fleet usage` の token refresh は `None`（argv は不変）。
     pub model: Option<&'a str>,
+    /// claude に渡す effort（`--effort <値>`・[`Effort::alias`]）。runner と lens は rules 行 `runner.effort` の値を
+    /// **毎回**渡す（`Some`・model と同じ理由＝省くと口座ごとに深さがばらばらになる・`s2-07l.322`）。
+    /// `fleet usage` の token refresh は `None`（argv は不変）。
+    pub effort: Option<&'a str>,
     /// 本 repo の plugin を載せる dir。
     pub plugin_dir: Option<&'a str>,
     /// 口座の設定 dir（子の環境変数へ書く値）。
@@ -201,6 +253,10 @@ pub fn build(call: &Call<'_>) -> (Command, confine::Confinement) {
     // （runner と lens の唯一の構築点）。
     if let Some(model) = call.model {
         inner.arg("--model").arg(model);
+    }
+    // effort も**毎回**渡す（`Some` の周・`--model` の直後）。省くと口座の設定 dir の settings が深さを決める。
+    if let Some(effort) = call.effort {
+        inner.arg("--effort").arg(effort);
     }
     inner
         // **settings を 1 つも読まない**（ADR-0011 §2.1）。空の値は user / project / local の
@@ -339,6 +395,7 @@ mod tests {
             prompt: "",
             permission_mode: "plan",
             model: None,
+            effort: None,
             plugin_dir: Some(&text),
             account_dir: None,
             cwd: None,
@@ -362,6 +419,7 @@ mod tests {
             prompt: "",
             permission_mode: "plan",
             model: None,
+            effort: None,
             plugin_dir: None,
             account_dir: None,
             cwd: None,
@@ -382,6 +440,7 @@ mod tests {
                 prompt: "",
                 permission_mode: "plan",
                 model: None,
+                effort: None,
                 plugin_dir: None,
                 account_dir: None,
                 cwd: None,
@@ -411,6 +470,7 @@ mod tests {
                 prompt: "",
                 permission_mode: "plan",
                 model,
+                effort: None,
                 plugin_dir: None,
                 account_dir: None,
                 cwd: None,
