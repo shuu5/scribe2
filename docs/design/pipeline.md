@@ -400,6 +400,14 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
 - 歯（`pipe_follow_stale_rows_` 接頭辞・`tests/e2e/pipe/land.rs`・既存の追随の fixture〔`gated_pass` + 別便の commit + 偽 runner〕の型）: (a) 便が file を消した後、main が「消えた path を write-set に持つ行」を足す docs の commit で進んだ周は、land が `Implemented detail=rebase-stale-rows:` を記帳して偽 runner を 1 回起こし、写しの write-set にその設計 doc が追記され、再 gate は撃たれない（偽 lens の写し 0）／(b) 行が便と無関係の path を名指す周は起こし直さず従来どおり再 gate へ進む／(c) 上限 `pipe.follow_retries` に達した周は `Failed detail=rebase-stale-rows` で終端する／(d) `--runner` の無い land は `rebase-stale-rows:` を記帳して rc 1 で止まり resume で続けられる（§3 の手順 4 と同型）。
 - 却下: 器が行を書き換えて着地する（land が write-set の外の doc を触る＝gate の照合と runner の guard の外の変更・C16）／stale な行を INCONCLUSIVE の理由の 1 つとして記帳するだけ（記帳は在っても直す手が無い・穴 (1) そのもの）／検出線の rc 2 の周に resume が全 verify を撃ち直す（原因が木に在る間は何回撃っても同じ・費用だけ増える）。
 
+## 35. main 実測の赤に落ちた歯の名と panic の抜粋を残す — record に `failed=`・落ちた歯ごとの stderr の区間（契約表の行 ac・`s2-07l.401`）
+
+- 何が起きているか（admin 実測 2026-09-16 07:18Z `.164` run 051333Z・14:2xZ の 3 便比較・verified）: land の主実測（§5.4・`verify_main`）で全件 nextest が rc 100 → `Failed detail=main-red`（push なし・main 無傷＝止め方は正しい）。record（`verify-main.jsonl`・gate の `verify.jsonl` と同じ `records_of` の形）は行ごとの `rc` と stderr の末尾 `STDERR_TAIL_LINES` 行（20）を持つので、落ちた歯の名（nextest の Summary の後の `FAIL [` 行）は残るが、**panic の本文（assert の文）は落ちた歯の実行位置が末尾に入る周だけ残る**（`.389` は在る・`.323` は 441/1490 と 642/1490 の位置で無い）。原因の切り分け（rebase の相互作用か flaky か）を admin が手で撃ち直して探した。
+- 形（gate の verify 行と主実測の**同じ 1 本**・`pipe/gate/record.rs`）: (1) record の head に `failed=<歯の名>` を 1 つ足す（nextest の stderr の `FAIL [` 行の最初の 1 本・無い周は書かない・pure な抽出関数 1 本・in-file の歯）。(2) stderr の写しは末尾 N 行に加えて、**落ちた歯ごとの区間**（nextest の `--- STDERR: <歯の名> ---` から次の区切りまで・歯 1 本あたり `STDERR_TAIL_LINES` 行を上限・落ちた歯が複数なら順に）を残す＝末尾の N 行に panic が入らない位置の歯でも本文が残る。区間の切り出しは nextest の字面の閉じた 2 形（`FAIL [` / `--- STDERR:`）だけを読む pure な関数で、他の verify 行（clippy 等）は従来どおり末尾 N 行だけ。(3) gate の `verify.jsonl` と主実測の `verify-main.jsonl` は同じ関数を通る（片側だけに足さない・C2）。
+- 触らない: `MainCheck` の 3 値と `main-red` の極性（auto revert しない）・record の `n` / `rc` / `cmd` の形・`STDERR_TAIL_LINES` の値・stdout の扱い。
+- 歯（`pipe_verify_failed_` 接頭辞・`pipe/gate/record.rs` の in-file の pure な歯 + `tests/e2e/pipe/land.rs` の既存の main-red の fixture の型）: nextest 形の stderr（Summary の後に `FAIL [` 2 本・各歯の `--- STDERR:` 区間・落ちた歯が末尾から遠い位置）から `failed=` が最初の 1 本を指し、区間が歯ごとに上限行数で残る／`FAIL [` の無い stderr は `failed=` を持たず末尾 N 行だけ／main-red の便の `verify-main.jsonl` に `failed=` と区間が載る（e2e）。
+- 却下: 末尾の行数を増やす（歯の数に比例して膨らみ、位置の問題は残る）／nextest の JSON 出力を読む（出力形式の依存が 1 つ増え、共通 verify の行の字面を器が縛る・ADR-0010 の宣言の外）／runner の stdout に写す（主実測は runner が居ない）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -685,4 +693,14 @@ write-set = ["crates/scribe2/src/pipe/land.rs", "crates/scribe2/src/pipe/follow.
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_follow_stale_rows_"]
 size = "M"
 done = "便が消した path を名指す行が追随で入った周は land が rebase-stale-rows を記帳して runner を起こし直し、写しの write-set にその設計 doc が追記され再 gate は撃たれず、無関係の findings は従来どおり再 gate へ進み、上限に達した周は Failed で終端し、--runner の無い land は記帳して rc 1 で止まる"
+
+[[contract]]
+id = "ac"
+title = "verify の record に failed=<歯の名> と落ちた歯ごとの stderr の区間を残す — nextest の FAIL 行と --- STDERR 区間だけを読む pure な関数 1 本を gate と主実測が共有する"
+req = ["FR50", "NFR4"]
+section = "35"
+write-set = ["crates/scribe2/src/pipe/gate/record.rs", "crates/scribe2/src/pipe/gate/verify.rs", "crates/scribe2/src/pipe/land.rs", "crates/scribe2/tests/e2e/pipe/land.rs", "crates/scribe2/tests/e2e/pipe/gate.rs"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_verify_failed_"]
+size = "S"
+done = "nextest 形の stderr から failed= が最初の落ちた歯を指し、落ちた歯ごとの区間が上限行数で record に残り、FAIL 行の無い stderr は従来どおり末尾だけ、gate と主実測が同じ関数を通り、MainCheck の 3 値と末尾行数の定数は不変"
 <!-- contracts:end -->
