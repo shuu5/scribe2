@@ -10,6 +10,9 @@
 //! base へ写り flip を検査される。名前で見なければ区間判定には src 区間だけの file に
 //! 見え、ここへ足した歯が 1 本も測られないままになる。
 
+// 純粋な移動（`flipcheck.rs` の git / tar の群を `flipcheck/git.rs` へ・歯は足していない・s2-07l.372）。
+// flip-check: moved s2-07l.372
+
 use super::{
     failed_tests, is_test_file, judge, judge_into, nextest_args, parse_base, split_regions,
     FailedTest, FilePair, Verdict, RETROACTIVE_MARK,
