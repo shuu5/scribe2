@@ -222,7 +222,7 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
 ## 12. retire の終端の列挙（契約表の行 i・`s2-07l.353`）
 
 - 審査の段（[contract-source.md](./contract-source.md) §4）が足した終端 Reviewed の FAIL / INCONCLUSIVE は live を持たない（判定の読み手は `pipe/review.rs` の 1 本）が、retire の入口（`pipe/cli.rs` の段の列挙と弁別）は Gated の FAIL と Failed の一部しか畳めない＝審査の段で終端した便が前の周の worktree を残すと畳めず、run N+1 が別 worktree で立つ（.209 run 1 の実測 2026-09-15）。
-- 形: retire が許す段の列挙に Reviewed を足し、弁別は判定の読み手の 3 値で分ける（FAIL / INCONCLUSIVE = 畳む・PASS = 断る〔live・起こす側〕・読めない = 断る〔読めない判定を終端に読み替えない・fail-closed〕）。畳んだ後の段は Reviewed のまま（Failed / Gated と同じ・可逆 move の 1 本は不変・N1.2）。worktree の無い Reviewed 終端の便は畳む物が無い＝既存の断りのまま。
+- 形: retire が許す段の列挙（`pipe/cli/step.rs` の `retire_run` の `allowed`）に Reviewed を足し、弁別は段の中の弁別 1 本（`pipe/cli/state.rs` の `discriminate`）に Retire × Reviewed の arm を足して判定の読み手（`ReviewCheck`）の 3 値で分ける（FAIL / INCONCLUSIVE = 畳む・PASS = 断る〔live・起こす側〕・読めない = 断る〔読めない判定を終端に読み替えない・fail-closed〕）。断りの字面は Spawn × Reviewed の既存の arm と同じ形 `run <id> の段は Reviewed である（verdict=<V>）`＝段違いの一般則の字面（`run <id> の段は Reviewed である`・verdict 無し）と区別が付き、歯はこの逐語で新 arm を pin する。畳んだ後の段は Reviewed のまま（Failed / Gated と同じ・可逆 move の 1 本は不変・N1.2）。worktree の無い Reviewed 終端の便は畳む物が無い＝既存の断りのまま。
 - 却下: 審査の段の中で自動で畳む（終端の後始末は go を挟む retire の 1 口に揃える）／live が false の段を全部畳める側にする（Failed の理由ごとの弁別が消える）。
 
 ## 13. xtask の flipcheck.rs の分割（契約表の行 j・純移動）
@@ -452,7 +452,7 @@ id = "i"
 title = "pipe retire の終端の列挙に Reviewed の非 PASS（FAIL / INCONCLUSIVE）を足す — 審査の段で終端した便の残った worktree を可逆 move で畳み、PASS と読めない判定は断る"
 req = ["FR49", "FR14"]
 section = "12"
-write-set = ["crates/scribe2/src/pipe/cli.rs", "crates/scribe2/tests/e2e/pipe/land.rs"]
+write-set = ["crates/scribe2/src/pipe/cli/step.rs", "crates/scribe2/src/pipe/cli/state.rs", "crates/scribe2/tests/e2e/pipe/land.rs"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_retire_"]
 size = "S"
 done = "Reviewed の FAIL / INCONCLUSIVE で終端した便が pipe retire で畳め（段は Reviewed のまま・可逆 move）、PASS は断られ、読めない判定は終端に読み替えない"
