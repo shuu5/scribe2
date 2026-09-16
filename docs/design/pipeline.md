@@ -336,6 +336,7 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
 - 形: `pipe review --lens <cmd>`（run の最初に lens を受ける口）が cmd を `<run_dir>/lens.toml`（`schema = 1` / `cmd = "<逐語>"`・rules manifest と同じ parser の subset・run dir の一時物で跨版契約ではない）に写す。`gate` / `land` / `resume` は `--lens` が無い周にその写しを読む（`--lens` が在れば flag が勝つ＝上書きの手は残す）。写しが**無い**周は従来どおり INCONCLUSIVE（「lens が要るのに --lens が無い」）、写しが**読めない**周は理由を変えて INCONCLUSIVE（`lens.toml` の path と読めなかった理由・「無い」に潰さない・C10）。読み書きは新 module `pipe/lens_record.rs`（pure な parse + I/O 2 関数）に置き、3 つの口は同じ 1 関数で読む（C2）。
 - 分岐の置き場（run 1 = 審査 INCONCLUSIVE 2026-09-16「verdict の生成箇所に依存し文面から確定できない」の解・admin の現物実測: 「lens が要るのに --lens が無い」を出すのは `pipe/gate.rs` の `gate`（`let Some(cmd) = entry.lens else`）と `pipe/review.rs` の `decide` の **2 か所**・母集団 = `crates/scribe2/src` の grep・`pipe/land.rs` は自分では出さず再 gate に `entry.lens` を渡すだけ）: 読みの 3 値は `lens_record.rs` の閉じた型 1 つ（flag か写しから得た cmd / 無い / 読めない〔path と理由〕）で表し、`Gate` / `Review` / `Land` の `lens` field（現物は `Option<&str>`）をその型に置き換える。step.rs は `--lens` が在れば cmd を、無ければ写しを読んだ結果をその型で渡す。INCONCLUSIVE の理由の分岐は既存の 2 か所が 3 値を match して行う（無い = 字面不変・読めない = path と理由）。`pipe/land.rs` は field の型と再 gate への pass-through だけが変わり、追随の要否判定は触らない。step.rs で先回りする形（写しが読めない周に gate / land を呼ばず INCONCLUSIVE を書く）は採らない＝land の再 gate が要らない周まで INCONCLUSIVE に倒す挙動変化になる。
 - 既存の歯の fixture（run 3 = QUESTION 2026-09-16「写しを読む gate が既存 5 本を PASS に変えて赤にする」の解・admin の現物実測: 「`--lens` 無しで INCONCLUSIVE」を期待する歯は `tests/e2e/pipe/gate.rs` に 4 本〔`pipe_gate_inconclusive_without_lens_when_required` / `pipe_gate_regates_after_inconclusive` / `pipe_gate_fails_regate_on_dirty_worktree` / `pipe_gate_refuses_regate_without_readable_verdict`〕・`tests/e2e/pipe/spawn.rs` に 1 本〔`pipe_resume_reports_next_gate_on_inconclusive`〕・母集団 = `tests/e2e/pipe` の grep）: これらは review を `--lens` 付きで通した run に対して gate / resume を `--lens` 無しで撃ち INCONCLUSIVE を期待するので、写しが在る世界では**設計どおり gate が lens を起動して PASS に変わる**。歯の期待（「写しも flag も無い周は INCONCLUSIVE」）を保つ形は fixture 側で `<run_dir>/lens.toml` を外す 1 行だけ（歯の名・極性・assert は不変・step.rs や gate に「写しを読まない」seam は作らない）。この 2 file は行 t の write-set に含める（歯の fixture が閉包の外に在る形を残さない）。
+- `Land.lens` の型置換が届く literal 構築点（run 4 = QUESTION 2026-09-16「queue.rs の in-file の歯の helper `land()` が `Land { lens: None, .. }` を literal で組む」の解・admin の現物実測: `src/pipe/queue.rs` の `mod tests` の `fn land<'a>(…) -> Land<'a>` が `lens: None` を持つ）: `Land` の field の型を替える便は `Land {` の literal 構築点を全部持つ＝`queue.rs` も行 t の write-set に含める（変わるのは in-file の歯の helper の 1 field だけ・queue の判定は不変）。
 - 触らない: lens の起動の形（`{contract}` / `{worktree}` の穴・stdin の diff）・gate の判定順・land の追随の要否判定・`pipe run` の引数（run は lens を受けない＝現物のまま）。
 - 却下案: `pipe land --lens` を必須にする（毎回手で渡す seam が残る・記録に残らない）／event log の detail に cmd を書く（detail は自由文で typed に読めない・cmd に空白と引用符が入る）／`vessel.toml` の写しに足す（写しは tracked な宣言の写しで、操作役の入力を混ぜると出所が割れる）。
 
@@ -345,6 +346,13 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
 - 形: `finish` の直前（export の前）に `git rev-parse refs/heads/main` を 1 回実測し、**stdout に `main=<実測>`・event の detail に `main:<実測>`（`sha:` の後ろ・空白区切り）** を足す。`new` と一致する周も書く（一致を「省略」で表さない・C10 の実測値）。読めない周は `main=unknown`（land は成立している＝落とさない・理由は stderr 1 行）。`landed=` / verdicts.jsonl の `sha`（squash の sha・key 列は跨版契約で不変）の意味は不変。
 - 触らない: squash・CAS・anchor の同期・main 実測（手順 3）・retire・verdicts.jsonl の key 列・`--pr-cmd` の形（main を動かさない形は `main=` を持たない）。
 - 却下案: 不一致を `Failed` に倒す（main は既に進んでいる＝終端を偽らない・記録して loud に留める）／push 後の `origin/main` を読む（land は push しない・remote は器の外）／verdicts.jsonl に key を足す（跨版契約の改訂＝ADR が要る・本便の射程外）。
+
+## 28. e2e の歯が binary を起こす cwd を repo の外に固定する（契約表の行 v・`s2-07l.381`）
+
+- 何が起きているか: admin の実測 2026-09-16 01:4xZ（本番の state dir の `pipe/` に e2e の fixture 便 `s2-2e5-…`〔`contract_body()` の goal・owner・`write-set = ["src/lib.rs"]`・`repo` file は tmp の toy repo・review.json は `evidence:"fake"`〕が 1 件〔全 320 件中〕・`fleet/events.jsonl` に RunCreated / RunStage Reviewed の 2 件〔2320 件中〕）。現物（verified・main d6e4e6f）: `pipe/cli.rs` の `state_dir_of` は `--state-dir` が無いと `repo_of` へ落ち、`repo_of` は `--repo` が無いと **cwd** から repo root を解いて `hook/vessel.rs` の `state_dir`（`git -C <root> config --get <NAME>.stateDir`）を読む。e2e の helper（`tests/e2e/pipe.rs` の `run_pipe` / `intake_raw` ほか）は全部の呼出しで `--state-dir` を渡している（母集団 = `run_pipe(&[` 136 箇所・grep）が、binary を **cwd を継いだまま**（nextest の子 process の cwd = crate dir・便の worktree の中）起こす。便の worktree は anchor の `.git/config` を共有し、この host の anchor は `<NAME>.stateDir` に本番を持つ。経路（inferred・時刻 01:39Z は `.349` / `.379` が Implemented → gate に入った直後）: gate の変異検査は**変異 binary で歯を回す**ので、`flag` / `state_dir_of` / `repo_of` を壊す変異の下では `--state-dir` / `--repo` が読めず cwd の fallback が本番へ届く。CI は config を持たないので露出せず、この host でだけ非 hermetic。
+- 形: e2e の helper が binary を起こす口を **1 関数**（`tests/e2e/pipe.rs` の `pipe_command()`・`Command::new(bin())` に `current_dir(<git repo でない temp dir>)` を付けて返す）に集め、`run_pipe` / `run_pipe_with_path`（`pipe.rs`）/ `run_pipe_in_pane`（`pipe/spawn.rs`）と `pipe` を直接起こす helper（`intake_raw` ほか）は全部それを通す。cwd が repo でなければ、どの変異の下でも cwd の fallback は「repo の root を解決できない」で**断る**（fail-closed）＝本番へは届かない。器の側（`state_dir_of` / `repo_of` の fallback・`vessel::state_dir`）は触らない（読みの口 `show` / `report` を anchor の cwd で撃つ admin の常道を残す）。
+- 触らない: `state_dir_of` / `repo_of` / `vessel::state_dir` の解決順・`vessel init` の呼出し（`--state-dir` と root を明示済み）・`fleet` / `seat` / `hook` の e2e の helper（本便の射程外・同じ型は別便で数える）・汚れた 1 件の処分（消さず `retired/` へ移す = N1.2・admin の運用）。
+- 却下案: 書く口（intake / run）に `--repo` を必須にして cwd の fallback を消す（変異の下では必須の検査も壊れる＝歯の側で cwd を固定しないと閉じない・admin の launcher の引数も変わる）／CI に `<NAME>.stateDir` の config を足して再現する（露出の面を増やすだけ）／本番の置き場を手で掃除する（不可逆・N1）。
 
 <!-- contracts:begin -->
 schema = 1
@@ -547,7 +555,7 @@ id = "t"
 title = "pipe review が受けた lens の cmd を run dir の lens.toml に写し、gate / land / resume が --lens の無い周にそれを読む"
 req = ["FR10", "FR9"]
 section = "26"
-write-set = ["+crates/scribe2/src/pipe/lens_record.rs", "crates/scribe2/src/pipe/mod.rs", "crates/scribe2/src/pipe/cli/step.rs", "crates/scribe2/src/pipe/gate.rs", "crates/scribe2/src/pipe/review.rs", "crates/scribe2/src/pipe/land.rs", "crates/scribe2/tests/e2e/pipe/land.rs", "crates/scribe2/tests/e2e/pipe/gate.rs", "crates/scribe2/tests/e2e/pipe/spawn.rs"]
+write-set = ["+crates/scribe2/src/pipe/lens_record.rs", "crates/scribe2/src/pipe/mod.rs", "crates/scribe2/src/pipe/cli/step.rs", "crates/scribe2/src/pipe/gate.rs", "crates/scribe2/src/pipe/review.rs", "crates/scribe2/src/pipe/land.rs", "crates/scribe2/src/pipe/queue.rs", "crates/scribe2/tests/e2e/pipe/land.rs", "crates/scribe2/tests/e2e/pipe/gate.rs", "crates/scribe2/tests/e2e/pipe/spawn.rs"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_lens_record_"]
 size = "S"
 done = "review で渡した lens だけで land の再 gate が lens を起動して着地し、写しが読めない周は「無い」と別の理由で INCONCLUSIVE"
@@ -561,4 +569,14 @@ write-set = ["crates/scribe2/src/pipe/land.rs", "crates/scribe2/tests/e2e/pipe/l
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_land_main_measured_"]
 size = "S"
 done = "reference-transaction hook で main を動かす toy repo の land が、landed= と違う main= を stdout と detail に写し rc 0 で終端する"
+
+[[contract]]
+id = "v"
+title = "e2e の pipe の helper が binary を git repo でない temp dir を cwd にして起こす — cwd の fallback が本番の state dir へ届かない"
+req = ["NFR6"]
+section = "28"
+write-set = ["crates/scribe2/tests/e2e/pipe.rs", "crates/scribe2/tests/e2e/pipe/spawn.rs"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_hermetic_"]
+size = "S"
+done = "--state-dir も --repo も無い pipe の呼出しが helper 経由では「repo の root を解決できない」で rc 1 に断られ、既存の e2e は全部緑のまま"
 <!-- contracts:end -->
