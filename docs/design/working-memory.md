@@ -218,7 +218,8 @@ section = "12"
 touches = ["crate::seat::rebrief::Marker"]
 creates = ["crates/scribe2/src/seat/rebrief/status.rs"]
 also = ["crates/scribe2/tests/e2e/snapshots/e2e__seat__seat_rebrief_external_form.snap"]
-verify = ["cargo nextest run -p scribe2 --no-tests=fail seat_wm_rebrief_"]
+tests = ["crates/scribe2/tests/e2e/seat/wm.rs"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail seat_wm_status_ seat_rebrief_lists_live_runs_and_seats"]
 size = "S"
 done = "偽の event log と state.jsonl から [RUN][SEAT][WIN] が件数付きで出て、git の無い anchor では [MAIN] が unknown で rc 0"
 
