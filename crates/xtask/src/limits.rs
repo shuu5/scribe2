@@ -12,7 +12,7 @@ use crate::toml_lite::{quoted, sections};
 /// `sections` は `[` を 1 つだけ剥がすので、array-of-tables は `[rule` になる。
 const RULE_HEADER: &str = "[rule";
 
-/// manifest の行 id ↔ [`Limits`] の field。`read` が要求する 8 本（欠けは Err）。
+/// manifest の行 id ↔ [`Limits`] の field。`read` が要求する 9 本（欠けは Err）。
 const CORE_LINES: &str = "R-C4-1";
 const FILE_LINES: &str = "R-C4-2";
 const TEST_SRC_RATIO_PCT: &str = "R-C4-3";
@@ -21,8 +21,9 @@ const FN_COMPLEXITY: &str = "R-C4-4.complexity";
 const FN_ARGS: &str = "R-C4-4.args";
 const LINE_WIDTH: &str = "R-C4.line-width";
 const DEP_BUDGET: &str = "R-C13-1";
+const TMUX_TEST_THREADS: &str = "gate.tmux_test_threads";
 
-/// `cargo xtask check` が比べる閾値（manifest の R-C4 / R-C13 行の読み出し）。
+/// `cargo xtask check` が比べる閾値（manifest の R-C4 / R-C13 / gate.tmux_test_threads 行の読み出し）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Limits {
     /// core crate の `src` 配下 `.rs` の総行数の上限（R-C4-1）。
@@ -41,12 +42,14 @@ pub(crate) struct Limits {
     pub(crate) line_width: u64,
     /// 直接依存の本数の上限（R-C13-1）。
     pub(crate) dep_budget: u64,
+    /// tmux を立てる歯の同時本数（gate.tmux_test_threads・nextest の test-group `tmux` の `max-threads` の正本）。
+    pub(crate) tmux_test_threads: u64,
 }
 
 impl Limits {
-    /// manifest の本文から 8 値を読む。
+    /// manifest の本文から 9 値を読む。
     ///
-    /// 8 本のどれかが無い / `value` が整数でない / `enabled = true` でない周は `Err`
+    /// 9 本のどれかが無い / `value` が整数でない / `enabled = true` でない周は `Err`
     /// （測れないを緑にしない・SRS FR18）。不備は**全件**を集めて 1 つの reason に畳み、
     /// 各件が行 id と（本文に在る行なら）行番号を名指す。`enabled` の省略も `false` と
     /// 同じく拒む——省略を true に埋めると書き忘れた行が黙って効く側へ倒れる。
@@ -70,6 +73,7 @@ impl Limits {
             fn_args: value_of(FN_ARGS),
             line_width: value_of(LINE_WIDTH),
             dep_budget: value_of(DEP_BUDGET),
+            tmux_test_threads: value_of(TMUX_TEST_THREADS),
         };
         if problems.is_empty() {
             Ok(limits)
@@ -207,7 +211,7 @@ mod tests {
         raw_field(text, id, "ruling").and_then(|value| quoted(&value))
     }
 
-    /// 現物の manifest で [`Limits::read`] が 8 値を返し、`core_lines` / `file_lines` が
+    /// 現物の manifest で [`Limits::read`] が 9 値を返し、`core_lines` / `file_lines` が
     /// R-C4-1 / R-C4-2 の行の値と等しい（憲法 C14.2・const を消して読み手 1 本にした形）。
     #[test]
     fn limits_match_rules_manifest() {
@@ -221,12 +225,14 @@ mod tests {
         assert_eq!(Some(limits.fn_args), int_value(&text, "R-C4-4.args"), "R-C4-4.args");
         assert_eq!(Some(limits.line_width), int_value(&text, "R-C4.line-width"), "R-C4.line-width と line_width");
         assert_eq!(Some(limits.dep_budget), int_value(&text, "R-C13-1"), "R-C13-1");
-        // 8 値はどれも 0 ではない（`read` が不備を 0 で埋めて Ok に化けていない）。
+        assert_eq!(Some(limits.tmux_test_threads), int_value(&text, "gate.tmux_test_threads"), "gate.tmux_test_threads");
+        // 9 値はどれも 0 ではない（`read` が不備を 0 で埋めて Ok に化けていない）。
         assert!(limits.core_lines > 0 && limits.file_lines > 0 && limits.dep_budget > 0, "{limits:?}");
         assert!(limits.line_width > 0, "幅 0 は数え方を縮退させる: {limits:?}");
+        assert!(limits.tmux_test_threads > 0, "同時本数 0 は tmux の歯を 1 本も走らせない: {limits:?}");
     }
 
-    /// 8 行の読み手用 fixture。`drop` に与えた行だけ `value` を落とし、`disabled` の行は
+    /// 9 行の読み手用 fixture。`drop` に与えた行だけ `value` を落とし、`disabled` の行は
     /// `enabled = false` にする。
     fn limits_fixture(drop: Option<&str>, disabled: Option<&str>) -> String {
         let rows = [
@@ -238,6 +244,7 @@ mod tests {
             ("R-C4-4.args", 5),
             ("R-C4.line-width", 120),
             ("R-C13-1", 12),
+            ("gate.tmux_test_threads", 1),
         ];
         let mut text = "schema = 1\n".to_owned();
         for (id, value) in rows {
@@ -251,17 +258,18 @@ mod tests {
         text
     }
 
-    /// 8 行そろった fixture は読め、`value = 60` を欠いた fixture は `Err` が行 id を名指す。
+    /// 9 行そろった fixture は読め、`value = 60` を欠いた fixture は `Err` が行 id を名指す。
     #[test]
     fn limits_read_names_the_row_missing_its_value() {
         let whole = Limits::read(&limits_fixture(None, None)).unwrap_or_else(|reason| panic!("{reason}"));
         assert_eq!(whole.fn_lines, 60);
         assert_eq!(whole.dep_budget, 12);
+        assert_eq!(whole.tmux_test_threads, 1);
         let missing = Limits::read(&limits_fixture(Some("R-C4-4.fn-lines"), None));
         let reason = missing.err().unwrap_or_default();
         assert!(reason.contains("R-C4-4.fn-lines"), "欠いた行 id を名指す: {reason}");
         assert!(!reason.contains("R-C4-1"), "他の行は名指さない: {reason}");
-        // 行そのものが無い形も同じ（8 本のどれかが無いは Err）。
+        // 行そのものが無い形も同じ（9 本のどれかが無いは Err）。
         let dropped = limits_fixture(None, None).replace("id = \"R-C13-1\"", "id = \"R-C13-9\"");
         assert!(Limits::read(&dropped).err().is_some_and(|reason| reason.contains("R-C13-1")));
     }

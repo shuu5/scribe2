@@ -1005,10 +1005,10 @@ fn rules_embedded_manifest_declares_account_selection_threshold() {
     assert_eq!(healed.get("probe").map(|found| found.value.clone()), Some(RuleValue::Int(85)));
 }
 
-/// gate の費用の 5 行（設計 gate-cost.md §3.1・ADR-0021）。**値は manifest が持ち、ADR も
-/// 設計 doc も写さない**（C1 / C5）。
+/// gate の費用の 6 行（設計 gate-cost.md §3.1・ADR-0021・tmux の歯の同時本数は `s2-07l.360`）。**値は manifest が
+/// 持ち、ADR も設計 doc も写さない**（C1 / C5）。
 ///
-/// kind の包含を 5 行まとめて測るのは、行と variant を**対で**足させるためである——片方だけ
+/// kind の包含を 6 行まとめて測るのは、行と variant を**対で**足させるためである——片方だけ
 /// 足した manifest は `parse` できず（未知の kind）、片方だけ足した enum は行の無い variant を
 /// 残す（親 test の `covers_all_kinds` が落ちる）。**行数は pin しない**（他便と同時に並ぶと
 /// 順序次第で動く数であり、母集団の健全性は親 test が持つ）。
@@ -1021,22 +1021,24 @@ fn rules_embedded_manifest_declares_the_gate_cost_rows() {
             panic!("埋め込み manifest が拒まれた:\n{}", lines.join("\n"))
         }
     };
-    // (id, kind, 値, 裁定 id)。値は **user 2026-09-12 の裁定**（台帳 s2-07l.153 notes 逐語）。
-    let rows: [(&str, RuleKind, u64, &str); 5] = [
-        ("gate.mutants_jobs", RuleKind::GateMutantsJobs, 4, "user 2026-09-12T11:42Z"),
-        ("gate.job_memory_mb", RuleKind::GateJobMemoryMb, 3072, "user 2026-09-12T12:08Z"),
-        ("host.reserve_memory_mb", RuleKind::HostReserveMemoryMb, 8192, "user 2026-09-12T12:08Z"),
-        ("gate.slot_wait_s", RuleKind::GateSlotWaitS, 900, "user 2026-09-12T12:08Z"),
-        ("gate.cpu_weight", RuleKind::GateCpuWeight, 50, "user 2026-09-12T12:08Z"),
+    // (id, kind, 値, 裁定 id, 裁定日)。値は **user 2026-09-12 の裁定**（台帳 s2-07l.153 notes 逐語）と
+    // `gate.tmux_test_threads` の **user 2026-09-15T21:09Z の裁定**（planner の推奨 1 への承認・`s2-07l.360`）。
+    let rows: [(&str, RuleKind, u64, &str, &str); 6] = [
+        ("gate.mutants_jobs", RuleKind::GateMutantsJobs, 4, "user 2026-09-12T11:42Z", "2026-09-12"),
+        ("gate.job_memory_mb", RuleKind::GateJobMemoryMb, 3072, "user 2026-09-12T12:08Z", "2026-09-12"),
+        ("host.reserve_memory_mb", RuleKind::HostReserveMemoryMb, 8192, "user 2026-09-12T12:08Z", "2026-09-12"),
+        ("gate.slot_wait_s", RuleKind::GateSlotWaitS, 900, "user 2026-09-12T12:08Z", "2026-09-12"),
+        ("gate.tmux_test_threads", RuleKind::GateTmuxTestThreads, 1, "user 2026-09-15T21:09Z", "2026-09-15"),
+        ("gate.cpu_weight", RuleKind::GateCpuWeight, 50, "user 2026-09-12T12:08Z", "2026-09-12"),
     ];
-    for (id, kind, value, ruling) in rows {
+    for (id, kind, value, ruling, ruled_at) in rows {
         let row = manifest.get(id).unwrap_or_else(|| panic!("{id} の行が在る"));
         assert_eq!(row.value, RuleValue::Int(value), "{id} の値");
         assert_eq!(row.kind, kind, "{id} の kind");
         assert_eq!(row.kind.shape(), ValueShape::Int, "{id} の値の形");
         assert!(row.enabled, "{id} は既定で効く");
         assert_eq!(row.ruling, ruling, "{id} の裁定 id");
-        assert_eq!(row.ruled_at, "2026-09-12", "{id} の裁定日");
+        assert_eq!(row.ruled_at, ruled_at, "{id} の裁定日");
         // kind の字面は閉じた enum を通してしか解けない（綴り違いの manifest は読めない）。
         assert_eq!(RuleKind::parse(kind.as_str()), Some(kind), "{id} の kind を字面から引ける");
     }
@@ -1054,7 +1056,7 @@ fn rules_embedded_manifest_is_valid_and_covers_all_kinds() {
     // **tracked な `rules/manifest.toml` の全行が受理される**（`parse` は 1 件でも違反が
     // 在れば `Err` を返すので、ここに届いた時点で全行が必須 key を持つ）。母集団を額面に
     // 出すのは、行が黙って落ちた周を「全部読めた」と読み違えないためである。
-    assert_eq!(manifest.rows().len(), 52, "埋め込み manifest の行数（母集団・`.217` で +2・`.249` で +3・`.254` で +1・`.168` で +1・`.297` で +1・`.315` で +1・`.322` で +1）");
+    assert_eq!(manifest.rows().len(), 53, "埋め込み manifest の行数（母集団・`.217` で +2・`.249` で +3・`.254` で +1・`.168` で +1・`.297` で +1・`.315` で +1・`.322` で +1・`.360` で +1）");
     for kind in ALL {
         let covered = manifest.rows().iter().any(|row| row.kind == *kind);
         assert!(covered, "{} の行が manifest に無い", kind.as_str());
@@ -1191,7 +1193,7 @@ fn rules_embedded_manifest_declares_one_capability_row_per_role() {
     assert!(ALL.contains(&RuleKind::RoleCapabilities), "ALL に在る（末尾は `.315` の SeatSignalBackoffS）");
     assert_eq!(RuleKind::parse("RoleCapabilities"), Some(RuleKind::RoleCapabilities), "kind を字面から引ける");
     let kinds = ALL.len();
-    assert_eq!(kinds, 51, "kind の母集団（`.201` で +1・`.217` で +2・`.249` で +3・`.254` で +1・`.168` で +1・`.297` で +1・`.315` で +1・`.322` で +1）");
+    assert_eq!(kinds, 52, "kind の母集団（`.201` で +1・`.217` で +2・`.249` で +3・`.254` で +1・`.168` で +1・`.297` で +1・`.315` で +1・`.322` で +1・`.360` で +1）");
 }
 
 /// 禁じる語列の行（`runner.denied_commands`・`RuleKind::RunnerDeniedCommands`・裁定 id `user 2026-09-14`・ADR-0025 §2.1・
@@ -1417,7 +1419,7 @@ fn rules_manifest_carries_seat_signal_backoff() {
     assert_eq!(RuleKind::SeatSignalBackoffS.shape(), ValueShape::Int, "形は秒の整数");
     assert_eq!(RuleKind::SeatTickStaleS.shape(), RuleKind::SeatSignalBackoffS.shape(), "打刻の合図の brake の行と同じ形");
     assert_eq!(ALL.last(), Some(&RuleKind::SeatSignalBackoffS), "宣言順の末尾");
-    assert_eq!(ALL.len(), 51, "kind の母集団（`.297` の 49 に `.315` と `.322` で +2）");
+    assert_eq!(ALL.len(), 52, "kind の母集団（`.297` の 49 に `.315` と `.322` で +2・`.360` で +1）");
     assert_eq!(RuleKind::parse("SeatSignalBackoffS"), Some(RuleKind::SeatSignalBackoffS), "kind を字面から引ける");
     assert_eq!(int_row(&manifest, "seat.signal_backoff_s"), Ok(300), "整数の行の読み手が同じ値を返す");
     let healed = parsed(&one_row(RuleKind::SeatSignalBackoffS, "60")).expect("整数の値は受理される");

@@ -370,6 +370,17 @@ enabled = true
 ruling = "user 2026-09-12T12:08Z"
 ruled_at = "2026-09-12"
 
+# tmux を立てる歯（e2e の isolated seat）の同時本数（設計 gate-cost.md §3.1・契約表の行 b）。値の写しは nextest の
+# test-group `tmux` の max-threads（.config/nextest.toml）で、xtask check が写しの一致と配線を突合する（C10.3）。
+
+[[rule]]
+id = "gate.tmux_test_threads"
+kind = "GateTmuxTestThreads"
+value = 1
+enabled = true
+ruling = "user 2026-09-15T21:09Z"
+ruled_at = "2026-09-15"
+
 # 作業記憶の退避（設計 working-memory.md §5.1・ADR-0018 §2.3）。
 
 [[rule]]

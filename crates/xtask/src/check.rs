@@ -69,6 +69,7 @@ pub fn inspect(root: &Path) -> Report {
     measured.extend(crate::check_facts::measure_lints(&layout));
     measured.push(crate::check_facts::measure_deps_empty(&layout));
     measured.push(crate::check_facts::measure_clippy_thresholds(&layout, &limits));
+    measured.push(crate::check_facts::measure_nextest_tmux_group(&layout, &limits));
     measured.push(crate::check_facts::measure_dep_budget(&limits));
     measured.push(crate::check_facts::measure_toolchain_pin(&layout));
     measured.push(crate::paths_clean::measure(&layout));

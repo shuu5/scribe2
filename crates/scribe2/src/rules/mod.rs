@@ -182,6 +182,10 @@ pub enum RuleKind {
     HostReserveMemoryMb,
     /// 受付で枠が空くのを待つ上限（秒）。超えたら並列度 1 で進む（縮退・止めない）。
     GateSlotWaitS,
+    /// tmux を立てる歯（e2e の isolated seat）の同時本数（本・設計 gate-cost.md §3.1・`s2-07l.360`）。値の写しは
+    /// nextest の test-group `tmux` の `max-threads`（`.config/nextest.toml`）で、`cargo xtask check` が写しの一致と
+    /// 配線を manifest と突合する（clippy.toml ↔ R-C4-4.* と同型）。読み手は xtask 側（core は値を消費しない）。
+    GateTmuxTestThreads,
     /// 便の scope に付ける CPU の重み（席は既定の重み）。
     GateCpuWeight,
     /// 退避物の節 3（命令・制約）に置ける項目行の上限（行）。超えた退避は止まる（黙って切らない）。
@@ -255,6 +259,7 @@ pub const ALL: &[RuleKind] = &[
     RuleKind::GateJobMemoryMb,
     RuleKind::HostReserveMemoryMb,
     RuleKind::GateSlotWaitS,
+    RuleKind::GateTmuxTestThreads,
     RuleKind::GateCpuWeight,
     RuleKind::WmDirectiveCap,
     RuleKind::PipeLandWaitS,
@@ -312,6 +317,7 @@ impl RuleKind {
             Self::GateJobMemoryMb => "GateJobMemoryMb",
             Self::HostReserveMemoryMb => "HostReserveMemoryMb",
             Self::GateSlotWaitS => "GateSlotWaitS",
+            Self::GateTmuxTestThreads => "GateTmuxTestThreads",
             Self::GateCpuWeight => "GateCpuWeight",
             Self::WmDirectiveCap => "WmDirectiveCap",
             Self::PipeLandWaitS => "PipeLandWaitS",
@@ -360,6 +366,7 @@ impl RuleKind {
             | Self::GateJobMemoryMb
             | Self::HostReserveMemoryMb
             | Self::GateSlotWaitS
+            | Self::GateTmuxTestThreads
             | Self::GateCpuWeight
             | Self::WmDirectiveCap
             | Self::PipeLandWaitS

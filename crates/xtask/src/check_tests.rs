@@ -121,6 +121,12 @@ fn write_healthy(dir: &Path) {
     write_at(dir, RULES_REL, &rules_manifest(&[]));
     // clippy の閾値 file も同じ（clippy-thresholds は不在と key 欠落を違反に倒す・`s2-07l.163`）。
     write_at(dir, "clippy.toml", &clippy_toml());
+    // nextest の test-group の写しと e2e の木も同じ（nextest-tmux-group は不在・key 欠落・group の外の歯を違反に
+    // 倒す・`s2-07l.360`）。歯は `seat::seat_x` の 1 本で、filter はそれを固定形で列挙する。
+    write_at(dir, crate::check_facts::NEXTEST_REL, &crate::check_facts::nextest_fixture(real_limits().tmux_test_threads, &["seat::seat_x"]));
+    for (rel, body) in crate::check_facts::e2e_fixture() {
+        write_at(dir, &format!("crates/{FIXTURE_CORE}/{rel}"), body);
+    }
     // claude の構築点も同じ（claude-spawn-points は見失った形を違反に倒す・`s2-07l.101`）。
     write_at(
         dir,
@@ -167,8 +173,8 @@ fn real_limits() -> Limits {
 }
 
 /// fixture の rules manifest。`allow` に与えた path が例外行に載る。役割の行は planner 1 つ（権能 2 つ）。
-/// 閾値の 8 行（R-C4-* / R-C4.line-width / R-C13-1）は現物と同じ値で持つ（`Limits::read` が無い行を拒むので、fixture も
-/// 実 repo が持つものを持つ）。
+/// 閾値の 9 行（R-C4-* / R-C4.line-width / R-C13-1 / gate.tmux_test_threads）は現物と同じ値で持つ（`Limits::read` が
+/// 無い行を拒むので、fixture も実 repo が持つものを持つ）。
 fn rules_manifest(allow: &[&str]) -> String {
     let items = allow
         .iter()
@@ -185,6 +191,7 @@ fn rules_manifest(allow: &[&str]) -> String {
         ("R-C4-4.args", "FnArgs", limits.fn_args),
         ("R-C4.line-width", "LineWidth", limits.line_width),
         ("R-C13-1", "DepBudget", limits.dep_budget),
+        ("gate.tmux_test_threads", "GateTmuxTestThreads", limits.tmux_test_threads),
     ];
     let mut text = String::from("schema = 1\n");
     for (id, kind, value) in rows {
@@ -293,7 +300,8 @@ fn check_passes_on_workspace() {
 /// 判定行の外形の pin（repo root で撃ったときの形）。値は [`shape`] で伏せてある。
 const SUMMARY_PIN: &str = "xtask check: ok core-lines=<v>/<v> file-lines=<v>/<v> \
     test-src-ratio=<v>/<v> name-literal=<v> manifest-name=<v> manifest-version=<v>.<v>.<v> \
-    lints-set=<v> lints-optin=<v>/<v> deps-empty=<v> clippy-thresholds=<v> dep-budget=<v>/<v> \
+    lints-set=<v> lints-optin=<v>/<v> deps-empty=<v> clippy-thresholds=<v> \
+    nextest-tmux-group=<v> tests=<v> files=<v> dep-budget=<v>/<v> \
     toolchain-pin=<v>.<v>.<v> \
     paths-clean=<v> private-clean=<v> non-rust-exec=<v>/<v> allow=<v> ci-shell-lines=<v> \
     claude-md-constitution=<v> claude-md-done=<v> claude-md-prose=<v>/<v> enum-slices=<v> claude-spawn-points=<v> env-reads=<v>/<v> polarity=<v>/<v> \
@@ -620,6 +628,100 @@ fn check_fails_on_floating_toolchain() {
         write_at(dir, "rust-toolchain.toml", &toolchain_file("1.98"));
     });
     assert_single(&violations, "toolchain-pin");
+}
+
+/// tmp の root に e2e の木（`check_facts::e2e_fixture` + `extra`・core crate の dir からの相対）と nextest の設定（`None`
+/// なら置かない）を置いて `nextest-tmux-group` を測る（閾値は現物の manifest・`s2-07l.360`・設計 gate-cost.md §3.1）。
+fn tmux_fixture(config: Option<&str>, extra: &[(&str, &str)]) -> super::Measured {
+    let root = make_tmp_dir();
+    let core = root.join("crates").join(FIXTURE_CORE);
+    for (rel, body) in crate::check_facts::e2e_fixture().into_iter().chain(extra.iter().copied()) {
+        write_at(&core, rel, body);
+    }
+    if let Some(text) = config {
+        write_at(&root, crate::check_facts::NEXTEST_REL, text);
+    }
+    let layout = Layout { root: root.clone(), core_dir: core, member_dirs: Vec::new(), name: FIXTURE_CORE.to_owned() };
+    let got = crate::check_facts::measure_nextest_tmux_group(&layout, &real_limits());
+    let _ = fs::remove_dir_all(&root);
+    got
+}
+
+/// nextest の設定の fixture（`threads` と固定形の filter に載せる名の列）。
+fn nextest_toml(threads: u64, names: &[&str]) -> String {
+    crate::check_facts::nextest_fixture(threads, names)
+}
+
+/// (a) 行あり + 同値の写し + 固定形の filter で fact `nextest-tmux-group=ok`（母集団 = 歯 1 本・file 1 つ）。現物の
+/// workspace も ok（母集団は pin しない・数は notes に写す）。
+#[test]
+fn nextest_tmux_group_passes_when_max_threads_matches_the_manifest() {
+    let limits = real_limits();
+    let same = tmux_fixture(Some(&nextest_toml(limits.tmux_test_threads, &["seat::seat_x"])), &[]);
+    assert_eq!(same.violations, Vec::<String>::new());
+    assert_eq!(same.fact, "nextest-tmux-group=ok tests=1 files=1");
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+    let layout = Layout::discover(&root).unwrap_or_else(|reason| panic!("{reason}"));
+    let real = crate::check_facts::measure_nextest_tmux_group(&layout, &limits);
+    assert_eq!(real.violations, Vec::<String>::new(), "現物の .config/nextest.toml は manifest と e2e の木に一致");
+    assert!(real.fact.starts_with("nextest-tmux-group=ok tests="), "{}", real.fact);
+}
+
+/// (b) 値違い / file 無し / key 無しの 3 fixture が各 1 件の違反を名指す（読めなかったを一致に化けさせない）。
+#[test]
+fn nextest_tmux_group_names_drift_missing_file_and_missing_key() {
+    let want = real_limits().tmux_test_threads;
+    let drift = tmux_fixture(Some(&nextest_toml(want.saturating_add(1), &["seat::seat_x"])), &[]);
+    assert_eq!(drift.violations.len(), 1, "{:?}", drift.violations);
+    let line = drift.violations.first().map(String::as_str).unwrap_or_default();
+    assert!(line.starts_with("nextest-tmux-group: test-groups.tmux.max-threads = "), "{line}");
+    assert!(line.ends_with(&format!(" ≠ gate.tmux_test_threads = {want}")), "manifest の値を名指す: {line}");
+    assert_eq!(drift.fact, "nextest-tmux-group=drift tests=1 files=1");
+    let absent = tmux_fixture(None, &[]);
+    assert_eq!(absent.violations.len(), 1, "{:?}", absent.violations);
+    assert_eq!(absent.fact, "nextest-tmux-group=?", "file の無い周は測れない形");
+    let without = nextest_toml(want, &["seat::seat_x"]).replace("max-threads", "max-thre4ds");
+    let missing = tmux_fixture(Some(&without), &[]);
+    assert_eq!(missing.violations.len(), 1, "{:?}", missing.violations);
+    assert!(missing.violations.first().is_some_and(|line| line.contains("max-threads が無い")), "{:?}", missing.violations);
+}
+
+/// (c) fixture の e2e file（`start_seat(` を名指す `#[test] fn pipe_x()`・helper 越しの `pipe_y()`）で「group の外」を
+/// module 付きの fn 名で名指し、歯に無い名は「幽霊」として名指す（両向き）。種に届かない歯は母集団の外。
+#[test]
+fn nextest_tmux_group_names_a_tmux_test_outside_the_group() {
+    let pipe = "use crate::seat::start_seat;\n\nfn via_helper() {\n    let _guard = start_seat(\"h\");\n}\n\n\
+                #[test]\nfn pipe_x() {\n    let _guard = start_seat(\"x\");\n}\n\n#[test]\nfn pipe_y() {\n    via_helper();\n}\n\n\
+                #[test]\nfn pipe_plain() {\n    assert!(true);\n}\n";
+    let extra = [("tests/e2e/pipe.rs", pipe)];
+    let want = real_limits().tmux_test_threads;
+    let outside = tmux_fixture(Some(&nextest_toml(want, &["seat::seat_x", "seat::ghost"])), &extra);
+    assert_eq!(outside.fact, "nextest-tmux-group=drift tests=3 files=2", "母集団は固定点で決まる歯の本数");
+    let lines: Vec<&str> = outside.violations.iter().map(String::as_str).collect();
+    assert_eq!(lines.len(), 3, "{lines:?}");
+    assert!(lines.iter().any(|line| line.starts_with("nextest-tmux-group: pipe::pipe_x は") && line.contains("group の外")), "{lines:?}");
+    assert!(lines.iter().any(|line| line.starts_with("nextest-tmux-group: pipe::pipe_y は") && line.contains("group の外")), "{lines:?}");
+    assert!(lines.iter().any(|line| line.starts_with("nextest-tmux-group: seat::ghost は") && line.contains("幽霊")), "{lines:?}");
+    assert!(!lines.iter().any(|line| line.contains("pipe_plain")), "種に届かない歯は母集団の外: {lines:?}");
+    let listed = tmux_fixture(Some(&nextest_toml(want, &["seat::seat_x", "pipe::pipe_x", "pipe::pipe_y"])), &extra);
+    assert_eq!(listed.violations, Vec::<String>::new(), "3 本を列挙すれば一致");
+}
+
+/// (d) 固定形でない filter（接頭辞の regex・空の名・override 無し）は typed に断る（0 件の集合に化けない）。
+#[test]
+fn nextest_tmux_group_refuses_a_filter_outside_the_fixed_form() {
+    let want = real_limits().tmux_test_threads;
+    let prefixed = nextest_toml(want, &["seat::seat_x"]).replace("test(/^(seat::seat_x)$/)", "test(/^seat::/)");
+    let refused = tmux_fixture(Some(&prefixed), &[]);
+    assert_eq!(refused.violations.len(), 1, "{:?}", refused.violations);
+    let line = refused.violations.first().map(String::as_str).unwrap_or_default();
+    assert!(line.contains("固定形") && line.contains("test(/^seat::/)"), "形と現物を名指す: {line}");
+    assert!(!line.contains("group の外"), "0 件の列挙には化けない: {line}");
+    let empty_name = tmux_fixture(Some(&nextest_toml(want, &["seat::seat_x", ""])), &[]);
+    assert!(empty_name.violations.iter().any(|line| line.contains("固定形")), "{:?}", empty_name.violations);
+    let no_override = tmux_fixture(Some(&format!("[test-groups.tmux]\nmax-threads = {want}\n")), &[]);
+    assert_eq!(no_override.violations.len(), 1, "{:?}", no_override.violations);
+    assert!(no_override.violations.first().is_some_and(|line| line.contains("[[profile.default.overrides]] が無い")));
 }
 
 /// in-module の `#[cfg(test)]` 以降も test 行として数える（tests/ dir だけを

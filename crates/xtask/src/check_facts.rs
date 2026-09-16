@@ -9,6 +9,7 @@ use crate::check::{failed, json_string_field, read_text, Layout, Measured};
 use crate::genmanifest::MANIFEST_REL;
 use crate::limits::{Limits, ALLOWED_DEPS, REQUIRED_LINTS};
 use crate::toml_lite::{entries_in, key_value, lint_level, quoted, sections};
+use crate::workspace::read_dir_sorted;
 use std::collections::BTreeSet;
 use std::path::Path;
 
@@ -328,6 +329,241 @@ fn clippy_drift(clippy: &str, limits: &Limits) -> Vec<String> {
     violations
 }
 
+/// nextest-tmux-group の tag。
+const TMUX_TAG: &str = "nextest-tmux-group";
+
+/// nextest の設定 file（workspace root からの相対・tmux を立てる歯の test-group の写し・設計 gate-cost.md §3.1）。
+pub(crate) const NEXTEST_REL: &str = ".config/nextest.toml";
+
+/// test-group の名。
+const TMUX_GROUP: &str = "tmux";
+
+/// 正本の行 id（manifest の `gate.tmux_test_threads`・[`Limits::tmux_test_threads`]）。
+const TMUX_ROW: &str = "gate.tmux_test_threads";
+
+/// `[[profile.default.overrides]]` の header を [`sections`] が返す字面（`[` を 1 つだけ剥がす）。
+const OVERRIDE_HEADER: &str = "[profile.default.overrides";
+
+/// tmux を立てる歯の**種**: 本文がこの字面を名指す fn（席の fixture の道具・`tests/e2e/seat.rs`）。
+const TMUX_SEEDS: [&str; 2] = ["start_seat(", "IsolatedSeat"];
+
+/// filter の固定形 `test(/^(名|名|…)$/)` の頭と尾。名は `cargo nextest list` が出す module 付きの形。
+const FILTER_HEAD: &str = "test(/^(";
+const FILTER_TAIL: &str = ")$/)";
+
+/// tmux を立てる歯が nextest の test-group `tmux` に居ること（nextest-tmux-group・clippy-thresholds と同型・C10.3）:
+/// (a) `.config/nextest.toml` の `test-groups.tmux.max-threads` が manifest の `gate.tmux_test_threads` と同値、
+/// (b) group の filter が列挙する名の集合と、e2e の木を**関数名の固定点**で閉じた `#[test]` の集合が両向きに一致する
+/// （filter に無い歯 = group の外・歯に無い名 = 幽霊・固定形でない filter は typed に断る）。
+///
+/// file が無い / key が無い / e2e の木を読めない周は違反（読めなかったを一致に化けさせない）。fact は母集団
+/// （歯の本数と file 数）を出す。
+pub(crate) fn measure_nextest_tmux_group(layout: &Layout, limits: &Limits) -> Measured {
+    let text = match read_text(&layout.root.join(NEXTEST_REL)) {
+        Ok(text) => text,
+        Err(reason) => return failed(TMUX_TAG, &reason),
+    };
+    let e2e = layout.core_dir.join("tests").join("e2e");
+    let files = match e2e_files(&e2e) {
+        Ok(files) => files,
+        Err(reason) => return failed(TMUX_TAG, &reason),
+    };
+    let tests = tmux_tests(&files);
+    let modules: BTreeSet<&str> = tests.iter().map(|name| name.rsplit_once("::").map_or("", |(module, _)| module)).collect();
+    let mut violations = threads_drift(&text, limits.tmux_test_threads);
+    violations.extend(group_drift(&text, &tests));
+    let state = if violations.is_empty() { "ok" } else { "drift" };
+    Measured { fact: format!("{TMUX_TAG}={state} tests={} files={}", tests.len(), modules.len()), violations }
+}
+
+/// `test-groups.tmux.max-threads` と正本の値の差（多くとも 1 件・key が無い / 整数でない周も 1 件）。
+fn threads_drift(config: &str, want: u64) -> Vec<String> {
+    let found = entries_in(config, &format!("test-groups.{TMUX_GROUP}"))
+        .into_iter()
+        .find(|(key, _)| *key == "max-threads")
+        .map(|(_, value)| value);
+    match found.map(|value| (value, value.trim().parse::<u64>())) {
+        Some((_, Ok(actual))) if actual == want => Vec::new(),
+        Some((raw, _)) => vec![format!("{TMUX_TAG}: test-groups.{TMUX_GROUP}.max-threads = {raw} ≠ {TMUX_ROW} = {want}")],
+        None => vec![format!(
+            "{TMUX_TAG}: {NEXTEST_REL} に test-groups.{TMUX_GROUP}.max-threads が無い（{TMUX_ROW} = {want} の実効値を持たない）"
+        )],
+    }
+}
+
+/// filter の列挙と歯の集合の**両向き**の差（group の外の歯・幽霊の名を 1 件 1 行）。固定形でない filter はその 1 件。
+fn group_drift(config: &str, tests: &BTreeSet<String>) -> Vec<String> {
+    let listed = match filter_names(config) {
+        Ok(names) => names,
+        Err(reason) => return vec![format!("{TMUX_TAG}: {reason}")],
+    };
+    let mut violations: Vec<String> = tests
+        .difference(&listed)
+        .map(|name| format!("{TMUX_TAG}: {name} は tmux を立てる歯だが group の外（{NEXTEST_REL} の filter に無い）"))
+        .collect();
+    violations.extend(
+        listed.difference(tests).map(|name| format!("{TMUX_TAG}: {name} は filter に在るが tmux を立てる歯に無い（幽霊）")),
+    );
+    violations
+}
+
+/// `test-group = "tmux"` の `[[profile.default.overrides]]` の `filter` を固定形として読む（名の集合）。
+///
+/// override が無い / `filter` が無い / 固定形でない（頭尾が違う・名が空・名に識別子と `::` 以外の字が在る）は `Err`
+/// で、0 件の集合には化けない。
+fn filter_names(config: &str) -> Result<BTreeSet<String>, String> {
+    let pairs = sections(config)
+        .into_iter()
+        .filter(|(header, _)| *header == OVERRIDE_HEADER)
+        .map(|(_, pairs)| pairs)
+        .find(|pairs| pairs.iter().any(|(key, value)| *key == "test-group" && unquote(value) == Some(TMUX_GROUP)))
+        .ok_or_else(|| format!("{NEXTEST_REL} に test-group = \"{TMUX_GROUP}\" の [[profile.default.overrides]] が無い"))?;
+    let raw = pairs
+        .iter()
+        .find(|(key, _)| *key == "filter")
+        .map(|(_, value)| *value)
+        .ok_or_else(|| format!("{NEXTEST_REL} の {TMUX_GROUP} の override に filter が無い"))?;
+    let refused = || format!("{NEXTEST_REL} の filter が固定形 {FILTER_HEAD}名|名|…{FILTER_TAIL} でない: {raw}");
+    let inner = unquote(raw)
+        .and_then(|text| text.strip_prefix(FILTER_HEAD))
+        .and_then(|text| text.strip_suffix(FILTER_TAIL))
+        .ok_or_else(refused)?;
+    let names: BTreeSet<String> = inner.split('|').map(str::to_owned).collect();
+    let well_formed = |name: &String| !name.is_empty() && name.chars().all(|ch| is_ident(ch) || ch == ':');
+    if names.iter().all(well_formed) {
+        Ok(names)
+    } else {
+        Err(refused())
+    }
+}
+
+/// `'…'` / `"…"` の中身（TOML の literal / basic string の 1 行形）。
+fn unquote(value: &str) -> Option<&str> {
+    let text = value.trim();
+    ['\'', '"']
+        .into_iter()
+        .find_map(|quote| text.strip_prefix(quote).and_then(|rest| rest.strip_suffix(quote)))
+}
+
+/// Rust の識別子を成す文字。
+fn is_ident(ch: char) -> bool {
+    ch.is_alphanumeric() || ch == '_'
+}
+
+/// `crates/<core>/tests/e2e/` 配下の `.rs`（`(module の接頭辞, 本文)`・path 順）。接頭辞は path から `e2e/` と `.rs` を
+/// 落とし `::` で繋いだ形（`seat/cycle.rs` → `seat::cycle`・`main.rs` → 空・`main.rs` の宣言順は使わない）。
+fn e2e_files(root: &Path) -> Result<Vec<(String, String)>, String> {
+    let mut out = Vec::new();
+    for entry in read_dir_sorted(root)? {
+        if entry.is_dir() {
+            let dir = entry.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+            for (module, text) in e2e_files(&entry)? {
+                out.push((if module.is_empty() { dir.clone() } else { format!("{dir}::{module}") }, text));
+            }
+        } else if entry.extension().is_some_and(|ext| ext == "rs") {
+            let stem = entry.file_stem().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+            out.push((if stem == "main" { String::new() } else { stem }, read_text(&entry)?));
+        }
+    }
+    Ok(out)
+}
+
+/// e2e の木の fn 1 本（名・module の接頭辞・`#[test]` か・本文が種を名指すか・本文が `(` を直後に持つ識別子の集合）。
+struct Item {
+    name: String,
+    module: String,
+    is_test: bool,
+    seed: bool,
+    calls: BTreeSet<String>,
+}
+
+/// tmux を立てる `#[test]` を**関数名の固定点**で閉じ、module 付きの名（`seat::cycle::<fn>`）で返す。
+///
+/// 種 = 本文が [`TMUX_SEEDS`] を名指す fn。集合の fn 名を本文で呼ぶ fn を、増えなくなるまで足す（helper 越しの歯を
+/// 接頭辞や直接名指しでは拾えない・`.360` run 2 の実測）。
+fn tmux_tests(files: &[(String, String)]) -> BTreeSet<String> {
+    let items: Vec<Item> = files.iter().flat_map(|(module, text)| items_of(module, text)).collect();
+    let mut names: BTreeSet<String> = items.iter().filter(|item| item.seed).map(|item| item.name.clone()).collect();
+    loop {
+        let grown: Vec<String> = items
+            .iter()
+            .filter(|item| !names.contains(&item.name) && !item.calls.is_disjoint(&names))
+            .map(|item| item.name.clone())
+            .collect();
+        if grown.is_empty() {
+            break;
+        }
+        names.extend(grown);
+    }
+    items
+        .iter()
+        .filter(|item| item.is_test && names.contains(&item.name))
+        .map(|item| if item.module.is_empty() { item.name.clone() } else { format!("{}::{}", item.module, item.name) })
+        .collect()
+}
+
+/// file の fn を rustfmt の形で切る: `fn <名>` の行から同じ字下げの `}` だけの行まで（1 行の fn はその行）。
+/// 行頭コメント行は本文から除く（doc の字面を種に数えない）。直前の `#[test]` がその fn の印。
+fn items_of(module: &str, text: &str) -> Vec<Item> {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut out = Vec::new();
+    let mut is_test = false;
+    let mut at = 0_usize;
+    while let Some(line) = lines.get(at) {
+        let trimmed = line.trim_start();
+        if trimmed == "#[test]" {
+            is_test = true;
+        } else if let Some(name) = fn_name(trimmed) {
+            let close = format!("{}}}", " ".repeat(line.len().saturating_sub(trimmed.len())));
+            let end = if trimmed.ends_with('}') || trimmed.ends_with(';') {
+                at
+            } else {
+                let mut after = lines.iter().enumerate().skip(at.saturating_add(1));
+                after.find(|(_, rest)| **rest == close.as_str()).map_or(lines.len(), |(end, _)| end)
+            };
+            let span = lines.iter().skip(at).take(end.saturating_sub(at).saturating_add(1));
+            let body = span.filter(|rest| !rest.trim_start().starts_with("//")).copied().collect::<Vec<&str>>().join("\n");
+            let seed = TMUX_SEEDS.iter().any(|needle| body.contains(needle));
+            out.push(Item { name, module: module.to_owned(), is_test, seed, calls: called_names(&body) });
+            is_test = false;
+            at = end;
+        }
+        at = at.saturating_add(1);
+    }
+    out
+}
+
+/// 行が fn の宣言ならその名（`pub` / `pub(crate)` / `async` / `const` / `unsafe` の前置きは任意・コメント行は見ない）。
+fn fn_name(trimmed: &str) -> Option<String> {
+    if trimmed.starts_with("//") {
+        return None;
+    }
+    let (head, rest) = trimmed.split_once("fn ")?;
+    if !head.split_whitespace().all(|word| matches!(word, "pub" | "async" | "const" | "unsafe") || word.starts_with("pub(")) {
+        return None;
+    }
+    let name: String = rest.chars().take_while(|ch| is_ident(*ch)).collect();
+    let follows = rest.get(name.len()..).is_some_and(|tail| tail.starts_with('(') || tail.starts_with('<'));
+    (!name.is_empty() && follows).then_some(name)
+}
+
+/// 本文で `(` を直後に持つ識別子の集合（呼ぶ関数の名の候補・`.name(` の method 呼びも含む）。
+fn called_names(body: &str) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    let mut ident = String::new();
+    for ch in body.chars() {
+        if is_ident(ch) {
+            ident.push(ch);
+            continue;
+        }
+        if ch == '(' && !ident.is_empty() {
+            out.insert(ident.clone());
+        }
+        ident.clear();
+    }
+    out
+}
+
 /// dep-budget の tag。
 const DEP_BUDGET_TAG: &str = "dep-budget";
 
@@ -510,6 +746,28 @@ pub(crate) fn contracts_fixture(core: &str) -> Vec<(String, String)> {
     let table = "pub struct Field;\n\npub const FIELDS: &[Field] = &[\n    Field { name: \"id\", need: Need::Required, shape: Shape::Text },\n];\n";
     let schema = "schema = 1\n\n[[field]]\nname = \"id\"\nneed = \"required\"\nshape = \"text\"\n";
     vec![(SCHEMA_REL.to_owned(), schema.to_owned()), (format!("crates/{core}/{TABLE_SRC}"), table.to_owned())]
+}
+
+/// nextest の設定の fixture（`threads` と固定形の filter に載せる名の列）。
+#[cfg(test)]
+pub(crate) fn nextest_fixture(threads: u64, names: &[&str]) -> String {
+    format!(
+        "[test-groups.{TMUX_GROUP}]\nmax-threads = {threads}\n\n[[profile.default.overrides]]\nfilter = '{FILTER_HEAD}{}{FILTER_TAIL}'\ntest-group = '{TMUX_GROUP}'\n",
+        names.join("|")
+    )
+}
+
+/// 健全な擬似 workspace の e2e の木（`(core crate の dir からの相対 path, 本文)`）: 種を持つ helper と、それを呼ぶ歯 1 本
+/// （`seat::seat_x`・[`nextest_fixture`] の名と対）。
+#[cfg(test)]
+pub(crate) fn e2e_fixture() -> Vec<(&'static str, &'static str)> {
+    vec![
+        ("tests/e2e/main.rs", "mod seat;\n\n#[test]\nfn plain_x() {\n    assert!(true);\n}\n"),
+        (
+            "tests/e2e/seat.rs",
+            "struct IsolatedSeat;\n\nfn start_seat(name: &str) -> IsolatedSeat {\n    let _ = name;\n    IsolatedSeat\n}\n\n#[test]\nfn seat_x() {\n    let _guard = start_seat(\"x\");\n}\n",
+        ),
+    ]
 }
 
 #[cfg(test)]
