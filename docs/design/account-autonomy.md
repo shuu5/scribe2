@@ -121,9 +121,9 @@ C1 / C5（R-C9-1 は行・裁定 id）・C2（`Purpose` / `Selection` / `Stage` 
 ## 15. lens の口座も器が選ぶ — gate の lens 起動に便用の選定を通し記帳する（契約表の行 l・`s2-07l.412`）
 
 - 何が起きているか（admin の実測 2026-09-16 11:5xZ・verified）: gate の lens 起動（`pipe/gate.rs` → `gate/lens.rs` の `ask_lens`）には `pipe/spawn.rs` の `with_account` が無く、器は lens の口座を選ばず記帳もしない。操作役の launcher（器の外）が前置きの select の口座を lens の起動行に書いて補っている（N2 の散文運用・§3「器の外の起動手順が除外を足すのは散文規則」と同型）。lens は runner と同じ `runner.model` の窓を消費する（[pipeline.md](./pipeline.md) §6）ので、選定なしでは席の口座や当たった口座で走りうる。
-- 形: (1) `pipe gate` は lens を起こす直前に §3 の便用の規則で口座を選ぶ（計測 → `select_for_run`〔便の repo・§14〕）。入力は `Pool::declared`（`--rules` / `--curl` は gate の引数から・`pipe/ratelimit.rs` の既存の口）。宣言 0 の周は従来どおり親の環境を継承する。(2) 起動行の末尾に `--account-dir <state_dir>/accounts/<label>` を足す口は `with_account` の **1 関数**を共有する（gate から呼べる可視性に変えるだけ・中身は不変）。(3) 記帳: `RunStage stage=Gated detail=verdict:<V>` の detail に `account:<label>` を足す（`Spawned` の detail と同じ語彙・人由来の event は 0）。(4) 候補なしの周は lens を起こさず INCONCLUSIVE（理由 `account:none=<reason>`）＝gate は待ちの口を持たない（`resume` が撃ち直す・`AccountFree` の待ちは §4 の runner 側だけ）。
+- 形: (1) `pipe gate` は lens を起こす直前に §3 の便用の規則で口座を選ぶ（計測 → `select_for_run`〔便の repo・§14〕）。入力は `Pool::declared`（`--rules` / `--curl` は gate の引数から・`pipe/ratelimit.rs` の既存の口）。`Gate` の構築点は 2 つ（`pipe/cli/step.rs` の `gate_run`＝`args` を持つので `Pool::declared` を解いて渡す・`pipe/land.rs` の `follow_main`＝追随の再 gate・`Land` の `runner` が持つ `Pool` を借りて渡す）で、`Gate` に選定の材料（`Pool` の参照・無ければ継承）を 1 欄足す。宣言 0 の周は従来どおり親の環境を継承する。(2) 起動行の末尾に `--account-dir <state_dir>/accounts/<label>` を足す口は `with_account`（`pipe/spawn.rs`）の **1 関数**を共有する＝引数を `Launch` 全体から「label と state_dir」に絞って gate から呼べる可視性にし、runner 側の唯一の呼び手（`launch_runner`・同 file）は絞った形で同じ結果を得る（足す字面は不変）。(3) 記帳: `RunStage stage=Gated detail=verdict:<V>` の detail に `account:<label>` を足す（`Spawned` の detail と同じ語彙・人由来の event は 0）。(4) 候補なしの周は lens を起こさず INCONCLUSIVE（理由 `account:none=<reason>`）＝gate は待ちの口を持たない（`resume` が撃ち直す・`AccountFree` の待ちは §4 の runner 側だけ）。
 - 触らない: 純関数 `select` / `Pool` の形・runner の起動行と選定（§4）・lens の prompt と cap・launcher。
-- 歯（`pipe_gate_lens_account_` 接頭辞・`tests/e2e/pipe/gate.rs`）: 宣言口座 + 当たっていない実測を置いた置き場で、偽 lens が argv を写し、起動行の末尾に選んだ口座の `--account-dir` が在り `Gated` の detail に `account:<label>` が在る／宣言 0 の周は従来どおり `--account-dir` 無し／全口座が当たっている周は lens を呼ばず INCONCLUSIVE に `account:none` の理由。
+- 歯（`pipe_gate_lens_account_` 接頭辞・`tests/e2e/pipe/gate.rs`）: 口座の当たり / 空きは置き場へ実測行を直接置くのでなく、既存の `fake_usage_curl`（`tests/e2e/pipe/ratelimit.rs`・token ごとの応答本文）で作る（`choose_account` は毎回計測し直し、最新の 1 行が置き場の行を無条件に置き換えるので、直接置いた行は計測で上書きされ歯が空虚になる）。宣言口座 + 当たっていない応答を置いた置き場で、偽 lens が argv を写し、起動行の末尾に選んだ口座の `--account-dir` が在り `Gated` の detail に `account:<label>` が在る／宣言 0 の周は従来どおり `--account-dir` 無し／全口座が当たっている周は lens を呼ばず INCONCLUSIVE に `account:none` の理由。
 - 却下: launcher が lens の起動行に口座を書く（N2・記帳と実体が食い違う）／lens を runner と同じ口座に固定する（runner の口座が当たった直後の lens が同じ窓で落ちる）／gate で `AccountFree` を待つ（gate は段の判定で待ちを持たない・resume の撃ち直しで足りる）。
 
 ## 16. 同じ flag の二重を断る — `--account-dir` が 2 つ在る起動行で器の選定が黙って無効になる穴（契約表の行 m・`s2-07l.411`）
@@ -192,7 +192,7 @@ id = "l"
 title = "lens の口座も器が選ぶ — pipe gate が lens を起こす直前に便用の選定を通し、with_account の 1 関数で起動行に足し、Gated の detail に account:<label> を記帳する（候補なしは INCONCLUSIVE）"
 req = ["FR36", "FR33"]
 section = "15"
-write-set = ["crates/scribe2/src/pipe/gate.rs", "crates/scribe2/src/pipe/gate/lens.rs", "crates/scribe2/src/pipe/spawn.rs", "crates/scribe2/src/pipe/ratelimit.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/tests/e2e/pipe/gate.rs"]
+write-set = ["crates/scribe2/src/pipe/gate.rs", "crates/scribe2/src/pipe/gate/lens.rs", "crates/scribe2/src/pipe/spawn.rs", "crates/scribe2/src/pipe/ratelimit.rs", "crates/scribe2/src/pipe/cli/step.rs", "crates/scribe2/src/pipe/land.rs", "crates/scribe2/tests/e2e/pipe/gate.rs"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_gate_lens_account_"]
 size = "S"
 done = "宣言口座のある置き場で gate の lens 起動行の末尾に選んだ口座の --account-dir が在り Gated の detail に account:<label> が出て、宣言 0 は従来どおり、候補なしは lens を呼ばず INCONCLUSIVE"
