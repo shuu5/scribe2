@@ -573,7 +573,7 @@ title = "pipe retire が受ける終端の段を Stage の終端全部（Failed 
 req = ["FR34"]
 section = "24"
 write-set = ["crates/scribe2/src/pipe/cli/state.rs", "crates/scribe2/tests/e2e/pipe/land.rs"]
-verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_retire_"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_retire_", "cargo nextest run -p scribe2 --no-tests=fail pipe_follow_retire_"]
 size = "S"
 done = "Failed の detail を問わず終端の便の worktree を器の口で可逆に畳め、非終端と Gated(PASS) は断られ、既存の pipe_retire_ の歯は反転した 1 本を除き不変"
 
