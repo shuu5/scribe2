@@ -156,6 +156,13 @@ scribe2 を載せる consumer が pipe を通すのに要る面は 3 つで、�
 - 却下案: `matches_arm` を「`<Type>::` の出現全部」に広げる（`use` 文や doc コメントの `[`ClosureError::Unreadable`]` まで拾い上界に化ける）／`also` に `.rs` を許す（`AlsoNamesRust`・Declared の再来）／行 r を恒久に Declared にする（手書きの write-set は数え落とす＝.303 の型）。
 - 着地後: 行 r（§18）の暫定 Declared を `touches` / `tests` の Derived に戻す（docs PR・planner）。
 
+## 20. Declared 行にも歯の置き場の門（verify の歯の file ⊆ write-set）を撃つ（契約表の行 t・`s2-07l.391`）
+
+- 何が起きているか: admin の実測 2026-09-16 04:4xZ（本日の審査の終端 19/42 便・45%・母集団 = 本日の便）で、型 (a)「検証行の歯が write-set の閉包の外の file を要る」が `.358` run 3 / `.383` run 1 / `.164` ほかを審査 FAIL に倒した。Derived 行は §3 (ii)（`closure/derive.rs` の `teeth_places`）が `verify` の filter 語から base の歯の file を解いて導出値に入れるが、Declared 行（`creates` / `tests` / `also` を持たず `write-set` を持つ行・`cli/intake.rs` の `settle_write_set`）は「導出も drift も撃たない」だけで、planner が手で数えた `write-set` に歯の file が無くても受付を通り、審査（`Stage::Reviewed`）で 1 周（数十分）払う。
+- 形: `settle_write_set` の Declared 分岐で、導出と drift は撃たないまま **歯の置き場の門**を 1 つ撃つ。読み手は §3 (ii) と同じ 1 関数（`teeth_places`・`pub(crate)` 化・`tests` 欄は空のまま渡す＝2 本目の読み手を作らない・C2）で、`verify` の nextest 行ごとに base の歯の file を解き、解けた file のうち行の `write-set`（`check_drift` と同じ正規化・dir 項目はその配下）に無いものを**全部**名指して断る: 新 variant `ClosureError::TeethOutsideWriteSet { files }`（辞書順）→ `Refuse::TeethOutsideWriteSet { files }`（名 `teeth-outside-write-set`・rc 1・理由の字面は導出の側と同じ 1 本・`refuse_of` に 1 行・`Refuse` の宣言順の末尾）。base で 0 本の filter 語（新しい歯の接頭辞）は、Declared 行に `tests` 欄が無いので、行の `write-set` に歯の file（`teeth_file` と同じ弁別 = `test_region` が空でない file）が 1 つも無ければ従来の `TeethPlaceUnresolved`（字面不変）で断り、1 つでも在ればそれを置き場と読んで通す。判定行の token（`write-set=declared` / `files=<行の項目数>`）と写しの契約 file（write-set は行のまま）は不変。nextest 形でない `verify` 行（例: `git status`）は (ii) と同じく読み飛ばす＝門は撃たない。
+- 触らない: Derived の経路（導出・drift・`TeethPlaceUnresolved` の条件）・Declared の弁別（3 欄の不在 ∧ `write-set` の存在）・契約表の schema・`nextest_filter` / `test_fns` の判定・歯が読む読み手の module（例: `claude_md.rs`）まで追うこと（型の閉包の領分＝審査に残す）。
+- 却下案: 審査に任せる（1 周 = 数十分の損失が続く・本日 3 例）／Declared を廃止して全部 Derived にする（§17〜§19 の未 Landed の形が残るうちは Declared が要る・行 r の型）／新しい filter 語の周も断る（新設の歯の置き場は planner が write-set に書く以外に無い・歯の file が 1 つ在れば通す）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -362,4 +369,14 @@ write-set = ["crates/scribe2/src/pipe/closure.rs"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail closure_variant_construction_"]
 size = "S"
 done = "variant 構築だけを持つ file が導出値に入り、=> の左のパターンだけの file・Self:: の構築・doc コメントの名指しは数えず、既存 4 形の導出値は不変"
+
+[[contract]]
+id = "t"
+title = "Declared 行にも歯の置き場の門を撃つ — verify の filter 語が base で解く歯の file が write-set に無ければ file を名指して断る"
+req = ["FR48"]
+section = "20"
+write-set = ["crates/scribe2/src/pipe/closure.rs", "crates/scribe2/src/pipe/closure/derive.rs", "crates/scribe2/src/pipe/refuse.rs", "crates/scribe2/src/pipe/cli/intake.rs", "crates/scribe2/tests/e2e/pipe/intake.rs"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail contract_declared_teeth_"]
+size = "S"
+done = "Declared 行の verify の歯の file が write-set の外に在る契約を受付が file を全部名指して断り、中に在る契約と nextest 形でない verify の契約は従来どおり通る"
 <!-- contracts:end -->
