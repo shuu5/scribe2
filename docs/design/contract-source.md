@@ -143,6 +143,7 @@ scribe2 を載せる consumer が pipe を通すのに要る面は 3 つで、�
 
 - 何が起きているか: planner の `.323` の契約化（2026-09-15 16:5xZ・実測）で、Derived 形の write-set が subcommand の入口 file（`pipe/cli.rs` の `resume` の match・`ratelimit.rs` の段の分岐）に届かない。導出（`pipe/closure.rs` の `closure`）は `touches` を型の path（`crate::module::Type`・末尾が大文字始まり・`touched`）としか読まず、分岐を 1 本足す契約が触る入口の file を型で表せない（届く型は `Stage` / `Outcome` / `Verdict` で全木に広がる）＝Declared に戻るか全木へ広がるかの二択。現物（verified・main 797389f）: 名指しの検査（`unresolved_names`）は fn 形（`Form::Fn`・`declares_fn`）を既に読むが、導出の `touched` は大文字始まりの名だけを受け、fn 形は `ClosureError::TypeForm` で断る。§17（行 q）の (vi)(vii) は creates の親 mod と subcommand の閉じた enum を足す形で、fn の名指しは持たない。
 - 形: 導出の第 8 項として **fn 形の touches**（`crate::<module>::<snake_case の識別子>`・末尾が小文字始まり）を足す。閉包 = その module の段（`scopes` / `in_module`・型形と同じ 1 関数を通す）で `fn <識別子>(` を宣言する file（`declares_fn`・下界のまま・呼び手は数えない）。宣言する file が 0 の周は typed に断る（`ClosureError` の variant 1 つ・空集合に潰さない・C10）。型形の 4 形・§16 の第 5 形・§17 の (vi)(vii) は不変。
+- 閉包の置き場（run 1 = 審査 INCONCLUSIVE 2026-09-16「touches は `Touched` だけを名指すが §18 は `ClosureError` の variant 追加も要求する」の解）: 行 r の `touches` は `Touched` と **`ClosureError`** の 2 つ。`ClosureError` は `pipe/closure.rs` の外で `pipe/refuse.rs`（`Refuse` → `ClosureError` の写し・4 理由の字面）と `pipe/table.rs`（`SurfaceUnknown` / `Unreadable` の match）が名指す（verified・main 07310fe）ので、導出値はその 2 file を含む＝variant を足す周に網羅 match と字面の写しが同じ PR で閉じる。新 variant を受付の断り（`Refuse`）へ写すかは実装役の判断で、写すなら `refuse.rs` は既に閉包の中。歯の toy repo は `tests/e2e/pipe/intake.rs` の既存の `contract_derive_` の歯と同じく **test の中で組む**（on-disk の fixture は置かない・`src/pipe/cli.rs` に `fn resume(` を書いた 1 file）。
 - 触らない: `unresolved_names` の fn 形（名指しの検査は別の面）・`Form` / `Touched` の型名・契約表の schema（`touches` の値の形が 1 つ増えるだけで field は増えない）。
 - 却下案: 入口の match を dispatch の閉じた enum に寄せる（§17 の (vii) が同じ向きで担う・分岐の追加が variant の追加になる大きい形）／`also` に `.rs` を許す（Rust の面を手書きに戻す＝Declared の再来）／呼び手まで閉包に入れる（上界に化ける・`Stage::` と同じ全木の広がり）。
 
@@ -338,7 +339,7 @@ id = "r"
 title = "write-set の導出に fn 形の touches（crate::module::snake_ident）を足し、その fn を宣言する file を閉包に入れる"
 req = ["FR48"]
 section = "18"
-touches = ["crate::pipe::closure::Touched"]
+touches = ["crate::pipe::closure::Touched", "crate::pipe::closure::ClosureError"]
 tests = ["crates/scribe2/tests/e2e/pipe/intake.rs"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail contract_derive_fn_"]
 size = "S"

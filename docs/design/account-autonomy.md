@@ -93,6 +93,15 @@ C1 / C5（R-C9-1 は行・裁定 id）・C2（`Purpose` / `Selection` / `Stage` 
 
 席の起動と初回の口座選択（s2-07l.38 → [account-lifecycle.md](./account-lifecycle.md) §4・ADR-0026）・token の refresh（[fleet-usage.md](./fleet-usage.md) §3・s2-07l.229）・再 login（墓標・user の手番）・crash の起こし直し（§5 の入口 (1) が無い停止）・上限停止の便の一覧画面（v3）・モデル別窓の display name の一致の細部（ADR-0017 §2.5）・SQLite 化（v3・A3）。
 
+## 12. usage refresh の歯の起動待ち（壁時計 5 秒）を負荷下でも足りる値へ（契約表の行 i・`s2-07l.385`）
+
+- 何が起きているか: admin の実測 2026-09-16 01:5x〜02:05Z（母集団 = 本日 gate に到達して verify.stderr.log を持つ便 5・うち 3 = `.354` run 2 / `.247` run 1 / `.360` run 4）。歯 `fleet_usage_refresh_timeout_stops_the_child_and_its_grandchild`（`crates/scribe2/tests/e2e/fleet.rs`）が、7〜8 便が同時に gate / build を回す負荷の下で「child: 子が起動に達しない（pid file が 5s で書かれない・停止経路の失敗ではない）」で落ち、gate の n=3（workspace の歯）と n=7（検出線の baseline）の両方で便を Gated INCONCLUSIVE に倒す。anchor で単体なら 8.4 秒で PASS。
+- 現物（verified・main 07310fe）: `const PID_FILE_WAIT: Duration = Duration::from_secs(5)`（fleet.rs:2765）を偽 claude の pid file 待ちと `spy_line` の poll 上限が共有する。歯は「起動に達しない」と「停止経路の失敗」を字面で弁別しており、落ちているのは fixture の起動待ちで器の停止経路ではない。
+- 形: `PID_FILE_WAIT` を 60 秒にする。緑の周は pid file が書かれた時点で抜けるので費用は変わらず、赤の周だけ待ちが延びる。待ちの意味・panic の字面・停止経路の期待値（`REFRESH_TIMEOUT_S` / `STOP_MARGIN_S` / grace の算術）は不変。本体不変の歯だけの便＝base で RED を作れないので `// flip-check: retroactive` の札で通す（pipeline.md §5.3）。
+- 触らない: 器の src・他の歯・並列度（並列の上限は write-set の重複と直列依存だけ・user 直命 2026-09-16）。
+- 却下案: 並列度を下げる（user の許しが要る側・歯を直せば要らない）／歯を `#[ignore]` にする（停止経路の pin を失う）／CPU 負荷を測って待ちを伸縮する（fixture に測定を持ち込む・値の線が増える）。
+- 同日の他の赤 2 本は本 § の対象外: `seat_tick_signal_backoff_does_not_brake_without_a_record` の赤は flip-check の base 段の「binary を起動できる: NotFound」（歯の壁時計ではなく base copy の binary 不在＝infra の側・`.380` の弁別子の対象）、`pipe_gate_move_proof_zero_moved_items_sends_diff` は verify.stderr.log に panic の字面が無く未分類。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -115,4 +124,14 @@ write-set = ["crates/scribe2/src/pipe/cli/run.rs", "crates/scribe2/src/pipe/rate
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_spawn_account_"]
 size = "M"
 done = "初回の起動が器の選んだ口座の credential dir で起き Spawned の detail に label が載り、口座の宣言が無い toy だけが親の環境を継承する"
+
+[[contract]]
+id = "i"
+title = "e2e/fleet.rs の PID_FILE_WAIT を 5 s → 60 s（負荷下で usage refresh の歯が「子が起動に達しない」で gate を落とす・歯だけの便・retroactive）"
+req = ["FR36"]
+section = "12"
+write-set = ["crates/scribe2/tests/e2e/fleet.rs"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail fleet_usage_refresh_timeout_stops_the_child_and_its_grandchild"]
+size = "S"
+done = "PID_FILE_WAIT が 60 秒で、歯の名・panic の字面・停止経路の期待値が不変"
 <!-- contracts:end -->
