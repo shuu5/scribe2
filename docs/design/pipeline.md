@@ -368,6 +368,14 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
 - 触らない: 追随の要否判定（`old != base` なら rebase）・rebase と衝突の経路・共通 verify と契約 verify の行・検出線の行の中身と `{jobs}` の受付・verdict の 3 値と rc・`DETECTION_SCOPE` の外の変更（docs / design-intent / README / .github）が共通 verify で赤になる経路（従来どおり赤）。
 - 却下案: docs だけの周は再 gate ごと飛ばす（xtask check の prose gate と契約表の歯 `contract_closure_ext_real_table_has_zero_findings` が docs を読む＝偽 PASS の経路・#249 の型）／`DETECTION_SCOPE` を rules 行にする（値でなく閉じた path の集合・variant の領分）／docs merge を止める（新契約の投入が遅れる・運用は Landed 直後に束ねる形〔planner 裁定 06:2xZ〕で別に手当て）／変異検査を着地の直前 1 回だけにする（gate の検出線を捨てる設計変更＝ADR-0021 §2.4 の改訂・本便の後に残る重さで判定）。
 
+## 31. flip-check の module 宣言の残し方に `<stem>/<name>.rs` の子を足す — 宣言 file の子 dir に置いた新規 module が落ちない（契約表の行 y・`s2-07l.410`）
+
+- 何が起きているか: `.320` run 110459Z の QUESTION（2026-09-16 11:37Z・admin 実測 verified）。flip-check の base 段は、歯の diff だけを base に当てるとき宣言 file の `mod <name>;` のうち **base に本体が無い行を落とす**（§5.3・新 module の本体は head にしか無いので base では宣言だけが残り compile error になる型の回避）。その判定 `present_mods_only`（`crates/xtask/src/flipcheck.rs`）は宣言 file と同じ dir の `<name>.rs` と `<name>/mod.rs` しか探さない。Rust の規則では `tests/e2e/seat.rs` の子は `tests/e2e/seat/<name>.rs`（`<stem>/<name>.rs`）で、既存の `mod account;` 等は base に在るので carried で通るが、**新しい `mod statusline;` は本体が head の overlay に在っても落とされ**、その module の歯が base 段で走らず green-on-base で FAIL する＝`tests/e2e/<x>.rs` の子に新 module を置く便の全部に効く器の穴。
+- 形: `present_mods_only` の探索に **`<宣言 file の stem>/<name>.rs`** を 3 つ目の形として足す（`dir/<stem>/<name>.rs`・stem = 宣言 file の拡張子を除いた名）。判定は「base に在る」でなく「overlay 先（`dest`）に本体が在る」の従来の意味のまま（3 形を or で見る）。`#[path]` 付きの module は従来どおり救済しない（§5.3 の M4 の記録のまま）。
+- 触らない: flip の 3 段の順序・`carried` の読み（base の宣言）・`judge_each` の集合・`retroactive` の札・head 段。
+- 歯（`flipcheck_declaration_nested_` 接頭辞・`crates/xtask/src/flipcheck_declaration_tests.rs`・既存の fixture〔`base_commit_with_e2e` / `red_body` / `green_body`〕の型）: 宣言 file `tests/e2e/seat.rs` の子（seat/ 配下の probe の module・新規）を足す diff で flip が RED-on-base ok を出す（base は宣言が落ちて歯が走らず green-on-base FAIL → RED）／同じ dir の `<name>.rs` と `<name>/mod.rs` の既存の 2 形は不変（既存の歯が緑のまま）／`#[path]` 付きは従来どおり測れない（既存の期待を変えない）。
+- 却下: `.320` の新歯を `tests/e2e/seat.rs` の test 区間に置く（seat.rs の余地を食い、子 module の置き場を禁じる運用が散文に生まれる・N2）／`.320` の write-set に xtask を足す（seat と xtask を 1 便に混ぜる）／parser を足して `#[path]` も追う（A3 の依存・§5.3 で却下済み）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -613,4 +621,14 @@ write-set = ["crates/scribe2/src/pipe/land.rs", "crates/scribe2/src/pipe/gate.rs
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_detection_scope_"]
 size = "M"
 done = "docs だけで main が動いた便の追随の再 gate と主実測が検出線を撃たず reason=outside-scope の record を残し、crates が動いた周と読めない周は従来どおり撃つ"
+
+[[contract]]
+id = "y"
+title = "flip-check の present_mods_only に <stem>/<name>.rs の子 module の探索を足す — tests/e2e/<x>.rs の子に置いた新規 module の宣言が base 段で落ちない"
+req = ["FR7"]
+section = "31"
+write-set = ["crates/xtask/src/flipcheck.rs", "crates/xtask/src/flipcheck_declaration_tests.rs"]
+verify = ["cargo nextest run -p xtask --no-tests=fail flipcheck_declaration_nested_"]
+size = "S"
+done = "宣言 file の子 dir に新規 module を足す diff で flip が RED-on-base ok を出し、同じ dir の 2 形と #[path] の扱いは不変"
 <!-- contracts:end -->
