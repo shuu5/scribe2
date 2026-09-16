@@ -220,6 +220,28 @@ mod tests {
         assert_eq!(measured(MANIFEST, &across).fact, "rules-wired=2/3 ids=probe.beta,probe.gamma");
     }
 
+    /// 字下げした `#[cfg(test)]`（行頭でない・fn の中の属性）は test 区間の印に数えない（module doc の
+    /// 「行頭の印」を pin・`s2-07l.160` の A/B で `starts_with` → `contains` が生存した）。印の後の使用は
+    /// 読み手のまま。行頭の印はその後を切る。
+    // flip-check: retroactive s2-07l.350
+    #[test]
+    fn rules_wired_indented_cfg_test_is_not_a_test_mod_mark() {
+        let indented = "const ROW_ALPHA: &str = \"probe.alpha\";\nfn f() {\n    #[cfg(test)]\n    fn inner() {}\n}\n\
+                        fn g() -> &'static str {\n    ROW_ALPHA\n}\n";
+        assert_eq!(
+            measured(MANIFEST, &[("a.rs", indented)]).fact,
+            "rules-wired=2/3 ids=probe.beta,probe.gamma",
+            "字下げした印は区間を切らない（contains だと使用が test 区間に落ちて 3/3 に化ける）"
+        );
+        let at_head = "const ROW_ALPHA: &str = \"probe.alpha\";\nfn f() {\n    #[cfg(test)]\n    fn inner() {}\n}\n\
+                       #[cfg(test)]\nfn g() -> &'static str {\n    ROW_ALPHA\n}\n";
+        assert_eq!(
+            measured(MANIFEST, &[("a.rs", at_head)]).fact,
+            "rules-wired=3/3 ids=probe.alpha,probe.beta,probe.gamma",
+            "行頭の印はその後を切る"
+        );
+    }
+
     /// (b) 検出線: 読み手の無い行が在っても違反は 0（rc に効かない）。全行に読み手が在れば `ids=none`。
     /// 読めない / 行に分けられない manifest だけが違反（数に化けない）。
     #[test]
