@@ -170,6 +170,16 @@ C1 / C5（R-C9-1 は行・裁定 id）・C2（`Purpose` / `Selection` / `Stage` 
 - 歯（`seat_account_model_` 接頭辞・`seat/tick/account.rs` の in-file の歯の module〔既存 `seat_account_pressure_` の fixture `measured` の型〕）: (a) 登録 row の model が別名 `fable`・実測行の model が表示名 `Fable` の周に `pressure` がそのモデル別窓の使用率を数える（base は字面比較で数えない → RED）／(b) 逆向き（row が表示名・実測行が別名）も同じ／(c) 表に無い字面（row か実測行のどちらか）は全 model 窓を数える（保守側＝選定の `counts` と同じ極性。base の tick の `counted` は字面比較で表に無い row のモデル別窓を数えないので答えが違う → RED）／(d) `MODELS` の全 variant × {別名, 表示名} の組で選定側の `counts` と tick 側の答えが等しい（同じ関数を呼ぶ証拠・base は 4 組で食い違う → RED）。既存の `seat_account_pressure_` と `select_model_windows_` の歯は期待を変えない。
 - 却下: tick 側にも `Model::parse` を書く（2 実装のまま・C2）／登録 row を表示名で書き直して凌ぐ（`s2-07l.433` の暫定・row の字面に依存する穴が残る）／字面を小文字に寄せて比べる（表の外の字面が偶然一致する・§19 の「字面の寄せは採らない」と同じ理由）。
 
+## 21. fleet/select.rs の歯の module を歯の file へ割る — `#[path]` の子 module で module path と歯の名を変えない（契約表の行 r・`s2-07l.460`・純移動）
+
+- 何が起きているか（planner の実測 2026-09-17・main 943ea01・`pipe preflight` で verified）: `crates/scribe2/src/fleet/select.rs` は 1240 行（src 382 + 行頭の `#[cfg(test)]` から後の歯の module 858・歯 30 本〔うち property 4 本・proptest の block 1〕）で R-C4-2（1500）の余地が 242 行しか無く、size M（300 行）の行 g（[seat-autonomy.md](./seat-autonomy.md) §15・`s2-07l.434`）を受付が `cap-headroom` で断った（admin の実測 2026-09-17T20:56Z・rc 1）。src は全部で 382 行なので src の群を子へ割っても余地は 624 行が上限＝余地を食っているのは歯の module（file の 69%）。
+- 決定的な制約（実測）: (1) 歯の module を別 file にしても **module path fleet::select::tests と歯の名を変えない**形が要る（行 g / 行 k の verify の filter と §7 の接頭辞は名で結ぶ）。Rust の `#[path]` 属性付きの `mod tests;` がその形＝xtask が check.rs の歯を check_tests.rs へ出した形（`s2-07l.257`・1499 / 1500 行で同じ理由）と同じ。(2) 器の 3 つの読み手のうち flip-check（`crates/xtask/src/flipcheck.rs` の `is_test_file`・src 配下で名が _tests.rs で終わる file は test file と見なして丸ごと写す・`s2-07l.34` の (6)）と rules-wired（`TEST_FILE_TAIL`・同じ名の file は読み手に数えない）は名で弁別するが、R-C4-3 の比（`crates/xtask/src/workspace.rs` の `split_test_src`・最初の行頭 `#[cfg(test)]` から後を test 行と数える）は名を見ない＝歯の file は全行 src 側に数えられる（比は緩む側＝違反にならない・値が嘘になる既存の穴で xtask の 2 file も同じ・memo `s2-07l.461`）。(3) 純移動の機械証明（[pipeline.md](./pipeline.md) §5.3）は inline の `mod tests {}` を **item 1 本**に畳むので、本便は「item 1 本 → 列 0 の item 約 60 本」＝多重集合が一致せず純移動と判定されない → lens は従来どおり diff を読む（`s2-07l.257` と同じ・diff は約 2 × 858 行）。札 `moved` は flip-check の側（§7）に効く。(4) 歯の module は `super::` の `use`（`select` / `Input` / `Model` 等 12 item）と `crate::fleet` / `crate::order` / `crate::polarity` の `use` だけで親を読み、他の file から fleet::select::tests を読む箇所は無い（grep 0 件）＝親側の可視性は 1 語も変えない。
+- 形（[pipeline.md](./pipeline.md) §41 / [contract-source.md](./contract-source.md) §29 と同型・向きは「歯だけを外へ」）: 歯の module の**本文**（`use` から proptest の block まで・383〜1240 行）を行 r の write-set の `+` の file（`select.rs` と同じ dir・名は _tests.rs で終わる形＝flip-check と rules-wired が名で test file と読む）へ indent を 1 段外して**そのまま**移す。親の歯の区間は `#[cfg(test)]` と `#[path]` と `mod tests;` の 3 行だけになる（module 名は `tests` のまま＝module path 不変・宣言の可視性は private のまま）。子は `mod` の本文そのものなので `use super::{…}` の path は不変。札 `// flip-check: moved s2-07l.460` は親の歯の区間（宣言の直後）と子の先頭に対で置く。src の 382 行・親の `use`・可視性は 1 byte も変えない。
+- 見積: 親 約 386 行（余地 約 1110＝行 g の M と後続の余地）・子 約 860 行（上限 1500 の内）。
+- 歯: 既存の 30 本（fleet::select::tests 配下・名に select_ を含む 29 本 + `model_parse_accepts_alias_and_display_exactly` 1 本）が全部緑で期待を変えない。verify は module path の filter（nextest の positional filter は module path を含む名に当たる）で 30 本を撃ち、base = head の本数を実装役が `cargo nextest list` で写す。名だけの filter select_ は `seat/tick/account.rs` の歯 1 本（名に select_ を含む）にも当たるので使わない。
+- 後続: 行 g（`s2-07l.434`）の write-set には歯の file が要る（行 g は歯を in-file に足す＝歯の file が write-set に無いと実装役の diff が write-set の外に出る）ので、本便が同じ PR で [seat-autonomy.md](./seat-autonomy.md) の行 g の write-set に歯の file を 1 項目足す（§15 の「in-file」の語は歯の file を指すと読む＝本文は変えない）。行 g の焼き直しは本便の Landed 後（planner）。
+- 却下: 行 g を S に落とす（見積が S の 100 を超える＝size の字面だけ変える嘘）／行 g を 3 便に割る（§15 の形 2 / 3 の書き直しと審査 3 周・select.rs の余地は増えない＝次の M で再発）／src の群を子へ割る（src 382 行の全部を出しても余地は 624・歯の module が残る限り 858 行が居座る）／歯を `crates/scribe2/tests/e2e/` へ移す（私有 item を撃つ歯は e2e からは撃てない・`--lib` の scope が変わる）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -284,4 +294,14 @@ write-set = ["crates/scribe2/src/fleet/select.rs", "crates/scribe2/src/seat/tick
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail seat_account_model_"]
 size = "S"
 done = "登録 row の model が別名でも表示名でも tick の逼迫度がそのモデル別窓を数え、表に無い字面は保守側で全 model 窓を数え、選定と tick が同じ表に同じ答えを出し、既存の pressure と選定の歯は不変"
+
+[[contract]]
+id = "r"
+title = "fleet/select.rs の歯の module（30 本・858 行）を #[path] の子 module の file へ割る — 純移動・module path fleet::select::tests と歯の名は不変・親の src と可視性は不変・札 moved・R-C4-2 の余地を行 g（seat-autonomy.md・M）に作る"
+req = ["FR36"]
+section = "21"
+write-set = ["-crates/scribe2/src/fleet/select.rs", "+crates/scribe2/src/fleet/select_tests.rs", "docs/design/account-autonomy.md", "docs/design/seat-autonomy.md"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail fleet::select::tests::"]
+size = "S"
+done = "歯の module の本文が子の file に在り、親の歯の区間は cfg(test) と path と mod 宣言の 3 行だけ、module path と歯 30 本の名は不変で base = head、親の src と可視性は不変、札 moved が対で在って flip-check が moved で通り、file-lines で select.rs の余地が 1000 行以上に増え、行 r の + の剥がしと行 g の write-set への歯の file の追加が同じ PR で済む"
 <!-- contracts:end -->
