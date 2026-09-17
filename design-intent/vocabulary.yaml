@@ -454,8 +454,8 @@ terms:
     relationships: [write-set, cap guard]
   - canonical: 管理 tick
     domain: consumer
-    definition: 開発 session が黙っていないかを周期で見て、 条件が揃ったときだけ打刻の合図か退避の合図を 1 行注入する仕組み (SRS FR27 / FR29)。
-    relationships: [開発 session, cycle, 打刻の合図, 退避の合図]
+    definition: 開発 session が黙っていないかを周期で見て、 条件が揃ったときだけ打刻の合図か退避の合図 (移れる口座の候補が無い周は妥協の通知) を 1 行注入する仕組み (SRS FR27 / FR29 / FR38)。
+    relationships: [開発 session, cycle, 打刻の合図, 退避の合図, 妥協の通知]
   - canonical: statusline
     domain: consumer
     definition: 開発 session の画面の下に Claude Code が描く 1 行。 器の口 (seat statusline) が stdin の payload だけから組み、 管理 tick の context 計測が pane から読む入力でもある (SRS FR25 / FR29・ADR-0029 §2.1 / §2.2)。 描く形と読む形は同じ 1 つの規則で、 口座の設定の statusLine は器の口座の口が書く (ADR-0029 §2.3)。
@@ -758,7 +758,12 @@ terms:
     aliases: [effective role account]
     definition: その周に役割の席が実際に使う口座。 実効の記録の口座 (使える間は居続ける)、 宣言の口座 (記録が無い周の種)、 役割単位で 1 回だけ session 用の順序 (余裕が最大) で選び直した口座の順に 1 関数で解く。 席の起動・立て直し・管理 tick の比較・便用の除外が同じ解き方を読み、 consult の席は planner のそれを読む (ADR-0041・設計 docs/design/seat-roles.md §17)。 役割の口座 (宣言値) とは別で、 登録 row の口座はこの値の写し。
     relationships: [役割の口座, 実効の記録, 妥協の起動, 口座選定, 席の登録 row, 立て直し]
-    flagged_ambiguities: ["実効: 実効の口座 (役割の席が使う口座) と実効 jobs (変異検査の並列度) は別義"]
+    flagged_ambiguities: ["実効: 実効の口座 (役割の席が使う口座) と実効 jobs (変異検査の並列度) は別義", "実測の口座と 1 字差: 実効 = 器が解いた口座 / 実測 = session の開始時に測った現物の口座"]
+  - canonical: 実測の口座
+    domain: consumer
+    aliases: [measured account, 実口座]
+    definition: session の開始時に器が測って出所付きで記録した、 その session が実際に立っている口座。 席の登録 row の口座 (実効の口座の写し) とは別で、 食い違う周は管理 tick が口座を起点とする合図を止めて見せる (SRS FR71・設計 docs/design/account-lifecycle.md §16)。
+    relationships: [実効の口座, 席の登録 row, 管理 tick]
   - canonical: 実効の記録
     domain: consumer
     aliases: [effective role record]
@@ -772,13 +777,13 @@ terms:
   - canonical: 妥協の通知
     domain: consumer
     aliases: [compromise notice]
-    definition: 既に立っている席の口座が閾値以上で、 選び直しの候補が無い周に、 管理 tick が退避の合図の代わりに同じ口座・同じ窓につき 1 回だけ席の入力欄へ注入する通知。 管理 tick の合図 (打刻・退避) とは別の類で、 受けた席は作業を止めて対話面で user の裁定を待つ (ADR-0041・設計 docs/design/seat-roles.md §18)。
+    definition: 既に立っている席の口座が閾値以上で、 選び直しの候補が無い周に、 管理 tick が退避の合図の代わりに同じ口座・同じ窓につき 1 回だけ席の入力欄へ注入する合図。 行は作業を止めて対話面で user の裁定を待つ旨を運ぶ (ADR-0041・設計 docs/design/seat-roles.md §18)。
     relationships: [管理 tick, 退避の合図, 妥協の起動, 対話面]
   - canonical: 強制 cycle
     domain: consumer
     aliases: [forced cycle, 強制サイクル]
-    definition: rules 行が強制と名指す窓が閾値以上の席に管理 tick が印を書き、 印が在る間は退避に要る操作以外の編集・shell の実行・agent の起動の呼出を PreToolUse の guard が断る状態。 印は退避物の書き込み・立て直し・閾値未満の計測の 3 周で可逆な move で外れる (設計 docs/design/seat-autonomy.md §15)。
-    relationships: [管理 tick, 退避の合図, 立て直し, rules 行]
+    definition: rules 行が強制と名指す窓が閾値以上の席に管理 tick が印を書き、 印が在る間は退避に要る操作以外の編集・Bash・agent の起動の呼出を PreToolUse の guard が断る状態。 印は退避物の書き込み・立て直し・閾値未満の計測の 3 周で可逆な move で外れる (設計 docs/design/seat-autonomy.md §15)。
+    relationships: [管理 tick, 退避の合図, 席の起動, rules 行]
     flagged_ambiguities: ["強制サイクル: SRS の用語集は表示名を強制サイクルとする (SRS の生成器は cycle を部分文字列に持つ用語を拒む)。 正本の名は強制 cycle"]
   - canonical: 便用の並べ鍵
     domain: consumer
