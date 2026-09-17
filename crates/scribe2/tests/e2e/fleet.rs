@@ -3635,3 +3635,132 @@ fn fleet_select_refuses_rules_without_the_selection_row() {
     assert_eq!(curl_calls(&fx), 0, "計測しない");
     drop_fixture(&fx);
 }
+
+// ───── 便用の除外は便の repo（anchor）の席だけ（設計 account-autonomy.md §14・FR36 / FR40・接頭辞 `fleet_select_anchor_`） ─────
+
+/// 席の登録 row を anchor つきで 1 件積む（[`register_account`] と同型・鍵は (役割, anchor) なので anchor 違いの
+/// 2 row は両方残る）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn register_anchored_account(dir: &Path, anchor: &str, label: &str) {
+    let mut event = registration_event("s:w");
+    event.registration = event
+        .registration
+        .map(|row| Registration { anchor: anchor.to_owned(), account: label.to_owned(), ..row });
+    store::append(dir, &event, LockPolicy::embedded().expect("lock の規則を読める")).expect("登録 row を積める");
+}
+
+/// (a) 2 anchor の登録 row（anchor X の席 = a1・anchor Y の席 = a2）を置いた置き場で `--purpose run --anchor X` は
+/// X の席の口座だけを外す＝他 repo の席の口座 a2 が候補に入り `chosen=a2`（a3 は 100 で当たっている）。一致は
+/// 登録が書いた値との `OsStr` の等値で正規化しない（FR40）: 末尾 `/` の違う `--anchor X/` はどの row とも一致せず
+/// 除外 0 で `chosen=a1`。base は `--anchor` を読まず全 row も読まないので `chosen=a1` → RED。
+#[test]
+fn fleet_select_anchor_keeps_other_repo_seat_accounts() {
+    let (fx, curl) = select_fixture(SELECT_THREE, true, Some("85"));
+    register_anchored_account(&fx.state, "/repo/x", "a1");
+    register_anchored_account(&fx.state, "/repo/y", "a2");
+    let out = run_select(&fx, &curl, &["--purpose", "run", "--anchor", "/repo/x"]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{out:?}");
+    assert_eq!(out_lines(&out), vec!["select purpose=run chosen=a2".to_owned()], "X の席 a1 だけ外れ、Y の席 a2 は候補");
+    let out = run_select(&fx, &curl, &["--purpose", "run", "--anchor", "/repo/y"]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{out:?}");
+    assert_eq!(out_lines(&out), vec!["select purpose=run chosen=a1".to_owned()], "Y の席 a2 だけ外れ、X の席 a1 は候補");
+    let out = run_select(&fx, &curl, &["--purpose", "run", "--anchor", "/repo/x/"]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{out:?}");
+    assert_eq!(out_lines(&out), vec!["select purpose=run chosen=a1".to_owned()], "正規化しない: 末尾 / はどの row とも一致せず除外 0");
+    drop_fixture(&fx);
+}
+
+/// (b) 同じ fixture で `--anchor` 無しは従来どおり置き場の全 row の口座を外す（保守側）: a1 も a2 も外れ a3 は窓
+/// 100 → 候補なし（`all-limited`・rc 0）。base の cli は row を読まず `--exclude` だけで除外していたので
+/// `chosen=a1` → RED。加えて `--purpose session --anchor X` と値欠けの `--anchor` は usage で断る（rc 1・選ばない・
+/// 計測しない）。
+#[test]
+fn fleet_select_anchor_absent_excludes_every_seat_account() {
+    let (fx, curl) = select_fixture(SELECT_THREE, true, Some("85"));
+    register_anchored_account(&fx.state, "/repo/x", "a1");
+    register_anchored_account(&fx.state, "/repo/y", "a2");
+    let out = run_select(&fx, &curl, &["--purpose", "run"]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "候補なしは断りではない: {out:?}");
+    assert_eq!(
+        out_lines(&out),
+        vec![format!("select purpose=run none=all-limited earliest_reset={SELECT_FIVE_RESET}")],
+        "--anchor 無しは全 row の口座を外す"
+    );
+    let calls = curl_calls(&fx);
+    let out = run_select(&fx, &curl, &["--purpose", "session", "--anchor", "/repo/x"]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "session 用に --anchor は無い: {out:?}");
+    assert!(out.stdout.is_empty(), "選ばない");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("fleet: --anchor は --purpose run だけが取る"), "断りの理由: {stderr}");
+    assert!(stderr.contains("usage: fleet") && stderr.contains("[--anchor DIR]"), "使い方を stderr へ: {stderr}");
+    let out = run_select(&fx, &curl, &["--purpose", "run", "--anchor"]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "値の無い --anchor は断る: {out:?}");
+    assert!(out.stdout.is_empty(), "選ばない");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("fleet: --anchor に値が無い"), "{out:?}");
+    assert_eq!(curl_calls(&fx), calls, "断った周は計測しない");
+    drop_fixture(&fx);
+}
+
+/// (c) `pipe spawn` は便の repo（`--repo X`）を選定に渡す: 口座 a1 / a2（どちらも余裕）の置き場に、anchor = X の
+/// path そのものの席 = a1・別 path の席 = a2 の row を置くと、初回の起動の選定（`follow.rs` `spawn_selected`）は
+/// X の席 a1 だけを外して a2 を選び、`Spawned` の detail が `account:a2` を持つ（`base:<sha>,account:<label>`）。
+/// base は全 row を除外して候補が空（reset を持たない `none=excluded`）→ rc 3 `next=wait reset=-` で止まり
+/// `Spawned` は無い → RED（reset 2099 の窓の口座を置かないので待ちに入らず hang しない）。
+///
+/// 便の側の fixture は `super::pipe` の helper（repo と置き場・契約・intake・`pipe` の起動）で、口座の側は
+/// [`select_fixture`]（credential + 偽 curl + rules）。`pipe` の manifest は rules fixture に `runner.model`
+/// （[`vessel::pipe::ratelimit::Pool`] は口座を宣言する置き場に要る）と lock の 2 行（`pipe` の dispatch が読む）を
+/// 足した写し。
+#[test]
+fn fleet_select_anchor_pipe_run_passes_the_repo() {
+    use std::os::unix::fs::PermissionsExt;
+    let (fx, curl) = select_fixture(&[("a1", 30, 10), ("a2", 20, 10)], true, Some("85"));
+    let (repo, state) = super::pipe::repo_with_state_in(&fx.state);
+    let mut rules = fs::read_to_string(&fx.rules).expect("rules fixture を読める");
+    for (id, kind, value) in [
+        ("runner.model", "RunnerModel", "\"opus\""),
+        ("fleet.lock_retry_ms", "LockRetryMs", "5000"),
+        ("fleet.lock_stale_ms", "LockStaleMs", "30000"),
+    ] {
+        rules.push_str(&format!(
+            "\n[[rule]]\nid = \"{id}\"\nkind = \"{kind}\"\nvalue = {value}\nenabled = true\nruling = \"r\"\nruled_at = \"d\"\n"
+        ));
+    }
+    let rules_path = fx.spy.join("rules-pipe.toml");
+    fs::write(&rules_path, rules).expect("pipe の manifest を書ける");
+    let runner = fx.spy.join("runner.sh");
+    fs::write(&runner, "#!/bin/sh\ncat >/dev/null\nexit 0\n").expect("stub runner を書ける");
+    let mut perm = fs::metadata(&runner).expect("stub の権限を読める").permissions();
+    perm.set_mode(0o755);
+    fs::set_permissions(&runner, perm).expect("stub を実行可能にできる");
+    let contract = super::pipe::write_contract(&repo, &[], &[]);
+    let id = super::pipe::intake_bead(&repo, &state, &contract, "s2-anchor");
+    // 席の row: 便の repo の path そのものを anchor に持つ席 = a1・別 path の席 = a2。
+    register_anchored_account(&state, &repo.display().to_string(), "a1");
+    register_anchored_account(&state, "/repo/other", "a2");
+    let out = super::pipe::run_pipe(&[
+        "spawn", "--run", &id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(), "--runner", &format!("sh {}", runner.display()),
+        "--rules", &rules_path.display().to_string(), "--curl", &curl.display().to_string(),
+    ]);
+    let stdout = super::pipe::stdout_of(&out);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!stdout.contains("next=wait"), "候補が在るので待たない: {stdout} / {stderr}");
+    assert_eq!(curl_calls(&fx), 2, "起動の前に FR33 の計測を 1 回（口座 2 つ）: {stderr}");
+    let spawned: Vec<String> = store::read_all(&state)
+        .expect("event log を読める")
+        .into_iter()
+        .filter(|event| event.run == id && event.stage == Some(Stage::Spawned))
+        .filter_map(|event| event.detail)
+        .collect();
+    assert_eq!(spawned.len(), 1, "runner を 1 回起こした: {spawned:?} / {stdout} / {stderr}");
+    assert!(
+        spawned.first().is_some_and(|detail| detail.starts_with("base:") && detail.ends_with(",account:a2")),
+        "便の repo の席 a1 だけを外し、他 repo の席 a2 で起きる: {spawned:?}"
+    );
+    super::pipe::clean(&[&repo]);
+    drop_fixture(&fx);
+}

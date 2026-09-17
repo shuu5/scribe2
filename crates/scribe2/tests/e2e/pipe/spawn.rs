@@ -1942,7 +1942,7 @@ fn pipe_spawn_account_first_turn_runs_on_the_chosen_free_account() {
     let rules = resume_rules(&state, &["a1", "a2"]);
     put_account(&state, "a1", &[windows(10, 10)]);
     put_account(&state, "a2", &[windows(40, 10)]);
-    register_seat_account(&state, "a1");
+    register_seat_account(&state, &repo, "a1");
     let marker = state.join("lens-ran");
     let lens = fake_lens(&marker, &lens_verdict("PASS"));
     let out = run_pipe(&[

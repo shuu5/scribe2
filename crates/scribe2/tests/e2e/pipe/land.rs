@@ -2440,7 +2440,7 @@ fn pipe_spawn_account_conflict_retry_runs_on_the_chosen_account() {
     let rules = resume_rules(&state, &["a1", "a2"]);
     put_account(&state, "a1", &[windows(10, 10)]);
     put_account(&state, "a2", &[windows(40, 10)]);
-    register_seat_account(&state, "a1");
+    register_seat_account(&state, &repo, "a1");
     let out = land_extra(&repo, &state, &id, &["--runner", &runner, "--rules", &rules, "--curl", &fake_usage_curl(&state)]);
     assert_eq!(out.status.code(), Some(i32::from(RC_INCONCLUSIVE)), "起こし直した周は rc 3: {} / {}", stdout_of(&out), stderr_of(&out));
     assert!(stdout_of(&out).contains(&format!("run={id} next=gate")), "次に撃つ段: {}", stdout_of(&out));

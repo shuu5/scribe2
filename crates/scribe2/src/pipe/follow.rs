@@ -246,7 +246,8 @@ pub(crate) fn spawn_selected(entry: &Turn<'_>, expected: Stage) -> Outcome {
             outcome.err.push("pipe: 口座の宣言が無い＝親の環境を継承".to_owned());
             None
         }
-        Some(pool) => match choose_account(pool, entry.run, entry.state_dir, expected, &mut outcome) {
+        // 除外は便の repo（`entry.repo`）を anchor に持つ席の口座だけ（設計 account-autonomy.md §14）。
+        Some(pool) => match choose_account(pool, entry, expected, &mut outcome) {
             Ok(label) => Some(label),
             // 止まる周も、それまでの判定行（`next=wait …`）と計測の行は残す。
             Err(stopped) => {
