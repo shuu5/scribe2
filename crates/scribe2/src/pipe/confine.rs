@@ -65,7 +65,7 @@ const MIB: u64 = 1024 * 1024;
 /// 封じ込めの record（`reason=`）に載る閉じた語彙。
 ///
 /// **理由を自由文にしない**（憲法 C3.3・設計 §4.2）。包めなかった 5 つと、包んだ箱の中で
-/// 起きた 2 つ（oom / signal）を 1 つの列挙で持つ——record の読み手はどちらも同じ `reason=`
+/// 起きた 3 つ（oom / signal / unknown）を 1 つの列挙で持つ——record の読み手はどちらも同じ `reason=`
 /// で読むので、語彙が 2 面に割れると「外からの kill」と弁別できない（lens-132d L1）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Reason {
@@ -84,6 +84,9 @@ pub enum Reason {
     OomKill,
     /// 包みごと signal で死んだ（oom の代理・設計 §4.3）。
     Signal,
+    /// 包みごと signal で死んだが、kernel の証拠（終端行の `oom_kill`）が無い / 読めない（runner の終端・
+    /// 設計 pipeline.md §23）。外からの kill を oom-kill と読まない（C10）。
+    Unknown,
 }
 
 /// [`Reason`] の全 variant（宣言順）。
@@ -95,6 +98,7 @@ pub const REASONS: &[Reason] = &[
     Reason::NoRoom,
     Reason::OomKill,
     Reason::Signal,
+    Reason::Unknown,
 ];
 
 impl Reason {
@@ -108,6 +112,7 @@ impl Reason {
             Self::NoRoom => "no-room",
             Self::OomKill => "oom-kill",
             Self::Signal => "signal",
+            Self::Unknown => "unknown",
         }
     }
 
@@ -626,14 +631,14 @@ fn script(line: &str, unit: &str) -> String {
 pub struct Usage {
     /// scope の peak（MiB）。**終端行が無い / 読めない周は `None`**（0 と書かない）。
     pub peak_mb: Option<u64>,
-    /// scope の中で kernel が殺した数（読めない周は 0）。
-    pub oom_kill: u64,
+    /// scope の中で kernel が殺した数。**終端行が無い / 読めない周は `None`**（0 と「測れない」を融合しない）。
+    pub oom_kill: Option<u64>,
 }
 
 /// stdout の**最後の終端行**を剥がす（pure・in-file の歯が fixture 文字列で測る）。
 ///
 /// 終端行が無い周（`memory.peak` の無い kernel・包みの外で撃った周・行が途中で `exit` した
-/// 周）は既定＝`peak_mb` 不明・`oom_kill` 0 である。
+/// 周）は既定＝`peak_mb` も `oom_kill` も不明である。
 pub fn read_usage(stdout: &str) -> Usage {
     let found = stdout
         .lines()
@@ -648,7 +653,7 @@ pub fn read_usage(stdout: &str) -> Usage {
     };
     Usage {
         peak_mb: field("peak_bytes=").map(|bytes| bytes / MIB),
-        oom_kill: field("oom_kill=").unwrap_or(0),
+        oom_kill: field("oom_kill="),
     }
 }
 
@@ -934,26 +939,29 @@ mod tests {
     fn confine_read_usage_strips_the_trailing_line() {
         let found = read_usage("noise\nconfine-usage peak_bytes=3145728 oom_kill=0\n");
         assert_eq!(found.peak_mb, Some(3), "3 MiB");
-        assert_eq!(found.oom_kill, 0, "殺されていない");
+        assert_eq!(found.oom_kill, Some(0), "殺されていない");
 
         let killed = read_usage("confine-usage peak_bytes=2097152 oom_kill=2\n");
-        assert_eq!(killed.oom_kill, 2, "殺された数をそのまま読む");
+        assert_eq!(killed.oom_kill, Some(2), "殺された数をそのまま読む");
 
-        // 終端行が無い周は **`peak_mb` 不明**（0 ではない）。
+        // 終端行が無い周は **`peak_mb` も `oom_kill` も不明**（0 ではない）。
         let none = read_usage("ふつうの出力\n{\"verdict\":\"PASS\"}\n");
         assert_eq!(none.peak_mb, None, "終端行が無い周は不明");
-        assert_eq!(none.oom_kill, 0, "殺された証拠も無い");
+        assert_eq!(none.oom_kill, None, "殺された証拠も殺されていない証拠も無い");
 
         // `memory.peak` の無い kernel は `-` を出す（0 と書かない）。
         let dash = read_usage("confine-usage peak_bytes=- oom_kill=0\n");
         assert_eq!(dash.peak_mb, None, "- は不明");
+        assert_eq!(dash.oom_kill, Some(0), "oom_kill は読める");
+        let unread = read_usage("confine-usage peak_bytes=1048576 oom_kill=-\n");
+        assert_eq!(unread.oom_kill, None, "`memory.events` の読めない周は不明（0 ではない）");
 
         // **最後の 1 行が勝つ**（同じ行が 2 度出た周は後の周の数である）。
         let twice = read_usage(
             "confine-usage peak_bytes=1048576 oom_kill=0\nconfine-usage peak_bytes=4194304 oom_kill=1\n",
         );
         assert_eq!(twice.peak_mb, Some(4), "後の行を読む");
-        assert_eq!(twice.oom_kill, 1, "後の行を読む");
+        assert_eq!(twice.oom_kill, Some(1), "後の行を読む");
     }
 
     /// epilogue は **rc を返し**、**自分の scope の中でだけ**終端行を出す（設計 §4.3）。
@@ -977,7 +985,8 @@ mod tests {
         assert_eq!(Reason::OomKill.as_str(), "oom-kill");
         assert_eq!(Reason::Signal.as_str(), "signal");
         assert_eq!(Reason::ManifestUnreadable.as_str(), "manifest-unreadable");
-        assert_eq!(REASONS.len(), 7, "母集団（包めない 5 つ + 箱の中の 2 つ）");
+        assert_eq!(Reason::Unknown.as_str(), "unknown");
+        assert_eq!(REASONS.len(), 8, "母集団（包めない 5 つ + 箱の中の 3 つ）");
     }
 
     /// parse に失敗する text からの読みは `Caps::of` が [`RuleRead::ManifestUnreadable`] のまま運び、包みは

@@ -183,13 +183,19 @@ fn group_path(state: &Path) -> String {
 
 /// 孫まで持つ偽 runner で `pipe spawn` を**背景で**起こし、席が Live になり孫の pid が書かれるまで待つ。
 ///
-/// `body` は runner の script（孫の pid を `pid_file` へ書いてから前景で待つ形）。返すのは
-/// （便 id・spawn の process・孫の pid）。
+/// `body` は runner の script（孫の pid を `pid_file` へ書いてから前景で待つ形）。`path` は spawn の PATH
+/// （[`group_path`] か、包める周に固定する [`confined_path`]）。返すのは（便 id・spawn の process・孫の pid）。
 #[expect(
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
-fn spawn_live_seat(repo: &Path, state: &Path, body: &str, pid_file: &Path) -> (String, std::process::Child, u32) {
+fn spawn_live_seat(
+    repo: &Path,
+    state: &Path,
+    body: &str,
+    pid_file: &Path,
+    path: &str,
+) -> (String, std::process::Child, u32) {
     use std::process::Stdio;
     use std::time::{Duration, Instant};
 
@@ -201,7 +207,7 @@ fn spawn_live_seat(repo: &Path, state: &Path, body: &str, pid_file: &Path) -> (S
     let mut child = Command::new(bin())
         .args(["pipe", "spawn", "--run", &id, "--repo", &repo.display().to_string(),
                "--state-dir", &state.display().to_string(), "--runner", &runner])
-        .env("PATH", group_path(state))
+        .env("PATH", path)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -274,7 +280,7 @@ fn pipe_stop_group_run_kills_the_grandchild() {
     let (repo, state) = repo_with_state();
     let pid_file = state.join("grandchild.pid");
     let body = format!("sleep 300 </dev/null >/dev/null 2>&1 &\necho $! > '{}'\nwait\n", pid_file.display());
-    let (id, mut spawner, grandchild) = spawn_live_seat(&repo, &state, &body, &pid_file);
+    let (id, mut spawner, grandchild) = spawn_live_seat(&repo, &state, &body, &pid_file, &group_path(&state));
     spawner.kill().ok();
     spawner.wait().ok();
     assert!(proc_alive(grandchild), "孫が動いている（前提）");
@@ -303,7 +309,7 @@ fn pipe_stop_group_unstoppable_seat_keeps_the_run_live() {
     let (repo, state) = repo_with_state();
     let pid_file = state.join("escaped.pid");
     let body = escaped_runner(&pid_file);
-    let (id, mut spawner, escaped) = spawn_live_seat(&repo, &state, &body, &pid_file);
+    let (id, mut spawner, escaped) = spawn_live_seat(&repo, &state, &body, &pid_file, &group_path(&state));
     let premise = left_the_seat_group(&state, &id, escaped);
     if premise.is_err() {
         reap_own(escaped);
@@ -337,7 +343,7 @@ fn pipe_stop_group_premature_pid_fails_the_premise() {
     let (repo, state) = repo_with_state();
     let pid_file = state.join("premature.pid");
     let body = format!("(sleep 30; exec setsid sleep 300) &\necho $! > '{}'\nwait\n", pid_file.display());
-    let (id, mut spawner, premature) = spawn_live_seat(&repo, &state, &body, &pid_file);
+    let (id, mut spawner, premature) = spawn_live_seat(&repo, &state, &body, &pid_file, &group_path(&state));
     let premise = left_the_seat_group(&state, &id, premature);
 
     let out = run_pipe(&["stop", "--run", &id, "--state-dir", &state.display().to_string()]);
@@ -378,5 +384,156 @@ fn pipe_stop_group_legacy_seat_falls_back_to_the_single_pid() {
     assert!(stdout_of(&out).contains("seats=1 stopped=1"), "{}", stdout_of(&out));
     assert!(!survived, "runner の process は消えている");
     assert_eq!(kind_count(&state, "r7", EventKind::SeatStopped), 1, "SeatStopped は 1 件");
+    clean(&[&repo, &state]);
+}
+
+// ───── stop 起因の終端を oom-kill に誤分類しない（`s2-07l.340`・設計 pipeline.md §23・接頭辞 `pipe_spawn_terminal_reason_`） ─────
+
+/// 偽 `systemd-run` の argv を 1 起動 1 行で写す file 名。
+const CONFINED_CALLS: &str = "systemd-run-calls";
+
+/// **包める周に固定する** PATH: 偽 `systemd-run`（argv を写し `--` の後ろを exec する・`tests/e2e/pipe/gate.rs` の
+/// 同型）を [`group_path`] の前に積む。
+///
+/// [`group_path`] だけだと包めない host になり、「oom-kill が 0 件」が**包めないことで空虚に充足する**。
+/// 包みの終端行は実 scope の中でしか出ない（偽の包みの中では `/proc/self/cgroup` が一致しない）＝kernel の証拠が
+/// 無い周を作る。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn confined_path(state: &Path) -> String {
+    use std::os::unix::fs::PermissionsExt;
+    let bin_dir = state.join("confined-bin");
+    fs::create_dir_all(&bin_dir).expect("stub の dir を作れる");
+    let shim = bin_dir.join("systemd-run");
+    let script = format!(
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\nwhile [ $# -gt 0 ] && [ \"$1\" != \"--\" ]; do shift; done\nshift\nexec \"$@\"\n",
+        state.join(CONFINED_CALLS).display()
+    );
+    fs::write(&shim, script).expect("stub を書ける");
+    fs::set_permissions(&shim, fs::Permissions::from_mode(0o755)).expect("stub に実行権を付ける");
+    format!("{}:{}", bin_dir.display(), group_path(state))
+}
+
+/// runner の起動が偽 `systemd-run` を通った（包めた）か。
+fn runner_was_confined(state: &Path) -> bool {
+    fs::read_to_string(state.join(CONFINED_CALLS))
+        .unwrap_or_default()
+        .lines()
+        .any(|line| line.contains("--scope") && line.contains("-runner-"))
+}
+
+/// `fleet record` を 1 回撃つ（rc 0 を assert・stop.rs の既存の 4 か所と同じ形）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn record_event(state: &Path, args: &[&str]) {
+    let out = Command::new(bin())
+        .args(["fleet", "record"])
+        .args(args)
+        .arg("--state-dir")
+        .arg(state)
+        .output()
+        .expect("binary を起動できる");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{args:?}: {}", stderr_of(&out));
+}
+
+/// 便の `RunStage` のうち detail が `detail` の行の段（物理順）。
+fn stages_with(state: &Path, id: &str, detail: &str) -> Vec<Option<Stage>> {
+    stages(state, id)
+        .into_iter()
+        .filter(|(_, found)| found.as_deref() == Some(detail))
+        .map(|(stage, _)| stage)
+        .collect()
+}
+
+/// (a) **包める周**で走る runner の便を `pipe stop --run` で止めると、spawn の終端検出は段を書かない:
+/// `detail=oom-kill` の `RunStage` は 0 件・印 `(Spawned, stopping)` が `RunStopped` より前に 1 件・`RunStopped` 1 件・
+/// show は `stage=Stopped`。base は包めた周の rc < 0 だけで `Failed detail=oom-kill` を書く（実測 2026-09-15 の再現）。
+#[test]
+fn pipe_spawn_terminal_reason_stop_is_not_oom() {
+    let (repo, state) = repo_with_state();
+    let pid_file = state.join("confined.pid");
+    let body = format!("sleep 300 </dev/null >/dev/null 2>&1 &\necho $! > '{}'\nwait\n", pid_file.display());
+    let (id, mut spawner, grandchild) = spawn_live_seat(&repo, &state, &body, &pid_file, &confined_path(&state));
+    let out = run_pipe(&["stop", "--run", &id, "--state-dir", &state.display().to_string()]);
+    let survived = proc_alive(grandchild);
+    reap_own(grandchild);
+    // spawn の終端検出（runner の消滅を見た経路）まで見届けてから測る。
+    spawner.wait().ok();
+
+    assert!(runner_was_confined(&state), "前提: runner は包めた周で起きた（空虚な充足にしない）");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "席ごと止まる: {}", stderr_of(&out));
+    assert!(!survived, "孫 {grandchild} も消えている");
+    let seen = trail(&state, &id);
+    assert!(stages_with(&state, &id, "oom-kill").is_empty(), "stop の kill を oom-kill に化けさせない: {seen:?}");
+    assert_eq!(stage_count(&state, &id, Stage::Failed), 0, "Failed を 1 件も書かない: {seen:?}");
+    let mark = seen
+        .iter()
+        .position(|(kind, stage, detail)| {
+            *kind == EventKind::RunStage && *stage == Some(Stage::Spawned) && detail.as_deref() == Some("stopping")
+        });
+    let stopped = seen.iter().position(|(kind, _, _)| *kind == EventKind::RunStopped);
+    assert!(matches!((mark, stopped), (Some(at), Some(end)) if at < end), "印は RunStopped より前: {seen:?}");
+    assert_eq!(stages_with(&state, &id, "stopping").len(), 1, "印は 1 件: {seen:?}");
+    assert_eq!(kind_count(&state, &id, EventKind::RunStopped), 1, "RunStopped は 1 件");
+    let shown = run_pipe(&["show", "--run", &id, "--state-dir", &state.display().to_string()]);
+    assert!(stdout_of(&shown).contains("stage=Stopped"), "終端: {}", stdout_of(&shown));
+    clean(&[&repo, &state]);
+}
+
+/// (e) 止められない席（偽 kill の下の pid 1）を持つ便を `pipe stop --run` で撃つ: rc 1・`RunStopped` 0 件・**生の**
+/// 最後の `RunStage` が印（段は `Spawned` のまま）。止め切れない 2 回目も印を増やさない。席が消えた後
+/// （`SeatStopped` を record）の stop は signal を送らず、`RunStopped` を 1 件書く。base は印を書かない。
+#[test]
+fn pipe_spawn_terminal_reason_mark_survives_an_unstoppable_stop() {
+    let (repo, state) = repo_with_state();
+    let (path, _calls) = kill_stub(&state);
+    record_event(&state, &["--kind", "RunStage", "--run", "r5", "--bead", "b", "--stage", "Spawned", "--detail", "base:abc"]);
+    record_event(&state, &["--kind", "SeatSpawned", "--run", "r5", "--bead", "b", "--seat", "s5", "--pid", "1"]);
+    let dir = state.display().to_string();
+    for round in 1..=2 {
+        let out = run_pipe_with_path(&path, &["stop", "--run", "r5", "--state-dir", &dir]);
+        assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{round} 回目は止め切れない: {}", stdout_of(&out));
+        assert_eq!(kind_count(&state, "r5", EventKind::RunStopped), 0, "{round} 回目: RunStopped を書かない");
+        assert_eq!(
+            stages(&state, "r5").last(),
+            Some(&(Some(Stage::Spawned), Some("stopping".to_owned()))),
+            "{round} 回目: 生の最後の RunStage は印・段は変わらない"
+        );
+        assert_eq!(stages_with(&state, "r5", "stopping").len(), 1, "{round} 回目: 印は 1 件のまま");
+        let shown = run_pipe(&["show", "--run", "r5", "--state-dir", &dir]);
+        assert!(stdout_of(&shown).contains("stage=Spawned"), "{round} 回目: live のまま: {}", stdout_of(&shown));
+    }
+    record_event(&state, &["--kind", "SeatStopped", "--run", "r5", "--bead", "b", "--seat", "s5", "--pid", "1"]);
+    let last = run_pipe_with_path(&path, &["stop", "--run", "r5", "--state-dir", &dir]);
+    assert_eq!(last.status.code(), Some(i32::from(RC_OK)), "席が消えた後は止め切れる: {}", stderr_of(&last));
+    assert_eq!(kind_count(&state, "r5", EventKind::RunStopped), 1, "RunStopped を 1 件書く");
+    let shown = run_pipe(&["show", "--run", "r5", "--state-dir", &dir]);
+    assert!(stdout_of(&shown).contains("stage=Stopped"), "終端: {}", stdout_of(&shown));
+    clean(&[&repo, &state]);
+}
+
+/// (f) 衝突を記帳した `Implemented` の便（`rebase-conflict:<base>..<main>`）に live 席を置いて `pipe stop --run` を撃つ:
+/// (i) log に印（`RunStage stage=Implemented detail=stopping`）が 1 件在り（base は書かない＝RED）、(ii) 席が消えた後も
+/// resume はその便を**起こし直しの続き**と読む（`--runner` を要る＝印が衝突の記帳を隠さない）。印を読み飛ばさない
+/// 口では resume が gate へ流れ、`--runner が要る` を名乗らない。
+#[test]
+fn pipe_spawn_terminal_reason_mark_keeps_the_conflict_readable() {
+    let (repo, state) = repo_with_state();
+    let (path, _calls) = kill_stub(&state);
+    let conflict = "rebase-conflict:1111111..2222222";
+    record_event(&state, &["--kind", "RunStage", "--run", "r6", "--bead", "b", "--stage", "Implemented", "--detail", conflict]);
+    record_event(&state, &["--kind", "SeatSpawned", "--run", "r6", "--bead", "b", "--seat", "s6", "--pid", "1"]);
+    let dir = state.display().to_string();
+    let out = run_pipe_with_path(&path, &["stop", "--run", "r6", "--state-dir", &dir]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "止め切れない（偽 kill）: {}", stdout_of(&out));
+    assert_eq!(stages_with(&state, "r6", "stopping"), vec![Some(Stage::Implemented)], "(i) 印の行が 1 件: {:?}", stages(&state, "r6"));
+    record_event(&state, &["--kind", "SeatStopped", "--run", "r6", "--bead", "b", "--seat", "s6", "--pid", "1"]);
+    let resumed = run_pipe(&["resume", "--run", "r6", "--state-dir", &dir]);
+    assert_eq!(resumed.status.code(), Some(i32::from(RC_REFUSED)), "(ii) 起こし直しの続きは --runner を要る: {}", stderr_of(&resumed));
+    assert!(stderr_of(&resumed).contains("--runner が要る"), "(ii) 衝突の記帳を読む: {}", stderr_of(&resumed));
     clean(&[&repo, &state]);
 }

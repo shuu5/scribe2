@@ -259,15 +259,39 @@ pub fn base_of_run(state_dir: &Path, id: &str) -> Option<String> {
 /// `detail=retired` や、段を持たない event の自由文が後から被さって理由が消える。読むのは
 /// 追記だけの log の原本である（[`base_of_run`] と同じ理由）。
 ///
-/// 読み手は 3 つ（`retire` の入口・`resume` の弁別・land の追随）で、**判定は 1 本**である。
+/// 読み手は 2 面（`retire` の入口の弁別・`resume` の起こし直しの弁別）で、**判定は 1 本**である。
+///
+/// **停止中の印（[`STOPPING`]）の行は読み飛ばし**、その手前の最後の `RunStage` の detail を返す（設計 §23）。
+/// 印は `Stopped` に落ちた正常な便にも最後の `RunStage` として残るので、読み飛ばさないと衝突の記帳も
+/// `Failed` の理由も印に隠れ、2 面の読み手の意味が変わる。停止中かは [`is_stopping`] が読む。
 pub fn last_stage_detail(state_dir: &Path, id: &str) -> Option<String> {
     let events = store::read_all(state_dir).ok()?;
     events
         .iter()
         .rev()
-        .find(|event| event.run == id && event.kind == EventKind::RunStage)?
+        .filter(|event| event.run == id && event.kind == EventKind::RunStage)
+        .find(|event| event.detail.as_deref() != Some(STOPPING))?
         .detail
         .clone()
+}
+
+/// `pipe stop --run` が最初の signal を送る**前**に書く停止中の印（`RunStage stage=<現段> detail=stopping`・
+/// 設計 §23）。書く側（`pipe stop`）と読む側（[`last_stage_detail`] の読み飛ばし・[`is_stopping`]）の字面はこの 1 本。
+pub const STOPPING: &str = "stopping";
+
+/// 便が停止中か＝**生の**最後の `RunStage` の detail が [`STOPPING`] か。store を読めない周は `None`。
+///
+/// 読み手は `pipe stop`（印を 2 度書かない）と spawn の終端検出（停止中なら段を書かず `RunStopped` の経路に
+/// 任せる）の 2 つだけである。再 spawn が書く `RunStage` は最後の記帳を置き換えるので、印は自然に読まれなくなる。
+pub fn is_stopping(state_dir: &Path, id: &str) -> Option<bool> {
+    let events = store::read_all(state_dir).ok()?;
+    Some(
+        events
+            .iter()
+            .rev()
+            .find(|event| event.run == id && event.kind == EventKind::RunStage)
+            .is_some_and(|event| event.detail.as_deref() == Some(STOPPING)),
+    )
 }
 
 /// 便の runner が**起きていない**か（最後の `SeatSpawned` より後に `SeatStopped` が在る）。

@@ -483,7 +483,7 @@ fn lens_outcome(waited: std::io::Result<std::process::Output>, confinement: &con
     };
     let text = String::from_utf8_lossy(&out.stdout);
     if confinement.confined() {
-        let killed = (confine::read_usage(&text).oom_kill >= 1).then_some(confine::Reason::OomKill);
+        let killed = confine::read_usage(&text).oom_kill.is_some_and(|count| count >= 1).then_some(confine::Reason::OomKill);
         let killed = killed.or_else(|| out.status.code().is_none().then_some(confine::Reason::Signal));
         if let Some(reason) = killed {
             return (Verdict::Inconclusive, format!("lens が scope の中で死んだ（reason={}）", reason.as_str()));

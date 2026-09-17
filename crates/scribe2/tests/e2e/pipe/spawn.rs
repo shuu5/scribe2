@@ -2090,3 +2090,99 @@ fn pipe_spawn_account_base_with_account_suffix_lands() {
     assert_eq!(git(&repo, &["rev-list", "--count", &format!("{base}..refs/heads/main")]), "1", "base の上に 1 便が載る");
     clean(&[&repo, &state]);
 }
+
+// ───── 箱の中の死の理由は kernel の証拠で分ける（`s2-07l.340`・設計 pipeline.md §23・接頭辞 `pipe_spawn_terminal_reason_` /
+// `pipe_spawn_reason_vocabulary_`） ─────
+
+/// 偽 `systemd-run` の argv を 1 起動 1 行で写す file 名。
+const TERMINAL_SCOPE_CALLS: &str = "terminal-systemd-run-calls";
+
+/// **包める周に固定する** PATH（偽 `systemd-run` が argv を写し `--` の後ろを exec する・`gate.rs` の同型）。
+/// 偽の包みの中では `/proc/self/cgroup` が unit の scope と一致しないので、包みの終端行は出ない＝kernel の証拠は
+/// runner が自分で書いた行だけになる。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn terminal_confined_path(state: &Path) -> String {
+    use std::os::unix::fs::PermissionsExt;
+    let bin_dir = state.join("terminal-systemd-bin");
+    fs::create_dir_all(&bin_dir).expect("stub の dir を作れる");
+    let shim = bin_dir.join("systemd-run");
+    let script = format!(
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\nwhile [ $# -gt 0 ] && [ \"$1\" != \"--\" ]; do shift; done\nshift\nexec \"$@\"\n",
+        state.join(TERMINAL_SCOPE_CALLS).display()
+    );
+    fs::write(&shim, script).expect("stub を書ける");
+    fs::set_permissions(&shim, fs::Permissions::from_mode(0o755)).expect("stub に実行権を付ける");
+    format!("{}:{}", bin_dir.display(), std::env::var("PATH").unwrap_or_default())
+}
+
+/// 包める PATH で `runner` の便を 1 本 spawn し、（便 id・spawn の出力）を返す。前提として runner が包めた周で
+/// 起きたことを assert する（包めない周の「oom-kill 0 件」で空虚に充足しない）。
+fn spawn_confined(repo: &Path, state: &Path, runner: &str) -> (String, Output) {
+    let contract = write_contract(repo, &[], &[]);
+    let id = intake(repo, state, &contract);
+    let out = run_pipe_with_path(
+        &terminal_confined_path(state),
+        &["spawn", "--run", &id, "--repo", &repo.display().to_string(),
+          "--state-dir", &state.display().to_string(), "--runner", runner],
+    );
+    let calls = fs::read_to_string(state.join(TERMINAL_SCOPE_CALLS)).unwrap_or_default();
+    assert!(
+        calls.lines().any(|line| line.contains("--scope") && line.contains("-runner-")),
+        "前提: runner は包めた周で起きた: {calls:?}"
+    );
+    (id, out)
+}
+
+/// (b) 包めた周で、終端行を出さずに自分を KILL する runner（kernel の証拠が無い signal 死）は `Failed detail=unknown`。
+/// base は rc < 0 だけで `oom-kill` を書く。
+#[test]
+fn pipe_spawn_terminal_reason_no_evidence_is_unknown() {
+    let (repo, state) = repo_with_state();
+    let (id, out) = spawn_confined(&repo, &state, "kill -KILL $$");
+    assert!(stdout_of(&out).contains("stage=Failed"), "{} / {}", stdout_of(&out), stderr_of(&out));
+    assert_eq!(
+        stages(&state, &id).last(),
+        Some(&(Some(Stage::Failed), Some("unknown".to_owned()))),
+        "証拠の無い kill は unknown: {:?}",
+        stages(&state, &id)
+    );
+    assert!(
+        !stages(&state, &id).iter().any(|(_, detail)| detail.as_deref() == Some("oom-kill")),
+        "oom-kill を書かない: {:?}",
+        stages(&state, &id)
+    );
+    clean(&[&repo, &state]);
+}
+
+/// (c) 終端行 `oom_kill=1` を出す runner（rc 0）は従来どおり `Failed detail=oom-kill`（退行の pin）。
+#[test]
+fn pipe_spawn_terminal_reason_oom_evidence_stays_oom_kill() {
+    let (repo, state) = repo_with_state();
+    let runner = format!("{TOY_COMMIT}\nprintf 'confine-usage peak_bytes=9437184 oom_kill=1\\n'");
+    let (id, out) = spawn_confined(&repo, &state, &runner);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "記帳は通る: {}", stderr_of(&out));
+    assert_eq!(
+        stages(&state, &id).last(),
+        Some(&(Some(Stage::Failed), Some("oom-kill".to_owned()))),
+        "kernel の証拠がある周は oom-kill: {:?}",
+        stages(&state, &id)
+    );
+    clean(&[&repo, &state]);
+}
+
+/// (d) 器が公開する封じ込めの理由の列（`confine::REASONS` の `as_str`）が**逐語の列で完全一致**する: 母集団 8・
+/// 字面の重複 0・宣言順の末尾が `unknown`。variant の名を書かず字面だけで測る（base の木でも compile する）。
+#[test]
+fn pipe_spawn_reason_vocabulary_closes_over_the_unnamed_kill() {
+    let words: Vec<&str> = vessel::pipe::confine::REASONS.iter().map(|reason| reason.as_str()).collect();
+    assert_eq!(
+        words,
+        vec!["no-systemd-run", "no-scope", "no-rules", "manifest-unreadable", "no-room", "oom-kill", "signal", "unknown"],
+        "理由の列（宣言順）"
+    );
+    let unique: BTreeSet<&str> = words.iter().copied().collect();
+    assert_eq!(unique.len(), words.len(), "字面の重複 0: {words:?}");
+}

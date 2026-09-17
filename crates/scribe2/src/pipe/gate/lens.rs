@@ -118,7 +118,7 @@ fn lens_outcome(waited: std::io::Result<std::process::Output>, confinement: &Con
     // 「lens が rc N で終わった」と記すと、外からの kill と弁別できない（lens-132d L1）。
     if confinement.confined() {
         let usage = confine::read_usage(&text);
-        let killed = (usage.oom_kill >= 1).then_some(Reason::OomKill);
+        let killed = usage.oom_kill.is_some_and(|count| count >= 1).then_some(Reason::OomKill);
         let killed = killed.or_else(|| (out.status.code().is_none()).then_some(Reason::Signal));
         if let Some(reason) = killed {
             return unjudged(format!("lens が scope の中で死んだ（reason={}）", reason.as_str()));

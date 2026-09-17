@@ -3,7 +3,7 @@
 //! **env も HOME も読まない**（憲法 C2.2）。置き場と規則の値は `pipe::cli` と同じ口から解く。
 
 use super::cli::{broken, flag, int_row, live, refused, state_dir_of};
-use super::{current, emit, Emit};
+use super::{current, emit, is_stopping, Emit, STOPPING};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
 use crate::fleet::store::{LockPolicy, StoreError};
 use crate::fleet::{self, Completion, EventKind, SeatState, Stage, State};
@@ -63,6 +63,15 @@ fn stop_run(args: &[String], manifest: &Manifest, policy: LockPolicy, id: &str) 
         .filter(|seat| seat.state == SeatState::Live && seat.run == id)
         .map(|seat| (seat.id.clone(), seat.pid))
         .collect();
+    // **最初の signal を送る前に停止中の印を書く**（設計 pipeline.md §23）。runner の消滅を見た spawn は
+    // 印を読んで段を書かない（stop の kill を oom-kill に化けさせない）。signal を送らない周（pid 付きの
+    // 席が 0）は書かない。止め切れなかった前の周の印が残る便には 2 度書かない。
+    let signals = live_seats.iter().any(|(_, pid)| pid.is_some());
+    if signals && is_stopping(&state_dir, id) != Some(true) {
+        if let Err(err) = record_stopping(&state_dir, &state, id, run.stage, policy) {
+            return broken(err);
+        }
+    }
     let mut stopped = 0_usize;
     for (seat, pid) in &live_seats {
         if !pid.is_some_and(|found| terminate(found, grace)) {
@@ -254,6 +263,30 @@ fn record_seat_stop(
             seat: Some(id.to_owned()),
             pid,
             detail: None,
+        },
+        policy,
+    )
+    .map_err(|err| err.to_string())
+}
+
+/// 便に停止中の印を記帳する（`RunStage stage=<現段> detail=stopping`＝段は動かない・設計 pipeline.md §23）。
+fn record_stopping(
+    state_dir: &Path,
+    state: &State,
+    run: &str,
+    stage: Stage,
+    policy: LockPolicy,
+) -> Result<(), String> {
+    emit(
+        state_dir,
+        &Emit {
+            kind: EventKind::RunStage,
+            run,
+            bead: bead_of(state, run),
+            stage: Some(stage),
+            seat: None,
+            pid: None,
+            detail: Some(STOPPING.to_owned()),
         },
         policy,
     )

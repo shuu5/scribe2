@@ -246,11 +246,15 @@ fn launch_runner(launch: &Launch<'_>, worktree: &Path, cmd: &str, base: &str) ->
     // 捕らえた stdout は診断 file へ残す（包みの観測行を端末から消さない）。書けない周は
     // 段の判定を変えない（stderr 1 行で loud）。
     let kept = keep_stdout(launch, rc, &stdout).err();
-    let mut outcome = if box_killed(&confinement, rc, &stdout) {
-        // **箱が溢れた周は便を終端する**（設計 gate-cost.md §4.2）。verify 行の「測れなかった」
-        // とは極性が違う——便の内容が測れないのではなく、便自身が host の予約分を超えた。
-        // 理由は閉じた 1 つ（`runner-rc` と同じ終端の段）で、`Failed` から resume しない。
-        record_stage(launch, Stage::Failed, Some(OOM_DETAIL.to_owned()))
+    let mut outcome = if super::is_stopping(launch.state_dir, launch.run) == Some(true) {
+        // **停止中の便は段を 1 件も書かない**（設計 pipeline.md §23）。runner を消したのは `pipe stop` で、
+        // 終端は `RunStopped` の経路が書く——ここで `Failed` を書くと stop の終端を上書きする。
+        stopped_underneath(launch)
+    } else if let Some(reason) = box_killed(&confinement, rc, &stdout) {
+        // **箱の中で死んだ周は便を終端する**（設計 gate-cost.md §4.2）。verify 行の「測れなかった」
+        // とは極性が違う——便の内容が測れないのではなく、便自身が箱の中で死んだ。
+        // 理由は閉じた語彙の 1 つ（`runner-rc` と同じ終端の段）で、`Failed` から resume しない。
+        record_stage(launch, Stage::Failed, Some(reason.as_str().to_owned()))
     } else if rc == i32::from(RC_QUESTION) {
         settle_question(launch, worktree, &tip, &stdout)
     } else if rc == i32::from(RC_RATE_LIMIT) {
@@ -269,17 +273,30 @@ fn launch_runner(launch: &Launch<'_>, worktree: &Path, cmd: &str, base: &str) ->
 /// runner の scope の unit 名に載せる段の名。
 const RUNNER_STAGE: &str = "runner";
 
-/// 箱が溢れて終端した便の理由（**閉じた 1 つ**・設計 gate-cost.md §4.2・憲法 C2）。
-const OOM_DETAIL: &str = "oom-kill";
-
-/// runner の包みが箱の中で殺されたか（設計 gate-cost.md §4.2 / §4.3）。
+/// runner の包みが箱の中で死んだ理由（設計 gate-cost.md §4.2 / §4.3・pipeline.md §23）。
 ///
-/// 根拠は包みが stdout の終端に出した `oom_kill` である。包みごと死んで終端行を出せなかった
-/// 周は **signal 死**（rc が無い＝`code()` が `None` の周・器は -1 と記す）を代理にする。
-/// **包めなかった周は当たらない**——素の runner が外から止められた周（`pipe stop`）を
-/// 「箱が溢れた」と読まない。
-fn box_killed(confinement: &confine::Confinement, rc: i32, stdout: &str) -> bool {
-    confinement.confined() && (confine::read_usage(stdout).oom_kill >= 1 || rc < 0)
+/// **oom-kill は kernel の証拠がある周だけ**＝包みが stdout の終端に出した `oom_kill` が 1 以上。
+/// 終端行が在って `oom_kill` が 0 の周は箱の中の死と読まず `None`（従来の settle へ落ちる）。
+/// 終端行が無い / 読めない周の **signal 死**（rc が無い＝`code()` が `None` の周・器は -1 と記す）は
+/// 証拠が無いので [`confine::Reason::Unknown`]（外からの kill を oom-kill に化けさせない・C10）。
+/// **包めなかった周は当たらない**。
+fn box_killed(confinement: &confine::Confinement, rc: i32, stdout: &str) -> Option<confine::Reason> {
+    if !confinement.confined() {
+        return None;
+    }
+    match confine::read_usage(stdout).oom_kill {
+        Some(count) => (count >= 1).then_some(confine::Reason::OomKill),
+        None => (rc < 0).then_some(confine::Reason::Unknown),
+    }
+}
+
+/// 停止中の便で runner が消えた周（設計 pipeline.md §23）: 段は書かず（`SeatStopped` は書き済み）、終端を
+/// `pipe stop` の `RunStopped` に任せて rc 1 で止まる（呼び手が次の段へ進まない）。
+fn stopped_underneath(launch: &Launch<'_>) -> Outcome {
+    Outcome::failed_line(
+        RC_REFUSED,
+        format!("pipe: run {} は停止中に runner が消えた（終端は pipe stop が書く）", launch.run),
+    )
 }
 
 /// 捕らえた runner の stdout を `<run_dir>/runner.stdout.log` へ見出し付きで append する。

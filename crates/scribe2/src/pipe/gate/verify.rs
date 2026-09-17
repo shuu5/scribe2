@@ -363,7 +363,7 @@ impl Fired {
         if let Some(found) = self.confinement.reason() {
             return Some(found);
         }
-        if self.usage.oom_kill >= 1 {
+        if self.usage.oom_kill.is_some_and(|count| count >= 1) {
             return Some(Reason::OomKill);
         }
         (self.rc < 0).then_some(Reason::Signal)
@@ -497,7 +497,7 @@ pub(crate) mod tests {
     fn pipe_record_usage_head_matches_the_confine_reader() {
         let usage = read_usage(&format!("{USAGE_HEAD} peak_bytes=2097152 oom_kill=1\n"));
         assert_eq!(usage.peak_mb, Some(2), "同じ見出しを包みの読み手が測定として読む");
-        assert_eq!(usage.oom_kill, 1);
+        assert_eq!(usage.oom_kill, Some(1));
     }
 
     // flip-check: retroactive s2-07l.222
