@@ -1,6 +1,6 @@
 //! `flipcheck` の歯（overlay 判定）: base へ test 区間を写して撃つ本筋——RED-on-base /
-//! green-on-base / no-test-diff / not-flippable / tests-removed-only を測る。共通の helper は
-//! 親 module（`flipcheck_tests.rs`）に在る。
+//! green-on-base / no-test-diff / not-flippable / tests-removed-only / outside-teeth を測る。
+//! 共通の helper は親 module（`flipcheck_tests.rs`）に在る。
 
 // 純粋な移動（歯を足さない・s2-07l.91）。札は file ごとに要る＝この file の差は削除にならない。
 // flip-check: moved s2-07l.91
@@ -253,6 +253,110 @@ fn flip_check_ignores_file_whose_test_diff_only_removes_tests() {
     assert!(
         !got.line.contains("removed-only"),
         "本文が変わった file を削除だけへ逃がさない: {}",
+        got.line
+    );
+}
+
+// ---- 歯の外の file の同梱（s2-07l.450・設計 docs/design/pipeline.md §37）----
+//
+// 歯の外（helper・fixture）の行だけが動いた test file は、単独 overlay が base の歯を 1 本も
+// 動かさず構造的に緑になる。宣言 file と同じ側＝本体を撃つ木へ同梱し、判定行に `fixture=N`。
+
+/// 歯 `holds` の隣に **`#[test]` の付かない helper** を持つ lib（`holds` は helper を呼ばない
+/// ＝helper だけ変えた便は単独では必ず緑）。`dead_code` の allow は base から在る（動かない行）。
+const HELPER_FN: &str = "    #[allow(dead_code)]\n    fn helper() -> u32 {\n        10\n    }\n";
+
+/// [`HELPER_FN`] の本文の 1 行（歯の外）だけを変えた lib。
+fn helper_changed_lib(base_lib: &str) -> String {
+    base_lib.replace("        10\n", "        20\n")
+}
+
+/// `extra_rel()` に置く、base の実装（`val()` は 1）で落ちる歯 1 本。
+fn red_extra() -> String {
+    format!("#[test]\nfn fresh() {{\n    assert_eq!({FIXTURE_MEMBER}::val(), 2);\n}}\n")
+}
+
+/// (a) 歯の外の 1 行だけを動かした lib と、新しい歯を足した test file の 2 本を持つ便は、
+/// lib を本体（extra）の木へ同梱して `RED-on-base ok` で通り、判定行に `fixture=1` が載る。
+/// `tests_changed` は単独で撃った本体の 1 本。
+///
+/// base ではこの便は 2 本とも flip して lib が単独で撃たれ、`holds` が base で通るので
+/// `FAIL reason=green-on-base file=<lib>` で落ちる（→ RED）。
+#[test]
+fn flipcheck_fixture_outside_teeth_file_is_bundled_with_the_body() {
+    let dir = make_tmp_dir();
+    scaffold(&dir);
+    let base_lib = base_lib_with(HELPER_FN);
+    let base = seed_fixture(&dir, &base_lib);
+    write_at(&dir, &lib_rel(), &helper_changed_lib(&base_lib));
+    write_at(&dir, &extra_rel(), &red_extra());
+    head_commit(&dir);
+    let got = judge(&base, &dir);
+    drop_fixture(&dir);
+    assert_verdict(&got.line, got.code, 0, "RED-on-base ok");
+    assert!(
+        got.line.contains("tests_changed=1"),
+        "単独で撃った本体の 1 本だけを数えるはず: {}",
+        got.line
+    );
+    assert!(
+        got.line.contains("fixture=1"),
+        "同梱した歯の外の file の本数が判定行に載るはず: {}",
+        got.line
+    );
+}
+
+/// (b) 負例: 同じ形で、動かすのが**歯の中**の 1 行（base でも通る形＝assert に説明の引数を
+/// 足すだけ）なら、lib は従来どおり単独で撃たれて `green-on-base file=<lib>` で落ち、
+/// `fixture` の後置を持たない（2 つを両方見る＝別の理由で通った / 落ちたを塞ぐ）。
+#[test]
+fn flipcheck_fixture_inside_teeth_change_is_still_shot_alone() {
+    let dir = make_tmp_dir();
+    scaffold(&dir);
+    let base_lib = base_lib_with(HELPER_FN);
+    let base = seed_fixture(&dir, &base_lib);
+    write_at(
+        &dir,
+        &lib_rel(),
+        &base_lib.replace(
+            "        assert_eq!(super::val(), 1);\n",
+            "        assert_eq!(super::val(), 1, \"still one\");\n",
+        ),
+    );
+    write_at(&dir, &extra_rel(), &red_extra());
+    head_commit(&dir);
+    let got = judge(&base, &dir);
+    drop_fixture(&dir);
+    assert_verdict(
+        &got.line,
+        got.code,
+        1,
+        &format!("reason=green-on-base file={}", lib_rel()),
+    );
+    assert!(
+        !got.line.contains("fixture"),
+        "歯の中の行が動いた file を歯の外へ逃がさない: {}",
+        got.line
+    );
+}
+
+/// (c) 歯の外の file **しか**動かない便（新しい歯がどこにも無い）は、従来どおり単独で撃たれて
+/// rc 1 の `FAIL reason=green-on-base` のまま落ち、`fixture` の後置を持たない（同梱の
+/// fail-closed な落とし方・判定行の形は base と同じ）。
+#[test]
+fn flipcheck_fixture_only_change_falls_back_to_a_lone_shot() {
+    let dir = make_tmp_dir();
+    scaffold(&dir);
+    let base_lib = base_lib_with(HELPER_FN);
+    let base = seed_fixture(&dir, &base_lib);
+    write_at(&dir, &lib_rel(), &helper_changed_lib(&base_lib));
+    head_commit(&dir);
+    let got = judge(&base, &dir);
+    drop_fixture(&dir);
+    assert_verdict(&got.line, got.code, 1, "reason=green-on-base");
+    assert!(
+        !got.line.contains("fixture"),
+        "本体の無い便は同梱せず従来どおり落ちるはず: {}",
         got.line
     );
 }
