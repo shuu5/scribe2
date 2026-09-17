@@ -264,6 +264,6 @@ req = ["FR36", "FR33"]
 section = "19"
 write-set = ["crates/scribe2/src/fleet/select.rs", "crates/scribe2/tests/e2e/fleet.rs"]
 verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail fleet_select_week_", "cargo nextest run -p scribe2 --lib --no-tests=fail select_run_week_"]
-size = "S"
+size = "M"
 done = "便用の選定が 7 日窓の reset の早い口座を 5 時間窓の reset の早い口座より先に選び、7 日窓の reset が同じなら走行中の便数 → label、7 日窓の reset を持たない口座は候補のまま最後で、同じ表の席用の答えと候補なしの周の earliest_reset は変わらない"
 <!-- contracts:end -->
