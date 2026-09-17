@@ -227,6 +227,14 @@ scribe2 を載せる consumer が pipe を通すのに要る面は 3 つで、�
 - 限界（残す側）: (a) は base に在る名だけ（新しい歯の名は下界の外・実装役が置いた歯は FR20 の guard と §20 の門が拾う）。(b) は key の字面一致＝同じ key を別の判定行が使う file も入る（広がるだけ・害は交差の直列化）。生成物の連鎖（ci.yml の行 → CLAUDE.md の done 区間・rules 行 → 生成区間・.161 の型）は本 § の外＝後続の行（生成器の入出力を機械で引く表は on-disk の生成物になるので ADR が先・N4 /「ADR を書く条件」3）。
 - 却下案: 審査（lens）に任せる（本日 39 便・1 周 = 数十分）／§ の本文まで走査する（§ は「触らない」に名を並べる＝偽陽性が受付の断りになる・散文は契約 file の 2 欄に限る）／write-set 内の全 pub fn の呼び手を tests/ で grep して足す（write-set の src file が持つ pub fn は数十本＝ほぼ全歯の file が入り直列化が跳ねる・.423 の型は fn でなく判定行の字面で反転した）／`surfaces` 欄に判定行を宣言させる（planner の手の宣言に戻る・散文に既に在る字面を 2 度書かせる）。
 
+## 29. pipe/closure.rs の名指しの解決の群を closure/names.rs へ割る（契約表の行 ac・`s2-07l.458`・純移動）
+
+- 何が起きているか（planner の実測 2026-09-18・main 36d9c39・`pipe preflight` で verified）: `pipe/closure.rs`（1190 行・src 710 + in-file の歯 480）は R-C4-2 の余地が 262 行しか無く、size M の便（行 aa・`s2-07l.429`）を受付が `cap-headroom` で断る（rc 1 を実測）。行 ab（`s2-07l.451`）も同じ余地で S に固定されている。責務は 3 群（型の閉包の 4 形と `sees`〔§3〕／名指しの解決〔`unresolved_names` と `Form` の判定・§3 の名指し〕／外形 pin と歯の区間〔`surface_closure` / `test_region` / `texts_of`〕）で、名指しの解決の群は他の 2 群に依存しない閉じた集合（呼び手は `table/check.rs` の 1 か所と親の歯だけ・grep で確認）。
+- 形（§14 / §15 と同型）: 子 module（行 ac の write-set の `+` の file）へ名指しの解決の群（`unresolved_names` / `Form` / `resolves_type` / `impls_type` / `form_of` / `backticked` / `path_matches` / `holds_word` / `declares_fn`・src 約 116 行）と対応する歯（`closure_names_` の 3 本・fixture `name_fixture` / `named_texts` / `impl_fixture`・約 126 行）をそのまま移す。親は `mod` 宣言と `pub use`（`unresolved_names`）で呼び手（`table/check.rs`）を無傷に保つ。**親に残す**: `ClosureError` / `Source` / `surface_closure` / `test_region` / `texts_of` / `closure` と 4 形の helper / `is_ident` / `is_ident_char`（`derive.rs` の import は不変）。子が親の私有 item（`texts_of` / `test_region` / `is_ident` / const 群）を呼ぶ周は可視性を `pub(super)` に上げる＝可視性の 1 語と mod 宣言・`pub use`・`use` の path・移動で生じた可視性の制約を説明する doc コメント行は移動の一部（純移動の残差として許す・§14 と同じ）。札 `// flip-check: moved s2-07l.458` は親と子の歯の区間に対で置く。行 aa（`s2-07l.429`）が使う `backticked` は親の `pub(super) use` で引く（行 aa の write-set は不変）。
+- 見積: 親 約 948 行（余地 約 550）・子 約 245 行。
+- 歯: 既存の `closure_` / `contract_closure_ext_` / `contract_derive_` / `prop_closure_` の歯が全部緑で期待を変えない。極性一覧の snapshot は不変（closure に境界の型名の pin は無い・`tests/e2e/polarity.rs` で実測）。
+- 却下: `unresolved_names` だけを移して `Form` 系を親に残す（呼び合いが 2 module に跨り可視性の 1 語が 8 つに増える）／歯の module だけを別 file に出す（R-C4-2 は歯込みで測るので余地は増えるが責務が割れず、次の M で同じ詰まりに戻る）／行 aa を S に落とす（`prose_closure` の見積 150 行が S の 100 を超える＝size の字面だけ変える嘘）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -530,6 +538,16 @@ write-set = ["crates/scribe2/src/pipe/closure.rs", "crates/scribe2/src/pipe/clos
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail closure_scope_"]
 size = "S"
 done = "--test の行が統合 test の file だけを、--lib の行が src の file だけを置き場に返し、旗なしと読めない旗と 2 つ以上の旗の行は crate 全体のまま、0 本の行は従来の字面で断られ、現物の契約表は findings 0"
+
+[[contract]]
+id = "ac"
+title = "pipe/closure.rs の名指しの解決の群（unresolved_names / Form 系 / backticked と歯 closure_names_）を closure/names.rs へ割る — 純移動・ClosureError と 4 形と surface_closure は親に残す・呼び手は pub use で不変・札 moved"
+req = ["FR48"]
+section = "29"
+write-set = ["-crates/scribe2/src/pipe/closure.rs", "+crates/scribe2/src/pipe/closure/names.rs", "docs/design/contract-source.md"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail closure_names_"]
+size = "S"
+done = "名指しの解決の群 9 item と歯 3 本と fixture が子 module に在り、親は mod 宣言と pub use / pub(super) use だけが増えて呼び手の import は不変、既存の closure_ と contract_ の歯が全部緑で極性一覧の snapshot が不変、純移動の機械証明の残差が use と path と可視性の 1 語だけ"
 <!-- contracts:end -->
 
 
