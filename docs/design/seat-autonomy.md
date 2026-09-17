@@ -187,6 +187,19 @@ repo に入れない）。
 - 歯（`e2e_fixture_sweep_` 接頭辞・`tests/e2e/main.rs` の隣の新 file `tests/e2e/fixture.rs`）: (a) 死んだ pid（`sh -c true` を spawn して wait した pid）名義の `e2e-<pid>-x` dir に隔離 server を立てておき、`make_tmp_dir` を呼ぶと dir が無く `tmux -S <sock> ls` が断る（base は残る → RED）／(b) 自分の pid 名義の dir は掃かれない（server も生きている）。
 - 却下: `tempfile` crate（直接依存の追加・A3・`make_tmp_dir` の doc comment に既に却下の記録）／nextest の `leak-timeout` / 外部の掃除 script（歯の外の散文運用・C12）／fixture 作成時に全 `e2e-*` を消す（並列の歯の dir を壊す）／`kill-server` を生きている pid の server にも撃つ（同上）。
 
+## 14. 打刻の合図の backoff — 無変化の席には合図の間隔を伸ばして最後は止め、変化で 40 分に戻す（契約表の行 f・`s2-07l.423`）
+
+- 何が起きているか（folio2 planner の実測 2026-09-17・verified・`s2-07l.423`）: 打刻の合図（idle の席へ「管理 tick: heartbeat を撃ち、続きを進めてください」を注入する口・§3 (d)）の brake は **時間だけ**（tick-stamp の mtime が rules 行 `seat.tick_stale_s` 未満なら送らない・`pointer_recent`）で、席の状態が前回の合図から変わったかを見ない。承認待ちで 6 時間無変化の席に同じ合図が 40 分ごとに約 30 回届き、各回が 1 turn（heartbeat + 確認 + park の報告）を消費した。tick の周期（rules 行 `seat.tick_interval_s`・§11）は刻みが細かくても token を消費しない＝消費するのは合図に応える席の turn だけ。user 裁定 2026-09-17T00:55Z（逐語は台帳 `s2-07l.423` notes）: tick は 1 分・合図は基本 40 分・無変化なら間隔を伸ばして最後は止める。
+- 形（判定入力は typed な状態だけ・席の描画や自由文は見ない・C3.3）:
+  1. **変化の digest**: tick は合図を送る前に席の digest を測る。材料は 2 つ = 席の状態 log（`seat/<target>/state.jsonl`）の最終行の `ts`・置き場の fleet の event log（`fleet/events.jsonl`）の最終行の `ts`。context は入れない（合図に応える turn ごとに増えるので無変化の席でも毎回変わる・閾値は退避の合図が別に見る）。台帳は読まない（毎周 `bd` を子 process で撃つ費用を tick に持ち込まない・台帳の動きは席の turn になって状態 log に現れる）。digest は 2 値の並びの 1 行（順は宣言順・hash にしない＝読める形で残す・C10）。
+  2. **梯子の記録**: 合図を送った周は `seat/<target>/pointer-digest` に 1 行 JSON（`sent_at` / `step` / `digest`）を書く（tick-stamp の隣・tick-stamp は「合図を送った」の印として残す＝読み手と極性は不変）。ただし送った周の `digest` は**基準にしない**（合図に応える席の turn〔heartbeat + 報告〕が状態 log を必ず 1 行進めるので、送出時の digest と比べると毎回「変化あり」になり梯子が登らない）。基準は **席が合図に応えて idle に戻った最初の周**（状態 log の最終行が `sent_at` より後の Stop）に取り、記録の `digest` に書く（settle）。settle の前の周は比べない（`pointer=settling`）。`sent_at` から `seat.tick_stale_s` を過ぎても settle しない周（席が応えなかった＝入力欄の門など）は、その周の digest を基準にする（席が応えない席へは梯子が登る側に倒す）。settle 後の各周は基準と今の digest を比べ、**違えば `step` = 0**（待ち = `seat.tick_stale_s`・40 分）、**同じなら `step` + 1** で待ち = `seat.tick_stale_s × seat.pointer_backoff_factor ^ step`（`sent_at` からの経過で測る）。待ちが `seat.pointer_backoff_max_s` を超える段は**送らない**（停止・`pointer=stopped`）。記録の読みは閉じた 3 値（記録なし／settle 前＝基準が無い／基準あり）で、記録が無い・読めない周は「記録なし」＝step = 0 でそのまま送る（settle 待ちに落とさない・fail-open は合図 1 本だけ・N1 の面は無い）。
+  3. **止めるのは合図だけ**: 停止中も tick は毎周 digest を測り、変化した周に step = 0 へ戻して合図を送る。退避の合図（context の閾値・FR29）と cycle の評価（§3 (b)）は従来どおり毎周で、本節の梯子に掛からない（brake が掛かるのは打刻の合図だけ＝`s2-07l.109` の形は不変）。
+  4. **判定行**: `pointer=<sent|settling|wait:<残り秒>|stopped> step=<n>` を tick の判定行に 1 語ずつ足す（既存の `reason=pointer-recent` は「待ち」と「settling」の両方に残し、停止は `NoopReason` の variant 1 つ `PointerStopped` を足す・C2）。
+  5. **rules 行**（C1・値は manifest・裁定 id = user 2026-09-17T00:55Z）: `seat.pointer_backoff_factor`（2）と `seat.pointer_backoff_max_s`（86400）。初段は既存の `seat.tick_stale_s`（2400）を流用し行を増やさない。梯子の実値 = 40 分 → 80 → 160 → 320（5.3 時間）→ 640（10.7 時間）→ 1280 分（21.3 時間）→ 停止（次段 2560 分 > 24 時間）。
+- 触らない: 合図の文面（`default_pointer`）・注入の経路（`inject_line`・入力欄の門）・`seat.tick_stale_s` / `seat.signal_backoff_s` の値・退避の合図と cycle の順序・tick の周期（§11）。
+- 歯（`seat_pointer_backoff_` 接頭辞・`tests/e2e/seat/tick.rs`・fixture は既存の tick の歯と同じ〔偽 tmux + 席 dir + rules の写し〕で、時刻は記録の `sent_at` を過去に書いて進める）: (a) 1 周目で合図が出て記録が書かれ、席の応答（状態 log に `sent_at` より後の Stop を 1 行）の後の周で settle し、その後の無変化の周は待ちが factor 倍になって合図が出ない（判定行 `pointer=wait:<s> step=1`・応答の turn が「変化」に数えられない）／(b) settle 後に digest の材料（状態 log の最終行）を変えると step = 0 に戻って合図が出る／(c) 待ちが max を超える段は `pointer=stopped` で合図が出ず、digest を変えると再開する／(d) rules 行 2 本が `RuleKind` の `ALL` と `rules validate` の外形に載る（`tests/e2e/rules.rs` の pin）。
+- 却下: 席（AI）に「変化が無ければ heartbeat を打たない」と判断させる（席を起こす＝それ自体が合図の消費・C3.3 の自由文入力）／固定の「3 回無変化で中断」（変化の検知が席の応答に依存する周に永久停止しうる・上限で必ず 1 回撃つ梯子の方が両端を機械で守れる）／tick 自体を止める（退避の合図と cycle が止まる・folio2 の 2026-09-17 の事故）／既定の 40 分を伸ばすだけ（撃ちすぎも遅すぎも残る）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -239,4 +252,14 @@ write-set = ["crates/scribe2/tests/e2e/main.rs", "+crates/scribe2/tests/e2e/fixt
 verify = ["cargo nextest run -p scribe2 --no-tests=fail e2e_fixture_sweep_"]
 size = "S"
 done = "死んだ pid 名義の隔離 server と dir が次の make_tmp_dir で消え、生きている pid の dir と server は残り、make_tmp_dir の戻りの型と呼び手は不変"
+
+[[contract]]
+id = "f"
+title = "打刻の合図の backoff — tick が席の digest（状態 log・fleet event の最終行）を席が合図に応えた後に測り、無変化なら合図の間隔を factor 倍ずつ伸ばして max で止め、変化で seat.tick_stale_s に戻す（rules 行 seat.pointer_backoff_factor / seat.pointer_backoff_max_s・裁定 user 2026-09-17T00:55Z）"
+req = ["FR29", "FR27"]
+section = "14"
+write-set = ["rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "crates/scribe2/tests/e2e/rules.rs", "docs/design/rules-manifest.md", "crates/scribe2/src/seat/tick.rs", "crates/scribe2/src/seat/tick/render.rs", "+crates/scribe2/src/seat/tick/pointer.rs", "crates/scribe2/tests/e2e/seat/tick.rs", "crates/scribe2/tests/e2e/snapshots/e2e__rules__rules_external_form.snap"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail seat_pointer_backoff_"]
+size = "S"
+done = "無変化の席への合図が 40 分 → 80 → 160 → 320 → 640 → 1280 分で止まり、席が合図に応えた後の状態 log か fleet event が変わった周に 40 分へ戻って再開し、退避の合図と cycle は毎周のまま"
 <!-- contracts:end -->
