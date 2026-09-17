@@ -56,7 +56,8 @@
     { "@id": "./ADR-0032-dialogue-surface-rules-live-in-one-design-doc-and-planner-brief.html" },
     { "@id": "./ADR-0033-core-lines-count-source-only-and-io-lives-in-a-boundary-crate.html" },
     { "@id": "./ADR-0034-dispatcher-starts-reviewed-contracts-automatically.html" },
-    { "@id": "./ADR-0037-rulings-without-a-run-are-approval-events.html" }
+    { "@id": "./ADR-0037-rulings-without-a-run-are-approval-events.html" },
+    { "@id": "./ADR-0038-plugin-payload-lives-in-a-generated-dir.html" }
   ]
 }
 </script>
@@ -136,6 +137,7 @@
     <tr><td>ADR-0033</td><td><a href="./ADR-0033-core-lines-count-source-only-and-io-lives-in-a-boundary-crate.html">core の行数は本体だけを数え、 子 process を撃つ I/O 面は境界 crate へ分ける (上限 40,000 は上げない・binary は 1 つ・境界 crate にも上限)</a></td><td>accepted</td><td>2026-09-15</td></tr>
     <tr><td>ADR-0034</td><td><a href="./ADR-0034-dispatcher-starts-reviewed-contracts-automatically.html">便の起動は器の dispatcher が行う (審査を通った契約を列に入れ、 依存・交差・受付を満たす便を自動で起こす・planner の手動介入は typed な口)</a></td><td>accepted</td><td>2026-09-15</td></tr>
     <tr><td>ADR-0037</td><td><a href="./ADR-0037-rulings-without-a-run-are-approval-events.html">run 無しの裁定も承認 event として器が持つ (event kind RulingReceived・逐語は detail・裁定 id は器が打つ ts・書き手は対話面の席の口 1 つ・manifest の裁定 id との突合は doctor)</a></td><td>accepted</td><td>2026-09-16</td></tr>
+    <tr><td>ADR-0038</td><td><a href="./ADR-0038-plugin-payload-lives-in-a-generated-dir.html">plugin の実体は生成 dir に置き、 marketplace の source はその dir を指す (cache の写しの単位を plugin に閉じる・生成器が起こし xtask check が drift 0 を測る・plugin root を前提にする現物は 1 定数に追随・再 install は user 手番)</a></td><td>accepted</td><td>2026-09-16</td></tr>
   </tbody>
 </table>
 <p data-audience="machine">新しい決定を記録したら本表と JSON-LD の <code>dc:hasPart</code> に追記する。 ADR は frozen (改訂は supersede する新 ADR で行う)。</p>
