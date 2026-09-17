@@ -68,3 +68,27 @@ marker は判定行（inject / noop の判定と同じ「出すだけ」）で g
 
 - 同じ設計 doc を指す memo が N 本以上になったら「設計 doc 1 本に畳む候補」を出す（束ねの検出線・memo の本文の pointer を読む必要があり本 doc の「本文は読まない」の外）。
 - 契約表（[contract-source.md](./contract-source.md)）が正本になった後、memo の「契約化」は設計 doc に行を足すことになる＝(a) の marker はそのまま、読み方だけ skill 側で変わる。
+
+## 11. memo の列 — rebrief の DATA に `[MEMO-QUEUE]`（着手可能な memo を priority → 齢 → id の順）を足す（契約表の行 a・`s2-07l.369`）
+
+- 何が起きているか: user 指摘 2026-09-15 22:3xZ（要旨: 溜まった memo を処理する planner の構造的な仕組みは在るか・逐語は台帳 `s2-07l.369`）。§3 の 2 種は「判定点を過ぎた」と「齢を過ぎた」の 2 面で、**いま契約化に着手できる memo をどの順で**は出さない（実測 2026-09-15: memo 26 本・`[MEMO-DUE]` 0・`[MEMO-STALE]` 0＝planner が rebrief のたびに台帳の一覧を手で数える）。契約 34 本の側は [dispatcher.md](./dispatcher.md) §6（`[DISPATCH]`・列外の理由）が出す。現物（verified・main a620600）: `seat/rebrief.rs` の `triage`（純関数・I/O なし）は `Triage`（due / stale / memo_total / unreadable）を返し `memo_lines` が marker に描く。閾値は rules 行 `ledger.memo_stale_days` / `ledger.memo_stale_priority`。
+- 形: (1) `Triage` に **queue** の列を足す = open ∧ label `intake:memo` ∧ **着手可能**（blocks 依存を持たないか、持つなら全部 closed）∧ priority ≤ `ledger.memo_stale_priority`（閾値は既存の行を共用・新しい行を足さない・C1 / C5）の memo。順序 = priority の昇順 → 齢（`updated_at` からの経過）の降順 → id の数字順（同点の周・既存の `id_key`）。due / stale と重なってよい（面が違う: due = 判定点、stale = 齢、queue = 着手順）。(2) marker 3 種（`Marker` の宣言順の末尾・`[MEMO-STALE-NONE]` の後・`as_str` / `ALL` / 網羅 match）: `[MEMO-QUEUE] <id> p=<P> age_days=<実測|-> blocks=<閉じた依存の列|-> updated=<ts>`（1 memo 1 行・上の順）/ `[MEMO-QUEUE-COUNT] n=<件> of=<memo 母集団> unreadable=<updated_at を読めず齢を測れなかった件数>`（齢が測れない memo は列の末尾に `age_days=-` で載せる＝落とさない・C10）/ `[MEMO-QUEUE-NONE]`（確認した上で 0）。台帳を読めない周は既存の rc 2（marker なし）。(3) skill 側の読み方（本 repo の外・形だけ）: brief の「次のアクション」の memo の項は `[MEMO-QUEUE]` の先頭から取る（器は決めない）。
+- 触らない: due / stale の判定と marker の字面・rules 行の値・`[DISPATCH]`（契約の側）・台帳の write（列は読むだけ・起票も label も動かさない）・`Issue` の field（既存の priority / labels / dependencies / updated で足りる）。
+- 歯（`seat_rebrief_memo_queue_` 接頭辞・`tests/e2e/seat/wm.rs`・偽 bd は既存の fixture〔JSON を返す script〕）: 依存なし P1 と blocks 全 closed P0 と blocks に open を持つ P0 の 3 memo → 列は P0（closed の依存）→ P1 の 2 本で open の依存を持つ memo は出ない／priority 閾値超の memo は出ない／同 priority は齢の降順／`updated_at` の壊れた memo は末尾に `age_days=-` で出て `unreadable=1`／0 件は `-NONE`・`of=` は母集団／property: queue ⊆ memo 母集団 ∧ 列は priority で非減少／snapshot の marker 一覧に 3 行増える。
+- 却下案: 新しい rules 行で queue の閾値を持つ（裁定 id が要り既存の行で足りる）／件数の上限で切る（切った分が見えない・列は全部出し読み手が先頭を取る）／queue を due / stale と排他にする（面が違う・排他にすると due の memo が列から消える）／`[DISPATCH]` と 1 つの marker に畳む（契約と memo は列の入力も順序も別・dispatcher.md §2）／齢の測れない memo を落とす（測れないを 0 件に化けさせる・C10）。
+
+<!-- contracts:begin -->
+schema = 1
+
+[[contract]]
+id = "a"
+title = "memo の列 — rebrief の DATA に [MEMO-QUEUE]（着手可能 ∧ priority ≤ ledger.memo_stale_priority の memo を priority → 齢 → id の順）と件数行・NONE を足す"
+req = ["FR23"]
+section = "11"
+touches = ["crate::seat::rebrief::Marker"]
+tests = ["crates/scribe2/tests/e2e/seat/wm.rs"]
+also = ["crates/scribe2/src/seat/rebrief.rs", "crates/scribe2/tests/e2e/snapshots/e2e__seat__seat_rebrief_external_form.snap"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail seat_rebrief_memo_queue_"]
+size = "S"
+done = "偽 bd の memo 3 本で [MEMO-QUEUE] が着手可能な 2 本を priority 順に出し、open の依存を持つ memo は出ず、齢の測れない memo は末尾に age_days=- で載り、件数行の of= が母集団と一致し、0 件は -NONE"
+<!-- contracts:end -->
