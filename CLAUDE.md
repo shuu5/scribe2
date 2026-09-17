@@ -32,6 +32,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo xtask check
 cargo xtask flip-check --base <base>
 cargo xtask rules-diff --base <base>
+cargo xtask deps-delta --base <base>
 cargo deny check
 cargo insta test --test-runner nextest --unreferenced reject --check --workspace
 ```

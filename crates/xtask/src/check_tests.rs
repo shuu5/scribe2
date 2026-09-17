@@ -173,8 +173,8 @@ fn real_limits() -> Limits {
 }
 
 /// fixture の rules manifest。`allow` に与えた path が例外行に載る。役割の行は planner 1 つ（権能 2 つ）。
-/// 閾値の 9 行（R-C4-* / R-C4.line-width / R-C13-1 / gate.tmux_test_threads）は現物と同じ値で持つ（`Limits::read` が
-/// 無い行を拒むので、fixture も実 repo が持つものを持つ）。
+/// 閾値の 11 行（R-C4-* / R-C4.line-width / R-C13-1〔.per-pr / .check-delta-ms〕/ gate.tmux_test_threads）は
+/// 現物と同じ値で持つ（`Limits::read` が無い行を拒むので、fixture も実 repo が持つものを持つ）。
 fn rules_manifest(allow: &[&str]) -> String {
     let items = allow
         .iter()
@@ -191,6 +191,8 @@ fn rules_manifest(allow: &[&str]) -> String {
         ("R-C4-4.args", "FnArgs", limits.fn_args),
         ("R-C4.line-width", "LineWidth", limits.line_width),
         ("R-C13-1", "DepBudget", limits.dep_budget),
+        ("R-C13-1.per-pr", "DepPerPr", limits.dep_per_pr),
+        ("R-C13-1.check-delta-ms", "CheckDeltaMs", limits.check_delta_ms),
         ("gate.tmux_test_threads", "GateTmuxTestThreads", limits.tmux_test_threads),
     ];
     let mut text = String::from("schema = 1\n");

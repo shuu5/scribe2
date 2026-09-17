@@ -204,7 +204,7 @@ id = "c"
 title = "1 便あたりの依存の増分を R-C13-1.per-pr と突合する xtask deps-delta・依存を足した便の check-delta-ms を検出線に記録"
 req = ["FR7", "FR17", "NFR3"]
 section = "4"
-write-set = ["+crates/xtask/src/deps_delta.rs", "crates/xtask/src/main.rs", "crates/xtask/src/limits.rs", "crates/xtask/src/check_facts.rs", "crates/xtask/src/check_tests.rs", ".github/workflows/ci.yml", "CLAUDE.md", "docs/design/rules-manifest.md"]
+write-set = ["crates/xtask/src/deps_delta.rs", "crates/xtask/src/main.rs", "crates/xtask/src/limits.rs", "crates/xtask/src/check_facts.rs", "crates/xtask/src/check_tests.rs", ".github/workflows/ci.yml", "CLAUDE.md", "docs/design/rules-manifest.md"]
 verify = ["cargo nextest run -p xtask --no-tests=fail deps_delta_"]
 size = "S"
 done = "per-pr を超えて依存を足す PR が CI の入口で落ち、足した便の check-delta-ms が判定行に残る"
