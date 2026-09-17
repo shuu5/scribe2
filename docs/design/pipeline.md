@@ -275,7 +275,7 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
 
 - 出所: planner の実測: docs PR の squash merge が `Gated`（PASS）の便の追随を 1 周誘発する。いまは「Gated PASS の便が 0 の窓か Landed の直後に merge」を席の運用（散文）で守っている＝規則ではない。
 - 現物: 着地の列は `pipe/queue.rs` の `turn_in` / `await_turn` が読む。唯一の wait は `fleet/wait.rs` の `Completion`（`LandTurn` / `SlotFree` / `AccountFree` は pid を見張らない variant）。
-- 形: `Completion` に pid を見張らない variant を 1 つ足す（窓の待ち）。判定条件は、着地の列に PASS の便が 0 本かつ `Landed` の記帳から追随中の便が無いこと。既存の deadline・唯一の wait の経路をそのまま通す。
+- 形: `Completion` に pid を見張らない variant を 1 つ足す（窓の待ち）。判定条件は 3 つ全部: 着地の列に PASS の便が 0 本／`Landed` の記帳から追随中の便が無い／local の `refs/heads/main` が `refs/remotes/origin/main` の祖先である（**未 push の squash が無い**＝主実測中の便が local main に積んだ squash と push 待ちの `Landed` の両方を数える・`s2-07l.449` の 1 面目: 窓が `Landed` 前の squash を数えず docs の merge で origin と分岐した・admin 実測 2026-09-17）。origin の ref は読むだけで fetch しない（撃つ側が fetch する・器は網を撃たない）。3 つ目の読みの順は固定: **先に** local の `refs/heads/main` を読み、読めない周は origin の有無に依らず窓を**閉じる**（fail-closed・`unpushed=unreadable`）。**次に** `refs/remotes/origin/main` を読み、無い周は 3 つ目を数えず（列の条件だけ）行に `remote=none` を載せる。両方読めた周だけ祖先を判定する。`busy` の行は列の便の名指しの隣に `unpushed=<local main の sha|unreadable|->` を持つ（3 つ目で閉じた周は sha・読めない周は `unreadable`・列だけで閉じた周は `-`＝どの条件で閉じたかを 1 行で読める・C10）。git の読みは `pipe` の既存の 2 口（`git_ok` / `git_line`）。既存の deadline・唯一の wait の経路をそのまま通す。
 - 新しい subcommand の口（`pipe land-window`）を足す。窓が開いていれば rc 0 で `clear` を、待ちが切れれば rc 1 で列の便を名指した `busy` を返す。席の docs merge はこの口を前置して撃ち、散文の窓判断を消す。
 - 触らない: `gh pr merge` 自体（器は merge を撃たない）・列の順序・`LandTurn`。
 - 却下: docs-only PR も器が `gh` を撃って merge する（外部 binary を撃つ面が増える）／運用のまま据え置く（規則が散文のまま）。
@@ -427,6 +427,22 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
 - 触らない: 単独 overlay の骨（`judge_each` の 1 本ずつ・「どれか 1 本が赤い」へ緩めない）・`removed_only` の部分列・`retroactive` / `moved` の札と効く 4 条件・`present_mods_only` の 3 形・base 段の撃ち直しと `base-not-green` の弁別子・判定行の 3 形と FAIL の 4 語・極性一覧の行・gate の段の順序。
 - 歯（`flipcheck_fixture_` 接頭辞・`crates/xtask/src/flipcheck_overlay_tests.rs`・既存 fixture〔`base_commit` / `write_at` / `head_commit` / `judge` / `assert_verdict`〕の型）: (a) 歯の外の 1 行だけを動かす file と新しい歯を足す file の 2 本を持つ diff が `RED-on-base ok` を出し判定行に `fixture=1` が載る（base は前者を単独で撃って `green-on-base file=…` で落ちる → RED）／(b) 負例 = 歯**の中**の 1 行（base でも通る前提の値）を動かす file は従来どおり単独で撃たれて `green-on-base` で落ち、判定行に `fixture` の後置が付かない／(c) 歯の外の file しか動かない便は `green-on-base` のまま落ちる（同梱の fail-closed な落とし方）。
 - 却下: 便に 1 本でも RED が在れば他の file の緑を通す（`judge_each` が塞いだ当の fail-open で、flip の意味は「どれか 1 本が赤い」ではない）／file の種別を閉じた enum へ畳む（現物は述語の組で、畳むと判定の全面書き換え＝S の便が L になる・C4）／歯の中の前提の値（`s2-07l.447` の型）まで救う（前提と期待は字面で弁別できない＝解は契約の側〔弁別の歯を 1 本足す〕と、入口の測定を実装役の完了判定の前へ寄せる形〔別便〕に残る）。
+
+## 38. 追随の形が無い便（base が main の祖先でない）を merge-base からの rebase --onto で追随する — merge-base が無い周だけ stale base で断る（契約表の行 af・`s2-07l.449`）
+
+- 何が起きているか（admin 実測 2026-09-17 07:2xZ・verified・`s2-07l.449` の 2 面目）: 着地中の便が squash を local main に積んで主実測を回している間に docs PR の merge が origin/main へ載り、local と origin が分岐した。回復で local main を origin へ揃えた後、その未 push の squash を base に追随済みだった便（Gated PASS・base が消えた squash）の base が main の祖先でなくなり、`pipe land` が `stale base` で 8 周断り、後ろの便が着地の順番待ちで止まった（#297 と同型）。現物: `pipe/land.rs` の `follow_main` は `git merge-base --is-ancestor <base> <main>` が偽なら `stale base` の refused で何も書かない。§18 の周回はこの断りを `stale:` として記帳し同じ経路へ戻すが、祖先でない base は何周しても解けない（撃ち直しの回数だけ減る）。1 面目（窓が主実測中の squash を数えない）は §19 の窓の 3 つ目の条件で塞ぐ。
+- 形: (1) `follow_main` の祖先検査を閉じた 3 値にする（宣言順 = base が main の祖先／祖先でないが `git merge-base <base> <main>` が 1 つ在る／merge-base が無い・読めない）。(2) 2 つ目の周は worktree の branch に `git rebase --onto <main> <base>` を撃つ＝便が記録した base の上に積んだ commit だけを main の上へ運ぶ（merge-base から base までの消えた commit は運ばない・main は 1 byte も動かさず force 系は使わない・N1）。衝突は既存の衝突の経路（`follow.rs` の `on_conflict`・`rebase-conflict:` の記帳・起こし直し・上限）へ、成功は既存の `rebase:<base>..<main>` の記帳（`base_of_run` が新しい側を読む＝新しい base は main）・既着地の判定（§29）・再 gate の要否（§30 の検出線の面）へ**合流する**＝以後は従来の追随と同じ 1 本で、rebase の呼び方が 1 語違うだけ。(3) merge-base が無い・読めない周だけ従来の `stale base` の断り（字面不変・何も書かない・fail-closed）。(4) 記帳の detail と stdout の `rebase=` の形は不変（何を onto したかは範囲の 2 sha で読める）。
+- 触らない: CAS と「撃ち直しの間に main が動いた」の断り・§18 の周回・§29 の既着地・衝突の回数の上限（`pipe.follow_retries`）・`retire` の前提・`--pr-cmd` 形（stale base を見ない）・§19 の窓。
+- 歯（`pipe_land_onto_` 接頭辞・`tests/e2e/pipe/land.rs`・既存の追随の fixture〔`pipe_land_rebase_` の型〕で main を base の親から別の commit で作り直す）: (a) base が main の祖先でなく merge-base が在る便の land が rebase --onto で追随して `Landed`（squash の tree は便の commit だけを運ぶ・記帳は `rebase:<base>..<main>`・base は `stale base` の rc 1 で event 0 増 → RED）／(b) 同じ形で衝突する周は既存の `rebase-conflict:` の記帳と起こし直しの経路（字面不変）／(c) merge-base の無い main（無関係な歴史）は従来どおり `stale base` の rc 1・event 0 増（極性不変）／(d) 追随の後の `base_of_run` が main を返し、再 gate の要否は §30 の判定のまま（差分が検出線の面の外なら省く）。
+- 却下: land の外で人が branch を rebase する（.432 で 8 周・撃つ主体が席に残る）／器が local main を origin へ揃える（main を動かす側・N1・回復は人の手番のまま）／merge-base を新しい base として記帳する（gate の diff に main の commit の逆向きが載る・pipeline-conflict.md §3 手順 5 と同じ穴）／`stale base` の断りを全部 --onto に置き換える（無関係な歴史へ運ぶ・fail-closed を保つ）。
+
+## 39. pipe stop --run が段を問わず便を終端にする — Stopped の後の段の記帳を記帳の口が断り、運転手の process を札で止める（契約表の行 ag・`s2-07l.437`・[dispatcher.md](./dispatcher.md) 行 d の札の後）
+
+- 何が起きているか（admin 実測 2026-09-17 05:5xZ・母集団 = 同じ周の stop 2 本・2 本とも再現・verified）: `pipe stop --run` は runner の席（process group）だけを止めて `RunStopped` を書き、review / gate / land の段を運んでいる運転手（`pipe run` の process・`cli/run.rs` の `run_all` が段を 1 process で連続させる）を止めない。運転手は止まった便の次の段を書く: .430 run 055209Z は Intake で stop（seats=0）した後も審査 → `Spawned` まで進み（再 stop で runner を止め、器は停止の signal を `Failed oom-kill` と記帳＝行 q の誤分類）、.289 run 052948Z は Implemented で stop した後も gate を続け `Gated` → land で `Stopped` を上書きし write-set の面を握り続けた（運転手を手で TERM）。現物: run の event を書く口は `pipe/mod.rs` の `emit` 1 本（`fleet/store.rs` の `append` が lock の中で追記する）で、段の関数は `Stopped` を読まない（読むのは `queue.rs` の `may_queue`・`cli/state.rs`・`retire` の前提だけ）。
+- 形（判定は typed・段の関数に読み手を増やさない・C2）: (1) **記帳の門**: `fleet/store.rs` に「lock の中で述語を評価して偽なら書かない」条件付き append の口を 1 つ足し（述語は閉じた enum の値＝`NotStopped { run }`・自由な closure は受けない・lock の外で読んだ値との race を塞ぐ）、`pipe/mod.rs` の `emit` は kind が `RunStage` / `RunDone` / `SeatSpawned` の周だけこの口を通す＝その run の最後の run event が `RunStopped` なら書かずに `StoreError` の新しい variant `Stopped` で断る（呼び手は既存の Err の経路＝rc 2 と stderr 1 行で止まる・運転手はそこで終わる・`chain` が後段を撃たない）。読めない周は書く側に倒さない（既存の `Malformed` / `Io` の断りのまま・fail-closed）。`RunStopped` 自身と `SeatStopped` は門を通さない（停止の記帳を停止が塞がない）。(2) **運転手の停止**: `pipe stop --run` は席を止めた後、札（dispatcher.md 行 d・`<state_dir>/pipe/<run>/driver`・pid + 起動時刻・`Owner` の probe）が生きた運転手を指す周は、その process group を席と同じ 1 関数（`terminate`・猶予は `pipe.stop_grace_ms`・TERM → wait → KILL）で止め、`SeatStopped` と同じ形の記録（`seat=driver` の 1 行・detail に `stopped-by-stop`）を残す。札の pid が**自分自身**（`pipe run` の中から stop を撃つ形）の周は止めない。札が無い・読めない・死んでいる周は止めない（測れないを「止めた」に読み替えない）。止め切れなかった周は従来どおり `RunStopped` を書かず rc 1。(3) 段の順序は不変: 席 → 運転手 → `RunStopped`（`RunStopped` は最後＝書けた時点で live から外れる・§5.6 の極性）。
+- 触らない: `pipe stop --all`（席の掃除・運転手は止めない）・`pipe.stop_grace_ms` の値・`Stopped` の便の `retire`（pipeline-conflict.md §5）・`queue.rs` の `may_queue`・oom の分類（行 q・`s2-07l.340`）・`resume`（`Stopped` は終端＝再開の口は無いまま）・札の書き・消し（行 d）。
+- 歯（`pipe_stop_driver_` 接頭辞・e2e は `tests/e2e/pipe/stop.rs`・偽の運転手 = `sleep` の process group の pid を札に書いた fixture）: (a) in-file（`pipe/mod.rs` の tests）`RunStopped` の後に `RunStage stage=Gated` を `emit` すると `StoreError` の `Stopped` で断られ event log の byte 数が不変（base は書く → RED）・`RunStopped` / `SeatStopped` は書ける／(a′) e2e の race: verify を `sleep` にした gate を子 process で走らせ走行中に `pipe stop --run` を撃つと、gate は `Gated` の記帳で断られ rc 2・event log の最後は `RunStopped` のまま（札の無い gate は止められず門だけが効く形）／(b) `pipe stop --run` が札の pid の group を止め `seat=driver` の記録を残す（base は生きたまま・記録 0 → RED）／(c) 札の pid が stop を撃つ process 自身の周は止めずに `RunStopped` を書く（fixture は `sh -c` で `$$` と起動時刻を札に書いてから同じ shell で `exec` して stop を撃つ＝札の pid == stop の pid）／(d) 札が無い・死んでいる周は席の停止と `RunStopped` だけ（従来と同じ event 列）／(e) TERM を無視する偽の運転手（`trap '' TERM` の sh）は猶予の後の KILL で止まり rc 0（席の既存の歯と同型）／(f) in-file（`fleet/store.rs` の tests）: 条件付き append は lock の中で述語を評価し、偽の周は file が 1 byte も変わらない。
+- 却下: 各段の関数の先頭で `Stopped` を読む（読み手が段の数だけ増え、新しい段を足すたびに漏れる・C2）／stop が state dir に印の file を置いて段が読む（記帳と別の状態・C3）／運転手を殺すだけで記帳の門を持たない（殺す前に書かれた event と race する・.289 の型）／記帳の門だけで運転手を殺さない（gate の verify が走り切るまで CPU と worktree を握る）。
 
 <!-- contracts:begin -->
 schema = 1
@@ -744,4 +760,24 @@ write-set = ["crates/xtask/src/flipcheck.rs", "crates/xtask/src/flipcheck_overla
 verify = ["cargo nextest run -p xtask --no-tests=fail flipcheck_fixture_"]
 size = "S"
 done = "歯の外の行だけ動いた file を持つ diff が RED-on-base ok を出して判定行に fixture=1 が載り、歯の中の行が動いた file は green-on-base のまま単独で落ち、歯の外の file しか flip しない便も green-on-base で落ち、宣言 file の同梱と removed-only と札の扱いは不変"
+
+[[contract]]
+id = "af"
+title = "追随の形が無い便を merge-base からの rebase --onto で追随する — 祖先検査を閉じた 3 値にし、祖先でないが merge-base の在る base は便の commit だけを main の上へ運んで既存の記帳・衝突・再 gate の経路に合流し、merge-base の無い周だけ stale base で断る"
+req = ["FR11", "FR30"]
+section = "38"
+write-set = ["crates/scribe2/src/pipe/land.rs", "crates/scribe2/tests/e2e/pipe/land.rs"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_land_onto_"]
+size = "S"
+done = "base が main の祖先でなく merge-base の在る便の land が rebase --onto で追随して Landed になり、衝突は既存の rebase-conflict の経路へ、merge-base の無い main は従来どおり stale base の rc 1 で event 0 増"
+
+[[contract]]
+id = "ag"
+title = "pipe stop --run が段を問わず便を終端にする — store の条件付き append で Stopped の後の RunStage / RunDone / SeatSpawned を lock の中で断り、stop は札の運転手の process group を席と同じ 1 関数で止めてから RunStopped を書く"
+req = ["FR13", "FR11"]
+section = "39"
+write-set = ["crates/scribe2/src/fleet/store.rs", "crates/scribe2/src/pipe/mod.rs", "crates/scribe2/src/pipe/stop.rs", "crates/scribe2/tests/e2e/pipe/stop.rs", "crates/scribe2/tests/e2e/fleet.rs"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_stop_driver_"]
+size = "M"
+done = "RunStopped の後の段の記帳が lock の中で断られて event が増えず、pipe stop --run が札の運転手を止めて記録を残し、自分自身と札の無い便は従来どおり、止め切れない周は RunStopped を書かず rc 1"
 <!-- contracts:end -->
