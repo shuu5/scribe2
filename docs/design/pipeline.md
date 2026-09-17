@@ -563,7 +563,7 @@ id = "q"
 title = "pipe stop 起因の終端を oom-kill に誤分類せず、kernel の証拠が無い kill は unknown に倒す"
 req = ["FR22", "FR46"]
 section = "23"
-write-set = ["crates/scribe2/src/pipe/stop.rs", "crates/scribe2/src/pipe/spawn.rs", "crates/scribe2/src/pipe/confine.rs", "crates/scribe2/src/pipe/gate/lens.rs", "crates/scribe2/tests/e2e/pipe/spawn.rs", "crates/scribe2/tests/e2e/pipe/ratelimit.rs", "crates/scribe2/tests/e2e/pipe/stop.rs", "docs/design/pipeline.md"]
+write-set = ["crates/scribe2/src/pipe/stop.rs", "crates/scribe2/src/pipe/spawn.rs", "crates/scribe2/src/pipe/confine.rs", "crates/scribe2/src/pipe/gate/lens.rs", "crates/scribe2/src/pipe/gate/verify.rs", "crates/scribe2/src/pipe/review.rs", "crates/scribe2/tests/e2e/pipe/spawn.rs", "crates/scribe2/tests/e2e/pipe/ratelimit.rs", "crates/scribe2/tests/e2e/pipe/stop.rs", "docs/design/pipeline.md"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_spawn_terminal_reason_", "cargo nextest run -p scribe2 --no-tests=fail confine_reasons_"]
 size = "S"
 done = "stop した便が oom-kill に分類されず、証拠の無い kill は unknown"
