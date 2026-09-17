@@ -458,7 +458,7 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
 
 - 何が起きているか（planner の実測 2026-09-18・main 36d9c39・`pipe preflight` で verified）: `pipe/land.rs`（1238 行・src 1160 + in-file の歯 78）は R-C4-2 の余地が 261 行しか無く、size M の便 3 本（行 ah・`s2-07l.428`／行 af・`s2-07l.449`／行 ab・`s2-07l.400`）を受付が `cap-headroom` で断る（3 本とも rc 1 を実測）。責務は 6 群（入口と番待ち／追随〔`follow_main` の群〕／squash と finish／主実測〔`verify_main` の群〕／anchor の同期／worktree の検査）で、主実測の群は §5.4 の tmp worktree の中だけを触り、追随・squash の群に依存しない閉じた集合（呼び手は `land` の 1 か所・grep で確認）。
 - 決定的な制約（実測）: `MainCheck` は極性一覧（`crates/scribe2/src/polarity.rs`・`tests/e2e/polarity.rs`・snapshot `polarity_external_form`）が境界の型名 `pipe::land::MainCheck` を pin する＝**`MainCheck` は親に残す**（`pub use` では型名が変わらない・contract-source.md §15 の `TableError` と同型）。`AnchorPlan` / `WorktreeCheck` も同じ pin を持つが移す群に無い。
-- 形（contract-source.md §14 / §15 と同型）: 子 module（行 aj の write-set の `+` の file）へ主実測の群（`check_path` / `verify_main` / `materials` / `main_detection` / `record_main` / `measure_main` / `main_red` / `with_anchor` / `main_unmeasured` と const `CHECK_DIR` / `VERIFY_MAIN_FILE` / `MAIN_UNKNOWN`・約 230 行）をそのまま移す。親は `mod` 宣言と `use`（子の 3 関数を `land` が呼ぶ）で `land` の本体を不変に保つ。in-file の歯 5 本（`pipe_land_subject_` / `pipe_detection_scope_` / `mutant_in_pipe_land_next_number_`）は移す群の歯ではないので親に残す＝子に歯は無い（純移動の証明は札と既存の e2e の歯）。子が親の私有 item（`MainCheck` / `AnchorSync` / `Land` の欄 / `verdicts_path` / `with_lines` 等）を呼ぶ周は可視性を `pub(super)` に上げる＝可視性の 1 語と mod 宣言・`use` の path・doc コメント行は移動の一部（純移動の残差として許す）。札 `// flip-check: moved s2-07l.457` は親の歯の区間と子の先頭に対で置く。
+- 形（contract-source.md §14 / §15 と同型）: 子 module（行 aj の write-set の `+` の file）へ主実測の群（`check_path` / `verify_main` / `materials` / `main_detection` / `record_main` / `measure_main` / `main_red` / `with_anchor` / `main_unmeasured` と const `CHECK_DIR` / `VERIFY_MAIN_FILE` / `MAIN_UNKNOWN`・約 230 行）をそのまま移す。親は `mod` 宣言と `use`（子の 3 関数を `land` が呼ぶ）で `land` の本体を不変に保つ。in-file の歯 5 本（`pipe_land_subject_` / `pipe_detection_scope_` / `mutant_in_pipe_land_next_number_`）は移す群の歯ではないので親に残す＝子に歯は無い（純移動の証明は札と既存の e2e の歯）。子は親の私有 item（`MainCheck` / `AnchorSync` / `Land` の欄 / `verdicts_path` / `with_lines` 等）を `super::` でそのまま呼べる（Rust の可視性＝子孫は祖先の私有を見る）ので親側の可視性は変えない。上げるのは**子側**の可視性＝親の `land` が呼ぶ `verify_main` / `main_red` / `main_unmeasured` の `pub(super)` の 3 つだけ。可視性の 1 語と mod 宣言・`use` の path・doc コメント行は移動の一部（純移動の残差として許す）。札 `// flip-check: moved s2-07l.457` は親の歯の区間と子の先頭に対で置く。verify は親に残る in-file の歯（`pipe_land_subject_`）と極性一覧の snapshot の歯（`polarity_external_form`・`tests/e2e/polarity.rs`）を撃つ＝後者の file は行 aj の write-set に持つが本便では触らない（受付の歯の置き場の門のため）。
 - 見積: 親 約 1000 行（余地 約 500）・子 約 240 行。
 - 歯: 既存の `pipe_land_` / `pipe_order_` / `pipe_follow_` / `pipe_retire_` の e2e と極性一覧の snapshot（`polarity_external_form`）が全部緑で期待を変えない。
 - 却下: anchor の群を移す（88 行で M の余地に届かない）／追随の群を移す（行 af / 行 ab が同じ群を触る＝それらの write-set が 2 file に割れて交差が増える）／行 ah / af / ab を S に落とす（見積が S の 100 を超える＝size の字面だけ変える嘘）。
@@ -827,8 +827,8 @@ id = "aj"
 title = "pipe/land.rs の主実測の群（verify_main / main_red / main_unmeasured ほか 9 item と const 3 つ）を land/verify.rs へ割る — 純移動・MainCheck は親に残す（極性一覧の pin）・land の本体は不変・札 moved"
 req = ["FR11"]
 section = "41"
-write-set = ["-crates/scribe2/src/pipe/land.rs", "+crates/scribe2/src/pipe/land/verify.rs", "docs/design/pipeline.md"]
-verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_land_ polarity_external_form"]
+write-set = ["-crates/scribe2/src/pipe/land.rs", "+crates/scribe2/src/pipe/land/verify.rs", "crates/scribe2/tests/e2e/polarity.rs", "docs/design/pipeline.md"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail pipe_land_subject_", "cargo nextest run -p scribe2 --no-tests=fail polarity_external_form"]
 size = "S"
-done = "主実測の群 9 item と const 3 つが子 module に在り、MainCheck は親に残って極性一覧の snapshot が不変、親は mod 宣言と use と可視性の 1 語だけが増えて land の本体と e2e の歯が全部緑、純移動の機械証明の残差が use と path と可視性の 1 語だけ"
+done = "主実測の群 9 item と const 3 つが子 module に在り、MainCheck は親に残って極性一覧の snapshot が不変、親は mod 宣言と use だけが増え（子側の pub(super) 3 語で land の本体は不変）、in-file と e2e の歯が全部緑、純移動の機械証明の残差が use と path と可視性の語だけ"
 <!-- contracts:end -->
