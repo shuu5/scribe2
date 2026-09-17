@@ -179,8 +179,19 @@ pub fn started_ms_in(root: &Path, pid: u32) -> Probe {
         return Probe::Unreadable;
     };
     boot.checked_mul(1000)
-        .and_then(|ms| ms.checked_add(ticks.checked_mul(1000)? / USER_HZ))
+        .and_then(|ms| ms.checked_add(ticks_to_ms(ticks, USER_HZ)?))
         .map_or(Probe::Unreadable, Probe::Started)
+}
+
+/// clock tick を ms へ直す（pure・`starttime` の算術はこの 1 本だけ）。
+///
+/// `ticks * 1000 / hz` の**切り捨て**で、剰余は捨てる（[`started_ms_in`] が出す時刻が実際の
+/// 起動より早い側へ寄る向きと同じ）。`ticks * 1000` が `u64` を溢れる周は `None` で、呼び手は
+/// 「読めない」へ倒す（[`started_ms_in`] の極性を変えない）。
+///
+/// `hz` は呼び手が渡す clock tick / 秒（実経路は [`USER_HZ`] の 100 で、0 は来ない）。
+fn ticks_to_ms(ticks: u64, hz: u64) -> Option<u64> {
+    Some(ticks.checked_mul(1000)? / hz)
 }
 
 /// `/proc/<pid>/stat` の starttime（clock tick・pure）。comm の中の空白と `)` に釣られない。
@@ -386,7 +397,7 @@ pub fn read_all(dir: &Path) -> Result<Vec<Event>, Vec<StoreError>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{boot_s, lock_owner, started_ms_in, starttime_ticks, Owner, Probe};
+    use super::{boot_s, lock_owner, started_ms_in, starttime_ticks, ticks_to_ms, Owner, Probe, USER_HZ};
     use proptest::prelude::*;
     use proptest::test_runner::Config;
     use std::path::PathBuf;
@@ -448,6 +459,54 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    // flip-check: retroactive s2-07l.247
+    //
+    // 以下の 4 本は `ticks_to_ms`（`started_ms_in` の clock tick → ms）の算術を pin する。
+    // 実装は純移動（式は `started_ms_in` に在ったものと同一）なので挙動は変わらない
+    // ＝赤にする flip は変異で示す（`/`→`*` と `/`→`%`・admin の A/B・母集団 2）。
+
+    /// 境界の tick（0 / 1 / hz − 1 / hz / hz + 1）での clock tick → ms。
+    ///
+    /// tick = hz の丁度 1 秒を挟んで、割り切れない手前（hz − 1）と余りの出る後ろ（hz + 1）を
+    /// 両方 pin する。
+    #[test]
+    fn fleet_store_started_ms_ticks_to_ms_at_the_boundaries() {
+        assert_eq!(ticks_to_ms(0, USER_HZ), Some(0), "tick = 0");
+        assert_eq!(ticks_to_ms(1, USER_HZ), Some(10), "tick = 1（1000 / 100）");
+        assert_eq!(ticks_to_ms(USER_HZ - 1, USER_HZ), Some(990), "tick = hz − 1");
+        assert_eq!(ticks_to_ms(USER_HZ, USER_HZ), Some(1000), "tick = hz（丁度 1 秒）");
+        assert_eq!(ticks_to_ms(USER_HZ + 1, USER_HZ), Some(1010), "tick = hz + 1");
+    }
+
+    /// 割り切れない周は**切り捨て**で、剰余は ms に足さない（`/` を `%` に替えると外れる 1 例）。
+    #[test]
+    fn fleet_store_started_ms_ticks_to_ms_truncates_the_remainder() {
+        // 1000 / 1024 は 0、剰余は 1000——剰余を返す実装なら 0 では済まない。
+        assert_eq!(ticks_to_ms(1, 1024), Some(0), "1 tick は 1024 Hz では 0 ms");
+        assert_eq!(ticks_to_ms(1, 3), Some(333), "1000 / 3 は 333（剰余 1 は捨てる）");
+        assert_eq!(ticks_to_ms(1024, 1024), Some(1000), "割り切れる周は剰余 0 と区別が付く");
+    }
+
+    /// `ticks * 1000` が `u64` を溢れる周だけ `None`（呼び手は「読めない」へ倒す）。
+    #[test]
+    fn fleet_store_started_ms_ticks_to_ms_overflow_is_none() {
+        let last = u64::MAX / 1000;
+        assert_eq!(ticks_to_ms(last, USER_HZ), Some(last * 1000 / USER_HZ), "溢れない最大の tick");
+        assert_eq!(ticks_to_ms(last + 1, USER_HZ), None, "溢れる周は None");
+        assert_eq!(ticks_to_ms(u64::MAX, USER_HZ), None, "u64::MAX も None");
+    }
+
+    /// 溢れた tick は `started_ms_in` で「読めない」になる（`None` の行き先を pin する）。
+    #[test]
+    fn fleet_store_started_ms_overflowing_ticks_are_unreadable() {
+        let root = scratch("overflow");
+        std::fs::create_dir_all(root.join("42")).expect("pid dir を作れる");
+        std::fs::write(root.join("stat"), "cpu 1 2\nbtime 1700000000\n").expect("btime を書ける");
+        std::fs::write(root.join("42").join("stat"), pid_stat(u64::MAX)).expect("pid の stat を書ける");
+        assert_eq!(started_ms_in(&root, 42), Probe::Unreadable, "溢れる tick は「読めない」");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     /// 10 進 1 行の本文（末尾の改行は有無を振る）。
     fn pid_line() -> impl Strategy<Value = (u32, String)> {
         (any::<u32>(), any::<bool>()).prop_map(|(pid, newline)| {
@@ -476,6 +535,30 @@ mod tests {
 
     proptest! {
         #![proptest_config(config())]
+
+        /// (0) 任意の tick / hz で `ms = tick * 1000 / hz`（`u128` の別経路で照合）。溢れる周だけ
+        /// `None` で、それ以外は必ず値が出る（`hz` は 0 を外す＝実経路に 0 は来ない）。
+        ///
+        /// tick は**小さい側を明示的に混ぜる**: `any::<u64>()` だけだと殆どの draw が
+        /// `tick * 1000` の溢れ（= `None`）へ落ち、算術の本体を通らない案が薄くなる。
+        #[test]
+        fn fleet_store_started_ms_prop_ticks_to_ms_matches_the_wide_oracle(
+            ticks in prop_oneof![0u64..10_000, 0u64..u64::MAX / 1000, any::<u64>()],
+            hz in 1u64..=4096,
+        ) {
+            let wide = u128::from(ticks) * 1000;
+            let expected = u64::try_from(wide).ok().map(|product| product / hz);
+            prop_assert_eq!(ticks_to_ms(ticks, hz), expected);
+        }
+
+        /// (0′) 剰余は捨てる＝`ms * hz` は必ず `tick * 1000` 以下で、差は `hz` 未満（切り捨ての形を
+        /// 商の側から pin する・`%` を返す実装も `*` の実装もこの不等式に乗らない）。
+        #[test]
+        fn fleet_store_started_ms_prop_ticks_to_ms_truncates_toward_zero(ticks in 0u64..1_000_000, hz in 1u64..=4096) {
+            let product = ticks * 1000;
+            let held = ticks_to_ms(ticks, hz).filter(|ms| ms * hz <= product && product - ms * hz < hz);
+            prop_assert!(held.is_some(), "商 * hz は tick * 1000 を超えず、捨てた剰余は hz 未満: {:?}", ticks_to_ms(ticks, hz));
+        }
 
         /// (1) 任意の pid で probe が「無い」を返す周は必ず `Dead`（外して取り直す側）。
         #[test]

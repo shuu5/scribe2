@@ -248,8 +248,9 @@ enum Sent {
     Refused(&'static str),
 }
 
-/// [`EXIT`] を 1 行送る（順序固定）: 入力欄の門（cycle の `/clear` と同じ [`inject::guard_input`]・断りは
-/// `input-busy` / `input-unknown` で **1 key も送らない**）→ exit-stamp（write-ahead・打てない周は送らない＝次の周も
+/// [`EXIT`] を 1 行送る（順序固定）: 入力欄の門（cycle の `/clear` と同じ [`inject::pass_input`]・断りは
+/// `input-busy` / `input-own-queued` / `input-unknown` で **1 key も送らない**——自席の文が残る周だけは
+/// Enter を 1 回送って着地させ、残れば `input-own-queued` で断る・`s2-07l.288`）→ exit-stamp（write-ahead・打てない周は送らない＝次の周も
 /// 送りうる形を作らない）→ 送る（[`cycle::send_exit`]）→ 前面 process が shell になるかで送達を確かめる（[`exited`]）。
 ///
 /// 送達を目印の出現数（[`inject::deliver`]）で測らないのは、`/exit` を受けた席は終わって pane が shell に置き換わり
@@ -261,10 +262,13 @@ fn send_exit(request: &Request, place: &super::StateDir, dir: &Path) -> Sent {
     let Some(pane) = pane_of(request.socket, request.target, request.capture_file) else {
         return Sent::Refused(cycle::REASON_PANE_MISSING);
     };
-    match inject::guard_input(&pane) {
+    let own = inject::last_own_payload(&place.path, request.target);
+    let recapture = || pane_of(request.socket, request.target, request.capture_file);
+    match inject::pass_input(request.socket, request.target, &pane, own.as_deref(), recapture) {
         Ok(()) => {}
-        Err(inject::InputGate::Busy) => return Sent::Refused(cycle::REASON_INPUT_BUSY),
-        Err(inject::InputGate::UnknownInput) => return Sent::Refused(cycle::REASON_INPUT_UNKNOWN),
+        Err(inject::Blocked::Foreign) => return Sent::Refused(cycle::REASON_INPUT_BUSY),
+        Err(inject::Blocked::UnknownInput) => return Sent::Refused(cycle::REASON_INPUT_UNKNOWN),
+        Err(inject::Blocked::OwnQueued) => return Sent::Refused(cycle::REASON_INPUT_OWN_QUEUED),
     }
     if cycle::write_exit_stamp(dir).is_err() {
         return Sent::Refused(cycle::REASON_STAMP);

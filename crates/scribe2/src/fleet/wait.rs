@@ -50,6 +50,9 @@ pub enum Completion {
         reset_at: String,
         /// 実測行の置き場（`SlotFree` が `slots_dir` を運ぶのと同型）。
         state_dir: std::path::PathBuf,
+        /// 便の repo（`pipe run --repo` の値・`Turn.repo`）。便用の除外はこの repo を anchor に持つ席の口座だけ
+        /// （設計 account-autonomy.md §14）＝観測の再評価も選定と同じ repo で除外する（C3.4）。
+        repo: std::path::PathBuf,
         /// 待つ便の id。**便が [`expected`](Self::AccountFree::expected) の段でなくなった周は満たされた側**
         /// （`pipe stop --run` が待ちの途中の便を終端した周に待ちから抜ける・呼び手が段を読み直す）。
         run: String,
@@ -88,8 +91,8 @@ impl Completion {
                 )
             }
             Self::LandTurn { .. } => self.round(None).met,
-            Self::AccountFree { state_dir, run, expected, labels, model, .. } => {
-                account_free(state_dir, run, *expected, labels, model.as_deref())
+            Self::AccountFree { state_dir, repo, run, expected, labels, model, .. } => {
+                account_free(state_dir, run, *expected, &RunSelect { repo, labels, model: model.as_deref() })
             }
         }
     }
@@ -182,19 +185,24 @@ fn observe(mark: Option<Mark>, state_dir: &Path, run: &str) -> Glance {
     Glance { mark, met }
 }
 
+/// [`Completion::AccountFree`] が運ぶ便用の選定の入力のうち、[`select_for_run`] へ**そのまま**渡すもの
+/// （置き場と時刻以外・待ちの観測と選定が同じ入力で除外する・C3.4）。
+struct RunSelect<'a> {
+    /// 便の repo（除外はこの repo を anchor に持つ席の口座だけ・設計 account-autonomy.md §14）。
+    repo: &'a Path,
+    /// 宣言の label 列。
+    labels: &'a [String],
+    /// 便が使う model（字面のまま）。
+    model: Option<&'a str>,
+}
+
 /// [`Completion::AccountFree`] の 1 周分の観測。
 ///
-/// 置き場を replay し、便がまだ `expected` の段なら最新の実測行で便用の規則（[`select_for_run`]）を
-/// 再評価して `Chosen` の周だけ満たされる。便が `expected` の段でなくなった周（stop で終端した・別の
-/// process が起こし直した）は**満たされた側**＝待ち続ける理由が無い。置き場を読めない周は満たされない
-/// （読めなさで起こし直さない・期限で Timeout に倒れて計測から撃ち直す）。
-fn account_free(
-    state_dir: &std::path::Path,
-    run: &str,
-    expected: Stage,
-    labels: &[String],
-    model: Option<&str>,
-) -> bool {
+/// 置き場を replay し、便がまだ `expected` の段なら最新の実測行で便用の規則（[`select_for_run`]・除外は便の
+/// `repo` を anchor に持つ席の口座だけ）を再評価して `Chosen` の周だけ満たされる。便が `expected` の段でなくなった周
+/// （stop で終端した・別の process が起こし直した）は**満たされた側**＝待ち続ける理由が無い。置き場を読めない周は
+/// 満たされない（読めなさで起こし直さない・期限で Timeout に倒れて計測から撃ち直す）。
+fn account_free(state_dir: &Path, run: &str, expected: Stage, select: &RunSelect<'_>) -> bool {
     let Ok(events) = store::read_all(state_dir) else {
         return false;
     };
@@ -203,7 +211,7 @@ fn account_free(
         return true;
     }
     matches!(
-        select_for_run(&state, labels, model, &cli::now_utc()),
+        select_for_run(&state, select.repo, select.labels, select.model, &cli::now_utc()),
         select::Selection::Chosen(_)
     )
 }
@@ -494,6 +502,7 @@ mod tests {
         let found = Completion::AccountFree {
             reset_at: "2026-09-13T06:00:00Z".to_owned(),
             state_dir: std::path::PathBuf::from("state"),
+            repo: std::path::PathBuf::from("repo"),
             run: "r".to_owned(),
             expected: Stage::RateLimited,
             labels: Vec::new(),
@@ -535,6 +544,7 @@ mod tests {
             Completion::AccountFree {
                 reset_at: "2026-09-13T06:00:00Z".to_owned(),
                 state_dir: std::path::PathBuf::from("state"),
+                repo: std::path::PathBuf::from("repo"),
                 run: "r".to_owned(),
                 expected: Stage::RateLimited,
                 labels: Vec::new(),

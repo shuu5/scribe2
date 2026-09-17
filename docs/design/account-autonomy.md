@@ -105,9 +105,9 @@ C1 / C5（R-C9-1 は行・裁定 id）・C2（`Purpose` / `Selection` / `Stage` 
 ## 13. 選定の前計測の鮮度 — 新しい実測を測り直さず、計測自身の 429 で口座を失わない（契約表の行 j・`s2-07l.407`）
 
 - 何が起きているか（admin の実測 2026-09-16 09:57Z〜10:30Z・verified・母集団 = 第 2 陣以降の `fleet select` 全回）: §3 の「選定の直前に FR33 の計測を 1 回撃つ」は 1 回の選定で manifest の**全口座**を測り直す。短時間に選定を重ねると usage endpoint が **HTTP 429** を返し、全口座が `unmeasured reason=http_status` → `none=unmeasured` で 1 本も出せない。内訳は IP でなく **token 単位**: 走行中の runner / lens の claude（11 process）が同じ口座の token で usage を poll しており、その口座だけが選定の計測で落ちる（単発の curl は 200）＝**便を増やすほどその口座が選べなくなる**構造。上限の合図（ADR-0012）でも口座の残量でもなく、器自身の計測の burst と競合が原因。
-- 形: (1) rules 行 `fleet.usage_fresh_s`（kind `UsageFreshS`・Int・秒・**値は user 裁定**・C5）。(2) `fleet select` の前計測は**鮮度つき**: 口座の最新の回（`latest_round`）の数える窓が全部 `AllowanceMeasured` で、その ts が `now − fresh_s` より新しい口座は**測り直さない**（子 process を起こさず event も書かない）。古い口座・Unmeasured の口座・行の無い口座だけを測る。(3) 測った結果が `HttpStatus` / `Timeout`（読みに届かなかった側・本文の形の失敗は含まない）で、直前の回が (2) の意味で新しい実測なら、その Unmeasured 行を**追記せず**直前の実測を最新のまま使う（stderr に `usage: account=<label> kept reason=<reason>` の 1 行・stdout は 1 行形のまま）。それ以外の周は従来どおり追記する。(4) 計測の方針は閉じた enum（`Freshness::{Always, Within(secs)}`・`fleet usage` の口は `Always`＝挙動不変・選定の前計測だけ `Within`）で `measure` に渡す＝計測の実装は 1 本のまま。
+- 形: (1) rules 行 `fleet.usage_fresh_s`（kind `UsageFreshS`・Int・秒・**値は user 裁定**・C5）。(2) `fleet select` の前計測は**鮮度つき**: 口座の最新の回（`latest_round`）の数える窓が全部 `AllowanceMeasured` で、その ts が `now − fresh_s` より新しい口座は**測り直さない**（子 process を起こさず event も書かない）。古い口座・Unmeasured の口座・行の無い口座だけを測る。(3) 測った結果が `HttpStatus` / `Timeout`（読みに届かなかった側・本文の形の失敗は含まない）で、その口座の**最新の回が実測**（数える窓が全部 `AllowanceMeasured`・古さは問わない＝(2) で「古い」と判定して測りに来た口座がここに来る）なら、その Unmeasured 行を**追記せず**その実測を最新のまま使う（stderr に `usage: account=<label> kept reason=<reason>` の 1 行・stdout は 1 行形のまま）。実測の古さの判定は選定の既存の規則（`select.rs` の `fresh_windows`＝reset を過ぎた実測だけを古いと読む）に任せる＝kept は「値の無い行で有効な実測を上書きしない」だけで、鮮度の規則を 2 か所に持たない。最新の回が Unmeasured・行なしの周は従来どおり追記する（(2) の条件と (3) の条件は重ならない: (2) は「新しい実測は測らない」・(3) は「測った古い実測を 429 で捨てない」）。(4) 計測の方針は閉じた enum（`Freshness::{Always, Within(secs)}`・`fleet usage` の口は `Always`＝挙動不変・選定の前計測だけ `Within`）で `measure` に渡す＝計測の実装は 1 本のまま。
 - 触らない: 純関数 `select`（`fleet/select.rs`）と `Input`（構築点 6 か所・`prop.rs` を含む）・replay の `State`・event の形・`UnmeasuredReason` の variant・`fleet usage` / `--show` の外形・R-C9-1。
-- 歯（`fleet_select_fresh_` 接頭辞・`tests/e2e/fleet.rs`）: 偽 client の呼出回数を写しで数え、新しい実測を持つ口座は選定で測り直されない（呼出 0）／古い実測の口座は測り直される（呼出 1）／429 を返す偽 client + 新しい実測の口座 → Unmeasured が追記されず（event の本数不変）選定がその口座を候補に残す／古い実測 + 429 → 追記され候補から外れる（従来）／`fleet usage` は鮮度に関わらず全口座を測る（`Always`）。rules 行は kind 件数の pin + 外形の歯（`fleet.usage_timeout_s` と同型）。
+- 歯（`fleet_select_fresh_` 接頭辞・`tests/e2e/fleet.rs`）: 偽 client の呼出回数を写しで数え、新しい実測を持つ口座は選定で測り直されない（呼出 0）／古い実測の口座は測り直される（呼出 1）／429 を返す偽 client + 古い実測（reset 前・`fresh_s` より古い）の口座 → 測り直され、Unmeasured が追記されず（event の本数不変）選定がその口座を候補に残す／429 + 最新の回が Unmeasured の口座 → 追記され候補から外れる（従来）／`fleet usage` は鮮度に関わらず全口座を測る（`Always`）。rules 行は kind 件数の pin + 外形の歯（`fleet.usage_timeout_s` と同型）。
 - 却下: 選定ごとに 1 口座だけ測る（候補の比較が古い値と新しい値の混在になる）／壁時計の sleep で間引く（壁時計依存・費用が増える）／replay で「最新の Measured」を別に持ち `select` に渡す（`Input` の構築点 6 か所と `prop.rs` を動かす・鮮度の規則が純関数に入り値の線が 2 か所になる）／429 の口座を admin が `--account` で名指しする（器の選定 FR36 の迂回・N2）。
 
 ## 14. 便用の除外は便の repo（anchor）の席だけ — 置き場を共有する他 vessel の席の口座は候補（契約表の行 k）
@@ -115,7 +115,7 @@ C1 / C5（R-C9-1 は行・裁定 id）・C2（`Purpose` / `Selection` / `Stage` 
 - 何が起きているか（2026-09-16 12:0xZ・verified）: 便用の選定の除外集合は `fleet/replay.rs` の `registered_accounts()`＝置き場（state dir）に在る**全部**の席の登録 row の口座。置き場は host の口座 dir ごとに 1 つで複数の vessel（repo）が共有するので、別 repo の席（同じ host で planner / admin を持つ他 project）の口座まで本 repo の便から外れる。実測: 登録 row 4 席（本 repo 2 + 他 repo 2）・宣言 7 口座のうち席で 4 が外れ、当たっていない候補が 1〜2 に痩せて並列が口座の窓で頭打ちになった。user 裁定 2026-09-16T12:09Z（逐語は台帳 `s2-07l` notes・A1「使う」）: 他 repo の席の口座を本 repo の便に使ってよい。FR40 の席の識別子は（役割, anchor）＝「席」は anchor ごとに定まるので、FR36 / ADR-0027 の「席の登録 row が持つ口座」を**便の repo の anchor の row**と読む（SRS の字面は変えない）。
 - 形: (1) `registered_accounts`（`fleet/replay.rs`）は anchor を受けて**その anchor の登録 row の口座だけ**を返す（`Registration.anchor` と便の repo の一致・文字列の完全一致で比べ正規化しない＝登録が書いた値がそのまま鍵）。anchor を持たない呼び手（口座の退役の検査・`account/mod.rs`）は従来どおり全 row を見る（退役は host 全体の席を守る側・弁別の形は現物で決める）。(2) `select_for_run` は便の repo（`Turn.repo`・`pipe run --repo` の値）を受けて (1) に渡す。呼び手は `pipe/ratelimit.rs` の `choose_or_wait`（`choose_account` の 2 呼び手 = `ratelimit.rs` / `follow.rs` が `Turn.repo` を渡す）と `fleet/wait.rs` の `account_free`（`AccountFree` の観測も同じ除外で再評価する・C3.4）。(3) `fleet select --purpose run` に `--anchor DIR` を足す（無い周は従来どおり全 row を除外＝保守側・stdout は 1 行のまま）。順序の鍵・当たっている口座・測れない口座の扱い（§3 / §13）は不変。
 - 触らない: 純関数 `select`（`fleet/select.rs`）と `Input`・event の形（`SeatRegistered` に列を足さない）・`--exclude` の意味・R-C9-1・session 用の規則。
-- 歯（`fleet_select_anchor_` 接頭辞・`tests/e2e/fleet.rs`）: 2 anchor の登録 row を置いた置き場で `--anchor` に片方を渡すと他方の席の口座が候補に入る（`chosen` がその口座）／`--anchor` 無しは従来どおり両方外れる／`pipe run` が便の repo を渡して他 repo の席の口座を `Spawned` の account に記す 1 本。
+- 歯（`fleet_select_anchor_` 接頭辞・`tests/e2e/fleet.rs`）: 2 anchor の登録 row を置いた置き場で `--anchor` に片方を渡すと他方の席の口座が候補に入る（`chosen` がその口座）／`--anchor` 無しは従来どおり両方外れる／`pipe run` が便の repo を渡して他 repo の席の口座を `Spawned` の account に記す 1 本。既存の歯の側: pipe e2e の helper `register_seat_account`（`tests/e2e/pipe/ratelimit.rs`）は登録 row の anchor を固定の字面で置き、(1) の一致で便の repo と食い違うので、その helper に依る既存の歯（`tests/e2e/pipe/spawn.rs` / `tests/e2e/pipe/land.rs` の便の口座を測る 2 本）は head で赤になる＝helper が便の repo の anchor を置くよう直し、helper の file と歯の file 2 つを write-set に数える（run 235030Z の QUESTION の解）。
 - 却下: 除外を host の全 vessel の席へ広げる（`.328` の (a)(b)・user 裁定で却下）／launcher が `--exclude` で席を足す（ADR-0027「器の外の起動手順は除外を足さない」・N2）／登録 row を消して席の口座を候補に入れる（席の立て直しの口座が消える・N1.2）。
 
 ## 15. lens の口座も器が選ぶ — gate の lens 起動に便用の選定を通し記帳する（契約表の行 l・`s2-07l.412`）
@@ -129,10 +129,38 @@ C1 / C5（R-C9-1 は行・裁定 id）・C2（`Purpose` / `Selection` / `Stage` 
 ## 16. 同じ flag の二重を断る — `--account-dir` が 2 つ在る起動行で器の選定が黙って無効になる穴（契約表の行 m・`s2-07l.411`）
 
 - 何が起きているか（admin の実測 2026-09-16 11:5xZ・verified）: headless の `flag()`（`headless/mod.rs`）は**最初の出現**を採る。launcher が runner の起動行に `--account-dir` を書き、器（`with_account`）が末尾に選んだ口座を足すと 2 つ並び、器の選定が黙って無効・`Spawned` の記帳（account:<label>）と実行の口座（子 claude の設定 dir）が食い違った（C10 の実測の出所が偽になる）。
-- 形: (1) `flag`（`headless/mod.rs`）は同名の flag が 2 回以上在る周を typed に断る（`Err`・理由に両方の値）＝runner / lens の全 flag に効く（読み手は 1 関数・C2）。(2) `with_account` は起動行に既に `--account-dir` が在れば足さずに spawn を断る（typed・理由に既存の値・N2 の混入を受付で止める・FailClosed）。断りの型は `pipe/spawn.rs` に新設する閉じた enum 1 つ（起動行の受付の境界・variant は「`--account-dir` が既に在る」の 1 つ・既存の値を運ぶ）で、`with_account` の戻りを `Result` にし、唯一の呼び手 `launch_runner`（同 file）が既存の `refused` の面へ写す。既存の `Refuse`（`pipe/refuse.rs`・契約単位の判定・呼び手は intake）は使わない（領分が違い write-set の外）。境界の `POLARITY` は同 file に置き、`crates/scribe2/src/polarity.rs` の `Guard` の 4 つ組と `as_str` に 1 つ足す（極性一覧に載る・C11.2）。(3) `Spawned` の `account:<label>` は器が足した口座だけ＝記帳と実行の一致は (1)(2) で構造的に成り、歯で pin する。
+- 形: (1) `flag`（`headless/mod.rs`）は同名の flag が 2 回以上在る周を typed に断る（`Err`・理由に両方の値）＝runner / lens の全 flag に効く（読み手は 1 関数・C2）。(2) `with_account` は起動行に既に `--account-dir` が在れば足さずに spawn を断る（typed・理由に既存の値・N2 の混入を受付で止める・FailClosed）。断りの型は `pipe/spawn.rs` に新設する閉じた enum 1 つ（起動行の受付の境界・variant は「`--account-dir` が既に在る」の 1 つ・既存の値を運ぶ）で、`with_account` の戻りを `Result` にし、唯一の呼び手は同 file の `spawn`（`Spawned` の emit より前・worktree と plugin を組んだ後）へ移して既存の `refused` の面へ写す（断った周は `Spawned` も `SeatSpawned` も記帳しない・現物の `spawn` は `Spawned` を emit してから `launch_runner` を呼ぶ）。既存の `Refuse`（`pipe/refuse.rs`・契約単位の判定・呼び手は intake）は使わない（領分が違い write-set の外）。境界の `POLARITY` は同 file に置き、`crates/scribe2/src/polarity.rs` の `Guard` の 4 つ組と `as_str` に 1 つ足す（極性一覧に載る・C11.2）。(3) `Spawned` の `account:<label>` は器が足した口座だけ＝記帳と実行の一致は (1)(2) で構造的に成り、歯で pin する。
 - 触らない: `flag` の値の読み方（次の token・`--` 始まりは値でない）・runner / lens の他の引数・launcher。
-- 歯（`headless_flag_duplicate_` 接頭辞・`tests/e2e/headless.rs` と `tests/e2e/pipe/spawn.rs`）: runner の argv に `--account-dir` ×2 → claude を呼ばず引数不正の rc で断る（偽 claude の呼出 0）／lens も同じ／`with_account` は起動行に `--account-dir` が既に在ると足さずに断る（spawn の e2e・Spawned が記録されない）。
+- 歯（`headless_flag_duplicate_` 接頭辞・`tests/e2e/headless.rs` と `tests/e2e/pipe/spawn.rs`）: runner の argv に `--account-dir` ×2 → claude を呼ばず引数不正の rc で断る（偽 claude の呼出 0）／lens も同じ／`with_account` は起動行に `--account-dir` が既に在ると足さずに断る（spawn の e2e・Spawned が記録されない）／runner と lens の argv に `--worktree` ×2 → 同じ断り（`need` は `flag` の包み・全 flag に 1 経路で効く pin）。
 - 却下: 最後の出現を採る（launcher の混入を黙って上書きする＝散文運用を器が受け入れる）／runner だけ直す（lens も同じ読み手）／`with_account` が既存の値を置換する（どちらが正か器に分からない・C10）。
+
+## 17. API に届かず止まった runner を Failed に倒さない — 到達不能を閉じた語で弁別し、runner の死亡と同じ途中再開へ載せる（契約表の行 n・`s2-07l.301`）
+
+- 何が起きているか（host のネット断 2026-09-14 23:1x〜23:5xZ・verified）: runner が `API Error: Can't reach the API server (EAI_AGAIN)` で rc 1 → `RunStage Failed detail=runner-rc:1,commits:2`（worktree に commit 2 本）。`pipe resume` は Failed から再開しない（§4・終端）ので、運びは retire → run 2＝成果が捨てられた（C9「成果を保つ」の便版の穴）。現物（main d0fe20d）: `pipe/spawn.rs` は包みの rc が `RC_QUESTION` / `RC_RATE_LIMIT` の周だけ最終行を読み、それ以外は `settle`（rc 0 ∧ commit ≥ 1 なら Implemented・他は Failed）。`headless/runner.rs` は claude の stream の `result` record から `subtype`（`ResultKind`・Success / ErrorMaxTurns / ErrorDuringExecution / Unknown）と `is_error` と本文（`last_result`）を読み `result_line` に写すが、到達不能を弁別する典型の語も rc も持たない（上限は `rate_limit_event` の status＝typed・到達不能に typed な record は無い＝本文の語で読むしかない）。§4 の runner の死亡（`.323`・Landed）は `Spawned` のまま `SeatStopped detail=runner-dead` を記帳して同じ worktree・同じ契約で起こし直す形を持つ。
+- 形: (1) **弁別**（`headless/runner.rs`・pure）: `result` record が `is_error=true` かつ本文が到達不能の**閉じた語の集合**（const slice・宣言順・記録時点の語 = `Can't reach the API server` / `EAI_AGAIN` / `ENETUNREACH` / `ECONNREFUSED`・語は現物で決める）のいずれかを含む周を「到達不能」と読み、runner は新しい rc `RC_UNREACHABLE`（`headless/mod.rs`・`RC_RATE_LIMIT` の隣・値は現物で決める・他と衝突しない）で終わり、上限の停止行と同じ場所（stdout・`stop_line` の隣の 1 関数）に `runner: halt reason=unreachable text=<本文の先頭>` を出す。集合に無い `is_error` は従来どおり（rc はそのまま・Failed）。**限界（残す側）**: 語の集合は claude の文面に追随する下界＝見逃した周は従来の Failed（fail-safe 側・成果は retire の worktree に残る）で、語を足すのは本 § の集合 1 か所。
+- (2) **段**（`pipe/spawn.rs`・rc の分岐に 1 つ）: rc が `RC_UNREACHABLE` の周は Failed を記帳せず、`SeatStopped detail=runner-unreachable`（pid 付き・`runner-dead` と同じ形の定数・`follow.rs` の `RUNNER_DEAD` の隣）を 1 件記帳して段は `Spawned` のまま（live・排他の母集団に残る・worktree と commit と未 commit は保つ・N1）。commit の有無は見ない（0 本でも捨てない＝ネットが戻れば続く）。
+- (3) **途中再開**（§4 の runner の死亡と同じ 1 本）: `follow.rs` の `Halt` に variant `Unreachable` を足し、`resumption` は `Spawned` の段で最後の席の event が `SeatStopped detail=runner-unreachable` の周に `Some`（`stopped_at` = その ts・未 commit の一覧は同じ読み手）。`pipe resume` の `Spawned` の分岐は、**最後の席の event**（`SeatSpawned` / `SeatStopped` のうち ts 最大の 1 件）が `SeatStopped detail=runner-unreachable` の周**だけ**生死の計測と `runner-dead` の記帳を飛ばして（runner は rc で終わっている＝pid は死んでいるが理由は既に typed に在る・二重に記帳しない）§4 の起こし直しの 1 本へ進む。起こし直しの後は最後の席の event が `SeatSpawned` になるので、2 回目の `pipe resume` は従来どおり生死の計測を通り、生きている runner は typed に断る（FR37・runner を 2 本にしない）（計測 → §3 の便用の規則〔前の口座が候補ならそれ〕→ `spawn_turn`）。`Spawned` の detail は `resume:unreachable`（`resume:runner-dead` の隣の定数）。`headless/runner.txt` の「途中再開」節に理由の 3 つ目（API に届かず止まった・同じ契約で続く）を 1 行。
+- (4) **待ち**: ネットが戻るまでの待ちは本 § が持たない（resume を撃つのは §4 と同じ操作役 / dispatcher の周で、行 d の起こし直しの上限と間隔がその側に在る）。撃った周にまだ届かなければ runner が同じ rc で早く終わり (2) がもう 1 件記帳する＝記録に残る・段は動かない。
+- 触らない: `RC_QUESTION` / `RC_RATE_LIMIT` の分岐・`RateLimited` の段と別口座の選定・`Failed` の他の理由（OOM・runner-rc）・`settle` の commit の条件・lens（到達不能は FR9 の既存極性 INCONCLUSIVE のまま・resume → next=gate で撃ち直せる）・`Stage` の variant（足さない・`Spawned` + `SeatStopped` の detail で弁別＝`.323` と同じ・schema 1）。
+- 歯（`pipe_unreachable_` 接頭辞・`tests/e2e/pipe/spawn.rs` の `.323` の歯の隣・偽 claude が `result` record に `is_error:true` と到達不能の本文を書く fixture・in-file は `runner.rs` の弁別の pure な歯）: 到達不能の本文で終わった runner の便は `Spawned` のまま `SeatStopped detail=runner-unreachable` が 1 件・Failed は 0・worktree の commit が残る／`pipe resume` が生死の計測を飛ばして runner を 1 回起こし直し `Spawned detail=account:<label>,resume:unreachable` と prompt の「途中再開」節に理由の行／集合に無い `is_error` の本文は従来どおり `Failed detail=runner-rc:1,commits:<n>`／`is_error=false` の本文に語が在っても弁別しない（pure）／rc の値が既存の rc と衝突しない（in-file の pin）。
+- 却下: `Stage` に `Unreachable` を足す（`.323` が `Spawned` + `SeatStopped` の detail で同じ形を持つ・段を増やすと `may_queue` / `live` / 外形の面が動く）／本文でなく rc 1 全部を再開可能にする（実装の失敗を無限に起こし直す）／runner がネットの復帰を自分で待つ（口座の窓と箱を掴んだまま待つ・C6）／claude の record の typed な field だけで弁別する（到達不能の typed な record は現物に無い＝語の集合を下界として持ち、field が現れたら差し替える）。
+
+## 18. 便の起動の前計測にも鮮度を掛ける — `choose_account` は `fleet select` と同じ 1 本の口で測る（契約表の行 o・`s2-07l.359`）
+
+- 何が起きているか（admin の実測 2026-09-15 16:3xZ・母集団 = 第 2 陣 5 便の `fleet select`）: launcher が便ごとに `fleet select` を撃ち、1 回の選定が host の全口座（7）を測る＝5 便で 35 request。§13（行 j）はこの `fleet select` の前計測を鮮度つきにするが、`pipe run` / `pipe resume` / 追随の起こし直しが口座を選ぶ `choose_account`（`pipe/ratelimit.rs`・§4「初回の起動も同じ選定を通す」）は (i) で `fleet usage` の口（`usage::run`＝§13 (4) の `Always`）を撃つので、便ごとに全口座を測る形がそのまま残る。dispatcher（[dispatcher.md](./dispatcher.md) §2）は起動の時機だけを決め便ごとに `pipe run` を撃つので、その後は burst がこの経路へ移る。§15 の lens の口座も同じ関数を通る。席の tick の定期計測は既に鮮度つき（§5 (1)・`seat/tick/account.rs`）。
+- 形: (1) `choose_account` の (i) は `fleet select` の前計測と**同じ 1 本の口**（§13 (4) の計測の方針の `Within` 側・秒は §13 の rules 行・読み手は 1 関数＝`fleet/usage.rs` に置き `select_account` と `choose_account` の 2 呼び手が呼ぶ・鮮度の規則を 2 か所に持たない・C2）で測る。`Pool` の `args`（`--rules` / `--curl` の写し・`usage_args`）はそのまま渡す。(2) **撃ち直しは従来どおり**: (iii) の待ちが成立した後と `Timeout` の後の (i) は `Always` で全口座を測る（待った reset の後の実測が要る・§13 (2) は ts で「新しい」を読むので、reset を過ぎた実測を「新しい」と読んで測らず候補なしを繰り返す周を作らない）。初回の (i) だけが `Within`。(3) `fleet usage` の口・`select_for_run`・`Input`・replay・event の形・rules 行は不変（新しい rules 行は足さない＝§13 の行を共有する）。stderr の `kept` 行は §13 (3) のまま。
+- 触らない: 純関数 `select`・`Input`・`Pool` の欄・`choose_or_wait`・`Completion::AccountFree` の観測・極性一覧。
+- 歯（`pipe_ratelimit_fresh_` 接頭辞・`tests/e2e/pipe/ratelimit.rs`・既存の偽 curl `fake_usage_curl` と `curl_calls` / `put_account` / `resume_with_accounts` を再利用）: 同じ置き場で 2 便を続けて resume すると 2 便目の偽 curl の呼出が増えない（母集団 = 1 便目の呼出 = 口座数）／rules 行より古い ts の実測の口座は測り直される（呼出 +1）／reset を待った後の撃ち直しは全口座を測る（既存の `pipe_ratelimit_resume_waits_for_the_earliest_reset_then_remeasures` の fixture で待ちの後の呼出が口座数だけ増える）／`pipe run` の初回の起動も新しい実測の口座を測り直さない。
+- 却下: dispatcher が周 1 回だけ測り全便へ同じ実測を渡す（dispatcher に計測の口を持たせる＝FR33 の計測の呼び手が 3 つ目になり、dispatcher を経ない `pipe run` と挙動が分かれる）／`choose_account` に独自の鮮度（別の rules 行）を持たせる（値の線が 2 本）／IP 単位の 429 の backoff（前提の 429 は未認証 curl の偽信号・器の経路の 429 は token 単位で §13 (3) が受ける・壁時計の sleep は §13 で却下済）。
+
+## 19. 便用の並べ鍵の 1 つ目は 7 日窓の reset の早い順 — 5 時間窓とモデル別窓は鍵にしない（[ADR-0042](../../design-intent/decisions/ADR-0042-run-account-order-is-earliest-seven-day-reset.html)・契約表の行 p・`s2-07l.439`）
+
+- 何が起きているか（現物・main 3f1eec8・verified）: §3 の便用の 1 つ目の鍵は「数える窓（5 時間 / 7 日 / モデル別 7 日）の reset の最も早いもの」。`fleet/select.rs` の `reading` が口座の読み `Reading` の `earliest` に全部の数える窓の `resets_at` の最小を入れ、`standing` が候補 `Candidate` の `reset` へ写し、`run_key` が `(reset が無い, reset, 走行中の便数, label)` で並べる。5 時間窓が reset を持つ口座では、7 日窓の reset が 5 時間窓の reset より手前に迫った周を除いて 5 時間窓の reset が最小になる＝並びは実質 5 時間窓の reset の順。7 日窓の枠は reset までに使わなければ消え、開き直りは週に 1 回なので、消える順に使うなら見る窓は 7 日窓。user 裁定 2026-09-17T06:10Z（論点 A・逐語は台帳 `s2-07l.436`）と同日 06:2xZ（逐語は台帳 `s2-07l.439`）: 便用は 7 日窓の reset が近い口座から順に使い潰す。
+- 形: (1) **1 つ目の鍵** = 口座単位の 7 日窓（`WindowKind` の 7 日窓の variant・モデル別 7 日窓ではない）の古くない実測（`fresh_windows` が返す行のうち窓の種類が 7 日窓の行）の `resets_at` の昇順。その値を持たない口座（7 日窓が消費の無い窓で reset 未定・ADR-0024、または 7 日窓の実測が reset を過ぎて `fresh_windows` から落ちた周）は**候補のまま最後**（`run_key` の先頭の `bool` の意味は従来どおり「鍵の reset を持たない」）。(2) 2 つ目以降（走行中の便数 → label）と `run_key` の tuple の形は不変＝変わるのは `reading` が鍵の reset を導く 1 か所（全部の窓の最小 → 7 日窓の行の値）と、`Reading` / `Candidate` の欄の名と doc comment。(3) **5 時間窓・モデル別窓は鍵にしない**: それらの窓は逼迫度と「当たっている」の判定（`standing`）にだけ効き、当たっている口座は従来どおり候補から外れるだけ。(4) **窓の種類の弁別は現物の型**: `Measured` は `window`（`WindowKind`・`fleet/mod.rs` の閉じた enum・3 variant）を持ち、`counts` が既に同じ enum でモデル別窓を弁別している＝7 日窓を名指すのに新しい型・`Input` の欄・rules 行は要らない。
+- **席用と便用は順序が別**: 席用は session 用の既存の順序（`prefer` → 逼迫度が最小＝余裕が最大 → label・`pick` の session 側）のままで、7 日窓の reset を読まない。便用は 7 日窓の reset の早い順に使い切る。用途の分岐（`pick`）で分かれている（[seat-roles.md](./seat-roles.md) §17 (4) と同じ言い方・同 § の「便用は reset の早い順」は本 § の後は 7 日窓の reset と読む）。
+- 触らない: `Input` の欄と構築点・`Selection` / `NoCandidate`（候補なしの周の `earliest_reset` は `reopens`＝当たっている窓の reset の遅い方の最小のままで、待ち §4 に渡す値は変わらない）・`standing` の判定の順（除外 → 測れない → 当たっている → 閾値）・`fresh_windows` / `latest_round` / `counts`・session 用の順序と R-C9-1・`fleet select` の stdout の 1 行形・event の形・replay・§13 / §18 の鮮度・§14 の除外。
+- 歯（`fleet_select_week_` 接頭辞・`tests/e2e/fleet.rs`・`fleet_select_run_prefers_earliest_reset_over_pressure` と同じ偽 curl の口座ごとの本文で 5 時間窓と 7 日窓の reset を別々に置く）: 7 日窓の reset が早い口座が、5 時間窓の reset が早い別の口座より先に選ばれる（base は 5 時間窓の早い口座を選ぶ → RED）／同じ表で `--purpose session` の答えは変わらない（逼迫度の最小）。in-file（`select_run_week_` 接頭辞・`fleet/select.rs` の歯の module）: 7 日窓の reset が同じなら走行中の便数 → label（5 時間窓の reset の差は並びに効かない）／7 日窓が reset を持たない口座は 5 時間窓に reset が在っても最後で、候補が 1 つならその口座を選ぶ／7 日窓の実測が reset を過ぎた口座も最後（候補からは外れない）／モデル別 7 日窓の reset が早くても鍵にならない／席用の答えは同じ表で変わらない。**既存の歯の側**: in-file の `select_run_prefers_the_earliest_reset`（「窓の種類を問わず最小の reset」と「過ぎた reset は鍵にならない」の段）と `select_run_breaks_ties_by_fewer_inflight_runs`（「reset が便数より先」の段は 5 時間窓の reset の差で立てている）は head で赤になる＝7 日窓の reset の差で立て直す。prop の `prop_select_run_choice_has_the_earliest_reset_then_fewest_inflight` は振り方 `Spec` の `soon` が 5 時間窓の reset だけを動かし `run_key_of` がそれを鍵に読むので、`world` が 7 日窓の reset を動かす形と `run_key_of` を合わせて直す（性質 = 並べ鍵がどの候補にも上回られない・候補なしの答えは便数に依らない、は保つ）。`select_run_ignores_prefer`・入力順の不変・session 用の prop は性質を保つ。e2e の `fleet_select_run_prefers_earliest_reset_over_pressure` は末尾の段（5 時間窓の reset を近くした口座へ動く）が赤になる＝7 日窓の reset で立て直す。pipe の e2e（`tests/e2e/pipe/ratelimit.rs` の `usage_body`）と席の e2e は 5 時間窓と 7 日窓の reset を同じ値で置くので並びが変わらない（grep で実測・snapshot に並びの字面は無い）。
+- 却下（ADR-0042 の写しは持たない・設計固有のもの）: `Input` に「鍵にする窓」の欄を足す（構築点 6 か所と `prop.rs` を動かす・用途で決まる値を入力に出す理由が無い）／`Reading` に `earliest` を残して 7 日窓の欄を足す（読み手の無い欄が残る）／7 日窓の reset を持たない口座を 5 時間窓の reset で並べ直す（鍵が 2 窓の合成になり ADR-0042 の OPT3 と同じ穴）。
 
 <!-- contracts:begin -->
 schema = 1
@@ -172,17 +200,17 @@ id = "j"
 title = "選定の前計測の鮮度 — rules 行 fleet.usage_fresh_s の内側の実測を測り直さず、計測自身の 429 / timeout では直前の新しい実測を保つ（fleet usage の口は不変）"
 req = ["FR36", "FR33"]
 section = "13"
-write-set = ["rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "crates/scribe2/tests/e2e/rules.rs", "docs/design/rules-manifest.md", "crates/scribe2/src/fleet/usage.rs", "crates/scribe2/src/fleet/cli.rs", "crates/scribe2/tests/e2e/fleet.rs"]
+write-set = ["rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "crates/scribe2/tests/e2e/rules.rs", "docs/design/rules-manifest.md", "crates/scribe2/src/fleet/select.rs", "crates/scribe2/src/fleet/usage.rs", "crates/scribe2/src/fleet/cli.rs", "crates/scribe2/tests/e2e/fleet.rs", "crates/scribe2/tests/e2e/snapshots/e2e__rules__rules_external_form.snap"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail fleet_select_fresh_"]
 size = "S"
-done = "新しい実測を持つ口座は選定で測り直されず、429 を返す周も直前の新しい実測が最新のまま候補に残り、fleet usage は全口座を測り、rules 行が裁定 id 付きで 1 本増える"
+done = "新しい実測を持つ口座は選定で測り直されず、測り直した口座が 429 / timeout を返す周も最新の実測が上書きされず候補に残り、fleet usage は全口座を測り、rules 行が裁定 id 付きで 1 本増える"
 
 [[contract]]
 id = "k"
 title = "便用の除外は便の repo（anchor）の席の登録 row の口座だけ — 置き場を共有する他 vessel の席の口座を候補に入れる（fleet select --anchor・pipe は Turn.repo を渡す）"
 req = ["FR36", "FR40"]
 section = "14"
-write-set = ["crates/scribe2/src/fleet/replay.rs", "crates/scribe2/src/fleet/wait.rs", "crates/scribe2/src/fleet/cli.rs", "crates/scribe2/src/pipe/ratelimit.rs", "crates/scribe2/src/pipe/follow.rs", "crates/scribe2/src/account/mod.rs", "crates/scribe2/tests/e2e/fleet.rs", "crates/scribe2/tests/e2e/snapshots/e2e__fleet__fleet_external_form.snap"]
+write-set = ["crates/scribe2/src/fleet/replay.rs", "crates/scribe2/src/fleet/wait.rs", "crates/scribe2/src/fleet/cli.rs", "crates/scribe2/src/pipe/ratelimit.rs", "crates/scribe2/src/pipe/follow.rs", "crates/scribe2/src/account/mod.rs", "crates/scribe2/tests/e2e/fleet.rs", "crates/scribe2/tests/e2e/pipe/ratelimit.rs", "crates/scribe2/tests/e2e/pipe/spawn.rs", "crates/scribe2/tests/e2e/pipe/land.rs", "crates/scribe2/tests/e2e/snapshots/e2e__fleet__fleet_external_form.snap"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail fleet_select_anchor_"]
 size = "S"
 done = "他 repo の席の口座を持つ置き場で本 repo の便の選定がその口座を chosen に出し、--anchor 無しの fleet select は従来どおり全 row を外す"
@@ -192,7 +220,7 @@ id = "l"
 title = "lens の口座も器が選ぶ — pipe gate が lens を起こす直前に便用の選定を通し、with_account の 1 関数で起動行に足し、Gated の detail に account:<label> を記帳する（候補なしは INCONCLUSIVE）"
 req = ["FR36", "FR33"]
 section = "15"
-write-set = ["crates/scribe2/src/pipe/gate.rs", "crates/scribe2/src/pipe/gate/lens.rs", "crates/scribe2/src/pipe/spawn.rs", "crates/scribe2/src/pipe/ratelimit.rs", "crates/scribe2/src/pipe/cli/step.rs", "crates/scribe2/src/pipe/land.rs", "crates/scribe2/tests/e2e/pipe/gate.rs"]
+write-set = ["crates/scribe2/src/pipe/gate.rs", "crates/scribe2/src/pipe/gate/lens.rs", "crates/scribe2/src/pipe/spawn.rs", "crates/scribe2/src/pipe/ratelimit.rs", "crates/scribe2/src/pipe/cli/step.rs", "crates/scribe2/src/pipe/land.rs", "crates/scribe2/tests/e2e/pipe/gate.rs", "crates/scribe2/tests/e2e/pipe.rs", "crates/scribe2/tests/e2e/pipe/spawn.rs", "crates/scribe2/tests/e2e/pipe/ratelimit.rs"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_gate_lens_account_"]
 size = "S"
 done = "宣言口座のある置き場で gate の lens 起動行の末尾に選んだ口座の --account-dir が在り Gated の detail に account:<label> が出て、宣言 0 は従来どおり、候補なしは lens を呼ばず INCONCLUSIVE"
@@ -202,8 +230,40 @@ id = "m"
 title = "同じ flag の二重を断る — headless の flag（headless/mod.rs）が同名 2 回以上を typed に断り、with_account は起動行に既に --account-dir が在れば足さずに spawn を断る（記帳の口座と実行の口座の一致を歯で pin）"
 req = ["NFR4", "FR36"]
 section = "16"
-write-set = ["crates/scribe2/src/headless/mod.rs", "crates/scribe2/src/headless/runner.rs", "crates/scribe2/src/headless/lens.rs", "crates/scribe2/src/pipe/spawn.rs", "crates/scribe2/src/polarity.rs", "crates/scribe2/tests/e2e/snapshots/e2e__polarity__polarity_external_form.snap", "crates/scribe2/tests/e2e/headless.rs", "crates/scribe2/tests/e2e/pipe/spawn.rs"]
+write-set = ["crates/scribe2/src/headless/mod.rs", "crates/scribe2/src/headless/runner.rs", "crates/scribe2/src/headless/lens.rs", "crates/scribe2/src/pipe/spawn.rs", "crates/scribe2/src/polarity.rs", "crates/scribe2/tests/e2e/snapshots/e2e__polarity__polarity_external_form.snap", "crates/scribe2/tests/e2e/polarity.rs", "crates/scribe2/tests/e2e/headless.rs", "crates/scribe2/tests/e2e/pipe/spawn.rs"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail headless_flag_duplicate_"]
 size = "S"
 done = "runner / lens の argv に同じ flag が 2 つ在ると claude を呼ばずに断り、with_account は既に --account-dir を持つ起動行を足さずに断って Spawned を記録しない"
+
+[[contract]]
+id = "n"
+title = "API に届かず止まった runner を Failed に倒さない — 到達不能を閉じた語の集合で弁別して rc RC_UNREACHABLE で終え、Spawned のまま SeatStopped detail=runner-unreachable を記帳し、pipe resume が runner の死亡と同じ 1 本で同じ worktree・同じ契約に起こし直す"
+req = ["FR37", "FR14"]
+section = "17"
+touches = ["crate::pipe::follow::Halt"]
+write-set = ["crates/scribe2/src/headless/mod.rs", "crates/scribe2/src/headless/runner.rs", "crates/scribe2/src/headless/runner.txt", "crates/scribe2/src/pipe/spawn.rs", "crates/scribe2/src/pipe/follow.rs", "crates/scribe2/src/pipe/cli/resume.rs", "crates/scribe2/tests/e2e/pipe/spawn.rs", "crates/scribe2/tests/e2e/snapshots/e2e__headless__headless_runner_prompt_external_form.snap"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_unreachable_"]
+size = "M"
+done = "到達不能の本文で終わった runner の便が Spawned のまま SeatStopped detail=runner-unreachable を 1 件持ち Failed が 0 で commit が残り、pipe resume が生死の計測を飛ばして runner を 1 回起こし直して resume:unreachable を記帳し、集合に無い is_error は従来どおり Failed"
+
+[[contract]]
+id = "o"
+title = "便の起動の前計測にも鮮度を掛ける — choose_account が fleet select と同じ 1 本の口で測り、撃ち直しは従来どおり全口座を測る"
+req = ["FR36", "FR33"]
+section = "18"
+write-set = ["crates/scribe2/src/pipe/ratelimit.rs", "crates/scribe2/src/fleet/usage.rs", "crates/scribe2/src/fleet/cli.rs", "crates/scribe2/tests/e2e/pipe/ratelimit.rs"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_ratelimit_fresh_"]
+size = "S"
+done = "pipe run / resume / 追随の起こし直しの初回の前計測が新しい実測の口座を測り直さず、待ちと Timeout の後の撃ち直しは全口座を測り、rules 行は増えない"
+depends = ["j"]
+
+[[contract]]
+id = "p"
+title = "便用の並べ鍵の 1 つ目を 7 日窓の reset の早い順にする — 7 日窓の reset を持たない口座は最後・5 時間窓とモデル別窓は鍵にしない・席用の順序と候補の判定は不変（ADR-0042）"
+req = ["FR36", "FR33"]
+section = "19"
+write-set = ["crates/scribe2/src/fleet/select.rs", "crates/scribe2/tests/e2e/fleet.rs"]
+verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail fleet_select_week_", "cargo nextest run -p scribe2 --lib --no-tests=fail select_run_week_"]
+size = "M"
+done = "便用の選定が 7 日窓の reset の早い口座を 5 時間窓の reset の早い口座より先に選び、7 日窓の reset が同じなら走行中の便数 → label、7 日窓の reset を持たない口座は候補のまま最後で、同じ表の席用の答えと候補なしの周の earliest_reset は変わらない"
 <!-- contracts:end -->

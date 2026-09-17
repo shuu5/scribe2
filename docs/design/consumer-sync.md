@@ -116,6 +116,15 @@ C1（rules 行を足さない・閾値は無い）・C2 / C2.2（`EventKind` / `
 - 依存: `.320` Landed が前提（seat/statusline.rs は本便の受付時点でまだ着地していない＝行の write-set では + で名指し、.320 Landed 後に素の path へ焼き直す）。
 - 却下案: consumer 行で settings.json を独自に読む（口座行と 2 実装になる・C2）／`statusline` を `drift=` の語に入れる（上書きの有無は判定でなく事実の名指し・C10.2・設計 §4「判定しない」）。
 
+## 15. 呼ばれる binary が上流の既定 branch から behind の周に管理 tick が §5 の口を撃つ — 更新の運用を tick の軸で強制し、doctor の consumer 行に behind= を足す（契約表の行 g・`s2-07l.408`）
+
+- 何が起きているか: 別 host の planner 経由の user 直命 2026-09-16（要旨: 器を最新に更新する運用は plugin の hook が強制する形で持つ・逐語は別 repo の台帳）。§5 の口（`.336`・行 e）が Landed しても、それを**いつ誰が撃つか**は planner の作業記憶の散文のままで（N2）、導入先の binary が origin/main から behind になったことを器は測らない（§4 の `drift=` は「記録 vs 今の file」の比較で、上流に対する behind ではない）。現物（verified・main a620600）: tick の軸は context → 口座 → hook 集合（`seat/tick/plugin.rs`・§6）→ 状態の門の順で、host 単位の軸は無い。doctor の consumer 行は `head=`（`account/consumers.rs` の `head_of`・`[[vessel]] repo` の HEAD）を持つが上流との差は持たない。binary の build 元 commit は `env!` の 1 値（§2）。
+- 形: (1) **tick の軸を 1 つ足す**（hook 集合の軸の**直後**・状態の門の前・§6 と同じ「judge であって guard ではない・極性一覧に載せない」・置き場は `seat/tick/vessel.rs`）: host の manifest（`<state_dir>/host.toml`・口座の軸と同じ `HostManifest` の読み手・doctor の `head=` と同じ `vessel()`）の `[[vessel]] repo` が無い周は `vessel=undeclared` で次の条件へ。在る周は **behind を測る**: 自分の build 元 commit（`env!`・§2）が `unknown` か `+dirty` の周は `unmeasured`（理由の語 `build-unknown` / `build-dirty`）、それ以外は `git -C <repo> rev-list --count <build>..<remote>/<branch>`（既定 = §5 と同じ `origin` / `main`・子 process・timeout は既存の唯一の wait）で数える（build の sha を repo が知らない周・git が返らない周は `unmeasured`・理由 `git-failed`）。**fetch は tick が撃つ**が毎周ではない: `<repo>/.git/FETCH_HEAD` の mtime が `seat.tick_stale_s` 未満の周は撃たず（閾値は §6 の cycle-recent と同じ共用＝新しい rules 行を足さない・C1）、それ以外の周に `git fetch <remote>` を 1 回撃ってから数える（fetch が失敗した周は `unmeasured`・理由 `fetch-failed`・stale な ref で数えない）。(2) **behind ≥ 1 の周は §5 の口をそのまま呼ぶ**（`hook/vessel.rs` の関数 1 本・CLI と同じ経路・rebuild と install と `InstallRecorded` の記録は §5 のまま）。結果は判定行の token に載せる: `vessel=<current|behind:<n>|updated:<sha12>|refused:<UpdateError の語>|unmeasured:<理由>|undeclared>`（closed・評価していない周は載らない＝`plugin=` と同じ印・bool で持たない）。撃った周も撃たなかった周も判定は次の条件へ進む（軸は Pass のみ・`NoopReason` / `InjectKind` / Guard を足さない）。同じ host の 2 席の tick が同時に撃った周は git の index.lock と cargo の build lock が直列化し、後の周は `refused:<語>`（`not-fast-forward` 等）か `updated:` の重複（同じ sha の `InstallRecorded` が 2 件）で終わる＝器の lock は持たない（害は build 1 回分）。(3) **doctor の consumer 行**に `behind=<n|unmeasured>` を足す（`head=` の隣・値は doctor 自身の build 元 commit と `<remote>/<branch>` の差を (1) と**同じ 1 関数**で読む・doctor は fetch を撃たない〔読むだけ・§4「判定しない」〕・`[[vessel]]` が無い行は `behind=-`）。行の外形は `seat_doctor_external_form` の snapshot が動く。
+- 自動実行の判定（planner 裁定 2026-09-16）: §5 の口は「消す / 出す / 使う」のいずれでもない（§5「A1」・local の build と install・push しない・課金しない）ので tick が撃ってよい。人間へ上げる形（NEEDS-USER の注入）は採らない（更新の運用を人の手に戻す＝直命の逆）。
+- 触らない: §5 の口の順序と断り・`drift=` の語・hook 集合の軸（§6）・cycle / exit の経路・rules 行（fetch の間隔は `seat.tick_stale_s` の共用・値は不変）・導入先の帳簿と cache（§5 と同じく書かない）・別 host の席（tick は自 host の binary だけを測る）。
+- 歯（`seat_tick_vessel_` / `doctor_consumer_behind_` 接頭辞・`tests/e2e/seat/tick.rs` と `tests/e2e/main.rs`・偽 `git` / 偽 `cargo` は §5 の歯と同じ argv を写す stub・build 元 commit は歯の binary の値ゆえ `rev-list` の答えは偽 git が返す）: behind 2 の偽 git で tick が §5 の口を 1 回撃ち `updated:<sha>` と `InstallRecorded` 1 件／behind 0 は `current` で撃たない／FETCH_HEAD が新しい周は fetch の argv が写らない・古い周は 1 回写る／fetch 失敗は `unmeasured:fetch-failed` で撃たない／`[[vessel]]` 無しは `undeclared`／dirty な repo は `refused:dirty` で event 0／doctor の consumer 行が `behind=<n>` を持ち fetch の argv が写らない。
+- 却下案: tick が毎周 fetch する（network を分単位で撃つ・host 越しの負荷）／behind を席へ 1 行 inject して人に撃たせる（散文の運用に戻る・直命の逆）／新しい rules 行で fetch の間隔を持つ（裁定 id が要る・既存の閾値で足りる）／器の lock file で 2 席の同時実行を塞ぐ（git と cargo が既に直列化する・lock の TTL の設計が増える）／`vessel=` を `NoopReason` に足す（更新は noop の理由でなく事実の名指し・判定を止めない）／導入先の席の記録（§3 の `binary=`）と比べる（席の binary は再起動まで古いまま＝§6 の作り直しの領分・測るのは呼ばれる binary）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -138,4 +147,15 @@ write-set = ["crates/scribe2/src/account/consumers.rs", "+crates/scribe2/src/sea
 verify = ["cargo nextest run -p scribe2 --no-tests=fail doctor_consumer_statusline_"]
 size = "S"
 done = "doctor の consumer 行が statusline= を 4 値で出し、口座行と同じ関数を通る"
+
+[[contract]]
+id = "g"
+title = "呼ばれる binary が上流の既定 branch から behind の周に管理 tick が vessel update を撃つ — tick の軸 1 つ（vessel= の token・fetch は tick_stale_s の共用で間引く）と doctor の consumer 行の behind="
+req = ["FR61"]
+section = "15"
+write-set = ["crates/scribe2/src/seat/tick.rs", "+crates/scribe2/src/seat/tick/vessel.rs", "crates/scribe2/src/seat/tick/render.rs", "crates/scribe2/src/hook/vessel.rs", "crates/scribe2/src/account/consumers.rs", "crates/scribe2/tests/e2e/seat/tick.rs", "crates/scribe2/tests/e2e/main.rs", "crates/scribe2/tests/e2e/snapshots/e2e__seat__seat_doctor_external_form.snap"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail seat_tick_vessel_", "cargo nextest run -p scribe2 --no-tests=fail doctor_consumer_behind_"]
+size = "M"
+done = "behind の周に tick が vessel update を 1 回撃って updated: と InstallRecorded 1 件を残し、current / unmeasured / undeclared / refused の周は撃たず、fetch は FETCH_HEAD が tick_stale_s 未満なら撃たず、doctor の consumer 行に behind= が載る"
+depends = ["e"]
 <!-- contracts:end -->

@@ -4,7 +4,19 @@
 最後の 1 行に、次の形の JSON を**ちょうど 1 つ**書く。前置きや説明は JSON の前に書いてよいが、
 最終行は JSON だけにする。
 
-{"verdict":"PASS|FAIL|INCONCLUSIVE","evidence":"<根拠を 1 行で>"}
+{"verdict":"PASS|FAIL|INCONCLUSIVE","evidence":"<根拠を 1 行で>","findings":"contract-fit:<n>,teeth-nonvacuous:<n>,constitution:<n>,delete:<n>,stdlib:<n>,native:<n>,yagni:<n>,shrink:<n>","population":"files:<n>,lines:<n>"}
+
+**`findings` と `population` は必須である**（8 観点をこの順で全部・**0 件も 0 と書く**・`population` は**実際に読んだ**母集団＝diff の file 数と行数で、取り繕った数を書かない）。
+
+## 数える観点（8 つ・**件数だけ**を数える。欠け・表に無い名・母集団 0 の周は、器が「判定に届かなかった」＝ INCONCLUSIVE として読む——「見て 0 件だった」と「見ていない」は別のことだからである）
+- `contract-fit`: 契約（下の goal / done / verify / write-set）と diff の食い違い。
+- `teeth-nonvacuous`: 歯が空虚（assert の字面が入力と衝突している・測る対象が実装に無い）。
+- `constitution`: 憲法（起動 cwd の `CLAUDE.md` の生成区間）の条項に反する面。
+- `delete`: 消せる面（重複・到達しない経路・使われない field）。
+- `stdlib`: 標準 library で足りる自作。
+- `native`: 言語・道具の既存機能で足りる作り込み。
+- `yagni`: この便が要らない一般化（将来のための引数・設定・抽象）。
+- `shrink`: 同じ意味のまま縮む面（分岐の重複・冗長な中間値）。
 
 ## 判定の決め方
 - **PASS**: diff が契約の求めるものを満たし、明らかな欠陥が無い。

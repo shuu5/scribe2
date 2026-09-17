@@ -233,7 +233,9 @@ fn dep_violation(
 const DEP_SECTION_BASES: &[&str] = &["dependencies", "dev-dependencies", "build-dependencies"];
 
 /// section header が依存 section なら `(base 名, `[<base>.<name>]` 形の dep 名)`。
-fn dep_section(header: &str) -> Option<(&'static str, Option<&str>)> {
+///
+/// `deps-empty` と `xtask deps-delta` が同じ分類を共有する（`s2-07l.161`・節の 5 形を 2 度書かない）。
+pub(crate) fn dep_section(header: &str) -> Option<(&'static str, Option<&str>)> {
     let scoped = strip_target_scope(header.strip_prefix("workspace.").unwrap_or(header));
     for base in DEP_SECTION_BASES {
         if scoped == *base {
@@ -266,17 +268,23 @@ fn strip_target_scope(header: &str) -> &str {
 
 /// inline table 形の dep 値が `package = ` による改名を持つか。
 fn renames_package(value: &str) -> bool {
-    let Some(inner) = value
+    package_rename(value).is_some()
+}
+
+/// inline table 形の dep 値の `package = "<name>"` の改名先（無ければ `None`）。
+///
+/// `deps-empty` は有無だけを見て違反にし、`xtask deps-delta` は改名先を crate 名に取る
+/// （`s2-07l.161`・inline table の読み方を 2 度書かない）。
+pub(crate) fn package_rename(value: &str) -> Option<String> {
+    let inner = value
         .trim()
         .strip_prefix('{')
-        .and_then(|rest| rest.strip_suffix('}'))
-    else {
-        return false;
-    };
+        .and_then(|rest| rest.strip_suffix('}'))?;
     inner
         .split(',')
         .filter_map(|part| part.split_once('='))
-        .any(|(key, _)| key.trim() == "package")
+        .find(|(key, _)| key.trim() == "package")
+        .map(|(_, name)| quoted(name).unwrap_or_else(|| name.trim().to_owned()))
 }
 
 /// `(section, dep 名)` が [`ALLOWED_DEPS`] に在るか。

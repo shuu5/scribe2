@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="generator" content="folio ADR-pack assembler (folio-bwc / instance#2) — deterministic structure, prose slots unfilled">
-<title>便の起動は器の dispatcher が行う (審査を通った契約を列に入れ、 依存・交差・受付を満たす便を自動で起こす・planner の手動介入は typed な口)</title>
+<title>役割の実効の口座は host の根の記録 1 件が持ち、 逼迫した周にだけ余裕が最大の口座へ役割ごと移る (宣言は初期値の種で宣言へは戻らない・候補が無い周も妥協の口座で席を立てて user の裁定を待つ・consult は planner の口座を読む・ADR-0036 の DR3 を supersede)</title>
 <style>
 /* ===========================================================================
    folio human-layer design system — core.css (S3 / folio-8oc プロトタイプ)
@@ -455,18 +455,17 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
     "schema": "https://schema.org/",
     "folio": "https://folio.dev/spec/v1/"
   },
-  "@id": "./ADR-0034-dispatcher-starts-reviewed-contracts-automatically.html",
+  "@id": "./ADR-0041-role-effective-account-is-one-host-record-and-moves-only-under-pressure.html",
   "@type": "schema:TechArticle",
   "dc:isReferencedBy": [
-    { "@id": "./ADR-0041-role-effective-account-is-one-host-record-and-moves-only-under-pressure.html" },
-    { "@id": "./ADR-0035-live-run-cap-is-one-rules-row.html" }
+    { "@id": "./ADR-0042-run-account-order-is-earliest-seven-day-reset.html" }
   ],
   "dc:isPartOf": [
     {
       "@id": "./README.html"
     }
   ],
-  "dc:title": "便の起動は器の dispatcher が行う (審査を通った契約を列に入れ、 依存・交差・受付を満たす便を自動で起こす・planner の手動介入は typed な口)",
+  "dc:title": "役割の実効の口座は host の根の記録 1 件が持ち、 逼迫した周にだけ余裕が最大の口座へ役割ごと移る (宣言は初期値の種で宣言へは戻らない・候補が無い周も妥協の口座で席を立てて user の裁定を待つ・consult は planner の口座を読む・ADR-0036 の DR3 を supersede)",
   "folio:version": "0.1.0",
   "folio:stakeholders": [
     "Developer",
@@ -478,40 +477,40 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
       "@id": "../spec/constitution.html#c2"
     },
     {
+      "@id": "../spec/constitution.html#c3"
+    },
+    {
+      "@id": "../spec/constitution.html#c9"
+    },
+    {
       "@id": "../spec/constitution.html#c10"
     },
     {
-      "@id": "../spec/constitution.html#c15"
-    },
-    {
-      "@id": "../spec/constitution.html#c16"
-    },
-    {
-      "@id": "../spec/constitution.html#n2"
-    },
-    {
-      "@id": "../spec/constitution.html#a4"
-    },
-    {
-      "@id": "../spec/srs.html#FR30"
+      "@id": "../spec/constitution.html#n1"
     },
     {
       "@id": "../spec/srs.html#FR36"
     },
     {
-      "@id": "../spec/srs.html#FR39"
+      "@id": "../spec/srs.html#FR38"
     },
     {
-      "@id": "../spec/srs.html#FR49"
+      "@id": "../spec/srs.html#FR59"
     },
     {
-      "@id": "../spec/srs.html#NFR4"
+      "@id": "./ADR-0020-account-autonomy-limit-stop-resume-and-selection.html"
     },
     {
-      "@id": "./ADR-0016-default-delivery-structure-and-typed-question-record.html"
+      "@id": "./ADR-0022-seat-roles-are-typed-and-enforced-by-hooks.html"
     },
     {
-      "@id": "./ADR-0019-parallel-runs-exclude-overlap-at-intake-and-runner-resolves-conflicts.html"
+      "@id": "./ADR-0027-run-account-order-earliest-reset-and-no-per-account-cap.html"
+    },
+    {
+      "@id": "./ADR-0034-dispatcher-starts-reviewed-contracts-automatically.html"
+    },
+    {
+      "@id": "./ADR-0036-role-accounts-are-declared-once-per-host.html"
     }
   ]
 }
@@ -523,165 +522,195 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
 <nav class="breadcrumb" aria-label="パンくず"><ol>
   <li><a href="../index.html">design-intent</a></li>
   <li><a href="./README.html">decisions</a></li>
-  <li aria-current="page">ADR-0034</li>
+  <li aria-current="page">ADR-0041</li>
 </ol></nav>
 <!-- /folio:chrome-top -->
 <div class="page" data-component="requirement-type-color-tokens">
 <header data-component="doc-cover-band">
-<p class="cover-eyebrow"><span class="doc-type">設計判断記録 (ADR)</span> <span>scribe2 — dispatcher</span></p>
-<h1>便の起動は器の dispatcher が行う (審査を通った契約を列に入れ、 依存・交差・受付を満たす便を自動で起こす・planner の手動介入は typed な口)</h1>
-<p class="cover-sub">便の起動を planner → 管理席 → launcher の中継 (席の手番) から外し、 契約が出来た直後の審査と器が既に持つ判定 (台帳の依存・write-set の交差・受付) だけで自動的に起こす。 順序は planner の介入 first → 契約の priority → 起票順で決める (hold は止め、 release で戻す)。</p>
-<div class="summary-card"><span class="ic"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#ffe8a8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span><div><p class="lab">この判断が約束すること (1 文サマリ)</p><p class="txt" data-prose-slot="cover-summary" data-slot-id="cover-summary">便を起こす仕事を、planner と管理席の中継から器へ移します。契約が出来た直後に審査し、通った契約は自動で列に入り、依存と write-set の交差と受付を満たしたものから器が起こします。順番は planner の印 first、契約の priority、起票順で決め、管理席は質問と判定の中継と着地だけを担います。</p></div></div>
-<div class="cover-meta"><span class="m"><span class="k">状態</span><span class="v">accepted</span></span><span class="m"><span class="k">選択肢</span><span class="v">5件 (OPT1–OPT5)</span></span><span class="m"><span class="k">結果</span><span class="v">良い 3 / トレードオフ 3</span></span><span class="m"><span class="k">版</span><span class="v">v0.1.0 / 2026-09-15</span></span></div>
-<div class="reader-chip" data-component="cross-doc-ref-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 正当化する要件: <b>SRS-SCRIBE2-MVP</b> の <b>FR30・FR39・FR49・FR36</b></div>
+<p class="cover-eyebrow"><span class="doc-type">設計判断記録 (ADR)</span> <span>scribe2 — 役割の実効の口座</span></p>
+<h1>役割の実効の口座は host の根の記録 1 件が持ち、 逼迫した周にだけ余裕が最大の口座へ役割ごと移る (宣言は初期値の種で宣言へは戻らない・候補が無い周も妥協の口座で席を立てて user の裁定を待つ・consult は planner の口座を読む・ADR-0036 の DR3 を supersede)</h1>
+<p class="cover-sub">役割の席が実際に使う口座を、 host の根の実効の記録 (役割ごとに高々 1 件・器が書く) が持つ。 記録の口座が使える間は居続け、 宣言の口座に余裕が戻っても戻らない。 記録が無い周は宣言を種にし、 記録の口座が逼迫した周にだけ役割単位で 1 回、 余裕が最大の口座を選び直す。 閾値未満の候補が無い周も断らず、 妥協の口座で席を立てて理由を記録と席の指示文に出す。</p>
+<div class="summary-card"><span class="ic"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#ffe8a8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span><div><p class="lab">この判断が約束すること (1 文サマリ)</p><p class="txt" data-prose-slot="cover-summary" data-slot-id="cover-summary">役割の席が使う口座は、host に 1 か所だけ在る記録が決めます。同じ役割の席はどの project からでもその記録を読んで同じ口座を使い、その口座が逼迫したときにだけ、役割ごとまとめて余裕が最大の口座へ移ります。宣言の口座は最初の 1 回の種で、余裕が戻っても戻りません。使える口座が見つからないときも席は必ず立て、その旨を席に知らせて user の裁定を待たせます。</p></div></div>
+<div class="cover-meta"><span class="m"><span class="k">状態</span><span class="v">accepted</span></span><span class="m"><span class="k">選択肢</span><span class="v">7件 (OPT1–OPT7)</span></span><span class="m"><span class="k">結果</span><span class="v">良い 4 / トレードオフ 4</span></span><span class="m"><span class="k">版</span><span class="v">v0.1.0 / 2026-09-17</span></span></div>
+<div class="reader-chip" data-component="cross-doc-ref-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 正当化する要件: <b>SRS-SCRIBE2-MVP</b> の <b>FR38・FR59・FR36</b></div>
 <div data-component="approval-block">
-<div class="sign"><span class="role">裁定 (user)</span><span class="who">user</span><span class="when">2026-09-15 裁定 (対話面・逐語は台帳 s2-07l notes 12:5xZ)</span><span class="stamp self">裁定済</span></div>
-<div class="sign"><span class="role">設計 (planner)</span><span class="who">planner</span><span class="when">2026-09-15 起票 (docs/design/dispatcher.md)</span><span class="stamp self">作成</span></div>
+<div class="sign"><span class="role">裁定 (user)</span><span class="who">user</span><span class="when">2026-09-17T05:50Z (逐語は台帳 s2-07l.418) と 2026-09-17T06:10Z (逐語は台帳 s2-07l.436)</span><span class="stamp self">裁定済</span></div>
+<div class="sign"><span class="role">設計 (planner)</span><span class="who">planner</span><span class="when">2026-09-17 起票 (docs/design/seat-roles.md §17 / §18・契約表の行 k / l・台帳 s2-07l.436)</span><span class="stamp self">作成</span></div>
 </div>
-<div class="reader-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 想定読者: scribe2 の開発 session (planner / admin) と user — pipeline の内部構造の専門知識は不要 (専門語はやさしい言葉を併記)</div>
+<div class="reader-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 想定読者: scribe2 の開発 session (planner / admin) と user — fleet と席の内部構造の専門知識は不要 (専門語はやさしい言葉を併記)</div>
 </header>
 <!-- folio:chrome-toc -->
 <!-- /folio:chrome-toc -->
-<section data-component="chapter-deck-band" class="tint-info"><span class="num">01</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 2v6m0 0L9 5m3 3l3-3"/><circle cx="12" cy="14" r="6"/></svg> 背景 / なぜこの判断が要るか</span><h2>いま何が問題か (確定方式を決める力学)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-01">なぜ今この判断が要るのかを、当日の実測から説明します。便の起動が planner → 管理席 → launcher の中継に乗っていて、着地から次の起動まで席の手番の待ちが乗り、優先便の後回しと器に無い上限の散文が事故として出ました。判定はすべて器が持っています。</p></section>
+<section data-component="chapter-deck-band" class="tint-info"><span class="num">01</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 2v6m0 0L9 5m3 3l3-3"/><circle cx="12" cy="14" r="6"/></svg> 背景 / なぜこの判断が要るか</span><h2>いま何が問題か (確定方式を決める力学)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-01">なぜこの判断が要るのかを、現物と user の裁定から説明します。いまは宣言の口座が使えない周に、席が 1 つずつ別々に移り先を選びます。その結果、同じ役割の席が別々の口座へ散り、候補が尽きて席が立たないことが実際に起きました。user は、同じ役割の席は揃って移り、移った先に居続け、候補が無くても席は立てると裁定しました。</p></section>
 <div class="chapbody">
 <div data-component="adr-context-list">
-<div data-component="adr-context-row"><span class="cxid">CTX1</span><div class="cxbody"><p class="cxh">便の起動が 2 席の中継に乗っている</p><p class="cxd">ADR-0016 §2.1 は管理席の仕事の 1 つ目を「dispatch された契約を pipe run で流す」と定め、 planner が便ごとに dispatch を書き、 管理席が交差を手で測って launcher を撃つ。 2026-09-15 の実測では、 着地から次の起動まで数分〜十数分の待ちが便ごとに乗り、 planner が順序を誤って user が名指した優先便を後回しにする事故 (11:47Z) と、 器に無い「同時 3 便」の上限を席の散文で持っていた事故 (11:5xZ) が起きた。</p></div></div>
-<div data-component="adr-context-row"><span class="cxid">CTX2</span><div class="cxbody"><p class="cxh">起動に要る判定は器が全部持っている</p><p class="cxd">台帳の依存 (bd ready)・live 便との write-set の交差 (FR39・intake の 1 関数)・受付の余地と host の memory (contract-source.md §3 / gate-cost.md §3.2)・契約の審査 (FR49・審査の段)。 席がしているのは、 これらの値を読み直して launcher を撃つことだけである。 前提が 2 つ = 審査の段 (設計 contract-source.md の契約表の行 (c)・s2-07l.241) と、 設計 doc の契約表の行から intake が契約 file を生成する口 (同 契約表の行 (b)・s2-07l.209)。 後者が無いと便の契約 file は管理席の手順 (bead の acceptance を写す script) でしか作れず、 器は起動を組めない。</p></div></div>
-<div data-component="adr-context-row"><span class="cxid">CTX3</span><div class="cxbody"><p class="cxh">user の裁定</p><p class="cxd">2026-09-15 12:5xZ に user は「審査を通った契約は write-set が被っていなければどんどん dispatch の列<span class="term" data-component="plain-language-term-inline" data-term="列">起動を待つ契約の並び</span>に自動的に入るべき」「優先度は契約のときに planner が設定し、 それをもとに自動的に dispatcher<span class="term" data-component="plain-language-term-inline" data-term="dispatcher">便を自動で起こす係</span> に入り、 管理席は仕事を pipeline に委譲する仕組みを器として作るべき」「user が最優先を言ったら planner が後から手動で順番を入れ替えられるように」と裁定した (逐語は台帳)。 同日 13:4xZ に「planner が作ったらその直後に lens は審査すべき」と裁定し (審査の時点 = 契約が出来た直後・起動の瞬間ではない)、 13:5xZ に残りの論点 (first が priority より上・介入は 3 つ・契機は tick と land・FR30 の改訂は /folio-architect の周) を planner の推奨どおりと裁定した。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX1</span><div class="cxbody"><p class="cxh">現物 — 使えない周の選定は席ごとで、 除外は「自席以外の全登録 row の口座」</p><p class="cxd">ADR-0036 と seat-roles.md §15 (2) は、 宣言の口座が使えない周に席ごとに session 用の選定<span class="term" data-component="plain-language-term-inline" data-term="session 用の選定">席を起こす口座を残量から選ぶ規則</span>へ落ちる。 その選定 (crates/scribe2/src/seat/cycle/relaunch.rs の choose) は除外集合を「自席 (同じ役割と anchor) 以外の全登録 row の口座」で作る。 同じ役割の他 project の席も除外に入るので、 先に移った席の口座が後続の席の候補から外れる。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX2</span><div class="cxbody"><p class="cxh">実測 — 同じ役割の席が別々の口座へ散り、 候補が尽きて席が立たない</p><p class="cxd">(a) 同じ役割の他 project の席が先に移った口座は後続の席の候補から外れるので、 同じ役割の席が別々の口座へ散る = ADR-0036 の「役割の口座を host で揃える」が逼迫時に崩れる。 (b) 席の数が口座の数に近づくと候補が尽き、 選定が no-account を返して席が立たない (実測 2026-09-17・planner の席の立て直しが連続で断られた・口座名は台帳が原本で本 file には写さない・CON2)。 席が立たない間は対話面が無く、 user は進め方を裁定することもできない。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX3</span><div class="cxbody"><p class="cxh">user の裁定 — 役割ごと揃って移る・移った先に居続ける・候補が無くても席は立てる</p><p class="cxd">裁定 id = user 2026-09-17T05:50Z (逐語は台帳 s2-07l.418) と user 2026-09-17T06:10Z (逐語は台帳 s2-07l.436)。 逐語は台帳が原本で本 file には写さない (CON2)。 要旨: (1) 役割の口座は project をまたいで共有し、 上限が来たら同じ役割の席は同時に同じ別の口座へ移る。 (2) 移った先には、 そこが逼迫するまで居続ける (宣言の口座に余裕が戻っても戻らない)。 移る先は余裕が最大の口座。 (3) 閾値未満の候補が無い周も席は必ず立て、 妥協で立った席は作業を止めて user の裁定を待つ。 全口座が上限に当たっている周だけは従来どおり断る。 (4) 走行中の便は止めない。 (5) consult の席は planner の口座を使う。 狙い = 便が使える口座が増える・席の管理と予算の見通しが単純になる・行き来の cycle を減らす。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX4</span><div class="cxbody"><p class="cxh">host の根<span class="term" data-component="plain-language-term-inline" data-term="host の根">同じ host の全 project が共有する置き場</span>と、 宣言値と実効値を型で分ける向き</p><p class="cxd">state dir は project ごとに分かれうる (ADR-0036 CTX2 の実測) ので、 実効の口座を state dir の中に置くと別の state dir の project に届かない。 host の根 (&lt;state_dir の親&gt;/&lt;NAME&gt;-host/) は ADR-0036 の宣言 file と受付札が既に使う project 横断の置き場で、 env を読まずに state dir から導く。 宣言 file は人が書く宣言値で、 器が実測から決めた口座は実効値の側である (憲法 C10 は両者を型で分ける)。 憲法の向き = C10・C2 (選定と除外は 1 関数・順序は宣言順)・C2.2 (env を読まない)・C9 (席が止まったら人手なしで再開する)・C9.2 (口座を窓の終わりまで使い切る)・N1 / N1.2 (消さない・退役は可逆な move)。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX5</span><div class="cxbody"><p class="cxh">現物 — 席用と便用は選ぶ順序が別で、 選定の純関数は閾値を入力で受ける</p><p class="cxd">選定の純関数 (crates/scribe2/src/fleet/select.rs) は用途で順序が分かれる: session 用は逼迫度<span class="term" data-component="plain-language-term-inline" data-term="逼迫度">数える窓のうち最大の使用率</span>が最小 (= 余裕が最大) の口座、 便用は reset が最も早い口座から使い切る (ADR-0027)。 当たっている口座 (窓の全量) と測れない口座はどちらの用途でも候補にならず、 session 用だけが閾値 (R-C9-1) 以上の口座も外す。 閾値は入力の 1 項目なので、 閾値に窓の全量を渡せば「当たっていない中で余裕が最大」を同じ関数が返す。</p></div></div>
 </div>
 </div>
-<section data-component="chapter-deck-band" class="tint-brand"><span class="num">02</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3v18"/><path d="M5 7l-3 6h6z"/><path d="M19 7l-3 6h6z"/><path d="M3 21h18"/></svg> 判断を縛る力 / 評価の軸</span><h2>選択肢を測るものさし (安全・速さ)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-02">判断を評価する 4 本のものさしです。並列度を席の手番に依存させないこと、判定は器の既存の実装を使うこと、planner の産物は契約と priority と介入だけにすること、起動は可逆でも止める口と観測は typed に持つことです。</p></section>
+<section data-component="chapter-deck-band" class="tint-brand"><span class="num">02</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3v18"/><path d="M5 7l-3 6h6z"/><path d="M19 7l-3 6h6z"/><path d="M3 21h18"/></svg> 判断を縛る力 / 評価の軸</span><h2>選択肢を測るものさし (安全・速さ)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-02">判断を評価する 5 本のものさしです。同じ役割の席が同じ口座に揃うこと、移るのは逼迫した周だけで行き来しないこと、席は必ず立って妥協は隠さず user に渡すこと、人が書いた宣言と器が決めた口座を分けること、既存の経路と純関数を変えないことです。</p></section>
 <div class="chapbody">
 <table data-component="adr-driver-table"><tbody>
-<tr data-component="adr-driver-row"><td class="drid">DR1</td><td>並列度を席の手番に依存させない (user 直命 = 並列度を下げる判断は承認が要る) <span class="drg">台帳 s2-07l notes 2026-09-15T11:5xZ / SRS FR30</span></td></tr>
-<tr data-component="adr-driver-row"><td class="drid">DR2</td><td>判定は器の既存の 1 実装を使い、 席が読み直さない <span class="drg">憲法 C2 / C3.3 / ADR-0019 (交差は入口で排他・待ち行列と同時本数の上限は別途送り = 本 ADR が引き取る)</span></td></tr>
-<tr data-component="adr-driver-row"><td class="drid">DR3</td><td>planner の産物は契約と priority と typed な介入<span class="term" data-component="plain-language-term-inline" data-term="介入">planner が順番を動かす印</span>だけ (散文の順序を持たない) <span class="drg">憲法 N2 / C15 (台帳は task と裁定)</span></td></tr>
-<tr data-component="adr-driver-row"><td class="drid">DR4</td><td>起動は可逆 (承認は要らない) だが止める口と観測は typed に持つ <span class="drg">憲法 A4.3 / C10 / NFR4</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR1</td><td>同じ役割の席は、 project をまたいで常に同じ口座に揃う (実効の口座は役割単位で 1 つ・同じ役割の席どうしで候補を削り合わない) <span class="drg">user 裁定 2026-09-17T05:50Z (台帳 s2-07l.418) / ADR-0036 DR1</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR2</td><td>移るのは実効の口座が逼迫した周だけ。 移った先に居続け、 宣言へは戻らない (行き来の cycle を作らない)。 移る先は余裕が最大の口座 <span class="drg">user 裁定 2026-09-17T06:10Z (台帳 s2-07l.436) / SRS FR38 / FR36 の session 用の順序</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR3</td><td>席は必ず立つ (全口座が当たっている周を除く)。 妥協で立った事実は隠さず、 理由を閉じた語で記録と席の指示文に出し、 進め方は user が裁定する <span class="drg">user 裁定 2026-09-17T06:10Z / 憲法 C9 / C7 / C3.3</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR4</td><td>人が書いた宣言 (宣言値) と器が決めた口座 (実効値) を file と型で分け、 記録は消さない <span class="drg">憲法 C10 / N1 / N1.2</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR5</td><td>席を動かす経路は既存の tick の軸と立て直しのまま。 選定の純関数とその入力の型を変えず、 常駐 process を持たず、 走行中の便を止めない <span class="drg">憲法 C2 / ADR-0034 (契機は tick) / ADR-0036 DR4 / ADR-0027</span></td></tr>
 </tbody></table>
 </div>
-<section data-component="chapter-deck-band" class="tint-violet"><span class="num">03</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M8.5 6H13a3 3 0 0 1 3 3v.5M8.5 18H13a3 3 0 0 0 3-3v-.5"/></svg> 検討した選択肢 / 3 つの確定方式</span><h2>それぞれの利点と欠点を並べる</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-03">候補を 5 つ並べます。器に dispatcher を持つ案、管理席の手順を自動化する案、現行の中継のままの案、台帳の側で自動化する案、そして審査を起動の瞬間まで遅らせる案です。</p></section>
+<section data-component="chapter-deck-band" class="tint-violet"><span class="num">03</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M8.5 6H13a3 3 0 0 1 3 3v.5M8.5 18H13a3 3 0 0 0 3-3v-.5"/></svg> 検討した選択肢 / 3 つの確定方式</span><h2>それぞれの利点と欠点を並べる</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-03">候補を 7 つ並べます。実効の口座を host の根の記録 1 件に持ち逼迫した周にだけ移る案、余裕が戻れば宣言へ戻る案、器が宣言 file 自体を書き換える案、除外だけ直して記録を持たない案、記録を各 project の event に持つ案、候補が無い周は断る案、host に常駐する監視 process を置く案です。</p></section>
 <div class="chapbody">
 <div class="opt-grid">
 <div data-component="adr-option-card" class="chosen">
-<div class="opt-head"><span class="opt-id">OPT1</span><span class="opt-name">器の dispatcher — 審査 PASS の契約を列に入れ、 tick と land の直後に条件を満たす便を自動で起こす</span><span class="opt-verdict chosen">採用</span></div>
-<p class="opt-sum">列の入力は「台帳の依存が閉じた ∧ 現在の契約の sha に対する審査が PASS」の契約。 審査は契約が出来た直後に 1 回撃ち、 verdict を契約の sha に紐づけて記録し、 起動の pipe run は同じ sha の PASS を再利用する。 起動条件は「live 便との write-set の交差 0 ∧ 受付 (余地・memory) を通る」。 順序は planner の介入 first → priority → 起票順 (hold は起こさない・release で戻す)。 契機は tick と land の直後。 列と理由 (なぜまだ出ていないか) を typed に列挙する口を持つ。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT1">契約が出来た直後に lens が審査し、通った契約だけが「起動を待つ契約の並び」に入ります。器は条件がそろった便から自動で起こし、起動のときに同じ契約を審査し直しません。planner は契約に priority を付け、急ぐときは first、止めたいときは hold の印を付けるだけです。列の口を見れば、どの便が何を待っているかが 1 行ずつ分かります。</span>
+<div class="opt-head"><span class="opt-id">OPT1</span><span class="opt-name">実効の口座を host の根の実効の記録 1 件 (役割ごと・器が書く) に持ち、 逼迫した周にだけ役割単位で 1 回選び直す。 候補が無い周は妥協の口座で立てる</span><span class="opt-verdict chosen">採用</span></div>
+<p class="opt-sum">役割の実効の口座を 1 関数で解く: 実効の記録が在りその口座が使えればそれ (居続ける)、 記録が無い周は宣言の口座が使えればそれを記録に書いて使う (宣言 = 初期値の種)、 どちらも使えない周だけ役割単位で 1 回 session 用の順序 (余裕が最大) で選び直して記録を書き換える (前の記録は履歴へ move)。 除外は他の役割の口座だけ。 閾値未満の候補が無い周は、 当たっていない中で余裕が最大の口座、 それも無ければ他の役割の口座との同居も入れて余裕が最大の口座で席を立て、 妥協の理由を記録と席の指示文に出す。 consult は planner の記録を読む。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT1">host に 1 か所だけ「この役割はいまこの口座」という記録を器が持ちます。同じ役割の席は全部それを読むので、いつも同じ口座に揃います。その口座が逼迫したら、最初に気づいた席が役割を代表して余裕が最大の口座を選び、記録を書き換えます。元の口座に余裕が戻っても戻りません。使える口座が見つからないときも、いちばんましな口座で席を立て、席に「妥協で立った」と知らせて user の裁定を待たせます。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>着地から次の起動までの待ちが席の手番から消える</li>
-<li>順序が器の 1 関数で決まり、 席が優先便を後回しにする誤りが構造で消える</li>
-<li>介入 (first / hold) が記録に残り、 rebrief と tick の DATA で見える</li>
+<li>同じ役割の席が常に同じ口座に揃い、 席が占める口座が役割の数で頭打ちになる (便が使える口座が増える)</li>
+<li>移るのは逼迫した周だけで、 宣言との行き来の cycle が無い</li>
+<li>席が必ず立つので対話面が残り、 妥協の周の進め方を user が裁定できる</li>
+<li>人が書く宣言は器が触らず、 選定の純関数も変えない (閾値の入力と除外集合の作り方だけで妥協の段を表せる)</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>器が台帳 (bd) を子 process で読む面が 1 つ増える (rebrief の read_ledger を共用・timeout は rules 行)</li>
-<li>審査の段 (s2-07l.241) と契約表からの intake (s2-07l.209) が前提で、 その 2 便の後にしか入らない</li>
-<li>QUESTION と Gated FAIL の裁定は依然 planner の手番 (本 ADR の対象外)</li>
+<li>host の根に器が書く記録が 1 種類増え、 reader・lock・退役の move・doctor の項目・席の指示文の穴・歯が契約に載る</li>
+<li>同じ役割の席が 1 つの口座に集まるので、 その口座の窓の減りが速くなる</li>
+<li>宣言と実効の口座が長く食い違いうる (宣言は種でしかない)。 人が戻したい周は宣言の書き換えの口を撃つ 1 手が要る</li>
+<li>妥協の周は閾値以上の口座や他の役割と同居の口座で席が走る (作業は止まり、 user の裁定待ちになる)</li>
 </ul></div></div>
 </div>
 <div data-component="adr-option-card" class="rejected">
-<div class="opt-head"><span class="opt-id">OPT2</span><span class="opt-name">管理席が tick ごとに台帳の ready を漁って出す (手順の自動化)</span><span class="opt-verdict rejected">不採用</span></div>
-<p class="opt-sum">器は変えず、 管理席の tick の手順に「ready を読み交差を測って launcher を撃つ」を足す。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT2">器は変えず、管理席が定期的に台帳を読んで起動する手順を足します。手順が散文のまま残り、席が止まると起動も止まります。</span>
+<div class="opt-head"><span class="opt-id">OPT2</span><span class="opt-name">移り先を記録するが、 宣言の口座に余裕が戻れば宣言へ戻る (ADR-0036 DR3 の後半を残す)</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">解決の順を宣言 → 移り先の記録 → 選定にし、 宣言の口座が使える周は常に宣言が勝つ。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT2">人が決めた口座を常に優先する案です。宣言どおりに戻るので分かりやすい一方、口座の窓が開くたびに全席が退避と起こし直しを通って戻り、また逼迫して移る、という行き来が起きます。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>器の変更が無い</li>
+<li>宣言と実効の口座の食い違いが短い (余裕が戻れば宣言どおりになる)</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>判定が席の散文の手順に残り、 順序と交差の読み直しが席ごとに揺れる (N2)</li>
-<li>席が止まると起動も止まる (自律の穴が席の生存に縛られる)</li>
+<li>窓が開くたびに全 project の席が退避と立て直しを通って戻る = 行き来の cycle が役割の席の数だけ増える (user の裁定は「移った先に居続ける」)</li>
+<li>戻った直後の宣言の口座は閾値の近くに居やすく、 すぐまた移る</li>
 </ul></div></div>
 </div>
 <div data-component="adr-option-card" class="rejected">
-<div class="opt-head"><span class="opt-id">OPT3</span><span class="opt-name">planner の dispatch file と管理席の中継 (現行・ADR-0016 §2.1)</span><span class="opt-verdict rejected">不採用</span></div>
-<p class="opt-sum">planner が便ごとに dispatch を書き、 管理席が受けて起動する。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT3">今の形です。planner が便ごとに dispatch を書き、管理席が交差を測って起動します。当日の実測で、待ちと順序の誤りがここで起きました。</span>
+<div class="opt-head"><span class="opt-id">OPT3</span><span class="opt-name">器が宣言 file (roles.toml) 自体を移り先の口座で書き換える</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">逼迫を見た席が ADR-0036 の書き換えの口と同じ手順で宣言の行を移り先に書き換え、 全席が宣言を読んで移る。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT3">新しい記録を持たず、宣言そのものを器が書き換える案です。仕組みは増えませんが、人が決めた値と器が測って決めた値が同じ file で混ざり、どちらが書いた値か分からなくなります。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>契約の所有者が起動の瞬間を見ている</li>
+<li>置き場と reader が増えない (ADR-0036 の file と口だけで済む)</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>2026-09-15 の実測どおり、 待ちと順序の誤りが席の手番に乗る</li>
-<li>「上限 3」のような器に無い制限が散文で入り込む</li>
+<li>宣言値を器の実測で上書きする = 宣言値と実効値を型で分ける憲法 C10 に反する</li>
+<li>人が決めた口座が file から消え、 妥協の理由のような器の側の項目を宣言 file に持ち込むことになる</li>
 </ul></div></div>
 </div>
 <div data-component="adr-option-card" class="rejected">
-<div class="opt-head"><span class="opt-id">OPT4</span><span class="opt-name">台帳 (bd) の側で自動化する (台帳の hook が起動を撃つ)</span><span class="opt-verdict rejected">不採用</span></div>
-<p class="opt-sum">bd の hook や外部 script が ready を検知して launcher を撃つ。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT4">台帳の仕組みに起動を任せます。台帳に規律と実行を置くことになり、Rust の外の経路が増えます。</span>
+<div class="opt-head"><span class="opt-id">OPT4</span><span class="opt-name">選定の除外から同じ役割の席を外すだけで、 記録は持たない</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">除外集合の作り方だけを変え、 使えない周は従来どおり席ごとに選定を撃つ。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT4">候補の削り合いだけを直す案です。席が立たない問題は減りますが、席が 1 つずつ別の時刻に選ぶので、その時々の残量で選ぶ口座が変わり、同じ役割の席が別々の口座へ散ります。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>器の変更が小さい</li>
+<li>変更が除外集合の 1 か所で済み、 新しい file を持たない</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>台帳に規律と実行を置く (憲法 C15 に反する)・Rust の外の経路 (C12 / ADR-0009)</li>
+<li>席ごとに別の周の実測で選ぶので、 同じ役割の席が別々の口座へ散る (user の裁定の「同時に同じ口座へ」にならない)</li>
+<li>席が占める口座が役割の数で頭打ちにならず、 便が使える口座が減る</li>
 </ul></div></div>
 </div>
 <div data-component="adr-option-card" class="rejected">
-<div class="opt-head"><span class="opt-id">OPT5</span><span class="opt-name">審査は起動の瞬間 (pipe run の中) に撃ち、 列の入力に審査を持たない (planner の初案)</span><span class="opt-verdict rejected">不採用</span></div>
-<p class="opt-sum">列には依存が閉じた契約が全部入り、 dispatcher が起こす瞬間の pipe run の中で審査 (intake の直後) を撃つ。 FAIL の便は次の周から理由付きで待つ。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT5">審査を、契約が出来たときではなく便を起こす瞬間まで遅らせる案です。審査の段の位置を変えずに済み、verdict の置き場も増えませんが、契約の不備が起動の順番が回ってくるまで見えず、planner が手空きのうちに直せる時間を捨ててしまいます。</span>
+<div class="opt-head"><span class="opt-id">OPT5</span><span class="opt-name">実効の口座を各 state dir の event log の event に持つ</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">口座を決めた席が自分の state dir の event log に event を 1 件積み、 他の席は replay で読む。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT5">既に在る記録の仕組みに載せる案です。追記だけで履歴も残りますが、記録の置き場は project ごとに分かれうるので、別の置き場を使う project の席には届きません。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>審査の段 (s2-07l.241) の位置を変えず、 verdict の置き場が増えない</li>
+<li>append のみの既存の store に載り、 履歴が自然に残る</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>契約の不備が起動が回ってきた時まで見えず、 planner の待ち時間が捨てられる (user 裁定 2026-09-15 13:4xZ = 時間の使い方)</li>
-<li>FAIL の便が run N+1 まで列を塞ぎ、 lens を run ごとに撃つ</li>
+<li>state dir が project ごとに分かれた host では、 別の state dir の席に届かない (ADR-0036 CTX2 の実測と同じ穴)</li>
+<li>host 横断の値を project の state に置くことになり、 ADR-0036 が host の根へ寄せた向きの逆</li>
+</ul></div></div>
+</div>
+<div data-component="adr-option-card" class="rejected">
+<div class="opt-head"><span class="opt-id">OPT6</span><span class="opt-name">閾値未満の候補が無い周は席を起こさず断る (現行)</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">選定が候補なしを返した周は 1 key も送らず、 次の tick で選び直す。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT6">いまの形です。逼迫した口座で席を走らせずに済みますが、席が立たないので対話の窓口も消え、user が「どう進めるか」を決める場所が無くなります。</span>
+<div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
+<li>閾値以上の口座を席が消費しない。 器の変更が無い</li>
+</ul></div><div class="cons"><h4>− 欠点</h4><ul>
+<li>planner の席が立たない間は対話面が無く、 裁定も便の起動も止まる (実測 2026-09-17)</li>
+<li>どの口座をどこまで使うかは user の予算の判断なのに、 器が黙って「使わない」側に倒している</li>
+</ul></div></div>
+</div>
+<div data-component="adr-option-card" class="rejected">
+<div class="opt-head"><span class="opt-id">OPT7</span><span class="opt-name">host 常駐の process が逼迫を監視して全席を同時に移す</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">host に 1 つ常駐する process が役割の口座の残量を監視し、 逼迫したら移り先を選んで全 project の席を一斉に動かす。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT7">host に常駐して監視する process を置く案です。全席が本当に同時に移りますが、常駐 process を持たない方針と食い違い、ADR-0034 と ADR-0036 で既に退けた形です。</span>
+<div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
+<li>移し替えが即時で、 project ごとの tick を待たない</li>
+</ul></div><div class="cons"><h4>− 欠点</h4><ul>
+<li>常駐 process を持たない向き (ADR-0034 の契機は tick と land・ADR-0036 OPT5 の却下) と食い違う</li>
+<li>席を動かす手が tick の外にもう 1 本増え、 退避の合図の除外 (FR29) と立て直しの 3 条件を 2 か所で持つことになる</li>
 </ul></div></div>
 </div>
 </div>
 </div>
-<section data-component="chapter-deck-band" class="tint-ok"><span class="num">04</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14 4l6 6-3 3-6-6z"/><path d="M11 7L4 14l3 3 7-7"/><path d="M3 21h10"/></svg> 採用した判断 / どの方式を選ぶか</span><h2>選んだ方式と、 それが守る要件 (cross-doc 照会)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-04">選んだ案と、それが要件書のどの要件を支えるかを示します。契約が出来た直後に審査し、通った契約を器の列に入れ、依存・交差・受付を満たす便を tick と land の直後に自動で起こします。数字の上限は持ちません。</p></section>
+<section data-component="chapter-deck-band" class="tint-ok"><span class="num">04</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14 4l6 6-3 3-6-6z"/><path d="M11 7L4 14l3 3 7-7"/><path d="M3 21h10"/></svg> 採用した判断 / どの方式を選ぶか</span><h2>選んだ方式と、 それが守る要件 (cross-doc 照会)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-04">選んだ案と、それが要件書のどの要件を支えるかを示します。役割の実効の口座は、実効の記録、宣言の種、役割単位の 1 回の選び直しの順に 1 関数で解きます。候補が無い周は 2 段の妥協で席を立て、理由を記録と席の指示文に出します。</p></section>
 <div class="chapbody">
 <div data-component="adr-decision-panel" id="decision">
 <p class="dec-kick">採用 — OPT1</p>
-<p class="dec-state">器 SHALL 契約が出来た直後に審査 (FR49) を 1 回撃ち、 verdict を契約の sha に紐づけて記録し、 現在の sha が PASS の契約 (細目 = 設計 doc §2・依存が閉じ、 acceptance が非空で memo でなく、 設計 pointer を持つ) を dispatcher の列に入れ、 列外の便も理由付きで列挙し、 tick と land の直後に、 台帳の依存が閉じ ∧ live 便との write-set の交差が 0 ∧ 受付 (余地・host の memory) を通る便を、 planner の typed な介入 first → priority → 起票順で自動的に起こす (起動は既存の pipe run = intake → Reviewed → spawn をそのまま撃ち、 Reviewed は同じ sha の PASS を再利用して lens を撃ち直さない)。 器 SHALL NOT 便の同時本数の数値上限を持つ。 planner SHALL 契約と priority と介入だけを書き、 管理席 SHALL 質問と gate の判定の中継と着地の運びだけを担う。 器 SHALL 列の各便に「まだ出ていない理由」を閉じた型で付けて列挙する口を持つ。</p>
-<span class="dec-plain" data-prose-slot="plain" data-slot-id="decision-plain">契約が出来た直後に審査し、通った契約は器の列に入り、依存・交差・受付を満たす便から器が自動で起こします。順番は planner の印 first、契約の priority、起票順の順で決まり、同時に何本という数字の上限は持ちません。planner は契約と priority と印だけを書き、管理席は質問と判定の中継と着地だけを担います。</span>
-<span class="dec-why" data-prose-slot="rationale" data-slot-id="decision-rationale">起動に要る判定は台帳の依存・write-set の交差・受付のどれも器が既に持っていて、席がしていたのはそれを読み直して launcher を撃つことだけでした。読み直しは待ちと誤りを生み、器に無い上限を散文で持ち込みました。判定と行為を器の同じ関数に置けば、待ちは交差と受付だけで決まり、介入も記録に残ります。</span>
+<p class="dec-state">器 SHALL 役割の実効の口座<span class="term" data-component="plain-language-term-inline" data-term="実効の口座">その周に役割の席が実際に使う口座</span>を 1 関数で解き、 その順は (1) host の根の実効の記録 (役割ごとに高々 1 件) が在りその口座が使える (ADR-0036 の意味 = 宣言済み・退役でない・最新の実測が在り・session 用の閾値未満) 周はそれ (宣言の口座に余裕が戻っても記録の口座に居続ける)、 (2) 記録が無い周は宣言 (roles.toml) の口座が使えればそれを記録に書いて使う (宣言 = 初期値の種)、 (3) どちらも使えない周だけ役割単位で 1 回選び直して記録を書き換える、 とする。 器 SHALL 実効の記録を host の根 (&lt;state_dir の親&gt;/&lt;NAME&gt;-host/・宣言 file と受付札と同じ導き方・env を読まない) の下の dir 1 つに役割ごとの file 1 つで持ち (schema = 1・項目 = role・口座 label・ts・妥協の理由・宣言 file と同じ TOML subset の reader と同じ拒否形)、 宣言 file とは file も型も分け (宣言 = 人が書く宣言値・記録 = 器が書く実効値・C10)、 記録が在るのに読めない周は typed に止める (FailClosed)。 記録の書きは席を起こす口 (seat launch と立て直し) だけが行い、 lock の下で読み直し → 在って使えればそれを読むだけ → でなければ決めて一時 file → rename (先に書いた席が勝ち、 後続の席は読むだけ = 同じ役割の席は同じ口座へ揃う)、 前の記録は上書きせず履歴の側へ rename してから書く (N1 / N1.2)。 (3) の選び方 SHALL session 用の既存の順序 (逼迫度が最小 = 余裕が最大) であり、 便用の順序 (reset の早い順に使い切る・ADR-0027) とは用途の分岐で分かれたままとする。 (3) の除外 SHALL 他の役割の実効の口座 (記録が無い役割は宣言の口座) と他の役割の登録 row の口座だけであり、 同じ役割の席の口座は除外しない。 選定の純関数とその入力の型は変えない。 (3) で閾値未満の候補が無い周 SHALL NOT 断る: (i) 同じ除外のまま当たっていない口座の中で逼迫度が最小の口座、 (ii) それも無ければ他の役割の口座との同居も候補に入れて逼迫度が最小の口座、 の順で席を立て、 その周は妥協の理由を閉じた 2 値 (over-threshold / shared-with-role) で実効の記録と launch / relaunch の記録の行に載せ、 SessionStart の席の指示文 (雛形の穴 1 つ) に「妥協の口座で立った = 作業を止めて対話面で user の裁定を待つ」の行を出す。 妥協の理由を持つ記録は (1) の「居続ける」に当たらず、 席を起こす周ごとに (3) を解き直す。 当たっていない測れた口座が 1 つも無い周だけは従来どおり断る。 妥協でない周の他の役割との同居は不可のままとする。 管理 tick SHALL ADR-0036 の軸 1 本のまま比較の相手を宣言の口座から実効の口座に替え、 記録を読むだけで書かず、 口座の逼迫の軸は閾値つきの選定 (同じ除外) が候補を返す周にだけ退避の合図を注入し (走っている席を妥協の口座へ動かす cycle を作らない = 妥協の起動は席が止まっている周にだけ起こる)、 候補を返さない周は退避の合図の代わりに妥協の通知 (作業を止めて対話面で user の裁定を求める) を 1 回だけ注入する (既に立っている席にも同じ裁定を効かせる・同じ席・同じ口座・同じ窓の間は繰り返さず、 1 回の弁別は注入の記録で行い、 繰り返さない周は閉じた理由 1 つの noop)。 器 SHALL NOT 常駐 process を持つ (ADR-0034)。 便用の選定の除外 SHALL 便の repo の登録 row の口座 ∪ 全役割の宣言の口座 ∪ 全役割の実効の口座であり、 次の選定から効く (走行中の便は止めず、 移った先の口座で走っている便はそのまま走り切る)。 consult の席 SHALL planner の実効の口座を読む (consult 用の宣言の行も記録も持たず、 役割 → 口座の解決の 1 関数の中で consult を planner に写す)。 宣言の書き換えの口 (account reassign) SHALL 宣言を書き換えた周にその役割の実効の記録を履歴の側へ move する (人の 1 手で全席が移る ADR-0036 の口を保つ = 次に席を起こす周が新しい宣言を種にする)。 doctor SHALL 役割の口座の 1 行に役割ごとの実効の口座と妥協の理由を足す (読むだけ・判定しない)。 実効の記録の書きと退役 SHALL NOT A1 の承認を要する (宣言の書き換えと同じ扱い・ADR-0036 の読み)。 妥協の周に席が作業を続けるかは user の裁定による。 本 ADR は ADR-0036 の DR3 の全部 (使えない周は席ごとに選定に落ちる・余裕が戻れば宣言へ戻る) と、 決定の句「宣言が在り口座が使える周はその口座で起こし、 使えない周だけ選定に落ちる」、 その選定の除外 (自席以外の全登録 row の口座)、 管理 tick の比較の相手、 便用の除外を supersede し、 宣言 file の形と置き場・--account の食い違いの断りの型・理由の閉じた 3 値・選定の純関数・R-C9-1・登録 row の鍵は変えない。</p>
+<span class="dec-plain" data-prose-slot="plain" data-slot-id="decision-plain">役割の席が使う口座は、host に 1 か所だけ在る記録が決めます。記録の口座が使える間はそこに居続け、宣言の口座は記録がまだ無いときの最初の種にだけ使います。記録の口座が逼迫したら、最初に気づいた席が役割を代表して余裕が最大の口座を選び、記録を書き換えます。前の記録は消さずに履歴へ移します。候補から外すのは他の役割の口座だけです。使える口座が無いときも、まず閾値を超えていても上限には当たっていない口座、それも無ければ他の役割と同居する口座で席を立て、その理由を記録と席の指示文に出して user の裁定を待たせます。便は全役割の口座を次の選定から外し、走っている便は止めません。consult の席は planner の口座を使います。</span>
+<span class="dec-why" data-prose-slot="rationale" data-slot-id="decision-rationale">user は、同じ役割の席が揃って移り、移った先に居続け、候補が無くても席は立てると裁定しました。席ごとに選ぶと口座が分かれて互いを候補から外し合うので、決めるのを役割につき 1 回にして全 project から読める host の根に置きます。宣言へ戻る形は窓が開くたびに全席の起こし直しを生むので採りません。席が立たないと対話の窓口が消え、user が進め方を決められないので、妥協してでも席を立て、妥協の事実を隠さず席に知らせます。どこまで口座を使うかは user の判断だからです。人が書いた宣言は器が上書きせず、選定の純関数も変えません。</span>
 <div class="justify-box"><p class="jh">この判断が正当化する要件 (cross-doc 照会 → SRS-SCRIBE2-MVP)</p>
-<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR30" data-justifies-req="FR30" data-justifies-role="claim">FR30</a><span class="justify-role">claim</span><span class="justify-note">配送構造のうち「管理席が契約を pipeline に流す」の担い手が器の dispatcher に移る。 SRS への反映 (FR30 の response の 1 句) は user の /folio-architect の周で行う。</span></div>
-<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR39" data-justifies-req="FR39" data-justifies-role="claim">FR39</a><span class="justify-role">claim</span><span class="justify-note">intake の排他 (live 便との write-set の交差) を dispatcher が起動条件として同じ 1 関数で読む。</span></div>
-<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR49" data-justifies-req="FR49" data-justifies-role="claim">FR49</a><span class="justify-role">claim</span><span class="justify-note">現在の契約の sha に対する審査 PASS が列に入る条件になる (PASS でない便は起こさない、 の対)。 FR49 の condition「便が intake を通ったとき」は「契約が出来た直後」へ改める (SRS への反映は FR30 と同じ user の /folio-architect の周)。</span></div>
-<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR36" data-justifies-req="FR36" data-justifies-role="claim">FR36</a><span class="justify-role">claim</span><span class="justify-note">dispatcher は口座選定を再実装せず、 起こす便ごとに FR36 の既存経路 (便用の選定) を通す = 自動起動でも口座の選定と除外が満たされる。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR38" data-justifies-req="FR38" data-justifies-role="claim">FR38</a><span class="justify-role">claim</span><span class="justify-note">立て直しの口座は実効の口座 (記録 → 宣言の種 → 役割単位で 1 回の選び直し → 妥協の 2 段) で決まり、 候補が無い周も席が立つ。 FR38 の句の改訂は ADR-0036 と同じ user の /folio-architect の周。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR59" data-justifies-req="FR59" data-justifies-role="claim">FR59</a><span class="justify-role">claim</span><span class="justify-note">席の起動の口座の決め方も同じ 1 関数を通る。 --account の食い違いは実効の口座と比べる。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR36" data-justifies-req="FR36" data-justifies-role="claim">FR36</a><span class="justify-role">claim</span><span class="justify-note">session 用の選定の除外が「他の役割の口座」に、 便用の除外が「登録 row + 全役割の宣言と実効の口座」に変わる。 席用 (余裕が最大) と便用 (reset の早い順) の順序は別のまま。 選定の純関数は不変。</span></div>
 <p class="justify-tgt">照会先: SRS-SCRIBE2-MVP — SRS: 設計 → 契約 → 実装 → 検証 → land を、 人の手を借りずに 1 本通す器（MVP）</p>
 </div>
 </div>
 </div>
-<section data-component="chapter-deck-band" class="tint-warn"><span class="num">05</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg> 結果 / 良い面とトレードオフ</span><h2>この判断で何が良くなり、 何を引き受けるか</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-05">この判断で良くなることと、代わりに引き受けることです。起動の待ちと順序の誤りが消える一方、器が台帳を読む面が増え、質問と判定の裁定は依然 planner の手番に残ります。</p></section>
+<section data-component="chapter-deck-band" class="tint-warn"><span class="num">05</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg> 結果 / 良い面とトレードオフ</span><h2>この判断で何が良くなり、 何を引き受けるか</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-05">この判断で良くなることと、代わりに引き受けることです。同じ役割の席が常に同じ口座に揃い、行き来が無くなり、席が必ず立ち、便が使える口座が増えます。一方で器が書く記録が 1 種類増え、1 つの口座の減りが速くなり、宣言と実際の口座が食い違い続けることがあり、妥協の周は逼迫した口座で席が走ります。</p></section>
 <div class="chapbody">
 <div data-component="scope-summary-panel"><div class="scol in"><h3>✓ 良い結果</h3><ul>
-<li data-component="adr-consequence-pos"><span class="b">●</span>着地から次の起動までの待ちが 0 に近づき、 並列度が席の手番でなく交差と受付だけで決まる</li>
-<li data-component="adr-consequence-pos"><span class="b">●</span>順序の誤り (優先便の後回し) と散文の上限が構造で消え、 介入は記録として残る</li>
-<li data-component="adr-consequence-pos"><span class="b">●</span>rebrief と tick の DATA に列の状態 (何が何を待っているか) が typed に出る</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>同じ役割の席が project をまたいで常に同じ口座に揃い、 席の管理と予算の見通しが役割単位で済む</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>移るのは逼迫した周だけで、 宣言との行き来の退避と立て直しが無い</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>候補が無い周も席が立ち、 対話面が残る。 妥協の事実は記録と席の指示文に出て、 進め方を user が裁定できる</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>席が占める口座が役割の数で頭打ちになり (consult は planner と同じ口座)、 残りの口座を便が使い切れる</li>
 </ul></div><div class="scol out"><h3>⚖ トレードオフ・代償</h3><ul>
-<li data-component="adr-consequence-neg"><span class="b">●</span>器が台帳を子 process で読む面が増える (timeout と読めない周の扱いは rebrief と同じ型で持つ)</li>
-<li data-component="adr-consequence-neg"><span class="b">●</span>質問 (FR31) と gate FAIL の裁定は依然 planner の手番で、 そこは本 ADR では速くならない</li>
-<li data-component="adr-consequence-neg"><span class="b">●</span>便の起動条件を判定する関数 (交差・余地・受付札) は intake の既存の関数を記帳せずに呼ぶ形にする必要があり、 その可視性の変更が契約に載る</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>host の根に器が書く記録が 1 種類増え、 reader・lock・退役の move・doctor の項目・席の指示文の穴・歯が契約 1 本に載る</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>同じ役割の席 (と consult) が 1 つの口座に集まるので、 その口座の窓の減りが速くなる</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>宣言は種でしかなく、 宣言と実効の口座が長く食い違いうる (doctor の 1 行が両方を出す・人が戻す周は宣言の書き換えの口)</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>妥協の周は閾値以上の口座や他の役割と同居の口座を席が消費し、 席は user の裁定まで作業を止める</li>
 </ul></div></div>
 </div>
-<section data-component="chapter-deck-band" class="tint-info"><span class="num">06</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg> 改訂関係と原則 / この判断の位置づけ</span><h2>版の系譜と、 行き着く原則 (照会終端)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-06">この ADR が版の系譜のどこに在るかと、判断が最後に行き着く原則です。ADR-0016 の管理席の仕事「dispatch された契約を pipe run で流す」の句を置き換え、ADR-0019 が別途送りにした待ち行列と同時本数の上限を引き取ります。他の節はそのままです。</p></section>
+<section data-component="chapter-deck-band" class="tint-info"><span class="num">06</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg> 改訂関係と原則 / この判断の位置づけ</span><h2>版の系譜と、 行き着く原則 (照会終端)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-06">この ADR が版の系譜のどこに在るかと、判断が最後に行き着く原則です。ADR-0036 の「宣言の口座が使えない周は席ごとに選定に落ち、余裕が戻れば宣言へ戻る」を、host の根の記録 1 件に居続ける形に置き換えます。宣言の file と書き換えの口、選定の純関数はそのままです。</p></section>
 <div class="chapbody">
 <div data-component="adr-supersession">
 <p class="ss-row"><span class="ss-k">改訂状態</span>current</p>
 <p class="ss-row"><span class="ss-k">置き換える ADR</span>なし (新規)</p>
 <p class="ss-row"><span class="ss-k">置き換えられた</span>なし (現行)</p>
-<p class="ss-row">本 ADR は現行。 ADR-0016 §2.1 の管理席の仕事 (1)「dispatch された契約を pipe run で流す」の句は本 ADR が置き換える (担い手が器の dispatcher に移る・部分的な上書き・ADR-0016 の質問 record と中継の節は現行のまま)。 ADR-0019 が「本 ADR の決定ではない」として別途送りにした「排他で断られた契約の待ち行列と再投入」「同時に流す便の本数の上限」を本 ADR が引き取る (交差の排他は ADR-0019 のまま・数値上限を持たない判断は本 ADR の新規決定)。</p>
+<p class="ss-row">本 ADR は現行。 ADR-0036 を部分 supersede する: DR3 の前半 (逼迫したら席ごとに選定に落ちる) と後半 (余裕が戻れば宣言へ戻る) の両方、 決定の句「宣言が在り口座が使える周はその口座で起こし、 使えない周だけ session 用の選定に落ちる」(→ 実効の記録が先・宣言は種)、 その選定の除外 (自席以外の全登録 row の口座・ADR-0026 §2.3 由来 → 他の役割の口座だけ)、 管理 tick の比較の相手 (宣言の口座 → 実効の口座)、 便用の除外 (登録 row + 宣言の口座 → それに全役割の実効の口座を足す)、 --account の食い違いの比較の相手 (宣言 → 実効の口座)、 account reassign の効き方 (宣言の書き換え → それに実効の記録の退役を足す)。 ADR-0020 §2.4 の決定の句「候補なしの周 SHALL 立て直さず typed な理由を記帳し、 次の tick で選び直す (席を 0 口座で起こさない)」(設計 account-autonomy.md §5 も同じ) を部分 supersede する: 当たっていない測れた口座が在る周は妥協の起動で席を立て、 1 つも無い周だけ現行のまま。 同じ §2.4 の「閾値以上の間は退避の合図を注入する」は、 選び直しの候補が在る周に限り、 無い周は妥協の通知 1 回に置き換える。 SRS FR44 が並べる tick の合図の名 (打刻・退避) に妥協の通知が加わる。 ADR-0036 の宣言 file の形と置き場・理由の閉じた 3 値・doctor の 1 行の既存の項目、 選定の純関数 (ADR-0020 §2.2 / ADR-0027 §2.2 の順序)・R-C9-1・登録 row の鍵と書き手・退役の可逆 move・役割の権能 (ADR-0022) は現行のまま。 SRS FR36 / FR38 / FR44 / FR59 の句は ADR-0036 と同じ user の /folio-architect の周で改訂する。</p>
 </div>
 <div data-component="adr-principle">
-<p class="prin-id">照会終端 — PRIN-MACHINE-JUDGES-MACHINE-ACTS</p>
-<p class="prin-text">器が持つ判定を席が読み直して行為に変えない。 判定と行為を同じ器の 1 関数に置き、 席は判定の入力 (契約・priority・介入) だけを書く。</p>
+<p class="prin-id">照会終端 — PRIN-ROLE-ACCOUNT-IS-ONE-EFFECTIVE-RECORD</p>
+<p class="prin-text">役割に効く実効値 (いま使う口座) は役割単位で 1 回だけ決めて host に 1 か所だけ記録し、 同じ役割の席はそれを読む。 決め直すのは逼迫した周だけで、 人が書いた宣言は器が上書きしない。 決められない周は席を止めずに妥協の事実を user に渡す。</p>
 <p class="prin-note">本 ADR の判断はこの原則に行き着く (これ以上は遡らない照会終端)。</p>
 </div>
 </div>
 <section data-component="chapter-deck-band" class="tint-brand"><span class="num">07</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg> 用語集 / この文書で使う専門語</span><h2>本文に出てくる専門語のやさしい説明</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-07">本文に出てくる専門語を、やさしい言葉で説明します。</p></section>
 <div class="chapbody">
 <div data-component="glossary-term-table">
-<div class="grow"><div class="gword">dispatcher<span class="en">dispatcher</span></div><div class="gdef">審査を通った契約の列を持ち、 依存・交差・受付を満たす便を tick と land の直後に自動で起こす器の口。 席の中継を置き換える。</div></div>
-<div class="grow"><div class="gword">列<span class="en">dispatch queue</span></div><div class="gdef">現在の sha の審査が PASS の契約のうちまだ起こしていないもの。 順序は first → priority → 起票順。</div></div>
-<div class="grow"><div class="gword">介入<span class="en">planner intervention</span></div><div class="gdef">first (最優先)・hold (止める)・release (戻す) の 3 つの typed な印。 user の直命の対で、 散文でなく列の状態として記録される。</div></div>
-<div class="grow"><div class="gword">まだ出ていない理由<span class="en">wait reason</span></div><div class="gdef">依存 (台帳)・交差 (相手の便)・受付 (余地・memory)・hold と、 列外の理由 (審査が無い / 審査 FAIL / 設計 pointer 無し) のどれかを閉じた型で持つ。 列の口が 1 便 1 行で列挙する。</div></div>
+<div class="grow"><div class="gword">実効の口座<span class="en">effective role account</span></div><div class="gdef">その周に役割の席が実際に使う口座。 実効の記録の口座、 宣言の口座 (記録が無い周の種)、 役割単位で 1 回選び直した口座の順に 1 関数で解く。 席の起動・立て直し・管理 tick の比較・便用の除外が同じ解き方を読む。</div></div>
+<div class="grow"><div class="gword">実効の記録<span class="en">effective role record</span></div><div class="gdef">役割の実効の口座を器が host の根に書く記録 (役割ごとに高々 1 件・role と口座 label と ts と妥協の理由)。 宣言の file とは別で、 書き換える周は前の記録を消さずに履歴の側へ移す。</div></div>
+<div class="grow"><div class="gword">妥協の起動<span class="en">compromise launch</span></div><div class="gdef">閾値未満の候補が無い周に、 閾値以上でも当たっていない口座、 それも無ければ他の役割と同居の口座で席を立てること。 理由 (over-threshold / shared-with-role) が記録と席の指示文に出て、 席は作業を止めて user の裁定を待つ。</div></div>
+<div class="grow"><div class="gword">逼迫度<span class="en">pressure</span></div><div class="gdef">口座の数える窓のうち最大の使用率。 session 用の選定は逼迫度が最小 (余裕が最大) の口座を選び、 窓の全量に達した口座は「当たっている」として候補にしない。</div></div>
+<div class="grow"><div class="gword">host の根<span class="en">host root</span></div><div class="gdef">state dir の親の下の host 用 dir (&lt;親&gt;/&lt;NAME&gt;-host/)。 受付の枠 (ADR-0021)・役割の口座の宣言 (ADR-0036)・実効の記録がここに在り、 env を読まずに state dir から導く。</div></div>
 </div>
 </div>
 </div>
 <footer class="foot" data-component="fidelity-sync-meta"><div class="ft-grid">
 <div class="ft-plain">このページは、大もとの機械データ (正本) から自動で組み立てられています。構造は機械が自動で検査し、内容が元データに忠実かは独立のレビューで確かめます。</div>
-<div data-audience="machine">機械SSoT: <b>ADR-0034.build.adr.yaml</b> &middot; 生成: <b>2026-09-15 13:44</b> &middot; 検証状態: <b>structure ✓ fabrication-free / prose ✓ 充填済 (fidelity ceiling → S5 対象)</b></div>
+<div data-audience="machine">機械SSoT: <b>ADR-0041.build.adr.yaml</b> &middot; 生成: <b>2026-09-17 06:40</b> &middot; 検証状態: <b>structure ✓ fabrication-free / prose ✓ 充填済 (fidelity ceiling → S5 対象)</b></div>
 <div class="tags" data-audience="machine"><span>folio design system</span><span>ADR-pack</span><span>folio engine B1 (instance#2)</span><span>cross-doc 照会</span></div>
 </div></footer>
 <!-- folio:chrome-bottom -->
 <nav class="prevnext" aria-label="前後の文書">
-  <a class="prevnext__prev" href="ADR-0033-core-lines-count-source-only-and-io-lives-in-a-boundary-crate.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">ADR-0033 — core の行数は本体だけを数え、 子 process を撃つ I/O 面は境界 crate へ分ける (上限 40,000 は上げない・binary は 1 つ・境界 crate にも上限)</span></a>
-  <a class="prevnext__next" href="ADR-0035-live-run-cap-is-one-rules-row.html"><span class="prevnext__dir">次 &rarr;</span><span class="prevnext__title">host で同時に走る便の本数は rules 行 1 本の最大値を持つ (値は user 裁定・受付が live の便数を数えて typed に断る・ADR-0034 の「数値上限を持たない」句を部分 supersede)</span></a>
+  <a class="prevnext__prev" href="ADR-0036-role-accounts-are-declared-once-per-host.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">役割ごとの口座は host の根の宣言 1 か所が持ち、 全 project の席の起動・立て直し・便の除外がそれを読む (planner / admin の口座を host で統一・逼迫時は宣言の書き換え 1 手で全席が移る・ADR-0026 §2.3 と ADR-0027 の除外を部分 supersede)</span></a>
+  <a class="prevnext__next" href="ADR-0042-run-account-order-is-earliest-seven-day-reset.html"><span class="prevnext__dir">次 &rarr;</span><span class="prevnext__title">便用の並べ鍵は 7 日窓の reset の早い順 (7 日窓の reset を持たない口座は最後・5 時間窓とモデル別窓は鍵にしない・席用の順序は不変・ADR-0027 §2.2 の 1 つ目の鍵を supersede)</span></a>
 </nav>
 <script>
 (function () {

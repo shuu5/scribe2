@@ -6,9 +6,13 @@
 //! pin ∪ 新規 file ∪ Rust の外の file。手書きの write-set は [`check_drift`] で導出値との集合一致だけを認める
 //! （接頭辞 `+` は剥がして比べる）。行の数え方 [`weighted_lines`] も上限の余地の式としてここに置く。
 //!
+//! **Declared 行の歯の置き場の門**（§20・行 t）[`declared_teeth`]: 導出も drift も撃たない Declared 行でも、`verify` の
+//! nextest 行の歯の file は同じ [`teeth_places`] で解き、行の write-set に無い file を全部名指して断る
+//! （[`check_teeth_cover`]・照合は [`check_drift`] と同じ正規化・dir 項目は配下）。
+//!
 //! 型の閉包の字面走査（4 形と [`super::sees`]）は親 module `closure.rs` に置いたまま（1 関数の判定で結ばれる）。
 
-use super::super::refuse::{normalize, NEW_FILE};
+use super::super::refuse::{covered, normalize, NEW_FILE};
 use super::{closure, is_ident, is_ident_char, surface_closure, test_region, texts_of, ClosureError, Source};
 use super::{CRATES_DIR, NEXTEST_HEAD, PACKAGE_FLAGS, RS, TEST_ATTR};
 use std::collections::BTreeSet;
@@ -85,11 +89,45 @@ pub fn check_drift(written: &[String], derived: &BTreeSet<String>) -> Result<(),
     }
 }
 
+/// Declared 行の歯の置き場の門（§20・pure）: `verify` の nextest 行ごとに base の歯の file を [`teeth_places`] と
+/// **同じ 1 関数**で解き（`tests` 欄は行のまま空・nextest 形でない行は読み飛ばす）、解けた file が行の write-set
+/// `written` に全部含まれるかを [`check_teeth_cover`] で測る。base で 0 本の filter 語（新しい接頭辞）は、Declared
+/// 行に `tests` 欄が無いので write-set の歯の file（[`teeth_file`] と同じ弁別 = 歯の区間が空でない `.rs`・dir 項目は
+/// 配下）を置き場と読む: 1 つも無ければ従来の [`ClosureError::TeethPlaceUnresolved`]（字面不変）。行ごとに解くのは、
+/// 先に在る新しい接頭辞の行で止まると後の行の歯の file を測り落とすからである。
+pub(crate) fn declared_teeth(fields: &Fields<'_>, base: &Base<'_>, written: &[String]) -> Result<(), ClosureError> {
+    let texts = texts_of(base.sources)?;
+    let placed = texts.iter().any(|(path, text)| covered(written, path) && !test_region(path, text).is_empty());
+    let mut places = BTreeSet::new();
+    for line in fields.verify {
+        let one = Fields { verify: std::slice::from_ref(line), ..*fields };
+        let found = teeth_places(&one, base, &texts);
+        // 新しい接頭辞で write-set に歯の file が在る周だけ読み飛ばす（他の理由はそのまま断る）。
+        if placed && matches!(found, Err(ClosureError::TeethPlaceUnresolved { .. })) {
+            continue;
+        }
+        places.extend(found?);
+    }
+    check_teeth_cover(written, &places)
+}
+
+/// 解けた歯の file `places` が write-set `written` に全部含まれるか（照合は [`check_drift`] と同じ正規化・dir 項目は
+/// その配下・[`covered`]）。無い file を**全部**名指す（辞書順）。
+pub(crate) fn check_teeth_cover(written: &[String], places: &BTreeSet<String>) -> Result<(), ClosureError> {
+    let files: Vec<String> = places.iter().filter(|path| !covered(written, path)).map(|path| normalize(path)).collect();
+    if files.is_empty() {
+        Ok(())
+    } else {
+        Err(ClosureError::TeethOutsideWriteSet { files })
+    }
+}
+
 /// (ii) 歯の置き場: `verify` の nextest 行ごとに、その crate の歯の区間で `#[test]` の直下の `fn` の名が filter 語を
 /// 含む file の全部（nextest の positional filter と同じ「含む」・helper の fn は数えない）。base で 0 本の filter 語
 /// （新しい接頭辞）は `tests` 欄が置き場で、`tests` も無ければ [`ClosureError::TeethPlaceUnresolved`]。`tests` の
-/// 項目は歯の file だけ（`creates` に在る新規 file は creates の側が write-set に載る）。
-fn teeth_places(fields: &Fields<'_>, base: &Base<'_>, texts: &[(&str, &str)]) -> Result<BTreeSet<String>, ClosureError> {
+/// 項目は歯の file だけ（`creates` に在る新規 file は creates の側が write-set に載る）。Declared 行の門
+/// （[`declared_teeth`]）も同じ 1 関数で読む（2 本目の読み手を作らない）。
+pub(crate) fn teeth_places(fields: &Fields<'_>, base: &Base<'_>, texts: &[(&str, &str)]) -> Result<BTreeSet<String>, ClosureError> {
     let mut found = BTreeSet::new();
     for line in fields.verify {
         let Some((krate, filter)) = nextest_filter(line, base.core_crate) else {
@@ -217,7 +255,7 @@ mod tests {
     // flip-check: moved s2-07l.363
 
     use super::super::tests::{set, source, PAINT};
-    use super::{check_drift, derive_write_set, weighted_lines, Base, ClosureError, Fields, Source};
+    use super::{check_drift, check_teeth_cover, declared_teeth, derive_write_set, weighted_lines, Base, ClosureError, Fields, Source};
     use std::collections::BTreeSet;
 
     /// 文字列の列。
@@ -381,6 +419,62 @@ mod tests {
         );
         let reason = got.map_err(|error| error.reason()).err().unwrap_or_default();
         assert!(reason.contains("missing: rules/manifest.toml") && reason.contains("extra: -"), "余分の側は - で名乗る: {reason}");
+    }
+
+    // flip-check: s2-07l.391
+
+    /// Declared 行の門（§20・(d)）: 解けた歯の file {e2e.rs, other.rs} に対し write-set {tint.rs, other.rs} は e2e.rs を
+    /// 名指して断り・両方を持てば通り・dir 項目 `crates/toy/tests/` は配下の e2e.rs を含むと読む（3 分岐）。
+    #[test]
+    fn contract_declared_teeth_gate_names_missing_files_sorted() {
+        let places = set(&["crates/toy/tests/e2e.rs", "crates/toy/src/other.rs"]);
+        let short = strings(&["crates/toy/src/tint.rs", "crates/toy/src/other.rs"]);
+        assert_eq!(
+            check_teeth_cover(&short, &places),
+            Err(ClosureError::TeethOutsideWriteSet { files: strings(&["crates/toy/tests/e2e.rs"]) }),
+            "write-set に無い歯の file を名指す"
+        );
+        let full = strings(&["crates/toy/src/tint.rs", "./crates/toy/tests/e2e.rs", "crates/toy/src/other.rs"]);
+        assert_eq!(check_teeth_cover(&full, &places), Ok(()), "両方を持てば通る（正規化して比べる）");
+        let dir = strings(&["crates/toy/tests/", "crates/toy/src/other.rs"]);
+        assert_eq!(check_teeth_cover(&dir, &places), Ok(()), "dir 項目は配下を含む");
+        let none = strings(&["crates/toy/src/tint.rs"]);
+        let reason = check_teeth_cover(&none, &places).map_err(|error| error.reason()).err().unwrap_or_default();
+        assert!(reason.contains("crates/toy/src/other.rs, crates/toy/tests/e2e.rs"), "全部を辞書順で名乗る: {reason}");
+    }
+
+    /// Declared 行の門の入口（§20・(a)〜(c) の pure な対）: `derive_` の歯（other.rs / e2e.rs）を write-set が欠けば
+    /// 両方を名指し・持てば通り・nextest 形でない行は読み飛ばす。base で 0 本の `fresh_` は write-set に歯の file が
+    /// 無ければ従来の `TeethPlaceUnresolved`・在れば通る（後ろに並ぶ `derive_` の行の歯は落とさない）。
+    #[test]
+    fn contract_declared_teeth_resolves_each_line_and_reads_a_written_teeth_file_as_the_place() {
+        let (sources, tracked) = derive_base();
+        let base = Base { sources: &sources, snapshots: &[], tracked: &tracked, core_crate: "toy" };
+        let gate = |lines: &[&str], written: &[&str]| {
+            let verify = strings(lines);
+            let fields = Fields { touches: &[], surfaces: &[], verify: &verify, creates: &[], tests: &[], also: &[] };
+            declared_teeth(&fields, &base, &strings(written))
+        };
+        let derive_line = "cargo nextest run -p toy --no-tests=fail derive_";
+        assert_eq!(
+            gate(&[derive_line, "git status"], &["crates/toy/src/tint.rs"]),
+            Err(ClosureError::TeethOutsideWriteSet { files: strings(&["crates/toy/src/other.rs", "crates/toy/tests/e2e.rs"]) }),
+            "歯の file を欠く write-set は両方を名指す（helper.rs は歯の file でない）"
+        );
+        assert_eq!(gate(&[derive_line], &["crates/toy/src/tint.rs", "crates/toy/src/other.rs", "crates/toy/tests/e2e.rs"]), Ok(()));
+        assert_eq!(gate(&["git status"], &["crates/toy/src/tint.rs"]), Ok(()), "nextest 形でない行は読み飛ばす");
+        let fresh_line = "cargo nextest run -p toy --no-tests=fail fresh_";
+        assert_eq!(
+            gate(&[fresh_line], &["crates/toy/src/tint.rs"]),
+            Err(ClosureError::TeethPlaceUnresolved { filter: "fresh_".to_owned() }),
+            "write-set に歯の file が無ければ従来の理由"
+        );
+        assert_eq!(gate(&[fresh_line], &["crates/toy/src/tint.rs", "crates/toy/tests/e2e.rs"]), Ok(()), "歯の file が置き場");
+        assert_eq!(
+            gate(&[fresh_line, derive_line], &["crates/toy/tests/e2e.rs"]),
+            Err(ClosureError::TeethOutsideWriteSet { files: strings(&["crates/toy/src/other.rs"]) }),
+            "先の行が新しい接頭辞でも後の行の歯は測る"
+        );
     }
 
     /// 幅 10 の fixture と期待値。**xtask の `workspace` の歯と同じ字面・同じ値**（2 crate の式の一致を守る）。

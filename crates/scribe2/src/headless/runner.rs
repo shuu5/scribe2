@@ -36,7 +36,7 @@ const TEMPLATE: &str = include_str!("runner.txt");
 /// 使い方の 1 行。
 pub fn usage() -> String {
     format!(
-        "usage: {} runner --worktree D --write-set F --vessel F --plugin-dir D --permission-mode M [--rules PATH] [--account-dir D] [--claude PATH] < contract",
+        "usage: {} runner --worktree D --write-set F --vessel F --plugin-dir D --permission-mode M [--rules PATH] [--account-dir D] [--claude PATH] [--cgroup-root DIR] < contract",
         crate::name::NAME
     )
 }
@@ -65,9 +65,12 @@ pub fn dispatch(args: &[String]) -> Outcome {
             need(args, "--permission-mode")?.to_owned(),
             flag(args, "--account-dir")?.map(str::to_owned),
             flag(args, "--claude")?.map(str::to_owned),
+            // cgroup の root（claude の scope の peak の置き場・設計 gate-cost.md §13）。省くと typed な既定
+            // [`confine::CGROUP_ROOT`]・env は読まない（C2.2）。
+            flag(args, "--cgroup-root")?.map(str::to_owned),
         ))
     })();
-    let (worktree, write_set, vessel, plugin_dir, mode, account, claude) = match parsed {
+    let (worktree, write_set, vessel, plugin_dir, mode, account, claude, cgroup_root) = match parsed {
         Ok(found) => found,
         Err(reason) => return Outcome::failed(RC_REFUSED, vec![format!("runner: {reason}"), usage()]),
     };
@@ -119,8 +122,7 @@ pub fn dispatch(args: &[String]) -> Outcome {
         // rate limit を**途中で**見るので逐次で受ける。
         streaming: true,
         max_turns: None,
-    },
-    &tools);
+    }, &tools, Path::new(cgroup_root.as_deref().unwrap_or(confine::CGROUP_ROOT)));
     if let Some(reason) = unsaved {
         outcome.err.push(format!("runner: prompt を残せない: {reason}"));
     }
@@ -180,7 +182,11 @@ fn save_prompt(vessel: &Path, prompt: &str) -> Result<(), String> {
 /// 共通なので [`build`] が持ち、この口は**与える権限**だけを足す——器が与えた allow の外は
 /// plugin の PermissionRequest hook が deny する（ADR-0011 §2.1 が ADR-0009 §2.1 / ADR-0010
 /// §2.4 の起動 flag を部分 supersede・allowlist の形と hook の一律 deny は不変）。
-fn launch(call: &Call<'_>, tools: &str) -> Outcome {
+///
+/// **claude の scope の peak は走行中に sample する**（設計 gate-cost.md §13・`s2-07l.273`）: stream の
+/// 行を読む各周で `memory.peak` を 1 回読み（[`confine::Sampler`]・待ちは足さない）、終端の `scope=` 行に
+/// `claude_peak_bytes=` で写す。終端で読む形は、最後の process の終了で scope が消えた正常系を測れない。
+fn launch(call: &Call<'_>, tools: &str, cgroup_root: &Path) -> Outcome {
     let (mut command, confinement) = build(call);
     command.arg("--allowedTools").arg(tools);
     let spawned = command.spawn();
@@ -190,8 +196,10 @@ fn launch(call: &Call<'_>, tools: &str) -> Outcome {
     };
     feed(&mut child, call.prompt);
     let mut seen = Watched::default();
+    let mut sampler = confine::Sampler::of(&confinement, cgroup_root);
     if let Some(out) = child.stdout.take() {
         for line in BufReader::new(out).lines().map_while(Result::ok) {
+            sampler.sample();
             seen.records = seen.records.saturating_add(1);
             // **最終 result の text を覚える**（質問 record の置き場・設計 pipeline-question.md §3）。
             // 種別（`subtype`）と `is_error` も同じ record から読む——claude が失敗で終わった事実は
@@ -221,10 +229,24 @@ fn launch(call: &Call<'_>, tools: &str) -> Outcome {
     let status = child.wait();
     // **終端で scope を片付ける**（設計 gate-cost.md §4.4 errata・`s2-07l.234`）。rc と最終行は変えない
     // （stdout は pipeline が読む面なので、結果は stderr の 1 行だけに出す）。
-    let scope = confine::release_scope(&confinement);
     let mut outcome = conclude(status, &seen);
-    outcome.err.extend(scope.map(|released| format!("runner: scope={}", released.as_str())));
+    outcome.err.extend(scope_line("runner", &confinement, sampler.peak()));
     outcome
+}
+
+/// 包めた周の終端の stderr 1 行（`<who>: scope=<片付け> claude_peak_bytes=<n|->`・設計 gate-cost.md §13）。
+///
+/// **Confined の周は `gone` でも必ず出す**——[`confine::release_scope`] は `Gone` を `None` に落とすので
+/// [`confine::release`] を直に撃つ（他の呼び手の filter と型は変えない）。包めなかった周は scope が無い＝
+/// 行を出さない（`claude_peak_bytes` の語も出ない）。lens も同じ 1 本を使う。
+pub(super) fn scope_line(who: &str, confinement: &confine::Confinement, peak: confine::Peak) -> Option<String> {
+    match confinement {
+        confine::Confinement::Confined { unit } => {
+            let released = confine::release(unit);
+            Some(format!("{who}: scope={} claude_peak_bytes={}", released.as_str(), peak.word()))
+        }
+        confine::Confinement::Unconfined(_) => None,
+    }
 }
 
 /// stream を読みながら覚えたもの。

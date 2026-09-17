@@ -2039,8 +2039,8 @@ fn seat_tick_signal_backoff_does_not_brake_without_a_record() {
     }
 }
 
-/// (d) 口座の軸（登録 row の口座が閾値以上・`origin=account`）の合図にも同じ brake（同じ 1 関数・同じ rules 行）: 1 周目は
-/// `kind=externalize origin=account`、2 周目は `noop reason=signal-recent`（口座の軸は評価した＝`account=a1:90` が載る・
+/// (d) 口座の軸（登録 row の口座が閾値以上＝96 ≥ 95・`origin=account`）の合図にも同じ brake（同じ 1 関数・同じ rules 行）: 1 周目は
+/// `kind=externalize origin=account`、2 周目は `noop reason=signal-recent`（口座の軸は評価した＝`account=a1:96` が載る・
 /// 席が受けた合図は 1 本のまま）、記録を窓の外へ出した 3 周目は再送する。pane は cap 未満（`IDLE_PANE`＝context 10）なので
 /// context の軸は立たない。base は口座の軸に brake が無く 2 周目も注入する（RED）。
 #[test]
@@ -2051,12 +2051,12 @@ fn seat_tick_signal_backoff_applies_to_the_account_axis_too() {
     assert!(guard.ready(), "独立 socket に prompt 付きの session を立てられる");
     let registered = acct_register(&place, name, ACCT_LAUNCH);
     assert_eq!(rc_of(&registered), i32::from(RC_OK), "stderr={}", stderr_of(&registered));
-    acct_measured(&place.state, ACCT_SEAT, 90, &acct_now());
+    acct_measured(&place.state, ACCT_SEAT, 96, &acct_now());
     write_state(&seat_dir_of(&place.state, name), StateFix::Busy { age_s: 0 });
     let pane = fixture(&place.dir, "pane.txt", IDLE_PANE);
     let sent = acct_line(
         &format!("decision=inject target={name} consumed=false kind=externalize origin=account"),
-        &format!("{ST_BUSY} account=a1:90"),
+        &format!("{ST_BUSY} account=a1:96"),
         &place.state,
     );
     let received = || capture(&place.socket, name).matches("/ready-compaction").count();
@@ -2070,7 +2070,7 @@ fn seat_tick_signal_backoff_applies_to_the_account_axis_too() {
     assert_eq!(rc_of(&second), i32::from(RC_OK), "stderr={}", stderr_of(&second));
     assert_eq!(
         stdout_of(&second),
-        acct_line("decision=noop reason=signal-recent", &format!("{ST_BUSY} account=a1:90"), &place.state),
+        acct_line("decision=noop reason=signal-recent", &format!("{ST_BUSY} account=a1:96"), &place.state),
         "2 周目は口座の軸でも再送しない（逼迫度は評価した）"
     );
     assert_eq!(received(), 1, "席が受けた合図は 1 本のまま");
@@ -2080,6 +2080,33 @@ fn seat_tick_signal_backoff_applies_to_the_account_axis_too() {
     assert_eq!(stdout_of(&third), sent, "記録が窓の外なら口座の軸でも再送する");
     assert_eq!(received(), 2, "席が受けた合図は 2 本");
     drop(guard);
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// 85 と 95 を弁別する歯（`s2-07l.447`・rules-manifest.md §13・接頭辞 `seat_threshold_95_`）: (d) の対で、登録 row の口座が 90
+/// （85 以上 95 未満）の席には口座を起点とする退避の合図が出ない——2 周とも `noop reason=busy`（`signal-recent` にもならない＝
+/// brake の掛かる記録が無い）・判定行の口座の軸は `account=a1:90` で `kind=` / `origin=` を持たず・tmux に触れず・
+/// `inject.jsonl` は無い。85 の manifest では 1 周目に `kind=externalize origin=account` を注入して RED。
+#[test]
+fn seat_threshold_95_account_at_90_has_no_account_signal_to_brake() {
+    let place = acct_place();
+    let name = "seatsigninety";
+    let registered = acct_register(&place, name, ACCT_LAUNCH);
+    assert_eq!(rc_of(&registered), i32::from(RC_OK), "stderr={}", stderr_of(&registered));
+    acct_measured(&place.state, ACCT_SEAT, 90, &acct_now());
+    write_state(&seat_dir_of(&place.state, name), StateFix::Busy { age_s: 0 });
+    let pane = fixture(&place.dir, "pane.txt", IDLE_PANE);
+    let want = acct_line("decision=noop reason=busy", &format!("{ST_BUSY} account=a1:90 plugin=unrecorded"), &place.state);
+
+    for round in [1_u32, 2] {
+        let (out, touched) = acct_tick_probed(&place, name, &pane);
+        let line = stdout_of(&out);
+        assert_eq!(rc_of(&out), i32::from(RC_OK), "{round} 周目: stderr={}", stderr_of(&out));
+        assert_eq!(line, want, "{round} 周目: 90 は閾値 95 未満＝口座の軸は通り、既存の順序どおり busy");
+        assert_eq!((tick_token(&line, "kind"), tick_token(&line, "origin")), (None, None), "{round} 周目: 注入の軸は立たない: {line}");
+        assert!(!touched, "{round} 周目: tmux に触れない");
+        assert!(!place.state.join("inject.jsonl").exists(), "{round} 周目: brake の掛かる合図の記録は無い");
+    }
     fs::remove_dir_all(&place.dir).ok();
 }
 

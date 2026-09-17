@@ -60,7 +60,7 @@ pub(super) fn record_verify(entry: &Gate<'_>, worktree: &Path, base: &str) -> Re
     };
     let (detection, skipped): (&[String], Option<Skipped<'_>>) = match entry.detection {
         Detection::Run => (frozen.detection_verify(), None),
-        Detection::Skip(reason) => (&[], Some(Skipped { reason, tree: None })),
+        Detection::Skip(reason) => (&[], Some(Skipped::detection(reason, None))),
     };
     let checks = Checks {
         worktree,
@@ -86,26 +86,96 @@ pub(super) fn record_verify(entry: &Gate<'_>, worktree: &Path, base: &str) -> Re
         .position(detection_unmeasured)
         .map(|index| index as u64 + 1);
     for record in records_of(&steps, skipped) {
-        if let Some(step) = record.step.filter(|step| step.rc != 0) {
-            if !is_unreadable(step) && box_kill(step).is_none() && !detection_unmeasured(step) {
+        if let Some(step) = record.step {
+            if step.rc != 0 && !is_unreadable(step) && box_kill(step).is_none() && !detection_unmeasured(step) {
                 red += 1;
             }
-            let head = format!("## n={} rc={} cmd={}", record.n, step.rc, step.cmd);
-            append_stderr(&tail_path, entry.policy, &head, &step.stderr)?;
+            append_diagnosis(&tail_path, entry.policy, record.n, step)?;
         }
         append_line(&path, &record.body, entry.policy).map_err(|err| err.to_string())?;
     }
     Ok(Counted { red, unreadable, killed, detection_unmeasured: unmeasured })
 }
 
-/// 検出線を省いた周の材料（record の `reason=` と、主実測だけが持つ `tree=`）。
+/// 赤い行と撃ち直した行の見出し + stderr の末尾を診断 file へ残す（緑で撃ち直しも無い行は残さない）。
+///
+/// 撃ち直した行（`retried_from` が `Some`・設計 gate-cost.md §21）は **1 回目の見出し
+/// （`## n=<i> rc=<rc> retry=1 cmd=…`）+ 1 回目の末尾を先に**書き、その後に 2 回目を従来の見出しで書く
+/// ——2 回目が緑でも書く（1 回目を捨てると「なぜ撃ち直したか」が便の外から読めない・C10）。
+/// `verify.jsonl` の record は 2 回目の 1 本だけで、2 段になるのは診断 file だけである。
+fn append_diagnosis(path: &Path, policy: LockPolicy, n: u64, step: &Step) -> Result<(), String> {
+    if let Some((rc, tail)) = &step.retried_from {
+        let head = format!("## n={n} rc={rc} retry=1 cmd={}", step.cmd);
+        append_stderr(path, policy, &head, tail)?;
+    }
+    if step.rc != 0 || step.retried_from.is_some() {
+        let head = format!("## n={n} rc={} cmd={}", step.rc, step.cmd);
+        append_stderr(path, policy, &head, &step.stderr)?;
+    }
+    Ok(())
+}
+
+/// 撃たなかった周の材料（record の `skipped=` の段と `reason=`、主実測だけが持つ `tree=`）。
+///
+/// **構築は下の 2 つの口だけ**である（field は本 file に閉じる）——段と理由は別の軸で、
+/// 呼び手が任意の組を書けると `kind=detection skipped=regate` のような無い形が生まれる。
 #[derive(Debug, Clone, Copy)]
 pub struct Skipped<'a> {
+    /// 省いた段。
+    stage: SkippedStage,
     /// 省いた理由。
-    pub reason: DetectionSkip,
+    reason: DetectionSkip,
     /// land した木（主実測の record だけ・gate の再撃ちは木を持たない＝field を書かない）。
-    pub tree: Option<&'a str>,
+    tree: Option<&'a str>,
 }
+
+impl<'a> Skipped<'a> {
+    /// 検出線の段だけを省いた周（`kind=detection skipped=detection`・主実測は木を持つ）。
+    pub fn detection(reason: DetectionSkip, tree: Option<&'a str>) -> Self {
+        Self { stage: SkippedStage::Detection, reason, tree }
+    }
+
+    /// 追随の再 gate を**丸ごと**省いて前周の判定を引き継いだ周（`kind=gate skipped=regate`・設計 §33）。
+    ///
+    /// 木は持たない——撃っていないので「どの木を測ったか」が無い（`tree` を書くと測った形に読める）。
+    pub fn regate(reason: DetectionSkip) -> Self {
+        Self { stage: SkippedStage::Regate, reason, tree: None }
+    }
+}
+
+/// 撃たなかったのはどの段か（record の `skipped=` と `kind=` の字面）。
+///
+/// **理由（[`DetectionSkip`]）とは別の軸**である（run 2 の裁定 2026-09-16）——`outside-scope` は
+/// 検出線を省く周にも再 gate を省く周にも同じ意味で立つので、理由の enum に段を足すと
+/// 2 つの軸が 1 つの列に潰れる。値は 2 つで、本 file の外へは出ない。
+#[derive(Debug, Clone, Copy)]
+enum SkippedStage {
+    /// 検出線の段（gate / 主実測の中の 1 行）。
+    Detection,
+    /// 追随の再 gate 1 周（設計 §33 (i)）。
+    Regate,
+}
+
+impl SkippedStage {
+    /// record の `skipped=` の字面。
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Detection => "detection",
+            Self::Regate => "regate",
+        }
+    }
+
+    /// record の `kind=` の字面（段の名＝verify 行の kind か、gate 1 周そのものか）。
+    fn kind(self) -> &'static str {
+        match self {
+            Self::Detection => Check::Detection.as_str(),
+            Self::Regate => KIND_GATE,
+        }
+    }
+}
+
+/// gate 1 周を省いた record の `kind=`（verify 行の段ではないので [`Check`] の値を使わない）。
+const KIND_GATE: &str = "gate";
 
 /// 書く record 1 本（通し番号 `n`・本文・撃った段なら元の [`Step`]）。
 pub struct Record<'a> {
@@ -146,16 +216,17 @@ pub fn next_number(len: usize) -> u64 {
     u64::try_from(len).unwrap_or(u64::MAX).saturating_add(1)
 }
 
-/// 検出線を省いた段の名（record の `skipped=`）。
-const SKIPPED_DETECTION: &str = "detection";
-
-/// 検出線を省いた段の record（`kind=detection skipped=detection [tree=<sha>] reason=<理由>`・schema は 1 のまま）。
+/// 撃たなかった段の record（`kind=<段> skipped=<段> [tree=<sha>] reason=<理由>`・schema は 1 のまま）。
+///
+/// 検出線を省いた周は `kind=detection skipped=detection`、追随の再 gate を省いて前周の判定を
+/// 引き継いだ周は `kind=gate skipped=regate`（設計 §33 (2)）。どちらも**撃たなかった事実を
+/// 黙って落とさない**ための 1 本で、読み手は `skipped=` の非空で両者をまとめて拾える。
 pub fn skip_record(number: u64, skipped: Skipped<'_>) -> String {
     let mut fields = vec![
         ("schema", Value::Num(SCHEMA)),
         ("n", Value::Num(number)),
-        ("kind", Value::Str(Check::Detection.as_str().to_owned())),
-        ("skipped", Value::Str(SKIPPED_DETECTION.to_owned())),
+        ("kind", Value::Str(skipped.stage.kind().to_owned())),
+        ("skipped", Value::Str(skipped.stage.as_str().to_owned())),
     ];
     if let Some(tree) = skipped.tree {
         fields.push(("tree", Value::Str(tree.to_owned())));
@@ -195,6 +266,10 @@ pub fn step_record(number: u64, step: &Step) -> String {
     if let Some(released) = step.scope {
         fields.push(("scope", Value::Str(released.as_str().to_owned())));
     }
+    // 撃ち直した周だけ `retried=1`（設計 gate-cost.md §21・撃ち直さない周は field を欠く・C10）。
+    if step.retried_from.is_some() {
+        fields.push(("retried", Value::Num(1)));
+    }
     if let Some(line) = &step.line {
         fields.push(("line", Value::Str(line.clone())));
     }
@@ -219,7 +294,10 @@ pub(super) struct Counted {
 /// 2 = 測れなかった（baseline が落ちた・道具が起こせない）。段を問わず rc≠0 を赤に数えると、2 が
 /// FAIL（判定に届いた便の終端）に化ける（`s2-07l.329` run 1 の実測）。**rc 1 の検出線と、検出線以外の
 /// rc 2 は従来どおり赤**——除外は「検出線 ∧ rc 2」の 1 点だけで、rc の意味は道具の側が持つ。
-fn detection_unmeasured(step: &Step) -> bool {
+///
+/// 撃ち直すか（[`super::verify::run_checks_admitted`]・設計 gate-cost.md §21）も**同じ 1 点**で見る
+/// （判定と撃ち直しの条件を 2 面に持たない）。
+pub(super) fn detection_unmeasured(step: &Step) -> bool {
     step.stage == Check::Detection && step.rc == 2
 }
 

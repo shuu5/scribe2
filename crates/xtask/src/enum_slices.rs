@@ -1,4 +1,4 @@
-//! 閉じた enum と、その全 variant を並べる const slice の**集合完全性**を測る（enum-slices）。
+//! 閉じた enum と、その全 variant を並べる const slice の**集合完全性と順序**を測る（enum-slices）。
 //!
 //! ADR-0013 §2.2 の C2 充足形（閉じた enum + 全 variant の const slice + 網羅 match + 昇順の歯）は、
 //! enum の末尾に足した variant を const slice へ入れ忘れた形をどの面も受けていなかった（§2.3・
@@ -15,6 +15,11 @@
 //!
 //! **意図した部分集合の const は書けない**（lens-88 MEDIUM-5）: `&[Enum]` 型の const は全 variant
 //! を並べる形しか通らず、逃がしは無い。部分集合が要るなら関数か別の型（`&[&str]` 等）で表す。
+//!
+//! **順序も測る**（`s2-07l.177`・憲法 C2「宣言順」）: 集合が一致する対は、同じ添字に同じ名が
+//! 並ぶことまで見る（[`compare`]）。集合だけの一致は「全部並んでいるが順序は宣言と無関係」な
+//! slice を通してしまい、C2 の宣言順は呼び手が手で書く述語（core の `is_declaration_order`）に
+//! しか載っていなかった。
 
 use crate::check::{Measured, SourceFile};
 
@@ -124,7 +129,10 @@ fn slices_in(text: &str) -> Vec<Result<Pair, String>> {
 }
 
 /// `pub const` / `pub(crate) const` / `const` の行（字下げ可）から `NAME: &[…] …` の部分を返す。
-fn const_head(line: &str) -> Option<&str> {
+///
+/// 極性の宣言 site を数える measure（[`crate::polarity::measure_sites`]）も同じ字面で const 行を
+/// 拾う——2 通りの「const 行の形」を持たないため `pub(crate)` で共有する（`s2-07l.177`）。
+pub(crate) fn const_head(line: &str) -> Option<&str> {
     let trimmed = line.trim_start();
     ["pub const ", "pub(crate) const ", "const "]
         .iter()
@@ -150,7 +158,9 @@ fn starts_upper(elem: &str) -> bool {
 }
 
 /// 大文字で始まり英数字と `_` だけの識別子か（enum / struct の名前の形）。
-fn is_type_ident(elem: &str) -> bool {
+///
+/// [`crate::polarity::measure_sites`] が `impl <Type> {` の型の名を読むのにも使う（`s2-07l.177`）。
+pub(crate) fn is_type_ident(elem: &str) -> bool {
     let mut chars = elem.chars();
     chars.next().is_some_and(|first| first.is_ascii_uppercase())
         && chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
@@ -260,7 +270,13 @@ fn is_variant_ident(ident: &str) -> bool {
     is_type_ident(ident)
 }
 
-/// variant の集合と slice の要素の集合を突き合わせる（欠け・余り・重複を全部出す）。
+/// variant と slice の要素を突き合わせる: まず集合（欠け・余り・重複を全部出す）、集合が一致した
+/// 対だけ**順序**（同じ添字に同じ名）を見る。
+///
+/// 順序違いは `order:<slice> expected=<Enum::Variant> at=<添字>` で**最初のずれ 1 件だけ**名指す
+/// （添字は 0 始まり・`s2-07l.177`）。集合の違反が在る周に添字を出すと、1 つの入れ忘れで以降の
+/// 添字が丸ごとずれて雪崩れる（同じ 1 つのずれを 2 つの面で数えない）ので、集合が揃うまで順序は
+/// 見ない。集合が揃った対は要素数も一致するので、`zip` が落とす要素は無い。
 fn compare(pair: &Pair, elements: &[String], variants: &[String]) -> Vec<String> {
     let mut reasons = Vec::new();
     for variant in variants {
@@ -282,5 +298,24 @@ fn compare(pair: &Pair, elements: &[String], variants: &[String]) -> Vec<String>
             ));
         }
     }
+    if reasons.is_empty() {
+        reasons.extend(first_disorder(pair, elements, variants));
+    }
     reasons
+}
+
+/// 宣言順とずれた最初の添字（0 始まり）を名指す。揃っていれば空。
+fn first_disorder(pair: &Pair, elements: &[String], variants: &[String]) -> Option<String> {
+    elements
+        .iter()
+        .zip(variants)
+        .position(|(element, variant)| element != variant)
+        .and_then(|at| {
+            variants.get(at).map(|variant| {
+                format!(
+                    "order:{} expected={}::{variant} at={at}",
+                    pair.slice, pair.enum_name
+                )
+            })
+        })
 }

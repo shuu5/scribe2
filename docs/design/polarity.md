@@ -25,6 +25,7 @@
 - 各 variant は `fn polarity(self) -> Polarity`（網羅 match・各境界の `POLARITY` を返す）と `fn boundary(self) -> &'static str`（境界の module path・pointer）を持つ。
 - **記録時点の母集団**は本 doc に列挙しない（ADR-0013 §2.1）。現物は `<NAME> polarity` の出力と `polarity.rs`。目安として、記録時点で hook 3・pipe 5・fleet 1・seat 1 の境界を数えた（件数は契約の A/B が実測する）。
 - **FailOpen の境界を隠さない**: cap guard は「測れない周は deny しない」（FR26・[seat-autonomy.md §3](./seat-autonomy.md)）と設計で決めた FailOpen である。一覧はそれを FailOpen として**そのまま**出す（極性一覧の目的は全数を可視にすることで、全部を FailClosed に見せることではない）。
+- guard でない極性 site は `polarity.rs` の `NOT_A_GUARD`（閉じた const slice・型は `&[Polarity]`・要素は site の const を crate 相対 path で参照した値）に載せ、`xtask polarity-sites` が `Guard` の網羅 match の参照 path 集合と両方向で突合する（doc コメントで除外しない・[rules-manifest.md §3](./rules-manifest.md)）
 
 ## 4. 外形（`<NAME> polarity`・C12.5 の snapshot）
 

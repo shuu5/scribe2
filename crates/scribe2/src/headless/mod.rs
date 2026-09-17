@@ -60,18 +60,40 @@ pub const AGENT_VIEW_OFF: &str = "1";
 /// 判定に届かなかった周の 1 行（lens の既定）。
 pub const INCONCLUSIVE_HEAD: &str = r#"{"verdict":"INCONCLUSIVE","evidence":"#;
 
-/// flag の値を取る。値が無ければ理由つきで `Err`。
+/// 値を持たない flag の代わりに理由へ出す 1 語（[`flag`] の二重の断りと、起動行の受付
+/// （`pipe::spawn::LineRefusal`）が**同じ語**で名乗る）。
+pub const NO_VALUE: &str = "値なし";
+
+/// flag の値を取る。**同名が 2 回以上在る**か値が無ければ理由つきで `Err`。
 ///
 /// `pipe::cli` に同形の関数が在るが、そちらは private であり、pub にするには
 /// `pipe` 側へ手を入れることになる（本契約の「やらない」に当たる）。**同じ形を
 /// 2 つ持つより、契約の柵を守るほうを採った**。
+///
+/// **二重は値の読みより先に断る**（設計 account-autonomy.md §16・`s2-07l.411`）。最初の出現を採ると、
+/// 器が足した `--account-dir` の後ろに散文で書かれた値（や、その逆）が黙って捨てられ、記帳した口座と
+/// 実際に走る口座がずれる。どちらが正かは器に分からない（C10）ので、読み手 1 本＝ここで断る。runner /
+/// lens の**全 flag**（[`need`] 経由の必須も含む）が同じ 1 経路を通る。
 pub fn flag<'a>(args: &'a [String], name: &str) -> Result<Option<&'a str>, String> {
-    let Some(at) = args.iter().position(|arg| arg == name) else {
+    let mut seen = args.iter().enumerate().filter(|(_, arg)| arg.as_str() == name).map(|(at, _)| at);
+    let Some(at) = seen.next() else {
         return Ok(None);
     };
+    if let Some(again) = seen.next() {
+        return Err(format!("{name} が 2 回以上在る（{} / {}）", value_at(args, at), value_at(args, again)));
+    }
     match args.get(at + 1) {
         Some(found) if !found.starts_with("--") => Ok(Some(found)),
         _ => Err(format!("{name} に値が無い")),
+    }
+}
+
+/// `at` の flag が持つ値（次の token・`--` 始まりと末尾は [`NO_VALUE`]）。二重の理由に
+/// **両方の値**を載せるための読み（値の判定は [`flag`] と同じ形）。
+fn value_at(args: &[String], at: usize) -> &str {
+    match args.get(at + 1) {
+        Some(found) if !found.starts_with("--") => found,
+        _ => NO_VALUE,
     }
 }
 

@@ -127,8 +127,8 @@ AC8 の確認（SRS の FR23 の検証手法は I = 目視確認・2 つの開�
 
 ### 12.1 直命の表（ADR-0031 §2.1）
 
-- 記録 = event log の variant 2 つ: `DirectiveIssued { id, target, issued_at（器が打つ UTC）, text（逐語）, premise: Vec<Pointer>（§4 の `PointerKind` の再利用） }` / `DirectiveClosed { id, outcome: Done | Withdrawn | Expired, ruling }`。`EventKind` の末尾に宣言順で足す（`KINDS` の件数 pin・literal 構築点の歯・property の生成器が write-set）。
-- 口 = `<NAME> seat directive add --state-dir S --target T --text "<逐語>" [--premise <pointer>]…`（発言を受けた席が 1 回撃つ・時刻は推定しない）/ `seat directive close <id> --outcome done|withdrawn|expired --ruling <id>` / `seat directive ls`（有効な直命の一覧・逐語）。
+- 記録 = event log の variant 2 つ: `DirectiveIssued { id, target, issued_at（器が打つ UTC）, text（逐語）, premise（前提の参照の列・要素 = §4 の `PointerKind` で分類した kind と参照の字面の対・log では文字列 1 field `<kind>:<reference>;…`〔kind の字面は `PointerKind` の `as_str`・参照は `;` を含まない〕・空なら key を書かない・**Resolution は log に固定しない**＝読む側が §4 の `Anchor` で測る・C10） }` / `DirectiveClosed { id, outcome: Done | Withdrawn | Expired, ruling }`。`EventKind` の末尾に宣言順で足す（`KINDS` の件数 pin・literal 構築点の歯・property の生成器が write-set・event log の書き手は配列を持たないので premise は文字列 1 field）。
+- 口 = `<NAME> seat directive add --state-dir S --target T --anchor DIR --text "<逐語>" [--premise <reference>]…`（発言を受けた席が 1 回撃つ・時刻は推定しない・`--premise` は `→ SSOT:` の後に書く参照の字面そのもので、§4 の `classify` が分類できない参照は typed に断り event を書かない・`--anchor` は rebrief と同じ Anchor の根）/ `seat directive close <id> --outcome done|withdrawn|expired --ruling <id>` / `seat directive ls`（有効な直命の一覧・逐語）。
 - rebrief の marker（宣言順・§5.2 の `Marker` enum に足す・外形 snapshot が動く）: `[DIRECTIVE] id=… issued=… premise=<kind:resolution>… line=<逐語>` / `[DIRECTIVE-COUNT] total=<n>` / `[DIRECTIVE-NONE]` / `[DIRECTIVE-REVIEW] id=… reason=<age|premise-closed|premise-superseded>` / `[DIRECTIVE-REVIEW-COUNT]` / `[DIRECTIVE-REVIEW-NONE]`。`age` の閾値 = rules 行 `directive.review_after_days`（新 kind `DirectiveReviewAfterDays`・`ValueShape::Int`・裁定 id = user 2026-09-15T07:22Z 問 1・値は manifest が持つ）。`premise-closed` は前提の台帳 id の status（rebrief の bd 読みと同じ 1 本の口）、`premise-superseded` は前提の ADR の `folio-status`（§4 の Adr の実在検査と同じ file を読む）。
 - 退避物の節 1 は廃止（`--user` の引数を外す・carry-forward の対象外・`schema: 1` のまま「節が空」として読む）。器は直命の意味を判定しない（印を出すだけ）。
 
@@ -192,7 +192,7 @@ AC8 の確認（SRS の FR23 の検証手法は I = 目視確認・2 つの開�
 ## 13. 退避の supersede — 同 sid の未 consumed を置き換える（契約表の行 d・`s2-07l.289`）
 
 - 何が起きているか: admin 2026-09-14 19:05Z の退避 → cycle が input-busy で 40 分 back-off し、席は仕事を続けたが 2 通目の退避が `wm-exists` で断られ、差分を planner に散文で預けた（退避の一次面が席の外へ漏れる）。現物（verified）: `crates/scribe2/src/seat/externalize.rs` は `WmScan::Unconsumed(_)` を一律 `WmExists` にする（§5 手順 1「二重退避を取り合わない」）。consume は `working-memory.<sid>.consumed.md` へ move する形（`crates/scribe2/src/seat/consume.rs`）。
-- 形: `externalize` が `Unconsumed` の退避物を見た周、その file の frontmatter の sid が**現在の sid と同じ**なら `working-memory.<sid>.superseded.<ts>.md` へ rename（write → rename の順・部分書きを残さない）してから新 file を書く。別 sid（`/clear` 後の候補・別席）は従来どおり `wm-exists`。記録の 1 行に `superseded=<旧 file>` を添える。`rebrief` / `consume` は superseded を走査から外す（`[WM]` の候補にしない）。
+- 形: `externalize` が `Unconsumed` の退避物を見た周、その file の frontmatter の sid が**現在の sid と同じ**なら `working-memory.<sid>.superseded.<ts>.md` へ rename（write → rename の順・部分書きを残さない）してから新 file を書く。別 sid（`/clear` 後の候補・別席）は従来どおり `wm-exists`。記録の 1 行に `superseded=<旧 file>` を添える。`rebrief` / `consume` は superseded を走査から外す（`[WM]` の候補にしない・consume の候補にしない）。走査の実体は `crates/scribe2/src/seat/mod.rs` の共有の名前判定 `is_unconsumed_name` 1 本（`working-memory.*.md` かつ `.consumed.md` で終わらない・`scan_wm` / `crates/scribe2/src/seat/consume.rs` の候補 / `crates/scribe2/src/seat/rebrief.rs` の走査が共有）＝除外はこの 1 か所に superseded の後置きを足すことで 3 面が同時に外れる。rebrief.rs / consume.rs は mod.rs で足りる周は触らない（write-set には残す）。
 - 触らない: carry-forward・命令行の cap・consume の move。
 - 却下案: 2 通目を consume → 書き直しで通す（「同 sid の consumed が在る」で断られる・consume は復元の合図であって更新ではない）／旧 file を上書き（不可逆・N1）。
 
@@ -213,7 +213,7 @@ title = "直命の表 — EventKind の variant 2（DirectiveIssued / DirectiveC
 req = ["FR65"]
 section = "12"
 touches = ["crate::fleet::EventKind", "crate::fleet::event::Event"]
-write-set = ["+crates/scribe2/src/seat/directive.rs", "crates/scribe2/src/seat/mod.rs", "crates/scribe2/src/seat/cli.rs", "crates/scribe2/src/fleet/mod.rs", "crates/scribe2/src/fleet/event.rs", "crates/scribe2/src/fleet/replay.rs", "crates/scribe2/src/fleet/cli.rs", "crates/scribe2/src/account/mod.rs", "crates/scribe2/src/fleet/usage.rs", "crates/scribe2/src/pipe/mod.rs", "crates/scribe2/src/pipe/queue.rs", "crates/scribe2/src/pipe/stop.rs", "crates/scribe2/src/seat/role.rs", "crates/scribe2/src/seat/state.rs", "crates/scribe2/tests/e2e/fleet.rs", "crates/scribe2/tests/e2e/prop.rs", "crates/scribe2/tests/e2e/seat.rs", "crates/scribe2/tests/e2e/pipe/ratelimit.rs", "crates/scribe2/tests/e2e/pipe/stop.rs", "crates/scribe2/tests/e2e/snapshots/e2e__seat__seat_usage_external_form.snap", "crates/scribe2/tests/e2e/snapshots/e2e__fleet__fleet_external_form.snap"]
+write-set = ["+crates/scribe2/src/seat/directive.rs", "crates/scribe2/src/seat/mod.rs", "crates/scribe2/src/seat/cli.rs", "crates/scribe2/src/fleet/mod.rs", "crates/scribe2/src/fleet/event.rs", "crates/scribe2/src/fleet/replay.rs", "crates/scribe2/src/fleet/cli.rs", "crates/scribe2/src/account/mod.rs", "crates/scribe2/src/fleet/usage.rs", "crates/scribe2/src/pipe/mod.rs", "crates/scribe2/src/pipe/queue.rs", "crates/scribe2/src/pipe/stop.rs", "crates/scribe2/src/seat/role.rs", "crates/scribe2/tests/e2e/fleet.rs", "crates/scribe2/tests/e2e/prop.rs", "crates/scribe2/tests/e2e/seat.rs", "crates/scribe2/tests/e2e/pipe/ratelimit.rs", "crates/scribe2/tests/e2e/pipe/stop.rs", "crates/scribe2/tests/e2e/snapshots/e2e__seat__seat_usage_external_form.snap", "crates/scribe2/tests/e2e/snapshots/e2e__fleet__fleet_external_form.snap"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail seat_directive_", "cargo nextest run -p scribe2 --no-tests=fail fleet_record_refuses_directive_"]
 size = "M"
 done = "seat directive add が DirectiveIssued を逐語で 1 行記し、close が閉じて未知と二重を typed に断り、ls が有効な直命を件数付きで列挙し、fleet record は直命の kind を断る"
@@ -236,7 +236,7 @@ id = "d"
 title = "自席・同 sid の未 consumed 退避物は superseded へ rename して置き換える — 別 sid は従来どおり wm-exists"
 req = ["FR38", "FR23"]
 section = "13"
-write-set = ["crates/scribe2/src/seat/externalize.rs", "crates/scribe2/src/seat/rebrief.rs", "crates/scribe2/tests/e2e/seat/wm.rs", "docs/design/working-memory.md"]
+write-set = ["crates/scribe2/src/seat/externalize.rs", "crates/scribe2/src/seat/mod.rs", "crates/scribe2/src/seat/rebrief.rs", "crates/scribe2/src/seat/consume.rs", "crates/scribe2/tests/e2e/seat/wm.rs", "docs/design/working-memory.md"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail seat_wm_externalize_supersede_"]
 size = "S"
 done = "同 sid の退避が置き換えられ、旧版は superseded として残る"

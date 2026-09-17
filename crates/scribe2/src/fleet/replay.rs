@@ -9,6 +9,8 @@ use super::{
 use crate::rules::manifest::Manifest;
 use crate::seat::role::Role;
 use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::OsStr;
+use std::path::Path;
 
 /// 便の現在地。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -76,13 +78,19 @@ impl State {
         labels.into_iter().filter(|label| !self.retired.contains_key(*label)).map(str::to_owned).collect()
     }
 
-    /// 席の登録 row が持つ口座 label の集合（便用の選定の除外集合・設計 account-autonomy.md §3）。
+    /// 席の登録 row が持つ口座 label の集合（便用の選定の除外集合・設計 account-autonomy.md §3 / §14）。
     ///
     /// **席の生死を問わない**——登録が在る限りその口座は席のものである（便が席の口座を食い潰す穴を
     /// 塞ぐのが除外の目的で、席が一時的に落ちている周に便がその口座を取ると、立て直しの口座が無い）。
-    pub fn registered_accounts(&self) -> BTreeSet<String> {
+    ///
+    /// `anchor` は絞り（§14・FR40 の席の識別子は (役割, anchor)）: `None` は置き場の全 row の口座（退役の検査・
+    /// `--anchor` 無しの `fleet select`＝保守側）、`Some(repo)` は `Registration.anchor` が `repo` と **`OsStr` の
+    /// 等値**で一致する row の口座だけ（正規化も component の比較もしない＝登録が書いた値がそのまま鍵）。置き場を
+    /// 共有する他 repo の席の口座は本 repo の便の候補に残る（user 裁定 2026-09-16・A1）。
+    pub fn registered_accounts(&self, anchor: Option<&Path>) -> BTreeSet<String> {
         self.registrations
             .values()
+            .filter(|latest| anchor.is_none_or(|repo| OsStr::new(&latest.registration.anchor) == repo.as_os_str()))
             .map(|latest| latest.registration.account.clone())
             .collect()
     }
@@ -116,17 +124,25 @@ pub fn effective_accounts(manifest: &Manifest, state: &State) -> Vec<String> {
 ///
 /// `model` は rules 行 `runner.model` の値（runner / lens が `--model` で毎回明示する model・設計 §3・`s2-07l.297`）
 /// ＝便が消費するのはその model のモデル別窓だけなので、他の model の窓が 100 でも候補から外さない。字面のまま
-/// 渡し、型にするのは `select` の中（別名 × 表示名の照合）。`None` は全 model 窓の最大（保守側）。除外は登録 row の
-/// 口座。走行中の便数は state から導く（[`State::inflight_by_account`]・呼び手は渡さない）。閾値は便用の規則が
-/// 持たないので**窓の全量**（[`select::LIMIT_PCT`]）を置く＝session 用の分岐に届かない値であって、R-C9-1 の値ではない。
-pub fn select_for_run(state: &State, labels: &[String], model: Option<&str>, now: &str) -> select::Selection {
+/// 渡し、型にするのは `select` の中（別名 × 表示名の照合）。`None` は全 model 窓の最大（保守側）。除外は**便の repo
+/// （`repo`・`pipe run --repo` の値）を anchor に持つ**登録 row の口座だけ（[`State::registered_accounts`]・設計 §14＝
+/// 置き場を共有する他 repo の席の口座は候補）。走行中の便数は state から導く（[`State::inflight_by_account`]・呼び手は
+/// 渡さない）。閾値は便用の規則が持たないので**窓の全量**（[`select::LIMIT_PCT`]）を置く＝session 用の分岐に届かない
+/// 値であって、R-C9-1 の値ではない。
+pub fn select_for_run(
+    state: &State,
+    repo: &Path,
+    labels: &[String],
+    model: Option<&str>,
+    now: &str,
+) -> select::Selection {
     let labels = state.without_retired(labels.iter().map(String::as_str));
     select::select(&select::Input {
         labels: &labels,
         allowance: &state.allowance,
         purpose: select::Purpose::Run,
         model,
-        exclude: &state.registered_accounts(),
+        exclude: &state.registered_accounts(Some(repo)),
         inflight: &state.inflight_by_account(),
         threshold_pct: select::LIMIT_PCT,
         now,

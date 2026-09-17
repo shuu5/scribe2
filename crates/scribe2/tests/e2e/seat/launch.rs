@@ -92,9 +92,14 @@ fn seat_attrib_tick_resends_enter_once_and_reports_enter_lost() {
     fs::remove_dir_all(&dir).ok();
 }
 
-/// (2) 同じ席で tick を 2 回撃つと、2 周目は入力欄の門が断る（`decision=error reason=inject-busy`・rc 1）。
-/// **`pointer-recent` ではない**＝1 周目が stamp を打っていないことがここで測れる（base は 1 周目で自打刻
-/// するので 2 周目が `decision=noop reason=pointer-recent`・RED）。
+/// (2) 同じ席で tick を 2 回撃つと、2 周目は入力欄の門が断る（`decision=error reason=inject-input-own-queued`・
+/// rc 1）。**`pointer-recent` ではない**＝1 周目が stamp を打っていないことがここで測れる（base は 1 周目で
+/// 自打刻するので 2 周目が `decision=noop reason=pointer-recent`・RED）。
+///
+/// 2 周目の字面は入力欄の門が 3 値になって `inject-busy` から変わった（`s2-07l.288`）: 入力欄に残るのは
+/// **器自身が送った目印**（1 周目の記録が `tick.jsonl` に在る）なので Foreign ではなく OwnQueued で、この席は
+/// Enter を submit にしない＝Enter 1 回の後も残るので `input-own-queued` で断る。attrib の写像は既存の 1 本
+/// （`seat/tick/render.rs` が deliver の断りを `inject-<reason>` へ写す）をそのまま通る。
 #[test]
 fn seat_attrib_tick_next_round_names_the_busy_input_not_pointer_recent() {
     let dir = tmp();
@@ -113,11 +118,11 @@ fn seat_attrib_tick_next_round_names_the_busy_input_not_pointer_recent() {
     assert_eq!(stdout_of(&second), "", "error の周は stdout 0 byte");
     assert_eq!(
         stderr_of(&second),
-        format!("seat: tick decision=error reason=inject-busy{CTX_10}{ST_IDLE}{}\n", provenance(&state, "flag")),
+        format!("seat: tick decision=error reason=inject-input-own-queued{CTX_10}{ST_IDLE}{}\n", provenance(&state, "flag")),
         "入力欄に目印が残る席は入力欄の門が名乗る（黙った pointer-recent にならない）"
     );
     assert!(!tick_stamp_of(&dir, name).exists(), "2 周とも tick-stamp を打たない");
-    assert_eq!(capture(&socket, name).matches(ATTRIB_POINTER).count(), 1, "2 周目は 1 key も送らない");
+    assert_eq!(capture(&socket, name).matches(ATTRIB_POINTER).count(), 1, "2 周目は text を再送しない（Enter 1 回だけ）");
     drop(guard);
     fs::remove_dir_all(&dir).ok();
 }

@@ -207,7 +207,8 @@ fn start_seat_sized(socket: &str, name: &str, ps1: &str, needle: char, width: &s
 }
 
 /// prompt が描かれるのを待つ上限。
-const PROMPT_WAIT: Duration = Duration::from_secs(5);
+// flip-check: retroactive s2-07l.392
+const PROMPT_WAIT: Duration = Duration::from_secs(60);
 
 // 外形 snapshot は**面ごとに 1 本**（usage / rebrief の DATA / doctor の末尾・`s2-07l.327`・seat-roles.md §7）。
 // 1 本に連結すると seat 面の契約が全部この 1 file で交差する（実測 2026-09-15: 4 便が互いに当たり同時に

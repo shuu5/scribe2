@@ -28,4 +28,5 @@ guard=inject-refusal timing=in-loop on-failure=fail-closed boundary=seat::inject
 guard=cycle-refusal timing=in-loop on-failure=fail-closed boundary=seat::cycle::Cycle
 guard=externalize-refusal timing=in-loop on-failure=fail-closed boundary=seat::externalize::ExternalizeError
 guard=consume-refusal timing=in-loop on-failure=fail-closed boundary=seat::consume::ConsumeError
-polarity: guards=26 in-loop=21 post-hoc=5 fail-open=4
+guard=spawn-line timing=in-loop on-failure=fail-closed boundary=pipe::spawn::LineRefusal
+polarity: guards=27 in-loop=22 post-hoc=5 fail-open=4

@@ -541,7 +541,8 @@ pub fn retire(state_dir: &Path, label: &str) -> Result<PathBuf, AccountError> {
     if state.retired.contains_key(label) {
         return Err(AccountError::AlreadyRetired);
     }
-    if state.registered_accounts().contains(label) {
+    // 退役は host 全体の席を守る側＝置き場の全 row を見る（anchor で絞らない・設計 account-autonomy.md §14 (1)）。
+    if state.registered_accounts(None).contains(label) {
         return Err(AccountError::InUse);
     }
     let ts = fleet_cli::now_utc();

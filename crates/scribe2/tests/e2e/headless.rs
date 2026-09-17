@@ -8,7 +8,8 @@ use std::fs;
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Child, Command, Output, Stdio};
+use std::time::{Duration, Instant};
 use vessel::cli_outcome::{RC_BROKEN, RC_OK, RC_REFUSED};
 use vessel::headless::RC_RATE_LIMIT;
 
@@ -2933,4 +2934,399 @@ fn headless_runner_result_line_pure_readers_and_format() {
         "runner: result subtype=unknown is_error=- text=a b  c"
     );
     assert_eq!(result_line(None, Some(true), None), "runner: result subtype=- is_error=true text=-");
+}
+
+// ---- claude の scope の peak を走行中に sample する（設計 gate-cost.md §13・s2-07l.273）------------------
+
+/// 偽 `systemctl show` が返す fixture の ControlGroup（実 systemd と同じ `/` 始まりの絶対形＝root を捨てない
+/// 側の材料）。unit 名は pid と通し番号で動くので、歯が**起動前に** `memory.peak` を置ける固定の名にする。
+const PEAK_CONTROL_GROUP: &str = "/user.slice/scribe2-peak-fixture.scope";
+
+/// 歯が起動前に `memory.peak` へ書く値（planner の実測 5006 MB に寄せた byte・0 でも 1 でもない）。
+const PEAK_BYTES: &str = "5006000000";
+
+/// 偽 `systemctl show` の答え: fixture の ControlGroup を 1 行（rc 0）。
+const SHOW_FOUND: &str = "printf '%s\\n' '/user.slice/scribe2-peak-fixture.scope'\nexit 0";
+
+/// 偽 `systemctl show` の答え: rc 1 で空（解けない周）。
+const SHOW_FAILED: &str = "exit 1";
+
+/// 偽 `systemctl kill` の答え: 殺した（rc 0 = `killed`）。
+const KILL_KILLED: &str = "exit 0";
+
+/// 偽 `systemctl kill` の答え: unit が無い（実 systemctl の字面・rc 1 = `gone`＝最後の process の終了で消えた正常系）。
+const KILL_GONE: &str = "printf 'Failed to kill unit %s: Unit %s not loaded.\\n' \"$5\" \"$5\" >&2\nexit 1";
+
+/// 偽 `systemctl` が撃たれた argv（1 呼出 1 行）を追記する file 名。
+const PEAK_CALLS: &str = "systemctl-calls";
+
+/// stream の init record（runner の fake が 1 行目に出す）。
+const INIT_RECORD: &str = r#"{"type":"system","subtype":"init"}"#;
+
+/// stream の result record（runner の fake が終端に出す）。
+const RESULT_RECORD: &str = r#"{"type":"result","subtype":"success","is_error":false,"result":"done"}"#;
+
+/// lens の fake が終端に出す verdict。
+const PEAK_VERDICT: &str = r#"{"verdict":"PASS","evidence":"peak の歯"}"#;
+
+/// 偽 `systemd-run`（argv の `--` の後ろをそのまま exec・probe の `sh -c exit 0` も通す）と偽 `systemctl`
+/// （`show` は `show`・`kill` は `kill` の答え・argv は [`PEAK_CALLS`] へ写す）を `dir/shim-bin` に置き、
+/// それを先頭にした PATH を返す。`e2e/pipe/gate.rs` の shim は流用しない（module の可視性を触らない）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn peak_shims(dir: &Path, show: &str, kill: &str) -> String {
+    let bin_dir = dir.join("shim-bin");
+    fs::create_dir_all(&bin_dir).expect("shim の dir を作れる");
+    let systemd_run = "#!/bin/sh\nwhile [ $# -gt 0 ] && [ \"$1\" != \"--\" ]; do shift; done\nshift\nexec \"$@\"\n";
+    let systemctl = format!(
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\ncase \"$2\" in\nshow) {show};;\nkill) {kill};;\nesac\nexit 1\n",
+        dir.join(PEAK_CALLS).display()
+    );
+    for (name, script) in [("systemd-run", systemd_run.to_owned()), ("systemctl", systemctl)] {
+        let shim = bin_dir.join(name);
+        fs::write(&shim, script).expect("shim を書ける");
+        fs::set_permissions(&shim, fs::Permissions::from_mode(0o755)).expect("shim に実行権を付ける");
+    }
+    format!("{}:{}", bin_dir.display(), std::env::var("PATH").unwrap_or_default())
+}
+
+/// `<root>/<ControlGroup>/memory.peak` に [`PEAK_BYTES`] を**起動前に**書き、その scope の dir を返す
+/// （fake claude が終端の前に `rm -r` する相手）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn peak_fixture(root: &Path) -> PathBuf {
+    let scope = root.join(PEAK_CONTROL_GROUP.trim_start_matches('/'));
+    fs::create_dir_all(&scope).expect("fixture の cgroup dir を作れる");
+    fs::write(scope.join("memory.peak"), format!("{PEAK_BYTES}\n")).expect("memory.peak を書ける");
+    scope
+}
+
+/// 偽 claude（[`fake_claude`] の形を写した歯内の script）: `called` を残してから `body` を撃つ。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn peak_claude(dir: &Path, body: &str) -> PathBuf {
+    let path = dir.join("fake-claude");
+    fs::write(&path, format!("#!/bin/sh\n: > \"{}/called\"\n{body}", dir.display())).expect("fake を書ける");
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("fake を実行可能にできる");
+    path
+}
+
+/// binary を PATH を差し替えて起こす（stdin に `input` を流す・env の残りは [`run_bin`] と同じ）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn spawn_bin(args: &[String], input: &[u8], path: &str) -> Child {
+    let mut child = Command::new(bin())
+        .args(args)
+        .env("PATH", path)
+        .env("CLAUDE_CODE_DISABLE_AGENT_VIEW", INHERITED_AGENT_VIEW)
+        .env("TMUX_PANE", PARENT_PANE)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("binary を起動できる");
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(input);
+    }
+    child
+}
+
+/// [`run_bin`] の PATH 差し替え変種。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn run_bin_with_path(args: &[String], input: &[u8], path: &str) -> Output {
+    spawn_bin(args, input, path).wait_with_output().expect("binary の出力を読める")
+}
+
+/// `limit` の上限つきで binary の終了を待つ。超えたら kill して落とす（poll 中に stdout を読まない実装は
+/// 子の pipe が詰まって永久に回る＝上限で RED）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn wait_bounded(mut child: Child, limit: Duration) -> Output {
+    let started = Instant::now();
+    while child.try_wait().expect("binary の状態を読める").is_none() {
+        let timed_out = started.elapsed() > limit;
+        if timed_out {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        assert!(!timed_out, "{limit:?} 内に終わらない（poll 中に stdout を読み切らず pipe が詰まった形）");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    child.wait_with_output().expect("binary の出力を読める")
+}
+
+/// runner を `--cgroup-root root` つきで撃つ（write-set / vessel / plugin leaf は `dir` に置く）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn run_runner_peak(dir: &Path, worktree: &Path, claude: &Path, root: &Path, path: &str) -> Output {
+    let write_set = dir.join("write-set.txt");
+    fs::write(&write_set, "src/lib.rs\n").expect("write-set を書ける");
+    let vessel = write_vessel_copy(dir, r#"["cargo"]"#);
+    plugin_leaf(dir);
+    let call = RunnerCall { dir, worktree, write_set: &write_set, vessel: &vessel, claude, mode: "plan", account: None };
+    let mut args = runner_args(&call, dir);
+    args.extend(["--cgroup-root".to_owned(), root.display().to_string()]);
+    run_bin_with_path(&args, b"goal = \"x\"\n", path)
+}
+
+/// lens の argv（`--rules` の cap と `--cgroup-root root` つき・契約は `dir` に置く）。
+fn lens_peak_args(dir: &Path, claude: &Path, root: &Path) -> Vec<String> {
+    let contract = contract_in(dir);
+    let rules = rules_with_cap(dir, 4096);
+    let extra = ["--rules", &rules.display().to_string(), "--cgroup-root", &root.display().to_string()];
+    lens_args(&contract, dir, &extra, claude)
+}
+
+/// stderr の `<who>: scope=` で始まる行（母集団ごと返す）。
+fn scope_lines<'a>(err: &'a str, who: &str) -> Vec<&'a str> {
+    let head = format!("{who}: scope=");
+    err.lines().filter(|line| line.starts_with(&head)).collect()
+}
+
+/// (a) runner: scope の peak は**走行中の sample**で残る。偽 claude は stream の record を 1 行出し → `sleep 3` →
+/// fixture の cgroup dir を `rm -r`（最後の process の終了で scope が消えることを模す）→ result record → rc 0。
+/// 偽 `kill` は「not loaded」（`gone`）。期待: `runner: scope=gone` で始まり ` claude_peak_bytes=5006000000` を
+/// 含む行が**ちょうど 1 本**・rc 0・stdout の最終行は現物と同じ。終端で読む実装は dir が無く `-`・`Gone` を
+/// `None` に落とす実装は行そのものが無い→どちらも RED。`show` の argv も pin する（unit 名は `systemd-run` が
+/// 受けた claude の scope・`-p ControlGroup --value`）。
+#[test]
+fn headless_claude_peak_is_sampled_before_the_scope_vanishes() {
+    let dir = tmp();
+    let worktree = tmp();
+    let root = tmp();
+    let path = peak_shims(&dir, SHOW_FOUND, KILL_GONE);
+    let scope = peak_fixture(&root);
+    let body = format!(
+        "printf '%s\\n' '{INIT_RECORD}'\nsleep 3\nrm -r '{}'\nprintf '%s\\n' '{RESULT_RECORD}'\nexit 0\n",
+        scope.display()
+    );
+    let claude = peak_claude(&dir, &body);
+    let out = run_runner_peak(&dir, &worktree, &claude, &root, &path);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    assert!(!scope.exists(), "fake は終端の前に scope の dir を消している（母集団）");
+    let err = stderr_of(&out);
+    let lines = scope_lines(&err, "runner");
+    assert_eq!(lines.len(), 1, "scope= 行はちょうど 1 本: {err}");
+    let line = lines.first().copied().unwrap_or_default();
+    assert!(line.starts_with("runner: scope=gone"), "gone の周も行を出す: {line}");
+    assert!(line.contains(&format!(" claude_peak_bytes={PEAK_BYTES}")), "走行中に読んだ値が残る: {line}");
+    let stdout = stdout_of(&out);
+    assert_eq!(stdout.lines().last(), Some("runner: rc=0 records=2"), "stdout の最終行は不変: {stdout}");
+    let calls = slurp(&dir.join(PEAK_CALLS));
+    let shown: Vec<&str> = calls.lines().filter(|call| call.starts_with("--user show ")).collect();
+    assert_eq!(shown.len(), 1, "show は 1 回: {calls}");
+    let show = shown.first().copied().unwrap_or_default();
+    assert!(show.starts_with("--user show scribe2-runner-claude-"), "claude の scope の unit を引く: {show}");
+    assert!(show.ends_with(".scope -p ControlGroup --value"), "ControlGroup の値だけを引く: {show}");
+    clean(&[&dir, &worktree, &root]);
+}
+
+/// (b) lens: `wait_with_output` を poll に替え、各周で sample する。偽 claude は `sleep 3` → dir を `rm -r` →
+/// verdict 1 行で rc 0。期待: `lens: scope=gone claude_peak_bytes=5006000000` の行が 1 本・stdout の最終行は
+/// verdict・rc 0。終端で読む実装は `-` → RED。
+#[test]
+fn headless_claude_peak_lens_samples_by_poll() {
+    let dir = tmp();
+    let root = tmp();
+    let path = peak_shims(&dir, SHOW_FOUND, KILL_GONE);
+    let scope = peak_fixture(&root);
+    let body = format!("sleep 3\nrm -r '{}'\nprintf '%s\\n' '{PEAK_VERDICT}'\nexit 0\n", scope.display());
+    let claude = peak_claude(&dir, &body);
+    let out = run_bin_with_path(&lens_peak_args(&dir, &claude, &root), b"--- a\n+++ b\n", &path);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    assert!(dir.join("called").exists(), "lens は claude を呼ぶ（母集団）");
+    let err = stderr_of(&out);
+    let want = format!("lens: scope=gone claude_peak_bytes={PEAK_BYTES}");
+    assert_eq!(scope_lines(&err, "lens"), vec![want.as_str()], "{err}");
+    let stdout = stdout_of(&out);
+    assert_eq!(stdout.lines().last(), Some(PEAK_VERDICT), "stdout の最終行は verdict: {stdout}");
+    clean(&[&dir, &root]);
+}
+
+/// (c) runner・読めない周は `-`（0 でない・C10）: ① `memory.peak` を置かない ② 偽 `show` が rc 1 で空。
+/// 偽 `kill` は rc 0（`killed`）。
+#[test]
+fn headless_claude_peak_unreadable_is_dash() {
+    let body = format!("printf '%s\\n' '{RESULT_RECORD}'\nexit 0\n");
+    for (show, with_fixture) in [(SHOW_FOUND, false), (SHOW_FAILED, true)] {
+        let dir = tmp();
+        let worktree = tmp();
+        let root = tmp();
+        let path = peak_shims(&dir, show, KILL_KILLED);
+        if with_fixture {
+            peak_fixture(&root);
+        }
+        let claude = peak_claude(&dir, &body);
+        let out = run_runner_peak(&dir, &worktree, &claude, &root, &path);
+        assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+        let err = stderr_of(&out);
+        assert_eq!(
+            scope_lines(&err, "runner"),
+            vec!["runner: scope=killed claude_peak_bytes=-"],
+            "fixture={with_fixture} show={show:?}: {err}"
+        );
+        clean(&[&dir, &worktree, &root]);
+    }
+}
+
+/// (d) runner・systemd 無しの host（PATH = 空 dir 1 つ・builtin だけの偽 claude）: 行に `claude_peak_bytes` も
+/// `scope=` も出ない。母集団を先に測る（rc 0 ∧ stdout の行数 > 0 ∧ `called` の印）。
+#[test]
+fn headless_claude_peak_absent_without_systemd() {
+    let dir = tmp();
+    let worktree = tmp();
+    let root = tmp();
+    let empty = tmp();
+    let claude = peak_claude(&dir, &format!("printf '%s\\n' '{RESULT_RECORD}'\nexit 0\n"));
+    let out = run_runner_peak(&dir, &worktree, &claude, &root, &empty.display().to_string());
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    let stdout = stdout_of(&out);
+    assert!(stdout.lines().count() > 0, "stdout の行が在る（母集団）");
+    assert!(dir.join("called").exists(), "claude は呼ばれた（母集団）");
+    let err = stderr_of(&out);
+    assert!(!err.contains("claude_peak_bytes"), "systemd 無しでは語を出さない: {err}");
+    assert!(!err.contains("scope="), "scope= も出ない（現物と同じ）: {err}");
+    clean(&[&dir, &worktree, &root, &empty]);
+}
+
+/// (e) lens・poll の間も stdout を読み切る: 偽 claude が 256 KiB の filler を出してから verdict（sleep 無し・
+/// 偽 `kill` rc 0）。30 秒の上限つきで待ち、超えたら binary を kill して落とす。期待: 上限内に rc 0 ∧ 最終行が
+/// verdict ∧ `lens: scope=killed claude_peak_bytes=` の語。
+#[test]
+fn headless_claude_peak_lens_drains_stdout_while_polling() {
+    let dir = tmp();
+    let root = tmp();
+    let path = peak_shims(&dir, SHOW_FOUND, KILL_KILLED);
+    peak_fixture(&root);
+    let body = format!("head -c 262144 /dev/zero | tr '\\0' x\nprintf '\\n%s\\n' '{PEAK_VERDICT}'\nexit 0\n");
+    let claude = peak_claude(&dir, &body);
+    let child = spawn_bin(&lens_peak_args(&dir, &claude, &root), b"--- a\n+++ b\n", &path);
+    let out = wait_bounded(child, Duration::from_secs(30));
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    let stdout = stdout_of(&out);
+    assert_eq!(stdout.lines().last(), Some(PEAK_VERDICT), "filler の後の verdict を読む: {stdout}");
+    let err = stderr_of(&out);
+    assert!(err.contains("lens: scope=killed claude_peak_bytes="), "行は killed で出る: {err}");
+    clean(&[&dir, &root]);
+}
+
+// ───── 同名の flag が 2 つ在る argv は claude を起こさずに断る（`s2-07l.411`・設計 account-autonomy.md §16・
+// 接頭辞 `headless_flag_duplicate_`） ─────
+//
+// 読み手は `headless::flag` の**1 関数**で、runner も lens も・必須（`need`）も任意も同じ経路を通る。
+// 最初の出現を採る実装では、器が足した口座の後ろに散文で書かれた値（やその逆）が黙って捨てられ、
+// 記帳した口座と実際に走る口座がずれる——どちらが正かは器に分からない（C10）ので断る。
+
+/// 断りの手前まで材料が揃った契約（parse で断るので中身は読まれない＝「材料不足で落ちた」と区別する）。
+const DUPLICATE_CONTRACT: &str = "goal = \"縦 1 本を通す\"\nverify = [\"true\"]\n";
+
+/// (a) runner の argv に `--account-dir` が 2 つ在る周は rc 1 で断り、claude を 1 度も起こさない。
+/// base は最初の値で claude を起こす（`called` が在り `account` が最初の dir）＝RED。
+#[test]
+fn headless_flag_duplicate_account_dir_refuses_runner_before_claude() {
+    let dir = tmp();
+    let worktree = tmp();
+    let first = tmp();
+    let second = tmp();
+    let claude = fake_claude(&dir, "", false, 0);
+    let write_set = dir.join("write-set.txt");
+    let vessel = write_vessel_copy(&dir, r#"["cargo", "git"]"#);
+    fs::write(&write_set, "src/lib.rs\n").expect("write-set を書ける");
+    plugin_leaf(&dir);
+    // **値は別の dir** にする——同じ値だと「2 つ在る」でなく「値が一致する」で通る実装と区別できない。
+    let call = RunnerCall {
+        dir: &dir, worktree: &worktree, write_set: &write_set, vessel: &vessel,
+        claude: &claude, mode: "plan", account: Some(&first),
+    };
+    let mut args = runner_args(&call, &dir);
+    args.push("--account-dir".to_owned());
+    args.push(second.display().to_string());
+    let out = run_bin_owned(&args, DUPLICATE_CONTRACT.as_bytes());
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "同名 2 つは rc 1: {}", stderr_of(&out));
+    assert!(!dir.join("called").exists(), "claude を 1 度も起動しない");
+    let err = stderr_of(&out);
+    assert!(err.contains("--account-dir"), "何が 2 つ在るかを名乗る: {err}");
+    assert!(err.contains(&first.display().to_string()), "1 つ目の値を名乗る: {err}");
+    assert!(err.contains(&second.display().to_string()), "2 つ目の値も名乗る: {err}");
+    assert!(err.contains("usage:"), "usage も併記する: {err}");
+    clean(&[&dir, &worktree, &first, &second]);
+}
+
+/// (b) lens も同じ 1 経路で断る（`--account-dir` は `KNOWN_FLAGS` に在るので `unknown_arg` は通す）。
+/// base は最初の値で claude を起こす＝RED。
+#[test]
+fn headless_flag_duplicate_account_dir_refuses_lens_before_claude() {
+    let dir = tmp();
+    let first = tmp();
+    let second = tmp();
+    let contract = contract_in(&dir);
+    let claude = fake_claude(&dir, "{\"verdict\":\"PASS\",\"evidence\":\"呼ばれてはならない\"}\n", false, 0);
+    let one = first.display().to_string();
+    let two = second.display().to_string();
+    let args = lens_args(&contract, &dir, &["--account-dir", &one, "--account-dir", &two], &claude);
+    let out = run_bin_owned(&args, b"--- a\n+++ b\n");
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "同名 2 つは rc 1: {}", stderr_of(&out));
+    assert!(!dir.join("called").exists(), "claude を 1 度も起動しない");
+    let err = stderr_of(&out);
+    assert!(err.contains("--account-dir"), "何が 2 つ在るかを名乗る: {err}");
+    assert!(err.contains(&one) && err.contains(&two), "両方の値を名乗る: {err}");
+    assert!(err.contains("usage:"), "usage も併記する: {err}");
+    clean(&[&dir, &first, &second]);
+}
+
+/// (d) 必須の flag（`need` → `flag` の経路）でも同じ断りに届く: runner と lens の argv のそれぞれに
+/// `--worktree` が 2 つ在る周は、どちらも rc 1・claude を起こさず・両方の dir を名乗る。base は最初の
+/// dir で claude を起こす＝RED。`headless_lens_refuses_without_worktree`（**不在**の断り）は不変。
+#[test]
+fn headless_flag_duplicate_worktree_refuses_runner_and_lens_before_claude() {
+    let dir = tmp();
+    let worktree = tmp();
+    let other = tmp();
+    let claude = fake_claude(&dir, "", false, 0);
+    let write_set = dir.join("write-set.txt");
+    let vessel = write_vessel_copy(&dir, r#"["cargo", "git"]"#);
+    fs::write(&write_set, "src/lib.rs\n").expect("write-set を書ける");
+    plugin_leaf(&dir);
+    let call = RunnerCall {
+        dir: &dir, worktree: &worktree, write_set: &write_set, vessel: &vessel,
+        claude: &claude, mode: "plan", account: None,
+    };
+    let mut args = runner_args(&call, &dir);
+    args.push("--worktree".to_owned());
+    args.push(other.display().to_string());
+    let out = run_bin_owned(&args, DUPLICATE_CONTRACT.as_bytes());
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "runner も rc 1: {}", stderr_of(&out));
+    assert!(!dir.join("called").exists(), "runner は claude を 1 度も起動しない");
+    let err = stderr_of(&out);
+    assert!(err.contains("--worktree"), "何が 2 つ在るかを名乗る: {err}");
+    assert!(err.contains(&worktree.display().to_string()), "1 つ目の dir を名乗る: {err}");
+    assert!(err.contains(&other.display().to_string()), "2 つ目の dir も名乗る: {err}");
+
+    let lens_dir = tmp();
+    let contract = contract_in(&lens_dir);
+    let lens_claude = fake_claude(&lens_dir, "{\"verdict\":\"PASS\",\"evidence\":\"呼ばれてはならない\"}\n", false, 0);
+    let second = other.display().to_string();
+    let args = lens_args(&contract, &worktree, &["--worktree", &second], &lens_claude);
+    let out = run_bin_owned(&args, b"--- a\n+++ b\n");
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "lens も rc 1: {}", stderr_of(&out));
+    assert!(!lens_dir.join("called").exists(), "lens も claude を 1 度も起動しない");
+    let err = stderr_of(&out);
+    assert!(err.contains("--worktree"), "何が 2 つ在るかを名乗る: {err}");
+    assert!(err.contains(&worktree.display().to_string()) && err.contains(&second), "両方の dir を名乗る: {err}");
+    clean(&[&dir, &worktree, &other, &lens_dir]);
 }

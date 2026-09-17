@@ -15,7 +15,7 @@
 
 - **入力** = 台帳の open な bead のうち「依存が全部 closed ∧ acceptance が非空 ∧ `intake:memo` の label が無い ∧ acceptance に設計 pointer の行 `design = docs/design/<題>.md#<id>` が在る ∧ **現在の契約の sha に対する審査の verdict が PASS**」もの（.209 の `--design` と同じ字面・pointer の無い便は理由 `NoDesignPointer`・verdict の無い便は `NotReviewed { sha }`・FAIL / INCONCLUSIVE の便は `ReviewFailed { sha }`。列外の便も `dispatch ls` には理由付きで出す＝planner が直すべき契約が見える）。台帳の読みは rebrief と同じ子 process と同じ関数（`seat/rebrief.rs` の `read_ledger`・`bd --readonly list --limit 0 --json`・待ち上限は rules 行 `seat.ledger_timeout_s`）を共用し、読めない周は列を空と読まず `unmeasured` で止まる（NFR4・C10）。
 - **審査の時点 = 契約が出来た直後**（user 裁定 2026-09-15 13:4xZ「planner が作ったらその直後に lens は審査すべき」・逐語は台帳 s2-07l notes）。審査の段（[contract-source.md](./contract-source.md) §4・契約 (c) = s2-07l.241 の `Stage::Reviewed`・同じ lens・同じ雛形 `headless/lens-contract.txt`・同じ観点 3 つ）を起動の瞬間でなく、契約 file が出来た直後に 1 回撃つ。verdict は契約 file の sha に紐づく event log の 1 kind `ContractReviewed { bead, sha, verdict }`（append-only・replay で bead ごとの最新 sha の verdict を導く・C6.3 と同じ store）。契機は 2 つ: (1) .209 の生成の口が契約 file を書いた直後（planner の焼き直しで acceptance の sha が変われば生成が走り直し、審査も走り直す）(2) dispatcher の 1 周が「現 sha に verdict の無い便」を見つけた時（取りこぼしを次の tick で埋める）。`pipe run` は intake の直後、同じ sha の PASS が在れば Reviewed をその記録で埋めて lens を撃ち直さず、sha が違えば .241 のとおり撃つ（C2 の 1 実装・審査を飛ばす flag は作らない・C16）。理由: 契約の不備は planner の手空きのうちに返す（起動の瞬間まで見えないと planner の待ち時間が捨てられ、FAIL が列を塞ぐ）。
-- **順序** = 1 関数 `order(rows) -> Vec<Candidate>`: (1) 介入 `first` の便 (2) 台帳の `priority`（P0 → P4）(3) 起票順（id の数字）。同順は起票順。**散文の順序を持たない**（憲法 C2）。
+- **順序** = 1 関数 `order`（行の列 → 候補 `Candidate` の列）: (1) 介入 `first` の便 (2) 台帳の `priority`（P0 → P4）(3) 起票順（id の数字）。同順は起票順。**散文の順序を持たない**（憲法 C2）。
 - **hold** の便は列に載るが起こさない（理由 = `Hold`）。
 
 ## 3. 起動条件（器の判定の再利用・1 実装）
@@ -30,7 +30,7 @@
 | 設計 pointer が在る | acceptance の `design = …` 行 | `NoDesignPointer` |
 
 - 判定は intake の既存の関数（`pipe/cli/intake.rs` の `exclude_overlap` / `exclude_cap_shortfall`・`pipe/admission.rs` の `has_room`）を**記帳せずに**呼ぶ（可視性を `pub(super)` にする以外は不変・C2 の 1 実装）。通る便だけ既存の `pipe run --design <pointer> --bead <id> --repo <anchor>`（intake → Reviewed〔同じ sha の PASS を再利用・§2〕→ spawn）を撃つ。**dispatcher は起動の時機だけを決め、口座の選定（FR36）・受付の記帳・審査は従来の段がそのまま行う**。
-- **数値の並列上限を持たない**（[ADR-0019](../../design-intent/decisions/ADR-0019-parallel-runs-exclude-overlap-at-intake-and-runner-resolves-conflicts.html)）。同じ契機で複数の便が条件を満たせば全部起こす（受付札が memory で縮退させる）。
+- **並列の上限は write-set の交差・直列依存・受付の枠と、host の同時走行の最大値 1 つ**（[ADR-0019](../../design-intent/decisions/ADR-0019-parallel-runs-exclude-overlap-at-intake-and-runner-resolves-conflicts.html)・[ADR-0035](../../design-intent/decisions/ADR-0035-live-run-cap-is-one-rules-row.html)）。最大値は rules 行 `pipe.max_live` が持ち、受付が live な便を数えて断る（[gate-cost.md](./gate-cost.md) §24）。同じ契機で複数の便が条件を満たせば最大値まで全部起こす（受付札が memory で縮退させる）。最大値で断られた契約は列に留まり、その理由の variant は行 a の Landed 後に足す（gate-cost.md §24 (4)）。
 - 1 周で起こした便は次の候補の交差の相手に入る（列を上から順に評価し、起こした便の write-set を live に足して次を評価する）。
 - **anchor の作業木の汚れは起動条件に無い**（`s2-07l.367`・admin の実測 2026-09-15 21:51Z で 2 例目: planner の未 commit の design-intent 編集が launcher の手順 0「porcelain 0」で便を止めた）。便は base の sha から worktree を切る（[pipeline.md](./pipeline.md) §5.2）ので作業木の汚れは便に載らず、照合するのは **base の sha が `origin/main` の先端と一致するか**だけ（一致しない周は列の `WaitReason` でなく intake の stale base の断り＝既存の判定）。binary は base の sha で build した写しを使う（anchor の作業木で build した binary を便に渡さない）。
 
@@ -136,7 +136,7 @@ id = "d"
 title = "driver の死亡 — 札の書き・消し、turn 関数の起こし直し（pipe resume）、record token resumed:<m>、base_of_run の typed 化"
 req = ["FR68", "FR14", "FR50"]
 section = "5"
-write-set = ["+crates/scribe2/src/pipe/dispatch.rs", "+crates/scribe2/src/seat/tick/dispatch.rs", "crates/scribe2/src/pipe/cli/run.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/admission.rs", "crates/scribe2/src/pipe/mod.rs", "+crates/scribe2/tests/e2e/pipe/dispatch.rs", "crates/scribe2/tests/e2e/pipe/spawn.rs"]
+write-set = ["+crates/scribe2/src/pipe/dispatch.rs", "+crates/scribe2/src/seat/tick/dispatch.rs", "crates/scribe2/src/pipe/cli/run.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/cli/resume.rs", "crates/scribe2/src/pipe/admission.rs", "crates/scribe2/src/pipe/mod.rs", "crates/scribe2/src/pipe/spawn.rs", "crates/scribe2/src/pipe/gate.rs", "crates/scribe2/src/pipe/follow.rs", "crates/scribe2/src/pipe/land.rs", "+crates/scribe2/tests/e2e/pipe/dispatch.rs", "crates/scribe2/tests/e2e/pipe/spawn.rs"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_dispatch_driver_"]
 size = "M"
 done = "driver を殺した便に dispatch の 1 周を撃つと pipe resume が 1 回起きて Landed まで通り record に resumed:1、札の無い live 便は起こし直さない"

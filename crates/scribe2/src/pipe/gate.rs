@@ -21,6 +21,7 @@
 //! 持つ。verify 行の実行は [`verify`]、lens の呼び出しと parse は [`lens`]、記録と診断は [`record`]
 //! （`s2-07l.286` の純移動・外から呼ぶ path は本 file の再輸出で不変）。
 
+mod findings;
 mod lens;
 mod record;
 mod verify;
@@ -41,7 +42,8 @@ use crate::cli_outcome::{Outcome, RC_BROKEN, RC_OK, RC_REFUSED};
 use crate::fleet::json_lite::{self, Value};
 use crate::fleet::store::LockPolicy;
 use crate::fleet::{cli::now_utc, EventKind, Stage, SCHEMA};
-use lens::{ask_lens, lens_input, substitute, write_verdict, LENS_STAGE};
+use findings::Tally;
+use lens::{ask_lens, lens_input, substitute, unjudged, write_verdict, Judged, LENS_STAGE};
 use record::record_verify;
 use std::path::Path;
 use verify::byte_count;
@@ -233,6 +235,8 @@ struct Decision {
     diff_bytes: u64,
     /// gate を撃った HEAD の木（`HEAD^{tree}`・読めない周は `None`＝field を書かない）。
     tree: Option<String>,
+    /// lens の findings の集計（`s2-07l.188`・読めた周だけ `Some`＝field `findings` / `population`）。
+    tally: Option<Tally>,
     /// lens の scope を片付けた結果（record に書く周だけ `Some`＝field `scope`・設計 gate-cost.md §4.4 errata）。
     scope: Option<Released>,
 }
@@ -252,16 +256,17 @@ pub fn gate(entry: &Gate<'_>) -> Outcome {
         Ok(found) => found,
         Err(reason) => return broken(reason),
     };
-    let (verdict, evidence, scope) = match decide(entry, &worktree, &measured) {
+    let (judged, scope) = match decide(entry, &worktree, &measured) {
         Ok(found) => found,
         Err(reason) => return broken(reason),
     };
     let decision = Decision {
-        verdict,
-        evidence,
+        verdict: judged.verdict,
+        evidence: judged.evidence,
         red: measured.red,
         diff_bytes: byte_count(&measured.diff),
         tree,
+        tally: judged.tally,
         scope,
     };
     match settle(entry, &decision) {
@@ -270,12 +275,12 @@ pub fn gate(entry: &Gate<'_>) -> Outcome {
             out: vec![format!(
                 "run={} verdict={} lens-input={} bytes={}",
                 entry.run,
-                verdict.as_str(),
+                decision.verdict.as_str(),
                 measured.input.kind(),
                 byte_count(measured.input.body(&measured.diff))
             )],
             err: measured.input.notice().into_iter().collect(),
-            rc: verdict.rc(),
+            rc: decision.verdict.rc(),
         },
     }
 }
@@ -323,7 +328,7 @@ fn measure(entry: &Gate<'_>, worktree: &Path, base: &str) -> Result<Measured, St
 ///
 /// 3 つ目は lens の scope を片付けた結果（record に書く周だけ `Some`・lens を撃たない周は `None`）。
 /// `Err` は裁定の写しを書けなかった周（判定に届かず gate を止める＝rc 2・verdict を書かない）。
-fn decide(entry: &Gate<'_>, worktree: &Path, measured: &Measured) -> Result<(Verdict, String, Option<Released>), String> {
+fn decide(entry: &Gate<'_>, worktree: &Path, measured: &Measured) -> Result<(Judged, Option<Released>), String> {
     // **測れなかったは赤より先**（C10・AC3）。段①の diff が読めない周は判定に届いていない
     // ので lens も呼ばず INCONCLUSIVE（測り直せる側・FR14）。
     if measured.unreadable {
@@ -345,7 +350,9 @@ fn decide(entry: &Gate<'_>, worktree: &Path, measured: &Measured) -> Result<(Ver
         return inconclusive(format!("検出線（n={n}）が測れなかった（rc 2・赤ではない）"));
     }
     if measured.red > 0 {
-        return Ok((Verdict::Fail, format!("verify の {} 行が rc≠0", measured.red), None));
+        // 赤い周は lens を呼ばない＝findings は測っていない（`tally` は `None`・C10）。
+        let evidence = format!("verify の {} 行が rc≠0", measured.red);
+        return Ok((Judged { verdict: Verdict::Fail, evidence, tally: None }, None));
     }
     // **予算の照合は lens に渡す本文の byte で行う**（FR9・純移動の周は要約・`verdict.json` の
     // `diff_bytes` は従来どおり diff の byte）。
@@ -400,8 +407,8 @@ fn decide(entry: &Gate<'_>, worktree: &Path, measured: &Measured) -> Result<(Ver
 ///
 /// 腕ごとに 3 つ組を書くと [`decide`] が C4 の線（`too_many_lines`）に当たる。**判定順は動かさない**
 /// （腕の並びは [`decide`] が 1 か所で持つ・C2）。
-fn inconclusive(reason: String) -> Result<(Verdict, String, Option<Released>), String> {
-    Ok((Verdict::Inconclusive, reason, None))
+fn inconclusive(reason: String) -> Result<(Judged, Option<Released>), String> {
+    Ok((unjudged(reason), None))
 }
 
 /// 便の裁定（質問と planner の回答の対・発生順・[`super::questions_of_run`]）を run dir の
@@ -445,6 +452,13 @@ fn settle(entry: &Gate<'_>, decision: &Decision) -> Result<(), String> {
     }
     if let Some(released) = decision.scope {
         fields.push(("scope", Value::Str(released.as_str().to_owned())));
+    }
+    // **findings と母集団は判定と同じ record に載る**（`s2-07l.188`・設計 §6 / §17）。読めた周だけ
+    // 書く＝2 key を持たない lens は INCONCLUSIVE なので、field の無い verdict は「件数を測って
+    // いない」と読める（0 件の verdict と弁別できる・C10）。
+    if let Some(tally) = &decision.tally {
+        fields.push(("findings", Value::Str(tally.findings_field())));
+        fields.push(("population", Value::Str(tally.population_field())));
     }
     fields.push(("ts", Value::Str(now_utc())));
     let body = json_lite::write_object(&fields);

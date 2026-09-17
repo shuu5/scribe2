@@ -9,6 +9,7 @@ mod check;
 mod check_facts;
 mod check_sizes;
 mod claude_md;
+mod deps_delta;
 mod enum_slices;
 mod env_reads;
 mod flipcheck;
@@ -32,7 +33,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 /// 使い方の 1 行。
-const USAGE: &str = "usage: cargo xtask <check|gen-manifest|gen-claude-md> [ROOT] | cargo xtask <flip-check|mutants-diff|rules-diff> --base <ref>";
+const USAGE: &str = "usage: cargo xtask <check|gen-manifest|gen-claude-md> [ROOT] | cargo xtask <flip-check|mutants-diff|rules-diff|deps-delta> --base <ref>";
 
 /// stdout 出力層。stdout へ書くのはこの関数だけである。
 #[expect(
@@ -102,6 +103,8 @@ fn main() -> ExitCode {
         Some("mutants-diff") => return mutantsdiff::run(tail),
         // rules-diff も rc 2（測れなかった）を持つ（設計 rules-manifest.md §4.3・C5 の差分の門）。
         Some("rules-diff") => return rules_diff::run(tail),
+        // deps-delta も rc 2（deny の面が測れなかった）を持つ（設計 rules-manifest.md §4・C13 の増分の門）。
+        Some("deps-delta") => return deps_delta::run(tail),
         _ => Err(USAGE.to_owned()),
     };
     match outcome {
@@ -413,6 +416,14 @@ mod tests {
     fn rules_diff_entry_point_refuses_without_base() {
         assert_eq!(crate::rules_diff::run(&[]), ExitCode::from(2), "--base 無しは rc 2");
         assert!(crate::USAGE.contains("rules-diff"), "usage が subcommand を名指す");
+    }
+
+    /// `deps-delta`（設計 rules-manifest.md §4・憲法 C13 の増分の門）の配線の歯。本体と判定の歯は
+    /// `deps_delta.rs` に在るが、入口の 1 本は base に在るこの file へ置く（新規 module の歯だけに頼らない）。
+    #[test]
+    fn deps_delta_entry_point_refuses_without_base() {
+        assert_eq!(crate::deps_delta::run(&[]), ExitCode::from(2), "--base 無しは rc 2");
+        assert!(crate::USAGE.contains("deps-delta"), "usage が subcommand を名指す");
     }
 
     #[test]

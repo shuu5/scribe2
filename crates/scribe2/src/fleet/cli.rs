@@ -19,7 +19,7 @@ const ROW_SELECTION: &str = "R-C9-1";
 
 /// `fleet` の使い方。
 pub fn usage() -> String {
-    "usage: fleet <record|show|export|usage|select> --state-dir D [flags]".to_owned()
+    "usage: fleet <record|show|export|usage|select [--anchor DIR]> --state-dir D [flags]".to_owned()
 }
 
 /// `fleet` に続く引数を捌く。
@@ -41,8 +41,11 @@ pub fn dispatch(args: &[String]) -> Outcome {
 /// 口座を 1 つ選ぶ（設計 account-autonomy.md §3）。引数と rules 行を先に読み、選定の直前に FR33 の計測を
 /// 1 回撃ち（その行は stderr 側へ）、log を replay して純関数へ渡す。**候補なしも rc 0**（断りではない・
 /// FailOpen）。計測が撃てない周は `fleet usage` の rc のまま返し、選ばない。
+///
+/// 除外集合（設計 §14 (3)）: `--purpose run` は `--exclude` の集合 ∪ 席の登録 row の口座（`--anchor DIR` が在れば
+/// その anchor の row だけ・無い周は置き場の全 row＝保守側）。`--purpose session` は `--exclude` だけ（row を読まない）。
 fn select_account(args: &[String], dir: &Path) -> Outcome {
-    let (purpose, model, exclude) = match select_flags(args) {
+    let SelectFlags { purpose, model, mut exclude, anchor } = match select_flags(args) {
         Ok(found) => found,
         Err(reason) => return Outcome::failed(RC_REFUSED, vec![format!("fleet: {reason}"), usage()]),
     };
@@ -60,6 +63,10 @@ fn select_account(args: &[String], dir: &Path) -> Outcome {
     };
     // 候補は有効な口座の集合だけ（退役中の口座を候補に入れない・account-lifecycle.md §3）。
     let labels = super::effective_accounts(&manifest, &state);
+    // 便用は席の口座を外す（`select_for_run` と同じ読み手・`--anchor` の有無で絞りが変わる・§14）。
+    if purpose == select::Purpose::Run {
+        exclude.extend(state.registered_accounts(anchor.map(Path::new)));
+    }
     let now = now_utc();
     // 走行中の便数は便用の 2 つ目の鍵（`select_for_run` と同じ導出・ADR-0027 §2.3）。
     let found = select::select(&select::Input {
@@ -79,11 +86,24 @@ fn select_account(args: &[String], dir: &Path) -> Outcome {
     outcome
 }
 
-/// `--purpose`（必須）・`--model`・`--exclude`（複数可）を読む。
+/// `fleet select` の引数（[`select_flags`] が読む）。
+struct SelectFlags<'a> {
+    /// `--purpose`。
+    purpose: select::Purpose,
+    /// `--model`（字面のまま）。
+    model: Option<&'a str>,
+    /// `--exclude` の集合。
+    exclude: BTreeSet<String>,
+    /// `--anchor DIR`（便用だけ・設計 account-autonomy.md §14 (3)）。
+    anchor: Option<&'a str>,
+}
+
+/// `--purpose`（必須）・`--model`・`--exclude`（複数可）・`--anchor`（便用だけ）を読む。
 ///
 /// `--model` は閉じた表（[`select::Model::parse`]・別名か表示名）で受け、表に無い値は typed に断る（字面は
-/// そのまま選定へ渡し、型にするのは選定の中・`s2-07l.297`）。
-fn select_flags(args: &[String]) -> Result<(select::Purpose, Option<&str>, BTreeSet<String>), String> {
+/// そのまま選定へ渡し、型にするのは選定の中・`s2-07l.297`）。`--anchor` は値欠けを `--exclude` と同じく断り、
+/// session 用に付いた周も断る（session 用は row を読まない＝絞る対象が無い flag を黙って落とさない・NFR4）。
+fn select_flags(args: &[String]) -> Result<SelectFlags<'_>, String> {
     let text = required(args, "--purpose")?;
     let purpose = select::Purpose::parse(text).ok_or(format!("purpose {text} は run でも session でもない"))?;
     let model = optional(args, "--model")?;
@@ -91,7 +111,11 @@ fn select_flags(args: &[String]) -> Result<(select::Purpose, Option<&str>, BTree
         let taken: Vec<&str> = select::MODELS.iter().map(|model| model.display()).collect();
         return Err(format!("model {found} は未知である（取るのは {}）", taken.join(" / ")));
     }
-    Ok((purpose, model, excludes(args)?))
+    let anchor = optional(args, "--anchor")?;
+    if anchor.is_some() && purpose != select::Purpose::Run {
+        return Err("--anchor は --purpose run だけが取る".to_owned());
+    }
+    Ok(SelectFlags { purpose, model, exclude: excludes(args)?, anchor })
 }
 
 /// `--exclude L` を全部読む。値欠けは黙って落とさず断る（SRS NFR4）。

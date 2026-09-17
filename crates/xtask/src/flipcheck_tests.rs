@@ -14,8 +14,8 @@
 // flip-check: moved s2-07l.372
 
 use super::{
-    failed_tests, is_test_file, judge, judge_into, nextest_args, parse_base, split_regions,
-    FailedTest, FilePair, Verdict, RETROACTIVE_MARK,
+    base_not_green, failed_tests, is_test_file, judge, judge_into, nextest_args, parse_base,
+    split_regions, BaseNotGreen, FailedTest, FilePair, Verdict, RETROACTIVE_MARK,
 };
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -356,6 +356,71 @@ fn flip_check_base_retry_needs_named_failures() {
     let (got, retries) = judge_with_retry_lines(&base, &dir);
     drop_fixture(&dir);
     assert_verdict(&got.line, got.code, 1, "FAIL reason=infra-error base-not-green");
+    assert!(
+        retries.is_empty(),
+        "名指せない失敗は撃ち直さない（sink に base-retry が {} 行）: {retries:?}",
+        retries.len()
+    );
+}
+
+// ---- base-not-green の経路の弁別子（s2-07l.380・設計 docs/design/pipeline.md §32）----
+//
+// 「名指せない失敗」の 3 経路が同じ字面へ倒れると、操作役が負荷 / 環境 / 本物の赤を判定行から
+// 分けられない。経路の写像は純関数で測り（実 signal と実 retry-failed の fixture は壁時計と
+// 環境に依るので置かない）、判定行まで通る形は compile error の実 fixture 1 本で測る。
+
+/// 理由の純関数が 3 経路を**宣言順**の variant へ写し、後置の字面を 1 つずつ持つ。
+///
+/// 入力は (base の rc・名指した歯の本数・撃ち直しの rc)。(i) rc 無し＝signal ／(ii) rc≠0 で
+/// 名指し 0 ／(iii) 名指した歯の撃ち直しが rc≠0。
+#[test]
+fn flipcheck_base_reason_maps_three_paths_in_declaration_order() {
+    let cases: [(Option<i32>, usize, Option<i32>); 3] =
+        [(None, 0, None), (Some(101), 0, None), (Some(1), 2, Some(1))];
+    let got: Vec<(BaseNotGreen, String)> = cases
+        .into_iter()
+        .map(|(base_rc, named, retry_rc)| {
+            let path = base_not_green(base_rc, named, retry_rc);
+            (path, path.label())
+        })
+        .collect();
+    assert_eq!(
+        got,
+        vec![
+            (BaseNotGreen::Signal, "base-not-green:signal".to_owned()),
+            (BaseNotGreen::Unnamed { rc: 101 }, "base-not-green:unnamed rc=101".to_owned()),
+            (BaseNotGreen::RetryFailed { rc: 1 }, "base-not-green:retry-failed rc=1".to_owned()),
+        ],
+        "(i) signal (ii) 名指し 0 (iii) 撃ち直しの赤 の順に写し、字面は後置だけのはず"
+    );
+}
+
+/// base が compile しない周（rc 101・`FAIL` 行が無い＝名指せない）の判定行が
+/// `base-not-green:unnamed rc=101` を名指す。判定行の先頭は不変（後置だけ）。
+#[test]
+fn flipcheck_base_reason_compile_error_names_unnamed_rc() {
+    let dir = make_tmp_dir();
+    scaffold(&dir);
+    // src 区間が型を誤り compile できない base（test 区間は BASE_LIB のまま）。
+    let base_lib = BASE_LIB.replace("    1\n}", "    \"one\"\n}");
+    let base = seed_fixture(&dir, &base_lib);
+    write_at(
+        &dir,
+        &lib_rel(),
+        &base_lib.replace(
+            "        assert_eq!(super::val(), 1);\n",
+            "        assert_eq!(super::val(), 2);\n",
+        ),
+    );
+    head_commit(&dir);
+    let (got, retries) = judge_with_retry_lines(&base, &dir);
+    drop_fixture(&dir);
+    assert_verdict(&got.line, got.code, 1, "reason=infra-error base-not-green:unnamed rc=101");
+    assert!(
+        got.line.starts_with("flip-check: FAIL reason=infra-error "),
+        "判定行の先頭は不変（弁別子は後置だけ）: {}",
+        got.line
+    );
     assert!(
         retries.is_empty(),
         "名指せない失敗は撃ち直さない（sink に base-retry が {} 行）: {retries:?}",

@@ -39,8 +39,9 @@ const BLOCKS: &str = "blocks";
 const DAY_S: u64 = 86_400;
 /// `--bd` を渡さない周の台帳 client（PATH 解決は子 process の起動側）。
 pub const DEFAULT_BD: &str = "bd";
-/// 台帳を読む引数（`--readonly` を必ず付ける）。
-const BD_ARGS: [&str; 5] = ["--readonly", "list", "--limit", "0", "--json"];
+/// 台帳を読む引数（`--readonly` を必ず付ける）。`--all` は closed を含む一覧（既定は closed を含まない＝閉じた
+/// bead も `[DIFF]` で `unknown` に化ける・設計 §14）。呼出しは 1 回のまま（待ち上限 [`ID_TIMEOUT`] は不変）。
+const BD_ARGS: [&str; 6] = ["--readonly", "list", "--all", "--limit", "0", "--json"];
 /// 起票候補の tag。
 const HARD_CANDIDATE: &str = "[hard候補]";
 /// kind / resolution が無い行の字面。
@@ -748,7 +749,8 @@ fn epoch_of_ts(ts: &str) -> Option<u64> {
     }
 }
 
-/// 節 3 が言及する bead id ごとの台帳 status（台帳に無い id は `unknown`）。
+/// 節 3 が言及する bead id ごとの台帳 status（status の字面をそのまま写す＝閉じた bead は `closed`・台帳に
+/// **無い** id だけ `unknown`・設計 §14）。母集団は [`BD_ARGS`] の `--all`（closed を含む）。
 fn diff_lines(rows: &[Row], issues: &[Issue], prefixes: &[String], lines: &mut Vec<(Marker, String)>) {
     let mut ids: Vec<String> = Vec::new();
     for row in rows {
