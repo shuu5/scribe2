@@ -1,7 +1,7 @@
 //! gate の verify 行の実行（段の列 [`Check`] と、行を撃つ 1 本 [`run_line_captured`]・
 //! [`super`] から純移動・`s2-07l.286`）。判定の順と終端は親（[`super::gate`]）が持つ。
 
-use super::record::{STDERR_TAIL_LINES, USAGE_HEAD};
+use super::record::{detection_unmeasured, STDERR_TAIL_LINES, USAGE_HEAD};
 use super::{UNADMITTED_JOBS, WRITE_SET_CMD};
 use crate::pipe::admission::{self, Grant};
 use crate::pipe::confine::{self, Confinement, Reason, Released, Usage};
@@ -75,6 +75,13 @@ pub struct Step {
     /// **kind と rc を問わず**運ぶ（xtask の検出線の 1 行も flip-check の判定行も、rc 0 で通った周の
     /// stdout にしか現れない）。無い周は `None`＝field を欠く（空文字を書かない・C10）。
     pub line: Option<String>,
+    /// 撃ち直した周の **1 回目の rc と stderr の末尾**（record の `retried=1`・診断 file の 1 段目・設計
+    /// gate-cost.md §21）。
+    ///
+    /// 検出線が rc 2（測れなかった）で終えた周だけ同じ材料でもう 1 回撃ち、**2 回目の `Step` がこの欄に
+    /// 1 回目を運ぶ**（1 回目の `Step` は列に積まない・撃ち直した事実を record に残す・C10）。
+    /// 「撃ち直した」はこの欄の有無に畳む（別の bool を持たない）。撃ち直さない行と 1 回目は `None`。
+    pub retried_from: Option<(i32, String)>,
 }
 
 /// 撃つ process を持たない段（write-set 照合）の封じ込め欄。
@@ -95,6 +102,7 @@ fn unwrapped(cmd: String, rc: i32, stderr: String) -> Step {
         slot_why: None,
         scope: None,
         line: None,
+        retried_from: None,
     }
 }
 
@@ -134,6 +142,10 @@ pub fn run_checks(checks: &Checks<'_>) -> Vec<Step> {
 ///
 /// `admit` が在る周だけ、`{jobs}` を持つ共通 verify の行が host の受付を通る（設計 gate-cost.md
 /// §3.2・§3.3）。行を撃つ実装はこの 1 本のままである。
+///
+/// **検出線の行だけ**、rc 2（測れなかった・[`detection_unmeasured`]）で終えた周は同じ材料で
+/// もう 1 回撃つ（[`refire`]・設計 gate-cost.md §21）。gate も land もここを通るので撃ち直しの
+/// 挙動も 1 本である（land の木が同じ周は検出線を撃たないので撃ち直しも起きない）。
 pub fn run_checks_admitted(checks: &Checks<'_>, admit: Option<&Admit<'_>>) -> Vec<Step> {
     // 封じ込めの 3 線は 1 便で 1 度だけ読む（行ごとに manifest を開き直さない）。
     let caps = confine::Caps::embedded();
@@ -151,10 +163,29 @@ pub fn run_checks_admitted(checks: &Checks<'_>, admit: Option<&Admit<'_>>) -> Ve
         for line in lines {
             let n = steps.len().saturating_add(1);
             let entry = Fire { checks, raw: line.as_str(), holes, stage: *check, n };
-            steps.push(fire(&entry, caps, admit));
+            let first = fire(&entry, caps, admit);
+            let step = if detection_unmeasured(&first) { refire(first, &entry, caps, admit) } else { first };
+            steps.push(step);
         }
     }
     steps
+}
+
+/// 測れなかった検出線を**同じ [`Fire`] で 1 回だけ**撃ち直し、2 回目の [`Step`] に 1 回目の rc と
+/// stderr の末尾を運ばせる（設計 gate-cost.md §21・C10）。
+///
+/// 撃ち直しは 1 行につき 1 回である——2 回目も rc 2 なら従来どおり「測れなかった」
+/// （[`detection_unmeasured`]）で、3 回目は撃たない（値の線を足さない・極性不変・C11.2）。
+/// rc 1 の検出線と検出線以外の rc 2 は呼び手が撃ち直さない（判定は [`detection_unmeasured`] の 1 点）。
+fn refire(
+    first: Step,
+    entry: &Fire<'_>,
+    caps: Result<confine::Caps, RuleRead>,
+    admit: Option<&Admit<'_>>,
+) -> Step {
+    let mut second = fire(entry, caps, admit);
+    second.retried_from = Some((first.rc, first.stderr));
+    second
 }
 
 /// 共通 verify の行の穴を実値へ置く（**契約の行には置換しない**）。
@@ -226,6 +257,7 @@ fn fire(entry: &Fire<'_>, caps: Result<confine::Caps, RuleRead>, admit: Option<&
         slot_why,
         scope: fired.scope,
         line: fired.stdout_tail,
+        retried_from: None,
     }
 }
 

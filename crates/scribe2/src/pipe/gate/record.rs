@@ -86,16 +86,33 @@ pub(super) fn record_verify(entry: &Gate<'_>, worktree: &Path, base: &str) -> Re
         .position(detection_unmeasured)
         .map(|index| index as u64 + 1);
     for record in records_of(&steps, skipped) {
-        if let Some(step) = record.step.filter(|step| step.rc != 0) {
-            if !is_unreadable(step) && box_kill(step).is_none() && !detection_unmeasured(step) {
+        if let Some(step) = record.step {
+            if step.rc != 0 && !is_unreadable(step) && box_kill(step).is_none() && !detection_unmeasured(step) {
                 red += 1;
             }
-            let head = format!("## n={} rc={} cmd={}", record.n, step.rc, step.cmd);
-            append_stderr(&tail_path, entry.policy, &head, &step.stderr)?;
+            append_diagnosis(&tail_path, entry.policy, record.n, step)?;
         }
         append_line(&path, &record.body, entry.policy).map_err(|err| err.to_string())?;
     }
     Ok(Counted { red, unreadable, killed, detection_unmeasured: unmeasured })
+}
+
+/// 赤い行と撃ち直した行の見出し + stderr の末尾を診断 file へ残す（緑で撃ち直しも無い行は残さない）。
+///
+/// 撃ち直した行（`retried_from` が `Some`・設計 gate-cost.md §21）は **1 回目の見出し
+/// （`## n=<i> rc=<rc> retry=1 cmd=…`）+ 1 回目の末尾を先に**書き、その後に 2 回目を従来の見出しで書く
+/// ——2 回目が緑でも書く（1 回目を捨てると「なぜ撃ち直したか」が便の外から読めない・C10）。
+/// `verify.jsonl` の record は 2 回目の 1 本だけで、2 段になるのは診断 file だけである。
+fn append_diagnosis(path: &Path, policy: LockPolicy, n: u64, step: &Step) -> Result<(), String> {
+    if let Some((rc, tail)) = &step.retried_from {
+        let head = format!("## n={n} rc={rc} retry=1 cmd={}", step.cmd);
+        append_stderr(path, policy, &head, tail)?;
+    }
+    if step.rc != 0 || step.retried_from.is_some() {
+        let head = format!("## n={n} rc={} cmd={}", step.rc, step.cmd);
+        append_stderr(path, policy, &head, &step.stderr)?;
+    }
+    Ok(())
 }
 
 /// 撃たなかった周の材料（record の `skipped=` の段と `reason=`、主実測だけが持つ `tree=`）。
@@ -249,6 +266,10 @@ pub fn step_record(number: u64, step: &Step) -> String {
     if let Some(released) = step.scope {
         fields.push(("scope", Value::Str(released.as_str().to_owned())));
     }
+    // 撃ち直した周だけ `retried=1`（設計 gate-cost.md §21・撃ち直さない周は field を欠く・C10）。
+    if step.retried_from.is_some() {
+        fields.push(("retried", Value::Num(1)));
+    }
     if let Some(line) = &step.line {
         fields.push(("line", Value::Str(line.clone())));
     }
@@ -273,7 +294,10 @@ pub(super) struct Counted {
 /// 2 = 測れなかった（baseline が落ちた・道具が起こせない）。段を問わず rc≠0 を赤に数えると、2 が
 /// FAIL（判定に届いた便の終端）に化ける（`s2-07l.329` run 1 の実測）。**rc 1 の検出線と、検出線以外の
 /// rc 2 は従来どおり赤**——除外は「検出線 ∧ rc 2」の 1 点だけで、rc の意味は道具の側が持つ。
-fn detection_unmeasured(step: &Step) -> bool {
+///
+/// 撃ち直すか（[`super::verify::run_checks_admitted`]・設計 gate-cost.md §21）も**同じ 1 点**で見る
+/// （判定と撃ち直しの条件を 2 面に持たない）。
+pub(super) fn detection_unmeasured(step: &Step) -> bool {
     step.stage == Check::Detection && step.rc == 2
 }
 
