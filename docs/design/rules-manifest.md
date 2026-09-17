@@ -178,7 +178,7 @@ xtask 側の drift 歯（最小形）: `crates/xtask/src/limits.rs` の `#[cfg(t
 ## 13. session 用の閾値の行の値を 95 に上げる（契約表の行 k・`s2-07l.447`）
 
 - 何が起きているか（planner 席 2026-09-17・verified）: rules 行 `R-C9-1`（kind `AccountSelection`・Int・85）の 1 値が、数える窓の全部（5 時間・7 日・モデル別 7 日）に同じく効く。7 日窓とモデル別窓は全量が大きく、85 で席を退避させ候補から外すと席が使える口座が足りない。窓別の閾値は [seat-autonomy.md](./seat-autonomy.md) の窓別の閾値の便（`s2-07l.434`）が持つが、型と読み手を変える複数便でまだ着地しない。user 裁定 2026-09-17T07:30Z（逐語は台帳 `s2-07l.434`）の要旨: 窓別の口が入るまでの特例として、値を今すぐ 95 に上げる（全窓 95 を受け入れる・5 時間窓を 85 に戻すのは窓別の便の着地）。
-- 形: `rules/manifest.toml` の `R-C9-1` の行の `value` を 95 に・`ruling` を上の裁定 id に・`ruled_at` をその日付に書き換える（行の id・kind・`enabled` は不変・行は増やさない・C5）。読み手（`fleet/cli.rs` の `threshold_of`・席の側の `int_rule_of`）と選定の純関数は 1 字も変えない。値と裁定 id を pin する歯（`tests/e2e/rules.rs` の埋め込み manifest の歯）と、`rules get R-C9-1` の 1 行を含む外形 snapshot を新しい値に直す。埋め込み manifest の 85 に依る e2e が他に在れば（歯の多くは fixture の rules を `--rules` で渡すので依らない見込み・便が base で実測する）同じ便で直す。
+- 形: `rules/manifest.toml` の `R-C9-1` の行の `value` を 95 に・`ruling` を上の裁定 id に・`ruled_at` をその日付に書き換える（行の id・kind・`enabled` は不変・行は増やさない・C5）。読み手（`fleet/cli.rs` の `threshold_of`・席の側の `int_rule_of`）と選定の純関数は 1 字も変えない。値と裁定 id を pin する歯（`tests/e2e/rules.rs` の埋め込み manifest の歯）と、`rules get R-C9-1` の 1 行を含む外形 snapshot を新しい値に直す。**席の e2e は埋め込み manifest の値に依る**（実測: 席の tick は閾値を埋め込み manifest の `R-C9-1` から読み、歯が `--rules` で渡す fixture はこの行を持たない）＝閾値の両側を撃つ歯（`tests/e2e/seat/account.rs` の実測値 85〜94 を置く歯と合図の字面の「閾値 85%」・`tests/e2e/seat/cycle.rs` の予備の口座 90・`tests/e2e/seat.rs` の helper）を新しい値の両側（94 / 95 以上）へ同じ便で直す。`tests/e2e/fleet.rs` の選定の歯は fixture が行を持つので依らない見込み（便が base で実測する）。
 - 触らない: 行の id と kind・他の行・読み手と選定の code・退避の合図の字面・便用の選定（閾値を読まない）・`seat.context_cap_pct`。
 - 歯（`rules_embedded_manifest_declares_account_selection_threshold` を直す＝値 95 と新しい裁定 id を assert・base は 85 で RED／`rules_external_form` の snapshot）。
 - 却下: repo の外の rules の写しを `--rules` で席の tick に読ませる（規則の値が manifest の外に住む・C1 / C5・宣言を別の置き場の値で上書きする型）／host の面（`host.toml`）に閾値の上書きを足す（host 固有の値ではない・N3）。
@@ -296,8 +296,8 @@ id = "k"
 title = "session 用の閾値の行 R-C9-1 の値を 95 に上げる — 値と裁定 id と ruled_at だけを書き換え、値を pin する歯と rules の外形 snapshot を直す（特例・裁定 user 2026-09-17T07:30Z・窓別は s2-07l.434）"
 req = ["FR36", "FR38"]
 section = "13"
-write-set = ["rules/manifest.toml", "crates/scribe2/tests/e2e/rules.rs", "crates/scribe2/tests/e2e/snapshots/e2e__rules__rules_external_form.snap", "crates/scribe2/tests/e2e/seat/account.rs", "crates/scribe2/tests/e2e/fleet.rs"]
-verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail rules_embedded_manifest_declares_account_selection_threshold", "cargo nextest run -p scribe2 --test e2e --no-tests=fail rules_external_form"]
-size = "S"
+write-set = ["rules/manifest.toml", "crates/scribe2/tests/e2e/rules.rs", "crates/scribe2/tests/e2e/snapshots/e2e__rules__rules_external_form.snap", "crates/scribe2/tests/e2e/seat.rs", "crates/scribe2/tests/e2e/seat/account.rs", "crates/scribe2/tests/e2e/seat/cycle.rs", "crates/scribe2/tests/e2e/fleet.rs"]
+verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail rules_embedded_manifest_declares_account_selection_threshold", "cargo nextest run -p scribe2 --test e2e --no-tests=fail rules_external_form", "cargo nextest run -p scribe2 --test e2e --no-tests=fail seat_account_"]
+size = "M"
 done = "埋め込み manifest の R-C9-1 が値 95 と裁定 id user 2026-09-17T07:30Z を持ち、rules get R-C9-1 の外形が 95 を出し、読み手と選定の code は不変"
 <!-- contracts:end -->
