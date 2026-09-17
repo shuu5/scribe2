@@ -113,7 +113,7 @@ C1 / C5（権能の値は行・裁定 id）・C1.2（生成文に手書きの規
   4. **brief の雛形 1 枚** `seat/brief/consult.txt`（§5 の規律・穴と pointer 付きの行だけ）: 第一手の復元・相談と調査の作法（repo と台帳は読むだけ・実験は repo の外の作業場・結論と実測は planner へ relay・research 文書は docs PR で出す・依存の候補を器に入れる話は A3）・席間の連絡の経路（FR44）・3 クラスの発火の pointer。xtask の検査（§5・穴 ⊆ 定義済み・pointer 無しの行 0・権能の名が全部現れる）と外形 snapshot はそのまま 3 枚目に掛かる。
   5. **触らない**: planner / admin の行と値・R-C7-1・`pipe` の口・§13 の断りの理由（`RefuseReason` は増やさない・consult が止められる周も既存の variant で足りる）。
 - 却下: planner に相談を兼ねさせる（今日の詰まりの再発）／consult に `edit-contract` を渡す（台帳の書き手が 2 席になり契約の字面の事故の口が増える）／repo 内に `lab/` を切る（PUBLIC・CON2・実験物が tracked に漏れる）／`edit-design-intent` を渡す（spec / decisions まで書ける・広すぎる）。
-- 歯（`seat_role_consult_` 接頭辞・`tests/e2e/seat.rs` と `tests/e2e/hook.rs`）: (a) `role.consult` の行が manifest に在り `RuleKind` の `ALL` と `rules validate` の外形に載る／(b) consult の登録 row を持つ席の Edit が `design-intent/research/x.html` を通し `design-intent/spec/x.html` と `docs/design/x.md` と `crates/x.rs` を権能の名を告げて断る（planner の席は research も spec も通る）／(c) consult の席の `pipe answer` / `pipe run` が権能で断られる／(d) SessionStart の brief が consult の雛形から生成され外形 snapshot に載る。
+- 歯（`seat_role_consult_` 接頭辞・`tests/e2e/seat.rs` と `tests/e2e/hook.rs`）: (a) `role.consult` の行が manifest に在り `RuleKind` の `ALL` と `rules validate` の外形に載る／(b) consult の登録 row を持つ席の Edit が `design-intent/research/x.html` を通し `design-intent/spec/x.html` と `docs/design/x.md` と crates 配下の Rust file を権能の名を告げて断る（planner の席は research も spec も通る）／(c) consult の席の `pipe answer` / `pipe run` が権能で断られる／(d) SessionStart の brief が consult の雛形から生成され外形 snapshot に載る。
 
 <!-- contracts:begin -->
 schema = 1
