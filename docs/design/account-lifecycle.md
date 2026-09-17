@@ -111,14 +111,14 @@ user-scope MCP 設定の同期・別口座への `--resume` の混線 fence・pr
 ## 13. 役割なしの起動の口 account shell（契約表の行 a・`s2-07l.268`）
 
 - 何が起きているか: user の問い 2026-09-14「cla は今のところ消さないが、最終的には scribe v2 にどこかで完全に互換機能が搭載されるよね？」への **user 裁定 2026-09-14 12:5xZ**「まあ確かに役割なしにも対応しておいてほしいかな。何か不測の事態のときのために。」を承けた便。現物: 席の起動は `seat launch --role`（役割必須・`.244` Landed）だけで、役割を持たない対話 session（前の版の口座切替 wrapper `cla` 相当）は器の外に在る。`account add` は login 用の起動行 `login_line`（`account/mod.rs`）を既に持つ。設計は §4.5「役割なしの起動」が正本（ADR-0028 §2.5）。
-- 形: 口 `account shell <label> [--state-dir S] [--anchor DIR] [--resume SID] [--target S:W] [--tmux-socket P]` を `account/cli.rs` の verb に足す（`SHELL_FLAGS` の閉じた列）。起動行の導出は §4 の `derive_launch` と**同じ 1 関数**に `resume: Option<&str>` を足して得る（`None` は従来の行）。`--target` 無しは穴を埋めた起動行を stdout に 1 行、在れば `seat launch` と同じ shell への注入の門を通して注入する。`inject.jsonl` の `kind=launch` 行に `role=` 欄を足し、役割なしは `role=-`。**登録 row（`SeatRegistered`）は書かない**（権能なし・role guard が `unregistered` で編集を止める）。断りは `AccountError` に variant を足す（`account-dir-missing`）。
+- 形: 口 `account shell <label> --state-dir S [--anchor DIR] [--resume SID] [--target S:W] [--tmux-socket P]` を `account/cli.rs` の verb に足す（`SHELL_FLAGS` の閉じた列・`--state-dir` は他の verb と同じく必須＝穴 `{account_dir}` は置き場無しに埋まらない）。起動行の導出は §4 の `derive_launch` と**同じ 1 関数**に `resume: Option<&str>` を足して得る（`None` は従来の行）。`--target` 無しは穴を埋めた起動行を stdout に 1 行、在れば `seat launch` と同じ shell への注入の門を通して注入する。window は `seat launch` の `open_window`・記録は `record_launch` を `pub(crate)` にして `cycle.rs` の再輸出から呼ぶ（`record_launch` の引数は `&Launch` を要らない形に落とす＝役割の起動の値〔manifest・役割・刻み〕を持たない口座側から呼べる形にする＝記録の書き手は 1 つのまま）。`inject.jsonl` の `kind=launch` 行に `role=` 欄を足し、役割なしは `role=-`。**登録 row（`SeatRegistered`）は書かない**（権能なし・role guard が `unregistered` で編集を止める）。断りは `AccountError` に variant を足す（`account-dir-missing`）。
 - 触らない: `seat/tick*`・`fleet/mod.rs`（event の形は不変）・`hook/`・`account/mod.rs` の `add` / `ls` / `retire` / `restore`・`docs/`・`design-intent/`・`prop.rs`（共有）。
 - 依存: docs PR #185 merged ∧ `.307`（合図の出所と立て直しの口座優先）Landed 後（`seat/cycle.rs` で交差）。`.303` / `.304` とは交差 0（`hook/` / `seat/tick*` / `fleet/mod.rs` を触らない）。
 
 ## 14. 席の起動の短い形（契約表の行 b・`s2-07l.404`）
 
 - 何が起きているか: §4 の `seat launch` は引数 4〜5 個（置き場・役割・target・口座・model）を毎回書かせる。置き場は `seat heartbeat` が git 設定から解けるのに launch は必須 flag、target と model は同じ鍵（役割 × anchor）の登録 row が既に持つ値。user 直命 2026-09-16 08:2xZ（逐語は台帳 `s2-07l.404`）: 口座 label と役割の flag だけの 1 行で planner / admin を起こせる形が要る。
-- 形: `seat <label> (--planner|--admin) [--target S:W] [--model M] [--anchor DIR] [--restore CMD] [--state-dir S]`。第 1 token が既知の verb でなく `--` で始まらなければ口座 label と読む。役割の flag は**ちょうど 1 つ**（0 か 2 は使い方の誤り・rc 1）。既定は全部 1 関数で導く: 置き場 = state_dir_of（`--state-dir` > git 設定・解けなければ `state-dir`）／anchor = `--anchor` か cwd の repo root（`seat register` / `seat launch` と同じ）／target と model = 同じ鍵（役割 × anchor）の**登録 row の値**（`seat/role.rs` の registration_of_target の隣に鍵で引く読み手を 1 本置く・row の `model` が無ければ `--model` が要る）。row が無く flag も無い周は `defaults-unresolved` で typed に断る（足りない flag の名を行に載せる・1 key も送らず row も書かない）。明示の flag は row の値に勝つ。導いた値で §4 と**同じ `LaunchFlags` を組み同じ経路**を通る（`seat/cli.rs` の launch_of の本体を flags を受ける 1 関数に括る）＝短い形と長い形は同じ Registration・同じ起動行を作る。使い方の行に短い形を足す（外形 snapshot が動く）。
+- 形: `seat <label> (--planner|--admin) [--target S:W] [--model M] [--anchor DIR] [--restore CMD] [--state-dir S]`。第 1 token が既知の verb でなく `--` で始まらなければ口座 label と読む。役割の flag は**ちょうど 1 つ**（0 か 2 は使い方の誤り・rc 1）。既定は全部 1 関数で導く: 置き場 = state_dir_of（`--state-dir` > git 設定・解けなければ `state-dir`）／anchor = `--anchor` か cwd の repo root（`seat register` / `seat launch` と同じ）／target と model = 同じ鍵（役割 × anchor）の**登録 row の値**（`seat/role.rs` の registration_of_target の隣に鍵で引く読み手を 1 本置く・row の `model` が無ければ `--model` が要る）。row が無く flag も無い周は `defaults-unresolved` で typed に断る（足りない flag の名を行に載せる・1 key も送らず row も書かない）。断りの行は `seat launch: refused reason=defaults-unresolved missing=<flag[,flag]>`（`missing=` は足りない flag の名を宣言順 `--target` → `--model` で `,` 区切り・`target=` は載せない＝target が解けない周にも出る断りに未確定の値を置かない・rc は既存の `RC_REFUSED`・字面の定数は `seat/cli.rs` に 1 つ）。明示の flag は row の値に勝つ。導いた値で §4 と**同じ `LaunchFlags` を組み同じ経路**を通る（`seat/cli.rs` の launch_of の本体を flags を受ける 1 関数に括る）＝短い形と長い形は同じ Registration・同じ起動行を作る。使い方の行に短い形を足す（外形 snapshot が動く）。
 - 触らない: `seat/cycle/launch.rs`（起動の本体・derive_launch）・登録 row の schema・`account shell`（§4.5・役割なし）・tick の立て直し・rules 行。
 - 歯（`seat_launch_short_` 接頭辞・`crates/scribe2/tests/e2e/seat/launch.rs`）: 登録 row が在る周に短い形が長い形と同じ row と同じ注入行を作る（両方を偽 tmux と偽 claude で撃ち、inject.jsonl の what と row の差分 0）／row が無く `--target` `--model` も無い周は `defaults-unresolved` + 0 key + row 0／役割の flag が 0 か 2 は使い方 rc 1／既知の verb（`launch` ほか）は従来どおり通る。
 - 却下: session 名を NAME 定数から導く（今の席は別名の session に居る＝改名は移行で本便の外・値を code に焼くのは N3）／host.toml に target を手書き（登録 row が既に持つ値の二重化・C3）／`seat launch` の flag を任意化するだけ（人が打つ形が長いまま）／短い形を `account` の verb に置く（役割の起動は §4 の領分）。
@@ -140,18 +140,18 @@ id = "a"
 title = "役割なしの起動 — account shell が derive_launch を再利用し登録 row を書かずに起動行を注入する"
 req = ["FR60", "FR59", "FR58"]
 section = "13"
-write-set = ["crates/scribe2/src/account/cli.rs", "crates/scribe2/src/account/mod.rs", "crates/scribe2/src/seat/cycle.rs", "crates/scribe2/src/seat/cycle/launch.rs", "crates/scribe2/src/seat/inject.rs", "crates/scribe2/tests/e2e/fleet.rs", "crates/scribe2/tests/e2e/seat/launch.rs", "crates/scribe2/tests/e2e/snapshots/e2e__fleet__fleet_external_form.snap"]
-verify = ["cargo nextest run -p scribe2 --no-tests=fail account_cmd_shell_", "cargo nextest run -p scribe2 --no-tests=fail seat_launch_"]
+write-set = ["crates/scribe2/src/account/cli.rs", "crates/scribe2/src/account/mod.rs", "crates/scribe2/src/seat/cycle.rs", "crates/scribe2/src/seat/cycle/launch.rs", "crates/scribe2/tests/e2e/fleet.rs", "crates/scribe2/tests/e2e/seat/launch.rs", "crates/scribe2/tests/e2e/snapshots/e2e__fleet__fleet_external_form.snap"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail account_cmd_shell_", "cargo nextest run -p scribe2 --no-tests=fail seat_launch_", "cargo nextest run -p scribe2 --lib --no-tests=fail account_cmd_errors_"]
 size = "S"
-done = "偽 tmux と偽 claude で account shell が登録 row 0 のまま起動行を 1 回だけ差し込み、resume と拒否 2/2 が typed に出る"
+done = "偽 tmux と偽 claude で account shell が登録 row 0 のまま起動行を 1 回だけ差し込み、resume と拒否 3 種が typed に出る"
 
 [[contract]]
 id = "b"
 title = "席の起動の短い形 seat <label> --planner|--admin — 置き場は git 設定、target と model は登録 row から導き、長い形と同じ 1 経路を通る"
 req = ["FR59", "FR40"]
 section = "14"
-write-set = ["crates/scribe2/src/seat/cli.rs", "crates/scribe2/src/seat/role.rs", "crates/scribe2/tests/e2e/seat/launch.rs", "crates/scribe2/tests/e2e/snapshots/e2e__seat__seat_usage_external_form.snap"]
-verify = ["cargo nextest run -p scribe2 --no-tests=fail seat_launch_short_"]
+write-set = ["crates/scribe2/src/seat/cli.rs", "crates/scribe2/src/seat/role.rs", "crates/scribe2/tests/e2e/seat.rs", "crates/scribe2/tests/e2e/seat/launch.rs", "crates/scribe2/tests/e2e/snapshots/e2e__seat__seat_usage_external_form.snap"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail seat_launch_short_", "cargo nextest run -p scribe2 --no-tests=fail seat_usage_external_form"]
 size = "S"
 done = "登録 row の在る anchor で短い形が長い形と同じ row と起動行を作り、row も flag も無い周は defaults-unresolved で 1 key も送らず、既知の verb は従来どおり通る"
 
