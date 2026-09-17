@@ -284,7 +284,7 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
 - 出所: admin の観測（`.270` run 1）: runner が「flip-check を背景で回している・完了通知を待つ」と言って turn を閉じ（rc 0）、背景の task が scope の片付けで止められた。
 - 現物: `crates/scribe2/src/headless/runner.txt` に「背景実行で turn を閉じない」の規律は無い。`headless/mod.rs` の片付けは `pipe/confine.rs` の `release_scope` が行い、結果の 1 行 `runner: scope=<gone|killed|failed|no-tool>` は `headless/runner.rs` が組む。片付けで殺した子の数は record に残らない。
 - 形: 雛形 `runner.txt` に「検証は前面で完走させてから turn を閉じる（背景実行を残して終えない・残した task は片付けで止められ done に数えない）」の 1 行を足し、雛形の外形を snapshot で pin する。snapshot の `.snap` は入口の flip の test 区間に入らないので、この 1 行だけを名指す歯を別に持つ（雛形の RED はその歯で測る）。
-- `release_scope` が scope を止める直前に scope に残った process の数を読み、`runner: scope=<…>` と同じ行に `orphans=<n|->` として残す（0 も書く・読めなければ `-`）。
+- `release_scope` が scope を止める直前に scope に残った process の数を読み、`runner: scope=<…>` と同じ行に `orphans=<n|->` として残す（0 も書く・読めなければ `-`）。数える関数（`pipe/confine.rs`）と行を組む関数（`headless/runner.rs`）は pure に切り、それぞれの file の in-file の歯が fixture で測る（systemd の scope を歯で起こさない）。
 - 触らない: 片付けの極性（止める）・runner の権限。
 - 却下: 背景 task を待ってから片付ける（turn の終端の規律が曖昧になる）／雛形だけ直す（殺した事実が記録に残らない）。
 
