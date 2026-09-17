@@ -56,7 +56,8 @@
     { "@id": "./ADR-0032-dialogue-surface-rules-live-in-one-design-doc-and-planner-brief.html" },
     { "@id": "./ADR-0033-core-lines-count-source-only-and-io-lives-in-a-boundary-crate.html" },
     { "@id": "./ADR-0034-dispatcher-starts-reviewed-contracts-automatically.html" },
-    { "@id": "./ADR-0035-live-run-cap-is-one-rules-row.html" }
+    { "@id": "./ADR-0035-live-run-cap-is-one-rules-row.html" },
+    { "@id": "./ADR-0036-role-accounts-are-declared-once-per-host.html" }
   ]
 }
 </script>
@@ -136,6 +137,7 @@
     <tr><td>ADR-0033</td><td><a href="./ADR-0033-core-lines-count-source-only-and-io-lives-in-a-boundary-crate.html">core の行数は本体だけを数え、 子 process を撃つ I/O 面は境界 crate へ分ける (上限 40,000 は上げない・binary は 1 つ・境界 crate にも上限)</a></td><td>accepted</td><td>2026-09-15</td></tr>
     <tr><td>ADR-0034</td><td><a href="./ADR-0034-dispatcher-starts-reviewed-contracts-automatically.html">便の起動は器の dispatcher が行う (審査を通った契約を列に入れ、 依存・交差・受付を満たす便を自動で起こす・planner の手動介入は typed な口)</a></td><td>accepted</td><td>2026-09-15</td></tr>
     <tr><td>ADR-0035</td><td><a href="./ADR-0035-live-run-cap-is-one-rules-row.html">host で同時に走る便の本数は rules 行 1 本の最大値を持つ (値は user 裁定・受付が live の便数を数えて typed に断る・ADR-0034 の「数値上限を持たない」句を部分 supersede)</a></td><td>accepted</td><td>2026-09-16</td></tr>
+    <tr><td>ADR-0036</td><td><a href="./ADR-0036-role-accounts-are-declared-once-per-host.html">役割ごとの口座は host の根の宣言 1 か所が持ち、 全 project の席の起動・立て直し・便の除外がそれを読む (planner / admin の口座を host で統一・逼迫時は宣言の書き換え 1 手で全席が移る・ADR-0026 §2.3 と ADR-0027 の除外を部分 supersede)</a></td><td>accepted</td><td>2026-09-16</td></tr>
   </tbody>
 </table>
 <p data-audience="machine">新しい決定を記録したら本表と JSON-LD の <code>dc:hasPart</code> に追記する。 ADR は frozen (改訂は supersede する新 ADR で行う)。</p>

@@ -115,6 +115,22 @@ C1 / C5（権能の値は行・裁定 id）・C1.2（生成文に手書きの規
 - 却下: planner に相談を兼ねさせる（今日の詰まりの再発）／consult に `edit-contract` を渡す（台帳の書き手が 2 席になり契約の字面の事故の口が増える）／repo 内に `lab/` を切る（PUBLIC・CON2・実験物が tracked に漏れる）／`edit-design-intent` を渡す（spec / decisions まで書ける・広すぎる）。
 - 歯（`seat_role_consult_` 接頭辞・`tests/e2e/seat.rs` と `tests/e2e/hook.rs`）: (a) `role.consult` の行が manifest に在り `RuleKind` の `ALL` と `rules validate` の外形に載る／(b) consult の登録 row を持つ席の Edit が `design-intent/research/x.html` を通し `design-intent/spec/x.html` と `docs/design/x.md` と crates 配下の Rust file を権能の名を告げて断る（planner の席は research も spec も通る）／(c) consult の席の `pipe answer` / `pipe run` が権能で断られる／(d) SessionStart の brief が consult の雛形から生成され外形 snapshot に載る。
 
+## 15. 役割の口座 — host の根の宣言 1 か所を席の起動・立て直し・便用の除外・doctor が読む（契約表の行 i・`s2-07l.418`）
+
+- 何が起きているか（user 直命 2026-09-16 13:5xZ・folio2 planner の relay・逐語は台帳 `s2-07l.418`・決定は [ADR-0036](../../design-intent/decisions/ADR-0036-role-accounts-are-declared-once-per-host.html)）: planner と admin の口座を全 project で同じ口座に揃えたい（口座名と逐語は台帳が原本・CON2）が、役割 → 口座の対応は project ごとの state dir（host の manifest・[account-lifecycle.md](./account-lifecycle.md) §2）に閉じ、host 全体で 1 か所に宣言する口が無い。席の口座は `seat launch --account` か session 用の選定（同 §4）で決まる。便用の除外は便の repo の登録 row の口座だけ（[account-autonomy.md](./account-autonomy.md) §14・行 k）なので、他 project の席の口座が便に使われて席が逼迫する。
+- 形: (1) **置き場** = host の根（受付札と同じ `<state_dir の親>/<NAME>-host/`・`seat/mod.rs` の `host_slots_dir` と同じ導き方・env を読まない）の file 1 つ `roles.toml`（`schema = 1` + `[[role-account]] role = "<Role の名>" account = "<label>"`・役割ごとに高々 1 行・role は閉じた `Role` の名で解け・account は host の面の `[[account]]` に宣言済みで退役でない label）。読み手は manifest の loader（`rules/manifest.rs`・TOML subset の同じ parser・同じ拒否形〔未知 key・型違い・役割の重複・未知の role・未宣言の label は行番号付きで全件・rc 1〕）で、file が**無い**周は 0 行として続き、**在るのに読めない**周は typed に止める（FailClosed・`HostManifest` と同じ 3 値の型）。`<state_dir>/host.toml` に `[[role-account]]` が在れば未知の表として断る（1 か所）。(2) **席の起動と立て直し**（`seat/cycle/launch.rs`・`seat/cycle/relaunch.rs` の `choose`）: その役割の宣言が在り口座が**使える**（宣言済み・退役でない・最新の実測が在り・session 用の閾値 R-C9-1 未満・model は登録 row / `--model`）周は選定の純関数を撃たずにその label を返す。使えない周だけ従来の session 用の選定に落ち、理由（`declared-over-threshold` / `declared-unmeasured` / `declared-retired` の閉じた 3 値）を `inject.jsonl` の launch / relaunch の行に載せる。`--account L` が宣言と違う周は `seat launch` の断り（`seat/cycle.rs` の閉じた型に variant 1 つ `role-account-conflict`・宣言の label を添える）で起こさない。(3) **便用の除外**（`fleet/replay.rs` の `select_for_run`）: 除外集合 = 便の repo の登録 row の口座（行 k）∪ 宣言の全役割の口座（host 全体・席の生死を問わない）。純関数 `select` と `Input` は不変（除外集合の作り方が変わるだけ）。(4) **doctor** の 1 行 `role-accounts=<present|absent|unreadable> planner=<label|none> admin=<label|none>`（読むだけ・判定しない・C10.2・外形 snapshot `seat_doctor_external_form` が変わる）。(5) 登録 row の `account` は宣言から導いた実効値の写し（C10・row の鍵と書き手 3 つは不変）。
+- 触らない: 純関数 `select`・R-C9-1・`Registration` の項目・退役の口・`host.toml` の 3 表・行 k の `--anchor`。
+- 歯（`seat_role_account_` 接頭辞・`tests/e2e/seat/launch.rs` と `tests/e2e/fleet.rs`・fixture は tmp の state dir の親に `<NAME>-host/roles.toml` を置く）: 宣言が在り使える周の `seat launch --role planner` が row の account に宣言の label を書く／宣言の口座が閾値以上の周は選定に落ちて理由 `declared-over-threshold` が記録に載る／`--account` が宣言と違う周は `role-account-conflict` で row も key も書かない／`fleet select --purpose run` が宣言の口座を候補から外す（登録 row の無い host でも）／`roles.toml` が壊れている周（未知 key・役割の重複・未知の role・未宣言の label）は launch も select も host の面と同じ拒否形（rc 1・欠陥を行番号付きで全部名指す）で止まる／無い周は従来どおり。
+- 却下: [ADR-0036](../../design-intent/decisions/ADR-0036-role-accounts-are-declared-once-per-host.html) §3（写しは持たない）。
+
+## 16. 役割の口座への移し替え — 宣言の書き換えの口 1 つと管理 tick の軸 1 つ（契約表の行 j・`s2-07l.418`・行 i の後）
+
+- 何が起きているか: 逼迫時に全 project の席を一括で別口座へ移す口が無い（席ごとの `seat launch --account` の手作業）。hook 集合の食い違い（FR62・[consumer-sync.md](./consumer-sync.md) §6・`seat/tick/plugin.rs`）は「退避の合図 → 同じ target に立て直し」の経路を既に持つ。
+- 形: (1) **口** `account reassign --state-dir S --role <Role の名> --to <label>`（`account/cli.rs` の verb 1 つ・`--to` は host の面に宣言済みで退役でない label・同じ label への書き換えは `unchanged` で何もしない）: §15 の `roles.toml` を読み → 検査 → 一時 file → rename で書き換える（部分書きを残さない・`account add` の host.toml の書き方と同じ）。A1 の対象外（宣言の書き換えで消費は席の起動と同じ・裁定の逐語は台帳）。(2) **tick の軸**（`seat/tick/account.rs` の `account_turn` の隣・inject / noop の判定で guard ではない）: 登録済みの席ごとに、登録 row の口座 ≠ その役割の宣言の口座 ∧ 宣言の口座が §15 (2) の意味で使える周は、FR29 と同じ除外（退避物が在る周・cycle が走っている周は注入しない）の下で退避の合図を注入する（`SignalOrigin` に variant 1 つ `Role`・`kind=externalize origin=role`）。使えない周は注入せず `NoopReason` に理由 1 つ。(3) **立て直し**は既存の入口（`seat/tick/exit.rs` の `Entry::Relaunch`・origin が `Account` / `Hook` の周と同じ 3 条件）を通り、口座は §15 (2) の優先（宣言が使えればそれ）で決まる＝移し替えに新しい経路を持たない。(4) 常駐 process を持たない（各 project の tick が次の周に移す・ADR-0034 の契機の型）。
+- 触らない: 退避の合図の形・立て直しの 3 条件・`Entry` の順序・復元の第 2 手。
+- 歯（`seat_role_reassign_` 接頭辞・`tests/e2e/seat/account.rs` と `tests/e2e/seat/tick.rs`）: `account reassign` が `roles.toml` の 1 行を書き換え他の行を保つ／未宣言・退役中の label と未知の role を typed に断る／登録 row の口座が宣言と違い宣言の口座が使える席に tick が `origin=role` の退避の合図を注入する／宣言の口座が閾値以上の周は注入しない／合図の後の立て直しが宣言の口座で row を書く。
+- 却下: ADR-0036 §3（写しは持たない）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -178,4 +194,24 @@ write-set = ["rules/manifest.toml", "crates/scribe2/src/seat/role.rs", "crates/s
 verify = ["cargo nextest run -p scribe2 --no-tests=fail seat_role_consult_"]
 size = "S"
 done = "consult の登録 row を持つ席が research の文書と repo の外だけ Edit でき、spec / 設計 doc / code と pipe の口は権能の名を告げて断られ、planner と admin の席の挙動と brief は不変で、consult の brief が外形 snapshot に載る"
+[[contract]]
+id = "i"
+title = "役割の口座 — host の根の roles.toml（[[role-account]]）を manifest の loader で読み、seat launch と立て直しは使える宣言の口座を選定の前に使い、便用の除外に宣言の口座を足し、doctor が 1 行出す"
+req = ["FR59", "FR36", "FR40"]
+section = "15"
+write-set = ["crates/scribe2/src/rules/manifest.rs", "crates/scribe2/src/rules/mod.rs", "crates/scribe2/src/seat/mod.rs", "crates/scribe2/src/account/mod.rs", "crates/scribe2/src/seat/cycle.rs", "crates/scribe2/src/seat/cycle/launch.rs", "crates/scribe2/src/seat/cycle/relaunch.rs", "crates/scribe2/src/seat/tick.rs", "crates/scribe2/src/fleet/replay.rs", "crates/scribe2/src/fleet/wait.rs", "crates/scribe2/src/fleet/cli.rs", "crates/scribe2/src/pipe/ratelimit.rs", "crates/scribe2/tests/e2e/seat/launch.rs", "crates/scribe2/tests/e2e/seat/account.rs", "crates/scribe2/tests/e2e/seat/rules.rs", "crates/scribe2/tests/e2e/fleet.rs", "crates/scribe2/tests/e2e/snapshots/e2e__seat__seat_doctor_external_form.snap"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail seat_role_account_"]
+size = "M"
+done = "host の根の roles.toml が同じ loader と拒否形で読まれ、使える宣言の口座で seat launch と立て直しが起こり、使えない周は理由付きで選定に落ち、--account の食い違いは起こさず、便用の候補から宣言の口座が host 全体で外れ、doctor が role-accounts の 1 行を出し、壊れた file は host の面と同じ拒否形（rc 1）で欠陥を全部名指して止まる"
+
+[[contract]]
+id = "j"
+title = "役割の口座への移し替え — account reassign が roles.toml を書き換え、管理 tick が登録 row の口座 ≠ 宣言 ∧ 宣言の口座が使える席に origin=role の退避の合図を注入し、既存の立て直しが宣言の口座で起こし直す"
+req = ["FR38", "FR59"]
+section = "16"
+depends = ["i"]
+write-set = ["crates/scribe2/src/account/cli.rs", "crates/scribe2/src/account/mod.rs", "crates/scribe2/src/seat/tick.rs", "crates/scribe2/src/seat/tick/account.rs", "crates/scribe2/src/seat/tick/exit.rs", "crates/scribe2/src/seat/cycle/relaunch.rs", "crates/scribe2/tests/e2e/seat/account.rs", "crates/scribe2/tests/e2e/seat/tick.rs", "crates/scribe2/tests/e2e/snapshots/e2e__fleet__fleet_external_form.snap"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail seat_role_reassign_"]
+size = "M"
+done = "account reassign が roles.toml の 1 行だけを書き換えて不正な label と role を typed に断り、tick が宣言と違う口座の席に origin=role の退避の合図を注入し、宣言の口座が閾値以上の周は注入せず、合図の後の立て直しが宣言の口座で row を書く"
 <!-- contracts:end -->
