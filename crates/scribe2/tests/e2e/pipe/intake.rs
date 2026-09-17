@@ -1449,6 +1449,47 @@ fn contract_closure_ext_real_table_has_zero_findings() {
     assert!(rows >= 8, "母集団は現物の契約表の行（contract-source.md の 8 行以上・空の表で 0 件を名乗らない）: {last}");
 }
 
+// ─────── 名指しの実在の impl 経路（設計 docs/design/contract-source.md §26・§3 (2)・`s2-07l.432`・接頭辞 `contract_names_impl_`） ───────
+
+/// toy repo の method / 関連 fn を持つ file（素の impl `Report::violation`・generic impl `Wide::width`）。どちらの
+/// file も「型::項目」の字面は持たない（呼び手は「値.項目(」なので (a) の字面の経路では解けない）。
+const IMPL_FILES: &[(&str, &str)] = &[
+    (
+        "src/report.rs",
+        "pub struct Report {\n    pub at: u8,\n}\n\nimpl Report {\n    pub fn violation(&self) -> u8 {\n        self.at\n    }\n}\n",
+    ),
+    (
+        "src/wide.rs",
+        "pub struct Wide<T> {\n    pub inner: T,\n}\n\nimpl<T: Copy> Wide<T> {\n    pub fn width(&self) -> usize {\n        0\n    }\n}\n",
+    ),
+];
+
+/// impl 経路（§26）: base が宣言する method / 関連 fn の「型::項目」は `contracts check` で解け、同じ 1 語の形で
+/// 並ぶ実在しない `Report::nope` だけが `name-unresolved` で名指される（done と § 本文の 2 か所ぶんの 2 行）・rc 1。
+/// base（字面の経路だけ）では実在の 2 語も名指されて findings が 6 件になる（偽陽性・C16）。
+#[test]
+fn contract_names_impl_method_is_not_named_by_contracts_check() {
+    let named = "`Report::violation` と `Wide::width` は在る。`Report::nope` は無い。";
+    let doc = table_doc(&table_region(&[table_row("a", &[("done", &format!("\"{named}\""))])]))
+        .replace("## 1. 何を解くか\n\n本文。", &format!("## 1. 何を解くか\n\n{named}"));
+    let repo = table_repo(&doc, IMPL_FILES);
+    let out = contracts_check(&repo);
+    let (text, found) = (stdout_of(&out), findings_of(&out));
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "実在しない 1 語で rc 1: {text}{}", stderr_of(&out));
+    let body_line = doc.lines().position(|line| line.starts_with("`Report::violation`")).unwrap_or_default() + 1;
+    let row_a = findings_for(&found, &doc, "a", "name-unresolved");
+    let want = [("Report::nope", "done".to_owned()), ("Report::nope", format!("section 1 line {body_line}"))];
+    assert_eq!(row_a.len(), want.len(), "名指すのは実在しない 1 語の 2 か所だけ: {text}");
+    for ((name, at), line) in want.iter().zip(&row_a) {
+        assert!(line.contains(&format!("名指し {name} が base に無い（{at}）")), "{name} を {at} で名指す: {line}");
+    }
+    for resolved in ["Report::violation", "Wide::width"] {
+        assert!(!text.contains(resolved), "base が impl で宣言する {resolved} は名指さない: {text}");
+    }
+    assert_eq!(text.lines().last(), Some("contracts check: docs=1 rows=1 findings=2"), "判定行: {text}");
+    clean(&[&repo]);
+}
+
 // ─────── land 済みの `+`（設計 docs/design/contract-source.md §3・契約 (i)・`s2-07l.346`・接頭辞 `contract_table_landed_plus_`） ───────
 
 /// 行 `i` の write-set の項目（`+` 付きの新規 file の宣言・land すると base に実在する）。
