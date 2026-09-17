@@ -81,7 +81,7 @@ manifest に行が載るまでは ADR-0021 の予定行（C14.2 の相互参照�
 ### 4.2 形
 
 - `systemd-run --user --scope --quiet --unit=<NAME>-<run>-<段>-<n> -p MemoryMax=<上限> -p CPUWeight=<gate.cpu_weight> -p OOMPolicy=continue -- sh -c <line>`。`MemoryHigh` は付けない（係数を持たない・rules 行を増やさない）。`OOMPolicy=continue` は包みを systemd の OOM 停止から外すため（既定の `stop` では kernel が箱の中の 1 process を殺した直後に unit ごと止められ、包みが終端行を出す前に SIGTERM で死ぬ・本 host 実測 2026-09-12: 既定で 3 回中 1 回が終端行なし、continue で 3/3 が終端行あり・rc 137）。
-- **上限は 2 種**: `{jobs}` を持つ行 = `実効 jobs × gate.job_memory_mb`。それ以外（`{jobs}` を持たない verify 行〔workspace の nextest / clippy 等〕・runner・lens）= `MemTotal − host.reserve_memory_mb`（host の予約分だけを守る箱。行ごとの値を持たない＝rules 行を増やさない）。
+- **上限は 2 種**: `{jobs}` を持つ行 = `実効 jobs × gate.job_memory_mb`。それ以外の verify 行（`{jobs}` を持たない行〔workspace の nextest / clippy 等〕）= `MemTotal − host.reserve_memory_mb`（host の予約分だけを守る箱。行ごとの値を持たない＝rules 行を増やさない）。runner / lens / claude の包み = `1 × gate.job_memory_mb`（§12・契約表の行 c・裁定 id user 2026-09-15T18:2xZ。行 c の land までの現物は `MemTotal − host.reserve_memory_mb`〔ADR-0021 §2.2 の割り当て〕）。
 - 止められたのは scope の内側の process だけで、席・他の便・他の project は影響を受けない。scope の `memory.events` の `oom_kill` が 1 以上の周は、その行を rc に依らず「測れなかった」に倒す（gate は INCONCLUSIVE・main 実測は `main-unmeasured`・赤に化けさせない）。**検出線の行（`detection-verify`・§5）は例外**で、`oom_kill` ≥ 1 でも測れなかったに倒さない——変異ごとの test process を箱の中で起こす道具は、無限 loop になる変異 1 つが kernel に殺されてもその死を吸収して完走する（測れた周・判定は rc と outcomes が持つ・record の `reason=oom-kill` / `peak_mb` は現物のまま残す・`s2-07l.228`〔.217 run 2 の実測 2026-09-13〕）。包みごと signal で死んだ周（終端行なし）は検出線でも従来どおり測れなかった。
 - **runner の scope が殺された周**: verify 行の「測れなかった」とは極性を分ける（便の内容が測れないのではなく、便自身が host の予約分を超えた）。便は閉じた理由 1 つ（`Failed detail=oom-kill`・pipeline.md §5.2 の `runner-rc` と同じ終端の段・C2 の variant 1 つ）で終端し、`Failed` からは resume しない＝intake からの起こし直し。根拠は包みが出す `memory.events` の `oom_kill`（包みごと死んだ周は signal 死）。peak の記録先（runner.stdout.log の終端行）は契約 (a) で確定する。
 - **lens の scope が殺された周**: FR9 の既存極性のまま **INCONCLUSIVE**（stdout が parse できない周と同じ・pipeline.md §5.3 の判定順を変えない・道具を揃えて同じ便を撃ち直せる〔FR14〕）。runner と違い便の成果は残っているので終端しない。
@@ -198,12 +198,14 @@ e2e は binary を spawn し外部 command は PATH 先頭の stub で差し替�
 - state root の運用（同じ host の state dir は 1 つの親）を doctor（C3.2・移行後の epic）の検査項目に足す。
 - SRS v0.7 に NFR（host の資源を枯渇させない）を足す材料は planner state dir に置いた（user の /folio-architect 手番）。
 
-## 12. runner / lens の箱の上限を gate.job_memory_mb に揃え、cargo mutants を runner の allowlist から外す（契約表の行 c・`s2-07l.230`）
+## 12. runner / lens / claude の箱の上限を 1 × gate.job_memory_mb に揃える（契約表の行 c・`s2-07l.230`・cargo mutants の deny は ADR-0025 / `s2-07l.168` で既着）
 
-- **出所・現物**: .222 run 1 で Failed detail=oom-kill（runner が自分の箱の中で cargo mutants を回し host の memory を圧迫）が起きた。user の裁定（2026-09-15・裁定 id user 2026-09-15T18:2xZ・C5 / A2）は「runner の箱の上限を gate の job と同じ rules 行の値にし、runner の allowlist から cargo mutants を外す」。現物: `limit_of`（`crates/scribe2/src/pipe/confine.rs`）は jobs を持つ行だけ実効 jobs × gate.job_memory_mb を上限にし、それ以外（runner / lens を含む）は MemTotal − host.reserve_memory_mb を上限にしている。runner の許可コマンド列（`rules/manifest.toml` の runner.allowed_commands）は command 単位の allowlist で、cargo の subcommand を個別に禁じる語彙を持たない。
-- **形（何を作るか）**: (1) `limit_of` の分岐を広げ、runner / lens の箱（jobs を持たない包みのうち verify 行でないもの）の上限を gate.job_memory_mb × 1 に揃える。verify 行の上限は変えない。(2) rules 行を 1 つ新設し（禁じる subcommand の列）、`RuleKind` に variant を 1 つ足し、runner の許可判定（`crates/scribe2/src/hook/permission.rs`）がその列にある subcommand を deny にする。runner の雛形（`crates/scribe2/src/headless/runner.txt`）に「検出線は gate が撃つ・runner は撃たない」の 1 行を足す。
-- **触らない**: gate.job_memory_mb / host.reserve_memory_mb の値そのもの、gate の箱の上限。
-- **却下案**: 上限だけ下げて allowlist をそのままにする案は、runner が箱の中で mutants を回して oom-kill になる型を残すため不採用。allowlist を cargo ごと外す案は build / nextest まで撃てなくなるため不採用。
+- **出所・現物**: .222 run 1 で Failed detail=oom-kill（runner が自分の箱の中で cargo mutants を回し host の memory を圧迫）が起きた。user の裁定（2026-09-15・裁定 id user 2026-09-15T18:2xZ・C5 / A2）は「runner の箱の上限を gate の job と同じ rules 行の値にし、runner の allowlist から cargo mutants を外す」。後半（cargo mutants の deny）は ADR-0025 / `s2-07l.168` で main に在る: rules 行 `runner.denied_commands`（値に "cargo mutants"・`RuleKind` の variant `RunnerDeniedCommands`）・Bash の command guard `crates/scribe2/src/hook/command.rs`（pre-tool-use・FailClosed）・intake の同型判定。歯は `crates/scribe2/tests/e2e/hook.rs`（hook_command_guard_denies_a_denied_sequence_from_bash / hook_command_guard_matches_sequence_regardless_of_flag_order）と `crates/scribe2/tests/e2e/rules.rs`（rules_embedded_manifest_declares_the_denied_commands_row）。`crates/scribe2/src/hook/permission.rs` は Bash の承認要求を一律 deny する別の門で、語列の判定は持たない。前半（箱の上限）の現物: `limit_of`（`crates/scribe2/src/pipe/confine.rs`）は gate の verify 行（`crates/scribe2/src/pipe/gate/verify.rs`）だけが呼び、`{jobs}` を持つ行を `Limit` の variant `PerJob`（実効 jobs × gate.job_memory_mb）・持たない行を `HostReserve`（MemTotal − host.reserve_memory_mb）に振る。runner / lens / claude の包みは `limit_of` を通らず、呼び手 4 か所が `HostReserve` を字面で選んでいる: `crates/scribe2/src/pipe/spawn.rs`（runner の process）/ `crates/scribe2/src/pipe/gate.rs`（gate の lens）/ `crates/scribe2/src/pipe/review.rs`（審査の lens）/ `crates/scribe2/src/headless/mod.rs`（runner と lens が起こす claude の子＝cargo が実際に走る箱・§13 のとおり runner の包みとは別 scope）。この割り当ては ADR-0021 §2.2（runner・lens = MemTotal − host.reserve_memory_mb）のもので、本節は裁定 id でその面だけを置き換える（`Limit` の variant と rules 行は増やさない）。
+- **形（何を作るか）**: (1) 上の呼び手 4 か所の limit を `HostReserve` から `PerJob(1)` に替える＝上限 = 1 × gate.job_memory_mb（値は manifest が持つ）。`Limit` の variant は増やさない（§4.2「2 種」のまま）。`limit_of` と gate の verify 行の箱は変えない。`confine.rs` は `HostReserve` の doc の 1 行（「runner・lens」の語を外す）だけ。(2) 禁じる語列の rules 行・`RuleKind` の variant・hook の deny は ADR-0025 / `s2-07l.168` で既着＝本便は行を増やさず、既存の歯が緑のままであることを回帰の柵にする。(3) runner の雛形（`crates/scribe2/src/headless/runner.txt`）の「実行してよい command」節に「検出線（cargo mutants）は gate が撃つ・runner は撃たない（禁じる語列で止まる）」の 1 行を足す。(4) 設計の写し: §4.2 の割り当ての句（本 doc）と pipeline.md §6 の封じ込めの pointer に同じ 1 句。
+- **歯**（呼び手 4 か所に 1 本ずつ・どれか 1 か所を `HostReserve` のまま残すと赤になる）: `crates/scribe2/tests/e2e/pipe/spawn.rs`（runner の unit の MemoryMax）/ `crates/scribe2/tests/e2e/pipe/gate.rs`（gate の lens の unit の MemoryMax ∧ 同じ gate の `{jobs}` 無しの verify 行は host の箱のまま・両方向を 1 本で）/ `crates/scribe2/tests/e2e/pipe/intake.rs`（審査の lens の unit `-review-1` の MemoryMax・審査の歯は既存の pipe_review_ 接頭辞と同じ file）/ `crates/scribe2/tests/e2e/headless.rs`（claude の unit の MemoryMax・雛形の 1 行）。偽 systemd-run は gate.rs の歯の stub が private なので、spawn.rs / intake.rs / headless.rs の歯は同型の stub を歯の中で書く（§13 と同じ・module の可視性を触らない）。
+- **触らない**: gate.job_memory_mb / host.reserve_memory_mb の値そのもの、gate の箱の上限、rules 行・`RuleKind`・`crates/scribe2/src/hook/permission.rs`。
+- **却下案**: 上限だけ下げて allowlist をそのままにする案は、ADR-0025 が語列で止めた時点で前提が消えた。`limit_of` に stage 名の分岐を足す案は、呼び手が行を渡さず `Limit` を字面で選んでいるので unit 名を嗅ぐ分岐になり C2（1 関数 1 列挙）に反するため不採用。`Limit` に 3 つ目の variant を足す案は `PerJob(1)` と同じ式になるため不採用（§4.2「2 種」を守る）。allowlist を cargo ごと外す案は build / nextest まで撃てなくなるため不採用。
+- **risk（裁定の値そのものは触らない）**: claude の箱が 1 × gate.job_memory_mb になると、runner の cargo nextest / clippy の workspace build がその箱で走る（gate は同じ行を host の箱で回している・§4.2）。溢れた周は §4.2 の runner の極性どおり Failed detail=oom-kill で終端し record に残る＝値の見直しは実測後の別裁定（A2）。
 
 ## 13. runner / lens が起こす claude の子の peak memory を record に残す（契約表の行 d・`s2-07l.273`）
 
@@ -227,18 +229,18 @@ e2e は binary を spawn し外部 command は PATH 先頭の stub で差し替�
 
 ## 15. gate の周ごとの検出線の出力を run dir へ写し、show はその写しから読む（契約表の行 f・`s2-07l.298`）
 
-- **出所・現物**: admin の提案（2026-09-14・.286 run 1 の実測）で、検出線の出力が便の worktree の out にだけ在り、追随周の撃ち直しが out を作り直すと前の周の生存の一覧が消えることが分かった。gate の record（`crates/scribe2/src/pipe/gate/record.rs` が書く verify.jsonl）は行ごとの rc を残すが生存の一覧は残していない。pipe show の判定行は `detection_lines`（`crates/scribe2/src/pipe/cli.rs`）が読む。
-- **形（何を作るか）**: gate が検出線を撃った直後に、その周の出力（無ければ不在を表す marker）を run dir 配下の周ごとの置き場へ写す（上書きせず周ごとに別の置き場へ）。`detection_lines` の読み口をこの写しへ向け、worktree の out を直接読まないようにする。
+- **出所・現物**: admin の提案（2026-09-14・.286 run 1 の実測）で、検出線の出力が便の worktree の out にだけ在り、追随周の撃ち直しが out を作り直すと前の周の生存の一覧が消えることが分かった。gate の record（`crates/scribe2/src/pipe/gate/record.rs` が書く verify.jsonl）は行ごとの rc を残すが生存の一覧は残していない。pipe show の判定行は `detection_lines`（`crates/scribe2/src/pipe/cli/show.rs`・`s2-07l.349` の純移動で `cli.rs` から移った）が verify.jsonl の detection record の line を逐語で写す。
+- **形（何を作るか）**: gate が検出線を撃った直後に、その周の判定行（record の `line=` と同じ字面）と出力（`outcomes.json` と missed.txt・無ければ不在を表す marker）を run dir 配下の周ごとの置き場へ写す（上書きせず周ごとに別の置き場へ）。`detection_lines` の読み口を写しの判定行へ向け、verify.jsonl を読む経路と worktree の out を直接読む形を持たない。数は数え直さない（total / caught / missed の数え手は `crates/xtask/src/mutantsdiff.rs` の 1 つのまま・C2）ので、偽の検出線が outcomes.json を書かず判定行だけを出す既存の歯の字面は変わらない。判定行も無い周は不在と分かる 1 行（0 件と弁別・判定行の形と衝突しない字面）。
 - **触らない**: 検出線の実行そのもの・判定・verify.jsonl の record。
 - **却下案**: admin が Gated の時点で手で写す運用は散文の手順になり、追随の再 gate が同じ秒に起きると間に合わないため不採用。worktree の out を周ごとに別名で残す案は、worktree が retire で畳まれるため置き場として不適で不採用。
 
-## 16. 契約が名指した生存行に変異を当てて 4 分類で記す（契約表の行 g・`s2-07l.341`）
+## 16. 契約が名指した生存行に変異を当てて outcomes の 4 kind + 不在の 5 値で記す（契約表の行 g・`s2-07l.341`）
 
 - **出所・現物**: .338（歯だけの便）の gate で検出線が 2 周とも母集団 0 になった（admin 実測 2026-09-15）。diff が mod tests の中だけで、検出線が変異を生やす本体の行を持たなかったため。歯だけを足す便が base の生存行を撃ち落としたかどうかを、器がこれまで測っていなかった。現物: 契約 file（`crates/scribe2/src/pipe/contract.rs` の `Contract`・write_set field を含む）は変異の的を宣言する field を持たず、`crates/xtask/src/mutantsdiff.rs` の検出線を撃つ口も diff の追加行を母集団にする経路しか持たない。
-- **形（何を作るか）**: (1) 契約 field を 1 つ新設し、契約が生存行（ファイル・行・変異の名）を的として名指せるようにする（読み手は `crates/scribe2/src/pipe/table.rs` の `ContractRow`）。(2) `crates/xtask/src/mutantsdiff.rs` に的を直接絞って撃つ口を新設し、対象を caught / missed / unviable（コンパイル不能）/ noop（挙動差なし）の 4 分類で記す判定行を出す。(3) gate はこの field が在る便では的を絞った口で検出線を撃ち、無い便は従来どおり diff の追加行を母集団にする。verdict の判定は変えない（検出線は deny ではない）。
-- **触らない**: diff の追加行を母集団にする従来の経路、verdict の 3 値。
+- **形（何を作るか）**: (1) 契約 field を 1 つ新設し、契約が生存行（ファイル・行・変異の名）を的として名指せるようにする（契約表の行の欄の正本は `crates/scribe2/src/pipe/table.rs` の `FIELDS`・読み手は同 file の `ContractRow` と 1 欄ずつ読む `crates/scribe2/src/pipe/table/parse.rs`・欄の追加は `FIELDS` の tracked な生成物 `contracts/schema.toml` の描き直しを伴う〔xtask check が render と tracked の差分 0 を測る〕・契約 file の側は `contract.rs` の optional の欄・intake が写しへ運ぶ受付の歯は `crates/scribe2/tests/e2e/pipe/intake.rs`）。(2) `crates/xtask/src/mutantsdiff.rs` に的を直接絞って撃つ口を新設し、的ごとの分類を閉じた enum 1 つで記す判定行を出す。値は cargo-mutants の outcomes の 4 kind（caught / missed / unviable〔コンパイル不能〕/ timeout＝現物の `Counts` が読む 4 つの数と同じ語）+ 的が outcomes に当たらない absent（file・行・変異の名が現物とずれた）の 5 値で、母集団 = 的の本数・5 値の和 = total。noop（変異前後で挙動差なし）は outcomes の上では missed と同じで測れないため分類に持たない（挙動差の A/B は本節の射程外）。(3) gate はこの field が在る便では的を絞った口で検出線を撃ち、無い便は従来どおり diff の追加行を母集団にする。verdict の判定は変えない（検出線は deny ではない）。
+- **触らない**: diff の追加行を母集団にする従来の経路、verdict の 3 値、挙動差の A/B（手順のまま・別便）。
 - **依存**: `crates/scribe2/src/pipe/gate.rs` / `crates/scribe2/src/pipe/gate/record.rs` で契約表の行 e・f と交差するため、それらの後に流す。
-- **却下案**: 歯が名指す関数の本体全体を母集団に加える案は、宣言した的を測定するという型に合わないため不採用。admin の手作業を続ける案は散文の手順になり、便が増えると追いつかないため不採用。
+- **却下案**: 歯が名指す関数の本体全体を母集団に加える案は、宣言した的を測定するという型に合わないため不採用。noop を分類に入れる案は、outcomes だけでは missed と区別する規則が無く（挙動差は変異前後の実 binary の A/B でしか測れない）偽の outcomes に札を貼るだけの空虚な歯になるため不採用。admin の手作業を続ける案は散文の手順になり、便が増えると追いつかないため不採用。
 
 ## 17. 歯の fixture の dir と器の systemd scope を終端で必ず片付ける（契約表の行 h・`s2-07l.343`）
 
@@ -316,13 +318,13 @@ done = "tmux を立てる歯が test-group tmux で同時本数 1 に絞られ�
 
 [[contract]]
 id = "c"
-title = "runner / lens の箱の上限を gate.job_memory_mb に揃え、cargo mutants を runner の allowlist から外す（裁定 id user 2026-09-15T18:2xZ）"
+title = "runner / lens / claude の箱の上限を 1 × gate.job_memory_mb に揃える（裁定 id user 2026-09-15T18:2xZ・cargo mutants の deny は ADR-0025 / s2-07l.168 で既着）"
 req = ["FR46", "NFR3"]
 section = "12"
-write-set = ["crates/scribe2/src/pipe/confine.rs", "rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "crates/scribe2/tests/e2e/rules.rs", "docs/design/rules-manifest.md", "crates/scribe2/src/hook/permission.rs", "crates/scribe2/src/headless/runner.txt", "crates/scribe2/tests/e2e/pipe/spawn.rs", "crates/scribe2/tests/e2e/hook.rs", "docs/design/gate-cost.md", "docs/design/pipeline.md"]
-verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_confine_runner_limit_"]
+write-set = ["crates/scribe2/src/pipe/confine.rs", "crates/scribe2/src/pipe/spawn.rs", "crates/scribe2/src/pipe/gate.rs", "crates/scribe2/src/pipe/review.rs", "crates/scribe2/src/headless/mod.rs", "crates/scribe2/src/headless/runner.txt", "crates/scribe2/tests/e2e/pipe/spawn.rs", "crates/scribe2/tests/e2e/pipe/gate.rs", "crates/scribe2/tests/e2e/pipe/intake.rs", "crates/scribe2/tests/e2e/headless.rs", "docs/design/gate-cost.md", "docs/design/pipeline.md"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_confine_runner_limit_", "cargo nextest run -p scribe2 --no-tests=fail pipe_confine_lens_box_", "cargo nextest run -p scribe2 --no-tests=fail pipe_confine_review_box_", "cargo nextest run -p scribe2 --no-tests=fail headless_runner_box_"]
 size = "S"
-done = "runner の箱の上限が gate.job_memory_mb × 1 に揃い、cargo mutants が runner の permission 判定で deny になる（既存の歯は緑のまま）"
+done = "runner / lens / claude の包みの MemoryMax が 1 × gate.job_memory_mb に揃い、gate の verify 行の箱は不変、runner の雛形に検出線の 1 行が在る（rules 行は増やさず、cargo mutants の deny は既着の歯が緑のまま）"
 
 [[contract]]
 id = "d"
@@ -349,20 +351,20 @@ id = "f"
 title = "gate の周ごとの検出線の出力を run dir へ写し、show はその写しから読む"
 req = ["FR8", "FR22"]
 section = "15"
-write-set = ["crates/scribe2/src/pipe/gate/record.rs", "crates/scribe2/src/pipe/gate.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/tests/e2e/pipe/gate.rs", "docs/design/gate-cost.md"]
+write-set = ["crates/scribe2/src/pipe/gate/record.rs", "crates/scribe2/src/pipe/gate.rs", "crates/scribe2/src/pipe/cli/show.rs", "crates/scribe2/tests/e2e/pipe/gate.rs", "docs/design/gate-cost.md"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_gate_detection_copy_"]
 size = "S"
 done = "検出線の出力が周ごとに run dir へ残り、pipe show が worktree の out でなくその写しから判定行を出す"
 
 [[contract]]
 id = "g"
-title = "契約が名指した生存行に変異を当てて 4 分類（caught / missed / unviable / noop）で記す"
+title = "契約が名指した生存行に変異を当てて outcomes の 4 kind（caught / missed / unviable / timeout）+ 不在（absent）の 5 値で記す"
 req = ["FR8"]
 section = "16"
-write-set = ["crates/scribe2/src/pipe/contract.rs", "crates/scribe2/src/pipe/table.rs", "crates/scribe2/src/pipe/gate.rs", "crates/scribe2/src/pipe/gate/record.rs", "crates/xtask/src/mutantsdiff.rs", "crates/scribe2/tests/e2e/pipe/gate.rs", "crates/scribe2/tests/e2e/pipe/intake.rs", "docs/design/gate-cost.md", "docs/design/contract-source.md"]
-verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_gate_targets_", "cargo nextest run -p xtask --no-tests=fail mutants_targets_"]
+write-set = ["crates/scribe2/src/pipe/contract.rs", "crates/scribe2/src/pipe/table.rs", "crates/scribe2/src/pipe/table/parse.rs", "contracts/schema.toml", "crates/scribe2/src/pipe/gate.rs", "crates/scribe2/src/pipe/gate/record.rs", "crates/xtask/src/mutantsdiff.rs", "crates/scribe2/tests/e2e/pipe/gate.rs", "crates/scribe2/tests/e2e/pipe/intake.rs", "docs/design/gate-cost.md", "docs/design/contract-source.md"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_gate_targets_", "cargo nextest run -p xtask --no-tests=fail mutants_targets_", "cargo nextest run -p scribe2 --no-tests=fail pipe_intake_targets_"]
 size = "M"
-done = "歯だけの便で契約が名指した生存行が的になり、caught / missed / unviable / noop の 4 分類で記録され、field の無い契約は従来どおり動く"
+done = "歯だけの便で契約が名指した生存行が的になり、caught / missed / unviable / timeout / absent の 5 値（和 = 的の本数）で記録され、field の無い契約は従来どおり動く"
 
 [[contract]]
 id = "h"
