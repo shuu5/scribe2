@@ -262,8 +262,8 @@ fn seat_account_tick_never_measures_an_undeclared_account() {
     fs::remove_dir_all(&place.dir).ok();
 }
 
-/// (1) 登録 row の口座が閾値以上（90 ≥ 85）の席は、打刻が Busy でも idle を待たずに退避の合図 1 行を注入する
-/// （`kind=externalize origin=account`・判定行に `account=a1:90`・打刻の合図は出ない）。注入の記録は
+/// (1) 登録 row の口座が閾値以上（96 ≥ R-C9-1 の 95）の席は、打刻が Busy でも idle を待たずに退避の合図 1 行を注入する
+/// （`kind=externalize origin=account`・判定行に `account=a1:96`・合図の字面は「閾値 95%」・打刻の合図は出ない）。注入の記録は
 /// `<state_dir>/inject.jsonl` にも同じ席の行として残る（立て直しの入口 (1) の読み先・出所は終了の手の入口が読む・
 /// `s2-07l.307`）。base は口座を見ず `noop reason=busy`（RED）。
 #[test]
@@ -274,7 +274,7 @@ fn seat_account_tick_signals_externalize_over_threshold_while_busy() {
     assert!(guard.ready(), "独立 socket に prompt 付きの session を立てられる");
     let registered = acct_register(&place, name, ACCT_LAUNCH);
     assert_eq!(rc_of(&registered), i32::from(RC_OK), "stderr={}", stderr_of(&registered));
-    acct_measured(&place.state, ACCT_SEAT, 90, &acct_now());
+    acct_measured(&place.state, ACCT_SEAT, 96, &acct_now());
     write_state(&seat_dir_of(&place.state, name), StateFix::Busy { age_s: 0 });
     let pane = fixture(&place.dir, "pane.txt", IDLE_PANE);
 
@@ -285,14 +285,14 @@ fn seat_account_tick_signals_externalize_over_threshold_while_busy() {
         stdout_of(&out),
         acct_line(
             &format!("decision=inject target={name} consumed=false kind=externalize origin=account"),
-            &format!("{ST_BUSY} account=a1:90"),
+            &format!("{ST_BUSY} account=a1:96"),
             &place.state
         ),
         "busy でも退避の合図・判定行に出所（口座）と口座と逼迫度"
     );
     let seen = capture(&place.socket, name);
     assert!(
-        seen.contains("口座 a1 90%") && seen.contains("閾値 85%") && seen.contains("/ready-compaction"),
+        seen.contains("口座 a1 96%") && seen.contains("閾値 95%") && seen.contains("/ready-compaction"),
         "口座・実測値・閾値・退避 skill が届く: {seen}"
     );
     assert!(!seen.contains("seat heartbeat"), "打刻の合図は出ない: {seen}");
@@ -303,28 +303,29 @@ fn seat_account_tick_signals_externalize_over_threshold_while_busy() {
     assert_eq!(acct_text(row, "who").as_deref(), Some("seat-tick"), "{log}");
     assert_eq!(acct_text(row, "seat").as_deref(), Some(name), "{log}");
     assert!(
-        acct_text(row, "what").is_some_and(|what| what.contains(" kind=externalize origin=account ") && what.contains(" account=a1:90")),
+        acct_text(row, "what").is_some_and(|what| what.contains(" kind=externalize origin=account ") && what.contains(" account=a1:96")),
         "判定行と同じ字面（出所は kind の直後）: {log}"
     );
     drop(guard);
     fs::remove_dir_all(&place.dir).ok();
 }
 
-/// (2) 閾値未満（50）は注入せず判定行に `account=a1:50` を載せ、以後は既存の順序どおり: Busy なら `busy`（tmux に
-/// 触れない）、Idle なら打刻の合図（FR27 の「使用率が閾値未満」が立つ）。
+/// (2) 閾値未満（90 < 95）は注入せず判定行に `account=a1:90` を載せ、以後は既存の順序どおり: Busy なら `busy`（tmux に
+/// 触れない）、Idle なら打刻の合図（FR27 の「使用率が閾値未満」が立つ）。実測値 90 は 85 の manifest では閾値以上＝
+/// base は退避の合図の側へ倒れて RED（`s2-07l.447`）。
 #[test]
 fn seat_account_tick_below_threshold_keeps_the_existing_order() {
     let place = acct_place();
     let name = "acctunder";
     let registered = acct_register(&place, name, ACCT_LAUNCH);
     assert_eq!(rc_of(&registered), i32::from(RC_OK), "stderr={}", stderr_of(&registered));
-    acct_measured(&place.state, ACCT_SEAT, 50, &acct_now());
+    acct_measured(&place.state, ACCT_SEAT, 90, &acct_now());
     write_state(&seat_dir_of(&place.state, name), StateFix::Busy { age_s: 0 });
     let pane = fixture(&place.dir, "pane.txt", IDLE_PANE);
 
     let (out, touched) = acct_tick_probed(&place, name, &pane);
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
-    assert_eq!(stdout_of(&out), acct_line("decision=noop reason=busy", &format!("{ST_BUSY} account=a1:50 plugin=unrecorded"), &place.state));
+    assert_eq!(stdout_of(&out), acct_line("decision=noop reason=busy", &format!("{ST_BUSY} account=a1:90 plugin=unrecorded"), &place.state));
     assert!(!touched, "注入しない周は tmux に触れない");
 
     let guard = start_seat(&place.socket, name);
@@ -336,7 +337,7 @@ fn seat_account_tick_below_threshold_keeps_the_existing_order() {
         stdout_of(&out),
         acct_line(
             &format!("decision=inject target={name} consumed=false kind=pointer"),
-            &format!("{ST_IDLE} account=a1:50 plugin=unrecorded"),
+            &format!("{ST_IDLE} account=a1:90 plugin=unrecorded"),
             &place.state
         ),
         "閾値未満の Idle な席には打刻の合図"
@@ -407,7 +408,7 @@ fn seat_account_tick_measures_once_when_the_latest_row_is_stale() {
     fs::remove_dir_all(&place.dir).ok();
 }
 
-/// (5) 閾値以上でも FR29 と同じ除外の周は注入しない: 自席の未 consumed 退避物が在る・cycle lock が live（Busy の
+/// (5) 閾値以上（96 ≥ 95）でも FR29 と同じ除外の周は注入しない: 自席の未 consumed 退避物が在る・cycle lock が live（Busy の
 /// 席は以後の順序どおり `busy`・tmux に触れない・注入の記録なし）。除外が無ければ (1) のとおり注入する。
 #[test]
 fn seat_account_tick_keeps_the_fr29_exclusions_over_threshold() {
@@ -416,7 +417,7 @@ fn seat_account_tick_keeps_the_fr29_exclusions_over_threshold() {
         let name = "acctexcluded";
         let registered = acct_register(&place, name, ACCT_LAUNCH);
         assert_eq!(rc_of(&registered), i32::from(RC_OK), "{case}: stderr={}", stderr_of(&registered));
-        acct_measured(&place.state, ACCT_SEAT, 90, &acct_now());
+        acct_measured(&place.state, ACCT_SEAT, 96, &acct_now());
         let seat = seat_dir_of(&place.state, name);
         write_state(&seat, StateFix::Busy { age_s: 0 });
         if case == "wm-unconsumed" {
@@ -431,7 +432,7 @@ fn seat_account_tick_keeps_the_fr29_exclusions_over_threshold() {
         assert_eq!(rc_of(&out), i32::from(RC_OK), "{case}: stderr={}", stderr_of(&out));
         assert_eq!(
             stdout_of(&out),
-            acct_line("decision=noop reason=busy", &format!("{ST_BUSY} account=a1:90 plugin=unrecorded"), &place.state),
+            acct_line("decision=noop reason=busy", &format!("{ST_BUSY} account=a1:96 plugin=unrecorded"), &place.state),
             "{case}: 閾値以上でも注入しない"
         );
         assert!(!touched, "{case}: tmux に触れない");
@@ -509,7 +510,7 @@ fn seat_account_relaunch_needs_the_signal_the_stop_and_a_shell() {
     }
 }
 
-/// (7) 選べる口座が無い（a1 = 100 は当たっている・a2 = 90 は閾値以上・他は実測行なし）周は立て直さない:
+/// (7) 選べる口座が無い（a1 = 100 は当たっている・a2 = 95 は閾値ちょうど＝以上・他は実測行なし）周は立て直さない:
 /// `noop reason=account-no-candidate` と選定の理由（`relaunch=none:over-threshold`）を判定行に残し、注入 0・
 /// `SeatRegistered` 0・cycle-stamp なし（次の tick で選び直す）。
 #[test]
@@ -522,7 +523,7 @@ fn seat_account_relaunch_without_a_candidate_is_a_typed_noop() {
     let registered = acct_register(&place, name, &launch);
     assert_eq!(rc_of(&registered), i32::from(RC_OK), "stderr={}", stderr_of(&registered));
     acct_measured(&place.state, ACCT_SEAT, 100, &acct_now());
-    acct_measured(&place.state, ACCT_SPARE, 90, &acct_now());
+    acct_measured(&place.state, ACCT_SPARE, 95, &acct_now());
     let first = acct_signal(&place, name);
     assert_eq!(tick_token(&first, "kind").as_deref(), Some("externalize"), "1 周目は退避の合図: {first}");
     acct_stop(&place, name, unix_now().saturating_add(1));
@@ -615,9 +616,10 @@ fn seat_account_relaunch_runs_after_a_context_signal_when_the_front_is_a_shell()
 }
 
 /// (10) 立て直しは**自席の登録 row の口座に留まる**（ADR-0028 §2.4・consumer-sync.md §6・`s2-07l.312`）: context 由来の
-/// 退避 → `Stop` → 前面が shell の席で、自席の口座 a1 = 13%（閾値未満）・他候補 a2 = 5% → 立て直しは a1（判定行
-/// `account=a1:13 relaunch=a1`・雛形の穴は a1 の credential dir・`SeatRegistered` は口座 a1 のまま 1 件増える）。
+/// 退避 → `Stop` → 前面が shell の席で、自席の口座 a1 = 90%（閾値 95 未満）・他候補 a2 = 5% → 立て直しは a1（判定行
+/// `account=a1:90 relaunch=a1`・雛形の穴は a1 の credential dir・`SeatRegistered` は口座 a1 のまま 1 件増える）。
 /// base（逼迫度最小の a2）→ RED。planner / admin が立て直しのたびに別口座へ動いた形（2026-09-15 01:15Z 実測）の対。
+/// 実測値 90 は 85 の manifest では閾値以上＝別口座へ移る（`s2-07l.447` の base でも RED）。
 #[test]
 fn seat_account_relaunch_keeps_the_current_account_below_threshold() {
     let place = acct_place();
@@ -626,7 +628,7 @@ fn seat_account_relaunch_keeps_the_current_account_below_threshold() {
     assert!(guard.ready(), "独立 socket に shell の session を立てられる");
     let registered = acct_register(&place, name, &acct_launcher(&place, name));
     assert_eq!(rc_of(&registered), i32::from(RC_OK), "stderr={}", stderr_of(&registered));
-    acct_measured(&place.state, ACCT_SEAT, 13, &acct_now());
+    acct_measured(&place.state, ACCT_SEAT, 90, &acct_now());
     acct_measured(&place.state, ACCT_SPARE, 5, &acct_now());
     acct_context_signal(&place, name);
     acct_stop(&place, name, unix_now().saturating_add(1));
@@ -636,7 +638,7 @@ fn seat_account_relaunch_keeps_the_current_account_below_threshold() {
 
     let line = stdout_of(&out);
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stdout={line} stderr={}", stderr_of(&out));
-    for (key, want) in [("decision", "inject"), ("kind", "relaunch"), ("consumed", "true"), ("account", "a1:13"), ("relaunch", ACCT_SEAT)] {
+    for (key, want) in [("decision", "inject"), ("kind", "relaunch"), ("consumed", "true"), ("account", "a1:90"), ("relaunch", ACCT_SEAT)] {
         assert_eq!(tick_token(&line, key).as_deref(), Some(want), "{key}: {line}");
     }
     let own_dir = place.state.join("accounts").join(ACCT_SEAT);
@@ -654,9 +656,9 @@ fn seat_account_relaunch_keeps_the_current_account_below_threshold() {
     fs::remove_dir_all(&place.dir).ok();
 }
 
-/// (11) (10) の極性の対: 自席の口座が閾値以上（85 ≥ R-C9-1 の 85）なら留まらず別口座（a2 = 5%）へ（口座由来の退避 →
-/// `Stop` → 前面が shell）。判定行は `account=a1:85 relaunch=a2`・穴は a2 の credential dir・row の口座は a2 に
-/// （base でも PASS＝極性不変）。
+/// (11) (10) の極性の対: 自席の口座が閾値以上（95 ≥ R-C9-1 の 95＝ちょうど）なら留まらず別口座（a2 = 5%）へ（口座由来の退避 →
+/// `Stop` → 前面が shell）。判定行は `account=a1:95 relaunch=a2`・穴は a2 の credential dir・row の口座は a2 に
+/// （85 の manifest でも 95 は閾値以上＝この歯は base でも PASS・極性不変）。
 #[test]
 fn seat_account_relaunch_leaves_the_current_account_at_threshold() {
     let place = acct_place();
@@ -665,7 +667,7 @@ fn seat_account_relaunch_leaves_the_current_account_at_threshold() {
     assert!(guard.ready(), "独立 socket に shell の session を立てられる");
     let registered = acct_register(&place, name, &acct_launcher(&place, name));
     assert_eq!(rc_of(&registered), i32::from(RC_OK), "stderr={}", stderr_of(&registered));
-    acct_measured(&place.state, ACCT_SEAT, 85, &acct_now());
+    acct_measured(&place.state, ACCT_SEAT, 95, &acct_now());
     acct_measured(&place.state, ACCT_SPARE, 5, &acct_now());
     let first = acct_signal(&place, name);
     assert_eq!(tick_token(&first, "kind").as_deref(), Some("externalize"), "閾値ちょうどは退避の合図: {first}");
@@ -676,12 +678,37 @@ fn seat_account_relaunch_leaves_the_current_account_at_threshold() {
 
     let line = stdout_of(&out);
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stdout={line} stderr={}", stderr_of(&out));
-    for (key, want) in [("decision", "inject"), ("kind", "relaunch"), ("consumed", "true"), ("account", "a1:85"), ("relaunch", ACCT_SPARE)] {
+    for (key, want) in [("decision", "inject"), ("kind", "relaunch"), ("consumed", "true"), ("account", "a1:95"), ("relaunch", ACCT_SPARE)] {
         assert_eq!(tick_token(&line, key).as_deref(), Some(want), "{key}: {line}");
     }
     acct_assert_launched_then_restored(&place, name);
     acct_assert_relabelled(&place, name);
     drop(guard);
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// 85 と 95 を弁別する歯（`s2-07l.447`・rules-manifest.md §13・接頭辞 `seat_threshold_95_`）: 登録 row の口座が 90 の席
+/// （85 以上 95 未満）は退避の合図を受けない——Busy の周は `noop reason=busy`・判定行の口座の軸は `account=a1:90` で
+/// `kind=` を持たず・tmux に触れず・注入の記録も無い。85 の manifest では 90 は閾値以上＝`kind=externalize origin=account`
+/// を注入して RED。
+#[test]
+fn seat_threshold_95_account_at_90_gets_no_externalize_signal() {
+    let place = acct_place();
+    let name = "acctninety";
+    let registered = acct_register(&place, name, ACCT_LAUNCH);
+    assert_eq!(rc_of(&registered), i32::from(RC_OK), "stderr={}", stderr_of(&registered));
+    acct_measured(&place.state, ACCT_SEAT, 90, &acct_now());
+    write_state(&seat_dir_of(&place.state, name), StateFix::Busy { age_s: 0 });
+    let pane = fixture(&place.dir, "pane.txt", IDLE_PANE);
+
+    let (out, touched) = acct_tick_probed(&place, name, &pane);
+
+    let line = stdout_of(&out);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(line, acct_line("decision=noop reason=busy", &format!("{ST_BUSY} account=a1:90 plugin=unrecorded"), &place.state));
+    assert_eq!(tick_token(&line, "kind"), None, "90 は閾値 95 未満＝口座由来の退避の合図は出ない: {line}");
+    assert!(!touched, "tmux に触れない");
+    assert!(!place.state.join("inject.jsonl").exists(), "注入の記録なし");
     fs::remove_dir_all(&place.dir).ok();
 }
 

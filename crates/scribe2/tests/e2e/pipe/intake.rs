@@ -1069,6 +1069,27 @@ fn contract_check_reads_requirements_from_the_declared_face() {
     clean(&[&declared, &fallback, &missing]);
 }
 
+/// (6') 要件面が `.md` の周は行頭 `#` の見出しの先頭 token を要件 id に読む（設計 contract-source.md §4・行 k・
+/// `s2-07l.354`）: `## FR1 …` / `## FR2 …` を持つ面で `req = ["FR1"]` の行は通り、`["FR9"]` は「要件面に無い」で
+/// 落ちる。base は `.md` を「形を読めない」で断る（rc 2・RED）。
+#[test]
+fn contract_check_reads_requirements_from_md_headings() {
+    let with_key = format!("{TABLE_VESSEL}requirements = \"spec/reqs.md\"\n");
+    let md = "# 要件\n\n## FR1 便の起動\n\n便を起こす。FR9 は本文の字面。\n\n## FR2 審査\n\n審査する。\n";
+    let passing = table_doc(&table_region(&[table_row("a", &[("req", "[\"FR1\", \"FR2\"]")])]));
+    let declared = table_repo(&passing, &[(".vessel.toml", &with_key), ("spec/reqs.md", md)]);
+    let out = contracts_check(&declared);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "md の見出しの id は通る: {}", stdout_of(&out));
+    assert_eq!(stdout_of(&out).lines().last(), Some("contracts check: docs=1 rows=1 findings=0"), "{}", stdout_of(&out));
+    let failing = table_doc(&table_region(&[table_row("a", &[("req", "[\"FR9\"]")])]));
+    let missing = table_repo(&failing, &[(".vessel.toml", &with_key), ("spec/reqs.md", md)]);
+    let out = contracts_check(&missing);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "本文の字面は id でない: {}", stdout_of(&out));
+    let named = findings_of(&out).iter().any(|line| line.contains("requirement-missing") && line.contains("FR9"));
+    assert!(named, "要件面に無い id を名指す: {}", stdout_of(&out));
+    clean(&[&declared, &missing]);
+}
+
 /// 使い方の誤りは rc 1（stderr に理由）・git repo でない `--repo` は判定できないので rc 2（判定行を出さない）。
 #[test]
 fn contract_check_refuses_usage_errors_and_non_repositories() {
@@ -1428,6 +1449,47 @@ fn contract_closure_ext_real_table_has_zero_findings() {
     assert!(rows >= 8, "母集団は現物の契約表の行（contract-source.md の 8 行以上・空の表で 0 件を名乗らない）: {last}");
 }
 
+// ─────── 名指しの実在の impl 経路（設計 docs/design/contract-source.md §26・§3 (2)・`s2-07l.432`・接頭辞 `contract_names_impl_`） ───────
+
+/// toy repo の method / 関連 fn を持つ file（素の impl `Report::violation`・generic impl `Wide::width`）。どちらの
+/// file も「型::項目」の字面は持たない（呼び手は「値.項目(」なので (a) の字面の経路では解けない）。
+const IMPL_FILES: &[(&str, &str)] = &[
+    (
+        "src/report.rs",
+        "pub struct Report {\n    pub at: u8,\n}\n\nimpl Report {\n    pub fn violation(&self) -> u8 {\n        self.at\n    }\n}\n",
+    ),
+    (
+        "src/wide.rs",
+        "pub struct Wide<T> {\n    pub inner: T,\n}\n\nimpl<T: Copy> Wide<T> {\n    pub fn width(&self) -> usize {\n        0\n    }\n}\n",
+    ),
+];
+
+/// impl 経路（§26）: base が宣言する method / 関連 fn の「型::項目」は `contracts check` で解け、同じ 1 語の形で
+/// 並ぶ実在しない `Report::nope` だけが `name-unresolved` で名指される（done と § 本文の 2 か所ぶんの 2 行）・rc 1。
+/// base（字面の経路だけ）では実在の 2 語も名指されて findings が 6 件になる（偽陽性・C16）。
+#[test]
+fn contract_names_impl_method_is_not_named_by_contracts_check() {
+    let named = "`Report::violation` と `Wide::width` は在る。`Report::nope` は無い。";
+    let doc = table_doc(&table_region(&[table_row("a", &[("done", &format!("\"{named}\""))])]))
+        .replace("## 1. 何を解くか\n\n本文。", &format!("## 1. 何を解くか\n\n{named}"));
+    let repo = table_repo(&doc, IMPL_FILES);
+    let out = contracts_check(&repo);
+    let (text, found) = (stdout_of(&out), findings_of(&out));
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "実在しない 1 語で rc 1: {text}{}", stderr_of(&out));
+    let body_line = doc.lines().position(|line| line.starts_with("`Report::violation`")).unwrap_or_default() + 1;
+    let row_a = findings_for(&found, &doc, "a", "name-unresolved");
+    let want = [("Report::nope", "done".to_owned()), ("Report::nope", format!("section 1 line {body_line}"))];
+    assert_eq!(row_a.len(), want.len(), "名指すのは実在しない 1 語の 2 か所だけ: {text}");
+    for ((name, at), line) in want.iter().zip(&row_a) {
+        assert!(line.contains(&format!("名指し {name} が base に無い（{at}）")), "{name} を {at} で名指す: {line}");
+    }
+    for resolved in ["Report::violation", "Wide::width"] {
+        assert!(!text.contains(resolved), "base が impl で宣言する {resolved} は名指さない: {text}");
+    }
+    assert_eq!(text.lines().last(), Some("contracts check: docs=1 rows=1 findings=2"), "判定行: {text}");
+    clean(&[&repo]);
+}
+
 // ─────── land 済みの `+`（設計 docs/design/contract-source.md §3・契約 (i)・`s2-07l.346`・接頭辞 `contract_table_landed_plus_`） ───────
 
 /// 行 `i` の write-set の項目（`+` 付きの新規 file の宣言・land すると base に実在する）。
@@ -1688,6 +1750,70 @@ fn contract_derive_declared_rows_skip_derivation() {
     let missing = intake_raw(&repo, &state, &pointed_contract(&repo, "z.toml", "zz"), "s2-z");
     assert_eq!(missing.status.code(), Some(i32::from(RC_REFUSED)), "区間に無い行 id は rc 1: {}", stderr_of(&missing));
     assert!(stderr_of(&missing).contains("行 id zz が区間に無い"), "{}", stderr_of(&missing));
+    clean(&[&repo, &state]);
+}
+
+// ───── Declared 行の歯の置き場の門（設計 docs/design/contract-source.md §20・行 t・`s2-07l.391`・接頭辞 `contract_declared_teeth_`） ─────
+
+/// Declared 行（新欄なし + `write-set` あり）で `verify` が nextest 形の行。`write-set` だけを差し替える。
+fn declared_teeth_row(id: &str, filter: &str, write_set: &str) -> String {
+    let verify = format!("[\"cargo nextest run -p toy --no-tests=fail {filter}\"]");
+    table_row(id, &[("write-set", write_set), ("verify", verify.as_str())])
+}
+
+/// (a) Declared 行の `verify` の歯（`derive_` = other.rs と e2e.rs）が `write-set`（tint.rs だけ）の外に在る契約は受付が
+/// `teeth-outside-write-set`（rc 1）で**両方**を辞書順に名指して断り（helper の fn だけの helper.rs は出ない）、run dir は
+/// 撃つ前と同数（便を作らない）。base は Declared を導出も門も無しで通す（rc 0 → RED）。
+#[test]
+fn contract_declared_teeth_outside_write_set_is_refused() {
+    let row = declared_teeth_row("t", "derive_", "[\"crates/toy/src/tint.rs\"]");
+    let (repo, state) = derive_repo(&table_doc(&table_region(&[row])));
+    let before = run_dirs(&state);
+    let out = intake_raw(&repo, &state, &pointed_contract(&repo, "t.toml", "t"), "s2-t");
+    let err = stderr_of(&out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "write-set の外の歯は rc 1: {err}");
+    assert!(err.contains("verify の歯の file が write-set に無い"), "teeth-outside-write-set の理由: {err}");
+    assert!(err.contains("crates/toy/src/other.rs, crates/toy/tests/e2e.rs"), "両方を辞書順に名指す: {err}");
+    assert!(!err.contains("helper.rs"), "helper の fn だけの file は歯の file でない: {err}");
+    assert!(!err.contains("write-set が導出値と一致しない"), "drift は撃たない: {err}");
+    assert_eq!(run_dirs(&state), before, "便を作らない（run dir は撃つ前と同数）");
+    assert_eq!(event_count(&state), 0, "断った周は event を書かない");
+    clean(&[&repo, &state]);
+}
+
+/// (b) 同じ行の `write-set` に歯の 2 file を足した形（3 項目）は通る: rc 0・判定行 `write-set=declared` ∧ `files=3`・
+/// 写しの write-set は契約 file のまま（Declared は差し替えない）。
+#[test]
+fn contract_declared_teeth_inside_write_set_passes() {
+    let write_set = "[\"crates/toy/src/tint.rs\", \"crates/toy/src/other.rs\", \"crates/toy/tests/e2e.rs\"]";
+    let row = declared_teeth_row("u", "derive_", write_set);
+    let (repo, state) = derive_repo(&table_doc(&table_region(&[row])));
+    let out = intake_raw(&repo, &state, &pointed_contract(&repo, "u.toml", "u"), "s2-u");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "歯が write-set の中なら通る: {}", stderr_of(&out));
+    let tokens = intake_tokens(&out);
+    assert!(tokens.contains(&"write-set=declared".to_owned()) && tokens.contains(&"files=3".to_owned()), "{tokens:?}");
+    assert_eq!(copied_write_set(&state, &run_id_of(&out)), ["src/lib.rs"], "写しは契約 file のまま");
+    clean(&[&repo, &state]);
+}
+
+/// (c) base で 0 本の filter 語（`fresh_`）: Declared 行に `tests` 欄は無いので、`write-set` が歯の file を 1 つも持たなければ
+/// 従来の `teeth-place-unresolved`（rc 1・字面不変）で断り、歯の file（e2e.rs）を足せばそれを置き場と読んで通る（rc 0）。
+/// 母集団 = 2 回の intake の rc。
+#[test]
+fn contract_declared_teeth_new_filter_needs_a_teeth_file_in_write_set() {
+    let rows = [
+        declared_teeth_row("v", "fresh_", "[\"crates/toy/src/tint.rs\"]"),
+        declared_teeth_row("w", "fresh_", "[\"crates/toy/src/tint.rs\", \"crates/toy/tests/e2e.rs\"]"),
+    ];
+    let (repo, state) = derive_repo(&table_doc(&table_region(&rows)));
+    let bare = intake_raw(&repo, &state, &pointed_contract(&repo, "v.toml", "v"), "s2-v");
+    let err = stderr_of(&bare);
+    assert_eq!(bare.status.code(), Some(i32::from(RC_REFUSED)), "歯の file の無い write-set は rc 1: {err}");
+    assert!(err.contains("filter 語 fresh_ を含む #[test] の fn が base に無く tests 欄も無い"), "teeth-place-unresolved の字面のまま: {err}");
+    assert!(!state.join("pipe").exists(), "run dir を作らない");
+    let placed = intake_raw(&repo, &state, &pointed_contract(&repo, "w.toml", "w"), "s2-w");
+    assert_eq!(placed.status.code(), Some(i32::from(RC_OK)), "write-set の歯の file が置き場: {}", stderr_of(&placed));
+    assert!(intake_tokens(&placed).contains(&"write-set=declared".to_owned()), "{}", stdout_of(&placed));
     clean(&[&repo, &state]);
 }
 
@@ -2096,6 +2222,81 @@ fn pipe_review_reads_design_section_and_requirements_from_base() {
     assert!(!design.contains("何を解くか") && !design.contains("[[contract]]"), "他の節と契約表は写さない: {design}");
     let requirements = fs::read_to_string(dir.join("requirements.txt")).unwrap_or_default();
     assert_eq!(requirements.trim_end(), "FR2: 2\nFR9: （要件面 design-intent/spec/srs.html に無い）", "{requirements}");
+    clean(&[&repo, &state]);
+}
+
+/// 宣言 `requirements` が `face` を指す導出の toy repo（面の本文は `body`・設計 doc は行 `a` 1 行）と置き場。
+fn faced_repo(face: &str, body: &str) -> (PathBuf, PathBuf) {
+    let doc = table_doc(&table_region(&[derive_row("a", &[("write-set", "[\"crates/toy/src/tint.rs\"]")])]));
+    let vessel = format!("{DERIVE_VESSEL}requirements = \"{face}\"\n");
+    derive_repo_with(&doc, &[(".vessel.toml", &vessel), (face, body)])
+}
+
+/// 設計 pointer `docs/design/toy.md#a` と `req` を持つ契約を intake し（偽 PASS の lens）、審査の材料 `requirements.txt`
+/// の本文（末尾の改行を除く）を返す。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn reviewed_requirements(repo: &Path, state: &Path, req: &[&str]) -> String {
+    let quoted: Vec<String> = req.iter().map(|id| format!("\"{id}\"")).collect();
+    let lines: Vec<String> = contract_body()
+        .into_iter()
+        .filter(|line| !line.starts_with("design") && !line.starts_with("req"))
+        .chain(["design = \"docs/design/toy.md#a\"".to_owned(), format!("req = [{}]", quoted.join(", "))])
+        .collect();
+    let contract = repo.join("a.toml");
+    fs::write(&contract, format!("{}\n", lines.join("\n"))).expect("契約 file を書ける");
+    let out = intake_raw(repo, state, &contract, "s2-a");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    let dir = review_dir(state, &run_id_of(&out));
+    fs::read_to_string(dir.join("requirements.txt")).unwrap_or_default().trim_end().to_owned()
+}
+
+/// (b'') 要件面が `.yaml` の周は `- id: FR1` と同じ mapping の `text:` の値が材料に載る（設計 §4「yaml の `id` + `text`」・
+/// `s2-07l.354`）。`title:` は本文にしない。base は `id="…"` の字面だけを探すので「要件面に無い」になる（RED）。
+#[test]
+fn pipe_review_reads_requirements_text_from_yaml() {
+    let yaml = "requirements:\n  - id: FR1\n    title: 起動\n    text: 便を起こす YAML-TEXT-MARK\n  - id: FR2\n    text: 審査する\n";
+    let (repo, state) = faced_repo("spec/reqs.yaml", yaml);
+    let requirements = reviewed_requirements(&repo, &state, &["FR1", "FR2", "FR9"]);
+    assert_eq!(
+        requirements,
+        "FR1: 便を起こす YAML-TEXT-MARK\nFR2: 審査する\nFR9: （要件面 spec/reqs.yaml に無い）",
+        "{requirements}"
+    );
+    assert!(!requirements.contains("起動"), "title は本文にしない: {requirements}");
+    clean(&[&repo, &state]);
+}
+
+/// (c) 要件面が `.md` の周は `## FR1 …` の見出しの下の本文（次の見出しの直前まで・空白を畳んだ 1 行）が材料に載る。
+/// 無い id は「要件面に無い」。base は `.md` を読めず「要件面に無い」になる（RED）。
+#[test]
+fn pipe_review_reads_requirements_text_from_md() {
+    let md = "# 要件\n\n## FR1 便の起動\n\n便を\n起こす MD-TEXT-MARK。\n\n## FR2 審査\n\n審査する。\n";
+    let (repo, state) = faced_repo("spec/reqs.md", md);
+    let requirements = reviewed_requirements(&repo, &state, &["FR1", "FR9"]);
+    assert_eq!(requirements, "FR1: 便を 起こす MD-TEXT-MARK。\nFR9: （要件面 spec/reqs.md に無い）", "{requirements}");
+    assert!(!requirements.contains("審査する"), "次の見出しの下は写さない: {requirements}");
+    clean(&[&repo, &state]);
+}
+
+/// (d) 裸の `- FR1` の yaml は id の検査は通るが本文が無い＝「（要件面 <path> の FR1 に本文が無い）」の理由が材料に
+/// 載る（黙って空にしない・NFR4）。
+#[test]
+fn pipe_review_reads_requirements_reason_for_bare_yaml_id() {
+    let (repo, state) = faced_repo("spec/reqs.yaml", "requirements:\n  - FR1\n  - FR2\n");
+    let requirements = reviewed_requirements(&repo, &state, &["FR1"]);
+    assert_eq!(requirements, "FR1: （要件面 spec/reqs.yaml の FR1 に本文が無い）", "{requirements}");
+    clean(&[&repo, &state]);
+}
+
+/// (e) `## FR1` の直下が空行だけで次の見出しに続く md は (d) と同じ形の理由が載る（本文の無い id の理由は形を問わない）。
+#[test]
+fn pipe_review_reads_requirements_reason_for_empty_md_heading() {
+    let (repo, state) = faced_repo("spec/reqs.md", "# 要件\n\n## FR1\n\n\n## FR2 審査\n\n審査する。\n");
+    let requirements = reviewed_requirements(&repo, &state, &["FR1", "FR2"]);
+    assert_eq!(requirements, "FR1: （要件面 spec/reqs.md の FR1 に本文が無い）\nFR2: 審査する。", "{requirements}");
     clean(&[&repo, &state]);
 }
 

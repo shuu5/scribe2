@@ -18,6 +18,10 @@ pub const MAX_DEPTH: usize = 64;
 const MAX_PCT_DIGITS: i128 = 20;
 
 /// この境界の極性（[`TreeError`]）: 読む時点で形を確かめ、読めない字面は Err にする。
+///
+/// **Guard ではない**（module の doc の通り）。その除外を持つのは散文ではなく
+/// [`crate::polarity::NOT_A_GUARD`] で、`xtask polarity-sites` が site と網羅 match を両方向で
+/// 突き合わせる（`s2-07l.177`）。
 pub const POLARITY: Polarity = Polarity {
     timing: Timing::InLoop,
     on_failure: OnFailure::FailClosed,

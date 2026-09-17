@@ -61,6 +61,9 @@ jobs:
       # rules manifest の差分の門（設計 rules-manifest.md §4.3・憲法 C5 の「変える」側）。
       # base との比較でしか測れないので、同じ base の取り方を持つこの PR job に相乗りする。
       - run: cargo xtask rules-diff --base '${{ github.event.pull_request.base.sha }}'
+      # 1 便あたりの直接依存の増分の門（設計 rules-manifest.md §4・憲法 C13 / C13.5）。rc は deny の面
+      # （added ≤ R-C13-1.per-pr・total ≤ R-C13-1）だけで決まり、check-delta-ms は判定行に残る検出線。
+      - run: cargo xtask deps-delta --base '${{ github.event.pull_request.base.sha }}'
 
   deny:
     runs-on: ubuntu-latest

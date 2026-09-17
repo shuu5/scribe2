@@ -121,6 +121,9 @@ pub enum Guard {
     Externalize,
     /// 退避物の消費（move）を止める判定＝曖昧・移し先の既在（[`crate::seat::consume`]）。
     Consume,
+    /// runner の起動行の受付＝既に `--account-dir` を持つ行に器の口座を足さずに断る
+    /// （[`crate::pipe::spawn::LineRefusal`]・設計 account-autonomy.md §16）。
+    SpawnLine,
 }
 
 /// [`Guard`] の全 variant（宣言順）。
@@ -151,6 +154,26 @@ pub const ALL: &[Guard] = &[
     Guard::Cycle,
     Guard::Externalize,
     Guard::Consume,
+    Guard::SpawnLine,
+];
+
+/// `Polarity` を持つが **guard ではない**境界（設計 docs/design/polarity.md §3・`s2-07l.177`）。
+///
+/// 極性の宣言 site は `crates/*/src` の `const <NAME>: Polarity` の全数で、[`Guard::polarity`] の
+/// 網羅 match が参照する path とは一致しない——計測や読取りの境界も「測れない周にどちらへ倒れるか」
+/// を型で持つからである。その差は **doc コメントでなくこの閉じた slice** が持つ（散文は規則では
+/// ない・N2）: `xtask polarity-sites` が site の全数と match の参照 path を両方向で突き合わせ、
+/// ここに無い site と、ここに在るのに宣言 site の無い要素を名指す。
+///
+/// 要素は site の const を crate 相対 path で参照した**値**である（[`Guard::polarity`] の arm と
+/// 同じ参照の形）。型は `&[Polarity]` で `Polarity` は struct なので、`enum-slices` の対には
+/// 数えない（`variants_of` が `struct` 宣言を見て対象外にする）。
+pub const NOT_A_GUARD: &[Polarity] = &[
+    crate::fleet::json_tree::POLARITY,
+    crate::fleet::UnmeasuredReason::POLARITY,
+    crate::fleet::select::NoCandidateReason::POLARITY,
+    crate::fleet::usage::UsageError::POLARITY,
+    crate::seat::rebrief::POLARITY,
 ];
 
 impl Guard {
@@ -183,6 +206,7 @@ impl Guard {
             Self::Cycle => crate::seat::cycle::POLARITY,
             Self::Externalize => crate::seat::externalize::POLARITY,
             Self::Consume => crate::seat::consume::POLARITY,
+            Self::SpawnLine => crate::pipe::spawn::POLARITY,
         }
     }
 
@@ -215,6 +239,7 @@ impl Guard {
             Self::Cycle => "seat::cycle::Cycle",
             Self::Externalize => "seat::externalize::ExternalizeError",
             Self::Consume => "seat::consume::ConsumeError",
+            Self::SpawnLine => "pipe::spawn::LineRefusal",
         }
     }
 
@@ -247,6 +272,7 @@ impl Guard {
             Self::Cycle => "cycle-refusal",
             Self::Externalize => "externalize-refusal",
             Self::Consume => "consume-refusal",
+            Self::SpawnLine => "spawn-line",
         }
     }
 

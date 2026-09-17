@@ -434,11 +434,14 @@ fn sections_in_order(prompt: &str, with_answer: bool) -> bool {
 }
 
 /// 席の登録 row を 1 件置く（`seat register` は打刻を要るので、便の歯は行を直に積む・読み手は replay）。
+///
+/// `anchor` は row の anchor（便用の除外はその repo の席だけ・設計 account-autonomy.md §14）: 「席の口座は便から
+/// 外れる」を測る歯は**便の repo の path** を渡す（別の anchor を置くと席の口座は候補に入る）。
 #[expect(
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
-pub(super) fn register_seat_account(state: &Path, account: &str) {
+pub(super) fn register_seat_account(state: &Path, anchor: &Path, account: &str) {
     let event = Event {
         schema: vessel::fleet::SCHEMA,
         ts: vessel::fleet::cli::now_utc(),
@@ -454,7 +457,7 @@ pub(super) fn register_seat_account(state: &Path, account: &str) {
         allowance: None,
         registration: Some(vessel::fleet::Registration {
             role: vessel::seat::role::Role::Planner,
-            anchor: "/repo/anchor".to_owned(),
+            anchor: anchor.display().to_string(),
             target: "rs:planner".to_owned(),
             sid: Some("sid-a".to_owned()),
             account: account.to_owned(),
@@ -556,7 +559,7 @@ fn pipe_ratelimit_resume_excludes_the_registered_seat_account() {
     let (repo, state) = repo_with_state();
     let (id, runner, rules) = rate_limited_with_accounts(&repo, &state, &[IMPLEMENT.to_owned()], &["a2"]);
     put_account(&state, "a2", &[windows(40, 10)]);
-    register_seat_account(&state, "a2");
+    register_seat_account(&state, &repo, "a2");
     let resumed = resume_with_accounts(&repo, &state, &id, &runner, &rules);
     assert_eq!(resumed.status.code(), Some(i32::from(RC_BLOCKED)), "{} / {}", stdout_of(&resumed), stderr_of(&resumed));
     assert!(stdout_of(&resumed).contains(&format!("run={id} next=wait reset=-")), "{}", stdout_of(&resumed));

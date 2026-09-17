@@ -2,6 +2,7 @@
 //! 穴埋め・起動・stdout の JSON 1 行の読み・`verdict.json` の書き・[`super`] から純移動・
 //! `s2-07l.286`）。判定の順と終端は親（[`super::gate`]）が持つ。
 
+use super::findings::Tally;
 use super::{Verdict, JSON_HEAD};
 use crate::fleet::json_lite::{self, Value};
 use crate::pipe::confine::{self, Confinement, Reason, Released};
@@ -27,6 +28,25 @@ pub(super) fn lens_input(worktree: &Path, base: &str, diff: &[u8]) -> LensInput 
 
 /// lens の scope の unit 名に載せる段の名。
 pub(super) const LENS_STAGE: &str = "lens";
+
+/// lens 1 本から得たもの（3 値・理由・findings の集計）。
+///
+/// 集計は**読めた周だけ** `Some` である（`s2-07l.188`）——2 key を持たない出力は判定に届いて
+/// いないので [`Verdict::Inconclusive`] へ倒れ、`verdict.json` にも field が生えない（C10:
+/// 「0 件だった」と「見ていない」を型で分ける）。
+pub(super) struct Judged {
+    /// 3 値。
+    pub(super) verdict: Verdict,
+    /// 理由（lens の evidence か、判定に届かなかった理由）。
+    pub(super) evidence: String,
+    /// findings の集計（読めた周だけ）。
+    pub(super) tally: Option<Tally>,
+}
+
+/// 判定に届かなかった周の戻り（集計は無い）。
+pub(super) fn unjudged(evidence: String) -> Judged {
+    Judged { verdict: Verdict::Inconclusive, evidence, tally: None }
+}
 
 /// `--lens` の cmd の `{contract}` / `{worktree}` を run の path へ置く。
 ///
@@ -64,7 +84,7 @@ pub(super) fn ask_lens(
     worktree: &Path,
     body: &[u8],
     wrap: &confine::Wrap<'_>,
-) -> (Verdict, String, Option<Released>) {
+) -> (Judged, Option<Released>) {
     let (mut command, confinement) = confine::wrap_line(cmd, wrap);
     let spawned = command
         .current_dir(worktree)
@@ -74,7 +94,7 @@ pub(super) fn ask_lens(
         .spawn();
     let mut child = match spawned {
         Ok(found) => found,
-        Err(err) => return (Verdict::Inconclusive, format!("lens を起動できない: {err}"), None),
+        Err(err) => return (unjudged(format!("lens を起動できない: {err}")), None),
     };
     if let Some(mut stdin) = child.stdin.take() {
         // 読まずに終える lens への write は EPIPE になる。**判定は出力で決める**ので
@@ -84,15 +104,14 @@ pub(super) fn ask_lens(
     let waited = child.wait_with_output();
     // **終端で scope を片付ける**（verify 行と同じ・設計 §4.4 errata）。判定は変えない。
     let scope = confine::release_scope(&confinement);
-    let (verdict, evidence) = lens_outcome(waited, &confinement);
-    (verdict, evidence, scope)
+    (lens_outcome(waited, &confinement), scope)
 }
 
 /// 終わった lens の出力から判定を読む。
-fn lens_outcome(waited: std::io::Result<std::process::Output>, confinement: &Confinement) -> (Verdict, String) {
+fn lens_outcome(waited: std::io::Result<std::process::Output>, confinement: &Confinement) -> Judged {
     let out = match waited {
         Ok(found) => found,
-        Err(err) => return (Verdict::Inconclusive, format!("lens の出力を読めない: {err}")),
+        Err(err) => return unjudged(format!("lens の出力を読めない: {err}")),
     };
     let text = String::from_utf8_lossy(&out.stdout);
     // **箱の中で死んだ周は rc より先に見る**（設計 §4.2）。溢れた箱で死んだ lens の rc を
@@ -102,15 +121,12 @@ fn lens_outcome(waited: std::io::Result<std::process::Output>, confinement: &Con
         let killed = (usage.oom_kill >= 1).then_some(Reason::OomKill);
         let killed = killed.or_else(|| (out.status.code().is_none()).then_some(Reason::Signal));
         if let Some(reason) = killed {
-            return (
-                Verdict::Inconclusive,
-                format!("lens が scope の中で死んだ（reason={}）", reason.as_str()),
-            );
+            return unjudged(format!("lens が scope の中で死んだ（reason={}）", reason.as_str()));
         }
     }
     if !out.status.success() {
         let rc = out.status.code().unwrap_or(-1);
-        return (Verdict::Inconclusive, format!("lens が rc {rc} で終わった"));
+        return unjudged(format!("lens が rc {rc} で終わった"));
     }
     parse_lens(&text)
 }
@@ -130,10 +146,15 @@ pub(crate) fn last_json_object(text: &str) -> Result<Vec<(String, Value)>, Strin
 }
 
 /// lens の stdout から最後の JSON 行を読む。読めない周は INCONCLUSIVE。
-fn parse_lens(text: &str) -> (Verdict, String) {
+///
+/// **`findings` と `population` は必須 key である**（`s2-07l.188`・設計 §6 / §17）: どちらかが
+/// 欠けた周・表に無い category・母集団 0 の周は、3 値が何であれ INCONCLUSIVE へ倒す——件数の
+/// 無い verdict は「見て 0 件だった」と「見ていない」を弁別できず、後段がそれを裏書きする
+/// （C10・fail-closed C11.2・既存の INCONCLUSIVE 経路なので便は測り直せる）。
+fn parse_lens(text: &str) -> Judged {
     let pairs = match last_json_object(text) {
         Ok(parsed) => parsed,
-        Err(reason) => return (Verdict::Inconclusive, format!("lens の{reason}")),
+        Err(reason) => return unjudged(format!("lens の{reason}")),
     };
     let get = |key: &str| {
         pairs
@@ -142,12 +163,22 @@ fn parse_lens(text: &str) -> (Verdict, String) {
             .and_then(|(_, value)| value.as_str())
     };
     let evidence = get("evidence").unwrap_or_default().to_owned();
-    match get("verdict").and_then(Verdict::parse) {
-        Some(verdict) => (verdict, evidence),
-        None => (
-            Verdict::Inconclusive,
-            "lens の verdict が 3 値でない".to_owned(),
-        ),
+    let Some(verdict) = get("verdict").and_then(Verdict::parse) else {
+        return unjudged("lens の verdict が 3 値でない".to_owned());
+    };
+    // **欠けた key を名指す**（どちらが無いのかで直す先が違う）。lens 自身の evidence（cap 超過
+    // 等）も併せて残す——2 key を持たない出力の理由はここでしか残らない。
+    let missing = |key: &str| format!("lens の verdict に {key} が無い（evidence: {evidence}）");
+    let read = match (get("findings"), get("population")) {
+        (None, _) => Err(missing("findings")),
+        (_, None) => Err(missing("population")),
+        (Some(counted), Some(population)) => {
+            Tally::parse(counted, population).map_err(|reason| format!("lens の{reason}"))
+        }
+    };
+    match read {
+        Err(reason) => unjudged(reason),
+        Ok(tally) => Judged { verdict, evidence, tally: Some(tally) },
     }
 }
 

@@ -758,6 +758,30 @@ fn fake_bd(dir: &Path, name: &str, body: &str, rc: u8, sleep_s: u64) -> String {
     path.display().to_string()
 }
 
+/// argv で body を選ぶ偽 bd を 1 本作る（上の [`fake_bd`] と同じ script の型・rc は 0）。argv に `--all` を含む周は
+/// `all`（closed を含む一覧）を、含まない周は `open`（台帳の既定＝closed を含まない）を stdout へ出す。argv の写しは
+/// 既存と同じ `<name>.args`（設計 working-memory.md §14・`s2-07l.406`）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn fake_bd_by_args(dir: &Path, name: &str, open: &str, all: &str) -> String {
+    let d = dir.display().to_string();
+    fs::write(dir.join(format!("{name}.open.json")), open).expect("open の body を書ける");
+    fs::write(dir.join(format!("{name}.all.json")), all).expect("all の body を書ける");
+    let script = format!(
+        "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"{d}/{name}.args\"\ncase \"$*\" in\n\
+         *--all*) cat \"{d}/{name}.all.json\" ;;\n\
+         *) cat \"{d}/{name}.open.json\" ;;\nesac\nexit 0\n"
+    );
+    let path = dir.join(name);
+    fs::write(&path, script).expect("fake を書ける");
+    let mut perm = fs::metadata(&path).expect("fake の権限を読める").permissions();
+    perm.set_mode(0o755);
+    fs::set_permissions(&path, perm).expect("fake を実行可能にできる");
+    path.display().to_string()
+}
+
 /// 台帳の待ち上限と memo の閾値 2 つ（3 日 / P2）を持つ rules の fixture を書き、`--rules` に渡す path を返す。
 fn rebrief_rules(place: &WmPlace, secs: u64) -> String {
     fixture(
@@ -846,8 +870,8 @@ fn seat_wm_rebrief_lists_found_wm_with_every_stage_in_marker_order() {
     assert_eq!(vessel::seat::rebrief::ALL.len(), 36, "marker の母集団（`[PLUGIN]` で 24 → 25・現在地の 11 で 36）");
     assert_eq!(
         fs::read_to_string(place.dir.join("bd.args")).unwrap_or_default(),
-        "--readonly\nlist\n--limit\n0\n--json\n",
-        "台帳は --readonly の子 process で読む"
+        "--readonly\nlist\n--all\n--limit\n0\n--json\n",
+        "台帳は --readonly の子 process で読む（`--all` で closed も母集団に入れる・`s2-07l.406`）"
     );
     fs::remove_dir_all(&place.dir).ok();
 }
@@ -1173,6 +1197,133 @@ fn seat_wm_rebrief_is_listed_in_usage_and_refuses_missing_flags() {
     assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "--anchor 欠けは rc 1");
     assert_eq!(stderr_of(&out), usage, "使い方で断る");
     assert!(stdout_of(&out).is_empty(), "stdout は空");
+}
+
+// ─────── `[DIFF]` の母集団に閉じた bead を含める（設計 working-memory.md §14・`s2-07l.406`） ───────
+
+/// `_diff_` の歯の節 3（閉じた id・開いた id・台帳に無い id を出現順に 1 行ずつ言及する）。
+const REBRIEF_DIFF_DIRECTIVES: &str = concat!(
+    "- [confirm] [P1] since=2026-09-01 閉じた続き → SSOT: s2-900\n",
+    "- [confirm] [P1] since=2026-09-01 開いた続き → SSOT: s2-901\n",
+    "- [confirm] [P1] since=2026-09-01 台帳に無い続き → SSOT: s2-902\n",
+);
+
+/// 台帳の 1 要素（status を明示・`labels` は JSON の字面）。
+fn diff_issue(id: &str, status: &str, labels: &str, priority: u64, updated: &str) -> String {
+    format!(
+        "{{\"id\":\"{id}\",\"title\":\"t\",\"status\":\"{status}\",\"priority\":{priority},\"labels\":{labels},\"updated_at\":\"{updated}\"}}"
+    )
+}
+
+/// 要素の列を `bd list --json` の配列にする。
+fn diff_json(issues: &[String]) -> String {
+    format!("[{}]\n", issues.join(",\n"))
+}
+
+/// `_diff_` の歯の場所（自席の退避物 1・打刻 1・argv で body を選ぶ偽 bd）。節 3 は [`REBRIEF_DIFF_DIRECTIVES`]。
+fn rebrief_diff_place(open: &str, all: &str) -> (WmPlace, String) {
+    let place = wm_place();
+    wm_stamp(&place, &["sid-diff"]);
+    let body = format!(
+        "---\nschema: 1\nseat: {WM_TARGET}\ntrigger: manual\n---\n\n{WM_HEAD_PLAN}\n- 続き\n\n{WM_HEAD_DIRECTIVES}\n{REBRIEF_DIFF_DIRECTIVES}"
+    );
+    wm_raw(&place, "working-memory.sid-diff.md", &body);
+    let bd = fake_bd_by_args(&place.dir, "bd-diff", open, all);
+    (place, bd)
+}
+
+/// stdout の `[DIFF` 行。
+fn diff_rows(text: &str) -> Vec<String> {
+    text.lines().filter(|line| line.starts_with("[DIFF")).map(str::to_owned).collect()
+}
+
+/// (a) 閉じた bead は `bd=closed` と名乗り、`unknown` は**台帳に無い** id だけになる（設計 §14 の形 (1)(2)）。
+/// 同じ退避物でも closed を含まない一覧（台帳の既定＝`--all` を無視する偽 bd）で撃つと、閉じた id が `unknown` に
+/// 化ける——「無い」と「閉じた」を同じ語で名乗らないことを、母集団の違いそのもので測る。
+#[test]
+fn seat_wm_rebrief_diff_names_closed_beads_as_closed() {
+    let updated = "2026-09-12T02:01:00Z";
+    let open_only = diff_json(&[diff_issue("s2-901", "open", "[]", 1, updated)]);
+    let with_closed = diff_json(&[
+        diff_issue("s2-900", "closed", "[]", 1, updated),
+        diff_issue("s2-901", "open", "[]", 1, updated),
+    ]);
+    let (place, bd) = rebrief_diff_place(&open_only, &with_closed);
+    let out = wm_rebrief(&place, &bd, &[]);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    let text = stdout_of(&out);
+    assert_eq!(
+        diff_rows(&text),
+        ["[DIFF] s2-900 bd=closed", "[DIFF] s2-901 bd=open", "[DIFF] s2-902 bd=unknown"],
+        "{text}"
+    );
+
+    let closed_blind = fake_bd(&place.dir, "bd-open-only", &open_only, 0, 0);
+    let blind = stdout_of(&wm_rebrief(&place, &closed_blind, &[]));
+    assert_eq!(
+        diff_rows(&blind),
+        ["[DIFF] s2-900 bd=unknown", "[DIFF] s2-901 bd=open", "[DIFF] s2-902 bd=unknown"],
+        "closed を含まない母集団では閉じた id が「無い」に化ける: {blind}"
+    );
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (b) 台帳は 1 回だけ撃ち、argv の写しは `--readonly list --all --limit 0 --json`（`--all` は 1 回だけ・
+/// 従来の 5 語は順も字面もそのまま）。
+#[test]
+fn seat_wm_rebrief_diff_passes_all_once() {
+    let body = diff_json(&[diff_issue("s2-901", "open", "[]", 1, "2026-09-12T02:01:00Z")]);
+    let (place, bd) = rebrief_diff_place(&body, &body);
+    let out = wm_rebrief(&place, &bd, &[]);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    let args = fs::read_to_string(place.dir.join("bd-diff.args")).unwrap_or_default();
+    assert_eq!(
+        args.lines().collect::<Vec<&str>>(),
+        ["--readonly", "list", "--all", "--limit", "0", "--json"],
+        "argv 全体"
+    );
+    assert_eq!(args.lines().filter(|word| *word == "--all").count(), 1, "--all は 1 回だけ: {args}");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (c) closed を含む母集団にしても、status で絞る既存の読み手は件数が変わらない: `[BD-COUNT]` の 3 値と
+/// `[MEMO-*]` の行は closed を含まない一覧で撃った周と 1 byte 同じ（`[DIFF]` だけが変わる）。
+#[test]
+fn seat_wm_rebrief_diff_keeps_open_counts_unchanged() {
+    let (four, ten) = (days_ago(4), days_ago(10));
+    let open_rows = [
+        diff_issue("s2-910", "open", MEMO_LABEL, 2, &four),
+        diff_issue("s2-911", "open", "[]", 3, &four),
+        diff_issue("s2-912", "in_progress", "[]", 1, &four),
+        diff_issue("s2-913", "blocked", "[]", 1, &four),
+        diff_issue("s2-901", "open", "[]", 1, &four),
+    ];
+    let mut all_rows = open_rows.to_vec();
+    all_rows.push(diff_issue("s2-900", "closed", MEMO_LABEL, 1, &ten));
+    all_rows.push(diff_issue("s2-914", "closed", "[]", 0, &ten));
+    let (place, bd) = rebrief_diff_place(&diff_json(&open_rows), &diff_json(&all_rows));
+    let out = wm_rebrief(&place, &bd, &[]);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    let text = stdout_of(&out);
+    let bd_count: Vec<&str> = text.lines().filter(|line| line.starts_with("[BD-COUNT] ")).collect();
+    assert_eq!(bd_count, ["[BD-COUNT] open=3 in_progress=1 blocked=1"], "closed は open にも in_progress にも数えない: {text}");
+    assert_eq!(
+        memo_rows(&text),
+        [
+            "[MEMO-DUE-COUNT] n=0 of=1".to_owned(),
+            "[MEMO-DUE-NONE]".to_owned(),
+            format!("[MEMO-STALE] s2-910 p=2 age_days=4 updated={four}"),
+            "[MEMO-STALE-COUNT] n=1 of=1 unreadable=0".to_owned(),
+        ],
+        "closed の memo は母集団の外（10 日前 / P1 でも stale に数えない）: {text}"
+    );
+
+    let closed_blind = fake_bd(&place.dir, "bd-open-only", &diff_json(&open_rows), 0, 0);
+    let blind = stdout_of(&wm_rebrief(&place, &closed_blind, &[]));
+    assert_eq!(bd_count, blind.lines().filter(|line| line.starts_with("[BD-COUNT] ")).collect::<Vec<&str>>(), "{blind}");
+    assert_eq!(memo_rows(&text), memo_rows(&blind), "{blind}");
+    assert_ne!(diff_rows(&text), diff_rows(&blind), "変わるのは [DIFF] だけ: {text}");
+    fs::remove_dir_all(&place.dir).ok();
 }
 
 // ─────────────── 台帳の棚卸し（memo の判定点と齢・設計 ledger-triage.md §7 / §9 (a)） ───────────────

@@ -19,10 +19,17 @@
 //! 終了で cgroup dir ごと消えるので、外から終了後に読む形は成立しない。包みの `sh -c` が
 //! 自分の `/proc/self/cgroup` から数を読み、stdout の終端に固定形 1 行で出す。器はその行を
 //! [`read_usage`]（pure・in-file の歯が fixture 文字列で測る）で剥がす。
+//!
+//! argv で包む起動（runner / lens が起こす claude・[`wrap_command`]）は epilogue を持てないので、
+//! 器が**走行中に** `memory.peak` を sample する（設計 §13・`s2-07l.273`）: scope の cgroup dir は
+//! `systemctl show` で 1 回解き（[`control_group_of`]）、[`Sampler`] が周期ごとに読んで最後に読めた
+//! 値を保つ（high-water mark ゆえそれが peak）。終端で 1 回読む形は、最後の process の終了で dir が
+//! 消えた正常系を測れない。
 
 use crate::name::NAME;
 use crate::rules::manifest::Manifest;
 use crate::seat::{embedded_manifest, int_rule_of, RuleRead};
+use std::path::Path;
 use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
@@ -247,7 +254,8 @@ const NOT_LOADED: &str = "not loaded";
 /// **判定の極性を持たない**（設計 §4.5）: 片付けに失敗しても行は赤にしない（縮退・憲法 C11.2）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Released {
-    /// unit が既に無い（最後の process の終了で消えた・正常＝record に書かない）。
+    /// unit が既に無い（最後の process の終了で消えた・正常＝[`release_scope`] の呼び手の record には書かず、
+    /// runner / lens の stderr の `scope=` 行だけが `gone` を書く・設計 §13）。
     Gone,
     /// scope の中に残った process を殺した。
     Killed,
@@ -307,6 +315,139 @@ pub fn release_scope(confinement: &Confinement) -> Option<Released> {
     match confinement {
         Confinement::Confined { unit } => Some(release(unit)).filter(|found| *found != Released::Gone),
         Confinement::Unconfined(_) => None,
+    }
+}
+
+/// cgroup v2 の root（`memory.peak` の置き場の頭・設計 §13）。**typed な既定値**で、runner / lens の
+/// `--cgroup-root DIR` が差し替える（env は読まない・C2.2）。包みの epilogue（[`script`]）は自分の字面を
+/// 持つのでここを参照しない（触らない・設計 §13）。
+pub const CGROUP_ROOT: &str = "/sys/fs/cgroup";
+
+/// cgroup dir の中の high-water mark の file 名。
+const MEMORY_PEAK: &str = "memory.peak";
+
+/// `systemctl show` で引く property（scope の cgroup の path・root からの相対）。
+const CONTROL_GROUP: &str = "ControlGroup";
+
+/// 走行中に読んだ scope の peak（閉じた型・設計 §13）。
+///
+/// **読めない周を 0 に融合しない**（C10）: `memory.peak` の無い kernel・dir が消えた後・parse 不能は
+/// [`Peak::Unreadable`] で、行には `-` と書く。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Peak {
+    /// 読めた値（byte）。
+    Bytes(u64),
+    /// 1 度も読めていない。
+    Unreadable,
+}
+
+impl Peak {
+    /// 行に書く字面（`Bytes` は 10 進・`Unreadable` は `-`）。
+    pub fn word(self) -> String {
+        match self {
+            Self::Bytes(bytes) => bytes.to_string(),
+            Self::Unreadable => "-".to_owned(),
+        }
+    }
+
+    /// 次の sample を畳む: 読めた値なら置き換え、読めない周は自分を保つ（high-water mark ゆえ最後に
+    /// 読めた値が peak・dir が消えた後の周で値を失わない）。
+    pub fn absorb(self, next: Self) -> Self {
+        match next {
+            Self::Bytes(_) => next,
+            Self::Unreadable => self,
+        }
+    }
+}
+
+/// `memory.peak` の中身を読む（pure・in-file の歯が fixture で測る）: trim して 10 進の u64・
+/// `Err` / 空 / parse 不能は [`Peak::Unreadable`]。
+pub fn peak_from(read: std::io::Result<String>) -> Peak {
+    read.ok()
+        .and_then(|text| text.trim().parse::<u64>().ok())
+        .map_or(Peak::Unreadable, Peak::Bytes)
+}
+
+/// `<root>/<control_group>/memory.peak` を 1 回読む（file の read 1 回・待ちは無い）。
+///
+/// `ControlGroup` は `/user.slice/…` の絶対形で来るので**先頭の `/` を剥がして**つなぐ——`Path::join` は
+/// 絶対 path を渡されると root を捨てる（`--cgroup-root` の差し替えが黙って効かなくなる）。
+pub fn peak_of(root: &Path, control_group: &str) -> Peak {
+    let relative = control_group.trim_start_matches('/');
+    peak_from(std::fs::read_to_string(root.join(relative).join(MEMORY_PEAK)))
+}
+
+/// scope の cgroup の path（root からの相対）を `systemctl --user show <unit>.scope -p ControlGroup --value`
+/// で 1 回引く（PATH 解決・子 process・[`SYSTEMCTL`]）。解けない周は `None`＝peak は読まない。
+pub fn control_group_of(unit: &str) -> Option<String> {
+    let out = Command::new(SYSTEMCTL)
+        .args(["--user", "show"])
+        .arg(format!("{unit}.scope"))
+        .args(["-p", CONTROL_GROUP, "--value"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output();
+    control_group_from(out)
+}
+
+/// `systemctl show` の結果を読む（pure・in-file の歯が fixture で測る）: rc≠0 / 起動不能 / 空は `None`・
+/// 末尾の改行は trim する。
+pub fn control_group_from(out: std::io::Result<Output>) -> Option<String> {
+    let out = out.ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+    if text.is_empty() {
+        None
+    } else {
+        Some(text)
+    }
+}
+
+/// 走行中の scope の peak の sample（設計 §13）。runner は stream の行ごと・lens は poll の周ごとに
+/// [`Sampler::sample`] を撃ち、終端で [`Sampler::peak`] を行に写す。
+///
+/// cgroup の path は**最初の sample で 1 回だけ**解く（起動の直後ではない）——`systemd-run --scope` は
+/// spawn が返った後に scope を作るので、直後の `show` は空を返しうる。1 回解けなかった周は撃ち直さず
+/// `Unreadable` のまま（`show` を周期で撃たない）。包めなかった周（[`Confinement::Unconfined`]）は
+/// `show` も read も撃たない。
+pub struct Sampler<'a> {
+    /// 包めた周の unit 名（包めなかった周は `None`）。
+    unit: Option<&'a str>,
+    /// cgroup の root（[`CGROUP_ROOT`] か `--cgroup-root`）。
+    root: &'a Path,
+    /// 解いた cgroup の path（外側の `None` は未だ解いていない）。
+    control_group: Option<Option<String>>,
+    /// 最後に読めた値。
+    peak: Peak,
+}
+
+impl<'a> Sampler<'a> {
+    /// 包みの結果と root から。
+    pub fn of(confinement: &'a Confinement, root: &'a Path) -> Self {
+        let unit = match confinement {
+            Confinement::Confined { unit } => Some(unit.as_str()),
+            Confinement::Unconfined(_) => None,
+        };
+        Self { unit, root, control_group: None, peak: Peak::Unreadable }
+    }
+
+    /// 1 回 sample する（`memory.peak` の read 1 回・待ちは足さない）。
+    pub fn sample(&mut self) {
+        let Some(unit) = self.unit else {
+            return;
+        };
+        let resolved = self.control_group.get_or_insert_with(|| control_group_of(unit));
+        if let Some(control_group) = resolved.as_deref() {
+            self.peak = self.peak.absorb(peak_of(self.root, control_group));
+        }
+    }
+
+    /// 最後に読めた値（1 度も読めていなければ [`Peak::Unreadable`]）。
+    pub fn peak(&self) -> Peak {
+        self.peak
     }
 }
 
@@ -514,14 +655,16 @@ pub fn read_usage(stdout: &str) -> Usage {
 #[cfg(test)]
 mod tests {
     use super::{
-        limit_mb, limit_of, mem_total_mb, next_seq, probe_outcome, read_usage, release_scope, released_of, script,
-        tame, unit_name, wrap_command, wrap_line, Caps, Confinement, Limit, Reason, Released, Wrap, PANE_ENV, REASONS,
+        control_group_from, limit_mb, limit_of, mem_total_mb, next_seq, peak_from, peak_of, probe_outcome, read_usage,
+        release_scope, released_of, script, tame, unit_name, wrap_command, wrap_line, Caps, Confinement, Limit, Peak,
+        Reason, Released, Sampler, Wrap, CGROUP_ROOT, PANE_ENV, REASONS,
     };
     use crate::order::is_declaration_order;
     use crate::rules::manifest::Manifest;
     use crate::seat::{manifest_read, RuleRead};
     use std::ffi::OsStr;
     use std::os::unix::process::ExitStatusExt;
+    use std::path::Path;
     use std::process::{Command, ExitStatus, Output};
 
     /// 同じ引数の `unit_name` を 2 回呼ぶと**別の名**になる（追随の再 gate で同名が衝突しない・`s2-07l.234`）。
@@ -600,6 +743,69 @@ mod tests {
     #[test]
     fn confine_release_scope_skips_the_unconfined() {
         assert_eq!(release_scope(&Confinement::Unconfined(Reason::NoTool)), None);
+    }
+
+    /// `memory.peak` の読み（設計 §13）: 10 進の値は `Bytes`・空 / parse 不能 / `Err` は `Unreadable`（0 に
+    /// 融合しない・C10）。`word` は `Bytes` を 10 進の字面・`Unreadable` を `-` に写す。
+    #[test]
+    fn confine_peak_from_reads_bytes_and_marks_the_rest_unreadable() {
+        assert_eq!(peak_from(Ok("5006000000\n".to_owned())), Peak::Bytes(5_006_000_000));
+        assert_eq!(peak_from(Ok(String::new())), Peak::Unreadable, "空");
+        assert_eq!(peak_from(Ok("abc".to_owned())), Peak::Unreadable, "parse 不能");
+        let missing = std::io::Error::new(std::io::ErrorKind::NotFound, "no memory.peak");
+        assert_eq!(peak_from(Err(missing)), Peak::Unreadable, "読めない");
+        assert_eq!(Peak::Bytes(5_006_000_000).word(), "5006000000");
+        assert_eq!(Peak::Unreadable.word(), "-");
+    }
+
+    /// `ControlGroup` は `/` で始まる絶対形で来る。root の下につなぐときに root を**捨てない**
+    /// （`Path::join` に絶対 path を渡すと root が消える）＝tmp の root + `/user.slice/x.scope` で file を読める。
+    #[test]
+    fn confine_peak_of_keeps_the_root_when_control_group_starts_with_slash() {
+        let root = std::env::temp_dir().join(format!("confine-peak-root-{}", std::process::id()));
+        let dir = root.join("user.slice").join("x.scope");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("memory.peak"), "4096\n").unwrap();
+        assert_eq!(peak_of(&root, "/user.slice/x.scope"), Peak::Bytes(4096), "root の下から読む");
+        assert_eq!(peak_of(&root, "user.slice/x.scope"), Peak::Bytes(4096), "相対形も同じ");
+        assert_eq!(peak_of(&root, "/user.slice/y.scope"), Peak::Unreadable, "無い dir は読めない");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 畳み込み: 読めた値は置き換え・読めない周は直前を保つ（最後に読めた値が peak）。全部読めなければ
+    /// `Unreadable` のまま。
+    #[test]
+    fn confine_peak_absorb_keeps_the_last_readable_sample() {
+        let samples = [Peak::Bytes(1), Peak::Unreadable, Peak::Bytes(5), Peak::Unreadable];
+        let folded = samples.iter().fold(Peak::Unreadable, |kept, next| kept.absorb(*next));
+        assert_eq!(folded, Peak::Bytes(5), "最後に読めた値");
+        let none = [Peak::Unreadable, Peak::Unreadable].iter().fold(Peak::Unreadable, |kept, next| kept.absorb(*next));
+        assert_eq!(none, Peak::Unreadable, "1 度も読めない");
+        assert_eq!(Peak::Bytes(3).absorb(Peak::Bytes(2)), Peak::Bytes(2), "読めた値は後の周が勝つ");
+    }
+
+    /// `systemctl show … -p ControlGroup --value` の読み: rc 0 + path は `Some`（末尾の改行を落とす）・rc 1 /
+    /// 空 / 起動不能は `None`。
+    #[test]
+    fn confine_peak_control_group_from_reads_the_show_output() {
+        let out = |raw: i32, stdout: &str| {
+            Ok(Output { status: ExitStatus::from_raw(raw), stdout: stdout.as_bytes().to_vec(), stderr: Vec::new() })
+        };
+        assert_eq!(control_group_from(out(0, "/user.slice/x.scope\n")), Some("/user.slice/x.scope".to_owned()));
+        assert_eq!(control_group_from(out(1 << 8, "/user.slice/x.scope\n")), None, "rc 1");
+        assert_eq!(control_group_from(out(0, "\n")), None, "空");
+        let missing = std::io::Error::new(std::io::ErrorKind::NotFound, "no systemctl");
+        assert_eq!(control_group_from(Err(missing)), None, "起動できない");
+    }
+
+    /// 包めなかった周の [`Sampler`] は `show` も read も撃たず `Unreadable` のまま（行に語が出ない側の材料）。
+    #[test]
+    fn confine_peak_sampler_stays_unreadable_when_unconfined() {
+        let confinement = Confinement::Unconfined(Reason::NoTool);
+        let mut sampler = Sampler::of(&confinement, Path::new(CGROUP_ROOT));
+        sampler.sample();
+        assert_eq!(sampler.peak(), Peak::Unreadable);
     }
 
     /// `wrap_line` が組む起動は `TMUX_PANE` を**外す**指定を持ち、ほかの env を足さない。

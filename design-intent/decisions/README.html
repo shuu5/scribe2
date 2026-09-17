@@ -56,8 +56,12 @@
     { "@id": "./ADR-0032-dialogue-surface-rules-live-in-one-design-doc-and-planner-brief.html" },
     { "@id": "./ADR-0033-core-lines-count-source-only-and-io-lives-in-a-boundary-crate.html" },
     { "@id": "./ADR-0034-dispatcher-starts-reviewed-contracts-automatically.html" },
+    { "@id": "./ADR-0035-live-run-cap-is-one-rules-row.html" },
+    { "@id": "./ADR-0036-role-accounts-are-declared-once-per-host.html" },
     { "@id": "./ADR-0037-rulings-without-a-run-are-approval-events.html" },
-    { "@id": "./ADR-0038-plugin-payload-lives-in-a-generated-dir.html" }
+    { "@id": "./ADR-0038-plugin-payload-lives-in-a-generated-dir.html" },
+    { "@id": "./ADR-0041-role-effective-account-is-one-host-record-and-moves-only-under-pressure.html" },
+    { "@id": "./ADR-0042-run-account-order-is-earliest-seven-day-reset.html" }
   ]
 }
 </script>
@@ -98,7 +102,7 @@
 
 <section id="s2-adr-list" class="informative">
 <h2>§2. ADRs</h2>
-<p class="section-essence" data-audience="human">ADR は 28 本です。 1 本目は実装言語と構成を Rust の単一 static binary に決めた記録、 2 本目は test / lint の toolchain を決めた記録、 3 本目は v1 の完全放棄に伴って憲法の 4 か所 (対話面・拘束条件・自己開発の既定・改訂の手続き) を書き換えた記録、 4 本目は MVP の状態の置き場と前の版と共有する接点の file の形 (追記だけの JSONL・環境変数を使わない・TOML subset) を決めた記録、 5 本目は 3 本目で決めた「承認を受け取る窓口は 1 つ」を、 適用し漏れていた A3 (依存 OSS の追加・削除) へ揃えた記録、 6 本目は構造検査が測る項目の一覧を、 実際に動いているもの (11 本) に合わせて差し替えた記録、 7 本目は「統合 test の file は 3 つまで」という決まりの数え方を、 cargo がテスト用に build するかたまり (integration test target) の数で数えると決めた記録、 8 本目は自分の repo への branch push と PR 作成は「出す」に当たらない (取り消せる) と決めた記録、 9 本目は実装役 (runner) に何を実行してよいかと「test が本当に測っているか」の検証を、 人の口座設定や repo の外の script でなく器が manifest から与えると決めた記録、 10 本目は「実装役が使ってよい command」と「どの便にも共通の検証」の値を器の規則 file でなく相手の repo の宣言 file (目印の隣) に置き、 器の規則 file は宣言が名乗ってよい上限だけを持つと決めた記録、 11 本目は器が起こす claude (実装役と審査役) が起動した人の設定 file も相手の repo の設定 file も 1 つも読まないと決めた記録、 12 本目は口座の使用上限の検出を claude が出す専用の record の構造化 field だけで行うと決めた記録、 13 本目は一覧の正本を動いているコードとその出力に置き文書は pointer だけを持つと決めた記録、 14 本目は「止める仕組み」の性質 (その場で止めるか・迷ったら止めるか) を型で持ち、 その一覧を器の出力の固定 file として残し、 「その場で止める仕組みが無い」状態を構造検査が拒むと決めた記録、 15 本目は席が手を止めているかを画面の見た目でなく席自身が押す判子 (hook の打刻) で決め、 判子の無い席には何も送らないと決めた記録、 26 本目は口座の宣言と host 固有の起動値を state dir の host の manifest 1 file に置き、 口座の登録・一覧・退役・復帰と席の起動を器の口が担って外の wrapper への依存を切ると決めた記録、 27 本目は便に渡す口座を reset が最も近い口座から選び、 同点は走行中の便が少ない口座に倒し、 1 口座あたりの便数で候補を絞らないと決めた記録、 28 本目は他の project に入った器の版を器が測って器が更新し (build 元 commit・読み込み元の記録・install の event)、 hook の配線が変わった席は作り直し、 役割なしの起動行も器が組むと決めた記録です。</p>
+<p class="section-essence" data-audience="human">ADR は 38 本です。 1 本目は実装言語と構成を Rust の単一 static binary に決めた記録、 2 本目は test / lint の toolchain を決めた記録、 3 本目は v1 の完全放棄に伴って憲法の 4 か所 (対話面・拘束条件・自己開発の既定・改訂の手続き) を書き換えた記録、 4 本目は MVP の状態の置き場と前の版と共有する接点の file の形 (追記だけの JSONL・環境変数を使わない・TOML subset) を決めた記録、 5 本目は 3 本目で決めた「承認を受け取る窓口は 1 つ」を、 適用し漏れていた A3 (依存 OSS の追加・削除) へ揃えた記録、 6 本目は構造検査が測る項目の一覧を、 実際に動いているもの (11 本) に合わせて差し替えた記録、 7 本目は「統合 test の file は 3 つまで」という決まりの数え方を、 cargo がテスト用に build するかたまり (integration test target) の数で数えると決めた記録、 8 本目は自分の repo への branch push と PR 作成は「出す」に当たらない (取り消せる) と決めた記録、 9 本目は実装役 (runner) に何を実行してよいかと「test が本当に測っているか」の検証を、 人の口座設定や repo の外の script でなく器が manifest から与えると決めた記録、 10 本目は「実装役が使ってよい command」と「どの便にも共通の検証」の値を器の規則 file でなく相手の repo の宣言 file (目印の隣) に置き、 器の規則 file は宣言が名乗ってよい上限だけを持つと決めた記録、 11 本目は器が起こす claude (実装役と審査役) が起動した人の設定 file も相手の repo の設定 file も 1 つも読まないと決めた記録、 12 本目は口座の使用上限の検出を claude が出す専用の record の構造化 field だけで行うと決めた記録、 13 本目は一覧の正本を動いているコードとその出力に置き文書は pointer だけを持つと決めた記録、 14 本目は「止める仕組み」の性質 (その場で止めるか・迷ったら止めるか) を型で持ち、 その一覧を器の出力の固定 file として残し、 「その場で止める仕組みが無い」状態を構造検査が拒むと決めた記録、 15 本目は席が手を止めているかを画面の見た目でなく席自身が押す判子 (hook の打刻) で決め、 判子の無い席には何も送らないと決めた記録、 26 本目は口座の宣言と host 固有の起動値を state dir の host の manifest 1 file に置き、 口座の登録・一覧・退役・復帰と席の起動を器の口が担って外の wrapper への依存を切ると決めた記録、 27 本目は便に渡す口座を reset が最も近い口座から選び、 同点は走行中の便が少ない口座に倒し、 1 口座あたりの便数で候補を絞らないと決めた記録、 28 本目は他の project に入った器の版を器が測って器が更新し (build 元 commit・読み込み元の記録・install の event)、 hook の配線が変わった席は作り直し、 役割なしの起動行も器が組むと決めた記録、 ADR-0041 は役割の席が使う口座を host に 1 か所だけ在る記録が決め、 同じ役割の席はどの project からでも同じ口座を使い、 その口座が逼迫したときにだけ役割ごと余裕が最大の口座へ移って元へは戻らず、 使える口座が無いときも席は立てて user の裁定を待たせると決めた記録、 ADR-0042 は便に渡す口座を 7 日窓の reset が近い順に選び (7 日窓の残りは reset で消えるので消える順に使う)、 5 時間窓の reset は順序に使わず、 席を起こすときの選び方は変えないと決めた記録です。</p>
 <table>
   <thead><tr><th>id</th><th>title</th><th>status</th><th>date</th></tr></thead>
   <tbody>
@@ -136,8 +140,12 @@
     <tr><td>ADR-0032</td><td><a href="./ADR-0032-dialogue-surface-rules-live-in-one-design-doc-and-planner-brief.html">対話面の作法は設計 doc 1 本が持ち、 planner の雛形は pointer 付きの行で運ぶ (信頼度 4 段を上位に読み手本位の 8 則を融合・harness 一般の規律は global CLAUDE.md から器へ)</a></td><td>accepted</td><td>2026-09-15</td></tr>
     <tr><td>ADR-0033</td><td><a href="./ADR-0033-core-lines-count-source-only-and-io-lives-in-a-boundary-crate.html">core の行数は本体だけを数え、 子 process を撃つ I/O 面は境界 crate へ分ける (上限 40,000 は上げない・binary は 1 つ・境界 crate にも上限)</a></td><td>accepted</td><td>2026-09-15</td></tr>
     <tr><td>ADR-0034</td><td><a href="./ADR-0034-dispatcher-starts-reviewed-contracts-automatically.html">便の起動は器の dispatcher が行う (審査を通った契約を列に入れ、 依存・交差・受付を満たす便を自動で起こす・planner の手動介入は typed な口)</a></td><td>accepted</td><td>2026-09-15</td></tr>
+    <tr><td>ADR-0035</td><td><a href="./ADR-0035-live-run-cap-is-one-rules-row.html">host で同時に走る便の本数は rules 行 1 本の最大値を持つ (値は user 裁定・受付が live の便数を数えて typed に断る・ADR-0034 の「数値上限を持たない」句を部分 supersede)</a></td><td>accepted</td><td>2026-09-16</td></tr>
+    <tr><td>ADR-0036</td><td><a href="./ADR-0036-role-accounts-are-declared-once-per-host.html">役割ごとの口座は host の根の宣言 1 か所が持ち、 全 project の席の起動・立て直し・便の除外がそれを読む (planner / admin の口座を host で統一・逼迫時は宣言の書き換え 1 手で全席が移る・ADR-0026 §2.3 と ADR-0027 の除外を部分 supersede)</a></td><td>accepted</td><td>2026-09-16</td></tr>
     <tr><td>ADR-0037</td><td><a href="./ADR-0037-rulings-without-a-run-are-approval-events.html">run 無しの裁定も承認 event として器が持つ (event kind RulingReceived・逐語は detail・裁定 id は器が打つ ts・書き手は対話面の席の口 1 つ・manifest の裁定 id との突合は doctor)</a></td><td>accepted</td><td>2026-09-16</td></tr>
     <tr><td>ADR-0038</td><td><a href="./ADR-0038-plugin-payload-lives-in-a-generated-dir.html">plugin の実体は生成 dir に置き、 marketplace の source はその dir を指す (cache の写しの単位を plugin に閉じる・生成器が起こし xtask check が drift 0 を測る・plugin root を前提にする現物は 1 定数に追随・再 install は user 手番)</a></td><td>accepted</td><td>2026-09-16</td></tr>
+    <tr><td>ADR-0041</td><td><a href="./ADR-0041-role-effective-account-is-one-host-record-and-moves-only-under-pressure.html">役割の実効の口座は host の根の記録 1 件が持ち、 逼迫した周にだけ余裕が最大の口座へ役割ごと移る (宣言は初期値の種で宣言へは戻らない・候補が無い周も妥協の口座で席を立てて user の裁定を待つ・consult は planner の口座を読む・ADR-0036 の DR3 を supersede)</a></td><td>accepted</td><td>2026-09-17</td></tr>
+    <tr><td>ADR-0042</td><td><a href="./ADR-0042-run-account-order-is-earliest-seven-day-reset.html">便用の並べ鍵は 7 日窓の reset の早い順 (7 日窓の reset を持たない口座は最後・5 時間窓とモデル別窓は鍵にしない・席用の順序は不変・ADR-0027 §2.2 の 1 つ目の鍵を supersede)</a></td><td>accepted</td><td>2026-09-17</td></tr>
   </tbody>
 </table>
 <p data-audience="machine">新しい決定を記録したら本表と JSON-LD の <code>dc:hasPart</code> に追記する。 ADR は frozen (改訂は supersede する新 ADR で行う)。</p>

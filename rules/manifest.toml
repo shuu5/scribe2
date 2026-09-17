@@ -90,10 +90,10 @@ ruled_at = "2026-09-09"
 [[rule]]
 id = "R-C9-1"
 kind = "AccountSelection"
-value = 85
+value = 95
 enabled = true
-ruling = "user 2026-09-13T03:14Z"
-ruled_at = "2026-09-13"
+ruling = "user 2026-09-17T07:30Z"
+ruled_at = "2026-09-17"
 
 [[rule]]
 id = "R-C12-1"

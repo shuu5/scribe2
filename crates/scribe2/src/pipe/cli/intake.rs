@@ -191,7 +191,8 @@ struct Settled {
 /// write-set の扱いと撃つ場所」）。pointer でない `design`（(b) の前の契約 file）は `None`＝従来どおり導出しない。
 ///
 /// - pointer が解けない（doc を読めない・区間が無い・行が無い）周は契約表の欠陥として断る（FR54・fail-closed）。
-/// - `creates` / `tests` / `also` を 1 つも持たず `write-set` を持つ行は [`WriteSet::Declared`]（導出も drift も撃たない）。
+/// - `creates` / `tests` / `also` を 1 つも持たず `write-set` を持つ行は [`WriteSet::Declared`]（導出も drift も撃たず、
+///   verify の歯の file が write-set に在るかの門〔[`closure::declared_teeth`]・§20〕だけを撃つ）。
 /// - それ以外は [`WriteSet::Derived`]: 導出値を作り（解けない欄は typed に断る）、行に `write-set` が在れば集合一致
 ///   でなければ `write-set-drift`・無ければ導出値が write-set になる。
 fn settle_write_set(
@@ -211,9 +212,6 @@ fn settle_write_set(
         refuse(&Refuse::ContractTable(first), &rest)
     })?;
     let declared = row.creates.is_empty() && row.tests.is_empty() && row.also.is_empty() && !row.write_set.is_empty();
-    if declared {
-        return Ok(Some(Settled { kind: WriteSet::Declared, replaced: None, files: row.write_set.len() }));
-    }
     let snapshots = table::read_all(repo, tracked, ".snap");
     let fields = closure::Fields {
         touches: &row.touches,
@@ -224,6 +222,12 @@ fn settle_write_set(
         also: &row.also,
     };
     let base = closure::Base { sources, snapshots: &snapshots, tracked, core_crate: NAME };
+    if declared {
+        // Declared 行は導出も drift も撃たないが、**歯の置き場の門**だけは撃つ（§20・行 t）: verify の nextest 行の
+        // 歯の file が write-set の外に在る契約は、便を作らずに file を全部名指して断る（審査へ先送りしない・C16）。
+        closure::declared_teeth(&fields, &base, &row.write_set).map_err(|error| refuse(&refuse_of(error, &row), &[]))?;
+        return Ok(Some(Settled { kind: WriteSet::Declared, replaced: None, files: row.write_set.len() }));
+    }
     let derived = closure::derive_write_set(&fields, &base).map_err(|error| refuse(&refuse_of(error, &row), &[]))?;
     let files = derived.len();
     if row.write_set.is_empty() {
@@ -247,6 +251,7 @@ fn refuse_of(error: ClosureError, row: &ContractRow) -> Refuse {
         ClosureError::TestsNotATeethFile { item } => Refuse::TestsNotATeethFile { item },
         ClosureError::ItemUnresolved { item } => Refuse::WriteSetItemUnresolved { item },
         ClosureError::FnUndeclared { module, name } => Refuse::FnUndeclared { module, name },
+        ClosureError::TeethOutsideWriteSet { files } => Refuse::TeethOutsideWriteSet { files },
     }
 }
 

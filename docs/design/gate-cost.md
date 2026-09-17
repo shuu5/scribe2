@@ -37,6 +37,7 @@
 | `gate.slot_wait_s` | `GateSlotWaitS`（Int） | 受付で枠が空くのを待つ上限。超えたら並列度 1 で進む（縮退・止めない）。 |
 | `gate.cpu_weight` | `GateCpuWeight`（Int） | 便の scope に付ける CPU の重み（席は既定の重み）。 |
 | `gate.tmux_test_threads` | `GateTmuxTestThreads`（Int） | tmux を立てる歯（e2e の isolated seat）の同時本数。値の写しは nextest の test-group `tmux` の `max-threads`（`.config/nextest.toml`・新規）で、`cargo xtask check` が写しの一致と配線（tmux を立てる歯＝本文が席の fixture の道具を名指すか、それを名指す e2e の木の関数を呼ぶ `#[test]`・閉包は器が関数名の固定点で決め、filter はその歯を module 付きの名で全部列挙する固定形＝file 単位や接頭辞では決めない〔.360 run 2 の QUESTION・helper 越しの歯 21 本を接頭辞が拾えない〕）を測る（clippy.toml ↔ R-C4-4.* と同型・C10.3）。並列 gate 下の負荷で tmux の歯が落ちる flake（`s2-07l.360`・契約表の行 b）の解＝並列度そのものは下げない。 |
+| `pipe.max_live` | `PipeMaxLive`（Int） | host で同時に走る便（live な便）の本数の**最大値**（[ADR-0035](../../design-intent/decisions/ADR-0035-live-run-cap-is-one-rules-row.html)・値は user 裁定 id 付き）。受付が便を作る前に live な便を数え、値以上の周は typed に断る（§24）。変異検査の並列度（`gate.mutants_jobs`）や memory の枠（§3.2）とは別の軸で、走行中の便には効かない。 |
 
 manifest に行が載るまでは ADR-0021 の予定行（C14.2 の相互参照は行が在って成立・ADR-0018 §4 と同じ）。
 
@@ -58,7 +59,7 @@ manifest に行が載るまでは ADR-0021 の予定行（C14.2 の相互参照�
 
 - **module は `pipe/admission.rs`**（§7 の旧名は slots.rs・その file は無い）。code の識別子は admission / Ticket 系で、hook の注入計測の slot（FR21）と intake の「受付」との字面衝突を避ける。file 名の `.slot` と record の `slot=` は ADR-0021 §2.3 の字面のまま。置き場は seat/mod.rs `host_slots_dir`（`StateDir::slots_dir` はその委譲）。
 - **札の中身は 1 行 JSON**（`schema` / `pid` / `run` / `jobs` / `ts`・§3.2 は「state dir と同じ TOML subset」と書いた）。ADR-0004 §2.3 D-3 の TOML subset の列挙を広げないためである。`ts` は UNIX epoch の ms で、生きている判定の起動時刻は `/proc/stat` の `btime` + `/proc/<pid>/stat` の starttime ÷ `USER_HZ`（ABI の 100）で組む（`btime` の秒の切り捨ては持ち主を死んだと読まない側へ寄る）。札は `.partial` に書いて rename する＝読み手は半端な札を見ない。
-- **`Completion::SlotFree { slots_dir, want, job_mb, reserve_mb, cap }`**（§3.2 の分担の宿題の決着）。variant はデータだけを運び、meminfo と札の読み手は wait の内側（`admission::has_room`）が持つ。待ちの間の観測は lock を取らず札も消さない（回収と記録は lock の内側の受付だけ）。`Completion::pid()` は pid を見張らない本 variant で 0 を返す（`/proc/0` は無い）。
+- **`Completion::SlotFree { slots_dir, want, job_mb, reserve_mb, cap }`**（§3.2 の分担の宿題の決着）。variant はデータだけを運び、meminfo と札の読み手は wait の内側（`admission::has_room`）が持つ。待ちの間の観測は lock を取らず札も消さない（回収と記録は lock の内側の受付だけ）。`pid()` は pid を見張らない本 variant で 0 を返す（`/proc/0` は無い）。
 - **`slot=` の値**: `granted` / `degraded` / `unmeasured`、回収が在った周は `reclaimed:<n>`（枠を配れた周）か `<degraded|unmeasured>,reclaimed:<n>`（縮退と重なった周）。測れなかった理由は閉じた enum で `slot_why=<slots-dir|lock|meminfo>` に残す。meminfo が読めない周は札を回収しない（回収の数を残す前に縮退するため）。縮退（`degraded`）の周も 1 枠の札を置く。
 - **包めない周（`Unconfined`）は 1 枠だけを取りにいく**（札は置く）。箱の無い行に並列度を上げると、溢れたときに殺されるのが席の側になる。
 - **受付を通るのは gate の共通 verify の `{jobs}` 行だけ**。land の main 実測（`run_checks`・land.rs）は受付を持たず `jobs = 1` のまま撃つ（gate.rs `UNADMITTED_JOBS`・§3.3 の errata の `EFFECTIVE_JOBS` の改名）。main 実測の検出線は (c) で撃たなくなる。
@@ -81,7 +82,7 @@ manifest に行が載るまでは ADR-0021 の予定行（C14.2 の相互参照�
 ### 4.2 形
 
 - `systemd-run --user --scope --quiet --unit=<NAME>-<run>-<段>-<n> -p MemoryMax=<上限> -p CPUWeight=<gate.cpu_weight> -p OOMPolicy=continue -- sh -c <line>`。`MemoryHigh` は付けない（係数を持たない・rules 行を増やさない）。`OOMPolicy=continue` は包みを systemd の OOM 停止から外すため（既定の `stop` では kernel が箱の中の 1 process を殺した直後に unit ごと止められ、包みが終端行を出す前に SIGTERM で死ぬ・本 host 実測 2026-09-12: 既定で 3 回中 1 回が終端行なし、continue で 3/3 が終端行あり・rc 137）。
-- **上限は 2 種**: `{jobs}` を持つ行 = `実効 jobs × gate.job_memory_mb`。それ以外（`{jobs}` を持たない verify 行〔workspace の nextest / clippy 等〕・runner・lens）= `MemTotal − host.reserve_memory_mb`（host の予約分だけを守る箱。行ごとの値を持たない＝rules 行を増やさない）。
+- **上限は 2 種**: `{jobs}` を持つ行 = `実効 jobs × gate.job_memory_mb`。それ以外の verify 行（`{jobs}` を持たない行〔workspace の nextest / clippy 等〕）= `MemTotal − host.reserve_memory_mb`（host の予約分だけを守る箱。行ごとの値を持たない＝rules 行を増やさない）。runner / lens / claude の包み = `1 × gate.job_memory_mb`（§12・契約表の行 c・裁定 id user 2026-09-15T18:2xZ。行 c の land までの現物は `MemTotal − host.reserve_memory_mb`〔ADR-0021 §2.2 の割り当て〕）。
 - 止められたのは scope の内側の process だけで、席・他の便・他の project は影響を受けない。scope の `memory.events` の `oom_kill` が 1 以上の周は、その行を rc に依らず「測れなかった」に倒す（gate は INCONCLUSIVE・main 実測は `main-unmeasured`・赤に化けさせない）。**検出線の行（`detection-verify`・§5）は例外**で、`oom_kill` ≥ 1 でも測れなかったに倒さない——変異ごとの test process を箱の中で起こす道具は、無限 loop になる変異 1 つが kernel に殺されてもその死を吸収して完走する（測れた周・判定は rc と outcomes が持つ・record の `reason=oom-kill` / `peak_mb` は現物のまま残す・`s2-07l.228`〔.217 run 2 の実測 2026-09-13〕）。包みごと signal で死んだ周（終端行なし）は検出線でも従来どおり測れなかった。
 - **runner の scope が殺された周**: verify 行の「測れなかった」とは極性を分ける（便の内容が測れないのではなく、便自身が host の予約分を超えた）。便は閉じた理由 1 つ（`Failed detail=oom-kill`・pipeline.md §5.2 の `runner-rc` と同じ終端の段・C2 の variant 1 つ）で終端し、`Failed` からは resume しない＝intake からの起こし直し。根拠は包みが出す `memory.events` の `oom_kill`（包みごと死んだ周は signal 死）。peak の記録先（runner.stdout.log の終端行）は契約 (a) で確定する。
 - **lens の scope が殺された周**: FR9 の既存極性のまま **INCONCLUSIVE**（stdout が parse できない周と同じ・pipeline.md §5.3 の判定順を変えない・道具を揃えて同じ便を撃ち直せる〔FR14〕）。runner と違い便の成果は残っているので終端しない。
@@ -90,7 +91,7 @@ manifest に行が載るまでは ADR-0021 の予定行（C14.2 の相互参照�
 
 ### 4.3 測定の環（宣言値を測定値で置き換えるため）
 
-読みは scope の**内側**で行う: 包みの `sh -c` が行の終了後に自分の `/proc/self/cgroup` の path（scope の内側ではそれが scope 自身＝prefix の導出は要らない・端末直起動で `user@<uid>.service` の segment が無い文脈でも成立する）から `memory.peak` と `memory.events` を読み、stdout の終端に固定形の 1 行で出す（固定形は `{` で始めない＝gate.rs `last_json_object` が lens の verdict / runner の質問 record を末尾から探す経路と衝突させない）。器はその行を pure な parser（in-file の歯・fixture 文字列）で剥がし、record に `peak_mb=<n> jobs=<k>` を残す。外から終了後に読む形は成立しない（transient scope は最後の process の終了で消える・2026-09-12 本 host 実測）。包みは `OOMPolicy=continue` で OOM 停止から外す（§4.2）。それでも包みが死んだ周は signal 死（record の 255・gate.rs `recorded_rc`）を代理にする。その周の record にも `reason=<閉じた enum>`（oom-kill / signal）を載せて外からの kill と弁別する（契約 (a)）。`memory.peak` の無い kernel と終端行の無い周は field を欠く＝0 と書かない。`gate.job_memory_mb` の宣言値は、peak の測定が溜まった後に裁定で置き換える（C10: 宣言値を実効に上げるのは測定を通してだけ）。台帳 s2-07l.152（検出行の記録）と同じ行に載せる。
+読みは scope の**内側**で行う: 包みの `sh -c` が行の終了後に自分の `/proc/self/cgroup` の path（scope の内側ではそれが scope 自身＝prefix の導出は要らない・端末直起動で `user@<uid>.service` の segment が無い文脈でも成立する）から `memory.peak` と `memory.events` を読み、stdout の終端に固定形の 1 行で出す（固定形は `{` で始めない＝gate.rs `last_json_object` が lens の verdict / runner の質問 record を末尾から探す経路と衝突させない）。器はその行を pure な parser（in-file の歯・fixture 文字列）で剥がし、record に `peak_mb=<n> jobs=<k>` を残す。外から終了後に読む形は成立しない（transient scope は最後の process の終了で消える・2026-09-12 本 host 実測）。包みは `OOMPolicy=continue` で OOM 停止から外す（§4.2）。それでも包みが死んだ周は signal 死（record の 255・gate.rs `recorded_rc`）を代理にする。その周の record にも `reason=<閉じた enum>`（oom-kill / signal）を載せて外からの kill と弁別する（契約 (a)）。`memory.peak` の無い kernel と終端行の無い周は field を欠く＝0 と書かない。`gate.job_memory_mb` の宣言値は、peak の測定が溜まった後に裁定で置き換える（C10: 宣言値を実効に上げるのは測定を通してだけ）。台帳 s2-07l.152（検出行の記録）と同じ行に載せる。runner / lens が起こす claude の scope（argv の包み・epilogue を持てない）は、器が**走行中に** `memory.peak` を sample し（`systemctl show` で解いた cgroup dir を周期で読む・最後に読めた値が peak・読めない周は `-`）、runner / lens の stderr の `scope=` 行に `claude_peak_bytes=` で残す（§13・`s2-07l.273`）。
 
 ### 4.4 errata（現物との差・s2-07l.157・規範は §4.1〜§4.3 のまま）
 
@@ -198,21 +199,23 @@ e2e は binary を spawn し外部 command は PATH 先頭の stub で差し替�
 - state root の運用（同じ host の state dir は 1 つの親）を doctor（C3.2・移行後の epic）の検査項目に足す。
 - SRS v0.7 に NFR（host の資源を枯渇させない）を足す材料は planner state dir に置いた（user の /folio-architect 手番）。
 
-## 12. runner / lens の箱の上限を gate.job_memory_mb に揃え、cargo mutants を runner の allowlist から外す（契約表の行 c・`s2-07l.230`）
+## 12. runner / lens / claude の箱の上限を 1 × gate.job_memory_mb に揃える（契約表の行 c・`s2-07l.230`・cargo mutants の deny は ADR-0025 / `s2-07l.168` で既着）
 
-- **出所・現物**: .222 run 1 で Failed detail=oom-kill（runner が自分の箱の中で cargo mutants を回し host の memory を圧迫）が起きた。user の裁定（2026-09-15・裁定 id user 2026-09-15T18:2xZ・C5 / A2）は「runner の箱の上限を gate の job と同じ rules 行の値にし、runner の allowlist から cargo mutants を外す」。現物: `limit_of`（`crates/scribe2/src/pipe/confine.rs`）は jobs を持つ行だけ実効 jobs × gate.job_memory_mb を上限にし、それ以外（runner / lens を含む）は MemTotal − host.reserve_memory_mb を上限にしている。runner の許可コマンド列（`rules/manifest.toml` の runner.allowed_commands）は command 単位の allowlist で、cargo の subcommand を個別に禁じる語彙を持たない。
-- **形（何を作るか）**: (1) `limit_of` の分岐を広げ、runner / lens の箱（jobs を持たない包みのうち verify 行でないもの）の上限を gate.job_memory_mb × 1 に揃える。verify 行の上限は変えない。(2) rules 行を 1 つ新設し（禁じる subcommand の列）、`RuleKind` に variant を 1 つ足し、runner の許可判定（`crates/scribe2/src/hook/permission.rs`）がその列にある subcommand を deny にする。runner の雛形（`crates/scribe2/src/headless/runner.txt`）に「検出線は gate が撃つ・runner は撃たない」の 1 行を足す。
-- **触らない**: gate.job_memory_mb / host.reserve_memory_mb の値そのもの、gate の箱の上限。
-- **却下案**: 上限だけ下げて allowlist をそのままにする案は、runner が箱の中で mutants を回して oom-kill になる型を残すため不採用。allowlist を cargo ごと外す案は build / nextest まで撃てなくなるため不採用。
+- **出所・現物**: .222 run 1 で Failed detail=oom-kill（runner が自分の箱の中で cargo mutants を回し host の memory を圧迫）が起きた。user の裁定（2026-09-15・裁定 id user 2026-09-15T18:2xZ・C5 / A2）は「runner の箱の上限を gate の job と同じ rules 行の値にし、runner の allowlist から cargo mutants を外す」。後半（cargo mutants の deny）は ADR-0025 / `s2-07l.168` で main に在る: rules 行 `runner.denied_commands`（値に "cargo mutants"・`RuleKind` の variant `RunnerDeniedCommands`）・Bash の command guard `crates/scribe2/src/hook/command.rs`（pre-tool-use・FailClosed）・intake の同型判定。歯は `crates/scribe2/tests/e2e/hook.rs`（hook_command_guard_denies_a_denied_sequence_from_bash / hook_command_guard_matches_sequence_regardless_of_flag_order）と `crates/scribe2/tests/e2e/rules.rs`（rules_embedded_manifest_declares_the_denied_commands_row）。`crates/scribe2/src/hook/permission.rs` は Bash の承認要求を一律 deny する別の門で、語列の判定は持たない。前半（箱の上限）の現物: `limit_of`（`crates/scribe2/src/pipe/confine.rs`）は gate の verify 行（`crates/scribe2/src/pipe/gate/verify.rs`）だけが呼び、`{jobs}` を持つ行を `Limit` の variant `PerJob`（実効 jobs × gate.job_memory_mb）・持たない行を `HostReserve`（MemTotal − host.reserve_memory_mb）に振る。runner / lens / claude の包みは `limit_of` を通らず、呼び手 4 か所が `HostReserve` を字面で選んでいる: `crates/scribe2/src/pipe/spawn.rs`（runner の process）/ `crates/scribe2/src/pipe/gate.rs`（gate の lens）/ `crates/scribe2/src/pipe/review.rs`（審査の lens）/ `crates/scribe2/src/headless/mod.rs`（runner と lens が起こす claude の子＝cargo が実際に走る箱・§13 のとおり runner の包みとは別 scope）。この割り当ては ADR-0021 §2.2（runner・lens = MemTotal − host.reserve_memory_mb）のもので、本節は裁定 id でその面だけを置き換える（`Limit` の variant と rules 行は増やさない）。
+- **形（何を作るか）**: (1) 上の呼び手 4 か所の limit を `HostReserve` から `PerJob(1)` に替える＝上限 = 1 × gate.job_memory_mb（値は manifest が持つ）。`Limit` の variant は増やさない（§4.2「2 種」のまま）。`limit_of` と gate の verify 行の箱は変えない。`confine.rs` は `HostReserve` の doc の 1 行（「runner・lens」の語を外す）だけ。(2) 禁じる語列の rules 行・`RuleKind` の variant・hook の deny は ADR-0025 / `s2-07l.168` で既着＝本便は行を増やさず、既存の歯が緑のままであることを回帰の柵にする。(3) runner の雛形（`crates/scribe2/src/headless/runner.txt`）の「実行してよい command」節に「検出線（cargo mutants）は gate が撃つ・runner は撃たない（禁じる語列で止まる）」の 1 行を足す。(4) 設計の写し: §4.2 の割り当ての句（本 doc）と pipeline.md §6 の封じ込めの pointer に同じ 1 句。
+- **歯**（呼び手 4 か所に 1 本ずつ・どれか 1 か所を `HostReserve` のまま残すと赤になる）: `crates/scribe2/tests/e2e/pipe/spawn.rs`（runner の unit の MemoryMax）/ `crates/scribe2/tests/e2e/pipe/gate.rs`（gate の lens の unit の MemoryMax ∧ 同じ gate の `{jobs}` 無しの verify 行は host の箱のまま・両方向を 1 本で）/ `crates/scribe2/tests/e2e/pipe/intake.rs`（審査の lens の unit `-review-1` の MemoryMax・審査の歯は既存の pipe_review_ 接頭辞と同じ file）/ `crates/scribe2/tests/e2e/headless.rs`（claude の unit の MemoryMax・雛形の 1 行）。偽 systemd-run は gate.rs の歯の stub が private なので、spawn.rs / intake.rs / headless.rs の歯は同型の stub を歯の中で書く（§13 と同じ・module の可視性を触らない）。
+- **触らない**: gate.job_memory_mb / host.reserve_memory_mb の値そのもの、gate の箱の上限、rules 行・`RuleKind`・`crates/scribe2/src/hook/permission.rs`。
+- **却下案**: 上限だけ下げて allowlist をそのままにする案は、ADR-0025 が語列で止めた時点で前提が消えた。`limit_of` に stage 名の分岐を足す案は、呼び手が行を渡さず `Limit` を字面で選んでいるので unit 名を嗅ぐ分岐になり C2（1 関数 1 列挙）に反するため不採用。`Limit` に 3 つ目の variant を足す案は `PerJob(1)` と同じ式になるため不採用（§4.2「2 種」を守る）。allowlist を cargo ごと外す案は build / nextest まで撃てなくなるため不採用。
+- **risk（裁定の値そのものは触らない）**: claude の箱が 1 × gate.job_memory_mb になると、runner の cargo nextest / clippy の workspace build がその箱で走る（gate は同じ行を host の箱で回している・§4.2）。溢れた周は §4.2 の runner の極性どおり Failed detail=oom-kill で終端し record に残る＝値の見直しは実測後の別裁定（A2）。
 
 ## 13. runner / lens が起こす claude の子の peak memory を record に残す（契約表の行 d・`s2-07l.273`）
 
 - **出所・現物**: planner の実測（2026-09-14）で、runner の record の confine-usage peak_bytes は包みそのものの数 MB しか持たず、claude の子（`crates/scribe2/src/headless/mod.rs` の build が起こす別 scope）は 5000 MB を超えても記録されていなかった。gate-cost.md §4.3「測定の環」の runner 面が空振りし、gate.job_memory_mb の宣言値を測定で置き換える材料が溜まらない。現物: `crates/scribe2/src/pipe/confine.rs` の終端行は包みの末尾で memory.peak を読み、`crates/scribe2/src/headless/mod.rs` の build は claude の scope の unit 名を返して終端で `release_scope` を呼ぶ。
 - **形（何を作るか・run 1 審査 INCONCLUSIVE 2026-09-16「§13 に write-set / seam の材料が無い」の解として書き直し）**:
-  1. **読む時機 = 走行中の sample**（release の直前ではない）: transient scope は最後の process が終わると消える（`confine.rs` の `Released::Gone` の doc「unit が既に無い（最後の process の終了で消えた・正常）」・verified）ので、`child.wait()` の後に読む形は大半の周で `Gone` になり測れない。claude の scope の cgroup dir は起動直後に 1 回 `systemctl --user show <unit>.scope -p ControlGroup --value`（子 process・`SYSTEMCTL` 定数・PATH 解決）で解き、`<cgroup root>/<ControlGroup>/memory.peak` を走行中に周期で読む（high-water mark なので最後に読めた値が peak・値は単調）。読めない周（file 無し・parse 不能・`show` の失敗）は欠落の記号 `-` を保つ（0 と融合しない・C10）。
-  2. **cgroup root は typed な値**: `confine.rs` の定数（`/sys/fs/cgroup`）を既定にし、`runner` / `lens` の口の flag `--cgroup-root DIR`（optional・`KNOWN_FLAGS` に 1 つ・env は読まない・C2.2）で差し替える。歯はこの flag に偽 dir を渡す（`/sys/fs/cgroup` 固定 path への注入 seam は持たない）。
-  3. **書く面 = 既存の stderr 1 行**（`headless/runner.rs` の `runner: scope=<…>`・`headless/lens.rs` の `lens: scope=<…>`・record と呼んでいるのはこの行）。同じ行に `claude_peak_bytes=<n|->` を 1 語足す。stdout（判定の面）と rc は変えない。`spawn.rs` の `pipe: runner scope=` は包みの側で本便の外。
-  4. **sample の置き場**: runner は stream の行を読む loop（`headless/runner.rs`）の各周で 1 回読む（file の read 1 回・追加の待ちは無い）。lens は `wait_with_output` を `try_wait` の poll（1 秒・`std::thread::sleep`・async 無し C13.3）に替え、各周で読む。閉じた型 `Peak { Bytes(u64), Unreadable }` と読み手 1 関数（pure な parse + I/O）は `confine.rs` に置く。
+  1. **読む時機 = 走行中の sample**（release の直前ではない）: transient scope は最後の process が終わると消える（`confine.rs` の `Released::Gone` の doc「unit が既に無い（最後の process の終了で消えた・正常）」・verified）ので、`child.wait()` の後に読む形は大半の周で `Gone` になり測れない。claude の scope の cgroup dir は起動直後に 1 回 `systemctl --user show <unit>.scope -p ControlGroup --value`（子 process・`SYSTEMCTL` 定数・PATH 解決）で解き、`<cgroup root>/<ControlGroup>/memory.peak` を走行中に周期で読む（high-water mark なので最後に読めた値が peak・値は単調）。読めない周（file 無し・parse 不能・`show` の失敗）は欠落の記号 `-` を保つ（0 と融合しない・C10）。歯は scope の消滅を模す＝偽 claude が終端の前に `<cgroup root>/<ControlGroup>` を消し、走行中に読んだ値だけが行に載ることを測る（終端で 1 回読む実装は `-` になる）。
+  2. **cgroup root は typed な値**: `confine.rs` の定数（`/sys/fs/cgroup`）を既定にし、`runner` / `lens` の口の flag `--cgroup-root DIR`（optional・`KNOWN_FLAGS` に 1 つ・env は読まない・C2.2）で差し替える。歯はこの flag に偽 dir を渡す（`/sys/fs/cgroup` 固定 path への注入 seam は持たない）。定数は新設する（現物は `script` の epilogue に字面が埋め込まれているだけ・埋め込みは触らない）。
+  3. **書く面 = 既存の stderr 1 行**（`headless/runner.rs` の `runner: scope=<…>`・`headless/lens.rs` の `lens: scope=<…>`・record と呼んでいるのはこの行）。同じ行に `claude_peak_bytes=<n|->` を 1 語足す。stdout（判定の面）と rc は変えない。`spawn.rs` の `pipe: runner scope=` は包みの側で本便の外。この行は Confined の周に必ず出す（`Gone` の周は `scope=gone`・現物の `release_scope` は `Gone` を `None` に落とすので正常系ではこの行が出ない）。runner / lens は `release` を直に撃って `Released` の字面を写す＝`release_scope` の filter と型は他の呼び手のまま。
+  4. **sample の置き場**: runner は stream の行を読む loop（`headless/runner.rs`）の各周で 1 回読む（file の read 1 回・追加の待ちは無い）。lens は `wait_with_output` を `try_wait` の poll（1 秒・`std::thread::sleep`・async 無し C13.3）に替え、各周で読む。閉じた型 `Peak { Bytes(u64), Unreadable }` と読み手 1 関数（pure な parse + I/O）は `confine.rs` に置く。poll の間も stdout は別 thread（`std::thread`・`read_to_end`）で読み切り、終端で join する（子の stdout は pipe なので、誰も読まないと 64 KiB で子が書き待ちになり poll が永久に回る）。
   5. **systemd 無しの host**: `Confinement::Unconfined` の周は scope が無い＝`show` を撃たず、行に `claude_peak_bytes` の語を**出さない**（現物と同じく `scope=` も出ない・stub は不要＝PATH から `systemd-run` を外した fixture がそのまま「無い host」）。
 - **歯の seam（write-set に数える）**: `crates/scribe2/tests/e2e/headless.rs` に偽 `systemd-run`（内側の command をそのまま exec）と偽 `systemctl`（`show … -p ControlGroup --value` に fixture の path を返し、`kill` に rc 0）を PATH の先頭に置く shim を歯の中で書く（`e2e/pipe/gate.rs` の shim は流用しない＝module の可視性を触らない）。`--cgroup-root` に tmp dir を渡し、`<tmp>/<ControlGroup>/memory.peak` を歯が書く。usage の外形 snapshot `e2e__headless__headless_external_form.snap` は flag の追加で動く。
 - **触らない**: 包みの形・上限・`sh -c` 側の終端行（`confine-usage` の epilogue）・`release_scope` の型と `Released` の variant・`Call` の field・`spawn.rs` / `gate/verify.rs` / `review.rs` / `gate/lens.rs` / `fleet/usage.rs` の `release_scope` の呼び手。
@@ -227,18 +230,18 @@ e2e は binary を spawn し外部 command は PATH 先頭の stub で差し替�
 
 ## 15. gate の周ごとの検出線の出力を run dir へ写し、show はその写しから読む（契約表の行 f・`s2-07l.298`）
 
-- **出所・現物**: admin の提案（2026-09-14・.286 run 1 の実測）で、検出線の出力が便の worktree の out にだけ在り、追随周の撃ち直しが out を作り直すと前の周の生存の一覧が消えることが分かった。gate の record（`crates/scribe2/src/pipe/gate/record.rs` が書く verify.jsonl）は行ごとの rc を残すが生存の一覧は残していない。pipe show の判定行は `detection_lines`（`crates/scribe2/src/pipe/cli.rs`）が読む。
-- **形（何を作るか）**: gate が検出線を撃った直後に、その周の出力（無ければ不在を表す marker）を run dir 配下の周ごとの置き場へ写す（上書きせず周ごとに別の置き場へ）。`detection_lines` の読み口をこの写しへ向け、worktree の out を直接読まないようにする。
+- **出所・現物**: admin の提案（2026-09-14・.286 run 1 の実測）で、検出線の出力が便の worktree の out にだけ在り、追随周の撃ち直しが out を作り直すと前の周の生存の一覧が消えることが分かった。gate の record（`crates/scribe2/src/pipe/gate/record.rs` が書く verify.jsonl）は行ごとの rc を残すが生存の一覧は残していない。pipe show の判定行は `detection_lines`（`crates/scribe2/src/pipe/cli/show.rs`・`s2-07l.349` の純移動で `cli.rs` から移った）が verify.jsonl の detection record の line を逐語で写す。
+- **形（何を作るか）**: gate が検出線を撃った直後に、その周の判定行（record の `line=` と同じ字面）と出力（`outcomes.json` と missed.txt・無ければ不在を表す marker）を run dir 配下の周ごとの置き場へ写す（上書きせず周ごとに別の置き場へ）。`detection_lines` の読み口を写しの判定行へ向け、verify.jsonl を読む経路と worktree の out を直接読む形を持たない。数は数え直さない（total / caught / missed の数え手は `crates/xtask/src/mutantsdiff.rs` の 1 つのまま・C2）ので、偽の検出線が outcomes.json を書かず判定行だけを出す既存の歯の字面は変わらない。判定行も無い周は不在と分かる 1 行（0 件と弁別・判定行の形と衝突しない字面）。
 - **触らない**: 検出線の実行そのもの・判定・verify.jsonl の record。
 - **却下案**: admin が Gated の時点で手で写す運用は散文の手順になり、追随の再 gate が同じ秒に起きると間に合わないため不採用。worktree の out を周ごとに別名で残す案は、worktree が retire で畳まれるため置き場として不適で不採用。
 
-## 16. 契約が名指した生存行に変異を当てて 4 分類で記す（契約表の行 g・`s2-07l.341`）
+## 16. 契約が名指した生存行に変異を当てて outcomes の 4 kind + 不在の 5 値で記す（契約表の行 g・`s2-07l.341`）
 
 - **出所・現物**: .338（歯だけの便）の gate で検出線が 2 周とも母集団 0 になった（admin 実測 2026-09-15）。diff が mod tests の中だけで、検出線が変異を生やす本体の行を持たなかったため。歯だけを足す便が base の生存行を撃ち落としたかどうかを、器がこれまで測っていなかった。現物: 契約 file（`crates/scribe2/src/pipe/contract.rs` の `Contract`・write_set field を含む）は変異の的を宣言する field を持たず、`crates/xtask/src/mutantsdiff.rs` の検出線を撃つ口も diff の追加行を母集団にする経路しか持たない。
-- **形（何を作るか）**: (1) 契約 field を 1 つ新設し、契約が生存行（ファイル・行・変異の名）を的として名指せるようにする（読み手は `crates/scribe2/src/pipe/table.rs` の `ContractRow`）。(2) `crates/xtask/src/mutantsdiff.rs` に的を直接絞って撃つ口を新設し、対象を caught / missed / unviable（コンパイル不能）/ noop（挙動差なし）の 4 分類で記す判定行を出す。(3) gate はこの field が在る便では的を絞った口で検出線を撃ち、無い便は従来どおり diff の追加行を母集団にする。verdict の判定は変えない（検出線は deny ではない）。
-- **触らない**: diff の追加行を母集団にする従来の経路、verdict の 3 値。
+- **形（何を作るか）**: (1) 契約 field を 1 つ新設し、契約が生存行（ファイル・行・変異の名）を的として名指せるようにする（契約表の行の欄の正本は `crates/scribe2/src/pipe/table.rs` の `FIELDS`・読み手は同 file の `ContractRow` と 1 欄ずつ読む `crates/scribe2/src/pipe/table/parse.rs`・欄の追加は `FIELDS` の tracked な生成物 `contracts/schema.toml` の描き直しを伴う〔xtask check が render と tracked の差分 0 を測る〕・契約 file の側は `contract.rs` の optional の欄・intake が写しへ運ぶ受付の歯は `crates/scribe2/tests/e2e/pipe/intake.rs`）。(2) `crates/xtask/src/mutantsdiff.rs` に的を直接絞って撃つ口を新設し、的ごとの分類を閉じた enum 1 つで記す判定行を出す。値は cargo-mutants の outcomes の 4 kind（caught / missed / unviable〔コンパイル不能〕/ timeout＝現物の `Counts` が読む 4 つの数と同じ語）+ 的が outcomes に当たらない absent（file・行・変異の名が現物とずれた）の 5 値で、母集団 = 的の本数・5 値の和 = total。noop（変異前後で挙動差なし）は outcomes の上では missed と同じで測れないため分類に持たない（挙動差の A/B は本節の射程外）。(3) gate はこの field が在る便では的を絞った口で検出線を撃ち、無い便は従来どおり diff の追加行を母集団にする。verdict の判定は変えない（検出線は deny ではない）。
+- **触らない**: diff の追加行を母集団にする従来の経路、verdict の 3 値、挙動差の A/B（手順のまま・別便）。
 - **依存**: `crates/scribe2/src/pipe/gate.rs` / `crates/scribe2/src/pipe/gate/record.rs` で契約表の行 e・f と交差するため、それらの後に流す。
-- **却下案**: 歯が名指す関数の本体全体を母集団に加える案は、宣言した的を測定するという型に合わないため不採用。admin の手作業を続ける案は散文の手順になり、便が増えると追いつかないため不採用。
+- **却下案**: 歯が名指す関数の本体全体を母集団に加える案は、宣言した的を測定するという型に合わないため不採用。noop を分類に入れる案は、outcomes だけでは missed と区別する規則が無く（挙動差は変異前後の実 binary の A/B でしか測れない）偽の outcomes に札を貼るだけの空虚な歯になるため不採用。admin の手作業を続ける案は散文の手順になり、便が増えると追いつかないため不採用。
 
 ## 17. 歯の fixture の dir と器の systemd scope を終端で必ず片付ける（契約表の行 h・`s2-07l.343`）
 
@@ -265,14 +268,15 @@ e2e は binary を spawn し外部 command は PATH 先頭の stub で差し替�
 ## 20. e2e の tmux fixture の prompt 待ち（壁時計 5 秒）を負荷下でも足りる値へ（契約表の行 k・`s2-07l.392`）
 
 - 何が起きているか: admin の実測 2026-09-16 04:5xZ（#246〔docs-only〕の CI で `tests/e2e/hook.rs` の歯 `hook_brief_planner_carries_the_dialogue_surface_lines` が `guard.ready()`〔assert の字面「独立 socket に session を立てられる」〕で落ち、main で単独なら PASS・本日 2 例目の「並列が高いときに fixture の tmux 席が立たない」型・1 例目は検出線の rc 2 = `.390`）。現物（verified・main aee95a3）: `tests/e2e/seat.rs` の `start_seat_sized` が独立 socket に `new-session` を立てた後、`capture` の末尾が prompt の字になるまで **`PROMPT_WAIT` = 5 秒**を 100 ms 刻みで待ち、届かなければ `ready = false` の guard を返す（helper は panic せず呼び側の `#[test]` が落とす）。`ready()` の呼び手は e2e の 7 file・100 箇所（`hook.rs` 8 / `seat.rs` 2 / `seat/account.rs` 13 / `seat/cycle.rs` 35 / `seat/launch.rs` 14 / `seat/register.rs` 5 / `seat/tick.rs` 23・grep）＝同じ 1 定数が全部の tmux fixture の起動待ちを決める。負荷下（CI の並列・便の gate と build の同時走行）では `sh -i` が prompt を描くまで 5 秒を超える周が在る。
-- 形: `PROMPT_WAIT` を **60 秒**にする（`.385` = account-autonomy.md §12 と同じ型）。緑の周は prompt が描かれた時点で抜けるので費用は変わらず、赤の周だけ待ちが延びる。`new-session` 自体が失敗した周（`out.status.success()` が偽）は待たずに `ready = false` を返す形も不変＝「立てられない」と「描くのが遅い」の弁別は現物のまま。assert の字面・`ready()` の型（bool）・`Drop` の畳み方・socket と `-f /dev/null` の分離は不変。本体不変の歯だけの便＝base で RED を作れないので `// flip-check: retroactive` の札で flip-check を通す（pipeline.md §5.3 の対の規則・`.342` の型）。
+- 形: `PROMPT_WAIT` を **60 秒**にする（`.385` = account-autonomy.md §12 と同じ型）。緑の周は prompt が描かれた時点で抜けるので費用は変わらず、赤の周だけ待ちが延びる。`new-session` 自体が失敗した周（`out.status.success()` が偽）は待たずに `ready = false` を返す形も不変＝「立てられない」と「描くのが遅い」の弁別は現物のまま。assert の字面・`ready()` の型（bool）・`Drop` の畳み方・socket と `-f /dev/null` の分離は不変。本体不変の歯だけの便＝base で RED を作れないので、`seat.rs` の test 区間へ `// flip-check: retroactive <bead-id>` の札を 1 行足して flip-check を通す（id 必須・id 無しの札は数えない・base から持ち越した `.196` の札は効かない＝pipeline.md §5.3 の対の規則・`.342` / `.385` の型・xtask 側に登録は無い）。
 - 触らない: 器の src・`ready()` の呼び手 100 箇所・並列度（並列の上限は write-set の重複と直列依存だけ・user 直命 2026-09-16）・`PROMPT` の字と `PS1`。
 - 却下案: 起動を 1 回だけ再試行する（memo の案・`new-session` が通った後の遅さには効かず、通らなかった周の再試行は server の二重起動と socket の取り合いを生む＝待ちを伸ばす方が 1 定数で閉じる）／並列度を下げる（user の許しが要る側・歯を直せば要らない）／歯を `#[ignore]` にする（対話面の行の pin を失う）／CI の再実行で凌ぐ（1 周の損失が続く・#246 で実測）。
 
 ## 21. 検出線が rc 2（測れなかった）で終えた周は同じ gate の中でその行だけ 1 回撃ち直す（契約表の行 l・`s2-07l.390`）
 
 - 何が起きているか: admin の実測 2026-09-16 04:2xZ（`.247` / `.377`・母集団 = 本日 gate に到達した便）。検出線 `cargo xtask mutants-diff`（宣言の `detection-verify`・`{jobs}` の穴）が負荷下（load average 10 前後・並列 10 便）で rc 2（測れなかった・赤ではない）で終わると gate は INCONCLUSIVE に倒し、便は 1 周（追随 → 再 gate = workspace 全件 + 変異）を丸ごと払う。`.247` は再 gate 1 回で PASS＝時間切れの型で、並列を上げるほど頻度が上がる。現物（verified・main aee95a3）: `pipe/gate/verify.rs` の `run_checks_admitted` が `CHECKS` の宣言順に全行を `fire` 1 本で撃ち、`pipe/gate/record.rs` の `detection_unmeasured`（`Check::Detection ∧ rc 2`）を `Counted.detection_unmeasured` に数え、`pipe/gate.rs` の判定が INCONCLUSIVE に倒す。flip-check の base 段には名指せた歯だけの撃ち直し（xtask の `retry_named`・`base-retried=N`）が在るが、検出線には撃ち直しの口が無い。
-- 形: `run_checks_admitted` の **`Check::Detection` の行だけ**、`fire` の結果が `detection_unmeasured` なら**同じ行を同じ受付の形（穴の値・箱・枠）でもう 1 回** `fire` し、2 回目の `Step` を採る（1 行につき撃ち直しは 1 回・3 回目は撃たない）。撃ち直した `Step` は `retried = true` を持ち（`Step` に field 1 つ・`unwrapped` / `check_write_set` / 1 回目の `fire` は false）、`record.rs` の `step_record` が `verify.jsonl` の record に **`retried=1`** を任意 field で足す（schema 1 のまま・§5 の足し方・C10 = 撃ち直した事実を 0 に潰さない）。1 回目の stderr の末尾は従来どおり stderr の log に残す（1 回目の `Step` は `Counted` に数えない＝「測れなかった → 測れた」の向きだけが変わる）。2 回目も rc 2 なら従来どおり `detection_unmeasured` → INCONCLUSIVE（`retried=1 rc=2` の record が残る）。rc 1 の検出線（deny 昇格後の赤）と検出線以外の rc 2 は撃ち直さない（`detection_unmeasured` の 1 点だけ・C11.2 の極性は不変）。land の main 実測（`run_checks`・§5）は同じ 1 本を通るので同じ挙動になる（木が同じ周は検出線を撃たないので実際には gate だけ）。
+- 形: `run_checks_admitted` の **`Check::Detection` の行だけ**、`fire` の結果が `detection_unmeasured` なら**同じ行を同じ受付の形（穴の値・箱・枠）でもう 1 回** `fire` し、2 回目の `Step` を採る（1 行につき撃ち直しは 1 回・3 回目は撃たない）。撃ち直した `Step` は `retried = true` を持ち（`Step` に field 1 つ・`unwrapped` / `check_write_set` / 1 回目の `fire` は false）、`record.rs` の `step_record` が `verify.jsonl` の record に **`retried=1`** を任意 field で足す（schema 1 のまま・§5 の足し方・C10 = 撃ち直した事実を 0 に潰さない）。1 回目の stderr の末尾は従来どおり stderr の log に残す＝`record.rs` の `append_stderr` は `steps` の `Step` と 1 対 1 なので、1 回目を `steps` から落とすと 1 回目の末尾は書かれない。よって 2 回目の `Step` が **1 回目の rc と stderr の末尾を運ぶ欄**（`retried_from`・`Option<(rc, tail)>`・`retried` の bool はこれの有無に畳む）を持ち、`record_verify` はその欄を見つけた周に `append_stderr` を 1 回多く呼んで 1 回目の見出し（`## n=<i> rc=2 retry=1 cmd=…`）+ 末尾を先に書き、2 回目は従来の見出しで続ける（`verify.jsonl` の record は 2 回目の 1 本だけ・診断 log だけが 2 段になる）。1 回目の `Step` は `Counted` に数えない＝「測れなかった → 測れた」の向きだけが変わる。2 回目も rc 2 なら従来どおり `detection_unmeasured` → INCONCLUSIVE（`retried=1 rc=2` の record が残る）。rc 1 の検出線（deny 昇格後の赤）と検出線以外の rc 2 は撃ち直さない（`detection_unmeasured` の 1 点だけ・C11.2 の極性は不変）。land の main 実測（`run_checks`・§5）は同じ 1 本を通るので同じ挙動になる（木が同じ周は検出線を撃たないので実際には gate だけ）。
+- 歯（`pipe_detection_retry_` 接頭辞・`tests/e2e/pipe/gate.rs`・fixture の script は歯の中で書く: 奇数回目は `exit 2`・偶数回目は `exit 0` の検出線／常に `exit 2`／`exit 1`）: (a) rc 2 → rc 0 の検出線を持つ gate は PASS で終わり、撃たれた回数が +2・`verify.jsonl` の `kind=detection` の record は 1 本で `rc=0` `retried=1`／(b) rc 2 が 2 回の周は INCONCLUSIVE・回数 +2（3 回目は無い）・record は `rc=2` `retried=1` の 1 本／(c) rc 1 の検出線と共通 verify の rc 2 は撃ち直されない（回数 +1・`retried` 無し）／(d) (a) の周の `verify.stderr.log` に 1 回目の見出し（`rc=2 retry=1`）と 2 回目の見出し（`rc=0`）が**この順で両方**在る（1 回目の末尾を捨てない pin）。
 - 触らない: `fire` の中身（受付・箱・`run_line_captured`）・`CHECKS` の順序・`detection_unmeasured` の判定・`Counted` の形・gate の verdict の 3 値と rc・common-verify / 契約 verify の行（撃ち直さない）・xtask の `retry_named`・`mutants-diff` の rc の意味（道具の側が持つ）。
 - 却下案: 検出線の rc 2 を PASS 扱いにする（測れないを緑にする・C10 違反）／並列度を下げる（user の許しが要る側・user 直命 2026-09-16）／gate 全体を撃ち直す（1 周と同じ費用）／撃ち直しの回数を rules 行にする（値の線が増える・1 回で足りる＝2 回目も rc 2 なら負荷でなく道具の側）／1 回目の `Step` も `Counted` に残す（`position` が 1 回目の rc 2 を拾って INCONCLUSIVE に倒す＝撃ち直しが効かない）。
 
@@ -286,10 +290,26 @@ e2e は binary を spawn し外部 command は PATH 先頭の stub で差し替�
 ## 23. 負荷下で落ちる歯 — 列の歯は壁時計を記録の pin に替え、refresh の停止経路の歯は起動未達を待たずに段を名指し zombie を残存に数えない（契約表の行 n・`s2-07l.417`）
 
 - 何が起きているか（gate の log 5 便の実測 2026-09-16 11:3xZ〜13:5xZ・verified）: 走行 9〜11・load 5〜12 の下で全件 nextest の歯が落ち、`.389` / `.323` / `.360` を Gated FAIL（retire・実装喪失）に、`.188` を INCONCLUSIVE にした。(1) `tests/e2e/pipe/land.rs` の `pipe_order_regate_fail_leaves_the_queue`（195 s・panic 文 = 「上限まで待たない」）は `assert!(started.elapsed() < Duration::from_secs(30), ..)`＝「列に居ない便を待たない」を壁時計で測っており、負荷下では land 自体（rebase + 再 gate + 主実測）が 30 s を超えて偽に落ちる。待ちの唯一の記録は stdout の `order=` と面 5（`verdicts.jsonl`）の `order`（`pipe/queue.rs` の閉じた 4 値 `first` / `waited:<s>` / `degraded` / `unmeasured`）で、同じ歯の `order_token(&out) == "first"` が「待たなかった」を既に pin している（待ちの別 record は無い）。`pipe_order_pr_cmd_does_not_look_at_the_queue` も同じ壁時計を持つ。(2) `tests/e2e/fleet.rs` の `fleet_usage_refresh_timeout_stops_the_child_and_its_grandchild` は 5 便で落ち、所要は 69〜73 s。panic 文が残る便（`.360`）は `assert_gone` の「child: 子が起動に達しない（pid file が 60s で書かれない・停止経路の失敗ではない）」＝負荷下で偽 claude（包める host では `systemd-run` の scope 越し）が fixture の上限 `REFRESH_TIMEOUT_S`（4 s）までに `{spy}/child` を書けず、器が group を止めて `refresh=timeout` で返った**後**に `spy_line` が `PID_FILE_WAIT`（60 s）を空しく poll して落ちる。壁時計 bound（`assert_refresh_timeout`）ではない（bound は起動の段を測れない）。他 4 便は所要が同じ型（60 s の poll + 停止経路）＝同じ段（deduced・panic 文は log の末尾 20 行に入らない）。(3) 同じ family の `fleet_usage_refresh_timeout_unconfined_kills_the_child_that_ignores_term`（`.323`・8 s）は panic 文が残らず、8 s = 上限 4 + 猶予 2 × 2 の停止経路の全長＝`assert_gone` の `/proc/<pid>` 判定が KILL 後の zombie（回収されるまで `/proc` に残る・`fleet/wait.rs` の group 判定も zombie を数える）を「残った」と読む型が候補（inferred・本便の歯が段を名指せば次の周に確定する）。
-- 形: (1) 列の歯 2 本の壁時計 assert を外し、「待たなかった」は `order_token(&out) == "first"` と面 5 の `exported_order(&state, &id) == "first"`（既存 helper・`waited:<s>` なら待った）で pin する。(2) refresh の family（4 本・共通 helper）: (a) `spy_line` の起動待ちは**器が返る前**にだけ意味が在る＝run が返った後に pid file が無い周は `PID_FILE_WAIT` を待たず即落とし、文に段 `launch`・起動から返るまでの経過・`REFRESH_TIMEOUT_S`・`/proc/loadavg` の 1 分値（provenance・C10）を載せる。(b) `assert_gone` は `/proc/<pid>/stat` の state `Z`（回収待ち）を「残っていない」に数え、`/proc` の消滅は猶予（`pipe.stop_grace_ms`・embedded manifest から読む・`refresh_stop_bound` と同じ読み方）まで poll する。落ちた周の文は段 `stop`・pid・state・経過。(c) fixture の上限 `REFRESH_TIMEOUT_S` を 4 → 15 に（`.249` の 1 → 4 と同じ型・fixture の manifest の値であって rules 行の裁定ではない）。`assert_refresh_timeout` の bound の式（`REFRESH_TIMEOUT_S + STOP_MARGIN_S + 2 × pipe.stop_grace_ms`）は不変で値だけ従属して伸びる。(d) `assert_refresh_timeout` は bound を超えた周の文に段 `return`・経過・上限・猶予を載せる。段の時刻から器の停止経路の欠陥が見えた周は本便で直さず notes に evidence を残し memo に切る。
+- 形: (1) 列の歯 2 本の壁時計 assert を外す。「待たなかった」の pin は歯ごとに違う: 列を通る歯（`pipe_order_regate_fail_leaves_the_queue`）は既存の `order_token(&out) == "first"` に加えて面 5 の `exported_order(&state, &id) == "first"`（既存 helper・`waited:<s>` なら待った）で pin する。面 5 へ書かない pr_cmd の形の歯（`pipe_order_pr_cmd_does_not_look_at_the_queue`・歯の doc の逐語）は列を見ないので `order=` を出さないことの既存 pin（stdout に `order=` が無い）だけを残し、**面 5 の pin は置かない**（record を書かない面に空文字の pin を置いても RED を作れない＝空虚な歯）。(2) refresh の family（4 本・共通 helper）: (a) `spy_line` の起動待ちは**器が返る前**にだけ意味が在る＝run が返った後に pid file が無い周は `PID_FILE_WAIT` を待たず即落とし、文に段 `launch`・経過 2 値（起動から返るまで・返ってから判定まで＝helper が測る値・待たなかったことの証跡）・`REFRESH_TIMEOUT_S`・`/proc/loadavg` の 1 分値（provenance・C10）を載せる。(b) `assert_gone` は `/proc/<pid>/stat` の state `Z`（回収待ち）を「残っていない」に数え、`/proc` の消滅は猶予（`pipe.stop_grace_ms`・embedded manifest から読む・`refresh_stop_bound` と同じ読み方）まで poll する。落ちた周の文は段 `stop`・pid・state・経過。(c) fixture の上限 `REFRESH_TIMEOUT_S` を 4 → 15 に（`.249` の 1 → 4 と同じ型・fixture の manifest の値であって rules 行の裁定ではない）。`assert_refresh_timeout` の bound の式（`REFRESH_TIMEOUT_S + STOP_MARGIN_S + 2 × pipe.stop_grace_ms`）は不変で値だけ従属して伸びる。(d) `assert_refresh_timeout` は bound を超えた周の文に段 `return`・経過・上限・猶予を載せる。段の時刻から器の停止経路の欠陥が見えた周は本便で直さず notes に evidence を残し memo に切る。
 - 触らない: 器の src・rules 行・並列度（user 直命）・fixture の socket と偽 claude の本文・`PID_FILE_WAIT` の値（返る前の待ちとしては不変）。
 - 歯（`gate_flaky_bound_` 接頭辞・`tests/e2e/fleet.rs`）: (a) `gate_flaky_bound_launch_miss_is_reported_without_the_pid_wait` = pid を書かずに上限を超えて眠る偽 claude で `refresh=timeout` の後、起動の helper が段 `launch` の未達を返す（poll しない）。(b) `gate_flaky_bound_zombie_counts_as_gone` = 歯が起こして回収しない子（std の Command で `exit 0` の sh を spawn し wait しない）を `/proc/<pid>/stat` の `Z` で「残っていない」に数える（歯の側の pure な判定）。両方とも helper の変更と同じ file に在り base では該当 0 本（verify 行が rc 4 = RED）＝本体不変の歯だけの便として `// flip-check: retroactive s2-07l.417` の札（pipeline.md §5.3 の型・`.342` と同じ）。既存の歯 6 本（列 2 本・family 4 本）は改名しない。
 - 却下: 壁時計の bound だけ伸ばす（起動の段を測れず、落ちた周の文が経過時間のまま）／`PID_FILE_WAIT` を伸ばす（返った後に待つ意味が無い）／歯を `#[ignore]`（列の順序と停止経路の pin を失う）／並列度を下げる（user 直命）／偽 claude が pid を書くまで器の上限を止める（器の src に歯の都合を入れる）。
+
+## 24. host で同時に走る便の本数の最大値 — rules 行 `pipe.max_live` を受付が live な便の本数で撃つ（契約表の行 o・`s2-07l.398`）
+
+- 何が起きているか（user 直命 2026-09-16 05:5xZ / 裁定 06:39Z・11:14Z・逐語は台帳 `s2-07l` notes・決定は [ADR-0035](../../design-intent/decisions/ADR-0035-live-run-cap-is-one-rules-row.html)）: 並列度を上げた周の実測（ThinkPad・16 core）は load 18〜26・CPU 81 ℃で memory は 10 / 62 GB＝受付（§3.2）は memory の枠だけで本数を絞るので CPU と温度の逼迫が受付に映らない。user は、走っている便は止めず次に走らせる分から絞る → 同時本数の最大値を 1 つ器の規則として持つ・値は 16、と裁定した（裁定 id = user 2026-09-16T11:14Z・逐語は台帳・CON2）。暫定の上限は admin の launcher の変数と live を数え直す script（器の外・C2.2 / N2・ADR-0034 §1 が事故として挙げた型）に在り、器には無い。ADR-0034 の決定文と SRS FR68 の「数値上限を持たない」句は ADR-0035 が部分 supersede する（SRS の同句は user の /folio-architect の周）。
+- 形: (1) rules 行 `pipe.max_live`（kind `PipeMaxLive`・Int・本・**値は user 裁定**・C5）を §3.1 の表と manifest に足す（連鎖は行 j〔[account-autonomy.md](./account-autonomy.md) §13〕と同型: `RuleKind` の variant・Int の列・manifest の行・[rules-manifest.md](./rules-manifest.md) §4 の表・歯の kind 件数）。(2) 受付（`pipe/cli/intake.rs`・交差の判定 `exclude_overlap` と同じ段・`--design` / 従来形の両方が通る同じ関数）が、交差と同じ live の判定（`pipe/cli/state.rs` の `live`・終端でない run・段の網羅 match）で state dir の live な便を数え、本数 ≥ 値の周は `Refuse` に足す variant 1 つ（live の本数と上限を運ぶ・slug `max-live`・stderr の 1 行 `pipe: max-live live=<n> cap=<c>`）で断る（run を作らず event を書かない・rc は既存の拒否と同じ 1）。live を読めない便が 1 つでも在れば交差と同じく `WriteSetUnreadable` 側（rc 2・fail-closed・NFR4）。数える順は交差の前（上限で断る周は交差の全組を並べない）。(3) 数えるのは便を作る前だけ＝走行中の便には効かず、`pipe resume` と追随の起こし直しは新しい便を作らないので数えない。(4) dispatcher の列の理由（[dispatcher.md](./dispatcher.md) §3 の閉じた型）に「上限で待つ」variant 1 つを足すのは行 a の Landed 後の別の行（本行は受付だけ）。(5) 一時的な引き下げは rules 行の値の改訂（裁定 id 付きの PR）でだけ行い、env・launcher の変数・host.toml から読まない（C1 / C2.2）。
+- 触らない: 受付の memory の枠（§3.2）と `gate.mutants_jobs`・交差の判定 `overlaps`・`pipe run` / `pipe intake` の外形（usage）・段の enum・`Refuse` の既存 variant と rc の語彙。
+- 歯（`pipe_intake_max_live_` 接頭辞・`tests/e2e/pipe/intake.rs`・toy repo・tmp の manifest を `--rules` で渡す）: `pipe.max_live = 1` で live 1 本の下の 2 本目の intake が slug `max-live` と `live=1 cap=1` の 1 行で断られ、run dir も event も増えない／その live の便を `stop --run` で終端に倒すと同じ契約が通る／Gated で verdict FAIL の便は live に数えず上限 1 でも通る／写しを読めない live の便が在る周は `write-set-unreadable`（rc 2）で断る。rules 行は kind 件数の pin + 外形の歯（行 j と同型）。
+- 却下: ADR-0035 §3（写しは持たない）。
+
+## 25. 一時 scope を終端で unload する — `--collect` と kill の後の `reset-failed`（契約表の行 p・`s2-07l.421`）
+
+- 何が起きているか（別 project の planner の relay 2026-09-16・planner 再実測・verified）: host の `systemctl --user --failed` に器の一時 scope が 239 件残っていた（probe 85 / review 60 / common 48 / contract 14 / lens 11 / runner 10 / lens-claude 4 / toy 1）。sample の state は `ActiveState=failed SubState=failed Result=success`＝process は正常終了しているのに unit が failed で残る（transient scope は `--collect` が無いと終了後に unit を残す周がある）。同じ host の他 project の観察（failed unit 0）を汚す。現物: `pipe/confine.rs` の `scope_args` に `--collect` が無く、`release`（`systemctl --user kill --signal=SIGKILL`）は残った unit を `reset-failed` しない。probe（`sh -c exit 0` の scope）は起動結果だけ読む。
+- 形: (1) `scope_args` に `--collect` を 1 語足す（systemd の `-G`・全部の scope に効く・終了後に unit を unload・失敗した周も）。(2) `release` は kill の後に `systemctl --user reset-failed <unit>.scope` を 1 回撃つ（unit が無い周の字面は `Gone` と同じ扱い・reset の rc は record に写さない＝`Released` の閉じた 4 値は不変）。(3) probe の scope は (1) で消える（後始末の口を足さない）。
+- 触らない: 箱の大きさ（`MemoryMax` / `CPUWeight` / `OOMPolicy`）・`Released` の variant と `as_str`・record の `confined=` / `reason=` の語彙・封じ込めの 3 線。
+- 歯（`confine_collect_` 接頭辞・`pipe/confine.rs` の in-file の pure な歯 + `tests/e2e/pipe/gate.rs`）: `scope_args` の列に `--collect` が 1 回在り既存の引数の順序が不変／偽 `systemctl` の呼出の写しに `kill` の後 `reset-failed` が 1 回在る／unit が無い周（`reset-failed` が「not loaded」の字面で断る）も `Gone` として record が変わらない。
+- 却下: 定期の `reset-failed` を管理 tick に置く（掃除の 2 本目・原因の側を直さない）／`--collect` だけ（release で kill した周は failed のまま残る）／人が `systemctl --user reset-failed` を撃つ運用（散文の手順・N2）。
 
 <!-- contracts:begin -->
 schema = 1
@@ -316,13 +336,13 @@ done = "tmux を立てる歯が test-group tmux で同時本数 1 に絞られ�
 
 [[contract]]
 id = "c"
-title = "runner / lens の箱の上限を gate.job_memory_mb に揃え、cargo mutants を runner の allowlist から外す（裁定 id user 2026-09-15T18:2xZ）"
+title = "runner / lens / claude の箱の上限を 1 × gate.job_memory_mb に揃える（裁定 id user 2026-09-15T18:2xZ・cargo mutants の deny は ADR-0025 / s2-07l.168 で既着）"
 req = ["FR46", "NFR3"]
 section = "12"
-write-set = ["crates/scribe2/src/pipe/confine.rs", "rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "crates/scribe2/tests/e2e/rules.rs", "docs/design/rules-manifest.md", "crates/scribe2/src/hook/permission.rs", "crates/scribe2/src/headless/runner.txt", "crates/scribe2/tests/e2e/pipe/spawn.rs", "crates/scribe2/tests/e2e/hook.rs", "docs/design/gate-cost.md", "docs/design/pipeline.md"]
-verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_confine_runner_limit_"]
+write-set = ["crates/scribe2/src/pipe/confine.rs", "crates/scribe2/src/pipe/spawn.rs", "crates/scribe2/src/pipe/gate.rs", "crates/scribe2/src/pipe/review.rs", "crates/scribe2/src/headless/mod.rs", "crates/scribe2/src/headless/runner.txt", "crates/scribe2/tests/e2e/pipe/spawn.rs", "crates/scribe2/tests/e2e/pipe/gate.rs", "crates/scribe2/tests/e2e/pipe/intake.rs", "crates/scribe2/tests/e2e/headless.rs", "docs/design/gate-cost.md", "docs/design/pipeline.md"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_confine_runner_limit_", "cargo nextest run -p scribe2 --no-tests=fail pipe_confine_lens_box_", "cargo nextest run -p scribe2 --no-tests=fail pipe_confine_review_box_", "cargo nextest run -p scribe2 --no-tests=fail headless_runner_box_"]
 size = "S"
-done = "runner の箱の上限が gate.job_memory_mb × 1 に揃い、cargo mutants が runner の permission 判定で deny になる（既存の歯は緑のまま）"
+done = "runner / lens / claude の包みの MemoryMax が 1 × gate.job_memory_mb に揃い、gate の verify 行の箱は不変、runner の雛形に検出線の 1 行が在る（rules 行は増やさず、cargo mutants の deny は既着の歯が緑のまま）"
 
 [[contract]]
 id = "d"
@@ -330,9 +350,9 @@ title = "runner / lens が起こす claude の子の peak memory を record に�
 req = ["FR46", "NFR3"]
 section = "13"
 write-set = ["crates/scribe2/src/pipe/confine.rs", "crates/scribe2/src/headless/runner.rs", "crates/scribe2/src/headless/lens.rs", "crates/scribe2/tests/e2e/headless.rs", "crates/scribe2/tests/e2e/snapshots/e2e__headless__headless_external_form.snap", "docs/design/gate-cost.md"]
-verify = ["cargo nextest run -p scribe2 --no-tests=fail headless_claude_peak_"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail headless_claude_peak_", "cargo nextest run -p scribe2 --lib --no-tests=fail confine_peak_"]
 size = "M"
-done = "claude の scope の memory.peak が走行中に sample され runner / lens の stderr の scope= の行に claude_peak_bytes= で残り、読めない周は 0 でなく - になり、systemd 無しの host では語が出ない"
+done = "claude の scope の memory.peak が走行中に sample され、scope が終端で消えた周も runner / lens の stderr の scope= の行（Confined の周は gone でも出る）に claude_peak_bytes= で残り、読めない周は 0 でなく - になり、lens の poll は stdout を読み切り、systemd 無しの host では語が出ない"
 
 [[contract]]
 id = "e"
@@ -349,20 +369,20 @@ id = "f"
 title = "gate の周ごとの検出線の出力を run dir へ写し、show はその写しから読む"
 req = ["FR8", "FR22"]
 section = "15"
-write-set = ["crates/scribe2/src/pipe/gate/record.rs", "crates/scribe2/src/pipe/gate.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/tests/e2e/pipe/gate.rs", "docs/design/gate-cost.md"]
+write-set = ["crates/scribe2/src/pipe/gate/record.rs", "crates/scribe2/src/pipe/gate.rs", "crates/scribe2/src/pipe/cli/show.rs", "crates/scribe2/tests/e2e/pipe/gate.rs", "docs/design/gate-cost.md"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_gate_detection_copy_"]
 size = "S"
 done = "検出線の出力が周ごとに run dir へ残り、pipe show が worktree の out でなくその写しから判定行を出す"
 
 [[contract]]
 id = "g"
-title = "契約が名指した生存行に変異を当てて 4 分類（caught / missed / unviable / noop）で記す"
+title = "契約が名指した生存行に変異を当てて outcomes の 4 kind（caught / missed / unviable / timeout）+ 不在（absent）の 5 値で記す"
 req = ["FR8"]
 section = "16"
-write-set = ["crates/scribe2/src/pipe/contract.rs", "crates/scribe2/src/pipe/table.rs", "crates/scribe2/src/pipe/gate.rs", "crates/scribe2/src/pipe/gate/record.rs", "crates/xtask/src/mutantsdiff.rs", "crates/scribe2/tests/e2e/pipe/gate.rs", "crates/scribe2/tests/e2e/pipe/intake.rs", "docs/design/gate-cost.md", "docs/design/contract-source.md"]
-verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_gate_targets_", "cargo nextest run -p xtask --no-tests=fail mutants_targets_"]
+write-set = ["crates/scribe2/src/pipe/contract.rs", "crates/scribe2/src/pipe/table.rs", "crates/scribe2/src/pipe/table/parse.rs", "contracts/schema.toml", "crates/scribe2/src/pipe/gate.rs", "crates/scribe2/src/pipe/gate/record.rs", "crates/xtask/src/mutantsdiff.rs", "crates/scribe2/tests/e2e/pipe/gate.rs", "crates/scribe2/tests/e2e/pipe/intake.rs", "docs/design/gate-cost.md", "docs/design/contract-source.md"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_gate_targets_", "cargo nextest run -p xtask --no-tests=fail mutants_targets_", "cargo nextest run -p scribe2 --no-tests=fail pipe_intake_targets_"]
 size = "M"
-done = "歯だけの便で契約が名指した生存行が的になり、caught / missed / unviable / noop の 4 分類で記録され、field の無い契約は従来どおり動く"
+done = "歯だけの便で契約が名指した生存行が的になり、caught / missed / unviable / timeout / absent の 5 値（和 = 的の本数）で記録され、field の無い契約は従来どおり動く"
 
 [[contract]]
 id = "h"
@@ -407,7 +427,7 @@ done = "PROMPT_WAIT が 60 秒で、assert の字面・ready() の型・new-sess
 [[contract]]
 id = "l"
 title = "検出線が rc 2（測れなかった）で終えた周は同じ gate の中でその行だけ 1 回撃ち直し、record に retried=1 を残す"
-req = ["FR46"]
+req = ["FR9", "AC3"]
 section = "21"
 write-set = ["crates/scribe2/src/pipe/gate/verify.rs", "crates/scribe2/src/pipe/gate/record.rs", "crates/scribe2/tests/e2e/pipe/gate.rs"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_detection_retry_"]
@@ -432,5 +452,25 @@ section = "23"
 write-set = ["crates/scribe2/tests/e2e/pipe/land.rs", "crates/scribe2/tests/e2e/fleet.rs"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail gate_flaky_bound_"]
 size = "S"
-done = "列の歯 2 本が壁時計でなく order_token と exported_order の first で「待たなかった」を pin し、refresh の helper は器が返った後の起動未達を PID_FILE_WAIT を待たず段 launch と経過・load で落とし、assert_gone は state Z を残存に数えず、REFRESH_TIMEOUT_S は 15、bound の式と器の src は不変"
+done = "列の歯 2 本が壁時計を持たず、列を通る歯は order_token の first と面 5 の exported_order の first で、面 5 へ書かない pr_cmd の歯は stdout に order= が無いことだけで「待たなかった」を pin し、refresh の helper は器が返った後の起動未達を PID_FILE_WAIT を待たず段 launch と経過・load で落とし、assert_gone は state Z を残存に数えず、REFRESH_TIMEOUT_S は 15、bound の式と器の src は不変"
+
+[[contract]]
+id = "o"
+title = "host で同時に走る便の本数の最大値 — rules 行 pipe.max_live を足し、受付が live な便を交差と同じ判定で数えて値以上の周は typed に断る（走行中の便は止めない・dispatcher の列の理由は行 a の後）"
+req = ["FR68", "FR39"]
+section = "24"
+write-set = ["rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "crates/scribe2/tests/e2e/rules.rs", "crates/scribe2/tests/e2e/snapshots/e2e__rules__rules_external_form.snap", "docs/design/rules-manifest.md", "crates/scribe2/src/pipe/refuse.rs", "crates/scribe2/src/pipe/cli/intake.rs", "crates/scribe2/tests/e2e/pipe.rs", "crates/scribe2/tests/e2e/pipe/intake.rs"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_intake_max_live_"]
+size = "S"
+done = "rules 行 pipe.max_live が裁定 id 付きで 1 本増え、live な便が値以上の周の intake は max-live の 1 行で断られて run dir も event も増えず、live の便を止めれば同じ契約が通り、Gated FAIL の便は数えられず、写しを読めない周は write-set-unreadable で止まり、走行中の便と受付の memory の枠は不変"
+
+[[contract]]
+id = "p"
+title = "一時 scope を終端で unload する — scope_args に --collect を足し、release は kill の後に reset-failed を 1 回撃つ（Released の 4 値と record の語彙は不変）"
+req = ["NFR6"]
+section = "25"
+write-set = ["crates/scribe2/src/pipe/confine.rs", "crates/scribe2/tests/e2e/pipe/gate.rs", "crates/scribe2/tests/e2e/pipe.rs"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail confine_collect_"]
+size = "S"
+done = "scope_args の列に --collect が 1 回在り、release が kill の後に reset-failed を 1 回撃ち、unit の無い周は Gone のまま record が変わらず、箱の大きさと Released の 4 値は不変"
 <!-- contracts:end -->
