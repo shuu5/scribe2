@@ -4,8 +4,9 @@
 use super::exit::{exit_turn, parked_entry, relaunch_turn, restore_turn, Entry};
 use super::render::{inject_line, Signal};
 use super::{account_pointer, Account, InjectKind, Request, Seen, SignalOrigin, TickDecision, Verdict};
+use crate::fleet::select::counts;
 use crate::fleet::store;
-use crate::fleet::{cli as fleet_cli, replay, Allowance, AllowanceLatest, Registration, State, WindowKind};
+use crate::fleet::{cli as fleet_cli, replay, Allowance, AllowanceLatest, Registration, State};
 use crate::rules::manifest::Manifest;
 use crate::seat::{cycle, role, state, WmScan};
 use std::path::Path;
@@ -119,6 +120,10 @@ fn reading(seated: &Seated, threshold: u64) -> Account {
 /// 保守側〕）。窓の数え方は選定（[`crate::fleet::select`]）と同じ: 口座の最新の回のうち、数える窓に Unmeasured が
 /// 在れば測れない・reset を過ぎた行は数えない（reset 無しの行は古くない実測として数える・ADR-0024 §2.2）・残った窓の
 /// 最大の使用率。数える窓が 1 つも無ければ `None`。
+///
+/// 数える窓の照合は選定と**同じ 1 関数** [`counts`]（account-autonomy.md §20・`s2-07l.435`）: 登録 row の
+/// `model` が別名（`fable`）でも表示名（`Fable`）でも `Model` の閉じた表で型にしてから比べ、表に無い字面は
+/// 保守側で全 model 窓を数える（字面比較の 2 実装を持たない・C2）。
 fn pressure(state: &State, label: &str, model: Option<&str>) -> Option<u64> {
     let mine: Vec<&AllowanceLatest> = state
         .allowance
@@ -131,9 +136,9 @@ fn pressure(state: &State, label: &str, model: Option<&str>) -> Option<u64> {
     let mut found: Option<u64> = None;
     for latest in mine.iter().filter(|latest| latest.ts == newest) {
         match &latest.allowance {
-            Allowance::Unmeasured(row) if counted(model, row.window, row.model.as_deref()) => return None,
+            Allowance::Unmeasured(row) if counts(model, row.window, row.model.as_deref()) => return None,
             Allowance::Measured(row)
-                if counted(model, Some(row.window), row.model.as_deref())
+                if counts(model, Some(row.window), row.model.as_deref())
                     && row.resets_at.as_deref().is_none_or(|resets_at| resets_at >= now.as_str()) =>
             {
                 found = found.max(Some(row.used_pct));
@@ -142,15 +147,6 @@ fn pressure(state: &State, label: &str, model: Option<&str>) -> Option<u64> {
         }
     }
     found
-}
-
-/// その行を逼迫度に数えるか。model が与えられた周のモデル別窓はその model の行だけを数える（model の分からない行は
-/// 保守側で数える・選定と同じ）。
-fn counted(model: Option<&str>, window: Option<WindowKind>, row_model: Option<&str>) -> bool {
-    match (window, model, row_model) {
-        (Some(WindowKind::SevenDayModel), Some(want), Some(found)) => want == found,
-        _ => true,
-    }
 }
 
 /// 開いた manifest（tracked の面）の `[[account]]` の label 列（宣言値・`--rules` が在ればその file の宣言・
@@ -288,5 +284,61 @@ mod tests {
         ])]);
         assert_eq!(pressure(&same_model, "a1", Some("Opus")), None, "席の model と同じ SevenDayModel 窓の Unmeasured");
         assert_eq!(pressure(&same_model, "a1", None), None, "model の無い row は全 model 窓を数える（保守側）");
+    }
+
+    /// 登録 row の `model` の字面（別名 / 表示名 / 表に無い字面）と tick の逼迫度の照合（account-autonomy.md §20 /
+    /// 行 q・`s2-07l.435`）: 選定と同じ 1 関数 [`counts`] で型にしてから比べる。
+    mod model {
+        use super::{measured, table, pressure, LATER};
+        use crate::fleet::select::{counts, MODELS};
+        use crate::fleet::WindowKind;
+
+        /// 5 時間窓 10・Opus 窓 70・`spelling` の model 窓 90 の 1 回。
+        fn round(spelling: &str) -> crate::fleet::State {
+            table(&[("2026-09-13T05:59:00Z", vec![
+                measured("a1", WindowKind::FiveHour, None, 10, LATER),
+                measured("a1", WindowKind::SevenDay, None, 10, LATER),
+                measured("a1", WindowKind::SevenDayModel, Some("Opus"), 70, LATER),
+                measured("a1", WindowKind::SevenDayModel, Some(spelling), 90, LATER),
+            ])])
+        }
+
+        /// 登録 row の model が別名（`fable`）でも、表示名（`Fable`）の実測行のモデル別窓を数える。
+        #[test]
+        fn seat_account_model_alias_row_counts_the_display_name_window() {
+            assert_eq!(pressure(&round("Fable"), "a1", Some("fable")), Some(90), "別名の row × 表示名の実測行");
+        }
+
+        /// 逆向き: 登録 row の model が表示名（`Fable`）でも、別名（`fable`）の実測行のモデル別窓を数える。
+        #[test]
+        fn seat_account_model_display_row_counts_the_alias_window() {
+            assert_eq!(pressure(&round("fable"), "a1", Some("Fable")), Some(90), "表示名の row × 別名の実測行");
+        }
+
+        /// 表に無い字面は保守側: 登録 row の model が表に無ければ全 model 窓の最大（Opus 70 と Fable 90 → 90）を
+        /// 数え、実測行の model が表に無い周もその窓を数える（選定の `counts` と同じ極性）。
+        #[test]
+        fn seat_account_model_unknown_name_counts_every_model_window() {
+            assert_eq!(pressure(&round("Fable"), "a1", Some("nope")), Some(90), "表に無い row は全 model 窓の最大");
+            assert_eq!(pressure(&round("zzz"), "a1", Some("nope")), Some(90), "表に無い row × 表に無い実測行も数える");
+        }
+
+        /// `MODELS` の全 variant × {別名, 表示名} の row の字面 × 実測行の字面の全組で、tick の逼迫度がその
+        /// モデル別窓を数える答えと選定の [`counts`] の答えが一致する（同じ表に同じ答え）。
+        #[test]
+        fn seat_account_model_tick_and_select_agree_on_every_model_spelling() {
+            let spellings: Vec<&str> = MODELS.iter().flat_map(|model| [model.alias(), model.display()]).collect();
+            for row in &spellings {
+                for found in &spellings {
+                    let rows = table(&[("2026-09-13T05:59:00Z", vec![
+                        measured("a1", WindowKind::FiveHour, None, 10, LATER),
+                        measured("a1", WindowKind::SevenDayModel, Some(found), 90, LATER),
+                    ])]);
+                    let tick_counts = pressure(&rows, "a1", Some(row)) == Some(90);
+                    let select_counts = counts(Some(row), Some(WindowKind::SevenDayModel), Some(found));
+                    assert_eq!(tick_counts, select_counts, "row={row} 実測行={found}: tick と選定の答えが違う");
+                }
+            }
+        }
     }
 }

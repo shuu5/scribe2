@@ -370,7 +370,7 @@ fn latest_round<'a>(
 /// **型の境目はここ**: 与えられた model（別名か表示名）と行の表示名を [`Model::parse`] で型にしてから比べる
 /// （字面比較を `counts` の外に残さない）。与えられた model が表に無い周は**保守側で数える**（`model = None`
 /// と同じ・fail-open にしない）。行の表示名が表に無い周は数えない（別 model の窓・従来どおり）。
-fn counts(model: Option<&str>, window: Option<WindowKind>, row_model: Option<&str>) -> bool {
+pub(crate) fn counts(model: Option<&str>, window: Option<WindowKind>, row_model: Option<&str>) -> bool {
     match (window, model, row_model) {
         (Some(WindowKind::SevenDayModel), Some(want), Some(found)) => match Model::parse(want) {
             Some(want) => Model::parse(found) == Some(want),
