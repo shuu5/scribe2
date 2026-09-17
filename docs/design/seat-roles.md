@@ -183,7 +183,7 @@ C1 / C5（権能の値は行・裁定 id）・C1.2（生成文に手書きの規
   3. **`seat register` は食い違いを断る**: `--model` を省いた周は器が行から導いた値を row に書き、`--model` が行と食い違う周は登録の断りの閉じた列に variant を 1 つ足して断る（event を書かない・受付の極性は in-loop / fail-closed のまま）。
   4. **row の `model` は導出値**: 口座選定（モデル別 7 日窓）と tick の逼迫度が row の `model` を読む経路は変えず、器が書く値を**実測行と同じ語彙（表示名）**に揃える。立て直しが登録 row を更新する既存の 1 本（口座 label の更新）が同じ周に `model` も導出値で書き直す＝land より前に書かれた row は次の立て直しで自動的に直る（移行の口を別に作らない）。
   5. **行を読めない周は起こさない**（fail-closed）: 初回の起動は断り、立て直しは注入せず理由を判定行に残す（黙って口座の設定の既定で起こさない・C10）。
-  6. **doctor に宣言と row の突合を出す**（C3.2・C10）: 登録 row の 1 行に行の既定を 1 語添える。`[SEAT]` の行は変えない（席は宣言を直す権能を持たず、突合の面は doctor である＝同じ事実を 2 面に描かない）。
+  6. **doctor に宣言と row の突合を出す**（C3.2・C10）: 登録 row の 1 行に行の既定を 1 語添える。席の doctor の行を描く関数（`seat/role.rs`）は今は manifest を受けないので、`--rules` の値を口座の doctor の行と同じ形で受ける引数を 1 つ足し、呼び手（`crates/scribe2/src/main.rs` の doctor の口・1 か所）が渡す（行を読めない周は既定の語を出さず理由の字面を出す・rc を変えない）。`[SEAT]` の行は変えない（席は宣言を直す権能を持たず、突合の面は doctor である＝同じ事実を 2 面に描かない）。
 - 行 i〜l との交差: §15〜§18 の行 i / j / k / l も `crates/scribe2/src/seat/cycle/launch.rs`・`crates/scribe2/src/seat/cycle/relaunch.rs`・`crates/scribe2/src/seat/cli.rs`・`crates/scribe2/src/seat/tick/exit.rs` と e2e の同じ file を触る＝交差する便は直列に流す（口座の決め方と model / effort の導き方は別の軸で、互いの型と断りを変えない）。
 - 触らない: 口座選定の規則と入力・注入の門と極性・復元の経路・`Registration` の項目（effort の field を足さない）・`seat` の使い方の 1 行（`--effort` の flag を作らないので動かない）・`[SEAT]` の行と rebrief の外形 snapshot・極性一覧（guard は増えない）。
 - 歯（`seat_launch_` / `seat_account_relaunch_` / `seat_register_model_` / `seat_role_doctor_` の既存の接頭辞に足す）: (a) 起動行が `claude` の直後に `--model` と `--effort` をこの順で 1 つずつ運び、雛形には旗が残らない／(b) 行と食い違う `--model` の起動は typed に断り、注入 0・登録 row 0／(c) 行と食い違う `--model` の登録は typed に断り event 0、省いた登録は導出値が row に載る／(d) 行と食い違う古い row を持つ席の立て直しは行の値で起こし、更新後の row の `model` が導出値に直る／(e) 行を読めない manifest では起動も立て直しも起こさず理由を名指す／(f) 雛形に旗が二重に在る周の断りが旗ごとに違う理由を名乗る／(g) doctor の登録 row の行が行の既定を添える。
@@ -312,7 +312,7 @@ title = "席の起動と立て直しが既定の行から model と effort を�
 req = ["FR59", "FR38", "FR40"]
 section = "20"
 depends = ["m"]
-write-set = ["crates/scribe2/src/seat/cycle.rs", "crates/scribe2/src/seat/cycle/launch.rs", "crates/scribe2/src/seat/cycle/relaunch.rs", "crates/scribe2/src/seat/cli.rs", "crates/scribe2/src/seat/role.rs", "crates/scribe2/src/seat/tick/exit.rs", "crates/scribe2/tests/e2e/seat.rs", "crates/scribe2/tests/e2e/seat/launch.rs", "crates/scribe2/tests/e2e/seat/account.rs", "crates/scribe2/tests/e2e/seat/register.rs"]
+write-set = ["crates/scribe2/src/seat/cycle.rs", "crates/scribe2/src/seat/cycle/launch.rs", "crates/scribe2/src/seat/cycle/relaunch.rs", "crates/scribe2/src/seat/cli.rs", "crates/scribe2/src/seat/role.rs", "crates/scribe2/src/seat/tick/exit.rs", "crates/scribe2/src/main.rs", "crates/scribe2/tests/e2e/seat.rs", "crates/scribe2/tests/e2e/seat/launch.rs", "crates/scribe2/tests/e2e/seat/account.rs", "crates/scribe2/tests/e2e/seat/register.rs"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail seat_launch_", "cargo nextest run -p scribe2 --no-tests=fail seat_account_relaunch_", "cargo nextest run -p scribe2 --no-tests=fail seat_register_model_", "cargo nextest run -p scribe2 --no-tests=fail seat_role_doctor_", "cargo nextest run -p scribe2 --lib --no-tests=fail seat_launch_"]
 size = "M"
 done = "初回の起動も立て直しも既定の行から導いた model と effort を claude の直後にこの順で 1 つずつ運び、行と食い違う登録と起動は 1 key も送らず event も書かずに断り、古い row を持つ席は立て直しで行の値に直り、行を読めない周はどちらも起こさず理由を名指し、doctor の登録 row が行の既定を添える"
