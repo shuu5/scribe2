@@ -167,7 +167,7 @@ repo に入れない）。
 ## 11. 管理 tick の systemd unit を器が導出して書く（契約表の行 c・`s2-07l.321`）
 
 - 何が起きているか: 報告書「scribe2 — マルチアカウント管理の現状と対策（2026-09-15）」§6・§7 問 3 と user 裁定 2026-09-15T03:52Z（「３．よい」＝unit を器が書く起票の承認）を承け、ADR-0030 §2.1 は unit を器が導出して host へ書くと定める（手書きの雛形は同 §5 (A) で却下済み）。前提の `.315`（`seat.signal_backoff_s`）は Landed 済み。現物（verified）: `seat` の usage に `tick install` は無く、`systemctl` を撃つ口は既に `pipe/confine.rs` の `SYSTEMCTL` 定数に在るが、rules 行 `seat.tick_interval_s` は manifest に無い。
-- 形: rules 行 `seat.tick_interval_s`（裁定 id = user 2026-09-15T02:30Z・`RuleKind` に variant 1 つ・値 60）を足す。口 `seat tick install --state-dir S --target S:W --wm-dir D --unit-dir U --binary PATH [--rules PATH]` と `seat tick uninstall --target S:W --unit-dir U` を `seat/cli.rs` に足す。導出は pure 関数 `derive_units`（新 module `crates/scribe2/src/seat/tick/install.rs`）で service / timer の 2 file 名と中身を組む（`Environment=` / `WorkingDirectory=` / `%h` を持たない）。書きは一時 file → rename、既存 file は bytes 一致なら `unchanged`、不一致は `unit-exists` で断る。有効化は `systemctl --user daemon-reload` → `enable --now`（順序固定）。撤去は `disable --now` の後に 2 file を `.retired/` へ mv（N1.2）。doctor に `tick-unit=<present|absent|foreign>` の行を足す。
+- 形: rules 行 `seat.tick_interval_s`（裁定 id = user 2026-09-15T02:30Z・`RuleKind` に variant 1 つ・値 60）を足す。口 `seat tick install --state-dir S --target S:W --wm-dir D --unit-dir U --binary PATH [--rules PATH]` と `seat tick uninstall --target S:W --unit-dir U` を `seat/cli.rs` に足す。導出は pure 関数 `derive_units`（新 module `crates/scribe2/src/seat/tick/install.rs`）で service / timer の 2 file 名と中身を組む（`Environment=` / `WorkingDirectory=` / `%h` を持たない）。書きは一時 file → rename、既存 file は bytes 一致なら `unchanged`、不一致は `unit-exists` で断る。有効化は `systemctl --user daemon-reload` → `enable --now`（順序固定）。撤去は `disable --now` の後に 2 file を `.retired/` へ mv（N1.2）。doctor に `tick-unit=<present|absent|foreign>` の行を足す（`--unit-dir U` を受けた周だけ・flag は `main.rs` の doctor の分岐・行は `account/mod.rs`）。
 - 触らない: `seat tick` の判定の列・timer 間隔以外の rules 行・`pipe/confine.rs` の `systemctl` の口の実装（呼ぶだけで可視性のみ変える）。
 - 却下案: template unit と `%i`（target の潰し方が unit 名の規則と二重になる）／雛形 file を repo に置いて写す（host 固有の値が PUBLIC repo の tracked に入る・ADR-0030 §5 (A)）／間隔を引数の既定値で持つ（規則が code に散る・C1）。
 
@@ -215,8 +215,8 @@ id = "c"
 title = "管理 tick の systemd unit を derive_units が導出して書く — seat tick install / uninstall・rules 行 seat.tick_interval_s・doctor の tick-unit 行"
 req = ["FR29"]
 section = "11"
-write-set = ["rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "crates/scribe2/tests/e2e/rules.rs", "docs/design/rules-manifest.md", "crates/scribe2/src/seat/cli.rs", "+crates/scribe2/src/seat/tick/install.rs", "crates/scribe2/src/seat/tick.rs", "crates/scribe2/src/pipe/confine.rs", "crates/scribe2/src/account/mod.rs", "crates/scribe2/tests/e2e/seat/tick.rs", "+crates/scribe2/tests/e2e/snapshots/e2e__seat__tick__seat_tick_install_external_form.snap", "crates/scribe2/tests/e2e/snapshots/e2e__seat__seat_usage_external_form.snap"]
-verify = ["cargo nextest run -p scribe2 --no-tests=fail seat_tick_install_"]
+write-set = ["rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "crates/scribe2/tests/e2e/rules.rs", "docs/design/rules-manifest.md", "crates/scribe2/tests/e2e/snapshots/e2e__rules__rules_external_form.snap", "crates/scribe2/src/seat/cli.rs", "+crates/scribe2/src/seat/tick/install.rs", "crates/scribe2/src/seat/tick.rs", "crates/scribe2/src/pipe/confine.rs", "crates/scribe2/src/account/mod.rs", "crates/scribe2/src/main.rs", "crates/scribe2/tests/e2e/seat/tick.rs", "+crates/scribe2/tests/e2e/snapshots/e2e__seat__tick__seat_tick_install_external_form.snap", "crates/scribe2/tests/e2e/snapshots/e2e__seat__seat_usage_external_form.snap"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail seat_tick_install_", "cargo nextest run -p scribe2 --no-tests=fail rules_manifest_carries_seat_tick_interval"]
 size = "S"
 done = "tmp の unit dir で install → unchanged → uninstall が往復し、偽 systemctl の呼出順が reload → enable"
 
