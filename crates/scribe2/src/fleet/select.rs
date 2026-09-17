@@ -5,9 +5,11 @@
 //! 持ち、便の再開と席の立て直しが同じものを呼ぶ（C2）。候補なしは断りではなく typed な理由
 //! （[`NoCandidate`]・[`NoCandidateReason::POLARITY`] = FailOpen）。
 //!
-//! 便用の順序（ADR-0027 §2.2・C9.2「窓の終わりまで使い切る」）: 候補を **(1) 数える窓の reset の最も早いもの**
-//! （昇順・reset を持つ窓が無い口座は最後）→ **(2) 走行中の便数**（昇順）→ **(3) label** で並べた先頭。
-//! 逼迫度（使用率の最大）は当たっている判定と session 用にだけ残る。
+//! 便用の順序（ADR-0042・ADR-0027 §2.2 の鍵 (1) を supersede・C9.2「窓の終わりまで使い切る」）: 候補を
+//! **(1) 口座単位の 7 日窓の reset**（昇順・7 日窓の reset を持たない口座は最後）→ **(2) 走行中の便数**（昇順）→
+//! **(3) label** で並べた先頭。7 日窓の枠は reset までに使わなければ消えるので、**消える順に使い潰す**。
+//! 5 時間窓とモデル別窓は鍵にしない（当たっている判定と逼迫度にだけ効く）。逼迫度（使用率の最大）は当たって
+//! いる判定と session 用にだけ残る。
 //!
 //! session 用は並べ替えの**前**に [`Input::prefer`]（自席の登録 row の口座）を見る（ADR-0028 §2.4・`s2-07l.312`）:
 //! それが候補（除外に無く・測れていて・当たっておらず・R-C9-1 未満）ならその口座に留まる。planner / admin の席が
@@ -23,8 +25,8 @@ pub const LIMIT_PCT: u64 = 100;
 /// 選定の用途。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Purpose {
-    /// 便用: 当たっていない口座のうち reset が最も早い → 走行中の便数が最少 → label（reset で消える残りから
-    /// 使う側・C9.2・ADR-0027 §2.2）。閾値を持たない。
+    /// 便用: 当たっていない口座のうち **7 日窓の reset** が最も早い → 走行中の便数が最少 → label（reset で消える
+    /// 残りから使う側・C9.2・ADR-0042）。閾値を持たない。
     Run,
     /// session 用: [`Input::prefer`] が候補ならそれ・でなければ逼迫度が最小かつ R-C9-1 の値未満（余裕を残す側）。
     Session,
@@ -196,8 +198,8 @@ struct Candidate<'a> {
     label: &'a str,
     /// 逼迫度（session 用の鍵）。
     pressure: u64,
-    /// 数える窓の reset の最も早いもの（便用の 1 つ目の鍵・`None` = reset を持つ窓が無い＝最後）。
-    reset: Option<String>,
+    /// 口座単位の 7 日窓の reset（便用の 1 つ目の鍵・`None` = 7 日窓が reset を持たない＝最後・ADR-0042）。
+    week_reset: Option<String>,
     /// 走行中の便数（便用の 2 つ目の鍵）。
     inflight: usize,
 }
@@ -261,10 +263,11 @@ fn pick<'a>(purpose: Purpose, prefer: Option<&str>, candidates: &[Candidate<'a>]
     found.map(|found| found.label)
 }
 
-/// 便用の並べ鍵（ADR-0027 §2.2）: reset の最も早いもの（reset の無い口座は最後＝先頭の `bool` が立つ）→
-/// 走行中の便数 → label。辞書順の比較でそのまま並ぶ形にしておく（比較関数に分岐を持たない）。
+/// 便用の並べ鍵（ADR-0042・ADR-0027 §2.2 の鍵 (1) を supersede）: **7 日窓の reset** の最も早いもの（鍵の reset を
+/// 持たない口座は最後＝先頭の `bool` が立つ）→ 走行中の便数 → label。5 時間窓・モデル別窓の reset はここに入らない。
+/// 辞書順の比較でそのまま並ぶ形にしておく（比較関数に分岐を持たない）。
 fn run_key<'a>(found: &'a Candidate<'_>) -> (bool, Option<&'a str>, usize, &'a str) {
-    (found.reset.is_none(), found.reset.as_deref(), found.inflight, found.label)
+    (found.week_reset.is_none(), found.week_reset.as_deref(), found.inflight, found.label)
 }
 
 /// 口座 1 つを候補か、外れた理由かに分ける（除外 → 測れない → 当たっている → 閾値の順に見る）。
@@ -284,7 +287,7 @@ fn standing<'a>(input: &Input<'_>, label: &'a str) -> Standing<'a> {
     Standing::Candidate(Candidate {
         label,
         pressure: found.pressure,
-        reset: found.earliest,
+        week_reset: found.week_reset,
         inflight: input.inflight.get(label).copied().unwrap_or(0),
     })
 }
@@ -295,11 +298,12 @@ struct Reading {
     pressure: u64,
     /// 開き直る時刻 = 当たっている窓の reset の**遅い方**（全部の窓が開くまで当たったまま）。
     reopens: Option<String>,
-    /// 数える窓の reset の**最も早いもの**（便用の 1 つ目の鍵・reset を持つ窓が無ければ `None`）。
-    earliest: Option<String>,
+    /// 口座単位の 7 日窓（[`WindowKind::SevenDay`]・モデル別窓ではない）の古くない実測の reset（便用の 1 つ目の
+    /// 鍵・ADR-0042）。7 日窓が消費の無い窓（reset 未定）か、古くて落ちた周は `None`。
+    week_reset: Option<String>,
 }
 
-/// 口座の読み。測れない口座は `None`。reset 無しの行は開き直る時刻にも最も早い reset にも入らない
+/// 口座の読み。測れない口座は `None`。reset 無しの行は開き直る時刻にも 7 日窓の鍵にも入らない
 /// （待つ対象でも「reset で消える残り」でもない・ADR-0024 §2.2）。
 fn reading(input: &Input<'_>, label: &str) -> Option<Reading> {
     let windows = fresh_windows(input, label)?;
@@ -309,8 +313,12 @@ fn reading(input: &Input<'_>, label: &str) -> Option<Reading> {
         .filter(|found| found.used_pct >= LIMIT_PCT)
         .filter_map(|found| found.resets_at.clone())
         .max();
-    let earliest = windows.iter().filter_map(|found| found.resets_at.clone()).min();
-    Some(Reading { pressure, reopens, earliest })
+    let week_reset = windows
+        .iter()
+        .filter(|found| found.window == WindowKind::SevenDay)
+        .filter_map(|found| found.resets_at.clone())
+        .min();
+    Some(Reading { pressure, reopens, week_reset })
 }
 
 /// 口座の最新の回のうち、数える窓の古くない実測。数える窓に Unmeasured が在る・古くない実測が
@@ -511,36 +519,33 @@ mod tests {
     const SOON_RESET: &str = "2026-09-13T07:00:00Z";
     /// `NOW` の 4 時間後の reset（`SOON_RESET` より遅く `FIVE_RESET` より遅い）。
     const LATE_RESET: &str = "2026-09-13T10:00:00Z";
+    /// 7 日窓の早い側の reset（`WEEK_RESET` より早く、5 時間窓のどの reset より**遅い**＝鍵が窓の種類で分かれる・
+    /// ADR-0042）。
+    const WEEK_SOON_RESET: &str = "2026-09-16T00:00:00Z";
 
-    /// (a) 便用は逼迫度でなく **reset が最も早い**候補を選ぶ（ADR-0027 §2.2・C9.2「reset で消える残りから使う」）:
-    /// a1（5h 20%・reset +1h）と a2（5h 80%・reset +4h）→ a1。base（逼迫度最大）は a2 → RED。
+    /// (a) 便用は逼迫度でなく **7 日窓の reset が最も早い**候補を選ぶ（ADR-0042・C9.2「reset で消える残りから使う」）:
+    /// a1（5h 20%・5h の reset は遅く 7d の reset が早い）と a2（5h 80%・5h の reset は早く 7d の reset が遅い）→ a1。
+    /// base（数える窓の最小＝5h）は a2 → RED。
     #[test]
     fn select_run_prefers_the_earliest_reset() {
         let rows = table(&[(TS, vec![
+            measured("a1", WindowKind::FiveHour, None, 20, LATE_RESET),
+            measured("a1", WindowKind::SevenDay, None, 10, WEEK_SOON_RESET),
+            measured("a2", WindowKind::FiveHour, None, 80, SOON_RESET),
+            measured("a2", WindowKind::SevenDay, None, 10, WEEK_RESET),
+        ])]);
+        assert_eq!(choose(&["a1", "a2"], &rows, &run()), chosen("a1"), "7d の reset が早い a1（5h の reset なら a2）");
+        assert_eq!(choose(&["a2", "a1"], &rows, &run()), chosen("a1"), "入力順に依らない");
+        assert_eq!(choose(&["a1", "a2"], &rows, &session()), chosen("a1"), "session 用は逼迫度の最小のまま（20）");
+        // 向きを入れ替えても鍵は 7 日窓: a2 の 7d が早ければ 5h が遅くても a2。
+        let week_first = table(&[(TS, vec![
             measured("a1", WindowKind::FiveHour, None, 20, SOON_RESET),
             measured("a1", WindowKind::SevenDay, None, 10, WEEK_RESET),
             measured("a2", WindowKind::FiveHour, None, 80, LATE_RESET),
-            measured("a2", WindowKind::SevenDay, None, 10, WEEK_RESET),
+            measured("a2", WindowKind::SevenDay, None, 10, WEEK_SOON_RESET),
         ])]);
-        assert_eq!(choose(&["a1", "a2"], &rows, &run()), chosen("a1"), "reset +1h の a1（逼迫度なら 80 の a2）");
-        assert_eq!(choose(&["a2", "a1"], &rows, &run()), chosen("a1"), "入力順に依らない");
-        assert_eq!(choose(&["a1", "a2"], &rows, &session()), chosen("a1"), "session 用は逼迫度の最小のまま（20）");
-        // 鍵は口座の数える窓の reset の**最小**: a2 の 7d が a1 の 5h より早ければ a2。
-        let week_first = table(&[(TS, vec![
-            measured("a1", WindowKind::FiveHour, None, 20, LATE_RESET),
-            measured("a1", WindowKind::SevenDay, None, 10, WEEK_RESET),
-            measured("a2", WindowKind::FiveHour, None, 80, LATE_RESET),
-            measured("a2", WindowKind::SevenDay, None, 10, SOON_RESET),
-        ])]);
-        assert_eq!(choose(&["a1", "a2"], &week_first, &run()), chosen("a2"), "窓の種類を問わず最小の reset");
-        // 古い行（reset を過ぎた）は数えない＝その窓の reset は鍵に入らない。
-        let stale_first = table(&[(TS, vec![
-            measured("a1", WindowKind::FiveHour, None, 20, PAST_RESET),
-            measured("a1", WindowKind::SevenDay, None, 10, WEEK_RESET),
-            measured("a2", WindowKind::FiveHour, None, 80, LATE_RESET),
-            measured("a2", WindowKind::SevenDay, None, 10, WEEK_RESET),
-        ])]);
-        assert_eq!(choose(&["a1", "a2"], &stale_first, &run()), chosen("a2"), "過ぎた reset は鍵にならない（a1 = 7d だけ）");
+        assert_eq!(choose(&["a1", "a2"], &week_first, &run()), chosen("a2"), "鍵は 7 日窓の reset だけ");
+        // 古い 7 日窓の行（reset を過ぎた）は `select_run_week_stale_seven_day_row_goes_last` が測る。
     }
 
     /// (b) reset を持つ窓が 1 つも無い口座（消費の無い窓だけ・ADR-0024）は**最後**: a1（reset 無し）と a2（reset +4h）→ a2。
@@ -572,14 +577,14 @@ mod tests {
             chosen("a2"),
             "3 口座でも最少"
         );
-        // reset が先: 便数が多くても reset が早い口座が勝つ。
+        // reset が先: 便数が多くても 7 日窓の reset が早い口座が勝つ（5 時間窓の reset は逆向きに置く）。
         let soon = table(&[(TS, vec![
-            measured("a1", WindowKind::FiveHour, None, 10, SOON_RESET),
-            measured("a1", WindowKind::SevenDay, None, 10, WEEK_RESET),
-            measured("a2", WindowKind::FiveHour, None, 10, FIVE_RESET),
+            measured("a1", WindowKind::FiveHour, None, 10, FIVE_RESET),
+            measured("a1", WindowKind::SevenDay, None, 10, WEEK_SOON_RESET),
+            measured("a2", WindowKind::FiveHour, None, 10, SOON_RESET),
             measured("a2", WindowKind::SevenDay, None, 10, WEEK_RESET),
         ])]);
-        assert_eq!(choose(&pair, &soon, &Ask { inflight: &[("a1", 5)], ..run() }), chosen("a1"), "reset が便数より先");
+        assert_eq!(choose(&pair, &soon, &Ask { inflight: &[("a1", 5)], ..run() }), chosen("a1"), "7 日窓の reset が便数より先");
         assert_eq!(choose(&pair, &rows, &Ask { inflight: &[("a1", 5)], ..session() }), chosen("a1"), "session 用は便数を読まない");
     }
 
@@ -589,6 +594,117 @@ mod tests {
         assert_eq!(choose(THREE, &three(), &run()), chosen("a1"), "同じ reset・便数 0・a3 は当たっている");
         assert_eq!(choose(&["a2", "a1", "a3"], &three(), &run()), chosen("a1"), "入力順に依らない");
         assert_eq!(choose(&["a2", "a3"], &three(), &run()), chosen("a2"));
+    }
+
+    // ───── ADR-0042: 便用の 1 つ目の鍵は口座単位の 7 日窓の reset（接頭辞 `select_run_week_`） ─────
+
+    /// (c) の表: 7 日窓の reset が同じ 2 口座で、5 時間窓の reset だけが違う（a1 = 遅い・a2 = 早い）。
+    /// 逼迫度は a1 = 40 / a2 = 10（席用の答えが便用と別になる向き）。
+    fn week_tied() -> BTreeMap<AllowanceKey, AllowanceLatest> {
+        table(&[(TS, vec![
+            measured("a1", WindowKind::FiveHour, None, 40, LATE_RESET),
+            measured("a1", WindowKind::SevenDay, None, 10, WEEK_RESET),
+            measured("a2", WindowKind::FiveHour, None, 10, SOON_RESET),
+            measured("a2", WindowKind::SevenDay, None, 10, WEEK_RESET),
+        ])])
+    }
+
+    /// (d) の表: a1 は 7 日窓が消費の無い窓（reset 未定・ADR-0024）で 5 時間窓に早い reset・a2 は 7 日窓に reset。
+    /// 逼迫度は a1 = 10 / a2 = 60。
+    fn week_missing() -> BTreeMap<AllowanceKey, AllowanceLatest> {
+        table(&[(TS, vec![
+            measured("a1", WindowKind::FiveHour, None, 10, SOON_RESET),
+            idle("a1", WindowKind::SevenDay),
+            measured("a2", WindowKind::FiveHour, None, 60, LATE_RESET),
+            measured("a2", WindowKind::SevenDay, None, 50, WEEK_RESET),
+        ])])
+    }
+
+    /// (e) の表: a1 の 7 日窓の実測は reset を過ぎて古い（`fresh_windows` から落ちる）・5 時間窓は新しい。
+    /// 逼迫度は a1 = 10（古い 90 は数えない）/ a2 = 60。
+    fn week_stale() -> BTreeMap<AllowanceKey, AllowanceLatest> {
+        table(&[(TS, vec![
+            measured("a1", WindowKind::FiveHour, None, 10, SOON_RESET),
+            measured("a1", WindowKind::SevenDay, None, 90, PAST_RESET),
+            measured("a2", WindowKind::FiveHour, None, 60, LATE_RESET),
+            measured("a2", WindowKind::SevenDay, None, 50, WEEK_RESET),
+        ])])
+    }
+
+    /// (f) の表: a1 はモデル別 7 日窓の reset が表の中で最も早く、口座単位の 7 日窓の reset は遅い・a2 は 7 日窓の
+    /// reset が早い。逼迫度は a1 = 20 / a2 = 60。
+    fn week_model() -> BTreeMap<AllowanceKey, AllowanceLatest> {
+        table(&[(TS, vec![
+            measured("a1", WindowKind::FiveHour, None, 10, LATE_RESET),
+            measured("a1", WindowKind::SevenDay, None, 20, WEEK_RESET),
+            measured("a1", WindowKind::SevenDayModel, Some("Opus"), 15, SOON_RESET),
+            measured("a2", WindowKind::FiveHour, None, 60, LATE_RESET),
+            measured("a2", WindowKind::SevenDay, None, 50, WEEK_SOON_RESET),
+        ])])
+    }
+
+    /// (c) 7 日窓の reset が同じなら**走行中の便数** → label（5 時間窓の reset の差は並びに効かない）。
+    /// base（数える窓の最小）は 5h の早い a2 を便数に依らず選ぶ → RED。
+    #[test]
+    fn select_run_week_same_seven_day_reset_falls_to_inflight_then_label() {
+        let rows = week_tied();
+        let pair = ["a1", "a2"];
+        assert_eq!(
+            choose(&pair, &rows, &Ask { inflight: &[("a2", 1)], ..run() }),
+            chosen("a1"),
+            "5h の reset が早い a2 でも便数で負ける"
+        );
+        assert_eq!(choose(&pair, &rows, &Ask { inflight: &[("a1", 1)], ..run() }), chosen("a2"), "便数の少ない側");
+        assert_eq!(choose(&pair, &rows, &run()), chosen("a1"), "同数は label の先頭");
+        assert_eq!(choose(&["a2", "a1"], &rows, &run()), chosen("a1"), "入力順に依らない");
+    }
+
+    /// (d) 7 日窓が reset を持たない口座（消費の無い窓・ADR-0024）は、5 時間窓に早い reset を持っても**最後**。
+    /// 候補からは外れない（その口座だけならそれを選ぶ）。base は 5h の早い a1 → RED。
+    #[test]
+    fn select_run_week_account_without_seven_day_reset_goes_last_but_stays_a_candidate() {
+        let rows = week_missing();
+        assert_eq!(choose(&["a1", "a2"], &rows, &run()), chosen("a2"), "7 日窓の reset を持たない a1 は最後");
+        assert_eq!(choose(&["a2", "a1"], &rows, &run()), chosen("a2"), "入力順に依らない");
+        assert_eq!(choose(&["a1"], &rows, &run()), chosen("a1"), "鍵の reset が無くても候補");
+    }
+
+    /// (e) 7 日窓の実測が古くて `fresh_windows` から落ちた口座も**最後**（5 時間窓が新しいので候補からは外れない）。
+    /// base は a1 の新しい 5h の reset を鍵にして a1 → RED。
+    #[test]
+    fn select_run_week_stale_seven_day_row_goes_last() {
+        let rows = week_stale();
+        assert_eq!(choose(&["a1", "a2"], &rows, &run()), chosen("a2"), "古い 7 日窓の行は鍵に入らない");
+        assert_eq!(choose(&["a2", "a1"], &rows, &run()), chosen("a2"), "入力順に依らない");
+        assert_eq!(choose(&["a1"], &rows, &run()), chosen("a1"), "5 時間窓が新しいので候補のまま");
+    }
+
+    /// (f) モデル別 7 日窓の reset は鍵にしない（`model` を与えた周も与えない周も）: a1 のモデル別窓の reset が表で
+    /// 最も早くても、口座単位の 7 日窓の reset が早い a2 が先。base は a1 → RED。
+    #[test]
+    fn select_run_week_model_window_reset_is_not_a_key() {
+        let rows = week_model();
+        let pair = ["a1", "a2"];
+        assert_eq!(choose(&pair, &rows, &run()), chosen("a2"), "model なし（モデル別窓も数える周）");
+        assert_eq!(choose(&pair, &rows, &Ask { model: Some("Opus"), ..run() }), chosen("a2"), "その model の窓を数える周");
+        assert_eq!(choose(&pair, &rows, &Ask { model: Some("Fable"), ..run() }), chosen("a2"), "数えない周も同じ");
+        assert_eq!(choose(&["a2", "a1"], &rows, &run()), chosen("a2"), "入力順に依らない");
+    }
+
+    /// (g) 同じ表の席用の答えは逼迫度の最小のまま（7 日窓の reset を動かしても変わらない・ADR-0042 は便用の順序
+    /// だけを差し替える）。どの表でも便用の答えとは別の口座になる置き方にしてある。
+    #[test]
+    fn select_run_week_session_answer_is_unchanged() {
+        let pair = ["a1", "a2"];
+        assert_eq!(choose(&pair, &week_tied(), &session()), chosen("a2"), "(c) 最小は 10 の a2（便用は a1）");
+        assert_eq!(choose(&pair, &week_missing(), &session()), chosen("a1"), "(d) 最小は 10 の a1（便用は a2）");
+        assert_eq!(choose(&pair, &week_stale(), &session()), chosen("a1"), "(e) 古い 90 を外した 10 の a1（便用は a2）");
+        assert_eq!(choose(&pair, &week_model(), &session()), chosen("a1"), "(f) 最小は 20 の a1（便用は a2）");
+        assert_eq!(
+            choose(&pair, &week_model(), &Ask { model: Some("Opus"), ..session() }),
+            chosen("a1"),
+            "(f) model を与えた周も同じ"
+        );
     }
 
     #[test]
@@ -714,7 +830,7 @@ mod tests {
             ]),
         ]);
         let all = ["a1", "a2", "a3", "a4", "a5", "a6"];
-        assert_eq!(choose(&all, &rows, &run()), chosen("a2"), "候補は a2 と a4・a4 の古い 5h は reset の鍵にも入らず 7d の reset だけ＝a2 が先");
+        assert_eq!(choose(&all, &rows, &run()), chosen("a2"), "候補は a2 と a4・7 日窓の reset は同じ → 便数 0 → label で a2 が先");
         assert_eq!(choose(&["a1", "a3", "a4", "a5", "a6"], &rows, &run()), chosen("a4"), "古い 5h の 100 は数えない・測れない口座は選ばない");
         assert_eq!(choose(&all, &rows, &session()), chosen("a2"));
         assert_eq!(
@@ -915,7 +1031,8 @@ mod tests {
     const IDENTITY: [usize; 5] = [0, 1, 2, 3, 4];
 
     /// 口座 1 つの振り方。`kind`: 0 = 実測なし・1 = 口座単位の Unmeasured・2 = 実測（5h・7d・Fable）。`soon` は
-    /// 5h の reset を `SOON_RESET`（早い方）にする・`inflight` は走行中の便数。
+    /// **7 日窓**の reset を `WEEK_SOON_RESET`（早い方）にし、5 時間窓とモデル別窓の reset は**逆向き**に置く
+    /// （鍵でない窓の reset が並びに入っていないことを振る・ADR-0042）・`inflight` は走行中の便数。
     #[derive(Debug, Clone)]
     struct Spec {
         kind: u8,
@@ -967,17 +1084,17 @@ mod tests {
     fn world(specs: &[Spec]) -> BTreeMap<AllowanceKey, AllowanceLatest> {
         let mut rows = Vec::new();
         for (label, spec) in POOL.iter().zip(specs) {
-            let (five_reset, week_reset) = match (spec.stale, spec.soon) {
-                (true, _) => (PAST_RESET, PAST_RESET),
-                (false, true) => (SOON_RESET, WEEK_RESET),
-                (false, false) => (FIVE_RESET, WEEK_RESET),
+            let (five_reset, week_reset, model_reset) = match (spec.stale, spec.soon) {
+                (true, _) => (PAST_RESET, PAST_RESET, PAST_RESET),
+                (false, true) => (FIVE_RESET, WEEK_SOON_RESET, WEEK_RESET),
+                (false, false) => (SOON_RESET, WEEK_RESET, WEEK_SOON_RESET),
             };
             match spec.kind {
                 1 => rows.push(unmeasured(label, None)),
                 2 => {
                     rows.push(measured(label, WindowKind::FiveHour, None, spec.five, five_reset));
                     rows.push(measured(label, WindowKind::SevenDay, None, spec.seven, week_reset));
-                    rows.push(measured(label, WindowKind::SevenDayModel, Some("Fable"), spec.fable, week_reset));
+                    rows.push(measured(label, WindowKind::SevenDayModel, Some("Fable"), spec.fable, model_reset));
                 }
                 _ => {}
             }
@@ -1010,9 +1127,10 @@ mod tests {
         pressure(spec_of(specs, label)?, model)
     }
 
-    /// 振り方の便用の並べ鍵（実測の候補だけ・5h の reset が最小＝`soon` なら `SOON_RESET`・便数・label）。
+    /// 振り方の便用の並べ鍵（実測の候補だけ・**7 日窓**の reset＝`soon` なら `WEEK_SOON_RESET`・便数・label・
+    /// ADR-0042）。実測の候補（`kind == 2` かつ古くない）は必ず 7 日窓の行を持つので `Option` にならない。
     fn run_key_of(spec: &Spec, label: &str) -> (&'static str, usize, String) {
-        (if spec.soon { SOON_RESET } else { FIVE_RESET }, spec.inflight, label.to_owned())
+        (if spec.soon { WEEK_SOON_RESET } else { WEEK_RESET }, spec.inflight, label.to_owned())
     }
 
     /// `order` の順に label を並べて選ぶ（除外と走行中の便数は振り方から組む）。
@@ -1066,9 +1184,9 @@ mod tests {
             }
         }
 
-        /// (e) 便用の選択は候補の中で **reset が最小**で、同じ reset の候補の中で**走行中の便数が最少**（＝並べ鍵
-        /// (reset, 便数, label) がどの候補にも上回られない・ADR-0027 §2.2）。候補なしの理由と `earliest_reset` は
-        /// 便数に依らない（便数を空にしても同じ `None(..)`）。
+        /// (e) 便用の選択は候補の中で **7 日窓の reset が最小**で、同じ reset の候補の中で**走行中の便数が最少**
+        /// （＝並べ鍵 (7 日窓の reset, 便数, label) がどの候補にも上回られない・ADR-0042）。候補なしの理由と
+        /// `earliest_reset` は便数に依らない（便数を空にしても同じ `None(..)`）。
         #[test]
         fn prop_select_run_choice_has_the_earliest_reset_then_fewest_inflight(specs in specs(), model in models()) {
             let found = evaluate(&specs, &IDENTITY, Purpose::Run, model, THRESHOLD);

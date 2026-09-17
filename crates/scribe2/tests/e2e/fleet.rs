@@ -3117,6 +3117,9 @@ fn fleet_usage_refresh_launches_once_for_the_single_expired_account() {
 /// `fleet select` の歯の 5 時間窓の reset（遠い未来＝どの「いま」でも古くない）。
 const SELECT_FIVE_RESET: &str = "2099-01-01T05:00:00Z";
 
+/// `fleet select` の歯の 7 日窓の reset（便用の 1 つ目の鍵・ADR-0042・既定は全口座で同じ＝並びは label に落ちる）。
+const SELECT_WEEK_RESET: &str = "2099-01-07T00:00:00+00:00";
+
 /// 3 口座: a1 = 30（5h）・a2 = 70（7d）・a3 = 100（5h・当たっている）。
 const SELECT_THREE: &[(&str, u64, u64)] = &[("a1", 30, 10), ("a2", 20, 70), ("a3", 100, 5)];
 
@@ -3139,10 +3142,15 @@ fn select_rules(labels: &[&str], timeout: bool, selection: Option<&str>) -> Stri
     text
 }
 
-/// 5 時間窓と 7 日窓だけの本文（`limits` は空＝モデル別の行なし）。
+/// 5 時間窓と 7 日窓だけの本文（`limits` は空＝モデル別の行なし・reset は口座で同じ）。
 fn select_body(five: u64, seven: u64) -> String {
+    select_body_resets(five, seven, SELECT_FIVE_RESET, SELECT_WEEK_RESET)
+}
+
+/// 両方の窓の reset を口座ごとに変えた本文（`select_body` の reset 違い）。
+fn select_body_resets(five: u64, seven: u64, five_reset: &str, seven_reset: &str) -> String {
     format!(
-        r#"{{"five_hour":{{"utilization":{five},"resets_at":"{SELECT_FIVE_RESET}"}},"seven_day":{{"utilization":{seven},"resets_at":"2099-01-07T00:00:00+00:00"}},"limits":[]}}"#
+        r#"{{"five_hour":{{"utilization":{five},"resets_at":"{five_reset}"}},"seven_day":{{"utilization":{seven},"resets_at":"{seven_reset}"}},"limits":[]}}"#
     )
 }
 
@@ -3240,33 +3248,85 @@ fn fleet_select_run_prints_the_earliest_reset_unlimited_account() {
     drop_fixture(&fx);
 }
 
-/// 5 時間窓の reset を口座ごとに変えた本文（`select_body` の reset 違い）。
-fn select_body_resetting(five: u64, seven: u64, five_reset: &str) -> String {
-    format!(
-        r#"{{"five_hour":{{"utilization":{five},"resets_at":"{five_reset}"}},"seven_day":{{"utilization":{seven},"resets_at":"2099-01-07T00:00:00+00:00"}},"limits":[]}}"#
-    )
+// ───── ADR-0042: 便用の 1 つ目の鍵は口座単位の 7 日窓の reset（接頭辞 `fleet_select_week_`） ─────
+
+/// 7 日窓の鍵を測る置き場: a1 = 5 時間窓の reset が**早く**（2099-01-01T01Z）7 日窓の reset が**遅い**（2099-01-07）・
+/// 20%。a2 = 5 時間窓の reset が遅く（2099-01-01T04Z）7 日窓の reset が早い（2099-01-05）・80%。
+/// label 順でも逼迫度の最小でも a1 が先＝便用の答え a2 は 7 日窓の鍵でだけ出る（偶然では通らない）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn week_reset_fixture() -> (UsageFixture, PathBuf) {
+    let (fx, curl) = select_fixture(&[("a1", 20, 10), ("a2", 80, 10)], true, Some("85"));
+    let a1 = select_body_resets(20, 10, "2099-01-01T01:00:00+00:00", "2099-01-07T00:00:00+00:00");
+    let a2 = select_body_resets(80, 10, "2099-01-01T04:00:00+00:00", "2099-01-05T00:00:00+00:00");
+    fs::write(fx.spy.join("body-tok-a1"), a1).expect("本文を書ける");
+    fs::write(fx.spy.join("body-tok-a2"), a2).expect("本文を書ける");
+    (fx, curl)
 }
 
-/// (h) CLI の便用は逼迫度でなく **reset が最も近い口座**を選ぶ（ADR-0027 §2.2・C9.2）: a1（5h 20%・reset 2099-01-01T01Z）と
-/// a2（5h 80%・reset 2099-01-01T04Z）→ `chosen=a1`。base（逼迫度最大）は a2 → RED。実測行は `fleet select` が撃つ
-/// 計測（偽 curl の口座ごとの本文）で置く。
+/// (a) CLI の便用は **7 日窓の reset が早い口座**を、5 時間窓の reset が早い口座より先に選ぶ（ADR-0042・C9.2
+/// 「reset で消える枠から使い潰す」）→ `chosen=a2`。base（数える窓の reset の最小＝実質 5 時間窓）は a1 → RED。
+/// 計測の行が両口座の 7 日窓の reset を名指す＝fixture が効いている証拠。
 #[test]
-fn fleet_select_run_prefers_earliest_reset_over_pressure() {
-    let (fx, curl) = select_fixture(&[("a1", 20, 10), ("a2", 80, 10)], true, Some("85"));
-    fs::write(fx.spy.join("body-tok-a1"), select_body_resetting(20, 10, "2099-01-01T01:00:00+00:00")).expect("本文を書ける");
-    fs::write(fx.spy.join("body-tok-a2"), select_body_resetting(80, 10, "2099-01-01T04:00:00+00:00")).expect("本文を書ける");
+fn fleet_select_week_prefers_the_earlier_seven_day_reset_over_the_earlier_five_hour_reset() {
+    let (fx, curl) = week_reset_fixture();
     let out = run_select(&fx, &curl, &["--purpose", "run"]);
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{out:?}");
-    assert_eq!(out_lines(&out), vec!["select purpose=run chosen=a1".to_owned()], "reset が近い a1（逼迫度なら a2）: {out:?}");
+    assert_eq!(
+        out_lines(&out),
+        vec!["select purpose=run chosen=a2".to_owned()],
+        "7 日窓の reset が早い a2（5 時間窓の reset なら a1・label 順でも a1）: {out:?}"
+    );
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("usage: account=a1 five_hour=20% resets=2099-01-01T01:00:00Z"), "a1 の reset: {stderr}");
-    assert!(stderr.contains("usage: account=a2 five_hour=80% resets=2099-01-01T04:00:00Z"), "a2 の reset: {stderr}");
+    assert!(
+        stderr.contains("usage: account=a1 five_hour=20% resets=2099-01-01T01:00:00Z seven_day=10% resets=2099-01-07T00:00:00Z"),
+        "a1 の 7 日窓の reset は遅い: {stderr}"
+    );
+    assert!(
+        stderr.contains("usage: account=a2 five_hour=80% resets=2099-01-01T04:00:00Z seven_day=10% resets=2099-01-05T00:00:00Z"),
+        "a2 の 7 日窓の reset は早い: {stderr}"
+    );
+    drop_fixture(&fx);
+}
+
+/// (b) 同じ表の席用の答えは変わらない（ADR-0042 は便用の順序だけを差し替える）: `--purpose session` は逼迫度の
+/// 最小 = a1（20%）で、(a) の便用の答え a2 とは別の口座＝同じ答えで偶然通らない。
+#[test]
+fn fleet_select_week_session_answer_is_unchanged_on_the_same_table() {
+    let (fx, curl) = week_reset_fixture();
     let out = run_select(&fx, &curl, &["--purpose", "session"]);
-    assert_eq!(out_lines(&out), vec!["select purpose=session chosen=a1".to_owned()], "session 用は逼迫度の最小（同じ答えだが鍵が違う）");
-    // 逆に a2 の reset を近くすれば a2（逼迫度 80 でも当たってはいない）。
-    fs::write(fx.spy.join("body-tok-a2"), select_body_resetting(80, 10, "2099-01-01T00:30:00+00:00")).expect("本文を書ける");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{out:?}");
+    assert_eq!(
+        out_lines(&out),
+        vec!["select purpose=session chosen=a1".to_owned()],
+        "逼迫度の最小（20%）・便用の答え（a2）とは別の口座: {out:?}"
+    );
+    drop_fixture(&fx);
+}
+
+/// (h) 便用の答えは **7 日窓の reset を動かすと動く**（逼迫度でも 5 時間窓の reset でもない・ADR-0042）: a2 の 7 日窓が
+/// 早い間は `chosen=a2`、a1 の 7 日窓を（5 時間窓は遅いまま）もっと早くすれば `chosen=a1`。どちらの段も base
+/// （数える窓の最小＝5 時間窓）は逆の口座 → RED。実測行は `fleet select` が撃つ計測（偽 curl の本文）で置く。
+#[test]
+fn fleet_select_run_prefers_earliest_reset_over_pressure() {
+    let (fx, curl) = week_reset_fixture();
     let out = run_select(&fx, &curl, &["--purpose", "run"]);
-    assert_eq!(out_lines(&out), vec!["select purpose=run chosen=a2".to_owned()], "reset が近い側へ動く: {out:?}");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{out:?}");
+    assert_eq!(out_lines(&out), vec!["select purpose=run chosen=a2".to_owned()], "7 日窓の reset が近い a2: {out:?}");
+    // a1 の 7 日窓を最も早くする（5 時間窓の reset は a2 より遅くしておく＝5 時間窓の鍵なら a2 のまま）。
+    let a1 = select_body_resets(20, 10, "2099-01-01T10:00:00+00:00", "2099-01-03T00:00:00+00:00");
+    fs::write(fx.spy.join("body-tok-a1"), a1).expect("本文を書ける");
+    let out = run_select(&fx, &curl, &["--purpose", "run"]);
+    assert_eq!(out_lines(&out), vec!["select purpose=run chosen=a1".to_owned()], "7 日窓の reset が近い側へ動く: {out:?}");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("usage: account=a1 five_hour=20% resets=2099-01-01T10:00:00Z seven_day=10% resets=2099-01-03T00:00:00Z"),
+        "a1 の 5 時間窓は a2 より遅い: {stderr}"
+    );
+    let out = run_select(&fx, &curl, &["--purpose", "session"]);
+    assert_eq!(out_lines(&out), vec!["select purpose=session chosen=a1".to_owned()], "session 用は逼迫度の最小（20%）");
     drop_fixture(&fx);
 }
 
@@ -3435,8 +3495,11 @@ fn fleet_usage_idle_window_null_reset_is_measured_zero_and_a_run_candidate() {
         .expect("a1 の 5 時間窓の行が在る");
     assert!(idle_line.contains(r#""kind":"AllowanceMeasured""#), "{idle_line}");
     assert!(!idle_line.contains("resets_at"), "reset 無しの周は key を出さない: {idle_line}");
+    // 便用の鍵は 7 日窓の reset（ADR-0042）: a2 の 7 日窓を早くすれば a2（a1 の 5 時間窓は reset 無しのまま）。
+    let a2 = select_body_resets(50, 10, SELECT_FIVE_RESET, "2099-01-05T00:00:00+00:00");
+    fs::write(fx.spy.join("body-tok-a2"), a2).expect("本文を書ける");
     let out = run_select(&fx, &curl, &["--purpose", "run"]);
-    assert_eq!(out_lines(&out), vec!["select purpose=run chosen=a2".to_owned()], "便用は reset が早い側（a2 の 5h・a1 は 7d の reset だけ）");
+    assert_eq!(out_lines(&out), vec!["select purpose=run chosen=a2".to_owned()], "便用は 7 日窓の reset が早い側（a2）");
     drop_fixture(&fx);
 }
 
