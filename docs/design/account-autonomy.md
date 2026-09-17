@@ -162,6 +162,14 @@ C1 / C5（R-C9-1 は行・裁定 id）・C2（`Purpose` / `Selection` / `Stage` 
 - 歯（`fleet_select_week_` 接頭辞・`tests/e2e/fleet.rs`・`fleet_select_run_prefers_earliest_reset_over_pressure` と同じ偽 curl の口座ごとの本文で 5 時間窓と 7 日窓の reset を別々に置く）: 7 日窓の reset が早い口座が、5 時間窓の reset が早い別の口座より先に選ばれる（base は 5 時間窓の早い口座を選ぶ → RED）／同じ表で `--purpose session` の答えは変わらない（逼迫度の最小）。in-file（`select_run_week_` 接頭辞・`fleet/select.rs` の歯の module）: 7 日窓の reset が同じなら走行中の便数 → label（5 時間窓の reset の差は並びに効かない）／7 日窓が reset を持たない口座は 5 時間窓に reset が在っても最後で、候補が 1 つならその口座を選ぶ／7 日窓の実測が reset を過ぎた口座も最後（候補からは外れない）／モデル別 7 日窓の reset が早くても鍵にならない／席用の答えは同じ表で変わらない。**既存の歯の側**: in-file の `select_run_prefers_the_earliest_reset`（「窓の種類を問わず最小の reset」と「過ぎた reset は鍵にならない」の段）と `select_run_breaks_ties_by_fewer_inflight_runs`（「reset が便数より先」の段は 5 時間窓の reset の差で立てている）は head で赤になる＝7 日窓の reset の差で立て直す。prop の `prop_select_run_choice_has_the_earliest_reset_then_fewest_inflight` は振り方 `Spec` の `soon` が 5 時間窓の reset だけを動かし `run_key_of` がそれを鍵に読むので、`world` が 7 日窓の reset を動かす形と `run_key_of` を合わせて直す（性質 = 並べ鍵がどの候補にも上回られない・候補なしの答えは便数に依らない、は保つ）。`select_run_ignores_prefer`・入力順の不変・session 用の prop は性質を保つ。e2e の `fleet_select_run_prefers_earliest_reset_over_pressure` は末尾の段（5 時間窓の reset を近くした口座へ動く）が赤になる＝7 日窓の reset で立て直す。pipe の e2e（`tests/e2e/pipe/ratelimit.rs` の `usage_body`）と席の e2e は 5 時間窓と 7 日窓の reset を同じ値で置くので並びが変わらない（grep で実測・snapshot に並びの字面は無い）。
 - 却下（ADR-0042 の写しは持たない・設計固有のもの）: `Input` に「鍵にする窓」の欄を足す（構築点 6 か所と `prop.rs` を動かす・用途で決まる値を入力に出す理由が無い）／`Reading` に `earliest` を残して 7 日窓の欄を足す（読み手の無い欄が残る）／7 日窓の reset を持たない口座を 5 時間窓の reset で並べ直す（鍵が 2 窓の合成になり ADR-0042 の OPT3 と同じ穴）。
 
+## 20. 席の model とモデル別窓の照合を `Model` の型で比べる 1 関数に寄せる — tick の逼迫度が別名の row でモデル別窓を数え落とさない（契約表の行 q・`s2-07l.435`）
+
+- 何が起きているか（planner の実測 2026-09-17・main 02bb895・`s2-07l.433` の草稿起こしの副産物・verified）: 席の登録 row の `model` と、口座残量の実測行のモデル別 7 日窓（`SevenDayModel`）の `model` を照合する場所が 2 つ在る。便用・席用の選定（`fleet/select.rs` の `counts`）は閉じた `Model` の `parse` で両側を型にしてから比べる（登録 row の**別名** `fable` と usage API の**表示名** `Fable` が同じ値に落ちる・表に無い字面は保守側で数える）。tick の逼迫の軸（`seat/tick/account.rs` の `counted`・§3 の逼迫度の読み手・FR38）は**字面のまま** `want == found` で比べる。登録 row が別名で書かれ（2026-09-17T03:5xZ に planner を `fable` で register し直した row が現物）実測行が表示名を持つ周は、tick がその席のモデル別窓を **1 行も数えず**、`account=` の逼迫度が 5 時間窓と 7 日窓だけになる＝モデル別窓が閾値以上でも退避の合図が出ない（C2「選定は 1 関数」・C10 の型の弁別の穴）。同じ表を選定は正しく読む＝2 実装の答えが食い違う。
+- 形: (1) 照合は `fleet/select.rs` の `counts` **1 本**（`Model::parse` で両側を型にしてから比べ、表に無い字面は保守側＝数える）で、tick の逼迫の軸はそれを呼ぶ（`seat/tick/account.rs` の `counted` は消す・可視性は crate 内に開く・引数の形は現物の `counts` のまま＝`(model, window, row_model)`）。(2) 答えの形・`pressure` の読み方（最新の回・reset）・判定行の token・`Allowance` の形は不変＝選定と tick が同じ表に同じ答えを出す。(3) 表に無い model の字面（row にも実測行にも）は両方とも保守側（全 model 窓を数える）＝現物の `counts` の極性のまま。
+- 触らない: `Model` の表と別名・表示名（`fleet/select.rs`）・選定の順序と鍵（§3 / §19）・`pressure` の reset と最新の回の読み・判定行の token（`account=`）・§15 の窓ごとの閾値（seat-autonomy.md）・実測行の schema。
+- 歯（`seat_account_model_` 接頭辞・`seat/tick/account.rs` の in-file の歯の module〔既存 `seat_account_pressure_` の fixture `measured` の型〕）: (a) 登録 row の model が別名 `fable`・実測行の model が表示名 `Fable` の周に `pressure` がそのモデル別窓の使用率を数える（base は字面比較で数えない → RED）／(b) 逆向き（row が表示名・実測行が別名）も同じ／(c) 表に無い字面（row か実測行のどちらか）は全 model 窓を数える（保守側・base と同じ答え＝極性不変）／(d) `MODELS` の全 variant × {別名, 表示名} の組で選定側の `counts` と tick 側の答えが等しい（同じ関数を呼ぶ証拠・base は 4 組で食い違う → RED）。既存の `seat_account_pressure_` と `select_model_windows_` の歯は期待を変えない。
+- 却下: tick 側にも `Model::parse` を書く（2 実装のまま・C2）／登録 row を表示名で書き直して凌ぐ（`s2-07l.433` の暫定・row の字面に依存する穴が残る）／字面を小文字に寄せて比べる（表の外の字面が偶然一致する・§19 の「字面の寄せは採らない」と同じ理由）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -266,4 +274,14 @@ write-set = ["crates/scribe2/src/fleet/select.rs", "crates/scribe2/tests/e2e/fle
 verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail fleet_select_week_", "cargo nextest run -p scribe2 --lib --no-tests=fail select_run_week_"]
 size = "M"
 done = "便用の選定が 7 日窓の reset の早い口座を 5 時間窓の reset の早い口座より先に選び、7 日窓の reset が同じなら走行中の便数 → label、7 日窓の reset を持たない口座は候補のまま最後で、同じ表の席用の答えと候補なしの周の earliest_reset は変わらない"
+
+[[contract]]
+id = "q"
+title = "席の model とモデル別窓の照合を fleet/select.rs の counts 1 本（Model の型で比べる）に寄せ、tick の逼迫度が別名の登録 row でもモデル別窓を数える — tick 側の字面比較 counted を消す"
+req = ["FR38", "FR36"]
+section = "20"
+write-set = ["crates/scribe2/src/fleet/select.rs", "crates/scribe2/src/seat/tick/account.rs"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail seat_account_model_"]
+size = "S"
+done = "登録 row の model が別名でも表示名でも tick の逼迫度がそのモデル別窓を数え、表に無い字面は保守側で全 model 窓を数え、選定と tick が同じ表に同じ答えを出し、既存の pressure と選定の歯は不変"
 <!-- contracts:end -->
