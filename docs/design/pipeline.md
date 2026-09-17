@@ -454,6 +454,15 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
 - 却下（ADR-0039 §03）: 現行のまま（2 乗の撃ち直し）／追随の再 gate を撃たない（着地前に着地後の木を検査しない・C12.6）／楽観着地して赤なら revert（main が赤の時間を認める）／先頭 k 本ごとの木を並列に検査する（費用が N 倍・改訂 ADR で足す候補）／候補の木を便の worktree を順に rebase して作る（後続の便の記録の base が main の祖先でなくなり、解いた周に便が stale で固まる）／`Landed` の detail に train の印を足す（便ごとの記録の形は不変・train の事実は先頭の便の record と stdout に置く）。
 - 歯（`pipe_train_` 接頭辞・`tests/e2e/pipe/land.rs`・既存の `three_gated_runs` + 偽 lens + rules の tmp manifest の型／`rules_land_train_` 接頭辞・`tests/e2e/rules.rs`／行 ai は `pipe_detection_carry_` 接頭辞・`tests/e2e/pipe/gate.rs` と `land.rs`）: (a) 上限 3 で先頭を land すると 3 本が列の順に着地し（親の連鎖・main の先端・`Landed` 3 件・`verdicts.jsonl` 3 行・`order=train` が後続 2 本）、後続の追随は 0 回・先頭の `verify.jsonl` に共通 verify が `train=3` で 1 組・後続の `verify.jsonl` に契約 verify と検出線だけ／着地済みの便の land は rc 0 で main 不変／番待ちで待っている 2 本目の land（子 process・`pipe.land_wait_s` の窓）と並行に先頭が列で着地すると、2 本目は起きた後に rc 0 `already-landed` で終端し event が増えない。(b) 3 本目の契約 verify が赤なら列を解いて先頭だけが着地し、後続 2 本は Gated PASS のまま列に残り、stdout に `dissolved`。(c) 2 本目が先頭と衝突する周は 2 本目を外して 1・3 本目が着地し、2 本目の worktree は clean のまま event が増えない。(d) 上限 1 と行の不在は先頭だけが着地し後続は従来どおり追随 1 回。(e) 列を選ぶ pure 関数の in-file の歯（鍵の順・PASS でない / worktree 無し / 終端の便を数えない・上限で切る）。(f) rules 行の pin（kind・enabled・裁定 id・`ALL` に在る・parse で引ける・外形 snap の `rows=` / `kinds=` が 1 増える）。(g) 先端の木の主実測が赤の周は列の便すべてが `Failed` の `main-red` で `Landed` 0 件・main は N 本ぶん進んだまま（巻き戻さない・既存の極性）。行 ai: (g) gate の検出線の record に `patch_id` が在り `git patch-id --stable` と一致／(h) main が `crates/` で動いた追随で便の diff が不変なら検出線を撃たず `carried=<n>` の record が前周の写し／(i) 便の diff の中身が変わる周（衝突無しでも context が動く fixture）と前周の record が無い周は撃つ。
 
+## 41. pipe/land.rs の主実測の群を land/verify.rs へ割る（契約表の行 aj・`s2-07l.457`・純移動）
+
+- 何が起きているか（planner の実測 2026-09-18・main 36d9c39・`pipe preflight` で verified）: `pipe/land.rs`（1238 行・src 1160 + in-file の歯 78）は R-C4-2 の余地が 261 行しか無く、size M の便 3 本（行 ah・`s2-07l.428`／行 af・`s2-07l.449`／行 ab・`s2-07l.400`）を受付が `cap-headroom` で断る（3 本とも rc 1 を実測）。責務は 6 群（入口と番待ち／追随〔`follow_main` の群〕／squash と finish／主実測〔`verify_main` の群〕／anchor の同期／worktree の検査）で、主実測の群は §5.4 の tmp worktree の中だけを触り、追随・squash の群に依存しない閉じた集合（呼び手は `land` の 1 か所・grep で確認）。
+- 決定的な制約（実測）: `MainCheck` は極性一覧（`crates/scribe2/src/polarity.rs`・`tests/e2e/polarity.rs`・snapshot `polarity_external_form`）が境界の型名 `pipe::land::MainCheck` を pin する＝**`MainCheck` は親に残す**（`pub use` では型名が変わらない・contract-source.md §15 の `TableError` と同型）。`AnchorPlan` / `WorktreeCheck` も同じ pin を持つが移す群に無い。
+- 形（contract-source.md §14 / §15 と同型）: 子 module（行 aj の write-set の `+` の file）へ主実測の群（`check_path` / `verify_main` / `materials` / `main_detection` / `record_main` / `measure_main` / `main_red` / `with_anchor` / `main_unmeasured` と const `CHECK_DIR` / `VERIFY_MAIN_FILE` / `MAIN_UNKNOWN`・約 230 行）をそのまま移す。親は `mod` 宣言と `use`（子の 3 関数を `land` が呼ぶ）で `land` の本体を不変に保つ。in-file の歯 5 本（`pipe_land_subject_` / `pipe_detection_scope_` / `mutant_in_pipe_land_next_number_`）は移す群の歯ではないので親に残す＝子に歯は無い（純移動の証明は札と既存の e2e の歯）。子が親の私有 item（`MainCheck` / `AnchorSync` / `Land` の欄 / `verdicts_path` / `with_lines` 等）を呼ぶ周は可視性を `pub(super)` に上げる＝可視性の 1 語と mod 宣言・`use` の path・doc コメント行は移動の一部（純移動の残差として許す）。札 `// flip-check: moved s2-07l.457` は親の歯の区間と子の先頭に対で置く。
+- 見積: 親 約 1000 行（余地 約 500）・子 約 240 行。
+- 歯: 既存の `pipe_land_` / `pipe_order_` / `pipe_follow_` / `pipe_retire_` の e2e と極性一覧の snapshot（`polarity_external_form`）が全部緑で期待を変えない。
+- 却下: anchor の群を移す（88 行で M の余地に届かない）／追随の群を移す（行 af / 行 ab が同じ群を触る＝それらの write-set が 2 file に割れて交差が増える）／行 ah / af / ab を S に落とす（見積が S の 100 を超える＝size の字面だけ変える嘘）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -812,4 +821,14 @@ verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_detection_carry_"]
 size = "S"
 done = "gate の検出線の record が patch_id を持ち、diff 不変の追随と候補の木の段は検出線を撃たず carried=<n> の写しを残し、違う周と record の無い周は撃つ"
 depends = ["ah"]
+
+[[contract]]
+id = "aj"
+title = "pipe/land.rs の主実測の群（verify_main / main_red / main_unmeasured ほか 9 item と const 3 つ）を land/verify.rs へ割る — 純移動・MainCheck は親に残す（極性一覧の pin）・land の本体は不変・札 moved"
+req = ["FR11"]
+section = "41"
+write-set = ["-crates/scribe2/src/pipe/land.rs", "+crates/scribe2/src/pipe/land/verify.rs", "docs/design/pipeline.md"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_land_ polarity_external_form"]
+size = "S"
+done = "主実測の群 9 item と const 3 つが子 module に在り、MainCheck は親に残って極性一覧の snapshot が不変、親は mod 宣言と use と可視性の 1 語だけが増えて land の本体と e2e の歯が全部緑、純移動の機械証明の残差が use と path と可視性の 1 語だけ"
 <!-- contracts:end -->
