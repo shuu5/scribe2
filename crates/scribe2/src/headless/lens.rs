@@ -41,6 +41,7 @@
 //! 材料が壊れているので claude を呼ばず rc 2。cap は契約 + 節 + 要件の byte で照合する（NFR1・超えたら
 //! INCONCLUSIVE）。
 
+use super::runner::scope_line;
 use super::{build, feed, fill, flag, need, read_stdin_bytes, rules_of, runner_effort, runner_model, Call, Effort, DEFAULT_CLAUDE};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
 use crate::fleet::select::Model;
@@ -49,8 +50,10 @@ use crate::pipe::contract::Contract;
 use crate::pipe::move_proof::RULINGS_FILE;
 use crate::pipe::review::{DESIGN_FILE, REQUIREMENTS_FILE};
 use crate::rules::int_row;
-use std::io::ErrorKind;
+use std::io::{ErrorKind, Read};
 use std::path::Path;
+use std::process::{Child, ExitStatus, Output};
+use std::time::Duration;
 
 /// prompt の文面（tracked な template・絶対 path も口座名も含まない）。
 const TEMPLATE: &str = include_str!("lens.txt");
@@ -68,12 +71,17 @@ const JSON_HEAD: char = '{';
 const ROW_CAP: &str = "gate.token_cap";
 
 /// lens が受ける flag の全部（この外は未知の引数として断る）。
-const KNOWN_FLAGS: [&str; 6] = ["--contract", "--worktree", "--permission-mode", "--rules", "--account-dir", "--claude"];
+const KNOWN_FLAGS: [&str; 7] =
+    ["--contract", "--worktree", "--permission-mode", "--rules", "--account-dir", "--claude", "--cgroup-root"];
+
+/// claude の終了を待つ poll の間隔（各周で scope の `memory.peak` を 1 回読む・設計 gate-cost.md §13）。
+/// async は使わない（C13.3）。
+const POLL: Duration = Duration::from_secs(1);
 
 /// 使い方の 1 行。
 pub fn usage() -> String {
     format!(
-        "usage: {} lens --contract F --worktree D --permission-mode M [--rules PATH] [--account-dir D] [--claude PATH] < diff",
+        "usage: {} lens --contract F --worktree D --permission-mode M [--rules PATH] [--account-dir D] [--claude PATH] [--cgroup-root DIR] < diff",
         crate::name::NAME
     )
 }
@@ -127,9 +135,12 @@ pub fn dispatch(args: &[String]) -> Outcome {
             need(args, "--permission-mode")?.to_owned(),
             flag(args, "--account-dir")?.map(str::to_owned),
             flag(args, "--claude")?.map(str::to_owned),
+            // cgroup の root（claude の scope の peak の置き場・設計 gate-cost.md §13）。省くと typed な既定
+            // [`confine::CGROUP_ROOT`]・env は読まない（C2.2）。
+            flag(args, "--cgroup-root")?.map(str::to_owned),
         ))
     })();
-    let (contract, worktree, mode, account, claude) = match parsed {
+    let (contract, worktree, mode, account, claude, cgroup_root) = match parsed {
         Ok(found) => found,
         Err(reason) => return Outcome::failed(RC_REFUSED, vec![format!("lens: {reason}"), usage()]),
     };
@@ -159,7 +170,8 @@ pub fn dispatch(args: &[String]) -> Outcome {
         Ok(found) => found,
         Err(outcome) => return outcome,
     };
-    ask(&Call {
+    ask(
+        &Call {
         claude: claude.as_deref().unwrap_or(DEFAULT_CLAUDE),
         prompt: &prompt,
         permission_mode: &mode,
@@ -175,7 +187,9 @@ pub fn dispatch(args: &[String]) -> Outcome {
         // 「最後の JSON 行」が claude の result record になり、判定が取れない。
         streaming: false,
         max_turns: None,
-    })
+        },
+        Path::new(cgroup_root.as_deref().unwrap_or(confine::CGROUP_ROOT)),
+    )
 }
 
 /// 審査の材料と prompt（**どちらの審査かは契約の隣の材料で決まる**）。
@@ -272,7 +286,12 @@ fn state(contract: &Contract) -> String {
 /// 起動形は [`build`] が持つ——lens は `--allowedTools` を渡さない側だが、settings 由来の
 /// allow 規則は権限の口を開けるので、settings を 1 つも読まない形（`--setting-sources` の
 /// 空値 + `--strict-mcp-config`）は runner と同じく毎回効く（ADR-0011 §2.1）。
-fn ask(call: &Call<'_>) -> Outcome {
+///
+/// **claude の scope の peak は走行中に sample する**（設計 gate-cost.md §13・`s2-07l.273`）: 終了を
+/// [`POLL`] の `try_wait` で待ち、各周で `memory.peak` を 1 回読む（[`confine::Sampler`]）。終端で読む形は
+/// 最後の process の終了で scope が消えた正常系を測れない。**poll の間も stdout を読み切る**——子の stdout は
+/// pipe なので、誰も読まないと 64 KiB で子が書き待ちになり poll が永久に回る（[`drain`]）。
+fn ask(call: &Call<'_>, cgroup_root: &Path) -> Outcome {
     let (mut command, confinement) = build(call);
     let spawned = command.spawn();
     let mut child = match spawned {
@@ -280,13 +299,41 @@ fn ask(call: &Call<'_>) -> Outcome {
         Err(err) => return Outcome::failed_line(RC_BROKEN, format!("lens: claude を起動できない: {err}")),
     };
     feed(&mut child, call.prompt);
-    let waited = child.wait_with_output();
+    let mut sampler = confine::Sampler::of(&confinement, cgroup_root);
+    let waited = drain(&mut child, |child| poll(child, &mut sampler));
     // **終端で scope を片付ける**（設計 gate-cost.md §4.4 errata・`s2-07l.234`）。stdout の 1 行は
     // 判定の面なので、結果は stderr の 1 行だけに出す。
     let mut outcome = read_verdict(waited);
-    let scope = confine::release_scope(&confinement);
-    outcome.err.extend(scope.map(|released| format!("lens: scope={}", released.as_str())));
+    outcome.err.extend(scope_line("lens", &confinement, sampler.peak()));
     outcome
+}
+
+/// 子の stdout を**別 thread で読み切りながら** `wait` を回し、終端で join して `Output` に組む。
+///
+/// stdout を取り出せない周（`build` は必ず pipe にする）は空の stdout で `wait` だけ回す。thread が落ちた周
+/// （読み手の panic）も空＝読めない出力は INCONCLUSIVE へ倒れる側。stderr は子が親のものを継承する（空）。
+fn drain(child: &mut Child, wait: impl FnOnce(&mut Child) -> std::io::Result<ExitStatus>) -> std::io::Result<Output> {
+    let reader = child.stdout.take().map(|mut out| {
+        std::thread::spawn(move || {
+            let mut buffer = Vec::new();
+            let _ = out.read_to_end(&mut buffer);
+            buffer
+        })
+    });
+    let status = wait(child)?;
+    let stdout = reader.and_then(|handle| handle.join().ok()).unwrap_or_default();
+    Ok(Output { status, stdout, stderr: Vec::new() })
+}
+
+/// claude の終了を [`POLL`] で待つ。**周ごとに 1 回 sample する**（眠った後・起動の直後は scope が未だ無い）。
+fn poll(child: &mut Child, sampler: &mut confine::Sampler<'_>) -> std::io::Result<ExitStatus> {
+    loop {
+        if let Some(status) = child.try_wait()? {
+            return Ok(status);
+        }
+        std::thread::sleep(POLL);
+        sampler.sample();
+    }
 }
 
 /// 終わった claude の出力から最後の JSON 行を読む。
