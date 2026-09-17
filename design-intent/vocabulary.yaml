@@ -768,6 +768,56 @@ terms:
     definition: host で同時に走る live な便の本数の上限。 値は rules 行 pipe.max_live が持ち (user 裁定 id 付き・憲法 C5)、 受付が便を作る前に live な便を数えて値以上の周は typed に断り、 dispatcher はその契約を列に留めて次の契機で再判定する。 走行中の便には効かない。 env・launcher の変数・host の宣言 file には置かない (ADR-0035)。 並列の枠 (変異検査の並列度・memory の枠) とは別。
     relationships: [live な便, 受付, dispatcher, 起動の列, rules 行, 並列の枠]
     flagged_ambiguities: ["上限: 同時走行の最大値 (便の本数・pipe.max_live) と並列の枠 (変異検査の並列度・memory) と上限停止 (口座の使用上限) は別義"]
+  - canonical: 着地の列
+    domain: consumer
+    aliases: [landing queue]
+    definition: Gated ∧ verdict PASS の便の並び。 先に gate を通った便が先に着地し (ADR-0021 §2.5)、 順番の鍵は event log の replay で導く。 候補の木はこの列の先頭から積む (ADR-0039)。
+    relationships: [land, gate, 候補の木, 追随, 列の長さの上限]
+  - canonical: 候補の木
+    domain: consumer
+    aliases: [candidate tree]
+    definition: main の先端に着地の列の先頭から N 本を順に rebase して作る 1 つの worktree。 gate はこの木に対して 1 回撃ち、 緑なら列の順に着地する。 rebase が衝突した便は積まず列から外れて起こし直しへ進む (ADR-0039)。
+    relationships: [着地の列, gate, 共通 verify, 衝突, 起こし直し, 列を解く]
+  - canonical: 列を解く
+    domain: consumer
+    aliases: [dissolve the train]
+    definition: 候補の木の gate が赤だった周に、 N 本の並びを捨てて先頭 1 本だけの既存の経路 (追随 → 再 gate) に戻すこと。 どの便が赤かの帰属はしない (ADR-0039)。
+    relationships: [候補の木, 着地の列, 追随, gate]
+  - canonical: 検出線の持ち越し
+    domain: consumer
+    aliases: [carried detection line]
+    definition: 便の diff の patch-id が前周の記録と同じ周に、 前周の検出線 (変異の生存) の record を持ち越しの印付きで写して撃たないこと。 記録が無い・patch-id が違う周は撃つ。 持ち越した値は実測と型で区別する (C10・ADR-0039)。
+    relationships: [検出線, 変異検出線, patch-id, 実測行, 候補の木]
+  - canonical: patch-id
+    domain: consumer
+    aliases: [patch id]
+    definition: git patch-id --stable が diff の中身だけから計算する指紋。 行番号や base が変わっても diff の中身が同じなら同じ値になり、 衝突無しの rebase で便の diff が変わらなかったことを測る鍵 (ADR-0039)。
+    relationships: [検出線の持ち越し, 追随, 衝突]
+  - canonical: 列の長さの上限
+    domain: consumer
+    aliases: [train max]
+    definition: 候補の木に積む便の数の上限。 rules 行 land.train_max の値で、 裁定 id 付きで manifest が持つ (C5・ADR-0039)。
+    relationships: [rules 行, 裁定 id, manifest, 候補の木, 着地の列]
+  - canonical: 封じ込めの箱
+    domain: consumer
+    aliases: [箱, confinement scope]
+    definition: 封じ込めが process を閉じ込める memory 上限付きの囲い (systemd-run --user --scope で作る transient scope)。 上限を超えると殺されるのはその中の process だけ (ADR-0021 §2.2・ADR-0040)。
+    relationships: [封じ込め, 箱の上限の 2 種, 実装役の箱, 検証行の箱]
+  - canonical: 箱の上限の 2 種
+    domain: consumer
+    aliases: [two limit kinds]
+    definition: 封じ込めの箱の上限の決め方の 2 通り。 PerJob(n) = n × gate.job_memory_mb と HostReserve = MemTotal − host.reserve_memory_mb。 実装役・審査役・claude の箱は PerJob(1)、 検証行の箱は HostReserve (ADR-0040)。
+    relationships: [封じ込めの箱, 実装役の箱, 検証行の箱, rules 行]
+  - canonical: 実装役の箱
+    domain: consumer
+    aliases: [runner box]
+    definition: 便の runner を起こす封じ込めの箱。 上限は 1 × gate.job_memory_mb で、 溢れた周は便を理由付きで終端し新しい便で起こし直す (ADR-0021 §2.2・ADR-0040)。
+    relationships: [封じ込めの箱, 箱の上限の 2 種, runner, 起こし直し]
+  - canonical: 検証行の箱
+    domain: consumer
+    aliases: [verify-line box]
+    definition: gate と main 実測の共通の検証行を起こす封じ込めの箱。 上限は HostReserve のまま (ADR-0040 では変えない)。
+    relationships: [封じ込めの箱, 箱の上限の 2 種, 共通 verify, gate]
   - canonical: 役割の口座
     domain: consumer
     aliases: [role account]

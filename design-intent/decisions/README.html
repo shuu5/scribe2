@@ -60,6 +60,8 @@
     { "@id": "./ADR-0036-role-accounts-are-declared-once-per-host.html" },
     { "@id": "./ADR-0037-rulings-without-a-run-are-approval-events.html" },
     { "@id": "./ADR-0038-plugin-payload-lives-in-a-generated-dir.html" },
+    { "@id": "./ADR-0039-landing-train-gates-one-candidate-tree.html" },
+    { "@id": "./ADR-0040-runner-and-lens-boxes-are-one-job-each.html" },
     { "@id": "./ADR-0041-role-effective-account-is-one-host-record-and-moves-only-under-pressure.html" },
     { "@id": "./ADR-0042-run-account-order-is-earliest-seven-day-reset.html" }
   ]
@@ -144,6 +146,8 @@
     <tr><td>ADR-0036</td><td><a href="./ADR-0036-role-accounts-are-declared-once-per-host.html">役割ごとの口座は host の根の宣言 1 か所が持ち、 全 project の席の起動・立て直し・便の除外がそれを読む (planner / admin の口座を host で統一・逼迫時は宣言の書き換え 1 手で全席が移る・ADR-0026 §2.3 と ADR-0027 の除外を部分 supersede)</a></td><td>accepted</td><td>2026-09-16</td></tr>
     <tr><td>ADR-0037</td><td><a href="./ADR-0037-rulings-without-a-run-are-approval-events.html">run 無しの裁定も承認 event として器が持つ (event kind RulingReceived・逐語は detail・裁定 id は器が打つ ts・書き手は対話面の席の口 1 つ・manifest の裁定 id との突合は doctor)</a></td><td>accepted</td><td>2026-09-16</td></tr>
     <tr><td>ADR-0038</td><td><a href="./ADR-0038-plugin-payload-lives-in-a-generated-dir.html">plugin の実体は生成 dir に置き、 marketplace の source はその dir を指す (cache の写しの単位を plugin に閉じる・生成器が起こし xtask check が drift 0 を測る・plugin root を前提にする現物は 1 定数に追随・再 install は user 手番)</a></td><td>accepted</td><td>2026-09-16</td></tr>
+    <tr><td>ADR-0039</td><td><a href="./ADR-0039-landing-train-gates-one-candidate-tree.html">着地の列は候補の木 1 つに対して gate を 1 回撃つ (merge train・列の先頭 N 本を順に rebase した木を 1 回検査し緑なら順に着地・赤は列を解いて 1 本ずつに戻す・検出線は patch-id が不変なら持ち越す・N は rules 行)</a></td><td>proposed</td><td>2026-09-17</td></tr>
+    <tr><td>ADR-0040</td><td><a href="./ADR-0040-runner-and-lens-boxes-are-one-job-each.html">runner・lens・claude の箱の上限は 1 × gate.job_memory_mb (ADR-0021 §2.2 の「host 全体から席のぶんを引いた残り」を実装役・審査役・claude の箱について部分 supersede・Limit の 2 種は不変・値は既存の rules 行)</a></td><td>proposed</td><td>2026-09-17</td></tr>
     <tr><td>ADR-0041</td><td><a href="./ADR-0041-role-effective-account-is-one-host-record-and-moves-only-under-pressure.html">役割の実効の口座は host の根の記録 1 件が持ち、 逼迫した周にだけ余裕が最大の口座へ役割ごと移る (宣言は初期値の種で宣言へは戻らない・候補が無い周も妥協の口座で席を立てて user の裁定を待つ・consult は planner の口座を読む・ADR-0036 の DR3 を supersede)</a></td><td>accepted</td><td>2026-09-17</td></tr>
     <tr><td>ADR-0042</td><td><a href="./ADR-0042-run-account-order-is-earliest-seven-day-reset.html">便用の並べ鍵は 7 日窓の reset の早い順 (7 日窓の reset を持たない口座は最後・5 時間窓とモデル別窓は鍵にしない・席用の順序は不変・ADR-0027 §2.2 の 1 つ目の鍵を supersede)</a></td><td>accepted</td><td>2026-09-17</td></tr>
   </tbody>
