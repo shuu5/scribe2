@@ -220,7 +220,7 @@ id = "l"
 title = "lens の口座も器が選ぶ — pipe gate が lens を起こす直前に便用の選定を通し、with_account の 1 関数で起動行に足し、Gated の detail に account:<label> を記帳する（候補なしは INCONCLUSIVE）"
 req = ["FR36", "FR33"]
 section = "15"
-write-set = ["crates/scribe2/src/pipe/gate.rs", "crates/scribe2/src/pipe/gate/lens.rs", "crates/scribe2/src/pipe/spawn.rs", "crates/scribe2/src/pipe/ratelimit.rs", "crates/scribe2/src/pipe/cli/step.rs", "crates/scribe2/src/pipe/land.rs", "crates/scribe2/tests/e2e/pipe/gate.rs"]
+write-set = ["crates/scribe2/src/pipe/gate.rs", "crates/scribe2/src/pipe/gate/lens.rs", "crates/scribe2/src/pipe/spawn.rs", "crates/scribe2/src/pipe/ratelimit.rs", "crates/scribe2/src/pipe/cli/step.rs", "crates/scribe2/src/pipe/land.rs", "crates/scribe2/tests/e2e/pipe/gate.rs", "crates/scribe2/tests/e2e/pipe.rs", "crates/scribe2/tests/e2e/pipe/spawn.rs", "crates/scribe2/tests/e2e/pipe/ratelimit.rs"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_gate_lens_account_"]
 size = "S"
 done = "宣言口座のある置き場で gate の lens 起動行の末尾に選んだ口座の --account-dir が在り Gated の detail に account:<label> が出て、宣言 0 は従来どおり、候補なしは lens を呼ばず INCONCLUSIVE"
