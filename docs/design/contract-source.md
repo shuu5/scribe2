@@ -544,7 +544,7 @@ id = "ac"
 title = "pipe/closure.rs の名指しの解決の群（unresolved_names / Form 系 / backticked と歯 closure_names_）を closure/names.rs へ割る — 純移動・ClosureError と 4 形と surface_closure は親に残す・呼び手は pub use で不変・札 moved"
 req = ["FR48"]
 section = "29"
-write-set = ["-crates/scribe2/src/pipe/closure.rs", "+crates/scribe2/src/pipe/closure/names.rs", "docs/design/contract-source.md"]
+write-set = ["-crates/scribe2/src/pipe/closure.rs", "crates/scribe2/src/pipe/closure/names.rs", "docs/design/contract-source.md"]
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail closure_names_"]
 size = "S"
 done = "名指しの解決の群 9 item と歯 3 本と fixture が子 module に在り、親は mod 宣言と pub use / pub(super) use だけが増えて呼び手の import は不変、既存の closure_ と contract_ の歯が全部緑で極性一覧の snapshot が不変、純移動の機械証明の残差が use と path と可視性の 1 語だけ"
