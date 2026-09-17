@@ -444,6 +444,16 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
 - 歯（`pipe_stop_driver_` 接頭辞・e2e は `tests/e2e/pipe/stop.rs`・偽の運転手 = `sleep` の process group の pid を札に書いた fixture）: (a) in-file（`pipe/mod.rs` の tests）`RunStopped` の後に `RunStage stage=Gated` を `emit` すると `StoreError` の `Stopped` で断られ event log の byte 数が不変（base は書く → RED）・`RunStopped` / `SeatStopped` は書ける／(a′) e2e の race: verify を `sleep` にした gate を子 process で走らせ走行中に `pipe stop --run` を撃つと、gate は `Gated` の記帳で断られ rc 2・event log の最後は `RunStopped` のまま（札の無い gate は止められず門だけが効く形）／(b) `pipe stop --run` が札の pid の group を止め `seat=driver` の記録を残す（base は生きたまま・記録 0 → RED）／(c) 札の pid が stop を撃つ process 自身の周は止めずに `RunStopped` を書く（fixture は `sh -c` で `$$` と起動時刻を札に書いてから同じ shell で `exec` して stop を撃つ＝札の pid == stop の pid）／(d) 札が無い・死んでいる周は席の停止と `RunStopped` だけ（従来と同じ event 列）／(e) TERM を無視する偽の運転手（`trap '' TERM` の sh）は猶予の後の KILL で止まり rc 0（席の既存の歯と同型）／(f) in-file（`fleet/store.rs` の tests）: 条件付き append は lock の中で述語を評価し、偽の周は file が 1 byte も変わらない。
 - 却下: 各段の関数の先頭で `Stopped` を読む（読み手が段の数だけ増え、新しい段を足すたびに漏れる・C2）／stop が state dir に印の file を置いて段が読む（記帳と別の状態・C3）／運転手を殺すだけで記帳の門を持たない（殺す前に書かれた event と race する・.289 の型）／記帳の門だけで運転手を殺さない（gate の verify が走り切るまで CPU と worktree を握る）。
 
+## 40. 着地の列の先頭 N 本を候補の木 1 つに積んで検査を 1 回撃ち、patch-id 不変の便は検出線を持ち越す（契約表の行 ah / ai・`s2-07l.428`・[ADR-0039](../../design-intent/decisions/ADR-0039-landing-train-gates-one-candidate-tree.html)）
+
+- 何が起きているか（planner の実測 2026-09-17・fleet の event log 09-16 00:00Z 以降 84 便）: 便の延べ 83 時間のうち gate 36 時間（43%）・追随の再 gate 29 回（中央値 16 分・最大 151 分）・着地した 17 bead の壁時計は中央値 238 分。列の先頭が着地するたびに後続が追随して全部撃ち直す＝列の長さ N に対して再 gate が N 回・gate の時間が N の 2 乗に伸びる。29 回の再 gate はすべて `rebase:<old>..<new>` の記帳を持つ衝突無しの rebase で、便の diff は変わっていないのに検出線（mutants-diff）も撃ち直している。§30 / §33 は main の差分が検出線の面の外の周だけを省く。
+- 現物: `pipe/land.rs` の `land` は便 1 本ごとに「番待ち → 追随（rebase → gate の撃ち直し）→ squash → 主実測 → finish」を通す 1 本道で、列（`pipe/queue.rs` の `turn_in`）は順番だけを決める。検出線の record（`pipe/gate/record.rs`）は便の diff の指紋を持たないので、再 gate は「同じ diff か」を測れない。
+- 形 (a)（行 ah・候補の木）: 列の先頭（`turn_in` が `First` を返した便）が着地する周、**列の自分の後ろに並ぶ便**（`turn_in` と同じ条件＝終端でない ∧ Gated 済 ∧ worktree 実在 ∧ 最新 verdict PASS・鍵の順）を rules 行 `land.train_max`（列の長さの上限・kind `LandTrainMax`・Int・値 4・裁定 id = user 2026-09-17T03:28Z・C5）− 1 本まで取り、自分を先頭に並べた列を **1 つの候補の木**に積む。選ぶ関数は `pipe/queue.rs` の pure な 1 本（`turn_in` と同じ列の読みの上）で、行が無い・読めない周と上限 1 の周は自分だけ（現行と同じ）。候補の木は main の先端から切った tmp worktree（主実測の `verify` の隣・便の worktree と記録の base は触らない）に、便ごとに `git cherry-pick <base>..<HEAD>` で順に積む。積めなかった便（衝突）は `cherry-pick --abort` で候補から外し（その便の event は書かない・後続は詰める）、外れた便は自分の land で従来どおり追随して衝突を pipeline-conflict.md §3 の起こし直しへ進める。積んだ便ごとにその段の tree を覚え、便の diff に対する検出線をその場で撃つ（base = 直前の段・record はその便の `verify.jsonl`）。全部積んだ木に対して共通 verify を **1 回**（record は先頭の便の `verify.jsonl`・field `train=<N>`）と各便の契約 verify をその便の分（record はその便の `verify.jsonl`）撃つ＝lens は撃たない（各便の verdict PASS が入口の条件で、候補の木で測るのは木の緑）。**緑**なら列の順に、覚えた段の tree で `commit-tree`（親 = 直前の着地 commit）して main を CAS で N 本ぶん進め（squash の材料を「worktree の tree」から「段の tree」に広げる 1 引数）、次に主実測 `verify_main` を従来どおり先端の木で 1 回撃つ（§33・C12.6 の緑はここが担う・木は候補と同じなので検出線は `same-tree` で省かれる）。主実測が**緑**なら便ごとに列の順で `verdicts.jsonl` の 1 行（`order` の閉じた値に `train` を 1 つ足す）と `Landed` event（detail は従来の形＝`sha:` に自分の段の commit・`main:` に実測した先端）と worktree の退避を書く。主実測が**赤**なら列の便すべてに従来の `Failed` の `main-red` を書く（main は進んだまま・巻き戻さない＝既存の極性・N 本のどれが赤かは帰属しない）。FR50 の面: push と CI の照合は先端 commit 1 回で N 本ぶん（同じ push・同じ CI run）、台帳の close は便ごとの `Landed` の `sha:` で 1 本ずつ（push・照合・close の機械化は本節の外＝行 ah の write-set に無い）。**赤**（共通 / 契約 / 検出線のいずれか）なら候補の木を畳んで**列を解き**、先頭 1 本の既存の経路（追随 → 撃ち直し）にそのまま入る（どの便が赤かは帰属しない・後続の便は列に残る）。候補の木を切れない・積めない・読めない周も同じく解く（fail-closed）。列の後ろの便が自分の land に来た周は、**番待ち（`await_turn`）から戻った直後の 1 点**で段を読み、`Landed` なら **何もせず rc 0**（§29 の冪等の終端を段で先に読む・worktree の実在を要さない・待たない周も同じ点を通るので、番待ちの間に列で着地した便も追随へ進まず終端する＝`await_turn` 自身は触らない）。上限 1 と行の不在は現行の経路そのもの。stdout の 1 行に `train=<積んだ本数>`（解いた周は `train=<N> dissolved`）。train の本体は行 ah の write-set の `+` の file（新設 module）に置き、`pipe/land.rs` は `Landed` の早期終端・`First` の周の委譲・`squash` の 1 引数だけが動く。
+- 形 (b)（行 ai・検出線の持ち越し）: gate は検出線を撃つ周に便の diff の `git patch-id --stable`（`<base>..HEAD`）を検出線の record に `patch_id=` で残す。追随の撃ち直し（`follow_main`）と候補の木の各段は、検出線を撃つ前に同じ 1 関数で「面に触れたか（§30）→ 前周の record に `patch_id` が在り今の diff の patch-id と同じか」を順に読み、同じ周は前周の検出線の record を **`carried=<前周の n>` を付けて写し**撃たない（`Detection` の閉じた値に持ち越しを 1 つ足す・持ち越した値は record の field で実測と区別する・C10）。record が無い・`patch_id` が無い・違う・読めない周は撃つ（fail-closed）。§30 の `outside-scope` の省略は不変で先に効く。
+- 触らない: 列の順序と鍵（`turn_in`・ADR-0021 §2.5）・`await_turn` と `pipe.land_wait_s`・stale base の判定と CAS・rebase と衝突の経路（便の worktree は候補の木の外）・主実測の行・lens の判定・verdict の 3 値・`Landed` の detail の形・`--pr-cmd` 形（列を見ない）・`DETECTION_SCOPE`。
+- 却下（ADR-0039 §03）: 現行のまま（2 乗の撃ち直し）／追随の再 gate を撃たない（着地前に着地後の木を検査しない・C12.6）／楽観着地して赤なら revert（main が赤の時間を認める）／先頭 k 本ごとの木を並列に検査する（費用が N 倍・改訂 ADR で足す候補）／候補の木を便の worktree を順に rebase して作る（後続の便の記録の base が main の祖先でなくなり、解いた周に便が stale で固まる）／`Landed` の detail に train の印を足す（便ごとの記録の形は不変・train の事実は先頭の便の record と stdout に置く）。
+- 歯（`pipe_train_` 接頭辞・`tests/e2e/pipe/land.rs`・既存の `three_gated_runs` + 偽 lens + rules の tmp manifest の型／`rules_land_train_` 接頭辞・`tests/e2e/rules.rs`／行 ai は `pipe_detection_carry_` 接頭辞・`tests/e2e/pipe/gate.rs` と `land.rs`）: (a) 上限 3 で先頭を land すると 3 本が列の順に着地し（親の連鎖・main の先端・`Landed` 3 件・`verdicts.jsonl` 3 行・`order=train` が後続 2 本）、後続の追随は 0 回・先頭の `verify.jsonl` に共通 verify が `train=3` で 1 組・後続の `verify.jsonl` に契約 verify と検出線だけ／着地済みの便の land は rc 0 で main 不変／番待ちで待っている 2 本目の land（子 process・`pipe.land_wait_s` の窓）と並行に先頭が列で着地すると、2 本目は起きた後に rc 0 `already-landed` で終端し event が増えない。(b) 3 本目の契約 verify が赤なら列を解いて先頭だけが着地し、後続 2 本は Gated PASS のまま列に残り、stdout に `dissolved`。(c) 2 本目が先頭と衝突する周は 2 本目を外して 1・3 本目が着地し、2 本目の worktree は clean のまま event が増えない。(d) 上限 1 と行の不在は先頭だけが着地し後続は従来どおり追随 1 回。(e) 列を選ぶ pure 関数の in-file の歯（鍵の順・PASS でない / worktree 無し / 終端の便を数えない・上限で切る）。(f) rules 行の pin（kind・enabled・裁定 id・`ALL` に在る・parse で引ける・外形 snap の `rows=` / `kinds=` が 1 増える）。(g) 先端の木の主実測が赤の周は列の便すべてが `Failed` の `main-red` で `Landed` 0 件・main は N 本ぶん進んだまま（巻き戻さない・既存の極性）。行 ai: (g) gate の検出線の record に `patch_id` が在り `git patch-id --stable` と一致／(h) main が `crates/` で動いた追随で便の diff が不変なら検出線を撃たず `carried=<n>` の record が前周の写し／(i) 便の diff の中身が変わる周（衝突無しでも context が動く fixture）と前周の record が無い周は撃つ。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -780,4 +790,26 @@ write-set = ["crates/scribe2/src/fleet/store.rs", "crates/scribe2/src/pipe/mod.r
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_stop_driver_"]
 size = "M"
 done = "RunStopped の後の段の記帳が lock の中で断られて event が増えず、pipe stop --run が札の運転手を止めて記録を残し、自分自身と札の無い便は従来どおり、止め切れない周は RunStopped を書かず rc 1"
+
+[[contract]]
+id = "ah"
+title = "着地の列の先頭 N 本を候補の木 1 つに積み検査を 1 回撃って列の順に着地し、赤なら列を解く（merge train・rules 行 land.train_max〔4・裁定 id user 2026-09-17T03:28Z〕）"
+req = ["FR34", "FR10", "FR12", "FR50"]
+section = "40"
+touches = ["crate::rules::RuleKind"]
+write-set = ["rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "crates/scribe2/tests/e2e/rules.rs", "crates/scribe2/tests/e2e/snapshots/e2e__rules__rules_external_form.snap", "crates/scribe2/src/pipe/cli/step.rs", "crates/scribe2/src/pipe/mod.rs", "+crates/scribe2/src/pipe/train.rs", "crates/scribe2/src/pipe/land.rs", "crates/scribe2/src/pipe/queue.rs", "crates/scribe2/src/pipe/gate/record.rs", "crates/scribe2/tests/e2e/pipe/land.rs", "docs/design/pipeline.md"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_train_", "cargo nextest run -p scribe2 --no-tests=fail rules_land_train_"]
+size = "M"
+done = "偽の列 3 本が候補の木 1 つの検査 1 回で列の順に着地して追随 0 回、赤の周は列を解いて先頭だけが従来の経路で着地し、上限 1 と行の不在は現行と同じ"
+
+[[contract]]
+id = "ai"
+title = "検出線は便の diff の patch-id を record に残し、追随の撃ち直しと候補の木の段で patch-id 不変なら前周の record を carried 付きで写して撃たない"
+req = ["FR34", "FR46"]
+section = "40"
+write-set = ["crates/scribe2/src/pipe/gate.rs", "crates/scribe2/src/pipe/gate/record.rs", "crates/scribe2/src/pipe/land.rs", "+crates/scribe2/src/pipe/train.rs", "crates/scribe2/tests/e2e/pipe/gate.rs", "crates/scribe2/tests/e2e/pipe/land.rs", "docs/design/pipeline.md"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_detection_carry_"]
+size = "S"
+done = "gate の検出線の record が patch_id を持ち、diff 不変の追随と候補の木の段は検出線を撃たず carried=<n> の写しを残し、違う周と record の無い周は撃つ"
+depends = ["ah"]
 <!-- contracts:end -->
