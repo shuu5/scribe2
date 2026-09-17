@@ -145,6 +145,14 @@ C1 / C5（R-C9-1 は行・裁定 id）・C2（`Purpose` / `Selection` / `Stage` 
 - 歯（`pipe_unreachable_` 接頭辞・`tests/e2e/pipe/spawn.rs` の `.323` の歯の隣・偽 claude が `result` record に `is_error:true` と到達不能の本文を書く fixture・in-file は `runner.rs` の弁別の pure な歯）: 到達不能の本文で終わった runner の便は `Spawned` のまま `SeatStopped detail=runner-unreachable` が 1 件・Failed は 0・worktree の commit が残る／`pipe resume` が生死の計測を飛ばして runner を 1 回起こし直し `Spawned detail=account:<label>,resume:unreachable` と prompt の「途中再開」節に理由の行／集合に無い `is_error` の本文は従来どおり `Failed detail=runner-rc:1,commits:<n>`／`is_error=false` の本文に語が在っても弁別しない（pure）／rc の値が既存の rc と衝突しない（in-file の pin）。
 - 却下: `Stage` に `Unreachable` を足す（`.323` が `Spawned` + `SeatStopped` の detail で同じ形を持つ・段を増やすと `may_queue` / `live` / 外形の面が動く）／本文でなく rc 1 全部を再開可能にする（実装の失敗を無限に起こし直す）／runner がネットの復帰を自分で待つ（口座の窓と箱を掴んだまま待つ・C6）／claude の record の typed な field だけで弁別する（到達不能の typed な record は現物に無い＝語の集合を下界として持ち、field が現れたら差し替える）。
 
+## 18. 便の起動の前計測にも鮮度を掛ける — `choose_account` は `fleet select` と同じ 1 本の口で測る（契約表の行 o・`s2-07l.359`）
+
+- 何が起きているか（admin の実測 2026-09-15 16:3xZ・母集団 = 第 2 陣 5 便の `fleet select`）: launcher が便ごとに `fleet select` を撃ち、1 回の選定が host の全口座（7）を測る＝5 便で 35 request。§13（行 j）はこの `fleet select` の前計測を鮮度つきにするが、`pipe run` / `pipe resume` / 追随の起こし直しが口座を選ぶ `choose_account`（`pipe/ratelimit.rs`・§4「初回の起動も同じ選定を通す」）は (i) で `fleet usage` の口（`usage::run`＝§13 (4) の `Always`）を撃つので、便ごとに全口座を測る形がそのまま残る。dispatcher（[dispatcher.md](./dispatcher.md) §2）は起動の時機だけを決め便ごとに `pipe run` を撃つので、その後は burst がこの経路へ移る。§15 の lens の口座も同じ関数を通る。席の tick の定期計測は既に鮮度つき（§5 (1)・`seat/tick/account.rs`）。
+- 形: (1) `choose_account` の (i) は `fleet select` の前計測と**同じ 1 本の口**（§13 (4) の計測の方針の `Within` 側・秒は §13 の rules 行・読み手は 1 関数＝`fleet/usage.rs` に置き `select_account` と `choose_account` の 2 呼び手が呼ぶ・鮮度の規則を 2 か所に持たない・C2）で測る。`Pool` の `args`（`--rules` / `--curl` の写し・`usage_args`）はそのまま渡す。(2) **撃ち直しは従来どおり**: (iii) の待ちが成立した後と `Timeout` の後の (i) は `Always` で全口座を測る（待った reset の後の実測が要る・§13 (2) は ts で「新しい」を読むので、reset を過ぎた実測を「新しい」と読んで測らず候補なしを繰り返す周を作らない）。初回の (i) だけが `Within`。(3) `fleet usage` の口・`select_for_run`・`Input`・replay・event の形・rules 行は不変（新しい rules 行は足さない＝§13 の行を共有する）。stderr の `kept` 行は §13 (3) のまま。
+- 触らない: 純関数 `select`・`Input`・`Pool` の欄・`choose_or_wait`・`Completion::AccountFree` の観測・極性一覧。
+- 歯（`pipe_ratelimit_fresh_` 接頭辞・`tests/e2e/pipe/ratelimit.rs`・既存の偽 curl `fake_usage_curl` と `curl_calls` / `put_account` / `resume_with_accounts` を再利用）: 同じ置き場で 2 便を続けて resume すると 2 便目の偽 curl の呼出が増えない（母集団 = 1 便目の呼出 = 口座数）／rules 行より古い ts の実測の口座は測り直される（呼出 +1）／reset を待った後の撃ち直しは全口座を測る（既存の `pipe_ratelimit_resume_waits_for_the_earliest_reset_then_remeasures` の fixture で待ちの後の呼出が口座数だけ増える）／`pipe run` の初回の起動も新しい実測の口座を測り直さない。
+- 却下: dispatcher が周 1 回だけ測り全便へ同じ実測を渡す（dispatcher に計測の口を持たせる＝FR33 の計測の呼び手が 3 つ目になり、dispatcher を経ない `pipe run` と挙動が分かれる）／`choose_account` に独自の鮮度（別の rules 行）を持たせる（値の線が 2 本）／IP 単位の 429 の backoff（前提の 429 は未認証 curl の偽信号・器の経路の 429 は token 単位で §13 (3) が受ける・壁時計の sleep は §13 で却下済）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -228,4 +236,15 @@ write-set = ["crates/scribe2/src/headless/mod.rs", "crates/scribe2/src/headless/
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_unreachable_"]
 size = "M"
 done = "到達不能の本文で終わった runner の便が Spawned のまま SeatStopped detail=runner-unreachable を 1 件持ち Failed が 0 で commit が残り、pipe resume が生死の計測を飛ばして runner を 1 回起こし直して resume:unreachable を記帳し、集合に無い is_error は従来どおり Failed"
+
+[[contract]]
+id = "o"
+title = "便の起動の前計測にも鮮度を掛ける — choose_account が fleet select と同じ 1 本の口で測り、撃ち直しは従来どおり全口座を測る"
+req = ["FR36", "FR33"]
+section = "18"
+write-set = ["crates/scribe2/src/pipe/ratelimit.rs", "crates/scribe2/src/fleet/usage.rs", "crates/scribe2/src/fleet/cli.rs", "crates/scribe2/tests/e2e/pipe/ratelimit.rs"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_ratelimit_fresh_"]
+size = "S"
+done = "pipe run / resume / 追随の起こし直しの初回の前計測が新しい実測の口座を測り直さず、待ちと Timeout の後の撃ち直しは全口座を測り、rules 行は増えない"
+depends = ["j"]
 <!-- contracts:end -->
