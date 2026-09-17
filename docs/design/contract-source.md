@@ -135,7 +135,7 @@ scribe2 を載せる consumer が pipe を通すのに要る面は 3 つで、�
 ## 17. write-set の導出に creates の親 mod と subcommand の閉じた enum を足す（契約表の行 q・`s2-07l.337`）
 
 - 何が起きているか: planner 実測 2026-09-15 10:4xZ で、契約 (a) の直命の表を Derived で書けなかった。write-set の導出（`pipe/closure.rs`）は Rust の面を `touches` の型の閉包と `tests` からしか導かず、subcommand を足す便が触る 2 面（`seat/cli.rs` の文字列 match `Some("rebrief") =>`・`seat/mod.rs` の `pub mod <新 module>;`）が写らない。`also` は非 `.rs` 限定・`creates` は新規のみ・`surfaces` は歯の区間だけ＝「口を 1 つ足す」契約は Declared に戻る（`.303` が 4 回 QUESTION した型）。現物（verified）: `seat/cli.rs` の分岐は `Some("…") =>` が 10 本・`seat/mod.rs` の mod 宣言 14 本・`pipe/cli.rs` / `seat/cli.rs` に subcommand の enum は無い。
-- 形: (vi) `creates` の各 `.rs` について、その親 module の file（`<dir>/mod.rs` か `<dir>.rs`）を導出値に足す。(vii) `seat/cli.rs` と `pipe/cli.rs` の文字列 match を閉じた enum（`SeatCommand` / `PipeCommand`・`as_str` / `parse`・宣言順・`ALL` の件数 pin）にし、以後「口を足す」契約は `touches = ["crate::seat::cli::SeatCommand"]` で cli.rs が閉包（match の arm）に入る。
+- 形: (vi) `creates` の各 `.rs` について、その親 module の file（`<dir>/mod.rs` か `<dir>.rs`・base の tracked に在る方）を導出値に足す（置き場は §3 の導出の側＝closure の子 module derive・新規 file の検査 `created` の隣に 1 関数）。(vii) `seat/cli.rs` と `pipe/cli.rs` の文字列 match を閉じた enum（`SeatCommand` / `PipeCommand`・`as_str` / `parse`・宣言順・`ALL` の件数 pin）にし、以後「口を足す」契約は `touches = ["crate::seat::cli::SeatCommand"]` で cli.rs が閉包（match の arm）に入る。
 - 触らない: 各 subcommand の実装関数・usage の字面（`ALL` から組んで同じ字面になることを外形 snapshot で pin）。
 - 却下案: 導出に「usage 行を持つ .rs」の形を足す（字面の形が増える・閉じた enum で既存の第 2 形に乗せる方が C2）／Declared のまま（`.303` の型の QUESTION が再発する）。
 
@@ -167,7 +167,7 @@ scribe2 を載せる consumer が pipe を通すのに要る面は 3 つで、�
 ## 21. 器の口 pipe preflight — 受付と同じ判定を run を作らず撃ち、契約の実態突合を planner が edit time に測る（契約表の行 u・`s2-07l.394`）
 
 - 何が起きているか: user の相談 2026-09-16 06:0xZ「planner が契約を実態に測定するためのツールや突き返された修正を適切に行うためのツールをもっときっちり用意したほうが良いのでは」。本日の実例: `.164`（審査 4 周・毎回別の理由）/ `.209`（10 周・7 周が字面の不一致）/ `.392`（verify の歯が write-set の外）/ #249（§ が base に無い名を名指し CI 赤）。現物（verified・main c3f2fdb）: 契約の実態突合は **受付**（`cli/intake.rs` の `intake_run` = 契約 file の読み → `freeze`〔宣言の写し〕→ `settle_write_set`〔行の pointer・§3 の導出・§20 の歯の門〕→ `exclude_cap_shortfall`〔余地〕→ `exclude_overlap`〔live との交差〕→ run dir の作成と `RunCreated`）と **CI の歯**（`contracts check` の行の形と § の名指し）に在り、どちらも planner が契約を書いた時点で撃てる口ではない。planner の点検は state dir の script（design-of / section-of / candidates.py）と admin の preflight.sh / preflight-ws.py に散っている＝器の外の散文の作法（N2）で、怠った周が審査へ届いて 1 周（数十分）払う。
-- 形: `pipe` に subcommand **`preflight`**（`--contract F --bead B --repo R [--state-dir S]`・intake と同じ引数）を足す。中身は `intake_run` を **判定（`judge`・pure に近い・run を作らない）と作成（`create`・run dir と event）の 2 段に割り**、`intake` = judge → create、`preflight` = judge だけ（C2・判定関数は 1 本・2 本目を作らない）。judge は断る理由を **最初の 1 件で止めず全部集めて**返し（`Refuse` の列・受付は従来どおり先頭の 1 件で断る）、preflight は stdout に 1 行 1 事実で並べる: `design=<doc>#<id> section=<n> material=<本文の行数>` / `write-set=<declared|derived> files=<n>` / `teeth=<filter>:<本数>@<file,…>`（verify の nextest 行ごと）/ `headroom=<file>:<余地>/<size の上限>`（余地の小さい順）/ `overlap=<live run>:<file,…>`（在れば）/ `refuse=<名>:<理由>`（judge の断り・全部）/ 末尾に `preflight: <ok|refused n=<件数>|broken>`。rc = 0（断り 0）/ 1（断り ≥ 1・全部列挙）/ 2（読めない・受付と同じ `RC_BROKEN` の周）。宣言の写し（`freeze`）は読むだけで書かない・event は書かない・state dir は交差の読みにだけ使う（無ければ交差の行を `overlap=unmeasured` と出して rc は他の断りで決める＝測れないを 0 に潰さない・C10）。usage の外形 snapshot に subcommand 1 語が増える（C12.5）。
+- 形: `pipe` に subcommand **`preflight`**（`--contract F --bead B --repo R [--state-dir S]`・intake と同じ引数）を足す。中身は `intake_run` を **判定（`judge`・pure に近い・run を作らない）と作成（`create`・run dir と event）の 2 段に割り**、`intake` = judge → create、`preflight` = judge だけ（C2・判定関数は 1 本・2 本目を作らない）。judge は断る理由を **最初の 1 件で止めず全部集めて**返し（`Refuse` の列・受付は従来どおり先頭の 1 件で断る。集める粒度は判定関数 1 本につき高々 1 件＝`freeze` / `settle_write_set` / `exclude_cap_shortfall` / `exclude_overlap` / 重複 run の検査をこの順に全部撃ち、各関数が返した断りを列に積む・各関数の中身と「先頭の 1 件で返す」形は不変）、preflight は stdout に 1 行 1 事実で並べる: `design=<doc>#<id> section=<n> material=<本文の行数>` / `write-set=<declared|derived> files=<n>` / `teeth=<filter>:<本数>@<file,…>`（verify の nextest 行ごと）/ `headroom=<file>:<余地>/<size の上限>`（余地の小さい順）/ `overlap=<live run>:<file,…>`（在れば）/ `refuse=<名>:<理由>`（judge の断り・全部）/ 末尾に `preflight: <ok|refused n=<件数>|broken>`。rc = 0（断り 0）/ 1（断り ≥ 1・全部列挙）/ 2（読めない・受付と同じ `RC_BROKEN` の周）。宣言の写し（`freeze`）は読むだけで書かない・event は書かない・state dir は交差の読みにだけ使う（無ければ交差の行を `overlap=unmeasured` と出して rc は他の断りで決める＝測れないを 0 に潰さない・C10）。usage の外形 snapshot に subcommand 1 語が増える（C12.5）。
 - 触らない: 受付の判定の中身（`settle_write_set` / 余地 / 交差の順序と極性）・`Refuse` の variant と rc・契約 file の schema・`contracts check`（§ の名指しは CI の歯のまま・preflight は契約 file 側の名指し `NameUnresolved` を judge の中で従来どおり撃つ）・dispatcher（`.345` の入口が同じ judge を呼ぶのは行 a の便の側）。
 - 却下案: planner の state dir の script を増やす（器の外・host 固有・散文の作法）／`pipe intake --dry-run`（intake の引数に既定と逆の flag が増え、flag の有無で run が出来たり出来なかったりする口になる・subcommand で分ける方が typed）／審査（lens）に任せる（1 周 = 数十分・本日の審査 FAIL 19/42 便）／judge を複製して preflight 専用にする（受付と preflight が静かにずれる・C2）。
 
@@ -310,8 +310,8 @@ id = "l"
 title = "受付の門の判定式に検出線の生存 9 本を潰す歯を足す — 余地の境界・閉包の usages・core の合計の条件を in-file と e2e で赤にする（歯だけ・門は動かさない）"
 req = ["FR48", "FR47"]
 section = "3"
-write-set = ["crates/scribe2/src/pipe/cli/intake.rs", "crates/scribe2/src/pipe/declaration.rs", "crates/scribe2/src/pipe/table.rs", "crates/scribe2/tests/e2e/pipe/intake.rs"]
-verify = ["cargo nextest run -p scribe2 --no-tests=fail contract_closure_ext_survivor_"]
+write-set = ["crates/scribe2/src/pipe/cli/intake.rs", "crates/scribe2/src/pipe/declaration/write_set.rs", "crates/scribe2/src/pipe/table/check.rs", "crates/scribe2/tests/e2e/pipe/intake.rs"]
+verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail contract_closure_ext_survivor_", "cargo nextest run -p scribe2 --lib --no-tests=fail contract_closure_ext_survivor_"]
 size = "S"
 done = "生存 9 本の判定式それぞれに赤になる歯が在り、変異の A/B で撃墜される（門の判定は不変）"
 
@@ -360,8 +360,8 @@ id = "q"
 title = "write-set の導出に (vi) creates の親 mod の宣言 file と (vii) subcommand の閉じた enum（SeatCommand / PipeCommand）を足す"
 req = ["FR48"]
 section = "17"
-write-set = ["crates/scribe2/src/pipe/closure.rs", "crates/scribe2/src/seat/cli.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/tests/e2e/pipe/intake.rs", "crates/scribe2/tests/e2e/seat.rs", "crates/scribe2/tests/e2e/pipe.rs", "docs/design/contract-source.md"]
-verify = ["cargo nextest run -p scribe2 --no-tests=fail contract_derive_creates_parent_"]
+write-set = ["crates/scribe2/src/pipe/closure.rs", "crates/scribe2/src/pipe/closure/derive.rs", "crates/scribe2/src/seat/cli.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/tests/e2e/pipe/intake.rs", "crates/scribe2/tests/e2e/seat.rs", "crates/scribe2/tests/e2e/pipe.rs", "docs/design/contract-source.md"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail contract_derive_creates_parent_", "cargo nextest run -p scribe2 --no-tests=fail contract_derive_subcommand_enum_", "cargo nextest run -p scribe2 --no-tests=fail seat_command_all_", "cargo nextest run -p scribe2 --no-tests=fail pipe_command_all_", "cargo nextest run -p scribe2 --no-tests=fail seat_usage_external_form", "cargo nextest run -p scribe2 --no-tests=fail pipe_external_form"]
 size = "M"
 done = "口を足す契約が Derived で書け、導出値に cli.rs と親 mod.rs が入る"
 
@@ -400,8 +400,8 @@ id = "u"
 title = "pipe preflight — 受付の判定を judge / create に割り、judge だけを run を作らず撃って断りと事実を全部 1 行 1 事実で出す口"
 req = ["FR48"]
 section = "21"
-write-set = ["+crates/scribe2/src/pipe/cli/preflight.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/cli/intake.rs", "crates/scribe2/tests/e2e/pipe/intake.rs", "crates/scribe2/tests/e2e/snapshots/e2e__pipe__pipe_external_form.snap"]
-verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_preflight_"]
+write-set = ["+crates/scribe2/src/pipe/cli/preflight.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/cli/intake.rs", "crates/scribe2/tests/e2e/pipe/intake.rs", "crates/scribe2/tests/e2e/pipe.rs", "crates/scribe2/tests/e2e/snapshots/e2e__pipe__pipe_external_form.snap"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_preflight_", "cargo nextest run -p scribe2 --no-tests=fail pipe_external_form"]
 size = "M"
 done = "preflight が run dir も event も作らずに受付と同じ断りを全部列挙して rc 0 / 1 / 2 を返し、intake の断りの先頭 1 件と一致し、usage に preflight が載る"
 
