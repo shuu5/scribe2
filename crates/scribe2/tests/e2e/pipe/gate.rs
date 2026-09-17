@@ -3300,3 +3300,139 @@ fn pipe_gate_move_proof_carried_dropped_marker_sends_diff() {
     let base = carried(MOVE_BASE_LIB, "s2-07l.1");
     assert_sends_diff_from(&[("lib.rs", &base)], &move_head(), "foreign-marker");
 }
+
+// ───── lens の口座も器が選ぶ（`s2-07l.412`・設計 account-autonomy.md §15・SRS FR36 / FR33・接頭辞 `pipe_gate_lens_account_`） ─────
+//
+// 口座の当たり / 空きは置き場へ実測行を直接置くのでなく、便の歯と同じ fixture（`ratelimit.rs` の偽 curl の応答本文）で
+// 作る——選定は毎回計測し直し、最新の 1 行が置き場の行を無条件に置き換えるので、直接置いた行は計測で上書きされ歯が
+// 空虚になる。
+
+/// 器が起動行の末尾に足した語を写す偽 lens（`sh <script>`＝行の末尾の語は script の引数に届く）。
+///
+/// argv を 1 行 1 語で `lens-argv` へ写し、呼ばれた回数を `lens-calls` へ積み、verdict の JSON 1 行を返す。
+/// 「lens を**起こさなかった**」（候補なしの周）を呼出回数 0 で測れる形である。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn argv_lens(state: &Path, verdict: &str) -> String {
+    let spy = lens_spy(state);
+    fs::create_dir_all(&spy).expect("偽 lens の置き場を作れる");
+    let body = format!(
+        "#!/bin/sh\ncat >/dev/null\nprintf 'call\\n' >> '{}'\nprintf '%s\\n' \"$@\" > '{}'\nprintf '%s\\n' '{}'\n",
+        spy.join("calls").display(),
+        spy.join("argv").display(),
+        lens_verdict(verdict)
+    );
+    let path = state.join("argv-lens.sh");
+    fs::write(&path, body).expect("偽 lens を書ける");
+    format!("sh {}", path.display())
+}
+
+/// 偽 lens の置き場（呼出回数と argv の写し）。
+fn lens_spy(state: &Path) -> PathBuf {
+    state.join("lens-spy")
+}
+
+/// 偽 lens に渡された argv（1 行 1 語・無ければ空）。
+fn lens_argv(state: &Path) -> Vec<String> {
+    fs::read_to_string(lens_spy(state).join("argv"))
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_owned)
+        .collect()
+}
+
+/// 偽 lens が起こされた回数（file が無ければ 0）。
+fn lens_calls(state: &Path) -> usize {
+    fs::read_to_string(lens_spy(state).join("calls"))
+        .map(|text| text.lines().count())
+        .unwrap_or(0)
+}
+
+/// `--rules`（口座の宣言を持つ写し）・偽 curl・偽 lens を渡して gate を 1 回撃つ。
+fn gate_with_accounts(repo: &Path, state: &Path, id: &str, rules: &str, lens: &str) -> Output {
+    run_pipe(&[
+        "gate", "--run", id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(),
+        "--rules", rules, "--curl", &lifecycle::fake_usage_curl(state), "--lens", lens,
+    ])
+}
+
+/// (a) 宣言口座のある置き場の gate は、lens を起こす直前に便用の規則で口座を選び、起動行の末尾に
+/// `--account-dir <state>/accounts/<label>` を足して `Gated` の detail に `account:<label>` を残す。
+///
+/// a1 は当たっている（5 時間窓 100%）ので余裕の a2 が選ばれる＝flag の値は選定の結果である（固定の 1 つ目ではない）。
+/// 計測は lens の前に 1 回（口座 2 つ分の偽 curl）。base は口座を選ばず足さない → RED。
+#[test]
+fn pipe_gate_lens_account_is_chosen_and_appended() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let id = implemented(&repo, &state, &path);
+    let rules = lifecycle::resume_rules(&state, &["a1", "a2"]);
+    lifecycle::put_account(&state, "a1", &[lifecycle::windows(100, 10)]);
+    lifecycle::put_account(&state, "a2", &[lifecycle::windows(40, 10)]);
+    let out = gate_with_accounts(&repo, &state, &id, &rules, &argv_lens(&state, "PASS"));
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{} / {}", stdout_of(&out), stderr_of(&out));
+    assert_eq!(lens_calls(&state), 1, "lens は 1 回起きる");
+    assert_eq!(
+        lifecycle::argv_account_dir(&lens_argv(&state)),
+        Some(state.join("accounts").join("a2").display().to_string()),
+        "lens の argv の末尾に選んだ口座の credential dir: {:?}",
+        lens_argv(&state)
+    );
+    assert_eq!(lifecycle::curl_calls(&state), 2, "lens の前に FR33 の計測を 1 回（口座 2 つ）");
+    assert_eq!(
+        gated_details(&state, &id),
+        vec!["verdict:PASS,account:a2".to_owned()],
+        "記帳は判定と起こした口座を対で運ぶ"
+    );
+    clean(&[&repo, &state]);
+}
+
+/// (b) 口座の宣言が 0 の置き場は従来どおり親の環境を継承する（負例・極性不変）: lens の argv に `--account-dir` が
+/// 無く・`Gated` の detail は `verdict:<V>` だけ・計測も撃たない。
+#[test]
+fn pipe_gate_lens_account_absent_when_no_declared_accounts() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let id = implemented(&repo, &state, &path);
+    let rules = write_rules(&state, "rules-plain.toml", 1, 1_000_000);
+    let out = gate_with_accounts(&repo, &state, &id, &rules.display().to_string(), &argv_lens(&state, "PASS"));
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{} / {}", stdout_of(&out), stderr_of(&out));
+    assert_eq!(lens_calls(&state), 1, "lens は 1 回起きる");
+    assert_eq!(lifecycle::argv_account_dir(&lens_argv(&state)), None, "宣言 0 は起動行を変えない: {:?}", lens_argv(&state));
+    assert_eq!(lifecycle::curl_calls(&state), 0, "宣言の無い置き場は測らない");
+    assert_eq!(gated_details(&state, &id), vec!["verdict:PASS".to_owned()], "detail は判定だけ");
+    clean(&[&repo, &state]);
+}
+
+/// (c) 全口座が当たっている周は **lens を起こさず** INCONCLUSIVE（理由に `account:none=<reason>`）。
+///
+/// gate は段の判定で待ちを持たない（`AccountFree` の待ちは runner 側だけ）＝便は `Gated` のまま測り直せる側に残り、
+/// `resume` が撃ち直す。base は口座を見ずに lens を起こす → RED。
+#[test]
+fn pipe_gate_lens_account_none_is_inconclusive_without_calling_lens() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let id = implemented(&repo, &state, &path);
+    let rules = lifecycle::resume_rules(&state, &["a1", "a2"]);
+    lifecycle::put_account(&state, "a1", &[lifecycle::windows(100, 10)]);
+    lifecycle::put_account(&state, "a2", &[lifecycle::windows(100, 10)]);
+    let out = gate_with_accounts(&repo, &state, &id, &rules, &argv_lens(&state, "PASS"));
+    assert_eq!(
+        out.status.code(),
+        Some(i32::from(RC_INCONCLUSIVE)),
+        "候補なしは測れなかった側: {} / {}",
+        stdout_of(&out),
+        stderr_of(&out)
+    );
+    assert_eq!(lens_calls(&state), 0, "lens を起こさない（写し 0）");
+    assert_eq!(lifecycle::curl_calls(&state), 2, "計測は撃つ（選定の入力）");
+    let pairs = verdict_pairs(&state, &id);
+    assert_eq!(value_of(&pairs, "verdict"), "INCONCLUSIVE", "{pairs:?}");
+    assert!(value_of(&pairs, "evidence").contains("account:none="), "理由は候補なしを名乗る: {pairs:?}");
+    assert_eq!(gated_details(&state, &id), vec!["verdict:INCONCLUSIVE".to_owned()], "選べなかった周は account を足さない");
+    assert!(show_line(&repo, &state, &id).contains("stage=Gated"), "便は Gated のまま（測り直せる側）");
+    clean(&[&repo, &state]);
+}

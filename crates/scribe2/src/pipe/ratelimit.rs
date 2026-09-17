@@ -227,6 +227,45 @@ pub(super) fn choose_account(
     }
 }
 
+/// gate の lens 1 本のための選定の結果（設計 account-autonomy.md §15・**待ちを持たない**）。
+pub(super) enum LensAccount {
+    /// 選んだ口座の label。
+    Chosen(String),
+    /// 候補なし（理由は選定が名乗る閉じた字面・[`fleet::select::NoCandidateReason::as_str`]）。
+    None(String),
+}
+
+/// lens 1 本の口座の選定（設計 account-autonomy.md §15 (1)(4)・FR36 / FR33）。
+///
+/// 便の起動（[`choose_account`]）と同じ 2 段——(i) FR33 の計測を 1 回撃つ → (ii) 便用の規則
+/// （[`fleet::select_for_run`]・便の `repo` を anchor に持つ席の口座は除外・§14）——を通すが、**候補なしで
+/// 待たない**（[`LensAccount::None`] を返す）: gate は段の判定で待ちを持たず、候補なしの周は lens を起こさず
+/// INCONCLUSIVE へ倒れて `resume` が撃ち直す（`AccountFree` の待ちは §4 の runner 側だけ）。
+///
+/// `Err` は測れなかった周（計測の rc≠0・置き場を読めない）で、呼び手は判定に届かなかった側へ倒す
+/// （fail-closed・PASS には決してならない）。計測の行（`fleet select` と同じ stderr 側）は `notes` へ写す。
+pub(super) fn select_lens_account(
+    pool: &Pool,
+    state_dir: &Path,
+    repo: &Path,
+    notes: &mut Vec<String>,
+) -> Result<LensAccount, String> {
+    let measured = fleet::usage::run(&pool.args, state_dir);
+    if measured.rc != RC_OK {
+        let lines: Vec<String> = measured.out.into_iter().chain(measured.err).collect();
+        return Err(format!("計測が rc {} で終わった（{}）", measured.rc, lines.join(" / ")));
+    }
+    notes.extend(measured.out.into_iter().chain(measured.err));
+    let state = current(state_dir).map_err(|errors| {
+        errors.iter().map(StoreError::to_string).collect::<Vec<String>>().join(" / ")
+    })?;
+    let found = fleet::select_for_run(&state, repo, &pool.labels, Some(&pool.model), &fleet::cli::now_utc());
+    Ok(match found {
+        Selection::Chosen(label) => LensAccount::Chosen(label),
+        Selection::None(none) => LensAccount::None(none.reason.as_str().to_owned()),
+    })
+}
+
 /// 選定と待ち（(ii) / (iii)）。`Ok(Some)` は選んだ label、`Ok(None)` は `Timeout`（計測から撃ち直す）、
 /// `Err` はこの process が止まる周（便は `expected` の段のまま live）。
 ///

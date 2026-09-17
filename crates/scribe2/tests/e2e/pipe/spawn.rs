@@ -1955,7 +1955,8 @@ fn pipe_spawn_account_first_turn_runs_on_the_chosen_free_account() {
     let stdout = stdout_of(&out);
     assert!(!stdout.contains("next=spawn account="), "初回は判定行を持たない: {stdout}");
     assert!(!stdout.contains("next=wait"), "候補が在るので待たない: {stdout}");
-    assert_eq!(curl_calls(&state), 2, "起動の前に FR33 の計測を 1 回（口座 2 つ）");
+    // 計測は runner の起動の前と gate の lens の前で 1 回ずつ（`s2-07l.412`・設計 account-autonomy.md §15）。
+    assert_eq!(curl_calls(&state), 4, "起動の前と lens の前に FR33 の計測を 1 回ずつ（口座 2 つ × 2）");
     assert_eq!(stub_calls(&state), 1, "runner は 1 回起きる");
     assert_eq!(
         argv_account_dir(&stub_argv(&state, 1)),
@@ -2052,7 +2053,8 @@ fn pipe_spawn_account_waits_for_the_earliest_reset_then_remeasures() {
     assert!(stdout.contains(&format!("run={id} next=wait reset={soon}")), "最も早い reset を名乗って待つ: {stdout}");
     assert!(!stdout.contains("next=spawn account="), "初回は判定行を持たない: {stdout}");
     assert!(waited >= Duration::from_secs(1), "reset まで待った（{waited:?}）");
-    assert_eq!(curl_calls(&state), 4, "Timeout の後に計測を撃ち直す（口座 2 つ × 2 回）");
+    // 起動の前に 2 回（待ち → 撃ち直し）・gate の lens の前に 1 回（`s2-07l.412`・設計 account-autonomy.md §15）。
+    assert_eq!(curl_calls(&state), 6, "Timeout の後に計測を撃ち直し、lens の前にもう 1 回（口座 2 つ × 3 回）");
     assert_eq!(stub_calls(&state), 1, "runner は 1 回起きる");
     assert_eq!(
         argv_account_dir(&stub_argv(&state, 1)),

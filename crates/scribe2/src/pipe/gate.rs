@@ -10,8 +10,14 @@
 //! **偽の PASS を作らない**（AC3）。判定に届かなかった周はすべて INCONCLUSIVE へ倒す
 //! ——「測れなかった」を「通った」に化けさせないためで、極性は fail-closed（C11.2）。
 //!
+//! **lens の口座も器が選ぶ**（設計 account-autonomy.md §15・`s2-07l.412`）。lens を起こす直前に便用の
+//! 選定（計測 → [`super::ratelimit::select_lens_account`]）を通し、起動行の末尾に runner と同じ 1 関数
+//! （[`super::spawn::with_account`]）で `--account-dir` を足す。**候補なしでも待たない**（gate は段の判定で
+//! 待ちを持たない）——lens を起こさず INCONCLUSIVE へ倒し、`resume` が撃ち直す。宣言 0 の周は継承。
+//!
 //! **同じ便を 2 度以上通ることが在る**（INCONCLUSIVE からの測り直し）。`verdict.json` は
-//! 最後の判定で上書きし、`RunStage stage=Gated detail=verdict:<V>` は追記する。
+//! 最後の判定で上書きし、`RunStage stage=Gated detail=verdict:<V>`（器が口座を選んだ周は
+//! `,account:<label>` 付き）は追記する。
 //! 残るのは **3 値の履歴だけ**である——「1 度目は測れなかった」は event から読めるが、
 //! **なぜ測れなかったか（evidence）は上書きで消える**（理由まで残すには面を 1 つ増やす
 //! ことになり、MVP では取らない）。**測り直してよい便か**の判定はここではなく段の入口
@@ -35,6 +41,7 @@ use super::confine::{self, Reason, Released};
 use super::contract::Contract;
 use super::lens_record::LensSource;
 use super::move_proof::{self, LensInput, NotPure};
+use super::ratelimit::{select_lens_account, LensAccount, Pool};
 use super::{
     contract_path, emit, git_bytes, git_line, run_dir, verdict_path, worktree_path, Emit,
 };
@@ -187,6 +194,9 @@ pub struct Gate<'a> {
     pub contract: &'a Contract,
     /// lens のコマンドの出所（`--lens` か run dir の写し・無い / 読めないは別の値・[`super::lens_record`]・§26）。
     pub lens: &'a LensSource,
+    /// lens の口座の選定の材料（[`Pool::declared`]・宣言が 1 つ以上在る周だけ `Some`・設計
+    /// account-autonomy.md §15）。`None` の周は口座を選ばず、lens は親の環境を継承する（起動行は不変）。
+    pub pool: Option<&'a Pool>,
     /// 規則から読んだ線。
     pub limits: Limits,
     /// 検出線を撃つか（設計 §30・追随の再 gate だけが [`Detection::Skip`] を渡しうる）。
@@ -239,6 +249,19 @@ struct Decision {
     tally: Option<Tally>,
     /// lens の scope を片付けた結果（record に書く周だけ `Some`＝field `scope`・設計 gate-cost.md §4.4 errata）。
     scope: Option<Released>,
+    /// lens を起こした口座（器が選んだ周だけ `Some`＝`Gated` の detail の `account:<label>`・設計
+    /// account-autonomy.md §15）。宣言 0 の周と選べなかった周は `None`（足さない＝継承と弁別できる・C10）。
+    account: Option<String>,
+}
+
+/// [`decide`] の戻り（判定・lens の scope の片付け・lens を起こした口座）。
+struct Decided {
+    /// lens 1 本から得た 3 値（lens を呼ばなかった周は [`unjudged`]）。
+    judged: Judged,
+    /// lens の scope を片付けた結果（lens を撃たない周は `None`）。
+    scope: Option<Released>,
+    /// 器が選んで起動行に足した口座（選ばなかった周は `None`）。
+    account: Option<String>,
 }
 
 /// gate を 1 回通す。
@@ -256,18 +279,21 @@ pub fn gate(entry: &Gate<'_>) -> Outcome {
         Ok(found) => found,
         Err(reason) => return broken(reason),
     };
-    let (judged, scope) = match decide(entry, &worktree, &measured) {
+    // 口座の計測の行は stderr 側へ写す（`fleet select` と同じ・判定は変えない）。
+    let mut notes = Vec::new();
+    let decided = match decide(entry, &worktree, &measured, &mut notes) {
         Ok(found) => found,
         Err(reason) => return broken(reason),
     };
     let decision = Decision {
-        verdict: judged.verdict,
-        evidence: judged.evidence,
+        verdict: decided.judged.verdict,
+        evidence: decided.judged.evidence,
         red: measured.red,
         diff_bytes: byte_count(&measured.diff),
         tree,
-        tally: judged.tally,
-        scope,
+        tally: decided.judged.tally,
+        scope: decided.scope,
+        account: decided.account,
     };
     match settle(entry, &decision) {
         Err(reason) => broken(reason),
@@ -279,7 +305,7 @@ pub fn gate(entry: &Gate<'_>) -> Outcome {
                 measured.input.kind(),
                 byte_count(measured.input.body(&measured.diff))
             )],
-            err: measured.input.notice().into_iter().collect(),
+            err: notes.into_iter().chain(measured.input.notice()).collect(),
             rc: decision.verdict.rc(),
         },
     }
@@ -326,9 +352,14 @@ fn measure(entry: &Gate<'_>, worktree: &Path, base: &str) -> Result<Measured, St
 
 /// 判定順を 1 か所に閉じる（**wildcard 無し・上から順に効く**）。
 ///
-/// 3 つ目は lens の scope を片付けた結果（record に書く周だけ `Some`・lens を撃たない周は `None`）。
-/// `Err` は裁定の写しを書けなかった周（判定に届かず gate を止める＝rc 2・verdict を書かない）。
-fn decide(entry: &Gate<'_>, worktree: &Path, measured: &Measured) -> Result<(Judged, Option<Released>), String> {
+/// 戻りは [`Decided`]（判定・lens の scope の片付け・lens を起こした口座）。`Err` は裁定の写しを
+/// 書けなかった周（判定に届かず gate を止める＝rc 2・verdict を書かない）。`notes` は stderr へ写す行。
+fn decide(
+    entry: &Gate<'_>,
+    worktree: &Path,
+    measured: &Measured,
+    notes: &mut Vec<String>,
+) -> Result<Decided, String> {
     // **測れなかったは赤より先**（C10・AC3）。段①の diff が読めない周は判定に届いていない
     // ので lens も呼ばず INCONCLUSIVE（測り直せる側・FR14）。
     if measured.unreadable {
@@ -352,7 +383,8 @@ fn decide(entry: &Gate<'_>, worktree: &Path, measured: &Measured) -> Result<(Jud
     if measured.red > 0 {
         // 赤い周は lens を呼ばない＝findings は測っていない（`tally` は `None`・C10）。
         let evidence = format!("verify の {} 行が rc≠0", measured.red);
-        return Ok((Judged { verdict: Verdict::Fail, evidence, tally: None }, None));
+        let judged = Judged { verdict: Verdict::Fail, evidence, tally: None };
+        return Ok(Decided { judged, scope: None, account: None });
     }
     // **予算の照合は lens に渡す本文の byte で行う**（FR9・純移動の周は要約・`verdict.json` の
     // `diff_bytes` は従来どおり diff の byte）。
@@ -393,6 +425,11 @@ fn decide(entry: &Gate<'_>, worktree: &Path, measured: &Measured) -> Result<(Jud
     // 起こさない——回答で認めた逸脱が契約違反に読まれ、偽 FAIL / 偽 INCONCLUSIVE へ倒れる。
     keep_rulings(entry)?;
     let contract = contract_path(entry.state_dir, entry.run);
+    // **lens の口座は起こす直前に選ぶ**（裁定の写しを書いた後・設計 account-autonomy.md §15）。
+    let (line, account) = match lens_account(entry, substitute(cmd, &contract, worktree), notes) {
+        Ok(found) => found,
+        Err(reason) => return inconclusive(reason),
+    };
     let unit = confine::unit_name(entry.run, LENS_STAGE, 1);
     let wrap = confine::Wrap {
         unit: &unit,
@@ -400,15 +437,38 @@ fn decide(entry: &Gate<'_>, worktree: &Path, measured: &Measured) -> Result<(Jud
         limit: confine::Limit::HostReserve,
         caps: confine::Caps::embedded(),
     };
-    Ok(ask_lens(&substitute(cmd, &contract, worktree), worktree, body, &wrap))
+    let (judged, scope) = ask_lens(&line, worktree, body, &wrap);
+    Ok(Decided { judged, scope, account })
 }
 
-/// 判定に届かなかった腕の戻り（[`decide`] の INCONCLUSIVE・lens を撃たない周なので scope は `None`）。
+/// 器が選んだ口座を lens の起動行の末尾に足す（設計 account-autonomy.md §15 (1)(2)(4)・FR36）。
 ///
-/// 腕ごとに 3 つ組を書くと [`decide`] が C4 の線（`too_many_lines`）に当たる。**判定順は動かさない**
+/// 宣言 0（[`Gate::pool`] が `None`）の周は行も記帳も変えない＝lens は親の環境を継承する（起動行不変）。
+/// 選定は [`select_lens_account`]（計測 → 便用の規則）の 1 本で、**候補なしでも待たない**——`Err` は
+/// lens を起こさず INCONCLUSIVE へ倒れる理由で、`resume` が撃ち直す（gate は段の判定で待ちを持たない）。
+/// 起動行が既に `--account-dir` を持つ周も足さずに断る（runner と同じ [`super::spawn::with_account`]）。
+fn lens_account(entry: &Gate<'_>, line: String, notes: &mut Vec<String>) -> Result<(String, Option<String>), String> {
+    let Some(pool) = entry.pool else {
+        return Ok((line, None));
+    };
+    let label = match select_lens_account(pool, entry.state_dir, entry.repo, notes) {
+        Ok(LensAccount::Chosen(label)) => label,
+        Ok(LensAccount::None(reason)) => {
+            return Err(format!("lens の口座の候補が無い（account:none={reason}・待たずに測り直す）"));
+        }
+        Err(reason) => return Err(format!("lens の口座を選べない（{reason}）")),
+    };
+    let line = super::spawn::with_account(line, Some(&label), entry.state_dir)
+        .map_err(|refusal| format!("lens の{refusal}"))?;
+    Ok((line, Some(label)))
+}
+
+/// 判定に届かなかった腕の戻り（[`decide`] の INCONCLUSIVE・lens を撃たない周なので scope も口座も `None`）。
+///
+/// 腕ごとに [`Decided`] を組むと [`decide`] が C4 の線（`too_many_lines`）に当たる。**判定順は動かさない**
 /// （腕の並びは [`decide`] が 1 か所で持つ・C2）。
-fn inconclusive(reason: String) -> Result<(Judged, Option<Released>), String> {
-    Ok((unjudged(reason), None))
+fn inconclusive(reason: String) -> Result<Decided, String> {
+    Ok(Decided { judged: unjudged(reason), scope: None, account: None })
 }
 
 /// 便の裁定（質問と planner の回答の対・発生順・[`super::questions_of_run`]）を run dir の
@@ -472,11 +532,23 @@ fn settle(entry: &Gate<'_>, decision: &Decision) -> Result<(), String> {
             stage: Some(Stage::Gated),
             seat: None,
             pid: None,
-            detail: Some(format!("verdict:{}", decision.verdict.as_str())),
+            detail: Some(gated_detail(decision)),
         },
         entry.policy,
     )
     .map_err(|err| err.to_string())
+}
+
+/// `Gated` の detail（`verdict:<V>`・器が lens の口座を選んだ周は `,account:<label>`）。
+///
+/// 語彙は `Spawned` の `account:<label>` と同じ 1 つで、**足すのは器が選んだ周だけ**（設計
+/// account-autonomy.md §15 (3)）——宣言 0 の継承と「選べなかった」を接尾辞の不在で弁別できる（C10）。
+fn gated_detail(decision: &Decision) -> String {
+    let verdict = format!("verdict:{}", decision.verdict.as_str());
+    match &decision.account {
+        None => verdict,
+        Some(label) => format!("{verdict},account:{label}"),
+    }
 }
 
 /// 前提違反を `Failed detail=precheck:<理由>` で残して断る（lens は起動しない）。

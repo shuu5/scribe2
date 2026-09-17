@@ -533,6 +533,9 @@ fn follow_main(entry: &Land<'_>, worktree: &Path, base: &str, main: &str) -> Fol
         state_dir: entry.state_dir,
         contract: entry.contract,
         lens: entry.lens,
+        // 撃ち直しの lens の口座も器が選ぶ（設計 account-autonomy.md §15）。宣言は `--runner` を持つ周に
+        // 1 回だけ解いて [`follow::Runner`] へ載っている＝land は借りて渡す（runner の無い周は継承）。
+        pool: entry.runner.and_then(|runner| runner.pool),
         limits: entry.limits,
         detection,
         policy: entry.policy,

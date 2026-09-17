@@ -197,6 +197,12 @@ pub(super) fn gate_run(args: &[String], id: &str, manifest: &Manifest, policy: L
         Ok(found) => found,
         Err(reason) => return refused(reason),
     };
+    // lens の口座も器が選ぶ（設計 account-autonomy.md §15・FR36）。宣言（`--rules` の tracked の面 + 置き場の
+    // host の面）が 0 の周は `None`＝lens は親の環境を継承する。新しい flag は足さない（`--rules` / `--curl` の写し）。
+    let pool = match Pool::declared(args, manifest, &resolved.state_dir) {
+        Ok(found) => found,
+        Err(reason) => return refused(reason),
+    };
     super::gate::gate(&Gate {
         run: id,
         bead: &resolved.bead,
@@ -204,6 +210,7 @@ pub(super) fn gate_run(args: &[String], id: &str, manifest: &Manifest, policy: L
         state_dir: &resolved.state_dir,
         contract: &resolved.contract,
         lens: &lens,
+        pool: pool.as_ref(),
         limits,
         detection: Detection::Run,
         policy,

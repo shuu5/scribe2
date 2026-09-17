@@ -707,7 +707,8 @@ fn pipe_ratelimit_resume_run_rides_out_repeated_limits_without_a_cap() {
         "初回の turn から選んだ口座の credential dir を渡す: {:?}",
         stub_argv(&state, 1)
     );
-    assert_eq!(curl_calls(&state), 6, "初回の起動と起こし直しのたびに計測（2 口座 × 3 回）");
+    // 初回 + 起こし直し 2 回 + gate の lens の前 1 回（`s2-07l.412`・設計 account-autonomy.md §15）。
+    assert_eq!(curl_calls(&state), 8, "初回の起動と起こし直しのたび、および lens の前に計測（2 口座 × 4 回）");
     assert!(show_line(&repo, &state, &id).contains("stage=Landed"), "1 process で Landed まで: {stdout}");
     assert!(!events(&state).iter().any(|event| event.actor == "human"), "人由来の event は 0");
     clean(&[&repo, &state]);

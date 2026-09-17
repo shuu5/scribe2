@@ -440,8 +440,14 @@ pub(super) fn implemented(repo: &Path, state: &Path, contract: &Path) -> String 
 /// marker で「lens を**起動しなかった**」を測れるようにしてある。判定順の 2 分岐
 /// （verify RED / cap 超過）は lens を呼ばないことが契約なので、verdict だけを見ると
 /// 「呼んだうえで INCONCLUSIVE を返した」と区別がつかない。
+///
+/// **末尾の `:` は器が足した語を捨てる口である**（`s2-07l.412`・設計 account-autonomy.md §15）: gate は
+/// lens の起動行の末尾に選んだ口座の `--account-dir <dir>` を足すので、`echo` で終わる行のままだと
+/// その 2 語まで verdict と同じ行に印字され、JSON 1 行が読めず**全 e2e の gate が静かに INCONCLUSIVE へ
+/// 倒れる**。捨てるのに `#` を使わない——行の後ろへ足して使う呼び手（箱の終端行を出す歯）が在り、
+/// コメントはその足した分まで覆う（`:` は引数を無視する builtin なので、足す側も足さない側も動く）。
 pub(super) fn fake_lens(marker: &Path, body: &str) -> String {
-    format!("cat >/dev/null; touch '{}'; echo '{body}'", marker.display())
+    format!("cat >/dev/null; touch '{}'; echo '{body}'; :", marker.display())
 }
 
 /// `--rules` に渡す tmp manifest を書く（gate の 2 行 + lock の 2 行だけ）。
@@ -624,6 +630,50 @@ fn pipe_gate_findings_fake_lens_keys_reach_the_verdict_record() {
     assert_eq!(value_of(&pairs, "findings"), FAKE_FINDINGS, "8 category の件数が record に載る: {pairs:?}");
     assert_eq!(value_of(&pairs, "population"), FAKE_POPULATION, "母集団も同じ record に載る: {pairs:?}");
     clean(&[&repo, &state]);
+}
+
+/// **器が lens の起動行に足した語を、偽 lens は verdict の JSON に混ぜない**（`s2-07l.412`・設計
+/// account-autonomy.md §15）。
+///
+/// [`fake_lens`] は e2e のほぼ全部が使う lens である。gate が起動行の末尾に `--account-dir <dir>` を
+/// 足すようになると、`echo` で終わる行はその 2 語まで同じ行に印字する＝判定の JSON が読めず、全 e2e の
+/// gate が静かに INCONCLUSIVE へ倒れる。宣言口座のある置き場で 1 便を通し、**判定が読めること**
+/// （PASS + 必須 2 key）と**器が実際に口座を足したこと**（`Gated` の detail）を対で測る——後者が無いと
+/// 「足していない木でも読める」だけの歯になり、fixture の値打ちを測れない。
+#[test]
+fn pipe_gate_lens_account_fake_lens_ignores_extra_args() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let id = implemented(&repo, &state, &path);
+    let rules = ratelimit::resume_rules(&state, &["a1"]);
+    ratelimit::put_account(&state, "a1", &[ratelimit::windows(40, 10)]);
+    let marker = state.join("lens-ran");
+    let out = run_pipe(&[
+        "gate", "--run", &id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(),
+        "--rules", &rules, "--curl", &ratelimit::fake_usage_curl(&state),
+        "--lens", &fake_lens(&marker, &lens_verdict("PASS")),
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "口座を足した行でも判定は読める: {}", stderr_of(&out));
+    assert!(marker.exists(), "lens は起動している");
+    let pairs = verdict_pairs(&state, &id);
+    assert_eq!(value_of(&pairs, "verdict"), "PASS", "余分な語が混じると 3 値を読めない: {pairs:?}");
+    assert_eq!(value_of(&pairs, "findings"), FAKE_FINDINGS, "必須 2 key も同じ 1 行から読める: {pairs:?}");
+    assert_eq!(
+        gated_details(&state, &id),
+        vec!["verdict:PASS,account:a1".to_owned()],
+        "器が選んだ口座を足した周である（足さない木ではこの detail が出ない）"
+    );
+    clean(&[&repo, &state]);
+}
+
+/// 便の `RunStage(Gated)` の detail の列（物理順）。
+pub(super) fn gated_details(state: &Path, id: &str) -> Vec<String> {
+    stages(state, id)
+        .into_iter()
+        .filter(|(stage, _)| *stage == Some(Stage::Gated))
+        .filter_map(|(_, detail)| detail)
+        .collect()
 }
 
 /// 便の worktree。

@@ -153,7 +153,8 @@ pub fn spawn(budget: Budget, launch: &Launch<'_>) -> Outcome {
     // **起動行はここで組み上げる**（`Spawned` の記帳より前）。口座の断り（[`LineRefusal`]）を
     // `launch_runner` に置くと、段を記帳した後で起こさない周ができる——記帳した口座と実行が
     // 一致しない行が置き場に残る。worktree は作ったまま（`prepare_worktree` の後の断りと同じ形）。
-    let cmd = match with_account(launch, substitute(launch, &worktree, &write_set, &plugin, &base)) {
+    let line = substitute(launch, &worktree, &write_set, &plugin, &base);
+    let cmd = match with_account(line, launch.account.label(), launch.state_dir) {
         Ok(line) => line,
         Err(refusal) => return refused(refusal.to_string()),
     };
@@ -323,23 +324,27 @@ impl std::fmt::Display for LineRefusal {
     }
 }
 
-/// 器が選んだ口座を runner の行に足す（`--account-dir <state_dir>/accounts/<label>`・FR5 の口のまま）。
+/// 器が選んだ口座を起動行に足す（`--account-dir <state_dir>/accounts/<label>`・FR5 の口のまま）。
 ///
 /// placeholder でなく**末尾に足す**——runner の雛形は口座を知らず（口座は便でなく器が選ぶ）、穴を
 /// 雛形に要ると、穴の無い雛形の便が黙って親の口座で起きる。渡していない周は行を変えない（親の
 /// 環境をそのまま継承させる・C2.2）。label の有無だけを見る（選んだ経路が初回か再開かは見ない）。
 ///
-/// **既に在る周は足さずに断る**（`s2-07l.411`）: 2 つ並べて渡すと runner の読み手が最初の値を採り、
-/// 記帳した口座と実際に走る口座がずれる。置換もしない——どちらが正かを器は決められない（C10）。
-/// label が `None`（宣言 0）は従来どおり行を変えない＝器は口座を選んでおらず、launcher の値が唯一の口座。
-fn with_account(launch: &Launch<'_>, cmd: String) -> Result<String, LineRefusal> {
-    let Some(label) = launch.account.label() else {
+/// **既に在る周は足さずに断る**（`s2-07l.411`）: 2 つ並べて渡すと読み手が最初の値を採り、記帳した口座と
+/// 実際に走る口座がずれる。置換もしない——どちらが正かを器は決められない（C10）。label が `None`
+/// （宣言 0）は従来どおり行を変えない＝器は口座を選んでおらず、launcher の値が唯一の口座。
+///
+/// **引数は label と置き場だけ**（`s2-07l.412`・設計 account-autonomy.md §15 (2)）: 足す口は runner と
+/// lens で**この 1 関数**である。`Launch` 全体を取ると runner の材料を持たない gate から呼べず、
+/// 「起動行に口座を足す」規則が 2 つに割れる。
+pub(super) fn with_account(cmd: String, label: Option<&str>, state_dir: &Path) -> Result<String, LineRefusal> {
+    let Some(label) = label else {
         return Ok(cmd);
     };
     if let Some(found) = account_dir_in(&cmd) {
         return Err(LineRefusal::AccountDirPresent(found));
     }
-    Ok(format!("{cmd} {ACCOUNT_DIR_FLAG} {}", crate::fleet::account_dir(launch.state_dir, label).display()))
+    Ok(format!("{cmd} {ACCOUNT_DIR_FLAG} {}", crate::fleet::account_dir(state_dir, label).display()))
 }
 
 /// 起動行が既に持つ口座の値（token [`ACCOUNT_DIR_FLAG`] の次の語・値の無い末尾は [`NO_VALUE`]）。
