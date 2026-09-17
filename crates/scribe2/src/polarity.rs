@@ -121,6 +121,9 @@ pub enum Guard {
     Externalize,
     /// 退避物の消費（move）を止める判定＝曖昧・移し先の既在（[`crate::seat::consume`]）。
     Consume,
+    /// runner の起動行の受付＝既に `--account-dir` を持つ行に器の口座を足さずに断る
+    /// （[`crate::pipe::spawn::LineRefusal`]・設計 account-autonomy.md §16）。
+    SpawnLine,
 }
 
 /// [`Guard`] の全 variant（宣言順）。
@@ -151,6 +154,7 @@ pub const ALL: &[Guard] = &[
     Guard::Cycle,
     Guard::Externalize,
     Guard::Consume,
+    Guard::SpawnLine,
 ];
 
 impl Guard {
@@ -183,6 +187,7 @@ impl Guard {
             Self::Cycle => crate::seat::cycle::POLARITY,
             Self::Externalize => crate::seat::externalize::POLARITY,
             Self::Consume => crate::seat::consume::POLARITY,
+            Self::SpawnLine => crate::pipe::spawn::POLARITY,
         }
     }
 
@@ -215,6 +220,7 @@ impl Guard {
             Self::Cycle => "seat::cycle::Cycle",
             Self::Externalize => "seat::externalize::ExternalizeError",
             Self::Consume => "seat::consume::ConsumeError",
+            Self::SpawnLine => "pipe::spawn::LineRefusal",
         }
     }
 
@@ -247,6 +253,7 @@ impl Guard {
             Self::Cycle => "cycle-refusal",
             Self::Externalize => "externalize-refusal",
             Self::Consume => "consume-refusal",
+            Self::SpawnLine => "spawn-line",
         }
     }
 

@@ -3224,3 +3224,109 @@ fn headless_claude_peak_lens_drains_stdout_while_polling() {
     assert!(err.contains("lens: scope=killed claude_peak_bytes="), "行は killed で出る: {err}");
     clean(&[&dir, &root]);
 }
+
+// ───── 同名の flag が 2 つ在る argv は claude を起こさずに断る（`s2-07l.411`・設計 account-autonomy.md §16・
+// 接頭辞 `headless_flag_duplicate_`） ─────
+//
+// 読み手は `headless::flag` の**1 関数**で、runner も lens も・必須（`need`）も任意も同じ経路を通る。
+// 最初の出現を採る実装では、器が足した口座の後ろに散文で書かれた値（やその逆）が黙って捨てられ、
+// 記帳した口座と実際に走る口座がずれる——どちらが正かは器に分からない（C10）ので断る。
+
+/// 断りの手前まで材料が揃った契約（parse で断るので中身は読まれない＝「材料不足で落ちた」と区別する）。
+const DUPLICATE_CONTRACT: &str = "goal = \"縦 1 本を通す\"\nverify = [\"true\"]\n";
+
+/// (a) runner の argv に `--account-dir` が 2 つ在る周は rc 1 で断り、claude を 1 度も起こさない。
+/// base は最初の値で claude を起こす（`called` が在り `account` が最初の dir）＝RED。
+#[test]
+fn headless_flag_duplicate_account_dir_refuses_runner_before_claude() {
+    let dir = tmp();
+    let worktree = tmp();
+    let first = tmp();
+    let second = tmp();
+    let claude = fake_claude(&dir, "", false, 0);
+    let write_set = dir.join("write-set.txt");
+    let vessel = write_vessel_copy(&dir, r#"["cargo", "git"]"#);
+    fs::write(&write_set, "src/lib.rs\n").expect("write-set を書ける");
+    plugin_leaf(&dir);
+    // **値は別の dir** にする——同じ値だと「2 つ在る」でなく「値が一致する」で通る実装と区別できない。
+    let call = RunnerCall {
+        dir: &dir, worktree: &worktree, write_set: &write_set, vessel: &vessel,
+        claude: &claude, mode: "plan", account: Some(&first),
+    };
+    let mut args = runner_args(&call, &dir);
+    args.push("--account-dir".to_owned());
+    args.push(second.display().to_string());
+    let out = run_bin_owned(&args, DUPLICATE_CONTRACT.as_bytes());
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "同名 2 つは rc 1: {}", stderr_of(&out));
+    assert!(!dir.join("called").exists(), "claude を 1 度も起動しない");
+    let err = stderr_of(&out);
+    assert!(err.contains("--account-dir"), "何が 2 つ在るかを名乗る: {err}");
+    assert!(err.contains(&first.display().to_string()), "1 つ目の値を名乗る: {err}");
+    assert!(err.contains(&second.display().to_string()), "2 つ目の値も名乗る: {err}");
+    assert!(err.contains("usage:"), "usage も併記する: {err}");
+    clean(&[&dir, &worktree, &first, &second]);
+}
+
+/// (b) lens も同じ 1 経路で断る（`--account-dir` は `KNOWN_FLAGS` に在るので `unknown_arg` は通す）。
+/// base は最初の値で claude を起こす＝RED。
+#[test]
+fn headless_flag_duplicate_account_dir_refuses_lens_before_claude() {
+    let dir = tmp();
+    let first = tmp();
+    let second = tmp();
+    let contract = contract_in(&dir);
+    let claude = fake_claude(&dir, "{\"verdict\":\"PASS\",\"evidence\":\"呼ばれてはならない\"}\n", false, 0);
+    let one = first.display().to_string();
+    let two = second.display().to_string();
+    let args = lens_args(&contract, &dir, &["--account-dir", &one, "--account-dir", &two], &claude);
+    let out = run_bin_owned(&args, b"--- a\n+++ b\n");
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "同名 2 つは rc 1: {}", stderr_of(&out));
+    assert!(!dir.join("called").exists(), "claude を 1 度も起動しない");
+    let err = stderr_of(&out);
+    assert!(err.contains("--account-dir"), "何が 2 つ在るかを名乗る: {err}");
+    assert!(err.contains(&one) && err.contains(&two), "両方の値を名乗る: {err}");
+    assert!(err.contains("usage:"), "usage も併記する: {err}");
+    clean(&[&dir, &first, &second]);
+}
+
+/// (d) 必須の flag（`need` → `flag` の経路）でも同じ断りに届く: runner と lens の argv のそれぞれに
+/// `--worktree` が 2 つ在る周は、どちらも rc 1・claude を起こさず・両方の dir を名乗る。base は最初の
+/// dir で claude を起こす＝RED。`headless_lens_refuses_without_worktree`（**不在**の断り）は不変。
+#[test]
+fn headless_flag_duplicate_worktree_refuses_runner_and_lens_before_claude() {
+    let dir = tmp();
+    let worktree = tmp();
+    let other = tmp();
+    let claude = fake_claude(&dir, "", false, 0);
+    let write_set = dir.join("write-set.txt");
+    let vessel = write_vessel_copy(&dir, r#"["cargo", "git"]"#);
+    fs::write(&write_set, "src/lib.rs\n").expect("write-set を書ける");
+    plugin_leaf(&dir);
+    let call = RunnerCall {
+        dir: &dir, worktree: &worktree, write_set: &write_set, vessel: &vessel,
+        claude: &claude, mode: "plan", account: None,
+    };
+    let mut args = runner_args(&call, &dir);
+    args.push("--worktree".to_owned());
+    args.push(other.display().to_string());
+    let out = run_bin_owned(&args, DUPLICATE_CONTRACT.as_bytes());
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "runner も rc 1: {}", stderr_of(&out));
+    assert!(!dir.join("called").exists(), "runner は claude を 1 度も起動しない");
+    let err = stderr_of(&out);
+    assert!(err.contains("--worktree"), "何が 2 つ在るかを名乗る: {err}");
+    assert!(err.contains(&worktree.display().to_string()), "1 つ目の dir を名乗る: {err}");
+    assert!(err.contains(&other.display().to_string()), "2 つ目の dir も名乗る: {err}");
+
+    let lens_dir = tmp();
+    let contract = contract_in(&lens_dir);
+    let lens_claude = fake_claude(&lens_dir, "{\"verdict\":\"PASS\",\"evidence\":\"呼ばれてはならない\"}\n", false, 0);
+    let second = other.display().to_string();
+    let args = lens_args(&contract, &worktree, &["--worktree", &second], &lens_claude);
+    let out = run_bin_owned(&args, b"--- a\n+++ b\n");
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "lens も rc 1: {}", stderr_of(&out));
+    assert!(!lens_dir.join("called").exists(), "lens も claude を 1 度も起動しない");
+    let err = stderr_of(&out);
+    assert!(err.contains("--worktree"), "何が 2 つ在るかを名乗る: {err}");
+    assert!(err.contains(&worktree.display().to_string()) && err.contains(&second), "両方の dir を名乗る: {err}");
+    clean(&[&dir, &worktree, &other, &lens_dir]);
+}

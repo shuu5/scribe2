@@ -19,9 +19,10 @@ use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
 use crate::fleet::store::LockPolicy;
 use crate::fleet::{EventKind, Stage};
 use crate::headless::runner::{stop_status, top_level_string};
-use crate::headless::RC_RATE_LIMIT;
+use crate::headless::{NO_VALUE, RC_RATE_LIMIT};
 use crate::name::NAME;
 use crate::pipe::contract::Contract;
+use crate::polarity::{OnFailure, Polarity, Timing};
 use std::io::Write;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -149,6 +150,13 @@ pub fn spawn(budget: Budget, launch: &Launch<'_>) -> Outcome {
         Ok(path) => path,
         Err(reason) => return broken(reason),
     };
+    // **起動行はここで組み上げる**（`Spawned` の記帳より前）。口座の断り（[`LineRefusal`]）を
+    // `launch_runner` に置くと、段を記帳した後で起こさない周ができる——記帳した口座と実行が
+    // 一致しない行が置き場に残る。worktree は作ったまま（`prepare_worktree` の後の断りと同じ形）。
+    let cmd = match with_account(launch, substitute(launch, &worktree, &write_set, &plugin, &base)) {
+        Ok(line) => line,
+        Err(refusal) => return refused(refusal.to_string()),
+    };
     // 途中再開は `account:<label>,resume:<理由>` を名乗る（設計 account-autonomy.md §4・印は止まった理由で分かれる）。
     // base は初回の `base:<sha>` が持ったままで、読み手（`base_of_run`）は接頭辞の違う行を飛ばす。
     // 器が選んだ口座での起動は `base:<sha>,account:<label>`（読み手は最初の `,` までを sha と読む）。
@@ -174,18 +182,11 @@ pub fn spawn(budget: Budget, launch: &Launch<'_>) -> Outcome {
     ) {
         return broken(err.to_string());
     }
-    launch_runner(launch, &worktree, &write_set, &plugin, &base)
+    launch_runner(launch, &worktree, &cmd, &base)
 }
 
-/// runner を起こし、終わりまで見届けて段を決める。
-fn launch_runner(
-    launch: &Launch<'_>,
-    worktree: &Path,
-    write_set: &Path,
-    plugin: &Path,
-    base: &str,
-) -> Outcome {
-    let cmd = with_account(launch, substitute(launch, worktree, write_set, plugin, base));
+/// runner を起こし、終わりまで見届けて段を決める（起動行は [`spawn`] が組み上げて渡す）。
+fn launch_runner(launch: &Launch<'_>, worktree: &Path, cmd: &str, base: &str) -> Outcome {
     // **turn 開始時の tip**（ADR-0019 §2.6）。質問の判定はこの点からの commit 数で見る
     // ——base 基準だと、起こし直しの turn は便が base から持つ commit を数えてしまい、
     // 質問で止まった turn が常に「commit を作った」側へ倒れる。初回は tip = base ゆえ同値。
@@ -200,7 +201,7 @@ fn launch_runner(
         limit: confine::Limit::HostReserve,
         caps: confine::Caps::embedded(),
     };
-    let (mut command, confinement) = confine::wrap_line(&cmd, &wrap);
+    let (mut command, confinement) = confine::wrap_line(cmd, &wrap);
     // **env を 1 つも足さない**: `.env()` / `.envs()` を呼ばず親の env をそのまま継承する（`TMUX_PANE` だけは外す＝confine）。
     // stdout は捕らえる（質問 record の読み面・`gate.rs::ask_lens` と同じ形）。stderr は継承。
     // **先頭 process を新しい process group の leader にする**（setsid ではない・cgroup の scope とは
@@ -297,19 +298,56 @@ fn keep_stdout(launch: &Launch<'_>, rc: i32, stdout: &str) -> Result<(), String>
         .map_err(|err| format!("{} を書けない: {err}", path.display()))
 }
 
+/// 器が足す口座の flag（足す側と、行が既に持つかを見る側の**同じ 1 つの字面**）。
+const ACCOUNT_DIR_FLAG: &str = "--account-dir";
+
+/// 起動行の受付の極性（[`LineRefusal`]・設計 account-autonomy.md §16・C11.2）: runner を起こす**前**に
+/// 測り、既に口座を持つ行は足さずに断る（どちらの口座が正かを器は決められない＝断る側へ倒す）。
+pub const POLARITY: Polarity = Polarity {
+    timing: Timing::InLoop,
+    on_failure: OnFailure::FailClosed,
+};
+
+/// 起動行の受付の断り（**閉じた 1 つ**・C11.2「境界ごとの enum が極性型を運ぶ」）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LineRefusal {
+    /// 起動行が既に `--account-dir` を持つ（値は**行が持っていた**方）。
+    AccountDirPresent(String),
+}
+
+impl std::fmt::Display for LineRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::AccountDirPresent(found) => write!(f, "起動行に {ACCOUNT_DIR_FLAG} が既に在る（{found}）"),
+        }
+    }
+}
+
 /// 器が選んだ口座を runner の行に足す（`--account-dir <state_dir>/accounts/<label>`・FR5 の口のまま）。
 ///
 /// placeholder でなく**末尾に足す**——runner の雛形は口座を知らず（口座は便でなく器が選ぶ）、穴を
 /// 雛形に要ると、穴の無い雛形の便が黙って親の口座で起きる。渡していない周は行を変えない（親の
 /// 環境をそのまま継承させる・C2.2）。label の有無だけを見る（選んだ経路が初回か再開かは見ない）。
-fn with_account(launch: &Launch<'_>, cmd: String) -> String {
-    match launch.account.label() {
-        None => cmd,
-        Some(label) => format!(
-            "{cmd} --account-dir {}",
-            crate::fleet::account_dir(launch.state_dir, label).display()
-        ),
+///
+/// **既に在る周は足さずに断る**（`s2-07l.411`）: 2 つ並べて渡すと runner の読み手が最初の値を採り、
+/// 記帳した口座と実際に走る口座がずれる。置換もしない——どちらが正かを器は決められない（C10）。
+/// label が `None`（宣言 0）は従来どおり行を変えない＝器は口座を選んでおらず、launcher の値が唯一の口座。
+fn with_account(launch: &Launch<'_>, cmd: String) -> Result<String, LineRefusal> {
+    let Some(label) = launch.account.label() else {
+        return Ok(cmd);
+    };
+    if let Some(found) = account_dir_in(&cmd) {
+        return Err(LineRefusal::AccountDirPresent(found));
     }
+    Ok(format!("{cmd} {ACCOUNT_DIR_FLAG} {}", crate::fleet::account_dir(launch.state_dir, label).display()))
+}
+
+/// 起動行が既に持つ口座の値（token [`ACCOUNT_DIR_FLAG`] の次の語・値の無い末尾は [`NO_VALUE`]）。
+/// 持たない行は `None`。
+fn account_dir_in(cmd: &str) -> Option<String> {
+    let mut tokens = cmd.split_whitespace();
+    tokens.find(|token| *token == ACCOUNT_DIR_FLAG)?;
+    Some(tokens.next().map_or_else(|| NO_VALUE.to_owned(), str::to_owned))
 }
 
 /// runner の stdin に流す本文 = 契約の写し（再読）+ 回答済みの質問が在れば「回答」節 +

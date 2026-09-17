@@ -1969,6 +1969,39 @@ fn pipe_spawn_account_first_turn_runs_on_the_chosen_free_account() {
     clean(&[&repo, &state]);
 }
 
+/// 起動行が**既に** `--account-dir` を持つ周は、器は足さずに断る（`s2-07l.411`・設計 account-autonomy.md §16）:
+/// (a) と同じ fixture（a1 / a2 を宣言・a1 は登録 row ＝器は a2 を選ぶ）の `--runner` の雛形の末尾に a1 の
+/// credential dir を literal で書いて `pipe run` を撃つと、rc 1・stderr に `pipe:` と**行が持っていた** a1 の値・
+/// `Spawned` は 0 件・runner は 1 度も起きない。base は末尾に a2 を足して 2 つ並べたまま起こすので、runner の
+/// 読み手が最初の値（a1）を採り、記帳（a2）と実行がずれる＝RED。
+#[test]
+fn headless_flag_duplicate_with_account_refuses_when_already_present() {
+    let (repo, state) = repo_with_state();
+    let first = write_set_contract(&repo, "first.toml", &["src/lib.rs"]);
+    let present = state.join("accounts").join("a1").display().to_string();
+    let runner = format!("{} --account-dir {present}", turn_runner(&state, &[IMPLEMENT.to_owned()]));
+    let rules = resume_rules(&state, &["a1", "a2"]);
+    put_account(&state, "a1", &[windows(10, 10)]);
+    put_account(&state, "a2", &[windows(40, 10)]);
+    register_seat_account(&state, &repo, "a1");
+    let marker = state.join("lens-ran");
+    let lens = fake_lens(&marker, &lens_verdict("PASS"));
+    let out = run_pipe(&[
+        "run", "--contract", &first.display().to_string(), "--bead", "s2-acct",
+        "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
+        "--rules", &rules, "--curl", &fake_usage_curl(&state), "--runner", &runner, "--lens", &lens,
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{} / {}", stdout_of(&out), stderr_of(&out));
+    let err = stderr_of(&out);
+    assert!(err.contains("pipe:"), "断りは器の 1 行: {err}");
+    assert!(err.contains(&present), "行が持っていた値を名乗る: {err}");
+    let id = run_id_of(&out);
+    assert!(!id.is_empty(), "便の id は落ちた周も stdout に出る: {}", stdout_of(&out));
+    assert_eq!(spawned_details(&state, &id), Vec::<String>::new(), "Spawned を記帳しない");
+    assert_eq!(stub_calls(&state), 0, "runner は 1 度も起きない");
+    clean(&[&repo, &state]);
+}
+
 /// (b) 口座の宣言が 0 の置き場（既存の fixture のまま）では runner は親の環境を継承する: argv に `--account-dir` 無し・
 /// `Spawned detail=base:<sha>`（口座の接尾辞なし）・stderr に継承の 1 行・計測は撃たない。既存の `pipe_spawn_` /
 /// `pipe_five_` / `pipe_e2e_` の歯が名を変えず緑＝継承の形は不変。
