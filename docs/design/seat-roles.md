@@ -174,7 +174,7 @@ id = "h"
 title = "相談席 consult — Role の variant 1 つ・rules 行 role.consult = [relay, edit-outside, edit-research]・Capability と PathKind に research の variant 1 つずつ・brief の雛形 1 枚（裁定 user 2026-09-17T01:48Z）"
 req = ["FR40", "FR45", "FR44"]
 section = "14"
-write-set = ["rules/manifest.toml", "crates/scribe2/src/seat/role.rs", "crates/scribe2/src/hook/role_guard.rs", "crates/scribe2/src/seat/brief/mod.rs", "+crates/scribe2/src/seat/brief/consult.txt", "crates/scribe2/tests/e2e/seat.rs", "crates/scribe2/tests/e2e/hook.rs", "crates/scribe2/tests/e2e/rules.rs", "crates/scribe2/tests/e2e/snapshots/e2e__rules__rules_external_form.snap", "crates/scribe2/tests/e2e/snapshots/"]
+write-set = ["rules/manifest.toml", "crates/scribe2/src/seat/role.rs", "crates/scribe2/src/hook/role_guard.rs", "crates/scribe2/src/seat/brief/mod.rs", "+crates/scribe2/src/seat/brief/consult.txt", "crates/scribe2/tests/e2e/seat.rs", "crates/scribe2/tests/e2e/hook.rs", "crates/scribe2/tests/e2e/rules.rs", "crates/scribe2/tests/e2e/snapshots/e2e__rules__rules_external_form.snap", "+crates/scribe2/tests/e2e/snapshots/e2e__hook__hook_brief_consult.snap"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail seat_role_consult_"]
 size = "S"
 done = "consult の登録 row を持つ席が research の文書と repo の外だけ Edit でき、spec / 設計 doc / code と pipe の口は権能の名を告げて断られ、planner と admin の席の挙動と brief は不変で、consult の brief が外形 snapshot に載る"
