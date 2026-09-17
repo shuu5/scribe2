@@ -202,7 +202,7 @@ id = "m"
 title = "同じ flag の二重を断る — headless の flag（headless/mod.rs）が同名 2 回以上を typed に断り、with_account は起動行に既に --account-dir が在れば足さずに spawn を断る（記帳の口座と実行の口座の一致を歯で pin）"
 req = ["NFR4", "FR36"]
 section = "16"
-write-set = ["crates/scribe2/src/headless/mod.rs", "crates/scribe2/src/headless/runner.rs", "crates/scribe2/src/headless/lens.rs", "crates/scribe2/src/pipe/spawn.rs", "crates/scribe2/src/polarity.rs", "crates/scribe2/tests/e2e/snapshots/e2e__polarity__polarity_external_form.snap", "crates/scribe2/tests/e2e/headless.rs", "crates/scribe2/tests/e2e/pipe/spawn.rs"]
+write-set = ["crates/scribe2/src/headless/mod.rs", "crates/scribe2/src/headless/runner.rs", "crates/scribe2/src/headless/lens.rs", "crates/scribe2/src/pipe/spawn.rs", "crates/scribe2/src/polarity.rs", "crates/scribe2/tests/e2e/snapshots/e2e__polarity__polarity_external_form.snap", "crates/scribe2/tests/e2e/polarity.rs", "crates/scribe2/tests/e2e/headless.rs", "crates/scribe2/tests/e2e/pipe/spawn.rs"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail headless_flag_duplicate_"]
 size = "S"
 done = "runner / lens の argv に同じ flag が 2 つ在ると claude を呼ばずに断り、with_account は既に --account-dir を持つ起動行を足さずに断って Spawned を記録しない"
