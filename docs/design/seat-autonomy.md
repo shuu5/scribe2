@@ -200,6 +200,23 @@ repo に入れない）。
 - 歯（`seat_pointer_backoff_` 接頭辞・`tests/e2e/seat/tick.rs`・fixture は既存の tick の歯と同じ〔偽 tmux + 席 dir + rules の写し〕で、時刻は記録の `sent_at` を過去に書いて進める）: (a) 1 周目で合図が出て記録が書かれ、席の応答（状態 log に `sent_at` より後の Stop を 1 行）の後の周で settle し、その後の無変化の周は待ちが factor 倍になって合図が出ない（判定行 `pointer=wait:<s> step=1`・応答の turn が「変化」に数えられない）／(b) settle 後に digest の材料（状態 log の最終行）を変えると step = 0 に戻って合図が出る／(c) 待ちが max を超える段は `pointer=stopped` で合図が出ず、digest を変えると再開する／(d) rules 行 2 本が `RuleKind` の `ALL` と `rules validate` の外形に載る（`tests/e2e/rules.rs` の pin）／(e) 注入の周の判定行の全文を pin する既存の歯 7 箇所（`tests/e2e/seat/register.rs` 2・`tests/e2e/seat/launch.rs` 3・`tests/e2e/hook.rs` 1・`tests/e2e/seat/account.rs` 1）の期待に `pointer=sent step=<n>` を写し、**送った直後の周の判定行（`reason=pointer-recent`）を全文 pin する既存の歯 2 箇所**（`tests/e2e/seat/tick.rs`・1 周目が記録を書くので 2 周目は settle 前）の期待に `pointer=settling step=0` を写す（どちらも意味不変・期待の字面だけ）。
 - 却下: 席（AI）に「変化が無ければ heartbeat を打たない」と判断させる（席を起こす＝それ自体が合図の消費・C3.3 の自由文入力）／固定の「3 回無変化で中断」（変化の検知が席の応答に依存する周に永久停止しうる・上限で必ず 1 回撃つ梯子の方が両端を機械で守れる）／tick 自体を止める（退避の合図と cycle が止まる・folio2 の 2026-09-17 の事故）／既定の 40 分を伸ばすだけ（撃ちすぎも遅すぎも残る）。
 
+## 15. 退避の閾値を窓ごとに持ち、7 日窓とモデル別窓は強制 cycle にする（契約表の行 g〜j・`s2-07l.434`）
+
+- 何が起きているか（planner 席 2026-09-17・verified・`s2-07l.434`）: session 用の閾値は rules 行 `R-C9-1`（kind `AccountSelection`・Int・85）の 1 値で、選定（`fleet/select.rs` の `standing`）も席の逼迫度（`seat/tick/account.rs` の `reading`）も「数える窓の最大の使用率 ≥ その 1 値」で判定する＝3 つの窓（`WindowKind` の 5 時間・7 日・モデル別 7 日）に同じ値が効く。同時に多数流した agent の返答がまとまって戻り、5 時間窓が閾値を越えてから上限に当たるまでに退避が間に合わなかった。user 裁定 2026-09-17T03:28Z / 03:50Z（逐語は台帳 `s2-07l.434`）の要旨: 5 時間窓は 85 のまま・7 日窓とモデル別窓は全量が大きいので 95 まで使う・ただし 95 の 2 窓は合図を受けた席がそこから新しい作業を始めないことを器が担保する（強制 cycle）。口座の選定と退避の合図の結び方は [account-autonomy.md](./account-autonomy.md) §5 のまま。
+- 形（判定入力は typed な値だけ・C3.3）:
+  1. **rules 行は 3 つ足す**（C1 / C5・裁定 id = user 2026-09-17T03:50Z・`RuleKind` に variant 3 つ・宣言順は `AccountSelection` の直後）: `R-C9-1.seven-day`（Int・95）・`R-C9-1.seven-day-model`（Int・95）・`R-C9-1.forced-windows`（List・値は `WindowKind` の `as_str` の字面 = `seven_day` と `seven_day_model`）。`R-C9-1` の行は**触らない**（値 85・裁定 id とも不変）で、読みが「全部の窓」から「5 時間窓」に狭まるだけ（03:28Z の裁定の 5 時間窓 = 85 は現行と同値＝行の改訂は無い）。id は既存の compound 行（`R-C13-1.per-pr`）と同じ形なので、憲法 §3 との突合（`rules-parity`）は `R-C9-1` に畳まれて動かない。「どの窓が強制か」も規則の値なので行に持つ（code の match に埋めない・C1）。
+  2. **窓別の閾値の型**: `fleet/select.rs` に閉じた型 `WindowThresholds`（窓ごとの閾値 3 値 + 強制の窓の集合）を置き、窓から閾値を引く口は `WindowKind` の網羅 match の 1 関数・全部の窓に同じ値を入れる構築子を 1 つ持つ（便用が渡す `LIMIT_PCT`・歯の fixture 用）。`Input` の `threshold_pct` をこの型の field に差し替える。`standing` の順序（除外 → 測れない → 当たっている → 閾値）は不変で、4 つ目の判定だけが「逼迫度 ≥ 1 値」から「数える窓のどれかが自分の窓の閾値以上」に変わる（並べる鍵の逼迫度 = 数える窓の最大の使用率は不変）。manifest からの読みは 2 面の既存の読み手（`fleet/cli.rs` の `threshold_of`・席の側の `int_rule_of`）が 4 行を読んで同じ構築子 1 つで組む＝選定と退避の合図が同じ値を読む結び方は保つ。4 行のどれかが無い・不発効・形が違う周は既存どおり `RuleError` / `no-rule` で断る（既定値に倒さない）。強制の窓の字面が `WindowKind` の `parse` を通らない周も同じ断り。
+  3. **席の逼迫度**: `reading` は数える窓（`counted` の規則は不変）ごとに自分の窓の閾値と比べ、以上の窓が 1 つでも在れば `Account` の variant `Over`。`Over` が運ぶ使用率と閾値は**引き金の窓**のもの（以上の窓のうち強制の窓を先・同順位は `WINDOWS` の宣言順）で、強制の窓のときはその窓を `Over` に載せる。退避の合図の字面（`account_pointer`）は不変（運ぶ実測値と閾値が引き金の窓の値になるだけ）。
+  4. **判定行**: 引き金が強制の窓の周だけ、判定行の `origin=account` の直後に `forced=<窓の字面>` の 1 語を足す（5 時間窓だけが以上の周・閾値未満の周の判定行は 1 byte も変わらない）。
+  5. **強制の印**: tick は強制の退避の合図を送ると決めた周（FR29 と同じ除外と `signal_brake` を通った後・注入の直前＝write-ahead）に、席の置き場（`seat_dir`）へ印の file を 1 つ書く（1 行 JSON・`ts` / 口座 label / 窓 / 使用率 / 閾値 / tick が受けた作業記憶の置き場）。**判定に使うのは file の有無だけ**で、中身は出所の記録と断りの 1 行に載せる材料（中身が壊れていても印は効く）。注入が入力欄の門で断られた周も印は残る（席は次の tool 呼出の断りの 1 行から退避へ向かう）。
+  6. **印を外す周は 3 つ**（全部 move・N1.2・同じ dir の外した名へ rename し、既に在る外した名は ts 付きの名へ先に rename する＝FR23 の再退避と同じ型で上書きしない）: (i) `seat externalize` が退避物を書き終えた周 (ii) 立て直しが起動行を差し込み終えた周（`seat/cycle/relaunch.rs`）(iii) tick が口座の軸を測れて強制の `Over` でなかった周（窓の reset で閾値未満に戻った席を印が止め続けない）。測れない周・登録 row の無い周は外さない。
+  7. **強制 cycle の guard**（PreToolUse・in-loop・新 module は行 i の write-set の `+` の file）: 門の位置は command guard の後・role guard の前（`polarity.rs` の `Guard` に variant `ForcedCycle` を `Command` の直後に足す＝門の順は宣言順）。(a) 置き場の席 dir のどこにも印が無い周は tmux を撃たずに通す（毎 tool 呼出で tmux を撃たない・NFR5）。(b) 印が 1 つでも在る周だけ pane から自席の target を解き（`target_of_pane`）、自席の印が無ければ通す。(c) 自席の印が在る周は **退避に要る操作だけ**を通す: Bash は、command を command guard と同じ区切りで segment に分け、**全部の segment** の先頭語が器自身（role guard の `is_self` と同じ規則）で続く 2 語が閉じた列（`seat externalize`・`seat heartbeat`）に在り、command が置換（`$(`・backtick）と redirect の字を含まない周だけ。編集 tool（write-set guard と同じ集合 `GUARDED`）は、編集先が自席の席 dir の直下の入力 dir（1 段ちょうど・`seat_guard` の退避の口と同じく字句の段と link の実体の段で狭く取る）の中の周だけ。それ以外は deny（rc 2・stderr 1 行・記録 1 行 `forced-cycle-deny`）。読みの tool は PreToolUse の matcher に無いので元から通る。(d) 断りの 1 行は理由の語 `forced-cycle` と、印の中身から組んだ**次の手の 1 形**（`<NAME> seat externalize --target … --wm-dir … --anchor … --plan <入力 dir>/… --directives <入力 dir>/…`・role guard の `route` と同じ考え方＝席が source も skill の変数展開も使わずに退避へ進める・N2 の散文の手順を持たない）を運ぶ。判定は新 module の閉じた enum（通す理由を 1 つに畳まない・`seat_guard` の `SeatDecision` と同じ型）で持つ。
+  8. **極性 = FailOpen**（`seat_guard` の cap guard と同じ側）: 印が在るのに自席を解けない周（pane が無い・tmux が返らない・置き場を読めない）は通し、記録に `forced-cycle-unresolved reason=<語>` を 1 行残す。FailClosed にすると、host のどこかの席に印が在る間、target を解けない全部の session の Bash と編集が止まる＝器が自分の席を使えなくする（cap guard が測れない周を deny しないのと同じ理由）。pane を持たない session（席でない）は印に関わらず通す。極性一覧には in-loop / fail-open で載る（C16.2・隠さない）。
+  9. **agent を起こす tool も止める**（行 j）: 事故の根は agent の同時投入の戻りなので、自席の印が在る周は agent を起こす tool の呼出も同じ断りで止める。生成 hooks.json の PreToolUse の matcher（`crates/xtask/src/genmanifest.rs` の `MATCHER`）に agent を起こす tool の名を足し、guard の対象集合に同じ名を足す。既存の 4 つの門はこの tool を元から素通しする（write-set guard / cap guard は `GUARDED` の外・command guard は Bash だけ・role guard の `subject` は `None`）。matcher が変わると hook 集合の digest が変わり、既存の席は FR62 の経路で 1 回作り直される。
+- 触らない: `R-C9-1` の行（値・裁定 id）・便用の選定と session 用の選定の鍵と順序（`pick` / `run_key`）・`counted` / `counts` の窓の数え方・`LIMIT_PCT`・退避の合図の字面と `signal_brake`・FR29 の除外・5 時間窓の席の挙動（従来どおりの合図で印も guard も無い）・context の軸（`seat.context_cap_pct` と cap guard）・妥協の通知の周（[seat-roles.md](./seat-roles.md) §18・退避の合図を送らない周なので印も書かない）・[account-autonomy.md](./account-autonomy.md)。同時に流す agent の数の上限は本 § の外（planner 側の投入量の題・閾値でも guard でも解けない）。
+- 歯: **値と合図**（`seat_window_threshold_` 接頭辞）= (a) 7 日窓 90% の口座は session 用の候補に残り 95% で外れ、5 時間窓は 85% で外れる（`fleet select` の e2e・base は 90% で外れる → RED）／(b) 純関数の in-file の歯と property（選ばれた口座は数える窓の全部が自分の窓の閾値未満）／(c) rules 行 3 つが `RuleKind` の `ALL` と `rules validate` の外形に載り、行が 1 つ欠けた manifest を `fleet select` が断る／(d) 席: 7 日窓 96% の席の tick は退避の合図を送り判定行に `forced=seven_day` が載り、7 日窓 90% の席は打刻の合図の側へ進み、5 時間窓 85% の席の判定行は従来と同じ字面（`forced=` が無い）。**guard**（`seat_forced_cycle_` 接頭辞）= (e) 強制の合図を送った周に印が書かれ、5 時間窓の合図の周には書かれない／(f) 印の在る席の pane からの Bash・Edit は deny で、断りの 1 行が次の手の形を運び、`seat externalize` / `seat heartbeat` の Bash と入力 dir への Write は通る（base は全部通る → RED）／(g) 別の席の印だけが在る周・印が無い周は通り、印が無い周は tmux を撃たない（偽 tmux の呼出記録が 0 行）／(h) 通す側の狭さ: `seat externalize` に別の segment を繋いだ command・置換を含む command・入力 dir の名の link で外を指す編集先は deny／(i) target を解けない周は通して記録が 1 行残る／(j) 印は externalize の成功・立て直し・強制でないと測れた tick の 3 つで外れ、外した名が残る（消えていない）／(k) 極性一覧に 1 行増え集計が動く／(l) 行 j: agent を起こす tool は印の在る席で deny・印の無い席で通り、生成 hooks.json の matcher に名が載る。
+- 却下: `R-C9-1` の値を窓別の表（inline table）にする（`ValueShape` に形を 1 つ足し `rules get` の外形と既存の読み手 2 面が全部動く・行を足す方が既存の compound 行の型に乗る）／強制の窓を `WindowKind` の match に埋める（規則の値が code に住む・C1）／合図の字面に「新しい作業を始めないでください」を足すだけ（席の善意に頼る散文の規則・N2 / C16）／断りの理由を role guard の `RefuseReason` に足す（あの enum は「権能を解けない理由」の列で宣言順 = 解く順・強制 cycle は権能の欠落ではなく席の状態＝意味が混ざる・cap guard と同じく自分の判定 enum を持つ）／FailClosed（上の 8）／印の中身の使用率を guard が読み直して判定する（hook が毎回 event log を replay する・NFR5）／tick が閾値以上の周に打刻以外の注入を止めるだけ（席が自分で始める作業を止められない）／再送の back-off を短くする（合図が増えるだけで強制力は増えない）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -262,4 +279,47 @@ write-set = ["rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "crates/s
 verify = ["cargo nextest run -p scribe2 --no-tests=fail seat_pointer_backoff_"]
 size = "S"
 done = "無変化の席への合図が 40 分 → 80 → 160 → 320 → 640 → 1280 分で止まり、席が合図に応えた後の状態 log か fleet event が変わった周に 40 分へ戻って再開し、退避の合図と cycle は毎周のまま"
+
+[[contract]]
+id = "g"
+title = "session 用の閾値を窓ごとに持つ（値）— rules 行 R-C9-1.seven-day / R-C9-1.seven-day-model（95）と R-C9-1.forced-windows を足し、選定の Input が閉じた型 WindowThresholds を運んで数える窓ごとに自分の窓の閾値と比べる（R-C9-1 は 5 時間窓 85 のまま・裁定 user 2026-09-17T03:50Z）"
+req = ["FR36", "FR38"]
+section = "15"
+write-set = ["rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "crates/scribe2/tests/e2e/rules.rs", "docs/design/rules-manifest.md", "crates/scribe2/tests/e2e/snapshots/e2e__rules__rules_external_form.snap", "crates/scribe2/src/fleet/select.rs", "crates/scribe2/src/fleet/cli.rs", "crates/scribe2/src/fleet/replay.rs", "crates/scribe2/src/seat/cycle/relaunch.rs", "crates/scribe2/src/seat/tick/exit.rs", "crates/scribe2/tests/e2e/prop.rs", "crates/scribe2/tests/e2e/fleet.rs"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail seat_window_threshold_select_", "cargo nextest run -p scribe2 --lib --no-tests=fail seat_window_threshold_pure_"]
+size = "M"
+done = "fleet select の session 用が 7 日窓とモデル別窓は 95 未満・5 時間窓は 85 未満の口座だけを候補にし、4 行のどれかが欠けた manifest は断り、便用の選定と選定の順序は不変"
+
+[[contract]]
+id = "h"
+title = "席の逼迫度を窓別の閾値で測る（合図）— tick / launch / relaunch が WindowThresholds を 4 行から組んで運び、引き金が強制の窓の周は Over がその窓を載せて判定行に forced=<窓> の 1 語が出る（合図の字面・除外・brake は不変）"
+req = ["FR38", "FR29"]
+section = "15"
+depends = ["g"]
+write-set = ["crates/scribe2/src/seat/mod.rs", "crates/scribe2/src/seat/cli.rs", "crates/scribe2/src/seat/cycle/launch.rs", "crates/scribe2/src/seat/cycle/relaunch.rs", "crates/scribe2/src/seat/tick.rs", "crates/scribe2/src/seat/tick/account.rs", "crates/scribe2/src/seat/tick/exit.rs", "crates/scribe2/src/seat/tick/render.rs", "crates/scribe2/tests/e2e/seat.rs", "crates/scribe2/tests/e2e/seat/account.rs", ".config/nextest.toml"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail seat_window_threshold_tick_", "cargo nextest run -p scribe2 --lib --no-tests=fail seat_window_threshold_reading_"]
+size = "S"
+done = "7 日窓 96% の席へ退避の合図が出て判定行に forced=seven_day が載り、7 日窓 90% の席は閾値未満として進み、5 時間窓 85% の席の判定行は従来と同じ字面"
+
+[[contract]]
+id = "i"
+title = "強制 cycle の guard — tick が強制の合図の周に席 dir へ印を書き、印の在る席の Bash と編集を PreToolUse で断って退避の口（seat externalize / seat heartbeat・入力 dir への書込）だけを通し、印は externalize の成功・立て直し・強制でないと測れた tick が move で外す（in-loop / FailOpen）"
+req = ["FR38", "NFR5"]
+section = "15"
+depends = ["h"]
+write-set = ["+crates/scribe2/src/hook/forced_guard.rs", "crates/scribe2/src/hook/mod.rs", "crates/scribe2/src/hook/role_guard.rs", "crates/scribe2/src/polarity.rs", "+crates/scribe2/src/seat/forced.rs", "crates/scribe2/src/seat/mod.rs", "crates/scribe2/src/seat/tick/account.rs", "crates/scribe2/src/seat/externalize.rs", "crates/scribe2/src/seat/cycle/relaunch.rs", "crates/scribe2/tests/e2e/hook.rs", "crates/scribe2/tests/e2e/polarity.rs", "crates/scribe2/tests/e2e/seat/account.rs", "crates/scribe2/tests/e2e/seat/wm.rs", "crates/scribe2/tests/e2e/snapshots/e2e__polarity__polarity_external_form.snap", ".config/nextest.toml"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail seat_forced_cycle_", "cargo nextest run -p scribe2 --lib --no-tests=fail seat_forced_cycle_mouth_"]
+size = "M"
+done = "強制の合図を受けた席は退避の口以外の Bash と編集を断られて断りの 1 行から退避へ進め、印の無い席と別の席は tmux も撃たれずに通り、印は 3 つの周に move で外れ、極性一覧に in-loop / fail-open の 1 行が増える"
+
+[[contract]]
+id = "j"
+title = "強制 cycle の guard が agent を起こす tool も止める — 生成 hooks.json の PreToolUse の matcher と guard の対象集合に agent を起こす tool の名を足す（既存の 4 つの門は素通しのまま）"
+req = ["FR38"]
+section = "15"
+depends = ["i"]
+write-set = ["crates/xtask/src/genmanifest.rs", "hooks/hooks.json", "+crates/scribe2/src/hook/forced_guard.rs", "crates/scribe2/tests/e2e/hook.rs"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail seat_forced_cycle_agent_"]
+size = "S"
+done = "印の在る席の agent を起こす tool の呼出が同じ断りで止まり、印の無い席では通り、生成 hooks.json の matcher にその名が載って gen-manifest の検査が緑"
 <!-- contracts:end -->
