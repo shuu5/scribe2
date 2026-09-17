@@ -11,14 +11,14 @@ meta:
   eyebrow_left: 要件定義書 (SRS)
   eyebrow_right: scribe2 — MVP
   subtitle: 契約は小さく・検証は機械が先・止まるときは記帳して止まる
-  version: "0.16"
+  version: "0.17"
   date: "2026-09-17"
   reader: この器で開発する人と AI（Claude Code の session）。 専門語には必ずやさしい言い換えを併記する
 
 approval:
   - role: 承認 (user)
     who: user
-    when: 2026-09-17（版 0.16。 版ごとの裁定 id は台帳が持つ）
+    when: 2026-09-17（版 0.17。 版ごとの裁定 id は台帳が持つ）
     stamp: 裁定済
   - role: レビュー (folio review lens)
     who: spec-review 5 軸 + SRS ceiling 3 lens
@@ -64,6 +64,9 @@ scope:
     - 契約表からの契約 file の生成
     - 契約の審査
     - 便の自動起動
+    - 妥協の起動
+    - 強制サイクル
+    - 席の実口座の検出
     - write-set の閉包
     - land の終端
     - 台帳の lint
@@ -145,6 +148,9 @@ acceptance:
   - { id: AC37, criterion: 登録 row のある planner の席の指示文に、 雛形が設計 doc を指す pointer 付き 4 行のうち対話面の作法の行 3 本（文の形・信頼度・brief の 5 slot）が在り、 管理席の指示文にはその行が 0 本（走査した行数を母集団として出す）で、 pointer の無い行（規範文）が指示文で 0（走査した行数を母集団として出す）で、 復元 skill の本文は brief の 5 slot の名（対話面の設計 doc §3 の宣言順の id）と対話面の設計 doc §3 への pointer を持ち作法の則の本文を持たず（skill の frontmatter〔先頭の --- 区間〕を除く非空行は見出し・番号付きの手順・code block・pointer 付きの行・5 slot の名の行のいずれかに分類され、 どれでもない行が 0・frontmatter を除く非空行数を母集団として出す）、 rules manifest に対話面の作法の行が 0（rules 行数を母集団として出す）である, metric_v: 行 3/4 + 管理席 0/N + 指示文の規範文 0/N + skill の 5 slot 5/5 + skill の pointer（設計 doc §3）1/1 + skill の分類外の行 0/M + rules 行 0/R, metric_l: 対話面の作法, links: [FR30, FR67] }
   - { id: AC38, criterion: 偽の台帳と偽の終端でない段の便で、 審査 PASS ∧ 依存 closed ∧ write-set の交差 0 ∧ 受付を通る契約が、 席の操作なしに次の管理 tick か land の直後に受付と Reviewed の段を経て待機の段を挟まず Spawned になり、 条件を満たす契約が N 本なら同じ契機で N 本（同時走行の最大値の範囲内）起き、 最大値に達した周の契約は最大値の理由で起動の列に留まり、 交差する契約は交差の理由（Overlap）で起動の列に留まり、 typed な介入（first / hold / release）のうち first の印を持つ契約が契約の priority の高い契約より先に起き、 同じ介入では priority の高い契約が先に起き、 同じ介入と priority の契約は起票順に起き、 hold の契約は起きず release で戻り、 2 席の管理 tick が同時に撃たれても、 管理 tick と land の直後が重なっても起こす便が二重にならず（重複起動 0・起動試行を母集団）、 台帳が読めない周は 1 本も起こさず unmeasured の 1 行が出る（列挙した契約数と起こした便数を母集団として出す）, metric_v: 自動起動 1/1 + 段の遷移 1/1 + 同じ契機 N/N（最大値の範囲内） + 最大値の待ち 1/1 + 交差の待ち 1/1 + first 1/1 + priority 1/1 + 起票順 1/1 + hold / release 2/2 + 契機の重なりの重複起動 0/2 + unmeasured 1/1 + 母集団 = 列挙 N / 起動 M, metric_l: dispatcher の自動起動, links: [FR68] }
   - { id: AC39, criterion: Spawned の段で偽の runner を kill した便に resume を撃つと、 同じ worktree で runner が起き直り途中再開の節に前の runner の未 commit の変更の file 名が載り、 生きている偽の runner を持つ便は typed に断られて runner が 2 本にならない（試行した便数を母集団として出す）, metric_v: 起こし直し 1/1 + 未 commit の一覧 1/1 + 生存の断り 1/1, metric_l: runner が死んだ便の起こし直し, links: [FR37] }
+  - { id: AC40, criterion: 閾値未満の口座の候補が 0 の fixture で席の起動と立て直しが断られずに逼迫度が最小の口座で席を起こし、 妥協の理由が実効の記録と起動の記録と席の指示文に載り、 他の役割の口座との同居は自前の候補が 1 つも無い周だけに起き、 上限に当たっていない測れた口座が 0 の周だけ typed に断られ、 同じ役割の 2 席（置き場が別）が同じ実効の記録の口座に揃い、 宣言の口座に余裕が戻っても記録の口座に留まる（試行した起動の数を母集団として出す）, metric_v: 妥協の起動 2/2 + 理由の記録 3/3 + 同居の限定 1/1 + 全口座が上限の断り 1/1 + 同じ口座への揃い 1/1 + 居続け 1/1, metric_l: 妥協の起動と実効の口座, links: [FR69, FR38, FR59] }
+  - { id: AC41, criterion: 強制と名指された窓が閾値以上の席へ管理 tick が退避の合図を送る周に印が書かれ、 印の在る席の編集・Bash・agent を起こす tool の呼出が理由付きで断られて退避の口と heartbeat と退避の入力の置き場への書き込みは通り、 強制でない窓だけが閾値以上の席には印が書かれず、 印は退避物の書き込み・立て直し・閾値未満の計測の 3 周で外れ、 別の席の印だけが在る周と印が無い周は通り、 印が無い周は tmux を 1 度も撃たない（断った呼出と通した呼出の数を母集団として出す）, metric_v: 印の書き 1/1 + 断り 3/3 + 通す操作 3/3 + 強制でない窓 1/1 + 印を外す周 3/3 + 他席と無印 2/2 + tmux の呼出 0, metric_l: 強制サイクル の guard, links: [FR70, FR38] }
+  - { id: AC42, criterion: 実口座の記録が登録 row の口座と違う席の管理 tick が、 口座を起点とする退避の合図と打刻の合図を送らず判定の記録に両方の口座を載せ、 登録 row は書き換わらず、 止まった席の立て直しは通り、 席の指示文と復元の DATA に食い違いの 1 行が出て、 実口座の記録が無い席と一致する席は従来どおりに動く（撃った tick の数を母集団として出す）, metric_v: 合図の停止 2/2 + 記録の両口座 1/1 + row 不変 1/1 + 立て直しの通過 1/1 + 表示 2/2 + 従来どおり 2/2, metric_l: 実口座の食い違いの検出, links: [FR71, FR38] }
 requirements:
   - id: FR1
     type: FR
@@ -545,7 +551,7 @@ requirements:
     ears:
       pattern: ubiquitous
       condition: 常時
-      response: 口座は、 manifest に宣言した口座（退役中の口座は FR58 で候補から外れ、 便用は席の登録 row を持つ口座と役割の口座（host の根の宣言）を除く）と実測した口座残量（FR33）だけから決定的に選び、 便用（口座残量を使い切る側）と開発 session 用（余裕を残す側）の 2 つの規則を持ち、 規則の値は rules 行 R-C9-1（user 裁定で発効）だけから取る
+      response: 口座は、 manifest に宣言した口座（退役中の口座は FR58 で候補から外れ、 便用は席の登録 row を持つ口座と役割の口座（host の根の宣言と実効の記録）を次の選定から除き、 走行中の便は止めない）と実測した口座残量（FR33）だけから決定的に選び、 便用（7 日窓の reset の早い口座から使い切る側）と開発 session 用（逼迫度が最小の口座を選び余裕を残す側）の 2 つの規則を持ち、 規則の値は session 用の閾値の rules 行（窓ごと・user 裁定で発効）だけから取る
   - id: FR37
     type: FR
     label: 別口座での途中再開
@@ -563,11 +569,11 @@ requirements:
     priority: should
     vmethod: T
     rationale_source: N-1
-    trace: { backward: [N-1, N-3], acceptance: [AC13, AC32] }
+    trace: { backward: [N-1, N-3], acceptance: [AC13, AC32, AC40, AC41, AC42] }
     ears:
       pattern: state
-      condition: 開発 session の口座の窓（5 時間・7 日・モデル別 7 日）の使用率が session 用の rules 行の閾値以上である間、 または席の登録 row の口座が役割の口座の宣言（在り、 かつ使える周）と違う間
-      response: 管理 tick は FR29 と同じ除外（退避物が在る周・cycle が走っている周は注入しない）の下で idle を待たずに退避の合図を注入し、 session が退避して止まった後は役割の口座（使える周）か FR36 で選んだ別の口座で session を立て直して復元の command を注入する（FR28）
+      condition: 開発 session の口座の窓（5 時間・7 日・モデル別 7 日）のどれかの使用率がその窓の session 用の rules 行の閾値以上である間、 または席の登録 row の口座が役割の実効の口座（使える周）と違う間
+      response: 管理 tick は FR29 と同じ除外（退避物が在る周・cycle が走っている周は注入しない）の下で idle を待たずに退避の合図を注入し（閾値以上でも移れる口座の候補が無い周は、 退避の合図の代わりに妥協の通知を同じ口座・同じ窓につき 1 回だけ注入する）、 session が退避して止まった後は役割の実効の口座で session を立て直して復元の command を注入する（FR28）。 役割の実効の口座は host の根の実効の記録が持ち（記録が無い周は役割の口座の宣言を種にし、 どちらも使えない周だけ役割単位で 1 回 FR36 の session 用の規則で選び直して記録を書き換える）、 同じ役割の席は project をまたいで同じ記録の口座に揃い、 その口座が閾値以上になるまで居続ける（候補が無い周の起動は FR69）
   - id: FR39
     type: FR
     label: intake の排他
@@ -633,7 +639,7 @@ requirements:
     ears:
       pattern: ubiquitous
       condition: 常時
-      response: 開発 session の席どうしの連絡は席の入力欄を経由しない経路で届け、 届いたことは端末の描画でなく経路自身の記録で確かめ、 入力欄への注入は器の管理 tick の合図（打刻・退避）と復元の command にだけ使う
+      response: 開発 session の席どうしの連絡は席の入力欄を経由しない経路で届け、 届いたことは端末の描画でなく経路自身の記録で確かめ、 入力欄への注入は器の管理 tick の合図（打刻・退避・妥協の通知）と復元の command にだけ使う
   - id: FR45
     type: FR
     label: 権能の執行
@@ -799,11 +805,11 @@ requirements:
     priority: must
     vmethod: T
     rationale_source: N-1
-    trace: { backward: [N-1, N-3], acceptance: [AC29, AC30, AC33] }
+    trace: { backward: [N-1, N-3], acceptance: [AC29, AC30, AC33, AC40] }
     ears:
       pattern: event
       condition: 器の口から席の起動が要求されたとき
-      response: 器は席の役割を必須で受け、 口座を、 役割の口座（宣言が在り、 かつ使える周）が在る周はその口座に決め（引数が在って役割の口座と違う周は typed に断る）、 それ以外の周は引数か session 用の口座選定（FR36）で決め、 起動行を手書きの起動の雛形を読まずに導出し（起動行の構成は決定記録が正本）、 席の登録（FR40）を起動の前に書き、 立て直し（FR38）と同じ経路で target の窓の shell へ起動行を差し込み、 窓が無ければ作り tmux の session は作らず、 tmux の session が無い・入力欄に文字が在る・口座の候補が無い・口座が退役中・引数の口座が役割の口座と違うのいずれかでは typed に断り key を 1 つも送らない
+      response: 器は席の役割を必須で受け、 口座を、 役割の実効の口座（FR38 と同じ 1 本の解決・使える周）が在る周はその口座に決め（引数が在って役割の実効の口座と違う周は typed に断る）、 それ以外の周は引数か session 用の口座選定（FR36・閾値未満の候補が無い周は FR69）で決め、 起動行を手書きの起動の雛形を読まずに導出し（起動行の構成は決定記録が正本）、 席の登録（FR40）を起動の前に書き、 立て直し（FR38）と同じ経路で target の窓の shell へ起動行を差し込み、 窓が無ければ作り tmux の session は作らず、 tmux の session が無い・入力欄に文字が在る・上限に当たっていない測れた口座が 1 つも無い・口座が退役中・引数の口座が役割の実効の口座と違うのいずれかでは typed に断り key を 1 つも送らない
 
   - id: FR60
     type: FR
@@ -911,6 +917,39 @@ requirements:
       pattern: event
       condition: 管理 tick が撃たれたとき（FR64・席の判定とは独立に 1 周）、 または便が Landed に達したとき（FR50）
       response: 器の dispatcher は起動の列（審査（FR49）の verdict が現在の契約の中身（sha）で PASS の契約の並び）を planner の介入 first → 契約の priority → 起票順で評価し、 台帳の依存が閉じ ∧ 終端でない段の便と write-set が交差せず（FR39 と同じ判定）∧ 受付（write-set の余地・host の memory の枠・同時走行の最大値〔rules 行 pipe.max_live・値は user 裁定 id 付き〕）を通る契約を、 席の操作なしに条件を満たす本数だけ起こし（本数の絞りは受付の host の memory の枠と同時走行の最大値が行い、 受付が最大値で断った契約は列に留めて理由を持つ）、 起動は通常の便の起動の段（受付 → 便の段 Reviewed → runner の起動）をそのまま通り起動の前に待機の段を持たず、 契機（管理 tick / Landed）が重なっても同じ契約を二重に起こさず、 同じ周で起こした便の write-set を次の候補の交差の相手に数え、 起こせない契約はまだ出ていない理由（依存 / 交差（Overlap）/ 受付 / 同時走行の最大値 / hold）を閉じた型で持って列に留め、 hold の契約は起こさず release で戻し、 介入を起動の列の記録として残し、 起動では同じ中身の契約の記帳した verdict で便の段（Reviewed）を埋めて lens を撃ち直さず、 verdict が PASS でない契約の runner を起こさず、 台帳が読めない周は 1 本も起こさず測れなかったことを記帳する
+  - id: FR69
+    type: FR
+    label: 妥協の起動
+    priority: must
+    vmethod: T
+    rationale_source: N-1
+    trace: { backward: [N-1, N-3], acceptance: [AC40] }
+    ears:
+      pattern: unwanted
+      condition: 開発 session の起動か立て直しで、 session 用の閾値未満の口座の候補が 1 つも無いとき
+      response: 器は席を断らず、 上限に当たっていない測れた口座のうち逼迫度が最小の口座（他の役割の口座を除いて探し、 それも無い周に限り他の役割の口座との同居を候補に入れる）で席を起こし、 妥協の理由を閉じた型で役割の実効の記録と起動の記録に残し、 席の指示文に妥協の口座で立ったことと理由を出して、 席が作業を止め対話面で user の裁定を待つようにする。 上限に当たっていない測れた口座が 1 つも無い周だけは typed に断る
+  - id: FR70
+    type: FR
+    label: 強制サイクル
+    priority: must
+    vmethod: T
+    rationale_source: N-1
+    trace: { backward: [N-1, N-2], acceptance: [AC41] }
+    ears:
+      pattern: state
+      condition: 席に強制サイクル の印が在る間（rules 行が強制と名指す窓の使用率が閾値以上になり、 管理 tick が退避の合図を送ると決めた周に器が書く）
+      response: 器の hook は、 退避に要る操作（退避の口・heartbeat・退避の入力の置き場への書き込み）を除くその席の編集・Bash・agent を起こす tool の呼出を、 次の手を運ぶ理由付きで断り、 印は退避物が書かれた周・立て直しの周・管理 tick が強制の窓を閾値未満と測った周に可逆な move で外し、 印が在るのに自席を解けない周は通して理由を記録に残す
+  - id: FR71
+    type: FR
+    label: 席の実口座の食い違いの検出
+    priority: must
+    vmethod: T
+    rationale_source: N-3
+    trace: { backward: [N-1, N-3], acceptance: [AC42] }
+    ears:
+      pattern: unwanted
+      condition: 開発 session の実口座（session の開始時に器が測って出所付きで記録した口座）が席の登録 row の口座と違うとき
+      response: 管理 tick は口座を起点とする退避の合図と打刻の合図を送らず、 登録 row の口座と実測の口座の両方を判定の記録に載せて判定不能として扱い、 登録 row を実測の値で書き換えず、 止まった席の立て直しは従来どおり通し、 席の指示文と復元の DATA に食い違いを出す
 
 nfr:
   - { id: NFR1, type: NFR, label: lens 予算,   category: 性能, target: 1 lens は 0.15M token 以内（目標値）,                                measure: lens 起動時の diff byte と cap の照合を verdict に記録,        vmethod: T, trace: { backward: [N-2], acceptance: [AC3] }, hero: { cat: 予算, big: "0.15", unit: M token, qual: lens 1 本あたりの上限 } }
@@ -1005,4 +1044,9 @@ glossary:
   - { term: 口座の登録,     en: account registration,   plain_short: 口座を器に足すこと,       def: 器の subcommand が口座の設定 dir・席の前提の設定・host の面の宣言を揃え、 login 用の起動 command を user へ渡すこと（FR58）。 login は user の手番で、 器は credential に触れない。 退役と復帰も同じ subcommand が担う。 }
   - { term: 席の起動,       en: seat launch,            plain_short: 器の subcommand で席を起こすこと, def: 役割を必須に受け、 口座を決め、 起動行を導出し、 席の登録を先に書いて target の窓の shell へ差し込むこと（FR59）。 立て直しと同じ経路で、 器の subcommand 以外の起動経路を使わない。 }
   - { term: 同時走行の最大値, en: live run cap,           plain_short: 同時に走らせる便の最大本数, def: host で同時に走らせる便（終端でない段の便）の最大本数。 値は rules 行 pipe.max_live だけが持ち（user 裁定 id 付き）、 受付が終端でない便を数えて最大値以上の周は typed に断り、 その契約は起動の列に留まる（FR68）。 走っている便は止めない。 }
-  - { term: host の根,       en: host root,              plain_short: 同じ host の全 project が共有する置き場, def: state dir の親の下に在る host 用の dir。 同じ host の全 project が共有し、 役割の口座の宣言 file（役割ごとに高々 1 つの口座 label・FR36 / FR38 / FR59）がここに在る。 host の面（project ごとの state dir の 1 file）とは別。 state の真実は置かない。 }
+  - { term: host の根,       en: host root,              plain_short: 同じ host の全 project が共有する置き場, def: state dir の親の下に在る host 用の dir。 同じ host の全 project が共有し、 役割の口座の宣言 file（役割ごとに高々 1 つの口座 label・FR36 / FR38 / FR59）と役割の実効の記録がここに在る。 host の面（project ごとの state dir の 1 file）とは別。 }
+  - { term: 実効の口座,     en: effective role account, plain_short: その役割がいま使う口座,   def: 役割の席がいま使うと器が解いた口座。 実効の記録が在ればその口座、 無ければ役割の口座の宣言を種にし、 どちらも使えない周だけ役割単位で 1 回選び直す（FR38・ADR-0041）。 同じ役割の席は project をまたいで同じ口座に揃う。 }
+  - { term: 実効の記録,     en: effective record,       plain_short: いま使う口座の記録,       def: 器が host の根に書く、 役割ごとに高々 1 件の記録（役割・口座 label・時刻・妥協の理由）。 人が書く役割の口座の宣言とは別の file で、 書き換える周は前の記録を消さずに履歴の側へ移す（FR38・ADR-0041）。 }
+  - { term: 妥協の起動,     en: compromise launch,      plain_short: 余裕が無くても席を立てること, def: 閾値未満の口座の候補が無い周に、 上限に当たっていない中で逼迫度が最小の口座、 それも無ければ他の役割と同居の口座で席を起こすこと。 理由を記録と席の指示文に出し、 席は作業を止めて user の裁定を待つ（FR69・ADR-0041）。 }
+  - { term: 妥協の通知,     en: compromise notice,      plain_short: 移れる口座が無いという合図, def: 席の口座が閾値以上なのに移れる口座の候補が無い周に、 管理 tick が退避の合図の代わりに同じ口座・同じ窓につき 1 回だけ送る合図。 受けた席は作業を止めて user の裁定を求める（FR38・ADR-0041）。 }
+  - { term: 強制サイクル,     en: forced cycle,           plain_short: 退避だけを通す状態,       def: rules 行が強制と名指す窓が閾値以上になった席に器が印を書き、 印が在る間は退避に要る操作以外の編集・Bash・agent を起こす tool の呼出を hook が断る状態（FR70）。 印は退避・立て直し・閾値未満の計測で外れる。 }
