@@ -16,16 +16,6 @@
 - **本文の形**: **TOML subset の `[[contract]]` の表**（rules manifest と同じ parser・ADR-0004 §2.3。現物の parser は `[[rule]]` / `[[account]]` の 2 種だけを受け**空の配列を拒む**ので、array-of-tables の種類に `[[contract]]` を 1 つ足し〔C2・variant 1 つ〕、**空の列は key を省いて表す**〔`touches` / `depends` が無い行 = 空・空配列の拒否は緩めない〕）。**置き場は 2 形を同じ読み手で受ける**: (i) 記録時点 = 設計 doc（`docs/design/<題>.md`）の末尾の機械が読む区間 `
 
 <!-- contracts:begin -->` … `
-
-[[contract]]
-id = "ab"
-title = "歯の置き場が verify 行の scope を閉じた 3 値で読む — --test <name> の行は統合 test の file だけ、--lib の行は src の file だけを置き場に数え、読めない旗と複数の旗は従来どおり crate 全体"
-req = ["FR48"]
-section = "28"
-write-set = ["crates/scribe2/src/pipe/closure.rs", "crates/scribe2/src/pipe/closure/derive.rs"]
-verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail closure_scope_"]
-size = "S"
-done = "--test の行が統合 test の file だけを、--lib の行が src の file だけを置き場に返し、旗なしと読めない旗と 2 つ以上の旗の行は crate 全体のまま、0 本の行は従来の字面で断られ、現物の契約表は findings 0"
 <!-- contracts:end -->`（CLAUDE.md の憲法区間と同じ marker 形・行走査で区間を抜いて同じ parser に渡す・設計 doc 1 本に区間は 0 か 1 つ）(ii) 後続 = folio2 が設計ノート（YAML 正本）から導出する tracked な `.toml` 1 file（全文を同じ parser に渡す・folio2 planner との擦り合わせ 2026-09-13・scribe2 側は path を差し替えるだけ）。読み手は path の拡張子（`.md` = 区間 / `.toml` = 全文）で形を決め、それ以外は typed に断る。
 - **契約 id** = `<doc id>#<row id>`（doc id = file 名の stem・row id = 行の `id`・folio2 の設計ノートと同じ形）。doc id は **append-only**（file を改名しても id は変えない＝改名は新 id + 旧 id の廃止・folio2 へ移すとき設計ノートの meta.id に同じ文字列を写す）。
 - **行の field**（**正本は core の型** = `pipe/table.rs` の const・`<NAME> contracts schema` が tracked な生成物 `contracts/schema.toml` へ描き〔hooks.json / 極性一覧と同型・xtask check が render と tracked の差分 0 を測る〕・本節はその pointer・folio2 M1 はその file を「外部 schema 参照型」として読む＝欄の追加は scribe2 の版上げで folio2 の ADR は要らない。現物の契約 file の REQUIRED 9 欄との共通は 5 欄〔req / write-set / verify / size / done〕で 1:1 ではない）: `id`（doc 内で一意・`a` `b` …）/ `title` / `req`（要件 id の列）/ `section`（本 doc の節 anchor・生成時に節の本文を `goal` へ写す＝説明文を二重に書かない）/ `touches`（閉じた型の宣言の列・`crate::fleet::Stage` の形・空可・§3）/ `write-set`（path の列）/ `verify`（positional filter 形の列・`(` を含まない）/ `size` / `done`（1 行）/ `depends`（同 doc の契約 id の列・順序・床が解決と輪の無さを数える）/ `classes`（optional・既存）/ `opens`（optional・[seat-roles.md](./seat-roles.md) 契約 (b) が足す印・(b) の land までは未知 key として断る）。**散文の欄は `title` と `done` の 2 つだけ**（他は id / path / 型名 / 命令の識別子・folio2 の床〔語彙に無い裸の英字語 0〕はこの 2 欄に掛かる・括弧の中は免除。数 + 単位の検査は散文一般には掛けず「規範の印を持つ文」にだけ〔§12〕）。`section` は同じ doc の **節番号（`§N` の N・append-only・見出しの字面ではない）** で、`contracts check` は `## N.` の見出しが在り本文が非空であることを見る。`goal` は optional: (ii) の導出 file は各行に `goal`（節の本文の逐語・正本が YAML へ移ると節の本文の在り処が YAML になる）を運び、(i) の区間では書かず生成時に section の本文を写す。写す形は**単一行**（各行を trim し空行を落とし空白 1 つで繋ぐ・`"` と `\` は escape しない）＝契約 file の読み手は共有の scalar の読み手で、escape を解かず複数行の値も扱わない（`.209` run 10 の実測 2026-09-16）。審査の材料 `{design}` は行の `section` から節の本文をそのまま読むので、契約 file の `goal` の単一行化は審査の材料を薄めない。`schema = 1` は両形とも先頭に置く（rules manifest と同じ parser の前提）。**契約表の意味検査（id / req / section / depends / 閉包）は scribe2 の 1 関数（編集時・fail-closed）だけが持つ**。folio2 が持つのは器・導出・導出物の差分 0（post の drift 検出・C16 の代替ではない）。`owner` / `disposition` は生成時に固定値（現物の contract.rs が要求する field を埋める）。
@@ -530,6 +520,16 @@ write-set = ["crates/scribe2/src/pipe/closure.rs", "crates/scribe2/src/pipe/clos
 verify = ["cargo nextest run -p scribe2 --no-tests=fail contract_prose_teeth_", "cargo nextest run -p scribe2 --lib --no-tests=fail prose_closure_", "cargo nextest run -p scribe2 --lib --no-tests=fail refuse_derive_reasons_are_last_and_name_their_payload"]
 size = "M"
 done = "goal / done が名指す base の歯が verify の filter に当たらない契約と、その歯の file・判定行 token を pin する file が write-set に無い Declared 契約を受付が名を全部名指して断り、Derived 契約は導出値にその file が入り、新しい名と base に無い token は判定されず既存 6 形の導出値は不変"
+
+[[contract]]
+id = "ab"
+title = "歯の置き場が verify 行の scope を閉じた 3 値で読む — --test <name> の行は統合 test の file だけ、--lib の行は src の file だけを置き場に数え、読めない旗と複数の旗は従来どおり crate 全体"
+req = ["FR48"]
+section = "28"
+write-set = ["crates/scribe2/src/pipe/closure.rs", "crates/scribe2/src/pipe/closure/derive.rs"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail closure_scope_"]
+size = "S"
+done = "--test の行が統合 test の file だけを、--lib の行が src の file だけを置き場に返し、旗なしと読めない旗と 2 つ以上の旗の行は crate 全体のまま、0 本の行は従来の字面で断られ、現物の契約表は findings 0"
 <!-- contracts:end -->
 
 
