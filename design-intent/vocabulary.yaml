@@ -613,8 +613,8 @@ terms:
     relationships: [口座残量, 口座, 口座選定]
   - canonical: 口座選定
     domain: consumer
-    definition: manifest の口座と実測の口座残量から 1 本の純関数が口座を選ぶこと (SRS FR36・ADR-0020 §2.2)。 便用 (使い切る側・reset が最も近い口座から・同点は走行中の便が少ない口座・1 口座あたりの便数で候補を絞らない・ADR-0027 §2.1 / §2.2) と session 用 (余裕を残す側) の 2 規則を持ち、 値は rules 行 R-C9-1。
-    relationships: [口座, 口座残量, rules 行, 上限停止]
+    definition: manifest の口座と実測の口座残量から 1 本の純関数が口座を選ぶこと (SRS FR36・ADR-0020 §2.2)。 便用 (使い切る側・7 日窓の reset が最も近い口座から・同点は走行中の便が少ない口座・1 口座あたりの便数で候補を絞らない・ADR-0027 §2.1 / §2.2・1 つ目の鍵は ADR-0042) と session 用 (余裕を残す側) の 2 規則を持ち、 値は rules 行 R-C9-1。
+    relationships: [口座, 口座残量, rules 行, 上限停止, 便用の並べ鍵]
   - canonical: 導入先
     domain: consumer
     definition: scribe2 の plugin を install した利用側の repo と worktree（install 帳簿が指す場所）と、 席の登録 row の anchor（SRS FR61）。 folio の語彙 schema の domain tag consumer（scribe2 所有の語の印）とは別物。
@@ -769,3 +769,8 @@ terms:
     aliases: [compromise launch]
     definition: 役割の口座を選び直す周に閾値未満の候補が無いとき、 断らずに席を立てること。 段は 2 つ = 閾値以上でも当たっていない口座の中で逼迫度が最小 (over-threshold)、 それも無ければ他の役割の口座との同居も入れて逼迫度が最小 (shared-with-role)。 理由は実効の記録・launch / relaunch の記録の行・SessionStart の席の指示文に出て、 席は作業を止めて対話面で user の裁定を待つ。 既に立っている席が閾値以上で選び直しの候補が無い周は、 管理 tick が退避の合図の代わりに妥協の通知を同じ口座・同じ窓につき 1 回だけ注入する。 当たっていない測れた口座が 1 つも無い周だけは断る。 妥協でない周の同居は不可 (ADR-0041・設計 docs/design/seat-roles.md §18)。
     relationships: [実効の口座, 実効の記録, 口座選定, 席の指示文, 対話面]
+  - canonical: 便用の並べ鍵
+    domain: consumer
+    aliases: [run ordering key]
+    definition: 便用の口座選定が候補を並べる比較の値の組。 1 つ目 = 口座単位の 7 日窓の古くない最新の実測行が持つ reset 時刻 (早い順・その reset を持たない口座は候補のまま最後)、 2 つ目 = 走行中の便数 (少ない順)、 3 つ目 = label (辞書順)。 5 時間窓とモデル別 7 日窓の reset は鍵に使わず、 それらの窓は当たっている口座を候補から外す判定にだけ効く。 session 用の順序 (逼迫度が最小) とは別 (ADR-0042・ADR-0027 §2.2 の 1 つ目の鍵を supersede・設計 docs/design/account-autonomy.md §19)。
+    relationships: [口座選定, 口座残量, 実測行, 上限停止]

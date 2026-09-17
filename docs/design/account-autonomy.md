@@ -153,6 +153,15 @@ C1 / C5（R-C9-1 は行・裁定 id）・C2（`Purpose` / `Selection` / `Stage` 
 - 歯（`pipe_ratelimit_fresh_` 接頭辞・`tests/e2e/pipe/ratelimit.rs`・既存の偽 curl `fake_usage_curl` と `curl_calls` / `put_account` / `resume_with_accounts` を再利用）: 同じ置き場で 2 便を続けて resume すると 2 便目の偽 curl の呼出が増えない（母集団 = 1 便目の呼出 = 口座数）／rules 行より古い ts の実測の口座は測り直される（呼出 +1）／reset を待った後の撃ち直しは全口座を測る（既存の `pipe_ratelimit_resume_waits_for_the_earliest_reset_then_remeasures` の fixture で待ちの後の呼出が口座数だけ増える）／`pipe run` の初回の起動も新しい実測の口座を測り直さない。
 - 却下: dispatcher が周 1 回だけ測り全便へ同じ実測を渡す（dispatcher に計測の口を持たせる＝FR33 の計測の呼び手が 3 つ目になり、dispatcher を経ない `pipe run` と挙動が分かれる）／`choose_account` に独自の鮮度（別の rules 行）を持たせる（値の線が 2 本）／IP 単位の 429 の backoff（前提の 429 は未認証 curl の偽信号・器の経路の 429 は token 単位で §13 (3) が受ける・壁時計の sleep は §13 で却下済）。
 
+## 19. 便用の並べ鍵の 1 つ目は 7 日窓の reset の早い順 — 5 時間窓とモデル別窓は鍵にしない（[ADR-0042](../../design-intent/decisions/ADR-0042-run-account-order-is-earliest-seven-day-reset.html)・契約表の行 p・`s2-07l.439`）
+
+- 何が起きているか（現物・main 3f1eec8・verified）: §3 の便用の 1 つ目の鍵は「数える窓（5 時間 / 7 日 / モデル別 7 日）の reset の最も早いもの」。`fleet/select.rs` の `reading` が口座の読み `Reading` の `earliest` に全部の数える窓の `resets_at` の最小を入れ、`standing` が候補 `Candidate` の `reset` へ写し、`run_key` が `(reset が無い, reset, 走行中の便数, label)` で並べる。5 時間窓が reset を持つ口座では、7 日窓の reset が 5 時間窓の reset より手前に迫った周を除いて 5 時間窓の reset が最小になる＝並びは実質 5 時間窓の reset の順。7 日窓の枠は reset までに使わなければ消え、開き直りは週に 1 回なので、消える順に使うなら見る窓は 7 日窓。user 裁定 2026-09-17T06:10Z（論点 A・逐語は台帳 `s2-07l.436`）と同日 06:2xZ（逐語は台帳 `s2-07l.439`）: 便用は 7 日窓の reset が近い口座から順に使い潰す。
+- 形: (1) **1 つ目の鍵** = 口座単位の 7 日窓（`WindowKind` の 7 日窓の variant・モデル別 7 日窓ではない）の古くない実測（`fresh_windows` が返す行のうち窓の種類が 7 日窓の行）の `resets_at` の昇順。その値を持たない口座（7 日窓が消費の無い窓で reset 未定・ADR-0024、または 7 日窓の実測が reset を過ぎて `fresh_windows` から落ちた周）は**候補のまま最後**（`run_key` の先頭の `bool` の意味は従来どおり「鍵の reset を持たない」）。(2) 2 つ目以降（走行中の便数 → label）と `run_key` の tuple の形は不変＝変わるのは `reading` が鍵の reset を導く 1 か所（全部の窓の最小 → 7 日窓の行の値）と、`Reading` / `Candidate` の欄の名と doc comment。(3) **5 時間窓・モデル別窓は鍵にしない**: それらの窓は逼迫度と「当たっている」の判定（`standing`）にだけ効き、当たっている口座は従来どおり候補から外れるだけ。(4) **窓の種類の弁別は現物の型**: `Measured` は `window`（`WindowKind`・`fleet/mod.rs` の閉じた enum・3 variant）を持ち、`counts` が既に同じ enum でモデル別窓を弁別している＝7 日窓を名指すのに新しい型・`Input` の欄・rules 行は要らない。
+- **席用と便用は順序が別**: 席用は session 用の既存の順序（`prefer` → 逼迫度が最小＝余裕が最大 → label・`pick` の session 側）のままで、7 日窓の reset を読まない。便用は 7 日窓の reset の早い順に使い切る。用途の分岐（`pick`）で分かれている（[seat-roles.md](./seat-roles.md) §17 (4) と同じ言い方・同 § の「便用は reset の早い順」は本 § の後は 7 日窓の reset と読む）。
+- 触らない: `Input` の欄と構築点・`Selection` / `NoCandidate`（候補なしの周の `earliest_reset` は `reopens`＝当たっている窓の reset の遅い方の最小のままで、待ち §4 に渡す値は変わらない）・`standing` の判定の順（除外 → 測れない → 当たっている → 閾値）・`fresh_windows` / `latest_round` / `counts`・session 用の順序と R-C9-1・`fleet select` の stdout の 1 行形・event の形・replay・§13 / §18 の鮮度・§14 の除外。
+- 歯（`fleet_select_week_` 接頭辞・`tests/e2e/fleet.rs`・`fleet_select_run_prefers_earliest_reset_over_pressure` と同じ偽 curl の口座ごとの本文で 5 時間窓と 7 日窓の reset を別々に置く）: 7 日窓の reset が早い口座が、5 時間窓の reset が早い別の口座より先に選ばれる（base は 5 時間窓の早い口座を選ぶ → RED）／同じ表で `--purpose session` の答えは変わらない（逼迫度の最小）。in-file（`select_run_week_` 接頭辞・`fleet/select.rs` の歯の module）: 7 日窓の reset が同じなら走行中の便数 → label（5 時間窓の reset の差は並びに効かない）／7 日窓が reset を持たない口座は 5 時間窓に reset が在っても最後で、候補が 1 つならその口座を選ぶ／7 日窓の実測が reset を過ぎた口座も最後（候補からは外れない）／モデル別 7 日窓の reset が早くても鍵にならない／席用の答えは同じ表で変わらない。**既存の歯の側**: in-file の `select_run_prefers_the_earliest_reset`（「窓の種類を問わず最小の reset」と「過ぎた reset は鍵にならない」の段）と `select_run_breaks_ties_by_fewer_inflight_runs`（「reset が便数より先」の段は 5 時間窓の reset の差で立てている）は head で赤になる＝7 日窓の reset の差で立て直す。prop の `prop_select_run_choice_has_the_earliest_reset_then_fewest_inflight` は振り方 `Spec` の `soon` が 5 時間窓の reset だけを動かし `run_key_of` がそれを鍵に読むので、`world` が 7 日窓の reset を動かす形と `run_key_of` を合わせて直す（性質 = 並べ鍵がどの候補にも上回られない・候補なしの答えは便数に依らない、は保つ）。`select_run_ignores_prefer`・入力順の不変・session 用の prop は性質を保つ。e2e の `fleet_select_run_prefers_earliest_reset_over_pressure` は末尾の段（5 時間窓の reset を近くした口座へ動く）が赤になる＝7 日窓の reset で立て直す。pipe の e2e（`tests/e2e/pipe/ratelimit.rs` の `usage_body`）と席の e2e は 5 時間窓と 7 日窓の reset を同じ値で置くので並びが変わらない（grep で実測・snapshot に並びの字面は無い）。
+- 却下（ADR-0042 の写しは持たない・設計固有のもの）: `Input` に「鍵にする窓」の欄を足す（構築点 6 か所と `prop.rs` を動かす・用途で決まる値を入力に出す理由が無い）／`Reading` に `earliest` を残して 7 日窓の欄を足す（読み手の無い欄が残る）／7 日窓の reset を持たない口座を 5 時間窓の reset で並べ直す（鍵が 2 窓の合成になり ADR-0042 の OPT3 と同じ穴）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -247,4 +256,14 @@ verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_ratelimit_fresh_"]
 size = "S"
 done = "pipe run / resume / 追随の起こし直しの初回の前計測が新しい実測の口座を測り直さず、待ちと Timeout の後の撃ち直しは全口座を測り、rules 行は増えない"
 depends = ["j"]
+
+[[contract]]
+id = "p"
+title = "便用の並べ鍵の 1 つ目を 7 日窓の reset の早い順にする — 7 日窓の reset を持たない口座は最後・5 時間窓とモデル別窓は鍵にしない・席用の順序と候補の判定は不変（ADR-0042）"
+req = ["FR36", "FR33"]
+section = "19"
+write-set = ["crates/scribe2/src/fleet/select.rs", "crates/scribe2/tests/e2e/fleet.rs"]
+verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail fleet_select_week_", "cargo nextest run -p scribe2 --lib --no-tests=fail select_run_week_"]
+size = "S"
+done = "便用の選定が 7 日窓の reset の早い口座を 5 時間窓の reset の早い口座より先に選び、7 日窓の reset が同じなら走行中の便数 → label、7 日窓の reset を持たない口座は候補のまま最後で、同じ表の席用の答えと候補なしの周の earliest_reset は変わらない"
 <!-- contracts:end -->
