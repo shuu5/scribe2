@@ -297,7 +297,7 @@ title = "session 用の閾値の行 R-C9-1 の値を 95 に上げる — 値と�
 req = ["FR36", "FR38"]
 section = "13"
 write-set = ["rules/manifest.toml", "crates/scribe2/tests/e2e/rules.rs", "crates/scribe2/tests/e2e/snapshots/e2e__rules__rules_external_form.snap", "crates/scribe2/tests/e2e/seat.rs", "crates/scribe2/tests/e2e/seat/account.rs", "crates/scribe2/tests/e2e/seat/cycle.rs", "crates/scribe2/tests/e2e/fleet.rs"]
-verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail rules_embedded_manifest_declares_account_selection_threshold", "cargo nextest run -p scribe2 --test e2e --no-tests=fail rules_external_form", "cargo nextest run -p scribe2 --test e2e --no-tests=fail seat_account_"]
+verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail rules_embedded_manifest_declares_account_selection_threshold", "cargo nextest run -p scribe2 --test e2e --no-tests=fail rules_external_form", "cargo nextest run -p scribe2 --test e2e --no-tests=fail seat_account_relaunch_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail seat_account_tick_"]
 size = "M"
 done = "埋め込み manifest の R-C9-1 が値 95 と裁定 id user 2026-09-17T07:30Z を持ち、rules get R-C9-1 の外形が 95 を出し、読み手と選定の code は不変"
 <!-- contracts:end -->
