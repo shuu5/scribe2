@@ -136,8 +136,13 @@ terms:
     relationships: [manifest, 裁定 id, 検出線]
   - canonical: 裁定 id
     domain: consumer
-    definition: user 裁定を一意に指す id (transcript の ts)。 rules 行の変更 (C5)、 閾値変更 (A2)、 憲法改訂 (N4) が要求する。
-    relationships: [rules 行, 対話面, 承認 event]
+    definition: user 裁定を一意に指す id。 器が打った裁定 event (RulingReceived) の ts (UTC・ADR-0037) で、 rules 行の ruling 欄が user <ts> の形で指し、 doctor が同じ分の event の有無を読む。 rules 行の変更 (C5)、 閾値変更 (A2)、 憲法改訂 (N4) が要求する。
+    relationships: [rules 行, 対話面, 承認 event, 裁定 event]
+  - canonical: 裁定 event
+    domain: consumer
+    aliases: [RulingReceived]
+    definition: 便 (run) を持たない裁定 (rules 行の値・閾値・方針) を逐語付きで残す event の kind (actor = human・bead と rules 行 id は任意)。 対話面の席の口 seat ruling add だけが書く (ADR-0037・設計 docs/design/fleet-event-log.md §9)。 便の不可逆操作の承認 (承認 event・ApprovalReceived) とは別の kind で、 到達点の計測では承認と同じ側に数える。
+    relationships: [裁定 id, 承認 event, 対話面, 直命の表, rules 行]
   - canonical: RuleKind
     domain: consumer
     definition: 規則の種類を閉じた列挙で表す enum。 網羅 match 必須で、 未実装は compile error (C1)。
@@ -737,6 +742,26 @@ terms:
     aliases: [planner intervention]
     definition: planner が起動の列の順番を動かす typed な印。 first (最優先へ)・hold (止める)・release (戻す) の 3 つで、 user の直命の対として記録され、 散文の順序を持たない (ADR-0034 §2)。
     relationships: [dispatcher, 起動の列, 直命の表]
+  - canonical: plugin の実体
+    domain: consumer
+    aliases: [plugin payload]
+    definition: Claude Code に渡す plugin の中身 = plugin.json (名乗り)・hooks.json (hook の一覧)・skills (復元と退避の作法) の 3 つ。 前 2 つは gen-manifest の生成物、 skills は tracked の実体。 生成 dir に置く (ADR-0038・設計 docs/design/seat-autonomy.md §14)。
+    relationships: [生成 dir, marketplace の source, hook, 導入先の同期]
+  - canonical: 生成 dir
+    domain: consumer
+    aliases: [generated plugin dir]
+    definition: plugin の実体を置く repo 内の dir。 置き場は core の定数 1 つが正本 (xtask は tracked の core から読む・NAME と同じ形) で、 gen-manifest が中身を起こし、 xtask check が tracked との drift 0 を測る。 器の作業物 (worktree 群・build 生成物・台帳) と同じ木に置かない (ADR-0038)。
+    relationships: [plugin の実体, marketplace の source, 席の起動]
+  - canonical: marketplace の source
+    domain: consumer
+    aliases: [marketplace source]
+    definition: marketplace.json の plugins[].source。 plugin の install はこの dir を丸ごと cache へ写す。 repo 全体 (./) でなく生成 dir を指す (ADR-0038)。 marketplace.json 自体は repo root の .claude-plugin に残る。
+    relationships: [生成 dir, plugin の実体, 再 install]
+  - canonical: 再 install
+    domain: consumer
+    aliases: [reinstall]
+    definition: marketplace の source が変わった後、 各口座 × project で plugin を入れ直す user の手番。 器は代筆せず、 古い install は doctor の導入先の行に古い root として出る (ADR-0038・SRS FR61)。
+    relationships: [marketplace の source, 導入先の同期, doctor]
   - canonical: 同時走行の最大値
     domain: consumer
     aliases: [live run cap]
