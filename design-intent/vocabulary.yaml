@@ -746,7 +746,7 @@ terms:
   - canonical: 役割の口座
     domain: consumer
     aliases: [role account]
-    definition: host の根の宣言 file (roles.toml) が役割ごとに高々 1 つ持つ口座 label (宣言値)。 席の起動と立て直しは使える周にその口座を選定の前に使い、 便用の選定は host 全体で候補から外し、 管理 tick は宣言と違う口座の席を退避と立て直しで移す。 書き換えは器の口 account reassign (ADR-0036・設計 docs/design/seat-roles.md §15 / §16)。
+    definition: host の根の宣言 file (roles.toml) が役割ごとに高々 1 つ持つ口座 label (宣言値)。 席の起動と立て直しが使う口座は実効の口座の解決が決め (実効の記録が無い周の種がこの宣言値・ADR-0041 が ADR-0036 の解決順を supersede)、 便用の選定は host 全体で候補から外す。 書き換えは器の口 account reassign (ADR-0036・設計 docs/design/seat-roles.md §15 / §16)。
     relationships: [役割, host の根, host の manifest, 席の登録 row, 口座選定, 立て直し]
   - canonical: host の根
     domain: consumer
@@ -768,7 +768,18 @@ terms:
     domain: consumer
     aliases: [compromise launch]
     definition: 役割の口座を選び直す周に閾値未満の候補が無いとき、 断らずに席を立てること。 段は 2 つ = 閾値以上でも当たっていない口座の中で逼迫度が最小 (over-threshold)、 それも無ければ他の役割の口座との同居も入れて逼迫度が最小 (shared-with-role)。 理由は実効の記録・launch / relaunch の記録の行・SessionStart の席の指示文に出て、 席は作業を止めて対話面で user の裁定を待つ。 既に立っている席が閾値以上で選び直しの候補が無い周は、 管理 tick が退避の合図の代わりに妥協の通知を同じ口座・同じ窓につき 1 回だけ注入する。 当たっていない測れた口座が 1 つも無い周だけは断る。 妥協でない周の同居は不可 (ADR-0041・設計 docs/design/seat-roles.md §18)。
-    relationships: [実効の口座, 実効の記録, 口座選定, 席の指示文, 対話面]
+    relationships: [実効の口座, 実効の記録, 口座選定, 席の指示文, 対話面, 妥協の通知]
+  - canonical: 妥協の通知
+    domain: consumer
+    aliases: [compromise notice]
+    definition: 既に立っている席の口座が閾値以上で、 選び直しの候補が無い周に、 管理 tick が退避の合図の代わりに同じ口座・同じ窓につき 1 回だけ席の入力欄へ注入する通知。 管理 tick の合図 (打刻・退避) とは別の類で、 受けた席は作業を止めて対話面で user の裁定を待つ (ADR-0041・設計 docs/design/seat-roles.md §18)。
+    relationships: [管理 tick, 退避の合図, 妥協の起動, 対話面]
+  - canonical: 強制 cycle
+    domain: consumer
+    aliases: [forced cycle, 強制サイクル]
+    definition: rules 行が強制と名指す窓が閾値以上の席に管理 tick が印を書き、 印が在る間は退避に要る操作以外の編集・shell の実行・agent の起動の呼出を PreToolUse の guard が断る状態。 印は退避物の書き込み・立て直し・閾値未満の計測の 3 周で可逆な move で外れる (設計 docs/design/seat-autonomy.md §15)。
+    relationships: [管理 tick, 退避の合図, 立て直し, rules 行]
+    flagged_ambiguities: ["強制サイクル: SRS の用語集は表示名を強制サイクルとする (SRS の生成器は cycle を部分文字列に持つ用語を拒む)。 正本の名は強制 cycle"]
   - canonical: 便用の並べ鍵
     domain: consumer
     aliases: [run ordering key]
