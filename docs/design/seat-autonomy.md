@@ -109,7 +109,7 @@ v2 に既に在るもの: FR23（WM の規則）・FR21（`<state_dir>/inject.js
   （N1.2・削除しない・器の生成物でない file は `unit-foreign` で断る＝S の `kind=tick-install` の記録から導出し直した bytes と比べる・§11）。
 - **承認**: 有効化・撤去は 3 クラス（消す / 出す / 使う）のいずれにも当たらない（ADR-0030 §2.4・user 裁定 2026-09-15T03:52Z 問 3）
   ＝器が撃つ。**v1 の timer は器が止めない**（器の管理物でない・切替は §5 の便 5 で user が裁定する）。
-- **doctor**: `--unit-dir U` を渡した周だけ、登録 row のある席ごとに `tick=<installed|drift|absent|unreadable>`
+- **doctor**: `--unit-dir U` を渡した周だけ、登録 row のある席ごとに `tick-unit=<present|absent|foreign>`（値名は §11 と同じ 3 値・旧案の 4 値は §11 に寄せた）
   （bytes の一致・`absent` に潰さない・`systemctl` は呼ばない・`--unit-dir` 無しは `tick=-`）。
 - target の window は `-n` で明示して名付ける（名無しの window は automatic-rename で前景 process の名になり、
   打刻の dir が席の一生の間に散る＝tick は永久に state-missing・[seat-state.md §3](./seat-state.md)）。
