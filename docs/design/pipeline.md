@@ -180,7 +180,7 @@ subcommand と helper は責務ごとに 1 file に置く——入口（usage / 
 
 - **toy repo の seed（`s2-07l.117` の実測・2026-09-12）**: cargo crate の toy には **`Cargo.lock` を seed の commit に含める**。gate の precheck は untracked も clean の外と数える（便が生成した file を黙って捨てない規則は正しい）ので、lock を track していない toy では `cargo test` が生成する lock で precheck に落ちる。実 repo は lock を track 済みで発現しない。
 
-- **歯の file の置き場**（`s2-07l.351`）: `tests/e2e/pipe/` の file は接頭辞（責務）ごとに 1 file——`intake.rs` = `pipe_intake_`、`review.rs` = `pipe_review_`、`contracts.rs` = 契約表の検査の歯（`contracts_check` を使うもの）、`refuse.rs` = 残りの `pipe_refuse_`、`ratelimit.rs` / `stop.rs` = `pipe_ratelimit_` / `pipe_stop_`（`s2-07l.349`）。2 file 以上が使う helper は `pipe.rs` の `pub(super)` に置いて複製せず、外形 snapshot の歯は `pipe.rs` に残す。`contracts.rs` は `contracts_check` を使う歯に加えて、intake の口で契約の閉包・導出・宣言を撃つ歯（名に `contract_` を含むもの・`pipe_contract_` を含む）も持つ。接頭辞が 1 本だけの歯（`pipe_state_` / `pipe_show_`）は群を成さないので外形の歯と同じく `pipe.rs` に置く。
+- **歯の file の置き場**（`s2-07l.351`）: `tests/e2e/pipe/` の file は接頭辞（責務）ごとに 1 file——`intake.rs` = `pipe_intake_`、`review.rs` = `pipe_review_`、`contracts.rs` = 契約表の検査の歯（`contracts_check` を使うもの）、`refuse.rs` = 残りの `pipe_refuse_`、`ratelimit.rs` / `stop.rs` = `pipe_ratelimit_` / `pipe_stop_`（`s2-07l.349`）。2 file 以上が使う helper は `pipe.rs` の `pub(super)` に置いて複製せず、外形 snapshot の歯は `pipe.rs` に残す。`contracts.rs` は `contracts_check` を使う歯に加えて、intake の口で契約の閉包・導出・宣言を撃つ歯も持つ＝置き場は**名の接頭辞**で決める（名が `contract_` で始まる歯と `pipe_contract_` の歯が `contracts.rs`。`pipe_intake_` / `pipe_refuse_` で始まり名の途中に `contract_` を持つ歯は接頭辞の file に残る＝名の途中の語では動かさない）。接頭辞が 1 本だけの歯（`pipe_state_` / `pipe_show_`）は群を成さないので外形の歯と同じく `pipe.rs` に置く。
 
 ## 9. 到達点の計測（AC1 / AC2・(e)）
 
