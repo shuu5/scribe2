@@ -743,3 +743,13 @@ terms:
     definition: host で同時に走る live な便の本数の上限。 値は rules 行 pipe.max_live が持ち (user 裁定 id 付き・憲法 C5)、 受付が便を作る前に live な便を数えて値以上の周は typed に断り、 dispatcher はその契約を列に留めて次の契機で再判定する。 走行中の便には効かない。 env・launcher の変数・host の宣言 file には置かない (ADR-0035)。 並列の枠 (変異検査の並列度・memory の枠) とは別。
     relationships: [live な便, 受付, dispatcher, 起動の列, rules 行, 並列の枠]
     flagged_ambiguities: ["上限: 同時走行の最大値 (便の本数・pipe.max_live) と並列の枠 (変異検査の並列度・memory) と上限停止 (口座の使用上限) は別義"]
+  - canonical: 役割の口座
+    domain: consumer
+    aliases: [role account]
+    definition: host の根の宣言 file (roles.toml) が役割ごとに高々 1 つ持つ口座 label (宣言値)。 席の起動と立て直しは使える周にその口座を選定の前に使い、 便用の選定は host 全体で候補から外し、 管理 tick は宣言と違う口座の席を退避と立て直しで移す。 書き換えは器の口 account reassign (ADR-0036・設計 docs/design/seat-roles.md §15 / §16)。
+    relationships: [役割, host の根, host の manifest, 席の登録 row, 口座選定, 立て直し]
+  - canonical: host の根
+    domain: consumer
+    aliases: [host root]
+    definition: state dir の親の下の host 用 dir (<親>/<NAME>-host/)。 同じ host の全 project が共有する置き場で、 受付札 (並列の枠・ADR-0021 §2.3) と役割の口座の宣言 (ADR-0036) がここに在る。 env を読まず state dir から導く。 state の真実は置かない (憲法 C3)。
+    relationships: [役割の口座, 並列の枠, 受付札, host の manifest]
