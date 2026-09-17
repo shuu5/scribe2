@@ -192,7 +192,7 @@ AC8 の確認（SRS の FR23 の検証手法は I = 目視確認・2 つの開�
 ## 13. 退避の supersede — 同 sid の未 consumed を置き換える（契約表の行 d・`s2-07l.289`）
 
 - 何が起きているか: admin 2026-09-14 19:05Z の退避 → cycle が input-busy で 40 分 back-off し、席は仕事を続けたが 2 通目の退避が `wm-exists` で断られ、差分を planner に散文で預けた（退避の一次面が席の外へ漏れる）。現物（verified）: `crates/scribe2/src/seat/externalize.rs` は `WmScan::Unconsumed(_)` を一律 `WmExists` にする（§5 手順 1「二重退避を取り合わない」）。consume は `working-memory.<sid>.consumed.md` へ move する形（`crates/scribe2/src/seat/consume.rs`）。
-- 形: `externalize` が `Unconsumed` の退避物を見た周、その file の frontmatter の sid が**現在の sid と同じ**なら `working-memory.<sid>.superseded.<ts>.md` へ rename（write → rename の順・部分書きを残さない）してから新 file を書く。別 sid（`/clear` 後の候補・別席）は従来どおり `wm-exists`。記録の 1 行に `superseded=<旧 file>` を添える。`rebrief` / `consume` は superseded を走査から外す（`[WM]` の候補にしない）。
+- 形: `externalize` が `Unconsumed` の退避物を見た周、その file の frontmatter の sid が**現在の sid と同じ**なら `working-memory.<sid>.superseded.<ts>.md` へ rename（write → rename の順・部分書きを残さない）してから新 file を書く。別 sid（`/clear` 後の候補・別席）は従来どおり `wm-exists`。記録の 1 行に `superseded=<旧 file>` を添える。`rebrief` / `consume` は superseded を走査から外す（`[WM]` の候補にしない・consume の候補にしない）。走査の実体は `crates/scribe2/src/seat/mod.rs` の共有の名前判定 `is_unconsumed_name` 1 本（`working-memory.*.md` かつ `.consumed.md` で終わらない・`scan_wm` / `crates/scribe2/src/seat/consume.rs` の候補 / `crates/scribe2/src/seat/rebrief.rs` の走査が共有）＝除外はこの 1 か所に superseded の後置きを足すことで 3 面が同時に外れる。rebrief.rs / consume.rs は mod.rs で足りる周は触らない（write-set には残す）。
 - 触らない: carry-forward・命令行の cap・consume の move。
 - 却下案: 2 通目を consume → 書き直しで通す（「同 sid の consumed が在る」で断られる・consume は復元の合図であって更新ではない）／旧 file を上書き（不可逆・N1）。
 
@@ -236,7 +236,7 @@ id = "d"
 title = "自席・同 sid の未 consumed 退避物は superseded へ rename して置き換える — 別 sid は従来どおり wm-exists"
 req = ["FR38", "FR23"]
 section = "13"
-write-set = ["crates/scribe2/src/seat/externalize.rs", "crates/scribe2/src/seat/rebrief.rs", "crates/scribe2/tests/e2e/seat/wm.rs", "docs/design/working-memory.md"]
+write-set = ["crates/scribe2/src/seat/externalize.rs", "crates/scribe2/src/seat/mod.rs", "crates/scribe2/src/seat/rebrief.rs", "crates/scribe2/src/seat/consume.rs", "crates/scribe2/tests/e2e/seat/wm.rs", "docs/design/working-memory.md"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail seat_wm_externalize_supersede_"]
 size = "S"
 done = "同 sid の退避が置き換えられ、旧版は superseded として残る"
