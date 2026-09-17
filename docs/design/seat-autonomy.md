@@ -275,7 +275,7 @@ id = "f"
 title = "打刻の合図の backoff — tick が席の digest（状態 log・fleet event の最終行）を席が合図に応えた後に測り、無変化なら合図の間隔を factor 倍ずつ伸ばして max で止め、変化で seat.tick_stale_s に戻す（rules 行 seat.pointer_backoff_factor / seat.pointer_backoff_max_s・裁定 user 2026-09-17T00:55Z）"
 req = ["FR29", "FR27"]
 section = "14"
-write-set = ["rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "crates/scribe2/tests/e2e/rules.rs", "docs/design/rules-manifest.md", "crates/scribe2/src/seat/tick.rs", "crates/scribe2/src/seat/tick/render.rs", "+crates/scribe2/src/seat/tick/pointer.rs", "crates/scribe2/tests/e2e/seat/tick.rs", "crates/scribe2/tests/e2e/seat/register.rs", "crates/scribe2/tests/e2e/seat/account.rs", "crates/scribe2/tests/e2e/seat/launch.rs", "crates/scribe2/tests/e2e/hook.rs", "crates/scribe2/tests/e2e/snapshots/e2e__rules__rules_external_form.snap"]
+write-set = ["rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "crates/scribe2/tests/e2e/rules.rs", "docs/design/rules-manifest.md", "crates/scribe2/src/seat/tick.rs", "crates/scribe2/src/seat/tick/render.rs", "+crates/scribe2/src/seat/tick/pointer.rs", "crates/scribe2/tests/e2e/seat/tick.rs", "crates/scribe2/tests/e2e/seat/register.rs", "crates/scribe2/tests/e2e/seat/account.rs", "crates/scribe2/tests/e2e/seat/launch.rs", "crates/scribe2/tests/e2e/hook.rs", "crates/scribe2/tests/e2e/snapshots/e2e__rules__rules_external_form.snap", ".config/nextest.toml"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail seat_pointer_backoff_"]
 size = "S"
 done = "無変化の席への合図が 40 分 → 80 → 160 → 320 → 640 → 1280 分で止まり、席が合図に応えた後の状態 log か fleet event が変わった周に 40 分へ戻って再開し、退避の合図と cycle は毎周のまま"
