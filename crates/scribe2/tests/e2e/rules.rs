@@ -976,9 +976,9 @@ fn rules_embedded_manifest_declares_the_size_lines_rows() {
     assert!(errors.join("\n").contains("未知である"), "4 段目の size は kind として読めない");
 }
 
-/// 口座選定の行（`R-C9-1`・裁定 id `user 2026-09-13T03:14Z`・設計 account-autonomy.md §3）。値は
-/// session 用の閾値（使用率の百分率）で形は `Int`。**散文（Policy）の値を置いた行は形の不一致で拒まれる**
-/// （形は `RuleKind::shape` の 1 箇所が持つ）。
+/// 口座選定の行（`R-C9-1`・裁定 id `user 2026-09-17T07:30Z`・設計 account-autonomy.md §3・rules-manifest.md §13）。値は
+/// session 用の閾値（使用率の百分率）で形は `Int`。窓別の閾値が着地するまでの特例で 95（`s2-07l.447`・5 時間窓を 85 に
+/// 戻すのは窓別の便）。**散文（Policy）の値を置いた行は形の不一致で拒まれる**（形は `RuleKind::shape` の 1 箇所が持つ）。
 #[test]
 fn rules_embedded_manifest_declares_account_selection_threshold() {
     let manifest = match Manifest::embedded() {
@@ -989,12 +989,12 @@ fn rules_embedded_manifest_declares_account_selection_threshold() {
         }
     };
     let row = manifest.get("R-C9-1").expect("口座選定の行が在る");
-    assert_eq!(row.value, RuleValue::Int(85), "user 裁定 2026-09-13T03:14Z の値");
+    assert_eq!(row.value, RuleValue::Int(95), "user 裁定 2026-09-17T07:30Z の値");
     assert_eq!(row.kind, RuleKind::AccountSelection, "kind は既存のまま");
     assert_eq!(row.kind.shape(), ValueShape::Int, "値の形は Int（百分率）");
     assert!(row.enabled, "発効している");
-    assert_eq!(row.ruling, "user 2026-09-13T03:14Z", "裁定 id");
-    assert_eq!(row.ruled_at, "2026-09-13", "裁定日");
+    assert_eq!(row.ruling, "user 2026-09-17T07:30Z", "裁定 id");
+    assert_eq!(row.ruled_at, "2026-09-17", "裁定日");
     let errors = rejected(&one_row(RuleKind::AccountSelection, "\"新規投入は 5h 線\""))
         .expect("散文の値の fixture が受理された");
     assert_eq!(errors.len(), 1, "件数: {errors:?}");

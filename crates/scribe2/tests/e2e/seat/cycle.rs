@@ -2367,14 +2367,15 @@ fn seat_exit_stamp_then_shell_relaunches_on_the_next_round() {
 }
 
 /// (g) 前面が shell の周（session は終わっている）は `/exit` を送らない: 入口は立て直しの側で、候補が無ければ
-/// `account-no-candidate`（shell へ `/exit` が届かない・記録は退避の合図だけ・cycle-stamp なし）。
+/// （予備の口座 a2 = 95 は閾値ちょうど＝以上）`account-no-candidate`（shell へ `/exit` が届かない・記録は退避の合図だけ・
+/// cycle-stamp なし）。
 #[test]
 fn seat_exit_is_not_sent_to_a_shell() {
     let place = acct_place();
     let name = "exitshell";
     let guard = start_seat(&place.socket, name);
     assert!(guard.ready(), "独立 socket に shell の session を立てられる");
-    acct_parked(&place, name, &acct_launcher(&place, name), 90);
+    acct_parked(&place, name, &acct_launcher(&place, name), 95);
     wm_file(&place.wm, "working-memory.parked.md", name);
     assert!(acct_shell_prompt(&place, name, ""), "shell の prompt を描ける");
 
@@ -2389,6 +2390,34 @@ fn seat_exit_is_not_sent_to_a_shell() {
     assert!(!capture(&place.socket, name).contains("/exit"), "shell へ /exit を送らない");
     assert_eq!(acct_injected(&place.state, name).len(), 1, "記録は 1 周目の退避の合図だけ");
     assert!(!seat_dir_of(&place.state, name).join("cycle-stamp").exists(), "cycle-stamp を打たない");
+    drop(guard);
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// 85 と 95 を弁別する歯（`s2-07l.447`・rules-manifest.md §13・接頭辞 `seat_threshold_95_`）: (g) の対で、予備の口座 a2 が 90
+/// （85 以上 95 未満）の周は候補になり、前面が shell の席の立て直しはその口座へ走る（判定行 `kind=relaunch account=a1:100
+/// relaunch=a2`・穴は a2 の credential dir・起動 → 復元・row の口座は a2 に）。85 の manifest では 90 は閾値以上＝候補が無く
+/// `account-no-candidate` で RED。
+#[test]
+fn seat_threshold_95_spare_at_90_is_a_candidate_for_relaunch() {
+    let place = acct_place();
+    let name = "spareninety";
+    let guard = start_seat(&place.socket, name);
+    assert!(guard.ready(), "独立 socket に shell の session を立てられる");
+    acct_parked(&place, name, &acct_launcher(&place, name), 90);
+    assert!(acct_shell_prompt(&place, name, ""), "shell の prompt を描ける");
+
+    let out = acct_tick(&place, name, None);
+
+    let line = stdout_of(&out);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stdout={line} stderr={}", stderr_of(&out));
+    for (key, want) in [("decision", "inject"), ("kind", "relaunch"), ("consumed", "true"), ("account", "a1:100"), ("relaunch", ACCT_SPARE)] {
+        assert_eq!(tick_token(&line, key).as_deref(), Some(want), "{key}: {line}");
+    }
+    acct_assert_launched_then_restored(&place, name);
+    acct_assert_relabelled(&place, name);
+    let again = stdout_of(&acct_tick(&place, name, None));
+    assert_eq!(tick_token(&again, "account").as_deref(), Some("a2:90"), "次の周は 90 の口座を読む: {again}");
     drop(guard);
     fs::remove_dir_all(&place.dir).ok();
 }
