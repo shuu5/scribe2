@@ -294,7 +294,7 @@ id = "g"
 title = "session 用の閾値を窓ごとに運べる形にする（型・挙動不変）— 閉じた型 WindowThresholds（閾値を引く口・強制の窓を問う口・全窓同値の構築子・4 行の値から組む構築子）を置き、選定の Input と席の運びをこの型に差し替えて standing と reading を窓ごとの比較にし、全部の構築点は従来の 1 値を全窓同値で入れる"
 req = ["FR36", "FR38"]
 section = "15"
-write-set = ["crates/scribe2/src/fleet/select.rs", "crates/scribe2/src/fleet/cli.rs", "crates/scribe2/src/fleet/replay.rs", "crates/scribe2/src/seat/cli.rs", "crates/scribe2/src/seat/cycle/launch.rs", "crates/scribe2/src/seat/cycle/relaunch.rs", "crates/scribe2/src/seat/tick.rs", "crates/scribe2/src/seat/tick/account.rs", "crates/scribe2/src/seat/tick/exit.rs", "crates/scribe2/tests/e2e/prop.rs", "crates/scribe2/tests/e2e/fleet.rs"]
+write-set = ["crates/scribe2/src/fleet/select.rs", "crates/scribe2/src/fleet/select_tests.rs", "crates/scribe2/src/fleet/cli.rs", "crates/scribe2/src/fleet/replay.rs", "crates/scribe2/src/seat/cli.rs", "crates/scribe2/src/seat/cycle/launch.rs", "crates/scribe2/src/seat/cycle/relaunch.rs", "crates/scribe2/src/seat/tick.rs", "crates/scribe2/src/seat/tick/account.rs", "crates/scribe2/src/seat/tick/exit.rs", "crates/scribe2/tests/e2e/prop.rs", "crates/scribe2/tests/e2e/fleet.rs"]
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail seat_window_threshold_pure_", "cargo nextest run -p scribe2 --lib --no-tests=fail seat_window_threshold_reading_", "cargo nextest run -p scribe2 --no-tests=fail seat_window_threshold_prop_"]
 size = "M"
 done = "型の 4 つの口と窓ごとの比較が選定と席の両方に入り、全部の構築点が従来の 1 値を全窓同値で入れるので fleet select も席の tick も立て直しも従来と同じ結果のまま"

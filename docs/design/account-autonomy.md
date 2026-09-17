@@ -300,7 +300,7 @@ id = "r"
 title = "fleet/select.rs の歯の module（30 本・858 行）を #[path] の子 module の file へ割る — 純移動・module path fleet::select::tests と歯の名は不変・親の src と可視性は不変・札 moved・R-C4-2 の余地を行 g（seat-autonomy.md・M）に作る"
 req = ["FR36"]
 section = "21"
-write-set = ["-crates/scribe2/src/fleet/select.rs", "+crates/scribe2/src/fleet/select_tests.rs", "docs/design/account-autonomy.md", "docs/design/seat-autonomy.md"]
+write-set = ["-crates/scribe2/src/fleet/select.rs", "crates/scribe2/src/fleet/select_tests.rs", "docs/design/account-autonomy.md", "docs/design/seat-autonomy.md"]
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail fleet::select::tests::"]
 size = "S"
 done = "歯の module の本文が子の file に在り、親の歯の区間は cfg(test) と path と mod 宣言の 3 行だけ、module path と歯 30 本の名は不変で base = head、親の src と可視性は不変、札 moved が対で在って flip-check が moved で通り、file-lines で select.rs の余地が 1000 行以上に増え、行 r の + の剥がしと行 g の write-set への歯の file の追加が同じ PR で済む"
