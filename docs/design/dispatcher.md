@@ -102,7 +102,7 @@ id = "b"
 title = "契機 — tick の軸 dispatch と pipe land の直後の 1 周（同じ dispatch::turn を撃つ）"
 req = ["FR30"]
 section = "5"
-write-set = ["+crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2/src/seat/tick.rs", "+crates/scribe2/src/seat/tick/dispatch.rs", "crates/scribe2/src/pipe/land.rs", "crates/scribe2/tests/e2e/seat/tick.rs", "crates/scribe2/tests/e2e/pipe/land.rs"]
+write-set = ["+crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2/src/seat/tick.rs", "+crates/scribe2/src/seat/tick/dispatch.rs", "crates/scribe2/src/pipe/land.rs", "crates/scribe2/tests/e2e/seat/tick.rs", "crates/scribe2/tests/e2e/pipe/land.rs", ".config/nextest.toml"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail seat_tick_dispatch_", "cargo nextest run -p scribe2 --no-tests=fail pipe_terminal_dispatch_"]
 size = "S"
 done = "tick が decision=dispatch を記録し、偽 remote の toy repo で land の直後に列が 1 周撃たれる"

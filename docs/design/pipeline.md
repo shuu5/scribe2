@@ -499,7 +499,7 @@ id = "f"
 title = "未知の flag と --help を全 subcommand が typed に断る — 引数の reader を 1 module に集め、land が unknown flag で何も動かさない"
 req = ["NFR4", "FR12"]
 section = "14"
-write-set = ["+crates/scribe2/src/cli_args.rs", "crates/scribe2/src/lib.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/fleet/cli.rs", "crates/scribe2/src/seat/cli.rs", "crates/scribe2/src/headless/mod.rs", "crates/scribe2/src/hook/vessel.rs", "crates/scribe2/src/account/cli.rs", "crates/scribe2/tests/e2e/pipe/land.rs", "crates/scribe2/tests/e2e/fleet.rs", "crates/scribe2/tests/e2e/seat.rs", "crates/scribe2/tests/e2e/headless.rs", "crates/scribe2/tests/e2e/hook.rs", "crates/scribe2/tests/e2e/seat/account.rs"]
+write-set = ["+crates/scribe2/src/cli_args.rs", "crates/scribe2/src/lib.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/fleet/cli.rs", "crates/scribe2/src/seat/cli.rs", "crates/scribe2/src/headless/mod.rs", "crates/scribe2/src/hook/vessel.rs", "crates/scribe2/src/account/cli.rs", "crates/scribe2/tests/e2e/pipe/land.rs", "crates/scribe2/tests/e2e/fleet.rs", "crates/scribe2/tests/e2e/seat.rs", "crates/scribe2/tests/e2e/headless.rs", "crates/scribe2/tests/e2e/hook.rs", "crates/scribe2/tests/e2e/seat/account.rs", ".config/nextest.toml"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail cli_args_", "cargo nextest run -p scribe2 --no-tests=fail pipe_terminal_land_refuses_unknown_flag"]
 size = "M"
 done = "偽 remote の toy repo で pipe land に未知の flag か --help を渡すと main の ref・event log・worktree が 1 つも動かず、fleet / seat / headless / vessel の 1 口ずつが未知の flag を rc 2 で断り、usage の外形 snapshot は不変"
