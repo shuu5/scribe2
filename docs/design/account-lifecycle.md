@@ -153,7 +153,7 @@ id = "a"
 title = "役割なしの起動 — account shell が derive_launch を再利用し登録 row を書かずに起動行を注入する"
 req = ["FR60", "FR59", "FR58"]
 section = "13"
-write-set = ["crates/scribe2/src/account/cli.rs", "crates/scribe2/src/account/mod.rs", "crates/scribe2/src/seat/cycle.rs", "crates/scribe2/src/seat/cycle/launch.rs", "crates/scribe2/tests/e2e/fleet.rs", "crates/scribe2/tests/e2e/seat/launch.rs", "crates/scribe2/tests/e2e/snapshots/e2e__fleet__fleet_external_form.snap"]
+write-set = ["crates/scribe2/src/account/cli.rs", "crates/scribe2/src/account/mod.rs", "crates/scribe2/src/seat/cycle.rs", "crates/scribe2/src/seat/cycle/launch.rs", "crates/scribe2/tests/e2e/fleet.rs", "crates/scribe2/tests/e2e/seat/launch.rs", "crates/scribe2/tests/e2e/snapshots/e2e__fleet__fleet_external_form.snap", ".config/nextest.toml"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail account_cmd_shell_", "cargo nextest run -p scribe2 --no-tests=fail seat_launch_", "cargo nextest run -p scribe2 --lib --no-tests=fail account_cmd_errors_"]
 size = "S"
 done = "偽 tmux と偽 claude で account shell が登録 row 0 のまま起動行を 1 回だけ差し込み、resume と拒否 3 種が typed に出る"
@@ -163,7 +163,7 @@ id = "b"
 title = "席の起動の短い形 seat <label> --planner|--admin — 置き場は git 設定、target と model は登録 row から導き、長い形と同じ 1 経路を通る"
 req = ["FR59", "FR40"]
 section = "14"
-write-set = ["crates/scribe2/src/seat/cli.rs", "crates/scribe2/src/seat/role.rs", "crates/scribe2/tests/e2e/seat.rs", "crates/scribe2/tests/e2e/seat/launch.rs", "crates/scribe2/tests/e2e/snapshots/e2e__seat__seat_usage_external_form.snap"]
+write-set = ["crates/scribe2/src/seat/cli.rs", "crates/scribe2/src/seat/role.rs", "crates/scribe2/tests/e2e/seat.rs", "crates/scribe2/tests/e2e/seat/launch.rs", "crates/scribe2/tests/e2e/snapshots/e2e__seat__seat_usage_external_form.snap", ".config/nextest.toml"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail seat_launch_short_", "cargo nextest run -p scribe2 --no-tests=fail seat_usage_external_form"]
 size = "S"
 done = "登録 row の在る anchor で短い形が長い形と同じ row と起動行を作り、row も flag も無い周は defaults-unresolved で 1 key も送らず、既知の verb は従来どおり通る"
@@ -183,7 +183,7 @@ id = "d"
 title = "席の実口座の記録と食い違いの検出 — SessionStart hook が transcript の置き場から実口座を測って席の打刻 dir に記録し、tick の口座の軸は登録 row と違う周に退避の合図を撃たず account-mismatch で倒す"
 req = ["FR38", "FR27", "FR40"]
 section = "16"
-write-set = ["crates/scribe2/src/hook/mod.rs", "+crates/scribe2/src/seat/session_account.rs", "crates/scribe2/src/seat/mod.rs", "crates/scribe2/src/seat/tick.rs", "crates/scribe2/src/seat/tick/account.rs", "crates/scribe2/tests/e2e/hook.rs", "crates/scribe2/tests/e2e/seat/account.rs"]
+write-set = ["crates/scribe2/src/hook/mod.rs", "+crates/scribe2/src/seat/session_account.rs", "crates/scribe2/src/seat/mod.rs", "crates/scribe2/src/seat/tick.rs", "crates/scribe2/src/seat/tick/account.rs", "crates/scribe2/tests/e2e/hook.rs", "crates/scribe2/tests/e2e/seat/account.rs", ".config/nextest.toml"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail seat_account_mismatch_record_", "cargo nextest run -p scribe2 --no-tests=fail seat_account_mismatch_tick_", "cargo nextest run -p scribe2 --lib --no-tests=fail seat_account_noop_reasons_"]
 size = "M"
 done = "偽の transcript_path で SessionStart が実口座（当たらない周は unknown）を席の打刻 dir に上書きで記録し、row の口座が閾値以上でも記録が別 label の周は tick が注入 0 で account-mismatch と両方の label を判定行に載せ、記録なし・unknown・同じ label の周と止まった席の立て直しは従来どおり動く"
@@ -193,7 +193,7 @@ id = "e"
 title = "席の実口座の見える化 — SessionStart の指示文に row の口座・実測の口座・照合の 1 行を出し、seat rebrief の [SEAT] 行に session-account= を足す"
 req = ["FR42", "FR23", "FR40"]
 section = "16"
-write-set = ["crates/scribe2/src/hook/mod.rs", "crates/scribe2/src/seat/brief/mod.rs", "crates/scribe2/src/seat/brief/planner.txt", "crates/scribe2/src/seat/brief/admin.txt", "crates/xtask/src/seat_brief.rs", "crates/scribe2/src/seat/rebrief/status.rs", "crates/scribe2/tests/e2e/hook.rs", "crates/scribe2/tests/e2e/seat/wm.rs", "crates/scribe2/tests/e2e/snapshots/e2e__hook__hook_brief_planner.snap", "crates/scribe2/tests/e2e/snapshots/e2e__hook__hook_brief_admin.snap", "docs/design/working-memory.md"]
+write-set = ["crates/scribe2/src/hook/mod.rs", "crates/scribe2/src/seat/brief/mod.rs", "crates/scribe2/src/seat/brief/planner.txt", "crates/scribe2/src/seat/brief/admin.txt", "crates/xtask/src/seat_brief.rs", "crates/scribe2/src/seat/rebrief/status.rs", "crates/scribe2/tests/e2e/hook.rs", "crates/scribe2/tests/e2e/seat/wm.rs", "crates/scribe2/tests/e2e/snapshots/e2e__hook__hook_brief_planner.snap", "crates/scribe2/tests/e2e/snapshots/e2e__hook__hook_brief_admin.snap", "docs/design/working-memory.md", ".config/nextest.toml"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail seat_account_mismatch_shown_", "cargo nextest run -p scribe2 --no-tests=fail hook_brief_", "cargo nextest run -p scribe2 --lib --no-tests=fail seat_brief_holes_", "cargo nextest run -p scribe2 --lib --no-tests=fail seat_wm_status_", "cargo nextest run -p xtask --no-tests=fail seat_brief_"]
 size = "S"
 done = "登録 row の在る席の SessionStart の指示文に row の口座・実測の口座・照合（match / mismatch / unknown）の 1 行が直し方の pointer 付きで出て、seat rebrief の [SEAT] 行が session-account= の 4 値を出し、雛形の穴は core と xtask で同じ 7 つに揃う"
