@@ -13,7 +13,20 @@
 
 ## 2. 契約表（FR47）
 
-- **本文の形**: **TOML subset の `[[contract]]` の表**（rules manifest と同じ parser・ADR-0004 §2.3。現物の parser は `[[rule]]` / `[[account]]` の 2 種だけを受け**空の配列を拒む**ので、array-of-tables の種類に `[[contract]]` を 1 つ足し〔C2・variant 1 つ〕、**空の列は key を省いて表す**〔`touches` / `depends` が無い行 = 空・空配列の拒否は緩めない〕）。**置き場は 2 形を同じ読み手で受ける**: (i) 記録時点 = 設計 doc（`docs/design/<題>.md`）の末尾の機械が読む区間 `<!-- contracts:begin -->` … `<!-- contracts:end -->`（CLAUDE.md の憲法区間と同じ marker 形・行走査で区間を抜いて同じ parser に渡す・設計 doc 1 本に区間は 0 か 1 つ）(ii) 後続 = folio2 が設計ノート（YAML 正本）から導出する tracked な `.toml` 1 file（全文を同じ parser に渡す・folio2 planner との擦り合わせ 2026-09-13・scribe2 側は path を差し替えるだけ）。読み手は path の拡張子（`.md` = 区間 / `.toml` = 全文）で形を決め、それ以外は typed に断る。
+- **本文の形**: **TOML subset の `[[contract]]` の表**（rules manifest と同じ parser・ADR-0004 §2.3。現物の parser は `[[rule]]` / `[[account]]` の 2 種だけを受け**空の配列を拒む**ので、array-of-tables の種類に `[[contract]]` を 1 つ足し〔C2・variant 1 つ〕、**空の列は key を省いて表す**〔`touches` / `depends` が無い行 = 空・空配列の拒否は緩めない〕）。**置き場は 2 形を同じ読み手で受ける**: (i) 記録時点 = 設計 doc（`docs/design/<題>.md`）の末尾の機械が読む区間 `
+
+<!-- contracts:begin -->` … `
+
+[[contract]]
+id = "ab"
+title = "歯の置き場が verify 行の scope を閉じた 3 値で読む — --test <name> の行は統合 test の file だけ、--lib の行は src の file だけを置き場に数え、読めない旗と複数の旗は従来どおり crate 全体"
+req = ["FR48"]
+section = "28"
+write-set = ["crates/scribe2/src/pipe/closure.rs", "crates/scribe2/src/pipe/closure/derive.rs"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail closure_scope_"]
+size = "S"
+done = "--test の行が統合 test の file だけを、--lib の行が src の file だけを置き場に返し、旗なしと読めない旗と 2 つ以上の旗の行は crate 全体のまま、0 本の行は従来の字面で断られ、現物の契約表は findings 0"
+<!-- contracts:end -->`（CLAUDE.md の憲法区間と同じ marker 形・行走査で区間を抜いて同じ parser に渡す・設計 doc 1 本に区間は 0 か 1 つ）(ii) 後続 = folio2 が設計ノート（YAML 正本）から導出する tracked な `.toml` 1 file（全文を同じ parser に渡す・folio2 planner との擦り合わせ 2026-09-13・scribe2 側は path を差し替えるだけ）。読み手は path の拡張子（`.md` = 区間 / `.toml` = 全文）で形を決め、それ以外は typed に断る。
 - **契約 id** = `<doc id>#<row id>`（doc id = file 名の stem・row id = 行の `id`・folio2 の設計ノートと同じ形）。doc id は **append-only**（file を改名しても id は変えない＝改名は新 id + 旧 id の廃止・folio2 へ移すとき設計ノートの meta.id に同じ文字列を写す）。
 - **行の field**（**正本は core の型** = `pipe/table.rs` の const・`<NAME> contracts schema` が tracked な生成物 `contracts/schema.toml` へ描き〔hooks.json / 極性一覧と同型・xtask check が render と tracked の差分 0 を測る〕・本節はその pointer・folio2 M1 はその file を「外部 schema 参照型」として読む＝欄の追加は scribe2 の版上げで folio2 の ADR は要らない。現物の契約 file の REQUIRED 9 欄との共通は 5 欄〔req / write-set / verify / size / done〕で 1:1 ではない）: `id`（doc 内で一意・`a` `b` …）/ `title` / `req`（要件 id の列）/ `section`（本 doc の節 anchor・生成時に節の本文を `goal` へ写す＝説明文を二重に書かない）/ `touches`（閉じた型の宣言の列・`crate::fleet::Stage` の形・空可・§3）/ `write-set`（path の列）/ `verify`（positional filter 形の列・`(` を含まない）/ `size` / `done`（1 行）/ `depends`（同 doc の契約 id の列・順序・床が解決と輪の無さを数える）/ `classes`（optional・既存）/ `opens`（optional・[seat-roles.md](./seat-roles.md) 契約 (b) が足す印・(b) の land までは未知 key として断る）。**散文の欄は `title` と `done` の 2 つだけ**（他は id / path / 型名 / 命令の識別子・folio2 の床〔語彙に無い裸の英字語 0〕はこの 2 欄に掛かる・括弧の中は免除。数 + 単位の検査は散文一般には掛けず「規範の印を持つ文」にだけ〔§12〕）。`section` は同じ doc の **節番号（`§N` の N・append-only・見出しの字面ではない）** で、`contracts check` は `## N.` の見出しが在り本文が非空であることを見る。`goal` は optional: (ii) の導出 file は各行に `goal`（節の本文の逐語・正本が YAML へ移ると節の本文の在り処が YAML になる）を運び、(i) の区間では書かず生成時に section の本文を写す。写す形は**単一行**（各行を trim し空行を落とし空白 1 つで繋ぐ・`"` と `\` は escape しない）＝契約 file の読み手は共有の scalar の読み手で、escape を解かず複数行の値も扱わない（`.209` run 10 の実測 2026-09-16）。審査の材料 `{design}` は行の `section` から節の本文をそのまま読むので、契約 file の `goal` の単一行化は審査の材料を薄めない。`schema = 1` は両形とも先頭に置く（rules manifest と同じ parser の前提）。**契約表の意味検査（id / req / section / depends / 閉包）は scribe2 の 1 関数（編集時・fail-closed）だけが持つ**。folio2 が持つのは器・導出・導出物の差分 0（post の drift 検出・C16 の代替ではない）。`owner` / `disposition` は生成時に固定値（現物の contract.rs が要求する field を埋める）。
 - **台帳の bead**: title・status・裁定（notes）・acceptance は `design = docs/design/<題>.md#<id>` の **1 行だけ**。契約の改訂 = 設計 doc の改訂（PR・folio と CI の門を通る）。台帳の acceptance に本文を書く形は §9 (a) の land 後に止める（FR51 の lint が名指す）。
@@ -518,3 +531,13 @@ verify = ["cargo nextest run -p scribe2 --no-tests=fail contract_prose_teeth_", 
 size = "M"
 done = "goal / done が名指す base の歯が verify の filter に当たらない契約と、その歯の file・判定行 token を pin する file が write-set に無い Declared 契約を受付が名を全部名指して断り、Derived 契約は導出値にその file が入り、新しい名と base に無い token は判定されず既存 6 形の導出値は不変"
 <!-- contracts:end -->
+
+
+## 28. 歯の置き場が verify 行の scope（-p / --test <name> / --lib）を読む — その行が撃てない file を write-set に要求しない（契約表の行 ab・`s2-07l.451`）
+
+- 何が起きているか: 歯の置き場の読み手（§3 (ii) の `teeth_places` と、§20 が同じ 1 関数で通す Declared 行の門 `declared_teeth`）は、verify の nextest 行から crate（`-p` の値）と filter 語だけを取り、`nextest_filter` が scope の旗（`--test <name>` / `--lib`）を落とす。置き場はその crate の **全 file** から「`#[test]` の直下の `fn` の名が filter 語を含む file」を集めるので、`--test e2e` の行（統合 test の target だけを撃つ行）でも `src` の in-file の歯の file を write-set に要求して断る＝**その行が実際には走らせない file** を書く権利ごと要求している。実測（2026-09-17・母集団 = 設計 doc の契約表の nextest 行 220 本）: `s2-07l.447` run 1 が `seat_account_` で src の歯 4 本に当たって断られ（接頭辞を 2 本に割って回避）・`s2-07l.340` が `confine_reasons_` で同型・純移動の `s2-07l.351` は 12 の接頭辞のうち 6 本が src の歯の file を要求し、**歯の名を変えられない純移動では回避できず run が 1 本も起きない**。
+- 形: nextest 行の読み手に scope を足す。scope は **閉じた 3 値の enum**（宣言順 = 旗なし / `--lib` / `--test <name>`）で、行の語から 1 関数で解き、置き場の母集団を `in_crate` の後段で 1 述語に畳む: 旗なし = その crate の全 file（従来どおり）／`--lib` = `crates/<crate>/src/` 配下／`--test <name>` = `crates/<crate>/tests/<name>.rs` とその配下。**読めない旗（`--bin` / `--benches` / `-E` ほか）と、scope の旗が 2 つ以上在る行は旗なしと同じ広い側へ倒す**（fail-closed・緩める側は狭く取るの対）。読み手は 1 本のまま（Derived の導出 (ii) と Declared の門 §20 は同じ関数を通る）で、断りの型も字面も増やさない（`TeethPlaceUnresolved` / `TeethOutsideWriteSet` のまま）。
+- 触らない: filter 語の読み（`-` で始まらない最後の語）・`test_fns` と `test_region` の弁別・`tests` 欄の扱いと `teeth_file`・Declared / Derived の弁別・`check_teeth_cover` の照合と正規化・契約表の schema（欄を足さない＝行の verify から読む）・nextest 形でない verify 行を読み飛ばす規則・受付の判定行の token。
+- 歯（`closure_scope_` 接頭辞・`crates/scribe2/src/pipe/closure/derive.rs` の歯の区間・fixture は同 module の `source(` の型）: (a) `--test e2e` の行が `tests/e2e/` の歯の file だけを置き場に返し、同じ filter 語に当たる src の in-file の歯の file を返さない（base では返す → RED）／(b) `--lib` の行が `src/` の歯の file だけを返す／(c) 旗なしの行・読めない旗を持つ行・旗が 2 つ在る行は crate 全体を返す（広い側のまま）／(d) scope が返す file が 0 本で `tests` 欄も無い行は従来どおり `TeethPlaceUnresolved`（字面不変）。
+- 限界（残す側）: scope は**その行が走らせる target**までしか写さず、target の中の module の木は読まない（`--lib` は `src/main.rs` と `src/bin/` の歯も数える＝真の lib target より広い側。現物の契約表 220 行のうちこの差に当たる行は 0 本・実測）。`--test <name>` の `<name>` は `tests/<name>.rs` と `tests/<name>/` の字面で解き、`Cargo.toml` の `[[test]]` の `path` は読まない（本 repo は宣言を持たない）。断りの字面は不変ゆえ、scope の外に歯が在って 0 本になった行の理由は「base に無い」と読める（下界・`tests` 欄で置き場を宣言する側に倒す）。
+- 却下案: 純移動の契約に別の verify の形（filter ごとの nextest list の本数が base = head）を持たせる（`s2-07l.351` だけを救い、`s2-07l.447` / `s2-07l.340` の型〔純移動でない便の scope 誤読〕が残る。本数で数える門は歯の本文の改変を通す＝flip-check の `removed_only` が名前の集合を捨てた教訓と同型）／scope を読めない行を断る（今日通っている 183 本の旗なしの行を全部断る）／crate の target を `cargo metadata` で解く（外部の口と実行時の依存を足す・字面走査の下界のままにする）。
