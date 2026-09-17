@@ -294,7 +294,7 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
 - 現物: gate は理由を `notice()`（`pipe/move_proof.rs`）で出すが、`pipe/cli/run.rs` の `chain` 関数は rc 0 の段の err を捨てて out だけを繋ぐ。run dir にも書かれない（`lens-input.txt` は要約の周だけ残る）。
 - 形: `chain` が rc 0 の段の err を保持し、`pipe run` の stderr に段の順で出す（stdout の判定行は不変）。
 - gate の record（`pipe/gate/record.rs`）の step 行と同じ log に `lens-input=<kind> reason=<語>` を追記する（要約の周も diff の周も・run dir に残る）。kind は判定行が既に出す `LensInput` の `kind`（diff / summary）・語は `notice()` の reason の値（要約の周は `-`）＝`pipe/move_proof.rs` は触らない。
-- 歯の置き場: record の歯は `tests/e2e/pipe/gate.rs`、`pipe run` の stderr の歯は `pipe run` の e2e が在る `tests/e2e/pipe/spawn.rs`（`lifecycle.rs` は §5 の分割で `ratelimit.rs` / `stop.rs` になり、どちらも `pipe run` の歯を持たない）。
+- 歯の置き場: record の歯は `tests/e2e/pipe/gate.rs`、`pipe run` の stderr の歯は `pipe run` の e2e が在る `tests/e2e/pipe/spawn.rs`（旧 lifecycle.rs は §5 の分割で `ratelimit.rs` / `stop.rs` になり、どちらも `pipe run` の歯を持たない）。
 - 触らない: 判定の極性・`notice()` の語彙・lens の入力の選び方。
 - 却下: stderr にだけ出す（run dir に残らず事後に読めない）／record にだけ書く（席が run の場で読めない）。
 
