@@ -42,7 +42,7 @@ use std::collections::BTreeSet;
 mod derive;
 
 pub use derive::{check_drift, derive_write_set, weighted_lines, Base, Fields};
-pub(crate) use derive::declared_teeth;
+pub(crate) use derive::{declared_teeth, teeth_places};
 
 /// nextest の行の書き出し（この後ろの語から crate と filter 語を読む）。
 const NEXTEST_HEAD: &[&str] = &["cargo", "nextest", "run"];

@@ -9,6 +9,12 @@
 //! 1 つも持たず `write-set` を持てば [`WriteSet::Declared`]（(g) までの検査だけ）・それ以外は [`WriteSet::Derived`]
 //! （導出値を作り、行に `write-set` が在れば集合一致を要り、無ければ導出値を契約の写しの write-set に書く）。
 //! pointer でない `design`（(b) の前の契約 file）は従来どおり導出しない。**撃つのは受付だけ**（CI は撃たない）。
+//!
+//! **judge と create**（契約表の行 u・contract-source.md §21・C2「判定関数は 1 本」）: 受付の判定は [`judge`]（run を作らない・
+//! 断りを判定関数 1 本につき高々 1 件で**全部**集める）と [`create`]（run dir・写し・event）の 2 段で、`intake` = judge →
+//! create（列の先頭の 1 件で断る＝従来の外形）・`pipe preflight`（[`super::preflight`]）= judge だけ。各判定関数
+//! （[`freeze`] / [`settle_write_set`] / [`exclude_cap_shortfall`] / [`exclude_overlap`] / 重複 run）の中身と「先頭の 1 件で
+//! 返す」形は不変で、Ok 値だけを事実（[`Headrooms`] / [`Crossed`]）へ広げる。
 
 use super::{broken, flag, int_row, list_row, live, need, refused, repo_of, state_dir_of};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
@@ -16,8 +22,8 @@ use crate::fleet::store::{LockPolicy, StoreError};
 use crate::fleet::{self, EventKind, Stage};
 use crate::name::NAME;
 use crate::pipe::closure::{self, ClosureError, Source};
-use crate::pipe::contract::Contract;
-use crate::pipe::declaration::{self, Ceiling, Effective, NewFilePolicy, CEILING_ROW, DENIED_ROW};
+use crate::pipe::contract::{Contract, ContractError};
+use crate::pipe::declaration::{self, Ceiling, Effective, NewFilePolicy, WriteSetItem, CEILING_ROW, DENIED_ROW};
 use crate::pipe::refuse::{overlaps, Refuse, NEW_FILE, SHRINK_FILE};
 use crate::pipe::table::{self, ContractRow, TableError};
 use crate::pipe::{contract_path, current, emit, run_dir, run_id, vessel_path, Emit};
@@ -111,69 +117,232 @@ pub(super) fn intake_id(args: &[String], manifest: &Manifest, policy: LockPolicy
     intake_run(args, manifest, policy).map(|found| found.id)
 }
 
-/// 受付の 1 周（id と write-set の弁別）。
+/// 受付の 1 周（id と write-set の弁別）= [`judge`] → [`create`]。
 fn intake_run(args: &[String], manifest: &Manifest, policy: LockPolicy) -> Result<Intaken, Outcome> {
-    let parsed = (|| {
-        Ok::<_, String>((
-            PathBuf::from(need(args, "--contract")?),
-            need(args, "--bead")?.to_owned(),
-            PathBuf::from(need(args, "--repo")?),
-        ))
-    })();
-    let (path, bead, repo) = parsed.map_err(refused)?;
-    // repo は spawn まで使わないが、**intake の時点で** git repo かを確かめる。
-    // 後段で初めて落ちると、契約は受理されたのに進めない run が残る。
+    let (path, bead, repo) = read_args(args).map_err(refused)?;
+    // repo は spawn まで使わないが、**intake の時点で** git repo かを確かめる（judge も先頭で同じ検査を撃つが、intake は
+    // 置き場と契約 file を読む前に断る＝従来の順）。後段で初めて落ちると、契約は受理されたのに進めない run が残る。
     if super::head_of(&repo).is_none() {
-        return Err(refuse(&Refuse::NotARepo { repo: repo.display().to_string() }, &[]));
+        return Err(not_a_repo(&repo).outcome);
     }
     let state_dir = state_dir_of(args).map_err(refused)?;
-    let mut contract = Contract::load(&path).map_err(|errors| {
-        Outcome::failed(RC_BROKEN, errors.iter().map(ToString::to_string).collect())
-    })?;
+    let contract = Contract::load(&path).map_err(unloadable)?;
+    let material = Material { repo: &repo, manifest, contract: &contract, state_dir: Some(&state_dir), bead: &bead };
+    create(judge(&material), &material, &state_dir, &path, policy)
+}
+
+/// intake / preflight が同じ形で読む引数（`--contract` / `--bead` / `--repo`・欠けは理由の 1 行）。
+pub(super) fn read_args(args: &[String]) -> Result<(PathBuf, String, PathBuf), String> {
+    Ok((PathBuf::from(need(args, "--contract")?), need(args, "--bead")?.to_owned(), PathBuf::from(need(args, "--repo")?)))
+}
+
+/// 契約 file が読めない周の断り（rc 2・理由を全件出す）。
+pub(super) fn unloadable(errors: Vec<ContractError>) -> Outcome {
+    Outcome::failed(RC_BROKEN, errors.iter().map(ToString::to_string).collect())
+}
+
+/// 対象が git repo でない断り。
+fn not_a_repo(repo: &Path) -> Denial {
+    refuse(&Refuse::NotARepo { repo: repo.display().to_string() }, &[])
+}
+
+/// 判定関数 1 本の断り（**先頭の 1 件が理由**・後続行は stderr に並ぶ・§21）。intake は [`Self::outcome`] で従来どおりの
+/// rc と stderr で断り、preflight は [`Self::name`] と理由を `refuse=` の行に写す。
+pub(super) struct Denial {
+    /// 理由の名（[`Refuse::as_str`]・[`Refuse`] を持たない断り〔宣言の写し / rules 行 / 置き場の読み〕は材料の名）。
+    pub(super) name: &'static str,
+    /// 従来の断り（rc は理由が持つ・stderr の行）。
+    pub(super) outcome: Outcome,
+}
+
+/// 宣言の写し（`freeze`）が外れた周の名（[`Refuse`] の variant を持たない断り）。
+const DENIAL_DECLARATION: &str = "declaration";
+
+/// rules 行が読めない周の名。
+const DENIAL_RULES: &str = "rules";
+
+/// 契約の `size` が S / M / L のどれでもない周の名。
+const DENIAL_SIZE: &str = "size";
+
+/// 置き場の store が読めない周の名。
+const DENIAL_STORE: &str = "store";
+
+/// [`Refuse`] を持たない断りを [`Denial`] に写す（名は材料の側・rc と行は `outcome` のまま）。
+fn denied(name: &'static str, outcome: Outcome) -> Denial {
+    Denial { name, outcome }
+}
+
+/// judge が読む材料（run を作らずに揃う値・intake と preflight が同じ 1 本を撃つ・C2）。
+pub(super) struct Material<'a> {
+    /// 対象 repo（base = HEAD）。
+    pub(super) repo: &'a Path,
+    /// 規則の値（上限と余地の行）。
+    pub(super) manifest: &'a Manifest,
+    /// 読み込み済みの契約 file。
+    pub(super) contract: &'a Contract,
+    /// 置き場（交差と重複 run の 2 検査だけが読む・`None` = 撃たず overlap は unmeasured・intake は常に `Some`）。
+    pub(super) state_dir: Option<&'a Path>,
+    /// 契約の bead id（この秒の run id の材料）。
+    pub(super) bead: &'a str,
+}
+
+/// [`judge`] の結果: 事実（§21 の 1 行 1 事実の材料・関数が Err の周はその関数の事実が無い）と断りの列（判定関数 1 本
+/// につき高々 1 件・撃った順＝intake が先頭で断る順）。
+pub(super) struct Judged {
+    /// 設計 pointer の字面と行の § 番号（pointer でない `design` と行の解けない周は `None`）。
+    pub(super) design: Option<(String, String)>,
+    /// write-set の弁別と本数（`settle_write_set` が Ok で pointer の在る周）。
+    pub(super) write_set: Option<(WriteSet, usize)>,
+    /// verify の nextest 行ごとの (filter 語, base の歯の file)。
+    pub(super) teeth: Vec<(String, Vec<String>)>,
+    /// 上限の余地（`exclude_cap_shortfall` が Ok の周）。
+    pub(super) headroom: Option<Headrooms>,
+    /// live との交差（`exclude_overlap` が Ok の周・置き場が無い周は撃たない）。
+    pub(super) overlap: Option<Crossed>,
+    /// 断りの列。
+    pub(super) denials: Vec<Denial>,
+    /// 導出値で写しの write-set を置き換える周の導出値（create が写しに書く）。
+    derived: Option<Vec<String>>,
+    /// 宣言の有効値（`freeze` が Ok の周・create が写す）。
+    effective: Option<Effective>,
+    /// この秒の run id（置き場が在る周・重複 run の検査と create が同じ id を読む）。
+    run: Option<String>,
+}
+
+/// 受付の判定（run を作らない・§21）。判定関数を `freeze` → `settle_write_set` → `exclude_cap_shortfall` →
+/// `exclude_overlap` → 重複 run の順に**全部撃ち**、各関数が返した断りを列に積む。前段の Ok 値を取るのは導出値で
+/// write-set を置き換える 1 点だけで、`settle_write_set` が Err の周は契約 file の write-set のまま後段を撃つ
+/// （Declared 行は元々置き換えが無い＝前段と後段の断りが同時に載る）。git repo でない対象は他の関数が撃てないので
+/// `not-a-repo` の 1 件で止まる。
+pub(super) fn judge(material: &Material<'_>) -> Judged {
+    let Material { repo, manifest, contract, state_dir, bead } = *material;
+    let mut judged = Judged {
+        design: None,
+        write_set: None,
+        teeth: Vec::new(),
+        headroom: None,
+        overlap: None,
+        denials: Vec::new(),
+        derived: None,
+        effective: None,
+        run: None,
+    };
+    // base の tracked file の一覧（交差の dir の展開と上限の余地が読む・設計 contract-source.md §3）。
+    let Some(tracked) = super::head_of(repo).and_then(|_| table::tracked_files(repo)) else {
+        judged.denials.push(not_a_repo(repo));
+        return judged;
+    };
     // **宣言は上限と突き合わせてから**。ここで断つ周は run dir も event も作らない
     // ——撃てない契約の run が置き場に残ると、続きから引ける便に見えてしまう。
-    let effective = freeze(&repo, manifest, &contract)?;
-    // base の tracked file の一覧（交差の dir の展開と上限の余地が読む・設計 contract-source.md §3）。
-    let tracked = table::tracked_files(&repo)
-        .ok_or_else(|| refuse(&Refuse::NotARepo { repo: repo.display().to_string() }, &[]))?;
-    let sources = table::read_all(&repo, &tracked, ".rs");
-    // **write-set の弁別は余地と交差より前**（導出値が write-set になる周は、その導出値で余地と交差を測る）。
-    let settled = settle_write_set(&repo, &contract, &tracked, &sources)?;
-    let derived: Option<&[String]> = settled.as_ref().and_then(|found| found.replaced.as_deref());
-    if let Some(files) = derived {
-        contract.write_set = files.to_vec();
+    match freeze(repo, manifest, contract) {
+        Ok(found) => judged.effective = Some(found),
+        Err(denial) => judged.denials.push(denial),
     }
+    let sources = table::read_all(repo, &tracked, ".rs");
+    // **write-set の弁別は余地と交差より前**（導出値が write-set になる周は、その導出値で余地と交差を測る）。
+    let mut measured = contract.clone();
+    match settle_write_set(repo, contract, &tracked, &sources) {
+        Ok(settled) => {
+            judged.write_set = settled.as_ref().map(|found| (found.kind, found.files));
+            judged.derived = settled.and_then(|found| found.replaced);
+            if let Some(files) = judged.derived.as_deref() {
+                measured.write_set = files.to_vec();
+            }
+        }
+        Err(denial) => judged.denials.push(denial),
+    }
+    row_facts(repo, contract, &tracked, &sources, &mut judged);
     // **上限の余地は受付だけが撃つ**（§3「撃つ場所は受付だけ」）: その便を今の base に当てたら入るか、という
     // 受付時点の事実で、CI の `contracts check` は撃たない（表は履歴を持つ）。
-    exclude_cap_shortfall(manifest, &contract, &tracked, &sources)?;
+    match exclude_cap_shortfall(manifest, &measured, &tracked, &sources) {
+        Ok(found) => judged.headroom = Some(found),
+        Err(denial) => judged.denials.push(denial),
+    }
+    let Some(state_dir) = state_dir else {
+        return judged;
+    };
     // **入口で排他する**（ADR-0019 §2.1）。live な便と write-set が交差する契約は、
     // run dir も event も作らずに断る——後段（land の rebase）で衝突を知るより安い。
-    exclude_overlap(&state_dir, &contract, &tracked)?;
-    let id = run_id(&bead, &fleet::cli::now_utc());
+    match exclude_overlap(state_dir, &measured, &tracked) {
+        Ok(found) => judged.overlap = Some(found),
+        Err(denial) => judged.denials.push(denial),
+    }
+    let id = run_id(bead, &fleet::cli::now_utc());
     // stamp は秒までなので、同じ bead を同じ秒に 2 回 intake すると id が衝突する。
     // 黙って上書きすると **前の便の契約が別物に化ける**ので、何も書かずに断る。
-    if run_dir(&state_dir, &id).exists() {
-        return Err(refuse(&Refuse::DuplicateRun { run: id.clone() }, &[]));
+    if run_dir(state_dir, &id).exists() {
+        judged.denials.push(refuse(&Refuse::DuplicateRun { run: id.clone() }, &[]));
     }
-    copy_contract(&state_dir, &id, &path, derived).map_err(broken)?;
-    copy_vessel(&state_dir, &id, &effective).map_err(broken)?;
-    remember_repo(&state_dir, &id, &repo).map_err(broken)?;
+    judged.run = Some(id);
+    judged
+}
+
+/// 便を作る（run dir・写し・event）。judge の断りが 1 件でも在れば**先頭の 1 件**で断り、何も書かない（従来の外形）。
+fn create(
+    judged: Judged,
+    material: &Material<'_>,
+    state_dir: &Path,
+    path: &Path,
+    policy: LockPolicy,
+) -> Result<Intaken, Outcome> {
+    let Judged { write_set, denials, derived, effective, run, .. } = judged;
+    if let Some(first) = denials.into_iter().next() {
+        return Err(first.outcome);
+    }
+    // 断り 0 の周は freeze が Ok（有効値が在る）で、置き場 `Some` の judge は run id を持つ。
+    let (Some(effective), Some(id)) = (effective, run) else {
+        return Err(broken("受付の判定が有効値と run id を持たない".to_owned()));
+    };
+    copy_contract(state_dir, &id, path, derived.as_deref()).map_err(broken)?;
+    copy_vessel(state_dir, &id, &effective).map_err(broken)?;
+    remember_repo(state_dir, &id, material.repo).map_err(broken)?;
     let emitted = emit(
-        &state_dir,
+        state_dir,
         &Emit {
             kind: EventKind::RunCreated,
             run: &id,
-            bead: &bead,
+            bead: material.bead,
             stage: Some(Stage::Intake),
             seat: None,
             pid: None,
-            detail: Some(format!("classes:{}", contract.classes.join("+"))),
+            detail: Some(format!("classes:{}", material.contract.classes.join("+"))),
         },
         policy,
     );
     match emitted {
         Err(err) => Err(broken(err.to_string())),
-        Ok(()) => Ok(Intaken { id, write_set: settled.map(|found| (found.kind, found.files)) }),
+        Ok(()) => Ok(Intaken { id, write_set }),
+    }
+}
+
+/// 行の事実（設計 pointer と § 番号・verify の nextest 行ごとの歯の置き場）を judge に載せる（§21・判定はしない）。
+/// pointer でない `design` と行の解けない周（`settle_write_set` が同じ根で断る）は載せず、読めない `.rs` が在る周は
+/// 歯の置き場を測れない（Unreadable の断りが立つ）ので `teeth` を載せない。
+///
+/// 歯の置き場は導出 (ii) と Declared 行の門が撃つ [`closure::teeth_places`] の同じ 1 実装で、行ごとに `tests` 欄を空に
+/// して読む（`tests` の file は置き場でなく write-set の側）。filter 語も同じ 1 実装から取る: 本文 0 本で撃つと nextest
+/// 形の行は必ず [`ClosureError::TeethPlaceUnresolved`] で filter 語を返し、nextest 形でない行は空で通る（2 本目の
+/// 読み手を作らない）。本文で 0 本の filter 語は 0 本の事実として載せる（断るかは `settle_write_set` の側）。
+fn row_facts(repo: &Path, contract: &Contract, tracked: &[String], sources: &[Source], judged: &mut Judged) {
+    let Ok(Some(row)) = pointed_row(repo, contract) else {
+        return;
+    };
+    judged.design = Some((contract.design.clone(), row.section.clone()));
+    let texts: Option<Vec<(&str, &str)>> =
+        sources.iter().map(|source| source.body.as_deref().ok().map(|text| (source.path.as_str(), text))).collect();
+    let Some(texts) = texts else {
+        return;
+    };
+    let snapshots = table::read_all(repo, tracked, ".snap");
+    let fields = fields_of(&row);
+    let base = base_of(sources, &snapshots, tracked);
+    for line in &row.verify {
+        let one = closure::Fields { verify: std::slice::from_ref(line), tests: &[], ..fields };
+        let Err(ClosureError::TeethPlaceUnresolved { filter }) = closure::teeth_places(&one, &base, &[]) else {
+            continue;
+        };
+        let files: Vec<String> = closure::teeth_places(&one, &base, &texts).map(Vec::from_iter).unwrap_or_default();
+        judged.teeth.push((filter, files));
     }
 }
 
@@ -187,20 +356,10 @@ struct Settled {
     files: usize,
 }
 
-/// 契約の `design` が設計 pointer（`<doc>#<id>`）なら base の契約表の行を引いて write-set を弁別する（§3「手書きの
-/// write-set の扱いと撃つ場所」）。pointer でない `design`（(b) の前の契約 file）は `None`＝従来どおり導出しない。
-///
-/// - pointer が解けない（doc を読めない・区間が無い・行が無い）周は契約表の欠陥として断る（FR54・fail-closed）。
-/// - `creates` / `tests` / `also` を 1 つも持たず `write-set` を持つ行は [`WriteSet::Declared`]（導出も drift も撃たず、
-///   verify の歯の file が write-set に在るかの門〔[`closure::declared_teeth`]・§20〕だけを撃つ）。
-/// - それ以外は [`WriteSet::Derived`]: 導出値を作り（解けない欄は typed に断る）、行に `write-set` が在れば集合一致
-///   でなければ `write-set-drift`・無ければ導出値が write-set になる。
-fn settle_write_set(
-    repo: &Path,
-    contract: &Contract,
-    tracked: &[String],
-    sources: &[Source],
-) -> Result<Option<Settled>, Outcome> {
+/// 契約の `design` が設計 pointer（`<doc>#<id>`）なら base の契約表の行を引く（[`settle_write_set`] と [`row_facts`] が
+/// 同じ 1 本で読む）。pointer でない `design`（(b) の前の契約 file）は `Ok(None)`。pointer が解けない（doc を読めない・
+/// 区間が無い・行が無い）周は契約表の欠陥として断る（FR54・fail-closed）。
+fn pointed_row(repo: &Path, contract: &Contract) -> Result<Option<ContractRow>, Denial> {
     let Ok(pointer) = table::parse_pointer(&contract.design) else {
         return Ok(None);
     };
@@ -211,17 +370,46 @@ fn settle_write_set(
         let first = errors.into_iter().next().unwrap_or(TableError::RowMissing { line: 0, id: pointer.id.clone() });
         refuse(&Refuse::ContractTable(first), &rest)
     })?;
-    let declared = row.creates.is_empty() && row.tests.is_empty() && row.also.is_empty() && !row.write_set.is_empty();
-    let snapshots = table::read_all(repo, tracked, ".snap");
-    let fields = closure::Fields {
+    Ok(Some(row))
+}
+
+/// 行の欄を導出の材料に写す（`settle_write_set` と `row_facts` が同じ形で組む）。
+fn fields_of(row: &ContractRow) -> closure::Fields<'_> {
+    closure::Fields {
         touches: &row.touches,
         surfaces: &row.surfaces,
         verify: &row.verify,
         creates: &row.creates,
         tests: &row.tests,
         also: &row.also,
+    }
+}
+
+/// base の tree の事実を導出の材料に写す。
+fn base_of<'a>(sources: &'a [Source], snapshots: &'a [Source], tracked: &'a [String]) -> closure::Base<'a> {
+    closure::Base { sources, snapshots, tracked, core_crate: NAME }
+}
+
+/// 契約の `design` が設計 pointer なら base の契約表の行を引いて write-set を弁別する（§3「手書きの write-set の扱いと
+/// 撃つ場所」）。pointer でない `design` は `None`＝従来どおり導出しない。行の読みは [`pointed_row`]。
+///
+/// - `creates` / `tests` / `also` を 1 つも持たず `write-set` を持つ行は [`WriteSet::Declared`]（導出も drift も撃たず、
+///   verify の歯の file が write-set に在るかの門〔[`closure::declared_teeth`]・§20〕だけを撃つ）。
+/// - それ以外は [`WriteSet::Derived`]: 導出値を作り（解けない欄は typed に断る）、行に `write-set` が在れば集合一致
+///   でなければ `write-set-drift`・無ければ導出値が write-set になる。
+fn settle_write_set(
+    repo: &Path,
+    contract: &Contract,
+    tracked: &[String],
+    sources: &[Source],
+) -> Result<Option<Settled>, Denial> {
+    let Some(row) = pointed_row(repo, contract)? else {
+        return Ok(None);
     };
-    let base = closure::Base { sources, snapshots: &snapshots, tracked, core_crate: NAME };
+    let declared = row.creates.is_empty() && row.tests.is_empty() && row.also.is_empty() && !row.write_set.is_empty();
+    let snapshots = table::read_all(repo, tracked, ".snap");
+    let fields = fields_of(&row);
+    let base = base_of(sources, &snapshots, tracked);
     if declared {
         // Declared 行は導出も drift も撃たないが、**歯の置き場の門**だけは撃つ（§20・行 t）: verify の nextest 行の
         // 歯の file が write-set の外に在る契約は、便を作らずに file を全部名指して断る（審査へ先送りしない・C16）。
@@ -262,13 +450,15 @@ fn refuse_of(error: ClosureError, row: &ContractRow) -> Refuse {
 /// 排他が黙って無効化される（fail-closed・NFR4）。
 ///
 /// 交差した周は**全組を stderr へ並べ**、理由の 1 行は先頭の 1 組を名乗る。dir 項目は base の tracked file に
-/// 展開してから数える（設計 contract-source.md §3・[`overlaps`]）。
-fn exclude_overlap(state_dir: &Path, contract: &Contract, tracked: &[String]) -> Result<(), Outcome> {
+/// 展開してから数える（設計 contract-source.md §3・[`overlaps`]）。通った周は突き合わせた live な run を [`Crossed`]
+/// で返す（交差は 0・§21 の `overlap=` の材料）。
+fn exclude_overlap(state_dir: &Path, contract: &Contract, tracked: &[String]) -> Result<Crossed, Denial> {
     let state = current(state_dir).map_err(|errors| {
-        Outcome::failed(RC_BROKEN, errors.iter().map(StoreError::to_string).collect())
+        denied(DENIAL_STORE, Outcome::failed(RC_BROKEN, errors.iter().map(StoreError::to_string).collect()))
     })?;
     let mut first: Option<Refuse> = None;
     let mut lines: Vec<String> = Vec::new();
+    let mut runs: Vec<(String, Vec<String>)> = Vec::new();
     for (id, run) in &state.runs {
         let Some(alive) = live(state_dir, id, run.stage) else {
             return Err(refuse(&Refuse::WriteSetUnreadable { run: id.clone() }, &[]));
@@ -279,17 +469,55 @@ fn exclude_overlap(state_dir: &Path, contract: &Contract, tracked: &[String]) ->
         let Ok(live_contract) = Contract::load(&contract_path(state_dir, id)) else {
             return Err(refuse(&Refuse::WriteSetUnreadable { run: id.clone() }, &[]));
         };
+        let mut crossed: Vec<String> = Vec::new();
         for (mine, theirs) in overlaps(&contract.write_set, &live_contract.write_set, tracked) {
             if first.is_none() {
                 first = Some(Refuse::WriteSetOverlap { run: id.clone(), path: mine.clone() });
             }
             lines.push(format!("pipe: overlap run={id} contract={mine} live={theirs}"));
+            crossed.push(mine);
         }
+        runs.push((id.clone(), crossed));
     }
     match first {
-        None => Ok(()),
+        None => Ok(Crossed { runs }),
         Some(found) => Err(refuse(&found, &lines)),
     }
+}
+
+/// live との交差の事実（[`exclude_overlap`] が通った周＝交差 0・§21 の `overlap=` の材料）。
+pub(super) struct Crossed {
+    /// 突き合わせた live な run（run id の順）と、その便と交差した契約側の file（通った周は全部空）。
+    pub(super) runs: Vec<(String, Vec<String>)>,
+}
+
+/// 上限の余地の事実（[`exclude_cap_shortfall`] が通った周・§21 の `headroom=` の材料）。
+pub(super) struct Headrooms {
+    /// write-set の `.rs`（dir は配下に展開・`+` の新規 file は 0 行・`-` の縮む面は余地を求めない）ごとの余地
+    /// （R-C4-2 の値 − base の行数）・余地の小さい順（同じ余地は path の辞書順）。
+    pub(super) rooms: Vec<(String, u64)>,
+    /// 契約の `size` の見積（行・rules 行 `pipe.size_<s|m|l>_lines` の値）。
+    pub(super) size_lines: u64,
+}
+
+/// [`Headrooms`] を組む（[`exclude_cap_shortfall`] が余地を測る同じ `items` / `lines` / `caps` から・判定はしない）。
+fn headrooms_of(items: &[WriteSetItem], lines: &[(String, u64)], caps: declaration::Caps) -> Headrooms {
+    let lines_of = |path: &str| lines.iter().find(|(found, _)| found == path).map_or(0, |(_, count)| *count);
+    let mut rooms: Vec<(String, u64)> = items
+        .iter()
+        .flat_map(|item| match *item {
+            WriteSetItem::File(ref path) | WriteSetItem::New(ref path) => vec![path.clone()],
+            WriteSetItem::Dir(ref under) => under.clone(),
+            WriteSetItem::Shrink(_) => Vec::new(),
+        })
+        .filter(|path| path.ends_with(".rs"))
+        .map(|path| {
+            let room = caps.file_lines.saturating_sub(lines_of(&path));
+            (path, room)
+        })
+        .collect();
+    rooms.sort_by(|left, right| left.1.cmp(&right.1).then_with(|| left.0.cmp(&right.0)));
+    Headrooms { rooms, size_lines: caps.size_lines }
 }
 
 /// 上限の余地（設計 contract-source.md §3・受付だけ）: write-set の各 `.rs` の base の行数と R-C4-2 の差、core の
@@ -302,12 +530,18 @@ fn exclude_overlap(state_dir: &Path, contract: &Contract, tracked: &[String]) ->
 /// （`write-set-item-unresolved`）: `-` の先が base に無い項目を落として測ると「余地を求めない」宣言が静かに消え、
 /// 無い file を減らす便が通る。`+` の先が base に在る項目（[`NewFilePolicy::MustBeAbsent`]）も同じ＝契約表の検査は
 /// land 済みの `+` を実在 file と読む（`MayBeLanded`・`s2-07l.346`）ので、入口で止めないと満杯の file を `+` で
-/// 書いた便が余地を測られずに通る。
-fn exclude_cap_shortfall(manifest: &Manifest, contract: &Contract, tracked: &[String], sources: &[Source]) -> Result<(), Outcome> {
+/// 書いた便が余地を測られずに通る。通った周は file ごとの余地を [`Headrooms`] で返す（§21 の `headroom=` の材料）。
+fn exclude_cap_shortfall(
+    manifest: &Manifest,
+    contract: &Contract,
+    tracked: &[String],
+    sources: &[Source],
+) -> Result<Headrooms, Denial> {
+    let rules = |id: &str| int_row(manifest, id).map_err(|reason| denied(DENIAL_RULES, broken(reason)));
     let caps = declaration::Caps {
-        file_lines: int_row(manifest, ROW_FILE_LINES).map_err(broken)?,
-        core_lines: int_row(manifest, ROW_CORE_LINES).map_err(broken)?,
-        size_lines: int_row(manifest, size_row(&contract.size).map_err(refused)?).map_err(broken)?,
+        file_lines: rules(ROW_FILE_LINES)?,
+        core_lines: rules(ROW_CORE_LINES)?,
+        size_lines: rules(size_row(&contract.size).map_err(|reason| denied(DENIAL_SIZE, refused(reason)))?)?,
     };
     let items = match declaration::read_write_set(&contract.write_set, tracked, NewFilePolicy::MustBeAbsent) {
         Ok(found) => found,
@@ -321,7 +555,7 @@ fn exclude_cap_shortfall(manifest: &Manifest, contract: &Contract, tracked: &[St
         }
     };
     // 行数は幅で正規化して数える（1 行に詰め込んでも余地は増えない・rules-manifest.md §4）。
-    let width = int_row(manifest, ROW_LINE_WIDTH).map_err(broken)?;
+    let width = rules(ROW_LINE_WIDTH)?;
     let lines: Vec<(String, u64)> = sources
         .iter()
         .map(|source| {
@@ -334,7 +568,7 @@ fn exclude_cap_shortfall(manifest: &Manifest, contract: &Contract, tracked: &[St
         .map(|found| Refuse::CapHeadroom { file: found.file, headroom: found.headroom, size: contract.size.clone() })
         .collect();
     match short.split_first() {
-        None => Ok(()),
+        None => Ok(headrooms_of(&items, &lines, caps)),
         Some((first, rest)) => {
             let lines: Vec<String> = rest.iter().map(|found| format!("pipe: {}", found.reason())).collect();
             Err(refuse(first, &lines))
@@ -352,23 +586,23 @@ fn size_row(size: &str) -> Result<&'static str, String> {
     }
 }
 
-/// 契約単位の拒否（**rc は理由の variant が持つ**）。`extra` は理由の後ろに並べる行。
-fn refuse(found: &Refuse, extra: &[String]) -> Outcome {
+/// 契約単位の拒否（**rc は理由の variant が持つ**・名は [`Refuse::as_str`]）。`extra` は理由の後ろに並べる行。
+fn refuse(found: &Refuse, extra: &[String]) -> Denial {
     let mut err = vec![format!("pipe: {}", found.reason())];
     err.extend(extra.iter().cloned());
-    Outcome::failed(found.rc(), err)
+    Denial { name: found.as_str(), outcome: Outcome::failed(found.rc(), err) }
 }
 
 /// 対象 repo の HEAD から vessel 宣言を読み、器の上限と突き合わせて有効値にする。
 ///
 /// **外れは rc 1**（前提違反）で、宣言が読めない周も同じ極性である——「宣言が無い」と
 /// 「宣言が壊れている」で扱いを変えると、器の視野の外の verify 行が片方から入る。
-fn freeze(repo: &Path, manifest: &Manifest, contract: &Contract) -> Result<Effective, Outcome> {
-    let commands = list_row(manifest, CEILING_ROW).map_err(refused)?;
-    let denied = list_row(manifest, DENIED_ROW).map_err(refused)?;
-    let ceiling = Ceiling { row: CEILING_ROW, commands: &commands, denied: &denied };
+fn freeze(repo: &Path, manifest: &Manifest, contract: &Contract) -> Result<Effective, Denial> {
+    let rows = |id: &str| list_row(manifest, id).map_err(|reason| denied(DENIAL_RULES, refused(reason)));
+    let (commands, denied_commands) = (rows(CEILING_ROW)?, rows(DENIED_ROW)?);
+    let ceiling = Ceiling { row: CEILING_ROW, commands: &commands, denied: &denied_commands };
     declaration::measure(repo, &ceiling, &contract.verify).map_err(|errors| {
-        Outcome::failed(RC_REFUSED, errors.iter().map(ToString::to_string).collect())
+        denied(DENIAL_DECLARATION, Outcome::failed(RC_REFUSED, errors.iter().map(ToString::to_string).collect()))
     })
 }
 

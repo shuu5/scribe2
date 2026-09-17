@@ -1878,6 +1878,161 @@ fn contract_derive_teeth_place_uses_base_test_names() {
     clean(&[&repo, &state]);
 }
 
+// ───── 器の口 pipe preflight（設計 docs/design/contract-source.md §21・行 u・`s2-07l.394`・接頭辞 `pipe_preflight_`） ─────
+
+/// `pipe preflight` を 1 回撃つ（intake と同じ引数の読み・審査の lens は無い・`--state-dir` は `with_state_dir` の周だけ）。
+fn preflight_raw(repo: &Path, state: &Path, contract: &Path, bead: &str, with_state_dir: bool) -> Output {
+    let (rules, state_dir) = (ceiling_rules(state), state.display().to_string());
+    let mut args = vec![
+        "preflight", "--contract", &contract.display().to_string(), "--bead", bead,
+        "--repo", &repo.display().to_string(), "--rules", &rules,
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect::<Vec<String>>();
+    if with_state_dir {
+        args.extend(["--state-dir".to_owned(), state_dir]);
+    }
+    let borrowed: Vec<&str> = args.iter().map(String::as_str).collect();
+    run_pipe(&borrowed)
+}
+
+/// stdout の `key` で始まる行（1 行 1 事実の母集団を key で数える）。
+fn fact_lines(out: &Output, key: &str) -> Vec<String> {
+    stdout_of(out).lines().filter(|line| line.starts_with(key)).map(str::to_owned).collect()
+}
+
+/// stdout の末尾の行（`preflight: <ok|refused n=<件数>|broken>`）。
+fn tail_line(out: &Output) -> String {
+    stdout_of(out).lines().last().unwrap_or_default().to_owned()
+}
+
+/// 設計 pointer `docs/design/toy.md#<id>` と **契約 file 側の write-set** を持つ契約 file（Declared 行は写しを差し替えない
+/// ので、受付の余地と交差は契約 file の write-set を読む＝行と同じ列挙を契約 file にも書く）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn pointed_contract_with(repo: &Path, name: &str, id: &str, write_set: &str) -> PathBuf {
+    let lines: Vec<String> = contract_body()
+        .into_iter()
+        .filter(|line| !line.starts_with("design") && !line.starts_with("write-set"))
+        .chain([format!("design = \"docs/design/toy.md#{id}\""), format!("write-set = {write_set}")])
+        .collect();
+    let path = repo.join(name);
+    fs::write(&path, format!("{}\n", lines.join("\n"))).expect("契約 file を書ける");
+    path
+}
+
+/// (a) Declared 行（`derive_` の歯 other.rs / e2e.rs が write-set の外・`-` の先が base に無い）は preflight が判定関数
+/// 1 本につき高々 1 件を**全部**並べる: `refuse=` が teeth-outside-write-set（settle_write_set）と write-set-item-unresolved
+/// （exclude_cap_shortfall）の順に 2 本・末尾 `preflight: refused n=2`・rc 1・run dir と event は撃つ前と同数。同じ契約を
+/// `intake` に通すと rc 1 で**先頭の 1 件**（teeth-outside-write-set）だけを名乗る（judge が同じ列を返し intake が先頭で
+/// 断る証拠）。base は `pipe preflight` を usage 違反で断る（RED）。
+#[test]
+fn pipe_preflight_lists_one_refusal_per_judgement_without_creating_a_run() {
+    let write_set = "[\"crates/toy/src/tint.rs\", \"-crates/toy/src/none.rs\"]";
+    let row = declared_teeth_row("t", "derive_", write_set);
+    let (repo, state) = derive_repo(&table_doc(&table_region(&[row])));
+    let contract = pointed_contract_with(&repo, "t.toml", "t", write_set);
+    let (dirs, events) = (run_dirs(&state), event_count(&state));
+    let out = preflight_raw(&repo, &state, &contract, "s2-t", true);
+    let text = stdout_of(&out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "断り ≥ 1 は rc 1: {text}");
+    let refuses = fact_lines(&out, "refuse=");
+    assert_eq!(refuses.len(), 2, "判定関数 1 本につき高々 1 件を全部並べる: {text}");
+    assert!(refuses[0].starts_with("refuse=teeth-outside-write-set:"), "1 本目は歯の門（settle_write_set）: {text}");
+    assert!(refuses[1].starts_with("refuse=write-set-item-unresolved:"), "2 本目は解けない項目（exclude_cap_shortfall）: {text}");
+    assert!(refuses[0].contains("crates/toy/src/other.rs, crates/toy/tests/e2e.rs"), "歯の file を名指す: {text}");
+    assert!(refuses[1].contains("-crates/toy/src/none.rs"), "項目の字面（- 込み）を名指す: {text}");
+    assert_eq!(tail_line(&out), "preflight: refused n=2", "末尾は件数: {text}");
+    assert!(fact_lines(&out, "design=") == ["design=docs/design/toy.md#t section=1"], "行の pointer と § は事実のまま: {text}");
+    assert!(fact_lines(&out, "write-set=").is_empty(), "断った関数の事実の行は立たない: {text}");
+    assert_eq!(run_dirs(&state), dirs, "run dir は撃つ前と同数（母集団 {} 本）", dirs.len());
+    assert_eq!(event_count(&state), events, "event も同じ（母集団 {events} 件）");
+    intake_names_only_the_first(&repo, &state, &contract, events);
+    clean(&[&repo, &state]);
+}
+
+/// (a) の対照: 同じ契約を `intake` に通すと rc 1 で先頭の 1 件（teeth-outside-write-set）だけを名乗り、event を書かない。
+fn intake_names_only_the_first(repo: &Path, state: &Path, contract: &Path, events: usize) {
+    let taken = intake_raw(repo, state, contract, "s2-t");
+    let err = stderr_of(&taken);
+    assert_eq!(taken.status.code(), Some(i32::from(RC_REFUSED)), "intake は従来どおり rc 1: {err}");
+    assert!(err.contains("verify の歯の file が write-set に無い"), "先頭の 1 件を名乗る: {err}");
+    assert!(!err.contains("base に解けない"), "2 件目は名乗らない（先頭で断る形は不変）: {err}");
+    assert_eq!(event_count(state), events, "intake も断った周は event を書かない");
+}
+
+/// (b) 断り 0 の Derived 行（`derive_` の歯 2 file が導出値）: rc 0・`design=docs/design/toy.md#a section=1`（material= の
+/// 行は出さない）・`write-set=derived files=2`・`teeth=derive_:2` に other.rs と e2e.rs・`headroom=` が write-set の file 数
+/// （2 本・`<file>:<余地>/<見積>` の形）・末尾 `preflight: ok`。続けて `intake` が rc 0 で同じ `files=2` を出す。
+#[test]
+fn pipe_preflight_ok_reports_facts_and_matches_intake() {
+    let row = derive_row("a", &[("verify", "[\"cargo nextest run -p toy --no-tests=fail derive_\"]")]);
+    let (repo, state) = derive_repo(&table_doc(&table_region(&[row])));
+    let contract = pointed_contract(&repo, "a.toml", "a");
+    let out = preflight_raw(&repo, &state, &contract, "s2-a", true);
+    let text = stdout_of(&out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "断り 0 は rc 0: {text} {}", stderr_of(&out));
+    assert_eq!(fact_lines(&out, "design="), ["design=docs/design/toy.md#a section=1"], "{text}");
+    assert!(!text.contains("material="), "§ の本文の大きさは判定に効かないので出さない: {text}");
+    assert_eq!(fact_lines(&out, "write-set="), ["write-set=derived files=2"], "{text}");
+    assert_eq!(fact_lines(&out, "teeth="), ["teeth=derive_:2@crates/toy/src/other.rs,crates/toy/tests/e2e.rs"], "{text}");
+    let rooms = fact_lines(&out, "headroom=");
+    assert_eq!(rooms.len(), 2, "余地は write-set の file 数だけ: {text}");
+    for (room, file) in rooms.iter().zip(["crates/toy/src/other.rs", "crates/toy/tests/e2e.rs"]) {
+        let rest = room.strip_prefix(&format!("headroom={file}:")).unwrap_or_default();
+        let (left, right) = rest.split_once('/').unwrap_or_default();
+        assert!(left.parse::<u64>().is_ok() && right.parse::<u64>().is_ok(), "<余地>/<見積> の 2 数: {room}");
+    }
+    assert!(fact_lines(&out, "refuse=").is_empty(), "断り 0: {text}");
+    assert_eq!(tail_line(&out), "preflight: ok", "{text}");
+    assert_eq!(run_dirs(&state), Vec::<String>::new(), "run dir を作らない");
+    assert_eq!(event_count(&state), 0, "event を書かない");
+    let taken = intake_raw(&repo, &state, &contract, "s2-a");
+    assert_eq!(taken.status.code(), Some(i32::from(RC_OK)), "同じ契約は intake も通る: {}", stderr_of(&taken));
+    assert!(intake_tokens(&taken).contains(&"files=2".to_owned()), "同じ本数: {}", stdout_of(&taken));
+    clean(&[&repo, &state]);
+}
+
+/// (c) `--state-dir` 無し・git 設定も無い toy: preflight は `overlap=unmeasured` を出し、rc は他の断りで決まる（断り 0 なら
+/// rc 0）・置き場を作らない。対照: 同じ引数の `intake` は従来どおり置き場が無い旨で断る（rc 1）。
+#[test]
+fn pipe_preflight_without_state_dir_marks_overlap_unmeasured() {
+    let row = derive_row("a", &[("verify", "[\"cargo nextest run -p toy --no-tests=fail derive_\"]")]);
+    let (repo, state) = derive_repo(&table_doc(&table_region(&[row])));
+    git(&repo, &["config", "--unset", &format!("{NAME}.stateDir")]);
+    let contract = pointed_contract(&repo, "a.toml", "a");
+    let out = preflight_raw(&repo, &state, &contract, "s2-a", false);
+    let text = stdout_of(&out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "置き場が無くても断りでない: {text} {}", stderr_of(&out));
+    assert_eq!(fact_lines(&out, "overlap="), ["overlap=unmeasured"], "交差は測れないと言う（0 に潰さない）: {text}");
+    assert_eq!(tail_line(&out), "preflight: ok", "{text}");
+    assert!(!state.join("pipe").exists() && event_count(&state) == 0, "置き場に何も作らない");
+    let taken = run_pipe(&[
+        "intake", "--contract", &contract.display().to_string(), "--bead", "s2-a",
+        "--repo", &repo.display().to_string(), "--rules", &ceiling_rules(&state),
+    ]);
+    assert_eq!(taken.status.code(), Some(i32::from(RC_REFUSED)), "intake は置き場が要る（従来どおり）");
+    assert!(stderr_of(&taken).contains("置き場が紐づいていない"), "{}", stderr_of(&taken));
+    clean(&[&repo, &state]);
+}
+
+/// (d) 読めない契約 file（壊れた TOML）は rc 2・末尾 `preflight: broken`・run dir も event も無し（理由は stderr）。
+#[test]
+fn pipe_preflight_broken_contract_is_rc_2() {
+    let (repo, state) = derive_repo(&table_doc(&table_region(&[table_row("a", &[])])));
+    let contract = repo.join("broken.toml");
+    fs::write(&contract, "goal = \"g\"\nwrite-set = [\"src/lib.rs\"\n").expect("契約 file を書ける");
+    let out = preflight_raw(&repo, &state, &contract, "s2-a", true);
+    assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "読めない契約は rc 2: {}", stderr_of(&out));
+    assert_eq!(tail_line(&out), "preflight: broken", "{}", stdout_of(&out));
+    assert!(!stderr_of(&out).is_empty(), "理由は stderr に出す");
+    assert!(!state.join("pipe").exists() && event_count(&state) == 0, "run dir も event も作らない");
+    clean(&[&repo, &state]);
+}
+
 // ───── fn 形の touches（設計 docs/design/contract-source.md §18・行 r・`s2-07l.358`・接頭辞 `contract_derive_fn_`） ─────
 
 /// fn 形の toy（歯の中で組む・base の file ではない）: module `pipe::cli` の file が `fn resume(` を宣言し、呼び手

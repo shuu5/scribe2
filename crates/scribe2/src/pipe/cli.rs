@@ -10,12 +10,14 @@
 //! 本 file は入口（[`dispatch`] / [`contracts`] / [`usage`]）と材料の型（[`Resolved`] / [`Extra`]）と `mod` 宣言、
 //! および再輸出の shim だけを持つ（`pipe/cli/` は subcommand と helper の責務ごとに 1 file・設計 §5）。引数と規則の
 //! 行の helper は [`args`]、便の状態の helper は [`state`]、表示は [`show`]、再開は [`resume`]（`s2-07l.349` の
-//! 純移動）。受付は [`intake`]、段の手は [`step`]、起動と連鎖は [`run`]（`s2-07l.295` の純移動）。外から呼ぶ path
+//! 純移動）。受付は [`intake`]、段の手は [`step`]、起動と連鎖は [`run`]（`s2-07l.295` の純移動）、受付と同じ判定を
+//! run を作らず撃つ口は [`preflight`]（契約表の行 u・contract-source.md §21）。外から呼ぶ path
 //! は本 file の再輸出で不変（子 module は helper を `super::` で引き、兄弟 module を `super::approve` /
 //! `super::gate` / `super::land` の path で呼ぶので、その名は本 file の `use` が親として持つ）。
 
 mod args;
 mod intake;
+mod preflight;
 mod resume;
 mod run;
 mod show;
@@ -42,6 +44,7 @@ use crate::fleet::store::LockPolicy;
 use crate::fleet::Stage;
 use crate::name::NAME;
 use intake::intake;
+use preflight::preflight;
 use run::{run_all, start};
 use std::path::{Path, PathBuf};
 use step::{answer_run, approve_run, gate_run, land_run, retire_run};
@@ -49,7 +52,7 @@ use step::{answer_run, approve_run, gate_run, land_run, retire_run};
 /// `pipe` の使い方。
 pub fn usage() -> String {
     format!(
-        "usage: {NAME} pipe <intake|spawn|approve|answer|gate|land|retire|run|show|resume|stop|report> [--state-dir D] [--rules PATH] [stop: --all|--run ID] [flags]"
+        "usage: {NAME} pipe <intake|preflight|spawn|approve|answer|gate|land|retire|run|show|resume|stop|report> [--state-dir D] [--rules PATH] [stop: --all|--run ID] [flags]"
     )
 }
 
@@ -72,6 +75,7 @@ pub fn dispatch(args: &[String]) -> Outcome {
     };
     match args.first().map(String::as_str) {
         Some("intake") => intake(args, &manifest, policy),
+        Some("preflight") => preflight(args, &manifest),
         Some("spawn") => start(args, policy),
         Some("approve") => by_run(args, |id| approve_run(args, id, policy)),
         Some("answer") => by_run(args, |id| answer_run(args, id, policy)),
