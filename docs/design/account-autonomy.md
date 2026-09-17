@@ -105,9 +105,9 @@ C1 / C5（R-C9-1 は行・裁定 id）・C2（`Purpose` / `Selection` / `Stage` 
 ## 13. 選定の前計測の鮮度 — 新しい実測を測り直さず、計測自身の 429 で口座を失わない（契約表の行 j・`s2-07l.407`）
 
 - 何が起きているか（admin の実測 2026-09-16 09:57Z〜10:30Z・verified・母集団 = 第 2 陣以降の `fleet select` 全回）: §3 の「選定の直前に FR33 の計測を 1 回撃つ」は 1 回の選定で manifest の**全口座**を測り直す。短時間に選定を重ねると usage endpoint が **HTTP 429** を返し、全口座が `unmeasured reason=http_status` → `none=unmeasured` で 1 本も出せない。内訳は IP でなく **token 単位**: 走行中の runner / lens の claude（11 process）が同じ口座の token で usage を poll しており、その口座だけが選定の計測で落ちる（単発の curl は 200）＝**便を増やすほどその口座が選べなくなる**構造。上限の合図（ADR-0012）でも口座の残量でもなく、器自身の計測の burst と競合が原因。
-- 形: (1) rules 行 `fleet.usage_fresh_s`（kind `UsageFreshS`・Int・秒・**値は user 裁定**・C5）。(2) `fleet select` の前計測は**鮮度つき**: 口座の最新の回（`latest_round`）の数える窓が全部 `AllowanceMeasured` で、その ts が `now − fresh_s` より新しい口座は**測り直さない**（子 process を起こさず event も書かない）。古い口座・Unmeasured の口座・行の無い口座だけを測る。(3) 測った結果が `HttpStatus` / `Timeout`（読みに届かなかった側・本文の形の失敗は含まない）で、直前の回が (2) の意味で新しい実測なら、その Unmeasured 行を**追記せず**直前の実測を最新のまま使う（stderr に `usage: account=<label> kept reason=<reason>` の 1 行・stdout は 1 行形のまま）。それ以外の周は従来どおり追記する。(4) 計測の方針は閉じた enum（`Freshness::{Always, Within(secs)}`・`fleet usage` の口は `Always`＝挙動不変・選定の前計測だけ `Within`）で `measure` に渡す＝計測の実装は 1 本のまま。
+- 形: (1) rules 行 `fleet.usage_fresh_s`（kind `UsageFreshS`・Int・秒・**値は user 裁定**・C5）。(2) `fleet select` の前計測は**鮮度つき**: 口座の最新の回（`latest_round`）の数える窓が全部 `AllowanceMeasured` で、その ts が `now − fresh_s` より新しい口座は**測り直さない**（子 process を起こさず event も書かない）。古い口座・Unmeasured の口座・行の無い口座だけを測る。(3) 測った結果が `HttpStatus` / `Timeout`（読みに届かなかった側・本文の形の失敗は含まない）で、その口座の**最新の回が実測**（数える窓が全部 `AllowanceMeasured`・古さは問わない＝(2) で「古い」と判定して測りに来た口座がここに来る）なら、その Unmeasured 行を**追記せず**その実測を最新のまま使う（stderr に `usage: account=<label> kept reason=<reason>` の 1 行・stdout は 1 行形のまま）。実測の古さの判定は選定の既存の規則（`select.rs` の `fresh_windows`＝reset を過ぎた実測だけを古いと読む）に任せる＝kept は「値の無い行で有効な実測を上書きしない」だけで、鮮度の規則を 2 か所に持たない。最新の回が Unmeasured・行なしの周は従来どおり追記する（(2) の条件と (3) の条件は重ならない: (2) は「新しい実測は測らない」・(3) は「測った古い実測を 429 で捨てない」）。(4) 計測の方針は閉じた enum（`Freshness::{Always, Within(secs)}`・`fleet usage` の口は `Always`＝挙動不変・選定の前計測だけ `Within`）で `measure` に渡す＝計測の実装は 1 本のまま。
 - 触らない: 純関数 `select`（`fleet/select.rs`）と `Input`（構築点 6 か所・`prop.rs` を含む）・replay の `State`・event の形・`UnmeasuredReason` の variant・`fleet usage` / `--show` の外形・R-C9-1。
-- 歯（`fleet_select_fresh_` 接頭辞・`tests/e2e/fleet.rs`）: 偽 client の呼出回数を写しで数え、新しい実測を持つ口座は選定で測り直されない（呼出 0）／古い実測の口座は測り直される（呼出 1）／429 を返す偽 client + 新しい実測の口座 → Unmeasured が追記されず（event の本数不変）選定がその口座を候補に残す／古い実測 + 429 → 追記され候補から外れる（従来）／`fleet usage` は鮮度に関わらず全口座を測る（`Always`）。rules 行は kind 件数の pin + 外形の歯（`fleet.usage_timeout_s` と同型）。
+- 歯（`fleet_select_fresh_` 接頭辞・`tests/e2e/fleet.rs`）: 偽 client の呼出回数を写しで数え、新しい実測を持つ口座は選定で測り直されない（呼出 0）／古い実測の口座は測り直される（呼出 1）／429 を返す偽 client + 古い実測（reset 前・`fresh_s` より古い）の口座 → 測り直され、Unmeasured が追記されず（event の本数不変）選定がその口座を候補に残す／429 + 最新の回が Unmeasured の口座 → 追記され候補から外れる（従来）／`fleet usage` は鮮度に関わらず全口座を測る（`Always`）。rules 行は kind 件数の pin + 外形の歯（`fleet.usage_timeout_s` と同型）。
 - 却下: 選定ごとに 1 口座だけ測る（候補の比較が古い値と新しい値の混在になる）／壁時計の sleep で間引く（壁時計依存・費用が増える）／replay で「最新の Measured」を別に持ち `select` に渡す（`Input` の構築点 6 か所と `prop.rs` を動かす・鮮度の規則が純関数に入り値の線が 2 か所になる）／429 の口座を admin が `--account` で名指しする（器の選定 FR36 の迂回・N2）。
 
 ## 14. 便用の除外は便の repo（anchor）の席だけ — 置き場を共有する他 vessel の席の口座は候補（契約表の行 k）
@@ -172,10 +172,10 @@ id = "j"
 title = "選定の前計測の鮮度 — rules 行 fleet.usage_fresh_s の内側の実測を測り直さず、計測自身の 429 / timeout では直前の新しい実測を保つ（fleet usage の口は不変）"
 req = ["FR36", "FR33"]
 section = "13"
-write-set = ["rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "crates/scribe2/tests/e2e/rules.rs", "docs/design/rules-manifest.md", "crates/scribe2/src/fleet/usage.rs", "crates/scribe2/src/fleet/cli.rs", "crates/scribe2/tests/e2e/fleet.rs"]
+write-set = ["rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "crates/scribe2/tests/e2e/rules.rs", "docs/design/rules-manifest.md", "crates/scribe2/src/fleet/select.rs", "crates/scribe2/src/fleet/usage.rs", "crates/scribe2/src/fleet/cli.rs", "crates/scribe2/tests/e2e/fleet.rs"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail fleet_select_fresh_"]
 size = "S"
-done = "新しい実測を持つ口座は選定で測り直されず、429 を返す周も直前の新しい実測が最新のまま候補に残り、fleet usage は全口座を測り、rules 行が裁定 id 付きで 1 本増える"
+done = "新しい実測を持つ口座は選定で測り直されず、測り直した口座が 429 / timeout を返す周も最新の実測が上書きされず候補に残り、fleet usage は全口座を測り、rules 行が裁定 id 付きで 1 本増える"
 
 [[contract]]
 id = "k"

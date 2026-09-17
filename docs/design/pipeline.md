@@ -318,8 +318,8 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
 ## 24. pipe retire が受ける終端の段を広げる（契約表の行 r・`s2-07l.132`）
 
 - 出所: `s2-07l.127` phase 1 / 2 の実測: gate FAIL で終端した run の worktree が live のまま残り、`pipe retire` は限られた段しか受けないので操作役が畳めない。dispatcher で便が増えると FAIL 終端の worktree が積む。
-- 現物: `pipe/retire.rs` の `retire` 関数は「在るか・clean か」だけを検査し段を動かさず `retired/` へ move する。受ける段の弁別は呼び手（`pipe/cli.rs` の `discriminate`）が持ち、`Extra::Retire` は現状 `Stage::Gated`（verdict が `Verdict::Fail`）と `Stage::Failed`（detail が `REBASE_EMPTY` か `follow::EXHAUSTED`）だけを受ける。
-- 形: `discriminate` が `Extra::Retire` に対して受ける便の条件を「終端の段（`Stage` の終端＝`Landed` / `Stopped` / `Failed`〔detail を問わない〕）∧ `Gated` で最新 verdict が `Fail`」に広げる。clean の検査と `retired/` への move は不変。段は動かさない（`RunStage detail=retired` の記帳も不変）。
+- 現物（main fffa8bb・`.349` の分割後）: `pipe/retire.rs` の `retire` 関数は「在るか・clean か」だけを検査し段を動かさず `retired/` へ move する（段の弁別は持たない）。受ける段の弁別は呼び手が持つ＝`pipe/cli/step.rs` の `retire_run` の `allowed`（`Landed` / `Failed` / `Gated` / `Stopped`）と `pipe/cli/state.rs` の `discriminate`（`Extra::Retire` × `Gated` = verdict が `Fail` だけ・× `Failed` = detail が `REBASE_EMPTY` か `follow::EXHAUSTED` だけ・他の段は catch-all で受ける）。＝`Landed` / `Stopped` / `Gated(FAIL)` / `Failed(rebase-empty / rebase-conflict)` は**既に畳める**（`tests/e2e/pipe/land.rs` の `pipe_retire_*` / `pipe_follow_retire_*` の歯が pin）。base で断るのは **`Failed` の他の detail**（`main-red` / `main-unmeasured` / `rebase-dirty` / `precheck:…`）だけで、`pipe_retire_rebase_empty_refuses_other_failed_reasons` がその拒否を pin している。
+- 形: `discriminate` の `Extra::Retire` × `Failed` の arm から detail の弁別を外し、`Failed` は detail を問わず畳める（受ける集合 = `Stage` の終端全部〔`Landed` / `Stopped` / `Failed`〕∧ `Gated(FAIL)`）。`allowed` の列と `retire.rs` は不変。clean の検査と `retired/` への move は不変。段は動かさない（`RunStage detail=retired` の記帳も不変）。「人が現物を読む前に入れ物が動く」懸念は `retired/` への可逆 move（N1.2）と event の `detail=retired` が持つ＝読む物は消えない。
 - 触らない: 非終端（`Spawned` / `Implemented` / `Gated`(PASS)）の便は断る（退行の pin）・`stop` の極性。
 - 却下: 手で `git worktree remove`（pipeline の外・不可逆）／段を新しい `Retired` の variant に動かす（`.128` の裁定に反する）。
 
@@ -570,13 +570,13 @@ done = "stop した便が oom-kill に分類されず、証拠の無い kill は
 
 [[contract]]
 id = "r"
-title = "pipe retire が受ける終端の段を Stage の終端全部（detail 不問）と Gated(FAIL) に広げる"
+title = "pipe retire が受ける終端の段を Stage の終端全部（Failed は detail 不問）と Gated(FAIL) に広げる — 残る穴は discriminate の Failed の detail の弁別だけ"
 req = ["FR34"]
 section = "24"
-write-set = ["crates/scribe2/src/pipe/retire.rs", "crates/scribe2/tests/e2e/pipe/gate.rs", "docs/design/pipeline.md"]
-verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_retire_failed_"]
+write-set = ["crates/scribe2/src/pipe/cli/state.rs", "crates/scribe2/tests/e2e/pipe/land.rs"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_retire_", "cargo nextest run -p scribe2 --no-tests=fail pipe_follow_retire_"]
 size = "S"
-done = "FAIL 終端の便の worktree を器の口で可逆に畳める"
+done = "Failed の detail を問わず終端の便の worktree を器の口で可逆に畳め、非終端と Gated(PASS) は断られ、既存の pipe_retire_ の歯は反転した 1 本を除き不変"
 
 [[contract]]
 id = "s"
