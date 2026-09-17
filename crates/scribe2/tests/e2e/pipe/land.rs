@@ -112,6 +112,23 @@ fn pipe_land_subject_keeps_short_single_sentence_whole() {
     clean(&[&repo, &state]);
 }
 
+/// 別便の 1 commit で main を **面の内**（`crates/` 配下＝検出線の [`DETECTION_SCOPE`]）へ進める。
+/// 返すのは動いた後の main の sha。
+///
+/// 面の**外**で進んだ周の追随は再 gate を撃たずに前周の判定を引き継ぐ（設計 §33）ので、撃ち直し
+/// そのものを測る歯は面の内で main を動かす——測る対象（lens の再走・撃ち直しの判定）は不変である。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn commit_other_in_scope(repo: &Path) -> String {
+    fs::create_dir_all(repo.join("crates")).expect("面の内の dir を作れる");
+    fs::write(repo.join("crates").join("other.txt"), "other\n").expect("別便の変更を書ける");
+    git(repo, &["add", "-A"]);
+    git(repo, &["commit", "-q", "-m", "other"]);
+    git(repo, &["rev-parse", "refs/heads/main"])
+}
+
 #[test]
 fn pipe_land_rebase_without_lens_stops_inconclusive_and_keeps_main() {
     let (repo, state) = repo_with_state();
@@ -120,10 +137,7 @@ fn pipe_land_rebase_without_lens_stops_inconclusive_and_keeps_main() {
     let base = git(&repo, &["rev-parse", "refs/heads/main"]);
     let id = gated_pass(&repo, &state, &path, &marker);
     // gate の後に main が別便で進む。CAS の old が動いた＝そのままでは land できない。
-    fs::write(repo.join("other.txt"), "other\n").expect("別便の変更を書ける");
-    git(&repo, &["add", "-A"]);
-    git(&repo, &["commit", "-q", "-m", "other"]);
-    let moved = git(&repo, &["rev-parse", "refs/heads/main"]);
+    let moved = commit_other_in_scope(&repo);
     // `--lens` 無しの land（審査が残した写し `lens.toml` も外す＝写しも flag も無い世界・§26）: 追随（rebase）は
     // 済むが撃ち直しの gate は lens を得られず INCONCLUSIVE＝**land しない**（測れなかったを通ったに化けさせない・
     // FR14 で測り直せる）。
@@ -178,10 +192,7 @@ fn pipe_lens_record_land_regate_reads_it_when_flag_absent() {
     let marker = state.join("lens-ran");
     let base = git(&repo, &["rev-parse", "refs/heads/main"]);
     let id = gated_pass(&repo, &state, &path, &marker);
-    fs::write(repo.join("other.txt"), "other\n").expect("別便の変更を書ける");
-    git(&repo, &["add", "-A"]);
-    git(&repo, &["commit", "-q", "-m", "other"]);
-    let moved = git(&repo, &["rev-parse", "refs/heads/main"]);
+    let moved = commit_other_in_scope(&repo);
     // 2 つの marker を外して「どの lens が起きたか」を効果で測る: gate の flag の lens（`lens-ran`）は起きず、
     // 審査が写した lens（[`REVIEW_MARKER`]）が起きる。
     fs::remove_file(&marker).expect("gate の marker を消せる");
@@ -318,10 +329,7 @@ fn pipe_land_rebase_refuses_when_main_moves_during_regate() {
     let path = write_contract(&repo, &[], &[]);
     let marker = state.join("lens-ran");
     let id = gated_pass(&repo, &state, &path, &marker);
-    fs::write(repo.join("other.txt"), "other\n").expect("別便の変更を書ける");
-    git(&repo, &["add", "-A"]);
-    git(&repo, &["commit", "-q", "-m", "other"]);
-    let moved = git(&repo, &["rev-parse", "refs/heads/main"]);
+    let moved = commit_other_in_scope(&repo);
     // 撃ち直しの lens が走っている間に **さらに別便が main を進める**（lens の中で commit する）。
     let racing = format!(
         "cat >/dev/null; git -C '{}' commit -q --allow-empty -m racing; echo '{}'",
@@ -355,11 +363,23 @@ fn pipe_land_rebase_refuses_when_main_moves_during_regate() {
     clean(&[&repo, &state]);
 }
 
-/// 同じ base から 2 便を PASS の gate まで通す（1 本目 = `src/lib.rs`・2 本目 = `src/b.rs`＝
+/// 同じ base から 2 便を PASS の gate まで通す（1 本目 = `crates/toy/a.rs`・2 本目 = `src/b.rs`＝
 /// write-set は交わらない）。追随の歯の材料。
+///
+/// 1 本目が **面の内**（`crates/` 配下）を書くのは、1 本目の着地で動いた main に 2 本目が追随する周が
+/// 従来どおり再 gate を撃つ形だからである（面の外だけが動いた周は引き継ぐ・設計 §33）。
 fn two_gated_runs(repo: &Path, state: &Path, marker: &Path) -> (String, String) {
-    let contract_a = write_contract(repo, &[], &[]);
-    let id_a = gated_pass(repo, state, &contract_a, marker);
+    let contract_a = write_contract(repo, &["write-set"], &[r#"write-set = ["crates/toy/a.rs"]"#]);
+    let id_a = intake_bead(repo, state, &contract_a, "s2-2e5");
+    let spawned_a = run_pipe(&[
+        "spawn", "--run", &id_a, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(),
+        "--runner", "mkdir -p crates/toy && echo a > crates/toy/a.rs && git add -A && git commit -q -m runner",
+    ]);
+    assert_eq!(spawned_a.status.code(), Some(i32::from(RC_OK)), "1 本目の spawn: {}", stderr_of(&spawned_a));
+    let lens_a = fake_lens(marker, &lens_verdict("PASS"));
+    let gated_a = gate_once(repo, state, &id_a, Some(&lens_a));
+    assert_eq!(gated_a.status.code(), Some(i32::from(RC_OK)), "1 本目の gate: {}", stderr_of(&gated_a));
     let contract_b = write_contract(repo, &["write-set"], &[r#"write-set = ["src/b.rs"]"#]);
     let id_b = intake_bead(repo, state, &contract_b, "s2-3ax");
     let spawned = run_pipe(&[
@@ -418,7 +438,7 @@ fn pipe_land_rebase_follows_landed_sibling_and_lands() {
     assert_eq!(git(&repo, &["rev-parse", &format!("{new}^")]), moved, "squash は動いた main の上に載る");
     assert_eq!(git(&repo, &["rev-list", "--count", &format!("{moved}..{new}")]), "1", "squash は 1 commit");
     assert_eq!(git(&repo, &["show", &format!("{new}:src/b.rs")]), "b", "2 本目の仕事が main に載る");
-    assert!(git(&repo, &["show", &format!("{new}:src/lib.rs")]).contains('x'), "1 本目の仕事も残る");
+    assert_eq!(git(&repo, &["show", &format!("{new}:crates/toy/a.rs")]), "a", "1 本目の仕事も残る");
     assert!(marker.exists(), "gate を撃ち直した（lens が再び走った）");
     let stdout = stdout_of(&out);
     assert!(stdout.contains(&format!("run={id_b} rebase={base}..{moved}")), "rebase= token: {stdout}");
@@ -1138,10 +1158,7 @@ fn pipe_land_rebase_regate_fail_keeps_gated_and_main() {
     let marker = state.join("lens-ran");
     let id = gated_pass(&repo, &state, &path, &marker);
     let base = git(&repo, &["rev-parse", "refs/heads/main"]);
-    fs::write(repo.join("other.txt"), "other\n").expect("別便の変更を書ける");
-    git(&repo, &["add", "-A"]);
-    git(&repo, &["commit", "-q", "-m", "other"]);
-    let moved = git(&repo, &["rev-parse", "refs/heads/main"]);
+    let moved = commit_other_in_scope(&repo);
     let lens = fake_lens(&marker, &lens_verdict("FAIL"));
     let out = run_pipe(&[
         "land", "--run", &id, "--repo", &repo.display().to_string(),
@@ -3045,9 +3062,11 @@ fn pipe_follow_self_rebase_mid_rebase_turn_fails_dirty_without_a_follow_section(
     clean(&[&repo, &state]);
 }
 
-// ───── 検出線の面（設計 pipeline.md §30・`s2-07l.397`・FR46・接頭辞 `pipe_detection_scope_`） ─────
+// ───── 検出線の面（設計 pipeline.md §30 / §33・`s2-07l.397` / `s2-07l.416`・FR46 / FR14 / FR34） ─────
 //
-// 追随の再 gate の側。主実測の側（same-tree / outside-scope / 読めない周）は `gate.rs` の同じ接頭辞の歯が持つ。
+// 追随の側。面の内が動いた周・diff を読めない周が従来どおり全段を撃ち直すのは接頭辞 `pipe_detection_scope_`、
+// 面の外だけが動いた周が再 gate を丸ごと省いて前周の判定を引き継ぐのは接頭辞 `pipe_follow_docs_only_` の歯。
+// 主実測の側（same-tree / outside-scope / 読めない周）は `gate.rs` の `pipe_detection_scope_` の歯が持つ。
 
 /// 検出線を持つ便を Gated PASS まで通し、呼出行の母集団と base を返す（[`super::gate::detection_repo`] の型）。
 fn detection_gated() -> (PathBuf, PathBuf, String, String, usize) {
@@ -3081,52 +3100,60 @@ fn advance_main_with(repo: &Path, path: &str) -> String {
     moved
 }
 
-/// (a) docs だけで main が動いた便の追随: 再 gate は検出線を撃たず（呼出 +0・共通 verify +1）`verify.jsonl` に
-/// `kind=detection skipped=detection reason=outside-scope` の record を 1 本置き、主実測も撃たず（木は同じ）、
-/// Landed まで進む。base は docs だけの周も撃つ（呼出 +1）＝RED。
+/// (a) docs だけで main が動いた便の追随（設計 §33）: **再 gate を丸ごと撃たず**（lens も起こさず）
+/// 前周の Gated PASS を新しい base へ引き継いで着地する。撃つのは主実測の ②④ だけ（③ は木の差が
+/// docs だけ＝面の外なので従来どおり省く）で、`verify.jsonl` に足されるのは引き継ぎの 1 本だけ。
+///
+/// base は再 gate を撃つので、呼出が ②④ の 2 行 + record 4 本ぶん多く、偽 lens の marker も立つ＝RED。
 #[test]
-fn pipe_detection_scope_main_skips_detection_when_only_docs_moved() {
+fn pipe_follow_docs_only_carries_gated_pass_without_regate() {
     let (repo, state, id, base, before) = detection_gated();
     let moved = advance_main_with(&repo, "docs/design/toy.md");
+    // 1 度目の gate が立てた marker を外す＝「land の中で lens が起きたか」だけを効果で測る。
+    let marker = state.join("lens-ran");
+    fs::remove_file(&marker).expect("1 度目の gate の marker を消せる");
     let out = land_once(&repo, &state, &id);
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "land は rc 0: {}", stderr_of(&out));
     let stdout = stdout_of(&out);
     assert!(stdout.contains(&format!("rebase={base}..{moved}")), "追随は済む: {stdout}");
-    assert!(stdout.contains("verdict=PASS"), "撃ち直しの判定行: {stdout}");
+    assert!(stdout.contains("verdict=PASS"), "引き継いだ判定行: {stdout}");
+    assert!(!marker.exists(), "再 gate を撃たない＝lens は 1 度も起きない: {stdout}");
     let added = super::gate::detection_calls(&repo).split_off(before);
-    assert_eq!(
-        added,
-        ["common", "contract", "common", "contract"],
-        "再 gate（②④）と主実測（②④）のどちらも ③ を撃たない（母集団 = 前 {before} 行）"
-    );
+    assert_eq!(added, ["common", "contract"], "撃つのは主実測の ②④ だけ（母集団 = 前 {before} 行）");
     assert_regate_skip_record(&verify_rows(&state, &id));
-    // 主実測: rebase 後の木 = land した木なので same-tree で省く。
+    // 主実測は別 file（`verify-main.jsonl`）に従来どおり ②・③ の skip・④ の 3 本。木は gate を撃った周と
+    // 違う（docs の 1 file ぶん進んでいる）ので、③ を省く理由は木の一致ではなく面の外である。
     let main = super::gate::main_rows(&state, &id);
+    assert_eq!(
+        super::gate::kinds(&main),
+        ["write-set", "common", "detection", "contract"],
+        "主実測は ①②④ を撃ち ③ の位置に record を置く: {main:?}"
+    );
     assert_eq!(row_value(&main, 3, "skipped"), "detection", "主実測も ③ を省く: {main:?}");
-    assert_eq!(row_value(&main, 3, "reason"), "same-tree", "主実測の理由は木の一致");
+    assert_eq!(row_value(&main, 3, "reason"), "outside-scope", "省いた理由は面の外");
     assert!(show_line(&repo, &state, &id).contains("stage=Landed"), "段は Landed: {}", show_line(&repo, &state, &id));
-    assert_eq!(value_of(&verdict_pairs(&state, &id), "verdict"), "PASS", "再 gate の verdict");
+    assert_eq!(value_of(&verdict_pairs(&state, &id), "verdict"), "PASS", "引き継いだ verdict");
+    assert_follow_events(&state, &base, &moved, &git(&repo, &["rev-parse", "refs/heads/main"]));
     clean(&[&repo, &state]);
 }
 
-/// (a) の `verify.jsonl`: 1 度目の gate の 4 本の後ろに、③ の位置へ `reason=outside-scope` の skip record を
-/// 挟んだ再 gate の 4 本（`n` は通し・木は持たない）。
+/// (a) の `verify.jsonl`: 1 度目の gate の 4 本の後ろに、**引き継ぎの 1 本**（`kind=gate` /
+/// `skipped=regate` / `reason=outside-scope`・`n` は通し・木は持たない）だけが足される。
 fn assert_regate_skip_record(rows: &[Vec<(String, vessel::fleet::json_lite::Value)>]) {
     assert_eq!(
         super::gate::kinds(rows),
-        ["write-set", "common", "detection", "contract", "write-set", "common", "detection", "contract"],
-        "省いた段も位置に record が在る: {rows:?}"
+        ["write-set", "common", "detection", "contract", "gate"],
+        "1 度目の gate の 4 本 + 引き継ぎの 1 本（撃ち直しの 4 本は無い）: {rows:?}"
     );
     let skips = super::gate::skip_rows(rows);
-    assert_eq!(skips.len(), 1, "skip record は再 gate の 1 本だけ（1 度目の gate は撃っている）: {rows:?}");
+    assert_eq!(skips.len(), 1, "skip record は引き継ぎの 1 本だけ（1 度目の gate は撃っている）: {rows:?}");
     let skip = skips.first().copied().cloned().unwrap_or_default();
-    assert_eq!(value_of(&skip, "kind"), "detection");
-    assert_eq!(value_of(&skip, "skipped"), "detection");
+    assert_eq!(value_of(&skip, "kind"), "gate", "省いたのは段ではなく gate 1 周");
+    assert_eq!(value_of(&skip, "skipped"), "regate");
     assert_eq!(value_of(&skip, "reason"), "outside-scope", "理由は面の外");
-    assert!(skip.iter().all(|(key, _)| key != "tree"), "再 gate の skip record は木を持たない: {skip:?}");
-    assert_eq!(row_value(rows, 7, "n"), "3", "skip record は ③ の `n`");
-    assert_eq!(row_value(rows, 8, "n"), "4", "④ の `n` は skip record の次");
-    assert_eq!(row_value(rows, 8, "rc"), "0", "④ は撃って緑");
+    assert!(skip.iter().all(|(key, _)| key != "tree"), "引き継ぎの record は木を持たない: {skip:?}");
+    assert_eq!(row_value(rows, 5, "n"), "5", "`n` は 1 度目の gate の 4 本からの通し");
+    assert_eq!(row_value(rows, 4, "rc"), "0", "1 度目の ④ は撃って緑（引き継ぐ根）");
 }
 
 /// (b) 対: `crates/` 配下で main が動いた周の再 gate は**従来どおり ③ を撃つ**（呼出 +1・穴は新しい base）

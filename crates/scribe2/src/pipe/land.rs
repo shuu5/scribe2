@@ -47,8 +47,8 @@ use super::contract::Contract;
 use super::declaration::Effective;
 use super::follow::{self, Conflict};
 use super::gate::{
-    gate, is_unreadable, records_of, run_checks, Checks, Detection, DetectionSkip, Gate, Limits, Skipped,
-    Step, Verdict,
+    gate, is_unreadable, next_number, records_of, run_checks, skip_record, Checks, Detection, DetectionSkip,
+    Gate, Limits, Skipped, Step, Verdict,
 };
 use super::lens_record::LensSource;
 use super::{
@@ -477,8 +477,9 @@ fn with_lines(mut lines: Vec<String>, mut outcome: Outcome) -> Outcome {
 ///   （[`super::base_of_run`]）はこの行から新しい base を読む。
 /// - 撃ち直しが PASS でない周は gate の判定行と rc で止まる（FAIL は `Gated` のまま
 ///   land しない・INCONCLUSIVE は測り直せる側）。
-/// - 撃ち直しの検出線は `<base>..<main>` の path が [`DETECTION_SCOPE`] に 1 つも触れない周は省く
-///   （[`follow_detection`]・rebase の**前**に読む・設計 §30 (i)）。共通 verify と契約 verify は撃つ。
+/// - main が動いた差分が [`DETECTION_SCOPE`] に 1 つも触れない周（[`follow_detection`]・rebase の**前**に
+///   読む）は**撃ち直しを丸ごと省き**、前周の Gated PASS を新しい base へ引き継ぐ（[`carry_gated_pass`]・
+///   設計 §33 (i)）。面に触れる周と diff を読めない周は従来どおり全段を撃ち直す。
 fn follow_main(entry: &Land<'_>, worktree: &Path, base: &str, main: &str) -> Follow {
     if !git_ok(entry.repo, &["merge-base", "--is-ancestor", base, main]) {
         return Follow::Stopped(refused(format!(
@@ -518,6 +519,13 @@ fn follow_main(entry: &Land<'_>, worktree: &Path, base: &str, main: &str) -> Fol
         return Follow::Stopped(broken(err.to_string()));
     }
     let mut lines = vec![format!("run={} rebase={base}..{main}", entry.run)];
+    // **再 gate の要否は検出線の要否と同じ 1 本の判定で決める**（新しい判定関数を足さない・C2）。
+    if let Detection::Skip(reason) = detection {
+        if let Some(carried) = carry_gated_pass(entry, reason) {
+            lines.push(carried);
+            return Follow::Ready(lines);
+        }
+    }
     let regated = gate(&Gate {
         run: entry.run,
         bead: entry.bead,
@@ -551,6 +559,44 @@ fn follow_detection(repo: &Path, base: &str, main: &str) -> Detection {
         return Detection::Run;
     }
     Detection::Skip(DetectionSkip::OutsideScope)
+}
+
+/// stdout の判定行で「撃ち直しを省いて引き継いだ」を名乗る token（gate が撃った周には出ない）。
+///
+/// `verdict=` は**引き継いだ値**（land の前提が PASS なので PASS）を従来どおり出す——読み手
+/// （人・`fleet`）が段と判定を同じ形で読めるためで、撃ったか引き継いだかはこの token が弁別する。
+const REGATE_SKIPPED: &str = "regate=skipped";
+
+/// 面に触れない周の追随: 前周の Gated PASS を新しい base へ引き継ぐ（設計 §33 (i) / (2)）。
+///
+/// 引き継いだ事実は 2 つの面に残す:
+/// - `verify.jsonl` の 1 本（`kind=gate skipped=regate reason=<理由>`・`n` は既存の record からの通し）。
+/// - `RunStage stage=Gated detail=verdict:PASS`（**gate が書くのと同じ形**＝`fleet` の読み手は不変）。
+///
+/// **record を書けない周は引き継がない**（`None`＝呼び手は従来どおり撃ち直す・fail-closed）。record を
+/// 先に書くのは、event だけが残って判定の根が無い形を作らないためである（event は「PASS だった」と
+/// 名乗る面で、撃ち直しが FAIL になり得る周にそれを先に置くと嘘が残る）。
+fn carry_gated_pass(entry: &Land<'_>, reason: DetectionSkip) -> Option<String> {
+    let path = super::verify_log_path(entry.state_dir, entry.run);
+    let written = std::fs::read_to_string(&path).ok()?;
+    let number = next_number(written.lines().filter(|line| !line.trim().is_empty()).count());
+    let body = skip_record(number, Skipped::regate(reason));
+    append_line(&path, &body, entry.policy).ok()?;
+    emit(
+        entry.state_dir,
+        &Emit {
+            kind: EventKind::RunStage,
+            run: entry.run,
+            bead: entry.bead,
+            stage: Some(Stage::Gated),
+            seat: None,
+            pid: None,
+            detail: Some(format!("verdict:{}", Verdict::Pass.as_str())),
+        },
+        entry.policy,
+    )
+    .ok()?;
+    Some(format!("run={} verdict={} {REGATE_SKIPPED}", entry.run, Verdict::Pass.as_str()))
 }
 
 /// worktree の branch を main へ rebase する（追随の (iii)・(iii′)）。**main は動かさない**。
@@ -800,7 +846,7 @@ fn verify_main(entry: &Land<'_>, new: &str) -> MainCheck {
     let _ = git_ok(entry.repo, &["worktree", "remove", "--force", &path]);
     let record = skipped
         .as_ref()
-        .map(|(reason, tree)| Skipped { reason: *reason, tree: Some(tree.as_str()) });
+        .map(|(reason, tree)| Skipped::detection(*reason, Some(tree.as_str())));
     if let Err(reason) = record_main(entry, &steps, record) {
         return MainCheck::Unmeasurable(reason);
     }
@@ -1120,7 +1166,7 @@ mod tests {
     #[test]
     fn mutant_in_pipe_land_next_number_increases_across_two_rounds() {
         assert_eq!((0..4).map(next_number).collect::<Vec<u64>>(), vec![1, 2, 3, 4], "1 始まりの通し番号");
-        let skipped = Skipped { reason: DetectionSkip::SameTree, tree: Some("tree") };
+        let skipped = Skipped::detection(DetectionSkip::SameTree, Some("tree"));
         for (len, n) in [(0, 1), (3, 4)] {
             let record = skip_record(next_number(len), skipped);
             assert!(record.contains(&format!("\"n\":{n}")), "{record}");

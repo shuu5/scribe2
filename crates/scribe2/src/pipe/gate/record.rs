@@ -60,7 +60,7 @@ pub(super) fn record_verify(entry: &Gate<'_>, worktree: &Path, base: &str) -> Re
     };
     let (detection, skipped): (&[String], Option<Skipped<'_>>) = match entry.detection {
         Detection::Run => (frozen.detection_verify(), None),
-        Detection::Skip(reason) => (&[], Some(Skipped { reason, tree: None })),
+        Detection::Skip(reason) => (&[], Some(Skipped::detection(reason, None))),
     };
     let checks = Checks {
         worktree,
@@ -98,14 +98,67 @@ pub(super) fn record_verify(entry: &Gate<'_>, worktree: &Path, base: &str) -> Re
     Ok(Counted { red, unreadable, killed, detection_unmeasured: unmeasured })
 }
 
-/// 検出線を省いた周の材料（record の `reason=` と、主実測だけが持つ `tree=`）。
+/// 撃たなかった周の材料（record の `skipped=` の段と `reason=`、主実測だけが持つ `tree=`）。
+///
+/// **構築は下の 2 つの口だけ**である（field は本 file に閉じる）——段と理由は別の軸で、
+/// 呼び手が任意の組を書けると `kind=detection skipped=regate` のような無い形が生まれる。
 #[derive(Debug, Clone, Copy)]
 pub struct Skipped<'a> {
+    /// 省いた段。
+    stage: SkippedStage,
     /// 省いた理由。
-    pub reason: DetectionSkip,
+    reason: DetectionSkip,
     /// land した木（主実測の record だけ・gate の再撃ちは木を持たない＝field を書かない）。
-    pub tree: Option<&'a str>,
+    tree: Option<&'a str>,
 }
+
+impl<'a> Skipped<'a> {
+    /// 検出線の段だけを省いた周（`kind=detection skipped=detection`・主実測は木を持つ）。
+    pub fn detection(reason: DetectionSkip, tree: Option<&'a str>) -> Self {
+        Self { stage: SkippedStage::Detection, reason, tree }
+    }
+
+    /// 追随の再 gate を**丸ごと**省いて前周の判定を引き継いだ周（`kind=gate skipped=regate`・設計 §33）。
+    ///
+    /// 木は持たない——撃っていないので「どの木を測ったか」が無い（`tree` を書くと測った形に読める）。
+    pub fn regate(reason: DetectionSkip) -> Self {
+        Self { stage: SkippedStage::Regate, reason, tree: None }
+    }
+}
+
+/// 撃たなかったのはどの段か（record の `skipped=` と `kind=` の字面）。
+///
+/// **理由（[`DetectionSkip`]）とは別の軸**である（run 2 の裁定 2026-09-16）——`outside-scope` は
+/// 検出線を省く周にも再 gate を省く周にも同じ意味で立つので、理由の enum に段を足すと
+/// 2 つの軸が 1 つの列に潰れる。値は 2 つで、本 file の外へは出ない。
+#[derive(Debug, Clone, Copy)]
+enum SkippedStage {
+    /// 検出線の段（gate / 主実測の中の 1 行）。
+    Detection,
+    /// 追随の再 gate 1 周（設計 §33 (i)）。
+    Regate,
+}
+
+impl SkippedStage {
+    /// record の `skipped=` の字面。
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Detection => "detection",
+            Self::Regate => "regate",
+        }
+    }
+
+    /// record の `kind=` の字面（段の名＝verify 行の kind か、gate 1 周そのものか）。
+    fn kind(self) -> &'static str {
+        match self {
+            Self::Detection => Check::Detection.as_str(),
+            Self::Regate => KIND_GATE,
+        }
+    }
+}
+
+/// gate 1 周を省いた record の `kind=`（verify 行の段ではないので [`Check`] の値を使わない）。
+const KIND_GATE: &str = "gate";
 
 /// 書く record 1 本（通し番号 `n`・本文・撃った段なら元の [`Step`]）。
 pub struct Record<'a> {
@@ -146,16 +199,17 @@ pub fn next_number(len: usize) -> u64 {
     u64::try_from(len).unwrap_or(u64::MAX).saturating_add(1)
 }
 
-/// 検出線を省いた段の名（record の `skipped=`）。
-const SKIPPED_DETECTION: &str = "detection";
-
-/// 検出線を省いた段の record（`kind=detection skipped=detection [tree=<sha>] reason=<理由>`・schema は 1 のまま）。
+/// 撃たなかった段の record（`kind=<段> skipped=<段> [tree=<sha>] reason=<理由>`・schema は 1 のまま）。
+///
+/// 検出線を省いた周は `kind=detection skipped=detection`、追随の再 gate を省いて前周の判定を
+/// 引き継いだ周は `kind=gate skipped=regate`（設計 §33 (2)）。どちらも**撃たなかった事実を
+/// 黙って落とさない**ための 1 本で、読み手は `skipped=` の非空で両者をまとめて拾える。
 pub fn skip_record(number: u64, skipped: Skipped<'_>) -> String {
     let mut fields = vec![
         ("schema", Value::Num(SCHEMA)),
         ("n", Value::Num(number)),
-        ("kind", Value::Str(Check::Detection.as_str().to_owned())),
-        ("skipped", Value::Str(SKIPPED_DETECTION.to_owned())),
+        ("kind", Value::Str(skipped.stage.kind().to_owned())),
+        ("skipped", Value::Str(skipped.stage.as_str().to_owned())),
     ];
     if let Some(tree) = skipped.tree {
         fields.push(("tree", Value::Str(tree.to_owned())));

@@ -1676,6 +1676,12 @@ fn pipe_confine_release_without_systemctl_is_no_tool_and_keeps_the_verdict() {
 /// (e) **同じ process が gate を 2 周撃つ**（land の追随 → 再 gate → main 実測・どちらも場所は run id）
 /// と、2 周目の unit 名は 1 周目と異なる。偽 `systemd-run` は同名の 2 本目を実 systemd と同じ字面で
 /// 断るので、base（名に通し番号が無い）では main 実測の行が起動できず land が落ちる（.208 run 3）。
+///
+/// 本 file の test 区間の差は**この歯の fixture の path 1 つ**（`other.txt` → `crates/other.txt`）だけで、
+/// 歯の名も assert も期待も動かない——別便が動かす面を検出線の面の内へ移し、追随が従来どおり再 gate を
+/// 撃つ形を保っただけである（設計 §33）。base の器は面の内外に依らず撃ち直すので、base で新しく赤くなる
+/// 歯は 1 本も無い（`s2-07l.80` と同じ形の逃がし）。
+// flip-check: retroactive s2-07l.416
 #[test]
 fn pipe_confine_release_regate_in_one_process_uses_distinct_unit_names() {
     let (repo, state) = repo_with_state();
@@ -1684,7 +1690,10 @@ fn pipe_confine_release_regate_in_one_process_uses_distinct_unit_names() {
     let marker = state.join("lens-ran");
     let (id, gated) = confined_run(&repo, &state, &path, &fake_lens(&marker, &lens_verdict("PASS")));
     assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "1 周目の gate: {}", stderr_of(&gated));
-    fs::write(repo.join("other.txt"), "other\n").expect("別便の変更を書ける");
+    // 別便は **面の内**（`crates/` 配下）を動かす——面の外だけが動いた周の追随は再 gate を撃たずに
+    // 前周の判定を引き継ぐ（設計 §33）ので、2 周が別名で撃たれたことを測れない。
+    fs::create_dir_all(repo.join("crates")).expect("面の内の dir を作れる");
+    fs::write(repo.join("crates").join("other.txt"), "other\n").expect("別便の変更を書ける");
     git(&repo, &["add", "-A"]);
     git(&repo, &["commit", "-q", "-m", "other"]);
     // land の process が撃つ名だけを数える（1 周目の gate は別 process の記録）。
