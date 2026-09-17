@@ -572,8 +572,8 @@ terms:
     relationships: [追随, 起こし直し, write-set の交差]
   - canonical: live な便
     domain: consumer
-    definition: 終端でない run。 終端 = 段が Landed / Failed / Stopped のいずれか、 または Gated で verdict が FAIL。 intake の排他が照合する母集団で、 pipe stop --run で 1 本だけ終端に倒せる (ADR-0019 §2.1)。
-    relationships: [便, write-set の交差, 契約]
+    definition: 終端でない run。 終端 = 段が Landed / Failed / Stopped のいずれか、 または Gated で verdict が FAIL、 または Reviewed で verdict が PASS でない (契約の審査)。 intake の排他が照合する母集団で、 同時走行の最大値が数える母集団でもあり、 pipe stop --run で 1 本だけ終端に倒せる (ADR-0019 §2.1・ADR-0035)。
+    relationships: [便, write-set の交差, 契約, 同時走行の最大値]
   - canonical: 起こし直し
     domain: consumer
     definition: land の追随が衝突した run で、 同じ worktree と契約に「追随」節を添えて runner をもう 1 回 spawn すること。 回数は rules 行 pipe.follow_retries が上限で、 その判定は guard (ADR-0019 §2.2 / §2.4)。
@@ -737,3 +737,9 @@ terms:
     aliases: [planner intervention]
     definition: planner が起動の列の順番を動かす typed な印。 first (最優先へ)・hold (止める)・release (戻す) の 3 つで、 user の直命の対として記録され、 散文の順序を持たない (ADR-0034 §2)。
     relationships: [dispatcher, 起動の列, 直命の表]
+  - canonical: 同時走行の最大値
+    domain: consumer
+    aliases: [live run cap]
+    definition: host で同時に走る live な便の本数の上限。 値は rules 行 pipe.max_live が持ち (user 裁定 id 付き・憲法 C5)、 受付が便を作る前に live な便を数えて値以上の周は typed に断り、 dispatcher はその契約を列に留めて次の契機で再判定する。 走行中の便には効かない。 env・launcher の変数・host の宣言 file には置かない (ADR-0035)。 並列の枠 (変異検査の並列度・memory の枠) とは別。
+    relationships: [live な便, 受付, dispatcher, 起動の列, rules 行, 並列の枠]
+    flagged_ambiguities: ["上限: 同時走行の最大値 (便の本数・pipe.max_live) と並列の枠 (変異検査の並列度・memory) と上限停止 (口座の使用上限) は別義"]
