@@ -236,17 +236,38 @@ fn section_number(title: &str) -> Option<String> {
     (!head.is_empty() && head.chars().all(|found| found.is_ascii_digit())).then(|| head.to_owned())
 }
 
-/// `req` の各 id の要件本文を要件面（`.html` の `id="<id>"` を持つ行・tag を剥がした字面）から抜く。
-/// 要件面を読めない周は理由の 1 行・id が無い周はその id の行に明示する（黙って落とさない）。
+/// 要件面から 1 つの id を読んだ結果（形ごとの読み手が返す・材料の行の 3 形）。
+#[derive(Debug, PartialEq, Eq)]
+enum Found {
+    /// id の本文（空白を畳んだ 1 行）。
+    Body(String),
+    /// id は在るが本文が無い（yaml の裸の `- FR1` / `text:` の無い mapping・md の見出しの下が空）。
+    Empty,
+    /// id が要件面に無い。
+    Absent,
+}
+
+/// `req` の各 id の要件本文を要件面から抜く。読み手は要件面の**形ごとに 1 関数**で、呼び分けは id の集合の読み手
+/// [`table::requirement_ids`] と同じ**拡張子の 1 match**（`.html` = [`requirement_row`]〔`id="<id>"` の行・tag を剥がした
+/// 字面〕・`.yaml` / `.yml` = [`requirement_yaml`]〔id と同じ mapping の `text:`〕・`.md` = [`requirement_md`]〔見出しの
+/// 下の本文〕・設計 contract-source.md §4・C2）。要件面を読めない周・形を読めない周は理由の 1 行・id が無い周と本文の
+/// 無い id はその id の行に明示する（黙って落とさない・NFR4）。
 fn requirements_text(repo: &Path, path: &str, req: &[String]) -> String {
     let text = match table::read(repo, path) {
         Ok(found) => found,
         Err(reason) => return format!("（要件面を読めない: {reason}）"),
     };
+    let reader: fn(&str, &str) -> Found = match Path::new(path).extension().and_then(|ext| ext.to_str()) {
+        Some("html") => |text, id| requirement_row(text, id).map_or(Found::Absent, Found::Body),
+        Some("yaml" | "yml") => requirement_yaml,
+        Some("md") => requirement_md,
+        _ => return format!("（要件面 {path} の形を読めない: .html の anchor / .yaml の id + text / .md の見出しだけ）"),
+    };
     req.iter()
-        .map(|id| match requirement_row(&text, id) {
-            Some(body) => format!("{id}: {body}"),
-            None => format!("{id}: （要件面 {path} に無い）"),
+        .map(|id| match reader(&text, id) {
+            Found::Body(body) => format!("{id}: {body}"),
+            Found::Empty => format!("{id}: （要件面 {path} の {id} に本文が無い）"),
+            Found::Absent => format!("{id}: （要件面 {path} に無い）"),
         })
         .collect::<Vec<String>>()
         .join("\n")
@@ -258,6 +279,129 @@ fn requirement_row(text: &str, id: &str) -> Option<String> {
     text.lines()
         .find(|line| marks.iter().any(|mark| line.contains(mark.as_str())))
         .map(strip_tags)
+}
+
+/// md の要件面（行頭 `#` の見出しの先頭 token が id・`table/check.rs` の `md_id` と同じ見出しの読み）の本文: その
+/// 見出しの次の行から次の見出しの直前までを空白を畳んだ 1 行に。本文の行が無い（空行だけ）id は [`Found::Empty`]。
+fn requirement_md(text: &str, id: &str) -> Found {
+    let mut lines = text.lines();
+    if lines.by_ref().all(|line| md_heading(line).and_then(|title| title.split_whitespace().next()) != Some(id)) {
+        return Found::Absent;
+    }
+    let body: Vec<&str> = lines.take_while(|line| md_heading(line).is_none()).flat_map(str::split_whitespace).collect();
+    if body.is_empty() {
+        Found::Empty
+    } else {
+        Found::Body(body.join(" "))
+    }
+}
+
+/// 行頭 `#` の列 + 空白で始まる md の見出しの字面（それ以外は `None`）。
+fn md_heading(line: &str) -> Option<&str> {
+    let rest = line.strip_prefix('#')?.trim_start_matches('#');
+    rest.strip_prefix([' ', '\t']).map(str::trim)
+}
+
+/// yaml の要件面の本文: id の行（`- id: FR1` / `id: FR1`）と同じ mapping の **`text:` の値だけ**（`title:` へ倒さない・
+/// 設計 §4「yaml の `id` + `text`」）。値の続き（`text: |` の block・桁の深い行）は空白を畳んで繋ぐ。裸の `- FR1` と
+/// `text:` の無い mapping は [`Found::Empty`]。
+fn requirement_yaml(text: &str, id: &str) -> Found {
+    let lines: Vec<&str> = text.lines().collect();
+    let hit = lines.iter().enumerate().find_map(|(index, line)| {
+        let (column, key, value) = yaml_entry(line)?;
+        (value == id && (key.is_empty() || key == "id")).then_some((index, column, key.is_empty()))
+    });
+    let Some((at, column, bare)) = hit else {
+        return Found::Absent;
+    };
+    if bare {
+        return Found::Empty;
+    }
+    // mapping の始まり: `- id:` の行はそれ自身・`id:` の行は同じ桁の key を上へ辿り、`-` の頭で止まる。
+    let member = |index: usize| lines.get(index).map_or(Member::Outside, |line| yaml_member(line, column));
+    let mut start = at;
+    while member(start) != Member::Head && start > 0 && member(start.saturating_sub(1)) != Member::Outside {
+        start = start.saturating_sub(1);
+    }
+    let (mut body, mut reading) = (Vec::new(), false);
+    for (index, line) in lines.iter().enumerate().skip(start) {
+        match yaml_member(line, column) {
+            Member::Outside => break,
+            Member::Head if index != start => break,
+            Member::Head | Member::Key => {
+                let (_, key, value) = yaml_entry(line).unwrap_or_default();
+                reading = key == "text";
+                if reading && !matches!(value, "|" | ">" | "|-" | ">-" | "|+" | ">+") {
+                    body.push(value);
+                }
+            }
+            Member::Inner if reading => body.push(unquote(line)),
+            Member::Inner => {}
+        }
+    }
+    let joined = body.join(" ").split_whitespace().collect::<Vec<&str>>().join(" ");
+    if joined.is_empty() {
+        Found::Empty
+    } else {
+        Found::Body(joined)
+    }
+}
+
+/// yaml の 1 行の (key の桁, key, 値)。`- id: FR1` は key の桁を `-` と空白の後ろに取り、`- FR1` の裸の項目は key が空。
+/// 空行と `#` の comment は `None`。値は両端の引用符を剥がす。
+fn yaml_entry(line: &str) -> Option<(usize, &str, &str)> {
+    let trimmed = line.trim_start();
+    if trimmed.is_empty() || trimmed.starts_with('#') {
+        return None;
+    }
+    let mut column = line.len().saturating_sub(trimmed.len());
+    let item = match trimmed.strip_prefix('-') {
+        Some(rest) if rest.is_empty() || rest.starts_with([' ', '\t']) => {
+            let body = rest.trim_start();
+            column = column.saturating_add(trimmed.len().saturating_sub(body.len()));
+            body
+        }
+        _ => trimmed,
+    };
+    match item.split_once(':') {
+        Some((key, value)) if !key.contains([' ', '"', '\'']) && (value.is_empty() || value.starts_with([' ', '\t'])) => {
+            Some((column, key, unquote(value)))
+        }
+        _ => Some((column, "", unquote(item))),
+    }
+}
+
+/// 両端の空白と引用符（`"` / `'`）を剥がした字面。
+fn unquote(value: &str) -> &str {
+    value.trim().trim_matches(|found: char| found == '"' || found == '\'')
+}
+
+/// yaml の 1 行が、桁 `column` に key を持つ mapping に対してどこに在るか。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Member {
+    /// `-` の頭を持つ同じ桁の key（mapping の始まり・次の項目の始まり）。
+    Head,
+    /// 同じ桁の key（同じ mapping の欄）。
+    Key,
+    /// 桁の深い行・空行・comment（値の続き）。
+    Inner,
+    /// 桁の浅い行（mapping の外）。
+    Outside,
+}
+
+/// [`Member`] の判定（`yaml_entry` の桁と行の字下げから）。
+fn yaml_member(line: &str, column: usize) -> Member {
+    let trimmed = line.trim_start();
+    if trimmed.is_empty() || trimmed.starts_with('#') {
+        return Member::Inner;
+    }
+    let indent = line.len().saturating_sub(trimmed.len());
+    match yaml_entry(line) {
+        Some((at, _, _)) if at == column && indent < at => Member::Head,
+        Some((at, _, _)) if at == column => Member::Key,
+        _ if indent > column => Member::Inner,
+        _ => Member::Outside,
+    }
 }
 
 /// HTML の tag（`<…>`）を剥がし、連続する空白を 1 つに畳む。
@@ -415,7 +559,10 @@ fn broken(reason: String) -> Outcome {
 
 #[cfg(test)]
 mod tests {
-    use super::{requirement_row, requirements_text, section_text, strip_tags, verdict_of, write_review, ReviewCheck};
+    use super::{
+        requirement_md, requirement_row, requirement_yaml, requirements_text, section_text, strip_tags, verdict_of,
+        write_review, Found, ReviewCheck,
+    };
     use crate::pipe::gate::Verdict;
     use crate::pipe::run_dir;
     use std::path::{Path, PathBuf};
@@ -453,6 +600,40 @@ mod tests {
         let listed = requirements_text(&repo, "srs.html", &["FR1".to_owned(), "FR3".to_owned()]);
         assert_eq!(listed, "FR1: one two words\nFR3: （要件面 srs.html に無い）");
         assert!(requirements_text(&repo, "absent.html", &["FR1".to_owned()]).starts_with("（要件面を読めない: "));
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// 要件本文の読み手は形ごとに 1 関数で、呼び分けは拡張子の 1 match（設計 §4・`s2-07l.354`）: yaml は id と同じ
+    /// mapping の `text:` の値だけ（`title:` へ倒さない・`text:` の前に在っても・block の続きも畳む）、md は見出しの
+    /// 下の本文。裸の `- FR1`・`text:` の無い mapping・見出しの下が空の id は「本文が無い」の理由の行、他の拡張子は
+    /// 形を読めない理由の 1 行。
+    #[test]
+    fn pipe_review_requirements_text_reads_yaml_text_and_md_headings_by_extension() {
+        let yaml = "requirements:\n  - id: FR1\n    title: 起動\n    text: \"便を  起こす\"\n  - text: |\n      二行の\n      本文\n    id: FR2\n  - FR3\n  - id: FR4\n    title: 題だけ\nother:\n  text: 外の text\n";
+        assert_eq!(requirement_yaml(yaml, "FR1"), Found::Body("便を 起こす".to_owned()), "同じ mapping の text だけ");
+        assert_eq!(requirement_yaml(yaml, "FR2"), Found::Body("二行の 本文".to_owned()), "id の前の block も読む");
+        assert_eq!(requirement_yaml(yaml, "FR3"), Found::Empty, "裸の列は本文なし");
+        assert_eq!(requirement_yaml(yaml, "FR4"), Found::Empty, "title へ倒さない・隣の mapping の text を借りない");
+        assert_eq!(requirement_yaml(yaml, "FR9"), Found::Absent);
+        let md = "# 要件\n\n## FR1 便の起動\n\n便を\n起こす。\n\n## FR2\n\n## FR3 末尾\n";
+        assert_eq!(requirement_md(md, "FR1"), Found::Body("便を 起こす。".to_owned()), "次の見出しの前までを 1 行に");
+        assert_eq!(requirement_md(md, "FR2"), Found::Empty, "見出しの下が空行だけ");
+        assert_eq!(requirement_md(md, "FR3"), Found::Empty, "file 末尾まで空");
+        assert_eq!(requirement_md(md, "FR9"), Found::Absent);
+        let repo = scratch("faces");
+        let _ = std::fs::write(repo.join("reqs.yaml"), yaml);
+        let _ = std::fs::write(repo.join("reqs.md"), md);
+        let _ = std::fs::write(repo.join("reqs.json"), "{}");
+        let ids = ["FR1".to_owned(), "FR3".to_owned(), "FR9".to_owned()];
+        assert_eq!(
+            requirements_text(&repo, "reqs.yaml", &ids),
+            "FR1: 便を 起こす\nFR3: （要件面 reqs.yaml の FR3 に本文が無い）\nFR9: （要件面 reqs.yaml に無い）"
+        );
+        assert_eq!(
+            requirements_text(&repo, "reqs.md", &["FR1".to_owned(), "FR2".to_owned()]),
+            "FR1: 便を 起こす。\nFR2: （要件面 reqs.md の FR2 に本文が無い）"
+        );
+        assert!(requirements_text(&repo, "reqs.json", &ids).starts_with("（要件面 reqs.json の形を読めない: "));
         let _ = std::fs::remove_dir_all(&repo);
     }
 

@@ -247,12 +247,15 @@ fn reachable<'r>(rows: &'r [ContractRow], start: &'r ContractRow) -> BTreeSet<&'
     found
 }
 
-/// 要件面の id の集合（`.html` = `id="…"` の anchor・`.yaml` / `.yml` = 要件 id の列）。他の拡張子は読まない。
+/// 要件面の id の集合（`.html` = `id="…"` の anchor・`.yaml` / `.yml` = 要件 id の列・`.md` = 要件 id で始まる
+/// 見出し）。他の拡張子は読まない。形の弁別は拡張子の 1 match（C2）で、審査の段の本文の読み手（`pipe/review.rs` の
+/// `requirements_text`）も同じ match で形の関数を選ぶ（設計 contract-source.md §4・`s2-07l.354`）。
 pub fn requirement_ids(path: &str, text: &str) -> Result<BTreeSet<String>, String> {
     match Path::new(path).extension().and_then(|ext| ext.to_str()) {
         Some("html") => Ok(anchors(text)),
         Some("yaml" | "yml") => Ok(text.lines().filter_map(yaml_id).collect()),
-        _ => Err(format!("要件面 {path} の形を読めない（.html の anchor / .yaml の列だけ）")),
+        Some("md") => Ok(text.lines().filter_map(md_id).collect()),
+        _ => Err(format!("要件面 {path} の形を読めない（.html の anchor / .yaml の列 / .md の見出しだけ）")),
     }
 }
 
@@ -281,6 +284,15 @@ fn yaml_id(line: &str) -> Option<String> {
     let item = item.strip_prefix("id:").map_or(item, str::trim_start);
     let item = item.trim().trim_matches(|found: char| found == '"' || found == '\'');
     is_requirement(item).then(|| item.to_owned())
+}
+
+/// md の 1 行が行頭 `#` の見出しで、その先頭 token が要件 id の形なら id（`## FR1 便の起動` → `FR1`・`## FR1` も
+/// 同じ）。見出しでない行・先頭 token が id の形でない見出しは `None`。見出しの読み（行頭の `#` の列 + 空白）は審査の
+/// 段の本文の読み手（`pipe/review.rs` の `requirement_md`）と同じ形。
+fn md_id(line: &str) -> Option<String> {
+    let rest = line.strip_prefix('#')?.trim_start_matches('#');
+    let title = rest.strip_prefix([' ', '\t'])?;
+    title.split_whitespace().next().filter(|head| is_requirement(head)).map(str::to_owned)
 }
 
 /// 要件 id の形（英大文字の列 + 数字の列・`FR47` / `NFR4` / `AC21`）。
@@ -373,7 +385,8 @@ mod tests {
     use crate::pipe::refuse::Refuse;
     use std::collections::BTreeSet;
 
-    /// 要件面は拡張子で読み手を分ける（`.html` の要件 id の形の anchor・`.yaml` の列）。他の形は読まない。
+    /// 要件面は拡張子で読み手を分ける（`.html` の要件 id の形の anchor・`.yaml` の列・`.md` の要件 id で始まる
+    /// 見出し）。他の形は読まない。
     #[test]
     fn table_requirement_faces_read_html_anchors_and_yaml_lists_by_extension() {
         let set = |ids: &[&str]| ids.iter().map(|id| (*id).to_owned()).collect::<BTreeSet<String>>();
@@ -381,6 +394,8 @@ mod tests {
         assert_eq!(requirement_ids("spec/srs.html", html), Ok(set(&["FR47", "NFR4"])), "要件 id の形の anchor だけ");
         let yaml = "requirements:\n  - FR1\n  - \"AC2\"\n  - id: FR3\n";
         assert_eq!(requirement_ids("spec/reqs.yaml", yaml), Ok(set(&["AC2", "FR1", "FR3"])));
+        let md = "# 要件\n\n## FR1 便の起動\n\n本文。\n\n### NFR2\n\n## 3. 番号の節\n\nFR9 は本文の字面。\n#FR8 は見出しでない\n";
+        assert_eq!(requirement_ids("spec/reqs.md", md), Ok(set(&["FR1", "NFR2"])), "行頭 `#` の見出しの先頭 token だけ");
         assert!(requirement_ids("spec/reqs.json", "{}").is_err(), "他の拡張子は読まない");
     }
 
