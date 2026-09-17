@@ -180,7 +180,7 @@ subcommand と helper は責務ごとに 1 file に置く——入口（usage / 
 
 - **toy repo の seed（`s2-07l.117` の実測・2026-09-12）**: cargo crate の toy には **`Cargo.lock` を seed の commit に含める**。gate の precheck は untracked も clean の外と数える（便が生成した file を黙って捨てない規則は正しい）ので、lock を track していない toy では `cargo test` が生成する lock で precheck に落ちる。実 repo は lock を track 済みで発現しない。
 
-- **歯の file の置き場**（`s2-07l.351`）: `tests/e2e/pipe/` の file は接頭辞（責務）ごとに 1 file——`intake.rs` = `pipe_intake_`、`review.rs` = `pipe_review_`、`contracts.rs` = 契約表の検査の歯（`contracts_check` を使うもの）、`refuse.rs` = 残りの `pipe_refuse_`、`ratelimit.rs` / `stop.rs` = `pipe_ratelimit_` / `pipe_stop_`（`s2-07l.349`）。2 file 以上が使う helper は `pipe.rs` の `pub(super)` に置いて複製せず、外形 snapshot の歯は `pipe.rs` に残す。
+- **歯の file の置き場**（`s2-07l.351`）: `tests/e2e/pipe/` の file は接頭辞（責務）ごとに 1 file——`intake.rs` = `pipe_intake_`、`review.rs` = `pipe_review_`、`contracts.rs` = 契約表の検査の歯（`contracts_check` を使うもの）、`refuse.rs` = 残りの `pipe_refuse_`、`ratelimit.rs` / `stop.rs` = `pipe_ratelimit_` / `pipe_stop_`（`s2-07l.349`）。2 file 以上が使う helper は `pipe.rs` の `pub(super)` に置いて複製せず、外形 snapshot の歯は `pipe.rs` に残す。`contracts.rs` は `contracts_check` を使う歯に加えて、intake の口で契約の閉包・導出・宣言を撃つ歯（名に `contract_` を含むもの・`pipe_contract_` を含む）も持つ。接頭辞が 1 本だけの歯（`pipe_state_` / `pipe_show_`）は群を成さないので外形の歯と同じく `pipe.rs` に置く。
 
 ## 9. 到達点の計測（AC1 / AC2・(e)）
 
@@ -282,9 +282,9 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
 ## 20. runner の雛形に終端の規律を足し片付けで殺した子の数を記録する（契約表の行 n・`s2-07l.275`）
 
 - 出所: admin の観測（`.270` run 1）: runner が「flip-check を背景で回している・完了通知を待つ」と言って turn を閉じ（rc 0）、背景の task が scope の片付けで止められた。
-- 現物: `crates/scribe2/src/headless/runner.txt` に「背景実行で turn を閉じない」の規律は無い。`headless/mod.rs` の片付けは `pipe/confine.rs` の `release_scope` が行い、片付けで殺した子の数は record に残らない。
-- 形: 雛形 `runner.txt` に「検証は前面で完走させてから turn を閉じる（背景実行を残して終えない・残した task は片付けで止められ done に数えない）」の 1 行を足し、雛形の外形を snapshot で pin する。
-- `release_scope` が scope を止める直前に scope に残った process の数を読み、record に `orphans=<n|->` として残す（0 も書く・読めなければ `-`）。
+- 現物: `crates/scribe2/src/headless/runner.txt` に「背景実行で turn を閉じない」の規律は無い。`headless/mod.rs` の片付けは `pipe/confine.rs` の `release_scope` が行い、結果の 1 行 `runner: scope=<gone|killed|failed|no-tool>` は `headless/runner.rs` が組む。片付けで殺した子の数は record に残らない。
+- 形: 雛形 `runner.txt` に「検証は前面で完走させてから turn を閉じる（背景実行を残して終えない・残した task は片付けで止められ done に数えない）」の 1 行を足し、雛形の外形を snapshot で pin する。snapshot の `.snap` は入口の flip の test 区間に入らないので、この 1 行だけを名指す歯を別に持つ（雛形の RED はその歯で測る）。
+- `release_scope` が scope を止める直前に scope に残った process の数を読み、`runner: scope=<…>` と同じ行に `orphans=<n|->` として残す（0 も書く・読めなければ `-`）。
 - 触らない: 片付けの極性（止める）・runner の権限。
 - 却下: 背景 task を待ってから片付ける（turn の終端の規律が曖昧になる）／雛形だけ直す（殺した事実が記録に残らない）。
 
@@ -310,7 +310,7 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
 
 - 出所: admin 実測: `.336` run 2 を `pipe stop` した同じ秒に `RunStage`（`stage=Failed detail=oom-kill`）が記録され、その後 `RunStopped` で最終的に `Stopped` になった（直後の available memory は圧迫なし）。
 - 現物: `pipe/spawn.rs` の `OOM_DETAIL`（"oom-kill"）・`pipe/confine.rs` の `Reason::OomKill`（終端行の `oom_kill` ≥ 1 で判定・`pipe/gate/lens.rs`）・`pipe/stop.rs` は席を止め切ってから `RunStopped` を書く。stop の終端検出が「runner が消えた」を oom-kill に倒す経路が疑われる（kernel の証拠は権限で未確認）。
-- 形: `pipe stop` は signal を送る前に、その run の「停止中」の印を書く。runner の消滅を見た経路（`pipe/spawn.rs` の終端検出）は、その run が停止中なら `Failed detail=oom-kill` を書かず `RunStopped` の経路に任せる。
+- 形: `pipe stop` は signal を送る前に、その run の「停止中」の印を書く。runner の消滅を見た経路（`pipe/spawn.rs` の終端検出）は、その run が停止中なら `Failed detail=oom-kill` を書かず `RunStopped` の経路に任せる。印は `RunStage stage=<現段> detail=stopping`（kind も field も既存）で、「停止中」は便の最後の `RunStage` の detail が stopping であることを既存の読み手 1 本で読む。止め切れなかった周は印が残り便は live のままで、次の `pipe stop` が同じ判定で読む（再 spawn の `RunStage` は最後の記帳を置き換えるので印は自然に読まれなくなる）。
 - oom-kill は `Reason::OomKill` の既存の判定条件（終端行の `oom_kill` ≥ 1）が在る周だけに限る。終端行が無い / 読めない周は `Reason` に variant を 1 つ足し（unknown・`as_str`）、`Failed detail=unknown` に倒す（0 と「測れない」を融合しない）。
 - 触らない: stop の極性（止め切れなければ `RunStopped` を書かない）・oom の閾値。
 - 却下: dmesg / journalctl を読む（権限と host 依存）／stop 後の `Failed` を後から書き換える（append-only の log を汚す）。
@@ -412,9 +412,9 @@ title = "tests/e2e/pipe/intake.rs を接頭辞ごとに review.rs / contracts.rs
 req = ["FR30"]
 section = "8"
 write-set = ["crates/scribe2/tests/e2e/pipe/intake.rs", "+crates/scribe2/tests/e2e/pipe/review.rs", "+crates/scribe2/tests/e2e/pipe/contracts.rs", "+crates/scribe2/tests/e2e/pipe/refuse.rs", "crates/scribe2/tests/e2e/pipe.rs", "docs/design/pipeline.md"]
-verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_intake_", "cargo nextest run -p scribe2 --no-tests=fail pipe_review_", "cargo nextest run -p scribe2 --no-tests=fail pipe_refuse_", "cargo nextest run -p scribe2 --no-tests=fail contract_", "cargo nextest run -p scribe2 --no-tests=fail pipe_state_", "cargo nextest run -p scribe2 --no-tests=fail pipe_show_"]
 size = "S"
-done = "intake.rs が pipe_intake_ だけになり、review / contracts / refuse の 3 file に歯が移って本数が不変"
+done = "intake.rs が pipe_intake_ だけになり、review / contracts / refuse の 3 file と pipe.rs（pipe_state_ / pipe_show_ の単発 2 本）に歯が移って filter ごとの本数が不変"
 depends = ["a"]
 
 [[contract]]
@@ -423,8 +423,8 @@ title = "入口の flip check の免除経路を閉じる — docs-only の面�
 req = ["FR7", "FR17", "FR50"]
 section = "7"
 touches = ["crate::rules::RuleKind"]
-write-set = ["rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "crates/scribe2/src/rules/manifest.rs", "crates/scribe2/src/pipe/declaration.rs", "crates/xtask/src/flipcheck.rs", "crates/xtask/src/main.rs", "crates/xtask/src/limits.rs", "+crates/xtask/src/provenance.rs", "crates/xtask/src/flipcheck_tests.rs", "crates/xtask/src/flipcheck_declaration_tests.rs", "crates/scribe2/tests/e2e/rules.rs", "crates/scribe2/tests/e2e/snapshots/e2e__rules__rules_external_form.snap", "crates/scribe2/src/snapshots/scribe2__tests__doctor_external_form.snap", ".github/workflows/ci.yml", "docs/design/pipeline.md", "docs/design/rules-manifest.md"]
-verify = ["cargo nextest run -p xtask --no-tests=fail flip_docs_only_ flip_marks_ provenance_", "cargo nextest run -p scribe2 --no-tests=fail declaration_kind_"]
+write-set = ["rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "crates/scribe2/src/rules/manifest.rs", "crates/scribe2/src/pipe/declaration.rs", "crates/xtask/src/flipcheck.rs", "crates/xtask/src/flipcheck/git.rs", "crates/xtask/src/main.rs", "crates/xtask/src/limits.rs", "+crates/xtask/src/provenance.rs", "crates/xtask/src/flipcheck_tests.rs", "crates/xtask/src/flipcheck_declaration_tests.rs", "crates/scribe2/tests/e2e/rules.rs", "crates/scribe2/tests/e2e/snapshots/e2e__rules__rules_external_form.snap", "crates/scribe2/src/snapshots/scribe2__tests__doctor_external_form.snap", ".github/workflows/ci.yml", "docs/design/pipeline.md", "docs/design/rules-manifest.md"]
+verify = ["cargo nextest run -p xtask --no-tests=fail flip_docs_only_ flip_marks_ provenance_", "cargo nextest run -p scribe2 --no-tests=fail declaration_kind_", "cargo nextest run -p scribe2 --no-tests=fail rules_flip_"]
 size = "M"
 done = "rules 行だけの便が no-test-diff で落ち、札は形と上限で止まり、push(main) の CI が出所を測り、入口の flip を撃たない宣言が intake で断られる"
 
@@ -533,8 +533,8 @@ id = "n"
 title = "runner の雛形に turn 終端の規律を足し、片付けで殺した子の数を record に残す"
 req = ["FR5", "FR22"]
 section = "20"
-write-set = ["crates/scribe2/src/headless/runner.txt", "crates/scribe2/src/pipe/confine.rs", "crates/scribe2/src/headless/mod.rs", "crates/scribe2/tests/e2e/headless.rs", "crates/scribe2/tests/e2e/snapshots/e2e__headless__headless_runner_prompt_external_form.snap", "docs/design/pipeline.md"]
-verify = ["cargo nextest run -p scribe2 --no-tests=fail headless_release_orphans_ headless_runner_prompt_"]
+write-set = ["crates/scribe2/src/headless/runner.txt", "crates/scribe2/src/headless/runner.rs", "crates/scribe2/src/pipe/confine.rs", "crates/scribe2/src/headless/mod.rs", "crates/scribe2/tests/e2e/headless.rs", "crates/scribe2/tests/e2e/snapshots/e2e__headless__headless_runner_prompt_external_form.snap", "docs/design/pipeline.md"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail headless_release_orphans_", "cargo nextest run -p scribe2 --no-tests=fail headless_runner_prompt_closes_turn_"]
 size = "S"
 done = "runner の雛形が終端の規律を持ち、片付けで殺した子の数が record に残る"
 
@@ -564,7 +564,7 @@ title = "pipe stop 起因の終端を oom-kill に誤分類せず、kernel の�
 req = ["FR22", "FR46"]
 section = "23"
 write-set = ["crates/scribe2/src/pipe/stop.rs", "crates/scribe2/src/pipe/spawn.rs", "crates/scribe2/src/pipe/confine.rs", "crates/scribe2/src/pipe/gate/lens.rs", "crates/scribe2/tests/e2e/pipe/spawn.rs", "crates/scribe2/tests/e2e/pipe/ratelimit.rs", "crates/scribe2/tests/e2e/pipe/stop.rs", "docs/design/pipeline.md"]
-verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_spawn_terminal_reason_"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_spawn_terminal_reason_", "cargo nextest run -p scribe2 --no-tests=fail confine_reasons_"]
 size = "S"
 done = "stop した便が oom-kill に分類されず、証拠の無い kill は unknown"
 
