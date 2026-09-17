@@ -2,9 +2,10 @@
 //!
 //! 型の閉包（[`super::closure`]）・外形 pin（[`super::surface_closure`]）と同じ **pure** な字面走査で、契約表の行の
 //! 欄（`touches` / `verify` / `surfaces` / `creates` / `tests` / `also`）から write-set を**導出値**として作る
-//! [`derive_write_set`] = 閉包 ∪ 歯の置き場（base の `#[test]` の fn 名が verify の filter 語を含む file）∪ 外形
-//! pin ∪ 新規 file ∪ Rust の外の file。手書きの write-set は [`check_drift`] で導出値との集合一致だけを認める
-//! （接頭辞 `+` は剥がして比べる）。行の数え方 [`weighted_lines`] も上限の余地の式としてここに置く。
+//! [`derive_write_set`] = 閉包 ∪ 歯の置き場（verify の nextest 行の scope〔[`Scope`]・§28〕の中で base の `#[test]` の
+//! fn 名が filter 語を含む file）∪ 外形 pin ∪ 新規 file ∪ Rust の外の file。手書きの write-set は [`check_drift`] で
+//! 導出値との集合一致だけを認める（接頭辞 `+` は剥がして比べる）。行の数え方 [`weighted_lines`] も上限の余地の式として
+//! ここに置く。
 //!
 //! **Declared 行の歯の置き場の門**（§20・行 t）[`declared_teeth`]: 導出も drift も撃たない Declared 行でも、`verify` の
 //! nextest 行の歯の file は同じ [`teeth_places`] で解き、行の write-set に無い file を全部名指して断る
@@ -14,7 +15,7 @@
 
 use super::super::refuse::{covered, normalize, NEW_FILE};
 use super::{closure, is_ident, is_ident_char, surface_closure, test_region, texts_of, ClosureError, Source};
-use super::{CRATES_DIR, NEXTEST_HEAD, PACKAGE_FLAGS, RS, TEST_ATTR};
+use super::{CRATES_DIR, LIB_FLAG, NEXTEST_HEAD, PACKAGE_FLAGS, RS, SRC_DIR, TESTS_DIR, TEST_ATTR, TEST_FLAG, UNREAD_TARGET_FLAGS};
 use std::collections::BTreeSet;
 
 /// 行の数え方（設計 rules-manifest.md §4・`R-C4.line-width`・上限の余地が base の行数を数える式）: 各行を
@@ -122,20 +123,22 @@ pub(crate) fn check_teeth_cover(written: &[String], places: &BTreeSet<String>) -
     }
 }
 
-/// (ii) 歯の置き場: `verify` の nextest 行ごとに、その crate の歯の区間で `#[test]` の直下の `fn` の名が filter 語を
-/// 含む file の全部（nextest の positional filter と同じ「含む」・helper の fn は数えない）。base で 0 本の filter 語
-/// （新しい接頭辞）は `tests` 欄が置き場で、`tests` も無ければ [`ClosureError::TeethPlaceUnresolved`]。`tests` の
-/// 項目は歯の file だけ（`creates` に在る新規 file は creates の側が write-set に載る）。Declared 行の門
-/// （[`declared_teeth`]）も同じ 1 関数で読む（2 本目の読み手を作らない）。
+/// (ii) 歯の置き場: `verify` の nextest 行ごとに、その crate のその行の scope（[`Scope`]・§28）の歯の区間で `#[test]`
+/// の直下の `fn` の名が filter 語を含む file の全部（nextest の positional filter と同じ「含む」・helper の fn は
+/// 数えない）。scope で 0 本の filter 語（新しい接頭辞）は `tests` 欄が置き場で、`tests` も無ければ
+/// [`ClosureError::TeethPlaceUnresolved`]。`tests` の項目は歯の file だけ（`creates` に在る新規 file は creates の側が
+/// write-set に載る）。Declared 行の門（[`declared_teeth`]）も同じ 1 関数で読む（2 本目の読み手を作らない）。
 pub(crate) fn teeth_places(fields: &Fields<'_>, base: &Base<'_>, texts: &[(&str, &str)]) -> Result<BTreeSet<String>, ClosureError> {
     let mut found = BTreeSet::new();
     for line in fields.verify {
-        let Some((krate, filter)) = nextest_filter(line, base.core_crate) else {
+        let Some((krate, filter, scope)) = nextest_filter(line, base.core_crate) else {
             continue;
         };
         let places: Vec<&str> = texts
             .iter()
-            .filter(|(path, text)| in_crate(path, krate) && test_fns(test_region(path, text)).iter().any(|name| name.contains(filter)))
+            .filter(|(path, text)| {
+                in_crate(path, krate) && in_scope(path, krate, scope) && test_fns(test_region(path, text)).iter().any(|name| name.contains(filter))
+            })
             .map(|(path, _)| *path)
             .collect();
         if places.is_empty() && fields.tests.is_empty() {
@@ -149,29 +152,71 @@ pub(crate) fn teeth_places(fields: &Fields<'_>, base: &Base<'_>, texts: &[(&str,
     Ok(found)
 }
 
-/// nextest の行から (crate, filter 語) を読む。書き出しが `cargo nextest run` でない行・filter 語（`-` で始まらない
-/// 末尾の語）の無い行は `None`。crate は `-p` / `--package` の次の語・無ければ core の crate。
-fn nextest_filter<'l>(line: &'l str, core_crate: &'l str) -> Option<(&'l str, &'l str)> {
+/// nextest 行の scope（§28・閉じた 3 値・宣言順 = 旗なし / `--lib` / `--test <name>`）＝その行が走らせる target。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Scope<'l> {
+    /// 旗なし＝その crate の全 file。読めない旗（[`UNREAD_TARGET_FLAGS`]）と旗が 2 つ以上の行もここへ倒す（fail-closed）。
+    Crate,
+    /// `--lib`＝`crates/<crate>/src/` 配下。
+    Lib,
+    /// `--test <name>`＝`crates/<crate>/tests/<name>.rs` とその配下 `tests/<name>/`。
+    Test(&'l str),
+}
+
+/// nextest の行から (crate, filter 語, scope) を読む。書き出しが `cargo nextest run` でない行・filter 語（`-` で
+/// 始まらない末尾の語）の無い行は `None`。crate は `-p` / `--package` の次の語・無ければ core の crate。scope の旗
+/// （`--lib` / `--test <name>`）が丁度 1 つで読めない旗が無い行だけ狭く読み、他は [`Scope::Crate`]。
+fn nextest_filter<'l>(line: &'l str, core_crate: &'l str) -> Option<(&'l str, &'l str, Scope<'l>)> {
     let mut words = line.split_whitespace();
     for head in NEXTEST_HEAD {
         if words.next() != Some(*head) {
             return None;
         }
     }
-    let (mut krate, mut filter) = (core_crate, None);
+    let (mut krate, mut filter, mut scopes) = (core_crate, None, Vec::new());
     while let Some(word) = words.next() {
         if PACKAGE_FLAGS.contains(&word) {
             krate = words.next()?;
+        } else if word == LIB_FLAG {
+            scopes.push(Scope::Lib);
+        } else if word == TEST_FLAG {
+            scopes.push(Scope::Test(words.next()?));
+        } else if UNREAD_TARGET_FLAGS.contains(&word) {
+            // 読めない旗は「広い側の旗」として数える＝単独でも scope の旗と並んでも Crate へ倒れる。
+            scopes.push(Scope::Crate);
         } else if !word.starts_with('-') {
             filter = Some(word);
         }
     }
-    Some((krate, filter?))
+    let scope = match scopes.as_slice() {
+        [one] => *one,
+        _ => Scope::Crate,
+    };
+    Some((krate, filter?, scope))
 }
 
 /// `path` が crate `name` の file か（`crates/<name>/` 配下）。
 fn in_crate(path: &str, name: &str) -> bool {
-    path.strip_prefix(CRATES_DIR).and_then(|rest| rest.strip_prefix(name)).is_some_and(|rest| rest.starts_with('/'))
+    crate_relative(path, name).is_some()
+}
+
+/// `path` が行の scope の中か（§28・[`in_crate`] の後段の 1 述語・網羅 match）: 旗なし = crate の全 file / `--lib` =
+/// `src/` 配下 / `--test <name>` = `tests/<name>.rs` とその配下 `tests/<name>/`。
+fn in_scope(path: &str, krate: &str, scope: Scope<'_>) -> bool {
+    crate_relative(path, krate).is_some_and(|rest| match scope {
+        Scope::Crate => true,
+        Scope::Lib => rest.split('/').next() == Some(SRC_DIR),
+        Scope::Test(name) => rest
+            .strip_prefix(TESTS_DIR)
+            .and_then(|tail| tail.strip_prefix('/'))
+            .and_then(|tail| tail.strip_prefix(name))
+            .is_some_and(|tail| tail == RS || tail.starts_with('/')),
+    })
+}
+
+/// `crates/<name>/` を剥がした残り（crate の外は `None`）。
+fn crate_relative<'p>(path: &'p str, name: &str) -> Option<&'p str> {
+    path.strip_prefix(CRATES_DIR).and_then(|rest| rest.strip_prefix(name)).and_then(|rest| rest.strip_prefix('/'))
 }
 
 /// 歯の区間の `#[test]` の直下の `fn` の名（属性行・doc・空行は跨ぐ・他の行が先に来れば歯ではない）。
@@ -475,6 +520,61 @@ mod tests {
             Err(ClosureError::TeethOutsideWriteSet { files: strings(&["crates/toy/src/other.rs"]) }),
             "先の行が新しい接頭辞でも後の行の歯は測る"
         );
+    }
+
+    // flip-check: s2-07l.451
+
+    /// §28 (a): `--test e2e` の行の置き場は `tests/e2e.rs` とその配下 `tests/e2e/nested.rs` の 2 本に等しい（同じ filter 語に
+    /// 当たる src の in-file の歯 `other.rs` は返さない）。`--test helper` は `helper.rs` だけ・別 crate の `other` の歯は
+    /// どちらも返さない（`in_crate` の側は不変）。(e) Declared 行の門も同じ 1 関数で scope を読む＝同じ行に target の 2 file
+    /// だけの write-set を渡すと通る（crate 全体を読めば `other.rs` を名指して断る）。
+    #[test]
+    fn closure_scope_test_target_keeps_only_that_targets_files() {
+        let (mut sources, tracked) = derive_base();
+        sources.push(source("crates/toy/tests/e2e/nested.rs", "#[test]\nfn derive_nested() {}\n"));
+        let e2e_line = "cargo nextest run -p toy --test e2e --no-tests=fail derive_";
+        let target = set(&["crates/toy/tests/e2e.rs", "crates/toy/tests/e2e/nested.rs"]);
+        let teeth = |line: &str| derive(&[("verify", &[line])], &sources, &tracked);
+        assert_eq!(teeth(e2e_line), Ok(target.clone()), "--test e2e は target の file とその配下だけ");
+        assert_eq!(teeth("cargo nextest run -p toy --test helper other_"), Ok(set(&["crates/toy/tests/helper.rs"])), "--test helper");
+        let base = Base { sources: &sources, snapshots: &[], tracked: &tracked, core_crate: "toy" };
+        let verify = strings(&[e2e_line]);
+        let fields = Fields { touches: &[], surfaces: &[], verify: &verify, creates: &[], tests: &[], also: &[] };
+        let written: Vec<String> = target.into_iter().collect();
+        assert_eq!(declared_teeth(&fields, &base, &written), Ok(()), "(e) 門は src の歯の file を要求しない");
+    }
+
+    /// §28 (b): `--lib` の行の置き場は `src/` の歯の file `other.rs` の 1 本だけ（`tests/e2e.rs` は返さない）。
+    #[test]
+    fn closure_scope_lib_keeps_only_src_side_teeth() {
+        let (sources, tracked) = derive_base();
+        let got = derive(&[("verify", &["cargo nextest run -p toy --lib --no-tests=fail derive_"])], &sources, &tracked);
+        assert_eq!(got, Ok(set(&["crates/toy/src/other.rs"])), "--lib は src 配下だけ");
+    }
+
+    /// §28 (c): 旗なし・読めない旗（`--bin toy`）・scope の旗が 2 つ（`--lib --test e2e`）の行は 3 つとも crate 全体
+    /// （src も tests も）＝広い側へ倒す。返りの集合を等値で測る（空で通らない）。
+    #[test]
+    fn closure_scope_unknown_or_repeated_flags_stay_crate_wide() {
+        let (sources, tracked) = derive_base();
+        let wide = set(&["crates/toy/src/other.rs", "crates/toy/tests/e2e.rs"]);
+        for line in [
+            "cargo nextest run -p toy --no-tests=fail derive_",
+            "cargo nextest run -p toy --bin toy --no-tests=fail derive_",
+            "cargo nextest run -p toy --lib --test e2e --no-tests=fail derive_",
+        ] {
+            assert_eq!(derive(&[("verify", &[line])], &sources, &tracked), Ok(wide.clone()), "{line}");
+        }
+    }
+
+    /// §28 (d): `--test e2e` の scope に filter 語 `in_src` の歯が無く（`e2e.rs` / `e2e/nested.rs`）src の `other.rs` にだけ
+    /// 在る周は、`tests` 欄が無ければ従来どおり `TeethPlaceUnresolved`（字面不変・crate 全体を読んで解いてしまわない）。
+    #[test]
+    fn closure_scope_zero_files_without_tests_is_still_unresolved() {
+        let (mut sources, tracked) = derive_base();
+        sources.push(source("crates/toy/tests/e2e/nested.rs", "#[test]\nfn derive_nested() {}\n"));
+        let got = derive(&[("verify", &["cargo nextest run -p toy --test e2e --no-tests=fail in_src"])], &sources, &tracked);
+        assert_eq!(got, Err(ClosureError::TeethPlaceUnresolved { filter: "in_src".to_owned() }), "scope の外の歯では解かない");
     }
 
     /// 幅 10 の fixture と期待値。**xtask の `workspace` の歯と同じ字面・同じ値**（2 crate の式の一致を守る）。

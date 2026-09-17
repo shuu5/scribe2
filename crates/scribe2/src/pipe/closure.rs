@@ -28,8 +28,9 @@
 //! base に解けないものを全件返す）。
 //!
 //! **write-set の導出**（契約 (h)・§3「write-set の導出」）[`derive_write_set`] は行の欄（`touches` / `verify` /
-//! `surfaces` / `creates` / `tests` / `also`）から write-set を**導出値**として作る = 閉包 ∪ 歯の置き場（base の
-//! `#[test]` の fn 名が verify の filter 語を含む file）∪ 外形 pin ∪ 新規 file ∪ Rust の外の file。手書きの
+//! `surfaces` / `creates` / `tests` / `also`）から write-set を**導出値**として作る = 閉包 ∪ 歯の置き場（verify の nextest
+//! 行の scope〔旗なし / `--lib` / `--test <name>`・§28〕の中で base の `#[test]` の fn 名が filter 語を含む file）∪ 外形 pin
+//! ∪ 新規 file ∪ Rust の外の file。手書きの
 //! write-set は [`check_drift`] で導出値との集合一致だけを認める（接頭辞 `+` は剥がして比べる）。
 //!
 //! **fn 形の touches**（§18・行 r）: `touches` の項目の末尾が小文字始まりの識別子（`crate::pipe::cli::resume`）なら
@@ -49,6 +50,15 @@ const NEXTEST_HEAD: &[&str] = &["cargo", "nextest", "run"];
 
 /// nextest の行で crate を選ぶ flag（次の語が crate の名）。
 const PACKAGE_FLAGS: &[&str] = &["-p", "--package"];
+
+/// nextest の行で lib target だけを撃つ scope の旗（§28・置き場は `crates/<crate>/src/` 配下）。
+const LIB_FLAG: &str = "--lib";
+
+/// nextest の行で統合 test の target を選ぶ scope の旗（§28・次の語が target の名・置き場は `tests/<name>.rs` とその配下）。
+const TEST_FLAG: &str = "--test";
+
+/// nextest の行で target を選ぶが scope に読まない旗（§28・在れば旗なしと同じ広い側＝crate 全体へ倒す・fail-closed）。
+const UNREAD_TARGET_FLAGS: &[&str] = &["--bin", "--bins", "--bench", "--benches", "--example", "--examples", "--tests", "--all-targets", "-E"];
 
 /// 歯の印（この行の直下の `fn` が歯・helper の fn は数えない）。
 const TEST_ATTR: &str = "#[test]";
