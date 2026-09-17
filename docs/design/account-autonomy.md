@@ -134,6 +134,17 @@ C1 / C5（R-C9-1 は行・裁定 id）・C2（`Purpose` / `Selection` / `Stage` 
 - 歯（`headless_flag_duplicate_` 接頭辞・`tests/e2e/headless.rs` と `tests/e2e/pipe/spawn.rs`）: runner の argv に `--account-dir` ×2 → claude を呼ばず引数不正の rc で断る（偽 claude の呼出 0）／lens も同じ／`with_account` は起動行に `--account-dir` が既に在ると足さずに断る（spawn の e2e・Spawned が記録されない）／runner と lens の argv に `--worktree` ×2 → 同じ断り（`need` は `flag` の包み・全 flag に 1 経路で効く pin）。
 - 却下: 最後の出現を採る（launcher の混入を黙って上書きする＝散文運用を器が受け入れる）／runner だけ直す（lens も同じ読み手）／`with_account` が既存の値を置換する（どちらが正か器に分からない・C10）。
 
+## 17. API に届かず止まった runner を Failed に倒さない — 到達不能を閉じた語で弁別し、runner の死亡と同じ途中再開へ載せる（契約表の行 n・`s2-07l.301`）
+
+- 何が起きているか（host のネット断 2026-09-14 23:1x〜23:5xZ・verified）: runner が `API Error: Can't reach the API server (EAI_AGAIN)` で rc 1 → `RunStage Failed detail=runner-rc:1,commits:2`（worktree に commit 2 本）。`pipe resume` は Failed から再開しない（§4・終端）ので、運びは retire → run 2＝成果が捨てられた（C9「成果を保つ」の便版の穴）。現物（main d0fe20d）: `pipe/spawn.rs` は包みの rc が `RC_QUESTION` / `RC_RATE_LIMIT` の周だけ最終行を読み、それ以外は `settle`（rc 0 ∧ commit ≥ 1 なら Implemented・他は Failed）。`headless/runner.rs` は claude の stream の `result` record から `subtype`（`ResultKind`・Success / ErrorMaxTurns / ErrorDuringExecution / Unknown）と `is_error` と本文（`last_result`）を読み `result_line` に写すが、到達不能を弁別する典型の語も rc も持たない（上限は `rate_limit_event` の status＝typed・到達不能に typed な record は無い＝本文の語で読むしかない）。§4 の runner の死亡（`.323`・Landed）は `Spawned` のまま `SeatStopped detail=runner-dead` を記帳して同じ worktree・同じ契約で起こし直す形を持つ。
+- 形: (1) **弁別**（`headless/runner.rs`・pure）: `result` record が `is_error=true` かつ本文が到達不能の**閉じた語の集合**（const slice・宣言順・記録時点の語 = `Can't reach the API server` / `EAI_AGAIN` / `ENETUNREACH` / `ECONNREFUSED`・語は現物で決める）のいずれかを含む周を「到達不能」と読み、runner は新しい rc `RC_UNREACHABLE`（`headless/mod.rs`・`RC_RATE_LIMIT` の隣・値は現物で決める・他と衝突しない）で終わり、上限の停止行と同じ場所（stdout・`stop_line` の隣の 1 関数）に `runner: halt reason=unreachable text=<本文の先頭>` を出す。集合に無い `is_error` は従来どおり（rc はそのまま・Failed）。**限界（残す側）**: 語の集合は claude の文面に追随する下界＝見逃した周は従来の Failed（fail-safe 側・成果は retire の worktree に残る）で、語を足すのは本 § の集合 1 か所。
+- (2) **段**（`pipe/spawn.rs`・rc の分岐に 1 つ）: rc が `RC_UNREACHABLE` の周は Failed を記帳せず、`SeatStopped detail=runner-unreachable`（pid 付き・`runner-dead` と同じ形の定数・`follow.rs` の `RUNNER_DEAD` の隣）を 1 件記帳して段は `Spawned` のまま（live・排他の母集団に残る・worktree と commit と未 commit は保つ・N1）。commit の有無は見ない（0 本でも捨てない＝ネットが戻れば続く）。
+- (3) **途中再開**（§4 の runner の死亡と同じ 1 本）: `follow.rs` の `Halt` に variant `Unreachable` を足し、`resumption` は `Spawned` の段で最後の席の event が `SeatStopped detail=runner-unreachable` の周に `Some`（`stopped_at` = その ts・未 commit の一覧は同じ読み手）。`pipe resume` の `Spawned` の分岐は、**最後の席の event**（`SeatSpawned` / `SeatStopped` のうち ts 最大の 1 件）が `SeatStopped detail=runner-unreachable` の周**だけ**生死の計測と `runner-dead` の記帳を飛ばして（runner は rc で終わっている＝pid は死んでいるが理由は既に typed に在る・二重に記帳しない）§4 の起こし直しの 1 本へ進む。起こし直しの後は最後の席の event が `SeatSpawned` になるので、2 回目の `pipe resume` は従来どおり生死の計測を通り、生きている runner は typed に断る（FR37・runner を 2 本にしない）（計測 → §3 の便用の規則〔前の口座が候補ならそれ〕→ `spawn_turn`）。`Spawned` の detail は `resume:unreachable`（`resume:runner-dead` の隣の定数）。`headless/runner.txt` の「途中再開」節に理由の 3 つ目（API に届かず止まった・同じ契約で続く）を 1 行。
+- (4) **待ち**: ネットが戻るまでの待ちは本 § が持たない（resume を撃つのは §4 と同じ操作役 / dispatcher の周で、行 d の起こし直しの上限と間隔がその側に在る）。撃った周にまだ届かなければ runner が同じ rc で早く終わり (2) がもう 1 件記帳する＝記録に残る・段は動かない。
+- 触らない: `RC_QUESTION` / `RC_RATE_LIMIT` の分岐・`RateLimited` の段と別口座の選定・`Failed` の他の理由（OOM・runner-rc）・`settle` の commit の条件・lens（到達不能は FR9 の既存極性 INCONCLUSIVE のまま・resume → next=gate で撃ち直せる）・`Stage` の variant（足さない・`Spawned` + `SeatStopped` の detail で弁別＝`.323` と同じ・schema 1）。
+- 歯（`pipe_unreachable_` 接頭辞・`tests/e2e/pipe/spawn.rs` の `.323` の歯の隣・偽 claude が `result` record に `is_error:true` と到達不能の本文を書く fixture・in-file は `runner.rs` の弁別の pure な歯）: 到達不能の本文で終わった runner の便は `Spawned` のまま `SeatStopped detail=runner-unreachable` が 1 件・Failed は 0・worktree の commit が残る／`pipe resume` が生死の計測を飛ばして runner を 1 回起こし直し `Spawned detail=account:<label>,resume:unreachable` と prompt の「途中再開」節に理由の行／集合に無い `is_error` の本文は従来どおり `Failed detail=runner-rc:1,commits:<n>`／`is_error=false` の本文に語が在っても弁別しない（pure）／rc の値が既存の rc と衝突しない（in-file の pin）。
+- 却下: `Stage` に `Unreachable` を足す（`.323` が `Spawned` + `SeatStopped` の detail で同じ形を持つ・段を増やすと `may_queue` / `live` / 外形の面が動く）／本文でなく rc 1 全部を再開可能にする（実装の失敗を無限に起こし直す）／runner がネットの復帰を自分で待つ（口座の窓と箱を掴んだまま待つ・C6）／claude の record の typed な field だけで弁別する（到達不能の typed な record は現物に無い＝語の集合を下界として持ち、field が現れたら差し替える）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -206,4 +217,15 @@ write-set = ["crates/scribe2/src/headless/mod.rs", "crates/scribe2/src/headless/
 verify = ["cargo nextest run -p scribe2 --no-tests=fail headless_flag_duplicate_"]
 size = "S"
 done = "runner / lens の argv に同じ flag が 2 つ在ると claude を呼ばずに断り、with_account は既に --account-dir を持つ起動行を足さずに断って Spawned を記録しない"
+
+[[contract]]
+id = "n"
+title = "API に届かず止まった runner を Failed に倒さない — 到達不能を閉じた語の集合で弁別して rc RC_UNREACHABLE で終え、Spawned のまま SeatStopped detail=runner-unreachable を記帳し、pipe resume が runner の死亡と同じ 1 本で同じ worktree・同じ契約に起こし直す"
+req = ["FR37", "FR14"]
+section = "17"
+touches = ["crate::pipe::follow::Halt"]
+write-set = ["crates/scribe2/src/headless/mod.rs", "crates/scribe2/src/headless/runner.rs", "crates/scribe2/src/headless/runner.txt", "crates/scribe2/src/pipe/spawn.rs", "crates/scribe2/src/pipe/follow.rs", "crates/scribe2/src/pipe/cli/resume.rs", "crates/scribe2/tests/e2e/pipe/spawn.rs", "crates/scribe2/tests/e2e/snapshots/e2e__headless__headless_runner_prompt_external_form.snap"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_unreachable_"]
+size = "M"
+done = "到達不能の本文で終わった runner の便が Spawned のまま SeatStopped detail=runner-unreachable を 1 件持ち Failed が 0 で commit が残り、pipe resume が生死の計測を飛ばして runner を 1 回起こし直して resume:unreachable を記帳し、集合に無い is_error は従来どおり Failed"
 <!-- contracts:end -->
