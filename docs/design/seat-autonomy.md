@@ -197,7 +197,7 @@ repo に入れない）。
   4. **判定行**: `pointer=<sent|settling|wait:<残り秒>|stopped> step=<n>` を tick の判定行に 1 語ずつ足す（既存の `reason=pointer-recent` は「待ち」と「settling」の両方に残し、停止は `NoopReason` の variant 1 つ `PointerStopped` を足す・C2）。
   5. **rules 行**（C1・値は manifest・裁定 id = user 2026-09-17T00:55Z）: `seat.pointer_backoff_factor`（2）と `seat.pointer_backoff_max_s`（86400）。初段は既存の `seat.tick_stale_s`（2400）を流用し行を増やさない。梯子の実値 = 40 分 → 80 → 160 → 320（5.3 時間）→ 640（10.7 時間）→ 1280 分（21.3 時間）→ 停止（次段 2560 分 > 24 時間）。
 - 触らない: 合図の文面（`default_pointer`）・注入の経路（`inject_line`・入力欄の門）・`seat.tick_stale_s` / `seat.signal_backoff_s` の値・退避の合図と cycle の順序・tick の周期（§11）。
-- 歯（`seat_pointer_backoff_` 接頭辞・`tests/e2e/seat/tick.rs`・fixture は既存の tick の歯と同じ〔偽 tmux + 席 dir + rules の写し〕で、時刻は記録の `sent_at` を過去に書いて進める）: (a) 1 周目で合図が出て記録が書かれ、席の応答（状態 log に `sent_at` より後の Stop を 1 行）の後の周で settle し、その後の無変化の周は待ちが factor 倍になって合図が出ない（判定行 `pointer=wait:<s> step=1`・応答の turn が「変化」に数えられない）／(b) settle 後に digest の材料（状態 log の最終行）を変えると step = 0 に戻って合図が出る／(c) 待ちが max を超える段は `pointer=stopped` で合図が出ず、digest を変えると再開する／(d) rules 行 2 本が `RuleKind` の `ALL` と `rules validate` の外形に載る（`tests/e2e/rules.rs` の pin）。
+- 歯（`seat_pointer_backoff_` 接頭辞・`tests/e2e/seat/tick.rs`・fixture は既存の tick の歯と同じ〔偽 tmux + 席 dir + rules の写し〕で、時刻は記録の `sent_at` を過去に書いて進める）: (a) 1 周目で合図が出て記録が書かれ、席の応答（状態 log に `sent_at` より後の Stop を 1 行）の後の周で settle し、その後の無変化の周は待ちが factor 倍になって合図が出ない（判定行 `pointer=wait:<s> step=1`・応答の turn が「変化」に数えられない）／(b) settle 後に digest の材料（状態 log の最終行）を変えると step = 0 に戻って合図が出る／(c) 待ちが max を超える段は `pointer=stopped` で合図が出ず、digest を変えると再開する／(d) rules 行 2 本が `RuleKind` の `ALL` と `rules validate` の外形に載る（`tests/e2e/rules.rs` の pin）／(e) 注入の周の判定行の全文を pin する既存の歯 7 箇所（`tests/e2e/seat/register.rs` 2・`tests/e2e/seat/launch.rs` 3・`tests/e2e/hook.rs` 1・`tests/e2e/seat/account.rs` 1）の期待に `pointer=sent step=<n>` を写す（意味不変・期待の字面だけ）。
 - 却下: 席（AI）に「変化が無ければ heartbeat を打たない」と判断させる（席を起こす＝それ自体が合図の消費・C3.3 の自由文入力）／固定の「3 回無変化で中断」（変化の検知が席の応答に依存する周に永久停止しうる・上限で必ず 1 回撃つ梯子の方が両端を機械で守れる）／tick 自体を止める（退避の合図と cycle が止まる・folio2 の 2026-09-17 の事故）／既定の 40 分を伸ばすだけ（撃ちすぎも遅すぎも残る）。
 
 <!-- contracts:begin -->
@@ -258,7 +258,7 @@ id = "f"
 title = "打刻の合図の backoff — tick が席の digest（状態 log・fleet event の最終行）を席が合図に応えた後に測り、無変化なら合図の間隔を factor 倍ずつ伸ばして max で止め、変化で seat.tick_stale_s に戻す（rules 行 seat.pointer_backoff_factor / seat.pointer_backoff_max_s・裁定 user 2026-09-17T00:55Z）"
 req = ["FR29", "FR27"]
 section = "14"
-write-set = ["rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "crates/scribe2/tests/e2e/rules.rs", "docs/design/rules-manifest.md", "crates/scribe2/src/seat/tick.rs", "crates/scribe2/src/seat/tick/render.rs", "+crates/scribe2/src/seat/tick/pointer.rs", "crates/scribe2/tests/e2e/seat/tick.rs", "crates/scribe2/tests/e2e/snapshots/e2e__rules__rules_external_form.snap"]
+write-set = ["rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "crates/scribe2/tests/e2e/rules.rs", "docs/design/rules-manifest.md", "crates/scribe2/src/seat/tick.rs", "crates/scribe2/src/seat/tick/render.rs", "+crates/scribe2/src/seat/tick/pointer.rs", "crates/scribe2/tests/e2e/seat/tick.rs", "crates/scribe2/tests/e2e/seat/register.rs", "crates/scribe2/tests/e2e/seat/account.rs", "crates/scribe2/tests/e2e/seat/launch.rs", "crates/scribe2/tests/e2e/hook.rs", "crates/scribe2/tests/e2e/snapshots/e2e__rules__rules_external_form.snap"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail seat_pointer_backoff_"]
 size = "S"
 done = "無変化の席への合図が 40 分 → 80 → 160 → 320 → 640 → 1280 分で止まり、席が合図に応えた後の状態 log か fleet event が変わった周に 40 分へ戻って再開し、退避の合図と cycle は毎周のまま"
