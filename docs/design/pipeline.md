@@ -96,7 +96,7 @@
 
 ### 5.4 land（(b)・FR10 / FR11 / FR12・N1）
 - main 実測で木の hash が gate の木と一致する周は検出線を撃ち直さず、record は `verify-main.jsonl` に書く（[gate-cost.md](./gate-cost.md) §5・ADR-0021 §2.4・**契約 land 後**）。着地の順序の原則は同 §6。
-`pipe land --run <id> [--lens <cmd>]`: 前提 = Gated ∧ verdict.json が PASS（それ以外 = rc 1・**何もしない**）。`git rev-parse refs/heads/main` が記録した `base` と違う周は **追随する**（`s2-07l.119`・FR30・並行に流した便の 2 本目が先着の後に置き去りになる形）: (i) `base` が main の祖先でなければ rc 1 `stale base`（main が巻き戻った / 分岐した＝追随の形が無い・何も書かない）(ii) worktree が clean でなければ rc 1（何も書かない・汚れた木では rebase を走らせない）(iii) worktree の branch を `git rebase <main>` する——効くのは **worktree の branch だけ**で main は 1 byte も動かさず、force 系は使わない（N1）。衝突は `git rebase --abort` で木を戻す。**ADR-0019 §2.2 の形**では `RunStage stage=Implemented detail=rebase-conflict:<base>..<main>` を記帳して runner を起こし直し、回数上限で `Failed detail=rebase-conflict`（[pipeline-conflict.md](./pipeline-conflict.md) §3・契約 (b) の land まで現物は `RunStage stage=Failed detail=rebase-conflict` + rc 1 の終端）(iii′) rebase が通って便の commit が 0 本になった周（同一変更の便が先に land した）は gate を撃ち直さず `RunStage stage=Failed detail=rebase-empty` + rc 1（便の変更は既に main に在る＝close してよい合図・lens を起動しない・main 不変・`s2-07l.125`）。commit 数を読めない周は 0 に読み替えず (iv) へ進む（fail-closed の向きを変えない） (iv) `RunStage stage=Implemented detail=rebase:<old>..<new>` を追記する（段が `Gated` から `Implemented` へ戻る 1 件＝撃ち直す便の記帳。`base` の読み手〔`base_of_run` の 1 本〕はこの行の新しい側を読む）→ stdout に `run=<id> rebase=<old>..<new>` (v) §5.3 の gate を**同じ関数で**撃ち直す（機械検証 + lens・diff が変わりうる）。PASS でなければ gate の判定行と rc で止まる（FAIL は `Gated` のまま land しない・INCONCLUSIVE は測り直せる側・lens は `--lens` で渡す）(vi) 撃ち直しの間に main がさらに動いた周は rc 1 `stale base`（次の land が同じ経路で追随する＝1 回の land が rebase するのは 1 度だけで、event 列が追随の回数をそのまま語る）。追随した周も以下の手順は同じ（CAS の old は新しい base）。
+`pipe land --run <id> [--lens <cmd>]`: 前提 = Gated ∧ verdict.json が PASS（それ以外 = rc 1・**何もしない**）。`git rev-parse refs/heads/main` が記録した `base` と違う周は **追随する**（`s2-07l.119`・FR30・並行に流した便の 2 本目が先着の後に置き去りになる形）: (i) `base` が main の祖先でなければ rc 1 `stale base`（main が巻き戻った / 分岐した＝追随の形が無い・何も書かない）(ii) worktree が clean でなければ rc 1（何も書かない・汚れた木では rebase を走らせない）(iii) worktree の branch を `git rebase <main>` する——効くのは **worktree の branch だけ**で main は 1 byte も動かさず、force 系は使わない（N1）。衝突は `git rebase --abort` で木を戻す。**ADR-0019 §2.2 の形**では `RunStage stage=Implemented detail=rebase-conflict:<base>..<main>` を記帳して runner を起こし直し、回数上限で `Failed detail=rebase-conflict`（[pipeline-conflict.md](./pipeline-conflict.md) §3・契約 (b) の land まで現物は `RunStage stage=Failed detail=rebase-conflict` + rc 1 の終端）(iii′) rebase が通って便の commit が 0 本になった周（同一変更の便が先に land した）は gate を撃ち直さず `RunStage stage=Failed detail=rebase-empty` + rc 1（便の変更は既に main に在る＝close してよい合図・lens を起動しない・main 不変・`s2-07l.125`）。commit 数を読めない周は 0 に読み替えず (iv) へ進む（fail-closed の向きを変えない） (iv) `RunStage stage=Implemented detail=rebase:<old>..<new>` を追記する（段が `Gated` から `Implemented` へ戻る 1 件＝撃ち直す便の記帳。`base` の読み手〔`base_of_run` の 1 本〕はこの行の新しい側を読む）→ stdout に `run=<id> rebase=<old>..<new>` (v) §5.3 の gate を**同じ関数で**撃ち直す（機械検証 + lens・diff が変わりうる）。PASS でなければ gate の判定行と rc で止まる（FAIL は `Gated` のまま land しない・INCONCLUSIVE は測り直せる側・lens は `--lens` で渡す）(vi) 撃ち直しの間に main がさらに動いた周は `RunStage stage=Gated detail=stale:<old>..<now>` を記帳して**同じ land の中で** (iii) から追随し直す。回数は `pipe.follow_retries` の 1 つの上限に衝突（`rebase-conflict:`）と合算で数え、上限で `Failed detail=rebase-conflict` rc 1（§18）。event 列が追随の回数をそのまま語るのは同じ。追随した周も以下の手順は同じ（CAS の old は新しい base）。
 - 順序制御（[gate-cost.md](./gate-cost.md) §6・`s2-07l.147`）が在る周は (vi) は起きない（前提検査の直後・追随の前に着地待ちの列で自分の番を待ち、順番が来た便は撃ち直しの間も列の先頭に残るので他の便は待つ）。land の stdout と面 5 の行に `order=<first|waited:<秒>|degraded|unmeasured>` が載る。
 1. `tree = git rev-parse <worktree HEAD>^{tree}` → `new = git commit-tree <tree> -p <old> -m "<message>"` → `git update-ref refs/heads/main <new> <old>`（CAS）→ `git rev-parse <new>^{tree} == tree`（lossless の実測）。message は **3 部**（`s2-07l.130`）: 件名の要旨 = goal の**先頭の文**（最初の改行または「。」の手前まで・前後の空白と markdown の見出し記号 `#` を除く）を **72 文字**（byte でなく char）で切ったもので、切った周だけ末尾に `…` を付ける（要旨が空なら件名は `<bead>` だけ＝land を止めない）／空行／本文 = goal 全文を**逐語**（改行を保つ）+ 空行 + `run: <run id>` の 1 行（trailer・読み手が fleet の記録へ辿る鍵）。件名は要約ゆえ中身が落ちるので、**落とさない側を同じ message の本文に必ず持つ**。`--pr-cmd` 形の message は forge が組む（この形は ref を動かさない）。
 2. **anchor の同期**（`s2-07l.120`・N1・**手順 3 の実測の結果に依らず**行う＝ref は既に進んでいる。`s2-07l.131`: 同期は squash の直後・実測の**前**で、`git status` に staged の逆向きが見える窓を実測の長さから秒単位へ縮める。同期が `sync-failed` でも実測は続ける）: `--repo` の checkout の HEAD が `refs/heads/main` を指し、tracked な未 commit の変更が無く（見立ては **ref を進める前**に読む）、landed tree が足す path が anchor に無ければ `git read-tree -m -u <old> <new>` で index と working tree を新 main に揃える（`update-ref` は ref しか動かさず、揃えないと `git status` に landed 変更が staged の逆向きで残り次の `commit -a` が打ち消す・`.117` 実測。`reset --keep <new>` は ref が既に new を指すため working tree を更新しない＝採らない。`read-tree -m -u` は ignored な untracked file を黙って上書きするので足す path の衝突を先に見る）。dirty / 衝突 / 別 branch・detached / 読めない / git が途中で断った周は `anchor=skipped:<dirty|collision|not-main|unreadable|sync-failed>`（not-main 以外は stderr に warning 1 行・sync-failed は部分更新の可能性を名指す）。成立は `anchor=synced`。赤 / 測れない周は stderr に `pipe: anchor=…` を足す。`--pr-cmd` 形は ref を動かさないので token を持たない。
@@ -261,12 +261,12 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
 - 雛形 `lens.txt` に観点 8 行（pointer 付き・判断は lens に残す）と出力の形（2 key の字面）を足し、外形を snapshot で pin する。歯の偽 lens（`fake_lens`）は 2 key を出す形に改める。
 - 触らない: verdict の 3 値・lens の本数と予算（rules 行）・runner の雛形。
 
-## 18. land の stale base を人手なしで追随し直し、resume が Gated(PASS) を受ける（契約表の行 l・`s2-07l.335`）
+## 18. land の stale base を同じ land の中で人手なしで追随し直す — resume の Gated(PASS) 受けは既在で同じ周回を通る（契約表の行 l・`s2-07l.335`）
 
 - 出所: admin 報告（`.329` run 2）: 追随の撃ち直し中に main が動くと `pipe land` が stale base の rc 1 で抜け、`pipe run` はそこで終了する＝段は `Gated`（PASS）のまま次の land を撃つ主体が無い。user 直命: dispatcher の仕組みを最優先にし、admin が手で撃ち直す穴を器で塞ぐ。
-- 現物: `pipe/land.rs` の `land` 関数が stale base を refused で返す。`pipe/cli.rs` の `resume` は `Stage::Gated` の周を `verdict_of` の値で分けている。`pipe/follow.rs` は起こし直しの上限を rules 行 `pipe.follow_retries` で持ち、回数は replay から導く（`EXHAUSTED`）。
-- 形: `pipe run` の着地の段で land が stale base を返した周は `RunStage`（`stage=Gated detail=stale:<base>..<main>`）を記帳し、同じ追随の経路（rebase → gate の撃ち直し → 順番待ち → land）へ戻る。回数は既存の `pipe.follow_retries` の判定に「起こし直し 1 回」として数え、上限に当たれば typed な `Failed` で終端する（既存の終端の型を使い新しい理由の variant は増やさない）。
-- `pipe resume` が `Stage::Gated` かつ `Verdict::Pass` の便を受け、同じ追随の経路へ入れるようにする（`verdict_of` が読む値・land の CAS・stale の判定は不変）。verdict が Pass でない周は従来どおり断る。
+- 現物: `pipe/land.rs` の `land` 関数が stale base を refused で返す。`pipe/cli/resume.rs` の `resume` は `Stage` の `Gated` の周を `verdict_of` の値で分けている。`pipe/follow.rs` は起こし直しの上限を rules 行 `pipe.follow_retries` で持ち、回数は replay から導く（`EXHAUSTED`）。
+- 形: `pipe run` の着地の段で land が stale base を返した周は `RunStage`（`stage=Gated detail=stale:<base>..<main>`）を記帳し、同じ追随の経路（rebase → gate の撃ち直し → 順番待ち → land）へ戻る。回数は既存の `pipe.follow_retries` の判定に「起こし直し 1 回」として数え、上限に当たれば typed な `Failed` で終端する（既存の終端の型を使い新しい理由の variant は増やさない）。周回は `land` の中に置き、試行 1 回の戻りを閉じた enum（決着 / stale）にして自由文で判定しない。stale の記帳は `follow.rs` の衝突と同じ記帳の口を通し、`retried` は `rebase-conflict:` と `stale:` の行を 1 つの回数に合算する。stale の周回に `--runner` は要らない。列の鍵は最初の Gated の ts なので stale の Gated 記帳で動かない。
+- `pipe resume` は `Stage` の `Gated` かつ verdict PASS の便を既に `land_run` へ流す（触らない）。周回は `land` の中に閉じるので、`pipe run` / `pipe resume` / `pipe land` のどの口から撃っても同じ追随を通る。verdict が Pass でない周は従来どおり断る。
 - 触らない: `land` の CAS と stale の判定・`follow_retries` の値・`pipe/queue.rs`。
 - 却下: stale を state dir に記録するだけで撃ち直しは人に任せる（撃つ主体が席のまま残る）／新しい rules 行を作る（既存の `pipe.follow_retries` で足りる）。
 
@@ -300,9 +300,9 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
 ## 22. 撃ち直しの間も着地の番を先頭に保つ（契約表の行 p・`s2-07l.305`）
 
 - 出所: admin の現物確認: `.294` が `.279` を追い抜き、`.279` が撃ち直し 1 周分を余計に払った。
-- 現物: `pipe/queue.rs` の `turn_in` は「最初の `Gated` の ts が自分より小さい PASS の便」だけを前に数える。`pipe/land.rs` は `await_turn` を追随の前に 1 回だけ撃ち、撃ち直しの後は番を読み直さない。鍵の早い便が Inconclusive で一度列を離れて戻ると先頭が 2 つになる。
-- 形: `await_turn` が「自分の番」と判定した周に `RunStage`（`stage=Gated detail=turn:taken`）を 1 行追記する（既存の段の event・detail で弁別・新しい kind は足さない）。
-- `turn_in` は「鍵が自分より小さい PASS の便」に加えて「`turn:taken` を記帳済みで終端でない便」も前に数える（自分自身は除く・`Queued` に導出の field を 1 つ足す）。番を取った便が `Landed` / `Stopped` / `Failed` で終端すれば外れる（既存の条件）。
+- 現物: `pipe/queue.rs` の `turn_in` は「最初の `Gated` の ts が自分より小さい PASS の便」だけを前に数える。`pipe/land.rs` は `await_turn` を追随の前に 1 回だけ撃ち、撃ち直しの後は番を読み直さない。鍵の早い便が Inconclusive で一度列を離れて戻ると先頭が 2 つになる。`gate.rs` の `Gated` は `detail=verdict:<…>` を持つので、gate の周数を数える歯は `verdict:` の件だけを母集団にする。
+- 形: `await_turn` が「自分の番」と判定した周に `RunStage`（`stage=Gated detail=turn:taken`）を 1 行追記する（既存の段の event・detail で弁別・新しい kind は足さない）。記帳するのは `Order` が `First` / `Waited` の周だけ（`Degraded` / `Unmeasured` は番を取っていない）。
+- `turn_in` は、列の便のうち `turn:taken` を持つ便が在れば、最新の `turn:taken` の ts（同時刻は run id の辞書順）の 1 本だけを先頭とする（自分なら `First`・他なら `After`）。無ければ鍵の順。列を離れた便（終端・worktree 無し・verdict が PASS でない）の `turn:taken` は数えない。`Queued` の導出の field はその便の最新の `turn:taken` の ts。
 - 触らない: 鍵（最初の `Gated` の ts）の定義・stale base の判定・`await_turn` の待ち（唯一の wait）。
 - 却下: 撃ち直しの後に番を読み直す（払う側が入れ替わるだけで 1 周の損失は消えない）／受容する（dispatcher で便が増えると追い抜きの頻度が上がる）。
 
@@ -510,13 +510,13 @@ done = "lens の verdict が category ごとの件数と母集団を必ず持ち
 
 [[contract]]
 id = "l"
-title = "land の stale base を同じ経路で人手なしで追随し直し、resume が Gated(PASS) の便を受ける"
+title = "land の stale base を同じ経路で人手なしで追随し直す（resume の Gated(PASS) 受けは既在・同じ周回を通る）"
 req = ["FR30", "FR50"]
 section = "18"
-write-set = ["crates/scribe2/src/pipe/cli/run.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/follow.rs", "crates/scribe2/src/pipe/land.rs", "crates/scribe2/tests/e2e/pipe/land.rs", "crates/scribe2/tests/e2e/pipe/ratelimit.rs", "crates/scribe2/tests/e2e/pipe/stop.rs", "docs/design/pipeline.md"]
-verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_land_stale_"]
+write-set = ["crates/scribe2/src/pipe/land.rs", "crates/scribe2/src/pipe/follow.rs", "crates/scribe2/tests/e2e/pipe/land.rs", "docs/design/pipeline.md"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_land_stale_", "cargo nextest run -p scribe2 --lib --no-tests=fail follow_stale_"]
 size = "S"
-done = "toy repo で stale base の便が人手なしで追随して Landed し、上限は typed な Failed"
+done = "toy repo で stale base の便が同じ land の中で人手なしで追随して Landed し、上限は合算の回数で typed な Failed"
 
 [[contract]]
 id = "m"
@@ -554,9 +554,9 @@ title = "着地の番を取った事実を記帳し、撃ち直しの間も番�
 req = ["FR50", "FR30"]
 section = "22"
 write-set = ["crates/scribe2/src/pipe/queue.rs", "crates/scribe2/src/pipe/land.rs", "crates/scribe2/tests/e2e/pipe/land.rs", "docs/design/pipeline.md"]
-verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_land_turn_"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_land_turn_", "cargo nextest run -p scribe2 --lib --no-tests=fail pipe_land_turn_"]
 size = "S"
-done = "偽の列で番を取った便が鍵の順と独立に先頭に残る"
+done = "偽の列で番を取った便が鍵の順と独立に先頭に残り、2 便が番の履歴を持っても列が循環せず、INCONCLUSIVE で離れて戻った便が撃ち直し中の便を追い抜かない"
 
 [[contract]]
 id = "q"
