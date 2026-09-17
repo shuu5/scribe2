@@ -1092,46 +1092,12 @@ fn seat_cycle_settle_limit_comes_from_rules() {
     fs::remove_dir_all(&dir).ok();
 }
 
-/// 打刻は cycle 側の口で、`seat cycle` を直に回した周も **1 key も送らず refused で終わる周も**
-/// 打つ（write-ahead・lock の内側）。tick 以外の経路で回した cycle の直後に tick が `/clear` を
-/// 重ねない（lens-110 F-2）。
-#[test]
-fn seat_cycle_stamps_even_when_it_refuses_before_sending() {
-    let dir = tmp();
-    let target = "seatcyclestamp";
-    let state = dir.join("state");
-    let wm = dir.join("wm");
-    fs::create_dir_all(&wm).expect("wm dir を作れる");
-    let (wm_s, state_s, sock_s) = (
-        wm.display().to_string(),
-        state.display().to_string(),
-        dir.join("absent-sock").display().to_string(),
-    );
-
-    let out = run_seat(&[
-        "cycle", "--target", target, "--wm-dir", &wm_s, "--tmux-socket", &sock_s,
-        "--state-dir", &state_s,
-    ]);
-
-    assert_ne!(rc_of(&out), i32::from(RC_OK), "退避物が無いので断る: {}", stderr_of(&out));
-    assert!(
-        stderr_of(&out).contains("refused reason=wm-missing"),
-        "断った理由は退避物の不在（断りは stderr 側）: {}",
-        stderr_of(&out)
-    );
-    let stamp = seat_dir_of(&state, target).join("cycle-stamp");
-    assert!(stamp.is_file(), "断った周も cycle-stamp を打つ（評価した事実）");
-    assert!(
-        fs::read_to_string(&stamp).is_ok_and(|body| body.trim().parse::<u64>().is_ok()),
-        "stamp の中身は unix 秒 1 行"
-    );
-    assert!(!seat_dir_of(&state, target).join("cycle.lock").exists(), "lock は返す");
-    fs::remove_dir_all(&dir).ok();
-}
-
 /// stamp を**打てない**周は `/clear` を送る前に断る（`cycle-stamp-unwritable`・write-ahead）:
 /// 打てないまま送ると次の周に記憶が無く、また送りうる（N1）。stamp の位置に dir を置いて
 /// 書けなくする。`seat cycle` を直に回すので back-off の読みは通らず、書き口だけを測る。
+///
+/// stamp は**門を全部通った後**に打つ（`s2-07l.288`）ので、入力欄の門まで通る pane を
+/// `--capture-file` で渡す＝ここで測るのは書き口だけで、門の断りではない。
 #[test]
 fn seat_cycle_refuses_without_sending_when_the_cycle_stamp_is_unwritable() {
     let dir = tmp();
@@ -1142,15 +1108,18 @@ fn seat_cycle_refuses_without_sending_when_the_cycle_stamp_is_unwritable() {
     fs::create_dir_all(seat.join("cycle-stamp")).expect("stamp の位置に dir を置ける");
     let wm = dir.join("wm");
     wm_file(&wm, "working-memory.parked.md", target);
-    let (wm_s, state_s, sock_s) = (
+    let pane = dir.join("pane.txt");
+    fs::write(&pane, IDLE_PANE).expect("入力欄が空の pane を置ける");
+    let (wm_s, state_s, sock_s, pane_s) = (
         wm.display().to_string(),
         state.display().to_string(),
         dir.join("absent-sock").display().to_string(),
+        pane.display().to_string(),
     );
 
     let (out, touched) = run_seat_probed(&dir, &[
         "cycle", "--target", target, "--wm-dir", &wm_s, "--tmux-socket", &sock_s,
-        "--state-dir", &state_s,
+        "--state-dir", &state_s, "--capture-file", &pane_s,
     ]);
 
     assert_ne!(rc_of(&out), i32::from(RC_OK), "打てないので断る: {}", stdout_of(&out));
@@ -1159,8 +1128,360 @@ fn seat_cycle_refuses_without_sending_when_the_cycle_stamp_is_unwritable() {
         "断った理由は stamp を打てないこと: {}",
         stderr_of(&out)
     );
-    assert!(!touched, "1 key も送らない（pane も読みに行かない）");
+    assert!(!touched, "1 key も送らない（tmux を撃たない）");
     assert!(!seat.join("cycle.lock").exists(), "lock は返す");
+    fs::remove_dir_all(&dir).ok();
+}
+
+// ───── 入力欄の門の 3 値（Clear / OwnQueued / Foreign・設計 seat-autonomy.md §10・`s2-07l.288`） ─────
+
+/// 器が注入した文（記録の上限 80 byte には収まり、幅 [`OWN_WIDTH`] の pane では端末が折り返す ASCII の 1 行）。
+const OWN_TEXT: &str = "own-queued: the vessel put this line into the input field";
+/// 自席の文が折り返す狭い pane の幅（列）。**折り返しを結合する読み**（注入の `capture-pane -J`）だけが
+/// この幅でも残りを 1 論理行として読める。
+const OWN_WIDTH: &str = "40";
+/// 自席の文が 1 行に収まる pane の幅（列）。門の照合は `tail.starts_with(record)` の**一方向**だけなので、
+/// 折り返しを結合しない読み（cycle と exit の `pane_of`）が自席の文と読めるのは折り返さないこの形である
+/// （折り返した周は残りが記録より短く見え、従来どおり Foreign＝1 key も送らない側へ倒れる）。
+const OWN_WIDE: &str = "120";
+
+/// **直近の自席注入の記録**を 1 行積む（`seat inject` が書く形＝`who=seat-inject` / `what` は payload の
+/// 先頭 80 byte・**契約の字面から組む**＝実装の writer を呼ばない）。
+fn own_record(state: &Path, target: &str, what: &str) {
+    let path = tick_file(state, target);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).ok();
+    }
+    let mut body = fs::read_to_string(&path).unwrap_or_default();
+    body.push_str(&format!(
+        r#"{{"schema":1,"who":"seat-inject","what":"{what}","when":"inject","bytes":{},"tokens":null,"wall_ms":0,"seat":"{target}","ts":{}}}"#,
+        what.len(),
+        unix_now()
+    ));
+    body.push('\n');
+    fs::write(&path, body).ok();
+}
+
+/// 入力欄に `tail` が残った pane（[`INPUT_BUSY_PANE`] と同じ形・`tail` が空なら入力欄は空）。
+fn own_pane(tail: &str) -> String {
+    format!("\u{276f} {tail}\n  10% 100k/1M Opus 5\n")
+}
+
+/// 幅 `width` の偽の席（[`start_clearing_seat`] と同じ script）: 受けた 1 行を `log` に写し、`/clear` の周だけ
+/// 画面を消して `SessionStart` を打つ（＝作り直しが起きた席の形）。幅は呼び側が選ぶ——[`OWN_WIDTH`] は
+/// 自席の文を端末に折り返させ（注入の `-J` の読みだけが 1 論理行に戻せる）、[`OWN_WIDE`] は折り返させない。
+fn own_queued_seat(socket: &str, name: &str, log: &Path, state: &Path, width: &str) -> IsolatedSeat {
+    let after_clear = stamp_cmd(state, "idle", "SessionStart", FakeStamp::Now);
+    let on_other = format!(
+        "{}; printf 'seat got %s\\n' \"$line\"; {}",
+        stamp_cmd(state, "busy", "UserPromptSubmit", FakeStamp::Now),
+        stamp_cmd(state, "idle", "Stop", FakeStamp::Now)
+    );
+    let script = format!(
+        "while :; do printf '\u{276f} '; read -r line || exit 0; printf '%s\\n' \"$line\" >> '{}'; \
+         case \"$line\" in '/clear') printf '\\033[2J\\033[3J\\033[H\u{276f} /clear\\n'; {after_clear} ;; \
+         *) {on_other} ;; esac; done",
+        log.display()
+    );
+    let mut seat = IsolatedSeat { socket: socket.to_owned(), name: name.to_owned(), ready: false };
+    let out = tmux(socket, &["new-session", "-d", "-s", name, "-x", width, "-y", "40", "sh", "-c", &script]);
+    seat.ready = out.status.success() && wait_prompt(socket, name);
+    seat
+}
+
+/// **Enter を submit にしない**席（prompt を 1 つ描いて入力を読み捨てる）: 送った字面は最後の prompt 行の
+/// 右に残り、Enter は改行を描くだけ＝自席の文が Enter の後も残る周の形。
+fn own_stuck_seat(socket: &str, name: &str) -> IsolatedSeat {
+    let mut seat = IsolatedSeat { socket: socket.to_owned(), name: name.to_owned(), ready: false };
+    let out = tmux(
+        socket,
+        &["new-session", "-d", "-s", name, "-x", "120", "-y", "40", "sh", "-c", "printf '\u{276f} '; exec cat >/dev/null"],
+    );
+    seat.ready = out.status.success() && wait_prompt(socket, name);
+    seat
+}
+
+/// [`OWN_TEXT`] を **Enter なしで**入力欄へ置き、描かれるまで待つ（上限 [`PROMPT_WAIT`]）。
+fn own_draft(socket: &str, name: &str) -> bool {
+    if !tmux(socket, &["send-keys", "-t", name, "-l", OWN_TEXT]).status.success() {
+        return false;
+    }
+    let deadline = Instant::now().checked_add(PROMPT_WAIT);
+    while deadline.is_some_and(|at| Instant::now() < at) {
+        if squashed(&capture(socket, name)).contains(&squashed(OWN_TEXT)) {
+            return true;
+        }
+        sleep(Duration::from_millis(100));
+    }
+    false
+}
+
+/// (a) 自席の文（[`OWN_TEXT`]＝記録の `what` と同じ字面）が入力欄に残る周: 門は Enter を **1 回だけ**送って
+/// 着地させ（席が受けた 1 行目は [`OWN_TEXT`]・text は再送しない）、取り直した pane が空なので cycle はそのまま
+/// `/clear` → 復元まで進む。base は非空を一律 `input-busy` と読んで断る（RED）。
+///
+/// 幅は [`OWN_WIDE`]: cycle の読み（[`pane_of`]）は折り返しを結合しないので、残りが記録を**丸ごと頭に持つ**のは
+/// 折り返さない周である（照合は一方向だけ・折り返した周は Foreign へ倒れる）。
+#[test]
+fn seat_cycle_own_queued_input_gets_one_enter_then_clears() {
+    let dir = tmp();
+    let socket = socket_of(&dir);
+    let name = "seatownclear";
+    let log = dir.join("seat.log");
+    let state = dir.join("state");
+    let guard = own_queued_seat(&socket, name, &log, &state_file(&seat_dir_of(&state, name)), OWN_WIDE);
+    assert!(guard.ready(), "幅 120 の偽の席を立てられる");
+    let wm = dir.join("wm");
+    wm_file(&wm, "working-memory.parked.md", name);
+    stamp_idle(&state, name);
+    own_record(&state, name, OWN_TEXT);
+    assert!(own_draft(&socket, name), "自席の文が入力欄に残っている");
+    let (wm_s, state_s) = (wm.display().to_string(), state.display().to_string());
+
+    let out = run_seat(&[
+        "cycle", "--target", name, "--wm-dir", &wm_s, "--tmux-socket", &socket, "--state-dir", &state_s,
+    ]);
+
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(stdout_of(&out), format!("seat: cycle done target={name}{}\n", provenance(&state, "flag")));
+    assert_eq!(
+        fs::read_to_string(&log).unwrap_or_default(),
+        format!("{OWN_TEXT}\n/clear\n/rebrief\n"),
+        "Enter 1 回で自席の文が着地し（1 行目）、text は再送されない"
+    );
+    assert!(seat_dir_of(&state, name).join("cycle-stamp").is_file(), "門を全部通った周は stamp を打つ");
+    // socket を消す**前**に畳む（消してからでは kill-session が届かない・実測 2026-09-10）。
+    drop(guard);
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// (b) 入力欄の残りが記録と一致しない（人間の打ちかけ）周は従来どおり `input-busy` で **1 key も送らず**
+/// （Enter も送らない＝tmux を 1 度も撃たない）、**cycle-stamp を打たない**＝次の tick が同じ周を評価し直す。
+/// base は lock の直後に打つので stamp が立つ（RED）。
+#[test]
+fn seat_cycle_own_queued_foreign_input_refuses_without_stamp() {
+    let dir = tmp();
+    let name = "seatownforeign";
+    let (state, wm, pane) = (dir.join("state"), dir.join("wm"), dir.join("pane.txt"));
+    wm_file(&wm, "working-memory.parked.md", name);
+    stamp_idle(&state, name);
+    own_record(&state, name, OWN_TEXT);
+    fs::write(&pane, own_pane("human draft")).expect("pane fixture を置ける");
+    let (wm_s, state_s, pane_s, sock_s) = (
+        wm.display().to_string(),
+        state.display().to_string(),
+        pane.display().to_string(),
+        dir.join("absent-sock").display().to_string(),
+    );
+
+    let (out, touched) = run_seat_probed(&dir, &[
+        "cycle", "--target", name, "--wm-dir", &wm_s, "--tmux-socket", &sock_s,
+        "--state-dir", &state_s, "--capture-file", &pane_s,
+    ]);
+
+    assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "stdout={}", stdout_of(&out));
+    assert_eq!(stderr_of(&out), format!("seat: cycle refused reason=input-busy{}\n", provenance(&state, "flag")));
+    assert!(!touched, "人間の文へは Enter も送らない（tmux を 1 度も撃たない）");
+    assert!(
+        !seat_dir_of(&state, name).join("cycle-stamp").exists(),
+        "門で断った周は cycle-stamp を打たない（打つと入力欄の文が消えるまで back-off が続く）"
+    );
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// (c) 門を全部通った周の順序（write-ahead の pin）: 偽 tmux が `send-keys` を見た時点で **cycle-stamp が
+/// 在る**。`/clear` を送ってから打つ形（不可逆の口の記憶を残さない・N1）はここで落ちる。
+#[test]
+fn seat_cycle_own_queued_stamp_is_written_before_clear() {
+    let dir = tmp();
+    let name = "seatownorder";
+    let (state, wm, pane) = (dir.join("state"), dir.join("wm"), dir.join("pane.txt"));
+    wm_file(&wm, "working-memory.parked.md", name);
+    stamp_idle(&state, name);
+    fs::write(&pane, own_pane("")).expect("入力欄が空の pane を置ける");
+    let stamp = seat_dir_of(&state, name).join("cycle-stamp");
+    let sent = dir.join("sent.log");
+    let path = own_order_shim(&dir, &stamp, &sent);
+    let (wm_s, state_s, pane_s, sock_s) = (
+        wm.display().to_string(),
+        state.display().to_string(),
+        pane.display().to_string(),
+        dir.join("absent-sock").display().to_string(),
+    );
+
+    let out = run_seat_with_path(&path, &[
+        "cycle", "--target", name, "--wm-dir", &wm_s, "--tmux-socket", &sock_s,
+        "--state-dir", &state_s, "--capture-file", &pane_s,
+    ])
+    .expect("binary を起動できる");
+
+    assert_ne!(rc_of(&out), i32::from(RC_OK), "偽 tmux は送れない: {}", stdout_of(&out));
+    assert!(stderr_of(&out).contains("failed reason=clear-unconfirmed"), "送れなかった周の語: {}", stderr_of(&out));
+    assert_eq!(
+        fs::read_to_string(&sent).unwrap_or_default(),
+        "send stamp=yes\n",
+        "`/clear` の送信は cycle-stamp の後（送信は 1 回だけ）"
+    );
+    assert!(stamp.is_file(), "門を全部通った周は stamp を打つ");
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// `send-keys` を見たら **その時点で `stamp` が在るか**を `log` へ 1 行書いて失敗する偽 tmux を PATH の先頭に
+/// 置き、その PATH を返す（pane は `--capture-file` が肩代わりするので capture は撃たれない）。
+fn own_order_shim(dir: &Path, stamp: &Path, log: &Path) -> String {
+    let bin_dir = dir.join("bin");
+    fs::create_dir_all(&bin_dir).ok();
+    let shim = bin_dir.join("tmux");
+    let (stamp_s, log_s) = (stamp.display().to_string(), log.display().to_string());
+    fs::write(
+        &shim,
+        format!(
+            "#!/bin/sh\nfor arg in \"$@\"; do\n  [ \"$arg\" = send-keys ] || continue\n  \
+             if [ -f '{stamp_s}' ]; then echo 'send stamp=yes' >> '{log_s}'; \
+             else echo 'send stamp=no' >> '{log_s}'; fi\n  break\ndone\nexit 1\n"
+        ),
+    )
+    .ok();
+    fs::set_permissions(&shim, fs::Permissions::from_mode(0o755)).ok();
+    format!("{}:{}", bin_dir.display(), std::env::var("PATH").unwrap_or_default())
+}
+
+/// PATH を差し替えて `seat` を 1 回撃つ（偽 tmux を通す）。
+fn run_seat_with_path(path: &str, args: &[&str]) -> Option<Output> {
+    Command::new(bin()).arg("seat").args(args).env("PATH", path).output().ok()
+}
+
+/// (d) 終了の手の入力欄の門も同じ 3 値を通る: 自席の文が残る周は Enter 1 回で着地し（席が受けた 1 行は
+/// [`OWN_TEXT`]・text は再送しない）、取り直した pane が空なので `/exit` まで進む。base は `input-busy` で
+/// 断り、`decision=error reason=exit-input-busy` になる（RED）。
+#[test]
+fn seat_cycle_own_queued_exit_gate_takes_one_enter() {
+    let place = acct_place();
+    let name = "exitownqueued";
+    let guard = exit_parked(&place, name);
+    own_record(&place.state, name, OWN_TEXT);
+    assert!(own_draft(&place.socket, name), "自席の文が入力欄に残っている");
+
+    let out = acct_tick(&place, name, None);
+
+    let line = stdout_of(&out);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stdout={line} stderr={}", stderr_of(&out));
+    for (key, want) in [("decision", "inject"), ("kind", "exit")] {
+        assert_eq!(tick_token(&line, key).as_deref(), Some(want), "{key}: {line}");
+    }
+    assert_eq!(exit_received(&place), format!("{OWN_TEXT}\n"), "Enter 1 回で自席の文が着地する（text は再送しない）");
+    assert_eq!(acct_sent(&place.state, name).last().map(String::as_str), Some("/exit"), "門を通った後に送る 1 行");
+    assert!(seat_dir_of(&place.state, name).join("exit-stamp").exists(), "門を通った周は exit-stamp を打つ");
+    drop(guard);
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (e) Enter を 1 回送っても自席の文が残る周（取り直した pane が同じ＝`--capture-file`）は **それ以上
+/// 1 key も送らず** `input-own-queued` で断り、席の記録の `cycle` の行がその理由を名乗り、cycle-stamp は
+/// 立たない。base は `input-busy` を名乗り stamp も立つ（RED）。
+#[test]
+fn seat_cycle_own_queued_persisting_after_enter_records_own_queued() {
+    let dir = tmp();
+    let socket = socket_of(&dir);
+    let name = "seatownstuck";
+    let guard = start_seat(&socket, name);
+    assert!(guard.ready(), "Enter の届く独立 socket の session を立てられる");
+    let (state, wm, pane) = (dir.join("state"), dir.join("wm"), dir.join("pane.txt"));
+    wm_file(&wm, "working-memory.parked.md", name);
+    stamp_idle(&state, name);
+    own_record(&state, name, OWN_TEXT);
+    fs::write(&pane, own_pane(OWN_TEXT)).expect("pane fixture を置ける");
+    let (wm_s, state_s, pane_s) = (
+        wm.display().to_string(),
+        state.display().to_string(),
+        pane.display().to_string(),
+    );
+
+    let out = run_seat(&[
+        "cycle", "--target", name, "--wm-dir", &wm_s, "--tmux-socket", &socket,
+        "--state-dir", &state_s, "--capture-file", &pane_s,
+    ]);
+
+    assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "stdout={}", stdout_of(&out));
+    assert_eq!(
+        stderr_of(&out),
+        format!("seat: cycle refused reason=input-own-queued{}\n", provenance(&state, "flag")),
+        "人間の打ちかけ（input-busy）と弁別した字面"
+    );
+    assert!(!seat_dir_of(&state, name).join("cycle-stamp").exists(), "断った周は cycle-stamp を打たない");
+    let recorded = fs::read_to_string(tick_file(&state, name)).unwrap_or_default();
+    assert!(
+        recorded.lines().last().is_some_and(|line| line
+            .contains(&format!(r#""what":"cycle refused reason=input-own-queued{}""#, provenance(&state, "flag")))),
+        "席の記録の cycle の行が理由を名乗る: {recorded}"
+    );
+    drop(guard);
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// `seat inject` を 1 回撃つ（自席の文が入力欄に残る席へ）。
+fn own_inject(socket: &str, state: &Path, name: &str, payload: &str) -> Output {
+    let state_s = state.display().to_string();
+    run_seat(&["inject", "--target", name, "--tmux-socket", socket, "--state-dir", &state_s, "--text", payload])
+}
+
+/// (f) `seat inject`（[`deliver_within`] の経路）も同じ 3 値を通る: 自席の文が残る席は Enter 1 回で着地して
+/// 注入が届き（stdout は既存の `delivered` 行・text は再送しない）、Enter の後も残る席は `input-own-queued` で
+/// 断る——断りは **CLI の 1 行と rc** だけで、`tick.jsonl` には書かない（`Delivery::Refused` は記録しない面・
+/// 設計 §10 (2)）。base はどちらも `input-busy`（RED）。
+///
+/// 着地する側の席は幅 [`OWN_WIDTH`]（端末が折り返す）: 注入の読みは折り返しを結合する（`capture-pane -J`）ので
+/// 残りは 1 論理行に戻り、記録を丸ごと頭に持つ＝一方向の照合でも自席の文と読める。
+#[test]
+fn seat_cycle_own_queued_inject_deliver_takes_one_enter() {
+    let dir = tmp();
+    let socket = socket_of(&dir);
+    let state = dir.join("state");
+    let log = dir.join("seat.log");
+    let (lands, stuck) = ("seatowninj", "seatowninjstuck");
+    let landing = own_queued_seat(&socket, lands, &log, &state_file(&seat_dir_of(&state, lands)), OWN_WIDTH);
+    assert!(landing.ready(), "着地する偽の席（幅 40＝端末が折り返す）を立てられる");
+    own_record(&state, lands, OWN_TEXT);
+    assert!(own_draft(&socket, lands), "自席の文が入力欄に残っている");
+
+    let payload = "echo seat-e2e-own";
+    let out = own_inject(&socket, &state, lands, payload);
+
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(
+        stdout_of(&out),
+        format!(
+            "seat: inject delivered target={lands} bytes={} consumed=true{}\n",
+            payload.len(),
+            provenance(&state, "flag")
+        ),
+        "着地した後の注入は既存の delivered 行"
+    );
+    assert_eq!(
+        fs::read_to_string(&log).unwrap_or_default(),
+        format!("{OWN_TEXT}\n{payload}\n"),
+        "Enter 1 回で自席の文が着地し、text は再送されない"
+    );
+    drop(landing);
+
+    let guard = own_stuck_seat(&socket, stuck);
+    assert!(guard.ready(), "Enter を submit にしない席を立てられる");
+    own_record(&state, stuck, OWN_TEXT);
+    assert!(own_draft(&socket, stuck), "自席の文が入力欄に残っている");
+
+    let out = own_inject(&socket, &state, stuck, payload);
+
+    assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "stdout={}", stdout_of(&out));
+    assert_eq!(stdout_of(&out), "", "断りの周は stdout 0 行");
+    assert_eq!(
+        stderr_of(&out),
+        format!("seat: inject refused reason=input-own-queued{}\n", provenance(&state, "flag"))
+    );
+    let recorded = fs::read_to_string(tick_file(&state, stuck)).unwrap_or_default();
+    assert_eq!(recorded.lines().count(), 1, "断りは tick.jsonl に書かない（積んだ記録 1 行のまま）: {recorded}");
+    let pane = capture(&socket, stuck);
+    assert!(!pane.contains(payload), "1 key も送っていない（payload は現れない）: {pane}");
+    drop(guard);
     fs::remove_dir_all(&dir).ok();
 }
 

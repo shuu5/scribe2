@@ -107,6 +107,9 @@ pub const REASON_PANE_MISSING: &str = "pane-missing";
 pub const REASON_INPUT_BUSY: &str = "input-busy";
 /// 入力欄を特定できない（prompt 行が無い pane へ送らない・注入と同じ門）。
 pub const REASON_INPUT_UNKNOWN: &str = "input-unknown";
+/// 器自身が queue した文が入力欄に残り、Enter を 1 回送っても消えない（`s2-07l.288`・注入と同じ門・
+/// 人間の打ちかけの [`REASON_INPUT_BUSY`] と弁別する＝断りの記録から「誰の文で止まったか」が読める）。
+pub const REASON_INPUT_OWN_QUEUED: &str = "input-own-queued";
 /// TTL の宣言（rules 行）が読めない。埋め込みを読む周は読めなかった variant を `:` で添える
 /// （[`super::RuleRead::no_rule`]・`s2-07l.205`）。
 pub const REASON_NO_RULE: &str = "no-rule";
@@ -245,10 +248,12 @@ pub fn run(request: &Request) -> Cycle {
 
 /// lock を取り、握っている間の手順を回して、**どの枝でも lock を返す**。
 ///
-/// **打刻は `/clear` より先**（write-ahead・`s2-07l.110`）: lock を取った周は手順に入る前に
-/// [`STAMP_FILE`] を打つ（lock を取れない周は打たない＝他の cycle が打っているか置き場が使えない）。後から打つ形だと、打てない周や途中で死んだ周に `/clear` の記憶が残らず
-/// 次の周も送りうる（不可逆の口・N1）。打てない周は 1 key も送らずに断る。tick からでも
-/// `seat cycle` からでも同じ口を通るので、どちらの経路の cycle も back-off の根拠になる。
+/// **二重投函の防止は lock（TTL）が持つ**: [`STAMP_FILE`] は [`guarded`] の末尾＝不可逆の `/clear` を
+/// 送る直前に打つ（write-ahead の意図は保つ・planner 裁定 `s2-07l.288`）。lock の直後に打つ形
+/// （`s2-07l.110` 裁定 (a) の位置）は、門で 1 key も送らずに断った周にも stamp を立てて
+/// `seat.tick_stale_s` の back-off に入れた——入力欄の文が消えない限り同じ拒否を繰り返し、席が cap を
+/// 超えたまま止まる（実地 2026-09-14 18:45Z〜19:20Z の admin）。**打刻は back-off の根拠にだけ使う**
+/// ＝送らなかった周に back-off を課さない。
 fn perform(request: &Request, dir: &Path) -> Cycle {
     let ttl = match ttl_s() {
         Ok(found) => found,
@@ -259,11 +264,7 @@ fn perform(request: &Request, dir: &Path) -> Cycle {
         Lock::Held => return Cycle::Refused(REASON_LOCK_HELD),
         Lock::Broken => return Cycle::Refused(REASON_STATE_DIR),
     }
-    let held = if write_stamp(dir).is_ok() {
-        guarded(request, dir)
-    } else {
-        Cycle::Refused(REASON_STAMP)
-    };
+    let held = guarded(request, dir);
     std::fs::remove_file(lock_path(dir)).ok();
     held
 }
@@ -284,7 +285,12 @@ fn write_secs(path: &Path) -> std::io::Result<()> {
     std::fs::write(path, format!("{secs}\n"))
 }
 
-/// lock を握っている間の手順（順序固定）: 退避物 → 状態の門 → pane → 入力欄の門 → 送る。
+/// lock を握っている間の手順（順序固定）: 退避物 → 状態の門 → pane → 入力欄の門 → **cycle-stamp** → 送る。
+///
+/// stamp が入力欄の門の**後ろ**に在るのが要点である（`s2-07l.288`）: 門で断った周（`input-busy` /
+/// `input-own-queued` / `input-unknown` / `wm-*` / 状態の門）は 1 key も送っていないので back-off の
+/// 根拠を作らない＝次の tick が同じ周を評価し直す。打てない周は従来どおり [`REASON_STAMP`] で
+/// 1 key も送らずに断る（打てないまま送ると次の周に記憶が無く、また送りうる・N1）。
 fn guarded(request: &Request, dir: &Path) -> Cycle {
     match super::scan_wm(Path::new(request.wm_dir), request.target) {
         WmScan::None => return Cycle::Refused(REASON_WM_MISSING),
@@ -301,10 +307,16 @@ fn guarded(request: &Request, dir: &Path) -> Cycle {
     let Some(pane) = pane_of(request.socket, request.target, request.capture_file) else {
         return Cycle::Refused(REASON_PANE_MISSING);
     };
-    match inject::guard_input(&pane) {
+    let own = inject::last_own_payload(&request.state_dir.path, request.target);
+    let recapture = || pane_of(request.socket, request.target, request.capture_file);
+    match inject::pass_input(request.socket, request.target, &pane, own.as_deref(), recapture) {
         Ok(()) => {}
-        Err(inject::InputGate::Busy) => return Cycle::Refused(REASON_INPUT_BUSY),
-        Err(inject::InputGate::UnknownInput) => return Cycle::Refused(REASON_INPUT_UNKNOWN),
+        Err(inject::Blocked::Foreign) => return Cycle::Refused(REASON_INPUT_BUSY),
+        Err(inject::Blocked::UnknownInput) => return Cycle::Refused(REASON_INPUT_UNKNOWN),
+        Err(inject::Blocked::OwnQueued) => return Cycle::Refused(REASON_INPUT_OWN_QUEUED),
+    }
+    if write_stamp(dir).is_err() {
+        return Cycle::Refused(REASON_STAMP);
     }
     if !send_clear(request, dir) {
         return Cycle::Failed(REASON_CLEAR);

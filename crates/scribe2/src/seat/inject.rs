@@ -3,6 +3,9 @@
 //! **送る前に入力欄を見る**: 人間の打ちかけと 1 行に merge する co-submit 事故を、
 //! 「非空なら 1 key も送らない」で構造的に塞ぐ（prompt 行を特定できない周も送らない
 //! ＝fail-closed）。rc は **0 / 1 の 2 値**だけで、v1 の偽陰性（4 / 7）を作らない。
+//! 非空の残りは**器自身の記録との一致**だけで 2 つに割れる（門は 3 値・[`guard_input`] /
+//! [`pass_input`]・`s2-07l.288`）: 直近の自席注入の文がそのまま残っている周（[`InputPass::OwnQueued`]）は
+//! Enter を 1 回だけ送って着地させ、人間の打ちかけ（Foreign）は従来どおり 1 key も送らない。
 //!
 //! pane を読むのは**入力欄の門と送達の目印**（送った字面が現れた = 送達・`.90`）だけで、
 //! **消費（`consumed=`）は席の打刻**で決める（送達 ts 以後の `UserPromptSubmit`・
@@ -15,6 +18,7 @@
 
 use crate::polarity::{OnFailure, Polarity, Timing};
 use super::{input_tail, sanitize_target, state, tmux_ok, tmux_stdout, StateDir};
+use crate::fleet::json_lite::{self, Value};
 use crate::fleet::store::{self, LockPolicy};
 use crate::hook::{seat_name, InjectionRecord, SCHEMA};
 use std::path::{Path, PathBuf};
@@ -155,7 +159,8 @@ pub fn repair_of(settled: Settled, read: state::Read, tail: Option<&str>, marker
     }
 }
 
-/// この境界の極性（[`Delivery::Refused`]）: 送る前に入力欄を見て、非空・prompt 行を特定できない周は 1 key も送らない。
+/// この境界の極性（[`Delivery::Refused`]）: 送る前に入力欄を見て、人間の打ちかけ・prompt 行を特定できない
+/// 周は 1 key も送らない（自席の文が残る周に送る Enter 1 回は、その文を着地させるだけで text を運ばない）。
 pub const POLARITY: Polarity = Polarity {
     timing: Timing::InLoop,
     on_failure: OnFailure::FailClosed,
@@ -189,8 +194,12 @@ pub fn deliver_within(request: &Request, window: Duration) -> Delivery {
     let Some(pane) = capture(request.socket, request.target) else {
         return Delivery::Unconfirmed(REASON_TMUX_FAILED);
     };
-    if let Err(gate) = guard_input(&pane) {
-        return Delivery::Refused(gate.as_str());
+    let own = request
+        .state_dir
+        .and_then(|found| last_own_payload(&found.path, request.target));
+    let recapture = || capture(request.socket, request.target);
+    if let Err(blocked) = pass_input(request.socket, request.target, &pane, own.as_deref(), recapture) {
+        return Delivery::Refused(blocked.as_str());
     }
     // 送る**前**の pane で目印の出現数を数えておく: 同じ字面が先に在る（前周の pointer の写し・
     // tool の出力の引用）と `contains` 1 本では届いていない周が「届いた」に化ける（lens-90 HIGH-1）。
@@ -279,7 +288,7 @@ pub fn nudge_enter_within(request: &Request, settled: Settled, read: state::Read
         seat: seat.as_deref().map(|dir| (dir, state::baseline(dir))),
         since: state::now_secs(),
     };
-    if !tmux_ok(request.socket, &["send-keys", "-t", request.target, "Enter"]) {
+    if !send_enter(request.socket, request.target) {
         return Settled::EnterLost;
     }
     for _ in 0..tries_within(window) {
@@ -310,17 +319,152 @@ impl InputGate {
     }
 }
 
+/// 入力欄の門を**通った**形（**閉じた 2 値**・憲法 C11・`s2-07l.288`）。3 値（Clear / OwnQueued /
+/// Foreign）の残り 1 つは [`InputGate::Busy`] が持つ。
+///
+/// [`InputGate`] に variant を足さないのは、同じ型を shell の門（[`super::shell_input_empty`]）も返し、
+/// その網羅 match（`cycle/relaunch.rs`）は本便の write-set の外だからである——shell の pane に
+/// 「自席の注入文」は無い。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputPass {
+    /// 入力欄が空。
+    Clear,
+    /// 残りが**直近の自席注入の記録**に前方一致する＝器自身が queue した文（[`own_queued`]）。
+    OwnQueued,
+}
+
+/// 入力欄の門を**通せなかった**理由（**閉じた 3 値**・憲法 C11）。字面は呼び手の語彙が持つ
+/// （`seat inject` は `busy` / cycle と exit は `input-busy`）ので、ここでは型のまま返す
+/// ——3 呼び手がこの 1 つの enum を網羅 match する（憲法 C2）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Blocked {
+    /// 人間の打ちかけ（記録と一致しない非空の残り）。
+    Foreign,
+    /// prompt 行を特定できない。
+    UnknownInput,
+    /// 自席の文が Enter を 1 回送った後も残る。
+    OwnQueued,
+}
+
+impl Blocked {
+    /// 従来の 2 値からの写し（[`InputGate`] に variant を足さない）。
+    fn of(gate: InputGate) -> Self {
+        match gate {
+            InputGate::Busy => Self::Foreign,
+            InputGate::UnknownInput => Self::UnknownInput,
+        }
+    }
+
+    /// **注入の面**の字面（cycle と exit は `input-` を前置いた自分の語彙を持つ）。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Foreign => REASON_BUSY,
+            Self::UnknownInput => REASON_UNKNOWN_INPUT,
+            Self::OwnQueued => super::cycle::REASON_INPUT_OWN_QUEUED,
+        }
+    }
+}
+
 /// 送る前の入力欄の門（co-submit 止め・**送達の面の唯一の字面読み**）: prompt 行を特定できない
 /// pane は [`InputGate::UnknownInput`]、入力欄が非空なら [`InputGate::Busy`] で、どちらも 1 key も
 /// 送らない側へ倒す。席の busy / idle の判定ではない（それは [`super::state`] が typed に持つ・
 /// ADR-0015）——人間の打ちかけと 1 行に merge する事故を、送る直前の入力欄で塞ぐ門である。
 /// cycle の `/clear` も同じ門を通る（第 2 の判定を作らない）。
-pub fn guard_input(pane: &str) -> Result<(), InputGate> {
+///
+/// 非空の残りは**器自身の記録との一致だけ**で 2 つに割れる（`s2-07l.288`・憲法 C3.3）: `own`
+/// （直近の自席注入の記録＝[`last_own_payload`]）に前方一致すれば [`InputPass::OwnQueued`]
+/// （呼び側は Enter を 1 回だけ送って着地させる）、しなければ従来どおり [`InputGate::Busy`]。
+/// 記録が無い・読めない周（`own` が `None`）は非空 = Foreign のまま＝門は緩まない。
+pub fn guard_input(pane: &str, own: Option<&str>) -> Result<InputPass, InputGate> {
     match input_tail(pane) {
         None => Err(InputGate::UnknownInput),
-        Some(tail) if !tail.is_empty() => Err(InputGate::Busy),
-        Some(_) => Ok(()),
+        Some("") => Ok(InputPass::Clear),
+        Some(tail) if own.is_some_and(|record| own_queued(tail, record)) => Ok(InputPass::OwnQueued),
+        Some(_) => Err(InputGate::Busy),
     }
+}
+
+/// 入力欄の残りが**直近の自席注入の記録**を丸ごと頭に持つか（`s2-07l.288`）。どちらも [`folded`] で
+/// 畳み、**残り（`tail`）が記録（`record`）で始まる**一方向だけを見る。記録は payload の先頭
+/// [`WHAT_CAP`] byte までなので、長い payload を queue した周は残りの方が長い——その形が自席の文である。
+///
+/// 逆向き（記録が残りの頭に一致＝`record.starts_with(tail)`）は**書かない**: 記録の頭の 1 字を打ちかけた
+/// 人間の入力欄を自席の注入と読んで Enter を送る形になり、co-submit の門を緩める（N1）。代償は、折り返しを
+/// 結合しない読み（cycle と exit の [`super::pane_of`]）で残りが記録より短く見える周が Foreign に倒れる
+/// ことで、これは 1 key も送らない側の誤り（fail-closed）である。畳んで空の記録は弁別できない＝偽。
+fn own_queued(tail: &str, record: &str) -> bool {
+    let record = folded(record);
+    !record.is_empty() && folded(tail).starts_with(&record)
+}
+
+/// **直近の自席注入の記録**の `what`（同じ席の [`tick_path`] を末尾から見て `seat` が一致し `who` が
+/// [`WHO`] の最初の行＝[`record`] が書いた payload の先頭 [`WHAT_CAP`] byte）。file が無い・読めない・
+/// 行が無い周は `None`（門は従来どおり非空 = Foreign）。
+///
+/// `<state_dir>/inject.jsonl` の `decision=inject …` の行は**別の記録**（`who` は seat-tick /
+/// seat-launch・本文を持たない判定行）で、照合には使わない（設計 seat-autonomy.md §10 (1)）。
+pub fn last_own_payload(state_dir: &Path, target: &str) -> Option<String> {
+    let seat = seat_name(target)?;
+    let text = std::fs::read_to_string(tick_path(state_dir, target)).ok()?;
+    let last = text
+        .lines()
+        .rev()
+        .filter_map(|line| json_lite::parse_object(line).ok())
+        .find(|pairs| field(pairs, "seat") == Some(seat.as_str()) && field(pairs, "who") == Some(WHO))?;
+    field(&last, "what").map(str::to_owned)
+}
+
+/// 記録 1 行の key の文字列値（`tick/exit.rs` の同じ読みと同型）。
+fn field<'a>(pairs: &'a [(String, Value)], key: &str) -> Option<&'a str> {
+    pairs
+        .iter()
+        .find(|(found, _)| found == key)
+        .map(|(_, value)| value)
+        .and_then(Value::as_str)
+}
+
+/// 送る前の入力欄の門を通す**3 呼び手の 1 本**（`s2-07l.288`・設計 seat-autonomy.md §10 (2)）:
+/// [`guard_input`] が [`InputPass::OwnQueued`] を返した周は **Enter を 1 回だけ**送り
+/// （[`nudge_enter_within`] と同じ口・text は再送しない＝二重投函にならない）、`recapture` で pane を
+/// 取り直して同じ門をもう 1 度通す。空になれば通り、残れば [`Blocked::OwnQueued`] で**それ以上
+/// 1 key も送らない**。
+///
+/// 取り直しは既定の窓（[`SETTLE_STEP`] × [`SETTLE_TRIES`]）まで刻んで見る（[`settle`] と同じ形）:
+/// Enter を受けた席が入力欄を空にして prompt を描き直すまでには間が在り、1 回だけ読む形は着地した
+/// 周を落とす。Enter を送れない・pane を取り直せない周も [`Blocked::OwnQueued`]（この周の中で
+/// 閉じない＝次の周の門が名乗る・[`POLARITY`] は不変）。
+///
+/// pane の読み口を閉包で受けるのは呼び手ごとに違うためである（注入は折り返しを結合する
+/// [`capture`]・cycle と exit は `--capture-file` も通る [`super::pane_of`]）。
+pub fn pass_input(
+    socket: Option<&str>,
+    target: &str,
+    pane: &str,
+    own: Option<&str>,
+    recapture: impl Fn() -> Option<String>,
+) -> Result<(), Blocked> {
+    match guard_input(pane, own) {
+        Ok(InputPass::Clear) => return Ok(()),
+        Ok(InputPass::OwnQueued) => {}
+        Err(gate) => return Err(Blocked::of(gate)),
+    }
+    if !send_enter(socket, target) {
+        return Err(Blocked::OwnQueued);
+    }
+    for _ in 0..SETTLE_TRIES {
+        sleep(SETTLE_STEP);
+        match recapture().as_deref().map(|found| guard_input(found, own)) {
+            Some(Ok(InputPass::Clear)) => return Ok(()),
+            Some(Err(gate)) => return Err(Blocked::of(gate)),
+            Some(Ok(InputPass::OwnQueued)) | None => {}
+        }
+    }
+    Err(Blocked::OwnQueued)
+}
+
+/// **Enter だけ**を 1 回送る（修復の門と入力欄の門の同じ口・`s2-07l.150` / `s2-07l.288`）。
+fn send_enter(socket: Option<&str>, target: &str) -> bool {
+    tmux_ok(socket, &["send-keys", "-t", target, "Enter"])
 }
 
 /// 送達の面が読む pane 本文（**折り返しを結合した論理行**・`capture-pane -p -J`・`s2-07l.148`）。
