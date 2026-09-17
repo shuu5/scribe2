@@ -731,3 +731,158 @@ fn seat_launch_refuses_a_duplicated_model_in_the_template() {
     drop(guard);
     fs::remove_dir_all(&place.dir).ok();
 }
+
+// ─────────────────── 席の起動の短い形（account-lifecycle.md §14・`s2-07l.404`・接頭辞 `seat_launch_short_`） ───────────────────
+
+/// 短い形 `seat <label> …` を shim の PATH で 1 回撃つ（置き場・anchor・独立 socket は長い形の [`launch_run`] と同じ flag・`extra` は
+/// 役割の flag と明示の値）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn launch_run_short(place: &AcctPlace, path: &str, label: &str, extra: &[&str]) -> Output {
+    let state = place.state.display().to_string();
+    let anchor = launch_anchor(place);
+    let mut args = vec!["seat", label];
+    args.extend_from_slice(extra);
+    args.extend_from_slice(&["--state-dir", &state, "--anchor", &anchor, "--tmux-socket", &place.socket]);
+    Command::new(bin()).args(&args).env("PATH", path).output().expect("binary を起動できる")
+}
+
+/// 起こした偽 claude を EOF（`C-d`）で終え、前面が shell（prompt `$`）に戻るのを待つ＝同じ window へもう 1 度起こせる形
+/// （`new-window` は要らない）。
+fn launch_quit_seat(place: &AcctPlace, target: &str) -> bool {
+    tmux(&place.socket, &["send-keys", "-t", target, "C-d"]).status.success()
+        && acct_wait_pane(place, target, |pane| pane.trim_end().ends_with('$'))
+}
+
+/// 短い形の断りの 3 面: rc 1・stdout 0 byte・stderr はちょうど 1 行 `line`。
+fn launch_assert_refused_line(out: &Output, line: &str, case: &str) {
+    assert_eq!(rc_of(out), i32::from(RC_REFUSED), "{case}: stdout={} stderr={}", stdout_of(out), stderr_of(out));
+    assert!(stdout_of(out).is_empty(), "{case}: stdout は空");
+    assert_eq!(stderr_of(out), format!("{line}\n"), "{case}");
+}
+
+/// (a) 登録 row の在る anchor で短い形 `<label> --planner` は長い形と同じ row と同じ起動行を作る: 長い形（`--account l2 --model Fable`）
+/// で 1 回起こして row を作った place で、席を終えて前面を shell に戻し、短い形を `--target` / `--model` 無しで撃つ → rc 0・
+/// `inject.jsonl` の `kind=launch` の `what` は 2 行とも同一・最新 row の target / model / account は長い形の row と一致・偽 claude の
+/// argv も同じ（`--model fable` を運ぶ）・`new-window` は長い形の 1 回だけ（短い形は 0 回＝window は在る）。base は第 1 token を
+/// verb と読めず使い方で断る（RED）。
+#[test]
+fn seat_launch_short_form_reuses_the_registered_row_target_and_model() {
+    let place = launch_place();
+    let name = "launchshort";
+    let target = format!("{name}:seat");
+    let path = launch_shims(&place, &target);
+    let guard = launch_session(&place, name, &path);
+    assert!(guard.ready(), "独立 socket に shell の session を立てられる");
+    let long = launch_run(&place, &path, &target, &["--account", "l2", "--model", "Fable"]);
+    assert_eq!(rc_of(&long), i32::from(RC_OK), "長い形: stdout={} stderr={}", stdout_of(&long), stderr_of(&long));
+    assert_eq!(launch_tmux_calls(&place, "new-window"), 1, "長い形が window を 1 回作る");
+    assert!(launch_quit_seat(&place, &target), "席を終えて前面を shell に戻せる: {}", capture(&place.socket, &target));
+
+    let out = launch_run_short(&place, &path, "l2", &["--planner"]);
+
+    let line = stdout_of(&out);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "短い形: stdout={line} stderr={} pane={}", stderr_of(&out), capture(&place.socket, &target));
+    assert_eq!(line, format!("seat launch: launched target={name}_seat account=l2{}\n", provenance(&place.state, "flag")));
+    assert_eq!(launch_tmux_calls(&place, "new-window"), 1, "短い形は window を作らない（在る window へ起こす）");
+    let injected = launch_inject_rows(&place);
+    assert_eq!(injected.len(), 2, "長い形と短い形の kind=launch が 1 行ずつ: {injected:?}");
+    assert_eq!(injected.first().map(|(_, what)| what), injected.get(1).map(|(_, what)| what), "注入の記録の what は同一: {injected:?}");
+    let rows = acct_rows(&place.state);
+    assert_eq!(rows.len(), 2, "同じ鍵の row が 2 件: {rows:?}");
+    assert_eq!(rows.first(), rows.get(1), "短い形の row は長い形の row と同じ（target / model / account）: {rows:?}");
+    assert_eq!(rows.get(1).map(|row| (row.target.as_str(), row.model.as_deref(), row.account.as_str())), Some((target.as_str(), Some("Fable"), "l2")));
+    let argv = launch_expected_argv(&place, "l2");
+    assert_eq!(
+        fs::read_to_string(place.dir.join("launched")).unwrap_or_default(),
+        format!("--model\nfable\n{argv}--model\nfable\n{argv}"),
+        "偽 claude の argv は 2 回とも同じ（row の model を運ぶ）"
+    );
+    drop(guard);
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (b) row が無く flag も無い周は `defaults-unresolved` で typed に断る: rc 1・stderr の行はちょうど
+/// `seat launch: refused reason=defaults-unresolved missing=--target,--model`（`target=` を持たない）・0 key・row 0・`inject.jsonl` に
+/// launch 行なし。2 周目: `model` を持たない row を長い形（`--model` 無し）で作った place で短い形を `--model` 無しで撃つ →
+/// 同じ形で `missing=--model`・0 key（席を終えた後なので送れる状態だが送らない）・row の本数は撃つ前と同じ。
+#[test]
+fn seat_launch_short_form_refuses_typed_without_a_row() {
+    let place = launch_place();
+    let name = "launchshortnorow";
+    let target = format!("{name}:{name}");
+    let path = launch_shims(&place, &target);
+    let guard = launch_session(&place, name, &path);
+    assert!(guard.ready(), "独立 socket に shell の session を立てられる");
+
+    let out = launch_run_short(&place, &path, "l2", &["--planner"]);
+
+    launch_assert_refused_line(&out, "seat launch: refused reason=defaults-unresolved missing=--target,--model", "no-row");
+    assert!(!stderr_of(&out).contains("target="), "解けない target を行に置かない: {}", stderr_of(&out));
+    launch_assert_not_sent(&place, 0, "no-row");
+
+    let long = launch_run(&place, &path, &target, &["--account", "l2"]);
+    assert_eq!(rc_of(&long), i32::from(RC_OK), "長い形（model 無し）: stdout={} stderr={}", stdout_of(&long), stderr_of(&long));
+    assert!(launch_quit_seat(&place, &target), "席を終えて前面を shell に戻せる: {}", capture(&place.socket, &target));
+    let sent_before = launch_tmux_calls(&place, "send-keys");
+    let rows_before = acct_rows(&place.state).len();
+    assert_eq!(rows_before, 1, "model を持たない row が 1 件");
+
+    let again = launch_run_short(&place, &path, "l2", &["--planner"]);
+
+    launch_assert_refused_line(&again, "seat launch: refused reason=defaults-unresolved missing=--model", "no-model");
+    assert_eq!(launch_tmux_calls(&place, "send-keys"), sent_before, "no-model: 1 key も送らない");
+    assert_eq!(acct_rows(&place.state).len(), rows_before, "no-model: row を書かない");
+    assert_eq!(launch_inject_rows(&place).len(), 1, "no-model: launch の記録は長い形の 1 行のまま");
+    drop(guard);
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (c) 役割の flag は**ちょうど 1 つ**: 0 個（`l2` だけ）と 2 個（`--planner --admin`）はどちらも使い方で断る（rc 1・stderr は
+/// usage・stdout 0 byte）・0 key・row 0。
+#[test]
+fn seat_launch_short_form_requires_exactly_one_role_flag() {
+    for (case, extra) in [("zero", &[][..]), ("two", &["--planner", "--admin"][..])] {
+        let place = launch_place();
+        let name = "launchshortrole";
+        let target = format!("{name}:{name}");
+        let path = launch_shims(&place, &target);
+        let guard = launch_session(&place, name, &path);
+        assert!(guard.ready(), "{case}: 独立 socket に shell の session を立てられる");
+
+        let out = launch_run_short(&place, &path, "l2", extra);
+
+        assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "{case}: stdout={} stderr={}", stdout_of(&out), stderr_of(&out));
+        assert!(stdout_of(&out).is_empty(), "{case}: stdout は空");
+        assert!(stderr_of(&out).starts_with("usage: seat "), "{case}: 使い方で断る: {}", stderr_of(&out));
+        assert!(stderr_of(&out).contains("(--planner|--admin)"), "{case}: 使い方に短い形が載る: {}", stderr_of(&out));
+        launch_assert_not_sent(&place, 0, case);
+        drop(guard);
+        fs::remove_dir_all(&place.dir).ok();
+    }
+}
+
+/// (d) 既知の verb は従来どおり通る: `launch` の長い形は短い形の口が在っても同じ結果（window 1 回・導出した行が 1 回届く・row は
+/// 送る前に 1 件・`inject.jsonl` に `kind=launch` 1 行＝[`seat_launch_creates_the_window_and_injects_the_derived_line_once`] と同じ）。
+#[test]
+fn seat_launch_short_form_keeps_known_verbs() {
+    let place = launch_place();
+    let name = "launchshortverb";
+    let target = format!("{name}:seat");
+    let path = launch_shims(&place, &target);
+    let guard = launch_session(&place, name, &path);
+    assert!(guard.ready(), "独立 socket に shell の session を立てられる");
+
+    let out = launch_run(&place, &path, &target, &["--account", "l2"]);
+
+    let line = stdout_of(&out);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stdout={line} stderr={}", stderr_of(&out));
+    assert_eq!(line, format!("seat launch: launched target={name}_seat account=l2{}\n", provenance(&place.state, "flag")));
+    assert_eq!(launch_tmux_calls(&place, "new-window"), 1, "window を 1 回作る");
+    assert_eq!(fs::read_to_string(place.dir.join("launched")).unwrap_or_default(), launch_expected_argv(&place, "l2"), "導出した行が 1 回だけ届く");
+    launch_assert_registered_before_send(&place, &target, "l2");
+    drop(guard);
+    fs::remove_dir_all(&place.dir).ok();
+}

@@ -195,6 +195,12 @@ pub fn registration_of_target<'a>(state: &'a State, target: &str) -> Option<&'a 
     rows.max_by_key(|latest| latest.seq).map(|latest| &latest.registration)
 }
 
+/// 鍵（役割 × anchor）の登録 row（[`registration_of_target`] の隣・account-lifecycle.md §14 の短い形の既定の出所）: 鍵ごとに
+/// 最新へ畳んだ行をそのまま引く（`target` / `model` はここから運ぶ・無ければ `None`＝呼び手が flag の欠けを名指す）。
+pub fn registration_of_key<'a>(state: &'a State, role: Role, anchor: &str) -> Option<&'a Registration> {
+    state.registrations.get(&(role, anchor.to_owned())).map(|latest| &latest.registration)
+}
+
 /// target の役割（**役割の解決の 1 本**・設計 §2）: [`registration_of_target`] の row の `role`。
 pub fn role_of_target(state: &State, target: &str) -> Option<Role> {
     registration_of_target(state, target).map(|row| row.role)
