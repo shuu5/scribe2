@@ -103,6 +103,18 @@ C1 / C5（権能の値は行・裁定 id）・C1.2（生成文に手書きの規
 - 触らない: 判定の順序と極性（fail-closed）・登録の口・deny 文の前半（理由の字面は不変）。
 - 却下: deny 文に散文で手順を書く（理由ごとに違う route を 1 形の文に押し込むと散文の規則になる・N2）／未登録を allow に倒す（fail-closed を崩す）。
 
+## 14. 相談席 consult — 相談・調査・実験の席（契約表の行 h・`s2-07l.430`）
+
+- 何が起きているか（user の要望 2026-09-17・逐語は台帳 `s2-07l.430`・裁定 id user 2026-09-17T01:45Z / 01:48Z）: 相談・調査・OSS の試用（例: 依存の候補を実際に動かして測る）を planner に兼ねさせると、planner が契約の焼き直しで詰まった日に相談が止まる。第 3 の役割を置き、**開発の本線と pipeline を汚さない**ことを権能の集合（§3・rules 行）で機械に守らせる。
+- 形（§2 の役割の形に席を 1 つ足すだけ・ADR-0022 §2.1〜§2.5 は不変）:
+  1. **`Role` の variant 1 つ** `Consult`（宣言順の末尾・`parse` / `as_str` / 網羅 match の消費側）。登録・起動（`seat register` / `seat launch --role consult`）・tick・rebrief・SessionStart の役割の解決は §2 の 1 本のまま。
+  2. **rules 行 `role.consult`**（kind `RoleCapabilities`・値 = `["relay", "edit-outside", "edit-research"]`・裁定 id user 2026-09-17T01:48Z・C5）。中継（planner / 管理席へ結論を送る）・repo の外の編集（実験の作業場）・research 文書の編集の 3 つだけ。回答・承認・go・便の起動・merge・契約の編集（台帳の write）・code / 設計 doc / design-intent（research 以外）の編集は持たない＝§4 の guard が Edit / Write と `pipe` の口を止める。裁定の持ち込み先（R-C7-1）は planner の席のまま。
+  3. **`Capability` の variant 1 つ** `EditResearch` と `PathKind` の variant 1 つ `Research`（`design-intent/research/` の段・`DesignIntent` より先に判定する＝1 関数の中の宣言順で決め、prose の順序注記を持たない・C2）。planner の行は `edit-design-intent` を持つので research も従来どおり書ける（`EditDesignIntent` は `Research` の段も通す＝上位の権能）。
+  4. **brief の雛形 1 枚** `seat/brief/consult.txt`（§5 の規律・穴と pointer 付きの行だけ）: 第一手の復元・相談と調査の作法（repo と台帳は読むだけ・実験は repo の外の作業場・結論と実測は planner へ relay・research 文書は docs PR で出す・依存の候補を器に入れる話は A3）・席間の連絡の経路（FR44）・3 クラスの発火の pointer。xtask の検査（§5・穴 ⊆ 定義済み・pointer 無しの行 0・権能の名が全部現れる）と外形 snapshot はそのまま 3 枚目に掛かる。
+  5. **触らない**: planner / admin の行と値・R-C7-1・`pipe` の口・§13 の断りの理由（`RefuseReason` は増やさない・consult が止められる周も既存の variant で足りる）。
+- 却下: planner に相談を兼ねさせる（今日の詰まりの再発）／consult に `edit-contract` を渡す（台帳の書き手が 2 席になり契約の字面の事故の口が増える）／repo 内に `lab/` を切る（PUBLIC・CON2・実験物が tracked に漏れる）／`edit-design-intent` を渡す（spec / decisions まで書ける・広すぎる）。
+- 歯（`seat_role_consult_` 接頭辞・`tests/e2e/seat.rs` と `tests/e2e/hook.rs`）: (a) `role.consult` の行が manifest に在り `RuleKind` の `ALL` と `rules validate` の外形に載る／(b) consult の登録 row を持つ席の Edit が `design-intent/research/x.html` を通し `design-intent/spec/x.html` と `docs/design/x.md` と crates 配下の Rust file を権能の名を告げて断る（planner の席は research も spec も通る）／(c) consult の席の `pipe answer` / `pipe run` が権能で断られる／(d) SessionStart の brief が consult の雛形から生成され外形 snapshot に載る。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -156,4 +168,14 @@ write-set = ["crates/scribe2/src/hook/role_guard.rs", "crates/scribe2/tests/e2e/
 verify = ["cargo nextest run -p scribe2 --no-tests=fail hook_role_guard_route_"]
 size = "S"
 done = "role guard の deny 文が理由ごとの代替ルートを 1 行で名指し、理由の字面と判定の順序と極性は不変、6 variant の宣言順が pin され route が全部非空"
+
+[[contract]]
+id = "h"
+title = "相談席 consult — Role の variant 1 つ・rules 行 role.consult = [relay, edit-outside, edit-research]・Capability と PathKind に research の variant 1 つずつ・brief の雛形 1 枚（裁定 user 2026-09-17T01:48Z）"
+req = ["FR40", "FR45", "FR44"]
+section = "14"
+write-set = ["rules/manifest.toml", "crates/scribe2/src/seat/role.rs", "crates/scribe2/src/hook/role_guard.rs", "crates/scribe2/src/seat/brief/mod.rs", "+crates/scribe2/src/seat/brief/consult.txt", "crates/scribe2/tests/e2e/seat.rs", "crates/scribe2/tests/e2e/hook.rs", "crates/scribe2/tests/e2e/rules.rs", "crates/scribe2/tests/e2e/snapshots/e2e__rules__rules_external_form.snap", "crates/scribe2/tests/e2e/snapshots/"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail seat_role_consult_"]
+size = "S"
+done = "consult の登録 row を持つ席が research の文書と repo の外だけ Edit でき、spec / 設計 doc / code と pipe の口は権能の名を告げて断られ、planner と admin の席の挙動と brief は不変で、consult の brief が外形 snapshot に載る"
 <!-- contracts:end -->
