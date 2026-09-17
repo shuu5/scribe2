@@ -366,8 +366,10 @@ impl UnmeasuredReason {
     /// 記録して続行する**（計測は行為を止めない）。
     ///
     /// **Guard ではない**——編集・起動・merge・書込を止めうる判定ではないので、極性一覧
-    /// （[`crate::polarity::ALL`]）の母集団には載らない。「0 に読み替えない」は極性ではなく
-    /// 行の構造（`AllowanceUnmeasured` に `used_pct` が在れば malformed）が守る。
+    /// （[`crate::polarity::ALL`]）の母集団には載らない。その除外を持つのはこの散文ではなく
+    /// [`crate::polarity::NOT_A_GUARD`] で、`xtask polarity-sites` が site と網羅 match を両方向で
+    /// 突き合わせる（`s2-07l.177`）。「0 に読み替えない」は極性ではなく行の構造
+    /// （`AllowanceUnmeasured` に `used_pct` が在れば malformed）が守る。
     pub const POLARITY: Polarity = Polarity {
         timing: Timing::InLoop,
         on_failure: OnFailure::FailOpen,

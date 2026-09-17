@@ -157,6 +157,25 @@ pub const ALL: &[Guard] = &[
     Guard::SpawnLine,
 ];
 
+/// `Polarity` を持つが **guard ではない**境界（設計 docs/design/polarity.md §3・`s2-07l.177`）。
+///
+/// 極性の宣言 site は `crates/*/src` の `const <NAME>: Polarity` の全数で、[`Guard::polarity`] の
+/// 網羅 match が参照する path とは一致しない——計測や読取りの境界も「測れない周にどちらへ倒れるか」
+/// を型で持つからである。その差は **doc コメントでなくこの閉じた slice** が持つ（散文は規則では
+/// ない・N2）: `xtask polarity-sites` が site の全数と match の参照 path を両方向で突き合わせ、
+/// ここに無い site と、ここに在るのに宣言 site の無い要素を名指す。
+///
+/// 要素は site の const を crate 相対 path で参照した**値**である（[`Guard::polarity`] の arm と
+/// 同じ参照の形）。型は `&[Polarity]` で `Polarity` は struct なので、`enum-slices` の対には
+/// 数えない（`variants_of` が `struct` 宣言を見て対象外にする）。
+pub const NOT_A_GUARD: &[Polarity] = &[
+    crate::fleet::json_tree::POLARITY,
+    crate::fleet::UnmeasuredReason::POLARITY,
+    crate::fleet::select::NoCandidateReason::POLARITY,
+    crate::fleet::usage::UsageError::POLARITY,
+    crate::seat::rebrief::POLARITY,
+];
+
 impl Guard {
     /// 境界が持つ極性を返す**だけ**（一覧の側に値を書かない）。
     pub fn polarity(self) -> Polarity {

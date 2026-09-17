@@ -307,6 +307,7 @@ const SUMMARY_PIN: &str = "xtask check: ok core-lines=<v>/<v> file-lines=<v>/<v>
     toolchain-pin=<v>.<v>.<v> \
     paths-clean=<v> private-clean=<v> non-rust-exec=<v>/<v> allow=<v> ci-shell-lines=<v> \
     claude-md-constitution=<v> claude-md-done=<v> claude-md-prose=<v>/<v> enum-slices=<v> claude-spawn-points=<v> env-reads=<v>/<v> polarity=<v>/<v> \
+    polarity-sites=<v>/<v>/<v> \
     prose-gate=<v>/<v> seat-brief=<v> contracts-schema=<v> rules-wired=<v>/<v> \
     rules-parity=<v>/<v> doc-only=<v> manifest-only=<v> population=<v>/<v>";
 
@@ -554,6 +555,63 @@ fn enum_slices_refuses_unrecognized_forms_instead_of_counting() {
         write_enum_slice(dir, "    Alpha,\n", "    Kind::Alpha, OTHER,\n");
     });
     assert_single(&element, "enum-slices");
+}
+
+/// 集合が揃っていても**宣言順**とずれた slice は落ち、ずれた最初の添字を名指す
+/// （憲法 C2「宣言順」・`s2-07l.177`）。集合だけの一致は「全部並んでいるが順序は無関係」を通す。
+#[test]
+fn enum_slices_order_names_the_first_mismatched_index() {
+    // 逆順（添字 0 から食い違う）。
+    let reversed = check_fixture(|dir| {
+        write_enum_slice(
+            dir,
+            "    Alpha,\n    Beta,\n    Gamma,\n",
+            "    Kind::Gamma,\n    Kind::Beta,\n    Kind::Alpha,\n",
+        );
+    });
+    assert_single(&reversed, "enum-slices");
+    let head = reversed.first().map(String::as_str).unwrap_or_default();
+    assert!(head.contains("order:KINDS"), "順序の違反として名指す: {head}");
+    assert!(head.contains("expected=Kind::Alpha"), "宣言順の名を出す: {head}");
+    assert!(head.contains("at=0"), "ずれた添字を出す: {head}");
+    // 途中の入れ替え（添字 0 は一致・**最初の**ずれだけを 1 件出す）。
+    let swapped = check_fixture(|dir| {
+        write_enum_slice(
+            dir,
+            "    Alpha,\n    Beta,\n    Gamma,\n",
+            "    Kind::Alpha,\n    Kind::Gamma,\n    Kind::Beta,\n",
+        );
+    });
+    assert_single(&swapped, "enum-slices");
+    let swapped_head = swapped.first().map(String::as_str).unwrap_or_default();
+    assert!(swapped_head.contains("expected=Kind::Beta"), "添字 1 の期待を出す: {swapped_head}");
+    assert!(swapped_head.contains("at=1"), "最初のずれの添字: {swapped_head}");
+}
+
+/// 宣言順に並ぶ slice は違反 0 で、対は 1 つ数える（順序の面を足しても fact の形は変わらない）。
+/// 欠けが在る周は添字を出さない——1 つの入れ忘れで以降の添字が丸ごとずれ、同じずれを 2 面で
+/// 数えることになるからである（集合が揃うまで順序は見ない）。
+#[test]
+fn enum_slices_order_passes_when_slice_follows_declaration() {
+    let ordered = summary_fixture(|dir| {
+        write_enum_slice(
+            dir,
+            "    Alpha,\n    Beta,\n    Gamma,\n",
+            "    Kind::Alpha,\n    Kind::Beta,\n    Kind::Gamma,\n",
+        );
+    });
+    assert!(ordered.contains(" enum-slices=1"), "宣言順の対を 1 つ数える: {ordered}");
+    let missing = check_fixture(|dir| {
+        write_enum_slice(
+            dir,
+            "    Alpha,\n    Beta,\n    Gamma,\n",
+            "    Kind::Gamma,\n    Kind::Alpha,\n",
+        );
+    });
+    assert_single(&missing, "enum-slices");
+    let head = missing.first().map(String::as_str).unwrap_or_default();
+    assert!(head.contains("Kind::Beta"), "欠けを名指す: {head}");
+    assert!(!head.contains("order:"), "集合が揃うまで添字は出さない: {head}");
 }
 
 /// 上限 +1 行の .rs は file-lines だけで落ち、上限ちょうどは通る（上限は manifest の R-C4-2）。
