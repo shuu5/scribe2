@@ -2265,6 +2265,41 @@ fn pipe_main_same_tree_missing_tree_fires_all_stages() {
     clean(&[&landed.repo, &landed.state]);
 }
 
+/// (e) 同じ木の判定は tmp worktree を**切る前**（設計 gate-cost.md §27 (1)）: 置き場を塞いでも同じ木の周は撃たずに
+/// 緑で、塞いだ物に触れない。判定が worktree の後に在る変異は「切れない」で Unmeasurable（rc 2）に倒れる。
+#[test]
+fn pipe_main_same_tree_decides_before_cutting_the_worktree() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let id = gated_pass(&repo, &state, &path, &state.join("lens-ran"));
+    let blocked = repo.join(".worktrees").join("scribe2").join("verify").join(&id);
+    fs::create_dir_all(&blocked).expect("tmp の置き場を塞げる");
+    fs::write(blocked.join("occupied"), "x\n").expect("塞げる");
+    let out = land_once(&repo, &state, &id);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "同じ木の周は worktree を切らない＝塞いでも緑: {}", stderr_of(&out));
+    assert_eq!(kinds(&main_rows(&state, &id)), ["main"], "主実測は skip record 1 本");
+    assert!(blocked.join("occupied").exists(), "塞いだ置き場に触れていない");
+    clean(&[&repo, &state]);
+}
+
+/// (f) skip record を書けない周は**緑を名乗らない**（C10・設計 gate-cost.md §27 (1)）: `verify-main.jsonl` の path を
+/// dir で塞ぐと rc 2・`main-unmeasured` の event・Landed は無い。Err の腕を Green に倒す変異はここで落ちる。
+#[test]
+fn pipe_main_same_tree_unwritable_record_is_unmeasurable() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let id = gated_pass(&repo, &state, &path, &state.join("lens-ran"));
+    let record = state.join("pipe").join(&id).join("verify-main.jsonl");
+    fs::create_dir_all(&record).expect("record の path を dir で塞げる");
+    let out = land_once(&repo, &state, &id);
+    assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "書けない周は rc 2: {}", stderr_of(&out));
+    assert!(stderr_of(&out).contains("実測できない"), "赤ではなく測れないと名乗る: {}", stderr_of(&out));
+    let log = fs::read_to_string(state.join("fleet").join("events.jsonl")).expect("event log");
+    assert!(log.contains("\"detail\":\"main-unmeasured\""), "main-unmeasured の event: {log}");
+    assert!(!log.contains("\"stage\":\"Landed\""), "Landed は無い: {log}");
+    clean(&[&repo, &state]);
+}
+
 // ---- 検出線の面（設計 pipeline.md §30・`s2-07l.397`・接頭辞 `pipe_detection_scope_`）------------
 //
 // 追随の再 gate 側（docs だけ / crates が動いた周）は `land.rs` の歯（同じ接頭辞）が持つ。ここは主実測の側。
