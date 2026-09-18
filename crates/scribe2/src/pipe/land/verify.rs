@@ -37,7 +37,19 @@ fn check_path(repo: &Path, id: &str) -> PathBuf {
 }
 
 /// 進めた main を別の worktree で実測する。
+///
+/// **木が同じ周は 1 本も撃たない**（設計 gate-cost.md §27・ADR-0043 §2.1）: gate が判定した木（verdict の `tree`）と
+/// 着地の木が同じなら、主実測は同じ木を同じ verify で撃ち直すだけ＝worktree も材料も要らない。撃たなかった事実は
+/// `verify-main.jsonl` の skip record 1 本（[`Skipped::main`]・木を必ず持つ）に残し、**書けない周は緑を名乗らない**
+/// （撃たずに緑と読める形を残さない・C10）。木が違う周・`tree` の無い周・比べられない周は従来どおり全段へ倒す。
 pub(super) fn verify_main(entry: &Land<'_>, new: &str) -> MainCheck {
+    let skipped = main_detection(entry, new);
+    if let Some((DetectionSkip::SameTree, tree)) = &skipped {
+        return match record_main(entry, &[], Some(Skipped::main(tree))) {
+            Ok(()) => MainCheck::Green,
+            Err(reason) => MainCheck::Unmeasurable(reason),
+        };
+    }
     let tmp = check_path(entry.repo, entry.run);
     if let Some(parent) = tmp.parent() {
         if let Err(err) = std::fs::create_dir_all(parent) {
@@ -59,7 +71,6 @@ pub(super) fn verify_main(entry: &Land<'_>, new: &str) -> MainCheck {
             return MainCheck::Unmeasurable(reason);
         }
     };
-    let skipped = main_detection(entry, new);
     let steps = run_checks(&Checks {
         worktree: &tmp,
         base: &base,
@@ -112,9 +123,10 @@ fn materials(entry: &Land<'_>) -> Result<(String, Effective), String> {
 /// 別 file にするのは、gate の周の `n` と main 実測の `n` を重ねないためである（設計 gate-cost.md §5）。
 const VERIFY_MAIN_FILE: &str = "verify-main.jsonl";
 
-/// 主実測で検出線を省くか（省く周はその理由と land した木の sha・設計 §30 (ii)・ADR-0021 §2.4）。
+/// 主実測で何を省くか（省く周はその理由と land した木の sha・設計 §30 (ii)・ADR-0021 §2.4）。
 ///
-/// gate を撃った木（verdict の `tree`）と land した木が**同じ**なら `same-tree`。違う周は
+/// gate を撃った木（verdict の `tree`）と land した木が**同じ**なら `same-tree`（[`verify_main`] は主実測ごと省く・
+/// 設計 gate-cost.md §27）。違う周は
 /// `git diff-tree -r --name-only -z <gated> <landed>` の path を [`super::DETECTION_SCOPE`] と照らし、1 つも触れなければ
 /// `outside-scope`。`tree` の無い verdict（旧 gate）・読めない木・読めない diff はどれも `None`＝全段を撃つ側へ
 /// 倒す（省く側へ倒すと、測っていない検出線を main で通したことになる）。
@@ -133,7 +145,8 @@ fn main_detection(entry: &Land<'_>, new: &str) -> Option<(DetectionSkip, String)
 }
 
 /// main 実測の段を `verify-main.jsonl` へ逐条で残す。検出線を省いた周は、その段の位置に
-/// `skipped=detection tree=<sha> reason=<理由>` の record を 1 件置く（**撃たなかった事実を黙って落とさない**・
+/// `skipped=detection tree=<sha> reason=<理由>` の record を 1 件置き、主実測ごと省いた周は段が空なので
+/// `kind=main skipped=main` の record 1 件だけになる（**撃たなかった事実を黙って落とさない**・
 /// 形と位置は gate の `verify.jsonl` と同じ [`records_of`] の 1 本）。
 fn record_main(entry: &Land<'_>, steps: &[Step], skipped: Option<Skipped<'_>>) -> Result<(), String> {
     let path = super::verify_log_path(entry.state_dir, entry.run).with_file_name(VERIFY_MAIN_FILE);

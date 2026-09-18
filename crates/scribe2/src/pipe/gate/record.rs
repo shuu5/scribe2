@@ -117,7 +117,7 @@ fn append_diagnosis(path: &Path, policy: LockPolicy, n: u64, step: &Step) -> Res
 
 /// 撃たなかった周の材料（record の `skipped=` の段と `reason=`、主実測だけが持つ `tree=`）。
 ///
-/// **構築は下の 2 つの口だけ**である（field は本 file に閉じる）——段と理由は別の軸で、
+/// **構築は下の 3 つの口だけ**である（field は本 file に閉じる）——段と理由は別の軸で、
 /// 呼び手が任意の組を書けると `kind=detection skipped=regate` のような無い形が生まれる。
 #[derive(Debug, Clone, Copy)]
 pub struct Skipped<'a> {
@@ -141,19 +141,31 @@ impl<'a> Skipped<'a> {
     pub fn regate(reason: DetectionSkip) -> Self {
         Self { stage: SkippedStage::Regate, reason, tree: None }
     }
+
+    /// land の主実測を**丸ごと**省いた周（`kind=main skipped=main reason=same-tree`・設計 gate-cost.md §27・
+    /// ADR-0043 §2.2）: gate が判定した木と着地の木が同じ＝同じ木を同じ verify で撃ち直すだけなので撃たない。
+    ///
+    /// 理由は木の一致だけ（[`DetectionSkip::SameTree`]・面の外は主実測の省略の理由にならない）で、木は
+    /// **必ず取る**（`&str`・`Option` にしない）——「どの木を gate が測ったか」が無い skip record は
+    /// 撃っていない緑と読み分けられない。
+    pub fn main(tree: &'a str) -> Self {
+        Self { stage: SkippedStage::Main, reason: DetectionSkip::SameTree, tree: Some(tree) }
+    }
 }
 
 /// 撃たなかったのはどの段か（record の `skipped=` と `kind=` の字面）。
 ///
 /// **理由（[`DetectionSkip`]）とは別の軸**である（run 2 の裁定 2026-09-16）——`outside-scope` は
 /// 検出線を省く周にも再 gate を省く周にも同じ意味で立つので、理由の enum に段を足すと
-/// 2 つの軸が 1 つの列に潰れる。値は 2 つで、本 file の外へは出ない。
+/// 2 つの軸が 1 つの列に潰れる。値は 3 つで、本 file の外へは出ない。
 #[derive(Debug, Clone, Copy)]
 enum SkippedStage {
     /// 検出線の段（gate / 主実測の中の 1 行）。
     Detection,
     /// 追随の再 gate 1 周（設計 §33 (i)）。
     Regate,
+    /// land の主実測 1 周（設計 gate-cost.md §27・ADR-0043 §2.1）。
+    Main,
 }
 
 impl SkippedStage {
@@ -162,20 +174,25 @@ impl SkippedStage {
         match self {
             Self::Detection => "detection",
             Self::Regate => "regate",
+            Self::Main => KIND_MAIN,
         }
     }
 
-    /// record の `kind=` の字面（段の名＝verify 行の kind か、gate 1 周そのものか）。
+    /// record の `kind=` の字面（段の名＝verify 行の kind か、gate 1 周 / 主実測 1 周そのものか）。
     fn kind(self) -> &'static str {
         match self {
             Self::Detection => Check::Detection.as_str(),
             Self::Regate => KIND_GATE,
+            Self::Main => KIND_MAIN,
         }
     }
 }
 
 /// gate 1 周を省いた record の `kind=`（verify 行の段ではないので [`Check`] の値を使わない）。
 const KIND_GATE: &str = "gate";
+
+/// land の主実測 1 周を省いた record の `kind=` と `skipped=`（同じ 1 語・verify 行の段ではない）。
+const KIND_MAIN: &str = "main";
 
 /// 書く record 1 本（通し番号 `n`・本文・撃った段なら元の [`Step`]）。
 pub struct Record<'a> {
@@ -219,8 +236,9 @@ pub fn next_number(len: usize) -> u64 {
 /// 撃たなかった段の record（`kind=<段> skipped=<段> [tree=<sha>] reason=<理由>`・schema は 1 のまま）。
 ///
 /// 検出線を省いた周は `kind=detection skipped=detection`、追随の再 gate を省いて前周の判定を
-/// 引き継いだ周は `kind=gate skipped=regate`（設計 §33 (2)）。どちらも**撃たなかった事実を
-/// 黙って落とさない**ための 1 本で、読み手は `skipped=` の非空で両者をまとめて拾える。
+/// 引き継いだ周は `kind=gate skipped=regate`（設計 §33 (2)）、land の主実測を省いた周は
+/// `kind=main skipped=main`（設計 gate-cost.md §27）。どれも**撃たなかった事実を
+/// 黙って落とさない**ための 1 本で、読み手は `skipped=` の非空でまとめて拾える。
 pub fn skip_record(number: u64, skipped: Skipped<'_>) -> String {
     let mut fields = vec![
         ("schema", Value::Num(SCHEMA)),
@@ -356,4 +374,20 @@ fn frozen_copy(entry: &Gate<'_>) -> Result<Effective, String> {
 fn append_stderr(path: &Path, policy: LockPolicy, head: &str, stderr: &str) -> Result<(), String> {
     append_line(path, &format!("{head}\n{stderr}"), policy).map_err(|err| err.to_string())?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{skip_record, Skipped};
+
+    /// (d) 主実測の口で作った record の字面は `kind=main skipped=main tree=<sha> reason=same-tree` の順で固定
+    /// （設計 gate-cost.md §27・ADR-0043 §2.2・`s2-07l.464`）。木は口が `&str` で必ず取る＝木の無い構築は型が拒む。
+    #[test]
+    fn main_skip_record_line_is_fixed() {
+        let line = skip_record(1, Skipped::main("0123456789abcdef0123456789abcdef01234567"));
+        assert_eq!(
+            line,
+            r#"{"schema":1,"n":1,"kind":"main","skipped":"main","tree":"0123456789abcdef0123456789abcdef01234567","reason":"same-tree"}"#
+        );
+    }
 }
