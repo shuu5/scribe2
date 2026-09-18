@@ -24,7 +24,7 @@ use crate::name::NAME;
 use crate::pipe::closure::{self, ClosureError, Source};
 use crate::pipe::contract::{Contract, ContractError};
 use crate::pipe::declaration::{self, Ceiling, Effective, NewFilePolicy, WriteSetItem, CEILING_ROW, DENIED_ROW};
-use crate::pipe::refuse::{overlaps, Refuse, NEW_FILE, SHRINK_FILE};
+use crate::pipe::refuse::{overlaps, Refuse, DELETE_FILE, NEW_FILE, SHRINK_FILE};
 use crate::pipe::table::{self, ContractRow, TableError};
 use crate::pipe::{contract_path, current, emit, run_dir, run_id, vessel_path, Emit};
 use crate::rules::manifest::Manifest;
@@ -495,7 +495,7 @@ pub(super) struct Crossed {
 
 /// 上限の余地の事実（[`exclude_cap_shortfall`] が通った周・§21 の `headroom=` の材料）。
 pub(super) struct Headrooms {
-    /// write-set の `.rs`（dir は配下に展開・`+` の新規 file は 0 行・`-` の縮む面は余地を求めない）ごとの余地
+    /// write-set の `.rs`（dir は配下に展開・`+` の新規 file は 0 行・`-` の縮む面と `~` の消える file は余地を求めない）ごとの余地
     /// （R-C4-2 の値 − base の行数）・余地の小さい順（同じ余地は path の辞書順）。
     pub(super) rooms: Vec<(String, u64)>,
     /// 契約の `size` の見積（行・rules 行 `pipe.size_<s|m|l>_lines` の値）。
@@ -510,7 +510,7 @@ fn headrooms_of(items: &[WriteSetItem], lines: &[(String, u64)], caps: declarati
         .flat_map(|item| match *item {
             WriteSetItem::File(ref path) | WriteSetItem::New(ref path) => vec![path.clone()],
             WriteSetItem::Dir(ref under) => under.clone(),
-            WriteSetItem::Shrink(_) => Vec::new(),
+            WriteSetItem::Shrink(_) | WriteSetItem::Delete(_) => Vec::new(),
         })
         .filter(|path| path.ends_with(".rs"))
         .map(|path| {
@@ -526,11 +526,12 @@ fn headrooms_of(items: &[WriteSetItem], lines: &[(String, u64)], caps: declarati
 /// 合計と R-C4-1 の差に、契約の `size` の見積（rules 行 `pipe.size_<s|m|l>_lines`・数は manifest が持つ・C1）を
 /// 当て、入らない file を名指して断る（file と core の 2 形・先頭の 1 件が理由の 1 行・残りは stderr に並ぶ）。
 ///
-/// dir 項目は base の配下に展開し、`+` の新規 file は 0 行として数え、`-` の縮む面は余地も本数も数えない
-/// （弁別は [`declaration::headroom_shortfalls`] の中）。base に無い項目は数えない（項目の実在は契約表の行の検査
-/// 〔`contracts check` / 設計 pointer の intake〕が名指す）——ただし **接頭辞付きで解けない項目は受付で断る**
-/// （`write-set-item-unresolved`）: `-` の先が base に無い項目を落として測ると「余地を求めない」宣言が静かに消え、
-/// 無い file を減らす便が通る。`+` の先が base に在る項目（[`NewFilePolicy::MustBeAbsent`]）も同じ＝契約表の検査は
+/// dir 項目は base の配下に展開し、`+` の新規 file は 0 行として数え、`-` の縮む面と `~` の消える file は余地も
+/// 本数も数えない（弁別は [`declaration::headroom_shortfalls`] の中）。base に無い項目は数えない（項目の実在は
+/// 契約表の行の検査〔`contracts check` / 設計 pointer の intake〕が名指す）——ただし **接頭辞付きで解けない項目は
+/// 受付で断る**（`write-set-item-unresolved`）: `-` / `~` の先が base に無い項目を落として測ると「余地を求めない」
+/// 宣言が静かに消え、無い file を減らす / 消す便が通る（`~` は §24）。`+` の先が base に在る項目
+/// （[`NewFilePolicy::MustBeAbsent`]）も同じ＝契約表の検査は
 /// land 済みの `+` を実在 file と読む（`MayBeLanded`・`s2-07l.346`）ので、入口で止めないと満杯の file を `+` で
 /// 書いた便が余地を測られずに通る。通った周は file ごとの余地を [`Headrooms`] で返す（§21 の `headroom=` の材料）。
 fn exclude_cap_shortfall(
@@ -548,7 +549,7 @@ fn exclude_cap_shortfall(
     let items = match declaration::read_write_set(&contract.write_set, tracked, NewFilePolicy::MustBeAbsent) {
         Ok(found) => found,
         Err(unresolved) => {
-            if let Some(item) = unresolved.iter().find(|item| item.starts_with([NEW_FILE, SHRINK_FILE])) {
+            if let Some(item) = unresolved.iter().find(|item| item.starts_with([NEW_FILE, SHRINK_FILE, DELETE_FILE])) {
                 return Err(refuse(&Refuse::WriteSetItemUnresolved { item: item.clone() }, &[]));
             }
             let resolvable: Vec<String> =
