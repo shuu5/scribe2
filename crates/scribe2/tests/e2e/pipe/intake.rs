@@ -5,42 +5,24 @@
 
 use super::*;
 
-#[test]
-fn pipe_intake_rejects_missing_field() {
-    let (repo, state) = repo_with_state();
-    let path = write_contract(&repo, &["goal", "size"], &[]);
-    let out = run_pipe(&[
-        "intake", "--contract", &path.display().to_string(), "--bead", "b",
-        "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
-    ]);
-    assert_ne!(out.status.code(), Some(i32::from(RC_OK)), "欠落を通さない");
-    let err = stderr_of(&out);
-    // **全件集めて返す**（1 件目で止めない）。落とした 2 本がどちらも出る。
-    assert!(err.contains("goal"), "goal の欠落: {err}");
-    assert!(err.contains("size"), "size の欠落: {err}");
-    clean(&[&repo, &state]);
-}
-
+/// 契約 (b) 以後、1 行に収まらない配列は**行**の側の欠陥である（契約 file は器が作る）。
 #[test]
 fn pipe_intake_rejects_multiline_verify() {
     let (repo, state) = repo_with_state();
-    let path = repo.join("multiline.toml");
-    let mut lines = contract_body()
-        .into_iter()
-        .filter(|line| !line.starts_with("verify"))
-        .collect::<Vec<String>>();
-    lines.push("verify = [".to_owned());
-    lines.push(r#"  "true","#.to_owned());
-    lines.push("]".to_owned());
-    fs::write(&path, format!("{}\n", lines.join("\n"))).expect("契約 file を書ける");
+    let mut fields: Vec<String> = contract_body().into_iter().filter(|line| !line.starts_with("verify")).collect();
+    fields.push("verify = [".to_owned());
+    fields.push(r#"  "true","#.to_owned());
+    fields.push("]".to_owned());
+    commit_row(&repo, &fields);
     let out = run_pipe(&[
-        "intake", "--contract", &path.display().to_string(), "--bead", "b",
+        "intake", "--design", &design_pointer(), "--bead", "b",
         "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
+        "--rules", &ceiling_rules(&state),
     ]);
     assert_ne!(out.status.code(), Some(i32::from(RC_OK)), "1 行で完結しない verify を通さない");
     assert!(
-        stderr_of(&out).contains("1 行で完結"),
-        "理由は行を跨いだことである: {}",
+        stderr_of(&out).contains("verify"),
+        "理由は verify の欄を名乗る: {}",
         stderr_of(&out)
     );
     clean(&[&repo, &state]);
@@ -50,14 +32,15 @@ fn pipe_intake_rejects_multiline_verify() {
 fn pipe_intake_rejects_contract_without_req_or_design() {
     let (repo, state) = repo_with_state();
     for (drop, add, want) in [
+        // `design` は行の欄でなく pointer そのものなので、欠落の形が無い（契約 (b)）。
         (vec!["req"], vec![], "req"),
-        (vec!["design"], vec![], "design"),
         (vec!["req"], vec![r#"req = []"#], "req"),
     ] {
         let path = write_contract(&repo, &drop, &add);
         let out = run_pipe(&[
-            "intake", "--contract", &path.display().to_string(), "--bead", "b",
+            "intake", "--design", &path, "--bead", "b",
             "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
+            "--rules", &ceiling_rules(&state),
         ]);
         assert_ne!(out.status.code(), Some(i32::from(RC_OK)), "{want} が無い契約を通さない");
         assert!(stderr_of(&out).contains(want), "{want}: {}", stderr_of(&out));
@@ -95,7 +78,7 @@ fn pipe_state_survives_process_restart() {
     let path = write_contract(&repo, &[], &[]);
     // 置き場を **--state-dir なしで** 解く＝repo に紐づいた git 設定から読む。
     let out = Command::new(bin())
-        .args(["pipe", "intake", "--contract"])
+        .args(["pipe", "intake", "--design"])
         .arg(&path)
         .args(["--bead", "s2-2e5", "--repo"])
         .arg(&repo)
@@ -145,23 +128,27 @@ fn pipe_intake_rejects_broken_arrays_and_unknown_keys() {
     let (repo, state) = repo_with_state();
     for (drop, add, want) in [
         // 区切り忘れを 1 本の壊れた文字列として受理しない。
-        (vec!["verify"], vec![r#"verify = ["a" "b"]"#], "引用符 1 組の文字列でない"),
-        (vec!["write-set"], vec![r#"write-set = []"#], "write-set は 1 本以上"),
-        (vec!["verify"], vec![r#"verify = []"#], "verify は 1 本以上"),
-        (vec![], vec![r#"nonsense = "x""#], "未知の key nonsense"),
-        (vec![], vec![r#"classes = ["publish", "bogus"]"#], "未知の classes 値 bogus"),
-        // 契約の印（`s2-07l.201`・AC16）も閉じた名の列＝列に無い名は既存の契約 error。
-        (vec![], vec![r#"opens = ["code", "everything"]"#], "未知の opens 値 everything"),
+        // 契約 (b) 以後、壊れているのは**行**である（契約 file は器が作る）。理由は当該の欄を名乗り、
+        // 行番号を持つ——字面そのものは表の語彙で、契約 file の語彙ではない。
+        (vec!["verify"], vec![r#"verify = ["a" "b"]"#], "verify"),
+        (vec!["write-set"], vec![r#"write-set = []"#], "write-set"),
+        (vec!["verify"], vec![r#"verify = []"#], "verify"),
+        (vec![], vec![r#"nonsense = "x""#], "nonsense"),
+        (vec![], vec![r#"classes = ["publish", "bogus"]"#], "bogus"),
+        (vec![], vec![r#"opens = ["code", "everything"]"#], "everything"),
     ] {
         let path = write_contract(&repo, &drop, &add);
         let out = run_pipe(&[
-            "intake", "--contract", &path.display().to_string(), "--bead", "b",
+            "intake", "--design", &path, "--bead", "b",
             "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
+            "--rules", &ceiling_rules(&state),
         ]);
         let err = stderr_of(&out);
         assert_ne!(out.status.code(), Some(i32::from(RC_OK)), "{want} を通さない: {err}");
         assert!(err.contains(want), "理由に {want} が出る: {err}");
-        assert!(err.contains("line="), "行番号を持つ: {err}");
+        // 位置（doc:line）は**表の検査に届いた周**だけが持つ。値の読みで落ちる周（配列の形の不備）は
+        // 欄と字面だけを名乗る＝ここでは位置を pin しない（位置の側は `contract_closure_ext_` の族が
+        // `contracts: docs/design/toy.md:<line>` を逐語で測る）。
     }
     clean(&[&repo, &state]);
 }
@@ -182,42 +169,25 @@ fn pipe_contract_opens_is_an_optional_list_of_path_kinds_copied_by_intake() {
     assert!(copied.classes.is_empty(), "classes は別の field のまま");
     stop_run_ok(&state, &id);
 
-    let plain = Contract::parse(&fs::read_to_string(write_contract(&repo, &[], &[])).unwrap_or_default())
+    let bare = intake_bead(&repo, &state, &write_contract(&repo, &[], &[]), "s2-bare");
+    let plain = Contract::load(&state.join("pipe").join(&bare).join("contract.toml"))
         .unwrap_or_else(|errors| panic!("{errors:?}"));
+    stop_run_ok(&state, &bare);
     assert!(plain.opens.is_empty() && plain.opened_kinds().is_empty(), "印の無い便は空");
     // 取る名は PathKind の全数で、variant 名の字面・空の配列・重複 key は受けない。
     let all: Vec<String> = PATH_KINDS.iter().map(|kind| format!("\"{}\"", kind.as_str())).collect();
-    let every = Contract::parse(&fs::read_to_string(write_contract(&repo, &[], &[&format!("opens = [{}]", all.join(", "))])).unwrap_or_default())
+    let every_id = intake_bead(&repo, &state, &write_contract(&repo, &[], &[&format!("opens = [{}]", all.join(", "))]), "s2-every");
+    let every = Contract::load(&state.join("pipe").join(&every_id).join("contract.toml"))
         .unwrap_or_else(|errors| panic!("{errors:?}"));
+    stop_run_ok(&state, &every_id);
     assert_eq!(every.opened_kinds(), PATH_KINDS.to_vec(), "全種別を開ける");
-    for (add, want) in [
-        (r#"opens = ["Code"]"#, "未知の opens 値 Code"),
-        (r#"opens = "code""#, "opens は配列である"),
-    ] {
-        let text = fs::read_to_string(write_contract(&repo, &[], &[add])).unwrap_or_default();
-        let errors = Contract::parse(&text).err().unwrap_or_default();
-        assert!(errors.iter().any(|error| error.reason.contains(want)), "{add}: {errors:?}");
+    // 名簿に無い名・配列でない値は**行**の側で断られる（契約 file は器が作るので手書きの不備は入口に無い）。
+    for (add, want) in [(r#"opens = ["Code"]"#, "Code"), (r#"opens = "code""#, "opens")] {
+        let out = intake_raw(&repo, &state, &write_contract(&repo, &[], &[add]), "s2-bad");
+        let err = stderr_of(&out);
+        assert_ne!(out.status.code(), Some(i32::from(RC_OK)), "{add} を通さない: {err}");
+        assert!(err.contains(want), "{add}: {err}");
     }
-    clean(&[&repo, &state]);
-}
-
-#[test]
-fn pipe_intake_reports_broken_value_without_claiming_absence() {
-    let (repo, state) = repo_with_state();
-    // 値が壊れているだけで key は書かれている。「無い」と二重に言わない。
-    // 文字列 key を壊すと値が 1 つも取れない＝「書かれていた」を別に覚えていないと
-    // 欠落として二重に報告される。
-    let path = write_contract(&repo, &["goal"], &[r#"goal = 1"#]);
-    let out = run_pipe(&[
-        "intake", "--contract", &path.display().to_string(), "--bead", "b",
-        "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
-    ]);
-    let err = stderr_of(&out);
-    assert!(err.contains("goal の value が文字列でない"), "値の不備を言う: {err}");
-    assert!(
-        !err.contains("必須の key goal が無い"),
-        "書かれている key を「無い」とは言わない: {err}"
-    );
     clean(&[&repo, &state]);
 }
 
@@ -227,8 +197,9 @@ fn pipe_intake_refuses_non_git_repo() {
     let bare = tmp();
     let path = write_contract(&bare, &[], &[]);
     let out = run_pipe(&[
-        "intake", "--contract", &path.display().to_string(), "--bead", "b",
+        "intake", "--design", &path, "--bead", "b",
         "--repo", &bare.display().to_string(), "--state-dir", &state.display().to_string(),
+        "--rules", &ceiling_rules(&state),
     ]);
     assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "git repo でなければ intake の時点で断る");
     assert_eq!(event_count(&state), 0, "断った周は event を書かない");
@@ -382,7 +353,7 @@ fn pipe_intake_refuses_contract_verify_with_placeholder() {
     let out = intake_raw(&repo, &state, &path, "b");
     let err = stderr_of(&out);
     assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "契約行の穴は rc 1: {err}");
-    assert!(err.contains("契約の verify"), "どちらの面かを言う: {err}");
+    assert!(err.contains("verify"), "どちらの面かを言う: {err}");
     assert!(err.contains("置けない穴"), "理由を名指す: {err}");
     assert_eq!(event_count(&state), 0, "断った周は event を書かない");
     assert!(!state.join("pipe").exists(), "run dir も作らない");
@@ -403,7 +374,9 @@ fn pipe_intake_refuses_contract_verify_outside_declared_allowlist() {
         let path = write_contract(&repo, &["verify"], &[add]);
         let out = intake_raw(&repo, &state, &path, "b");
         let err = stderr_of(&out);
-        assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{add} は rc 1: {err}");
+        // 撃てない行は断る。rc は理由の側が持つ（撃てない形は 1・**読めない行**は 2＝空の要素は
+        // 行の parser が読めない側で、契約 (b) 以後は表の語彙で出る）。
+        assert_ne!(out.status.code(), Some(i32::from(RC_OK)), "{add} を通さない: {err}");
         assert!(err.contains(want), "理由に {want} が出る: {err}");
     }
     assert_eq!(event_count(&state), 0, "断った周は event を書かない");
@@ -448,13 +421,15 @@ fn pipe_intake_accepts_self_hosted_declaration_under_embedded_ceiling() {
         .expect("repo の root を解ける");
     let declared = fs::read_to_string(root.join(".vessel.toml")).expect("自己ホストの宣言を読める");
     let (repo, state) = repo_with_state();
+    // 自己ホストの宣言は本 repo の要件面を指すので、toy repo の面を宣言する（契約 (b) の表の検査が読む）。
+    let declared = format!("{declared}requirements = \"{REQS_FILE}\"\n");
     fs::write(repo.join(".vessel.toml"), &declared).expect("宣言を写せる");
     git(&repo, &["add", "-f", ".vessel.toml"]);
     git(&repo, &["commit", "-q", "-m", "self-hosted"]);
     // **`--rules` を渡さない**＝埋め込みの上限で測る。
     let path = write_contract(&repo, &["verify"], &[r#"verify = ["git status"]"#]);
     let out = run_pipe(&[
-        "intake", "--contract", &path.display().to_string(), "--bead", "s2-2e5",
+        "intake", "--design", &path, "--bead", "s2-2e5",
         "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
         "--lens", &review_lens_pass(&state),
     ]);
@@ -547,7 +522,7 @@ fn pipe_intake_names_ceiling_override_in_stdout() {
     let path = write_contract(&repo, &[], &[]);
     let rules = ceiling_rules(&state);
     let out = run_pipe(&[
-        "intake", "--contract", &path.display().to_string(), "--bead", "s2-2e5",
+        "intake", "--design", &path, "--bead", "s2-2e5",
         "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
         "--rules", &rules, "--lens", &review_lens_pass(&state),
     ]);
@@ -563,12 +538,14 @@ fn pipe_intake_names_ceiling_override_in_stdout() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().and_then(Path::parent).expect("repo の root を解ける");
     let declared = fs::read_to_string(root.join(".vessel.toml")).expect("自己ホストの宣言を読める");
     let (plain, plain_state) = repo_with_state();
+    // 自己ホストの宣言は本 repo の要件面（design-intent/spec/srs.html）を指すので、toy repo の面を宣言する。
+    let declared = format!("{declared}requirements = \"{REQS_FILE}\"\n");
     fs::write(plain.join(".vessel.toml"), &declared).expect("宣言を写せる");
     git(&plain, &["add", "-f", ".vessel.toml"]);
     git(&plain, &["commit", "-q", "-m", "self-hosted"]);
-    let contract = write_contract(&plain, &["verify"], &[r#"verify = ["git status"]"#]);
+    let design = write_contract(&plain, &["verify"], &[r#"verify = ["git status"]"#]);
     let out = run_pipe(&[
-        "intake", "--contract", &contract.display().to_string(), "--bead", "s2-2e5",
+        "intake", "--design", &design, "--bead", "s2-2e5",
         "--repo", &plain.display().to_string(), "--state-dir", &plain_state.display().to_string(),
         "--lens", &review_lens_pass(&plain_state),
     ]);
@@ -621,11 +598,11 @@ fn write_verdict(state: &Path, id: &str, verdict: &str) {
 #[test]
 fn pipe_refuse_intake_refuses_a_contract_that_overlaps_a_live_run() {
     let (repo, state) = repo_with_state();
-    let first = write_set_contract(&repo, "first.toml", &["src/lib.rs"]);
+    let first = write_set_contract(&repo, "first", &["src/lib.rs"]);
     let id = intake_bead(&repo, &state, &first, "s2-live");
     let before = events_bytes(&state);
     let dirs = run_dirs(&state);
-    let second = write_set_contract(&repo, "second.toml", &["src/lib.rs"]);
+    let second = write_set_contract(&repo, "second", &["src/lib.rs"]);
     let out = try_intake(&repo, &state, &second, "s2-next");
     assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "交差は rc 1: {}", stdout_of(&out));
     let err = stderr_of(&out);
@@ -647,17 +624,17 @@ fn pipe_refuse_intake_measures_dir_and_file_overlap() {
         ("src/", "src/lib.rs", true),
         ("src/", "srcx/", false),
         ("src/", "src/", true),
-        ("./src/lib.rs", "src/lib.rs", true),
-        ("src//lib.rs", "src/lib.rs", true),
-        ("src/../src/lib.rs", "src/lib.rs", true),
+        // 正規化していない形（`./x` / `x//y` / `x/../x`）は**行が持てない**（表の検査が base に解けないと断る）。
+        // 畳み方そのものは `pipe::refuse` の in-file の歯（`normalize` / `overlaps`）が測る。
         ("src/", "+src/new.rs", false),
-        ("src/", "src/new.rs", false),
+        // base に無い file を**素の path**で持つ行は表の検査が断る（`+` を付けるのが行の形）＝
+        // 「dir と未来の file は交差しない」は上の `+` の対で測る。
         ("+src/new.rs", "src/new.rs", true),
     ] {
         let (repo, state) = repo_with_state();
-        let first = write_set_contract(&repo, "first.toml", &[live_entry]);
+        let first = write_set_contract(&repo, "first", &[live_entry]);
         intake_bead(&repo, &state, &first, "s2-live");
-        let second = write_set_contract(&repo, "second.toml", &[next_entry]);
+        let second = write_set_contract(&repo, "second", &[next_entry]);
         let out = try_intake(&repo, &state, &second, "s2-next");
         let want = if refused { RC_REFUSED } else { RC_OK };
         assert_eq!(
@@ -684,13 +661,13 @@ fn pipe_refuse_intake_ignores_terminal_runs() {
         ("Gated", Some("INCONCLUSIVE"), true),
     ] {
         let (repo, state) = repo_with_state();
-        let first = write_set_contract(&repo, "first.toml", &["src/lib.rs"]);
+        let first = write_set_contract(&repo, "first", &["src/lib.rs"]);
         let id = intake_bead(&repo, &state, &first, "s2-live");
         if let Some(found) = verdict {
             write_verdict(&state, &id, found);
         }
         record_stage(&state, &id, stage);
-        let second = write_set_contract(&repo, "second.toml", &["src/lib.rs"]);
+        let second = write_set_contract(&repo, "second", &["src/lib.rs"]);
         let out = try_intake(&repo, &state, &second, "s2-next");
         let want = if refused { RC_REFUSED } else { RC_OK };
         assert_eq!(
@@ -710,7 +687,7 @@ fn pipe_refuse_intake_ignores_terminal_runs() {
 fn pipe_refuse_intake_is_broken_when_a_live_copy_is_unreadable() {
     for damage in ["remove", "garble", "verdict"] {
         let (repo, state) = repo_with_state();
-        let first = write_set_contract(&repo, "first.toml", &["src/lib.rs"]);
+        let first = write_set_contract(&repo, "first", &["src/lib.rs"]);
         let id = intake_bead(&repo, &state, &first, "s2-live");
         let copied = state.join("pipe").join(&id).join("contract.toml");
         match damage {
@@ -725,7 +702,7 @@ fn pipe_refuse_intake_is_broken_when_a_live_copy_is_unreadable() {
         }
         let before = events_bytes(&state);
         let dirs = run_dirs(&state);
-        let second = write_set_contract(&repo, "second.toml", &["src/lib.rs"]);
+        let second = write_set_contract(&repo, "second", &["src/lib.rs"]);
         let out = try_intake(&repo, &state, &second, "s2-next");
         assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "{damage}: 読めない周は rc 2");
         let err = stderr_of(&out);
@@ -742,7 +719,7 @@ fn pipe_refuse_intake_is_broken_when_a_live_copy_is_unreadable() {
 #[test]
 fn pipe_refuse_intake_refuses_the_second_run_of_the_same_bead() {
     let (repo, state) = repo_with_state();
-    let path = write_set_contract(&repo, "first.toml", &["src/lib.rs"]);
+    let path = write_set_contract(&repo, "first", &["src/lib.rs"]);
     let id = intake_bead(&repo, &state, &path, "s2-same");
     let out = try_intake(&repo, &state, &path, "s2-same");
     assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "同 bead の 2 本目も断る");
@@ -756,9 +733,9 @@ fn pipe_refuse_intake_refuses_the_second_run_of_the_same_bead() {
 #[test]
 fn pipe_refuse_intake_lists_every_overlapping_pair() {
     let (repo, state) = repo_with_state();
-    let first = write_set_contract(&repo, "first.toml", &["src/a.rs", "src/b.rs"]);
+    let first = write_set_contract(&repo, "first", &["src/a.rs", "src/b.rs"]);
     let id = intake_bead(&repo, &state, &first, "s2-live");
-    let second = write_set_contract(&repo, "second.toml", &["src/a.rs", "src/b.rs"]);
+    let second = write_set_contract(&repo, "second", &["src/a.rs", "src/b.rs"]);
     let out = try_intake(&repo, &state, &second, "s2-next");
     assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "交差は rc 1");
     let err = stderr_of(&out);
@@ -781,9 +758,9 @@ fn pipe_refuse_intake_lists_every_overlapping_pair() {
 #[test]
 fn pipe_refuse_stop_run_releases_the_write_set_of_a_live_run() {
     let (repo, state) = repo_with_state();
-    let first = write_set_contract(&repo, "first.toml", &["src/lib.rs"]);
+    let first = write_set_contract(&repo, "first", &["src/lib.rs"]);
     let id = intake_bead(&repo, &state, &first, "s2-live");
-    let second = write_set_contract(&repo, "second.toml", &["src/lib.rs"]);
+    let second = write_set_contract(&repo, "second", &["src/lib.rs"]);
     let blocked = try_intake(&repo, &state, &second, "s2-next");
     assert_eq!(blocked.status.code(), Some(i32::from(RC_REFUSED)), "止める前は交差で断られる");
     let before = event_count(&state);
@@ -813,7 +790,7 @@ fn pipe_refuse_stop_run_releases_the_write_set_of_a_live_run() {
 #[test]
 fn pipe_refuse_stop_run_stops_the_live_seat_of_the_run() {
     let (repo, state) = repo_with_state();
-    let path = write_set_contract(&repo, "first.toml", &["src/lib.rs"]);
+    let path = write_set_contract(&repo, "first", &["src/lib.rs"]);
     let id = intake_bead(&repo, &state, &path, "s2-live");
     // **孫**として起こす（test process の子のままだと zombie が /proc に残る）。
     let spawned = Command::new("sh")
@@ -1186,12 +1163,12 @@ fn contract_closure_ext_dir_items_expand_and_unresolved_items_are_named() {
     clean(&[&repo]);
 
     let (repo, state) = repo_with_state();
-    let dir_run = write_set_contract(&repo, "dir.toml", &["src/"]);
+    let dir_run = write_set_contract(&repo, "dir", &["src/"]);
     let id = intake_bead(&repo, &state, &dir_run, "s2-live");
-    let fresh = write_set_contract(&repo, "fresh.toml", &["+src/new.rs"]);
+    let fresh = write_set_contract(&repo, "fresh", &["+src/new.rs"]);
     let passed = try_intake(&repo, &state, &fresh, "s2-fresh");
     assert_eq!(passed.status.code(), Some(i32::from(RC_OK)), "新規 file は dir と交差しない: {}", stderr_of(&passed));
-    let existing = write_set_contract(&repo, "existing.toml", &["src/lib.rs"]);
+    let existing = write_set_contract(&repo, "existing", &["src/lib.rs"]);
     let refused = try_intake(&repo, &state, &existing, "s2-old");
     assert_eq!(refused.status.code(), Some(i32::from(RC_REFUSED)), "base の file は dir に展開されて交差する");
     assert!(stderr_of(&refused).contains(&id) && stderr_of(&refused).contains("src/lib.rs"), "{}", stderr_of(&refused));
@@ -1227,37 +1204,28 @@ fn contract_closure_ext_cap_headroom_refuses_a_size_that_does_not_fit_the_file_o
         write_rules_capped(&state, name, fixture).display().to_string()
     };
     let roomy = rules("rules-roomy.toml", 40_000);
-    let intake = |contract: &Path, bead: &str, rules: &str| intake_with_rules(&repo, &state, contract, bead, rules);
-    let sized = |name: &str, size: &str, write_set: &str| {
-        let lines: Vec<String> = contract_body()
-            .into_iter()
-            .filter(|line| !line.starts_with("size") && !line.starts_with("write-set"))
-            .chain([format!("size = \"{size}\""), format!("write-set = [{write_set}]")])
-            .collect();
-        let path = repo.join(name);
-        fs::write(&path, format!("{}\n", lines.join("\n"))).expect("契約 file を書ける");
-        path
-    };
+    let intake = |design: &str, bead: &str, rules: &str| intake_with_rules(&repo, &state, design, bead, rules);
+    let sized = |id: &str, size: &str, write_set: &str| sized_contract(&repo, id, size, write_set);
     let big = "\"crates/toy/src/big.rs\"";
-    let out = intake(&sized("m.toml", "M", big), "s2-m", &roomy);
+    let out = intake(&sized("m", "M", big), "s2-m", &roomy);
     let err = stderr_of(&out);
     assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "余地 101 に M（300）は入らない: {err}");
     assert!(err.contains("crates/toy/src/big.rs") && err.contains(" 101 ") && err.contains("size M"), "file と余地と size: {err}");
     assert_eq!(event_count(&state), 0, "断った周は event を書かない");
     assert!(!state.join("pipe").exists(), "run dir も作らない");
-    let small = intake(&sized("s.toml", "S", big), "s2-s", &roomy);
+    let small = intake(&sized("s", "S", big), "s2-s", &roomy);
     assert_eq!(small.status.code(), Some(i32::from(RC_OK)), "S（100）は余地 101 に入る: {}", stderr_of(&small));
     stop_run_ok(&state, &run_id_of(&small));
-    let other = intake(&sized("other.toml", "M", "\"src/lib.rs\""), "s2-o", &roomy);
+    let other = intake(&sized("other", "M", "\"src/lib.rs\""), "s2-o", &roomy);
     assert_eq!(other.status.code(), Some(i32::from(RC_OK)), "余地の無い file を持たない行は通る: {}", stderr_of(&other));
     stop_run_ok(&state, &run_id_of(&other));
     // core の形: 上限 1500 に対し合計 1399（余地 101）・新規 file 1 本の M の見積 300 が超える（file の余地は 1500）。
     let tight = rules("rules-tight.toml", 1_500);
-    let core = intake(&sized("core.toml", "M", "\"+crates/toy/src/new.rs\""), "s2-c", &tight);
+    let core = intake(&sized("core", "M", "\"+crates/toy/src/new.rs\""), "s2-c", &tight);
     let err = stderr_of(&core);
     assert_eq!(core.status.code(), Some(i32::from(RC_REFUSED)), "core の余地 101 に 300 は入らない: {err}");
     assert!(err.contains("core の上限の余地が 101 行") && !err.contains("big.rs"), "core を名指す: {err}");
-    let fits = intake(&sized("fits.toml", "S", "\"+crates/toy/src/new.rs\""), "s2-f", &tight);
+    let fits = intake(&sized("fits", "S", "\"+crates/toy/src/new.rs\""), "s2-f", &tight);
     assert_eq!(fits.status.code(), Some(i32::from(RC_OK)), "S の見積 100 は core の余地 101 に入る: {}", stderr_of(&fits));
     clean(&[&repo, &state]);
 }
@@ -1274,25 +1242,20 @@ fn capped_rules(state: &Path, name: &str, core_lines: u64) -> String {
 }
 
 /// `size` と `write-set` だけ差し替えた契約 file を repo に書き、その path を返す。
-#[expect(
-    clippy::expect_used,
-    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
-)]
-fn sized_contract(repo: &Path, name: &str, size: &str, write_set: &str) -> PathBuf {
-    let lines: Vec<String> = contract_body()
+fn sized_contract(repo: &Path, id: &str, size: &str, write_set: &str) -> String {
+    let fields: Vec<String> = contract_body()
         .into_iter()
-        .filter(|line| !line.starts_with("size") && !line.starts_with("write-set"))
-        .chain([format!("size = \"{size}\""), format!("write-set = [{write_set}]")])
+        .filter(|line| !line.starts_with("size") && !line.starts_with("write-set") && !line.starts_with("id"))
+        .chain([format!("id = \"{id}\""), format!("size = \"{size}\""), format!("write-set = [{write_set}]")])
         .collect();
-    let path = repo.join(name);
-    fs::write(&path, format!("{}\n", lines.join("\n"))).expect("契約 file を書ける");
-    path
+    commit_row(repo, &fields);
+    format!("{DESIGN_FILE}#{id}")
 }
 
 /// `--rules` を名指して intake を 1 回撃つ（rc を assert しない形・審査の lens は偽 PASS）。
-fn intake_with_rules(repo: &Path, state: &Path, contract: &Path, bead: &str, rules: &str) -> Output {
+fn intake_with_rules(repo: &Path, state: &Path, design: &str, bead: &str, rules: &str) -> Output {
     run_pipe(&[
-        "intake", "--contract", &contract.display().to_string(), "--bead", bead,
+        "intake", "--design", design, "--bead", bead,
         "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
         "--rules", rules, "--lens", &review_lens_pass(state),
     ])
@@ -1364,18 +1327,18 @@ fn contract_closure_ext_shrink_item_is_not_counted_in_the_core_estimate() {
 #[test]
 fn contract_closure_ext_delete_intake_accepts_existing_and_strips_prefix() {
     let (repo, state) = repo_with_state();
-    let doomed = write_set_contract(&repo, "delete.toml", &["~src/lib.rs"]);
+    let doomed = write_set_contract(&repo, "delete", &["~src/lib.rs"]);
     let out = try_intake(&repo, &state, &doomed, "s2-del");
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "base に在る file への ~ は受付を通る: {}", stderr_of(&out));
     let id = run_id_of(&out);
     assert!(state.join("pipe").join(&id).is_dir(), "run dir が作られる: {id}");
     assert_eq!(event_count(&state), 2, "RunCreated と審査の段（Reviewed）の 2 件");
-    let plain = write_set_contract(&repo, "plain.toml", &["src/lib.rs"]);
+    let plain = write_set_contract(&repo, "plain", &["src/lib.rs"]);
     let crossed = try_intake(&repo, &state, &plain, "s2-plain");
     let err = stderr_of(&crossed);
     assert_eq!(crossed.status.code(), Some(i32::from(RC_REFUSED)), "~ の便と素の path の便は同じ面を触る: {err}");
     assert!(err.contains(&id) && err.contains("src/lib.rs"), "1 本目の run id と交差した path を名乗る: {err}");
-    let apart = try_intake(&repo, &state, &write_set_contract(&repo, "other.toml", &["+src/new.rs"]), "s2-apart");
+    let apart = try_intake(&repo, &state, &write_set_contract(&repo, "other", &["+src/new.rs"]), "s2-apart");
     assert_eq!(apart.status.code(), Some(i32::from(RC_OK)), "別の file の便は交差しない: {}", stderr_of(&apart));
     clean(&[&repo, &state]);
 }
@@ -1385,7 +1348,7 @@ fn contract_closure_ext_delete_intake_accepts_existing_and_strips_prefix() {
 #[test]
 fn contract_closure_ext_delete_intake_refuses_missing_file() {
     let (repo, state) = repo_with_state();
-    let out = try_intake(&repo, &state, &write_set_contract(&repo, "none.toml", &["~src/none.rs"]), "s2-none");
+    let out = try_intake(&repo, &state, &write_set_contract(&repo, "none", &["~src/none.rs"]), "s2-none");
     let err = stderr_of(&out);
     assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "base に無い file への ~ は解けない: {err}");
     assert!(err.contains("write-set の ~src/none.rs は base に解けない"), "項目の字面（~ 込み）を名指す: {err}");
@@ -1488,15 +1451,9 @@ fn contract_closure_ext_width_packed_line_does_not_widen_the_headroom() {
         caps: CapFixture { core_lines: 40_000, file_lines: 1_500 },
     };
     let rules = write_rules_capped(&state, "rules-width.toml", fixture).display().to_string();
-    let lines: Vec<String> = contract_body()
-        .into_iter()
-        .filter(|line| !line.starts_with("size") && !line.starts_with("write-set"))
-        .chain(["size = \"S\"".to_owned(), "write-set = [\"crates/toy/src/packed.rs\"]".to_owned()])
-        .collect();
-    let contract = repo.join("s.toml");
-    fs::write(&contract, format!("{}\n", lines.join("\n"))).expect("契約 file を書ける");
+    let design = sized_contract(&repo, "s", "S", "\"crates/toy/src/packed.rs\"");
     let out = run_pipe(&[
-        "intake", "--contract", &contract.display().to_string(), "--bead", "s2-w",
+        "intake", "--design", &design, "--bead", "s2-w",
         "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(), "--rules", &rules,
     ]);
     let err = stderr_of(&out);
@@ -1612,19 +1569,9 @@ fn landed_plus_doc() -> String {
 }
 
 /// 設計 pointer `docs/design/toy.md#i` と行と同じ write-set（`+` 付き）を持つ契約 file。
-#[expect(
-    clippy::expect_used,
-    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
-)]
-fn landed_plus_contract(repo: &Path) -> PathBuf {
-    let lines: Vec<String> = contract_body()
-        .into_iter()
-        .filter(|line| !line.starts_with("design") && !line.starts_with("write-set"))
-        .chain(["design = \"docs/design/toy.md#i\"".to_owned(), format!("write-set = [\"{LANDED_PLUS_ITEM}\"]")])
-        .collect();
-    let path = repo.join("landed.toml");
-    fs::write(&path, format!("{}\n", lines.join("\n"))).expect("契約 file を書ける");
-    path
+fn landed_plus_contract(_repo: &Path) -> String {
+    // 契約 (b) 以後、write-set は**行**が持つ（`+` の項目も行の側）。受付へ渡すのは pointer だけである。
+    "docs/design/toy.md#i".to_owned()
 }
 
 /// (a) 契約表の行が `+crates/toy/src/new.rs` を持ち、その file を commit した base（land 後の main の形）で `contracts check`
@@ -1713,19 +1660,9 @@ fn derive_row(id: &str, over: &[(&str, &str)]) -> String {
 
 /// 設計 pointer `docs/design/toy.md#<id>` を持つ契約 file（残りの欄は [`contract_body`]・write-set は仮の `src/lib.rs`
 /// ＝写しの差し替えを測る対）。
-#[expect(
-    clippy::expect_used,
-    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
-)]
-fn pointed_contract(repo: &Path, name: &str, id: &str) -> PathBuf {
-    let lines: Vec<String> = contract_body()
-        .into_iter()
-        .filter(|line| !line.starts_with("design"))
-        .chain([format!("design = \"docs/design/toy.md#{id}\"")])
-        .collect();
-    let path = repo.join(name);
-    fs::write(&path, format!("{}\n", lines.join("\n"))).expect("契約 file を書ける");
-    path
+fn pointed_contract(_repo: &Path, _name: &str, id: &str) -> String {
+    // 契約 (b) 以後、受付が受けるのは pointer そのものである（契約 file は器が行から作る）。
+    format!("docs/design/toy.md#{id}")
 }
 
 /// 便の写しの契約の write-set。
@@ -1777,28 +1714,37 @@ fn contract_derive_fills_write_set_for_a_row_without_one() {
     ];
     assert_eq!(copied_write_set(&state, &id), want, "写しの write-set は導出値（閉包 ∪ 歯の置き場 ∪ tests ∪ creates ∪ also）");
     let copied = fs::read_to_string(state.join("pipe").join(&id).join("contract.toml")).unwrap_or_default();
-    assert!(copied.contains("verify = [\"sh verify-ok.sh\"]") && !copied.contains("creates"), "他の欄は逐語・新欄は写さない: {copied}");
+    // 契約 (b) 以後、写しの欄は**行**から来る（`verify` は行の逐語・新欄 `creates` / `tests` / `also` は写さない）。
+    assert!(
+        copied.contains("verify = [\"cargo nextest run -p toy --no-tests=fail derive_\"]"),
+        "verify は行の逐語: {copied}"
+    );
+    for skipped in ["creates", "tests =", "also"] {
+        assert!(!copied.contains(skipped), "新欄 {skipped} は写さない: {copied}");
+    }
     assert_eq!(event_count(&state), 2, "RunCreated と審査の段（Reviewed）の 2 件");
     clean(&[&repo, &state]);
 }
 
-/// (b) 手書きの `write-set` が導出値とずれた行は `write-set-drift` で不足（閉包の show.rs）と余分（src/lib.rs）を両方名指して
-/// 断られ、run dir も event も作らない。`+x` と `x` は同じ項目（new.rs は名指さない）。対: 一致する行は通り、写しの
-/// write-set は契約 file のまま（差し替えは write-set の無い行だけ）。
+/// (b) 手書きの `write-set` が導出値とずれた行は `write-set-drift` で**余分**（src/lib.rs）を名指して断られ、run dir も
+/// event も作らない。`+x` と `x` は同じ項目（new.rs は名指さない）。対: 一致する行は通り、写しの write-set は行の逐語。
+///
+/// **不足の側は表の検査が先に断る**（契約 (b)・`write-set-incomplete`＝閉包の file が write-set に無い）ので、
+/// drift に届くのは余分だけである（不足は `contract_closure_ext_` の族が測る）。
 #[test]
 fn contract_derive_refuses_drift_naming_missing_and_extra() {
     let touches = ("touches", "[\"crate::tint::Tint\"]");
     let creates = ("creates", "[\"crates/toy/src/new.rs\"]");
     let rows = [
-        derive_row("b", &[touches, creates, ("write-set", "[\"crates/toy/src/tint.rs\", \"+crates/toy/src/new.rs\", \"src/lib.rs\"]")]),
-        derive_row("c", &[touches, creates, ("write-set", "[\"crates/toy/src/new.rs\", \"crates/toy/src/show.rs\", \"crates/toy/src/tint.rs\"]")]),
+        derive_row("b", &[touches, creates, ("write-set", "[\"crates/toy/src/tint.rs\", \"crates/toy/src/show.rs\", \"+crates/toy/src/new.rs\", \"src/lib.rs\"]")]),
+        derive_row("c", &[touches, creates, ("write-set", "[\"+crates/toy/src/new.rs\", \"crates/toy/src/show.rs\", \"crates/toy/src/tint.rs\"]")]),
     ];
     let (repo, state) = derive_repo(&table_doc(&table_region(&rows)));
     let out = intake_raw(&repo, &state, &pointed_contract(&repo, "b.toml", "b"), "s2-b");
     let err = stderr_of(&out);
     assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "ずれは rc 1: {err}");
     assert!(err.contains("write-set が導出値と一致しない"), "理由: {err}");
-    assert!(err.contains("missing: crates/toy/src/show.rs") && err.contains("extra: src/lib.rs"), "不足と余分を両方名指す: {err}");
+    assert!(err.contains("extra: src/lib.rs"), "余分を名指す: {err}");
     assert!(!err.contains("new.rs") && !err.contains("tint.rs"), "一致する項目（+ の有無は同じ）は名指さない: {err}");
     assert_eq!(event_count(&state), 0, "断った周は event を書かない");
     assert!(!state.join("pipe").exists(), "run dir も作らない");
@@ -1806,7 +1752,12 @@ fn contract_derive_refuses_drift_naming_missing_and_extra() {
     assert_eq!(passed.status.code(), Some(i32::from(RC_OK)), "一致する手書きは通る: {}", stderr_of(&passed));
     let tokens = intake_tokens(&passed);
     assert!(tokens.contains(&"write-set=derived".to_owned()) && tokens.contains(&"files=3".to_owned()), "{tokens:?}");
-    assert_eq!(copied_write_set(&state, &run_id_of(&passed)), ["src/lib.rs"], "手書きの在る行は写しを差し替えない");
+    // 契約 (b) 以後、写しの write-set は**行の逐語**である（手書きの行は導出値で差し替えない）。
+    assert_eq!(
+        copied_write_set(&state, &run_id_of(&passed)),
+        ["+crates/toy/src/new.rs", "crates/toy/src/show.rs", "crates/toy/src/tint.rs"],
+        "手書きの在る行は写しを差し替えない"
+    );
     clean(&[&repo, &state]);
 }
 
@@ -1840,24 +1791,25 @@ fn contract_derive_refuses_also_rs_and_tests_non_teeth_and_unresolved_filter() {
     clean(&[&repo, &state]);
 }
 
-/// (d) 新欄なし + `write-set` あり = `Declared`: 閉包の file（show.rs）を欠く write-set でも導出も drift も撃たず (g) までの
-/// 検査だけで通り（判定行 `write-set=declared files=<N>`・写しは契約 file のまま）、pointer でない `design`（(b) の前の
-/// 契約 file）は弁別を持たず token を出さない。解けない pointer（区間に無い行 id）は契約表の欠陥として断る。
+/// (d) 新欄なし + `write-set` あり = `Declared`: 導出も drift も撃たず (g) までの検査だけで通り（判定行 `write-set=declared files=<N>`・写しは行の write-set のまま）。解けない pointer
+/// （区間に無い行 id）は契約表の欠陥として断る。
 #[test]
 fn contract_derive_declared_rows_skip_derivation() {
-    let row = table_row("d", &[("touches", "[\"crate::tint::Tint\"]"), ("write-set", "[\"crates/toy/src/tint.rs\"]")]);
+    // 契約 (b) 以後、**Declared の行も閉包 ⊆ write-set** を表の検査が要る（導出と drift を撃たないだけ）。
+    let row = table_row(
+        "d",
+        &[("touches", "[\"crate::tint::Tint\"]"), ("write-set", "[\"crates/toy/src/tint.rs\", \"crates/toy/src/show.rs\"]")],
+    );
     let (repo, state) = derive_repo(&table_doc(&table_region(&[row])));
     let out = intake_raw(&repo, &state, &pointed_contract(&repo, "d.toml", "d"), "s2-d");
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "Declared は導出しない: {}", stderr_of(&out));
     let tokens = intake_tokens(&out);
-    assert!(tokens.contains(&"write-set=declared".to_owned()) && tokens.contains(&"files=1".to_owned()), "{tokens:?}");
+    assert!(tokens.contains(&"write-set=declared".to_owned()) && tokens.contains(&"files=2".to_owned()), "{tokens:?}");
     let id = run_id_of(&out);
-    assert_eq!(copied_write_set(&state, &id), ["src/lib.rs"], "写しは契約 file のまま");
+    // 契約 (b) 以後、写しの write-set は**行の逐語**である（Declared は導出しない＝行がそのまま載る）。
+    assert_eq!(copied_write_set(&state, &id), ["crates/toy/src/tint.rs", "crates/toy/src/show.rs"], "写しは行の write-set のまま");
     stop_run_ok(&state, &id);
-    let plain = intake_raw(&repo, &state, &write_contract(&repo, &[], &[]), "s2-plain");
-    assert_eq!(plain.status.code(), Some(i32::from(RC_OK)), "pointer でない design は従来どおり: {}", stderr_of(&plain));
-    assert!(!stdout_of(&plain).contains("write-set="), "弁別の token を出さない: {}", stdout_of(&plain));
-    stop_run_ok(&state, &run_id_of(&plain));
+    // 「pointer でない design」の周は**もう無い**（受付は pointer しか受けない・契約 (b)）。
     let missing = intake_raw(&repo, &state, &pointed_contract(&repo, "z.toml", "zz"), "s2-z");
     assert_eq!(missing.status.code(), Some(i32::from(RC_REFUSED)), "区間に無い行 id は rc 1: {}", stderr_of(&missing));
     assert!(stderr_of(&missing).contains("行 id zz が区間に無い"), "{}", stderr_of(&missing));
@@ -1903,7 +1855,12 @@ fn contract_declared_teeth_inside_write_set_passes() {
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "歯が write-set の中なら通る: {}", stderr_of(&out));
     let tokens = intake_tokens(&out);
     assert!(tokens.contains(&"write-set=declared".to_owned()) && tokens.contains(&"files=3".to_owned()), "{tokens:?}");
-    assert_eq!(copied_write_set(&state, &run_id_of(&out)), ["src/lib.rs"], "写しは契約 file のまま");
+    // 契約 (b) 以後、写しの write-set は行の逐語である。
+    assert_eq!(
+        copied_write_set(&state, &run_id_of(&out)),
+        ["crates/toy/src/tint.rs", "crates/toy/src/other.rs", "crates/toy/tests/e2e.rs"],
+        "写しは行の write-set のまま"
+    );
     clean(&[&repo, &state]);
 }
 
@@ -2008,25 +1965,10 @@ const PROSE_OTHER_LINE: &str = "cargo nextest run -p toy --no-tests=fail other_"
 
 /// 設計 pointer `docs/design/toy.md#<id>` と、契約 file 側の `done`（散文）・`verify`（散文の門が読む filter 語）・
 /// `write-set` を持つ契約 file（`goal` は [`contract_body`] の既定＝backtick を持たない）。
-#[expect(
-    clippy::expect_used,
-    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
-)]
-fn prose_contract(repo: &Path, id: &str, done: &str, verify: &str, write_set: &str) -> PathBuf {
-    let dropped = ["design", "done", "verify", "write-set"];
-    let lines: Vec<String> = contract_body()
-        .into_iter()
-        .filter(|line| !dropped.iter().any(|key| line.starts_with(key)))
-        .chain([
-            format!("design = \"docs/design/toy.md#{id}\""),
-            format!("done = \"{done}\""),
-            format!("verify = [\"{verify}\"]"),
-            format!("write-set = {write_set}"),
-        ])
-        .collect();
-    let path = repo.join(format!("{id}.toml"));
-    fs::write(&path, format!("{}\n", lines.join("\n"))).expect("契約 file を書ける");
-    path
+fn prose_contract(_repo: &Path, id: &str, _done: &str, _verify: &str, _write_set: &str) -> String {
+    // 契約 (b) 以後、`done` / `verify` / `write-set` は**行**が持つ（契約 file は行から作られる）。
+    // 受付へ渡すのは pointer だけで、散文は行の側に在る。
+    format!("docs/design/toy.md#{id}")
 }
 
 /// (a) `done` が base の歯 `derive_ok` を backtick で名指し、契約 file の `verify` の filter が `other_`（名指しに当たらない）
@@ -2063,10 +2005,10 @@ fn pipe_intake_prose_token_pin_outside_write_set_is_accepted() {
 // ───── 器の口 pipe preflight（設計 docs/design/contract-source.md §21・行 u・`s2-07l.394`・接頭辞 `pipe_preflight_`） ─────
 
 /// `pipe preflight` を 1 回撃つ（intake と同じ引数の読み・審査の lens は無い・`--state-dir` は `with_state_dir` の周だけ）。
-fn preflight_raw(repo: &Path, state: &Path, contract: &Path, bead: &str, with_state_dir: bool) -> Output {
+fn preflight_raw(repo: &Path, state: &Path, design: &str, bead: &str, with_state_dir: bool) -> Output {
     let (rules, state_dir) = (ceiling_rules(state), state.display().to_string());
     let mut args = vec![
-        "preflight", "--contract", &contract.display().to_string(), "--bead", bead,
+        "preflight", "--design", design, "--bead", bead,
         "--repo", &repo.display().to_string(), "--rules", &rules,
     ]
     .into_iter()
@@ -2091,19 +2033,9 @@ fn tail_line(out: &Output) -> String {
 
 /// 設計 pointer `docs/design/toy.md#<id>` と **契約 file 側の write-set** を持つ契約 file（Declared 行は写しを差し替えない
 /// ので、受付の余地と交差は契約 file の write-set を読む＝行と同じ列挙を契約 file にも書く）。
-#[expect(
-    clippy::expect_used,
-    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
-)]
-fn pointed_contract_with(repo: &Path, name: &str, id: &str, write_set: &str) -> PathBuf {
-    let lines: Vec<String> = contract_body()
-        .into_iter()
-        .filter(|line| !line.starts_with("design") && !line.starts_with("write-set"))
-        .chain([format!("design = \"docs/design/toy.md#{id}\""), format!("write-set = {write_set}")])
-        .collect();
-    let path = repo.join(name);
-    fs::write(&path, format!("{}\n", lines.join("\n"))).expect("契約 file を書ける");
-    path
+fn pointed_contract_with(_repo: &Path, _name: &str, id: &str, _write_set: &str) -> String {
+    // 契約 (b) 以後、write-set は**行**が持つ。受付へ渡すのは pointer だけである。
+    format!("docs/design/toy.md#{id}")
 }
 
 /// (a) Declared 行（`derive_` の歯 other.rs / e2e.rs が write-set の外・`-` の先が base に無い）は preflight が判定関数
@@ -2121,15 +2053,15 @@ fn pipe_preflight_lists_one_refusal_per_judgement_without_creating_a_run() {
     let out = preflight_raw(&repo, &state, &contract, "s2-t", true);
     let text = stdout_of(&out);
     assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "断り ≥ 1 は rc 1: {text}");
+    // 契約 (b) 以後、**行の欠陥は表の検査が先に断る**（受付は行から契約を作るので、作れない行で judge まで
+    // 進まない）。`-` の先が base に無い項目は表の findings で出て、preflight はそれを 1 件として並べる。
     let refuses = fact_lines(&out, "refuse=");
-    assert_eq!(refuses.len(), 2, "判定関数 1 本につき高々 1 件を全部並べる: {text}");
-    assert!(refuses[0].starts_with("refuse=teeth-outside-write-set:"), "1 本目は歯の門（settle_write_set）: {text}");
-    assert!(refuses[1].starts_with("refuse=write-set-item-unresolved:"), "2 本目は解けない項目（exclude_cap_shortfall）: {text}");
-    assert!(refuses[0].contains("crates/toy/src/other.rs, crates/toy/tests/e2e.rs"), "歯の file を名指す: {text}");
-    assert!(refuses[1].contains("-crates/toy/src/none.rs"), "項目の字面（- 込み）を名指す: {text}");
-    assert_eq!(tail_line(&out), "preflight: refused n=2", "末尾は件数: {text}");
-    assert!(fact_lines(&out, "design=") == ["design=docs/design/toy.md#t section=1"], "行の pointer と § は事実のまま: {text}");
-    assert!(fact_lines(&out, "write-set=").is_empty(), "断った関数の事実の行は立たない: {text}");
+    assert!(refuses.is_empty(), "行が作れない周は判定の列を持たない: {text}");
+    let err = stderr_of(&out);
+    assert!(err.contains("write-set-item-unresolved"), "解けない項目を名乗る: {err}");
+    assert!(err.contains("-crates/toy/src/none.rs"), "項目の字面（- 込み）を名乗る: {err}");
+    assert_eq!(tail_line(&out), "preflight: refused n=1", "末尾は件数: {text}");
+    assert!(fact_lines(&out, "write-set=").is_empty(), "断った周は事実の行を立てない: {text}");
     assert_eq!(run_dirs(&state), dirs, "run dir は撃つ前と同数（母集団 {} 本）", dirs.len());
     assert_eq!(event_count(&state), events, "event も同じ（母集団 {events} 件）");
     intake_names_only_the_first(&repo, &state, &contract, events);
@@ -2137,12 +2069,13 @@ fn pipe_preflight_lists_one_refusal_per_judgement_without_creating_a_run() {
 }
 
 /// (a) の対照: 同じ契約を `intake` に通すと rc 1 で先頭の 1 件（teeth-outside-write-set）だけを名乗り、event を書かない。
-fn intake_names_only_the_first(repo: &Path, state: &Path, contract: &Path, events: usize) {
-    let taken = intake_raw(repo, state, contract, "s2-t");
+fn intake_names_only_the_first(repo: &Path, state: &Path, design: &str, events: usize) {
+    let taken = intake_raw(repo, state, design, "s2-t");
     let err = stderr_of(&taken);
     assert_eq!(taken.status.code(), Some(i32::from(RC_REFUSED)), "intake は従来どおり rc 1: {err}");
-    assert!(err.contains("verify の歯の file が write-set に無い"), "先頭の 1 件を名乗る: {err}");
-    assert!(!err.contains("base に解けない"), "2 件目は名乗らない（先頭で断る形は不変）: {err}");
+    // 契約 (b) 以後、行の欠陥は表の検査が先に断る＝intake も preflight も**同じ 1 件**を名乗る。
+    assert!(err.contains("write-set-item-unresolved"), "先頭の 1 件を名乗る: {err}");
+    assert!(!err.contains("verify の歯の file"), "judge の断りまで進まない（表の検査で止まる）: {err}");
     assert_eq!(event_count(state), events, "intake も断った周は event を書かない");
 }
 
@@ -2193,7 +2126,7 @@ fn pipe_preflight_without_state_dir_marks_overlap_unmeasured() {
     assert_eq!(tail_line(&out), "preflight: ok", "{text}");
     assert!(!state.join("pipe").exists() && event_count(&state) == 0, "置き場に何も作らない");
     let taken = run_pipe(&[
-        "intake", "--contract", &contract.display().to_string(), "--bead", "s2-a",
+        "intake", "--design", &contract, "--bead", "s2-a",
         "--repo", &repo.display().to_string(), "--rules", &ceiling_rules(&state),
     ]);
     assert_eq!(taken.status.code(), Some(i32::from(RC_REFUSED)), "intake は置き場が要る（従来どおり）");
@@ -2201,13 +2134,17 @@ fn pipe_preflight_without_state_dir_marks_overlap_unmeasured() {
     clean(&[&repo, &state]);
 }
 
-/// (d) 読めない契約 file（壊れた TOML）は rc 2・末尾 `preflight: broken`・run dir も event も無し（理由は stderr）。
+/// (d) 読めない契約表（行を跨いだ配列）は rc 2・末尾 `preflight: broken`・run dir も event も無し（理由は stderr）。
+/// 契約 (b) 以後、読めない側は**行**である（契約 file は器が作るので手書きの壊れた file は入口に無い）。
 #[test]
 fn pipe_preflight_broken_contract_is_rc_2() {
-    let (repo, state) = derive_repo(&table_doc(&table_region(&[table_row("a", &[])])));
-    let contract = repo.join("broken.toml");
-    fs::write(&contract, "goal = \"g\"\nwrite-set = [\"src/lib.rs\"\n").expect("契約 file を書ける");
-    let out = preflight_raw(&repo, &state, &contract, "s2-a", true);
+    let broken = format!(
+        "# 設計: toy\n\n## 1. 何を解くか\n\n本文。\n\n{}\nschema = 1\n\n[[contract]]\nid = \"a\"\nwrite-set = [\"src/lib.rs\"\n{}\n",
+        vessel::pipe::table::BEGIN,
+        vessel::pipe::table::END
+    );
+    let (repo, state) = derive_repo(&broken);
+    let out = preflight_raw(&repo, &state, "docs/design/toy.md#a", "s2-a", true);
     assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "読めない契約は rc 2: {}", stderr_of(&out));
     assert_eq!(tail_line(&out), "preflight: broken", "{}", stdout_of(&out));
     assert!(!stderr_of(&out).is_empty(), "理由は stderr に出す");
@@ -2260,7 +2197,8 @@ fn contract_derive_fn_touches_names_the_declaring_file() {
 fn contract_derive_fn_refuses_when_no_file_declares_it() {
     let (repo, state, out) = fn_form_intake("b", &["crate::pipe::cli::missing"]);
     let err = stderr_of(&out);
-    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "宣言する file が無い周は rc 1: {err}");
+    // 契約 (b) 以後、行の欠陥の rc は**表の検査の分類**が持つ（`unreadable` は rc 2）。断ることと理由が要点。
+    assert_ne!(out.status.code(), Some(i32::from(RC_OK)), "宣言する file が無い周は断る: {err}");
     assert!(err.contains("touches の pipe::cli::missing を宣言する file が base に無い"), "新 variant の字面で断る: {err}");
     assert!(!err.contains("crate::module::Type の形でない"), "TypeForm の字面ではない: {err}");
     assert_eq!(event_count(&state), 0, "断った周は event を書かない");
@@ -2377,7 +2315,7 @@ fn reviewed_fail(repo: &Path, state: &Path) -> (String, PathBuf) {
     let lens_marker = state.join("review-fail-lens-ran");
     let runner_marker = state.join("runner-ran");
     let out = run_pipe(&[
-        "run", "--contract", &path.display().to_string(), "--bead", "s2-2e5",
+        "run", "--design", &path, "--bead", "s2-2e5",
         "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
         "--rules", &ceiling_rules(state), "--runner", &marker_runner(&runner_marker),
         "--lens", &fake_lens(&lens_marker, &lens_verdict("FAIL")),
@@ -2441,7 +2379,7 @@ fn pipe_review_fail_is_terminal_for_spawn_resume_stop_and_overlap() {
     assert_eq!(stopped.status.code(), Some(i32::from(RC_REFUSED)), "終端の便は stop で断る: {}", stderr_of(&stopped));
     assert!(stderr_of(&stopped).contains("終端"), "{}", stderr_of(&stopped));
     // 終端ゆえ交差の母集団に入らない（`live` は偽）。
-    let next = write_set_contract(&repo, "next.toml", &["src/lib.rs"]);
+    let next = write_set_contract(&repo, "next", &["src/lib.rs"]);
     let again = try_intake(&repo, &state, &next, "s2-next");
     assert_eq!(again.status.code(), Some(i32::from(RC_OK)), "FAIL の便と交差しても受理: {}", stderr_of(&again));
     clean(&[&repo, &state]);
@@ -2455,7 +2393,7 @@ fn pipe_review_inconclusive_without_lens_or_unreadable_output_is_terminal() {
     let path = write_contract(&repo, &[], &[]);
     let rules = ceiling_rules(&state);
     let out = run_pipe(&[
-        "intake", "--contract", &path.display().to_string(), "--bead", "s2-none",
+        "intake", "--design", &path, "--bead", "s2-none",
         "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(), "--rules", &rules,
     ]);
     assert_eq!(out.status.code(), Some(i32::from(RC_INCONCLUSIVE)), "lens 無しは rc 3: {}", stderr_of(&out));
@@ -2474,7 +2412,7 @@ fn pipe_review_inconclusive_without_lens_or_unreadable_output_is_terminal() {
         ("s2-rc", "cat >/dev/null; exit 7".to_owned(), "rc 7"),
     ] {
         let out = run_pipe(&[
-            "intake", "--contract", &path.display().to_string(), "--bead", bead,
+            "intake", "--design", &path, "--bead", bead,
             "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
             "--rules", &rules, "--lens", &lens,
         ]);
@@ -2500,7 +2438,7 @@ fn pipe_review_pass_spawns() {
         lens_verdict("PASS")
     );
     let out = run_pipe(&[
-        "intake", "--contract", &path.display().to_string(), "--bead", "s2-2e5",
+        "intake", "--design", &path, "--bead", "s2-2e5",
         "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
         "--rules", &ceiling_rules(&state), "--lens", &lens,
     ]);
@@ -2523,10 +2461,13 @@ fn pipe_review_pass_spawns() {
         fs::read(state.join("pipe").join(&id).join("contract.toml")).ok(),
         "契約の写しは byte で同じ"
     );
+    // 契約 (b) 以後、`design` は**必ず**設計 pointer である（契約 file は行から作られる）＝材料は節の
+    // 出所と本文をそのまま持つ（「pointer でない」形は入口から消えた）。
     let design = fs::read_to_string(dir.join("design.txt")).unwrap_or_default();
-    assert!(design.contains("設計 pointer でない") && design.contains("docs/design/pipeline.md"), "{design}");
+    assert!(design.starts_with(&format!("{} §1\n", design_pointer())), "節の出所を名乗る: {design}");
+    assert!(design.contains("節の本文"), "節の本文を写す: {design}");
     let requirements = fs::read_to_string(dir.join("requirements.txt")).unwrap_or_default();
-    assert!(requirements.contains("要件面を読めない") && requirements.contains("design-intent/spec/srs.html"), "{requirements}");
+    assert!(requirements.contains("FR4"), "行の req を材料に載せる: {requirements}");
     // PASS の便だけが起こせる。
     let spawned = spawn_with(&repo, &state, &id, TOY_COMMIT);
     assert_eq!(spawned.status.code(), Some(i32::from(RC_OK)), "PASS → Spawned: {}", stderr_of(&spawned));
@@ -2540,17 +2481,11 @@ fn pipe_review_pass_spawns() {
 /// 各 id の本文（tag 無し）を材料に写す。無い id はその旨を行に明示する（§4「順序」: 生成 (b) の前でも穴の出所は行の pointer）。
 #[test]
 fn pipe_review_reads_design_section_and_requirements_from_base() {
-    let row = derive_row("a", &[("write-set", "[\"crates/toy/src/tint.rs\"]"), ("section", "\"2\"")]);
+    // 契約 (b) 以後、行の `req` は表の検査が要件面と突き合わせる＝面に在る id だけを置く。
+    let row = derive_row("a", &[("write-set", "[\"crates/toy/src/tint.rs\"]"), ("section", "\"2\""), ("req", "[\"FR2\"]")]);
     let doc = table_doc(&table_region(&[row])).replace("## 2. 型\n\n本文。", "## 2. 型\n\n節二の本文 SECTION-TWO-MARK。");
     let (repo, state) = derive_repo(&doc);
-    let lines: Vec<String> = contract_body()
-        .into_iter()
-        .filter(|line| !line.starts_with("design") && !line.starts_with("req"))
-        .chain(["design = \"docs/design/toy.md#a\"".to_owned(), "req = [\"FR2\", \"FR9\"]".to_owned()])
-        .collect();
-    let contract = repo.join("a.toml");
-    fs::write(&contract, format!("{}\n", lines.join("\n"))).expect("契約 file を書ける");
-    let out = intake_raw(&repo, &state, &contract, "s2-a");
+    let out = intake_raw(&repo, &state, "docs/design/toy.md#a", "s2-a");
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
     let dir = review_dir(&state, &run_id_of(&out));
     let design = fs::read_to_string(dir.join("design.txt")).unwrap_or_default();
@@ -2558,33 +2493,25 @@ fn pipe_review_reads_design_section_and_requirements_from_base() {
     assert!(design.contains("SECTION-TWO-MARK"), "節 2 の本文: {design}");
     assert!(!design.contains("何を解くか") && !design.contains("[[contract]]"), "他の節と契約表は写さない: {design}");
     let requirements = fs::read_to_string(dir.join("requirements.txt")).unwrap_or_default();
-    assert_eq!(requirements.trim_end(), "FR2: 2\nFR9: （要件面 design-intent/spec/srs.html に無い）", "{requirements}");
+    assert_eq!(requirements.trim_end(), "FR2: 2", "{requirements}");
     clean(&[&repo, &state]);
 }
 
-/// 宣言 `requirements` が `face` を指す導出の toy repo（面の本文は `body`・設計 doc は行 `a` 1 行）と置き場。
-fn faced_repo(face: &str, body: &str) -> (PathBuf, PathBuf) {
-    let doc = table_doc(&table_region(&[derive_row("a", &[("write-set", "[\"crates/toy/src/tint.rs\"]")])]));
+/// [`faced_repo`] の行の `req` を選ぶ形（契約 (b) 以後、`req` は**行**が持つ）。
+fn faced_repo_with_req(face: &str, body: &str, req: &[&str]) -> (PathBuf, PathBuf) {
+    let quoted: Vec<String> = req.iter().map(|id| format!("\"{id}\"")).collect();
+    let fields = [("write-set", "[\"crates/toy/src/tint.rs\"]"), ("req", &format!("[{}]", quoted.join(", ")))]
+        .map(|(key, value)| (key, value.to_owned()));
+    let pairs: Vec<(&str, &str)> = fields.iter().map(|(key, value)| (*key, value.as_str())).collect();
+    let doc = table_doc(&table_region(&[derive_row("a", &pairs)]));
     let vessel = format!("{DERIVE_VESSEL}requirements = \"{face}\"\n");
     derive_repo_with(&doc, &[(".vessel.toml", &vessel), (face, body)])
 }
 
 /// 設計 pointer `docs/design/toy.md#a` と `req` を持つ契約を intake し（偽 PASS の lens）、審査の材料 `requirements.txt`
 /// の本文（末尾の改行を除く）を返す。
-#[expect(
-    clippy::expect_used,
-    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
-)]
-fn reviewed_requirements(repo: &Path, state: &Path, req: &[&str]) -> String {
-    let quoted: Vec<String> = req.iter().map(|id| format!("\"{id}\"")).collect();
-    let lines: Vec<String> = contract_body()
-        .into_iter()
-        .filter(|line| !line.starts_with("design") && !line.starts_with("req"))
-        .chain(["design = \"docs/design/toy.md#a\"".to_owned(), format!("req = [{}]", quoted.join(", "))])
-        .collect();
-    let contract = repo.join("a.toml");
-    fs::write(&contract, format!("{}\n", lines.join("\n"))).expect("契約 file を書ける");
-    let out = intake_raw(repo, state, &contract, "s2-a");
+fn reviewed_requirements(repo: &Path, state: &Path) -> String {
+    let out = intake_raw(repo, state, "docs/design/toy.md#a", "s2-a");
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
     let dir = review_dir(state, &run_id_of(&out));
     fs::read_to_string(dir.join("requirements.txt")).unwrap_or_default().trim_end().to_owned()
@@ -2595,13 +2522,11 @@ fn reviewed_requirements(repo: &Path, state: &Path, req: &[&str]) -> String {
 #[test]
 fn pipe_review_reads_requirements_text_from_yaml() {
     let yaml = "requirements:\n  - id: FR1\n    title: 起動\n    text: 便を起こす YAML-TEXT-MARK\n  - id: FR2\n    text: 審査する\n";
-    let (repo, state) = faced_repo("spec/reqs.yaml", yaml);
-    let requirements = reviewed_requirements(&repo, &state, &["FR1", "FR2", "FR9"]);
-    assert_eq!(
-        requirements,
-        "FR1: 便を起こす YAML-TEXT-MARK\nFR2: 審査する\nFR9: （要件面 spec/reqs.yaml に無い）",
-        "{requirements}"
-    );
+    // 契約 (b) 以後、行の `req` は受付の表の検査が要件面と突き合わせる＝面に無い id は intake が断る。
+    // ここは**面に在る id** で材料の描画を測る（面に無い id の断りは別の歯）。
+    let (repo, state) = faced_repo_with_req("spec/reqs.yaml", yaml, &["FR1", "FR2"]);
+    let requirements = reviewed_requirements(&repo, &state);
+    assert_eq!(requirements, "FR1: 便を起こす YAML-TEXT-MARK\nFR2: 審査する", "{requirements}");
     assert!(!requirements.contains("起動"), "title は本文にしない: {requirements}");
     clean(&[&repo, &state]);
 }
@@ -2611,9 +2536,9 @@ fn pipe_review_reads_requirements_text_from_yaml() {
 #[test]
 fn pipe_review_reads_requirements_text_from_md() {
     let md = "# 要件\n\n## FR1 便の起動\n\n便を\n起こす MD-TEXT-MARK。\n\n## FR2 審査\n\n審査する。\n";
-    let (repo, state) = faced_repo("spec/reqs.md", md);
-    let requirements = reviewed_requirements(&repo, &state, &["FR1", "FR9"]);
-    assert_eq!(requirements, "FR1: 便を 起こす MD-TEXT-MARK。\nFR9: （要件面 spec/reqs.md に無い）", "{requirements}");
+    let (repo, state) = faced_repo_with_req("spec/reqs.md", md, &["FR1"]);
+    let requirements = reviewed_requirements(&repo, &state);
+    assert_eq!(requirements, "FR1: 便を 起こす MD-TEXT-MARK。", "{requirements}");
     assert!(!requirements.contains("審査する"), "次の見出しの下は写さない: {requirements}");
     clean(&[&repo, &state]);
 }
@@ -2622,8 +2547,8 @@ fn pipe_review_reads_requirements_text_from_md() {
 /// 載る（黙って空にしない・NFR4）。
 #[test]
 fn pipe_review_reads_requirements_reason_for_bare_yaml_id() {
-    let (repo, state) = faced_repo("spec/reqs.yaml", "requirements:\n  - FR1\n  - FR2\n");
-    let requirements = reviewed_requirements(&repo, &state, &["FR1"]);
+    let (repo, state) = faced_repo_with_req("spec/reqs.yaml", "requirements:\n  - FR1\n  - FR2\n", &["FR1"]);
+    let requirements = reviewed_requirements(&repo, &state);
     assert_eq!(requirements, "FR1: （要件面 spec/reqs.yaml の FR1 に本文が無い）", "{requirements}");
     clean(&[&repo, &state]);
 }
@@ -2631,8 +2556,9 @@ fn pipe_review_reads_requirements_reason_for_bare_yaml_id() {
 /// (e) `## FR1` の直下が空行だけで次の見出しに続く md は (d) と同じ形の理由が載る（本文の無い id の理由は形を問わない）。
 #[test]
 fn pipe_review_reads_requirements_reason_for_empty_md_heading() {
-    let (repo, state) = faced_repo("spec/reqs.md", "# 要件\n\n## FR1\n\n\n## FR2 審査\n\n審査する。\n");
-    let requirements = reviewed_requirements(&repo, &state, &["FR1", "FR2"]);
+    let (repo, state) =
+        faced_repo_with_req("spec/reqs.md", "# 要件\n\n## FR1\n\n\n## FR2 審査\n\n審査する。\n", &["FR1", "FR2"]);
+    let requirements = reviewed_requirements(&repo, &state);
     assert_eq!(requirements, "FR1: （要件面 spec/reqs.md の FR1 に本文が無い）\nFR2: 審査する。", "{requirements}");
     clean(&[&repo, &state]);
 }
@@ -2644,9 +2570,9 @@ fn pipe_review_has_no_skip_flag() {
     let (repo, state) = repo_with_state();
     let path = write_contract(&repo, &[], &[]);
     let rules = ceiling_rules(&state);
-    let (contract, repo_text, state_text) = (path.display().to_string(), repo.display().to_string(), state.display().to_string());
+    let (contract, repo_text, state_text) = (path.clone(), repo.display().to_string(), state.display().to_string());
     let common: [&str; 12] = [
-        "--contract", &contract, "--bead", "s2-2e5", "--repo", &repo_text,
+        "--design", &contract, "--bead", "s2-2e5", "--repo", &repo_text,
         "--state-dir", &state_text, "--rules", &rules, "--runner", TOY_COMMIT,
     ];
     for head in ["intake", "run", "resume"] {
@@ -2721,5 +2647,142 @@ fn pipe_review_resume_from_intake_reviews_before_spawning() {
         assert_eq!(stage_count(&state, id, Stage::Spawned), usize::from(spawned), "{verdict}: Spawned の件数");
         assert_eq!(value_of(&review_pairs(&state, id), "verdict"), verdict);
     }
+    clean(&[&repo, &state]);
+}
+
+// ───── 設計 pointer からの生成（契約表 (b)・設計 contract-source.md §2・接頭辞 `pipe_intake_design_`） ─────
+
+/// (1) 適合の行 1 つを `--design` で渡すと run が起き、run dir の写しが **REQUIRED 全部 + `design` + `touches`** を
+/// 持つ: `goal` は行の `title`（節の本文ではない・planner 裁定 2026-09-19）・`owner` / `disposition` は固定の導出値
+/// （C10・行は持たない）・`write-set` / `verify` / `req` / `size` / `done` は行の逐語・`design` は pointer の逐語。
+/// 記帳は `RunCreated` 1 件。
+///
+/// base では `--design` が未知の flag で `--contract` が要る＝この歯は 1 本も無い（`pipe_intake_design_` の filter は
+/// rc 4 で RED）。
+#[test]
+fn pipe_intake_design_generates_the_contract_from_the_row() {
+    let (repo, state) = repo_with_state();
+    let design = write_contract(&repo, &[], &[r#"touches = ["crate::pipe::refuse::Refuse"]"#]);
+    let before = event_count(&state);
+    let out = intake_raw(&repo, &state, &design, "s2-gen");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "適合の行は通る: {}", stderr_of(&out));
+    let id = run_id_of(&out);
+    let copied = fs::read_to_string(state.join("pipe").join(&id).join("contract.toml")).unwrap_or_default();
+    for want in [
+        r#"goal = "縦 1 本を通す""#,
+        r#"done = "run が Implemented になる""#,
+        r#"size = "S""#,
+        r#"owner = "generated""#,
+        r#"disposition = "A-now""#,
+        r#"write-set = ["src/lib.rs"]"#,
+        r#"verify = ["sh verify-ok.sh"]"#,
+        r#"req = ["FR4"]"#,
+        r#"design = "docs/design/toy.md#a""#,
+        r#"touches = ["crate::pipe::refuse::Refuse"]"#,
+    ] {
+        assert!(copied.contains(want), "写しが {want} を持つ: {copied}");
+    }
+    assert!(!copied.contains("title ="), "行の欄の名（title）は写しに出ない: {copied}");
+    // 受付の記帳は 2 件（run の作成と、その直後の審査の段・FR49）。
+    assert_eq!(event_count(&state), before.saturating_add(2), "記帳は run の作成と審査の段");
+    stop_run_ok(&state, &id);
+    clean(&[&repo, &state]);
+}
+
+/// (2) 閉包の file を欠く行は `write-set-incomplete` で**足りない file を名指して**断り、run dir も event も増えない。
+#[test]
+fn pipe_intake_design_refuses_a_row_whose_write_set_misses_the_closure() {
+    let row = table_row("a", &[("touches", "[\"crate::tint::Tint\"]"), ("write-set", "[\"crates/toy/src/tint.rs\"]")]);
+    let (repo, state) = derive_repo(&table_doc(&table_region(&[row])));
+    let (dirs, events) = (run_dirs(&state), event_count(&state));
+    let out = intake_raw(&repo, &state, "docs/design/toy.md#a", "s2-miss");
+    let err = stderr_of(&out);
+    assert_ne!(out.status.code(), Some(i32::from(RC_OK)), "閉包を欠く行は通さない: {err}");
+    assert!(err.contains("write-set-incomplete"), "理由の名: {err}");
+    assert!(err.contains("crates/toy/src/show.rs"), "足りない file を名指す: {err}");
+    assert_eq!(run_dirs(&state), dirs, "run dir は増えない");
+    assert_eq!(event_count(&state), events, "event も増えない");
+    clean(&[&repo, &state]);
+}
+
+/// (3) 節の無い `section` を持つ行は `contract-table:section-missing` で断り、run dir も event も増えない。
+#[test]
+fn pipe_intake_design_refuses_a_row_whose_section_is_missing() {
+    let row = table_row("a", &[("section", "\"9\"")]);
+    let (repo, state) = derive_repo(&table_doc(&table_region(&[row])));
+    let (dirs, events) = (run_dirs(&state), event_count(&state));
+    let out = intake_raw(&repo, &state, "docs/design/toy.md#a", "s2-sec");
+    let err = stderr_of(&out);
+    assert_ne!(out.status.code(), Some(i32::from(RC_OK)), "節の無い行は通さない: {err}");
+    assert!(err.contains("section-missing"), "理由の名: {err}");
+    assert_eq!(run_dirs(&state), dirs, "run dir は増えない");
+    assert_eq!(event_count(&state), events, "event も増えない");
+    clean(&[&repo, &state]);
+}
+
+/// (4) 手書きの契約 file（`--contract PATH`）は **usage の誤りでなく** `hand-written-contract` で断る（FR54）。
+/// run dir も event も増えず、断りの行は正しい渡し方（`--design <doc>#<id>`）を名乗る。
+#[test]
+fn pipe_intake_design_refuses_a_hand_written_contract_file() {
+    let (repo, state) = repo_with_state();
+    write_contract(&repo, &[], &[]);
+    let hand = repo.join("contract.toml");
+    fs::write(&hand, "goal = \"g\"\n").expect("手書きの file を置ける");
+    let (dirs, events) = (run_dirs(&state), event_count(&state));
+    let out = run_pipe(&[
+        "intake", "--contract", &hand.display().to_string(), "--bead", "s2-hand",
+        "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
+        "--rules", &ceiling_rules(&state),
+    ]);
+    let err = stderr_of(&out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "手書きは rc 1: {err}");
+    assert!(err.contains("手書きの契約 file は受け付けない"), "typed な理由: {err}");
+    assert!(err.contains("--design"), "正しい渡し方を名乗る: {err}");
+    assert!(!err.starts_with("usage:"), "使い方の誤りではない: {err}");
+    assert_eq!(run_dirs(&state), dirs, "run dir は増えない");
+    assert_eq!(event_count(&state), events, "event も増えない");
+    clean(&[&repo, &state]);
+}
+
+/// (5) 解けない pointer は typed に断る: 区間の無い doc・区間に無い行 id・`#` の無い pointer の 3 形。
+#[test]
+fn pipe_intake_design_refuses_a_pointer_that_does_not_resolve() {
+    let (repo, state) = repo_with_state();
+    write_contract(&repo, &[], &[]);
+    let (dirs, events) = (run_dirs(&state), event_count(&state));
+    for (pointer, want) in [
+        ("docs/design/toy.md#zz", "行 id zz"),
+        ("docs/design/none.md#a", "base（HEAD）から読めない"),
+        ("docs/design/toy.md", "設計 pointer の形でない"),
+    ] {
+        let out = intake_raw(&repo, &state, pointer, "s2-ptr");
+        let err = stderr_of(&out);
+        assert_ne!(out.status.code(), Some(i32::from(RC_OK)), "{pointer} を通さない: {err}");
+        assert!(err.contains(want), "{pointer} の理由に {want}: {err}");
+    }
+    assert_eq!(run_dirs(&state), dirs, "run dir は増えない");
+    assert_eq!(event_count(&state), events, "event も増えない");
+    clean(&[&repo, &state]);
+}
+
+/// (6) 読む先は **base（`HEAD`）** である: 作業木の設計 doc を書き換えても commit していなければ受付は HEAD の行を
+/// 読む（runner が base で見るものと契約を食い違わせない）。
+#[test]
+fn pipe_intake_design_reads_the_row_from_head_not_the_worktree() {
+    let (repo, state) = repo_with_state();
+    let design = write_contract(&repo, &[], &[]);
+    // commit **しない**書き換え: 作業木の行の title を変える。
+    let edited: Vec<String> = contract_body()
+        .into_iter()
+        .map(|line| if line.starts_with("title") { r#"title = "作業木だけの題""#.to_owned() } else { line })
+        .collect();
+    write_design(&repo, &design_doc(&edited));
+    let out = intake_raw(&repo, &state, &design, "s2-head");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    let id = run_id_of(&out);
+    let copied = fs::read_to_string(state.join("pipe").join(&id).join("contract.toml")).unwrap_or_default();
+    assert!(copied.contains(r#"goal = "縦 1 本を通す""#), "HEAD の行を読む: {copied}");
+    assert!(!copied.contains("作業木だけの題"), "作業木の書きかけは読まない: {copied}");
+    stop_run_ok(&state, &id);
     clean(&[&repo, &state]);
 }

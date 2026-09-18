@@ -644,7 +644,7 @@ fn pipe_e2e_toy_repo_lands_one_bead_with_fake_runner() {
     let base = git(&repo, &["rev-parse", "refs/heads/main"]);
     // intake → spawn → gate → land を **1 process で人手 0** で通す。
     let out = run_pipe(&[
-        "run", "--contract", &path.display().to_string(), "--bead", "s2-41o",
+        "run", "--design", &path, "--bead", "s2-41o",
         "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
         "--rules", &ceiling_rules(&state),
         "--runner", "echo x >> src/lib.rs && git add -A && git commit -q -m runner",
@@ -734,11 +734,11 @@ fn blocking_lens(marker: &Path, pid_file: &Path) -> String {
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
-fn spawn_run_child(repo: &Path, state: &Path, contract: &Path, runner: &str, lens: &str) -> Child {
+fn spawn_run_child(repo: &Path, state: &Path, design: &str, runner: &str, lens: &str) -> Child {
     use std::os::unix::process::CommandExt;
     Command::new(bin())
         .args([
-            "pipe", "run", "--contract", &contract.display().to_string(), "--bead", "s2-kill",
+            "pipe", "run", "--design", design, "--bead", "s2-kill",
             "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
             "--rules", &ceiling_rules(state), "--runner", runner, "--lens", lens,
         ])
@@ -792,11 +792,11 @@ fn kill_group(pid: u32) {
 
 /// 便を `pipe run` で起こし、`Implemented` が記帳された時点で process group ごと殺す。
 /// 返すのは（便 id・殺した `pipe run` の pid）。group から漏れた lens の `sleep` は [`reap_own`] で片付ける。
-fn killed_at_implemented(repo: &Path, state: &Path, contract: &Path) -> (String, u32) {
+fn killed_at_implemented(repo: &Path, state: &Path, design: &str) -> (String, u32) {
     let marker = state.join("lens-ran");
     let pid_file = state.join("lens-sleep.pid");
     let lens = blocking_lens(&marker, &pid_file);
-    let mut child = spawn_run_child(repo, state, contract, TOY_COMMIT, &lens);
+    let mut child = spawn_run_child(repo, state, design, TOY_COMMIT, &lens);
     let pid = child.id();
     let id = wait_for_implemented(state, &mut child);
     kill_group(pid);
@@ -821,9 +821,9 @@ fn done_count(state: &Path, id: &str, stage: Stage) -> usize {
 #[test]
 fn pipe_resume_kill_at_implemented_resumes_to_landed_in_new_process() {
     let (repo, state) = repo_with_state();
-    let contract = write_contract(&repo, &[], &[]);
+    let design = write_contract(&repo, &[], &[]);
     let base = git(&repo, &["rev-parse", "refs/heads/main"]);
-    let (id, _killed) = killed_at_implemented(&repo, &state, &contract);
+    let (id, _killed) = killed_at_implemented(&repo, &state, &design);
 
     // 中断の現在地: Implemented が 1 件・終端の記帳は無い・show も Implemented を名乗る。
     let log = fs::read_to_string(state.join("fleet").join("events.jsonl")).unwrap_or_default();
@@ -869,8 +869,8 @@ fn pipe_resume_kill_at_implemented_resumes_to_landed_in_new_process() {
 #[test]
 fn pipe_resume_kill_dead_owner_lock_does_not_block_resume() {
     let (repo, state) = repo_with_state();
-    let contract = write_contract(&repo, &[], &[]);
-    let (id, killed) = killed_at_implemented(&repo, &state, &contract);
+    let design = write_contract(&repo, &[], &[]);
+    let (id, killed) = killed_at_implemented(&repo, &state, &design);
     assert!(!proc_alive(killed), "前提: 殺した pid {killed} は生きていない");
     let lock = state.join("fleet").join("events.jsonl.lock");
     fs::write(&lock, format!("{killed}\n")).expect("死んだ所有者の lock を置ける");
@@ -1002,8 +1002,9 @@ fn resume_dead_runner(repo: &Path, state: &Path, id: &str, runner: &str) -> Outp
 #[test]
 fn pipe_resume_kill_at_spawned_respawns_in_same_worktree() {
     let (repo, state) = repo_with_state();
-    let base = git(&repo, &["rev-parse", "refs/heads/main"]);
+    // 行の commit が main を進めるので、base は**便を起こした後**に読む（契約 (b)）。
     let (id, _runner_pid, runner) = killed_at_spawned(&repo, &state, &[IMPLEMENT.to_owned()]);
+    let base = git(&repo, &["rev-parse", "refs/heads/main"]);
     let before = show_line(&repo, &state, &id);
 
     let resumed = resume_dead_runner(&repo, &state, &id, &runner);
@@ -1063,7 +1064,7 @@ fn pipe_resume_kill_at_spawned_lists_uncommitted_in_prompt() {
 #[test]
 fn pipe_resume_kill_at_spawned_refuses_while_runner_alive() {
     let (repo, state) = repo_with_state();
-    let contract = write_set_contract(&repo, "wip.toml", &["src/lib.rs", &format!("+{WIP_FILE}")]);
+    let contract = write_set_contract(&repo, "wip", &["src/lib.rs", &format!("+{WIP_FILE}")]);
     let pid_file = state.join("wip-sleep.pid");
     let runner = turn_runner(&state, &[wip_then_wait_turn(&pid_file), IMPLEMENT.to_owned()]);
     let marker = state.join("lens-ran");
@@ -1343,8 +1344,9 @@ fn pipe_approval_unlisted_class_value_is_rejected_at_intake() {
     let (repo, state) = repo_with_state();
     let path = write_contract(&repo, &[], &[r#"classes = ["deploy"]"#]);
     let out = run_pipe(&[
-        "intake", "--contract", &path.display().to_string(), "--bead", "b",
+        "intake", "--design", &path, "--bead", "b",
         "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
+        "--rules", &ceiling_rules(&state),
     ]);
     assert_ne!(out.status.code(), Some(i32::from(RC_OK)), "名簿に無いクラスを通さない");
     let err = stderr_of(&out);
@@ -1369,7 +1371,7 @@ fn pipe_approval_blocks_in_one_shot_run() {
     // 段ごとの口だけを測ると、この経路だけ素通りする実装に気づけない——関門は唯一の
     // 起動口 `spawn()` に在るという主張を、経路の側から裏書きする歯である。
     let out = run_pipe(&[
-        "run", "--contract", &path.display().to_string(), "--bead", "s2-2e5",
+        "run", "--design", &path, "--bead", "s2-2e5",
         "--repo", &repo.display().to_string(),
         "--state-dir", &state.display().to_string(),
         "--rules", &ceiling_rules(&state),
@@ -1489,8 +1491,8 @@ fn pipe_report_counts_landed_runs_not_landed_events() {
 }
 
 /// toy repo の 1 便を intake → spawn まで通す（bead を分けて id の衝突を避ける）。
-fn toy_spawn(repo: &Path, state: &Path, bead: &str, contract: &Path, runner: &str) -> (String, Output) {
-    let id = intake_bead(repo, state, contract, bead);
+fn toy_spawn(repo: &Path, state: &Path, bead: &str, design: &str, runner: &str) -> (String, Output) {
+    let id = intake_bead(repo, state, design, bead);
     let out = run_pipe(&[
         "spawn", "--run", &id, "--repo", &repo.display().to_string(),
         "--state-dir", &state.display().to_string(), "--runner", runner,
@@ -1517,9 +1519,9 @@ struct Toy<'a> {
 }
 
 /// 1 便を intake → spawn → gate(PASS) → land まで通す（正常形）。
-fn toy_land(toy: &Toy<'_>, bead: &str, contract: &Path, runner: &str) {
+fn toy_land(toy: &Toy<'_>, bead: &str, design: &str, runner: &str) {
     let (repo, state, lens) = (toy.repo, toy.state, toy.lens);
-    let (id, spawned) = toy_spawn(repo, state, bead, contract, runner);
+    let (id, spawned) = toy_spawn(repo, state, bead, design, runner);
     assert_eq!(spawned.status.code(), Some(i32::from(RC_OK)), "{bead} spawn: {}", stderr_of(&spawned));
     let gated = gate_once(repo, state, &id, Some(lens));
     assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "{bead} gate: {}", stderr_of(&gated));
@@ -1533,13 +1535,13 @@ fn toy_land(toy: &Toy<'_>, bead: &str, contract: &Path, runner: &str) {
 /// この経路は **misbehave した runner** のためのもので、五便（compliant な runner）では
 /// 発火しない。ゆえに呼び手は `pipe_guard_is_backstop_for_misbehaving_runner` の 1 本だけ
 /// である（`Toy` を受けないのは、使わない lens を組み立てさせないため）。
-fn toy_denied(repo: &Path, state: &Path, contract: &Path) {
+fn toy_denied(repo: &Path, state: &Path, design: &str) {
     let runner = format!(
         "printf '{{\"cwd\":\"%s\",\"tool_name\":\"Write\",\"tool_input\":{{\"file_path\":\"docs/out.md\"}}}}' \"$PWD\" \
          | '{}' hook pre-tool-use; test $? -eq 0 || exit 1; {TOY_COMMIT}",
         bin()
     );
-    let (id, stopped) = toy_spawn(repo, state, "toy-guard", contract, &runner);
+    let (id, stopped) = toy_spawn(repo, state, "toy-guard", design, &runner);
     // **spawn の rc は 0 のまま**（段が結果を運ぶ・設計 §5.2）。便の終わり方は段で読む。
     assert!(stdout_of(&stopped).contains("stage=Failed"), "guard に止まった便は Failed: {}", stdout_of(&stopped));
     assert!(
@@ -1561,10 +1563,10 @@ fn toy_denied(repo: &Path, state: &Path, contract: &Path) {
 /// 実 runner は fence の外を書きに行かず「両立しない」と述べて空 commit を打つ
 /// （実測・`s2-07l.24` の AC1 再走）。便は commit 1 本ゆえ `Implemented` まで進み、
 /// **gate の verify で止まる**——guard は 1 件も発火しない（backstop であって関門ではない）。
-fn toy_compliant_refusal(toy: &Toy<'_>, contract: &Path) {
+fn toy_compliant_refusal(toy: &Toy<'_>, design: &str) {
     let (repo, state) = (toy.repo, toy.state);
     let runner = "git commit -q --allow-empty -m 'goal と write-set が両立しない'";
-    let (id, spawned) = toy_spawn(repo, state, "toy-refuse", contract, runner);
+    let (id, spawned) = toy_spawn(repo, state, "toy-refuse", design, runner);
     assert_eq!(spawned.status.code(), Some(i32::from(RC_OK)), "spawn: {}", stderr_of(&spawned));
     // **空 commit も commit 1 本**＝FR6 の完了判定（commit 0 は完了ではない）は通る。
     assert!(
@@ -1620,9 +1622,9 @@ fn toy_compliant_refusal(toy: &Toy<'_>, contract: &Path) {
 }
 
 /// gate が FAIL する便（land しない）。
-fn toy_gate_fail(toy: &Toy<'_>, contract: &Path, lens: &str) {
+fn toy_gate_fail(toy: &Toy<'_>, design: &str, lens: &str) {
     let (repo, state) = (toy.repo, toy.state);
-    let (id, spawned) = toy_spawn(repo, state, "toy-fail", contract, TOY_COMMIT);
+    let (id, spawned) = toy_spawn(repo, state, "toy-fail", design, TOY_COMMIT);
     assert_eq!(spawned.status.code(), Some(i32::from(RC_OK)), "spawn: {}", stderr_of(&spawned));
     let gated = gate_once(repo, state, &id, Some(lens));
     assert_eq!(gated.status.code(), Some(i32::from(RC_REFUSED)), "FAIL の gate は rc 1");
@@ -1631,9 +1633,9 @@ fn toy_gate_fail(toy: &Toy<'_>, contract: &Path, lens: &str) {
 }
 
 /// 3 クラスを名乗る便: spawn の手前で Blocked → approve（逐語）→ resume → gate → land。
-fn toy_approved_land(toy: &Toy<'_>, contract: &Path) {
+fn toy_approved_land(toy: &Toy<'_>, design: &str) {
     let (repo, state, lens) = (toy.repo, toy.state, toy.lens);
-    let (id, blocked) = toy_spawn(repo, state, "toy-approve", contract, TOY_COMMIT);
+    let (id, blocked) = toy_spawn(repo, state, "toy-approve", design, TOY_COMMIT);
     assert_eq!(blocked.status.code(), Some(i32::from(RC_BLOCKED)), "承認待ちは rc 3");
     let approved = run_pipe(&[
         "approve", "--run", &id, "--words", "この便は出してよい",
@@ -1696,8 +1698,8 @@ fn pipe_five_contracts_land_with_fake_runner_in_toy_repo() {
 fn pipe_guard_is_backstop_for_misbehaving_runner() {
     let (repo, state) = repo_with_state();
     track_marker(&repo);
-    let contract = write_contract(&repo, &[], &[]);
-    toy_denied(&repo, &state, &contract);
+    let design = write_contract(&repo, &[], &[]);
+    toy_denied(&repo, &state, &design);
     clean(&[&repo, &state]);
 }
 
@@ -1907,7 +1909,7 @@ fn pipe_question_run_stops_with_question_token() {
     let path = write_contract(&repo, &[], &[]);
     let rules = ceiling_rules(&state);
     let out = run_pipe(&[
-        "run", "--contract", &path.display().to_string(), "--bead", "s2-2e5",
+        "run", "--design", &path, "--bead", "s2-2e5",
         "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
         "--rules", &rules, "--runner", &question_runner(), "--lens", &review_lens_pass(&state),
     ]);
@@ -1936,8 +1938,9 @@ use super::lifecycle::{
 #[test]
 fn pipe_spawn_account_first_turn_runs_on_the_chosen_free_account() {
     let (repo, state) = repo_with_state();
+    // 行の commit が main を進めるので、base は**行を置いた後**に読む（契約 (b)）。
+    let first = write_set_contract(&repo, "first", &["src/lib.rs"]);
     let base = git(&repo, &["rev-parse", "refs/heads/main"]);
-    let first = write_set_contract(&repo, "first.toml", &["src/lib.rs"]);
     let runner = turn_runner(&state, &[IMPLEMENT.to_owned()]);
     let rules = resume_rules(&state, &["a1", "a2"]);
     put_account(&state, "a1", &[windows(10, 10)]);
@@ -1946,7 +1949,7 @@ fn pipe_spawn_account_first_turn_runs_on_the_chosen_free_account() {
     let marker = state.join("lens-ran");
     let lens = fake_lens(&marker, &lens_verdict("PASS"));
     let out = run_pipe(&[
-        "run", "--contract", &first.display().to_string(), "--bead", "s2-acct",
+        "run", "--design", &first, "--bead", "s2-acct",
         "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
         "--rules", &rules, "--curl", &fake_usage_curl(&state), "--runner", &runner, "--lens", &lens,
     ]);
@@ -1978,7 +1981,7 @@ fn pipe_spawn_account_first_turn_runs_on_the_chosen_free_account() {
 #[test]
 fn headless_flag_duplicate_with_account_refuses_when_already_present() {
     let (repo, state) = repo_with_state();
-    let first = write_set_contract(&repo, "first.toml", &["src/lib.rs"]);
+    let first = write_set_contract(&repo, "first", &["src/lib.rs"]);
     let present = state.join("accounts").join("a1").display().to_string();
     let runner = format!("{} --account-dir {present}", turn_runner(&state, &[IMPLEMENT.to_owned()]));
     let rules = resume_rules(&state, &["a1", "a2"]);
@@ -1988,7 +1991,7 @@ fn headless_flag_duplicate_with_account_refuses_when_already_present() {
     let marker = state.join("lens-ran");
     let lens = fake_lens(&marker, &lens_verdict("PASS"));
     let out = run_pipe(&[
-        "run", "--contract", &first.display().to_string(), "--bead", "s2-acct",
+        "run", "--design", &first, "--bead", "s2-acct",
         "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
         "--rules", &rules, "--curl", &fake_usage_curl(&state), "--runner", &runner, "--lens", &lens,
     ]);
@@ -2009,8 +2012,8 @@ fn headless_flag_duplicate_with_account_refuses_when_already_present() {
 #[test]
 fn pipe_spawn_account_inherits_when_no_account_is_declared() {
     let (repo, state) = repo_with_state();
-    let base = git(&repo, &["rev-parse", "refs/heads/main"]);
     let path = write_contract(&repo, &[], &[]);
+    let base = git(&repo, &["rev-parse", "refs/heads/main"]);
     let id = intake(&repo, &state, &path);
     let runner = turn_runner(&state, &[IMPLEMENT.to_owned()]);
     let out = spawn_with(&repo, &state, &id, &runner);
@@ -2030,7 +2033,7 @@ fn pipe_spawn_account_inherits_when_no_account_is_declared() {
 #[test]
 fn pipe_spawn_account_waits_for_the_earliest_reset_then_remeasures() {
     let (repo, state) = repo_with_state();
-    let first = write_set_contract(&repo, "first.toml", &["src/lib.rs"]);
+    let first = write_set_contract(&repo, "first", &["src/lib.rs"]);
     let runner = turn_runner(&state, &[IMPLEMENT.to_owned()]);
     let rules = resume_rules(&state, &["a1", "a2"]);
     // a1 は計測の 2 秒後に開き直る（最も早い reset）・a2 は 4 秒後。2 回目の計測では a1 に余裕が戻る。
@@ -2040,7 +2043,7 @@ fn pipe_spawn_account_waits_for_the_earliest_reset_then_remeasures() {
     let lens = fake_lens(&marker, &lens_verdict("PASS"));
     let started = Instant::now();
     let out = run_pipe(&[
-        "run", "--contract", &first.display().to_string(), "--bead", "s2-acct",
+        "run", "--design", &first, "--bead", "s2-acct",
         "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
         "--rules", &rules, "--curl", &fake_usage_curl(&state), "--runner", &runner, "--lens", &lens,
     ]);
@@ -2072,8 +2075,9 @@ fn pipe_spawn_account_waits_for_the_earliest_reset_then_remeasures() {
 #[test]
 fn pipe_spawn_account_base_with_account_suffix_lands() {
     let (repo, state) = repo_with_state();
+    // 行の commit が main を進めるので、base は**行を置いた後**に読む（契約 (b)）。
+    let first = write_set_contract(&repo, "first", &["src/lib.rs"]);
     let base = git(&repo, &["rev-parse", "refs/heads/main"]);
-    let first = write_set_contract(&repo, "first.toml", &["src/lib.rs"]);
     let id = intake_bead(&repo, &state, &first, "s2-acct");
     let runner = turn_runner(&state, &[IMPLEMENT.to_owned()]);
     let rules = resume_rules(&state, &["a2"]);
@@ -2121,8 +2125,8 @@ fn terminal_confined_path(state: &Path) -> String {
 /// 包める PATH で `runner` の便を 1 本 spawn し、（便 id・spawn の出力）を返す。前提として runner が包めた周で
 /// 起きたことを assert する（包めない周の「oom-kill 0 件」で空虚に充足しない）。
 fn spawn_confined(repo: &Path, state: &Path, runner: &str) -> (String, Output) {
-    let contract = write_contract(repo, &[], &[]);
-    let id = intake(repo, state, &contract);
+    let design = write_contract(repo, &[], &[]);
+    let id = intake(repo, state, &design);
     let out = run_pipe_with_path(
         &terminal_confined_path(state),
         &["spawn", "--run", &id, "--repo", &repo.display().to_string(),

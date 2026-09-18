@@ -35,7 +35,7 @@ fn last_stage(state: &Path, id: &str) -> Option<(Option<Stage>, Option<String>)>
 /// write-set `src/lib.rs` の便を intake → 停止行 + rc 75 の runner で spawn し、`RateLimited` に
 /// 倒れたことを確かめて run id と runner cmd を返す。
 fn rate_limited_run(repo: &Path, state: &Path) -> (String, String) {
-    let first = write_set_contract(repo, "first.toml", &["src/lib.rs"]);
+    let first = write_set_contract(repo, "first", &["src/lib.rs"]);
     let id = intake_bead(repo, state, &first, "s2-limit");
     let runner = limit_runner(state, Some(RATE_LIMIT_STOP_LINE), RC_RATE_LIMIT);
     let out = spawn_with(repo, state, &id, &runner);
@@ -50,8 +50,9 @@ fn rate_limited_run(repo: &Path, state: &Path) -> (String, String) {
 #[test]
 fn pipe_ratelimit_spawn_keeps_the_run_at_rate_limited() {
     let (repo, state) = repo_with_state();
-    let base = git(&repo, &["rev-parse", "refs/heads/main"]);
+    // 行の commit が main を進めるので、base は**便を起こした後**に読む（契約 (b)）。
     let (id, _) = rate_limited_run(&repo, &state);
+    let base = git(&repo, &["rev-parse", "refs/heads/main"]);
     assert_eq!(
         last_stage(&state, &id),
         Some((Some(Stage::RateLimited), Some("rc:75,status:allowed_warning,account:inherited".to_owned()))),
@@ -72,7 +73,7 @@ fn pipe_ratelimit_spawn_keeps_the_run_at_rate_limited() {
 fn pipe_ratelimit_run_stays_live_until_stopped() {
     let (repo, state) = repo_with_state();
     let (id, runner) = rate_limited_run(&repo, &state);
-    let second = write_set_contract(&repo, "second.toml", &["src/lib.rs"]);
+    let second = write_set_contract(&repo, "second", &["src/lib.rs"]);
     let blocked = try_intake(&repo, &state, &second, "s2-next");
     assert_eq!(blocked.status.code(), Some(i32::from(RC_REFUSED)), "RateLimited は live: {}", stdout_of(&blocked));
     assert!(stderr_of(&blocked).contains(&id), "交差した相手を名乗る: {}", stderr_of(&blocked));
@@ -398,7 +399,7 @@ pub(super) fn argv_account_dir(argv: &[String]) -> Option<String> {
 /// 上限で止まった便（turn 1 = 上限・turn 2 以降 = `rest`）と、その置き場の口座 fixture（`labels` の manifest）を
 /// 組む。返すのは `(run id, runner cmd, manifest の path)`。
 fn rate_limited_with_accounts(repo: &Path, state: &Path, rest: &[String], labels: &[&str]) -> (String, String, String) {
-    let first = write_set_contract(repo, "first.toml", &["src/lib.rs"]);
+    let first = write_set_contract(repo, "first", &["src/lib.rs"]);
     let id = intake_bead(repo, state, &first, "s2-limit");
     let mut turns = vec![limit_turn()];
     turns.extend(rest.iter().cloned());
@@ -621,7 +622,7 @@ fn pipe_ratelimit_resume_stop_breaks_the_wait() {
 #[test]
 fn pipe_ratelimit_resume_prompt_lists_commits_after_the_answer() {
     let (repo, state) = repo_with_state();
-    let first = write_set_contract(&repo, "first.toml", &["src/lib.rs"]);
+    let first = write_set_contract(&repo, "first", &["src/lib.rs"]);
     let id = intake_bead(&repo, &state, &first, "s2-limit");
     let runner = turn_runner(&state, &[ask_turn(), commit_then_limit_turn(), IMPLEMENT.to_owned()]);
     let asked = spawn_with(&repo, &state, &id, &runner);
@@ -666,7 +667,7 @@ fn pipe_ratelimit_resume_prompt_lists_commits_after_the_answer() {
 #[test]
 fn pipe_ratelimit_resume_run_rides_out_repeated_limits_without_a_cap() {
     let (repo, state) = repo_with_state();
-    let first = write_set_contract(&repo, "first.toml", &["src/lib.rs"]);
+    let first = write_set_contract(&repo, "first", &["src/lib.rs"]);
     let runner = turn_runner(&state, &[limit_turn(), limit_turn(), IMPLEMENT.to_owned()]);
     let rules = resume_rules(&state, &["a1", "a2"]);
     // 1 回目の計測（初回の起動の前）: a1 は当たっている・a2 に余裕。2 回目以降: a2 が当たり・a1 に余裕が戻る。
@@ -675,7 +676,7 @@ fn pipe_ratelimit_resume_run_rides_out_repeated_limits_without_a_cap() {
     let marker = state.join("lens-ran");
     let lens = fake_lens(&marker, &lens_verdict("PASS"));
     let out = run_pipe(&[
-        "run", "--contract", &first.display().to_string(), "--bead", "s2-limit",
+        "run", "--design", &first, "--bead", "s2-limit",
         "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
         "--rules", &rules, "--curl", &fake_usage_curl(&state), "--runner", &runner, "--lens", &lens,
     ]);

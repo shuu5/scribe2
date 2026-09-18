@@ -1,7 +1,7 @@
 //! `pipe preflight` — 受付と同じ判定を run を作らず撃ち、契約の実態突合を planner が edit time に測る口（契約表の行 u・
 //! 設計 contract-source.md §21・SRS FR48・C16「逸脱は edit time に止める」）。
 //!
-//! 引数は `intake` と同じ（`--contract F --bead B --repo R [--state-dir S]`）。判定は受付の [`super::intake::judge`] の
+//! 引数は `intake` と同じ（`--design <doc>#<id> --bead B --repo R [--state-dir S]`）。判定は受付の [`super::intake::judge`] の
 //! **同じ 1 本**（C2・2 本目を作らない）で、断りを最初の 1 件で止めず**全部**（判定関数 1 本につき高々 1 件）並べる。
 //! run dir・写し・event は一切書かず、宣言の写しは読むだけ・置き場は交差の読みにだけ使う。
 //!
@@ -13,10 +13,9 @@
 //! `--state-dir` が無く git 設定からも解けない周は `overlap=unmeasured` を出し、rc は他の断りで決める（測れないを 0 に
 //! 潰さない・C10・`intake` は従来どおり置き場が無い旨で断る）。
 
-use super::intake::{judge, read_args, unloadable, Denial, Judged, Material};
-use super::{refused, state_dir_of};
+use super::intake::{ceiling_of, generated, judge, read_args, Denial, Judged, Material};
+use super::state_dir_of;
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_OK, RC_REFUSED};
-use crate::pipe::contract::Contract;
 use crate::rules::manifest::Manifest;
 
 /// 末尾の判定行の書き出し。
@@ -30,16 +29,23 @@ const NONE: &str = "-";
 
 /// `pipe preflight`: judge だけを撃ち、事実と断りを stdout に並べる。
 pub(super) fn preflight(args: &[String], manifest: &Manifest) -> Outcome {
-    let (path, bead, repo) = match read_args(args) {
+    let (pointer, bead, repo) = match read_args(args) {
         Ok(found) => found,
-        Err(reason) => return refused(reason),
+        Err(denial) => return denial.outcome,
     };
-    let contract = match Contract::load(&path) {
+    let ceiling = match ceiling_of(manifest) {
         Ok(found) => found,
-        Err(errors) => {
-            // 読めない契約 file は判定の対象そのものが壊れている（受付と同じ rc 2・理由は stderr に全件）。
-            let mut outcome = unloadable(errors);
-            outcome.out.push(format!("{TAIL} broken"));
+        Err(denial) => return denial.outcome,
+    };
+    // 受付と**同じ 1 本**で base の行から契約を組む（C2）。行を引けない・表の検査に落ちる周は判定の対象が
+    // 揃わないので、受付と同じ断りをそのまま返して末尾に `broken` を積む（0 件と混ぜない）。
+    let contract = match generated(&repo, &pointer, &ceiling.borrow()) {
+        Ok((found, _)) => found,
+        Err(denial) => {
+            // 末尾は **rc に従う**（読めない = broken・撃てない = 断り 1 件）。行の欠陥は「読めない」ではない。
+            let mut outcome = denial.outcome;
+            let tail = if outcome.rc == RC_BROKEN { format!("{TAIL} broken") } else { format!("{TAIL} refused n=1") };
+            outcome.out.push(tail);
             return outcome;
         }
     };

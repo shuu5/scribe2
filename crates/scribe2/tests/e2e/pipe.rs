@@ -77,9 +77,19 @@ pub(super) const VESSEL_COMMON: &str = r#"["git rev-parse --verify {base}"]"#;
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
 pub(super) fn write_vessel(repo: &Path, allowed: &str, common: &str) {
-    let body = format!("schema = 1\nallowed-commands = {allowed}\ncommon-verify = {common}\n");
+    let body =
+        format!("schema = 1\nallowed-commands = {allowed}\ncommon-verify = {common}\nrequirements = \"{REQS_FILE}\"\n");
     fs::write(repo.join(".vessel.toml"), body).expect("宣言を書ける");
 }
+
+/// toy repo の要件面（契約表の `req` の id を持つ・`.md` の見出し形）。
+pub(super) const REQS_FILE: &str = "reqs.md";
+
+/// toy repo の設計 doc（契約の正本・repo 相対）。
+pub(super) const DESIGN_FILE: &str = "docs/design/toy.md";
+
+/// toy repo の契約表の行 id（[`design_pointer`] が指す 1 本）。
+pub(super) const DESIGN_ROW: &str = "a";
 
 /// 宣言を書き換えて commit する（**HEAD の tree が intake の読み面**である）。
 pub(super) fn commit_vessel(repo: &Path, allowed: &str, common: &str) {
@@ -183,6 +193,10 @@ pub(super) fn repo_with_state_configured(state: &Path, config: &[(&str, &str)]) 
     }
     fs::create_dir_all(repo.join("src")).expect("src dir を作れる");
     fs::write(repo.join("src").join("lib.rs"), "// seed\n").expect("seed を書ける");
+    // 要件面（契約表の `req` の id の出所・`.md` の見出し形・`requirement_ids` が読む）。
+    fs::write(repo.join(REQS_FILE), "# toy の要件\n\n## FR4\n\n## FR5\n").expect("要件面を書ける");
+    // 設計 doc（契約の正本・intake は **HEAD の tree** の行を読む）。
+    write_design(&repo, &design_doc(&[]));
     // **宣言も marker と一緒に commit する**（intake は HEAD の tree から読む＝作業ツリー
     // に置いただけの宣言は無いのと同じ・設計 §8）。
     write_vessel(&repo, VESSEL_ALLOWED, VESSEL_COMMON);
@@ -212,38 +226,163 @@ pub(super) fn run_pipe(args: &[&str]) -> Output {
         .expect("binary を起動できる")
 }
 
-/// 正しく書けた契約 file の本文。差し替えたい行だけ上書きして使う。
+/// 正しく書けた契約表の行の欄。差し替えたい欄だけ上書きして使う（`owner` / `disposition` / `design` は
+/// 行が持たない＝生成の導出値と pointer そのもの・契約 (b)）。
 pub(super) fn contract_body() -> Vec<String> {
     [
-        r#"goal = "縦 1 本を通す""#,
-        r#"done = "run が Implemented になる""#,
-        r#"size = "S""#,
-        r#"owner = "s2-2e5""#,
-        r#"disposition = "A-now""#,
+        r#"id = "a""#,
+        r#"title = "縦 1 本を通す""#,
+        r#"req = ["FR4"]"#,
+        r#"section = "1""#,
         r#"write-set = ["src/lib.rs"]"#,
         r#"verify = ["sh verify-ok.sh"]"#,
-        r#"req = ["FR4"]"#,
-        r#"design = "docs/design/pipeline.md""#,
+        r#"size = "S""#,
+        r#"done = "run が Implemented になる""#,
     ]
     .iter()
     .map(|line| (*line).to_owned())
     .collect()
 }
 
-/// 契約 file を書き、その path を返す。`drop` の行を落とし `add` の行を足す。
+/// 契約表の行 1 本を持つ設計 doc の本文（`drop` の欄を落とし `add` の欄を足す）。
+///
+/// 節は 1 つ（`## 1.`・本文つき）で、行は区間の中に置く。**契約の正本はこの doc の行**である（契約 (b)）。
+pub(super) fn design_doc(fields: &[String]) -> String {
+    let rows = if fields.is_empty() { contract_body() } else { fields.to_vec() };
+    design_doc_rows(&[rows])
+}
+
+/// 行を**複数**持つ設計 doc の本文（同じ base から 2 便を起こす歯が使う・commit を 1 回に保つ）。
+pub(super) fn design_doc_rows(rows: &[Vec<String>]) -> String {
+    let listed: Vec<String> = rows.iter().map(|fields| format!("[[contract]]\n{}", fields.join("\n"))).collect();
+    format!(
+        "# 設計: toy\n\n## 1. 何を解くか\n\ntoy repo の縦 1 本を通す節の本文。\n\n{}\nschema = 1\n\n{}\n{}\n",
+        table_begin(),
+        listed.join("\n\n"),
+        table_end()
+    )
+}
+
+/// 欄を差し替えた行の欄の列（`drop` を落とし `add` を足す・`id` は `id` 引数で上書き）。
+pub(super) fn row_fields(id: &str, drop: &[&str], add: &[&str]) -> Vec<String> {
+    let mut fields: Vec<String> = contract_body()
+        .into_iter()
+        .filter(|line| !drop.iter().any(|key| line.starts_with(key)) && !line.starts_with("id"))
+        .collect();
+    fields.insert(0, format!("id = \"{id}\""));
+    fields.extend(add.iter().map(|line| (*line).to_owned()));
+    fields
+}
+
+/// 行を**複数**書いて 1 回だけ commit する（同じ base から複数便を起こす歯の入口）。
+pub(super) fn commit_rows(repo: &Path, rows: &[Vec<String>]) {
+    let body = design_doc_rows(rows);
+    if fs::read_to_string(repo.join(DESIGN_FILE)).is_ok_and(|found| found == body) {
+        return;
+    }
+    for fields in rows {
+        seed_write_set(repo, fields);
+    }
+    write_design(repo, &body);
+    if !repo.join(".git").exists() {
+        return;
+    }
+    git(repo, &["add", "-A"]);
+    git(repo, &["commit", "-q", "-m", "design-rows"]);
+}
+
+/// 契約表の区間の marker（器の [`vessel::pipe::table::BEGIN`] / `END` と同じ字面を器から借りる）。
+fn table_begin() -> &'static str {
+    vessel::pipe::table::BEGIN
+}
+
+/// 区間の終わりの marker。
+fn table_end() -> &'static str {
+    vessel::pipe::table::END
+}
+
+/// 行の `write-set` が名指す素の path を repo に用意する（**行は base に解けなければならない**・契約 (b)）。
+///
+/// `+`（新規）・`-`（縮む）・末尾 `/`（dir）の項目は base に在ってはならない / dir なので触らない。既に在る file も
+/// 触らない（上限の余地を測る歯が置いた行数を壊さない）。
 #[expect(
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
-pub(super) fn write_contract(dir: &Path, drop: &[&str], add: &[&str]) -> PathBuf {
-    let mut lines: Vec<String> = contract_body()
+pub(super) fn seed_write_set(repo: &Path, fields: &[String]) {
+    let Some(line) = fields.iter().find(|line| line.starts_with("write-set")) else {
+        return;
+    };
+    for item in line.split('"').skip(1).step_by(2) {
+        if item.starts_with('+') || item.starts_with('-') || item.contains('=') {
+            continue;
+        }
+        let path = repo.join(item.trim_end_matches('/'));
+        if path.exists() {
+            continue;
+        }
+        // 末尾 `/` の項目は dir として解ける必要がある（中身が 1 file も無い dir は git が持てないので seed を置く）。
+        if item.ends_with('/') {
+            fs::create_dir_all(&path).expect("write-set の dir を作れる");
+            fs::write(path.join("seed.rs"), "").expect("dir の seed を書ける");
+            continue;
+        }
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("write-set の dir を作れる");
+        }
+        fs::write(&path, "").expect("write-set の file を書ける");
+    }
+}
+
+/// 設計 doc を repo へ書く（commit は呼び手）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+pub(super) fn write_design(repo: &Path, body: &str) {
+    let path = repo.join(DESIGN_FILE);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).expect("設計 doc の dir を作れる");
+    }
+    fs::write(&path, body).expect("設計 doc を書ける");
+}
+
+/// 契約表の行を書いて **commit し**、`--design` に渡す pointer を返す。`drop` の欄を落とし `add` の欄を足す。
+///
+/// commit するのは、受付が読むのが**作業木でなく base（`HEAD`）**だからである（契約 (b)・設計 §2「生成」）。
+pub(super) fn write_contract(repo: &Path, drop: &[&str], add: &[&str]) -> String {
+    let mut fields: Vec<String> = contract_body()
         .into_iter()
         .filter(|line| !drop.iter().any(|key| line.starts_with(key)))
         .collect();
-    lines.extend(add.iter().map(|line| (*line).to_owned()));
-    let path = dir.join("contract.toml");
-    fs::write(&path, format!("{}\n", lines.join("\n"))).expect("契約 file を書ける");
-    path
+    fields.extend(add.iter().map(|line| (*line).to_owned()));
+    commit_row(repo, &fields);
+    design_pointer()
+}
+
+/// 行を書いて commit する。**seed と同じ本文なら commit しない**（HEAD を動かさない）。
+///
+/// 受付は base（`HEAD`）の行を読むので行は commit されていなければならないが、seed が既に既定の行を
+/// commit している。既定のまま撃つ歯（母集団の大半）で HEAD を動かすと、base の sha を先に控える歯や
+/// commit 数を数える歯が、契約とは関係のない理由で落ちる。
+pub(super) fn commit_row(repo: &Path, fields: &[String]) {
+    let body = design_doc(fields);
+    if fs::read_to_string(repo.join(DESIGN_FILE)).is_ok_and(|found| found == body) {
+        return;
+    }
+    seed_write_set(repo, fields);
+    write_design(repo, &body);
+    // git repo でない dir（「repo でない」を測る歯）は書くだけで commit しない。
+    if !repo.join(".git").exists() {
+        return;
+    }
+    git(repo, &["add", "-A"]);
+    git(repo, &["commit", "-q", "-m", "design-row"]);
+}
+
+/// toy repo の設計 pointer（`<doc>#<行 id>`）。
+pub(super) fn design_pointer() -> String {
+    format!("{DESIGN_FILE}#{DESIGN_ROW}")
 }
 
 /// stdout の全文。
@@ -268,8 +407,8 @@ pub(super) fn run_id_of(out: &Output) -> String {
 
 /// intake を 1 回通して run id を返す（審査の段は**偽 PASS の lens**で 1 回通す・FR49・設計 contract-source.md §4
 /// 「人の関与 0」＝審査を飛ばす flag は歯にも無い）。
-pub(super) fn intake(repo: &Path, state: &Path, contract: &Path) -> String {
-    intake_bead(repo, state, contract, "s2-2e5")
+pub(super) fn intake(repo: &Path, state: &Path, design: &str) -> String {
+    intake_bead(repo, state, design, "s2-2e5")
 }
 
 /// 審査の段（`pipe intake` の直後の lens 1 回）を通す偽 PASS の lens（gate の [`fake_lens`] と同じ作り）。
@@ -283,8 +422,8 @@ pub(super) const REVIEW_MARKER: &str = "review-lens-ran";
 
 /// bead を選んで intake を 1 回通す。**run id は `<bead>-<秒>`** なので、同じ秒に
 /// 2 便を起こす歯は bead を分ける（同 bead だと id が衝突して 2 便目が断られる）。
-pub(super) fn intake_bead(repo: &Path, state: &Path, contract: &Path, bead: &str) -> String {
-    let out = intake_raw(repo, state, contract, bead);
+pub(super) fn intake_bead(repo: &Path, state: &Path, design: &str, bead: &str) -> String {
+    let out = intake_raw(repo, state, design, bead);
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "intake は rc 0: {}", stderr_of(&out));
     run_id_of(&out)
 }
@@ -332,10 +471,10 @@ pub(super) fn event_count(state: &Path) -> usize {
 }
 
 /// intake を 1 回撃つ（rc を assert しない形・審査の lens は偽 PASS）。
-pub(super) fn intake_raw(repo: &Path, state: &Path, contract: &Path, bead: &str) -> Output {
+pub(super) fn intake_raw(repo: &Path, state: &Path, design: &str, bead: &str) -> Output {
     let rules = ceiling_rules(state);
     run_pipe(&[
-        "intake", "--contract", &contract.display().to_string(), "--bead", bead,
+        "intake", "--design", design, "--bead", bead,
         "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
         "--rules", &rules, "--lens", &review_lens_pass(state),
     ])
@@ -400,13 +539,15 @@ fn pipe_intake_rejects_verify_line_with_denied_sequence() {
         let out = intake_raw(&repo, &state, &path, "b");
         let err = stderr_of(&out);
         assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{add} は rc 1: {err}");
-        assert!(err.contains("契約の verify"), "どちらの面かを言う: {err}");
+        // 契約 (b) 以後、verify の面は**行**である（理由は行の欄と doc の位置を名乗る）。
+        assert!(err.contains("verify"), "どちらの面かを言う: {err}");
         assert!(err.contains("runner.denied_commands") && err.contains(sequence), "行 id と語列を名指す: {err}");
         assert!(!err.contains("allowed-commands"), "先頭語は宣言の内＝断る理由は語列だけ: {err}");
     }
     let two = write_contract(&repo, &["verify"], &[r#"verify = ["sh verify-ok.sh", "git push origin main --force"]"#]);
     let err = stderr_of(&intake_raw(&repo, &state, &two, "b"));
-    assert!(err.contains("契約の verify 2 本目"), "何本目かを名指す: {err}");
+    // 契約 (b) 以後、断るのは**行**なので理由は当該の verify の行そのものを逐語で名乗る（何本目かの序数は持たない）。
+    assert!(err.contains("git push origin main --force"), "当たった行を名指す: {err}");
     assert_eq!(event_count(&state), 0, "断った周は event を書かない");
     assert!(!state.join("pipe").exists(), "run dir も作らない");
     // 対: 当たらない行（`git branch -d x`・語が違う）は受理される。
@@ -423,8 +564,8 @@ fn pipe_intake_rejects_verify_line_with_denied_sequence() {
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
-pub(super) fn implemented(repo: &Path, state: &Path, contract: &Path) -> String {
-    let id = intake(repo, state, contract);
+pub(super) fn implemented(repo: &Path, state: &Path, design: &str) -> String {
+    let id = intake(repo, state, design);
     let out = run_pipe(&[
         "spawn", "--run", &id, "--repo", &repo.display().to_string(),
         "--state-dir", &state.display().to_string(),
@@ -792,8 +933,8 @@ pub(super) fn shim_path(state: &Path, name: &str, script: &str) -> String {
 }
 
 /// PASS の gate まで通した便を作る。
-pub(super) fn gated_pass(repo: &Path, state: &Path, contract: &Path, marker: &Path) -> String {
-    let id = implemented(repo, state, contract);
+pub(super) fn gated_pass(repo: &Path, state: &Path, design: &str, marker: &Path) -> String {
+    let id = implemented(repo, state, design);
     let lens = fake_lens(marker, &lens_verdict("PASS"));
     let out = gate_once(repo, state, &id, Some(&lens));
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "PASS の gate は rc 0: {}", stderr_of(&out));
@@ -895,26 +1036,24 @@ pub(super) fn events_bytes(state: &Path) -> Vec<u8> {
     fs::read(state.join("fleet").join("events.jsonl")).unwrap_or_default()
 }
 
-/// write-set だけを差し替えた契約 file を名前つきで書く（1 便 1 file＝写しの取り違えを作らない）。
-#[expect(
-    clippy::expect_used,
-    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
-)]
-pub(super) fn write_set_contract(dir: &Path, name: &str, entries: &[&str]) -> PathBuf {
+/// write-set だけを差し替えた行を id つきで書いて commit し、pointer を返す（1 便 1 行）。
+pub(super) fn write_set_contract(repo: &Path, id: &str, entries: &[&str]) -> String {
     let quoted: Vec<String> = entries.iter().map(|item| format!("\"{item}\"")).collect();
-    let mut lines: Vec<String> = contract_body()
+    let fields: Vec<String> = contract_body()
         .into_iter()
-        .filter(|line| !line.starts_with("write-set"))
+        .map(|line| match line.split_once(" =").map(|(key, _)| key) {
+            Some("write-set") => format!("write-set = [{}]", quoted.join(", ")),
+            Some("id") => format!("id = \"{id}\""),
+            _ => line,
+        })
         .collect();
-    lines.push(format!("write-set = [{}]", quoted.join(", ")));
-    let path = dir.join(name);
-    fs::write(&path, format!("{}\n", lines.join("\n"))).expect("契約 file を書ける");
-    path
+    commit_row(repo, &fields);
+    format!("{DESIGN_FILE}#{id}")
 }
 
 /// intake を 1 回撃つ（**rc を測らない**＝断られる周の歯が使う・[`intake_raw`] と同じ形）。
-pub(super) fn try_intake(repo: &Path, state: &Path, contract: &Path, bead: &str) -> Output {
-    intake_raw(repo, state, contract, bead)
+pub(super) fn try_intake(repo: &Path, state: &Path, design: &str, bead: &str) -> Output {
+    intake_raw(repo, state, design, bead)
 }
 
 /// 便の `RunStage` のうち段が `want` の件数。

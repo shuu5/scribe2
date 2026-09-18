@@ -56,6 +56,7 @@ pub(crate) const REFUSALS: &[&str] = &[
     "tests-not-a-teeth-file",
     "fn-undeclared",
     "teeth-outside-write-set",
+    "hand-written-contract",
 ];
 
 /// 契約 file が読めた後の、契約単位の拒否理由。**新しい理由は variant を 1 つ足す**（憲法 C2）。
@@ -159,6 +160,12 @@ pub(crate) enum Refuse {
         /// write-set に無い歯の file（repo 相対・辞書順）。
         files: Vec<String>,
     },
+    /// 手書きの契約 file を渡された（`--contract`・契約 (b)・FR54）。契約の正本は設計 doc の行だけで、
+    /// 器が base の行から写しを作る＝手で書いた file は**使い方の誤りでなく typed な断り**である。
+    HandWrittenContract {
+        /// 渡された path の字面。
+        path: String,
+    },
 }
 
 impl Refuse {
@@ -181,6 +188,7 @@ impl Refuse {
             Self::TestsNotATeethFile { .. } => "tests-not-a-teeth-file",
             Self::FnUndeclared { .. } => "fn-undeclared",
             Self::TeethOutsideWriteSet { .. } => "teeth-outside-write-set",
+            Self::HandWrittenContract { .. } => "hand-written-contract",
         }
     }
 
@@ -228,6 +236,9 @@ impl Refuse {
                 ClosureError::FnUndeclared { module: module.clone(), name: name.clone() }.reason()
             }
             Self::TeethOutsideWriteSet { ref files } => ClosureError::TeethOutsideWriteSet { files: files.clone() }.reason(),
+            Self::HandWrittenContract { ref path } => {
+                format!("手書きの契約 file は受け付けない（{path}）＝契約の正本は設計 doc の行で、--design <doc>#<id> を渡す")
+            }
         }
     }
 
@@ -248,7 +259,8 @@ impl Refuse {
             | Self::AlsoNamesRust { .. }
             | Self::TestsNotATeethFile { .. }
             | Self::FnUndeclared { .. }
-            | Self::TeethOutsideWriteSet { .. } => RC_REFUSED,
+            | Self::TeethOutsideWriteSet { .. }
+            | Self::HandWrittenContract { .. } => RC_REFUSED,
             Self::WriteSetUnreadable { .. } => RC_BROKEN,
             Self::ContractTable(ref found) => found.rc(),
         }
@@ -394,6 +406,7 @@ mod tests {
             Refuse::TestsNotATeethFile { item: "src/a.rs".to_owned() },
             Refuse::FnUndeclared { module: "pipe::cli".to_owned(), name: "missing".to_owned() },
             Refuse::TeethOutsideWriteSet { files: vec!["src/a.rs".to_owned(), "tests/b.rs".to_owned()] },
+            Refuse::HandWrittenContract { path: "contract.toml".to_owned() },
         ]
     }
 
@@ -403,7 +416,8 @@ mod tests {
     #[test]
     fn refuse_derive_reasons_are_last_and_name_their_payload() {
         let found = samples();
-        let tail: Vec<&str> = found.iter().skip(10).map(Refuse::as_str).collect();
+        // 契約 (b) の `hand-written-contract` は導出の理由ではないので、末尾の 6 つはその手前に並ぶ。
+        let tail: Vec<&str> = found.iter().skip(10).take(6).map(Refuse::as_str).collect();
         assert_eq!(
             tail,
             [
@@ -414,9 +428,9 @@ mod tests {
                 "fn-undeclared",
                 "teeth-outside-write-set"
             ],
-            "宣言順の末尾 6 つ"
+            "宣言順の 11〜16 番目"
         );
-        let reasons: Vec<String> = found.iter().skip(10).map(Refuse::reason).collect();
+        let reasons: Vec<String> = found.iter().skip(10).take(6).map(Refuse::reason).collect();
         assert!(reasons.first().is_some_and(|line| line.contains("missing: src/a.rs") && line.contains("extra: docs/x.md")), "{reasons:?}");
         assert!(reasons.get(1).is_some_and(|line| line.contains("fresh_") && line.contains("tests")), "{reasons:?}");
         assert!(reasons.get(2).is_some_and(|line| line.contains("also の src/a.rs")), "{reasons:?}");

@@ -24,8 +24,9 @@ const REQUIRED: &[&str] = &[
     "design",
 ];
 
-/// 任意の key。
-const OPTIONAL: &[&str] = &["classes", "opens"];
+/// 任意の key。`touches` は契約 (b) の生成物が行から写す欄（型の閉包の宣言・受付は読まないが
+/// 写しに残す＝run dir の写しだけで行の宣言が読める）。
+const OPTIONAL: &[&str] = &["classes", "opens", "touches"];
 
 /// 3 クラスの自己申告が取れる値（FR15）。
 pub const CLASSES: &[&str] = &["delete", "publish", "consume"];
@@ -81,6 +82,8 @@ pub struct Contract {
     pub classes: Vec<String>,
     /// 契約の印（席の編集を開く path 種別の名・既定 空＝印なし・[`OPENS`]）。
     pub opens: Vec<String>,
+    /// 行が宣言した型の閉包の種（`crate::…` の path の列・既定 空）。生成の写しが行から運ぶ。
+    pub touches: Vec<String>,
 }
 
 /// 走査中の 1 key の値。
@@ -265,6 +268,7 @@ fn build(found: &[(String, Raw, u64)], errors: &mut Vec<ContractError>) -> Optio
         design: text_of(found, "design", errors),
         classes,
         opens,
+        touches: list_of(found, "touches", 0, errors),
     })
 }
 
@@ -295,5 +299,138 @@ impl Contract {
     /// 印で開いた path 種別（`opens` の名を [`PathKind`] へ引いた列・未知の名は [`Contract::parse`] が拒む）。
     pub fn opened_kinds(&self) -> Vec<PathKind> {
         self.opens.iter().filter_map(|name| PathKind::parse(name)).collect()
+    }
+}
+
+/// 生成の写しの `owner`（**導出値**・宣言値ではない・C10）。契約の正本は設計 doc の行で、行は owner を持たない
+/// ＝器が固定の 1 語を書く（値の形は [`REQUIRED`] の text のまま）。
+pub const GENERATED_OWNER: &str = "generated";
+
+/// 生成の写しの `disposition`（同じく導出値・受付の判定は `classes` が持ち、この語は判定に使われない）。
+pub const GENERATED_DISPOSITION: &str = "A-now";
+
+/// 契約表の行 1 つから契約 file の本文を組む（契約 (b)・設計 §2「生成」）。
+///
+/// **手で書く口は無い**（§7: 写しは生成物）。`owner` / `disposition` は固定の導出値（C10）で、残りは行の欄と
+/// pointer の逐語をそのまま写す。`goal` は**行の `title`**である（planner 裁定 2026-09-19）: 節の本文は
+/// `design` pointer が指しており、写しに複製しない——契約 file の値は 1 行 1 key の TOML subset で `"` を
+/// 表せず（[`quoted_once`]）、実測で設計 doc の 276 節のうち 41 節が `"` を含み最大の節は 27 KB である。
+/// key の順は [`REQUIRED`] の宣言順 + 任意 key で、配列は 1 行に収める。
+///
+/// **値は逃がさない**（escape の仕組みが TOML subset に無い）。行の値と契約 file の値は**同じ 1 つの
+/// scalar の読み**（[`scalar`]）を通るので、行が持てた字面は写しでも同じ字面として読み戻る。
+/// 読み戻せない本文を書いた周は [`Contract::parse`] が Err にし、受付は rc 2 で断る（fail-closed）。
+pub fn render(row: &crate::pipe::table::ContractRow, design: &str, write_set: &[String]) -> String {
+    let list = |items: &[String]| {
+        let quoted: Vec<String> = items.iter().map(|item| format!("\"{}\"", item)).collect();
+        format!("[{}]", quoted.join(", "))
+    };
+    // 契約 file は `schema` の key を持たない（[`REQUIRED`] / [`OPTIONAL`] の外＝書くと自分の parser が断る）。
+    let mut out = String::new();
+    out.push_str(&format!("goal = \"{}\"\n", row.title));
+    out.push_str(&format!("done = \"{}\"\n", row.done));
+    out.push_str(&format!("size = \"{}\"\n", row.size));
+    out.push_str(&format!("owner = \"{GENERATED_OWNER}\"\n"));
+    out.push_str(&format!("disposition = \"{GENERATED_DISPOSITION}\"\n"));
+    out.push_str(&format!("write-set = {}\n", list(write_set)));
+    out.push_str(&format!("verify = {}\n", list(&row.verify)));
+    out.push_str(&format!("req = {}\n", list(&row.req)));
+    out.push_str(&format!("design = \"{}\"\n", design));
+    if !row.classes.is_empty() {
+        out.push_str(&format!("classes = {}\n", list(&row.classes)));
+    }
+    if !row.touches.is_empty() {
+        out.push_str(&format!("touches = {}\n", list(&row.touches)));
+    }
+    if !row.opens.is_empty() {
+        out.push_str(&format!("{OPENS} = {}\n", list(&row.opens)));
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{render, Contract, GENERATED_DISPOSITION, GENERATED_OWNER};
+    use crate::pipe::table::ContractRow;
+
+    /// 生成の材料になる行（欄は最小・値は行の parser が通す形）。
+    fn row() -> ContractRow {
+        ContractRow {
+            line: 7,
+            id: "b".to_owned(),
+            title: "縦 1 本を通す".to_owned(),
+            req: vec!["FR4".to_owned()],
+            section: "2".to_owned(),
+            touches: vec!["crate::pipe::refuse::Refuse".to_owned()],
+            surfaces: Vec::new(),
+            write_set: vec!["src/lib.rs".to_owned()],
+            creates: Vec::new(),
+            tests: Vec::new(),
+            also: Vec::new(),
+            verify: vec!["sh verify-ok.sh".to_owned()],
+            size: "M".to_owned(),
+            done: "run が Implemented になる".to_owned(),
+            depends: Vec::new(),
+            classes: Vec::new(),
+            opens: Vec::new(),
+        }
+    }
+
+    /// 生成した本文は**器自身が読める**（`Contract::parse` を通る）。`goal` は行の `title`・`owner` と
+    /// `disposition` は導出値・`touches` は行から運ぶ（設計 contract-source.md §2「行の field」）。
+    #[test]
+    fn contract_render_round_trips_through_parse() {
+        let row = row();
+        let body = render(&row, "docs/design/contract-source.md#b", &row.write_set);
+        let found = match Contract::parse(&body) {
+            Ok(found) => found,
+            Err(errors) => panic!("生成した本文を読めない: {errors:?}\n{body}"),
+        };
+        assert_eq!(found.goal, row.title, "goal は行の title（節の本文は pointer が指す）");
+        assert_eq!(found.done, row.done);
+        assert_eq!(found.size, row.size);
+        assert_eq!(found.owner, GENERATED_OWNER, "owner は導出値");
+        assert_eq!(found.disposition, GENERATED_DISPOSITION, "disposition は導出値");
+        assert_eq!(found.write_set, row.write_set);
+        assert_eq!(found.verify, row.verify);
+        assert_eq!(found.req, row.req);
+        assert_eq!(found.design, "docs/design/contract-source.md#b", "pointer の逐語");
+        assert_eq!(found.touches, row.touches, "行の touches を写す");
+        assert!(found.classes.is_empty() && found.opens.is_empty(), "空の任意 key は書かない");
+    }
+
+    /// 行の値が `"` を含んでも**同じ字面で読み戻る**（行と写しは同じ scalar の読みを通る＝escape を持たない
+    /// 形が両側で揃っている）。逃がす実装を足すと、逃がした字面が写しに残って行と食い違う。
+    #[test]
+    fn contract_render_keeps_a_row_value_that_carries_a_quote() {
+        let mut row = row();
+        row.title = "\"引用\" を持つ題".to_owned();
+        let body = render(&row, "docs/design/toy.md#b", &row.write_set);
+        let found = match Contract::parse(&body) {
+            Ok(found) => found,
+            Err(errors) => panic!("生成した本文を読めない: {errors:?}\n{body}"),
+        };
+        assert_eq!(found.goal, row.title, "字面は行のまま");
+    }
+
+    /// 必須 key の欠落は**全件**返す（1 件目で止めない）。生成の不備がここで 1 回で見える。
+    #[test]
+    fn contract_parse_reports_every_missing_required_key() {
+        let errors = Contract::parse("goal = \"g\"\n").expect_err("欠落は Err");
+        let joined: Vec<String> = errors.iter().map(ToString::to_string).collect();
+        let text = joined.join("\n");
+        for key in ["done", "size", "owner", "disposition", "write-set", "verify", "req", "design"] {
+            assert!(text.contains(key), "{key} の欠落を名乗る: {text}");
+        }
+    }
+
+    /// 値が壊れているだけの key を「無い」とは言わない（同じ key について二重に報告しない）。
+    #[test]
+    fn contract_parse_names_a_broken_value_without_claiming_absence() {
+        let errors = Contract::parse("goal = 1\n").expect_err("壊れた値は Err");
+        let text: Vec<String> = errors.iter().map(ToString::to_string).collect();
+        let joined = text.join("\n");
+        assert!(joined.contains("goal の value が文字列でない"), "値の不備を言う: {joined}");
+        assert!(!joined.contains("必須の key goal が無い"), "書かれている key を「無い」とは言わない: {joined}");
     }
 }

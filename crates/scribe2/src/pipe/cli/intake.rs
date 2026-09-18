@@ -119,21 +119,146 @@ pub(super) fn intake_id(args: &[String], manifest: &Manifest, policy: LockPolicy
 
 /// 受付の 1 周（id と write-set の弁別）= [`judge`] → [`create`]。
 fn intake_run(args: &[String], manifest: &Manifest, policy: LockPolicy) -> Result<Intaken, Outcome> {
-    let (path, bead, repo) = read_args(args).map_err(refused)?;
+    let (pointer, bead, repo) = read_args(args).map_err(|denial| denial.outcome)?;
     // repo は spawn まで使わないが、**intake の時点で** git repo かを確かめる（judge も先頭で同じ検査を撃つが、intake は
-    // 置き場と契約 file を読む前に断る＝従来の順）。後段で初めて落ちると、契約は受理されたのに進めない run が残る。
+    // 置き場と行を読む前に断る＝従来の順）。後段で初めて落ちると、契約は受理されたのに進めない run が残る。
     if super::head_of(&repo).is_none() {
         return Err(not_a_repo(&repo).outcome);
     }
     let state_dir = state_dir_of(args).map_err(refused)?;
-    let contract = Contract::load(&path).map_err(unloadable)?;
+    let ceiling = ceiling_of(manifest).map_err(|denial| denial.outcome)?;
+    let (contract, body) = generated(&repo, &pointer, &ceiling.borrow()).map_err(|denial| denial.outcome)?;
     let material = Material { repo: &repo, manifest, contract: &contract, state_dir: Some(&state_dir), bead: &bead };
-    create(judge(&material), &material, &state_dir, &path, policy)
+    create(judge(&material), &material, &state_dir, &body, policy)
 }
 
-/// intake / preflight が同じ形で読む引数（`--contract` / `--bead` / `--repo`・欠けは理由の 1 行）。
-pub(super) fn read_args(args: &[String]) -> Result<(PathBuf, String, PathBuf), String> {
-    Ok((PathBuf::from(need(args, "--contract")?), need(args, "--bead")?.to_owned(), PathBuf::from(need(args, "--repo")?)))
+/// rules 行から allowlist と禁じる語を読んで [`Ceiling`] の材料を持つ（借りる側は [`Rows::borrow`]）。
+pub(super) struct Rows {
+    /// 通す語列（`runner.allowed_commands`）。
+    commands: Vec<String>,
+    /// 禁じる語列（`runner.denied_commands`）。
+    denied: Vec<String>,
+}
+
+impl Rows {
+    /// 借りた形の上限（`row` は同じ 1 つの rules 行 id）。
+    pub(super) fn borrow(&self) -> Ceiling<'_> {
+        Ceiling { row: CEILING_ROW, commands: &self.commands, denied: &self.denied }
+    }
+}
+
+/// 上限の材料を rules 行から読む（読めない周は [`DENIAL_RULES`] の断り・[`freeze`] と同じ 2 行）。
+pub(super) fn ceiling_of(manifest: &Manifest) -> Result<Rows, Denial> {
+    let rows = |id: &str| list_row(manifest, id).map_err(|reason| denied(DENIAL_RULES, refused(reason)));
+    Ok(Rows { commands: rows(CEILING_ROW)?, denied: rows(DENIED_ROW)? })
+}
+
+/// intake / preflight が同じ形で読む引数（`--design` / `--bead` / `--repo`・欠けは理由の 1 行）。
+///
+/// 契約 (b) 以後、受付が受けるのは**設計 pointer だけ**である（`<doc>#<id>`）。手書きの契約 file
+/// （`--contract`）は使い方の誤りでなく [`Refuse::HandWrittenContract`] で断る（FR54）＝「渡し方を間違えた」
+/// ではなく「契約の正本はそこに無い」と名乗る。pointer の形が壊れている周は理由の 1 行で断る。
+pub(super) fn read_args(args: &[String]) -> Result<(table::Pointer, String, PathBuf), Denial> {
+    if let Ok(Some(path)) = flag(args, FLAG_CONTRACT) {
+        return Err(refuse(&Refuse::HandWrittenContract { path: path.to_owned() }, &[]));
+    }
+    let read = |name: &str| need(args, name).map_err(|reason| denied(DENIAL_ARGS, refused(reason)));
+    let design = read("--design")?.to_owned();
+    let bead = read("--bead")?.to_owned();
+    let repo = PathBuf::from(read("--repo")?);
+    let pointer = table::parse_pointer(&design)
+        .map_err(|err| denied(DENIAL_ARGS, refused(format!("--design {design} は設計 pointer の形でない（{}）", err.reason()))))?;
+    Ok((pointer, bead, repo))
+}
+
+/// 廃止した手書きの契約 file の flag（字面だけ残して断る側に使う・契約 (b)）。
+const FLAG_CONTRACT: &str = "--contract";
+
+/// 引数の形が読めない周の名（[`Refuse`] を持たない断り）。
+const DENIAL_ARGS: &str = "args";
+
+/// base の設計 pointer から契約を組む（契約 (b)・設計 contract-source.md §2「生成」）。
+///
+/// 読む先は**作業木でなく base（`HEAD`）**である（[`crate::pipe::show_head`]）: 記録する base と同じ commit の
+/// 行だけが契約の正本で、commit していない書きかけを受け付けると runner が base で見るものと食い違う。
+/// 行を引いたら **(a) の [`table::check_table`] を同じ ctx でその 1 行に撃ち**（1 実装・C2）、findings が 1 件でも
+/// 在れば先頭を理由に断る（run dir を作らない・FR48 / FR54）。
+pub(super) fn generated(repo: &Path, pointer: &table::Pointer, ceiling: &Ceiling<'_>) -> Result<(Contract, String), Denial> {
+    let Some(text) = crate::pipe::show_head(repo, &pointer.path) else {
+        let reason = format!("{} を base（HEAD）から読めない", pointer.path);
+        return Err(refuse(&Refuse::ContractTable(TableError::Unreadable { line: 0, reason }), &[]));
+    };
+    let row = table::find_row(&pointer.path, &text, &pointer.id).map_err(|errors| {
+        let rest: Vec<String> = errors.iter().skip(1).map(|error| format!("pipe: {}", error.reason())).collect();
+        let first = errors.into_iter().next().unwrap_or(TableError::RowMissing { line: 0, id: pointer.id.clone() });
+        refuse(&Refuse::ContractTable(first), &rest)
+    })?;
+    let findings = check_row(repo, &text, &row, ceiling)?;
+    if !findings.is_empty() {
+        // 名は `Refuse::ContractTable` の側から取る（字面を 2 か所に書かない・C1）。findings は表の検査の
+        // 描画をそのまま並べる（`contracts check` と 1 byte 同じ行＝読み手が 2 つの形を覚えない）。
+        let name = Refuse::ContractTable(TableError::RowMissing { line: 0, id: String::new() }).as_str();
+        let rc = findings.iter().map(table::Finding::rc).fold(RC_REFUSED, u8::max);
+        let lines = findings.iter().map(|finding| finding.render(&pointer.path)).collect();
+        return Err(denied(name, Outcome::failed(rc, lines)));
+    }
+    let design = format!("{}#{}", pointer.path, pointer.id);
+    // 行が `write-set` を持たない周（Derived の行・§3「write-set の導出」）は**導出値**を写しに書く。
+    // 契約 file は write-set を 1 本以上要るので、空のまま書くと器が自分の生成物を読めない。
+    // 導出は行と base だけで決まるので、後段の [`settle_write_set`] と同じ 1 実装をここで撃つ（C2）。
+    let write_set = if row.write_set.is_empty() { derived_write_set(repo, &row)? } else { row.write_set.clone() };
+    let body = crate::pipe::contract::render(&row, &design, &write_set);
+    let contract = Contract::parse(&body).map_err(|errors| {
+        denied(DENIAL_GENERATED, unloadable(errors))
+    })?;
+    Ok((contract, body))
+}
+
+/// 生成した写しを器自身が読めない周の名（生成の不備＝壊れた器・rc 2）。
+const DENIAL_GENERATED: &str = "generated";
+
+/// 行から導いた write-set（[`settle_write_set`] と同じ [`closure::derive_write_set`] を撃つ）。
+fn derived_write_set(repo: &Path, row: &ContractRow) -> Result<Vec<String>, Denial> {
+    let Some(tracked) = table::tracked_files(repo) else {
+        let reason = format!("{} の tracked file を読めない（git repo でない）", repo.display());
+        return Err(refuse(&Refuse::ContractTable(TableError::Unreadable { line: 0, reason }), &[]));
+    };
+    let sources = table::read_all(repo, &tracked, ".rs");
+    let snapshots = table::read_all(repo, &tracked, ".snap");
+    let fields = fields_of(row);
+    let base = base_of(&sources, &snapshots, &tracked);
+    let derived = closure::derive_write_set(&fields, &base).map_err(|error| refuse(&refuse_of(error, row), &[]))?;
+    Ok(derived.into_iter().collect())
+}
+
+/// 行 1 つに (a) の表の検査を撃つ（`contracts check` と**同じ 1 実装**・C2）。ctx（allowlist / 禁じる語 /
+/// 要件面 / base の tree）は `contracts check` と同じ材料から組み、doc の本文は base（`HEAD`）の字面を渡す。
+///
+/// base の tree を読めない（git repo でない）周は理由の 1 行を返す＝呼び側が `Unreadable` で断る。
+fn check_row(repo: &Path, text: &str, row: &ContractRow, ceiling: &Ceiling<'_>) -> Result<Vec<table::Finding>, Denial> {
+    let Some(tracked) = table::tracked_files(repo) else {
+        let reason = format!("{} の tracked file を読めない（git repo でない）", repo.display());
+        return Err(refuse(&Refuse::ContractTable(TableError::Unreadable { line: 0, reason }), &[]));
+    };
+    // 宣言が読めない・上限に外れる周は **rc 1**（前提違反）である（[`freeze`] と同じ極性・同じ名）。
+    // 表の検査の前に宣言を読むのは要件面の path が宣言から来るからで、ここで rc 2 に倒すと
+    // 「宣言が壊れている」便が「表を読めない」に化ける。
+    let facts = declaration::table_facts(repo, ceiling).map_err(|errors| {
+        denied(DENIAL_DECLARATION, Outcome::failed(RC_REFUSED, errors.iter().map(ToString::to_string).collect()))
+    })?;
+    let sources = table::read_all(repo, &tracked, ".rs");
+    let snapshots = table::read_all(repo, &tracked, ".snap");
+    let requirements = table::read(repo, &facts.requirements)
+        .and_then(|found| table::requirement_ids(&facts.requirements, &found));
+    let ctx = table::Context {
+        allowed: &facts.allowed,
+        denied: &facts.denied,
+        requirements: &requirements,
+        sources: &sources,
+        tracked: &tracked,
+        snapshots: &snapshots,
+    };
+    Ok(table::check_table(text, std::slice::from_ref(row), &ctx))
 }
 
 /// 契約 file が読めない周の断り（rc 2・理由を全件出す）。
@@ -282,7 +407,7 @@ fn create(
     judged: Judged,
     material: &Material<'_>,
     state_dir: &Path,
-    path: &Path,
+    body: &str,
     policy: LockPolicy,
 ) -> Result<Intaken, Outcome> {
     let Judged { write_set, denials, derived, effective, run, .. } = judged;
@@ -293,7 +418,7 @@ fn create(
     let (Some(effective), Some(id)) = (effective, run) else {
         return Err(broken("受付の判定が有効値と run id を持たない".to_owned()));
     };
-    copy_contract(state_dir, &id, path, derived.as_deref()).map_err(broken)?;
+    write_contract(state_dir, &id, body, derived.as_deref()).map_err(broken)?;
     copy_vessel(state_dir, &id, &effective).map_err(broken)?;
     remember_repo(state_dir, &id, material.repo).map_err(broken)?;
     let emitted = emit(
@@ -636,16 +761,15 @@ pub(super) fn run_repo(args: &[String], state_dir: &Path, id: &str) -> Result<Pa
 
 /// 契約 file を置き場へ写す（process 間で持ち越す面は event log とこの写しだけ）。導出値が write-set になる周
 /// （`derived`）は写しの `write-set` の行だけをその値に差し替える（他の行は逐語・runner が読むのは写しの write-set）。
-fn copy_contract(state_dir: &Path, id: &str, from: &Path, derived: Option<&[String]>) -> Result<(), String> {
+fn write_contract(state_dir: &Path, id: &str, body: &str, derived: Option<&[String]>) -> Result<(), String> {
     let dir = run_dir(state_dir, id);
     std::fs::create_dir_all(&dir).map_err(|err| format!("{} を作れない: {err}", dir.display()))?;
     let to = contract_path(state_dir, id);
-    let Some(files) = derived else {
-        std::fs::copy(from, &to).map_err(|err| format!("{} を写せない: {err}", to.display()))?;
-        return Ok(());
+    let text = match derived {
+        Some(files) => with_write_set(body, files),
+        None => body.to_owned(),
     };
-    let text = std::fs::read_to_string(from).map_err(|err| format!("{} を読めない: {err}", from.display()))?;
-    std::fs::write(&to, with_write_set(&text, files)).map_err(|err| format!("{} を写せない: {err}", to.display()))
+    std::fs::write(&to, text).map_err(|err| format!("{} を書けない: {err}", to.display()))
 }
 
 /// 契約 file の本文の `write-set` の行を `files` の列に差し替える（契約 file は 1 行 1 key・配列は 1 行に収まる）。

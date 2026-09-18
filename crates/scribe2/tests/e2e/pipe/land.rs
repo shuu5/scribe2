@@ -70,8 +70,9 @@ const LONG_GOAL: &str = "件名の要旨は goal の先頭の文を 72 文字で
 #[test]
 fn pipe_land_subject_cuts_first_sentence_and_keeps_goal_in_body() {
     let (repo, state) = repo_with_state();
-    let goal = format!("goal = \"{LONG_GOAL}\"");
-    let path = write_contract(&repo, &["goal"], &[&goal]);
+    // 契約 (b) 以後、`goal` は**行の `title`** である（planner 裁定 2026-09-19）。
+    let goal = format!("title = \"{LONG_GOAL}\"");
+    let path = write_contract(&repo, &["title"], &[&goal]);
     let marker = state.join("lens-ran");
     let id = gated_pass(&repo, &state, &path, &marker);
     let out = land_once(&repo, &state, &id);
@@ -99,7 +100,7 @@ fn pipe_land_subject_cuts_first_sentence_and_keeps_goal_in_body() {
 #[test]
 fn pipe_land_subject_keeps_short_single_sentence_whole() {
     let (repo, state) = repo_with_state();
-    let path = write_contract(&repo, &["goal"], &[r#"goal = "短い 1 文の goal は件名にそのまま載る。""#]);
+    let path = write_contract(&repo, &["title"], &[r#"title = "短い 1 文の goal は件名にそのまま載る。""#]);
     let marker = state.join("lens-ran");
     let id = gated_pass(&repo, &state, &path, &marker);
     let out = land_once(&repo, &state, &id);
@@ -167,7 +168,7 @@ fn pipe_lens_record_review_writes_lens_toml() {
     let path = write_contract(&repo, &[], &[]);
     // 対: `--lens` の無い intake は審査が INCONCLUSIVE（終端）で写しを残さない。
     let bare = run_pipe(&[
-        "intake", "--contract", &path.display().to_string(), "--bead", "b-bare",
+        "intake", "--design", &path, "--bead", "b-bare",
         "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
         "--rules", &ceiling_rules(&state),
     ]);
@@ -369,7 +370,15 @@ fn pipe_land_rebase_refuses_when_main_moves_during_regate() {
 /// 1 本目が **面の内**（`crates/` 配下）を書くのは、1 本目の着地で動いた main に 2 本目が追随する周が
 /// 従来どおり再 gate を撃つ形だからである（面の外だけが動いた周は引き継ぐ・設計 §33）。
 fn two_gated_runs(repo: &Path, state: &Path, marker: &Path) -> (String, String) {
-    let contract_a = write_contract(repo, &["write-set"], &[r#"write-set = ["crates/toy/a.rs"]"#]);
+    // **2 行を 1 回で commit する**（行ごとに commit すると 2 便の base が別になる・契約 (b)）。
+    commit_rows(
+        repo,
+        &[
+            row_fields("a", &["write-set"], &[r#"write-set = ["crates/toy/a.rs"]"#]),
+            row_fields("b", &["write-set"], &[r#"write-set = ["src/b.rs"]"#]),
+        ],
+    );
+    let contract_a = format!("{DESIGN_FILE}#a");
     let id_a = intake_bead(repo, state, &contract_a, "s2-2e5");
     let spawned_a = run_pipe(&[
         "spawn", "--run", &id_a, "--repo", &repo.display().to_string(),
@@ -380,7 +389,7 @@ fn two_gated_runs(repo: &Path, state: &Path, marker: &Path) -> (String, String) 
     let lens_a = fake_lens(marker, &lens_verdict("PASS"));
     let gated_a = gate_once(repo, state, &id_a, Some(&lens_a));
     assert_eq!(gated_a.status.code(), Some(i32::from(RC_OK)), "1 本目の gate: {}", stderr_of(&gated_a));
-    let contract_b = write_contract(repo, &["write-set"], &[r#"write-set = ["src/b.rs"]"#]);
+    let contract_b = format!("{DESIGN_FILE}#b");
     let id_b = intake_bead(repo, state, &contract_b, "s2-3ax");
     let spawned = run_pipe(&[
         "spawn", "--run", &id_b, "--repo", &repo.display().to_string(),
@@ -417,9 +426,11 @@ fn assert_follow_events(state: &Path, base: &str, moved: &str, new: &str) {
 #[test]
 fn pipe_land_rebase_follows_landed_sibling_and_lands() {
     let (repo, state) = repo_with_state();
-    let base = git(&repo, &["rev-parse", "refs/heads/main"]);
     let marker = state.join("lens-ran");
+    // 行の commit が main を進めうるので、base は**行を置いた後**に読む（契約 (b)）。
+    // 行は `two_gated_runs` が 1 回で commit するので、base はその後に読む（2 便で同じ 1 つ）。
     let (id_a, id_b) = two_gated_runs(&repo, &state, &marker);
+    let base = git(&repo, &["rev-parse", "refs/heads/main"]);
     // 1 本目が land して main が動く（2 本目の base は置き去り）。
     let first = land_once(&repo, &state, &id_a);
     assert_eq!(first.status.code(), Some(i32::from(RC_OK)), "1 本目の land: {}", stderr_of(&first));
@@ -461,8 +472,8 @@ fn pipe_land_rebase_follows_landed_sibling_and_lands() {
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
 fn gated_run_whose_change_is_already_on_main(repo: &Path, state: &Path, marker: &Path) -> (String, String) {
-    let contract = write_contract(repo, &[], &[]);
-    let id = gated_pass(repo, state, &contract, marker);
+    let design = write_contract(repo, &[], &[]);
+    let id = gated_pass(repo, state, &design, marker);
     // 便の runner（`echo x >> src/lib.rs`）と**同じ 1 行**を main へ載せる。
     let lib = repo.join("src").join("lib.rs");
     let text = fs::read_to_string(&lib).expect("seed を読める");
@@ -553,8 +564,8 @@ fn pipe_land_rebase_empty_does_not_fire_for_distinct_changes() {
 /// `body` は A の id から本文の末尾（trailer の行）を組む——**trailer の有無と字面は歯が選ぶ**。
 /// 返すのは A の id と作った squash の sha。
 fn gated_run_squashed_on_main(repo: &Path, state: &Path, marker: &Path, body: impl Fn(&str) -> String) -> (String, String) {
-    let contract = write_contract(repo, &[], &[]);
-    let id = gated_pass(repo, state, &contract, marker);
+    let design = write_contract(repo, &[], &[]);
+    let id = gated_pass(repo, state, &design, marker);
     let tree = git(&worktree_of(repo, &id), &["rev-parse", "HEAD^{tree}"]);
     let old = git(repo, &["rev-parse", "refs/heads/main"]);
     let message = format!("s2-2e5: 縦 1 本を通す\n\n縦 1 本を通す\n\n{}", body(&id));
@@ -1787,8 +1798,8 @@ fn land_pr(repo: &Path, state: &Path, id: &str) {
 }
 
 /// `--pr-cmd` 形で land した便の id。
-fn landed_pr(repo: &Path, state: &Path, contract: &Path, marker: &Path) -> String {
-    let id = gated_pass(repo, state, contract, marker);
+fn landed_pr(repo: &Path, state: &Path, design: &str, marker: &Path) -> String {
+    let id = gated_pass(repo, state, design, marker);
     land_pr(repo, state, &id);
     id
 }
@@ -1979,8 +1990,8 @@ fn pipe_retire_rebase_empty_refuses_other_failed_reasons() {
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
 fn stopped_run(repo: &Path, state: &Path) -> String {
-    let contract = write_contract(repo, &[], &[]);
-    let id = intake(repo, state, &contract);
+    let design = write_contract(repo, &[], &[]);
+    let id = intake(repo, state, &design);
     let mut spawner = Command::new(bin())
         .args(["pipe", "spawn", "--run", &id, "--repo", &repo.display().to_string()])
         .args(["--state-dir", &state.display().to_string(), "--runner", "sleep 300"])
@@ -2174,7 +2185,8 @@ fn pipe_land_anchor_skips_when_landed_tree_adds_a_path_that_exists_ignored_in_an
     let path = write_contract(
         &repo,
         &["write-set"],
-        &[r#"write-set = ["src/lib.rs", "src/new.rs"]"#],
+        // base に無い file は `+` で宣言する（契約 (b) の行の形）＝anchor の ignored な同名 file は tracked でない。
+        &[r#"write-set = ["src/lib.rs", "+src/new.rs"]"#],
     );
     let marker = state.join("lens-ran");
     let id = intake(&repo, &state, &path);
@@ -3098,9 +3110,9 @@ fn pipe_follow_self_rebase_mid_rebase_turn_fails_dirty_without_a_follow_section(
 
 /// 検出線を持つ便を Gated PASS まで通し、呼出行の母集団と base を返す（[`super::gate::detection_repo`] の型）。
 fn detection_gated() -> (PathBuf, PathBuf, String, String, usize) {
-    let (repo, state, contract) = super::gate::detection_repo(super::gate::DETECTION_COUNT);
+    let (repo, state, design) = super::gate::detection_repo(super::gate::DETECTION_COUNT);
     let base = git(&repo, &["rev-parse", "refs/heads/main"]);
-    let id = gated_pass(&repo, &state, &contract, &state.join("lens-ran"));
+    let id = gated_pass(&repo, &state, &design, &state.join("lens-ran"));
     let before = super::gate::detection_calls(&repo).len();
     (repo, state, id, base, before)
 }

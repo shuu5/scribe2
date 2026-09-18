@@ -111,8 +111,8 @@ fn prefixed_run(extra: &str) -> (PathBuf, PathBuf, String) {
     fs::write(repo.join("src").join("old.rs"), "// old\n// shrink me\n").expect("縮む file を書ける");
     git(&repo, &["add", "-A"]);
     git(&repo, &["commit", "-q", "-m", "prefixed-base"]);
-    let contract = write_contract(&repo, &["write-set"], &[r#"write-set = ["+src/new.rs", "-src/old.rs"]"#]);
-    let id = intake(&repo, &state, &contract);
+    let design = write_contract(&repo, &["write-set"], &[r#"write-set = ["+src/new.rs", "-src/old.rs"]"#]);
+    let id = intake(&repo, &state, &design);
     let runner = format!(
         "echo new > src/new.rs && echo '// old' > src/old.rs {extra} && git add -A && git commit -q -m runner"
     );
@@ -1291,8 +1291,8 @@ fn scope_prop(record: &str, key: &str) -> String {
 
 /// PATH を差し替えて spawn → gate まで通す（gate の rc と便 id を返す）。
 fn confined_run(repo: &Path, state: &Path, path: &str, lens: &str) -> (String, Output) {
-    let contract = write_contract(repo, &[], &[]);
-    let id = intake(repo, state, &contract);
+    let design = write_contract(repo, &[], &[]);
+    let id = intake(repo, state, &design);
     let spawned = run_pipe_with_path(
         path,
         &["spawn", "--run", &id, "--repo", &repo.display().to_string(),
@@ -1426,12 +1426,12 @@ fn pipe_confine_falls_back_to_the_plain_shell_without_the_tool() {
 fn pipe_confine_reads_the_peak_from_the_trailing_line() {
     let (repo, state) = repo_with_state();
     let path = systemd_stub(&state);
-    let contract = write_contract(
+    let design = write_contract(
         &repo,
         &["verify"],
         &[r#"verify = ["sh verify-peak.sh", "sh verify-ok.sh"]"#],
     );
-    let id = intake(&repo, &state, &contract);
+    let id = intake(&repo, &state, &design);
     let spawned = run_pipe_with_path(
         &path,
         &["spawn", "--run", &id, "--repo", &repo.display().to_string(),
@@ -1479,8 +1479,8 @@ fn pipe_confine_wraps_the_runner_and_the_lens() {
 fn pipe_confine_oom_verify_line_is_inconclusive() {
     let (repo, state) = repo_with_state();
     let path = systemd_stub(&state);
-    let contract = write_contract(&repo, &["verify"], &[r#"verify = ["sh verify-oom.sh"]"#]);
-    let id = intake(&repo, &state, &contract);
+    let design = write_contract(&repo, &["verify"], &[r#"verify = ["sh verify-oom.sh"]"#]);
+    let id = intake(&repo, &state, &design);
     let spawned = run_pipe_with_path(
         &path,
         &["spawn", "--run", &id, "--repo", &repo.display().to_string(),
@@ -1509,8 +1509,8 @@ fn pipe_confine_oom_verify_line_is_inconclusive() {
 fn pipe_confine_oom_runner_fails_the_run() {
     let (repo, state) = repo_with_state();
     let path = systemd_stub(&state);
-    let contract = write_contract(&repo, &[], &[]);
-    let id = intake(&repo, &state, &contract);
+    let design = write_contract(&repo, &[], &[]);
+    let id = intake(&repo, &state, &design);
     let runner = format!("{TOY_COMMIT}\nprintf 'confine-usage peak_bytes=9437184 oom_kill=1\\n'");
     let out = run_pipe_with_path(
         &path,
@@ -1968,8 +1968,8 @@ fn pipe_slots_wait_ends_early_when_the_blocking_ticket_goes() {
     let lens = fake_lens(&marker, &lens_verdict("PASS"));
     let slots = SlotFixture { job_mb: 1, reserve_mb: 0, wait_s: SLOT_WAIT_LONG_S };
     let rules = write_rules_full(&state, "rules-slot-long.toml", (1, 1_000_000), FOLLOW_RETRIES, slots);
-    let contract = write_contract(&repo, &[], &[]);
-    let id = intake(&repo, &state, &contract);
+    let design = write_contract(&repo, &[], &[]);
+    let id = intake(&repo, &state, &design);
     let spawned = run_pipe_with_path(
         &path,
         &["spawn", "--run", &id, "--repo", &repo.display().to_string(),
@@ -2064,11 +2064,11 @@ fn commit_detection_vessel(repo: &Path, detection: &str) {
 }
 
 /// 検出線を持つ toy repo と、契約 verify も stub にした契約 file。
-pub(super) fn detection_repo(detection: &str) -> (PathBuf, PathBuf, PathBuf) {
+pub(super) fn detection_repo(detection: &str) -> (PathBuf, PathBuf, String) {
     let (repo, state) = repo_with_state();
     commit_detection_vessel(&repo, detection);
-    let contract = write_contract(&repo, &["verify"], &[r#"verify = ["sh verify-count.sh contract"]"#]);
-    (repo, state, contract)
+    let design = write_contract(&repo, &["verify"], &[r#"verify = ["sh verify-count.sh contract"]"#]);
+    (repo, state, design)
 }
 
 /// 呼出回数 file の行（撃たれた順）。
@@ -2129,9 +2129,9 @@ fn detection_land(edit: fn(&str, &str, &str) -> String) -> DetectionLand {
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
 fn detection_land_shimmed(edit: fn(&str, &str, &str) -> String, shim: Option<&str>) -> DetectionLand {
-    let (repo, state, contract) = detection_repo(DETECTION_COUNT);
+    let (repo, state, design) = detection_repo(DETECTION_COUNT);
     let base_tree = git(&repo, &["rev-parse", "HEAD^{tree}"]);
-    let id = gated_pass(&repo, &state, &contract, &state.join("lens-ran"));
+    let id = gated_pass(&repo, &state, &design, &state.join("lens-ran"));
     let before = detection_calls(&repo).len();
     let verdict = state.join("pipe").join(&id).join("verdict.json");
     let text = fs::read_to_string(&verdict).expect("verdict.json を読める");
@@ -2155,9 +2155,9 @@ fn verdict_tree_to_base(text: &str, tree: &str, base_tree: &str) -> String {
 /// (1) `detection-verify` が読めて、gate が **① write-set → ② common → ③ detection → ④ 契約** の順で撃つ。
 #[test]
 fn pipe_detection_verify_fires_third_in_gate() {
-    let (repo, state, contract) = detection_repo(DETECTION_COUNT);
+    let (repo, state, design) = detection_repo(DETECTION_COUNT);
     let base = git(&repo, &["rev-parse", "HEAD"]);
-    let id = gated_pass(&repo, &state, &contract, &state.join("lens-ran"));
+    let id = gated_pass(&repo, &state, &design, &state.join("lens-ran"));
     let rows = verify_rows(&state, &id);
     assert_eq!(kinds(&rows), ["write-set", "common", "detection", "contract"], "段の順序と kind: {rows:?}");
     assert_eq!(row_value(&rows, 3, "cmd"), format!("sh verify-count.sh detection-{base}"), "③ の穴は置換される");
@@ -2172,8 +2172,8 @@ fn pipe_detection_verify_fires_third_in_gate() {
 /// (2) `verdict.json` の `tree` は **gate を撃った HEAD の木**（base の木ではない）。
 #[test]
 fn pipe_detection_verdict_carries_tree_of_gated_head() {
-    let (repo, state, contract) = detection_repo(DETECTION_COUNT);
-    let id = gated_pass(&repo, &state, &contract, &state.join("lens-ran"));
+    let (repo, state, design) = detection_repo(DETECTION_COUNT);
+    let id = gated_pass(&repo, &state, &design, &state.join("lens-ran"));
     let tree = value_of(&verdict_pairs(&state, &id), "tree");
     assert!(!tree.is_empty(), "tree が在る");
     assert_eq!(tree, git(&worktree_of(&repo, &id), &["rev-parse", "HEAD^{tree}"]), "HEAD の木と一致");
@@ -2400,8 +2400,8 @@ fn pipe_detection_land_fires_detection_when_verdict_has_no_tree() {
 /// (6) 検出線の rc≠0 は **従来どおり gate FAIL**（測れなかったを通ったに化けさせない・lens を呼ばない）。
 #[test]
 fn pipe_detection_red_line_fails_gate() {
-    let (repo, state, contract) = detection_repo(r#"["sh verify-red.sh"]"#);
-    let id = implemented(&repo, &state, &contract);
+    let (repo, state, design) = detection_repo(r#"["sh verify-red.sh"]"#);
+    let id = implemented(&repo, &state, &design);
     let marker = state.join("lens-ran");
     let out = gate_once(&repo, &state, &id, Some(&fake_lens(&marker, &lens_verdict("PASS"))));
     assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "FAIL の rc は 1: {}", stderr_of(&out));
@@ -2447,10 +2447,10 @@ fn write_detection_stub(repo: &Path, rc: u8) {
 
 /// 検出線が跳び板の便を実装済みにする（共通 verify は `verify-count.sh common`・契約 verify も stub）。
 fn stubbed_detection_run(rc: u8) -> (PathBuf, PathBuf, String) {
-    let (repo, state, contract) = detection_repo(STUBBED_LINE);
+    let (repo, state, design) = detection_repo(STUBBED_LINE);
     commit_stub_trampoline(&repo);
     write_detection_stub(&repo, rc);
-    let id = implemented(&repo, &state, &contract);
+    let id = implemented(&repo, &state, &design);
     (repo, state, id)
 }
 
@@ -2518,8 +2518,8 @@ fn stubbed_common_run(rc: u8) -> (PathBuf, PathBuf, String) {
     fs::write(&path, format!("{body}detection-verify = [\"sh verify-ok.sh\"]\n")).ok();
     git(&repo, &["add", "-f", ".vessel.toml"]);
     git(&repo, &["commit", "-q", "-m", "vessel-common-stubbed"]);
-    let contract = write_contract(&repo, &["verify"], &[r#"verify = ["sh verify-ok.sh"]"#]);
-    let id = implemented(&repo, &state, &contract);
+    let design = write_contract(&repo, &["verify"], &[r#"verify = ["sh verify-ok.sh"]"#]);
+    let id = implemented(&repo, &state, &design);
     (repo, state, id)
 }
 
@@ -2619,9 +2619,9 @@ fn retry_gate(common: &str, detection_script: &str) -> (PathBuf, PathBuf, String
     fs::write(&path, format!("{body}detection-verify = [\"sh {detection_script} detection-{{base}}\"]\n")).ok();
     git(&repo, &["add", "-f", ".vessel.toml"]);
     git(&repo, &["commit", "-q", "-m", "vessel-detection-retry"]);
+    let design = write_contract(&repo, &["verify"], &[r#"verify = ["sh verify-count.sh contract"]"#]);
     let base = git(&repo, &["rev-parse", "HEAD"]);
-    let contract = write_contract(&repo, &["verify"], &[r#"verify = ["sh verify-count.sh contract"]"#]);
-    let id = implemented(&repo, &state, &contract);
+    let id = implemented(&repo, &state, &design);
     assert!(detection_calls(&repo).is_empty(), "fixture: gate の前は印が無い");
     let marker = state.join("lens-ran");
     let out = gate_once(&repo, &state, &id, Some(&fake_lens(&marker, &lens_verdict("PASS"))));
@@ -2785,8 +2785,8 @@ fn detection_oom_gate(common: &str, detection: &str) -> DetectionOom {
     fs::write(&path, format!("{body}detection-verify = {detection}\n")).ok();
     git(&repo, &["add", "-f", ".vessel.toml", VERIFY_SIGKILL]);
     git(&repo, &["commit", "-q", "-m", "vessel-detection-oom"]);
-    let contract = write_contract(&repo, &["verify"], &[r#"verify = ["sh verify-ok.sh"]"#]);
-    let id = implemented(&repo, &state, &contract);
+    let design = write_contract(&repo, &["verify"], &[r#"verify = ["sh verify-ok.sh"]"#]);
+    let id = implemented(&repo, &state, &design);
     let stub = systemd_stub(&state);
     let marker = state.join("lens-ran");
     let gated = run_pipe_with_path(
@@ -2932,8 +2932,8 @@ fn commit_line_vessel(repo: &Path) {
 fn line_gate(verify: &str) -> (PathBuf, PathBuf, String, Output) {
     let (repo, state) = repo_with_state();
     commit_line_vessel(&repo);
-    let contract = write_contract(&repo, &["verify"], &[&format!("verify = {verify}")]);
-    let id = implemented(&repo, &state, &contract);
+    let design = write_contract(&repo, &["verify"], &[&format!("verify = {verify}")]);
+    let id = implemented(&repo, &state, &design);
     let marker = state.join("lens-ran");
     let out = gate_once(&repo, &state, &id, Some(&fake_lens(&marker, &lens_verdict("PASS"))));
     (repo, state, id, out)
@@ -3045,8 +3045,8 @@ fn pipe_record_land_skipped_detection_has_no_line() {
 fn pipe_record_show_external_form() {
     let (repo, state) = repo_with_state();
     commit_line_vessel(&repo);
-    let contract = write_contract(&repo, &[], &[]);
-    let id = implemented(&repo, &state, &contract);
+    let design = write_contract(&repo, &[], &[]);
+    let id = implemented(&repo, &state, &design);
     let before = show_line(&repo, &state, &id);
     assert_eq!(before.lines().count(), 1, "gate 前は段の 1 行だけ: {before}");
     let marker = state.join("lens-ran");
@@ -3168,8 +3168,8 @@ fn move_run(base: &[(&str, &str)], head: &[(&str, &str)]) -> (PathBuf, PathBuf, 
     for (name, body) in head {
         fs::write(staged.join(name), body).expect("HEAD の file を書ける");
     }
-    let contract = write_contract(&repo, &["write-set"], &[r#"write-set = ["src/lib.rs", "src/alpha.rs", "src/beta.rs"]"#]);
-    let id = intake(&repo, &state, &contract);
+    let design = write_contract(&repo, &["write-set"], &[r#"write-set = ["src/lib.rs", "src/alpha.rs", "src/beta.rs"]"#]);
+    let id = intake(&repo, &state, &design);
     let runner = format!("cp '{}'/*.rs src/ && git add -A && git commit -q -m runner", staged.display());
     let out = spawn_with(&repo, &state, &id, &runner);
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "spawn: {}", stderr_of(&out));
