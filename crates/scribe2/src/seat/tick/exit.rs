@@ -473,7 +473,7 @@ mod tests {
     /// 登録 row 1 件（役割 planner・口座 `account`・target `target`）。
     fn row(target: &str, account: &str) -> crate::fleet::Registration {
         crate::fleet::Registration {
-            role: crate::seat::role::Role::Planner,
+            role: crate::seat::role::Role::Orchestrator,
             anchor: format!("/repo/{target}"),
             target: target.to_owned(),
             sid: None,

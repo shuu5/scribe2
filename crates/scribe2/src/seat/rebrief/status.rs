@@ -577,7 +577,7 @@ mod tests {
     /// 登録 row の event 1 件（鍵 = role × anchor ゆえ anchor は target ごと）。
     fn registered(ts: &str, target: &str, model: Option<&str>) -> Event {
         let registration = Registration {
-            role: Role::Planner,
+            role: Role::Orchestrator,
             anchor: format!("/a/{target}"),
             target: target.to_owned(),
             sid: None,
@@ -617,8 +617,8 @@ mod tests {
                 "[RUN] id=r1 stage=Spawned account=x base=abcdef012345 updated=2026-09-16T01:00:01Z",
                 "[RUN] id=r2 stage=Implemented account=unknown base=222222222222 updated=2026-09-16T01:00:03Z",
                 "[RUN-COUNT] n=2",
-                "[SEAT] target=wm:1 role=planner state=busy account=a1 model=Opus",
-                "[SEAT] target=wm:2 role=planner state=unknown account=a1 model=unknown",
+                "[SEAT] target=wm:1 role=orchestrator state=busy account=a1 model=Opus",
+                "[SEAT] target=wm:2 role=orchestrator state=unknown account=a1 model=unknown",
                 "[SEAT-COUNT] n=2",
             ]
         );

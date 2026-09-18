@@ -899,7 +899,7 @@ fn tree_stat(root: &Path) -> Vec<(PathBuf, u64, SystemTime)> {
 fn mutant_e2e_doctor_reconciles_against_the_given_tmux_socket_and_refuses_a_duplicate() {
     let place = role_place();
     role_stamp(&place, "mutdoc:mutdoc", Some("sid-mut"));
-    let out = role_register(&place, "mutdoc:mutdoc", "planner", &["--anchor", "/repo"]);
+    let out = role_register(&place, "mutdoc:mutdoc", "orchestrator", &["--anchor", "/repo"]);
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
     let seat = start_seat(&place.socket, "mutdoc");
     assert!(seat.ready(), "隔離 seat が立つ");
@@ -1036,7 +1036,7 @@ fn acct_register_as(place: &AcctPlace, target: &str, account: &str, launch: &str
     let launch_file = fixture(&place.dir, "launch.txt", launch);
     let state = place.state.display().to_string();
     run_seat(&[
-        "register", "--state-dir", &state, "--target", target, "--role", "planner", "--account", account,
+        "register", "--state-dir", &state, "--target", target, "--role", "orchestrator", "--account", account,
         "--launch", &launch_file, "--anchor", &acct_anchor(place),
     ])
 }
@@ -1377,15 +1377,24 @@ fn role_doctor_rules(place: &RolePlace, body: &str) -> Output {
         .expect("binary を起動できる")
 }
 
-/// 登録 2 件（実在の target 1 件）を置いた置き場（tmux の server は呼び側が立てる）。
+/// 登録 1 件（anchor `/repo`）を置いた置き場（tmux の server は呼び側が立てる）。
+///
+/// 鍵は (役割, anchor) で役割は 1 つ（ADR-0045 §2 (1)）＝2 件を置くには anchor を分けるほかなく、
+/// anchor が増えると導入先の行と口座の trust の値も増える。**2 件が要る歯はその歯が自分で足す**
+/// （[`role_register_extra`]）。
 pub(super) fn role_doctor_place() -> RolePlace {
     let place = role_place();
-    for (target, role) in [("rolesdoc:rolesdoc", "planner"), ("gone:gone", "admin")] {
-        role_stamp(&place, target, Some("sid-doc"));
-        let out = role_register(&place, target, role, &["--anchor", "/repo"]);
-        assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
-    }
+    role_stamp(&place, "rolesdoc:rolesdoc", Some("sid-doc"));
+    let out = role_register(&place, "rolesdoc:rolesdoc", "orchestrator", &["--anchor", "/repo"]);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
     place
+}
+
+/// 別 anchor の登録 row を 1 件足す（鍵を分けるのは anchor・[`role_doctor_place`] の対）。
+pub(super) fn role_register_extra(place: &RolePlace, target: &str, anchor: &str) {
+    role_stamp(place, target, Some("sid-doc"));
+    let out = role_register(place, target, "orchestrator", &["--anchor", anchor]);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
 }
 
 // ─────────────────── doctor の口座の行の共有 fixture（s2-07l.233・account-autonomy.md §5・`account` / `rules` が使う） ───────────────────
@@ -1523,7 +1532,7 @@ fn launch_run(place: &AcctPlace, path: &str, target: &str, extra: &[&str]) -> Ou
     let state = place.state.display().to_string();
     let anchor = launch_anchor(place);
     let mut args = vec![
-        "seat", "launch", "--state-dir", &state, "--role", "planner", "--target", target, "--anchor", &anchor, "--tmux-socket", &place.socket,
+        "seat", "launch", "--state-dir", &state, "--role", "orchestrator", "--target", target, "--anchor", &anchor, "--tmux-socket", &place.socket,
     ];
     args.extend_from_slice(extra);
     Command::new(bin()).args(&args).env("PATH", path).output().expect("binary を起動できる")

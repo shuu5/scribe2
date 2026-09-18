@@ -9,21 +9,18 @@ use std::path::Path;
 /// 席の役割。**variant の列挙は core が持つ**（文書は写さない・ADR-0013 §2.1）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Role {
-    /// 計画と裁定の持ち込み先の席。
-    Planner,
-    /// 便を流す管理席。
-    Admin,
+    /// 人と話す唯一の席（ADR-0045 §2 (1)）。契約・設計・落ちる歯を書き、実装は自分で行わない。
+    Orchestrator,
 }
 
 /// [`Role`] の全 variant（宣言順）。
-pub const ALL: &[Role] = &[Role::Planner, Role::Admin];
+pub const ALL: &[Role] = &[Role::Orchestrator];
 
 impl Role {
     /// 行と引数に使う字面。
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Planner => "planner",
-            Self::Admin => "admin",
+            Self::Orchestrator => "orchestrator",
         }
     }
 
@@ -37,9 +34,9 @@ impl Role {
 ///
 /// どの役割がどの権能を持つかは rules 行 `role.<役割名>`（`RuleKind::RoleCapabilities`・値は名の列・裁定 id
 /// 付き）が持ち、ここは名の集合だけを閉じる。列に無い名は manifest の読み込みで `RuleError` になる
-/// （[`Capability::parse`] の失敗）。`Go` / `Relay` / `EditContract` は記録時点で対応する subcommand も path 種別も
-/// 無い（go の記帳の口は後続・中継は開発 session の道具・契約は台帳の write）＝行の値には在るが Bash 面では
-/// 照合されない宣言だけの権能である。
+/// （[`Capability::parse`] の失敗）。`Go` / `EditContract` は記録時点で対応する subcommand も path 種別も無い
+/// （go の記帳の口は後続・契約は台帳の write）＝行の値には在るが Bash 面では照合されない宣言だけの
+/// 権能である。`Launch` / `Merge` は器の dispatcher だけが行う操作で、席の行には並ばない（ADR-0045 §2 (1)）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Capability {
     /// 回答の記帳（`pipe answer`）。
@@ -50,8 +47,6 @@ pub enum Capability {
     Go,
     /// 便の起動（`pipe intake` / `run` / `resume` / `stop` / `retire`）。
     Launch,
-    /// 席間の中継（開発 session の道具の message・器の subcommand ではない）。
-    Relay,
     /// go 後の merge（`pipe land`）。
     Merge,
     /// 契約の編集（台帳の write・path 種別を持たない）。
@@ -60,6 +55,8 @@ pub enum Capability {
     EditDesignIntent,
     /// `docs/design/` の編集。
     EditDesignDoc,
+    /// 歯（`crates/<crate>/tests/` 配下）の編集。
+    EditTests,
     /// 上記以外の repo 内の編集。
     EditCode,
     /// repo root の外の編集。
@@ -72,11 +69,11 @@ pub const CAPABILITIES: &[Capability] = &[
     Capability::Approve,
     Capability::Go,
     Capability::Launch,
-    Capability::Relay,
     Capability::Merge,
     Capability::EditContract,
     Capability::EditDesignIntent,
     Capability::EditDesignDoc,
+    Capability::EditTests,
     Capability::EditCode,
     Capability::EditOutside,
 ];
@@ -89,11 +86,11 @@ impl Capability {
             Self::Approve => "approve",
             Self::Go => "go",
             Self::Launch => "launch",
-            Self::Relay => "relay",
             Self::Merge => "merge",
             Self::EditContract => "edit-contract",
             Self::EditDesignIntent => "edit-design-intent",
             Self::EditDesignDoc => "edit-design-doc",
+            Self::EditTests => "edit-tests",
             Self::EditCode => "edit-code",
             Self::EditOutside => "edit-outside",
         }

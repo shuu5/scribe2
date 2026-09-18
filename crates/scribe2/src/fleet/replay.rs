@@ -217,9 +217,11 @@ fn apply_account(state: &mut State, event: &Event) {
 /// 1 件の event を便へ反映する。
 fn apply_run(state: &mut State, event: &Event) {
     // 口座残量・登録・退役の行は便に紐づかない（`run` / `bead` を持たない）。ここで通すと id が空の
-    // 幽霊の便が 1 つ生まれ、`show` / `export` の件数が実在しない便を数える。退役は kind で見分ける
-    // （`account` の有無ではない＝口座つきの `SeatSpawned` は便に紐づく行・ADR-0027 §2.3）。
-    if event.kind.is_allowance() || event.registration.is_some() || event.kind.is_account_lifecycle() {
+    // 幽霊の便が 1 つ生まれ、`show` / `export` の件数が実在しない便を数える。登録と退役は **kind で
+    // 見分ける**（本体の有無ではない＝退役した役割の登録 row は本体を持たずに読まれる〔`Event::from_line`〕
+    // ので、本体で見分けると幽霊の便が 1 つ生まれる・`account` の有無でもない＝口座つきの `SeatSpawned` は
+    // 便に紐づく行・ADR-0027 §2.3）。
+    if event.kind.is_allowance() || event.kind == EventKind::SeatRegistered || event.kind.is_account_lifecycle() {
         return;
     }
     let run = state.runs.entry(event.run.clone()).or_insert_with(|| Run {

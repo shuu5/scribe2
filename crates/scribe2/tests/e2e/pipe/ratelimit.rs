@@ -456,7 +456,7 @@ pub(super) fn register_seat_account(state: &Path, anchor: &Path, account: &str) 
         detail: None,
         allowance: None,
         registration: Some(vessel::fleet::Registration {
-            role: vessel::seat::role::Role::Planner,
+            role: vessel::seat::role::Role::Orchestrator,
             anchor: anchor.display().to_string(),
             target: "rs:planner".to_owned(),
             sid: Some("sid-a".to_owned()),

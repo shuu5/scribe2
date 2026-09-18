@@ -1,7 +1,7 @@
 //! 席の権能の執行（`pre-tool-use` の role guard・設計 docs/design/seat-roles.md §3 / §4 / §6・
 //! ADR-0022 §2.2 / §2.3 / §2.5・SRS FR41 / FR45 / AC15 / AC16・憲法 C1 / C5 / C2 / C2.2 / C11.2 / C16）。
 //!
-//! 役割の規律（planner は実装しない・管理席は記帳しない）を**役割ごとの rules 行 1 つ**（`role.<役割名>`・
+//! 役割の規律（orchestrator は実装を自分で行わない・ADR-0045 §2 (1)）を**役割ごとの rules 行 1 つ**（`role.<役割名>`・
 //! 値は権能の名の列・裁定 id 付き）に置き、この guard がその行を読んで **2 面**で止める:
 //! (1) **Bash** — command 行が権能付き subcommand（[`CAPABILITY_COMMANDS`]）を含む周に、席の役割の行が
 //! その権能を持たなければ deny。(2) **Edit 系** — 編集先の path 種別（[`PathKind`]・repo root からの相対
@@ -25,7 +25,7 @@ use crate::pipe::{contract_path, worktrees_dir};
 use crate::polarity::{OnFailure, Polarity, Timing};
 use crate::rules::manifest::Manifest;
 use crate::rules::RuleValue;
-use crate::seat::role::{role_of_target, Capability, Role, ALL as ROLES};
+use crate::seat::role::{role_of_target, Capability, Role};
 use std::path::{Component, Path, PathBuf};
 
 /// この境界の極性: 操作の時点で止め、権能を解けない周は権能付きの操作を通さない。
@@ -43,6 +43,9 @@ const DESIGN_INTENT_DIR: &str = "design-intent";
 /// `docs/design/` の 2 段（[`PathKind::DesignDoc`]）。
 const DESIGN_DOC_DIRS: [&str; 2] = ["docs", "design"];
 
+/// 歯の段（[`PathKind::Tests`]・`crates/<crate>/tests/…` の 1 段目と 3 段目）。
+const TESTS_DIRS: [&str; 2] = ["crates", "tests"];
+
 /// subcommand の名の並びを閉じる token の末尾（`;` `&&` `|` `)` の直付け・`pipe answer;` の形）。
 const SEPARATORS: &[char] = &[';', '&', '|', ')'];
 
@@ -53,6 +56,8 @@ pub enum PathKind {
     DesignIntent,
     /// `docs/design/` 配下。
     DesignDoc,
+    /// 歯（`crates/<crate>/tests/` 配下）。
+    Tests,
     /// 上記以外の repo 内。
     Code,
     /// repo root の外（root からの相対 path が `..` で始まる・root を解けない周も同じ）。
@@ -63,6 +68,7 @@ pub enum PathKind {
 pub const PATH_KINDS: &[PathKind] = &[
     PathKind::DesignIntent,
     PathKind::DesignDoc,
+    PathKind::Tests,
     PathKind::Code,
     PathKind::Outside,
 ];
@@ -73,6 +79,7 @@ impl PathKind {
         match self {
             Self::DesignIntent => "design-intent",
             Self::DesignDoc => "design-doc",
+            Self::Tests => "tests",
             Self::Code => "code",
             Self::Outside => "outside",
         }
@@ -88,6 +95,7 @@ impl PathKind {
         match self {
             Self::DesignIntent => Capability::EditDesignIntent,
             Self::DesignDoc => Capability::EditDesignDoc,
+            Self::Tests => Capability::EditTests,
             Self::Code => Capability::EditCode,
             Self::Outside => Capability::EditOutside,
         }
@@ -100,13 +108,14 @@ impl PathKind {
             [first, ..] if *first == ".." => Self::Outside,
             [first, ..] if *first == DESIGN_INTENT_DIR => Self::DesignIntent,
             [first, second, ..] if [*first, *second] == DESIGN_DOC_DIRS => Self::DesignDoc,
+            [first, _, third, ..] if [*first, *third] == TESTS_DIRS => Self::Tests,
             _ => Self::Code,
         }
     }
 }
 
 /// 権能付き subcommand の名（`<NAME>` の直後の 2 語）→ 権能。**器の口だけ**を見る（`gh pr merge` 等の他 tool は
-/// 見ない）。`Go` / `Relay` / `EditContract` は対応する subcommand が無い（宣言だけ・module doc）。
+/// 見ない）。`Go` / `EditContract` は対応する subcommand が無い（宣言だけ・module doc）。
 pub const CAPABILITY_COMMANDS: &[(&str, Capability)] = &[
     ("pipe answer", Capability::Answer),
     ("pipe approve", Capability::Approve),
@@ -245,7 +254,7 @@ pub struct Located {
 ///
 /// 相対 path の基準は payload の `cwd`。root の外（字句で `..` へ抜ける・実体が symlink で外を指す）と root を
 /// 解けない周は `Outside`。便の worktree の中は worktree 相対で分類する（便の木は repo の写しである）。
-/// `.worktrees/` 直下の便の器でない worktree（`<root>/.worktrees/<name>/<rel>`・planner が docs PR 用に切る木）も
+/// `.worktrees/` 直下の便の器でない worktree（`<root>/.worktrees/<name>/<rel>`・席が docs PR 用に切る木）も
 /// repo の写しとして `<rel>` で分類する（便の印は開かない＝`run: None`）。`.worktrees/<name>` そのものは `Code`。
 pub fn locate(root: Option<&Path>, cwd: &Path, target: &str) -> Located {
     let outside = Located { kind: PathKind::Outside, run: None };
@@ -381,7 +390,7 @@ impl RefuseReason {
         Self::RegistryUnreadable,
         Self::Unregistered,
         Self::RulesUnreadable,
-        Self::NoRow(Role::Planner),
+        Self::NoRow(Role::Orchestrator),
         Self::NoAnchor,
     ];
 
@@ -409,10 +418,10 @@ impl RefuseReason {
     /// 持たない（N2）。
     pub fn route(self) -> &'static str {
         match self {
-            Self::TargetUnresolved => "seat launch --state-dir <S> --role <planner|admin> --target <session:window>",
+            Self::TargetUnresolved => "seat launch --state-dir <S> --role <orchestrator> --target <session:window>",
             Self::RegistryUnreadable => "doctor --state-dir <S>",
             Self::Unregistered => {
-                "seat register --state-dir <S> --target <session:window> --role <planner|admin> --account <L> --launch <FILE>"
+                "seat register --state-dir <S> --target <session:window> --role <orchestrator> --account <L> --launch <FILE>"
             }
             Self::RulesUnreadable => "doctor --state-dir <S> --rules <PATH>",
             Self::NoRow(_) => "rules get <row> --rules <PATH>",
@@ -459,7 +468,7 @@ pub fn judge(subject: &Subject, role: Role, manifest: &Manifest) -> RoleDecision
     if missing.is_empty() {
         RoleDecision::Allow
     } else {
-        RoleDecision::Deny(denied(role, &missing, manifest))
+        RoleDecision::Deny(denied(role, &missing))
     }
 }
 
@@ -477,26 +486,18 @@ fn held_by(manifest: &Manifest, role: Role) -> Option<Vec<Capability>> {
     Some(names.iter().filter_map(|name| Capability::parse(name)).collect())
 }
 
-/// deny 文: **権能を持つ役割の名と rules 行 id** を名指す（設計 §4・字面は現物が正本）。
-fn denied(role: Role, missing: &[Capability], manifest: &Manifest) -> String {
+/// deny 文: **欠けた権能と rules 行 id** を名指す（設計 §4・字面は現物が正本）。
+///
+/// 役割は orchestrator 1 つなので「他の役割が持つ」形は持たない（ADR-0045 §2 (1)）——欠けた権能は
+/// 行に無いということで、行 id を 1 本名指せば直す先が決まる。
+fn denied(role: Role, missing: &[Capability]) -> String {
     let names: Vec<&str> = missing.iter().map(|cap| cap.as_str()).collect();
-    let holders: Vec<String> = ROLES
-        .iter()
-        .copied()
-        .filter(|other| held_by(manifest, *other).is_some_and(|held| missing.iter().all(|cap| held.contains(cap))))
-        .map(|other| format!("{} 席の権能（rules 行 {}）", other.as_str(), row_id(other)))
-        .collect();
-    let rows: Vec<String> = ROLES.iter().copied().map(row_id).collect();
-    if holders.is_empty() {
-        format!(
-            "{NAME}: この操作（{}）はどの役割の席の権能でもない（rules 行 {}）＝{} 席では止める",
-            names.join("+"),
-            rows.join(" / "),
-            role.as_str()
-        )
-    } else {
-        format!("{NAME}: この操作（{}）は {}＝{} 席は持たない", names.join("+"), holders.join(" / "), role.as_str())
-    }
+    format!(
+        "{NAME}: この操作（{}）は席の権能でない（rules 行 {}）＝{} 席では止める",
+        names.join("+"),
+        row_id(role),
+        role.as_str()
+    )
 }
 
 /// 権能を解けない周の 1 行（FailClosed・理由の 1 語つき・末尾に代替ルート `route=<NAME> <1 行>`・§13）。
@@ -532,15 +533,15 @@ mod tests {
         Config { cases: 256, failure_persistence: None, ..Config::default() }
     }
 
-    /// `role.planner` が `held` を持つ manifest（`role.admin` は無い）。空の列は行を置けない（loader が空の
-    /// 配列を拒む）ので、行の無い manifest にする（＝権能なし）。
+    /// `role.orchestrator` が `held` を持つ manifest。空の列は行を置けない（loader が空の配列を拒む）ので、
+    /// 行の無い manifest にする（＝権能なし＝`NoRow` の枝）。
     fn manifest_with(held: &[Capability]) -> Manifest {
         let names: Vec<String> = held.iter().map(|cap| format!("\"{}\"", cap.as_str())).collect();
         let row = if names.is_empty() {
             String::new()
         } else {
             format!(
-                "\n[[rule]]\nid = \"role.planner\"\nkind = \"RoleCapabilities\"\nvalue = [{}]\nenabled = true\nruling = \"r\"\nruled_at = \"d\"\n",
+                "\n[[rule]]\nid = \"role.orchestrator\"\nkind = \"RoleCapabilities\"\nvalue = [{}]\nenabled = true\nruling = \"r\"\nruled_at = \"d\"\n",
                 names.join(", ")
             )
         };
@@ -649,43 +650,61 @@ mod tests {
         }
     }
 
-    /// 判定は行の値だけを読む: 持てば Allow・欠けば Deny（deny 文は権能を持つ役割の名と行 id）・
-    /// 行の無い役割は権能なし・印で開いた path は種別の権能が無くても Allow。
+    /// 判定は行の値だけを読む: 持てば Allow・欠けば Deny（deny 文は欠けた権能と行 id）・行の無い周は
+    /// 権能なし・印で開いた path は種別の権能が無くても Allow。
     #[test]
     fn role_guard_judge_reads_the_role_row() {
         let manifest = manifest_with(&[Capability::Answer, Capability::EditDesignDoc]);
         let answer = Subject::Capabilities(vec![Capability::Answer]);
-        assert_eq!(judge(&answer, Role::Planner, &manifest), RoleDecision::Allow);
+        assert_eq!(judge(&answer, Role::Orchestrator, &manifest), RoleDecision::Allow);
         let launch = Subject::Capabilities(vec![Capability::Answer, Capability::Launch]);
-        let RoleDecision::Deny(line) = judge(&launch, Role::Planner, &manifest) else {
+        let RoleDecision::Deny(line) = judge(&launch, Role::Orchestrator, &manifest) else {
             panic!("欠けた権能は deny");
         };
         assert!(line.starts_with(&format!("{NAME}: ")), "器が名乗る: {line}");
         assert!(line.contains("launch") && !line.contains("answer"), "欠けた権能だけを名指す: {line}");
-        assert!(line.contains("role.planner") && line.contains("role.admin"), "行 id を名指す: {line}");
-        let RoleDecision::Deny(line) = judge(&answer, Role::Admin, &manifest) else {
-            panic!("行の無い役割は権能なし");
+        assert!(line.contains("role.orchestrator"), "行 id を名指す: {line}");
+        let RoleDecision::Deny(line) = judge(&answer, Role::Orchestrator, &manifest_with(&[])) else {
+            panic!("行の無い manifest は権能なし");
         };
-        assert!(line.contains("reason=no-row role.admin"), "{line}");
+        assert!(line.contains("reason=no-row role.orchestrator"), "{line}");
         let doc = Subject::Path { kind: PathKind::DesignDoc, opened: false };
-        assert_eq!(judge(&doc, Role::Planner, &manifest), RoleDecision::Allow);
+        assert_eq!(judge(&doc, Role::Orchestrator, &manifest), RoleDecision::Allow);
         let code = Subject::Path { kind: PathKind::Code, opened: false };
-        let RoleDecision::Deny(line) = judge(&code, Role::Planner, &manifest) else {
+        let RoleDecision::Deny(line) = judge(&code, Role::Orchestrator, &manifest) else {
             panic!("種別の権能が無ければ deny");
         };
         assert!(line.contains("edit-code"), "{line}");
         let opened = Subject::Path { kind: PathKind::Code, opened: true };
-        assert_eq!(judge(&opened, Role::Planner, &manifest), RoleDecision::Allow, "印で開いた path は通る");
-        // 権能を持つ役割の名を deny 文に含める（admin の行が在る manifest）。
-        let both = Manifest::parse(
-            "schema = 1\n\n[[rule]]\nid = \"role.planner\"\nkind = \"RoleCapabilities\"\nvalue = [\"answer\"]\nenabled = true\nruling = \"r\"\nruled_at = \"d\"\n\n[[rule]]\nid = \"role.admin\"\nkind = \"RoleCapabilities\"\nvalue = [\"launch\"]\nenabled = true\nruling = \"r\"\nruled_at = \"d\"\n",
-        )
-        .unwrap_or_else(|errors| panic!("{errors:?}"));
-        let RoleDecision::Deny(line) = judge(&answer, Role::Admin, &both) else {
-            panic!("admin は answer を持たない");
+        assert_eq!(judge(&opened, Role::Orchestrator, &manifest), RoleDecision::Allow, "印で開いた path は通る");
+    }
+
+    /// 歯の段（`crates/<crate>/tests/`）と src の段は**別の権能**である（ADR-0045 §2 (1)）: orchestrator の行は
+    /// `edit-tests` を持ち `edit-code` を持たないので、歯の編集は通り src の編集は止まり、`design-intent/` は通る。
+    ///
+    /// 分類は path の段だけで決まる（字面の語彙で判定しない）＝`crates/x/tests/…` は `Tests`・`crates/x/src/…`
+    /// と `tests/…`（crate の外）は `Code` である。
+    #[test]
+    fn role_guard_orchestrator_may_edit_teeth_but_not_src() {
+        let row = manifest_with(&[Capability::EditTests, Capability::EditDesignIntent, Capability::EditOutside]);
+        let judged = |rel: &str| {
+            let kind = PathKind::of_relative(Path::new(rel));
+            (kind, judge(&Subject::Path { kind, opened: false }, Role::Orchestrator, &row))
         };
-        assert!(line.contains("planner 席の権能（rules 行 role.planner）"), "権能を持つ役割と行 id: {line}");
-        assert!(line.contains("admin 席は持たない"), "{line}");
+        assert_eq!(judged("crates/scribe2/tests/e2e/hook.rs"), (PathKind::Tests, RoleDecision::Allow), "歯は通る");
+        assert_eq!(
+            judged("design-intent/decisions/ADR-0045.html"),
+            (PathKind::DesignIntent, RoleDecision::Allow),
+            "design-intent は通る"
+        );
+        for rel in ["crates/scribe2/src/hook/role_guard.rs", "tests/e2e/hook.rs", "crates/scribe2/tests.rs"] {
+            let (kind, decision) = judged(rel);
+            assert_eq!(kind, PathKind::Code, "{rel} は src の段");
+            let RoleDecision::Deny(line) = decision else {
+                panic!("{rel}: src の編集は止まる");
+            };
+            assert!(line.contains("edit-code"), "{rel}: 欠けた権能を名指す: {line}");
+        }
     }
 
     /// 理由の字面 6 種（現行のまま・宣言順）。
@@ -703,7 +722,7 @@ mod tests {
         }
         assert_eq!(RefuseReason::ALL[0], RefuseReason::TargetUnresolved, "先頭は target の段");
         assert_eq!(RefuseReason::ALL[5], RefuseReason::NoAnchor, "末尾は anchor の段");
-        assert_eq!(RefuseReason::NoRow(Role::Admin).render(), "no-row role.admin", "行 id を伴う");
+        assert_eq!(RefuseReason::NoRow(Role::Orchestrator).render(), "no-row role.orchestrator", "行 id を伴う");
         assert_eq!(RefuseReason::Unregistered.render(), "unregistered", "行 id を伴わない");
     }
 
@@ -726,7 +745,11 @@ mod tests {
         assert!(RefuseReason::NoAnchor.route().starts_with("vessel init "), "{}", RefuseReason::NoAnchor.route());
         assert!(RefuseReason::RegistryUnreadable.route().starts_with("doctor "), "{}", RefuseReason::RegistryUnreadable.route());
         assert!(RefuseReason::RulesUnreadable.route().starts_with("doctor "), "{}", RefuseReason::RulesUnreadable.route());
-        assert!(RefuseReason::NoRow(Role::Planner).route().starts_with("rules get "), "{}", RefuseReason::NoRow(Role::Planner).route());
+        assert!(
+            RefuseReason::NoRow(Role::Orchestrator).route().starts_with("rules get "),
+            "{}",
+            RefuseReason::NoRow(Role::Orchestrator).route()
+        );
         assert!(RefuseReason::TargetUnresolved.route().starts_with("seat launch "), "{}", RefuseReason::TargetUnresolved.route());
     }
 
@@ -748,12 +771,15 @@ mod tests {
         }
         assert_eq!(unanchored_line(&subject), refused(&subject, RefuseReason::NoAnchor));
         assert!(unanchored_line(&subject).contains("reason=no-anchor（"), "{}", unanchored_line(&subject));
-        let RoleDecision::Deny(line) = judge(&subject, Role::Admin, &manifest_with(&[Capability::Answer])) else {
-            panic!("行の無い役割は権能なし");
+        let RoleDecision::Deny(line) = judge(&subject, Role::Orchestrator, &manifest_with(&[])) else {
+            panic!("行の無い manifest は権能なし");
         };
-        assert_eq!(line, refused(&subject, RefuseReason::NoRow(Role::Admin)));
-        assert!(line.contains("reason=no-row role.admin（"), "{line}");
-        assert!(line.ends_with(&format!(" route={NAME} {}", RefuseReason::NoRow(Role::Admin).route())), "{line}");
+        assert_eq!(line, refused(&subject, RefuseReason::NoRow(Role::Orchestrator)));
+        assert!(line.contains("reason=no-row role.orchestrator（"), "{line}");
+        assert!(
+            line.ends_with(&format!(" route={NAME} {}", RefuseReason::NoRow(Role::Orchestrator).route())),
+            "{line}"
+        );
     }
 
     /// 記録の種別の字面。
@@ -763,7 +789,7 @@ mod tests {
         assert_eq!(caps.render(), "capability=answer+launch");
         assert_eq!(Subject::Path { kind: PathKind::Code, opened: false }.render(), "path=code");
         assert_eq!(Subject::Path { kind: PathKind::Code, opened: true }.render(), "path=code opened");
-        assert_eq!(PATH_KINDS.len(), 4, "path 種別は 4 つ");
+        assert_eq!(PATH_KINDS.len(), 5, "path 種別は 5 つ（歯の段を含む）");
     }
 
     /// 権能の名か表に無い語。
@@ -829,9 +855,9 @@ mod tests {
             let subject = Subject::Capabilities(matched.clone());
             let mut held = matched.clone();
             held.extend(extra.iter().copied());
-            prop_assert_eq!(judge(&subject, Role::Planner, &manifest_with(&held)), RoleDecision::Allow);
+            prop_assert_eq!(judge(&subject, Role::Orchestrator, &manifest_with(&held)), RoleDecision::Allow);
             let short: Vec<Capability> = held.iter().copied().filter(|cap| Some(cap) != matched.first()).collect();
-            prop_assert!(matches!(judge(&subject, Role::Planner, &manifest_with(&short)), RoleDecision::Deny(_)));
+            prop_assert!(matches!(judge(&subject, Role::Orchestrator, &manifest_with(&short)), RoleDecision::Deny(_)));
         }
 
         /// 照合は行の語の並びだけを見る＝行の中の `<NAME> <sub> <sub2>` の 3 語窓が表に無ければ空。

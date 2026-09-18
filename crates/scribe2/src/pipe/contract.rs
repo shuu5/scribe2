@@ -31,7 +31,7 @@ const OPTIONAL: &[&str] = &["classes", "opens"];
 pub const CLASSES: &[&str] = &["delete", "publish", "consume"];
 
 /// 契約の印 `opens` の key（設計 seat-roles.md §3「契約が開く例外」・AC16）。値は path 種別
-/// （[`PathKind`]）の名の列で、管理席が自分の手で編集してよい種別を便ごとに開く。印の無い便は従来どおり。
+/// （[`PathKind`]）の名の列で、席が自分の手で編集してよい種別を便ごとに開く。印の無い便は従来どおり。
 pub const OPENS: &str = "opens";
 
 /// 契約 file が読めない理由。**行番号を必ず持つ**（0 は file 全体を指す）。
@@ -79,7 +79,7 @@ pub struct Contract {
     pub design: String,
     /// 3 クラスの自己申告（既定 空）。
     pub classes: Vec<String>,
-    /// 契約の印（管理席の編集を開く path 種別の名・既定 空＝印なし・[`OPENS`]）。
+    /// 契約の印（席の編集を開く path 種別の名・既定 空＝印なし・[`OPENS`]）。
     pub opens: Vec<String>,
 }
 

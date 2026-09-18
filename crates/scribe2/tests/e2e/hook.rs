@@ -683,7 +683,7 @@ fn hook_command_guard_denies_a_denied_sequence_from_bash() {
 
     // fixture の manifest（`--rules`）でも同じ deny（値は行から来る）。
     let rules = state.join("rules.toml");
-    fs::write(&rules, role_rules_text(PLANNER_CAPS, Some(ADMIN_CAPS))).expect("rules を書ける");
+    fs::write(&rules, role_rules_text(ORCHESTRATOR_CAPS)).expect("rules を書ける");
     let out = run_hook_args(&["pre-tool-use", "--rules", &rules.display().to_string()], &payload);
     assert_command_deny(&out, "git push --force", "fixture の manifest の deny");
     // 語列の先頭語が segment の先頭語でない command（`echo git push --force`）は当たらない。
@@ -734,7 +734,7 @@ fn hook_command_guard_denies_when_rules_unreadable() {
     }
     // 行の無い manifest（読めるが `runner.denied_commands` が無い）も deny。
     let rowless = state.join("rowless.toml");
-    fs::write(&rowless, format!("schema = 1\n{}", role_rows_text(PLANNER_CAPS, Some(ADMIN_CAPS)))).expect("rules を書ける");
+    fs::write(&rowless, format!("schema = 1\n{}", role_rows_text(ORCHESTRATOR_CAPS))).expect("rules を書ける");
     let out = run_hook_args(&["pre-tool-use", "--rules", &rowless.display().to_string()], &payload);
     assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "行の無い manifest は deny: {}", stderr_text(&out));
     assert!(stderr_text(&out).contains("reason=no-row runner.denied_commands"), "{}", stderr_text(&out));
@@ -1986,7 +1986,7 @@ fn assert_attributed(line: &str, seat: Option<&str>, why: &str) {
 fn seat_attrib_hook_unmeasured_edit_records_the_seat_named_by_pane() {
     let place = role_place();
     let name = "hookattrib";
-    let (guard, pane) = role_seat(&place, name, Some("planner"));
+    let (guard, pane) = role_seat(&place, name, Some("orchestrator"));
     let seat = format!("{name}_{name}");
     let (state_s, target) = (place.state.display().to_string(), place.repo.join("design-intent").join("x.html").display().to_string());
     let cases: [(&str, Vec<&str>, Option<&str>, bool); 4] = [
@@ -2113,16 +2113,22 @@ struct RolePlace {
     socket: String,
     /// 登録の雛形の path。
     launch: String,
-    /// fixture の rules manifest の path（役割ごとの行 2 つ）。
+    /// fixture の rules manifest の path（役割の行 1 本）。
     rules: String,
+    /// 偽の台帳 client の path（席の指示文の `{ledger}` を固定する）。
+    bd: String,
 }
 
-/// planner の権能（裁定 `user 2026-09-13T03:14Z` の値に、裁定 `user 2026-09-13T12:04Z` の `edit-outside` を足したもの）。
-const PLANNER_CAPS: &[&str] =
-    &["answer", "approve", "go", "relay", "edit-contract", "edit-design-intent", "edit-design-doc", "edit-outside"];
+/// orchestrator の権能（裁定 `user 2026-09-18T08:3xZ`・ADR-0045 §2 (1) の値）。**起動と着地（launch / merge）と
+/// src の編集（edit-code）は持たない**。
+const ORCHESTRATOR_CAPS: &[&str] =
+    &["answer", "approve", "go", "edit-contract", "edit-design-intent", "edit-design-doc", "edit-tests", "edit-outside"];
 
-/// 管理席の権能（同じ 2 つの裁定）。
-const ADMIN_CAPS: &[&str] = &["launch", "relay", "merge", "edit-outside"];
+/// 台帳の fixture（`bd --readonly list --json` の配列・open 2 / in_progress 1 / blocked 0）。
+const LEDGER_JSON: &str = "[{\"id\":\"x-1\",\"status\":\"open\"},{\"id\":\"x-2\",\"status\":\"open\"},{\"id\":\"x-3\",\"status\":\"in_progress\"}]";
+
+/// [`LEDGER_JSON`] を数えた 1 行（席の指示文の `{ledger}` の値）。
+const LEDGER_LINE: &str = "open=2 in_progress=1 blocked=0";
 
 /// 禁じる語列の fixture（rules 行 `runner.denied_commands`・ADR-0025 §2.1 の初期値の一部・`s2-07l.168`）。
 const DENIED_SEQUENCES: &[&str] = &["cargo mutants", "git push --force", "git push -f", "git branch -D"];
@@ -2137,25 +2143,29 @@ fn denied_row_text() -> String {
     )
 }
 
-/// 役割ごとの行の本文（`admin` が `None` なら管理席の行を置かない・`schema` 行と禁じる語列の行は持たない）。
-fn role_rows_text(planner: &[&str], admin: Option<&[&str]>) -> String {
-    let row = |id: &str, names: &[&str]| {
-        let quoted: Vec<String> = names.iter().map(|name| format!("\"{name}\"")).collect();
-        format!(
-            "\n[[rule]]\nid = \"{id}\"\nkind = \"RoleCapabilities\"\nvalue = [{}]\nenabled = true\nruling = \"r\"\nruled_at = \"2026-09-13\"\n",
-            quoted.join(", ")
-        )
-    };
-    let mut text = row("role.planner", planner);
-    if let Some(names) = admin {
-        text.push_str(&row("role.admin", names));
-    }
-    text
+/// 役割の行の本文（役割は orchestrator 1 つ＝行も 1 本・`schema` 行と禁じる語列の行は持たない）。
+fn role_rows_text(caps: &[&str]) -> String {
+    let quoted: Vec<String> = caps.iter().map(|name| format!("\"{name}\"")).collect();
+    format!(
+        "\n[[rule]]\nid = \"role.orchestrator\"\nkind = \"RoleCapabilities\"\nvalue = [{}]\nenabled = true\nruling = \"r\"\nruled_at = \"2026-09-18\"\n",
+        quoted.join(", ")
+    )
 }
 
-/// 役割ごとの行と禁じる語列の行を持つ rules manifest の本文（`admin` が `None` なら管理席の行を置かない）。
-fn role_rules_text(planner: &[&str], admin: Option<&[&str]>) -> String {
-    format!("schema = 1\n{}{}", denied_row_text(), role_rows_text(planner, admin))
+/// `ORCHESTRATOR_CAPS` から 1 つ抜いた列（負例の行＝通したのが行の値であって判定の穴でないことを測る）。
+fn caps_without(drop: &str) -> Vec<&'static str> {
+    ORCHESTRATOR_CAPS.iter().copied().filter(|name| *name != drop).collect()
+}
+
+/// 台帳の待ち上限の行（`seat.ledger_timeout_s`・席の指示文の `{ledger}` が読む・行が無い周は `unknown`）。
+const LEDGER_TIMEOUT_ROW: &str = concat!(
+    "\n[[rule]]\nid = \"seat.ledger_timeout_s\"\nkind = \"LedgerTimeoutS\"\nvalue = 60\n",
+    "enabled = true\nruling = \"r\"\nruled_at = \"2026-09-12\"\n",
+);
+
+/// 役割の行と禁じる語列の行と台帳の待ち上限の行を持つ rules manifest の本文。
+fn role_rules_text(caps: &[&str]) -> String {
+    format!("schema = 1\n{}{}{LEDGER_TIMEOUT_ROW}", denied_row_text(), role_rows_text(caps))
 }
 
 /// 置き場を 1 つ作る（rules は裁定の値と同じ 2 行）。
@@ -2171,7 +2181,8 @@ fn role_place() -> RolePlace {
     let launch = sock_dir.join("launch.txt");
     fs::write(&launch, "claude\n").expect("雛形を書ける");
     let rules = sock_dir.join("rules.toml");
-    fs::write(&rules, role_rules_text(PLANNER_CAPS, Some(ADMIN_CAPS))).expect("rules を書ける");
+    fs::write(&rules, role_rules_text(ORCHESTRATOR_CAPS)).expect("rules を書ける");
+    let bd = fake_bd(&sock_dir, LEDGER_JSON);
     RolePlace {
         repo,
         state,
@@ -2179,7 +2190,25 @@ fn role_place() -> RolePlace {
         socket,
         launch: launch.display().to_string(),
         rules: rules.display().to_string(),
+        bd,
     }
+}
+
+/// 偽の台帳 client を 1 本置く（`seat rebrief` の歯と同じ型・引数に依らず `body` を stdout へ出す）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn fake_bd(dir: &Path, body: &str) -> String {
+    use std::os::unix::fs::PermissionsExt;
+    let json = dir.join("bd.json");
+    fs::write(&json, body).expect("台帳の fixture を書ける");
+    let path = dir.join("bd");
+    fs::write(&path, format!("#!/bin/sh\ncat \"{}\"\n", json.display())).expect("偽の bd を書ける");
+    let mut perm = fs::metadata(&path).expect("偽の bd の権限を読める").permissions();
+    perm.set_mode(0o755);
+    fs::set_permissions(&path, perm).expect("偽の bd を実行可能にできる");
+    path.display().to_string()
 }
 
 /// 独立 socket に席を立て、hook の打刻（session-start）で sid を置き、`role` が在れば `seat register` で
@@ -2252,38 +2281,42 @@ fn assert_role_record(state: &Path, before: usize, what: &str, seat: &str) {
     assert_attributed(&line, Some(seat), what);
 }
 
-/// (1)(2)(12): 管理席の target から `pipe answer` を含む Bash → deny（deny 文に権能を持つ役割の名と rules 行 id・
-/// 記録 1 行）／planner の target から同じ command → allow（記録 1 行）。`--project` 無し + cwd = anchor の形
-/// （旧 hooks.json）でも cwd で解けて同じ deny（互換）。埋め込み manifest（`--rules` 無し）でも同じ。
+/// (1)(2)(12): 登録済みの席の Bash 面は**行の値だけ**で決まる: `pipe answer`（行が持つ）→ allow（記録 1 行）・
+/// `pipe run`（起動は dispatcher の口ゆえ行に無い）→ deny（deny 文は欠けた権能と rules 行 id・記録 1 行）。
+/// 負例として `answer` を抜いた行では同じ command が deny＝通したのは行の値であって判定の穴ではない。
+/// 埋め込み manifest（`--rules` 無し）でも同じ判定＝裁定の値が binary に在る。
 #[test]
-fn hook_role_bash_face_denies_admin_and_allows_planner_for_answer() {
+fn hook_role_bash_face_allows_answer_and_denies_launch() {
     let place = role_place();
-    let (admin, admin_pane) = role_seat(&place, "roleadmin", Some("admin"));
-    let (planner, planner_pane) = role_seat(&place, "roleplanner", Some("planner"));
+    let (seat, pane) = role_seat(&place, "rolebash", Some("orchestrator"));
     let payload = bash_payload(&place.repo, &answer_line());
 
     let before = role_records(&place.state).len();
-    let out = run_role_hook(&place, &admin_pane, &[], &payload);
-    let text = assert_role_deny(&out, "管理席の answer");
-    assert!(text.starts_with(&format!("{NAME}: ")), "器が名乗る: {text}");
-    assert!(text.contains("answer"), "権能を名指す: {text}");
-    assert!(text.contains("planner 席の権能（rules 行 role.planner）"), "権能を持つ役割の名と rules 行 id: {text}");
-    assert!(text.contains("admin 席は持たない"), "自席の役割: {text}");
-    assert_role_record(&place.state, before, "role-deny capability=answer", "roleadmin_roleadmin");
+    assert_silent(&run_role_hook(&place, &pane, &[], &payload), "行が持つ answer は通す");
+    assert_role_record(&place.state, before, "role-allow capability=answer", "rolebash_rolebash");
 
+    let launch = bash_payload(&place.repo, &format!("{NAME} pipe run --run r --repo ."));
     let before = role_records(&place.state).len();
-    let out = run_role_hook(&place, &planner_pane, &[], &payload);
-    assert_silent(&out, "planner の answer は通す");
-    assert_role_record(&place.state, before, "role-allow capability=answer", "roleplanner_roleplanner");
+    let text = assert_role_deny(&run_role_hook(&place, &pane, &[], &launch), "行に無い launch");
+    assert!(text.starts_with(&format!("{NAME}: ")), "器が名乗る: {text}");
+    assert!(text.contains("launch"), "欠けた権能を名指す: {text}");
+    assert!(text.contains("role.orchestrator"), "rules 行 id: {text}");
+    assert_role_record(&place.state, before, "role-deny capability=launch", "rolebash_rolebash");
 
-    // 埋め込み manifest（tracked の `role.*` の行）でも同じ判定＝裁定の値が binary に在る。
-    let out = run_hook_args(&["pre-tool-use", "--pane", &admin_pane, "--tmux-socket", &place.socket], &payload);
-    let text = assert_role_deny(&out, "埋め込み manifest でも管理席の answer は deny");
-    assert!(text.contains("role.planner"), "{text}");
-    let out = run_hook_args(&["pre-tool-use", "--pane", &planner_pane, "--tmux-socket", &place.socket], &payload);
-    assert_silent(&out, "埋め込み manifest でも planner の answer は通す");
-    drop(admin);
-    drop(planner);
+    // 負例: `answer` を抜いた行では同じ command が deny。
+    let stripped = place.sock_dir.join("no-answer.toml");
+    fs::write(&stripped, role_rules_text(&caps_without("answer"))).unwrap_or_else(|err| panic!("{err}"));
+    let args = ["pre-tool-use", "--pane", &pane, "--tmux-socket", &place.socket, "--rules", &stripped.display().to_string()];
+    let text = assert_role_deny(&run_hook_args(&args, &payload), "answer の無い行");
+    assert!(text.contains("answer"), "{text}");
+
+    // 埋め込み manifest（tracked の `role.orchestrator` の行）でも同じ判定。
+    let out = run_hook_args(&["pre-tool-use", "--pane", &pane, "--tmux-socket", &place.socket], &payload);
+    assert_silent(&out, "埋め込み manifest でも answer は通す");
+    let out = run_hook_args(&["pre-tool-use", "--pane", &pane, "--tmux-socket", &place.socket], &launch);
+    let text = assert_role_deny(&out, "埋め込み manifest でも launch は deny");
+    assert!(text.contains("role.orchestrator"), "{text}");
+    drop(seat);
     clean(&[&place.repo, &place.state, &place.sock_dir]);
 }
 
@@ -2350,59 +2383,56 @@ fn hook_role_guard_route_unregistered_names_seat_register() {
     clean(&[&place.repo, &place.state, &place.sock_dir, &bare]);
 }
 
-/// (5)(7)(10): Edit 系は path 種別で判定する: 管理席の code path → deny・planner の design-intent → allow・
-/// planner の code path → deny・`README.md`（Code）は両役割とも deny（裁定: code は誰も持たない）・
-/// `docs/design/x.md` は planner だけ allow。権能付きでない Bash（`ls`）は通す（記録なし・write-set の policy が
-/// 在っても Bash は write-set guard に届かない）。
+/// (5)(7)(10): Edit 系は path 種別で判定する（ADR-0045 §2 (1)）: `design-intent/` と `docs/design/` と
+/// 歯（`crates/<crate>/tests/`）→ allow・src と `README.md`（どちらも Code）→ deny（行に `edit-code` が無い）。
+/// 権能付きでない Bash（`ls`）は通す（記録なし・write-set の policy が在っても Bash は write-set guard に届かない）。
 #[test]
-fn hook_role_edit_face_classifies_path_kind_per_role() {
+fn hook_role_edit_face_classifies_path_kind() {
     let place = role_place();
-    let (admin, admin_pane) = role_seat(&place, "roleeditadmin", Some("admin"));
-    let (planner, planner_pane) = role_seat(&place, "roleeditplanner", Some("planner"));
+    let (seat, pane) = role_seat(&place, "roleedit", Some("orchestrator"));
     let edit = |file: &str| tool_payload(&place.repo, "Edit", file);
 
     let before = role_records(&place.state).len();
-    let text = assert_role_deny(&run_role_hook(&place, &admin_pane, &[], &edit("src/lib.rs")), "管理席の code");
+    let text = assert_role_deny(&run_role_hook(&place, &pane, &[], &edit("src/lib.rs")), "src の編集");
     assert!(text.contains("edit-code"), "種別の権能を名指す: {text}");
-    assert_role_record(&place.state, before, "role-deny path=code", "roleeditadmin_roleeditadmin");
+    assert_role_record(&place.state, before, "role-deny path=code", "roleedit_roleedit");
 
     let before = role_records(&place.state).len();
-    let out = run_role_hook(&place, &planner_pane, &[], &edit("design-intent/spec/srs.html"));
-    assert_silent(&out, "planner の design-intent は通す");
-    assert_role_record(&place.state, before, "role-allow path=design-intent", "roleeditplanner_roleeditplanner");
+    assert_silent(&run_role_hook(&place, &pane, &[], &edit("design-intent/spec/srs.html")), "design-intent は通す");
+    assert_role_record(&place.state, before, "role-allow path=design-intent", "roleedit_roleedit");
 
-    let text = assert_role_deny(&run_role_hook(&place, &planner_pane, &[], &edit("src/lib.rs")), "planner の code");
-    assert!(text.contains("edit-code") && text.contains("どの役割の席の権能でもない"), "{text}");
-    for (pane, why) in [(&admin_pane, "管理席"), (&planner_pane, "planner")] {
-        assert_role_deny(&run_role_hook(&place, pane, &[], &edit("README.md")), &format!("{why} の README.md（Code）"));
-    }
-    assert_silent(&run_role_hook(&place, &planner_pane, &[], &edit("docs/design/x.md")), "planner の設計 doc は通す");
-    let text = assert_role_deny(&run_role_hook(&place, &admin_pane, &[], &edit("docs/design/x.md")), "管理席の設計 doc");
-    assert!(text.contains("planner 席の権能（rules 行 role.planner）"), "{text}");
+    let before = role_records(&place.state).len();
+    assert_silent(&run_role_hook(&place, &pane, &[], &edit("crates/scribe2/tests/e2e/hook.rs")), "歯は通す");
+    assert_role_record(&place.state, before, "role-allow path=tests", "roleedit_roleedit");
+
+    assert_role_deny(&run_role_hook(&place, &pane, &[], &edit("README.md")), "README.md（Code）");
+    assert_silent(&run_role_hook(&place, &pane, &[], &edit("docs/design/x.md")), "設計 doc は通す");
+    // 負例: `edit-tests` を抜いた行では歯の編集も deny（通したのは行の値であって判定の穴ではない）。
+    let stripped = place.sock_dir.join("no-tests.toml");
+    fs::write(&stripped, role_rules_text(&caps_without("edit-tests"))).unwrap_or_else(|err| panic!("{err}"));
+    let args = ["pre-tool-use", "--pane", &pane, "--tmux-socket", &place.socket, "--rules", &stripped.display().to_string()];
+    let text = assert_role_deny(&run_hook_args(&args, &edit("crates/scribe2/tests/e2e/hook.rs")), "edit-tests の無い行");
+    assert!(text.contains("edit-tests"), "種別の権能を名指す: {text}");
     // 絶対 path も root 相対へ畳んで同じ種別（Write / NotebookEdit も同じ面）。
     let absolute = place.repo.join("design-intent").join("x.html").display().to_string();
-    assert_silent(&run_role_hook(&place, &planner_pane, &[], &tool_payload(&place.repo, "Write", &absolute)), "絶対 path");
+    assert_silent(&run_role_hook(&place, &pane, &[], &tool_payload(&place.repo, "Write", &absolute)), "絶対 path");
     let notebook = format!(
         "{{\"cwd\":\"{}\",\"tool_name\":\"NotebookEdit\",\"tool_input\":{{\"notebook_path\":\"src/x.ipynb\"}}}}",
         place.repo.display()
     );
-    assert_role_deny(&run_role_hook(&place, &planner_pane, &[], &notebook), "notebook の code");
+    assert_role_deny(&run_role_hook(&place, &pane, &[], &notebook), "notebook の code");
 
-    // 権能付きでない Bash は両役割とも通し、記録も残さない（tmux も event log も撃たない・NFR5）。
+    // 権能付きでない Bash は通し、記録も残さない（tmux も event log も撃たない・NFR5）。
     write_policy(&place.repo, "src/lib.rs\n");
     let before = role_records(&place.state).len();
-    for pane in [&admin_pane, &planner_pane] {
-        let out = run_role_hook(&place, pane, &[], &bash_payload(&place.repo, "ls -la"));
-        assert_silent(&out, "ls は権能付きでない");
-        let out = run_role_hook(&place, pane, &[], &bash_payload(&place.repo, &format!("{NAME} pipe show --run r")));
-        assert_silent(&out, "pipe show は権能付きでない");
-    }
+    assert_silent(&run_role_hook(&place, &pane, &[], &bash_payload(&place.repo, "ls -la")), "ls は権能付きでない");
+    let show = bash_payload(&place.repo, &format!("{NAME} pipe show --run r"));
+    assert_silent(&run_role_hook(&place, &pane, &[], &show), "pipe show は権能付きでない");
     assert_eq!(role_records(&place.state).len(), before, "権能付きでない Bash は記録を残さない");
     // policy が在る周の write-set guard は従来どおり効く（Edit は先に write-set guard が止める）。
-    let text = stderr_text(&run_role_hook(&place, &planner_pane, &[], &edit("docs/design/x.md")));
+    let text = stderr_text(&run_role_hook(&place, &pane, &[], &edit("docs/design/x.md")));
     assert!(text.contains("write-set の外"), "write-set guard が先に止める: {text}");
-    drop(admin);
-    drop(planner);
+    drop(seat);
     clean(&[&place.repo, &place.state, &place.sock_dir]);
 }
 
@@ -2420,12 +2450,12 @@ fn write_run_contract(state: &Path, run: &str, extra: &str) {
     fs::write(dir.join("contract.toml"), body).expect("契約の写しを書ける");
 }
 
-/// (6・AC16): 契約の印 `opens = ["code"]` で開いた便の write-set の内側 → 管理席でも allow（記録は `opened`）・
-/// 外 → deny・印の無い便は deny・印が別の種別（`design-doc`）なら code は deny。
+/// (6・AC16): 契約の印 `opens = ["code"]` で開いた便の write-set の内側 → 行が `edit-code` を持たない席でも
+/// allow（記録は `opened`）・外 → deny・印の無い便は deny・印が別の種別（`design-doc`）なら code は deny。
 #[test]
-fn hook_role_contract_mark_opens_bead_write_set_for_admin() {
+fn hook_role_contract_mark_opens_bead_write_set() {
     let place = role_place();
-    let (admin, admin_pane) = role_seat(&place, "roleopenadmin", Some("admin"));
+    let (admin, admin_pane) = role_seat(&place, "roleopen", Some("orchestrator"));
     write_run_contract(&place.state, "run-open", "opens = [\"code\"]\n");
     write_run_contract(&place.state, "run-plain", "");
     write_run_contract(&place.state, "run-doc", "opens = [\"design-doc\"]\n");
@@ -2436,8 +2466,8 @@ fn hook_role_contract_mark_opens_bead_write_set_for_admin() {
 
     let before = role_records(&place.state).len();
     let out = run_role_hook(&place, &admin_pane, &[], &in_bead("run-open", "src/lib.rs"));
-    assert_silent(&out, "印で開いた便の write-set の内側は管理席でも通す");
-    assert_role_record(&place.state, before, "role-allow path=code opened", "roleopenadmin_roleopenadmin");
+    assert_silent(&out, "印で開いた便の write-set の内側は行に無くても通す");
+    assert_role_record(&place.state, before, "role-allow path=code opened", "roleopen_roleopen");
     assert_silent(&run_role_hook(&place, &admin_pane, &[], &in_bead("run-open", "docs/new.md")), "末尾 / の項目は配下全部");
 
     let text = assert_role_deny(&run_role_hook(&place, &admin_pane, &[], &in_bead("run-open", "src/other.rs")), "write-set の外");
@@ -2451,13 +2481,13 @@ fn hook_role_contract_mark_opens_bead_write_set_for_admin() {
     clean(&[&place.repo, &place.state, &place.sock_dir]);
 }
 
-/// `s2-07l.227`: 便の器でない worktree（`.worktrees/planner-x/`・planner の docs PR 用の木）は repo の写し＝
-/// worktree 相対で分類する: planner の `design-intent/` → allow・同じ木の `src/` → deny（edit-code）・便の worktree の
-/// `src/` は印の無い周 deny のまま。
+/// `s2-07l.227`: 便の器でない worktree（`.worktrees/planner-x/`・docs PR 用の木）は repo の写し＝worktree 相対で
+/// 分類する: 木の中の `design-intent/` → allow・同じ木の `src/` → deny（edit-code）・便の worktree の `src/` は
+/// 印の無い周 deny のまま。
 #[test]
-fn hook_role_worktree_repo_copy_allows_planner_design_intent() {
+fn hook_role_worktree_repo_copy_allows_design_intent() {
     let place = role_place();
-    let (planner, planner_pane) = role_seat(&place, "roletreeplanner", Some("planner"));
+    let (planner, planner_pane) = role_seat(&place, "roletree", Some("orchestrator"));
     let under = |parts: &[&str]| {
         let path = parts.iter().fold(place.repo.join(".worktrees"), |dir, part| dir.join(part));
         tool_payload(&place.repo, "Edit", &path.display().to_string())
@@ -2467,10 +2497,10 @@ fn hook_role_worktree_repo_copy_allows_planner_design_intent() {
     let out = run_role_hook(&place, &planner_pane, &[], &under(&["planner-x", "design-intent", "x.html"]));
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "rc 0: {}", stderr_text(&out));
     assert_silent(&out, "planner の worktree の design-intent は通す");
-    assert_role_record(&place.state, before, "role-allow path=design-intent", "roletreeplanner_roletreeplanner");
+    assert_role_record(&place.state, before, "role-allow path=design-intent", "roletree_roletree");
     assert_silent(
         &run_role_hook(&place, &planner_pane, &[], &under(&["planner-x", "docs", "design", "a.md"])),
-        "planner の worktree の設計 doc も通す",
+        "同じ木の設計 doc も通す",
     );
 
     let text = assert_role_deny(&run_role_hook(&place, &planner_pane, &[], &under(&["planner-x", "src", "x.rs"])), "同じ木の code");
@@ -2481,22 +2511,24 @@ fn hook_role_worktree_repo_copy_allows_planner_design_intent() {
     clean(&[&place.repo, &place.state, &place.sock_dir]);
 }
 
-/// (8)(9): rules 行が読めない・行に無い役割 → deny（FailClosed・理由を名指す）／1 行に `pipe answer` と
-/// `pipe run` が並ぶ Bash は両方の権能が要る（planner も管理席も deny・記録の種別は両方の名）。
+/// (8)(9): rules 行が読めない・行が無い → deny（FailClosed・理由を名指す）／1 行に `pipe answer` と
+/// `pipe run` が並ぶ Bash は両方の権能が要る（行が `launch` を持たないので deny・記録の種別は両方の名）。
 #[test]
 fn hook_role_fails_closed_on_missing_rows_and_requires_every_capability_on_the_line() {
     let place = role_place();
-    let (admin, admin_pane) = role_seat(&place, "rolerowadmin", Some("admin"));
-    let (planner, planner_pane) = role_seat(&place, "rolerowplanner", Some("planner"));
+    // 席は 1 つで足りる（鍵は (役割, anchor) で役割は 1 つ＝同じ anchor の 2 席目は前の row を置き換える）。
+    let (admin, admin_pane) = role_seat(&place, "rolerowa", Some("orchestrator"));
+    let planner_pane = admin_pane.clone();
     let launch = bash_payload(&place.repo, &format!("{NAME} pipe run --run r --repo ."));
-    assert_silent(&run_role_hook(&place, &admin_pane, &[], &launch), "管理席の起動は通す（行が読める周の対）");
+    let answer = bash_payload(&place.repo, &answer_line());
+    assert_silent(&run_role_hook(&place, &admin_pane, &[], &answer), "行が持つ answer は通す（行が読める周の対）");
 
-    // 管理席の行が無い manifest → 権能なし。
-    let no_admin = place.sock_dir.join("no-admin.toml");
-    fs::write(&no_admin, role_rules_text(PLANNER_CAPS, None)).unwrap_or_else(|err| panic!("{err}"));
-    let args = ["pre-tool-use", "--pane", &admin_pane, "--tmux-socket", &place.socket, "--rules", &no_admin.display().to_string()];
-    let text = assert_role_deny(&run_hook_args(&args, &launch), "行の無い役割");
-    assert!(text.contains("reason=no-row role.admin"), "{text}");
+    // 役割の行が無い manifest → 権能なし。
+    let no_row = place.sock_dir.join("no-row.toml");
+    fs::write(&no_row, format!("schema = 1\n{}", denied_row_text())).unwrap_or_else(|err| panic!("{err}"));
+    let args = ["pre-tool-use", "--pane", &admin_pane, "--tmux-socket", &place.socket, "--rules", &no_row.display().to_string()];
+    let text = assert_role_deny(&run_hook_args(&args, &launch), "行の無い manifest");
+    assert!(text.contains("reason=no-row role.orchestrator"), "{text}");
     // 読めない manifest（無い file）→ 権能なし。
     let missing = place.sock_dir.join("nope.toml").display().to_string();
     let args = ["pre-tool-use", "--pane", &admin_pane, "--tmux-socket", &place.socket, "--rules", &missing];
@@ -2505,44 +2537,48 @@ fn hook_role_fails_closed_on_missing_rows_and_requires_every_capability_on_the_l
     // 不発効の行も権能なし（値は写すが機械は効かせない）。不発効にするのは役割の行だけ（禁じる語列の行は発効の
     // まま＝先に立つ command guard の門で止まらない）。
     let disabled = place.sock_dir.join("disabled.toml");
-    let roles = role_rows_text(PLANNER_CAPS, Some(ADMIN_CAPS)).replace("enabled = true", "enabled = false");
+    let roles = role_rows_text(ORCHESTRATOR_CAPS).replace("enabled = true", "enabled = false");
     let body = format!("schema = 1\n{}{roles}", denied_row_text());
     fs::write(&disabled, body).unwrap_or_else(|err| panic!("{err}"));
     let args = ["pre-tool-use", "--pane", &admin_pane, "--tmux-socket", &place.socket, "--rules", &disabled.display().to_string()];
     let text = assert_role_deny(&run_hook_args(&args, &launch), "不発効の行");
-    assert!(text.contains("reason=no-row role.admin"), "{text}");
+    assert!(text.contains("reason=no-row role.orchestrator"), "{text}");
 
     // 2 つの権能付き subcommand が並ぶ行は両方が要る。
     let both = bash_payload(&place.repo, &format!("{NAME} pipe answer --run r --words \"ok\" && {NAME} pipe run --run r"));
     let before = role_records(&place.state).len();
-    let text = assert_role_deny(&run_role_hook(&place, &planner_pane, &[], &both), "planner は launch を持たない");
+    let text = assert_role_deny(&run_role_hook(&place, &planner_pane, &[], &both), "行は launch を持たない");
     assert!(text.contains("launch") && !text.contains("（answer"), "欠けた権能だけを名指す: {text}");
-    assert_role_record(&place.state, before, "role-deny capability=answer+launch", "rolerowplanner_rolerowplanner");
-    let text = assert_role_deny(&run_role_hook(&place, &admin_pane, &[], &both), "管理席は answer を持たない");
-    assert!(text.contains("answer") && !text.contains("（launch"), "欠けた権能だけを名指す: {text}");
+    assert_role_record(&place.state, before, "role-deny capability=answer+launch", "rolerowa_rolerowa");
+    // 対: `answer` も抜いた行では 2 つとも欠けた権能として名指される。
+    let stripped = place.sock_dir.join("no-answer-row.toml");
+    fs::write(&stripped, role_rules_text(&caps_without("answer"))).unwrap_or_else(|err| panic!("{err}"));
+    let args = ["pre-tool-use", "--pane", &admin_pane, "--tmux-socket", &place.socket, "--rules", &stripped.display().to_string()];
+    let text = assert_role_deny(&run_hook_args(&args, &both), "answer も launch も持たない行");
+    assert!(text.contains("answer") && text.contains("launch"), "欠けた権能を両方名指す: {text}");
     drop(admin);
-    drop(planner);
     clean(&[&place.repo, &place.state, &place.sock_dir]);
 }
 
 /// (11)(13)(14): anchor は payload の `cwd` でなく `--project` から解く（席が `cd` しても guard は外れない・run 2
-/// の穴）: cwd = repo の外かつ `--project` = anchor で登録済みの管理席の `pipe answer` → deny と記録 1 行／
+/// の穴）: cwd = repo の外かつ `--project` = anchor で登録済みの席の `pipe run`（行に無い権能）→ deny と記録 1 行／
 /// `--pane` 無しかつ cwd = repo の外 → 0 byte・rc 0（FR24 の沈黙は pane 無しだけ）／`--pane` 在りかつ
 /// `--project` = repo でない dir なら権能付き Bash は deny・stderr 1 行（`--state-dir` が在れば記録 1 行）・`ls` は通す。
 #[test]
 fn hook_role_anchor_comes_from_project_not_cwd() {
     let place = role_place();
-    let (admin, admin_pane) = role_seat(&place, "roleanchoradmin", Some("admin"));
+    let (admin, admin_pane) = role_seat(&place, "roleanchor", Some("orchestrator"));
     let outside = tmp();
-    let payload = bash_payload(&outside, &answer_line());
+    let launch_line = format!("{NAME} pipe run --run r --repo .");
+    let payload = bash_payload(&outside, &launch_line);
     let project = place.repo.display().to_string();
 
     let before = role_records(&place.state).len();
     let out = run_role_hook(&place, &admin_pane, &["--project", &project], &payload);
     let text = assert_role_deny(&out, "cd で repo の外に居ても anchor から解けて deny");
-    assert!(text.contains("role.planner"), "{text}");
-    assert_role_record(&place.state, before, "role-deny capability=answer", "roleanchoradmin_roleanchoradmin");
-    // 同じ形で権能付きでない Bash と Edit（repo の外の path＝Outside・管理席は edit-outside を持つ＝裁定 12:04Z）。
+    assert!(text.contains("role.orchestrator"), "{text}");
+    assert_role_record(&place.state, before, "role-deny capability=launch", "roleanchor_roleanchor");
+    // 同じ形で権能付きでない Bash と Edit（repo の外の path＝Outside・行は edit-outside を持つ＝裁定 12:04Z）。
     assert_silent(&run_role_hook(&place, &admin_pane, &["--project", &project], &bash_payload(&outside, "ls")), "ls");
     assert_silent(
         &run_role_hook(&place, &admin_pane, &["--project", &project], &tool_payload(&outside, "Edit", "x.rs")),
@@ -2561,14 +2597,14 @@ fn hook_role_anchor_comes_from_project_not_cwd() {
     assert!(text.contains("reason=no-anchor"), "{text}");
     assert_silent(&run_role_hook(&place, &admin_pane, &["--project", &bare_s], &bash_payload(&outside, "ls")), "ls は通す");
     // `--project` が空（$CLAUDE_PROJECT_DIR 未設定）は無いのと同じ＝cwd から解く（互換）。
-    let out = run_role_hook(&place, &admin_pane, &["--project", ""], &bash_payload(&place.repo, &answer_line()));
-    assert!(stderr_text(&out).contains("role.planner"), "空の --project は cwd で解く: {}", stderr_text(&out));
+    let out = run_role_hook(&place, &admin_pane, &["--project", ""], &bash_payload(&place.repo, &launch_line));
+    assert!(stderr_text(&out).contains("role.orchestrator"), "空の --project は cwd で解く: {}", stderr_text(&out));
     // 置き場を明示すれば anchor の解けない周も記録 1 行を残す。
     let state_s = place.state.display().to_string();
     let before = role_records(&place.state).len();
     let out = run_role_hook(&place, &admin_pane, &["--project", &bare_s, "--state-dir", &state_s], &payload);
     assert_role_deny(&out, "anchor の解けない席（置き場つき）");
-    assert_role_record(&place.state, before, "role-deny capability=answer", "roleanchoradmin_roleanchoradmin");
+    assert_role_record(&place.state, before, "role-deny capability=launch", "roleanchor_roleanchor");
     drop(admin);
     clean(&[&place.repo, &place.state, &place.sock_dir, &outside, &bare]);
 }
@@ -2594,9 +2630,8 @@ fn assert_outside_edit_allowed_for(place: &RolePlace, pane: &str, seat: &str, ca
 
     // 対: edit-outside を抜いた行では deny（通したのは行の値であって判定の穴ではない）。
     let without: Vec<&str> = caps.iter().copied().filter(|name| *name != "edit-outside").collect();
-    let (planner, admin) = if caps == PLANNER_CAPS { (without.as_slice(), ADMIN_CAPS) } else { (PLANNER_CAPS, without.as_slice()) };
     let stripped = place.sock_dir.join("no-outside.toml");
-    fs::write(&stripped, role_rules_text(planner, Some(admin))).expect("rules を書ける");
+    fs::write(&stripped, role_rules_text(&without)).expect("rules を書ける");
     let args = ["pre-tool-use", "--pane", pane, "--tmux-socket", &place.socket, "--rules", &stripped.display().to_string()];
     let text = assert_role_deny(&run_hook_args(&args, &edit), "edit-outside の無い行");
     assert!(text.contains("edit-outside"), "種別の権能を名指す: {text}");
@@ -2605,24 +2640,14 @@ fn assert_outside_edit_allowed_for(place: &RolePlace, pane: &str, seat: &str, ca
     clean(&[&outside]);
 }
 
-/// 裁定 `user 2026-09-13T12:04Z`: 登録済み planner 席の repo の外（dispatch file の state dir・auto-memory）への
+/// 裁定 `user 2026-09-13T12:04Z`: 登録済みの席の repo の外（state dir・auto-memory・scratchpad）への
 /// Edit / Write は allow（`PathKind::Outside` → `edit-outside`）。
 #[test]
-fn hook_role_outside_edit_is_allowed_for_planner() {
+fn hook_role_outside_edit_is_allowed() {
     let place = role_place();
-    let (planner, planner_pane) = role_seat(&place, "roleoutplanner", Some("planner"));
-    assert_outside_edit_allowed_for(&place, &planner_pane, "roleoutplanner_roleoutplanner", PLANNER_CAPS);
-    drop(planner);
-    clean(&[&place.repo, &place.state, &place.sock_dir]);
-}
-
-/// 裁定 `user 2026-09-13T12:04Z`: 登録済み管理席の repo の外（`.claude-session/`・scratchpad）への Edit / Write は allow。
-#[test]
-fn hook_role_outside_edit_is_allowed_for_admin() {
-    let place = role_place();
-    let (admin, admin_pane) = role_seat(&place, "roleoutadmin", Some("admin"));
-    assert_outside_edit_allowed_for(&place, &admin_pane, "roleoutadmin_roleoutadmin", ADMIN_CAPS);
-    drop(admin);
+    let (seat, pane) = role_seat(&place, "roleout", Some("orchestrator"));
+    assert_outside_edit_allowed_for(&place, &pane, "roleout_roleout", ORCHESTRATOR_CAPS);
+    drop(seat);
     clean(&[&place.repo, &place.state, &place.sock_dir]);
 }
 
@@ -2631,11 +2656,11 @@ fn hook_role_outside_edit_is_allowed_for_admin() {
 #[test]
 fn hook_role_reads_the_command_line_through_json_escapes() {
     let place = role_place();
-    let (admin, admin_pane) = role_seat(&place, "roleescapeadmin", Some("admin"));
-    let line = format!("echo \"hi\\\\there\" && {NAME} pipe answer --run r --words \"ok\"");
+    let (admin, admin_pane) = role_seat(&place, "roleescape", Some("orchestrator"));
+    let line = format!("echo \"hi\\\\there\" && {NAME} pipe run --run r");
     let out = run_role_hook(&place, &admin_pane, &[], &bash_payload(&place.repo, &line));
-    let text = assert_role_deny(&out, "escape の後ろの answer");
-    assert!(text.contains("role.planner"), "{text}");
+    let text = assert_role_deny(&out, "escape の後ろの起動");
+    assert!(text.contains("role.orchestrator"), "{text}");
     drop(admin);
     clean(&[&place.repo, &place.state, &place.sock_dir]);
 }
@@ -2665,7 +2690,7 @@ fn brief_registration(role: Role, target: &str, anchor: &str) -> Registration {
 
 /// session-start を撃ち（rc 0・stderr 0 byte）、名乗りの 1 行を確かめて**その後ろの行**を返す。
 fn brief_lines(place: &RolePlace, pane: &str, extra: &[&str]) -> Vec<String> {
-    let mut args = vec!["session-start", "--pane", pane, "--tmux-socket", &place.socket];
+    let mut args = vec!["session-start", "--pane", pane, "--tmux-socket", &place.socket, "--bd", &place.bd];
     args.extend_from_slice(extra);
     let out = run_hook_args(&args, &stamp_payload(&place.repo, "sid-brief"));
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "session-start は rc 0: {}", stderr_text(&out));
@@ -2677,39 +2702,66 @@ fn brief_lines(place: &RolePlace, pane: &str, extra: &[&str]) -> Vec<String> {
     lines.map(str::to_owned).collect()
 }
 
-/// (a) 登録済みの target の SessionStart で生成文が名乗りの後ろに出て、権能の名がすべて含まれる（planner / admin の
-/// 2 fixture）。生成文は `render`（雛形の穴に登録 row の target / anchor と fixture の rules 行の値）と**同じ字面**で、
-/// 記録は名乗り + 指示文の 2 行（指示文の `bytes` は生成文の byte 数・席を名乗る）。`--rules` 無し（埋め込み manifest）
-/// でも同じ経路で出る＝裁定の値が binary に在る。
+/// (a) 登録済みの target の SessionStart で生成文が名乗りの後ろに出て、権能の名がすべて含まれる。生成文は
+/// `render`（雛形の穴に登録 row の target / anchor と fixture の rules 行の値と台帳の現在値）と**同じ字面**で、
+/// 行は 11 行（ADR-0045 §2 (3)）、記録は名乗り + 指示文の 2 行（指示文の `bytes` は生成文の byte 数・席を名乗る）。
+/// `--rules` 無し（埋め込み manifest）でも同じ経路で出る＝裁定の値が binary に在る。
 #[test]
 fn hook_brief_session_start_emits_the_role_brief_with_every_capability() {
     let place = role_place();
     let embedded = vessel::rules::manifest::Manifest::embedded().unwrap_or_else(|errors| panic!("埋め込み manifest: {errors:?}"));
-    for (name, role, caps) in [("briefplanner", Role::Planner, PLANNER_CAPS), ("briefadmin", Role::Admin, ADMIN_CAPS)] {
-        let (seat, pane) = role_seat(&place, name, Some(role.as_str()));
-        let target = format!("{name}:{name}");
-        let registration = brief_registration(role, &target, &place.repo.display().to_string());
-        let before = inject_lines(&place.state).len();
-        let body = brief_lines(&place, &pane, &["--rules", &place.rules]);
-        let expected = brief::render(role, &registration, &brief_caps(caps));
-        assert_eq!(format!("{}\n", body.join("\n")), expected, "{name}: 生成文は render と同じ字面");
-        assert!(body.len() >= 5, "{name}: 設計 §5 の項目を持つ: {body:?}");
-        for cap in caps {
-            assert!(body.iter().any(|line| line.contains(cap)), "{name}: 権能 {cap} の名が生成文に現れる: {body:?}");
-        }
-        assert!(body.iter().any(|line| line.contains(&target) && line.contains(&place.repo.display().to_string())), "{name}: target と anchor の穴: {body:?}");
-        let lines = inject_lines(&place.state);
-        assert_eq!(lines.len(), before + 2, "{name}: 記録は名乗り + 指示文の 2 行: {lines:?}");
-        let last = lines.last().cloned().unwrap_or_default();
-        assert_eq!(what_of(&last), "session-start-brief", "{last}");
-        assert_eq!(value_of(&last, "bytes"), Some(json_lite::Value::Num(expected.len() as u64)), "bytes は生成文の byte 数: {last}");
-        assert_attributed(&last, Some(&format!("{name}_{name}")), "指示文の記録");
-        // 埋め込み manifest（`--rules` 無し）でも同じ経路。
-        let held = brief::capabilities_of(&embedded, role).unwrap_or_else(|| panic!("{name}: 埋め込みに行が在る"));
-        let body = brief_lines(&place, &pane, &[]);
-        assert_eq!(format!("{}\n", body.join("\n")), brief::render(role, &registration, &held), "{name}: 埋め込みの行の値");
-        drop(seat);
+    let (name, role, caps) = ("brieforch", Role::Orchestrator, ORCHESTRATOR_CAPS);
+    let (seat, pane) = role_seat(&place, name, Some(role.as_str()));
+    let target = format!("{name}:{name}");
+    let registration = brief_registration(role, &target, &place.repo.display().to_string());
+    let before = inject_lines(&place.state).len();
+    let body = brief_lines(&place, &pane, &["--rules", &place.rules]);
+    let expected = brief::render(role, &registration, &brief_caps(caps), LEDGER_LINE);
+    assert_eq!(format!("{}\n", body.join("\n")), expected, "生成文は render と同じ字面");
+    assert_eq!(body.len(), 11, "注入は 11 行（ADR-0045 §2 (3)）: {body:?}");
+    for cap in caps {
+        assert!(body.iter().any(|line| line.contains(cap)), "権能 {cap} の名が生成文に現れる: {body:?}");
     }
+    assert!(
+        body.iter().any(|line| line.contains(&target) && line.contains(&place.repo.display().to_string())),
+        "target と anchor の穴: {body:?}"
+    );
+    assert!(body.iter().any(|line| line.contains(LEDGER_LINE)), "台帳の現在値の穴: {body:?}");
+    assert!(
+        body.iter().all(|line| !line.contains("edit-code")),
+        "src の編集の権能は行にも生成文にも無い（歯だけが edit-tests で開く・ADR-0045 §2 (1)）: {body:?}"
+    );
+    let lines = inject_lines(&place.state);
+    assert_eq!(lines.len(), before + 2, "記録は名乗り + 指示文の 2 行: {lines:?}");
+    let last = lines.last().cloned().unwrap_or_default();
+    assert_eq!(what_of(&last), "session-start-brief", "{last}");
+    assert_eq!(value_of(&last, "bytes"), Some(json_lite::Value::Num(expected.len() as u64)), "bytes は生成文の byte 数: {last}");
+    assert_attributed(&last, Some(&format!("{name}_{name}")), "指示文の記録");
+    // 埋め込み manifest（`--rules` 無し）でも同じ経路。
+    let held = brief::capabilities_of(&embedded, role).unwrap_or_else(|| panic!("埋め込みに行が在る"));
+    let body = brief_lines(&place, &pane, &[]);
+    assert_eq!(format!("{}\n", body.join("\n")), brief::render(role, &registration, &held, LEDGER_LINE), "埋め込みの行の値");
+    drop(seat);
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
+/// 台帳を読めない周の `{ledger}` は `unknown`（**数に化けさせない**・憲法 C10）。`--bd` が無い file を指す周も
+/// 席は止まらず（rc 0・stderr 0 byte）、行数は 11 行のままである。
+#[test]
+fn hook_brief_ledger_is_unknown_when_the_client_is_unreadable() {
+    let place = role_place();
+    let (seat, pane) = role_seat(&place, "briefnobd", Some("orchestrator"));
+    let missing = place.sock_dir.join("no-such-bd").display().to_string();
+    let args = ["session-start", "--pane", &pane, "--tmux-socket", &place.socket, "--bd", &missing, "--rules", &place.rules];
+    let out = run_hook_args(&args, &stamp_payload(&place.repo, "sid-brief"));
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "席は止めない: {}", stderr_text(&out));
+    assert_eq!(stderr_text(&out), "", "断りも出さない");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let body: Vec<&str> = stdout.lines().skip(1).collect();
+    assert_eq!(body.len(), 11, "行数は変わらない: {body:?}");
+    assert!(body.iter().any(|line| line.contains("台帳の現在値 = unknown（台帳を読めない）")), "{body:?}");
+    assert!(body.iter().all(|line| !line.contains("open=")), "数に化けない: {body:?}");
+    drop(seat);
     clean(&[&place.repo, &place.state, &place.sock_dir]);
 }
 
@@ -2737,7 +2789,7 @@ fn hook_brief_is_silent_for_an_unregistered_target() {
 #[test]
 fn hook_brief_names_the_reason_when_it_cannot_resolve_capabilities() {
     let place = role_place();
-    let (seat, pane) = role_seat(&place, "briefbroken", Some("admin"));
+    let (seat, pane) = role_seat(&place, "briefbroken", Some("orchestrator"));
     let payload = stamp_payload(&place.repo, "sid-brief");
     let refused = |extra: &[&str], reason: &str| {
         let mut args = vec!["session-start", "--pane", &pane, "--tmux-socket", &place.socket];
@@ -2748,9 +2800,9 @@ fn hook_brief_names_the_reason_when_it_cannot_resolve_capabilities() {
         assert_eq!(stderr_lines(&out), 1, "{reason}: 理由 1 行: {}", stderr_text(&out));
         assert!(stderr_text(&out).contains(&format!("reason={reason}")), "{reason}: {}", stderr_text(&out));
     };
-    let planner_only = place.sock_dir.join("planner-only.toml");
-    fs::write(&planner_only, role_rules_text(PLANNER_CAPS, None)).unwrap_or_else(|err| panic!("rules: {err}"));
-    refused(&["--rules", &planner_only.display().to_string()], "no-row role.admin");
+    let rowless = place.sock_dir.join("rowless.toml");
+    fs::write(&rowless, format!("schema = 1\n{}", denied_row_text())).unwrap_or_else(|err| panic!("rules: {err}"));
+    refused(&["--rules", &rowless.display().to_string()], "no-row role.orchestrator");
     let missing = place.sock_dir.join("missing.toml").display().to_string();
     refused(&["--rules", &missing], "rules-unreadable");
     let events = vessel::fleet::store::events_path(&place.state);
@@ -2763,43 +2815,34 @@ fn hook_brief_names_the_reason_when_it_cannot_resolve_capabilities() {
 
 /// (c) 生成文の外形 snapshot（C12.5・穴は fixture の固定値・権能は裁定の値と同じ fixture の列）。
 #[test]
-fn hook_brief_planner_external_form() {
-    let registration = brief_registration(Role::Planner, "fixture:planner", "/srv/anchor");
-    insta::assert_snapshot!("hook_brief_planner", brief::render(Role::Planner, &registration, &brief_caps(PLANNER_CAPS)));
+fn hook_brief_orchestrator_external_form() {
+    let registration = brief_registration(Role::Orchestrator, "fixture:orchestrator", "/srv/anchor");
+    insta::assert_snapshot!(
+        "hook_brief_orchestrator",
+        brief::render(Role::Orchestrator, &registration, &brief_caps(ORCHESTRATOR_CAPS), LEDGER_LINE)
+    );
 }
 
-/// (d) 対話面の作法（設計 dialogue-surface.md §4・ADR-0032 §2.1 / §2.2・FR67・`s2-07l.326.2`）: 登録 row のある planner の
-/// 席の `session-start` の生成文に、作法の SSOT（`docs/design/dialogue-surface.md`）を指す行が §2 で 2 本・§3 で 1 本・
-/// §5 で 1 本在り、いずれも `→ SSOT:` を持つ（pointer の無い行 0）。負例: 管理席の生成文にはこれらの行が無い
-/// （ADR-0032 §2.5・admin の雛形は不変）。
+/// (d) 注入の中身（ADR-0045 §2 (3)・ADR-0046 §2）: 生成文は **11 行**で、席の同一性 3 行（役割 / 権能 / 台帳の
+/// 現在値）・憲法の効く部分 5 行（順位・A1・A4.2・A2 と A3・N1〜N3）・役割の特性 3 行（対話面の作法と信頼度・
+/// 実装を自分で行わない・決定はしご）から成る。**C 条文は 1 行も注入しない**（CI の門と guard が執行する）。
 #[test]
-fn hook_brief_planner_carries_the_dialogue_surface_lines() {
+fn hook_brief_carries_the_ask_first_and_role_lines_without_c_articles() {
     let place = role_place();
-    let ssot = "docs/design/dialogue-surface.md";
-    let counts = |body: &[String], section: &str| body.iter().filter(|line| line.contains(&format!("{ssot} {section}"))).count();
-    let (planner, planner_pane) = role_seat(&place, "briefsurface", Some("planner"));
-    let body = brief_lines(&place, &planner_pane, &["--rules", &place.rules]);
-    let surface: Vec<&String> = body.iter().filter(|line| line.contains(ssot)).collect();
-    assert_eq!(surface.len(), 4, "planner: 作法の SSOT を指す行は 4 本: {body:?}");
-    assert!(surface.iter().all(|line| line.contains("→ SSOT:")), "planner: 作法の行はすべて pointer を持つ: {surface:?}");
-    assert_eq!(counts(&body, "§2"), 2, "planner: §2（作法・信頼度）の行は 2 本: {surface:?}");
-    assert_eq!(counts(&body, "§3"), 1, "planner: §3（復元の brief の 5 slot）の行は 1 本: {surface:?}");
-    assert_eq!(counts(&body, "§5"), 1, "planner: §5（並列 agent）の行は 1 本: {surface:?}");
-    assert!(body.iter().any(|line| line.contains("verified / deduced / inferred / uncertain")), "planner: 信頼度の 4 語: {body:?}");
-    assert!(body.iter().any(|line| line.contains("next / wins / status / plan / risks")), "planner: 5 slot の名: {body:?}");
-    drop(planner);
-    // 負例: 管理席の生成文にはこれらの行が無い（雛形は admin.txt のまま）。
-    let (admin, admin_pane) = role_seat(&place, "briefsurfaceadmin", Some("admin"));
-    let body = brief_lines(&place, &admin_pane, &["--rules", &place.rules]);
-    assert!(!body.is_empty(), "admin: 登録済みの席は生成文を出す");
-    assert!(body.iter().all(|line| !line.contains(ssot)), "admin: 作法の SSOT を指す行は無い: {body:?}");
-    drop(admin);
+    let (seat, pane) = role_seat(&place, "briefsurface", Some("orchestrator"));
+    let body = brief_lines(&place, &pane, &["--rules", &place.rules]);
+    assert_eq!(body.len(), 11, "注入は 11 行: {body:?}");
+    assert!(body.iter().all(|line| line.contains("→ SSOT:")), "行はすべて出所 pointer を持つ: {body:?}");
+    for pointer in ["憲法 A1", "憲法 A4.2", "憲法 A2", "憲法 A3", "憲法 N1", "憲法 C17"] {
+        assert!(body.iter().any(|line| line.contains(pointer)), "{pointer} を指す行が在る: {body:?}");
+    }
+    assert!(body.iter().any(|line| line.contains("docs/design/dialogue-surface.md §2")), "対話面の作法: {body:?}");
+    assert!(body.iter().any(|line| line.contains("verified / deduced / inferred / uncertain")), "信頼度の 4 語: {body:?}");
+    assert!(body.iter().any(|line| line.contains("docs/constitution.md")), "憲法の全文の pointer: {body:?}");
+    // 憲法の**規範文**（生成 file の英語の SHALL 文）は 1 行も載らない（C 条文の執行は CI の門と guard・
+    // 注入は出所 pointer と要約だけ・ADR-0046 §2）。
+    let normative: Vec<&String> = body.iter().filter(|line| line.contains("SHALL") || line.contains("MUST")).collect();
+    assert!(normative.is_empty(), "規範文は注入しない（全文は生成 file の pointer が指す）: {normative:?}");
+    drop(seat);
     clean(&[&place.repo, &place.state, &place.sock_dir]);
-}
-
-/// (c) 管理席の生成文の外形 snapshot。
-#[test]
-fn hook_brief_admin_external_form() {
-    let registration = brief_registration(Role::Admin, "fixture:admin", "/srv/anchor");
-    insta::assert_snapshot!("hook_brief_admin", brief::render(Role::Admin, &registration, &brief_caps(ADMIN_CAPS)));
 }

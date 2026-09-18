@@ -147,7 +147,7 @@ fn write_ledger_text(place: &ConsumerPlace, label: &str, body: &str) -> PathBuf 
 /// 登録 row を 1 件積む（planner・`anchor` = 導入先の path・tmux は立てない）。
 fn register_anchor(place: &ConsumerPlace, anchor: &str, target: &str) {
     let row = Registration {
-        role: Role::Planner,
+        role: Role::Orchestrator,
         anchor: anchor.to_owned(),
         target: target.to_owned(),
         sid: None,

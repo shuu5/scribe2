@@ -7,43 +7,44 @@
 
 ## 1. 何を解くか
 
-役割（planner / 管理席）の規律は文書（SRS FR30〜32・ADR-0016）と散文 7 面にしか無く、器は役割の型を持たない。散文でしか止まっていない事故型は 6 つ（ADR-0022 §1 (a)〜(f)）。本設計は (a)(b)(c)(e) を guard で止め、(d) を記帳の deny で効かなくし、(f) は [working-memory.md](./working-memory.md) の内蔵に委ねる。consumer の repo は席の登録だけで同じ執行と注入を得る（CLAUDE.md に役割の文を書かない）。
+役割の規律は文書（SRS FR30〜32・ADR-0016）と散文 7 面にしか無く、器は役割の型を持たない。散文でしか止まっていない事故型は 6 つ（ADR-0022 §1 (a)〜(f)）。本設計は (a)(b)(c)(e) を guard で止め、(d) を記帳の deny で効かなくし、(f) は [working-memory.md](./working-memory.md) の内蔵に委ねる。consumer の repo は席の登録だけで同じ執行と注入を得る（CLAUDE.md に役割の文を書かない）。
 
 ## 2. 役割と登録（ADR-0022 §2.1）
 
-- **`Role`**（closed enum・core）: variant の列挙は core が持ち文書は写さない。記録時点の値は 2 つ。`as_str` / `ALL` / 判別子順の pin は既存の enum（`RuleKind` / `Guard`）と同じ形。
+- **`Role`**（closed enum・core）: variant の列挙は core が持ち文書は写さない。記録時点の値は 1 つ（orchestrator・[ADR-0045](../../design-intent/decisions/ADR-0045-seat-role-is-one-orchestrator-and-dispatcher-lands-runs.html) §2 (1)）。`as_str` / `ALL` / 判別子順の pin は既存の enum（`RuleKind` / `Guard`）と同じ形。
 - **登録の subcommand**: `<NAME> seat register --state-dir S --target T --role R --account L --launch FILE [--anchor DIR] [--model M]`。`--model M` は席が使う model の display name（任意・[account-autonomy.md](./account-autonomy.md) §3 の session 用の入力・無い周は None＝保守側・契約 (e)）。`--anchor` の既定は cwd の repo root（`git rev-parse --show-toplevel`・env を読まない）。`--launch FILE` は起動の雛形（穴は口座の credential dir 1 つ・[account-autonomy.md](./account-autonomy.md) §5 が使う）で、内容を event に載せる（tracked file に置かない・CON2）。
 - **event**: `EventKind::SeatRegistered`（末尾・宣言順）1 件。項目 = `role` / `anchor` / `target` / `sid`（登録を撃った session の id・SessionStart の打刻から解く）/ `account` / `launch`（雛形の本文）/ `model`（任意・席が使う model の display name・契約 (e)・無い row は None）。項目は `Event` の typed な束 1 つ（`allowance` と同型の `Option<Registration>`・kind ではなく束の有無が本体を決める）で持つ＝`Event` を literal で組む既存の構築点（core・歯・property の生成器）と `KINDS` の件数の pin がすべて変わる（write-set は §9 (a)）。schema 1 のまま（値の追加）。
-- **鍵と置き換え**: 鍵 = (role, anchor)。同じ鍵の再登録は前の row を置き換える（append のみ・replay の最新が効く・N1）。1 つの anchor に役割ごとに 1 席（FR40）。`target` / `sid` / `account` は項目で鍵ではない。pane id は鍵にも項目にも置かない。**書き手は 2 つ**: `seat register`（席の session が撃つ・打刻の条件付き）と tick の口座更新（[account-autonomy.md](./account-autonomy.md) §5・器の内部の同じ 1 関数・`target` / `sid` / `launch` は既存 row から写す）。3 つ目 = `seat launch`（器が起動行を導出して row を先に書く・`sid` は無し・[account-lifecycle.md](./account-lifecycle.md) §4・ADR-0026 §2.3）。
+- **鍵と置き換え**: 鍵 = (role, anchor)。同じ鍵の再登録は前の row を置き換える（append のみ・replay の最新が効く・N1）。1 つの anchor に役割ごとに 1 席（FR40・役割は 1 つなので anchor が鍵を分ける）。`target` / `sid` / `account` は項目で鍵ではない。pane id は鍵にも項目にも置かない。**書き手は 2 つ**: `seat register`（席の session が撃つ・打刻の条件付き）と tick の口座更新（[account-autonomy.md](./account-autonomy.md) §5・器の内部の同じ 1 関数・`target` / `sid` / `launch` は既存 row から写す）。3 つ目 = `seat launch`（器が起動行を導出して row を先に書く・`sid` は無し・[account-lifecycle.md](./account-lifecycle.md) §4・ADR-0026 §2.3）。
 - **登録を受ける条件**: 登録を撃った session に SessionStart の打刻（[seat-state.md](./seat-state.md) §2）が在ること。打刻の無い session（plugin を積まない・tmux の外）からの登録は typed な理由（`RegisterRefusal::NoStamp`）で断る＝guard の無い席が権能を持てない。登録そのものは権能を要しない（登録が先・ADR-0022 §2.5）。
 - **役割の解決**（1 本・読み手は guard / 注入 / doctor / tick）: `pane → target（ADR-0015 §2.2）→ replay を鍵 (role, anchor) ごとに最新 row へ畳んでから `target` が一致する row を引く（同じ鍵の旧 row は旧 target では解けない・複数の鍵が同じ target を持てば replay の最新）→ role`。`anchor` は row の項目として読むだけで、hook の cwd と突合しない（席が worktree へ cd した周も同じ row が解ける）。window 名は target の一部（`session:window`）としてだけ効き、名前の慣習で役割を決めない。env・作業木の path・pane の字面は入力にしない（C2.2 / C3.3 / N3）。window を rename した席は別の target＝登録し直す（doctor の突合が `missing` で出す）。replay の cache は持たない（C3・hook の予算 NFR5 の内側で実測済み）。
 - **doctor**: 登録 row と実在の target（tmux の `list-panes`）の突合を項目に持つ（C3.2・値は生成物）。`doctor` の現物は bin crate の `render_doctor`（記録時点は name / version の 2 行・state dir の引数なし）なので、`--state-dir S` の口を足し項目列に 1 行足す（外形 snapshot `doctor_external_form` が変わる）。
 
 ## 3. 権能と rules 行（ADR-0022 §2.2 / §2.5）
 
-- **`Capability`**（closed enum・core）: 操作の種別。記録時点の variant の**種類**は次のとおりで、名は core が持つ: 回答の記帳（`pipe answer`）・承認の記帳（approval event）・go の記帳（merge の許可）・便の起動（`pipe intake` / `run` / `resume` / `stop` / `retire`）・中継（席間の連絡を送る）・go 後の merge・path 種別ごとの編集（design-intent / 設計 doc / code / 対象 repo の外）。
+- **`Capability`**（closed enum・core）: 操作の種別。記録時点の variant の**種類**は次のとおりで、名は core が持つ: 回答の記帳（`pipe answer`）・承認の記帳（approval event）・go の記帳（merge の許可）・便の起動（`pipe intake` / `run` / `resume` / `stop` / `retire`）・go 後の merge・path 種別ごとの編集（design-intent / 設計 doc / 歯〔`crates/<crate>/tests/`〕/ code / 対象 repo の外）。中継の variant は持たない（[ADR-0045](../../design-intent/decisions/ADR-0045-seat-role-is-one-orchestrator-and-dispatcher-lands-runs.html) §2 (1)・機械の面が無く席が 1 つになって意味を失う）。便の起動と merge は器の dispatcher の口ゆえ席の行には並ばない（variant は guard が deny を出すために残る）。
+- **権能の名の対応**: `edit-tests` は [ADR-0045](../../design-intent/decisions/ADR-0045-seat-role-is-one-orchestrator-and-dispatcher-lands-runs.html) §2 (1) の「`edit-code`〔`tests/` の path 種別に限る〕」である。名を分けるのは §4 の guard が path 種別と権能を 1:1 で照合するからで（値に修飾子を持たせると読み手を 1 本足すことになる）、意味は ADR のとおり＝src は行に無く歯だけが開く。
 - **rules 行**: `RuleKind::RoleCapabilities`（variant 1 つ・値は権能の名の**列**〔既存の `RuleValue::List`・manifest に list の行が既に在る〕・裁定 id 付き）を役割ごとに 1 行（id は `role.<役割名>`）。値（どの役割がどの権能を持つか）は本 doc が決めず、契約 (b) が裁定 id 付きで書く（§9）。列に無い名は manifest の読み込みで拒む（閉じた enum の parse・既存の `RuleError`）。
 - **読み手は 4 つ・行は 1 つ**: §4 の guard・§5 の注入文の生成・C1.2 の生成文書（rules 表）・xtask の drift 検査（C14.2）。
-- **R-C7-1**: kind は既存の `Dialogue`（対話面）のまま、値を「役割 planner の登録 row を持つ席」を表す typed な値（`Role` の名）へ改める（行の値の変更・裁定 id・契約 (b)）。承認 event / 回答 event / go の記帳は planner の席からだけ受理（§4 の Bash guard が権能の行で止める・AC15）。
-- **契約が開く例外**: 管理席が自分の手で code を編集してよい便は、契約 file の typed な印（既存の `classes` と同じ形の field・名は契約 (b) が決める）で表す。§4 の Edit guard はその便の write-set の内側だけ通す（AC16）。散文に置かない。
+- **R-C7-1**: kind は既存の `Dialogue`（対話面）のまま、値は「役割 orchestrator の登録 row を持つ席」を表す typed な値（`Role` の名）である（行の値・裁定 id）。承認 event / 回答 event / go の記帳はその席からだけ受理（§4 の Bash guard が権能の行で止める・AC15）。
+- **契約が開く例外**: 席が自分の手で code を編集してよい便は、契約 file の typed な印（既存の `classes` と同じ形の field・`opens`）で表す。§4 の Edit guard はその便の write-set の内側だけ通す（AC16）。散文に置かない。
 
 ## 4. 執行（ADR-0022 §2.3）
 
 - **`Guard::Role`**（variant 1 つ・宣言順は `Register` の直後〔`Cap` → `Register` → `Role`＝登録が先で執行が後の行為の流れ〕・InLoop・FailClosed・極性一覧に 1 行）。
-- **2 面**: (1) **Bash** — command 行が権能付き subcommand（core の const slice `CAPABILITY_COMMANDS`: subcommand の名 → `Capability`）を含む周に、席の役割の行がその権能を持たなければ deny。(2) **Edit 系** — path の種別（`PathKind`: design-intent / 設計 doc / code / 対象 repo の外・closed enum・分類は repo root からの相対 path の prefix）ごとの権能を照合し、持たなければ deny。契約が印で開いた便の write-set の内側は通す。
-- **repo の写し**: `.worktrees/` 直下の worktree は便の worktree（`.worktrees/<NAME>/<run>/`）に限らず repo の写しで、`PathKind` はその worktree からの相対 path で分類する（planner が docs PR 用に切る `.worktrees/<name>/` の `design-intent/` も DesignIntent）。契約の印が開くのは便の worktree だけ・`.worktrees/<name>` そのものは code（s2-07l.227）。
+- **2 面**: (1) **Bash** — command 行が権能付き subcommand（core の const slice `CAPABILITY_COMMANDS`: subcommand の名 → `Capability`）を含む周に、席の役割の行がその権能を持たなければ deny。(2) **Edit 系** — path の種別（`PathKind`: design-intent / 設計 doc / 歯〔`crates/<crate>/tests/`〕/ code / 対象 repo の外・closed enum・分類は repo root からの相対 path の prefix）ごとの権能を照合し、持たなければ deny。契約が印で開いた便の write-set の内側は通す。
+- **repo の写し**: `.worktrees/` 直下の worktree は便の worktree（`.worktrees/<NAME>/<run>/`）に限らず repo の写しで、`PathKind` はその worktree からの相対 path で分類する（席が docs PR 用に切る `.worktrees/<name>/` の `design-intent/` も DesignIntent）。契約の印が開くのは便の worktree だけ・`.worktrees/<name>` そのものは code（s2-07l.227）。
 - **identity**: 生成 hooks.json の shell 行が渡す `--pane` だけ（[vessel-hook.md](./vessel-hook.md)・生成器は同じ gen-manifest）。PreToolUse の shell 行に `--pane "$TMUX_PANE"` を足し、matcher を `Edit|Write|MultiEdit|NotebookEdit` から **Bash を含む形**へ改める（Bash は PermissionRequest の matcher でもある・2 面の判定は別 hook event）。
 - **解く順**: anchor → pane → target → 登録 row → role → 行 → 権能。**anchor（repo root・state dir）は payload の `cwd` でなく、生成 hooks.json の shell 行が渡す `--project`（session の起動 dir・Claude Code が hook の command に与える project dir・席が `cd` しても変わらない・`--pane` と同型で binary は env を読まない〔C2.2〕）から解く**。`--project` が無い周（旧 hooks.json）は `cwd` で解く（互換・生成物の更新で消える）。pane が空（tmux の外・runner / lens）は席ではなく本 guard の対象外（ADR-0009 の write-set guard と allowlist がそのまま担う）。**pane が在るのに anchor が解けない（root が無い・`served` が `ByMe` でない・state dir が無い）周と、登録 row が無い・target が解けない周は権能なし＝権能付きの操作を deny（FailClosed・理由を stderr に 1 行・記録 1 行）**。[vessel-hook.md](./vessel-hook.md) の「仕えない周は黙る」（FR24）は pane が無い周にだけ当たる（席が repo の外へ `cd` しても guard は外れない）。止めるのは権能付きの操作だけで、それ以外の Bash / Edit は通す。
-- **deny 文**: 権能を持つ役割の名を含む（例の形: `<NAME>: この操作は <役割名> 席の権能（rules 行 <id>）`・字面は現物が正本）。**記録行**: allow の周も target と command の種別を 1 行（hook の消費記録と同じ置き場 `<state_dir>/inject.jsonl`・[vessel-hook.md](./vessel-hook.md)。打刻の `state.jsonl` には書かない）。
+- **deny 文**: 欠けた権能と rules 行の id を含む（例の形: `<NAME>: この操作（<権能>）は席の権能でない（rules 行 <id>）`・字面は現物が正本・役割が 1 つなので「他の役割が持つ」形は持たない）。**記録行**: allow の周も target と command の種別を 1 行（hook の消費記録と同じ置き場 `<state_dir>/inject.jsonl`・[vessel-hook.md](./vessel-hook.md)。打刻の `state.jsonl` には書かない）。
 - **subcommand は役割を検査しない**（引数の identity は偽装できる）。発話は監視しない。
 - **runner / lens は pane を持たない（起動の包みの 2 口で同じ）**: 便の runner / lens / verify 行は行の包み（`confine::wrap_line`）が起動側の `TMUX_PANE` を外す（s2-07l.216）。`headless/mod.rs` の `build`（runner と lens の唯一の構築点・pipe の外から `<NAME> runner` / `<NAME> lens` を単体起動した周もここを通る）は command の包み（`confine::wrap_command`）を通り、こちらは `TMUX_PANE` を外していなかった＝席の pane の中から単体起動した runner の hook が `--pane` で**その席の打刻と読み込み元の記録**に混入する（2026-09-15 15:23Z・別 repo の管理席が run の plugin 写しで runner を単体起動し、席の `plugin` 記録が run dir を指した）。**2 つの包みは同じ 1 点で `TMUX_PANE` を外す**（`wrap_command` に置き `wrap_line` はそれを通る・外す名は 1 つの const・足す env は無い・C2.2）。runner は席ではない（FR40）ので hook は `--pane` 空で黙る（既存）。
 
 ## 5. 注入（ADR-0022 §2.4）
 
 - SessionStart の hook（[vessel-hook.md](./vessel-hook.md)）が pane → target → 登録 row で役割を解き、役割ごとの **tracked な雛形 1 枚**（`headless/runner.txt` と同じ形・binary に埋め込む・`seat/brief/<役割名>.txt`）から生成した指示文を stdout で注入する。登録の無い席は 0 byte（断りも出さない）。
-- **雛形の行の規律**: 行は「穴」か「出所 pointer を持つ行」に限る。穴 = `{capabilities}`（権能の行の値の列）/ `{target}` / `{anchor}` / `{role}`。pointer の形は [working-memory.md](./working-memory.md) §4 の `PointerKind` を再利用（憲法の id・ADR の節・SRS の要件 id・rules 行の id）。**規範文の定義 = pointer を持たない行**（typed・字面の語彙で判定しない）。
-- **雛形が持つもの**（§4 で塞げない振る舞いだけ・短く）: 中継の形・報告の形・裁定の持ち込み先（planner の席）・第一手の復元（`seat rebrief`）・命令行は pointer 付きだけ従う（ADR-0018 §2.2）・席間の連絡の経路（FR44）・3 クラスの発火の pointer。§4 で塞ぐ事項（回答・承認・go・merge・code の Edit）は書かない（二重化しない）。
-- **席間の連絡の行**（FR44・AC19・雛形に置く pointer 付きの行の 1 つ）: planner と管理席の連絡は席の入力欄を経由しない経路＝開発 session の道具が持つ session 間の message（記録時点は Claude Code の `SendMessage` / `ListAgents`・宛先は毎回 `ListAgents` で取る）で送り、届いたことは経路自身の記録（送信結果の message id）で確かめる。器はこの経路を持たず（FR44 の経路設計は ADR-0022 §2.8 の射程外＝道具の機能をそのまま使う）、雛形は「経路の名・宛先の取り方・届いた確認の取り方」を pointer 付きの 3 行で持つだけ。入力欄への注入は器の管理 tick の合図（打刻・退避）と復元の command に限る（FR44）。
+- **雛形の行の規律**: 行は「穴」か「出所 pointer を持つ行」に限る。穴 = `{capabilities}`（権能の行の値の列）/ `{target}` / `{anchor}` / `{role}` / `{ledger}`（台帳の現在値・読めない周は `unknown`＝数に化けさせない・C10）。pointer の形は [working-memory.md](./working-memory.md) §4 の `PointerKind` を再利用（憲法の id・ADR の節・SRS の要件 id・rules 行の id）。**規範文の定義 = pointer を持たない行**（typed・字面の語彙で判定しない）。
+- **雛形が持つもの**（[ADR-0045](../../design-intent/decisions/ADR-0045-seat-role-is-one-orchestrator-and-dispatcher-lands-runs.html) §2 (3)・全部で 11 行）: 席の同一性 3 行（役割 / 権能の行の値 / 台帳の現在値）・憲法の効く部分 5 行（順位・A1・A4.2・A2 と A3・N1〜N3）・役割の特性 3 行（対話面の作法と信頼度・実装を自分で行わない・決定はしご）。**C 条文は注入しない**（CI の門と PreToolUse の guard が執行する・[ADR-0046](../../design-intent/decisions/ADR-0046-constitution-is-enforced-by-gates-and-only-ask-first-and-never-are-injected.html) §2）。§4 で塞ぐ事項（回答・承認・go・merge・code の Edit）は書かない（二重化しない）。
+- **席間の連絡の行**（FR44・AC19）: 席が 1 つになったので雛形は席間の連絡の行を持たない（[ADR-0045](../../design-intent/decisions/ADR-0045-seat-role-is-one-orchestrator-and-dispatcher-lands-runs.html) §2 (3)）。器はこの経路を持たない（FR44 の経路設計は ADR-0022 §2.8 の射程外＝道具の機能をそのまま使う）。
 - **xtask の検査**（C14.2・AC17・`cargo xtask check` の 1 項目）: 雛形の穴 ⊆ 定義済みの穴・pointer を持たない行 0・行に在って文に無い権能 0（生成文に権能の名がすべて現れる）。生成文は外形 snapshot（C12.5）。
 - 器は consumer の repo に file を書かない（CLAUDE.md の生成区間を持たない・1 経路）。
 
@@ -60,7 +61,7 @@
 
 - 登録: `seat register` が `SeatRegistered` を 1 件追記し replay の最新が効く（同じ鍵の再登録で前の row が残ったまま最新だけが解決される）・打刻の無い session は `NoStamp` で rc 1・event なし・`--anchor` 無しは cwd の repo root・pane id は event に現れない（fixture の pane 文字列が events.jsonl に 0 回）。
 - 解決: 役割の解決は登録 row だけを入力にする（pane id を差し替えた fixture でも同じ target なら同じ役割・env を置いても変わらない・同じ鍵で別 target に再登録すると旧 target では解けない・window を rename した fixture は解けない＝登録し直す）。
-- guard（hook.rs・偽 tmux で pane → target を返す stub）: 管理席の target から `pipe answer` を含む Bash → deny・deny 文に権能を持つ役割の名と rules 行 id・記録行 1 件／planner の target から同じ command → allow・記録行 1 件／登録の無い pane → deny／pane 無し → 通す（記録なし）／Edit: 管理席の code path → deny・planner の design-intent → allow・契約の印で開いた便の write-set の内側 → allow・外 → deny（AC16）／権能付きでない Bash / Edit は通す。
+- guard（hook.rs・偽 tmux で pane → target を返す stub）: 行に無い権能（`pipe run` の起動）を含む Bash → deny・deny 文に欠けた権能と rules 行 id・記録行 1 件／行が持つ `pipe answer` → allow・記録行 1 件／登録の無い pane → deny／pane 無し → 通す（記録なし）／Edit: 管理席の code path → deny・planner の design-intent → allow・契約の印で開いた便の write-set の内側 → allow・外 → deny（AC16）／権能付きでない Bash / Edit は通す。
 - rules: 役割ごとの行の kind 件数 +1・値が列であること・列に無い名は `RuleError`・R-C7-1 の値の型（Str → Role の名）・rules 外形 snapshot。
 - 注入（hook.rs）: 登録済みの target の SessionStart で生成文が出て権能の名がすべて含まれる・登録の無い target で 0 byte・雛形に pointer の無い行を置いた fixture で xtask check が落ちる（AC17）・行に在って文に無い権能を作った fixture で落ちる・生成文の外形 snapshot。
 - 極性一覧 snapshot に `Register`（(a)）と `Role`（(b)）の 2 行（件数 +2・N = K + M の pin）・doctor の項目 1 行（`--state-dir` 付きの外形 snapshot）。
@@ -104,6 +105,8 @@ C1 / C5（権能の値は行・裁定 id）・C1.2（生成文に手書きの規
 - 却下: deny 文に散文で手順を書く（理由ごとに違う route を 1 形の文に押し込むと散文の規則になる・N2）／未登録を allow に倒す（fail-closed を崩す）。
 
 ## 14. 相談席 consult — 相談・調査・実験の席（契約表の行 h・`s2-07l.430`）
+
+> 本節は [ADR-0045](../../design-intent/decisions/ADR-0045-seat-role-is-one-orchestrator-and-dispatcher-lands-runs.html) §2 (1)（席の役割は orchestrator 1 つ）が超過した。起票されていない提案として残す（中継 `relay` の権能も `s2-07l.478` で消えている）。
 
 - 何が起きているか（user の要望 2026-09-17・逐語は台帳 `s2-07l.430`・裁定 id user 2026-09-17T01:45Z / 01:48Z）: 相談・調査・OSS の試用（例: 依存の候補を実際に動かして測る）を planner に兼ねさせると、planner が契約の焼き直しで詰まった日に相談が止まる。第 3 の役割を置き、**開発の本線と pipeline を汚さない**ことを権能の集合（§3・rules 行）で機械に守らせる。
 - 形（§2 の役割の形に席を 1 つ足すだけ・ADR-0022 §2.1〜§2.5 は不変）:

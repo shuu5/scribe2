@@ -1,6 +1,9 @@
-//! 席の指示文（設計 docs/design/seat-roles.md §5・ADR-0022 §2.4・SRS FR42 / FR44）: 役割ごとの tracked な雛形 1 枚
-//! （`planner.txt` / `admin.txt`・`include_str!` で埋め込む・`headless/runner.txt` と同じ形）の穴を登録 row と rules 行
-//! の値で埋めるだけの生成（[`render`]・行の追加も削除もしない）。読み手は SessionStart の hook（`hook/mod.rs`）。
+//! 席の指示文（設計 docs/design/seat-roles.md §5・ADR-0022 §2.4・SRS FR42）: 役割ごとの tracked な雛形 1 枚
+//! （`orchestrator.txt`・`include_str!` で埋め込む・`headless/runner.txt` と同じ形）の穴を登録 row と rules 行の値と
+//! 台帳の現在値で埋めるだけの生成（[`render`]・行の追加も削除もしない）。読み手は SessionStart の hook（`hook/mod.rs`）。
+//!
+//! 行は 11 行（ADR-0045 §2 (3)）: 席の同一性 3 行・憲法の効く部分 5 行（順位 / A1 / A4.2 / A2 と A3 / N1〜N3・
+//! C 条文は CI の門と guard が執行するので注入しない・ADR-0046）・役割の特性 3 行。
 //!
 //! 雛形の行は「穴」か「出所 pointer を持つ行」だけである（憲法 C1.2・規範文の定義 = pointer を持たない行・typed）。
 //! pointer の形は退避物の命令行と同じ [`PointerKind`]（行末の `→ SSOT:` の後ろを [`wm::references`] が切り
@@ -15,10 +18,8 @@ use crate::headless::fill;
 use crate::rules::manifest::Manifest;
 use crate::rules::RuleValue;
 
-/// planner の雛形（tracked・絶対 path も口座名も含まない）。
-const PLANNER: &str = include_str!("planner.txt");
-/// 管理席の雛形。
-const ADMIN: &str = include_str!("admin.txt");
+/// orchestrator の雛形（tracked・絶対 path も口座名も含まない）。
+const ORCHESTRATOR: &str = include_str!("orchestrator.txt");
 
 /// 雛形の穴（**閉じた列**・宣言順・設計 §5）。列に無い `{…}` は雛形の違反である。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,10 +32,12 @@ pub enum Hole {
     Anchor,
     /// 役割の名。
     Role,
+    /// 台帳の現在値（`bd --readonly list` の数え・読めない周は呼び側の `unknown`）。
+    Ledger,
 }
 
 /// [`Hole`] の全 variant（宣言順）。
-pub const HOLES: &[Hole] = &[Hole::Capabilities, Hole::Target, Hole::Anchor, Hole::Role];
+pub const HOLES: &[Hole] = &[Hole::Capabilities, Hole::Target, Hole::Anchor, Hole::Role, Hole::Ledger];
 
 impl Hole {
     /// 雛形の中の字面。
@@ -44,6 +47,7 @@ impl Hole {
             Self::Target => "{target}",
             Self::Anchor => "{anchor}",
             Self::Role => "{role}",
+            Self::Ledger => "{ledger}",
         }
     }
 }
@@ -54,8 +58,7 @@ const CAPABILITY_SEPARATOR: &str = "・";
 /// 役割の雛形（役割ごとに 1 枚・variant を足すときは雛形も足す）。
 pub fn template(role: Role) -> &'static str {
     match role {
-        Role::Planner => PLANNER,
-        Role::Admin => ADMIN,
+        Role::Orchestrator => ORCHESTRATOR,
     }
 }
 
@@ -138,7 +141,8 @@ pub fn capabilities_of(manifest: &Manifest, role: Role) -> Option<Vec<Capability
 ///
 /// 穴は **1 走査**で埋める（[`fill`]・runner / lens と同じ）: 重ねて replace すると、先に埋めた target や anchor の中の
 /// `{role}` が次の走査で展開される。`role` は雛形の選択と `{role}` の値で、`registration` からは target と anchor だけを読む。
-pub fn render(role: Role, registration: &Registration, capabilities: &[Capability]) -> String {
+/// `ledger` は台帳の現在値の字面で、読めなかった周の字面（`unknown`）も呼び側が決める（測れなかったを数に化けさせない・C10）。
+pub fn render(role: Role, registration: &Registration, capabilities: &[Capability], ledger: &str) -> String {
     let names: Vec<&str> = capabilities.iter().map(|cap| cap.as_str()).collect();
     let listed = names.join(CAPABILITY_SEPARATOR);
     fill(
@@ -148,6 +152,7 @@ pub fn render(role: Role, registration: &Registration, capabilities: &[Capabilit
             (Hole::Target.as_str(), &registration.target),
             (Hole::Anchor.as_str(), &registration.anchor),
             (Hole::Role.as_str(), role.as_str()),
+            (Hole::Ledger.as_str(), ledger),
         ],
     )
 }
@@ -179,7 +184,7 @@ mod tests {
     #[test]
     fn seat_brief_holes_are_declared_in_order_with_distinct_braced_names() {
         assert!(is_declaration_order(HOLES, |hole| hole as usize), "HOLES は宣言順");
-        assert_eq!(HOLES.len(), 4, "設計 §5 の穴は 4 つ");
+        assert_eq!(HOLES.len(), 5, "設計 §5 の穴は 5 つ（台帳の現在値を含む・ADR-0045 §2 (3)）");
         for hole in HOLES.iter().copied() {
             let text = hole.as_str();
             assert!(text.starts_with('{') && text.ends_with('}'), "{text}");
@@ -201,7 +206,7 @@ mod tests {
             LineKind::Pointed(PointerKind::Constitution),
             "最も強い kind（宣言順で最小）"
         );
-        assert_eq!(classify_line("{role} の権能 → SSOT: rules 行 role.planner"), LineKind::Pointed(PointerKind::Manifest));
+        assert_eq!(classify_line("{role} の権能 → SSOT: rules 行 role.orchestrator"), LineKind::Pointed(PointerKind::Manifest));
         assert_eq!(classify_line("{unknown} → SSOT: N2"), LineKind::UnknownHole("{unknown}".to_owned()), "未知の穴は pointer より先");
         assert_eq!(classify_line("席は lock を確保する"), LineKind::Bare, "pointer 無し");
         assert_eq!(classify_line("席は lock を確保する → SSOT: user 裁定 2026-09-14"), LineKind::Bare, "分類できない参照だけ");
@@ -237,20 +242,25 @@ mod tests {
     /// `render` は穴を埋めるだけ（行数は雛形と同じ・穴の字面が 0 個残る・値は 1 走査で埋める）。
     #[test]
     fn seat_brief_render_fills_holes_in_one_pass_without_adding_lines() {
-        let caps = [Capability::Launch, Capability::Relay];
-        let text = render(Role::Admin, &registration(Role::Admin), &caps);
-        assert_eq!(text.lines().count(), template(Role::Admin).lines().count(), "行の追加も削除もしない");
+        const LEDGER: &str = "open=7 in_progress=1 blocked=2";
+        let role = Role::Orchestrator;
+        let caps = [Capability::Answer, Capability::EditTests];
+        let text = render(role, &registration(role), &caps, LEDGER);
+        assert_eq!(text.lines().count(), template(role).lines().count(), "行の追加も削除もしない");
         assert!(HOLES.iter().all(|hole| !text.contains(hole.as_str())), "穴が残らない: {text}");
-        assert!(text.contains("役割 = admin・target = fixture:seat・anchor = /srv/anchor"), "穴の値: {text}");
-        assert!(text.contains("権能 = launch・relay（"), "権能の名の列: {text}");
+        assert!(text.contains("役割 = orchestrator・target = fixture:seat・anchor = /srv/anchor"), "穴の値: {text}");
+        assert!(text.contains("権能 = answer・edit-tests（"), "権能の名の列: {text}");
+        assert!(text.contains(&format!("台帳の現在値 = {LEDGER} ")), "台帳の現在値: {text}");
         // 値の中の穴の字面は展開しない（1 走査）。
-        let mut braced = registration(Role::Admin);
+        let mut braced = registration(role);
         braced.target = "sess:{role}".to_owned();
-        let text = render(Role::Admin, &braced, &caps);
-        assert!(text.contains("役割 = admin・target = sess:{role}・anchor = /srv/anchor"), "target の中の穴は展開しない: {text}");
-        let planner = render(Role::Planner, &registration(Role::Planner), CAPABILITIES);
-        assert!(CAPABILITIES.iter().all(|cap| planner.contains(cap.as_str())), "権能の名がすべて現れる: {planner}");
-        assert!(planner.contains("役割 = planner"), "{planner}");
+        let text = render(role, &braced, &caps, LEDGER);
+        assert!(
+            text.contains("役割 = orchestrator・target = sess:{role}・anchor = /srv/anchor"),
+            "target の中の穴は展開しない: {text}"
+        );
+        let all = render(role, &registration(role), CAPABILITIES, LEDGER);
+        assert!(CAPABILITIES.iter().all(|cap| all.contains(cap.as_str())), "権能の名がすべて現れる: {all}");
     }
 
     /// 権能は rules 行 `role.<役割>` から読む: 行が無い・不発効・列でない周は `None`。
@@ -260,17 +270,22 @@ mod tests {
             Ok(found) => found,
             Err(errors) => panic!("fixture の manifest を読める: {errors:?}"),
         };
-        let row = |value: &str, enabled: bool| {
-            format!("schema = 1\n\n[[rule]]\nid = \"role.admin\"\nkind = \"RoleCapabilities\"\nvalue = {value}\nenabled = {enabled}\nruling = \"r\"\nruled_at = \"d\"\n")
+        let row = |id: &str, value: &str, enabled: bool| {
+            format!("schema = 1\n\n[[rule]]\nid = \"{id}\"\nkind = \"RoleCapabilities\"\nvalue = {value}\nenabled = {enabled}\nruling = \"r\"\nruled_at = \"d\"\n")
         };
+        let orchestrator = "role.orchestrator";
         assert_eq!(
-            capabilities_of(&parse(&row("[\"merge\", \"launch\"]", true)), Role::Admin),
-            Some(vec![Capability::Merge, Capability::Launch]),
+            capabilities_of(&parse(&row(orchestrator, "[\"answer\", \"go\"]", true)), Role::Orchestrator),
+            Some(vec![Capability::Answer, Capability::Go]),
             "行の並びのまま"
         );
-        assert_eq!(capabilities_of(&parse(&row("[\"merge\"]", false)), Role::Admin), None, "不発効");
-        assert_eq!(capabilities_of(&parse(&row("[\"merge\"]", true)), Role::Planner), None, "行が無い役割");
-        assert_eq!(capabilities_of(&parse("schema = 1\n"), Role::Admin), None, "空の manifest");
+        assert_eq!(capabilities_of(&parse(&row(orchestrator, "[\"answer\"]", false)), Role::Orchestrator), None, "不発効");
+        assert_eq!(
+            capabilities_of(&parse(&row("role.other", "[\"answer\"]", true)), Role::Orchestrator),
+            None,
+            "役割の行が無い"
+        );
+        assert_eq!(capabilities_of(&parse("schema = 1\n"), Role::Orchestrator), None, "空の manifest");
         let embedded = match Manifest::embedded() {
             Ok(found) => found,
             Err(errors) => panic!("埋め込み manifest を読める: {errors:?}"),

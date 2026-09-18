@@ -313,10 +313,10 @@ fn seat_wm_externalize_refuses_over_directive_cap_from_rules() {
 fn seat_wm_externalize_writes_frontmatter_with_schema_seat_and_trigger() {
     let place = wm_place();
     wm_stamp(&place, &["sid-7"]);
-    let out = wm_externalize(&place, "", &["--trigger", "tick", "--role", "planner"]);
+    let out = wm_externalize(&place, "", &["--trigger", "tick", "--role", "orchestrator"]);
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
     let text = fs::read_to_string(place.wm.join("working-memory.sid-7.md")).unwrap_or_default();
-    assert!(text.starts_with(&format!("---\nschema: 1\nseat: {WM_TARGET}\nrole: planner\nexternalized_at: ")), "{text}");
+    assert!(text.starts_with(&format!("---\nschema: 1\nseat: {WM_TARGET}\nrole: orchestrator\nexternalized_at: ")), "{text}");
     for key in ["\ntrigger: tick\n", "\ncarry_source: none\n", "\ncarry_items: 0\n", "\ncarry_user_directives: 0\n"] {
         assert!(text.contains(key), "{key:?} が在る: {text}");
     }
@@ -1591,7 +1591,7 @@ fn seat_rebrief_lists_live_runs_and_seats() {
                 ..status_event("2026-09-16T01:00:01Z", EventKind::SeatSpawned, "r1", None, None)
             },
             status_event("2026-09-16T01:00:02Z", EventKind::RunStage, "r2", Some(Stage::Landed), None),
-            status_registered(&place, WM_TARGET, Role::Planner, Some("Opus")),
+            status_registered(&place, WM_TARGET, Role::Orchestrator, Some("Opus")),
         ],
     );
     let out = wm_rebrief(&place, &bd, &[]);
@@ -1607,7 +1607,7 @@ fn seat_rebrief_lists_live_runs_and_seats() {
     );
     assert_eq!(
         status_rows(&text, "[SEAT"),
-        ["[SEAT] target=wm:1 role=planner state=idle account=a1 model=Opus", "[SEAT-COUNT] n=1"],
+        ["[SEAT] target=wm:1 role=orchestrator state=idle account=a1 model=Opus", "[SEAT-COUNT] n=1"],
         "{text}"
     );
     assert_eq!(
@@ -1629,9 +1629,9 @@ fn seat_wm_status_lists_seats_with_state_from_the_stamp() {
     status_log(
         &place,
         &[
-            status_registered(&place, WM_TARGET, Role::Planner, Some("Opus")),
-            status_registered(&place, "other:2", Role::Admin, None),
-            status_registered(&place, "third:3", Role::Admin, Some("Sonnet")),
+            status_registered(&place, WM_TARGET, Role::Orchestrator, Some("Opus")),
+            status_registered(&place, "other:2", Role::Orchestrator, None),
+            status_registered(&place, "third:3", Role::Orchestrator, Some("Sonnet")),
         ],
     );
     let out = wm_rebrief(&place, &bd, &[]);
@@ -1642,9 +1642,9 @@ fn seat_wm_status_lists_seats_with_state_from_the_stamp() {
     assert_eq!(
         seats,
         [
-            "[SEAT] target=other:2 role=admin state=busy account=a1 model=unknown",
-            "[SEAT] target=third:3 role=admin state=unknown account=a1 model=Sonnet",
-            "[SEAT] target=wm:1 role=planner state=idle account=a1 model=Opus",
+            "[SEAT] target=other:2 role=orchestrator state=busy account=a1 model=unknown",
+            "[SEAT] target=third:3 role=orchestrator state=unknown account=a1 model=Sonnet",
+            "[SEAT] target=wm:1 role=orchestrator state=idle account=a1 model=Opus",
         ],
         "{text}"
     );
