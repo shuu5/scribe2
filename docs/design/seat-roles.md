@@ -186,11 +186,11 @@ C1 / C5（権能の値は行・裁定 id）・C1.2（生成文に手書きの規
   3. **`seat register` は食い違いを断る**: `--model` を省いた周は器が行から導いた値を row に書き、`--model` が行と食い違う周は登録の断りの閉じた列に variant を 1 つ足して断る（event を書かない・受付の極性は in-loop / fail-closed のまま）。
   4. **row の `model` は導出値**: 口座選定（モデル別 7 日窓）と tick の逼迫度が row の `model` を読む経路は変えず、器が書く値を**実測行と同じ語彙（表示名）**に揃える。立て直しが登録 row を更新する既存の 1 本（口座 label の更新）が同じ周に `model` も導出値で書き直す＝land より前に書かれた row は次の立て直しで自動的に直る（移行の口を別に作らない）。
   5. **行を読めない周は起こさない**（fail-closed）: 初回の起動は断り、立て直しは注入せず理由を判定行に残す（黙って口座の設定の既定で起こさない・C10）。
-  6. **doctor に宣言と row の突合を出す**（C3.2・C10）: 登録 row の 1 行に行の既定を 1 語添える。席の doctor の行を描く関数（`seat/role.rs`）は今は manifest を受けないので、`--rules` の値を口座の doctor の行と同じ形で受ける引数を 1 つ足し、呼び手（`crates/scribe2/src/main.rs` の doctor の口・1 か所）が渡す（行を読めない周は既定の語を出さず理由の字面を出す・rc を変えない）。`[SEAT]` の行は変えない（席は宣言を直す権能を持たず、突合の面は doctor である＝同じ事実を 2 面に描かない）。
+  6. **doctor に宣言と row の突合を出す**（C3.2・C10）: 登録 row の 1 行に行の既定を 1 語添える。席の doctor の行を描く関数（`seat/role.rs`）は今は manifest を受けないので、`--rules` の値を口座の doctor の行と同じ形で受ける引数を 1 つ足し、呼び手（`crates/scribe2/src/main.rs` の doctor の口・1 か所）が渡す（行を読めない周は既定の語を出さず理由の字面を出す・rc を変えない）。突合の面は doctor の 1 つである（席は宣言を直す権能を持たず、同じ事実を 2 面に描かない。復元の DATA の `[SEAT]` 行は `s2-07l.479.2` で DATA ごと消えた）。
 - 行 i〜l との交差: §15〜§18 の行 i / j / k / l も `crates/scribe2/src/seat/cycle/launch.rs`・`crates/scribe2/src/seat/cycle/relaunch.rs`・`crates/scribe2/src/seat/cli.rs`・管理 tick の終了の手の module〔`s2-07l.479.1` で削除〕 と e2e の同じ file を触る＝交差する便は直列に流す（口座の決め方と model / effort の導き方は別の軸で、互いの型と断りを変えない）。
-- 触らない: 口座選定の規則と入力・注入の門と極性・復元の経路・`Registration` の項目（effort の field を足さない）・`seat` の使い方の 1 行（`--effort` の flag を作らないので動かない）・`[SEAT]` の行と rebrief の外形 snapshot・極性一覧（guard は増えない）。
+- 触らない: 口座選定の規則と入力・注入の門と極性・復元の経路・`Registration` の項目（effort の field を足さない）・`seat` の使い方の 1 行（`--effort` の flag を作らないので動かない）・極性一覧（guard は増えない）。
 - 歯（`seat_launch_` / `seat_account_relaunch_` / `seat_register_model_` / `seat_role_doctor_` の既存の接頭辞に足す）: (a) 起動行が `claude` の直後に `--model` と `--effort` をこの順で 1 つずつ運び、雛形には旗が残らない／(b) 行と食い違う `--model` の起動は typed に断り、注入 0・登録 row 0／(c) 行と食い違う `--model` の登録は typed に断り event 0、省いた登録は導出値が row に載る／(d) 行と食い違う古い row を持つ席の立て直しは行の値で起こし、更新後の row の `model` が導出値に直る／(e) 行を読めない manifest では起動も立て直しも起こさず理由を名指す／(f) 雛形に旗が二重に在る周の断りが旗ごとに違う理由を名乗る／(g) doctor の登録 row の行が行の既定を添える。
-- 却下案: `--model` の flag を廃す（未知の旗は今の読み方では黙って無視され、宣言の食い違いが静かに通る＝loud でない）／`--model` の上書きを裁定付きの別経路で通す（裁定は行の値を変える側にあり、起動ごとの上書きは行を回避する口になる）／row に effort の field を足す（宣言が 2 面になり、今回の事故と同じ形を effort で作る）／effort を口座の設定 file へ書いて揃える（器が設定の層に依る・C2.2）／`[SEAT]` にも突合を出す（同じ事実の 2 面・席に処置の権能が無い）／立て直しで row を直さず移行の subcommand を作る（口が 1 つ増え、直すまで逼迫度が別の窓を読む）。
+- 却下案: `--model` の flag を廃す（未知の旗は今の読み方では黙って無視され、宣言の食い違いが静かに通る＝loud でない）／`--model` の上書きを裁定付きの別経路で通す（裁定は行の値を変える側にあり、起動ごとの上書きは行を回避する口になる）／row に effort の field を足す（宣言が 2 面になり、今回の事故と同じ形を effort で作る）／effort を口座の設定 file へ書いて揃える（器が設定の層に依る・C2.2）／席の側にも突合を出す（同じ事実の 2 面・席に処置の権能が無い）／立て直しで row を直さず移行の subcommand を作る（口が 1 つ増え、直すまで逼迫度が別の窓を読む）。
 
 <!-- contracts:begin -->
 schema = 1

@@ -2,8 +2,8 @@
 
 - 要件: [FR30](../../design-intent/spec/srs.html#FR30) 便の配送構造（planner が唯一の対話面）/ [FR44](../../design-intent/spec/srs.html#FR44) 席間の連絡（不変）。「対話面の作法」を名指す FR は要件書の改訂（user の手番）で足す。制約: CON2（PUBLIC・user の逐語を tracked file に書かない）
 - 憲法: [C7](../../design-intent/spec/constitution.html#c7) 対話面は 1 つ / [C10](../../design-intent/spec/constitution.html#c10) 宣言・実測・導出を型で分ける（信頼度の語の根）/ [C14](../../design-intent/spec/constitution.html#c14) 規律は文書と manifest の 2 面 / [N2](../../design-intent/spec/constitution.html#n2) prose だけの規則は規則でない / [A1](../../design-intent/spec/constitution.html#a1) 3 クラスの承認
-- 決定: [ADR-0032](../../design-intent/decisions/ADR-0032-dialogue-surface-rules-live-in-one-design-doc-and-planner-brief.html)（本 doc の置き場・9 則の形・5 slot・global の行き先）/ [ADR-0031](../../design-intent/decisions/ADR-0031-working-memory-is-held-by-the-vessel-directives-status-and-hooks.html) §2.2 §2.6（brief の材料 = 器の DATA）/ [ADR-0022](../../design-intent/decisions/ADR-0022-seat-roles-are-typed-and-enforced-by-hooks.html) §2.4（雛形の行の規律）
-- 土台: [seat-roles.md](./seat-roles.md) §5（注入・雛形の行は穴か pointer 付き・xtask の検査）/ [working-memory.md](./working-memory.md) §12（現在地の DATA・直命の表）
+- 決定: [ADR-0032](../../design-intent/decisions/ADR-0032-dialogue-surface-rules-live-in-one-design-doc-and-planner-brief.html)（本 doc の置き場・9 則の形・5 slot・global の行き先）/ [ADR-0031](../../design-intent/decisions/ADR-0031-working-memory-is-held-by-the-vessel-directives-status-and-hooks.html) §2.2 §2.6（brief の材料 = 器の DATA・**ADR-0045 §2 (2) が超過**）/ [ADR-0022](../../design-intent/decisions/ADR-0022-seat-roles-are-typed-and-enforced-by-hooks.html) §2.4（雛形の行の規律）
+- 土台: [seat-roles.md](./seat-roles.md) §5（注入・雛形の行は穴か pointer 付き・xtask の検査）。器の DATA（現在地・直命の表）を土台に敷いていた面は **超過した**（ADR-0045 §2 (2)・`s2-07l.479.2`・[working-memory.md](./working-memory.md)）。
 - この設計から出る契約: §7（3 便）。
 
 ## 1. 何を解くか
@@ -21,8 +21,8 @@ planner は user と話す唯一の席（R-C7-1）。その席が user に向け
 | 3 | **手順は番号** | 2 段以上の手順は番号付き・1 項目 1 動作 | i-have-adhd 則 2 |
 | 4 | **末尾は 1 手** | 最終行 = 次に起きること 1 つ（planner の次の行為 か user の手番）。締めの挨拶・要約の反復を持たない。queue が非空なら「指示があれば」型で park しない | i-have-adhd 則 3 |
 | 5 | **脇道は分けて末尾に** | 本筋の後に「別件:」で 1 行ずつ。**列挙義務（乖離・orphan・危険・件数と母集団）は脇道ではない**＝本筋の slot に載せ省略しない | i-have-adhd 則 4（条件付き） |
-| 6 | **状態を言い直す** | 毎 turn 現在地を 1〜2 行（器の `[MAIN]` `[RUN]` `[SEAT]` 由来）。user に「覚えておいて」を頼まない（直命の表が持つ） | i-have-adhd 則 5 / ADR-0031 §2.1 §2.2 |
-| 7 | **成果を見せる** | 前 session からの Landed を id と sha で（器の `[WIN]`）。作文で膨らませない | i-have-adhd 則 7 |
+| 6 | **状態を言い直す** | 毎 turn 現在地を 1〜2 行。材料は planner が自分で測る（器がまとめて出す DATA は `s2-07l.479.2` で超過した）。user に「覚えておいて」を頼まない | i-have-adhd 則 5 / ADR-0045 §2 (2) |
+| 7 | **成果を見せる** | 前 session からの Landed を id と sha で。作文で膨らませない | i-have-adhd 則 7 |
 | 8 | **error は事実だけ** | 原因・修正・出所（bead / run id / file:line）。感嘆・謝罪・「問題があるようです」を持たない | i-have-adhd 則 8 / global「推測で答えず」 |
 | 9 | **一覧は 5 件・前置きと締めなし** | 表示は 5 件まで・母集団の件数を併記・全件は file へ落として path を返す。前置き（「〜します」の宣言）・要約の反復・締めの挨拶を持たない。「詳細版で」と言われたら本文の長さの上限を外す（形は保つ）。平易に書く＝提示層だけ易しく、思考・解・code の技術水準は下げない | i-have-adhd 則 9 / 則 10 / global「平易」「ガードレール」 |
 
@@ -36,13 +36,13 @@ pushback: user の訂正を即座に受け入れず根拠を検討し、誤っ�
 
 | slot | 中身 | 材料 |
 |---|---|---|
-| 1 `next` | user の手番（承認・裁定・入力・`[DIRECTIVE-REVIEW]` の確認候補）。無ければ planner の次の行為 | DATA + 計画弧 |
-| 2 `wins` | 前 session からの Landed（id・sha） | `[WIN]` |
-| 3 `status` | main の sha と同期・走行中の便（id・段・口座）・席の状態 | `[MAIN]` `[RUN]` `[SEAT]` |
-| 4 `plan` | 進行中の計画の上位 3 件（bead id）+ 母集団（open / in_progress / blocked） | 計画弧 + `[BD-COUNT]` |
-| 5 `risks` | 乖離・orphan・危険。無ければ「なし」・判定不能はその理由（marker 名） | `[DIFF]` `[ORPHAN-WM]` `[WM]` |
+| 1 `next` | user の手番（承認・裁定・入力）。無ければ planner の次の行為 | planner の実測 |
+| 2 `wins` | 前 session からの Landed（id・sha） | planner の実測 |
+| 3 `status` | main の sha と同期・走行中の便（id・段・口座）・席の状態 | planner の実測 |
+| 4 `plan` | 進行中の計画の上位 3 件（bead id）+ 母集団（open / in_progress / blocked） | 席の指示文の `{ledger}` + planner の実測 |
+| 5 `risks` | 乖離・危険。無ければ「なし」・判定不能はその理由 | planner の実測 |
 
-AI 面（pointer の kind / resolution・3 値則・consume の可否・暫定行の扱い）は context に在って表示しない。brief の後の consume は不変（ADR-0018 §2.1）。
+**材料の出所**: 器がこの 5 slot をまとめて出す DATA は `s2-07l.479.2` で超過した（ADR-0045 §2 (2)）。器が持つのは席の指示文の `{ledger}`（台帳の現在値）だけで、残りは planner が自分で測る。**器に新しい出力面を足すのはこの doc の射程外**（足す便は別の契約）。
 
 ## 4. planner の雛形に足す行（pointer 付き・穴なし・規範文 0）
 
@@ -69,11 +69,11 @@ user の裁定を受けた turn の中で対話面の席の口（seat ruling add
 |---|---|---|
 | 言語・伝え方（日本語・平易・ガードレール） | **器の作法へ** | §2 則 9。HTML / tailnet の提示面は host 固有＝global に残す |
 | 回答の方針（信頼度・pushback・承認 front-load・バナー様式・v1 の merge-gate pointer） | **器の作法へ** | §2 則 1 / 則 2 / pushback。v1 docs への pointer は撤去（A1 の 3 クラスが SSOT）。バナー様式は則 2 に簡素化 |
-| タスク開始時（git fetch / status） | **hook / DATA が代替** | SessionStart の hook と `[MAIN]`（ADR-0031 §2.2） |
+| タスク開始時（git fetch / status） | **hook が代替** | SessionStart の hook（DATA の面は `s2-07l.479.2` で超過） |
 | ファイル編集後（commit → push・worker cell 例外 5 面同文） | **縮小**（git skill の 1 行） | worker cell は前の版の遺物。scribe2 は 1 bead = 1 PR・pipeline |
 | multi-agent 実行（v1 骨格の不使用・model / budget 明示・file 出力） | **器の作法へ** | §4 の 4 行目（fan-out の 3 条件）。v1 骨格・cld-spawn の記述は撤去 |
 | 破壊的操作の禁止（tmux / git の hook block） | **残す** | host の hook が SSOT。器の guard へ移すのは別件（N1） |
-| 記憶（auto-memory のみ・旧 MCP の廃止） | **縮小**（1 行） | 経緯は撤去。教訓の carrier は [working-memory.md](./working-memory.md) §12 |
+| 記憶（auto-memory のみ・旧 MCP の廃止） | **縮小**（1 行） | 経緯は撤去。知見の carrier は `design-intent/`（ADR / research）と設計 doc |
 | ホスト・コンテナ（編集 = host / test = container） | **残す** | host 固有 |
 
 見込み（deduced）: global 52 行 → host 固有 3 節 + git skill の 1 行。器は consumer の repo にも global にも書かない（ADR-0022 §2.4）＝痩身は global を持つ repo の便。
@@ -83,7 +83,7 @@ user の裁定を受けた turn の中で対話面の席の口（seat ruling add
 - 雛形の行: pointer の無い行 0・穴 ⊆ 定義済み（既存の xtask の検査・行が増えても検査は不変）。生成文の外形 snapshot（`hook_brief_planner`）が 4 行分動く（C12.5）。
 - 作法の遵守そのものは歯にしない（機械が測れない・ADR-0032 §4）。brief の 5 slot は skill の手順で、snapshot も歯も持たない。
 
-## 7. 契約（3 便）
+## 7. 契約（1 便・(h)(i) は超過）
 
 - **(g)** planner の雛形に §4 の 4 行を足す + 外形 snapshot（S・docs-adjacent・base で RED = snapshot の 4 行不在を名指す歯 1 本）。write-set = `seat/brief/planner.txt` + `tests/e2e/snapshots/e2e__hook__hook_brief_planner.snap` + 名指す歯の file。依存: ADR-0032 land。
 - **(h)(i)** 判断層の skill 2 本の縮小と global の配備替えは**超過した**: skill も退避 / 復元の口も `s2-07l.479.2` で消えた（ADR-0045 §2 (2)・[working-memory.md](./working-memory.md)）。
@@ -91,7 +91,7 @@ user の裁定を受けた turn の中で対話面の席の口（seat ruling add
 ## 8. 却下案（ADR-0032 §5 の写しは持たない・設計固有のもの）
 
 - 5 slot を器が全文生成する: slot 1 と 4 は計画弧（AI の判断）を要し、器は事実しか持たない（ADR-0018 §2.1 の線）。器は材料（DATA）を出し、組むのは skill の手順。
-- 作法の遵守を rubric（Correctness / Autonomy / …）で lens に採点させる: 採点の値が新しい閾値になり、機械が enforce できない値を規則の表に入れる圧力になる（ADR-0032 §5 (D)）。作法は生成文の pointer で運び、違反は user の訂正（直命の表）で戻す。
+- 作法の遵守を rubric（Correctness / Autonomy / …）で lens に採点させる: 採点の値が新しい閾値になり、機械が enforce できない値を規則の表に入れる圧力になる（ADR-0032 §5 (D)）。作法は生成文の pointer で運び、違反は user の訂正で戻す。
 - 雛形の 4 行を admin にも足す: admin は user と話さない（ADR-0016 §2.1・relay のみ）。
 
 ## 9. 後続
