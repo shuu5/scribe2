@@ -48,8 +48,9 @@ fn account_line_of(label: &str) -> String {
 
 // ─────────────────────────── 壊れた --rules の族の不在（s2-07l.479.2） ───────────────────────────
 
-/// 欠陥 3 件の manifest（未知 kind / `ruling` 欠け / id 重複）。base では席の口がこれを defect の列で
-/// 並べた——不在を測るには「並べられる入力」を渡す必要があるので fixture だけ残す。
+/// 欠陥 **2 件**の manifest（未知 kind・`ruling` 欠け）。実測（`rules validate --rules` = 2 行:
+/// `line=3` の未知 kind と `line=11` の必須 key 欠け）。base では席の口がこれを defect の列で並べた
+/// ——不在を測るには「並べられる入力」が要るので fixture だけ残す（HEAD では口が無く file は開かれない）。
 const BROKEN_RULES: &str = concat!(
     "schema = 1\n",
     "\n",
@@ -69,11 +70,14 @@ const BROKEN_RULES: &str = concat!(
     "ruled_at = \"2026-09-12\"\n",
 );
 
-/// 席の口はもう `--rules` を読まない（ADR-0045 §2 (2)・`s2-07l.479.2`）: 使い方の 1 行に `--rules` の
-/// 字面が 1 つも無く、`--rules` を読んでいた 2 口（externalize / rebrief）へ壊れた manifest を
-/// base と同じ引数で渡しても、`rules validate` の defect の行は 1 行も出ず**使い方 1 行だけ**で断る。
+/// 席の口はもう `--rules` を読まない（ADR-0045 §2 (2)・`s2-07l.479.2`）: `--rules` を読んでいた 2 口
+/// （externalize / rebrief）へ壊れた manifest を **base と同じ引数で**渡しても、`rules validate` の
+/// defect の行は 1 行も出ず**使い方 1 行だけ**で断る。
 ///
-/// **消えたことを測る歯**である（base では defect の行が並ぶので RED）。
+/// **消えたことを測る歯**である（base では defect 2 行 + 判定行 1 行の計 3 行が出るので RED）。
+/// 使い方の 1 行から口の名と `--rules` の字面が消えたことは
+/// `seat_working_memory_subcommands_are_gone_from_the_usage`（`tests/e2e/seat.rs`）が測る
+/// ——こちらは**defect の列が出ないこと**だけを測り、同じ事実を 2 度測らない。
 #[test]
 fn seat_rules_no_seat_face_reads_a_rules_flag() {
     let dir = tmp();
@@ -81,8 +85,6 @@ fn seat_rules_no_seat_face_reads_a_rules_flag() {
     let wm = dir.join("wm").display().to_string();
     let anchor = dir.display().to_string();
     let plan = dir.join("plan.md").display().to_string();
-    let usage = stderr_of(&run_seat(&[]));
-    assert!(!usage.contains("--rules"), "使い方に `--rules` は残らない: {usage}");
     let faces: [(&str, Vec<&str>); 2] = [
         ("externalize", vec!["--anchor", anchor.as_str(), "--plan", plan.as_str(), "--directives", plan.as_str()]),
         ("rebrief", vec!["--anchor", anchor.as_str()]),
