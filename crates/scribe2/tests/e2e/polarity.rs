@@ -308,7 +308,13 @@ fn polarity_drops_the_working_memory_guards() {
     assert!(names.contains(&"guard=inject-refusal"), "残る席の guard は在る: {text}");
     let ledger: Polarity = vessel::seat::ledger::POLARITY;
     assert_eq!(ledger, Polarity { timing: Timing::InLoop, on_failure: OnFailure::FailClosed }, "台帳の読みは fail-closed");
-    assert!(vessel::polarity::NOT_A_GUARD.contains(&ledger), "台帳の読みは guard でない境界として残る");
+    // `NOT_A_GUARD` は **値**の slice なので `contains` では site を弁別できない（同じ値の site が 3 つ在る:
+    // json_tree / usage::UsageError / seat::ledger）。ここでは**母集団と、その値を持つ site の本数**を pin する
+    // ＝台帳の行を落とせば 3 → 2 で落ちる。site と一覧の突合そのものは `cargo xtask polarity-sites` の門が持つ。
+    let not_a_guard = vessel::polarity::NOT_A_GUARD;
+    assert_eq!(not_a_guard.len(), 5, "guard でない境界の母集団: {not_a_guard:?}");
+    let closed = not_a_guard.iter().filter(|found| **found == ledger).count();
+    assert_eq!(closed, 3, "in-loop / fail-closed の site は 3 つ（台帳の読みを含む）: {not_a_guard:?}");
 }
 
 /// 席の登録の受付（`s2-07l.192`・設計 seat-roles.md §6・ADR-0022 §2.5）は **in-loop / fail-closed** で一覧に載る。
