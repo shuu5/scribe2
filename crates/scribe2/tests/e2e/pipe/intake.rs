@@ -1356,6 +1356,117 @@ fn contract_closure_ext_shrink_item_is_not_counted_in_the_core_estimate() {
     clean(&[&repo, &state]);
 }
 
+// ── 着地で消える file の宣言（`~`・設計 contract-source.md §24・行 x・`s2-07l.405`・接頭辞 `contract_closure_ext_delete_`） ──
+
+/// `~` の項目が base に在る行は受付を通り（run dir と event 1 件）、受付はその項目を**接頭辞を剥がした素の path**で
+/// 読む（剥がす規則は `normalize` の 1 本＝交差の照合も同じ 1 本を通る）: 素の path を書いた 2 本目は live な `~` の
+/// 便と交差して断られ、別の file の便は交差しない（base は `~` を剥がさないので交差 0 で通る＝RED）。
+#[test]
+fn contract_closure_ext_delete_intake_accepts_existing_and_strips_prefix() {
+    let (repo, state) = repo_with_state();
+    let doomed = write_set_contract(&repo, "delete.toml", &["~src/lib.rs"]);
+    let out = try_intake(&repo, &state, &doomed, "s2-del");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "base に在る file への ~ は受付を通る: {}", stderr_of(&out));
+    let id = run_id_of(&out);
+    assert!(state.join("pipe").join(&id).is_dir(), "run dir が作られる: {id}");
+    assert_eq!(event_count(&state), 2, "RunCreated と審査の段（Reviewed）の 2 件");
+    let plain = write_set_contract(&repo, "plain.toml", &["src/lib.rs"]);
+    let crossed = try_intake(&repo, &state, &plain, "s2-plain");
+    let err = stderr_of(&crossed);
+    assert_eq!(crossed.status.code(), Some(i32::from(RC_REFUSED)), "~ の便と素の path の便は同じ面を触る: {err}");
+    assert!(err.contains(&id) && err.contains("src/lib.rs"), "1 本目の run id と交差した path を名乗る: {err}");
+    let apart = try_intake(&repo, &state, &write_set_contract(&repo, "other.toml", &["+src/new.rs"]), "s2-apart");
+    assert_eq!(apart.status.code(), Some(i32::from(RC_OK)), "別の file の便は交差しない: {}", stderr_of(&apart));
+    clean(&[&repo, &state]);
+}
+
+/// `~` の先が base に無い項目は **`pipe intake` で** `write-set-item-unresolved` として項目の字面（`~` 込み）を名指して
+/// 断り、run dir も event も作らない（消す予定の file が無い＝宣言の誤りを入口で止める・落として測ると黙って通る）。
+#[test]
+fn contract_closure_ext_delete_intake_refuses_missing_file() {
+    let (repo, state) = repo_with_state();
+    let out = try_intake(&repo, &state, &write_set_contract(&repo, "none.toml", &["~src/none.rs"]), "s2-none");
+    let err = stderr_of(&out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "base に無い file への ~ は解けない: {err}");
+    assert!(err.contains("write-set の ~src/none.rs は base に解けない"), "項目の字面（~ 込み）を名指す: {err}");
+    assert_eq!(event_count(&state), 0, "断った周は event を書かない");
+    assert!(!state.join("pipe").exists(), "run dir も作らない");
+    clean(&[&repo, &state]);
+}
+
+/// 契約表の検査（`MayBeLanded` の場面）は `~` の項目を **2 分岐とも**解く: tracked から消した後（着地の後）も、まだ
+/// 消していない周も findings 0・rc 0（着地済みの行が `write-set-item-unresolved` で永久に赤くなる型を塞ぐ）。
+#[test]
+fn contract_closure_ext_delete_check_passes_after_landing() {
+    let doc = table_doc(&table_region(&[table_row("a", &[("write-set", "[\"src/tint.rs\", \"~src/old.rs\"]")])]));
+    let present = table_repo(&doc, &[("src/old.rs", "// old\n")]);
+    let out = contracts_check(&present);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "まだ消していない周の ~ も解ける: {}", stdout_of(&out));
+    assert_eq!(stdout_of(&out).trim_end(), "contracts check: docs=1 rows=1 findings=0");
+    let landed = table_repo(&doc, &[("src/old.rs", "// old\n")]);
+    git(&landed, &["rm", "-q", "src/old.rs"]);
+    git(&landed, &["commit", "-q", "-m", "land"]);
+    let out = contracts_check(&landed);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "着地で消えた ~ も解ける: {}", stdout_of(&out));
+    assert_eq!(stdout_of(&out).trim_end(), "contracts check: docs=1 rows=1 findings=0");
+    clean(&[&present, &landed]);
+}
+
+/// 名指しの実在（§24 (3)）: 節の本文が行の `~` の項目と等しい path 形を backtick で名指しても、着地（tracked から
+/// 消えた後）に `name-unresolved` にならない。除外の無い別の path（`src/gone.rs`）は名指されたまま＝空虚でない対。
+#[test]
+fn contract_closure_ext_delete_name_in_section_resolves_after_landing() {
+    let body = "本文。`src/old.rs` は行の消える file・`src/gone.rs` は write-set に無い。";
+    let doc = table_doc(&table_region(&[table_row("a", &[("write-set", "[\"src/tint.rs\", \"~src/old.rs\"]")])]))
+        .replace("## 1. 何を解くか\n\n本文。", &format!("## 1. 何を解くか\n\n{body}"));
+    let repo = table_repo(&doc, &[("src/old.rs", "// old\n")]);
+    git(&repo, &["rm", "-q", "src/old.rs"]);
+    git(&repo, &["commit", "-q", "-m", "land"]);
+    let out = contracts_check(&repo);
+    let (text, found) = (stdout_of(&out), findings_of(&out));
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{text}{}", stderr_of(&out));
+    let names = findings_for(&found, &doc, "a", "name-unresolved");
+    assert!(names.iter().all(|line| !line.contains("src/old.rs")), "~ の項目と等しい名指しは着地の後も解ける: {text}");
+    assert_eq!(names.len(), 1, "解けない名指しは 1 件だけ: {text}");
+    assert!(names.iter().all(|line| line.contains("名指し src/gone.rs が base に無い")), "除外の無い path は名指したまま: {text}");
+    assert_eq!(found.len(), 1, "他の理由は出ない（~ の項目は write-set-item-unresolved にならない）: {text}");
+    clean(&[&repo]);
+}
+
+/// 上限の余地: `~` の項目は増分が負なので **file の余地も core の見積の本数も**求めない（`-` と同じ扱い）。余地 101 の
+/// 1399 行の `.rs` を `~` で持つ size M（300）の契約は受付を**通り**（run dir と event 1 件）、同じ file を素の path で
+/// 持つ M は従来どおり `cap-headroom`。core も対で測る: 余地 150 に `~big.rs` + `+new.rs` の見積 100 × 1 本は入り、素の
+/// 2 本 200 は超えて `core` を名指して断られる（`~` を `File` / `New` と同じ本数に数えると後段が赤くなる）。
+#[test]
+fn contract_closure_ext_delete_does_not_count_headroom() {
+    let (repo, state) = repo_with_big_file();
+    let roomy = capped_rules(&state, "rules-roomy.toml", 40_000);
+    let plain = intake_with_rules(&repo, &state, &sized_contract(&repo, "m.toml", "M", "\"crates/toy/src/big.rs\""), "s2-mb", &roomy);
+    let err = stderr_of(&plain);
+    assert_eq!(plain.status.code(), Some(i32::from(RC_REFUSED)), "素の path の M は余地 101 に入らない: {err}");
+    assert!(err.contains("crates/toy/src/big.rs の上限の余地が 101 行") && err.contains("size M"), "cap-headroom: {err}");
+    assert_eq!(event_count(&state), 0, "断った周は event を書かない");
+    assert!(!state.join("pipe").exists(), "run dir も作らない");
+    let doomed = intake_with_rules(&repo, &state, &sized_contract(&repo, "del.toml", "M", "\"~crates/toy/src/big.rs\""), "s2-db", &roomy);
+    assert_eq!(doomed.status.code(), Some(i32::from(RC_OK)), "~ の big.rs は余地を求めない: {}", stderr_of(&doomed));
+    let id = run_id_of(&doomed);
+    assert!(state.join("pipe").join(&id).is_dir(), "run dir が作られる: {id}");
+    assert_eq!(event_count(&state), 2, "RunCreated と審査の段（Reviewed）の 2 件");
+    stop_run_ok(&state, &id);
+    // core の見積の本数（上限 1549・合計 1399＝余地 150・size S の見積は 1 本 100 行）。
+    let tight = capped_rules(&state, "rules-tight.toml", 1_549);
+    let both = "\"crates/toy/src/big.rs\", \"+crates/toy/src/new.rs\"";
+    let counted = intake_with_rules(&repo, &state, &sized_contract(&repo, "both.toml", "S", both), "s2-bo", &tight);
+    let err = stderr_of(&counted);
+    assert_eq!(counted.status.code(), Some(i32::from(RC_REFUSED)), "2 本の見積 200 は core の余地 150 に入らない: {err}");
+    assert!(err.contains("core の上限の余地が 150 行") && !err.contains("big.rs の上限"), "core を名指す: {err}");
+    let gone = "\"~crates/toy/src/big.rs\", \"+crates/toy/src/new.rs\"";
+    let apart = intake_with_rules(&repo, &state, &sized_contract(&repo, "gone.toml", "S", gone), "s2-go", &tight);
+    assert_eq!(apart.status.code(), Some(i32::from(RC_OK)), "~ を数えない 1 本の見積 100 は余地 150 に入る: {}", stderr_of(&apart));
+    assert!(state.join("pipe").join(run_id_of(&apart)).is_dir(), "run dir が作られる");
+    clean(&[&repo, &state]);
+}
+
 /// (5) 行の数え方（`s2-07l.254`・設計 rules-manifest.md §4・接頭辞 `contract_closure_ext_width_`）: base の `.rs` が短い
 /// 1399 行と 2000 字を詰めた 1 行を持つとき、余地は改行の数（1400 行 → 100）でなく幅（`--rules` の `R-C4.line-width`）で
 /// 正規化した行数で出て、改行の数なら入る size S（100）が `cap-headroom` で断られる（詰め込みで余地が増えない）。
