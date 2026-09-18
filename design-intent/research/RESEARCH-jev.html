@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="folio-doc-type" content="research-report">
+<meta name="folio-layer" content="project">
+<meta name="folio-version" content="0.1.0">
+<meta name="folio-status" content="active">
+<meta name="folio-stakeholders" content="Developer, AI Agent">
+<meta name="folio-research-date" content="2026-09-18">
+<title>RESEARCH-jev — Jev（typed decision の API）を pipeline の判定に使えるか: 3 問 87 件の実測（2026-09-18 の調査）</title>
+<link rel="stylesheet" href="../../common.css">
+<script type="application/ld+json">
+{
+  "@context": {
+    "dc": "http://purl.org/dc/terms/",
+    "schema": "https://schema.org/",
+    "folio": "https://folio.dev/spec/v1/"
+  },
+  "@id": "./RESEARCH-jev.html",
+  "@type": "schema:TechArticle",
+  "dc:isPartOf": [
+    { "@id": "./README.html" }
+  ],
+  "dc:title": "RESEARCH-jev — Jev（typed decision の API）を pipeline の判定に使えるか: 3 問 87 件の実測（2026-09-18 の調査）",
+  "folio:version": "0.1.0",
+  "folio:stakeholders": ["Developer", "AI Agent"]
+}
+</script>
+</head>
+<body>
+<!-- folio:chrome-top -->
+<a class="skip-link" href="#s1-question">本文へスキップ</a>
+<nav class="breadcrumb" aria-label="パンくず"><ol>
+  <li><a href="../index.html">design-intent</a></li>
+  <li><a href="./README.html">research</a></li>
+  <li aria-current="page">RESEARCH-jev</li>
+</ol></nav>
+<!-- /folio:chrome-top -->
+
+<header class="doc-header">
+  <h1>RESEARCH-jev — Jev（typed decision の API）を pipeline の判定に使えるか: 3 問 87 件の実測（2026-09-18 の調査）</h1>
+  <div class="meta">v0.1.0 &middot; status: active &middot; 調査日 2026-09-18 &middot; research-report &middot; 決めない（記録時点の推奨は「保留」・採否は後続の ADR が記録する）</div>
+</header>
+<!-- folio:chrome-toc -->
+<nav class="toc" aria-label="ページ内目次">
+<ol>
+  <li><a href="#s1-question">§1. 問い（何を調べたか）</a></li>
+  <li><a href="#s2-object">§2. 調査対象の実体（Jev・記録時点）</a></li>
+  <li><a href="#s3-measured">§3. 実測（正解との一致・確率の較正・揺れ・速さと単価）</a></li>
+  <li><a href="#s4-fit">§4. scribe2 との突合（どこに挿せるか・今は挿さない理由）</a></li>
+  <li><a href="#s5-open">§5. 再検討の条件と未解決の問い</a></li>
+  <li><a href="#s6-sources">§6. 出所</a></li>
+</ol>
+</nav>
+<!-- /folio:chrome-toc -->
+
+<aside class="informative">
+<ul>
+  <li>出所: user の依頼 2026-09-18（対話面・orchestrator 席）＝early access の API を試し、pipeline の判定に使えるかを検証する（要旨）。本 doc は探索であり<strong>決めない</strong>。</li>
+  <li>実測は repo の外の spike（素の session・依存 0・標準 library の HTTP client だけ）で行い、scribe2 側は読み取りだけ。鍵・host 名・口座名・path は本 doc に書かない（PUBLIC 面）。spike の report と samples は tracked ではない（§6 (5)）。</li>
+</ul>
+</aside>
+
+<section id="s1-question" class="informative">
+<h2>§1. 問い（何を調べたか）</h2>
+<p class="section-essence" data-audience="human">Jev は「文章を返す」のではなく「型のある判定と、較正された確率を返す」ことを売りにする API です。scribe2 の pipeline で今 LLM（lens）か字面の規則で決めている判定のうち 3 つに当てて、正解との一致・確率が当てになるか・同じ入力での揺れ・速さと単価を測りました。</p>
+<p data-audience="machine">問いは 3 つで、いずれも scribe2 の現物から採った素材（契約の acceptance・lens の evidence・便の結末）に、この spike が正解を付けたもの。(q1) 契約の acceptance が「pointer だけ」か「本文を持つ」か（2 値）。(q2) lens の指摘 1 件が「契約適合 / 歯の非空虚性 / 憲法 / その他」のどれかと、その重さ（0 形式の逸脱 / 1 検査の穴 / 2 挙動の欠陥）。(q3) 便の結末を「着地 / 差し戻し / 人へ上げる」の 3 値で決める（state に lens の verdict の語は入れない）。比較の基準線は、q1 は設計 contract-source.md の lint (iii) の正規表現 1 本、q3 は lens の判定語（PASS → 着地・FAIL → 差し戻し）の規則 1 行。</p>
+</section>
+
+<section id="s2-object" class="informative">
+<h2>§2. 調査対象の実体（Jev・記録時点）</h2>
+<p class="section-essence" data-audience="human">Jev は 1 回の request に複数の問いを載せられ、問いの型は 3 つ（0〜1 の数 / 選択肢と確率分布 / 段階の加重値）です。確率とは別に confidence という統計量を返し、式は非公開です。入力 100 万 token あたり $0.042 で出力は無料、docs は英語が主で CJK は同等の精度ではないと明記しています。</p>
+<table data-audience="machine">
+  <thead><tr><th>項目</th><th>記録時点の事実</th><th>出所</th></tr></thead>
+  <tbody>
+    <tr><td>正体</td><td>「System One Models」を名乗る、対話でなく機械の自動化のための判定 API。早期アクセス。model の alias は予告なく動く（記録時点の版 ID は jev-1.13.0・閾値を決めたら版を pin せよと docs が明記）</td><td>§6 (1)(2)</td></tr>
+    <tr><td>request</td><td>1 request = state（文字列 / object / 配列）+ 問いの集合（key ごとに type・instructions・criteria）。問いの型は noul（0〜1 の数 1 つ・閾値は呼ぶ側）/ choice（選択肢 + 確率分布〔和 1〕+ confidence）/ score（加重値 + 確率分布 + legend + confidence）。context は 64k token</td><td>§6 (2)</td></tr>
+    <tr><td>応答の形</td><td>確率は小数 2 桁に丸められる（0.0 / 1.0 が出る）。probabilities の key 順は毎回変わる。confidence は最大確率とは別の統計量（式は非公開）</td><td>§6 (2)・実測</td></tr>
+    <tr><td>エラー</td><td>401 / 422 / 429 / 529。401 と 422 は body の形が違う（object と配列）。rate limit の残量や request id の header は無い。内容による「断り」の型は docs に無く、実測でも未遭遇</td><td>§6 (2)・実測</td></tr>
+    <tr><td>単価と上限</td><td>入力 $0.042 / 100 万 token・出力無料。rate limit は 25 万 token / 秒・1,200 request / 分（予告なく変わると警告）。公称 latency 70〜500ms</td><td>§6 (2)</td></tr>
+    <tr><td>SDK</td><td>Python と JS の SDK がある。本 spike は依存 0（標準 library の HTTP client）で回した</td><td>§6 (2)</td></tr>
+    <tr><td>docs が自ら明記する弱点</td><td>(a) 英語が主・CJK は同等の精度ではない・非英語は自分で試せ。(b) 多段の推論・間接参照に弱い。(c) state 内の文が判定を動かしうる（注入に無防備）。(d)「code で計算できることを model に聞くな」</td><td>§6 (3)</td></tr>
+  </tbody>
+</table>
+</section>
+
+<section id="s3-measured" class="informative">
+<h2>§3. 実測（正解との一致・確率の較正・揺れ・速さと単価）</h2>
+<p class="section-essence" data-audience="human">正解つき 87 件（q1 30・q2 27・q3 30）を、日本語の問いと英語の問いの両方で 3 回ずつ撃ちました（261 回・約 $0.014）。q1 は 30/30 で正規表現と同点、q2 は 22/27、q3 は 26/30 で lens の判定語の規則（28/30）を下回りました。確率 0.9 以上の判定は 422 件すべて的中し、誤りは全部 0.9 未満に集まります。同じ入力での揺れは確率 0.5 付近だけで、失敗は 444 回で 0、1 回の中央値は 527ms です。</p>
+<table data-audience="machine">
+  <thead><tr><th>問い（3 回の多数決）</th><th>英語の問い</th><th>日本語の問い</th><th>境界例</th><th>基準線</th></tr></thead>
+  <tbody>
+    <tr><td>q1 2 値（choice 型）</td><td>30/30</td><td>30/30</td><td>6/6・6/6</td><td>正規表現 1 本 30/30（同点）</td></tr>
+    <tr><td>q1 同じ問いを noul 型で（閾値 0.5）</td><td>28/30</td><td>30/30</td><td>6/6・6/6</td><td>pointer だけの例の確率が 0.44〜0.92（中央値 0.64）に寄る。choice 型との確率の差は最大 0.55</td></tr>
+    <tr><td>q2 種別（4 択）</td><td>22/27</td><td>22/27</td><td>7/10・7/10</td><td>無し（現物に finding 単位の記録が無い）</td></tr>
+    <tr><td>q2 重さ（3 段・最大確率の段）</td><td>22/27</td><td>23/27</td><td>8/10・9/10</td><td>無し（重さは本 spike の定義）</td></tr>
+    <tr><td>q3 3 値</td><td>26/30</td><td>25/30</td><td>6/8・6/8</td><td>lens の判定語の規則 28/30（Jev が下回る）</td></tr>
+  </tbody>
+</table>
+<table data-audience="machine">
+  <thead><tr><th>性質</th><th>実測値</th><th>母集団</th></tr></thead>
+  <tbody>
+    <tr><td>確率の較正</td><td>確率 0.9 以上: 422/422 的中（全体の 62%）。0.5〜0.7: 63/118 = 53%（平均の確率 約 0.59）。誤りは全部 0.9 未満。confidence では 0.8 以上で外れ 0</td><td>選択式 4 問 × 日英・延べ 684 回（独立ではない）</td></tr>
+    <tr><td>同じ入力での揺れ</td><td>判定が変わったのは問いごとに 0〜2 件 / 27〜30 件で、全て確率 0.5 付近。確率の幅は中央値 0.01〜0.03・最大 0.15。同梱 request と英語のみ request の判定の一致 164/165</td><td>3 回 × 87 件 + 英語のみ 78 件 × 2 回</td></tr>
+    <tr><td>速さ</td><td>p50 527ms・p95 645ms（毎回接続を張り直し・推論の上乗せは約 100ms で大半は通信）</td><td>N = 261</td></tr>
+    <tr><td>失敗</td><td>timeout / 429 / 529 / 断り / 型の壊れ すべて 0（直列のみ・並列の負荷は未測定）</td><td>N = 444（段 1〜3 の総計）</td></tr>
+    <tr><td>単価</td><td>1 回 平均 1,271 入力 token = 約 $0.00005。短い request でも 200 token 超の固定分が載る。段 1〜3 の総費用 約 $0.02</td><td>N = 261（段 3）</td></tr>
+    <tr><td>日英の問いの差</td><td>0〜1 件 / 問いで、この規模では見えない。state を英訳した場合との比較は未測定</td><td>各 27〜30 件</td></tr>
+    <tr><td>契約の側を直すべきだった便 2 件（lens は FAIL）</td><td>1 件は日英とも 3/3 で「人へ上げる」（確率 0.76〜0.85）。もう 1 件は英語で 1/3・日本語で 3/3（確率 0.44〜0.60 で揺れる）</td><td>q3 の境界例 8 件のうち 2 件</td></tr>
+  </tbody>
+</table>
+<p data-audience="machine">読み方: (a) q1 の一致は Jev の手柄ではない。docs (d) のとおり code で計算できる問いで、正規表現が同点。(b) q3 は lens の verdict の語を state から抜いても 26/30 だが、語を使う規則 1 行が 28/30 で上回る＝「lens の verdict → 3 値」に Jev を挟む理由は無い。(c) 確率は閾値として使える形をしている（0.9 以上は外れ 0・誤りは 0.5〜0.9 に集まる）。これは「確信のある判定だけ機械が進め、残りを人へ上げる」形に向く。(d) 揺れは確率 0.5 付近に限られ、閾値を 0.9 に置けば揺れの影響は消える。(e) 限界: 正解は 1 人（spike の AI）が付け 2 人目の照合は無い。件数は 27〜30（1 件 = 約 3〜4%）。q2 の「憲法」は現物に 2 件しか無い。問いの文は 1 版で samples を見て調整していない（docs の勧める criteria の書き足しで上がる余地は未測定）。</p>
+</section>
+
+<section id="s4-fit" class="informative">
+<h2>§4. scribe2 との突合（どこに挿せるか・今は挿さない理由）</h2>
+<p class="section-essence" data-audience="human">記録時点の推奨は「保留」です。3 問のどれも、Jev を足す理由が実測から出ませんでした。q1 は正規表現で足り、q3 は既存の規則が上回り、q2 は比べる基準線となる記録が scribe2 に無いからです。挿せる場所があるとすれば「lens の指摘 1 件ごとの重さの仕分け」と「dispatcher が人へ上げるかの判断」で、どちらも今は無い記録か無い口です。</p>
+<table data-audience="machine">
+  <thead><tr><th>挿し口の候補</th><th>記録時点の scribe2</th><th>Jev が足すもの</th><th>今は挿さない理由</th></tr></thead>
+  <tbody>
+    <tr><td>受付の分類（契約の形）</td><td>設計 contract-source.md の lint (iii)（正規表現）。台帳 517 件の acceptance は pointer + 本文 140 / 散文のみ 227 / 空 150 で pointer だけの契約は 0 件（spike の計数）</td><td>無し（同点）</td><td>docs (d)「code で計算できることを model に聞くな」と決定はしごの段 2（既に在る）で止まる</td></tr>
+    <tr><td>lens の指摘の種別と重さ</td><td>lens の出力は verdict + evidence 1 行 + 観点の件数だけで、指摘 1 件ごとの文と重さの record は無い（q2 の重さは spike の定義）</td><td>指摘ごとの重さの確率（0.9 以上なら外れ 0）</td><td>仕分けの対象となる record が無い。lens が finding 単位の record を持つ設計（<a href="../spec/constitution.html#c17">C17.2</a>: 足す前に消すものを名指す）が先</td></tr>
+    <tr><td>dispatcher の 3 値（着地 / 差し戻し / 人へ上げる）</td><td>lens の verdict の語からの規則 1 行（ADR-0045 の dispatcher は未着地）</td><td>「契約の側を直すべき便」を確率つきで人へ上げる（境界例 2 件のうち 1 件は 3/3・もう 1 件は揺れる）</td><td>規則 1 行が 28/30 で上回る。dispatcher の escalate の判断に確率が要ると分かってから（<a href="../spec/constitution.html#c10">C10</a>: まず測る）</td></tr>
+    <tr><td>憲法の面</td><td>—</td><td>—</td><td>採るなら外部依存の追加（<a href="../spec/constitution.html#a3">A3</a>・<a href="../spec/constitution.html#c13">C13</a>）と課金（<a href="../spec/constitution.html#a1">A1</a>「使う」）の承認 event、版 ID の pin（rules 行・裁定 id）、外へ出す state の scrub（host 名・口座名・path・user の逐語）が要る。lens の evidence を state に入れるなら docs (c) の注入の弱さが効く</td></tr>
+  </tbody>
+</table>
+</section>
+
+<section id="s5-open" class="informative">
+<h2>§5. 再検討の条件と未解決の問い</h2>
+<p class="section-essence" data-audience="human">Jev を再検討するのは、lens が指摘 1 件ごとの記録を持つようになって重さの仕分けが必要になった時か、dispatcher の「人へ上げる」判断に確率が要ると分かった時です。その時は、版 ID の pin・閾値（0.9 が実測の境）・外へ出す素材の scrub・日本語の state のままでよいかを決めてから使います。</p>
+<ul data-audience="machine">
+  <li>再検討の引き金: (1) lens の findings が閉じた型の record（1 件 1 行・種別つき）になり、重さの仕分けが人の手番を作るとき。(2) dispatcher（ADR-0045）の escalate の判断で、規則 1 行が取りこぼす「契約の側を直すべき便」が実測で積み上がるとき。</li>
+  <li>閾値: 実測の境は確率 0.9（0.9 以上は外れ 0・0.5〜0.7 は 53%）。deny の門に使うなら閾値は rules 行（裁定 id・<a href="../spec/constitution.html#c5">C5</a>）で、検出線として置くなら C12.4 の型。</li>
+  <li>版: alias は予告なく動くので rules 行に版 ID を pin する（記録時点 jev-1.13.0）。版が動いたら samples 87 件で再測定（費用 約 $0.014 / 周）。</li>
+  <li>未測定: 並列の負荷・長い state（数万 token）・429 の挙動・請求額の照合・state を英訳した場合との差・criteria に境界例を書き足した場合の上がり幅・2 人目の正解付け。</li>
+  <li>散文の面: docs (c) のとおり state 内の文が判定を動かしうる。lens の evidence（LLM の出力）を state に入れる設計は、注入に無防備な口を pipeline に足すことになる＝挿すなら state は機械が作った field に限る。</li>
+</ul>
+</section>
+
+<section id="s6-sources" class="informative">
+<h2>§6. 出所</h2>
+<ol data-audience="machine">
+  <li>製品の説明（System One Models・単価・早期アクセス）: <a href="https://typesafe.ai/">typesafe.ai</a></li>
+  <li>API reference と model の一覧（endpoint・request / response の形・rate limit・SDK）: <a href="https://docs.typesafe.ai/">docs.typesafe.ai</a></li>
+  <li>既知の弱点（CJK・多段の推論・state 内の文・「code で計算できることを聞くな」・2026-09-17 改訂）: docs.typesafe.ai の model-jaggedness の頁（jev-1.13）</li>
+  <li>scribe2 側の現物（記録時点・読み取りだけ）: 台帳の acceptance 517 件・便の verify record と lens の evidence・便の結末（fleet の event log）・設計 contract-source.md §3 の lint (iii)・pipeline.md の段の規則。</li>
+  <li>spike の成果物（tracked ではない・repo の外）: report（HTML 1 枚と metrics の JSON）・samples 87 件（正解と根拠つき・host 名は伏せ字）・段 1 の API の形の記録。本 doc の数値はその metrics から写した（2026-09-18・commit の sha は spike の local repo）。</li>
+</ol>
+</section>
+<!-- folio:chrome-bottom -->
+<script>
+(function () {
+  var openedForPrint = [];
+  window.addEventListener('beforeprint', function () {
+    openedForPrint = [];
+    var ds = document.querySelectorAll('details:not([open])');
+    for (var i = 0; i < ds.length; i++) { ds[i].setAttribute('open', ''); openedForPrint.push(ds[i]); }
+  });
+  window.addEventListener('afterprint', function () {
+    for (var i = 0; i < openedForPrint.length; i++) openedForPrint[i].removeAttribute('open');
+    openedForPrint = [];
+  });
+  if (!document.querySelector('[data-audience]')) return;
+  /* 既定 = 人間プレゼン型 (ADR-0040 / rules §11.3): script 経由で初期 class を付与するため
+     no-JS では付かず全文可視に graceful degrade する。 static DOM は全文を保持 (AI/検索/印刷は不変)。 */
+  document.body.classList.add('audience-human');
+  var bar = document.createElement('nav');
+  bar.className = 'audience-toggle';
+  bar.setAttribute('aria-label', '表示対象の切替');
+  var states = [['both', '両方'], ['human', '人間向け'], ['machine', '機械向け']];
+  for (var s = 0; s < states.length; s++) {
+    (function (mode, label) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      b.setAttribute('aria-pressed', mode === 'human' ? 'true' : 'false');
+      b.addEventListener('click', function () {
+        document.body.classList.remove('audience-human', 'audience-machine');
+        if (mode !== 'both') document.body.classList.add('audience-' + mode);
+        var bs = bar.querySelectorAll('button');
+        for (var j = 0; j < bs.length; j++) bs[j].setAttribute('aria-pressed', bs[j] === b ? 'true' : 'false');
+      });
+      bar.appendChild(b);
+    })(states[s][0], states[s][1]);
+  }
+  var bc = document.querySelector('nav.breadcrumb');
+  if (bc && bc.parentNode) { bc.parentNode.insertBefore(bar, bc.nextSibling); }
+  else { document.body.insertBefore(bar, document.body.firstChild); }
+})();
+</script>
+<!-- /folio:chrome-bottom -->
+</body>
+</html>
