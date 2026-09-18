@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="generator" content="folio ADR-pack assembler (folio-bwc / instance#2) — deterministic structure, prose slots unfilled">
-<title>着地の列は候補の木 1 つに対して gate を 1 回撃つ (merge train・列の先頭 N 本を順に rebase した木を 1 回検査し緑なら順に着地・赤は列を解いて 1 本ずつに戻す・検出線は patch-id が不変なら持ち越す・N は rules 行)</title>
+<title>主実測は着地する木が gate の木と同じなら全段を撃たない (木の sha の一致を測定の再現と見なし record 1 本で残す・一致しない周と tree の無い verdict の周は全段撃つ・ADR-0021 §2.4「木が同じ main 実測は検出線を撃ち直さない」を「全段を撃ち直さない」へ広げる部分 supersede)</title>
 <style>
 /* ===========================================================================
    folio human-layer design system — core.css (S3 / folio-8oc プロトタイプ)
@@ -455,17 +455,14 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
     "schema": "https://schema.org/",
     "folio": "https://folio.dev/spec/v1/"
   },
-  "@id": "./ADR-0039-landing-train-gates-one-candidate-tree.html",
+  "@id": "./ADR-0043-same-tree-main-check-is-one-record.html",
   "@type": "schema:TechArticle",
-  "dc:isReferencedBy": [
-    { "@id": "./ADR-0043-same-tree-main-check-is-one-record.html" }
-  ],
   "dc:isPartOf": [
     {
       "@id": "./README.html"
     }
   ],
-  "dc:title": "着地の列は候補の木 1 つに対して gate を 1 回撃つ (merge train・列の先頭 N 本を順に rebase した木を 1 回検査し緑なら順に着地・赤は列を解いて 1 本ずつに戻す・検出線は patch-id が不変なら持ち越す・N は rules 行)",
+  "dc:title": "主実測は着地する木が gate の木と同じなら全段を撃たない (木の sha の一致を測定の再現と見なし record 1 本で残す・一致しない周と tree の無い verdict の周は全段撃つ・ADR-0021 §2.4「木が同じ main 実測は検出線を撃ち直さない」を「全段を撃ち直さない」へ広げる部分 supersede)",
   "folio:version": "0.1.0",
   "folio:stakeholders": [
     "Developer",
@@ -474,25 +471,25 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
   ],
   "dc:references": [
     {
-      "@id": "../spec/constitution.html#c2"
-    },
-    {
       "@id": "../spec/constitution.html#c10"
     },
     {
       "@id": "../spec/constitution.html#c12"
     },
     {
-      "@id": "../spec/constitution.html#c5"
+      "@id": "../spec/constitution.html#c11"
     },
     {
-      "@id": "../spec/srs.html#FR10"
+      "@id": "../spec/constitution.html#c2"
     },
     {
-      "@id": "../spec/srs.html#FR12"
+      "@id": "../spec/constitution.html#c3"
     },
     {
       "@id": "../spec/srs.html#FR34"
+    },
+    {
+      "@id": "../spec/srs.html#FR12"
     },
     {
       "@id": "../spec/srs.html#FR50"
@@ -501,7 +498,10 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
       "@id": "./ADR-0021-gate-cost-is-measured-and-confined.html"
     },
     {
-      "@id": "./ADR-0019-parallel-runs-exclude-overlap-at-intake-and-runner-resolves-conflicts.html"
+      "@id": "./ADR-0039-landing-train-gates-one-candidate-tree.html"
+    },
+    {
+      "@id": "./ADR-0009-vessel-grants-runner-permissions-and-mutation-proof.html"
     }
   ]
 }
@@ -513,170 +513,172 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
 <nav class="breadcrumb" aria-label="パンくず"><ol>
   <li><a href="../index.html">design-intent</a></li>
   <li><a href="./README.html">decisions</a></li>
-  <li aria-current="page">ADR-0039</li>
+  <li aria-current="page">ADR-0043</li>
 </ol></nav>
 <!-- /folio:chrome-top -->
 <div class="page" data-component="requirement-type-color-tokens">
 <header data-component="doc-cover-band">
-<p class="cover-eyebrow"><span class="doc-type">設計判断記録 (ADR)</span> <span>scribe2 — 着地の列と再 gate</span></p>
-<h1>着地の列は候補の木 1 つに対して gate を 1 回撃つ (merge train・列の先頭 N 本を順に rebase した木を 1 回検査し緑なら順に着地・赤は列を解いて 1 本ずつに戻す・検出線は patch-id が不変なら持ち越す・N は rules 行)</h1>
-<p class="cover-sub">main が動くたびに着地待ちの便が全部の検査を撃ち直す (1 日に 29 回・便の延べ時間の 43% が gate)。 着地の列の先頭 N 本を 1 つの候補の木に積んで検査を 1 回にし、 赤の周だけ 1 本ずつに戻す。 便ごとの記録と着地の順序は変えない。</p>
-<div class="summary-card"><span class="ic"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#ffe8a8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span><div><p class="lab">この判断が約束すること (1 文サマリ)</p><p class="txt" data-prose-slot="cover-summary" data-slot-id="cover-summary">着地を待つ便の並び（着地の列）の先頭から数本を、main に順に積んだ 1 つの作業木にまとめ、検査をその木に 1 回だけ撃ちます。緑なら順に着地し、赤なら列を解いて今までどおり 1 本ずつに戻します。便の記録と着地の順序は変わりません。</p></div></div>
-<div class="cover-meta"><span class="m"><span class="k">状態</span><span class="v">proposed</span></span><span class="m"><span class="k">選択肢</span><span class="v">5件 (OPT1–OPT5)</span></span><span class="m"><span class="k">結果</span><span class="v">良い 3 / トレードオフ 3</span></span><span class="m"><span class="k">版</span><span class="v">v0.1.0 / 2026-09-17</span></span></div>
-<div class="reader-chip" data-component="cross-doc-ref-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 正当化する要件: <b>SRS-SCRIBE2-MVP</b> の <b>FR34・FR10・FR12・FR50</b></div>
+<p class="cover-eyebrow"><span class="doc-type">設計判断記録 (ADR)</span> <span>scribe2 — 着地後の主実測</span></p>
+<h1>主実測は着地する木が gate の木と同じなら全段を撃たない (木の sha の一致を測定の再現と見なし record 1 本で残す・一致しない周と tree の無い verdict の周は全段撃つ・ADR-0021 §2.4「木が同じ main 実測は検出線を撃ち直さない」を「全段を撃ち直さない」へ広げる部分 supersede)</h1>
+<p class="cover-sub">着地の直後にもう一度撃つ検査 (主実測) は、 着地した木が gate で検査した木と byte 単位で同じでも、 検出線を除く 3 段を撃ち直していた (同じ木の便 27 本で中央値 14.9 分)。 木の sha が同じ周は全段を撃たず、 「どの木の測定を再現と見なしたか」を record 1 本に残して着地を進める。 木が違う周と木の記録が無い周は今までどおり全段撃つ。</p>
+<div class="summary-card"><span class="ic"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#ffe8a8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span><div><p class="lab">この判断が約束すること (1 文サマリ)</p><p class="txt" data-prose-slot="cover-summary" data-slot-id="cover-summary">便が main に着地した直後の検査（主実測）は、着地した木が gate で検査した木と同じ sha なら 4 段のどれも撃たず、「この木の gate の測定を再現と見なした」という record を 1 本だけ残して着地を終えます。木が違う周や、gate の記録に木の sha が無い周は、今までどおり全段を撃ちます。record の形や規則の値は増やしません。</p></div></div>
+<div class="cover-meta"><span class="m"><span class="k">状態</span><span class="v">accepted</span></span><span class="m"><span class="k">選択肢</span><span class="v">6件 (OPT1–OPT6)</span></span><span class="m"><span class="k">結果</span><span class="v">良い 3 / トレードオフ 3</span></span><span class="m"><span class="k">版</span><span class="v">v0.1.0 / 2026-09-17</span></span></div>
+<div class="reader-chip" data-component="cross-doc-ref-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 正当化する要件: <b>SRS-SCRIBE2-MVP</b> の <b>FR34・FR12・FR50</b></div>
 <div data-component="approval-block">
-<div class="sign"><span class="role">裁定 (user)</span><span class="who">user</span><span class="when">2026-09-17 (対話面・「ADR 候補の裁定は承認する」= 草稿への着手の承認・逐語は台帳 s2-07l.428 の notes・land は別途裁定)</span><span class="stamp self">草稿の着手</span></div>
-<div class="sign"><span class="role">設計 (planner)</span><span class="who">planner</span><span class="when">2026-09-17 起票 (台帳 s2-07l.428・設計 § と契約は本 ADR の land 後)</span><span class="stamp self">作成</span></div>
+<div class="sign"><span class="role">裁定 (user)</span><span class="who">user</span><span class="when">不要 — rules 行を足さず憲法の閾値にも触れない (A1 / A2 / A3 非該当・AI 裁定)。出所の方針は user 裁定 2026-09-17T22:4xZ (対話面・「最大の bottleneck は 1 便あたりの時間と token」・逐語は台帳 s2-07l.462 の notes)</span><span class="stamp self">AI 裁定</span></div>
+<div class="sign"><span class="role">設計 (planner)</span><span class="who">planner</span><span class="when">2026-09-17 起票 (docs/design/gate-cost.md §27・契約表の行 s・台帳 s2-07l.464・拘束する constitution の版 0.4.6)</span><span class="stamp self">作成</span></div>
 </div>
-<div class="reader-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 想定読者: scribe2 の開発 session (planner / admin) と user — CI や merge queue の専門知識は不要 (専門語はやさしい言葉を併記)</div>
+<div class="reader-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 想定読者: scribe2 の開発 session (planner / admin) と user — git の内部構造や CI の専門知識は不要 (専門語はやさしい言葉を併記)</div>
 </header>
 <!-- folio:chrome-toc -->
 <!-- /folio:chrome-toc -->
-<section data-component="chapter-deck-band" class="tint-info"><span class="num">01</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 2v6m0 0L9 5m3 3l3-3"/><circle cx="12" cy="14" r="6"/></svg> 背景 / なぜこの判断が要るか</span><h2>いま何が問題か (確定方式を決める力学)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-01">なぜこの判断が要るのかを、実測と現物から説明します。main が動くたびに着地待ちの便が検査を全部撃ち直しており、1 日で 29 回、便の延べ時間の 43% が検査でした。列が長いほど撃ち直しは 2 乗に伸びます。</p></section>
+<section data-component="chapter-deck-band" class="tint-info"><span class="num">01</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 2v6m0 0L9 5m3 3l3-3"/><circle cx="12" cy="14" r="6"/></svg> 背景 / なぜこの判断が要るか</span><h2>いま何が問題か (主実測の残り 3 段を撃ち直す力学)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-01">なぜこの判断が要るのかを、実測と現物から説明します。着地の直後の検査（主実測）は、前の決定で「木が同じなら変異検査だけ省く」と決めましたが、残りの 3 段は同じ木でも撃ち直しています。同じ木だった便が 4 本のうち 3 本で、その 3 段に中央値で約 15 分かかっています。user の裁定と憲法の向きも併せて示します。</p></section>
 <div class="chapbody">
 <div data-component="adr-context-list">
-<div data-component="adr-context-row"><span class="cxid">CTX1</span><div class="cxbody"><p class="cxh">実測 — 再 gate が 1 日 29 回・gate が便の延べ時間の 43%</p><p class="cxd">fleet の event log (2026-09-16 00:00Z 以降・84 便・37 bead) の機械集計で、 便の延べ 83 時間のうち gate が 36 時間 (43%)、 追随の再 gate (rebase の後に gate を撃ち直す周) が 29 回 (1 周 中央値 16 分・最大 151 分)、 gate 1 周目は中央値 25 分・最大 299 分だった。 着地した 17 bead の壁時計は中央値 238 分・最大 637 分で、 その多くが列で待つ間の再 gate である。 同時に走る便が 10 以上の時間帯は main が数十分おきに動くので、 列の先頭でない便は着地の番が来るまでに 2〜3 回 gate を撃ち直す。</p></div></div>
-<div data-component="adr-context-row"><span class="cxid">CTX2</span><div class="cxbody"><p class="cxh">現物 — 追随の再 gate は共通 verify・検出線・契約 verify を全部撃ち直す</p><p class="cxd">land の追随 (pipe/land.rs の follow_main) は main の tip が便の base より進んだ周に worktree を rebase し、 gate を撃ち直す (SRS FR34)。 撃ち直す列は共通 verify 6 本 (flip-check・nextest --workspace・clippy・xtask check・deny) と検出線 (mutants-diff) と契約 verify で、 1 周目と同じ。 main の差分が検出線の面 (crates/・Cargo.toml・Cargo.lock・rules/・.vessel.toml) に触れない周だけ検出線を省く (設計 pipeline.md §30・ADR-0021 §2.4) 形と、 面の外だけの周は再 gate ごと省く (同 §33・台帳 s2-07l.416) 形は在るが、 面の内で main が動いた周 (別の便の着地) は全部撃ち直す。 便の自分の diff は衝突無しの rebase で変わらない (29 回全部が衝突無し) のに、 その diff の変異を殺せるかの検出線も撃ち直している。</p></div></div>
-<div data-component="adr-context-row"><span class="cxid">CTX3</span><div class="cxbody"><p class="cxh">現物 — 着地の列<span class="term" data-component="plain-language-term-inline" data-term="着地の列">着地の順番待ちの便の並び</span>は gate 済みの便を先に通す (ADR-0021 §2.5・gate-cost.md §6)</p><p class="cxd">Gated ∧ verdict PASS の便が在る間は他の便の land が待ち (先に gate を通った便を先に着地させる)、 順番の鍵は event log の replay で導く (ADR-0021 §2.5・設計 gate-cost.md §6・台帳 s2-07l.147)。 列の先頭が着地すると main が動き、 次の便は追随して再 gate する = 列の長さ N に対して再 gate が N 回、 gate の時間が N の 2 乗に近く伸びる。 着地の外の merge (docs PR の squash) も同じ再 gate を誘発する (台帳 s2-07l.212・pipeline.md §19 の待ち口)。</p></div></div>
-<div data-component="adr-context-row"><span class="cxid">CTX4</span><div class="cxbody"><p class="cxh">憲法と要件の向き</p><p class="cxd">C12.6 は main を常に緑に保つ (known-red の台帳を持たない)。 FR34 は追随の周に gate をやり直すことを、 FR10 は base が古い周に land が main を動かさないことを、 FR12 と FR50 は便ごとに Landed の記録と着地 commit の CI の照合を求める。 C2 は選定・除外・順序を 1 列挙の上の 1 関数で持つ。 C10 は実測値と持ち越した値を型で分ける。 C5 は規則の値 (列の長さの上限<span class="term" data-component="plain-language-term-inline" data-term="列の長さの上限">1 回の検査に積む便の数の上限</span>) に裁定 id を要る。 ADR-0019 の衝突の起こし直し (rebase が衝突した便は runner を起こし直す) は動かさない。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX1</span><div class="cxbody"><p class="cxh">実測 — 同じ木の便が 36 本中 27 本で、 主実測の残り 3 段に中央値 14.9 分かかる</p><p class="cxd">2026-09-17 の planner の実測 (main 12e64cc・逐語は台帳 s2-07l.464): verify-main.jsonl を持つ着地 39 便のうち理由を持つ 36 便の内訳は same-tree 27 / outside-scope 9。 same-tree の 27 便で、 squash の commit 時刻から主実測の record の終端までの壁時計は中央値 14.9 分 (p25 5.6 / p75 15.9 / 最大 30.6) で、 これは③を省いた後に残る ①②④ の時間。 着地 45 便の Gated(PASS) → Landed は中央値 10.4 分 (p25 5.1 / p75 15.9)。 1 便の壁時計の中央値 126 分のうち land は約 1 割。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX2</span><div class="cxbody"><p class="cxh">現物 — 主実測は tmp worktree を切ってから木を比べ、 ③だけを省く</p><p class="cxd">land の主実測<span class="term" data-component="plain-language-term-inline" data-term="主実測">着地した main の木に対して撃ち直す検査</span> (設計 gate-cost.md §5・pipeline.md §5.4) は、 追跡 file だけの tmp worktree を切り、 着地する commit の木の sha と gate の verdict.json の tree を比べ、 一致する周は③ 検出線だけを skipped=detection reason=same-tree で省き、 ① write-set 照合・② 共通 verify・④ 契約 verify は撃ち直す (ADR-0021 §2.4)。 ADR-0021 §2.4 (2026-09-12) の実測は main 実測 78 分のうち変異検査が約 75 分で、 当時は③が大半だったので③だけを省いた。 ③を省いた後は ①②④ が主実測のすべてになった。 skip record の構築の口は段ごとに閉じており (検出線・再 gate の 2 つ)、 主実測の段の口は無い。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX3</span><div class="cxbody"><p class="cxh">裁定 — 最大の bottleneck は 1 便あたりの時間と token</p><p class="cxd">user 裁定 2026-09-17T22:4xZ (逐語は台帳 s2-07l.462 の notes) は、 器の最大の bottleneck を「1 便あたりの時間と token」と名指した。 着地の列 (ADR-0039) は gate の回数を便の数に比例させない側を決めたが、 着地後の主実測は便ごとに残っている。 本 ADR はその主実測を、 木が同じ周は record 1 本に縮める。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX4</span><div class="cxbody"><p class="cxh">憲法と要件の向き</p><p class="cxd">C12.6 は main を常に緑に保つ (未検査の木を main にしない)。 C10 は持ち越した値を実測と型で区別する (撃たなかった事実を黙って落とさず、 どの木の測定を再現と見なしたかを残す)。 C11.2 は skip の口を閉じた型で持つ。 C2 は省く条件を 1 関数の 1 比較で持ち、 段の手書きの選別を持たない。 C3.3 は判定の入力を描画や自由文でなく typed な値 (木の sha) にする。 FR34 は追随の周の gate のやり直しを、 FR12 は着地ごとの Landed と record を、 FR50 は先端の着地 commit の CI の照合を求める。 ADR-0039 の原則 PRIN-GATE-THE-TREE-NOT-THE-RUN は「着地の前の検査は着地後の木に対して行い、 検査の回数を便の数に比例させない」。</p></div></div>
 </div>
 </div>
-<section data-component="chapter-deck-band" class="tint-brand"><span class="num">02</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3v18"/><path d="M5 7l-3 6h6z"/><path d="M19 7l-3 6h6z"/><path d="M3 21h18"/></svg> 判断を縛る力 / 評価の軸</span><h2>選択肢を測るものさし (安全・速さ)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-02">判断を評価する 5 本のものさしです。main の先端が常に緑であること、検査の総時間が便の数に比例すること、着地の順序と便ごとの記録を変えないこと、赤の周に手で選別しないこと、持ち越した値を実測と区別することです。</p></section>
+<section data-component="chapter-deck-band" class="tint-brand"><span class="num">02</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3v18"/><path d="M5 7l-3 6h6z"/><path d="M19 7l-3 6h6z"/><path d="M3 21h18"/></svg> 判断を縛る力 / 評価の軸</span><h2>選択肢を測るものさし (緑・記録・形)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-02">判断を評価する 5 本のものさしです。main が常に緑であること、同じ木を 2 度測らないこと、撃たなかった事実を型で残すこと、省く条件が 1 つの比較で段の手書きの選別を持たないこと、record の形と規則の値を増やさないことです。</p></section>
 <div class="chapbody">
 <table data-component="adr-driver-table"><tbody>
-<tr data-component="adr-driver-row"><td class="drid">DR1</td><td>main の先端は常に緑で、 着地の前に着地後の木がそのまま検査されている <span class="drg">憲法 C12.6 / SRS FR34 (追随の周は gate をやり直す) / FR10</span></td></tr>
-<tr data-component="adr-driver-row"><td class="drid">DR2</td><td>着地の列の gate の総時間は着地する便の数に比例し、 列の長さの 2 乗に伸びない <span class="drg">CTX1 / CTX3 / SRS NFR1 (lens の予算) と gate-cost.md の費用の面</span></td></tr>
-<tr data-component="adr-driver-row"><td class="drid">DR3</td><td>着地の順序と待ちの規則は 1 つの列と 1 つの関数のままで、 便ごとの記録 (Landed・着地 commit・CI の照合) は変わらない <span class="drg">憲法 C2 / ADR-0021 §2.5 / SRS FR12 / FR50</span></td></tr>
-<tr data-component="adr-driver-row"><td class="drid">DR4</td><td>赤の周は手書きの帰属や選別をせず、 器が列を解いて既存の 1 本ずつの経路に戻す (fail-closed) <span class="drg">憲法 C12.6 / N2 (散文の規則を持たない) / ADR-0019 (衝突は起こし直し)</span></td></tr>
-<tr data-component="adr-driver-row"><td class="drid">DR5</td><td>持ち越した検査の値は実測と型で区別され、 記録が無い周は撃ち直す <span class="drg">憲法 C10 / C12.4 (変異の生存は検出線であって deny ではない)</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR1</td><td>main の先端は常に緑で、 検査されていない木を main にしない (木が違う周・木の記録が無い周は全段撃つ = fail-closed) <span class="drg">憲法 C12.6 / SRS FR34 / FR50</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR2</td><td>同じ木を 2 度測っても情報は増えない = 検査の回数を便の数に比例させない <span class="drg">CTX1 / ADR-0039 PRIN-GATE-THE-TREE-NOT-THE-RUN</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR3</td><td>撃たなかった事実は黙って落とさず、 どの木の測定を再現と見なしたかを record に残し、 実測と型で区別する <span class="drg">憲法 C10 / C11.2 / SRS FR12</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR4</td><td>省く条件は 1 関数の 1 比較 (木の sha の一致) で、 段の名や行の種類による手書きの選別を持たない <span class="drg">憲法 C2 / C3.3</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR5</td><td>record の schema・gate の段と順序・③の省き方の面・rules 行は変えない <span class="drg">ADR-0021 §2.4 / ADR-0009 §2.4 / 設計 gate-cost.md §5</span></td></tr>
 </tbody></table>
 </div>
-<section data-component="chapter-deck-band" class="tint-violet"><span class="num">03</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M8.5 6H13a3 3 0 0 1 3 3v.5M8.5 18H13a3 3 0 0 0 3-3v-.5"/></svg> 検討した選択肢 / 3 つの確定方式</span><h2>それぞれの利点と欠点を並べる</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-03">候補を 5 つ並べます。先頭数本を 1 つの木にまとめて 1 回検査する案、今の 1 本ずつの形、追随の検査を撃たない案、先に着地して赤なら戻す案、先頭 k 本ごとの木を並列に検査する案です。</p></section>
+<section data-component="chapter-deck-band" class="tint-violet"><span class="num">03</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M8.5 6H13a3 3 0 0 1 3 3v.5M8.5 18H13a3 3 0 0 0 3-3v-.5"/></svg> 検討した選択肢 / 6 つの形</span><h2>それぞれの利点と欠点を並べる</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-03">候補を 6 つ並べます。同じ木なら全段を撃たず record 1 本にする案、今のまま検出線だけ省く案、write-set の照合だけ残す案、主実測をなくして gate の後は常に着地する案、主実測を着地の後に非同期で撃つ案、そして重い段だけ選んで省く案です。</p></section>
 <div class="chapbody">
 <div class="opt-grid">
 <div data-component="adr-option-card" class="chosen">
-<div class="opt-head"><span class="opt-id">OPT1</span><span class="opt-name">着地の列の先頭 N 本を 1 つの候補の木<span class="term" data-component="plain-language-term-inline" data-term="候補の木">列の先頭 N 本を main に順に積んだ作業木</span>に積み、 gate を 1 回撃って緑なら順に着地する (merge train)</span><span class="opt-verdict chosen">採用</span></div>
-<p class="opt-sum">列 (ADR-0021 §2.5 の順) の先頭から N 本 (rules 行 land.train_max が上限) を、 main の先端に順に rebase して 1 つの候補の木を作る (rebase が衝突した便は列から外れて ADR-0019 の起こし直しへ・後続は詰める)。 候補の木に対して共通 verify を 1 回、 各便の契約 verify をその便の分、 検出線は便の diff の patch-id<span class="term" data-component="plain-language-term-inline" data-term="patch-id">diff の中身だけから決まる指紋</span> が前周の記録と同じなら前周の record を provenance 付きで写し、 違えば撃つ。 緑なら N 本を列の順に着地 (便ごとに squash commit・Landed の記録・push は 1 回・CI の照合は先端の commit で)。 赤なら列を解き、 先頭 1 本だけの既存の経路 (追随 → 再 gate) に戻る (帰属はしない)。 N = 1 の周は現行と同じ。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT1">着地待ちの先頭数本を main に順に積んだ 1 つの作業木を作り、検査をその木に 1 回撃ちます。緑なら順に着地し、赤なら列を解いて 1 本ずつに戻します。変異検査は便の diff の指紋（patch-id）が前回と同じなら前回の結果を印付きで使い回します。</span>
+<div class="opt-head"><span class="opt-id">OPT1</span><span class="opt-name">同じ木なら全段を撃たず、 木の sha を持つ record 1 本で主実測を残す</span><span class="opt-verdict chosen">採用</span></div>
+<p class="opt-sum">着地する commit の木の sha が verdict の tree と一致する周は ①②③④ の全段を撃たず、 verify-main.jsonl に record 1 本 (kind=main skipped=main tree=&lt;sha&gt; reason=same-tree) を書いて main-green とする。 一致しない周と tree の無い verdict の周は従来どおり全段撃つ。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT1">着地した木が gate で検査した木と同じ sha なら、検査を 1 段も撃たず、「この木の gate の測定を再現と見なした」という record を 1 本だけ書いて着地を終えます。木が違う周や、gate の記録に木の sha が無い周は今までどおり全段撃ちます。省く条件は「木の sha が同じか」の 1 つの比較だけです。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>列の長さ N に対して gate が N 回から 1 回になる (CTX1 の 29 回が数回に落ちる)・検出線は patch-id 不変の便で撃たない</li>
-<li>着地の順序・待ちの規則・便ごとの記録は不変 (列は同じ 1 関数の上に「N 本まとめて検査する」を足すだけ)</li>
-<li>赤の周の処置が既存の経路 (1 本ずつ) そのもので、 新しい判定を足さない</li>
+<li>同じ木の周 (実測で 36 本中 27 本) の主実測が中央値 14.9 分から record 1 本の書き込みに縮む</li>
+<li>省く条件は 1 比較で段の選別を持たず (C2)、 撃たなかった事実は木の sha 付きの record で残る (C10)</li>
+<li>schema・rules 行・gate の段と順序は変えず、 skip record の閉じた口に主実測の 1 つを足すだけ (C11.2)</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>候補の木で検査されるのは N 本を全部積んだ木だけで、 途中の commit (先頭 k 本だけの木) は個別に検査されない (main の途中の commit が赤でありうる・先端は緑)</li>
-<li>1 本の赤が N 本の待ちを 1 周分止める (列を解いた後は先頭から 1 本ずつ)</li>
-<li>rules 行 1 本 (列の長さの上限) が増え、 値は裁定 id を要る</li>
+<li>gate は便の worktree で撃ち、 主実測は切りたての worktree で撃つ。 untracked と未 commit は gate の前提検査 (status --porcelain が空) が既に断るので木の外には無いが、 ignore された file (build の中間物など) に依って gate を通った便を同じ木の周に主実測が捕まえる機会は無くなる (その面は main の CI の照合 FR50 が残る)</li>
+<li>ADR-0021 §2.4 の「①②④ は従来どおり撃つ」を部分 supersede する</li>
 </ul></div></div>
 </div>
 <div data-component="adr-option-card" class="rejected">
-<div class="opt-head"><span class="opt-id">OPT2</span><span class="opt-name">現行のまま (1 本ずつ追随 → 再 gate) + docs だけの周の省略 (§33)</span><span class="opt-verdict rejected">不採用</span></div>
-<p class="opt-sum">列の先頭が着地するたびに次の便が追随して全部撃ち直す。 main の差分が面の外だけの周は省く。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT2">今の形です。列の先頭が着地するたびに次の便が追随して検査を全部撃ち直します。docs だけの変更で main が動いた周は撃ち直しを省きますが、便の着地で動いた周は全部撃ち直します。</span>
+<div class="opt-head"><span class="opt-id">OPT2</span><span class="opt-name">現行のまま (同じ木でも ①②④ を撃ち直し、 ③だけ省く・ADR-0021 §2.4)</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">前提は「squash の木は gate の木と違いうる」。 実測では 36 本中 27 本が同じ木で、 違う周は既に全段撃つ経路が在る。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT2">今の形です。同じ木でも変異検査以外の 3 段を撃ち直します。「squash した木は gate の木と違うかもしれない」という前提でしたが、実測では 4 本のうち 3 本が同じ木で、違う周には既に全段撃つ経路が在ります。同じ木を 2 度測る時間が便ごとに残ります。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>器の変更が §33 だけで済む</li>
-<li>途中の commit も含めて main の全 commit が検査済み</li>
+<li>器の変更が無い・ignore された file に依って通った便を切りたての worktree の主実測が捕まえる面が残る (untracked は gate の前提検査が既に断る＝ADR-0021 §03 (C) の前提は今は無い)</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>面の内で main が動く周 (便の着地) は全部撃ち直すので、 列が長いほど 2 乗に伸びる (CTX1)</li>
-<li>検出線を patch-id 不変でも撃つ</li>
+<li>同じ木の周 (36 本中 27 本) に ①②④ の中央値 14.9 分を便ごとに払い続ける = 同じ木の同じ測定の重複で情報を足さない</li>
 </ul></div></div>
 </div>
 <div data-component="adr-option-card" class="rejected">
-<div class="opt-head"><span class="opt-id">OPT3</span><span class="opt-name">追随の再 gate を撃たず、 便ごとの gate と main の CI だけに頼る</span><span class="opt-verdict rejected">不採用</span></div>
-<p class="opt-sum">base が古い便も rebase だけして着地し、 赤は main の CI で拾う。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT3">追随の検査を撃たず、便ごとの検査と main の CI だけに頼る案です。検査は 1 回で済みますが、着地の前に着地後の木を検査しないので、main が赤になってから気づくことになります。</span>
+<div class="opt-head"><span class="opt-id">OPT3</span><span class="opt-name">① write-set の照合だけ残し、 ②③④ を省く</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">①は数秒で終わるが、 同じ木の周に「撃つ段」と「省く段」の 2 経路が残り、 木の一致で守れている diff を 2 度測る。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT3">4 段のうち、いちばん軽い「変更した file が契約の範囲に収まっているか」の照合だけ残す案です。数秒で済みますが、同じ木の周に「撃つ段」と「省く段」の 2 つの経路ができ、木が同じなら既に守れている diff をもう一度測ることになります。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>gate が便ごとに 1 回で済む</li>
+<li>①は数秒で終わる</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>着地の前に着地後の木を検査しない = FR34 と C12.6 に反する (main が赤になってから気づく)</li>
-<li>赤の main を直す便が列に割り込む = known-red の運用になる</li>
+<li>同じ木の周に経路が 2 本 (撃つ / 省く) になり、 木の一致で守れている diff を 2 度測る = 段の手書きの選別 (C2)</li>
 </ul></div></div>
 </div>
 <div data-component="adr-option-card" class="rejected">
-<div class="opt-head"><span class="opt-id">OPT4</span><span class="opt-name">楽観的に着地して main が赤なら revert する</span><span class="opt-verdict rejected">不採用</span></div>
-<p class="opt-sum">検査を後回しにして着地し、 CI が赤なら器が revert commit を積む。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT4">先に着地して、CI が赤なら器が戻す案です。列は止まりませんが、main が赤である時間を認めることになり、戻しの commit が記録を汚します。</span>
+<div class="opt-head"><span class="opt-id">OPT4</span><span class="opt-name">主実測を廃止し、 gate の後は常に着地する</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">木が違う周 (outside-scope・docs の merge で main が動き §33 で再 gate を省いた周) に main が未検査の木になる。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT4">着地後の検査をなくし、gate が緑なら必ず着地する案です。いちばん速いですが、着地した木が gate の木と違う周（実測で 36 本中 9 本）に、誰も検査していない木が main になります。「main は常に緑」という憲法の線を越えます。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>列が止まらない</li>
+<li>主実測の時間が全周で 0 になる</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>main が赤である時間を認める (C12.6 に反する)・revert の連鎖が便の記録を汚す</li>
+<li>木が違う周 (36 本中 9 本の outside-scope) に main が未検査の木になる (C12.6 に反する)</li>
 </ul></div></div>
 </div>
 <div data-component="adr-option-card" class="rejected">
-<div class="opt-head"><span class="opt-id">OPT5</span><span class="opt-name">先頭 k 本ごとの木 (k = 1..N) を並列に検査する (merge queue の一般形)</span><span class="opt-verdict rejected">不採用</span></div>
-<p class="opt-sum">候補の木を N 個 (先頭 1 本・2 本・…・N 本) 作り、 並列に gate して緑の最長の先頭列を着地する。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT5">先頭 1 本・2 本・…・N 本の木を並列に検査する案です。途中の commit まで検査でき赤の便も特定できますが、検査の費用が N 倍に戻り、封じ込めの枠と口座の窓を N 個食います。枠の余裕を実測した後に改訂で足す候補です。</span>
+<div class="opt-head"><span class="opt-id">OPT5</span><span class="opt-name">主実測を Landed の後に非同期で撃つ</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">着地を待たせないが、 赤の周に main が赤のまま次の便が積まれる。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT5">着地を先に終え、検査を後から別に走らせる案です。便は待ちませんが、検査が赤だった周に main が赤のまま残り、次の便がその上に積まれます。「main は常に緑」に反します。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>途中の commit も検査済みになり、 赤の便を機械で特定できる</li>
+<li>着地の壁時計から主実測が消える</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>gate の費用が N 倍に戻る (封じ込めの枠と口座の窓を N 個食う・ADR-0021 の並列の上限に当たる)</li>
-<li>検査の枠が空いた周だけ有効で、 空かない host では OPT1 と同じ形に縮退する = まず OPT1 を置き、 枠の余裕の実測の後に改訂 ADR で足す</li>
+<li>赤の周に main が赤のまま次の便が積まれる (C12.6 に反する)・赤を戻す経路が新たに要る</li>
+</ul></div></div>
+</div>
+<div data-component="adr-option-card" class="rejected">
+<div class="opt-head"><span class="opt-id">OPT6</span><span class="opt-name">②④ のうち clippy / deny のような重い行だけ省く</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">どの行を省くかを手で選ぶ = 行の種類による分岐と散文の規則。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT6">時間のかかる行（lint や依存監査）だけを省く案です。速くはなりますが、「どの行を省くか」を人が選ぶことになり、行の種類で分岐する規則が器に入ります。「1 つの列挙の上の 1 つの関数」という憲法の形に反します。</span>
+<div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
+<li>重い行のぶんだけ短くなる</li>
+</ul></div><div class="cons"><h4>− 欠点</h4><ul>
+<li>行の種類による手書きの選別 (C2)・省いた行の分だけ主実測の意味が散文に依る (N2)</li>
 </ul></div></div>
 </div>
 </div>
 </div>
-<section data-component="chapter-deck-band" class="tint-ok"><span class="num">04</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14 4l6 6-3 3-6-6z"/><path d="M11 7L4 14l3 3 7-7"/><path d="M3 21h10"/></svg> 採用した判断 / どの方式を選ぶか</span><h2>選んだ方式と、 それが守る要件 (cross-doc 照会)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-04">選んだ案と、それが要件書のどの要件を支えるかを示します。列の先頭 N 本を 1 つの木に積んで 1 回検査し、緑なら順に着地、赤なら列を解きます。追随の検査・古い base の扱い・便ごとの着地の記録・push と CI の照合の要件に対応します。</p></section>
+<section data-component="chapter-deck-band" class="tint-ok"><span class="num">04</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14 4l6 6-3 3-6-6z"/><path d="M11 7L4 14l3 3 7-7"/><path d="M3 21h10"/></svg> 採用した判断 / どの形を選ぶか</span><h2>選んだ形と、 それが守る要件 (cross-doc 照会)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-04">選んだ案と、それが要件書のどの要件を支えるかを示します。着地する木の sha が gate の記録の木と同じ周は主実測の全段を撃たず、木の sha を持つ record を 1 本残して着地を進めます。違う周と木の記録が無い周は全段撃ちます。追随の周の gate のやり直し（FR34）、着地ごとの記録（FR12）、先端の commit の CI の照合（FR50）に対応します。</p></section>
 <div class="chapbody">
 <div data-component="adr-decision-panel" id="decision">
 <p class="dec-kick">採用 — OPT1</p>
-<p class="dec-state">器 SHALL 着地の列 (ADR-0021 §2.5 の順) の先頭から rules 行 land.train_max 本までを main の先端に順に rebase した候補の木 1 つを作り、 その木に対して共通 verify を 1 回と各便の契約 verify を撃ち、 検出線 SHALL 便の diff の patch-id が前周の記録と同じ周は前周の record を持ち越しの印付きで写して撃たず、 記録が無いか違う周は撃つ。 緑の周は器 SHALL N 本を列の順に着地し (便ごとに commit と Landed の記録・push は 1 回・CI の照合は先端の commit)、 赤の周は器 SHALL 列を解いて先頭 1 本の既存の経路に戻る。 rebase が衝突した便 SHALL 列から外れて ADR-0019 の起こし直しへ進む。</p>
-<span class="dec-plain" data-prose-slot="plain" data-slot-id="decision-plain">着地の列の先頭から、規則の値までの本数を main に順に積んだ 1 つの作業木を作り、共通の検査を 1 回、各便の契約の検査をその便の分だけ撃ちます。変異検査は便の diff の指紋が前回と同じなら前回の結果を印付きで写します。緑なら便ごとに commit と記録を残して順に着地し、push は 1 回で CI は先端の commit で照合します。赤なら列を解き、先頭 1 本だけの今までの経路に戻します。rebase がぶつかった便は列から外れ、起こし直しに進みます。</span>
-<span class="dec-why" data-prose-slot="rationale" data-slot-id="decision-rationale">撃ち直しが 2 乗に伸びるのは、検査の単位が便だからです。着地後の木を 1 回検査すれば、先端が緑であることは同じ強さで保証でき、便ごとに持つべきものは記録だけになります。赤の周は帰属せずに列を解けば、新しい判定を足さずに今の経路に戻れます。途中の commit が検査されない代償は、先端の緑と便ごとの記録で受けます。</span>
+<p class="dec-state">land の主実測 (設計 gate-cost.md §5・pipeline.md §5.4) は、 着地する commit の木の sha が gate の verdict.json の tree と一致する周、 ① write-set 照合・② 共通 verify・③ 検出線・④ 契約 verify の全段 SHALL 撃たず、 verify-main.jsonl に record 1 本 (kind=main skipped=main tree=&lt;sha&gt; reason=same-tree) SHALL 書いて main-green とし finish (Landed) へ進む。 一致しない周と verdict に tree が無い周 SHALL 従来どおり全段を撃つ (③は ADR-0021 §2.4 の面の規則のまま)。 record SHALL 既存の skip record の閉じた口に主実測の段の口を 1 つ足す形で作り、 木 (tree) SHALL 必ず持つ。 schema SHALL 1 のまま field を足さず、 読み手は skipped の非空で従来どおり拾う。 ADR-0039 の候補の木の主実測 SHALL 同じ 1 関数を通り、 候補の先端の木と着地の先端の木が同じ周は record 1 本とする。</p>
+<span class="dec-plain" data-prose-slot="plain" data-slot-id="decision-plain">着地する commit の木の sha が、gate が記録した木の sha と同じなら、着地後の検査は 4 段とも撃たず、「この木の gate の測定を再現と見なした」という record を 1 本だけ書いて着地を終えます。違う周と、gate の記録に木の sha が無い周は、今までどおり全段撃ちます。record は既存の「省いた」record と同じ形で、木の sha を必ず持ちます。record の形も規則の値も増やしません。着地の列（ADR-0039）でまとめて着地する周も同じ 1 つの関数を通ります。</span>
+<span class="dec-why" data-prose-slot="rationale" data-slot-id="decision-rationale">木の sha は中身から計算されるので、同じ sha は byte 単位で同じ木です。gate はその木に全段を撃って緑にしており、同じ木にもう一度撃っても新しいことは分かりません。これは「main が赤かもしれないが先に着地する」楽観着地（ADR-0039 で却下）とは違い、着地する木そのものが既に全段緑です。撃たなかった事実は record に木の sha ごと残すので、後から「どの木の測定を再現と見なしたか」を辿れます。木が違う周は全段撃つ経路がそのまま残るので、main が未検査の木になることはありません。省く条件を「木の sha の一致」の 1 つの比較に限り、段や行を手で選ぶ規則を持ちません。</span>
 <div class="justify-box"><p class="jh">この判断が正当化する要件 (cross-doc 照会 → SRS-SCRIBE2-MVP)</p>
-<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR34" data-justifies-req="FR34" data-justifies-role="claim">FR34</a><span class="justify-role">claim</span><span class="justify-note">追随の周の「gate をやり直す」を、 便ごとでなく候補の木 1 つに対して 1 回行う = やり直しの単位が便から木に変わり、 進んだ base の事実は便ごとに記帳する。</span></div>
-<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR10" data-justifies-req="FR10" data-justifies-role="claim">FR10</a><span class="justify-role">claim</span><span class="justify-note">base が古い便は候補の木に積まれるまで main を動かさない。 列を解いた周も同じ (land は何もしない)。</span></div>
-<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR12" data-justifies-req="FR12" data-justifies-role="claim">FR12</a><span class="justify-role">claim</span><span class="justify-note">着地は便ごとに Landed を記帳し verdicts.jsonl に 1 行ずつ append する = 列でまとめて検査しても記録の単位は便のまま。</span></div>
-<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR50" data-justifies-req="FR50" data-justifies-role="claim">FR50</a><span class="justify-role">claim</span><span class="justify-note">push は列で 1 回、 CI の照合は先端の着地 commit の id で行い、 台帳の close は便ごと。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR34" data-justifies-req="FR34" data-justifies-role="claim">FR34</a><span class="justify-role">claim</span><span class="justify-note">追随の周の「gate をやり直す」は不変で、 やり直した gate が記録した木と着地する木が同じ周だけ主実測を record 1 本にする = 木が違う周は全段撃つ。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR12" data-justifies-req="FR12" data-justifies-role="claim">FR12</a><span class="justify-role">claim</span><span class="justify-note">着地ごとの Landed と record は不変で、 撃たなかった主実測も verify-main.jsonl に木の sha を持つ record 1 本として便ごとに残る。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR50" data-justifies-req="FR50" data-justifies-role="claim">FR50</a><span class="justify-role">claim</span><span class="justify-note">先端の着地 commit の CI の照合は不変で、 同じ木の周に主実測が撃たなかった面 (追跡 file だけの木での検査) は CI の照合が残る。</span></div>
 <p class="justify-tgt">照会先: SRS-SCRIBE2-MVP — SRS: 設計 → 契約 → 実装 → 検証 → land を、 人の手を借りずに 1 本通す器（MVP）</p>
 </div>
 </div>
 </div>
-<section data-component="chapter-deck-band" class="tint-warn"><span class="num">05</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg> 結果 / 良い面とトレードオフ</span><h2>この判断で何が良くなり、 何を引き受けるか</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-05">この判断で良くなることと、代わりに引き受けることです。検査が列の長さに比例しなくなる一方、途中の commit は個別に検査されず、1 本の赤が同じ列の便を 1 周止め、列の長さの上限という規則の値が 1 つ増えます。</p></section>
+<section data-component="chapter-deck-band" class="tint-warn"><span class="num">05</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg> 結果 / 良い面とトレードオフ</span><h2>この判断で何が良くなり、 何を引き受けるか</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-05">この判断で良くなることと、代わりに引き受けることです。同じ木の周の主実測が record 1 本になり、形も規則も増えません。代わりに、git が無視する file（build の中間物など）のせいで gate を通った便を主実測が捕まえる機会が同じ木の周には無くなること（追跡していない file は gate の前提検査がもともと断ります）、同じ木の周には段ごとの秒の記録が残らないこと、前の決定記録の 1 文を部分的に置き換えることを引き受けます。</p></section>
 <div class="chapbody">
 <div data-component="scope-summary-panel"><div class="scol in"><h3>✓ 良い結果</h3><ul>
-<li data-component="adr-consequence-pos"><span class="b">●</span>列の長さ N に対して gate が 1 回になり、 検出線は patch-id 不変の便で撃たない = 1 日 29 回の再 gate が数回に落ち、 着地の壁時計が列の長さに比例しなくなる</li>
-<li data-component="adr-consequence-pos"><span class="b">●</span>着地の順序・待ちの規則・便ごとの記録 (Landed・着地 commit・CI の照合・台帳の close) は不変</li>
-<li data-component="adr-consequence-pos"><span class="b">●</span>赤の周の処置は既存の 1 本ずつの経路そのもので、 帰属の判定や散文の運用を足さない</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>同じ木の周 (実測で 36 本中 27 本) の主実測が、 ①②④ の中央値 14.9 分から record 1 本の書き込みに縮む</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>record の schema・rules 行・gate の段と順序は増えず、 変更は skip record の閉じた口に主実測の 1 つを足すことと、 木の比較を tmp worktree を切る前へ移すこと</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>木が違う周と tree の無い verdict の周の経路は不変 (全段撃つ) で、 main が未検査の木になる周は増えない (fail-closed)</li>
 </ul></div><div class="scol out"><h3>⚖ トレードオフ・代償</h3><ul>
-<li data-component="adr-consequence-neg"><span class="b">●</span>検査されるのは N 本を積んだ木だけで、 main の途中の commit (先頭 k 本の木) は個別に検査されない = 先端は緑だが途中の commit が赤でありうる (bisect の粒度が落ちる)</li>
-<li data-component="adr-consequence-neg"><span class="b">●</span>1 本の赤が同じ列の N 本を 1 周分止める (列を解いた後は先頭から 1 本ずつ)</li>
-<li data-component="adr-consequence-neg"><span class="b">●</span>rules 行 land.train_max (列の長さの上限) が増え、 値は裁定 id を要る (C5)・patch-id の記録 (gate の record の 1 語) が増える</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>gate は便の worktree で撃ち、 主実測は切りたての worktree で撃つ (ADR-0021 §2.4)。 untracked と未 commit は gate の前提検査 (status --porcelain が空・verdict の tree はその木) が既に断るが、 ignore された file に依って gate を通った便を同じ木の周に主実測が捕まえる機会は無くなる (その面は main の CI の照合 FR50 に残る)</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>同じ木の周は verify-main.jsonl に段ごとの record が並ばないので、 主実測の段ごとの秒の分布はその周から取れない (skip record は秒を持たない規則のまま)</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>ADR-0021 §2.4 の「①②④ は従来どおり撃つ」を部分 supersede する (③の省き方の面と record の形の文は残る)</li>
 </ul></div></div>
 </div>
-<section data-component="chapter-deck-band" class="tint-info"><span class="num">06</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg> 改訂関係と原則 / この判断の位置づけ</span><h2>版の系譜と、 行き着く原則 (照会終端)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-06">この ADR が版の系譜のどこに在るかと、判断が最後に行き着く原則です。着地の順序の原則（ADR-0021 §2.5）と衝突の起こし直し（ADR-0019）は変えず、列に「まとめて 1 回検査する」を足します。</p></section>
+<section data-component="chapter-deck-band" class="tint-info"><span class="num">06</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg> 改訂関係と原則 / この判断の位置づけ</span><h2>版の系譜と、 行き着く原則 (照会終端)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-06">この ADR が版の系譜のどこに在るかと、判断が最後に行き着く原則です。ADR-0021 §2.4 のうち「木が同じ周は検出線だけ撃たない」を「全段を撃たない」へ広げ、それ以外の文は変えません。ADR-0039 は着地後の検査を決めていないので変わらず、その原則「検査は木に対して行い、回数を便の数に比例させない」に本 ADR も行き着きます。</p></section>
 <div class="chapbody">
 <div data-component="adr-supersession">
 <p class="ss-row"><span class="ss-k">改訂状態</span>current</p>
-<p class="ss-row"><span class="ss-k">置き換える ADR</span>なし (新規)</p>
+<p class="ss-row"><span class="ss-k">置き換える ADR</span>ADR-0021</p>
 <p class="ss-row"><span class="ss-k">置き換えられた</span>なし (現行)</p>
-<p class="ss-row">本 ADR は現行。 ADR-0021 §2.5 (着地は gate 済みの便を先に通す) の順序の原則は不変で、 本 ADR はその列に「N 本まとめて 1 回検査する」を足す。 ADR-0019 (衝突の起こし直し) と ADR-0021 §2.4 (検出線は面に触れた周だけ) は不変。 設計 pipeline.md §33 (面の外だけの周は再 gate を省く) は本 ADR の N = 1 の周の特例として残る。</p>
+<p class="ss-row">ADR-0021 §2.4 のうち「git rev-parse &lt;new&gt;^{tree} が verdict の tree と一致する周に③を撃たず skipped=detection tree=&lt;sha&gt; を記し、 ①②④ は従来どおり撃つ」を、 本 ADR は「一致する周は全段を撃たず skipped=main tree=&lt;sha&gt; の record 1 本を記す」と読む。 同 §2.4 の「一致しない周と tree の無い verdict の周は全部撃つ」・③の面の規則 (検出線は面に触れた周だけ)・verify.jsonl と verify-main.jsonl の record 形・verdict.json の tree は不変。 ADR-0009 §2.4 の verify の順序と ADR-0021 §2.6 の読み替えは不変。 ADR-0039 (候補の木) は主実測を規定していないので不変で、 候補の木の主実測も本 ADR の 1 関数を通る。</p>
 </div>
 <div data-component="adr-principle">
-<p class="prin-id">照会終端 — PRIN-GATE-THE-TREE-NOT-THE-RUN</p>
+<p class="prin-id">照会終端 — PRIN-GATE-THE-TREE-NOT-THE-RUN (ADR-0039)</p>
 <p class="prin-text">着地の前の検査は着地後の木に対して行い、 検査の回数を便の数に比例させない。 便ごとに持つのは記録であって検査ではない。</p>
-<p class="prin-note">本 ADR の判断はこの原則に行き着く (これ以上は遡らない照会終端)。</p>
+<p class="prin-note">本 ADR の判断は ADR-0039 のこの原則に行き着く (これ以上は遡らない照会終端)。 同じ木を 2 度測っても情報は増えず、 便ごとに残すのは「どの木の測定を再現と見なしたか」の記録である。</p>
 </div>
 </div>
 <section data-component="chapter-deck-band" class="tint-brand"><span class="num">07</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg> 用語集 / この文書で使う専門語</span><h2>本文に出てくる専門語のやさしい説明</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-07">本文に出てくる専門語を、やさしい言葉で説明します。</p></section>
 <div class="chapbody">
 <div data-component="glossary-term-table">
-<div class="grow"><div class="gword">着地の列<span class="en">landing queue</span></div><div class="gdef">Gated ∧ verdict PASS の便の並び。 先に gate を通った便が先に着地する (ADR-0021 §2.5)。 順番の鍵は event log の replay で導く。</div></div>
-<div class="grow"><div class="gword">候補の木<span class="en">candidate tree</span></div><div class="gdef">main の先端に列の先頭から N 本を順に rebase して作る 1 つの worktree。 gate はこの木に対して 1 回撃つ。 rebase が衝突した便は積まず、 列から外れる。</div></div>
-<div class="grow"><div class="gword">列を解く<span class="en">dissolve the train</span></div><div class="gdef">候補の木の gate が赤だった周に、 N 本の並びを捨てて先頭 1 本だけの既存の経路 (追随 → 再 gate) に戻すこと。 どの便が赤かの帰属はしない。</div></div>
-<div class="grow"><div class="gword">検出線の持ち越し<span class="en">carried detection line</span></div><div class="gdef">便の diff の patch-id が前周の記録と同じなら、 前周の検出線 (変異の生存) の record を持ち越しの印付きで写して撃たないこと。 記録が無い・patch-id が違う周は撃つ。 持ち越した値は実測と型で区別する (C10)。</div></div>
-<div class="grow"><div class="gword">patch-id<span class="en">patch id</span></div><div class="gdef">git patch-id --stable が diff から計算する値。 行番号や base が変わっても diff の中身が同じなら同じ値になる。 衝突無しの rebase で便の diff が変わらなかったことを測る鍵。</div></div>
-<div class="grow"><div class="gword">列の長さの上限<span class="en">train max</span></div><div class="gdef">rules 行 land.train_max の値。 候補の木に積む便の数はこれ以下。 値は裁定 id 付きで manifest が持つ (C5)。</div></div>
+<div class="grow"><div class="gword">主実測<span class="en">main check</span></div><div class="gdef">便が main に着地した直後に、 着地した main の木 (追跡 file だけ) に対して gate と同じ検証を撃ち直すこと。 record は verify-main.jsonl に残る (ADR-0021 §2.4・設計 gate-cost.md §5)。</div></div>
+<div class="grow"><div class="gword">同じ木の主実測<span class="en">same-tree main check</span></div><div class="gdef">着地する commit の木の sha が gate の verdict.json の tree と一致する周の主実測。 本 ADR では全段を撃たず record 1 本で残す。</div></div>
+<div class="grow"><div class="gword">主実測の省略の record<span class="en">main skip record</span></div><div class="gdef">同じ木の周に verify-main.jsonl へ 1 本だけ書く record (kind=main skipped=main tree=&lt;sha&gt; reason=same-tree)。 どの木の測定を再現と見なしたかを木の sha で持つ。 既存の skip record と同じ形で schema は 1 のまま。</div></div>
+<div class="grow"><div class="gword">木の sha<span class="en">tree sha</span></div><div class="gdef">git が commit の中身 (追跡 file の集合) から計算する識別子。 中身が byte 単位で同じなら同じ値になる (content-addressed)。 gate は verdict.json の tree に、 主実測は着地する commit から取って比べる。</div></div>
+<div class="grow"><div class="gword">4 段<span class="en">four stages</span></div><div class="gdef">gate と主実測が撃つ順序: ① write-set 照合 → ② 共通 verify → ③ 検出線 → ④ 契約 verify (ADR-0009 §2.4 に ADR-0021 §2.4 が③を挿した順)。 本 ADR は順序を変えない。</div></div>
 </div>
 </div>
 </div>
 <footer class="foot" data-component="fidelity-sync-meta"><div class="ft-grid">
 <div class="ft-plain">このページは、大もとの機械データ (正本) から自動で組み立てられています。構造は機械が自動で検査し、内容が元データに忠実かは独立のレビューで確かめます。</div>
-<div data-audience="machine">機械SSoT: <b>ADR-0039.build.adr.yaml</b> &middot; 生成: <b>2026-09-17 01:21</b> &middot; 検証状態: <b>structure ✓ fabrication-free / prose ✓ 充填済 (fidelity ceiling → S5 対象)</b></div>
+<div data-audience="machine">機械SSoT: <b>ADR-0043.build.adr.yaml</b> &middot; 生成: <b>2026-09-17 23:59</b> &middot; 検証状態: <b>structure ✓ fabrication-free / prose ✓ 充填済 (fidelity ceiling → S5 対象)</b></div>
 <div class="tags" data-audience="machine"><span>folio design system</span><span>ADR-pack</span><span>folio engine B1 (instance#2)</span><span>cross-doc 照会</span></div>
 </div></footer>
 <!-- folio:chrome-bottom -->
 <nav class="prevnext" aria-label="前後の文書">
-  <a class="prevnext__prev" href="ADR-0038-plugin-payload-lives-in-a-generated-dir.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">plugin の実体は生成 dir に置き、 marketplace の source はその dir を指す (cache の写しの単位を plugin に閉じる・生成器が起こし xtask check が drift 0 を測る・plugin root を前提にする現物は 1 定数に追随・再 install は user 手番)</span></a>
-  <a class="prevnext__next" href="ADR-0040-runner-and-lens-boxes-are-one-job-each.html"><span class="prevnext__dir">次 &rarr;</span><span class="prevnext__title">runner・lens・claude の箱の上限は 1 × gate.job_memory_mb (ADR-0021 §2.2 の「host 全体から席のぶんを引いた残り」を実装役・審査役・claude の箱について部分 supersede・Limit の 2 種は不変・値は既存の rules 行)</span></a>
+  <a class="prevnext__prev" href="ADR-0042-run-account-order-is-earliest-seven-day-reset.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">便用の並べ鍵は 7 日窓の reset の早い順 (7 日窓の reset を持たない口座は最後・5 時間窓とモデル別窓は鍵にしない・席用の順序は不変・ADR-0027 §2.2 の 1 つ目の鍵を supersede)</span></a>
 </nav>
 <script>
 (function () {

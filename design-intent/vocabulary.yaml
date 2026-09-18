@@ -865,3 +865,13 @@ terms:
     aliases: [run ordering key]
     definition: 便用の口座選定が候補を並べる比較の値の組。 1 つ目 = 口座単位の 7 日窓の古くない最新の実測行が持つ reset 時刻 (早い順・その reset を持たない口座は候補のまま最後)、 2 つ目 = 走行中の便数 (少ない順)、 3 つ目 = label (辞書順)。 5 時間窓とモデル別 7 日窓の reset は鍵に使わず、 それらの窓は当たっている口座を候補から外す判定にだけ効く。 session 用の順序 (逼迫度が最小) とは別 (ADR-0042・ADR-0027 §2.2 の 1 つ目の鍵を supersede・設計 docs/design/account-autonomy.md §19)。
     relationships: [口座選定, 口座残量, 実測行, 上限停止]
+  - canonical: 同じ木の主実測
+    domain: consumer
+    aliases: [same-tree main check]
+    definition: 便が main に着地した直後の検査 (主実測・ADR-0021 §2.4) のうち、 着地する commit の木の sha が gate の verdict の tree と一致する周のもの。 木の sha の一致を gate の測定の再現と見なし、 ① write-set 照合・② 共通 verify・③ 検出線・④ 契約 verify の全段を撃たず主実測の省略の record 1 本で残して着地を進める。 一致しない周と tree の無い verdict の周は全段撃つ。 候補の木の主実測も同じ 1 関数を通る (ADR-0043・設計 docs/design/gate-cost.md §27)。
+    relationships: [主実測の省略の record, 候補の木, 検出線の持ち越し, 検証行の箱, gate, land]
+  - canonical: 主実測の省略の record
+    domain: consumer
+    aliases: [main skip record]
+    definition: 同じ木の主実測の周に verify-main.jsonl へ 1 本だけ書く record (kind=main skipped=main tree=<sha> reason=same-tree)。 既存の skip record と同じ閉じた口から作り、 どの木の測定を再現と見なしたかを木の sha で必ず持つ (C10)。 schema は 1 のまま field を足さず、 読み手は skipped の非空で従来どおり拾う (ADR-0043)。
+    relationships: [同じ木の主実測, 検出線の持ち越し, 実測行, 候補の木]

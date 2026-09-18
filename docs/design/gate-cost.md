@@ -320,6 +320,15 @@ e2e は binary を spawn し外部 command は PATH 先頭の stub で差し替�
 - 歯（`gate_secs_` 接頭辞 = 行 q / `run_cost_` 接頭辞 = 行 r）: 行 q = (a) in-file（`pipe/gate/verify.rs`）: 撃った段の `Step` が秒を持ち write-set 照合の `Step` は持たない／(b) e2e（`tests/e2e/pipe/gate.rs`）: gate の `verify.jsonl` の撃った record 全部に `secs=` が在り skip record には無い（母集団 = record 数を同じ assert に）・`pipe show` の外形 snapshot。行 r = (c) in-file（`headless/runner.rs`）: result record の 1 行から usage 4 値と turns / wall_ms を読む・`usage` が無い record は `None`・入れ子の `usage.iterations[]` の中の数に釣られない／(d) e2e（`tests/e2e/headless.rs`・偽 claude が usage 付きの result record を出す）: runner の要約行に `usage=` が載る・lens の判定 object に `usage` が載る／(e) e2e（`tests/e2e/pipe/spawn.rs` / `tests/e2e/pipe/gate.rs`）: 便 1 本で消費の event が runner 1 件 + lens 1 件（review を通す周は +1）書かれ token の値が偽 claude の出した数と一致・`pipe show --run` と `pipe report` の行（母集団 = event 数）／(f) 偽 claude が usage を出さない周は event を書かず gate の verdict は変わらない（fail-open ではなく「測れなかった」を field の不在で運ぶ・C10）。
 - 却下: run dir に usage.json を置く（C6.3 の store が 2 つになる）／`total_cost_usd` を記す（CLI の見積＝派生値・口座の種別で意味が変わる）／lens を stream-json にする（最後の JSON 行が claude の record になり判定が埋もれる・`headless/lens.rs` の実測 2026-09-10）／runner の要約行を parse せず run dir の `runner.stdout.log` から後で拾う（log は要約だけで record を持たない・verified）／R-C6-1 を同じ便で足す（値の裁定が先・C5）。
 
+## 27. 主実測は着地する木が gate の木と同じなら全段を撃たない — record 1 本 `kind=main skipped=main tree=<sha>` で main-green にする（契約表の行 s・`s2-07l.464`・[ADR-0043](../../design-intent/decisions/ADR-0043-same-tree-main-check-is-one-record.html)）
+
+- 何が起きているか（planner の実測 2026-09-17・main 12e64cc・verified）: land の主実測（`verify_main`・§5）は着地する木が gate の verdict の `tree` と同じ周でも ① write-set 照合・② 共通 verify・④ 契約 verify を撃ち直し、③ 検出線だけを `skipped=detection reason=same-tree` で省く。母集団 = `verify-main.jsonl` を持つ着地 39 便のうち理由を持つ 36 便: `same-tree` 27 / `outside-scope` 9。same-tree の 27 便で squash の commit 時刻から主実測の record の終端までの壁時計は中央値 14.9 分（p25 5.6 / p75 15.9 / 最大 30.6）＝③を省いた後に残る ①②④ の時間。着地 45 便の Gated(PASS) → Landed は中央値 10.4 分（p25 5.1 / p75 15.9）・1 便 126 分の約 1 割。木の sha が同じ＝gate が測った木と byte 単位で同一（content-addressed）ゆえ、①②④ は同じ木の同じ測定の重複で情報を足さない。
+- 形（行 s・S・ADR-0043 §2.1 / §2.2）: `verify_main` は tmp worktree を切る**前に** `main_detection` と同じ比較（verdict の `tree` と `<new>^{tree}`）を読み、**同じ周は tmp worktree も verify の段も撃たず** `verify-main.jsonl` に record 1 本（`kind=main skipped=main tree=<sha> reason=same-tree`・schema 1 のまま既存 field の組だけ）を書いて緑の `MainCheck` を返す（finish へ進む・Landed の detail と stdout は不変）。record は `pipe/gate/record.rs` の `Skipped` に構築の口を 1 つ足す（段の閉じた値に主実測の 1 つを足す・理由は既存の `same-tree` を再利用・木は必ず持つ＝どの木の測定を再現と見なしたかを残す・C10）。一致しない周（`outside-scope` と面の内）と verdict に `tree` が無い周は従来どおり全段（③ は §5 の規則のまま）。候補の木（[pipeline.md](./pipeline.md) §40）の主実測も同じ 1 関数を通る＝候補の先端と着地の先端の木が同じ周は record 1 本。ADR-0021 §03 (C) が「untracked に依って通った便を main 実測が捕まえる」として全省略を却下した前提は、gate の前提検査（`precheck`・`status --porcelain` が空でなければ撃たない・verdict の `tree` はその木）が既に untracked と未 commit を断るので今は無い。残るのは ignore された file に依る周だけで、その面は main の CI（FR50）が持つ。
+- 触らない: gate の段と順序（§5）・③ の省き方（`outside-scope` の面・`DETECTION_SCOPE`）・CAS と anchor 同期・`finish` と `Landed` の detail・`MainCheck` の 3 値と極性（`Unmeasurable` の周は不変）・`verify.jsonl` の record・record の schema 番号・行 q の `secs`（撃たない周は持たない＝skip record の規則のまま）・`pipe show` の読み（`skipped=` の非空で従来どおり拾う）。
+- 順序: `s2-07l.457`（[pipeline.md](./pipeline.md) 行 aj・主実測の群の純移動）の Landed 後に出す。その後は主実測が行 aj の write-set の `+` の file に在るので、bake の周に行 s の write-set をその file へ取り直す（land.rs の余地は 261 行＝M は通らない・本便は S）。
+- 歯（`pipe_main_same_tree_` 接頭辞・`tests/e2e/pipe/land.rs`・既存の land の歯の fixture〔tmp git repo + 偽 verdict.json + 印の file を触る verify 行〕／in-file は `main_skip_record_` 接頭辞・`pipe/gate/record.rs`）: (a) verdict の `tree` と着地の木が同じ周は `verify-main.jsonl` が 1 行（`kind=main skipped=main tree=<sha> reason=same-tree`）で verify の cmd は 1 本も走らず（印の file が無い）・Landed の detail と main の先端は従来の形／(b) `tree` が違う周は record が従来の段数で並び主実測の skip record は無い／(c) verdict に `tree` が無い周は全段撃つ（record の形は (b) と同じ）／(d) in-file: 主実測の skip record の字面が固定で、木の無い構築は口が取らない。base は `verify_main` が木の比較の前に worktree を切って全段撃つので (a) が RED（record が 8 行以上）。
+- 却下（ADR-0043 §03）: ① だけ残す（数秒だが経路が 2 本になり、木の一致で守れている diff を 2 度測る）／主実測を廃止し gate 後は常に着地（`outside-scope` の 9/36 = 木が違う周に main が未検査の木になる・C12.6）／主実測を Landed 後に非同期で撃つ（赤の周に main が赤のまま・C12.6）／②④ のうち clippy / deny だけ省く（手書きの選別・C2）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -503,4 +512,14 @@ verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail run_cost_", "cargo
 size = "M"
 depends = ["q"]
 done = "runner の要約行と lens の判定 object が usage 4 値と turns / wall_ms を運び、便 1 本で消費の event が出所ごとに 1 件ずつ fleet/events.jsonl に書かれて token の値が claude の record と一致し、usage の無い周は event を書かず判定も rc も変わらず、pipe show と pipe report が消費の行を母集団つきで写し、run dir に別 file は増えない"
+[[contract]]
+id = "s"
+title = "主実測は着地する木が gate の verdict の tree と同じ周は全段を撃たず record 1 本（kind=main skipped=main tree=<sha> reason=same-tree）で main-green にする — 違う周と tree の無い周は従来どおり全段（ADR-0043・ADR-0021 §2.4 の部分 supersede・.457 Landed 後）"
+req = ["FR34", "FR12", "FR50"]
+section = "27"
+write-set = ["crates/scribe2/src/pipe/land.rs", "crates/scribe2/src/pipe/gate/record.rs", "crates/scribe2/tests/e2e/pipe/land.rs", "docs/design/gate-cost.md"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_main_same_tree_", "cargo nextest run -p scribe2 --lib --no-tests=fail main_skip_record_"]
+size = "S"
+done = "着地する木が verdict の tree と同じ周は verify-main.jsonl が skip record 1 本で verify の cmd が 1 本も走らず Landed の形は不変、違う周と tree の無い周は従来の段数で撃ち、skip record は木を必ず持つ"
+
 <!-- contracts:end -->
