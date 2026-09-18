@@ -367,11 +367,11 @@ fn role_state(place: &RolePlace) -> vessel::fleet::State {
 fn seat_role_register_appends_one_seat_registered_row() {
     let place = role_place();
     role_stamp(&place, "rs:planner", Some("sid-a"));
-    let out = role_register(&place, "rs:planner", "planner", &["--anchor", "/repo/anchor"]);
+    let out = role_register(&place, "rs:planner", "orchestrator", &["--anchor", "/repo/anchor"]);
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
     assert_eq!(
         stdout_of(&out),
-        "seat register: registered role=planner target=rs:planner sid=sid-a account=acct-1 anchor=/repo/anchor\n"
+        "seat register: registered role=orchestrator target=rs:planner sid=sid-a account=acct-1 anchor=/repo/anchor\n"
     );
     let events = vessel::fleet::store::read_all(&place.state).unwrap_or_default();
     assert_eq!(events.len(), 1, "1 件だけ: {}", role_log(&place));
@@ -379,7 +379,7 @@ fn seat_role_register_appends_one_seat_registered_row() {
     assert_eq!(event.kind, vessel::fleet::EventKind::SeatRegistered);
     assert!(event.run.is_empty() && event.bead.is_empty(), "便に紐づかない");
     let registration = event.registration.unwrap_or_else(|| panic!("本体が在る"));
-    assert_eq!(registration.role, vessel::seat::role::Role::Planner);
+    assert_eq!(registration.role, vessel::seat::role::Role::Orchestrator);
     assert_eq!(registration.anchor, "/repo/anchor");
     assert_eq!(registration.target, "rs:planner");
     assert_eq!(registration.sid.as_deref(), Some("sid-a"), "register の口の row は打刻の sid を持つ");
@@ -387,37 +387,44 @@ fn seat_role_register_appends_one_seat_registered_row() {
     assert_eq!(registration.launch, LAUNCH_BODY, "雛形の本文がそのまま載る");
     let state = role_state(&place);
     assert_eq!(state.runs.len(), 0, "幽霊の便を作らない");
-    assert_eq!(vessel::seat::role::role_of_target(&state, "rs:planner"), Some(vessel::seat::role::Role::Planner));
+    assert_eq!(vessel::seat::role::role_of_target(&state, "rs:planner"), Some(vessel::seat::role::Role::Orchestrator));
     fs::remove_dir_all(&place.dir).ok();
 }
 
 /// 同じ鍵の再登録は前の row を残したまま最新だけが解ける・別 target へ移すと旧 target では解けない・
 /// 別の anchor に同じ target を登録すると replay の最新が解ける（歯 (a)(2)(8)）。
+///
+/// 鍵は **役割 × anchor** で、役割は orchestrator 1 つ（ADR-0045 §2 (1)）なので鍵を分けるのは anchor である
+/// ＝弁別は解けた row の `anchor` で測る（役割の名では測れない）。
 #[test]
 fn seat_role_reregister_keeps_old_rows_and_resolves_the_latest() {
-    use vessel::seat::role::{role_of_target, Role};
+    use vessel::seat::role::{registration_of_target, role_of_target, Role};
     let place = role_place();
     for target in ["rr:one", "rr:two"] {
         role_stamp(&place, target, Some("sid-r"));
     }
-    let register = |target: &str, role: &str, anchor: &str| {
-        let out = role_register(&place, target, role, &["--anchor", anchor]);
+    let register = |target: &str, anchor: &str| {
+        let out = role_register(&place, target, "orchestrator", &["--anchor", anchor]);
         assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
     };
-    register("rr:one", "admin", "/repo/main");
-    register("rr:one", "admin", "/repo/main");
+    let anchor_of = |state: &vessel::fleet::State, target: &str| {
+        registration_of_target(state, target).map(|row| row.anchor.clone())
+    };
+    let (main, wt) = ("/repo/main", "/repo/.worktrees/wt");
+    register("rr:one", main);
+    register("rr:one", main);
     assert_eq!(role_log(&place).lines().count(), 2, "前の row は残る（append のみ）");
     let state = role_state(&place);
     assert_eq!(state.registrations.len(), 1, "同じ鍵は 1 つに畳む");
     assert_eq!(state.registrations.values().map(|latest| latest.seq).collect::<Vec<_>>(), vec![1], "2 件目が解決される");
-    assert_eq!(role_of_target(&state, "rr:one"), Some(Role::Admin));
-    register("rr:one", "planner", "/repo/.worktrees/wt");
-    assert_eq!(role_of_target(&role_state(&place), "rr:one"), Some(Role::Planner), "別の anchor の後の row が勝つ");
-    register("rr:two", "planner", "/repo/.worktrees/wt");
+    assert_eq!(role_of_target(&state, "rr:one"), Some(Role::Orchestrator));
+    register("rr:one", wt);
+    assert_eq!(anchor_of(&role_state(&place), "rr:one").as_deref(), Some(wt), "別の anchor の後の row が勝つ");
+    register("rr:two", wt);
     let moved = role_state(&place);
-    assert_eq!(role_of_target(&moved, "rr:two"), Some(Role::Planner));
-    assert_eq!(role_of_target(&moved, "rr:one"), Some(Role::Admin), "移した鍵の旧 target は解けず、別の鍵の row が残る");
-    register("rr:two", "admin", "/repo/main");
+    assert_eq!(anchor_of(&moved, "rr:two").as_deref(), Some(wt));
+    assert_eq!(anchor_of(&moved, "rr:one").as_deref(), Some(main), "移した鍵の旧 target は解けず、別の鍵の row が残る");
+    register("rr:two", main);
     assert_eq!(role_of_target(&role_state(&place), "rr:one"), None, "どの鍵も持たない target は解けない");
     fs::remove_dir_all(&place.dir).ok();
 }
@@ -432,7 +439,7 @@ fn seat_role_register_refuses_without_a_stamped_sid() {
     let unreadable = place.state.join("seat").join("rn_dir");
     fs::create_dir_all(state_file(&unreadable)).ok();
     for target in ["rn:absent", "rn:nostamp", "rn:empty", "rn:blank", "rn:dir"] {
-        let out = role_register(&place, target, "planner", &["--anchor", "/repo"]);
+        let out = role_register(&place, target, "orchestrator", &["--anchor", "/repo"]);
         assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "{target}: stdout={}", stdout_of(&out));
         assert_eq!(stderr_of(&out), format!("seat register: refused reason=no-stamp target={target}\n"));
         assert!(stdout_of(&out).is_empty(), "{target}: stdout は空");
@@ -456,7 +463,7 @@ fn seat_role_register_defaults_anchor_to_the_cwd_repo_root() {
     role_stamp(&place, "ra:anchor", Some("sid-anchor"));
     let state = place.state.display().to_string();
     let out = run_seat_in(&nested, &[
-        "register", "--state-dir", &state, "--target", "ra:anchor", "--role", "admin", "--account", "acct-1",
+        "register", "--state-dir", &state, "--target", "ra:anchor", "--role", "orchestrator", "--account", "acct-1",
         "--launch", &place.launch,
     ]);
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
@@ -484,14 +491,14 @@ fn seat_role_resolution_reads_only_rows_on_isolated_tmux() {
     let target = target_of_pane(Some(&place.socket), &first).unwrap_or_default();
     assert_eq!(target, "rolesess:win");
     role_stamp(&place, &target, Some("sid-live"));
-    let out = role_register(&place, &target, "planner", &["--anchor", "/repo"]);
+    let out = role_register(&place, &target, "orchestrator", &["--anchor", "/repo"]);
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
     let resolve = |pane: &str| target_of_pane(Some(&place.socket), pane).and_then(|found| role_of_target(&role_state(&place), &found));
-    assert_eq!(resolve(&first), Some(Role::Planner), "env の値でなく row の役割");
+    assert_eq!(resolve(&first), Some(Role::Orchestrator), "env の値でなく row の役割");
     assert!(tmux(&place.socket, &["kill-window", "-t", "rolesess:win"]).status.success(), "window を畳める");
     let (second, why) = pane_of("win", "SCRIBE2_ROLE=admin");
     assert!(second.starts_with('%') && second != first, "pane id が差し替わる: {second} stderr={why}");
-    assert_eq!(resolve(&second), Some(Role::Planner), "同じ target なら同じ役割");
+    assert_eq!(resolve(&second), Some(Role::Orchestrator), "同じ target なら同じ役割");
     assert!(tmux(&place.socket, &["rename-window", "-t", "rolesess:win", "moved"]).status.success(), "rename できる");
     assert_eq!(resolve(&second), None, "rename した window は別 target＝解けない");
     let log = role_log(&place);
@@ -515,20 +522,21 @@ fn seat_role_register_refuses_unknown_role_with_usage() {
         assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "role={role:?}");
         assert_eq!(stderr_of(&out), usage, "role={role:?} は使い方で断る");
     }
-    let out = run_seat(&["register", "--target", "ru:x", "--role", "planner"]);
+    let out = run_seat(&["register", "--target", "ru:x", "--role", "orchestrator"]);
     assert_eq!(stderr_of(&out), usage, "必須 flag の欠けも使い方");
     assert!(!vessel::fleet::store::events_path(&place.state).exists(), "行を書かない");
     fs::remove_dir_all(&place.dir).ok();
 }
 
-/// 役割は 2 つで宣言順・variant 名の字面は受けない・受付の極性は in-loop / fail-closed。
+/// 役割は 1 つ（orchestrator・ADR-0045 §2 (1)）で宣言順・variant 名の字面は受けない・受付の極性は
+/// in-loop / fail-closed。
 #[test]
 fn seat_role_enum_is_closed_in_declaration_order() {
     use vessel::polarity::{OnFailure, Timing};
     use vessel::seat::role::{Role, ALL, POLARITY};
-    assert_eq!(ALL.len(), 2, "記録時点の母集団");
+    assert_eq!(ALL.len(), 1, "記録時点の母集団");
     assert!(vessel::order::is_declaration_order(ALL, |role| role as usize), "ALL は宣言順: {ALL:?}");
-    assert_eq!(Role::parse("Planner"), None, "variant 名は字面でない");
+    assert_eq!(Role::parse("Orchestrator"), None, "variant 名は字面でない");
     assert_eq!(Role::parse(""), None, "空は役割でない");
     assert_eq!((POLARITY.timing, POLARITY.on_failure), (Timing::InLoop, OnFailure::FailClosed));
 }
@@ -541,8 +549,9 @@ fn seat_role_reconcile_line_counts_folded_rows_and_never_writes_zero_for_unmeasu
     for target in ["rc:gone", "rc:live", "rc:away"] {
         role_stamp(&place, target, Some("sid-rc"));
     }
-    for (target, role) in [("rc:gone", "planner"), ("rc:live", "planner"), ("rc:away", "admin")] {
-        assert_eq!(rc_of(&role_register(&place, target, role, &["--anchor", "/repo"])), i32::from(RC_OK));
+    // 鍵は (役割, anchor) で役割は 1 つ＝同じ anchor の 2 件が 1 つに畳まれ、別 anchor の 1 件が残る。
+    for (target, anchor) in [("rc:gone", "/repo"), ("rc:live", "/repo"), ("rc:away", "/repo/away")] {
+        assert_eq!(rc_of(&role_register(&place, target, "orchestrator", &["--anchor", anchor])), i32::from(RC_OK));
     }
     let state = role_state(&place);
     let live = vec!["rc:live".to_owned(), "rc:gone".to_owned()];
@@ -557,20 +566,31 @@ fn seat_role_reconcile_line_counts_folded_rows_and_never_writes_zero_for_unmeasu
 #[test]
 fn seat_role_doctor_reconciles_rows_with_live_targets() {
     let place = role_doctor_place();
+    // 実在しない target の row を 1 件足す（鍵を分けるのは anchor・`missing` の面を測る）。
+    crate::seat::role_register_extra(&place, "gone:gone", "/repo/gone");
     let out = role_doctor(&place);
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
-    let tail = |out: &Output| stdout_of(out).lines().rev().take(3).map(str::to_owned).collect::<Vec<String>>();
+    let tail = |out: &Output| stdout_of(out).lines().rev().take(4).map(str::to_owned).collect::<Vec<String>>();
+    let consumer_gone = CONSUMER_REPO.replace("consumer=/repo ", "consumer=/repo/gone ");
     assert_eq!(
         tail(&out),
-        [CONSUMER_REPO, HOST_ABSENT, "seats: registered=2 live=unmeasurable missing=unmeasurable"],
-        "突合の行の直後に host の面の行・末尾に導入先の行"
+        [
+            consumer_gone.as_str(),
+            CONSUMER_REPO,
+            HOST_ABSENT,
+            "seats: registered=2 live=unmeasurable missing=unmeasurable"
+        ],
+        "突合の行の直後に host の面の行・末尾に anchor ごとの導入先の行"
     );
     let seat = start_seat(&place.socket, "rolesdoc");
     assert!(seat.ready(), "隔離 seat が立つ");
     let out = role_doctor(&place);
     let lines: Vec<String> = stdout_of(&out).lines().map(str::to_owned).collect();
-    assert_eq!(lines.len(), 7, "2 行 + 登録 row 2 行 + 突合 1 行 + host の面 1 行 + 導入先 1 行: {lines:?}");
-    assert_eq!(tail(&out), [CONSUMER_REPO, HOST_ABSENT, "seats: registered=2 live=1 missing=1"]);
+    assert_eq!(lines.len(), 8, "2 行 + 登録 row 2 行 + 突合 1 行 + host の面 1 行 + 導入先 2 行: {lines:?}");
+    assert_eq!(
+        tail(&out),
+        [consumer_gone.as_str(), CONSUMER_REPO, HOST_ABSENT, "seats: registered=2 live=1 missing=1"]
+    );
     let doctor = |args: &[&str]| Command::new(bin()).arg("doctor").args(args).output().ok();
     let bare = doctor(&[]).map(|out| stdout_of(&out)).unwrap_or_default();
     assert_eq!(bare.lines().count(), 2, "引数無しは従来の 2 行: {bare}");
@@ -597,17 +617,17 @@ fn model_of_target(place: &RolePlace, target: &str) -> Option<String> {
 fn seat_register_model_lands_in_the_row_and_the_reader_returns_it() {
     let place = role_place();
     role_stamp(&place, "rm:planner", Some("sid-m"));
-    let out = role_register(&place, "rm:planner", "planner", &["--anchor", "/repo/anchor", "--model", "Fable"]);
+    let out = role_register(&place, "rm:planner", "orchestrator", &["--anchor", "/repo/anchor", "--model", "Fable"]);
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
     assert_eq!(
         stdout_of(&out),
-        "seat register: registered role=planner target=rm:planner sid=sid-m account=acct-1 anchor=/repo/anchor model=Fable\n"
+        "seat register: registered role=orchestrator target=rm:planner sid=sid-m account=acct-1 anchor=/repo/anchor model=Fable\n"
     );
     let events = vessel::fleet::store::read_all(&place.state).unwrap_or_default();
     assert_eq!(events.len(), 1, "1 件だけ: {}", role_log(&place));
     let registration = events.first().and_then(|event| event.registration.clone()).unwrap_or_else(|| panic!("本体が在る"));
     assert_eq!(registration.model.as_deref(), Some("Fable"));
-    assert_eq!(registration.role, vessel::seat::role::Role::Planner, "他の項目はそのまま");
+    assert_eq!(registration.role, vessel::seat::role::Role::Orchestrator, "他の項目はそのまま");
     assert_eq!(registration.account, "acct-1");
     let log = role_log(&place);
     assert!(log.contains("\"model\":\"Fable\""), "行の key: {log}");
@@ -615,8 +635,8 @@ fn seat_register_model_lands_in_the_row_and_the_reader_returns_it() {
     let state = role_state(&place);
     let row = vessel::seat::role::registration_of_target(&state, "rm:planner").unwrap_or_else(|| panic!("row が在る"));
     assert_eq!(row.model.as_deref(), Some("Fable"), "読み手が model を運ぶ");
-    assert_eq!(row.role, vessel::seat::role::Role::Planner);
-    assert_eq!(vessel::seat::role::role_of_target(&state, "rm:planner"), Some(vessel::seat::role::Role::Planner), "役割の解決は同じ 1 本");
+    assert_eq!(row.role, vessel::seat::role::Role::Orchestrator);
+    assert_eq!(vessel::seat::role::role_of_target(&state, "rm:planner"), Some(vessel::seat::role::Role::Orchestrator), "役割の解決は同じ 1 本");
     assert_eq!(vessel::seat::role::registration_of_target(&state, "rm:absent"), None, "登録の無い target は None");
     fs::remove_dir_all(&place.dir).ok();
 }
@@ -626,9 +646,9 @@ fn seat_register_model_lands_in_the_row_and_the_reader_returns_it() {
 fn seat_register_model_absent_reads_as_none_and_keeps_the_old_row_form() {
     let place = role_place();
     role_stamp(&place, "rm:plain", Some("sid-p"));
-    let out = role_register(&place, "rm:plain", "admin", &["--anchor", "/repo/anchor"]);
+    let out = role_register(&place, "rm:plain", "orchestrator", &["--anchor", "/repo/anchor"]);
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
-    assert_eq!(stdout_of(&out), "seat register: registered role=admin target=rm:plain sid=sid-p account=acct-1 anchor=/repo/anchor\n");
+    assert_eq!(stdout_of(&out), "seat register: registered role=orchestrator target=rm:plain sid=sid-p account=acct-1 anchor=/repo/anchor\n");
     let log = role_log(&place);
     assert_eq!(log.lines().count(), 1, "1 件: {log}");
     assert!(!log.contains("\"model\""), "None は key ごと書かない: {log}");
@@ -644,7 +664,7 @@ fn seat_register_model_empty_is_refused_with_usage_and_no_event() {
     role_stamp(&place, "rm:empty", Some("sid-e"));
     let usage = stderr_of(&run_seat(&[]));
     for extra in [&["--anchor", "/repo", "--model", ""][..], &["--anchor", "/repo", "--model", "  "], &["--anchor", "/repo", "--model"]] {
-        let out = role_register(&place, "rm:empty", "planner", extra);
+        let out = role_register(&place, "rm:empty", "orchestrator", extra);
         assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "{extra:?}: stdout={}", stdout_of(&out));
         assert_eq!(stderr_of(&out), usage, "{extra:?} は使い方で断る");
         assert!(stdout_of(&out).is_empty(), "{extra:?}: stdout は空");
@@ -659,7 +679,7 @@ fn seat_register_model_reregistration_replaces_the_model_with_the_latest() {
     let place = role_place();
     role_stamp(&place, "rm:again", Some("sid-g"));
     let register = |extra: &[&str]| {
-        let out = role_register(&place, "rm:again", "admin", extra);
+        let out = role_register(&place, "rm:again", "orchestrator", extra);
         assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
     };
     register(&["--anchor", "/repo/main", "--model", "Opus"]);
@@ -677,7 +697,7 @@ fn seat_register_model_reregistration_replaces_the_model_with_the_latest() {
 #[test]
 fn seat_register_model_shows_in_the_doctor_rows_with_dash_for_none() {
     let place = role_place();
-    for (target, role, extra) in [("rm:doc-a", "planner", &["--anchor", "/repo/a", "--model", "Fable"][..]), ("rm:doc-b", "admin", &["--anchor", "/repo/b"])] {
+    for (target, role, extra) in [("rm:doc-a", "orchestrator", &["--anchor", "/repo/a", "--model", "Fable"][..]), ("rm:doc-b", "orchestrator", &["--anchor", "/repo/b"])] {
         role_stamp(&place, target, Some("sid-d"));
         let out = role_register(&place, target, role, extra);
         assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
@@ -688,8 +708,8 @@ fn seat_register_model_shows_in_the_doctor_rows_with_dash_for_none() {
     assert_eq!(
         lines.get(2..),
         Some(&[
-            "seat: role=planner anchor=/repo/a target=rm:doc-a account=acct-1 model=Fable".to_owned(),
-            "seat: role=admin anchor=/repo/b target=rm:doc-b account=acct-1 model=-".to_owned(),
+            "seat: role=orchestrator anchor=/repo/a target=rm:doc-a account=acct-1 model=Fable".to_owned(),
+            "seat: role=orchestrator anchor=/repo/b target=rm:doc-b account=acct-1 model=-".to_owned(),
             "seats: registered=2 live=unmeasurable missing=unmeasurable".to_owned(),
             HOST_ABSENT.to_owned(),
             consumer_line_of("/repo/a"),

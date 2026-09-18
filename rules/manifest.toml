@@ -71,10 +71,10 @@ ruled_at = "2026-09-14"
 [[rule]]
 id = "R-C7-1"
 kind = "DialogueSurface"
-value = "planner"
+value = "orchestrator"
 enabled = true
-ruling = "user 2026-09-13T03:14Z"
-ruled_at = "2026-09-13"
+ruling = "user 2026-09-18T08:3xZ"
+ruled_at = "2026-09-18"
 
 [[rule]]
 id = "R-C8-1"
@@ -430,25 +430,18 @@ enabled = true
 ruling = "user 2026-09-12T02:01Z"
 ruled_at = "2026-09-12"
 
-# 席の権能（設計 seat-roles.md §3 / §4・ADR-0022 §2.2）。役割ごとに 1 行・値は権能の名の列（名の集合は
-# crates 側の Capability が閉じる・列に無い名は loader が拒む）。PreToolUse の guard が Bash（権能付き
-# subcommand）と Edit 系（path 種別）の 2 面でこの行を読んで止める。管理席の code の編集は契約が印
-# （opens）で開いた便の write-set の内側だけ通る（行の値ではなく契約の印・AC16）。
+# 席の権能（設計 seat-roles.md §3 / §4・ADR-0022 §2.2・ADR-0045 §2 (1)）。役割ごとに 1 行・値は権能の名の列
+# （名の集合は crates 側の Capability が閉じる・列に無い名は loader が拒む）。PreToolUse の guard が Bash（権能付き
+# subcommand）と Edit 系（path 種別）の 2 面でこの行を読んで止める。席は orchestrator の 1 つで、src の編集
+# （edit-code）は行に無く、歯（crates/<crate>/tests/）だけが edit-tests で開く。便の起動と着地と merge（launch /
+# merge）は器の dispatcher の口ゆえ行に並ばない。
 
 [[rule]]
-id = "role.planner"
+id = "role.orchestrator"
 kind = "RoleCapabilities"
-value = ["answer", "approve", "go", "relay", "edit-contract", "edit-design-intent", "edit-design-doc", "edit-outside"]
+value = ["answer", "approve", "go", "edit-contract", "edit-design-intent", "edit-design-doc", "edit-tests", "edit-outside"]
 enabled = true
-ruling = "user 2026-09-13T12:04Z"
-ruled_at = "2026-09-13"
-
-[[rule]]
-id = "role.admin"
-kind = "RoleCapabilities"
-value = ["launch", "relay", "merge", "edit-outside", "edit-code"]
-enabled = true
-ruling = "user 2026-09-18T04:10Z"
+ruling = "user 2026-09-18T08:3xZ"
 ruled_at = "2026-09-18"
 
 # 台帳の棚卸し（設計 ledger-triage.md §2 / §4）。判定点（blocks 依存）を持たない memo を stale と数える

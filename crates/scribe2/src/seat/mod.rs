@@ -495,14 +495,14 @@ mod tests {
             "行は在るが不発効"
         );
         assert_eq!(
-            int_rule_of(&manifest_with("DialogueSurface", "\"planner\"", true), FIXTURE_ID),
+            int_rule_of(&manifest_with("DialogueSurface", "\"orchestrator\"", true), FIXTURE_ID),
             Err(RuleRead::NotInt),
             "発効しているが整数でない"
         );
         assert_eq!(int_rule_of(&manifest_with("SeatTickStaleS", "7", true), FIXTURE_ID), Ok(7), "正常");
         // 不発効かつ整数でない行は**不発効**が先（発効を見てから形を見る）。
         assert_eq!(
-            int_rule_of(&manifest_with("DialogueSurface", "\"planner\"", false), FIXTURE_ID),
+            int_rule_of(&manifest_with("DialogueSurface", "\"orchestrator\"", false), FIXTURE_ID),
             Err(RuleRead::Disabled),
             "不発効が形より先"
         );

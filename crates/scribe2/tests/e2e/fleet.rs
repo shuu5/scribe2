@@ -1395,7 +1395,7 @@ fn registration_event_with_model(target: &str, model: Option<&str>) -> Event {
         detail: None,
         allowance: None,
         registration: Some(Registration {
-            role: Role::Admin,
+            role: Role::Orchestrator,
             anchor: "/repo".to_owned(),
             target: target.to_owned(),
             sid: Some("sid-1".to_owned()),
@@ -1462,7 +1462,7 @@ fn fleet_seat_role_registration_row_round_trips_and_its_keys_stay_exclusive() {
     assert!(Event::from_line(&with_run).is_err(), "登録の行は run を持たない: {with_run}");
     let with_window = line.replacen("\"kind\":\"SeatRegistered\"", "\"kind\":\"SeatRegistered\",\"window\":\"five_hour\"", 1);
     assert!(Event::from_line(&with_window).is_err(), "登録の行は口座残量だけの key を持たない: {with_window}");
-    let unknown = line.replacen("\"role\":\"admin\"", "\"role\":\"Admin\"", 1);
+    let unknown = line.replacen("\"role\":\"orchestrator\"", "\"role\":\"Orchestrator\"", 1);
     assert!(Event::from_line(&unknown).is_err(), "未知の role は malformed: {unknown}");
     let missing = line.replacen(",\"launch\":\"line 1\\n\\\"line 2\\\"\\n\"", "", 1);
     assert_ne!(missing, line, "置換が効く");
@@ -1479,7 +1479,8 @@ fn seat_launch_registration_sid_is_optional_and_both_forms_replay() {
     let line = with.to_line();
     assert!(line.contains("\"sid\":\"sid-1\""), "{line}");
     let mut launched = registration_event("s:launched");
-    launched.registration = launched.registration.map(|row| Registration { sid: None, role: Role::Planner, ..row });
+    // 鍵は (役割, anchor) で役割は 1 つ＝2 row を別の鍵にするのは anchor である（ADR-0045 §2 (1)）。
+    launched.registration = launched.registration.map(|row| Registration { sid: None, anchor: "/repo/launched".to_owned(), ..row });
     let bare = launched.to_line();
     assert!(!bare.contains("\"sid\""), "None は key ごと書かない（null を出さない）: {bare}");
     assert!(bare.contains("\"schema\":1"), "schema 1 のまま: {bare}");
@@ -1491,7 +1492,7 @@ fn seat_launch_registration_sid_is_optional_and_both_forms_replay() {
     assert!(Event::from_line(&typed).is_err(), "文字列でも null でもない sid は malformed: {typed}");
     let state = replay(&[with.clone(), launched.clone()]);
     let sids: Vec<Option<String>> = state.registrations.values().map(|latest| latest.registration.sid.clone()).collect();
-    assert_eq!(sids, vec![None, Some("sid-1".to_owned())], "鍵の違う 2 row（planner / admin の鍵順）が両方 replay に載る");
+    assert_eq!(sids, vec![Some("sid-1".to_owned()), None], "鍵の違う 2 row（anchor の違う 2 鍵）が両方 replay に載る");
 }
 
 /// 登録の行は便も席も作らず `export` を変えず、`fleet record` からは書けない（書き手は `seat register`）。

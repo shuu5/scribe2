@@ -2,6 +2,6 @@
 source: crates/scribe2/tests/e2e/seat.rs
 expression: form
 ---
-seats: registered=2 live=unmeasurable missing=unmeasurable
+seats: registered=1 live=unmeasurable missing=unmeasurable
 host-manifest=absent
 consumer=/repo source=launch scope=- binary=unrecorded plugin=unrecorded ledger=- cache=absent head=undeclared drift=unrecorded

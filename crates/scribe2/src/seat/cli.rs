@@ -16,7 +16,7 @@ use std::time::Duration;
 
 /// `seat` の使い方。
 pub fn usage() -> String {
-    "usage: seat <meter --target T [--transcript PATH]|inject --target T (--text S|--file PATH)|heartbeat --target T|tick --target T --wm-dir DIR [--pointer TEXT] [--restore CMD] [--rules PATH]|cycle --target T --wm-dir DIR [--restore CMD] [--rules PATH]|externalize --target T --wm-dir DIR --anchor DIR --plan FILE --directives FILE [--user FILE] [--retire FILE] [--trigger manual|tick] [--role R] [--rules PATH]|rebrief --target T --wm-dir DIR --anchor DIR [--bd PATH] [--prefix P] [--rules PATH]|consume --target T --wm-dir DIR|register --state-dir S --target T --role R --account L --launch FILE [--anchor DIR]|launch --state-dir S --role R --target S:W [--account L] [--anchor DIR] [--model M] [--restore CMD]|<label> (--planner|--admin) [--target S:W] [--model M] [--anchor DIR] [--restore CMD] [--state-dir S]> [--tmux-socket PATH] [--capture-file PATH] [--state-dir PATH]".to_owned()
+    "usage: seat <meter --target T [--transcript PATH]|inject --target T (--text S|--file PATH)|heartbeat --target T|tick --target T --wm-dir DIR [--pointer TEXT] [--restore CMD] [--rules PATH]|cycle --target T --wm-dir DIR [--restore CMD] [--rules PATH]|externalize --target T --wm-dir DIR --anchor DIR --plan FILE --directives FILE [--user FILE] [--retire FILE] [--trigger manual|tick] [--role R] [--rules PATH]|rebrief --target T --wm-dir DIR --anchor DIR [--bd PATH] [--prefix P] [--rules PATH]|consume --target T --wm-dir DIR|register --state-dir S --target T --role R --account L --launch FILE [--anchor DIR]|launch --state-dir S --role R --target S:W [--account L] [--anchor DIR] [--model M] [--restore CMD]|<label> --orchestrator [--target S:W] [--model M] [--anchor DIR] [--restore CMD] [--state-dir S]> [--tmux-socket PATH] [--capture-file PATH] [--state-dir PATH]".to_owned()
 }
 
 /// `seat` に続く引数を捌く。
@@ -462,7 +462,7 @@ fn register_of(args: &[String]) -> Outcome {
 struct LaunchFlags<'a> {
     /// `--target S:W`（`session:window` の両方が非空・短い形は row の値が既定）。
     target: &'a str,
-    /// `--role`（閉じた [`role::Role`]・短い形は `--planner` / `--admin` の 1 つ）。
+    /// `--role`（閉じた [`role::Role`]・短い形は `--orchestrator`）。
     role: role::Role,
     /// `--account` / `--model` / `--restore` / `--tmux-socket`（任意・空文字は使い方の誤り・`--model` の表に無い値は
     /// [`cycle::launch`] が `launch-model-unknown` で断る・短い形の口座は第 1 token の label）。
@@ -535,7 +535,7 @@ fn launch_of(args: &[String]) -> Outcome {
 /// [`cycle::Launched`] の variant ではない）。
 const REASON_DEFAULTS_UNRESOLVED: &str = "defaults-unresolved";
 
-/// 短い形 `seat <label> (--planner|--admin) [--target S:W] [--model M] [--anchor DIR] [--restore CMD] [--state-dir S]`
+/// 短い形 `seat <label> --orchestrator [--target S:W] [--model M] [--anchor DIR] [--restore CMD] [--state-dir S]`
 /// （設計 account-lifecycle.md §14・SRS FR59 / FR40）: 役割の flag は**ちょうど 1 つ**（0 か 2 は使い方の誤り）・置き場と anchor は
 /// 長い形と同じ解き方・target と model は明示の flag が無ければ同じ鍵（役割 × anchor）の登録 row の値（[`short_defaults`]）。
 /// 解けた周は長い形と同じ [`LaunchFlags`]（口座 = label）を組んで同じ [`launch_with`] を通る。
@@ -564,8 +564,8 @@ fn short_of(label: &str, args: &[String]) -> Outcome {
     launch_with(&flags, &place)
 }
 
-/// 短い形の役割の flag（`--planner` / `--admin`＝[`role::Role`] の字面に `--` を前置した形）。**ちょうど 1 つ**の周だけ `Some`
-/// （0 個・2 個・同じ flag の重複は `None`＝使い方の誤り）。
+/// 短い形の役割の flag（`--orchestrator`＝[`role::Role`] の字面に `--` を前置した形）。**ちょうど 1 つ**の周だけ `Some`
+/// （0 個・同じ flag の重複は `None`＝使い方の誤り）。
 fn short_role_of(args: &[String]) -> Option<role::Role> {
     let mut roles = args.iter().filter_map(|arg| arg.strip_prefix("--").and_then(role::Role::parse));
     let role = roles.next()?;

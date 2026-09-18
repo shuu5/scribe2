@@ -16,7 +16,7 @@ const BRIEF_DIR: &str = "seat/brief";
 /// 権能の穴（rules 行の値の列で埋める）。
 const BRIEF_CAPABILITIES: &str = "{capabilities}";
 /// 雛形の定義済みの穴（core の `seat::brief::HOLES` と同じ列＝自 workspace の check が drift を捕まえる）。
-const BRIEF_HOLES: &[&str] = &[BRIEF_CAPABILITIES, "{target}", "{anchor}", "{role}"];
+const BRIEF_HOLES: &[&str] = &[BRIEF_CAPABILITIES, "{target}", "{anchor}", "{role}", "{ledger}"];
 /// 雛形の行の出所 pointer の区切り（退避物の命令行と同じ字面・この後ろの参照だけを pointer と読む）。
 const BRIEF_SSOT: &str = "→ SSOT:";
 /// 役割の rules 行 id の前置き（`role.<役割名>`）。
@@ -112,7 +112,7 @@ mod tests {
         assert!(unknown.first().is_some_and(|line| line.contains(":1: unknown-hole {model}")), "{unknown:?}");
         let dropped = check_fixture(|dir| write_at(dir, &brief_rel(), "権能は answer だけ → SSOT: ADR-0022 §2.2\n"));
         assert_single(&dropped, "seat-brief");
-        assert!(dropped.first().is_some_and(|line| line.contains("権能 relay が生成文に無い")), "{dropped:?}");
+        assert!(dropped.first().is_some_and(|line| line.contains("権能 merge が生成文に無い")), "{dropped:?}");
         let orphan = check_fixture(|dir| drop(fs::remove_file(dir.join(brief_rel()))));
         assert_eq!(orphan.iter().filter(|line| line.starts_with("seat-brief: ")).count(), 2, "{orphan:?}");
         let ok = summary_fixture(|_| {});

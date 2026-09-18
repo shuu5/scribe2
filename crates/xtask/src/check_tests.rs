@@ -159,9 +159,9 @@ fn clippy_toml() -> String {
 /// fixture の設計 doc の相対 path。
 const PROSE_DOC_REL: &str = "docs/design/probe-7q.md";
 
-/// fixture の雛形の相対 path（rules manifest の `role.planner` の行と対）。
+/// fixture の雛形の相対 path（rules manifest の `role.orchestrator` の行と対）。
 pub(crate) fn brief_rel() -> String {
-    format!("crates/{FIXTURE_CORE}/src/seat/brief/planner.txt")
+    format!("crates/{FIXTURE_CORE}/src/seat/brief/orchestrator.txt")
 }
 
 /// 現物の rules manifest から読んだ閾値（fixture の期待値と閾値行はここから機械的に作る＝
@@ -172,7 +172,7 @@ fn real_limits() -> Limits {
     Limits::read(&text).unwrap_or_else(|reason| panic!("{reason}"))
 }
 
-/// fixture の rules manifest。`allow` に与えた path が例外行に載る。役割の行は planner 1 つ（権能 2 つ）。
+/// fixture の rules manifest。`allow` に与えた path が例外行に載る。役割の行は orchestrator 1 つ（権能 2 つ）。
 /// 閾値の 11 行（R-C4-* / R-C4.line-width / R-C13-1〔.per-pr / .check-delta-ms〕/ gate.tmux_test_threads）は
 /// 現物と同じ値で持つ（`Limits::read` が無い行を拒むので、fixture も実 repo が持つものを持つ）。
 fn rules_manifest(allow: &[&str]) -> String {
@@ -205,7 +205,7 @@ fn rules_manifest(allow: &[&str]) -> String {
     text.push_str(&format!(
         "\n[[rule]]\nid = \"repo.non_rust_exec_allow\"\nkind = \"RepoNonRustExecAllow\"\n\
          value = [{items}]\nenabled = true\nruling = \"fixture\"\nruled_at = \"2026-09-11\"\n\n\
-         [[rule]]\nid = \"role.planner\"\nkind = \"RoleCapabilities\"\nvalue = [\"answer\", \"relay\"]\n\
+         [[rule]]\nid = \"role.orchestrator\"\nkind = \"RoleCapabilities\"\nvalue = [\"answer\", \"merge\"]\n\
          enabled = true\nruling = \"fixture\"\nruled_at = \"2026-09-14\"\n"
     ));
     text

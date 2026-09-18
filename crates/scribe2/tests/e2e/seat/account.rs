@@ -114,7 +114,7 @@ fn doctor_accounts_trust_is_na_without_rows_and_per_anchor_with_many() {
     let rules = account_rules(&["multi"]);
     let head = "account=multi dir=present credential=missing config=missing agentview=unreadable";
     assert_eq!(account_line(&doctor_rows(&place, &rules), "multi"), format!("{head} trust=n/a retired=no"), "登録 row 0 件");
-    for (target, role, anchor) in [("mb:x", "planner", "/repo/b"), ("ma:x", "admin", "/repo/a"), ("mc:x", "admin", "/repo/b")] {
+    for (target, role, anchor) in [("mb:x", "orchestrator", "/repo/b"), ("ma:x", "orchestrator", "/repo/a"), ("mc:x", "orchestrator", "/repo/b")] {
         role_stamp(&place, target, Some("sid-t"));
         let out = role_register(&place, target, role, &["--anchor", anchor]);
         assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
@@ -142,7 +142,7 @@ fn doctor_accounts_lines_follow_the_seat_lines_in_label_order() {
     let first = lines.iter().position(|line| line.starts_with("account="));
     assert_eq!(host, seats.map(|at| at + 1), "host の面の行は突合の行の直後: {lines:?}");
     assert_eq!(first, seats.map(|at| at + 2), "口座の行は host の面の行の直後: {lines:?}");
-    assert_eq!(lines.len(), 10, "2 行 + 登録 row 2 行 + 突合 1 行 + host の面 1 行 + 口座 3 行 + 導入先 1 行: {lines:?}");
+    assert_eq!(lines.len(), 9, "2 行 + 登録 row 1 行 + 突合 1 行 + host の面 1 行 + 口座 3 行 + 導入先 1 行: {lines:?}");
     assert_eq!(lines.last().map(String::as_str), Some(CONSUMER_REPO), "導入先の行は口座の行の後ろ: {lines:?}");
     fs::remove_dir_all(&place.dir).ok();
 }
@@ -156,7 +156,7 @@ fn doctor_accounts_no_declared_account_adds_no_line_and_keeps_the_rest() {
     let without = doctor_rows(&place, NO_ACCOUNT_RULES);
     let with = doctor_rows(&place, &account_rules(&["solo"]));
     assert!(!without.iter().any(|line| line.starts_with("account=")), "{without:?}");
-    assert_eq!(without.len(), 7, "2 行 + 登録 row 2 行 + 突合 1 行 + host の面 1 行 + 導入先 1 行: {without:?}");
+    assert_eq!(without.len(), 6, "2 行 + 登録 row 1 行 + 突合 1 行 + host の面 1 行 + 導入先 1 行: {without:?}");
     let rest: Vec<String> = with.iter().filter(|line| !line.starts_with("account=")).cloned().collect();
     assert_eq!(rest, without, "他の行は不変");
     assert_eq!(with.len(), without.len() + 1, "{with:?}");
@@ -834,7 +834,7 @@ fn acct_register_with_model(place: &AcctPlace, target: &str, launch: &str, model
     let launch_file = fixture(&place.dir, "launch.txt", launch);
     let state = place.state.display().to_string();
     run_seat(&[
-        "register", "--state-dir", &state, "--target", target, "--role", "planner", "--account", ACCT_SEAT,
+        "register", "--state-dir", &state, "--target", target, "--role", "orchestrator", "--account", ACCT_SEAT,
         "--launch", &launch_file, "--anchor", &acct_anchor(place), "--model", model,
     ])
 }
@@ -905,7 +905,7 @@ fn seat_account_relaunch_refuses_an_unknown_row_model() {
     assert!(stdout_of(&via_cli).is_empty(), "stdout は空");
     assert!(acct_rows(&place.state).is_empty(), "未知の値は row に書かない");
     let broken = vessel::fleet::Registration {
-        role: vessel::seat::role::Role::Planner,
+        role: vessel::seat::role::Role::Orchestrator,
         anchor: acct_anchor(&place),
         target: name.to_owned(),
         sid: Some(ACCT_SID.to_owned()),

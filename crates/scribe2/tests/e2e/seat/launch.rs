@@ -504,7 +504,7 @@ fn seat_launch_creates_the_window_and_injects_the_derived_line_once() {
 fn launch_assert_registered_before_send(place: &AcctPlace, target: &str, label: &str) {
     let rows = acct_rows(&place.state);
     let want = vessel::fleet::Registration {
-        role: vessel::seat::role::Role::Planner,
+        role: vessel::seat::role::Role::Orchestrator,
         anchor: launch_anchor(place),
         target: target.to_owned(),
         sid: None,
@@ -763,7 +763,7 @@ fn launch_assert_refused_line(out: &Output, line: &str, case: &str) {
     assert_eq!(stderr_of(out), format!("{line}\n"), "{case}");
 }
 
-/// (a) 登録 row の在る anchor で短い形 `<label> --planner` は長い形と同じ row と同じ起動行を作る: 長い形（`--account l2 --model Fable`）
+/// (a) 登録 row の在る anchor で短い形 `<label> --orchestrator` は長い形と同じ row と同じ起動行を作る: 長い形（`--account l2 --model Fable`）
 /// で 1 回起こして row を作った place で、席を終えて前面を shell に戻し、短い形を `--target` / `--model` 無しで撃つ → rc 0・
 /// `inject.jsonl` の `kind=launch` の `what` は 2 行とも同一・最新 row の target / model / account は長い形の row と一致・偽 claude の
 /// argv も同じ（`--model fable` を運ぶ）・`new-window` は長い形の 1 回だけ（短い形は 0 回＝window は在る）。base は第 1 token を
@@ -781,7 +781,7 @@ fn seat_launch_short_form_reuses_the_registered_row_target_and_model() {
     assert_eq!(launch_tmux_calls(&place, "new-window"), 1, "長い形が window を 1 回作る");
     assert!(launch_quit_seat(&place, &target), "席を終えて前面を shell に戻せる: {}", capture(&place.socket, &target));
 
-    let out = launch_run_short(&place, &path, "l2", &["--planner"]);
+    let out = launch_run_short(&place, &path, "l2", &["--orchestrator"]);
 
     let line = stdout_of(&out);
     assert_eq!(rc_of(&out), i32::from(RC_OK), "短い形: stdout={line} stderr={} pane={}", stderr_of(&out), capture(&place.socket, &target));
@@ -817,7 +817,7 @@ fn seat_launch_short_form_refuses_typed_without_a_row() {
     let guard = launch_session(&place, name, &path);
     assert!(guard.ready(), "独立 socket に shell の session を立てられる");
 
-    let out = launch_run_short(&place, &path, "l2", &["--planner"]);
+    let out = launch_run_short(&place, &path, "l2", &["--orchestrator"]);
 
     launch_assert_refused_line(&out, "seat launch: refused reason=defaults-unresolved missing=--target,--model", "no-row");
     assert!(!stderr_of(&out).contains("target="), "解けない target を行に置かない: {}", stderr_of(&out));
@@ -830,7 +830,7 @@ fn seat_launch_short_form_refuses_typed_without_a_row() {
     let rows_before = acct_rows(&place.state).len();
     assert_eq!(rows_before, 1, "model を持たない row が 1 件");
 
-    let again = launch_run_short(&place, &path, "l2", &["--planner"]);
+    let again = launch_run_short(&place, &path, "l2", &["--orchestrator"]);
 
     launch_assert_refused_line(&again, "seat launch: refused reason=defaults-unresolved missing=--model", "no-model");
     assert_eq!(launch_tmux_calls(&place, "send-keys"), sent_before, "no-model: 1 key も送らない");
@@ -840,11 +840,11 @@ fn seat_launch_short_form_refuses_typed_without_a_row() {
     fs::remove_dir_all(&place.dir).ok();
 }
 
-/// (c) 役割の flag は**ちょうど 1 つ**: 0 個（`l2` だけ）と 2 個（`--planner --admin`）はどちらも使い方で断る（rc 1・stderr は
-/// usage・stdout 0 byte）・0 key・row 0。
+/// (c) 役割の flag は**ちょうど 1 つ**: 0 個（`l2` だけ）と 2 個（`--orchestrator` の重複）はどちらも使い方で断る（rc 1・
+/// stderr は usage・stdout 0 byte）・0 key・row 0。
 #[test]
 fn seat_launch_short_form_requires_exactly_one_role_flag() {
-    for (case, extra) in [("zero", &[][..]), ("two", &["--planner", "--admin"][..])] {
+    for (case, extra) in [("zero", &[][..]), ("two", &["--orchestrator", "--orchestrator"][..])] {
         let place = launch_place();
         let name = "launchshortrole";
         let target = format!("{name}:{name}");
@@ -857,7 +857,7 @@ fn seat_launch_short_form_requires_exactly_one_role_flag() {
         assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "{case}: stdout={} stderr={}", stdout_of(&out), stderr_of(&out));
         assert!(stdout_of(&out).is_empty(), "{case}: stdout は空");
         assert!(stderr_of(&out).starts_with("usage: seat "), "{case}: 使い方で断る: {}", stderr_of(&out));
-        assert!(stderr_of(&out).contains("(--planner|--admin)"), "{case}: 使い方に短い形が載る: {}", stderr_of(&out));
+        assert!(stderr_of(&out).contains("--orchestrator"), "{case}: 使い方に短い形が載る: {}", stderr_of(&out));
         launch_assert_not_sent(&place, 0, case);
         drop(guard);
         fs::remove_dir_all(&place.dir).ok();

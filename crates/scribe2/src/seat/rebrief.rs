@@ -619,14 +619,7 @@ fn orphan_lines(orphans: &[(String, String)], lines: &mut Vec<(Marker, String)>)
 
 /// 台帳の件数と in_progress の列挙。
 fn ledger_lines(issues: &[Issue], lines: &mut Vec<(Marker, String)>) {
-    let count = |status: &str| issues.iter().filter(|issue| issue.status == status).count();
-    let body = format!(
-        "open={} in_progress={} blocked={}",
-        count("open"),
-        count("in_progress"),
-        count("blocked")
-    );
-    lines.push((Marker::BdCount, body));
+    lines.push((Marker::BdCount, counts_body(issues)));
     let active: Vec<&Issue> = issues.iter().filter(|issue| issue.status == "in_progress").collect();
     if active.is_empty() {
         lines.push((Marker::BdInprogressNone, String::new()));
@@ -837,6 +830,19 @@ pub fn issues_of(text: &str) -> Option<Vec<Issue>> {
 fn dep_of(node: &Tree) -> Option<Dep> {
     let text_of = |key: &str| node.get(key).and_then(Tree::as_str).map(str::to_owned);
     Some(Dep { id: text_of("id")?, status: text_of("status")?, kind: text_of("dependency_type")? })
+}
+
+/// 台帳の現在値の 1 行（status 3 つの数え・DATA の `[BD_COUNT]` と席の指示文の `{ledger}` が同じ 1 本を読む）。
+fn counts_body(issues: &[Issue]) -> String {
+    let count = |status: &str| issues.iter().filter(|issue| issue.status == status).count();
+    format!("open={} in_progress={} blocked={}", count("open"), count("in_progress"), count("blocked"))
+}
+
+/// 台帳の現在値を 1 行で返す（席の指示文の `{ledger}`・SessionStart の hook が読む）。
+///
+/// 読めない周は `None` である——呼び側が `unknown` を書く。**数え損ねを 0 に化けさせない**（憲法 C10）。
+pub fn counts_of(bd: &str, timeout: Duration) -> Option<String> {
+    read_ledger(bd, timeout).ok().as_deref().map(counts_body)
 }
 
 /// 台帳を子 process で読む（待ち上限を超えたら殺して断る・stderr は捨てる）。

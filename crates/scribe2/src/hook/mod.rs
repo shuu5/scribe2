@@ -78,6 +78,9 @@ const FLAG_SOCKET: &str = "--tmux-socket";
 const FLAG_PROJECT: &str = "--project";
 /// rules manifest を差し替える flag（役割の行の歯の seam・`rules get --rules` と同じ形）。
 const FLAG_RULES: &str = "--rules";
+/// 台帳の client を差し替える flag（席の指示文の `{ledger}` の歯の seam・`seat rebrief --bd` と同じ形）。
+/// 無い周は PATH の [`crate::seat::rebrief::DEFAULT_BD`]（生成 hooks.json は渡さない）。
+const FLAG_BD: &str = "--bd";
 /// plugin の root（hooks.json の在る場所）を渡す flag。生成 hooks.json の shell 行が `$CLAUDE_PLUGIN_ROOT` から渡す
 /// （設計 consumer-sync.md §3・器は env を読まない・C2.2）。無い・空の周（plugin の外から撃った hook・fixture）は記録しない。
 const FLAG_PLUGIN_ROOT: &str = "--plugin-root";
@@ -167,6 +170,7 @@ pub fn dispatch(args: &[String], payload: &str) -> Outcome {
         pane: flag_of(args, FLAG_PANE),
         socket: flag_of(args, FLAG_SOCKET),
         rules: flag_of(args, FLAG_RULES),
+        bd: flag_of(args, FLAG_BD),
     };
     match args.first().map(String::as_str) {
         Some(EVENT_SESSION_START) => {
@@ -223,6 +227,7 @@ fn unanchored(args: &[String], cwd: &Path, payload: &str, started: Instant) -> O
             pane,
             socket: flag_of(args, FLAG_SOCKET),
             rules: None,
+            bd: None,
         };
         return denied(&hooked, &format!("role-deny {}", subject.render()), line, started);
     }
@@ -247,6 +252,8 @@ struct Hooked<'a> {
     socket: Option<&'a str>,
     /// rules manifest の差し替え（`--rules`・無ければ埋め込み）。
     rules: Option<&'a str>,
+    /// 台帳の client の差し替え（`--bd`・無ければ PATH の既定）。
+    bd: Option<&'a str>,
 }
 
 /// 記録の `seat` 列（`--pane` → target → 潰した字面）。pane が無い・空・解けない周は `None`
@@ -483,11 +490,18 @@ fn brief(hooked: &Hooked, outcome: &mut Outcome, started: Instant) {
         outcome.err.push(brief_refused(&format!("no-row {}", role_guard::row_id(row.role))));
         return;
     };
-    let text = crate::seat::brief::render(row.role, row, &capabilities);
+    let bd = hooked.bd.filter(|found| !found.trim().is_empty()).unwrap_or(crate::seat::rebrief::DEFAULT_BD);
+    let ledger = crate::seat::rebrief::timeout_of(&manifest)
+        .and_then(|timeout| crate::seat::rebrief::counts_of(bd, timeout))
+        .unwrap_or_else(|| LEDGER_UNKNOWN.to_owned());
+    let text = crate::seat::brief::render(row.role, row, &capabilities, &ledger);
     let emit = Emit { who: EVENT_SESSION_START, what: WHAT_BRIEF, when: "SessionStart", line: text.trim_end_matches('\n') };
     outcome.err.extend(record_lines(hooked.dir, &record(&emit, hooked, started)));
     outcome.out.extend(text.lines().map(str::to_owned));
 }
+
+/// 台帳を読めなかった周の `{ledger}` の字面（**数に化けさせない**・憲法 C10）。
+const LEDGER_UNKNOWN: &str = "unknown（台帳を読めない）";
 
 /// 指示文を出せない周の 1 行（理由の 1 語つき・guard の断りと同じ形）。
 fn brief_refused(reason: &str) -> String {
