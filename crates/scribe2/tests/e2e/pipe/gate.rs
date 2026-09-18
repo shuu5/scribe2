@@ -2930,6 +2930,10 @@ fn pipe_record_land_skipped_detection_has_no_line() {
 
 /// (f) `pipe show --run` は 1 行目の段に続けて **検出線の `line` だけ**を逐語で出す（他の kind の
 /// `line` は出さない・gate 前は 1 行目だけ）。外形は snapshot（置き場は親の `snapshots/`）。
+///
+/// 行の末尾の段の秒（`secs=`・設計 gate-cost.md §26 形 (1)）は**周ごとに動く**ので、snapshot に入れる前に
+/// [`mask_secs`] で `[secs]` へ置く（`default-features = false` の insta は `add_filter` を持たない・
+/// `src/main.rs` の `doctor_external_form` と同じ型）。秒が数であることは [`gate_secs_only_fired_steps_carry_the_wall_clock`] が測る。
 #[test]
 fn pipe_record_show_external_form() {
     let (repo, state) = repo_with_state();
@@ -2947,10 +2951,66 @@ fn pipe_record_show_external_form() {
     assert!(first.starts_with(&format!("run={id} ")) && first.contains("stage=Gated"), "1 行目は便の段: {first}");
     let rest: Vec<&str> = lines.collect();
     assert!(!rest.iter().any(|line| line.contains("flip-check")), "他の kind の `line` は出さない: {rest:?}");
-    let form = rest.join("\n");
+    let form = mask_secs(&rest.join("\n"));
     let mut settings = insta::Settings::clone_current();
     settings.set_snapshot_path("../snapshots");
     settings.bind(|| insta::assert_snapshot!(form));
+    clean(&[&repo, &state]);
+}
+
+/// 行末の段の秒を `[secs]` へ置く（値は周ごとに動く＝snapshot に入れない・外形だけを固定する）。
+fn mask_secs(form: &str) -> String {
+    form.lines()
+        .map(|line| {
+            line.split_once(" secs=")
+                .map_or_else(|| line.to_owned(), |(head, _)| format!("{head} secs=[secs]"))
+        })
+        .collect::<Vec<String>>()
+        .join("\n")
+}
+
+// ---- 段の秒（設計 gate-cost.md §26 形 (1)・`s2-07l.466`・接頭辞 `gate_secs_`）--------------------
+//
+// 撃った段の record だけが `secs=`（process の起動から終了までの壁時計・秒）を持つ。母集団 = 判定行の
+// fixture の 4 record（write-set 1 + 共通 1 + 検出線 1 + 契約 1）で、撃つ process を持たない段①と、
+// 撃たなかった段（land の skip record）は field を欠く（0 と書かない・C10）。
+
+/// gate の `verify.jsonl` は**撃った段の全部**に `secs=` を持ち段①は持たない・`pipe show --run` の
+/// 検出線の行が同じ秒をそのまま写す・land の `verify-main.jsonl` も同じ形（省いた段は持たない）。
+#[test]
+fn gate_secs_only_fired_steps_carry_the_wall_clock() {
+    let (repo, state, id, out) = line_gate(r#"["sh verify-ok.sh"]"#);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "PASS: {}", stderr_of(&out));
+    let rows = verify_rows(&state, &id);
+    assert_eq!(kinds(&rows), ["write-set", "common", "detection", "contract"], "母集団 4 record: {rows:?}");
+    assert!(!row_has(&rows, 1, "secs"), "撃つ process を持たない段①は秒を欠く: {:?}", rows.first());
+    for n in [2, 3, 4] {
+        assert!(row_has(&rows, n, "secs"), "撃った段 {n} は秒を持つ: {rows:?}");
+        assert!(row_value(&rows, n, "secs").parse::<u64>().is_ok(), "秒は数（{n} 番目）: {rows:?}");
+    }
+    let log = verify_log(&state, &id);
+    assert_eq!(
+        log.matches("\"secs\":").count(),
+        3,
+        "秒を持つのは撃った 3 record だけ（母集団 {} record）: {log}",
+        rows.len()
+    );
+    // `pipe show --run` は record の秒をそのまま写す（器は数え直さない）。
+    let shown = show_line(&repo, &state, &id);
+    let line = shown.lines().nth(1).unwrap_or_default().to_owned();
+    assert_eq!(
+        line,
+        format!("{DETECTION_LINE} secs={}", row_value(&rows, 3, "secs")),
+        "検出線の行は判定行の逐語 + record の秒: {shown}"
+    );
+    // land の主実測も同じ 1 本（`step_record`）を通る＝撃った段は秒を持ち、省いた段は持たない。
+    let landed = land_once(&repo, &state, &id);
+    assert_eq!(landed.status.code(), Some(i32::from(RC_OK)), "land: {}", stderr_of(&landed));
+    let main = main_rows(&state, &id);
+    assert_eq!(kinds(&main), ["write-set", "common", "detection", "contract"], "main 実測の母集団: {main:?}");
+    assert_eq!(row_value(&main, 3, "skipped"), "detection", "木が同じ周は ③ を省く");
+    assert!(!row_has(&main, 3, "secs"), "撃たなかった段（skip record）は秒を欠く: {:?}", main.get(2));
+    assert!(row_has(&main, 2, "secs"), "verify-main.jsonl も同じ形で秒を持つ: {main:?}");
     clean(&[&repo, &state]);
 }
 

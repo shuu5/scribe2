@@ -240,7 +240,8 @@ pub fn skip_record(number: u64, skipped: Skipped<'_>) -> String {
 /// **schema は 1 のまま任意 field を足す**（古い読み手は未知の field を無視する・
 /// ADR-0017 §2.1 の event と同じ足し方・設計 gate-cost.md §5）。
 ///
-/// `line=` は **kind と rc を問わず**、stdout の末尾 1 行が在った step 全部に書く（設計 §5.1・
+/// `secs=` は**撃った段の全部**（kind と rc を問わず）に書く任意 field である（設計 §26 形 (1)・1 便の
+/// 時間を器が測る）。`line=` は **kind と rc を問わず**、stdout の末尾 1 行が在った step 全部に書く（設計 §5.1・
 /// planner 裁定 2026-09-14）。検出線の行だけに絞ると flip-check の `base-retried=N`（rc 0 の周の
 /// stdout にしか出ない）が残らず、行の種類で分岐する形にもなる（C2）。
 pub fn step_record(number: u64, step: &Step) -> String {
@@ -272,6 +273,12 @@ pub fn step_record(number: u64, step: &Step) -> String {
     }
     if let Some(line) = &step.line {
         fields.push(("line", Value::Str(line.clone())));
+    }
+    // 段の壁時計（設計 gate-cost.md §26 形 (1)）。**撃った段だけ**が持つ——write-set 照合は撃つ
+    // process を持たず（[`super::verify::Step::secs`] が `None`）、撃たなかった段は [`skip_record`] で、
+    // どちらも field を欠く（0 と書かない＝「測って 0 秒」と弁別する・C10）。
+    if let Some(secs) = step.secs {
+        fields.push(("secs", Value::Num(secs)));
     }
     json_lite::write_object(&fields)
 }

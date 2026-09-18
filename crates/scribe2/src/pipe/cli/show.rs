@@ -1,6 +1,6 @@
 //! `pipe show`（設計 §5「subcommand の置き場」・`s2-07l.349` で `cli.rs` から純移動・本文は不変）。
 //!
-//! 便の段の 1 行と、gate の検出線の判定行（[`detection_lines`]・在る周だけ）。
+//! 便の段の 1 行と、gate の検出線の判定行（[`detection_lines`]・在る周だけ・段の秒を伴う）。
 
 use super::intake::run_repo;
 use super::{need, refused, state_dir_of};
@@ -53,11 +53,28 @@ fn detection_lines(path: &Path) -> Vec<String> {
         .lines()
         .filter_map(|text| json_lite::parse_object(text.trim()).ok())
         .filter(|pairs| field(pairs, "kind") == Some(detection))
-        .filter_map(|pairs| field(&pairs, "line").map(str::to_owned))
+        .filter_map(|pairs| shown_record(&pairs))
         .collect()
+}
+
+/// record 1 本の行: 判定行の逐語 + **段の秒**（`secs=<秒>`・設計 gate-cost.md §26 形 (1)）。
+///
+/// 秒は record の値をそのまま写す（器は数え直さない）。`secs` を欠く record（撃たなかった段・
+/// 古い便の `verify.jsonl`）は判定行だけを出す——`secs=0` と書くと「測って 0 秒」に化ける（C10）。
+fn shown_record(pairs: &[(String, json_lite::Value)]) -> Option<String> {
+    let line = field(pairs, "line")?;
+    match num(pairs, "secs") {
+        Some(secs) => Some(format!("{line} secs={secs}")),
+        None => Some(line.to_owned()),
+    }
 }
 
 /// flat object の文字列 field。
 fn field<'a>(pairs: &'a [(String, json_lite::Value)], key: &str) -> Option<&'a str> {
     pairs.iter().find(|(found, _)| found == key).and_then(|(_, value)| value.as_str())
+}
+
+/// flat object の数 field。
+fn num(pairs: &[(String, json_lite::Value)], key: &str) -> Option<u64> {
+    pairs.iter().find(|(found, _)| found == key).and_then(|(_, value)| value.as_num())
 }

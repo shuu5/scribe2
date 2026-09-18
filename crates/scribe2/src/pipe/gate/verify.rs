@@ -62,6 +62,11 @@ pub struct Step {
     pub reason: Option<Reason>,
     /// scope の peak（MiB）。**読めない周は `None`**＝record は `-`（0 と書かない）。
     pub peak_mb: Option<u64>,
+    /// 段の壁時計（秒・record の `secs=`・設計 gate-cost.md §26 形 (1)）。
+    ///
+    /// **撃つ process を持たない段（[`unwrapped`]）は `None`**＝record は field を欠く（0 と書かない
+    /// ＝「測って 0 秒」と弁別する・C10）。撃った段は起動できなかった周も秒を持つ（[`Fired::secs`]）。
+    pub secs: Option<u64>,
     /// この行に渡した実効 jobs（record の `jobs=`）。
     pub jobs: u64,
     /// 受付の結果（record の `slot=`・受付を通らない行は `None`）。
@@ -87,7 +92,8 @@ pub struct Step {
 /// 撃つ process を持たない段（write-set 照合）の封じ込め欄。
 ///
 /// 包めなかったのではなく**包む対象が無い**（Rust で照合するだけで子 process を起こさない）。
-/// 理由を持たせないのはそのためである。
+/// 理由を持たせないのはそのためである。**秒を持たないのも同じ理由**である（測る process が無い
+/// ＝0 秒で撃ったのではない・設計 gate-cost.md §26 形 (1)）。
 fn unwrapped(cmd: String, rc: i32, stderr: String) -> Step {
     Step {
         stage: Check::WriteSet,
@@ -97,6 +103,7 @@ fn unwrapped(cmd: String, rc: i32, stderr: String) -> Step {
         confined: false,
         reason: None,
         peak_mb: None,
+        secs: None,
         jobs: UNADMITTED_JOBS,
         slot: None,
         slot_why: None,
@@ -252,6 +259,7 @@ fn fire(entry: &Fire<'_>, caps: Result<confine::Caps, RuleRead>, admit: Option<&
         confined,
         reason,
         peak_mb,
+        secs: Some(fired.secs),
         jobs,
         slot,
         slot_why,
@@ -342,6 +350,12 @@ pub struct Fired {
     pub stderr: String,
     /// 包みが stdout の終端に出した数（包めなかった周は既定）。
     pub usage: Usage,
+    /// 行の壁時計（秒・[`Step::secs`] 経由で record の `secs=`・設計 gate-cost.md §26 形 (1)）。
+    ///
+    /// 測るのは **process の起動から終了まで**で、起動できなかった周も（起動に失敗するまでの）
+    /// 秒を持つ——判定は rc のままで、秒は費用の値である（1 便の時間を器が測る・C10）。
+    /// 行の終端で scope を片付ける時間（[`confine::release_scope`]）は行の費用ではないので入れない。
+    pub secs: u64,
     /// 包めたか。
     pub confinement: Confinement,
     /// 行の終端で scope を片付けた結果（record に書く周だけ `Some`・[`confine::release_scope`]）。
@@ -379,7 +393,11 @@ impl Fired {
 /// stdout を読むのは**包みの終端行と record の `line=` のため**だけで、判定には使わない（判定は rc である）。
 pub fn run_line_captured(worktree: &Path, line: &str, wrap: &confine::Wrap<'_>) -> Fired {
     let (mut command, confinement) = confine::wrap_line(line, wrap);
+    // 壁時計は**起動の直前から終了の直後まで**の 1 対で取る（設計 gate-cost.md §26 形 (1)）。
+    // 秒は起動できた周も起動できなかった周も同じこの 1 つを運ぶ（下の 2 つの返り口）。
+    let started = std::time::Instant::now();
     let spawned = command.current_dir(worktree).output();
+    let secs = started.elapsed().as_secs();
     // **行の終端で scope を片付ける**（設計 gate-cost.md §4.4 errata・`s2-07l.234`）。行が孤児の
     // process を残すと scope は active のまま残り、同じ名の次の周の相手になる。判定は変えない。
     let scope = confine::release_scope(&confinement);
@@ -390,6 +408,7 @@ pub fn run_line_captured(worktree: &Path, line: &str, wrap: &confine::Wrap<'_>) 
             rc: -1,
             stderr: String::new(),
             usage: Usage::default(),
+            secs,
             confinement,
             scope,
             stdout_tail: None,
@@ -407,6 +426,7 @@ pub fn run_line_captured(worktree: &Path, line: &str, wrap: &confine::Wrap<'_>) 
         rc: out.status.code().unwrap_or(-1),
         stderr: tail_of(&String::from_utf8_lossy(&out.stderr)),
         usage,
+        secs,
         confinement,
         scope,
         stdout_tail: last_line(&stdout),
@@ -451,7 +471,7 @@ pub(super) fn byte_count(bytes: &[u8]) -> u64 {
 pub(crate) mod tests {
     // flip-check: moved s2-07l.286
     use super::super::record::USAGE_HEAD;
-    use super::{last_line, listed, run_line_captured};
+    use super::{last_line, listed, run_line_captured, unwrapped, WRITE_SET_CMD};
     use crate::pipe::confine::{read_usage, Limit, Reason, Wrap};
     use crate::seat::RuleRead;
     use std::path::{Path, PathBuf};
@@ -517,6 +537,29 @@ pub(crate) mod tests {
         assert_eq!(fired.stdout_tail, None, "stdout も器の外に無い");
         let missing = run_line_captured(&root, "scribe2-mutant-no-such-command", &wrap);
         assert_eq!(missing.rc, 127, "PATH に無い command は sh が起動して 127（-1 ではない）");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 段の秒は **process の起動から終了まで**の壁時計である（設計 gate-cost.md §26 形 (1)）: 1 秒眠る行の
+    /// [`super::Fired`] は 1 以上を運び、起動できなかった周（存在しない cwd・rc -1 は不変）も秒を持ち、
+    /// 撃つ process を持たない段（[`unwrapped`]・write-set 照合）は秒を持たない（`None`＝record は field を欠く）。
+    ///
+    /// 上限に当てるのは**外から測った秒**だけである——固定の壁時計 bound は負荷の高い host で偽に落ちる
+    /// （設計 gate-cost.md §25 の実測）。包めない `Wrap` で撃つので `systemd-run` も `systemctl` も起こさない。
+    #[test]
+    fn gate_secs_fired_measures_the_wall_clock_of_the_process() {
+        let root = scratch("secs");
+        let wrap = Wrap { unit: "scribe2-secs-unit", limit: Limit::HostReserve, caps: Err(RuleRead::Missing) };
+        let slept = run_line_captured(&root, "sleep 1", &wrap);
+        assert_eq!(slept.rc, 0, "行は完走した");
+        assert!(slept.secs >= 1, "1 秒眠った行の壁時計は 1 以上: {}", slept.secs);
+        let started = std::time::Instant::now();
+        let unspawnable = run_line_captured(&root.join("absent-worktree"), "true", &wrap);
+        let outer = started.elapsed().as_secs();
+        assert_eq!(unspawnable.rc, -1, "起動できない周の極性は -1 のまま");
+        assert!(unspawnable.secs <= outer, "起動失敗までの壁時計（外から測った秒を超えない）: {}", unspawnable.secs);
+        let matched = unwrapped(WRITE_SET_CMD.to_owned(), 0, String::new());
+        assert_eq!(matched.secs, None, "撃つ process を持たない段は秒を持たない（0 と書かない）");
         let _ = std::fs::remove_dir_all(&root);
     }
 
