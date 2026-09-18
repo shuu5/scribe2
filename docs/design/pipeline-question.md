@@ -23,7 +23,7 @@ runner（claude -p）は契約と worktree の中身だけで判断し、聞き�
                                        │ runner（包み）が rc RC_QUESTION で終わり、stdout の最終行が質問 record
                                        ▼
                                   Questioned（QuestionRaised・detail = 質問の逐語）
-                                       │ 席が planner へ pointer 1 行を中継（seat inject・席の手順）
+                                       │ 席が判定行の pointer 1 行を読む（配送の中継は ADR-0045 §2 (3) で超過）
                                        │ planner: 契約を直す ／ 回答を記帳する ／ A 系なら契約に classes / 裁定 id を足して承認関門へ
                                        ▼
                               pipe answer --run <id> --words "<回答の逐語>"（QuestionAnswered・actor = machine）
@@ -69,11 +69,12 @@ lens の verdict（最終行の JSON・`{"verdict":…,"evidence":…}`）と**�
 - `<NAME> pipe run`（席が撃つ 1 本）の判定行に `question=<id>` を出す（席の中継の入力・§6）。CLI の外形 snapshot（`e2e__pipe__pipe_external_form.snap`・usage 行）は `answer` の分だけ変わる。
 - **A 系の質問**（3 クラス・A2 の閾値・A3 の依存・C5 の裁定 id に触れる）: planner は `answer` で解かず、契約に `classes` を名乗らせる／裁定 id を書く→ `resume` → 既存の承認関門が `Blocked` に倒す → user の逐語は `pipe approve --words` で承認 event に載る（C7.2）。`answer` は契約の読み方・write-set・verify 行の**機械由来**の補足に限る。
 
-## 6. 席の役割（既定の配送構造・ADR-0016 §2.1）
+## 6. 席の役割（ADR-0045 §2 (1) / §2 (3) で 1 役割になった）
 
-- **planner ×1**: 契約・裁定・merge の go。QUESTION には契約を直すか回答を記帳するかで応え、A 系は §5 の経路で user へ上げる。
-- **管理席 ×N**（各 1 口座）: dispatch された bead を `pipe run` で流す・判定行に `question=` が出たら **pointer 1 行**（run id と `about`）を planner へ `seat inject` で送る・go の後に merge する。**自分の手で実装するのは pipeline が回せない便だけ**（器の穴・design-intent・host 作業）。
-- **中継は席の手順であって core の結合ではない**: `seat` の module は `pipe` を呼ばず、`pipe` も席へ書かない（記録時点どおり）。席が `pipe run` の判定行（typed な token）を読んで `seat inject --target <planner>` を撃つ。歯は「判定行に `question=` が出る」（契約 (a)）と既存の inject の歯で足りる。planner の入力欄が塞がっている周は inject が `Refused` になる（既存の極性・[ADR-0014](../../design-intent/decisions/ADR-0014-polarity-list-is-a-snapshot-rendered-by-core.html)）＝**届かなかった事実は判定行に残る**。
+- **orchestrator ×1**: 契約・裁定・merge の go。QUESTION には契約を直すか回答を記帳するかで応え、A 系は §5 の経路で user へ上げる。
+- **2 役割の配送構造（planner ×1 + 管理席 ×N）と席間の中継は超過した**（ADR-0045 §2 (1) / §2 (3)）。`seat inject` の口も
+  `s2-07l.479.3` で消えたので、質問は**中継されず**、席が `pipe run` の判定行（typed な token・`question=`）と
+  event log をそのまま読む。歯は「判定行に `question=` が出る」（契約 (a)）で足りる。
 - runner / lens は claude -p のまま（FR5・ADR-0009 / 0011）。teammate（Agent tool の subagent）は席の中の review に限る。
 
 ## 7. 極性（C11.2・polarity.md §3）

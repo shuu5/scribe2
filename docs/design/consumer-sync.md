@@ -52,13 +52,13 @@
 - **子 process**: `git` と `cargo` は器の子（`std::process::Command`・timeout は既存の唯一の wait・出力は `--color never` で読む〔auto-memory の CI 色の型〕）。失敗は typed（`fetch-failed` / `install-failed` に rc を添える）。(4) の追記に失敗した周（store が書けない）は `record-failed` で断る（install は済んでいる＝binary は新しく `InstallRecorded` は 0 件・§6 の tick が食い違いを測る側・rc は 2）。
 - **A1**: 消す / 出す / 使う のどれでもない（local の build と install・push しない・課金しない）。
 
-## 6. hook 集合の食い違いで席を作り直す（ADR-0028 §2.4・FR62・台帳 `s2-07l.304`）
+## 6. hook 集合の食い違いで席を作り直す — **超過**（ADR-0045 §2 (2)）
 
-- **tick の軸を 1 つ足す**（[seat-autonomy.md](./seat-autonomy.md) §3 の judge・inject / noop の判定であって guard ではない・極性一覧に載せない・置き場は口座の軸の**後**〔逼迫の席を先に逃がす〕・状態の門の前）: 登録 row の在る席ごとに §3 の `plugin` 記録を読み、記録の root に今在る hooks.json の digest と比べる。違えば **退避の合図**を注入する（FR29 と同じ除外 = 退避物が在る周・cycle lock が live な周は送らない・busy でも送る〔context cap と同じ運び〕・payload の理由は `hook-drift`）。記録が無い・読めない席・root の file が無い周は注入せず `NoopReason` に理由 1 つ（縮退・止めない）。
-- **合図の出所を typed に**（台帳 `s2-07l.307` と同じ穴）: 退避の合図の記録（`inject.jsonl`）は出所を持たず、終了の手（[account-autonomy.md](./account-autonomy.md) §5）は「直近の合図が退避の合図」だけで立つ。本節の合図は **口座由来と同じく終了の手 → 立て直し**へ進ませたい（`/clear` では新しい hook が載らない）ので、合図の記録に closed enum の `origin=<context|account|hook>` を足し、終了の手は `account` / `hook` 由来の合図にだけ立つ（`context` 由来は従来どおり `/clear` の cycle）。**`.307` が先**（同じ 1 変更・.304 は .307 に依存する）。
-- **立て直し**: 既存の経路そのもの（退避 → Stop → `/exit` → 前面が shell → relaunch）。口座は §3 の session 用の規則で選ぶが、**hook 由来の周は登録 row の口座が閾値未満ならその口座を優先**（`.307` の「閾値未満なら現在の口座を優先」と同じ規則・planner を 1 口座に固定する user 直命 2026-09-14）。
-- **binary だけの食い違い**（hooks の digest が同じ）: 作り直さない（次の hook の起動で新しい binary が走る）。doctor の行に載せるだけ（復元の DATA に載せる面は `s2-07l.479.2` で消えた）。
-- **復元の DATA の `[PLUGIN]` の行**は**超過した**（ADR-0045 §2 (2)・`s2-07l.479.2`・DATA ごと消えた）。導入先の食い違いは doctor の行が持つ。
+- 本節の設計（tick の軸を 1 つ足し、digest が違う席へ退避の合図を注入して終了の手 → 立て直しへ進ませる）は、
+  軸を持つ管理 tick が `s2-07l.479.1` で、退避の合図と復元の DATA が `s2-07l.479.2` で、席の状態の最終行の読みが
+  `s2-07l.479.3` で、それぞれ機構ごと消えたため**超過した**。本文は git の履歴に在る。
+- **残るもの**: 導入先の食い違いは doctor の行が持つ（§4 の `drift=`・`[[vessel]]` の記録と今の hooks.json の digest の比較）。
+  更新の判断と実行は user の手番で、器は測って見せるだけである。
 
 ## 7. 極性（[polarity.md](./polarity.md)）
 

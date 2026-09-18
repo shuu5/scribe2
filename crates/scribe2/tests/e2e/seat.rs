@@ -15,7 +15,6 @@
 // flip-check: moved s2-07l.361
 
 mod account;
-mod inject;
 mod launch;
 mod register;
 mod rules;
@@ -29,7 +28,6 @@ use std::thread::sleep;
 use std::time::{Duration, Instant, SystemTime};
 use vessel::cli_outcome::{RC_OK, RC_REFUSED};
 use vessel::name::NAME;
-use vessel::seat::inject::tick_path;
 
 /// binary の path。
 fn bin() -> &'static str {
@@ -221,8 +219,29 @@ fn seat_autonomy_subcommands_are_gone_from_the_usage() {
         assert!(stderr_of(&out).starts_with("usage: seat "), "{gone}: 使い方 1 行: {}", stderr_of(&out));
         assert!(!usage.contains(&format!("|{gone} ")), "{gone} は使い方に出ない: {usage}");
     }
-    for kept in ["register", "launch", "inject"] {
+    for kept in ["register", "launch"] {
         assert!(usage.contains(&format!("{kept} --")), "{kept} は使い方に残る: {usage}");
+    }
+}
+
+/// 注入の口は**もう無い**（ADR-0045 §2 (2)・`s2-07l.479.3`）: `seat inject` は未知の第 1 token として
+/// 使い方で断られ（rc 1・stdout 0 byte）、使い方の 1 行に口の名も `--text` / `--file` の flag も出ない。
+/// 送達の機構そのものは残る（`seat launch` の復元が使う・ADR-0045 §2 (4) の不変の面）ので、
+/// **消えたのは口だけ**である＝残る口 2 つは従来どおり使い方に在る。
+///
+/// **消えたことを測る歯**である（base では `seat inject --target s:w --text x` が自分の口として動くので RED）。
+#[test]
+fn seat_inject_subcommand_is_gone_from_the_usage() {
+    let usage = stderr_of(&run_seat(&[]));
+    let out = run_seat(&["inject", "--target", "s:w", "--text", "x"]);
+    assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "使い方で断る: {}", stderr_of(&out));
+    assert!(stdout_of(&out).is_empty(), "stdout 0 byte");
+    assert!(stderr_of(&out).starts_with("usage: seat "), "使い方 1 行: {}", stderr_of(&out));
+    for gone in ["inject --target", "--text", "--file"] {
+        assert!(!usage.contains(gone), "{gone} は使い方に出ない: {usage}");
+    }
+    for kept in ["register --", "launch --"] {
+        assert!(usage.contains(kept), "{kept} は使い方に残る: {usage}");
     }
 }
 
@@ -243,7 +262,7 @@ fn seat_working_memory_subcommands_are_gone_from_the_usage() {
     }
     assert!(!usage.contains("--wm-dir"), "退避物の置き場の flag も残らない: {usage}");
     assert!(!usage.contains("--rules"), "席の口は `--rules` を 1 つも受けない: {usage}");
-    for kept in ["register", "launch", "inject"] {
+    for kept in ["register", "launch"] {
         assert!(usage.contains(&format!("{kept} --")), "{kept} は使い方に残る: {usage}");
     }
 }
@@ -288,85 +307,11 @@ fn unix_now() -> u64 {
         .map_or(0, |since| since.as_secs())
 }
 
-/// Idle の打刻を置く（注入の門が状態を読む周の fixture）。
-fn stamp_idle(state: &Path, target: &str) {
-    write_state(&seat_dir_of(state, target));
-}
-
-/// `/clear` を受けると画面を消して echo を描き直し、hook の代わりに `SessionStart` を `on_clear` の
-/// 時刻で打つ偽の席。それ以外の行は `UserPromptSubmit`（復元の消費の証拠）を `on_line` の時刻で打ち、
-/// 受けた字面を描いて `Stop`（turn の終わり＝実席と同じく Idle へ戻る）を同じ時刻で打つ。
-/// 打刻の file は `state_file`（`<seat dir>/state.jsonl`）。
-fn start_clearing_seat(
-    socket: &str,
-    name: &str,
-    log: &Path,
-    state_file: &Path,
-    (on_clear, on_line): (FakeStamp, FakeStamp),
-) -> IsolatedSeat {
-    let after_clear = stamp_cmd(state_file, "idle", "SessionStart", on_clear);
-    let on_other = format!(
-        "{}; printf 'seat got %s\\n' \"$line\"; {}",
-        stamp_cmd(state_file, "busy", "UserPromptSubmit", on_line),
-        stamp_cmd(state_file, "idle", "Stop", on_line)
-    );
-    start_clearing_seat_with(socket, name, log, &after_clear, &on_other)
-}
-
-/// `/clear` の後に走らせる shell と、それ以外の行への応答を指定して偽の席を立てる。
-///
-/// `/clear` を受けた席は画面を消した後、実席と同じく echo `❯ /clear` を行頭に描き直す（実測
-/// 2026-09-11）。**echo は作り直しの証拠ではない**（`s2-07l.112`）: 証拠は `after_clear` が置く
-/// `SessionStart` の打刻で、echo だけを描いて打刻しない席は「作り直しを確認できない席」の形になる。
-fn start_clearing_seat_with(
-    socket: &str,
-    name: &str,
-    log: &Path,
-    after_clear: &str,
-    on_other: &str,
-) -> IsolatedSeat {
-    let script = format!(
-        "while :; do printf '❯ '; read -r line || exit 0; printf '%s\\n' \"$line\" >> '{}'; \
-         case \"$line\" in '/clear') printf '\\033[2J\\033[3J\\033[H❯ /clear\\n'; {after_clear} ;; \
-         *) {on_other} ;; esac; done",
-        log.display()
-    );
-    let mut seat = IsolatedSeat {
-        socket: socket.to_owned(),
-        name: name.to_owned(),
-        ready: false,
-    };
-    let out = tmux(
-        socket,
-        &[
-            "new-session", "-d", "-s", name, "-x", "120", "-y", "40", "sh", "-c", &script,
-        ],
-    );
-    seat.ready = out.status.success() && wait_prompt(socket, name);
-    seat
-}
-
-/// prompt が描かれるのを待つ。
-fn wait_prompt(socket: &str, name: &str) -> bool {
-    let deadline = Instant::now().checked_add(PROMPT_WAIT);
-    while deadline.is_some_and(|at| Instant::now() < at) {
-        if capture(socket, name).trim_end().ends_with(PROMPT) {
-            return true;
-        }
-        sleep(Duration::from_millis(100));
-    }
-    false
-}
-
 /// 偽の席が打刻を 1 行 append する shell 断片（**契約の字面から**組む・設計 seat-state.md §2）。
-/// [`FakeStamp::Never`] は何もしない `:`。
-fn stamp_cmd(state_file: &Path, state: &str, event: &str, when: FakeStamp) -> String {
-    let ts = match when {
-        FakeStamp::Now => "$(date +%s)",
-        FakeStamp::Never => return ":".to_owned(),
-    };
+/// 時刻は常にいま（送達 ts 以後＝証拠になる側）で、打たない形は `s2-07l.479.3` で読み手ごと消えた。
+fn stamp_cmd(state_file: &Path, state: &str, event: &str) -> String {
     format!(
-        "printf '{{\"schema\":1,\"state\":\"{state}\",\"event\":\"{event}\",\"ts\":%s,\"sid\":\"fake\"}}\\n' \"{ts}\" >> '{}'",
+        "printf '{{\"schema\":1,\"state\":\"{state}\",\"event\":\"{event}\",\"ts\":%s,\"sid\":\"fake\"}}\\n' \"$(date +%s)\" >> '{}'",
         state_file.display()
     )
 }
@@ -374,17 +319,6 @@ fn stamp_cmd(state_file: &Path, state: &str, event: &str, when: FakeStamp) -> St
 /// 打刻 file の path（契約の字面から組む）。
 fn state_file(seat: &Path) -> PathBuf {
     seat.join("state.jsonl")
-}
-
-/// fixture を置く（最終行が Idle＝`Stop`・席の状態の fixture は 1 形だけになった）。
-#[expect(
-    clippy::expect_used,
-    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
-)]
-fn write_state(seat: &Path) {
-    fs::create_dir_all(seat).expect("seat dir を作れる");
-    let body = stamp_line("idle", "Stop", unix_now(), "sid-fix");
-    fs::write(state_file(seat), format!("{body}\n")).expect("打刻を置ける");
 }
 
 /// 打刻の成功行と tick の記録の末尾に載る**置き場の出所と path**（契約の字面から組む）。
@@ -405,22 +339,6 @@ fn run_seat_in(cwd: &Path, args: &[&str]) -> Output {
         .current_dir(cwd)
         .output()
         .expect("binary を起動できる")
-}
-
-/// `/clear` を受けたら**画面を作り直す** fake な席を独立 socket に立てる。
-///
-/// 実際の席は `/clear` で pane を消すが `sh` は消さない。`sh` のままだと「作り直せた」を
-/// 測る歯が、確認をどう実装しても通る（実測: 確認を常に真へ倒す変異が全歯 GREEN で生存）。
-/// 受け取った行は `log` へ 1 行ずつ積むので、**送った順序は pane の描画でなく席が受けた行**で
-/// 測れる。`mute_after_clear` の席は作り直した後に echo を止める＝**作り直しは確認できるが
-/// 復元の送達は確認できない**周（`restore-unconfirmed`）を作る。
-/// 偽の席が hook の代わりに置く打刻の**時刻**（`s2-07l.112`）。
-#[derive(Clone, Copy)]
-enum FakeStamp {
-    /// いま（送達 ts 以後＝証拠になる）。
-    Now,
-    /// 打たない（hook が死んだ・載っていない席の形）。
-    Never,
 }
 
 /// guard が drop されたら独立 socket の server は終わっている。
@@ -859,10 +777,10 @@ fn launch_shims(place: &AcctPlace, target: &str) -> String {
         launched = place.dir.join("launched").display(),
         events = vessel::fleet::store::events_path(&place.state).display(),
         seen = place.dir.join(LAUNCH_EVENTS_SEEN).display(),
-        start = stamp_cmd(&file, "idle", "SessionStart", FakeStamp::Now),
+        start = stamp_cmd(&file, "idle", "SessionStart"),
         log = place.dir.join(LAUNCH_LOG).display(),
-        busy = stamp_cmd(&file, "busy", "UserPromptSubmit", FakeStamp::Now),
-        stop = stamp_cmd(&file, "idle", "Stop", FakeStamp::Now),
+        busy = stamp_cmd(&file, "busy", "UserPromptSubmit"),
+        stop = stamp_cmd(&file, "idle", "Stop"),
     );
     let tmux = format!(
         "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\nexec '{}' \"$@\"\n",

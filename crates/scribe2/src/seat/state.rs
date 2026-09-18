@@ -1,15 +1,16 @@
 //! 席の状態（busy / idle）を hook の打刻で typed に持つ面（設計 docs/design/seat-state.md §2 / §4・
-//! ADR-0015・憲法 C3.3 / C10 / C11・SRS FR27 / FR28）。
+//! ADR-0015・憲法 C3.3 / C10 / C11）。
 //!
 //! 出所は Claude Code の hook event（`UserPromptSubmit` → Busy・`Stop` / `SessionStart` → Idle）で、
 //! 打刻は `<state_dir>/seat/<target>/state.jsonl` へ 1 行 JSON を append する（lock は fleet と同じ
-//! 1 実装 [`store::append_line`]）。tick と cycle は**最終行**を [`read_last`] の 1 本で読む。
-//! 作り直しと送達の**証拠**（設計 §6・`s2-07l.112`）は [`evidence_after`] の 1 本で読む: 送る前に
+//! 1 実装 [`store::append_line`]）。
+//! 読み手は**証拠の 1 本**（[`evidence_after`]・設計 §6・`s2-07l.112`）だけである: 送る前に
 //! [`baseline`] を取り、その後ろに足された打刻のうち送達 ts 以後のものだけを証拠に採る。
+//! 起動と立て直しの確認（`seat launch`・ADR-0045 §2 (4) の不変の面）と注入の消費の確認がこれを読む。
 //! pane の字面は判定入力にしない（C3.3）。
 //!
-//! **読めない側は注入しない側へ倒す**（fail-closed・ADR-0015 §2.3）: file が無い・読めない・Busy が
-//! 古い、はいずれも [`Read`] の別 variant で持ち、missing を idle に、stale を busy に読み替えない。
+//! **最終行を状態として読む面は消えた**（`s2-07l.479.3`）: その読み手（管理 tick と作り直しの cycle）は
+//! `s2-07l.479.1` で機構ごと消え、閾値の rules 行も同じ便で消えた。
 
 use crate::fleet::json_lite::{self, Value};
 use crate::fleet::store::{self, LockPolicy, StoreError, Warning};
@@ -20,10 +21,6 @@ use std::time::SystemTime;
 pub const FILE: &str = "state.jsonl";
 /// 打刻 1 行の schema 版。非互換な変更で上げる。
 pub const SCHEMA: u64 = 1;
-/// Busy の打刻を stale と見なす閾値を宣言する rules 行の id（**値は code に焼かない**・憲法 C5）。
-/// tick の鮮度と**共用**する（新しい閾値は足さない・ADR-0015 §2.4）。
-pub const ID_STALE: &str = "seat.tick_stale_s";
-
 /// key: schema 版。
 const KEY_SCHEMA: &str = "schema";
 /// key: 状態。
@@ -197,88 +194,10 @@ pub fn path(seat_dir: &Path) -> PathBuf {
     seat_dir.join(FILE)
 }
 
-/// stale 閾値（秒）を埋め込み manifest から読む。読めない周は理由付き（[`super::RuleRead`]）。
-pub fn stale_s() -> Result<u64, super::RuleRead> {
-    super::int_rule(ID_STALE)
-}
-
 /// 1 行を追記する。lock は fleet と同じ実装を通る（第 2 の writer を作らない・C6.3）。
 pub fn append(seat_dir: &Path, stamp: &Stamp) -> Result<Vec<Warning>, StoreError> {
     let policy = LockPolicy::embedded()?;
     store::append_line(&path(seat_dir), &stamp.to_line(), policy)
-}
-
-/// 最終行の読み。**5 値で閉じる**（憲法 C11: 読めないことを状態に潰さない）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Read {
-    /// 最終行が Busy で、閾値の内側。
-    Busy(Event),
-    /// 最終行が Idle。
-    Idle(Event),
-    /// file が無い（hook が載っていない席・v1 の席）。
-    Missing,
-    /// file は在るが読めない・最終行が壊れている・空。
-    Unreadable,
-    /// 最終行が Busy で、`ts` が閾値より古い（hook が死んだ疑い・busy とも idle とも言わない）。
-    Stale(Event),
-}
-
-impl Read {
-    /// 判定行に使う字面。
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Busy(_) => "busy",
-            Self::Idle(_) => "idle",
-            Self::Missing => "missing",
-            Self::Unreadable => "unreadable",
-            Self::Stale(_) => "stale",
-        }
-    }
-
-    /// 値の出所（読めなかった周は `None`）。
-    pub fn event(self) -> Option<Event> {
-        match self {
-            Self::Busy(event) | Self::Idle(event) | Self::Stale(event) => Some(event),
-            Self::Missing | Self::Unreadable => None,
-        }
-    }
-
-    /// 判定行の末尾に足す字面（`state=<値> event=<出所|none>`・C10 の出所付き）。
-    pub fn suffix(self) -> String {
-        format!(
-            " state={} event={}",
-            self.as_str(),
-            self.event().map_or("none", Event::as_str)
-        )
-    }
-}
-
-/// 最終行を読む（tick と cycle の**唯一の読み口**）。
-///
-/// `stale_s` は rules 行 [`ID_STALE`] の値（呼び側が引く）。Busy の `ts` が `now` より
-/// `stale_s` 秒を超えて古ければ [`Read::Stale`]。未来の `ts` は経過 0 と数える（stale 側へ倒さない）。
-pub fn read_last(seat_dir: &Path, stale_s: u64) -> Read {
-    let text = match std::fs::read_to_string(path(seat_dir)) {
-        Ok(found) => found,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Read::Missing,
-        Err(_) => return Read::Unreadable,
-    };
-    let Some(line) = text.lines().rev().find(|line| !line.trim().is_empty()) else {
-        return Read::Unreadable;
-    };
-    let Ok(stamp) = Stamp::from_line(line) else {
-        return Read::Unreadable;
-    };
-    classify(&stamp, stale_s, unix_secs(SystemTime::now()))
-}
-
-/// 打刻を読みに写す（時刻を引数に取る＝判定を時計から切り離す）。
-fn classify(stamp: &Stamp, stale_s: u64, now: u64) -> Read {
-    match stamp.state {
-        SeatState::Idle => Read::Idle(stamp.event),
-        SeatState::Busy if now.saturating_sub(stamp.ts) > stale_s => Read::Stale(stamp.event),
-        SeatState::Busy => Read::Busy(stamp.event),
-    }
 }
 
 /// いまの 1970 年からの秒（送達 ts を取る呼び側の 1 本・打刻と同じ時計）。
@@ -344,7 +263,7 @@ pub fn evidence_after(seat_dir: &Path, baseline: Baseline, event: Event, since: 
 
 #[cfg(test)]
 mod tests {
-    use super::{classify, Event, Read, SeatState, Stamp, SCHEMA};
+    use super::{Event, SeatState, Stamp, SCHEMA};
 
     /// 打刻は書いた行から同じ値で読める（round-trip）。
     #[test]
@@ -373,15 +292,4 @@ mod tests {
         }
     }
 
-    /// stale の境界は閾値**ちょうど**まで busy、1 秒超で stale。Idle は経過に依らず idle。
-    #[test]
-    fn seat_state_classify_uses_threshold_as_inclusive_busy_bound() {
-        let busy = Stamp::now(Event::UserPromptSubmit, "");
-        let at = busy.ts;
-        assert_eq!(classify(&busy, 10, at + 10), Read::Busy(Event::UserPromptSubmit));
-        assert_eq!(classify(&busy, 10, at + 11), Read::Stale(Event::UserPromptSubmit));
-        assert_eq!(classify(&busy, 10, at.saturating_sub(5)), Read::Busy(Event::UserPromptSubmit), "未来の ts は stale にしない");
-        let idle = Stamp::now(Event::Stop, "");
-        assert_eq!(classify(&idle, 10, idle.ts + 1_000_000), Read::Idle(Event::Stop));
-    }
 }

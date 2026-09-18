@@ -42,6 +42,22 @@ fn tmux_stdout(socket: Option<&str>, args: &[&str]) -> Option<String> {
 }
 
 /// pane の前面 process を shell と読む名（`#{pane_current_command}` の値・閉じた列・字面は現物が正本）。
+/// 入力欄の門の断り。**閉じた 2 値**（憲法 C11: 境界ごとの enum・字面で routing しない）。
+///
+/// `seat/inject.rs` から**挙動不変で移した**もの（`s2-07l.479.3`）: 注入の口は ADR-0045 §2 (2) で
+/// 消えたが、この型は shell の入力欄の門（[`shell_input_empty`]）と口座の delivery
+/// （`account login`・ADR-0045 §2 (4) の不変の面）と立て直しが返し続ける。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputGate {
+    /// 入力欄が非空（人間が打ちかけている）。
+    Busy,
+    /// prompt 行を特定できない。
+    UnknownInput,
+}
+
+/// tmux を撃てなかった（同じ便で `seat/inject.rs` から移した・読み手は口座の delivery と立て直し）。
+pub const REASON_TMUX_FAILED: &str = "tmux-failed";
+
 pub const SHELLS: &[&str] = &["sh", "bash", "zsh", "fish"];
 
 /// target の pane の前面 process が shell か＝session が終わっているか（設計 seat-state.md §6・account-autonomy.md §5
@@ -107,21 +123,21 @@ pub const SHELL_PROMPT_TAILS: &[&str] = &["$ ", "# ", "% ", "> "];
 
 /// shell の pane の入力欄の門（pure・`s2-07l.218`）: 可視域の**最後の非空行**が [`SHELL_PROMPT_TAILS`] のどれかで
 /// 終わる（右端の空白は trim しない＝prompt の直後に字が無い）周だけ `Ok`。その行が末尾のどれかを途中に含む
-/// （prompt の後に打ちかけが在る）周は [`inject::InputGate::Busy`]、含まない（`Password:` 等・空 pane）周は
-/// [`inject::InputGate::UnknownInput`]——どちらも 1 key も送らない側（C11.2・緩めない）。
+/// （prompt の後に打ちかけが在る）周は [`InputGate::Busy`]、含まない（`Password:` 等・空 pane）周は
+/// [`InputGate::UnknownInput`]——どちらも 1 key も送らない側（C11.2・緩めない）。
 ///
 /// 席の `❯` の行は読まない: 終了した席の画面に残る古い `❯` 行は shell の入力欄ではない（[`inject::guard_input`] は
 /// 席の pane 用のまま）。
-pub fn shell_input_empty(pane: &str) -> Result<(), inject::InputGate> {
+pub fn shell_input_empty(pane: &str) -> Result<(), InputGate> {
     let Some(last) = pane.lines().rfind(|line| !line.trim().is_empty()) else {
-        return Err(inject::InputGate::UnknownInput);
+        return Err(InputGate::UnknownInput);
     };
     if SHELL_PROMPT_TAILS.iter().any(|tail| last.ends_with(tail)) {
         Ok(())
     } else if SHELL_PROMPT_TAILS.iter().any(|tail| last.contains(tail)) {
-        Err(inject::InputGate::Busy)
+        Err(InputGate::Busy)
     } else {
-        Err(inject::InputGate::UnknownInput)
+        Err(InputGate::UnknownInput)
     }
 }
 
@@ -452,7 +468,7 @@ pub fn int_rule_of(manifest: &crate::rules::manifest::Manifest, id: &str) -> Res
 
 #[cfg(test)]
 mod tests {
-    use super::inject::InputGate;
+    use super::InputGate;
     use super::{
         host_slots_dir, int_rule_of, manifest_read, shell_input_empty, Provenance, RuleRead, StateDir, RULE_READS,
         SHELL_PROMPT_TAILS,
