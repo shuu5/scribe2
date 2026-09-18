@@ -1878,6 +1878,149 @@ fn contract_derive_teeth_place_uses_base_test_names() {
     clean(&[&repo, &state]);
 }
 
+// ───── 契約の散文の門（設計 docs/design/contract-source.md §27・行 aa・`s2-07l.429`・接頭辞 `contract_prose_teeth_`） ─────
+
+/// 判定行 token（`mode=`）を歯の区間に持つ toy の file 2 本（pin の file を辞書順に 2 件名乗らせる）。
+const PROSE_PIN_FILES: &[(&str, &str)] = &[
+    ("crates/toy/tests/pin_a.rs", "#[test]\nfn pin_a_case() {\n    assert!(out.contains(\"mode=fast\"));\n}\n"),
+    ("crates/toy/tests/pin_b.rs", "#[test]\nfn pin_b_case() {\n    assert!(out.contains(\"mode=slow\"));\n}\n"),
+];
+
+/// Declared 行の `write-set`（行の `verify` の filter `other_` の歯の file〔helper.rs〕を持つ＝§20 の門は通る形）。
+const PROSE_WRITE_SET: &str = "[\"crates/toy/src/tint.rs\", \"crates/toy/tests/helper.rs\"]";
+
+/// 行と契約 file の `verify` に使う nextest 行（`other_` は helper.rs の歯 `other_case` に当たる）。
+const PROSE_OTHER_LINE: &str = "cargo nextest run -p toy --no-tests=fail other_";
+
+/// 契約 file 側の `verify`（`derive_` は e2e.rs の歯 `derive_ok` に当たる＝行の側とは別の filter）。
+const PROSE_DERIVE_LINE: &str = "cargo nextest run -p toy --no-tests=fail derive_";
+
+/// 設計 pointer `docs/design/toy.md#<id>` と、契約 file 側の `done`（散文）・`verify`（散文の門が読む filter 語）・
+/// `write-set` を持つ契約 file（`goal` は [`contract_body`] の既定＝backtick を持たない）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn prose_contract(repo: &Path, id: &str, done: &str, verify: &str, write_set: &str) -> PathBuf {
+    let dropped = ["design", "done", "verify", "write-set"];
+    let lines: Vec<String> = contract_body()
+        .into_iter()
+        .filter(|line| !dropped.iter().any(|key| line.starts_with(key)))
+        .chain([
+            format!("design = \"docs/design/toy.md#{id}\""),
+            format!("done = \"{done}\""),
+            format!("verify = [\"{verify}\"]"),
+            format!("write-set = {write_set}"),
+        ])
+        .collect();
+    let path = repo.join(format!("{id}.toml"));
+    fs::write(&path, format!("{}\n", lines.join("\n"))).expect("契約 file を書ける");
+    path
+}
+
+/// (a) Declared 行: `done` が base の歯 `derive_ok` を名指すのに契約 file の `verify` の filter が `other_` の契約は、受付が
+/// `teeth-uncovered`（rc 1）で名を名乗って断る（(a1) は (a2) の前＝歯の file の門の字面は出ない）・run dir は撃つ前と同数・
+/// event 0。base は散文を読まずに通す（rc 0 → RED）。
+#[test]
+fn contract_prose_teeth_uncovered_name_is_refused() {
+    let row = declared_teeth_row("t", "other_", PROSE_WRITE_SET);
+    let (repo, state) = derive_repo(&table_doc(&table_region(&[row])));
+    let contract = prose_contract(&repo, "t", "`derive_ok` を測る", PROSE_OTHER_LINE, PROSE_WRITE_SET);
+    let before = run_dirs(&state);
+    let out = intake_raw(&repo, &state, &contract, "s2-t");
+    let err = stderr_of(&out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "filter に当たらない名指しは rc 1: {err}");
+    assert!(err.contains("goal / done が名指す歯が verify の filter 語に当たらない（derive_ok）"), "名を名乗る: {err}");
+    assert!(!err.contains("歯の file が write-set に無い"), "(a1) は (a2) より先に断る: {err}");
+    assert_eq!(run_dirs(&state), before, "便を作らない（run dir は撃つ前と同数）");
+    assert_eq!(event_count(&state), 0, "断った周は event を書かない");
+    clean(&[&repo, &state]);
+}
+
+/// (b) 同じ散文を Derived 形の行（`write-set` 欄なし）で出しても**同じ断り**（(a1) は分岐で限定しない）: 導出値の置き換えも
+/// 起きず（run dir 不増・event 0）、理由は (a) と同じ 1 本の字面。
+#[test]
+fn contract_prose_teeth_uncovered_name_is_refused_for_derived() {
+    let row = derive_row("u", &[("verify", &format!("[\"{PROSE_OTHER_LINE}\"]"))]);
+    let (repo, state) = derive_repo(&table_doc(&table_region(&[row])));
+    let contract = prose_contract(&repo, "u", "`derive_ok` を測る", PROSE_OTHER_LINE, "[\"crates/toy/tests/helper.rs\"]");
+    let before = run_dirs(&state);
+    let out = intake_raw(&repo, &state, &contract, "s2-u");
+    let err = stderr_of(&out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "Derived でも rc 1: {err}");
+    assert!(err.contains("goal / done が名指す歯が verify の filter 語に当たらない（derive_ok）"), "同じ字面: {err}");
+    assert_eq!(run_dirs(&state), before, "導出値の置き換えも便も起きない");
+    assert_eq!(event_count(&state), 0, "断った周は event を書かない");
+    clean(&[&repo, &state]);
+}
+
+/// (c) 名指しは契約 file の `verify` の filter（`derive_`）に当たるが、その歯の file（e2e.rs）が Declared 行の `write-set` に
+/// 無い契約は `teeth-outside-write-set` の**字面のまま**（§20 と同じ 1 関数）で断る。行の `verify` は `other_` なので §20 の
+/// 門は通る＝断りは散文の側から来る。
+#[test]
+fn contract_prose_teeth_outside_write_set_is_refused() {
+    let row = declared_teeth_row("o", "other_", PROSE_WRITE_SET);
+    let (repo, state) = derive_repo(&table_doc(&table_region(&[row])));
+    let contract = prose_contract(&repo, "o", "`derive_ok` を測る", PROSE_DERIVE_LINE, PROSE_WRITE_SET);
+    let out = intake_raw(&repo, &state, &contract, "s2-o");
+    let err = stderr_of(&out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "write-set の外の歯の file は rc 1: {err}");
+    assert!(err.contains("verify の歯の file が write-set に無い（crates/toy/tests/e2e.rs）"), "字面のまま file を名乗る: {err}");
+    assert!(!err.contains("filter 語に当たらない"), "被覆は足りている: {err}");
+    assert_eq!(event_count(&state), 0, "断った周は event を書かない");
+    clean(&[&repo, &state]);
+}
+
+/// (d) `done` の判定行 token（`mode=<a|b>` の placeholder＝literal は `mode=`）を歯の区間に持つ toy の 2 file が Declared 行の
+/// `write-set` に無い契約は `pins-outside-write-set`（rc 1）で file を**全部**辞書順に名乗って断る。
+#[test]
+fn contract_prose_teeth_pins_outside_write_set_is_refused() {
+    let row = declared_teeth_row("p", "other_", PROSE_WRITE_SET);
+    let (repo, state) = derive_repo_with(&table_doc(&table_region(&[row])), PROSE_PIN_FILES);
+    let contract = prose_contract(&repo, "p", "`mode=<a|b>` を pin する", PROSE_OTHER_LINE, PROSE_WRITE_SET);
+    let out = intake_raw(&repo, &state, &contract, "s2-p");
+    let err = stderr_of(&out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "pin の file が write-set の外は rc 1: {err}");
+    assert!(err.contains("判定行 token を pin する file が write-set に無い"), "pins-outside-write-set の理由: {err}");
+    assert!(err.contains("crates/toy/tests/pin_a.rs, crates/toy/tests/pin_b.rs"), "全部を辞書順に名乗る: {err}");
+    assert_eq!(event_count(&state), 0, "断った周は event を書かない");
+    clean(&[&repo, &state]);
+}
+
+/// (e) Derived 行: 名指した歯の file（e2e.rs）と pin の file（pin_a.rs / pin_b.rs）が**導出値に入る**（行の `verify` の歯
+/// helper.rs の 1 本から 4 本へ）・判定行は `write-set=derived files=4` と末尾の `prose=1:0:2`・写しの write-set は 4 file。
+#[test]
+fn contract_prose_teeth_derived_adds_pin_and_teeth_files() {
+    let row = derive_row("y", &[("verify", &format!("[\"{PROSE_OTHER_LINE}\"]"))]);
+    let (repo, state) = derive_repo_with(&table_doc(&table_region(&[row])), PROSE_PIN_FILES);
+    let done = "`derive_ok` と `mode=<a|b>` を測る";
+    let contract = prose_contract(&repo, "y", done, PROSE_DERIVE_LINE, "[\"crates/toy/tests/helper.rs\"]");
+    let out = intake_raw(&repo, &state, &contract, "s2-y");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "被覆が足りていれば通る: {}", stderr_of(&out));
+    let tokens = intake_tokens(&out);
+    assert!(tokens.contains(&"write-set=derived".to_owned()) && tokens.contains(&"files=4".to_owned()), "{tokens:?}");
+    assert!(tokens.contains(&"prose=1:0:2".to_owned()), "散文の 3 数を既存 token の末尾に足す: {tokens:?}");
+    let want = ["crates/toy/tests/e2e.rs", "crates/toy/tests/helper.rs", "crates/toy/tests/pin_a.rs", "crates/toy/tests/pin_b.rs"];
+    assert_eq!(copied_write_set(&state, &run_id_of(&out)), want, "導出値 = 行の歯 ∪ 名指した歯の file ∪ pin の file");
+    clean(&[&repo, &state]);
+}
+
+/// (f) base に無い名（`brand_new_tooth`）と base に無い判定行 token（`pointer=<id>`）は**判定しない**（下界・§27 の限界）:
+/// 契約は通り（rc 0）、判定行の 3 数は `prose=0:0:0` で弁別と本数の token は不変。
+#[test]
+fn contract_prose_teeth_unknown_name_and_token_are_not_judged() {
+    let row = declared_teeth_row("n", "other_", PROSE_WRITE_SET);
+    let (repo, state) = derive_repo(&table_doc(&table_region(&[row])));
+    let done = "`brand_new_tooth` と `pointer=<id>` は base に無い";
+    let contract = prose_contract(&repo, "n", done, PROSE_OTHER_LINE, PROSE_WRITE_SET);
+    let out = intake_raw(&repo, &state, &contract, "s2-n");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "base に無い名と token は判定しない: {}", stderr_of(&out));
+    let tokens = intake_tokens(&out);
+    assert!(tokens.contains(&"prose=0:0:0".to_owned()), "散文の 3 数は 0: {tokens:?}");
+    assert!(tokens.contains(&"write-set=declared".to_owned()) && tokens.contains(&"files=2".to_owned()), "{tokens:?}");
+    clean(&[&repo, &state]);
+}
+
 // ───── 器の口 pipe preflight（設計 docs/design/contract-source.md §21・行 u・`s2-07l.394`・接頭辞 `pipe_preflight_`） ─────
 
 /// `pipe preflight` を 1 回撃つ（intake と同じ引数の読み・審査の lens は無い・`--state-dir` は `with_state_dir` の周だけ）。

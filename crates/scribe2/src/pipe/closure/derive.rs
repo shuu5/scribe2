@@ -11,12 +11,30 @@
 //! nextest 行の歯の file は同じ [`teeth_places`] で解き、行の write-set に無い file を全部名指して断る
 //! （[`check_teeth_cover`]・照合は [`check_drift`] と同じ正規化・dir 項目は配下）。
 //!
+//! **契約の散文の閉包**（§27・行 aa）[`prose_closure`]: 契約 file の `goal` / `done` の backtick 字面から (a) 既存の歯の
+//! 名指しと (b) 判定行 token の pin（第 7 形）を読む 1 本の pure 関数。行の欄ではなく契約 file の散文を入力にするので
+//! [`Fields`] は広げず別の引数で受ける。(a) の被覆は [`nextest_filter`]・(a) の歯の file の門は §20 と同じ
+//! [`check_teeth_cover`]・(b) の門は対の [`check_pin_cover`] で、撃つ場所は受付（`cli::intake` の `settle_write_set`）だけ。
+//!
 //! 型の閉包の字面走査（4 形と [`super::sees`]）は親 module `closure.rs` に置いたまま（1 関数の判定で結ばれる）。
 
+use super::names::backticked;
 use super::super::refuse::{covered, normalize, NEW_FILE};
 use super::{closure, is_ident, is_ident_char, surface_closure, test_region, texts_of, ClosureError, Source};
 use super::{CRATES_DIR, LIB_FLAG, NEXTEST_HEAD, PACKAGE_FLAGS, RS, SRC_DIR, TESTS_DIR, TEST_ATTR, TEST_FLAG, UNREAD_TARGET_FLAGS};
 use std::collections::BTreeSet;
+
+/// 歯の名指しの末尾に付いてよい形（§27 (a)・`derive_ok()` / `derive_ok(` も同じ名指し・長い側から剥がす）。
+const CALL_TAILS: &[&str] = &["()", "("];
+
+/// 判定行 token の key と value の区切り（§27 (b)）。
+const TOKEN_EQ: char = '=';
+
+/// 判定行 token の key に使える記号（英数字に加えて・§27 (b)）。
+const KEY_SYMBOLS: &[char] = &['_', '-'];
+
+/// value が具体でない印（`<…>` の穴と `a|b` の選択肢・§27 (b)・placeholder は `<key>=` までを literal にする）。
+const PLACEHOLDERS: &[char] = &['<', '|'];
 
 /// 行の数え方（設計 rules-manifest.md §4・`R-C4.line-width`・上限の余地が base の行数を数える式）: 各行を
 /// `max(1, ceil(文字数 ÷ width))` と数えた合計。
@@ -115,12 +133,138 @@ pub(crate) fn declared_teeth(fields: &Fields<'_>, base: &Base<'_>, written: &[St
 /// 解けた歯の file `places` が write-set `written` に全部含まれるか（照合は [`check_drift`] と同じ正規化・dir 項目は
 /// その配下・[`covered`]）。無い file を**全部**名指す（辞書順）。
 pub(crate) fn check_teeth_cover(written: &[String], places: &BTreeSet<String>) -> Result<(), ClosureError> {
-    let files: Vec<String> = places.iter().filter(|path| !covered(written, path)).map(|path| normalize(path)).collect();
+    let files = outside(written, places);
     if files.is_empty() {
         Ok(())
     } else {
         Err(ClosureError::TeethOutsideWriteSet { files })
     }
+}
+
+/// 散文が pin する判定行 token の file `pins` が write-set `written` に全部含まれるか（§27 (b)・照合は
+/// [`check_teeth_cover`] と**同じ 1 本**[`outside`]・理由だけが別の variant）。無い file を**全部**名指す（辞書順）。
+pub(crate) fn check_pin_cover(written: &[String], pins: &BTreeSet<String>) -> Result<(), ClosureError> {
+    let files = outside(written, pins);
+    if files.is_empty() {
+        Ok(())
+    } else {
+        Err(ClosureError::PinsOutsideWriteSet { files })
+    }
+}
+
+/// `places` のうち write-set `written` に含まれない file（正規化した形・辞書順・2 つの門が同じ畳み方で数える）。
+fn outside(written: &[String], places: &BTreeSet<String>) -> Vec<String> {
+    places.iter().filter(|path| !covered(written, path)).map(|path| normalize(path)).collect()
+}
+
+/// 契約の散文（`goal` / `done`）が名指すもの（§27・行 aa・[`prose_closure`] の出力・閉じた struct）。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct Prose {
+    /// 名指した**既存の**歯の名（base の `#[test]` の fn 名に等しいもの・辞書順・一意）。
+    pub(crate) teeth: Vec<String>,
+    /// そのうち `verify` のどの nextest 行の filter 語も含まない名（辞書順・全部）。
+    pub(crate) uncovered: Vec<String>,
+    /// 名指した歯を宣言する file（repo 相対・辞書順）。
+    pub(crate) files: BTreeSet<String>,
+    /// 判定行 token の literal を歯の区間か外形 snapshot に持つ file（repo 相対・辞書順）。
+    pub(crate) pins: BTreeSet<String>,
+}
+
+/// 契約の散文の閉包（§27・行 aa・**pure**）: `prose`（契約 file の `goal` / `done` の本文）の backtick 字面から
+/// (a) 既存の歯の名指しと (b) 判定行 token の pin を読む。
+///
+/// (a) 識別子形（[`named`]）で base の `#[test]` の fn 名（[`test_fns`] × [`super::test_region`]）に**等しい**名だけを
+/// 既存の歯の名指しと読み（base に無い名は判定しない＝下界・新しい歯は §20 の門と FR20 の guard が拾う）、`verify` の
+/// nextest 行の filter 語（[`filters_of`]）を 1 つも含まない名を [`Prose::uncovered`] に、その歯を宣言する file を
+/// [`Prose::files`] に置く。
+///
+/// (b) 判定行 token の literal（[`pinned`]）を歯の区間か外形 snapshot に持つ file を [`Prose::pins`] に置く
+/// （[`pinned_files`]・src の区間の外の同じ字面は数えない）。
+///
+/// 名も token も無い散文は base を走査しない（費用を掛けない・[`surface_closure`] と同じ）。読めない file が 1 本でも
+/// 在れば `Err`（fail-closed・NFR4）。
+pub(crate) fn prose_closure(prose: &[&str], verify: &[String], base: &Base<'_>) -> Result<Prose, ClosureError> {
+    let (names, literals) = (named(prose), pinned(prose));
+    if names.is_empty() && literals.is_empty() {
+        return Ok(Prose::default());
+    }
+    let (texts, snapshots) = (texts_of(base.sources)?, texts_of(base.snapshots)?);
+    let (mut teeth, mut files) = (BTreeSet::new(), BTreeSet::new());
+    for &(path, text) in &texts {
+        let fns = test_fns(test_region(path, text));
+        let mine: Vec<&str> = names.iter().copied().filter(|name| fns.contains(name)).collect();
+        if !mine.is_empty() {
+            files.insert(path.to_owned());
+            teeth.extend(mine);
+        }
+    }
+    let filters = filters_of(verify, base.core_crate);
+    let uncovered: Vec<String> = teeth
+        .iter()
+        .filter(|name| !filters.iter().any(|filter| name.contains(filter)))
+        .map(|name| (*name).to_owned())
+        .collect();
+    let pins = pinned_files(&literals, &texts, &snapshots);
+    Ok(Prose { teeth: teeth.into_iter().map(str::to_owned).collect(), uncovered, files, pins })
+}
+
+/// 散文の backtick 字面のうち歯の名の候補（§27 (a)・識別子形＝小文字始まりの英数字と `_`・末尾の `(` / `()` は剥がす）。
+/// 大文字始まり・`::` を持つ形・`-` を含む形は名指しと読まない（`NameUnresolved` の領分と重ねない）。
+fn named<'p>(prose: &[&'p str]) -> Vec<&'p str> {
+    let mut found = Vec::new();
+    for &text in prose {
+        for piece in backticked(text) {
+            let ident = CALL_TAILS.iter().find_map(|tail| piece.strip_suffix(tail)).unwrap_or(piece);
+            if ident.starts_with(|first: char| first.is_ascii_lowercase()) && is_ident(ident) {
+                found.push(ident);
+            }
+        }
+    }
+    found
+}
+
+/// 散文の backtick 字面の中の判定行 token の literal（§27 (b)・字面は空白で語に割ってから読む）。
+fn pinned<'p>(prose: &[&'p str]) -> Vec<&'p str> {
+    let mut found = Vec::new();
+    for &text in prose {
+        for piece in backticked(text) {
+            found.extend(piece.split_whitespace().filter_map(token_literal));
+        }
+    }
+    found
+}
+
+/// 1 語が `<key>=<value>` の token なら pin する literal（value が具体なら語の全体・placeholder〔`<…>` / `a|b`〕と空なら
+/// `<key>=` まで）。key の形（小文字始まりの英数字と `_` `-`）でない語は `None`。
+fn token_literal(word: &str) -> Option<&str> {
+    let (key, value) = word.split_once(TOKEN_EQ)?;
+    let formed = key.starts_with(|first: char| first.is_ascii_lowercase())
+        && key.chars().all(|found| found.is_ascii_alphanumeric() || KEY_SYMBOLS.contains(&found));
+    if !formed {
+        return None;
+    }
+    if value.is_empty() || value.contains(PLACEHOLDERS) {
+        // `=` は 1 byte なので key の長さの次が value の頭である。
+        return word.get(..key.len().saturating_add(1));
+    }
+    Some(word)
+}
+
+/// 判定行 token の literal を持つ file（歯の区間の `.rs` と外形 snapshot の全文・§27 (b)）。
+fn pinned_files(literals: &[&str], texts: &[(&str, &str)], snapshots: &[(&str, &str)]) -> BTreeSet<String> {
+    let holds = |text: &str| literals.iter().any(|literal| text.contains(*literal));
+    let mut found: BTreeSet<String> = texts
+        .iter()
+        .filter(|(path, text)| holds(test_region(path, text)))
+        .map(|(path, _)| (*path).to_owned())
+        .collect();
+    found.extend(snapshots.iter().filter(|(_, text)| holds(text)).map(|(path, _)| (*path).to_owned()));
+    found
+}
+
+/// `verify` の nextest 行の filter 語（読みは歯の置き場と**同じ 1 本**[`nextest_filter`]・nextest 形でない行は落ちる）。
+fn filters_of<'v>(verify: &'v [String], core_crate: &'v str) -> Vec<&'v str> {
+    verify.iter().filter_map(|line| nextest_filter(line, core_crate).map(|(_, filter, _)| filter)).collect()
 }
 
 /// (ii) 歯の置き場: `verify` の nextest 行ごとに、その crate のその行の scope（[`Scope`]・§28）の歯の区間で `#[test]`
@@ -301,6 +445,7 @@ mod tests {
 
     use super::super::tests::{set, source, PAINT};
     use super::{check_drift, check_teeth_cover, declared_teeth, derive_write_set, weighted_lines, Base, ClosureError, Fields, Source};
+    use super::{prose_closure, Prose};
     use std::collections::BTreeSet;
 
     /// 文字列の列。
@@ -575,6 +720,98 @@ mod tests {
         sources.push(source("crates/toy/tests/e2e/nested.rs", "#[test]\nfn derive_nested() {}\n"));
         let got = derive(&[("verify", &["cargo nextest run -p toy --test e2e --no-tests=fail in_src"])], &sources, &tracked);
         assert_eq!(got, Err(ClosureError::TeethPlaceUnresolved { filter: "in_src".to_owned() }), "scope の外の歯では解かない");
+    }
+
+    // flip-check: s2-07l.429
+
+    /// 散文の閉包の fixture（§27・行 aa）: [`derive_base`] の歯に、判定行 token を歯の区間に持つ file（`tests/` 配下と
+    /// src の `#[cfg(test)]` の区間）と、同じ字面を区間の**外**に持つ file を足す。
+    fn prose_sources() -> Vec<Source> {
+        let (mut sources, _) = derive_base();
+        sources.push(source("crates/toy/tests/pin.rs", "#[test]\nfn pin_case() {\n    assert!(line.contains(\"mode=fast\"));\n}\n"));
+        sources.push(source(
+            "crates/toy/src/inline.rs",
+            "pub fn f() {}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn pin_inline() {\n        assert!(line.contains(\"mode=fast\"));\n    }\n}\n",
+        ));
+        sources.push(source("crates/toy/src/outside.rs", "pub fn shown() -> &'static str {\n    \"mode=fast\"\n}\n"));
+        sources
+    }
+
+    /// 判定行 token を持つ外形 snapshot（`.snap` は全文が pin の探索域）。
+    fn prose_snapshots() -> Vec<Source> {
+        vec![source(PROSE_SNAP, "---\n---\nrun=r-1 mode=fast\n")]
+    }
+
+    /// 外形 snapshot の path（pin の期待値が名指す）。
+    const PROSE_SNAP: &str = "crates/toy/tests/e2e/snapshots/e2e__pipe__form.snap";
+
+    /// 散文の閉包を求める（`texts` = `goal` / `done` の本文・読める fixture は `Ok`）。
+    fn prose(texts: &[&str], verify: &[&str]) -> Prose {
+        let (sources, snapshots) = (prose_sources(), prose_snapshots());
+        let lines = strings(verify);
+        let base = Base { sources: &sources, snapshots: &snapshots, tracked: &[], core_crate: "toy" };
+        prose_closure(texts, &lines, &base).unwrap_or_else(|error| panic!("読める fixture は散文の閉包を返す: {error:?}"))
+    }
+
+    /// (a) 歯の名指しは**識別子形で base の `#[test]` の fn 名に等しいもの**だけ: `derive_ok` / `derive_ok()` / `derive_ok(`
+    /// は同じ 1 本で、大文字始まり・型の path 形・`-` を含む形・`#[test]` でない fn・base に無い名は名指しと読まない
+    /// （下界・§27 の限界）。`goal` と `done` の両方から拾い、名は辞書順・一意で file は宣言する歯の file。
+    #[test]
+    fn prose_closure_reads_identifier_forms_only() {
+        let line = "cargo nextest run -p toy derive_";
+        for text in ["`derive_ok`", "`derive_ok()`", "`derive_ok(`"] {
+            let found = prose(&[text, ""], &[line]);
+            assert_eq!(found.teeth, ["derive_ok"], "{text}");
+            assert_eq!(found.files, set(&["crates/toy/tests/e2e.rs"]), "{text}");
+        }
+        let plain = prose(&["`Derive_ok` `Tint::derive_ok` `derive-ok` `derive_outside` `derive_new`", ""], &[line]);
+        assert!(plain.teeth.is_empty() && plain.files.is_empty(), "識別子形で base の歯の名でなければ読まない: {plain:?}");
+        let both = prose(&["`derive_ok`", "`derive_in_src` と `other_case` と `derive_ok`"], &[line]);
+        assert_eq!(both.teeth, ["derive_in_src", "derive_ok", "other_case"], "辞書順・一意");
+        assert_eq!(both.files, set(&["crates/toy/src/other.rs", "crates/toy/tests/e2e.rs", "crates/toy/tests/helper.rs"]));
+    }
+
+    /// (b) 判定行 token の literal は value が**具体**なら語の全体・placeholder（`<…>` / `a|b`）と空なら `<key>=` まで:
+    /// `mode=fast` は fixture の 3 file を pin し、具体で base に無い `mode=slow` は 0 file（判定しない）・`mode=<a|b>` は
+    /// `mode=` までなので同じ 3 file を pin する。key の形でない語は token と読まない。
+    #[test]
+    fn prose_closure_token_literal_is_whole_when_concrete_and_key_when_placeholder() {
+        let pinned = set(&["crates/toy/src/inline.rs", PROSE_SNAP, "crates/toy/tests/pin.rs"]);
+        assert_eq!(prose(&["", "`mode=fast`"], &[]).pins, pinned, "具体な value は語の全体で当てる");
+        assert!(prose(&["", "`mode=slow`"], &[]).pins.is_empty(), "具体で base に無い語は 0 file");
+        assert_eq!(prose(&["", "`mode=<a|b>`"], &[]).pins, pinned, "placeholder は mode= までを literal にする");
+        assert_eq!(prose(&["", "`mode=`"], &[]).pins, pinned, "空の value も key まで");
+        for text in ["`Mode=fast`", "`=fast`", "`mode`"] {
+            assert!(prose(&["", text], &[]).pins.is_empty(), "{text} は判定行 token でない");
+        }
+    }
+
+    /// (b) の探索域は**歯の区間と外形 snapshot だけ**: src の `#[cfg(test)]` の区間の中の字面は数え、同じ字面を区間の外に
+    /// 持つ file は数えない。(a) の名指しも同じ区間で読む（区間の外の `fn` は歯でない）。
+    #[test]
+    fn prose_closure_searches_test_regions_and_snapshots_only() {
+        let found = prose(&["", "`mode=fast` と `derive_outside`"], &["cargo nextest run -p toy derive_"]);
+        assert!(found.pins.contains("crates/toy/src/inline.rs"), "src の test 区間は数える: {found:?}");
+        assert!(found.pins.contains(PROSE_SNAP), "外形 snapshot も数える: {found:?}");
+        assert!(!found.pins.contains("crates/toy/src/outside.rs"), "区間の外の同じ字面は数えない: {found:?}");
+        assert!(found.teeth.is_empty(), "区間の外の fn は歯の名指しでない: {found:?}");
+    }
+
+    /// (a1) 被覆は nextest の positional filter と**同じ「含む」**: `derive_` の行は `derive_ok` を被覆し `other_case` を
+    /// 被覆しない（被覆されない名は全部・辞書順）。2 行のどちらかが被覆すれば足り、nextest 形でない行と filter 語の無い行は
+    /// 被覆を持たない。
+    #[test]
+    fn prose_closure_uncovered_uses_nextest_contains() {
+        let named = ["", "`derive_ok` と `other_case`"];
+        let derive_line = "cargo nextest run -p toy --no-tests=fail derive_";
+        let found = prose(&named, &[derive_line]);
+        assert_eq!(found.teeth, ["derive_ok", "other_case"], "名指しは 2 本");
+        assert_eq!(found.uncovered, ["other_case"], "filter 語 derive_ を含まない名だけ");
+        let covered = prose(&named, &[derive_line, "cargo nextest run -p toy other_"]);
+        assert!(covered.uncovered.is_empty(), "2 行のどちらかで足りる: {covered:?}");
+        let unread = prose(&named, &["git status", "cargo nextest run -p toy"]);
+        assert_eq!(unread.uncovered, ["derive_ok", "other_case"], "nextest 形でない行と filter 語の無い行は被覆を持たない");
+        assert_eq!(prose(&named, &["cargo nextest run -p toy derive_ok"]).uncovered, ["other_case"], "filter 語は名の全体でもよい");
     }
 
     /// 幅 10 の fixture と期待値。**xtask の `workspace` の歯と同じ字面・同じ値**（2 crate の式の一致を守る）。
