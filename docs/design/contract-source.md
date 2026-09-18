@@ -216,16 +216,14 @@ scribe2 を載せる consumer が pipe を通すのに要る面は 3 つで、�
 - 歯: in-file（closure.rs の test 区間・接頭辞 closure_names_impl_・`unresolved_names(` を既存の signature で呼ぶ＝base で compile し assert で RED）: impl の 3 形（素の impl・generic impl・trait impl）の file が fn を宣言する対で解け、impl 行の無い file の同名 fn では解けず、fn の無い項目（.243 の Guard::Rules の型）は解けないまま、variant は字面の (a) で解けたまま。e2e（intake.rs・接頭辞 contract_names_impl_）: 上の fixture repo で findings が「Report::nope」の 1 件だけ・rc 1・実在の 2 語は stdout に無い。現物の契約表の歯（違反 0）は変えない。
 - 却下案: (i) `::` を含む語を候補から外す（memo 案 1）＝.243 の「Guard::Rules」（実在しない variant）を再び通し、(2) の下界を丸ごと失う。(ii) rustdoc / cargo metadata で型と項目の実在を引く＝契約表の検査に compile と外部 process を持ち込む（CI の歯が cargo を撃つ）。(iii) 「fn 項目」が任意の file に在れば解ける＝別の型の同名 method で偽陰性（impl 行で型に結ぶ (b) の方が狭い）。(iv) 散文の回避規則を続ける＝N2。
 
-## 27. 受付が契約の散文（goal / done）と verify を歯と外形の pin まで現物で突合する（契約表の行 aa・`s2-07l.429`）
+## 27. 受付は契約の散文（goal / done）を走査しない — 行 aa の門を消した（契約表の行 aa・`s2-07l.429` → `s2-07l.476`）
 
-- 何が起きているか: planner の実測 2026-09-17（fleet event log・09-16 00:00Z 以降）: 便 94 のうち審査の段の非 PASS 39（41%）・runner の QuestionRaised 10。非 PASS の evidence の型（重複あり・母集団 40）= verify の filter が done の歯に当たらない 13 / write-set の閉包の外の file 18 / 生成物・snapshot・外形 11 / 既存の歯の fixture・逐語 pin の反転 9 / 字面の不一致 19。QuestionRaised 10 のうち 5 は「既存の歯の逐語 pin が write-set の外」（.320 ×2・.288・.416・.423）。現物: 受付（`cli/intake.rs` の `settle_write_set(`）が測るのは型の構造の閉包（§3 の 6 形）と verify の歯の置き場（§3 (ii)・§20）だけで、契約の散文（契約 file の `goal` / `done`）が名指す歯と外形の字面は読まない。名指しの実在（§3）も呼び手は CI の `table/check.rs` だけで受付は撃っていない。lens（散文の読み）が偶然拾うか runner が実装中に気づく＝1 周（数十分）払う。
-- 形（2 つ・どちらも `closure/derive.rs` の pure 関数 1 本 `prose_closure`〔入力 = 契約の `goal` と `done` の本文・`verify`・base の test 区間と snapshot〕で、受付の `settle_write_set(` が Declared / Derived の両分岐で 1 回撃つ・字面走査の下界・C2）:
-  - (a) **歯の名指しの被覆と置き場**: `goal` / `done` の backtick 字面（`backticked(`）のうち識別子形（小文字始まりの英数字と `_`・末尾の `(` / `()` は任意）で、**base の `#[test]` の fn 名に等しい**もの（`test_fns(` を `test_region` の全 file に当てる・母集団 1487 本）を「既存の歯の名指し」と読む。名指した既存の歯は (a1) いずれかの `verify` の nextest 行の filter 語を含む（nextest の positional filter と同じ「含む」・`nextest_filter(` と同じ読み）でなければ `ClosureError` の variant `TeethUncovered { names }`（名を全部・辞書順）→ `Refuse` の variant `TeethUncovered`（名 `teeth-uncovered`・rc 1・`refuse_of(` に 1 行・宣言順の末尾）。(a2) その歯の file は write-set に要る: Declared 行は `check_teeth_cover(` と同じ 1 関数で `TeethOutsideWriteSet` に倒す（字面不変）・Derived 行は導出値に足す（§3 (ii) と同じ扱い）。base に無い名（新しい歯）は判定しない（下界・`NameUnresolved` の領分とも重ねない＝`(` の無い識別子は Prose 形のまま）。
-  - (b) **判定行 token の pin（第 7 形）**: `goal` / `done` の backtick 字面の中の `<key>=<value>` token（key = 小文字始まりの英数字と `_` `-`・直後に `=`）を取り、value が具体（`<` も `|` も含まない）なら token 全体を、placeholder（`<…>` / `a|b`）なら `<key>=` を literal とし、それを **test 区間か外形 snapshot に持つ file** を閉包に足す（Derived = 導出値へ・Declared = write-set に無ければ `ClosureError` の variant `PinsOutsideWriteSet { files }` → `Refuse` の variant `PinsOutsideWriteSet`〔名 `pins-outside-write-set`・rc 1・file を全部辞書順〕）。base に無い literal（新しい語・例 `pointer=`）は 0 file＝判定しない。現物の当たり方: `skipped=` 2 file（.416 が反転した `tests/e2e/pipe/gate.rs` を含む）・`decision=` 9 file（.423 が名指した 4 file を全部含む・広がる 5 file も同じ判定行を pin する歯）。
-  - 判定行の token に `prose=<teeth>:<uncovered>:<pins>`（名指した既存の歯の本数・被覆されない本数・pin の file 数）を**既存の token の末尾に**足す（実測 2026-09-17・verified: intake の判定行は run= の id と弁別の 2 token だけで、`pipe` の外形 snapshot は判定行を pin しておらず、`tests/e2e/pipe.rs` は run= の接頭辞で id を取るだけ＝全文では測らない。token を読む歯は `tests/e2e/pipe/intake.rs` の `intake_tokens(` の集合読み〔`contains` で 1 token ずつ〕なので、末尾に足す token は write-set の中で閉じる）。Guard は増えない（`Guard::Intake` の断りの理由が 2 つ増えるだけ・極性一覧は不変）。
-- 触らない: §3 の 6 形と `sees(`・§3 (ii) の `teeth_places(`（(a2) は同じ `check_teeth_cover(` を使う）・Declared / Derived の弁別・契約表の schema（欄を足さない＝散文から引く）・`Fields` の形（構築点 4 か所は不変・`prose_closure` は別の引数で受ける）・CI の `contracts check`（散文は契約 file にしか無い＝表の行には撃たない）・lens の観点。
-- 限界（残す側）: (a) は base に在る名だけ（新しい歯の名は下界の外・実装役が置いた歯は FR20 の guard と §20 の門が拾う）。(b) は key の字面一致＝同じ key を別の判定行が使う file も入る（広がるだけ・害は交差の直列化）。生成物の連鎖（ci.yml の行 → CLAUDE.md の done 区間・rules 行 → 生成区間・.161 の型）は本 § の外＝後続の行（生成器の入出力を機械で引く表は on-disk の生成物になるので ADR が先・N4 /「ADR を書く条件」3）。
-- 却下案: 審査（lens）に任せる（本日 39 便・1 周 = 数十分）／§ の本文まで走査する（§ は「触らない」に名を並べる＝偽陽性が受付の断りになる・散文は契約 file の 2 欄に限る）／write-set 内の全 pub fn の呼び手を tests/ で grep して足す（write-set の src file が持つ pub fn は数十本＝ほぼ全歯の file が入り直列化が跳ねる・.423 の型は fn でなく判定行の字面で反転した）／`surfaces` 欄に判定行を宣言させる（planner の手の宣言に戻る・散文に既に在る字面を 2 度書かせる）。
+- 何が起きたか: 行 aa（`s2-07l.429`・Landed 9f44667）は受付に契約の散文（goal / done）の字面走査を足した——(a) backtick で名指した base の歯が verify の filter 語に当たらなければ断る・(b) backtick の中の判定行 token の literal を持つ file を write-set に求める。着地した当日に同型の受付拒否が 5 件（.341 / .381 / .395 / .418 / .462 系・母集団 = 当日の投入 9 便）並び、planner が契約の字面を門に合わせて焼き直す周が繰り返された（字面の門のいたちごっこ）。
+- 裁定（user 2026-09-18 07:4xZ・逐語は台帳 epic `s2-07l` の notes・ここは要旨）: 問題のある門は消してよい。同時に、単純にできる問題を複雑に作り直していないかの指摘＝新しい走査・判定・record を足す前に「何を消せばこの問題が消えるか」を先に書く。
+- 消した（`s2-07l.476`・admin の直接実装）: 散文の閉包の pure 関数と 2 つの拒否理由（歯の名指しの不被覆・pin の file の不足）・受付の `settle_write_set(` からの呼出し・判定行の散文の 3 数の token・対応する歯（in-file 4 本と e2e 6 本）。**検出線にも record にも変えない**（機構を残さない・字面走査を別の面へ移さない）。閉包の実測は gate の共通 verify（test 全件）の 1 本だけで、契約の散文が名指す歯が走るかは gate が測る。
+- 残るもの（不変）: §3 の 6 形と `sees(`・§3 (ii) の歯の置き場 `teeth_places(`・§20 の Declared 行の門（verify の歯の file ⊆ write-set・`check_teeth_cover(`）・Declared / Derived の弁別・契約表の schema。行 aa の verify 行と write-set は歴史として表に残す（bead は close 済み・焼く契約は無い）。
+- 却下＝散文の字面走査は増殖の型: 契約の散文を機械が読んで断る門は、散文の書き方（backtick の有無・token の字面）を門に合わせて変える圧を planner に掛け、契約の中身でなく字面で受付が割れる。当日この門で断られた契約（.341 / .381 / .395 / .464 / .462 / .471）の字面の回避は仕様不変なのでそのまま残す。
+- 歯: `pipe_intake_prose_` の 2 本（`tests/e2e/pipe/intake.rs`・負例＝散文に既存の歯の名・判定行 token を backtick で書いた契約が受付で断られない・rc 0・判定行に散文の数の token が無い）。base は断る＝RED。消した歯は削除便の flip（removed-only）で立つ。
 
 ## 29. pipe/closure.rs の名指しの解決の群を closure/names.rs へ割る（契約表の行 ac・`s2-07l.458`・純移動）
 
@@ -521,13 +519,13 @@ depends = ["y"]
 
 [[contract]]
 id = "aa"
-title = "受付が契約の散文（goal / done）の歯の名指しを verify の filter と write-set に突合し、判定行 token の pin（第 7 形）を閉包に足す"
+title = "（消した・s2-07l.476）受付が契約の散文（goal / done）の歯の名指しを verify の filter と write-set に突合し、判定行 token の pin（第 7 形）を閉包に足す"
 req = ["FR48"]
 section = "27"
 write-set = ["crates/scribe2/src/pipe/closure.rs", "crates/scribe2/src/pipe/closure/derive.rs", "crates/scribe2/src/pipe/refuse.rs", "crates/scribe2/src/pipe/cli/intake.rs", "crates/scribe2/tests/e2e/pipe/intake.rs"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail contract_prose_teeth_", "cargo nextest run -p scribe2 --lib --no-tests=fail prose_closure_", "cargo nextest run -p scribe2 --lib --no-tests=fail refuse_derive_reasons_are_last_and_name_their_payload"]
 size = "M"
-done = "goal / done が名指す base の歯が verify の filter に当たらない契約と、その歯の file・判定行 token を pin する file が write-set に無い Declared 契約を受付が名を全部名指して断り、Derived 契約は導出値にその file が入り、新しい名と base に無い token は判定されず既存 6 形の導出値は不変"
+done = "（消した・s2-07l.476・user 裁定 2026-09-18 07:4xZ）受付は契約の散文（goal / done）を走査せず、歯の名指しの被覆と判定行 token の pin の門は無い。行の verify と write-set は歴史として残す"
 
 [[contract]]
 id = "ab"

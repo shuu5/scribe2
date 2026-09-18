@@ -56,8 +56,6 @@ pub(crate) const REFUSALS: &[&str] = &[
     "tests-not-a-teeth-file",
     "fn-undeclared",
     "teeth-outside-write-set",
-    "teeth-uncovered",
-    "pins-outside-write-set",
 ];
 
 /// 契約 file が読めた後の、契約単位の拒否理由。**新しい理由は variant を 1 つ足す**（憲法 C2）。
@@ -161,18 +159,6 @@ pub(crate) enum Refuse {
         /// write-set に無い歯の file（repo 相対・辞書順）。
         files: Vec<String>,
     },
-    /// 契約の散文（`goal` / `done`）が名指す base の歯が `verify` のどの nextest 行の filter 語にも当たらない（§27・
-    /// 行 aa・受付だけが撃つ）。**名を全部**持つ。
-    TeethUncovered {
-        /// filter 語に当たらない歯の名（辞書順）。
-        names: Vec<String>,
-    },
-    /// 契約の散文が pin する判定行 token（§27 (b)・第 7 形）を持つ file が Declared 行の write-set に無い（受付だけが
-    /// 撃つ）。**足りない file を全部**持つ。
-    PinsOutsideWriteSet {
-        /// write-set に無い pin の file（repo 相対・辞書順）。
-        files: Vec<String>,
-    },
 }
 
 impl Refuse {
@@ -195,8 +181,6 @@ impl Refuse {
             Self::TestsNotATeethFile { .. } => "tests-not-a-teeth-file",
             Self::FnUndeclared { .. } => "fn-undeclared",
             Self::TeethOutsideWriteSet { .. } => "teeth-outside-write-set",
-            Self::TeethUncovered { .. } => "teeth-uncovered",
-            Self::PinsOutsideWriteSet { .. } => "pins-outside-write-set",
         }
     }
 
@@ -244,8 +228,6 @@ impl Refuse {
                 ClosureError::FnUndeclared { module: module.clone(), name: name.clone() }.reason()
             }
             Self::TeethOutsideWriteSet { ref files } => ClosureError::TeethOutsideWriteSet { files: files.clone() }.reason(),
-            Self::TeethUncovered { ref names } => ClosureError::TeethUncovered { names: names.clone() }.reason(),
-            Self::PinsOutsideWriteSet { ref files } => ClosureError::PinsOutsideWriteSet { files: files.clone() }.reason(),
         }
     }
 
@@ -266,9 +248,7 @@ impl Refuse {
             | Self::AlsoNamesRust { .. }
             | Self::TestsNotATeethFile { .. }
             | Self::FnUndeclared { .. }
-            | Self::TeethOutsideWriteSet { .. }
-            | Self::TeethUncovered { .. }
-            | Self::PinsOutsideWriteSet { .. } => RC_REFUSED,
+            | Self::TeethOutsideWriteSet { .. } => RC_REFUSED,
             Self::WriteSetUnreadable { .. } => RC_BROKEN,
             Self::ContractTable(ref found) => found.rc(),
         }
@@ -408,15 +388,12 @@ mod tests {
             Refuse::TestsNotATeethFile { item: "src/a.rs".to_owned() },
             Refuse::FnUndeclared { module: "pipe::cli".to_owned(), name: "missing".to_owned() },
             Refuse::TeethOutsideWriteSet { files: vec!["src/a.rs".to_owned(), "tests/b.rs".to_owned()] },
-            Refuse::TeethUncovered { names: vec!["derive_ok".to_owned(), "other_case".to_owned()] },
-            Refuse::PinsOutsideWriteSet { files: vec!["src/c.rs".to_owned(), "tests/d.rs".to_owned()] },
         ]
     }
 
-    /// write-set の導出の 8 理由（契約 (h)・設計 contract-source.md §3「write-set の導出」・§18 の fn 形・§20 の Declared
-    /// 行の門・§27 の散文の門）: 宣言順の末尾に並び、rc 1 で、理由は不足と余分 / filter 語 / 項目 / module の段と fn の名 /
-    /// write-set に無い歯の file / filter に当たらない歯の名 / write-set に無い pin の file の全部を名乗る（字面は導出の側と
-    /// 同じ 1 本）。
+    /// write-set の導出の 6 理由（契約 (h)・設計 contract-source.md §3「write-set の導出」・§18 の fn 形・§20 の Declared
+    /// 行の門）: 宣言順の末尾に並び、rc 1 で、理由は不足と余分 / filter 語 / 項目 / module の段と fn の名 /
+    /// write-set に無い歯の file の全部を名乗る（字面は導出の側と同じ 1 本）。
     #[test]
     fn refuse_derive_reasons_are_last_and_name_their_payload() {
         let found = samples();
@@ -429,11 +406,9 @@ mod tests {
                 "also-names-rust",
                 "tests-not-a-teeth-file",
                 "fn-undeclared",
-                "teeth-outside-write-set",
-                "teeth-uncovered",
-                "pins-outside-write-set"
+                "teeth-outside-write-set"
             ],
-            "宣言順の末尾 8 つ"
+            "宣言順の末尾 6 つ"
         );
         let reasons: Vec<String> = found.iter().skip(10).map(Refuse::reason).collect();
         assert!(reasons.first().is_some_and(|line| line.contains("missing: src/a.rs") && line.contains("extra: docs/x.md")), "{reasons:?}");
@@ -446,14 +421,6 @@ mod tests {
         );
         assert!(
             reasons.get(5).is_some_and(|line| line.contains("歯の file が write-set に無い") && line.contains("src/a.rs, tests/b.rs")),
-            "{reasons:?}"
-        );
-        assert!(
-            reasons.get(6).is_some_and(|line| line.contains("filter 語に当たらない") && line.contains("derive_ok, other_case")),
-            "{reasons:?}"
-        );
-        assert!(
-            reasons.get(7).is_some_and(|line| line.contains("pin する file が write-set に無い") && line.contains("src/c.rs, tests/d.rs")),
             "{reasons:?}"
         );
         assert!(found.iter().skip(10).all(|refuse| refuse.rc() == RC_REFUSED && !refuse.reason().contains('\n')), "rc 1・1 行");

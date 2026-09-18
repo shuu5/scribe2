@@ -33,12 +33,6 @@
 //! ∪ 新規 file ∪ Rust の外の file。手書きの
 //! write-set は [`check_drift`] で導出値との集合一致だけを認める（接頭辞 `+` は剥がして比べる）。
 //!
-//! **契約の散文の閉包**（§27・行 aa）[`prose_closure`]: 契約 file の `goal` / `done` の backtick 字面から (a) 既存の歯の
-//! 名指し（base の `#[test]` の fn 名に等しい識別子形）と (b) 判定行 token の pin（第 7 形＝`<key>=<value>` の literal を
-//! 歯の区間か外形 snapshot に持つ file）を読む。受付は (a) が `verify` の filter 語に当たらなければ
-//! [`ClosureError::TeethUncovered`]、(b) の file が Declared 行の write-set に無ければ [`ClosureError::PinsOutsideWriteSet`]
-//! で断る（(a) の歯の file は §20 と同じ [`check_teeth_cover`]）。
-//!
 //! **fn 形の touches**（§18・行 r）: `touches` の項目の末尾が小文字始まりの識別子（`crate::pipe::cli::resume`）なら
 //! 型でなく fn の名指しで、閉包はその module の段（[`in_module`]）で `fn <識別子>` を宣言する file（[`declares_fn`]・
 //! 下界・呼び手は数えない）。宣言する file が 0 の周は [`ClosureError::FnUndeclared`]（空集合に潰さない・C10）。型形の
@@ -51,7 +45,7 @@ mod names;
 
 pub use derive::{check_drift, derive_write_set, weighted_lines, Base, Fields};
 pub use names::unresolved_names;
-pub(crate) use derive::{check_pin_cover, check_teeth_cover, declared_teeth, prose_closure, teeth_places, Prose};
+pub(crate) use derive::{declared_teeth, teeth_places};
 use names::{declares_fn, holds_word};
 
 /// nextest の行の書き出し（この後ろの語から crate と filter 語を読む）。
@@ -196,18 +190,6 @@ pub enum ClosureError {
         /// write-set に無い歯の file（repo 相対・辞書順）。
         files: Vec<String>,
     },
-    /// 契約の散文（`goal` / `done`）が名指す base の歯が、`verify` のどの nextest 行の filter 語にも当たらない
-    /// （§27・行 aa・その便の verify では走らない歯を「測る」と書いた契約）。**名を全部**持つ（辞書順）。
-    TeethUncovered {
-        /// filter 語に当たらない歯の名（辞書順）。
-        names: Vec<String>,
-    },
-    /// 契約の散文が pin する判定行 token（§27 (b)・第 7 形）を持つ file が Declared 行の write-set に無い。
-    /// **足りない file を全部**持つ（辞書順）。
-    PinsOutsideWriteSet {
-        /// write-set に無い pin の file（repo 相対・辞書順）。
-        files: Vec<String>,
-    },
 }
 
 impl ClosureError {
@@ -235,12 +217,6 @@ impl ClosureError {
             }
             Self::TeethOutsideWriteSet { ref files } => {
                 format!("verify の歯の file が write-set に無い（{}）", listed(files))
-            }
-            Self::TeethUncovered { ref names } => {
-                format!("goal / done が名指す歯が verify の filter 語に当たらない（{}）", listed(names))
-            }
-            Self::PinsOutsideWriteSet { ref files } => {
-                format!("判定行 token を pin する file が write-set に無い（{}）", listed(files))
             }
         }
     }
