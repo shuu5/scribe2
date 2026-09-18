@@ -197,13 +197,13 @@ schema = 1
 
 [[contract]]
 id = "a"
-title = "seat の外形 snapshot を usage / rebrief / doctor の 3 面に割る（旧 snapshot は消し、他 doc の行の名指しを面ごとの file 名へ）"
+title = "seat の外形 snapshot を面ごとに割る（旧 snapshot は消し、他 doc の行の名指しを面ごとの file 名へ）"
 req = ["FR23", "FR59"]
 section = "7"
-write-set = ["crates/scribe2/tests/e2e/seat.rs", "crates/scribe2/tests/e2e/snapshots/e2e__seat__seat_usage_external_form.snap", "crates/scribe2/tests/e2e/snapshots/e2e__seat__seat_rebrief_external_form.snap", "crates/scribe2/tests/e2e/snapshots/e2e__seat__seat_doctor_external_form.snap", "docs/design/seat-roles.md", "docs/design/seat-autonomy.md", "docs/design/dispatcher.md", "docs/design/working-memory.md"]
-verify = ["cargo nextest run -p scribe2 --no-tests=fail seat_usage_external_form seat_rebrief_external_form seat_doctor_external_form"]
+write-set = ["crates/scribe2/tests/e2e/seat.rs", "crates/scribe2/tests/e2e/snapshots/e2e__seat__seat_usage_external_form.snap", "crates/scribe2/tests/e2e/snapshots/e2e__seat__seat_doctor_external_form.snap", "docs/design/seat-roles.md", "docs/design/seat-autonomy.md", "docs/design/dispatcher.md", "docs/design/working-memory.md"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail seat_usage_external_form seat_doctor_external_form"]
 size = "S"
-done = "seat の外形 snapshot が 3 file・歯の本数は移動前 + 2・旧 snapshot は消えて未参照 0・他 doc の行が面ごとの file 名を名指す"
+done = "seat の外形 snapshot が面ごとに割れ・旧 snapshot は消えて未参照 0・他 doc の行が面ごとの file 名を名指す（rebrief の面は `s2-07l.479.2` で DATA ごと消えた）"
 
 [[contract]]
 id = "b"
