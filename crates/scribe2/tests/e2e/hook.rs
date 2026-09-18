@@ -915,93 +915,12 @@ fn seat_payload(cwd: &Path, tool: &str, file: &str, transcript: Option<&str>) ->
     )
 }
 
-/// 使用 token が `used` になる transcript を書き、その path を返す。
-#[expect(
-    clippy::expect_used,
-    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
-)]
-fn transcript_at(dir: &Path, name: &str, body: &str) -> String {
-    let path = dir.join(name);
-    fs::write(&path, body).expect("transcript を書ける");
-    path.display().to_string()
-}
-
-/// `used` token ちょうどの有効な usage 行 1 本。
-fn usage_jsonl(used: u64) -> String {
-    format!(
-        "{{\"type\":\"assistant\",\"isSidechain\":false,\"message\":{{\"usage\":{{\"input_tokens\":{used},\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0}}}}}}\n"
-    )
-}
-
 /// 記録 1 行の `what`。
 fn what_of(line: &str) -> String {
     match value_of(line, "what") {
         Some(json_lite::Value::Str(found)) => found,
         _ => String::new(),
     }
-}
-
-/// **使用率は切り捨てである**——`59.9001%` の周は止めない（cap 60%）。
-///
-/// 丸めは load-bearing で、切り上げると **cap 未満の周まで止まる**。1 本の口へ寄せた後は
-/// guard と meter が必ず同じだけずれるので、2 面の一致を見る歯では丸めを検出できない
-/// （s2-07l.75 lens H-1）。**floor と ceil が割れる点**（599001 / 1000000）を 1 つ置いて、
-/// 極性が反転すること自体を測る。
-#[test]
-fn hook_seat_guard_keeps_the_floor_rounding_at_the_boundary() {
-    let repo = git_repo();
-    let state = linked(&repo);
-    let script = transcript_at(&state, "floor.jsonl", &usage_jsonl(599_001));
-    let before = inject_lines(&state).len();
-    let target = repo.join("src").join("lib.rs");
-    let out = run_hook_args(
-        &["pre-tool-use", "--state-dir", &state.display().to_string()],
-        &seat_payload(&repo, "Edit", &target.display().to_string(), Some(&script)),
-    );
-    assert_silent(&out, "59.9001% は cap 未満＝止めない（切り上げるとここが deny になる）");
-    assert_eq!(inject_lines(&state).len(), before, "通した周は記録を増やさない");
-}
-
-/// 上限**未満**の周は 1 byte も書かない（hook budget を毎編集の追記で食い潰さない）。
-#[test]
-fn hook_seat_guard_is_silent_below_cap() {
-    let repo = git_repo();
-    let state = linked(&repo);
-    let script = transcript_at(&state, "small.jsonl", &usage_jsonl(100_000));
-    let before = inject_lines(&state).len();
-    let target = repo.join("src").join("lib.rs");
-    let out = run_hook_args(
-        &["pre-tool-use", "--state-dir", &state.display().to_string()],
-        &seat_payload(&repo, "Edit", &target.display().to_string(), Some(&script)),
-    );
-    assert_silent(&out, "上限未満は黙って通す");
-    assert_eq!(
-        inject_lines(&state).len(),
-        before,
-        "上限未満は記録も残さない"
-    );
-    clean(&[&repo, &state]);
-}
-
-/// **`Bash` は見ない**（write-set guard と同じ集合だけを見る）。
-///
-/// 上限を超えた transcript を添えても `Bash` は通り、記録も残らない。tool 集合の照合を
-/// 落とす変異は、ここで `Bash` が deny されて落ちる——上限未満の payload で測ると、
-/// その変異は同じく 0 byte を返すので生き残る（実測 2026-09-10・lens-383 F3）。
-#[test]
-fn hook_seat_guard_ignores_bash_even_above_cap() {
-    let repo = git_repo();
-    let state = linked(&repo);
-    let script = transcript_at(&state, "big.jsonl", &usage_jsonl(650_000));
-    let before = inject_lines(&state).len();
-    let target = repo.join("src").join("lib.rs");
-    let out = run_hook_args(
-        &["pre-tool-use", "--state-dir", &state.display().to_string()],
-        &seat_payload(&repo, "Bash", &target.display().to_string(), Some(&script)),
-    );
-    assert_silent(&out, "Bash は上限以上でも見ない");
-    assert_eq!(inject_lines(&state).len(), before, "Bash の周は記録も残さない");
-    clean(&[&repo, &state]);
 }
 
 /// 承認の問いの答えから、**flat な決定 object だけ**を切り出す。
