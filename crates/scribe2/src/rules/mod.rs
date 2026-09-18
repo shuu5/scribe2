@@ -145,14 +145,6 @@ pub enum RuleKind {
     LockStaleMs,
     /// hook の timeout（秒）。
     HookTimeoutS,
-    /// 席の context 使用率の上限（百分率）。超えると退避以外の編集を止める。
-    SeatContextCapPct,
-    /// 席の context 窓の宣言値（token）。使用率の分母である。
-    SeatContextWindowTokens,
-    /// 席の tick を stale と見なす経過時間（秒）。これを超えた席にだけ tick を撃つ。
-    SeatTickStaleS,
-    /// 席の cycle lock を live と見なす経過時間（秒）。超えた lock は residue として取り直す。
-    SeatCycleLockTtlS,
     /// **宣言が名乗れる上限**（ADR-0010 §2.2）。対象 repo の vessel 宣言
     /// `allowed-commands` はこの部分集合でなければ intake が便を起こさない。
     RunnerAllowedCommands,
@@ -214,15 +206,6 @@ pub enum RuleKind {
     /// runner / lens が claude に**毎回**渡す effort（設計 pipeline.md §6・`s2-07l.322`）。値は claude CLI の字面
     /// （閉じた表は [`crate::headless::Effort`]）。省くと口座の設定 dir の `settings.json` の値で決まる。
     RunnerEffort,
-    /// 退避の合図（`kind=externalize`）を同じ席へ**再送するまでの back-off**（秒・設計 seat-autonomy.md §3 / §8・
-    /// `s2-07l.315`）。直近の合図の記録からこれ未満の周は再送しない（打刻の合図の brake [`Self::SeatTickStaleS`] とは別）。
-    SeatSignalBackoffS,
-    /// 打刻の合図の梯子の**倍率**（設計 seat-autonomy.md §14・`s2-07l.423`）。無変化の席への合図は 1 段ごとに
-    /// 待ちがこの倍になる（初段は [`Self::SeatTickStaleS`] を流用し、行を増やさない）。
-    SeatPointerBackoffFactor,
-    /// 打刻の合図の梯子の**待ちの上限**（秒・同上）。これを超える段は合図を送らない（止まるのは合図だけで、
-    /// 席の状態が変わった周は初段へ戻って再開する）。
-    SeatPointerBackoffMaxS,
 }
 
 /// [`RuleKind`] の全 variant。parity test の母集団である。
@@ -250,10 +233,6 @@ pub const ALL: &[RuleKind] = &[
     RuleKind::LockRetryMs,
     RuleKind::LockStaleMs,
     RuleKind::HookTimeoutS,
-    RuleKind::SeatContextCapPct,
-    RuleKind::SeatContextWindowTokens,
-    RuleKind::SeatTickStaleS,
-    RuleKind::SeatCycleLockTtlS,
     RuleKind::RunnerAllowedCommands,
     RuleKind::RunnerDeniedCommands,
     RuleKind::RepoNonRustExecAllow,
@@ -278,9 +257,6 @@ pub const ALL: &[RuleKind] = &[
     RuleKind::PipeSizeLLines,
     RuleKind::RunnerModel,
     RuleKind::RunnerEffort,
-    RuleKind::SeatSignalBackoffS,
-    RuleKind::SeatPointerBackoffFactor,
-    RuleKind::SeatPointerBackoffMaxS,
 ];
 
 impl RuleKind {
@@ -310,10 +286,6 @@ impl RuleKind {
             Self::LockRetryMs => "LockRetryMs",
             Self::LockStaleMs => "LockStaleMs",
             Self::HookTimeoutS => "HookTimeoutS",
-            Self::SeatContextCapPct => "SeatContextCapPct",
-            Self::SeatContextWindowTokens => "SeatContextWindowTokens",
-            Self::SeatTickStaleS => "SeatTickStaleS",
-            Self::SeatCycleLockTtlS => "SeatCycleLockTtlS",
             Self::RunnerAllowedCommands => "RunnerAllowedCommands",
             Self::RunnerDeniedCommands => "RunnerDeniedCommands",
             Self::RepoNonRustExecAllow => "RepoNonRustExecAllow",
@@ -338,9 +310,6 @@ impl RuleKind {
             Self::PipeSizeLLines => "PipeSizeLLines",
             Self::RunnerModel => "RunnerModel",
             Self::RunnerEffort => "RunnerEffort",
-            Self::SeatSignalBackoffS => "SeatSignalBackoffS",
-            Self::SeatPointerBackoffFactor => "SeatPointerBackoffFactor",
-            Self::SeatPointerBackoffMaxS => "SeatPointerBackoffMaxS",
         }
     }
 
@@ -364,10 +333,6 @@ impl RuleKind {
             | Self::LockRetryMs
             | Self::LockStaleMs
             | Self::HookTimeoutS
-            | Self::SeatContextCapPct
-            | Self::SeatContextWindowTokens
-            | Self::SeatTickStaleS
-            | Self::SeatCycleLockTtlS
             | Self::SeatCycleSettleS
             | Self::SeatCyclePollMs
             | Self::UsageTimeoutS
@@ -386,9 +351,6 @@ impl RuleKind {
             | Self::PipeSizeSLines
             | Self::PipeSizeMLines
             | Self::PipeSizeLLines
-            | Self::SeatSignalBackoffS
-            | Self::SeatPointerBackoffFactor
-            | Self::SeatPointerBackoffMaxS
             | Self::AccountSelection => ValueShape::Int,
             Self::DialogueSurface | Self::RunnerModel | Self::RunnerEffort => ValueShape::Str,
             Self::MaturityCondition

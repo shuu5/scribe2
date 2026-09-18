@@ -4,7 +4,6 @@ expression: form
 ---
 guard=write-set-guard timing=in-loop on-failure=fail-closed boundary=hook::guard::Decision
 guard=permission-deny timing=in-loop on-failure=fail-closed boundary=hook::permission::PermissionDecision
-guard=cap-guard timing=in-loop on-failure=fail-open boundary=hook::seat_guard::SeatDecision
 guard=command-guard timing=in-loop on-failure=fail-closed boundary=hook::command::CommandDecision
 guard=register-refusal timing=in-loop on-failure=fail-closed boundary=seat::role::RegisterRefusal
 guard=role-guard timing=in-loop on-failure=fail-closed boundary=hook::role_guard::RoleDecision
@@ -25,8 +24,7 @@ guard=land-worktree-clean timing=in-loop on-failure=fail-closed boundary=pipe::l
 guard=follow-retry timing=in-loop on-failure=fail-closed boundary=pipe::follow::FollowCheck
 guard=store-lock timing=in-loop on-failure=fail-closed boundary=fleet::store::StoreError
 guard=inject-refusal timing=in-loop on-failure=fail-closed boundary=seat::inject::Delivery
-guard=cycle-refusal timing=in-loop on-failure=fail-closed boundary=seat::cycle::Cycle
 guard=externalize-refusal timing=in-loop on-failure=fail-closed boundary=seat::externalize::ExternalizeError
 guard=consume-refusal timing=in-loop on-failure=fail-closed boundary=seat::consume::ConsumeError
 guard=spawn-line timing=in-loop on-failure=fail-closed boundary=pipe::spawn::LineRefusal
-polarity: guards=27 in-loop=22 post-hoc=5 fail-open=4
+polarity: guards=25 in-loop=20 post-hoc=5 fail-open=3

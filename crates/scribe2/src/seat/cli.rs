@@ -4,29 +4,24 @@
 //! 引数で明示されたものだけを見る。値欠けの flag は黙って落とさず使い方で断る。
 
 use super::consume::{self, ConsumeError};
-use super::cycle::{self, Cycle};
+use super::cycle;
 use super::externalize::{self, ExternalizeError, Trigger};
 use super::rebrief::{self, RebriefError};
-use super::{heartbeat, inject, meter, role, tick};
+use super::{inject, role};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_OK, RC_REFUSED};
 use crate::fleet::select::Model;
 use crate::rules::RuleError;
 use std::path::Path;
-use std::time::Duration;
 
 /// `seat` の使い方。
 pub fn usage() -> String {
-    "usage: seat <meter --target T [--transcript PATH]|inject --target T (--text S|--file PATH)|heartbeat --target T|tick --target T --wm-dir DIR [--pointer TEXT] [--restore CMD] [--rules PATH]|cycle --target T --wm-dir DIR [--restore CMD] [--rules PATH]|externalize --target T --wm-dir DIR --anchor DIR --plan FILE --directives FILE [--user FILE] [--retire FILE] [--trigger manual|tick] [--role R] [--rules PATH]|rebrief --target T --wm-dir DIR --anchor DIR [--bd PATH] [--prefix P] [--rules PATH]|consume --target T --wm-dir DIR|register --state-dir S --target T --role R --account L --launch FILE [--anchor DIR]|launch --state-dir S --role R --target S:W [--account L] [--anchor DIR] [--model M] [--restore CMD]|<label> --orchestrator [--target S:W] [--model M] [--anchor DIR] [--restore CMD] [--state-dir S]> [--tmux-socket PATH] [--capture-file PATH] [--state-dir PATH]".to_owned()
+    "usage: seat <inject --target T (--text S|--file PATH)|externalize --target T --wm-dir DIR --anchor DIR --plan FILE --directives FILE [--user FILE] [--retire FILE] [--trigger manual|tick] [--role R] [--rules PATH]|rebrief --target T --wm-dir DIR --anchor DIR [--bd PATH] [--prefix P] [--rules PATH]|consume --target T --wm-dir DIR|register --state-dir S --target T --role R --account L --launch FILE [--anchor DIR]|launch --state-dir S --role R --target S:W [--account L] [--anchor DIR] [--model M] [--restore CMD]|<label> --orchestrator [--target S:W] [--model M] [--anchor DIR] [--restore CMD] [--state-dir S]> [--tmux-socket PATH] [--capture-file PATH] [--state-dir PATH]".to_owned()
 }
 
 /// `seat` に続く引数を捌く。
 pub fn dispatch(args: &[String]) -> Outcome {
     match args.first().map(String::as_str) {
-        Some("meter") => meter_of(args),
         Some("inject") => inject_of(args),
-        Some("heartbeat") => heartbeat_of(args),
-        Some("tick") => tick_of(args),
-        Some("cycle") => cycle_of(args),
         Some("externalize") => externalize_of(args),
         Some("rebrief") => rebrief_of(args),
         Some("consume") => consume_of(args),
@@ -76,30 +71,6 @@ fn optional<'a>(args: &'a [String], name: &str) -> Result<Option<&'a str>, ()> {
 /// 必須の flag。
 fn required<'a>(args: &'a [String], name: &str) -> Result<&'a str, ()> {
     optional(args, name)?.ok_or(())
-}
-
-/// `seat meter`。
-fn meter_of(args: &[String]) -> Outcome {
-    let (Ok(target), Ok(socket), Ok(capture_file), Ok(transcript)) = (
-        required(args, "--target"),
-        optional(args, "--tmux-socket"),
-        optional(args, "--capture-file"),
-        optional(args, "--transcript"),
-    ) else {
-        return refused_usage();
-    };
-    let request = meter::Request {
-        target,
-        socket,
-        capture_file,
-        transcript,
-    };
-    match meter::measure(&request) {
-        meter::Measure::Measured(reading) => Outcome::ok_line(meter::render(&reading)),
-        meter::Measure::Unmeasured(reason) => {
-            Outcome::failed_line(RC_REFUSED, meter::render_unmeasured(reason))
-        }
-    }
 }
 
 /// `seat inject`。
@@ -174,53 +145,9 @@ fn nonempty<'a>(args: &'a [String], name: &str) -> Result<Option<&'a str>, ()> {
     }
 }
 
-/// 場所を指す共有の flag（3 つの subcommand が同じ字で持つ）。
-struct Common<'a> {
-    /// tmux の socket。
-    socket: Option<&'a str>,
-    /// pane 本文の代わりに読む file。
-    capture_file: Option<&'a str>,
-    /// 記録と marker の置き場。
-    state_dir: Option<&'a str>,
-}
-
 /// 必須の flag のうち**空文字を断る**もの。
 fn required_nonempty<'a>(args: &'a [String], name: &str) -> Result<&'a str, ()> {
     nonempty(args, name)?.ok_or(())
-}
-
-/// 共有の flag を読む。**場所の flag も空文字を断る**——空の `--state-dir` は
-/// `PathBuf::from("")` が cwd 相対になり、記録と marker が撃った場所へ散る
-/// （実測 2026-09-10・lens-384 L-13: `./seat/<t>/heartbeat` が cwd に作られた）。
-fn common_of(args: &[String]) -> Result<Common<'_>, ()> {
-    Ok(Common {
-        socket: nonempty(args, "--tmux-socket")?,
-        capture_file: nonempty(args, "--capture-file")?,
-        state_dir: nonempty(args, "--state-dir")?,
-    })
-}
-
-/// `seat heartbeat`。
-fn heartbeat_of(args: &[String]) -> Outcome {
-    let (Ok(target), Ok(state_dir)) = (
-        required_nonempty(args, "--target"),
-        nonempty(args, "--state-dir"),
-    ) else {
-        return refused_usage();
-    };
-    let Some(state) = super::state_dir_of(state_dir) else {
-        return Outcome::failed_line(
-            RC_REFUSED,
-            heartbeat::render_refused(heartbeat::REASON_STATE_DIR),
-        );
-    };
-    match heartbeat::touch(&super::seat_dir(&state.path, target)) {
-        Ok(()) => Outcome::ok_line(heartbeat::render(target, &state)),
-        Err(_) => Outcome::failed_line(
-            RC_REFUSED,
-            heartbeat::render_refused(heartbeat::REASON_UNWRITABLE),
-        ),
-    }
 }
 
 /// 壊れた manifest の断り: defect を 1 件 1 行（`rules validate` と 1 byte 同じ）で全件並べ、
@@ -230,97 +157,6 @@ fn broken_rules(errors: &[RuleError], mut judged: Vec<String>) -> Outcome {
     let mut lines = crate::rules::cli::render_defects(errors);
     lines.append(&mut judged);
     Outcome::failed(RC_REFUSED, lines)
-}
-
-/// cycle の確認の刻み（上限・周期）を解く。`--rules PATH` が在ればその file・無ければ埋め込み
-/// （`rules` subcommand と**同じ 1 本の口**＝[`crate::rules::cli::open`]・`s2-07l.151`）。
-///
-/// 読めない manifest は `Err`（defect を全件返す）・行の無い file と不発効の行は `Ok(None)`
-/// ——**「壊れている」と「行が無い」を型で分ける**（呼び手はどちらも `no-rule` で断る・
-/// fail-closed・値を焼かない・憲法 C5 / C11）。**1 回の呼出しで 1 回だけ解く**: tick と cycle
-/// が別々に解くと、同じ判定の中で別の値で走りうる。
-fn pace_of(args: &[String]) -> Result<Option<(Duration, Duration)>, Vec<RuleError>> {
-    Ok(cycle::pace_of(&crate::rules::cli::open(args)?))
-}
-
-/// `seat tick`。
-fn tick_of(args: &[String]) -> Outcome {
-    // 値欠け・空文字の `--rules` は使い方の誤り（他の flag と同じ極性・SRS NFR4）。
-    let (Ok(target), Ok(wm_dir), Ok(pointer), Ok(restore), Ok(rules), Ok(common)) = (
-        required_nonempty(args, "--target"),
-        required_nonempty(args, "--wm-dir"),
-        nonempty(args, "--pointer"),
-        nonempty(args, "--restore"),
-        nonempty(args, "--rules"),
-        common_of(args),
-    ) else {
-        return refused_usage();
-    };
-    // rules は 1 回だけ開き、確認の刻みと口座の宣言を同じ manifest から解く（`s2-07l.224`・第 2 の parser を作らない）。
-    let manifest = match crate::rules::cli::open(args) {
-        Ok(manifest) => manifest,
-        Err(errors) => return broken_rules(&errors, vec![tick::render_no_rule()]),
-    };
-    let Some((settle, step)) = cycle::pace_of(&manifest) else {
-        return Outcome::failed_line(RC_REFUSED, tick::render_no_rule());
-    };
-    let accounts = tick::account_labels(&manifest);
-    tick::run(&tick::Request {
-        target,
-        wm_dir,
-        pointer,
-        socket: common.socket,
-        capture_file: common.capture_file,
-        state_dir: common.state_dir,
-        restore,
-        settle,
-        step,
-        accounts: &accounts,
-        rules,
-    })
-}
-
-/// `seat cycle`。
-fn cycle_of(args: &[String]) -> Outcome {
-    // 値欠け・空文字の `--rules` は使い方の誤り（他の flag と同じ極性・SRS NFR4）。
-    let (Ok(target), Ok(wm_dir), Ok(restore), Ok(_), Ok(common)) = (
-        required_nonempty(args, "--target"),
-        required_nonempty(args, "--wm-dir"),
-        nonempty(args, "--restore"),
-        nonempty(args, "--rules"),
-        common_of(args),
-    ) else {
-        return refused_usage();
-    };
-    let Some(state) = super::state_dir_of(common.state_dir) else {
-        return Outcome::failed_line(
-            RC_REFUSED,
-            cycle::render(target, &Cycle::Refused(cycle::REASON_STATE_DIR), None),
-        );
-    };
-    // 規則が読めない周は **1 key も送らずに** 断る（lock も取らない・fail-closed・`s2-07l.151`）。
-    let no_rule = || cycle::render(target, &Cycle::Refused(cycle::REASON_NO_RULE), Some(&state));
-    let (settle, step) = match pace_of(args) {
-        Ok(Some(pace)) => pace,
-        Ok(None) => return Outcome::failed_line(RC_REFUSED, no_rule()),
-        Err(errors) => return broken_rules(&errors, vec![no_rule()]),
-    };
-    let result = cycle::run(&cycle::Request {
-        target,
-        wm_dir,
-        socket: common.socket,
-        capture_file: common.capture_file,
-        state_dir: &state,
-        restore,
-        settle,
-        step,
-    });
-    match result {
-        Cycle::Done => Outcome::ok_line(cycle::render(target, &result, Some(&state))),
-        Cycle::Refused(_) | Cycle::Failed(_) => {
-            Outcome::failed_line(RC_REFUSED, cycle::render(target, &result, Some(&state)))
-        }
-    }
 }
 
 /// `seat externalize`（設計 working-memory.md §5.1）。
@@ -645,7 +481,7 @@ fn launch_with(flags: &LaunchFlags, place: &LaunchPlace) -> Outcome {
     let Some((settle, step)) = cycle::pace_of(&manifest) else {
         return refused(cycle::REASON_NO_RULE);
     };
-    let threshold_pct = match super::int_rule_of(&manifest, tick::ID_THRESHOLD) {
+    let threshold_pct = match super::int_rule_of(&manifest, super::ID_THRESHOLD) {
         Ok(found) => found,
         Err(read) => return refused(read.no_rule()),
     };

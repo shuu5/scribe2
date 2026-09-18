@@ -71,8 +71,6 @@ pub enum Guard {
     WriteSet,
     /// 内蔵 guard の承認の問いへの一律 deny（[`crate::hook::permission`]）。
     Permission,
-    /// 席の context 上限の cap guard（[`crate::hook::seat_guard`]・FailOpen）。
-    Cap,
     /// Bash の command guard＝rules 行 `runner.denied_commands` の語列に当たる command を実行の時点で止める
     /// （[`crate::hook::command`]・ADR-0025 §2.2）。
     Command,
@@ -115,8 +113,6 @@ pub enum Guard {
     StoreLock,
     /// tmux pane への注入の断り＝入力欄が非空なら 1 key も送らない（[`crate::seat::inject`]）。
     Inject,
-    /// session を作り直す口の断り（[`crate::seat::cycle`]）。
-    Cycle,
     /// 退避物の書込を止める判定＝二重退避・上限超過・文法の断り（[`crate::seat::externalize`]）。
     Externalize,
     /// 退避物の消費（move）を止める判定＝曖昧・移し先の既在（[`crate::seat::consume`]）。
@@ -130,7 +126,6 @@ pub enum Guard {
 pub const ALL: &[Guard] = &[
     Guard::WriteSet,
     Guard::Permission,
-    Guard::Cap,
     Guard::Command,
     Guard::Register,
     Guard::Role,
@@ -151,7 +146,6 @@ pub const ALL: &[Guard] = &[
     Guard::FollowRetry,
     Guard::StoreLock,
     Guard::Inject,
-    Guard::Cycle,
     Guard::Externalize,
     Guard::Consume,
     Guard::SpawnLine,
@@ -182,7 +176,6 @@ impl Guard {
         match self {
             Self::WriteSet => crate::hook::guard::POLARITY,
             Self::Permission => crate::hook::permission::POLARITY,
-            Self::Cap => crate::hook::seat_guard::POLARITY,
             Self::Command => crate::hook::command::POLARITY,
             Self::Register => crate::seat::role::POLARITY,
             Self::Role => crate::hook::role_guard::POLARITY,
@@ -203,7 +196,6 @@ impl Guard {
             Self::FollowRetry => crate::pipe::follow::POLARITY,
             Self::StoreLock => crate::fleet::store::POLARITY,
             Self::Inject => crate::seat::inject::POLARITY,
-            Self::Cycle => crate::seat::cycle::POLARITY,
             Self::Externalize => crate::seat::externalize::POLARITY,
             Self::Consume => crate::seat::consume::POLARITY,
             Self::SpawnLine => crate::pipe::spawn::POLARITY,
@@ -215,7 +207,6 @@ impl Guard {
         match self {
             Self::WriteSet => "hook::guard::Decision",
             Self::Permission => "hook::permission::PermissionDecision",
-            Self::Cap => "hook::seat_guard::SeatDecision",
             Self::Command => "hook::command::CommandDecision",
             Self::Register => "seat::role::RegisterRefusal",
             Self::Role => "hook::role_guard::RoleDecision",
@@ -236,7 +227,6 @@ impl Guard {
             Self::FollowRetry => "pipe::follow::FollowCheck",
             Self::StoreLock => "fleet::store::StoreError",
             Self::Inject => "seat::inject::Delivery",
-            Self::Cycle => "seat::cycle::Cycle",
             Self::Externalize => "seat::externalize::ExternalizeError",
             Self::Consume => "seat::consume::ConsumeError",
             Self::SpawnLine => "pipe::spawn::LineRefusal",
@@ -248,7 +238,6 @@ impl Guard {
         match self {
             Self::WriteSet => "write-set-guard",
             Self::Permission => "permission-deny",
-            Self::Cap => "cap-guard",
             Self::Command => "command-guard",
             Self::Register => "register-refusal",
             Self::Role => "role-guard",
@@ -269,7 +258,6 @@ impl Guard {
             Self::FollowRetry => "follow-retry",
             Self::StoreLock => "store-lock",
             Self::Inject => "inject-refusal",
-            Self::Cycle => "cycle-refusal",
             Self::Externalize => "externalize-refusal",
             Self::Consume => "consume-refusal",
             Self::SpawnLine => "spawn-line",
