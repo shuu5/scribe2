@@ -288,7 +288,7 @@ id = "e"
 title = "台帳 lint（doctor の項目）"
 req = ["FR51"]
 section = "6"
-write-set = ["+crates/scribe2/src/ledger/mod.rs", "+crates/scribe2/src/ledger/lint.rs", "crates/scribe2/src/lib.rs", "crates/scribe2/src/main.rs", "+crates/scribe2/src/seat/ledger.rs", "+crates/scribe2/tests/e2e/ledger.rs", "crates/scribe2/src/snapshots/scribe2__tests__doctor_external_form.snap"]
+write-set = ["+crates/scribe2/src/ledger/mod.rs", "+crates/scribe2/src/ledger/lint.rs", "crates/scribe2/src/lib.rs", "crates/scribe2/src/main.rs", "crates/scribe2/src/seat/ledger.rs", "+crates/scribe2/tests/e2e/ledger.rs", "crates/scribe2/src/snapshots/scribe2__tests__doctor_external_form.snap"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail ledger_lint_"]
 size = "S"
 done = "偽 adapter の出力で doctor の行が件数と母集団を出す"
