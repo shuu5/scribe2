@@ -139,10 +139,11 @@ pub enum Delivery {
     Unconfirmed(&'static str),
 }
 
-/// 注入を 1 回行い、settle を `window` まで見続ける。
+/// 注入を 1 回行い、settle を `window` まで見続ける（注入の**唯一の入口**・`s2-07l.479.3` で
+/// 既定窓の入口 `deliver` は口ごと消えた）。
 ///
-/// 成功の形は [`deliver`] と同じ（目印が現れた = 送達・送達 ts 以後の `UserPromptSubmit` の打刻 =
-/// `Consumed`・窓の終わりに無ければ `Queued`）で、変わるのは**窓の長さだけ**。作り直し直後の席は
+/// 成功の形は「目印が現れた = 送達・送達 ts 以後の `UserPromptSubmit` の打刻 =
+/// `Consumed`・窓の終わりに無ければ `Queued`」で、呼び側が決めるのは**窓の長さだけ**。作り直し直後の席は
 /// SessionStart hook の間（数秒〜十数秒）注入を入力欄に queue したまま turn を始めないので、2 s の
 /// 窓では復元が正しく届く周ほど `Queued` に落ちる（bd `s2-07l.97`）。cycle は作り直しの確認と同じ
 /// 上限を渡す。**窓はここで決めない**（`s2-07l.151`）: cycle 側の rules 行
@@ -531,8 +532,8 @@ mod tests {
         assert_eq!(needle_of(" \n\t\n"), None, "非空行が無い payload は目印を持てない");
     }
 
-    /// 既定の窓（[`SETTLE_STEP`] × [`SETTLE_TRIES`]）は従来と同じ回数に写る（`deliver` の
-    /// 既定 2 s が変わらないことの pin）。掛け算や剰余に化けた写しはここで落ちる。
+    /// 既定の窓（[`SETTLE_STEP`] × [`SETTLE_TRIES`]）は従来と同じ回数に写る（既定 2 s が
+    /// 変わらないことの pin）。掛け算や剰余に化けた写しはここで落ちる。
     #[test]
     fn inject_tries_within_default_window_is_settle_tries() {
         assert_eq!(

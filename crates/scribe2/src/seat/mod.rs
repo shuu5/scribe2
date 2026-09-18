@@ -41,7 +41,6 @@ fn tmux_stdout(socket: Option<&str>, args: &[&str]) -> Option<String> {
         .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-/// pane の前面 process を shell と読む名（`#{pane_current_command}` の値・閉じた列・字面は現物が正本）。
 /// 入力欄の門の断り。**閉じた 2 値**（憲法 C11: 境界ごとの enum・字面で routing しない）。
 ///
 /// `seat/inject.rs` から**挙動不変で移した**もの（`s2-07l.479.3`）: 注入の口は ADR-0045 §2 (2) で
@@ -58,6 +57,7 @@ pub enum InputGate {
 /// tmux を撃てなかった（同じ便で `seat/inject.rs` から移した・読み手は口座の delivery と立て直し）。
 pub const REASON_TMUX_FAILED: &str = "tmux-failed";
 
+/// pane の前面 process を shell と読む名（`#{pane_current_command}` の値・閉じた列・字面は現物が正本）。
 pub const SHELLS: &[&str] = &["sh", "bash", "zsh", "fish"];
 
 /// target の pane の前面 process が shell か＝session が終わっているか（設計 seat-state.md §6・account-autonomy.md §5
