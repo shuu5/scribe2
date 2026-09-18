@@ -880,3 +880,8 @@ terms:
     aliases: [decision ladder]
     definition: 変更を提案・実装する前に通る段の列 (要るか → 既に在るか → 標準 library か入っている依存で足りるか → 1 行で書けるか → 最小実装)。 宣言順に通り最初に成立した段で止まり、 走査・record・rules 行・機構を足す提案は先に消すものを名指す。 出所は ponytail (研究 RESEARCH-ponytail §2) で、 憲法の条 C17 として持つ (ADR-0044)。 機械の面は lens の findings の過剰設計 5 観点と便の規模の record で、 判断は散文に残る。
     relationships: [lens, 契約, rules 行, 裁定 id]
+  - canonical: 憲法の生成 file
+    domain: consumer
+    aliases: [constitution generated file, 生成区間の移り先]
+    definition: 憲法の規範文の生成区間 (constitution.html の機械層から gen-claude-md が抽出した規範文・印で囲む) の置き場となる tracked な生成 file 1 枚 (docs/constitution.md)。 正本は constitution.html で、 drift は xtask check の claude-md-constitution が測る。 CLAUDE.md はこの file を名指す pointer 1 行だけを残し、 席の指示文が憲法から運ぶのは順位と Ask-first / Never の pointer 行だけ、 C 条文は CI の門と PreToolUse の guard が執行する (ADR-0046・適用は scribe2 自身の repo に限る)。
+    relationships: [席の指示文, 規範の印, rules 行, 対話面]
