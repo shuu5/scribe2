@@ -17,6 +17,7 @@
 // flip-check: moved s2-07l.361
 
 mod account;
+mod inject;
 mod launch;
 mod register;
 mod rules;
@@ -32,6 +33,7 @@ use std::thread::sleep;
 use std::time::{Duration, Instant, SystemTime};
 use vessel::cli_outcome::{RC_OK, RC_REFUSED};
 use vessel::name::NAME;
+use vessel::seat::inject::tick_path;
 
 /// binary の path。
 fn bin() -> &'static str {
@@ -316,6 +318,91 @@ fn unix_now() -> u64 {
 enum StateFix {
     /// 最終行が Busy（`age_s` 秒前の `UserPromptSubmit`）。
     Busy { age_s: u64 },
+    /// 最終行が Idle（`Stop`）。
+    Idle,
+}
+
+/// Idle の打刻を置く（tick / cycle が状態の門を通る周の fixture）。
+fn stamp_idle(state: &Path, target: &str) {
+    write_state(&seat_dir_of(state, target), StateFix::Idle);
+}
+
+/// `/clear` を受けると画面を消して echo を描き直し、hook の代わりに `SessionStart` を `on_clear` の
+/// 時刻で打つ偽の席。それ以外の行は `UserPromptSubmit`（復元の消費の証拠）を `on_line` の時刻で打ち、
+/// 受けた字面を描いて `Stop`（turn の終わり＝実席と同じく Idle へ戻る）を同じ時刻で打つ。
+/// 打刻の file は `state_file`（`<seat dir>/state.jsonl`）。
+fn start_clearing_seat(
+    socket: &str,
+    name: &str,
+    log: &Path,
+    state_file: &Path,
+    (on_clear, on_line): (FakeStamp, FakeStamp),
+) -> IsolatedSeat {
+    let after_clear = stamp_cmd(state_file, "idle", "SessionStart", on_clear);
+    let on_other = format!(
+        "{}; printf 'seat got %s\\n' \"$line\"; {}",
+        stamp_cmd(state_file, "busy", "UserPromptSubmit", on_line),
+        stamp_cmd(state_file, "idle", "Stop", on_line)
+    );
+    start_clearing_seat_with(socket, name, log, &after_clear, &on_other)
+}
+
+/// `/clear` の後に走らせる shell と、それ以外の行への応答を指定して偽の席を立てる。
+///
+/// `/clear` を受けた席は画面を消した後、実席と同じく echo `❯ /clear` を行頭に描き直す（実測
+/// 2026-09-11）。**echo は作り直しの証拠ではない**（`s2-07l.112`）: 証拠は `after_clear` が置く
+/// `SessionStart` の打刻で、echo だけを描いて打刻しない席は「作り直しを確認できない席」の形になる。
+fn start_clearing_seat_with(
+    socket: &str,
+    name: &str,
+    log: &Path,
+    after_clear: &str,
+    on_other: &str,
+) -> IsolatedSeat {
+    let script = format!(
+        "while :; do printf '❯ '; read -r line || exit 0; printf '%s\\n' \"$line\" >> '{}'; \
+         case \"$line\" in '/clear') printf '\\033[2J\\033[3J\\033[H❯ /clear\\n'; {after_clear} ;; \
+         *) {on_other} ;; esac; done",
+        log.display()
+    );
+    let mut seat = IsolatedSeat {
+        socket: socket.to_owned(),
+        name: name.to_owned(),
+        ready: false,
+    };
+    let out = tmux(
+        socket,
+        &[
+            "new-session", "-d", "-s", name, "-x", "120", "-y", "40", "sh", "-c", &script,
+        ],
+    );
+    seat.ready = out.status.success() && wait_prompt(socket, name);
+    seat
+}
+
+/// prompt が描かれるのを待つ。
+fn wait_prompt(socket: &str, name: &str) -> bool {
+    let deadline = Instant::now().checked_add(PROMPT_WAIT);
+    while deadline.is_some_and(|at| Instant::now() < at) {
+        if capture(socket, name).trim_end().ends_with(PROMPT) {
+            return true;
+        }
+        sleep(Duration::from_millis(100));
+    }
+    false
+}
+
+/// 偽の席が打刻を 1 行 append する shell 断片（**契約の字面から**組む・設計 seat-state.md §2）。
+/// [`FakeStamp::Never`] は何もしない `:`。
+fn stamp_cmd(state_file: &Path, state: &str, event: &str, when: FakeStamp) -> String {
+    let ts = match when {
+        FakeStamp::Now => "$(date +%s)",
+        FakeStamp::Never => return ":".to_owned(),
+    };
+    format!(
+        "printf '{{\"schema\":1,\"state\":\"{state}\",\"event\":\"{event}\",\"ts\":%s,\"sid\":\"fake\"}}\\n' \"{ts}\" >> '{}'",
+        state_file.display()
+    )
 }
 
 /// 打刻 file の path（契約の字面から組む）。
@@ -334,6 +421,7 @@ fn write_state(seat: &Path, fix: StateFix) {
         StateFix::Busy { age_s } => {
             stamp_line("busy", "UserPromptSubmit", unix_now().saturating_sub(age_s), "sid-fix")
         }
+        StateFix::Idle => stamp_line("idle", "Stop", unix_now(), "sid-fix"),
     };
     fs::write(state_file(seat), format!("{body}\n")).expect("打刻を置ける");
 }
@@ -370,18 +458,8 @@ fn run_seat_in(cwd: &Path, args: &[&str]) -> Output {
 enum FakeStamp {
     /// いま（送達 ts 以後＝証拠になる）。
     Now,
-}
-
-/// 偽の席が打刻を 1 行 append する shell 断片（**契約の字面から**組む・設計 seat-state.md §2）。
-/// [`FakeStamp::Never`] は何もしない `:`。
-fn stamp_cmd(state_file: &Path, state: &str, event: &str, when: FakeStamp) -> String {
-    let ts = match when {
-        FakeStamp::Now => "$(date +%s)",
-    };
-    format!(
-        "printf '{{\"schema\":1,\"state\":\"{state}\",\"event\":\"{event}\",\"ts\":%s,\"sid\":\"fake\"}}\\n' \"{ts}\" >> '{}'",
-        state_file.display()
-    )
+    /// 打たない（hook が死んだ・載っていない席の形）。
+    Never,
 }
 
 /// guard が drop されたら独立 socket の server は終わっている。
