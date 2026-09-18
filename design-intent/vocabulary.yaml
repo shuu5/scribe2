@@ -715,7 +715,7 @@ terms:
     relationships: [作業記憶, 席, 対話面]
   - canonical: dispatcher
     domain: consumer
-    definition: 審査を通った契約の起動の列を持ち、 台帳の依存・live 便との write-set の交差・受付 (余地・host の memory) を満たす便を管理 tick と land の直後に自動で起こす器の口 (SRS FR68・ADR-0034・設計 docs/design/dispatcher.md)。 便の起動は dispatcher が持ち、 質問と判定の中継は管理席が持つ。
+    definition: 審査を通った契約の起動の列を持ち、 台帳の依存・live 便との write-set の交差・受付 (余地・host の memory) を満たす便を管理 tick と land の直後に自動で起こす器の口 (SRS FR68・ADR-0034・設計 docs/design/dispatcher.md)。 便の起動は dispatcher が持ち、 質問と判定の中継は管理席が持つ。 着地と merge も dispatcher が持ち契機を land の直後と契約の直後に限る最小の形は ADR-0045 (proposed)。
     relationships: [起動の列, 介入, 便, 契約の審査, write-set, 受付]
   - canonical: 起動の列
     domain: consumer
@@ -885,3 +885,8 @@ terms:
     aliases: [constitution generated file, 生成区間の移り先]
     definition: 憲法の規範文の生成区間 (constitution.html の機械層から gen-claude-md が抽出した規範文・印で囲む) の置き場となる tracked な生成 file 1 枚 (docs/constitution.md)。 正本は constitution.html で、 drift は xtask check の claude-md-constitution が測る。 CLAUDE.md はこの file を名指す pointer 1 行だけを残し、 席の指示文が憲法から運ぶのは順位と Ask-first / Never の pointer 行だけ、 C 条文は CI の門と PreToolUse の guard が執行する (ADR-0046・適用は scribe2 自身の repo に限る)。
     relationships: [席の指示文, 規範の印, rules 行, 対話面]
+  - canonical: orchestrator
+    domain: consumer
+    aliases: [orchestrator seat, orchestrator の席]
+    definition: 席の唯一の役割 (ADR-0045・proposed)。 user と話し承認と裁定を受け取る対話面の席 (R-C7-1 の値) で、 契約・設計・落ちる歯 (実行できる acceptance・tests/ に限った edit-code) を書き、 実装はせず便の起動・着地・merge は dispatcher に任せる。 前の名は planner で、 管理席は無い。 権能は rules 行 role.orchestrator が持つ。
+    relationships: [対話面, 席, dispatcher, 権能, 台帳, planner]
