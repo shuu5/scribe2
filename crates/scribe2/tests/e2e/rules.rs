@@ -968,9 +968,9 @@ fn rules_embedded_manifest_declares_the_size_lines_rows() {
         assert_eq!(row.ruled_at, "2026-09-14", "{id} の裁定日");
         assert_eq!(RuleKind::parse(kind.as_str()), Some(kind), "{id} の kind を字面から引ける");
     }
-    // `.297` で `RunnerModel`・`.322` で `RunnerEffort`・`.315` で `SeatSignalBackoffS` が末尾に足されたので、
-    // size の 3 つはその直前に並ぶ。
-    let tail: Vec<RuleKind> = ALL.iter().rev().skip(3).take(3).rev().copied().collect();
+    // `.297` で `RunnerModel`・`.322` で `RunnerEffort`・`.315` で `SeatSignalBackoffS`・`.423` で梯子の 2 行が
+    // 末尾に足されたので、size の 3 つはその直前（末尾から 5 つ目まで）に並ぶ。
+    let tail: Vec<RuleKind> = ALL.iter().rev().skip(5).take(3).rev().copied().collect();
     assert_eq!(tail, [RuleKind::PipeSizeSLines, RuleKind::PipeSizeMLines, RuleKind::PipeSizeLLines], "宣言順の末尾から 3 つ目までの 3 つ");
     let errors = rejected(&one_row_raw("PipeSizeXlLines", "1600")).expect("未知の kind の fixture が受理された");
     assert!(errors.join("\n").contains("未知である"), "4 段目の size は kind として読めない");
@@ -1056,7 +1056,7 @@ fn rules_embedded_manifest_is_valid_and_covers_all_kinds() {
     // **tracked な `rules/manifest.toml` の全行が受理される**（`parse` は 1 件でも違反が
     // 在れば `Err` を返すので、ここに届いた時点で全行が必須 key を持つ）。母集団を額面に
     // 出すのは、行が黙って落ちた周を「全部読めた」と読み違えないためである。
-    assert_eq!(manifest.rows().len(), 53, "埋め込み manifest の行数（母集団・`.217` で +2・`.249` で +3・`.254` で +1・`.168` で +1・`.297` で +1・`.315` で +1・`.322` で +1・`.360` で +1）");
+    assert_eq!(manifest.rows().len(), 55, "埋め込み manifest の行数（母集団・`.217` で +2・`.249` で +3・`.254` で +1・`.168` で +1・`.297` で +1・`.315` で +1・`.322` で +1・`.360` で +1・`.423` で +2）");
     for kind in ALL {
         let covered = manifest.rows().iter().any(|row| row.kind == *kind);
         assert!(covered, "{} の行が manifest に無い", kind.as_str());
@@ -1200,10 +1200,10 @@ fn rules_embedded_manifest_declares_one_capability_row_per_role() {
             assert!(Capability::parse(name).is_some(), "{id} の値 {name} は Capability の名");
         }
     }
-    assert!(ALL.contains(&RuleKind::RoleCapabilities), "ALL に在る（末尾は `.315` の SeatSignalBackoffS）");
+    assert!(ALL.contains(&RuleKind::RoleCapabilities), "ALL に在る（末尾は `.423` の SeatPointerBackoffMaxS）");
     assert_eq!(RuleKind::parse("RoleCapabilities"), Some(RuleKind::RoleCapabilities), "kind を字面から引ける");
     let kinds = ALL.len();
-    assert_eq!(kinds, 52, "kind の母集団（`.201` で +1・`.217` で +2・`.249` で +3・`.254` で +1・`.168` で +1・`.297` で +1・`.315` で +1・`.322` で +1・`.360` で +1）");
+    assert_eq!(kinds, 54, "kind の母集団（`.201` で +1・`.217` で +2・`.249` で +3・`.254` で +1・`.168` で +1・`.297` で +1・`.315` で +1・`.322` で +1・`.360` で +1・`.423` で +2）");
 }
 
 /// 禁じる語列の行（`runner.denied_commands`・`RuleKind::RunnerDeniedCommands`・裁定 id `user 2026-09-14`・ADR-0025 §2.1・
@@ -1282,10 +1282,10 @@ fn rules_embedded_manifest_declares_the_memo_stale_rows() {
         assert_eq!(row.ruled_at, "2026-09-13", "{id} の裁定日");
         assert_eq!(RuleKind::parse(kind.as_str()), Some(kind), "{id} の kind を字面から引ける");
     }
-    // `.249` の size の 3 行・`.297` の RunnerModel・`.322` の RunnerEffort・`.315` の SeatSignalBackoffS が末尾に
-    // 続く＝この 2 行は末尾から 8 つ目と 7 つ目。
+    // `.249` の size の 3 行・`.297` の RunnerModel・`.322` の RunnerEffort・`.315` の SeatSignalBackoffS・
+    // `.423` の梯子の 2 行が末尾に続く＝この 2 行は末尾から 10 つ目と 9 つ目。
     assert_eq!(
-        ALL.get(ALL.len().saturating_sub(8)..ALL.len().saturating_sub(6)),
+        ALL.get(ALL.len().saturating_sub(10)..ALL.len().saturating_sub(8)),
         Some([RuleKind::MemoStaleDays, RuleKind::MemoStalePriority].as_slice()),
         "宣言順で size の 3 行の直前に並ぶ 2 つ"
     );
@@ -1386,7 +1386,7 @@ fn rules_dialogue_surface_value_must_be_a_role_name() {
 
 /// (f) `runner.model`（runner / lens が claude に毎回渡す model・裁定 id `user 2026-09-14T21:59Z`・設計 pipeline.md §6・
 /// `s2-07l.297`）: 埋め込み manifest の行は発効 ∧ `Str("opus")`（claude CLI の別名・閉じた表 `Model` で引ける）・kind は
-/// 宣言順の末尾から 3 つ目 `RunnerModel`（形は `Str`・末尾は `.315` の `SeatSignalBackoffS`）・`str_row` が同じ値を返し、
+/// 宣言順の末尾から 5 つ目 `RunnerModel`（形は `Str`・末尾は `.423` の `SeatPointerBackoffMaxS`）・`str_row` が同じ値を返し、
 /// 不発効 / 整数の行は 3 理由で `Err`。base は行も kind も無いので RED。
 #[test]
 fn rules_manifest_carries_runner_model() {
@@ -1405,7 +1405,7 @@ fn rules_manifest_carries_runner_model() {
     assert_eq!(row.ruled_at, "2026-09-14", "裁定日");
     assert_eq!(Model::parse("opus"), Some(Model::Opus), "値は閉じた表で引ける");
     assert_eq!(RuleKind::RunnerModel.shape(), ValueShape::Str, "形は識別子");
-    assert_eq!(ALL.get(ALL.len().saturating_sub(3)), Some(&RuleKind::RunnerModel), "宣言順の末尾から 3 つ目（`.322` の RunnerEffort が直後）");
+    assert_eq!(ALL.get(ALL.len().saturating_sub(5)), Some(&RuleKind::RunnerModel), "宣言順の末尾から 5 つ目（`.322` の RunnerEffort が直後）");
     assert_eq!(RuleKind::parse("RunnerModel"), Some(RuleKind::RunnerModel));
     let healed = parsed(&one_row(RuleKind::RunnerModel, "\"sonnet\"")).expect("文字列の値は受理される");
     assert_eq!(healed.get("probe").map(|row| row.value.clone()), Some(RuleValue::Str("sonnet".to_owned())));
@@ -1414,8 +1414,8 @@ fn rules_manifest_carries_runner_model() {
 }
 
 /// (e) `seat.signal_backoff_s`（退避の合図の再送の back-off・裁定 id `user 2026-09-15T02:30Z`・設計 seat-autonomy.md
-/// §3 / §8・`s2-07l.315`）: 埋め込み manifest の行は発効 ∧ `Int(300)`・kind は宣言順の末尾 `SeatSignalBackoffS`（形は
-/// `Int`・`SeatTickStaleS` と同じ形）・kind の母集団は 50（`.297` の 49 に +1）・`int_row` が同じ値を返し、散文の値の行は
+/// §3 / §8・`s2-07l.315`）: 埋め込み manifest の行は発効 ∧ `Int(300)`・kind は宣言順で `.423` の梯子の 2 行の直前
+/// `SeatSignalBackoffS`（形は `Int`・`SeatTickStaleS` と同じ形）・`int_row` が同じ値を返し、散文の値の行は
 /// 形の不一致で拒まれる。**値は manifest が持ち、設計 doc は写さない**（C1 / C5）。base は行も kind も無いので RED。
 #[test]
 fn rules_manifest_carries_seat_signal_backoff() {
@@ -1434,14 +1434,59 @@ fn rules_manifest_carries_seat_signal_backoff() {
     assert_eq!(row.ruled_at, "2026-09-15", "裁定日");
     assert_eq!(RuleKind::SeatSignalBackoffS.shape(), ValueShape::Int, "形は秒の整数");
     assert_eq!(RuleKind::SeatTickStaleS.shape(), RuleKind::SeatSignalBackoffS.shape(), "打刻の合図の brake の行と同じ形");
-    assert_eq!(ALL.last(), Some(&RuleKind::SeatSignalBackoffS), "宣言順の末尾");
-    assert_eq!(ALL.len(), 52, "kind の母集団（`.297` の 49 に `.315` と `.322` で +2・`.360` で +1）");
+    assert_eq!(
+        ALL.get(ALL.len().saturating_sub(3)),
+        Some(&RuleKind::SeatSignalBackoffS),
+        "宣言順で `.423` の梯子の 2 行の直前（末尾の seat 群）"
+    );
+    assert_eq!(ALL.len(), 54, "kind の母集団（`.297` の 49 に `.315` と `.322` で +2・`.360` で +1・`.423` で +2）");
     assert_eq!(RuleKind::parse("SeatSignalBackoffS"), Some(RuleKind::SeatSignalBackoffS), "kind を字面から引ける");
     assert_eq!(int_row(&manifest, "seat.signal_backoff_s"), Ok(300), "整数の行の読み手が同じ値を返す");
     let healed = parsed(&one_row(RuleKind::SeatSignalBackoffS, "60")).expect("整数の値は受理される");
     assert_eq!(healed.get("probe").map(|row| row.value.clone()), Some(RuleValue::Int(60)));
     let errors = rejected(&one_row(RuleKind::SeatSignalBackoffS, "\"5 分\"")).expect("散文の値は形が合わない");
     assert!(errors.join("\n").contains("要 Int"), "{errors:?}");
+}
+
+/// (d) 打刻の合図の梯子の 2 行（`seat.pointer_backoff_factor` / `seat.pointer_backoff_max_s`・裁定 id
+/// `user 2026-09-17T00:55Z`・設計 seat-autonomy.md §14 形 5・`s2-07l.423`）: 埋め込み manifest の行は発効 ∧
+/// `Int`（2 / 86400）・kind は**宣言順の末尾の seat 群**（`SeatSignalBackoffS` の直後に 2 つ並ぶ）・散文の値の行は
+/// 形の不一致で拒まれる。**値は manifest が持ち、設計 doc も code も写さない**（C1 / C5）。初段は既存の
+/// `seat.tick_stale_s` を流用するので行を増やさない。base は行も kind も無いので RED。
+#[test]
+fn seat_pointer_backoff_rules_rows_are_declared() {
+    let manifest = match Manifest::embedded() {
+        Ok(found) => found,
+        Err(errors) => {
+            let lines: Vec<String> = errors.iter().map(ToString::to_string).collect();
+            panic!("埋め込み manifest が拒まれた:\n{}", lines.join("\n"))
+        }
+    };
+    let rows: [(&str, RuleKind, u64); 2] = [
+        ("seat.pointer_backoff_factor", RuleKind::SeatPointerBackoffFactor, 2),
+        ("seat.pointer_backoff_max_s", RuleKind::SeatPointerBackoffMaxS, 86400),
+    ];
+    for (id, kind, value) in rows {
+        let row = manifest.get(id).unwrap_or_else(|| panic!("{id} の行が在る"));
+        assert_eq!(row.value, RuleValue::Int(value), "{id} の値（user 裁定 2026-09-17T00:55Z）");
+        assert_eq!(row.kind, kind, "{id} の kind");
+        assert_eq!(row.kind.shape(), ValueShape::Int, "{id} の値の形は Int");
+        assert!(row.enabled, "{id} は発効している");
+        assert_eq!(row.ruling, "user 2026-09-17T00:55Z", "{id} の裁定 id");
+        assert_eq!(row.ruled_at, "2026-09-17", "{id} の裁定日");
+        assert_eq!(RuleKind::parse(kind.as_str()), Some(kind), "{id} の kind を字面から引ける");
+        assert_eq!(int_row(&manifest, id), Ok(value), "{id} の整数の読み手が同じ値を返す");
+    }
+    // 宣言順は末尾の seat 群＝`.315` の `SeatSignalBackoffS` の直後に 2 つ（行と variant を対で足させる）。
+    assert_eq!(
+        ALL.get(ALL.len().saturating_sub(2)..),
+        Some([RuleKind::SeatPointerBackoffFactor, RuleKind::SeatPointerBackoffMaxS].as_slice()),
+        "宣言順の末尾の 2 つ"
+    );
+    // 初段は既存の行を流用する＝梯子のために新しい初段の行を足していない（C5）。
+    assert_eq!(RuleKind::SeatTickStaleS.shape(), ValueShape::Int, "初段は seat.tick_stale_s の値のまま");
+    let errors = rejected(&one_row(RuleKind::SeatPointerBackoffMaxS, "\"24 時間\"")).expect("散文の値の fixture が受理された");
+    assert!(errors.join("\n").contains("要 Int"), "Int でない値は拒む: {errors:?}");
 }
 
 /// 行の読み手 `str_row` / `int_row`（`rules::` の 1 本・headless と `pipe::ratelimit` が読む・`s2-07l.297`）: 発効した

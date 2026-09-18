@@ -56,15 +56,15 @@ fn seat_state_tick_injects_despite_spinner_text_when_stamped_idle() {
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
     assert_eq!(
         stdout_of(&out),
-        format!("seat: tick decision=inject target={name} consumed=false kind=pointer{CTX_19}{ST_IDLE}{}\n", provenance(&state, "flag")),
-        "spinner の字面は判定に効かない＝打刻 Idle の席には注入する"
+        format!("seat: tick decision=inject target={name} consumed=false kind=pointer{CTX_19}{ST_IDLE} pointer=sent step=0{}\n", provenance(&state, "flag")),
+        "spinner の字面は判定に効かない＝打刻 Idle の席には注入する（梯子は記録なしの初段＝`s2-07l.423`）"
     );
     let seen = capture(&socket, name);
     assert!(seen.contains(&format!("seat heartbeat --target {name}")), "既定の 1 行が届く: {seen}");
     let recorded = fs::read_to_string(tick_file(&state, name)).unwrap_or_default();
     assert!(
         recorded.contains(&format!(
-            r#""what":"decision=inject target={name} consumed=false kind=pointer{CTX_19}{ST_IDLE}{}""#,
+            r#""what":"decision=inject target={name} consumed=false kind=pointer{CTX_19}{ST_IDLE} pointer=sent step=0{}""#,
             provenance(&state, "flag")
         )),
         "記録にも state の列（出所 = Stop）が載る: {recorded}"

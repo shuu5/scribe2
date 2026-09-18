@@ -405,6 +405,7 @@ fn seat_tick_noop_reasons_in_fixed_order() {
     for (at, case) in cases.iter().enumerate() {
         let dir = tmp();
         let state = prepare_tick_case(&dir, case, target);
+        ladder_stopped_fixture(&state, case, target);
         let (wm_s, pane_s) = (
             dir.join("wm").display().to_string(),
             dir.join("pane.txt").display().to_string(),
@@ -482,6 +483,12 @@ fn fixed_order_cases(target: &'static str) -> Vec<TickCase> {
         TickCase { reason: "cycle-live", beat_age_s: None, pane: Some(IDLE_PANE),
                    wm_seat: Some("other:seat"), via_file: true, tmux: false, context: CTX_10,
                    stamp: StateFix::Idle, state: ST_IDLE },
+        // 6 の合図の brake まで通った組（`s2-07l.423`・宣言順で `pointer-recent` の次）: lock を TTL の外へ
+        // 倒し、無変化の基準を上限の 1 つ手前の段で置く（[`ladder_stopped_fixture`]）＝梯子が止める。
+        // 判定行の末尾には梯子の 2 語が載る（brake に届いた周だけ・設計 §14 形 4）。
+        TickCase { reason: "pointer-stopped", beat_age_s: None, pane: Some(IDLE_PANE),
+                   wm_seat: Some("other:seat"), via_file: true, tmux: false, context: CTX_10,
+                   stamp: StateFix::Idle, state: ST_IDLE_STOPPED },
     ]
 }
 
@@ -508,7 +515,7 @@ fn seat_tick_injects_pointer_and_stamps_on_isolated_socket() {
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
     assert_eq!(
         stdout_of(&out),
-        format!("seat: tick decision=inject target={name} consumed=false kind=pointer{CTX_NO_SOURCE}{ST_IDLE}{}\n", provenance(&state, "flag")),
+        format!("seat: tick decision=inject target={name} consumed=false kind=pointer{CTX_NO_SOURCE}{ST_IDLE} pointer=sent step=0{}\n", provenance(&state, "flag")),
         "`sh -i` の席は打刻しない＝消費の証拠が来ないので consumed=false（送達は成立）"
     );
     let pane = capture(&socket, name);
@@ -522,17 +529,226 @@ fn seat_tick_injects_pointer_and_stamps_on_isolated_socket() {
     let out = run_seat(&args);
     assert_eq!(
         stdout_of(&out),
-        format!("seat: tick decision=noop reason=pointer-recent{CTX_NO_SOURCE}{ST_IDLE}{}\n", provenance(&state, "flag")),
-        "自分の打刻の直後は合図を重ねない（この周も context と状態は読む）"
+        format!("seat: tick decision=noop reason=pointer-recent{CTX_NO_SOURCE}{ST_IDLE} pointer=settling step=0{}\n", provenance(&state, "flag")),
+        "自分の打刻の直後は合図を重ねない（この周も context と状態は読む・梯子は 1 周目の記録の settle 待ち）"
     );
-    // 打刻を閾値の外へ倒すと、また撃つ側に戻る（「打刻が在る」ではなく経過で決まる）。
+    // 記録を消して「記録なし」の縮退へ戻し、打刻を閾値の外へ倒すと、また撃つ側に戻る（「打刻が在る」
+    // ではなく経過で決まる・梯子の段は `seat_pointer_backoff_` の歯が測る・`s2-07l.423` 形 2）。
+    fs::remove_file(ladder_of(&state, name)).ok();
     backdate(&stamp, STALE_S + 1);
     let out = run_seat(&args);
     assert_eq!(
         stdout_of(&out),
-        format!("seat: tick decision=inject target={name} consumed=false kind=pointer{CTX_NO_SOURCE}{ST_IDLE}{}\n", provenance(&state, "flag"))
+        format!("seat: tick decision=inject target={name} consumed=false kind=pointer{CTX_NO_SOURCE}{ST_IDLE} pointer=sent step=0{}\n", provenance(&state, "flag"))
     );
     // socket を消す**前**に畳む（消してからでは kill-session が届かない・実測 2026-09-10）。
+    drop(guard);
+    fs::remove_dir_all(&dir).ok();
+}
+
+// ─────────────────────── 打刻の合図の梯子（`s2-07l.423`・設計 §14） ───────────────────────
+
+/// 梯子が上限（`seat.pointer_backoff_max_s` = 86400 秒）を超える段の 1 つ**手前**＝記録に書く段。
+/// 2400 × 2^5 = 76800 は上限の内側で、次の段 2400 × 2^6 = 153600 が外側＝段 6 で止まる。
+const MAX_STEP: u64 = 5;
+/// 順序固定の歯が置く状態 log の `ts`（壁時計に依らず digest を決めるための pin）。
+const PINNED_TS: u64 = 1_757_600_000;
+/// 梯子が上限で止まった周の判定行の末尾（[`ST_IDLE`] + 梯子の 2 語・[`ladder_stopped_fixture`] の置く段）。
+const ST_IDLE_STOPPED: &str = " state=idle event=Stop pointer=stopped step=6";
+
+/// 梯子の記録の在処（契約の字面から組む・tick-stamp の隣）。
+fn ladder_of(state: &Path, target: &str) -> PathBuf {
+    seat_dir_of(state, target).join("pointer-digest")
+}
+
+/// 記録の数値 field を 1 つ書き換える（`sent_at` を過去へ倒す・`step` を上の段へ写す）。**基準は
+/// 器が settle で書いたものをそのまま使う**＝歯は digest の字面を組み立てない（字面の出所を混ぜない）。
+fn edit_ladder(state: &Path, target: &str, key: &str, value: u64) {
+    let path = ladder_of(state, target);
+    let text = fs::read_to_string(&path).unwrap_or_default();
+    let head = format!("\"{key}\":");
+    let Some((before, rest)) = text.split_once(&head) else {
+        return;
+    };
+    let (_, tail) = rest.split_once(',').unwrap_or((rest, ""));
+    fs::write(&path, format!("{before}{head}{value},{tail}")).ok();
+}
+
+/// 記録の `sent_at`（器が書いた送出時刻）。読めなければ 0。
+fn ladder_sent_at(state: &Path, target: &str) -> u64 {
+    let text = fs::read_to_string(ladder_of(state, target)).unwrap_or_default();
+    text.split_once("\"sent_at\":")
+        .and_then(|(_, rest)| rest.split_once(','))
+        .and_then(|(found, _)| found.trim().parse().ok())
+        .unwrap_or(0)
+}
+
+/// 順序固定の歯の `pointer-stopped` の組だけに要る fixture（他の組は素通りする）。
+///
+/// 梯子は cycle の門を通った後でしか評価されないので lock を TTL の外へ倒し、状態 log の `ts` を
+/// [`PINNED_TS`] に pin して**今の digest と同じ基準**を上限の 1 つ手前の段で置く（基準が違えば段 0 へ
+/// 戻って上限に当たらない）。この fixture は fleet の event log を持たない＝digest の 2 値目は
+/// 測れない側の語である（0 や空に化けさせない側・憲法 C10）。
+fn ladder_stopped_fixture(state: &Path, case: &TickCase, target: &str) {
+    if case.reason != "pointer-stopped" {
+        return;
+    }
+    let seat = seat_dir_of(state, target);
+    backdate(&seat.join("cycle.lock"), STALE_S + 1);
+    fs::write(state_file(&seat), format!("{}\n", stamp_line("idle", "Stop", PINNED_TS, "sid-fix"))).ok();
+    fs::write(
+        ladder_of(state, target),
+        format!("{{\"sent_at\":0,\"step\":{MAX_STEP},\"digest\":\"{PINNED_TS} unreadable\"}}\n"),
+    )
+    .ok();
+}
+
+/// 席が合図に応えた turn を模す（状態 log へ `sent_at` より後の `Stop` を 1 行足す）。
+fn answer_with_stop(state: &Path, target: &str, at: u64) {
+    let path = state_file(&seat_dir_of(state, target));
+    let mut text = fs::read_to_string(&path).unwrap_or_default();
+    text.push_str(&stamp_line("idle", "Stop", at, "sid-fix"));
+    text.push('\n');
+    fs::write(&path, text).ok();
+}
+
+/// 梯子の歯の tick を 1 回撃つ（既定の合図・pane は独立 socket の席そのもの）。
+fn ladder_tick(dir: &Path, socket: &str, name: &str) -> Output {
+    let (wm_s, state_s) = (
+        dir.join("wm").display().to_string(),
+        dir.join("state").display().to_string(),
+    );
+    run_seat(&[
+        "tick", "--target", name, "--wm-dir", &wm_s, "--tmux-socket", socket,
+        "--state-dir", &state_s,
+    ])
+}
+
+/// 1 周目（合図が出て記録が書かれる）と 2 周目（席の応答を模した後の settle）を回し、基準が
+/// 書かれた状態で返す（(a)〜(c) の共通の入口）。
+fn ladder_settled(dir: &Path, socket: &str, name: &str) -> PathBuf {
+    let state = dir.join("state");
+    fs::create_dir_all(dir.join("wm")).ok();
+    stamp_idle(&state, name);
+    let first = ladder_tick(dir, socket, name);
+    assert_eq!(tick_token(&stdout_of(&first), "pointer").as_deref(), Some("sent"), "1 周目は送る: {}", stdout_of(&first));
+    answer_with_stop(&state, name, ladder_sent_at(&state, name).saturating_add(1));
+    let second = ladder_tick(dir, socket, name);
+    assert_eq!(
+        tick_token(&stdout_of(&second), "pointer").as_deref(),
+        Some("settling"),
+        "席が応えた周は比べずに基準を取る: {}",
+        stdout_of(&second)
+    );
+    state
+}
+
+/// (a) 応答の turn を「変化」に数えない: 1 周目で合図が出て記録が書かれ、席の応答（状態 log の
+/// `sent_at` より後の `Stop`）の周に基準を取り、**その後の無変化の周は待ちが factor 倍**になって
+/// 合図が出ない（`pointer=wait:<s> step=1`）。base は tick-stamp だけを見るので 3 周目に送る（RED）。
+#[test]
+fn seat_pointer_backoff_second_unchanged_round_waits_factor_times() {
+    let dir = tmp();
+    let socket = socket_of(&dir);
+    let name = "seatladderwait";
+    let guard = start_seat(&socket, name);
+    assert!(guard.ready(), "独立 socket に prompt 付きの session を立てられる");
+    let state = ladder_settled(&dir, &socket, name);
+
+    // 床（tick-stamp）と梯子の起点（`sent_at`）の両方を初段のぶんだけ過去へ倒す＝床は開いていて、
+    // 止めているのは梯子だけだと分かる形にする。
+    backdate(&seat_dir_of(&state, name).join("tick-stamp"), STALE_S + 1);
+    edit_ladder(&state, name, "sent_at", ladder_sent_at(&state, name).saturating_sub(STALE_S + 1));
+
+    let third = ladder_tick(&dir, &socket, name);
+    let line = stdout_of(&third);
+    assert_eq!(rc_of(&third), i32::from(RC_OK), "stderr={}", stderr_of(&third));
+    assert_eq!(tick_token(&line, "reason").as_deref(), Some("pointer-recent"), "{line}");
+    assert_eq!(tick_token(&line, "step").as_deref(), Some("1"), "無変化なので段が 1 つ上がる: {line}");
+    let waited = tick_token(&line, "pointer").unwrap_or_default();
+    let left: u64 = waited.strip_prefix("wait:").and_then(|rest| rest.parse().ok()).unwrap_or(0);
+    // 2 段目の待ち（`STALE_S` × factor）から `sent_at` の経過（`STALE_S` + 1）を引いた残り＝
+    // `STALE_S` - 1 の近傍（撃つまでの壁時計のぶんだけ小さい）。factor が 1 のままなら残りは 0 で送る。
+    assert!(
+        (STALE_S.saturating_sub(10)..STALE_S).contains(&left),
+        "残りは 2 段目の待ちから初段ぶんの経過を引いた値（およそ {} 秒）: {line}",
+        STALE_S - 1
+    );
+    assert_eq!(
+        capture(&socket, name).matches("seat heartbeat --target").count(),
+        1,
+        "席が受けた合図は 1 周目の 1 本だけ"
+    );
+    drop(guard);
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// (b) settle 後に digest の材料（状態 log の最終行）が変わった周は**段 0 に戻って**合図が出る
+/// （待ちは初段 = `seat.tick_stale_s`）。段を上げたまま黙る実装はここで落ちる。
+#[test]
+fn seat_pointer_backoff_resets_to_base_when_digest_changes() {
+    let dir = tmp();
+    let socket = socket_of(&dir);
+    let name = "seatladderreset";
+    let guard = start_seat(&socket, name);
+    assert!(guard.ready(), "独立 socket に prompt 付きの session を立てられる");
+    let state = ladder_settled(&dir, &socket, name);
+
+    backdate(&seat_dir_of(&state, name).join("tick-stamp"), STALE_S + 1);
+    let sent_at = ladder_sent_at(&state, name);
+    edit_ladder(&state, name, "sent_at", sent_at.saturating_sub(STALE_S + 1));
+    // 基準を取った**後**の変化（席が自分で動いた turn）。
+    answer_with_stop(&state, name, sent_at.saturating_add(2));
+
+    let out = ladder_tick(&dir, &socket, name);
+    let line = stdout_of(&out);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(
+        line,
+        format!("seat: tick decision=inject target={name} consumed=false kind=pointer{CTX_NO_SOURCE}{ST_IDLE} pointer=sent step=0{}\n", provenance(&state, "flag")),
+        "変化した周は初段へ戻って送る"
+    );
+    assert_eq!(
+        capture(&socket, name).matches("seat heartbeat --target").count(),
+        2,
+        "席が受けた合図は 1 周目と再開の 2 本"
+    );
+    drop(guard);
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// (c) 待ちが `seat.pointer_backoff_max_s` を超える段は**送らずに止まる**（`pointer=stopped`・
+/// `reason=pointer-stopped`）。止まるのは合図だけで、digest が変わった周は段 0 で再開する。
+#[test]
+fn seat_pointer_backoff_stops_at_max_and_resumes_on_change() {
+    let dir = tmp();
+    let socket = socket_of(&dir);
+    let name = "seatladderstop";
+    let guard = start_seat(&socket, name);
+    assert!(guard.ready(), "独立 socket に prompt 付きの session を立てられる");
+    let state = ladder_settled(&dir, &socket, name);
+
+    backdate(&seat_dir_of(&state, name).join("tick-stamp"), STALE_S + 1);
+    let sent_at = ladder_sent_at(&state, name);
+    edit_ladder(&state, name, "sent_at", sent_at.saturating_sub(STALE_S + 1));
+    edit_ladder(&state, name, "step", MAX_STEP);
+
+    let stopped = ladder_tick(&dir, &socket, name);
+    let line = stdout_of(&stopped);
+    assert_eq!(rc_of(&stopped), i32::from(RC_OK), "stderr={}", stderr_of(&stopped));
+    assert_eq!(tick_token(&line, "reason").as_deref(), Some("pointer-stopped"), "{line}");
+    assert_eq!(tick_token(&line, "pointer").as_deref(), Some("stopped"), "{line}");
+    assert_eq!(tick_token(&line, "step").as_deref(), Some("6"), "上限を超えた段を名指す: {line}");
+    assert_eq!(capture(&socket, name).matches("seat heartbeat --target").count(), 1, "止まった周は送らない");
+
+    // 変化した周は段 0 で再開する（記録は停止の周に触っていないので `sent_at` は倒したまま）。
+    answer_with_stop(&state, name, sent_at.saturating_add(2));
+    let resumed = ladder_tick(&dir, &socket, name);
+    assert_eq!(
+        stdout_of(&resumed),
+        format!("seat: tick decision=inject target={name} consumed=false kind=pointer{CTX_NO_SOURCE}{ST_IDLE} pointer=sent step=0{}\n", provenance(&state, "flag")),
+        "停止は合図だけ＝変化で再開する"
+    );
     drop(guard);
     fs::remove_dir_all(&dir).ok();
 }
@@ -1168,7 +1384,7 @@ fn seat_tick_without_freshness_gate_injects_pointer_when_heartbeat_is_fresh() {
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
     assert_eq!(
         stdout_of(&out),
-        format!("seat: tick decision=inject target={name} consumed=false kind=pointer{CTX_NO_SOURCE}{ST_IDLE}{}\n", provenance(&state, "flag")),
+        format!("seat: tick decision=inject target={name} consumed=false kind=pointer{CTX_NO_SOURCE}{ST_IDLE} pointer=sent step=0{}\n", provenance(&state, "flag")),
         "heartbeat が今でも注入する（鮮度は判定入力ではない）"
     );
     assert!(capture(&socket, name).contains(&format!("seat heartbeat --target {name}")), "合図が届く");
@@ -1276,7 +1492,7 @@ fn seat_tick_without_freshness_gate_backs_off_pointer_by_tick_stamp() {
         "tick", "--target", name, "--wm-dir", &wm_s, "--tmux-socket", &socket,
         "--state-dir", &state_s,
     ];
-    let injected = format!("seat: tick decision=inject target={name} consumed=false kind=pointer{CTX_NO_SOURCE}{ST_IDLE}{}\n", provenance(&state, "flag"));
+    let injected = format!("seat: tick decision=inject target={name} consumed=false kind=pointer{CTX_NO_SOURCE}{ST_IDLE} pointer=sent step=0{}\n", provenance(&state, "flag"));
 
     let first = run_seat(&args);
     assert_eq!(stdout_of(&first), injected, "tick-stamp 不在 → 注入: stderr={}", stderr_of(&first));
@@ -1287,13 +1503,15 @@ fn seat_tick_without_freshness_gate_backs_off_pointer_by_tick_stamp() {
     assert_eq!(rc_of(&second), i32::from(RC_OK), "stderr={}", stderr_of(&second));
     assert_eq!(
         stdout_of(&second),
-        format!("seat: tick decision=noop reason=pointer-recent{CTX_NO_SOURCE}{ST_IDLE}{}\n", provenance(&state, "flag")),
+        format!("seat: tick decision=noop reason=pointer-recent{CTX_NO_SOURCE}{ST_IDLE} pointer=settling step=0{}\n", provenance(&state, "flag")),
         "直後の周は合図を重ねない（context と状態はこの周も読んで載せる）"
     );
     let heard = capture(&socket, name).matches("seat heartbeat --target").count();
     assert_eq!(heard, 1, "pane に届いた合図は 1 周目の 1 本だけ");
 
-    // 境界は**未満**: 経過が閾値ちょうどの周は注入する（`<=` にすると見送る）。
+    // 境界は**未満**: 経過が閾値ちょうどの周は注入する（`<=` にすると見送る）。記録を消して
+    // 「記録なし」の縮退へ戻す＝この周の判定は tick-stamp の経過だけで決まる（`s2-07l.423` 形 2）。
+    fs::remove_file(ladder_of(&state, name)).ok();
     backdate(&stamp, STALE_S);
     let third = run_seat(&args);
     assert_eq!(stdout_of(&third), injected, "閾値ちょうど以上 → 再び注入: stderr={}", stderr_of(&third));
@@ -2223,7 +2441,7 @@ fn seat_tick_hook_drift_is_noop_when_only_the_binary_differs() {
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
     assert_eq!(
         stdout_of(&out),
-        acct_line(&format!("decision=inject target={name} consumed=false kind=pointer"), &format!("{ST_IDLE} account=a1:50 plugin=same"), &place.state),
+        acct_line(&format!("decision=inject target={name} consumed=false kind=pointer"), &format!("{ST_IDLE} account=a1:50 plugin=same pointer=sent step=0"), &place.state),
         "Idle な席には打刻の合図（退避の合図ではない）"
     );
     assert!(capture(&place.socket, name).contains("seat heartbeat"), "打刻の合図が届く");

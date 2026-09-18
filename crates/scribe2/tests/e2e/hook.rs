@@ -1731,7 +1731,7 @@ fn seat_state_hook_stamp_is_read_by_tick_on_the_same_target() {
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "stderr={}", stderr_text(&out));
     assert_eq!(
         String::from_utf8_lossy(&out.stdout),
-        format!("seat: tick decision=inject target={name}_{name} consumed=false kind=pointer context=10 state=idle event=Stop{suffix}\n"),
+        format!("seat: tick decision=inject target={name}_{name} consumed=false kind=pointer context=10 state=idle event=Stop pointer=sent step=0{suffix}\n"),
         "hook の打刻（Idle）で tick が pointer を注入する（`sh -i` の席は submit で打刻しない＝consumed=false・`s2-07l.112`）"
     );
     drop(guard);

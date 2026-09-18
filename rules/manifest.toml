@@ -241,6 +241,25 @@ enabled = true
 ruling = "user 2026-09-15T02:30Z externalize re-signal back-off"
 ruled_at = "2026-09-15"
 
+# 打刻の合図の梯子（設計 seat-autonomy.md §14）。無変化の席への合図は 1 段ごとに待ちが factor 倍になり
+# （初段は seat.tick_stale_s を流用）、待ちが max_s を超える段で止まる。変化した周は初段へ戻って再開する。
+# 実値 = 40 分 → 80 → 160 → 320 → 640 → 1280 分 → 停止（次段 2560 分 > 24 時間）。
+[[rule]]
+id = "seat.pointer_backoff_factor"
+kind = "SeatPointerBackoffFactor"
+value = 2
+enabled = true
+ruling = "user 2026-09-17T00:55Z"
+ruled_at = "2026-09-17"
+
+[[rule]]
+id = "seat.pointer_backoff_max_s"
+kind = "SeatPointerBackoffMaxS"
+value = 86400
+enabled = true
+ruling = "user 2026-09-17T00:55Z"
+ruled_at = "2026-09-17"
+
 [[rule]]
 id = "seat.cycle_settle_s"
 kind = "SeatCycleSettleS"

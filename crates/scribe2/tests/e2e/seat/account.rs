@@ -337,7 +337,7 @@ fn seat_account_tick_below_threshold_keeps_the_existing_order() {
         stdout_of(&out),
         acct_line(
             &format!("decision=inject target={name} consumed=false kind=pointer"),
-            &format!("{ST_IDLE} account=a1:90 plugin=unrecorded"),
+            &format!("{ST_IDLE} account=a1:90 plugin=unrecorded pointer=sent step=0"),
             &place.state
         ),
         "閾値未満の Idle な席には打刻の合図"

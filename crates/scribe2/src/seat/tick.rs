@@ -63,10 +63,22 @@
 //! 大きい・N1）。timer を 1 分に縮めても compaction 中の席の queue に合図が積まれない（実地 2026-09-15: planner へ
 //! 00:55 / 01:00 / 01:05 の 3 連投・`.150` / `.288` の入力欄の門の事故の型）。打刻の合図の brake（tick-stamp）と cycle の
 //! back-off は不変。
+//!
+//! **打刻の合図の梯子**（`s2-07l.423`・user 裁定 2026-09-17T00:55Z・設計 §14・[`pointer`]）: 上の brake は
+//! **時間だけ**を見て、席の状態が前回の合図から変わったかを見なかった——承認待ちで 6 時間無変化の席に
+//! 同じ合図が 40 分ごとに約 30 回届き、各回が 1 turn を消費した（folio2 planner の実測 2026-09-17）。
+//! tick は合図を送った周に `seat/<target>/pointer-digest` へ記録を書き、席が応えて idle に戻った周に
+//! その時の digest（状態 log と fleet の event log の最終行の `ts`・[`pointer::Digest`]）を基準として取る
+//! （settle）。以後は基準と今の digest を比べ、**違えば段 0**（待ち = `seat.tick_stale_s`）、**同じなら段 + 1**
+//! （待ち = `stale_s × seat.pointer_backoff_factor ^ 段`）で、待ちが `seat.pointer_backoff_max_s` を超える段は
+//! 送らない（`pointer-stopped`）。**従来の brake（tick-stamp）は記録の 3 値のどれでも床として先に効く**
+//! ＝記録を書けない席でも合図は `seat.tick_stale_s` に 1 本を超えない。止めるのは打刻の合図だけで、
+//! 退避の合図と cycle は従来どおり毎周である。
 
 mod account;
 mod exit;
 mod plugin;
+mod pointer;
 mod render;
 
 pub use account::account_labels;
@@ -119,6 +131,12 @@ pub const ID_THRESHOLD: &str = "R-C9-1";
 /// 退避の合図を同じ席へ再送するまでの back-off（秒）を宣言する rules 行の id（`s2-07l.315`・user 裁定 2026-09-15T02:30Z・
 /// 値は code に焼かない・C5）。context の軸と口座の軸の両方の合図が同じ 1 行を読む（[`signal_brake`]）。
 pub const ID_SIGNAL_BACKOFF: &str = "seat.signal_backoff_s";
+/// 打刻の合図の梯子の**倍率**を宣言する rules 行の id（`s2-07l.423`・user 裁定 2026-09-17T00:55Z・設計 §14 形 5・
+/// 値は code に焼かない・C5）。1 段ごとに待ちがこの倍になる（初段は既存の [`state::ID_STALE`] を流用する）。
+pub const ID_BACKOFF_FACTOR: &str = "seat.pointer_backoff_factor";
+/// 打刻の合図の梯子の**待ちの上限**（秒）を宣言する rules 行の id（同上）。これを超える段は合図を送らない
+/// （[`NoopReason::PointerStopped`]・止まるのは合図だけで、変化した周に段 0 へ戻って再開する）。
+pub const ID_BACKOFF_MAX_S: &str = "seat.pointer_backoff_max_s";
 
 /// tick 1 回の入力。
 pub struct Request<'a> {
@@ -339,6 +357,10 @@ pub(super) struct Verdict {
     /// 退避の合図の出所（[`InjectKind::Externalize`] を送った周だけ `Some`・打刻の合図・終了の手・立て直しは `None`
     /// ＝判定行に載らない・`s2-07l.307`）。
     origin: Option<SignalOrigin>,
+    /// 打刻の合図の梯子の 2 語（`pointer=<sent|settling|wait:<残り秒>|stopped> step=<n>`・`s2-07l.423`・設計 §14 形 4）。
+    /// **brake に届いた周だけ `Some`**——先に返る周（busy・退避物・cycle・rules 行が読めない）と、口座の軸が
+    /// 決めた周（閾値以上・測れない）は `None`＝梯子を評価していない（`cycle=` と同じ印）。
+    pointer: Option<String>,
 }
 
 impl Verdict {
@@ -353,6 +375,7 @@ impl Verdict {
             relaunched: None,
             detail: None,
             origin: None,
+            pointer: None,
         }
     }
 }
@@ -424,6 +447,10 @@ pub(super) struct Seen {
     threshold: u64,
     /// 退避の合図の再送の back-off（秒・rules 行 `seat.signal_backoff_s`・[`signal_brake`]）。
     backoff_s: u64,
+    /// 打刻の合図の梯子の倍率（rules 行 `seat.pointer_backoff_factor`・[`pointer::wait_s`]）。
+    factor: u64,
+    /// 打刻の合図の梯子の待ちの上限（秒・rules 行 `seat.pointer_backoff_max_s`）。
+    max_s: u64,
 }
 
 /// 撃たなかった理由。**順序固定の条件のうち最初に立たなかったもの**を表す。
@@ -450,7 +477,12 @@ pub enum NoopReason {
     /// 5. cycle-stamp を読めない（**「無い」と読み替えない**＝不可逆の `/clear` へ倒さない）。
     CycleStampUnreadable,
     /// 6. 打刻の合図を `seat.tick_stale_s` 未満の前に注入した（tick-stamp・storm 止め・`s2-07l.109`）。
+    ///    梯子（`s2-07l.423`・設計 §14）の settle 前の周と待ちの周も同じ理由で、判定行の
+    ///    `pointer=<settling|wait:<残り秒>>` が 2 つを弁別する（variant を足すのは停止の 1 つだけ）。
     PointerRecent,
+    /// 6. 打刻の合図の梯子の待ちが `seat.pointer_backoff_max_s` を超えた（無変化の席への合図を止めた・
+    ///    `s2-07l.423`）。**止まるのは合図だけ**で、digest が変わった周は段 0 へ戻って再開する。
+    PointerStopped,
     /// 6. 登録 row の口座の逼迫度を測れない（FR27 の「使用率が閾値未満」を確かめられない・注入も停止もしない）。
     AccountUnmeasured,
     /// 口座: 退避して止まった席の立て直しに選べる口座が無い（注入せず次の tick で選び直す・0 口座で起こさない）。
@@ -475,6 +507,7 @@ pub const NOOP_REASONS: &[NoopReason] = &[
     NoopReason::CycleRecent,
     NoopReason::CycleStampUnreadable,
     NoopReason::PointerRecent,
+    NoopReason::PointerStopped,
     NoopReason::AccountUnmeasured,
     NoopReason::AccountNoCandidate,
     NoopReason::SignalRecent,
@@ -496,6 +529,7 @@ impl NoopReason {
             Self::CycleRecent => "cycle-recent",
             Self::CycleStampUnreadable => "cycle-stamp-unreadable",
             Self::PointerRecent => "pointer-recent",
+            Self::PointerStopped => "pointer-stopped",
             Self::AccountUnmeasured => "account-unmeasured",
             Self::AccountNoCandidate => "account-no-candidate",
             Self::SignalRecent => "signal-recent",
@@ -574,11 +608,25 @@ pub fn run(request: &Request) -> Outcome {
 /// 使うためである（cycle を回す周だけは cycle 側が自分の入口でもう 1 度走査する＝lock の内側で
 /// 確かめ直す）。読めない周を「在る」に読み替えない。
 fn decide(request: &Request, place: &super::StateDir, dir: &Path) -> Judged {
-    // 4 行のどれかが読めない周は判定に入らない（理由は最初に読めなかった行の variant 付き・`s2-07l.205`）。
-    let rows = (state::stale_s(), cycle::ttl_s(), super::int_rule(ID_THRESHOLD), super::int_rule(ID_SIGNAL_BACKOFF));
-    let (stale_s, ttl_s, threshold, backoff_s) = match rows {
-        (Ok(stale_s), Ok(ttl_s), Ok(threshold), Ok(backoff_s)) => (stale_s, ttl_s, threshold, backoff_s),
-        (Err(read), ..) | (_, Err(read), ..) | (_, _, Err(read), _) | (.., Err(read)) => {
+    // 6 行のどれかが読めない周は判定に入らない（理由は最初に読めなかった行の variant 付き・`s2-07l.205`）。
+    let rows = (
+        state::stale_s(),
+        cycle::ttl_s(),
+        super::int_rule(ID_THRESHOLD),
+        super::int_rule(ID_SIGNAL_BACKOFF),
+        super::int_rule(ID_BACKOFF_FACTOR),
+        super::int_rule(ID_BACKOFF_MAX_S),
+    );
+    let (stale_s, ttl_s, threshold, backoff_s, factor, max_s) = match rows {
+        (Ok(stale_s), Ok(ttl_s), Ok(threshold), Ok(backoff_s), Ok(factor), Ok(max_s)) => {
+            (stale_s, ttl_s, threshold, backoff_s, factor, max_s)
+        }
+        (Err(read), ..)
+        | (_, Err(read), ..)
+        | (_, _, Err(read), ..)
+        | (_, _, _, Err(read), ..)
+        | (_, _, _, _, Err(read), _)
+        | (.., Err(read)) => {
             return Judged::bare(TickDecision::Error(read.no_rule().to_owned()));
         }
     };
@@ -599,6 +647,8 @@ fn decide(request: &Request, place: &super::StateDir, dir: &Path) -> Judged {
         stale_s,
         threshold,
         backoff_s,
+        factor,
+        max_s,
     };
     Judged {
         verdict: judge(request, place, dir, &seen),
@@ -651,24 +701,112 @@ fn after_account(request: &Request, place: &super::StateDir, dir: &Path, seen: &
     if cycle::lock_is_live(dir, seen.ttl_s) {
         return Verdict::of(TickDecision::Noop(NoopReason::CycleLive));
     }
-    if let Some(reason) = pointer_brake(dir, seen.stale_s, account) {
-        return Verdict::of(TickDecision::Noop(reason));
-    }
+    let (token, step) = match pointer_brake(place, dir, seen, account) {
+        Brake::Hold(reason, token) => {
+            return Verdict { pointer: token, ..Verdict::of(TickDecision::Noop(reason)) };
+        }
+        Brake::Send(token, step) => (token, step),
+    };
     let payload = request
         .pointer
         .map_or_else(|| default_pointer(request.target), str::to_owned);
     let signal = Signal { kind: InjectKind::Pointer, origin: None, payload: &payload, state: seen.state };
-    Verdict::of(inject_line(request, place, dir, &signal))
+    let decision = inject_line(request, place, dir, &signal);
+    // 梯子の記録は **tick-stamp を打った周にだけ**書く（Enter が落ちた周は自打刻しないので記録も残さず、
+    // 次の周が従来どおり測り直す・`s2-07l.150`）。書けない周も合図は送った＝次の周は記録なしの縮退へ
+    // 倒れ、床（tick-stamp）が 40 分に 1 本の上限を守る。
+    if stamped(&decision) {
+        let ladder = pointer::Ladder { sent_at: state::now_secs(), step, digest: None };
+        let _ = pointer::write(dir, &ladder);
+    }
+    // 注入が断られた周（入力欄の門など・`decision=error`）は**送っていない**＝2 語を載せない
+    // （断りの行の字面は不変・`pointer=sent` を実行系の失敗に被せない・憲法 C10）。
+    let sent = matches!(decision, TickDecision::Inject(..));
+    Verdict { pointer: sent.then_some(token), ..Verdict::of(decision) }
 }
 
-/// 打刻の合図の brake（`s2-07l.109`・planner 裁定 2026-09-12 案 A・account-autonomy.md §5）: tick 自身の打刻
-/// （tick-stamp）が新しい周に加え、FR27 の条件「使用率が閾値未満」が立たない周も合図を送らない——閾値以上の周は
-/// 同じ `pointer-recent`（閾値以上の席は退避の合図か FR29 の除外で先に返るので、ここは同じ brake の縁）、
-/// 測れない周は `account-unmeasured`（注入も停止もしない）。登録 row の無い席は口座を見ない（従来のまま）。
-fn pointer_brake(seat_dir: &Path, stale_s: u64, account: &Account) -> Option<NoopReason> {
-    if pointer_recent(seat_dir, stale_s) {
-        return Some(NoopReason::PointerRecent);
+/// 注入が成立して tick-stamp を打った周か（Enter が落ちた周は打たない・[`render::inject_line`]）。
+fn stamped(decision: &TickDecision) -> bool {
+    match *decision {
+        TickDecision::Inject(_, inject::Settled::EnterLost) => false,
+        TickDecision::Inject(..) => true,
+        TickDecision::Noop(_) | TickDecision::Error(_) => false,
     }
+}
+
+/// 打刻の合図の brake の結末。**閉じた 2 値**（憲法 C11・bool で持たない）。
+enum Brake {
+    /// 送らない（理由と、判定行に載せる 2 語。口座の軸が決めた周は `None`＝梯子を評価していない）。
+    Hold(NoopReason, Option<String>),
+    /// 送る（判定行に載せる 2 語と、記録に書く段）。
+    Send(String, u32),
+}
+
+/// 打刻の合図の brake（床 = `s2-07l.109`・梯子 = `s2-07l.423`・設計 seat-autonomy.md §14 形 2）。
+///
+/// **順序は load-bearing である**——`settle 前の処理 → 床 → 口座 → 梯子`:
+/// 1. **settle 前**（送った周の記録が在って基準がまだ無い）は送らない周なので床と競合しない。席が
+///    合図に応えて idle に戻った周（状態 log の最終行が `sent_at` より後）か、応えないまま
+///    `seat.tick_stale_s` を過ぎた周に、**今の** digest を基準として書く（比べない・`pointer=settling`）。
+///    送出時の digest を基準にしないのは、合図に応える turn が状態 log を必ず 1 行進めるからである。
+/// 2. **床**（[`pointer_recent`]）は記録の 3 値のどれでも先に効く＝送った後に記録の書き直しに失敗して
+///    古い `sent_at` や古い基準が残った席でも、合図は `seat.tick_stale_s` に 1 本を超えない（梯子の待ちは
+///    常に `stale_s` 以上なので、記録を書けている席の挙動は変わらない）。
+/// 3. **口座**（従来の位置・`s2-07l.109`）: FR27 の条件「使用率が閾値未満」が立たない周も合図を送らない
+///    ——閾値以上の周は同じ `pointer-recent`（閾値以上の席は退避の合図か FR29 の除外で先に返るので、
+///    ここは同じ brake の縁）、測れない周は `account-unmeasured`（注入も停止もしない）。登録 row の無い
+///    席は口座を見ない（従来のまま）。この 2 つは**梯子を評価していない**周なので 2 語を載せない。
+/// 4. **梯子**（[`climb_of`]）が送る / 待つ / 止めるを決める。
+fn pointer_brake(place: &super::StateDir, dir: &Path, seen: &Seen, account: &Account) -> Brake {
+    let record = pointer::read(dir);
+    if let pointer::Record::Settling { sent_at, step } = record {
+        return settling(place, dir, seen, sent_at, step);
+    }
+    let floor = pointer_recent(dir, seen.stale_s);
+    if floor.is_none() {
+        if let Some(reason) = account_brake(account) {
+            return Brake::Hold(reason, None);
+        }
+    }
+    let climb = climb_of(place, dir, seen, &record);
+    let Some(left) = floor else {
+        return match climb {
+            Climb::Wait(left, step) => Brake::Hold(NoopReason::PointerRecent, Some(wait_token(left, step))),
+            Climb::Stopped(step) => {
+                Brake::Hold(NoopReason::PointerStopped, Some(format!("pointer=stopped step={step}")))
+            }
+            Climb::Send(step) => Brake::Send(format!("pointer=sent step={step}"), step),
+        };
+    };
+    // 床で止まった周: 残りは床（tick-stamp から）と梯子（`sent_at` から・記録なしは無し）の**大きい方**で、
+    // 段は記録の段（記録なしは 0）＝どちらの待ちが効いているかを 1 行から読める（設計 §14 形 4）。
+    let climbing = match climb {
+        Climb::Wait(left, _) => left,
+        Climb::Stopped(_) | Climb::Send(_) => 0,
+    };
+    Brake::Hold(NoopReason::PointerRecent, Some(wait_token(left.max(climbing), record.step())))
+}
+
+/// 待ちの周の 2 語。
+fn wait_token(left: u64, step: u32) -> String {
+    format!("pointer=wait:{left} step={step}")
+}
+
+/// settle 前の周（設計 §14 形 2）: 席が応えた周か、応えないまま `stale_s` を過ぎた周に**今の** digest を
+/// 基準として書き、どちらでも比べず・送らずに `pointer=settling` で返す。書けない周も次の周が同じ入口を
+/// 通る（記録は書き直されるまで settle 前のまま＝床が上限を守る）。
+fn settling(place: &super::StateDir, dir: &Path, seen: &Seen, sent_at: u64, step: u32) -> Brake {
+    let answered = matches!(seen.state, state::Read::Idle(_))
+        && pointer::state_ts(dir).is_some_and(|ts| ts > sent_at);
+    if answered || state::now_secs().saturating_sub(sent_at) >= seen.stale_s {
+        let digest = Some(pointer::digest_of(dir, &place.path).to_string());
+        let _ = pointer::write(dir, &pointer::Ladder { sent_at, step, digest });
+    }
+    Brake::Hold(NoopReason::PointerRecent, Some(format!("pointer=settling step={step}")))
+}
+
+/// 口座の軸の brake（[`pointer_brake`] の 3・従来の位置と字面のまま）。
+fn account_brake(account: &Account) -> Option<NoopReason> {
     match account {
         Account::Over(..) => Some(NoopReason::PointerRecent),
         Account::Unmeasured(_) => Some(NoopReason::AccountUnmeasured),
@@ -676,14 +814,51 @@ fn pointer_brake(seat_dir: &Path, stale_s: u64, account: &Account) -> Option<Noo
     }
 }
 
-/// 打刻の合図の brake（`s2-07l.109`・planner 裁定 2026-09-12 案 A）: tick 自身の打刻（tick-stamp）の
-/// mtime が閾値**未満**なら、この周は合図を送らない。不在・読めない周は送る側（合図は可逆な
-/// 1 行で、読めないことを理由に止めると合図が永久に止まる）。mtime が未来の周は送らない側
-/// （経過を負に読まない）。境界は未満＝経過が閾値ちょうどの周は送る。
-fn pointer_recent(seat_dir: &Path, stale_s: u64) -> bool {
-    std::fs::metadata(stamp_path(seat_dir))
+/// 梯子の 1 周の結末。**閉じた 3 値**（憲法 C11）。
+enum Climb {
+    /// 待つ（残り秒・待っている段）。
+    Wait(u64, u32),
+    /// 待ちが `seat.pointer_backoff_max_s` を超える段（送らない・記録は触らない）。
+    Stopped(u32),
+    /// 送る（送る段＝記録に書く段）。
+    Send(u32),
+}
+
+/// 梯子を 1 段ぶん進める（設計 §14 形 2）。基準が今の digest と**違えば段 0**（待ち = `stale_s`）、
+/// **同じなら段 + 1**（待ち = `stale_s × factor ^ 段`）で、待ちが上限を超える段は停止。記録が無い周は
+/// 従来の縮退（段 0・待ちの起点は tick-stamp の mtime＝床が測るので、ここは送る側）。
+fn climb_of(place: &super::StateDir, dir: &Path, seen: &Seen, record: &pointer::Record) -> Climb {
+    let pointer::Record::Based { sent_at, step, ref base } = *record else {
+        return Climb::Send(0);
+    };
+    let step = if *base == pointer::digest_of(dir, &place.path).to_string() {
+        step.saturating_add(1)
+    } else {
+        0
+    };
+    let wait = pointer::wait_s(seen.stale_s, seen.factor, step).filter(|found| *found <= seen.max_s);
+    let Some(wait) = wait else {
+        return Climb::Stopped(step);
+    };
+    let age = state::now_secs().saturating_sub(sent_at);
+    if age < wait {
+        Climb::Wait(wait.saturating_sub(age), step)
+    } else {
+        Climb::Send(step)
+    }
+}
+
+/// 床（`s2-07l.109`・planner 裁定 2026-09-12 案 A）: tick 自身の打刻（tick-stamp）の mtime が閾値**未満**なら、
+/// この周は合図を送らない（残り秒を返す）。不在・読めない周は送る側（合図は可逆な 1 行で、読めないことを
+/// 理由に止めると合図が永久に止まる）。mtime が未来の周は送らない側（経過を負に読まない）。境界は未満＝
+/// 経過が閾値ちょうどの周は送る。
+fn pointer_recent(seat_dir: &Path, stale_s: u64) -> Option<u64> {
+    let age = std::fs::metadata(stamp_path(seat_dir))
         .and_then(|meta| meta.modified())
-        .is_ok_and(|at| at.elapsed().map_or(true, |age| age.as_secs() < stale_s))
+        .ok()?
+        .elapsed()
+        .map_or(0, |found| found.as_secs());
+    (age < stale_s).then(|| stale_s.saturating_sub(age))
 }
 
 /// 退避の合図の brake（`s2-07l.315`・user 裁定 2026-09-15T02:30Z・設計 seat-autonomy.md §3 / §8）: 自席への直近の注入
@@ -841,7 +1016,7 @@ mod tests {
             [
                 "pane-missing", "busy", "state-missing", "state-unreadable", "state-stale", "wm-unconsumed",
                 "wm-unreadable", "cycle-live", "cycle-recent", "cycle-stamp-unreadable", "pointer-recent",
-                "account-unmeasured", "account-no-candidate", "signal-recent", "restore-recent",
+                "pointer-stopped", "account-unmeasured", "account-no-candidate", "signal-recent", "restore-recent",
             ]
         );
         assert!(is_declaration_order(NOOP_REASONS, |reason| reason as usize));

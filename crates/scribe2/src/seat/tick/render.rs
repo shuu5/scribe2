@@ -77,6 +77,9 @@ pub(super) fn inject_line(request: &Request, place: &super::StateDir, dir: &Path
 /// （`origin=<context|account|hook>`・`s2-07l.307`・それ以外の kind の周は載らない）、第 2 手で終了を確定した周は
 /// 同じ位置に `detail=terminated`（`s2-07l.259`）、第 1 手が通らず同じ周で停止 → 立て直しまで進んだ周は `kind=relaunch` の
 /// 同じ位置に `detail=after-terminated`（[`DETAIL_AFTER_TERMINATED`]・`s2-07l.314`・それ以外の周は載らない）。
+/// 打刻の合図の梯子の 2 語（`pointer=<sent|settling|wait:<残り秒>|stopped> step=<n>`・`s2-07l.423`・設計
+/// seat-autonomy.md §14 形 4）は同じ規律で**さらに後ろ**（`relaunch=` の後・置き場の前）で、打刻の合図の
+/// brake に届いた周だけ載る（先に返る周と口座の軸が決めた周には載らない＝`cycle=` と同じ「評価していない」の印）。
 pub(super) fn body(target: &str, judged: &Judged, place: &super::StateDir) -> String {
     let verdict = &judged.verdict;
     let head = match verdict.decision {
@@ -103,8 +106,12 @@ pub(super) fn body(target: &str, judged: &Judged, place: &super::StateDir) -> St
         .relaunched
         .as_deref()
         .map_or_else(String::new, |found| format!(" relaunch={found}"));
+    let with_pointer = verdict
+        .pointer
+        .as_deref()
+        .map_or_else(String::new, |found| format!(" {found}"));
     format!(
-        "{with_cycle}{with_state}{with_stamp}{}{}{with_relaunch}{}",
+        "{with_cycle}{with_state}{with_stamp}{}{}{with_relaunch}{with_pointer}{}",
         verdict.account.suffix(),
         verdict.plugin.suffix(),
         place.suffix()

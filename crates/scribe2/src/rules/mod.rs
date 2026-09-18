@@ -217,6 +217,12 @@ pub enum RuleKind {
     /// 退避の合図（`kind=externalize`）を同じ席へ**再送するまでの back-off**（秒・設計 seat-autonomy.md §3 / §8・
     /// `s2-07l.315`）。直近の合図の記録からこれ未満の周は再送しない（打刻の合図の brake [`Self::SeatTickStaleS`] とは別）。
     SeatSignalBackoffS,
+    /// 打刻の合図の梯子の**倍率**（設計 seat-autonomy.md §14・`s2-07l.423`）。無変化の席への合図は 1 段ごとに
+    /// 待ちがこの倍になる（初段は [`Self::SeatTickStaleS`] を流用し、行を増やさない）。
+    SeatPointerBackoffFactor,
+    /// 打刻の合図の梯子の**待ちの上限**（秒・同上）。これを超える段は合図を送らない（止まるのは合図だけで、
+    /// 席の状態が変わった周は初段へ戻って再開する）。
+    SeatPointerBackoffMaxS,
 }
 
 /// [`RuleKind`] の全 variant。parity test の母集団である。
@@ -273,6 +279,8 @@ pub const ALL: &[RuleKind] = &[
     RuleKind::RunnerModel,
     RuleKind::RunnerEffort,
     RuleKind::SeatSignalBackoffS,
+    RuleKind::SeatPointerBackoffFactor,
+    RuleKind::SeatPointerBackoffMaxS,
 ];
 
 impl RuleKind {
@@ -331,6 +339,8 @@ impl RuleKind {
             Self::RunnerModel => "RunnerModel",
             Self::RunnerEffort => "RunnerEffort",
             Self::SeatSignalBackoffS => "SeatSignalBackoffS",
+            Self::SeatPointerBackoffFactor => "SeatPointerBackoffFactor",
+            Self::SeatPointerBackoffMaxS => "SeatPointerBackoffMaxS",
         }
     }
 
@@ -377,6 +387,8 @@ impl RuleKind {
             | Self::PipeSizeMLines
             | Self::PipeSizeLLines
             | Self::SeatSignalBackoffS
+            | Self::SeatPointerBackoffFactor
+            | Self::SeatPointerBackoffMaxS
             | Self::AccountSelection => ValueShape::Int,
             Self::DialogueSurface | Self::RunnerModel | Self::RunnerEffort => ValueShape::Str,
             Self::MaturityCondition

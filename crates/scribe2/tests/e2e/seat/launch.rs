@@ -75,7 +75,7 @@ fn seat_attrib_tick_resends_enter_once_and_reports_enter_lost() {
     assert_eq!(
         stdout_of(&out),
         format!(
-            "seat: tick decision=inject target={name} consumed=false reason=enter-lost kind=pointer{CTX_10}{ST_IDLE}{}\n",
+            "seat: tick decision=inject target={name} consumed=false reason=enter-lost kind=pointer{CTX_10}{ST_IDLE} pointer=sent step=0{}\n",
             provenance(&state, "flag")
         ),
         "送り直しても消費されない周は enter-lost を名乗る"
@@ -143,7 +143,7 @@ fn seat_attrib_tick_empty_input_keeps_queued_and_stamps() {
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
     assert_eq!(
         stdout_of(&out),
-        format!("seat: tick decision=inject target={name} consumed=false kind=pointer{CTX_10}{ST_IDLE}{}\n", provenance(&dir.join("state"), "flag")),
+        format!("seat: tick decision=inject target={name} consumed=false kind=pointer{CTX_10}{ST_IDLE} pointer=sent step=0{}\n", provenance(&dir.join("state"), "flag")),
         "入力欄が空の周は queue のまま（reason を足さない）"
     );
     assert!(tick_stamp_of(&dir, name).exists(), "修復しない周は従来どおり自打刻する");
