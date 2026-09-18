@@ -17,7 +17,7 @@ pub(super) enum Findings {
     ContractFit,
     /// 歯が空虚（assert が字面の出所を区別しない・測る対象が実装に無い）。
     TeethNonvacuous,
-    /// 憲法（`CLAUDE.md` の生成区間）の条項に反する面。
+    /// 憲法（生成 file `docs/constitution.md`）の条項に反する面。
     Constitution,
     /// 消せる面（重複・到達しない経路・使われない field）。
     Delete,

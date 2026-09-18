@@ -1,8 +1,9 @@
-//! claude-md-constitution（憲法の規範文を `CLAUDE.md` の生成区間へ注入する）。
+//! claude-md-constitution（憲法の規範文を生成 file `docs/constitution.md` の生成区間へ書く）。
 //!
-//! 憲法は全 role の context に**機械で**載っていなければならない。注入の経路は
-//! `CLAUDE.md` **1 本**である——`claude -p` は worktree でも project の `CLAUDE.md` を
-//! 読むので、hook や prompt template へ重ねて入れると同じ規範文が 2 面から来る。
+//! 書き先は生成 file **1 枚**である（ADR-0046・裁定 user 2026-09-18T08:5xZ）——C 条文の執行は
+//! CI の門と PreToolUse の guard が持つので、規範文を全 role の context へ載せる経路は持たない。
+//! `CLAUDE.md` に残るのは生成 file を名指す pointer 1 行で、**done の区間と区間外の検出線は
+//! `CLAUDE.md` のまま**である（区間の印と抽出器は移す前と同じ 1 本）。
 //!
 //! 抽出は **HTML の属性**で行い prose の字面 grep では行わない（憲法 C1.2「人向けは
 //! 生成・手書き 0 行」）。母集団は `data-audience="machine"` の面に在る `p` / `li` / `td`
@@ -11,7 +12,7 @@
 //!
 //! **改訂の削除側は本文ごと落とす**。憲法の改訂形は `<del class="delta">旧</del>
 //! `<ins class="delta">新</ins>` の対（N4.2）なので、tag を剥がすだけだと**超過された
-//! 旧規範文が CLAUDE.md へ載る**（実測: C8.2 / C8.3 / A4 / A4.2 の 4 段落が該当）。
+//! 旧規範文が生成 file へ載る**（実測: C8.2 / C8.3 / A4 / A4.2 の 4 段落が該当）。
 //!
 //! parse 不能は loud（rc≠0）である——「読めなかった」を「規範文 0 本」に化けさせない。
 //!
@@ -37,8 +38,11 @@ use std::path::{Path, PathBuf};
 /// 抽出元（repo root からの相対）。
 pub(crate) const SOURCE_REL: &str = "design-intent/spec/constitution.html";
 
-/// 書き先（repo root からの相対）。
-const TARGET_REL: &str = "CLAUDE.md";
+/// 憲法の生成区間の書き先（repo root からの相対・ADR-0046）。
+const TARGET_REL: &str = "docs/constitution.md";
+
+/// done の区間と区間外の検出線が載る面（repo root からの相対）。
+const CLAUDE_MD_REL: &str = "CLAUDE.md";
 
 /// 生成区間の始まりの印。
 pub const BEGIN: &str = "<!-- constitution:begin -->";
@@ -407,6 +411,9 @@ pub fn body_of(lines: &[String]) -> String {
 /// 生成区間 1 つの印の対。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Markers {
+    /// 区間が載る file（repo root からの相対）。2 つの区間は別の file に在るので、
+    /// 読めない理由を名乗る [`RegionError`] はこの字面を運ぶ。
+    pub(crate) file: &'static str,
     /// 始まりの印。
     pub(crate) begin: &'static str,
     /// 終わりの印。
@@ -414,36 +421,42 @@ pub(crate) struct Markers {
 }
 
 /// 憲法の区間。
-pub(crate) const CONSTITUTION: Markers = Markers { begin: BEGIN, end: END };
+pub(crate) const CONSTITUTION: Markers = Markers { file: TARGET_REL, begin: BEGIN, end: END };
 
 /// 「done の定義」の区間（正本は [`CI_REL`] の `run: cargo …` 行）。
 pub(crate) const DONE: Markers = Markers {
+    file: CLAUDE_MD_REL,
     begin: "<!-- done:begin -->",
     end: "<!-- done:end -->",
 };
 
-/// 生成区間の全部（区間外の散文を測るときに外す）。
-const REGIONS: &[Markers] = &[CONSTITUTION, DONE];
+/// `CLAUDE.md` に在る生成区間の全部（区間外の散文を測るときに外す）。
+///
+/// **憲法の区間は入らない**（ADR-0046 で生成 file へ移った）。移した後も憲法を数えると、
+/// `CLAUDE.md` に紛れ込んだ憲法の印 1 つが区間の始まりに読まれて切り出しが倒れ、検出線が
+/// `?` へ落ちる——その周を落とす deny はもう無い（`claude-md-constitution` は生成 file を見る）
+/// ので、**測れなかった周が rc を変えずに素通りする**。
+const REGIONS: &[Markers] = &[DONE];
 
 /// 生成区間を切り出せない理由。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum RegionError {
-    /// 印が 1 本も無い。
-    Missing(&'static str),
-    /// 印が 2 本以上在る（印・本数）。
-    Duplicated(&'static str, usize),
-    /// 終わりの印が始まりの印より前に在る。
-    Reversed,
+    /// 印が 1 本も無い（file・印）。
+    Missing(&'static str, &'static str),
+    /// 印が 2 本以上在る（file・印・本数）。
+    Duplicated(&'static str, &'static str, usize),
+    /// 終わりの印が始まりの印より前に在る（file）。
+    Reversed(&'static str),
 }
 
 impl std::fmt::Display for RegionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Missing(marker) => write!(f, "{TARGET_REL} に {marker} が無い"),
-            Self::Duplicated(marker, count) => {
-                write!(f, "{TARGET_REL} の {marker} が 1 本でない（{count} 本）")
+            Self::Missing(file, marker) => write!(f, "{file} に {marker} が無い"),
+            Self::Duplicated(file, marker, count) => {
+                write!(f, "{file} の {marker} が 1 本でない（{count} 本）")
             }
-            Self::Reversed => write!(f, "{TARGET_REL} の marker が逆順である"),
+            Self::Reversed(file) => write!(f, "{file} の marker が逆順である"),
         }
     }
 }
@@ -453,8 +466,8 @@ fn locate(text: &str, markers: Markers) -> Result<(usize, usize), RegionError> {
     for marker in [markers.begin, markers.end] {
         match text.matches(marker).count() {
             1 => {}
-            0 => return Err(RegionError::Missing(marker)),
-            count => return Err(RegionError::Duplicated(marker, count)),
+            0 => return Err(RegionError::Missing(markers.file, marker)),
+            count => return Err(RegionError::Duplicated(markers.file, marker, count)),
         }
     }
     let from = text
@@ -462,7 +475,7 @@ fn locate(text: &str, markers: Markers) -> Result<(usize, usize), RegionError> {
         .map_or(0, |at| at.saturating_add(markers.begin.len()));
     let to = text.find(markers.end).unwrap_or(0);
     if to < from {
-        return Err(RegionError::Reversed);
+        return Err(RegionError::Reversed(markers.file));
     }
     Ok((from, to))
 }
@@ -481,12 +494,12 @@ pub(crate) fn splice_between(text: &str, markers: Markers, body: &str) -> Result
     Ok(format!("{before}\n{body}\n{after}"))
 }
 
-/// `CLAUDE.md` の憲法区間の中身を返す（marker の間・両端の marker は含まない）。
+/// 生成 file の憲法区間の中身を返す（marker の間・両端の marker は含まない）。
 pub fn region_of(text: &str) -> Result<&str, String> {
     region_between(text, CONSTITUTION).map_err(|err| err.to_string())
 }
 
-/// 憲法区間だけを差し替えた `CLAUDE.md` の全文を組む。**区間外は 1 byte も触らない**。
+/// 憲法区間だけを差し替えた生成 file の全文を組む。**区間外は 1 byte も触らない**。
 pub fn splice(text: &str, body: &str) -> Result<String, String> {
     splice_between(text, CONSTITUTION, body).map_err(|err| err.to_string())
 }
@@ -590,7 +603,7 @@ fn judge_done(ci: &Path, target: &Path) -> Result<usize, String> {
     match first_difference(region, &format!("\n{body}\n")) {
         None => Ok(count),
         Some(diff) => Err(format!(
-            "{TARGET_REL} の done 区間が {CI_REL} と食い違う: {diff}（cargo xtask gen-claude-md で直す）"
+            "{CLAUDE_MD_REL} の done 区間が {CI_REL} と食い違う: {diff}（cargo xtask gen-claude-md で直す）"
         )),
     }
 }
@@ -601,7 +614,7 @@ fn no_ci(target: &Path) -> Measured {
     if orphan {
         return failed(
             DONE_TAG,
-            &format!("{CI_REL} が無いのに {TARGET_REL} に done 区間が在る（正本を失った done の定義である）"),
+            &format!("{CI_REL} が無いのに {CLAUDE_MD_REL} に done 区間が在る（正本を失った done の定義である）"),
         );
     }
     Measured {
@@ -613,7 +626,7 @@ fn no_ci(target: &Path) -> Measured {
 /// `cargo xtask check` の measure `claude-md-done`。区間が ci.yml からの生成と byte 一致しなければ deny。
 pub(crate) fn measure_done(layout: &Layout) -> Measured {
     let ci = layout.root.join(CI_REL);
-    let (_, target) = paths(&layout.root);
+    let target = layout.root.join(CLAUDE_MD_REL);
     match absent(&ci) {
         Ok(true) => return no_ci(&target),
         Ok(false) => {}
@@ -681,10 +694,10 @@ pub(crate) fn prose_count(text: &str) -> Result<(usize, usize), RegionError> {
 
 /// `cargo xtask check` の検出線 `claude-md-prose=<違反行>/<区間外の非空行>`（**違反行を立てない**）。
 ///
-/// 読めない / 印が壊れた周は `?` を出す（区間の印の破損は `claude-md-constitution` と
-/// `claude-md-done` が deny で落とす）。`CLAUDE.md` が無い木は `n/a`。
+/// 読めない / 印が壊れた周は `?` を出す（done の区間の印の破損は `claude-md-done` が deny で
+/// 落とす）。`CLAUDE.md` が無い木は `n/a`。
 pub(crate) fn measure_prose(layout: &Layout) -> Measured {
-    let (_, target) = paths(&layout.root);
+    let target = layout.root.join(CLAUDE_MD_REL);
     let value = match fs::read_to_string(&target) {
         Err(err) if err.kind() == ErrorKind::NotFound => "n/a(no-claude-md)".to_owned(),
         Err(_) => "?".to_owned(),
@@ -704,6 +717,11 @@ fn read(path: &Path) -> Result<String, String> {
     fs::read_to_string(path).map_err(|err| format!("{} を読めない: {err}", path.display()))
 }
 
+/// file を書く（書けない理由を逐語で載せる）。
+fn write(path: &Path, text: &str) -> Result<(), String> {
+    fs::write(path, text).map_err(|err| format!("{} を書けない: {err}", path.display()))
+}
+
 /// 抽出元と書き先の path。
 fn paths(root: &Path) -> (PathBuf, PathBuf) {
     (root.join(SOURCE_REL), root.join(TARGET_REL))
@@ -720,25 +738,25 @@ fn rendered(root: &Path) -> Result<(String, usize), String> {
     Ok((body_of(&lines), count))
 }
 
-/// `gen-claude-md` subcommand の本体。`CLAUDE.md` の生成区間を書き直す。
+/// `gen-claude-md` subcommand の本体。憲法の生成区間（生成 file）と done の区間（`CLAUDE.md`）を
+/// 書き直す。**書く面は 2 つで、区間の外は 1 byte も動かない**。
 ///
 /// done の区間は [`CI_REL`] が在る木でだけ書く（無い木で区間が残る形は measure が deny で落とす）。
 pub fn generate(root: &Path) -> Result<String, String> {
     let (_, target) = paths(root);
     let (body, count) = rendered(root)?;
-    let text = read(&target)?;
-    let spliced = splice(&text, &body)?;
+    let spliced = splice(&read(&target)?, &body)?;
+    write(&target, &spliced)?;
     let line = format!("{TAG}: ok paragraphs={count} bytes={}", body.len());
     let ci = root.join(CI_REL);
-    let (next, line) = if absent(&ci)? {
-        (spliced, line)
-    } else {
-        let (done, lines) = done_body(&read(&ci)?)?;
-        let next = splice_between(&spliced, DONE, &done).map_err(|err| err.to_string())?;
-        (next, format!("{line}\n{DONE_TAG}: ok lines={lines}"))
-    };
-    fs::write(&target, &next).map_err(|err| format!("{} を書けない: {err}", target.display()))?;
-    Ok(line)
+    if absent(&ci)? {
+        return Ok(line);
+    }
+    let (done, lines) = done_body(&read(&ci)?)?;
+    let claude_md = root.join(CLAUDE_MD_REL);
+    let next = splice_between(&read(&claude_md)?, DONE, &done).map_err(|err| err.to_string())?;
+    write(&claude_md, &next)?;
+    Ok(format!("{line}\n{DONE_TAG}: ok lines={lines}"))
 }
 
 /// 憲法を持たない workspace か（xtask の歯が組む骨格だけの木がこれである）。
@@ -758,8 +776,8 @@ fn absent(source: &Path) -> Result<bool, String> {
 /// 抽出元が無い木の扱い。**書き先に生成区間が残っていれば deny** である。
 ///
 /// 憲法を持たない workspace（xtask の歯が組む骨格だけの木）は測る対象が無いので `n/a` を
-/// 名乗ってよい。しかし `CLAUDE.md` に生成区間が在るなら、それは「対象が無い」ではなく
-/// **正本を失った規範文が全 role の context に残っている**状態＝drift そのものである。
+/// 名乗ってよい。しかし生成 file に生成区間が在るなら、それは「対象が無い」ではなく
+/// **正本を失った規範文が tracked に残っている**状態＝drift そのものである。
 /// paths-clean の `n/a(not-a-repo-root)` は「その木が repo ですらない」という適用外の
 /// 宣言で、こちらとは形が違う。★実測 2026-09-10: 憲法を `git mv` で **tracked ごと**動かすと
 /// paths-clean も拾わないので、狭めなければ `rc 0` のまま 57 段落が孤児化する。
@@ -890,7 +908,7 @@ mod tests {
         dir
     }
 
-    /// fixture の憲法と `CLAUDE.md` を 1 組置く。
+    /// fixture の憲法と生成 file を 1 組置く。
     fn seed(dir: &Path, region: &str) {
         fs::create_dir_all(dir.join("design-intent").join("spec")).expect("fixture の dir を作れる");
         fs::write(
@@ -898,11 +916,18 @@ mod tests {
             FIXTURE,
         )
         .expect("憲法 fixture を書ける");
-        fs::write(dir.join("CLAUDE.md"), claude_md_text(region)).expect("CLAUDE.md を書ける");
+        fs::create_dir_all(target_of(dir).parent().expect("生成 file は dir の下に在る"))
+            .expect("生成 file の dir を作れる");
+        fs::write(target_of(dir), generated_text(region)).expect("生成 file を書ける");
     }
 
-    /// marker 区間に `region` を持つ `CLAUDE.md` の全文。
-    fn claude_md_text(region: &str) -> String {
+    /// 憲法の生成区間の書き先（fixture 側の path・`src` 側の定数と同じ形）。
+    fn target_of(dir: &Path) -> PathBuf {
+        dir.join("docs").join("constitution.md")
+    }
+
+    /// marker 区間に `region` を持つ生成 file の全文。
+    fn generated_text(region: &str) -> String {
         format!("# fixture\n\nBEFORE-KAPPA\n{BEGIN}{region}{END}\nAFTER-LAMBDA\n")
     }
 
@@ -950,9 +975,9 @@ mod tests {
     /// 差し替えるのは marker の間だけで、区間外は 1 byte も動かない。
     #[test]
     fn claude_md_splices_only_between_markers() {
-        let before = claude_md_text("\nOLD-OMEGA\n");
+        let before = generated_text("\nOLD-OMEGA\n");
         let after = splice(&before, "NEW-PSI").expect("差し替えられる");
-        assert_eq!(after, claude_md_text("\nNEW-PSI\n"), "差し替え後の全文");
+        assert_eq!(after, generated_text("\nNEW-PSI\n"), "差し替え後の全文");
         for (side, text) in [("前", "BEFORE-KAPPA"), ("後ろ", "AFTER-LAMBDA")] {
             assert!(after.contains(text), "区間の{side}が消えた");
         }
@@ -991,7 +1016,7 @@ mod tests {
         let dir = tmp_dir("deny");
         seed(&dir, "\n");
         generate(&dir).expect("生成できる");
-        let generated = fs::read_to_string(dir.join("CLAUDE.md")).expect("生成物を読める");
+        let generated = fs::read_to_string(target_of(&dir)).expect("生成物を読める");
         let cases = [
             ("drift", generated.replace("KEEPSAKE-ALPHA", "TAMPERED-TAU")),
             // **byte 一致を測る**。本文は 1 文字も違わず端の空行だけ 1 行増えた形は、
@@ -1000,16 +1025,16 @@ mod tests {
                 "端の空行",
                 generated.replace(&format!("{BEGIN}\n"), &format!("{BEGIN}\n\n")),
             ),
-            ("空", claude_md_text("\n\n")),
+            ("空", generated_text("\n\n")),
             ("区間不在", "# fixture\nBEFORE-KAPPA\n".to_owned()),
         ];
         for (label, text) in cases {
-            fs::write(dir.join("CLAUDE.md"), &text).expect("CLAUDE.md を書ける");
+            fs::write(target_of(&dir), &text).expect("生成 file を書ける");
             let measured = measure(&layout_of(&dir));
             assert_eq!(measured.violations.len(), 1, "{label} の違反行");
             assert_eq!(measured.fact, "claude-md-constitution=?", "{label} の判定値");
         }
-        fs::remove_file(dir.join("CLAUDE.md")).expect("CLAUDE.md を消せる");
+        fs::remove_file(target_of(&dir)).expect("生成 file を消せる");
         let measured = measure(&layout_of(&dir));
         assert_eq!(measured.violations.len(), 1, "書き先不在の違反行");
         assert_eq!(measured.fact, "claude-md-constitution=?", "書き先不在の判定値");
@@ -1026,14 +1051,17 @@ mod tests {
     fn claude_md_measure_reports_na_without_constitution() {
         let dir = tmp_dir("na");
         for (label, body) in [
-            ("CLAUDE.md 不在", None),
-            ("marker の無い CLAUDE.md", Some("# fixture\nBEFORE-KAPPA\n")),
+            ("生成 file 不在", None),
+            ("marker の無い生成 file", Some("# fixture\nBEFORE-KAPPA\n")),
         ] {
             match body {
                 None => {
-                    fs::remove_file(dir.join("CLAUDE.md")).ok();
+                    fs::remove_file(target_of(&dir)).ok();
                 }
-                Some(text) => fs::write(dir.join("CLAUDE.md"), text).expect("CLAUDE.md を書ける"),
+                Some(text) => {
+                    fs::create_dir_all(dir.join("docs")).expect("生成 file の dir を作れる");
+                    fs::write(target_of(&dir), text).expect("生成 file を書ける");
+                }
             }
             let measured = measure(&layout_of(&dir));
             assert!(measured.violations.is_empty(), "{label}: {:?}", measured.violations);
@@ -1045,7 +1073,7 @@ mod tests {
     /// 正本を失った生成区間は `n/a` でなく deny。
     ///
     /// 憲法を **tracked ごと**移した便は paths-clean も拾わない（実測 2026-09-10: `git mv`
-    /// で `cargo xtask check` が rc 0 のまま通り、出所を失った規範文が CLAUDE.md に残った）。
+    /// で `cargo xtask check` が rc 0 のまま通り、出所を失った規範文が書き先に残った）。
     #[test]
     fn claude_md_measure_denies_orphan_region_without_constitution() {
         let dir = tmp_dir("orphan");
@@ -1069,7 +1097,8 @@ mod tests {
         // **生成区間を置かない**。区間が在ると孤児の枝でも deny になり、「stat に失敗した
         // から deny した」のか「区間が孤児だから deny した」のかを弁別できない
         // （実測 2026-09-10: 区間を置いた版では `NotFound` の絞りを外す変異が生き残った）。
-        fs::write(dir.join("CLAUDE.md"), "# fixture\nBEFORE-KAPPA\n").expect("CLAUDE.md を書ける");
+        fs::create_dir_all(dir.join("docs")).expect("生成 file の dir を作れる");
+        fs::write(target_of(&dir), "# fixture\nBEFORE-KAPPA\n").expect("生成 file を書ける");
         let measured = measure(&layout_of(&dir));
         assert_eq!(measured.violations.len(), 1, "違反行: {:?}", measured.violations);
         assert_eq!(measured.fact, "claude-md-constitution=?");
@@ -1117,11 +1146,11 @@ mod tests {
         seed(&dir, "\nSTALE-UPSILON\n");
         let line = generate(&dir).expect("生成できる");
         assert!(line.starts_with("claude-md-constitution: ok paragraphs=4 "), "判定行: {line}");
-        let once = fs::read_to_string(dir.join("CLAUDE.md")).expect("生成物を読める");
+        let once = fs::read_to_string(target_of(&dir)).expect("生成物を読める");
         assert!(once.contains("BEFORE-KAPPA") && once.contains("AFTER-LAMBDA"), "区間外が消えた");
         assert!(!once.contains("STALE-UPSILON"), "古い区間が残った");
         generate(&dir).expect("2 度目も生成できる");
-        let twice = fs::read_to_string(dir.join("CLAUDE.md")).expect("生成物を読める");
+        let twice = fs::read_to_string(target_of(&dir)).expect("生成物を読める");
         assert_eq!(once, twice, "2 度撃つと全文が動く");
         fs::remove_dir_all(&dir).ok();
     }

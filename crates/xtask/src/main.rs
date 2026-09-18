@@ -82,7 +82,7 @@ fn run_gen_manifest(root_arg: Option<&str>) -> Result<ExitCode, String> {
     Ok(ExitCode::SUCCESS)
 }
 
-/// `gen-claude-md` subcommand。`CLAUDE.md` の生成区間へ憲法の規範文を書く。
+/// `gen-claude-md` subcommand。生成 file へ憲法の規範文を、`CLAUDE.md` へ done の定義を書く。
 fn run_gen_claude_md(root_arg: Option<&str>) -> Result<ExitCode, String> {
     let root = resolve_root(root_arg)?;
     emit(&claude_md::generate(&root)?);

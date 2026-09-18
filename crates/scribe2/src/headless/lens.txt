@@ -11,7 +11,7 @@
 ## 数える観点（8 つ・**件数だけ**を数える。欠け・表に無い名・母集団 0 の周は、器が「判定に届かなかった」＝ INCONCLUSIVE として読む——「見て 0 件だった」と「見ていない」は別のことだからである）
 - `contract-fit`: 契約（下の goal / done / verify / write-set）と diff の食い違い。
 - `teeth-nonvacuous`: 歯が空虚（assert の字面が入力と衝突している・測る対象が実装に無い）。
-- `constitution`: 憲法（起動 cwd の `CLAUDE.md` の生成区間）の条項に反する面。
+- `constitution`: 憲法（起動 cwd の生成 file `docs/constitution.md`）の条項に反する面。
 - `delete`: 消せる面（重複・到達しない経路・使われない field）。
 - `stdlib`: 標準 library で足りる自作。
 - `native`: 言語・道具の既存機能で足りる作り込み。
