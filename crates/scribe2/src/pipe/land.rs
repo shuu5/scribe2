@@ -44,16 +44,16 @@
 
 use crate::polarity::{OnFailure, Polarity, Timing};
 use super::contract::Contract;
-use super::declaration::Effective;
 use super::follow::{self, Conflict};
 use super::gate::{
-    gate, is_unreadable, next_number, records_of, run_checks, skip_record, Checks, Detection, DetectionSkip,
-    Gate, Limits, Skipped, Step, Verdict,
+    gate, next_number, skip_record, Detection, DetectionSkip, Gate, Limits, Skipped, Verdict,
 };
 use super::lens_record::LensSource;
-use super::{
-    emit, git_bytes, git_line, git_ok, size, verdict_path, worktree_path, worktrees_dir, Emit,
-};
+use super::{emit, git_bytes, git_line, git_ok, size, verdict_path, worktree_path, Emit};
+// 子 module（[`verify`]）が `super::` で呼ぶ 3 本。子から見た `super::` は `land` なので、親が同じ名を
+// 持たないと**移した本文の path を書き換える**ことになり、純移動の機械証明（設計 §5.3）の (名, 本文の hash)
+// が動く。親自身は従来どおり `super::` で `pipe` の側を呼ぶ（本体は 1 byte も変えていない）。
+use super::{base_of_run, verify_log_path, vessel_path};
 use super::queue::{await_turn, Order};
 use super::retire::verdict_field;
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_OK, RC_REFUSED};
@@ -61,6 +61,11 @@ use crate::fleet::json_lite::{self, Value};
 use crate::fleet::store::{self, append_line, LockPolicy};
 use crate::fleet::{cli::now_utc, EventKind, Stage, SCHEMA};
 use std::path::{Path, PathBuf};
+
+/// 主実測の群（設計 §41・`s2-07l.457` の純移動）。`land` と `finish` が呼ぶ 4 本だけを借りる。
+mod verify;
+
+use verify::{main_red, main_unmeasured, measure_main, verify_main};
 
 pub(crate) use super::queue::turn_now;
 pub use super::queue::{turn_in, Queued, Turn};
@@ -120,13 +125,6 @@ const ELLIPSIS: char = '…';
 /// 本文の最後に置く trailer の key（読み手が fleet の記録へ辿る鍵）。
 const RUN_TRAILER: &str = "run: ";
 
-/// main 実測用の tmp worktree を置く dir 名。
-///
-/// **`std::env::temp_dir` を使わない**（`TMPDIR` を読む＝憲法 C2.2 に反する）。置き場は
-/// 便の worktree と同じ repo 配下から導く。run id は `<bead>-<stamp>` なのでこの名と
-/// 衝突しない。
-const CHECK_DIR: &str = "verify";
-
 /// 検出線（変異検査）の面（**閉じた集合**・設計 §30・`s2-07l.397`）。末尾 `/` の項目は dir の接頭辞、
 /// それ以外は file の完全一致。検出線の行の出所（`.vessel.toml`）と、変異検査が読む面（crate の source・
 /// Cargo の manifest / lock・rules）である。docs / design-intent / README / .github はこの外＝検出線の
@@ -138,7 +136,7 @@ pub const DETECTION_SCOPE: &[&str] = &["crates/", "Cargo.toml", "Cargo.lock", "r
 /// path の列 → 検出線の要否（**pure**・追随の再 gate と主実測の両方がこの 1 本を通す・設計 §30）。
 ///
 /// 1 つでも [`DETECTION_SCOPE`] に触れれば真。**空の列は偽**（差分が無い周は撃たない）——読めない周を
-/// 空に読み替えない責任は呼び手（[`follow_detection`] / [`main_detection`]）が持つ。
+/// 空に読み替えない責任は呼び手（[`follow_detection`] / [`verify::main_detection`]）が持つ。
 pub fn detection_needed<'a>(paths: impl IntoIterator<Item = &'a str>) -> bool {
     paths.into_iter().any(|path| DETECTION_SCOPE.iter().any(|face| in_face(path, face)))
 }
@@ -274,11 +272,6 @@ impl Landing {
 /// dir 名を 2 度書かず event log の隣として導く（`store` が dir を変えたら追随する）。
 pub fn verdicts_path(state_dir: &Path) -> PathBuf {
     store::events_path(state_dir).with_file_name(VERDICTS_FILE)
-}
-
-/// main 実測用の tmp worktree。
-fn check_path(repo: &Path, id: &str) -> PathBuf {
-    worktrees_dir(repo).join(CHECK_DIR).join(id)
 }
 
 /// land を 1 回通す。
@@ -813,135 +806,6 @@ fn gist_of(goal: &str) -> String {
     cut
 }
 
-/// 進めた main を別の worktree で実測する。
-fn verify_main(entry: &Land<'_>, new: &str) -> MainCheck {
-    let tmp = check_path(entry.repo, entry.run);
-    if let Some(parent) = tmp.parent() {
-        if let Err(err) = std::fs::create_dir_all(parent) {
-            return MainCheck::Unmeasurable(format!("{} を作れない: {err}", parent.display()));
-        }
-    }
-    let path = tmp.display().to_string();
-    if !git_ok(entry.repo, &["worktree", "add", "--detach", &path, new]) {
-        // **ここで赤を名乗らない**: verify 行を 1 本も撃てていない。
-        return MainCheck::Unmeasurable(format!("{} を切れない", tmp.display()));
-    }
-    // **gate と同じ順序を同じ関数で撃つ**（write-set 照合 → 写しの共通 verify → 検出線 → 契約 verify）。
-    // 材料が揃わない周は**赤を名乗らない**——読めなかったを落ちたに化けさせない。
-    let materials = materials(entry);
-    let (base, frozen) = match materials {
-        Ok(found) => found,
-        Err(reason) => {
-            let _ = git_ok(entry.repo, &["worktree", "remove", "--force", &path]);
-            return MainCheck::Unmeasurable(reason);
-        }
-    };
-    let skipped = main_detection(entry, new);
-    let steps = run_checks(&Checks {
-        worktree: &tmp,
-        base: &base,
-        contract: entry.contract,
-        common: frozen.common_verify(),
-        detection: if skipped.is_some() { &[] } else { frozen.detection_verify() },
-    });
-    // 成果は `new` に載っているので、この tmp だけは remove してよい（設計 §5.4）。
-    // `--force` は verify が tmp に生んだ中間物ごと畳むためで、履歴・データは触らない。
-    let _ = git_ok(entry.repo, &["worktree", "remove", "--force", &path]);
-    let record = skipped
-        .as_ref()
-        .map(|(reason, tree)| Skipped::detection(*reason, Some(tree.as_str())));
-    if let Err(reason) = record_main(entry, &steps, record) {
-        return MainCheck::Unmeasurable(reason);
-    }
-    // 段①を読めなかった周（gate と**同じ 1 本の判定**・rc だけでは見ない）は**赤の集計より先に**
-    // 「測れなかった」へ倒す——読めなかったを落ちたに化けさせない（gate §6 と同じ極性・
-    // `s2-07l.103`）。Red と同じく main-green にも finish にも進まない（fail-closed）。
-    if let Some(step) = steps.iter().find(|step| is_unreadable(step)) {
-        return MainCheck::Unmeasurable(format!(
-            "main で verify の段を読めない（cmd={} stderr={}）",
-            step.cmd,
-            step.stderr.lines().next().unwrap_or_default()
-        ));
-    }
-    let red = steps.iter().filter(|step| step.rc != 0).count();
-    if red > 0 {
-        return MainCheck::Red(format!("main で verify の {red} 行が rc≠0"));
-    }
-    MainCheck::Green
-}
-
-/// main の実測に要る材料（便の base と、写しの共通 verify・検出線）を揃える。
-///
-/// **写しからしか読まない**（repo / worktree の `.vessel.toml` は読み直さない・ADR-0010 §2.4）。
-fn materials(entry: &Land<'_>) -> Result<(String, Effective), String> {
-    let base = super::base_of_run(entry.state_dir, entry.run)
-        .ok_or_else(|| format!("run {} に base が無い", entry.run))?;
-    let path = super::vessel_path(entry.state_dir, entry.run);
-    let frozen = Effective::load(&path).map_err(|errors| {
-        let lines: Vec<String> = errors.iter().map(ToString::to_string).collect();
-        format!("{} を読めない: {}", path.display(), lines.join(" / "))
-    })?;
-    Ok((base, frozen))
-}
-
-/// main 実測の record を書く file の名（gate の `verify.jsonl` と同じ dir・同じ record 形・別 file）。
-///
-/// 別 file にするのは、gate の周の `n` と main 実測の `n` を重ねないためである（設計 gate-cost.md §5）。
-const VERIFY_MAIN_FILE: &str = "verify-main.jsonl";
-
-/// 主実測で検出線を省くか（省く周はその理由と land した木の sha・設計 §30 (ii)・ADR-0021 §2.4）。
-///
-/// gate を撃った木（verdict の `tree`）と land した木が**同じ**なら `same-tree`。違う周は
-/// `git diff-tree -r --name-only -z <gated> <landed>` の path を [`DETECTION_SCOPE`] と照らし、1 つも触れなければ
-/// `outside-scope`。`tree` の無い verdict（旧 gate）・読めない木・読めない diff はどれも `None`＝全段を撃つ側へ
-/// 倒す（省く側へ倒すと、測っていない検出線を main で通したことになる）。
-fn main_detection(entry: &Land<'_>, new: &str) -> Option<(DetectionSkip, String)> {
-    let gated = verdict_field(entry.state_dir, entry.run, "tree")?;
-    let landed = git_line(entry.repo, &["rev-parse", &format!("{new}^{{tree}}")])?;
-    if landed == gated {
-        return Some((DetectionSkip::SameTree, landed));
-    }
-    let bytes = git_bytes(entry.repo, &["diff-tree", "-r", "--name-only", "-z", &gated, &landed])?;
-    let paths = nul_paths(&bytes);
-    if detection_needed(paths.iter().map(String::as_str)) {
-        return None;
-    }
-    Some((DetectionSkip::OutsideScope, landed))
-}
-
-/// main 実測の段を `verify-main.jsonl` へ逐条で残す。検出線を省いた周は、その段の位置に
-/// `skipped=detection tree=<sha> reason=<理由>` の record を 1 件置く（**撃たなかった事実を黙って落とさない**・
-/// 形と位置は gate の `verify.jsonl` と同じ [`records_of`] の 1 本）。
-fn record_main(entry: &Land<'_>, steps: &[Step], skipped: Option<Skipped<'_>>) -> Result<(), String> {
-    let path = super::verify_log_path(entry.state_dir, entry.run).with_file_name(VERIFY_MAIN_FILE);
-    for record in records_of(steps, skipped) {
-        append_line(&path, &record.body, entry.policy).map_err(|err| err.to_string())?;
-    }
-    Ok(())
-}
-
-/// 終端で `refs/heads/main` を読めなかった周の実測値の字面（`main=unknown` / `main:unknown`）。
-///
-/// 読めないを「一致した」にも「動いた」にも化けさせない（C10）。land 自体は成立している
-/// （ref は既に進み実測も緑）ので落とさず、理由は stderr 1 行に残す。
-const MAIN_UNKNOWN: &str = "unknown";
-
-/// 終端の直前に `refs/heads/main` を 1 回実測する（設計 §27・`s2-07l.379`）。
-///
-/// `landed=` / verdicts.jsonl の `sha` は **宣言値**（squash で main に載せた `new`）で、
-/// CAS の後に main がさらに動いた周（追随の chain・別の便・手の操作）をそこからは見分けられない。
-/// 実測値は宣言値と**別の列**に置く（一致する周も省かない）。読めない周は
-/// [`MAIN_UNKNOWN`] と stderr の理由 1 行。
-fn measure_main(repo: &Path) -> (String, Vec<String>) {
-    match git_line(repo, &["rev-parse", MAIN_REF]) {
-        Some(found) => (found, Vec::new()),
-        None => (
-            MAIN_UNKNOWN.to_owned(),
-            vec![format!("pipe: 終端で {MAIN_REF} を読めない（main={MAIN_UNKNOWN}・land は成立している）")],
-        ),
-    }
-}
-
 /// export → `Landed` → 後始末。ここまで来た周は land が成立している（anchor は呼び手が揃え済み）。
 ///
 /// export の前に main を実測し、stdout の `main=` と `Landed` の detail の `main:` に写す
@@ -1095,55 +959,6 @@ pub(crate) fn verdict_of(state_dir: &Path, id: &str) -> Option<Verdict> {
     verdict_field(state_dir, id, "verdict").as_deref().and_then(Verdict::parse)
 }
 
-/// main の実測が赤だった周。**auto revert しない**（main は進んだまま・anchor は揃え済み＝stderr に token）。
-fn main_red(entry: &Land<'_>, reason: &str, anchor: &AnchorSync) -> Outcome {
-    let emitted = emit(
-        entry.state_dir,
-        &Emit {
-            kind: EventKind::RunStage,
-            run: entry.run,
-            bead: entry.bead,
-            stage: Some(Stage::Failed),
-            seat: None,
-            pid: None,
-            detail: Some("main-red".to_owned()),
-        },
-        entry.policy,
-    );
-    match emitted {
-        Err(err) => broken(err.to_string()),
-        Ok(()) => with_anchor(refused(format!("main が赤い（{reason}）・revert しない")), anchor),
-    }
-}
-
-/// failure exit の stderr に anchor の token（と warning）を足す（ref は進んでいるので黙らない）。
-fn with_anchor(mut outcome: Outcome, anchor: &AnchorSync) -> Outcome {
-    outcome.err.push(format!("pipe: {}", anchor.token()));
-    outcome.err.extend(anchor.warning());
-    outcome
-}
-
-/// main を実測できなかった周。**赤とは別の名で残す**（rc 2 = 対象が壊れている・anchor は揃え済み）。
-fn main_unmeasured(entry: &Land<'_>, reason: &str, anchor: &AnchorSync) -> Outcome {
-    let emitted = emit(
-        entry.state_dir,
-        &Emit {
-            kind: EventKind::RunStage,
-            run: entry.run,
-            bead: entry.bead,
-            stage: Some(Stage::Failed),
-            seat: None,
-            pid: None,
-            detail: Some("main-unmeasured".to_owned()),
-        },
-        entry.policy,
-    );
-    match emitted {
-        Err(err) => broken(err.to_string()),
-        Ok(()) => with_anchor(broken(format!("main を実測できない（{reason}）・revert しない")), anchor),
-    }
-}
-
 /// 前提違反・使い方の誤り（rc 1 + stderr 1 行・何もしない）。
 pub(super) fn refused(reason: String) -> Outcome {
     Outcome::failed_line(RC_REFUSED, format!("pipe: {reason}"))
@@ -1161,6 +976,7 @@ pub(super) fn broken(reason: String) -> Outcome {
 #[cfg(test)]
 mod tests {
     // flip-check: moved s2-07l.253
+    // flip-check: moved s2-07l.457
     use super::super::gate::{next_number, skip_record, DetectionSkip, Skipped};
     use super::{detection_needed, squash_message, subject_of, SUBJECT_CHARS};
 

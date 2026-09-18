@@ -827,7 +827,7 @@ id = "aj"
 title = "pipe/land.rs の主実測の群（verify_main / main_red / main_unmeasured ほか 9 item と const 3 つ）を land/verify.rs へ割る — 純移動・MainCheck は親に残す（極性一覧の pin）・land の本体は不変・札 moved"
 req = ["FR11"]
 section = "41"
-write-set = ["-crates/scribe2/src/pipe/land.rs", "+crates/scribe2/src/pipe/land/verify.rs", "crates/scribe2/tests/e2e/polarity.rs", "docs/design/pipeline.md"]
+write-set = ["-crates/scribe2/src/pipe/land.rs", "crates/scribe2/src/pipe/land/verify.rs", "crates/scribe2/tests/e2e/polarity.rs", "docs/design/pipeline.md"]
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail pipe_land_subject_", "cargo nextest run -p scribe2 --no-tests=fail polarity_external_form"]
 size = "S"
 done = "主実測の群 9 item と const 3 つが子 module に在り、MainCheck は親に残って極性一覧の snapshot が不変、親は mod 宣言と use だけが増え（子側の pub(super) 4 語〔measure_main は finish が呼ぶ〕で land と finish の本体は不変）、file-lines で land.rs の余地が base より 180 行以上増え、in-file と e2e の歯が全部緑、純移動の機械証明の残差が use と path と可視性の語だけ"
