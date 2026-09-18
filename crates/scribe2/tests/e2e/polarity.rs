@@ -303,9 +303,9 @@ fn polarity_drops_the_working_memory_guards() {
     let text = output();
     let names: Vec<&str> = text.lines().filter_map(|line| line.split(' ').next()).collect();
     for gone in ["guard=externalize-refusal", "guard=consume-refusal"] {
-        assert!(!names.iter().any(|name| *name == gone), "{gone} は一覧に残らない: {text}");
+        assert!(!names.contains(&gone), "{gone} は一覧に残らない: {text}");
     }
-    assert!(names.iter().any(|name| *name == "guard=inject-refusal"), "残る席の guard は在る: {text}");
+    assert!(names.contains(&"guard=inject-refusal"), "残る席の guard は在る: {text}");
     let ledger: Polarity = vessel::seat::ledger::POLARITY;
     assert_eq!(ledger, Polarity { timing: Timing::InLoop, on_failure: OnFailure::FailClosed }, "台帳の読みは fail-closed");
     assert!(vessel::polarity::NOT_A_GUARD.contains(&ledger), "台帳の読みは guard でない境界として残る");
