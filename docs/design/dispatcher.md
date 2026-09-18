@@ -13,7 +13,7 @@
 
 ## 2. 列の入力と順序
 
-- **入力** = 台帳の open な bead のうち「依存が全部 closed ∧ acceptance が非空 ∧ `intake:memo` の label が無い ∧ acceptance に設計 pointer の行 `design = docs/design/<題>.md#<id>` が在る ∧ **現在の契約の sha に対する審査の verdict が PASS**」もの（.209 の `--design` と同じ字面・pointer の無い便は理由 `NoDesignPointer`・verdict の無い便は `NotReviewed { sha }`・FAIL / INCONCLUSIVE の便は `ReviewFailed { sha }`。列外の便も `dispatch ls` には理由付きで出す＝planner が直すべき契約が見える）。台帳の読みは rebrief と同じ子 process と同じ関数（`seat/rebrief.rs` の `read_ledger`・`bd --readonly list --limit 0 --json`・待ち上限は rules 行 `seat.ledger_timeout_s`）を共用し、読めない周は列を空と読まず `unmeasured` で止まる（NFR4・C10）。
+- **入力** = 台帳の open な bead のうち「依存が全部 closed ∧ acceptance が非空 ∧ `intake:memo` の label が無い ∧ acceptance に設計 pointer の行 `design = docs/design/<題>.md#<id>` が在る ∧ **現在の契約の sha に対する審査の verdict が PASS**」もの（.209 の `--design` と同じ字面・pointer の無い便は理由 `NoDesignPointer`・verdict の無い便は `NotReviewed { sha }`・FAIL / INCONCLUSIVE の便は `ReviewFailed { sha }`。列外の便も `dispatch ls` には理由付きで出す＝planner が直すべき契約が見える）。台帳の読みは席の指示文の `{ledger}` と同じ子 process と同じ関数（`read_ledger`・`bd --readonly list --limit 0 --json`・待ち上限は rules 行 `seat.ledger_timeout_s`・置き場は `seat/ledger.rs`）を共用し、読めない周は列を空と読まず `unmeasured` で止まる（NFR4・C10）。
 - **審査の時点 = 契約が出来た直後**（user 裁定 2026-09-15 13:4xZ「planner が作ったらその直後に lens は審査すべき」・逐語は台帳 s2-07l notes）。審査の段（[contract-source.md](./contract-source.md) §4・契約 (c) = s2-07l.241 の `Stage::Reviewed`・同じ lens・同じ雛形 `headless/lens-contract.txt`・同じ観点 3 つ）を起動の瞬間でなく、契約 file が出来た直後に 1 回撃つ。verdict は契約 file の sha に紐づく event log の 1 kind `ContractReviewed { bead, sha, verdict }`（append-only・replay で bead ごとの最新 sha の verdict を導く・C6.3 と同じ store）。契機は 2 つ: (1) .209 の生成の口が契約 file を書いた直後（planner の焼き直しで acceptance の sha が変われば生成が走り直し、審査も走り直す）(2) dispatcher の 1 周が「現 sha に verdict の無い便」を見つけた時（取りこぼしを次の tick で埋める）。`pipe run` は intake の直後、同じ sha の PASS が在れば Reviewed をその記録で埋めて lens を撃ち直さず、sha が違えば .241 のとおり撃つ（C2 の 1 実装・審査を飛ばす flag は作らない・C16）。理由: 契約の不備は planner の手空きのうちに返す（起動の瞬間まで見えないと planner の待ち時間が捨てられ、FAIL が列を塞ぐ）。
 - **順序** = 1 関数 `order`（行の列 → 候補 `Candidate` の列）: (1) 介入 `first` の便 (2) 台帳の `priority`（P0 → P4）(3) 起票順（id の数字）。同順は起票順。**散文の順序を持たない**（憲法 C2）。
 - **hold** の便は列に載るが起こさない（理由 = `Hold`）。
@@ -36,7 +36,7 @@
 
 ## 4. 介入の口（planner の typed な印）
 
-`<NAME> pipe dispatch first <bead>` / `hold <bead>` / `release <bead>`。印は state dir の列の記録（event log の 1 kind `DispatchMark { bead, mark: First | Hold | Release, by: target }`）で、rebrief の DATA と `dispatch ls` に出る。user の直命「最優先」の対は `first`（planner が打つ・逐語は直命の表 [working-memory.md](./working-memory.md) §12.1 に残る）。印は台帳の priority を書き換えない（台帳は task と裁定・憲法 C15）。
+`<NAME> pipe dispatch first <bead>` / `hold <bead>` / `release <bead>`。印は state dir の列の記録（event log の 1 kind `DispatchMark { bead, mark: First | Hold | Release, by: target }`）で、`dispatch ls` に出る（退避物の復元の DATA に出す案は §6 のとおり超過した）。user の直命「最優先」の対は `first`（planner が打つ・逐語は台帳に残る）。印は台帳の priority を書き換えない（台帳は task と裁定・憲法 C15）。
 
 ## 5. 契機（tick と land の直後）
 
@@ -48,7 +48,7 @@
 ## 6. 観測
 
 - `<NAME> pipe dispatch ls --state-dir S`: 列の各便を `[DISPATCH] bead=<id> prio=<p> mark=<first|hold|->` + `reason=<WaitReason>` で 1 行ずつ・`[DISPATCH-COUNT] total=<n> ready=<k>`・0 件は `[DISPATCH-NONE]`・台帳が読めない周は `[DISPATCH-UNMEASURED reason=…]`（0 件と融合しない・C10）。
-- rebrief の DATA に同じ行を載せる（`Marker` の variant を宣言順で足す・[working-memory.md](./working-memory.md) §12.2 の現在地 DATA の隣）。planner の brief の slot `plan` の材料。
+- 観測の面は上の 1 口だけである。退避物の復元（rebrief）の DATA に同じ行を載せる案は、その DATA ごと超過した（ADR-0045 §2 (2)・`s2-07l.479.2`・[working-memory.md](./working-memory.md)）。
 
 ## 7. 極性
 
@@ -63,12 +63,12 @@ dispatcher は「起こす」側で行為を止める判定を持たない（起
 - 契機: tick の軸が `decision=dispatch` を記録する・land の直後に 1 周撃たれる（偽 remote の toy repo）。
 - 審査の時点（行 (r)・`pipe_review_contract_` 接頭辞）: 契約 file が出来た直後に偽 lens が 1 回撃たれ `ContractReviewed { sha }` が記録される・同じ sha で `pipe run` を撃つと lens の呼出 0 で Reviewed が PASS になる・sha が変わると撃ち直す・verdict の無い便は列外で `NotReviewed`。
 
-## 9. 契約（4 便・(a) の後に (r)(b)(c)・(b) は (r) の後）
+## 9. 契約（3 便・(a) の後に (r)(b)・(b) は (r) の後。観測の便 (c) は rebrief の DATA ごと超過・`s2-07l.479.2`）
 
 - **(a)** `pipe dispatch` の本体: 列の導出（台帳の list + acceptance の設計 pointer + `ContractReviewed` の最新）・順序の 1 関数・起動条件（intake の判定関数の再利用・可視性の変更）・`first / hold / release` の印と `ContractReviewed`（event kind 2 つ + `Event` の typed な field）・`dispatch ls`。依存: s2-07l.241 と s2-07l.209 Landed。
 - **(r)** 審査の時点: 契約 file が出来た直後に審査を撃つ口（.209 の生成の直後 + dispatcher の 1 周）・`ContractReviewed` の記録・`pipe run` の同 sha 再利用。依存: (a)。**行 (r) は契約表に s2-07l.241 Landed 後に足す**（write-set が .241 の新設 file `pipe/review.rs` を編集するため、tracked になる前は行が解けない＝s2-07l.346 の罠）。
 - **(b)** 契機: tick の軸 `dispatch` + `pipe land` の直後の 1 周。依存: (a)・(r)（列に PASS の便が無いと契機が空回りするだけなので (r) の Landed を待つ・行の `depends` は行 (r) と同時に足す）。
-- **(c)** 観測: rebrief の DATA に `[DISPATCH]` の行（`Marker` の variant）。依存: (a)・s2-07l.326.1（現在地の DATA）Landed。
+- **(c)** 観測（rebrief の DATA に `[DISPATCH]` の行）は**超過した**（ADR-0045 §2 (2)・`s2-07l.479.2`）。`dispatch ls` の 1 口が観測の面である。
 - **(d)** driver の死亡（§5・s2-07l.352）: 札の書き・消し（`pipe run` / `resume` の入口と終端）・turn 関数の起こし直し・record token・`base_of_run` の typed 化。依存: (a)・(b)。
 
 ## 10. 却下案（ADR-0034 §5 の写しは持たない・設計固有のもの）
@@ -92,7 +92,7 @@ title = "pipe dispatch の本体 — 列の導出（台帳 + ContractReviewed �
 req = ["FR30", "FR39", "FR49"]
 section = "3"
 touches = ["crate::fleet::EventKind"]
-write-set = ["+crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2/src/pipe/mod.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/cli/intake.rs", "crates/scribe2/src/seat/rebrief.rs", "crates/scribe2/src/fleet/mod.rs", "crates/scribe2/src/fleet/event.rs", "crates/scribe2/src/fleet/replay.rs", "crates/scribe2/src/fleet/cli.rs", "crates/scribe2/src/account/mod.rs", "crates/scribe2/src/fleet/usage.rs", "crates/scribe2/src/pipe/queue.rs", "crates/scribe2/src/pipe/stop.rs", "crates/scribe2/src/seat/role.rs", "crates/scribe2/src/seat/state.rs", "+crates/scribe2/tests/e2e/pipe/dispatch.rs", "crates/scribe2/tests/e2e/pipe.rs", "crates/scribe2/tests/e2e/fleet.rs", "crates/scribe2/tests/e2e/prop.rs", "crates/scribe2/tests/e2e/seat.rs", "crates/scribe2/tests/e2e/pipe/ratelimit.rs", "crates/scribe2/tests/e2e/pipe/stop.rs", "crates/scribe2/tests/e2e/snapshots/e2e__pipe__pipe_external_form.snap"]
+write-set = ["+crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2/src/pipe/mod.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/cli/intake.rs", "crates/scribe2/src/seat/ledger.rs", "crates/scribe2/src/fleet/mod.rs", "crates/scribe2/src/fleet/event.rs", "crates/scribe2/src/fleet/replay.rs", "crates/scribe2/src/fleet/cli.rs", "crates/scribe2/src/account/mod.rs", "crates/scribe2/src/fleet/usage.rs", "crates/scribe2/src/pipe/queue.rs", "crates/scribe2/src/pipe/stop.rs", "crates/scribe2/src/seat/role.rs", "crates/scribe2/src/seat/state.rs", "+crates/scribe2/tests/e2e/pipe/dispatch.rs", "crates/scribe2/tests/e2e/pipe.rs", "crates/scribe2/tests/e2e/fleet.rs", "crates/scribe2/tests/e2e/prop.rs", "crates/scribe2/tests/e2e/seat.rs", "crates/scribe2/tests/e2e/pipe/ratelimit.rs", "crates/scribe2/tests/e2e/pipe/stop.rs", "crates/scribe2/tests/e2e/snapshots/e2e__pipe__pipe_external_form.snap"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_dispatch_"]
 size = "M"
 done = "偽の台帳と偽の live 便で、交差する便は Overlap で待ち交差しない便だけが起動の構築点に届き、first が priority より先に来て hold は起こさず、現 sha の verdict の無い便は NotReviewed で列外、台帳が読めない周は UNMEASURED で 0 本"
@@ -107,18 +107,6 @@ verify = ["cargo nextest run -p scribe2 --no-tests=fail seat_tick_dispatch_", "c
 size = "S"
 done = "tick が decision=dispatch を記録し、偽 remote の toy repo で land の直後に列が 1 周撃たれる"
 depends = ["a", "r"]
-
-[[contract]]
-id = "c"
-title = "観測 — rebrief の DATA に [DISPATCH] の行（Marker の variant・現在地 DATA の隣）"
-req = ["FR23"]
-section = "6"
-touches = ["crate::seat::rebrief::Marker"]
-also = ["crates/scribe2/tests/e2e/snapshots/e2e__seat__seat_rebrief_external_form.snap"]
-verify = ["cargo nextest run -p scribe2 --no-tests=fail seat_wm_rebrief_"]
-size = "S"
-done = "偽の列で rebrief が [DISPATCH] を件数付きで出し、読めない周は [DISPATCH-UNMEASURED]"
-depends = ["a"]
 
 [[contract]]
 id = "r"

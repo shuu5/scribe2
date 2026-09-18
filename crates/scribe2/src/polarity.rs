@@ -113,10 +113,6 @@ pub enum Guard {
     StoreLock,
     /// tmux pane への注入の断り＝入力欄が非空なら 1 key も送らない（[`crate::seat::inject`]）。
     Inject,
-    /// 退避物の書込を止める判定＝二重退避・上限超過・文法の断り（[`crate::seat::externalize`]）。
-    Externalize,
-    /// 退避物の消費（move）を止める判定＝曖昧・移し先の既在（[`crate::seat::consume`]）。
-    Consume,
     /// runner の起動行の受付＝既に `--account-dir` を持つ行に器の口座を足さずに断る
     /// （[`crate::pipe::spawn::LineRefusal`]・設計 account-autonomy.md §16）。
     SpawnLine,
@@ -146,8 +142,6 @@ pub const ALL: &[Guard] = &[
     Guard::FollowRetry,
     Guard::StoreLock,
     Guard::Inject,
-    Guard::Externalize,
-    Guard::Consume,
     Guard::SpawnLine,
 ];
 
@@ -167,7 +161,7 @@ pub const NOT_A_GUARD: &[Polarity] = &[
     crate::fleet::UnmeasuredReason::POLARITY,
     crate::fleet::select::NoCandidateReason::POLARITY,
     crate::fleet::usage::UsageError::POLARITY,
-    crate::seat::rebrief::POLARITY,
+    crate::seat::ledger::POLARITY,
 ];
 
 impl Guard {
@@ -196,8 +190,6 @@ impl Guard {
             Self::FollowRetry => crate::pipe::follow::POLARITY,
             Self::StoreLock => crate::fleet::store::POLARITY,
             Self::Inject => crate::seat::inject::POLARITY,
-            Self::Externalize => crate::seat::externalize::POLARITY,
-            Self::Consume => crate::seat::consume::POLARITY,
             Self::SpawnLine => crate::pipe::spawn::POLARITY,
         }
     }
@@ -227,8 +219,6 @@ impl Guard {
             Self::FollowRetry => "pipe::follow::FollowCheck",
             Self::StoreLock => "fleet::store::StoreError",
             Self::Inject => "seat::inject::Delivery",
-            Self::Externalize => "seat::externalize::ExternalizeError",
-            Self::Consume => "seat::consume::ConsumeError",
             Self::SpawnLine => "pipe::spawn::LineRefusal",
         }
     }
@@ -258,8 +248,6 @@ impl Guard {
             Self::FollowRetry => "follow-retry",
             Self::StoreLock => "store-lock",
             Self::Inject => "inject-refusal",
-            Self::Externalize => "externalize-refusal",
-            Self::Consume => "consume-refusal",
             Self::SpawnLine => "spawn-line",
         }
     }

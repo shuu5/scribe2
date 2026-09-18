@@ -1193,81 +1193,21 @@ fn marketplace_json_names_the_same_plugin_as_plugin_json() {
     }
 }
 
-// ─────────────────── plugin 同梱の skill（`s2-07l.269`・設計 working-memory.md §6） ───────────────────
+// ─────────────────── plugin 同梱の skill（`s2-07l.269` → `s2-07l.479.2` で撤去） ───────────────────
 
-/// plugin root（repo root）の `skills/` 直下に置く判断層の skill の dir 名。名前空間は `<NAME>:<dir 名>`（憲法 C2.2）。
-const SKILL_DIRS: [&str; 2] = ["rebrief", "ready-compaction"];
-
-/// plugin root の `skills/<name>/SKILL.md` を読む（読めない周は空にせず落とす＝base の機能不在が RED）。
-fn skill_body(name: &str) -> String {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("..")
-        .join("skills")
-        .join(name)
-        .join("SKILL.md");
-    let body = fs::read_to_string(&path);
-    assert!(body.is_ok(), "{} を読める: {:?}", path.display(), body.as_ref().err());
-    body.unwrap_or_default()
-}
-
-/// frontmatter（先頭の `---` … `---`）の `name:` の値。
-fn skill_frontmatter_name(body: &str) -> Option<String> {
-    let rest = body.strip_prefix("---\n")?;
-    let (front, _) = rest.split_once("\n---\n")?;
-    front
-        .lines()
-        .find_map(|line| line.strip_prefix("name:"))
-        .map(|value| value.trim().to_owned())
-}
-
-/// (a) `skills/` 直下に 2 dir が在り、各 `SKILL.md` の frontmatter `name:` が dir 名と一致する（Claude Code plugin の
-/// skill 配置＝自動発見・名前空間 `<NAME>:<dir 名>`）。相互参照は名前空間付き（`/<NAME>:<対の名>`）で書く。
+/// plugin root（repo root）の `skills/` は **もう無い**（ADR-0045 §2 (2)・`s2-07l.479.2`）: 判断層の skill
+/// 2 つ（復元・退避）は口（`seat rebrief` / `seat consume` / `seat externalize`）ごと消えたので、dir も
+/// 名前空間（`<NAME>:<dir 名>`）も残さない。
+///
+/// **消えたことを測る歯**である（base では 2 dir とも在り `SKILL.md` を読めるので RED）。
 #[test]
-fn hook_skill_dirs_exist_with_frontmatter_name_matching_the_dir() {
-    for (name, pair) in [(SKILL_DIRS[0], SKILL_DIRS[1]), (SKILL_DIRS[1], SKILL_DIRS[0])] {
-        let body = skill_body(name);
-        assert_eq!(
-            skill_frontmatter_name(&body).as_deref(),
-            Some(name),
-            "{name}: frontmatter の name は dir 名と同じ"
-        );
-        assert!(
-            body.contains(&format!("/{NAME}:{pair}")),
-            "{name}: 対の skill を名前空間付き（`/{NAME}:{pair}`）で名指す"
-        );
-    }
-}
-
-/// (b) 復元の skill は器の口 `seat rebrief` と `seat consume` を、退避の skill は `seat externalize` を本文で名指す
-/// （口と skill の対応＝口の名を変えた周に落ちる・SRS FR23）。
-#[test]
-fn hook_skill_bodies_name_the_vessel_subcommands() {
-    for (name, mouths) in [
-        ("rebrief", &["seat rebrief", "seat consume"][..]),
-        ("ready-compaction", &["seat externalize"][..]),
-    ] {
-        let body = skill_body(name);
-        for mouth in mouths {
-            assert!(
-                body.contains(&format!("`{mouth}`")),
-                "{name}: 器の口 `{mouth}` を本文で名指す"
-            );
-        }
-    }
-}
-
-/// (c) 負例＝2 file とも private path 形（home dir・tilde の path 形）を持たない（paths-clean と同じ極性を歯でも pin・PUBLIC 面）。
-/// needle は断片から組み立てる（字面を歯の source に置くと paths-clean が歯そのものを撃つ）。
-#[test]
-fn hook_skill_bodies_carry_no_private_path_marks() {
-    for name in SKILL_DIRS {
-        let body = skill_body(name);
-        assert!(!body.is_empty(), "{name}: 空の本文では不在の検査が空虚になる");
-        for mark in [concat!("/", "home", "/"), concat!("~", "/")] {
-            assert!(!mark.is_empty(), "needle が空だと不在の検査が空虚になる");
-            assert!(!body.contains(mark), "{name}: PUBLIC 面に {mark} を書かない");
-        }
+fn hook_plugin_carries_no_judgement_skills() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+    assert!(root.join("crates").is_dir(), "repo root を解けている: {}", root.display());
+    assert!(!root.join("skills").exists(), "判断層の skill の dir は残らない: {}", root.display());
+    for name in ["rebrief", "ready-compaction"] {
+        let path = root.join("skills").join(name).join("SKILL.md");
+        assert!(!path.exists(), "{name}: SKILL.md は残らない");
     }
 }
 

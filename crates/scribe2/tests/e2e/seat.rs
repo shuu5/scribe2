@@ -1,12 +1,10 @@
-//! 席の歯の module root（設計 docs/design/seat-roles.md・seat-autonomy.md §3・working-memory.md §8・
-//! account-lifecycle.md §8）。
+//! 席の歯の module root（設計 docs/design/seat-roles.md・account-lifecycle.md §8）。
 //!
 //! 歯は題ごとの submodule に置く（`s2-07l.261`・契約の write-set が題の file 単位で交差しないため・接頭辞ごとの
-//! 固定した組は seat-roles.md §7・`s2-07l.361`）: `wm`（退避 / 消費 / 復元）・`tick`（tick / heartbeat / meter /
-//! 証拠）・`cycle`（inject / cycle / 終了 / 立て直しの shell の門）・`account`（口座の退避と立て直し / hook 集合の
-//! 食い違い / doctor の口座の行）・`launch`（起動 / 復元の第 2 手 / Enter 落ちの修復）・`register`（状態 / 役割 /
-//! 登録）・`rules`（host の面 / 壊れた `--rules`）。この file には **2 つ以上の submodule が使う共有 helper と
-//! fixture**・外形 snapshot の歯（面ごとに 1 本＝`seat_usage_external_form` / `seat_rebrief_external_form` /
+//! 固定した組は seat-roles.md §7・`s2-07l.361`）: `inject`（注入の口）・`account`（口座の退避と立て直し /
+//! hook 集合の食い違い / doctor の口座の行）・`launch`（起動 / 復元の第 2 手 / Enter 落ちの修復）・
+//! `register`（状態 / 役割 / 登録）・`rules`（doctor の host の面）。この file には **2 つ以上の submodule が
+//! 使う共有 helper と fixture**・外形 snapshot の歯（面ごとに 1 本＝`seat_usage_external_form` /
 //! `seat_doctor_external_form`・`s2-07l.327`・snapshot 名が module path を含むので動かさない）・変異生存の検出線の
 //! 歯（`mutant_e2e_*`）だけを残す。
 //!
@@ -21,9 +19,7 @@ mod inject;
 mod launch;
 mod register;
 mod rules;
-mod wm;
 
-use self::wm::rebrief_forms;
 use crate::make_tmp_dir;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -206,7 +202,7 @@ fn start_seat_sized(socket: &str, name: &str, ps1: &str, needle: char, width: &s
 // flip-check: retroactive s2-07l.392
 const PROMPT_WAIT: Duration = Duration::from_secs(60);
 
-// 外形 snapshot は**面ごとに 1 本**（usage / rebrief の DATA / doctor の末尾・`s2-07l.327`・seat-roles.md §7）。
+// 外形 snapshot は**面ごとに 1 本**（usage / doctor の末尾・`s2-07l.327`・seat-roles.md §7）。
 // 1 本に連結すると seat 面の契約が全部この 1 file で交差する（実測 2026-09-15: 4 便が互いに当たり同時に
 // 出せるのが 2 便）。面を触る契約だけがその面の file に当たる形にする（pipe の外形と同じ割り方）。
 
@@ -230,20 +226,32 @@ fn seat_autonomy_subcommands_are_gone_from_the_usage() {
     }
 }
 
+/// 作業記憶の口は**もう無い**（ADR-0045 §2 (2)・`s2-07l.479.2`）: 退避（externalize）・復元（rebrief）・
+/// 消費（consume）は未知の第 1 token として使い方で断られ（rc 1・stdout 0 byte）、使い方の 1 行にも
+/// その名が出ない。`--rules` を受ける席の口も 0 になる（この 3 口が最後だった）。
+///
+/// **消えたことを測る歯**である（base では 3 つとも自分の口として動くので RED）。
+#[test]
+fn seat_working_memory_subcommands_are_gone_from_the_usage() {
+    let usage = stderr_of(&run_seat(&[]));
+    for gone in ["externalize", "rebrief", "consume"] {
+        let out = run_seat(&[gone, "--target", "s:w"]);
+        assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "{gone}: 使い方で断る: {}", stderr_of(&out));
+        assert!(stdout_of(&out).is_empty(), "{gone}: stdout 0 byte");
+        assert!(stderr_of(&out).starts_with("usage: seat "), "{gone}: 使い方 1 行: {}", stderr_of(&out));
+        assert!(!usage.contains(&format!("|{gone} ")), "{gone} は使い方に出ない: {usage}");
+    }
+    assert!(!usage.contains("--wm-dir"), "退避物の置き場の flag も残らない: {usage}");
+    assert!(!usage.contains("--rules"), "席の口は `--rules` を 1 つも受けない: {usage}");
+    for kept in ["register", "launch", "inject"] {
+        assert!(usage.contains(&format!("{kept} --")), "{kept} は使い方に残る: {usage}");
+    }
+}
+
 /// `seat` の使い方（usage 1 行・全 subcommand）を snapshot に固定する（C12.5）。
 #[test]
 fn seat_usage_external_form() {
     let form = stderr_of(&run_seat(&[]));
-    insta::assert_snapshot!(form);
-}
-
-/// rebrief の DATA の 3 形（found / candidate / missing の marker の並び）を snapshot に固定する（C12.5）。
-#[test]
-fn seat_rebrief_external_form() {
-    let mut form = String::new();
-    for out in rebrief_forms() {
-        form.push_str(&stdout_of(&out));
-    }
     insta::assert_snapshot!(form);
 }
 
@@ -263,39 +271,6 @@ fn seat_doctor_external_form() {
 
 // ─────────────────── heartbeat / tick / cycle の共有 fixture ───────────────────
 
-/// file の mtime を `secs` 秒だけ過去へ倒す。
-///
-/// 経過を**時計の粒度に依存せず**作る（`sleep` で待つ歯は遅く、粒度の粗い fs では進まない）。
-#[expect(
-    clippy::expect_used,
-    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
-)]
-fn backdate(path: &Path, secs: u64) {
-    let file = fs::OpenOptions::new()
-        .append(true)
-        .open(path)
-        .expect("marker を開ける");
-    let at = SystemTime::now()
-        .checked_sub(Duration::from_secs(secs))
-        .unwrap_or(SystemTime::UNIX_EPOCH);
-    fs::File::set_modified(&file, at).expect("mtime を倒せる");
-}
-
-/// file の mtime（読めなければ epoch）。
-fn mtime_of(path: &Path) -> SystemTime {
-    fs::metadata(path)
-        .and_then(|meta| meta.modified())
-        .unwrap_or(SystemTime::UNIX_EPOCH)
-}
-
-/// 退避物を 1 つ置く（frontmatter で席を名乗る・FR23 / 裁定 (c)）。
-fn wm_file(dir: &Path, name: &str, seat: &str) -> PathBuf {
-    let path = dir.join(name);
-    fs::create_dir_all(dir).ok();
-    fs::write(&path, format!("---\nseat: {seat}\n---\n\n## 計画弧\n- 続き\n")).ok();
-    path
-}
-
 /// 席の置き場（`<state>/seat/<潰した target>/`）。
 fn seat_dir_of(state: &Path, target: &str) -> PathBuf {
     state.join("seat").join(target)
@@ -313,18 +288,9 @@ fn unix_now() -> u64 {
         .map_or(0, |since| since.as_secs())
 }
 
-/// 席の状態の fixture（`<seat dir>/state.jsonl`・hook の打刻の代わりに置く）。
-#[derive(Clone, Copy)]
-enum StateFix {
-    /// 最終行が Busy（`age_s` 秒前の `UserPromptSubmit`）。
-    Busy { age_s: u64 },
-    /// 最終行が Idle（`Stop`）。
-    Idle,
-}
-
-/// Idle の打刻を置く（tick / cycle が状態の門を通る周の fixture）。
+/// Idle の打刻を置く（注入の門が状態を読む周の fixture）。
 fn stamp_idle(state: &Path, target: &str) {
-    write_state(&seat_dir_of(state, target), StateFix::Idle);
+    write_state(&seat_dir_of(state, target));
 }
 
 /// `/clear` を受けると画面を消して echo を描き直し、hook の代わりに `SessionStart` を `on_clear` の
@@ -410,19 +376,14 @@ fn state_file(seat: &Path) -> PathBuf {
     seat.join("state.jsonl")
 }
 
-/// fixture を置く。
+/// fixture を置く（最終行が Idle＝`Stop`・席の状態の fixture は 1 形だけになった）。
 #[expect(
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
-fn write_state(seat: &Path, fix: StateFix) {
+fn write_state(seat: &Path) {
     fs::create_dir_all(seat).expect("seat dir を作れる");
-    let body = match fix {
-        StateFix::Busy { age_s } => {
-            stamp_line("busy", "UserPromptSubmit", unix_now().saturating_sub(age_s), "sid-fix")
-        }
-        StateFix::Idle => stamp_line("idle", "Stop", unix_now(), "sid-fix"),
-    };
+    let body = stamp_line("idle", "Stop", unix_now(), "sid-fix");
     fs::write(state_file(seat), format!("{body}\n")).expect("打刻を置ける");
 }
 
@@ -509,26 +470,6 @@ fn json_value(line: &str, key: &str) -> Option<vessel::fleet::json_lite::Value> 
         .into_iter()
         .find(|(found, _)| found == key)
         .map(|(_, value)| value)
-}
-
-/// wm dir と state dir の全 entry の (path, size, mtime)（dir の mtime も含む＝lock の作成を捕まえる）。
-fn tree_stat(root: &Path) -> Vec<(PathBuf, u64, SystemTime)> {
-    let mut found = Vec::new();
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        for entry in fs::read_dir(&dir).into_iter().flatten().flatten() {
-            let path = entry.path();
-            let Ok(meta) = fs::symlink_metadata(&path) else {
-                continue;
-            };
-            if meta.is_dir() {
-                stack.push(path.clone());
-            }
-            found.push((path, meta.len(), meta.modified().unwrap_or(SystemTime::UNIX_EPOCH)));
-        }
-    }
-    found.sort();
-    found
 }
 
 // ─────────────────────────── 変異生存の検出線（s2-07l.196・ADR-0013） ───────────────────────────

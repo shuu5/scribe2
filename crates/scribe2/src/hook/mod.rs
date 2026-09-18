@@ -74,8 +74,8 @@ const FLAG_SOCKET: &str = "--tmux-socket";
 const FLAG_PROJECT: &str = "--project";
 /// rules manifest を差し替える flag（役割の行の歯の seam・`rules get --rules` と同じ形）。
 const FLAG_RULES: &str = "--rules";
-/// 台帳の client を差し替える flag（席の指示文の `{ledger}` の歯の seam・`seat rebrief --bd` と同じ形）。
-/// 無い周は PATH の [`crate::seat::rebrief::DEFAULT_BD`]（生成 hooks.json は渡さない）。
+/// 台帳の client を差し替える flag（席の指示文の `{ledger}` の歯の seam）。
+/// 無い周は PATH の [`crate::seat::ledger::DEFAULT_BD`]（生成 hooks.json は渡さない）。
 const FLAG_BD: &str = "--bd";
 /// plugin の root（hooks.json の在る場所）を渡す flag。生成 hooks.json の shell 行が `$CLAUDE_PLUGIN_ROOT` から渡す
 /// （設計 consumer-sync.md §3・器は env を読まない・C2.2）。無い・空の周（plugin の外から撃った hook・fixture）は記録しない。
@@ -486,9 +486,9 @@ fn brief(hooked: &Hooked, outcome: &mut Outcome, started: Instant) {
         outcome.err.push(brief_refused(&format!("no-row {}", role_guard::row_id(row.role))));
         return;
     };
-    let bd = hooked.bd.filter(|found| !found.trim().is_empty()).unwrap_or(crate::seat::rebrief::DEFAULT_BD);
-    let ledger = crate::seat::rebrief::timeout_of(&manifest)
-        .and_then(|timeout| crate::seat::rebrief::counts_of(bd, timeout))
+    let bd = hooked.bd.filter(|found| !found.trim().is_empty()).unwrap_or(crate::seat::ledger::DEFAULT_BD);
+    let ledger = crate::seat::ledger::timeout_of(&manifest)
+        .and_then(|timeout| crate::seat::ledger::counts_of(bd, timeout))
         .unwrap_or_else(|| LEDGER_UNKNOWN.to_owned());
     let text = crate::seat::brief::render(row.role, row, &capabilities, &ledger);
     let emit = Emit { who: EVENT_SESSION_START, what: WHAT_BRIEF, when: "SessionStart", line: text.trim_end_matches('\n') };

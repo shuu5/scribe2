@@ -42,7 +42,7 @@
 ## 5. 注入（ADR-0022 §2.4）
 
 - SessionStart の hook（[vessel-hook.md](./vessel-hook.md)）が pane → target → 登録 row で役割を解き、役割ごとの **tracked な雛形 1 枚**（`headless/runner.txt` と同じ形・binary に埋め込む・`seat/brief/<役割名>.txt`）から生成した指示文を stdout で注入する。登録の無い席は 0 byte（断りも出さない）。
-- **雛形の行の規律**: 行は「穴」か「出所 pointer を持つ行」に限る。穴 = `{capabilities}`（権能の行の値の列）/ `{target}` / `{anchor}` / `{role}` / `{ledger}`（台帳の現在値・読めない周は `unknown`＝数に化けさせない・C10）。pointer の形は [working-memory.md](./working-memory.md) §4 の `PointerKind` を再利用（憲法の id・ADR の節・SRS の要件 id・rules 行の id）。**規範文の定義 = pointer を持たない行**（typed・字面の語彙で判定しない）。
+- **雛形の行の規律**: 行は「穴」か「出所 pointer を持つ行」に限る。穴 = `{capabilities}`（権能の行の値の列）/ `{target}` / `{anchor}` / `{role}` / `{ledger}`（台帳の現在値・読めない周は `unknown`＝数に化けさせない・C10。読みは `bd --readonly list --json` の子 process 1 回で、待ち上限は rules 行 `seat.ledger_timeout_s`。置き場は席の子 module 1 枚＝`s2-07l.479.2` の純移動で復元の DATA と共用していた `seat/rebrief.rs` から移した）。pointer の形は `PointerKind`（憲法の id・ADR の節・SRS の要件 id・rules 行の id）で、分類と anchor での解決は指示文の子 module が持つ（`s2-07l.479.2` の純移動: 退避物の命令行と共用していた `seat/wm.rs` から、読み手の残る側だけを指示文の隣へ移した）。**規範文の定義 = pointer を持たない行**（typed・字面の語彙で判定しない）。
 - **雛形が持つもの**（[ADR-0045](../../design-intent/decisions/ADR-0045-seat-role-is-one-orchestrator-and-dispatcher-lands-runs.html) §2 (3)・全部で 11 行）: 席の同一性 3 行（役割 / 権能の行の値 / 台帳の現在値）・憲法の効く部分 5 行（順位・A1・A4.2・A2 と A3・N1〜N3）・役割の特性 3 行（対話面の作法と信頼度・実装を自分で行わない・決定はしご）。**C 条文は注入しない**（CI の門と PreToolUse の guard が執行する・[ADR-0046](../../design-intent/decisions/ADR-0046-constitution-is-enforced-by-gates-and-only-ask-first-and-never-are-injected.html) §2）。§4 で塞ぐ事項（回答・承認・go・merge・code の Edit）は書かない（二重化しない）。
 - **席間の連絡の行**（FR44・AC19）: 席が 1 つになったので雛形は席間の連絡の行を持たない（[ADR-0045](../../design-intent/decisions/ADR-0045-seat-role-is-one-orchestrator-and-dispatcher-lands-runs.html) §2 (3)）。器はこの経路を持たない（FR44 の経路設計は ADR-0022 §2.8 の射程外＝道具の機能をそのまま使う）。
 - **xtask の検査**（C14.2・AC17・`cargo xtask check` の 1 項目）: 雛形の穴 ⊆ 定義済みの穴・pointer を持たない行 0・行に在って文に無い権能 0（生成文に権能の名がすべて現れる）。生成文は外形 snapshot（C12.5）。
@@ -66,7 +66,7 @@
 - 注入（hook.rs）: 登録済みの target の SessionStart で生成文が出て権能の名がすべて含まれる・登録の無い target で 0 byte・雛形に pointer の無い行を置いた fixture で xtask check が落ちる（AC17）・行に在って文に無い権能を作った fixture で落ちる・生成文の外形 snapshot。
 - 極性一覧 snapshot に `Register`（(a)）と `Role`（(b)）の 2 行（件数 +2・N = K + M の pin）・doctor の項目 1 行（`--state-dir` 付きの外形 snapshot）。
 - property（`prop_role_`・in-file）: `Role` / `Capability` / `PathKind` の `as_str` ↔ parse が往復し、列に無い名は必ず Err。
-- **外形 snapshot と歯の file の置き場**（`s2-07l.327`）: seat の外形 snapshot は面ごとに 1 file（usage / rebrief の DATA / doctor の末尾＝`seat_usage_external_form` / `seat_rebrief_external_form` / `seat_doctor_external_form`・旧 `seat_external_form` は消す）、`tests/e2e/seat/` の歯の file は接頭辞（責務）ごとに 1 file（module `account` = `seat_account_` + `seat_tick_` + `doctor_accounts_`〔doctor が口座を照合する歯・口座の面〕・module `launch` = `seat_launch_` + `seat_restore_` + `seat_attrib_`・module `register` = `seat_register_` + `seat_role_` + `seat_state_`・module `rules` = `seat_rules_` + `rules_host_` + nested module `rules_prop`・分割は `s2-07l.361`・契約表の行 b。母集団は移す前の `seat::account::` の本数を `cargo nextest list` の module 名義で数え、移した後は 4 module の合計がそれと一致する＝接頭辞で数えない）。共有 helper は `seat.rs` の `pub(super)` に置き複製しない。pipe が外形を面ごとに分けている形と同じ。
+- **外形 snapshot と歯の file の置き場**（`s2-07l.327`）: seat の外形 snapshot は面ごとに 1 file（usage / doctor の末尾＝`seat_usage_external_form` / `seat_doctor_external_form`・旧 `seat_external_form` は消す・復元の DATA の面は `s2-07l.479.2` で DATA ごと消えた）、`tests/e2e/seat/` の歯の file は接頭辞（責務）ごとに 1 file（module `inject` = `seat_inject_`・module `account` = `seat_account_` + `doctor_accounts_`〔doctor が口座を照合する歯・口座の面〕・module `launch` = `seat_launch_` + `seat_restore_` + `seat_attrib_`・module `register` = `seat_register_` + `seat_role_` + `seat_state_`・module `rules` = `rules_host_` + `seat_rules_`・分割は `s2-07l.361`・契約表の行 b。母集団は移す前の `seat::account::` の本数を `cargo nextest list` の module 名義で数え、移した後は **5 module**（`s2-07l.479.1` で `tick` / `cycle` が消え `inject` が出来た）の合計がそれと一致する＝接頭辞で数えない）。共有 helper は `seat.rs` の `pub(super)` に置き複製しない。pipe が外形を面ごとに分けている形と同じ。
 
 ## 8. 憲法・制約との整合
 
@@ -186,24 +186,24 @@ C1 / C5（権能の値は行・裁定 id）・C1.2（生成文に手書きの規
   3. **`seat register` は食い違いを断る**: `--model` を省いた周は器が行から導いた値を row に書き、`--model` が行と食い違う周は登録の断りの閉じた列に variant を 1 つ足して断る（event を書かない・受付の極性は in-loop / fail-closed のまま）。
   4. **row の `model` は導出値**: 口座選定（モデル別 7 日窓）と tick の逼迫度が row の `model` を読む経路は変えず、器が書く値を**実測行と同じ語彙（表示名）**に揃える。立て直しが登録 row を更新する既存の 1 本（口座 label の更新）が同じ周に `model` も導出値で書き直す＝land より前に書かれた row は次の立て直しで自動的に直る（移行の口を別に作らない）。
   5. **行を読めない周は起こさない**（fail-closed）: 初回の起動は断り、立て直しは注入せず理由を判定行に残す（黙って口座の設定の既定で起こさない・C10）。
-  6. **doctor に宣言と row の突合を出す**（C3.2・C10）: 登録 row の 1 行に行の既定を 1 語添える。席の doctor の行を描く関数（`seat/role.rs`）は今は manifest を受けないので、`--rules` の値を口座の doctor の行と同じ形で受ける引数を 1 つ足し、呼び手（`crates/scribe2/src/main.rs` の doctor の口・1 か所）が渡す（行を読めない周は既定の語を出さず理由の字面を出す・rc を変えない）。`[SEAT]` の行は変えない（席は宣言を直す権能を持たず、突合の面は doctor である＝同じ事実を 2 面に描かない）。
+  6. **doctor に宣言と row の突合を出す**（C3.2・C10）: 登録 row の 1 行に行の既定を 1 語添える。席の doctor の行を描く関数（`seat/role.rs`）は今は manifest を受けないので、`--rules` の値を口座の doctor の行と同じ形で受ける引数を 1 つ足し、呼び手（`crates/scribe2/src/main.rs` の doctor の口・1 か所）が渡す（行を読めない周は既定の語を出さず理由の字面を出す・rc を変えない）。突合の面は doctor の 1 つである（席は宣言を直す権能を持たず、同じ事実を 2 面に描かない。復元の DATA の `[SEAT]` 行は `s2-07l.479.2` で DATA ごと消えた）。
 - 行 i〜l との交差: §15〜§18 の行 i / j / k / l も `crates/scribe2/src/seat/cycle/launch.rs`・`crates/scribe2/src/seat/cycle/relaunch.rs`・`crates/scribe2/src/seat/cli.rs`・管理 tick の終了の手の module〔`s2-07l.479.1` で削除〕 と e2e の同じ file を触る＝交差する便は直列に流す（口座の決め方と model / effort の導き方は別の軸で、互いの型と断りを変えない）。
-- 触らない: 口座選定の規則と入力・注入の門と極性・復元の経路・`Registration` の項目（effort の field を足さない）・`seat` の使い方の 1 行（`--effort` の flag を作らないので動かない）・`[SEAT]` の行と rebrief の外形 snapshot・極性一覧（guard は増えない）。
+- 触らない: 口座選定の規則と入力・注入の門と極性・復元の経路・`Registration` の項目（effort の field を足さない）・`seat` の使い方の 1 行（`--effort` の flag を作らないので動かない）・極性一覧（guard は増えない）。
 - 歯（`seat_launch_` / `seat_account_relaunch_` / `seat_register_model_` / `seat_role_doctor_` の既存の接頭辞に足す）: (a) 起動行が `claude` の直後に `--model` と `--effort` をこの順で 1 つずつ運び、雛形には旗が残らない／(b) 行と食い違う `--model` の起動は typed に断り、注入 0・登録 row 0／(c) 行と食い違う `--model` の登録は typed に断り event 0、省いた登録は導出値が row に載る／(d) 行と食い違う古い row を持つ席の立て直しは行の値で起こし、更新後の row の `model` が導出値に直る／(e) 行を読めない manifest では起動も立て直しも起こさず理由を名指す／(f) 雛形に旗が二重に在る周の断りが旗ごとに違う理由を名乗る／(g) doctor の登録 row の行が行の既定を添える。
-- 却下案: `--model` の flag を廃す（未知の旗は今の読み方では黙って無視され、宣言の食い違いが静かに通る＝loud でない）／`--model` の上書きを裁定付きの別経路で通す（裁定は行の値を変える側にあり、起動ごとの上書きは行を回避する口になる）／row に effort の field を足す（宣言が 2 面になり、今回の事故と同じ形を effort で作る）／effort を口座の設定 file へ書いて揃える（器が設定の層に依る・C2.2）／`[SEAT]` にも突合を出す（同じ事実の 2 面・席に処置の権能が無い）／立て直しで row を直さず移行の subcommand を作る（口が 1 つ増え、直すまで逼迫度が別の窓を読む）。
+- 却下案: `--model` の flag を廃す（未知の旗は今の読み方では黙って無視され、宣言の食い違いが静かに通る＝loud でない）／`--model` の上書きを裁定付きの別経路で通す（裁定は行の値を変える側にあり、起動ごとの上書きは行を回避する口になる）／row に effort の field を足す（宣言が 2 面になり、今回の事故と同じ形を effort で作る）／effort を口座の設定 file へ書いて揃える（器が設定の層に依る・C2.2）／席の側にも突合を出す（同じ事実の 2 面・席に処置の権能が無い）／立て直しで row を直さず移行の subcommand を作る（口が 1 つ増え、直すまで逼迫度が別の窓を読む）。
 
 <!-- contracts:begin -->
 schema = 1
 
 [[contract]]
 id = "a"
-title = "seat の外形 snapshot を usage / rebrief / doctor の 3 面に割る（旧 snapshot は消し、他 doc の行の名指しを面ごとの file 名へ）"
+title = "seat の外形 snapshot を面ごとに割る（旧 snapshot は消し、他 doc の行の名指しを面ごとの file 名へ）"
 req = ["FR23", "FR59"]
 section = "7"
-write-set = ["crates/scribe2/tests/e2e/seat.rs", "crates/scribe2/tests/e2e/snapshots/e2e__seat__seat_usage_external_form.snap", "crates/scribe2/tests/e2e/snapshots/e2e__seat__seat_rebrief_external_form.snap", "crates/scribe2/tests/e2e/snapshots/e2e__seat__seat_doctor_external_form.snap", "docs/design/seat-roles.md", "docs/design/seat-autonomy.md", "docs/design/dispatcher.md", "docs/design/working-memory.md"]
-verify = ["cargo nextest run -p scribe2 --no-tests=fail seat_usage_external_form seat_rebrief_external_form seat_doctor_external_form"]
+write-set = ["crates/scribe2/tests/e2e/seat.rs", "crates/scribe2/tests/e2e/snapshots/e2e__seat__seat_usage_external_form.snap", "crates/scribe2/tests/e2e/snapshots/e2e__seat__seat_doctor_external_form.snap", "docs/design/seat-roles.md", "docs/design/seat-autonomy.md", "docs/design/dispatcher.md", "docs/design/working-memory.md"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail seat_usage_external_form seat_doctor_external_form"]
 size = "S"
-done = "seat の外形 snapshot が 3 file・歯の本数は移動前 + 2・旧 snapshot は消えて未参照 0・他 doc の行が面ごとの file 名を名指す"
+done = "seat の外形 snapshot が面ごとに割れ・旧 snapshot は消えて未参照 0・他 doc の行が面ごとの file 名を名指す（rebrief の面は `s2-07l.479.2` で DATA ごと消えた）"
 
 [[contract]]
 id = "b"

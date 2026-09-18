@@ -339,16 +339,6 @@ enabled = true
 ruling = "user 2026-09-15T21:09Z"
 ruled_at = "2026-09-15"
 
-# 作業記憶の退避（設計 working-memory.md §5.1・ADR-0018 §2.3）。
-
-[[rule]]
-id = "seat.wm_directive_cap"
-kind = "WmDirectiveCap"
-value = 24
-enabled = true
-ruling = "user 2026-09-12T02:01Z"
-ruled_at = "2026-09-12"
-
 # 着地の順序（設計 gate-cost.md §6・ADR-0021 §2.5）。上限を超えた周は待たずに進む（縮退・止めない）。
 
 [[rule]]
@@ -359,7 +349,7 @@ enabled = true
 ruling = "user 2026-09-13T02:50Z"
 ruled_at = "2026-09-13"
 
-# 作業記憶の復元（設計 working-memory.md §5.2・ADR-0018 §2.4）。台帳の子 process を待つ上限。
+# 席の指示文の台帳の現在値（設計 seat-roles.md §5・ADR-0045 §2 (3)）。台帳の子 process を待つ上限。
 
 [[rule]]
 id = "seat.ledger_timeout_s"
@@ -382,25 +372,6 @@ value = ["answer", "approve", "go", "edit-contract", "edit-design-intent", "edit
 enabled = true
 ruling = "user 2026-09-18T08:3xZ"
 ruled_at = "2026-09-18"
-
-# 台帳の棚卸し（設計 ledger-triage.md §2 / §4）。判定点（blocks 依存）を持たない memo を stale と数える
-# 閾値 2 つ（updated_at からの日数・以上 / priority field の上限・以下）。読み手は seat rebrief。
-
-[[rule]]
-id = "ledger.memo_stale_days"
-kind = "MemoStaleDays"
-value = 3
-enabled = true
-ruling = "user 2026-09-13T14:06Z"
-ruled_at = "2026-09-13"
-
-[[rule]]
-id = "ledger.memo_stale_priority"
-kind = "MemoStalePriority"
-value = 2
-enabled = true
-ruling = "user 2026-09-13T14:06Z"
-ruled_at = "2026-09-13"
 
 # 契約の size ↔ 1 file あたりの増分の見積（行・設計 contract-source.md §3「上限の余地」・rules-manifest.md §4）。
 # 受付（pipe intake）が write-set の各 .rs の余地（R-C4-2 との差）と core の余地（R-C4-1 との差）に当てる。

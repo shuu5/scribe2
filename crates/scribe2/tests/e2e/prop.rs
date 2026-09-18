@@ -2,7 +2,7 @@
 //!
 //! 対象は **純関数 5 群**（Command を呼ぶ e2e は対象外）: 席の打刻 [`Stamp`]・fleet の
 //! [`EventKind`] / [`Stage`] / [`Event`]・rules manifest の toml-lite・headless runner の
-//! `rate_limit_status`・入れ子 JSON reader の [`Tree`]・作業記憶の出所 pointer の分類（`seat::wm`）。入力は proptest の strategy で生成し、
+//! `rate_limit_status`・入れ子 JSON reader の [`Tree`]・席の指示文の出所 pointer の分類（`seat::brief::pointer`）。入力は proptest の strategy で生成し、
 //! 既知の反例（入れ子の status・空白・非 JSON・空要素・巨大な指数）を strategy の空間に含める。
 //!
 //! 反例の永続化（`proptest-regressions/`）は切る＝落ちた周に tracked tree を汚さない
@@ -714,11 +714,11 @@ mod json_tree {
     }
 }
 
-/// 作業記憶の出所 pointer の分類の性質（(6) seat/wm.rs・設計 working-memory.md §4）。
-mod wm_pointer {
+/// 席の指示文の出所 pointer の分類の性質（(6) seat/brief/pointer.rs・設計 seat-roles.md §2）。
+mod brief_pointer {
     use super::config;
     use proptest::prelude::*;
-    use vessel::seat::wm::{classify, ALL};
+    use vessel::seat::brief::pointer::{classify, ALL};
 
     /// 参照に近い字面: 前置き語（無しを含む）× 形の境界に効く字種の先頭語 × 注記。任意の文字列も混ぜる。
     fn reference_like() -> impl Strategy<Value = String> {
@@ -736,7 +736,7 @@ mod wm_pointer {
 
         /// 任意の参照文字列は**高々 1 つ**の kind の形に当たり、分類はその 1 つ（無ければ None）と一致する。
         #[test]
-        fn prop_wm_pointer_classifies_into_at_most_one_kind(reference in reference_like(), prefix in "[a-z][a-z0-9]{0,3}") {
+        fn prop_brief_pointer_classifies_into_at_most_one_kind(reference in reference_like(), prefix in "[a-z][a-z0-9]{0,3}") {
             let prefixes = vec![prefix];
             let hits: Vec<_> = ALL.iter().copied().filter(|kind| kind.matches(&reference, &prefixes)).collect();
             prop_assert!(hits.len() <= 1, "{:?} → {:?}", reference, hits);
@@ -745,7 +745,7 @@ mod wm_pointer {
 
         /// 分類は決定的（同じ入力に同じ結果・prefix の並びの複製で変わらない）。
         #[test]
-        fn prop_wm_pointer_classification_is_deterministic(reference in reference_like(), prefix in "[a-z][a-z0-9]{0,3}") {
+        fn prop_brief_pointer_classification_is_deterministic(reference in reference_like(), prefix in "[a-z][a-z0-9]{0,3}") {
             let once = vec![prefix.clone()];
             let twice = vec![prefix.clone(), prefix];
             let first = classify(&reference, &once);

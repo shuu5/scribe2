@@ -180,20 +180,14 @@ pub enum RuleKind {
     GateTmuxTestThreads,
     /// 便の scope に付ける CPU の重み（席は既定の重み）。
     GateCpuWeight,
-    /// 退避物の節 3（命令・制約）に置ける項目行の上限（行）。超えた退避は止まる（黙って切らない）。
-    WmDirectiveCap,
     /// land が着地待ちの列で自分の番を待つ上限（秒）。超えたら待たずに進む（縮退・止めない）。
     PipeLandWaitS,
-    /// 席の rebrief が台帳（`bd --readonly`）の子 process を待つ上限（秒）。超えたら DATA を出さない。
+    /// 席の指示文の `{ledger}` が台帳（`bd --readonly`）の子 process を待つ上限（秒）。超えたら数えを返さない。
     LedgerTimeoutS,
     /// 役割ごとの権能（設計 seat-roles.md §3・ADR-0022 §2.2）。値は権能の名の列で、名の集合は
     /// [`crate::seat::role::Capability`] が閉じる（列に無い名は読み込みで拒む）。**1 kind で行が 2 つ**
     /// （id は `role.<役割名>`・役割ごとに 1 行）。
     RoleCapabilities,
-    /// 判定点（blocks 依存）を持たない memo を stale と数える `updated_at` からの日数（日・以上）。
-    MemoStaleDays,
-    /// stale と数える memo の priority field の上限（以下・P0 = 0 … P4 = 4）。
-    MemoStalePriority,
     /// 契約の `size` = S の 1 file あたりの増分の見積（行）。契約表の上限の余地（設計 contract-source.md §3）が読む。
     PipeSizeSLines,
     /// 契約の `size` = M の 1 file あたりの増分の見積（行）。
@@ -246,12 +240,9 @@ pub const ALL: &[RuleKind] = &[
     RuleKind::GateSlotWaitS,
     RuleKind::GateTmuxTestThreads,
     RuleKind::GateCpuWeight,
-    RuleKind::WmDirectiveCap,
     RuleKind::PipeLandWaitS,
     RuleKind::LedgerTimeoutS,
     RuleKind::RoleCapabilities,
-    RuleKind::MemoStaleDays,
-    RuleKind::MemoStalePriority,
     RuleKind::PipeSizeSLines,
     RuleKind::PipeSizeMLines,
     RuleKind::PipeSizeLLines,
@@ -299,12 +290,9 @@ impl RuleKind {
             Self::GateSlotWaitS => "GateSlotWaitS",
             Self::GateTmuxTestThreads => "GateTmuxTestThreads",
             Self::GateCpuWeight => "GateCpuWeight",
-            Self::WmDirectiveCap => "WmDirectiveCap",
             Self::PipeLandWaitS => "PipeLandWaitS",
             Self::LedgerTimeoutS => "LedgerTimeoutS",
             Self::RoleCapabilities => "RoleCapabilities",
-            Self::MemoStaleDays => "MemoStaleDays",
-            Self::MemoStalePriority => "MemoStalePriority",
             Self::PipeSizeSLines => "PipeSizeSLines",
             Self::PipeSizeMLines => "PipeSizeMLines",
             Self::PipeSizeLLines => "PipeSizeLLines",
@@ -343,11 +331,8 @@ impl RuleKind {
             | Self::GateSlotWaitS
             | Self::GateTmuxTestThreads
             | Self::GateCpuWeight
-            | Self::WmDirectiveCap
             | Self::PipeLandWaitS
             | Self::LedgerTimeoutS
-            | Self::MemoStaleDays
-            | Self::MemoStalePriority
             | Self::PipeSizeSLines
             | Self::PipeSizeMLines
             | Self::PipeSizeLLines
