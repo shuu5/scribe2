@@ -128,8 +128,12 @@ fn claude_md_done_names_drifted_line_in_check() {
 fn claude_md_done_refuses_missing_and_duplicated_markers() {
     use crate::claude_md::{region_between, RegionError, DONE};
     let twice = format!("{}{}", done_claude_md("a"), done_claude_md("b"));
-    assert_eq!(region_between("# fixture\n", DONE), Err(RegionError::Missing("<!-- done:begin -->")));
-    assert_eq!(region_between(&twice, DONE), Err(RegionError::Duplicated("<!-- done:begin -->", 2)));
+    assert_eq!(
+        region_between("# fixture\n", DONE),
+        Err(RegionError::Missing("CLAUDE.md", "<!-- done:begin -->")),
+        "断る理由は印の在る file を名乗る"
+    );
+    assert_eq!(region_between(&twice, DONE), Err(RegionError::Duplicated("CLAUDE.md", "<!-- done:begin -->", 2)));
     for text in ["# fixture\n".to_owned(), twice] {
         let violations = check_fixture(|dir| {
             write_at(dir, CI_FIXTURE_REL, DONE_CI);
@@ -238,7 +242,7 @@ fn claude_md_prose_counts_unpointered_marked_lines_outside_regions() {
     let broken = format!("{}\n<!-- done:begin -->\n", prose_claude_md());
     assert_eq!(
         prose_count(&broken),
-        Err(RegionError::Duplicated("<!-- done:begin -->", 2)),
+        Err(RegionError::Duplicated("CLAUDE.md", "<!-- done:begin -->", 2)),
         "壊れた印は型で断る"
     );
 }
@@ -254,4 +258,36 @@ fn claude_md_prose_is_a_detection_line_in_check() {
     let _ = fs::remove_dir_all(&dir);
     assert!(report.violations.is_empty(), "検出線は rc を変えない: {:?}", report.violations);
     assert!(report.summary.contains(" claude-md-prose=2/5 "), "{}", report.summary);
+}
+
+/// 憲法の生成区間は `CLAUDE.md` でなく生成 file `docs/constitution.md` に在り、`CLAUDE.md` に
+/// 残るのはその file を名指す pointer 1 行だけである（ADR-0046・`claude_md.rs` の読み手は
+/// 使わない＝現物を字面で読む独立の pin）。
+///
+/// 測るのは 3 つ: 区間の印が `CLAUDE.md` から消え生成 file に 1 本ずつ在ること・規範文の字面
+/// （`scribe2 SHALL`）が `CLAUDE.md` に 1 つも無く生成 file に在ること・done の区間は
+/// `CLAUDE.md` に残ること（移したのは憲法の区間だけである）。
+#[test]
+fn constitution_region_lives_in_the_generated_file_not_claude_md() {
+    const GENERATED_REL: &str = "docs/constitution.md";
+    const NORMATIVE: &str = "scribe2 SHALL";
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+    let read = |rel: &str| fs::read_to_string(root.join(rel)).unwrap_or_else(|err| panic!("{rel} を読める: {err}"));
+    let claude_md = read("CLAUDE.md");
+    let generated = read(GENERATED_REL);
+    for marker in ["<!-- constitution:begin -->", "<!-- constitution:end -->"] {
+        assert_eq!(claude_md.matches(marker).count(), 0, "CLAUDE.md に生成区間の印が残った: {marker}");
+        assert_eq!(generated.matches(marker).count(), 1, "{GENERATED_REL} の印は 1 本: {marker}");
+    }
+    assert_eq!(claude_md.matches(NORMATIVE).count(), 0, "CLAUDE.md に規範文が残った");
+    let (_, after_begin) = generated
+        .split_once("<!-- constitution:begin -->")
+        .expect("生成 file に constitution:begin が在る");
+    let (region, _) = after_begin
+        .split_once("<!-- constitution:end -->")
+        .expect("生成 file に constitution:end が在る");
+    assert!(region.contains(NORMATIVE), "生成 file の区間に規範文が無い");
+    let pointers = claude_md.lines().filter(|line| line.contains(GENERATED_REL)).count();
+    assert_eq!(pointers, 1, "CLAUDE.md が生成 file を名指す行は 1 本");
+    assert!(claude_md.contains("<!-- done:begin -->"), "done の区間は CLAUDE.md に残る");
 }
