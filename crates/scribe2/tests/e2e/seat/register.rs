@@ -179,7 +179,8 @@ fn seat_role_register_refuses_unknown_role_with_usage() {
     let place = role_place();
     role_stamp(&place, "ru:x", Some("sid-u"));
     let usage = stderr_of(&run_seat(&[]));
-    assert!(usage.contains("|register --state-dir S --target T --role R --account L --launch FILE [--anchor DIR]"), "{usage}");
+    // 注入の口が消えて `register` が使い方の先頭の verb になった（`s2-07l.479.3`）＝区切りは `<`。
+    assert!(usage.contains("<register --state-dir S --target T --role R --account L --launch FILE [--anchor DIR]"), "{usage}");
     for role in ["Planner", "reviewer", ""] {
         let out = role_register(&place, "ru:x", role, &["--anchor", "/repo"]);
         assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "role={role:?}");

@@ -18,7 +18,7 @@ use crate::fleet::{
 };
 use crate::headless::{ACCOUNT_ENV, DEFAULT_CLAUDE};
 use crate::rules::manifest::{HostManifest, Manifest};
-use crate::seat::{self, cycle, inject, inject::InputGate};
+use crate::seat::{self, cycle, InputGate, REASON_TMUX_FAILED};
 use std::collections::BTreeSet;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -510,7 +510,7 @@ fn deliver(socket: Option<&str>, target: &str, line: &str) -> Result<(), &'stati
     })?;
     let sent = seat::tmux_ok(socket, &["send-keys", "-t", target, "-l", line])
         && seat::tmux_ok(socket, &["send-keys", "-t", target, "Enter"]);
-    sent.then_some(()).ok_or(inject::REASON_TMUX_FAILED)
+    sent.then_some(()).ok_or(REASON_TMUX_FAILED)
 }
 
 /// pane 本文を `-J`（行末の空白を保つ）で読む（shell の門は prompt 末尾の空白まで見る・`seat launch` の門と同じ読み）。

@@ -12,7 +12,7 @@ use crate::fleet::store::{self, LockPolicy};
 use crate::fleet::State;
 use crate::hook::{seat_name, InjectionRecord, SCHEMA};
 use crate::seat::role::Role;
-use crate::seat::{inject, state, StateDir};
+use crate::seat::{inject, state, InputGate, StateDir, REASON_TMUX_FAILED};
 use std::collections::BTreeSet;
 use std::path::Path;
 use std::thread::sleep;
@@ -93,14 +93,14 @@ pub(super) fn boot(common: &Boot, dir: &Path, (line, when): (&str, &str), betwee
     };
     match crate::seat::shell_input_empty(&pane) {
         Ok(()) => {}
-        Err(inject::InputGate::Busy) => return Booted::Refused(REASON_INPUT_BUSY),
-        Err(inject::InputGate::UnknownInput) => return Booted::Refused(REASON_INPUT_UNKNOWN),
+        Err(InputGate::Busy) => return Booted::Refused(REASON_INPUT_BUSY),
+        Err(InputGate::UnknownInput) => return Booted::Refused(REASON_INPUT_UNKNOWN),
     }
     let baseline = state::baseline(dir);
     let since = state::now_secs();
     let started_at = Instant::now();
     if !send_to(common.socket, common.target, line) {
-        return Booted::Failed(inject::REASON_TMUX_FAILED);
+        return Booted::Failed(REASON_TMUX_FAILED);
     }
     record_sent(common.state_dir, common.target, (line, when), started_at);
     if !started(dir, (baseline, since), common.settle, common.step) {
