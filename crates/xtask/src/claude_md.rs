@@ -430,8 +430,13 @@ pub(crate) const DONE: Markers = Markers {
     end: "<!-- done:end -->",
 };
 
-/// 生成区間の全部（区間外の散文を測るときに外す）。
-const REGIONS: &[Markers] = &[CONSTITUTION, DONE];
+/// `CLAUDE.md` に在る生成区間の全部（区間外の散文を測るときに外す）。
+///
+/// **憲法の区間は入らない**（ADR-0046 で生成 file へ移った）。移した後も憲法を数えると、
+/// `CLAUDE.md` に紛れ込んだ憲法の印 1 つが区間の始まりに読まれて切り出しが倒れ、検出線が
+/// `?` へ落ちる——その周を落とす deny はもう無い（`claude-md-constitution` は生成 file を見る）
+/// ので、**測れなかった周が rc を変えずに素通りする**。
+const REGIONS: &[Markers] = &[DONE];
 
 /// 生成区間を切り出せない理由。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -689,8 +694,8 @@ pub(crate) fn prose_count(text: &str) -> Result<(usize, usize), RegionError> {
 
 /// `cargo xtask check` の検出線 `claude-md-prose=<違反行>/<区間外の非空行>`（**違反行を立てない**）。
 ///
-/// 読めない / 印が壊れた周は `?` を出す（区間の印の破損は `claude-md-constitution` と
-/// `claude-md-done` が deny で落とす）。`CLAUDE.md` が無い木は `n/a`。
+/// 読めない / 印が壊れた周は `?` を出す（done の区間の印の破損は `claude-md-done` が deny で
+/// 落とす）。`CLAUDE.md` が無い木は `n/a`。
 pub(crate) fn measure_prose(layout: &Layout) -> Measured {
     let target = layout.root.join(CLAUDE_MD_REL);
     let value = match fs::read_to_string(&target) {

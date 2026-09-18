@@ -211,14 +211,14 @@ const PROSE_OUTSIDE: [&str; 5] = [
     "lens が差分を見る。",
 ];
 
-/// 区間外の 5 行の間に、印を持つ行を中に持つ 2 つの区間と空行を挟んだ `CLAUDE.md`。
+/// 区間外の 5 行の間に、印を持つ行を中に持つ done の区間と空行を挟んだ `CLAUDE.md`。
+///
+/// 憲法の区間は置かない——ADR-0046 で生成 file へ移り、`CLAUDE.md` に残る生成区間は done
+/// だけだからである。
 fn prose_claude_md() -> String {
     let [first, second, third, fourth, fifth] = PROSE_OUTSIDE;
     [
         first,
-        "<!-- constitution:begin -->",
-        "X1: scribe2 SHALL hold INSIDE-ALPHA.",
-        "<!-- constitution:end -->",
         second,
         third,
         "<!-- done:begin -->",
@@ -245,6 +245,19 @@ fn claude_md_prose_counts_unpointered_marked_lines_outside_regions() {
         Err(RegionError::Duplicated("CLAUDE.md", "<!-- done:begin -->", 2)),
         "壊れた印は型で断る"
     );
+}
+
+/// 憲法の印が片方だけ紛れ込んだ `CLAUDE.md` は「壊れた区間」ではなく**ただの行**である。
+///
+/// ADR-0046 で憲法の区間は生成 file へ移り、`CLAUDE.md` に残る生成区間は done だけになった。
+/// 移した後も区間の一覧が憲法を数えると、この行が区間の始まりに読まれて切り出しが倒れ、検出線が
+/// `?` へ落ちる——そして落とす deny はもう無い（`claude-md-constitution` は生成 file を見る）ので、
+/// **測れなかった周が rc を変えずに素通りする**。
+#[test]
+fn claude_md_prose_counts_a_stray_constitution_marker_as_an_ordinary_line() {
+    use crate::claude_md::prose_count;
+    let stray = format!("{}\n<!-- constitution:begin -->", PROSE_OUTSIDE.join("\n"));
+    assert_eq!(prose_count(&stray), Ok((2, 6)), "紛れ込んだ印は区間でなく 1 行である");
 }
 
 /// `claude-md-prose` は検出線: 判定行に値が出て、違反行は立たない（rc を変えない）。
