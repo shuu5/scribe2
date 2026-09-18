@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="generator" content="folio ADR-pack assembler (folio-bwc / instance#2) — deterministic structure, prose slots unfilled">
-<title>着地の列は候補の木 1 つに対して gate を 1 回撃つ (merge train・列の先頭 N 本を順に rebase した木を 1 回検査し緑なら順に着地・赤は列を解いて 1 本ずつに戻す・検出線は patch-id が不変なら持ち越す・N は rules 行)</title>
+<title>決定はしごは憲法の条 (C17) で持つ (要るか → 既に在るか → 標準 library か入っている依存で足りるか → 1 行で書けるか → 最小実装 を宣言順に通り最初に成立した段で止まる・走査・record・rules 行・機構を足す提案は先に消すものを名指す・機械の面は既に在る lens の過剰設計 5 観点と便の規模の record で rules 行も機構も足さない)</title>
 <style>
 /* ===========================================================================
    folio human-layer design system — core.css (S3 / folio-8oc プロトタイプ)
@@ -455,18 +455,14 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
     "schema": "https://schema.org/",
     "folio": "https://folio.dev/spec/v1/"
   },
-  "@id": "./ADR-0039-landing-train-gates-one-candidate-tree.html",
+  "@id": "./ADR-0044-decision-ladder-is-a-constitution-article.html",
   "@type": "schema:TechArticle",
-  "dc:isReferencedBy": [
-    { "@id": "./ADR-0044-decision-ladder-is-a-constitution-article.html" },
-    { "@id": "./ADR-0043-same-tree-main-check-is-one-record.html" }
-  ],
   "dc:isPartOf": [
     {
       "@id": "./README.html"
     }
   ],
-  "dc:title": "着地の列は候補の木 1 つに対して gate を 1 回撃つ (merge train・列の先頭 N 本を順に rebase した木を 1 回検査し緑なら順に着地・赤は列を解いて 1 本ずつに戻す・検出線は patch-id が不変なら持ち越す・N は rules 行)",
+  "dc:title": "決定はしごは憲法の条 (C17) で持つ (要るか → 既に在るか → 標準 library か入っている依存で足りるか → 1 行で書けるか → 最小実装 を宣言順に通り最初に成立した段で止まる・走査・record・rules 行・機構を足す提案は先に消すものを名指す・機械の面は既に在る lens の過剰設計 5 観点と便の規模の record で rules 行も機構も足さない)",
   "folio:version": "0.1.0",
   "folio:stakeholders": [
     "Developer",
@@ -475,34 +471,49 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
   ],
   "dc:references": [
     {
+      "@id": "../spec/constitution.html#c1"
+    },
+    {
       "@id": "../spec/constitution.html#c2"
     },
     {
-      "@id": "../spec/constitution.html#c10"
+      "@id": "../spec/constitution.html#c4"
     },
     {
       "@id": "../spec/constitution.html#c12"
     },
     {
-      "@id": "../spec/constitution.html#c5"
+      "@id": "../spec/constitution.html#c13"
     },
     {
-      "@id": "../spec/srs.html#FR10"
+      "@id": "../spec/constitution.html#c14"
     },
     {
-      "@id": "../spec/srs.html#FR12"
+      "@id": "../spec/constitution.html#a2"
     },
     {
-      "@id": "../spec/srs.html#FR34"
+      "@id": "../spec/constitution.html#n2"
     },
     {
-      "@id": "../spec/srs.html#FR50"
+      "@id": "../spec/srs.html#FR9"
+    },
+    {
+      "@id": "../spec/srs.html#NFR1"
+    },
+    {
+      "@id": "../spec/srs.html#NFR2"
+    },
+    {
+      "@id": "../research/RESEARCH-ponytail.html"
     },
     {
       "@id": "./ADR-0021-gate-cost-is-measured-and-confined.html"
     },
     {
-      "@id": "./ADR-0019-parallel-runs-exclude-overlap-at-intake-and-runner-resolves-conflicts.html"
+      "@id": "./ADR-0039-landing-train-gates-one-candidate-tree.html"
+    },
+    {
+      "@id": "./ADR-0043-same-tree-main-check-is-one-record.html"
     }
   ]
 }
@@ -514,170 +525,163 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
 <nav class="breadcrumb" aria-label="パンくず"><ol>
   <li><a href="../index.html">design-intent</a></li>
   <li><a href="./README.html">decisions</a></li>
-  <li aria-current="page">ADR-0039</li>
+  <li aria-current="page">ADR-0044</li>
 </ol></nav>
 <!-- /folio:chrome-top -->
 <div class="page" data-component="requirement-type-color-tokens">
 <header data-component="doc-cover-band">
-<p class="cover-eyebrow"><span class="doc-type">設計判断記録 (ADR)</span> <span>scribe2 — 着地の列と再 gate</span></p>
-<h1>着地の列は候補の木 1 つに対して gate を 1 回撃つ (merge train・列の先頭 N 本を順に rebase した木を 1 回検査し緑なら順に着地・赤は列を解いて 1 本ずつに戻す・検出線は patch-id が不変なら持ち越す・N は rules 行)</h1>
-<p class="cover-sub">main が動くたびに着地待ちの便が全部の検査を撃ち直す (1 日に 29 回・便の延べ時間の 43% が gate)。 着地の列の先頭 N 本を 1 つの候補の木に積んで検査を 1 回にし、 赤の周だけ 1 本ずつに戻す。 便ごとの記録と着地の順序は変えない。</p>
-<div class="summary-card"><span class="ic"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#ffe8a8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span><div><p class="lab">この判断が約束すること (1 文サマリ)</p><p class="txt" data-prose-slot="cover-summary" data-slot-id="cover-summary">着地を待つ便の並び（着地の列）の先頭から数本を、main に順に積んだ 1 つの作業木にまとめ、検査をその木に 1 回だけ撃ちます。緑なら順に着地し、赤なら列を解いて今までどおり 1 本ずつに戻します。便の記録と着地の順序は変わりません。</p></div></div>
-<div class="cover-meta"><span class="m"><span class="k">状態</span><span class="v">proposed</span></span><span class="m"><span class="k">選択肢</span><span class="v">5件 (OPT1–OPT5)</span></span><span class="m"><span class="k">結果</span><span class="v">良い 3 / トレードオフ 3</span></span><span class="m"><span class="k">版</span><span class="v">v0.1.0 / 2026-09-17</span></span></div>
-<div class="reader-chip" data-component="cross-doc-ref-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 正当化する要件: <b>SRS-SCRIBE2-MVP</b> の <b>FR34・FR10・FR12・FR50</b></div>
+<p class="cover-eyebrow"><span class="doc-type">設計判断記録 (ADR)</span> <span>scribe2 — 変更の作法 (決定はしご)</span></p>
+<h1>決定はしごは憲法の条 (C17) で持つ (要るか → 既に在るか → 標準 library か入っている依存で足りるか → 1 行で書けるか → 最小実装 を宣言順に通り最初に成立した段で止まる・走査・record・rules 行・機構を足す提案は先に消すものを名指す・機械の面は既に在る lens の過剰設計 5 観点と便の規模の record で rules 行も機構も足さない)</h1>
+<p class="cover-sub">器は 11 日で ADR を 43 本、 検出線 1 本を囲む省き方の機構を 5 つ、 同じ日に足して同じ日に消す字面の門を 1 つ積んだ。 ponytail の決定はしご (要るか → 既に在るか → 標準 library か入っている依存で足りるか → 1 行で書けるか → 最小実装) を憲法の条 C17 にし、 足す提案には先に消すものを名指させる。 機械の面は既に在る lens の過剰設計 5 観点と便の規模の record で、 rules 行も機構も足さない。</p>
+<div class="summary-card"><span class="ic"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#ffe8a8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span><div><p class="lab">この判断が約束すること (1 文サマリ)</p><p class="txt" data-prose-slot="cover-summary" data-slot-id="cover-summary">変更を提案するときも実装するときも、決定はしごを上から順に通り、最初に成立した段で止まることを憲法の条（C17）にします。走査・record・規則の行・仕組みを足す提案は、先に何を消すかを名指します。機械が数える面は、すでに在る審査役（lens）の過剰設計 5 観点と便の規模の記録で、新しい規則の行も仕組みも足しません。「先に消すものを名指す」の判断は審査役と人の散文の判断に残り、機械では拒みません。</p></div></div>
+<div class="cover-meta"><span class="m"><span class="k">状態</span><span class="v">proposed</span></span><span class="m"><span class="k">選択肢</span><span class="v">5件 (OPT1–OPT5)</span></span><span class="m"><span class="k">結果</span><span class="v">良い 3 / トレードオフ 3</span></span><span class="m"><span class="k">版</span><span class="v">v0.1.0 / 2026-09-18</span></span></div>
+<div class="reader-chip" data-component="cross-doc-ref-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 正当化する要件: <b>SRS-SCRIBE2-MVP</b> の <b>FR9・NFR1・NFR2</b></div>
 <div data-component="approval-block">
-<div class="sign"><span class="role">裁定 (user)</span><span class="who">user</span><span class="when">2026-09-17 (対話面・「ADR 候補の裁定は承認する」= 草稿への着手の承認・逐語は台帳 s2-07l.428 の notes・land は別途裁定)</span><span class="stamp self">草稿の着手</span></div>
-<div class="sign"><span class="role">設計 (planner)</span><span class="who">planner</span><span class="when">2026-09-17 起票 (台帳 s2-07l.428・設計 § と契約は本 ADR の land 後)</span><span class="stamp self">作成</span></div>
+<div class="sign"><span class="role">裁定 (user)</span><span class="who">user</span><span class="when">user 2026-09-18T09:0xZ (対話面・C17 の条文案を採用し ADR 草稿を起こす・条文の挿入は /folio-architect の段・逐語は台帳 s2-07l の notes・条の追加は A2 / N4.2)</span><span class="stamp self">裁定済</span></div>
+<div class="sign"><span class="role">設計 (planner)</span><span class="who">planner</span><span class="when">2026-09-18 起票 (研究 RESEARCH-ponytail §3 / §4・機械の面は台帳 s2-07l.188 / .189 で先に land 済・拘束する constitution の版 0.4.6)。 発効は /folio-architect が C17 を delta marker 付きで constitution.html に挿す段 (N4.2)</span><span class="stamp self">作成</span></div>
 </div>
-<div class="reader-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 想定読者: scribe2 の開発 session (planner / admin) と user — CI や merge queue の専門知識は不要 (専門語はやさしい言葉を併記)</div>
+<div class="reader-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 想定読者: scribe2 の開発 session と user — 憲法の条文の手続きや lens の内部の知識は不要 (専門語はやさしい言葉を併記)</div>
 </header>
 <!-- folio:chrome-toc -->
 <!-- /folio:chrome-toc -->
-<section data-component="chapter-deck-band" class="tint-info"><span class="num">01</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 2v6m0 0L9 5m3 3l3-3"/><circle cx="12" cy="14" r="6"/></svg> 背景 / なぜこの判断が要るか</span><h2>いま何が問題か (確定方式を決める力学)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-01">なぜこの判断が要るのかを、実測と現物から説明します。main が動くたびに着地待ちの便が検査を全部撃ち直しており、1 日で 29 回、便の延べ時間の 43% が検査でした。列が長いほど撃ち直しは 2 乗に伸びます。</p></section>
+<section data-component="chapter-deck-band" class="tint-info"><span class="num">01</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 2v6m0 0L9 5m3 3l3-3"/><circle cx="12" cy="14" r="6"/></svg> 背景 / なぜこの判断が要るか</span><h2>いま何が問題か (足す方向にしか働かない力学)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-01">なぜこの判断が要るのかを、現物と研究と裁定から説明します。器は 11 日で決定記録を 43 本積み、時間のかかる検査 1 本を囲んで「省く」仕組みを 5 つ重ね、ある日に足した字面の門をその日のうちに消す契約を起こしました。「書く前に、要るか・既に在るかを順に問う」作法（ponytail の決定はしご）は研究で調べ済みで、その機械の面は既に器に在ります。無いのは、その作法を器の折れない線として持つ条文です。</p></section>
 <div class="chapbody">
 <div data-component="adr-context-list">
-<div data-component="adr-context-row"><span class="cxid">CTX1</span><div class="cxbody"><p class="cxh">実測 — 再 gate が 1 日 29 回・gate が便の延べ時間の 43%</p><p class="cxd">fleet の event log (2026-09-16 00:00Z 以降・84 便・37 bead) の機械集計で、 便の延べ 83 時間のうち gate が 36 時間 (43%)、 追随の再 gate (rebase の後に gate を撃ち直す周) が 29 回 (1 周 中央値 16 分・最大 151 分)、 gate 1 周目は中央値 25 分・最大 299 分だった。 着地した 17 bead の壁時計は中央値 238 分・最大 637 分で、 その多くが列で待つ間の再 gate である。 同時に走る便が 10 以上の時間帯は main が数十分おきに動くので、 列の先頭でない便は着地の番が来るまでに 2〜3 回 gate を撃ち直す。</p></div></div>
-<div data-component="adr-context-row"><span class="cxid">CTX2</span><div class="cxbody"><p class="cxh">現物 — 追随の再 gate は共通 verify・検出線・契約 verify を全部撃ち直す</p><p class="cxd">land の追随 (pipe/land.rs の follow_main) は main の tip が便の base より進んだ周に worktree を rebase し、 gate を撃ち直す (SRS FR34)。 撃ち直す列は共通 verify 6 本 (flip-check・nextest --workspace・clippy・xtask check・deny) と検出線 (mutants-diff) と契約 verify で、 1 周目と同じ。 main の差分が検出線の面 (crates/・Cargo.toml・Cargo.lock・rules/・.vessel.toml) に触れない周だけ検出線を省く (設計 pipeline.md §30・ADR-0021 §2.4) 形と、 面の外だけの周は再 gate ごと省く (同 §33・台帳 s2-07l.416) 形は在るが、 面の内で main が動いた周 (別の便の着地) は全部撃ち直す。 便の自分の diff は衝突無しの rebase で変わらない (29 回全部が衝突無し) のに、 その diff の変異を殺せるかの検出線も撃ち直している。</p></div></div>
-<div data-component="adr-context-row"><span class="cxid">CTX3</span><div class="cxbody"><p class="cxh">現物 — 着地の列<span class="term" data-component="plain-language-term-inline" data-term="着地の列">着地の順番待ちの便の並び</span>は gate 済みの便を先に通す (ADR-0021 §2.5・gate-cost.md §6)</p><p class="cxd">Gated ∧ verdict PASS の便が在る間は他の便の land が待ち (先に gate を通った便を先に着地させる)、 順番の鍵は event log の replay で導く (ADR-0021 §2.5・設計 gate-cost.md §6・台帳 s2-07l.147)。 列の先頭が着地すると main が動き、 次の便は追随して再 gate する = 列の長さ N に対して再 gate が N 回、 gate の時間が N の 2 乗に近く伸びる。 着地の外の merge (docs PR の squash) も同じ再 gate を誘発する (台帳 s2-07l.212・pipeline.md §19 の待ち口)。</p></div></div>
-<div data-component="adr-context-row"><span class="cxid">CTX4</span><div class="cxbody"><p class="cxh">憲法と要件の向き</p><p class="cxd">C12.6 は main を常に緑に保つ (known-red の台帳を持たない)。 FR34 は追随の周に gate をやり直すことを、 FR10 は base が古い周に land が main を動かさないことを、 FR12 と FR50 は便ごとに Landed の記録と着地 commit の CI の照合を求める。 C2 は選定・除外・順序を 1 列挙の上の 1 関数で持つ。 C10 は実測値と持ち越した値を型で分ける。 C5 は規則の値 (列の長さの上限<span class="term" data-component="plain-language-term-inline" data-term="列の長さの上限">1 回の検査に積む便の数の上限</span>) に裁定 id を要る。 ADR-0019 の衝突の起こし直し (rebase が衝突した便は runner を起こし直す) は動かさない。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX1</span><div class="cxbody"><p class="cxh">現物 — 器は足す方向にだけ積み上がってきた</p><p class="cxd">決定記録は <a href="./README.html">decisions/README</a> の表で ADR-0001 (2026-09-07) から <a href="./ADR-0043-same-tree-main-check-is-one-record.html">ADR-0043</a> (2026-09-17) まで 11 日で 43 本。 検出線<span class="term" data-component="plain-language-term-inline" data-term="検出線">変異検査 = 時間のかかる検査の行</span> 1 本 (main 実測 78 分のうち約 75 分・設計 gate-cost.md §5 の実測) を囲んで、 撃たない・持ち越す機構が 5 つ積まれた: 木が同じ周は検出線を撃たない (gate-cost.md §5・<a href="./ADR-0021-gate-cost-is-measured-and-confined.html">ADR-0021</a> §2.4) / 面に触れた周だけ撃つ (pipeline.md §30) / 追随の再 gate を省く (pipeline.md §33) / 候補の木 1 つに検査 1 回と patch-id の持ち越し (pipeline.md §40・<a href="./ADR-0039-landing-train-gates-one-candidate-tree.html">ADR-0039</a>) / 木が同じ周は全段撃たない (gate-cost.md §27・ADR-0043)。 受付の散文走査 (設計 contract-source.md §27 行 aa・台帳 s2-07l.429) は 2026-09-18 に着地し、 同じ日に契約 6 本 (台帳 s2-07l.476 が名指す) を字面で断り、 同じ日にそれを消す契約 (s2-07l.476) が起票された。 どれも個別には筋が通り、 積み重なると器の重さになる。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX2</span><div class="cxbody"><p class="cxh">研究 — ponytail の決定はしごと、 その機械の面は既に器に在る</p><p class="cxd"><a href="../research/RESEARCH-ponytail.html">RESEARCH-ponytail</a> (2026-09-13) §2: ponytail は「要るか → 既に在るか → 標準 library で足りるか → native で足りるか → 入っている依存で足りるか → 1 行で書けるか → 最小実装」の決定はしごを最初に成立した段で止まる作法で、 強制の仕組みは無く散文の指示だけ。 独立検証では効果は実在するが宣伝値の 1/4〜1/2 (同 §2)。 同 §3 の突合: 段の大半は既に機械の線に対応する (依存 → C13 の allow-list と予算・最小実装 → C4 の大きさの上限・再利用 → 契約の write-set と lens・「最初に成立した段で止まる」→ C2 の宣言順)。 同 §4 の写し方 3 つのうち (1) lens の観点に過剰設計 5 種を足す・(2) 便の規模を record に残す は land 済: 台帳 s2-07l.188 (設計 pipeline.md §17) が lens の findings を閉じた 8 観点 (contract-fit / teeth-nonvacuous / constitution + delete / stdlib / native / yagni / shrink・宣言順・0 件も書く・欠けた周と母集団 0 の周は INCONCLUSIVE) にし、 s2-07l.189 が便の規模 (size / files / lines / pub_symbols・閾値なし) を verdicts の record に残す。 (3) はしごの typed な宣言 は未着手 (schema と SRS の FR を要する)。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX3</span><div class="cxbody"><p class="cxh">裁定 — 決定はしごを憲法に取り込む</p><p class="cxd">user 裁定 2026-09-18T09:0xZ (対話面・逐語は台帳 s2-07l の notes) は C17 の条文案を採用し、 ADR の草稿を起こしてから /folio-architect の段で条文を渡すと決めた。 同じ日の先行の裁定 (要旨) は、 大整理を「削る側」で行い、 決定はしごを器の設計と提案の両方に当て、 憲法へ取り込むという向きを示している。 研究 §4 の写し方 (1)(2) は既に land しているので、 本 ADR が足すのは条文 1 つだけである。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX4</span><div class="cxbody"><p class="cxh">憲法の向き</p><p class="cxd">N2 / C1.2 は散文にしか無い規則を規則と認めない (ponytail を skill として注入する形は取れない)。 C14 は規律を文書 (原則と裁定) と data (manifest = 強制する規則) の 2 面で持ち、 C14.2 は値を持つ規則の 2 面の drift を CI が拒む。 C2 は順序を列挙の宣言順で持ち散文の順序を持たない。 C4 / C13 は段の一部を既に deny gate で持つ。 C12.4 は検出線を deny へ昇格するには裁定 id が要ると定める。 A2 / N4.2 は条の追加を「新しい ADR + delta marker + 裁定 id」の手続きに限る。 憲法の順位は「場当たりの修正の禁止 → 増殖の防止 → compile 速度」で、 増殖の防止が 2 番目に在る。</p></div></div>
 </div>
 </div>
-<section data-component="chapter-deck-band" class="tint-brand"><span class="num">02</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3v18"/><path d="M5 7l-3 6h6z"/><path d="M19 7l-3 6h6z"/><path d="M3 21h18"/></svg> 判断を縛る力 / 評価の軸</span><h2>選択肢を測るものさし (安全・速さ)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-02">判断を評価する 5 本のものさしです。main の先端が常に緑であること、検査の総時間が便の数に比例すること、着地の順序と便ごとの記録を変えないこと、赤の周に手で選別しないこと、持ち越した値を実測と区別することです。</p></section>
+<section data-component="chapter-deck-band" class="tint-brand"><span class="num">02</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3v18"/><path d="M5 7l-3 6h6z"/><path d="M19 7l-3 6h6z"/><path d="M3 21h18"/></svg> 判断を縛る力 / 評価の軸</span><h2>選択肢を測るものさし (規則・既存・判断・手続き・予算)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-02">判断を評価する 5 本のものさしです。散文だけの規則を規則にしないこと、既に在る機械の面を使い新しい仕組みを足さないこと、「要るか」「何を消すか」の判断を機械に肩代わりさせず形と件数だけを機械が持つこと、条の追加の手続きを通ること、審査役の予算と便の大きさを増やさないことです。</p></section>
 <div class="chapbody">
 <table data-component="adr-driver-table"><tbody>
-<tr data-component="adr-driver-row"><td class="drid">DR1</td><td>main の先端は常に緑で、 着地の前に着地後の木がそのまま検査されている <span class="drg">憲法 C12.6 / SRS FR34 (追随の周は gate をやり直す) / FR10</span></td></tr>
-<tr data-component="adr-driver-row"><td class="drid">DR2</td><td>着地の列の gate の総時間は着地する便の数に比例し、 列の長さの 2 乗に伸びない <span class="drg">CTX1 / CTX3 / SRS NFR1 (lens の予算) と gate-cost.md の費用の面</span></td></tr>
-<tr data-component="adr-driver-row"><td class="drid">DR3</td><td>着地の順序と待ちの規則は 1 つの列と 1 つの関数のままで、 便ごとの記録 (Landed・着地 commit・CI の照合) は変わらない <span class="drg">憲法 C2 / ADR-0021 §2.5 / SRS FR12 / FR50</span></td></tr>
-<tr data-component="adr-driver-row"><td class="drid">DR4</td><td>赤の周は手書きの帰属や選別をせず、 器が列を解いて既存の 1 本ずつの経路に戻す (fail-closed) <span class="drg">憲法 C12.6 / N2 (散文の規則を持たない) / ADR-0019 (衝突は起こし直し)</span></td></tr>
-<tr data-component="adr-driver-row"><td class="drid">DR5</td><td>持ち越した検査の値は実測と型で区別され、 記録が無い周は撃ち直す <span class="drg">憲法 C10 / C12.4 (変異の生存は検出線であって deny ではない)</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR1</td><td>散文・記憶・会話にしか無い規則を規則として持たない (注入する skill や prompt の本文は規則ではない) <span class="drg">憲法 N2 / C1.2</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR2</td><td>既に在る機械の面を使い、 新しい走査・record・rules 行・機構を足さない = 本 ADR 自身が決定はしごの段 2 (既に在るか) で止まる <span class="drg">CTX2 / 憲法の順位「増殖の防止」</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR3</td><td>「要るか」「何を消すか」の判断は機械に肩代わりさせず、 機械が持つのは閉じた型と件数と母集団だけ (散文で判断・機械で形を強制) <span class="drg">憲法 C10 / C3.3 / 研究 §4 の安全側の理由</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR4</td><td>条の追加は新しい ADR + constitution.html の delta marker + 裁定 id の手続きを通り、 発効は /folio-architect の段 <span class="drg">憲法 A2 / N4.2 / C8.3</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR5</td><td>lens の呼出し回数と token の予算、 便の diff の大きさの目標値を増やさない <span class="drg">SRS NFR1 / NFR2 / rules 行 gate.lens_count</span></td></tr>
 </tbody></table>
 </div>
-<section data-component="chapter-deck-band" class="tint-violet"><span class="num">03</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M8.5 6H13a3 3 0 0 1 3 3v.5M8.5 18H13a3 3 0 0 0 3-3v-.5"/></svg> 検討した選択肢 / 3 つの確定方式</span><h2>それぞれの利点と欠点を並べる</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-03">候補を 5 つ並べます。先頭数本を 1 つの木にまとめて 1 回検査する案、今の 1 本ずつの形、追随の検査を撃たない案、先に着地して赤なら戻す案、先頭 k 本ごとの木を並列に検査する案です。</p></section>
+<section data-component="chapter-deck-band" class="tint-violet"><span class="num">03</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M8.5 6H13a3 3 0 0 1 3 3v.5M8.5 18H13a3 3 0 0 0 3-3v-.5"/></svg> 検討した選択肢 / 5 つの形</span><h2>それぞれの利点と欠点を並べる</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-03">候補を 5 つ並べます。決定はしごを憲法の条にして機械の面は既存のものを指す案、ponytail を skill や散文として注入する案、はしごの段を型で宣言させて gate が形を検査する案、条に対応する規則の行を 1 本足す案、そして何もしない案です。</p></section>
 <div class="chapbody">
 <div class="opt-grid">
 <div data-component="adr-option-card" class="chosen">
-<div class="opt-head"><span class="opt-id">OPT1</span><span class="opt-name">着地の列の先頭 N 本を 1 つの候補の木<span class="term" data-component="plain-language-term-inline" data-term="候補の木">列の先頭 N 本を main に順に積んだ作業木</span>に積み、 gate を 1 回撃って緑なら順に着地する (merge train)</span><span class="opt-verdict chosen">採用</span></div>
-<p class="opt-sum">列 (ADR-0021 §2.5 の順) の先頭から N 本 (rules 行 land.train_max が上限) を、 main の先端に順に rebase して 1 つの候補の木を作る (rebase が衝突した便は列から外れて ADR-0019 の起こし直しへ・後続は詰める)。 候補の木に対して共通 verify を 1 回、 各便の契約 verify をその便の分、 検出線は便の diff の patch-id<span class="term" data-component="plain-language-term-inline" data-term="patch-id">diff の中身だけから決まる指紋</span> が前周の記録と同じなら前周の record を provenance 付きで写し、 違えば撃つ。 緑なら N 本を列の順に着地 (便ごとに squash commit・Landed の記録・push は 1 回・CI の照合は先端の commit で)。 赤なら列を解き、 先頭 1 本だけの既存の経路 (追随 → 再 gate) に戻る (帰属はしない)。 N = 1 の周は現行と同じ。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT1">着地待ちの先頭数本を main に順に積んだ 1 つの作業木を作り、検査をその木に 1 回撃ちます。緑なら順に着地し、赤なら列を解いて 1 本ずつに戻します。変異検査は便の diff の指紋（patch-id）が前回と同じなら前回の結果を印付きで使い回します。</span>
+<div class="opt-head"><span class="opt-id">OPT1</span><span class="opt-name">決定はしごを憲法の条 C17 にし、 機械の面は既に在る lens の 5 観点と便の規模の record を指す (rules 行も機構も足さない)</span><span class="opt-verdict chosen">採用</span></div>
+<p class="opt-sum">Always の条 C17 を A2 / N4.2 の手続きで加える。 強制する面は台帳 s2-07l.188 / .189 で land 済の閉じた型 (findings の 5 観点・便の規模の 4 field) で、 新しい rules 行・走査・record・機構は足さない。 「先に消すものを名指す」は lens と提案の審査の散文の判断に残す。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT1">「上から順に問い、最初に成立した段で止まる」「足すなら先に消すものを名指す」を憲法の条にします。機械が数える面は、審査役がすでに数えている過剰設計の 5 観点と、便の大きさの記録です。新しい規則の行も仕組みも足しません。この ADR 自身が、はしごの「既に在るか」の段で止まっています。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>列の長さ N に対して gate が N 回から 1 回になる (CTX1 の 29 回が数回に落ちる)・検出線は patch-id 不変の便で撃たない</li>
-<li>着地の順序・待ちの規則・便ごとの記録は不変 (列は同じ 1 関数の上に「N 本まとめて検査する」を足すだけ)</li>
-<li>赤の周の処置が既存の経路 (1 本ずつ) そのもので、 新しい判定を足さない</li>
+<li>条文 1 つで器の設計と提案の両方に効き、 code の変更は 0 (機械の面は land 済)</li>
+<li>散文の規則にならない (N2): 強制する面は閉じた型と件数と母集団で、 欠けた周は INCONCLUSIVE (FR9)</li>
+<li>判断は機械に肩代わりさせず (DR3)、 増殖の防止の順位を条文として持つ</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>候補の木で検査されるのは N 本を全部積んだ木だけで、 途中の commit (先頭 k 本だけの木) は個別に検査されない (main の途中の commit が赤でありうる・先端は緑)</li>
-<li>1 本の赤が N 本の待ちを 1 周分止める (列を解いた後は先頭から 1 本ずつ)</li>
-<li>rules 行 1 本 (列の長さの上限) が増え、 値は裁定 id を要る</li>
+<li>「先に消すものを名指す」は機械では拒めない = lens の delete の件数と審査の散文の判断だけが見る</li>
+<li>条に値が無いので manifest の行を持たない (C2 / C16 と同じ形)。 後で deny の門にしたければ裁定 id 付きの昇格が別途要る (C12.4)</li>
 </ul></div></div>
 </div>
 <div data-component="adr-option-card" class="rejected">
-<div class="opt-head"><span class="opt-id">OPT2</span><span class="opt-name">現行のまま (1 本ずつ追随 → 再 gate) + docs だけの周の省略 (§33)</span><span class="opt-verdict rejected">不採用</span></div>
-<p class="opt-sum">列の先頭が着地するたびに次の便が追随して全部撃ち直す。 main の差分が面の外だけの周は省く。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT2">今の形です。列の先頭が着地するたびに次の便が追随して検査を全部撃ち直します。docs だけの変更で main が動いた周は撃ち直しを省きますが、便の着地で動いた周は全部撃ち直します。</span>
+<div class="opt-head"><span class="opt-id">OPT2</span><span class="opt-name">ponytail を skill / prompt の散文として注入する</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">ponytail の配布形そのまま。 散文にしか無い規則は規則ではなく (N2 / C1.2)、 prompt 本文が規範文になる穴 (台帳 s2-07l.176) を広げる (研究 §3 (a))。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT2">ponytail をそのまま「読み物」として agent に渡す案です。いちばん手軽ですが、この器は「文章にしか無い規則は規則ではない」と決めているので、守られたかどうかを誰も測れず、prompt の本文が規則になってしまう穴を広げます。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>器の変更が §33 だけで済む</li>
-<li>途中の commit も含めて main の全 commit が検査済み</li>
+<li>導入が最も軽い・ponytail の文面と強度をそのまま使える</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>面の内で main が動く周 (便の着地) は全部撃ち直すので、 列が長いほど 2 乗に伸びる (CTX1)</li>
-<li>検出線を patch-id 不変でも撃つ</li>
+<li>N2 / C1.2 に反する (散文の規範文)・遵守を測る面が無い・prompt 本文の穴 (s2-07l.176) を広げる</li>
 </ul></div></div>
 </div>
 <div data-component="adr-option-card" class="rejected">
-<div class="opt-head"><span class="opt-id">OPT3</span><span class="opt-name">追随の再 gate を撃たず、 便ごとの gate と main の CI だけに頼る</span><span class="opt-verdict rejected">不採用</span></div>
-<p class="opt-sum">base が古い便も rebase だけして着地し、 赤は main の CI で拾う。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT3">追随の検査を撃たず、便ごとの検査と main の CI だけに頼る案です。検査は 1 回で済みますが、着地の前に着地後の木を検査しないので、main が赤になってから気づくことになります。</span>
+<div class="opt-head"><span class="opt-id">OPT3</span><span class="opt-name">はしごの段を runner が typed に宣言し、 gate が段の含意を検査する (研究 §4 (3))</span><span class="opt-verdict rejected">不採用 (保留)</span></div>
+<p class="opt-sum">段を閉じた enum (Skip / Reuse / Stdlib / Native / Dependency / OneLine / Minimal) にし、 runner が止まった段と上の段を退けた理由を record で宣言、 gate が形 (段の宣言・含意と diff の整合) を検査する。 契約の field と record の schema を決めるので SRS の FR と ADR が要る。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT3">実装役に「どの段で止まったか」を型で宣言させ、gate がその形を検査する案です。効果は最も高いと読みますが、契約の形と記録の形を決める重い変更で、要件書の改訂も要ります。今は「足す前に消す」段階なので保留し、条文と lens の件数で足りないと分かったときに起こします。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>gate が便ごとに 1 回で済む</li>
+<li>runner が必ず一度「要るか・在るか」を通る構造になり、 過剰設計が record に残る (効果は 3 案で最も高いと読む)</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>着地の前に着地後の木を検査しない = FR34 と C12.6 に反する (main が赤になってから気づく)</li>
-<li>赤の main を直す便が列に割り込む = known-red の運用になる</li>
+<li>schema と契約の field を決める (ADR を書く条件 3)・SRS の FR 1 本・契約 2〜3 便 = 今の「削る側」の向き (CTX3) と DR2 に反する・Stdlib / Native は照合できる形が無い (研究 §5)</li>
 </ul></div></div>
 </div>
 <div data-component="adr-option-card" class="rejected">
-<div class="opt-head"><span class="opt-id">OPT4</span><span class="opt-name">楽観的に着地して main が赤なら revert する</span><span class="opt-verdict rejected">不採用</span></div>
-<p class="opt-sum">検査を後回しにして着地し、 CI が赤なら器が revert commit を積む。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT4">先に着地して、CI が赤なら器が戻す案です。列は止まりませんが、main が赤である時間を認めることになり、戻しの commit が記録を汚します。</span>
+<div class="opt-head"><span class="opt-id">OPT4</span><span class="opt-name">C17 に対応する rules 行 1 本 (例: R-C17-1 / review.overdesign・値 = 過剰設計 5 観点の名) を manifest に足す</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">C14.2 の 2 面のために行を 1 本足す案。 だが 5 観点の名は既に閉じた enum の宣言 (findings.rs) に在り、 行はその写しになる (1 つの列を 2 か所で持つ = drift の源)。 enabled の knob は誰も求めていない。 値 (閾値) の無い条は manifest に行を持たないのが現行の形 (C2 / C3 / C6 / C10 / C11 / C14 / C15 / C16 に行は無く、 R- 行を持つのは C4 / C7 / C8 / C9 / C12 / C13)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT4">条文に対応する規則の行を 1 本足す案です。「文書と機械の 2 面をそろえる」ためのようですが、5 観点の名前はすでに器の型に在り、行はその写しになって 2 か所がずれる元になります。値を持たない条は行を持たない、というのが今の憲法の形です。この案自体が、はしごの「既に在るか」で止まります。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>列が止まらない</li>
+<li>C17 の機械の面が manifest から辿れる・後の deny への昇格が行の enabled の反転で済む</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>main が赤である時間を認める (C12.6 に反する)・revert の連鎖が便の記録を汚す</li>
+<li>閉じた enum の宣言を manifest に写す = 同じ列を 2 か所で持つ (C1 の「値は 1 か所」の趣旨に反する)・enabled の knob は yagni・値の無い条は行を持たない現行の形と揃わない</li>
 </ul></div></div>
 </div>
 <div data-component="adr-option-card" class="rejected">
-<div class="opt-head"><span class="opt-id">OPT5</span><span class="opt-name">先頭 k 本ごとの木 (k = 1..N) を並列に検査する (merge queue の一般形)</span><span class="opt-verdict rejected">不採用</span></div>
-<p class="opt-sum">候補の木を N 個 (先頭 1 本・2 本・…・N 本) 作り、 並列に gate して緑の最長の先頭列を着地する。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT5">先頭 1 本・2 本・…・N 本の木を並列に検査する案です。途中の commit まで検査でき赤の便も特定できますが、検査の費用が N 倍に戻り、封じ込めの枠と口座の窓を N 個食います。枠の余裕を実測した後に改訂で足す候補です。</span>
+<div class="opt-head"><span class="opt-id">OPT5</span><span class="opt-name">何もしない (機械の面は land 済なので条文は要らない)</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">lens の 5 観点と便の規模の record は既に在る。 だが CTX1 の力学 (11 日で ADR 43 本・検出線 1 本を囲む機構 5 つ・同日に足して同日に消す門) は、 その 2 つが land した後も続いた。 「足す前に消す」を折れない線として持たなければ、 提案の段で止まる根拠が無い。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT5">機械が数える面はもう在るのだから条文は要らない、という案です。しかし、その面が入った後も器は足す方向に積み上がり続けました。数える面が在っても、「足す前に消す」を守るべき線として持たなければ、提案の段で止まる根拠がありません。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>途中の commit も検査済みになり、 赤の便を機械で特定できる</li>
+<li>変更が 0・憲法の改訂手続きが要らない</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>gate の費用が N 倍に戻る (封じ込めの枠と口座の窓を N 個食う・ADR-0021 の並列の上限に当たる)</li>
-<li>検査の枠が空いた周だけ有効で、 空かない host では OPT1 と同じ形に縮退する = まず OPT1 を置き、 枠の余裕の実測の後に改訂 ADR で足す</li>
+<li>CTX1 の力学がそのまま続く・lens の 5 観点は「数える」だけで、 提案を止める線がどこにも無い</li>
 </ul></div></div>
 </div>
 </div>
 </div>
-<section data-component="chapter-deck-band" class="tint-ok"><span class="num">04</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14 4l6 6-3 3-6-6z"/><path d="M11 7L4 14l3 3 7-7"/><path d="M3 21h10"/></svg> 採用した判断 / どの方式を選ぶか</span><h2>選んだ方式と、 それが守る要件 (cross-doc 照会)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-04">選んだ案と、それが要件書のどの要件を支えるかを示します。列の先頭 N 本を 1 つの木に積んで 1 回検査し、緑なら順に着地、赤なら列を解きます。追随の検査・古い base の扱い・便ごとの着地の記録・push と CI の照合の要件に対応します。</p></section>
+<section data-component="chapter-deck-band" class="tint-ok"><span class="num">04</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14 4l6 6-3 3-6-6z"/><path d="M11 7L4 14l3 3 7-7"/><path d="M3 21h10"/></svg> 採用した判断 / どの形を選ぶか</span><h2>選んだ形と、 それが守る要件 (cross-doc 照会)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-04">選んだ案と、それが要件書のどの要件を支えるかを示します。決定はしごを憲法の条 C17（Always）として加え、機械の面は審査役の過剰設計 5 観点と便の規模の記録を指します。規則の行・走査・記録・仕組みは足しません。審査役の判定が 3 値の外や観点欠けで判定不能になること（FR9）、審査役の予算（NFR1）、便の大きさの目標（NFR2）に対応します。</p></section>
 <div class="chapbody">
 <div data-component="adr-decision-panel" id="decision">
 <p class="dec-kick">採用 — OPT1</p>
-<p class="dec-state">器 SHALL 着地の列 (ADR-0021 §2.5 の順) の先頭から rules 行 land.train_max 本までを main の先端に順に rebase した候補の木 1 つを作り、 その木に対して共通 verify を 1 回と各便の契約 verify を撃ち、 検出線 SHALL 便の diff の patch-id が前周の記録と同じ周は前周の record を持ち越しの印付きで写して撃たず、 記録が無いか違う周は撃つ。 緑の周は器 SHALL N 本を列の順に着地し (便ごとに commit と Landed の記録・push は 1 回・CI の照合は先端の commit)、 赤の周は器 SHALL 列を解いて先頭 1 本の既存の経路に戻る。 rebase が衝突した便 SHALL 列から外れて ADR-0019 の起こし直しへ進む。</p>
-<span class="dec-plain" data-prose-slot="plain" data-slot-id="decision-plain">着地の列の先頭から、規則の値までの本数を main に順に積んだ 1 つの作業木を作り、共通の検査を 1 回、各便の契約の検査をその便の分だけ撃ちます。変異検査は便の diff の指紋が前回と同じなら前回の結果を印付きで写します。緑なら便ごとに commit と記録を残して順に着地し、push は 1 回で CI は先端の commit で照合します。赤なら列を解き、先頭 1 本だけの今までの経路に戻します。rebase がぶつかった便は列から外れ、起こし直しに進みます。</span>
-<span class="dec-why" data-prose-slot="rationale" data-slot-id="decision-rationale">撃ち直しが 2 乗に伸びるのは、検査の単位が便だからです。着地後の木を 1 回検査すれば、先端が緑であることは同じ強さで保証でき、便ごとに持つべきものは記録だけになります。赤の周は帰属せずに列を解けば、新しい判定を足さずに今の経路に戻れます。途中の commit が検査されない代償は、先端の緑と便ごとの記録で受けます。</span>
+<p class="dec-state">憲法 SHALL Always に条 C17 を加える。 条文 (日本語): 「変更を提案・実装するとき、 scribe2 は決定はしごを宣言順に通り (要るか → 既に在るか → 標準 library か入っている依存で足りるか → 1 行で書けるか → 最小実装)、 最初に成立した段で止まる。 走査・record・rules 行・機構を足す提案は、 先に何を消すかを名指す。」 条文 (EARS・生成区間の形): 「C17: WHEN a change is proposed or implemented, scribe2 SHALL pass the decision ladder in declaration order (needed at all, already exists, standard library or an existing dependency suffices, one line, minimal implementation) and SHALL stop at the first rung that holds, and SHALL name what is removed before adding a scanner, record, rules row or mechanism.」 機械の面 SHALL 既に在るものを指す: lens の findings の閉じた category のうち過剰設計の 5 観点 (delete / stdlib / native / yagni / shrink・宣言順・0 件も書く・欠けた周と母集団 0 の周は INCONCLUSIVE・台帳 s2-07l.188・設計 pipeline.md §17) と、 便の規模の record (size / files / lines / pub_symbols・閾値なし・台帳 s2-07l.189)。 本 ADR SHALL NOT rules 行・走査・record・機構を足す (条に値が無く manifest の行を持たない形は C2 / C16 と同じ)。 「先に何を消すかを名指す」 SHALL lens (delete の件数) と提案の審査 (planner / user の対話面) の散文の判断で見るものとし、 機械 SHALL NOT それを拒む。 deny の門への昇格 SHALL 裁定 id を伴う別の裁定 (C12.4 / C5) とする。 発効 SHALL /folio-architect が constitution.html に C17 を delta marker 付きで挿し §2 の一覧表と件数を改めた版 (N4.2) とし、 本 ADR SHALL それまで proposed のまま何も拘束しない。</p>
+<span class="dec-plain" data-prose-slot="plain" data-slot-id="decision-plain">憲法の「いつも守る」段に C17 を足します。中身は「変更を提案するときも作るときも、要るか → 既に在るか → 標準 library か入っている依存で足りるか → 1 行で書けるか → 最小実装、の順に問い、最初に成立した段で止まる。走査・記録・規則の行・仕組みを足す提案は、先に何を消すかを名指す」です。機械が数える面は、審査役がすでに数えている過剰設計の 5 観点と、便の大きさの記録で、新しい行も仕組みも足しません。「何を消すか」の判断は審査役と人に残り、機械では拒みません。条文が効き始めるのは、/folio-architect で憲法の本文に印付きで挿してからです。</span>
+<span class="dec-why" data-prose-slot="rationale" data-slot-id="decision-rationale">はしごの段の大半（依存・大きさ・再利用・宣言順）は憲法の既存の線に既に対応していて、無かったのは「要るか」「既に在るか」を先に問う順序そのものと、「足すなら先に消す」の線です。順序と線は値を持たないので、機械の面は閾値ではなく、審査役が数える 5 観点と便の大きさの記録で足ります。この 2 つは研究の写し方 (1)(2) として既に land しているので、条文以外に足すものがありません。行を 1 本足す案は、5 観点の名を型と manifest の 2 か所で持つことになり、はしごの「既に在るか」で止まります。判断（この抽象は要るか・何を消すか）は機械では決められないので、散文の判断に残すと正直に書き、拒む門にしたいときは裁定 id を伴う別の裁定にします。</span>
 <div class="justify-box"><p class="jh">この判断が正当化する要件 (cross-doc 照会 → SRS-SCRIBE2-MVP)</p>
-<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR34" data-justifies-req="FR34" data-justifies-role="claim">FR34</a><span class="justify-role">claim</span><span class="justify-note">追随の周の「gate をやり直す」を、 便ごとでなく候補の木 1 つに対して 1 回行う = やり直しの単位が便から木に変わり、 進んだ base の事実は便ごとに記帳する。</span></div>
-<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR10" data-justifies-req="FR10" data-justifies-role="claim">FR10</a><span class="justify-role">claim</span><span class="justify-note">base が古い便は候補の木に積まれるまで main を動かさない。 列を解いた周も同じ (land は何もしない)。</span></div>
-<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR12" data-justifies-req="FR12" data-justifies-role="claim">FR12</a><span class="justify-role">claim</span><span class="justify-note">着地は便ごとに Landed を記帳し verdicts.jsonl に 1 行ずつ append する = 列でまとめて検査しても記録の単位は便のまま。</span></div>
-<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR50" data-justifies-req="FR50" data-justifies-role="claim">FR50</a><span class="justify-role">claim</span><span class="justify-note">push は列で 1 回、 CI の照合は先端の着地 commit の id で行い、 台帳の close は便ごと。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR9" data-justifies-req="FR9" data-justifies-role="claim">FR9</a><span class="justify-role">claim</span><span class="justify-note">C17 の機械の面は lens の 3 値の verdict に乗る: 過剰設計 5 観点の件数か母集団が欠けた周は PASS を名乗らず INCONCLUSIVE (台帳 s2-07l.188) で、 「見ていない」が「穴なし」に化けない。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#NFR1" data-justifies-req="NFR1" data-justifies-role="claim">NFR1</a><span class="justify-role">claim</span><span class="justify-note">5 観点は 1 本の lens の中の観点で、 lens の呼出し回数 (rules 行 gate.lens_count) と token の予算を増やさない。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#NFR2" data-justifies-req="NFR2" data-justifies-role="claim">NFR2</a><span class="justify-role">claim</span><span class="justify-note">段「最小実装」の測る面は便の規模の record (diff の行数・file 数・新しい pub symbol 数) で、 便の diff の大きさの目標と照合できる (閾値は持たない・C10 はまず測る)。</span></div>
 <p class="justify-tgt">照会先: SRS-SCRIBE2-MVP — SRS: 設計 → 契約 → 実装 → 検証 → land を、 人の手を借りずに 1 本通す器（MVP）</p>
 </div>
 </div>
 </div>
-<section data-component="chapter-deck-band" class="tint-warn"><span class="num">05</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg> 結果 / 良い面とトレードオフ</span><h2>この判断で何が良くなり、 何を引き受けるか</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-05">この判断で良くなることと、代わりに引き受けることです。検査が列の長さに比例しなくなる一方、途中の commit は個別に検査されず、1 本の赤が同じ列の便を 1 周止め、列の長さの上限という規則の値が 1 つ増えます。</p></section>
+<section data-component="chapter-deck-band" class="tint-warn"><span class="num">05</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg> 結果 / 良い面とトレードオフ</span><h2>この判断で何が良くなり、 何を引き受けるか</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-05">この判断で良くなることと、代わりに引き受けることです。提案と実装の両方に「先に問う順序」と「足す前に消す」の線が入り、code の変更は 0 で、審査役の予算も増えません。代わりに、「何を消すか」を機械では拒めないこと、条に値が無いので manifest の行を持たず deny の門にするには別の裁定が要ること、条文が効くのは /folio-architect の段の後であることを引き受けます。</p></section>
 <div class="chapbody">
 <div data-component="scope-summary-panel"><div class="scol in"><h3>✓ 良い結果</h3><ul>
-<li data-component="adr-consequence-pos"><span class="b">●</span>列の長さ N に対して gate が 1 回になり、 検出線は patch-id 不変の便で撃たない = 1 日 29 回の再 gate が数回に落ち、 着地の壁時計が列の長さに比例しなくなる</li>
-<li data-component="adr-consequence-pos"><span class="b">●</span>着地の順序・待ちの規則・便ごとの記録 (Landed・着地 commit・CI の照合・台帳の close) は不変</li>
-<li data-component="adr-consequence-pos"><span class="b">●</span>赤の周の処置は既存の 1 本ずつの経路そのもので、 帰属の判定や散文の運用を足さない</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>提案 (契約・ADR・設計 §) と実装の両方が同じ順序で問われ、 「足すなら先に消す」が折れない線になる (CTX1 の力学に提案の段で止まる根拠ができる)</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>code の変更は 0: 機械の面 (lens の 5 観点・便の規模の record) は land 済で、 rules 行・走査・record・機構を足さない</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>lens の予算 (NFR1) と便の大きさの目標 (NFR2) は不変で、 5 観点の件数と母集団は verdict に残り続ける (「0 件」と「未測」の弁別)</li>
 </ul></div><div class="scol out"><h3>⚖ トレードオフ・代償</h3><ul>
-<li data-component="adr-consequence-neg"><span class="b">●</span>検査されるのは N 本を積んだ木だけで、 main の途中の commit (先頭 k 本の木) は個別に検査されない = 先端は緑だが途中の commit が赤でありうる (bisect の粒度が落ちる)</li>
-<li data-component="adr-consequence-neg"><span class="b">●</span>1 本の赤が同じ列の N 本を 1 周分止める (列を解いた後は先頭から 1 本ずつ)</li>
-<li data-component="adr-consequence-neg"><span class="b">●</span>rules 行 land.train_max (列の長さの上限) が増え、 値は裁定 id を要る (C5)・patch-id の記録 (gate の record の 1 語) が増える</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>「先に何を消すかを名指す」は機械では拒めない: 見るのは lens の delete の件数と提案の審査の散文の判断だけで、 はしごを飛ばした提案を CI は止めない (正直に散文の判断と書く)</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>条に値が無いので manifest に行を持たない (C2 / C16 と同じ形)。 後で deny の門 (例: 機構を足す diff で delete が 0 件なら FAIL) にしたいときは、 裁定 id を伴う昇格 (C12.4 / C5) と、 そのときに初めて行 1 本が要る</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>発効は /folio-architect が C17 を delta marker 付きで挿す段の後 (N4.2)。 それまで本 ADR は proposed で何も拘束せず、 constitution.html の件数表記 (16 / 4 / 4) と生成区間 (CLAUDE.md) の改訂も同じ段に付く</li>
 </ul></div></div>
 </div>
-<section data-component="chapter-deck-band" class="tint-info"><span class="num">06</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg> 改訂関係と原則 / この判断の位置づけ</span><h2>版の系譜と、 行き着く原則 (照会終端)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-06">この ADR が版の系譜のどこに在るかと、判断が最後に行き着く原則です。着地の順序の原則（ADR-0021 §2.5）と衝突の起こし直し（ADR-0019）は変えず、列に「まとめて 1 回検査する」を足します。</p></section>
+<section data-component="chapter-deck-band" class="tint-info"><span class="num">06</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg> 改訂関係と原則 / この判断の位置づけ</span><h2>版の系譜と、 行き着く原則 (照会終端)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-06">この ADR が版の系譜のどこに在るかと、判断が最後に行き着く原則です。既存の ADR は 1 本も置き換えません。研究 RESEARCH-ponytail の写し方 (1)(2) を決定として引き取り、(3) は保留のまま残します。行き着く原則は「最初に成立した段で止まり、足す前に消す」です。</p></section>
 <div class="chapbody">
 <div data-component="adr-supersession">
-<p class="ss-row"><span class="ss-k">改訂状態</span>current</p>
+<p class="ss-row"><span class="ss-k">改訂状態</span>current (proposed)</p>
 <p class="ss-row"><span class="ss-k">置き換える ADR</span>なし (新規)</p>
 <p class="ss-row"><span class="ss-k">置き換えられた</span>なし (現行)</p>
-<p class="ss-row">本 ADR は現行。 ADR-0021 §2.5 (着地は gate 済みの便を先に通す) の順序の原則は不変で、 本 ADR はその列に「N 本まとめて 1 回検査する」を足す。 ADR-0019 (衝突の起こし直し) と ADR-0021 §2.4 (検出線は面に触れた周だけ) は不変。 設計 pipeline.md §33 (面の外だけの周は再 gate を省く) は本 ADR の N = 1 の周の特例として残る。</p>
+<p class="ss-row">憲法 (版 0.4.6) の C1〜C16 / A1〜A4 / N1〜N4 は不変で、 本 ADR は C17 を加えるだけ。 <a href="../research/RESEARCH-ponytail.html">RESEARCH-ponytail</a> §4 の写し方 (1) (lens の観点・台帳 s2-07l.188) と (2) (便の規模の record・s2-07l.189) は本 ADR で決定として引き取り、 (3) (はしごの typed な宣言) は OPT3 として保留 (起こす条件 = C17 の下でも lens の 5 観点の件数が減らない・または提案の段の判断が繰り返し外れると実測で分かったとき)。 <a href="./ADR-0021-gate-cost-is-measured-and-confined.html">ADR-0021</a> / <a href="./ADR-0039-landing-train-gates-one-candidate-tree.html">ADR-0039</a> / <a href="./ADR-0043-same-tree-main-check-is-one-record.html">ADR-0043</a> は CTX1 の現物として引くだけで不変。</p>
 </div>
 <div data-component="adr-principle">
-<p class="prin-id">照会終端 — PRIN-GATE-THE-TREE-NOT-THE-RUN</p>
-<p class="prin-text">着地の前の検査は着地後の木に対して行い、 検査の回数を便の数に比例させない。 便ごとに持つのは記録であって検査ではない。</p>
-<p class="prin-note">本 ADR の判断はこの原則に行き着く (これ以上は遡らない照会終端)。</p>
+<p class="prin-id">照会終端 — PRIN-STOP-AT-THE-FIRST-RUNG (本 ADR)</p>
+<p class="prin-text">変更は、 要るか → 既に在るか → 標準 library か入っている依存で足りるか → 1 行で書けるか → 最小実装 の順に問い、 最初に成立した段で止まる。 足すものは、 先に消すものを名指してからにする。</p>
+<p class="prin-note">本 ADR の判断はこの原則に行き着く (これ以上は遡らない照会終端)。 憲法の順位の 2 番目「増殖の防止」を、 提案と実装の手順の形で持ったものである。 判断は散文に残し、 機械は形と件数だけを持つ。</p>
 </div>
 </div>
 <section data-component="chapter-deck-band" class="tint-brand"><span class="num">07</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg> 用語集 / この文書で使う専門語</span><h2>本文に出てくる専門語のやさしい説明</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-07">本文に出てくる専門語を、やさしい言葉で説明します。</p></section>
 <div class="chapbody">
 <div data-component="glossary-term-table">
-<div class="grow"><div class="gword">着地の列<span class="en">landing queue</span></div><div class="gdef">Gated ∧ verdict PASS の便の並び。 先に gate を通った便が先に着地する (ADR-0021 §2.5)。 順番の鍵は event log の replay で導く。</div></div>
-<div class="grow"><div class="gword">候補の木<span class="en">candidate tree</span></div><div class="gdef">main の先端に列の先頭から N 本を順に rebase して作る 1 つの worktree。 gate はこの木に対して 1 回撃つ。 rebase が衝突した便は積まず、 列から外れる。</div></div>
-<div class="grow"><div class="gword">列を解く<span class="en">dissolve the train</span></div><div class="gdef">候補の木の gate が赤だった周に、 N 本の並びを捨てて先頭 1 本だけの既存の経路 (追随 → 再 gate) に戻すこと。 どの便が赤かの帰属はしない。</div></div>
-<div class="grow"><div class="gword">検出線の持ち越し<span class="en">carried detection line</span></div><div class="gdef">便の diff の patch-id が前周の記録と同じなら、 前周の検出線 (変異の生存) の record を持ち越しの印付きで写して撃たないこと。 記録が無い・patch-id が違う周は撃つ。 持ち越した値は実測と型で区別する (C10)。</div></div>
-<div class="grow"><div class="gword">patch-id<span class="en">patch id</span></div><div class="gdef">git patch-id --stable が diff から計算する値。 行番号や base が変わっても diff の中身が同じなら同じ値になる。 衝突無しの rebase で便の diff が変わらなかったことを測る鍵。</div></div>
-<div class="grow"><div class="gword">列の長さの上限<span class="en">train max</span></div><div class="gdef">rules 行 land.train_max の値。 候補の木に積む便の数はこれ以下。 値は裁定 id 付きで manifest が持つ (C5)。</div></div>
+<div class="grow"><div class="gword">決定はしご<span class="en">decision ladder</span></div><div class="gdef">変更を書く前に問う段の列。 要るか → 既に在るか → 標準 library か入っている依存で足りるか → 1 行で書けるか → 最小実装 の宣言順に通り、 最初に成立した段で止まる。 出所は ponytail (RESEARCH-ponytail §2) で、 本 ADR は憲法の条 C17 として持つ。</div></div>
+<div class="grow"><div class="gword">段<span class="en">rung</span></div><div class="gdef">決定はしごの 1 つの問い。 「成立する」とは、 その段の答えで変更が終わること (例: 「既に在る」なら在るものを使って終わる)。</div></div>
+<div class="grow"><div class="gword">過剰設計の 5 観点<span class="en">five overdesign findings</span></div><div class="gdef">lens が数える閉じた観点のうち delete (消せる面) / stdlib (標準 library で足りる自作) / native (道具の既存機能で足りる作り込み) / yagni (この便が要らない一般化) / shrink (同じ意味のまま縮む面)。 件数は 0 でも書き、 欠けた周は INCONCLUSIVE (台帳 s2-07l.188)。</div></div>
+<div class="grow"><div class="gword">便の規模の record<span class="en">run size record</span></div><div class="gdef">便ごとに verdicts の record へ残す size / files / lines / pub_symbols の 4 field。 閾値は持たず、 まず測る (C10・台帳 s2-07l.189)。</div></div>
+<div class="grow"><div class="gword">delta marker<span class="en">delta marker</span></div><div class="gdef">constitution.html の本文に条文の追加・書換えを残す印 (data-delta-id)。 条の追加は新しい ADR + この印 + 裁定 id の 3 つで行う (N4.2)。 本 ADR の C17 は /folio-architect の段でこの印付きで挿す。</div></div>
+<div class="grow"><div class="gword">機械の面<span class="en">machine face</span></div><div class="gdef">憲法 C14 の 2 面のうち、 器が強制する側 (manifest の rules 行や閉じた型と件数)。 対は文書の面 (憲法・ADR・SRS = 人が読み裁定する側)。 C17 は値を持たないので行は無く、 型と件数が機械の面になる。</div></div>
 </div>
 </div>
 </div>
 <footer class="foot" data-component="fidelity-sync-meta"><div class="ft-grid">
 <div class="ft-plain">このページは、大もとの機械データ (正本) から自動で組み立てられています。構造は機械が自動で検査し、内容が元データに忠実かは独立のレビューで確かめます。</div>
-<div data-audience="machine">機械SSoT: <b>ADR-0039.build.adr.yaml</b> &middot; 生成: <b>2026-09-17 01:21</b> &middot; 検証状態: <b>structure ✓ fabrication-free / prose ✓ 充填済 (fidelity ceiling → S5 対象)</b></div>
+<div data-audience="machine">機械SSoT: <b>ADR-0044.build.adr.yaml</b> &middot; 生成: <b>2026-09-18 09:30</b> &middot; 検証状態: <b>structure ✓ fabrication-free / prose ✓ 充填済 (fidelity ceiling → S5 対象)</b></div>
 <div class="tags" data-audience="machine"><span>folio design system</span><span>ADR-pack</span><span>folio engine B1 (instance#2)</span><span>cross-doc 照会</span></div>
 </div></footer>
 <!-- folio:chrome-bottom -->
 <nav class="prevnext" aria-label="前後の文書">
-  <a class="prevnext__prev" href="ADR-0038-plugin-payload-lives-in-a-generated-dir.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">plugin の実体は生成 dir に置き、 marketplace の source はその dir を指す (cache の写しの単位を plugin に閉じる・生成器が起こし xtask check が drift 0 を測る・plugin root を前提にする現物は 1 定数に追随・再 install は user 手番)</span></a>
-  <a class="prevnext__next" href="ADR-0040-runner-and-lens-boxes-are-one-job-each.html"><span class="prevnext__dir">次 &rarr;</span><span class="prevnext__title">runner・lens・claude の箱の上限は 1 × gate.job_memory_mb (ADR-0021 §2.2 の「host 全体から席のぶんを引いた残り」を実装役・審査役・claude の箱について部分 supersede・Limit の 2 種は不変・値は既存の rules 行)</span></a>
+  <a class="prevnext__prev" href="ADR-0043-same-tree-main-check-is-one-record.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">主実測は着地する木が gate の木と同じなら全段を撃たない (木の sha の一致を測定の再現と見なし record 1 本で残す・一致しない周と tree の無い verdict の周は全段撃つ・ADR-0021 §2.4「木が同じ main 実測は検出線を撃ち直さない」を「全段を撃ち直さない」へ広げる部分 supersede)</span></a>
 </nav>
 <script>
 (function () {

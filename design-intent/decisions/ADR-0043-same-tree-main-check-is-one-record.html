@@ -457,6 +457,9 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
   },
   "@id": "./ADR-0043-same-tree-main-check-is-one-record.html",
   "@type": "schema:TechArticle",
+  "dc:isReferencedBy": [
+    { "@id": "./ADR-0044-decision-ladder-is-a-constitution-article.html" }
+  ],
   "dc:isPartOf": [
     {
       "@id": "./README.html"
@@ -679,6 +682,7 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
 <!-- folio:chrome-bottom -->
 <nav class="prevnext" aria-label="前後の文書">
   <a class="prevnext__prev" href="ADR-0042-run-account-order-is-earliest-seven-day-reset.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">便用の並べ鍵は 7 日窓の reset の早い順 (7 日窓の reset を持たない口座は最後・5 時間窓とモデル別窓は鍵にしない・席用の順序は不変・ADR-0027 §2.2 の 1 つ目の鍵を supersede)</span></a>
+  <a class="prevnext__next" href="ADR-0044-decision-ladder-is-a-constitution-article.html"><span class="prevnext__dir">次 &rarr;</span><span class="prevnext__title">決定はしごは憲法の条 (C17) で持つ (要るか → 既に在るか → 標準 library か入っている依存で足りるか → 1 行で書けるか → 最小実装 を宣言順に通り最初に成立した段で止まる・走査・record・rules 行・機構を足す提案は先に消すものを名指す・機械の面は既に在る lens の過剰設計 5 観点と便の規模の record で rules 行も機構も足さない)</span></a>
 </nav>
 <script>
 (function () {
