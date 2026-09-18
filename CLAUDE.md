@@ -163,7 +163,9 @@ C16: scribe2 SHALL stop a deviation from the specification at edit time, and SHA
 
 C16.2: scribe2 SHALL list every in-loop guard in the build-time polarity list (C11.2) as in-loop, and scribe2 CI SHALL reject a configuration whose in-loop guard count is zero or whose guards are all post-hoc.
 
-C17: WHEN a change is proposed or implemented, scribe2 SHALL pass the decision ladder in declaration order (needed at all, already exists, standard library or an existing dependency suffices, one line, minimal implementation), SHALL stop at the first rung that holds, and SHALL name what is removed before adding a scanner, record, rules row or mechanism.
+C17: WHEN a change is proposed or implemented, scribe2 SHALL pass the decision ladder in the order written in this article (needed at all, already exists, standard library or an existing dependency suffices, one line, minimal implementation), and SHALL stop at the first rung that holds.
+
+C17.2: WHEN a change would add a scanner, record, rules row or mechanism, scribe2 SHALL name what it removes before adding it.
 
 A1: WHEN an operation of one of the three classes (delete, send out, consume) is about to be performed, scribe2 SHALL obtain the user's approval through the dialogue surface designated by R-C7-1 (C7) before performing it.
 

@@ -878,8 +878,18 @@ terms:
   - canonical: 決定はしご
     domain: consumer
     aliases: [decision ladder]
-    definition: 変更を提案・実装する前に通る段の列 (要るか → 既に在るか → 標準 library か入っている依存で足りるか → 1 行で書けるか → 最小実装)。 宣言順に通り最初に成立した段で止まり、 走査・record・rules 行・機構を足す提案は先に消すものを名指す。 出所は ponytail (研究 RESEARCH-ponytail §2) で、 憲法の条 C17 として持つ (ADR-0044)。 機械の面は lens の findings の過剰設計 5 観点と便の規模の record で、 判断は散文に残る。
-    relationships: [lens, 契約, rules 行, 裁定 id]
+    definition: 変更を提案・実装する前に通る段 (rung) の列 (要るか → 既に在るか → 標準 library か入っている依存で足りるか → 1 行で書けるか → 最小実装)。 段の順は憲法 C17 の条文の記述が正本で enum の宣言順ではなく、 最初に成立した段で止まる。 走査・record・rules 行・仕掛けを足す提案が先に消すものを名指す義務は C17.2。 出所は ADR-0044 (研究 RESEARCH-ponytail §2)。 機械の面は既に在る 過剰設計 5 観点 と 便の規模の record で、 判断は lens と 契約の審査 の散文に残る。
+    relationships: [lens, 過剰設計 5 観点, 便の規模の record, 契約の審査, 契約, 裁定 id]
+  - canonical: 過剰設計 5 観点
+    domain: consumer
+    aliases: [過剰設計の 5 観点, five overdesign findings]
+    definition: lens の findings の閉じた category のうち過剰設計を指す 5 つ (delete / stdlib / native / yagni / shrink)。 宣言順に 0 件も書き、 欠けた周と母集団 0 の周は INCONCLUSIVE (設計 docs/design/pipeline.md §17・台帳 s2-07l.188)。 憲法 C17 の機械の面の 1 つで、 観点と決定はしごの段は 1 対 1 ではない。
+    relationships: [lens, 決定はしご, 便の規模の record, Verdict]
+  - canonical: 便の規模の record
+    domain: consumer
+    aliases: [run size record]
+    definition: 便の diff の規模 (size / files / lines / pub_symbols) を閾値なしで残す record (台帳 s2-07l.189)。 憲法 C17 の機械の面の 1 つで、 拒む門ではなく検出線の側に在る。
+    relationships: [便, 決定はしご, 過剰設計 5 観点, 検出線]
   - canonical: 憲法の生成 file
     domain: consumer
     aliases: [constitution generated file, 生成区間の移り先]
