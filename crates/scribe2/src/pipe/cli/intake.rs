@@ -78,8 +78,6 @@ struct Intaken {
     id: String,
     /// write-set の弁別と本数（設計 pointer を持たない契約は `None`＝従来の形）。
     write_set: Option<(WriteSet, usize)>,
-    /// 散文の 3 数（§27・行 aa・弁別と同じ周だけ在る）。
-    prose: Option<String>,
 }
 
 /// 契約 file を読み込み、置き場へ写して run を起こし、**直後に審査の段を通す**（FR49・設計 contract-source.md
@@ -91,10 +89,6 @@ pub(super) fn intake(args: &[String], manifest: &Manifest, policy: LockPolicy) -
             let mut line = intake_line(args, &found.id);
             if let Some((kind, files)) = found.write_set {
                 line.push_str(&format!(" write-set={} files={files}", kind.as_str()));
-            }
-            // 散文の 3 数は**既存の token の末尾**に足す（§27・判定行を全文で測る歯も snapshot も無い）。
-            if let Some(prose) = found.prose {
-                line.push_str(&format!(" prose={prose}"));
             }
             let mut reviewed = super::step::review_run(args, &found.id, manifest, policy);
             reviewed.out.insert(0, line);
@@ -199,8 +193,6 @@ pub(super) struct Judged {
     pub(super) design: Option<(String, String)>,
     /// write-set の弁別と本数（`settle_write_set` が Ok で pointer の在る周）。
     pub(super) write_set: Option<(WriteSet, usize)>,
-    /// 散文の 3 数（§27・行 aa・弁別と同じ周だけ在る・intake の判定行だけが読む）。
-    prose: Option<String>,
     /// verify の nextest 行ごとの (filter 語, base の歯の file)。
     pub(super) teeth: Vec<(String, Vec<String>)>,
     /// 上限の余地（`exclude_cap_shortfall` が Ok の周）。
@@ -227,7 +219,6 @@ pub(super) fn judge(material: &Material<'_>) -> Judged {
     let mut judged = Judged {
         design: None,
         write_set: None,
-        prose: None,
         teeth: Vec::new(),
         headroom: None,
         overlap: None,
@@ -253,7 +244,6 @@ pub(super) fn judge(material: &Material<'_>) -> Judged {
     match settle_write_set(repo, contract, &tracked, &sources) {
         Ok(settled) => {
             judged.write_set = settled.as_ref().map(|found| (found.kind, found.files));
-            judged.prose = settled.as_ref().map(|found| found.prose.clone());
             judged.derived = settled.and_then(|found| found.replaced);
             if let Some(files) = judged.derived.as_deref() {
                 measured.write_set = files.to_vec();
@@ -295,7 +285,7 @@ fn create(
     path: &Path,
     policy: LockPolicy,
 ) -> Result<Intaken, Outcome> {
-    let Judged { write_set, prose, denials, derived, effective, run, .. } = judged;
+    let Judged { write_set, denials, derived, effective, run, .. } = judged;
     if let Some(first) = denials.into_iter().next() {
         return Err(first.outcome);
     }
@@ -321,7 +311,7 @@ fn create(
     );
     match emitted {
         Err(err) => Err(broken(err.to_string())),
-        Ok(()) => Ok(Intaken { id, write_set, prose }),
+        Ok(()) => Ok(Intaken { id, write_set }),
     }
 }
 
@@ -364,8 +354,6 @@ struct Settled {
     replaced: Option<Vec<String>>,
     /// 判定行に載せる本数（導出値か手書きの項目数）。
     files: usize,
-    /// 判定行に載せる散文の 3 数（`<名指した既存の歯>:<被覆されない歯>:<pin の file>`・§27・行 aa）。
-    prose: String,
 }
 
 /// 契約の `design` が設計 pointer（`<doc>#<id>`）なら base の契約表の行を引く（[`settle_write_set`] と [`row_facts`] が
@@ -406,10 +394,9 @@ fn base_of<'a>(sources: &'a [Source], snapshots: &'a [Source], tracked: &'a [Str
 /// 撃つ場所」）。pointer でない `design` は `None`＝従来どおり導出しない。行の読みは [`pointed_row`]。
 ///
 /// - `creates` / `tests` / `also` を 1 つも持たず `write-set` を持つ行は [`WriteSet::Declared`]（導出も drift も撃たず、
-///   verify の歯の file が write-set に在るかの門〔[`closure::declared_teeth`]・§20〕と**散文の門**〔[`prose_gate`]・§27〕
-///   だけを撃つ）。
-/// - それ以外は [`WriteSet::Derived`]: 導出値を作り（解けない欄は typed に断る）、散文の門の (a1) を同じ断りで撃ってから
-///   (a2) と (b) の file を導出値に足し、行に `write-set` が在れば集合一致でなければ `write-set-drift`・無ければ導出値が
+///   verify の歯の file が write-set に在るかの門〔[`closure::declared_teeth`]・§20〕だけを撃つ）。
+/// - それ以外は [`WriteSet::Derived`]: 導出値を作り（解けない欄は typed に断る）、
+///   行に `write-set` が在れば集合一致でなければ `write-set-drift`・無ければ導出値が
 ///   write-set になる。
 fn settle_write_set(
     repo: &Path,
@@ -428,45 +415,17 @@ fn settle_write_set(
         // Declared 行は導出も drift も撃たないが、**歯の置き場の門**だけは撃つ（§20・行 t）: verify の nextest 行の
         // 歯の file が write-set の外に在る契約は、便を作らずに file を全部名指して断る（審査へ先送りしない・C16）。
         closure::declared_teeth(&fields, &base, &row.write_set).map_err(|error| refuse(&refuse_of(error, &row), &[]))?;
-        // 散文の門（§27・行 aa）: (a1) は Declared / Derived で同じ断り・(a2) の歯の file は §20 と同じ 1 関数で・
-        // (b) の pin の file は対の 1 関数で、行の write-set に無いものを全部名指す。
-        let prose = prose_gate(contract, &base, &row)?;
-        closure::check_teeth_cover(&row.write_set, &prose.files).map_err(|error| refuse(&refuse_of(error, &row), &[]))?;
-        closure::check_pin_cover(&row.write_set, &prose.pins).map_err(|error| refuse(&refuse_of(error, &row), &[]))?;
         let files = row.write_set.len();
-        return Ok(Some(Settled { kind: WriteSet::Declared, replaced: None, files, prose: prose_token(&prose) }));
+        return Ok(Some(Settled { kind: WriteSet::Declared, replaced: None, files }));
     }
-    let mut derived = closure::derive_write_set(&fields, &base).map_err(|error| refuse(&refuse_of(error, &row), &[]))?;
-    // Derived 行は (a2) と (b) の file を導出値へ足す（§3 (ii) と同じ扱い＝門でなく面を広げる）。
-    let prose = prose_gate(contract, &base, &row)?;
-    derived.extend(prose.files.iter().cloned());
-    derived.extend(prose.pins.iter().cloned());
-    let (files, token) = (derived.len(), prose_token(&prose));
+    let derived = closure::derive_write_set(&fields, &base).map_err(|error| refuse(&refuse_of(error, &row), &[]))?;
+    let files = derived.len();
     if row.write_set.is_empty() {
         let replaced: Vec<String> = derived.into_iter().collect();
-        return Ok(Some(Settled { kind: WriteSet::Derived, replaced: Some(replaced), files, prose: token }));
+        return Ok(Some(Settled { kind: WriteSet::Derived, replaced: Some(replaced), files }));
     }
     closure::check_drift(&row.write_set, &derived).map_err(|error| refuse(&refuse_of(error, &row), &[]))?;
-    Ok(Some(Settled { kind: WriteSet::Derived, replaced: None, files, prose: token }))
-}
-
-/// 契約の散文の閉包（[`closure::prose_closure`]・§27・行 aa）と (a1) の門: 契約 file の `goal` / `done` が名指す base の
-/// 歯が、契約 file の `verify` のどの nextest 行の filter 語にも当たらなければ、名を**全部**名指して断る（Declared /
-/// Derived のどちらの行でも同じ断り＝その便の verify では走らない歯を「測る」と書いた契約は入口で止める・C16）。
-fn prose_gate(contract: &Contract, base: &closure::Base<'_>, row: &ContractRow) -> Result<closure::Prose, Denial> {
-    let prose = [contract.goal.as_str(), contract.done.as_str()];
-    let found =
-        closure::prose_closure(&prose, &contract.verify, base).map_err(|error| refuse(&refuse_of(error, row), &[]))?;
-    if found.uncovered.is_empty() {
-        return Ok(found);
-    }
-    let error = ClosureError::TeethUncovered { names: found.uncovered };
-    Err(refuse(&refuse_of(error, row), &[]))
-}
-
-/// 判定行の散文の token の値（`<名指した既存の歯>:<被覆されない歯>:<pin の file>`・§27）。
-fn prose_token(found: &closure::Prose) -> String {
-    format!("{}:{}:{}", found.teeth.len(), found.uncovered.len(), found.pins.len())
+    Ok(Some(Settled { kind: WriteSet::Derived, replaced: None, files }))
 }
 
 /// 導出の理由を契約単位の拒否へ写す（理由は 1 対 1・型の形と読めなさは契約表の欠陥として行番号を持つ）。
@@ -483,8 +442,6 @@ fn refuse_of(error: ClosureError, row: &ContractRow) -> Refuse {
         ClosureError::ItemUnresolved { item } => Refuse::WriteSetItemUnresolved { item },
         ClosureError::FnUndeclared { module, name } => Refuse::FnUndeclared { module, name },
         ClosureError::TeethOutsideWriteSet { files } => Refuse::TeethOutsideWriteSet { files },
-        ClosureError::TeethUncovered { names } => Refuse::TeethUncovered { names },
-        ClosureError::PinsOutsideWriteSet { files } => Refuse::PinsOutsideWriteSet { files },
     }
 }
 
