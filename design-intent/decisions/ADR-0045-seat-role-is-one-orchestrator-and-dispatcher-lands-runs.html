@@ -1,0 +1,753 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="generator" content="folio ADR-pack assembler (folio-bwc / instance#2) — deterministic structure, prose slots unfilled">
+<title>席の役割は orchestrator 1 つで、 便の起動・着地・merge は器の dispatcher が行う (planner / 管理席の 2 役割と席の自律機能を廃止・SessionStart の注入は短い 1 本・session を跨ぐ記憶は台帳・runner には憲法の散文を注入しない)</title>
+<style>
+/* ===========================================================================
+   folio human-layer design system — core.css (S3 / folio-8oc プロトタイプ)
+   要件定義書 (SRS) ビジュアル design system の中核 register。
+   視覚言語 = deck帯 × B2高密度 (ADR-0041)。テーマ = 環境追従 prefers-color-scheme。
+   styling は意味クラス、taxonomy 識別は [data-component] 属性 (floor gate A)。
+   taxonomy = design-intent/research/srs-component-taxonomy.html
+   =========================================================================== */
+
+/* ---- requirement-type-color-tokens (meta / 全 register が共有・両テーマ定義) ---- */
+:root{
+  --ink:#08131a; --ink-soft:#3a4a55; --ink-faint:#5b6671;
+  --paper:#ffffff; --paper-2:#f5f8fa; --paper-3:#eef3f7;
+  --line:#dbe4ea; --line-soft:#eef3f7;
+  --brand:#2a4d6e; --brand-deep:#15324a; --brand-tint:#e8f0f7;
+  --ok:#1e7b65; --ok-tint:#e6f6f2; --ok-line:#9fd9cb;
+  --bad:#b22323; --bad-tint:#fdf3f3; --bad-line:#eab3b3;
+  --warn:#916626; --warn-tint:#fefbea; --warn-line:#e4cf8f;
+  --info:#2a5d9e; --info-tint:#eaf1fb; --info-line:#a8c4e8;
+  --violet:#5b3e8e; --violet-tint:#f0eafa; --violet-line:#cdb8ec;
+  --shadow:0 1px 2px rgba(8,19,26,.06),0 8px 24px rgba(8,19,26,.07);
+  --shadow-lg:0 2px 6px rgba(8,19,26,.08),0 18px 50px rgba(8,19,26,.12);
+  /* 要件型カラートークン (FR/NFR/CON/ASM) */
+  --fr:var(--brand); --nfr:var(--violet); --con:var(--warn); --asm:var(--info);
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --ink:#e8eef2; --ink-soft:#a9b7c1; --ink-faint:#8a99a4; /* ink-faint: 全 dark bg で contrast ≥4.85 = WCAG AA (≥4.5) 充足・最小は ok-tint/warn-tint (gate F・folio-vuf) */
+    --paper:#0d171e; --paper-2:#15222b; --paper-3:#1b2c37;
+    --line:#273947; --line-soft:#1b2c37;
+    --brand:#7db8e8; --brand-deep:#1d3a54; --brand-tint:#16293a;
+    --ok:#5ac8b8; --ok-tint:#10302b; --ok-line:#2e6258;
+    --bad:#ef7a7a; --bad-tint:#341c1c; --bad-line:#6e3636;
+    --warn:#d6a94e; --warn-tint:#312a13; --warn-line:#5e4e23;
+    --info:#7da9e8; --info-tint:#16263c; --info-line:#33507c;
+    --violet:#b89be0; --violet-tint:#241a36; --violet-line:#473a64;
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px rgba(0,0,0,.5);
+    --shadow-lg:0 2px 6px rgba(0,0,0,.5),0 18px 50px rgba(0,0,0,.6);
+  }
+}
+*{box-sizing:border-box;}
+html{scroll-behavior:smooth;}
+body{
+  margin:0; background:var(--paper-2); color:var(--ink);
+  font-family:"Noto Sans CJK JP","Noto Sans JP",system-ui,-apple-system,"Hiragino Kaku Gothic ProN",Meiryo,sans-serif;
+  font-feature-settings:"palt" 1; line-height:1.7; letter-spacing:.01em;
+  -webkit-font-smoothing:antialiased;
+}
+.page{max-width:1280px; margin:0 auto; background:var(--paper); box-shadow:var(--shadow-lg);}
+svg{display:block;} .ico{width:1em; height:1em;}
+
+/* ---- plain-language-term-inline (glossary 派生ビュー / 専門語のやさしい併記) ---- */
+.term{
+  /* font-size 下限 (folio-276 #5)。 .72em は em 連鎖 (例 .actor .role=11px 内) で 7.9px<8px へ縮み
+     判読不能化する。 max() で 10.5px を下限に据え、 広文脈では従来比率を保つ。 */
+  display:inline-block; font-size:max(10.5px,.72em); font-weight:700; line-height:1;
+  padding:.18em .5em; border-radius:999px; margin-left:.3em; vertical-align:.08em;
+  background:var(--paper-3); color:var(--ink-soft); border:1px solid var(--line);
+  letter-spacing:.02em; white-space:nowrap;
+}
+.term.en{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;}
+
+/* ===================== doc-cover-band (deck-band / 表紙) ===================== */
+[data-component="doc-cover-band"]{
+  position:relative; overflow:hidden; color:#fff;
+  /* deeper navy にして白文字 (小サイズ含む) を WCAG AA 維持 (gate F worst-case-stop が最明合成でも
+     ≥4.5 を要求)。 highlight radial は薄め、 linear の最明端 (旧 #33658f) を暗色化。 */
+  background:
+    radial-gradient(1200px 500px at 88% -10%, rgba(255,255,255,.07), transparent 60%),
+    linear-gradient(135deg,#0c1f30 0%,#143049 48%,#173a57 100%);
+  padding:54px 56px 46px;
+}
+.cover-eyebrow{font-size:12.5px; font-weight:700; letter-spacing:.22em; text-transform:uppercase; opacity:.86; margin:0 0 14px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;}
+.cover-eyebrow .doc-type{background:rgba(255,255,255,.16); padding:3px 10px; border-radius:6px; letter-spacing:.16em; border:1px solid rgba(255,255,255,.22);}
+[data-component="doc-cover-band"] h1{font-size:42px; line-height:1.14; margin:0 0 8px; font-weight:800; text-wrap:balance;}
+.cover-sub{font-size:17px; opacity:.9; margin:0 0 22px; font-weight:500;}
+.summary-card{background:rgba(255,255,255,.1); border:1px solid rgba(255,255,255,.2); border-radius:14px; padding:18px 22px; display:flex; gap:18px; align-items:flex-start; max-width:880px;}
+.summary-card .lab{font-size:11px; font-weight:700; letter-spacing:.16em; opacity:.8; margin:0 0 4px;}
+.summary-card .txt{font-size:17.5px; line-height:1.6; font-weight:600; margin:0;}
+.summary-card .txt b{color:#ffe8a8;}
+.cover-meta{display:flex; flex-wrap:wrap; gap:10px 26px; margin-top:24px; font-size:13px;}
+.cover-meta .m{display:flex; gap:8px; align-items:center; opacity:.92;}
+.cover-meta .m .k{opacity:.62; font-weight:600;} .cover-meta .m .v{font-weight:700;}
+.reader-chip{display:inline-flex; gap:8px; align-items:center; margin-top:18px; background:#ffce6e; color:#3a2c05; font-weight:700; font-size:13.5px; padding:8px 14px; border-radius:10px; box-shadow:0 3px 10px rgba(0,0,0,.2);}
+a{color:var(--brand);} /* anchor 既定色 — UA 既定 #0000ee は dark bg で 1.72 (skip-link/domain 目次等の素 anchor で 3 例目の同型欠陥・型 selector ゆえ class 付きリンクは specificity で不変・gate F WCAG AA 両テーマ ≥7.6) */
+
+/* ===================== approval-block (deck-band / 承認証跡) ★critic補填 ===== */
+[data-component="approval-block"]{display:flex; flex-wrap:wrap; gap:14px; align-items:stretch; margin-top:22px;}
+.sign{flex:1 1 200px; background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.22); border-radius:12px; padding:13px 16px; display:flex; flex-direction:column; gap:3px; min-width:0;}
+.sign .role{font-size:10.5px; font-weight:700; letter-spacing:.12em; text-transform:uppercase; opacity:.7;}
+.sign .who{font-size:15px; font-weight:800;}
+.sign .when{font-size:11.5px; opacity:.72; font-weight:600;}
+.sign .stamp{align-self:flex-start; margin-top:4px; font-size:10px; font-weight:800; letter-spacing:.08em; padding:2px 8px; border-radius:6px; background:#ffce6e; color:#3a2c05;}
+.sign .stamp.self{background:rgba(255,255,255,.18); color:#fff; border:1px solid rgba(255,255,255,.3);}
+
+/* ===================== chapter-deck-band (deck-band / 章開き) =============== */
+[data-component="chapter-deck-band"]{position:relative; padding:34px 56px 12px;}
+[data-component="chapter-deck-band"] .num{position:absolute; top:-6px; right:34px; font-size:138px; font-weight:900; line-height:1; opacity:.06; letter-spacing:-.04em; user-select:none; pointer-events:none; font-family:ui-monospace,monospace;}
+.kicker{display:inline-flex; align-items:center; gap:9px; font-size:12px; font-weight:800; letter-spacing:.14em; text-transform:uppercase; padding:5px 12px; border-radius:8px; margin-bottom:10px;}
+[data-component="chapter-deck-band"] h2{font-size:27px; margin:0 0 6px; font-weight:800; line-height:1.2;}
+.lead{font-size:15px; color:var(--ink-soft); margin:0; max-width:920px; line-height:1.65;}
+.tint-brand{background:var(--brand-tint);} .tint-ok{background:var(--ok-tint);} .tint-bad{background:var(--bad-tint);}
+.tint-warn{background:var(--warn-tint);} .tint-info{background:var(--info-tint);} .tint-violet{background:var(--violet-tint);}
+.tint-brand .kicker{background:var(--brand); color:#fff;} .tint-ok .kicker{background:var(--ok); color:#fff;}
+.tint-bad .kicker{background:var(--bad); color:#fff;} .tint-warn .kicker{background:var(--warn); color:#fff;}
+.tint-info .kicker{background:var(--info); color:#fff;} .tint-violet .kicker{background:var(--violet); color:#fff;}
+.chapbody{padding:22px 56px 40px; background:var(--paper);}
+
+/* ===================== section-lead-callout (callout / 章導入) ============= */
+[data-component="section-lead-callout"]{display:grid; grid-template-columns:repeat(3,1fr); gap:16px;}
+.card{background:var(--paper); border:1px solid var(--line); border-radius:14px; padding:18px 18px 16px; box-shadow:var(--shadow); position:relative; overflow:hidden;}
+.card.accent::before{content:""; position:absolute; left:0; top:0; bottom:0; width:5px; background:var(--brand);}
+.card .cid{font-size:11.5px; font-weight:800; letter-spacing:.12em; color:var(--brand); margin-bottom:8px; display:flex; align-items:center; gap:8px;}
+.card .ct{font-size:16.5px; font-weight:800; line-height:1.4; margin:0 0 6px;}
+.card .cd{font-size:13px; color:var(--ink-soft); margin:0;}
+
+/* ===================== scope-summary-panel (dense-list / 範囲) ============= */
+[data-component="scope-summary-panel"]{display:grid; grid-template-columns:1fr 1fr; gap:20px;}
+.scol{border-radius:14px; padding:18px 20px; box-shadow:var(--shadow);}
+.scol.in{background:var(--ok-tint); border:1px solid var(--ok-line);}
+.scol.out{background:var(--bad-tint); border:1px solid var(--bad-line);}
+.scol h3{margin:0 0 12px; font-size:15px; font-weight:800; display:flex; align-items:center; gap:9px;}
+.scol.in h3{color:var(--ok);} .scol.out h3{color:var(--bad);}
+.scol ul{list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:9px;}
+.scol li{display:flex; gap:10px; align-items:flex-start; font-size:13.5px; line-height:1.5;}
+.scol li .b{flex:0 0 auto; margin-top:3px;}
+
+/* ===================== actor-stakeholder-table (dense-table / 主体) ======== */
+[data-component="actor-stakeholder-table"]{display:flex; flex-wrap:wrap; gap:12px;}
+.actor{display:flex; align-items:center; gap:11px; background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:11px 15px 11px 12px; box-shadow:var(--shadow); min-width:0;}
+.actor .av{flex:0 0 auto; width:38px; height:38px; border-radius:10px; display:grid; place-items:center; color:#fff;}
+.actor .nm{font-size:14px; font-weight:700; line-height:1.25;}
+.actor .role{font-size:11px; color:var(--ink-faint); font-weight:600;}
+.ext-badge{font-size:9.5px; font-weight:800; letter-spacing:.08em; background:var(--warn-tint); color:var(--warn); border:1px solid var(--warn-line); padding:1px 6px; border-radius:5px; margin-left:6px;}
+
+/* ===================== source-trace-origin (dense-table / 上位ニーズ) ★補填 = */
+[data-component="source-trace-origin"]{width:100%; min-width:440px; border-collapse:separate; border-spacing:0; font-size:13.5px;}
+[data-component="source-trace-origin"] thead th{background:var(--info); color:#fff; text-align:left; font-size:11.5px; font-weight:800; letter-spacing:.06em; padding:11px 14px;}
+[data-component="source-trace-origin"] thead th:first-child{border-top-left-radius:12px;} [data-component="source-trace-origin"] thead th:last-child{border-top-right-radius:12px;}
+[data-component="source-trace-origin"] tbody td{padding:12px 14px; border-bottom:1px solid var(--line); vertical-align:top; line-height:1.5;}
+[data-component="source-trace-origin"] tbody tr:nth-child(even) td{background:var(--paper-2);}
+[data-component="source-trace-origin"] .nid{font-weight:800; font-family:ui-monospace,monospace; color:var(--info); white-space:nowrap;}
+[data-component="source-trace-origin"] .origin{font-size:11.5px; color:var(--ink-faint); font-weight:700;}
+
+/* ===================== requirement-matrix-table (dense-table / 要件本体) === */
+[data-component="requirement-matrix-table"]{width:100%; min-width:620px; border-collapse:separate; border-spacing:0; font-size:13.5px;}
+[data-component="requirement-matrix-table"] thead th{background:var(--brand-deep); color:#fff; text-align:left; font-size:11.5px; font-weight:800; letter-spacing:.06em; padding:11px 14px;}
+[data-component="requirement-matrix-table"] thead th:first-child{border-top-left-radius:12px;} [data-component="requirement-matrix-table"] thead th:last-child{border-top-right-radius:12px;}
+[data-component="requirement-matrix-table"] tbody td{padding:12px 14px; border-bottom:1px solid var(--line); vertical-align:top; line-height:1.5;}
+[data-component="requirement-matrix-table"] tbody tr:nth-child(even) td{background:var(--paper-2);}
+[data-component="requirement-matrix-table"] tbody tr:hover td{background:var(--brand-tint);}
+.fid{font-weight:800; font-family:ui-monospace,monospace; font-size:13px; white-space:nowrap; color:var(--brand);}
+td.cond{color:var(--ink-soft); font-size:13px; width:22%;}
+td.resp{font-size:13.5px; width:40%;}
+/* ears-requirement-row: 根拠 Rationale を必須スロットとして明示 (critic #3 格上げ) */
+td.resp .why{display:block; margin-top:5px; font-size:11.5px; color:var(--ink-faint); padding-left:62px; position:relative;}
+td.resp .why::before{content:"↳ なぜ要る"; position:absolute; left:0; font-weight:700; color:var(--ink-faint);}
+td.resp .plain{display:block; margin-top:5px; font-size:12.5px; color:var(--ink-soft);}
+td.resp .plain::before{content:"やさしく言うと "; font-weight:700; font-size:10px; color:var(--brand);}
+/* dense-table を clip せず狭幅で内部横スクロールへ倒す (folio-276 #1)。 旧 overflow:hidden は
+   375-390px で列を 1 文字/行へ潰し判読不能にした上 scroll も封じていた (gate F 盲点=#2 で捕捉)。
+   overflow-x:auto + table 側 min-width = rtm-grid と同じ「狭幅は横スクロール」方針へ統一する。 */
+.tbl-wrap{border:1px solid var(--line); border-radius:12px; overflow-x:auto; box-shadow:var(--shadow);}
+
+/* ---- priority-badge + EARS chip (badge) ---- */
+.ears{display:inline-flex; align-items:center; gap:5px; font-size:10.5px; font-weight:800; letter-spacing:.04em; padding:3px 9px; border-radius:7px; white-space:nowrap; border:1px solid;}
+.ears.always{background:var(--info-tint); color:var(--info); border-color:var(--info-line);}
+.ears.trigger{background:var(--brand-tint); color:var(--brand); border-color:var(--brand);}
+.ears.state{background:var(--violet-tint); color:var(--violet); border-color:var(--violet-line);}
+.ears.forbid{background:var(--bad-tint); color:var(--bad); border-color:var(--bad-line);}
+.ears.option{background:var(--warn-tint); color:var(--warn); border-color:var(--warn-line);}
+.ears .en{opacity:.7; font-weight:600; font-family:ui-monospace,monospace; font-size:9px;}
+.prio{display:inline-flex; align-items:center; gap:4px; font-size:10px; font-weight:800; letter-spacing:.04em; padding:2px 8px; border-radius:6px; white-space:nowrap;}
+.prio.must{background:var(--bad); color:#fff;} .prio.should{background:var(--warn); color:#fff;} .prio.may{background:var(--paper-3); color:var(--ink-soft); border:1px solid var(--line);}
+.vmeth{font-size:10px; font-weight:800; font-family:ui-monospace,monospace; padding:2px 6px; border-radius:5px; background:var(--ok-tint); color:var(--ok); border:1px solid var(--ok-line);}
+.ears-legend{display:flex; flex-wrap:wrap; gap:10px; margin-bottom:14px; align-items:center;}
+.ears-legend .lt{font-size:12px; font-weight:700; color:var(--ink-soft); margin-right:4px;}
+/* ears-requirement-row = requirement-matrix-table の各 <tr>。行 styling は table を継承し、
+   data-component で floor gate A 識別 + 根拠 (td.resp .why) を空不可スロットに保つ */
+tr[data-component="ears-requirement-row"] td.resp .why:empty::after{content:"⚠ 根拠 未記入"; color:var(--bad); font-weight:700;}
+
+/* ===================== nfr-hero-metrics + nfr-metrics-table =============== */
+[data-component="nfr-hero-metrics"]{display:grid; grid-template-columns:repeat(4,1fr); gap:16px; margin-bottom:24px;}
+.nfr-hero{border-radius:16px; padding:20px 18px 18px; box-shadow:var(--shadow); position:relative; overflow:hidden; border:1px solid var(--line); background:var(--paper);}
+.nfr-hero .cat{font-size:11px; font-weight:800; letter-spacing:.1em; text-transform:uppercase; margin-bottom:8px; display:flex; align-items:center; gap:7px;}
+.nfr-hero .big{font-size:38px; font-weight:900; line-height:1; letter-spacing:-.02em; display:flex; align-items:baseline; gap:4px;}
+.nfr-hero .big .u{font-size:16px; font-weight:800; opacity:.7;}
+.nfr-hero .qual{font-size:12.5px; font-weight:600; color:var(--ink-soft); margin-top:8px; line-height:1.45;}
+.nfr-hero.c1{background:linear-gradient(160deg,var(--info-tint),var(--paper));} .nfr-hero.c1 .cat,.nfr-hero.c1 .big{color:var(--info);}
+.nfr-hero.c2{background:linear-gradient(160deg,var(--ok-tint),var(--paper));} .nfr-hero.c2 .cat,.nfr-hero.c2 .big{color:var(--ok);}
+.nfr-hero.c3{background:linear-gradient(160deg,var(--brand-tint),var(--paper));} .nfr-hero.c3 .cat,.nfr-hero.c3 .big{color:var(--brand);}
+.nfr-hero.c4{background:linear-gradient(160deg,var(--violet-tint),var(--paper));} .nfr-hero.c4 .cat,.nfr-hero.c4 .big{color:var(--violet);}
+[data-component="nfr-metrics-table"]{width:100%; min-width:480px; border-collapse:separate; border-spacing:0; font-size:13px;}
+[data-component="nfr-metrics-table"] th{background:var(--paper-3); text-align:left; font-size:11px; font-weight:800; letter-spacing:.05em; color:var(--ink-soft); padding:10px 14px; text-transform:uppercase;}
+[data-component="nfr-metrics-table"] td{padding:11px 14px; border-bottom:1px solid var(--line); vertical-align:top; line-height:1.55;}
+[data-component="nfr-metrics-table"] tbody tr:last-child td{border-bottom:none;}
+.nid{font-weight:800; font-family:ui-monospace,monospace; color:var(--brand); white-space:nowrap;}
+.tgt{font-weight:800; color:var(--ink); white-space:nowrap;}
+.meas{color:var(--ink-soft); font-size:12.5px;}
+
+/* ===================== rtm-grid (rtm-grid / 双方向トレース + 孤立検出) ===== */
+[data-component="rtm-grid"]{overflow-x:auto; border:1px solid var(--line); border-radius:12px; box-shadow:var(--shadow);}
+.rtm{border-collapse:separate; border-spacing:0; font-size:12.5px; width:100%; min-width:760px;}
+.rtm th,.rtm td{padding:11px 12px; text-align:center; border-bottom:1px solid var(--line); border-right:1px solid var(--line-soft);}
+.rtm th{background:var(--brand-deep); color:#fff; font-size:11px; font-weight:800; letter-spacing:.04em;}
+.rtm thead th:first-child{text-align:left;}
+.rtm .grp{background:var(--paper-3); color:var(--ink-soft); font-weight:800; font-size:10.5px; letter-spacing:.06em; text-transform:uppercase;}
+.rtm tbody th{background:var(--paper-2); text-align:left; font-weight:800; color:var(--brand); font-family:ui-monospace,monospace; white-space:nowrap; font-size:12px;}
+.rtm tbody th .lbl{display:block; font-family:inherit; font-weight:600; color:var(--ink-soft); font-size:10.5px; margin-top:2px;}
+.rtm td.hit{background:var(--ok-tint);}
+.rtm td .dot{display:inline-grid; place-items:center; width:22px; height:22px; border-radius:50%; background:var(--ok); color:#fff;}
+.rtm td .dot.ac{display:inline-flex; align-items:center; width:auto; min-width:0; height:auto; border-radius:6px; padding:2px 7px; font-size:10px; font-weight:700; line-height:1.2; margin:1px;}
+.rtm td.gap{background:var(--bad-tint);} .rtm td.gap .x{color:var(--bad); font-weight:900;}
+.rtm tbody tr:last-child td,.rtm tbody tr:last-child th{border-bottom:none;}
+
+/* ===================== rtm-collapse (折りたたみ RTM の fold affordance / folio-276 #4) ====
+   生成 SRS は核心 RTM を <details data-component="rtm-collapse"> で既定折りたたむ。 素の details は
+   marker が小さく「開けるUI」と気付けず要旨が素通りした (ceiling 第2層)。 summary を panel ヘッダ化し
+   ▶ caret + 「クリックで開閉」ヒントで開閉可能性を明示する。 折りたたみ機構自体は assembler が所有。 */
+[data-component="rtm-collapse"]{border:1px solid var(--line); border-radius:12px; box-shadow:var(--shadow); background:var(--paper); overflow:hidden;}
+[data-component="rtm-collapse"]>summary{cursor:pointer; list-style:none; user-select:none; display:flex; align-items:center; gap:11px; padding:15px 20px; font-size:14.5px; font-weight:800; color:var(--brand); background:var(--brand-tint);}
+[data-component="rtm-collapse"]>summary::-webkit-details-marker{display:none;}
+[data-component="rtm-collapse"]>summary::before{content:""; flex:0 0 auto; width:0; height:0; border-left:7px solid currentColor; border-top:5px solid transparent; border-bottom:5px solid transparent; transition:transform .15s ease;}
+[data-component="rtm-collapse"][open]>summary::before{transform:rotate(90deg);}
+[data-component="rtm-collapse"]>summary::after{content:"クリックで開閉"; margin-left:auto; font-size:10.5px; font-weight:700; letter-spacing:.04em; color:var(--ink-faint); background:var(--paper); border:1px solid var(--line); border-radius:6px; padding:2px 9px;}
+[data-component="rtm-collapse"][open]>summary{border-bottom:1px solid var(--line);}
+[data-component="rtm-collapse"]>.rtm-summary-derived,[data-component="rtm-collapse"]>[data-prose-slot="rtm-summary"]{margin:0; padding:13px 20px 0; font-size:13px; color:var(--ink-soft); line-height:1.6;}
+[data-component="rtm-collapse"]>[data-component="rtm-grid"]{margin:16px 20px 18px;}
+
+/* ===================== acceptance-criteria-checklist (dense-list) ========= */
+[data-component="acceptance-criteria-checklist"]{display:grid; grid-template-columns:repeat(3,1fr); gap:16px;}
+.ac{background:var(--paper); border:1px solid var(--ok-line); border-radius:14px; padding:17px 18px; box-shadow:var(--shadow); position:relative; display:flex; flex-direction:column; gap:8px;}
+.ac::before{content:""; position:absolute; left:0; top:0; bottom:0; width:5px; background:var(--ok); border-radius:14px 0 0 14px;}
+.ac .aid{font-size:11.5px; font-weight:800; color:var(--ok); letter-spacing:.1em; display:flex; align-items:center; gap:8px;}
+.ac .at{font-size:14.5px; font-weight:700; line-height:1.5; margin:0;}
+.ac .at b{color:var(--ok); font-weight:800;}
+.ac .metric{display:flex; align-items:baseline; gap:6px; margin-top:auto; padding-top:6px;}
+.ac .metric .v{font-size:26px; font-weight:900; color:var(--ok); line-height:1;}
+.ac .metric .l{font-size:11.5px; color:var(--ink-faint); font-weight:600;}
+
+/* ===================== constraint-callout (callout / 制約・規制) =========== */
+[data-component="constraint-callout"]{width:100%; border-collapse:separate; border-spacing:0; font-size:13.5px;}
+[data-component="constraint-callout"] td{padding:13px 16px; border-bottom:1px solid var(--line); vertical-align:top; line-height:1.55;}
+[data-component="constraint-callout"] tbody tr:last-child td{border-bottom:none;}
+.cid2{font-weight:800; font-family:ui-monospace,monospace; color:var(--warn); white-space:nowrap; width:60px;}
+.cl{font-weight:700; white-space:nowrap; width:170px; color:var(--ink);}
+.reg-badge{font-size:9.5px; font-weight:800; letter-spacing:.06em; background:var(--bad-tint); color:var(--bad); border:1px solid var(--bad-line); padding:1px 7px; border-radius:5px; margin-left:6px;}
+
+/* ===================== glossary-term-table (glossary / 用語 SSoT) ========= */
+[data-component="glossary-term-table"]{display:grid; grid-template-columns:1fr 1fr; gap:0 28px; border:1px solid var(--line); border-radius:14px; overflow:hidden; box-shadow:var(--shadow);}
+.grow{display:flex; gap:16px; padding:15px 20px; border-bottom:1px solid var(--line-soft); align-items:flex-start;}
+.grow:nth-child(odd){background:var(--paper);} .grow:nth-child(even){background:var(--paper-2);}
+.gword{flex:0 0 142px; font-size:14.5px; font-weight:800; color:var(--brand); line-height:1.3;}
+.gword .en{display:block; font-size:11px; font-weight:700; color:var(--ink-faint); font-family:ui-monospace,monospace; margin-top:2px;}
+.gdef{font-size:13px; color:var(--ink-soft); line-height:1.55;}
+
+/* ===================== fidelity-sync-meta + footer (meta) ================= */
+.foot{padding:26px 56px 40px; background:var(--brand-deep); color:rgba(255,255,255,.78); font-size:12px;}
+.foot .ft-grid{display:flex; flex-wrap:wrap; gap:14px 40px; justify-content:space-between; align-items:center;}
+.foot b{color:#fff;}
+.foot .tags{display:flex; flex-wrap:wrap; gap:8px;}
+.foot .tags span{background:rgba(255,255,255,.1); border:1px solid rgba(255,255,255,.18); padding:4px 10px; border-radius:7px; font-size:11px; font-weight:600;}
+/* i6f9: 読者向け平易行は常時可視の第 1 行 (flex-basis:100%)、 dev メタ行は font-size のみ控えめ化
+   (色/opacity は据置 = contrast 不変で gate F に新規 risk を持ち込まない)。 */
+.foot .ft-plain{flex-basis:100%; font-size:13px; color:rgba(255,255,255,.92); font-weight:500;}
+.foot .ft-grid>[data-audience="machine"]{font-size:10.5px;}
+
+/* ===========================================================================
+   残り register (taxonomy 全 37 部品の被覆) — 多くは中核 register を再利用
+   =========================================================================== */
+
+/* ---- dense-table family: interface / data / revision-history ---- */
+[data-component="interface-spec-table"],
+[data-component="data-requirements-block"],
+[data-component="revision-history-table"]{width:100%; border-collapse:separate; border-spacing:0; font-size:13px;}
+[data-component="interface-spec-table"] th,
+[data-component="data-requirements-block"] th,
+[data-component="revision-history-table"] th{background:var(--paper-3); text-align:left; font-size:11px; font-weight:800; letter-spacing:.05em; color:var(--ink-soft); padding:10px 14px; text-transform:uppercase;}
+[data-component="interface-spec-table"] td,
+[data-component="data-requirements-block"] td,
+[data-component="revision-history-table"] td{padding:11px 14px; border-bottom:1px solid var(--line); vertical-align:top; line-height:1.55;}
+[data-component="interface-spec-table"] tbody tr:last-child td,
+[data-component="data-requirements-block"] tbody tr:last-child td,
+[data-component="revision-history-table"] tbody tr:last-child td{border-bottom:none;}
+.iid{font-weight:800; font-family:ui-monospace,monospace; color:var(--info); white-space:nowrap;}
+.dir{font-size:10px; font-weight:800; padding:2px 7px; border-radius:5px; background:var(--info-tint); color:var(--info); border:1px solid var(--info-line);}
+
+/* ---- dense-list family: ui / functions / use-case / references / toc / appendix ---- */
+[data-component="ui-spec-block"],
+[data-component="product-functions-list"],
+[data-component="use-case-card"],
+[data-component="references-list"],
+[data-component="toc-navigator"],
+[data-component="assumptions-constraints-list"],
+[data-component="supporting-info-appendix"]{list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:9px;}
+[data-component="ui-spec-block"] li,
+[data-component="product-functions-list"] li,
+[data-component="references-list"] li,
+[data-component="toc-navigator"] li,
+[data-component="assumptions-constraints-list"] li,
+[data-component="supporting-info-appendix"] li{display:flex; gap:11px; align-items:flex-start; background:var(--paper); border:1px solid var(--line); border-radius:11px; padding:11px 15px; box-shadow:var(--shadow); font-size:13.5px; line-height:1.5;}
+[data-component="assumptions-constraints-list"] li{border-left:5px solid var(--warn);}
+.li-tag{font-size:10px; font-weight:800; padding:2px 7px; border-radius:5px; background:var(--warn-tint); color:var(--warn); border:1px solid var(--warn-line); flex:0 0 auto;}
+[data-component="toc-navigator"]{display:grid; grid-template-columns:repeat(2,1fr); gap:9px 18px;}
+[data-component="toc-navigator"] li{box-shadow:none; border-color:var(--line-soft);}
+[data-component="toc-navigator"] .tn{font-weight:800; font-family:ui-monospace,monospace; color:var(--brand); flex:0 0 auto;}
+[data-component="references-list"] .ref-n{font-weight:800; font-family:ui-monospace,monospace; color:var(--ink-faint); flex:0 0 auto;}
+.li-key{font-weight:800; color:var(--brand); flex:0 0 auto;}
+
+/* use-case-card: precondition/flow/postcondition の枠 */
+[data-component="use-case-card"] li{flex-direction:column; gap:7px; border-left:5px solid var(--info); padding:14px 17px;}
+.uc-id{font-size:11.5px; font-weight:800; color:var(--info); letter-spacing:.08em;}
+.uc-flow{display:flex; flex-wrap:wrap; gap:6px; align-items:center; font-size:12.5px;}
+.uc-flow .stp{background:var(--paper-2); border:1px solid var(--line); border-radius:7px; padding:3px 9px; font-weight:600;}
+.uc-flow .ar{color:var(--ink-faint); font-weight:800;}
+
+/* ---- rtm-grid family: verification-method-grid / requirement-attributes-rtm ---- */
+[data-component="verification-method-grid"],
+[data-component="requirement-attributes-rtm"]{overflow-x:auto; border:1px solid var(--line); border-radius:12px; box-shadow:var(--shadow);}
+[data-component="verification-method-grid"] table,
+[data-component="requirement-attributes-rtm"] table{border-collapse:separate; border-spacing:0; font-size:12.5px; width:100%; min-width:680px;}
+[data-component="verification-method-grid"] th,
+[data-component="requirement-attributes-rtm"] th{background:var(--brand-deep); color:#fff; font-size:11px; font-weight:800; padding:10px 12px; text-align:left;}
+[data-component="verification-method-grid"] td,
+[data-component="requirement-attributes-rtm"] td{padding:10px 12px; border-bottom:1px solid var(--line); vertical-align:top; line-height:1.5;}
+[data-component="verification-method-grid"] tbody tr:nth-child(even) td,
+[data-component="requirement-attributes-rtm"] tbody tr:nth-child(even) td{background:var(--paper-2);}
+
+/* ---- callout family: quality-checklist / audience-toggle ---- */
+[data-component="quality-checklist-callout"]{background:var(--paper-2); border:1px solid var(--line); border-left:5px solid var(--ok); border-radius:12px; padding:16px 20px; box-shadow:var(--shadow);}
+[data-component="quality-checklist-callout"] .qt{font-size:13px; font-weight:800; color:var(--ok); margin:0 0 10px; display:flex; align-items:center; gap:8px;}
+[data-component="quality-checklist-callout"] ul{list-style:none; margin:0; padding:0; display:grid; grid-template-columns:repeat(3,1fr); gap:7px 16px;}
+[data-component="quality-checklist-callout"] li{font-size:12.5px; display:flex; gap:7px; color:var(--ink-soft);}
+[data-component="quality-checklist-callout"] li .ck{color:var(--ok); font-weight:900; flex:0 0 auto;}
+[data-component="audience-toggle"]{display:inline-flex; gap:0; border:1px solid var(--line); border-radius:10px; overflow:hidden; box-shadow:var(--shadow);}
+[data-component="audience-toggle"] button{border:none; background:var(--paper); color:var(--ink-soft); font:inherit; font-size:12.5px; font-weight:700; padding:8px 16px; cursor:pointer; border-right:1px solid var(--line);}
+[data-component="audience-toggle"] button:last-child{border-right:none;}
+[data-component="audience-toggle"] button[aria-pressed="true"]{background:var(--brand); color:#fff;}
+
+/* ---- diagram family: context / use-case-flow / state-machine ---- */
+[data-component="context-diagram"],
+[data-component="use-case-flow-diagram"],
+[data-component="state-machine-diagram"]{background:var(--paper); border:1px solid var(--line); border-radius:14px; padding:20px; box-shadow:var(--shadow); overflow-x:auto;}
+[data-component="context-diagram"] figcaption,
+[data-component="use-case-flow-diagram"] figcaption,
+[data-component="state-machine-diagram"] figcaption{font-size:11.5px; color:var(--ink-faint); font-weight:600; margin-top:10px; text-align:center;}
+/* use-case flow steps (横並びステップ) */
+.uc-basic{display:flex; align-items:stretch; gap:0; flex-wrap:wrap;}
+.uc-step{flex:1 1 0; min-width:140px; background:var(--paper); border:1px solid var(--brand); border-radius:13px; padding:14px; box-shadow:var(--shadow); display:flex; flex-direction:column; gap:5px;}
+.uc-arrow{flex:0 0 30px; display:grid; place-items:center; color:var(--brand); font-weight:800;}
+.uc-step .sn{font-size:11px; font-weight:800; color:var(--brand); letter-spacing:.06em;}
+.uc-step .st{font-size:14px; font-weight:800; line-height:1.3;}
+.uc-step .sd{font-size:11.5px; color:var(--ink-faint); line-height:1.45;}
+
+/* ---- badge: informative-normative-label ---- */
+.io-label{display:inline-flex; align-items:center; gap:5px; font-size:10px; font-weight:800; letter-spacing:.06em; padding:2px 9px; border-radius:6px; text-transform:uppercase;}
+.io-label.normative{background:var(--brand); color:#fff;}
+.io-label.informative{background:var(--paper-3); color:var(--ink-soft); border:1px solid var(--line);}
+
+/* ---- responsive ---- */
+@media (max-width:1080px){
+  [data-component="section-lead-callout"],[data-component="nfr-hero-metrics"],[data-component="acceptance-criteria-checklist"]{grid-template-columns:1fr 1fr;}
+  [data-component="scope-summary-panel"],[data-component="glossary-term-table"]{grid-template-columns:1fr;}
+}
+@media (max-width:720px){
+  [data-component="chapter-deck-band"],.chapbody,[data-component="doc-cover-band"],.foot{padding-left:22px; padding-right:22px;}
+  [data-component="section-lead-callout"],[data-component="nfr-hero-metrics"],[data-component="acceptance-criteria-checklist"]{grid-template-columns:1fr;}
+  [data-component="doc-cover-band"] h1{font-size:31px;}
+  [data-component="chapter-deck-band"] .num{font-size:92px;}
+}
+
+/* ============================================================================
+   dark accent コントラスト補正 — ★このブロックはファイル末尾に置くこと (source-order)。
+   dark では accent トークン (--brand/--info/--warn/--ok/--bad/--violet) が明色へ反転するため、
+   それを塗りに使い白文字を載せる小要素 (kicker / priority-badge / actor avatar / dot 等) は
+   WCAG AA が崩れる (gate F low-contrast で実検出)。 文字を暗色へ切替えて contrast を確保する。
+   基底の `color:#fff` ルールと同 specificity ゆえ、 source-order で後勝ちさせるには本ブロックが
+   それら全ての後 (= ファイル末尾) に来る必要がある。 前方へ移すと基底ルールに負け無効化する。
+   構造ヘッダ/フッタ (--brand-deep 塗り) は dark でも暗色維持ゆえ白文字のままで可読。
+   ============================================================================ */
+@media (prefers-color-scheme: dark){
+  .tint-brand .kicker, .tint-ok .kicker, .tint-bad .kicker,
+  .tint-warn .kicker, .tint-info .kicker, .tint-violet .kicker,
+  [data-component="source-trace-origin"] thead th,
+  .prio.must, .prio.should,
+  .rtm td .dot,
+  .actor .av,
+  [data-component="audience-toggle"] button[aria-pressed="true"],
+  .io-label.normative{ color:#08131a; }
+}
+/* ===== ADR-pack 固有部品 (folio-bwc / instance#2)。 srs.css の token を流用 ===== */
+[data-component="adr-context-row"]{display:flex;gap:12px;align-items:flex-start;padding:13px 16px;border:1px solid var(--line);border-left:3px solid var(--info);border-radius:10px;background:var(--paper-2);margin:10px 0}
+[data-component="adr-context-row"] .cxid{flex:0 0 auto;font-weight:700;font-size:12px;color:var(--info);background:var(--info-tint);border:1px solid var(--info-line);border-radius:6px;padding:2px 8px;letter-spacing:.02em}
+[data-component="adr-context-row"] .cxbody .cxh{font-weight:700;margin:0 0 3px;font-size:14.5px}
+[data-component="adr-context-row"] .cxbody .cxd{margin:0;color:var(--ink-soft);font-size:13.5px;line-height:1.7}
+table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;margin:8px 0;font-size:13.5px}
+[data-component="adr-driver-row"] td{border:1px solid var(--line);padding:9px 12px;vertical-align:top}
+[data-component="adr-driver-row"] .drid{font-weight:700;color:var(--brand);white-space:nowrap}
+[data-component="adr-driver-row"] .drg{display:inline-block;margin-left:6px;font-size:11px;color:var(--ink-soft);background:var(--paper-3);border:1px solid var(--line);border-radius:5px;padding:1px 6px}
+.opt-grid{display:flex;flex-direction:column;gap:12px;margin:10px 0}
+[data-component="adr-option-card"]{border:1px solid var(--line);border-radius:12px;padding:14px 16px;background:var(--paper);box-shadow:var(--shadow)}
+[data-component="adr-option-card"].chosen{border:2px solid var(--ok);background:var(--ok-tint)}
+[data-component="adr-option-card"].rejected{opacity:.92}
+.opt-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:4px}
+.opt-head .opt-id{font-weight:700;font-size:12px;color:var(--ink-soft)}
+.opt-head .opt-name{font-weight:800;font-size:15px}
+.opt-verdict{font-size:11.5px;font-weight:700;border-radius:999px;padding:2px 11px;border:1px solid}
+.opt-verdict.chosen{color:var(--ok);background:var(--ok-tint);border-color:var(--ok-line)}
+.opt-verdict.rejected{color:var(--bad);background:var(--bad-tint);border-color:var(--bad-line)}
+.opt-verdict.deferred{color:var(--warn);background:var(--warn-tint);border-color:var(--warn-line)}
+[data-component="adr-option-card"] .opt-sum{margin:2px 0 8px;color:var(--ink-soft);font-size:13.5px;line-height:1.7}
+[data-component="adr-option-card"] .opt-plain{display:block;margin:0 0 9px;font-size:13px;color:var(--ink-soft);background:var(--brand-tint);border-radius:7px;padding:6px 10px}
+.opt-pc{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+@media(max-width:640px){.opt-pc{grid-template-columns:1fr}}
+.opt-pc ul{margin:3px 0 0;padding-left:2px;list-style:none}
+.opt-pc li{font-size:12.5px;line-height:1.65;padding-left:18px;position:relative;margin:3px 0;color:var(--ink-soft)}
+.opt-pc .pros h4,.opt-pc .cons h4{margin:0;font-size:11.5px;letter-spacing:.04em}
+.opt-pc .pros h4{color:var(--ok)} .opt-pc .cons h4{color:var(--bad)}
+.opt-pc .pros li::before{content:"+";position:absolute;left:2px;color:var(--ok);font-weight:800}
+.opt-pc .cons li::before{content:"\2212";position:absolute;left:2px;color:var(--bad);font-weight:800}
+[data-component="adr-decision-panel"]{border:2px solid var(--ok);border-radius:14px;padding:16px 18px;background:var(--ok-tint);margin:8px 0}
+[data-component="adr-decision-panel"] .dec-kick{font-size:11.5px;font-weight:700;letter-spacing:.05em;color:var(--ok);text-transform:uppercase}
+[data-component="adr-decision-panel"] .dec-state{font-size:15.5px;font-weight:700;line-height:1.7;margin:5px 0 4px}
+[data-component="adr-decision-panel"] .dec-plain{display:block;font-size:13.5px;color:var(--ink-soft);line-height:1.7;margin:0 0 8px}
+[data-component="adr-decision-panel"] .dec-why{display:block;font-size:13px;color:var(--ink);background:var(--paper);border:1px solid var(--ok-line);border-radius:8px;padding:8px 11px;line-height:1.75;margin:0 0 10px}
+.justify-box{background:var(--paper);border:1px solid var(--line);border-radius:9px;padding:10px 12px}
+.justify-box .jh{font-size:12px;font-weight:700;color:var(--ink-faint);margin:0 0 6px}
+.justify-row{display:flex;gap:9px;align-items:baseline;padding:5px 0;border-top:1px dashed var(--line)}
+.justify-row:first-of-type{border-top:0}
+.justify-req{flex:0 0 auto;font-weight:800;font-size:12.5px;color:var(--ok);background:var(--ok-tint);border:1px solid var(--ok-line);border-radius:6px;padding:1px 9px}
+.justify-role{flex:0 0 auto;font-size:10.5px;color:var(--violet);background:var(--violet-tint);border:1px solid var(--violet-line);border-radius:999px;padding:1px 8px}
+.justify-note{flex:1 1 auto;font-size:12.5px;color:var(--ink-soft);line-height:1.6}
+.justify-tgt{font-size:11.5px;color:var(--ink-faint);margin:8px 0 0}
+[data-component="adr-supersession"],[data-component="adr-principle"]{border:1px solid var(--line);border-radius:10px;padding:12px 15px;margin:10px 0;font-size:13.5px;line-height:1.7}
+[data-component="adr-supersession"]{background:var(--paper-2)}
+[data-component="adr-principle"]{background:var(--violet-tint);border-color:var(--violet-line)}
+[data-component="adr-principle"] .prin-id{font-weight:700;color:var(--violet);font-size:12px;letter-spacing:.02em}
+[data-component="adr-principle"] .prin-text{font-weight:700;margin:4px 0 2px;color:var(--ink)}
+[data-component="adr-principle"] .prin-note{color:var(--ink-soft);font-size:12.5px}
+.ss-row{margin:3px 0}.ss-row .ss-k{font-weight:700;color:var(--ink-soft);font-size:12px;margin-right:6px}
+
+</style>
+<meta name="folio-version" content="0.1.0">
+<script type="application/ld+json">
+{
+  "@context": {
+    "dc": "http://purl.org/dc/terms/",
+    "schema": "https://schema.org/",
+    "folio": "https://folio.dev/spec/v1/"
+  },
+  "@id": "./ADR-0045-seat-role-is-one-orchestrator-and-dispatcher-lands-runs.html",
+  "@type": "schema:TechArticle",
+  "dc:isPartOf": [
+    {
+      "@id": "./README.html"
+    }
+  ],
+  "dc:title": "席の役割は orchestrator 1 つで、 便の起動・着地・merge は器の dispatcher が行う (planner / 管理席の 2 役割と席の自律機能を廃止・SessionStart の注入は短い 1 本・session を跨ぐ記憶は台帳・runner には憲法の散文を注入しない)",
+  "folio:version": "0.1.0",
+  "folio:stakeholders": [
+    "Developer",
+    "AI Agent",
+    "External Reviewer"
+  ],
+  "dc:references": [
+    {
+      "@id": "../spec/constitution.html#c1"
+    },
+    {
+      "@id": "../spec/constitution.html#c2"
+    },
+    {
+      "@id": "../spec/constitution.html#c3"
+    },
+    {
+      "@id": "../spec/constitution.html#c7"
+    },
+    {
+      "@id": "../spec/constitution.html#c9"
+    },
+    {
+      "@id": "../spec/constitution.html#c14"
+    },
+    {
+      "@id": "../spec/constitution.html#c16"
+    },
+    {
+      "@id": "../spec/constitution.html#a1"
+    },
+    {
+      "@id": "../spec/constitution.html#a2"
+    },
+    {
+      "@id": "../spec/constitution.html#n2"
+    },
+    {
+      "@id": "../spec/srs.html#FR30"
+    },
+    {
+      "@id": "../spec/srs.html#FR41"
+    },
+    {
+      "@id": "../spec/srs.html#FR68"
+    },
+    {
+      "@id": "./ADR-0016-default-delivery-structure-and-typed-question-record.html"
+    },
+    {
+      "@id": "./ADR-0018-working-memory-subcommands-and-pointer-required-directives.html"
+    },
+    {
+      "@id": "./ADR-0022-seat-roles-are-typed-and-enforced-by-hooks.html"
+    },
+    {
+      "@id": "./ADR-0030-tick-units-are-written-and-enabled-by-the-vessel.html"
+    },
+    {
+      "@id": "./ADR-0031-working-memory-is-held-by-the-vessel-directives-status-and-hooks.html"
+    },
+    {
+      "@id": "./ADR-0034-dispatcher-starts-reviewed-contracts-automatically.html"
+    },
+    {
+      "@id": "./ADR-0044-decision-ladder-is-a-constitution-article.html"
+    }
+  ]
+}
+</script>
+</head>
+<body>
+<!-- folio:chrome-top -->
+<a class="skip-link" href="#cover-summary">本文へスキップ</a>
+<nav class="breadcrumb" aria-label="パンくず"><ol>
+  <li><a href="../index.html">design-intent</a></li>
+  <li><a href="./README.html">decisions</a></li>
+  <li aria-current="page">ADR-0045</li>
+</ol></nav>
+<!-- /folio:chrome-top -->
+<div class="page" data-component="requirement-type-color-tokens">
+<header data-component="doc-cover-band">
+<p class="cover-eyebrow"><span class="doc-type">設計判断記録 (ADR)</span> <span>scribe2 — 席の役割と便の配送 (orchestrator / dispatcher)</span></p>
+<h1>席の役割は orchestrator 1 つで、 便の起動・着地・merge は器の dispatcher が行う (planner / 管理席の 2 役割と席の自律機能を廃止・SessionStart の注入は短い 1 本・session を跨ぐ記憶は台帳・runner には憲法の散文を注入しない)</h1>
+<p class="cover-sub">席は 2 役割 (planner / 管理席) と、 それを保つための自律機能 (作業記憶の退避と復元・管理 tick・cap guard と強制 cycle・heartbeat・statusline・席間の連絡・hook 集合の食い違いの検知) を 1 週間で積み、 席 1 つの起動に 256 行 / 20,616 字を注入するに至った (うち憲法の全文が 74%)。 本 ADR は席の役割を orchestrator 1 つ (人と話す唯一の席) にし、 便の起動・着地・merge を器の dispatcher に移し、 席の自律機能を削除する。 session を跨ぐ記憶は台帳 (metadata / status / 依存) が構造で持ち、 文脈の圧縮は Claude Code の /compact で足りる。 SessionStart の注入は約 11 行に縮み、 runner には憲法の散文を 1 行も注入しない。</p>
+<div class="summary-card"><span class="ic"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#ffe8a8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span><div><p class="lab">この判断が約束すること (1 文サマリ)</p><p class="txt" data-prose-slot="cover-summary" data-slot-id="cover-summary">席の役割を「人と話す席」1 つ（orchestrator）にし、便を起こす・着地させる・merge する仕事は器の dispatcher が台帳から読んで行います。席が自分を保つために積んだ仕組み（作業記憶の退避と復元、管理 tick、上限の guard と強制 cycle、heartbeat、statusline、席どうしの連絡、hook 集合の食い違いの検知）は消し、session を跨ぐ記憶は台帳の構造に置き、文脈の圧縮は Claude Code の /compact に任せます。session の開始で注入する文は約 11 行に縮み、実装役には憲法の文章を注入せず、書いてよい file と撃ってはいけない command を hook で止めるだけにします。消してから dispatcher を足す順で進めます。</p></div></div>
+<div class="cover-meta"><span class="m"><span class="k">状態</span><span class="v">proposed</span></span><span class="m"><span class="k">選択肢</span><span class="v">5件 (OPT1–OPT5)</span></span><span class="m"><span class="k">結果</span><span class="v">良い 4 / トレードオフ 4</span></span><span class="m"><span class="k">版</span><span class="v">v0.1.0 / 2026-09-18</span></span></div>
+<div class="reader-chip" data-component="cross-doc-ref-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 正当化する要件: <b>SRS-SCRIBE2-MVP</b> の <b>FR30・FR41・FR68</b> (改稿後の形・改稿は /folio-architect の段)</div>
+<div data-component="approval-block">
+<div class="sign"><span class="role">裁定 (user)</span><span class="who">user</span><span class="when">user 2026-09-18T08:2xZ / 08:3xZ / 09:0xZ (対話面・3 つの裁定の要旨 = 管理席を消して dispatcher に置き換える / 席の自律機能を消し /compact と台帳で足りるとする / SessionStart の注入を短くし runner には憲法を注入しない・逐語は台帳 s2-07l の notes・SRS の改訂は /folio-architect の段)</span><span class="stamp self">裁定済</span></div>
+<div class="sign"><span class="role">設計 (planner)</span><span class="who">planner</span><span class="when">2026-09-18 起票 (planner 席の調査 role-injection §1〜§5 と prose-root-cause §1〜§4・拘束する constitution の版 0.4.6・C17 は ADR-0044 で proposed)。 発効は SRS の改訂 (/folio-architect) と rules 行 role.orchestrator の裁定 id (C5) の後</span><span class="stamp self">作成</span></div>
+</div>
+<div class="reader-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 想定読者: scribe2 の開発 session と user — 席の内部機構や hook の知識は不要 (専門語はやさしい言葉を併記)</div>
+</header>
+<!-- folio:chrome-toc -->
+<!-- /folio:chrome-toc -->
+<section data-component="chapter-deck-band" class="tint-info"><span class="num">01</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 2v6m0 0L9 5m3 3l3-3"/><circle cx="12" cy="14" r="6"/></svg> 背景 / なぜこの判断が要るか</span><h2>いま何が問題か (席が自分を保つために機構を積み、 注入が憲法の全文になった)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-01">なぜこの判断が要るのかを、現物の計測と 2 本の調査と裁定から説明します。席 1 つの起動で 256 行の文を注入し、その 4 分の 3 が憲法の全文でした。planner の指示文 14 行のうち、文でしか運べない役割の特性は 5 行だけで、7 行は管理席との中継や復元の手順でした。席を保つ機構（退避と復元、tick、guard、heartbeat、連絡）は 1 万行を超え、契約に溜まる文の 6 割は「機械が引ける事実の写し」と「門を黙らせる防御文」でした。無いのは、席を 1 つにして機構を消すという決定です。</p></section>
+<div class="chapbody">
+<div data-component="adr-context-list">
+<div data-component="adr-context-row"><span class="cxid">CTX1</span><div class="cxbody"><p class="cxh">現物 — 注入の量と中身 (調査 role-injection §2・verified)</p><p class="cxd">planner 席の起動 1 回で載る文は 256 行 / 20,616 字 (user の作法 file 52 行・project の作法 file 189 行・SessionStart の指示文 14 行 + 名乗り 1 行)。 うち憲法の規範文の生成区間が 117 行 / 10,617 字で、 注入全体の 52%・project の作法 file 単体の 74% を占める。 Claude Code の公式 docs は「長い作法 file は実際の指示を無視させる」「200 行以内」を名指しで書いており (同 §1.4)、 憲法の C 条文の大半は CI と hook が既に執行している (C4 = size gate・C5 = 裁定 id・C11 = lint・C12 = flip-check と snapshot・C13 = deny と予算・C16 = PreToolUse の guard) ので、 注入しても deny は 1 つも増えない。 planner の指示文 14 行の分類 (同 §2.4・母集団 14): (a) guard が既にやっている 1 行 / (b) 注入でしか運べない席の特性 5 行 / (c) skill か管理席の中継の手順 7 行 / (d) 憲法の pointer 3 行に混在。 管理席の指示文 10 行のうち 5 行は中継と報告の手順。 権能<span class="term" data-component="plain-language-term-inline" data-term="権能">権能 = 役割ごとに許された操作の閉じた一覧</span> 11 個のうち機械の面 (Bash の subcommand か path の種別) を持つのは 8 個で、 go / relay / edit-contract の 3 個は宣言だけ (role.rs の doc comment が自ら明記)。 最も効いている役割の特性は「planner の行に edit-code が無い」ことで、 これは文ではなく role guard が止めている。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX2</span><div class="cxbody"><p class="cxh">現物 — 席が自分を保つために積んだ機構 (設計 doc 5 本と seat/ の現物)</p><p class="cxd">席の自律機能は設計 5 本に散る: 作業記憶の退避・復元・消費 (working-memory.md §5 の subcommand 3 つ・§12 の直命の表と現在地の DATA と hook・<a href="./ADR-0018-working-memory-subcommands-and-pointer-required-directives.html">ADR-0018</a> / <a href="./ADR-0031-working-memory-is-held-by-the-vessel-directives-status-and-hooks.html">ADR-0031</a>) / context の計測と cap guard・管理 tick と cycle・heartbeat・statusline (seat-autonomy.md §3・§8・§11 の tick の unit = <a href="./ADR-0030-tick-units-are-written-and-enabled-by-the-vessel.html">ADR-0030</a>・§14 の合図の backoff・§15 の窓ごとの閾値と強制 cycle) / 席の状態の打刻 (seat-state.md §2・§4) / hook 集合の digest の食い違いによる席の作り直し (consumer-sync.md §6) / 席間の連絡と復元の第一手を運ぶ指示文 (seat-roles.md §5)。 現物の大きさ (2026-09-18 main cc07cf6・verified): crates/scribe2/src/seat/ は 23 file 11,027 行で、 うち wm / tick / rebrief / externalize / consume / inject / meter の 7 系統が 7,215 行 (調査 §5)、 hook/seat_guard.rs 158 行、 e2e の歯は tests/e2e/seat/ の tick.rs 2,521 行 + wm.rs 1,719 行、 skill は ready-compaction / rebrief の 279 行。 rules 行は seat.context_cap_pct / seat.context_window_tokens / seat.tick_stale_s / seat.cycle_lock_ttl_s / seat.signal_backoff_s / seat.pointer_backoff_factor / seat.pointer_backoff_max_s / seat.cycle_settle_s / seat.cycle_poll_ms / seat.wm_directive_cap の 10 本と役割の行 role.planner / role.admin の 2 本。 削除できる規模は src 7,215 + 歯 4,240 + skill 279 ≒ 11,700 行以上 (core 43,859 行の 4 分の 1 強)。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX3</span><div class="cxbody"><p class="cxh">調査 — なぜ席に機構と散文が溜まったか (prose-root-cause §1〜§3・role-injection §1)</p><p class="cxd">契約 5 本 25,208 字の分類 (prose-root-cause §1・母集団 5 本): repo から機械で引ける事実の写し 36% / 門と lens を黙らせる防御文 25% / test を撃てば分かる事実 15% / 人の意図 16% / 手順 8%。 散文が伸びた根は「同じ事実を設計 § → 契約表の行 → 台帳の acceptance → 契約 file の 4 か所に写す構造」で、 写しの食い違いを lens が指し、 planner が次の焼き直しで防御文を足す輪が 1 日ごとに回った (同 §2・防御行の字数は 09-10 → 09-16 で 6 倍)。 審査の非 PASS 54 件 (母集団 161 run) の型は、 契約の中の自己矛盾 18 / verify が done を測れない 18 / write-set の閉包の外 10 / § との不一致 7 / 材料不足 1 で、 「散文が足りない」型は 0。 runner の質問 20 件は 20 件とも write-set の閉包の話で、 「何を作るか分からない」は 0 (同 §3)。 席の側も同型で、 席が黙る・文脈が溢れる・口座が上限に当たる、 の 1 つ 1 つに機構 (tick・guard・cycle・backoff・強制の窓) を足してきた。 一方 Claude Code の仕組み (role-injection §1・verified): 作法 file は system prompt ではなく user message として届き、 途中で注入した文は圧縮で要約に飲まれ、 圧縮のたびに原文が戻るのは SessionStart の hook だけ。 plugin の hooks.json から system prompt 層へ書く正規の経路は無い。 したがって注入の強さは置き場所ではなく「短さ・席ごとの限定・機械が測った値で穴を埋める・圧縮で戻る」の 4 つから来る。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX4</span><div class="cxbody"><p class="cxh">裁定 — 管理席を消し、 席の自律機能を消し、 注入を短くする</p><p class="cxd">user 裁定 2026-09-18T08:2xZ / 08:3xZ / 09:0xZ (対話面・逐語は台帳 s2-07l の notes) の要旨: (1) 管理席は要らず、 便の起動・着地・merge は器の dispatcher (<a href="./ADR-0034-dispatcher-starts-reviewed-contracts-automatically.html">ADR-0034</a> の向き・最小の形) が行う。 planner は orchestrator と改名し、 人と話す唯一の席として、 契約と設計と落ちる歯 (test) を書く。 (2) 席の自律機能は削除し、 文脈の圧縮は Claude Code の /compact で足りる。 session を跨ぐ記憶は台帳の構造 (metadata / status / 依存) が持ち、 session の開始で台帳の現在地を 1 行注入する。 (3) SessionStart の注入は orchestrator に約 11 行、 runner には憲法の散文を 1 行も注入せず、 write-set の guard と禁止 command の guard だけを PreToolUse に残す。 同じ日の先行の裁定 (<a href="./ADR-0044-decision-ladder-is-a-constitution-article.html">ADR-0044</a> CTX3) は大整理を「削る側」で行う向きを示している。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX5</span><div class="cxbody"><p class="cxh">憲法の向き</p><p class="cxd">C7 / R-C7-1 は承認を受け取る対話面をちょうど 1 つと定め、 C7.2 は承認 event が逐語を運ぶ。 A1 / A4.2 は 3 クラス (消す / 出す / 使う) と不可逆の操作の前に user へ聞くことを求め、 機械の面をほとんど持たない (人と話す席にだけ文で運ぶ価値がある)。 N2 / C1.2 は散文にしか無い規則を規則と認めず、 C14 は規律を文書と manifest の 2 面で持つ。 C2.2 / C3 は設定と状態の置き場を manifest と 1 つの DB に限る (席の退避物・直命の表・heartbeat の file は状態の置き場を増やしていた)。 C9 は席の停止の検知と再開を器に求め、 その面は管理 tick と cycle が担っていた = 本 ADR は C9 の解釈 (席 = orchestrator 1 つ・便の driver は dispatcher が起こし直す) を持つ (ADR を書く条件 1)。 C16 / C16.2 は in-loop の guard を要求し、 write-set guard・command guard・role guard がそれである。 C17 (ADR-0044・proposed) は機構を足す提案に先に消すものを名指させる = 本 ADR は「消す → dispatcher」の順を持つ。 憲法の順位 2 位は増殖の防止。</p></div></div>
+</div>
+</div>
+<section data-component="chapter-deck-band" class="tint-brand"><span class="num">02</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3v18"/><path d="M5 7l-3 6h6z"/><path d="M19 7l-3 6h6z"/><path d="M3 21h18"/></svg> 判断を縛る力 / 評価の軸</span><h2>選択肢を測るものさし (対話面・削る側・機械の面・停止の検知・注入の予算)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-02">判断を評価する 5 本のものさしです。人と話す席は 1 つであること、足すより先に消すこと、規則は文ではなく hook と manifest の面で持つこと、席と便の停止の検知と再開が人の手を要しないこと、そして session の開始で注入する文の行数を増やさないことです。</p></section>
+<div class="chapbody">
+<table data-component="adr-driver-table"><tbody>
+<tr data-component="adr-driver-row"><td class="drid">DR1</td><td>user と話し、 承認と裁定を受け取る席はちょうど 1 つで、 逐語は承認 event にだけ載る <span class="drg">憲法 C7 / C7.2 / rules 行 R-C7-1</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR2</td><td>足す前に消す: 機構を足す提案は先に消すものを名指し、 状態の置き場と rules 行を増やさない <span class="drg">憲法の順位「増殖の防止」/ C17 (ADR-0044) / C2.2 / C3</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR3</td><td>役割の規律は文ではなく、 hook (in-loop の guard) と manifest の行で持つ。 文で運ぶのは機械の面を持たない振る舞い (聞く・拒む) だけ <span class="drg">憲法 N2 / C1.2 / C14 / C16</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR4</td><td>席と便の停止の検知・再開・成果の保存に人の手を要しない (席 = orchestrator 1 つ・便 = dispatcher の driver) <span class="drg">憲法 C9 / SRS FR68</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR5</td><td>session の開始で注入する文は席ごとに絞り、 orchestrator は約 11 行以内、 runner は 0 行。 機械が測った値で穴を埋め、 圧縮のたびに原文が戻る経路 (SessionStart) だけを使う <span class="drg">調査 role-injection §1.1 / §1.4 / §3・SRS FR42</span></td></tr>
+</tbody></table>
+</div>
+<section data-component="chapter-deck-band" class="tint-violet"><span class="num">03</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M8.5 6H13a3 3 0 0 1 3 3v.5M8.5 18H13a3 3 0 0 0 3-3v-.5"/></svg> 検討した選択肢 / 5 つの形</span><h2>それぞれの利点と欠点を並べる</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-03">候補を 5 つ並べます。席を orchestrator 1 つにして自律機能を消し dispatcher に起動と着地を移す案、2 役割を残して文だけ削る案、作業記憶を器の機構でなく文書として残す案、役割を project の作法 file にだけ書く案、そして介入の印と観測を備えた dispatcher を先に作る案です。</p></section>
+<div class="chapbody">
+<div class="opt-grid">
+<div data-component="adr-option-card" class="chosen">
+<div class="opt-head"><span class="opt-id">OPT1</span><span class="opt-name">席の役割は orchestrator 1 つ・席の自律機能は削除・便の起動と着地と merge は最小の dispatcher・SessionStart は約 11 行・runner には憲法を注入しない</span><span class="opt-verdict chosen">採用</span></div>
+<p class="opt-sum">Role は Orchestrator の 1 variant (閉じた enum のまま)。 権能は answer / approve / go / edit-design-intent / edit-design-doc / edit-contract / edit-outside + tests/ に限った edit-code (落ちる歯 = 実行できる acceptance を書く)。 launch / merge は dispatcher (機械) が持ち、 relay は消える。 作業記憶・tick・guard・cycle・heartbeat・statusline・席間の連絡・hook 集合の検知は削除し、 /compact と台帳で代える。 順序は「消す → dispatcher」。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT1">人と話す席を 1 つだけにし、便を回す仕事は機械に渡し、席が自分を保つために積んだ仕組みを全部消す案です。文脈が溢れたら Claude Code の /compact を使い、次の session は台帳を読めば続きが分かるようにします。session の開始で注入する文は約 11 行に減り、実装役には憲法の文章を渡さず、書いてよい file と撃ってはいけない command だけを hook で止めます。</span>
+<div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
+<li>src 7,215 + 歯 4,240 + skill 279 ≒ 11,700 行と rules 行 10 本と skill 2 本が消え、 状態の置き場 (退避物・直命の表・heartbeat・tick-stamp・強制の印) が消える (DR2 / C2.2 / C3)</li>
+<li>人と話す席が 1 つになり、 中継 (planner ↔ 管理席) の手順 7 行と席間の連絡の経路が要らなくなる (DR1)</li>
+<li>注入は席の同一性 3 行 + 憲法の効く部分 5 行 + 役割の特性 3 行に縮み、 runner は 0 行 (DR5)。 残る規律は hook と行が持つ (DR3)</li>
+</ul></div><div class="cons"><h4>− 欠点</h4><ul>
+<li>席の停止の自動検知と自動の立て直し (C9 の席の面) は消え、 orchestrator の再起動は user が器の口 (seat launch) を撃つ。 便の側は dispatcher の driver の起こし直しが担う</li>
+<li>SRS の FR 20 本超が廃止候補になり、 改訂は /folio-architect の段で user が行う (本 ADR は候補を列挙するだけ)</li>
+</ul></div></div>
+</div>
+<div data-component="adr-option-card" class="rejected">
+<div class="opt-head"><span class="opt-id">OPT2</span><span class="opt-name">2 役割 (planner / 管理席) を残し、 指示文と憲法の注入だけを削る</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">注入は 20 行に入る (調査 §2.4 の含意) が、 中継・報告・席間の連絡の 7 行と、 管理席が便を見守るための tick・heartbeat・cycle は残る。 CTX3 の輪 (席が黙る → 機構を足す) の根は 2 席の間の中継そのもので、 文を削っても機構は減らない。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT2">席は 2 つのまま、注入する文だけを短くする案です。手軽ですが、席どうしの中継と、席を見守る仕組みがそのまま残ります。溜まった仕組みの根は「席が 2 つあって、片方がもう片方を見守る」形そのものなので、文を減らしても仕組みは減りません。</span>
+<div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
+<li>code の変更が小さい (雛形 2 枚の書き換えだけ)・既存の ADR-0016 / 0022 の形を保つ</li>
+</ul></div><div class="cons"><h4>− 欠点</h4><ul>
+<li>機構 11,700 行と rules 行 10 本が残る (DR2 に反する)・管理席の中継が残るので runner の質問と gate の判定は席を経由し続ける (ADR-0034 §1 の待ちが残る)</li>
+</ul></div></div>
+</div>
+<div data-component="adr-option-card" class="rejected">
+<div class="opt-head"><span class="opt-id">OPT3</span><span class="opt-name">作業記憶を器の機構でなく文書 (skill の散文と markdown の退避物) として残す</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">前の版の形。 退避物は規則の置き場ではないと決めていた (作業記憶の語彙・N2) が、 pointer の無い命令行が暫定行として溜まり (ADR-0018 §2.2 の対策が要った)、 復元の brief の 5 slot (FR67) が手順として指示文に載った。 台帳が metadata / status / 依存を構造で持つなら、 文書の退避物は台帳の写しになる。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT3">作業の記憶を器の仕組みでなく、文章の file として残す案です。前の版がこの形で、文章の中に「命令」が溜まって規則のように振る舞う問題が出ました。台帳が状態と依存を構造で持てば、文章の記憶はその写しになるだけです。</span>
+<div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
+<li>器の code は要らない・/compact の要約より多くの文脈を運べる</li>
+</ul></div><div class="cons"><h4>− 欠点</h4><ul>
+<li>散文の命令行が規則になる穴 (N2・台帳 s2-07l.176 の型)・台帳と退避物の 2 か所に状態を持つ (C3 / DR2)・写しの食い違いが lens の finding と防御文を生む (CTX3 の輪)</li>
+</ul></div></div>
+</div>
+<div data-component="adr-option-card" class="rejected">
+<div class="opt-head"><span class="opt-id">OPT4</span><span class="opt-name">役割の規律を project の作法 file (CLAUDE.md) にだけ書き、 hook の注入も guard も持たない</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">公式 docs (調査 §1.1 / §1.2・verified): 作法 file は system prompt の後ろの user message として届き、 遵守は保証されない (advisory)。 圧縮の後に原文が戻るのは SessionStart の注入だけで、 作法 file は project root の分しか戻らず、 席ごとに内容を変えられず、 機械が測った値 (target・権能の行・台帳の現在地) で穴を埋められない。 執行力は hook にしか無い (「hooks are deterministic」)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT4">役割の決まりを project の作法 file に書くだけで済ませる案です。作法 file は「お願い」として届くもので守られる保証が無く、席ごとに内容を変えられず、機械が測った値を埋め込めません。文脈を圧縮した後に元の文がもう一度入るのは session 開始の hook だけです。止める力は hook にしか無いので、この案は弱すぎます。</span>
+<div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
+<li>器の code が要らない・登録の無い session にも同じ文が載る</li>
+</ul></div><div class="cons"><h4>− 欠点</h4><ul>
+<li>執行力が無い (DR3・C16 の in-loop guard を欠く)・席ごとに絞れず穴も埋まらない (DR5)・散文の規則になる (N2)・置き場所の強さの差は docs に定量が無い (「hook だから強い」とも言えないが、 作法 file は明確に弱い側)</li>
+</ul></div></div>
+</div>
+<div data-component="adr-option-card" class="rejected">
+<div class="opt-head"><span class="opt-id">OPT5</span><span class="opt-name">介入の印 (first / hold / release) と観測 (dispatch ls・rebrief の DATA) を備えた dispatcher を先に作り、 その後に席を減らす</span><span class="opt-verdict rejected">不採用 (保留)</span></div>
+<p class="opt-sum">ADR-0034 §2 の全体像。 だが介入の印は「planner が列の順を動かす口」で、 orchestrator 1 席なら priority の書き換え (台帳) で足りる可能性が高く、 観測の DATA は rebrief (削除対象) に載せる設計だった。 先に機構を足すのは C17 と CTX4 の「削る側」に反する。 最小の dispatcher (台帳から ready の列を導き、 起こし、 着地させる) で始め、 印と観測は必要が実測で出たときに足す。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT5">便を回す機械に「順番を動かす印」と「いま何を待っているか見る画面」を最初から付ける案です。席が 1 つになれば順番は台帳の優先度で動かせ、見る画面は消す予定の仕組みの上に載っていました。先に足すのは「削る側」の向きに反するので、最小の形で始めて、要ると分かってから足します。</span>
+<div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
+<li>ADR-0034 の設計 (dispatcher.md §2〜§6) をそのまま使える・急ぐ便の扱いが最初から在る</li>
+</ul></div><div class="cons"><h4>− 欠点</h4><ul>
+<li>消す前に足す (C17 / DR2 に反する)・印の記録 (DispatchMark) と観測の marker は削除対象の rebrief に依存する・orchestrator 1 席では priority で足りる見込み (実測なし・inferred)</li>
+</ul></div></div>
+</div>
+</div>
+</div>
+<section data-component="chapter-deck-band" class="tint-ok"><span class="num">04</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14 4l6 6-3 3-6-6z"/><path d="M11 7L4 14l3 3 7-7"/><path d="M3 21h10"/></svg> 採用した判断 / どの形を選ぶか</span><h2>選んだ形と、 それが守る要件 (cross-doc 照会)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-04">選んだ案と、それが要件書のどの要件を支えるかを示します。席の役割は orchestrator 1 つ、便の起動・着地・merge は器の dispatcher、席の自律機能は削除、SessionStart の注入は約 11 行、runner には憲法の散文を注入しません。残すのは write-set guard・command guard・role guard・3 クラスの承認 event・口座の選定と役割の実効の口座です。改稿後の配送構造（FR30）、権能の行（FR41）、dispatcher の起動と着地（FR68）に対応します。</p></section>
+<div class="chapbody">
+<div data-component="adr-decision-panel" id="decision">
+<p class="dec-kick">採用 — OPT1</p>
+<p class="dec-state">(1) 役割: Role SHALL Orchestrator の 1 variant のみを持つ閉じた enum とし、 Admin SHALL 削除、 Planner SHALL Orchestrator に改名する。 rules 行 SHALL role.orchestrator の 1 本 (値 = answer / approve / go / edit-design-intent / edit-design-doc / edit-contract / edit-outside / edit-code〔tests/ の path 種別に限る〕・裁定 id 付き・C5) とし、 role.planner / role.admin SHALL 削除する。 Capability::Relay SHALL 削除し (機械の面が無く管理席の廃止で意味を失う)、 Launch / Merge SHALL 器の dispatcher だけが行う操作として orchestrator の行から外す (role guard が pipe run / pipe land を deny する形は不変)。 R-C7-1 の値 SHALL orchestrator の登録 row を持つ席とする。 orchestrator SHALL 人と話す唯一の席で、 契約・設計・落ちる歯 (実行できる acceptance) を書き、 実装 SHALL NOT 自分で行わない。 便の起動・着地・merge SHALL 器の dispatcher が行う: 台帳から起動の列 (依存が closed ∧ 設計 pointer が在る ∧ 現 sha の審査が PASS・dispatcher.md §2 の入力) を導き、 既存の intake の判定 (交差・受付・pipe.max_live) を通る便を起こし、 gate を通った便を land して merge する。 契機 SHALL land の直後と、 契約が出来た直後 (審査の後) の 2 つとし、 周期の timer SHALL NOT 持たない。 介入の印と観測 (ADR-0034 §2 の first / hold / release・dispatch ls・rebrief の DATA) SHALL 保留する (OPT5)。</p>
+<p class="dec-state">(2) 席の自律機能 SHALL 削除する: 作業記憶の退避・復元・消費 (seat externalize / rebrief / consume・working-memory.md §5)、 直命の表と現在地の DATA と skill 起動の hook と自動退避 (同 §12・ADR-0031)、 context の計測と cap guard (seat meter / seat guard・seat-autonomy.md §3)、 管理 tick と cycle と tick の unit (seat tick / seat cycle・同 §3 / §8 / §11・ADR-0030)、 合図の backoff (同 §14)、 窓ごとの強制 cycle と強制 cycle の guard (同 §15)、 heartbeat (seat heartbeat)、 statusline (seat statusline・ADR-0029)、 席間の連絡の作法 (seat-roles.md §5・FR44)、 hook 集合の digest の食い違いによる席の作り直し (consumer-sync.md §6)、 席の状態の打刻のうち読み手が消えるもの (UserPromptSubmit / Stop の Busy / Idle・seat-state.md §2・SessionStart の打刻は登録の条件として残る)、 skill ready-compaction / rebrief、 rules 行 seat.context_cap_pct / seat.context_window_tokens / seat.tick_stale_s / seat.cycle_lock_ttl_s / seat.signal_backoff_s / seat.pointer_backoff_factor / seat.pointer_backoff_max_s / seat.cycle_settle_s / seat.cycle_poll_ms / seat.wm_directive_cap と R-C9-1.forced-windows、 対応する極性一覧の行と外形 snapshot。 文脈の圧縮 SHALL Claude Code の /compact とし、 session を跨ぐ記憶 SHALL 台帳の構造 (metadata / status / 依存) とし、 器 SHALL NOT 退避物・直命の表・heartbeat・tick-stamp・強制の印の file を持たない (C3 / C2.2)。</p>
+<p class="dec-state">(3) 注入: orchestrator の SessionStart SHALL 約 11 行以内の生成文 (席の同一性 3 行 = 役割・target・anchor / 権能の行の値 / 台帳の現在地 1 行〔bd --readonly status 級の出力・実測 0.35 秒・rules 行 seat.ledger_timeout_s の内側〕、 憲法の効く部分 5 行 = 順位 / A1 / A4.2 と C7.2 / A2 と A3 / N1〜N3、 役割の特性 3 行 = 対話面の作法と信頼度〔C10〕/ 実装は自分でせず契約と歯を書く / 決定はしご〔C17・ADR-0044〕) とし、 行 SHALL 穴か出所 pointer を持つ行に限る (ADR-0022 §2.4 の規律は不変)。 runner SHALL 憲法の散文を 1 行も受けず、 PreToolUse の write-set guard と command guard だけを受ける (headless/runner.txt は便の task 記述であり注入ではない)。</p>
+<p class="dec-state">(4) 残すもの: write-set guard (C16)・command guard・role guard (権能の列から Relay を落とす)・PermissionRequest の一律 deny・3 クラスの承認 event (C7.2 / A1)・便用の口座選定と役割の実効の口座 (ADR-0036 / 0041 / 0042)・seat register / seat launch (orchestrator の起動と再起動の口・FR59) SHALL 不変。</p>
+<p class="dec-state">(5) 順序 SHALL 「消す → dispatcher」とし、 削除の便が Landed に達する前に dispatcher の便 SHALL NOT 起こさない (C17)。</p>
+<p class="dec-state">(6) SRS SHALL /folio-architect の段で user が改訂し、 本 ADR は廃止候補を列挙するだけ: FR23 (退避と復元の 9 作法) / FR25 (context 計測) / FR26 (cap guard) / FR27 (打刻の合図) / FR28 (cycle) / FR29 (退避の合図) / FR30 (2 役割 → orchestrator 1 役割 + dispatcher・改稿) / FR38 (口座逼迫の退避の合図) / FR40 (席の登録・1 役割へ改稿) / FR41 (権能の行・role.orchestrator へ改稿) / FR42 (指示文・約 11 行へ改稿) / FR43 (queue の pointer) / FR44 (席間の連絡) / FR45 (権能の執行・管理席の例外を削る改稿) / FR57 (host の宣言値・席に積む plugin dir の項目を見直す) / FR59 (席の起動・役割 1 つへ改稿) / FR60 (役割なしの起動) / FR61 (導入先の同期・hook 集合の digest) / FR62 (hook 集合の食い違いの作り直し) / FR63 (statusline) / FR64 (tick の unit) / FR65 (直命の表) / FR66 (作業記憶の hook 4 つ) / FR67 (対話面の作法の行と 5 slot) / FR68 (dispatcher・契機を tick から land 直後と契約直後へ改稿) / FR70 (強制 cycle の印)。 発効 SHALL SRS の改訂と rules 行 role.orchestrator の裁定 id の後とし、 本 ADR SHALL それまで proposed のまま何も拘束しない。</p>
+<span class="dec-plain" data-prose-slot="plain" data-slot-id="decision-plain">席の役割は orchestrator 1 つだけにします。人と話し、承認と裁定を受け取り、契約と設計と「落ちる test」を書く席です。便を起こす・着地させる・merge する仕事は器の dispatcher が台帳から読んで行い、周期の timer は持たず、着地の直後と契約が出来た直後にだけ動きます。席が自分を保つために積んだ仕組み（退避と復元、tick、上限の guard と強制 cycle、heartbeat、statusline、席どうしの連絡、hook 集合の食い違いの検知、それらの rules 行と skill）は消します。文脈が溢れたら /compact を使い、次の session は台帳を読めば続きが分かります。session の開始で注入する文は約 11 行で、実装役には憲法の文章を渡さず、書いてよい file と撃ってはいけない command だけを hook で止めます。残るのは write-set guard・command guard・role guard・3 クラスの承認 event・口座の選定です。順序は「消してから dispatcher」で、要件書の改訂は /folio-architect の段で user が行います。</span>
+<span class="dec-why" data-prose-slot="rationale" data-slot-id="decision-rationale">溜まった機構の根は「席が 2 つあり、片方がもう片方を見守り、席が自分の記憶を file で保つ」形そのものでした（CTX2 / CTX3）。席を 1 つにすれば中継と連絡が消え、記憶を台帳の構造に置けば退避と復元が消え、便の起動と着地を機械に渡せば見守りが消えます。注入の強さは置き場所でなく短さと席ごとの限定から来るので（CTX3）、注入は「文でしか運べない 5 行 + 憲法のうち聞く・拒むの 5 行 + 機械が埋める 3 行」だけにし、C 条文は既に CI と hook が執行しているので注入しません。実装役は 3 クラスの操作をせず裁定も持ち込まないので、憲法の文章は不要で、guard 2 枚で足ります。介入の印と観測は消す予定の仕組みの上に載っていたので、最小の dispatcher で始めて実測で要ると分かってから足します（C17）。</span>
+<div class="justify-box"><p class="jh">この判断が正当化する要件 (cross-doc 照会 → SRS-SCRIBE2-MVP)</p>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR30" data-justifies-req="FR30" data-justifies-role="claim">FR30</a><span class="justify-role">claim</span><span class="justify-note">便の配送構造 (改稿後): 席は orchestrator 1 役割で、 便の起動・着地・merge は器の dispatcher が持ち、 質問と判定は席を経由せず台帳と event log に載る。 改稿は /folio-architect の段。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR41" data-justifies-req="FR41" data-justifies-role="claim">FR41</a><span class="justify-role">claim</span><span class="justify-note">役割ごとの権能は rules 行 1 本 (role.orchestrator・裁定 id 付き) が持ち、 承認の記帳は R-C7-1 が名指す orchestrator の席の権能。 執行は role guard が同じ行を読む。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR68" data-justifies-req="FR68" data-justifies-role="claim">FR68</a><span class="justify-role">claim</span><span class="justify-note">dispatcher は起動の列を台帳と審査の verdict から導き、 既存の intake の判定を通る便を起こし、 着地まで持つ。 契機は land の直後と契約の直後 (tick は消える・改稿)。</span></div>
+<p class="justify-tgt">照会先: SRS-SCRIBE2-MVP — SRS: 設計 → 契約 → 実装 → 検証 → land を、 人の手を借りずに 1 本通す器（MVP）</p>
+</div>
+</div>
+</div>
+<section data-component="chapter-deck-band" class="tint-warn"><span class="num">05</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg> 結果 / 良い面とトレードオフ</span><h2>この判断で何が良くなり、 何を引き受けるか</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-05">この判断で良くなることと、代わりに引き受けることです。1 万行を超える機構と rules 行 10 本と skill 2 本が消え、人と話す席が 1 つになり、注入は約 11 行に縮み、便は着地の直後に次が起きます。代わりに、席の自動の立て直しが無くなること、要件書の 20 本超の改訂を user の手で行うこと、削除の便が着地するまで dispatcher を起こせないこと、消した後に「要る」と分かった機構は実測を添えて足し直すことを引き受けます。</p></section>
+<div class="chapbody">
+<div data-component="scope-summary-panel"><div class="scol in"><h3>✓ 良い結果</h3><ul>
+<li data-component="adr-consequence-pos"><span class="b">●</span>消えるもの: src 7,215 行 (wm / tick / rebrief / externalize / consume / inject / meter) + hook/seat_guard.rs + 強制 cycle の guard + 歯 4,240 行 + skill 279 行 + rules 行 10 本と R-C9-1.forced-windows + role.planner / role.admin + Role::Admin / Capability::Relay + tick の unit + 極性一覧の行 + 外形 snapshot。 状態の置き場 (退避物・直命の表・heartbeat・tick-stamp・pointer-digest・強制の印) が消え、 C3 の「状態は 1 つの DB」に近づく</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>人と話す席が 1 つになり、 中継 (planner ↔ 管理席) と席間の連絡が消える。 承認・回答・go の記帳は orchestrator の席からだけ (R-C7-1・不変の形で値だけ変わる)</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>注入は 256 行 / 20,616 字 → 約 11 行 (+ 作法 file) に縮み、 席ごとに絞られ、 機械が測った値 (権能の行・台帳の現在地) で穴が埋まり、 /compact のたびに原文が戻る。 runner は 0 行で guard 2 枚だけ</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>便は着地の直後と契約の直後に器が起こし、 gate を通れば器が land して merge する (ADR-0034 §1 の待ちと「同時 3 便」の散文が消える)。 残す guard (write-set / command / role) と承認 event と口座の選定は不変</li>
+</ul></div><div class="scol out"><h3>⚖ トレードオフ・代償</h3><ul>
+<li data-component="adr-consequence-neg"><span class="b">●</span>席の停止の自動検知と自動の立て直し (管理 tick・cycle・口座逼迫の退避) は消える: orchestrator が黙る・文脈が溢れる・口座が上限に当たる周は user が /compact か seat launch (役割の実効の口座は ADR-0041 のまま解ける) を撃つ。 C9 の「席」の面は orchestrator 1 席に対して人の手を許す解釈 (人と話す席は人が起こす) とし、 便の driver の死亡は dispatcher が起こし直す (dispatcher.md §5)。 条文は変えない</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>SRS の FR 26 本 (決定 (6) の列) が廃止か改稿の候補になり、 改訂は /folio-architect の段で user が行う。 それまで SRS と本 ADR は食い違い、 本 ADR は proposed で何も拘束しない</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>順序が「消す → dispatcher」なので、 削除の便が Landed に達するまで便の起動と着地は器の口 (pipe run / pipe land) を人が撃つ (前の版の admin の手順が一時的に戻る)。 削除の便そのものは write-set が大きく、 並列の便と交差しやすい (1 便 1 系統で切る)</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>消した機構のうち「要る」と実測で分かったもの (例: 起動の列の観測・急ぐ便の印・context の計測) は、 C17 に従い先に消すものを名指した上で足し直す。 /compact の要約が台帳に無い文脈 (設計の途中の判断) を落とす risk は実測が無い (inferred)</li>
+</ul></div></div>
+</div>
+<section data-component="chapter-deck-band" class="tint-info"><span class="num">06</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg> 改訂関係と原則 / この判断の位置づけ</span><h2>版の系譜と、 行き着く原則 (照会終端)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-06">この ADR が版の系譜のどこに在るかと、判断が最後に行き着く原則です。作業記憶と tick の 3 本（ADR-0018 / 0030 / 0031）は丸ごと置き換え、配送構造と役割の 2 本（ADR-0016 / 0022）と dispatcher の 1 本（ADR-0034）は一部を置き換えます。行き着く原則は「人と話す席は 1 つ、記憶は台帳、便は機械」です。</p></section>
+<div class="chapbody">
+<div data-component="adr-supersession">
+<p class="ss-row"><span class="ss-k">改訂状態</span>current (proposed)</p>
+<p class="ss-row"><span class="ss-k">置き換える ADR</span><a href="./ADR-0018-working-memory-subcommands-and-pointer-required-directives.html">ADR-0018</a> (全部: 退避・復元・消費の subcommand と暫定行)・<a href="./ADR-0030-tick-units-are-written-and-enabled-by-the-vessel.html">ADR-0030</a> (全部: tick の unit)・<a href="./ADR-0031-working-memory-is-held-by-the-vessel-directives-status-and-hooks.html">ADR-0031</a> (全部: 直命の表・現在地の DATA・skill の hook・自動退避)・<a href="./ADR-0016-default-delivery-structure-and-typed-question-record.html">ADR-0016</a> §2.1 (planner 1 席 + 管理席 N 席) / §2.3 (管理席の中継) を部分 supersede (§2.2 の typed な質問 record と §2.4 は不変)・<a href="./ADR-0022-seat-roles-are-typed-and-enforced-by-hooks.html">ADR-0022</a> §2.1 (役割の enum の値 2 → 1) / §2.5 (R-C7-1 の値 = orchestrator) を部分 supersede (§2.2 の行・§2.3 の guard・§2.4 の生成文の規律・§2.7 は不変)・<a href="./ADR-0034-dispatcher-starts-reviewed-contracts-automatically.html">ADR-0034</a> の契機 (tick) と介入の口を部分 supersede (列の入力と順序・起動条件・land の直後の契機は不変・介入と観測は保留)。 ADR-0015 (席の状態の打刻) は読み手が消える分 (Busy / Idle) を部分 supersede し、 SessionStart の打刻は不変。 ADR-0029 (statusline) と ADR-0028 §2.4 (hook 集合の食い違いで席を作り直す) は本 ADR で消える機構の記録として置き換える。 ADR-0020 の開発 session 側 (上限の手前の退避と別口座での立て直し) は消え、 便の側 (上限で殺さず別口座で再開) は不変</p>
+<p class="ss-row"><span class="ss-k">置き換えられた</span>なし (現行)</p>
+<p class="ss-row">憲法 (版 0.4.6) の C1〜C16 / A1〜A4 / N1〜N4 と、 ADR-0044 が proposed で加える C17 は不変で、 本 ADR は C9 の解釈 (席 = orchestrator 1 つ・便の driver は dispatcher) と R-C7-1 の値の変更を持つだけ。 ADR-0036 / 0041 / 0042 (口座の宣言と役割の実効の口座と便用の順序) は不変で、 orchestrator の席の口座はこれらで解ける。 ADR-0023 (契約の正本は設計 doc の契約表) と ADR-0019 (並列の便の排他) は不変で、 dispatcher はその判定を再利用する。 planner 席の調査 role-injection §4 の推奨 (憲法の生成区間を作法 file の外へ出す) は本 ADR の射程外で、 別の裁定と ADR に残す。</p>
+</div>
+<div data-component="adr-principle">
+<p class="prin-id">照会終端 — PRIN-ONE-SEAT-LEDGER-MEMORY-MACHINE-RUNS (本 ADR)</p>
+<p class="prin-text">人と話す席は 1 つ。 session を跨ぐ記憶は台帳の構造が持ち、 便を起こし着地させるのは機械。 席が自分を保つための機構を器に足さない。</p>
+<p class="prin-note">本 ADR の判断はこの原則に行き着く (これ以上は遡らない照会終端)。 憲法 C7 (対話面は 1 つ)・C3 (状態は 1 つの DB)・C17 (足す前に消す) を、 席の配置の形で持ったものである。 文で運ぶのは機械の面を持たない振る舞い (聞く・拒む) だけで、 規律は hook と行が持つ。</p>
+</div>
+</div>
+<section data-component="chapter-deck-band" class="tint-brand"><span class="num">07</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg> 用語集 / この文書で使う専門語</span><h2>本文に出てくる専門語のやさしい説明</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-07">本文に出てくる専門語を、やさしい言葉で説明します。</p></section>
+<div class="chapbody">
+<div data-component="glossary-term-table">
+<div class="grow"><div class="gword">orchestrator<span class="en">orchestrator</span></div><div class="gdef">席の唯一の役割。 user と話し、 承認と裁定を受け取り (R-C7-1)、 契約・設計・落ちる歯 (実行できる acceptance) を書く。 実装はせず、 便の起動と着地は dispatcher に任せる。 前の名は planner。</div></div>
+<div class="grow"><div class="gword">dispatcher<span class="en">dispatcher</span></div><div class="gdef">審査を通った契約の起動の列を台帳から導き、 依存・交差・受付を満たす便を起こし、 gate を通った便を land して merge する器の口 (ADR-0034・設計 dispatcher.md)。 本 ADR では周期の timer を持たず、 着地の直後と契約の直後に動く最小の形。</div></div>
+<div class="grow"><div class="gword">席の自律機能<span class="en">seat autonomy machinery</span></div><div class="gdef">席が自分を保つために器が持っていた仕組みの総称: 作業記憶の退避・復元・消費、 context の計測と cap guard、 管理 tick と cycle と tick の unit、 合図の backoff、 強制 cycle、 heartbeat、 statusline、 席間の連絡、 hook 集合の食い違いの検知。 本 ADR で削除する。</div></div>
+<div class="grow"><div class="gword">SessionStart の注入<span class="en">SessionStart injection</span></div><div class="gdef">Claude Code の session の開始・clear・圧縮の直後に hook が出す文。 圧縮のたびに原文が戻る唯一の経路で、 席ごとに内容を変えられ、 機械が測った値で穴を埋められる。 本 ADR で orchestrator は約 11 行、 runner は 0 行。</div></div>
+<div class="grow"><div class="gword">/compact<span class="en">compact</span></div><div class="gdef">Claude Code が会話の文脈を要約して短くする操作。 本 ADR では作業記憶の退避と復元の代わりで、 要約の後に SessionStart の注入が戻る。</div></div>
+<div class="grow"><div class="gword">write-set guard<span class="en">write-set guard</span></div><div class="gdef">PreToolUse の hook の 1 つ。 便の runner が編集できる path を契約の write-set の内側に限る (in-loop・FailClosed・C16)。 command guard (禁止 command の一覧・rules 行 runner.denied_commands) と共に runner に残す 2 枚。</div></div>
+<div class="grow"><div class="gword">3 クラス<span class="en">three classes</span></div><div class="gdef">憲法 A1 の 消す / 出す / 使う。 実行前に user の承認を対話面で取り、 承認 event が逐語を運ぶ (C7.2)。 機械の面をほとんど持たないので、 orchestrator の注入に文で残す。</div></div>
+</div>
+</div>
+</div>
+<footer class="foot" data-component="fidelity-sync-meta"><div class="ft-grid">
+<div class="ft-plain">このページは、大もとの機械データ (正本) から自動で組み立てられています。構造は機械が自動で検査し、内容が元データに忠実かは独立のレビューで確かめます。</div>
+<div data-audience="machine">機械SSoT: <b>ADR-0045.build.adr.yaml</b> &middot; 生成: <b>2026-09-18 10:40</b> &middot; 検証状態: <b>structure ✓ fabrication-free / prose ✓ 充填済 (fidelity ceiling → S5 対象)</b></div>
+<div class="tags" data-audience="machine"><span>folio design system</span><span>ADR-pack</span><span>folio engine B1 (instance#2)</span><span>cross-doc 照会</span></div>
+</div></footer>
+<!-- folio:chrome-bottom -->
+<nav class="prevnext" aria-label="前後の文書">
+  <a class="prevnext__prev" href="ADR-0044-decision-ladder-is-a-constitution-article.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">決定はしごは憲法の条 (C17) で持つ (要るか → 既に在るか → 標準 library か入っている依存で足りるか → 1 行で書けるか → 最小実装 を宣言順に通り最初に成立した段で止まる・走査・record・rules 行・機構を足す提案は先に消すものを名指す・機械の面は既に在る lens の過剰設計 5 観点と便の規模の record で rules 行も機構も足さない)</span></a>
+  <a class="prevnext__next" href="ADR-0046-constitution-is-enforced-by-gates-and-only-ask-first-and-never-are-injected.html"><span class="prevnext__dir">次 &rarr;</span><span class="prevnext__title">憲法の置き場: C 条文は CI と guard の執行だけで持ち、 注入するのは順位と Ask-first / Never の条だけ (生成区間を CLAUDE.md から生成 file 1 枚へ移し pointer 1 行を残す・orchestrator の SessionStart は順位 + A1 / A2 / A3 / A4.2 / N1 / N2 / N3 の pointer 行だけ・runner には憲法の散文を注入しない・本 repo だけの決定で他 project の憲法の執行は整理の後へ送る)</span></a>
+</nav>
+<script>
+(function () {
+  var openedForPrint = [];
+  window.addEventListener('beforeprint', function () {
+    openedForPrint = [];
+    var ds = document.querySelectorAll('details:not([open])');
+    for (var i = 0; i < ds.length; i++) { ds[i].setAttribute('open', ''); openedForPrint.push(ds[i]); }
+  });
+  window.addEventListener('afterprint', function () {
+    for (var i = 0; i < openedForPrint.length; i++) openedForPrint[i].removeAttribute('open');
+    openedForPrint = [];
+  });
+  if (!document.querySelector('[data-audience]')) return;
+  /* 既定 = 人間プレゼン型 (ADR-0040 / rules §11.3): script 経由で初期 class を付与するため
+     no-JS では付かず全文可視に graceful degrade する。 static DOM は全文を保持 (AI/検索/印刷は不変)。 */
+  document.body.classList.add('audience-human');
+  var bar = document.createElement('nav');
+  bar.className = 'audience-toggle';
+  bar.setAttribute('aria-label', '表示対象の切替');
+  var states = [['both', '両方'], ['human', '人間向け'], ['machine', '機械向け']];
+  for (var s = 0; s < states.length; s++) {
+    (function (mode, label) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      b.setAttribute('aria-pressed', mode === 'human' ? 'true' : 'false');
+      b.addEventListener('click', function () {
+        document.body.classList.remove('audience-human', 'audience-machine');
+        if (mode !== 'both') document.body.classList.add('audience-' + mode);
+        var bs = bar.querySelectorAll('button');
+        for (var j = 0; j < bs.length; j++) bs[j].setAttribute('aria-pressed', bs[j] === b ? 'true' : 'false');
+      });
+      bar.appendChild(b);
+    })(states[s][0], states[s][1]);
+  }
+  var bc = document.querySelector('nav.breadcrumb');
+  if (bc && bc.parentNode) { bc.parentNode.insertBefore(bar, bc.nextSibling); }
+  else { document.body.insertBefore(bar, document.body.firstChild); }
+})();
+</script>
+<!-- /folio:chrome-bottom -->
+</body>
+</html>

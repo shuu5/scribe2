@@ -458,6 +458,7 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
   "@id": "./ADR-0044-decision-ladder-is-a-constitution-article.html",
   "@type": "schema:TechArticle",
   "dc:isReferencedBy": [
+    { "@id": "./ADR-0045-seat-role-is-one-orchestrator-and-dispatcher-lands-runs.html" },
     { "@id": "./ADR-0046-constitution-is-enforced-by-gates-and-only-ask-first-and-never-are-injected.html" }
   ],
   "dc:isPartOf": [
@@ -685,7 +686,7 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
 <!-- folio:chrome-bottom -->
 <nav class="prevnext" aria-label="前後の文書">
   <a class="prevnext__prev" href="ADR-0043-same-tree-main-check-is-one-record.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">主実測は着地する木が gate の木と同じなら全段を撃たない (木の sha の一致を測定の再現と見なし record 1 本で残す・一致しない周と tree の無い verdict の周は全段撃つ・ADR-0021 §2.4「木が同じ main 実測は検出線を撃ち直さない」を「全段を撃ち直さない」へ広げる部分 supersede)</span></a>
-  <a class="prevnext__next" href="ADR-0046-constitution-is-enforced-by-gates-and-only-ask-first-and-never-are-injected.html"><span class="prevnext__dir">次 &rarr;</span><span class="prevnext__title">憲法の置き場: C 条文は CI と guard の執行だけで持ち、 注入するのは順位と Ask-first / Never の条だけ (生成区間を CLAUDE.md から生成 file 1 枚へ移し pointer 1 行を残す・orchestrator の SessionStart は順位 + A1 / A2 / A3 / A4.2 / N1 / N2 / N3 の pointer 行だけ・runner には憲法の散文を注入しない・本 repo だけの決定で他 project の憲法の執行は整理の後へ送る)</span></a>
+  <a class="prevnext__next" href="ADR-0045-seat-role-is-one-orchestrator-and-dispatcher-lands-runs.html"><span class="prevnext__dir">次 &rarr;</span><span class="prevnext__title">席の役割は orchestrator 1 つで、 便の起動・着地・merge は器の dispatcher が行う (planner / 管理席の 2 役割と席の自律機能を廃止・SessionStart の注入は短い 1 本・session を跨ぐ記憶は台帳・runner には憲法の散文を注入しない)</span></a>
 </nav>
 <script>
 (function () {
