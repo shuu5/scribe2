@@ -220,6 +220,16 @@ pub fn head_of(repo: &Path) -> Option<String> {
     git_line(repo, &["rev-parse", "HEAD"])
 }
 
+/// base（`HEAD`）の tree の file を読む（`git show HEAD:<path>`・**作業木ではない**）。
+///
+/// 受付が設計 pointer の doc を読む口である（契約 (b)・設計 contract-source.md §2「生成」）: 契約の正本は
+/// 記録する base と同じ commit の行で、作業木の書きかけを受け付けると **runner が base で見るもの**と
+/// 契約が食い違う。読めない（commit に無い・git を撃てない・UTF-8 でない）周は `None` ＝呼び側が断る。
+pub fn show_head(repo: &Path, path: &str) -> Option<String> {
+    let bytes = git_bytes(repo, &["show", &format!("HEAD:{path}")])?;
+    String::from_utf8(bytes).ok()
+}
+
 /// 便の base を event log から読む（spawn が記録した `base:<sha>`、または land の追随が
 /// 記録した `rebase:<old>..<new>` の新しい側・**物理順で後の行が勝つ**）。
 ///
@@ -482,6 +492,7 @@ pub(crate) mod fixture {
             design: "docs/design/pipeline.md".to_owned(),
             classes: owned(classes),
             opens: Vec::new(),
+            touches: Vec::new(),
         }
     }
 

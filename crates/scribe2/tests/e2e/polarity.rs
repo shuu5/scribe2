@@ -161,6 +161,7 @@ fn contract_with(classes: &[&str]) -> Contract {
         design: String::new(),
         classes: classes.iter().map(|class| (*class).to_owned()).collect(),
         opens: Vec::new(),
+        touches: Vec::new(),
     }
 }
 
