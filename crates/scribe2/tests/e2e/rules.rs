@@ -1182,8 +1182,12 @@ fn rules_embedded_manifest_declares_one_capability_row_per_role() {
         assert_eq!(row.kind, RuleKind::RoleCapabilities, "{id} の kind");
         assert_eq!(row.kind.shape(), ValueShape::List, "{id} の値の形は List（名の列）");
         assert!(row.enabled, "{id} は発効している");
-        assert_eq!(row.ruling, "user 2026-09-13T12:04Z", "{id} の裁定 id（edit-outside の追加）");
-        assert_eq!(row.ruled_at, "2026-09-13", "{id} の裁定日");
+        let (ruling, ruled_at) = match role {
+            Role::Planner => ("user 2026-09-13T12:04Z", "2026-09-13"),
+            Role::Admin => ("user 2026-09-18T04:10Z", "2026-09-18"),
+        };
+        assert_eq!(row.ruling, ruling, "{id} の裁定 id（planner = edit-outside の追加・admin = edit-code の例外運用）");
+        assert_eq!(row.ruled_at, ruled_at, "{id} の裁定日");
         let names = role_row_names(&manifest, *role);
         assert!(!names.is_empty(), "{id} の値は非空の列");
         for name in &names {
@@ -1294,6 +1298,7 @@ fn role_row_names(manifest: &Manifest, role: Role) -> Vec<String> {
 /// 裁定 `user 2026-09-13T03:14Z` の値: planner だけが記帳（回答・承認・go）と design-intent / 設計 doc の編集を
 /// 持ち、管理席だけが起動と merge を持つ。**code は両役割とも持たない**（印で開いた便の write-set だけ・AC16）。
 /// 裁定 `user 2026-09-13T12:04Z`: 対象 repo の外（state dir・auto-memory・scratchpad）の編集は両役割とも持つ。
+/// 裁定 `user 2026-09-18T04:10Z`（`s2-07l.472`・例外運用・終わったら外す）: 管理席だけが `edit-code` を持つ。
 #[test]
 fn rules_embedded_manifest_role_rows_carry_the_ruled_capabilities() {
     let manifest = Manifest::embedded().unwrap_or_else(|errors| panic!("埋め込み manifest が拒まれた: {errors:?}"));
@@ -1308,7 +1313,12 @@ fn rules_embedded_manifest_role_rows_carry_the_ruled_capabilities() {
     }
     for role in ROLES {
         assert!(held(*role, Capability::Relay), "{} は中継を持つ", role.as_str());
-        assert!(!held(*role, Capability::EditCode), "{}: code は持たない（印で開いた便だけ）", role.as_str());
+        assert_eq!(
+            held(*role, Capability::EditCode),
+            *role == Role::Admin,
+            "{}: code は管理席だけ（裁定 user 2026-09-18T04:10Z の例外運用・planner は印で開いた便だけ）",
+            role.as_str()
+        );
         assert!(held(*role, Capability::EditOutside), "{}: repo の外は持つ（12:04Z）", role.as_str());
     }
 }
