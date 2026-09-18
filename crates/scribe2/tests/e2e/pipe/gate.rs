@@ -1673,14 +1673,13 @@ fn pipe_confine_release_without_systemctl_is_no_tool_and_keeps_the_verdict() {
     clean(&[&repo, &state]);
 }
 
-/// (e) **同じ process が gate を 2 周撃つ**（land の追随 → 再 gate → main 実測・どちらも場所は run id）
-/// と、2 周目の unit 名は 1 周目と異なる。偽 `systemd-run` は同名の 2 本目を実 systemd と同じ字面で
-/// 断るので、base（名に通し番号が無い）では main 実測の行が起動できず land が落ちる（.208 run 3）。
+/// (e) land の追随の再 gate は 1 周目の gate と**別 process** で撃たれ、偽 `systemd-run` が同名の 2 本目を断る
+/// 形でも起動できる（unit 名は場所 + 段 + pid + 通し番号）。再 gate が判定した木をそのまま land するので
+/// **主実測は撃たない**（設計 gate-cost.md §27・`s2-07l.464`＝同じ process が 2 周撃つ経路はここで消えた。
+/// 通し番号で別名になる性質は in-file の `confine_unit_name_differs_for_the_same_arguments` /
+/// `confine_seq_increases_monotonically` が持つ）。
 ///
-/// 本 file の test 区間の差は**この歯の fixture の path 1 つ**（`other.txt` → `crates/other.txt`）だけで、
-/// 歯の名も assert も期待も動かない——別便が動かす面を検出線の面の内へ移し、追随が従来どおり再 gate を
-/// 撃つ形を保っただけである（設計 §33）。base の器は面の内外に依らず撃ち直すので、base で新しく赤くなる
-/// 歯は 1 本も無い（`s2-07l.80` と同じ形の逃がし）。
+/// 別便が動かす面は検出線の面の内（`crates/other.txt`）＝追随が従来どおり再 gate を撃つ形（設計 §33）。
 // flip-check: retroactive s2-07l.416
 #[test]
 fn pipe_confine_release_regate_in_one_process_uses_distinct_unit_names() {
@@ -1710,8 +1709,8 @@ fn pipe_confine_release_regate_in_one_process_uses_distinct_unit_names() {
     assert!(stdout_of(&landed).contains("rebase="), "追随の再 gate を通った: {}", stdout_of(&landed));
     let names = dir_names(&records);
     let contract: Vec<&String> = names.iter().filter(|name| name.contains("-contract-3-")).collect();
-    assert_eq!(contract.len(), 2, "再 gate と main 実測の 2 周が別名で撃たれた: {names:?}");
-    assert_ne!(contract.first(), contract.get(1), "2 周の名は異なる");
+    assert_eq!(contract.len(), 1, "land の process が撃つ契約 verify は再 gate の 1 周だけ（主実測は撃たない）: {names:?}");
+    assert_eq!(kinds(&main_rows(&state, &id)), ["main"], "主実測は再 gate と同じ木＝skip record 1 本");
     clean(&[&repo, &state]);
 }
 
@@ -2182,17 +2181,87 @@ fn pipe_detection_verdict_carries_tree_of_gated_head() {
     clean(&[&repo, &state]);
 }
 
-/// (3) 木が gate と同じ main 実測は **③ だけを撃たず** `skipped=detection tree=<sha>` を記す（②④は撃つ）。
+/// (3) 木が gate と同じ main 実測は **1 本も撃たず** `kind=main skipped=main tree=<sha>` の record 1 本を記す
+/// （設計 gate-cost.md §27・ADR-0043 §2.1・`s2-07l.464`。以前は ②④ を撃って ③ だけを省いた）。
 #[test]
 fn pipe_detection_land_skips_detection_when_tree_matches() {
     let landed = detection_land(|text, _, _| text.to_owned());
     let (rows, out) = (&landed.rows, &landed.out);
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "land は rc 0: {}", stderr_of(out));
-    assert_eq!(landed.added, ["common", "contract"], "main 実測は ②④ だけを撃つ");
-    assert_eq!(kinds(rows), ["write-set", "common", "detection", "contract"], "省いた段も位置に record が在る: {rows:?}");
-    assert_eq!(row_value(rows, 3, "skipped"), "detection", "skipped=detection");
-    assert_eq!(row_value(rows, 3, "tree"), git(&landed.repo, &["rev-parse", "refs/heads/main^{tree}"]), "tree=<land した木>");
-    assert_eq!(row_value(rows, 4, "rc"), "0", "④ は撃って緑");
+    assert!(landed.added.is_empty(), "main 実測は verify の cmd を 1 本も撃たない: {:?}", landed.added);
+    assert_eq!(kinds(rows), ["main"], "record は主実測の skip 1 本だけ: {rows:?}");
+    assert_eq!(row_value(rows, 1, "skipped"), "main", "skipped=main");
+    assert_eq!(row_value(rows, 1, "tree"), git(&landed.repo, &["rev-parse", "refs/heads/main^{tree}"]), "tree=<land した木>");
+    clean(&[&landed.repo, &landed.state]);
+}
+
+// ---- 主実測の省略（設計 gate-cost.md §27・ADR-0043 §2.1・`s2-07l.464`・接頭辞 `pipe_main_same_tree_`）----------
+//
+// gate が判定した木と着地の木が同じ周は、主実測は同じ木を同じ verify で撃ち直すだけ＝1 本も撃たず、
+// `verify-main.jsonl` に主実測の skip record 1 本（`kind=main skipped=main tree=<land した木> reason=same-tree`）を
+// 書いて緑。木が違う周と `tree` の無い周は従来の段数（③ の省き方は `pipe_detection_scope_` の歯の規則のまま）。
+
+/// 便の `RunDone stage=Landed` の detail（無ければ空）。
+fn landed_done_detail(state: &Path, id: &str) -> String {
+    trail(state, id)
+        .into_iter()
+        .rev()
+        .find(|(kind, stage, _)| *kind == EventKind::RunDone && *stage == Some(Stage::Landed))
+        .and_then(|(_, _, detail)| detail)
+        .unwrap_or_default()
+}
+
+/// (a) 同じ木の周: record は `kind=main skipped=main tree=<land した木> reason=same-tree` の 1 本（`n` = 1・key 列も
+/// pin）で、verify の cmd は 1 本も走らず、land は rc 0・Landed の detail と main の先端（squash）は従来の形。
+/// base は ①②④ を撃って 4 段の record を書く＝RED。
+#[test]
+fn pipe_main_same_tree_writes_one_record_and_fires_nothing() {
+    let landed = detection_land(|text, _, _| text.to_owned());
+    let (rows, out) = (&landed.rows, &landed.out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "land は rc 0: {}", stderr_of(out));
+    let main_tree = git(&landed.repo, &["rev-parse", "refs/heads/main^{tree}"]);
+    assert_eq!(value_of(&verdict_pairs(&landed.state, &landed.id), "tree"), main_tree, "fixture: gate の木 = land した木");
+    assert!(landed.added.is_empty(), "主実測は verify の cmd を 1 本も撃たない: {:?}", landed.added);
+    assert_eq!(kinds(rows), ["main"], "record は主実測の skip 1 本だけ: {rows:?}");
+    let skip = rows.first().cloned().unwrap_or_default();
+    let keys: Vec<&str> = skip.iter().map(|(key, _)| key.as_str()).collect();
+    assert_eq!(keys, ["schema", "n", "kind", "skipped", "tree", "reason"], "skip record の key 列: {skip:?}");
+    assert_eq!(value_of(&skip, "n"), "1", "`n` は 1");
+    assert_eq!(value_of(&skip, "skipped"), "main", "skipped=main");
+    assert_eq!(value_of(&skip, "tree"), main_tree, "tree=<land した木>");
+    assert_eq!(value_of(&skip, "reason"), "same-tree", "理由は木の一致");
+    let new = git(&landed.repo, &["rev-parse", "refs/heads/main"]);
+    assert!(stdout_of(out).contains(&format!("landed={new}")), "main の先端は squash: {}", stdout_of(out));
+    assert_eq!(landed_done_detail(&landed.state, &landed.id), format!("sha:{new} main:{new}"), "Landed の detail は従来の形");
+    clean(&[&landed.repo, &landed.state]);
+}
+
+/// (b) 木が違う周（verdict の `tree` を便の base の木に差し替え）: record は従来の段数（① / ② / ③ の skip / ④）で
+/// 主実測の skip record（`kind=main`）は無い（(a) と同じ fixture で分岐だけ違う負例の対＝base でも通る）。
+#[test]
+fn pipe_main_same_tree_different_tree_fires_all_stages() {
+    let landed = detection_land(verdict_tree_to_base);
+    let (rows, out) = (&landed.rows, &landed.out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "land は rc 0: {}", stderr_of(out));
+    assert_ne!(
+        value_of(&verdict_pairs(&landed.state, &landed.id), "tree"),
+        git(&landed.repo, &["rev-parse", "refs/heads/main^{tree}"]),
+        "fixture: gate の木と land した木は違う"
+    );
+    assert_eq!(landed.added, ["common", "contract"], "主実測は ②④ を撃つ: {:?}", landed.added);
+    assert_eq!(kinds(rows), ["write-set", "common", "detection", "contract"], "従来の段数: {rows:?}");
+    assert!(rows.iter().all(|row| value_of(row, "kind") != "main"), "主実測の skip record は無い: {rows:?}");
+    clean(&[&landed.repo, &landed.state]);
+}
+
+/// (c) verdict に `tree` が無い周（旧 gate の形）: 全段を撃つ（`added` は ②③④・`kind=main` の record は無い）。
+/// (a) との対＝base でも通る。
+#[test]
+fn pipe_main_same_tree_missing_tree_fires_all_stages() {
+    let landed = detection_land(|text, tree, _| text.replace(&format!(",\"tree\":\"{tree}\""), ""));
+    assert!(verdict_pairs(&landed.state, &landed.id).iter().all(|(key, _)| key != "tree"), "fixture は tree の無い形");
+    assert_detection_fired(&landed);
+    assert!(landed.rows.iter().all(|row| value_of(row, "kind") != "main"), "主実測の skip record は無い: {:?}", landed.rows);
     clean(&[&landed.repo, &landed.state]);
 }
 
@@ -2200,22 +2269,23 @@ fn pipe_detection_land_skips_detection_when_tree_matches() {
 //
 // 追随の再 gate 側（docs だけ / crates が動いた周）は `land.rs` の歯（同じ接頭辞）が持つ。ここは主実測の側。
 
-/// (d) main が動いていない周の主実測は `skipped=detection tree=<land した木> reason=same-tree`（理由が載る・
-/// base は `reason` を書かない＝RED）。record の key 列も pin する。
+/// (d) main が動いていない周の主実測は `kind=main skipped=main tree=<land した木> reason=same-tree` の record 1 本
+/// （`n` = 1・key 列も pin・設計 gate-cost.md §27 で ②④ も撃たない形に改めた）。
 #[test]
 fn pipe_detection_scope_same_tree_records_reason() {
     let landed = detection_land(|text, _, _| text.to_owned());
     let (rows, out) = (&landed.rows, &landed.out);
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "land は rc 0: {}", stderr_of(out));
-    assert_eq!(landed.added, ["common", "contract"], "主実測は ②④ だけを撃つ");
-    let skip = rows.get(2).cloned().unwrap_or_default();
+    assert!(landed.added.is_empty(), "主実測は 1 本も撃たない: {:?}", landed.added);
+    assert_eq!(rows.len(), 1, "record は 1 本: {rows:?}");
+    let skip = rows.first().cloned().unwrap_or_default();
     let keys: Vec<&str> = skip.iter().map(|(key, _)| key.as_str()).collect();
     assert_eq!(keys, ["schema", "n", "kind", "skipped", "tree", "reason"], "skip record の key 列: {skip:?}");
-    assert_eq!(value_of(&skip, "n"), "3", "③ の位置");
-    assert_eq!(value_of(&skip, "skipped"), "detection");
+    assert_eq!(value_of(&skip, "n"), "1", "1 本目");
+    assert_eq!(value_of(&skip, "kind"), "main", "kind=main");
+    assert_eq!(value_of(&skip, "skipped"), "main", "skipped=main");
     assert_eq!(value_of(&skip, "tree"), git(&landed.repo, &["rev-parse", "refs/heads/main^{tree}"]), "tree=<land した木>");
     assert_eq!(value_of(&skip, "reason"), "same-tree", "理由は木の一致");
-    assert_eq!(row_value(rows, 4, "n"), "4", "④ の `n` は skip record の次");
     clean(&[&landed.repo, &landed.state]);
 }
 
@@ -2913,16 +2983,18 @@ fn pipe_record_silent_line_has_no_line_field() {
 
 /// (e) land の main 実測で ③ を省いた周は `verify-main.jsonl` の detection の record に `line` が無い
 /// （撃っていない行の判定行を書かない）。同じ関数で書く ② の record には載る＝省いた段だけが欠ける。
+/// fixture は verdict の木を base の木に差し替えて主実測を撃つ周にする（同じ木の周は主実測ごと省く・設計 gate-cost.md §27）。
 #[test]
 fn pipe_record_land_skipped_detection_has_no_line() {
     let (repo, state, id, out) = line_gate(r#"["sh verify-ok.sh"]"#);
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "PASS: {}", stderr_of(&out));
     assert_eq!(row_value(&verify_rows(&state, &id), 3, "line"), DETECTION_LINE, "gate の周には載っている");
+    super::land::make_tree_differ(&repo, &state, &id, "refs/heads/main");
     let landed = land_once(&repo, &state, &id);
     assert_eq!(landed.status.code(), Some(i32::from(RC_OK)), "land: {}", stderr_of(&landed));
     let rows = main_rows(&state, &id);
     assert_eq!(kinds(&rows), ["write-set", "common", "detection", "contract"], "main 実測の母集団: {rows:?}");
-    assert_eq!(row_value(&rows, 3, "skipped"), "detection", "木が同じ周は ③ を省く");
+    assert_eq!(row_value(&rows, 3, "skipped"), "detection", "面の外だけが違う周は ③ を省く");
     assert!(!row_has(&rows, 3, "line"), "省いた段に `line` は無い: {:?}", rows.get(2));
     assert_eq!(row_value(&rows, 2, "line"), COMMON_LINE, "撃った ② には main 実測でも載る（同じ 1 本で書く）");
     clean(&[&repo, &state]);
@@ -3004,11 +3076,13 @@ fn gate_secs_only_fired_steps_carry_the_wall_clock() {
         "検出線の行は判定行の逐語 + record の秒: {shown}"
     );
     // land の主実測も同じ 1 本（`step_record`）を通る＝撃った段は秒を持ち、省いた段は持たない。
+    // fixture は verdict の木を base の木に差し替えて主実測を撃つ周にする（同じ木の周は主実測ごと省く・設計 gate-cost.md §27）。
+    super::land::make_tree_differ(&repo, &state, &id, "refs/heads/main");
     let landed = land_once(&repo, &state, &id);
     assert_eq!(landed.status.code(), Some(i32::from(RC_OK)), "land: {}", stderr_of(&landed));
     let main = main_rows(&state, &id);
     assert_eq!(kinds(&main), ["write-set", "common", "detection", "contract"], "main 実測の母集団: {main:?}");
-    assert_eq!(row_value(&main, 3, "skipped"), "detection", "木が同じ周は ③ を省く");
+    assert_eq!(row_value(&main, 3, "skipped"), "detection", "面の外だけが違う周は ③ を省く");
     assert!(!row_has(&main, 3, "secs"), "撃たなかった段（skip record）は秒を欠く: {:?}", main.get(2));
     assert!(row_has(&main, 2, "secs"), "verify-main.jsonl も同じ形で秒を持つ: {main:?}");
     clean(&[&repo, &state]);

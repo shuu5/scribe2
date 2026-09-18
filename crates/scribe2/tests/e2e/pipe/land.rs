@@ -687,6 +687,7 @@ fn pipe_land_already_landed_red_main_is_not_landed() {
     let (repo, state) = repo_with_state();
     let marker = state.join("lens-ran");
     let (id, squash) = gated_run_squashed_on_main(&repo, &state, &marker, run_trailer);
+    make_tree_differ(&repo, &state, &id, &format!("{squash}^"));
     // 主実測は**写しからしか読まない**（ADR-0010 §2.4）ので、gate の後に写しの共通 verify だけを赤へ差し替える。
     let frozen = vessel::pipe::vessel_path(&state, &id);
     let text = fs::read_to_string(&frozen).expect("宣言の写しを読める");
@@ -780,6 +781,25 @@ fn main_token(out: &Output) -> String {
         .find_map(|word| word.strip_prefix("main="))
         .map(str::to_owned)
         .unwrap_or_default()
+}
+
+/// verdict の `tree` を `rev` の木（実在する別の木）に差し替え、主実測を「木が違う周」の経路にする fixture
+/// （設計 gate-cost.md §27・`s2-07l.464`: 同じ木の周は主実測を 1 本も撃たないので、主実測の赤 / 測れない /
+/// verify の副作用を測る歯は land の前にこれを挟む。`gate.rs` の `verdict_tree_to_base` と同じ型）。
+/// 差分は便の `src/lib.rs` だけ＝面の外なので、③ は従来どおり省き ①②④ を撃つ＝歯の期待は不変。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+pub(super) fn make_tree_differ(repo: &Path, state: &Path, id: &str, rev: &str) {
+    let verdict = state.join("pipe").join(id).join("verdict.json");
+    let text = fs::read_to_string(&verdict).expect("verdict.json を読める");
+    let tree = value_of(&verdict_pairs(state, id), "tree");
+    assert!(!tree.is_empty(), "差し替える前の verdict は tree を持つ: {text}");
+    let other = git(repo, &["rev-parse", &format!("{rev}^{{tree}}")]);
+    assert_ne!(other, tree, "fixture: 差し替え先は別の木");
+    let swapped = text.replace(&format!("\"tree\":\"{tree}\""), &format!("\"tree\":\"{other}\""));
+    fs::write(&verdict, swapped).expect("verdict.json を差し替えられる");
 }
 
 /// 便の `RunDone stage=Landed` の detail（無ければ空）。
@@ -1247,6 +1267,7 @@ fn pipe_land_reruns_verify_on_main_and_fails_loud() {
     let marker = state.join("lens-ran");
     let base = git(&repo, &["rev-parse", "refs/heads/main"]);
     let id = gated_pass(&repo, &state, &path, &marker);
+    make_tree_differ(&repo, &state, &id, "refs/heads/main");
     let out = land_once(&repo, &state, &id);
     assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "main が赤ければ rc 1");
     assert!(stderr_of(&out).contains("main が赤い"), "理由: {}", stderr_of(&out));
@@ -1282,6 +1303,7 @@ fn pipe_land_reruns_common_verify_from_vessel_copy_on_main() {
     let marker = state.join("lens-ran");
     let base = git(&repo, &["rev-parse", "refs/heads/main"]);
     let id = gated_pass(&repo, &state, &path, &marker);
+    make_tree_differ(&repo, &state, &id, "refs/heads/main");
     let out = land_once(&repo, &state, &id);
     assert_eq!(
         out.status.code(),
@@ -1452,6 +1474,7 @@ fn pipe_land_turns_unstartable_verify_step_into_unmeasured() {
     let marker = state.join("lens-ran");
     let base = git(&repo, &["rev-parse", "refs/heads/main"]);
     let id = gated_pass(&repo, &state, &path, &marker);
+    make_tree_differ(&repo, &state, &id, "refs/heads/main");
 
     let out = land_once_with_unreadable_diff(&repo, &state, &id);
 
@@ -1489,6 +1512,7 @@ fn pipe_land_keeps_signal_killed_verify_line_as_red() {
     let path = write_contract(&repo, &[], &[]);
     let marker = state.join("lens-ran");
     let id = gated_pass(&repo, &state, &path, &marker);
+    make_tree_differ(&repo, &state, &id, "refs/heads/main");
 
     let out = land_once(&repo, &state, &id);
 
@@ -1507,6 +1531,7 @@ fn pipe_land_reports_unmeasured_main_apart_from_red() {
     let path = write_contract(&repo, &[], &[]);
     let marker = state.join("lens-ran");
     let id = gated_pass(&repo, &state, &path, &marker);
+    make_tree_differ(&repo, &state, &id, "refs/heads/main");
     // main 実測用の tmp の置き場を塞ぐ＝**verify を 1 行も撃てない**。
     let blocked = repo.join(".worktrees").join("scribe2").join("verify").join(&id);
     fs::create_dir_all(&blocked).expect("tmp の置き場を塞げる");
@@ -1921,6 +1946,7 @@ fn pipe_retire_rebase_empty_refuses_other_failed_reasons() {
     let path = write_contract(&repo, &["verify"], &[r#"verify = ["sh verify-once.sh"]"#]);
     let marker = state.join("lens-ran");
     let id = gated_pass(&repo, &state, &path, &marker);
+    make_tree_differ(&repo, &state, &id, "refs/heads/main");
     let red = land_once(&repo, &state, &id);
     assert_eq!(red.status.code(), Some(i32::from(RC_REFUSED)), "main が赤い land は rc 1: {}", stderr_of(&red));
     assert!(show_line(&repo, &state, &id).contains("stage=Failed"), "終端の段は Failed");
@@ -2128,6 +2154,7 @@ fn pipe_land_anchor_syncs_even_when_main_verify_is_red() {
     let path = write_contract(&repo, &["verify"], &[r#"verify = ["sh verify-once.sh"]"#]);
     let marker = state.join("lens-ran");
     let id = gated_pass(&repo, &state, &path, &marker);
+    make_tree_differ(&repo, &state, &id, "refs/heads/main");
     let out = land_once(&repo, &state, &id);
     assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "main が赤ければ rc 1");
     assert!(stderr_of(&out).contains("main が赤い"), "理由: {}", stderr_of(&out));
@@ -2256,6 +2283,7 @@ fn pipe_land_anchor_before_verify_records_clean_anchor_during_main_check() {
     let marker = state.join("lens-ran");
     let base = git(&repo, &["rev-parse", "refs/heads/main"]);
     let id = gated_pass(&repo, &state, &path, &marker);
+    make_tree_differ(&repo, &state, &id, "refs/heads/main");
     assert!(!record.exists(), "gate（branch の worktree）は record を書かない＝印は実測の周のもの");
 
     let out = land_once(&repo, &state, &id);
@@ -3157,7 +3185,7 @@ fn assert_regate_skip_record(rows: &[Vec<(String, vessel::fleet::json_lite::Valu
 }
 
 /// (b) 対: `crates/` 配下で main が動いた周の再 gate は**従来どおり ③ を撃つ**（呼出 +1・穴は新しい base）
-/// ・skip record 無し。
+/// ・skip record 無し。主実測は再 gate が判定した木をそのまま land するので撃たない（設計 gate-cost.md §27）。
 #[test]
 fn pipe_detection_scope_main_fires_detection_when_crates_moved() {
     let (repo, state, id, base, before) = detection_gated();
@@ -3168,14 +3196,16 @@ fn pipe_detection_scope_main_fires_detection_when_crates_moved() {
     let added = super::gate::detection_calls(&repo).split_off(before);
     assert_eq!(
         added,
-        ["common".to_owned(), format!("detection-{moved}"), "contract".to_owned(), "common".to_owned(), "contract".to_owned()],
-        "再 gate は ②③④（③ の穴は rebase 後の base）・主実測は ②④（木は同じ）"
+        ["common".to_owned(), format!("detection-{moved}"), "contract".to_owned()],
+        "再 gate は ②③④（③ の穴は rebase 後の base）・主実測は撃たない（木は同じ）"
     );
     let rows = verify_rows(&state, &id);
     assert_eq!(rows.len(), 8, "1 度目 4 本 + 再 gate 4 本: {rows:?}");
     assert!(super::gate::skip_rows(&rows).is_empty(), "撃った周に skip record は無い: {rows:?}");
     assert_eq!(row_value(&rows, 7, "kind"), "detection", "再 gate の ③ は撃った record");
     assert_eq!(row_value(&rows, 7, "rc"), "0");
+    let main = super::gate::main_rows(&state, &id);
+    assert_eq!(super::gate::kinds(&main), ["main"], "主実測は skip record 1 本（再 gate と同じ木）: {main:?}");
     assert!(show_line(&repo, &state, &id).contains("stage=Landed"), "段は Landed");
     clean(&[&repo, &state]);
 }
@@ -3190,7 +3220,7 @@ fn pipe_detection_scope_unreadable_follow_diff_fires_detection() {
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "land は rc 0: {}", stderr_of(&out));
     assert!(stdout_of(&out).contains(&format!("rebase={base}..{moved}")), "追随は済む: {}", stdout_of(&out));
     let added = super::gate::detection_calls(&repo).split_off(before);
-    assert_eq!(added.len(), 5, "再 gate は ②③④・主実測は ②④: {added:?}");
+    assert_eq!(added.len(), 3, "再 gate は ②③④・主実測は撃たない（再 gate と同じ木・設計 gate-cost.md §27）: {added:?}");
     assert_eq!(added.get(1).cloned().unwrap_or_default(), format!("detection-{moved}"), "読めない周は ③ を撃つ: {added:?}");
     let rows = verify_rows(&state, &id);
     assert!(super::gate::skip_rows(&rows).is_empty(), "撃った周に skip record は無い: {rows:?}");
