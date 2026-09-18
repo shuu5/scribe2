@@ -146,8 +146,9 @@ fn pipe_intake_rejects_broken_arrays_and_unknown_keys() {
         let err = stderr_of(&out);
         assert_ne!(out.status.code(), Some(i32::from(RC_OK)), "{want} を通さない: {err}");
         assert!(err.contains(want), "理由に {want} が出る: {err}");
-        // 位置は行番号（読めない値の側）か doc の位置（表の検査の側）のどちらかで必ず出る。
-        assert!(err.contains("line=") || err.contains("toy.md") || err.contains(want), "位置か欄を持つ: {err}");
+        // 位置（doc:line）は**表の検査に届いた周**だけが持つ。値の読みで落ちる周（配列の形の不備）は
+        // 欄と字面だけを名乗る＝ここでは位置を pin しない（位置の側は `contract_closure_ext_` の族が
+        // `contracts: docs/design/toy.md:<line>` を逐語で測る）。
     }
     clean(&[&repo, &state]);
 }
@@ -2646,5 +2647,142 @@ fn pipe_review_resume_from_intake_reviews_before_spawning() {
         assert_eq!(stage_count(&state, id, Stage::Spawned), usize::from(spawned), "{verdict}: Spawned の件数");
         assert_eq!(value_of(&review_pairs(&state, id), "verdict"), verdict);
     }
+    clean(&[&repo, &state]);
+}
+
+// ───── 設計 pointer からの生成（契約表 (b)・設計 contract-source.md §2・接頭辞 `pipe_intake_design_`） ─────
+
+/// (1) 適合の行 1 つを `--design` で渡すと run が起き、run dir の写しが **REQUIRED 全部 + `design` + `touches`** を
+/// 持つ: `goal` は行の `title`（節の本文ではない・planner 裁定 2026-09-19）・`owner` / `disposition` は固定の導出値
+/// （C10・行は持たない）・`write-set` / `verify` / `req` / `size` / `done` は行の逐語・`design` は pointer の逐語。
+/// 記帳は `RunCreated` 1 件。
+///
+/// base では `--design` が未知の flag で `--contract` が要る＝この歯は 1 本も無い（`pipe_intake_design_` の filter は
+/// rc 4 で RED）。
+#[test]
+fn pipe_intake_design_generates_the_contract_from_the_row() {
+    let (repo, state) = repo_with_state();
+    let design = write_contract(&repo, &[], &[r#"touches = ["crate::pipe::refuse::Refuse"]"#]);
+    let before = event_count(&state);
+    let out = intake_raw(&repo, &state, &design, "s2-gen");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "適合の行は通る: {}", stderr_of(&out));
+    let id = run_id_of(&out);
+    let copied = fs::read_to_string(state.join("pipe").join(&id).join("contract.toml")).unwrap_or_default();
+    for want in [
+        r#"goal = "縦 1 本を通す""#,
+        r#"done = "run が Implemented になる""#,
+        r#"size = "S""#,
+        r#"owner = "generated""#,
+        r#"disposition = "A-now""#,
+        r#"write-set = ["src/lib.rs"]"#,
+        r#"verify = ["sh verify-ok.sh"]"#,
+        r#"req = ["FR4"]"#,
+        r#"design = "docs/design/toy.md#a""#,
+        r#"touches = ["crate::pipe::refuse::Refuse"]"#,
+    ] {
+        assert!(copied.contains(want), "写しが {want} を持つ: {copied}");
+    }
+    assert!(!copied.contains("title ="), "行の欄の名（title）は写しに出ない: {copied}");
+    // 受付の記帳は 2 件（run の作成と、その直後の審査の段・FR49）。
+    assert_eq!(event_count(&state), before.saturating_add(2), "記帳は run の作成と審査の段");
+    stop_run_ok(&state, &id);
+    clean(&[&repo, &state]);
+}
+
+/// (2) 閉包の file を欠く行は `write-set-incomplete` で**足りない file を名指して**断り、run dir も event も増えない。
+#[test]
+fn pipe_intake_design_refuses_a_row_whose_write_set_misses_the_closure() {
+    let row = table_row("a", &[("touches", "[\"crate::tint::Tint\"]"), ("write-set", "[\"crates/toy/src/tint.rs\"]")]);
+    let (repo, state) = derive_repo(&table_doc(&table_region(&[row])));
+    let (dirs, events) = (run_dirs(&state), event_count(&state));
+    let out = intake_raw(&repo, &state, "docs/design/toy.md#a", "s2-miss");
+    let err = stderr_of(&out);
+    assert_ne!(out.status.code(), Some(i32::from(RC_OK)), "閉包を欠く行は通さない: {err}");
+    assert!(err.contains("write-set-incomplete"), "理由の名: {err}");
+    assert!(err.contains("crates/toy/src/show.rs"), "足りない file を名指す: {err}");
+    assert_eq!(run_dirs(&state), dirs, "run dir は増えない");
+    assert_eq!(event_count(&state), events, "event も増えない");
+    clean(&[&repo, &state]);
+}
+
+/// (3) 節の無い `section` を持つ行は `contract-table:section-missing` で断り、run dir も event も増えない。
+#[test]
+fn pipe_intake_design_refuses_a_row_whose_section_is_missing() {
+    let row = table_row("a", &[("section", "\"9\"")]);
+    let (repo, state) = derive_repo(&table_doc(&table_region(&[row])));
+    let (dirs, events) = (run_dirs(&state), event_count(&state));
+    let out = intake_raw(&repo, &state, "docs/design/toy.md#a", "s2-sec");
+    let err = stderr_of(&out);
+    assert_ne!(out.status.code(), Some(i32::from(RC_OK)), "節の無い行は通さない: {err}");
+    assert!(err.contains("section-missing"), "理由の名: {err}");
+    assert_eq!(run_dirs(&state), dirs, "run dir は増えない");
+    assert_eq!(event_count(&state), events, "event も増えない");
+    clean(&[&repo, &state]);
+}
+
+/// (4) 手書きの契約 file（`--contract PATH`）は **usage の誤りでなく** `hand-written-contract` で断る（FR54）。
+/// run dir も event も増えず、断りの行は正しい渡し方（`--design <doc>#<id>`）を名乗る。
+#[test]
+fn pipe_intake_design_refuses_a_hand_written_contract_file() {
+    let (repo, state) = repo_with_state();
+    write_contract(&repo, &[], &[]);
+    let hand = repo.join("contract.toml");
+    fs::write(&hand, "goal = \"g\"\n").expect("手書きの file を置ける");
+    let (dirs, events) = (run_dirs(&state), event_count(&state));
+    let out = run_pipe(&[
+        "intake", "--contract", &hand.display().to_string(), "--bead", "s2-hand",
+        "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
+        "--rules", &ceiling_rules(&state),
+    ]);
+    let err = stderr_of(&out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "手書きは rc 1: {err}");
+    assert!(err.contains("手書きの契約 file は受け付けない"), "typed な理由: {err}");
+    assert!(err.contains("--design"), "正しい渡し方を名乗る: {err}");
+    assert!(!err.starts_with("usage:"), "使い方の誤りではない: {err}");
+    assert_eq!(run_dirs(&state), dirs, "run dir は増えない");
+    assert_eq!(event_count(&state), events, "event も増えない");
+    clean(&[&repo, &state]);
+}
+
+/// (5) 解けない pointer は typed に断る: 区間の無い doc・区間に無い行 id・`#` の無い pointer の 3 形。
+#[test]
+fn pipe_intake_design_refuses_a_pointer_that_does_not_resolve() {
+    let (repo, state) = repo_with_state();
+    write_contract(&repo, &[], &[]);
+    let (dirs, events) = (run_dirs(&state), event_count(&state));
+    for (pointer, want) in [
+        ("docs/design/toy.md#zz", "行 id zz"),
+        ("docs/design/none.md#a", "base（HEAD）から読めない"),
+        ("docs/design/toy.md", "設計 pointer の形でない"),
+    ] {
+        let out = intake_raw(&repo, &state, pointer, "s2-ptr");
+        let err = stderr_of(&out);
+        assert_ne!(out.status.code(), Some(i32::from(RC_OK)), "{pointer} を通さない: {err}");
+        assert!(err.contains(want), "{pointer} の理由に {want}: {err}");
+    }
+    assert_eq!(run_dirs(&state), dirs, "run dir は増えない");
+    assert_eq!(event_count(&state), events, "event も増えない");
+    clean(&[&repo, &state]);
+}
+
+/// (6) 読む先は **base（`HEAD`）** である: 作業木の設計 doc を書き換えても commit していなければ受付は HEAD の行を
+/// 読む（runner が base で見るものと契約を食い違わせない）。
+#[test]
+fn pipe_intake_design_reads_the_row_from_head_not_the_worktree() {
+    let (repo, state) = repo_with_state();
+    let design = write_contract(&repo, &[], &[]);
+    // commit **しない**書き換え: 作業木の行の title を変える。
+    let edited: Vec<String> = contract_body()
+        .into_iter()
+        .map(|line| if line.starts_with("title") { r#"title = "作業木だけの題""#.to_owned() } else { line })
+        .collect();
+    write_design(&repo, &design_doc(&edited));
+    let out = intake_raw(&repo, &state, &design, "s2-head");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    let id = run_id_of(&out);
+    let copied = fs::read_to_string(state.join("pipe").join(&id).join("contract.toml")).unwrap_or_default();
+    assert!(copied.contains(r#"goal = "縦 1 本を通す""#), "HEAD の行を読む: {copied}");
+    assert!(!copied.contains("作業木だけの題"), "作業木の書きかけは読まない: {copied}");
+    stop_run_ok(&state, &id);
     clean(&[&repo, &state]);
 }
