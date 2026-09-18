@@ -5,10 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="folio-doc-type" content="constitution">
 <meta name="folio-layer" content="project">
-<meta name="folio-version" content="0.4.6">
+<meta name="folio-version" content="0.5.0">
 <meta name="folio-status" content="active">
 <meta name="folio-stakeholders" content="Developer, AI Agent, External Reviewer">
-<title>scribe2 constitution — 折れない線 (Always 16 / Ask-first 4 / Never 4)</title>
+<title>scribe2 constitution — 折れない線 (Always 17 / Ask-first 4 / Never 4)</title>
 <link rel="stylesheet" href="../../common.css">
 <script src="../assets/mermaid.min.js" defer></script>
 <script type="application/ld+json">
@@ -72,8 +72,8 @@
     { "@id": "../decisions/ADR-0002-test-lint-toolchain.html" },
     { "@id": "../decisions/ADR-0001-rust-single-static-binary.html" }
   ],
-  "dc:title": "scribe2 constitution — 折れない線 (Always 16 / Ask-first 4 / Never 4)",
-  "folio:version": "0.4.6",
+  "dc:title": "scribe2 constitution — 折れない線 (Always 17 / Ask-first 4 / Never 4)",
+  "folio:version": "0.5.0",
   "folio:stakeholders": ["Developer", "AI Agent", "External Reviewer"]
 }
 </script>
@@ -90,14 +90,14 @@
 
 <header class="doc-header">
   <h1>scribe2 constitution — 折れない線</h1>
-  <div class="meta">v0.4.6 &middot; status: active &middot; scribe v2「次の器」が守る 24 条 (Always 16 / Ask-first 4 / Never 4)。 各条は要旨 + 規範文 (EARS・正本) + 機構 (型 / lint / CI) + 出所を併せ持ち、 数値は条文でなく manifest の rules 行に置く (初期値は §3)</div>
+  <div class="meta">v0.5.0 &middot; status: active &middot; scribe v2「次の器」が守る 25 条 (Always 17 / Ask-first 4 / Never 4)。 各条は要旨 + 規範文 (EARS・正本) + 機構 (型 / lint / CI) + 出所を併せ持ち、 数値は条文でなく manifest の rules 行に置く (初期値は §3)</div>
 </header>
 <!-- folio:chrome-toc -->
 <nav class="toc" aria-label="ページ内目次">
 <ol>
   <li><a href="#s1-purpose">§1. Purpose — この憲法が何を決め、 どう読むか</a></li>
-  <li><a href="#s2-tiers">§2. 3 段の構造 — 24 条の一覧</a></li>
-  <li class="toc--sub"><a href="#s2-1-always">§2.1 Always — いつも守る (C1〜C16)</a></li>
+  <li><a href="#s2-tiers">§2. 3 段の構造 — 25 条の一覧</a></li>
+  <li class="toc--sub"><a href="#s2-1-always">§2.1 Always — いつも守る (C1〜C17)</a></li>
   <li class="toc--sub"><a href="#s2-2-askfirst">§2.2 Ask-first — 変える前に user に確認 (A1〜A4)</a></li>
   <li class="toc--sub"><a href="#s2-3-never">§2.3 Never — 絶対にやらない (N1〜N4)</a></li>
   <li><a href="#s3-rules-rows">§3. rules 行の初期値 — 条文から外した数値 (裁定 id 付き)</a></li>
@@ -111,12 +111,12 @@
   <dl>
     <dt>id</dt><dd>constitution</dd>
     <dt>doc-type</dt><dd>constitution</dd>
-    <dt>version</dt><dd>0.4.6 (follows the SPEC version)</dd>
+    <dt>version</dt><dd>0.5.0 (follows the SPEC version)</dd>
     <dt>status</dt><dd>active</dd>
     <dt>stakeholders</dt><dd>Developer, AI Agent, External Reviewer</dd>
-    <dt>tiers</dt><dd>Always C1-C16 (16) / Ask-first A1-A4 (4) / Never N1-N4 (4)</dd>
+    <dt>tiers</dt><dd>Always C1-C17 (17) / Ask-first A1-A4 (4) / Never N1-N4 (4)</dd>
     <dt>edit-ssot</dt><dd>this file (canonical WHAT; folio ADR-0051 §3: non-flipped doc = HTML is the only layer)</dd>
-    <dt>source</dt><dd>SPEC-scribe-v2-vessel §2 (v0.3 user approved 2026-09-07; C14 / C15 / C16 added in v0.4 / v0.4.5 by user rulings 2026-09-08 / 2026-09-09) / ADR-0003 (C7 / A1 / C8 / A4 / N4 rewritten 2026-09-09) / ADR-0005 (A3 rewritten 2026-09-09)</dd>
+    <dt>source</dt><dd>SPEC-scribe-v2-vessel §2 (v0.3 user approved 2026-09-07; C14 / C15 / C16 added in v0.4 / v0.4.5 by user rulings 2026-09-08 / 2026-09-09; C17 added in v0.5.0 by user ruling 2026-09-18) / ADR-0003 (C7 / A1 / C8 / A4 / N4 rewritten 2026-09-09) / ADR-0005 (A3 rewritten 2026-09-09) / ADR-0044 (C17 added 2026-09-18)</dd>
     <dt>amendment</dt><dd>A2 (grill verification first, then user ruling) + C5 (rules row diff with ruling id) + N4 (constitution amendments only with a new ADR, inline delta markers and a ruling id)</dd>
   </dl>
 </aside>
@@ -128,7 +128,7 @@
 <section id="s1-purpose" class="normative">
 <h2>§1. Purpose — この憲法が何を決め、 どう読むか</h2>
 <p class="section-essence" data-audience="human">scribe2 が版をまたいで守る「折れない線」を、 守り方の強さで Always / Ask-first / Never の 3 段に分けて置きます。 各条は「人が読む要旨」「機械が読む規範文 (正本)」「機械が検査できる形 (型 / lint / CI)」「出所 (どの裁定から来たか)」の 4 つを必ず併せ持ち、 数値は条文に書かず manifest の rules 行に置き、 その初期値を §3 に写します。 線どうしがぶつかったら、 場当たり修正の禁止 → 膨張防止 → compile 速度 の順位で決めます。</p>
-<p data-audience="machine">本 constitution は scribe v2「次の器」の design-intent の最上位文書であり、 条文の canonical WHAT かつ edit-SSoT である (folio ADR-0051 §3: flip しない doc は HTML が唯一の層)。 24 条の各条は (a) human 要旨、 (b) EARS 規範文 (canonical)、 (c) 機構 = 条を成立させる型 / lint / CI の形、 (d) 出所 = 裁定論点 id、 の 4 要素を持つ。 (c) を欠く条を置かない (散文だけの規則を残さない = N2)。 1 つの条は複数の規範文を持ちうる: 最初の規範文は条 id (例 C12)、 以降は条 id に連番を付す (例 C12.2)。 EARS pattern は各規範文の論理構造で決まり、 段 (Always / Ask-first / Never) とは独立である。 card の badge は最初の規範文の pattern を表し、 2 つ目以降の規範文の pattern は machine 層の各 block が持つ。 原本が執行主体を特定しない条は主語を scribe2 (system of interest) とし、 CI 等の執行機構は機構 dd に (導出) と明示する。 原本が CI を名指す条は scribe2 CI を主語にする。 数値 (閾値・件数・秒数) は条文に置かず <span class="term" data-term="rules 行">rules 行</span> (<span class="term" data-term="manifest">manifest</span> 内の値 1 行・<span class="term" data-term="裁定 id">裁定 id</span> 付き) に置き、 本文書ではその初期値を §3 に写す。 改訂は A2 (利益の grill 検証を前置した user 裁定) のみで、 条文の改訂は新 ADR と本文の delta marker と裁定 id を伴う (N4)。</p>
+<p data-audience="machine">本 constitution は scribe v2「次の器」の design-intent の最上位文書であり、 条文の canonical WHAT かつ edit-SSoT である (folio ADR-0051 §3: flip しない doc は HTML が唯一の層)。 25 条の各条は (a) human 要旨、 (b) EARS 規範文 (canonical)、 (c) 機構 = 条を成立させる型 / lint / CI の形、 (d) 出所 = 裁定論点 id、 の 4 要素を持つ。 (c) を欠く条を置かない (散文だけの規則を残さない = N2)。 1 つの条は複数の規範文を持ちうる: 最初の規範文は条 id (例 C12)、 以降は条 id に連番を付す (例 C12.2)。 EARS pattern は各規範文の論理構造で決まり、 段 (Always / Ask-first / Never) とは独立である。 card の badge は最初の規範文の pattern を表し、 2 つ目以降の規範文の pattern は machine 層の各 block が持つ。 原本が執行主体を特定しない条は主語を scribe2 (system of interest) とし、 CI 等の執行機構は機構 dd に (導出) と明示する。 原本が CI を名指す条は scribe2 CI を主語にする。 数値 (閾値・件数・秒数) は条文に置かず <span class="term" data-term="rules 行">rules 行</span> (<span class="term" data-term="manifest">manifest</span> 内の値 1 行・<span class="term" data-term="裁定 id">裁定 id</span> 付き) に置き、 本文書ではその初期値を §3 に写す。 改訂は A2 (利益の grill 検証を前置した user 裁定) のみで、 条文の改訂は新 ADR と本文の delta marker と裁定 id を伴う (N4)。</p>
 <div data-audience="machine">
 <p class="ears" data-ears-pattern="event-driven"><span class="ears-id">順位</span>: <span class="ears-when">WHEN two lines of this constitution conflict in a decision</span>, scribe2 <span class="ears-shall">SHALL</span> resolve the conflict in this order: prohibition of ad-hoc fixes first, prevention of growth second, compile speed third.</p>
 <p>出所: 論点 1。 <span class="term" data-term="順位">順位</span>は条ではなく全条に先立つ決め方であり、 条 id の連番を持たない (§2 の一覧表にも含めない)。</p>
@@ -136,14 +136,14 @@
 </section>
 
 <section id="s2-tiers" class="normative">
-<h2>§2. 3 段の構造 — 24 条の一覧</h2>
+<h2>§2. 3 段の構造 — 25 条の一覧</h2>
 <p class="section-essence" data-audience="human">Always は例外なく常に守る 16 条、 Ask-first は変える前に user に確認する 4 条、 Never は絶対にやらない 4 条です。 下の図と表が全体の地図で、 各条の本文は §2.1〜§2.3 にあります。 §1 の順位は段に属さず、 表には含めません。</p>
 <figure class="diagram">
 <pre class="mermaid">flowchart TB
   accTitle: scribe2 憲法の 3 段構造
-  accDescr: 折れない線 24 条を守り方の強さで 3 段に分ける。 Always は C1 から C16 の 16 条で常に守る。 Ask-first は A1 から A4 の 4 条で変える前に user に確認する。 Never は N1 から N4 の 4 条で絶対に行わない。
-  T["折れない線 (24 条)"]
-  A["Always — いつも守る&#10;C1〜C16 (16 条)"]
+  accDescr: 折れない線 25 条を守り方の強さで 3 段に分ける。 Always は C1 から C17 の 17 条で常に守る。 Ask-first は A1 から A4 の 4 条で変える前に user に確認する。 Never は N1 から N4 の 4 条で絶対に行わない。
+  T["折れない線 (25 条)"]
+  A["Always — いつも守る&#10;C1〜C17 (17 条)"]
   B["Ask-first — 変える前に user に確認&#10;A1〜A4 (4 条)"]
   C["Never — 絶対にやらない&#10;N1〜N4 (4 条)"]
   T --&gt; A
@@ -153,7 +153,7 @@
   style A fill:#e6f6f2,stroke:#1e7b65,color:#08131a
   style B fill:#fefbea,stroke:#916626,color:#08131a
   style C fill:#fdf3f3,stroke:#b22323,color:#08131a</pre>
-<figcaption>図 1. 24 条の 3 段構造。 段は「守り方の強さ」で分かれる。 線どうしがぶつかったときの決め方は §1 の順位だけが定める。</figcaption>
+<figcaption>図 1. 25 条の 3 段構造。 段は「守り方の強さ」で分かれる。 線どうしがぶつかったときの決め方は §1 の順位だけが定める。</figcaption>
 </figure>
 <p data-audience="machine">本表は索引である。 機構と出所の正本は各条の card (§2.1〜§2.3) にある。 「出所」は card と逐語一致させ、 「機構の要点」は card の機構 dd の要約である。</p>
 <table>
@@ -175,6 +175,7 @@
     <tr><td><a href="#c14">C14</a></td><td><ins class="delta" data-delta-id="D-2026-09-09-006">規律の 2 面と正本の向き</ins></td><td>Always</td><td><ins class="delta" data-delta-id="D-2026-09-09-006">文書 (design-intent) = 原理と裁定の正本 / データ (rules manifest) = 執行規則の正本 / 両面の drift は歯で RED</ins></td><td><ins class="delta" data-delta-id="D-2026-09-09-006">SPEC v0.4 論点 1</ins></td></tr>
     <tr><td><a href="#c15">C15</a></td><td><ins class="delta" data-delta-id="D-2026-09-09-007">台帳はタスク専用</ins></td><td>Always</td><td><ins class="delta" data-delta-id="D-2026-09-09-007">契約が SRS の要件 id を指す / 規則を変える PR・bead が裁定 id を指す / 参照の欠落は lint で RED</ins></td><td><ins class="delta" data-delta-id="D-2026-09-09-007">SPEC v0.4 論点 2</ins></td></tr>
     <tr><td><a href="#c16">C16</a></td><td><ins class="delta" data-delta-id="D-2026-09-09-008">逸脱は編集の時点で止める</ins></td><td>Always</td><td><ins class="delta" data-delta-id="D-2026-09-09-008">in-loop guard を極性一覧に InLoop で載せる / guard 0 件・PostHoc のみの構成は CI が RED</ins></td><td><ins class="delta" data-delta-id="D-2026-09-09-008">SPEC v0.4.5 U9</ins></td></tr>
+    <tr><td><a href="#c17">C17</a></td><td><ins class="delta" data-delta-id="D-2026-09-18-001">決定はしごを宣言順に通る</ins></td><td>Always</td><td><ins class="delta" data-delta-id="D-2026-09-18-001">要るか → 既に在るか → 標準 library か入っている依存で足りるか → 1 行で書けるか → 最小実装、 最初に成立した段で止まる / 機構を足す提案は先に消すものを名指す / 機械の面は lens の過剰設計 5 観点と便の規模の record</ins></td><td><ins class="delta" data-delta-id="D-2026-09-18-001">ADR-0044</ins></td></tr>
     <tr><td><a href="#a1">A1</a></td><td>3 クラスの操作</td><td>Ask-first</td><td><del class="delta" data-delta-id="D-2026-09-09-002" data-delta-superseded-by="D-2026-09-09-002">relay 印 (C7)</del><ins class="delta" data-delta-id="D-2026-09-09-002">C7 の対話面 (R-C7-1) を通した承認 / approval event に記帳</ins></td><td><del class="delta" data-delta-id="D-2026-09-09-002" data-delta-superseded-by="D-2026-09-09-002">SPEC §2 (裁定 id なし)</del><ins class="delta" data-delta-id="D-2026-09-09-002">SPEC §2 (裁定 id なし)・ADR-0003</ins></td></tr>
     <tr><td><a href="#a2">A2</a></td><td>憲法条文の改訂と C4 / C13 の閾値変更</td><td>Ask-first</td><td>利益の grill 検証を前置 → user 裁定 (裁定 id)</td><td>論点 2</td></tr>
     <tr><td><a href="#a3">A3</a></td><td>依存 OSS の追加・削除</td><td>Ask-first</td><td><ins class="delta" data-delta-id="D-2026-09-09-011">C7 の対話面 (R-C7-1) を通した承認 / </ins>C13 の手続き</td><td>SPEC §2 (裁定 id なし)・論点 3・4<ins class="delta" data-delta-id="D-2026-09-09-011">・ADR-0005</ins></td></tr>
@@ -187,7 +188,7 @@
 </table>
 
 <section id="s2-1-always">
-<h3>§2.1 Always — いつも守る (C1〜C16)</h3>
+<h3>§2.1 Always — いつも守る (C1〜C17)</h3>
 <p class="section-essence" data-audience="human">例外なく常に守る 16 条です。 規則・経路・状態を「1 つ」に閉じ、 大きさと消費と依存に予算を置き、 失敗と値の出所を型で扱い、 歯は Rust の test だけにします。 規律は文書とデータの 2 面で持ち、 台帳はタスク専用で、 仕様からの逸脱は編集の時点で止めます。</p>
 
 <section class="req" id="c1" data-audience="human">
@@ -476,6 +477,22 @@
     </div>
   </details>
 </section>
+
+<section class="req" id="c17" data-audience="human">
+  <div class="req__card"><span class="badge badge--req">C17</span> <span class="req__ears req__ears--event">Event-Driven</span> <strong><ins class="delta" data-delta-id="D-2026-09-18-001">決定はしごを宣言順に通る</ins></strong></div>
+  <p class="req__essence"><ins class="delta" data-delta-id="D-2026-09-18-001">何かを変えるとき、 先に「要るか」「既に在るか」「標準 library か入っている依存で足りるか」「1 行で書けるか」を順に問い、 最初に成立した段で止めます。 走査・record・rules 行・機構を足す提案は、 先に何を消すかを名指します。 これは器の設計と、 器を作る席の提案の両方に当てます。</ins></p>
+  <details class="req__machine" data-audience="machine">
+    <summary>normative (machine)</summary>
+    <div class="req__normative">
+      <p class="ears" data-ears-pattern="event-driven"><ins class="delta" data-delta-id="D-2026-09-18-001"><span class="ears-id">C17</span>: WHEN a change is proposed or implemented, scribe2 <span class="ears-shall">SHALL</span> pass the decision ladder in declaration order (needed at all, already exists, standard library or an existing dependency suffices, one line, minimal implementation), <span class="ears-shall">SHALL</span> stop at the first rung that holds, and <span class="ears-shall">SHALL</span> name what is removed before adding a scanner, record, rules row or mechanism.</ins></p>
+      <dl>
+        <dt>機構 (型 / lint / CI)</dt>
+        <dd><ins class="delta" data-delta-id="D-2026-09-18-001">機械の面は既に在るものを使い、 足さない: 審査 (lens) の findings の閉じた category が持つ過剰設計 5 観点 (delete / stdlib / native / yagni / shrink) と、 便の規模を残す record (size / files / lines / pub symbols)。 段の宣言と「消すものの名指し」は審査の散文判断であり、 CI は拒まない (検出線の型・C12.4)。 段の順序は本条の宣言順が正本で、 別の場所に順序の散文を持たない (C2)。</ins></dd>
+        <dt>出所</dt><dd><ins class="delta" data-delta-id="D-2026-09-18-001">ADR-0044 (user 裁定 2026-09-18・RESEARCH-ponytail 2026-09-13)</ins></dd>
+      </dl>
+    </div>
+  </details>
+</section>
 </section>
 
 <section id="s2-2-askfirst">
@@ -676,7 +693,7 @@
   <li>改訂 (2026-09-09): <a href="../decisions/ADR-0003-constitution-v1-abandon-rewrite.html">ADR-0003</a> (user 裁定・v1 完全放棄) が C7 / A1 / C8 / A4 / N4 を書き換えた。 旧文は delta marker (<code>data-delta-id</code> D-2026-09-09-001〜005・009〜010) で本文に残す。 C14 / C15 / C16 (D-2026-09-09-006〜008) は SPEC v0.4 / v0.4.5 で user 裁定済み (2026-09-08 / 2026-09-09) の条文を逐語で写したものであり、 ADR-0003 の決定ではない。 本 file の version 0.4.6 は SPEC v0.4.6 に追随する。 §2 の一覧表の C14〜C16 行は「出所」に SPEC の論点番号を持つ。</li>
   <li>改訂 (2026-09-09・A3): <a href="../decisions/ADR-0005-a3-approval-surface-c7.html">ADR-0005</a> (user 裁定) が <a href="#a3">A3</a> の承認経路を C7 の対話面へ揃えた。 ADR-0003 §2.1 の決定 (対話面は 1 つ・identity は rules 行) を A1 と同形で A3 へ適用した是正であり、 新しい決定ではない。 旧文は delta marker (<code>data-delta-id</code> D-2026-09-09-011) で本文に残す。 C13 の手続き (予算の範囲・compile 時間の実測差) は変えていない。</li>
   <li>用語: canonical 名は <code>design-intent/vocabulary.yaml</code> (P-5)。 本文の <span class="term" data-term="席">席</span> / <span class="term" data-term="口座">口座</span> / <span class="term" data-term="歯">歯</span> / <span class="term" data-term="検出線">検出線</span> / <span class="term" data-term="器">器</span> 等はそこで定義する。</li>
-  <li>段の対応: SPEC の「Always / Ask-first / Never」は folio constitution の 3 tier (いつも守る / 変える前に確認 / 絶対にやらない) と 1 対 1 に対応する。 条 id (C1〜C16 / A1〜A4 / N1〜N4) は SPEC と裁定文書の表記を逐語で維持する。</li>
+  <li>段の対応: SPEC の「Always / Ask-first / Never」は folio constitution の 3 tier (いつも守る / 変える前に確認 / 絶対にやらない) と 1 対 1 に対応する。 条 id (C1〜C17 / A1〜A4 / N1〜N4) は SPEC と裁定文書の表記を逐語で維持する (C17 は ADR-0044 で追加)。</li>
 </ul>
 </section>
 
