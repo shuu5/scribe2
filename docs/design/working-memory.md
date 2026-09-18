@@ -177,7 +177,7 @@ AC8 の確認（SRS の FR23 の検証手法は I = 目視確認・2 つの開�
 | 1 | (g) planner の雛形 +4 行（dialogue-surface §7） | S | ADR-0032 | `seat/brief/planner.txt` / `hook_brief_planner` snap |
 | 2 | (b) `[DIRECTIVE-REVIEW]` + rules 行 `directive.review_after_days` | S | (a) | `seat/rebrief.rs` / `rules/*` / snap |
 | 2 | (d) hooks 4 面 + PreToolUse Skill | M | (c)・.303 / .304 と `hooks/hooks.json` で直列 | `hooks/hooks.json` / `hook/mod.rs`（event 名の enum）/ `+hook/prompt_expansion.rs`（新）/ `polarity.rs` + 極性 snap / `tests/e2e/hook.rs` |
-| 3 | (e) 置き場を state dir へ + supersede + doctor 行 | M | SRS FR23 改訂・(d) | `seat/externalize.rs` / `seat/consume.rs` / `seat/tick.rs`（`--wm-dir` の撤去）/ `main.rs`（doctor 欄）/ snap |
+| 3 | (e) 置き場を state dir へ + supersede + doctor 行 | M | SRS FR23 改訂・(d) | `seat/externalize.rs` / `seat/consume.rs` / 管理 tick の module〔削除済み〕（`--wm-dir` の撤去）/ `main.rs`（doctor 欄）/ snap |
 | 3 | (h) skills 2 本の縮小 | docs | (a)(b)(c)(d) | `skills/*/SKILL.md` |
 | 3 | (i) global の痩身（別 repo） | 外 | (g)(h) | — |
 

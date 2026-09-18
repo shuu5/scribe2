@@ -273,10 +273,10 @@ pub(super) fn before_deadline(now: Instant, deadline: Option<Instant>) -> bool {
     deadline.is_some_and(|at| now < at)
 }
 
-/// 起動を `inject.jsonl` に 1 行記録する（`who=seat-launch`・`what` は tick の判定行と同じ `decision=inject … kind=launch`
-/// の形＝tick の立て直しの入口 (1) が「直近の注入」として読む・`when=launch`）。**置き場へ書けない周も結果を変えない**。
+/// 起動を `inject.jsonl` に 1 行記録する（`who=seat-launch`・`what` は `decision=inject … kind=launch` の形・
+/// `when=launch`）。**置き場へ書けない周も結果を変えない**。
 fn record_launch(request: &Launch, label: &str, started: Instant) {
-    let kind = crate::seat::tick::InjectKind::Launch.as_str();
+    let kind = super::KIND_LAUNCH;
     let what = format!("decision=inject target={} kind={kind} account={label}", sanitize_target(request.target));
     let entry = InjectionRecord {
         schema: SCHEMA,

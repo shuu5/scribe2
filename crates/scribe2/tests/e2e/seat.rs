@@ -17,11 +17,10 @@
 // flip-check: moved s2-07l.361
 
 mod account;
-mod cycle;
+mod inject;
 mod launch;
 mod register;
 mod rules;
-mod tick;
 mod wm;
 
 use self::wm::rebrief_forms;
@@ -34,10 +33,7 @@ use std::thread::sleep;
 use std::time::{Duration, Instant, SystemTime};
 use vessel::cli_outcome::{RC_OK, RC_REFUSED};
 use vessel::name::NAME;
-use vessel::rules::manifest::Manifest;
-use vessel::seat::cycle::pace_of;
 use vessel::seat::inject::tick_path;
-use vessel::seat::meter::{cap_of, window_of};
 
 /// binary の path。
 fn bin() -> &'static str {
@@ -214,6 +210,26 @@ const PROMPT_WAIT: Duration = Duration::from_secs(60);
 // 1 本に連結すると seat 面の契約が全部この 1 file で交差する（実測 2026-09-15: 4 便が互いに当たり同時に
 // 出せるのが 2 便）。面を触る契約だけがその面の file に当たる形にする（pipe の外形と同じ割り方）。
 
+/// 席の自律機能の口は**もう無い**（ADR-0045 §2 (2)・`s2-07l.479.1`）: 管理 tick・作り直しの cycle・
+/// 打刻の heartbeat・context の計測 meter は未知の第 1 token として使い方で断られ（rc 1・stdout 0 byte）、
+/// 使い方の 1 行にもその名が出ない。残る口（register / launch / inject）は従来どおり使い方に在る。
+///
+/// **消えたことを測る歯**である（base では 4 つとも自分の口として動くので RED）。
+#[test]
+fn seat_autonomy_subcommands_are_gone_from_the_usage() {
+    let usage = stderr_of(&run_seat(&[]));
+    for gone in ["meter", "heartbeat", "tick", "cycle"] {
+        let out = run_seat(&[gone, "--target", "s:w"]);
+        assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "{gone}: 使い方で断る: {}", stderr_of(&out));
+        assert!(stdout_of(&out).is_empty(), "{gone}: stdout 0 byte");
+        assert!(stderr_of(&out).starts_with("usage: seat "), "{gone}: 使い方 1 行: {}", stderr_of(&out));
+        assert!(!usage.contains(&format!("|{gone} ")), "{gone} は使い方に出ない: {usage}");
+    }
+    for kept in ["register", "launch", "inject"] {
+        assert!(usage.contains(&format!("{kept} --")), "{kept} は使い方に残る: {usage}");
+    }
+}
+
 /// `seat` の使い方（usage 1 行・全 subcommand）を snapshot に固定する（C12.5）。
 #[test]
 fn seat_usage_external_form() {
@@ -246,76 +262,6 @@ fn seat_doctor_external_form() {
 }
 
 // ─────────────────── heartbeat / tick / cycle の共有 fixture ───────────────────
-
-/// 入力欄が空の pane（**idle に見える字面**。busy / idle は打刻で与える＝字面は判定に効かない）。
-const IDLE_PANE: &str = "❯ \n  10% 100k/1M Opus 5\n";
-/// `/clear` が届いて**作り直された直後**の実席（2026-09-11・匿名化済み）: banner 3 行の下に
-/// **消費済みの echo `❯ /clear`**（行頭・col 0）が残り、その直下に空の新 prompt と statusline。
-///
-/// 「探索域に `/clear` の字面が無い」で見る作り直し確認は、この echo が prompt の直上に
-/// **必ず**残るので構造的に偽のまま固定され、復元を送らずに席を空のまま残す（bd `s2-07l.96`）。
-const REBUILT_PANE: &str = concat!(
-    " ▐▛███▛█   Claude Code v2.1.268\n",
-    "▝▜██████▀  Fable 5.1 with high effort · Claude Max\n",
-    "  ▝▝ ▝▝    /…/repo · /rc\n",
-    "❯ /clear\n",
-    "────────────────────────────────────────\n",
-    "❯\u{a0} \n",
-    "────────────────────────────────────────\n",
-    "  user@host (user@example.com)  repo\n",
-    "  Fable 5.1 [high] 5h:41%(2h8m) 7d:21%(6d5h)\n",
-    "  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 1 agent\n",
-);
-/// `seat.tick_stale_s` の宣言値（`rules/manifest.toml`）。歯はこの値の**両側**を撃つ。
-const STALE_S: u64 = 2400;
-/// 判定行の context の列（fixture の statusline は 10% / 19%）。
-const CTX_10: &str = " context=10";
-
-/// spinner の字面を持つ pane を使用率だけ変えて組む（cap = 60 の**両側**を撃つための fixture）。
-fn busy_pane_at(pct: u64) -> String {
-    format!(
-        "✻ Sublimating… (2m 3s · ↓ 4.1k tokens)\n\
-         ────────────────────────────────────────\n\
-         ❯\u{a0}\n\
-         ────────────────────────────────────────\n\
-         \x20 user@host (user@example.com)  scribe2  main\n\
-         \x20 {pct}% {}k/1M Fable 5.1 [high] 5h:10%(4h22m) 7d:15%(6d8h)\n\
-         \x20 ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 1 agent\n",
-        pct.saturating_mul(10)
-    )
-}
-/// 歯が `--rules` で渡す**短い**確認上限（秒）。宣言値（[`SETTLE_S`]）では確認できない周の歯が
-/// 1 本 30 秒かかり、suite の壁時計の大半をそれが占めていた（実測 2026-09-12: 10 本で 300 s）。
-/// 分岐は同じで、縮むのは待ちだけである（`s2-07l.151`）。
-const FAST_SETTLE_S: u64 = 2;
-/// 同上（周期・ミリ秒）。
-const FAST_POLL_MS: u64 = 100;
-
-/// cycle の確認の刻みだけを宣言する manifest の字面（`--rules` に渡す fixture）。
-///
-/// 他の行は持たない＝`seat` の他の閾値（`seat.tick_stale_s` / `seat.cycle_lock_ttl_s` /
-/// `seat.context_*`）は埋め込みのまま引かれる（読み口が別・[`vessel::seat::cycle::pace_of`] だけが
-/// この file を読む）。`enabled` を引数に取るのは、不発効の行を「無い」と同じに倒す側の歯（負例）を
-/// 同じ字面の組で作るためである。
-fn pace_manifest(settle_s: u64, poll_ms: u64, enabled: bool) -> String {
-    format!(
-        "schema = 1\n\n\
-         [[rule]]\nid = \"seat.cycle_settle_s\"\nkind = \"SeatCycleSettleS\"\nvalue = {settle_s}\n\
-         enabled = {enabled}\nruling = \"user 2026-09-12T12:08Z\"\nruled_at = \"2026-09-12\"\n\n\
-         [[rule]]\nid = \"seat.cycle_poll_ms\"\nkind = \"SeatCyclePollMs\"\nvalue = {poll_ms}\n\
-         enabled = {enabled}\nruling = \"user 2026-09-12T12:08Z\"\nruled_at = \"2026-09-12\"\n"
-    )
-}
-
-/// 上の fixture を `dir/rules.toml` へ書き、`--rules` に渡す path を返す。
-fn pace_rules(dir: &Path, settle_s: u64, poll_ms: u64) -> String {
-    fixture(dir, "rules.toml", &pace_manifest(settle_s, poll_ms, true))
-}
-
-/// 歯の既定の刻み（[`FAST_SETTLE_S`] / [`FAST_POLL_MS`]）を書いて path を返す。
-fn fast_rules(dir: &Path) -> String {
-    pace_rules(dir, FAST_SETTLE_S, FAST_POLL_MS)
-}
 
 /// file の mtime を `secs` 秒だけ過去へ倒す。
 ///
@@ -350,24 +296,6 @@ fn wm_file(dir: &Path, name: &str, seat: &str) -> PathBuf {
     path
 }
 
-/// 退避物**ではない** file を 3 つ置く（数えたら `/clear` の根拠が水増しされる形）。
-///
-/// 名前の前置きが違う `.md`／`.consumed.md`／`seat:` が frontmatter でなく**本文**に在る WM。
-///
-/// ★前置きが違う decoy は **18 文字以上の長い名前**にする。短い名前（旧 `notes.md` = 8 文字）
-/// だと前置きの条件を外す変異が長さの条件（最短形 18 文字）で偶然落ちるので、前置きの歯が
-/// 空虚になる——長さの条件は負例 1 本（`seat_tick_ignores_short_wm_like_names`）で単独に測る。
-fn wm_decoys(dir: &Path, seat: &str) {
-    wm_file(dir, "session-notes-archive-2026.md", seat);
-    wm_file(dir, "working-memory.old.consumed.md", seat);
-    // frontmatter を持たず、**本文の行頭**に名乗りが在る形（anchor を外すと拾ってしまう）。
-    fs::write(
-        dir.join("working-memory.body.md"),
-        format!("# 見出し\n\nseat: {seat}\n"),
-    )
-    .ok();
-}
-
 /// 席の置き場（`<state>/seat/<潰した target>/`）。
 fn seat_dir_of(state: &Path, target: &str) -> PathBuf {
     state.join("seat").join(target)
@@ -388,147 +316,15 @@ fn unix_now() -> u64 {
 /// 席の状態の fixture（`<seat dir>/state.jsonl`・hook の打刻の代わりに置く）。
 #[derive(Clone, Copy)]
 enum StateFix {
-    /// file を置かない（hook が載っていない席）。
-    Absent,
-    /// file の位置に dir を置く（読めない形）。
-    Unreadable,
     /// 最終行が Busy（`age_s` 秒前の `UserPromptSubmit`）。
     Busy { age_s: u64 },
     /// 最終行が Idle（`Stop`）。
     Idle,
 }
 
-/// 打刻 file の path（契約の字面から組む）。
-fn state_file(seat: &Path) -> PathBuf {
-    seat.join("state.jsonl")
-}
-
-/// fixture を置く。
-#[expect(
-    clippy::expect_used,
-    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
-)]
-fn write_state(seat: &Path, fix: StateFix) {
-    fs::create_dir_all(seat).expect("seat dir を作れる");
-    let body = match fix {
-        StateFix::Absent => return,
-        StateFix::Unreadable => {
-            fs::create_dir_all(state_file(seat)).expect("state.jsonl の位置に dir を置ける");
-            return;
-        }
-        StateFix::Busy { age_s } => {
-            stamp_line("busy", "UserPromptSubmit", unix_now().saturating_sub(age_s), "sid-fix")
-        }
-        StateFix::Idle => stamp_line("idle", "Stop", unix_now(), "sid-fix"),
-    };
-    fs::write(state_file(seat), format!("{body}\n")).expect("打刻を置ける");
-}
-
 /// Idle の打刻を置く（tick / cycle が状態の門を通る周の fixture）。
 fn stamp_idle(state: &Path, target: &str) {
     write_state(&seat_dir_of(state, target), StateFix::Idle);
-}
-
-/// 判定行の state の列（`state=<値> event=<出所|none>`）。
-const ST_IDLE: &str = " state=idle event=Stop";
-/// 同上（Busy・閾値の内側）。
-const ST_BUSY: &str = " state=busy event=UserPromptSubmit";
-/// 同上（Busy が閾値より古い）。
-const ST_STALE: &str = " state=stale event=UserPromptSubmit";
-/// 同上（打刻 file なし）。
-const ST_MISSING: &str = " state=missing event=none";
-/// 同上（読めない）。
-const ST_UNREADABLE: &str = " state=unreadable event=none";
-
-/// 打刻の成功行と tick の記録の末尾に載る**置き場の出所と path**（契約の字面から組む）。
-/// path は行末（空白や ` source=` を含む path でも出所を偽れない）。
-fn provenance(state: &Path, source: &str) -> String {
-    format!(" source={source} state_dir={}", state.display())
-}
-
-/// 成功行の `state_dir=` の値を切り出す（行末までの全部が path）。
-fn state_dir_in(line: &str) -> Option<PathBuf> {
-    line.split_once(" state_dir=")
-        .map(|(_, path)| PathBuf::from(path))
-}
-
-/// PATH の先頭に「呼ばれたら印を残して失敗する tmux」を置いて `seat` を 1 回撃つ。
-///
-/// 「1 key も送らない」「tmux を叩かない」は**触れたら分かる形**でしか測れない: 存在しない
-/// socket を渡すだけだと、tmux を撃って失敗した周と、そもそも撃たなかった周が同じ結果になる。
-#[expect(
-    clippy::expect_used,
-    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
-)]
-fn run_seat_probed(dir: &Path, args: &[&str]) -> (Output, bool) {
-    let bin_dir = dir.join("bin");
-    fs::create_dir_all(&bin_dir).expect("shim の dir を作れる");
-    let mark = dir.join("tmux-called");
-    let shim = bin_dir.join("tmux");
-    fs::write(
-        &shim,
-        format!("#!/bin/sh\necho called >> '{}'\nexit 1\n", mark.display()),
-    )
-    .expect("shim を書ける");
-    fs::set_permissions(&shim, fs::Permissions::from_mode(0o755)).expect("shim に実行権を付ける");
-    let path = format!(
-        "{}:{}",
-        bin_dir.display(),
-        std::env::var("PATH").unwrap_or_default()
-    );
-    let out = Command::new(bin())
-        .arg("seat")
-        .args(args)
-        .env("PATH", path)
-        .output()
-        .expect("binary を起動できる");
-    (out, mark.exists())
-}
-
-/// cwd を指定して `seat` を 1 回撃つ（置き場を git 設定から解く経路を測る）。
-#[expect(
-    clippy::expect_used,
-    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
-)]
-fn run_seat_in(cwd: &Path, args: &[&str]) -> Output {
-    Command::new(bin())
-        .arg("seat")
-        .args(args)
-        .current_dir(cwd)
-        .output()
-        .expect("binary を起動できる")
-}
-
-/// `/clear` を受けたら**画面を作り直す** fake な席を独立 socket に立てる。
-///
-/// 実際の席は `/clear` で pane を消すが `sh` は消さない。`sh` のままだと「作り直せた」を
-/// 測る歯が、確認をどう実装しても通る（実測: 確認を常に真へ倒す変異が全歯 GREEN で生存）。
-/// 受け取った行は `log` へ 1 行ずつ積むので、**送った順序は pane の描画でなく席が受けた行**で
-/// 測れる。`mute_after_clear` の席は作り直した後に echo を止める＝**作り直しは確認できるが
-/// 復元の送達は確認できない**周（`restore-unconfirmed`）を作る。
-/// 偽の席が hook の代わりに置く打刻の**時刻**（`s2-07l.112`）。
-#[derive(Clone, Copy)]
-enum FakeStamp {
-    /// いま（送達 ts 以後＝証拠になる）。
-    Now,
-    /// 100 秒前（送達 ts より前＝古い打刻・証拠にならない）。
-    Old,
-    /// 打たない（hook が死んだ・載っていない席の形）。
-    Never,
-}
-
-/// 偽の席が打刻を 1 行 append する shell 断片（**契約の字面から**組む・設計 seat-state.md §2）。
-/// [`FakeStamp::Never`] は何もしない `:`。
-fn stamp_cmd(state_file: &Path, state: &str, event: &str, when: FakeStamp) -> String {
-    let ts = match when {
-        FakeStamp::Now => "$(date +%s)",
-        FakeStamp::Old => "$(( $(date +%s) - 100 ))",
-        FakeStamp::Never => return ":".to_owned(),
-    };
-    format!(
-        "printf '{{\"schema\":1,\"state\":\"{state}\",\"event\":\"{event}\",\"ts\":%s,\"sid\":\"fake\"}}\\n' \"{ts}\" >> '{}'",
-        state_file.display()
-    )
 }
 
 /// `/clear` を受けると画面を消して echo を描き直し、hook の代わりに `SessionStart` を `on_clear` の
@@ -596,96 +392,74 @@ fn wait_prompt(socket: &str, name: &str) -> bool {
     false
 }
 
-/// tick の 1 組。**先に立たない条件だけが違う**——後ろの条件はどの組でも立たないので、
-/// 順序が入れ替われば別の理由が出る（理由の字面が順序の証拠になる）。
-struct TickCase {
-    /// 期待する理由。
-    reason: &'static str,
-    /// 打刻を何秒前に置くか（`None` = 置かない＝stale）。
-    beat_age_s: Option<u64>,
-    /// pane の本文（`None` = 本文を置かない＝読めない）。
-    pane: Option<&'static str>,
-    /// 退避物が名乗る席（`None` = 退避物の dir ごと無い＝読めない）。
-    wm_seat: Option<&'static str>,
-    /// pane を `--capture-file` で渡すか（`false` = tmux 経路＝shim に当たる）。
-    via_file: bool,
-    /// この組で tmux を撃つはずか。
-    tmux: bool,
-    /// 判定行の末尾に載る context（`" context=<pct>"` / `" context=unmeasured reason=<語>"` /
-    /// pane を取得しない周は `""`＝評価していない）。
-    context: &'static str,
-    /// 席の状態の fixture（打刻）。
-    stamp: StateFix,
-    /// 判定行の末尾に載る state の列（fresh で読まない周は `""`）。
-    state: &'static str,
+/// 偽の席が打刻を 1 行 append する shell 断片（**契約の字面から**組む・設計 seat-state.md §2）。
+/// [`FakeStamp::Never`] は何もしない `:`。
+fn stamp_cmd(state_file: &Path, state: &str, event: &str, when: FakeStamp) -> String {
+    let ts = match when {
+        FakeStamp::Now => "$(date +%s)",
+        FakeStamp::Never => return ":".to_owned(),
+    };
+    format!(
+        "printf '{{\"schema\":1,\"state\":\"{state}\",\"event\":\"{event}\",\"ts\":%s,\"sid\":\"fake\"}}\\n' \"{ts}\" >> '{}'",
+        state_file.display()
+    )
 }
 
-/// 1 組の fixture を組む。**どの組も TTL 内の lock を置く**＝cycle は評価されない
-/// （裁定 (b) の「それ以外の周は評価しない」側で、判定 1 行だけを測る）。
+/// 打刻 file の path（契約の字面から組む）。
+fn state_file(seat: &Path) -> PathBuf {
+    seat.join("state.jsonl")
+}
+
+/// fixture を置く。
 #[expect(
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
-fn prepare_tick_case(dir: &Path, case: &TickCase, target: &str) -> PathBuf {
-    let state = dir.join("state");
-    let seat = seat_dir_of(&state, target);
-    fs::create_dir_all(&seat).expect("seat dir を作れる");
-    fs::write(seat.join("cycle.lock"), "{\"pid\":1,\"deadline\":0}\n").expect("lock を置ける");
-    if let Some(age) = case.beat_age_s {
-        let beat = seat.join("heartbeat");
-        fs::write(&beat, "").expect("打刻を置ける");
-        backdate(&beat, age);
-    }
-    if let Some(seat_name) = case.wm_seat {
-        let wm = dir.join("wm");
-        wm_file(&wm, "working-memory.parked.md", seat_name);
-        wm_decoys(&wm, target);
-    }
-    if let Some(body) = case.pane {
-        fs::write(dir.join("pane.txt"), body).expect("pane fixture を置ける");
-    }
-    write_state(&seat, case.stamp);
-    state
+fn write_state(seat: &Path, fix: StateFix) {
+    fs::create_dir_all(seat).expect("seat dir を作れる");
+    let body = match fix {
+        StateFix::Busy { age_s } => {
+            stamp_line("busy", "UserPromptSubmit", unix_now().saturating_sub(age_s), "sid-fix")
+        }
+        StateFix::Idle => stamp_line("idle", "Stop", unix_now(), "sid-fix"),
+    };
+    fs::write(state_file(seat), format!("{body}\n")).expect("打刻を置ける");
 }
 
-/// 1 組の判定を見る。
-fn assert_tick_case(out: &Output, touched: bool, case: &TickCase, at: usize, state: &Path) {
-    let (reason, context, stamped) = (case.reason, case.context, case.state);
-    assert_eq!(rc_of(out), i32::from(RC_OK), "組 {at}: stderr={}", stderr_of(out));
-    assert_eq!(
-        stdout_of(out),
-        format!(
-            "seat: tick decision=noop reason={reason}{context}{stamped}{}\n",
-            provenance(state, "flag")
-        ),
-        "組 {at}"
-    );
-    assert_eq!(
-        touched, case.tmux,
-        "組 {at}（{reason}）: tmux を撃つか＝{}（撃つ組が在ることで、撃たない組の測定が空虚でない）",
-        case.tmux
-    );
+/// 打刻の成功行と tick の記録の末尾に載る**置き場の出所と path**（契約の字面から組む）。
+/// path は行末（空白や ` source=` を含む path でも出所を偽れない）。
+fn provenance(state: &Path, source: &str) -> String {
+    format!(" source={source} state_dir={}", state.display())
 }
 
-/// tick を 1 組ぶん撃つ（`seat_tick_noop_reasons_in_fixed_order` と同じ引数の組み方）。
-fn run_tick_case(dir: &Path, case: &TickCase, target: &str, state: &Path) -> (Output, bool) {
-    let (wm_s, pane_s) = (
-        dir.join("wm").display().to_string(),
-        dir.join("pane.txt").display().to_string(),
-    );
-    let (sock_s, state_s) = (
-        dir.join("absent-sock").display().to_string(),
-        state.display().to_string(),
-    );
-    let mut args = vec![
-        "tick", "--target", target, "--wm-dir", &wm_s, "--tmux-socket", &sock_s,
-        "--state-dir", &state_s,
-    ];
-    if case.via_file {
-        args.push("--capture-file");
-        args.push(&pane_s);
-    }
-    run_seat_probed(dir, &args)
+/// cwd を指定して `seat` を 1 回撃つ（置き場を git 設定から解く経路を測る）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn run_seat_in(cwd: &Path, args: &[&str]) -> Output {
+    Command::new(bin())
+        .arg("seat")
+        .args(args)
+        .current_dir(cwd)
+        .output()
+        .expect("binary を起動できる")
+}
+
+/// `/clear` を受けたら**画面を作り直す** fake な席を独立 socket に立てる。
+///
+/// 実際の席は `/clear` で pane を消すが `sh` は消さない。`sh` のままだと「作り直せた」を
+/// 測る歯が、確認をどう実装しても通る（実測: 確認を常に真へ倒す変異が全歯 GREEN で生存）。
+/// 受け取った行は `log` へ 1 行ずつ積むので、**送った順序は pane の描画でなく席が受けた行**で
+/// 測れる。`mute_after_clear` の席は作り直した後に echo を止める＝**作り直しは確認できるが
+/// 復元の送達は確認できない**周（`restore-unconfirmed`）を作る。
+/// 偽の席が hook の代わりに置く打刻の**時刻**（`s2-07l.112`）。
+#[derive(Clone, Copy)]
+enum FakeStamp {
+    /// いま（送達 ts 以後＝証拠になる）。
+    Now,
+    /// 打たない（hook が死んだ・載っていない席の形）。
+    Never,
 }
 
 /// guard が drop されたら独立 socket の server は終わっている。
@@ -721,139 +495,11 @@ fn seat_isolated_session_is_torn_down_when_guard_drops() {
     fs::remove_dir_all(&dir).ok();
 }
 
-/// cycle が **1 key も送らずに断る** 1 組。
-struct GateCase {
-    /// 期待する理由。
-    reason: &'static str,
-    /// 退避物が名乗る席（`None` = 退避物の dir ごと無い＝読めない）。
-    wm_seat: Option<&'static str>,
-    /// pane の本文（`None` = 本文を置かない＝読めない）。
-    pane: Option<&'static str>,
-    /// 置き場の位置に file を置く（dir を作れない）。
-    broken_state: bool,
-    /// 席の状態の fixture（打刻）。置き場が壊れている組では置かない。
-    stamp: StateFix,
-}
-
-/// 1 組の fixture を組む。
-#[expect(
-    clippy::expect_used,
-    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
-)]
-fn prepare_gate_case(dir: &Path, case: &GateCase, target: &str) -> PathBuf {
-    let state = dir.join("state");
-    fs::create_dir_all(state.join("seat")).expect("state dir を作れる");
-    if case.broken_state {
-        // 置き場の位置に file が在ると dir を作れない（error kind は競合と同じ AlreadyExists）。
-        fs::write(seat_dir_of(&state, target), "").expect("邪魔な file を置ける");
-    }
-    let wm = dir.join("wm");
-    // 退避物**ではない** file は、どの組でも「在る」の根拠にならない。
-    wm_decoys(&wm, target);
-    if let Some(seat_name) = case.wm_seat {
-        wm_file(&wm, "working-memory.parked.md", seat_name);
-    }
-    if let Some(body) = case.pane {
-        fs::write(dir.join("pane.txt"), body).expect("pane fixture を置ける");
-    }
-    if !case.broken_state {
-        write_state(&seat_dir_of(&state, target), case.stamp);
-    }
-    state
-}
-
-/// 1 組を撃ち、**送っていない**ことまで見る。
-fn assert_gate_case(dir: &Path, case: &GateCase, target: &str, state: &Path) {
-    let (wm_s, pane_s) = (
-        dir.join("wm").display().to_string(),
-        dir.join("pane.txt").display().to_string(),
-    );
-    let (sock_s, state_s) = (
-        dir.join("absent-sock").display().to_string(),
-        state.display().to_string(),
-    );
-    let wm_arg = if case.wm_seat.is_some() || case.reason != "wm-unreadable" {
-        wm_s
-    } else {
-        dir.join("absent-wm").display().to_string()
-    };
-    let (out, touched) = run_seat_probed(
-        dir,
-        &[
-            "cycle", "--target", target, "--wm-dir", &wm_arg, "--capture-file", &pane_s,
-            "--tmux-socket", &sock_s, "--state-dir", &state_s,
-        ],
-    );
-    let reason = case.reason;
-    assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "{reason}: stdout={}", stdout_of(&out));
-    assert_eq!(stdout_of(&out), "", "{reason}: 断りの周は stdout 0 行");
-    assert_eq!(
-        stderr_of(&out),
-        format!("seat: cycle refused reason={reason}{}\n", provenance(state, "flag")),
-        "置き場が解けた周は断りの行にも 2 語が載る"
-    );
-    assert!(!touched, "{reason}: tmux を 1 度も撃たない＝1 key も送っていない");
-    if !case.broken_state {
-        assert!(
-            !seat_dir_of(state, target).join("cycle.lock").exists(),
-            "{reason}: 断った周も lock を残さない"
-        );
-    }
-}
-
 /// 判定行の `key=value` を 1 つ取り出す（末尾の改行は落とす）。
 fn tick_token(line: &str, key: &str) -> Option<String> {
     line.split_whitespace()
         .find_map(|token| token.strip_prefix(key).and_then(|rest| rest.strip_prefix('=')))
         .map(str::to_owned)
-}
-
-/// cycle を撃ち、`/clear` が席の log（`<dir>/seat.log`）に着いた**後**で pane の写し
-/// （`--capture-file`）を `after` へ差し替えてから結果を待つ。写しは作り直しの確認が周期ごとに
-/// 読み直すので、「送る前は idle・送った後にこの形」の pane を 1 本の file で再現できる。
-/// socket は [`socket_of`]・log は偽の席と同じ path から導く（引数上限・憲法 C4）。
-///
-/// 確認の刻みは `--rules` の fixture（上限 `settle_s` 秒・周期 [`FAST_POLL_MS`]）で渡す: 確認できない
-/// 周の歯は宣言値だと 1 本 30 秒待つ（`s2-07l.151`）。**待つ長さを縮めるだけで分岐は変えない**ので、
-/// 窓の内に証拠が来る側の歯（遅れて打刻する席）は sleep より長い上限を渡す。
-#[expect(
-    clippy::expect_used,
-    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
-)]
-fn cycle_with_pane_after_clear(
-    dir: &Path,
-    name: &str,
-    before: &str,
-    after: &str,
-    settle_s: u64,
-) -> Output {
-    let (socket, log) = (socket_of(dir), dir.join("seat.log"));
-    let (state, wm, pane) = (dir.join("state"), dir.join("wm"), dir.join("pane.txt"));
-    stamp_idle(&state, name);
-    fs::write(&pane, before).expect("pane fixture を置ける");
-    let (wm_s, state_s, pane_s, rules_s) = (
-        wm.display().to_string(),
-        state.display().to_string(),
-        pane.display().to_string(),
-        pace_rules(dir, settle_s, FAST_POLL_MS),
-    );
-    let child = Command::new(bin())
-        .args([
-            "seat", "cycle", "--target", name, "--wm-dir", &wm_s, "--tmux-socket", &socket,
-            "--state-dir", &state_s, "--capture-file", &pane_s, "--rules", &rules_s,
-        ])
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .expect("binary を起動できる");
-    let deadline = Instant::now() + PROMPT_WAIT;
-    while Instant::now() < deadline
-        && !fs::read_to_string(&log).unwrap_or_default().contains("/clear")
-    {
-        sleep(Duration::from_millis(100));
-    }
-    fs::write(&pane, after).expect("pane fixture を差し替えられる");
-    child.wait_with_output().expect("binary の終了を待てる")
 }
 
 /// 記録 1 行の flat JSON から `key` の値を引く（無ければ `None`）。
@@ -966,10 +612,6 @@ fn mutant_e2e_version_flag_prints_name_and_version_on_the_binary() {
 
 // ─────────────────── 口座の歯の共有 fixture（account-autonomy.md §5・`s2-07l.211`） ───────────────────
 
-/// 登録 row の口座（埋め込み manifest の `[[account]]` の 1 つ目・宣言値）。
-const ACCT_SEAT: &str = "a1";
-/// 立て直しの候補（埋め込みの 2 つ目）。
-const ACCT_SPARE: &str = "a2";
 /// 実測行の reset（遠い未来＝どの「いま」でも古くない）。
 const ACCT_RESET: &str = "2099-01-01T05:00:00Z";
 /// 登録を撃った session の sid（打刻から解かれて row に載る）。
@@ -986,46 +628,22 @@ struct AcctPlace {
     /// `--state-dir`。
     state: PathBuf,
     /// `--wm-dir`（空で在る＝走査が 0 件と確かめられる）。
-    wm: PathBuf,
     /// 独立 socket。
     socket: String,
-    /// `--rules` の写しに宣言する `[[account]]` の label 列（既定は tracked の manifest と同じ a1〜a5）。
-    labels: &'static [&'static str],
 }
-
-/// tracked の manifest の `[[account]]`（`--rules` の写しの既定＝埋め込みと同じ宣言）。
-const ACCT_LABELS: &[&str] = &["a1", "a2", "a3", "a4", "a5"];
 
 /// 置き場を 1 つ作る（登録 row の anchor の dir も実在させる＝起動行の `cd` が通る）。
 fn acct_place() -> AcctPlace {
     let dir = tmp();
     let state = dir.join("state");
-    let wm = dir.join("wm");
-    fs::create_dir_all(&wm).ok();
     fs::create_dir_all(dir.join(ACCT_ANCHOR_DIR)).ok();
     let socket = socket_of(&dir);
-    AcctPlace { dir, state, wm, socket, labels: ACCT_LABELS }
+    AcctPlace { dir, state, socket }
 }
 
 /// 登録 row の anchor（置き場の配下の実在する dir・絶対 path）。
 fn acct_anchor(place: &AcctPlace) -> String {
     place.dir.join(ACCT_ANCHOR_DIR).display().to_string()
-}
-
-/// host の写しの形の `--rules`（歯の刻み・計測の上限・`labels` の `[[account]]`）を書いて path を返す。
-fn acct_rules(dir: &Path, labels: &[&str]) -> String {
-    let accounts: String = labels.iter().map(|label| format!("\n[[account]]\nlabel = \"{label}\"\n")).collect();
-    let body = format!(
-        "{}\n[[rule]]\nid = \"fleet.usage_timeout_s\"\nkind = \"UsageTimeoutS\"\nvalue = 30\n\
-         enabled = true\nruling = \"user 2026-09-12T02:01Z\"\nruled_at = \"2026-09-12\"\n{accounts}",
-        pace_manifest(FAST_SETTLE_S, FAST_POLL_MS, true)
-    );
-    fixture(dir, "rules.toml", &body)
-}
-
-/// 席を planner として `seat register` の口で登録する（口座は [`ACCT_SEAT`]）。`launch` は起動の雛形の本文。
-fn acct_register(place: &AcctPlace, target: &str, launch: &str) -> Output {
-    acct_register_as(place, target, ACCT_SEAT, launch)
 }
 
 /// 席を planner として口座 `account` で登録する（打刻の sid を先に置く＝`seat register` の条件）。
@@ -1083,57 +701,9 @@ fn acct_now() -> String {
     vessel::fleet::cli::now_utc()
 }
 
-/// tick の引数（確認の刻みは短い fixture・`pane` が在れば判定はその file・送信は独立 socket）。
-fn acct_args(place: &AcctPlace, target: &str, pane: Option<&str>) -> Vec<String> {
-    let mut args = vec![
-        "tick".to_owned(),
-        "--target".to_owned(),
-        target.to_owned(),
-        "--wm-dir".to_owned(),
-        place.wm.display().to_string(),
-        "--tmux-socket".to_owned(),
-        place.socket.clone(),
-        "--state-dir".to_owned(),
-        place.state.display().to_string(),
-        "--rules".to_owned(),
-        acct_rules(&place.dir, place.labels),
-    ];
-    if let Some(found) = pane {
-        args.extend(["--capture-file".to_owned(), found.to_owned()]);
-    }
-    args
-}
-
-/// tick を 1 回撃つ。
-fn acct_tick(place: &AcctPlace, target: &str, pane: Option<&str>) -> Output {
-    let args = acct_args(place, target, pane);
-    run_seat(&args.iter().map(String::as_str).collect::<Vec<&str>>())
-}
-
-/// PATH の先頭に「呼ばれたら印を残して失敗する tmux」を置いて tick を 1 回撃つ（tmux に触れたかを返す）。
-fn acct_tick_probed(place: &AcctPlace, target: &str, pane: &str) -> (Output, bool) {
-    let args = acct_args(place, target, Some(pane));
-    run_seat_probed(&place.dir, &args.iter().map(String::as_str).collect::<Vec<&str>>())
-}
-
-/// `--capture-file` の判定行（pane は [`IDLE_PANE`]＝context=10）。
-fn acct_line(head: &str, tail: &str, state: &Path) -> String {
-    format!("seat: tick {head}{CTX_10}{tail}{}\n", provenance(state, "flag"))
-}
-
 /// 記録 1 行の文字列の値。
 fn acct_text(line: &str, key: &str) -> Option<String> {
     json_value(line, key).and_then(|value| value.as_str().map(str::to_owned))
-}
-
-/// 席の記録（`tick.jsonl`）のうち `seat inject` の経路が積んだ行の `what`（送った順）。
-fn acct_injected(state: &Path, target: &str) -> Vec<String> {
-    fs::read_to_string(tick_file(state, target))
-        .unwrap_or_default()
-        .lines()
-        .filter(|line| acct_text(line, "who").as_deref() == Some("seat-inject"))
-        .filter_map(|line| acct_text(line, "what"))
-        .collect()
 }
 
 /// 席の記録（`tick.jsonl`）のうち注入の経路（`seat-inject`）と立て直しの起動（`seat-cycle`）が積んだ行の `what`（送った順）。
@@ -1155,149 +725,10 @@ fn acct_rows(state: &Path) -> Vec<vessel::fleet::Registration> {
         .collect()
 }
 
-/// `<state>/accounts/<label>/.credentials.json` に期限の遠い読める credential を置く（`fleet usage` の読み先）。
-fn acct_credential(place: &AcctPlace, label: &str) {
-    let dir = place.state.join("accounts").join(label);
-    fs::create_dir_all(&dir).ok();
-    fs::write(
-        dir.join(".credentials.json"),
-        r#"{"claudeAiOauth":{"accessToken":"tok-acct","expiresAt":4102444800000}}"#,
-    )
-    .ok();
-}
-
-/// PATH の先頭（[`run_seat_probed`] の shim の dir）に置く偽 curl（`fleet_usage_` の歯と同じ seam＝計測の子
-/// process）。argv を `curl-args` へ追記で写し、5 時間窓 `pct` の本文と status 200 を返す。
-fn acct_fake_curl(place: &AcctPlace, pct: u64) {
-    let bin = place.dir.join("bin");
-    fs::create_dir_all(&bin).ok();
-    let body = format!(
-        r#"{{"five_hour":{{"utilization":{pct}.0,"resets_at":"{ACCT_RESET}"}},"seven_day":{{"utilization":1.0,"resets_at":"{ACCT_RESET}"}},"limits":[]}}"#
-    );
-    let script = format!(
-        "#!/bin/sh\nprintf '%s\\n' \"$@\" >> '{}'\ncat > /dev/null\nprintf '%s\\n200' '{body}'\n",
-        place.dir.join("curl-args").display()
-    );
-    let curl = bin.join("curl");
-    fs::write(&curl, script).ok();
-    fs::set_permissions(&curl, fs::Permissions::from_mode(0o755)).ok();
-}
-
-/// 偽 curl が呼ばれた回数（口座 1 つにつき `--max-time` が 1 回）。
-fn acct_curl_calls(place: &AcctPlace) -> usize {
-    fs::read_to_string(place.dir.join("curl-args"))
-        .unwrap_or_default()
-        .lines()
-        .filter(|arg| *arg == "--max-time")
-        .count()
-}
-
-/// 立て直しの歯の起動 script（雛形 `sh <dir>/l.sh {account_dir}` で起こす偽の session）を書き、雛形を返す。
-///
-/// script は渡された credential dir を `launched` に写し、prompt を描いて hook の代わりに `SessionStart` を打ち、
-/// 以後は受けた行を `seat.log` に積んで `UserPromptSubmit` → `Stop` を打つ（復元の消費の証拠）。前面は `sh` の
-/// ままなので、立て直した後の周に入口 (3) が立ち続けても (1) が崩れる形を測れる。
-fn acct_launcher(place: &AcctPlace, target: &str) -> String {
-    format!("sh {} {{account_dir}}", acct_launch_script(place, target, "\"$1\""))
-}
-
-/// [`acct_launcher`] の偽の session の script を書き、path を返す。起動時に `words`（sh の語の並び）を 1 語 1 行で
-/// `launched` へ写す（雛形の穴を引数で受ける形は `"$1"`・env で受ける形は `"$CLAUDE_CONFIG_DIR"` など）。
-fn acct_launch_script(place: &AcctPlace, target: &str, words: &str) -> String {
-    let file = state_file(&seat_dir_of(&place.state, target));
-    let script = format!(
-        "printf '%s\\n' {words} >> '{launched}'\nprintf '\u{276f} '\n{start}\n\
-         while read -r line; do printf '%s\\n' \"$line\" >> '{log}'; {busy}; {stop}; printf '\u{276f} '; done\n",
-        launched = place.dir.join("launched").display(),
-        log = place.dir.join("seat.log").display(),
-        start = stamp_cmd(&file, "idle", "SessionStart", FakeStamp::Now),
-        busy = stamp_cmd(&file, "busy", "UserPromptSubmit", FakeStamp::Now),
-        stop = stamp_cmd(&file, "idle", "Stop", FakeStamp::Now),
-    );
-    fixture(&place.dir, "l.sh", &script)
-}
-
-/// 退避の合図を実物の tick で 1 回注入させる（打刻 Busy・口座が閾値以上の fixture が前提）。判定行を返す。
-fn acct_signal(place: &AcctPlace, target: &str) -> String {
-    write_state(&seat_dir_of(&place.state, target), StateFix::Busy { age_s: 0 });
-    stdout_of(&acct_tick(place, target, None))
-}
-
-/// 席が止まった打刻（`Stop`・時刻 `ts`）を打刻 file の末尾に足す。
-fn acct_stop(place: &AcctPlace, target: &str, ts: u64) {
-    let file = state_file(&seat_dir_of(&place.state, target));
-    let mut text = fs::read_to_string(&file).unwrap_or_default();
-    text.push_str(&stamp_line("idle", "Stop", ts, ACCT_SID));
-    text.push('\n');
-    fs::write(&file, text).ok();
-}
-
-/// 退避して止まった席の fixture（登録 row の口座 a1 = 100・候補 a2 = `spare`・実物の tick の退避の合図 → その後の
-/// `Stop`）＝立て直しの入口の (1)(2)。(3) は呼び側が立てる席（shell か否か）で決まる。
-fn acct_parked(place: &AcctPlace, target: &str, launch: &str, spare: u64) {
-    let registered = acct_register(place, target, launch);
-    assert_eq!(rc_of(&registered), i32::from(RC_OK), "stderr={}", stderr_of(&registered));
-    acct_measured(&place.state, ACCT_SEAT, 100, &acct_now());
-    acct_measured(&place.state, ACCT_SPARE, spare, &acct_now());
-    let first = acct_signal(place, target);
-    assert_eq!(tick_token(&first, "kind").as_deref(), Some("externalize"), "1 周目は退避の合図: {first}");
-    acct_stop(place, target, unix_now().saturating_add(1));
-}
-
 /// 立て直しと起動の起動行の前置（`s2-07l.324`・account-lifecycle.md §4）: `cd '<row の anchor>' && ` が agent view の env より
 /// **前**に来る＝`cd … && CLAUDE_CODE_DISABLE_AGENT_VIEW=1 <tail>`。`tail` は前置の後の字面の先頭（雛形か `CLAUDE_CONFIG_DIR=`）。
 fn acct_launch_prefix(anchor: &str, tail: &str) -> String {
     format!("cd '{anchor}' && CLAUDE_CODE_DISABLE_AGENT_VIEW=1 {tail}")
-}
-
-/// 立て直した周の注入: 雛形の穴が選んだ口座の credential dir で埋まって起動が走り、その後に立ち上がった席が復元の
-/// command を受けた（席の記録でも 退避の合図 → 起動 → 復元 の順）。起動行は row の anchor への `cd` → agent view off →
-/// 雛形の順（`s2-07l.324`）。
-fn acct_assert_launched_then_restored(place: &AcctPlace, target: &str) {
-    let spare_dir = place.state.join("accounts").join(ACCT_SPARE);
-    assert_eq!(
-        fs::read_to_string(place.dir.join("launched")).unwrap_or_default(),
-        format!("{}\n", spare_dir.display()),
-        "穴は選んだ口座の credential dir で埋まる"
-    );
-    assert_eq!(
-        fs::read_to_string(place.dir.join("seat.log")).unwrap_or_default(),
-        "/rebrief\n",
-        "立ち上がった席が復元の command を受けた（起動の後）"
-    );
-    let sent = acct_sent(&place.state, target);
-    assert_eq!(sent.len(), 3, "退避の合図・起動・復元の 3 行: {sent:?}");
-    assert!(
-        sent.get(1).is_some_and(|what| what.starts_with(&acct_launch_prefix(&acct_anchor(place), "sh "))),
-        "2 行目は row の anchor への cd と agent view off を前置した起動の雛形: {sent:?}"
-    );
-    assert_eq!(sent.get(2).map(String::as_str), Some("/rebrief"), "3 行目は復元: {sent:?}");
-}
-
-/// 立て直した周の登録 row: `SeatRegistered` が 1 件増え、口座だけが選んだ口座に変わる（他の項目は既存 row から
-/// 写す）。注入の前に cycle-stamp を打つ（再注入の back-off）。
-fn acct_assert_relabelled(place: &AcctPlace, target: &str) {
-    let rows = acct_rows(&place.state);
-    assert_eq!(rows.len(), 2, "SeatRegistered が 1 件増える: {rows:?}");
-    assert_eq!(rows.first().map(|row| row.account.as_str()), Some(ACCT_SEAT));
-    let copied = rows.first().map(|row| vessel::fleet::Registration { account: ACCT_SPARE.to_owned(), ..row.clone() });
-    assert_eq!(rows.last().cloned(), copied, "口座だけが変わり target / sid / launch / anchor / model は既存 row から写す");
-    assert!(seat_dir_of(&place.state, target).join("cycle-stamp").exists(), "立て直しの注入の前に cycle-stamp を打つ");
-}
-
-/// 席が終わった後の shell の prompt（`❯` を持たない・user の bash prompt の形）。
-const ACCT_SHELL_PS1: &str = "user@host:dir$ ";
-
-/// 席が終わって shell へ戻った pane を作る: prompt を [`ACCT_SHELL_PS1`] に替えて画面を消し、`extra`（printf の書式）を
-/// 描いてから prompt を待つ。前面 process は `sh` のまま（入口 (3) は立つ）。描けたかを返す（panic しない）。
-fn acct_shell_prompt(place: &AcctPlace, target: &str, extra: &str) -> bool {
-    let line = format!("PS1='{ACCT_SHELL_PS1}'; printf '\\033[H\\033[2J{extra}'");
-    if !tmux(&place.socket, &["send-keys", "-t", target, "-l", &line]).status.success()
-        || !tmux(&place.socket, &["send-keys", "-t", target, "Enter"]).status.success()
-    {
-        return false;
-    }
-    acct_wait_pane(place, target, |pane| pane.trim_end().ends_with('$') && !pane.contains("PS1="))
 }
 
 /// pane が `ready` を満たすまで待つ（上限 [`PROMPT_WAIT`]）。

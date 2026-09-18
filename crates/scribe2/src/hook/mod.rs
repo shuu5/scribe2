@@ -15,7 +15,6 @@ pub mod command;
 pub mod guard;
 pub mod permission;
 pub mod role_guard;
-pub mod seat_guard;
 pub mod stamp;
 pub mod vessel;
 
@@ -30,7 +29,6 @@ use command::CommandDecision;
 use guard::Decision;
 use permission::PermissionDecision;
 use role_guard::{Operation, RoleDecision, Seat};
-use seat_guard::SeatDecision;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 use vessel::Served;
@@ -50,8 +48,6 @@ const KEY_TOOL: &str = "tool_name";
 const KEY_FILE: &str = "file_path";
 /// payload から拾う key（notebook の編集先）。
 const KEY_NOTEBOOK: &str = "notebook_path";
-/// payload から拾う key（この session の transcript）。
-const KEY_TRANSCRIPT: &str = "transcript_path";
 /// payload から拾う key（`Bash` の command 行・`tool_input` の中）。
 const KEY_TOOL_INPUT: &str = "tool_input";
 /// payload から拾う key（`Bash` の command 行）。
@@ -522,11 +518,6 @@ fn pre_tool_use(hooked: &Hooked, payload: &str, started: Instant) -> Outcome {
         if let Decision::Deny(line) = guard::decide(root, cwd, &git_dir, &tool, path.as_deref()) {
             return denied(hooked, "deny", line, started);
         }
-        let transcript = field(payload, KEY_TRANSCRIPT);
-        let decided = seat_guard::decide(root, cwd, &tool, path.as_deref(), transcript.as_deref());
-        if let Some(outcome) = seat_outcome(&decided, hooked, started) {
-            return outcome;
-        }
     }
     let command = command_of(payload);
     if tool == command::BASH {
@@ -553,24 +544,6 @@ fn denied(hooked: &Hooked, what: &str, line: String, started: Instant) -> Outcom
 fn noted(hooked: &Hooked, what: &str, started: Instant) {
     let emit = Emit { who: EVENT_PRE_TOOL_USE, what, when: "PreToolUse", line: "" };
     let _ = append(hooked.dir, &silent(&emit, hooked, started));
-}
-
-/// seat guard の判定を外形へ写す。止める周だけ `Some`（通す周は次の門へ・**1 byte も書かない**）。
-///
-/// 判定（[`seat_guard::decide`]）と外形をここで分けているのは憲法 C4 の引数上限である
-/// ——1 本に畳むと判定の 5 引数へ記録の 2 引数が乗って上限を超える。
-fn seat_outcome(decided: &SeatDecision, hooked: &Hooked, started: Instant) -> Option<Outcome> {
-    match decided {
-        // 通す 2 つは記録も残さない（hook budget を毎編集ごとの追記で食い潰さない）。
-        SeatDecision::Allow | SeatDecision::Externalize => None,
-        SeatDecision::Deny(line) => Some(denied(hooked, "seat-guard-deny", line.clone(), started)),
-        // **測れない周は通す**。ただし黙って通すと「測れていない」ことが誰にも見えないので
-        // 記録だけ 1 行残す。
-        SeatDecision::Unmeasured(reason) => {
-            noted(hooked, &format!("seat-guard-unmeasured reason={reason}"), started);
-            None
-        }
-    }
 }
 
 /// role guard の判定を外形へ写す（設計 seat-roles.md §4）。

@@ -40,7 +40,7 @@
 
 ## 5. 契機（tick と land の直後）
 
-- **tick**: `seat/tick.rs` の `judge` の列に dispatch の段を 1 つ足す（s2-07l.304 の「hook 集合の軸」と同じ形・置き場は新 module `seat/tick/dispatch.rs`・宣言順の末尾＝席の判定の後）。席の状態と無関係に列を 1 周評価して起こせる便を起こし、`TickDecision` の variant は増やさず record 行に token `dispatch=started:<n>,waiting:<m>` か `dispatch=unmeasured` を 1 つ足す（`account=` の隣・C10）。どの席の tick が撃っても同じ関数で冪等（起こした便は live になり次の周の交差の相手になる）。
+- **tick**: 管理 tick の module〔削除済み〕 の `judge` の列に dispatch の段を 1 つ足す（s2-07l.304 の「hook 集合の軸」と同じ形・置き場は新 module 管理 tick の判定の分岐〔削除済み〕・宣言順の末尾＝席の判定の後）。席の状態と無関係に列を 1 周評価して起こせる便を起こし、`TickDecision` の variant は増やさず record 行に token `dispatch=started:<n>,waiting:<m>` か `dispatch=unmeasured` を 1 つ足す（`account=` の隣・C10）。どの席の tick が撃っても同じ関数で冪等（起こした便は live になり次の周の交差の相手になる）。
 - **land の直後**: `pipe land` が Landed を記帳した直後に同じ関数を 1 周撃つ（着地で交差が解けた便を待たせない）。
 - どちらも同じ 1 関数（dispatch module の turn 関数）を撃つ（C2）。lock は着地の列と同じ store の lock（fleet の store が持つ acquire）を使い、二重起動を防ぐ。
 - **driver の死亡**（`s2-07l.352`・契約 (d)・C9 の便版の driver 側）: `pipe run` / `pipe resume` の process（driver）は入口で `<state_dir>/pipe/<run>/driver` に受付札と同じ本文（pid + 起動時刻・[gate-cost.md](./gate-cost.md) §3.2）を書き、終端で消す。turn 関数は live 便のうち札の所有者が死んでいる便（lock の所有者と同じ probe・`Owner::Dead`）を (a) と同じ引数の `pipe resume` で起こし直し、record token に `resumed:<m>` を足す（`dispatch=started:<n>,resumed:<m>,waiting:<k>`）。札が無い / 読めない便は触らない（測れないを「死んだ」に読み替えない・fail-closed）。schema を広げた便の Landed で古い binary の driver が typed に死ぬ周（NFR4・.160 の座礁 2026-09-15）も次の周に現在の binary で続く＝写し binary の refresh は要らない（走行中の process の code は変わらないので refresh は座礁を防がない）。`base_of_run` の読めなさは typed に呼び手へ返す（C10・「base が無い」と分ける）。
@@ -102,7 +102,7 @@ id = "b"
 title = "契機 — tick の軸 dispatch と pipe land の直後の 1 周（同じ dispatch::turn を撃つ）"
 req = ["FR30"]
 section = "5"
-write-set = ["+crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2/src/seat/tick.rs", "+crates/scribe2/src/seat/tick/dispatch.rs", "crates/scribe2/src/pipe/land.rs", "crates/scribe2/tests/e2e/seat/tick.rs", "crates/scribe2/tests/e2e/pipe/land.rs", ".config/nextest.toml"]
+write-set = ["+crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2/src/pipe/land.rs", "crates/scribe2/tests/e2e/pipe/land.rs", ".config/nextest.toml"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail seat_tick_dispatch_", "cargo nextest run -p scribe2 --no-tests=fail pipe_terminal_dispatch_"]
 size = "S"
 done = "tick が decision=dispatch を記録し、偽 remote の toy repo で land の直後に列が 1 周撃たれる"
@@ -136,7 +136,7 @@ id = "d"
 title = "driver の死亡 — 札の書き・消し、turn 関数の起こし直し（pipe resume）、record token resumed:<m>、base_of_run の typed 化"
 req = ["FR68", "FR14", "FR50"]
 section = "5"
-write-set = ["+crates/scribe2/src/pipe/dispatch.rs", "+crates/scribe2/src/seat/tick/dispatch.rs", "crates/scribe2/src/pipe/cli/run.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/cli/resume.rs", "crates/scribe2/src/pipe/admission.rs", "crates/scribe2/src/pipe/mod.rs", "crates/scribe2/src/pipe/spawn.rs", "crates/scribe2/src/pipe/gate.rs", "crates/scribe2/src/pipe/follow.rs", "crates/scribe2/src/pipe/land.rs", "+crates/scribe2/tests/e2e/pipe/dispatch.rs", "crates/scribe2/tests/e2e/pipe/spawn.rs"]
+write-set = ["+crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2/src/pipe/cli/run.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/cli/resume.rs", "crates/scribe2/src/pipe/admission.rs", "crates/scribe2/src/pipe/mod.rs", "crates/scribe2/src/pipe/spawn.rs", "crates/scribe2/src/pipe/gate.rs", "crates/scribe2/src/pipe/follow.rs", "crates/scribe2/src/pipe/land.rs", "+crates/scribe2/tests/e2e/pipe/dispatch.rs", "crates/scribe2/tests/e2e/pipe/spawn.rs"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_dispatch_driver_"]
 size = "M"
 done = "driver を殺した便に dispatch の 1 周を撃つと pipe resume が 1 回起きて Landed まで通り record に resumed:1、札の無い live 便は起こし直さない"

@@ -16,13 +16,10 @@ pub mod cli;
 pub mod consume;
 pub mod cycle;
 pub mod externalize;
-pub mod heartbeat;
 pub mod inject;
-pub mod meter;
 pub mod rebrief;
 pub mod role;
 pub mod state;
-pub mod tick;
 pub mod wm;
 
 use std::io::Read;
@@ -438,6 +435,11 @@ pub fn int_rule(id: &str) -> Result<u64, RuleRead> {
     int_rule_of(&embedded_manifest()?, id)
 }
 
+/// 口座の逼迫度の閾値（使用率の百分率）を宣言する rules 行の id（account-autonomy.md §3・値は code に
+/// 焼かない・C5）。**読み手は `seat launch` の初回の選定（[`cycle::launch`]）だけになった**（ADR-0045 §2 (2)
+/// で管理 tick が消え、行そのものは §2 (4) の「便用の口座選定」として残る）。
+pub const ID_THRESHOLD: &str = "R-C9-1";
+
 /// **渡された manifest** から発効している rules 行の整数値を読む（pure・in-file の歯の入口）。
 /// 不在 / 不発効 / 整数でない、をそれぞれ別の variant で返す。
 pub fn int_rule_of(manifest: &crate::rules::manifest::Manifest, id: &str) -> Result<u64, RuleRead> {
@@ -490,7 +492,7 @@ mod tests {
         };
         assert_eq!(int_rule_of(&absent, FIXTURE_ID), Err(RuleRead::Missing), "行が無い");
         assert_eq!(
-            int_rule_of(&manifest_with("SeatTickStaleS", "7", false), FIXTURE_ID),
+            int_rule_of(&manifest_with("SeatCycleSettleS", "7", false), FIXTURE_ID),
             Err(RuleRead::Disabled),
             "行は在るが不発効"
         );
@@ -499,7 +501,7 @@ mod tests {
             Err(RuleRead::NotInt),
             "発効しているが整数でない"
         );
-        assert_eq!(int_rule_of(&manifest_with("SeatTickStaleS", "7", true), FIXTURE_ID), Ok(7), "正常");
+        assert_eq!(int_rule_of(&manifest_with("SeatCycleSettleS", "7", true), FIXTURE_ID), Ok(7), "正常");
         // 不発効かつ整数でない行は**不発効**が先（発効を見てから形を見る）。
         assert_eq!(
             int_rule_of(&manifest_with("DialogueSurface", "\"orchestrator\"", false), FIXTURE_ID),
@@ -522,7 +524,6 @@ mod tests {
                 RuleRead::NotInt => "not-int",
             };
             assert_eq!(read.as_str(), want, "{read:?}");
-            assert_eq!(read.no_rule(), format!("{}:{}", super::meter::REASON_NO_RULE, read.as_str()), "{read:?}");
             assert_eq!(read.no_rule(), format!("{}:{}", super::cycle::REASON_NO_RULE, read.as_str()), "{read:?}");
             let same = RULE_READS.iter().filter(|other| other.as_str() == read.as_str()).count();
             assert_eq!(same, 1, "字面 {} が重複する", read.as_str());

@@ -45,35 +45,6 @@ fn account_line_of(label: &str) -> String {
     format!("account={label} dir=missing credential=missing config=missing agentview=unreadable trust=unreadable retired=no")
 }
 
-/// (d) 壊れた host の面では `seat tick` が typed に止まる: 判定を回さず stderr 1 行
-/// `seat: tick decision=error reason=no-rule:manifest-unreadable`・rc 1・stdout 0 byte・event も記録も書かない・
-/// 計測（client）を撃たない。
-#[test]
-fn rules_host_broken_host_manifest_stops_seat_tick_without_events() {
-    let place = acct_place();
-    let name = "hostbroken";
-    let registered = acct_register(&place, name, ACCT_LAUNCH);
-    assert_eq!(rc_of(&registered), i32::from(RC_OK), "stderr={}", stderr_of(&registered));
-    acct_credential(&place, ACCT_SEAT);
-    acct_fake_curl(&place, 50);
-    write_state(&seat_dir_of(&place.state, name), StateFix::Busy { age_s: 0 });
-    let events = vessel::fleet::store::events_path(&place.state);
-    let before = fs::read(&events).unwrap_or_default();
-    fs::write(place.state.join(vessel::rules::HOST_MANIFEST), "schema = 1\n\n[[launch-arg]]\nvalue = true\n").expect("host の面を壊せる");
-    let pane = fixture(&place.dir, "pane.txt", IDLE_PANE);
-
-    let (out, touched) = acct_tick_probed(&place, name, &pane);
-
-    assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "stdout={} stderr={}", stdout_of(&out), stderr_of(&out));
-    assert_eq!(stdout_of(&out), "", "stdout は 0 byte");
-    assert_eq!(stderr_of(&out), "seat: tick decision=error reason=no-rule:manifest-unreadable\n", "1 行");
-    assert!(!touched, "tmux に触れない");
-    assert_eq!(fs::read(&events).unwrap_or_default(), before, "event を書かない");
-    assert!(!tick_file(&place.state, name).exists(), "tick の記録も書かない");
-    assert_eq!(acct_curl_calls(&place), 0, "計測を撃たない");
-    fs::remove_dir_all(&place.dir).ok();
-}
-
 // ─────────────────────────── 壊れた --rules（s2-07l.154） ───────────────────────────
 
 /// 欠陥 3 件の manifest（未知 kind / `ruling` 欠け / id 重複）。`line=` は key の行ではなく
@@ -117,11 +88,11 @@ const BROKEN_RULES: &str = concat!(
 /// [`BROKEN_RULES`] の 3 欠陥が名指す行（見出し行）。
 const BROKEN_LINES: [&str; 3] = [" line=3", " line=11", " line=26"];
 
-/// tick の既存の断り行（判定行・契約の字面）。
-const TICK_NO_RULE: &str = "seat: tick decision=error reason=no-rule";
+/// 主に撃つ口（`--rules` を受ける口のうち代表 1 つ）。
+const RULES_FACE: &str = "externalize";
 
-/// `--rules` を受ける seat の口の全体（usage 行の 4 口）。
-const RULES_FACES: [&str; 4] = ["tick", "cycle", "externalize", "rebrief"];
+/// `--rules` を受ける seat の口の全体（ADR-0045 §2 (2) で tick / cycle の 2 口が消え 2 口になった）。
+const RULES_FACES: [&str; 2] = ["externalize", "rebrief"];
 
 /// 壊れた `--rules` の歯の席名。
 const RULES_TARGET: &str = "seatrules";
@@ -182,33 +153,28 @@ fn run_face(place: &RulesPlace, face: &str) -> Output {
 }
 
 /// 口ごとの既存の断り行（行が無い周に出すものと同じ描画）。
-fn judged_of(face: &str, state: &Path) -> Vec<String> {
-    use vessel::seat::{cycle, externalize, rebrief};
+fn judged_of(face: &str, _state: &Path) -> Vec<String> {
+    use vessel::seat::{externalize, rebrief};
     match face {
-        "tick" => vec![vessel::seat::tick::render_no_rule()],
-        "cycle" => {
-            let place = vessel::seat::state_dir_of(Some(&state.display().to_string()));
-            vec![cycle::render(RULES_TARGET, &cycle::Cycle::Refused(cycle::REASON_NO_RULE), place.as_ref())]
-        }
         "externalize" => externalize::render_refused(&externalize::ExternalizeError::NoRule),
         _ => vec![rebrief::render_unavailable(rebrief::RebriefError::NoRule)],
     }
 }
 
-/// (a) 欠陥 3 件の manifest を `seat tick --rules` へ渡すと、defect を `rules validate` と同じ行で
+/// (a) 欠陥 3 件の manifest を `seat externalize --rules` へ渡すと、defect を `rules validate` と同じ行で
 /// 全件並べ、末尾に既存の判定行 1 行を残して rc 1（設計 rules-manifest.md §4.2 / §5・seat-autonomy.md §3）。
 #[test]
 fn seat_rules_broken_manifest_lists_every_defect() {
     let place = rules_place(BROKEN_RULES);
     let want = validate_lines(&place.rules);
     assert_eq!(want.len(), 3, "基準の rules validate は 3 件: {want:?}");
-    let out = run_face(&place, "tick");
+    let out = run_face(&place, RULES_FACE);
     let lines = stderr_lines(&out);
     assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "{lines:?}");
     assert_eq!(out.stdout.len(), 0, "断りの周は stdout 0 byte");
     assert_eq!(lines.len(), 3 + 1, "defect 3 行 + 判定行 1 行: {lines:?}");
     assert_eq!(lines.get(..3), Some(want.as_slice()), "defect 行は rules validate と 1 byte 同じ");
-    assert_eq!(lines.last().map(String::as_str), Some(TICK_NO_RULE), "判定行は消さない");
+    assert_eq!(lines.last().map(String::as_str), judged_of(RULES_FACE, &place.state).first().map(String::as_str), "判定行は消さない");
     for at in BROKEN_LINES {
         let hits = lines.iter().take(3).filter(|line| line.ends_with(at)).count();
         assert_eq!(hits, 1, "{at} は 1 回ずつ: {lines:?}");
@@ -225,9 +191,9 @@ fn seat_rules_broken_manifest_lists_every_defect() {
 #[test]
 fn seat_rules_absent_rows_still_refuse_with_one_line() {
     let place = rules_place("schema = 1\n");
-    let out = run_face(&place, "tick");
+    let out = run_face(&place, RULES_FACE);
     assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "stderr={}", stderr_of(&out));
-    assert_eq!(stderr_of(&out), format!("{TICK_NO_RULE}\n"), "行が無い周は 1 行のまま");
+    assert_eq!(stderr_lines(&out), judged_of(RULES_FACE, &place.state), "行が無い周は既存の断りのまま");
     assert_eq!(stderr_lines(&out).iter().filter(|line| line.contains("line=")).count(), 0);
     fs::remove_dir_all(&place.dir).ok();
 }
@@ -243,25 +209,25 @@ fn seat_rules_broken_manifest_refuses_on_every_seat_face() {
         let out = run_face(&place, face);
         let lines = stderr_lines(&out);
         let judged = judged_of(face, &place.state);
-        assert_eq!(want.len(), 3, "{face}（4 口のうち）: 基準 {want:?}");
-        assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "{face}（4 口のうち）: {lines:?}");
-        assert_eq!(lines.len(), 3 + 1, "{face}（4 口のうち）: {lines:?}");
-        assert_eq!(lines.get(..3), Some(want.as_slice()), "{face}（4 口のうち）");
-        assert!(lines.iter().take(3).all(|line| line.contains("line=")), "{face}（4 口のうち）: {lines:?}");
-        assert_eq!(lines.get(3..), Some(judged.as_slice()), "{face}（4 口のうち）: 末尾は既存の断り行");
+        assert_eq!(want.len(), 3, "{face}（2 口のうち）: 基準 {want:?}");
+        assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "{face}（2 口のうち）: {lines:?}");
+        assert_eq!(lines.len(), 3 + 1, "{face}（2 口のうち）: {lines:?}");
+        assert_eq!(lines.get(..3), Some(want.as_slice()), "{face}（2 口のうち）");
+        assert!(lines.iter().take(3).all(|line| line.contains("line=")), "{face}（2 口のうち）: {lines:?}");
+        assert_eq!(lines.get(3..), Some(judged.as_slice()), "{face}（2 口のうち）: 末尾は既存の断り行");
         let left = tree_stat(&place.state);
-        assert!(left.is_empty(), "{face}（4 口のうち）: 置き場は空のまま {left:?}");
+        assert!(left.is_empty(), "{face}（2 口のうち）: 置き場は空のまま {left:?}");
         refused.push(face);
         fs::remove_dir_all(&place.dir).ok();
     }
-    assert_eq!(refused, RULES_FACES, "4 / 4 の口が defect を全件並べて断る");
+    assert_eq!(refused, RULES_FACES, "2 / 2 の口が defect を全件並べて断る");
 }
 
-/// (d) 欠陥 k 個（k ∈ 1..=5）の manifest で、`seat tick --rules` の先頭 k 行は `rules validate` の行と
+/// (d) 欠陥 k 個（k ∈ 1..=5）の manifest で、`seat externalize --rules` の先頭 k 行は `rules validate` の行と
 /// 多重集合で一致し、末尾に判定行 1 行が残る。性質の歯は通常 `prop.rs`（純関数の面）に置くが、
 /// 本件は外形（binary の stderr）の性質なのでこの file に置き、verify 行を 1 本に保つ。
 mod rules_prop {
-    use super::{rules_place, run_face, stderr_lines, validate_lines, TICK_NO_RULE};
+    use super::{judged_of, rules_place, run_face, stderr_lines, validate_lines, RULES_FACE};
     use proptest::prelude::*;
     use proptest::test_runner::Config;
     use std::fs;
@@ -315,7 +281,7 @@ mod rules_prop {
             let rows: String = defects.iter().enumerate().map(|(at, defect)| row(at, *defect)).collect();
             let place = rules_place(&format!("schema = 1\n{rows}"));
             let mut want = validate_lines(&place.rules);
-            let lines = stderr_lines(&run_face(&place, "tick"));
+            let lines = stderr_lines(&run_face(&place, RULES_FACE));
             fs::remove_dir_all(&place.dir).ok();
             let k = defects.len();
             prop_assert_eq!(want.len(), k);
@@ -325,7 +291,7 @@ mod rules_prop {
             head.sort();
             want.sort();
             prop_assert_eq!(head, want);
-            prop_assert_eq!(lines.last().map(String::as_str), Some(TICK_NO_RULE));
+            prop_assert_eq!(lines.last().cloned(), judged_of(RULES_FACE, &place.state).last().cloned());
         }
     }
 }

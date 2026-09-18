@@ -200,67 +200,6 @@ ruling = "user 2026-09-09T09:08Z"
 ruled_at = "2026-09-09"
 
 [[rule]]
-id = "seat.context_cap_pct"
-kind = "SeatContextCapPct"
-value = 60
-enabled = true
-ruling = "user 2026-09-09T22:20Z"
-ruled_at = "2026-09-10"
-
-[[rule]]
-id = "seat.context_window_tokens"
-kind = "SeatContextWindowTokens"
-value = 1000000
-enabled = true
-ruling = "user 2026-09-09T23:51Z"
-ruled_at = "2026-09-09"
-
-[[rule]]
-id = "seat.tick_stale_s"
-kind = "SeatTickStaleS"
-value = 2400
-enabled = true
-ruling = "user 2026-09-10T00:00Z"
-ruled_at = "2026-09-10"
-
-[[rule]]
-id = "seat.cycle_lock_ttl_s"
-kind = "SeatCycleLockTtlS"
-value = 900
-enabled = true
-ruling = "user 2026-09-10T00:00Z"
-ruled_at = "2026-09-10"
-
-# 退避の合図（kind=externalize）を同じ席へ再送するまでの back-off（秒・設計 seat-autonomy.md §3 / §8）。
-# timer を短くしても compaction 中の席の queue に合図が積まれない。打刻の合図の brake（seat.tick_stale_s）とは別。
-[[rule]]
-id = "seat.signal_backoff_s"
-kind = "SeatSignalBackoffS"
-value = 300
-enabled = true
-ruling = "user 2026-09-15T02:30Z externalize re-signal back-off"
-ruled_at = "2026-09-15"
-
-# 打刻の合図の梯子（設計 seat-autonomy.md §14）。無変化の席への合図は 1 段ごとに待ちが factor 倍になり
-# （初段は seat.tick_stale_s を流用）、待ちが max_s を超える段で止まる。変化した周は初段へ戻って再開する。
-# 実値 = 40 分 → 80 → 160 → 320 → 640 → 1280 分 → 停止（次段 2560 分 > 24 時間）。
-[[rule]]
-id = "seat.pointer_backoff_factor"
-kind = "SeatPointerBackoffFactor"
-value = 2
-enabled = true
-ruling = "user 2026-09-17T00:55Z"
-ruled_at = "2026-09-17"
-
-[[rule]]
-id = "seat.pointer_backoff_max_s"
-kind = "SeatPointerBackoffMaxS"
-value = 86400
-enabled = true
-ruling = "user 2026-09-17T00:55Z"
-ruled_at = "2026-09-17"
-
-[[rule]]
 id = "seat.cycle_settle_s"
 kind = "SeatCycleSettleS"
 value = 30
