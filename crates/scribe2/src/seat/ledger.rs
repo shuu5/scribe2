@@ -21,8 +21,11 @@ pub const POLARITY: Polarity = Polarity {
     on_failure: OnFailure::FailClosed,
 };
 
-/// 台帳を読めない理由（**境界の enum**・[`POLARITY`]）。読めない周は数えを返さない
-/// （`LedgerError::Unreadable` の 1 つだけが残った・`s2-07l.479.2`）。
+/// 台帳を読めない理由（**境界の enum**・[`POLARITY`]）。読めない周は数えを返さない。
+///
+/// variant は 1 つである（`s2-07l.479.2` で復元の DATA が消え、この境界に残る失敗が「読めない」だけに
+/// なった）。値を分岐する読み手は今は無いが、**境界ごとに 1 つの enum が極性を持つ**のは憲法 C11.2 の
+/// 求めで、`Option` に潰すと [`POLARITY`] の宣言 site（極性一覧の guard でない側）ごと消える。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LedgerError {
     /// 台帳を読めない（起動できない・rc 非 0・JSON 不能・待ち上限超過）。
@@ -39,9 +42,6 @@ pub const DEFAULT_BD: &str = "bd";
 /// （待ち上限 [`ID_TIMEOUT`]）。
 const BD_ARGS: [&str; 6] = ["--readonly", "list", "--all", "--limit", "0", "--json"];
 
-/// `updated_at` が無い行の字面。
-const NONE: &str = "none";
-
 /// 子 process の終了を見に行く刻み。
 const POLL: Duration = Duration::from_millis(10);
 
@@ -54,66 +54,28 @@ pub fn timeout_of(manifest: &Manifest) -> Option<Duration> {
     }
 }
 
-/// 台帳の 1 件（読む key だけ）。
+/// 台帳の 1 件（**数えが読む key だけ**）。`s2-07l.479.2` の純移動では title / `updated_at` /
+/// priority / labels / `dependencies[]` も運んでいたが、読み手（復元の DATA と棚卸し）が同じ便で
+/// 消えたので落とした（到達しない構造を将来のために抱えない・C17）。足すのは読み手を足す便である。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Issue {
     /// bead id。
     pub id: String,
     /// status の字面。
     pub status: String,
-    /// title（無ければ空）。
-    pub title: String,
-    /// `updated_at`（無ければ `none`）。
-    pub updated: String,
-    /// priority field（無い・非負の整数でなければ `None`）。
-    pub priority: Option<u64>,
-    /// label の列（無ければ空）。
-    pub labels: Vec<String>,
-    /// 依存の列（`dependencies[]`・3 key の揃う要素だけ）。
-    pub deps: Vec<Dep>,
 }
 
-/// 依存の 1 件（`dependencies[]` の `id` / `status` / `dependency_type` だけを読む・本文は読まない）。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Dep {
-    /// 依存先の bead id。
-    pub id: String,
-    /// 依存先の status の字面。
-    pub status: String,
-    /// 依存の種別の字面（`blocks` / `parent-child` …）。
-    pub kind: String,
-}
-
-/// 台帳の JSON（`bd list --json` の配列）を読む。配列でない・要素に `id` / `status` の文字列が無い → `None`。
-/// priority / labels / dependencies は任意（無い・形が違えば `None` / 空・依存は 3 key の揃う要素だけ）。
+/// 台帳の JSON（`bd list --json` の配列）を読む。配列でない・要素に `id` / `status` の文字列が無い → `None`
+/// （**2 key の必須は不変**＝欠けた要素を読み飛ばして「読めた」に化けさせない・C10）。
 pub fn issues_of(text: &str) -> Option<Vec<Issue>> {
     let tree = json_tree::parse(text).ok()?;
     tree.as_array()?
         .iter()
         .map(|node| {
             let text_of = |key: &str| node.get(key).and_then(Tree::as_str).map(str::to_owned);
-            let array_of = |key: &str| node.get(key).and_then(Tree::as_array).unwrap_or_default();
-            let priority = match node.get("priority") {
-                Some(Tree::Num(digits)) => digits.parse::<u64>().ok(),
-                _ => None,
-            };
-            Some(Issue {
-                id: text_of("id")?,
-                status: text_of("status")?,
-                title: text_of("title").unwrap_or_default(),
-                updated: text_of("updated_at").unwrap_or_else(|| NONE.to_owned()),
-                priority,
-                labels: array_of("labels").iter().filter_map(Tree::as_str).map(str::to_owned).collect(),
-                deps: array_of("dependencies").iter().filter_map(dep_of).collect(),
-            })
+            Some(Issue { id: text_of("id")?, status: text_of("status")? })
         })
         .collect()
-}
-
-/// 依存の 1 要素（`id` / `status` / `dependency_type` の文字列が揃わなければ `None`）。
-fn dep_of(node: &Tree) -> Option<Dep> {
-    let text_of = |key: &str| node.get(key).and_then(Tree::as_str).map(str::to_owned);
-    Some(Dep { id: text_of("id")?, status: text_of("status")?, kind: text_of("dependency_type")? })
 }
 
 /// 台帳の現在値の 1 行（status 3 つの数え・DATA の `[BD_COUNT]` と席の指示文の `{ledger}` が同じ 1 本を読む）。

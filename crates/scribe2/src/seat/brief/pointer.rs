@@ -39,7 +39,7 @@ pub enum PointerKind {
     Adr,
     /// 設計 doc（`docs/design/<名>.md`）。
     Design,
-    /// rules manifest の行 id（`rules 行 seat.wm_directive_cap` / `R-C4-2`）。
+    /// rules manifest の行 id（`rules 行 seat.ledger_timeout_s` / `R-C4-2`）。
     Manifest,
     /// 台帳の id（`<prefix>-<id>`・prefix は `.beads` から解く）。
     Ledger,
@@ -262,7 +262,7 @@ impl Anchor {
         Some(Self::with_prefixes(root, prefixes))
     }
 
-    /// prefix を明示して作る（歯と rebrief が同じ root を使い回す口）。
+    /// prefix を明示して作る（歯が root を使い回す口）。
     pub fn with_prefixes(root: &Path, prefixes: Vec<String>) -> Self {
         Self {
             root: root.to_path_buf(),
