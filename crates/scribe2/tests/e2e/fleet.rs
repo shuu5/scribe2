@@ -1462,8 +1462,12 @@ fn fleet_seat_role_registration_row_round_trips_and_its_keys_stay_exclusive() {
     assert!(Event::from_line(&with_run).is_err(), "登録の行は run を持たない: {with_run}");
     let with_window = line.replacen("\"kind\":\"SeatRegistered\"", "\"kind\":\"SeatRegistered\",\"window\":\"five_hour\"", 1);
     assert!(Event::from_line(&with_window).is_err(), "登録の行は口座残量だけの key を持たない: {with_window}");
+    // 知らない役割（variant 名の字面も含む）は malformed でなく**本体を持たない行**として読む
+    // ＝退役した役割の row を読み飛ばす（憲法 N4 の schema 互換・replay の面は
+    // `fleet_seat_registration_row_with_a_retired_role_is_skipped_by_replay` が測る）。
     let unknown = line.replacen("\"role\":\"orchestrator\"", "\"role\":\"Orchestrator\"", 1);
-    assert!(Event::from_line(&unknown).is_err(), "未知の role は malformed: {unknown}");
+    let read = Event::from_line(&unknown).expect("知らない役割の行も読める");
+    assert_eq!(read.registration, None, "知らない役割の行は本体を持たない: {unknown}");
     let missing = line.replacen(",\"launch\":\"line 1\\n\\\"line 2\\\"\\n\"", "", 1);
     assert_ne!(missing, line, "置換が効く");
     assert!(Event::from_line(&missing).is_err(), "項目の欠けは malformed: {missing}");
@@ -1493,6 +1497,29 @@ fn seat_launch_registration_sid_is_optional_and_both_forms_replay() {
     let state = replay(&[with.clone(), launched.clone()]);
     let sids: Vec<Option<String>> = state.registrations.values().map(|latest| latest.registration.sid.clone()).collect();
     assert_eq!(sids, vec![Some("sid-1".to_owned()), None], "鍵の違う 2 row（anchor の違う 2 鍵）が両方 replay に載る");
+}
+
+/// 退役した役割の登録 row は **読み飛ばす**（憲法 N4・schema 互換・`s2-07l.478`）。
+///
+/// 既に在る event log は役割を 1 つにする前の `SeatRegistered` 行（`role` が planner / admin）を持つので、
+/// 知らない役割を `Err` に倒すと**その 1 行で replay 全体が unreadable**になる。role guard は FailClosed
+/// ゆえ、そうなると全席の権能付きの操作が deny になり、doctor の突合も口座の欄も `unreadable` に落ちる。
+/// 行は読めて `Ok` になり、登録には数えず（本体を持たない）、便も作らない（`run` が空の幽霊を生まない）。
+#[test]
+fn fleet_seat_registration_row_with_a_retired_role_is_skipped_by_replay() {
+    let live = registration_event("s:live");
+    let retired_line = live.to_line().replacen("\"role\":\"orchestrator\"", "\"role\":\"planner\"", 1);
+    assert_ne!(retired_line, live.to_line(), "置換が効く");
+    let retired = Event::from_line(&retired_line).expect("退役した役割の行も読める");
+    assert_eq!(retired.kind, EventKind::SeatRegistered, "kind は登録のまま");
+    assert_eq!(retired.registration, None, "本体は持たない＝登録に数えない");
+    let state = replay(&[retired, live.clone()]);
+    assert_eq!(state.registrations.len(), 1, "数えるのは読めた役割の row だけ");
+    assert!(state.runs.is_empty(), "run が空の幽霊の便を作らない: {:?}", state.runs);
+    // 役割の key そのものが欠けた行は従来どおり malformed（「知らない値」と「項目の欠け」を混ぜない）。
+    let missing = live.to_line().replacen("\"role\":\"orchestrator\",", "", 1);
+    assert_ne!(missing, live.to_line(), "置換が効く");
+    assert!(Event::from_line(&missing).is_err(), "role の欠けは malformed: {missing}");
 }
 
 /// 登録の行は便も席も作らず `export` を変えず、`fleet record` からは書けない（書き手は `seat register`）。

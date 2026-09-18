@@ -228,8 +228,15 @@ impl Body {
         forbid(pairs, ["run", "bead"].iter().chain(ALLOWANCE_KEYS.iter().filter(|key| !["account", "model"].contains(key))))?;
         let text = |key: &str| text_of(field(pairs, key), key);
         let role = text("role")?;
+        // **知らない役割の行は本体を持たない行として読む**（退役した役割の row・憲法 N4 の schema 互換）。
+        // 既に在る log は役割を 1 つにする前の行を持つので、ここで `Err` に倒すと**その 1 行で replay 全体が
+        // unreadable**になり、role guard は FailClosed ゆえ全席の権能付きの操作が deny になる（実測 2026-09-18）。
+        // 項目の欠け（`role` の key が無い）は従来どおり malformed で、「知らない値」と混ぜない。
+        let Some(parsed) = Role::parse(&role) else {
+            return Ok(Self::default());
+        };
         let registration = Registration {
-            role: Role::parse(&role).ok_or(format!("role {role} は未知である"))?,
+            role: parsed,
             anchor: text("anchor")?,
             target: text("target")?,
             sid: nullable_text(field(pairs, "sid"), "sid")?,
