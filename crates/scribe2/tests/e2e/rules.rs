@@ -1165,6 +1165,15 @@ fn rules_all_follows_declaration_order() {
 /// 役割ごとの権能の行（`role.<役割名>`・`RuleKind::RoleCapabilities`・裁定 id `user 2026-09-13T12:04Z`・設計
 /// seat-roles.md §3・ADR-0022 §2.2・`s2-07l.201`）: **行は `Role::ALL` と同数**（役割ごとに 1 行・1 kind で 2 行）、
 /// 値は `Capability` の名の列、宣言順の末尾の kind。**値は manifest が持ち、設計 doc は写さない**（C1 / C5）。
+/// 役割ごとの権能の行が持つ裁定 id と裁定日: planner は裁定 `user 2026-09-13T12:04Z`（edit-outside の追加）・
+/// 管理席は裁定 `user 2026-09-18T04:10Z`（edit-code の例外運用・`s2-07l.472`）。
+fn role_row_ruling(role: Role) -> (&'static str, &'static str) {
+    match role {
+        Role::Planner => ("user 2026-09-13T12:04Z", "2026-09-13"),
+        Role::Admin => ("user 2026-09-18T04:10Z", "2026-09-18"),
+    }
+}
+
 #[test]
 fn rules_embedded_manifest_declares_one_capability_row_per_role() {
     let manifest = match Manifest::embedded() {
@@ -1182,10 +1191,7 @@ fn rules_embedded_manifest_declares_one_capability_row_per_role() {
         assert_eq!(row.kind, RuleKind::RoleCapabilities, "{id} の kind");
         assert_eq!(row.kind.shape(), ValueShape::List, "{id} の値の形は List（名の列）");
         assert!(row.enabled, "{id} は発効している");
-        let (ruling, ruled_at) = match role {
-            Role::Planner => ("user 2026-09-13T12:04Z", "2026-09-13"),
-            Role::Admin => ("user 2026-09-18T04:10Z", "2026-09-18"),
-        };
+        let (ruling, ruled_at) = role_row_ruling(*role);
         assert_eq!(row.ruling, ruling, "{id} の裁定 id（planner = edit-outside の追加・admin = edit-code の例外運用）");
         assert_eq!(row.ruled_at, ruled_at, "{id} の裁定日");
         let names = role_row_names(&manifest, *role);

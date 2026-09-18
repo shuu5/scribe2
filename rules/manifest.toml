@@ -427,10 +427,10 @@ ruled_at = "2026-09-13"
 [[rule]]
 id = "role.admin"
 kind = "RoleCapabilities"
-value = ["launch", "relay", "merge", "edit-outside"]
+value = ["launch", "relay", "merge", "edit-outside", "edit-code"]
 enabled = true
-ruling = "user 2026-09-13T12:04Z"
-ruled_at = "2026-09-13"
+ruling = "user 2026-09-18T04:10Z"
+ruled_at = "2026-09-18"
 
 # 台帳の棚卸し（設計 ledger-triage.md §2 / §4）。判定点（blocks 依存）を持たない memo を stale と数える
 # 閾値 2 つ（updated_at からの日数・以上 / priority field の上限・以下）。読み手は seat rebrief。
