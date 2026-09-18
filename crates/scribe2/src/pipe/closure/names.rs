@@ -16,7 +16,8 @@ use super::{IMPL_HEAD, PATH_CHARS, RS};
 /// 名指しと読み、base に解けないものを (名, 在り処) で**全件**返す（書かれていた順）。
 ///
 /// (1) path 形（英数字と `_ . / -` だけ・拡張子 `.rs`）は `tracked` の path と等しいか `/` 区切りの末尾一致、または
-/// その行の write-set の `+` 項目（接頭辞を剥がした path）と同じ照合で解ける。(2) 型の path 形（`::` で結んだ識別子の
+/// その行の write-set の `+`（新規 file）/ `~`（着地で消える file・§24 (3)）の項目（接頭辞を剥がした path）と同じ
+/// 照合で解ける（`~` の除外が無いと、着地で消した file を名指す本文が着地の後に全部赤くなる）。(2) 型の path 形（`::` で結んだ識別子の
 /// 列）は末尾 2 節の「型」と「項目」を [`resolves_type`] の 2 経路（字面 / impl）で解く（§26）。**`touches` に宣言した
 /// 型の variant は名指しと読まない**
 /// （未来の variant は `touches` が説明する）。(3) fn 形（識別子 + `(`〔`)` は任意〕）は `fn 識別子` の宣言が在れば
@@ -30,13 +31,14 @@ pub fn unresolved_names(
     sources: &[Source],
 ) -> Result<Vec<(String, String)>, ClosureError> {
     let bodies = texts_of(sources)?;
-    let new_files: Vec<&str> = write_set.iter().filter_map(|item| item.strip_prefix('+')).collect();
+    // base に無くてよい項目（`+` の新規 file と `~` の着地で消える file）を接頭辞を剥がして path 形の解に足す。
+    let off_base: Vec<&str> = write_set.iter().filter_map(|item| item.strip_prefix(['+', '~'])).collect();
     let touched: Vec<&str> = touches.iter().filter_map(|raw| raw.rsplit("::").next()).collect();
     let mut found = Vec::new();
     for (at, text) in texts {
         for name in backticked(text) {
             let resolved = match form_of(name, &touched) {
-                Form::Path => tracked.iter().map(String::as_str).chain(new_files.iter().copied()).any(|path| path_matches(path, name)),
+                Form::Path => tracked.iter().map(String::as_str).chain(off_base.iter().copied()).any(|path| path_matches(path, name)),
                 Form::Type { ty, item } => resolves_type(&bodies, &ty, &item),
                 Form::Fn(ident) => bodies.iter().any(|(_, body)| declares_fn(body, &ident)),
                 Form::Prose => true,
@@ -157,8 +159,8 @@ mod tests {
         (tracked, sources)
     }
 
-    /// 名指しの 3 形（path / 型の path / fn）を解き、解けないものを在り処付きで全件返す。`+` 宣言の新規 file は解け
-    /// （write-set に無い同名は解けない）、`touches` の型の variant と一致しない字面（struct literal・field 付き
+    /// 名指しの 3 形（path / 型の path / fn）を解き、解けないものを在り処付きで全件返す。`+` 宣言の新規 file と
+    /// `~` 宣言の消える file は解け（write-set に無い同名は解けない）、`touches` の型の variant と一致しない字面（struct literal・field 付き
     /// variant・glob・属性・散文・単独の語）は名指しと読まない。
     #[test]
     fn closure_names_resolve_the_three_forms_and_name_every_unresolved_one() {
@@ -168,10 +170,15 @@ mod tests {
         };
         let resolved = texts(&[
             ("title", "`pipe/closure.rs` と `closure.rs` と `crate::polarity::Guard` の `Guard::Intake`"),
-            ("done", "`overlaps(` と `overlaps()` が在る・`Refuse::Nope` は touches の型・`pipe/review.rs` は write-set の + 宣言"),
+            ("done", "`overlaps(` と `overlaps()` が在る・`Refuse::Nope` は touches の型・`pipe/review.rs` は write-set の + 宣言・`pipe/old.rs` は ~ 宣言"),
             ("section 3 line 9", "`Refuse::WriteSetIncomplete { run, missing }`・`tests/e2e/*.rs`・`#[cfg(test)]`・`Type {`・`Type::`・`touches`・`.rs`・`NAME.len()`・`use … as`"),
         ]);
-        let write_set = ["crates/toy/src/pipe/closure.rs".to_owned(), "+crates/toy/src/pipe/review.rs".to_owned()];
+        let write_set = [
+            "crates/toy/src/pipe/closure.rs".to_owned(),
+            "+crates/toy/src/pipe/review.rs".to_owned(),
+            // 着地で消える file（§24 (3)）は base（tracked）に無いが、`+` と同じ除外で解ける。
+            "~crates/toy/src/pipe/old.rs".to_owned(),
+        ];
         let touches = ["crate::pipe::refuse::Refuse".to_owned()];
         assert_eq!(unresolved_names(&resolved, &touches, &write_set, &tracked, &sources), Ok(Vec::new()), "全部解ける");
         let unresolved = texts(&[

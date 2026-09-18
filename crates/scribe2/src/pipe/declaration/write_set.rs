@@ -2,7 +2,7 @@
 //! §14・SRS FR48・pure）。
 //!
 //! 契約の write-set の各項目を base（tracked file の一覧）に対して [`read_write_set`] で読み（実在する file / 末尾 `/`
-//! の dir / `+` の新規 file / `-` の縮む file の 4 形）、`.rs` の項目ごとに上限（R-C4-2 / R-C4-1）の余地を
+//! の dir / `+` の新規 file / `-` の縮む file / `~` の消える file の 5 形）、`.rs` の項目ごとに上限（R-C4-2 / R-C4-1）の余地を
 //! [`headroom_shortfalls`] で測る。宣言（`.vessel.toml`）の読みと上限の突き合わせは親 module `declaration.rs` に
 //! 置いたまま。呼び手（`pipe::table` / `pipe::cli::intake`）の `use` は親の再 export を通る。
 
@@ -19,6 +19,12 @@ pub enum WriteSetItem {
     /// 増分は負なので上限の余地を求めず、core の見積の本数にも数えない。閉包・交差・guard は [`Self::File`] と同じ
     /// 素の path として読む。
     Shrink(String),
+    /// `~` 接頭辞で宣言した**着地で消える file**（接頭辞を剥がした path・設計 contract-source.md §24）。受付
+    /// （[`NewFilePolicy::MustBeAbsent`]）は base に実在する file を要し（消す予定の file が無い＝宣言の誤り）、
+    /// 契約表の検査（[`NewFilePolicy::MayBeLanded`]）は tracked に無ければ**着地で消えた**と読んで解く（着地済みの
+    /// 行が永久に解けなくなる罠を塞ぐ）。増分は負なので [`Self::Shrink`] と同じく上限の余地を求めず、core の見積の
+    /// 本数にも数えない。閉包・交差・guard・gate の照合は [`Self::File`] と同じ素の path として読む。
+    Delete(String),
 }
 
 /// `+` の項目（新規 file の**宣言**）を base（tracked の**実測**）に対して読む場面（設計 contract-source.md §3・C10）。
@@ -34,10 +40,11 @@ pub enum NewFilePolicy {
 
 /// write-set の各項目を base に対して読む。**解けない項目は全件**（1 件目で止めない）。
 ///
-/// 解ける形は 4 つだけ: base に実在する file / 末尾 `/` で base に配下の file を持つ dir / `+` 接頭辞で base に**無い**
-/// 新規 file / `-` 接頭辞で base に**在る**縮む file。それ以外（無い file・空の dir・base に在る file への `+`・base に
-/// 無い file への `-`）は `Err` に項目の字面で積む。base に在る file への `+` だけは `policy` で読みが変わる
-/// （[`NewFilePolicy::MayBeLanded`] は [`WriteSetItem::File`] に解く）。
+/// 解ける形は 5 つだけ: base に実在する file / 末尾 `/` で base に配下の file を持つ dir / `+` 接頭辞で base に**無い**
+/// 新規 file / `-` 接頭辞で base に**在る**縮む file / `~` 接頭辞で base に**在る**消える file。それ以外（無い file・
+/// 空の dir・base に在る file への `+`・base に無い file への `-` / `~`）は `Err` に項目の字面で積む。接頭辞付きの
+/// 2 形だけは `policy` で読みが変わる（[`NewFilePolicy::MayBeLanded`] は base に在る `+` を [`WriteSetItem::File`] に、
+/// base に無い `~` を [`WriteSetItem::Delete`]〔着地で消えた〕に解く）。
 pub fn read_write_set(
     write_set: &[String],
     tracked: &[String],
@@ -76,6 +83,12 @@ fn read_item(item: &str, tracked: &[String], policy: NewFilePolicy) -> Option<Wr
     if let Some(old) = item.strip_prefix(crate::pipe::refuse::SHRINK_FILE) {
         let present = !old.is_empty() && tracked.iter().any(|path| path == old);
         return present.then(|| WriteSetItem::Shrink(old.to_owned()));
+    }
+    if let Some(gone) = item.strip_prefix(crate::pipe::refuse::DELETE_FILE) {
+        // 契約表の検査は tracked に無くても解く（着地で消えた＝行の履歴・§24）。受付は在ることを要する。
+        let landed = matches!(policy, NewFilePolicy::MayBeLanded);
+        let resolvable = !gone.is_empty() && (landed || tracked.iter().any(|path| path == gone));
+        return resolvable.then(|| WriteSetItem::Delete(gone.to_owned()));
     }
     tracked.iter().any(|path| path == item).then(|| WriteSetItem::File(item.to_owned()))
 }
@@ -121,15 +134,15 @@ pub fn line_count(text: &str, width: u64) -> u64 {
 /// 余地とし、`size_lines` が余地を超える file を名指す（範囲外の `tests/` 等は門の対象外で測らない）。core（write-set
 /// の `.rs` が在る `crates/<c>/src/` の総行数）は `size_lines × その core に属する write-set の .rs 本数` を見積として
 /// 同じ式で 1 回（母集団は file の余地と同じ [`core_of`] が `Some` の集合＝`tests/` の歯は本数に入れない・C10）。
-/// **縮む面（`-`）は増分が負**なので、file の余地も求めず core の本数にも数えない（満杯の file を割る便を受付が
-/// 断って満杯が固定される型を塞ぐ・§3「上限の余地」）。
+/// **縮む面（`-`）と消える file（`~`）は増分が負**なので、file の余地も求めず core の本数にも数えない（満杯の
+/// file を割る便を受付が断って満杯が固定される型を塞ぐ・§3「上限の余地」・§24）。
 pub fn headroom_shortfalls(items: &[WriteSetItem], lines: &[(String, u64)], caps: Caps) -> Vec<Headroom> {
     let files: Vec<&str> = items
         .iter()
         .flat_map(|item| match *item {
             WriteSetItem::File(ref path) | WriteSetItem::New(ref path) => vec![path.as_str()],
             WriteSetItem::Dir(ref under) => under.iter().map(String::as_str).collect(),
-            WriteSetItem::Shrink(_) => Vec::new(),
+            WriteSetItem::Shrink(_) | WriteSetItem::Delete(_) => Vec::new(),
         })
         .filter(|path| path.ends_with(".rs"))
         .collect();
@@ -177,13 +190,13 @@ mod tests {
         strings(&["crates/toy/src/a.rs", "crates/toy/src/b.rs", "snap/x.snap", "docs/d.md", "crates/toy/tests/t.rs"])
     }
 
-    /// write-set の項目は 4 形（実在する file / 末尾 `/` で配下を持つ dir〔展開される〕/ `+` の新規 file〔base に無い〕/
-    /// `-` の縮む file〔base に在る〕）だけが解け、それ以外は**全件**項目の字面で返る（設計 contract-source.md §3
-    /// 「項目の実在と展開」）。
+    /// write-set の項目は 5 形（実在する file / 末尾 `/` で配下を持つ dir〔展開される〕/ `+` の新規 file〔base に無い〕/
+    /// `-` の縮む file〔base に在る〕/ `~` の消える file〔受付の場面は base に在る・§24〕）だけが解け、それ以外は
+    /// **全件**項目の字面で返る（設計 contract-source.md §3「項目の実在と展開」）。
     #[test]
     fn declaration_write_set_items_resolve_only_the_three_forms_and_name_every_unresolved_item() {
         let read = read_write_set(
-            &strings(&["crates/toy/src/a.rs", "snap/", "+crates/toy/src/new.rs", "-crates/toy/src/b.rs"]),
+            &strings(&["crates/toy/src/a.rs", "snap/", "+crates/toy/src/new.rs", "-crates/toy/src/b.rs", "~docs/d.md"]),
             &base(),
             NewFilePolicy::MustBeAbsent,
         );
@@ -194,8 +207,9 @@ mod tests {
                 WriteSetItem::Dir(vec!["snap/x.snap".to_owned()]),
                 WriteSetItem::New("crates/toy/src/new.rs".to_owned()),
                 WriteSetItem::Shrink("crates/toy/src/b.rs".to_owned()),
+                WriteSetItem::Delete("docs/d.md".to_owned()),
             ]),
-            "4 形が解け dir は配下に展開され、- は接頭辞を剥がした path で持つ"
+            "5 形が解け dir は配下に展開され、- と ~ は接頭辞を剥がした path で持つ"
         );
         let unresolved = read_write_set(
             &strings(&[
@@ -206,6 +220,8 @@ mod tests {
                 "snap",
                 "-crates/toy/src/none.rs",
                 "-",
+                "~crates/toy/src/none.rs",
+                "~",
                 "docs/d.md",
             ]),
             &base(),
@@ -213,9 +229,40 @@ mod tests {
         );
         assert_eq!(
             unresolved,
-            Err(strings(&["crates/toy/src/none.rs", "empty/", "+crates/toy/src/a.rs", "+", "snap", "-crates/toy/src/none.rs", "-"])),
-            "無い file・空の dir・base に在る file への +・空の +・base に無い file への -・空の - は解けない（末尾 / 無しの dir も file としては無い）"
+            Err(strings(&[
+                "crates/toy/src/none.rs",
+                "empty/",
+                "+crates/toy/src/a.rs",
+                "+",
+                "snap",
+                "-crates/toy/src/none.rs",
+                "-",
+                "~crates/toy/src/none.rs",
+                "~",
+            ])),
+            "無い file・空の dir・base に在る file への +・空の +・base に無い file への - / ~・空の - / ~ は解けない（末尾 / 無しの dir も file としては無い）"
         );
+    }
+
+    /// `~` の 2 場面（§24）の表: tracked / untracked × [`NewFilePolicy`] の 4 組。違うのは「untracked な `~`」の
+    /// 1 組だけ（受付は解けない＝消す予定の file が無い・契約表の検査は着地で消えたと読んで [`WriteSetItem::Delete`]
+    /// に解く）。tracked な `~` はどちらの場面でも `Delete`・空の `~` はどちらでも解けない。
+    #[test]
+    fn declaration_write_set_delete_resolves_without_the_file_only_for_the_landed_policy() {
+        let (present, landed) = ("~crates/toy/src/a.rs", "~crates/toy/src/gone.rs");
+        let delete = |path: &str| Ok(vec![WriteSetItem::Delete(path.to_owned())]);
+        let table = [
+            (NewFilePolicy::MustBeAbsent, present, delete("crates/toy/src/a.rs")),
+            (NewFilePolicy::MayBeLanded, present, delete("crates/toy/src/a.rs")),
+            (NewFilePolicy::MustBeAbsent, landed, Err(strings(&[landed]))),
+            (NewFilePolicy::MayBeLanded, landed, delete("crates/toy/src/gone.rs")),
+        ];
+        for (policy, item, want) in table {
+            assert_eq!(read_write_set(&strings(&[item]), &base(), policy), want, "{policy:?} × {item}");
+        }
+        for policy in [NewFilePolicy::MustBeAbsent, NewFilePolicy::MayBeLanded] {
+            assert_eq!(read_write_set(&strings(&["~"]), &base(), policy), Err(strings(&["~"])), "空の ~ は {policy:?} でも解けない");
+        }
     }
 
     /// `+` の 2 場面（`s2-07l.346`・設計 contract-source.md §3）の表: tracked / untracked × [`NewFilePolicy`] の 4 組。
@@ -278,6 +325,11 @@ mod tests {
             vec![Headroom { file: CORE.to_owned(), headroom: 100 }],
             "新規 1 本の見積 101 は core の余地 100 を超える（- を数えないだけで core は測る）"
         );
+        // 消える file（`~`・§24）も増分は負＝`-` と同じ扱い（余地も本数も数えない）。
+        let doomed =
+            read_write_set(&strings(&["~crates/toy/src/a.rs", "+crates/toy/src/new.rs"]), &base(), policy).unwrap_or_default();
+        assert!(headroom_shortfalls(&doomed, &lines, caps(300, 40_000)).is_empty(), "~ の a.rs は余地 100 でも M を通す");
+        assert!(headroom_shortfalls(&doomed, &lines, caps(100, 1_600)).is_empty(), "core の見積は 100 × 1 本 = 100 ≤ 余地 100");
         assert_eq!(line_count("a\nb\n", 120), 2, "幅に収まる行は改行で区切った行の数");
         assert_eq!(line_count("a\nb", 120), 2, "末尾改行の有無で差を出さない");
         assert_eq!(line_count(&format!("{}\nb\n", "a".repeat(250)), 120), 4, "幅を超える行は ceil(250 ÷ 120) = 3 行");
@@ -338,7 +390,7 @@ mod tests {
                 WriteSetItem::File(ref path) | WriteSetItem::New(ref path) => {
                     super::core_of(path).map(|_| path.clone())
                 }
-                WriteSetItem::Dir(_) | WriteSetItem::Shrink(_) => None,
+                WriteSetItem::Dir(_) | WriteSetItem::Shrink(_) | WriteSetItem::Delete(_) => None,
             })
             .collect();
         assert_eq!(measured, in_range, "余地を測る範囲は core_of の述語と同じ");

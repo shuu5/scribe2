@@ -295,16 +295,22 @@ pub(crate) const NEW_FILE: char = '+';
 /// 受付の宣言だけの文法で、guard と交差の照合は素の path で持つ。
 pub(crate) const SHRINK_FILE: char = '-';
 
+/// 着地で消える file の項目の接頭辞（設計 contract-source.md §24・受付は base に**実在する** file を要し、契約表の
+/// 検査は tracked に無ければ着地で消えたと読む）。[`SHRINK_FILE`] と同じく受付の宣言だけの文法で、guard と交差の
+/// 照合と gate の write-set 照合は素の path で持つ（消す file は触る file）。
+pub(crate) const DELETE_FILE: char = '~';
+
 /// path 1 本を字面で畳む（write-set guard の `relative_to` と同じ規則）。
 ///
 /// 先頭の `./` を落とす・連続する `/` を 1 つにする・`..` を畳む・**末尾の `/` は dir の印
-/// として残す**・接頭辞（新規 file の `+`・縮む面の `-`）は剥がす。root の外へ出る `..`（畳めない分）はそのまま残す
+/// として残す**・接頭辞（新規 file の `+`・縮む面の `-`・消える file の `~`）は剥がす。root の外へ出る `..`
+/// （畳めない分）はそのまま残す
 /// ＝字面が違うものを同じ path に化けさせない。**存在は見ない**ので、まだ無い file を書く契約も同じ規則で測れる。
 ///
 /// `pub(crate)` なのは、spawn が guard へ写す policy（`spawn::write_policy`）が**同じ 1 本**で接頭辞を剥がすため
 /// である（剥がす規則を 2 か所に持たない）。
 pub(crate) fn normalize(raw: &str) -> String {
-    let raw = raw.strip_prefix([NEW_FILE, SHRINK_FILE]).unwrap_or(raw);
+    let raw = raw.strip_prefix([NEW_FILE, SHRINK_FILE, DELETE_FILE]).unwrap_or(raw);
     let is_dir = raw.ends_with('/');
     let mut parts: Vec<&str> = Vec::new();
     for part in raw.split('/') {
