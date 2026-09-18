@@ -2143,7 +2143,7 @@ fn denied_row_text() -> String {
     )
 }
 
-/// 役割ごとの行の本文（`admin` が `None` なら管理席の行を置かない・`schema` 行と禁じる語列の行は持たない）。
+/// 役割の行の本文（役割は orchestrator 1 つ＝行も 1 本・`schema` 行と禁じる語列の行は持たない）。
 fn role_rows_text(caps: &[&str]) -> String {
     let quoted: Vec<String> = caps.iter().map(|name| format!("\"{name}\"")).collect();
     format!(
@@ -2727,6 +2727,10 @@ fn hook_brief_session_start_emits_the_role_brief_with_every_capability() {
         "target と anchor の穴: {body:?}"
     );
     assert!(body.iter().any(|line| line.contains(LEDGER_LINE)), "台帳の現在値の穴: {body:?}");
+    assert!(
+        body.iter().all(|line| !line.contains("edit-code")),
+        "src の編集の権能は行にも生成文にも無い（歯だけが edit-tests で開く・ADR-0045 §2 (1)）: {body:?}"
+    );
     let lines = inject_lines(&place.state);
     assert_eq!(lines.len(), before + 2, "記録は名乗り + 指示文の 2 行: {lines:?}");
     let last = lines.last().cloned().unwrap_or_default();

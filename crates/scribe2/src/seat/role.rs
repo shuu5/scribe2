@@ -34,8 +34,8 @@ impl Role {
 ///
 /// どの役割がどの権能を持つかは rules 行 `role.<役割名>`（`RuleKind::RoleCapabilities`・値は名の列・裁定 id
 /// 付き）が持ち、ここは名の集合だけを閉じる。列に無い名は manifest の読み込みで `RuleError` になる
-/// （[`Capability::parse`] の失敗）。`Go` / `Relay` / `EditContract` は記録時点で対応する subcommand も path 種別も
-/// 無い（go の記帳の口は後続・契約は台帳の write）＝行の値には在るが Bash 面では照合されない宣言だけの
+/// （[`Capability::parse`] の失敗）。`Go` / `EditContract` は記録時点で対応する subcommand も path 種別も無い
+/// （go の記帳の口は後続・契約は台帳の write）＝行の値には在るが Bash 面では照合されない宣言だけの
 /// 権能である。`Launch` / `Merge` は器の dispatcher だけが行う操作で、席の行には並ばない（ADR-0045 §2 (1)）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Capability {

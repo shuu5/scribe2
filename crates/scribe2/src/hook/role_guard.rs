@@ -115,7 +115,7 @@ impl PathKind {
 }
 
 /// 権能付き subcommand の名（`<NAME>` の直後の 2 語）→ 権能。**器の口だけ**を見る（`gh pr merge` 等の他 tool は
-/// 見ない）。`Go` / `Relay` / `EditContract` は対応する subcommand が無い（宣言だけ・module doc）。
+/// 見ない）。`Go` / `EditContract` は対応する subcommand が無い（宣言だけ・module doc）。
 pub const CAPABILITY_COMMANDS: &[(&str, Capability)] = &[
     ("pipe answer", Capability::Answer),
     ("pipe approve", Capability::Approve),
@@ -254,7 +254,7 @@ pub struct Located {
 ///
 /// 相対 path の基準は payload の `cwd`。root の外（字句で `..` へ抜ける・実体が symlink で外を指す）と root を
 /// 解けない周は `Outside`。便の worktree の中は worktree 相対で分類する（便の木は repo の写しである）。
-/// `.worktrees/` 直下の便の器でない worktree（`<root>/.worktrees/<name>/<rel>`・planner が docs PR 用に切る木）も
+/// `.worktrees/` 直下の便の器でない worktree（`<root>/.worktrees/<name>/<rel>`・席が docs PR 用に切る木）も
 /// repo の写しとして `<rel>` で分類する（便の印は開かない＝`run: None`）。`.worktrees/<name>` そのものは `Code`。
 pub fn locate(root: Option<&Path>, cwd: &Path, target: &str) -> Located {
     let outside = Located { kind: PathKind::Outside, run: None };
