@@ -8,12 +8,14 @@ use std::fs;
 use std::mem::discriminant;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::LazyLock;
 use std::time::{Duration, Instant, SystemTime};
 use vessel::order::is_declaration_order;
 use vessel::fleet::store::{self, LockPolicy, StoreError};
 use vessel::cli_outcome::{RC_BROKEN, RC_OK, RC_REFUSED};
 use vessel::polarity::{OnFailure, Polarity, Timing};
 use vessel::rules::manifest::Manifest;
+use vessel::fleet::cli::format_utc;
 use vessel::fleet::json_tree::{self, parse, Tree, TreeError, MAX_DEPTH};
 use vessel::fleet::select::{self, Input, Purpose, Selection};
 use vessel::fleet::{KINDS, REASONS, STAGES, WINDOWS};
@@ -603,7 +605,7 @@ fn fleet_external_form() {
     ]);
     let fx = usage_fixture(&["a1"]);
     put_credential(&fx, "a1", &expired_credential("tok-old"));
-    let curl = fake_curl(&fx, LIVE_BODY, "200", 0);
+    let curl = fake_curl(&fx, &LIVE_BODY, "200", 0);
     let claude = fake_claude(&fx, "exit 0");
     let refreshed = run_usage_with_claude(&fx, &curl, &claude);
     // 口座の口の外形（account-lifecycle.md §3）: 使い方・add の 1 行・断りの 1 行・ls の 1 行・retire の 1 行。
@@ -1593,24 +1595,56 @@ const FAR_EXPIRES_MS: u64 = 4_102_444_800_000;
 const TOKEN_A1: &str = "tok-a1-7f3c9e0d";
 const TOKEN_A2: &str = "tok-a2-b81d04aa";
 
+/// [`LIVE_BODY`] とその期待が名乗る reset の 2 つ（`(five_hour, seven_day)`・字面は `Z` 形）。
+///
+/// 選定は `resets_at >= now` で測る（`fleet/select.rs`）ので、fixture に固定日付を書くと
+/// その日を壁時計が越えた瞬間に歯が赤くなる——時限である。壁時計の**今日**（UNIX 秒 / 86 400）から
+/// five_hour = 翌日 05:00:00Z・seven_day = 7 日後 00:00:00Z を組んで、常に今より未来にする。
+/// `LazyLock` なので process で 1 回だけ組む＝走行中に日付を跨いでも fixture と期待は同じ値を見る。
+/// 字面は器の `format_utc` と同じ経路で作る（`YYYY-MM-DDThh:mm:ssZ`・憲法 C2）。
+// flip-check: retroactive s2-07l.468
+static LIVE_RESETS: LazyLock<(String, String)> = LazyLock::new(|| {
+    let today = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        / 86_400;
+    (format_utc((today + 1) * 86_400 + 5 * 3_600), format_utc((today + 7) * 86_400))
+});
+
+/// `Z` 形の字面から末尾の `Z` を外す（`+00:00` 形を組む材料・`Z` が無ければそのまま）。
+fn without_z(ts: &str) -> &str {
+    ts.strip_suffix('Z').unwrap_or(ts)
+}
+
 /// 実測の応答と同じ形の本文（設計 §3）: 窓の `utilization` は**すでに % の値**・`limits[]` の要素は
 /// `utilization` を持たず `percent`（整数）が値・reset は `+00:00` 形と `Z` 形が混ざる。値は架空。
-const LIVE_BODY: &str = r#"{
-  "five_hour": {"utilization": 13.0, "resets_at": "2026-09-12T05:00:00.412000+00:00"},
-  "seven_day": {"utilization": 41.7, "resets_at": "2026-09-18T00:00:00+00:00"},
+///
+/// reset だけ [`LIVE_RESETS`] から差す（混在の形・小数付きの `.412000`・使用率・`scope` は不変）。
+static LIVE_BODY: LazyLock<String> = LazyLock::new(|| {
+    let (five, seven) = &*LIVE_RESETS;
+    format!(
+        r#"{{
+  "five_hour": {{"utilization": 13.0, "resets_at": "{five_naked}.412000+00:00"}},
+  "seven_day": {{"utilization": 41.7, "resets_at": "{seven_naked}+00:00"}},
   "limits": [
-    {"kind": "weekly_scoped", "group": "g", "percent": 38, "severity": "normal",
-     "resets_at": "2026-09-18T00:00:00Z",
-     "scope": {"model": {"display_name": "Fable", "id": null}}, "is_active": true},
-    {"kind": "weekly", "group": "g", "percent": 50, "severity": "normal",
-     "resets_at": "2026-09-18T00:00:00Z", "is_active": true}
+    {{"kind": "weekly_scoped", "group": "g", "percent": 38, "severity": "normal",
+     "resets_at": "{seven}",
+     "scope": {{"model": {{"display_name": "Fable", "id": null}}}}, "is_active": true}},
+    {{"kind": "weekly", "group": "g", "percent": 50, "severity": "normal",
+     "resets_at": "{seven}", "is_active": true}}
   ]
-}"#;
+}}"#,
+        five_naked = without_z(five),
+        seven_naked = without_z(seven),
+    )
+});
 
 /// [`LIVE_BODY`] を読んだ口座の 1 行（`label` の口座）。
 fn live_line(label: &str) -> String {
+    let (five, seven) = &*LIVE_RESETS;
     format!(
-        "usage: account={label} five_hour=13% resets=2026-09-12T05:00:00Z seven_day=41% resets=2026-09-18T00:00:00Z model=Fable:38% resets=2026-09-18T00:00:00Z"
+        "usage: account={label} five_hour=13% resets={five} seven_day=41% resets={seven} model=Fable:38% resets={seven}"
     )
 }
 
@@ -1740,7 +1774,7 @@ fn fleet_usage_measures_two_accounts_into_lines_and_events() {
     let fx = usage_fixture(&["a1", "a2"]);
     put_credential(&fx, "a1", &live_credential(TOKEN_A1));
     put_credential(&fx, "a2", &live_credential(TOKEN_A2));
-    let curl = fake_curl(&fx, LIVE_BODY, "200", 0);
+    let curl = fake_curl(&fx, &LIVE_BODY, "200", 0);
     let out = run_usage(&fx, &curl, &[]);
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "rc 0: {out:?}");
     assert_eq!(out_lines(&out), vec![live_line("a1"), live_line("a2")], "宣言順に口座ごと 1 行");
@@ -1765,11 +1799,12 @@ fn fleet_usage_measures_two_accounts_into_lines_and_events() {
         })
         .collect();
     seen.sort();
+    let (five, seven) = &*LIVE_RESETS;
     let want_for = |label: &str| {
         vec![
-            (label.to_owned(), WindowKind::FiveHour, None, 13, Some("2026-09-12T05:00:00Z".to_owned())),
-            (label.to_owned(), WindowKind::SevenDay, None, 41, Some("2026-09-18T00:00:00Z".to_owned())),
-            (label.to_owned(), WindowKind::SevenDayModel, Some("Fable".to_owned()), 38, Some("2026-09-18T00:00:00Z".to_owned())),
+            (label.to_owned(), WindowKind::FiveHour, None, 13, Some(five.clone())),
+            (label.to_owned(), WindowKind::SevenDay, None, 41, Some(seven.clone())),
+            (label.to_owned(), WindowKind::SevenDayModel, Some("Fable".to_owned()), 38, Some(seven.clone())),
         ]
     };
     let mut want = want_for("a1");
@@ -1785,7 +1820,7 @@ fn fleet_usage_token_travels_only_on_stdin_and_timeout_comes_from_rules() {
     let fx = usage_fixture(&["a1", "a2"]);
     put_credential(&fx, "a1", &live_credential(TOKEN_A1));
     put_credential(&fx, "a2", &live_credential(TOKEN_A2));
-    let curl = fake_curl(&fx, LIVE_BODY, "200", 0);
+    let curl = fake_curl(&fx, &LIVE_BODY, "200", 0);
     let out = run_usage(&fx, &curl, &[]);
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "rc 0: {out:?}");
 
@@ -1826,7 +1861,7 @@ fn fleet_usage_missing_credential_is_one_line_and_others_continue() {
     let fx = usage_fixture(&["a1", "ghost", "a2"]);
     put_credential(&fx, "a1", &live_credential(TOKEN_A1));
     put_credential(&fx, "a2", &live_credential(TOKEN_A2));
-    let curl = fake_curl(&fx, LIVE_BODY, "200", 0);
+    let curl = fake_curl(&fx, &LIVE_BODY, "200", 0);
     let out = run_usage(&fx, &curl, &[]);
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "測れなかったは失敗ではない: {out:?}");
     assert_eq!(
@@ -1861,7 +1896,7 @@ fn fleet_usage_credential_failures_name_their_reason() {
     put_credential(&fx, "old", r#"{"claudeAiOauth":{"accessToken":"tok-old","expiresAt":1000}}"#);
     put_credential(&fx, "notoken", &format!(r#"{{"claudeAiOauth":{{"expiresAt":{FAR_EXPIRES_MS}}}}}"#));
     put_credential(&fx, "broken", "{ not json");
-    let curl = fake_curl(&fx, LIVE_BODY, "200", 0);
+    let curl = fake_curl(&fx, &LIVE_BODY, "200", 0);
     let claude = fake_claude(&fx, "exit 0");
     let claude = claude.display().to_string();
     let out = run_usage(&fx, &curl, &["--claude", &claude]);
@@ -1884,18 +1919,16 @@ fn fleet_usage_credential_failures_name_their_reason() {
 #[test]
 fn fleet_usage_client_failures_name_their_reason() {
     let no_name = LIVE_BODY.replace(r#""display_name": "Fable", "#, "");
+    let (five, seven) = &*LIVE_RESETS;
+    let no_name_line = format!(
+        "usage: account=a1 five_hour=13% resets={five} seven_day=41% resets={seven} seven_day_model=unmeasured:shape_mismatch"
+    );
     let cases: [(&str, &str, &str, u8, &str); 5] = [
-        ("timeout", LIVE_BODY, "200", 28, "usage: account=a1 unmeasured reason=timeout"),
-        ("refused", LIVE_BODY, "200", 7, "usage: account=a1 unmeasured reason=client_failed"),
-        ("status", LIVE_BODY, "500", 0, "usage: account=a1 unmeasured reason=http_status"),
+        ("timeout", &LIVE_BODY, "200", 28, "usage: account=a1 unmeasured reason=timeout"),
+        ("refused", &LIVE_BODY, "200", 7, "usage: account=a1 unmeasured reason=client_failed"),
+        ("status", &LIVE_BODY, "500", 0, "usage: account=a1 unmeasured reason=http_status"),
         ("garbage", "<html>oops</html>", "200", 0, "usage: account=a1 unmeasured reason=body_unreadable"),
-        (
-            "no display_name",
-            &no_name,
-            "200",
-            0,
-            "usage: account=a1 five_hour=13% resets=2026-09-12T05:00:00Z seven_day=41% resets=2026-09-18T00:00:00Z seven_day_model=unmeasured:shape_mismatch",
-        ),
+        ("no display_name", &no_name, "200", 0, &no_name_line),
     ];
     for (name, body, status, rc, want) in cases {
         let fx = usage_fixture(&["a1"]);
@@ -1943,7 +1976,7 @@ fn fleet_usage_client_failures_name_their_reason() {
 #[test]
 fn fleet_usage_without_declaration_says_so_and_writes_nothing() {
     let fx = usage_fixture(&[]);
-    let curl = fake_curl(&fx, LIVE_BODY, "200", 0);
+    let curl = fake_curl(&fx, &LIVE_BODY, "200", 0);
     let out = run_usage(&fx, &curl, &[]);
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{out:?}");
     assert!(out.stdout.is_empty(), "stdout は 0 byte");
@@ -2030,7 +2063,7 @@ fn fleet_usage_show_is_read_only_and_prints_the_latest() {
     let fx = usage_fixture(&["a1", "a2"]);
     put_credential(&fx, "a1", &live_credential(TOKEN_A1));
     put_credential(&fx, "a2", &live_credential(TOKEN_A2));
-    let curl = fake_curl(&fx, LIVE_BODY, "200", 0);
+    let curl = fake_curl(&fx, &LIVE_BODY, "200", 0);
     let first = run_usage(&fx, &curl, &[]);
     assert_eq!(first.status.code(), Some(i32::from(RC_OK)), "{first:?}");
     let newer = LIVE_BODY.replace("13.0", "33.0");
@@ -2392,7 +2425,7 @@ fn retire_place() -> (UsageFixture, String, String) {
     put_host_labels(&fx.state, &["a1", "a2"]);
     put_credential(&fx, "a1", &live_credential(TOKEN_A1));
     put_credential(&fx, "a2", &live_credential(TOKEN_A2));
-    let curl = fake_curl(&fx, LIVE_BODY, "200", 0).display().to_string();
+    let curl = fake_curl(&fx, &LIVE_BODY, "200", 0).display().to_string();
     (fx, state, curl)
 }
 
@@ -2698,7 +2731,7 @@ fn account_cmd_flags_refuse_empty_value_dashed_value_and_unknown_flag() {
 fn fleet_usage_refresh_rewritten_credential_is_measured_with_refresh_ok() {
     let fx = usage_fixture(&["a1"]);
     put_credential(&fx, "a1", &expired_credential("tok-old"));
-    let curl = fake_curl(&fx, LIVE_BODY, "200", 0);
+    let curl = fake_curl(&fx, &LIVE_BODY, "200", 0);
     let claude = fake_claude(&fx, "cat \"{fresh}\" > \"$CLAUDE_CONFIG_DIR/.credentials.json\"\nexit 0");
     let out = run_usage_with_claude(&fx, &curl, &claude);
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{out:?}");
@@ -2738,7 +2771,7 @@ fn fleet_usage_refresh_failures_keep_token_expired_and_name_the_refresh() {
     ] {
         let fx = usage_fixture(&["a1"]);
         put_credential(&fx, "a1", &expired_credential("tok-old"));
-        let curl = fake_curl(&fx, LIVE_BODY, "200", 0);
+        let curl = fake_curl(&fx, &LIVE_BODY, "200", 0);
         let claude = match tail {
             Some(tail) => fake_claude(&fx, tail),
             None => fx.spy.join("no-such-claude"),
@@ -2782,7 +2815,7 @@ fn refresh_timeout_fixture() -> (UsageFixture, PathBuf) {
     );
     fs::write(&fx.rules, short).expect("短い上限の rules fixture を書ける");
     put_credential(&fx, "a1", &expired_credential("tok-old"));
-    let curl = fake_curl(&fx, LIVE_BODY, "200", 0);
+    let curl = fake_curl(&fx, &LIVE_BODY, "200", 0);
     (fx, curl)
 }
 
@@ -3081,7 +3114,7 @@ fn fleet_usage_refresh_is_not_attempted_for_fresh_or_tombstone() {
     let fx = usage_fixture(&["a1", "tomb"]);
     put_credential(&fx, "a1", &live_credential(TOKEN_A1));
     put_credential(&fx, "tomb", r#"{"claudeAiOauth":{"accessToken":"tok-tomb","expiresAt":0}}"#);
-    let curl = fake_curl(&fx, LIVE_BODY, "200", 0);
+    let curl = fake_curl(&fx, &LIVE_BODY, "200", 0);
     let claude = fake_claude(&fx, "exit 0");
     let out = run_usage_with_claude(&fx, &curl, &claude);
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{out:?}");
@@ -3100,7 +3133,7 @@ fn fleet_usage_refresh_launches_once_for_the_single_expired_account() {
     let fx = usage_fixture(&["a1", "a2"]);
     put_credential(&fx, "a1", &live_credential(TOKEN_A1));
     put_credential(&fx, "a2", &expired_credential("tok-old"));
-    let curl = fake_curl(&fx, LIVE_BODY, "200", 0);
+    let curl = fake_curl(&fx, &LIVE_BODY, "200", 0);
     let claude = fake_claude(&fx, "exit 0");
     let out = run_usage_with_claude(&fx, &curl, &claude);
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{out:?}");
