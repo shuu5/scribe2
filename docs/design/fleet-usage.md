@@ -117,7 +117,7 @@
 - 何が起きているか（planner の実測 2026-09-18・main 12e64cc・verified）: `crates/scribe2/tests/e2e/fleet.rs` の fixture `LIVE_BODY`（偽 curl が返す応答の本文）は `seven_day` / `limits[]` の `resets_at` を固定の `2026-09-18T00:00:00` で持つ。選定（`fleet select`・`fleet/select.rs` の `not_stale` = `resets_at >= now`）は壁時計の now と比べるので、その時刻を跨いだ瞬間から窓が「測れていない」に倒れて候補なしになり、`account_cmd_retired_account_leaves_select_and_usage` が赤（workspace 1621 本中この 1 本・nextest 単体でも同じ）。main の CI と gate の nextest・検出線の baseline がすべて赤＝便が 1 本も通らない（憲法 C12.6）。
 - 形（行 b・S・test だけの差分）: reset 2 つを **process で 1 回**壁時計から組む（`LazyLock` の static 1 つ・five_hour = 翌日 05:00Z・seven_day = 7 日後 00:00Z・字面は器の pub な `format_utc`（`fleet/cli.rs`）と同じ `YYYY-MM-DDThh:mm:ssZ`）。`LIVE_BODY` はその値から組む `LazyLock` の static に替える（本文の形 = `+00:00` 形・小数付きの形・`Z` 形の混在は不変・値は末尾の `Z` を外して差す）。期待の側（`live_line`・`fleet_usage_` の歯の期待 tuple 3 つ・`shape_mismatch` の case の期待 1 本）も同じ static から組み、固定日付の literal を fixture と期待の両方から消す。呼び手は `&LIVE_BODY`（`fake_curl` の引数）。flip-check は test だけの差分で base が緑（base に新しい fixture を当てれば通る）なので、行頭の札 `// flip-check: retroactive s2-07l.468` を test 区間に 1 行置く（判定行 `retroactive=1`・notes に変異 proof）。
 - 触らない: 選定の規則（`resets_at >= now`・過去の窓を stale と読むのは C10 の意図どおり）・器の src・`fleet_json_tree_reads_the_usage_shape` の fixture（構文の歯・壁時計と比べない）・ts を注入する歯（`ALLOWANCE_TS` / `RESETS_AT` の定数・now を渡す経路は時限ではない）・snapshot。
-- 歯: 検証行 1 = `account_cmd_retired_account_leaves_select_and_usage`（base = 時限で赤・head = 緑＝flip の RED は「環境（壁時計）」で機能不在ではない）／検証行 2 = `fleet_usage_` 接頭辞（期待を static から組み直した歯が緑のまま）。新しい歯は足さない。
+- 歯: 検証行 1 = `account_cmd_retired_account_leaves_select_and_usage`（base = 時限で赤・head = 緑＝flip の RED は「環境（壁時計）」で機能不在ではない）／検証行 2 = `fleet_usage_measures_two_accounts_into_lines_and_events`（`want_for` の tuple 3 つと `live_line` の期待を static から組み直した歯が緑のまま）／検証行 3 = `fleet_usage_client_failures_name_their_reason`（`shape_mismatch` の case の期待・同上）。filter は歯の名の全体で書く: 裸の接頭辞 `fleet_usage_` は `src/fleet/usage.rs` の unit の歯 8 本と `tests/e2e/rules.rs` の歯 1 本の名にも含まれ、受付の導出（歯の置き場 = fn 名が filter 語を含む file）が write-set を 3 面に広げて審査が落ちる（run 003510Z の実測）。新しい歯は足さない。
 - 却下: 日付だけ先へずらす（同じ穴が再発）／選定の `now` を歯から注入できる口を器に足す（src を触る便になり main-red の回復が遅れる・C2.2 の env 縫い目にもなりうる＝別 bead）／固定日付を 2099 にする（時限のまま）。
 
 <!-- contracts:begin -->
@@ -138,7 +138,7 @@ title = "fleet の e2e fixture の reset を壁時計から組む — 固定日�
 req = ["FR33", "AC11"]
 section = "12"
 tests = ["crates/scribe2/tests/e2e/fleet.rs"]
-verify = ["cargo nextest run -p scribe2 --no-tests=fail account_cmd_retired_account_leaves_select_and_usage", "cargo nextest run -p scribe2 --no-tests=fail fleet_usage_"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail account_cmd_retired_account_leaves_select_and_usage", "cargo nextest run -p scribe2 --no-tests=fail fleet_usage_measures_two_accounts_into_lines_and_events", "cargo nextest run -p scribe2 --no-tests=fail fleet_usage_client_failures_name_their_reason"]
 size = "S"
 done = "fleet.rs の fixture の resets_at が今より未来の値で組まれ、固定日付の literal が fixture と期待の両方から消え、fleet:: の歯が全部緑で main の nextest --workspace が緑に戻る"
 
