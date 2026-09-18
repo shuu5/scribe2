@@ -123,8 +123,8 @@ fn polarity_lists_the_three_added_guards() {
     }
     assert_eq!(
         ALL.len(),
-        25,
-        "母集団は 25（10 + 3 + 質問の口 1・`s2-07l.115` + land の 2・`s2-07l.124` + 入口の排他 1・`s2-07l.145` + 追随の回数 1・`s2-07l.146` + 退避の断り 1・`s2-07l.139` + 消費の断り 1・`s2-07l.141` + 登録の断り 1・`s2-07l.192` + 権能の執行 1・`s2-07l.201` + 契約表の検査 1・`s2-07l.208` + 純移動の証明 1・`s2-07l.266` + command guard 1・`s2-07l.168` + 審査の段 1・`s2-07l.241` + 起動行の受付 1・`s2-07l.411`・`.479.1` で cap guard と cycle の 2 つが消えた）"
+        23,
+        "母集団は 23（10 + 3 + 質問の口 1・`s2-07l.115` + land の 2・`s2-07l.124` + 入口の排他 1・`s2-07l.145` + 追随の回数 1・`s2-07l.146` + 登録の断り 1・`s2-07l.192` + 権能の執行 1・`s2-07l.201` + 契約表の検査 1・`s2-07l.208` + 純移動の証明 1・`s2-07l.266` + command guard 1・`s2-07l.168` + 審査の段 1・`s2-07l.241` + 起動行の受付 1・`s2-07l.411`・`.479.1` で cap guard と cycle の 2 つ・`.479.2` で退避と消費の 2 つが消えた）"
     );
 }
 
@@ -144,7 +144,7 @@ fn runner_question_guard_is_in_loop_fail_open() {
     let stop = names.iter().position(|name| *name == "guard=runner-stop");
     let question = names.iter().position(|name| *name == "guard=runner-question");
     assert!(matches!((stop, question), (Some(s), Some(q)) if q == s + 1), "runner-stop の直後: {names:?}");
-    assert!(text.lines().last().is_some_and(|line| line.contains(" in-loop=20 ") && line.contains(" fail-open=3")), "集計 +1（.124 の 2・.145 の 1・.146 の 1・.139 の 1・.141 の 1・.192 の 1・.201 の 1・.168 の 1・.241 の審査 1・fail-open は .266 の純移動の証明 1 を含む）: {text}");
+    assert!(text.lines().last().is_some_and(|line| line.contains(" in-loop=18 ") && line.contains(" fail-open=3")), "集計（.124 の 2・.145 の 1・.146 の 1・.192 の 1・.201 の 1・.168 の 1・.241 の審査 1・fail-open は .266 の純移動の証明 1 を含む・`.479.2` で退避と消費の 2 つが消えた）: {text}");
 }
 
 /// 3 クラスを名乗らない契約。
@@ -217,12 +217,13 @@ fn polarity_lists_land_anchor_sync_and_retire_clean_as_in_loop_fail_closed() {
     ] {
         assert!(text.lines().any(|line| line == expected), "一覧に載る: {expected}\n{text}");
     }
-    // 集計は行数から独立に数えた値と一致し、.115 の 11 から 2（+ `.145` / `.146` / `.139` / `.141` / `.192` / `.201` / `.168` / `.241` の 各 1）増えている。
+    // 集計は行数から独立に数えた値と一致する（`.145` / `.146` / `.192` / `.201` / `.168` / `.241` の 各 1 が足され、
+    // `.479.1` で cap guard と cycle の 2 つ・`.479.2` で退避と消費の 2 つが消えた）。
     let in_loop = text.lines().filter(|line| line.contains(" timing=in-loop ")).count();
-    assert_eq!(in_loop, 20, "in-loop の行数: {text}");
+    assert_eq!(in_loop, 18, "in-loop の行数: {text}");
     let summary = text.lines().last().unwrap_or_default();
-    assert_eq!(count_of(summary, "in-loop"), Some(20), "集計 +2（+ .145 / .146 / .139 / .141 / .192 / .201 / .168 / .241 の 各 1・.266 は post-hoc ゆえ不変）: {summary}");
-    assert_eq!(count_of(summary, "guards"), Some(25), "母集団 +2（+ .145 / .146 / .139 / .141 / .192 / .201 / .208 / .266 / .168 / .241 の 各 1）: {summary}");
+    assert_eq!(count_of(summary, "in-loop"), Some(18), "集計（+ .145 / .146 / .192 / .201 / .168 / .241 の 各 1・.266 は post-hoc ゆえ不変・`.479.2` で -2）: {summary}");
+    assert_eq!(count_of(summary, "guards"), Some(23), "母集団（+ .145 / .146 / .192 / .201 / .208 / .266 / .168 / .241 の 各 1・`.479.2` で -2）: {summary}");
 }
 
 /// 契約表の検査（`s2-07l.208`・設計 contract-source.md §8・ADR-0014 §2.1）は **post-hoc / fail-closed** で一覧に載る
@@ -247,7 +248,7 @@ fn polarity_lists_contract_table_as_a_post_hoc_fail_closed_guard() {
         "role-guard の直後・intake-unfit の直前: {names:?}"
     );
     let summary = text.lines().last().unwrap_or_default();
-    assert_eq!(count_of(summary, "guards"), Some(25), "母集団 +1（.168 の command guard と .241 の審査の段・.411 の起動行の受付を含む）: {summary}");
+    assert_eq!(count_of(summary, "guards"), Some(23), "母集団（.168 の command guard と .241 の審査の段・.411 の起動行の受付を含む・`.479.2` で -2）: {summary}");
     assert_eq!(count_of(summary, "post-hoc"), Some(5), "post-hoc +1（gate の 3〔.266 の純移動の証明を含む〕・land の main 実測・契約表）: {summary}");
 }
 
@@ -292,44 +293,22 @@ fn polarity_lists_role_guard_right_after_register_refusal() {
     assert!(matches!((register, role), (Some(r), Some(g)) if g == r + 1), "register-refusal の直後: {names:?}");
 }
 
-/// 退避の断り（`s2-07l.139`・ADR-0018 §2.1・ADR-0014 §2.1「書込を止めうる判定」）は **in-loop / fail-closed** で
-/// 一覧に載る。値は境界の定数（`seat::externalize::POLARITY`）で、一覧はそれを返すだけ。cycle の断りの**直後**に
-/// 並ぶ（行為の流れ = 退避は席の面の最後）。cap guard の行（FR26）は不変。
+/// 退避の断り（`s2-07l.139`）と消費の断り（`s2-07l.141`）は **もう無い**（ADR-0045 §2 (2)・`s2-07l.479.2`）:
+/// 一覧に 1 行も出ず、`Guard` の母集団からも消える。台帳の読みの極性は guard でない境界
+/// （[`vessel::polarity::NOT_A_GUARD`]）として残り、`seat::ledger::POLARITY` を指す。
+///
+/// **消えたことを測る歯**である（base では 2 行とも一覧に在るので RED）。
 #[test]
-fn polarity_lists_externalize_refusal_as_an_in_loop_fail_closed_guard() {
-    let closed = Polarity { timing: Timing::InLoop, on_failure: OnFailure::FailClosed };
-    assert_eq!(Guard::Externalize.polarity(), closed, "書く前に判定し、測れない周は退避物を作らない");
-    let externalize: Polarity = vessel::seat::externalize::POLARITY;
-    assert_eq!(Guard::Externalize.polarity(), externalize, "境界の定数と同じ値");
-    let type_name = std::any::type_name::<vessel::seat::externalize::ExternalizeError>();
-    assert!(type_name.ends_with(Guard::Externalize.boundary()), "boundary は enum を名指す: {type_name}");
+fn polarity_drops_the_working_memory_guards() {
     let text = output();
-    let expected = "guard=externalize-refusal timing=in-loop on-failure=fail-closed boundary=seat::externalize::ExternalizeError";
-    assert!(text.lines().any(|line| line == expected), "一覧に載る: {expected}\n{text}");
     let names: Vec<&str> = text.lines().filter_map(|line| line.split(' ').next()).collect();
-    let inject = names.iter().position(|name| *name == "guard=inject-refusal");
-    let refusal = names.iter().position(|name| *name == "guard=externalize-refusal");
-    assert!(matches!((inject, refusal), (Some(c), Some(r)) if r == c + 1), "inject-refusal の直後（cycle は `.479.1` で消えた）: {names:?}");
-}
-
-/// 消費の断り（`s2-07l.141`・ADR-0018 §2.1・ADR-0014 §2.1「書込を止めうる判定」＝`wm-ambiguous` / `consumed-exists`
-/// は move を止める）は **in-loop / fail-closed** で一覧に載る。値は境界の定数（`seat::consume::POLARITY`）で、
-/// 一覧はそれを返すだけ。退避の断りの**直後**に並ぶ（行為の流れ = 消費は退避の後）。
-#[test]
-fn polarity_lists_consume_refusal_as_an_in_loop_fail_closed_guard() {
-    let closed = Polarity { timing: Timing::InLoop, on_failure: OnFailure::FailClosed };
-    assert_eq!(Guard::Consume.polarity(), closed, "move の前に判定し、測れない周は動かさない");
-    let consume: Polarity = vessel::seat::consume::POLARITY;
-    assert_eq!(Guard::Consume.polarity(), consume, "境界の定数と同じ値");
-    let type_name = std::any::type_name::<vessel::seat::consume::ConsumeError>();
-    assert!(type_name.ends_with(Guard::Consume.boundary()), "boundary は enum を名指す: {type_name}");
-    let text = output();
-    let expected = "guard=consume-refusal timing=in-loop on-failure=fail-closed boundary=seat::consume::ConsumeError";
-    assert_eq!(text.lines().filter(|line| *line == expected).count(), 1, "一覧に 1 行で載る: {expected}\n{text}");
-    let names: Vec<&str> = text.lines().filter_map(|line| line.split(' ').next()).collect();
-    let externalize = names.iter().position(|name| *name == "guard=externalize-refusal");
-    let refusal = names.iter().position(|name| *name == "guard=consume-refusal");
-    assert!(matches!((externalize, refusal), (Some(e), Some(r)) if r == e + 1), "externalize-refusal の直後: {names:?}");
+    for gone in ["guard=externalize-refusal", "guard=consume-refusal"] {
+        assert!(!names.iter().any(|name| *name == gone), "{gone} は一覧に残らない: {text}");
+    }
+    assert!(names.iter().any(|name| *name == "guard=inject-refusal"), "残る席の guard は在る: {text}");
+    let ledger: Polarity = vessel::seat::ledger::POLARITY;
+    assert_eq!(ledger, Polarity { timing: Timing::InLoop, on_failure: OnFailure::FailClosed }, "台帳の読みは fail-closed");
+    assert!(vessel::polarity::NOT_A_GUARD.contains(&ledger), "台帳の読みは guard でない境界として残る");
 }
 
 /// 席の登録の受付（`s2-07l.192`・設計 seat-roles.md §6・ADR-0022 §2.5）は **in-loop / fail-closed** で一覧に載る。
@@ -376,8 +355,8 @@ fn polarity_lists_command_guard_as_in_loop_fail_closed_right_after_cap_guard() {
     assert!(matches!((permission, command), (Some(c), Some(g)) if g == c + 1), "permission の直後（cap guard は `.479.1` で消えた）: {names:?}");
     assert!(matches!((command, role), (Some(g), Some(r)) if g < r), "role-guard より前: {names:?}");
     let summary = text.lines().last().unwrap_or_default();
-    assert_eq!(count_of(summary, "guards"), Some(25), "母集団 +1（.241 の審査の段・.411 の起動行の受付を含む）: {summary}");
-    assert_eq!(count_of(summary, "in-loop"), Some(20), "in-loop（.241 の審査の段・.411 の起動行の受付を含む）: {summary}");
+    assert_eq!(count_of(summary, "guards"), Some(23), "母集団（.241 の審査の段・.411 の起動行の受付を含む・`.479.2` で -2）: {summary}");
+    assert_eq!(count_of(summary, "in-loop"), Some(18), "in-loop（.241 の審査の段・.411 の起動行の受付を含む・`.479.2` で -2）: {summary}");
     assert_eq!(count_of(summary, "fail-open"), Some(3), "fail-open は不変（FailClosed の門）: {summary}");
 }
 

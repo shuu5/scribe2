@@ -853,28 +853,6 @@ fn rules_embedded_manifest_declares_follow_retries() {
     assert!(joined.contains("未知である"), "行の kind を綴り違えた manifest は読めない: {joined}");
 }
 
-/// 退避物の節 3 の上限の行（`seat.wm_directive_cap`・裁定 id `user 2026-09-12T02:01Z`・設計
-/// working-memory.md §5.1）。**値は manifest が持ち、設計 doc は写さない**（C1 / C5）。
-#[test]
-fn rules_embedded_manifest_declares_wm_directive_cap() {
-    let manifest = match Manifest::embedded() {
-        Ok(found) => found,
-        Err(errors) => {
-            let lines: Vec<String> = errors.iter().map(ToString::to_string).collect();
-            panic!("埋め込み manifest が拒まれた:\n{}", lines.join("\n"))
-        }
-    };
-    let row = manifest.get("seat.wm_directive_cap").expect("上限の行が在る");
-    assert_eq!(row.value, RuleValue::Int(24), "user 裁定 2026-09-12T02:01Z の値");
-    assert_eq!(row.kind, RuleKind::WmDirectiveCap, "kind");
-    assert_eq!(row.kind.shape(), ValueShape::Int, "値の形は Int（行）");
-    assert!(row.enabled, "既定で効く");
-    assert_eq!(row.ruling, "user 2026-09-12T02:01Z", "裁定 id");
-    assert_eq!(row.ruled_at, "2026-09-12", "裁定日");
-    assert!(ALL.contains(&RuleKind::WmDirectiveCap), "ALL に在る");
-    assert_eq!(RuleKind::parse("WmDirectiveCap"), Some(RuleKind::WmDirectiveCap), "kind を字面から引ける");
-}
-
 /// 着地の順番を待つ上限の行（`pipe.land_wait_s`・裁定 id `user 2026-09-13T02:50Z`・設計
 /// gate-cost.md §6）。**値は manifest が持ち、設計 doc は写さない**（C1 / C5）。
 /// 行の kind を綴り違えた manifest は `RuleError` で拒まれる（kind の字面は `ALL` を通してしか解けない）。
@@ -1042,11 +1020,32 @@ fn rules_embedded_manifest_is_valid_and_covers_all_kinds() {
     // **tracked な `rules/manifest.toml` の全行が受理される**（`parse` は 1 件でも違反が
     // 在れば `Err` を返すので、ここに届いた時点で全行が必須 key を持つ）。母集団を額面に
     // 出すのは、行が黙って落ちた周を「全部読めた」と読み違えないためである。
-    assert_eq!(manifest.rows().len(), 47, "埋め込み manifest の行数（母集団・`.217` で +2・`.249` で +3・`.254` で +1・`.168` で +1・`.297` で +1・`.315` で +1・`.322` で +1・`.360` で +1・`.423` で +2・`.478` で -1〔役割の行 2 本が 1 本〕・`.479.1` で -7〔席の自律の行〕）");
+    assert_eq!(manifest.rows().len(), 44, "埋め込み manifest の行数（母集団・`.217` で +2・`.249` で +3・`.254` で +1・`.168` で +1・`.297` で +1・`.315` で +1・`.322` で +1・`.360` で +1・`.423` で +2・`.478` で -1〔役割の行 2 本が 1 本〕・`.479.1` で -7〔席の自律の行〕・`.479.2` で -3〔作業記憶の行 1 本と棚卸しの行 2 本〕）");
     for kind in ALL {
         let covered = manifest.rows().iter().any(|row| row.kind == *kind);
         assert!(covered, "{} の行が manifest に無い", kind.as_str());
     }
+}
+
+/// 作業記憶の行（`seat.wm_directive_cap`）と台帳の棚卸しの行 2 本（`ledger.memo_stale_days` /
+/// `ledger.memo_stale_priority`）は **もう無い**（ADR-0045 §2 (2)・`s2-07l.479.2`）: 読み手（退避と
+/// rebrief の triage）が消えたので行も kind も消える（C10.3: 配線の無い設定を残さない）。
+///
+/// **消えたことを測る歯**である（base では 3 行とも在り kind も引けるので RED）。
+#[test]
+fn rules_embedded_manifest_drops_the_working_memory_rows() {
+    let manifest = Manifest::embedded().unwrap_or_else(|errors| panic!("埋め込み manifest が拒まれた: {errors:?}"));
+    for id in ["seat.wm_directive_cap", "ledger.memo_stale_days", "ledger.memo_stale_priority"] {
+        assert!(manifest.get(id).is_none(), "{id} の行は残らない");
+    }
+    for name in ["WmDirectiveCap", "MemoStaleDays", "MemoStalePriority"] {
+        assert_eq!(RuleKind::parse(name), None, "{name} は kind の字面から引けない");
+        assert!(!ALL.iter().any(|kind| kind.as_str() == name), "{name} は ALL に無い");
+    }
+    // 台帳の待ち上限（席の指示文の `{ledger}` の読み手）は残る＝「全部消した」ではないことを同時に測る。
+    let kept = manifest.get("seat.ledger_timeout_s").expect("台帳の待ち上限の行は残る");
+    assert_eq!(kept.kind, RuleKind::LedgerTimeoutS, "kind");
+    assert!(kept.enabled, "既定で効く");
 }
 
 #[test]
@@ -1187,7 +1186,7 @@ fn rules_embedded_manifest_declares_one_capability_row_per_role() {
     assert!(ALL.contains(&RuleKind::RoleCapabilities), "ALL に在る（末尾は `.423` の SeatPointerBackoffMaxS）");
     assert_eq!(RuleKind::parse("RoleCapabilities"), Some(RuleKind::RoleCapabilities), "kind を字面から引ける");
     let kinds = ALL.len();
-    assert_eq!(kinds, 47, "kind の母集団（`.201` で +1・`.217` で +2・`.249` で +3・`.254` で +1・`.168` で +1・`.297` で +1・`.315` で +1・`.322` で +1・`.360` で +1・`.423` で +2）");
+    assert_eq!(kinds, 44, "kind の母集団（`.201` で +1・`.217` で +2・`.249` で +3・`.254` で +1・`.168` で +1・`.297` で +1・`.315` で +1・`.322` で +1・`.360` で +1・`.423` で +2・`.479.2` で -3）");
 }
 
 /// 禁じる語列の行（`runner.denied_commands`・`RuleKind::RunnerDeniedCommands`・裁定 id `user 2026-09-14`・ADR-0025 §2.1・
@@ -1245,36 +1244,6 @@ fn rules_embedded_manifest_declares_the_line_width_row() {
     let at = ALL.iter().position(|kind| *kind == RuleKind::LineWidth);
     let args = ALL.iter().position(|kind| *kind == RuleKind::FnArgs);
     assert_eq!(at, args.map(|found| found + 1), "宣言順は FnArgs の直後");
-}
-
-/// 台帳の棚卸しの閾値 2 行（`ledger.memo_stale_days` / `ledger.memo_stale_priority`・裁定 id
-/// `user 2026-09-13T14:06Z`・設計 ledger-triage.md §4）。**値は manifest が持ち、設計 doc は写さない**（C1 / C5）。
-#[test]
-fn rules_embedded_manifest_declares_the_memo_stale_rows() {
-    let manifest = Manifest::embedded().unwrap_or_else(|errors| panic!("埋め込み manifest が拒まれた: {errors:?}"));
-    let rows: [(&str, RuleKind, u64); 2] = [
-        ("ledger.memo_stale_days", RuleKind::MemoStaleDays, 3),
-        ("ledger.memo_stale_priority", RuleKind::MemoStalePriority, 2),
-    ];
-    for (id, kind, value) in rows {
-        let row = manifest.get(id).unwrap_or_else(|| panic!("{id} の行が在る"));
-        assert_eq!(row.value, RuleValue::Int(value), "{id} の値（user 裁定 2026-09-13T14:06Z）");
-        assert_eq!(row.kind, kind, "{id} の kind");
-        assert_eq!(row.kind.shape(), ValueShape::Int, "{id} の値の形は Int");
-        assert!(row.enabled, "{id} は既定で効く");
-        assert_eq!(row.ruling, "user 2026-09-13T14:06Z", "{id} の裁定 id");
-        assert_eq!(row.ruled_at, "2026-09-13", "{id} の裁定日");
-        assert_eq!(RuleKind::parse(kind.as_str()), Some(kind), "{id} の kind を字面から引ける");
-    }
-    // この 2 つは size の 3 行の直前に並ぶ（`.479.1` で席の自律の 7 つが消えたので位置は現物から数える）。
-    let at = ALL.iter().position(|kind| *kind == RuleKind::MemoStaleDays).unwrap_or_default();
-    assert_eq!(
-        ALL.get(at..at.saturating_add(3)),
-        Some([RuleKind::MemoStaleDays, RuleKind::MemoStalePriority, RuleKind::PipeSizeSLines].as_slice()),
-        "宣言順で size の 3 行の直前に並ぶ 2 つ"
-    );
-    let errors = rejected(&one_row(RuleKind::MemoStaleDays, "\"3 日\"")).expect("散文の値の fixture が受理された");
-    assert!(errors.join("\n").contains("要 Int"), "Int でない値は拒む: {errors:?}");
 }
 
 /// 埋め込み manifest の `role.<役割名>` の行の値（名の列・行が無い・列でない周は空＝呼び側の assert が落とす）。

@@ -2,7 +2,7 @@
 
 - 決定: [ADR-0028](../../design-intent/decisions/ADR-0028-consumer-sync-is-measured-and-updated-by-the-vessel.html)（§2.1 build 元 commit / §2.2 読み込み元の記録 / §2.3 install の event と repo の宣言 / §2.4 hook 集合の食い違い / §2.5 役割なしの起動行）
 - 要件: SRS [FR61](../../design-intent/spec/srs.html#FR61)（導入先の同期の測定と更新の口）/ [FR62](../../design-intent/spec/srs.html#FR62)（hook 集合の食い違いで席を作り直す）/ [AC31](../../design-intent/spec/srs.html#AC31) / [AC32](../../design-intent/spec/srs.html#AC32) が正本。役割なしの起動（FR60 / AC30）は [account-lifecycle.md](./account-lifecycle.md) §4.5 が持つ（同じ ADR の §2.5）。土台 = FR51（doctor の項目）/ FR19（SessionStart の名乗り）/ FR29 / FR38（退避と立て直しの既存経路）/ FR23（復元の DATA）/ FR57（host の面）。
-- 土台: [vessel-hook.md](./vessel-hook.md) §4（`session-start`）・[seat-state.md](./seat-state.md) §2（席の打刻の置き場）・[seat-autonomy.md](./seat-autonomy.md) §3（tick の判定の軸）・[account-autonomy.md](./account-autonomy.md) §5（退避後の終了の手と立て直し）・[account-lifecycle.md](./account-lifecycle.md) §2（host の manifest の表）・[fleet-event-log.md](./fleet-event-log.md) §3（event の schema）・[working-memory.md](./working-memory.md) §5.2（rebrief の DATA）
+- 土台: [vessel-hook.md](./vessel-hook.md) §4（`session-start`）・[seat-state.md](./seat-state.md) §2（席の打刻の置き場）・[seat-autonomy.md](./seat-autonomy.md) §3（tick の判定の軸〔機構ごと削除済み〕）・[account-autonomy.md](./account-autonomy.md) §5（退避後の終了の手と立て直し）・[account-lifecycle.md](./account-lifecycle.md) §2（host の manifest の表）・[fleet-event-log.md](./fleet-event-log.md) §3（event の schema）
 - 語彙: `design-intent/vocabulary.yaml`（導入先・build 元 commit・読み込み元・hook 集合の食い違い）
 
 ## 1. 何を解くか
@@ -57,8 +57,8 @@
 - **tick の軸を 1 つ足す**（[seat-autonomy.md](./seat-autonomy.md) §3 の judge・inject / noop の判定であって guard ではない・極性一覧に載せない・置き場は口座の軸の**後**〔逼迫の席を先に逃がす〕・状態の門の前）: 登録 row の在る席ごとに §3 の `plugin` 記録を読み、記録の root に今在る hooks.json の digest と比べる。違えば **退避の合図**を注入する（FR29 と同じ除外 = 退避物が在る周・cycle lock が live な周は送らない・busy でも送る〔context cap と同じ運び〕・payload の理由は `hook-drift`）。記録が無い・読めない席・root の file が無い周は注入せず `NoopReason` に理由 1 つ（縮退・止めない）。
 - **合図の出所を typed に**（台帳 `s2-07l.307` と同じ穴）: 退避の合図の記録（`inject.jsonl`）は出所を持たず、終了の手（[account-autonomy.md](./account-autonomy.md) §5）は「直近の合図が退避の合図」だけで立つ。本節の合図は **口座由来と同じく終了の手 → 立て直し**へ進ませたい（`/clear` では新しい hook が載らない）ので、合図の記録に closed enum の `origin=<context|account|hook>` を足し、終了の手は `account` / `hook` 由来の合図にだけ立つ（`context` 由来は従来どおり `/clear` の cycle）。**`.307` が先**（同じ 1 変更・.304 は .307 に依存する）。
 - **立て直し**: 既存の経路そのもの（退避 → Stop → `/exit` → 前面が shell → relaunch）。口座は §3 の session 用の規則で選ぶが、**hook 由来の周は登録 row の口座が閾値未満ならその口座を優先**（`.307` の「閾値未満なら現在の口座を優先」と同じ規則・planner を 1 口座に固定する user 直命 2026-09-14）。
-- **binary だけの食い違い**（hooks の digest が同じ）: 作り直さない（次の hook の起動で新しい binary が走る）。doctor の行と rebrief の DATA に載せるだけ。
-- **rebrief の DATA**: [working-memory.md](./working-memory.md) §5.2 の marker に **`[PLUGIN]`** を 1 行足す: `[PLUGIN] root=<root> hooks=<digest> binary=<sha> drift=<none|hooks|binary|hooks+binary|unrecorded>`（判断材料・規則ではない・外形 snapshot に載る）。
+- **binary だけの食い違い**（hooks の digest が同じ）: 作り直さない（次の hook の起動で新しい binary が走る）。doctor の行に載せるだけ（復元の DATA に載せる面は `s2-07l.479.2` で消えた）。
+- **復元の DATA の `[PLUGIN]` の行**は**超過した**（ADR-0045 §2 (2)・`s2-07l.479.2`・DATA ごと消えた）。導入先の食い違いは doctor の行が持つ。
 
 ## 7. 極性（[polarity.md](./polarity.md)）
 
@@ -79,7 +79,7 @@
 - §3: fixture の hook を `--plugin-root <tmp>` 付きで撃つと `seat/<target>/plugin` に 1 行・digest は tmp の hooks.json の FNV-1a と一致／`--plugin-root` 無し・空は file を書かない／hooks.json が無い周は `hooks=unreadable`。
 - §4（AC31）: tmp の state dir に口座 2 つ（片方の `plugins/installed_plugins.json` に consumer 2 つ・片方は worktree の path）と `[[vessel]] repo` を置き `doctor --state-dir` を撃つ → consumer ごとに 1 行・`drift=` が `none` / `binary` / `plugin` / `ledger` の 4 語をそれぞれ出す fixture 4 つ／記録の無い consumer は `unrecorded`／帳簿が壊れていれば `ledger=unreadable` の 1 行で他の行は出る／`[[vessel]]` 無しは `head=undeclared`。
 - §5（AC31）: 偽 `git`・偽 `cargo`（argv を写す stub・PATH の先頭）で `vessel update` を撃つと順序 (1)→(4) の argv が写り `InstallRecorded` が 1 件・stdout 1 行／dirty な repo・ff できない repo・cargo が rc 101 の周はそれぞれ typed に断り event 0／`KINDS.len()` の pin が +1。
-- §6（AC32）: 偽 tmux で席を立て `plugin` 記録に digest A を置いた後 root の hooks.json を B に変える → tick が `kind=externalize origin=hook` を注入／退避 → Stop の後に `/exit` → 立て直しが同じ target・同じ口座（閾値未満）で走る／hooks 同じで binary だけ違う周は noop（理由 1 つ）／`seat rebrief` の DATA に `[PLUGIN]` 1 行（外形 snapshot）。
+- §6（AC32）: 偽 tmux で席を立て `plugin` 記録に digest A を置いた後 root の hooks.json を B に変える → tick が `kind=externalize origin=hook` を注入／退避 → Stop の後に `/exit` → 立て直しが同じ target・同じ口座（閾値未満）で走る／hooks 同じで binary だけ違う周は noop（理由 1 つ）。
 - 実地（done の一部・歯にしない）: 本 host で `vessel update` を 1 回撃ち、consumer（folio2 / ubuntu-note-system）の doctor 行が `drift=none` になり、hooks.json を変えた便の後に consumer の planner 席が器の手で作り直されること。
 
 ## 10. 憲法・制約との整合
@@ -100,7 +100,7 @@ C1（rules 行を足さない・閾値は無い）・C2 / C2.2（`EventKind` / `
 - **(a) build 元 commit**（S・`s2-07l.302`）: §2。write-set = `+crates/<NAME>/build.rs` / `crates/<NAME>/src/main.rs`（`render_version`）/ `crates/<NAME>/src/snapshots/`（doctor / version の外形）/ `crates/<NAME>/tests/e2e/`（version の歯の置き場は現物の module）。依存: なし。base で RED = `--version` の行に `(` が在る歯（機能不在）。
 - **(b) 読み込み元の記録 + doctor の導入先の行 + `vessel update`**（M・`s2-07l.303`）: §3 / §4 / §5。write-set = `hooks/hooks.json`（`--plugin-root`）/ `crates/<NAME>/src/hook/mod.rs`（引数・記録の書き手）/ `crates/<NAME>/src/hook/vessel.rs`（`update`）/ `crates/<NAME>/src/rules/manifest.rs`（`[[vessel]]`）/ `crates/<NAME>/src/fleet/mod.rs`（`InstallRecorded`・`KINDS` +1）/ `crates/<NAME>/src/main.rs`（doctor の行）/ `crates/<NAME>/src/vessel/`（消費者の母集団・`Drift`・digest の pure 関数の置き場は現物で決める）/ `tests/e2e/hook.rs` / `tests/e2e/fleet.rs`（`KINDS` の pin）/ `tests/e2e/rules.rs` / doctor と hook の外形 snapshot。依存: (a)（記録に build 元 commit を載せる）。base で RED = `--plugin-root` の記録の歯 + `doctor` の consumer 行の歯（機能不在）。
 - **(c) 合図の出所と終了の手の弁別 + 立て直しの口座の優先**（M・`s2-07l.307`）: §6 の 2 点目・3 点目。write-set = 管理 tick の module〔削除済み〕（`.279` の分割後の file 名で焼く）/ `seat/inject.rs`（`origin`）/ `seat/cycle.rs`（relaunch の口座）/ `tests/e2e/seat.rs` / seat の外形 snapshot。依存: `.279` Landed。base で RED = context 由来の合図の後に `/exit` が出ない歯（現物は出る）。
-- **(d) hook 集合の食い違いの軸 + `[PLUGIN]` の DATA**（M・`s2-07l.304`）: §6。write-set = 管理 tick の module〔削除済み〕（分割後）/ `seat/rebrief` の module（`[PLUGIN]`）/ `tests/e2e/seat.rs` / seat の外形 snapshot。依存: (b)（記録）と (c)（出所）。base で RED = digest の違う席へ `origin=hook` の合図が出る歯（機能不在）。
+- **(d) hook 集合の食い違いの軸**（M・`s2-07l.304`）は、軸を持つ管理 tick ごと削除済み（`s2-07l.479.1`）で、`[PLUGIN]` の DATA も削除済み（`s2-07l.479.2`）＝この便は超過した。
 
 順序の理由: (a) は (b) の記録が載せる値。(b) は独立に Landed できる（tick を触らない＝`.279` と交差 0）。(c) は `.279` の分割を待つ tick の便で、(d) は (b)(c) の両方を読む。
 

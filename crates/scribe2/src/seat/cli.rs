@@ -3,10 +3,7 @@
 //! **env も HOME も読まない**（憲法 C2.2）: 出所（pane / transcript）も置き場も
 //! 引数で明示されたものだけを見る。値欠けの flag は黙って落とさず使い方で断る。
 
-use super::consume::{self, ConsumeError};
 use super::cycle;
-use super::externalize::{self, ExternalizeError, Trigger};
-use super::rebrief::{self, RebriefError};
 use super::{inject, role};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_OK, RC_REFUSED};
 use crate::fleet::select::Model;
@@ -15,16 +12,13 @@ use std::path::Path;
 
 /// `seat` の使い方。
 pub fn usage() -> String {
-    "usage: seat <inject --target T (--text S|--file PATH)|externalize --target T --wm-dir DIR --anchor DIR --plan FILE --directives FILE [--user FILE] [--retire FILE] [--trigger manual|tick] [--role R] [--rules PATH]|rebrief --target T --wm-dir DIR --anchor DIR [--bd PATH] [--prefix P] [--rules PATH]|consume --target T --wm-dir DIR|register --state-dir S --target T --role R --account L --launch FILE [--anchor DIR]|launch --state-dir S --role R --target S:W [--account L] [--anchor DIR] [--model M] [--restore CMD]|<label> --orchestrator [--target S:W] [--model M] [--anchor DIR] [--restore CMD] [--state-dir S]> [--tmux-socket PATH] [--capture-file PATH] [--state-dir PATH]".to_owned()
+    "usage: seat <inject --target T (--text S|--file PATH)|register --state-dir S --target T --role R --account L --launch FILE [--anchor DIR]|launch --state-dir S --role R --target S:W [--account L] [--anchor DIR] [--model M] [--restore CMD]|<label> --orchestrator [--target S:W] [--model M] [--anchor DIR] [--restore CMD] [--state-dir S]> [--tmux-socket PATH] [--capture-file PATH] [--state-dir PATH]".to_owned()
 }
 
 /// `seat` に続く引数を捌く。
 pub fn dispatch(args: &[String]) -> Outcome {
     match args.first().map(String::as_str) {
         Some("inject") => inject_of(args),
-        Some("externalize") => externalize_of(args),
-        Some("rebrief") => rebrief_of(args),
-        Some("consume") => consume_of(args),
         Some("register") => register_of(args),
         Some("launch") => launch_of(args),
         // 既知の verb でなく `--` で始まらない第 1 token は口座 label（短い形・account-lifecycle.md §14）。
@@ -157,104 +151,6 @@ fn broken_rules(errors: &[RuleError], mut judged: Vec<String>) -> Outcome {
     let mut lines = crate::rules::cli::render_defects(errors);
     lines.append(&mut judged);
     Outcome::failed(RC_REFUSED, lines)
-}
-
-/// `seat externalize`（設計 working-memory.md §5.1）。
-fn externalize_of(args: &[String]) -> Outcome {
-    // 値欠け・空文字は使い方の誤り（他の flag と同じ極性・SRS NFR4）。
-    let (Ok(target), Ok(wm_dir), Ok(anchor), Ok(plan), Ok(directives), Ok(user), Ok(retire), Ok(trigger), Ok(role), Ok(_), Ok(state_dir)) = (
-        required_nonempty(args, "--target"),
-        required_nonempty(args, "--wm-dir"),
-        required_nonempty(args, "--anchor"),
-        required_nonempty(args, "--plan"),
-        required_nonempty(args, "--directives"),
-        nonempty(args, "--user"),
-        nonempty(args, "--retire"),
-        nonempty(args, "--trigger"),
-        nonempty(args, "--role"),
-        nonempty(args, "--rules"),
-        nonempty(args, "--state-dir"),
-    ) else {
-        return refused_usage();
-    };
-    // frontmatter の 1 行に入る字面だけを受ける（改行を含む名乗りは別の key を作りうる）。
-    if [Some(target), role].into_iter().flatten().any(|text| text.contains(['\n', '\r'])) {
-        return refused_usage();
-    }
-    let Some(trigger) = trigger.map_or(Some(Trigger::Manual), Trigger::parse) else {
-        return refused_usage();
-    };
-    let refused = |err: ExternalizeError| Outcome::failed(RC_REFUSED, externalize::render_refused(&err));
-    let Some(state) = super::state_dir_of(state_dir) else {
-        return refused(ExternalizeError::StateDir);
-    };
-    // 上限は `rules` と同じ 1 本の口で解く（`--rules` が在ればその file・読めなければ defect を全件並べて断る・C5）。
-    let manifest = match crate::rules::cli::open(args) {
-        Ok(manifest) => manifest,
-        Err(errors) => return broken_rules(&errors, externalize::render_refused(&ExternalizeError::NoRule)),
-    };
-    let Some(cap) = externalize::cap_of(&manifest) else {
-        return refused(ExternalizeError::NoRule);
-    };
-    let request = externalize::Request {
-        target,
-        wm_dir: Path::new(wm_dir),
-        state_dir: &state,
-        anchor: Path::new(anchor),
-        plan: Path::new(plan),
-        directives: Path::new(directives),
-        user: user.map(Path::new),
-        retire: retire.map(Path::new),
-        trigger,
-        role,
-        cap,
-    };
-    match externalize::run(&request) {
-        Ok(done) => Outcome::ok_line(externalize::render(&done)),
-        Err(err) => refused(err),
-    }
-}
-
-/// `seat rebrief`（設計 working-memory.md §5.2・read-only）。DATA を出せない周は stdout 0 行で rc 2。
-fn rebrief_of(args: &[String]) -> Outcome {
-    // 値欠け・空文字は使い方の誤り（他の flag と同じ極性・SRS NFR4）。
-    let (Ok(target), Ok(wm_dir), Ok(anchor), Ok(bd), Ok(prefix), Ok(_), Ok(state_dir)) = (
-        required_nonempty(args, "--target"),
-        required_nonempty(args, "--wm-dir"),
-        required_nonempty(args, "--anchor"),
-        nonempty(args, "--bd"),
-        nonempty(args, "--prefix"),
-        nonempty(args, "--rules"),
-        nonempty(args, "--state-dir"),
-    ) else {
-        return refused_usage();
-    };
-    let unavailable = |err: RebriefError| Outcome::failed_line(RC_BROKEN, rebrief::render_unavailable(err));
-    let Some(state) = super::state_dir_of(state_dir) else {
-        return unavailable(RebriefError::StateDir);
-    };
-    // 待ち上限は `rules` と同じ 1 本の口で解く（`--rules` が在ればその file・読めなければ defect を全件並べて断る・C5）。
-    let manifest = match crate::rules::cli::open(args) {
-        Ok(manifest) => manifest,
-        Err(errors) => return broken_rules(&errors, vec![rebrief::render_unavailable(RebriefError::NoRule)]),
-    };
-    let (Some(timeout), Some(thresholds)) = (rebrief::timeout_of(&manifest), rebrief::thresholds_of(&manifest)) else {
-        return unavailable(RebriefError::NoRule);
-    };
-    let request = rebrief::Request {
-        target,
-        wm_dir: Path::new(wm_dir),
-        state_dir: &state,
-        anchor: Path::new(anchor),
-        prefix,
-        bd: bd.unwrap_or(rebrief::DEFAULT_BD),
-        timeout,
-        thresholds,
-    };
-    match rebrief::run(&request) {
-        Ok(lines) => Outcome::ok(lines),
-        Err(err) => unavailable(err),
-    }
 }
 
 /// `seat register`（設計 seat-roles.md §2）。未知の `--role` は使い方の誤りとして断る。`--model M` は任意
@@ -503,30 +399,5 @@ fn launch_with(flags: &LaunchFlags, place: &LaunchPlace) -> Outcome {
     match result {
         cycle::Launched::Done(..) => Outcome::ok_line(line),
         cycle::Launched::None(_) | cycle::Launched::Refused(_) | cycle::Launched::Failed(_) => Outcome::failed_line(RC_REFUSED, line),
-    }
-}
-
-/// `seat consume`（設計 working-memory.md §5.3）。
-fn consume_of(args: &[String]) -> Outcome {
-    // 値欠け・空文字は使い方の誤り（他の flag と同じ極性・SRS NFR4）。
-    let (Ok(target), Ok(wm_dir), Ok(state_dir)) = (
-        required_nonempty(args, "--target"),
-        required_nonempty(args, "--wm-dir"),
-        nonempty(args, "--state-dir"),
-    ) else {
-        return refused_usage();
-    };
-    let refused = |err: &ConsumeError| Outcome::failed_line(RC_REFUSED, consume::render_refused(err));
-    let Some(state) = super::state_dir_of(state_dir) else {
-        return refused(&ConsumeError::StateDir);
-    };
-    let request = consume::Request {
-        target,
-        wm_dir: Path::new(wm_dir),
-        state_dir: &state,
-    };
-    match consume::run(&request) {
-        Ok(done) => Outcome::ok_line(consume::render(&done)),
-        Err(err) => refused(&err),
     }
 }

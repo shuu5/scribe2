@@ -1,6 +1,6 @@
 # 設計: 対話面の作法 — planner が user に向けて出す文の形は設計 doc 1 本が持ち、生成文は pointer 付きの行で運ぶ
 
-- 要件: [FR23](../../design-intent/spec/srs.html#FR23) 作業記憶の復元（brief の user 面）/ [FR30](../../design-intent/spec/srs.html#FR30) 便の配送構造（planner が唯一の対話面）/ [FR44](../../design-intent/spec/srs.html#FR44) 席間の連絡（不変）。「対話面の作法」を名指す FR は要件書の改訂（user の手番）で足す。制約: CON2（PUBLIC・user の逐語を tracked file に書かない）
+- 要件: [FR30](../../design-intent/spec/srs.html#FR30) 便の配送構造（planner が唯一の対話面）/ [FR44](../../design-intent/spec/srs.html#FR44) 席間の連絡（不変）。「対話面の作法」を名指す FR は要件書の改訂（user の手番）で足す。制約: CON2（PUBLIC・user の逐語を tracked file に書かない）
 - 憲法: [C7](../../design-intent/spec/constitution.html#c7) 対話面は 1 つ / [C10](../../design-intent/spec/constitution.html#c10) 宣言・実測・導出を型で分ける（信頼度の語の根）/ [C14](../../design-intent/spec/constitution.html#c14) 規律は文書と manifest の 2 面 / [N2](../../design-intent/spec/constitution.html#n2) prose だけの規則は規則でない / [A1](../../design-intent/spec/constitution.html#a1) 3 クラスの承認
 - 決定: [ADR-0032](../../design-intent/decisions/ADR-0032-dialogue-surface-rules-live-in-one-design-doc-and-planner-brief.html)（本 doc の置き場・9 則の形・5 slot・global の行き先）/ [ADR-0031](../../design-intent/decisions/ADR-0031-working-memory-is-held-by-the-vessel-directives-status-and-hooks.html) §2.2 §2.6（brief の材料 = 器の DATA）/ [ADR-0022](../../design-intent/decisions/ADR-0022-seat-roles-are-typed-and-enforced-by-hooks.html) §2.4（雛形の行の規律）
 - 土台: [seat-roles.md](./seat-roles.md) §5（注入・雛形の行は穴か pointer 付き・xtask の検査）/ [working-memory.md](./working-memory.md) §12（現在地の DATA・直命の表）
@@ -19,7 +19,7 @@ planner は user と話す唯一の席（R-C7-1）。その席が user に向け
 | 1 | **信頼度** | 事実・結論の各文に `verified`（実行して確かめた）/ `deduced`（型・文書・記録から導いた）/ `inferred`（推測）/ `uncertain`（分からない）のいずれかを負わせる。hedge の副詞（perhaps / might）はこの 4 語に置き換え、削って断定に化けさせない。**時間の見積は書かない**（AI の見積は inferred にしかならない）＝便の段（Spawned / Implemented / Gated / Landed）と残り件数（母集団付き）で言う | global「回答の方針」信頼度 4 段 / i-have-adhd 則 6 を置換 / Pre-send check の hedge |
 | 2 | **先頭は次の 1 手** | 1 行目 = user が今できること（承認・裁定・入力・直命の確認候補）。無ければ「planner が次にすること」。承認要求は冒頭に材料付き〔やりたいこと / 理由 / 代替とトレードオフ / コスト・リスク / 推奨〕+ 質問形。承認不要の報告に承認の形を使わない | global「承認要求 front-load」/ i-have-adhd 則 1 |
 | 3 | **手順は番号** | 2 段以上の手順は番号付き・1 項目 1 動作 | i-have-adhd 則 2 |
-| 4 | **末尾は 1 手** | 最終行 = 次に起きること 1 つ（planner の次の行為 か user の手番）。締めの挨拶・要約の反復を持たない。queue が非空なら「指示があれば」型で park しない | i-have-adhd 則 3 / rebrief の park 禁止 |
+| 4 | **末尾は 1 手** | 最終行 = 次に起きること 1 つ（planner の次の行為 か user の手番）。締めの挨拶・要約の反復を持たない。queue が非空なら「指示があれば」型で park しない | i-have-adhd 則 3 |
 | 5 | **脇道は分けて末尾に** | 本筋の後に「別件:」で 1 行ずつ。**列挙義務（乖離・orphan・危険・件数と母集団）は脇道ではない**＝本筋の slot に載せ省略しない | i-have-adhd 則 4（条件付き） |
 | 6 | **状態を言い直す** | 毎 turn 現在地を 1〜2 行（器の `[MAIN]` `[RUN]` `[SEAT]` 由来）。user に「覚えておいて」を頼まない（直命の表が持つ） | i-have-adhd 則 5 / ADR-0031 §2.1 §2.2 |
 | 7 | **成果を見せる** | 前 session からの Landed を id と sha で（器の `[WIN]`）。作文で膨らませない | i-have-adhd 則 7 |
@@ -86,8 +86,7 @@ user の裁定を受けた turn の中で対話面の席の口（seat ruling add
 ## 7. 契約（3 便）
 
 - **(g)** planner の雛形に §4 の 4 行を足す + 外形 snapshot（S・docs-adjacent・base で RED = snapshot の 4 行不在を名指す歯 1 本）。write-set = `seat/brief/planner.txt` + `tests/e2e/snapshots/e2e__hook__hook_brief_planner.snap` + 名指す歯の file。依存: ADR-0032 land。
-- **(h)** skills 2 本の縮小: `skills/rebrief/SKILL.md` = DATA から §3 の 5 slot を組む手順 + consume / `skills/ready-compaction/SKILL.md` = `--plan` と `--directives` の 2 file + 口 1 回（docs-only PR・歯なし）。依存: ADR-0031 の契約 (a)(b)(c)(d) Landed（DATA の marker が実在してから）。
-- **(i)** global を持つ repo の便（本 repo の外）: §5 の表どおりに global CLAUDE.md を痩身し、global 版の ready-compaction / rebrief を配備から外す（台帳 `s2-07l.326` と相互参照）。依存: (g)(h)。
+- **(h)(i)** 判断層の skill 2 本の縮小と global の配備替えは**超過した**: skill も退避 / 復元の口も `s2-07l.479.2` で消えた（ADR-0045 §2 (2)・[working-memory.md](./working-memory.md)）。
 
 ## 8. 却下案（ADR-0032 §5 の写しは持たない・設計固有のもの）
 

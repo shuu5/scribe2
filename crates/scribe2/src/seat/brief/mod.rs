@@ -6,17 +6,19 @@
 //! C 条文は CI の門と guard が執行するので注入しない・ADR-0046）・役割の特性 3 行。
 //!
 //! 雛形の行は「穴」か「出所 pointer を持つ行」だけである（憲法 C1.2・規範文の定義 = pointer を持たない行・typed）。
-//! pointer の形は退避物の命令行と同じ [`PointerKind`]（行末の `→ SSOT:` の後ろを [`wm::references`] が切り
-//! [`wm::classify`] が分類する・字面の語彙で判定しない）。行の分類（[`classify_line`]）は in-file の歯が読み、
+//! pointer の形は [`PointerKind`]（行末の `→ SSOT:` の後ろを [`pointer::references`] が切り
+//! [`pointer::classify`] が分類する・字面の語彙で判定しない）。行の分類（[`classify_line`]）は in-file の歯が読み、
 //! xtask の drift 検査（C14.2・AC17）は同じ規律を雛形 file に対して測る。**env を読まない**（C2.2）: 穴の値は
 //! 登録 row と rules 行 `role.<役割>` から来る。
 
+pub mod pointer;
+
 use super::role::{Capability, Role};
-use super::wm::{self, PointerKind};
 use crate::fleet::Registration;
 use crate::headless::fill;
 use crate::rules::manifest::Manifest;
 use crate::rules::RuleValue;
+use pointer::PointerKind;
 
 /// orchestrator の雛形（tracked・絶対 path も口座名も含まない）。
 const ORCHESTRATOR: &str = include_str!("orchestrator.txt");
@@ -108,9 +110,9 @@ pub fn classify_line(line: &str) -> LineKind {
     if without_holes.trim().is_empty() {
         return LineKind::Holes;
     }
-    wm::references(line)
+    pointer::references(line)
         .iter()
-        .filter_map(|reference| wm::classify(reference, &[]))
+        .filter_map(|reference| pointer::classify(reference, &[]))
         .min()
         .map_or(LineKind::Bare, LineKind::Pointed)
 }
@@ -164,7 +166,7 @@ mod tests {
     use crate::order::is_declaration_order;
     use crate::rules::manifest::Manifest;
     use crate::seat::role::{Capability, Role, ALL, CAPABILITIES};
-    use crate::seat::wm::{self, Anchor, PointerKind, Resolution};
+    use super::pointer::{self, Anchor, PointerKind, Resolution};
     use std::path::PathBuf;
 
     /// 歯の登録 row（穴の値は固定）。
@@ -229,8 +231,8 @@ mod tests {
             assert!(text.contains(Hole::Capabilities.as_str()), "{}: 権能の穴", role.as_str());
             assert!(text.contains(&crate::hook::role_guard::row_id(role)), "{}: 自分の rules 行 id を名指す", role.as_str());
             for line in text.lines().filter(|line| !line.trim().is_empty()) {
-                for reference in wm::references(line) {
-                    let Some(kind) = wm::classify(&reference, &[]) else {
+                for reference in pointer::references(line) {
+                    let Some(kind) = pointer::classify(&reference, &[]) else {
                         continue;
                     };
                     assert_eq!(anchor.resolve(kind, &reference), Resolution::Resolved, "{}: {reference}", role.as_str());
