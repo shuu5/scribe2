@@ -125,6 +125,20 @@ C1（rules 行を足さない・閾値は無い）・C2 / C2.2（`EventKind` / `
 - 歯（`seat_tick_vessel_` / `doctor_consumer_behind_` 接頭辞・管理 tick の歯の file〔削除済み〕 と `tests/e2e/main.rs`・偽 `git` / 偽 `cargo` は §5 の歯と同じ argv を写す stub・起点は checkout の `HEAD` ゆえ歯の binary の出自に依らず `rev-list` の答えは偽 git が返す）: behind 2 の偽 git で tick が §5 の口を 1 回撃ち `updated:<sha>` と `InstallRecorded` 1 件／behind 0 は `current` で撃たない／FETCH_HEAD が新しい周は fetch の argv が写らない・古い周は 1 回写る／fetch 失敗は `unmeasured:fetch-failed` で撃たない／`[[vessel]]` 無しは `undeclared`／dirty な repo は `refused:dirty` で event 0／doctor の consumer 行が `behind=<n>` を持ち fetch の argv が写らない。
 - 却下案: tick が毎周 fetch する（network を分単位で撃つ・host 越しの負荷）／behind を席へ 1 行 inject して人に撃たせる（散文の運用に戻る・直命の逆）／新しい rules 行で fetch の間隔を持つ（裁定 id が要る・既存の閾値で足りる）／器の lock file で 2 席の同時実行を塞ぐ（git と cargo が既に直列化する・lock の TTL の設計が増える）／`vessel=` を `NoopReason` に足す（更新は noop の理由でなく事実の名指し・判定を止めない）／導入先の席の記録（§3 の `binary=`）と比べる（席の binary は再起動まで古いまま＝§6 の作り直しの領分・測るのは checkout）／binary の build 元 commit（`env!`・§2）を起点に `rev-list` で数える（起点が歯の binary の出自で変わり、dirty / unknown な build では fetch も rev-list も呼ばれず歯が空虚になる＝測れない seam。限界として、手で pull だけした checkout は `current` と読む＝binary の古さは §4 の `binary` の食い違いが名指す側）。
 
+## 16. consumer が orchestrator 1 役へ移る手順（`s2-07l.480`・運用・code の変更は無い）
+
+- 何が起きているか: `s2-07l.478`（役割を orchestrator 1 つに畳む）と `s2-07l.479`（席の自律機能の削除）で **rules の語彙と役割の集合が変わった**。器の写しを自分の置き場に持つ consumer（自分の `rules.toml` / `host.toml` / 席の登録 / 管理 tick の unit を持つ repo）は、新しい binary をそのまま使うと**自分の写しの `rules.toml` が loader に断られる**。実測（consumer 1 つ・`rules validate` の断り 11 行・2026-09-19）: 役割を名指す裁定 id の行の value が 1 行・`.479` で消えた席の kind の行が 6 行・`role.*` の 2 行が持つ消えた権能が 2 行・台帳の memo の kind の行が 2 行。置き場に `rules.toml` を持たない consumer（埋め込みの manifest で動く側）はこの段を飛ばす。
+- **手順**（この順・各段の後で次へ進む前に測る）:
+  1. **写しの `rules.toml` の版上げ**: 断りの 4 群を直す——(a) 役割を名指す裁定 id の行の value を `orchestrator` にする (b) `.479` で消えた席の kind の行を落とす (c) `role.planner` / `role.admin` の 2 行を `role.orchestrator` の 1 行に畳む（消えた権能の語も落ちる） (d) 台帳の memo の kind の行を落とす。**測り方**: `<NAME> rules validate --rules <写し>` が rc 0 になるまで（断りは行番号つきで全件出る）。
+  2. **席の登録の付け直し**: 旧 row（`role` が planner / admin のもの）は新しい binary の replay で**無視される**（実測: 旧 binary が `registered=2` と読む置き場を、新しい binary は `registered=0` と読む）。`seat register`（登録だけの口・起動しない）で `--role orchestrator` の row を書き直す。**1 anchor に 1 席**である（役割 × anchor が登録の鍵なので、同じ anchor の 2 席目は前の row を置き換える）。
+  3. **管理席の退役**: 役割が 1 つになるので、repo ごとの 2 席目は退役させる（席を畳む手順は [account-lifecycle.md](./account-lifecycle.md) §4 のまま）。
+  4. **管理 tick の unit の撤去**: 管理 tick は `.479` で subcommand ごと消えた。consumer が持つ timer / service の unit を止めて外す（残しても新しい binary は未知の subcommand として断るだけだが、失敗が毎周記録に積む）。
+  5. **移る時期**: `s2-07l.382`（land の終端）の **Landed 後**。それまで consumer は旧 binary（build 元 commit `99f20d3`）に pin して運ぶ（§2 の build 元 commit の記録がそのまま pin の宣言である）。
+- **検証**（consumer 側で 1 行ずつ）: `rules validate` が rc 0 ／ `doctor --state-dir <置き場>` の `seats: registered=<付け直した席の数>` が実測値と一致。
+- **触らない**: consumer の帳簿（`installed_plugins.json`）と cache（§5 と同じく器は書かない）・§4 の `drift=` の語・§5 の口の順序と断り・器の repo の code（本段は運用であって実装の便ではない）。
+- 却下案: 器が consumer の写しの `rules.toml` を自動で書き換える（他人の置き場を書く・§5「何を書かないか」と同じ線）／旧 role の row を新しい binary が読み替える（消した役割を replay に残す＝`.478` の削除が空洞化する）／移行を dispatcher の着地前に行う（consumer の席が止まっている間に列の設計が動く＝2 つの変化を同時に測ることになる）。
+
+
 <!-- contracts:begin -->
 schema = 1
 
