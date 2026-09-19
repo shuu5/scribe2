@@ -226,6 +226,19 @@ C1 / C5（権能の値は行・裁定 id）・C1.2（生成文に手書きの規
 - 着地形（`s2-07l.489.2`）: 置き場は `hook/` の子 module 1 枚（行 p の write-set の `+` の file）。枠は `seat/<target>/precompact` の 1 file（1 行目 `schema=1 trigger=<字面> ts=<秒> total=<切る前の文字数>`・2 行目以降が逐語）。SessionStart の 1 行は `[PRECOMPACT] trigger=<字面> ts=<UTC の時刻> lines=<逐語の行数>` で、切った周だけ ` cut=<出した文字数>/<切る前の文字数>` が続く（切った事実は header が持つ＝逐語の側に印を混ぜない）。末尾の読みと幅は module の定数（読みは末尾 256 KiB・幅は 2000 文字・表示の幅であって閾値ではない＝rules 行を足さない）。抜くのは transcript の行の `type == assistant` の `message.content` の配列の**最後の** `text` block（空白だけは無いと見る・content が文字列の行と JSON でない行は飛ばす）。書かない理由は閉じた enum（`no-transcript` / `transcript-unreadable` / `no-text`）で、**読めないだけを失敗**として stderr 1 行に出し、無い・text 無しは黙る（どれも記録 1 行 `what = precompact-skip <理由>`・書いた周は `precompact-slot`・bytes 0）。読む側は記録 1 行（`what = session-start-precompact`・bytes は出した行数分）を残し、読めない枠も消す（古い枠が次の圧縮で化けない）。登録の判定は §5 と同じ登録 row の有無（pane → target → row）。trigger の字面は空白と制御文字を `_` に畳み、無い周は `-`（header の key を偽装しない）。
 - 却下案: 枠を bead の notes に書く（bead は task と裁定だけ・C15。hook が台帳へ write する経路も作らない）／枠を複数持って履歴にする（作業記憶の再導入）／transcript の全文を要約する（hook は LLM を呼べない・呼ぶ経路は課金と依存を足す）。
 
+## 23. 復帰の 2 便の歯の補強 — 変異検査をすり抜けた面に歯を足す（契約表の行 q・`s2-07l.489`・歯だけ）
+
+- 何を解くか: 行 o と行 p の gate の変異検査（記録であって門ではない）で、173 本中 23 本が生存した（実測 2026-09-20・内訳は台帳 `s2-07l.489` の notes）。同値の変異は 1 本（待ち上限の境界の瞬間の `<` と `<=`）だけで、残りは歯の無い面である。挙動の誤りは見つかっていない＝src は触らず、歯だけを足す。
+- 歯の無かった面と足す歯（`tests/e2e/hook.rs`・接頭辞 `hook_recovery_edge_`・偽の `bd` と toy repo・SessionStart の口から測る）:
+  1. **台帳の子 process の終わり方**: (a) JSON を出した後 rc 非 0 で終わる偽の `bd` の周は `[RECENT-UNMEASURED] kind=wip reason=ledger-unreadable`（出力が読めても rc を見る）／(b) stdout を閉じた後も待ち上限を越えて生き続ける偽の `bd` の周は `reason=ledger-timeout`／(c) stdout を閉じた後、上限の内側で少し遅れて rc 0 で終わる偽の `bd` の周は測れた側（`[RECENT-WIP]` か `[RECENT-NONE]`）に出る。
+  2. **worktree を測る順**: 列挙の順と HEAD の commit の新しい順が**食い違う** dirty な worktree 2 本を作り、`[RECENT-DIRTY]` の行が commit の新しい順に並ぶ。commit を 1 つも持たない（未生の HEAD の）worktree を混ぜても順は変わらず、その worktree は末尾側に来る。
+  3. **上限とちょうど同じ件数**: commit の本数が表示の上限とちょうど同じ repo は `[RECENT-CUT] kind=commit` を出さない。worktree の本数が走査の上限とちょうど同じ repo は `[RECENT-CUT] kind=dirty` を出さない。
+  4. **時刻の字**: 時差の字が 2 桁でない `updated_at`（例 `+9:00`）を持つ in_progress の bead は `[RECENT-WIP]` に更新時刻の値 `-` で出て（時刻を読めない側）、同じ字の open の bead は 24 時間の窓に入らない。
+  5. **枠が「無い」以外の理由で読めない・消せない周**: 席の置き場の枠の名前が dir になっている周の `source = compact` の SessionStart は、`[PRECOMPACT]` を出さず、stderr に読めない理由の 1 行と消せない理由の 1 行を出し、§5 の指示文と §21 の区間は出す（rc 0）。枠が無い普通の周は stderr にどちらの行も出さない。
+  6. **socket を渡した周の席の解決**: PreCompact の口に tmux の socket を渡した周も登録済みの席として枠を書く（socket を渡さない形でしか測っていなかった）。
+- 各歯は、対応する生存した変異を src に当てると落ちることを実装の周に実測し、結果を便の報告に載せる（flip-check の後から足す歯の札の前提）。当てて落ちなかった変異は同値か歯の不足かを報告で分ける。
+- 触らない: `src/` の全部・§21 / §22 の行の形・既存の歯。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -363,4 +376,14 @@ write-set = ["+crates/scribe2/src/hook/precompact.rs", "crates/scribe2/src/hook/
 verify = ["cargo nextest run -p scribe2 --no-tests=fail hook_precompact_", "cargo nextest run -p xtask --no-tests=fail gen_manifest_hooks_json_precompact_"]
 size = "S"
 done = "偽の transcript と toy repo で、PreCompact が rc 0・stdout 0 byte のまま席の直近の発言を 1 枠に書き、続く source = compact の SessionStart が [PRECOMPACT] と逐語の文を 1 回だけ出して枠を消し、startup では出さず消さず、transcript が読めない周と登録の無い席は枠を書かず、幅を超える文は切られて切った事実が行に出て、生成 hooks.json の PreCompact の行が --pane と --project を運ぶ"
+
+[[contract]]
+id = "q"
+title = "復帰の 2 便の歯の補強 — 変異検査をすり抜けた面（台帳の子 process の終わり方・worktree を測る順・上限とちょうど同じ件数・時差の字・枠が無い以外の理由で読めない周・socket を渡した席の解決）に歯を足す（歯だけ・src/ は触らない）"
+req = ["FR42", "FR19", "NFR4"]
+section = "23"
+write-set = ["crates/scribe2/tests/e2e/hook.rs"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail hook_recovery_edge_"]
+size = "S"
+done = "偽の bd と toy repo で、JSON を出して rc 非 0 で終わる台帳は ledger-unreadable・stdout を閉じて上限を越えて生きる台帳は ledger-timeout・上限の内側で遅れて rc 0 で終わる台帳は測れた側に出て、列挙の順と食い違う dirty な worktree 2 本が commit の新しい順に並び未生の HEAD の worktree を混ぜても順が変わらず、commit と worktree の本数が上限とちょうど同じ repo は CUT を出さず、時差の字が 2 桁でない in_progress の bead は更新時刻 - で出て open の bead は窓に入らず、枠の名前が dir の周の compact の SessionStart は PRECOMPACT を出さず stderr に読めない理由と消せない理由の 2 行を出して指示文と DATA は出し（枠が無い周は stderr に出さない）、socket を渡した PreCompact が登録済みの席の枠を書き、各歯が対応する変異を src に当てると落ちる実測が便の報告に載り、src/ は 1 行も変わらない"
 <!-- contracts:end -->
