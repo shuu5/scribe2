@@ -16,6 +16,7 @@ pub mod cli;
 pub mod cycle;
 pub mod inject;
 pub mod ledger;
+pub mod recent;
 pub mod role;
 pub mod state;
 

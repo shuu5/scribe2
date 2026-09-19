@@ -3,6 +3,7 @@
 //! `seat/rebrief.rs` から**挙動不変で移した**もの（`s2-07l.479.2`）: 作業記憶の復元は ADR-0045 §2 (2) で
 //! 消えたが、SessionStart の指示文は台帳の現在値を 1 行で持つ（同 §2 (3)）ので、その読みだけを残す。
 //! 待ち上限は rules 行 [`ID_TIMEOUT`] から読み、**読めない周は `None`**（数え損ねを 0 に化けさせない・C10）。
+//! 子 process の出力（[`read_text`]）は復帰の DATA（`seat/recent.rs`・`s2-07l.489`）と**同じ 1 回**を共用する。
 // flip-check: moved s2-07l.479.2
 
 use crate::fleet::json_tree::{self, Tree};
@@ -23,13 +24,15 @@ pub const POLARITY: Polarity = Polarity {
 
 /// 台帳を読めない理由（**境界の enum**・[`POLARITY`]）。読めない周は数えを返さない。
 ///
-/// variant は 1 つである（`s2-07l.479.2` で復元の DATA が消え、この境界に残る失敗が「読めない」だけに
-/// なった）。値を分岐する読み手は今は無いが、**境界ごとに 1 つの enum が極性を持つ**のは憲法 C11.2 の
-/// 求めで、`Option` に潰すと [`POLARITY`] の宣言 site（極性一覧の guard でない側）ごと消える。
+/// **境界ごとに 1 つの enum が極性を持つ**のは憲法 C11.2 の求めで、`Option` に潰すと [`POLARITY`] の宣言 site
+/// （極性一覧の guard でない側）ごと消える。待ち上限超過は `s2-07l.489` で別の variant になった（復帰の DATA
+/// が `ledger-unreadable` / `ledger-timeout` を分けて出す・設計 seat-roles.md §21）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LedgerError {
-    /// 台帳を読めない（起動できない・rc 非 0・JSON 不能・待ち上限超過）。
+    /// 台帳を読めない（起動できない・rc 非 0・JSON 不能）。
     Unreadable,
+    /// 待ち上限までに読み切れなかった（子は殺した）。
+    Timeout,
 }
 
 /// 台帳の待ち上限を宣言する rules 行の id（**値は code に焼かない**・憲法 C5）。
@@ -122,16 +125,23 @@ fn counts_body(issues: &[Issue]) -> String {
     format!("open={} in_progress={} blocked={}", count("open"), count("in_progress"), count("blocked"))
 }
 
-/// 台帳の現在値を 1 行で返す（席の指示文の `{ledger}`・SessionStart の hook が読む）。
+/// 台帳の現在値を 1 行で返す（席の指示文の `{ledger}`・SessionStart の hook が読む）。入力は [`read_text`] の
+/// 出力（**同じ 1 回の出力を復帰の DATA と共用する**・設計 seat-roles.md §21）。
 ///
-/// 読めない周は `None` である——呼び側が `unknown` を書く。**数え損ねを 0 に化けさせない**（憲法 C10）。
-pub fn counts_of(bd: &str, timeout: Duration) -> Option<String> {
-    read_ledger(bd, timeout).ok().as_deref().map(counts_body)
+/// JSON として読めない周は `None` である——呼び側が `unknown` を書く。**数え損ねを 0 に化けさせない**（憲法 C10）。
+pub fn counts_of(text: &str) -> Option<String> {
+    issues_of(text).as_deref().map(counts_body)
 }
 
-/// 台帳を子 process で読む（待ち上限を超えたら殺して断る・stderr は捨てる）。**列の読み手も同じ 1 本**
-/// （設計 dispatcher.md §2・C2）。
+/// 台帳を子 process で読み、[`Issue`] の列にする。**列の読み手も同じ 1 本**（設計 dispatcher.md §2・C2）。
 pub fn read_ledger(bd: &str, timeout: Duration) -> Result<Vec<Issue>, LedgerError> {
+    let text = read_text(bd, timeout)?;
+    issues_of(&text).ok_or(LedgerError::Unreadable)
+}
+
+/// 台帳を子 process で読み、stdout の本文（JSON の text）を返す（待ち上限を超えたら殺して `Timeout`・stderr は
+/// 捨てる）。件数の 1 行（[`counts_of`]）と復帰の DATA（`seat::recent`）が**この 1 回の出力**を分けて読む。
+pub fn read_text(bd: &str, timeout: Duration) -> Result<String, LedgerError> {
     let mut child = Command::new(bd)
         .args(BD_ARGS)
         .stdin(Stdio::null())
@@ -142,21 +152,24 @@ pub fn read_ledger(bd: &str, timeout: Duration) -> Result<Vec<Issue>, LedgerErro
     let deadline = Instant::now().checked_add(timeout);
     let body = collect_stdout(&mut child, deadline);
     let status = body.and_then(|bytes| finish(&mut child, deadline).map(|status| (bytes, status)));
-    let Some((bytes, status)) = status else {
-        let _ = child.kill();
-        let _ = child.wait();
-        return Err(LedgerError::Unreadable);
+    let (bytes, status) = match status {
+        Ok(found) => found,
+        Err(reason) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(reason);
+        }
     };
     if !status.success() {
         return Err(LedgerError::Unreadable);
     }
-    let text = String::from_utf8(bytes).map_err(|_| LedgerError::Unreadable)?;
-    issues_of(&text).ok_or(LedgerError::Unreadable)
+    String::from_utf8(bytes).map_err(|_| LedgerError::Unreadable)
 }
 
-/// stdout を別 thread で読み切る（pipe の詰まりで待ちが上限を越えない）。上限までに読めなければ `None`。
-fn collect_stdout(child: &mut Child, deadline: Option<Instant>) -> Option<Vec<u8>> {
-    let mut stdout = child.stdout.take()?;
+/// stdout を別 thread で読み切る（pipe の詰まりで待ちが上限を越えない）。上限までに読めなければ `Timeout`・
+/// pipe を読めなければ `Unreadable`。
+fn collect_stdout(child: &mut Child, deadline: Option<Instant>) -> Result<Vec<u8>, LedgerError> {
+    let mut stdout = child.stdout.take().ok_or(LedgerError::Unreadable)?;
     let (sender, receiver) = mpsc::channel();
     std::thread::spawn(move || {
         let mut bytes = Vec::new();
@@ -167,16 +180,17 @@ fn collect_stdout(child: &mut Child, deadline: Option<Instant>) -> Option<Vec<u8
         Some(at) => receiver.recv_timeout(at.saturating_duration_since(Instant::now())).ok(),
         None => receiver.recv().ok(),
     };
-    received?.ok()
+    received.ok_or(LedgerError::Timeout)?.map_err(|_| LedgerError::Unreadable)
 }
 
-/// 上限までに終わった子の status。終わらなければ `None`。
-fn finish(child: &mut Child, deadline: Option<Instant>) -> Option<ExitStatus> {
+/// 上限までに終わった子の status。終わらなければ `Timeout`・待てなければ `Unreadable`。
+fn finish(child: &mut Child, deadline: Option<Instant>) -> Result<ExitStatus, LedgerError> {
     loop {
         match child.try_wait() {
-            Ok(Some(status)) => return Some(status),
+            Ok(Some(status)) => return Ok(status),
             Ok(None) if deadline.is_none_or(|at| Instant::now() < at) => std::thread::sleep(POLL),
-            _ => return None,
+            Ok(None) => return Err(LedgerError::Timeout),
+            Err(_) => return Err(LedgerError::Unreadable),
         }
     }
 }

@@ -24,6 +24,8 @@ use crate::fleet::json_tree;
 use crate::fleet::store::{self, LockPolicy, StoreError};
 use crate::name::NAME;
 use crate::rules::manifest::Manifest;
+use crate::seat::ledger::LedgerError;
+use crate::seat::recent;
 use crate::seat::state::Event;
 use command::CommandDecision;
 use guard::Decision;
@@ -487,17 +489,45 @@ fn brief(hooked: &Hooked, outcome: &mut Outcome, started: Instant) {
         return;
     };
     let bd = hooked.bd.filter(|found| !found.trim().is_empty()).unwrap_or(crate::seat::ledger::DEFAULT_BD);
-    let ledger = crate::seat::ledger::timeout_of(&manifest)
-        .and_then(|timeout| crate::seat::ledger::counts_of(bd, timeout))
+    // 台帳の子 process は **1 回**（件数の 1 行と復帰の DATA が同じ出力を読む・設計 seat-roles.md §21）。
+    let read = crate::seat::ledger::timeout_of(&manifest)
+        .ok_or(LedgerError::Unreadable)
+        .and_then(|timeout| crate::seat::ledger::read_text(bd, timeout));
+    let ledger = read
+        .as_deref()
+        .ok()
+        .and_then(crate::seat::ledger::counts_of)
         .unwrap_or_else(|| LEDGER_UNKNOWN.to_owned());
     let text = crate::seat::brief::render(row.role, row, &capabilities, &ledger);
     let emit = Emit { who: EVENT_SESSION_START, what: WHAT_BRIEF, when: "SessionStart", line: text.trim_end_matches('\n') };
     outcome.err.extend(record_lines(hooked.dir, &record(&emit, hooked, started)));
     outcome.out.extend(text.lines().map(str::to_owned));
+    recent(hooked, outcome, started, read.as_deref().map_err(|reason| *reason));
 }
 
 /// 台帳を読めなかった周の `{ledger}` の字面（**数に化けさせない**・憲法 C10）。
 const LEDGER_UNKNOWN: &str = "unknown（台帳を読めない）";
+
+/// 記録の `what`（復帰の DATA）。
+const WHAT_RECENT: &str = "session-start-recent";
+
+/// 復帰の DATA を指示文の直後へ出す（設計 seat-roles.md §21・FR42）: 台帳の同じ 1 回の出力（`read`）から
+/// 仕掛かり中と直近更新の bead、anchor の git から head / 直近の commit / dirty な worktree を typed な行で出し、
+/// 記録 1 行（`what` = [`WHAT_RECENT`]）を残す。台帳を読めない周はその 2 種類だけ `[RECENT-UNMEASURED]`
+/// （理由は `LedgerError` の variant ごと）で git の行は出す（fail-open・[`recent::POLARITY`]）。現在時刻は
+/// ここで 1 度読んで渡す（module の中で壁時計を読まない）。source（startup / resume / clear / compact）で出し分けない。
+fn recent(hooked: &Hooked, outcome: &mut Outcome, started: Instant, read: Result<&str, LedgerError>) {
+    let beads = match read {
+        Ok(text) => recent::beads_of(text).ok_or(recent::Unmeasured::LedgerUnreadable),
+        Err(LedgerError::Timeout) => Err(recent::Unmeasured::LedgerTimeout),
+        Err(LedgerError::Unreadable) => Err(recent::Unmeasured::LedgerUnreadable),
+    };
+    let lines = recent::render(beads.as_deref().map_err(|reason| *reason), hooked.root, crate::seat::state::now_secs());
+    let text = lines.join("\n");
+    let emit = Emit { who: EVENT_SESSION_START, what: WHAT_RECENT, when: "SessionStart", line: &text };
+    outcome.err.extend(record_lines(hooked.dir, &record(&emit, hooked, started)));
+    outcome.out.extend(lines);
+}
 
 /// 指示文を出せない周の 1 行（理由の 1 語つき・guard の断りと同じ形）。
 fn brief_refused(reason: &str) -> String {
