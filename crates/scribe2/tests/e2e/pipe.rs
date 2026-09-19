@@ -22,6 +22,7 @@ use vessel::pipe::gate::{CHECKS, RC_INCONCLUSIVE, VERDICTS};
 use vessel::rules::manifest::Manifest;
 use vessel::rules::RuleValue;
 
+mod dispatch;
 mod gate;
 mod intake;
 mod land;

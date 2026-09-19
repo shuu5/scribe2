@@ -55,6 +55,7 @@ fn event(kind: EventKind, run: &str, ts: &str) -> Event {
         detail: None,
         allowance: None,
         registration: None,
+        mark: None,
         account: None,
     }
 }
@@ -706,6 +707,7 @@ fn pipe_question_kinds_round_trip_on_schema_1() {
             detail: Some("verify 行が矛盾する".to_owned()),
             allowance: None,
             registration: None,
+            mark: None,
             account: None,
         };
         let line = event.to_line();
@@ -931,6 +933,7 @@ fn allowance_event(ts: &str, allowance: Allowance) -> Event {
         detail: None,
         allowance: Some(allowance),
         registration: None,
+        mark: None,
         account: None,
     }
 }
@@ -1343,15 +1346,22 @@ fn fleet_allowance_windows_round_trip_on_snake_case() {
     assert_eq!(WindowKind::parse("FiveHour"), None, "variant 名は字面でない");
 }
 
-/// (6e) `KINDS` は 15 variant で並びは宣言順のまま（席の登録 1 の後ろに口座の退役・戻しの 2 を末尾に足した・
-/// account-lifecycle.md §3）。base は 13 で落ちる（RED）。
+/// (6e) `KINDS` は 16 variant で並びは宣言順のまま（口座の退役・戻しの後ろに列の印 1 を末尾に足した・
+/// account-lifecycle.md §3・dispatcher.md §4）。base は 15 で落ちる（RED）。
 #[test]
 fn account_cmd_kinds_are_fifteen_with_retire_and_restore_last() {
-    assert_eq!(KINDS.len(), 15, "母集団（既存 10 + 口座残量 2 + 席の登録 1 + 口座の退役・戻し 2）");
+    assert_eq!(KINDS.len(), 16, "母集団（既存 10 + 口座残量 2 + 席の登録 1 + 口座の退役・戻し 2 + 列の印 1）");
     assert_eq!(
         KINDS.get(12..),
-        Some(&[EventKind::SeatRegistered, EventKind::AccountRetired, EventKind::AccountRestored][..]),
-        "登録 → 退役 → 戻しが末尾の順"
+        Some(
+            &[
+                EventKind::SeatRegistered,
+                EventKind::AccountRetired,
+                EventKind::AccountRestored,
+                EventKind::DispatchMark,
+            ][..]
+        ),
+        "登録 → 退役 → 戻し → 列の印が末尾の順"
     );
     for kind in [EventKind::SeatRegistered, EventKind::AccountRetired, EventKind::AccountRestored] {
         assert!(!kind.is_allowance(), "{} は口座残量の kind ではない", kind.as_str());
@@ -1394,6 +1404,7 @@ fn registration_event_with_model(target: &str, model: Option<&str>) -> Event {
         pid: None,
         detail: None,
         allowance: None,
+        mark: None,
         registration: Some(Registration {
             role: Role::Orchestrator,
             anchor: "/repo".to_owned(),

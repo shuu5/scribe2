@@ -689,6 +689,7 @@ fn event_of(ts: &str, host: &str, row: &Allowance) -> Event {
         detail: None,
         allowance: Some(row.clone()),
         registration: None,
+        mark: None,
         account: None,
     }
 }

@@ -17,6 +17,7 @@ pub mod closure;
 pub mod confine;
 pub mod contract;
 pub mod declaration;
+pub mod dispatch;
 pub mod follow;
 pub mod gate;
 pub mod land;
@@ -35,7 +36,7 @@ mod retire;
 
 use crate::polarity::{OnFailure, Polarity, Timing};
 use crate::fleet::store::{self, LockPolicy, StoreError};
-use crate::fleet::{self, replay, Event, EventKind, Stage, State, SCHEMA};
+use crate::fleet::{self, replay, Event, EventKind, Mark, Stage, State, SCHEMA};
 use crate::name::NAME;
 use std::path::{Path, PathBuf};
 
@@ -459,6 +460,33 @@ pub fn emit(state_dir: &Path, entry: &Emit<'_>, policy: LockPolicy) -> Result<()
         // pipeline の段は必ず便に紐づく（口座残量の行は `fleet` 側の口が書く）。
         allowance: None,
         registration: None,
+        mark: None,
+        account: None,
+    };
+    store::append(state_dir, &event, policy).map(|_| ())
+}
+
+/// 列の介入の印を 1 件追記する（[`EventKind::DispatchMark`]・設計 dispatcher.md §4）。
+///
+/// 段の event（[`emit`]）と**本体の形が違う**ので口を分ける——印は便でなく bead に付き、`run` を持たず、
+/// typed な [`Mark`] が本体である（自由文の `detail` を判定入力にしない・憲法 C3.3）。追記そのものは
+/// fleet の 1 本（[`store::append`]）を通る（C6.3）。
+pub fn emit_mark(state_dir: &Path, bead: &str, mark: Mark, policy: LockPolicy) -> Result<(), StoreError> {
+    let event = Event {
+        schema: SCHEMA,
+        ts: fleet::cli::now_utc(),
+        kind: EventKind::DispatchMark,
+        run: String::new(),
+        bead: bead.to_owned(),
+        host: fleet::cli::host(),
+        actor: EventKind::DispatchMark.default_actor().to_owned(),
+        stage: None,
+        seat: None,
+        pid: None,
+        detail: None,
+        allowance: None,
+        registration: None,
+        mark: Some(mark),
         account: None,
     };
     store::append(state_dir, &event, policy).map(|_| ())
@@ -520,6 +548,7 @@ pub(crate) mod fixture {
             detail: detail.map(str::to_owned),
             allowance: None,
             registration: None,
+            mark: None,
             account: None,
         }
     }

@@ -5,8 +5,8 @@
 
 use super::json_lite::{self, Value};
 use super::{
-    parse_actor, Allowance, EventKind, Measured, Registration, Stage, Unmeasured, UnmeasuredReason, WindowKind,
-    SCHEMA,
+    parse_actor, Allowance, EventKind, Mark, Measured, Registration, Shape, Stage, Unmeasured, UnmeasuredReason,
+    WindowKind, SCHEMA,
 };
 use crate::seat::role::Role;
 
@@ -17,6 +17,7 @@ use crate::seat::role::Role;
 const KNOWN_KEYS: &[&str] = &[
     "schema", "ts", "kind", "run", "bead", "host", "actor", "stage", "seat", "pid", "detail",
     "account", "window", "model", "endpoint", "used_pct", "resets_at", "reason", "role", "anchor", "target", "sid", "launch",
+    "mark",
 ];
 
 /// 口座残量の kind だけが持てる key（設計 fleet-usage.md §4）。
@@ -36,6 +37,9 @@ const ALLOWANCE_KEYS: &[&str] = &[
 
 /// 席の登録の kind だけが持てる key（他の kind の行に在れば malformed・`account` は口座残量と共有）。
 const REGISTRATION_KEYS: &[&str] = &["role", "anchor", "target", "sid", "launch"];
+
+/// 列の印の kind（[`Shape::Mark`]）だけが持てる key（他の kind の行に在れば malformed）。
+const MARK_KEYS: &[&str] = &["mark"];
 
 /// log の 1 行。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,6 +71,9 @@ pub struct Event {
     pub allowance: Option<Allowance>,
     /// 席の登録の本体（[`EventKind::SeatRegistered`] でだけ `Some`）。
     pub registration: Option<Registration>,
+    /// 列の介入の印（[`EventKind::DispatchMark`] でだけ `Some`＝必須・他の kind に在れば malformed）。
+    /// **typed な値で持つ**——`detail`〔自由文〕を判定入力にしない（憲法 C3.3）。
+    pub mark: Option<Mark>,
     /// 口座 label。[`EventKind::AccountRetired`] / [`EventKind::AccountRestored`] では退役・戻しの本体（必須）、
     /// [`EventKind::SeatSpawned`] では**便を起こした口座**（任意・ADR-0027 §2.3・走行中の便数の出所・field の無い
     /// 旧い行は「口座不明」＝数えない）。他の kind に在れば malformed。kind ごとの typed payload・`detail`〔自由文〕を
@@ -77,9 +84,9 @@ pub struct Event {
 impl Event {
     /// 1 行の JSON にする。
     ///
-    /// 本体は [`Self::allowance`] / [`Self::registration`] の有無と、退役・戻しの kind（[`EventKind::is_account_lifecycle`]）
-    /// が決める（`run` / `bead` を持つ行と口座残量・登録・退役の行は同じ並びを共有しない）。`account` の有無では
-    /// 決めない（`SeatSpawned` は `run` / `bead` と `account` を両方持つ）。食い違った組は [`Self::from_line`] が
+    /// 本体の並びは kind の [`EventKind::shape`] が決める（`run` / `bead` を持つ行と、口座残量・登録・退役・
+    /// 列の印の行は同じ並びを共有しない）。**本体や `account` の有無では決めない**——`SeatSpawned` は
+    /// `run` / `bead` と `account` を両方持つ。食い違った組（形と本体が噛み合わない値）は [`Self::from_line`] が
     /// 読み返せず malformed になるので、書いた行が読めない形は歯で捕まる。
     pub fn to_line(&self) -> String {
         let mut pairs: Vec<(&str, Value)> = vec![
@@ -87,9 +94,16 @@ impl Event {
             ("ts", Value::Str(self.ts.clone())),
             ("kind", Value::Str(self.kind.as_str().to_owned())),
         ];
-        if self.allowance.is_none() && self.registration.is_none() && !self.kind.is_account_lifecycle() {
-            pairs.push(("run", Value::Str(self.run.clone())));
-            pairs.push(("bead", Value::Str(self.bead.clone())));
+        match self.kind.shape() {
+            Shape::Run => {
+                pairs.push(("run", Value::Str(self.run.clone())));
+                pairs.push(("bead", Value::Str(self.bead.clone())));
+            }
+            Shape::Mark => {
+                pairs.push(("bead", Value::Str(self.bead.clone())));
+                pairs.extend(self.mark.iter().map(|mark| ("mark", Value::Str(mark.as_str().to_owned()))));
+            }
+            Shape::Allowance | Shape::Registration | Shape::Account => {}
         }
         pairs.extend(self.account.iter().map(|label| ("account", Value::Str(label.clone()))));
         pairs.extend(self.allowance.iter().flat_map(Allowance::pairs));
@@ -161,6 +175,7 @@ impl Event {
             detail: optional_text(field(&pairs, "detail"), "detail")?,
             allowance: body.allowance,
             registration: body.registration,
+            mark: body.mark,
             account: body.account,
         })
     }
@@ -177,6 +192,8 @@ struct Body {
     allowance: Option<Allowance>,
     /// 席の登録の本体。
     registration: Option<Registration>,
+    /// 列の介入の印。
+    mark: Option<Mark>,
     /// 口座の退役・戻しの label。
     account: Option<String>,
 }
@@ -195,6 +212,7 @@ impl Body {
             }
             EventKind::SeatRegistered => Self::registration(pairs),
             EventKind::AccountRetired | EventKind::AccountRestored => Self::account(pairs),
+            EventKind::DispatchMark => Self::mark(pairs),
             EventKind::SeatSpawned => Self::spawned(pairs),
             EventKind::RunCreated
             | EventKind::RunStage
@@ -205,7 +223,7 @@ impl Body {
             | EventKind::ApprovalReceived
             | EventKind::QuestionRaised
             | EventKind::QuestionAnswered => {
-                forbid(pairs, ALLOWANCE_KEYS.iter().chain(REGISTRATION_KEYS))?;
+                forbid(pairs, ALLOWANCE_KEYS.iter().chain(REGISTRATION_KEYS).chain(MARK_KEYS))?;
                 Ok(Self {
                     run: text_of(field(pairs, "run"), "run")?,
                     bead: text_of(field(pairs, "bead"), "bead")?,
@@ -217,7 +235,7 @@ impl Body {
 
     /// 口座残量の行の本体。`run` / `bead` と登録の key は**持たない**（在れば malformed）。
     fn allowance(pairs: &[(String, Value)], allowance: Allowance) -> Result<Self, String> {
-        forbid(pairs, ["run", "bead"].iter().chain(REGISTRATION_KEYS))?;
+        forbid(pairs, ["run", "bead"].iter().chain(REGISTRATION_KEYS).chain(MARK_KEYS))?;
         Ok(Self { allowance: Some(allowance), ..Self::default() })
     }
 
@@ -225,7 +243,13 @@ impl Body {
     /// `model` は任意（key が無い旧 row は `None`・在って文字列でなければ malformed）。`sid` も任意（key の省略か
     /// `null` が `None`＝launch の row・在って文字列でなければ malformed）。
     fn registration(pairs: &[(String, Value)]) -> Result<Self, String> {
-        forbid(pairs, ["run", "bead"].iter().chain(ALLOWANCE_KEYS.iter().filter(|key| !["account", "model"].contains(key))))?;
+        forbid(
+            pairs,
+            ["run", "bead"]
+                .iter()
+                .chain(ALLOWANCE_KEYS.iter().filter(|key| !["account", "model"].contains(key)))
+                .chain(MARK_KEYS),
+        )?;
         let text = |key: &str| text_of(field(pairs, key), key);
         let role = text("role")?;
         // **知らない役割の行は本体を持たない行として読む**（退役した役割の row・憲法 N4 の schema 互換）。
@@ -250,8 +274,18 @@ impl Body {
     /// 口座の退役・戻しの行の本体（`account` = label だけ）。`run` / `bead`・口座残量だけの key・登録の key は**持たない**。
     fn account(pairs: &[(String, Value)]) -> Result<Self, String> {
         let foreign = ALLOWANCE_KEYS.iter().filter(|key| **key != "account");
-        forbid(pairs, ["run", "bead"].iter().chain(foreign).chain(REGISTRATION_KEYS))?;
+        forbid(pairs, ["run", "bead"].iter().chain(foreign).chain(REGISTRATION_KEYS).chain(MARK_KEYS))?;
         Ok(Self { account: Some(text_of(field(pairs, "account"), "account")?), ..Self::default() })
+    }
+
+    /// 列の印の行の本体（`bead` + typed な `mark`）。**`run` は持たない**（印は bead に付く・設計
+    /// dispatcher.md §4）。口座残量だけの key・登録の key も持たない。3 値の外の `mark` は malformed で、
+    /// `None` に落とさない（書き側と読み側が同じ判定を使う）。
+    fn mark(pairs: &[(String, Value)]) -> Result<Self, String> {
+        forbid(pairs, ["run"].iter().chain(ALLOWANCE_KEYS).chain(REGISTRATION_KEYS))?;
+        let text = text_of(field(pairs, "mark"), "mark")?;
+        let mark = Mark::parse(&text).ok_or(format!("mark {text} は first でも hold でも release でもない"))?;
+        Ok(Self { bead: text_of(field(pairs, "bead"), "bead")?, mark: Some(mark), ..Self::default() })
     }
 
     /// 席を立てた行の本体: `run` / `bead` に加えて `account`（便を起こした口座）を**任意**で持つ（ADR-0027 §2.3・
@@ -259,7 +293,7 @@ impl Body {
     /// 登録の key は持たない（`account` の例外を開けるのはこの kind だけ）。
     fn spawned(pairs: &[(String, Value)]) -> Result<Self, String> {
         let foreign = ALLOWANCE_KEYS.iter().filter(|key| **key != "account");
-        forbid(pairs, foreign.chain(REGISTRATION_KEYS))?;
+        forbid(pairs, foreign.chain(REGISTRATION_KEYS).chain(MARK_KEYS))?;
         Ok(Self {
             run: text_of(field(pairs, "run"), "run")?,
             bead: text_of(field(pairs, "bead"), "bead")?,

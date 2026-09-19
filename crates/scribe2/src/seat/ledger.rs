@@ -54,15 +54,33 @@ pub fn timeout_of(manifest: &Manifest) -> Option<Duration> {
     }
 }
 
-/// 台帳の 1 件（**数えが読む key だけ**）。`s2-07l.479.2` の純移動では title / `updated_at` /
-/// priority / labels / `dependencies[]` も運んでいたが、読み手（復元の DATA と棚卸し）が同じ便で
-/// 消えたので落とした（到達しない構造を将来のために抱えない・C17）。足すのは読み手を足す便である。
+/// 台帳の 1 件（**読み手が読む key だけ**）。`s2-07l.479.2` で数え（status）だけに縮み、
+/// `s2-07l.345` で列の読み手（`pipe::dispatch`・設計 dispatcher.md §2）が足した分だけ戻った
+/// ——足すのは**読み手を足す便**である（到達しない構造を将来のために抱えない・C17）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Issue {
     /// bead id。
     pub id: String,
     /// status の字面。
     pub status: String,
+    /// priority field（無い・非負の整数でなければ `None`・列の順序が読む）。
+    pub priority: Option<u64>,
+    /// label の列（無ければ空・`intake:memo` の弁別が読む）。
+    pub labels: Vec<String>,
+    /// acceptance の本文（無ければ空・設計 pointer の行の出所）。
+    pub acceptance: String,
+    /// 依存の列（`dependencies[]`・2 key の揃う要素だけ・依存が閉じたかの判定が読む）。
+    pub deps: Vec<Dep>,
+}
+
+/// 依存の 1 件（`dependencies[]` の `depends_on_id` と `type` だけを読む・**要素は status を持たない**ので
+/// 閉じたかは読み手が同じ一覧（`--all`）の中で引く）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Dep {
+    /// 依存先の bead id（`depends_on_id`）。
+    pub on: String,
+    /// 依存の種別の字面（`type`・実測の母集団は `blocks` と `parent-child` の 2 値）。
+    pub kind: String,
 }
 
 /// 台帳の JSON（`bd list --json` の配列）を読む。配列でない・要素に `id` / `status` の文字列が無い → `None`
@@ -73,9 +91,29 @@ pub fn issues_of(text: &str) -> Option<Vec<Issue>> {
         .iter()
         .map(|node| {
             let text_of = |key: &str| node.get(key).and_then(Tree::as_str).map(str::to_owned);
-            Some(Issue { id: text_of("id")?, status: text_of("status")? })
+            let array_of = |key: &str| node.get(key).and_then(Tree::as_array).unwrap_or_default();
+            let priority = match node.get("priority") {
+                Some(Tree::Num(digits)) => digits.parse::<u64>().ok(),
+                _ => None,
+            };
+            Some(Issue {
+                id: text_of("id")?,
+                status: text_of("status")?,
+                priority,
+                labels: array_of("labels").iter().filter_map(Tree::as_str).map(str::to_owned).collect(),
+                acceptance: text_of("acceptance_criteria").unwrap_or_default(),
+                deps: array_of("dependencies").iter().filter_map(dep_of).collect(),
+            })
         })
         .collect()
+}
+
+/// 依存の 1 要素（`depends_on_id` / `type` の文字列が揃わなければ `None`）。key の字面は `bd --readonly list
+/// --all --json` の現物から採った（2026-09-19 の実測: 要素は `issue_id` / `depends_on_id` / `type` /
+/// `created_at` / `created_by` / `metadata` を持ち、**依存先の status は持たない**）。
+fn dep_of(node: &Tree) -> Option<Dep> {
+    let text_of = |key: &str| node.get(key).and_then(Tree::as_str).map(str::to_owned);
+    Some(Dep { on: text_of("depends_on_id")?, kind: text_of("type")? })
 }
 
 /// 台帳の現在値の 1 行（status 3 つの数え・DATA の `[BD_COUNT]` と席の指示文の `{ledger}` が同じ 1 本を読む）。
@@ -91,8 +129,9 @@ pub fn counts_of(bd: &str, timeout: Duration) -> Option<String> {
     read_ledger(bd, timeout).ok().as_deref().map(counts_body)
 }
 
-/// 台帳を子 process で読む（待ち上限を超えたら殺して断る・stderr は捨てる）。
-fn read_ledger(bd: &str, timeout: Duration) -> Result<Vec<Issue>, LedgerError> {
+/// 台帳を子 process で読む（待ち上限を超えたら殺して断る・stderr は捨てる）。**列の読み手も同じ 1 本**
+/// （設計 dispatcher.md §2・C2）。
+pub fn read_ledger(bd: &str, timeout: Duration) -> Result<Vec<Issue>, LedgerError> {
     let mut child = Command::new(bd)
         .args(BD_ARGS)
         .stdin(Stdio::null())

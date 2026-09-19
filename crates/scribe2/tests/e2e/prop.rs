@@ -13,7 +13,7 @@ use proptest::test_runner::Config;
 use vessel::fleet::json_tree::{parse as parse_tree, Tree};
 use vessel::fleet::{Allowance, Measured, Registration, WindowKind, WINDOWS};
 use vessel::seat::role::ALL as ROLES;
-use vessel::fleet::{Event as FleetEvent, EventKind, Stage, ACTOR_HUMAN, ACTOR_MACHINE, KINDS, SCHEMA as FLEET_SCHEMA, STAGES};
+use vessel::fleet::{Event as FleetEvent, EventKind, Shape, Stage, ACTOR_HUMAN, ACTOR_MACHINE, KINDS, SCHEMA as FLEET_SCHEMA, STAGES};
 use vessel::headless::runner::rate_limit_status;
 use vessel::rules::manifest::{elements, list, quoted_once, scalar, Scalar};
 use vessel::seat::state::{Event, SeatState, Stamp, SCHEMA};
@@ -109,7 +109,7 @@ mod stamp {
 
 /// fleet の閉じた enum と log 行の性質（(2) fleet/mod.rs）。
 mod fleet {
-    use super::{config, ident, json_text, Allowance, FleetEvent, EventKind, Measured, Registration, Stage, WindowKind, ACTOR_HUMAN, ACTOR_MACHINE, FLEET_SCHEMA, KINDS, ROLES, STAGES, WINDOWS};
+    use super::{config, ident, json_text, Allowance, FleetEvent, EventKind, Measured, Registration, Shape, Stage, WindowKind, ACTOR_HUMAN, ACTOR_MACHINE, FLEET_SCHEMA, KINDS, ROLES, STAGES, WINDOWS};
     use proptest::prelude::*;
     use std::collections::{BTreeMap, BTreeSet};
     use vessel::fleet::select::{select, Input, NoCandidate, NoCandidateReason, Purpose, Selection};
@@ -124,16 +124,10 @@ mod fleet {
         ]
     }
 
-    /// `run` / `bead` を持つ kind（口座残量の 2 kind・席の登録・口座の退役と戻しは本体が別なので別の strategy が作る）。
+    /// `run` / `bead` を持つ kind（[`Shape::Run`] の 1 分類・口座残量・席の登録・口座の退役と戻し・列の印は
+    /// 本体が別なので別の strategy が作る）。
     fn record_kinds() -> Vec<EventKind> {
-        KINDS
-            .iter()
-            .copied()
-            .filter(|kind| {
-                !kind.is_allowance()
-                    && !matches!(kind, EventKind::SeatRegistered | EventKind::AccountRetired | EventKind::AccountRestored)
-            })
-            .collect()
+        KINDS.iter().copied().filter(|kind| kind.shape() == Shape::Run).collect()
     }
 
     /// 全 variant の字面と、その近傍。
@@ -173,6 +167,7 @@ mod fleet {
                 detail,
                 allowance: None,
                 registration: None,
+                mark: None,
                 account: None,
             })
     }
@@ -222,6 +217,7 @@ mod fleet {
                 detail: None,
                 allowance: Some(Allowance::Measured(measured)),
                 registration: None,
+                mark: None,
                 account: None,
             })
     }
@@ -269,6 +265,7 @@ mod fleet {
                 detail: None,
                 allowance: None,
                 registration: Some(registration),
+                mark: None,
                 account: None,
             })
     }

@@ -4,7 +4,8 @@
 //! （`s2-07l.260` で挙動不変に分割・外の呼び手の path は `fleet` の再 export で保つ）。
 
 use super::{
-    select, AllowanceKey, AllowanceLatest, Event, EventKind, RegistrationLatest, SeatState, Stage, ACTOR_HUMAN,
+    select, AllowanceKey, AllowanceLatest, Event, EventKind, RegistrationLatest, SeatState, Shape, Stage,
+    ACTOR_HUMAN,
 };
 use crate::rules::manifest::Manifest;
 use crate::seat::role::Role;
@@ -210,18 +211,19 @@ fn apply_account(state: &mut State, event: &Event) {
         | EventKind::QuestionAnswered
         | EventKind::AllowanceMeasured
         | EventKind::AllowanceUnmeasured
-        | EventKind::SeatRegistered => {}
+        | EventKind::SeatRegistered
+        | EventKind::DispatchMark => {}
     }
 }
 
 /// 1 件の event を便へ反映する。
 fn apply_run(state: &mut State, event: &Event) {
-    // 口座残量・登録・退役の行は便に紐づかない（`run` / `bead` を持たない）。ここで通すと id が空の
-    // 幽霊の便が 1 つ生まれ、`show` / `export` の件数が実在しない便を数える。登録と退役は **kind で
-    // 見分ける**（本体の有無ではない＝退役した役割の登録 row は本体を持たずに読まれる〔`Event::from_line`〕
-    // ので、本体で見分けると幽霊の便が 1 つ生まれる・`account` の有無でもない＝口座つきの `SeatSpawned` は
-    // 便に紐づく行・ADR-0027 §2.3）。
-    if event.kind.is_allowance() || event.kind == EventKind::SeatRegistered || event.kind.is_account_lifecycle() {
+    // 口座残量・登録・退役・列の印の行は便に紐づかない（`run` を持たない）。ここで通すと id が空の
+    // 幽霊の便が 1 つ生まれ、`show` / `export` の件数が実在しない便を数える。見分けるのは **kind の
+    // [`EventKind::shape`]** である（本体の有無ではない＝退役した役割の登録 row は本体を持たずに読まれる
+    // 〔`Event::from_line`〕ので、本体で見分けると幽霊の便が 1 つ生まれる・`account` の有無でもない＝
+    // 口座つきの `SeatSpawned` は便に紐づく行・ADR-0027 §2.3）。
+    if event.kind.shape() != Shape::Run {
         return;
     }
     let run = state.runs.entry(event.run.clone()).or_insert_with(|| Run {
@@ -288,6 +290,7 @@ fn apply_seat(state: &mut State, event: &Event) {
         | EventKind::AllowanceUnmeasured
         | EventKind::SeatRegistered
         | EventKind::AccountRetired
-        | EventKind::AccountRestored => {}
+        | EventKind::AccountRestored
+        | EventKind::DispatchMark => {}
     }
 }
