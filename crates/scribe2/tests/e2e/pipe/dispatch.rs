@@ -888,6 +888,7 @@ fn put_dead_ticket(state: &Path, id: &str) {
 /// 再走では緑・ローカルの負荷では両側 0/20 で、原因を特定できなかった（台帳 notes）。
 #[test]
 fn pipe_terminal_dispatch_marks_fire_without_children() {
+    // flip-check: retroactive s2-07l.487
     let (repo, state) = repo_with_state();
     two_rows(&repo);
     // 行 a を持つ live な便を 1 本置く＝台帳の候補（行 a）は必ず交差して起こせない。
