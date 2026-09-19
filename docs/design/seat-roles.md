@@ -386,5 +386,5 @@ section = "23"
 write-set = ["crates/scribe2/tests/e2e/hook.rs"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail hook_recovery_edge_"]
 size = "S"
-done = "偽の bd と toy repo で、JSON を出して rc 非 0 で終わる台帳は ledger-unreadable・stdout を閉じて上限を越えて生きる台帳は ledger-timeout・上限の内側で遅れて rc 0 で終わる台帳は測れた側に出て、列挙の順と食い違う dirty な worktree 2 本が commit の新しい順に並び未生の HEAD の worktree を混ぜても順が変わらず、commit と worktree の本数が上限とちょうど同じ repo は CUT を出さず、時差の字が 2 桁でない in_progress の bead は更新時刻 - で出て open の bead は窓に入らず、枠の名前が dir の周の compact の SessionStart は PRECOMPACT を出さず stderr に読めない理由と消せない理由の 2 行を出して指示文と DATA は出し（枠が無い周は stderr に出さない）、socket を渡した PreCompact が登録済みの席の枠を書き、各歯が対応する変異を src に当てると落ちる実測が便の報告に載り、src/ は 1 行も変わらない"
+done = "偽の bd と toy repo で、JSON を出して rc 非 0 で終わる台帳は ledger-unreadable・stdout を閉じて上限を越えて生きる台帳は ledger-timeout・上限の内側で遅れて rc 0 で終わる台帳は測れた側に出て、列挙の順と食い違う dirty な worktree 2 本が commit の新しい順に並び未生の HEAD の worktree を混ぜても順が変わらずその worktree は末尾側に来て、commit と worktree の本数が上限とちょうど同じ repo は CUT を出さず、時差の字が 2 桁でない in_progress の bead は更新時刻 - で出て open の bead は窓に入らず、枠の名前が dir の周の compact の SessionStart は PRECOMPACT を出さず stderr に読めない理由と消せない理由の 2 行を出して指示文と DATA は出して rc 0 で終わり（枠が無い周は stderr にどちらの行も出さない）、socket を渡した PreCompact が登録済みの席の枠を書き、各歯が対応する変異を src に当てると落ちる実測が便の報告に載り（当てて落ちなかった変異は同値か歯の不足かを報告で分ける）、src/ と既存の歯は 1 行も変わらない"
 <!-- contracts:end -->
