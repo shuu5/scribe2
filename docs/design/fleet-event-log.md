@@ -49,6 +49,7 @@ C3 は「1 つの DB file（host 列）」と言う。MVP はそれを **append-
 
 - `pub fn replay(events: &[Event]) -> State`。`State { runs: BTreeMap<String, Run>, seats: BTreeMap<String, Seat> }`、`Run { id, bead, stage: Stage, updated, detail, approved: bool }`、`Seat { id, run, pid, state: SeatState, updated }`。run ごとに物理順で最後の `stage` が現在地。`SeatStopped` で `SeatState::Stopped`。`ApprovalReceived` で `approved = true`（`approved` は「承認 event が在るか」の導出値であって状態 enum ではない）。
 - `append(dir, &Event) -> Result<Warnings, StoreError>`: lock file を `create_new` で取り（再試行の上限は rules 行 `fleet.lock_retry_ms`）、`O_APPEND` で 1 行書いて flush し、lock を外す。**rules 行 `fleet.lock_stale_ms` より古い lock は stale として除去し** `Warning::StaleLockRemoved` を返り値に載せる（黙って消さない）。**予定形**（`s2-07l.203` の land まで現物は mtime の線だけ）: lock file には**所有者の pid を 10 進 1 行**で書く（`create_new` で開いた handle にそのまま書く・第 2 の writer を作らない）。既存の lock に当たった周は中身を読み、**所有者が死んでいれば外して取り直し**、その旨を warning の 1 種として返り値に載せる（黙って消さない）。判定は純関数 1 本で所有者を 3 値に読む——死んでいる = 本文の pid の `/proc/<pid>/stat` が**無い**周だけ／生きている = 起動時刻が読めた周（pid の再利用も「生きている」）／読めない = 本文が 10 進 1 行でない周と、起動時刻の probe が「無い」以外の理由で読めない周（`/proc` が読めない環境・parse 不能。probe は `/proc/stat` を先に読み、それが読めない周は pid の有無を見ずに「読めない」＝`/proc` 自体が無い環境を「無い」に畳まない）。読めない周と生きている pid は従来どおり `fleet.lock_stale_ms` の線に従う（FailClosed の極性は変えない＝probe の読めなさを「死んだ」に畳むと生きた所有者の lock を外す側へ倒れる・C11.2）。pid の生存判定（起動時刻）の実装は受付の札（[ADR-0021 §2.3](../../design-intent/decisions/ADR-0021-gate-cost-is-measured-and-confined.html#s2-3-slots)）と共有する 1 本にする（lock 実装を 1 本に保つのと同じ理由。札は probe が読めない周も回収側に読む＝ADR-0021 §2.3 の回収〔死んだ札と本文の壊れた札〕と §5 (D) の安全論〔札を失っても過剰に配る側へ倒れる〕に従う）。中身が pid だけである理由: 札の ts を持たないので pid の再利用は弁別できないが、再利用された pid は「生きている」と読んで**待つ側**へ倒れる（安全な向き）＝札と同じ 2 値を持たせると第 2 の受付が生える。新しい閾値は作らない（rules 行も裁定 id も増えない）。
+- **回収は 1 手**（契約表の行 c・`s2-07l.486`）: 現物の回収は 3 手（本文を読んで死んだ／古いと判じる → `remove_file` → `create_new`）で、同じ死んだ lock を観測した 2 本が両方とも回収に入ると、後の 1 本の `remove_file` が先の 1 本が取ったばかりの生きた lock を外し、2 本が同時に lock を持つ。lock 実装は 1 本なので穴は 4 面に共通——追記（本節）・受付の入口（[dispatcher.md](./dispatcher.md) §5・`s2-07l.366`）・受付札（[gate-cost.md](./gate-cost.md) §3.2）・driver の札（dispatcher.md §5・`s2-07l.482`）。直し: 回収を関数 1 本 `reclaim(lock, observed) -> bool` に切り出し、回収用の token `<lock>.reclaim` を `create_new` で取れた 1 本だけが lock を読み直し、観測した本文と同じ周に限って `remove_file` し、token を消して `true` を返す。token を取れなかった本と読み直しが観測と違った本は `false` で、外さずに次の周の取り直しへ戻る（token の寿命は μs 単位・rename は塞がらない〔`s2-07l.482` の実測〕）。回収の途中で死んだ process が残した token は外さず、`fleet.lock_retry_ms` の後に token を名指す typed な error で落とす（FailClosed・C11.2・黙って外す側へ倒さない・恒久の直しは §8 の OS の file lock）。判定の本文（所有者の 3 値・`Reclaim::{Stale, DeadOnly}`）と rules 行（`fleet.lock_retry_ms` / `fleet.lock_stale_ms`）は不変・新しい閾値は作らない。歯は同じ死んだ lock を観測した 2 本を逐次 2 回の呼び出しで表し `true, false` を pin する（in-file・並行の e2e は置かない）。
 - `read_all(dir) -> Result<Vec<Event>, Vec<StoreError>>`: **malformed 行（parse 不能・`schema` が 1 以外）は skip せず `line=<N>` 付きの error に全件集めて `Err`**（NFR4）。file 不在は `Ok(vec![])`。
 - **待機は 1 実装**（C3.4）: `pub enum Completion { RunnerExited(pid), SeatGone(pid) }` と `pub fn wait(c: Completion, deadline: Duration) -> Result<(), Timeout>` の 1 本。任意の述語を受ける口は作らない。pipeline の「runner の終了待ち」「TERM 後の消滅待ち」はこの 2 値で表す。
 - 失敗は境界ごとの enum（`StoreError` / `Timeout`）で持ち、極性は `FailClosed`（C11.2）。
@@ -83,6 +84,7 @@ C3 は「1 つの DB file（host 列）」と言う。MVP はそれを **append-
 - doctor の fleet 面（host ごとの event 件数と schema 版の照合・C3.2）。口座・lease・退役の表（v3・C3 / C9）。
 - SQLite 化は A3 を通した上で **同じ event を投影する**形にし、event log は消さない（跨版 面 2 は event log の path で固定）。
 - event の圧縮・rotation（MVP は無限追記・1 便あたり 10 行程度）。cross-host の lock（MVP は同 host 内のみ）。
+- lock の実装を OS の file lock（std の `File::try_lock`）へ置き換え、pid 本文と回収（§4 の行 c の token）を消す案。所有者が死ねば OS が lock を離すので、死んだ lock の回収そのものが要らなくなる（C17.2 の「消すもの」= 回収の経路と warning 2 種）。`fleet.lock_stale_ms`（と `Reclaim::Stale`）の去就は閾値行の裁定（A2）を要るので、行 c の後の候補として user に上げる。
 
 ## 9. run 無しの裁定を承認 event として持つ — kind `RulingReceived`・対話面の席の口 `seat ruling`・doctor の突合（契約表の行 b・`s2-07l.386`）
 
@@ -114,4 +116,14 @@ write-set = ["crates/scribe2/src/fleet/mod.rs", "crates/scribe2/src/fleet/event.
 verify = ["cargo nextest run -p scribe2 --no-tests=fail fleet_ruling_"]
 size = "M"
 done = "対話面の席の口が RulingReceived を逐語付き run 無しで 1 件書き、空の逐語と対話面でない席は typed に断られ、fleet record はこの kind を断り、pipe report が rulings を数えて approval 以外の人由来が増えず、doctor が manifest の user <ts> の裁定 id ごとに同じ分の event の有無を matched / unmatched で出し、既存の承認と質問の event は不変"
+
+[[contract]]
+id = "c"
+title = "lock の回収を 1 手にする — 回収用の token を create_new で取れた 1 本だけが死んだ / 古い lock を外す（追記・受付の入口・受付札・driver の札の 4 面共通）"
+req = ["FR3", "FR68", "NFR4"]
+section = "4"
+write-set = ["crates/scribe2/src/fleet/store.rs", "crates/scribe2/tests/e2e/fleet.rs"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail fleet_lock_reclaim_"]
+size = "S"
+done = "同じ死んだ lock を観測した 2 本のうち reclaim で外せるのは 1 本（逐次 2 回で true, false）、stale の回収も同じ 1 手を通り、生きている所有者の lock は Stale でも DeadOnly でも retry_ms まで待ち、追記の lock の既存の warning の歯は不変"
 <!-- contracts:end -->
