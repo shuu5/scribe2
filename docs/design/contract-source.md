@@ -49,12 +49,12 @@
 
 ## 5. land の終端（FR50）
 
-Landed（gate-cost.md §6 の CAS の後）に続けて器が行う。各段は typed な event（`RunDone` の `detail` で弁別・schema 1 のまま）。
+Landed（gate-cost.md §6 の CAS の後）に続けて器が行う。各段は typed な event を **1 件ずつ**記す（`RunDone` の `detail` で弁別・schema 1 のまま・push / ci / close の 3 段）。止まった段から先は撃たず、記録もそこで終わる。終端の結末は閉じた 6 値（Closed / Undeclared / PushFailed / CiFailed / CiUnmeasurable / CloseFailed）で、CI の「測れない」を failure に畳まない（C10）。
 
-1. **push**: `git push <remote> main:main`（子 process・remote 名は `.vessel.toml` の宣言 `remote`〔optional・無ければ `origin`〕）。失敗は `RunDone detail=push:failed:<reason>` で止める（close しない・rc 1）。
-2. **CI の照合**: 唯一の wait 実装に `Completion::CiResult { repo, sha }` を足し、forge の CLI（`gh run list --commit <sha> --json status,conclusion`・子 process・`.vessel.toml` の `ci-cmd`〔optional・無ければ既定の 1 行〕）を deadline（rules 行 `pipe.ci_wait_s`・Int・裁定 id）まで待つ。結果は 3 値（success / failure / unmeasurable）。**success 以外は close しない**（FailClosed）・記帳して rc 1。
+1. **push**: `git push <remote> main:main`（子 process・remote 名は `.vessel.toml` の宣言 `remote`）。**既定の remote は持たない**: push は repo の外へ出す行為（A1「出す」）なので、押す先を宣言していない repo の便は終端を持たない（`terminal=undeclared`・rc 0・event 0 件・`--pr-cmd` 形と同じ極性・既存の toy repo の歯は動かない）。失敗は `RunDone detail=push:failed:<reason>` で止める（close しない・rc 1）。
+2. **CI の照合**: 唯一の wait 実装に `Completion::CiResult { repo, sha }` を足し、forge の CLI（`.vessel.toml` の `ci-cmd`〔optional・無ければ既定の 1 行 = `gh run list --commit {sha} --json status,conclusion`〕）を deadline（rules 行 `pipe.ci_wait_s`・Int・裁定 id）まで待つ。`ci-cmd` は **argv 1 本として撃つ**（shell を通さない・宣言は対象 repo の tracked file から来るので shell に渡すと 1 行が別の command を継ぎ足せる）。`{sha}` の穴は**必須**で、穴の無い行は断る（別の commit の判定を読んで success と言いうる）。`{sha}` には full の sha を入れる（短縮 sha は forge の CLI が一致させない）。結果は 3 値（success / failure / unmeasurable）。**success 以外は close しない**（FailClosed）・記帳して rc 1。
 3. **台帳の close**: 台帳 adapter（§6）で `close <bead> --reason "landed <sha> ci=success"`。adapter が撃てない・rc ≠ 0 なら `RunDone detail=close:failed` で止める（着地は成立している＝やり直しは `pipe land --terminal-only <run>` で終端だけ再実行・冪等）。
-4. **binary の世代**: record（verdicts.jsonl の行）に `generation=<landed sha>` を足す。自分の版が landed sha より古い周に起動を断るかは後続（§12）。
+4. **binary の世代**: record（verdicts.jsonl の行）に `generation=<build 元 commit>` を足す（§2・`--version` の括弧の中身と同じ 1 本）。同じ行の `sha` が着地した commit を持つので、値を landed sha にすると同値の欄が 2 つ並び、§12 の版の比較にどちらを使うか読み手が判じられない（C10）。自分の版が landed sha より古い周に起動を断るかは後続（§12）。
 5. **commit の trailer**: squash commit の本文末尾に `<Name>-Contract: <doc id>#<row id>` と `<Name>-Requirements: <req の列>` の trailer を書く（名は NAME 定数から導出・C2.2・他の道具の trailer と衝突しない）（既存の `run:` trailer と 1 組に統合・**着地の正本は record〔面 5・event log〕で、trailer は器が squash message に同時に書く導出面**・folio2 の RTM は trailer だけを読み、無ければ「まだ分からない」と出す〔「未着地」とは言わない〕・`--pr-cmd` 形は trailer も record も無い恒久の穴として RTM に出る）。
 
 `--pr-cmd` の形（自 repo への PR）は終端を持たない（従来どおり）。
@@ -277,8 +277,8 @@ title = "land の終端（push・CI の照合・台帳の close）と rules 行 
 req = ["FR50", "FR12"]
 section = "5"
 touches = ["crate::fleet::Completion", "crate::rules::RuleKind", "crate::polarity::Guard"]
-write-set = ["rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "crates/scribe2/src/fleet/mod.rs", "crates/scribe2/src/fleet/wait.rs", "crates/scribe2/src/pipe/land.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/declaration.rs", "+crates/scribe2/src/ledger/mod.rs", "crates/scribe2/src/lib.rs", "crates/scribe2/src/polarity.rs", "crates/scribe2/tests/e2e/pipe/land.rs", "crates/scribe2/tests/e2e/rules.rs", "crates/scribe2/tests/e2e/fleet.rs", "crates/scribe2/tests/e2e/polarity.rs", "crates/scribe2/tests/e2e/snapshots/"]
-verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_terminal_"]
+write-set = ["rules/manifest.toml", ".vessel.toml", "crates/scribe2/src/rules/mod.rs", "crates/scribe2/src/fleet/mod.rs", "crates/scribe2/src/fleet/wait.rs", "crates/scribe2/src/pipe/land.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/cli/step.rs", "crates/scribe2/src/pipe/queue.rs", "crates/scribe2/src/pipe/declaration.rs", "+crates/scribe2/src/ledger/mod.rs", "crates/scribe2/src/lib.rs", "crates/scribe2/src/polarity.rs", "crates/scribe2/tests/e2e/pipe.rs", "crates/scribe2/tests/e2e/pipe/land.rs", "crates/scribe2/tests/e2e/rules.rs", "crates/scribe2/tests/e2e/fleet.rs", "crates/scribe2/tests/e2e/polarity.rs", "crates/scribe2/tests/e2e/snapshots/"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_terminal_land_"]
 size = "M"
 done = "偽 remote + 偽 CI + 偽 adapter で Landed → close の 3 event・failure は close しない・consumer の要件面の path を宣言で受ける（拡張子で読み手分岐・無ければ既定・既定も無ければ断る）"
 depends = ["b"]
