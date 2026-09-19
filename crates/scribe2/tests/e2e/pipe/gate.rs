@@ -2611,6 +2611,15 @@ fn commit_retry_scripts(repo: &Path) {
 /// 返すのは (repo, state, id, base, gate の出力)。印の file は gate の前は空（`implemented` は verify を撃たない）
 /// なので、`detection_calls` の全行が gate 1 周の母集団である。
 fn retry_gate(common: &str, detection_script: &str) -> (PathBuf, PathBuf, String, String, Output) {
+    retry_gate_with(common, detection_script, r#"verify = ["sh verify-count.sh contract"]"#)
+}
+
+/// [`retry_gate`] の契約 verify も呼び手が選ぶ形（`contract` は契約 file の `verify = [...]` の行）。
+fn retry_gate_with(
+    common: &str,
+    detection_script: &str,
+    contract: &str,
+) -> (PathBuf, PathBuf, String, String, Output) {
     let (repo, state) = repo_with_state();
     commit_retry_scripts(&repo);
     write_vessel(&repo, VESSEL_ALLOWED, common);
@@ -2619,7 +2628,7 @@ fn retry_gate(common: &str, detection_script: &str) -> (PathBuf, PathBuf, String
     fs::write(&path, format!("{body}detection-verify = [\"sh {detection_script} detection-{{base}}\"]\n")).ok();
     git(&repo, &["add", "-f", ".vessel.toml"]);
     git(&repo, &["commit", "-q", "-m", "vessel-detection-retry"]);
-    let design = write_contract(&repo, &["verify"], &[r#"verify = ["sh verify-count.sh contract"]"#]);
+    let design = write_contract(&repo, &["verify"], &[contract]);
     let base = git(&repo, &["rev-parse", "HEAD"]);
     let id = implemented(&repo, &state, &design);
     assert!(detection_calls(&repo).is_empty(), "fixture: gate の前は印が無い");
@@ -2887,6 +2896,92 @@ fn pipe_detection_intake_refuses_unfit_lines() {
     commit_detection_vessel(&repo, DETECTION_COUNT);
     let ok = intake_raw(&repo, &state, &path, "b");
     assert_eq!(ok.status.code(), Some(i32::from(RC_OK)), "検査を通る検出線は読める: {}", stderr_of(&ok));
+    clean(&[&repo, &state]);
+}
+
+// ---- 赤い行が在る周は検出線が測れなくても FAIL（設計 gate-cost.md §28・`s2-07l.495`・接頭辞 `pipe_gate_red_wins_over_detection_`）----
+//
+// 検出線は測る前に元の木の歯を全部走らせるので、歯が赤い木では必ず rc 2 で終わる。rc 2 を赤より先に
+// 読むと、赤いと分かっている便が INCONCLUSIVE のまま居座る。赤（検出線 ∧ rc 2 だけ除く）が 1 行でも
+// 在れば FAIL・赤が 0 の周だけ rc 2 が INCONCLUSIVE に倒す。fixture は撃ち直しの歯と同じ stub
+// （`verify-red-count.sh` = rc 1・`verify-unmeasured.sh` = 常に rc 2）。
+
+/// 赤 ∧ 検出線 rc 2 の周の共通 assert: rc 1・`Gated` verdict=FAIL・evidence は赤い行の数（今の FAIL と
+/// 同じ字面・検出線を名指さない）・`verify_red` は 1・lens は呼ばれない・③ の record は rc 2 の現物のまま。
+fn assert_red_wins(state: &Path, id: &str, out: &Output, red: (&str, usize, &str)) {
+    let (kind, n, rc) = red;
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "赤が在る周は FAIL の rc 1: {} / {}", stdout_of(out), stderr_of(out));
+    assert!(stdout_of(out).contains("verdict=FAIL"), "{}", stdout_of(out));
+    let pairs = verdict_pairs(state, id);
+    assert_eq!(value_of(&pairs, "verdict"), "FAIL", "verdict.json も FAIL: {pairs:?}");
+    assert_eq!(value_of(&pairs, "verify_red"), "1", "赤の数え方は不変（検出線の rc 2 は数えない）: {pairs:?}");
+    let evidence = value_of(&pairs, "evidence");
+    assert_eq!(evidence, "verify の 1 行が rc≠0", "evidence は赤い行の数（今の FAIL と同じ字面）");
+    assert!(!evidence.contains("検出線"), "evidence は検出線を名指さない: {evidence}");
+    assert!(!state.join("lens-ran").exists(), "赤い周は lens を起動しない");
+    assert_eq!(gated_details(state, id), vec!["verdict:FAIL".to_owned()], "Gated の detail は FAIL 1 件");
+    let rows = verify_rows(state, id);
+    assert_eq!(kinds(&rows), ["write-set", "common", "detection", "contract"], "段の並び: {rows:?}");
+    assert_eq!(row_value(&rows, n, "kind"), kind, "n={n} の段: {rows:?}");
+    assert_eq!(row_value(&rows, n, "rc"), rc, "n={n} の rc は現物: {rows:?}");
+    assert_eq!(row_value(&rows, 3, "rc"), "2", "③ の rc 2 は現物のまま（record の形は不変）: {rows:?}");
+    assert_eq!(row_value(&rows, 3, "retried"), "1", "撃ち直し（§21）は不変＝撃ち直した後の値で順を読む: {rows:?}");
+}
+
+/// (a) 共通 verify が赤（rc 1）∧ 検出線が rc 2 の便は `Gated` verdict=FAIL に着く（INCONCLUSIVE ではない）。
+/// evidence は赤い行の数・lens は呼ばれない。検出線は従来どおり 1 回撃ち直してから順を読む。
+#[test]
+fn pipe_gate_red_wins_over_detection_unmeasured_when_common_is_red() {
+    let (repo, state, id, base, out) = retry_gate(r#"["sh verify-red-count.sh common"]"#, VERIFY_UNMEASURED);
+    assert_red_wins(&state, &id, &out, ("common", 2, "1"));
+    assert_eq!(
+        detection_calls(&repo),
+        ["common".to_owned(), format!("detection-{base}"), format!("detection-{base}"), "contract".to_owned()],
+        "段の順と撃ち直しは不変（③ は 1 回だけ撃ち直す）"
+    );
+    clean(&[&repo, &state]);
+}
+
+/// (b) 契約 verify が赤（rc 1）∧ 検出線が rc 2 の便も同じく FAIL（赤の出所が②か④かを問わない）。
+#[test]
+fn pipe_gate_red_wins_over_detection_unmeasured_when_contract_is_red() {
+    let (repo, state, id, base, out) = retry_gate_with(
+        r#"["sh verify-count.sh common"]"#,
+        VERIFY_UNMEASURED,
+        r#"verify = ["sh verify-red-count.sh contract"]"#,
+    );
+    assert_red_wins(&state, &id, &out, ("contract", 4, "1"));
+    assert_eq!(
+        detection_calls(&repo),
+        ["common".to_owned(), format!("detection-{base}"), format!("detection-{base}"), "contract".to_owned()],
+        "④ は③の後に撃たれる（赤が④に在っても③の撃ち直しは不変）"
+    );
+    clean(&[&repo, &state]);
+}
+
+/// (c) 赤が 0 ∧ 検出線が rc 2 の便は今までどおり INCONCLUSIVE（`Gated` のまま測り直せる・lens は呼ばない）。
+/// 「赤より先」を「常に FAIL」へ倒す変異はここで落ちる。
+#[test]
+fn pipe_gate_red_wins_over_detection_unmeasured_only_when_red_exists() {
+    let (repo, state, id, _base, out) = retry_gate(r#"["sh verify-count.sh common"]"#, VERIFY_UNMEASURED);
+    assert_eq!(
+        out.status.code(),
+        Some(i32::from(RC_INCONCLUSIVE)),
+        "赤が 0 なら検出線の rc 2 は INCONCLUSIVE: {} / {}",
+        stdout_of(&out),
+        stderr_of(&out)
+    );
+    assert!(stdout_of(&out).contains("verdict=INCONCLUSIVE"), "{}", stdout_of(&out));
+    let pairs = verdict_pairs(&state, &id);
+    assert_eq!(value_of(&pairs, "verdict"), "INCONCLUSIVE");
+    assert_eq!(value_of(&pairs, "verify_red"), "0", "赤が 0");
+    let evidence = value_of(&pairs, "evidence");
+    for needle in ["検出線", "n=3", "rc 2"] {
+        assert!(evidence.contains(needle), "理由が {needle} を名指す: {evidence}");
+    }
+    assert!(!state.join("lens-ran").exists(), "測れなかった周は lens を起動しない");
+    assert!(show_line(&repo, &state, &id).contains("stage=Gated"), "段は Gated のまま（測り直せる）");
+    assert_eq!(gated_details(&state, &id), vec!["verdict:INCONCLUSIVE".to_owned()]);
     clean(&[&repo, &state]);
 }
 

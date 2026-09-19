@@ -1,8 +1,9 @@
 //! gate（設計 docs/design/pipeline.md §5.3・FR8 / FR9 / NFR1）。
 //!
 //! 契約の `verify` 各行の逐条 rc（機械検証）と lens 1 本の判定を合わせて 3 値を出す。
-//! **判定は wildcard 無しの順序で決める**: 測れなかった（段①が読めない・箱の中の死・検出線の rc 2）
-//! → INCONCLUSIVE ／ verify に rc≠0 → FAIL ／ lens に渡す本文の byte が cap 超
+//! **判定は wildcard 無しの順序で決める**: 測れなかった（段①が読めない・箱の中の死）
+//! → INCONCLUSIVE ／ verify に rc≠0 → FAIL ／ 検出線の rc 2（赤が 0 の周だけ・設計
+//! gate-cost.md §28）→ INCONCLUSIVE ／ lens に渡す本文の byte が cap 超
 //! → INCONCLUSIVE（lens を呼ばない）／ lens 側の不備 → INCONCLUSIVE ／ それ以外は
 //! lens の verdict。lens に渡す本文は閉じた型 [`LensInput`]（diff か、純移動の要約・
 //! [`super::move_proof`]・`s2-07l.266`）で、判定は純関数・file の読みだけをここが担う。
@@ -228,6 +229,7 @@ struct Measured {
     /// `cargo xtask mutants-diff` の rc 2 は「生存も時間切れも無いが測れていない」（baseline が
     /// 落ちた等）で、赤（rc 1 = deny 昇格後）ではない。赤に数えると測れなかった便が FAIL で終端し
     /// 測り直せない（C10）。rc 1 の検出線と検出線以外の rc 2 は従来どおり赤（`record::detection_unmeasured`）。
+    /// INCONCLUSIVE へ倒すのは [`red`](Self::red) が 0 の周だけ（赤が在れば FAIL が先・設計 gate-cost.md §28）。
     detection_unmeasured: Option<u64>,
     /// lens に渡す本文の型（純移動の要約か diff か・設計 §5.3・測れなかった周は diff）。
     input: LensInput,
@@ -377,17 +379,20 @@ fn decide(
             reason.as_str()
         ));
     }
-    // **検出線の rc 2（測れなかった）も赤より先**（`s2-07l.331`・設計 §5.3 の③・FR14）。道具が
-    // 「測れていない」と言った周を FAIL にすると、便は終端して測り直せない。Gated に留め、
-    // 検出線を撃ち直せる側へ倒す（PASS には決してならない・C10）。
-    if let Some(n) = measured.detection_unmeasured {
-        return inconclusive(format!("検出線（n={n}）が測れなかった（rc 2・赤ではない）"));
-    }
+    // **赤は検出線の rc 2 より先**（設計 gate-cost.md §28・`s2-07l.495`）。検出線は測る前に元の木の
+    // 歯を全部走らせるので、歯が赤い木では必ず rc 2 で終わる——rc 2 を先に読むと、赤いと分かって
+    // いる便が INCONCLUSIVE のまま居座る。赤の数え方は変えない（検出線 ∧ rc 2 だけ除く・rc 1 は赤）。
     if measured.red > 0 {
         // 赤い周は lens を呼ばない＝findings は測っていない（`tally` は `None`・C10）。
         let evidence = format!("verify の {} 行が rc≠0", measured.red);
         let judged = Judged { verdict: Verdict::Fail, evidence, tally: None };
         return Ok(Decided { judged, scope: None, account: None });
+    }
+    // **検出線の rc 2（測れなかった）は、赤が 0 の周だけ INCONCLUSIVE**（`s2-07l.331`・設計 §5.3 の③・
+    // FR14）。道具が「測れていない」と言った周を FAIL にすると、便は終端して測り直せない。Gated に
+    // 留め、検出線を撃ち直せる側へ倒す（PASS には決してならない・C10）。
+    if let Some(n) = measured.detection_unmeasured {
+        return inconclusive(format!("検出線（n={n}）が測れなかった（rc 2・赤ではない）"));
     }
     // **予算の照合は lens に渡す本文の byte で行う**（FR9・純移動の周は要約・`verdict.json` の
     // `diff_bytes` は従来どおり diff の byte）。
