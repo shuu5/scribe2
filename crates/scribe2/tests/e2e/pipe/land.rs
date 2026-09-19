@@ -3251,6 +3251,8 @@ struct FakeTerminal {
     remote: PathBuf,
     /// 偽 bd が argv を書き出す file（撃たれなければ在らない）。
     bd_log: PathBuf,
+    /// 偽 CI が argv を書き出す file（`{sha}` の穴に何が入ったかをここで測る）。
+    ci_log: PathBuf,
 }
 
 /// 実行権つきの `/bin/sh` script を書き、その path を返す。
@@ -3281,8 +3283,12 @@ fn fake_terminal_json(repo: &Path, state: &Path, json: &str) -> FakeTerminal {
     let remote = state.join("remote.git");
     git(state, &["init", "--bare", "-q", &remote.display().to_string()]);
     git(repo, &["remote", "add", "fake", &remote.display().to_string()]);
-    // 偽 CI: 渡された sha を読み捨てて JSON 1 行を返す（`{sha}` の穴は器が埋める）。
-    let ci = exec_script(&state.join("fake-ci.sh"), &format!("cat <<'JSON'\n{json}\nJSON\n"));
+    // 偽 CI: **渡された argv を log へ写してから** JSON 1 行を返す（`{sha}` の穴に何が入ったかを測る）。
+    let ci_log = state.join("ci-argv.txt");
+    let ci = exec_script(
+        &state.join("fake-ci.sh"),
+        &format!("printf '%s\\n' \"$@\" > '{}'\ncat <<'JSON'\n{json}\nJSON\n", ci_log.display()),
+    );
     // 偽 bd: argv をそのまま log へ書いて rc 0（書きは close の 1 種だけ）。
     let bd_log = state.join("bd-argv.txt");
     exec_script(&state.join("fake-bd.sh"), &format!("printf '%s\\n' \"$@\" > '{}'\n", bd_log.display()));
@@ -3291,7 +3297,7 @@ fn fake_terminal_json(repo: &Path, state: &Path, json: &str) -> FakeTerminal {
     fs::write(repo.join(".vessel.toml"), added).expect("宣言を書ける");
     git(repo, &["add", "-f", ".vessel.toml"]);
     git(repo, &["commit", "-q", "-m", "terminal-decl"]);
-    FakeTerminal { remote, bd_log }
+    FakeTerminal { remote, bd_log, ci_log }
 }
 
 /// 便の `RunDone stage=Landed` の detail を**宣言順に**並べる（終端は段ごとに 1 件記す）。
@@ -3326,6 +3332,13 @@ fn pipe_terminal_land_pushes_checks_ci_and_closes_the_bead() {
     );
     // **押した先が動いている**（数えただけでは撃ったと言えない）。
     assert_eq!(git(&tools.remote, &["rev-parse", "refs/heads/main"]), landed, "偽 remote の main は着地した sha");
+    // **`{sha}` の穴が埋まっている**: CI の行は着地した **40 桁の** sha を名指して撃たれる（短縮 sha だと
+    // forge の CLI は完了済みの run でも空を返し続ける）。
+    let ci_argv = fs::read_to_string(&tools.ci_log).expect("偽 CI が撃たれた");
+    let words: Vec<&str> = ci_argv.lines().collect();
+    assert!(words.contains(&landed.as_str()), "argv に着地した sha が入る: {words:?}");
+    assert_eq!(landed.len(), 40, "穴に入るのは 40 桁の sha: {landed}");
+    assert!(!ci_argv.contains("{sha}"), "穴の字面が残らない: {ci_argv}");
     // **台帳は close の 1 種だけで撃たれる**（起票も acceptance も撃たない）。
     let argv = fs::read_to_string(&tools.bd_log).expect("偽 bd が撃たれた");
     let words: Vec<&str> = argv.lines().collect();
@@ -3379,14 +3392,27 @@ fn pipe_terminal_land_only_replays_the_terminal_without_relanding() {
     assert_eq!(first.status.code(), Some(1), "1 周目は close しない: {}", stderr_of(&first));
     let landed = git(&repo, &["rev-parse", "refs/heads/main"]);
     assert!(!tools.bd_log.exists(), "前提: 台帳はまだ閉じていない");
+    // **別の便が main を進める**（この歯の要）: 以後 HEAD ≠ 着地した sha なので、終端が「記録の sha」を
+    // 読むのか「HEAD の今の sha」を読むのかが弁別できる。同じ fixture で両方が等しいままだと、HEAD を
+    // 読む実装でも通ってしまう（空虚）。
+    fs::write(repo.join("unrelated.md"), "別の便
+").expect("別の便の file を書ける");
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "another-run"]);
+    let moved = git(&repo, &["rev-parse", "refs/heads/main"]);
+    assert_ne!(moved, landed, "前提: HEAD は着地した sha から動いた");
     // CI を直す（宣言は同じ path を指したまま・行は 1 byte も変えない）。
-    exec_script(&state.join("fake-ci.sh"), "printf '[{\"status\":\"completed\",\"conclusion\":\"success\"}]\\n'\n");
+    exec_script(&state.join("fake-ci.sh"), &format!("printf '%s\\n' \"$@\" > '{}'\nprintf '[{{\"status\":\"completed\",\"conclusion\":\"success\"}}]\\n'\n", tools.ci_log.display()));
     let again = land_extra(&repo, &state, &id, &["--bd", &bd, "--terminal-only"]);
     assert_eq!(again.status.code(), Some(i32::from(RC_OK)), "継いだ終端は rc 0: {}", stderr_of(&again));
     assert_eq!(stdout_of(&again).trim(), format!("run={id} terminal=closed"), "終端だけの 1 行");
-    // **着地はやり直さない**: main も押した先も 1 mm も動かない。
-    assert_eq!(git(&repo, &["rev-parse", "refs/heads/main"]), landed, "main は動かない");
-    assert_eq!(git(&tools.remote, &["rev-parse", "refs/heads/main"]), landed, "押した先も動かない");
+    // **着地はやり直さない**: main は別の便が進めた位置のままで、器は 1 mm も動かさない。
+    assert_eq!(git(&repo, &["rev-parse", "refs/heads/main"]), moved, "main は器が動かさない");
+    // **照合したのは記録の sha である**（HEAD の今の sha ではない）。
+    let ci_argv = fs::read_to_string(&tools.ci_log).expect("偽 CI が撃たれた");
+    let words: Vec<&str> = ci_argv.lines().collect();
+    assert!(words.contains(&landed.as_str()), "CI の argv は**着地した sha**: {words:?}");
+    assert!(!words.contains(&moved.as_str()), "HEAD の今の sha では照合しない: {words:?}");
     // 記録は 1 周目の 2 件に 2 周目の 3 件が続く（段ごとに 1 件・やり直した段も残る）。
     let details = landed_details(&state, &id);
     assert_eq!(
@@ -3402,7 +3428,8 @@ fn pipe_terminal_land_only_replays_the_terminal_without_relanding() {
         details.len()
     );
     let argv = fs::read_to_string(&tools.bd_log).expect("2 周目で台帳が閉じられた");
-    assert!(argv.contains(&landed), "理由は**1 周目に着地した sha**を名指す（HEAD の今の sha ではない）: {argv}");
+    assert!(argv.contains(&landed), "理由は**1 周目に着地した sha**を名指す: {argv}");
+    assert!(!argv.contains(&moved), "HEAD の今の sha は理由に載らない: {argv}");
     clean(&[&repo, &state]);
 }
 

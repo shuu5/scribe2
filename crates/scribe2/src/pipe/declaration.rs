@@ -748,7 +748,7 @@ mod tests {
 
     use super::{
         unfit, Basis, Ceiling, Declared, Effective, Holes, Sourced, Unfit, BASE_HOLES, BASE_HOLE, CEILING_ROW, DECL_FILE,
-        DENIED_ROW, JOBS_HOLE,
+        DEFAULT_CI_CMD, DENIED_ROW, CI_SHA_HOLE, JOBS_HOLE,
     };
     use crate::order::is_declaration_order;
 
@@ -896,6 +896,39 @@ mod tests {
         }
         let typo = Declared::parse(&format!("{base}requirement = \"x.html\"\n")).expect_err("綴り違いは未知 key");
         assert!(typo.iter().any(|error| error.reason.contains("未知の key requirement")), "{typo:?}");
+    }
+
+    /// `remote` は**任意 key**で、書いた周は**空白を含まない 1 語**だけを受ける（設計 contract-source.md §5）。
+    ///
+    /// 空白を含む値は `git push <remote> main:main` の引数が 2 つに割れ、**別の ref を押す**。
+    #[test]
+    fn pipe_terminal_land_remote_is_an_optional_single_word() {
+        let base = body(r#"["cargo"]"#, r#"["cargo xtask check"]"#);
+        assert_eq!(Declared::parse(&base).expect("key 無しは通る").remote, None, "無い key は None（既定を持たない）");
+        let set = Declared::parse(&format!("{base}remote = \"upstream\"\n")).expect("1 語は通る");
+        assert_eq!(set.remote.as_deref(), Some("upstream"), "書いた remote の名");
+        for bad in ["\"\"", "\"   \"", "\"origin main\"", "\"origin +refs/heads/x\"", "[\"origin\"]", "1"] {
+            let errors = Declared::parse(&format!("{base}remote = {bad}\n")).expect_err("1 語でない");
+            assert!(errors.iter().any(|error| error.reason.contains("remote") && error.line == 4), "{bad}: {errors:?}");
+        }
+    }
+
+    /// `ci-cmd` は**任意 key**で、書いた周は **`{sha}` の穴を持つ 1 行**だけを受ける（同 §5）。
+    ///
+    /// 穴の無い行は着地した commit を名指さず、**別の commit の判定を読んで success と言いうる**（C10）。
+    #[test]
+    fn pipe_terminal_land_ci_cmd_must_carry_the_sha_hole() {
+        let base = body(r#"["cargo"]"#, r#"["cargo xtask check"]"#);
+        assert_eq!(Declared::parse(&base).expect("key 無しは通る").ci_cmd, None, "無い key は None（既定は呼び手が埋める）");
+        let line = format!("forge runs --commit {CI_SHA_HOLE} --json status");
+        let set = Declared::parse(&format!("{base}ci-cmd = \"{line}\"\n")).expect("穴を持つ行は通る");
+        assert_eq!(set.ci_cmd.as_deref(), Some(line.as_str()), "書いた行");
+        for bad in ["\"\"", "\"forge runs --commit HEAD\"", "\"forge runs --commit {run}\"", "[\"a\"]", "1"] {
+            let errors = Declared::parse(&format!("{base}ci-cmd = {bad}\n")).expect_err("穴が無い");
+            assert!(errors.iter().any(|error| error.reason.contains("ci-cmd") && error.line == 4), "{bad}: {errors:?}");
+        }
+        // 既定の 1 行も同じ条件を満たす（器が埋める既定が自分の規則を破らない）。
+        assert!(DEFAULT_CI_CMD.contains(CI_SHA_HOLE), "既定の行も穴を持つ: {DEFAULT_CI_CMD}");
     }
 
     /// schema は 1 だけ。**整数でない schema も断る**（型の取り違えを黙って通さない）。
