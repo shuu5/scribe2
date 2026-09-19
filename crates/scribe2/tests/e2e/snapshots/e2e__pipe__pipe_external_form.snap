@@ -2,9 +2,9 @@
 source: crates/scribe2/tests/e2e/pipe.rs
 expression: form
 ---
-usage: scribe2 pipe <intake|preflight|spawn|approve|answer|gate|land|retire|run|show|resume|stop|report> [--state-dir D] [--rules PATH] [stop: --all|--run ID] [flags]
+usage: scribe2 pipe <intake|preflight|spawn|approve|answer|gate|land|retire|run|show|resume|stop|report|dispatch> [--state-dir D] [--rules PATH] [stop: --all|--run ID] [dispatch: ls|first|hold|release BEAD] [flags]
 pipe: --run が要る
 pipe: --all が要る
-usage: scribe2 pipe <intake|preflight|spawn|approve|answer|gate|land|retire|run|show|resume|stop|report> [--state-dir D] [--rules PATH] [stop: --all|--run ID] [flags]
+usage: scribe2 pipe <intake|preflight|spawn|approve|answer|gate|land|retire|run|show|resume|stop|report|dispatch> [--state-dir D] [--rules PATH] [stop: --all|--run ID] [dispatch: ls|first|hold|release BEAD] [flags]
 pipe: 未知の引数 --no-review（審査の段を飛ばす口は無い）
-usage: scribe2 pipe <intake|preflight|spawn|approve|answer|gate|land|retire|run|show|resume|stop|report> [--state-dir D] [--rules PATH] [stop: --all|--run ID] [flags]
+usage: scribe2 pipe <intake|preflight|spawn|approve|answer|gate|land|retire|run|show|resume|stop|report|dispatch> [--state-dir D] [--rules PATH] [stop: --all|--run ID] [dispatch: ls|first|hold|release BEAD] [flags]

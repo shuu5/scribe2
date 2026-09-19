@@ -262,6 +262,7 @@ fn build_event(args: &[String]) -> Result<Event, String> {
         detail: optional(args, "--detail")?.map(str::to_owned),
         allowance: None,
         registration: None,
+        mark: None,
         account,
     })
 }

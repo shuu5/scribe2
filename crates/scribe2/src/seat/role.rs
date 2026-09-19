@@ -177,6 +177,7 @@ pub fn register(state_dir: &Path, registration: Registration) -> Result<Registra
         actor: ACTOR_MACHINE.to_owned(),
         stage: None, seat: None, pid: None, detail: None, allowance: None,
         registration: Some(registration.clone()),
+        mark: None,
         account: None,
     };
     let store_err = |err: store::StoreError| RegisterRefusal::Store(err.to_string());

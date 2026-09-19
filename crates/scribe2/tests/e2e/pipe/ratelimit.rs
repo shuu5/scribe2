@@ -456,6 +456,7 @@ pub(super) fn register_seat_account(state: &Path, anchor: &Path, account: &str) 
         pid: None,
         detail: None,
         allowance: None,
+        mark: None,
         registration: Some(vessel::fleet::Registration {
             role: vessel::seat::role::Role::Orchestrator,
             anchor: anchor.display().to_string(),

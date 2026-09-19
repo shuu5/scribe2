@@ -133,7 +133,7 @@ fn intake_run(args: &[String], manifest: &Manifest, policy: LockPolicy) -> Resul
 }
 
 /// rules 行から allowlist と禁じる語を読んで [`Ceiling`] の材料を持つ（借りる側は [`Rows::borrow`]）。
-pub(super) struct Rows {
+pub(in crate::pipe) struct Rows {
     /// 通す語列（`runner.allowed_commands`）。
     commands: Vec<String>,
     /// 禁じる語列（`runner.denied_commands`）。
@@ -142,13 +142,13 @@ pub(super) struct Rows {
 
 impl Rows {
     /// 借りた形の上限（`row` は同じ 1 つの rules 行 id）。
-    pub(super) fn borrow(&self) -> Ceiling<'_> {
+    pub(in crate::pipe) fn borrow(&self) -> Ceiling<'_> {
         Ceiling { row: CEILING_ROW, commands: &self.commands, denied: &self.denied }
     }
 }
 
 /// 上限の材料を rules 行から読む（読めない周は [`DENIAL_RULES`] の断り・[`freeze`] と同じ 2 行）。
-pub(super) fn ceiling_of(manifest: &Manifest) -> Result<Rows, Denial> {
+pub(in crate::pipe) fn ceiling_of(manifest: &Manifest) -> Result<Rows, Denial> {
     let rows = |id: &str| list_row(manifest, id).map_err(|reason| denied(DENIAL_RULES, refused(reason)));
     Ok(Rows { commands: rows(CEILING_ROW)?, denied: rows(DENIED_ROW)? })
 }
@@ -183,7 +183,7 @@ const DENIAL_ARGS: &str = "args";
 /// 行だけが契約の正本で、commit していない書きかけを受け付けると runner が base で見るものと食い違う。
 /// 行を引いたら **(a) の [`table::check_table`] を同じ ctx でその 1 行に撃ち**（1 実装・C2）、findings が 1 件でも
 /// 在れば先頭を理由に断る（run dir を作らない・FR48 / FR54）。
-pub(super) fn generated(repo: &Path, pointer: &table::Pointer, ceiling: &Ceiling<'_>) -> Result<(Contract, String), Denial> {
+pub(in crate::pipe) fn generated(repo: &Path, pointer: &table::Pointer, ceiling: &Ceiling<'_>) -> Result<(Contract, String), Denial> {
     let Some(text) = crate::pipe::show_head(repo, &pointer.path) else {
         let reason = format!("{} を base（HEAD）から読めない", pointer.path);
         return Err(refuse(&Refuse::ContractTable(TableError::Unreadable { line: 0, reason }), &[]));
@@ -273,9 +273,9 @@ fn not_a_repo(repo: &Path) -> Denial {
 
 /// 判定関数 1 本の断り（**先頭の 1 件が理由**・後続行は stderr に並ぶ・§21）。intake は [`Self::outcome`] で従来どおりの
 /// rc と stderr で断り、preflight は [`Self::name`] と理由を `refuse=` の行に写す。
-pub(super) struct Denial {
+pub(in crate::pipe) struct Denial {
     /// 理由の名（[`Refuse::as_str`]・[`Refuse`] を持たない断り〔宣言の写し / rules 行 / 置き場の読み〕は材料の名）。
-    pub(super) name: &'static str,
+    pub(in crate::pipe) name: &'static str,
     /// 従来の断り（rc は理由が持つ・stderr の行）。
     pub(super) outcome: Outcome,
 }
@@ -298,22 +298,22 @@ fn denied(name: &'static str, outcome: Outcome) -> Denial {
 }
 
 /// judge が読む材料（run を作らずに揃う値・intake と preflight が同じ 1 本を撃つ・C2）。
-pub(super) struct Material<'a> {
+pub(in crate::pipe) struct Material<'a> {
     /// 対象 repo（base = HEAD）。
-    pub(super) repo: &'a Path,
+    pub(in crate::pipe) repo: &'a Path,
     /// 規則の値（上限と余地の行）。
-    pub(super) manifest: &'a Manifest,
+    pub(in crate::pipe) manifest: &'a Manifest,
     /// 読み込み済みの契約 file。
-    pub(super) contract: &'a Contract,
+    pub(in crate::pipe) contract: &'a Contract,
     /// 置き場（交差と重複 run の 2 検査だけが読む・`None` = 撃たず overlap は unmeasured・intake は常に `Some`）。
-    pub(super) state_dir: Option<&'a Path>,
+    pub(in crate::pipe) state_dir: Option<&'a Path>,
     /// 契約の bead id（この秒の run id の材料）。
-    pub(super) bead: &'a str,
+    pub(in crate::pipe) bead: &'a str,
 }
 
 /// [`judge`] の結果: 事実（§21 の 1 行 1 事実の材料・関数が Err の周はその関数の事実が無い）と断りの列（判定関数 1 本
 /// につき高々 1 件・撃った順＝intake が先頭で断る順）。
-pub(super) struct Judged {
+pub(in crate::pipe) struct Judged {
     /// 設計 pointer の字面と行の § 番号（pointer でない `design` と行の解けない周は `None`）。
     pub(super) design: Option<(String, String)>,
     /// write-set の弁別と本数（`settle_write_set` が Ok で pointer の在る周）。
@@ -325,7 +325,7 @@ pub(super) struct Judged {
     /// live との交差（`exclude_overlap` が Ok の周・置き場が無い周は撃たない）。
     pub(super) overlap: Option<Crossed>,
     /// 断りの列。
-    pub(super) denials: Vec<Denial>,
+    pub(in crate::pipe) denials: Vec<Denial>,
     /// 導出値で写しの write-set を置き換える周の導出値（create が写しに書く）。
     derived: Option<Vec<String>>,
     /// 宣言の有効値（`freeze` が Ok の周・create が写す）。
@@ -339,7 +339,7 @@ pub(super) struct Judged {
 /// write-set を置き換える 1 点だけで、`settle_write_set` が Err の周は契約 file の write-set のまま後段を撃つ
 /// （Declared 行は元々置き換えが無い＝前段と後段の断りが同時に載る）。git repo でない対象は他の関数が撃てないので
 /// `not-a-repo` の 1 件で止まる。
-pub(super) fn judge(material: &Material<'_>) -> Judged {
+pub(in crate::pipe) fn judge(material: &Material<'_>) -> Judged {
     let Material { repo, manifest, contract, state_dir, bead } = *material;
     let mut judged = Judged {
         design: None,
@@ -580,6 +580,18 @@ fn refuse_of(error: ClosureError, row: &ContractRow) -> Refuse {
 /// 展開してから数える（設計 contract-source.md §3・[`overlaps`]）。通った周は突き合わせた live な run を [`Crossed`]
 /// で返す（交差は 0・§21 の `overlap=` の材料）。
 fn exclude_overlap(state_dir: &Path, contract: &Contract, tracked: &[String]) -> Result<Crossed, Denial> {
+    let found = crossings(state_dir, contract, tracked)?;
+    match &found.first {
+        None => Ok(found),
+        Some(reason) => Err(refuse(reason, &found.lines)),
+    }
+}
+
+/// live な便との交差を**測るだけ**の 1 本（断りは作らない・設計 dispatcher.md §3）。
+///
+/// [`exclude_overlap`]（受付＝交差 1 件で断る）と `pipe::dispatch`（列＝交差した相手を待ちの理由にする）が
+/// **同じこの 1 本**を読む（判定が 2 か所にならない・憲法 C2）。読めない側が勝つ極性はここが持つ。
+pub(in crate::pipe) fn crossings(state_dir: &Path, contract: &Contract, tracked: &[String]) -> Result<Crossed, Denial> {
     let state = current(state_dir).map_err(|errors| {
         denied(DENIAL_STORE, Outcome::failed(RC_BROKEN, errors.iter().map(StoreError::to_string).collect()))
     })?;
@@ -606,16 +618,18 @@ fn exclude_overlap(state_dir: &Path, contract: &Contract, tracked: &[String]) ->
         }
         runs.push((id.clone(), crossed));
     }
-    match first {
-        None => Ok(Crossed { runs }),
-        Some(found) => Err(refuse(&found, &lines)),
-    }
+    Ok(Crossed { runs, first, lines })
 }
 
-/// live との交差の事実（[`exclude_overlap`] が通った周＝交差 0・§21 の `overlap=` の材料）。
-pub(super) struct Crossed {
-    /// 突き合わせた live な run（run id の順）と、その便と交差した契約側の file（通った周は全部空）。
-    pub(super) runs: Vec<(String, Vec<String>)>,
+/// live との交差の事実（§21 の `overlap=` の材料）。[`exclude_overlap`] が通った周は交差が全部空である。
+pub(in crate::pipe) struct Crossed {
+    /// 突き合わせた live な run（run id の順）と、その便と交差した契約側の file（[`exclude_overlap`] が
+    /// 通った周は全部空・列は空でない組を待ちの理由にする）。
+    pub(in crate::pipe) runs: Vec<(String, Vec<String>)>,
+    /// 先頭の 1 組の断り（交差 0 なら `None`・受付の理由の 1 行）。
+    first: Option<Refuse>,
+    /// 交差の全組の行（受付の stderr・交差 0 なら空）。
+    lines: Vec<String>,
 }
 
 /// 上限の余地の事実（[`exclude_cap_shortfall`] が通った周・§21 の `headroom=` の材料）。

@@ -611,6 +611,7 @@ fn record(state_dir: &Path, kind: EventKind, label: &str, ts: &str) -> Result<()
         detail: None,
         allowance: None,
         registration: None,
+        mark: None,
         account: Some(label.to_owned()),
     };
     let policy = LockPolicy::embedded().map_err(|_| AccountError::WriteFailed)?;

@@ -368,6 +368,7 @@ mod tests {
             detail: None,
             allowance: None,
             registration: None,
+            mark: None,
             account: None,
         }
     }

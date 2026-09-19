@@ -25,6 +25,9 @@ mod state;
 mod step;
 
 pub(super) use args::{broken, flag, int_row, refused, state_dir_of};
+// 列（`pipe::dispatch`）は受付の判定を**記帳せずに**撃つ（設計 dispatcher.md §3・C2 の 1 実装）。
+// 可視性を上げるだけで本文は不変——2 本目の判定を作らないための再輸出である。
+pub(in crate::pipe) use intake::{ceiling_of, crossings, generated, judge, Material};
 pub(super) use run::turn_of;
 pub(super) use state::{live, resolve, stage_of};
 use args::{list_row, manifest_of, need, repo_of};
@@ -34,6 +37,7 @@ use state::by_run;
 
 use super::approve;
 use super::contract::Contract;
+use super::dispatch as queue;
 use super::declaration::{Ceiling, CEILING_ROW, DENIED_ROW};
 use super::gate;
 use super::land;
@@ -41,7 +45,9 @@ use super::stop::stop;
 use super::{head_of, repo_of_run, repo_path};
 use crate::cli_outcome::{Outcome, RC_REFUSED};
 use crate::fleet::store::LockPolicy;
-use crate::fleet::Stage;
+use crate::fleet::{Mark, Stage};
+use crate::rules::manifest::Manifest;
+use crate::seat::ledger::DEFAULT_BD;
 use crate::name::NAME;
 use intake::intake;
 use preflight::preflight;
@@ -52,7 +58,7 @@ use step::{answer_run, approve_run, gate_run, land_run, retire_run};
 /// `pipe` の使い方。
 pub fn usage() -> String {
     format!(
-        "usage: {NAME} pipe <intake|preflight|spawn|approve|answer|gate|land|retire|run|show|resume|stop|report> [--state-dir D] [--rules PATH] [stop: --all|--run ID] [flags]"
+        "usage: {NAME} pipe <intake|preflight|spawn|approve|answer|gate|land|retire|run|show|resume|stop|report|dispatch> [--state-dir D] [--rules PATH] [stop: --all|--run ID] [dispatch: ls|first|hold|release BEAD] [flags]"
     )
 }
 
@@ -86,11 +92,42 @@ pub fn dispatch(args: &[String]) -> Outcome {
         Some("show") => show(args),
         Some("resume") => resume(args, &manifest, policy),
         Some("stop") => stop(args, &manifest, policy),
+        Some("dispatch") => queued(args, &manifest, policy),
         Some("report") => match state_dir_of(args) {
             Err(reason) => refused(reason),
             Ok(state_dir) => super::report::report(&state_dir),
         },
         _ => Outcome::failed(RC_REFUSED, vec![usage()]),
+    }
+}
+
+/// `pipe dispatch <ls|first|hold|release>`: 審査を通った契約の列の観測と介入の印（設計 dispatcher.md §4・§6）。
+///
+/// **権能なしの口**である（誰が撃っても同じ 1 周・起動の権能は列の判定であって席の権能ではない・
+/// ADR-0045 §2 (1)）。列の 1 周そのものは [`queue::turn`] の 1 本で、本 file は引数を解くだけである。
+fn queued(args: &[String], manifest: &Manifest, policy: LockPolicy) -> Outcome {
+    let state_dir = match state_dir_of(args) {
+        Ok(found) => found,
+        Err(reason) => return refused(reason),
+    };
+    match args.get(1).map(String::as_str) {
+        Some("ls") => {
+            let repo = match repo_of(args) {
+                Ok(found) => found,
+                Err(reason) => return refused(reason),
+            };
+            let bd = match flag(args, "--bd") {
+                Ok(found) => found.unwrap_or(DEFAULT_BD),
+                Err(reason) => return refused(reason),
+            };
+            let input = queue::Input { state_dir: &state_dir, repo: &repo, manifest, bd };
+            queue::render(&queue::turn(&input))
+        }
+        Some(name) => match (Mark::parse(name), args.get(2)) {
+            (Some(mark), Some(bead)) if !bead.starts_with("--") => queue::mark(&state_dir, bead, mark, policy),
+            _ => Outcome::failed(RC_REFUSED, vec![queue::usage()]),
+        },
+        None => Outcome::failed(RC_REFUSED, vec![queue::usage()]),
     }
 }
 

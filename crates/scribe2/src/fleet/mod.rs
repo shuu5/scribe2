@@ -61,6 +61,9 @@ pub enum EventKind {
     AccountRetired,
     /// 退役させた口座を戻した（FR58・`account` = label）。**便に紐づかない**。
     AccountRestored,
+    /// 列の介入の印（`first` / `hold` / `release`・設計 dispatcher.md §4・[`Shape::Mark`]）。**便に紐づかない**
+    /// ——印は bead に付き、`bead` と typed な [`Mark`] が本体である（台帳の priority は書き換えない・C15）。
+    DispatchMark,
 }
 
 /// [`EventKind`] の全 variant。
@@ -80,6 +83,7 @@ pub const KINDS: &[EventKind] = &[
     EventKind::SeatRegistered,
     EventKind::AccountRetired,
     EventKind::AccountRestored,
+    EventKind::DispatchMark,
 ];
 
 impl EventKind {
@@ -101,6 +105,7 @@ impl EventKind {
             Self::SeatRegistered => "SeatRegistered",
             Self::AccountRetired => "AccountRetired",
             Self::AccountRestored => "AccountRestored",
+            Self::DispatchMark => "DispatchMark",
         }
     }
 
@@ -126,55 +131,97 @@ impl EventKind {
             | Self::AllowanceUnmeasured
             | Self::SeatRegistered
             | Self::AccountRetired
-            | Self::AccountRestored => ACTOR_MACHINE,
+            | Self::AccountRestored
+            | Self::DispatchMark => ACTOR_MACHINE,
+        }
+    }
+
+    /// 行が持つ**本体の形**（[`Shape`]）。
+    ///
+    /// 網羅 `match` で持つのは、kind を足した便に「この行はどの field を持つか」を必ず決めさせるためで
+    /// ある（既定を持つと、紐づかない行が幽霊の `run` を作る側へ黙って倒れる）。**本体や `account` の有無
+    /// では見分けない**——`SeatSpawned` も任意 field として `account`（便を起こした口座・ADR-0027 §2.3）を
+    /// 持ち、退役した役割の登録 row は本体を持たずに読まれる（[`Event::from_line`]）ので、本体で見分けると
+    /// 口座つきの spawn や登録 row が幽霊の便に化ける。
+    pub fn shape(self) -> Shape {
+        match self {
+            Self::RunCreated
+            | Self::RunStage
+            | Self::RunDone
+            | Self::RunStopped
+            | Self::SeatSpawned
+            | Self::SeatStopped
+            | Self::ApprovalRequested
+            | Self::ApprovalReceived
+            | Self::QuestionRaised
+            | Self::QuestionAnswered => Shape::Run,
+            Self::AllowanceMeasured | Self::AllowanceUnmeasured => Shape::Allowance,
+            Self::SeatRegistered => Shape::Registration,
+            Self::AccountRetired | Self::AccountRestored => Shape::Account,
+            Self::DispatchMark => Shape::Mark,
         }
     }
 
     /// 口座残量の kind か（`run` / `bead` を**持たない**側・設計 fleet-usage.md §4）。
     ///
-    /// 網羅 `match` で持つのは、kind を足した便に「この行は便に紐づくか」を必ず決めさせる
-    /// ためである（既定を持つと、紐づかない行が幽霊の `run` を作る側へ黙って倒れる）。
+    /// 分類は [`Self::shape`] の 1 本から導く（網羅 `match` の 2 本目を持たない・憲法 C2）。
     pub fn is_allowance(self) -> bool {
+        matches!(self.shape(), Shape::Allowance)
+    }
+}
+
+/// event の 1 行が持つ**本体の形**（設計 fleet-event-log.md §3）。
+///
+/// 行の並び（[`Event::to_line`]）と、行が要る field（`event` の `Body::read`）は同じ [`EventKind::shape`]
+/// の 1 本が決める。`s2-07l.345` で `is_account_lifecycle`（退役・戻しだけを名乗る述語）を置き換えた
+/// ——列の印が「便に紐づかないが `bead` は持つ」4 つ目の形を要り、2 値の述語では表せない。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Shape {
+    /// `run` + `bead`（便に紐づく行）。
+    Run,
+    /// 口座残量の本体（`run` / `bead` を持たない・設計 fleet-usage.md §4）。
+    Allowance,
+    /// 席の登録の本体（設計 seat-roles.md §2）。
+    Registration,
+    /// 口座 label だけ（退役・戻し・設計 account-lifecycle.md §3）。
+    Account,
+    /// `bead` + 列の印（便に紐づかない・設計 dispatcher.md §4）。
+    Mark,
+}
+
+/// [`Shape`] の全 variant（宣言順・`enum-slices` が集合完全性を測る）。
+pub const SHAPES: &[Shape] = &[Shape::Run, Shape::Allowance, Shape::Registration, Shape::Account, Shape::Mark];
+
+/// 列の介入の印（設計 dispatcher.md §4）。**閉じた 3 値**で、[`EventKind::DispatchMark`] の行だけが持つ。
+///
+/// 印は一時の順序であって契約の性質ではないので、台帳の priority を書き換えない（台帳が持つのは task と
+/// 裁定だけ・憲法 C15・設計 dispatcher.md §10）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mark {
+    /// 次の 1 周で priority より先に評価する。
+    First,
+    /// 列には載せるが起こさない。
+    Hold,
+    /// 印を外して既定の順に戻す。
+    Release,
+}
+
+/// [`Mark`] の全 variant（宣言順・`enum-slices` が集合完全性を測る）。
+pub const MARKS: &[Mark] = &[Mark::First, Mark::Hold, Mark::Release];
+
+impl Mark {
+    /// JSON の `mark` と `dispatch ls` に書く字面。
+    pub fn as_str(self) -> &'static str {
         match self {
-            Self::AllowanceMeasured | Self::AllowanceUnmeasured => true,
-            Self::RunCreated
-            | Self::RunStage
-            | Self::RunDone
-            | Self::RunStopped
-            | Self::SeatSpawned
-            | Self::SeatStopped
-            | Self::ApprovalRequested
-            | Self::ApprovalReceived
-            | Self::QuestionRaised
-            | Self::QuestionAnswered
-            | Self::SeatRegistered
-            | Self::AccountRetired
-            | Self::AccountRestored => false,
+            Self::First => "first",
+            Self::Hold => "hold",
+            Self::Release => "release",
         }
     }
 
-    /// 口座の退役・戻しの kind か（`account` = label が本体で、`run` / `bead` を**持たない**側・設計
-    /// account-lifecycle.md §3）。
-    ///
-    /// `account` の有無では見分けない——`SeatSpawned` も任意 field として `account`（便を起こした口座・ADR-0027
-    /// §2.3）を持つので、field の有無で「便に紐づかない行」を判定すると口座つきの spawn が幽霊の便に化ける。
-    pub fn is_account_lifecycle(self) -> bool {
-        match self {
-            Self::AccountRetired | Self::AccountRestored => true,
-            Self::RunCreated
-            | Self::RunStage
-            | Self::RunDone
-            | Self::RunStopped
-            | Self::SeatSpawned
-            | Self::SeatStopped
-            | Self::ApprovalRequested
-            | Self::ApprovalReceived
-            | Self::QuestionRaised
-            | Self::QuestionAnswered
-            | Self::AllowanceMeasured
-            | Self::AllowanceUnmeasured
-            | Self::SeatRegistered => false,
-        }
+    /// 字面から引く。未知なら `None`（書き側と読み側で**同じ判定**を使う）。
+    pub fn parse(text: &str) -> Option<Self> {
+        MARKS.iter().copied().find(|mark| mark.as_str() == text)
     }
 }
 
