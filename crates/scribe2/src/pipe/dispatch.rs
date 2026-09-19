@@ -11,7 +11,7 @@
 //! 台帳を読めない周は列を空と読まず [`Unmeasured`] で 1 本も起こさない（`0 件`と融合しない・C10・NFR4）。
 
 use super::admission::{self, Sizes};
-use super::cli::{ceiling_of, crossings, generated, int_row, judge, Material};
+use super::cli::{ceiling_of, crossings, generated, int_row, judge, Denial, Material, Rows};
 use super::contract::Contract;
 use super::refuse::overlaps;
 use super::review::ReviewCheck;
@@ -71,8 +71,8 @@ pub enum WaitReason {
     },
     /// 受付（余地・host の memory）を通らない。
     Admission {
-        /// 受付が断った名（[`crate::pipe::refuse::Refuse::as_str`] か [`SLOT`]）。
-        reason: String,
+        /// 受付が断った名（[`crate::pipe::refuse::Refuse::as_str`] か [`SLOT`]・どちらも `'static`）。
+        reason: &'static str,
     },
     /// 介入 `hold` が付いている。
     Hold {
@@ -107,7 +107,7 @@ impl WaitReason {
         match *self {
             Self::Dependency { ref on } => format!("{name}:{}", on.join(",")),
             Self::Overlap { ref with, files } => format!("{name}:{with}/{files}"),
-            Self::Admission { ref reason } => format!("{name}:{reason}"),
+            Self::Admission { reason } => format!("{name}:{reason}"),
             Self::Hold { ref since } => format!("{name}:{since}"),
             Self::ReviewFailed { ref sha } => format!("{name}:{sha}"),
             Self::NoDesignPointer => name.to_owned(),
@@ -152,9 +152,8 @@ impl Unmeasured {
 pub struct Launch {
     /// bead id。
     pub bead: String,
-    /// 設計 pointer の字面（`<doc>#<id>`）。
-    pub design: String,
-    /// `pipe` に続く引数（`run --design … --bead … --repo … --state-dir …`）。
+    /// `pipe` に続く引数（`run --design <pointer> --bead … --repo … --state-dir …`）。設計 pointer は
+    /// この列の中に在る（同じ値を 2 つの field で持たない）。
     pub argv: Vec<String>,
 }
 
@@ -191,16 +190,33 @@ pub fn turn(input: &Input<'_>) -> Turn {
     let Ok(issues) = ledger::read_ledger(input.bd, timeout) else {
         return unmeasured(Unmeasured::Ledger);
     };
-    let marks = marks_of(&read_events(input.state_dir));
-    let closed: BTreeSet<&str> =
-        issues.iter().filter(|issue| issue.status == CLOSED).map(|issue| issue.id.as_str()).collect();
-    let mut entries: Vec<Entry> = issues
-        .iter()
-        .filter(|issue| is_input(issue))
-        .map(|issue| entry_of(input, issue, &marks, &closed))
-        .collect();
-    entries.sort_by_key(|entry| key_of(&entry.candidate));
-    settle(input, entries)
+    // 1 周ぶん固定な材料は**ここで 1 回だけ**解く（候補ごとに rules 行と台帳を読み直さない）。
+    let ledger = Ledger {
+        marks: marks_of(&read_events(input.state_dir)),
+        closed: issues.iter().filter(|issue| issue.status == CLOSED).map(|issue| issue.id.as_str()).collect(),
+        ceiling: ceiling_of(input.manifest),
+    };
+    let mut ready: BTreeMap<String, (Pointer, Contract)> = BTreeMap::new();
+    let mut candidates: Vec<Candidate> = Vec::new();
+    for issue in issues.iter().filter(|issue| is_input(issue)) {
+        let (candidate, found) = entry_of(input, issue, &ledger);
+        if let Some(entry) = found {
+            ready.insert(candidate.bead.clone(), entry);
+        }
+        candidates.push(candidate);
+    }
+    // **順序は [`order`] の 1 本だけが決める**（生産経路も歯も同じ関数を通る・C2）。
+    settle(input, order(candidates), &ready)
+}
+
+/// 1 周ぶん固定な台帳側の材料（候補ごとに読み直さない）。
+struct Ledger<'a> {
+    /// bead ごとの最後の印。
+    marks: BTreeMap<String, (Mark, String)>,
+    /// 閉じた bead の id（依存が閉じたかを同じ一覧の中で引く）。
+    closed: BTreeSet<&'a str>,
+    /// 契約表の検査の上限（読めない周は断りの名を全候補が受ける）。
+    ceiling: Result<Rows, Denial>,
 }
 
 /// 列の順序を決める 1 関数（**pure**・設計 §2「順序」）: (1) 介入 `first` (2) 台帳の `priority`（P0 → P4）
@@ -219,18 +235,7 @@ fn key_of(candidate: &Candidate) -> (u8, u64, Vec<u64>, String) {
 
 /// id の数字の列（`s2-07l.345` → `[2, 7, 345]`・起票順の鍵・数字を持たない id は空）。
 fn digits_of(bead: &str) -> Vec<u64> {
-    let mut found: Vec<u64> = Vec::new();
-    let mut run = String::new();
-    for glyph in bead.chars() {
-        if glyph.is_ascii_digit() {
-            run.push(glyph);
-            continue;
-        }
-        found.extend(run.parse::<u64>().ok());
-        run.clear();
-    }
-    found.extend(run.parse::<u64>().ok());
-    found
+    bead.split(|glyph: char| !glyph.is_ascii_digit()).filter_map(|run| run.parse().ok()).collect()
 }
 
 /// 台帳を読めなかった周の 1 周（1 本も起こさない）。
@@ -245,59 +250,49 @@ fn is_input(issue: &Issue) -> bool {
         && !issue.labels.iter().any(|label| label == MEMO_LABEL)
 }
 
-/// 順序より前に決まる理由まで解いた 1 件（交差と枠は順序の後・§3「1 周で起こした便は次の候補の交差の相手」）。
-struct Entry {
-    /// 列の 1 件。
-    candidate: Candidate,
-    /// 設計 pointer と base の行から組んだ契約（理由が付いた周は `None`）。
-    ready: Option<(Pointer, Contract)>,
-}
-
 /// 台帳の 1 件を列の 1 件に解く（依存 → 印 → 設計 pointer → 審査 FAIL → 契約の生成の順）。
-fn entry_of(
-    input: &Input<'_>,
-    issue: &Issue,
-    marks: &BTreeMap<String, (Mark, String)>,
-    closed: &BTreeSet<&str>,
-) -> Entry {
-    let mark = marks.get(&issue.id).map(|(found, _)| *found);
-    let wait = |reason: WaitReason| Entry {
-        candidate: Candidate { bead: issue.id.clone(), priority: issue.priority, mark, reason: Some(reason) },
-        ready: None,
+///
+/// 交差と枠は**順序の後**に測る（§3「1 周で起こした便は次の候補の交差の相手」）ので、ここでは決めない。
+/// 理由の付かなかった候補だけが設計 pointer と契約を持って返る。
+fn entry_of(input: &Input<'_>, issue: &Issue, ledger: &Ledger<'_>) -> (Candidate, Option<(Pointer, Contract)>) {
+    let marked = ledger.marks.get(&issue.id);
+    let at = |reason: Option<WaitReason>| Candidate {
+        bead: issue.id.clone(),
+        priority: issue.priority,
+        mark: marked.map(|(found, _)| *found),
+        reason,
     };
+    let wait = |reason: WaitReason| (at(Some(reason)), None);
     let blocked: Vec<String> =
-        issue.deps.iter().filter(|dep| is_blocking(dep, closed)).map(|dep| dep.on.clone()).collect();
+        issue.deps.iter().filter(|dep| is_blocking(dep, &ledger.closed)).map(|dep| dep.on.clone()).collect();
     if !blocked.is_empty() {
         return wait(WaitReason::Dependency { on: blocked });
     }
-    if let Some((Mark::Hold, since)) = marks.get(&issue.id) {
+    if let Some((Mark::Hold, since)) = marked {
         return wait(WaitReason::Hold { since: since.clone() });
     }
     let Some(pointer) = pointer_of(&issue.acceptance) else {
         return wait(WaitReason::NoDesignPointer);
     };
-    let ceiling = match ceiling_of(input.manifest) {
-        Ok(found) => found,
-        Err(denial) => return wait(WaitReason::Admission { reason: denial.name.to_owned() }),
+    let ceiling = match &ledger.ceiling {
+        Ok(found) => found.borrow(),
+        Err(denial) => return wait(WaitReason::Admission { reason: denial.name }),
     };
-    let contract = match generated(input.repo, &pointer, &ceiling.borrow()) {
+    let contract = match generated(input.repo, &pointer, &ceiling) {
         Ok((found, body)) => match failed_review(input, &issue.id, &body) {
             Some(sha) => return wait(WaitReason::ReviewFailed { sha }),
             None => found,
         },
-        Err(denial) => return wait(WaitReason::Admission { reason: denial.name.to_owned() }),
+        Err(denial) => return wait(WaitReason::Admission { reason: denial.name }),
     };
-    Entry {
-        candidate: Candidate { bead: issue.id.clone(), priority: issue.priority, mark, reason: None },
-        ready: Some((pointer, contract)),
-    }
+    (at(None), Some((pointer, contract)))
 }
 
 /// 順序を守って交差と枠を測り、起こす便と待つ便に分ける。
 ///
 /// **1 周で起こした便は次の候補の交差の相手に入る**（設計 §3）: 起こした契約の write-set を live 側に足して
 /// 次を測る（同じ [`overlaps`] の 1 実装で測る・C2）。
-fn settle(input: &Input<'_>, entries: Vec<Entry>) -> Turn {
+fn settle(input: &Input<'_>, candidates: Vec<Candidate>, ready: &BTreeMap<String, (Pointer, Contract)>) -> Turn {
     let room = Room {
         tracked: table::tracked_files(input.repo).unwrap_or_default(),
         sizes: sizes_of(input.manifest),
@@ -305,14 +300,13 @@ fn settle(input: &Input<'_>, entries: Vec<Entry>) -> Turn {
     };
     let mut started: Vec<(String, Vec<String>)> = Vec::new();
     let mut turn = Turn { candidates: Vec::new(), launches: Vec::new(), unmeasured: None };
-    for entry in entries {
-        let Entry { mut candidate, ready } = entry;
-        if let Some((pointer, contract)) = ready {
-            match blocker(input, &contract, &room, &started) {
+    for mut candidate in candidates {
+        if let Some((pointer, contract)) = ready.get(&candidate.bead) {
+            match blocker(input, contract, &room, &started) {
                 Some(reason) => candidate.reason = Some(reason),
                 None => {
                     started.push((candidate.bead.clone(), contract.write_set.clone()));
-                    turn.launches.push(launch_of(input, &candidate.bead, &pointer));
+                    turn.launches.push(launch_of(input, &candidate.bead, pointer));
                 }
             }
         }
@@ -350,28 +344,27 @@ fn blocker(
                 return Some(WaitReason::Overlap { with: run.clone(), files: files.len() });
             }
         }
-        Err(denial) => return Some(WaitReason::Admission { reason: denial.name.to_owned() }),
+        Err(denial) => return Some(WaitReason::Admission { reason: denial.name }),
     }
     // 余地は受付の判定をそのまま撃つ。置き場は渡さない——交差は上で [`crossings`] が測り済みで、
     // 同じ周に 2 度測ると store を 2 度読むだけになる（重複 run の検査も run を作らない列には要らない）。
     let material =
         Material { repo: input.repo, manifest: input.manifest, contract, state_dir: None, bead: "" };
     if let Some(denial) = judge(&material).denials.first() {
-        return Some(WaitReason::Admission { reason: denial.name.to_owned() });
+        return Some(WaitReason::Admission { reason: denial.name });
     }
     if !admission::has_room(&room.slots, 1, room.sizes) {
-        return Some(WaitReason::Admission { reason: SLOT.to_owned() });
+        return Some(WaitReason::Admission { reason: SLOT });
     }
     None
 }
 
 /// 起動の構築点（`pipe run` の引数を組む・**撃たない**）。
 fn launch_of(input: &Input<'_>, bead: &str, pointer: &Pointer) -> Launch {
-    let design = format!("{}#{}", pointer.path, pointer.id);
     let argv = vec![
         "run".to_owned(),
         "--design".to_owned(),
-        design.clone(),
+        format!("{}#{}", pointer.path, pointer.id),
         "--bead".to_owned(),
         bead.to_owned(),
         "--repo".to_owned(),
@@ -379,7 +372,7 @@ fn launch_of(input: &Input<'_>, bead: &str, pointer: &Pointer) -> Launch {
         "--state-dir".to_owned(),
         input.state_dir.display().to_string(),
     ];
-    Launch { bead: bead.to_owned(), design, argv }
+    Launch { bead: bead.to_owned(), argv }
 }
 
 /// 順序を止める依存か（`blocks` の未 closed だけ・所属〔`parent-child`〕は順序ではない・`.beads/PRIME.md` R2）。
@@ -579,7 +572,7 @@ mod tests {
         let listed = vec![
             WaitReason::Dependency { on: vec!["s2-x".to_owned(), "s2-y".to_owned()] },
             WaitReason::Overlap { with: "r1".to_owned(), files: 2 },
-            WaitReason::Admission { reason: "cap-headroom".to_owned() },
+            WaitReason::Admission { reason: "cap-headroom" },
             WaitReason::Hold { since: "t1".to_owned() },
             WaitReason::ReviewFailed { sha: "abc".to_owned() },
             WaitReason::NoDesignPointer,

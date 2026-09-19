@@ -27,7 +27,7 @@ mod step;
 pub(super) use args::{broken, flag, int_row, refused, state_dir_of};
 // 列（`pipe::dispatch`）は受付の判定を**記帳せずに**撃つ（設計 dispatcher.md §3・C2 の 1 実装）。
 // 可視性を上げるだけで本文は不変——2 本目の判定を作らないための再輸出である。
-pub(in crate::pipe) use intake::{ceiling_of, crossings, generated, judge, Material};
+pub(in crate::pipe) use intake::{ceiling_of, crossings, generated, judge, Denial, Material, Rows};
 pub(super) use run::turn_of;
 pub(super) use state::{live, resolve, stage_of};
 use args::{list_row, manifest_of, need, repo_of};

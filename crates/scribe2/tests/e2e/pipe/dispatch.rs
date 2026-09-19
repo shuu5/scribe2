@@ -6,7 +6,7 @@
 
 use super::{
     ceiling_rules, clean, commit_rows, design_doc_rows, git, intake_bead, repo_with_state, row_fields, run_pipe,
-    stderr_of, stdout_of, write_design, DESIGN_FILE,
+    stderr_of, stdout_of, stop_run_ok, write_design, DESIGN_FILE,
 };
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -22,6 +22,9 @@ const COUNT: &str = "[DISPATCH-COUNT]";
 
 /// 台帳を読めなかった周の行。
 const UNMEASURED: &str = "[DISPATCH-UNMEASURED reason=ledger]";
+
+/// 列が空の周の行（読めなかった周と**別の行**である・C10）。
+const NONE_LINE: &str = "[DISPATCH-NONE]";
 
 /// 審査の判定 file（run dir の直下）。
 const REVIEW_FILE: &str = "review.json";
@@ -157,7 +160,11 @@ fn pipe_dispatch_unmeasured_ledger_starts_nothing_and_is_not_zero() {
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "ls は rc 0: {}", stderr_of(&out));
     assert_eq!(stdout_of(&out).trim_end(), UNMEASURED, "読めない周の 1 行だけ");
     assert!(!stdout_of(&out).contains(COUNT), "件数の行を出さない（0 件に読み替えない）");
-    // 同じ置き場・同じ行で**読める台帳**を渡すと件数が出る＝上の 1 行は「列が空」ではない。
+    // 同じ置き場で**読める空の台帳**は `[DISPATCH-NONE]`＝「0 件」と「読めない」は別の行である。
+    let empty = fake_bd(&state, &[]);
+    let none = ls(&repo, &state, &empty);
+    assert_eq!(stdout_of(&none).trim_end(), NONE_LINE, "0 件の行は読めない周と別");
+    // 読める非空の台帳では件数が出る＝上の 2 行はどちらも「列が空」の 1 形ではない。
     let bd = fake_bd(&state, &[issue("s2-toy.2", 2, "b")]);
     let measured = ls(&repo, &state, &bd);
     assert_eq!(count_of(&measured), format!("{COUNT} total=1 ready=1"), "読めた周は件数が出る");
@@ -187,6 +194,11 @@ fn pipe_dispatch_first_outranks_priority_and_hold_stops_the_start() {
     mark("first", "s2-toy.1");
     let first = ls(&repo, &state, &bd);
     assert_eq!(beads(&first), vec!["s2-toy.1", "s2-toy.2"], "first は P0 より先: {}", stdout_of(&first));
+    assert!(
+        stdout_of(&first).contains(&format!("{LINE} bead=s2-toy.1 prio=2 mark=first reason=-")),
+        "印は行にも出る: {}",
+        stdout_of(&first)
+    );
     mark("hold", "s2-toy.1");
     let held = ls(&repo, &state, &bd);
     assert!(reason_of(&held, "s2-toy.1").starts_with("hold:"), "hold の理由: {}", stdout_of(&held));
@@ -227,6 +239,36 @@ fn pipe_dispatch_keeps_a_review_failed_contract_out_until_its_sha_moves() {
     let again = ls(&repo, &state, &bd);
     assert_eq!(reason_of(&again, "s2-toy.1"), "-", "sha が動けば列に戻る: {}", stdout_of(&again));
     assert_eq!(count_of(&again), format!("{COUNT} total=1 ready=1"), "改訂した契約は起こせる");
+    clean(&[&repo, &state]);
+}
+
+/// (§2 審査 FAIL の列外・裏側) 判定の鍵は**現在の契約 file の sha**である: 同じ sha の直前の便が PASS で
+/// 終わっていれば、それより**古い**同じ sha の FAIL は列を塞がない。
+///
+/// `run id = <bead>-<UTC の秒>` なので 2 便は別の秒に起こす（同じ秒だと id が衝突して 2 本目が断られる）。
+#[test]
+fn pipe_dispatch_review_failed_reads_the_run_just_before_the_current_sha() {
+    let (repo, state) = repo_with_state();
+    two_rows(&repo);
+    let design = format!("{DESIGN_FILE}#a");
+    let older = intake_bead(&repo, &state, &design, "s2-toy.1");
+    fs::write(state.join("pipe").join(&older).join(REVIEW_FILE), "{\"verdict\":\"FAIL\"}\n")
+        .expect("古い便の審査の判定を書ける");
+    let bd = fake_bd(&state, &[issue("s2-toy.1", 2, "a")]);
+    let blocked = ls(&repo, &state, &bd);
+    assert!(
+        reason_of(&blocked, "s2-toy.1").starts_with("review-failed:"),
+        "古い便しか無い周は列外: {}",
+        stdout_of(&blocked)
+    );
+    // 同じ契約でもう 1 便（秒を跨ぐ）。こちらは審査 PASS のまま終端にする。
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    let newer = intake_bead(&repo, &state, &design, "s2-toy.1");
+    assert_ne!(newer, older, "2 便は別の run id");
+    stop_run_ok(&state, &newer);
+    let out = ls(&repo, &state, &bd);
+    assert_eq!(reason_of(&out, "s2-toy.1"), "-", "直前の便が PASS なら古い FAIL は塞がない: {}", stdout_of(&out));
+    assert_eq!(count_of(&out), format!("{COUNT} total=1 ready=1"), "起こせる 1 本");
     clean(&[&repo, &state]);
 }
 
