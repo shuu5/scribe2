@@ -193,6 +193,37 @@ C1 / C5（権能の値は行・裁定 id）・C1.2（生成文に手書きの規
 - 歯（`seat_launch_` / `seat_account_relaunch_` / `seat_register_model_` / `seat_role_doctor_` の既存の接頭辞に足す）: (a) 起動行が `claude` の直後に `--model` と `--effort` をこの順で 1 つずつ運び、雛形には旗が残らない／(b) 行と食い違う `--model` の起動は typed に断り、注入 0・登録 row 0／(c) 行と食い違う `--model` の登録は typed に断り event 0、省いた登録は導出値が row に載る／(d) 行と食い違う古い row を持つ席の立て直しは行の値で起こし、更新後の row の `model` が導出値に直る／(e) 行を読めない manifest では起動も立て直しも起こさず理由を名指す／(f) 雛形に旗が二重に在る周の断りが旗ごとに違う理由を名乗る／(g) doctor の登録 row の行が行の既定を添える。
 - 却下案: `--model` の flag を廃す（未知の旗は今の読み方では黙って無視され、宣言の食い違いが静かに通る＝loud でない）／`--model` の上書きを裁定付きの別経路で通す（裁定は行の値を変える側にあり、起動ごとの上書きは行を回避する口になる）／row に effort の field を足す（宣言が 2 面になり、今回の事故と同じ形を effort で作る）／effort を口座の設定 file へ書いて揃える（器が設定の層に依る・C2.2）／席の側にも突合を出す（同じ事実の 2 面・席に処置の権能が無い）／立て直しで row を直さず移行の subcommand を作る（口が 1 つ増え、直すまで逼迫度が別の窓を読む）。
 
+## 21. 復帰の DATA — SessionStart が台帳と git から「直前の流れ」を出す（契約表の行 o・`s2-07l.489`）
+
+- 何を解くか: 圧縮（`/compact`・自動圧縮）と起動し直しの後、席が持つのは道具の要約と §5 の指示文の件数 1 行だけで、仕掛かり中の便と直近の裁定の在処を自分で引き直している。作業記憶（散文）は ADR-0045 §2 (2) で消したので、復帰の材料は**台帳と git から機械で導く**（C15・散文の持ち越しを作らない）。
+- 形: SessionStart の hook は §5 の指示文（11 行・**変えない**）の後ろに、事実の行だけの区間を 1 つ出す。指示文の行ではない（規範を持たない＝N2 に当たらない・穴も pointer も持たない typed な行）ので、§5 の雛形・xtask の検査・ADR-0045 §2 (3) の行数は動かない。登録の無い席・仕えない周（FR24）は今と同じく 0 byte。
+- 行の種類（行頭の marker で弁別・この順）:
+  1. `[RECENT-WIP] <id> <更新時刻> <題>` — status が in_progress の bead の全件。
+  2. `[RECENT-BEAD] <id> <status> <更新時刻> <題>` — 直近 24 時間に更新された bead を更新の新しい順に上位 N 本（1. に出た id は除く）。
+  3. `[RECENT-GIT] head=<短い sha> branch=<名> ahead=<n> behind=<n>` の 1 行と、`[RECENT-COMMIT] <短い sha> <subject>` を直近 N 本。
+  4. `[RECENT-DIRTY] <worktree の repo 相対 path>` — 未 commit の変更を持つ worktree（anchor を含む）。
+  5. 各種類の末尾に `[RECENT-CUT] kind=<種類> shown=<n> total=<m>`（上限で切った周だけ）。0 件は `[RECENT-NONE] kind=<種類>`、測れなかった周は `[RECENT-UNMEASURED] kind=<種類> reason=<閉じた enum の字面>`（0 件と測れないを分ける・C10）。
+- N と 24 時間と題の切り詰め幅は module の定数（rules 行を足さない・閾値ではなく表示の幅）。時刻の窓は呼び手が渡す現在時刻で測る（壁時計を module の中で読まない＝歯が時刻を固定できる）。
+- 読み: 台帳は §5 と同じ `bd --readonly list --json` の子 process（**同じ 1 回の出力を件数の 1 行と共用**・待ち上限も同じ rules 行 `seat.ledger_timeout_s`）。`Issue`（列の順序が読む型）は広げない——構築 site が列の歯に多数在るので、新 module が同じ JSON から id / title / status / updated_at だけを読む型を別に持つ。git は anchor で子 process（`git` の読みの口だけ・network に出ない＝fetch しない。origin との差は手元の remote 追跡 ref で測る）。開いている PR は載せない（forge の口が要る・`gh` の 1 行で足りる＝C17）。
+- 題は台帳の自由文なので 1 行に畳み（改行と制御文字を空白へ）幅で切る。行頭の marker を題が偽装しても行の種類は行頭の 1 語で決まる（題は 3 語目以降にしか現れない）。
+- 極性: 台帳が読めない・git が無い・anchor が repo でない周は、その種類だけ `[RECENT-UNMEASURED]` を出して他の種類と §5 の指示文は出す（fail-open・読みの失敗で注入全体を黙らせない）。理由は閉じた enum（`ledger-unreadable` / `ledger-timeout` / `git-unavailable` / `not-a-repo`）。極性一覧に 1 行。
+- 置き場: `seat/` の子 module 1 枚（行 o の write-set の `+` の file）。hook の SessionStart の口が §5 の指示文の直後に呼ぶ。source（`startup` / `resume` / `clear` / `compact`）で出し分けない（どの入口でも同じ事実）。
+- 歯（`tests/e2e/hook.rs`・接頭辞 `hook_session_recent_`）: 偽の `bd`（JSON を返す script）と toy repo で、(a) in_progress の bead が `[RECENT-WIP]` に全件出る／(b) 24 時間の窓の内と外が分かれ、上限で切った周に `[RECENT-CUT]` が shown と total を持つ／(c) 台帳が読めない周は `[RECENT-UNMEASURED] kind=wip reason=ledger-unreadable` で、§5 の 11 行と git の行は出る／(d) git の行が head・branch・ahead / behind を持ち、dirty な worktree が `[RECENT-DIRTY]` に出る／(e) 登録の無い席は今と同じく 0 byte／(f) 改行入りの題が 1 行に畳まれ、行数が増えない。
+- 触らない: §5 の雛形と穴・`Issue` の field・rules 行・列（dispatch）の読み。
+- 却下案: `{ledger}` の穴の値を複数行に広げる（雛形の行の規律と xtask の検査が「1 穴 1 値」を前提にしている・ADR-0045 §2 (3) の 11 行が動く）／席が notes に書く習慣の行を雛形に足す（規範文の追加・N2）／直近の会話を要約して持ち越す（作業記憶の再導入）。
+
+## 22. 圧縮の直前の 1 枠 — PreCompact が直前の発言を逐語で残し、圧縮後の SessionStart が 1 回だけ出す（契約表の行 p・`s2-07l.489`・行 o の後）
+
+- 何を解くか: 自動圧縮は席の手番の途中でも走る。§21 の DATA は台帳と git に**書かれた後**の事実しか持たないので、「いま何をしている途中だったか」は落ちる。道具の hook は LLM に書かせられない（shell の command）ので、できるのは機械の記録だけである。
+- 形: 生成 hooks.json に PreCompact の 1 行を足す（生成器は同じ gen-manifest・`--pane` と `--project` は他の行と同じ）。hook は payload の `trigger`（`manual` / `auto`）・`transcript_path` を読み、transcript の**末尾から**直近の assistant の text block を逐語で抜いて、席の置き場（§4 と同じ解き方の `seat/<target>/`）の **1 枠**（file 1 つ・上書き）に書く。枠の中身 = 時刻・trigger・抜いた文（幅で切る・切ったら切った事実を持つ）。
+- 消費: SessionStart が `source = compact` の周だけ、§21 の区間の前に `[PRECOMPACT] trigger=<字面> ts=<時刻>` の 1 行と抜いた文を出し、**出した後に枠を消す**（持ち越さない＝古い枠が次の圧縮で化けない・drift 源にしない・C15）。`compact` 以外の source は枠を読まず触らない。
+- 読みの上限: transcript は末尾の定数 byte だけを読む（全読しない）。JSON として読めない行は読み飛ばし、assistant の text が 1 つも取れない周は枠を書かない（空の枠を作らない）。
+- 極性: PreCompact は**何が起きても圧縮を止めない**（rc 0・stdout 0 byte・失敗は stderr 1 行と記録 1 行）。登録の無い席・仕えない周は何も書かない。SessionStart の側は枠が無い・読めない周に `[PRECOMPACT]` を出さないだけで他は出す。極性一覧に 2 行（書く側・読む側）。
+- 出さないもの: 枠は置き場（repo の外）にだけ在り、repo には 1 byte も書かない。抜いた文は席の自分の発言だけ（tool の出力・user の発言は抜かない＝機微の混入の面を狭める）。
+- 歯（`tests/e2e/hook.rs`・接頭辞 `hook_precompact_`）: 偽の transcript と toy repo で、(a) PreCompact が枠を書き、続く `source = compact` の SessionStart が `[PRECOMPACT]` と逐語の文を出し、枠が消える／(b) 同じ SessionStart をもう 1 回撃つと `[PRECOMPACT]` は出ない／(c) `source = startup` は枠を消さず出さない／(d) transcript が読めない・assistant の text が無い周は枠を書かず rc 0・stdout 0 byte／(e) 幅を超える文は切られ、切った事実が行に出る／(f) 登録の無い席は枠を書かない。生成 hooks.json の歯（xtask）は PreCompact の行が `--pane` と `--project` を運ぶことを測る。
+- 行 o との交差: hook の SessionStart の口と `tests/e2e/hook.rs` を共に触る＝直列に流す（行 o が先）。
+- 却下案: 枠を bead の notes に書く（bead は task と裁定だけ・C15。hook が台帳へ write する経路も作らない）／枠を複数持って履歴にする（作業記憶の再導入）／transcript の全文を要約する（hook は LLM を呼べない・呼ぶ経路は課金と依存を足す）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -310,4 +341,24 @@ write-set = ["crates/scribe2/src/seat/cycle.rs", "crates/scribe2/src/seat/cycle/
 verify = ["cargo nextest run -p scribe2 --no-tests=fail seat_launch_", "cargo nextest run -p scribe2 --no-tests=fail seat_account_relaunch_", "cargo nextest run -p scribe2 --no-tests=fail seat_register_model_", "cargo nextest run -p scribe2 --no-tests=fail seat_role_doctor_", "cargo nextest run -p scribe2 --lib --no-tests=fail seat_launch_"]
 size = "M"
 done = "初回の起動も立て直しも既定の行から導いた model と effort を claude の直後にこの順で 1 つずつ運び、行と食い違う登録と起動は 1 key も送らず event も書かずに断り、古い row を持つ席は立て直しで行の値に直り、行を読めない周はどちらも起こさず理由を名指し、doctor の登録 row が行の既定を添える"
+
+[[contract]]
+id = "o"
+title = "復帰の DATA — SessionStart が §5 の指示文の後ろに、台帳の仕掛かり中と直近更新の bead・anchor の git の直近・dirty な worktree を typed な行で出す（0 件と測れないを分ける・読めない種類だけ UNMEASURED）"
+req = ["FR42", "FR19"]
+section = "21"
+write-set = ["+crates/scribe2/src/seat/recent.rs", "crates/scribe2/src/seat/mod.rs", "crates/scribe2/src/seat/ledger.rs", "crates/scribe2/src/hook/mod.rs", "crates/scribe2/src/polarity.rs", "crates/scribe2/tests/e2e/hook.rs", "crates/scribe2/tests/e2e/polarity.rs", "crates/scribe2/tests/e2e/snapshots/e2e__polarity__polarity_external_form.snap", "docs/design/polarity.md", "docs/design/seat-roles.md"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail hook_session_recent_"]
+size = "S"
+done = "偽の台帳と toy repo で、SessionStart が 11 行の指示文を変えずにその後ろへ仕掛かり中の bead の全件・24 時間の窓の直近更新（上限で切った周は shown と total）・git の head と branch と ahead / behind・dirty な worktree を出し、台帳が読めない周はその種類だけ UNMEASURED で他は出て、登録の無い席は 0 byte のまま"
+
+[[contract]]
+id = "p"
+title = "圧縮の直前の 1 枠 — 生成 hooks.json に PreCompact の行を足し、hook が transcript の末尾から席の直近の発言を逐語で 1 枠に書き、source = compact の SessionStart が 1 回だけ出して枠を消す（圧縮は止めない）"
+req = ["FR42", "FR19"]
+section = "22"
+write-set = ["+crates/scribe2/src/hook/precompact.rs", "crates/scribe2/src/hook/mod.rs", "crates/scribe2/src/hook/stamp.rs", "crates/scribe2/src/main.rs", "crates/scribe2/src/polarity.rs", "crates/xtask/src/genmanifest.rs", "hooks/hooks.json", "crates/scribe2/tests/e2e/hook.rs", "crates/scribe2/tests/e2e/polarity.rs", "crates/scribe2/tests/e2e/snapshots/e2e__polarity__polarity_external_form.snap", "crates/scribe2/tests/e2e/snapshots/e2e__hook__vessel_external_form.snap", "docs/design/polarity.md", "docs/design/vessel-hook.md", "docs/design/seat-roles.md"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail hook_precompact_", "cargo nextest run -p xtask --no-tests=fail gen_manifest_hooks_json_precompact_"]
+size = "S"
+done = "偽の transcript と toy repo で、PreCompact が rc 0・stdout 0 byte のまま席の直近の発言を 1 枠に書き、続く source = compact の SessionStart が [PRECOMPACT] と逐語の文を 1 回だけ出して枠を消し、startup では出さず消さず、transcript が読めない周は枠を書かず、生成 hooks.json の PreCompact の行が --pane と --project を運ぶ"
 <!-- contracts:end -->
