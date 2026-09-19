@@ -7,7 +7,7 @@
 use super::{
     ceiling_rules, clean, commit_rows, design_doc_rows, fake_lens, gate_once, git, implemented, intake_bead,
     kind_count, lens_verdict, repo_with_state, review_lens_pass, row_fields, run_pipe, shim_path, stderr_of,
-    stdout_of, write_contract, write_design, DESIGN_FILE, IMPLEMENT,
+    run_id_of, stdout_of, write_contract, write_design, DESIGN_FILE, IMPLEMENT,
 };
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -683,11 +683,14 @@ fn pipe_terminal_dispatch_two_overlapping_rounds_start_the_bead_once() {
     clean(&[&repo, &state]);
 }
 
-/// (§5 driver の死亡) `pipe run` の process を殺すと **driver の札が残り**、列の 1 周が `pipe resume` で
-/// 起こし直す（record token の `resumed:1`）。起こし直しが**実際に走った**ことは、その便に
+/// (§5 driver の死亡 + 便の自走) `pipe run` の process を殺すと **driver の札が残り**、列の 1 周が
+/// `pipe resume` で起こし直す（record token の `resumed:1`）。起こし直しが**実際に走った**ことは、その便に
 /// `SeatStopped detail=runner-dead` が 1 件積まれることで測る（数えただけでは撃ったと言えない）。
+///
+/// **列が起こす便は `--drive` を持つ**（行 (e)・`s2-07l.485`）ので、起こし直しは 1 段で終わらず
+/// `Landed` まで続く（AC38・`s2-07l.482` の実測で `Implemented` で止まった件の直し）。
 #[test]
-fn pipe_dispatch_driver_dead_driver_is_resumed_once() {
+fn pipe_dispatch_drive_revives_a_dead_driver_all_the_way_to_landed() {
     let (repo, state) = repo_with_state();
     // `pipe run` を子として起こし、`SeatSpawned` の時点で group ごと殺す（host の再起動と同じ形）。
     let (id, _runner_pid, runner) = super::spawn::killed_at_spawned(&repo, &state, &[IMPLEMENT.to_owned()]);
@@ -717,10 +720,11 @@ fn pipe_dispatch_driver_dead_driver_is_resumed_once() {
     );
     // **数えただけでは撃ったと言えない**: 起こし直しが実際に走ると、死んだ runner の始末が記帳される。
     assert_eq!(dead_runners(&state, &id, 1), 1, "pipe resume が 1 回走る（SeatStopped detail=runner-dead）");
-    // 起こし直した `pipe resume` は 1 段進めて抜け、抜けるときに**自分の札を外す**。
-    // （1 段進めた driver が自分の便を次の driver に渡す形＝便の自走は行 (e)・`s2-07l.485`）。
-    assert!(gone(&ticket), "起こし直した driver は抜けるときに自分の札を外す");
-    assert_eq!(stage_reached(&state, &id, "Implemented"), 1, "1 段進む（段の並び: {}）", stages_of(&state, &id));
+    // **1 段では終わらない**: 起こし直した driver は自分の便を次の driver へ渡し、便は着地まで進む。
+    assert_eq!(stage_reached(&state, &id, "Implemented"), 1, "1 段目（段の並び: {}）", stages_of(&state, &id));
+    assert_eq!(stage_reached(&state, &id, "Landed"), 1, "自走で着地まで（段の並び: {}）", stages_of(&state, &id));
+    // 便が着地したら、継いだ driver も抜けるときに**自分の札を外す**（札の寿命は変えていない）。
+    assert!(gone(&ticket), "継ぎの driver も抜けるときに自分の札を外す");
     clean(&[&repo, &state]);
 }
 
@@ -799,21 +803,32 @@ fn stages_of(state: &Path, id: &str) -> String {
     found.join(" → ")
 }
 
+/// 便が `stage` の段に達した件数（いま数えるだけ・待たない）。
+fn reached_now(state: &Path, id: &str, stage: &str) -> usize {
+    fs::read_to_string(state.join("fleet").join("events.jsonl"))
+        .unwrap_or_default()
+        .lines()
+        .filter(|line| line.contains(&format!("\"stage\":\"{stage}\"")))
+        .filter(|line| line.contains(&format!("\"run\":\"{id}\"")))
+        .count()
+}
+
 /// 便が `stage` の段に達した件数（達するまで待つ・起こし直しは子 process ゆえ遅れて来る）。
 fn stage_reached(state: &Path, id: &str, stage: &str) -> usize {
-    let log = state.join("fleet").join("events.jsonl");
-    let count = || -> usize {
-        fs::read_to_string(&log).unwrap_or_default()
-            .lines()
-            .filter(|line| line.contains(&format!("\"stage\":\"{stage}\"")))
-            .filter(|line| line.contains(&format!("\"run\":\"{id}\"")))
-            .count()
-    };
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
-    while count() == 0 && std::time::Instant::now() < deadline {
+    while reached_now(state, id, stage) == 0 && std::time::Instant::now() < deadline {
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
-    count().min(1)
+    reached_now(state, id, stage).min(1)
+}
+
+/// 便が `stage` の段に**達していない**ことを測る（**少し待ってから数える**）。
+///
+/// 達するのを待つ [`stage_reached`] をそのまま使うと上限いっぱい（90 秒）待ってから 0 を返す。
+/// かといって即座に数えると、遅れて来た 1 件を「来なかった」と読み違える（C10）。
+fn not_reached(state: &Path, id: &str, stage: &str) -> usize {
+    std::thread::sleep(std::time::Duration::from_millis(2000));
+    reached_now(state, id, stage)
 }
 
 /// 便の `SeatStopped detail=runner-dead` の件数（`want` 件まで待つ・起こし直しは子 process ゆえ遅れて来る）。
@@ -929,5 +944,136 @@ fn pipe_terminal_dispatch_marks_fire_without_children() {
     // **子 process は 1 つも生まれない**（母集団 = 撃った 1 周 4 回）。
     assert_eq!(created(&state, &["s2-toy.1"], 0), 0, "便を 1 本も起こさない（1 周 4 回）");
     assert_eq!(kind_count(&state, &live, vessel::fleet::EventKind::RunCreated), 1, "live な便は元の 1 件のまま");
+    clean(&[&repo, &state]);
+}
+
+/// 自走の 1 行（`dispatch=…` の行のうち `drive=` を持つ最後の 1 本の `drive=` の値）。
+fn drive_of(out: &Output) -> String {
+    stdout_of(out)
+        .lines()
+        .filter(|line| line.starts_with("dispatch="))
+        .filter_map(|line| line.split("drive=").nth(1).map(str::to_owned))
+        .next_back()
+        .unwrap_or_default()
+}
+
+/// (§5 便の自走) `--drive` を持つ `pipe run` は toy repo の契約 1 本を偽 runner と偽 lens で
+/// **人の手なしに** `Landed` まで通す。
+#[test]
+fn pipe_dispatch_drive_run_lands_a_toy_contract_without_hands() {
+    let (repo, state) = repo_with_state();
+    two_rows(&repo);
+    let lens = fake_lens(&state.join("drive-lens-ran"), &lens_verdict("PASS"));
+    let bd = fake_bd(&state, &[]);
+    let out = run_pipe(&[
+        "run",
+        "--design", &format!("{DESIGN_FILE}#a"),
+        "--bead", "s2-toy.1",
+        "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(),
+        "--rules", &dispatch_rules(&state),
+        "--bd", &bd,
+        "--lens", &lens,
+        "--runner", IMPLEMENT,
+        "--drive",
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "自走の run は rc 0（{}）", told(&out));
+    let id = run_id_of(&out);
+    assert_eq!(stage_reached(&state, &id, "Landed"), 1, "段の列: {}", stages_of(&state, &id));
+    assert_eq!(drive_of(&out), "settled", "着地した周は渡さない（{}）", told(&out));
+    clean(&[&repo, &state]);
+}
+
+/// `pipe resume` を 1 回撃つ（道具は toy の一式・`--drive` は呼び手が選ぶ）。
+fn resume_once(repo: &Path, state: &Path, id: &str, lens: &str, drive: bool) -> Output {
+    let mut args: Vec<String> = ["resume", "--run", id]
+        .iter()
+        .map(|item| (*item).to_owned())
+        .collect();
+    args.extend([
+        "--repo".to_owned(), repo.display().to_string(),
+        "--state-dir".to_owned(), state.display().to_string(),
+        "--rules".to_owned(), dispatch_rules(state),
+        "--bd".to_owned(), fake_bd(state, &[]),
+        "--lens".to_owned(), lens.to_owned(),
+        "--runner".to_owned(), IMPLEMENT.to_owned(),
+    ]);
+    if drive {
+        args.push("--drive".to_owned());
+    }
+    let borrowed: Vec<&str> = args.iter().map(String::as_str).collect();
+    run_pipe(&borrowed)
+}
+
+/// (§5 便の自走) `--drive` を持つ `pipe resume` は 1 段進めた後に**自分の便を次の driver へ渡し**、
+/// 便は `Landed` まで通る。**flag の無い周は今までどおり 1 段で止まり、行に `drive=` は載らない**
+/// （段を手で 1 つずつ進める既存の歯の行は 1 byte も変わらない）。
+///
+/// 2 つの置き場で同じ段から A/B する（同じ置き場だと 1 本目の着地が 2 本目の交差を動かす）。
+#[test]
+fn pipe_dispatch_drive_resume_hands_off_only_with_the_flag() {
+    let stopped = {
+        let (repo, state) = repo_with_state();
+        let contract = write_contract(&repo, &[], &[]);
+        let id = implemented(&repo, &state, &contract);
+        let lens = fake_lens(&state.join("drive-off-lens"), &lens_verdict("PASS"));
+        let out = resume_once(&repo, &state, &id, &lens, false);
+        assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "flag 無しの resume は rc 0（{}）", told(&out));
+        assert!(!stdout_of(&out).contains("drive="), "flag の無い周に token は載らない（{}）", told(&out));
+        assert_eq!(stage_reached(&state, &id, "Gated"), 1, "1 段だけ進む（段の並び: {}）", stages_of(&state, &id));
+        let landed = not_reached(&state, &id, "Landed");
+        clean(&[&repo, &state]);
+        landed
+    };
+    assert_eq!(stopped, 0, "flag の無い周は渡さない＝着地しない");
+    let (repo, state) = repo_with_state();
+    let contract = write_contract(&repo, &[], &[]);
+    let id = implemented(&repo, &state, &contract);
+    let lens = fake_lens(&state.join("drive-on-lens"), &lens_verdict("PASS"));
+    let out = resume_once(&repo, &state, &id, &lens, true);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "自走の resume は rc 0（{}）", told(&out));
+    assert_eq!(drive_of(&out), "pass", "1 段進めた周は渡す（{}）", told(&out));
+    assert_eq!(stage_reached(&state, &id, "Landed"), 1, "継ぎの子が着地させる（段の並び: {}）", stages_of(&state, &id));
+    clean(&[&repo, &state]);
+}
+
+/// (§5 渡す周と渡さない周) 渡さなかった周は**理由を名乗る**（C10・黙って止まらない）。
+///
+/// `waiting` = 人の手を待つ段に着いた周（承認待ち）・`no-progress` = 段が動かなかった周
+/// （`Gated` の INCONCLUSIVE は測り直さずに止まる）。`settled` は着地の歯が測る。
+#[test]
+fn pipe_dispatch_drive_names_why_it_did_not_hand_off() {
+    let waiting = {
+        let (repo, state) = repo_with_state();
+        commit_rows(&repo, &[row_fields("a", &["write-set"], &[r#"write-set = ["src/lib.rs"]"#, r#"classes = ["publish"]"#])]);
+        let out = run_pipe(&[
+            "run",
+            "--design", &format!("{DESIGN_FILE}#a"),
+            "--bead", "s2-toy.1",
+            "--repo", &repo.display().to_string(),
+            "--state-dir", &state.display().to_string(),
+            "--rules", &dispatch_rules(&state),
+            "--bd", &fake_bd(&state, &[]),
+            "--lens", &fake_lens(&state.join("wait-lens"), &lens_verdict("PASS")),
+            "--runner", IMPLEMENT,
+            "--drive",
+        ]);
+        let id = run_id_of(&out);
+        assert_eq!(reached_now(&state, &id, "Blocked"), 1, "承認待ちで止まる（段の並び: {}）", stages_of(&state, &id));
+        let drive = drive_of(&out);
+        assert_eq!(not_reached(&state, &id, "Gated"), 0, "渡していないので先へ進まない（{}）", told(&out));
+        clean(&[&repo, &state]);
+        drive
+    };
+    assert_eq!(waiting, "waiting", "人の手を待つ段に着いた周は渡さない");
+    let (repo, state) = repo_with_state();
+    let contract = write_contract(&repo, &[], &[]);
+    let id = implemented(&repo, &state, &contract);
+    let unsure = fake_lens(&state.join("unsure-lens"), &lens_verdict("INCONCLUSIVE"));
+    let gated = gate_once(&repo, &state, &id, Some(&unsure));
+    assert_eq!(reached_now(&state, &id, "Gated"), 1, "前提: Gated（{}）", told(&gated));
+    let out = resume_once(&repo, &state, &id, &unsure, true);
+    assert_eq!(drive_of(&out), "no-progress", "段が動かなかった周は渡さない（{}）", told(&out));
+    assert_eq!(not_reached(&state, &id, "Landed"), 0, "渡していないので着地しない（{}）", told(&out));
     clean(&[&repo, &state]);
 }

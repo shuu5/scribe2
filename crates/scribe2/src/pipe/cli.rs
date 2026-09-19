@@ -24,7 +24,7 @@ mod show;
 mod state;
 mod step;
 
-pub(super) use args::{broken, flag, int_row, refused, state_dir_of};
+pub(super) use args::{broken, flag, int_row, present, refused, state_dir_of};
 // 列（`pipe::dispatch`）は受付の判定を**記帳せずに**撃つ（設計 dispatcher.md §3・C2 の 1 実装）。
 // 可視性を上げるだけで本文は不変——2 本目の判定を作らないための再輸出である。
 pub(in crate::pipe) use intake::{crossings, generated, judge, Denial, Material, Materials};
@@ -58,7 +58,7 @@ use step::{answer_run, approve_run, gate_run, land_run, retire_run};
 /// `pipe` の使い方。
 pub fn usage() -> String {
     format!(
-        "usage: {NAME} pipe <intake|preflight|spawn|approve|answer|gate|land|retire|run|show|resume|stop|report|dispatch> [--state-dir D] [--repo R] [--rules PATH] [stop: --all|--run ID] [dispatch: (1 周)|ls|first|hold|release BEAD] [--runner CMD] [flags]"
+        "usage: {NAME} pipe <intake|preflight|spawn|approve|answer|gate|land|retire|run|show|resume|stop|report|dispatch> [--state-dir D] [--repo R] [--rules PATH] [stop: --all|--run ID] [dispatch: (1 周)|ls|first|hold|release BEAD] [run|resume: --drive] [--runner CMD] [flags]"
     )
 }
 
@@ -80,14 +80,37 @@ pub fn dispatch(args: &[String]) -> Outcome {
         Err(err) => return broken(err.to_string()),
     };
     let verb = args.first().map(String::as_str);
-    let outcome = subcommand(args, &manifest, policy, verb);
+    // **自分が段を進めた便**は subcommand しか知らない（run は便を作り、resume は入口の段を読む）ので、
+    // 判定の材料を typed に受け取る（stdout の字面から run id を読み戻さない・C3.3）。
+    let mut driven: Option<Driven> = None;
+    let mut outcome = subcommand(args, &manifest, policy, verb, &mut driven);
+    // **`--drive` を持つ周だけ自分の便を次の driver に渡す**（設計 dispatcher.md §5）。flag の無い周は
+    // 今までどおり 1 段だけ進めて抜ける＝段を手で 1 つずつ進める既存の歯は 1 本も動かない。
+    let driving = driven.filter(|_| present(args, queue::DRIVE));
     // **終端の記帳の後・lock の外で列を 1 周撃つ**（設計 dispatcher.md §5）。観測の面は増やさない（§6）ので
-    // 行は足さず、**効果（起こした便の `RunCreated`）だけ**が残る。1 周が失敗しても終端の rc は変えない
-    // ——起こせなかった便は次の契機で拾う。
+    // flag の無い周には行を足さず、**効果（起こした便の `RunCreated`）だけ**が残る。1 周が失敗しても終端の
+    // rc は変えない——起こせなかった便は次の契機で拾う。
     if verb.is_some_and(|found| TERMINALS.contains(&found)) {
-        let _ = queue_of(args, &manifest).map(|queue| queue::fire(&queue.borrow()));
+        if let Some(queue) = queue_of(args, &manifest, driving.as_ref()) {
+            let turn = queue::fire(&queue.borrow());
+            // 自走を頼んだ周は、渡したか・渡さなかった理由を 1 行で残す（C10・黙って止まらない）。
+            if driving.is_some() {
+                outcome.out.push(queue::line(&turn));
+            }
+        }
     }
     outcome
+}
+
+/// **自分が駆動した便**（`pipe run` / `pipe resume` が名乗る・設計 §5「渡す周と渡さない周」）。
+///
+/// `--drive` を読むのは [`dispatch`] の 1 か所である——subcommand の側で読むと、flag の意味
+/// （自走するか）が 2 か所で決まる。ここが名乗るのは**事実**（どの便の、入口の段は何だったか）だけ。
+pub(super) struct Driven {
+    /// 便 id。
+    pub(super) run: String,
+    /// 入口で読んだ段（便を作る `pipe run` は `None`）。
+    pub(super) entry: Option<Stage>,
 }
 
 /// **便が live で無くなりうる subcommand**（設計 dispatcher.md §5「便の終端」）。
@@ -102,7 +125,7 @@ const TERMINALS: [&str; 5] = ["run", "resume", "land", "stop", "retire"];
 /// 「この repo の契約」を突き合わせる口なので、片方を cwd から推すと**別の repo の契約を別の置き場へ
 /// 起こす**（2026-09-19 の実測: toy の置き場の終端が cwd の repo の bead を起こした）。列を起こす側の
 /// 判定は fail-closed に倒す（NFR4）。
-fn queue_of<'a>(args: &'a [String], manifest: &'a Manifest) -> Option<Queue<'a>> {
+fn queue_of<'a>(args: &'a [String], manifest: &'a Manifest, driven: Option<&'a Driven>) -> Option<Queue<'a>> {
     let (Some(state_dir), Some(repo)) = (flag(args, "--state-dir").ok()?, flag(args, "--repo").ok()?) else {
         return None;
     };
@@ -116,6 +139,7 @@ fn queue_of<'a>(args: &'a [String], manifest: &'a Manifest) -> Option<Queue<'a>>
         lens: flag(args, "--lens").ok()?,
         curl: flag(args, "--curl").ok()?,
         runner: flag(args, "--runner").ok()?,
+        driven,
     })
 }
 
@@ -137,6 +161,8 @@ struct Queue<'a> {
     curl: Option<&'a str>,
     /// 実装役の口（同上・無ければ列は 1 本も起こさない）。
     runner: Option<&'a str>,
+    /// 自走を頼んだ呼び手の便（`--drive` の周だけ `Some`）。
+    driven: Option<&'a Driven>,
 }
 
 impl Queue<'_> {
@@ -152,12 +178,19 @@ impl Queue<'_> {
             lens: self.lens,
             curl: self.curl,
             runner: self.runner,
+            driving: self.driven.map(|found| queue::Driving { run: &found.run, entry: found.entry }),
         }
     }
 }
 
 /// subcommand 1 つを撃つ（列の 1 周は呼び手が足す）。
-fn subcommand(args: &[String], manifest: &Manifest, policy: LockPolicy, verb: Option<&str>) -> Outcome {
+fn subcommand(
+    args: &[String],
+    manifest: &Manifest,
+    policy: LockPolicy,
+    verb: Option<&str>,
+    driven: &mut Option<Driven>,
+) -> Outcome {
     match verb {
         Some("intake") => intake(args, manifest, policy),
         Some("preflight") => preflight(args, manifest),
@@ -167,9 +200,9 @@ fn subcommand(args: &[String], manifest: &Manifest, policy: LockPolicy, verb: Op
         Some("gate") => by_run(args, |id| gate_run(args, id, manifest, policy)),
         Some("land") => by_run(args, |id| land_run(args, id, manifest, policy)),
         Some("retire") => by_run(args, |id| retire_run(args, id, policy)),
-        Some("run") => run_all(args, manifest, policy),
+        Some("run") => run_all(args, manifest, policy, driven),
         Some("show") => show(args),
-        Some("resume") => resume(args, manifest, policy),
+        Some("resume") => resume(args, manifest, policy, driven),
         Some("stop") => stop(args, manifest, policy),
         Some("dispatch") => queued(args, manifest, policy),
         Some("report") => match state_dir_of(args) {
@@ -191,7 +224,7 @@ fn with_turn(args: &[String], manifest: &Manifest, mut outcome: Outcome) -> Outc
 
 /// 列の 1 周の 1 行（引数から材料を解いて [`queue::fire`] を撃つ＝**起こす側**）。
 fn turn_line(args: &[String], manifest: &Manifest) -> String {
-    match queue_of(args, manifest) {
+    match queue_of(args, manifest, None) {
         Some(queue) => queue::line(&queue::fire(&queue.borrow())),
         None => format!("dispatch=unmeasured reason={ARGS_UNMEASURED}"),
     }
@@ -211,7 +244,7 @@ fn queued(args: &[String], manifest: &Manifest, policy: LockPolicy) -> Outcome {
     };
     match args.get(1).map(String::as_str) {
         // **観測は起こさない**（設計 §6）: `ls` は [`queue::turn`] を撃ち、[`queue::fire`] は撃たない。
-        Some("ls") => match queue_of(args, manifest) {
+        Some("ls") => match queue_of(args, manifest, None) {
             Some(queue) => queue::render(&queue::turn(&queue.borrow())),
             None => refused("列の材料（置き場・repo・台帳 client）を解けない".to_owned()),
         },

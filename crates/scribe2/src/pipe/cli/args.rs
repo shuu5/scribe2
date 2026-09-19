@@ -24,6 +24,15 @@ pub(in crate::pipe) fn flag<'a>(args: &'a [String], name: &str) -> Result<Option
     }
 }
 
+/// `--<name>`（**値を持たない flag**）が在るか。
+///
+/// 値なし flag の読み手は `pipe` の中でこの 1 本だけである（`s2-07l.485`）。同じ 1 行を書き写すと、
+/// 片方だけが `starts_with` や部分一致へ緩む形で穴が開く（[`flag`] が 3 本目の値つき reader を
+/// 畳んだのと同じ理由）。
+pub(in crate::pipe) fn present(args: &[String], name: &str) -> bool {
+    args.iter().any(|arg| arg == name)
+}
+
 /// 必須の flag。
 pub(super) fn need<'a>(args: &'a [String], name: &str) -> Result<&'a str, String> {
     flag(args, name)?.ok_or(format!("{name} が要る"))

@@ -9,7 +9,7 @@ use super::step::{gate_run, land_run, review_run};
 use super::{broken, need, refused, stage_of, state_dir_of};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
 use crate::fleet::store::{self, LockPolicy, StoreError};
-use crate::fleet::{self, Completion, EventKind, Stage, Timeout};
+use crate::fleet::{self, Completion, EventKind, Stage, State, Timeout};
 use crate::pipe::approve::RC_BLOCKED;
 use crate::pipe::follow;
 use crate::pipe::gate::{Verdict, RC_INCONCLUSIVE};
@@ -17,36 +17,62 @@ use crate::pipe::land::verdict_of;
 use crate::pipe::ratelimit::ride_out_rate_limit;
 use crate::pipe::{current, emit, last_stage_detail, question_of_run, runner_is_idle, Emit};
 use crate::rules::manifest::Manifest;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-/// `pipe resume`。現在の段から続きの段だけを通す。
-pub(super) fn resume(args: &[String], manifest: &Manifest, policy: LockPolicy) -> Outcome {
-    let id = match need(args, "--run") {
-        Ok(found) => found.to_owned(),
-        Err(reason) => return refused(reason),
-    };
-    let state_dir = match state_dir_of(args) {
-        Ok(found) => found,
-        Err(reason) => return refused(reason),
-    };
+/// `resume` が入口で解く材料（便 id・置き場・**driver の札**・replay・入口の段）。
+///
+/// 札は `driver` の binding が生きている間だけ握られる（`Drop` で外す）ので、呼び手は最後まで
+/// 束縛したまま持つ。
+struct Entered {
+    /// 便 id。
+    id: String,
+    /// 置き場。
+    state_dir: PathBuf,
+    /// driver の札（`Drop` まで握る）。
+    driver: crate::pipe::Driver,
+    /// replay が見た置き場の状態。
+    state: State,
+    /// 入口で読んだ段。
+    entry: Stage,
+}
+
+/// 入口の材料を解く（1 つでも解けなければ、その周の断りをそのまま返す）。
+fn enter(args: &[String], policy: LockPolicy) -> Result<Entered, Outcome> {
+    let id = need(args, "--run").map_err(refused)?.to_owned();
+    let state_dir = state_dir_of(args).map_err(refused)?;
     // **driver の札をここで握る**（設計 dispatcher.md §5・`pipe run` と同じ 1 つの型）。握れない周＝
     // 生きている別の driver が同じ便を駆動している周は、**駆動しない**（同じ便に driver を 2 本立てない・
     // 契機が重なって起こし直しが 2 本撃たれた周はここで片方が落ちる）。
-    let Some(_driver) = crate::pipe::Driver::hold(&state_dir, &id, policy) else {
-        return refused(format!("run {id} は別の driver が駆動している"));
+    let Some(driver) = crate::pipe::Driver::hold(&state_dir, &id, policy) else {
+        return Err(refused(format!("run {id} は別の driver が駆動している")));
     };
-    let state = match current(&state_dir) {
+    let state = current(&state_dir)
+        .map_err(|errors| Outcome::failed(RC_BROKEN, errors.iter().map(StoreError::to_string).collect()))?;
+    let entry = stage_of(&state, &id).map_err(refused)?;
+    Ok(Entered { id, state_dir, driver, state, entry })
+}
+
+/// `pipe resume`。現在の段から続きの段だけを通す。
+pub(super) fn resume(
+    args: &[String],
+    manifest: &Manifest,
+    policy: LockPolicy,
+    driven: &mut Option<super::Driven>,
+) -> Outcome {
+    let Entered { id, state_dir, driver: _driver, state, entry } = match enter(args, policy) {
         Ok(found) => found,
-        Err(errors) => return Outcome::failed(RC_BROKEN, errors.iter().map(StoreError::to_string).collect()),
+        Err(outcome) => return outcome,
     };
-    match stage_of(&state, &id) {
-        Err(reason) => refused(reason),
+    // **入口の段を名乗る**（設計 dispatcher.md §5）: 終端で読み直した段と比べて前進を判じる材料である
+    // （段が動かなかった周を渡すと、同じ段を空撃ちする子が無限に連なる）。`--drive` を読むのは呼び手の 1 か所。
+    *driven = Some(super::Driven { run: id.clone(), entry: Some(entry) });
+    match entry {
         // `Implemented` の先は 2 つに分かれる（設計 pipeline-conflict.md §3・ADR-0019 §2.6）。
         // 追随が衝突して段が戻った便（最後の `RunStage` の detail が `rebase-conflict:` で
         // 始まり、runner が起きていない）は**起こし直しの続き**で、`--runner` を要る。
         // それ以外の `Implemented` は従来どおり gate。
-        Ok(Stage::Implemented) => match follow_pending(&state_dir, &id) {
+        Stage::Implemented => match follow_pending(&state_dir, &id) {
             false => gate_run(args, &id, manifest, policy),
             true => relaunch(args, &id, policy, Stage::Implemented),
         },
@@ -55,7 +81,7 @@ pub(super) fn resume(args: &[String], manifest: &Manifest, policy: LockPolicy) -
         // 次に撃つ段だけを名乗って rc 3 で止まる（**自動では測り直さない**＝道具の
         // 不足は人が直す）。PASS / FAIL の弁別は land 側が持ち、読む関数は
         // [`verdict_of`] の 1 本で共有する（判定の読み手は増やさない）。
-        Ok(Stage::Gated) => match verdict_of(&state_dir, &id) {
+        Stage::Gated => match verdict_of(&state_dir, &id) {
             Some(Verdict::Inconclusive) => Outcome {
                 out: vec![format!("run={id} next=gate")],
                 err: Vec::new(),
@@ -65,16 +91,16 @@ pub(super) fn resume(args: &[String], manifest: &Manifest, policy: LockPolicy) -
         },
         // 審査を通っていない便（`RunCreated` の直後に process が落ちた周）は**先に審査**し、PASS の周だけ
         // 起こす（FR49・設計 contract-source.md §4「効き方」）。審査の段の event と `review.json` はここで残る。
-        Ok(Stage::Intake) => match need(args, "--runner") {
+        Stage::Intake => match need(args, "--runner") {
             Err(reason) => refused(reason),
             Ok(runner) => review_then_launch(args, &id, runner, manifest, policy),
         },
         // `Reviewed` から起こせるのは verdict が PASS の周だけ（[`super::Extra::Spawn`] が弁別する）。
-        Ok(Stage::Reviewed) => relaunch(args, &id, policy, Stage::Reviewed),
+        Stage::Reviewed => relaunch(args, &id, policy, Stage::Reviewed),
         // Blocked から先へ進めるのは承認 event が在る周だけ。未承認は **rc 3 のまま
         // 何も書かない**——待っている事実は既に Blocked が記帳しており、resume の
         // たびに ApprovalRequested を積むと「何回聞いたか」が事実と食い違う。
-        Ok(Stage::Blocked) => match state.runs.get(&id).is_some_and(|run| run.approved) {
+        Stage::Blocked => match state.runs.get(&id).is_some_and(|run| run.approved) {
             false => Outcome::failed_line(
                 RC_BLOCKED,
                 format!("pipe: run {id} は承認待ちである（pipe approve --words \"<user の逐語>\"）"),
@@ -83,7 +109,7 @@ pub(super) fn resume(args: &[String], manifest: &Manifest, policy: LockPolicy) -
         },
         // Questioned から先へ進めるのは**最新の質問への回答**が在る周だけ（`Blocked` と同型・
         // FR32）。無ければ rc 3 で何も書かない（待っている事実は Questioned が既に持つ）。
-        Ok(Stage::Questioned) => match question_of_run(&state_dir, &id).is_some_and(|q| q.answer.is_some()) {
+        Stage::Questioned => match question_of_run(&state_dir, &id).is_some_and(|q| q.answer.is_some()) {
             false => Outcome::failed_line(
                 RC_BLOCKED,
                 format!("pipe: run {id} は回答待ちである（pipe answer --run {id} --words \"<回答の逐語>\"）"),
@@ -92,18 +118,18 @@ pub(super) fn resume(args: &[String], manifest: &Manifest, policy: LockPolicy) -
         },
         // 上限で止まった便は器が別口座を選んで起こし直す（設計 account-autonomy.md §4・FR37）。人の
         // 操作は要らない（候補なしは reset まで待つ・終端は stop だけ）。
-        Ok(Stage::RateLimited) => match need(args, "--runner") {
+        Stage::RateLimited => match need(args, "--runner") {
             Err(reason) => refused(reason),
             Ok(runner) => ride_out_rate_limit(args, &id, runner, manifest, policy),
         },
         // `Spawned` から再開できるのは **runner が死んだ便だけ**（host の再起動・OOM・kill で `SeatStopped` が
         // 書かれないまま消えた形・設計 account-autonomy.md §4「runner が死んだ便の起こし直し」・C9）。生死は
         // 唯一の wait で測り、生きている便は断る（runner を 2 本にしない）。
-        Ok(Stage::Spawned) => match need(args, "--runner") {
+        Stage::Spawned => match need(args, "--runner") {
             Err(reason) => refused(reason),
             Ok(runner) => revive(args, &id, runner, manifest, policy),
         },
-        Ok(stage) => refused(format!("run {id} の段 {} からは再開しない", stage.as_str())),
+        stage => refused(format!("run {id} の段 {} からは再開しない", stage.as_str())),
     }
 }
 
