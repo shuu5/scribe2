@@ -85,8 +85,8 @@ dispatcher は「起こす」側で行為を止める判定を持たない（起
 - 便の自走（行 (e)・`pipe_dispatch_drive_` 接頭辞）: `--drive` を持つ `pipe run` は `run_all` の 1 process の連鎖（intake → 審査 → spawn → gate → land）で `Landed` に着き record は `drive=settled`（`resumed:0`）・`--drive` を持つ `pipe resume` は段ごとの終端の 1 周が子を 1 本ずつ継いで人の手なしに `Landed` まで通る（`Intake → Reviewed → Spawned → Implemented → Gated → Landed` の実測・母集団 = 段の遷移の数・渡さない理由は閉じた値〔待ち / 終端 / 前進なし / 測れない〕で record に載る＝測れなかった周を終端に読み替えない・C10）・`--drive` の無い run / resume は 1 段で止まる（既存の歯は 1 本も変えない＝母集団 205 本の diff 0）・`Blocked` の便と段の動かなかった周は渡さず理由が record に載る・列の起こし直しが起こす resume は `--drive` を持ち、殺した driver の便が `Landed` まで通る・段の前進の pure fn（in-file・前進 / 同じ段 / 後退の 3 形）・usage の外形 snapshot が更新される。
 - 診断と結合（行 (g)・`s2-07l.487`・歯だけの便）: dispatch の歯の assert の文は落ちた周の rc・stdout・stderr を写す（`s2-07l.486` の merge 後の main の CI で「印の直後の 1 周」の行が無い落ち方をし、rc も stderr も写っておらず原因が測れなかった・同じ sha の再走は緑・A/B は `.486` の前後とも 0/20）。印の直後の 1 周は、手動の 1 周で起こした子 process の状態に依存しない台帳（起こせる候補が 0 の列・`RunCreated` 0・子 process 0）で測り、起こした効果は別の歯が測る（子が走っている最中に印を打つ形は、子の記帳との lock の競合で印の記帳が `fleet.lock_retry_ms` を超えうる＝歯が器の待ち時間に依存する）。
 - 終端の便の列外: 直前の便が終端で終わった契約は同じ sha では `Settled` で列外、契約 file の sha が変わると列に戻る（偽 lens の verdict と run dir の fixture・着地した便を起こし直さない側も同じ 1 本で測る）。
-- 列へ戻す印（行 (h)・`pipe_dispatch_release_requeues_` 接頭辞）: `Failed` で終端した便の bead は `Settled` で列外だが、その後の `release` で同じ sha のまま列に戻り（`dispatch ls` の reason が `-`）、起こし直した便が同じ sha でまた終端に着くと再び `Settled`（印は 1 回しか効かない）・終端より**前**の `release` は効かない・`Landed` の便と審査 FAIL の便は `release` の後も `Settled` のまま（母集団 = 終端の段の種類）。
-- 起動の失敗の理由と repo の名指し（行 (i)・`pipe_spawn_runner_stderr_` と `pipe_repo_relative_` 接頭辞・置き場は行 (i) の write-set の `+` の file）: stderr に 1 行書いて rc 2 で落ちる偽 runner の便が `Failed` に着いた後、run dir の stderr の log にその 1 行が見出し付きで残り、呼び手の stderr にも同じ行が出る・stderr が空の周は file を作らない・`--repo` を相対 path で渡した `pipe run` が絶対 path で渡した周と同じ worktree の場所と同じ段に着く。
+- 列へ戻す印（行 (h)・`pipe_dispatch_release_requeues_` 接頭辞）: `Failed` で終端した便の bead は `Settled` で列外だが、その後の `release` で同じ sha のまま列に戻り（`dispatch ls` の reason が `-`）、起こし直した便が同じ sha でまた終端に着くと再び `Settled`（印は 1 回しか効かない）・終端より**前**の `release` は効かない・`Landed` の便と審査 FAIL の便は `release` の後も `Settled` のまま・`Stopped` の便と gate の判定で終端になった便は戻る（母集団 = 終端の段の種類）。
+- 起動の失敗の理由と repo の名指し（行 (i)・`pipe_spawn_runner_stderr_` と `pipe_repo_relative_` 接頭辞・置き場は行 (i) の write-set の `+` の file）: stderr に 1 行書いて rc 2 で落ちる偽 runner の便が `Failed` に着いた後、run dir の stderr の log にその 1 行が見出し付きで残り、呼び手の stderr にも同じ行が出る・stderr が空の周は file を作らない・stderr に書いても rc 0 ∧ commit 1 の偽 runner は `Implemented` に着く（段は stderr の中身で変わらない）・`--repo` を相対 path で渡した `pipe run` が絶対 path で渡した周と同じ worktree の場所と同じ段に着く。
 
 ## 9. 契約（7 便・(a) → (b) → (d) → (g) → (e)、その後に (h) と (i)。(r) と (c) は超過）
 
@@ -193,7 +193,7 @@ section = "12"
 write-set = ["crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2/tests/e2e/pipe/dispatch.rs"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_dispatch_release_requeues_"]
 size = "S"
-done = "偽の台帳と run dir の fixture で、Failed で終端した便の bead が Settled で列外に居り、その後の release で同じ sha のまま列に戻って dispatch ls の reason が - になり、起こし直した便が同じ sha でまた終端に着くと再び Settled になり、終端より前の release は効かず、Landed の便と審査 FAIL の便は release の後も Settled のままで（母集団 = 終端の段の種類）、gate の判定で終端になった便は戻る"
+done = "偽の台帳と run dir の fixture で、Failed で終端した便の bead が Settled で列外に居り、その後の release で同じ sha のまま列に戻って dispatch ls の reason が - になり、起こし直した便が同じ sha でまた終端に着くと再び Settled になり、終端より前の release は効かず、Landed の便と審査 FAIL の便は release の後も Settled のままで、Stopped の便と gate の判定で終端になった便は戻る（母集団 = 終端の段の種類）"
 
 [[contract]]
 id = "i"
@@ -203,5 +203,5 @@ section = "12"
 write-set = ["crates/scribe2/src/pipe/spawn.rs", "crates/scribe2/src/pipe/mod.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/cli/args.rs", "crates/scribe2/src/pipe/cli/intake.rs", "+crates/scribe2/tests/e2e/pipe/launch_failure.rs", "crates/scribe2/tests/e2e/pipe.rs"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_spawn_runner_stderr_", "cargo nextest run -p scribe2 --no-tests=fail pipe_repo_relative_"]
 size = "S"
-done = "stderr に 1 行書いて rc 2 で落ちる偽 runner の便が Failed detail=runner-rc:2,commits:0 に着いた後、run dir の stderr の log にその 1 行が見出し行付きで残り、呼び手の stderr にも同じ行が出て、stderr が空の周は file が作られず、段の判定は stderr の中身で変わらず、--repo を相対 path で渡した pipe run が絶対 path で渡した周と同じ worktree の場所と同じ段に着き、--repo の読み手が 1 本になる"
+done = "stderr に 1 行書いて rc 2 で落ちる偽 runner の便が Failed detail=runner-rc:2,commits:0 に着いた後、run dir の stderr の log にその 1 行が見出し行付きで残り、呼び手の stderr にも同じ行が出て、stderr が空の周は file が作られず、stderr に書いても rc 0 で commit 1 の偽 runner は Implemented に着き、--repo を相対 path で渡した pipe run が絶対 path で渡した周と同じ worktree の場所と同じ段に着く"
 <!-- contracts:end -->
