@@ -22,6 +22,7 @@
 ## 3. 権能と rules 行（ADR-0022 §2.2 / §2.5）
 
 - **`Capability`**（closed enum・core）: 操作の種別。記録時点の variant の**種類**は次のとおりで、名は core が持つ: 回答の記帳（`pipe answer`）・承認の記帳（approval event）・go の記帳（merge の許可）・便の起動（`pipe intake` / `run` / `resume` / `stop` / `retire`）・go 後の merge・path 種別ごとの編集（design-intent / 設計 doc / 歯〔`crates/<crate>/tests/`〕/ code / 対象 repo の外）。中継の variant は持たない（[ADR-0045](../../design-intent/decisions/ADR-0045-seat-role-is-one-orchestrator-and-dispatcher-lands-runs.html) §2 (1)・機械の面が無く席が 1 つになって意味を失う）。便の起動と merge は器の dispatcher の口ゆえ席の行には並ばない（variant は guard が deny を出すために残る）。
+- **停止の権能**: 便を止める口（`pipe stop`）を起動の権能（launch）から外して新しい権能 `stop` に結び、rules 行 `role.orchestrator` の値に `stop` を足す形は [ADR-0048](../../design-intent/decisions/ADR-0048-stopping-a-run-is-a-separate-capability-of-the-orchestrator.html) が決めた（proposed・席が撃てるのは便 1 本を名指す形だけで `--all` は launch のまま。発効は権能と行の値と guard の照合が land した版。発効までは `pipe stop` は launch のままで席から撃てない）。
 - **権能の名の対応**: `edit-tests` は [ADR-0045](../../design-intent/decisions/ADR-0045-seat-role-is-one-orchestrator-and-dispatcher-lands-runs.html) §2 (1) の「`edit-code`〔`tests/` の path 種別に限る〕」である。名を分けるのは §4 の guard が path 種別と権能を 1:1 で照合するからで（値に修飾子を持たせると読み手を 1 本足すことになる）、意味は ADR のとおり＝src は行に無く歯だけが開く。
 - **rules 行**: `RuleKind::RoleCapabilities`（variant 1 つ・値は権能の名の**列**〔既存の `RuleValue::List`・manifest に list の行が既に在る〕・裁定 id 付き）を役割ごとに 1 行（id は `role.<役割名>`）。値（どの役割がどの権能を持つか）は本 doc が決めず、契約 (b) が裁定 id 付きで書く（§9）。列に無い名は manifest の読み込みで拒む（閉じた enum の parse・既存の `RuleError`）。
 - **読み手は 4 つ・行は 1 つ**: §4 の guard・§5 の注入文の生成・C1.2 の生成文書（rules 表）・xtask の drift 検査（C14.2）。
@@ -256,6 +257,23 @@ C1 / C5（権能の値は行・裁定 id）・C1.2（生成文に手書きの規
 - 触らない: 種別の集合（closed enum）と種別ごとの権能の 1:1・rules 行・宣言の schema の版（1 のまま）・便の印で開く write-set の扱い（§4）。
 - 後続: consumer の移行の手順（[consumer-sync.md](./consumer-sync.md) §16）に「宣言へ 3 本の key を書く」段を足すのは、本行の着地の後の docs の便。新しい consumer の最初の宣言 file を書く口は導入の口の設計（`s2-07l.491`）。
 
+## 25. 便を止める権能 `stop` — 起動の権能から分け、席は便 1 本の名指しの形だけ撃てる（契約表の行 s・[ADR-0048](../../design-intent/decisions/ADR-0048-stopping-a-run-is-a-separate-capability-of-the-orchestrator.html)・`s2-07l.495`）
+
+- 何を解くか: ADR-0045 §2 (1) の後、便を止める口は起動の権能に結ばれていて、どの席の行にも無い＝居座る便を席から外せない（実測 2026-09-20・[dispatcher.md](./dispatcher.md) §11）。決定は ADR-0048 で、本 § はその実装の形である。
+- やさしく言うと: 「この 1 本を止める」だけを席に許す。「全部止める」と、始める・再開する・片付けるは、今までどおり席からは撃てない。
+- 約束（1 つずつ歯が測る・行 s の done と 1:1）:
+  1. **権能の列に `stop` が 1 つ増える**: 権能の閉じた enum と全 variant の列に `stop` を足す（字面は `stop`・宣言順は `merge` の後ろ）。rules 行の loader は `stop` を知っている名として受け、知らない名は今までどおり拒む。
+  2. **rules 行 `role.orchestrator` の値に `stop` が載る**（裁定 id と日付を今回の裁定に更新）。席の指示文（§5 の権能の行）にも `stop` が出る（外形 snapshot が更新される）。
+  3. **便 1 本を名指す停止は `stop` の権能で通る**（許す形を列挙する・allowlist）: guard の表は停止の口を `stop` に結ぶ（表は「口 → 権能」のまま）。その上で、停止の呼び出しの**窓**＝停止の 2 語の直後から command 行の末尾までの token が、**値つきの flag `--run` / `--state-dir` / `--repo` / `--rules` とその値だけ**で出来ていて、`--run` がちょうど 1 回在り、どの値も `-` で始まらず shell が意味を変える字（区切り・pipe・括弧・`$`・backtick・引用符・redirect）を 1 つも含まない呼び出しだけが、`stop` の権能を要る＝orchestrator の席で通る。
+  4. **それ以外の停止は起動の権能へ降ろす**（＝どの席でも断られる・fail-closed）: 窓に上の 4 つ以外の token が 1 つでも在る形は全部こちらである——`--all` を持つ形・`--run` の無い形・`--run` の直後に値の無い形・`--run` と `--all` の両方を持つ形・**`--run=<id>` の 1 語の形**（止める口は flag を完全一致で読むので、この形は名指しにならず一括の停止へ落ちる）・列を撃つ道具の flag を持つ形・値や窓に区切りや pipe や `$(` を含む形（窓の後ろに別の command が続く行は、席は停止を単独の 1 行で撃つ）。
+  5. **1 行に権能付きの呼び出しが複数在る周は全部の権能を要る**（今の規則のまま）: 名指しの停止の窓は行の末尾までなので、後ろに別の呼び出しが続く行は約束 4 で起動の権能へ降りる。停止の前に別の口（例えば回答）が在る行は、両方の権能を持つ席でだけ通る。
+  6. **他の口の権能は変わらない**: 受付・起動・再開・退役は起動の権能のまま、着地は merge のまま、回答と承認は今のまま。測るのは既存の歯（`role_guard_capability_commands_match_the_three_word_sequence`〔停止の 1 件だけ期待値が変わる〕・`hook_role_bash_face_allows_answer_and_denies_launch`・権能の表の prop 2 本）で、行の verify がその接頭辞を撃つ。
+  7. **`stop` を持たない行の席では名指しの停止も断られる**（権能は行から来る・行に無ければ通らない）。
+- 止める口そのものの挙動（終端 `Stopped` の記帳・worktree と branch を残す・止め切れない周の断り）は 1 つも変えない。止めた便は終端の列外に入り、契約の字を直すか `release` の印で列に戻る（[dispatcher.md](./dispatcher.md) §12）。
+- 歯: guard の照合は pure な fn の in-file の歯（接頭辞 `role_guard_stop_`・約束 3 / 4 / 5・**母集団 = 停止の呼び出しの形 9 つ**: 通る形 1〔`--run` と値、置き場と repo と rules の flag を足した形も通る〕／`--all`／`--run` 無し／`--run` の値無し／`--run` と `--all`／`--run=<id>`／列の道具の flag つき／値に pipe を含む形〔置き場の値の途中に pipe と別の `--run`〕／`$(` を含む形）と、PreToolUse の口からの e2e（`tests/e2e/hook.rs`・接頭辞 `hook_role_stop_`・約束 3 / 4 / 7 を登録済みの席で測る）。rules 行と loader は `tests/e2e/rules.rs`（接頭辞 `rules_role_stop_`・約束 1 / 2）。
+- 変更する既存の歯（名で数える・どれも write-set の中）: `role_guard_capability_commands_match_the_three_word_sequence`（停止の期待値が起動から `stop` へ）・埋め込みの rules 行の値と裁定 id を pin する `rules_embedded_manifest_` の歯 3 本・指示文の外形 snapshot（`hook_brief_` の歯・更新だけ）。約束 6 の「変わらない」は上に名指した歯がそのまま測る。
+- 触らない: 止める口の本体・他の権能付きの口の結び・編集面の guard・極性一覧（新しい guard は足さない＝既存の Bash 面の guard の表の 1 行が変わるだけ）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -413,4 +431,14 @@ write-set = ["crates/scribe2/src/hook/role_guard.rs", "crates/scribe2/src/hook/m
 verify = ["cargo nextest run -p scribe2 --no-tests=fail hook_role_paths_", "cargo nextest run -p scribe2 --no-tests=fail seat_role_doctor_paths_"]
 size = "M"
 done = "toy repo に宣言を commit して PreToolUse の口から測り、3 本の key を書いた repo で宣言した仕様と設計 doc と test の dir の下の編集が orchestrator の席で通ってそれ以外は断られ、/ で終わらない項目は完全一致の 1 file だけが通り、1 本だけ書いた repo は残りの種別が固定の判定のままで、宣言 file の無い repo と key を書かない repo は今の分類と同じで、宣言 file 自身の編集は宣言が名指していても断られ、不正な宣言（parent-segment / absolute / empty / overlap / unreadable のそれぞれ）の repo は固定値なら通る path も含めて repo 内の全編集が断られて deny の行が理由の字面を持ち、commit していない作業ツリーの宣言は効かず、便の worktree の中の file も anchor の宣言で分類され、doctor が anchor ごとに paths の 1 行を default / declared / invalid の 3 つの state と invalid の理由の字面で出し、種別の集合と権能の 1:1 と宣言の schema の版は変わらない"
+
+[[contract]]
+id = "s"
+title = "便を止める権能 stop — 権能の列に stop を足して停止の口を起動の権能から外し、rules 行 role.orchestrator の値に stop を足し、guard は便 1 本を名指す停止だけを stop で通す（--all と名指しの無い形は起動の権能のまま・止める口の本体は不変）"
+req = ["FR41", "FR45", "NFR4"]
+section = "25"
+write-set = ["crates/scribe2/src/seat/role.rs", "crates/scribe2/src/hook/role_guard.rs", "rules/manifest.toml", "crates/scribe2/tests/e2e/rules.rs", "crates/scribe2/tests/e2e/hook.rs", "crates/scribe2/tests/e2e/polarity.rs", "crates/scribe2/tests/e2e/snapshots/e2e__hook__hook_brief_orchestrator.snap", "docs/design/seat-roles.md"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail role_guard_stop_", "cargo nextest run -p scribe2 --no-tests=fail hook_role_stop_", "cargo nextest run -p scribe2 --no-tests=fail rules_role_stop_", "cargo nextest run -p scribe2 --no-tests=fail role_guard_", "cargo nextest run -p scribe2 --no-tests=fail hook_role_", "cargo nextest run -p scribe2 --no-tests=fail rules_embedded_manifest_", "cargo nextest run -p scribe2 --no-tests=fail hook_brief_"]
+size = "M"
+done = "(1) 権能の列と全 variant の列に stop が在り loader が stop を受けて知らない名は拒む (2) 埋め込みの rules 行 role.orchestrator の値が stop を持ち裁定 id が今回の裁定で、席の指示文の権能の行に stop が出て外形 snapshot が更新される (3) guard の表が停止の口を stop に結び、窓が --run / --state-dir / --repo / --rules の flag とその値だけで --run がちょうど 1 回の停止の呼び出しが orchestrator の席で通る (4) --all を持つ形・--run の無い形・--run の値の無い形・--run と --all の両方の形・--run=<id> の 1 語の形・列の道具の flag を持つ形・値や窓に pipe や区切りや $( を含む形の停止は起動の権能へ降りて断られる (5) 停止の後ろに別の呼び出しが続く行は断られ、停止の前に別の口が在る行は両方の権能を要り、deny の行が欠けた権能を名指す (6) 受付・起動・再開・退役は起動の権能のまま、着地は merge のまま、回答と承認は今のままで、既存の歯（3 語の並びの歯は停止の期待値だけが変わる・Bash 面の歯・権能の表の prop 2 本）が緑 (7) stop を持たない行の席では名指しの停止も断られる、の 7 つを in-file の歯（停止の呼び出しの形 9 つの母集団）と PreToolUse の口の歯と rules の歯が測り、止める口の本体は 1 行も変わらない"
 <!-- contracts:end -->

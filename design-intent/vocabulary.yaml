@@ -910,3 +910,13 @@ terms:
     aliases: [optional key]
     definition: vessel 宣言の key のうち書かなくてよいもの。 「無い」は key の不在で表し (書いた空配列は不備・ADR-0010 §2.1)、 書かない宣言は器の既定で動く。 未知の key は読み口が断るので、 任意 key を足す便は読み口の key の列も同時に広げる。
     relationships: [vessel 宣言, path 種別, 検出線, 共通 verify]
+  - canonical: 起動の権能
+    domain: consumer
+    aliases: [launch]
+    definition: 便を起こす側の口 (受付・起動・再開・退役) に結ばれた権能。 ADR-0045 §2 (1) の後は席の rules 行に無く dispatcher の口ゆえ、 どの席からも撃てない。 便 1 本を終端へ倒す口は ADR-0048 で停止の権能へ移る (proposed)。
+    relationships: [権能, dispatcher, 便, orchestrator]
+  - canonical: 停止の権能
+    domain: consumer
+    aliases: [stop]
+    definition: 走っている便 1 本を終端 Stopped へ倒す操作の権能 (ADR-0048・proposed)。 rules 行 role.orchestrator が持ち、 席が撃てるのは便を名指す形だけで、 生きている席を全部止める形と名指しを読めない呼び出しは起動の権能のまま (fail-closed) ＝どの席からも撃てない。
+    relationships: [権能, 起動の権能, live な便, orchestrator, guard]
