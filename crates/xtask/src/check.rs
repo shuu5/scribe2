@@ -61,6 +61,7 @@ pub fn inspect(root: &Path) -> Report {
     };
     let mut measured = vec![
         crate::check_sizes::measure_core_lines(&layout, &files, &limits),
+        crate::check_sizes::measure_core_spawn(&layout, &files),
         crate::check_sizes::measure_file_lines(&files, &limits),
         crate::check_sizes::measure_test_src_ratio(&files, &limits),
         crate::check_sizes::measure_name_literal(&layout, &files),

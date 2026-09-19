@@ -18,7 +18,7 @@ use std::path::Path;
 
 mod write_set;
 
-pub use write_set::{headroom_shortfalls, line_count, read_write_set, Caps, Headroom, NewFilePolicy, WriteSetItem, CORE};
+pub use write_set::{headroom_shortfalls, line_count, read_write_set, Caps, FileLines, Headroom, NewFilePolicy, WriteSetItem, CORE};
 pub(crate) use write_set::is_under;
 
 /// 対象 repo の root に置く宣言 file の名。

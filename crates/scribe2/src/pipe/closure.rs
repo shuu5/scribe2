@@ -307,12 +307,23 @@ fn test_region<'t>(path: &str, text: &'t str) -> &'t str {
     if path.split('/').any(|segment| segment == TESTS_DIR) {
         return text;
     }
-    let start = if text.starts_with(TEST_MARK) {
+    test_mark_at(text).and_then(|at| text.get(at..)).unwrap_or_default()
+}
+
+/// 本体の区間（[`test_region`] の補・最初の行頭 `#[cfg(test)]` より前・無ければ全体）。path は見ない＝xtask の
+/// core-lines（`split_test_src` の src 側・設計 core-boundary.md §2）と同じく印だけで切る。受付の core の余地
+/// （[`crate::pipe::declaration::FileLines`]）が R-C4-1 の合計をこの区間で数える。
+pub fn src_region(text: &str) -> &str {
+    test_mark_at(text).and_then(|at| text.get(..at)).unwrap_or(text)
+}
+
+/// 最初の行頭 `#[cfg(test)]` の byte 位置（無ければ `None`）。
+fn test_mark_at(text: &str) -> Option<usize> {
+    if text.starts_with(TEST_MARK) {
         Some(0)
     } else {
         text.find(&format!("\n{TEST_MARK}")).map(|at| at.saturating_add(1))
-    };
-    start.and_then(|at| text.get(at..)).unwrap_or_default()
+    }
 }
 
 /// `touches` の 1 項目を読んだもの。

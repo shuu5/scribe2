@@ -300,7 +300,7 @@ fn check_passes_on_workspace() {
 }
 
 /// 判定行の外形の pin（repo root で撃ったときの形）。値は [`shape`] で伏せてある。
-const SUMMARY_PIN: &str = "xtask check: ok core-lines=<v>/<v> file-lines=<v>/<v> \
+const SUMMARY_PIN: &str = "xtask check: ok core-lines=<v>/<v> core-spawn=<v>/<v> file-lines=<v>/<v> \
     test-src-ratio=<v>/<v> name-literal=<v> manifest-name=<v> manifest-version=<v>.<v>.<v> \
     lints-set=<v> lints-optin=<v>/<v> deps-empty=<v> clippy-thresholds=<v> \
     nextest-tmux-group=<v> tests=<v> files=<v> dep-budget=<v>/<v> \

@@ -127,16 +127,41 @@ pub fn line_count(text: &str, width: u64) -> u64 {
     u64::try_from(crate::pipe::closure::weighted_lines(text, width)).unwrap_or(u64::MAX)
 }
 
+/// base の tracked `.rs` 1 本の行数の 2 面（幅で正規化・[`line_count`]）。file の余地（R-C4-2）は全体で、core の
+/// 合計（R-C4-1）は本体だけで数える（xtask check の file-lines / core-lines と同じ切り方・設計 core-boundary.md §2）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileLines {
+    /// repo 相対 path。
+    pub path: String,
+    /// file 全体の行数（xtask の file-lines と同じ式・R-C4-2 の余地の分母）。
+    pub total: u64,
+    /// 本体の行数（最初の行頭 `#[cfg(test)]` より前・[`crate::pipe::closure::src_region`]・xtask の core-lines と
+    /// 同じ式＝in-file の歯は R-C4-3 が数える側で core の合計に入れない）。
+    pub src: u64,
+}
+
+impl FileLines {
+    /// 本文から 2 面を数える（式はここ 1 か所・xtask と crate は互いに依存しないので同じ fixture の歯が一致を守る）。
+    pub fn of(path: &str, text: &str, width: u64) -> Self {
+        Self {
+            path: path.to_owned(),
+            total: line_count(text, width),
+            src: line_count(crate::pipe::closure::src_region(text), width),
+        }
+    }
+}
+
 /// 上限の余地を測る（**受付だけが撃つ**・pure・I/O は呼び手）。
 ///
-/// `lines` は base の tracked `.rs` の (path, 行数)。write-set の `.rs`（dir は展開した配下・新規 file は 0 行）の
-/// うち R-C4-2 の測定範囲（`crates/<c>/src/` 配下＝[`core_of`] が `Some`）のそれぞれについて `file_lines − 行数` を
-/// 余地とし、`size_lines` が余地を超える file を名指す（範囲外の `tests/` 等は門の対象外で測らない）。core（write-set
-/// の `.rs` が在る `crates/<c>/src/` の総行数）は `size_lines × その core に属する write-set の .rs 本数` を見積として
-/// 同じ式で 1 回（母集団は file の余地と同じ [`core_of`] が `Some` の集合＝`tests/` の歯は本数に入れない・C10）。
+/// `lines` は base の tracked `.rs` の行数（[`FileLines`]・全体と本体の 2 面）。write-set の `.rs`（dir は展開した配下・
+/// 新規 file は 0 行）のうち R-C4-2 の測定範囲（`crates/<c>/src/` 配下＝[`core_of`] が `Some`）のそれぞれについて
+/// `file_lines − 全体の行数` を余地とし、`size_lines` が余地を超える file を名指す（範囲外の `tests/` 等は門の対象外で
+/// 測らない）。core（write-set の `.rs` が在る `crates/<c>/src/` の**本体**の総行数＝in-file の歯を除く・xtask の
+/// core-lines と同じ母集団）は `size_lines × その core に属する write-set の .rs 本数` を見積として同じ式で 1 回
+/// （母集団は file の余地と同じ [`core_of`] が `Some` の集合＝`tests/` の歯は本数に入れない・C10）。
 /// **縮む面（`-`）と消える file（`~`）は増分が負**なので、file の余地も求めず core の本数にも数えない（満杯の
 /// file を割る便を受付が断って満杯が固定される型を塞ぐ・§3「上限の余地」・§24）。
-pub fn headroom_shortfalls(items: &[WriteSetItem], lines: &[(String, u64)], caps: Caps) -> Vec<Headroom> {
+pub fn headroom_shortfalls(items: &[WriteSetItem], lines: &[FileLines], caps: Caps) -> Vec<Headroom> {
     let files: Vec<&str> = items
         .iter()
         .flat_map(|item| match *item {
@@ -146,7 +171,7 @@ pub fn headroom_shortfalls(items: &[WriteSetItem], lines: &[(String, u64)], caps
         })
         .filter(|path| path.ends_with(".rs"))
         .collect();
-    let lines_of = |path: &str| lines.iter().find(|(found, _)| found == path).map_or(0, |(_, count)| *count);
+    let lines_of = |path: &str| lines.iter().find(|found| found.path == path).map_or(0, |found| found.total);
     let mut found: Vec<Headroom> = files
         .iter()
         .filter(|path| core_of(path).is_some())
@@ -161,7 +186,8 @@ pub fn headroom_shortfalls(items: &[WriteSetItem], lines: &[(String, u64)], caps
     for core in cores {
         let members = files.iter().filter(|path| core_of(path) == Some(core)).count();
         let estimate = caps.size_lines.saturating_mul(u64::try_from(members).unwrap_or(u64::MAX));
-        let total: u64 = lines.iter().filter(|(path, _)| core_of(path) == Some(core)).map(|(_, count)| *count).sum();
+        // core の合計は本体だけ（in-file の歯を除く＝xtask の core-lines と同じ母集団）。
+        let total: u64 = lines.iter().filter(|found| core_of(&found.path) == Some(core)).map(|found| found.src).sum();
         let headroom = caps.core_lines.saturating_sub(total);
         if estimate > headroom {
             found.push(Headroom { file: CORE.to_owned(), headroom });
@@ -183,11 +209,63 @@ mod tests {
     // flip-check: moved s2-07l.373
 
     use super::super::tests::strings;
-    use super::{headroom_shortfalls, line_count, read_write_set, Caps, Headroom, NewFilePolicy, WriteSetItem, CORE};
+    use super::{headroom_shortfalls, line_count, read_write_set, Caps, FileLines, Headroom, NewFilePolicy, WriteSetItem, CORE};
 
     /// base の tracked file（write-set の項目の fixture）。
     fn base() -> Vec<String> {
         strings(&["crates/toy/src/a.rs", "crates/toy/src/b.rs", "snap/x.snap", "docs/d.md", "crates/toy/tests/t.rs"])
+    }
+
+    /// 歯を持たない file の行数（全体 = 本体）の列。
+    fn whole(rows: &[(&str, u64)]) -> Vec<FileLines> {
+        rows.iter().map(|(path, count)| FileLines { path: (*path).to_owned(), total: *count, src: *count }).collect()
+    }
+
+    /// 歯と本体を持つ file の fixture。**xtask の `check_sizes::tests` / `workspace::tests` の歯と同じ字面・同じ値**
+    /// （幅 10 で test 6 / src 4・全体 10）＝2 crate の切り方の一致を守る。
+    const SPLIT_FIXTURE: &str = "fn a() {}\nabcdefghijklmnopqrstuvwxy\n#[cfg(test)]\nmod t {}\nabcdefghijklmnopqrstuvwxy\n";
+
+    /// 歯を持たない file の fixture（幅 10 で 3 行・全部本体）。
+    const BARE_FIXTURE: &str = "abcdefghijklmnopqrstuvwxy\n";
+
+    /// 行数の 2 面（[`FileLines::of`]）は xtask の core-lines / file-lines と同じ切り方: 同じ fixture が幅 10 で
+    /// 全体 10 / 本体 4（xtask の split の歯は (test, src) = (6, 4)）、幅 120 で全体 5 / 本体 2、歯の無い file は
+    /// 全体 = 本体 = 3。行頭でない `#[cfg(test)]`（字下げ）は印でない・file 先頭の印は本体 0。
+    #[test]
+    fn pipe_intake_core_headroom_src_side_matches_the_xtask_split_fixture() {
+        let split = FileLines::of("crates/toy/src/x.rs", SPLIT_FIXTURE, 10);
+        assert_eq!(split, FileLines { path: "crates/toy/src/x.rs".to_owned(), total: 10, src: 4 }, "(全体, 本体) = (6 + 4, 1 + 3)");
+        let wide = FileLines::of("crates/toy/src/x.rs", SPLIT_FIXTURE, 120);
+        assert_eq!((wide.total, wide.src), (5, 2), "幅が広ければ改行の数");
+        let bare = FileLines::of("crates/toy/src/y.rs", BARE_FIXTURE, 10);
+        assert_eq!((bare.total, bare.src), (3, 3), "歯の無い file は全部本体");
+        let indented = FileLines::of("crates/toy/src/z.rs", "fn a() {}\n    #[cfg(test)]\nfn b() {}\n", 120);
+        assert_eq!((indented.total, indented.src), (3, 3), "字下げの印は本体を切らない");
+        let leading = FileLines::of("crates/toy/src/w.rs", "#[cfg(test)]\nmod t {}\n", 120);
+        assert_eq!((leading.total, leading.src), (2, 0), "先頭の印は本体 0");
+    }
+
+    /// core の合計は**本体**だけで、file の余地は**全体**で測る（同じ file の 2 面が別々に効く）: 本体 1000 / 全体 1399 の
+    /// file を持つ base で、上限 1450 の core の余地は 450（全体で数えれば 51）＝S の新規 1 本（100）は入り、同じ file
+    /// への M（300）は file の余地 101 で断られる（file の余地まで本体で数える実装は 500 で通してしまう）。
+    #[test]
+    fn pipe_intake_core_headroom_counts_the_core_total_by_src_side_and_the_file_by_whole() {
+        let lines = vec![FileLines { path: "crates/toy/src/a.rs".to_owned(), total: 1_399, src: 1_000 }];
+        let policy = NewFilePolicy::MustBeAbsent;
+        let fresh = read_write_set(&strings(&["+crates/toy/src/new.rs"]), &base(), policy).unwrap_or_default();
+        let caps = |size_lines: u64, core_lines: u64| Caps { file_lines: 1_500, core_lines, size_lines };
+        assert!(headroom_shortfalls(&fresh, &lines, caps(100, 1_450)).is_empty(), "本体 1000 → 余地 450 に S の 1 本は入る");
+        assert_eq!(
+            headroom_shortfalls(&fresh, &lines, caps(100, 1_099)),
+            vec![Headroom { file: CORE.to_owned(), headroom: 99 }],
+            "余地は本体から数える（全体なら 0 でなく 99）"
+        );
+        let same = read_write_set(&strings(&["crates/toy/src/a.rs"]), &base(), policy).unwrap_or_default();
+        assert_eq!(
+            headroom_shortfalls(&same, &lines, caps(300, 40_000)),
+            vec![Headroom { file: "crates/toy/src/a.rs".to_owned(), headroom: 101 }],
+            "file の余地は全体 1399 から（本体なら 500 で M が通る）"
+        );
     }
 
     /// write-set の項目は 5 形（実在する file / 末尾 `/` で配下を持つ dir〔展開される〕/ `+` の新規 file〔base に無い〕/
@@ -291,12 +369,12 @@ mod tests {
     /// （`crates/<c>/src/` の合計）は `見積 × .rs 本数` で 1 回。`.rs` でない項目と別 crate の行は数えない。
     #[test]
     fn declaration_headroom_names_the_file_and_the_core_whose_room_is_short() {
-        let lines = vec![
-            ("crates/toy/src/a.rs".to_owned(), 1_400),
-            ("crates/toy/src/b.rs".to_owned(), 100),
-            ("crates/other/src/z.rs".to_owned(), 5_000),
-            ("crates/toy/tests/t.rs".to_owned(), 900),
-        ];
+        let lines = whole(&[
+            ("crates/toy/src/a.rs", 1_400),
+            ("crates/toy/src/b.rs", 100),
+            ("crates/other/src/z.rs", 5_000),
+            ("crates/toy/tests/t.rs", 900),
+        ]);
         let policy = NewFilePolicy::MustBeAbsent;
         let items = read_write_set(&strings(&["crates/toy/src/a.rs", "snap/", "+crates/toy/src/new.rs"]), &base(), policy)
             .unwrap_or_default();
@@ -336,13 +414,13 @@ mod tests {
     }
 
     /// 門の範囲の外（R-C4-2 は `crates/<c>/src/` 配下だけ）の fixture: 余地 50 の src・余地 0 の tests・`.rs` でない doc。
-    fn outside_the_gate_range() -> (Vec<WriteSetItem>, Vec<(String, u64)>) {
+    fn outside_the_gate_range() -> (Vec<WriteSetItem>, Vec<FileLines>) {
         let items = vec![
             WriteSetItem::File("crates/toy/src/a.rs".to_owned()),
             WriteSetItem::File("crates/toy/tests/e2e/t.rs".to_owned()),
             WriteSetItem::File("docs/d.md".to_owned()),
         ];
-        let lines = vec![("crates/toy/src/a.rs".to_owned(), 1_450), ("crates/toy/tests/e2e/t.rs".to_owned(), 2_000)];
+        let lines = whole(&[("crates/toy/src/a.rs", 1_450), ("crates/toy/tests/e2e/t.rs", 2_000)]);
         (items, lines)
     }
 
@@ -363,7 +441,7 @@ mod tests {
     #[test]
     fn declaration_headroom_core_estimate_counts_only_files_in_the_gate_range() {
         let (items, _) = outside_the_gate_range();
-        let lines = vec![("crates/toy/src/a.rs".to_owned(), 100), ("crates/toy/tests/e2e/t.rs".to_owned(), 2_000)];
+        let lines = whole(&[("crates/toy/src/a.rs", 100), ("crates/toy/tests/e2e/t.rs", 2_000)]);
         let caps = |core_lines: u64| Caps { file_lines: 1_500, core_lines, size_lines: 100 };
         assert!(
             headroom_shortfalls(&items, &lines, caps(250)).is_empty(),

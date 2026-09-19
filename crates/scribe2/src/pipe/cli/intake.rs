@@ -726,9 +726,10 @@ pub(super) struct Headrooms {
     pub(super) size_lines: u64,
 }
 
-/// [`Headrooms`] を組む（[`exclude_cap_shortfall`] が余地を測る同じ `items` / `lines` / `caps` から・判定はしない）。
-fn headrooms_of(items: &[WriteSetItem], lines: &[(String, u64)], caps: declaration::Caps) -> Headrooms {
-    let lines_of = |path: &str| lines.iter().find(|(found, _)| found == path).map_or(0, |(_, count)| *count);
+/// [`Headrooms`] を組む（[`exclude_cap_shortfall`] が余地を測る同じ `items` / `lines` / `caps` から・判定はしない・
+/// file の余地は全体の行数から）。
+fn headrooms_of(items: &[WriteSetItem], lines: &[declaration::FileLines], caps: declaration::Caps) -> Headrooms {
+    let lines_of = |path: &str| lines.iter().find(|found| found.path == path).map_or(0, |found| found.total);
     let mut rooms: Vec<(String, u64)> = items
         .iter()
         .flat_map(|item| match *item {
@@ -749,6 +750,8 @@ fn headrooms_of(items: &[WriteSetItem], lines: &[(String, u64)], caps: declarati
 /// 上限の余地（設計 contract-source.md §3・受付だけ）: write-set の各 `.rs` の base の行数と R-C4-2 の差、core の
 /// 合計と R-C4-1 の差に、契約の `size` の見積（rules 行 `pipe.size_<s|m|l>_lines`・数は manifest が持つ・C1）を
 /// 当て、入らない file を名指して断る（file と core の 2 形・先頭の 1 件が理由の 1 行・残りは stderr に並ぶ）。
+/// core の合計は各 file の**本体**（行頭 `#[cfg(test)]` より前）だけ＝xtask check の core-lines と同じ母集団
+/// （[`declaration::FileLines`]・設計 core-boundary.md §2）で、file の余地は全体の行数から。
 ///
 /// dir 項目は base の配下に展開し、`+` の新規 file は 0 行として数え、`-` の縮む面と `~` の消える file は余地も
 /// 本数も数えない（弁別は [`declaration::headroom_shortfalls`] の中）。base に無い項目は数えない（項目の実在は
@@ -777,14 +780,11 @@ fn exclude_cap_shortfall(manifest: &Manifest, contract: &Contract, materials: &M
             declaration::read_write_set(&resolvable, tracked, NewFilePolicy::MustBeAbsent).unwrap_or_default()
         }
     };
-    // 行数は幅で正規化して数える（1 行に詰め込んでも余地は増えない・rules-manifest.md §4）。
+    // 行数は幅で正規化して数える（1 行に詰め込んでも余地は増えない・rules-manifest.md §4）。読めない file は 0 行。
     let width = rules(ROW_LINE_WIDTH)?;
-    let lines: Vec<(String, u64)> = sources
+    let lines: Vec<declaration::FileLines> = sources
         .iter()
-        .map(|source| {
-            let count = source.body.as_deref().map_or(0, |text| declaration::line_count(text, width));
-            (source.path.clone(), count)
-        })
+        .map(|source| declaration::FileLines::of(&source.path, source.body.as_deref().unwrap_or_default(), width))
         .collect();
     let short: Vec<Refuse> = declaration::headroom_shortfalls(&items, &lines, caps)
         .into_iter()
