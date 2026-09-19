@@ -643,6 +643,12 @@ terms:
     domain: consumer
     definition: 席の役割ごとに、 tracked な雛形 1 枚と権能の rules 行から器が生成して session の開始・clear・圧縮後に注入する文 (SRS FR42・ADR-0022 §2.4)。 雛形の外に手書きの規範文を持たず、 hook で塞ぐ事項は書かない。
     relationships: [役割, 権能, hook, 開発 session]
+  - canonical: 圧縮の直前の 1 枠
+    domain: consumer
+    aliases: [precompact slot]
+    definition: 圧縮が始まる直前に、 器が席の直前の発言を逐語で書く高々 1 つの記録 (SRS FR42・設計 docs/design/seat-roles.md)。 置き場は state dir の席ごとの置き場で repo の外。 圧縮の後の session の開始で 1 回だけ出して消す。 AI が書く散文の退避物ではない (SRS FR23 / FR66)。
+    relationships: [席の指示文, state dir, hook, 開発 session]
+    flagged_ambiguities: ["枠: 圧縮の直前の 1 枠 (席の記録) と並列の枠 (変異検査の並列・SRS NFR6) と host の memory の枠 (受付) は別義"]
   - canonical: 席の queue
     domain: consumer
     definition: 席に向けた dispatch・席宛ての質問・裁定済みの次の行動の集合。 管理 tick は queue が空でない idle の席に続きの pointer を注入し、 queue が承認と裁定の待ちだけのときを正当な idle とする (SRS FR43)。
@@ -720,7 +726,7 @@ terms:
   - canonical: 起動の列
     domain: consumer
     aliases: [dispatch queue]
-    definition: 台帳の open な契約のうち、 依存が閉じ・設計 pointer が解決し・memo でなく・同じ中身で審査 (SRS FR49) FAIL の便が無いものの並び。 並び・順序・待ちの理由は SRS FR68 が定める。 land の順序 (SRS FR50) とは別の実体。
+    definition: 台帳の open な契約のうち、 dispatcher が起動を待つものの並び。 入る条件・順序・待ちの理由・release で戻す範囲は SRS FR68 が定める (写さない)。 land の順序 (SRS FR50) とは別の実体。
     relationships: [dispatcher, 介入, 着地]
     flagged_ambiguities: ["列: 起動の列 (dispatcher・起動を待つ契約) と着地の列 (pipe/queue.rs・push の順序) は別義"]
   - canonical: 受付
