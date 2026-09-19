@@ -16,7 +16,7 @@
 //! （[`freeze`] / [`settle_write_set`] / [`exclude_cap_shortfall`] / [`exclude_overlap`] / 重複 run）の中身と「先頭の 1 件で
 //! 返す」形は不変で、Ok 値だけを事実（[`Headrooms`] / [`Crossed`]）へ広げる。
 
-use super::{broken, flag, int_row, list_row, live, need, refused, repo_of, state_dir_of};
+use super::{broken, flag, int_row, list_row, live, need, refused, repo_flag, repo_of, state_dir_of, REPO_FLAG};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
 use crate::fleet::store::{self, LockPolicy, StoreError};
 use crate::fleet::{self, EventKind, Stage};
@@ -274,7 +274,10 @@ pub(super) fn read_args(args: &[String]) -> Result<(table::Pointer, String, Path
     let read = |name: &str| need(args, name).map_err(|reason| denied(DENIAL_ARGS, refused(reason)));
     let design = read("--design")?.to_owned();
     let bead = read("--bead")?.to_owned();
-    let repo = PathBuf::from(read("--repo")?);
+    // repo の読み手は [`repo_flag`] の 1 本（絶対 path に直す・設計 dispatcher.md §12）。必須の断りは `need` と同じ字面。
+    let repo = repo_flag(args)
+        .and_then(|found| found.ok_or(format!("{REPO_FLAG} が要る")))
+        .map_err(|reason| denied(DENIAL_ARGS, refused(reason)))?;
     let pointer = table::parse_pointer(&design)
         .map_err(|err| denied(DENIAL_ARGS, refused(format!("--design {design} は設計 pointer の形でない（{}）", err.reason()))))?;
     Ok((pointer, bead, repo))
@@ -843,10 +846,10 @@ fn remember_repo(state_dir: &Path, id: &str, repo: &Path) -> Result<(), String> 
         .map_err(|err| format!("{} を書けない: {err}", path.display()))
 }
 
-/// 便の repo。`--repo` が上書きし、無ければ写し面 → cwd の順で解く。
+/// 便の repo。`--repo` が上書きし（読み手は [`repo_flag`] の 1 本・絶対 path）、無ければ写し面 → cwd の順で解く。
 pub(super) fn run_repo(args: &[String], state_dir: &Path, id: &str) -> Result<PathBuf, String> {
-    if let Some(found) = flag(args, "--repo")? {
-        return Ok(PathBuf::from(found));
+    if let Some(found) = repo_flag(args)? {
+        return Ok(found);
     }
     match super::repo_of_run(state_dir, id) {
         Some(found) => Ok(found),

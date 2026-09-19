@@ -12,8 +12,8 @@ use super::follow::{Halt, Resumption};
 use super::gate::last_json_object;
 use super::refuse;
 use super::{
-    base_of_run, branch_name, contract_path, emit, git_line, plugin_path, runner_stdout_path, vessel_path,
-    worktree_path, Budget, Emit, Question, RC_QUESTION,
+    base_of_run, branch_name, contract_path, emit, git_line, plugin_path, runner_stderr_path, runner_stdout_path,
+    vessel_path, worktree_path, Budget, Emit, Question, RC_QUESTION,
 };
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
 use crate::fleet::store::LockPolicy;
@@ -204,7 +204,9 @@ fn launch_runner(launch: &Launch<'_>, worktree: &Path, cmd: &str, base: &str) ->
     };
     let (mut command, confinement) = confine::wrap_line(cmd, &wrap);
     // **env を 1 つも足さない**: `.env()` / `.envs()` を呼ばず親の env をそのまま継承する（`TMUX_PANE` だけは外す＝confine）。
-    // stdout は捕らえる（質問 record の読み面・`gate.rs::ask_lens` と同じ形）。stderr は継承。
+    // stdout は捕らえる（質問 record の読み面・`gate.rs::ask_lens` と同じ形）。stderr も同じ形で捕らえる
+    // （起動の失敗の理由を run dir に残す・設計 dispatcher.md §12）——継承のままだと、列が起こした端末の無い
+    // driver では理由の 1 行がどこにも残らない。捕らえた分は終端で呼び手の stderr へそのまま流す（[`relay_stderr`]）。
     // **先頭 process を新しい process group の leader にする**（setsid ではない・cgroup の scope とは
     // 独立）。`SeatSpawned` の pid はそのまま group id として読まれ、`pipe stop` は group 宛てに
     // 撃つ＝wrapper だけが死んで runner や claude が残る形を塞ぐ（設計 §5.6）。
@@ -213,6 +215,7 @@ fn launch_runner(launch: &Launch<'_>, worktree: &Path, cmd: &str, base: &str) ->
         .current_dir(worktree)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .spawn();
     let mut child = match child {
         Ok(found) => found,
@@ -243,9 +246,14 @@ fn launch_runner(launch: &Launch<'_>, worktree: &Path, cmd: &str, base: &str) ->
     }
     let rc = out.status.code().unwrap_or(-1);
     let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
     // 捕らえた stdout は診断 file へ残す（包みの観測行を端末から消さない）。書けない周は
     // 段の判定を変えない（stderr 1 行で loud）。
     let kept = keep_stdout(launch, rc, &stdout).err();
+    // 捕らえた stderr も同じ形で並べて残し（設計 dispatcher.md §12）、呼び手の stderr へそのまま流す。
+    // **段の判定の入力にはしない**（判定は rc と commit の数だけ・C3.3）。
+    let kept_err = keep_stderr(launch, rc, &stderr).err();
+    relay_stderr(&out.stderr);
     let mut outcome = if super::is_stopping(launch.state_dir, launch.run) == Some(true) {
         // **停止中の便は段を 1 件も書かない**（設計 pipeline.md §23）。runner を消したのは `pipe stop` で、
         // 終端は `RunStopped` の経路が書く——ここで `Failed` を書くと stop の終端を上書きする。
@@ -266,8 +274,28 @@ fn launch_runner(launch: &Launch<'_>, worktree: &Path, cmd: &str, base: &str) ->
     if let Some(reason) = kept {
         outcome.err.push(format!("pipe: runner の stdout を残せない: {reason}"));
     }
+    if let Some(reason) = kept_err {
+        outcome.err.push(format!("pipe: runner の stderr を残せない: {reason}"));
+    }
     outcome.err.extend(scope);
     outcome
+}
+
+/// 捕らえた runner の stderr を呼び手の stderr へ**そのまま**流す（設計 dispatcher.md §12「手で撃った周の
+/// 見え方を変えない」）。
+///
+/// [`Outcome::err`] の行にしないのは 2 つの理由——(1) 行にすると `pipe:` の行と同じ層に混ざり、runner が書いた
+/// byte 列（改行の有無・prefix）が変わる。(2) 連鎖（`pipe run`）は rc 0 で終わった段の stderr の行を次の段へ
+/// 持ち越さないので、`Failed` に着いた便（spawn の rc は 0）の理由が呼び手に届かない。継承していたときと同じ
+/// byte 列を同じ stream へ書く＝出力層の行の形（1 行 1 `eprintln`）ではなく stream の中継である。
+/// 書けない周は黙る（理由は run dir の log に残っている・段の判定を変えない）。
+fn relay_stderr(bytes: &[u8]) {
+    if bytes.is_empty() {
+        return;
+    }
+    let mut stderr = std::io::stderr().lock();
+    let _ = stderr.write_all(bytes);
+    let _ = stderr.flush();
 }
 
 /// runner の scope の unit 名に載せる段の名。
@@ -302,16 +330,27 @@ fn stopped_underneath(launch: &Launch<'_>) -> Outcome {
 /// 捕らえた runner の stdout を `<run_dir>/runner.stdout.log` へ見出し付きで append する。
 /// 空の周は書かない（読む理由の無い見出しで埋めない）。
 fn keep_stdout(launch: &Launch<'_>, rc: i32, stdout: &str) -> Result<(), String> {
-    if stdout.trim().is_empty() {
+    keep_stream(&runner_stdout_path(launch.state_dir, launch.run), rc, stdout)
+}
+
+/// 捕らえた runner の stderr を `<run_dir>/runner.stderr.log` へ stdout と同じ形で append する（設計
+/// dispatcher.md §12）。空の周は書かない（file が無い＝runner は stderr に何も言わなかった）。
+fn keep_stderr(launch: &Launch<'_>, rc: i32, stderr: &str) -> Result<(), String> {
+    keep_stream(&runner_stderr_path(launch.state_dir, launch.run), rc, stderr)
+}
+
+/// 捕らえた stream を診断 file へ見出し行（`## <ts> rc=<rc>`）付きで append する **1 本の規律**（stdout と stderr で
+/// 見出しも空の扱いも分けない・pipeline.md §5.2 の 7）。
+fn keep_stream(path: &Path, rc: i32, text: &str) -> Result<(), String> {
+    if text.trim().is_empty() {
         return Ok(());
     }
-    let path = runner_stdout_path(launch.state_dir, launch.run);
     let mut file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(&path)
+        .open(path)
         .map_err(|err| format!("{} を開けない: {err}", path.display()))?;
-    let body = format!("## {} rc={rc}\n{}\n", crate::fleet::cli::now_utc(), stdout.trim_end());
+    let body = format!("## {} rc={rc}\n{}\n", crate::fleet::cli::now_utc(), text.trim_end());
     file.write_all(body.as_bytes())
         .map_err(|err| format!("{} を書けない: {err}", path.display()))
 }

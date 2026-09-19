@@ -26,6 +26,7 @@ mod dispatch;
 mod gate;
 mod intake;
 mod land;
+mod launch_failure;
 mod ratelimit;
 mod spawn;
 mod stop;

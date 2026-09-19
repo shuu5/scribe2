@@ -91,10 +91,28 @@ pub(in crate::pipe) fn state_dir_of(args: &[String]) -> Result<PathBuf, String> 
         .ok_or_else(|| format!("{} に置き場が紐づいていない（vessel init）", root.display()))
 }
 
+/// 対象 repo の flag（読む側と usage の字面の同じ 1 つ）。
+pub(in crate::pipe) const REPO_FLAG: &str = "--repo";
+
+/// `--repo` の値。**pipe の `--repo` の読み手はこの 1 本**である（設計 dispatcher.md §12・C2）。
+///
+/// 値は `std::path::absolute` で**絶対にしてから**返す（標準 library・symlink も存在も見ない＝席の打刻の
+/// 絶対化と同じ関数）。相対のまま使うと便の worktree の場所も相対になり、cwd を worktree に移した子から
+/// 解けない（2026-09-19 の実測）。絶対にできない入力は空文字だけで、断る variant を足すより直す 1 行が
+/// 小さい（C17.4）——その空文字は理由の 1 行で断る（NFR4）。無い周は `None`（cwd へ落とすかは呼び手が決める）。
+pub(in crate::pipe) fn repo_flag(args: &[String]) -> Result<Option<PathBuf>, String> {
+    let Some(found) = flag(args, REPO_FLAG)? else {
+        return Ok(None);
+    };
+    std::path::absolute(found)
+        .map(Some)
+        .map_err(|err| format!("{REPO_FLAG} {found} を絶対 path にできない: {err}"))
+}
+
 /// 対象 repo。`--repo` が無ければ cwd の repo root。
 pub(super) fn repo_of(args: &[String]) -> Result<PathBuf, String> {
-    if let Some(found) = flag(args, "--repo")? {
-        return Ok(PathBuf::from(found));
+    if let Some(found) = repo_flag(args)? {
+        return Ok(found);
     }
     let cwd = std::env::current_dir().map_err(|err| format!("cwd を解決できない: {err}"))?;
     vessel::repo_root(&cwd).ok_or("repo の root を解決できない".to_owned())

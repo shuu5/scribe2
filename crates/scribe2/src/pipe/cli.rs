@@ -30,7 +30,7 @@ pub(super) use args::{broken, flag, int_row, present, refused, state_dir_of};
 pub(in crate::pipe) use intake::{crossings, generated, judge, Denial, Material, Materials};
 pub(super) use run::turn_of;
 pub(super) use state::{live, resolve, stage_of};
-use args::{list_row, manifest_of, need, repo_of};
+use args::{list_row, manifest_of, need, repo_flag, repo_of, REPO_FLAG};
 use resume::{resume, review_then_launch};
 use show::show;
 use state::by_run;
@@ -52,7 +52,7 @@ use crate::name::NAME;
 use intake::intake;
 use preflight::preflight;
 use run::{run_all, start};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use step::{answer_run, approve_run, gate_run, land_run, retire_run};
 
 /// `pipe` の使い方。
@@ -126,10 +126,11 @@ const TERMINALS: [&str; 5] = ["run", "resume", "land", "stop", "retire"];
 /// 起こす**（2026-09-19 の実測: toy の置き場の終端が cwd の repo の bead を起こした）。列を起こす側の
 /// 判定は fail-closed に倒す（NFR4）。
 fn queue_of<'a>(args: &'a [String], manifest: &'a Manifest, driven: Option<&'a Driven>) -> Option<Queue<'a>> {
-    let (Some(state_dir), Some(repo)) = (flag(args, "--state-dir").ok()?, flag(args, "--repo").ok()?) else {
+    // repo の読み手は [`repo_flag`] の 1 本（絶対 path に直す・設計 dispatcher.md §12）。
+    let (Some(state_dir), Some(repo)) = (flag(args, "--state-dir").ok()?, repo_flag(args).ok()?) else {
         return None;
     };
-    let (state_dir, repo) = (PathBuf::from(state_dir), PathBuf::from(repo));
+    let state_dir = PathBuf::from(state_dir);
     Some(Queue {
         state_dir,
         repo,
@@ -273,10 +274,12 @@ pub fn contracts_usage() -> String {
 /// 対の `runner.denied_commands`）と欄の生成物の描画（tracked な `contracts/schema.toml` の出所・設計 contract-source.md §2）。
 pub fn contracts(args: &[String]) -> Outcome {
     let checked = || -> Result<Outcome, String> {
-        let (repo, manifest) = (need(args, "--repo")?, manifest_of(args)?);
+        // repo の読み手は pipe と同じ [`repo_flag`] の 1 本（`need` と同じ字面で必須を断る）。
+        let repo = repo_flag(args)?.ok_or(format!("{REPO_FLAG} が要る"))?;
+        let manifest = manifest_of(args)?;
         let (commands, denied) = (list_row(&manifest, CEILING_ROW)?, list_row(&manifest, DENIED_ROW)?);
         let ceiling = Ceiling { row: CEILING_ROW, commands: &commands, denied: &denied };
-        Ok(super::table::check_repo(Path::new(repo), &ceiling))
+        Ok(super::table::check_repo(&repo, &ceiling))
     };
     match args.first().map(String::as_str) {
         Some("schema") if args.len() == 1 => Outcome::ok(super::table::render_schema()),

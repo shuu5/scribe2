@@ -154,7 +154,27 @@ pub fn plugin_path(state_dir: &Path, id: &str) -> PathBuf {
 /// observed=…`・rate-limit status の集合を育てる唯一の口）が端末から消える。捕らえた全文を
 /// 周ごとに見出し付きで append し、観測面を塞がない。
 pub fn runner_stdout_path(state_dir: &Path, id: &str) -> PathBuf {
-    run_dir(state_dir, id).join("runner.stdout.log")
+    run_dir(state_dir, id).join(runner_log_name(STDOUT))
+}
+
+/// spawn が捕らえた runner の stderr を残す file（診断 file・機械は読まない・設計 dispatcher.md §12）。
+///
+/// 列が起こした driver は端末を持たないので、継承した stderr に出た起動の失敗の理由（rc 2・commit 0 で
+/// `Failed` に着いた便の 1 行）は読める場所に残らない（C10）。stdout の log と並べて 1 本置き、名前は
+/// stdout の log の `stdout` を `stderr` に替えたもの（[`runner_log_name`] の同じ 1 本）。空の周は書かない。
+pub fn runner_stderr_path(state_dir: &Path, id: &str) -> PathBuf {
+    run_dir(state_dir, id).join(runner_log_name(STDERR))
+}
+
+/// runner の stdout の log の stream 名。
+const STDOUT: &str = "stdout";
+
+/// runner の stderr の log の stream 名。
+const STDERR: &str = "stderr";
+
+/// runner の捕らえた stream を残す log の名（`runner.<stream>.log`・stdout と stderr の同じ 1 本の規則）。
+fn runner_log_name(stream: &str) -> String {
+    format!("runner.{stream}.log")
 }
 
 /// gate が逐条の rc を書く file。
