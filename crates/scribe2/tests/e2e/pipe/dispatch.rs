@@ -12,7 +12,7 @@ use super::{
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 use vessel::cli_outcome::RC_OK;
 
 /// 列の 1 行の書き出し（器の字面を借りない＝外形を測る側は自分で書く）。
@@ -620,5 +620,42 @@ fn pipe_terminal_dispatch_hands_the_ledger_client_to_the_run_it_starts() {
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
     assert_eq!(count(), 2, "列の 1 周と子の 1 周で偽の台帳が 2 回呼ばれる（母集団 = 1 周 × 2 段）");
+    clean(&[&repo, &state]);
+}
+
+/// (§5 二重起動) **契機が重なっても同じ bead は 1 本しか起きない**（SRS AC38・母集団 = 起動試行 2 回）。
+///
+/// 1 周は lock を取らない（子を起こす間じゅう着地の列と同じ lock を握らないため）ので、同時に来た 2 つの
+/// 契機は同じ候補をどちらも起こそうとする。落とすのは**受付**である——同じ秒なら run id の衝突
+/// （`DuplicateRun`）、秒を跨げば先の便と write-set が交差（`WriteSetOverlap`）。
+#[test]
+fn pipe_terminal_dispatch_two_overlapping_rounds_start_the_bead_once() {
+    let (repo, state) = repo_with_state();
+    two_rows(&repo);
+    let bd = fake_bd(&state, &[issue("s2-toy.2", 2, "b")]);
+    let args: Vec<String> = [
+        "pipe", "dispatch",
+        "--state-dir", &state.display().to_string(),
+        "--repo", &repo.display().to_string(),
+        "--rules", &dispatch_rules(&state),
+        "--bd", &bd,
+        "--lens", &review_lens_pass(&state),
+        "--runner", "true",
+    ]
+    .iter()
+    .map(|found| (*found).to_owned())
+    .collect();
+    // **同時に撃つ**（片方を待ってから撃つと 2 本目は交差で落ちるだけで、重なりを測れない）。
+    let spawned: Vec<_> = (0..2)
+        .filter_map(|_| Command::new(super::bin()).args(&args).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().ok())
+        .collect();
+    assert_eq!(spawned.len(), 2, "2 つの契機を同時に撃つ");
+    let started: usize = spawned
+        .into_iter()
+        .filter_map(|child| child.wait_with_output().ok())
+        .filter(|out| stdout_of(out).contains("dispatch=started:1"))
+        .count();
+    assert!(started >= 1, "少なくとも一方の 1 周は起こす側に立つ（母集団 2 回）");
+    assert_eq!(created(&state, &["s2-toy.2"], 1), 1, "起動試行 2 回でも便は 1 本（母集団 2 回）");
     clean(&[&repo, &state]);
 }

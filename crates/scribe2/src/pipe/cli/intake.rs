@@ -18,7 +18,7 @@
 
 use super::{broken, flag, int_row, list_row, live, need, refused, repo_of, state_dir_of};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
-use crate::fleet::store::{LockPolicy, StoreError};
+use crate::fleet::store::{self, LockPolicy, StoreError};
 use crate::fleet::{self, EventKind, Stage};
 use crate::name::NAME;
 use crate::pipe::closure::{self, ClosureError, Source};
@@ -127,6 +127,10 @@ fn intake_run(args: &[String], manifest: &Manifest, policy: LockPolicy) -> Resul
         return Err(not_a_repo(&repo).outcome);
     }
     let state_dir = state_dir_of(args).map_err(refused)?;
+    // **入口の排他はここから**（ADR-0019 §2.1・設計 pipeline-conflict.md §2）: [`judge`] と [`create`] を
+    // 1 つの周として閉じる。持たないと、同時に来た 2 つの受付がどちらも「live な便は無い」と読んでから
+    // 両方が run を作る（`s2-07l.366` の実測: 契機を同時に 2 回撃つと 20 回に 1 回 2 本作られた）。
+    let _entrance = Entrance::hold(&state_dir, policy)?;
     let ceiling = ceiling_of(manifest).map_err(|denial| denial.outcome)?;
     // **repo の材料の読みは 1 回**（設計 dispatcher.md §5）。生成も判定も同じ 1 つを借りる。
     let materials = Materials::read(&repo, &ceiling.borrow()).map_err(|denial| denial.outcome)?;
@@ -134,6 +138,39 @@ fn intake_run(args: &[String], manifest: &Manifest, policy: LockPolicy) -> Resul
     let material =
         Material { repo: &repo, manifest, contract: &contract, state_dir: Some(&state_dir), bead: &bead, materials: &materials };
     create(judge(&material), &material, &state_dir, &body, policy)
+}
+
+/// 受付の入口の lock file の名（置き場の直下・**run dir の側に置かない**）。
+///
+/// `pipe/` の下に置くと「断った周は run dir を 1 つも作らない」を測る既存の歯が、lock file を run dir と
+/// 数えて落ちる（`s2-07l.366` の実測 4 本）。入口の lock は便ではないので便の置き場に混ぜない。
+const ENTRANCE_LOCK: &str = "intake.lock";
+
+/// 受付の入口の排他（**[`judge`] と [`create`] を 1 つの周として閉じる**・ADR-0019 §2.1）。
+///
+/// event log の lock（[`store::append_line`] が中で取る）とは**別の lock file** である——同じものを外から
+/// 握ると、`create` の記帳が自分の握った lock を待って止まる。`Drop` で外すので、判定のどの断りに落ちても
+/// 残らない。
+struct Entrance {
+    /// 握っている lock file。
+    lock: PathBuf,
+}
+
+impl Entrance {
+    /// 入口を 1 つだけ通す（取れない周は rc 2＝置き場が壊れている側）。
+    fn hold(state_dir: &Path, policy: LockPolicy) -> Result<Self, Outcome> {
+        std::fs::create_dir_all(state_dir).map_err(|err| broken(format!("受付の入口を作れない: {err}")))?;
+        let lock = state_dir.join(ENTRANCE_LOCK);
+        store::acquire(&lock, policy).map_err(|err| broken(format!("受付の入口の lock を取れない: {err}")))?;
+        Ok(Self { lock })
+    }
+}
+
+impl Drop for Entrance {
+    fn drop(&mut self) {
+        // 外せない lock は次の受付が所有者の生死で回収する（ここで止めない）。
+        let _ = std::fs::remove_file(&self.lock);
+    }
 }
 
 /// rules 行から allowlist と禁じる語を読んで [`Ceiling`] の材料を持つ（借りる側は [`Rows::borrow`]）。
@@ -845,8 +882,32 @@ fn with_write_set(text: &str, files: &[String]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{with_write_set, WriteSet, WRITE_SETS};
+    use super::{with_write_set, Entrance, WriteSet, ENTRANCE_LOCK, WRITE_SETS};
+    use crate::fleet::store::LockPolicy;
     use crate::order::is_declaration_order;
+
+    /// 受付の入口は**同時に 1 つしか通さない**（[`judge`] と [`create`] を 1 周として閉じる・ADR-0019 §2.1）。
+    ///
+    /// 契機が重なると 2 つの受付が同時に来る（`s2-07l.366`）。入口を握れていなければ、どちらも「live な
+    /// 便は無い」と読んでから両方が run を作る。**握っている間は 2 つ目が取れない・外せば取れる**を
+    /// 決定的に測る（同時撃ちの e2e は競合の再現が確率的なので、不変条件はここで固定する）。
+    #[test]
+    fn pipe_terminal_dispatch_entrance_admits_one_holder_at_a_time() {
+        let state = std::env::temp_dir().join(format!("s2-entrance-{}", std::process::id()));
+        let policy = LockPolicy { retry_ms: 60, stale_ms: 60_000 };
+        let first = Entrance::hold(&state, policy).map_err(|out| out.rc);
+        assert!(first.is_ok(), "1 つ目は通る（rc {:?}）", first.as_ref().err());
+        let lock = state.join(ENTRANCE_LOCK);
+        assert!(lock.exists(), "握っている間は lock file が在る");
+        let second = Entrance::hold(&state, policy).map_err(|out| out.rc);
+        assert!(second.is_err(), "握っている間は 2 つ目が取れない（母集団 2 回の取得）");
+        drop(first);
+        assert!(!lock.exists(), "外すと lock file が消える");
+        let third = Entrance::hold(&state, policy).map_err(|out| out.rc);
+        assert!(third.is_ok(), "外れた後は取れる（rc {:?}）", third.as_ref().err());
+        drop(third);
+        std::fs::remove_dir_all(&state).ok();
+    }
 
     /// 弁別は閉じた 2 値で、const slice は宣言順・`as_str` は判定行の token（`derived` / `declared`）。
     #[test]
