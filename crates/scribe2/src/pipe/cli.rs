@@ -58,7 +58,7 @@ use step::{answer_run, approve_run, gate_run, land_run, retire_run};
 /// `pipe` の使い方。
 pub fn usage() -> String {
     format!(
-        "usage: {NAME} pipe <intake|preflight|spawn|approve|answer|gate|land|retire|run|show|resume|stop|report|dispatch> [--state-dir D] [--rules PATH] [stop: --all|--run ID] [dispatch: (1 周)|ls|first|hold|release BEAD] [flags]"
+        "usage: {NAME} pipe <intake|preflight|spawn|approve|answer|gate|land|retire|run|show|resume|stop|report|dispatch> [--state-dir D] [--repo R] [--rules PATH] [stop: --all|--run ID] [dispatch: (1 周)|ls|first|hold|release BEAD] [--runner CMD] [flags]"
     )
 }
 
@@ -79,7 +79,76 @@ pub fn dispatch(args: &[String]) -> Outcome {
         Ok(found) => found,
         Err(err) => return broken(err.to_string()),
     };
-    subcommand(args, &manifest, policy, args.first().map(String::as_str))
+    let verb = args.first().map(String::as_str);
+    let outcome = subcommand(args, &manifest, policy, verb);
+    // **終端の記帳の後・lock の外で列を 1 周撃つ**（設計 dispatcher.md §5）。観測の面は増やさない（§6）ので
+    // 行は足さず、**効果（起こした便の `RunCreated`）だけ**が残る。1 周が失敗しても終端の rc は変えない
+    // ——起こせなかった便は次の契機で拾う。
+    if verb.is_some_and(|found| TERMINALS.contains(&found)) {
+        let _ = queue_of(args, &manifest).map(|queue| queue::fire(&queue.borrow()));
+    }
+    outcome
+}
+
+/// **便が live で無くなりうる subcommand**（設計 dispatcher.md §5「便の終端」）。
+///
+/// 終端を作ったかを見分けずに撃つ——終端が無かった周は交差も受付も動いておらず、列は同じ答えを返す
+/// （起こせる便が増えないだけ）。見分ける述語を足すと、終端の検出と列の判定を 2 か所が別々に決めることになる。
+const TERMINALS: [&str; 5] = ["run", "resume", "land", "stop", "retire"];
+
+/// 列の 1 周の材料を引数から解く（解けない面が 1 つでも在れば `None`＝1 周を撃たない）。
+///
+/// **repo も置き場も引数で名指されていなければ撃たない**（cwd へ落ちない）。列は「この置き場の便」と
+/// 「この repo の契約」を突き合わせる口なので、片方を cwd から推すと**別の repo の契約を別の置き場へ
+/// 起こす**（2026-09-19 の実測: toy の置き場の終端が cwd の repo の bead を起こした）。列を起こす側の
+/// 判定は fail-closed に倒す（NFR4）。
+fn queue_of<'a>(args: &'a [String], manifest: &'a Manifest) -> Option<Queue<'a>> {
+    let (Some(state_dir), Some(repo)) = (flag(args, "--state-dir").ok()?, flag(args, "--repo").ok()?) else {
+        return None;
+    };
+    let (state_dir, repo) = (PathBuf::from(state_dir), PathBuf::from(repo));
+    Some(Queue {
+        state_dir,
+        repo,
+        manifest,
+        bd: flag(args, "--bd").ok()?.unwrap_or(DEFAULT_BD),
+        rules: flag(args, "--rules").ok()?,
+        lens: flag(args, "--lens").ok()?,
+        runner: flag(args, "--runner").ok()?,
+    })
+}
+
+/// 解いた材料（[`queue::Input`] は借りだけを持つので、その借り元をここで持つ）。
+struct Queue<'a> {
+    /// 置き場。
+    state_dir: PathBuf,
+    /// 対象 repo（anchor）。
+    repo: PathBuf,
+    /// 規則の値。
+    manifest: &'a Manifest,
+    /// 台帳 client。
+    bd: &'a str,
+    /// 規則の写しの path（起こす便へそのまま渡す）。
+    rules: Option<&'a str>,
+    /// 審査の lens の口（同上）。
+    lens: Option<&'a str>,
+    /// 実装役の口（同上・無ければ列は 1 本も起こさない）。
+    runner: Option<&'a str>,
+}
+
+impl Queue<'_> {
+    /// 借りの形（列の 1 周が読む）。
+    fn borrow(&self) -> queue::Input<'_> {
+        queue::Input {
+            state_dir: &self.state_dir,
+            repo: &self.repo,
+            manifest: self.manifest,
+            bd: self.bd,
+            rules: self.rules,
+            lens: self.lens,
+            runner: self.runner,
+        }
+    }
 }
 
 /// subcommand 1 つを撃つ（列の 1 周は呼び手が足す）。
@@ -115,16 +184,12 @@ fn with_turn(args: &[String], manifest: &Manifest, mut outcome: Outcome) -> Outc
     outcome
 }
 
-/// 列の 1 周の 1 行（引数から材料を解いて [`queue::turn`] を撃つ）。
+/// 列の 1 周の 1 行（引数から材料を解いて [`queue::fire`] を撃つ＝**起こす側**）。
 fn turn_line(args: &[String], manifest: &Manifest) -> String {
-    let (Ok(state_dir), Ok(repo)) = (state_dir_of(args), repo_of(args)) else {
-        return format!("dispatch=unmeasured reason={ARGS_UNMEASURED}");
-    };
-    let Ok(bd) = flag(args, "--bd") else {
-        return format!("dispatch=unmeasured reason={ARGS_UNMEASURED}");
-    };
-    let input = queue::Input { state_dir: &state_dir, repo: &repo, manifest, bd: bd.unwrap_or(DEFAULT_BD) };
-    queue::line(&queue::turn(&input))
+    match queue_of(args, manifest) {
+        Some(queue) => queue::line(&queue::fire(&queue.borrow())),
+        None => format!("dispatch=unmeasured reason={ARGS_UNMEASURED}"),
+    }
 }
 
 /// 引数から列の材料を解けなかった周の理由（台帳の読めなさ〔`ledger`〕と別の値である）。
@@ -140,19 +205,12 @@ fn queued(args: &[String], manifest: &Manifest, policy: LockPolicy) -> Outcome {
         Err(reason) => return refused(reason),
     };
     match args.get(1).map(String::as_str) {
-        Some("ls") => {
-            let repo = match repo_of(args) {
-                Ok(found) => found,
-                Err(reason) => return refused(reason),
-            };
-            let bd = match flag(args, "--bd") {
-                Ok(found) => found.unwrap_or(DEFAULT_BD),
-                Err(reason) => return refused(reason),
-            };
-            let input = queue::Input { state_dir: &state_dir, repo: &repo, manifest, bd };
-            queue::render(&queue::turn(&input))
-        }
-        Some(name) => match (Mark::parse(name), args.get(2)) {
+        // **観測は起こさない**（設計 §6）: `ls` は [`queue::turn`] を撃ち、[`queue::fire`] は撃たない。
+        Some("ls") => match queue_of(args, manifest) {
+            Some(queue) => queue::render(&queue::turn(&queue.borrow())),
+            None => refused("列の材料（置き場・repo・台帳 client）を解けない".to_owned()),
+        },
+        Some(name) if !name.starts_with("--") => match (Mark::parse(name), args.get(2)) {
             // **印の直後にも 1 周撃つ**（設計 §5）: `hold` は起こす側を増やさないので撃たない。
             (Some(mark), Some(bead)) if !bead.starts_with("--") => {
                 let marked = queue::mark(&state_dir, bead, mark, policy);
@@ -163,8 +221,8 @@ fn queued(args: &[String], manifest: &Manifest, policy: LockPolicy) -> Outcome {
             }
             _ => Outcome::failed(RC_REFUSED, vec![queue::usage()]),
         },
-        // **手動の 1 周**（権能なしの口・設計 §5）: 引数の subcommand が無い周は列を 1 周撃つ。
-        None => Outcome::ok(vec![turn_line(args, manifest)]),
+        // **手動の 1 周**（権能なしの口・設計 §5）: subcommand の無い周（flag だけ・引数なし）は列を 1 周撃つ。
+        _ => Outcome::ok(vec![turn_line(args, manifest)]),
     }
 }
 

@@ -20,11 +20,14 @@ use super::{contract_path, current, git_bytes};
 use crate::cli_outcome::Outcome;
 use crate::fleet::store;
 use crate::fleet::{Event, EventKind, Mark};
+use crate::name::NAME;
 use crate::rules::manifest::Manifest;
 use crate::seat::host_slots_dir;
 use crate::seat::ledger::{self, Dep, Issue};
 use std::collections::{BTreeMap, BTreeSet};
+use std::os::unix::process::CommandExt;
 use std::path::Path;
+use std::process::{Command, Stdio};
 
 /// `intake:memo` の bead（契約が未確定＝列に載せない・`.beads/PRIME.md` R3）。
 const MEMO_LABEL: &str = "intake:memo";
@@ -49,6 +52,10 @@ const ROW_RESERVE_MB: &str = "host.reserve_memory_mb";
 
 /// 枠が空いていない周の理由の字面。
 const SLOT: &str = "slot";
+
+/// 子 process を起こせなかった周の理由の字面。
+const SPAWN: &str = "spawn";
+
 
 /// [`WaitReason`] の全 variant の名（宣言順・`enum-slices` が集合完全性を測る）。
 pub const WAIT_REASONS: &[&str] =
@@ -135,6 +142,8 @@ pub enum Unmeasured {
     NoRule,
     /// 台帳の子 process が起動できない・rc 非 0・JSON 不能・待ち上限超過。
     Ledger,
+    /// 実装役の口（`--runner`）が無い＝起こせないので列を測らない（見る口は `dispatch ls`）。
+    NoRunner,
 }
 
 impl Unmeasured {
@@ -143,11 +152,44 @@ impl Unmeasured {
         match self {
             Self::NoRule => "no-rule",
             Self::Ledger => "ledger",
+            Self::NoRunner => "no-runner",
         }
     }
 }
 
-/// 起動の構築点（`pipe run` の引数まで組んだ 1 件・**撃つのは契機の便**〔設計 §5・契約 (b)〕）。
+/// `pipe` の subcommand の書き出し（子 process の argv の先頭）。
+const PIPE: &str = "pipe";
+
+/// 起こす（通る便だけ `pipe run` を**子 process で**起こす・設計 §3・§5・契約表の行 b）。
+///
+/// **待たない**: 子の完了を待つと終端が次の便の全行程を待つことになる（`pipe run` は intake → 審査 →
+/// spawn → gate → land の driver である）。新しい process group の leader にするのは [`super::spawn`] と
+/// 同じ理由で、終端の process が畳まれても起こした便が道連れにならないためである。
+///
+/// 起こせなかった周は `false` を返して**その便を起こさなかった事実だけ**を残す（終端の rc は呼び手が
+/// 変えない・次の契機で拾う・§5）。判定は turn の 1 回だが、`pipe run` 側の受付は外さない（二重に守る・
+/// planner 裁定 2026-09-19 の条件 (2)）。
+fn start(launch: &Launch) -> bool {
+    Command::new(myself())
+        .arg(PIPE)
+        .args(&launch.argv)
+        .process_group(0)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .is_ok()
+}
+
+/// 自分の binary（`argv[0]`）。PATH で呼ばれた周は同じ名で子も PATH から解ける。
+///
+/// **`current_exe` は使わない**——`/proc/self/exe` を読むのは「器は env も HOME も読まない」（C2.2）の
+/// 外側で、xtask の門が違反として数える。`argv[0]` は**呼ばれ方そのもの**なので、同じ呼ばれ方で子を起こす。
+fn myself() -> String {
+    std::env::args().next().unwrap_or_else(|| NAME.to_owned())
+}
+
+/// 起動の構築点（`pipe run` の引数まで組んだ 1 件・[`start`] がそのまま子 process へ渡す）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Launch {
     /// bead id。
@@ -178,6 +220,14 @@ pub struct Input<'a> {
     pub manifest: &'a Manifest,
     /// 台帳 client（`--bd` か [`ledger::DEFAULT_BD`]）。
     pub bd: &'a str,
+    /// 規則の写しの path（`--rules`）。起こす便へ**そのまま渡す**（列と便が同じ規則で動く）。
+    pub rules: Option<&'a str>,
+    /// 審査の lens の口（`--lens`）。渡された周だけ起こす便へそのまま渡す（既定は便の側が持つ）。
+    pub lens: Option<&'a str>,
+    /// 実装役の口（`--runner`）。**無ければ 1 本も起こさない**——`pipe run` は `--runner` を要り、
+    /// 器は既定を持たない（宣言にも rules 行にも無い・2026-09-19 の実測）。列が勝手な既定を作ると、
+    /// 「何を起こすか」が契約の外で決まる（C5 / C1）。
+    pub runner: Option<&'a str>,
 }
 
 /// 列を 1 周する（**判定は器の既存の関数・記帳はしない**）。
@@ -217,6 +267,30 @@ struct Ledger<'a> {
     closed: BTreeSet<&'a str>,
     /// 1 周ぶんの repo の材料（**読みは 1 周に 1 回**・設計 §5・読めない周は断りの名を全候補が受ける）。
     materials: Result<Materials, Denial>,
+}
+
+/// 列を 1 周して**起こす**（契機の口＝終端の直後・手動の 1 周・印の直後・設計 §5）。
+///
+/// [`turn`] との違いは**起こすかどうかだけ**である（判定は同じ 1 本・C2）。観測の口（`dispatch ls`）は
+/// [`turn`] を撃つ＝**見るだけでは 1 本も起こらない**（§6）。起こせなかった便は起こした数に数えず、
+/// 理由つきで待ちに残す（終端の rc は呼び手が変えない・次の契機で拾う・C10）。
+pub fn fire(input: &Input<'_>) -> Turn {
+    // **実装役の口が無い周は列を測らない**（`pipe run` は `--runner` を要り、器は既定を持たない）。
+    // 起こせないと分かっている周に台帳の子 process を撃つと、便の終端ごとに読みが 1 回乗る（実測: e2e
+    // 全体が 21 秒 → 111 秒）。測っていないので `0 件`とも言わない（C10）——列を見る口は `dispatch ls`。
+    if input.runner.is_none() {
+        return unmeasured(Unmeasured::NoRunner);
+    }
+    let mut turn = turn(input);
+    let failed: Vec<String> =
+        turn.launches.iter().filter(|launch| !start(launch)).map(|launch| launch.bead.clone()).collect();
+    turn.launches.retain(|launch| !failed.contains(&launch.bead));
+    for candidate in &mut turn.candidates {
+        if failed.contains(&candidate.bead) {
+            candidate.reason = Some(WaitReason::Admission { reason: SPAWN });
+        }
+    }
+    turn
 }
 
 /// 列の順序を決める 1 関数（**pure**・設計 §2「順序」）: (1) 介入 `first` (2) 台帳の `priority`（P0 → P4）
@@ -373,7 +447,7 @@ fn blocker(
 
 /// 起動の構築点（`pipe run` の引数を組む・**撃たない**）。
 fn launch_of(input: &Input<'_>, bead: &str, pointer: &Pointer) -> Launch {
-    let argv = vec![
+    let mut argv = vec![
         "run".to_owned(),
         "--design".to_owned(),
         format!("{}#{}", pointer.path, pointer.id),
@@ -384,6 +458,11 @@ fn launch_of(input: &Input<'_>, bead: &str, pointer: &Pointer) -> Launch {
         "--state-dir".to_owned(),
         input.state_dir.display().to_string(),
     ];
+    // 列に渡された道具（規則の写し・審査の lens）は起こす便へそのまま渡す＝**列と便が同じ道具で動く**。
+    // 渡されていない周は何も足さない（既定は便の側が持つ）。
+    for (name, value) in [("--rules", input.rules), ("--lens", input.lens), ("--runner", input.runner)] {
+        argv.extend(value.map(|found| [name.to_owned(), found.to_owned()]).into_iter().flatten());
+    }
     Launch { bead: bead.to_owned(), argv }
 }
 
