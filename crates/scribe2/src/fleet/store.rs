@@ -58,6 +58,11 @@ pub enum StoreError {
     },
     /// lock を取れなかった。
     Lock(String),
+    /// 回収の途中で死んだ process が残した token が在る（`s2-07l.486`・設計 fleet-event-log.md §4）。
+    ///
+    /// **黙って外す側へ倒さない**（外すとその lock は誰でも回収できる＝穴が戻る）。人が見て外す面で、
+    /// 恒久の直しは §8 の OS の file lock である。
+    ReclaimToken(String),
     /// rules 行が引けない。
     Rules(String),
 }
@@ -68,6 +73,7 @@ impl std::fmt::Display for StoreError {
             Self::Io(reason) => write!(f, "fleet: {reason}"),
             Self::Malformed { line, reason } => write!(f, "fleet: {reason} line={line}"),
             Self::Lock(reason) => write!(f, "fleet: lock を取れない（{reason}）"),
+            Self::ReclaimToken(path) => write!(f, "fleet: 回収の token {path} が残っている（人が外す）"),
             Self::Rules(reason) => write!(f, "fleet: rules 行を引けない（{reason}）"),
         }
     }
@@ -338,8 +344,38 @@ pub(crate) fn acquire(lock: &Path, policy: LockPolicy) -> Result<Vec<Warning>, S
     acquire_with(lock, policy, Reclaim::Stale)
 }
 
+/// 回収の token の path（`<lock>.reclaim`）。
+fn reclaim_token(lock: &Path) -> PathBuf {
+    let mut name = lock.as_os_str().to_owned();
+    name.push(".reclaim");
+    PathBuf::from(name)
+}
+
+/// **回収の 1 手**（設計 fleet-event-log.md §4「回収は 1 手」・`s2-07l.486`）。外せたのが自分なら `true`。
+///
+/// 現物の回収は 3 手（本文を読んで死んだ／古いと判じる → `remove_file` → `create_new`）で、同じ死んだ
+/// lock を観測した 2 本が両方とも回収に入ると、**後の 1 本の `remove_file` が先の 1 本が取ったばかりの
+/// 生きた lock を外す**（2 本が同時に lock を持つ）。`rename` で置き換える案は塞がらない——後の 1 本が
+/// path で先の新しい lock を動かすためである（`s2-07l.482` の実測）。
+///
+/// 直しは token 1 つで**回収する者を 1 本に絞る**ことである: `<lock>.reclaim` を `create_new` で取れた
+/// 1 本だけが lock を読み直し、**観測した本文と同じ周に限って**外す。token を取れなかった本と、読み直しが
+/// 観測と違った本（＝既に別の 1 本が取り直した lock）は `false` で、外さずに次の周の取り直しへ戻る。
+fn reclaim(lock: &Path, observed: &str) -> bool {
+    let token = reclaim_token(lock);
+    if OpenOptions::new().create_new(true).write(true).open(&token).is_err() {
+        return false;
+    }
+    // **読み直しが観測と同じ周だけ外す**（違えば別の 1 本が既に取り直している）。
+    let same = fs::read_to_string(lock).is_ok_and(|body| body == observed);
+    let outcome = same && fs::remove_file(lock).is_ok();
+    // token は寿命 μs で必ず外す（残るのは回収の途中で死んだ周だけ＝呼び手が typed に落とす）。
+    let _ = fs::remove_file(&token);
+    outcome
+}
+
 /// [`acquire`] に古い lock の扱いを渡す形（**判定の本文は 1 本**）。
-pub(crate) fn acquire_with(lock: &Path, policy: LockPolicy, reclaim: Reclaim) -> Result<Vec<Warning>, StoreError> {
+pub(crate) fn acquire_with(lock: &Path, policy: LockPolicy, policy_reclaim: Reclaim) -> Result<Vec<Warning>, StoreError> {
     let started = Instant::now();
     let mut warnings = Vec::new();
     loop {
@@ -356,27 +392,28 @@ pub(crate) fn acquire_with(lock: &Path, policy: LockPolicy, reclaim: Reclaim) ->
             }
             Err(_) => {}
         }
-        if owner_is_dead(lock) && fs::remove_file(lock).is_ok() {
+        // **観測は 1 度だけ読む**: 判じた本文と外す本文を同じにする（判定の本文は不変・§4）。
+        let observed = fs::read_to_string(lock).unwrap_or_default();
+        if lock_owner(&observed, started_ms) == Owner::Dead && reclaim(lock, &observed) {
             warnings.push(Warning::DeadOwnerLockRemoved);
             continue;
         }
-        if reclaim == Reclaim::Stale && is_stale(lock, policy.stale_ms) && fs::remove_file(lock).is_ok() {
+        if policy_reclaim == Reclaim::Stale && is_stale(lock, policy.stale_ms) && reclaim(lock, &observed) {
             warnings.push(Warning::StaleLockRemoved);
             continue;
         }
         if started.elapsed() >= Duration::from_millis(policy.retry_ms) {
+            // 回収の途中で死んだ process が残した token は**黙って外さない**（外すと穴が戻る）。
+            let token = reclaim_token(lock);
+            if token.exists() {
+                return Err(StoreError::ReclaimToken(token.display().to_string()));
+            }
             return Err(StoreError::Lock(format!("{} ms 待った", policy.retry_ms)));
         }
         std::thread::sleep(RETRY_TICK);
     }
 }
 
-/// 既存の lock の所有者が死んでいるか（本文の pid を実 probe で判じる）。
-///
-/// 読めない本文（書きかけの空 file を含む）と読めない probe は `false`＝stale の線へ落とす。
-fn owner_is_dead(lock: &Path) -> bool {
-    fs::read_to_string(lock).is_ok_and(|body| lock_owner(&body, started_ms) == Owner::Dead)
-}
 
 /// lock が stale か（mtime が線より古いか）。
 fn is_stale(lock: &Path, stale_ms: u64) -> bool {
@@ -419,10 +456,108 @@ pub fn read_all(dir: &Path) -> Result<Vec<Event>, Vec<StoreError>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{boot_s, lock_owner, started_ms_in, starttime_ticks, ticks_to_ms, Owner, Probe, USER_HZ};
+    use super::{
+        acquire_with, boot_s, lock_owner, reclaim, reclaim_token, started_ms_in, starttime_ticks, ticks_to_ms,
+        LockPolicy, Owner, Probe, Reclaim, StoreError, Warning, USER_HZ,
+    };
     use proptest::prelude::*;
     use proptest::test_runner::Config;
     use std::path::PathBuf;
+
+    /// 確実に居ない pid（`true` を起こして待った pid）。
+    fn dead_pid() -> u32 {
+        let mut child = std::process::Command::new("true").spawn().expect("true を起こせる");
+        let pid = child.id();
+        child.wait().expect("true を待てる");
+        pid
+    }
+
+    /// **回収は 1 手である**（設計 fleet-event-log.md §4・行 c）: 同じ死んだ lock を観測した 2 本のうち、
+    /// 外せるのは **1 本だけ**である（逐次 2 回の呼び出しで `true`, `false`）。
+    ///
+    /// **順序は現物どおりに並べる**: 1 本目が外した後、その 1 本は `create_new` で lock を取り直す。
+    /// 2 本目はそこで初めて回収に入る——3 手（読む → `remove_file` → `create_new`）の形では、この
+    /// 2 本目の `remove_file` が**1 本目が取ったばかりの生きた lock を落とす**（2 本が同時に lock を
+    /// 持つ）。外した直後に 2 回目を撃つだけの並びでは、どちらの実装でも `true`, `false` になって
+    /// 空虚である（`s2-07l.482` で同じ罠を踏んだ）。並行の e2e は負荷で揺れるので置かない。
+    #[test]
+    fn fleet_lock_reclaim_admits_one_of_two_observers() {
+        let dir = scratch("one-of-two");
+        let lock = dir.join("events.jsonl.lock");
+        let observed = format!("{}\n", dead_pid());
+        std::fs::write(&lock, &observed).expect("lock を書ける");
+        // 1 本目: 観測した本文のまま外し、続けて自分の lock を取る（`create_new` の後の姿）。
+        assert!(reclaim(&lock, &observed), "先に token を取った 1 本は外せる");
+        std::fs::write(&lock, format!("{}\n", std::process::id())).expect("1 本目が lock を取る");
+        // 2 本目: **同じ（古い）観測**で回収に入る。外せてはならない。
+        assert!(!reclaim(&lock, &observed), "2 本目は外せない（母集団 2 本）");
+        assert!(lock.exists(), "1 本目が取ったばかりの lock は残る");
+        assert_eq!(
+            std::fs::read_to_string(&lock).unwrap_or_default(),
+            format!("{}\n", std::process::id()),
+            "残るのは 1 本目の lock である"
+        );
+        assert!(!reclaim_token(&lock).exists(), "token は寿命 μs で必ず外れる");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **生きている所有者の（古くない）lock は `Stale` でも `DeadOnly` でも `retry_ms` まで待つ**
+    /// （行 c の done の 3 項目）。回収の 1 手は「外してよい」と判じた周にしか呼ばれない。
+    #[test]
+    fn fleet_lock_reclaim_live_owner_waits_under_both_reclaims() {
+        let dir = scratch("live-owner");
+        let lock = dir.join("events.jsonl.lock");
+        std::fs::write(&lock, format!("{}\n", std::process::id())).expect("lock を書ける");
+        // 古くない線（`stale_ms` を十分大きく）＝外してよい理由が 1 つも無い周。
+        let policy = LockPolicy { retry_ms: 30, stale_ms: 600_000 };
+        for reclaim in [Reclaim::Stale, Reclaim::DeadOnly] {
+            let outcome = acquire_with(&lock, policy, reclaim);
+            assert!(outcome.is_err(), "{reclaim:?} は生きている所有者の lock を奪わない");
+            assert!(lock.exists(), "{reclaim:?} の周でも lock は残る");
+        }
+        assert!(!reclaim_token(&lock).exists(), "回収に入らないので token も作らない");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **stale の回収も同じ 1 手を通る**（`Reclaim::Stale` の周）。`DeadOnly` の周は古くても外さない。
+    #[test]
+    fn fleet_lock_reclaim_stale_goes_through_the_same_one_step() {
+        let dir = scratch("stale");
+        let lock = dir.join("events.jsonl.lock");
+        // **生きている所有者**の lock（自分の pid）を古い側に倒す（`stale_ms` = 1）。
+        std::fs::write(&lock, format!("{}\n", std::process::id())).expect("lock を書ける");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        let policy = LockPolicy { retry_ms: 30, stale_ms: 1 };
+        let dead_only = acquire_with(&lock, policy, Reclaim::DeadOnly);
+        assert!(dead_only.is_err(), "DeadOnly は古くても生きている所有者の lock を奪わない");
+        std::fs::write(&lock, format!("{}\n", std::process::id())).expect("lock を書き直せる");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        let stale = acquire_with(&lock, policy, Reclaim::Stale).expect("Stale は古い lock を回収して取れる");
+        assert_eq!(stale, vec![Warning::StaleLockRemoved], "回収の warning は従来どおり 1 件");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **回収の途中で死んだ process が残した token は黙って外さない**（FailClosed・C11.2）。
+    ///
+    /// `retry_ms` の後に token を名指す typed な error で落ちる（外す側へ倒すと、その lock は誰でも
+    /// 回収できて穴が戻る）。
+    #[test]
+    fn fleet_lock_reclaim_leftover_token_fails_closed_with_its_path() {
+        let dir = scratch("token");
+        let lock = dir.join("events.jsonl.lock");
+        std::fs::write(&lock, format!("{}\n", dead_pid())).expect("lock を書ける");
+        std::fs::write(reclaim_token(&lock), "").expect("token を書ける");
+        let policy = LockPolicy { retry_ms: 30, stale_ms: 30_000 };
+        let outcome = acquire_with(&lock, policy, Reclaim::DeadOnly);
+        match outcome {
+            Err(StoreError::ReclaimToken(path)) => {
+                assert!(path.contains(".reclaim"), "error は token を名指す: {path}");
+            }
+            other => panic!("token が残る周は typed に落ちる: {other:?}"),
+        }
+        assert!(reclaim_token(&lock).exists(), "残った token は黙って外さない");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// 反例の永続化を切り、case 数を 256 に pin する（`tests/e2e/prop.rs` と同じ形）。
     fn config() -> Config {
