@@ -897,6 +897,11 @@ impl Terminal {
     }
 }
 
+/// この binary の build 元 commit（`build.rs` が compile time に焼く・設計 consumer-sync.md §2）。
+///
+/// `--version` の括弧の中身と**同じ 1 つの値**である（3 形: `<sha12>` / `<sha12>+dirty` / `unknown`）。
+const GENERATION: &str = env!("SCRIBE2_BUILD_COMMIT");
+
 /// 台帳の close に書く理由の書き出し（`landed <sha> ci=success`）。
 const CLOSE_REASON: &str = "landed";
 
@@ -1063,9 +1068,11 @@ fn export_verdict(entry: &Land<'_>, new: &str, order: Order) -> Result<(), Strin
         ("evidence", Value::Str(evidence)),
         ("ts", Value::Str(now_utc())),
         ("order", Value::Str(order.as_value())),
-        // **binary の世代**（設計 contract-source.md §5 手順 4）= この便が載せた main の sha。
-        // 自分の版がこの sha より古い周に起動を断るかは後続（§12）で、ここは事実を残すだけ。
-        ("generation", Value::Str(new.to_owned())),
+        // **binary の世代**（設計 contract-source.md §5 手順 4）= **この着地を作った binary の build 元 commit**
+        // （§2 の値・`--version` の括弧の中身と同じ 1 本）。自分の版が古い周に起動を断るかは後続（§12）で、
+        // ここは事実を残すだけである。**着地した sha は同じ行の `sha` が既に持つ**ので、同値の欄を 2 つ
+        // 並べない——2 つ在ると読み手はどちらを版の比較に使うのか判じられない（C10）。
+        ("generation", Value::Str(GENERATION.to_owned())),
     ];
     // verdict の size の材料は base が分かった周だけ載る（無い周も読めない周も同じ＝欄を持たない）。
     let base = super::base_of_run(entry.state_dir, entry.run).known();

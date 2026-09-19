@@ -3399,3 +3399,33 @@ fn pipe_terminal_land_only_replays_the_terminal_without_relanding() {
     assert!(argv.contains(&landed), "理由は**1 周目に着地した sha**を名指す（HEAD の今の sha ではない）: {argv}");
     clean(&[&repo, &state]);
 }
+
+/// (§5 手順 4) record の `generation` は **binary の build 元 commit**（`--version` の括弧の中身と同じ 1 本）で、
+/// 同じ行の `sha`（着地した commit）とは**別の値**である。
+///
+/// 同値の欄を 2 つ並べると、読み手はどちらを版の比較（§12）に使うのか判じられない（C10）。
+#[test]
+fn pipe_terminal_land_generation_is_the_binary_build_commit_not_the_landed_sha() {
+    let (repo, state) = repo_with_state();
+    let marker = state.join("lens-ran");
+    let design = write_contract(&repo, &[], &[]);
+    let id = gated_pass(&repo, &state, &design, &marker);
+    let out = land_extra(&repo, &state, &id, &[]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "land は rc 0: {}", stderr_of(&out));
+    let pairs = exported_pairs(&state, &id);
+    let landed = git(&repo, &["rev-parse", "refs/heads/main"]);
+    assert_eq!(value_of(&pairs, "sha"), landed, "sha は着地した commit: {pairs:?}");
+    // `--version` の括弧の中身を現物から採る（器の字面を借りずに外形から測る）。
+    let version = String::from_utf8_lossy(&Command::new(bin()).arg("--version").output().expect("--version").stdout)
+        .trim()
+        .to_owned();
+    let generation = version
+        .rsplit_once('(')
+        .and_then(|(_, tail)| tail.strip_suffix(')'))
+        .unwrap_or_default()
+        .to_owned();
+    assert!(!generation.is_empty(), "--version の括弧の中身を読める: {version}");
+    assert_eq!(value_of(&pairs, "generation"), generation, "generation は build 元 commit: {pairs:?}");
+    assert_ne!(value_of(&pairs, "generation"), value_of(&pairs, "sha"), "同値の欄を 2 つ並べない: {pairs:?}");
+    clean(&[&repo, &state]);
+}
