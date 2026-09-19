@@ -37,22 +37,18 @@ pub(super) fn preflight(args: &[String], manifest: &Manifest) -> Outcome {
         Ok(found) => found,
         Err(denial) => return denial.outcome,
     };
-    // 受付と**同じ 1 本**で base の行から契約を組む（C2）。行を引けない・表の検査に落ちる周は判定の対象が
-    // 揃わないので、受付と同じ断りをそのまま返して末尾に `broken` を積む（0 件と混ぜない）。
-    // **repo の材料の読みは 1 回**（設計 dispatcher.md §5）。生成も判定も同じ 1 つを借りる。
+    // 受付と**同じ 1 本**で base の行から契約を組む（C2）。材料を読めない・行を引けない・表の検査に落ちる
+    // 周は判定の対象が揃わないので、受付と同じ断りをそのまま返して末尾に判定行を積む（0 件と混ぜない）。
+    // **repo の材料の読みは 1 回**（設計 dispatcher.md §5）。生成も判定も同じ 1 つを借りる。材料の読みの
+    // 断り（tracked を読めない・宣言が上限に外れる）は、`s2-07l.366` の前は [`generated`] の中で立って
+    // いた＝**末尾の判定行は同じ 1 本で積む**（C2・積み忘れると「対象が揃わなかった周」だけ末尾を失う）。
     let materials = match Materials::read(&repo, &ceiling.borrow()) {
         Ok(found) => found,
-        Err(denial) => return denial.outcome,
+        Err(denial) => return tailed(denial),
     };
     let contract = match generated(&repo, &pointer, &materials) {
         Ok((found, _)) => found,
-        Err(denial) => {
-            // 末尾は **rc に従う**（読めない = broken・撃てない = 断り 1 件）。行の欠陥は「読めない」ではない。
-            let mut outcome = denial.outcome;
-            let tail = if outcome.rc == RC_BROKEN { format!("{TAIL} broken") } else { format!("{TAIL} refused n=1") };
-            outcome.out.push(tail);
-            return outcome;
-        }
+        Err(denial) => return tailed(denial),
     };
     // 置き場は交差と重複 run の 2 検査にだけ要る。解けない周は断りでなく `overlap=unmeasured`。
     let state_dir = state_dir_of(args).ok();
@@ -65,6 +61,16 @@ pub(super) fn preflight(args: &[String], manifest: &Manifest) -> Outcome {
         materials: &materials,
     };
     render(&judge(&material), state_dir.is_some())
+}
+
+/// 判定の対象が揃わなかった周の断りに**末尾の判定行**を積む（judge を撃てないので事実の行は無い）。
+///
+/// 末尾は **rc に従う**（読めない = broken・撃てない = 断り 1 件）。行の欠陥は「読めない」ではない。
+fn tailed(denial: Denial) -> Outcome {
+    let mut outcome = denial.outcome;
+    let tail = if outcome.rc == RC_BROKEN { format!("{TAIL} broken") } else { format!("{TAIL} refused n=1") };
+    outcome.out.push(tail);
+    outcome
 }
 
 /// judge の結果を 1 行 1 事実に描く。`measured` は置き場が在った（交差を撃った）か。

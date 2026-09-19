@@ -11,15 +11,14 @@
 //! 台帳を読めない周は列を空と読まず [`Unmeasured`] で 1 本も起こさない（`0 件`と融合しない・C10・NFR4）。
 
 use super::admission::{self, Sizes};
-use super::cli::{crossings, generated, int_row, judge, Denial, Material, Materials};
+use super::cli::{crossings, generated, int_row, judge, live, Denial, Material, Materials};
 use super::contract::Contract;
 use super::refuse::overlaps;
-use super::review::ReviewCheck;
 use super::table::{self, Pointer};
 use super::{contract_path, current, git_bytes};
 use crate::cli_outcome::Outcome;
 use crate::fleet::store;
-use crate::fleet::{Event, EventKind, Mark};
+use crate::fleet::{Event, EventKind, Mark, Stage};
 use crate::name::NAME;
 use crate::rules::manifest::Manifest;
 use crate::seat::host_slots_dir;
@@ -58,8 +57,7 @@ const SPAWN: &str = "spawn";
 
 
 /// [`WaitReason`] の全 variant の名（宣言順・`enum-slices` が集合完全性を測る）。
-pub const WAIT_REASONS: &[&str] =
-    &["dependency", "overlap", "admission", "hold", "review-failed", "no-design-pointer"];
+pub const WAIT_REASONS: &[&str] = &["dependency", "overlap", "admission", "hold", "settled", "no-design-pointer"];
 
 /// 列に載ったのに起こさない理由（**閉じた型**・設計 §3 の表）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -86,10 +84,17 @@ pub enum WaitReason {
         /// 印を付けた event の ts。
         since: String,
     },
-    /// 同じ契約で審査 FAIL / INCONCLUSIVE に終わった便が在る（契約 file の sha が変わっていない）。
-    ReviewFailed {
-        /// 審査に落ちた便の契約 file の sha。
+    /// 同じ契約 file の sha で**終端に着いた**便が在る（`Landed` / `Failed` / `Stopped`、審査や gate の
+    /// 判定で終端になった段も含む）。契約が改訂されて sha が動けば列に戻る。
+    ///
+    /// `s2-07l.366` で「審査 FAIL の便」から広げた: 便が終端に着いても bead は台帳で `open` のまま
+    /// （器は台帳に書かない・C15）で live な便も無いので、終端が来るたびに同じ契約が起こし直される
+    /// （着地から close までの無限再起動）。
+    Settled {
+        /// 終端に着いた便の契約 file の sha。
         sha: String,
+        /// その便の段（replay が見た最新）。
+        stage: Stage,
     },
     /// acceptance に設計 pointer の行が無い。
     NoDesignPointer,
@@ -103,7 +108,7 @@ impl WaitReason {
             Self::Overlap { .. } => "overlap",
             Self::Admission { .. } => "admission",
             Self::Hold { .. } => "hold",
-            Self::ReviewFailed { .. } => "review-failed",
+            Self::Settled { .. } => "settled",
             Self::NoDesignPointer => "no-design-pointer",
         }
     }
@@ -116,7 +121,7 @@ impl WaitReason {
             Self::Overlap { ref with, files } => format!("{name}:{with}/{files}"),
             Self::Admission { reason } => format!("{name}:{reason}"),
             Self::Hold { ref since } => format!("{name}:{since}"),
-            Self::ReviewFailed { ref sha } => format!("{name}:{sha}"),
+            Self::Settled { ref sha, stage } => format!("{name}:{sha}/{}", stage.as_str()),
             Self::NoDesignPointer => name.to_owned(),
         }
     }
@@ -353,8 +358,8 @@ fn entry_of(input: &Input<'_>, issue: &Issue, ledger: &Ledger<'_>) -> (Candidate
         Err(denial) => return wait(WaitReason::Admission { reason: denial.name }),
     };
     let contract = match generated(input.repo, &pointer, materials) {
-        Ok((found, body)) => match failed_review(input, &issue.id, &body) {
-            Some(sha) => return wait(WaitReason::ReviewFailed { sha }),
+        Ok((found, body)) => match settled(input, &issue.id, &body) {
+            Some((sha, stage)) => return wait(WaitReason::Settled { sha, stage }),
             None => found,
         },
         Err(denial) => return wait(WaitReason::Admission { reason: denial.name }),
@@ -480,23 +485,25 @@ fn pointer_of(acceptance: &str) -> Option<Pointer> {
     table::parse_pointer(line.trim()).ok()
 }
 
-/// 同じ契約で審査に落ちた便が在れば、その便の契約 file の sha（設計 §2「審査 FAIL の列外」）。
+/// 同じ契約 file の sha で**終端に着いた**便が在れば、その便の sha と段（設計 §2「終端の便は列外」）。
 ///
-/// 突き合わせるのは**便の写しの中身**である（sha は名札）。`git hash-object` を撃てない周は sha を測れない
-/// ので列外にしない（測れないを「落ちた」に読み替えない・C10）。
-fn failed_review(input: &Input<'_>, bead: &str, body: &str) -> Option<String> {
+/// 突き合わせるのは**便の写しの中身**である（sha は名札）。終端かは受付と同じ 1 本（[`live`]）で判じ、
+/// 測れない周（`None`）はここで外さない——その便は交差の検査が `WriteSetUnreadable` で断る側に倒す。
+/// `git hash-object` を撃てない周は sha を測れないので列外にしない（`generated` が base を読めている＝
+/// git は撃てているので、実際には到達しない）。
+fn settled(input: &Input<'_>, bead: &str, body: &str) -> Option<(String, Stage)> {
     let state = current(input.state_dir).ok()?;
     // **直前の便から見る**（run id は `<bead>-<UTC の秒>` ＝ id の昇順が時系列なので、逆順が新しい側）。
-    // 同じ契約 file を持つ最初の 1 本だけを見る——古い便の FAIL は、その後 PASS した同じ契約を塞がない。
-    let (id, path) = state.runs.iter().rev().filter(|(_, run)| run.bead == bead).find_map(|(id, _)| {
+    // 同じ契約 file を持つ最初の 1 本だけを見る——古い便の終端は、その後起こし直した同じ契約を塞がない。
+    let (id, stage, path) = state.runs.iter().rev().filter(|(_, run)| run.bead == bead).find_map(|(id, run)| {
         let path = contract_path(input.state_dir, id);
-        std::fs::read_to_string(&path).is_ok_and(|found| found == body).then_some((id, path))
+        std::fs::read_to_string(&path).is_ok_and(|found| found == body).then_some((id, run.stage, path))
     })?;
-    if !matches!(ReviewCheck::judge(input.state_dir, id), ReviewCheck::Stopped(_)) {
+    if live(input.state_dir, id, stage) != Some(false) {
         return None;
     }
     let sha = git_bytes(input.repo, &["hash-object", "--", &path.display().to_string()])?;
-    String::from_utf8(sha).ok().map(|found| found.trim().to_owned())
+    String::from_utf8(sha).ok().map(|found| (found.trim().to_owned(), stage))
 }
 
 /// 受付の枠の式の 2 線（読めない行は 0＝[`admission::has_room`] が `Free::Unmeasured` で待たせない側に倒す）。
@@ -598,7 +605,7 @@ pub fn mark(state_dir: &Path, bead: &str, mark: Mark, policy: store::LockPolicy)
 #[cfg(test)]
 mod tests {
     use super::{digits_of, marks_of, order, Candidate, WaitReason, WAIT_REASONS};
-    use crate::fleet::{Event, EventKind, Mark, SCHEMA};
+    use crate::fleet::{Event, EventKind, Mark, Stage, SCHEMA};
 
     /// 候補 1 件（印と priority だけを呼び手が選ぶ）。
     fn candidate(bead: &str, priority: Option<u64>, mark: Option<Mark>) -> Candidate {
@@ -679,7 +686,7 @@ mod tests {
             WaitReason::Overlap { with: "r1".to_owned(), files: 2 },
             WaitReason::Admission { reason: "cap-headroom" },
             WaitReason::Hold { since: "t1".to_owned() },
-            WaitReason::ReviewFailed { sha: "abc".to_owned() },
+            WaitReason::Settled { sha: "abc".to_owned(), stage: Stage::Landed },
             WaitReason::NoDesignPointer,
         ];
         let names: Vec<&str> = listed.iter().map(WaitReason::as_str).collect();
@@ -692,7 +699,7 @@ mod tests {
                 "overlap:r1/2",
                 "admission:cap-headroom",
                 "hold:t1",
-                "review-failed:abc",
+                "settled:abc/Landed",
                 "no-design-pointer",
             ],
             "値を持つ 5 件は値も描く"
