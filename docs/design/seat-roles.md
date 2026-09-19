@@ -208,7 +208,7 @@ C1 / C5（権能の値は行・裁定 id）・C1.2（生成文に手書きの規
 - 題は台帳の自由文なので 1 行に畳み（改行と制御文字を空白へ）幅で切る。行頭の marker を題が偽装しても行の種類は行頭の 1 語で決まる（題は 3 語目以降にしか現れない）。
 - 極性: 台帳が読めない・git が無い・anchor が repo でない周は、その種類だけ `[RECENT-UNMEASURED]` を出して他の種類と §5 の指示文は出す（fail-open・読みの失敗で注入全体を黙らせない）。理由は閉じた enum（`ledger-unreadable` / `ledger-timeout` / `git-unavailable` / `not-a-repo`）。極性一覧に 1 行。
 - 置き場: `seat/` の子 module 1 枚（行 o の write-set の `+` の file）。hook の SessionStart の口が §5 の指示文の直後に呼ぶ。source（`startup` / `resume` / `clear` / `compact`）で出し分けない（どの入口でも同じ事実）。
-- 歯（`tests/e2e/hook.rs`・接頭辞 `hook_session_recent_`）: 偽の `bd`（JSON を返す script）と toy repo で、(a) in_progress の bead が `[RECENT-WIP]` に全件出る／(b) 24 時間の窓の内と外が分かれ、上限で切った周に `[RECENT-CUT]` が shown と total を持つ／(c) 台帳が読めない周は `[RECENT-UNMEASURED] kind=wip reason=ledger-unreadable` で、§5 の 11 行と git の行は出る／(d) git の行が head・branch・ahead / behind を持ち、dirty な worktree が `[RECENT-DIRTY]` に出る／(e) 登録の無い席は今と同じく 0 byte／(f) 改行入りの題が 1 行に畳まれ、行数が増えない。
+- 歯（`tests/e2e/hook.rs`・接頭辞 `hook_session_recent_`）: 偽の `bd`（JSON を返す script）と toy repo で、(a) in_progress の bead が `[RECENT-WIP]` に全件出る／(b) 24 時間の窓の内と外が分かれ、上限で切った周に `[RECENT-CUT]` が shown と total を持つ／(c) 台帳が読めない周は `[RECENT-UNMEASURED] kind=wip reason=ledger-unreadable` で、§5 の 11 行と git の行は出る／(d) git の行が head・branch・ahead / behind を持ち、`[RECENT-COMMIT]` が直近の commit の短い sha と subject を新しい順に持ち（上限を超える周は `[RECENT-CUT] kind=commit`）、dirty な worktree が `[RECENT-DIRTY]` に出る／(e) 登録の無い席は今と同じく 0 byte／(f) 改行入りの題が 1 行に畳まれ、行数が増えない／(g) 読めた上で 0 件の種類（in_progress が 0・窓の内の更新が 0・dirty が 0）は `[RECENT-NONE] kind=<種類>` を出し、同じ種類の `[RECENT-UNMEASURED]` は出ない（(c) と対＝0 件と測れないの両側を測る）。
 - 触らない: §5 の雛形と穴・`Issue` の field・rules 行・列（dispatch）の読み。
 - 却下案: `{ledger}` の穴の値を複数行に広げる（雛形の行の規律と xtask の検査が「1 穴 1 値」を前提にしている・ADR-0045 §2 (3) の 11 行が動く）／席が notes に書く習慣の行を雛形に足す（規範文の追加・N2）／直近の会話を要約して持ち越す（作業記憶の再導入）。
 
@@ -350,7 +350,7 @@ section = "21"
 write-set = ["+crates/scribe2/src/seat/recent.rs", "crates/scribe2/src/seat/mod.rs", "crates/scribe2/src/seat/ledger.rs", "crates/scribe2/src/hook/mod.rs", "crates/scribe2/src/polarity.rs", "crates/scribe2/tests/e2e/hook.rs", "crates/scribe2/tests/e2e/polarity.rs", "crates/scribe2/tests/e2e/snapshots/e2e__polarity__polarity_external_form.snap", "docs/design/polarity.md", "docs/design/seat-roles.md"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail hook_session_recent_"]
 size = "S"
-done = "偽の台帳と toy repo で、SessionStart が 11 行の指示文を変えずにその後ろへ仕掛かり中の bead の全件・24 時間の窓の直近更新（上限で切った周は shown と total）・git の head と branch と ahead / behind・dirty な worktree を出し、台帳が読めない周はその種類だけ UNMEASURED で他は出て、登録の無い席は 0 byte のまま"
+done = "偽の台帳と toy repo で、SessionStart が 11 行の指示文を変えずにその後ろへ仕掛かり中の bead の全件・24 時間の窓の直近更新（上限で切った周は shown と total）・git の head と branch と ahead / behind・直近の commit の短い sha と subject・dirty な worktree を出し、読めた上で 0 件の種類は NONE・台帳が読めない周はその種類だけ UNMEASURED で他は出て（0 件と測れないの両側）、改行入りの題は 1 行に畳まれ、登録の無い席は 0 byte のまま"
 
 [[contract]]
 id = "p"
@@ -360,5 +360,5 @@ section = "22"
 write-set = ["+crates/scribe2/src/hook/precompact.rs", "crates/scribe2/src/hook/mod.rs", "crates/scribe2/src/hook/stamp.rs", "crates/scribe2/src/main.rs", "crates/scribe2/src/polarity.rs", "crates/xtask/src/genmanifest.rs", "hooks/hooks.json", "crates/scribe2/tests/e2e/hook.rs", "crates/scribe2/tests/e2e/polarity.rs", "crates/scribe2/tests/e2e/snapshots/e2e__polarity__polarity_external_form.snap", "crates/scribe2/tests/e2e/snapshots/e2e__hook__vessel_external_form.snap", "docs/design/polarity.md", "docs/design/vessel-hook.md", "docs/design/seat-roles.md"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail hook_precompact_", "cargo nextest run -p xtask --no-tests=fail gen_manifest_hooks_json_precompact_"]
 size = "S"
-done = "偽の transcript と toy repo で、PreCompact が rc 0・stdout 0 byte のまま席の直近の発言を 1 枠に書き、続く source = compact の SessionStart が [PRECOMPACT] と逐語の文を 1 回だけ出して枠を消し、startup では出さず消さず、transcript が読めない周は枠を書かず、生成 hooks.json の PreCompact の行が --pane と --project を運ぶ"
+done = "偽の transcript と toy repo で、PreCompact が rc 0・stdout 0 byte のまま席の直近の発言を 1 枠に書き、続く source = compact の SessionStart が [PRECOMPACT] と逐語の文を 1 回だけ出して枠を消し、startup では出さず消さず、transcript が読めない周と登録の無い席は枠を書かず、幅を超える文は切られて切った事実が行に出て、生成 hooks.json の PreCompact の行が --pane と --project を運ぶ"
 <!-- contracts:end -->
