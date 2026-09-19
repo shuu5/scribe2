@@ -1269,7 +1269,8 @@ mod tests {
             Terminal::PushFailed("git".to_owned()),
             Terminal::CiFailed,
             Terminal::CiUnmeasurable,
-            Terminal::CloseFailed("close:failed:rc=1".to_owned()),
+            // **前置きの字面は produce する側から採る**（fixture の literal で満たすと対の assert が空虚）。
+            Terminal::CloseFailed(crate::ledger::CloseError::Unlaunchable.render()),
         ];
         let tokens: Vec<String> = listed.iter().map(Terminal::as_token).collect();
         assert_eq!(tokens.len(), TERMINAL_TOKENS.len(), "母集団 {} 値: {tokens:?}", TERMINAL_TOKENS.len());

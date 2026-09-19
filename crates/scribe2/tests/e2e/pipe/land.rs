@@ -3267,16 +3267,22 @@ fn exec_script(path: &Path, body: &str) -> String {
 
 /// 偽 remote（bare repo）・偽 CI（`conclusion` を返す 1 行）・偽 bd を用意し、宣言に `remote` と
 /// `ci-cmd` を足して commit する。**`.vessel.toml` は HEAD の tree が読み面**なので commit まで行う。
+fn fake_terminal(repo: &Path, state: &Path, conclusion: &str) -> FakeTerminal {
+    let body = format!("[{{\"status\":\"completed\",\"conclusion\":\"{conclusion}\"}}]");
+    fake_terminal_json(repo, state, &body)
+}
+
+/// [`fake_terminal`] の一般形（偽 CI が返す JSON を呼び手が選ぶ）。
 #[expect(
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
-fn fake_terminal(repo: &Path, state: &Path, conclusion: &str) -> FakeTerminal {
+fn fake_terminal_json(repo: &Path, state: &Path, json: &str) -> FakeTerminal {
     let remote = state.join("remote.git");
     git(state, &["init", "--bare", "-q", &remote.display().to_string()]);
     git(repo, &["remote", "add", "fake", &remote.display().to_string()]);
     // 偽 CI: 渡された sha を読み捨てて JSON 1 行を返す（`{sha}` の穴は器が埋める）。
-    let ci = exec_script(&state.join("fake-ci.sh"), &format!("printf '[{{\"status\":\"completed\",\"conclusion\":\"{conclusion}\"}}]\\n'\n"));
+    let ci = exec_script(&state.join("fake-ci.sh"), &format!("cat <<'JSON'\n{json}\nJSON\n"));
     // 偽 bd: argv をそのまま log へ書いて rc 0（書きは close の 1 種だけ）。
     let bd_log = state.join("bd-argv.txt");
     exec_script(&state.join("fake-bd.sh"), &format!("printf '%s\\n' \"$@\" > '{}'\n", bd_log.display()));
@@ -3427,5 +3433,50 @@ fn pipe_terminal_land_generation_is_the_binary_build_commit_not_the_landed_sha()
     assert!(!generation.is_empty(), "--version の括弧の中身を読める: {version}");
     assert_eq!(value_of(&pairs, "generation"), generation, "generation は build 元 commit: {pairs:?}");
     assert_ne!(value_of(&pairs, "generation"), value_of(&pairs, "sha"), "同値の欄を 2 つ並べない: {pairs:?}");
+    clean(&[&repo, &state]);
+}
+
+/// (§5 手順 2) **落ちた run が 1 本在れば、別の run が走っていても `ci:failure`** である。
+///
+/// 実 CI では複数の workflow が並ぶので「1 本が落ちた後も別の 1 本が走っている」が常態である。
+/// 未完了を先に見る実装は、**測って落ちた事実**を上限いっぱい待った末の `ci:unmeasurable` に化けさせる
+/// （C10 の反転）。落ちたと分かった時点で待つ理由は無い。
+#[test]
+fn pipe_terminal_land_ci_failure_wins_over_a_still_running_workflow() {
+    let (repo, state) = repo_with_state();
+    let json = "[{\"status\":\"completed\",\"conclusion\":\"failure\"},{\"status\":\"in_progress\",\"conclusion\":null}]";
+    let tools = fake_terminal_json(&repo, &state, json);
+    let marker = state.join("lens-ran");
+    let design = write_contract(&repo, &[], &[]);
+    let id = gated_pass(&repo, &state, &design, &marker);
+    let bd = state.join("fake-bd.sh").display().to_string();
+    // **上限は fixture の manifest から渡す**（埋め込みの 900 s を待たない）。落ちた run を先に見ない
+    // 実装はここで上限まで待ってから `ci:unmeasurable` を名乗る＝この歯はその差で落ちる。
+    let rules = ceiling_rules(&state);
+    let out = land_extra(&repo, &state, &id, &["--bd", &bd, "--rules", &rules]);
+    assert_eq!(out.status.code(), Some(1), "close しなかった周は rc 1: {}", stderr_of(&out));
+    assert!(
+        stdout_of(&out).contains("terminal=ci:failure"),
+        "走っている run が同居しても **failure** を名乗る（unmeasurable に化けない）: {}",
+        stdout_of(&out)
+    );
+    assert!(!tools.bd_log.exists(), "台帳 client は 1 度も撃たれない");
+    // 負例の対: 同じ形で落ちた run を外すと（走っている run だけ）測れない側へ倒れる。
+    // **上限は fixture の manifest から渡す**（埋め込みの 900 s を待たない＝測れない周だけが待つ側である）。
+    clean(&[&repo, &state]);
+    let (repo, state) = repo_with_state();
+    let running = "[{\"status\":\"in_progress\",\"conclusion\":null}]";
+    let tools = fake_terminal_json(&repo, &state, running);
+    let design = write_contract(&repo, &[], &[]);
+    let id = gated_pass(&repo, &state, &design, &state.join("lens-ran"));
+    let bd = state.join("fake-bd.sh").display().to_string();
+    let rules = ceiling_rules(&state);
+    let out = land_extra(&repo, &state, &id, &["--bd", &bd, "--rules", &rules]);
+    assert!(
+        stdout_of(&out).contains("terminal=ci:unmeasurable"),
+        "走っている run だけの周は測れない側: {}",
+        stdout_of(&out)
+    );
+    assert!(!tools.bd_log.exists(), "測れない周も台帳は閉じない");
     clean(&[&repo, &state]);
 }

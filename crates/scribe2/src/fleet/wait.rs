@@ -156,9 +156,9 @@ const CI_SUCCESS: &str = "success";
 
 /// CI の判定を**1 回だけ**読む（子 process 1 回・設計 contract-source.md §5）。
 ///
-/// 返すのは 3 形である: `Some(Success)`（run が 1 本以上在り、**全部が完了していて全部 success**）・
-/// `Some(Failure)`（完了した run に success でないものが 1 本以上在る）・`None`（run が 0 本・まだ走って
-/// いる run が在る・行を撃てない・JSON を読めない）。**`None` を「成功していない」と読まない**のは
+/// 返すのは 3 形である: `Some(Failure)`（**完了した run に success でないものが 1 本以上在る**・他の run が
+/// まだ走っていても待たない）・`Some(Success)`（run が 1 本以上在り、落ちた run が無く全部が完了している）・
+/// `None`（run が 0 本・落ちた run は無いがまだ走っている run が在る・行を撃てない・JSON を読めない）。**`None` を「成功していない」と読まない**のは
 /// 呼び手の側で、`None` は「まだ測れていない」である（C10）。
 ///
 /// 行は **argv 1 本として撃つ**（shell を通さない）。宣言 `ci-cmd` は対象 repo の tracked file から来るので、
@@ -176,17 +176,25 @@ pub fn ci_now(repo: &Path, sha: &str, cmd: &str) -> Option<CiRun> {
     if runs.is_empty() {
         return None;
     }
-    let mut verdict = CiRun::Success;
-    for run in runs {
-        // **完了していない run が 1 本でも在れば測れていない**（走っている run を成功に数えない）。
-        if run.get(CI_STATUS).and_then(crate::fleet::json_tree::Tree::as_str) != Some(CI_COMPLETED) {
-            return None;
-        }
-        if run.get(CI_CONCLUSION).and_then(crate::fleet::json_tree::Tree::as_str) != Some(CI_SUCCESS) {
-            verdict = CiRun::Failure;
-        }
+    let status_of = |run: &crate::fleet::json_tree::Tree| {
+        run.get(CI_STATUS).and_then(crate::fleet::json_tree::Tree::as_str).map(str::to_owned)
+    };
+    let failed = |run: &crate::fleet::json_tree::Tree| {
+        status_of(run).as_deref() == Some(CI_COMPLETED)
+            && run.get(CI_CONCLUSION).and_then(crate::fleet::json_tree::Tree::as_str) != Some(CI_SUCCESS)
+    };
+    // **落ちた run を先に見る**。実 CI では複数の workflow が並ぶので、1 本が落ちた後も別の 1 本が
+    // 走っていることが常態である。未完了を先に見ると、**測って落ちた事実**が上限いっぱい待った末の
+    // 「測れていない」に化ける（C10 の反転）。落ちたと分かった時点で待つ理由は無い。
+    if runs.iter().any(failed) {
+        return Some(CiRun::Failure);
     }
-    Some(verdict)
+    // 落ちた run が 1 本も無い周は、**全部が完了している**ときだけ success と言える
+    // （走っている run を成功に数えない）。
+    if runs.iter().any(|run| status_of(run).as_deref() != Some(CI_COMPLETED)) {
+        return None;
+    }
+    Some(CiRun::Success)
 }
 
 /// file 1 本の印（長さ・mtime・inode・metadata だけで中身を parse しない）。
