@@ -1198,10 +1198,11 @@ mod tests {
     // flip-check: moved s2-07l.457
     use super::super::gate::{next_number, skip_record, DetectionSkip, Skipped};
     use super::{
-        detection_needed, squash_message, subject_of, trailer_key, Terminal, CONTRACT_TRAILER,
-        REQUIREMENTS_TRAILER, SUBJECT_CHARS, TERMINAL_TOKENS,
+        detection_needed, landed_sha, squash_message, subject_of, trailer_key, Terminal, CONTRACT_TRAILER,
+        REQUIREMENTS_TRAILER, SHA_PREFIX, SUBJECT_CHARS, TERMINAL_TOKENS,
     };
     use crate::cli_outcome::RC_OK;
+    use crate::fleet::{EventKind, Stage};
 
     // flip-check: retroactive s2-07l.222
     /// `next_number` は record 数の次（1 始まり）で、検出線を省いた record を挟む 2 周分でも単調に増える。
@@ -1253,6 +1254,33 @@ mod tests {
             message.lines().any(|line| line == "run: s2-07l.130-1757600000"),
             "run trailer が在る: {message}"
         );
+    }
+
+    /// `landed_sha` は **自分の便の `RunDone`** だけを読む（設計 contract-source.md §5 手順 3）。
+    ///
+    /// 置き場には他の便の event も並ぶ。便の弁別と kind の弁別のどちらか一方でも緩むと、**別の便が
+    /// 着地した sha** で CI を照合し、その sha が success なら自分の便の bead を閉じてしまう。
+    /// 他の便の行を**後に**置き、kind 違いの行に `sha:` を持たせて、両方の弁別を同時に測る。
+    #[test]
+    fn pipe_terminal_land_landed_sha_reads_only_its_own_run_done() {
+        let root = crate::pipe::fixture::scratch("landed-sha");
+        let mine = "0".repeat(40);
+        let other = "1".repeat(40);
+        let stray = "2".repeat(40);
+        crate::pipe::fixture::append_all(
+            &root,
+            &[
+                crate::pipe::fixture::event("mine", EventKind::RunDone, Some(Stage::Landed), None, Some(&format!("{SHA_PREFIX}{mine}"))),
+                // kind 違いの行が同じ便に**後から**載る（`RunDone` 以外は読まない）。
+                crate::pipe::fixture::event("mine", EventKind::RunStage, Some(Stage::Landed), None, Some(&format!("{SHA_PREFIX}{stray}"))),
+                // 別の便の着地が**後から**載る（便の弁別が緩むとこちらを読む）。
+                crate::pipe::fixture::event("other", EventKind::RunDone, Some(Stage::Landed), None, Some(&format!("{SHA_PREFIX}{other}"))),
+            ],
+        );
+        assert_eq!(landed_sha(&root, "mine").as_deref(), Some(mine.as_str()), "自分の便の RunDone の sha");
+        assert_eq!(landed_sha(&root, "other").as_deref(), Some(other.as_str()), "別の便からは別の sha");
+        assert_eq!(landed_sha(&root, "absent"), None, "居ない便は None（HEAD に読み替えない）");
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// 終端の結末は**閉じた 7 値**で、字面は [`TERMINAL_TOKENS`] と 1 対 1（宣言順）。

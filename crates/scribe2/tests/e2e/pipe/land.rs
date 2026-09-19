@@ -3319,7 +3319,10 @@ fn pipe_terminal_land_pushes_checks_ci_and_closes_the_bead() {
     let design = write_contract(&repo, &[], &[]);
     let id = gated_pass(&repo, &state, &design, &marker);
     let bd = state.join("fake-bd.sh").display().to_string();
-    let out = land_extra(&repo, &state, &id, &["--bd", &bd]);
+    // **上限は fixture の manifest から渡す**（埋め込みの 900 s を待たない）: CI を測れなくする変異は
+    // ここで速やかに落ちる側に倒れる＝timeout でなく撃墜として数えられる。
+    let rules = ceiling_rules(&state);
+    let out = land_extra(&repo, &state, &id, &["--bd", &bd, "--rules", &rules]);
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "終端まで通った land は rc 0: {}", stderr_of(&out));
     assert!(stdout_of(&out).contains("terminal=closed"), "終端の token: {}", stdout_of(&out));
     let landed = git(&repo, &["rev-parse", "refs/heads/main"]);
@@ -3360,7 +3363,8 @@ fn pipe_terminal_land_ci_failure_does_not_close_the_bead() {
     let id = gated_pass(&repo, &state, &design, &marker);
     let before = git(&repo, &["rev-parse", "refs/heads/main"]);
     let bd = state.join("fake-bd.sh").display().to_string();
-    let out = land_extra(&repo, &state, &id, &["--bd", &bd]);
+    let rules = ceiling_rules(&state);
+    let out = land_extra(&repo, &state, &id, &["--bd", &bd, "--rules", &rules]);
     assert_eq!(out.status.code(), Some(1), "close しなかった周は rc 1: {}", stderr_of(&out));
     assert!(stdout_of(&out).contains("terminal=ci:failure"), "終端の token: {}", stdout_of(&out));
     let details = landed_details(&state, &id);
@@ -3388,7 +3392,8 @@ fn pipe_terminal_land_only_replays_the_terminal_without_relanding() {
     let design = write_contract(&repo, &[], &[]);
     let id = gated_pass(&repo, &state, &design, &marker);
     let bd = state.join("fake-bd.sh").display().to_string();
-    let first = land_extra(&repo, &state, &id, &["--bd", &bd]);
+    let rules = ceiling_rules(&state);
+    let first = land_extra(&repo, &state, &id, &["--bd", &bd, "--rules", &rules]);
     assert_eq!(first.status.code(), Some(1), "1 周目は close しない: {}", stderr_of(&first));
     let landed = git(&repo, &["rev-parse", "refs/heads/main"]);
     assert!(!tools.bd_log.exists(), "前提: 台帳はまだ閉じていない");
@@ -3403,7 +3408,7 @@ fn pipe_terminal_land_only_replays_the_terminal_without_relanding() {
     assert_ne!(moved, landed, "前提: HEAD は着地した sha から動いた");
     // CI を直す（宣言は同じ path を指したまま・行は 1 byte も変えない）。
     exec_script(&state.join("fake-ci.sh"), &format!("printf '%s\\n' \"$@\" > '{}'\nprintf '[{{\"status\":\"completed\",\"conclusion\":\"success\"}}]\\n'\n", tools.ci_log.display()));
-    let again = land_extra(&repo, &state, &id, &["--bd", &bd, "--terminal-only"]);
+    let again = land_extra(&repo, &state, &id, &["--bd", &bd, "--rules", &rules, "--terminal-only"]);
     assert_eq!(again.status.code(), Some(i32::from(RC_OK)), "継いだ終端は rc 0: {}", stderr_of(&again));
     assert_eq!(stdout_of(&again).trim(), format!("run={id} terminal=closed"), "終端だけの 1 行");
     // **着地はやり直さない**: main は別の便が進めた位置のままで、器は 1 mm も動かさない。
