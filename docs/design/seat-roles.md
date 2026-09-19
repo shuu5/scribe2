@@ -240,6 +240,21 @@ C1 / C5（権能の値は行・裁定 id）・C1.2（生成文に手書きの規
 - 各歯は、対応する生存した変異を src に当てると落ちることを実装の周に実測し、結果を便の報告に載せる（flip-check の後から足す歯の札の前提）。当てて落ちなかった変異は同値か歯の不足かを報告で分ける。
 - 触らない: `src/` の全部・§21 / §22 の行の形・既存の歯。
 
+## 24. path の種別を対象 repo の vessel 宣言が名乗る（契約表の行 r・[ADR-0047](../../design-intent/decisions/ADR-0047-path-kinds-are-declared-in-the-vessel-declaration.html)・`s2-07l.491`）
+
+- 何を解くか: §4 の分類は本 repo の配置（3 つの固定 prefix）を器の中に持つ。配置の違う consumer repo では全 file が code の種別に落ち、src の編集の権能を持たない席は 1 file も編集できない（実測 2026-09-19）。決定は ADR-0047（種別に属する path の集合を対象 repo の宣言が名乗る）で、本 § はその実装の形である。
+- やさしく言うと: 「どこが仕様で、どこが設計 doc で、どこが test か」を、相手の repo が自分の宣言 file に書けるようにする。書かない repo は今までどおり。
+- 宣言の形: vessel 宣言の任意 key 3 本（ADR-0047 §04 の名）。値は repo 相対の prefix の配列で、末尾が `/` の項目はその dir の下の全 file、`/` で終わらない項目はその path と完全一致の 1 file。既存の任意 key と同じ読み口（宣言の parser の閉じた key 列に足す・配列の層は既に在る）で読み、書いた周の空配列は既存の key と同じく不備である。
+- key ごとに独立に効く: 書かれた key はその種別の固定値を**置き換える**（足し合わせない）。書かれていない key の種別は今の固定の判定のまま＝3 本とも無い宣言と、宣言 file を持たない repo は今と 1 行も変わらない。本 repo の歯の置き場（crate ごとの tests の dir）は prefix 1 本では書けない形なので、固定の判定は消さずに既定として残す。
+- 読む場所: guard は分類の直前に、席の登録 row の anchor の **HEAD の tree** の宣言を読む（宣言の既存の読み手と同じ 1 本＝作業ツリーは読まない・commit されていない宣言は無いのと同じ）。便の worktree と docs 用の worktree の中の file も、anchor の宣言で分類する（§4 の「repo の写し」の扱いは変えない）。宣言 file 自身は宣言に何が書いてあっても code の種別である（席は自分の柵を広げられない）。
+- 不正な宣言: 項目が `..` の段を含む・絶対 path・空文字・同じ項目か一方が他方の prefix になる項目が 2 つの種別にまたがる、のどれかが 1 件でも在る周、および宣言 file が在るのに読めない（parser の不備が 1 件でも在る）周は、**repo 内の全 file を code の種別として扱う**（fail-closed・黙って固定値へ戻さない・NFR4）。理由は閉じた enum（`parent-segment` / `absolute` / `empty` / `overlap` / `unreadable`）。repo の外（`Outside`）の判定は宣言に依らない。
+- 観測: doctor は席の行の後ろに、登録 row の anchor ごとに `paths: anchor=<path> state=<default|declared|invalid>` の 1 行を出す（`invalid` の周は ` reason=<上の字面>` が続く・`declared` の周は ` keys=<書かれた key の数>`）。guard が断った記録（§4 の deny の 1 行）は、`invalid` の周に理由の字面を持つ。
+- 極性: 新しい guard は足さない（既存の編集面の guard の分類の入力が変わるだけ）。宣言が読めない周に倒れる先は「全部 code」＝権能なしの側で、既存の fail-closed の向きと同じである。
+- hook の時間: 宣言の読みは git の子 process 1 回（HEAD の 1 file）で、Edit 系の tool の周にだけ撃つ（Bash の面は path を分類しないので読まない）。
+- 歯（`tests/e2e/hook.rs`・接頭辞 `hook_role_paths_`・toy repo に宣言を commit して PreToolUse の口から測る）: (a) 3 本の key を書いた repo で、宣言した仕様の dir・設計 doc の dir・test の dir の下の編集が orchestrator の席で通り、それ以外の file は断られる／(b) `/` で終わらない項目は完全一致の 1 file だけが通り、同じ名で始まる別の file は断られる／(c) 1 本だけ書いた repo は、その種別だけが宣言で決まり、残りは固定の判定のまま／(d) 宣言 file を持たない repo と key を 1 本も書かない repo は今の分類と同じ／(e) 宣言 file 自身の編集は、宣言がそれを名指していても断られる／(f) 不正な宣言（5 つの理由のそれぞれ）の repo は、固定値なら通る path も含めて repo 内の全編集が断られ、deny の 1 行が理由の字面を持つ／(g) commit していない作業ツリーの宣言は効かない／(h) 便の worktree の中の file も anchor の宣言で分類される。doctor の歯（`tests/e2e/seat/register.rs`・接頭辞 `seat_role_doctor_paths_`）: 3 つの state のそれぞれの行と、`invalid` の理由の字面。
+- 触らない: 種別の集合（closed enum）と種別ごとの権能の 1:1・rules 行・宣言の schema の版（1 のまま）・便の印で開く write-set の扱い（§4）。
+- 後続: consumer の移行の手順（[consumer-sync.md](./consumer-sync.md) §16）に「宣言へ 3 本の key を書く」段を足すのは、本行の着地の後の docs の便。新しい consumer の最初の宣言 file を書く口は導入の口の設計（`s2-07l.491`）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -387,4 +402,14 @@ write-set = ["crates/scribe2/tests/e2e/hook.rs"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail hook_recovery_edge_"]
 size = "S"
 done = "偽の bd と toy repo で、JSON を出して rc 非 0 で終わる台帳は ledger-unreadable・stdout を閉じて上限を越えて生きる台帳は ledger-timeout・上限の内側で遅れて rc 0 で終わる台帳は測れた側に出て、列挙の順と食い違う dirty な worktree 2 本が commit の新しい順に並び未生の HEAD の worktree を混ぜても順が変わらずその worktree は末尾側に来て、commit と worktree の本数が上限とちょうど同じ repo は CUT を出さず、時差の字が 2 桁でない in_progress の bead は更新時刻 - で出て open の bead は窓に入らず、枠の名前が dir の周の compact の SessionStart は PRECOMPACT を出さず stderr に読めない理由と消せない理由の 2 行を出して指示文と DATA は出して rc 0 で終わり（枠が無い周は stderr にどちらの行も出さない）、socket を渡した PreCompact が登録済みの席の枠を書き、各歯が対応する変異を src に当てると落ちる実測が便の報告に載り（当てて落ちなかった変異は同値か歯の不足かを報告で分ける）、src/ と既存の歯は 1 行も変わらない"
+
+[[contract]]
+id = "r"
+title = "path の種別を対象 repo の vessel 宣言が名乗る — 宣言の任意 key 3 本（prefix の配列）を編集面の guard が anchor の HEAD から読んで分類し、書かれない key は固定の判定のまま・宣言 file 自身は常に code・不正な宣言は全 file を code に倒して doctor と deny の行が理由を名乗る"
+req = ["FR45", "FR41", "NFR4"]
+section = "24"
+write-set = ["crates/scribe2/src/hook/role_guard.rs", "crates/scribe2/src/hook/mod.rs", "crates/scribe2/src/pipe/declaration.rs", "+crates/scribe2/src/pipe/declaration/path_kinds.rs", "crates/scribe2/src/seat/role.rs", "crates/scribe2/tests/e2e/hook.rs", "crates/scribe2/tests/e2e/seat/register.rs", "crates/scribe2/tests/e2e/seat.rs", "crates/scribe2/tests/e2e/snapshots/e2e__seat__seat_doctor_external_form.snap", "docs/design/seat-roles.md"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail hook_role_paths_", "cargo nextest run -p scribe2 --no-tests=fail seat_role_doctor_paths_"]
+size = "M"
+done = "toy repo に宣言を commit して PreToolUse の口から測り、3 本の key を書いた repo で宣言した仕様と設計 doc と test の dir の下の編集が orchestrator の席で通ってそれ以外は断られ、/ で終わらない項目は完全一致の 1 file だけが通り、1 本だけ書いた repo は残りの種別が固定の判定のままで、宣言 file の無い repo と key を書かない repo は今の分類と同じで、宣言 file 自身の編集は宣言が名指していても断られ、不正な宣言（parent-segment / absolute / empty / overlap / unreadable のそれぞれ）の repo は固定値なら通る path も含めて repo 内の全編集が断られて deny の行が理由の字面を持ち、commit していない作業ツリーの宣言は効かず、便の worktree の中の file も anchor の宣言で分類され、doctor が anchor ごとに paths の 1 行を default / declared / invalid の 3 つの state と invalid の理由の字面で出し、種別の集合と権能の 1:1 と宣言の schema の版は変わらない"
 <!-- contracts:end -->
