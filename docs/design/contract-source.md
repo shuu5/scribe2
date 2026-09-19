@@ -49,7 +49,7 @@
 
 ## 5. land の終端（FR50）
 
-Landed（gate-cost.md §6 の CAS の後）に続けて器が行う。各段は typed な event を **1 件ずつ**記す（`RunDone` の `detail` で弁別・schema 1 のまま・push / ci / close の 3 段）。止まった段から先は撃たず、記録もそこで終わる。終端の結末は閉じた 6 値（Closed / Undeclared / PushFailed / CiFailed / CiUnmeasurable / CloseFailed）で、CI の「測れない」を failure に畳まない（C10）。
+Landed（gate-cost.md §6 の CAS の後）に続けて器が行う。各段は typed な event を **1 件ずつ**記す（`RunDone` の `detail` で弁別・schema 1 のまま・push / ci / close の 3 段）。止まった段から先は撃たず、記録もそこで終わる。終端の結末は閉じた 7 値（Closed / Undeclared / Unreadable / PushFailed / CiFailed / CiUnmeasurable / CloseFailed）で、CI の「測れない」を failure に畳まず、宣言を読めない周（Unreadable）を「押す先が無い」（Undeclared）にも「push の失敗」にも畳まない（push を 1 度も撃っていない＝測れていない・C10）。rc 0 は Closed と Undeclared の 2 値だけである。CI の照合は**落ちた run を先に見る**（複数の workflow が並ぶ repo では 1 本が落ちた後も別の 1 本が走っているのが常態で、未完了を先に見ると deadline を空費した末に failure が「測れない」に化ける・`s2-07l.382` の lens の指摘）。
 
 1. **push**: `git push <remote> main:main`（子 process・remote 名は `.vessel.toml` の宣言 `remote`）。**既定の remote は持たない**: push は repo の外へ出す行為（A1「出す」）なので、押す先を宣言していない repo の便は終端を持たない（`terminal=undeclared`・rc 0・event 0 件・`--pr-cmd` 形と同じ極性・既存の toy repo の歯は動かない）。失敗は `RunDone detail=push:failed:<reason>` で止める（close しない・rc 1）。
 2. **CI の照合**: 唯一の wait 実装に `Completion::CiResult { repo, sha }` を足し、forge の CLI（`.vessel.toml` の `ci-cmd`〔optional・無ければ既定の 1 行 = `gh run list --commit {sha} --json status,conclusion`〕）を deadline（rules 行 `pipe.ci_wait_s`・Int・裁定 id）まで待つ。`ci-cmd` は **argv 1 本として撃つ**（shell を通さない・宣言は対象 repo の tracked file から来るので shell に渡すと 1 行が別の command を継ぎ足せる）。`{sha}` の穴は**必須**で、穴の無い行は断る（別の commit の判定を読んで success と言いうる）。`{sha}` には full の sha を入れる（短縮 sha は forge の CLI が一致させない）。結果は 3 値（success / failure / unmeasurable）。**success 以外は close しない**（FailClosed）・記帳して rc 1。
