@@ -233,6 +233,19 @@ scribe2 を載せる consumer が pipe を通すのに要る面は 3 つで、�
 - 歯: 既存の `closure_` / `contract_closure_ext_` / `contract_derive_` / `prop_closure_` の歯が全部緑で期待を変えない。極性一覧の snapshot は不変（closure に境界の型名の pin は無い・`tests/e2e/polarity.rs` で実測）。
 - 却下: `unresolved_names` だけを移して `Form` 系を親に残す（呼び合いが 2 module に跨り可視性の 1 語が 8 つに増える）／歯の module だけを別 file に出す（R-C4-2 は歯込みで測るので余地は増えるが責務が割れず、次の M で同じ詰まりに戻る）／行 aa を S に落とす（`prose_closure` の見積 150 行が S の 100 を超える＝size の字面だけ変える嘘）。
 
+## 30. 受付は depends の相手を同じ doc の全行の id から解く（契約表の行 ad・`s2-07l.496`）
+
+- 何が起きているか（orchestrator の実測 2026-09-20・verified）: 設計 doc の契約行に `depends` を書くと、受付と事前の検査の口が**必ず** `depends-unresolved` で断る。受付は §2 のとおり表の検査をその 1 行の slice に撃ち、検査は渡された行の id だけを「同じ doc の id」と読むので、相手の id は常に見えない。CI の `contracts check` は全行で撃つので緑＝CI は通って受付だけが落ちる。既に Landed の行（dispatcher の行 e ほか）でも再現する。回避として新しい行に `depends` を書かない運用が続いている（順序は台帳の blocks で表している）。
+- 約束（done と 1:1）:
+  1. `depends` の相手が同じ doc の契約表に在る行は、受付がそれを理由に断らない（rc 0・run dir が出来る）。
+  2. 相手の id が同じ doc の契約表に無い行は、従来どおり `depends-unresolved` で断る（run dir を作らない・字面は `contracts check` と 1 byte 同じ）。
+  3. 事前の検査の口（preflight）は受付と同じ 1 判定を通る＝(1) の行で `refuse=` に `depends-unresolved` が出ず、(2) の行では出る。
+  4. 既存の受付・事前の検査・表の検査の歯は期待を変えない。
+- 形: 検査する行は 1 つのまま（§2 の「その 1 行に撃つ」は不変＝閉包・名指し・write-set の検査を全行へ広げない・受付の時間を増やさない）。`depends` の解決の母集団だけを、同じ base（HEAD）の doc の**全行の id** にする。全行の id は受付が既に読んでいる doc の本文から取る（新しい読みを足さない）。表の検査の公開の形（全行で撃つ `contracts check`）は結果を変えない。
+- 触らない: `depends` の輪（`depends-cycle`）は全行を見ないと測れないので `contracts check`（CI）の持ち分のまま・受付では測らない。`depends` は表の検査の key であって、列の順序づけには使わない（順序は [dispatcher.md](./dispatcher.md) の列と台帳の blocks が持つ・本段で変えない）。断りの型と字面は増やさない。
+- 歯（`pipe_intake_depends_` 接頭辞・`tests/e2e/pipe/intake.rs`・toy repo の設計 doc に 2 行を commit する既存の fixture の形）: (1) 相手が同じ doc に在る行の受付が rc 0 で run dir が 1 つ出来る——base は断る＝RED。(2) 相手が doc に無い行は `depends-unresolved` で断られ run dir が 0。(3) preflight が (1) の行で `refuse=` に `depends-unresolved` を出さず、(2) の行で出す。(4) は verify の既存の接頭辞 3 本（`pipe_intake_design_` / `pipe_preflight_` / `table_check_`）が緑のまま。
+- 却下: 受付で表の検査を全行に撃って当該行の findings だけを残す（他の行の閉包と名指しまで毎回測る＝受付が doc の行数に比例して遅くなり、他の行の不備で無関係の便が断られる経路が出来る）／slice に渡す前に `depends` を空にする（(2) の断りが消える＝相手の無い `depends` が CI を通らず main に入った周に受付が黙って通す）／`depends` の key を schema から消す（既存の行が使っており、表の順序の宣言として CI の検査は働いている）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -546,6 +559,16 @@ write-set = ["-crates/scribe2/src/pipe/closure.rs", "crates/scribe2/src/pipe/clo
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail closure_names_"]
 size = "S"
 done = "名指しの解決の群 9 item と歯 3 本と fixture が子 module に在り、親は mod 宣言と pub use / pub(super) use だけが増えて呼び手の import は不変、既存の closure_ と contract_ の歯が全部緑で極性一覧の snapshot が不変、純移動の機械証明の残差が use と path と可視性の 1 語だけ"
+
+[[contract]]
+id = "ad"
+title = "受付は depends の相手を同じ doc の全行の id から解く — 検査する行は 1 つのまま・相手の無い depends は従来どおり断る"
+req = ["FR48", "FR54"]
+section = "30"
+write-set = ["crates/scribe2/src/pipe/cli/intake.rs", "crates/scribe2/src/pipe/table/check.rs", "crates/scribe2/tests/e2e/pipe/intake.rs"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_intake_depends_", "cargo nextest run -p scribe2 --no-tests=fail pipe_intake_design_", "cargo nextest run -p scribe2 --no-tests=fail pipe_preflight_", "cargo nextest run -p scribe2 --no-tests=fail table_check_"]
+size = "S"
+done = "depends の相手が同じ doc に在る行を受付が rc 0 で受けて run dir が 1 つ出来、相手が doc に無い行は depends-unresolved で断られて run dir が 0、preflight は前者で refuse= に depends-unresolved を出さず後者で出し、既存の pipe_intake_design_ / pipe_preflight_ / table_check_ の歯が緑のまま"
 <!-- contracts:end -->
 
 
