@@ -6,8 +6,8 @@
 
 use super::{
     ceiling_rules, clean, commit_rows, design_doc_rows, fake_lens, gate_once, git, implemented, intake_bead,
-    kind_count, lens_verdict, repo_with_state, review_lens_pass, row_fields, run_pipe, shim_path, stderr_of,
-    run_id_of, stdout_of, write_contract, write_design, DESIGN_FILE, IMPLEMENT,
+    kind_count, lens_verdict, question_runner, questioned, repo_with_state, review_lens_pass, row_fields, run_pipe,
+    shim_path, stderr_of, run_id_of, stdout_of, write_contract, write_design, DESIGN_FILE, IMPLEMENT, RC_BLOCKED,
 };
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -1235,5 +1235,299 @@ fn pipe_dispatch_drive_names_why_it_did_not_hand_off() {
     let out = resume_once(&repo, &state, &id, &unsure, true);
     assert_eq!(drive_of(&out), "no-progress", "段が動かなかった周は渡さない（{}）", told(&out));
     assert_eq!(not_reached(&state, &id, "Landed"), 0, "渡していないので着地しない（{}）", told(&out));
+    clean(&[&repo, &state]);
+}
+
+// ───── 関門が開いた待ちの便の再開（行 (j)・設計 §13・`pipe_dispatch_waiting_gate_` 接頭辞） ─────
+//
+// 回答済みの `Questioned` と承認済みの `Blocked` は段が待ちのままで札も無い（正常に抜けた driver は札を外す）ので、
+// §5 の起こし直しでは候補に戻らなかった（実測 2026-09-20: 回答の後に手動の 1 周を撃っても `resumed:0`）。
+// 列は関門の判定を resume の入口と同じ述語 1 本で撃ち、driver が居ないと測れた便を `--drive` 付きの resume で起こす。
+
+/// 列と回答・承認に渡す道具の一式（toy の偽 runner と偽 lens・起こし直した便が `Landed` まで通る形）。
+fn toy_tools(repo: &Path, state: &Path) -> Vec<String> {
+    vec![
+        "--repo".to_owned(), repo.display().to_string(),
+        "--state-dir".to_owned(), state.display().to_string(),
+        "--rules".to_owned(), dispatch_rules(state),
+        "--bd".to_owned(), fake_bd(state, &[]),
+        "--lens".to_owned(), fake_lens(&state.join("waiting-lens-ran"), &lens_verdict("PASS")),
+        "--runner".to_owned(), IMPLEMENT.to_owned(),
+    ]
+}
+
+/// `pipe <verb> …` を道具付きで撃つ（`head` は道具の前に置く引数）。
+fn with_tools(head: &[&str], tools: &[String]) -> Output {
+    let mut args: Vec<String> = head.iter().map(|item| (*item).to_owned()).collect();
+    args.extend(tools.iter().cloned());
+    let borrowed: Vec<&str> = args.iter().map(String::as_str).collect();
+    run_pipe(&borrowed)
+}
+
+/// 手動の 1 周（権能なしの口・道具は toy の一式）。
+fn waiting_turn(repo: &Path, state: &Path) -> Output {
+    with_tools(&["dispatch"], &toy_tools(repo, state))
+}
+
+/// 回答を 1 回撃つ（`extra` は置き場の後ろに足す引数＝道具の有無を呼び手が選ぶ）。
+fn answer(state: &Path, id: &str, words: &str, extra: &[String]) -> Output {
+    let mut head: Vec<String> = ["answer", "--run", id, "--words", words, "--state-dir"]
+        .iter()
+        .map(|item| (*item).to_owned())
+        .collect();
+    head.push(state.display().to_string());
+    head.extend(extra.iter().cloned());
+    let borrowed: Vec<&str> = head.iter().map(String::as_str).collect();
+    run_pipe(&borrowed)
+}
+
+/// 行 `row` の便を bead 名つきで質問に倒す（`questioned` の bead を選べる形・同じ置き場に 2 便を置く歯が使う）。
+fn questioned_bead(repo: &Path, state: &Path, row: &str, bead: &str) -> String {
+    let id = intake_bead(repo, state, &format!("{DESIGN_FILE}#{row}"), bead);
+    let out = run_pipe(&[
+        "spawn", "--run", &id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(), "--runner", &question_runner(),
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_BLOCKED)), "質問は rc 3 で止まる（{}）", told(&out));
+    id
+}
+
+/// 便の driver の札に本文を書く（dir は run dir・在る前提）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn put_ticket_body(state: &Path, id: &str, body: &str) {
+    fs::write(state.join("pipe").join(id).join("driver"), body).expect("札を書ける");
+}
+
+/// 便の `Spawned` の記帳の件数（いま数えるだけ）。質問で止まった便は 1 件で、起こし直されると 2 件になる。
+fn spawned_now(state: &Path, id: &str) -> usize {
+    reached_now(state, id, "Spawned")
+}
+
+/// 1 周の行の期待値（起こし直しの本数だけ呼び手が選ぶ）。
+fn resumed_line(count: usize) -> String {
+    format!("dispatch=started:0,resumed:{count},waiting:0")
+}
+
+/// 便の `QuestionAnswered` が 1 件在るか（記帳が成った証拠）。
+fn answered_once(state: &Path, id: &str) -> bool {
+    kind_count(state, id, vessel::fleet::EventKind::QuestionAnswered) == 1
+}
+
+/// (§13) 回答済みの `Questioned` の便（driver の札なし）は手動の 1 周で **`--drive` 付きの resume** で起こされ
+/// （`resumed:1`）、先の段へ進んで人の手なしに `Landed` まで通る。base は札の無い便を触らない（RED）。
+#[test]
+fn pipe_dispatch_waiting_gate_answered_question_is_resumed_with_drive() {
+    let (repo, state) = repo_with_state();
+    let id = questioned(&repo, &state);
+    assert!(!state.join("pipe").join(&id).join("driver").exists(), "前提: 正常に抜けた driver は札を外している");
+    let answered = answer(&state, &id, "verify は 1 行目だけを撃つ", &[]);
+    assert_eq!(answered.status.code(), Some(i32::from(RC_OK)), "回答は rc 0（{}）", told(&answered));
+    let out = waiting_turn(&repo, &state);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "1 周は rc 0（{}）", told(&out));
+    assert_eq!(stdout_of(&out).trim_end(), resumed_line(1), "回答済みの便を 1 本起こし直す（{}）", told(&out));
+    assert_eq!(stage_reached(&state, &id, "Implemented"), 1, "先の段へ進む（段の並び: {}）", stages_of(&state, &id));
+    // **`--drive` 付き**である証拠: 1 段で止まらず、継ぎの driver が着地まで通す。
+    assert_eq!(stage_reached(&state, &id, "Landed"), 1, "自走で着地まで（段の並び: {}）", stages_of(&state, &id));
+    clean(&[&repo, &state]);
+}
+
+/// (§13) 未回答の `Questioned` の便は起こされない（`resumed:0`・段は 1 つも動かない）。
+#[test]
+fn pipe_dispatch_waiting_gate_unanswered_question_is_left_alone() {
+    let (repo, state) = repo_with_state();
+    let id = questioned(&repo, &state);
+    let out = waiting_turn(&repo, &state);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "1 周は rc 0（{}）", told(&out));
+    assert_eq!(stdout_of(&out).trim_end(), resumed_line(0), "関門が閉じた便は起こさない（{}）", told(&out));
+    assert_eq!(not_reached(&state, &id, "Implemented"), 0, "段は動かない（段の並び: {}）", stages_of(&state, &id));
+    assert_eq!(spawned_now(&state, &id), 1, "起こし直していない（Spawned は初回の 1 件）");
+    clean(&[&repo, &state]);
+}
+
+/// (§13) 古い質問に回答が在っても**最新の**質問が未回答なら関門は閉じている（`resumed:0`）。
+#[test]
+fn pipe_dispatch_waiting_gate_newest_question_unanswered_is_left_alone() {
+    let (repo, state) = repo_with_state();
+    let id = questioned(&repo, &state);
+    let answered = answer(&state, &id, "verify は 1 行目だけを撃つ", &[]);
+    assert_eq!(answered.status.code(), Some(i32::from(RC_OK)), "1 つ目の回答は rc 0（{}）", told(&answered));
+    // 2 つ目の質問で止まる runner で手で resume する（`--drive` は無い＝1 段で止まる）。
+    let second = "printf '%s\\n' '{\"question\":\"write-set の外を触ってよいか\"}'; exit 76";
+    let resumed = run_pipe(&[
+        "resume", "--run", &id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(), "--runner", second,
+        "--bd", &fake_bd(&state, &[]),
+    ]);
+    assert_eq!(resumed.status.code(), Some(i32::from(RC_BLOCKED)), "2 つ目の質問で止まる（{}）", told(&resumed));
+    assert_eq!(reached_now(&state, &id, "Questioned"), 2, "前提: 質問は 2 件（段の並び: {}）", stages_of(&state, &id));
+    let out = waiting_turn(&repo, &state);
+    assert_eq!(stdout_of(&out).trim_end(), resumed_line(0), "最新の質問が未回答なら起こさない（{}）", told(&out));
+    assert_eq!(spawned_now(&state, &id), 2, "起こし直していない（Spawned は手の 2 件のまま）");
+    clean(&[&repo, &state]);
+}
+
+/// (§13) 承認済みの `Blocked` の便も同じく起こされ、先の段へ進む（`resumed:1`）。
+#[test]
+fn pipe_dispatch_waiting_gate_approved_blocked_is_resumed() {
+    let (repo, state) = repo_with_state();
+    let marker = state.join("blocked-runner-ran");
+    let (id, _said) = super::spawn::blocked(&repo, &state, &marker, r#"classes = ["publish"]"#);
+    let approved = run_pipe(&["approve", "--run", &id, "--words", "出してよい", "--state-dir", &state.display().to_string()]);
+    assert_eq!(approved.status.code(), Some(i32::from(RC_OK)), "承認は rc 0（{}）", told(&approved));
+    let out = waiting_turn(&repo, &state);
+    assert_eq!(stdout_of(&out).trim_end(), resumed_line(1), "承認済みの便を 1 本起こし直す（{}）", told(&out));
+    assert_eq!(stage_reached(&state, &id, "Implemented"), 1, "先の段へ進む（段の並び: {}）", stages_of(&state, &id));
+    assert_eq!(stage_reached(&state, &id, "Landed"), 1, "自走で着地まで（段の並び: {}）", stages_of(&state, &id));
+    clean(&[&repo, &state]);
+}
+
+/// (§13 札の 4 値) **所有者が死んでいる**札の便は起こす（`pipe run` が回答待ちまで進めて死んだ形）。
+#[test]
+fn pipe_dispatch_waiting_gate_dead_ticket_is_resumed() {
+    let (repo, state) = repo_with_state();
+    let id = questioned(&repo, &state);
+    let answered = answer(&state, &id, "verify は 1 行目だけを撃つ", &[]);
+    assert_eq!(answered.status.code(), Some(i32::from(RC_OK)), "回答は rc 0（{}）", told(&answered));
+    put_dead_ticket(&state, &id);
+    let out = waiting_turn(&repo, &state);
+    assert_eq!(stdout_of(&out).trim_end(), resumed_line(1), "死んだ所有者の札の便は起こす（{}）", told(&out));
+    assert_eq!(stage_reached(&state, &id, "Landed"), 1, "自走で着地まで（段の並び: {}）", stages_of(&state, &id));
+    clean(&[&repo, &state]);
+}
+
+/// (§13 札の 4 値) **所有者が生きている**札の便は触らない（別の driver が駆動している便に 2 本目を立てない）。
+#[test]
+fn pipe_dispatch_waiting_gate_live_ticket_is_left_alone() {
+    let (repo, state) = repo_with_state();
+    let id = questioned(&repo, &state);
+    let answered = answer(&state, &id, "verify は 1 行目だけを撃つ", &[]);
+    assert_eq!(answered.status.code(), Some(i32::from(RC_OK)), "回答は rc 0（{}）", told(&answered));
+    // 歯の process 自身の pid＝確実に生きている所有者。
+    put_ticket_body(&state, &id, &format!("{}\n", std::process::id()));
+    let out = waiting_turn(&repo, &state);
+    assert_eq!(stdout_of(&out).trim_end(), resumed_line(0), "生きている所有者の札の便は触らない（{}）", told(&out));
+    assert_eq!(not_reached(&state, &id, "Implemented"), 0, "段は動かない（段の並び: {}）", stages_of(&state, &id));
+    assert!(state.join("pipe").join(&id).join("driver").exists(), "札は奪わない");
+    clean(&[&repo, &state]);
+}
+
+/// (§13 札の 4 値) **在るのに読めない**札の便は触らない（測れないを「居ない」に読み替えない・fail-closed）。
+#[test]
+fn pipe_dispatch_waiting_gate_unreadable_ticket_is_left_alone() {
+    let (repo, state) = repo_with_state();
+    let id = questioned(&repo, &state);
+    let answered = answer(&state, &id, "verify は 1 行目だけを撃つ", &[]);
+    assert_eq!(answered.status.code(), Some(i32::from(RC_OK)), "回答は rc 0（{}）", told(&answered));
+    put_ticket_body(&state, &id, "not-a-pid\n");
+    let out = waiting_turn(&repo, &state);
+    assert_eq!(stdout_of(&out).trim_end(), resumed_line(0), "読めない札の便は触らない（{}）", told(&out));
+    assert_eq!(not_reached(&state, &id, "Implemented"), 0, "段は動かない（段の並び: {}）", stages_of(&state, &id));
+    assert_eq!(spawned_now(&state, &id), 1, "起こし直していない");
+    clean(&[&repo, &state]);
+}
+
+/// (§13 契機) 道具を渡した `pipe answer` は記帳の直後に同じ 1 周を撃ち、便が進む。**stdout は記帳の 1 行だけ**
+/// （1 周の行は足さない・終端の 1 周と同じ黙る形）。
+#[test]
+fn pipe_dispatch_waiting_gate_answer_with_tools_fires_a_turn_silently() {
+    let (repo, state) = repo_with_state();
+    let id = questioned(&repo, &state);
+    let out = answer(&state, &id, "verify は 1 行目だけを撃つ", &toy_tools(&repo, &state));
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "回答は rc 0（{}）", told(&out));
+    assert_eq!(stdout_of(&out), format!("run={id} answered=true\n"), "stdout は記帳の 1 行だけ（{}）", told(&out));
+    assert_eq!(stage_reached(&state, &id, "Implemented"), 1, "記帳の直後の 1 周が便を進める（段の並び: {}）", stages_of(&state, &id));
+    assert_eq!(stage_reached(&state, &id, "Landed"), 1, "自走で着地まで（段の並び: {}）", stages_of(&state, &id));
+    clean(&[&repo, &state]);
+}
+
+/// (§13 契機) 道具を渡した `pipe approve` も記帳の直後に同じ 1 周を撃ち、便が進む（stdout は記帳の 1 行だけ）。
+#[test]
+fn pipe_dispatch_waiting_gate_approve_with_tools_fires_a_turn_silently() {
+    let (repo, state) = repo_with_state();
+    let marker = state.join("blocked-runner-ran");
+    let (id, _said) = super::spawn::blocked(&repo, &state, &marker, r#"classes = ["publish"]"#);
+    let out = with_tools(&["approve", "--run", &id, "--words", "出してよい"], &toy_tools(&repo, &state));
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "承認は rc 0（{}）", told(&out));
+    assert_eq!(stdout_of(&out), format!("run={id} approved=true\n"), "stdout は記帳の 1 行だけ（{}）", told(&out));
+    assert_eq!(stage_reached(&state, &id, "Implemented"), 1, "記帳の直後の 1 周が便を進める（段の並び: {}）", stages_of(&state, &id));
+    assert_eq!(stage_reached(&state, &id, "Landed"), 1, "自走で着地まで（段の並び: {}）", stages_of(&state, &id));
+    clean(&[&repo, &state]);
+}
+
+/// (§13 契機) 道具を渡さない `pipe answer` は今までどおり記帳だけで rc 0（便は次の契機まで待つ）。
+#[test]
+fn pipe_dispatch_waiting_gate_answer_without_tools_only_records() {
+    let (repo, state) = repo_with_state();
+    let id = questioned(&repo, &state);
+    let before = kind_count(&state, &id, vessel::fleet::EventKind::RunStage);
+    let out = answer(&state, &id, "verify は 1 行目だけを撃つ", &[]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "回答は rc 0（{}）", told(&out));
+    assert_eq!(stdout_of(&out), format!("run={id} answered=true\n"), "stdout は記帳の 1 行だけ（{}）", told(&out));
+    assert_eq!(not_reached(&state, &id, "Implemented"), 0, "便は進まない（段の並び: {}）", stages_of(&state, &id));
+    assert_eq!(kind_count(&state, &id, vessel::fleet::EventKind::RunStage), before, "段の記帳は増えない");
+    assert!(answered_once(&state, &id), "記帳は成っている");
+    clean(&[&repo, &state]);
+}
+
+/// (§13 契機) 記帳の直後の 1 周が失敗しても（台帳を読めない周）回答の rc は変わらず、stdout も記帳の 1 行だけ。
+#[test]
+fn pipe_dispatch_waiting_gate_failed_turn_keeps_the_answer_rc() {
+    let (repo, state) = repo_with_state();
+    let id = questioned(&repo, &state);
+    // 台帳 client を rc 1 で落ちる script に差し替える＝1 周は `unmeasured` で 1 本も起こさない。
+    let broken = script(&state.join("bd-broken"), "exit 1\n");
+    let tools: Vec<String> = toy_tools(&repo, &state)
+        .into_iter()
+        .map(|item| if item.ends_with("/bd") { broken.clone() } else { item })
+        .collect();
+    let out = answer(&state, &id, "verify は 1 行目だけを撃つ", &tools);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "1 周が失敗しても回答は rc 0（{}）", told(&out));
+    assert_eq!(stdout_of(&out), format!("run={id} answered=true\n"), "stdout は記帳の 1 行だけ（{}）", told(&out));
+    assert_eq!(not_reached(&state, &id, "Implemented"), 0, "測れない周は起こさない（段の並び: {}）", stages_of(&state, &id));
+    assert!(answered_once(&state, &id), "記帳は成っている（回答の逐語が残る）");
+    clean(&[&repo, &state]);
+}
+
+/// (§13) 段を前へ進めた driver の終端の 1 周は、別の回答済みの便を起こす（`resumed:1`）。
+///
+/// 便 B を `Gated` まで手で進め、`--drive` の resume で着地させる（`Gated` → `Landed` は前進・自分の便は
+/// 終端ゆえ渡さない）。その終端の 1 周が、同じ置き場で回答を待っていた便 A を起こし直す。
+#[test]
+fn pipe_dispatch_waiting_gate_forward_driver_turn_resumes_another_answered_run() {
+    let (repo, state) = repo_with_state();
+    two_rows(&repo);
+    // A: 行 a（`src/lib.rs`）の便を質問で止めて回答する（道具なし＝記帳だけ・札は無い）。
+    let asked = questioned_bead(&repo, &state, "a", "s2-toy.1");
+    let answered = answer(&state, &asked, "verify は 1 行目だけを撃つ", &[]);
+    assert_eq!(answered.status.code(), Some(i32::from(RC_OK)), "回答は rc 0（{}）", told(&answered));
+    // B: 行 b（`src/b.rs`・A と交差しない）の便を Gated まで人の手で進める。
+    let other = intake_bead(&repo, &state, &format!("{DESIGN_FILE}#b"), "s2-toy.2");
+    let spawned = run_pipe(&[
+        "spawn", "--run", &other, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(),
+        "--runner", "echo x >> src/b.rs && git add -A && git commit -q -m runner",
+    ]);
+    assert_eq!(spawned.status.code(), Some(i32::from(RC_OK)), "B の spawn は rc 0（{}）", told(&spawned));
+    let lens = fake_lens(&state.join("forward-lens-ran"), &lens_verdict("PASS"));
+    let gated = gate_once(&repo, &state, &other, Some(&lens));
+    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "B の gate は rc 0（{}）", told(&gated));
+    assert_eq!(spawned_now(&state, &asked), 1, "前提: A はまだ起こし直されていない");
+    // B の driver（`--drive`）が Gated → Landed と段を前へ進め、終端の 1 周で A を起こす。
+    let mut tools = toy_tools(&repo, &state);
+    tools.push("--drive".to_owned());
+    let out = with_tools(&["resume", "--run", &other], &tools);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "B の resume は rc 0（{}）", told(&out));
+    assert_eq!(
+        stdout_of(&out).lines().last(),
+        Some(format!("{} drive=settled", resumed_line(1)).as_str()),
+        "終端の 1 周が A を 1 本起こす（{}）",
+        told(&out)
+    );
+    assert_eq!(stage_reached(&state, &other, "Landed"), 1, "B は着地（段の並び: {}）", stages_of(&state, &other));
+    assert_eq!(stage_reached(&state, &asked, "Implemented"), 1, "A が先の段へ進む（段の並び: {}）", stages_of(&state, &asked));
+    assert_eq!(stage_reached(&state, &asked, "Landed"), 1, "A も自走で着地まで（段の並び: {}）", stages_of(&state, &asked));
     clean(&[&repo, &state]);
 }

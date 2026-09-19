@@ -15,7 +15,7 @@ use crate::pipe::follow;
 use crate::pipe::gate::{Verdict, RC_INCONCLUSIVE};
 use crate::pipe::land::verdict_of;
 use crate::pipe::ratelimit::ride_out_rate_limit;
-use crate::pipe::{current, emit, last_stage_detail, question_of_run, runner_is_idle, Emit};
+use crate::pipe::{current, emit, gate_is_open, last_stage_detail, runner_is_idle, Emit};
 use crate::rules::manifest::Manifest;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -100,7 +100,8 @@ pub(super) fn resume(
         // Blocked から先へ進めるのは承認 event が在る周だけ。未承認は **rc 3 のまま
         // 何も書かない**——待っている事実は既に Blocked が記帳しており、resume の
         // たびに ApprovalRequested を積むと「何回聞いたか」が事実と食い違う。
-        Stage::Blocked => match state.runs.get(&id).is_some_and(|run| run.approved) {
+        // 関門の判定は列（`pipe::dispatch`）と**同じ述語 1 本**（[`gate_is_open`]・設計 dispatcher.md §13）。
+        Stage::Blocked => match gate_is_open(&state_dir, &state, &id) {
             false => Outcome::failed_line(
                 RC_BLOCKED,
                 format!("pipe: run {id} は承認待ちである（pipe approve --words \"<user の逐語>\"）"),
@@ -109,7 +110,7 @@ pub(super) fn resume(
         },
         // Questioned から先へ進めるのは**最新の質問への回答**が在る周だけ（`Blocked` と同型・
         // FR32）。無ければ rc 3 で何も書かない（待っている事実は Questioned が既に持つ）。
-        Stage::Questioned => match question_of_run(&state_dir, &id).is_some_and(|q| q.answer.is_some()) {
+        Stage::Questioned => match gate_is_open(&state_dir, &state, &id) {
             false => Outcome::failed_line(
                 RC_BLOCKED,
                 format!("pipe: run {id} は回答待ちである（pipe answer --run {id} --words \"<回答の逐語>\"）"),

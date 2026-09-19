@@ -125,10 +125,61 @@ impl Drop for Driver {
 /// 残った札の所有者が居なければ、その便は駆動する者を失っている。`pid` の再利用で生きて見える札は
 /// 触らない側へ倒す（判定は lock の所有者と同じ 1 本・C6.3）。
 pub fn driver_is_dead(state_dir: &Path, id: &str) -> bool {
-    let Ok(body) = std::fs::read_to_string(driver_path(state_dir, id)) else {
+    driver_ticket(state_dir, id) == Ticket::Dead
+}
+
+/// driver の札の状態（**閉じた 4 値**・設計 dispatcher.md §13「札の状態は 4 値で読む」）。
+///
+/// 「無い」と「在るのに読めない」を畳まない（C11.2）: 関門が開いた待ちの便は、driver が正常に抜けて札を
+/// 外した便（無い）と driver が死んだ便（所有者が死んでいる）だけを起こし直し、読めない札は「居ない」に
+/// 読み替えない（fail-closed）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ticket {
+    /// 札が無い（driver が正常に抜けた便・`pipe intake` + `pipe spawn` で起こした便）。
+    Absent,
+    /// 札は在るが所有者の process が無い（driver が死んだ便）。
+    Dead,
+    /// 所有者が生きている（`pid` の再利用で生きて見える札もここ）。
+    Live,
+    /// 在るのに読めない（file を読めない・本文が pid でない・probe が読めない）。
+    Unreadable,
+}
+
+/// 便の driver の札を 4 値で読む（生死の判定は lock の所有者と**同じ 1 本**・C6.3・第 2 の probe を作らない）。
+pub fn driver_ticket(state_dir: &Path, id: &str) -> Ticket {
+    match std::fs::read_to_string(driver_path(state_dir, id)) {
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ticket::Absent,
+        Err(_) => Ticket::Unreadable,
+        Ok(body) => match store::lock_owner(&body, store::started_ms) {
+            store::Owner::Dead => Ticket::Dead,
+            store::Owner::Live => Ticket::Live,
+            store::Owner::Unreadable => Ticket::Unreadable,
+        },
+    }
+}
+
+/// 待ちの段の関門が開いているか（**resume の入口と列が呼ぶ同じ述語 1 本**・設計 dispatcher.md §13・C2）。
+///
+/// `Blocked` は replay の承認の導出値（[`crate::fleet::Run::approved`]）、`Questioned` は**最新の**質問に回答が
+/// 在ること（[`question_of_run`]・古い質問への回答が在っても、その後の新しい質問が未回答なら閉じている）。
+/// 待ちの段でない便と replay に無い便は関門を持たない（`false`＝候補に入れない側）。
+pub fn gate_is_open(state_dir: &Path, state: &State, id: &str) -> bool {
+    let Some(run) = state.runs.get(id) else {
         return false;
     };
-    store::lock_owner(&body, store::started_ms) == store::Owner::Dead
+    match run.stage {
+        Stage::Blocked => run.approved,
+        Stage::Questioned => question_of_run(state_dir, id).is_some_and(|found| found.answer.is_some()),
+        Stage::Intake
+        | Stage::Reviewed
+        | Stage::Spawned
+        | Stage::RateLimited
+        | Stage::Implemented
+        | Stage::Gated
+        | Stage::Landed
+        | Stage::Failed
+        | Stage::Stopped => false,
+    }
 }
 
 /// 便の契約 file の写し。

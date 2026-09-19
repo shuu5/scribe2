@@ -15,10 +15,10 @@ use super::cli::{crossings, generated, int_row, judge, live, stage_of, Denial, M
 use super::contract::Contract;
 use super::refuse::overlaps;
 use super::table::{self, Pointer};
-use super::{contract_path, current, git_bytes};
+use super::{contract_path, current, git_bytes, Ticket};
 use crate::cli_outcome::Outcome;
 use crate::fleet::store;
-use crate::fleet::{Event, EventKind, Mark, Stage, STAGES};
+use crate::fleet::{Event, EventKind, Mark, Stage, State, STAGES};
 use crate::name::NAME;
 use crate::rules::manifest::Manifest;
 use crate::seat::host_slots_dir;
@@ -272,16 +272,34 @@ pub fn handoff(advance: Advance, exit: Stage, live: Option<bool>) -> Handoff {
     }
 }
 
-/// 呼び手の便を渡すかを永続面から判じる（段は replay・生死は [`live`] の 1 本）。
-fn handoff_of(input: &Input<'_>) -> Option<Handoff> {
+/// 呼び手の便の段の動きと渡すかを永続面から判じる（段は replay・生死は [`live`] の 1 本）。
+///
+/// driver でない周は `None`。段を読めない driver の周は動きが `None`（**測れないを「前進」にも「同じ段」
+/// にも読み替えない**・C10）で、渡すかは [`Handoff::Unmeasured`]。
+fn progress_of(input: &Input<'_>) -> Option<(Option<Advance>, Handoff)> {
     let driving = input.driving.as_ref()?;
     let Ok(state) = current(input.state_dir) else {
-        return Some(Handoff::Unmeasured);
+        return Some((None, Handoff::Unmeasured));
     };
     let Ok(exit) = stage_of(&state, driving.run) else {
-        return Some(Handoff::Unmeasured);
+        return Some((None, Handoff::Unmeasured));
     };
-    Some(handoff(advance(driving.entry, exit), exit, live(input.state_dir, driving.run, exit)))
+    let moved = advance(driving.entry, exit);
+    Some((Some(moved), handoff(moved, exit, live(input.state_dir, driving.run, exit))))
+}
+
+/// 関門が開いた待ちの便を起こす周か（**pure**・設計 §13「段を進めなかった driver の終端の 1 周は、関門の
+/// 候補を 1 本も起こさない」）。
+///
+/// driver でない周（手動の 1 周・印の直後・回答や承認の記帳の直後・`None`）は絞らない。driver の周は
+/// **段を前へ進めた周だけ**起こす——札の無い便を候補にすると「resume が抜けると札が消えて候補から落ちる」
+/// 止め金が効かないので、段を 1 つも進められずに抜けた resume が自分の終端の 1 周で同じ便をまた起こし、
+/// 待ちの便が 2 本在れば互いを起こし合う。連鎖は段の前進を 1 回ずつ要るので有限である。
+pub fn admits_gated(driver: Option<Advance>) -> bool {
+    match driver {
+        None | Some(Advance::Forward) => true,
+        Some(Advance::Same | Advance::Backward) => false,
+    }
 }
 
 /// 起こす（通る便だけ `pipe run` を**子 process で**起こす・設計 §3・§5・契約表の行 b）。
@@ -344,7 +362,7 @@ pub struct Turn {
     pub candidates: Vec<Candidate>,
     /// 起こす便の構築点（`candidates` の `reason` が `None` の件と同じ順・同じ本数）。
     pub launches: Vec<Launch>,
-    /// 起こし直す便（driver の札の所有者が死んでいる live 便・run id の順）。
+    /// 起こし直す便（driver の札の所有者が死んでいる live 便と、関門が開いて driver の居ない待ちの便・run id の順）。
     pub revives: Vec<Revive>,
     /// 台帳を読めなかった周の理由（`Some` なら他の 2 つは空）。
     pub unmeasured: Option<Unmeasured>,
@@ -443,11 +461,18 @@ pub fn fire(input: &Input<'_>) -> Turn {
     if turn.unmeasured.is_some() {
         return turn;
     }
-    turn.revives = revivals(input);
+    // **関門が開いた待ちの便は、driver の周なら段を前へ進めた周だけ起こす**（設計 §13・[`admits_gated`]）。
+    // 段を読めない driver の周は 0 本（測れないを「前進」に読み替えない・fail-closed）。
+    let progress = progress_of(input);
+    let gated = match progress {
+        None => admits_gated(None),
+        Some((moved, _)) => moved.is_some_and(|found| admits_gated(Some(found))),
+    };
+    turn.revives = revivals(input, gated);
     // **呼び手の便を継ぐ**（設計 §5「1 段進めた driver は終端の 1 周で自分の便を次の driver に渡す」）:
     // 自分の札は生きている（いま握っているのは自分である）ので [`revivals`] は拾わない。渡す周だけ
     // 足し、渡さなかった周は理由を [`Turn::drive`] に残す（C10）。
-    turn.drive = handoff_of(input);
+    turn.drive = progress.map(|(_, handoff)| handoff);
     if let (Some(Handoff::Pass), Some(driving)) = (turn.drive, input.driving.as_ref()) {
         if !turn.revives.iter().any(|revive| revive.run == driving.run) {
             turn.revives.push(revive_of(input, driving.run));
@@ -466,20 +491,23 @@ pub fn fire(input: &Input<'_>) -> Turn {
     turn
 }
 
-/// **人の手を待つ段**（承認待ち・回答待ち）。起こし直しの候補から**段で外す**（札は残す）。
+/// **人の手を待つ段**（承認待ち・回答待ち）。関門が閉じたままの便は起こし直しの候補から**段で外す**（札は残す）。
 ///
-/// `pipe resume` はこの 2 段で何もせず rc 3 を返す（待っている事実は段が既に持つ）ので、札が残ったまま
-/// 契機のたびに起こし直すと空撃ちになる。**札は消さない**——消すと、承認や回答が記帳された後に driver の
-/// 居ない live 便が「札の無い便＝触らない」に落ちて二度と自走せず、人が `pipe resume` を撃つ手順が戻る
-/// （planner 裁定 2026-09-19）。段で外せば、回答の後の次の契機で自走に戻る。
+/// `pipe resume` はこの 2 段で関門が閉じていれば何もせず rc 3 を返す（待っている事実は段が既に持つ）ので、
+/// 札が残ったまま契機のたびに起こし直すと空撃ちになる。**札は消さない**——消すと、承認や回答が記帳された
+/// 後に driver の居ない live 便が「札の無い便＝触らない」に落ちて二度と自走せず、人が `pipe resume` を撃つ
+/// 手順が戻る（planner 裁定 2026-09-19）。関門が開いた便（[`super::gate_is_open`]）は [`gated`] が候補に戻す。
 const WAITING: [Stage; 2] = [Stage::Blocked, Stage::Questioned];
 
-/// 起こし直す便（live 便のうち **driver の札の所有者が死んでいる**もの・設計 §5「driver の死亡」）。
+/// 起こし直す便（run id の順・設計 §5「driver の死亡」+ §13「関門が開いた待ちの便」）。
 ///
-/// **札が無い・読めない便は触らない**（測れないを「死んだ」に読み替えない・fail-closed）。別の process が
+/// 待ちの段でない live 便は **driver の札の所有者が死んでいる**ものだけ（§5 の規則・1 字も変えない）:
+/// 札が無い・読めない便は触らない（測れないを「死んだ」に読み替えない・fail-closed）。別の process が
 /// 生きて持っている札の便も、`pid` の再利用で生きて見える便も触らない（判定は lock の所有者と同じ 1 本）。
-/// 人の手を待つ段（[`WAITING`]）も候補から外す。
-fn revivals(input: &Input<'_>) -> Vec<Revive> {
+///
+/// 待ちの段（[`WAITING`]）の live 便は `gated` の周だけ [`gated`] で判じる（関門が開いていて driver が
+/// 居ないと測れた便）。閉じたままの便は今までどおり候補にしない。
+fn revivals(input: &Input<'_>, gated: bool) -> Vec<Revive> {
     let Ok(state) = current(input.state_dir) else {
         return Vec::new();
     };
@@ -487,10 +515,23 @@ fn revivals(input: &Input<'_>) -> Vec<Revive> {
         .runs
         .iter()
         .filter(|(id, run)| live(input.state_dir, id, run.stage) == Some(true))
-        .filter(|(_, run)| !WAITING.contains(&run.stage))
-        .filter(|(id, _)| super::driver_is_dead(input.state_dir, id))
+        .filter(|(id, run)| match WAITING.contains(&run.stage) {
+            false => super::driver_is_dead(input.state_dir, id),
+            true => gated && self::gated(input.state_dir, &state, id),
+        })
         .map(|(id, _)| revive_of(input, id))
         .collect()
+}
+
+/// 関門が開いた待ちの便か（live ∧ 待ちの段 ∧ 関門が開いている ∧ **driver が居ないと測れた**・設計 §13）。
+///
+/// 関門の判定は resume の入口と同じ述語 1 本（[`super::gate_is_open`]・C2）。札は 4 値で読む
+/// （[`Ticket`]）: 無い → 候補（待ちの段で止まった driver は正常に抜けて札を外す＝§5 の「札が無い便は
+/// 触らない」を**この候補にだけ**緩める・C17.2）／所有者が死んでいる → 候補／所有者が生きている → 触らない
+/// ／**在るのに読めない → 触らない**（測れないを「居ない」に読み替えない・fail-closed）。
+fn gated(state_dir: &Path, state: &State, id: &str) -> bool {
+    super::gate_is_open(state_dir, state, id)
+        && matches!(super::driver_ticket(state_dir, id), Ticket::Absent | Ticket::Dead)
 }
 
 /// 起こし直しの構築点（`pipe resume` の引数を組む・**撃たない**）。道具は起こす側と同じ 1 本から渡す。
@@ -892,8 +933,8 @@ pub fn mark(state_dir: &Path, bead: &str, mark: Mark, policy: store::LockPolicy)
 #[cfg(test)]
 mod tests {
     use super::{
-        advance, digits_of, handoff, launch_of, marks_of, order, rank, released_after, requeues, revive_of, tools,
-        Advance, Candidate, Handoff, Input, Pointer, WaitReason, DRIVE, HANDOFFS, WAIT_REASONS,
+        admits_gated, advance, digits_of, handoff, launch_of, marks_of, order, rank, released_after, requeues,
+        revive_of, tools, Advance, Candidate, Handoff, Input, Pointer, WaitReason, DRIVE, HANDOFFS, WAIT_REASONS,
     };
     use crate::fleet::{Event, EventKind, Mark, Stage, SCHEMA, STAGES};
     use crate::rules::manifest::Manifest;
@@ -993,6 +1034,20 @@ mod tests {
         assert!(!released_after(&[], run, "s2-a"), "記帳の無い便は「後」を測れない（効かない側）");
     }
 
+
+    /// 関門が開いた待ちの便の候補の選別（**pure**・設計 §13）: driver でない周は絞らず、driver の周は
+    /// 段の前進の 3 値のうち**前進だけ**が候補をそのまま起こし、同じ段のままと段が戻った周は 0 本にする
+    /// （空撃ちの連鎖を塞ぐ・母集団 = 3 値 + driver でない周）。
+    #[test]
+    fn pipe_dispatch_waiting_gate_admits_only_forward_drivers_and_every_non_driver() {
+        assert!(admits_gated(None), "driver でない周（手動の 1 周・印・回答や承認の直後）は絞らない");
+        assert!(admits_gated(Some(Advance::Forward)), "段を前へ進めた driver の周は候補をそのまま起こす");
+        assert!(!admits_gated(Some(Advance::Same)), "同じ段のままの driver の周は 0 本");
+        assert!(!admits_gated(Some(Advance::Backward)), "段が戻った driver の周は 0 本");
+        let listed = [Advance::Forward, Advance::Same, Advance::Backward];
+        let admitted = listed.iter().filter(|moved| admits_gated(Some(**moved))).count();
+        assert_eq!(admitted, 1, "母集団 {} 値のうち起こすのは前進の 1 値だけ", listed.len());
+    }
 
     /// 列が起こす便には**常に** `--drive` が付く（起こす側・起こし直す側の両方）。道具の
     /// pass-through（[`tools`]）とは**別の定数**である——渡された道具に混ぜると、`--rules` 等を

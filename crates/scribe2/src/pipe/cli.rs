@@ -90,7 +90,12 @@ pub fn dispatch(args: &[String]) -> Outcome {
     // **終端の記帳の後・lock の外で列を 1 周撃つ**（設計 dispatcher.md §5）。観測の面は増やさない（§6）ので
     // flag の無い周には行を足さず、**効果（起こした便の `RunCreated`）だけ**が残る。1 周が失敗しても終端の
     // rc は変えない——起こせなかった便は次の契機で拾う。
-    if verb.is_some_and(|found| TERMINALS.contains(&found)) {
+    // **回答・承認の記帳が成った周も同じ 1 周を撃つ**（設計 dispatcher.md §13）: 関門が開いた便を次の契機まで
+    // 待たせない。stdout には 1 行も足さない（`driving` は無い）・道具を渡さない呼び方は列が `no-runner` で
+    // 止まる＝記帳だけで終わる。
+    let contact = verb.is_some_and(|found| TERMINALS.contains(&found))
+        || (verb.is_some_and(|found| GATES.contains(&found)) && outcome.rc == RC_OK);
+    if contact {
         if let Some(queue) = queue_of(args, &manifest, driving.as_ref()) {
             let turn = queue::fire(&queue.borrow());
             // 自走を頼んだ周は、渡したか・渡さなかった理由を 1 行で残す（C10・黙って止まらない）。
@@ -118,6 +123,12 @@ pub(super) struct Driven {
 /// 終端を作ったかを見分けずに撃つ——終端が無かった周は交差も受付も動いておらず、列は同じ答えを返す
 /// （起こせる便が増えないだけ）。見分ける述語を足すと、終端の検出と列の判定を 2 か所が別々に決めることになる。
 const TERMINALS: [&str; 5] = ["run", "resume", "land", "stop", "retire"];
+
+/// **関門を開ける subcommand**（設計 dispatcher.md §13「契機に回答と承認の記帳の直後を足す」）。
+///
+/// 記帳が成った周（rc 0）だけ 1 周を撃つ——断られた周（段違い・空の逐語・無い run）は何も書いておらず、
+/// 関門は動いていない。便が live で無くなりうる [`TERMINALS`] とは別の列で、終端を作らない。
+const GATES: [&str; 2] = ["answer", "approve"];
 
 /// 列の 1 周の材料を引数から解く（解けない面が 1 つでも在れば `None`＝1 周を撃たない）。
 ///
