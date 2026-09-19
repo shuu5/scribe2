@@ -7,6 +7,7 @@ use super::{cli, replay, select, select_for_run, store, Stage};
 use std::collections::BTreeMap;
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
+use std::process::Command;
 use std::time::{Duration, Instant, SystemTime};
 
 /// 待つ対象。**述語を受ける口は作らない**（C3.4: 待機は 1 実装）。
@@ -65,16 +66,29 @@ pub enum Completion {
         /// 便が使う model（rules 行 `runner.model` の値・字面のまま運び [`select_for_run`] へ渡す・`s2-07l.297`）。
         model: Option<String>,
     },
+    /// **CI の判定が出ること**（`pipe land` の終端・設計 contract-source.md §5）: forge の CLI を子 process で
+    /// 撃ち、着地した commit の run が**終端の判定**（success / failure）に達する。まだ走っている周・
+    /// run が 1 本も無い周・読めない周は満たされない（deadline まで待つ）。判定そのものは呼び手が
+    /// [`ci_now`] で読み直す（`LandTurn` と同型＝待ちは「解けたか」だけを答える）。
+    CiResult {
+        /// CI の行を撃つ作業 dir（対象 repo）。
+        repo: std::path::PathBuf,
+        /// **着地した commit の 40 桁の sha**（行の `{sha}` の穴に入る）。短縮 sha を渡すと forge の CLI は
+        /// 完了済みの run でも空を返し続け、待ちが上限まで空回りする（実測の罠）。
+        sha: String,
+        /// 判定を読む 1 行（宣言 `ci-cmd` か既定・`{sha}` の穴を持つ）。
+        cmd: String,
+    },
 }
 
 impl Completion {
     /// 見張る pid。**pid を見張らない variant（[`Self::SlotFree`] / [`Self::LandTurn`] /
-    /// [`Self::AccountFree`]）は 0**——pid 0 は `/proc/0` を持たない（user の process に振られない）ので、
+    /// [`Self::AccountFree`] / [`Self::CiResult`]）は 0**——pid 0 は `/proc/0` を持たない（user の process に振られない）ので、
     /// 生きている pid と取り違えない。[`Self::GroupGone`] は group id（= group leader の pid）を返す。
     pub fn pid(&self) -> u32 {
         match *self {
             Self::RunnerExited(pid) | Self::SeatGone(pid) | Self::GroupGone(pid) => pid,
-            Self::SlotFree { .. } | Self::LandTurn { .. } | Self::AccountFree { .. } => 0,
+            Self::SlotFree { .. } | Self::LandTurn { .. } | Self::AccountFree { .. } | Self::CiResult { .. } => 0,
         }
     }
 
@@ -91,6 +105,7 @@ impl Completion {
                 )
             }
             Self::LandTurn { .. } => self.round(None).met,
+            Self::CiResult { repo, sha, cmd } => ci_now(repo, sha, cmd).is_some(),
             Self::AccountFree { state_dir, repo, run, expected, labels, model, .. } => {
                 account_free(state_dir, run, *expected, &RunSelect { repo, labels, model: model.as_deref() })
             }
@@ -113,6 +128,65 @@ impl Completion {
             None => observe(mark, state_dir, run),
         }
     }
+}
+
+/// CI の run 1 本が着いた**終端の判定**（**閉じた 2 値**・設計 contract-source.md §5）。
+///
+/// 「まだ出ていない」はこの型に入れない（[`ci_now`] が `None` で返す）——走っている run を
+/// `Failure` に畳むと、待つ前に close しない側へ倒れて上限の意味が消える（C10）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CiRun {
+    /// 完了して success。
+    Success,
+    /// 完了して success でない（failure / cancelled / timed_out …）。
+    Failure,
+}
+
+/// forge の CLI が `--json status,conclusion` で返す key（字面は forge のもの）。
+const CI_STATUS: &str = "status";
+
+/// 同上（判定の key）。
+const CI_CONCLUSION: &str = "conclusion";
+
+/// 完了した run の `status` の字面。
+const CI_COMPLETED: &str = "completed";
+
+/// 成功した run の `conclusion` の字面。
+const CI_SUCCESS: &str = "success";
+
+/// CI の判定を**1 回だけ**読む（子 process 1 回・設計 contract-source.md §5）。
+///
+/// 返すのは 3 形である: `Some(Success)`（run が 1 本以上在り、**全部が完了していて全部 success**）・
+/// `Some(Failure)`（完了した run に success でないものが 1 本以上在る）・`None`（run が 0 本・まだ走って
+/// いる run が在る・行を撃てない・JSON を読めない）。**`None` を「成功していない」と読まない**のは
+/// 呼び手の側で、`None` は「まだ測れていない」である（C10）。
+///
+/// 行は **argv 1 本として撃つ**（shell を通さない）。宣言 `ci-cmd` は対象 repo の tracked file から来るので、
+/// shell に渡すと宣言 1 行が別の command を継ぎ足せる（契約の verify 行と同じ線）。
+pub fn ci_now(repo: &Path, sha: &str, cmd: &str) -> Option<CiRun> {
+    let line = cmd.replace(crate::pipe::declaration::CI_SHA_HOLE, sha);
+    let mut words = line.split_whitespace();
+    let head = words.next()?;
+    let out = Command::new(head).args(words).current_dir(repo).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let tree = crate::fleet::json_tree::parse(&String::from_utf8_lossy(&out.stdout)).ok()?;
+    let runs = tree.as_array()?;
+    if runs.is_empty() {
+        return None;
+    }
+    let mut verdict = CiRun::Success;
+    for run in runs {
+        // **完了していない run が 1 本でも在れば測れていない**（走っている run を成功に数えない）。
+        if run.get(CI_STATUS).and_then(crate::fleet::json_tree::Tree::as_str) != Some(CI_COMPLETED) {
+            return None;
+        }
+        if run.get(CI_CONCLUSION).and_then(crate::fleet::json_tree::Tree::as_str) != Some(CI_SUCCESS) {
+            verdict = CiRun::Failure;
+        }
+    }
+    Some(verdict)
 }
 
 /// file 1 本の印（長さ・mtime・inode・metadata だけで中身を parse しない）。
@@ -550,6 +624,11 @@ mod tests {
                 labels: Vec::new(),
                 model: None,
             },
+            Completion::CiResult {
+                repo: std::path::PathBuf::from("repo"),
+                sha: "0".repeat(40),
+                cmd: "true {sha}".to_owned(),
+            },
         ];
         let names: Vec<&str> = all
             .iter()
@@ -560,12 +639,13 @@ mod tests {
                 Completion::GroupGone(_) => "GroupGone",
                 Completion::LandTurn { .. } => "LandTurn",
                 Completion::AccountFree { .. } => "AccountFree",
+                Completion::CiResult { .. } => "CiResult",
             })
             .collect();
         assert_eq!(
             names,
-            ["RunnerExited", "SeatGone", "SlotFree", "GroupGone", "LandTurn", "AccountFree"],
-            "宣言順の末尾に AccountFree"
+            ["RunnerExited", "SeatGone", "SlotFree", "GroupGone", "LandTurn", "AccountFree", "CiResult"],
+            "宣言順の末尾に CiResult"
         );
     }
 }

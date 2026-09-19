@@ -34,7 +34,23 @@ pub const DENIED_ROW: &str = crate::hook::command::ROW;
 const SCHEMA_VERSION: u64 = 1;
 
 /// 宣言が持つ key（この順で報告する）。
-const DECLARED_KEYS: &[&str] = &["schema", "allowed-commands", "common-verify", DETECTION_KEY, REQUIREMENTS_KEY];
+const DECLARED_KEYS: &[&str] =
+    &["schema", "allowed-commands", "common-verify", DETECTION_KEY, REQUIREMENTS_KEY, REMOTE_KEY, CI_CMD_KEY];
+
+/// **push 先の remote の名**の key（任意・設計 contract-source.md §5「land の終端」）。
+///
+/// **既定は持たない**。push は repo の外へ出す行為（憲法 A1 の「出す」）なので、押す先を宣言していない
+/// repo に器が勝手な既定で押すことはしない——宣言の無い repo の便は終端を持たない（`--pr-cmd` 形と同じ）。
+const REMOTE_KEY: &str = "remote";
+
+/// **CI の判定を読む 1 行**の key（任意・設計 contract-source.md §5）。書かない宣言は [`DEFAULT_CI_CMD`] を撃つ。
+const CI_CMD_KEY: &str = "ci-cmd";
+
+/// CI の判定を読む行の既定（forge の CLI・`{sha}` に着地した sha が入る）。
+pub const DEFAULT_CI_CMD: &str = "gh run list --commit {sha} --json status,conclusion";
+
+/// CI の行が必ず持つ穴（**着地した commit を名指さない行は撃てない**・別の commit の判定を読むことになる）。
+pub const CI_SHA_HOLE: &str = "{sha}";
 
 /// **要件面の path** の key（任意・設計 contract-source.md §2「表の検査」）。契約表の `req` の id をこの file で
 /// 測る。書かない宣言は [`DEFAULT_REQUIREMENTS`] を読む（既存の宣言を 1 行も変えさせない）。
@@ -63,7 +79,7 @@ const DETECTION_KEY: &str = "detection-verify";
 /// **書かなくてよい** key（無ければ空）。書いた周の空配列は従来どおり不備である（ADR-0010 §2.1）。
 ///
 /// 任意にするのは、検出線を持たない consumer（toy repo 等）の宣言を 1 行も変えさせないためである。
-const OPTIONAL_KEYS: &[&str] = &[DETECTION_KEY, REQUIREMENTS_KEY];
+const OPTIONAL_KEYS: &[&str] = &[DETECTION_KEY, REQUIREMENTS_KEY, REMOTE_KEY, CI_CMD_KEY];
 
 /// shell が意味を変える文字。**1 行 1 command の粒度**はここで守る——gate と land は行を
 /// `sh -c` で撃つので、先頭語だけを見ても包みや連結を止められない（ADR-0010 §2.3）。
@@ -214,6 +230,10 @@ pub struct Declared {
     detection_line: u64,
     /// 要件面の repo 相対 path（任意・無ければ `None`）。
     requirements: Option<String>,
+    /// push 先の remote の名（任意・無ければ `None`）。
+    remote: Option<String>,
+    /// CI の判定を読む 1 行（任意・無ければ `None`）。
+    ci_cmd: Option<String>,
 }
 
 /// 出所つきの宣言。**[`Effective`] はこれを消費してしか作れない**（C10）。
@@ -266,20 +286,26 @@ pub fn measure(
     Sourced::read(repo, ceiling)?.measure(ceiling, contract_verify)
 }
 
+/// HEAD commit の tree の宣言を読む（**読み手は 1 本**・作業ツリーは読まない＝commit されていない宣言は
+/// 無いのと同じ）。上限と突き合わせる [`Sourced::read`] と、終端が読む [`terminal_facts`] が共有する。
+fn declared_at_head(repo: &Path) -> Result<Declared, Vec<DeclError>> {
+    let spec = format!("HEAD:{DECL_FILE}");
+    let bytes = super::git_bytes(repo, &["show", &spec]).ok_or_else(|| {
+        vec![DeclError::new(
+            0,
+            format!("HEAD の tree に {DECL_FILE} が無い（作業ツリーの宣言は読まない＝commit されていない宣言は無いのと同じ）"),
+        )]
+    })?;
+    Declared::parse(&String::from_utf8_lossy(&bytes))
+}
+
 impl Sourced {
     /// HEAD commit の tree から宣言を読む。**作業ツリーは読まない**。
     fn read(repo: &Path, ceiling: &Ceiling<'_>) -> Result<Self, Vec<DeclError>> {
         let commit = super::head_of(repo).ok_or_else(|| {
             vec![DeclError::new(0, format!("{} の HEAD を読めない", repo.display()))]
         })?;
-        let spec = format!("HEAD:{DECL_FILE}");
-        let bytes = super::git_bytes(repo, &["show", &spec]).ok_or_else(|| {
-            vec![DeclError::new(
-                0,
-                format!("HEAD の tree に {DECL_FILE} が無い（作業ツリーの宣言は読まない＝commit されていない宣言は無いのと同じ）"),
-            )]
-        })?;
-        let declared = Declared::parse(&String::from_utf8_lossy(&bytes))?;
+        let declared = declared_at_head(repo)?;
         Ok(Self {
             declared,
             commit,
@@ -423,6 +449,8 @@ impl Declared {
         let (common_verify, common_line) = list_of(&found, "common-verify", &mut errors);
         let (detection_verify, detection_line) = list_of(&found, DETECTION_KEY, &mut errors);
         let requirements = requirements_of(&found, &mut errors);
+        let remote = remote_of(&found, &mut errors);
+        let ci_cmd = ci_cmd_of(&found, &mut errors);
         if schema != Some(SCHEMA_VERSION) {
             errors.push(DeclError::new(
                 0,
@@ -438,6 +466,8 @@ impl Declared {
                 common_line,
                 detection_line,
                 requirements,
+                remote,
+                ci_cmd,
             })
         } else {
             Err(errors)
@@ -454,6 +484,37 @@ fn requirements_of(found: &[(String, Raw, u64)], errors: &mut Vec<DeclError>) ->
             errors.push(DeclError::new(
                 *line,
                 format!("{REQUIREMENTS_KEY} は repo 相対の path の文字列である（空・絶対 path・home の短縮記号・.. は書けない）"),
+            ));
+            None
+        }
+    }
+}
+
+/// push 先の remote の名（任意）。**1 語だけ**を受ける——空白を含む値は `git push <remote> main:main` の
+/// 引数が 2 つに割れ、別の ref を押すことになる。
+fn remote_of(found: &[(String, Raw, u64)], errors: &mut Vec<DeclError>) -> Option<String> {
+    let (_, value, line) = found.iter().find(|(seen, _, _)| seen == REMOTE_KEY)?;
+    match value {
+        Raw::Text(name) if !name.trim().is_empty() && !name.split_whitespace().nth(1).is_some() => {
+            Some(name.trim().to_owned())
+        }
+        _ => {
+            errors.push(DeclError::new(*line, format!("{REMOTE_KEY} は空白を含まない 1 語の remote の名である")));
+            None
+        }
+    }
+}
+
+/// CI の判定を読む 1 行（任意）。**`{sha}` の穴を必ず持つ**——穴の無い行は着地した commit を名指さず、
+/// 別の commit の判定を読んで success と言いうる（測っていないものを測ったことにしない・C10）。
+fn ci_cmd_of(found: &[(String, Raw, u64)], errors: &mut Vec<DeclError>) -> Option<String> {
+    let (_, value, line) = found.iter().find(|(seen, _, _)| seen == CI_CMD_KEY)?;
+    match value {
+        Raw::Text(cmd) if !cmd.trim().is_empty() && cmd.contains(CI_SHA_HOLE) => Some(cmd.trim().to_owned()),
+        _ => {
+            errors.push(DeclError::new(
+                *line,
+                format!("{CI_CMD_KEY} は {CI_SHA_HOLE} の穴を持つ 1 行である（着地した commit を名指さない行は撃てない）"),
             ));
             None
         }
@@ -482,6 +543,27 @@ pub fn table_facts(repo: &Path, ceiling: &Ceiling<'_>) -> Result<TableFacts, Vec
     let requirements = sourced.declared.requirements.clone().unwrap_or_else(|| DEFAULT_REQUIREMENTS.to_owned());
     let effective = sourced.measure(ceiling, &[])?;
     Ok(TableFacts { allowed: effective.allowed, denied: ceiling.denied.to_vec(), requirements })
+}
+
+/// land の終端が読む宣言の事実（設計 contract-source.md §5・push 先と CI の行）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TerminalFacts {
+    /// push 先の remote の名（宣言 `remote`・**無ければ `None`＝終端を持たない**）。
+    pub remote: Option<String>,
+    /// CI の判定を読む 1 行（宣言 `ci-cmd`・無ければ [`DEFAULT_CI_CMD`]・`{sha}` の穴を持つ）。
+    pub ci_cmd: String,
+}
+
+/// HEAD の宣言から終端の事実を解く（上限は読まない＝終端は allowlist と突き合わせない）。
+///
+/// **宣言が無い周も断る**（`Err`）。終端は「どこへ push し、どの行で CI を読むか」を宣言から受ける口で、
+/// 宣言そのものが無い repo に既定で push するのは「測っていない先へ出す」ことになる（A1 の「出す」・C10）。
+pub fn terminal_facts(repo: &Path) -> Result<TerminalFacts, Vec<DeclError>> {
+    let declared = declared_at_head(repo)?;
+    Ok(TerminalFacts {
+        remote: declared.remote,
+        ci_cmd: declared.ci_cmd.unwrap_or_else(|| DEFAULT_CI_CMD.to_owned()),
+    })
 }
 
 /// 契約の verify 1 行が argv 1 本として撃てない理由（撃てれば `None`）。判定は [`unfit`] の 1 本で、契約の行は

@@ -87,11 +87,16 @@ fn pipe_land_subject_cuts_first_sentence_and_keeps_goal_in_body() {
         "件名は 72 文字 + `…` 以内（base は goal 全文を載せるので落ちる）: {subject}"
     );
     assert!(subject.ends_with('…'), "切った周は印が付く: {subject}");
-    // 落とさない側。**本文は goal 全文を逐語で持ち**、最終行は run へ辿る trailer である。
+    // 落とさない側。**本文は goal 全文を逐語で持ち**、末尾に run へ辿る trailer の組が並ぶ。
     let body = git(&repo, &["log", "-1", "--format=%b", "refs/heads/main"]);
     assert!(body.contains(LONG_GOAL), "本文に goal 全文が逐語で在る: {body}");
     let trailer = format!("run: {id}");
-    assert_eq!(body.lines().last(), Some(trailer.as_str()), "最終行は run trailer: {body}");
+    let tail: Vec<&str> = body.lines().rev().take(3).collect();
+    assert_eq!(tail.len(), 3, "trailer の組は 3 行: {body}");
+    assert!(tail.contains(&trailer.as_str()), "run trailer が在る: {body}");
+    // **契約と要件の trailer**（設計 contract-source.md §5 手順 5・`s2-07l.382`）は run の後ろに並ぶ。
+    assert!(tail.iter().any(|line| line.ends_with("#a")), "契約の trailer が設計 pointer を名指す: {body}");
+    assert!(tail.iter().any(|line| line.ends_with("FR4")), "要件の trailer が req を名指す: {body}");
     clean(&[&repo, &state]);
 }
 
@@ -643,7 +648,7 @@ fn assert_already_landed_side_effects(repo: &Path, state: &Path, id: &str, squas
     let keys: Vec<&str> = pairs.iter().map(|(key, _)| key.as_str()).collect();
     assert_eq!(
         keys,
-        vec!["schema", "run", "bead", "sha", "verdict", "evidence", "ts", "order", "size", "files", "lines", "pub_symbols"],
+        vec!["schema", "run", "bead", "sha", "verdict", "evidence", "ts", "order", "generation", "size", "files", "lines", "pub_symbols"],
         "verdicts.jsonl の行は従来の key 列（任意 field を足さない）"
     );
     assert_eq!(value_of(&pairs, "sha"), squash, "面 5 の `sha` は見つけた squash");
@@ -1352,7 +1357,7 @@ fn pipe_land_exports_verdict_schema1() {
     // 既存の 7 key の並びは動かない。便の規模の 4 field（gate-cost.md §5.1・`s2-07l.189`）は `order` の後ろ。
     assert_eq!(
         keys,
-        vec!["schema", "run", "bead", "sha", "verdict", "evidence", "ts", "order", "size", "files", "lines", "pub_symbols"],
+        vec!["schema", "run", "bead", "sha", "verdict", "evidence", "ts", "order", "generation", "size", "files", "lines", "pub_symbols"],
         "面 5 の key 列（ADR-0004 §2.2・版番号に依らず固定）"
     );
     assert_eq!(value_of(&pairs, "schema"), "1");
@@ -1419,7 +1424,7 @@ fn pipe_land_size_fields_follow_order_and_match_the_diff() {
     let keys: Vec<&str> = pairs.iter().map(|(key, _)| key.as_str()).collect();
     assert_eq!(
         keys.get(7..),
-        Some(&["order", "size", "files", "lines", "pub_symbols"][..]),
+        Some(&["order", "generation", "size", "files", "lines", "pub_symbols"][..]),
         "4 field は order の後ろにこの順: {keys:?}"
     );
     for (key, want) in [("size", "M"), ("files", "2"), ("lines", "3/1"), ("pub_symbols", "2")] {
@@ -1443,7 +1448,7 @@ fn pipe_land_size_fields_are_absent_when_git_cannot_be_read() {
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "land は rc 0: {}", stderr_of(&out));
     let pairs = exported_pairs(&state, &id);
     let keys: Vec<&str> = pairs.iter().map(|(key, _)| key.as_str()).collect();
-    assert_eq!(keys.last(), Some(&"order"), "面 5 の行は在り order で終わる: {keys:?}");
+    assert_eq!(keys.last(), Some(&"generation"), "面 5 の行は在り generation で終わる（`.382` で order の後ろに 1 つ足した）: {keys:?}");
     clean(&[&repo, &state]);
 }
 
@@ -3237,5 +3242,160 @@ fn pipe_detection_scope_unreadable_follow_diff_fires_detection() {
     let rows = verify_rows(&state, &id);
     assert!(super::gate::skip_rows(&rows).is_empty(), "撃った周に skip record は無い: {rows:?}");
     assert_eq!(row_value(&rows, 5, "rc"), "0", "再 gate の段①（`<base>..HEAD`）は読めている: {rows:?}");
+    clean(&[&repo, &state]);
+}
+
+/// 終端の道具一式（設計 contract-source.md §5・`s2-07l.382` の歯）。
+struct FakeTerminal {
+    /// 偽 remote（bare repo・push の着き先）。
+    remote: PathBuf,
+    /// 偽 bd が argv を書き出す file（撃たれなければ在らない）。
+    bd_log: PathBuf,
+}
+
+/// 実行権つきの `/bin/sh` script を書き、その path を返す。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn exec_script(path: &Path, body: &str) -> String {
+    use std::os::unix::fs::PermissionsExt;
+    fs::write(path, format!("#!/bin/sh\n{body}")).expect("script を書ける");
+    fs::set_permissions(path, fs::Permissions::from_mode(0o755)).expect("script に実行権を付ける");
+    path.display().to_string()
+}
+
+/// 偽 remote（bare repo）・偽 CI（`conclusion` を返す 1 行）・偽 bd を用意し、宣言に `remote` と
+/// `ci-cmd` を足して commit する。**`.vessel.toml` は HEAD の tree が読み面**なので commit まで行う。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn fake_terminal(repo: &Path, state: &Path, conclusion: &str) -> FakeTerminal {
+    let remote = state.join("remote.git");
+    git(state, &["init", "--bare", "-q", &remote.display().to_string()]);
+    git(repo, &["remote", "add", "fake", &remote.display().to_string()]);
+    // 偽 CI: 渡された sha を読み捨てて JSON 1 行を返す（`{sha}` の穴は器が埋める）。
+    let ci = exec_script(&state.join("fake-ci.sh"), &format!("printf '[{{\"status\":\"completed\",\"conclusion\":\"{conclusion}\"}}]\\n'\n"));
+    // 偽 bd: argv をそのまま log へ書いて rc 0（書きは close の 1 種だけ）。
+    let bd_log = state.join("bd-argv.txt");
+    exec_script(&state.join("fake-bd.sh"), &format!("printf '%s\\n' \"$@\" > '{}'\n", bd_log.display()));
+    let body = fs::read_to_string(repo.join(".vessel.toml")).expect("宣言を読める");
+    let added = format!("{body}remote = \"fake\"\nci-cmd = \"{ci} {{sha}}\"\n");
+    fs::write(repo.join(".vessel.toml"), added).expect("宣言を書ける");
+    git(repo, &["add", "-f", ".vessel.toml"]);
+    git(repo, &["commit", "-q", "-m", "terminal-decl"]);
+    FakeTerminal { remote, bd_log }
+}
+
+/// 便の `RunDone stage=Landed` の detail を**宣言順に**並べる（終端は段ごとに 1 件記す）。
+fn landed_details(state: &Path, id: &str) -> Vec<String> {
+    trail(state, id)
+        .into_iter()
+        .filter(|(kind, stage, _)| *kind == EventKind::RunDone && *stage == Some(Stage::Landed))
+        .filter_map(|(_, _, detail)| detail)
+        .collect()
+}
+
+/// (§5 land の終端) 偽 remote + 偽 CI（success）+ 偽 adapter で、`Landed` の後ろに **push → CI → close の
+/// 3 event**が並び、bead が閉じられる。押した先の main は着地した sha を指す。
+#[test]
+fn pipe_terminal_land_pushes_checks_ci_and_closes_the_bead() {
+    let (repo, state) = repo_with_state();
+    let tools = fake_terminal(&repo, &state, "success");
+    let marker = state.join("lens-ran");
+    let design = write_contract(&repo, &[], &[]);
+    let id = gated_pass(&repo, &state, &design, &marker);
+    let bd = state.join("fake-bd.sh").display().to_string();
+    let out = land_extra(&repo, &state, &id, &["--bd", &bd]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "終端まで通った land は rc 0: {}", stderr_of(&out));
+    assert!(stdout_of(&out).contains("terminal=closed"), "終端の token: {}", stdout_of(&out));
+    let landed = git(&repo, &["rev-parse", "refs/heads/main"]);
+    let details = landed_details(&state, &id);
+    assert_eq!(
+        details.iter().skip(1).cloned().collect::<Vec<String>>(),
+        vec!["terminal:push:fake".to_owned(), "terminal:ci:success".to_owned(), "terminal:close:ok".to_owned()],
+        "Landed の後ろに段ごとの 3 件（母集団 {} 件）: {details:?}",
+        details.len()
+    );
+    // **押した先が動いている**（数えただけでは撃ったと言えない）。
+    assert_eq!(git(&tools.remote, &["rev-parse", "refs/heads/main"]), landed, "偽 remote の main は着地した sha");
+    // **台帳は close の 1 種だけで撃たれる**（起票も acceptance も撃たない）。
+    let argv = fs::read_to_string(&tools.bd_log).expect("偽 bd が撃たれた");
+    let words: Vec<&str> = argv.lines().collect();
+    assert_eq!(words.first().copied(), Some("close"), "subcommand は close: {words:?}");
+    assert_eq!(words.get(2).copied(), Some("--reason"), "理由を渡す: {words:?}");
+    assert!(words.get(3).is_some_and(|line| line.contains(&landed) && line.ends_with("ci=success")), "理由の中身: {words:?}");
+    clean(&[&repo, &state]);
+}
+
+/// (§5 land の終端) CI が **failure** の周は**台帳を閉じない**（rc 1・記録は `ci:failure` で終わる）。
+///
+/// 着地そのものは取り消さない（main は進んだまま）——止めるのは close であって着地ではない。
+#[test]
+fn pipe_terminal_land_ci_failure_does_not_close_the_bead() {
+    let (repo, state) = repo_with_state();
+    let tools = fake_terminal(&repo, &state, "failure");
+    let marker = state.join("lens-ran");
+    let design = write_contract(&repo, &[], &[]);
+    let id = gated_pass(&repo, &state, &design, &marker);
+    let before = git(&repo, &["rev-parse", "refs/heads/main"]);
+    let bd = state.join("fake-bd.sh").display().to_string();
+    let out = land_extra(&repo, &state, &id, &["--bd", &bd]);
+    assert_eq!(out.status.code(), Some(1), "close しなかった周は rc 1: {}", stderr_of(&out));
+    assert!(stdout_of(&out).contains("terminal=ci:failure"), "終端の token: {}", stdout_of(&out));
+    let details = landed_details(&state, &id);
+    assert_eq!(
+        details.iter().skip(1).cloned().collect::<Vec<String>>(),
+        vec!["terminal:push:fake".to_owned(), "terminal:ci:failure".to_owned()],
+        "close の段は記さない（母集団 {} 件）: {details:?}",
+        details.len()
+    );
+    assert!(!tools.bd_log.exists(), "台帳 client は 1 度も撃たれない");
+    // 着地は取り消さない（main は進んだまま・押した先も動いている）。
+    assert_ne!(git(&repo, &["rev-parse", "refs/heads/main"]), before, "main は進んだまま");
+    clean(&[&repo, &state]);
+}
+
+/// (§5 手順 3) `pipe land --terminal-only` は**着地をやり直さず終端だけ**を撃ち直す（冪等）。
+///
+/// CI が確定しなかった便（`ci:failure`）を、CI を直してから継ぐ。main は 1 mm も動かない——
+/// 着地は既に成立していて、やり直すのは終端の 3 段だけである。
+#[test]
+fn pipe_terminal_land_only_replays_the_terminal_without_relanding() {
+    let (repo, state) = repo_with_state();
+    let tools = fake_terminal(&repo, &state, "failure");
+    let marker = state.join("lens-ran");
+    let design = write_contract(&repo, &[], &[]);
+    let id = gated_pass(&repo, &state, &design, &marker);
+    let bd = state.join("fake-bd.sh").display().to_string();
+    let first = land_extra(&repo, &state, &id, &["--bd", &bd]);
+    assert_eq!(first.status.code(), Some(1), "1 周目は close しない: {}", stderr_of(&first));
+    let landed = git(&repo, &["rev-parse", "refs/heads/main"]);
+    assert!(!tools.bd_log.exists(), "前提: 台帳はまだ閉じていない");
+    // CI を直す（宣言は同じ path を指したまま・行は 1 byte も変えない）。
+    exec_script(&state.join("fake-ci.sh"), "printf '[{\"status\":\"completed\",\"conclusion\":\"success\"}]\\n'\n");
+    let again = land_extra(&repo, &state, &id, &["--bd", &bd, "--terminal-only"]);
+    assert_eq!(again.status.code(), Some(i32::from(RC_OK)), "継いだ終端は rc 0: {}", stderr_of(&again));
+    assert_eq!(stdout_of(&again).trim(), format!("run={id} terminal=closed"), "終端だけの 1 行");
+    // **着地はやり直さない**: main も押した先も 1 mm も動かない。
+    assert_eq!(git(&repo, &["rev-parse", "refs/heads/main"]), landed, "main は動かない");
+    assert_eq!(git(&tools.remote, &["rev-parse", "refs/heads/main"]), landed, "押した先も動かない");
+    // 記録は 1 周目の 2 件に 2 周目の 3 件が続く（段ごとに 1 件・やり直した段も残る）。
+    let details = landed_details(&state, &id);
+    assert_eq!(
+        details.iter().skip(1).cloned().collect::<Vec<String>>(),
+        vec![
+            "terminal:push:fake".to_owned(),
+            "terminal:ci:failure".to_owned(),
+            "terminal:push:fake".to_owned(),
+            "terminal:ci:success".to_owned(),
+            "terminal:close:ok".to_owned(),
+        ],
+        "母集団 {} 件: {details:?}",
+        details.len()
+    );
+    let argv = fs::read_to_string(&tools.bd_log).expect("2 周目で台帳が閉じられた");
+    assert!(argv.contains(&landed), "理由は**1 周目に着地した sha**を名指す（HEAD の今の sha ではない）: {argv}");
     clean(&[&repo, &state]);
 }

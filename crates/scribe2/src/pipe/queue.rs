@@ -228,7 +228,7 @@ mod tests {
     fn land<'a>(state: &'a Path, repo: &'a Path, contract: &'a Contract, policy: LockPolicy, wait_s: u64) -> Land<'a> {
         let limits =
             Limits { lens_count: 0, token_cap: 0, mutants_jobs: 0, job_memory_mb: 0, reserve_memory_mb: 0, slot_wait_s: 0 };
-        Land { run: "b-me", bead: "s2-mutant", repo, state_dir: state, contract, pr_cmd: None, lens: &LensSource::Absent, limits, runner: None, retries: 0, land_wait_s: wait_s, approved: false, policy }
+        Land { run: "b-me", bead: "s2-mutant", repo, state_dir: state, contract, pr_cmd: None, lens: &LensSource::Absent, limits, runner: None, retries: 0, land_wait_s: wait_s, ci_wait_s: 0, bd: crate::ledger::DEFAULT_BD, approved: false, policy }
     }
 
     // flip-check: retroactive s2-07l.222

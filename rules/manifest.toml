@@ -349,6 +349,17 @@ enabled = true
 ruling = "user 2026-09-13T02:50Z"
 ruled_at = "2026-09-13"
 
+# land の終端の CI の照合（設計 contract-source.md §5）。push の後、この上限まで forge の判定を待つ。
+# 超えた周は unmeasurable で止め、**台帳を close しない**（FailClosed・やり直しは pipe land --terminal-only）。
+
+[[rule]]
+id = "pipe.ci_wait_s"
+kind = "PipeCiWaitS"
+value = 900
+enabled = true
+ruling = "user 2026-09-16T03:31Z"
+ruled_at = "2026-09-16"
+
 # 席の指示文の台帳の現在値（設計 seat-roles.md §5・ADR-0045 §2 (3)）。台帳の子 process を待つ上限。
 
 [[rule]]
