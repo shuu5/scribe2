@@ -28,6 +28,7 @@ use crate::pipe::refuse::{overlaps, Refuse, DELETE_FILE, NEW_FILE, SHRINK_FILE};
 use crate::pipe::table::{self, ContractRow, TableError};
 use crate::pipe::{contract_path, current, emit, run_dir, run_id, vessel_path, Emit};
 use crate::rules::manifest::Manifest;
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 /// 1 file の行数の上限を持つ rules 行（上限の余地の分子・設計 contract-source.md §3・値は読むだけ・C4）。
@@ -127,8 +128,11 @@ fn intake_run(args: &[String], manifest: &Manifest, policy: LockPolicy) -> Resul
     }
     let state_dir = state_dir_of(args).map_err(refused)?;
     let ceiling = ceiling_of(manifest).map_err(|denial| denial.outcome)?;
-    let (contract, body) = generated(&repo, &pointer, &ceiling.borrow()).map_err(|denial| denial.outcome)?;
-    let material = Material { repo: &repo, manifest, contract: &contract, state_dir: Some(&state_dir), bead: &bead };
+    // **repo の材料の読みは 1 回**（設計 dispatcher.md §5）。生成も判定も同じ 1 つを借りる。
+    let materials = Materials::read(&repo, &ceiling.borrow()).map_err(|denial| denial.outcome)?;
+    let (contract, body) = generated(&repo, &pointer, &materials).map_err(|denial| denial.outcome)?;
+    let material =
+        Material { repo: &repo, manifest, contract: &contract, state_dir: Some(&state_dir), bead: &bead, materials: &materials };
     create(judge(&material), &material, &state_dir, &body, policy)
 }
 
@@ -147,8 +151,76 @@ impl Rows {
     }
 }
 
+/// 1 周ぶんの repo の材料（**読みは 1 周に 1 回**・設計 dispatcher.md §5・契約表の行 b）。
+///
+/// base の tree の走査（tracked の一覧・`.rs`・`.snap`）と、宣言から解いた契約表の facts は**契約 1 本ごとに
+/// 変わらない**。受付は 1 便で 1 回読むだけだが、列（[`crate::pipe::dispatch`]）は候補の数だけ [`generated`] と
+/// [`judge`] を撃つので、読み直すと 1 周が候補数に比例して伸びる（`s2-07l.345` の実測: 候補 1 件あたり 0.2 秒）。
+/// **判定の関数は不変で、材料を受け取る引数だけを足す**（C2）。
+pub(in crate::pipe) struct Materials {
+    /// base の tracked file の repo 相対 path。
+    tracked: Vec<String>,
+    /// base の `.rs`（閉包を測る側）。
+    sources: Vec<Source>,
+    /// base の `.snap`（外形 pin を測る側）。
+    snapshots: Vec<Source>,
+    /// 宣言から解いた allowlist / 禁じる語 / 要件面の path。
+    facts: declaration::TableFacts,
+    /// 要件面の id の集合（読めない周は理由・表の検査がそのまま断る）。
+    requirements: Result<BTreeSet<String>, String>,
+}
+
+impl Materials {
+    /// repo を 1 回走査して材料を読む。
+    ///
+    /// 断りの**順序は従来のまま**である（tracked を読めない＝git repo でない〔rc 2〕→ 宣言が読めない・上限に
+    /// 外れる〔rc 1〕）。順を替えると「宣言が壊れている」便が「表を読めない」に化ける。
+    pub(in crate::pipe) fn read(repo: &Path, ceiling: &Ceiling<'_>) -> Result<Self, Denial> {
+        let Some(tracked) = table::tracked_files(repo) else {
+            let reason = format!("{} の tracked file を読めない（git repo でない）", repo.display());
+            return Err(refuse(&Refuse::ContractTable(TableError::Unreadable { line: 0, reason }), &[]));
+        };
+        let facts = declaration::table_facts(repo, ceiling).map_err(|errors| {
+            denied(DENIAL_DECLARATION, Outcome::failed(RC_REFUSED, errors.iter().map(ToString::to_string).collect()))
+        })?;
+        let sources = table::read_all(repo, &tracked, ".rs");
+        let snapshots = table::read_all(repo, &tracked, ".snap");
+        let requirements =
+            table::read(repo, &facts.requirements).and_then(|found| table::requirement_ids(&facts.requirements, &found));
+        Ok(Self { tracked, sources, snapshots, facts, requirements })
+    }
+
+    /// rules 行の上限から材料を読む（列の入口・上限の読みと base の走査を 1 本にまとめた口）。
+    pub(in crate::pipe) fn of(repo: &Path, manifest: &Manifest) -> Result<Self, Denial> {
+        let rows = ceiling_of(manifest)?;
+        Self::read(repo, &rows.borrow())
+    }
+
+    /// base の tracked file（交差の dir の展開が読む・**2 本目の走査を作らない**ための借り）。
+    pub(in crate::pipe) fn tracked(&self) -> &[String] {
+        &self.tracked
+    }
+
+    /// 閉包を測る base（`.rs` / `.snap` / tracked の 3 面を 1 つに束ねた借り）。
+    fn base(&self) -> closure::Base<'_> {
+        base_of(&self.sources, &self.snapshots, &self.tracked)
+    }
+
+    /// 表の検査の ctx（`contracts check` と同じ材料の形）。
+    fn context(&self) -> table::Context<'_> {
+        table::Context {
+            allowed: &self.facts.allowed,
+            denied: &self.facts.denied,
+            requirements: &self.requirements,
+            sources: &self.sources,
+            tracked: &self.tracked,
+            snapshots: &self.snapshots,
+        }
+    }
+}
+
 /// 上限の材料を rules 行から読む（読めない周は [`DENIAL_RULES`] の断り・[`freeze`] と同じ 2 行）。
-pub(in crate::pipe) fn ceiling_of(manifest: &Manifest) -> Result<Rows, Denial> {
+pub(super) fn ceiling_of(manifest: &Manifest) -> Result<Rows, Denial> {
     let rows = |id: &str| list_row(manifest, id).map_err(|reason| denied(DENIAL_RULES, refused(reason)));
     Ok(Rows { commands: rows(CEILING_ROW)?, denied: rows(DENIED_ROW)? })
 }
@@ -183,7 +255,11 @@ const DENIAL_ARGS: &str = "args";
 /// 行だけが契約の正本で、commit していない書きかけを受け付けると runner が base で見るものと食い違う。
 /// 行を引いたら **(a) の [`table::check_table`] を同じ ctx でその 1 行に撃ち**（1 実装・C2）、findings が 1 件でも
 /// 在れば先頭を理由に断る（run dir を作らない・FR48 / FR54）。
-pub(in crate::pipe) fn generated(repo: &Path, pointer: &table::Pointer, ceiling: &Ceiling<'_>) -> Result<(Contract, String), Denial> {
+pub(in crate::pipe) fn generated(
+    repo: &Path,
+    pointer: &table::Pointer,
+    materials: &Materials,
+) -> Result<(Contract, String), Denial> {
     let Some(text) = crate::pipe::show_head(repo, &pointer.path) else {
         let reason = format!("{} を base（HEAD）から読めない", pointer.path);
         return Err(refuse(&Refuse::ContractTable(TableError::Unreadable { line: 0, reason }), &[]));
@@ -193,7 +269,7 @@ pub(in crate::pipe) fn generated(repo: &Path, pointer: &table::Pointer, ceiling:
         let first = errors.into_iter().next().unwrap_or(TableError::RowMissing { line: 0, id: pointer.id.clone() });
         refuse(&Refuse::ContractTable(first), &rest)
     })?;
-    let findings = check_row(repo, &text, &row, ceiling)?;
+    let findings = check_row(&text, &row, materials);
     if !findings.is_empty() {
         // 名は `Refuse::ContractTable` の側から取る（字面を 2 か所に書かない・C1）。findings は表の検査の
         // 描画をそのまま並べる（`contracts check` と 1 byte 同じ行＝読み手が 2 つの形を覚えない）。
@@ -206,7 +282,7 @@ pub(in crate::pipe) fn generated(repo: &Path, pointer: &table::Pointer, ceiling:
     // 行が `write-set` を持たない周（Derived の行・§3「write-set の導出」）は**導出値**を写しに書く。
     // 契約 file は write-set を 1 本以上要るので、空のまま書くと器が自分の生成物を読めない。
     // 導出は行と base だけで決まるので、後段の [`settle_write_set`] と同じ 1 実装をここで撃つ（C2）。
-    let write_set = if row.write_set.is_empty() { derived_write_set(repo, &row)? } else { row.write_set.clone() };
+    let write_set = if row.write_set.is_empty() { derived_write_set(&row, materials)? } else { row.write_set.clone() };
     let body = crate::pipe::contract::render(&row, &design, &write_set);
     let contract = Contract::parse(&body).map_err(|errors| {
         denied(DENIAL_GENERATED, unloadable(errors))
@@ -218,47 +294,20 @@ pub(in crate::pipe) fn generated(repo: &Path, pointer: &table::Pointer, ceiling:
 const DENIAL_GENERATED: &str = "generated";
 
 /// 行から導いた write-set（[`settle_write_set`] と同じ [`closure::derive_write_set`] を撃つ）。
-fn derived_write_set(repo: &Path, row: &ContractRow) -> Result<Vec<String>, Denial> {
-    let Some(tracked) = table::tracked_files(repo) else {
-        let reason = format!("{} の tracked file を読めない（git repo でない）", repo.display());
-        return Err(refuse(&Refuse::ContractTable(TableError::Unreadable { line: 0, reason }), &[]));
-    };
-    let sources = table::read_all(repo, &tracked, ".rs");
-    let snapshots = table::read_all(repo, &tracked, ".snap");
+fn derived_write_set(row: &ContractRow, materials: &Materials) -> Result<Vec<String>, Denial> {
     let fields = fields_of(row);
-    let base = base_of(&sources, &snapshots, &tracked);
-    let derived = closure::derive_write_set(&fields, &base).map_err(|error| refuse(&refuse_of(error, row), &[]))?;
+    let derived =
+        closure::derive_write_set(&fields, &materials.base()).map_err(|error| refuse(&refuse_of(error, row), &[]))?;
     Ok(derived.into_iter().collect())
 }
 
 /// 行 1 つに (a) の表の検査を撃つ（`contracts check` と**同じ 1 実装**・C2）。ctx（allowlist / 禁じる語 /
 /// 要件面 / base の tree）は `contracts check` と同じ材料から組み、doc の本文は base（`HEAD`）の字面を渡す。
 ///
-/// base の tree を読めない（git repo でない）周は理由の 1 行を返す＝呼び側が `Unreadable` で断る。
-fn check_row(repo: &Path, text: &str, row: &ContractRow, ceiling: &Ceiling<'_>) -> Result<Vec<table::Finding>, Denial> {
-    let Some(tracked) = table::tracked_files(repo) else {
-        let reason = format!("{} の tracked file を読めない（git repo でない）", repo.display());
-        return Err(refuse(&Refuse::ContractTable(TableError::Unreadable { line: 0, reason }), &[]));
-    };
-    // 宣言が読めない・上限に外れる周は **rc 1**（前提違反）である（[`freeze`] と同じ極性・同じ名）。
-    // 表の検査の前に宣言を読むのは要件面の path が宣言から来るからで、ここで rc 2 に倒すと
-    // 「宣言が壊れている」便が「表を読めない」に化ける。
-    let facts = declaration::table_facts(repo, ceiling).map_err(|errors| {
-        denied(DENIAL_DECLARATION, Outcome::failed(RC_REFUSED, errors.iter().map(ToString::to_string).collect()))
-    })?;
-    let sources = table::read_all(repo, &tracked, ".rs");
-    let snapshots = table::read_all(repo, &tracked, ".snap");
-    let requirements = table::read(repo, &facts.requirements)
-        .and_then(|found| table::requirement_ids(&facts.requirements, &found));
-    let ctx = table::Context {
-        allowed: &facts.allowed,
-        denied: &facts.denied,
-        requirements: &requirements,
-        sources: &sources,
-        tracked: &tracked,
-        snapshots: &snapshots,
-    };
-    Ok(table::check_table(text, std::slice::from_ref(row), &ctx))
+/// 材料（tracked / sources / snapshots / facts）は [`Materials::read`] が 1 周に 1 回だけ読む。base の tree を
+/// 読めない周と宣言が上限に外れる周は、その読みの時点で断る（順序は従来のまま）。
+fn check_row(text: &str, row: &ContractRow, materials: &Materials) -> Vec<table::Finding> {
+    table::check_table(text, std::slice::from_ref(row), &materials.context())
 }
 
 /// 契約 file が読めない周の断り（rc 2・理由を全件出す）。
@@ -307,6 +356,8 @@ pub(in crate::pipe) struct Material<'a> {
     pub(in crate::pipe) contract: &'a Contract,
     /// 置き場（交差と重複 run の 2 検査だけが読む・`None` = 撃たず overlap は unmeasured・intake は常に `Some`）。
     pub(in crate::pipe) state_dir: Option<&'a Path>,
+    /// 1 周ぶんの repo の材料（**呼び手が 1 回読む**・設計 dispatcher.md §5）。
+    pub(in crate::pipe) materials: &'a Materials,
     /// 契約の bead id（この秒の run id の材料）。
     pub(in crate::pipe) bead: &'a str,
 }
@@ -340,7 +391,7 @@ pub(in crate::pipe) struct Judged {
 /// （Declared 行は元々置き換えが無い＝前段と後段の断りが同時に載る）。git repo でない対象は他の関数が撃てないので
 /// `not-a-repo` の 1 件で止まる。
 pub(in crate::pipe) fn judge(material: &Material<'_>) -> Judged {
-    let Material { repo, manifest, contract, state_dir, bead } = *material;
+    let Material { repo, manifest, contract, state_dir, bead, materials } = *material;
     let mut judged = Judged {
         design: None,
         write_set: None,
@@ -353,20 +404,21 @@ pub(in crate::pipe) fn judge(material: &Material<'_>) -> Judged {
         run: None,
     };
     // base の tracked file の一覧（交差の dir の展開と上限の余地が読む・設計 contract-source.md §3）。
-    let Some(tracked) = super::head_of(repo).and_then(|_| table::tracked_files(repo)) else {
+    // **走査は [`Materials::read`] が 1 周に 1 回だけ撃つ**（設計 dispatcher.md §5）ので、ここでは借りるだけ。
+    if super::head_of(repo).is_none() {
         judged.denials.push(not_a_repo(repo));
         return judged;
-    };
+    }
+    let tracked = materials.tracked.as_slice();
     // **宣言は上限と突き合わせてから**。ここで断つ周は run dir も event も作らない
     // ——撃てない契約の run が置き場に残ると、続きから引ける便に見えてしまう。
     match freeze(repo, manifest, contract) {
         Ok(found) => judged.effective = Some(found),
         Err(denial) => judged.denials.push(denial),
     }
-    let sources = table::read_all(repo, &tracked, ".rs");
     // **write-set の弁別は余地と交差より前**（導出値が write-set になる周は、その導出値で余地と交差を測る）。
     let mut measured = contract.clone();
-    match settle_write_set(repo, contract, &tracked, &sources) {
+    match settle_write_set(repo, contract, materials) {
         Ok(settled) => {
             judged.write_set = settled.as_ref().map(|found| (found.kind, found.files));
             judged.derived = settled.and_then(|found| found.replaced);
@@ -376,10 +428,10 @@ pub(in crate::pipe) fn judge(material: &Material<'_>) -> Judged {
         }
         Err(denial) => judged.denials.push(denial),
     }
-    row_facts(repo, contract, &tracked, &sources, &mut judged);
+    row_facts(repo, contract, materials, &mut judged);
     // **上限の余地は受付だけが撃つ**（§3「撃つ場所は受付だけ」）: その便を今の base に当てたら入るか、という
     // 受付時点の事実で、CI の `contracts check` は撃たない（表は履歴を持つ）。
-    match exclude_cap_shortfall(manifest, &measured, &tracked, &sources) {
+    match exclude_cap_shortfall(manifest, &measured, materials) {
         Ok(found) => judged.headroom = Some(found),
         Err(denial) => judged.denials.push(denial),
     }
@@ -388,7 +440,7 @@ pub(in crate::pipe) fn judge(material: &Material<'_>) -> Judged {
     };
     // **入口で排他する**（ADR-0019 §2.1）。live な便と write-set が交差する契約は、
     // run dir も event も作らずに断る——後段（land の rebase）で衝突を知るより安い。
-    match exclude_overlap(state_dir, &measured, &tracked) {
+    match exclude_overlap(state_dir, &measured, tracked) {
         Ok(found) => judged.overlap = Some(found),
         Err(denial) => judged.denials.push(denial),
     }
@@ -448,19 +500,21 @@ fn create(
 /// して読む（`tests` の file は置き場でなく write-set の側）。filter 語も同じ 1 実装から取る: 本文 0 本で撃つと nextest
 /// 形の行は必ず [`ClosureError::TeethPlaceUnresolved`] で filter 語を返し、nextest 形でない行は空で通る（2 本目の
 /// 読み手を作らない）。本文で 0 本の filter 語は 0 本の事実として載せる（断るかは `settle_write_set` の側）。
-fn row_facts(repo: &Path, contract: &Contract, tracked: &[String], sources: &[Source], judged: &mut Judged) {
+fn row_facts(repo: &Path, contract: &Contract, materials: &Materials, judged: &mut Judged) {
     let Ok(Some(row)) = pointed_row(repo, contract) else {
         return;
     };
     judged.design = Some((contract.design.clone(), row.section.clone()));
-    let texts: Option<Vec<(&str, &str)>> =
-        sources.iter().map(|source| source.body.as_deref().ok().map(|text| (source.path.as_str(), text))).collect();
+    let texts: Option<Vec<(&str, &str)>> = materials
+        .sources
+        .iter()
+        .map(|source| source.body.as_deref().ok().map(|text| (source.path.as_str(), text)))
+        .collect();
     let Some(texts) = texts else {
         return;
     };
-    let snapshots = table::read_all(repo, tracked, ".snap");
     let fields = fields_of(&row);
-    let base = base_of(sources, &snapshots, tracked);
+    let base = materials.base();
     for line in &row.verify {
         let one = closure::Fields { verify: std::slice::from_ref(line), tests: &[], ..fields };
         let Err(ClosureError::TeethPlaceUnresolved { filter }) = closure::teeth_places(&one, &base, &[]) else {
@@ -523,19 +577,13 @@ fn base_of<'a>(sources: &'a [Source], snapshots: &'a [Source], tracked: &'a [Str
 /// - それ以外は [`WriteSet::Derived`]: 導出値を作り（解けない欄は typed に断る）、
 ///   行に `write-set` が在れば集合一致でなければ `write-set-drift`・無ければ導出値が
 ///   write-set になる。
-fn settle_write_set(
-    repo: &Path,
-    contract: &Contract,
-    tracked: &[String],
-    sources: &[Source],
-) -> Result<Option<Settled>, Denial> {
+fn settle_write_set(repo: &Path, contract: &Contract, materials: &Materials) -> Result<Option<Settled>, Denial> {
     let Some(row) = pointed_row(repo, contract)? else {
         return Ok(None);
     };
     let declared = row.creates.is_empty() && row.tests.is_empty() && row.also.is_empty() && !row.write_set.is_empty();
-    let snapshots = table::read_all(repo, tracked, ".snap");
     let fields = fields_of(&row);
-    let base = base_of(sources, &snapshots, tracked);
+    let base = materials.base();
     if declared {
         // Declared 行は導出も drift も撃たないが、**歯の置き場の門**だけは撃つ（§20・行 t）: verify の nextest 行の
         // 歯の file が write-set の外に在る契約は、便を作らずに file を全部名指して断る（審査へ先送りしない・C16）。
@@ -673,12 +721,8 @@ fn headrooms_of(items: &[WriteSetItem], lines: &[(String, u64)], caps: declarati
 /// （[`NewFilePolicy::MustBeAbsent`]）も同じ＝契約表の検査は
 /// land 済みの `+` を実在 file と読む（`MayBeLanded`・`s2-07l.346`）ので、入口で止めないと満杯の file を `+` で
 /// 書いた便が余地を測られずに通る。通った周は file ごとの余地を [`Headrooms`] で返す（§21 の `headroom=` の材料）。
-fn exclude_cap_shortfall(
-    manifest: &Manifest,
-    contract: &Contract,
-    tracked: &[String],
-    sources: &[Source],
-) -> Result<Headrooms, Denial> {
+fn exclude_cap_shortfall(manifest: &Manifest, contract: &Contract, materials: &Materials) -> Result<Headrooms, Denial> {
+    let (tracked, sources) = (materials.tracked.as_slice(), materials.sources.as_slice());
     let rules = |id: &str| int_row(manifest, id).map_err(|reason| denied(DENIAL_RULES, broken(reason)));
     let caps = declaration::Caps {
         file_lines: rules(ROW_FILE_LINES)?,

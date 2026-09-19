@@ -11,7 +11,7 @@
 //! 台帳を読めない周は列を空と読まず [`Unmeasured`] で 1 本も起こさない（`0 件`と融合しない・C10・NFR4）。
 
 use super::admission::{self, Sizes};
-use super::cli::{ceiling_of, crossings, generated, int_row, judge, Denial, Material, Rows};
+use super::cli::{crossings, generated, int_row, judge, Denial, Material, Materials};
 use super::contract::Contract;
 use super::refuse::overlaps;
 use super::review::ReviewCheck;
@@ -194,7 +194,7 @@ pub fn turn(input: &Input<'_>) -> Turn {
     let ledger = Ledger {
         marks: marks_of(&read_events(input.state_dir)),
         closed: issues.iter().filter(|issue| issue.status == CLOSED).map(|issue| issue.id.as_str()).collect(),
-        ceiling: ceiling_of(input.manifest),
+        materials: Materials::of(input.repo, input.manifest),
     };
     let mut ready: BTreeMap<String, (Pointer, Contract)> = BTreeMap::new();
     let mut candidates: Vec<Candidate> = Vec::new();
@@ -206,7 +206,7 @@ pub fn turn(input: &Input<'_>) -> Turn {
         candidates.push(candidate);
     }
     // **順序は [`order`] の 1 本だけが決める**（生産経路も歯も同じ関数を通る・C2）。
-    settle(input, order(candidates), &ready)
+    settle(input, order(candidates), &ready, ledger.materials.as_ref().ok())
 }
 
 /// 1 周ぶん固定な台帳側の材料（候補ごとに読み直さない）。
@@ -215,8 +215,8 @@ struct Ledger<'a> {
     marks: BTreeMap<String, (Mark, String)>,
     /// 閉じた bead の id（依存が閉じたかを同じ一覧の中で引く）。
     closed: BTreeSet<&'a str>,
-    /// 契約表の検査の上限（読めない周は断りの名を全候補が受ける）。
-    ceiling: Result<Rows, Denial>,
+    /// 1 周ぶんの repo の材料（**読みは 1 周に 1 回**・設計 §5・読めない周は断りの名を全候補が受ける）。
+    materials: Result<Materials, Denial>,
 }
 
 /// 列の順序を決める 1 関数（**pure**・設計 §2「順序」）: (1) 介入 `first` (2) 台帳の `priority`（P0 → P4）
@@ -274,11 +274,11 @@ fn entry_of(input: &Input<'_>, issue: &Issue, ledger: &Ledger<'_>) -> (Candidate
     let Some(pointer) = pointer_of(&issue.acceptance) else {
         return wait(WaitReason::NoDesignPointer);
     };
-    let ceiling = match &ledger.ceiling {
-        Ok(found) => found.borrow(),
+    let materials = match &ledger.materials {
+        Ok(found) => found,
         Err(denial) => return wait(WaitReason::Admission { reason: denial.name }),
     };
-    let contract = match generated(input.repo, &pointer, &ceiling) {
+    let contract = match generated(input.repo, &pointer, materials) {
         Ok((found, body)) => match failed_review(input, &issue.id, &body) {
             Some(sha) => return wait(WaitReason::ReviewFailed { sha }),
             None => found,
@@ -292,17 +292,22 @@ fn entry_of(input: &Input<'_>, issue: &Issue, ledger: &Ledger<'_>) -> (Candidate
 ///
 /// **1 周で起こした便は次の候補の交差の相手に入る**（設計 §3）: 起こした契約の write-set を live 側に足して
 /// 次を測る（同じ [`overlaps`] の 1 実装で測る・C2）。
-fn settle(input: &Input<'_>, candidates: Vec<Candidate>, ready: &BTreeMap<String, (Pointer, Contract)>) -> Turn {
-    let room = Room {
-        tracked: table::tracked_files(input.repo).unwrap_or_default(),
+fn settle(
+    input: &Input<'_>,
+    candidates: Vec<Candidate>,
+    ready: &BTreeMap<String, (Pointer, Contract)>,
+    materials: Option<&Materials>,
+) -> Turn {
+    let room = materials.map(|found| Room {
+        materials: found,
         sizes: sizes_of(input.manifest),
         slots: host_slots_dir(input.state_dir),
-    };
+    });
     let mut started: Vec<(String, Vec<String>)> = Vec::new();
     let mut turn = Turn { candidates: Vec::new(), launches: Vec::new(), unmeasured: None };
     for mut candidate in candidates {
-        if let Some((pointer, contract)) = ready.get(&candidate.bead) {
-            match blocker(input, contract, &room, &started) {
+        if let (Some((pointer, contract)), Some(room)) = (ready.get(&candidate.bead), room.as_ref()) {
+            match blocker(input, contract, room, &started) {
                 Some(reason) => candidate.reason = Some(reason),
                 None => {
                     started.push((candidate.bead.clone(), contract.write_set.clone()));
@@ -315,10 +320,10 @@ fn settle(input: &Input<'_>, candidates: Vec<Candidate>, ready: &BTreeMap<String
     turn
 }
 
-/// 交差と枠を測るのに 1 周ぶん固定な材料（候補ごとに読み直さない）。
-struct Room {
-    /// base の tracked file（交差の dir の展開が読む）。
-    tracked: Vec<String>,
+/// 交差と枠を測るのに 1 周ぶん固定な材料（候補ごとに読み直さない・設計 §5）。
+struct Room<'a> {
+    /// base の走査（tracked / sources / snapshots / 契約表の facts）。
+    materials: &'a Materials,
     /// 受付の枠の式の 2 線。
     sizes: Sizes,
     /// host の枠の札の置き場。
@@ -329,16 +334,17 @@ struct Room {
 fn blocker(
     input: &Input<'_>,
     contract: &Contract,
-    room: &Room,
+    room: &Room<'_>,
     started: &[(String, Vec<String>)],
 ) -> Option<WaitReason> {
+    let tracked = room.materials.tracked();
     for (bead, write_set) in started {
-        let crossed = overlaps(&contract.write_set, write_set, &room.tracked);
+        let crossed = overlaps(&contract.write_set, write_set, tracked);
         if !crossed.is_empty() {
             return Some(WaitReason::Overlap { with: bead.clone(), files: crossed.len() });
         }
     }
-    match crossings(input.state_dir, contract, &room.tracked) {
+    match crossings(input.state_dir, contract, tracked) {
         Ok(found) => {
             if let Some((run, files)) = found.runs.iter().find(|(_, files)| !files.is_empty()) {
                 return Some(WaitReason::Overlap { with: run.clone(), files: files.len() });
@@ -348,8 +354,14 @@ fn blocker(
     }
     // 余地は受付の判定をそのまま撃つ。置き場は渡さない——交差は上で [`crossings`] が測り済みで、
     // 同じ周に 2 度測ると store を 2 度読むだけになる（重複 run の検査も run を作らない列には要らない）。
-    let material =
-        Material { repo: input.repo, manifest: input.manifest, contract, state_dir: None, bead: "" };
+    let material = Material {
+        repo: input.repo,
+        manifest: input.manifest,
+        contract,
+        state_dir: None,
+        bead: "",
+        materials: room.materials,
+    };
     if let Some(denial) = judge(&material).denials.first() {
         return Some(WaitReason::Admission { reason: denial.name });
     }
@@ -456,6 +468,20 @@ pub fn usage() -> String {
         "usage: {} pipe dispatch <ls|first|hold|release> [BEAD] [--state-dir D] [--repo R] [--bd PATH] [--rules PATH]",
         crate::name::NAME
     )
+}
+
+/// 列の 1 周の結果の 1 行（終端と手動の 1 周が stdout に足す・設計 §5）。
+///
+/// **0 件と「測れない」を融合しない**（C10）: 台帳を読めない周は件数でなく理由を名乗る。
+pub fn line(turn: &Turn) -> String {
+    match turn.unmeasured {
+        Some(reason) => format!("dispatch=unmeasured reason={}", reason.as_str()),
+        None => format!(
+            "dispatch=started:{},waiting:{}",
+            turn.launches.len(),
+            turn.candidates.len().saturating_sub(turn.launches.len())
+        ),
+    }
 }
 
 /// 列の 1 周を描く（`dispatch ls`・**観測の面はこの 1 口だけである**・設計 §6）。

@@ -27,7 +27,7 @@ mod step;
 pub(super) use args::{broken, flag, int_row, refused, state_dir_of};
 // 列（`pipe::dispatch`）は受付の判定を**記帳せずに**撃つ（設計 dispatcher.md §3・C2 の 1 実装）。
 // 可視性を上げるだけで本文は不変——2 本目の判定を作らないための再輸出である。
-pub(in crate::pipe) use intake::{ceiling_of, crossings, generated, judge, Denial, Material, Rows};
+pub(in crate::pipe) use intake::{crossings, generated, judge, Denial, Material, Materials};
 pub(super) use run::turn_of;
 pub(super) use state::{live, resolve, stage_of};
 use args::{list_row, manifest_of, need, repo_of};
@@ -43,7 +43,7 @@ use super::gate;
 use super::land;
 use super::stop::stop;
 use super::{head_of, repo_of_run, repo_path};
-use crate::cli_outcome::{Outcome, RC_REFUSED};
+use crate::cli_outcome::{Outcome, RC_OK, RC_REFUSED};
 use crate::fleet::store::LockPolicy;
 use crate::fleet::{Mark, Stage};
 use crate::rules::manifest::Manifest;
@@ -58,7 +58,7 @@ use step::{answer_run, approve_run, gate_run, land_run, retire_run};
 /// `pipe` の使い方。
 pub fn usage() -> String {
     format!(
-        "usage: {NAME} pipe <intake|preflight|spawn|approve|answer|gate|land|retire|run|show|resume|stop|report|dispatch> [--state-dir D] [--rules PATH] [stop: --all|--run ID] [dispatch: ls|first|hold|release BEAD] [flags]"
+        "usage: {NAME} pipe <intake|preflight|spawn|approve|answer|gate|land|retire|run|show|resume|stop|report|dispatch> [--state-dir D] [--rules PATH] [stop: --all|--run ID] [dispatch: (1 周)|ls|first|hold|release BEAD] [flags]"
     )
 }
 
@@ -79,20 +79,25 @@ pub fn dispatch(args: &[String]) -> Outcome {
         Ok(found) => found,
         Err(err) => return broken(err.to_string()),
     };
-    match args.first().map(String::as_str) {
-        Some("intake") => intake(args, &manifest, policy),
-        Some("preflight") => preflight(args, &manifest),
+    subcommand(args, &manifest, policy, args.first().map(String::as_str))
+}
+
+/// subcommand 1 つを撃つ（列の 1 周は呼び手が足す）。
+fn subcommand(args: &[String], manifest: &Manifest, policy: LockPolicy, verb: Option<&str>) -> Outcome {
+    match verb {
+        Some("intake") => intake(args, manifest, policy),
+        Some("preflight") => preflight(args, manifest),
         Some("spawn") => start(args, policy),
         Some("approve") => by_run(args, |id| approve_run(args, id, policy)),
         Some("answer") => by_run(args, |id| answer_run(args, id, policy)),
-        Some("gate") => by_run(args, |id| gate_run(args, id, &manifest, policy)),
-        Some("land") => by_run(args, |id| land_run(args, id, &manifest, policy)),
+        Some("gate") => by_run(args, |id| gate_run(args, id, manifest, policy)),
+        Some("land") => by_run(args, |id| land_run(args, id, manifest, policy)),
         Some("retire") => by_run(args, |id| retire_run(args, id, policy)),
-        Some("run") => run_all(args, &manifest, policy),
+        Some("run") => run_all(args, manifest, policy),
         Some("show") => show(args),
-        Some("resume") => resume(args, &manifest, policy),
-        Some("stop") => stop(args, &manifest, policy),
-        Some("dispatch") => queued(args, &manifest, policy),
+        Some("resume") => resume(args, manifest, policy),
+        Some("stop") => stop(args, manifest, policy),
+        Some("dispatch") => queued(args, manifest, policy),
         Some("report") => match state_dir_of(args) {
             Err(reason) => refused(reason),
             Ok(state_dir) => super::report::report(&state_dir),
@@ -100,6 +105,30 @@ pub fn dispatch(args: &[String]) -> Outcome {
         _ => Outcome::failed(RC_REFUSED, vec![usage()]),
     }
 }
+
+/// 列を 1 周撃ち、その結果の 1 行を outcome に足す（**rc は変えない**・設計 dispatcher.md §5）。
+///
+/// 材料（置き場・repo）を解けない周は 1 周を撃たず、`dispatch=unmeasured reason=args` を足す
+/// （**測れないを「起こす便 0」に読み替えない**・C10）。
+fn with_turn(args: &[String], manifest: &Manifest, mut outcome: Outcome) -> Outcome {
+    outcome.out.push(turn_line(args, manifest));
+    outcome
+}
+
+/// 列の 1 周の 1 行（引数から材料を解いて [`queue::turn`] を撃つ）。
+fn turn_line(args: &[String], manifest: &Manifest) -> String {
+    let (Ok(state_dir), Ok(repo)) = (state_dir_of(args), repo_of(args)) else {
+        return format!("dispatch=unmeasured reason={ARGS_UNMEASURED}");
+    };
+    let Ok(bd) = flag(args, "--bd") else {
+        return format!("dispatch=unmeasured reason={ARGS_UNMEASURED}");
+    };
+    let input = queue::Input { state_dir: &state_dir, repo: &repo, manifest, bd: bd.unwrap_or(DEFAULT_BD) };
+    queue::line(&queue::turn(&input))
+}
+
+/// 引数から列の材料を解けなかった周の理由（台帳の読めなさ〔`ledger`〕と別の値である）。
+const ARGS_UNMEASURED: &str = "args";
 
 /// `pipe dispatch <ls|first|hold|release>`: 審査を通った契約の列の観測と介入の印（設計 dispatcher.md §4・§6）。
 ///
@@ -124,10 +153,18 @@ fn queued(args: &[String], manifest: &Manifest, policy: LockPolicy) -> Outcome {
             queue::render(&queue::turn(&input))
         }
         Some(name) => match (Mark::parse(name), args.get(2)) {
-            (Some(mark), Some(bead)) if !bead.starts_with("--") => queue::mark(&state_dir, bead, mark, policy),
+            // **印の直後にも 1 周撃つ**（設計 §5）: `hold` は起こす側を増やさないので撃たない。
+            (Some(mark), Some(bead)) if !bead.starts_with("--") => {
+                let marked = queue::mark(&state_dir, bead, mark, policy);
+                if mark == Mark::Hold || marked.rc != RC_OK {
+                    return marked;
+                }
+                with_turn(args, manifest, marked)
+            }
             _ => Outcome::failed(RC_REFUSED, vec![queue::usage()]),
         },
-        None => Outcome::failed(RC_REFUSED, vec![queue::usage()]),
+        // **手動の 1 周**（権能なしの口・設計 §5）: 引数の subcommand が無い周は列を 1 周撃つ。
+        None => Outcome::ok(vec![turn_line(args, manifest)]),
     }
 }
 

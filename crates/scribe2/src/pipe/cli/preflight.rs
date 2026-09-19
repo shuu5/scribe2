@@ -13,7 +13,7 @@
 //! `--state-dir` が無く git 設定からも解けない周は `overlap=unmeasured` を出し、rc は他の断りで決める（測れないを 0 に
 //! 潰さない・C10・`intake` は従来どおり置き場が無い旨で断る）。
 
-use super::intake::{ceiling_of, generated, judge, read_args, Denial, Judged, Material};
+use super::intake::{ceiling_of, generated, judge, read_args, Denial, Judged, Material, Materials};
 use super::state_dir_of;
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_OK, RC_REFUSED};
 use crate::rules::manifest::Manifest;
@@ -39,7 +39,12 @@ pub(super) fn preflight(args: &[String], manifest: &Manifest) -> Outcome {
     };
     // 受付と**同じ 1 本**で base の行から契約を組む（C2）。行を引けない・表の検査に落ちる周は判定の対象が
     // 揃わないので、受付と同じ断りをそのまま返して末尾に `broken` を積む（0 件と混ぜない）。
-    let contract = match generated(&repo, &pointer, &ceiling.borrow()) {
+    // **repo の材料の読みは 1 回**（設計 dispatcher.md §5）。生成も判定も同じ 1 つを借りる。
+    let materials = match Materials::read(&repo, &ceiling.borrow()) {
+        Ok(found) => found,
+        Err(denial) => return denial.outcome,
+    };
+    let contract = match generated(&repo, &pointer, &materials) {
         Ok((found, _)) => found,
         Err(denial) => {
             // 末尾は **rc に従う**（読めない = broken・撃てない = 断り 1 件）。行の欠陥は「読めない」ではない。
@@ -51,7 +56,14 @@ pub(super) fn preflight(args: &[String], manifest: &Manifest) -> Outcome {
     };
     // 置き場は交差と重複 run の 2 検査にだけ要る。解けない周は断りでなく `overlap=unmeasured`。
     let state_dir = state_dir_of(args).ok();
-    let material = Material { repo: &repo, manifest, contract: &contract, state_dir: state_dir.as_deref(), bead: &bead };
+    let material = Material {
+        repo: &repo,
+        manifest,
+        contract: &contract,
+        state_dir: state_dir.as_deref(),
+        bead: &bead,
+        materials: &materials,
+    };
     render(&judge(&material), state_dir.is_some())
 }
 
