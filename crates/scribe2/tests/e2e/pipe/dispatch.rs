@@ -417,10 +417,9 @@ fn pipe_terminal_dispatch_manual_turn_starts_the_runs_it_can() {
     let (repo, state) = repo_with_state();
     two_rows(&repo);
     let bd = fake_bd(&state, &[issue("s2-toy.1", 2, "a"), issue("s2-toy.2", 0, "b")]);
-    let turn = |extra: &[&str]| -> Output {
-        let mut args: Vec<String> = vec!["dispatch".to_owned()];
-        args.extend(extra.iter().map(|found| (*found).to_owned()));
-        args.extend([
+    let turn = || -> Output {
+        let args: Vec<String> = vec![
+            "dispatch".to_owned(),
             "--state-dir".to_owned(),
             state.display().to_string(),
             "--repo".to_owned(),
@@ -435,12 +434,12 @@ fn pipe_terminal_dispatch_manual_turn_starts_the_runs_it_can() {
             // 実装役は偽の 1 行（器は runner の既定を持たない）。
             "--runner".to_owned(),
             "true".to_owned(),
-        ]);
+        ];
         let borrowed: Vec<&str> = args.iter().map(String::as_str).collect();
         run_pipe(&borrowed)
     };
-    let manual = turn(&[]);
-    assert_eq!(manual.status.code(), Some(i32::from(RC_OK)), "手動の 1 周は rc 0: {}", stderr_of(&manual));
+    let manual = turn();
+    assert_eq!(manual.status.code(), Some(i32::from(RC_OK)), "手動の 1 周は rc 0（{}）", told(&manual));
     assert_eq!(
         stdout_of(&manual).trim_end(),
         "dispatch=started:2,resumed:0,waiting:0",
