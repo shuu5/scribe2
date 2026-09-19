@@ -69,18 +69,17 @@ pub struct Issue {
     pub labels: Vec<String>,
     /// acceptance の本文（無ければ空・設計 pointer の行の出所）。
     pub acceptance: String,
-    /// 依存の列（`dependencies[]`・3 key の揃う要素だけ・依存が閉じたかの判定が読む）。
+    /// 依存の列（`dependencies[]`・2 key の揃う要素だけ・依存が閉じたかの判定が読む）。
     pub deps: Vec<Dep>,
 }
 
-/// 依存の 1 件（`dependencies[]` の `id` / `status` / `dependency_type` だけを読む・本文は読まない）。
+/// 依存の 1 件（`dependencies[]` の `depends_on_id` と `type` だけを読む・**要素は status を持たない**ので
+/// 閉じたかは読み手が同じ一覧（`--all`）の中で引く）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Dep {
-    /// 依存先の bead id。
-    pub id: String,
-    /// 依存先の status の字面。
-    pub status: String,
-    /// 依存の種別の字面（`blocks` / `parent-child` …）。
+    /// 依存先の bead id（`depends_on_id`）。
+    pub on: String,
+    /// 依存の種別の字面（`type`・実測の母集団は `blocks` と `parent-child` の 2 値）。
     pub kind: String,
 }
 
@@ -109,10 +108,12 @@ pub fn issues_of(text: &str) -> Option<Vec<Issue>> {
         .collect()
 }
 
-/// 依存の 1 要素（`id` / `status` / `dependency_type` の文字列が揃わなければ `None`）。
+/// 依存の 1 要素（`depends_on_id` / `type` の文字列が揃わなければ `None`）。key の字面は `bd --readonly list
+/// --all --json` の現物から採った（2026-09-19 の実測: 要素は `issue_id` / `depends_on_id` / `type` /
+/// `created_at` / `created_by` / `metadata` を持ち、**依存先の status は持たない**）。
 fn dep_of(node: &Tree) -> Option<Dep> {
     let text_of = |key: &str| node.get(key).and_then(Tree::as_str).map(str::to_owned);
-    Some(Dep { id: text_of("id")?, status: text_of("status")?, kind: text_of("dependency_type")? })
+    Some(Dep { on: text_of("depends_on_id")?, kind: text_of("type")? })
 }
 
 /// 台帳の現在値の 1 行（status 3 つの数え・DATA の `[BD_COUNT]` と席の指示文の `{ledger}` が同じ 1 本を読む）。

@@ -23,7 +23,7 @@ use crate::fleet::{Event, EventKind, Mark};
 use crate::rules::manifest::Manifest;
 use crate::seat::host_slots_dir;
 use crate::seat::ledger::{self, Dep, Issue};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 /// `intake:memo` の bead（契約が未確定＝列に載せない・`.beads/PRIME.md` R3）。
@@ -192,7 +192,13 @@ pub fn turn(input: &Input<'_>) -> Turn {
         return unmeasured(Unmeasured::Ledger);
     };
     let marks = marks_of(&read_events(input.state_dir));
-    let mut entries: Vec<Entry> = issues.iter().filter(|issue| is_input(issue)).map(|issue| entry_of(input, issue, &marks)).collect();
+    let closed: BTreeSet<&str> =
+        issues.iter().filter(|issue| issue.status == CLOSED).map(|issue| issue.id.as_str()).collect();
+    let mut entries: Vec<Entry> = issues
+        .iter()
+        .filter(|issue| is_input(issue))
+        .map(|issue| entry_of(input, issue, &marks, &closed))
+        .collect();
     entries.sort_by_key(|entry| key_of(&entry.candidate));
     settle(input, entries)
 }
@@ -248,13 +254,19 @@ struct Entry {
 }
 
 /// 台帳の 1 件を列の 1 件に解く（依存 → 印 → 設計 pointer → 審査 FAIL → 契約の生成の順）。
-fn entry_of(input: &Input<'_>, issue: &Issue, marks: &BTreeMap<String, (Mark, String)>) -> Entry {
+fn entry_of(
+    input: &Input<'_>,
+    issue: &Issue,
+    marks: &BTreeMap<String, (Mark, String)>,
+    closed: &BTreeSet<&str>,
+) -> Entry {
     let mark = marks.get(&issue.id).map(|(found, _)| *found);
     let wait = |reason: WaitReason| Entry {
         candidate: Candidate { bead: issue.id.clone(), priority: issue.priority, mark, reason: Some(reason) },
         ready: None,
     };
-    let blocked: Vec<String> = issue.deps.iter().filter(|dep| is_blocking(dep)).map(|dep| dep.id.clone()).collect();
+    let blocked: Vec<String> =
+        issue.deps.iter().filter(|dep| is_blocking(dep, closed)).map(|dep| dep.on.clone()).collect();
     if !blocked.is_empty() {
         return wait(WaitReason::Dependency { on: blocked });
     }
@@ -370,9 +382,12 @@ fn launch_of(input: &Input<'_>, bead: &str, pointer: &Pointer) -> Launch {
     Launch { bead: bead.to_owned(), design, argv }
 }
 
-/// 順序を止める依存か（`blocks` の未 closed だけ・所属〔`parent-child`〕は順序ではない）。
-fn is_blocking(dep: &Dep) -> bool {
-    dep.kind == BLOCKS && dep.status != CLOSED
+/// 順序を止める依存か（`blocks` の未 closed だけ・所属〔`parent-child`〕は順序ではない・`.beads/PRIME.md` R2）。
+///
+/// 依存の要素は status を持たない（`seat::ledger::Dep`）ので、**同じ一覧の中の依存先**で閉じたかを引く。
+/// 一覧（`--all`＝closed も含む）に依存先が居ない周は閉じたと読まない（測れないを「通った」に倒さない・C10）。
+fn is_blocking(dep: &Dep, closed: &BTreeSet<&str>) -> bool {
+    dep.kind == BLOCKS && !closed.contains(dep.on.as_str())
 }
 
 /// acceptance の `design = <doc>#<id>` の行から設計 pointer を引く（受付の `--design` と同じ字面・同じ parse）。
@@ -387,18 +402,17 @@ fn pointer_of(acceptance: &str) -> Option<Pointer> {
 /// ので列外にしない（測れないを「落ちた」に読み替えない・C10）。
 fn failed_review(input: &Input<'_>, bead: &str, body: &str) -> Option<String> {
     let state = current(input.state_dir).ok()?;
-    for (id, run) in &state.runs {
-        if run.bead != bead || !matches!(ReviewCheck::judge(input.state_dir, id), ReviewCheck::Stopped(_)) {
-            continue;
-        }
+    // **直前の便から見る**（run id は `<bead>-<UTC の秒>` ＝ id の昇順が時系列なので、逆順が新しい側）。
+    // 同じ契約 file を持つ最初の 1 本だけを見る——古い便の FAIL は、その後 PASS した同じ契約を塞がない。
+    let (id, path) = state.runs.iter().rev().filter(|(_, run)| run.bead == bead).find_map(|(id, _)| {
         let path = contract_path(input.state_dir, id);
-        if std::fs::read_to_string(&path).ok()? != body {
-            continue;
-        }
-        let sha = git_bytes(input.repo, &["hash-object", "--", &path.display().to_string()])?;
-        return String::from_utf8(sha).ok().map(|found| found.trim().to_owned());
+        std::fs::read_to_string(&path).is_ok_and(|found| found == body).then_some((id, path))
+    })?;
+    if !matches!(ReviewCheck::judge(input.state_dir, id), ReviewCheck::Stopped(_)) {
+        return None;
     }
-    None
+    let sha = git_bytes(input.repo, &["hash-object", "--", &path.display().to_string()])?;
+    String::from_utf8(sha).ok().map(|found| found.trim().to_owned())
 }
 
 /// 受付の枠の式の 2 線（読めない行は 0＝[`admission::has_room`] が `Free::Unmeasured` で待たせない側に倒す）。

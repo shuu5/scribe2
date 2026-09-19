@@ -26,11 +26,24 @@ const UNMEASURED: &str = "[DISPATCH-UNMEASURED reason=ledger]";
 /// 審査の判定 file（run dir の直下）。
 const REVIEW_FILE: &str = "review.json";
 
-/// 台帳の 1 件（`bd --readonly list --json` の要素・読み手が読む key だけ）。
+/// 台帳の 1 件（`bd --readonly list --all --json` の要素・**key の字面は現物から採る**）。
 fn issue(id: &str, priority: u64, row: &str) -> String {
+    listed(id, "open", priority, &format!("design = {DESIGN_FILE}#{row}"), &[])
+}
+
+/// 台帳の 1 件（status と依存も呼び手が選ぶ形）。依存の要素は現物と同じ key
+/// （`issue_id` / `depends_on_id` / `type`）で、**依存先の status は持たない**。
+fn listed(id: &str, status: &str, priority: u64, acceptance: &str, deps: &[(&str, &str)]) -> String {
+    let listed: Vec<String> = deps
+        .iter()
+        .map(|(on, kind)| {
+            format!("{{\"issue_id\":\"{id}\",\"depends_on_id\":\"{on}\",\"type\":\"{kind}\"}}")
+        })
+        .collect();
     format!(
-        "{{\"id\":\"{id}\",\"status\":\"open\",\"priority\":{priority},\"labels\":[],\
-         \"acceptance_criteria\":\"design = {DESIGN_FILE}#{row}\",\"dependencies\":[]}}"
+        "{{\"id\":\"{id}\",\"status\":\"{status}\",\"priority\":{priority},\"labels\":[],\
+         \"acceptance_criteria\":\"{acceptance}\",\"dependencies\":[{}]}}",
+        listed.join(",")
     )
 }
 
@@ -214,5 +227,31 @@ fn pipe_dispatch_keeps_a_review_failed_contract_out_until_its_sha_moves() {
     let again = ls(&repo, &state, &bd);
     assert_eq!(reason_of(&again, "s2-toy.1"), "-", "sha が動けば列に戻る: {}", stdout_of(&again));
     assert_eq!(count_of(&again), format!("{COUNT} total=1 ready=1"), "改訂した契約は起こせる");
+    clean(&[&repo, &state]);
+}
+
+/// (§3 起動条件) 閉じていない `blocks` の依存は `dependency` で待ち、依存先が closed になると起こせる。
+/// 所属（`parent-child`）は順序ではないので待たせない（`.beads/PRIME.md` R2）。
+///
+/// 依存の要素は**依存先の status を持たない**ので、判定は同じ一覧（`--all`）の中で引く＝この歯は key の
+/// 字面（`depends_on_id` / `type`）まで固定する（key を読み違えると依存が黙って「全部閉じた」に化ける）。
+#[test]
+fn pipe_dispatch_waits_for_an_open_blocks_dependency_and_ignores_the_parent() {
+    let (repo, state) = repo_with_state();
+    two_rows(&repo);
+    let acceptance = format!("design = {DESIGN_FILE}#a");
+    let waiting = listed("s2-toy.1", "open", 2, &acceptance, &[("s2-dep", "blocks"), ("s2-epic", "parent-child")]);
+    let open_dep = listed("s2-dep", "open", 2, "memo", &[]);
+    let epic = listed("s2-epic", "open", 2, "memo", &[]);
+    let blocked = fake_bd(&state, &[waiting.clone(), open_dep, epic.clone()]);
+    let out = ls(&repo, &state, &blocked);
+    assert_eq!(reason_of(&out, "s2-toy.1"), "dependency:s2-dep", "閉じていない blocks 1 本: {}", stdout_of(&out));
+    assert_eq!(count_of(&out), format!("{COUNT} total=3 ready=0"), "母集団 3 件・起こすのは 0 本");
+    // 依存先を closed にすると起こせる（親の epic は open のままでも待たせない）。
+    let closed_dep = listed("s2-dep", "closed", 2, "memo", &[]);
+    let freed = fake_bd(&state, &[waiting, closed_dep, epic]);
+    let again = ls(&repo, &state, &freed);
+    assert_eq!(reason_of(&again, "s2-toy.1"), "-", "blocks が閉じれば起こせる: {}", stdout_of(&again));
+    assert_eq!(count_of(&again), format!("{COUNT} total=2 ready=1"), "closed の bead は列の入力に入らない");
     clean(&[&repo, &state]);
 }
