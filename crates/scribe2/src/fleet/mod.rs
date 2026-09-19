@@ -19,7 +19,7 @@ mod wait;
 
 pub use event::Event;
 pub use replay::{account_dir, effective_accounts, replay, select_for_run, Run, Seat, State};
-pub use wait::{epoch_of, wait, Completion, Timeout};
+pub use wait::{ci_now, epoch_of, wait, CiRun, Completion, Timeout};
 
 use crate::polarity::{OnFailure, Polarity, Timing};
 use crate::seat::role::Role;

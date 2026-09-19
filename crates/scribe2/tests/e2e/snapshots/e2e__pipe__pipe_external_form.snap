@@ -2,9 +2,9 @@
 source: crates/scribe2/tests/e2e/pipe.rs
 expression: form
 ---
-usage: scribe2 pipe <intake|preflight|spawn|approve|answer|gate|land|retire|run|show|resume|stop|report|dispatch> [--state-dir D] [--repo R] [--rules PATH] [stop: --all|--run ID] [dispatch: (1 周)|ls|first|hold|release BEAD] [run|resume: --drive] [--runner CMD] [flags]
+usage: scribe2 pipe <intake|preflight|spawn|approve|answer|gate|land|retire|run|show|resume|stop|report|dispatch> [--state-dir D] [--repo R] [--rules PATH] [stop: --all|--run ID] [dispatch: (1 周)|ls|first|hold|release BEAD] [run|resume: --drive] [land: --terminal-only] [--runner CMD] [flags]
 pipe: --run が要る
 pipe: --all が要る
-usage: scribe2 pipe <intake|preflight|spawn|approve|answer|gate|land|retire|run|show|resume|stop|report|dispatch> [--state-dir D] [--repo R] [--rules PATH] [stop: --all|--run ID] [dispatch: (1 周)|ls|first|hold|release BEAD] [run|resume: --drive] [--runner CMD] [flags]
+usage: scribe2 pipe <intake|preflight|spawn|approve|answer|gate|land|retire|run|show|resume|stop|report|dispatch> [--state-dir D] [--repo R] [--rules PATH] [stop: --all|--run ID] [dispatch: (1 周)|ls|first|hold|release BEAD] [run|resume: --drive] [land: --terminal-only] [--runner CMD] [flags]
 pipe: 未知の引数 --no-review（審査の段を飛ばす口は無い）
-usage: scribe2 pipe <intake|preflight|spawn|approve|answer|gate|land|retire|run|show|resume|stop|report|dispatch> [--state-dir D] [--repo R] [--rules PATH] [stop: --all|--run ID] [dispatch: (1 周)|ls|first|hold|release BEAD] [run|resume: --drive] [--runner CMD] [flags]
+usage: scribe2 pipe <intake|preflight|spawn|approve|answer|gate|land|retire|run|show|resume|stop|report|dispatch> [--state-dir D] [--repo R] [--rules PATH] [stop: --all|--run ID] [dispatch: (1 周)|ls|first|hold|release BEAD] [run|resume: --drive] [land: --terminal-only] [--runner CMD] [flags]

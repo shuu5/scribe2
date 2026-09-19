@@ -45,6 +45,64 @@ const ROW_RETRIES: &str = "pipe.follow_retries";
 /// land が着地待ちの列で自分の番を待つ上限（秒）を持つ rules 行（設計 gate-cost.md §6）。
 const ROW_LAND_WAIT: &str = "pipe.land_wait_s";
 
+/// 終端が CI の判定を待つ上限を宣言する rules 行の id（**値は code に焼かない**・憲法 C5）。
+const ROW_CI_WAIT: &str = "pipe.ci_wait_s";
+
+/// 終端だけを撃ち直す flag（値なし・設計 contract-source.md §5 手順 3）。
+const TERMINAL_ONLY: &str = "--terminal-only";
+
+/// 終端の材料（CI の上限と台帳 client）を引数と規則から解く（**land と `--terminal-only` が共有**）。
+fn terminal_input<'a>(args: &'a [String], manifest: &Manifest) -> Result<(u64, &'a str), Outcome> {
+    let ci_wait_s = int_row(manifest, ROW_CI_WAIT).map_err(broken)?;
+    let bd = flag(args, "--bd").map_err(refused)?.unwrap_or(crate::ledger::DEFAULT_BD);
+    Ok((ci_wait_s, bd))
+}
+
+/// `pipe land --run <id> --terminal-only`: **着地をやり直さず終端だけ**を撃つ（冪等）。
+///
+/// 前提の段は `Landed`（着地は済んでいる）。着地した sha は記録から読む——HEAD の今の sha に
+/// 読み替えると、その後に別の便が main を進めた周に**別の commit の CI を照合する**（C10）。
+fn terminal_only(args: &[String], id: &str, manifest: &Manifest, policy: LockPolicy) -> Outcome {
+    let resolved = match resolve(args, id, &[Stage::Landed], &Extra::Nothing) {
+        Ok(found) => found,
+        Err(outcome) => return outcome,
+    };
+    let Some(sha) = super::land::landed_sha(&resolved.state_dir, id) else {
+        return refused(format!("run {id} の着地した sha を記録から読めない"));
+    };
+    let (ci_wait_s, bd) = match terminal_input(args, manifest) {
+        Ok(found) => found,
+        Err(outcome) => return outcome,
+    };
+    let limits = match limits_of(manifest) {
+        Ok(found) => found,
+        Err(reason) => return broken(reason),
+    };
+    let entry = Land {
+        run: id,
+        bead: &resolved.bead,
+        repo: &resolved.repo,
+        state_dir: &resolved.state_dir,
+        contract: &resolved.contract,
+        pr_cmd: None,
+        lens: &LensSource::Absent,
+        limits,
+        runner: None,
+        retries: 0,
+        land_wait_s: 0,
+        ci_wait_s,
+        bd,
+        approved: resolved.approved,
+        policy,
+    };
+    let terminal = super::land::terminal(&entry, &sha);
+    Outcome {
+        out: vec![format!("run={id} terminal={}", terminal.as_token())],
+        err: Vec::new(),
+        rc: terminal.rc(),
+    }
+}
+
 /// `pipe approve`。**逐語を event へ写すだけ**で、段は動かさない（resume が進める）。
 pub(super) fn approve_run(args: &[String], id: &str, policy: LockPolicy) -> Outcome {
     let words = match need(args, "--words") {
@@ -231,6 +289,11 @@ fn lens_source(args: &[String], id: &str, state_dir: &Path) -> Result<LensSource
 /// lens（`--lens` か run dir の写し・[`lens_source`]）と規則の線は main が動いた便の追随（rebase → gate の
 /// 撃ち直し・設計 §5.4）で gate へ渡すために読む（land 自身は数値を見ない）。
 pub(super) fn land_run(args: &[String], id: &str, manifest: &Manifest, policy: LockPolicy) -> Outcome {
+    // **終端だけを撃ち直す口**（設計 contract-source.md §5 手順 3）: 着地は成立しているのに終端が
+    // 止まった便（push の失敗・CI の未確定・台帳を閉じられなかった周）を、着地をやり直さずに継ぐ。
+    if super::present(args, TERMINAL_ONLY) {
+        return terminal_only(args, id, manifest, policy);
+    }
     let resolved = match resolve(args, id, &[Stage::Gated], &Extra::Nothing) {
         Ok(found) => found,
         Err(outcome) => return outcome,
@@ -271,6 +334,11 @@ pub(super) fn land_run(args: &[String], id: &str, manifest: &Manifest, policy: L
         Ok(found) => found,
         Err(reason) => return broken(reason),
     };
+    // 終端の材料（CI の上限と台帳 client）は `--terminal-only` と**同じ 1 本**で解く。
+    let (ci_wait_s, bd) = match terminal_input(args, manifest) {
+        Ok(found) => found,
+        Err(outcome) => return outcome,
+    };
     super::land::land(&Land {
         run: id,
         bead: &resolved.bead,
@@ -283,6 +351,8 @@ pub(super) fn land_run(args: &[String], id: &str, manifest: &Manifest, policy: L
         runner,
         retries,
         land_wait_s,
+        ci_wait_s,
+        bd,
         approved: resolved.approved,
         policy,
     })

@@ -58,8 +58,9 @@ use super::queue::{await_turn, Order};
 use super::retire::verdict_field;
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_OK, RC_REFUSED};
 use crate::fleet::json_lite::{self, Value};
+use crate::name::NAME;
 use crate::fleet::store::{self, append_line, LockPolicy};
-use crate::fleet::{cli::now_utc, EventKind, Stage, SCHEMA};
+use crate::fleet::{ci_now, cli::now_utc, CiRun, Completion, EventKind, Stage, SCHEMA};
 use std::path::{Path, PathBuf};
 
 /// 主実測の群（設計 §41・`s2-07l.457` の純移動）。`land` と `finish` が呼ぶ 4 本だけを借りる。
@@ -204,6 +205,10 @@ pub struct Land<'a> {
     pub retries: u64,
     /// 着地待ちの列で自分の番を待つ上限（秒・rules 行 `pipe.land_wait_s`）。超えた周は待たずに進む。
     pub land_wait_s: u64,
+    /// 終端が CI の判定を待つ上限（秒・rules 行 `pipe.ci_wait_s`）。超えた周は **close しない**。
+    pub ci_wait_s: u64,
+    /// 終端が bead を閉じる台帳 client（`--bd` か [`crate::ledger::DEFAULT_BD`]）。
+    pub bd: &'a str,
     /// 承認 event が在るか（起こし直しも A1 の関門を通る・replay の導出値）。
     pub approved: bool,
     /// lock の待ち方。
@@ -758,7 +763,7 @@ fn open_pr(entry: &Land<'_>, base: &str, cmd: &str) -> Outcome {
 fn squash(entry: &Land<'_>, worktree: &Path, old: &str) -> Result<String, String> {
     let tree = git_line(worktree, &["rev-parse", "HEAD^{tree}"])
         .ok_or_else(|| format!("{} の tree を読めない", worktree.display()))?;
-    let message = squash_message(entry.bead, &entry.contract.goal, entry.run);
+    let message = squash_message(entry.bead, &entry.contract.goal, entry.run, entry.contract);
     let new = git_line(entry.repo, &["commit-tree", &tree, "-p", old, "-m", &message])
         .ok_or_else(|| "squash commit を作れない".to_owned())?;
     if !git_ok(entry.repo, &["update-ref", MAIN_REF, &new, old]) {
@@ -780,8 +785,33 @@ fn squash(entry: &Land<'_>, worktree: &Path, old: &str) -> Result<String, String
 /// 件名は goal の先頭の文を [`SUBJECT_CHARS`] 文字で切った要約ゆえ中身が落ちる——だから
 /// **同じ message の中に落とさない側（本文の goal 全文）を必ず持つ**。`git log --oneline` は
 /// 件名だけを読み、便の現物を追う人は本文と trailer から fleet の記録へ辿る。
-fn squash_message(bead: &str, goal: &str, run: &str) -> String {
-    format!("{}\n\n{goal}\n\n{RUN_TRAILER}{run}\n", subject_of(bead, goal))
+fn squash_message(bead: &str, goal: &str, run: &str, contract: &Contract) -> String {
+    let mut trailers = format!("{RUN_TRAILER}{run}\n");
+    // **着地の正本は record（面 5・event log）である**（設計 contract-source.md §5 手順 5）。trailer は器が
+    // squash message に同時に書く**導出面**で、RTM（別 repo）は trailer だけを読み、無ければ「まだ分からない」
+    // と出す（「未着地」とは言わない）。空の欄は行ごと書かない——空の trailer は「無い」と読めない。
+    if !contract.design.trim().is_empty() {
+        trailers.push_str(&format!("{}{}\n", trailer_key(CONTRACT_TRAILER), contract.design.trim()));
+    }
+    if !contract.req.is_empty() {
+        trailers.push_str(&format!("{}{}\n", trailer_key(REQUIREMENTS_TRAILER), contract.req.join(" ")));
+    }
+    format!("{}\n\n{goal}\n\n{trailers}", subject_of(bead, goal))
+}
+
+/// 契約を名指す trailer の語幹。
+const CONTRACT_TRAILER: &str = "Contract";
+
+/// 要件を名指す trailer の語幹。
+const REQUIREMENTS_TRAILER: &str = "Requirements";
+
+/// trailer の key（**器の名から導く**・C2.2＝名を 2 か所に焼かない）。
+///
+/// 先頭を大文字にした器の名を前置するので、他の道具の trailer（`Co-Authored-By` 等）と衝突しない。
+fn trailer_key(stem: &str) -> String {
+    let mut chars = NAME.chars();
+    let head: String = chars.next().map(|first| first.to_uppercase().to_string()).unwrap_or_default();
+    format!("{head}{}-{stem}: ", chars.as_str())
 }
 
 /// 件名。要旨が空の周は **`<bead>` だけ**にして落とさない（契約の検査で goal は非空のはずで、
@@ -809,6 +839,182 @@ fn gist_of(goal: &str) -> String {
     cut
 }
 
+/// land の終端の結末（**閉じた 7 値**・設計 contract-source.md §5）。
+///
+/// `Closed` と `Undeclared` 以外はどれも**台帳を閉じない**（着地は取り消さない）。やり直しは
+/// `pipe land --terminal-only` で終端だけを撃ち直す（冪等）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Terminal {
+    /// push → CI success → close まで通った。
+    Closed,
+    /// **押す先が宣言されていない**（宣言を読めた上で `remote` の行が無い）＝この repo の便は終端を持たない。
+    ///
+    /// push は repo の外へ出す行為（A1 の「出す」）なので、宣言の無い repo に既定で押さない。
+    /// 着地は成立しているので**便は落とさない**（`--pr-cmd` 形と同じ極性）。
+    Undeclared,
+    /// **宣言そのものを読めない**（`.vessel.toml` が HEAD に無い・parse できない）。
+    ///
+    /// [`Self::Undeclared`] と融合しない（C10）——あちらは「読めた上で押す先が無い」で、こちらは
+    /// 「押す先が在るかを測れていない」である。[`Self::PushFailed`] とも融合しない（push を 1 度も
+    /// 撃っていないので「push が失敗した」ではない）。close しない側へ倒す。
+    Unreadable,
+    /// push が撃てなかった / 失敗した（理由の語）。
+    PushFailed(String),
+    /// CI が **failure** だった。
+    CiFailed,
+    /// CI の判定を**測れなかった**（上限超過・run が 0 本・行を撃てない・JSON を読めない）。
+    ///
+    /// `CiFailed` と融合しない（C10）——failure は「測って落ちた」で、こちらは「測れていない」である。
+    CiUnmeasurable,
+    /// 台帳を閉じられなかった（着地は成立・[`crate::ledger::CloseError`] の 1 行）。
+    CloseFailed(String),
+}
+
+/// [`Terminal`] の全 variant の字面（`terminal=` の値・宣言順）。
+pub const TERMINAL_TOKENS: &[&str] =
+    &["closed", "undeclared", "unreadable", "push:failed:", "ci:failure", "ci:unmeasurable", "close:failed:"];
+
+/// 終端の境界の極性（[`Terminal`]）: **success 以外は close しない側へ倒す**（FailClosed）。
+///
+/// 着地の後に測るので `PostHoc` である。止めるのは close であって着地ではない——main の commit は
+/// 既に在り、取り消しは N1 の外である。
+pub const TERMINAL_POLARITY: Polarity = Polarity {
+    timing: Timing::PostHoc,
+    on_failure: OnFailure::FailClosed,
+};
+
+impl Terminal {
+    /// stdout の `terminal=` と `RunDone` の detail に載る字面。
+    pub fn as_token(&self) -> String {
+        match self {
+            Self::Closed => "closed".to_owned(),
+            Self::Undeclared => "undeclared".to_owned(),
+            Self::Unreadable => "unreadable".to_owned(),
+            Self::PushFailed(reason) => format!("push:failed:{reason}"),
+            Self::CiFailed => "ci:failure".to_owned(),
+            Self::CiUnmeasurable => "ci:unmeasurable".to_owned(),
+            Self::CloseFailed(reason) => reason.clone(),
+        }
+    }
+
+    /// 終端が返す rc（**`Closed` だけが 0**・設計 §5）。
+    pub fn rc(&self) -> u8 {
+        match self {
+            Self::Closed | Self::Undeclared => RC_OK,
+            Self::Unreadable | Self::PushFailed(_) | Self::CiFailed | Self::CiUnmeasurable | Self::CloseFailed(_) => {
+                crate::cli_outcome::RC_REFUSED
+            }
+        }
+    }
+}
+
+/// この binary の build 元 commit（`build.rs` が compile time に焼く・設計 consumer-sync.md §2）。
+///
+/// `--version` の括弧の中身と**同じ 1 つの値**である（3 形: `<sha12>` / `<sha12>+dirty` / `unknown`）。
+const GENERATION: &str = env!("SCRIBE2_BUILD_COMMIT");
+
+/// 台帳の close に書く理由の書き出し（`landed <sha> ci=success`）。
+const CLOSE_REASON: &str = "landed";
+
+/// `Landed` の `RunDone` の detail が載せる着地した sha の前置き（[`finish`] が書く字面と同じ 1 本）。
+const SHA_PREFIX: &str = "sha:";
+
+/// 着地した commit の sha を記録から読む（`pipe land --terminal-only` の入力・設計 §5 手順 3）。
+///
+/// **終端の event（`terminal:`）は飛ばす**——終端をやり直した周にも、読むのは着地そのものを記した
+/// 行の `sha:` である。読めない周は `None`（**HEAD の今の sha に読み替えない**・別の commit の CI を
+/// 照合することになる・C10）。
+pub(super) fn landed_sha(state_dir: &Path, run: &str) -> Option<String> {
+    let events = store::read_all(state_dir).ok()?;
+    events
+        .iter()
+        .rev()
+        .filter(|event| event.run == run && event.kind == EventKind::RunDone)
+        // **`sha:` を持つ行を探す**（新しい順）。終端の行（`terminal:`）は sha を持たないので、
+        // 「最後の RunDone の detail」から読むと終端をやり直した周に読めなくなる。
+        .find_map(|event| {
+            event.detail.as_deref()?.split_whitespace().find_map(|token| token.strip_prefix(SHA_PREFIX))
+        })
+        .map(str::to_owned)
+}
+
+/// land の終端（設計 contract-source.md §5）: push → CI の照合 → 台帳の close。
+///
+/// **各段が typed な event を 1 件ずつ記す**（`RunDone` の detail で弁別）＝通った周は `Landed` の後ろに
+/// 3 件並ぶ。止まった段から先は撃たず、記録もそこで終わる（起きていない段の event を積まない）。
+pub(super) fn terminal(entry: &Land<'_>, sha: &str) -> Terminal {
+    let facts = match super::declaration::terminal_facts(entry.repo) {
+        Ok(found) => found,
+        // **push を 1 度も撃っていない**ので「push が失敗した」に畳まない（C10）。押す先が在るかを
+        // 測れていない周である。
+        Err(_) => {
+            note(entry, "unreadable");
+            return Terminal::Unreadable;
+        }
+    };
+    // 押す先を宣言していない repo は**終端を持たない**（A1 の「出す」を既定で撃たない）。1 件も記帳しない
+    // ——走らなかった段の event を積むと、記録から「何が起きたか」でなく「何が在るか」が読めなくなる。
+    let Some(remote) = facts.remote.as_deref() else {
+        return Terminal::Undeclared;
+    };
+    // (1) push。**main:main だけ**を押す（便の branch は押さない）。
+    if super::git_bytes(entry.repo, &["push", remote, "main:main"]).is_none() {
+        note(entry, "push:failed:git");
+        return Terminal::PushFailed("git".to_owned());
+    }
+    note(entry, &format!("push:{remote}"));
+    // (2) CI の照合。上限まで待ち、**success 以外は close しない**（FailClosed）。
+    let watch = Completion::CiResult {
+        repo: entry.repo.to_path_buf(),
+        sha: sha.to_owned(),
+        cmd: facts.ci_cmd.clone(),
+    };
+    let _ = crate::fleet::wait(watch, std::time::Duration::from_secs(entry.ci_wait_s));
+    match ci_now(entry.repo, sha, &facts.ci_cmd) {
+        None => {
+            note(entry, "ci:unmeasurable");
+            return Terminal::CiUnmeasurable;
+        }
+        Some(CiRun::Failure) => {
+            note(entry, "ci:failure");
+            return Terminal::CiFailed;
+        }
+        Some(CiRun::Success) => note(entry, "ci:success"),
+    }
+    // (3) 台帳の close。閉じられない周も着地は取り消さない（やり直しは `--terminal-only`・冪等）。
+    match crate::ledger::close(entry.bd, entry.bead, &format!("{CLOSE_REASON} {sha} ci=success")) {
+        Ok(()) => {
+            note(entry, "close:ok");
+            Terminal::Closed
+        }
+        Err(err) => {
+            let reason = err.render();
+            note(entry, &reason);
+            Terminal::CloseFailed(reason)
+        }
+    }
+}
+
+/// 終端の 1 段を記す（`RunDone stage=Landed` の detail・**段の数だけ呼ばれる**）。
+///
+/// 記帳できない周も結末は変えない——着地は成立していて取り消せないので、記録の欠けは store の
+/// error として別に出る（段の判定を記録の可否に従わせない）。
+fn note(entry: &Land<'_>, detail: &str) {
+    let _ = emit(
+        entry.state_dir,
+        &Emit {
+            kind: EventKind::RunDone,
+            run: entry.run,
+            bead: entry.bead,
+            stage: Some(Stage::Landed),
+            seat: None,
+            pid: None,
+            detail: Some(format!("terminal:{detail}")),
+        },
+        entry.policy,
+    );
+}
+
 /// export → `Landed` → 後始末。ここまで来た周は land が成立している（anchor は呼び手が揃え済み）。
 ///
 /// export の前に main を実測し、stdout の `main=` と `Landed` の detail の `main:` に写す
@@ -832,7 +1038,7 @@ fn finish(entry: &Land<'_>, worktree: &Path, landing: &Landing, anchor: &AnchorS
             stage: Some(Stage::Landed),
             seat: None,
             pid: None,
-            detail: Some(format!("sha:{new} main:{measured}{}", landing.detail_suffix())),
+            detail: Some(format!("{SHA_PREFIX}{new} main:{measured}{}", landing.detail_suffix())),
         },
         entry.policy,
     );
@@ -842,17 +1048,21 @@ fn finish(entry: &Land<'_>, worktree: &Path, landing: &Landing, anchor: &AnchorS
     // 後始末の失敗は land を取り消さない（**rc 0 のまま stderr 1 行**）。anchor の warning も同じ列。
     err.extend(retire_worktree(entry.repo, entry.run, worktree));
     err.extend(anchor.warning());
+    // **終端**（設計 contract-source.md §5）: push → CI の照合 → 台帳の close。着地は既に成立している
+    // ので、終端が止まっても取り消さない——止まった事実を typed な event と token で残し rc を 1 にする。
+    let terminal = terminal(entry, new);
     Outcome {
         out: vec![format!(
-            "run={} landed={new} main={measured} {} order={}{}",
+            "run={} landed={new} main={measured} {} order={}{} terminal={}",
             entry.run,
             anchor.token(),
             order.as_value(),
-            landing.stdout_suffix()
+            landing.stdout_suffix(),
+            terminal.as_token()
         )],
         // 後始末の失敗は land を取り消さない（**rc 0 のまま stderr**）。
         err,
-        rc: RC_OK,
+        rc: terminal.rc(),
     }
 }
 
@@ -871,6 +1081,11 @@ fn export_verdict(entry: &Land<'_>, new: &str, order: Order) -> Result<(), Strin
         ("evidence", Value::Str(evidence)),
         ("ts", Value::Str(now_utc())),
         ("order", Value::Str(order.as_value())),
+        // **binary の世代**（設計 contract-source.md §5 手順 4）= **この着地を作った binary の build 元 commit**
+        // （§2 の値・`--version` の括弧の中身と同じ 1 本）。自分の版が古い周に起動を断るかは後続（§12）で、
+        // ここは事実を残すだけである。**着地した sha は同じ行の `sha` が既に持つ**ので、同値の欄を 2 つ
+        // 並べない——2 つ在ると読み手はどちらを版の比較に使うのか判じられない（C10）。
+        ("generation", Value::Str(GENERATION.to_owned())),
     ];
     // verdict の size の材料は base が分かった周だけ載る（無い周も読めない周も同じ＝欄を持たない）。
     let base = super::base_of_run(entry.state_dir, entry.run).known();
@@ -982,7 +1197,12 @@ mod tests {
     // flip-check: moved s2-07l.253
     // flip-check: moved s2-07l.457
     use super::super::gate::{next_number, skip_record, DetectionSkip, Skipped};
-    use super::{detection_needed, squash_message, subject_of, SUBJECT_CHARS};
+    use super::{
+        detection_needed, landed_sha, squash_message, subject_of, trailer_key, Terminal, CONTRACT_TRAILER,
+        REQUIREMENTS_TRAILER, SHA_PREFIX, SUBJECT_CHARS, TERMINAL_TOKENS,
+    };
+    use crate::cli_outcome::RC_OK;
+    use crate::fleet::{EventKind, Stage};
 
     // flip-check: retroactive s2-07l.222
     /// `next_number` は record 数の次（1 始まり）で、検出線を省いた record を挟む 2 周分でも単調に増える。
@@ -1023,16 +1243,98 @@ mod tests {
     #[test]
     fn pipe_land_subject_keeps_multiline_goal_verbatim_in_body() {
         let goal = "## 何を作るか\n- 1 本目の行である。ここは件名に載らない\n- 2 本目の行";
-        let message = squash_message("s2-07l.130", goal, "s2-07l.130-1757600000");
+        let bare = crate::pipe::fixture::contract(&[], &[]);
+        let message = squash_message("s2-07l.130", goal, "s2-07l.130-1757600000", &bare);
+        assert!(message.contains(&trailer_key(CONTRACT_TRAILER)), "fixture の契約は design を持つ: {message}");
         let mut lines = message.lines();
         assert_eq!(lines.next(), Some("s2-07l.130: 何を作るか"), "件名は先頭の文（`#` と空白を除く）");
         assert_eq!(lines.next(), Some(""), "件名の次は空行");
         assert!(message.contains(goal), "goal 全文が逐語で在る: {message}");
-        assert_eq!(
-            message.lines().last(),
-            Some("run: s2-07l.130-1757600000"),
-            "最終行は run trailer: {message}"
+        assert!(
+            message.lines().any(|line| line == "run: s2-07l.130-1757600000"),
+            "run trailer が在る: {message}"
         );
+    }
+
+    /// `landed_sha` は **自分の便の `RunDone`** だけを読む（設計 contract-source.md §5 手順 3）。
+    ///
+    /// 置き場には他の便の event も並ぶ。便の弁別と kind の弁別のどちらか一方でも緩むと、**別の便が
+    /// 着地した sha** で CI を照合し、その sha が success なら自分の便の bead を閉じてしまう。
+    /// 他の便の行を**後に**置き、kind 違いの行に `sha:` を持たせて、両方の弁別を同時に測る。
+    #[test]
+    fn pipe_terminal_land_landed_sha_reads_only_its_own_run_done() {
+        let root = crate::pipe::fixture::scratch("landed-sha");
+        let mine = "0".repeat(40);
+        let other = "1".repeat(40);
+        let stray = "2".repeat(40);
+        crate::pipe::fixture::append_all(
+            &root,
+            &[
+                crate::pipe::fixture::event("mine", EventKind::RunDone, Some(Stage::Landed), None, Some(&format!("{SHA_PREFIX}{mine}"))),
+                // kind 違いの行が同じ便に**後から**載る（`RunDone` 以外は読まない）。
+                crate::pipe::fixture::event("mine", EventKind::RunStage, Some(Stage::Landed), None, Some(&format!("{SHA_PREFIX}{stray}"))),
+                // 別の便の着地が**後から**載る（便の弁別が緩むとこちらを読む）。
+                crate::pipe::fixture::event("other", EventKind::RunDone, Some(Stage::Landed), None, Some(&format!("{SHA_PREFIX}{other}"))),
+            ],
+        );
+        assert_eq!(landed_sha(&root, "mine").as_deref(), Some(mine.as_str()), "自分の便の RunDone の sha");
+        assert_eq!(landed_sha(&root, "other").as_deref(), Some(other.as_str()), "別の便からは別の sha");
+        assert_eq!(landed_sha(&root, "absent"), None, "居ない便は None（HEAD に読み替えない）");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 終端の結末は**閉じた 7 値**で、字面は [`TERMINAL_TOKENS`] と 1 対 1（宣言順）。
+    ///
+    /// **close する側は 2 値だけ**である: 通った周（`Closed`）と、そもそも終端を持たない repo の周
+    /// （`Undeclared`・rc 0）。残る 5 値はどれも close せず rc 1 で止まる——`Unreadable` を
+    /// `Undeclared` と同じ側に倒すと「測れていない」が「終端が無い」に化ける（C10）。
+    #[test]
+    fn pipe_terminal_land_outcomes_are_the_closed_seven() {
+        let listed = [
+            Terminal::Closed,
+            Terminal::Undeclared,
+            Terminal::Unreadable,
+            Terminal::PushFailed("git".to_owned()),
+            Terminal::CiFailed,
+            Terminal::CiUnmeasurable,
+            // **前置きの字面は produce する側から採る**（fixture の literal で満たすと対の assert が空虚）。
+            Terminal::CloseFailed(crate::ledger::CloseError::Unlaunchable.render()),
+        ];
+        let tokens: Vec<String> = listed.iter().map(Terminal::as_token).collect();
+        assert_eq!(tokens.len(), TERMINAL_TOKENS.len(), "母集団 {} 値: {tokens:?}", TERMINAL_TOKENS.len());
+        for (token, stem) in tokens.iter().zip(TERMINAL_TOKENS) {
+            assert!(token.starts_with(stem), "宣言順の {stem} と対: {tokens:?}");
+        }
+        let ok: Vec<&String> = tokens.iter().zip(&listed).filter(|(_, found)| found.rc() == RC_OK).map(|(token, _)| token).collect();
+        assert_eq!(ok, vec!["closed", "undeclared"], "rc 0 は 2 値だけ（母集団 {} 値）", listed.len());
+    }
+
+    /// **契約と要件の trailer**（設計 contract-source.md §5 手順 5）は `run:` の後ろに並び、key は器の名から
+    /// 導く（他の道具の trailer と衝突しない）。**欄が空の周は行ごと書かない**——空の trailer は「無い」と
+    /// 読めず、RTM が「まだ分からない」と言えなくなる。
+    #[test]
+    fn pipe_terminal_land_squash_message_carries_the_contract_and_requirements_trailers() {
+        let goal = "自走の goal";
+        let mut bare = crate::pipe::fixture::contract(&[], &[]);
+        bare.design = String::new();
+        let empty = squash_message("s2-x", goal, "s2-x-1", &bare);
+        assert!(!empty.contains(&trailer_key(CONTRACT_TRAILER)), "欄の無い契約は trailer を書かない: {empty}");
+        assert!(!empty.contains(&trailer_key(REQUIREMENTS_TRAILER)), "req が空なら要件の trailer も無い: {empty}");
+        let mut filled = crate::pipe::fixture::contract(&[], &[]);
+        filled.design = "docs/design/toy.md#a".to_owned();
+        filled.req = vec!["FR1".to_owned(), "FR2".to_owned()];
+        let message = squash_message("s2-x", goal, "s2-x-1", &filled);
+        let tail: Vec<&str> = message.lines().rev().take(3).collect();
+        assert_eq!(
+            tail,
+            vec![
+                format!("{}FR1 FR2", trailer_key(REQUIREMENTS_TRAILER)).as_str(),
+                format!("{}docs/design/toy.md#a", trailer_key(CONTRACT_TRAILER)).as_str(),
+                "run: s2-x-1",
+            ],
+            "run の後ろに契約 → 要件の順: {message}"
+        );
+        assert!(trailer_key(CONTRACT_TRAILER).starts_with(char::is_uppercase), "key は器の名の大文字始まり");
     }
 
     /// 要旨が空（goal が空・先頭の文が空白と `#` だけ）の周は **`<bead>` だけ**の件名にして

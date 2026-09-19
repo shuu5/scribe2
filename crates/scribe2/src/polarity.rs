@@ -116,6 +116,9 @@ pub enum Guard {
     /// runner の起動行の受付＝既に `--account-dir` を持つ行に器の口座を足さずに断る
     /// （[`crate::pipe::spawn::LineRefusal`]・設計 account-autonomy.md §16）。
     SpawnLine,
+    /// land の終端＝push の失敗と CI が success でない周（と測れない周）に**台帳を close しない**
+    /// （[`crate::pipe::land::Terminal`]・設計 contract-source.md §5）。
+    LandTerminal,
 }
 
 /// [`Guard`] の全 variant（宣言順）。
@@ -143,6 +146,7 @@ pub const ALL: &[Guard] = &[
     Guard::StoreLock,
     Guard::Inject,
     Guard::SpawnLine,
+    Guard::LandTerminal,
 ];
 
 /// `Polarity` を持つが **guard ではない**境界（設計 docs/design/polarity.md §3・`s2-07l.177`）。
@@ -162,6 +166,7 @@ pub const NOT_A_GUARD: &[Polarity] = &[
     crate::fleet::select::NoCandidateReason::POLARITY,
     crate::fleet::usage::UsageError::POLARITY,
     crate::seat::ledger::POLARITY,
+    crate::ledger::POLARITY,
 ];
 
 impl Guard {
@@ -191,6 +196,7 @@ impl Guard {
             Self::StoreLock => crate::fleet::store::POLARITY,
             Self::Inject => crate::seat::inject::POLARITY,
             Self::SpawnLine => crate::pipe::spawn::POLARITY,
+            Self::LandTerminal => crate::pipe::land::TERMINAL_POLARITY,
         }
     }
 
@@ -220,6 +226,7 @@ impl Guard {
             Self::StoreLock => "fleet::store::StoreError",
             Self::Inject => "seat::inject::Delivery",
             Self::SpawnLine => "pipe::spawn::LineRefusal",
+            Self::LandTerminal => "pipe::land::Terminal",
         }
     }
 
@@ -249,6 +256,7 @@ impl Guard {
             Self::StoreLock => "store-lock",
             Self::Inject => "inject-refusal",
             Self::SpawnLine => "spawn-line",
+            Self::LandTerminal => "land-terminal",
         }
     }
 

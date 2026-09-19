@@ -182,6 +182,9 @@ pub enum RuleKind {
     GateCpuWeight,
     /// land が着地待ちの列で自分の番を待つ上限（秒）。超えたら待たずに進む（縮退・止めない）。
     PipeLandWaitS,
+    /// land の終端が CI の判定を待つ上限（秒・設計 contract-source.md §5）。超えた周は **close しない**
+    /// （`unmeasurable` で止める・FailClosed）。
+    PipeCiWaitS,
     /// 席の指示文の `{ledger}` が台帳（`bd --readonly`）の子 process を待つ上限（秒）。超えたら数えを返さない。
     LedgerTimeoutS,
     /// 役割ごとの権能（設計 seat-roles.md §3・ADR-0022 §2.2）。値は権能の名の列で、名の集合は
@@ -241,6 +244,7 @@ pub const ALL: &[RuleKind] = &[
     RuleKind::GateTmuxTestThreads,
     RuleKind::GateCpuWeight,
     RuleKind::PipeLandWaitS,
+    RuleKind::PipeCiWaitS,
     RuleKind::LedgerTimeoutS,
     RuleKind::RoleCapabilities,
     RuleKind::PipeSizeSLines,
@@ -291,6 +295,7 @@ impl RuleKind {
             Self::GateTmuxTestThreads => "GateTmuxTestThreads",
             Self::GateCpuWeight => "GateCpuWeight",
             Self::PipeLandWaitS => "PipeLandWaitS",
+            Self::PipeCiWaitS => "PipeCiWaitS",
             Self::LedgerTimeoutS => "LedgerTimeoutS",
             Self::RoleCapabilities => "RoleCapabilities",
             Self::PipeSizeSLines => "PipeSizeSLines",
@@ -332,6 +337,7 @@ impl RuleKind {
             | Self::GateTmuxTestThreads
             | Self::GateCpuWeight
             | Self::PipeLandWaitS
+            | Self::PipeCiWaitS
             | Self::LedgerTimeoutS
             | Self::PipeSizeSLines
             | Self::PipeSizeMLines

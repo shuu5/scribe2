@@ -123,8 +123,8 @@ fn polarity_lists_the_three_added_guards() {
     }
     assert_eq!(
         ALL.len(),
-        23,
-        "母集団は 23（10 + 3 + 質問の口 1・`s2-07l.115` + land の 2・`s2-07l.124` + 入口の排他 1・`s2-07l.145` + 追随の回数 1・`s2-07l.146` + 登録の断り 1・`s2-07l.192` + 権能の執行 1・`s2-07l.201` + 契約表の検査 1・`s2-07l.208` + 純移動の証明 1・`s2-07l.266` + command guard 1・`s2-07l.168` + 審査の段 1・`s2-07l.241` + 起動行の受付 1・`s2-07l.411`・`.479.1` で cap guard と cycle の 2 つ・`.479.2` で退避と消費の 2 つが消えた）"
+        24,
+        "母集団は 24（10 + 3 + 質問の口 1・`s2-07l.115` + land の 2・`s2-07l.124` + 入口の排他 1・`s2-07l.145` + 追随の回数 1・`s2-07l.146` + 登録の断り 1・`s2-07l.192` + 権能の執行 1・`s2-07l.201` + 契約表の検査 1・`s2-07l.208` + 純移動の証明 1・`s2-07l.266` + command guard 1・`s2-07l.168` + 審査の段 1・`s2-07l.241` + 起動行の受付 1・`s2-07l.411`・`.479.1` で cap guard と cycle の 2 つ・`.479.2` で退避と消費の 2 つが消え `.382` で land の終端が 1 つ増えた）"
     );
 }
 
@@ -224,7 +224,7 @@ fn polarity_lists_land_anchor_sync_and_retire_clean_as_in_loop_fail_closed() {
     assert_eq!(in_loop, 18, "in-loop の行数: {text}");
     let summary = text.lines().last().unwrap_or_default();
     assert_eq!(count_of(summary, "in-loop"), Some(18), "集計（+ .145 / .146 / .192 / .201 / .168 / .241 の 各 1・.266 は post-hoc ゆえ不変・`.479.2` で -2）: {summary}");
-    assert_eq!(count_of(summary, "guards"), Some(23), "母集団（+ .145 / .146 / .192 / .201 / .208 / .266 / .168 / .241 の 各 1・`.479.2` で -2）: {summary}");
+    assert_eq!(count_of(summary, "guards"), Some(24), "母集団（+ .145 / .146 / .192 / .201 / .208 / .266 / .168 / .241 の 各 1・`.479.2` で -2・`.382` で +1〔land の終端〕）: {summary}");
 }
 
 /// 契約表の検査（`s2-07l.208`・設計 contract-source.md §8・ADR-0014 §2.1）は **post-hoc / fail-closed** で一覧に載る
@@ -249,8 +249,8 @@ fn polarity_lists_contract_table_as_a_post_hoc_fail_closed_guard() {
         "role-guard の直後・intake-unfit の直前: {names:?}"
     );
     let summary = text.lines().last().unwrap_or_default();
-    assert_eq!(count_of(summary, "guards"), Some(23), "母集団（.168 の command guard と .241 の審査の段・.411 の起動行の受付を含む・`.479.2` で -2）: {summary}");
-    assert_eq!(count_of(summary, "post-hoc"), Some(5), "post-hoc +1（gate の 3〔.266 の純移動の証明を含む〕・land の main 実測・契約表）: {summary}");
+    assert_eq!(count_of(summary, "guards"), Some(24), "母集団（.168 の command guard と .241 の審査の段・.411 の起動行の受付を含む・`.479.2` で -2・`.382` で +1〔land の終端〕）: {summary}");
+    assert_eq!(count_of(summary, "post-hoc"), Some(6), "post-hoc +1（gate の 3〔.266 の純移動の証明を含む〕・land の main 実測・契約表・`.382` の land の終端）: {summary}");
 }
 
 /// 純移動の機械証明（`s2-07l.266`・設計 pipeline.md §5.3・C11.2 / C16.2）は **post-hoc / fail-open** で一覧に載る
@@ -313,7 +313,7 @@ fn polarity_drops_the_working_memory_guards() {
     // json_tree / usage::UsageError / seat::ledger）。ここでは**母集団と、その値を持つ site の本数**を pin する
     // ＝台帳の行を落とせば 3 → 2 で落ちる。site と一覧の突合そのものは `cargo xtask polarity-sites` の門が持つ。
     let not_a_guard = vessel::polarity::NOT_A_GUARD;
-    assert_eq!(not_a_guard.len(), 5, "guard でない境界の母集団: {not_a_guard:?}");
+    assert_eq!(not_a_guard.len(), 6, "guard でない境界の母集団（`s2-07l.382` で台帳 adapter の書きが +1）: {not_a_guard:?}");
     let closed = not_a_guard.iter().filter(|found| **found == ledger).count();
     assert_eq!(closed, 3, "in-loop / fail-closed の site は 3 つ（台帳の読みを含む）: {not_a_guard:?}");
 }
@@ -362,7 +362,7 @@ fn polarity_lists_command_guard_as_in_loop_fail_closed_right_after_cap_guard() {
     assert!(matches!((permission, command), (Some(c), Some(g)) if g == c + 1), "permission の直後（cap guard は `.479.1` で消えた）: {names:?}");
     assert!(matches!((command, role), (Some(g), Some(r)) if g < r), "role-guard より前: {names:?}");
     let summary = text.lines().last().unwrap_or_default();
-    assert_eq!(count_of(summary, "guards"), Some(23), "母集団（.241 の審査の段・.411 の起動行の受付を含む・`.479.2` で -2）: {summary}");
+    assert_eq!(count_of(summary, "guards"), Some(24), "母集団（.241 の審査の段・.411 の起動行の受付を含む・`.479.2` で -2・`.382` で +1〔land の終端〕）: {summary}");
     assert_eq!(count_of(summary, "in-loop"), Some(18), "in-loop（.241 の審査の段・.411 の起動行の受付を含む・`.479.2` で -2）: {summary}");
     assert_eq!(count_of(summary, "fail-open"), Some(3), "fail-open は不変（FailClosed の門）: {summary}");
 }

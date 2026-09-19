@@ -9,6 +9,7 @@ pub mod cli_outcome;
 pub mod fleet;
 pub mod headless;
 pub mod hook;
+pub mod ledger;
 pub mod name;
 pub mod order;
 pub mod pipe;

@@ -609,6 +609,12 @@ pub(super) const FOLLOW_RETRIES: u64 = 2;
 /// tmp manifest の受付の待ちの上限（秒・rules 行 `gate.slot_wait_s` の fixture 値）。
 pub(super) const SLOT_WAIT_S: u64 = 1;
 
+/// tmp manifest の終端が CI を待つ上限（秒・rules 行 `pipe.ci_wait_s` の fixture 値）。
+///
+/// **終端は押す先を宣言した repo でしか走らない**ので、この値が効くのは終端の歯だけである
+/// （既存の toy repo は `remote` を宣言しない＝`terminal=undeclared` で待たない）。
+pub(super) const CI_WAIT_S: u64 = 1;
+
 /// tmp manifest の land の順番を待つ上限（秒・rules 行 `pipe.land_wait_s` の fixture 値）。待ちが
 /// 解ける歯だけが [`write_rules_land_wait`] で長い値に振る。
 pub(super) const LAND_WAIT_S: u64 = 1;
@@ -699,7 +705,7 @@ pub(super) fn write_rules_capped(dir: &Path, name: &str, fixture: RulesFixture) 
     // 上限の余地の 6 行（設計 contract-source.md §3）: 上限の 2 行は [`CapFixture`]・size の 3 行と行の数え方の幅は
     // 埋め込みの値。
     let body = format!(
-        "schema = 1\n\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{ceiling}",
+        "schema = 1\n\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{ceiling}",
         row("gate.lens_count", "GateLensCount", lens_count),
         row("gate.token_cap", "GateTokenCap", cap),
         row("fleet.lock_retry_ms", "LockRetryMs", 5000),
@@ -710,6 +716,7 @@ pub(super) fn write_rules_capped(dir: &Path, name: &str, fixture: RulesFixture) 
         row("host.reserve_memory_mb", "HostReserveMemoryMb", slots.reserve_mb),
         row("gate.slot_wait_s", "GateSlotWaitS", slots.wait_s),
         row("pipe.land_wait_s", "PipeLandWaitS", LAND_WAIT_S),
+        row("pipe.ci_wait_s", "PipeCiWaitS", CI_WAIT_S),
         row("R-C4-1", "CoreLines", caps.core_lines),
         row("R-C4-2", "ModuleLines", caps.file_lines),
         row("pipe.size_s_lines", "PipeSizeSLines", embedded_int("pipe.size_s_lines")),
