@@ -839,19 +839,25 @@ fn gist_of(goal: &str) -> String {
     cut
 }
 
-/// land の終端の結末（**閉じた 5 値**・設計 contract-source.md §5）。
+/// land の終端の結末（**閉じた 7 値**・設計 contract-source.md §5）。
 ///
-/// `Closed` 以外はどれも**台帳を閉じない**（着地は取り消さない）。やり直しは `pipe land --terminal-only`
-/// で終端だけを撃ち直す（冪等）。
+/// `Closed` と `Undeclared` 以外はどれも**台帳を閉じない**（着地は取り消さない）。やり直しは
+/// `pipe land --terminal-only` で終端だけを撃ち直す（冪等）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Terminal {
     /// push → CI success → close まで通った。
     Closed,
-    /// **押す先が宣言されていない**（宣言 `remote` が無い）＝この repo の便は終端を持たない。
+    /// **押す先が宣言されていない**（宣言を読めた上で `remote` の行が無い）＝この repo の便は終端を持たない。
     ///
     /// push は repo の外へ出す行為（A1 の「出す」）なので、宣言の無い repo に既定で押さない。
     /// 着地は成立しているので**便は落とさない**（`--pr-cmd` 形と同じ極性）。
     Undeclared,
+    /// **宣言そのものを読めない**（`.vessel.toml` が HEAD に無い・parse できない）。
+    ///
+    /// [`Self::Undeclared`] と融合しない（C10）——あちらは「読めた上で押す先が無い」で、こちらは
+    /// 「押す先が在るかを測れていない」である。[`Self::PushFailed`] とも融合しない（push を 1 度も
+    /// 撃っていないので「push が失敗した」ではない）。close しない側へ倒す。
+    Unreadable,
     /// push が撃てなかった / 失敗した（理由の語）。
     PushFailed(String),
     /// CI が **failure** だった。
@@ -863,6 +869,10 @@ pub enum Terminal {
     /// 台帳を閉じられなかった（着地は成立・[`crate::ledger::CloseError`] の 1 行）。
     CloseFailed(String),
 }
+
+/// [`Terminal`] の全 variant の字面（`terminal=` の値・宣言順）。
+pub const TERMINAL_TOKENS: &[&str] =
+    &["closed", "undeclared", "unreadable", "push:failed:", "ci:failure", "ci:unmeasurable", "close:failed:"];
 
 /// 終端の境界の極性（[`Terminal`]）: **success 以外は close しない側へ倒す**（FailClosed）。
 ///
@@ -879,6 +889,7 @@ impl Terminal {
         match self {
             Self::Closed => "closed".to_owned(),
             Self::Undeclared => "undeclared".to_owned(),
+            Self::Unreadable => "unreadable".to_owned(),
             Self::PushFailed(reason) => format!("push:failed:{reason}"),
             Self::CiFailed => "ci:failure".to_owned(),
             Self::CiUnmeasurable => "ci:unmeasurable".to_owned(),
@@ -890,7 +901,7 @@ impl Terminal {
     pub fn rc(&self) -> u8 {
         match self {
             Self::Closed | Self::Undeclared => RC_OK,
-            Self::PushFailed(_) | Self::CiFailed | Self::CiUnmeasurable | Self::CloseFailed(_) => {
+            Self::Unreadable | Self::PushFailed(_) | Self::CiFailed | Self::CiUnmeasurable | Self::CloseFailed(_) => {
                 crate::cli_outcome::RC_REFUSED
             }
         }
@@ -934,9 +945,11 @@ pub(super) fn landed_sha(state_dir: &Path, run: &str) -> Option<String> {
 pub(super) fn terminal(entry: &Land<'_>, sha: &str) -> Terminal {
     let facts = match super::declaration::terminal_facts(entry.repo) {
         Ok(found) => found,
+        // **push を 1 度も撃っていない**ので「push が失敗した」に畳まない（C10）。押す先が在るかを
+        // 測れていない周である。
         Err(_) => {
-            note(entry, "push:failed:declaration");
-            return Terminal::PushFailed("declaration".to_owned());
+            note(entry, "unreadable");
+            return Terminal::Unreadable;
         }
     };
     // 押す先を宣言していない repo は**終端を持たない**（A1 の「出す」を既定で撃たない）。1 件も記帳しない
@@ -1185,9 +1198,10 @@ mod tests {
     // flip-check: moved s2-07l.457
     use super::super::gate::{next_number, skip_record, DetectionSkip, Skipped};
     use super::{
-        detection_needed, squash_message, subject_of, trailer_key, CONTRACT_TRAILER, REQUIREMENTS_TRAILER,
-        SUBJECT_CHARS,
+        detection_needed, squash_message, subject_of, trailer_key, Terminal, CONTRACT_TRAILER,
+        REQUIREMENTS_TRAILER, SUBJECT_CHARS, TERMINAL_TOKENS,
     };
+    use crate::cli_outcome::RC_OK;
 
     // flip-check: retroactive s2-07l.222
     /// `next_number` は record 数の次（1 始まり）で、検出線を省いた record を挟む 2 周分でも単調に増える。
@@ -1239,6 +1253,31 @@ mod tests {
             message.lines().any(|line| line == "run: s2-07l.130-1757600000"),
             "run trailer が在る: {message}"
         );
+    }
+
+    /// 終端の結末は**閉じた 7 値**で、字面は [`TERMINAL_TOKENS`] と 1 対 1（宣言順）。
+    ///
+    /// **close する側は 2 値だけ**である: 通った周（`Closed`）と、そもそも終端を持たない repo の周
+    /// （`Undeclared`・rc 0）。残る 5 値はどれも close せず rc 1 で止まる——`Unreadable` を
+    /// `Undeclared` と同じ側に倒すと「測れていない」が「終端が無い」に化ける（C10）。
+    #[test]
+    fn pipe_terminal_land_outcomes_are_the_closed_seven() {
+        let listed = [
+            Terminal::Closed,
+            Terminal::Undeclared,
+            Terminal::Unreadable,
+            Terminal::PushFailed("git".to_owned()),
+            Terminal::CiFailed,
+            Terminal::CiUnmeasurable,
+            Terminal::CloseFailed("close:failed:rc=1".to_owned()),
+        ];
+        let tokens: Vec<String> = listed.iter().map(Terminal::as_token).collect();
+        assert_eq!(tokens.len(), TERMINAL_TOKENS.len(), "母集団 {} 値: {tokens:?}", TERMINAL_TOKENS.len());
+        for (token, stem) in tokens.iter().zip(TERMINAL_TOKENS) {
+            assert!(token.starts_with(stem), "宣言順の {stem} と対: {tokens:?}");
+        }
+        let ok: Vec<&String> = tokens.iter().zip(&listed).filter(|(_, found)| found.rc() == RC_OK).map(|(token, _)| token).collect();
+        assert_eq!(ok, vec!["closed", "undeclared"], "rc 0 は 2 値だけ（母集団 {} 値）", listed.len());
     }
 
     /// **契約と要件の trailer**（設計 contract-source.md §5 手順 5）は `run:` の後ろに並び、key は器の名から

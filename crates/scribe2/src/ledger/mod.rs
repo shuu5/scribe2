@@ -83,15 +83,25 @@ mod tests {
         assert_eq!(err.render(), "close:failed:unlaunchable", "記録の 1 行");
     }
 
-    /// rc ≠ 0 の client は rc と stderr の末尾を運ぶ（黙って「閉じた」にしない）。
+    /// rc ≠ 0 の client は **rc と stderr の末尾の両方**を運ぶ（黙って「閉じた」にしない）。
+    ///
+    /// rc も末尾も**呼び手が選んだ値**で測る（`sh` の断り文に賭けると、文言が変わった周に歯が
+    /// 静かに空虚化する）。末尾は 2 行目である＝1 行目を取る実装では落ちる。
     #[test]
     fn pipe_terminal_land_close_carries_the_rc_and_the_stderr_tail() {
-        let err = close("sh", "s2-x", "landed").expect_err("sh は close という script を持たない");
+        use std::os::unix::fs::PermissionsExt;
+        let dir = crate::pipe::fixture::scratch("ledger-close");
+        let client = dir.join("bd");
+        std::fs::write(&client, "#!/bin/sh\nprintf 'first line\\nlast line\\n' >&2\nexit 7\n")
+            .expect("偽の client を書ける");
+        std::fs::set_permissions(&client, std::fs::Permissions::from_mode(0o755)).expect("実行権を付ける");
+        let err = close(&client.display().to_string(), "s2-x", "landed").expect_err("rc 7 で断られる");
         let CloseError::Refused { rc, tail } = &err else {
             panic!("rc ≠ 0 の形: {err:?}");
         };
-        assert!(rc.is_some(), "rc を運ぶ: {err:?}");
-        assert!(err.render().starts_with("close:failed:rc="), "記録の 1 行: {}", err.render());
-        assert!(!tail.is_empty() || rc.is_some(), "理由を空にしない: {err:?}");
+        assert_eq!(*rc, Some(7), "client の rc をそのまま運ぶ: {err:?}");
+        assert_eq!(tail, "last line", "stderr の**末尾**の 1 行を運ぶ（1 行目ではない）: {err:?}");
+        assert_eq!(err.render(), "close:failed:rc=7 last line", "記録の 1 行");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
