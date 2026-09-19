@@ -50,6 +50,10 @@ const SUB_USER_PROMPT_SUBMIT: &str = "user-prompt-submit";
 /// `Stop` に紐づく subcommand（席の状態の打刻 = Idle）。
 const SUB_STOP: &str = "stop";
 
+/// `PreCompact` に紐づく subcommand（圧縮の直前の 1 枠・設計 seat-roles.md §22・`s2-07l.489`）。matcher は付けない
+/// （`manual` / `auto` の両方で撃つ・弁別は payload の `trigger` を器が読む）。
+const SUB_PRE_COMPACT: &str = "pre-compact";
+
 /// hook に自席の pane id を渡す引数（ADR-0015 §2.2）。**全 entry が持つ**: 打刻の席と記録の
 /// `seat` 列は同じ pane id から解く（`s2-07l.150`）。
 ///
@@ -126,7 +130,7 @@ fn entry(hook: &Hook, name: &str, timeout: u64) -> String {
     )
 }
 
-/// hooks.json 本文を組み立てる（entry は 5 つ・timeout は rules 行を写す）。
+/// hooks.json 本文を組み立てる（entry は 6 つ・timeout は rules 行を写す）。
 pub fn render_hooks(name: &str, timeout: u64) -> String {
     let hooks = [
         Hook { event: "SessionStart", matcher: None, sub: SUB_SESSION_START },
@@ -134,6 +138,7 @@ pub fn render_hooks(name: &str, timeout: u64) -> String {
         Hook { event: "PermissionRequest", matcher: Some(MATCHER_PERMISSION), sub: SUB_PERMISSION_REQUEST },
         Hook { event: "UserPromptSubmit", matcher: None, sub: SUB_USER_PROMPT_SUBMIT },
         Hook { event: "Stop", matcher: None, sub: SUB_STOP },
+        Hook { event: "PreCompact", matcher: None, sub: SUB_PRE_COMPACT },
     ];
     let entries: Vec<String> = hooks.iter().map(|hook| entry(hook, name, timeout)).collect();
     format!("{{\n  \"hooks\": {{\n{}\n  }}\n}}\n", entries.join(",\n"))
@@ -344,17 +349,17 @@ mod tests {
             .join("..")
     }
 
-    /// 5 つの command 行がすべて `--pane`（打刻の席と記録の `seat` 列・`s2-07l.150`）→ `--project`（anchor・
+    /// 6 つの command 行がすべて `--pane`（打刻の席と記録の `seat` 列・`s2-07l.150`）→ `--project`（anchor・
     /// seat-roles.md §4・`s2-07l.201`）→ `--plugin-root`（読み込み元の記録・consumer-sync.md §3・`s2-07l.303`）を
-    /// **この順で**受けて閉じる。件数（5）と subcommand ごとの形（1 つずつ）の両方で測る。
+    /// **この順で**受けて閉じる。件数（6）と subcommand ごとの形（1 つずつ）の両方で測る。
     fn assert_every_command_line_carries_the_seat_args(tracked: &str) {
         let pane_arg = " --pane \\\"$TMUX_PANE\\\"";
         let project_arg = " --project \\\"$CLAUDE_PROJECT_DIR\\\"";
         let plugin_root_arg = " --plugin-root \\\"$CLAUDE_PLUGIN_ROOT\\\"";
         for arg in [pane_arg, project_arg, plugin_root_arg] {
-            assert_eq!(tracked.matches(arg).count(), 5, "hook の command 行 5 つに{arg} が付く");
+            assert_eq!(tracked.matches(arg).count(), 6, "hook の command 行 6 つに{arg} が付く");
         }
-        for sub in ["session-start", "pre-tool-use", "permission-request", "user-prompt-submit", "stop"] {
+        for sub in ["session-start", "pre-tool-use", "permission-request", "user-prompt-submit", "stop", "pre-compact"] {
             assert_eq!(
                 tracked.matches(&format!("hook {sub}{pane_arg}{project_arg}{plugin_root_arg}\"")).count(),
                 1,
@@ -388,12 +393,12 @@ mod tests {
         );
         assert_eq!(
             tracked.matches("\"type\": \"command\"").count(),
-            5,
-            "entry は SessionStart / PreToolUse / PermissionRequest / UserPromptSubmit / Stop の 5 つである"
+            6,
+            "entry は SessionStart / PreToolUse / PermissionRequest / UserPromptSubmit / Stop / PreCompact の 6 つである"
         );
         // **数だけでなく名前で**測る。件数だけだと、event 名を取り違えた生成物
-        // （同じ event を 5 回書く等）が同じ 5 で通る。
-        for event in ["SessionStart", "PreToolUse", "PermissionRequest", "UserPromptSubmit", "Stop"] {
+        // （同じ event を 6 回書く等）が同じ 6 で通る。
+        for event in ["SessionStart", "PreToolUse", "PermissionRequest", "UserPromptSubmit", "Stop", "PreCompact"] {
             assert_eq!(
                 tracked.matches(&format!("\"{event}\": [")).count(),
                 1,
@@ -408,6 +413,35 @@ mod tests {
             "PreToolUse の matcher は Bash を含む"
         );
         assert_eq!(tracked.matches("\"matcher\": \"Bash\"").count(), 1, "PermissionRequest の matcher は Bash だけのまま");
+    }
+
+    /// 生成 hooks.json の `PreCompact` の行（圧縮の直前の 1 枠・設計 seat-roles.md §22・`s2-07l.489`）が `--pane` と
+    /// `--project` を運ぶ: entry はちょうど 1 つ・matcher を持たない（`manual` / `auto` の両方で撃つ）・command 行は
+    /// `hook pre-compact --pane "$TMUX_PANE" --project "$CLAUDE_PROJECT_DIR" …` の形で他の行と同じ生成器から出る
+    /// （render の bytes == tracked は `gen_manifest_hooks_json_is_idempotent` が測る）。
+    #[test]
+    fn gen_manifest_hooks_json_precompact_entry_carries_pane_and_project() {
+        let root = workspace_root();
+        let layout = Layout::discover(&root).expect("workspace の配置を読める");
+        let tracked = std::fs::read_to_string(root.join(HOOKS_REL)).expect("hooks.json を読める");
+        let pane_arg = " --pane \\\"$TMUX_PANE\\\"";
+        let project_arg = " --project \\\"$CLAUDE_PROJECT_DIR\\\"";
+        assert_eq!(tracked.matches("\"PreCompact\": [").count(), 1, "PreCompact の entry はちょうど 1 つ: {tracked}");
+        assert_eq!(
+            tracked.matches(&format!("hook pre-compact{pane_arg}{project_arg}")).count(),
+            1,
+            "PreCompact の command 行が --pane → --project を運ぶ: {tracked}"
+        );
+        let (_, tail) = tracked.split_once("\"PreCompact\": [").expect("PreCompact の entry");
+        assert!(!tail.contains("\"matcher\""), "PreCompact は matcher を持たない（manual / auto の両方で撃つ）: {tail}");
+        assert!(tail.contains(&format!("\\\"${{{}_BIN:-{}}}\\\" hook pre-compact", layout.name.to_uppercase(), layout.name)),
+            "command 行は他の entry と同じ `${{NAME_BIN:-NAME}}` の形: {tail}");
+        // 生成器の側: PreCompact を落とした render は tracked と一致しない（行は生成器から出ている）。
+        let rules = std::fs::read_to_string(root.join(RULES_REL)).expect("rules manifest を読める");
+        let timeout = rule_int(&rules, ROW_TIMEOUT).expect("hook.timeout_s を引ける");
+        let rendered = render_hooks(&layout.name, timeout);
+        assert_eq!(rendered.matches("hook pre-compact").count(), 1, "render も PreCompact の行を 1 つ持つ");
+        assert!(rendered.ends_with("    ]\n  }\n}\n"), "PreCompact は末尾の entry: {rendered}");
     }
 
     /// tracked な plugin.json が render の bytes と一致する（手書き禁止・冪等・`s2-07l.104`）。

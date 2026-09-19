@@ -14,6 +14,7 @@
 pub mod command;
 pub mod guard;
 pub mod permission;
+pub mod precompact;
 pub mod role_guard;
 pub mod stamp;
 pub mod vessel;
@@ -65,6 +66,8 @@ const EVENT_PERMISSION_REQUEST: &str = "permission-request";
 const EVENT_USER_PROMPT_SUBMIT: &str = "user-prompt-submit";
 /// `stop` の event 名（席の状態の打刻 = Idle）。
 const EVENT_STOP: &str = "stop";
+/// `pre-compact` の event 名（圧縮の直前の 1 枠・設計 seat-roles.md §22）。
+const EVENT_PRE_COMPACT: &str = "pre-compact";
 /// 記録の置き場を上書きする flag。
 const FLAG_STATE_DIR: &str = "--state-dir";
 /// 自席の pane id を渡す flag（打刻と記録の `seat` 列が同じ値から解く）。
@@ -172,7 +175,7 @@ pub fn dispatch(args: &[String], payload: &str) -> Outcome {
     };
     match args.first().map(String::as_str) {
         Some(EVENT_SESSION_START) => {
-            let mut outcome = session_start(&hooked, version, started);
+            let mut outcome = session_start(&hooked, version, payload, started);
             // 名乗りの後に打刻（Idle）。打刻の失敗は名乗りの行も rc も変えない（席を止めない）。
             outcome.err.extend(stamp::stamp(args, payload, Event::SessionStart, &dir));
             // 打刻の後に読み込み元の記録（設計 consumer-sync.md §3・同じく席を止めない）。
@@ -183,6 +186,7 @@ pub fn dispatch(args: &[String], payload: &str) -> Outcome {
         Some(EVENT_PERMISSION_REQUEST) => permission_request(&hooked, payload, started),
         Some(EVENT_USER_PROMPT_SUBMIT) => stamped(args, payload, Event::UserPromptSubmit, &dir),
         Some(EVENT_STOP) => stamped(args, payload, Event::Stop, &dir),
+        Some(EVENT_PRE_COMPACT) => pre_compact(&hooked, payload, started),
         _ => Outcome::ok(Vec::new()),
     }
 }
@@ -436,7 +440,7 @@ fn record_lines(dir: &Path, entry: &InjectionRecord) -> Vec<String> {
 }
 
 /// 名乗りの 1 行を出し、その 1 行についての記録を 1 件書く。
-fn session_start(hooked: &Hooked, version: u64, started: Instant) -> Outcome {
+fn session_start(hooked: &Hooked, version: u64, payload: &str, started: Instant) -> Outcome {
     let line = format!(
         "[{NAME}/SessionStart] served version={version} root={}",
         hooked.root.display()
@@ -450,7 +454,7 @@ fn session_start(hooked: &Hooked, version: u64, started: Instant) -> Outcome {
     let entry = record(&emit, hooked, started);
     let mut outcome = Outcome::ok_line(line);
     outcome.err = record_lines(hooked.dir, &entry);
-    brief(hooked, &mut outcome, started);
+    brief(hooked, &mut outcome, payload, started);
     outcome
 }
 
@@ -462,8 +466,9 @@ const WHAT_BRIEF: &str = "session-start-brief";
 ///
 /// **登録の無い席・pane の無い周・target が解けない周は 0 byte**（断りも出さない・記録も増やさない）。読めない周
 /// （event log・rules 行）は guard と同じ理由の 1 語を stderr に 1 行（席は止めない＝rc は変えない・注入は guard で
-/// はない・設計 §6）。
-fn brief(hooked: &Hooked, outcome: &mut Outcome, started: Instant) {
+/// はない・設計 §6）。指示文の後ろは圧縮の直前の 1 枠（`source = compact` の周だけ・[`precompact_out`]）→ 復帰の
+/// DATA（[`recent`]）の順。
+fn brief(hooked: &Hooked, outcome: &mut Outcome, payload: &str, started: Instant) {
     let Some(pane) = hooked.pane.filter(|found| !found.trim().is_empty()) else {
         return;
     };
@@ -502,7 +507,82 @@ fn brief(hooked: &Hooked, outcome: &mut Outcome, started: Instant) {
     let emit = Emit { who: EVENT_SESSION_START, what: WHAT_BRIEF, when: "SessionStart", line: text.trim_end_matches('\n') };
     outcome.err.extend(record_lines(hooked.dir, &record(&emit, hooked, started)));
     outcome.out.extend(text.lines().map(str::to_owned));
+    precompact_out(hooked, outcome, payload, &target, started);
     recent(hooked, outcome, started, read.as_deref().map_err(|reason| *reason));
+}
+
+/// 記録の `what`（圧縮の直前の 1 枠を出した周）。
+const WHAT_PRECOMPACT: &str = "session-start-precompact";
+
+/// 圧縮の直前の 1 枠を指示文の直後・§21 の DATA の前へ出す（設計 seat-roles.md §22・[`precompact::READ_POLARITY`]）:
+/// `source = compact` の周だけ枠を読み、`[PRECOMPACT]` の 1 行と抜いた文を出して記録 1 行（`what` = [`WHAT_PRECOMPACT`]）
+/// を残し、**出した後に枠を消す**（持ち越さない・読めない枠も消す＝古い枠が次の圧縮で化けない）。他の source は
+/// 枠を読まず触らない。枠が無い周は何も出さず、読めない・消せない周は stderr に 1 行（席は止めない）。
+fn precompact_out(hooked: &Hooked, outcome: &mut Outcome, payload: &str, target: &str, started: Instant) {
+    if field(payload, precompact::KEY_SOURCE).as_deref() != Some(precompact::SOURCE_COMPACT) {
+        return;
+    }
+    let seat_dir = crate::seat::seat_dir(hooked.dir, target);
+    match precompact::read(&seat_dir) {
+        precompact::Read::Absent => return,
+        precompact::Read::Unreadable => outcome.err.push(precompact_refused("slot-unreadable")),
+        precompact::Read::Slot(slot) => {
+            let lines = slot.lines();
+            let text = lines.join("\n");
+            let emit = Emit { who: EVENT_SESSION_START, what: WHAT_PRECOMPACT, when: "SessionStart", line: &text };
+            outcome.err.extend(record_lines(hooked.dir, &record(&emit, hooked, started)));
+            outcome.out.extend(lines);
+        }
+    }
+    if let Err(reason) = precompact::remove(&seat_dir) {
+        outcome.err.push(precompact_refused(&reason));
+    }
+}
+
+/// 枠を出せない・消せない周の 1 行（理由つき・guard の断りと同じ形）。
+fn precompact_refused(reason: &str) -> String {
+    format!("{NAME}: 圧縮の直前の枠を出せない reason={reason}")
+}
+
+/// 登録済みの席の target（`--pane` → target → 登録 row が在る周だけ）。pane が無い・解けない・event log を読めない・
+/// row が無い周は `None`（席ではない＝枠を書かない側）。
+fn registered_target(hooked: &Hooked) -> Option<String> {
+    let pane = hooked.pane.filter(|found| !found.trim().is_empty())?;
+    let socket = hooked.socket.filter(|found| !found.trim().is_empty());
+    let target = crate::seat::target_of_pane(socket, pane)?;
+    let events = store::read_all(hooked.dir).ok()?;
+    let state = crate::fleet::replay(&events);
+    crate::seat::role::registration_of_target(&state, &target).map(|_| target)
+}
+
+/// 圧縮の直前の 1 枠を書く（設計 seat-roles.md §22・[`precompact::WRITE_POLARITY`]）: 登録済みの席の周だけ、payload の
+/// `transcript_path` の末尾から席の直近の発言を抜いて `seat/<target>/precompact` に上書きする。**何が起きても圧縮を
+/// 止めない**（rc 0・stdout 0 byte）。書いた周と text が無い周は記録 1 行だけ、transcript を読めない・書けない周は
+/// stderr 1 行と記録 1 行。登録の無い席・pane の無い周は何も書かず記録も増やさない。
+fn pre_compact(hooked: &Hooked, payload: &str, started: Instant) -> Outcome {
+    let mut outcome = Outcome::ok(Vec::new());
+    let Some(target) = registered_target(hooked) else {
+        return outcome;
+    };
+    let seat_dir = crate::seat::seat_dir(hooked.dir, &target);
+    let transcript = field(payload, precompact::KEY_TRANSCRIPT).map(PathBuf::from);
+    let trigger = field(payload, precompact::KEY_TRIGGER).unwrap_or_default();
+    let written = precompact::last_text(transcript.as_deref())
+        .map_err(|skip| (skip.as_str().to_owned(), skip.surfaces()))
+        .and_then(|text| {
+            let slot = precompact::Slot::capture(&trigger, &text, crate::seat::state::now_secs());
+            precompact::write(&seat_dir, &slot).map_err(|reason| (reason, true))
+        });
+    let what = match &written {
+        Ok(()) => "precompact-slot".to_owned(),
+        Err((reason, _)) => format!("precompact-skip {reason}"),
+    };
+    let emit = Emit { who: EVENT_PRE_COMPACT, what: &what, when: "PreCompact", line: "" };
+    outcome.err.extend(record_lines(hooked.dir, &silent(&emit, hooked, started)));
+    if let Err((reason, true)) = written {
+        outcome.err.push(format!("{NAME}: 圧縮の直前の枠を書けない reason={reason}"));
+    }
+    outcome
 }
 
 /// 台帳を読めなかった周の `{ledger}` の字面（**数に化けさせない**・憲法 C10）。

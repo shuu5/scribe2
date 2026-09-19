@@ -167,6 +167,8 @@ pub const NOT_A_GUARD: &[Polarity] = &[
     crate::fleet::usage::UsageError::POLARITY,
     crate::seat::ledger::POLARITY,
     crate::seat::recent::POLARITY,
+    crate::hook::precompact::WRITE_POLARITY,
+    crate::hook::precompact::READ_POLARITY,
     crate::ledger::POLARITY,
 ];
 

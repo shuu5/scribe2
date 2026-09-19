@@ -56,6 +56,17 @@
           }
         ]
       }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${SCRIBE2_BIN:-scribe2}\" hook pre-compact --pane \"$TMUX_PANE\" --project \"$CLAUDE_PROJECT_DIR\" --plugin-root \"$CLAUDE_PLUGIN_ROOT\"",
+            "timeout": 10
+          }
+        ]
+      }
     ]
   }
 }

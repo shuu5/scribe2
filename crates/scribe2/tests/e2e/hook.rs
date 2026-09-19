@@ -13,6 +13,7 @@ use std::process::{Command, Output, Stdio};
 use vessel::cli_outcome::{RC_BROKEN, RC_OK, RC_REFUSED};
 use vessel::fleet::{json_lite, Registration};
 use vessel::hook::vessel::digest::{self, PluginRecord};
+use vessel::hook::precompact::{self, Slot, TEXT_WIDTH};
 use vessel::hook::vessel::{Marker, GENERATION, MARKER};
 use vessel::hook::{guard, inject_path, SCHEMA};
 use vessel::name::NAME;
@@ -1365,11 +1366,11 @@ fn seat_state_hooks_json_carries_stamp_entries() {
     for needle in ["\"UserPromptSubmit\"", "\"Stop\"", "hook user-prompt-submit", "hook stop"] {
         assert_eq!(body.matches(needle).count(), 1, "{needle} はちょうど 1 回: {body}");
     }
-    assert_eq!(body.matches(pane_arg).count(), 5, "5 行すべてが pane id を受ける: {body}");
+    assert_eq!(body.matches(pane_arg).count(), 6, "6 行すべてが pane id を受ける: {body}");
     for sub in ["session-start", "user-prompt-submit", "stop"] {
         assert_eq!(body.matches(&format!("hook {sub}{pane_arg}")).count(), 1, "{sub} の command 行に --pane");
     }
-    assert_eq!(body.matches("\"type\": \"command\"").count(), 5, "entry は 5 つ: {body}");
+    assert_eq!(body.matches("\"type\": \"command\"").count(), 6, "entry は 6 つ（`.489` で PreCompact が +1）: {body}");
 }
 
 // ─────────────────── 読み込み元の記録（consumer-sync.md §3・`s2-07l.303`・接頭辞 `hook_plugin_record_`） ───────────────────
@@ -1598,7 +1599,7 @@ fn seat_attrib_hook_session_start_and_permission_request_record_the_seat() {
     clean(&[&repo, &state, &sock_dir]);
 }
 
-/// 生成物 `hooks/hooks.json` の **5 entry すべて**が `--pane "$TMUX_PANE"` を渡す（記録の席の出所）。
+/// 生成物 `hooks/hooks.json` の **6 entry すべて**が `--pane "$TMUX_PANE"` を渡す（記録の席の出所）。
 #[test]
 fn seat_attrib_hook_every_hooks_json_entry_passes_the_pane() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
@@ -1606,8 +1607,8 @@ fn seat_attrib_hook_every_hooks_json_entry_passes_the_pane() {
         .unwrap_or_else(|err| panic!("hooks.json を読める: {err}"));
     let pane_arg = " --pane \\\"$TMUX_PANE\\\"";
     let entries = body.matches("\"type\": \"command\"").count();
-    assert_eq!(entries, 5, "entry は 5 つ（母集団）: {body}");
-    for sub in ["session-start", "pre-tool-use", "permission-request", "user-prompt-submit", "stop"] {
+    assert_eq!(entries, 6, "entry は 6 つ（母集団・`.489` で PreCompact が +1）: {body}");
+    for sub in ["session-start", "pre-tool-use", "permission-request", "user-prompt-submit", "stop", "pre-compact"] {
         assert_eq!(body.matches(&format!("hook {sub}{pane_arg}")).count(), 1, "{sub} の command 行が pane id を渡す: {body}");
     }
     assert_eq!(body.matches(pane_arg).count(), entries, "pane id を渡す行は entry と同数: {body}");
@@ -2779,5 +2780,327 @@ fn hook_session_recent_git_kinds_are_unmeasured_together_outside_a_repo() {
             "[RECENT-UNMEASURED] kind=dirty reason=not-a-repo"
         ]
     );
+    clean(&[&dir]);
+}
+
+// ---- 圧縮の直前の 1 枠（設計 seat-roles.md §22・FR42 / FR19・`s2-07l.489`・接頭辞 `hook_precompact_`）----
+// PreCompact が偽の transcript の末尾から席の直近の発言を `seat/<target>/precompact` に書き、`source = compact` の
+// SessionStart が指示文の後ろ・DATA の前に `[PRECOMPACT]` の 1 行と逐語の文を 1 回だけ出して枠を消す。席は §21 と同じ
+// 偽 tmux で解く（tmux を立てない）。
+
+/// `cwd` / `session_id` / `source` を持つ SessionStart の payload。
+fn session_payload(cwd: &Path, sid: &str, source: &str) -> String {
+    format!("{{\"cwd\":\"{}\",\"session_id\":\"{sid}\",\"source\":\"{source}\"}}", cwd.display())
+}
+
+/// PreCompact の payload（`trigger` と `transcript_path`・path は `None` なら key ごと無い）。
+fn precompact_payload(cwd: &Path, trigger: &str, transcript: Option<&Path>) -> String {
+    let path = transcript
+        .map(|found| json_lite::quote(&found.display().to_string()))
+        .map_or_else(String::new, |quoted| format!(",\"transcript_path\":{quoted}"));
+    format!("{{\"cwd\":\"{}\",\"session_id\":\"sid-pc\",\"trigger\":\"{trigger}\"{path}}}", cwd.display())
+}
+
+/// transcript の assistant の 1 行（content は block の列・`texts` の各要素が text block・`tool_use` を末尾に足す）。
+fn assistant_line(texts: &[&str], with_tool_use: bool) -> String {
+    let mut blocks: Vec<String> = texts.iter().map(|text| format!("{{\"type\":\"text\",\"text\":{}}}", json_lite::quote(text))).collect();
+    if with_tool_use {
+        blocks.push("{\"type\":\"tool_use\",\"id\":\"t1\",\"name\":\"Bash\",\"input\":{\"command\":\"ls\"}}".to_owned());
+    }
+    format!("{{\"type\":\"assistant\",\"uuid\":\"u\",\"message\":{{\"role\":\"assistant\",\"content\":[{}]}}}}", blocks.join(","))
+}
+
+/// transcript の user の 1 行（content は文字列・席の発言ではない）。
+fn user_line(text: &str) -> String {
+    format!("{{\"type\":\"user\",\"uuid\":\"u\",\"message\":{{\"role\":\"user\",\"content\":{}}}}}", json_lite::quote(text))
+}
+
+/// 偽の transcript を `sock_dir` に 1 本置く（JSONL・末尾改行）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn write_transcript(place: &RolePlace, name: &str, lines: &[String]) -> PathBuf {
+    let path = place.sock_dir.join(format!("{name}.jsonl"));
+    fs::write(&path, format!("{}\n", lines.join("\n"))).expect("transcript を書ける");
+    path
+}
+
+/// 枠の path を**契約の字面から**組む（`<state_dir>/seat/<潰した target>/precompact`）。
+fn slot_file(place: &RolePlace, name: &str) -> PathBuf {
+    place.state.join("seat").join(format!("{name}_{name}")).join(precompact::FILE)
+}
+
+/// 偽 tmux の席で `pre-compact` を撃ち、**rc 0・stdout 0 byte** を表明して stderr を返す（圧縮を止めない）。
+fn run_precompact(place: &RolePlace, path: &str, payload: &str) -> String {
+    let out = run_stub_hook(path, &["pre-compact", "--pane", STUB_PANE, "--rules", &place.rules], payload);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "pre-compact は rc 0: {}", stderr_text(&out));
+    assert!(out.stdout.is_empty(), "pre-compact は stdout 0 byte: {}", String::from_utf8_lossy(&out.stdout));
+    stderr_text(&out)
+}
+
+/// 偽 tmux の席で `source` 付きの session-start を撃ち、名乗りの後ろの行（指示文 + 枠 + DATA）を返す。
+fn session_lines_with(place: &RolePlace, path: &str, source: &str) -> Vec<String> {
+    let args = ["session-start", "--pane", STUB_PANE, "--rules", &place.rules, "--bd", &place.bd];
+    after_header(&run_stub_hook(path, &args, &session_payload(&place.repo, "sid-pc", source)))
+}
+
+/// 名乗りの後ろの行から `[PRECOMPACT]` の区間（header と抜いた文）を切り出す: 指示文 11 行の**直後**に始まり、最初の
+/// `[RECENT-` の**直前**で終わる。区間が無ければ空。
+fn precompact_section(lines: &[String]) -> Vec<String> {
+    let (brief, rest) = split_recent(lines.to_vec());
+    let at = brief.iter().position(|line| line.starts_with(precompact::MARKER));
+    assert!(rest.iter().all(|line| !line.starts_with(precompact::MARKER)), "枠は DATA の前に出る: {lines:?}");
+    match at {
+        None => Vec::new(),
+        Some(at) => {
+            assert_eq!(at, 11, "枠は §5 の指示文 11 行の直後: {lines:?}");
+            brief.get(at..).map(<[String]>::to_vec).unwrap_or_default()
+        }
+    }
+}
+
+/// 記録のうち圧縮の枠の行（`what` が `precompact-` か `session-start-precompact` で始まる）。
+fn precompact_records(state: &Path) -> Vec<String> {
+    inject_lines(state)
+        .into_iter()
+        .filter(|line| what_of(line).starts_with("precompact-") || what_of(line) == "session-start-precompact")
+        .collect()
+}
+
+/// `pre-compact` を撃ち、枠が `text` を逐語で持つ（trigger は `auto`・切っていない・stderr 0 byte・記録 `precompact-slot`
+/// が席を名乗る）ことを確かめて読んだ枠を返す。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn assert_slot_written(place: &RolePlace, path: &str, name: &str, transcript: &Path, text: &str) -> Slot {
+    let before = precompact_records(&place.state).len();
+    let stderr = run_precompact(place, path, &precompact_payload(&place.repo, "auto", Some(transcript)));
+    assert_eq!(stderr, "", "書けた周は stderr 0 byte");
+    let body = fs::read_to_string(slot_file(place, name)).expect("枠が在る");
+    let parsed = Slot::parse(&body).expect("枠の形");
+    assert_eq!(parsed.text, text, "逐語（同じ行の最後の text block・tool_use だけの行と user の行は飛ばす）");
+    assert_eq!(parsed.trigger, "auto");
+    assert!(!parsed.cut(), "幅の内側は切らない");
+    let records = precompact_records(&place.state);
+    assert_eq!(records.len(), before + 1, "記録 1 行: {records:?}");
+    let last = records.last().cloned().unwrap_or_default();
+    assert_eq!(what_of(&last), "precompact-slot", "{records:?}");
+    assert_attributed(&last, Some(&format!("{name}_{name}")), "枠の記録");
+    parsed
+}
+
+/// (a)(b): PreCompact が transcript の末尾から**直近の assistant の text block**（tool_use だけの行と user の行と JSON で
+/// ない行は飛ばす・同じ行の最後の text block）を枠に書き（rc 0・stdout 0 byte・stderr 0 byte・記録 `precompact-slot`）、
+/// 続く `source = compact` の SessionStart が指示文 11 行の直後・DATA の前に `[PRECOMPACT] trigger=auto ts=… lines=2` と
+/// 逐語の 2 行を出して枠を消し（記録 `session-start-precompact`）、同じ SessionStart をもう 1 回撃つと `[PRECOMPACT]` は
+/// 出ない（1 回だけ）。
+#[test]
+fn hook_precompact_writes_the_slot_and_compact_session_start_emits_it_once() {
+    let place = role_place();
+    let path = stub_seat(&place, "precomp", Some("orchestrator"));
+    let latest = "いま .489.2 の枠を書いている途中。\n次は SessionStart の読み側。";
+    let transcript = write_transcript(
+        &place,
+        "t-a",
+        &[
+            user_line("始めて"),
+            assistant_line(&["古い発言"], true),
+            user_line("続けて"),
+            assistant_line(&["途中の text", latest], true),
+            "not json at all".to_owned(),
+            assistant_line(&[], true),
+            user_line("[tool_result] 出力"),
+        ],
+    );
+    let before = precompact_records(&place.state).len();
+    let parsed = assert_slot_written(&place, &path, "precomp", &transcript, latest);
+    let slot = slot_file(&place, "precomp");
+    // 読む側: compact の SessionStart が 1 回だけ出して枠を消す。
+    let lines = session_lines_with(&place, &path, "compact");
+    let section = precompact_section(&lines);
+    assert_eq!(section.len(), 3, "header + 逐語の 2 行: {lines:?}");
+    assert_eq!(section[0], format!("[PRECOMPACT] trigger=auto ts={} lines=2", vessel::fleet::cli::format_utc(parsed.ts)), "{lines:?}");
+    assert_eq!(section[1..], ["いま .489.2 の枠を書いている途中。", "次は SessionStart の読み側。"], "逐語: {lines:?}");
+    assert!(!slot.exists(), "出した後に枠は消える");
+    let records = precompact_records(&place.state);
+    assert_eq!(records.len(), before + 2, "読む側の記録 1 行: {records:?}");
+    assert_eq!(what_of(&records[before + 1]), "session-start-precompact", "{records:?}");
+    let bytes = section.join("\n").len() as u64 + 1;
+    assert_eq!(value_of(&records[before + 1], "bytes"), Some(json_lite::Value::Num(bytes)), "bytes は出した行の byte 数");
+    // (b) もう 1 回: 枠は無いので出ない（指示文と DATA は出る）。
+    let again = session_lines_with(&place, &path, "compact");
+    assert!(precompact_section(&again).is_empty(), "2 回目は出ない: {again:?}");
+    assert_eq!(split_recent(again.clone()).0.len(), 11, "指示文は 11 行のまま: {again:?}");
+    assert!(again.iter().any(|line| line.starts_with("[RECENT-")), "DATA は出る: {again:?}");
+    assert_eq!(precompact_records(&place.state).len(), before + 2, "出さない周は記録も増えない");
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
+/// (c): `source = startup`（と `resume` / `clear`）の SessionStart は枠を読まず消さない（`[PRECOMPACT]` を出さず・
+/// 枠は残る）。その後の `compact` で出る。
+#[test]
+fn hook_precompact_startup_neither_emits_nor_removes_the_slot() {
+    let place = role_place();
+    let path = stub_seat(&place, "precompstart", Some("orchestrator"));
+    let transcript = write_transcript(&place, "t-c", &[assistant_line(&["手番の途中"], false)]);
+    run_precompact(&place, &path, &precompact_payload(&place.repo, "manual", Some(&transcript)));
+    let slot = slot_file(&place, "precompstart");
+    assert!(slot.is_file(), "枠が在る");
+    let written = fs::read_to_string(&slot).unwrap_or_default();
+    for source in ["startup", "resume", "clear"] {
+        let lines = session_lines_with(&place, &path, source);
+        assert!(precompact_section(&lines).is_empty(), "{source} では出ない: {lines:?}");
+        assert_eq!(fs::read_to_string(&slot).unwrap_or_default(), written, "{source} では枠を触らない");
+    }
+    // source の無い payload（旧い Claude Code）も同じ。
+    let out = run_stub_hook(&path, &["session-start", "--pane", STUB_PANE, "--rules", &place.rules, "--bd", &place.bd], &stamp_payload(&place.repo, "sid-pc"));
+    assert!(precompact_section(&after_header(&out)).is_empty(), "source 無しでは出ない");
+    assert!(slot.is_file(), "source 無しでは枠を触らない");
+    let lines = session_lines_with(&place, &path, "compact");
+    let section = precompact_section(&lines);
+    assert_eq!(section.len(), 2, "compact で出る: {lines:?}");
+    assert!(section[0].starts_with("[PRECOMPACT] trigger=manual ts="), "{}", section[0]);
+    assert_eq!(section[1], "手番の途中");
+    assert!(!slot.exists(), "compact で消える");
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
+/// (d): transcript が無い（path が無い file・payload に key が無い）・assistant の text が 1 つも無い（user の行と
+/// tool_use だけの行・JSON でない行）周は枠を書かず rc 0・stdout 0 byte。読めない周だけ stderr 1 行（失敗を黙って
+/// 消さない）と記録 `precompact-skip transcript-unreadable`・無い周は黙って記録 `precompact-skip no-text` / `no-transcript`。
+/// 続く compact の SessionStart は `[PRECOMPACT]` を出さないだけで指示文と DATA は出す。
+#[test]
+fn hook_precompact_skips_unreadable_and_text_less_transcripts_without_a_slot() {
+    let place = role_place();
+    let path = stub_seat(&place, "precompnone", Some("orchestrator"));
+    let slot = slot_file(&place, "precompnone");
+    let missing = place.sock_dir.join("no-such.jsonl");
+    let textless = write_transcript(
+        &place,
+        "t-d",
+        &[user_line("x"), assistant_line(&[], true), "{\"type\":\"assistant\"".to_owned(), assistant_line(&["   \n"], false)],
+    );
+    let cases: [(&str, Option<&Path>, &str, bool); 3] = [
+        ("無い file", Some(&missing), "transcript-unreadable", true),
+        ("key 無し", None, "no-transcript", false),
+        ("text 無し", Some(&textless), "no-text", false),
+    ];
+    for (why, transcript, reason, surfaces) in cases {
+        let before = precompact_records(&place.state).len();
+        let stderr = run_precompact(&place, &path, &precompact_payload(&place.repo, "auto", transcript));
+        assert!(!slot.exists(), "{why}: 枠を書かない");
+        if surfaces {
+            assert_eq!(stderr.lines().count(), 1, "{why}: stderr 1 行: {stderr}");
+            assert!(stderr.contains(&format!("reason={reason}")), "{why}: {stderr}");
+        } else {
+            assert_eq!(stderr, "", "{why}: 失敗ではない＝黙る");
+        }
+        let records = precompact_records(&place.state);
+        assert_eq!(records.len(), before + 1, "{why}: 記録 1 行: {records:?}");
+        assert_eq!(what_of(&records[before]), format!("precompact-skip {reason}"), "{why}: {records:?}");
+    }
+    let lines = session_lines_with(&place, &path, "compact");
+    assert!(precompact_section(&lines).is_empty(), "枠が無い compact は出さない: {lines:?}");
+    assert_eq!(split_recent(lines.clone()).0.len(), 11, "指示文は出る: {lines:?}");
+    assert!(lines.iter().any(|line| line.starts_with("[RECENT-")), "DATA は出る: {lines:?}");
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
+/// (e): 幅（`TEXT_WIDTH` 文字）を超える文は切られ、切った事実が `[PRECOMPACT]` の行に `cut=<shown>/<total>` で出る
+/// （文字で数える＝多 byte を byte で切らない）。幅ちょうどは切らず `cut=` を持たない。
+#[test]
+fn hook_precompact_cuts_long_text_and_names_the_cut_on_the_line() {
+    let place = role_place();
+    let path = stub_seat(&place, "precompcut", Some("orchestrator"));
+    let long: String = "あ".repeat(TEXT_WIDTH + 50);
+    let transcript = write_transcript(&place, "t-e", &[assistant_line(&[&long], false)]);
+    run_precompact(&place, &path, &precompact_payload(&place.repo, "auto", Some(&transcript)));
+    let lines = session_lines_with(&place, &path, "compact");
+    let section = precompact_section(&lines);
+    assert_eq!(section.len(), 2, "{lines:?}");
+    assert!(section[0].ends_with(&format!(" lines=1 cut={TEXT_WIDTH}/{}", TEXT_WIDTH + 50)), "切った事実: {}", section[0]);
+    assert_eq!(section[1].chars().count(), TEXT_WIDTH, "幅で切る（文字）");
+    assert_eq!(section[1], "あ".repeat(TEXT_WIDTH), "先頭から逐語");
+    // 幅ちょうどは切らない。
+    let exact: String = "い".repeat(TEXT_WIDTH);
+    let transcript = write_transcript(&place, "t-e2", &[assistant_line(&[&exact], false)]);
+    run_precompact(&place, &path, &precompact_payload(&place.repo, "auto", Some(&transcript)));
+    let section = precompact_section(&session_lines_with(&place, &path, "compact"));
+    assert!(section[0].ends_with(" lines=1"), "切らない周に cut= は無い: {}", section[0]);
+    assert_eq!(section[1], exact);
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
+/// (f): 登録の無い席（pane は解けるが row が無い）と `--pane` の無い周は枠を書かず（席の dir も作らない）、記録も
+/// 増やさない（rc 0・stdout 0 byte・stderr 0 byte）。
+#[test]
+fn hook_precompact_is_silent_for_an_unregistered_seat() {
+    let place = role_place();
+    let path = stub_seat(&place, "precompghost", None);
+    let transcript = write_transcript(&place, "t-f", &[assistant_line(&["登録の無い席の発言"], false)]);
+    let payload = precompact_payload(&place.repo, "auto", Some(&transcript));
+    let before = inject_lines(&place.state).len();
+    assert_eq!(run_precompact(&place, &path, &payload), "", "stderr 0 byte");
+    assert!(!slot_file(&place, "precompghost").exists(), "登録の無い席は枠を書かない");
+    let out = run_stub_hook(&path, &["pre-compact", "--rules", &place.rules], &payload);
+    assert_silent(&out, "--pane 無し");
+    assert_eq!(inject_lines(&place.state).len(), before, "記録は増えない");
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
+/// 純関数の面（1 行の読み）: assistant 以外・text の無い block・JSON でない行・配列でない content は `None`・同じ行の
+/// 最後の text block を取る・空白だけの text は無いと見る。書かない理由は閉じた enum（3 variant・宣言順）。
+#[test]
+fn hook_precompact_reads_the_last_text_block_of_a_line_purely() {
+    assert_eq!(precompact::text_of_line(&assistant_line(&["a", "b"], true)).as_deref(), Some("b"), "最後の text block");
+    assert_eq!(precompact::text_of_line(&assistant_line(&[], true)), None, "tool_use だけ");
+    assert_eq!(precompact::text_of_line(&assistant_line(&[" \n"], false)), None, "空白だけ");
+    assert_eq!(precompact::text_of_line(&user_line("a")), None, "user の行");
+    assert_eq!(precompact::text_of_line("{\"type\":\"assistant\""), None, "JSON でない");
+    assert_eq!(precompact::text_of_line("{\"type\":\"assistant\",\"message\":{\"content\":\"str\"}}"), None, "配列でない content");
+    let skips: Vec<&str> = precompact::SKIPS.iter().map(|skip| skip.as_str()).collect();
+    assert_eq!(skips, ["no-transcript", "transcript-unreadable", "no-text"], "理由の閉じた列（宣言順）");
+    assert!(vessel::order::is_declaration_order(precompact::SKIPS, |skip| skip as usize), "宣言順");
+    assert!(precompact::Skip::Unreadable.surfaces() && !precompact::Skip::NoText.surfaces(), "読めないだけが失敗");
+}
+
+/// 純関数の面（枠の往復）: `to_text` ↔ `parse`（改行入りの逐語・別 schema と壊れた 1 行目は `None`）・trigger の畳み
+/// （空白は `_`・空は `-`）・幅を超えた周の `cut=`。
+#[test]
+fn hook_precompact_round_trips_the_slot_purely() {
+    let slot = Slot::capture("man ual", "1 行目\n2 行目\n", 7);
+    assert_eq!(slot.trigger, "man_ual");
+    assert_eq!((slot.total, slot.shown(), slot.cut()), (10, 10, false));
+    assert_eq!(slot.to_text(), "schema=1 trigger=man_ual ts=7 total=10\n1 行目\n2 行目\n");
+    assert_eq!(Slot::parse(&slot.to_text()), Some(slot.clone()), "往復");
+    assert_eq!(slot.lines(), ["[PRECOMPACT] trigger=man_ual ts=1970-01-01T00:00:07Z lines=2", "1 行目", "2 行目"]);
+    assert_eq!(Slot::capture("", "x", 0).trigger, "-", "空の trigger は -");
+    let cut = Slot::capture("auto", &"x".repeat(TEXT_WIDTH + 1), 0);
+    assert!(cut.cut() && cut.header().ends_with(&format!(" cut={TEXT_WIDTH}/{}", TEXT_WIDTH + 1)), "{}", cut.header());
+    for broken in ["schema=2 trigger=a ts=1 total=1\nx", "schema=1 trigger=a ts=x total=1\nx", "schema=1 trigger=a ts=1 total=1", ""] {
+        assert_eq!(Slot::parse(broken), None, "{broken:?}");
+    }
+}
+
+/// 純関数の面（末尾だけの読み）: `TAIL_BYTES` を超える transcript は全読せず、途中から読んだ周は欠けた先頭の行を
+/// 捨てて末尾の assistant の text を取る。無い file は `Unreadable`・path 無しは `NoTranscript`。
+#[test]
+fn hook_precompact_reads_only_the_tail_of_the_transcript() {
+    let dir = tmp();
+    let file = dir.join("big.jsonl");
+    let filler = user_line(&"f".repeat(4_096));
+    let mut lines: Vec<String> = vec![assistant_line(&["古い"], false)];
+    let count = usize::try_from(precompact::TAIL_BYTES).unwrap_or_default() / filler.len() + 2;
+    lines.extend(std::iter::repeat_n(filler, count));
+    lines.push(assistant_line(&["末尾の発言"], false));
+    fs::write(&file, format!("{}\n", lines.join("\n"))).unwrap_or_else(|err| panic!("write: {err}"));
+    assert_eq!(precompact::last_text(Some(&file)).as_deref(), Ok("末尾の発言"));
+    let tail = precompact::tail_of(&file).unwrap_or_default();
+    assert!(u64::try_from(tail.len()).unwrap_or(u64::MAX) < precompact::TAIL_BYTES, "全読しない: {}", tail.len());
+    assert!(tail.starts_with('{') && !tail.contains("古い"), "欠けた先頭の行を捨てる");
+    assert_eq!(precompact::last_text(Some(&dir.join("none.jsonl"))), Err(precompact::Skip::Unreadable));
+    assert_eq!(precompact::last_text(None), Err(precompact::Skip::NoTranscript));
     clean(&[&dir]);
 }
