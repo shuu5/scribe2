@@ -900,3 +900,13 @@ terms:
     aliases: [orchestrator seat, orchestrator の席]
     definition: 席の唯一の役割 (ADR-0045・proposed)。 user と話し承認と裁定を受け取る対話面の席 (R-C7-1 の値) で、 契約・設計・落ちる歯 (実行できる acceptance・tests/ に限った edit-code) を書き、 実装はせず便の起動・着地・merge は dispatcher に任せる。 前の名は planner で、 管理席は無い。 権能は rules 行 role.orchestrator が持つ。
     relationships: [対話面, 席, dispatcher, 権能, 台帳, planner]
+  - canonical: path 種別
+    domain: consumer
+    aliases: [PathKind, path kind]
+    definition: 編集先の file を分ける閉じた enum (列挙は core が持ち文書は写さない・ADR-0013 §2.1)。 種別ごとに要る権能が 1 つ対応し、 編集面の guard が照合する (SRS FR41 / FR45・ADR-0022 §2.3)。 分類は anchor からの相対 path の prefix だけで決め、 字面の語彙では判定しない。 種別に属する path の集合は対象 repo が vessel 宣言の任意 key で名乗り、 書かない repo は器の既定で分類する (ADR-0047・proposed)。 宣言 file 自身は常に code の種別で、 不正な宣言の周は fail-closed で全 file を code として扱う。
+    relationships: [権能, vessel 宣言, 任意 key, 席, anchor]
+  - canonical: 任意 key
+    domain: consumer
+    aliases: [optional key]
+    definition: vessel 宣言の key のうち書かなくてよいもの。 「無い」は key の不在で表し (書いた空配列は不備・ADR-0010 §2.1)、 書かない宣言は器の既定で動く。 未知の key は読み口が断るので、 任意 key を足す便は読み口の key の列も同時に広げる。
+    relationships: [vessel 宣言, path 種別, 検出線, 共通 verify]
