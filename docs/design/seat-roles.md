@@ -257,6 +257,22 @@ C1 / C5（権能の値は行・裁定 id）・C1.2（生成文に手書きの規
 - 触らない: 種別の集合（closed enum）と種別ごとの権能の 1:1・rules 行・宣言の schema の版（1 のまま）・便の印で開く write-set の扱い（§4）。
 - 後続: consumer の移行の手順（[consumer-sync.md](./consumer-sync.md) §16）に「宣言へ 3 本の key を書く」段を足すのは、本行の着地の後の docs の便。新しい consumer の最初の宣言 file を書く口は導入の口の設計（`s2-07l.491`）。
 
+## 25. 便を止める権能 `stop` — 起動の権能から分け、席は便 1 本の名指しの形だけ撃てる（契約表の行 s・[ADR-0048](../../design-intent/decisions/ADR-0048-stopping-a-run-is-a-separate-capability-of-the-orchestrator.html)・`s2-07l.495`）
+
+- 何を解くか: ADR-0045 §2 (1) の後、便を止める口は起動の権能に結ばれていて、どの席の行にも無い＝居座る便を席から外せない（実測 2026-09-20・[dispatcher.md](./dispatcher.md) §11）。決定は ADR-0048 で、本 § はその実装の形である。
+- やさしく言うと: 「この 1 本を止める」だけを席に許す。「全部止める」と、始める・再開する・片付けるは、今までどおり席からは撃てない。
+- 約束（1 つずつ歯が測る・行 s の done と 1:1）:
+  1. **権能の列に `stop` が 1 つ増える**: 権能の閉じた enum と全 variant の列に `stop` を足す（字面は `stop`・宣言順は `merge` の後ろ）。rules 行の loader は `stop` を知っている名として受け、知らない名は今までどおり拒む。
+  2. **rules 行 `role.orchestrator` の値に `stop` が載る**（裁定 id と日付を今回の裁定に更新）。席の指示文（§5 の権能の行）にも `stop` が出る（外形 snapshot が更新される）。
+  3. **便 1 本を名指す停止は `stop` の権能で通る**: Bash の command 行の中の停止の呼び出しで、その呼び出しの token 列（次の区切りまで）に `--run` とその直後の値（`-` で始まらない token）が在り、`--all` が無いものは、`stop` の権能を要る＝orchestrator の席で通る。
+  4. **それ以外の停止は今までどおり起動の権能を要る**（＝どの席でも断られる）: `--all` を持つ呼び出し・`--run` の無い呼び出し・`--run` の直後に値の無い呼び出し・`--run` と `--all` の両方を持つ呼び出し。名指しを読めない形は起動の側へ倒す（fail-closed）。
+  5. **1 行に複数の呼び出しが在る周は呼び出しごとに判じる**: 名指しの停止と `--all` の停止が 1 行に並ぶ行は、起動の権能が欠けるので断られる（欠けた権能の名指しは今の deny の 1 行の形のまま）。
+  6. **他の口の権能は変わらない**: 受付・起動・再開・退役は起動の権能のまま、着地は merge のまま、回答と承認は今のまま（既存の歯が測る側）。
+  7. **`stop` を持たない行の席では名指しの停止も断られる**（権能は行から来る・行に無ければ通らない）。
+- 止める口そのものの挙動（終端 `Stopped` の記帳・worktree と branch を残す・止め切れない周の断り）は 1 つも変えない。止めた便は終端の列外に入り、契約の字を直すか `release` の印で列に戻る（[dispatcher.md](./dispatcher.md) §12）。
+- 歯: guard の照合は pure な fn の in-file の歯（接頭辞 `role_guard_stop_`・約束 3 / 4 / 5 の形を 1 つずつ・母集団 = 停止の呼び出しの形 6 つ）と、PreToolUse の口からの e2e（`tests/e2e/hook.rs`・接頭辞 `hook_role_stop_`・約束 3 / 4 / 7 を登録済みの席で測る）。rules 行と loader は `tests/e2e/rules.rs`（接頭辞 `rules_role_stop_`・約束 1 / 2）。指示文の外形 snapshot は既存の歯が測る（更新だけ）。
+- 触らない: 止める口の本体・他の権能付きの口の結び・編集面の guard・極性一覧（新しい guard は足さない＝既存の Bash 面の guard の表の 1 行が変わるだけ）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -414,4 +430,14 @@ write-set = ["crates/scribe2/src/hook/role_guard.rs", "crates/scribe2/src/hook/m
 verify = ["cargo nextest run -p scribe2 --no-tests=fail hook_role_paths_", "cargo nextest run -p scribe2 --no-tests=fail seat_role_doctor_paths_"]
 size = "M"
 done = "toy repo に宣言を commit して PreToolUse の口から測り、3 本の key を書いた repo で宣言した仕様と設計 doc と test の dir の下の編集が orchestrator の席で通ってそれ以外は断られ、/ で終わらない項目は完全一致の 1 file だけが通り、1 本だけ書いた repo は残りの種別が固定の判定のままで、宣言 file の無い repo と key を書かない repo は今の分類と同じで、宣言 file 自身の編集は宣言が名指していても断られ、不正な宣言（parent-segment / absolute / empty / overlap / unreadable のそれぞれ）の repo は固定値なら通る path も含めて repo 内の全編集が断られて deny の行が理由の字面を持ち、commit していない作業ツリーの宣言は効かず、便の worktree の中の file も anchor の宣言で分類され、doctor が anchor ごとに paths の 1 行を default / declared / invalid の 3 つの state と invalid の理由の字面で出し、種別の集合と権能の 1:1 と宣言の schema の版は変わらない"
+
+[[contract]]
+id = "s"
+title = "便を止める権能 stop — 権能の列に stop を足して停止の口を起動の権能から外し、rules 行 role.orchestrator の値に stop を足し、guard は便 1 本を名指す停止だけを stop で通す（--all と名指しの無い形は起動の権能のまま・止める口の本体は不変）"
+req = ["FR41", "FR45", "NFR4"]
+section = "25"
+write-set = ["crates/scribe2/src/seat/role.rs", "crates/scribe2/src/hook/role_guard.rs", "rules/manifest.toml", "crates/scribe2/tests/e2e/rules.rs", "crates/scribe2/tests/e2e/hook.rs", "crates/scribe2/tests/e2e/snapshots/e2e__hook__hook_brief_orchestrator.snap", "docs/design/seat-roles.md"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail role_guard_stop_", "cargo nextest run -p scribe2 --no-tests=fail hook_role_stop_", "cargo nextest run -p scribe2 --no-tests=fail rules_role_stop_", "cargo nextest run -p scribe2 --no-tests=fail hook_brief_"]
+size = "S"
+done = "(1) 権能の列と全 variant の列に stop が在り loader が stop を受けて知らない名は拒む (2) 埋め込みの rules 行 role.orchestrator の値が stop を持ち裁定 id が今回の裁定で、席の指示文の権能の行に stop が出て外形 snapshot が更新される (3) --run とその直後の値を持ち --all を持たない停止の呼び出しが orchestrator の席で通る (4) --all を持つ形・--run の無い形・--run の直後に値の無い形・--run と --all の両方を持つ形の停止は起動の権能が欠けて断られる (5) 名指しの停止と --all の停止が 1 行に並ぶ行は断られ deny の行が欠けた権能を名指す (6) 受付・起動・再開・退役は起動の権能のまま、着地は merge のまま、回答と承認は今のまま (7) stop を持たない行の席では名指しの停止も断られる、の 7 つを in-file の歯（停止の呼び出しの形 6 つの母集団）と PreToolUse の口の歯と rules の歯が測り、止める口の本体は 1 行も変わらない"
 <!-- contracts:end -->
