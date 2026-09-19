@@ -86,9 +86,19 @@ pub struct Driver {
 }
 
 impl Driver {
-    /// 札を置く。書けない周は `None` で、その便は**札の無い便**として扱われる（列は触らない・§5）。
+    /// 札を握る（**入口の排他でもある**・設計 dispatcher.md §5）。
+    ///
+    /// 既に**生きている別の driver** が握っていれば `None` で、その process はその便を駆動しない
+    /// （同じ便に driver を 2 本立てない）。契機が重なると同じ便に起こし直しが 2 本撃たれうるので、
+    /// 排他は**札の側**に置く——列の 1 周は lock を取らず、起こし直した子は別 process なので、
+    /// 1 周の側で閉じても効かない（`s2-07l.366` と同じ理由で「記帳する側」に置く）。
+    ///
+    /// 書けない周も `None`（その便は札の無い便として扱われる＝列は触らない・fail-closed）。
     pub fn hold(state_dir: &Path, id: &str) -> Option<Self> {
         let path = driver_path(state_dir, id);
+        if driven_by_another(&path) {
+            return None;
+        }
         std::fs::create_dir_all(path.parent()?).ok()?;
         std::fs::write(&path, format!("{}\n", std::process::id())).ok()?;
         let events = run_events(state_dir, id);
@@ -127,6 +137,20 @@ impl Drop for Driver {
             let _ = std::fs::remove_file(&self.path);
         }
     }
+}
+
+/// 札を**生きている別の process** が握っているか（[`Driver::hold`] の排他の判定）（札が無い・読めない周は `false`＝握ってよい）。
+///
+/// 自分の札は握り直してよい（同じ process が同じ便を続けて駆動する周）。`pid` の再利用で生きて見える
+/// 札は握らない側へ倒す（lock の所有者の判定と同じ極性）。
+fn driven_by_another(path: &Path) -> bool {
+    let Ok(body) = std::fs::read_to_string(path) else {
+        return false;
+    };
+    if body.trim().parse::<u32>() == Ok(std::process::id()) {
+        return false;
+    }
+    store::lock_owner(&body, store::started_ms) == store::Owner::Live
 }
 
 /// 便に紐づく event の件数（**前進したか**の基準・読めない周は 0）。
@@ -703,7 +727,10 @@ pub(crate) mod fixture {
 #[cfg(test)]
 mod tests {
     use super::fixture::{append_all, event, scratch};
-    use super::{base_of_run, last_stage_detail, question_of_run, questions_of_run, runner_is_idle, Base, Question};
+    use super::{
+        base_of_run, driver_path, last_stage_detail, question_of_run, questions_of_run, runner_is_idle, Base, Driver,
+        Question,
+    };
     use crate::fleet::{EventKind, Stage};
 
     /// `base_of_run` は `Spawned` の `base:<sha>` と `base:<sha>,account:<label>`（器が口座を選んで起こした周）の
@@ -738,6 +765,29 @@ mod tests {
         std::fs::write(&log, "{\"schema\":1,\"kind\":\"Nonsense\"}\n").ok();
         assert_eq!(base_of_run(&broken, "plain"), Base::Unreadable, "置き場を読めない");
         let _ = std::fs::remove_dir_all(&broken);
+    }
+
+    /// driver の札は**入口の排他**でもある（設計 dispatcher.md §5・`s2-07l.482`）: 生きている別の driver が
+    /// 握っている便は握れず、死んだ所有者の札は握り直せる。契機が重なって起こし直しが 2 本撃たれた周は、
+    /// ここで片方が落ちる（列の 1 周は lock を取らず、起こし直した子は別 process なので 1 周の側では閉じない）。
+    #[test]
+    fn pipe_dispatch_driver_hold_admits_one_driver_at_a_time() {
+        let root = scratch("driver-hold");
+        let first = Driver::hold(&root, "r1");
+        assert!(first.is_some(), "1 つ目は握れる");
+        // **自分の札は握り直せる**（同じ process が同じ便を続けて駆動する周）。
+        assert!(Driver::hold(&root, "r1").is_some(), "自分の札は握り直せる");
+        // 生きている**別の** process の札は握れない（自分でない pid = この test を起こした親）。
+        let other = std::os::unix::process::parent_id();
+        std::fs::write(driver_path(&root, "r1"), format!("{other}\n")).ok();
+        assert!(Driver::hold(&root, "r1").is_none(), "生きている別の driver の札は握れない");
+        // 死んだ所有者の札は握り直せる（起こし直しの入口）。
+        let mut dead = std::process::Command::new("true").spawn().expect("true を起こせる");
+        let gone = dead.id();
+        dead.wait().expect("true を待てる");
+        std::fs::write(driver_path(&root, "r1"), format!("{gone}\n")).ok();
+        assert!(Driver::hold(&root, "r1").is_some(), "死んだ所有者の札は握り直せる");
+        let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&root);
     }
 
