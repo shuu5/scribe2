@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="generator" content="folio ADR-pack assembler (folio-bwc / instance#2) — deterministic structure, prose slots unfilled">
-<title>path の種別は consumer が vessel 宣言で名乗る: guard の 4 種別の分類を固定 prefix から repo ごとの任意 key 3 本へ (key の不在は現行の固定値＝既存の consumer と本 repo は無変更・宣言 file 自身は常に code・不正な宣言は fail-closed で全 file を code にして doctor に typed な 1 行・glob は持たない・schema は 1 のまま)</title>
+<title>便を止める権能は起動の権能から分かれ、 orchestrator の席が持つ: pipe stop を launch から外して新しい権能 stop に結び、 rules 行 role.orchestrator に stop を足す (席が撃てるのは --run で便 1 本を名指す形だけ・--all は launch のままでどの席からも撃てない・起動 / 再開 / 受付 / 退役は launch のまま dispatcher の口・止めた便は Stopped で列外に入り契約の字か release の印で列に戻る・SRS FR30 / FR41 の字は変えない)</title>
 <style>
 /* ===========================================================================
    folio human-layer design system — core.css (S3 / folio-8oc プロトタイプ)
@@ -455,14 +455,14 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
     "schema": "https://schema.org/",
     "folio": "https://folio.dev/spec/v1/"
   },
-  "@id": "./ADR-0047-path-kinds-are-declared-in-the-vessel-declaration.html",
+  "@id": "./ADR-0048-stopping-a-run-is-a-separate-capability-of-the-orchestrator.html",
   "@type": "schema:TechArticle",
   "dc:isPartOf": [
     {
       "@id": "./README.html"
     }
   ],
-  "dc:title": "path の種別は consumer が vessel 宣言で名乗る: guard の 4 種別の分類を固定 prefix から repo ごとの任意 key 3 本へ (key の不在は現行の固定値＝既存の consumer と本 repo は無変更・宣言 file 自身は常に code・不正な宣言は fail-closed で全 file を code にして doctor に typed な 1 行・glob は持たない・schema は 1 のまま)",
+  "dc:title": "便を止める権能は起動の権能から分かれ、 orchestrator の席が持つ: pipe stop を launch から外して新しい権能 stop に結び、 rules 行 role.orchestrator に stop を足す (席が撃てるのは --run で便 1 本を名指す形だけ・--all は launch のままでどの席からも撃てない・起動 / 再開 / 受付 / 退役は launch のまま dispatcher の口・止めた便は Stopped で列外に入り契約の字か release の印で列に戻る・SRS FR30 / FR41 の字は変えない)",
   "folio:version": "0.1.0",
   "folio:stakeholders": [
     "Developer",
@@ -474,10 +474,7 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
       "@id": "../spec/constitution.html#c1"
     },
     {
-      "@id": "../spec/constitution.html#c2"
-    },
-    {
-      "@id": "../spec/constitution.html#c10"
+      "@id": "../spec/constitution.html#c5"
     },
     {
       "@id": "../spec/constitution.html#c11"
@@ -489,22 +486,28 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
       "@id": "../spec/constitution.html#c17"
     },
     {
-      "@id": "../spec/srs.html#FR45"
+      "@id": "../spec/constitution.html#n1"
+    },
+    {
+      "@id": "../spec/srs.html#FR30"
     },
     {
       "@id": "../spec/srs.html#FR41"
     },
     {
-      "@id": "../spec/srs.html#NFR4"
+      "@id": "../spec/srs.html#FR45"
     },
     {
-      "@id": "./ADR-0010-vessel-declaration-holds-allowlist-and-common-verify.html"
+      "@id": "../spec/srs.html#FR68"
+    },
+    {
+      "@id": "./ADR-0013-machine-holds-enumerations-docs-hold-pointers.html"
     },
     {
       "@id": "./ADR-0022-seat-roles-are-typed-and-enforced-by-hooks.html"
     },
     {
-      "@id": "./ADR-0023-contract-source-is-the-design-document-table.html"
+      "@id": "./ADR-0034-dispatcher-starts-reviewed-contracts-automatically.html"
     },
     {
       "@id": "./ADR-0044-decision-ladder-is-a-constitution-article.html"
@@ -522,169 +525,169 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
 <nav class="breadcrumb" aria-label="パンくず"><ol>
   <li><a href="../index.html">design-intent</a></li>
   <li><a href="./README.html">decisions</a></li>
-  <li aria-current="page">ADR-0047</li>
+  <li aria-current="page">ADR-0048</li>
 </ol></nav>
 <!-- /folio:chrome-top -->
 <div class="page" data-component="requirement-type-color-tokens">
 <header data-component="doc-cover-band">
-<p class="cover-eyebrow"><span class="doc-type">設計判断記録 (ADR)</span> <span>scribe2 — path の種別の出所</span></p>
-<h1>path の種別は consumer が vessel 宣言で名乗る: guard の 4 種別の分類を固定 prefix から repo ごとの任意 key 3 本へ (key の不在は現行の固定値＝既存の consumer と本 repo は無変更・宣言 file 自身は常に code・不正な宣言は fail-closed で全 file を code にして doctor に typed な 1 行・glob は持たない・schema は 1 のまま)</h1>
-<p class="cover-sub">席の編集を止める guard は、 編集先を 4 つの種別 (design-intent / 設計 doc / 歯 / code) に分けて権能と 1:1 で照合する。 いまの分類は器の中に固定で書かれた 3 つの prefix (design-intent/ ・ docs/design/ ・ crates/&lt;crate&gt;/tests/) で、 この配置は本 repo の配置である。 Rust でない consumer repo にはその段が無く、 全 file が code に落ち、 code の編集の権能を持たない orchestrator の席は 1 file も編集できない (実測)。 本 ADR は分類に属する path の集合を器の規則から外し、 対象 repo が自分の vessel 宣言 (.vessel.toml) の任意 key 3 本で名乗る形にする。 key を書かない repo は現行の固定値のままで、 既存の consumer も本 repo も 1 行も変えない。</p>
-<div class="summary-card"><span class="ic"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#ffe8a8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span><div><p class="lab">この判断が約束すること (1 文サマリ)</p><p class="txt" data-prose-slot="cover-summary" data-slot-id="cover-summary">「どの file が仕様で、どの file が設計 doc で、どの file が test で、どの file が本体 code か」の切り分けを、器の中に書いた固定の置き場所から、相手の repo が自分で名乗る宣言へ移します。名乗り先は相手の repo にもともと在る宣言 file（.vessel.toml）で、そこに「仕様の置き場」「設計 doc の置き場」「test の置き場」の 3 つを、先頭一致の一覧として書けるようにします。書かない repo はいままでどおりで、既存の相手も scribe2 自身も 1 行も変わりません。宣言 file 自身は必ず「本体 code」に数えるので、席が自分の柵を自分で広げることはできません。宣言が壊れている回は黙って既定へ戻さず、全部を「本体 code」として扱い（＝いちばん厳しい側へ倒し）、点検コマンドに 1 行で理由を出します。</p></div></div>
+<p class="cover-eyebrow"><span class="doc-type">設計判断記録 (ADR)</span> <span>scribe2 — 便を止める権能</span></p>
+<h1>便を止める権能は起動の権能から分かれ、 orchestrator の席が持つ: pipe stop を launch から外して新しい権能 stop に結び、 rules 行 role.orchestrator に stop を足す (席が撃てるのは --run で便 1 本を名指す形だけ・--all は launch のままでどの席からも撃てない・起動 / 再開 / 受付 / 退役は launch のまま dispatcher の口・止めた便は Stopped で列外に入り契約の字か release の印で列に戻る・SRS FR30 / FR41 の字は変えない)</h1>
+<p class="cover-sub">便の起動・着地・merge は席でなく器の dispatcher が行う (ADR-0045 §2 (1))。 その結果、 権能の表は <code>pipe stop</code> を <code>pipe run</code> / <code>resume</code> / <code>intake</code> / <code>retire</code> と同じ起動の権能 (launch) に結んだまま残り、 その launch は席の rules 行に無い＝<b>便を止められる席が 1 つも無い</b>。 判定に届かないまま driver の抜けた便が live のまま居座り、 write-set の重なる契約を塞ぎ続けた周 (実測 2026-09-20) は、 席から外す口が無く user が手で撃つほか無かった。 止める操作は安全側 (便 1 本を終端 <code>Stopped</code> に倒すだけ・worktree も branch も残る) で、 課金と並列度を動かす起動とは向きが違う。 本 ADR は権能の閉じた列に <code>stop</code> を 1 つ足して <code>pipe stop</code> をそれに結び、 席の行に <code>stop</code> を並べる。 席が撃てるのは便 1 本を名指す形だけで、 全部を止める形は今までどおりどの席からも撃てない。</p>
+<div class="summary-card"><span class="ic"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#ffe8a8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span><div><p class="lab">この判断が約束すること (1 文サマリ)</p><p class="txt" data-prose-slot="cover-summary" data-slot-id="cover-summary">「作業を始める」と「始まった作業を 1 つだけ終わらせる」を、別々の許可として分けます。いまは同じ 1 つの許可にまとまっていて、その許可は人と話す席に与えていないので、止まらなくなった作業を席から止める手段がありません。そこで「止める」だけの許可を新しく作り、人と話す席に渡します。渡すのは「この作業を止める」と名前で 1 本指定する形だけで、「走っているものを全部止める」形は今までどおり誰にも渡しません。一括で止めると走行中のものを全部失うので、取り返しの大きさが違うからです。止めた作業は終わりの状態になり、作業場所も枝もそのまま残ります。契約の中身を直すか「戻す」印を打てば、また順番待ちの列に戻ります。</p></div></div>
 <div class="cover-meta"><span class="m"><span class="k">状態</span><span class="v">proposed</span></span><span class="m"><span class="k">選択肢</span><span class="v">5件 (OPT1–OPT5)</span></span><span class="m"><span class="k">結果</span><span class="v">良い 4 / トレードオフ 4</span></span><span class="m"><span class="k">版</span><span class="v">v0.1.0 / 2026-09-20</span></span></div>
-<div class="reader-chip" data-component="cross-doc-ref-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 正当化する要件: <b>SRS-SCRIBE2-MVP</b> の <b>FR45・FR41・NFR4</b></div>
+<div class="reader-chip" data-component="cross-doc-ref-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 正当化する要件: <b>SRS-SCRIBE2-MVP</b> の <b>FR41・FR45・FR30・FR68</b></div>
 <div data-component="approval-block">
-<div class="sign"><span class="role">裁定 (user)</span><span class="who">user</span><span class="when">user 2026-09-20 (対話面・path の種別は repo ごとに宣言する・逐語は台帳 s2-07l.491 の notes)</span><span class="stamp self">裁定済</span></div>
-<div class="sign"><span class="role">設計 (orchestrator)</span><span class="who">orchestrator</span><span class="when">2026-09-20 起票 (guard の分類の現物と vessel 宣言の読み口の実測・拘束する constitution の版 0.5.0)。 発効は宣言の任意 key 3 本と guard の読み口が land した版</span><span class="stamp self">作成</span></div>
+<div class="sign"><span class="role">裁定 (user)</span><span class="who">user</span><span class="when">user 2026-09-20 (対話面・便を止める権能を起動の権能から分けて席に与える・逐語は台帳 s2-07l.495 の notes)</span><span class="stamp self">裁定済</span></div>
+<div class="sign"><span class="role">設計 (orchestrator)</span><span class="who">orchestrator</span><span class="when">2026-09-20 起票 (権能の閉じた列と guard の表と stop の 2 つの口の現物・拘束する constitution の版 0.5.0)。 発効は権能 stop と rules 行の値と guard の照合が land した版</span><span class="stamp self">作成</span></div>
 </div>
-<div class="reader-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 想定読者: scribe2 の開発 session と user — hook や Rust の配置の知識は不要 (専門語はやさしい言葉を併記)</div>
+<div class="reader-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 想定読者: scribe2 の開発 session と user — hook や Rust の知識は不要 (専門語はやさしい言葉を併記)</div>
 </header>
 <!-- folio:chrome-toc -->
 <!-- /folio:chrome-toc -->
-<section data-component="chapter-deck-band" class="tint-info"><span class="num">01</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 2v6m0 0L9 5m3 3l3-3"/><circle cx="12" cy="14" r="6"/></svg> 背景 / なぜこの判断が要るか</span><h2>いま何が問題か (本 repo の配置が器の規則になっている)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-01">なぜこの判断が要るのかを、現物と実測と裁定から説明します。席の編集を止める仕組みは、編集先の file を 4 つの種類に分けて、その種類ごとに「してよいか」を照らし合わせます。その分け方は器の中に固定で書かれていて、中身は scribe2 自身の file の置き方そのものです。置き方の違う repo では、全部が「本体 code」に落ちて、席が 1 file も編集できなくなります。相手の repo には、もともと自分のことを名乗る宣言 file が在り、そこには「書かなくてよい項目」の形が既に 4 つ在ります。</p></section>
+<section data-component="chapter-deck-band" class="tint-info"><span class="num">01</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 2v6m0 0L9 5m3 3l3-3"/><circle cx="12" cy="14" r="6"/></svg> 背景 / なぜこの判断が要るか</span><h2>いま何が問題か (止める口が起動の権能に括られ、 その権能を持つ席が無い)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-01">なぜこの判断が要るのかを、現物と実測と裁定から説明します。器は「作業を始める・再開する・受け付ける・片付ける・止める」を 1 つの許可にまとめていて、その許可は人と話す席には与えていません。与えていないのは「始める」を席に戻さないためですが、同じ束に「止める」が入っているせいで、止まらなくなった作業を席から止める手段がどこにもありません。実際に、判定に届かないまま止まった作業が居座り、後ろの作業を塞ぎ続けた回があります。</p></section>
 <div class="chapbody">
 <div data-component="adr-context-list">
-<div data-component="adr-context-row"><span class="cxid">CTX1</span><div class="cxbody"><p class="cxh">現物 — 分類は器の中の固定 prefix 3 本で、 中身は本 repo の配置</p><p class="cxd">編集面の guard (<a href="./ADR-0022-seat-roles-are-typed-and-enforced-by-hooks.html">ADR-0022</a> §2.3・設計 seat-roles.md §4) は、 編集先を repo root からの相対 path の <b>prefix だけ</b>で 5 つの種別に分ける閉じた enum <code>PathKind</code> (design-intent / 設計 doc / 歯 / code / 対象 repo の外) を持ち、 種別と権能は 1:1 である (<code>PathKind::capability</code>)。 分類の本体 <code>PathKind::of_relative</code> は 3 つの prefix を <b>const で固定して</b>持つ: 1 段目が <code>design-intent</code> なら design-intent、 1 段目と 2 段目が <code>docs</code> / <code>design</code> なら設計 doc、 1 段目と 3 段目が <code>crates</code> / <code>tests</code> なら歯、 先頭が <code>..</code> なら対象 repo の外、 それ以外はすべて code である。 この 3 つはいずれも <b>scribe2 自身の repo の配置</b>であって、 器が対象 repo に強制できる規則ではない。 歯 (<code>role_guard_path_kind_classifies_by_prefix_only</code> / <code>role_guard_orchestrator_may_edit_teeth_but_not_src</code>) も本 repo の配置を前提に書かれている。</p></div></div>
-<div data-component="adr-context-row"><span class="cxid">CTX2</span><div class="cxbody"><p class="cxh">実測 — Rust でない consumer repo では orchestrator の席が 1 file も編集できない</p><p class="cxd">orchestrator の席は <a href="./ADR-0045-seat-role-is-one-orchestrator-and-dispatcher-lands-runs.html">ADR-0045</a> §2 (1) により <b>src の編集の権能を持たない</b> (行が持つのは歯の段に限った編集で、 名は <code>edit-tests</code>)。 分類が固定 prefix である以上、 Rust でない consumer repo — <code>docs/design/</code> の 2 段も <code>crates/&lt;crate&gt;/tests/</code> の段も持たない repo — では、 仕様の file も設計 doc も test も、 <b>すべてが code に落ちる</b>。 落ちた先の権能を行が持たないので、 その席は自分の repo の file を 1 つも編集できない (実測済み)。 これは guard の欠陥ではなく、 <b>分類の値の出所</b>が器の側に在ることの帰結である。 本 repo では同じ分類が正しく働くので、 本 repo だけを見ていると現れない。</p></div></div>
-<div data-component="adr-context-row"><span class="cxid">CTX3</span><div class="cxbody"><p class="cxh">読み口が既に在る — 対象 repo は自分のことを vessel 宣言で名乗っている</p><p class="cxd">対象 repo の root には marker の隣に tracked な宣言 file <code>.vessel.toml</code> が在り (<a href="./ADR-0010-vessel-declaration-holds-allowlist-and-common-verify.html">ADR-0010</a> §2.1)、 「許してよい command」「どの便でも撃つ検証」を repo 自身が名乗っている。 読み手は器の中に 1 本だけで、 行単位の <code>key = value</code> を読み、 配列と scalar の層は rules manifest の loader と共有する (第 2 の parser を作らない)。 <b>未知の key は断り</b>、 必須 key の欠落・重複・型違いは行番号つきで全件積む。 <b>書かなくてよい key (任意 key) の形は既に在り</b>、 現に 4 つが載っている: 検出線の行の列・要件面の path・push 先の remote の名・CI の判定を読む 1 行 (<a href="./ADR-0023-contract-source-is-the-design-document-table.html">ADR-0023</a> が要件面の path を任意 key として足した前例)。 任意 key の「無い」は key の不在で表し、 書いた空配列は従来どおり不備である。 宣言の schema は 1 で、 読み口は <b>HEAD commit の tree</b> を読む (作業ツリーは読まない＝commit されていない宣言は無いのと同じ)。</p></div></div>
-<div data-component="adr-context-row"><span class="cxid">CTX4</span><div class="cxbody"><p class="cxh">guard は anchor を先に解いており、 宣言の置き場はそこから決まる</p><p class="cxd">guard が権能を解く順は anchor (repo root・state dir) → pane → target → 登録 row → role → rules 行 → 権能で、 <b>anchor がいちばん先</b>に在る (設計 seat-roles.md §4)。 anchor は生成 hooks.json の shell 行が渡す <code>--project</code> から解き、 席が <code>cd</code> しても変わらない。 席の登録 row も <b>役割 × anchor を鍵</b>に持ち、 anchor の値 (対象 repo の main checkout の path) を項目として持つ。 つまり「どの repo の宣言を読むか」は guard が既に持っている値から決まり、 新しい引数も env も要らない (C2.2)。 anchor を解けない周は現行どおり権能なし＝deny (fail-closed) である。</p></div></div>
-<div data-component="adr-context-row"><span class="cxid">CTX5</span><div class="cxbody"><p class="cxh">裁定 — repo ごとに宣言する</p><p class="cxd">user 裁定 2026-09-20 (対話面・逐語は台帳 s2-07l.491 の notes) は、 path の種別の分類を「repo ごとに宣言する」形に決めた。 分類の値をどこに書くか (宣言 file か rules 行か) と、 どの表現力を持たせるか (prefix か glob か) は本 ADR が決める。 新しい consumer repo の最初の宣言 file を誰が書くかは<b>導入の口の設計</b>に属し、 本 ADR の範囲外である (未実装)。</p></div></div>
-<div data-component="adr-context-row"><span class="cxid">CTX6</span><div class="cxbody"><p class="cxh">憲法の向き</p><p class="cxd">C1 は規律を manifest と型に置き、 器の外の散文を規則の置き場にしない。 <a href="../spec/constitution.html#c10">C10</a> は人が書いた宣言値と効力を持つ値を型で弁別し、 宣言値は実測を経てはじめて効力を持つと定める (host 固有の値は manifest 以外に置けない)。 <a href="../spec/constitution.html#c11">C11</a> は失敗を境界ごとの enum で表し、 開くか閉じるかの極性を型に持たせる。 <a href="../spec/constitution.html#c16">C16</a> は逸脱を編集の時点で止める。 <a href="../spec/constitution.html#c17">C17</a> (決定はしご・<a href="./ADR-0044-decision-ladder-is-a-constitution-article.html">ADR-0044</a>) は「要るか → 既に在るか → 標準 library か入っている依存で足りるか → 1 行で書けるか → 最小実装」を宣言順に通り、 最初に成立した段で止まる。 C17.2 は走査・record・rules 行・仕掛けを足す提案に、 先に消すものを名指すことを求める。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX1</span><div class="cxbody"><p class="cxh">現物 — 権能は閉じた列で、 guard の表が <code>pipe stop</code> を起動の権能に結んでいる</p><p class="cxd">権能 (<code>Capability</code>) は core が持つ閉じた列で、 文書は写さない (<a href="./ADR-0013-machine-holds-enumerations-docs-hold-pointers.html">ADR-0013</a> §2.1)。 いまの variant は 11 個 — 回答の記帳・承認の記帳・go の記帳・<b>便の起動 (launch)</b>・go 後の merge・契約の編集・path 種別ごとの編集 4 つ・対象 repo の外の編集である。 Bash 面の guard はこの列と器の口を結ぶ<b>表 8 行</b>を持ち (<a href="./ADR-0022-seat-roles-are-typed-and-enforced-by-hooks.html">ADR-0022</a> §2.3・設計 seat-roles.md §4)、 そのうち 5 行 — <code>pipe intake</code> / <code>pipe run</code> / <code>pipe resume</code> / <code>pipe stop</code> / <code>pipe retire</code> — が<b>同じ launch</b> に結ばれている (<code>pipe answer</code> は回答、 <code>pipe approve</code> は承認、 <code>pipe land</code> は merge)。 つまり「止める」は器の中で「始める」と 1 語を共有している。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX2</span><div class="cxbody"><p class="cxh">現物 — 席の行に launch が無い＝便を止められる席が 1 つも無い</p><p class="cxd">席の権能は rules 行 <code>role.orchestrator</code> (裁定 id 付き・値は権能の名の列) が持つ (<a href="./ADR-0022-seat-roles-are-typed-and-enforced-by-hooks.html">ADR-0022</a> §2.2)。 いまの値は 8 語で、 回答・承認・go・契約の編集・design-intent の編集・設計 doc の編集・歯の編集・対象 repo の外の編集である。 <b>launch は並んでいない</b> — <a href="./ADR-0045-seat-role-is-one-orchestrator-and-dispatcher-lands-runs.html">ADR-0045</a> §2 (1) が「便の起動・着地・merge は器の dispatcher が行う」と決め、 launch と merge を席の行から外したためである。 席は 1 種類しかないので、 <b>launch に結ばれた口はどの席からも撃てない</b>。 <code>pipe stop</code> がその束に入っている以上、 便を止められる席は 1 つも無い。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX3</span><div class="cxbody"><p class="cxh">実測 (2026-09-20) — 判定に届かない便が live のまま居座り、 後ろの契約を塞いだ</p><p class="cxd">全体の歯が 1 本赤い便の gate が、 終端の FAIL でなく<b>判定できず (INCONCLUSIVE)</b> に倒れた。 判定できずは終端ではないので便は live のまま残り、 driver は抜け、 同じ木を測り直しても赤いままで、 自分の bead と write-set の重なる契約を塞ぎ続けた (設計 gate-cost.md §28 の実測・verified)。 席は止められず、 user が手で撃つほか無かった。 <b>この 1 件の根は判定の順で解けた</b> (赤い行が在る周は検出線が測れなくても FAIL に着く・同 §28)。 だが「runner が応答しない便」「人が見て止めたい便」には口が無いままである。 設計 dispatcher.md §11 と §13 はこれを後続として名指し、 「<code>pipe stop</code> は起動の権能で、 ADR-0045 §2 (1) の後はどの席の行にも無い。 『止める』だけを席の権能に足すかは rules 行の変更＝user の裁定が先」と書いている。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX4</span><div class="cxbody"><p class="cxh">現物 — 止める操作は安全側で、 起動とは向きが違う</p><p class="cxd"><code>pipe stop --run &lt;id&gt;</code> が書くのは終端の段 <code>Stopped</code> 1 つで、 <b>worktree も branch も消さない</b> (畳む口は <code>pipe retire</code> で、 それ自体が可逆な move である・憲法 <a href="../spec/constitution.html#n1">N1</a>.2)。 席を止め切れなかった周は終端の記帳を<b>書かず</b> rc 1 で断り (止めていない席を黙って落とすと「全部止めた」に化ける)、 既に終端の便には event を増やさず断り、 段の判定を読めない周は rc 2 で断る (読めないを「終端でない」に読み替えない＝fail-closed)。 一方 <code>pipe run</code> / <code>resume</code> / <code>intake</code> は便を起こす＝<b>口座の消費と並列度を増やす</b>側で、 <code>retire</code> は入れ物を畳む側である。 止めるは、 どれとも向きが違う。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX5</span><div class="cxbody"><p class="cxh">現物 — <code>pipe stop</code> は 2 つの口を持ち、 guard は flag を読んでいない</p><p class="cxd">口は 2 つで意味が別である: <code>--run &lt;id&gt;</code> は<b>便 1 本</b>を排他の母集団から外す管理の操作、 <code>--all</code> は<b>生きている席を全部</b>止める掃除の操作で、 対象なしは rc 0 の冪等である (<code>--run</code> も <code>--all</code> も無い呼び出しは「<code>--all</code> が要る」と断る)。 これに対し Bash 面の guard は、 command 行を空白で割り、 器の binary を名指す token の<b>直後の 2 語だけ</b>を表と照合する。 <code>--run</code> や <code>--all</code> のような flag は<b>いま 1 つも読んでいない</b>。 したがって「名指しの停止だけを通す」形を作るには、 照合を 2 語から 1 段広げる実装が要る (本 ADR の発効の条件の 1 つ)。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX6</span><div class="cxbody"><p class="cxh">裁定と憲法の向き</p><p class="cxd">user 裁定 2026-09-20 (対話面・逐語は台帳 s2-07l.495 の notes) は、 便を止める権能を起動の権能から分け、 orchestrator の席に与えると決めた。 権能の名と行の値の形、 席が撃てる口の絞り方は本 ADR が決める。 <a href="../spec/constitution.html#c1">C1</a> は規律を manifest と型に置き、 器の外の散文を規則の置き場にしない。 <a href="../spec/constitution.html#c5">C5</a> は rules 行の追加・変更に user の裁定 id を要る。 <a href="../spec/constitution.html#c11">C11</a> は失敗を境界ごとの enum で表し、 開くか閉じるかの極性を型に持たせる。 <a href="../spec/constitution.html#c16">C16</a> は逸脱を編集・実行の時点で止める。 <a href="../spec/constitution.html#c17">C17</a> (決定はしご・<a href="./ADR-0044-decision-ladder-is-a-constitution-article.html">ADR-0044</a>) は「要るか → 既に在るか → 標準 library か入っている依存で足りるか → 1 行で書けるか → 最小実装」を宣言順に通り、 最初に成立した段で止まる。 C17.2 は走査・record・rules 行・仕掛けを足す提案に、 先に消すものを名指すことを求める。</p></div></div>
 </div>
 </div>
-<section data-component="chapter-deck-band" class="tint-brand"><span class="num">02</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3v18"/><path d="M5 7l-3 6h6z"/><path d="M19 7l-3 6h6z"/><path d="M3 21h18"/></svg> 判断を縛る力 / 評価の軸</span><h2>選択肢を測るものさし (出所・無変更・非増殖・自分の柵・fail-closed)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-02">判断を評価する 5 本のものさしです。repo の置き方はその repo の事実なので、その repo が名乗ること。いま動いている相手と scribe2 自身を 1 行も変えさせないこと。読み口も parser も規則の行も増やさないこと。席が自分を縛る柵を自分で広げられないこと。そして、宣言が読めない回に黙って既定へ戻さず、いちばん厳しい側へ倒して理由を名指すことです。</p></section>
+<section data-component="chapter-deck-band" class="tint-brand"><span class="num">02</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3v18"/><path d="M5 7l-3 6h6z"/><path d="M19 7l-3 6h6z"/><path d="M3 21h18"/></svg> 判断を縛る力 / 評価の軸</span><h2>選択肢を測るものさし (向き・役割分担・誤射の大きさ・型と行・非増殖)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-02">判断を評価する 5 本のものさしです。許可は操作の向き（増やすのか、終わらせるのか）で分けること。席は実装も起動もしないという役割分担を崩さないこと。撃ち間違えたときの被害が違う操作を同じ許可にまとめないこと。許可は型と規則の行で持ち、散文で持たないこと。そして、足すものは最小に留め、新しい記録も段も口も増やさないことです。</p></section>
 <div class="chapbody">
 <table data-component="adr-driver-table"><tbody>
-<tr data-component="adr-driver-row"><td class="drid">DR1</td><td>repo の file の配置は<b>その repo の事実</b>であって器の規則ではない。 器は種別の集合 (閉じた enum) と権能の対応を持ち、 種別に属する path の集合は対象 repo が名乗る <span class="drg">憲法 C1 / C10・CTX1</span></td></tr>
-<tr data-component="adr-driver-row"><td class="drid">DR2</td><td>いま動いている consumer と本 repo の宣言を <b>1 行も変えさせない</b> (key を書かない宣言は現行の分類のまま・schema の版も上げない) <span class="drg">ADR-0010 §2.1 / ADR-0023 (任意 key の前例)</span></td></tr>
-<tr data-component="adr-driver-row"><td class="drid">DR3</td><td>読み口・parser・rules 行・走査を<b>増やさない</b>。 既に在る宣言 file と 1 本の reader と既に在る任意 key の形で済ませる <span class="drg">憲法 C17 の段 2・C17.2 / ADR-0044</span></td></tr>
-<tr data-component="adr-driver-row"><td class="drid">DR4</td><td>席が<b>自分の柵を自分で広げられない</b>。 分類の宣言を書き換える編集そのものが、 便の審査と gate か user の手を通る側に落ちる <span class="drg">憲法 C16 / SRS FR45・ADR-0010 §2.4</span></td></tr>
-<tr data-component="adr-driver-row"><td class="drid">DR5</td><td>宣言が読めない・矛盾する周は<b>黙って既定へ戻さない</b>。 いちばん厳しい側 (全 file が code) へ倒し、 理由を typed な語で名指す <span class="drg">憲法 C10 / C11・SRS NFR4</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR1</td><td>権能は<b>操作の向き</b>で分ける。 起こす (口座を消費し並列度を増やす) と、 走っている 1 本を終わらせる (何も増やさず入れ物も残す) は別の向きで、 同じ 1 語に束ねない <span class="drg">CTX1 / CTX4・憲法 N1.2</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR2</td><td><a href="./ADR-0045-seat-role-is-one-orchestrator-and-dispatcher-lands-runs.html">ADR-0045</a> §2 (1) の役割分担を<b>崩さない</b>。 起動・再開・受付・退役・着地・merge は器の dispatcher の口のままで、 席へ戻すのは「止める」だけ <span class="drg">SRS FR30 / FR41・CTX2</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR3</td><td>誤射の<b>被害の大きさ</b>が違う操作を同じ権能に入れない。 便 1 本の名指しの停止と、 走行中の全部を落とす一括停止は、 取り返しの規模が違う <span class="drg">CTX5・憲法 N1</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR4</td><td>権能は<b>閉じた列と rules 行</b>が持ち、 散文が持たない。 行の変更には user の裁定 id が付き、 執行・注入・生成文書は同じ 1 行を読む <span class="drg">憲法 C1 / C5・ADR-0013 §2.1 / ADR-0022 §2.2</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR5</td><td>足すのは<b>語 2 つ</b>まで。 新しい口・event kind・段・記録・走査を足さず、 既に在る口と表と行の中で済ませる <span class="drg">憲法 C17 の段 4・C17.2 / ADR-0044</span></td></tr>
 </tbody></table>
 </div>
-<section data-component="chapter-deck-band" class="tint-violet"><span class="num">03</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M8.5 6H13a3 3 0 0 1 3 3v.5M8.5 18H13a3 3 0 0 0 3-3v-.5"/></svg> 検討した選択肢 / 5 つの形</span><h2>それぞれの利点と欠点を並べる</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-03">候補を 5 つ並べます。相手の repo の宣言 file に先頭一致の一覧を 3 つ足す案、同じ宣言をワイルドカードや正規表現で書けるようにする案、分類を器の規則の行に持つ案、置き方の違う相手の席に本体 code の編集を許す案、そして中身を見て言語を当てて自動で分類する案です。</p></section>
+<section data-component="chapter-deck-band" class="tint-violet"><span class="num">03</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M8.5 6H13a3 3 0 0 1 3 3v.5M8.5 18H13a3 3 0 0 0 3-3v-.5"/></svg> 検討した選択肢 / 5 つの形</span><h2>それぞれの利点と欠点を並べる</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-03">候補を 5 つ並べます。「止める」だけの許可を新しく作って席に渡す案、席に「始める」の許可ごと渡す案、止める手段を user の手だけに残す案、器が時間を見て勝手に止める案、そして「全部止める」も席に許す案です。</p></section>
 <div class="chapbody">
 <div class="opt-grid">
 <div data-component="adr-option-card" class="chosen">
-<div class="opt-head"><span class="opt-id">OPT1</span><span class="opt-name">vessel 宣言の任意 key 3 本 (repo 相対の prefix の配列)・key の不在は現行の固定値・宣言 file 自身は常に code</span><span class="opt-verdict chosen">採用</span></div>
-<p class="opt-sum">対象 repo の <code>.vessel.toml</code> に flat な任意 key を 3 本足す (design-intent の置き場 / 設計 doc の置き場 / 歯の置き場)。 値は repo 相対の prefix の配列で、 dir は末尾 <code>/</code>・単一 file は完全一致とする。 key を書かない宣言は現行の固定値 (本 repo の配置) のままで、 既存の consumer も本 repo も 1 行も変わらない。 読み口は既に在る 1 本 (行単位の <code>key = value</code>・配列の層は rules manifest と共有) で、 任意 key の形も既に在る (検出線・要件面・remote・CI の行)。 guard は登録 row の anchor の宣言を読んで分類し、 <b>宣言 file 自身は常に code の種別</b>に落とす。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT1">相手の repo が自分の宣言 file に「仕様はここ」「設計 doc はここ」「test はここ」を、先頭一致の一覧として書けるようにします。書かなければいままでどおりです。読み込む部品も書き方も、いま在るものをそのまま使います。宣言 file そのものは必ず「本体 code」に数えるので、席が自分で自分の柵を広げることはできません。</span>
+<div class="opt-head"><span class="opt-id">OPT1</span><span class="opt-name">権能 stop を 1 つ足して <code>pipe stop</code> を結び、 席の行に stop を並べる・席が撃てるのは <code>--run</code> の形だけ</span><span class="opt-verdict chosen">採用</span></div>
+<p class="opt-sum">権能の閉じた列に <code>stop</code> を 1 つ足し、 guard の表の <code>pipe stop</code> の行を launch から <code>stop</code> へ付け替える。 <code>pipe run</code> / <code>resume</code> / <code>intake</code> / <code>retire</code> は launch のままで、 席の行に launch は無い＝これらは今までどおり dispatcher の口である。 rules 行 <code>role.orchestrator</code> の値に <code>stop</code> を足す (裁定 id 付き)。 席が撃てるのは<b>便 1 本を名指す形</b> (<code>--run &lt;id&gt;</code>) だけで、 <code>--all</code> を持つ呼び出しと名指しの無い呼び出しは <code>stop</code> の権能では通らず launch を要る＝どの席からも撃てない (guard は名指しが読めない周を launch の側へ倒す＝fail-closed)。 止めた便は終端 <code>Stopped</code> で列外に入り、 契約の字を直すか <code>release</code> の印で列に戻る。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT1">「止める」だけの許可を新しく 1 つ作り、人と話す席に渡します。「始める」「再開する」「受け付ける」「片付ける」は今までどおり器の側の口で、席には渡しません。席が撃てるのは「この 1 本を止める」と名前で指定した形だけで、名前が読み取れない呼び出しは止める許可では通りません。止めた作業は終わりの状態になり、作業場所も枝も残ります。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>分類の値の出所が repo の側へ移る (DR1)・置き方の違う repo でも席が仕事を始められる (CTX2 の実測が解ける)</li>
-<li>key の不在＝現行の固定値ゆえ、 既存の consumer と本 repo の宣言は無変更で schema も 1 のまま (DR2)・跨版で読み口が割れない</li>
-<li>足すのは既に在る宣言 file の任意 key 3 本だけで、 読み口も parser も rules 行も走査も増えない (DR3)</li>
-<li>宣言 file 自身が常に code ゆえ、 席は自分の柵を自分で広げられない (DR4)・変更は便の審査と gate か user の手を通る</li>
+<li>居座る便を席が自分で外せる (CTX3 の型が解ける)・列が人の手を借りずに回復する</li>
+<li>起動・再開・受付・退役・着地・merge は dispatcher の口のままで、 ADR-0045 §2 (1) の役割分担が崩れない (DR2)</li>
+<li>名指しの停止だけを渡し、 一括停止は渡さない＝誤射の被害の上限が今と変わらない (DR3)</li>
+<li>足すのは権能の列の 1 語と rules 行の値の 1 語だけで、 新しい口も event kind も段も記録も増えない (DR5)</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>prefix しか書けないので、 種別が dir の段で分かれていない repo (同じ dir に設計 doc と code が混ざる形) は表せない</li>
-<li>宣言を書き間違えた repo は fail-closed で全 file が code になり、 席が止まる (doctor の 1 行を読むまで理由が分からない)</li>
+<li>guard が読む語が 1 段広がる (いまは器の binary の直後の 2 語だけ・CTX5)。 照合の面が 1 つ増え、 その面の歯も要る</li>
+<li>止めた便の worktree は残り、 畳む口 (<code>retire</code>) は launch のままなので席から撃てない＝終端の便の入れ物の片付けは別の設計に残る</li>
 </ul></div></div>
 </div>
 <div data-component="adr-option-card" class="rejected">
-<div class="opt-head"><span class="opt-id">OPT2</span><span class="opt-name">glob / 正規表現で宣言する</span><span class="opt-verdict rejected">不採用</span></div>
-<p class="opt-sum">同じ 3 本の key に、 prefix でなく glob (<code>docs/**/*.md</code>) か正規表現を書けるようにする案。 表現力は上がるが、 宣言の読み口に <b>pattern の parser と評価器</b>を足すことになり (行単位の <code>key = value</code> と配列の層だけで済んでいた読み口が 1 段深くなる)、 「どの pattern がどの種別に当たるか」の曖昧さ (重なり・優先順・最長一致) を器が決めることになる。 いま解こうとしている形 — 種別ごとの dir を名乗る — は prefix で足りる。 決定はしごの段 3 / 段 4 (入っている依存で足りるか・1 行で書けるか) で止まる。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT2">同じ宣言をワイルドカードや正規表現で書けるようにする案です。細かく書ける代わりに、読み取る部品が増え、複数の書き方が同じ file に当たったときにどちらを採るかを器が決めることになります。いま必要なのは「この dir から下」なので、先頭一致で足ります。</span>
+<div class="opt-head"><span class="opt-id">OPT2</span><span class="opt-name">席に launch を与える (行に 1 語足すだけ)</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">権能は今のまま 11 個で、 rules 行 <code>role.orchestrator</code> の値に <code>launch</code> を足す案。 変更は<b>行の 1 語だけ</b>で、 器の実装も guard の照合も 1 行も変わらない。 だが launch には <code>pipe run</code> / <code>resume</code> / <code>intake</code> / <code>retire</code> が同じ束で入っているので、 「止める」を渡すつもりで<b>起動と再開と受付と退役まで席に戻る</b>。 <a href="./ADR-0045-seat-role-is-one-orchestrator-and-dispatcher-lands-runs.html">ADR-0045</a> §2 (1) が dispatcher へ移したのはまさにその 4 つで、 口座の消費と並列度が席の手に戻り、 「席は実装を自分で行わない」の隣にある「便は器が起こす」の線が消える。 解きたい問題 (居座る便を外す) に対して、 渡す権能が広すぎる。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT2">席に「始める」の許可をそのまま渡す案です。行に 1 語足すだけで済みますが、その 1 語には「始める・再開する・受け付ける・片付ける」が全部入っています。止めたいだけなのに、作業を起こす力まで席に戻ってしまい、費用と同時実行数の決定権も戻ります。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>dir の段で分かれていない配置も表せる・拡張子だけで種別を分ける repo にも当たる</li>
+<li>rules 行の 1 語で済み、 器の実装も guard の照合も 1 行も変わらない (決定はしごの段 4)</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>宣言の読み口に parser と評価器を足す (DR3)・重なりと優先順の曖昧さを器が決めることになる・prefix で足りる (C17 の段)</li>
+<li>起動・再開・受付・退役まで席に戻り、 ADR-0045 §2 (1) の役割分担が崩れる (DR2)・口座の消費と並列度が席の手に戻る (DR1)</li>
 </ul></div></div>
 </div>
 <div data-component="adr-option-card" class="rejected">
-<div class="opt-head"><span class="opt-id">OPT3</span><span class="opt-name">rules manifest の行に持つ</span><span class="opt-verdict rejected">不採用</span></div>
-<p class="opt-sum">分類の値を器の rules manifest の行 (裁定 id つき) に置き、 consumer ごとに host の面で上書きする案。 だが rules 行は<b>器の規則</b>の置き場であって、 「この repo のどの dir が設計 doc か」は規則ではなく<b>対象 repo の事実</b>である。 器の規則の行に repo 固有の配置を積むと、 consumer が増えるたびに器の行が増え、 裁定 id を打つ相手も「その repo の配置」になる (C5 の裁定の意味が薄まる)。 宣言 file は既にこの分担で作られている — 値は repo が名乗り、 器の行は<b>上限</b>だけを持つ (ADR-0010 §2.1)。 同じ分担をここでも取る。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT3">分類を器の規則の行に書く案です。規則の行は「器がどう振る舞うか」の置き場で、「この repo のどの dir が設計 doc か」は相手の repo の事実です。相手が増えるたびに器の行が増え、承認の意味も薄まります。同じ分担は宣言 file の側に既に在ります。</span>
+<div class="opt-head"><span class="opt-id">OPT3</span><span class="opt-name">止める口を user の手だけに残す (現状維持)</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">権能も行も 1 語も変えず、 居座る便は user が手で <code>pipe stop --run</code> を撃って外す案。 変更 0 で、 誤射の面も一切開かない。 だが器の向きは「席が無人でも列が進む」側にあり (便の起動・着地・merge は dispatcher が契機ごとに自動で回す)、 その間に<b>居座る便だけが人の手を待つ</b>。 塞がれた契約は write-set の交差で止まったまま列に残り、 待ち時間は列の長さに比例して伸びる。 CTX3 の周はこの形で止まり、 判定順の直しで<b>その 1 件は</b>解けたが、 runner が応答しない便・人が見て止めたい便は同じ場所で待ち続ける。 「人が居るときしか回復できない列」は、 自走を目的にした器の中では欠陥である。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT3">何も変えず、止めるのは user が手で行う案です。変更も危険もありませんが、器は人が見ていない間も作業を進める作りなので、止まらなくなった作業だけが人を待つことになります。その間、後ろの作業も一緒に止まります。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>値が裁定 id つきで rules-diff に載る・器の側で全 consumer の分類を一望できる</li>
+<li>変更 0・権能も行も増えず、 席が誤って便を止める経路が 1 本も開かない</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>器の規則に対象 repo の事実を積む (DR1)・consumer ごとに器の行が増える (DR3)・ADR-0010 の分担 (値は宣言・行は上限) と逆向き</li>
+<li>席が無人で進む間、 居座る便を誰も外せない (CTX3)・塞がれた契約が人の手を待つ＝自走の器に人の手の段が残る (DR2 の目的に反する)</li>
 </ul></div></div>
 </div>
 <div data-component="adr-option-card" class="rejected">
-<div class="opt-head"><span class="opt-id">OPT4</span><span class="opt-name">consumer の席に src の編集の権能を与える</span><span class="opt-verdict rejected">不採用</span></div>
-<p class="opt-sum">分類は固定のまま、 置き方の違う repo の席には <code>edit-code</code> を与えて動かす案。 <b>1 行で済む</b>が、 <a href="./ADR-0045-seat-role-is-one-orchestrator-and-dispatcher-lands-runs.html">ADR-0045</a> §2 (1) の役割分担 — orchestrator は契約・設計・落ちる歯を書き、 実装は自分で行わない — を崩す。 しかも崩し方が静かで、 「置き方が違うから」という理由で権能が増え、 その repo では席が本体 code を直接書けるようになる。 種別の分類が壊れている問題を、 <b>権能を広げて</b>見えなくしているだけで、 分類は壊れたままである。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT4">分け方はそのままにして、置き方の違う相手の席には「本体 code を編集してよい」を与えて動かす案です。1 行で済みますが、席の役割分担（席は実装を自分で行わない）を、置き方の違いを理由に崩すことになります。分け方が壊れている問題は残ったままです。</span>
+<div class="opt-head"><span class="opt-id">OPT4</span><span class="opt-name">器が時間を見て自動で止める</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">席にも user にも渡さず、 器が「一定の時間より長く段が動かない便」を自分で終端へ倒す案。 人の手も席の権能も要らない。 だが<b>閾値が要る</b>——何分・何時間で殺すかは値で、 値は rules 行に載り、 rules 行には user の裁定 id が要る (<a href="../spec/constitution.html#c5">C5</a>)。 つまり「裁定を要らなくする案」が、 裁定を要る値を 1 つ増やす。 しかも便の段は本来<b>長い</b>——gate は変異検査を回し、 runner は人の回答を待って止まることもある (待ちの段は関門が開くまで動かない)。 時間で殺す形は、 正常に長い便を誤って殺し、 その誤りは「測っていない値が効いている」形で静かに起きる。 決定はしごの段 1 (要るか) で、 解きたいのは時間でなく<b>人か席の判断</b>だと分かる。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT4">器が時間を見て勝手に止める案です。人も席も要らなくなりますが、「何分で止めるか」という値が新しく必要になり、その値には user の承認が要ります。そのうえ、検査待ちや回答待ちで正しく長くかかっている作業まで誤って殺します。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>変更が rules 行 1 つ分で済む・実装の便が要らない</li>
+<li>席にも user にも権能を渡さずに居座る便が消える・人が見ていない時間帯でも列が回復する</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>ADR-0045 §2 (1) の役割分担を崩す (DR4)・分類の壊れを権能で覆い隠す・「置き方が違う」が権能を増やす理由になる</li>
+<li>閾値の rules 行が 1 本増え、 裁定の要る値が増える (DR5 / C5)・長い gate と待ちの段の便を誤って殺す・誤りが静かに起きる</li>
 </ul></div></div>
 </div>
 <div data-component="adr-option-card" class="rejected">
-<div class="opt-head"><span class="opt-id">OPT5</span><span class="opt-name">分類を言語の検出で自動化する</span><span class="opt-verdict rejected">不採用</span></div>
-<p class="opt-sum">repo の中身 (build file・拡張子の分布・慣習の dir 名) から言語と配置を当て、 種別を自動で決める案。 宣言を書かせずに済むが、 <b>推測は黙って外れる</b>——外れた周に席が止まる (厳しい側へ外れる) か、 本来 code の file が設計 doc として通る (緩い側へ外れる) かのどちらかで、 どちらも「測っていない値が効力を持つ」形である (C10)。 さらに検出のための走査を器に足すことになり、 C17.2 の「足す提案は先に消すものを名指す」に対して消すものが無い。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT5">repo の中身を見て言語と置き方を当て、自動で分ける案です。宣言を書かなくて済みますが、当て推量は外れたときに黙って外れます。厳しく外れれば席が止まり、緩く外れれば止めるはずの編集が通ります。どちらも「測っていない値が効いている」形です。</span>
+<div class="opt-head"><span class="opt-id">OPT5</span><span class="opt-name">権能 stop を足したうえで <code>--all</code> も席に許す</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">OPT1 と同じく <code>stop</code> を足すが、 口を絞らず <code>pipe stop</code> の呼び出しを丸ごと席に許す案。 guard の照合は<b>今のまま</b> (器の binary の直後の 2 語) で済み、 実装は表の 1 行の付け替えと行の 1 語だけになる。 だが <code>--all</code> は<b>生きている席を全部</b>止める掃除の口で (CTX5)、 撃ち間違えた 1 回で走行中の便を全部失う。 名指しの停止の誤射は便 1 本ぶんで、 <code>release</code> の印で列に戻せる。 <b>取り返しの規模が 2 桁違う操作</b>を、 実装が 1 段楽になるという理由で同じ権能に入れることになる。 C17 のはしごは「1 行で書けるか」を段の 4 番目に置くが、 段の 1 番目は「要るか」——席に要るのは名指しの停止であって、 一括停止ではない。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT5">止める許可を作ったうえで、「全部止める」形も席に許す案です。作りは楽になりますが、撃ち間違えた 1 回で走行中の作業を全部失います。1 本だけ止める誤りは戻せますが、全部止める誤りは戻せません。席に要るのは 1 本を止める力で、全部を止める力ではありません。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>consumer が宣言を書かなくてよい・新しい repo でもそのまま動く</li>
+<li>guard の照合が今のまま (2 語) で済み、 flag を読む面もその歯も要らない</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>推測が黙って外れ、 緩い側へ外れると guard が空洞化する (DR5 / C10)・検出のための走査を器に足す (C17.2 に対して消すものが無い)</li>
+<li>一括停止の誤射で走行中の便を全部失う (DR3)・名指しの誤射は <code>release</code> で戻せるが一括の誤射は戻せない・席に要るのは名指しの停止だけ (C17 の段 1)</li>
 </ul></div></div>
 </div>
 </div>
 </div>
-<section data-component="chapter-deck-band" class="tint-ok"><span class="num">04</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14 4l6 6-3 3-6-6z"/><path d="M11 7L4 14l3 3 7-7"/><path d="M3 21h10"/></svg> 採用した判断 / どの形を選ぶか</span><h2>選んだ形と、 それが守る要件 (cross-doc 照会)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-04">選んだ案と、それが要件書のどの要件を支えるかを示します。相手の repo の宣言 file に先頭一致の一覧を 3 つ足し、書かない repo はいままでどおりにし、宣言 file 自身は必ず本体 code に数え、宣言が壊れている回はいちばん厳しい側へ倒して理由を 1 行で出します。編集の時点で止める執行（FR45）、権能と種別の 1:1（FR41）、不正な入力を黙って落とさないこと（NFR4）に対応します。</p></section>
+<section data-component="chapter-deck-band" class="tint-ok"><span class="num">04</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14 4l6 6-3 3-6-6z"/><path d="M11 7L4 14l3 3 7-7"/><path d="M3 21h10"/></svg> 採用した判断 / どの形を選ぶか</span><h2>選んだ形と、 それが守る要件 (cross-doc 照会)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-04">選んだ案と、それが要件書のどの要件を支えるかを示します。「止める」だけの許可を 1 つ作って人と話す席に渡し、渡す形は「この 1 本を止める」に限り、「全部止める」は今までどおり誰にも渡しません。始める・再開する・受け付ける・片付ける・着地させる・merge する口は器の側のままです。許可の一覧は規則の行が持つこと（FR41）、止める点を実行の時点に置くこと（FR45）、便を起こすのは席でなく器であること（FR30）、止まった便が列の契機になること（FR68）に対応します。</p></section>
 <div class="chapbody">
 <div data-component="adr-decision-panel" id="decision">
 <p class="dec-kick">採用 — OPT1</p>
-<p class="dec-state">対象 repo の vessel 宣言 (<code>.vessel.toml</code>) SHALL <b>任意の flat key 3 本</b> (<code>design-intent-paths</code> / <code>design-doc-paths</code> / <code>tests-paths</code>) を受け、 値 SHALL repo 相対の prefix の<b>配列</b>である (dir は末尾 <code>/</code>・単一 file は完全一致・既に在る配列の層をそのまま使う)。 key を書かない宣言 SHALL 現行の固定値 (本 repo の配置) で分類され、 <b>既存の consumer と本 repo の宣言 SHALL 1 行も変わらない</b>。 宣言 SHALL NOT glob・正規表現を持つ (prefix で足りる・決定はしご C17)。 編集面の guard SHALL 登録 row の anchor の宣言を読んで種別を決め、 <b>宣言 file 自身 SHALL 常に code の種別</b>である＝席 SHALL NOT 自分の柵を自分で広げ、 宣言の変更 SHALL 便 (審査と gate) か user の手を通る。 宣言が不正な周 (<code>..</code> を含む・絶対 path・空文字・種別の間で prefix が重なる) SHALL fail-closed で<b>全 file を code の種別として扱い</b>、 doctor SHALL typed な 1 行で理由を出す＝器 SHALL NOT 黙って既定へ戻る (憲法 C10 / SRS NFR4)。 宣言の schema SHALL 1 のままで (key の追加と不在＝既定は版を上げない)、 新旧どちらの読み口も同じ宣言を読める。 種別の集合 (閉じた enum) と種別ごとの権能の 1:1 SHALL 不変で、 変わるのは<b>種別に属する path の集合の出所</b>だけである。 新しい consumer repo の最初の宣言 file を誰が書くか SHALL 導入の口の設計が決め、 本 ADR SHALL NOT それを決める (未実装)。 発効 SHALL 宣言の任意 key 3 本と guard の読み口が land した版とし、 本 ADR SHALL それまで proposed のまま何も拘束しない。</p>
-<span class="dec-plain" data-prose-slot="plain" data-slot-id="decision-plain">相手の repo が自分の宣言 file に、「仕様の置き場」「設計 doc の置き場」「test の置き場」の 3 つを先頭一致の一覧で書けるようにします。書かない repo はいままでどおりで、既存の相手も scribe2 自身も 1 行も変わりません。ワイルドカードや正規表現は持たせません。編集を止める仕組みは、その席が登録されている repo の宣言を読んで分け方を決めます。宣言 file そのものは必ず「本体 code」に数えるので、席が自分の柵を自分で広げることはできず、書き換えるには便（審査と検査）か user の手が要ります。宣言が壊れている回は、黙って元の分け方に戻さず、全部を「本体 code」として扱い（いちばん厳しい側）、点検コマンドが理由を 1 行で出します。宣言の版は上げないので、古い読み口でも新しい読み口でも同じ file が読めます。種類の数も、種類ごとに何をしてよいかも変わりません。変わるのは「どの file がどの種類か」を誰が決めるか、だけです。</span>
-<span class="dec-why" data-prose-slot="rationale" data-slot-id="decision-rationale">分類が器の中に固定で書かれている限り、その中身は scribe2 自身の置き方であって、相手の repo の事実ではありません（CTX1）。置き方の違う repo では全部が「本体 code」に落ち、本体 code の編集の権能を持たない席は 1 file も編集できません（CTX2）。これは guard の不具合ではなく、値の出所が間違っている形です。相手の repo はもともと自分のことを宣言 file で名乗っていて、そこには「書かなくてよい項目」の形も読み口も既に在ります（CTX3）。だから足すのは任意の項目 3 つだけで、読み込む部品も規則の行も増えません。書かない回を現行の固定値にするのは、いま動いている相手と scribe2 自身を 1 行も変えさせないためで、版を上げないのも同じ理由です。宣言 file 自身を必ず「本体 code」に数えるのは、そうしないと席が「自分が編集してよい範囲」を自分で書き足せてしまい、止める仕組みが自分で外せる柵になるからです。壊れた宣言で元の分け方へ黙って戻さないのは、戻した瞬間に「読めなかった」という事実が消え、間違った分け方で動いていることに誰も気づけないからです。先頭一致だけに絞るのは、いま要るのが「この dir から下」であって、それ以上の書き方を足すと読み取る部品と曖昧さが増えるからです。</span>
+<p class="dec-state">権能の閉じた列 SHALL 新しい variant <code>stop</code> (行と記録に使う字面は <code>stop</code>) を 1 つ持ち、 Bash 面の guard の表 SHALL <code>pipe stop</code> をその <code>stop</code> に結ぶ (launch から外す)。 <code>pipe intake</code> / <code>pipe run</code> / <code>pipe resume</code> / <code>pipe retire</code> SHALL launch のままとし、 <code>pipe land</code> SHALL merge のままとする＝これらは席の行に無く、 器の dispatcher の口である (<a href="./ADR-0045-seat-role-is-one-orchestrator-and-dispatcher-lands-runs.html">ADR-0045</a> §2 (1) は不変)。 rules 行 <code>role.orchestrator</code> の値 SHALL <code>stop</code> を含む (裁定 id は user 2026-09-20・憲法 <a href="../spec/constitution.html#c5">C5</a>)。 <b>席が <code>stop</code> の権能で撃てるのは便 1 本を名指す形 (<code>--run &lt;id&gt;</code>) だけ</b>で、 <code>--all</code> を持つ呼び出しと名指しの無い呼び出し SHALL <code>stop</code> では通らず launch を要る＝どの席からも撃てず user の手だけが撃つ。 guard SHALL 名指しを読めない呼び出しを launch の側へ倒す (fail-closed・憲法 <a href="../spec/constitution.html#c11">C11</a>)。 <code>pipe stop</code> の口の挙動 SHALL 1 つも変わらない: 書くのは終端の段 <code>Stopped</code> 1 つで、 worktree も branch も残し (畳む口は <code>retire</code>・憲法 <a href="../spec/constitution.html#n1">N1</a>.2)、 止め切れなかった周は終端を書かずに断り、 既に終端の便には event を増やさず、 段の判定を読めない周は断る。 止めた便 SHALL 終端として列外に入り、 契約の字が変わるか <code>release</code> の印が打たれた周に列へ戻る (設計 dispatcher.md §12 の判定は不変)。 SRS FR30 / FR41 の字 (便の起動・着地・merge は席でなく器の dispatcher が行う) SHALL 不変である——止めるは起動でも着地でも merge でもない。 本 ADR SHALL NOT 新しい口・event kind・段・記録・rules 行を足す (足すのは権能の列の 1 語と既存の行の値の 1 語だけ・憲法 <a href="../spec/constitution.html#c17">C17</a>.2)。 発効 SHALL 権能 <code>stop</code> と rules 行の値と guard の照合が land した版とし、 本 ADR SHALL それまで proposed のまま何も拘束しない。</p>
+<span class="dec-plain" data-prose-slot="plain" data-slot-id="decision-plain">「止める」だけの許可を新しく 1 つ作り、器の停止コマンドをその許可に結び直します。始める・再開する・受け付ける・片付ける・着地させる・merge する口は、今までどおり器の側にあり、席には渡しません。人と話す席の規則の行に「止める」を 1 語足します（user の承認 id 付き）。席が撃てるのは「この 1 本を止める」と名前で指定した形だけで、「全部止める」形と名前の無い呼び出しは、止める許可では通らず、今までどおり誰も撃てません。名前が読み取れない呼び出しは、安全側（通さない側）に倒します。止めるコマンドそのものの動きは 1 つも変えません。終わりの状態を 1 つ書くだけで、作業場所も枝も残り、止め切れなかった回は終わりにせず断ります。止めた作業は順番待ちの列から外れ、契約の中身が変わるか「戻す」印が打たれた回に列へ戻ります。要件書の「便を起こす・着地させる・merge するのは席でなく器」という文は変えません。止めるのは、そのどれでもないからです。</span>
+<span class="dec-why" data-prose-slot="rationale" data-slot-id="decision-rationale">いまの器では「止める」が「始める」と同じ 1 語に束ねられていて、その 1 語は席に渡していません（CTX1・CTX2）。渡していないのは正しい判断で、始める力を席に戻すと費用と同時実行数の決定権まで戻ります。しかし同じ束に入っているせいで、止まらなくなった作業を席から外す手段が 1 つも無くなりました。実際に、判定に届かないまま止まった作業が居座り、後ろの契約を塞ぎ続けた回があります（CTX3）。だから束をほどきます——止める操作は何も起こさず、終わりの状態を 1 つ書くだけで、作業場所も枝も残るので、始める操作とは向きが逆です（CTX4）。ほどいたうえで、渡すのは「1 本を名前で止める」形だけにします。「全部止める」は、撃ち間違えた 1 回で走行中の作業を全部失う操作で、1 本の誤りが「戻す」印で回復できるのとは取り返しの規模が違うからです。名前が読み取れない呼び出しを通さない側へ倒すのは、読み取れなさを「たぶん 1 本だろう」と解釈すると、一括停止がその隙間から通るからです。止めるコマンド自体の動きを 1 つも変えないのは、この判断が変えるのは「誰が撃てるか」であって「撃ったら何が起きるか」ではないからです。足すのが語 2 つで済むのは、口も段も記録も既に在るからで、増やす必要が無いものは増やしません。</span>
 <div class="justify-box"><p class="jh">この判断が正当化する要件 (cross-doc 照会 → SRS-SCRIBE2-MVP)</p>
-<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR45" data-justifies-req="FR45" data-justifies-role="claim">FR45</a><span class="justify-role">claim</span><span class="justify-note">権能で守られた操作を編集の時点で止める形は不変で、 分類の値の出所だけが対象 repo の宣言へ移る。 宣言が読めない周は権能なしの側へ倒れるので、 「止める点が在る」という要件の中身は弱まらない。</span></div>
-<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR41" data-justifies-req="FR41" data-justifies-role="claim">FR41</a><span class="justify-role">claim</span><span class="justify-note">権能の一覧は rules 行が持ち、 種別と権能の 1:1 も不変である。 本 ADR が決めるのは「歯の path 種別」等が指す path の集合を誰が名乗るかで、 行の値にも種別の集合にも触れない。</span></div>
-<div class="justify-row"><a class="justify-req" href="../spec/srs.html#NFR4" data-justifies-req="NFR4" data-justifies-role="claim">NFR4</a><span class="justify-role">claim</span><span class="justify-note">不正な宣言 (<code>..</code>・絶対 path・空文字・種別をまたぐ重なり) を黙って落とさず、 全 file を code として扱ったうえで doctor に typed な 1 行を出す＝「黙って落とす件数 0」の側に立つ。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR41" data-justifies-req="FR41" data-justifies-role="claim">FR41</a><span class="justify-role">claim</span><span class="justify-note">役割ごとの権能を rules 行 <code>role.orchestrator</code> が裁定 id 付きで持つ形は不変で、 本 ADR はその値に <code>stop</code> を 1 語足す。 「便の起動・着地・merge は行に無く dispatcher だけが行う」の字も不変である (止めるはその 3 つのどれでもない)。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR45" data-justifies-req="FR45" data-justifies-role="claim">FR45</a><span class="justify-role">claim</span><span class="justify-note">権能で守られた操作を実行の時点で止め、 断るときに欠けた権能と rules 行の id を告げる形は不変。 本 ADR は照合の対象に「名指しの有無」を加えるだけで、 読めない周は通さない側へ倒れるので要件の中身は弱まらない。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR30" data-justifies-req="FR30" data-justifies-role="claim">FR30</a><span class="justify-role">claim</span><span class="justify-note">配送構造 (席 1 役割 + 器の dispatcher) と「便の起動・着地・merge は席でなく dispatcher」は不変で、 席が持つのは契約と priority と介入の印と回答——そこに「居座る便を 1 本外す」が加わる。 起動の権能は席へ戻らない。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR68" data-justifies-req="FR68" data-justifies-role="claim">FR68</a><span class="justify-role">claim</span><span class="justify-note">便が終端の段 (<code>Landed</code> / <code>Failed</code> / <code>Stopped</code>) に達した直後が列の契機である形は不変。 席が 1 本を <code>Stopped</code> に倒せるようになると、 その契機がその場で立ち、 交差が解けた契約が人の手を待たずに起きる。</span></div>
 <p class="justify-tgt">照会先: SRS-SCRIBE2-MVP — SRS: 設計 → 契約 → 実装 → 検証 → land を、 人の手を借りずに 1 本通す器（MVP）</p>
 </div>
 </div>
 </div>
-<section data-component="chapter-deck-band" class="tint-warn"><span class="num">05</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg> 結果 / 良い面とトレードオフ</span><h2>この判断で何が良くなり、 何を引き受けるか</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-05">この判断で良くなることと、代わりに引き受けることです。置き方の違う repo でも席が動けるようになり、分け方の出所が相手の repo へ移り、いま動いているものは 1 行も変わらず、席が自分の柵を広げられない形が保たれます。代わりに、書ける形が先頭一致だけであること、宣言を間違えた repo は席が止まること、分類が repo ごとに違うので歯が本 repo の配置だけを測れなくなること、そして新しい repo の最初の宣言を誰が書くかを先送りにすることを引き受けます。</p></section>
+<section data-component="chapter-deck-band" class="tint-warn"><span class="num">05</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg> 結果 / 良い面とトレードオフ</span><h2>この判断で何が良くなり、 何を引き受けるか</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-05">この判断で良くなることと、代わりに引き受けることです。止まらなくなった作業を席が自分で外せるようになり、始める力は器の側に残り、「全部止める」の誤射は今までどおり起こらず、足すものは語 2 つで済みます。代わりに、止める命令の形まで見分ける段が 1 つ増えること、止めた作業の作業場所は残ったままになること、断り文が「1 本ずつなら撃てる」とは教えてくれないこと、そして許可の名が 1 つ増えて席の説明文も 1 語伸びることを引き受けます。</p></section>
 <div class="chapbody">
 <div data-component="scope-summary-panel"><div class="scol in"><h3>✓ 良い結果</h3><ul>
-<li data-component="adr-consequence-pos"><span class="b">●</span>Rust でない consumer repo でも orchestrator の席が自分の仕様と設計 doc と歯を編集できる (CTX2 の実測が解ける)・器の配置を相手に押し付けない</li>
-<li data-component="adr-consequence-pos"><span class="b">●</span>分類の値の出所が対象 repo の宣言へ移り、 器の側は種別の集合と権能の 1:1 と上限だけを持つ (ADR-0010 の分担と同じ形)</li>
-<li data-component="adr-consequence-pos"><span class="b">●</span>key の不在＝現行の固定値ゆえ、 既存の consumer と本 repo の宣言は無変更・schema は 1 のまま＝跨版で読み口が割れない</li>
-<li data-component="adr-consequence-pos"><span class="b">●</span>宣言 file 自身が常に code ゆえ席は自分の柵を広げられず、 宣言の変更は便の審査と gate か user の手を通る (DR4)・読み口も rules 行も走査も増えない</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>居座る便を席が 1 本ずつ外せる (CTX3 の型が解ける)・止めた直後が列の契機なので、 交差が解けた契約が人の手を待たずに起きる</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>起動・再開・受付・退役・着地・merge は器の dispatcher の口のままで、 口座の消費と並列度の決定権は席へ戻らない (ADR-0045 §2 (1) が保たれる)</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>一括停止は今までどおりどの席からも撃てない＝誤射で失いうる便の数の上限が 1 本のまま変わらない (しかもその 1 本は <code>release</code> で列に戻せる)</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>足すのは権能の列の 1 語と rules 行の値の 1 語だけ。 新しい口・event kind・段・記録・rules 行は 1 つも増えず、 <code>pipe stop</code> の挙動も 1 つも変わらない</li>
 </ul></div><div class="scol out"><h3>⚖ トレードオフ・代償</h3><ul>
-<li data-component="adr-consequence-neg"><span class="b">●</span>書けるのは prefix だけ。 種別が dir の段で分かれていない repo (同じ dir に設計 doc と code が混ざる形) は表せず、 その repo は dir を分けるか全 file を code として扱うことになる</li>
-<li data-component="adr-consequence-neg"><span class="b">●</span>宣言を書き間違えた repo は fail-closed で全 file が code になり、 席が止まる。 理由は doctor の 1 行に出るが、 席の側の deny 文は「権能でない」としか言わない (読む先が 2 つに分かれる)</li>
-<li data-component="adr-consequence-neg"><span class="b">●</span>分類が repo ごとに変わるので、 歯は「本 repo の配置で正しいか」だけを測れば足りるという前提を失う (宣言の値から分類が導かれる形を歯が測ることになる)</li>
-<li data-component="adr-consequence-neg"><span class="b">●</span>新しい consumer repo の最初の宣言 file を誰が書くかは決めない (導入の口の設計・未実装)。 それまでは新しい repo に宣言を置く手が user の側に残る</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>guard が読む語が広がる。 いまは器の binary の直後の 2 語だけを表と照合しているので、 名指しの有無を見る段と、 その面の歯が要る (照合の面が 1 つ増える)</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>席が止めた便の worktree は残る。 畳む口 (<code>retire</code>) は launch のままで席から撃てず、 終端の便の入れ物の掃除は別の設計 (消す操作＝A1 の裁定が要る) に残る</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>席が <code>--all</code> を撃った周の deny 文は「この操作は席の権能でない」としか言わず、 「<code>--run</code> なら撃てる」とは告げない (代替ルートを添える口は断りの理由の enum の側に在る)</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>権能の名が 1 つ増えるので、 席の指示文が運ぶ権能の列と、 生成文書の rules 表と、 その drift の検査の期待値が 1 語ずつ伸びる</li>
 </ul></div></div>
 </div>
-<section data-component="chapter-deck-band" class="tint-info"><span class="num">06</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg> 改訂関係と原則 / この判断の位置づけ</span><h2>版の系譜と、 行き着く原則 (照会終端)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-06">この ADR が版の系譜のどこに在るかと、判断が最後に行き着く原則です。既存の ADR は 1 本も置き換えません。宣言 file の分担（値は相手が名乗り、器の行は上限だけを持つ）と、席の役割分担の上に乗ります。行き着く原則は「相手の repo の形は相手の事実であって、器の規則ではない」です。</p></section>
+<section data-component="chapter-deck-band" class="tint-info"><span class="num">06</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg> 改訂関係と原則 / この判断の位置づけ</span><h2>版の系譜と、 行き着く原則 (照会終端)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-06">この ADR が版の系譜のどこに在るかと、判断が最後に行き着く原則です。席の役割を決めた記録の一部だけを差し替えます——「止める」を「始める」の束から外し、席の行に 1 語足す部分です。始める・再開する・受け付ける・片付ける・着地させる・merge するのは器の側という線は、そのまま残します。行き着く原則は「始める力と、始まったものを 1 本だけ終わらせる力は別である」です。</p></section>
 <div class="chapbody">
 <div data-component="adr-supersession">
 <p class="ss-row"><span class="ss-k">改訂状態</span>current (proposed)</p>
-<p class="ss-row"><span class="ss-k">置き換える ADR</span>なし (新規)</p>
+<p class="ss-row"><span class="ss-k">置き換える ADR</span>ADR-0045 §2 (1) を部分 supersede</p>
 <p class="ss-row"><span class="ss-k">置き換えられた</span>なし (現行)</p>
-<p class="ss-row"><a href="./ADR-0010-vessel-declaration-holds-allowlist-and-common-verify.html">ADR-0010</a> の分担 (値は対象 repo の宣言が持ち、 器の rules 行は上限だけを持つ) は不変で、 本 ADR はその宣言に<b>任意 key を 3 本足す</b>だけである (任意 key で宣言を広げる形は <a href="./ADR-0023-contract-source-is-the-design-document-table.html">ADR-0023</a> が要件面の path で既に取った)。 <a href="./ADR-0022-seat-roles-are-typed-and-enforced-by-hooks.html">ADR-0022</a> §2.3 の 2 面の執行と、 種別の集合・種別と権能の 1:1 は不変で、 変わるのは種別に属する path の集合の出所だけ。 <a href="./ADR-0045-seat-role-is-one-orchestrator-and-dispatcher-lands-runs.html">ADR-0045</a> §2 (1) の役割分担 (席は実装を自分で行わず、 開くのは歯の段だけ) は不変で、 本 ADR はその分担が<b>置き方の違う repo でも成立する</b>ようにするものである。 <a href="./ADR-0044-decision-ladder-is-a-constitution-article.html">ADR-0044</a> の C17 は OPT2 と OPT5 を落とす根拠として効く。 憲法の条文は 1 条も改訂しない。</p>
+<p class="ss-row"><a href="./ADR-0045-seat-role-is-one-orchestrator-and-dispatcher-lands-runs.html">ADR-0045</a> §2 (1) のうち 2 点を<b>部分 supersede</b> する: (i) 「Launch / Merge は器の dispatcher だけが行う操作として orchestrator の行から外す」の Launch の中身から <code>pipe stop</code> を抜き、 新しい権能 <code>stop</code> に結び直す。 (ii) 同 §2 (1) が並べる rules 行 <code>role.orchestrator</code> の値の列に <code>stop</code> を足す。 同じ §2 (1) の残り — 席は orchestrator の 1 つ・席は実装を自分で行わない・src の編集は行に無く歯の段だけが開く・便の起動と着地と merge は器の dispatcher が行う (<code>pipe run</code> / <code>resume</code> / <code>intake</code> / <code>retire</code> は launch・<code>pipe land</code> は merge)・<code>Capability::Relay</code> の削除・R-C7-1 の値 — は<b>不変</b>である。 <a href="./ADR-0022-seat-roles-are-typed-and-enforced-by-hooks.html">ADR-0022</a> §2.2 (権能は役割ごとの rules 行が裁定 id 付きで持ち、 執行・注入・生成文書が同じ行を読む) と §2.3 (執行は PreToolUse の guard・identity は pane だけ・subcommand は役割を検査しない) は不変で、 本 ADR は行の値と列の 1 語を足すだけ。 <a href="./ADR-0013-machine-holds-enumerations-docs-hold-pointers.html">ADR-0013</a> §2.1 (列挙は機械が持ち文書は写さない) も不変＝本 ADR は権能の名の列を文書に写さず、 足す 1 語だけを名指す。 <a href="./ADR-0034-dispatcher-starts-reviewed-contracts-automatically.html">ADR-0034</a> の列の入力・順序・介入の印 (first / hold / release) は不変で、 止めた便が列外に入り印で戻る形もそのままである。 <a href="./ADR-0044-decision-ladder-is-a-constitution-article.html">ADR-0044</a> の C17 は OPT4 と OPT5 を落とす根拠として効く。 憲法の条文は 1 条も改訂しない。</p>
 </div>
 <div data-component="adr-principle">
-<p class="prin-id">照会終端 — PRIN-CONSUMER-DECLARES-ITS-OWN-SHAPE (本 ADR)</p>
-<p class="prin-text">対象 repo の形 (どの dir が何か) は、 その repo の事実である。 器は種別と上限と極性を持ち、 値はその repo に名乗らせる——名乗らない周は器の既定で動き、 名乗りが読めない周は最も厳しい側へ倒す。</p>
-<p class="prin-note">本 ADR の判断はこの原則に行き着く (これ以上は遡らない照会終端)。 憲法 C10 (宣言値と効力を持つ値を型で弁別し、 宣言は実測を経てしか効かない) と C1 (規律は器の中に置く) を、 「repo 固有の事実をどちらの側に置くか」の形で持ったものである。 器の既定を他人の repo の規則にしない。</p>
+<p class="prin-id">照会終端 — PRIN-STOPPING-IS-NOT-STARTING (本 ADR)</p>
+<p class="prin-text">始める力と、 始まったものを 1 本だけ終わらせる力は別の権能である。 器は口を<b>誤射の被害の大きさ</b>で分け、 名指しの停止だけを席に渡し、 一括の停止は渡さない——名指しを読めない呼び出しは、 渡していない側へ倒す。</p>
+<p class="prin-note">本 ADR の判断はこの原則に行き着く (これ以上は遡らない照会終端)。 憲法 <a href="../spec/constitution.html#n1">N1</a> (元に戻せない削除をしない・退役は可逆な move) と <a href="../spec/constitution.html#c11">C11</a> (極性は型が持つ) を、 「権能をどの粒度で切るか」の形で持ったものである。 実装が 1 段楽になることは、 取り返しの規模が違う 2 つの操作を同じ権能に入れる理由にならない。</p>
 </div>
 </div>
 <section data-component="chapter-deck-band" class="tint-brand"><span class="num">07</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg> 用語集 / この文書で使う専門語</span><h2>本文に出てくる専門語のやさしい説明</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-07">本文に出てくる専門語を、やさしい言葉で説明します。</p></section>
 <div class="chapbody">
 <div data-component="glossary-term-table">
-<div class="grow"><div class="gword">path の種別<span class="en">path kind</span></div><div class="gdef">編集先の file を分ける閉じた分類 (design-intent / 設計 doc / 歯 / code / 対象 repo の外)。 種別ごとに要る権能が 1 つ決まっていて、 編集面の guard は編集先の種別を引いてから席の権能と照らす。 分類は repo root からの相対 path の先頭一致だけで決め、 file の中身や名前の語彙では判定しない。</div></div>
-<div class="grow"><div class="gword">vessel 宣言<span class="en">vessel declaration</span></div><div class="gdef">対象 repo の root に marker の隣として置く tracked な file (<code>.vessel.toml</code>)。 その repo が「許してよい command」「どの便でも撃つ検証」などを自分で名乗る宣言値で、 器はここに上限を掛けて便ごとに凍結する。 本 ADR はここに path の種別の宣言を 3 本足す。</div></div>
-<div class="grow"><div class="gword">任意 key<span class="en">optional key</span></div><div class="gdef">宣言 file の key のうち、 書かなくてよいもの。 「無い」は key の不在で表し (書いた空配列は不備)、 書かない宣言は器の既定で動く。 既に検出線の行・要件面の path・push 先の remote・CI の行の 4 つが任意 key で、 本 ADR の 3 本も同じ形である。</div></div>
-<div class="grow"><div class="gword">prefix の宣言<span class="en">prefix declaration</span></div><div class="gdef">repo 相対の path の<b>先頭一致</b>で集合を表す書き方。 末尾に <code>/</code> を付けた項目はその dir の配下全部を指し、 付けない項目は file の完全一致を指す。 ワイルドカードも正規表現も持たない。 器の中では write-set の allowlist が同じ形を既に使っている。</div></div>
-<div class="grow"><div class="gword">fail-closed<span class="en">fail closed</span></div><div class="gdef">解けない・読めない周に「通す」ではなく「止める」側へ倒す極性。 ここでは、 宣言が不正な周に現行の既定へ戻すのでなく、 全 file を code の種別として扱う (code の権能を持たない席は止まる)。 極性は型が持ち、 全 guard の一覧は器が生成する。</div></div>
-<div class="grow"><div class="gword">anchor<span class="en">anchor</span></div><div class="gdef">席が仕える対象 repo の main checkout。 席の登録は役割と anchor を鍵に持ち、 guard は権能を解く最初の段で anchor を解く。 本 ADR の guard は、 この anchor の宣言 file を読んで種別を決める (新しい引数も env も要らない)。</div></div>
+<div class="grow"><div class="gword">権能<span class="en">capability</span></div><div class="gdef">役割ごとに許された操作の閉じた一覧。 列挙は器の中の型が持ち、 文書は写さない。 どの役割がどの権能を持つかは役割ごとの rules 行 (値は権能の名の列・user の裁定 id 付き) が持ち、 同じ 1 行を執行 (guard)・席の指示文・生成文書が読む。</div></div>
+<div class="grow"><div class="gword">起動の権能<span class="en">launch</span></div><div class="gdef">便を起こす側の操作をまとめた権能 (受付・起動・再開・退役)。 <a href="./ADR-0045-seat-role-is-one-orchestrator-and-dispatcher-lands-runs.html">ADR-0045</a> §2 (1) の後は席の rules 行に無く、 器の dispatcher の口である＝どの席からも撃てない。 本 ADR はこの束から停止だけを抜く。</div></div>
+<div class="grow"><div class="gword">停止の権能<span class="en">stop</span></div><div class="gdef">走っている便 1 本を終端へ倒す操作の権能 (本 ADR が足す)。 席の rules 行に並び、 撃てるのは便を名指す形だけである。 生きている席を全部止める形は起動の権能のままで、 どの席からも撃てない。</div></div>
+<div class="grow"><div class="gword">終端の段<span class="en">terminal stage</span></div><div class="gdef">便がそれ以上進まない段 (着地・失敗・停止と、 判定が FAIL の段)。 終端でない便だけが排他の母集団に数えられ、 同時走行の最大値にも数えられる。 終端に達した直後は列の契機の 1 つで、 器が次の便を起こす。</div></div>
+<div class="grow"><div class="gword">列外<span class="en">out of the queue</span></div><div class="gdef">終端に着いた便の契約が起動の列から外れている状態。 契約の字が変わるか、 <code>release</code> の印が打たれた周に列へ戻る。 印 1 回で戻るのは 1 回だけで、 同じ字でまた終端に着けば再び列外になる。</div></div>
+<div class="grow"><div class="gword">fail-closed<span class="en">fail closed</span></div><div class="gdef">解けない・読めない周に「通す」ではなく「止める」側へ倒す極性。 ここでは、 便の名指しを読めない停止の呼び出しを起動の権能の側 (＝席では撃てない側) へ倒す。 極性は型が持ち、 全 guard の一覧は器が生成する。</div></div>
 </div>
 </div>
 </div>
 <footer class="foot" data-component="fidelity-sync-meta"><div class="ft-grid">
 <div class="ft-plain">このページは、大もとの機械データ (正本) から自動で組み立てられています。構造は機械が自動で検査し、内容が元データに忠実かは独立のレビューで確かめます。</div>
-<div data-audience="machine">機械SSoT: <b>ADR-0047.build.adr.yaml</b> &middot; 生成: <b>2026-09-20</b> &middot; 検証状態: <b>structure ✓ fabrication-free / prose ✓ 充填済 (fidelity ceiling → S5 対象)</b></div>
+<div data-audience="machine">機械SSoT: <b>ADR-0048.build.adr.yaml</b> &middot; 生成: <b>2026-09-20</b> &middot; 検証状態: <b>structure ✓ fabrication-free / prose ✓ 充填済 (fidelity ceiling → S5 対象)</b></div>
 <div class="tags" data-audience="machine"><span>folio design system</span><span>ADR-pack</span><span>folio engine B1 (instance#2)</span><span>cross-doc 照会</span></div>
 </div></footer>
 <!-- folio:chrome-bottom -->
 <nav class="prevnext" aria-label="前後の文書">
-  <a class="prevnext__prev" href="ADR-0046-constitution-is-enforced-by-gates-and-only-ask-first-and-never-are-injected.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">憲法の置き場: C 条文は CI と guard の執行だけで持ち、 注入するのは順位と Ask-first / Never の条だけ (生成区間を CLAUDE.md から生成 file 1 枚へ移し pointer 1 行を残す・orchestrator の SessionStart は順位 + A1 / A2 / A3 / A4.2 / N1 / N2 / N3 の pointer 行だけ・runner には憲法の散文を注入しない・本 repo だけの決定で他 project の憲法の執行は整理の後へ送る)</span></a>
-  <a class="prevnext__next" href="ADR-0048-stopping-a-run-is-a-separate-capability-of-the-orchestrator.html"><span class="prevnext__dir">次 &rarr;</span><span class="prevnext__title">便を止める権能は起動の権能から分かれ、 orchestrator の席が持つ: pipe stop を launch から外して新しい権能 stop に結び、 rules 行 role.orchestrator に stop を足す (席が撃てるのは --run で便 1 本を名指す形だけ・--all は launch のままでどの席からも撃てない・起動 / 再開 / 受付 / 退役は launch のまま dispatcher の口・止めた便は Stopped で列外に入り契約の字か release の印で列に戻る・SRS FR30 / FR41 の字は変えない)</span></a>
+  <a class="prevnext__prev" href="ADR-0047-path-kinds-are-declared-in-the-vessel-declaration.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">path の種別は consumer が vessel 宣言で名乗る: guard の 4 種別の分類を固定 prefix から repo ごとの任意 key 3 本へ (key の不在は現行の固定値＝既存の consumer と本 repo は無変更・宣言 file 自身は常に code・不正な宣言は fail-closed で全 file を code にして doctor に typed な 1 行・glob は持たない・schema は 1 のまま)</span></a>
 </nav>
 <script>
 (function () {
