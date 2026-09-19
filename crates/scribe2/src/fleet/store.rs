@@ -501,6 +501,24 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// **生きている所有者の（古くない）lock は `Stale` でも `DeadOnly` でも `retry_ms` まで待つ**
+    /// （行 c の done の 3 項目）。回収の 1 手は「外してよい」と判じた周にしか呼ばれない。
+    #[test]
+    fn fleet_lock_reclaim_live_owner_waits_under_both_reclaims() {
+        let dir = scratch("live-owner");
+        let lock = dir.join("events.jsonl.lock");
+        std::fs::write(&lock, format!("{}\n", std::process::id())).expect("lock を書ける");
+        // 古くない線（`stale_ms` を十分大きく）＝外してよい理由が 1 つも無い周。
+        let policy = LockPolicy { retry_ms: 30, stale_ms: 600_000 };
+        for reclaim in [Reclaim::Stale, Reclaim::DeadOnly] {
+            let outcome = acquire_with(&lock, policy, reclaim);
+            assert!(outcome.is_err(), "{reclaim:?} は生きている所有者の lock を奪わない");
+            assert!(lock.exists(), "{reclaim:?} の周でも lock は残る");
+        }
+        assert!(!reclaim_token(&lock).exists(), "回収に入らないので token も作らない");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// **stale の回収も同じ 1 手を通る**（`Reclaim::Stale` の周）。`DeadOnly` の周は古くても外さない。
     #[test]
     fn fleet_lock_reclaim_stale_goes_through_the_same_one_step() {
