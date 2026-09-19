@@ -5,13 +5,14 @@
 //! `pipe/dispatch.rs` の in-file の歯が持つ（同じ接頭辞 `pipe_dispatch_`）。
 
 use super::{
-    ceiling_rules, clean, commit_rows, design_doc_rows, git, intake_bead, repo_with_state, row_fields, run_pipe,
-    stderr_of, stdout_of, stop_run_ok, write_design, DESIGN_FILE,
+    ceiling_rules, clean, commit_rows, design_doc_rows, fake_lens, gate_once, git, intake_bead, lens_verdict,
+    repo_with_state, review_lens_pass, row_fields, run_pipe, shim_path, stderr_of, stdout_of, write_design,
+    DESIGN_FILE,
 };
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
-use std::process::Output;
+use std::process::{Command, Output, Stdio};
 use vessel::cli_outcome::RC_OK;
 
 /// 列の 1 行の書き出し（器の字面を借りない＝外形を測る側は自分で書く）。
@@ -82,10 +83,18 @@ fn script(path: &Path, body: &str) -> String {
 )]
 fn dispatch_rules(state: &Path) -> String {
     let base = fs::read_to_string(ceiling_rules(state)).expect("受付の写しを読める");
-    let row = "[[rule]]\nid = \"seat.ledger_timeout_s\"\nkind = \"LedgerTimeoutS\"\n\
-               value = 60\nenabled = true\nruling = \"t\"\nruled_at = \"d\"\n";
+    let row = |id: &str, kind: &str, value: u64| {
+        format!("[[rule]]\nid = \"{id}\"\nkind = \"{kind}\"\nvalue = {value}\nenabled = true\nruling = \"t\"\nruled_at = \"d\"\n")
+    };
+    // 台帳の待ち上限（列が読む）と、終端の口が読む行（`pipe stop`）を足す＝**同じ 1 本の manifest で
+    // 終端も列も動く**（終端の 1 周が別の写しを読むと、測っているものがずれる）。
+    let rows = format!(
+        "{}\n{}",
+        row("seat.ledger_timeout_s", "LedgerTimeoutS", 60),
+        row("pipe.stop_grace_ms", "StopGraceMs", super::embedded_int("pipe.stop_grace_ms")),
+    );
     let path = state.join("rules-dispatch.toml");
-    fs::write(&path, format!("{base}\n{row}")).expect("列の写しを書ける");
+    fs::write(&path, format!("{base}\n{rows}")).expect("列の写しを書ける");
     path.display().to_string()
 }
 
@@ -108,6 +117,33 @@ fn reason_of(out: &Output, bead: &str) -> String {
         .find(|line| line.contains(&format!("bead={bead} ")))
         .and_then(|line| line.split("reason=").nth(1).map(str::to_owned))
         .unwrap_or_default()
+}
+
+/// `bead` が `beads` のどれかである `RunCreated` の件数（起こした便の効果・上限まで待つ）。
+///
+/// 起こすのは子 process なので、記帳は親の終端の**後**に来る。待たずに数えると「起こしていない」と
+/// 読み違える（測れていないを 0 件に読み替えない・C10）。
+fn created(state: &Path, beads: &[&str], want: usize) -> usize {
+    let log = state.join("fleet").join("events.jsonl");
+    let count = || -> usize {
+        let Ok(text) = fs::read_to_string(&log) else {
+            return 0;
+        };
+        text.lines()
+            .filter(|line| line.contains("\"kind\":\"RunCreated\""))
+            .filter(|line| beads.iter().any(|bead| line.contains(&format!("\"bead\":\"{bead}\""))))
+            .count()
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while count() < want && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    // **0 を待たずに数えない**: 起こすのは子 process なので、`want` が 0 の周も少し待ってから数える
+    // （遅れて来た 1 件を「起こしていない」と読み違えない・C10）。
+    if want == 0 {
+        std::thread::sleep(std::time::Duration::from_millis(800));
+    }
+    count()
 }
 
 /// `[DISPATCH-COUNT] total=<n> ready=<k>` の行。
@@ -191,7 +227,16 @@ fn pipe_dispatch_first_outranks_priority_and_hold_stops_the_start() {
         let out = run_pipe(&["dispatch", verb, bead, "--state-dir", &state.display().to_string()]);
         assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{verb}: {}", stderr_of(&out));
     };
-    mark("first", "s2-toy.1");
+    let marked = run_pipe(&["dispatch", "first", "s2-toy.1", "--state-dir", &state.display().to_string()]);
+    assert_eq!(marked.status.code(), Some(i32::from(RC_OK)), "first: {}", stderr_of(&marked));
+    // **`first` の記録の直後にも 1 周撃つ**（§5）。`--repo` を渡していないので材料は解けず、1 周を
+    // 撃った事実だけが `unmeasured reason=args` の行で残る（撃っていなければ行が無い）。
+    assert_eq!(
+        stdout_of(&marked).lines().last(),
+        Some("dispatch=unmeasured reason=args"),
+        "first の直後に 1 周: {}",
+        stdout_of(&marked)
+    );
     let first = ls(&repo, &state, &bd);
     assert_eq!(beads(&first), vec!["s2-toy.1", "s2-toy.2"], "first は P0 より先: {}", stdout_of(&first));
     assert!(
@@ -210,10 +255,10 @@ fn pipe_dispatch_first_outranks_priority_and_hold_stops_the_start() {
     clean(&[&repo, &state]);
 }
 
-/// (§8 審査 FAIL の列外) 同じ契約 file の sha で審査に落ちた便が在る契約は `review-failed` で列外になり、
+/// (§2 終端の便は列外) 同じ契約 file の sha で**終端に着いた**便が在る契約は `settled` で列外になり、
 /// 設計 doc の行が変わって sha が動くと列に戻る。
 #[test]
-fn pipe_dispatch_keeps_a_review_failed_contract_out_until_its_sha_moves() {
+fn pipe_dispatch_keeps_a_settled_contract_out_until_its_sha_moves() {
     let (repo, state) = repo_with_state();
     two_rows(&repo);
     let failed = intake_bead(&repo, &state, &format!("{DESIGN_FILE}#a"), "s2-toy.1");
@@ -224,7 +269,7 @@ fn pipe_dispatch_keeps_a_review_failed_contract_out_until_its_sha_moves() {
     let bd = fake_bd(&state, &[issue("s2-toy.1", 2, "a")]);
     let out = ls(&repo, &state, &bd);
     let reason = reason_of(&out, "s2-toy.1");
-    assert!(reason.starts_with("review-failed:"), "同じ sha では列外: {}", stdout_of(&out));
+    assert!(reason.starts_with("settled:"), "同じ sha では列外: {}", stdout_of(&out));
     assert_eq!(count_of(&out), format!("{COUNT} total=1 ready=0"), "列には載るが起こさない");
     // 行の本文を変える＝生成される契約 file の sha が動く。
     write_design(
@@ -242,12 +287,12 @@ fn pipe_dispatch_keeps_a_review_failed_contract_out_until_its_sha_moves() {
     clean(&[&repo, &state]);
 }
 
-/// (§2 審査 FAIL の列外・裏側) 判定の鍵は**現在の契約 file の sha**である: 同じ sha の直前の便が PASS で
-/// 終わっていれば、それより**古い**同じ sha の FAIL は列を塞がない。
+/// (§2 終端の便は列外・裏側) 判定の鍵は**現在の契約 file の sha**である: 同じ sha の直前の便が live なら、
+/// それより**古い**同じ sha の終端は列を塞がない。
 ///
 /// `run id = <bead>-<UTC の秒>` なので 2 便は別の秒に起こす（同じ秒だと id が衝突して 2 本目が断られる）。
 #[test]
-fn pipe_dispatch_review_failed_reads_the_run_just_before_the_current_sha() {
+fn pipe_dispatch_settled_reads_the_run_just_before_the_current_sha() {
     let (repo, state) = repo_with_state();
     two_rows(&repo);
     let design = format!("{DESIGN_FILE}#a");
@@ -257,18 +302,23 @@ fn pipe_dispatch_review_failed_reads_the_run_just_before_the_current_sha() {
     let bd = fake_bd(&state, &[issue("s2-toy.1", 2, "a")]);
     let blocked = ls(&repo, &state, &bd);
     assert!(
-        reason_of(&blocked, "s2-toy.1").starts_with("review-failed:"),
+        reason_of(&blocked, "s2-toy.1").starts_with("settled:"),
         "古い便しか無い周は列外: {}",
         stdout_of(&blocked)
     );
-    // 同じ契約でもう 1 便（秒を跨ぐ）。こちらは審査 PASS のまま終端にする。
+    // 同じ契約でもう 1 便（秒を跨ぐ）。こちらは審査 PASS のまま **live** にしておく。
     std::thread::sleep(std::time::Duration::from_millis(1100));
     let newer = intake_bead(&repo, &state, &design, "s2-toy.1");
     assert_ne!(newer, older, "2 便は別の run id");
-    stop_run_ok(&state, &newer);
     let out = ls(&repo, &state, &bd);
-    assert_eq!(reason_of(&out, "s2-toy.1"), "-", "直前の便が PASS なら古い FAIL は塞がない: {}", stdout_of(&out));
-    assert_eq!(count_of(&out), format!("{COUNT} total=1 ready=1"), "起こせる 1 本");
+    // **直前の便が live なら古い終端は塞がない**＝理由は交差（live な自分の便）であって `settled` ではない。
+    assert_eq!(
+        reason_of(&out, "s2-toy.1"),
+        format!("overlap:{newer}/1"),
+        "直前の便が live なら古い終端は塞がない: {}",
+        stdout_of(&out)
+    );
+    assert_eq!(count_of(&out), format!("{COUNT} total=1 ready=0"), "live な便と交差して 0 本");
     clean(&[&repo, &state]);
 }
 
@@ -295,5 +345,317 @@ fn pipe_dispatch_waits_for_an_open_blocks_dependency_and_ignores_the_parent() {
     let again = ls(&repo, &state, &freed);
     assert_eq!(reason_of(&again, "s2-toy.1"), "-", "blocks が閉じれば起こせる: {}", stdout_of(&again));
     assert_eq!(count_of(&again), format!("{COUNT} total=2 ready=1"), "closed の bead は列の入力に入らない");
+    clean(&[&repo, &state]);
+}
+
+/// (§5 材料の読み) 候補 N 件の 1 周で **repo の走査は 1 回**（候補ごとに `generated` / `judge` で読み直さない）。
+///
+/// 数えるのは PATH の偽 git が記録した `git ls-files` の回数である（走査の入口は必ずここを通る）。
+/// base は候補の数だけ走査するので RED になる。母集団は `[DISPATCH-COUNT]` の `total=` で同時に出す。
+#[test]
+fn pipe_terminal_dispatch_reads_the_repo_materials_once_for_every_candidate() {
+    let (repo, state) = repo_with_state();
+    two_rows(&repo);
+    // 行 a と行 b を指す候補を 4 件（同じ 2 行を指す＝走査の回数だけが候補数に依る）。
+    let issues: Vec<String> = ["s2-toy.1", "s2-toy.2", "s2-toy.3", "s2-toy.4"]
+        .iter()
+        .enumerate()
+        .map(|(at, id)| issue(id, 2, if at % 2 == 0 { "a" } else { "b" }))
+        .collect();
+    let bd = fake_bd(&state, &issues);
+    let log = state.join("ls-files.log");
+    let script = format!("case \"$*\" in *ls-files*) printf 'x\\n' >> '{}';; esac", log.display());
+    let path = shim_path(&state, "git-count", &script);
+    let measured = Command::new(super::bin())
+        .args(["pipe", "dispatch", "ls"])
+        .args(["--state-dir", &state.display().to_string()])
+        .args(["--repo", &repo.display().to_string()])
+        .args(["--rules", &dispatch_rules(&state)])
+        .args(["--bd", &bd])
+        .env("PATH", path)
+        .output()
+        .expect("binary を起動できる");
+    assert_eq!(measured.status.code(), Some(i32::from(RC_OK)), "ls は rc 0: {}", stderr_of(&measured));
+    assert_eq!(count_of(&measured), format!("{COUNT} total=4 ready=2"), "母集団 4 件: {}", stdout_of(&measured));
+    let scans = fs::read_to_string(&log).map(|text| text.lines().count()).unwrap_or_default();
+    assert_eq!(scans, 1, "候補 4 件の 1 周で repo の走査は 1 回（母集団 4 件）");
+    clean(&[&repo, &state]);
+}
+
+/// (§5 手動の 1 周・印の直後) subcommand の無い `pipe dispatch` は 1 周を撃ってその結果を 1 行で返し、
+/// `first` / `release` の記録の直後にも同じ 1 周が撃たれる。`hold` は起こす側を増やさないので撃たない。
+#[test]
+fn pipe_terminal_dispatch_manual_turn_and_marks_fire_the_same_round() {
+    let (repo, state) = repo_with_state();
+    two_rows(&repo);
+    let bd = fake_bd(&state, &[issue("s2-toy.1", 2, "a"), issue("s2-toy.2", 0, "b")]);
+    let turn = |extra: &[&str]| -> Output {
+        let mut args: Vec<String> = vec!["dispatch".to_owned()];
+        args.extend(extra.iter().map(|found| (*found).to_owned()));
+        args.extend([
+            "--state-dir".to_owned(),
+            state.display().to_string(),
+            "--repo".to_owned(),
+            repo.display().to_string(),
+            "--rules".to_owned(),
+            dispatch_rules(&state),
+            "--bd".to_owned(),
+            bd.clone(),
+            // 起こした便の審査は**偽 PASS の lens**で通す（既定の lens は実 claude を起こす）。
+            "--lens".to_owned(),
+            review_lens_pass(&state),
+            // 実装役は偽の 1 行（器は runner の既定を持たない）。
+            "--runner".to_owned(),
+            "true".to_owned(),
+        ]);
+        let borrowed: Vec<&str> = args.iter().map(String::as_str).collect();
+        run_pipe(&borrowed)
+    };
+    let manual = turn(&[]);
+    assert_eq!(manual.status.code(), Some(i32::from(RC_OK)), "手動の 1 周は rc 0: {}", stderr_of(&manual));
+    assert_eq!(stdout_of(&manual).trim_end(), "dispatch=started:2,waiting:0", "交差しない 2 本は両方起こせる");
+    // **起こした効果**: 起こした 2 本ぶんの `RunCreated` が置き場に積まれる（構築点で止まらない・裁定 (A)）。
+    assert_eq!(created(&state, &["s2-toy.1", "s2-toy.2"], 2), 2, "起こした便の RunCreated が 2 件");
+    // `hold` は 1 周を撃たない（印の行だけ）。
+    let held = turn(&["hold", "s2-toy.1"]);
+    assert_eq!(stdout_of(&held).lines().count(), 1, "hold は印の行だけ: {}", stdout_of(&held));
+    assert!(!stdout_of(&held).contains("dispatch=started"), "hold は 1 周を撃たない");
+    // `release` は印を外した直後に 1 周を撃つ＝2 行目に結果が出る。**起こす本数は 0 でよい**
+    // （最初の 1 周で起こした 2 便が live で、同じ契約は自分の便と交差する）＝測るのは「撃たれたか」である。
+    let released = turn(&["release", "s2-toy.1"]);
+    assert_eq!(
+        stdout_of(&released).lines().last(),
+        Some("dispatch=started:0,waiting:2"),
+        "release の直後に 1 周（起こした 2 便と交差して 0 本）: {}",
+        stdout_of(&released)
+    );
+    assert_eq!(created(&state, &["s2-toy.1", "s2-toy.2"], 2), 2, "2 周目は便を増やさない");
+    // 台帳を読めない周は件数でなく理由を名乗る（0 件と融合しない・C10）。
+    let broken = script(&state.join("bd-broken2"), "exit 1\n");
+    let unmeasured = run_pipe(&[
+        "dispatch",
+        "--state-dir", &state.display().to_string(),
+        "--repo", &repo.display().to_string(),
+        "--rules", &dispatch_rules(&state),
+        "--bd", &broken,
+        "--runner", "true",
+    ]);
+    assert_eq!(stdout_of(&unmeasured).trim_end(), "dispatch=unmeasured reason=ledger", "読めない周は理由");
+    // **実装役の口が無い周は台帳も読まない**（起こせないと分かっている＝理由が別の値・C10）。
+    let no_runner = run_pipe(&[
+        "dispatch",
+        "--state-dir", &state.display().to_string(),
+        "--repo", &repo.display().to_string(),
+        "--rules", &dispatch_rules(&state),
+        "--bd", &bd,
+    ]);
+    assert_eq!(stdout_of(&no_runner).trim_end(), "dispatch=unmeasured reason=no-runner", "runner が無い周");
+    clean(&[&repo, &state]);
+}
+
+/// (§5 便の終端) `pipe stop` の終端の記帳の直後に列が 1 周撃たれ、**交差の解けた便が起こされる**
+/// （`RunCreated` が増える）。台帳を読めない周でも終端の rc は変わらない。
+#[test]
+fn pipe_terminal_dispatch_stop_starts_the_contract_whose_overlap_just_cleared() {
+    let (repo, state) = repo_with_state();
+    two_rows(&repo);
+    // 行 a を持つ live な便＝同じ行を指す候補と交差する。
+    let live = intake_bead(&repo, &state, &format!("{DESIGN_FILE}#a"), "s2-live");
+    let bd = fake_bd(&state, &[issue("s2-toy.1", 2, "a")]);
+    let blocked = ls(&repo, &state, &bd);
+    assert_eq!(reason_of(&blocked, "s2-toy.1"), format!("overlap:{live}/1"), "止める前は交差で待つ");
+    assert_eq!(count_of(&blocked), format!("{COUNT} total=1 ready=0"), "起こせる便は 0 本");
+    let terminal = |client: &str| -> Output {
+        run_pipe(&[
+            "stop", "--run", &live,
+            "--state-dir", &state.display().to_string(),
+            "--repo", &repo.display().to_string(),
+            "--rules", &dispatch_rules(&state),
+            "--bd", client,
+            "--lens", &review_lens_pass(&state),
+            "--runner", "true",
+        ])
+    };
+    let stopped = terminal(&bd);
+    assert_eq!(stopped.status.code(), Some(i32::from(RC_OK)), "stop は rc 0: {}", stderr_of(&stopped));
+    // **観測の面は増えない**（設計 §6）: 終端の stdout に列の行は出ず、効果だけが残る。
+    assert!(!stdout_of(&stopped).contains("dispatch="), "終端は列の行を出さない: {}", stdout_of(&stopped));
+    assert_eq!(created(&state, &["s2-toy.1"], 1), 1, "交差が解けた便が起こされる（RunCreated 1 件）");
+    clean(&[&repo, &state]);
+}
+
+/// (§5 便の終端) 終端の中の 1 周が**失敗しても終端の rc は変わらない**（台帳を読めない周）。
+#[test]
+fn pipe_terminal_dispatch_keeps_the_terminal_rc_when_the_round_cannot_measure() {
+    let (repo, state) = repo_with_state();
+    two_rows(&repo);
+    let live = intake_bead(&repo, &state, &format!("{DESIGN_FILE}#a"), "s2-live");
+    let broken = script(&state.join("bd-dead"), "exit 1\n");
+    let stopped = run_pipe(&[
+        "stop", "--run", &live,
+        "--state-dir", &state.display().to_string(),
+        "--repo", &repo.display().to_string(),
+        "--rules", &dispatch_rules(&state),
+        "--bd", &broken,
+        "--runner", "true",
+    ]);
+    assert_eq!(stopped.status.code(), Some(i32::from(RC_OK)), "読めない台帳でも stop は rc 0: {}", stderr_of(&stopped));
+    assert_eq!(created(&state, &["s2-toy.1"], 0), 0, "読めない周は 1 本も起こさない");
+    // 終端そのものは通っている（便は止まっている）＝1 周の失敗が終端を巻き込んでいない。
+    let again = run_pipe(&["stop", "--run", &live, "--state-dir", &state.display().to_string()]);
+    assert_ne!(again.status.code(), Some(i32::from(RC_OK)), "既に終端ゆえ 2 度目は断られる");
+    clean(&[&repo, &state]);
+}
+
+/// (§5 便の終端) `pipe run` の終端の 1 周は**その process 自身の道具**（`--rules` / `--lens` / `--runner`）で
+/// 便を起こす。driver は自分の道具を知っているので、列に渡し直さなくても起こせる。
+#[test]
+fn pipe_terminal_dispatch_run_uses_its_own_tools_for_the_round() {
+    let (repo, state) = repo_with_state();
+    two_rows(&repo);
+    // 台帳の候補は行 a。`pipe run` が起こすのは行 b（交差しない）＝終端の 1 周で行 a が起きる。
+    let bd = fake_bd(&state, &[issue("s2-toy.1", 2, "a")]);
+    let ran = run_pipe(&[
+        "run", "--design", &format!("{DESIGN_FILE}#b"), "--bead", "s2-own",
+        "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(),
+        "--rules", &dispatch_rules(&state),
+        "--bd", &bd,
+        "--lens", &review_lens_pass(&state),
+        "--runner", "true",
+    ]);
+    // `pipe run` 自体の rc は問わない（toy の runner は何もしないので後段で止まる）。測るのは**終端の 1 周**である。
+    assert!(!stdout_of(&ran).contains("dispatch="), "終端は列の行を出さない: {}", stdout_of(&ran));
+    assert_eq!(created(&state, &["s2-toy.1"], 1), 1, "自分の道具で台帳の候補 1 本を起こす");
+    clean(&[&repo, &state]);
+}
+
+/// (§5 便の終端 + §2 終端の便は列外) `pipe land` の終端の直後に列が 1 周撃たれ、**交差の外の候補が起こされる**
+/// 一方で、**着地した便の bead は起こし直されない**（`settled`）。契約の行を改訂して sha が動けば列に戻る。
+///
+/// 着地から台帳を閉じるまでの間、終端が来るたびに同じ契約が起こし直される穴（`s2-07l.366` の自己レビュー）を
+/// 両側で測る。母集団は `[DISPATCH-COUNT]` の `total=` で同時に出す。
+#[test]
+fn pipe_terminal_dispatch_land_starts_the_queue_without_restarting_the_landed_bead() {
+    let (repo, state) = repo_with_state();
+    two_rows(&repo);
+    let design_a = format!("{DESIGN_FILE}#a");
+    // 行 a の便を PASS の gate まで通す（bead は台帳の候補と同じ id にする）。
+    let landing = intake_bead(&repo, &state, &design_a, "s2-toy.1");
+    let spawned = run_pipe(&[
+        "spawn", "--run", &landing, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(),
+        "--runner", "echo x >> src/lib.rs && git add -A && git commit -q -m runner",
+    ]);
+    assert_eq!(spawned.status.code(), Some(i32::from(RC_OK)), "spawn は rc 0: {}", stderr_of(&spawned));
+    let lens = fake_lens(&state.join("gate-lens-ran"), &lens_verdict("PASS"));
+    let gated = gate_once(&repo, &state, &landing, Some(&lens));
+    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "gate は rc 0: {}", stderr_of(&gated));
+    // 台帳の候補は 2 件: 着地する bead（行 a）と、交差しない bead（行 b）。
+    let bd = fake_bd(&state, &[issue("s2-toy.1", 2, "a"), issue("s2-toy.2", 2, "b")]);
+    let landed = run_pipe(&[
+        "land", "--run", &landing, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(),
+        "--rules", &dispatch_rules(&state),
+        "--bd", &bd,
+        "--lens", &review_lens_pass(&state),
+        "--runner", "true",
+    ]);
+    assert_eq!(landed.status.code(), Some(i32::from(RC_OK)), "land は rc 0: {}", stderr_of(&landed));
+    // 終端の 1 周が撃たれた（行 b の候補が起きる）。
+    assert_eq!(created(&state, &["s2-toy.2"], 1), 1, "land の終端の直後に交差の外の 1 本が起きる");
+    // **着地した bead は起こし直されない**（RunCreated は着地した便の 1 件だけ）。
+    assert_eq!(created(&state, &["s2-toy.1"], 0), 1, "着地した bead の便は 1 件のまま（起こし直さない）");
+    let after = ls(&repo, &state, &bd);
+    let reason = reason_of(&after, "s2-toy.1");
+    assert!(reason.starts_with("settled:"), "着地した便の sha で列外: {}", stdout_of(&after));
+    assert!(reason.ends_with("/Landed"), "段は Landed: {reason}");
+    assert_eq!(count_of(&after), format!("{COUNT} total=2 ready=0"), "母集団 2 件・起こせる 0 本");
+    // **契約の行を改訂して sha が動けば列に戻る**（着地した便は塞ぎ続けない）。
+    write_design(
+        &repo,
+        &design_doc_rows(&[
+            row_fields("a", &["write-set", "done"], &[r#"write-set = ["src/lib.rs"]"#, r#"done = "改訂した""#]),
+            row_fields("b", &["write-set"], &[r#"write-set = ["src/b.rs"]"#]),
+        ]),
+    );
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "design-row-revised"]);
+    let revised = ls(&repo, &state, &bd);
+    assert_eq!(reason_of(&revised, "s2-toy.1"), "-", "sha が動けば列に戻る: {}", stdout_of(&revised));
+    clean(&[&repo, &state]);
+}
+
+/// (§5 起こす便へ渡す道具) 起こした子（`pipe run`）**自身も終端で 1 周撃つ**ので、列に渡した台帳 client も
+/// そのまま渡る。落とすと子の 1 周が既定の台帳（PATH の `bd`）を読み、1 hop で列と食い違う。
+///
+/// 測り方: 偽の台帳を「呼ばれたら印を置く」形にし、**列の 1 周（1 回）と子の 1 周（1 回）で 2 回**呼ばれる
+/// ことを見る。落ちていれば 1 回で止まる（子は PATH の `bd` を読む）。
+#[test]
+fn pipe_terminal_dispatch_hands_the_ledger_client_to_the_run_it_starts() {
+    let (repo, state) = repo_with_state();
+    two_rows(&repo);
+    let json = state.join("ledger-counted.json");
+    fs::write(&json, format!("[{}]\n", issue("s2-toy.2", 2, "b"))).expect("偽の台帳を書ける");
+    let calls = state.join("bd-calls.log");
+    let counted = script(
+        &state.join("bd-counted"),
+        &format!("printf 'x\\n' >> '{}'\ncat '{}'\n", calls.display(), json.display()),
+    );
+    let out = run_pipe(&[
+        "dispatch",
+        "--state-dir", &state.display().to_string(),
+        "--repo", &repo.display().to_string(),
+        "--rules", &dispatch_rules(&state),
+        "--bd", &counted,
+        "--lens", &review_lens_pass(&state),
+        "--runner", "true",
+    ]);
+    assert_eq!(stdout_of(&out).trim_end(), "dispatch=started:1,waiting:0", "1 本起こす: {}", stderr_of(&out));
+    assert_eq!(created(&state, &["s2-toy.2"], 1), 1, "起こした便の RunCreated");
+    // 子の終端の 1 周が**同じ台帳**を読む＝印が 2 つ（列の 1 周 + 子の 1 周）。
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let count = || fs::read_to_string(&calls).map(|text| text.lines().count()).unwrap_or_default();
+    while count() < 2 && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert_eq!(count(), 2, "列の 1 周と子の 1 周で偽の台帳が 2 回呼ばれる（母集団 = 1 周 × 2 段）");
+    clean(&[&repo, &state]);
+}
+
+/// (§5 二重起動) **契機が重なっても同じ bead は 1 本しか起きない**（SRS AC38・母集団 = 起動試行 2 回）。
+///
+/// 1 周は lock を取らない（子を起こす間じゅう着地の列と同じ lock を握らないため）ので、同時に来た 2 つの
+/// 契機は同じ候補をどちらも起こそうとする。落とすのは**受付**である——同じ秒なら run id の衝突
+/// （`DuplicateRun`）、秒を跨げば先の便と write-set が交差（`WriteSetOverlap`）。
+#[test]
+fn pipe_terminal_dispatch_two_overlapping_rounds_start_the_bead_once() {
+    let (repo, state) = repo_with_state();
+    two_rows(&repo);
+    let bd = fake_bd(&state, &[issue("s2-toy.2", 2, "b")]);
+    let args: Vec<String> = [
+        "pipe", "dispatch",
+        "--state-dir", &state.display().to_string(),
+        "--repo", &repo.display().to_string(),
+        "--rules", &dispatch_rules(&state),
+        "--bd", &bd,
+        "--lens", &review_lens_pass(&state),
+        "--runner", "true",
+    ]
+    .iter()
+    .map(|found| (*found).to_owned())
+    .collect();
+    // **同時に撃つ**（片方を待ってから撃つと 2 本目は交差で落ちるだけで、重なりを測れない）。
+    let spawned: Vec<_> = (0..2)
+        .filter_map(|_| Command::new(super::bin()).args(&args).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().ok())
+        .collect();
+    assert_eq!(spawned.len(), 2, "2 つの契機を同時に撃つ");
+    let started: usize = spawned
+        .into_iter()
+        .filter_map(|child| child.wait_with_output().ok())
+        .filter(|out| stdout_of(out).contains("dispatch=started:1"))
+        .count();
+    assert!(started >= 1, "少なくとも一方の 1 周は起こす側に立つ（母集団 2 回）");
+    assert_eq!(created(&state, &["s2-toy.2"], 1), 1, "起動試行 2 回でも便は 1 本（母集団 2 回）");
     clean(&[&repo, &state]);
 }

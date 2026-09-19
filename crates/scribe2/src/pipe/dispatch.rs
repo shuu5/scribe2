@@ -11,20 +11,22 @@
 //! 台帳を読めない周は列を空と読まず [`Unmeasured`] で 1 本も起こさない（`0 件`と融合しない・C10・NFR4）。
 
 use super::admission::{self, Sizes};
-use super::cli::{ceiling_of, crossings, generated, int_row, judge, Denial, Material, Rows};
+use super::cli::{crossings, generated, int_row, judge, live, Denial, Material, Materials};
 use super::contract::Contract;
 use super::refuse::overlaps;
-use super::review::ReviewCheck;
 use super::table::{self, Pointer};
 use super::{contract_path, current, git_bytes};
 use crate::cli_outcome::Outcome;
 use crate::fleet::store;
-use crate::fleet::{Event, EventKind, Mark};
+use crate::fleet::{Event, EventKind, Mark, Stage};
+use crate::name::NAME;
 use crate::rules::manifest::Manifest;
 use crate::seat::host_slots_dir;
 use crate::seat::ledger::{self, Dep, Issue};
 use std::collections::{BTreeMap, BTreeSet};
+use std::os::unix::process::CommandExt;
 use std::path::Path;
+use std::process::{Command, Stdio};
 
 /// `intake:memo` の bead（契約が未確定＝列に載せない・`.beads/PRIME.md` R3）。
 const MEMO_LABEL: &str = "intake:memo";
@@ -50,9 +52,12 @@ const ROW_RESERVE_MB: &str = "host.reserve_memory_mb";
 /// 枠が空いていない周の理由の字面。
 const SLOT: &str = "slot";
 
+/// 子 process を起こせなかった周の理由の字面。
+const SPAWN: &str = "spawn";
+
+
 /// [`WaitReason`] の全 variant の名（宣言順・`enum-slices` が集合完全性を測る）。
-pub const WAIT_REASONS: &[&str] =
-    &["dependency", "overlap", "admission", "hold", "review-failed", "no-design-pointer"];
+pub const WAIT_REASONS: &[&str] = &["dependency", "overlap", "admission", "hold", "settled", "no-design-pointer"];
 
 /// 列に載ったのに起こさない理由（**閉じた型**・設計 §3 の表）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -79,10 +84,17 @@ pub enum WaitReason {
         /// 印を付けた event の ts。
         since: String,
     },
-    /// 同じ契約で審査 FAIL / INCONCLUSIVE に終わった便が在る（契約 file の sha が変わっていない）。
-    ReviewFailed {
-        /// 審査に落ちた便の契約 file の sha。
+    /// 同じ契約 file の sha で**終端に着いた**便が在る（`Landed` / `Failed` / `Stopped`、審査や gate の
+    /// 判定で終端になった段も含む）。契約が改訂されて sha が動けば列に戻る。
+    ///
+    /// `s2-07l.366` で「審査 FAIL の便」から広げた: 便が終端に着いても bead は台帳で `open` のまま
+    /// （器は台帳に書かない・C15）で live な便も無いので、終端が来るたびに同じ契約が起こし直される
+    /// （着地から close までの無限再起動）。
+    Settled {
+        /// 終端に着いた便の契約 file の sha。
         sha: String,
+        /// その便の段（replay が見た最新）。
+        stage: Stage,
     },
     /// acceptance に設計 pointer の行が無い。
     NoDesignPointer,
@@ -96,7 +108,7 @@ impl WaitReason {
             Self::Overlap { .. } => "overlap",
             Self::Admission { .. } => "admission",
             Self::Hold { .. } => "hold",
-            Self::ReviewFailed { .. } => "review-failed",
+            Self::Settled { .. } => "settled",
             Self::NoDesignPointer => "no-design-pointer",
         }
     }
@@ -109,7 +121,7 @@ impl WaitReason {
             Self::Overlap { ref with, files } => format!("{name}:{with}/{files}"),
             Self::Admission { reason } => format!("{name}:{reason}"),
             Self::Hold { ref since } => format!("{name}:{since}"),
-            Self::ReviewFailed { ref sha } => format!("{name}:{sha}"),
+            Self::Settled { ref sha, stage } => format!("{name}:{sha}/{}", stage.as_str()),
             Self::NoDesignPointer => name.to_owned(),
         }
     }
@@ -135,6 +147,8 @@ pub enum Unmeasured {
     NoRule,
     /// 台帳の子 process が起動できない・rc 非 0・JSON 不能・待ち上限超過。
     Ledger,
+    /// 実装役の口（`--runner`）が無い＝起こせないので列を測らない（見る口は `dispatch ls`）。
+    NoRunner,
 }
 
 impl Unmeasured {
@@ -143,11 +157,44 @@ impl Unmeasured {
         match self {
             Self::NoRule => "no-rule",
             Self::Ledger => "ledger",
+            Self::NoRunner => "no-runner",
         }
     }
 }
 
-/// 起動の構築点（`pipe run` の引数まで組んだ 1 件・**撃つのは契機の便**〔設計 §5・契約 (b)〕）。
+/// `pipe` の subcommand の書き出し（子 process の argv の先頭）。
+const PIPE: &str = "pipe";
+
+/// 起こす（通る便だけ `pipe run` を**子 process で**起こす・設計 §3・§5・契約表の行 b）。
+///
+/// **待たない**: 子の完了を待つと終端が次の便の全行程を待つことになる（`pipe run` は intake → 審査 →
+/// spawn → gate → land の driver である）。新しい process group の leader にするのは [`super::spawn`] と
+/// 同じ理由で、終端の process が畳まれても起こした便が道連れにならないためである。
+///
+/// 起こせなかった周は `false` を返して**その便を起こさなかった事実だけ**を残す（終端の rc は呼び手が
+/// 変えない・次の契機で拾う・§5）。判定は turn の 1 回だが、`pipe run` 側の受付は外さない（二重に守る・
+/// planner 裁定 2026-09-19 の条件 (2)）。
+fn start(launch: &Launch) -> bool {
+    Command::new(myself())
+        .arg(PIPE)
+        .args(&launch.argv)
+        .process_group(0)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .is_ok()
+}
+
+/// 自分の binary（`argv[0]`）。PATH で呼ばれた周は同じ名で子も PATH から解ける。
+///
+/// **`current_exe` は使わない**——`/proc/self/exe` を読むのは「器は env も HOME も読まない」（C2.2）の
+/// 外側で、xtask の門が違反として数える。`argv[0]` は**呼ばれ方そのもの**なので、同じ呼ばれ方で子を起こす。
+fn myself() -> String {
+    std::env::args().next().unwrap_or_else(|| NAME.to_owned())
+}
+
+/// 起動の構築点（`pipe run` の引数まで組んだ 1 件・[`start`] がそのまま子 process へ渡す）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Launch {
     /// bead id。
@@ -176,8 +223,18 @@ pub struct Input<'a> {
     pub repo: &'a Path,
     /// 規則の値。
     pub manifest: &'a Manifest,
-    /// 台帳 client（`--bd` か [`ledger::DEFAULT_BD`]）。
+    /// 台帳 client（`--bd` か [`ledger::DEFAULT_BD`]）。列自身が読むときの値。
     pub bd: &'a str,
+    /// `--bd` が**引数で名指されていた**か（起こす便へ渡すのはこちら・既定は渡さない＝便の側が持つ）。
+    pub bd_flag: Option<&'a str>,
+    /// 規則の写しの path（`--rules`）。起こす便へ**そのまま渡す**（列と便が同じ規則で動く）。
+    pub rules: Option<&'a str>,
+    /// 審査の lens の口（`--lens`）。渡された周だけ起こす便へそのまま渡す（既定は便の側が持つ）。
+    pub lens: Option<&'a str>,
+    /// 実装役の口（`--runner`）。**無ければ 1 本も起こさない**——`pipe run` は `--runner` を要り、
+    /// 器は既定を持たない（宣言にも rules 行にも無い・2026-09-19 の実測）。列が勝手な既定を作ると、
+    /// 「何を起こすか」が契約の外で決まる（C5 / C1）。
+    pub runner: Option<&'a str>,
 }
 
 /// 列を 1 周する（**判定は器の既存の関数・記帳はしない**）。
@@ -194,7 +251,7 @@ pub fn turn(input: &Input<'_>) -> Turn {
     let ledger = Ledger {
         marks: marks_of(&read_events(input.state_dir)),
         closed: issues.iter().filter(|issue| issue.status == CLOSED).map(|issue| issue.id.as_str()).collect(),
-        ceiling: ceiling_of(input.manifest),
+        materials: Materials::of(input.repo, input.manifest),
     };
     let mut ready: BTreeMap<String, (Pointer, Contract)> = BTreeMap::new();
     let mut candidates: Vec<Candidate> = Vec::new();
@@ -206,7 +263,7 @@ pub fn turn(input: &Input<'_>) -> Turn {
         candidates.push(candidate);
     }
     // **順序は [`order`] の 1 本だけが決める**（生産経路も歯も同じ関数を通る・C2）。
-    settle(input, order(candidates), &ready)
+    settle(input, order(candidates), &ready, ledger.materials.as_ref().ok())
 }
 
 /// 1 周ぶん固定な台帳側の材料（候補ごとに読み直さない）。
@@ -215,8 +272,32 @@ struct Ledger<'a> {
     marks: BTreeMap<String, (Mark, String)>,
     /// 閉じた bead の id（依存が閉じたかを同じ一覧の中で引く）。
     closed: BTreeSet<&'a str>,
-    /// 契約表の検査の上限（読めない周は断りの名を全候補が受ける）。
-    ceiling: Result<Rows, Denial>,
+    /// 1 周ぶんの repo の材料（**読みは 1 周に 1 回**・設計 §5・読めない周は断りの名を全候補が受ける）。
+    materials: Result<Materials, Denial>,
+}
+
+/// 列を 1 周して**起こす**（契機の口＝終端の直後・手動の 1 周・印の直後・設計 §5）。
+///
+/// [`turn`] との違いは**起こすかどうかだけ**である（判定は同じ 1 本・C2）。観測の口（`dispatch ls`）は
+/// [`turn`] を撃つ＝**見るだけでは 1 本も起こらない**（§6）。起こせなかった便は起こした数に数えず、
+/// 理由つきで待ちに残す（終端の rc は呼び手が変えない・次の契機で拾う・C10）。
+pub fn fire(input: &Input<'_>) -> Turn {
+    // **実装役の口が無い周は列を測らない**（`pipe run` は `--runner` を要り、器は既定を持たない）。
+    // 起こせないと分かっている周に台帳の子 process を撃つと、便の終端ごとに読みが 1 回乗る（実測: e2e
+    // 全体が 21 秒 → 111 秒）。測っていないので `0 件`とも言わない（C10）——列を見る口は `dispatch ls`。
+    if input.runner.is_none() {
+        return unmeasured(Unmeasured::NoRunner);
+    }
+    let mut turn = turn(input);
+    let failed: Vec<String> =
+        turn.launches.iter().filter(|launch| !start(launch)).map(|launch| launch.bead.clone()).collect();
+    turn.launches.retain(|launch| !failed.contains(&launch.bead));
+    for candidate in &mut turn.candidates {
+        if failed.contains(&candidate.bead) {
+            candidate.reason = Some(WaitReason::Admission { reason: SPAWN });
+        }
+    }
+    turn
 }
 
 /// 列の順序を決める 1 関数（**pure**・設計 §2「順序」）: (1) 介入 `first` (2) 台帳の `priority`（P0 → P4）
@@ -274,13 +355,13 @@ fn entry_of(input: &Input<'_>, issue: &Issue, ledger: &Ledger<'_>) -> (Candidate
     let Some(pointer) = pointer_of(&issue.acceptance) else {
         return wait(WaitReason::NoDesignPointer);
     };
-    let ceiling = match &ledger.ceiling {
-        Ok(found) => found.borrow(),
+    let materials = match &ledger.materials {
+        Ok(found) => found,
         Err(denial) => return wait(WaitReason::Admission { reason: denial.name }),
     };
-    let contract = match generated(input.repo, &pointer, &ceiling) {
-        Ok((found, body)) => match failed_review(input, &issue.id, &body) {
-            Some(sha) => return wait(WaitReason::ReviewFailed { sha }),
+    let contract = match generated(input.repo, &pointer, materials) {
+        Ok((found, body)) => match settled(input, &issue.id, &body) {
+            Some((sha, stage)) => return wait(WaitReason::Settled { sha, stage }),
             None => found,
         },
         Err(denial) => return wait(WaitReason::Admission { reason: denial.name }),
@@ -292,17 +373,22 @@ fn entry_of(input: &Input<'_>, issue: &Issue, ledger: &Ledger<'_>) -> (Candidate
 ///
 /// **1 周で起こした便は次の候補の交差の相手に入る**（設計 §3）: 起こした契約の write-set を live 側に足して
 /// 次を測る（同じ [`overlaps`] の 1 実装で測る・C2）。
-fn settle(input: &Input<'_>, candidates: Vec<Candidate>, ready: &BTreeMap<String, (Pointer, Contract)>) -> Turn {
-    let room = Room {
-        tracked: table::tracked_files(input.repo).unwrap_or_default(),
+fn settle(
+    input: &Input<'_>,
+    candidates: Vec<Candidate>,
+    ready: &BTreeMap<String, (Pointer, Contract)>,
+    materials: Option<&Materials>,
+) -> Turn {
+    let room = materials.map(|found| Room {
+        materials: found,
         sizes: sizes_of(input.manifest),
         slots: host_slots_dir(input.state_dir),
-    };
+    });
     let mut started: Vec<(String, Vec<String>)> = Vec::new();
     let mut turn = Turn { candidates: Vec::new(), launches: Vec::new(), unmeasured: None };
     for mut candidate in candidates {
-        if let Some((pointer, contract)) = ready.get(&candidate.bead) {
-            match blocker(input, contract, &room, &started) {
+        if let (Some((pointer, contract)), Some(room)) = (ready.get(&candidate.bead), room.as_ref()) {
+            match blocker(input, contract, room, &started) {
                 Some(reason) => candidate.reason = Some(reason),
                 None => {
                     started.push((candidate.bead.clone(), contract.write_set.clone()));
@@ -315,10 +401,10 @@ fn settle(input: &Input<'_>, candidates: Vec<Candidate>, ready: &BTreeMap<String
     turn
 }
 
-/// 交差と枠を測るのに 1 周ぶん固定な材料（候補ごとに読み直さない）。
-struct Room {
-    /// base の tracked file（交差の dir の展開が読む）。
-    tracked: Vec<String>,
+/// 交差と枠を測るのに 1 周ぶん固定な材料（候補ごとに読み直さない・設計 §5）。
+struct Room<'a> {
+    /// base の走査（tracked / sources / snapshots / 契約表の facts）。
+    materials: &'a Materials,
     /// 受付の枠の式の 2 線。
     sizes: Sizes,
     /// host の枠の札の置き場。
@@ -329,16 +415,17 @@ struct Room {
 fn blocker(
     input: &Input<'_>,
     contract: &Contract,
-    room: &Room,
+    room: &Room<'_>,
     started: &[(String, Vec<String>)],
 ) -> Option<WaitReason> {
+    let tracked = room.materials.tracked();
     for (bead, write_set) in started {
-        let crossed = overlaps(&contract.write_set, write_set, &room.tracked);
+        let crossed = overlaps(&contract.write_set, write_set, tracked);
         if !crossed.is_empty() {
             return Some(WaitReason::Overlap { with: bead.clone(), files: crossed.len() });
         }
     }
-    match crossings(input.state_dir, contract, &room.tracked) {
+    match crossings(input.state_dir, contract, tracked) {
         Ok(found) => {
             if let Some((run, files)) = found.runs.iter().find(|(_, files)| !files.is_empty()) {
                 return Some(WaitReason::Overlap { with: run.clone(), files: files.len() });
@@ -348,8 +435,14 @@ fn blocker(
     }
     // 余地は受付の判定をそのまま撃つ。置き場は渡さない——交差は上で [`crossings`] が測り済みで、
     // 同じ周に 2 度測ると store を 2 度読むだけになる（重複 run の検査も run を作らない列には要らない）。
-    let material =
-        Material { repo: input.repo, manifest: input.manifest, contract, state_dir: None, bead: "" };
+    let material = Material {
+        repo: input.repo,
+        manifest: input.manifest,
+        contract,
+        state_dir: None,
+        bead: "",
+        materials: room.materials,
+    };
     if let Some(denial) = judge(&material).denials.first() {
         return Some(WaitReason::Admission { reason: denial.name });
     }
@@ -361,7 +454,7 @@ fn blocker(
 
 /// 起動の構築点（`pipe run` の引数を組む・**撃たない**）。
 fn launch_of(input: &Input<'_>, bead: &str, pointer: &Pointer) -> Launch {
-    let argv = vec![
+    let mut argv = vec![
         "run".to_owned(),
         "--design".to_owned(),
         format!("{}#{}", pointer.path, pointer.id),
@@ -372,6 +465,17 @@ fn launch_of(input: &Input<'_>, bead: &str, pointer: &Pointer) -> Launch {
         "--state-dir".to_owned(),
         input.state_dir.display().to_string(),
     ];
+    // 列に渡された道具は起こす便へ**そのまま全部**渡す＝列と便が同じ道具で動く。渡されていない周は
+    // 何も足さない（既定は便の側が持つ）。
+    //
+    // **台帳 client（`--bd`）も渡す**: 起こした子（`pipe run`）自身も終端で 1 周撃つので、落とすと
+    // 子の 1 周が既定の台帳を読み、**1 hop で列の名指した台帳と食い違う**（列は偽の台帳、子は PATH の
+    // 実 `bd`）。道具の受け渡しは全部か皆無かで、1 つだけ落とすと「同じ道具で動く」が静かに破れる。
+    for (name, value) in
+        [("--rules", input.rules), ("--lens", input.lens), ("--runner", input.runner), ("--bd", input.bd_flag)]
+    {
+        argv.extend(value.map(|found| [name.to_owned(), found.to_owned()]).into_iter().flatten());
+    }
     Launch { bead: bead.to_owned(), argv }
 }
 
@@ -389,23 +493,25 @@ fn pointer_of(acceptance: &str) -> Option<Pointer> {
     table::parse_pointer(line.trim()).ok()
 }
 
-/// 同じ契約で審査に落ちた便が在れば、その便の契約 file の sha（設計 §2「審査 FAIL の列外」）。
+/// 同じ契約 file の sha で**終端に着いた**便が在れば、その便の sha と段（設計 §2「終端の便は列外」）。
 ///
-/// 突き合わせるのは**便の写しの中身**である（sha は名札）。`git hash-object` を撃てない周は sha を測れない
-/// ので列外にしない（測れないを「落ちた」に読み替えない・C10）。
-fn failed_review(input: &Input<'_>, bead: &str, body: &str) -> Option<String> {
+/// 突き合わせるのは**便の写しの中身**である（sha は名札）。終端かは受付と同じ 1 本（[`live`]）で判じ、
+/// 測れない周（`None`）はここで外さない——その便は交差の検査が `WriteSetUnreadable` で断る側に倒す。
+/// `git hash-object` を撃てない周は sha を測れないので列外にしない（`generated` が base を読めている＝
+/// git は撃てているので、実際には到達しない）。
+fn settled(input: &Input<'_>, bead: &str, body: &str) -> Option<(String, Stage)> {
     let state = current(input.state_dir).ok()?;
     // **直前の便から見る**（run id は `<bead>-<UTC の秒>` ＝ id の昇順が時系列なので、逆順が新しい側）。
-    // 同じ契約 file を持つ最初の 1 本だけを見る——古い便の FAIL は、その後 PASS した同じ契約を塞がない。
-    let (id, path) = state.runs.iter().rev().filter(|(_, run)| run.bead == bead).find_map(|(id, _)| {
+    // 同じ契約 file を持つ最初の 1 本だけを見る——古い便の終端は、その後起こし直した同じ契約を塞がない。
+    let (id, stage, path) = state.runs.iter().rev().filter(|(_, run)| run.bead == bead).find_map(|(id, run)| {
         let path = contract_path(input.state_dir, id);
-        std::fs::read_to_string(&path).is_ok_and(|found| found == body).then_some((id, path))
+        std::fs::read_to_string(&path).is_ok_and(|found| found == body).then_some((id, run.stage, path))
     })?;
-    if !matches!(ReviewCheck::judge(input.state_dir, id), ReviewCheck::Stopped(_)) {
+    if live(input.state_dir, id, stage) != Some(false) {
         return None;
     }
     let sha = git_bytes(input.repo, &["hash-object", "--", &path.display().to_string()])?;
-    String::from_utf8(sha).ok().map(|found| found.trim().to_owned())
+    String::from_utf8(sha).ok().map(|found| (found.trim().to_owned(), stage))
 }
 
 /// 受付の枠の式の 2 線（読めない行は 0＝[`admission::has_room`] が `Free::Unmeasured` で待たせない側に倒す）。
@@ -458,6 +564,20 @@ pub fn usage() -> String {
     )
 }
 
+/// 列の 1 周の結果の 1 行（終端と手動の 1 周が stdout に足す・設計 §5）。
+///
+/// **0 件と「測れない」を融合しない**（C10）: 台帳を読めない周は件数でなく理由を名乗る。
+pub fn line(turn: &Turn) -> String {
+    match turn.unmeasured {
+        Some(reason) => format!("dispatch=unmeasured reason={}", reason.as_str()),
+        None => format!(
+            "dispatch=started:{},waiting:{}",
+            turn.launches.len(),
+            turn.candidates.len().saturating_sub(turn.launches.len())
+        ),
+    }
+}
+
 /// 列の 1 周を描く（`dispatch ls`・**観測の面はこの 1 口だけである**・設計 §6）。
 pub fn render(turn: &Turn) -> Outcome {
     if let Some(reason) = turn.unmeasured {
@@ -493,7 +613,7 @@ pub fn mark(state_dir: &Path, bead: &str, mark: Mark, policy: store::LockPolicy)
 #[cfg(test)]
 mod tests {
     use super::{digits_of, marks_of, order, Candidate, WaitReason, WAIT_REASONS};
-    use crate::fleet::{Event, EventKind, Mark, SCHEMA};
+    use crate::fleet::{Event, EventKind, Mark, Stage, SCHEMA};
 
     /// 候補 1 件（印と priority だけを呼び手が選ぶ）。
     fn candidate(bead: &str, priority: Option<u64>, mark: Option<Mark>) -> Candidate {
@@ -574,7 +694,7 @@ mod tests {
             WaitReason::Overlap { with: "r1".to_owned(), files: 2 },
             WaitReason::Admission { reason: "cap-headroom" },
             WaitReason::Hold { since: "t1".to_owned() },
-            WaitReason::ReviewFailed { sha: "abc".to_owned() },
+            WaitReason::Settled { sha: "abc".to_owned(), stage: Stage::Landed },
             WaitReason::NoDesignPointer,
         ];
         let names: Vec<&str> = listed.iter().map(WaitReason::as_str).collect();
@@ -587,7 +707,7 @@ mod tests {
                 "overlap:r1/2",
                 "admission:cap-headroom",
                 "hold:t1",
-                "review-failed:abc",
+                "settled:abc/Landed",
                 "no-design-pointer",
             ],
             "値を持つ 5 件は値も描く"
