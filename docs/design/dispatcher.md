@@ -14,7 +14,7 @@
 ## 2. 列の入力と順序
 
 - **入力** = 台帳の open な bead のうち「依存が全部 closed ∧ acceptance が非空 ∧ `intake:memo` の label が無い ∧ acceptance に設計 pointer の行 `design = docs/design/<題>.md#<id>` が在る ∧ **同じ契約 file の sha で終端に着いた便が無い**」もの（.209 の `--design` と同じ字面・pointer の無い便は理由 `NoDesignPointer`・直前の便が終端〔`Landed` / `Failed` / `Stopped`、および審査や gate の判定で終端になった段〕で終わり契約 file の sha が変わっていない便は `Settled { sha, stage }`＝既存の event log（replay の段）と run dir の契約 file の sha から導く・終端かの判定は受付と同じ 1 本・新しい event kind は足さない。列外の便も `dispatch ls` には理由付きで出す＝planner が直すべき契約が見える）。
-- **終端の便を列外にするのは無限再起動を塞ぐためである**（`s2-07l.366`）: 便が終端に着くと live でなくなって交差が消えるが、bead は台帳で `open` のまま（器は台帳に書かない・C15）なので、終端が来るたびに同じ契約が起こし直される（着地から close までの間ずっと）。契約が改訂されて sha が動けば列に戻る＝「直すまで起こさない」で `Landed`（済んでいる）・`Failed`（契約を直すまで再試行しない）・`Stopped`（人が止めた）のどれも筋が通る。台帳の読みは席の指示文の `{ledger}` と同じ子 process と同じ関数（`read_ledger`・`bd --readonly list --limit 0 --json`・待ち上限は rules 行 `seat.ledger_timeout_s`・置き場は `seat/ledger.rs`）を共用し、読めない周は列を空と読まず `unmeasured` で止まる（NFR4・C10）。
+- **終端の便を列外にするのは無限再起動を塞ぐためである**（`s2-07l.366`）: 便が終端に着くと live でなくなって交差が消えるが、bead は台帳で `open` のまま（器は台帳に書かない・C15）なので、終端が来るたびに同じ契約が起こし直される（着地から close までの間ずっと）。契約が改訂されて sha が動けば列に戻る＝「直すまで起こさない」で `Landed`（済んでいる）・`Failed`（契約を直すまで再試行しない）・`Stopped`（人が止めた）のどれも筋が通る。契約の字が正しいのに器の側の理由で終端に着いた便（実装役の起動の失敗など）を、字を変えずに列へ戻す口は §12（`release` の印）。台帳の読みは席の指示文の `{ledger}` と同じ子 process と同じ関数（`read_ledger`・`bd --readonly list --limit 0 --json`・待ち上限は rules 行 `seat.ledger_timeout_s`・置き場は `seat/ledger.rs`）を共用し、読めない周は列を空と読まず `unmeasured` で止まる（NFR4・C10）。
 - **審査の時点 = `pipe run` の Reviewed の段のまま**（[contract-source.md](./contract-source.md) §4・契約 (c) = s2-07l.241）。「契約が出来た直後に審査し verdict を sha に紐づける」旧案（user 裁定 2026-09-15 13:4xZ・旧 (r)・`ContractReviewed`）は ADR-0045 §2 の後は持たない: 契約は設計 doc の行 1 つになり（[contract-source.md](./contract-source.md) §2「台帳の bead」・`s2-07l.209`）本文の不備は CI の `contracts check` が先に落とすので、審査の材料は起動の時点で揃う。FAIL の便が列を塞ぐ形は「同じ sha で審査 FAIL に終わった便は列外」（上の入力の条件）で塞ぎ、契約の改訂（設計 doc の PR）で sha が変わればまた列に入る。新しい event kind・審査を飛ばす flag は作らない（C2・C16・C17.2）。
 - **順序** = 1 関数 `order`（行の列 → 候補 `Candidate` の列）: (1) 介入 `first` の便 (2) 台帳の `priority`（P0 → P4）(3) 起票順（id の数字）。同順は起票順。**散文の順序を持たない**（憲法 C2）。
 - **hold** の便は列に載るが起こさない（理由 = `Hold`）。
@@ -38,7 +38,7 @@
 
 ## 4. 介入の口（planner の typed な印）
 
-`<NAME> pipe dispatch first <bead>` / `hold <bead>` / `release <bead>`。印は state dir の列の記録（event log の 1 kind `DispatchMark { bead, mark: First | Hold | Release }`＝`run` を持たない行・`mark` は `Event` の typed な field で、自由文の `detail` を判定入力にしない〔C3.3〕）で、`dispatch ls` に出る（退避物の復元の DATA に出す案は §6 のとおり超過した）。**打ち手の名（`by`）は持たない**（実装 `s2-07l.345`）: 口は権能なし（§5・ADR-0045 §2 (1)）で誰が撃っても同じ印になり、器は env も HOME も読まない（C2.2）ので、正直に書ける出所が無い。user の直命「最優先」の対は `first`（planner が打つ・逐語は台帳に残る）。印は台帳の priority を書き換えない（台帳は task と裁定・憲法 C15）。
+`<NAME> pipe dispatch first <bead>` / `hold <bead>` / `release <bead>`。印は state dir の列の記録（event log の 1 kind `DispatchMark { bead, mark: First | Hold | Release }`＝`run` を持たない行・`mark` は `Event` の typed な field で、自由文の `detail` を判定入力にしない〔C3.3〕）で、`dispatch ls` に出る（退避物の復元の DATA に出す案は §6 のとおり超過した）。**打ち手の名（`by`）は持たない**（実装 `s2-07l.345`）: 口は権能なし（§5・ADR-0045 §2 (1)）で誰が撃っても同じ印になり、器は env も HOME も読まない（C2.2）ので、正直に書ける出所が無い。user の直命「最優先」の対は `first`（planner が打つ・逐語は台帳に残る）。印は台帳の priority を書き換えない（台帳は task と裁定・憲法 C15）。`release` は `hold` を外すだけでなく、終端に着いた便の列外（§2 の `Settled`）も 1 回だけ外す（§12）。
 
 ## 5. 契機（便の終端と手動の 1 周・tick は無い）
 
@@ -85,8 +85,10 @@ dispatcher は「起こす」側で行為を止める判定を持たない（起
 - 便の自走（行 (e)・`pipe_dispatch_drive_` 接頭辞）: `--drive` を持つ `pipe run` は `run_all` の 1 process の連鎖（intake → 審査 → spawn → gate → land）で `Landed` に着き record は `drive=settled`（`resumed:0`）・`--drive` を持つ `pipe resume` は段ごとの終端の 1 周が子を 1 本ずつ継いで人の手なしに `Landed` まで通る（`Intake → Reviewed → Spawned → Implemented → Gated → Landed` の実測・母集団 = 段の遷移の数・渡さない理由は閉じた値〔待ち / 終端 / 前進なし / 測れない〕で record に載る＝測れなかった周を終端に読み替えない・C10）・`--drive` の無い run / resume は 1 段で止まる（既存の歯は 1 本も変えない＝母集団 205 本の diff 0）・`Blocked` の便と段の動かなかった周は渡さず理由が record に載る・列の起こし直しが起こす resume は `--drive` を持ち、殺した driver の便が `Landed` まで通る・段の前進の pure fn（in-file・前進 / 同じ段 / 後退の 3 形）・usage の外形 snapshot が更新される。
 - 診断と結合（行 (g)・`s2-07l.487`・歯だけの便）: dispatch の歯の assert の文は落ちた周の rc・stdout・stderr を写す（`s2-07l.486` の merge 後の main の CI で「印の直後の 1 周」の行が無い落ち方をし、rc も stderr も写っておらず原因が測れなかった・同じ sha の再走は緑・A/B は `.486` の前後とも 0/20）。印の直後の 1 周は、手動の 1 周で起こした子 process の状態に依存しない台帳（起こせる候補が 0 の列・`RunCreated` 0・子 process 0）で測り、起こした効果は別の歯が測る（子が走っている最中に印を打つ形は、子の記帳との lock の競合で印の記帳が `fleet.lock_retry_ms` を超えうる＝歯が器の待ち時間に依存する）。
 - 終端の便の列外: 直前の便が終端で終わった契約は同じ sha では `Settled` で列外、契約 file の sha が変わると列に戻る（偽 lens の verdict と run dir の fixture・着地した便を起こし直さない側も同じ 1 本で測る）。
+- 列へ戻す印（行 (h)・`pipe_dispatch_release_requeues_` 接頭辞）: `Failed` で終端した便の bead は `Settled` で列外だが、その後の `release` で同じ sha のまま列に戻り（`dispatch ls` の reason が `-`）、起こし直した便が同じ sha でまた終端に着くと再び `Settled`（印は 1 回しか効かない）・終端より**前**の `release` は効かない・`Landed` の便と審査 FAIL の便は `release` の後も `Settled` のまま（母集団 = 終端の段の種類）。
+- 起動の失敗の理由と repo の名指し（行 (i)・`pipe_spawn_runner_stderr_` と `pipe_repo_relative_` 接頭辞・置き場は spawn の歯の file）: stderr に 1 行書いて rc 2 で落ちる偽 runner の便が `Failed` に着いた後、run dir の stderr の log にその 1 行が見出し付きで残り、呼び手の stderr にも同じ行が出る・stderr が空の周は file を作らない・`--repo` を相対 path で渡した `pipe run` が絶対 path で渡した周と同じ worktree の場所と同じ段に着く。
 
-## 9. 契約（5 便・(a) → (b) → (d) → (g) → (e)。(r) と (c) は超過）
+## 9. 契約（7 便・(a) → (b) → (d) → (g) → (e)、その後に (h) と (i)。(r) と (c) は超過）
 
 - **(a)** `pipe dispatch` の本体: 列の導出（台帳の list + acceptance の設計 pointer + 審査 FAIL の列外）・順序の 1 関数・起動条件（intake の判定関数の再利用・可視性の変更）・`first / hold / release` の印（event kind 1 つ `DispatchMark` + `Event` の typed な field）・`dispatch ls`。依存: s2-07l.209 Landed。
 - **(r)** 審査の時点（契約が出来た直後の審査・`ContractReviewed`）は**超過した**（ADR-0045 §2 の後の形・§2「審査の時点」・`s2-07l.368` は close）。審査は `pipe run` の Reviewed の段のまま。
@@ -95,6 +97,8 @@ dispatcher は「起こす」側で行為を止める判定を持たない（起
 - **(d)** driver の死亡（§5・s2-07l.352）: 札の書き・消し（`pipe run` / `resume` の入口と終端）・turn 関数の起こし直し・record token・`base_of_run` の typed 化。依存: (a)・(b)。
 - **(g)** 歯の診断と結合の切り離し（§8・s2-07l.487・歯だけ）: assert の文に rc / stdout / stderr・印の直後の 1 周は子 process を起こさない台帳で測る。依存: (b)。
 - **(e)** 便の自走（§5・s2-07l.485）: `pipe run` / `pipe resume` の flag `--drive`・turn の Input に呼び手の便・渡す周の判定（前進 ∧ 待ちでない ∧ 終端でない）と理由の record token・列と起こし直しが起こす便への `--drive` の写し。依存: (d)・(g)・`s2-07l.486`（Landed）。
+- **(h)** 列へ戻す印（§12・s2-07l.495）: `Settled` の判定が、その便の最後の記帳より後の `release` を見て 1 回だけ列外を外す（`Landed` と審査 FAIL は外さない）。依存: (b)。
+- **(i)** 起動の失敗の理由と repo の名指し（§12・s2-07l.495）: 実装役の stderr を run dir に残し、`--repo` の値を口で絶対 path に直す。依存: なし。
 
 ## 10. 却下案（ADR-0034 §5 の写しは持たない・設計固有のもの）
 
@@ -108,6 +112,20 @@ dispatcher は「起こす」側で行為を止める判定を持たない（起
 - SRS FR30 の response と FR49 の condition の改訂・AC38 / AC39 の追加は SRS v0.14 で反映済み（FR68 の起動の形・lock・glossary の 受付 / priority / Reviewed は v0.15）。
 - QUESTION と Gated FAIL の裁定（planner の手番）を速くする形は別設計（契約の改訂を器の口で持つ .133 の系）。
 - ADR-0045 §2 (6) の SRS 改稿（FR30 の担い手・FR68 の契機を tick から便の終端と手動の 1 周へ・FR49 の condition は「便が intake を通ったとき」のまま）は user の /folio-architect の周。
+- 終端の便の worktree（退役先に寄せたものと `Failed` で残ったもの）の掃除は別設計（消す操作＝憲法 A1 の裁定が先）。[FR68](../../design-intent/spec/srs.html#FR68) の「release で戻し」の対象に終端の便を含める字の改訂は user の /folio-architect の周（§12 は hold と同じ印の同じ向きの拡張で、要件の向きは変えない）。
+
+## 12. 器の側の理由で終端に着いた便（起動の失敗・`s2-07l.495`）
+
+やさしく言うと: 契約は正しいのに、実装役が立ち上がれずに便が落ちることがある。今はその理由がどこにも残らず、契約の字を書き換えない限り二度と起きない。理由を残し、席が「もう一度」の印を 1 つ打てば同じ契約のまま起き直るようにする。
+
+実測（consumer の最初の便・2026-09-19）: 審査 PASS の直後に実装役が rc 2・commit 0 で落ちて `Failed` に着いた。(1) 列が起こした driver は端末を持たないので、継承した stderr に出た理由の 1 行は読める場所に残らない（C10）。(2) §2 の列外は段を区別しないので、この便は契約の字を変えるまで列に戻らない——字は正しいので変える理由が無い。席は起動の権能を持たない（ADR-0045 §2 (1)）ので、正規に起こし直す口が無い。(3) `--repo` を相対 path で渡すと worktree の場所も相対になり、cwd を worktree に移した子から見て解けない。
+
+- **列へ戻す印は `release`**（行 (h)）: `Settled` の判定は、同じ契約 file を持つ直前の便を見つけた後、**その便の最後の記帳より後に同じ bead への `release` が在る**周は列外にしない。判定の材料は既存の event log の並びだけである（新しい event kind も field も足さない・C17.1）。起こし直した便は新しい run id を持ち、その記帳は `release` より後に並ぶので、同じ sha でまた終端に着けば再び列外になる＝**印 1 回で起き直るのは 1 回**（§2 の無限再起動を開け直さない）。
+- **戻さない段が 2 つ在る**: `Landed`（済んでいる。起こし直すと同じ変更をもう一度作る）と審査 FAIL（`Reviewed` で終端・[FR49](../../design-intent/spec/srs.html#FR49) が「中身が変わるまで列に入らない」と定める）。この 2 つは `release` の後も `Settled` のままで、`dispatch ls` の理由も変わらない。`Failed` / `Stopped` / gate の判定で終端になった段は戻す——gate の FAIL には flaky な歯で落ちた周が含まれ、契約の字を変えずに測り直す口が他に無い。
+- **器が自分で戻すことはしない**: 「commit 0 ∧ 起動の失敗」を器が見分けて自動で起こし直す形は、見分けを誤った周に §2 が塞いだ無限再起動へ戻る。戻すかは理由（下の stderr の log）を読んだ席が決める。口は権能なしの既存の `release`（§4）で、印の直後の 1 周（§5）がそのまま起こす。
+- **実装役の stderr を run dir に残す**（行 (i)）: spawn は stdout と同じ形で stderr も捕らえ、run dir に stdout の log と並べて 1 本置く（名前は stdout の log の `stdout` を `stderr` に替えたもの・見出し行 `## <ts> rc=<rc>` 付きの append・空の周は書かない・機械は読まない診断 file＝[pipeline.md](./pipeline.md) §5.2 の 7 と同じ規律）。捕らえた stderr は呼び手の stderr にもそのまま流す（手で撃った周の見え方を変えない）。段の判定は今までどおり rc と commit の数だけで決め、stderr の中身を判定入力にしない（C3.3）。
+- **`--repo` の値は口で絶対 path に直す**（行 (i)）: `--repo` を読む口（pipe の引数の読み手）は値を `std::path::absolute` で絶対にしてから使う（標準 library・symlink も存在も見ない＝席の打刻の絶対化と同じ関数）。読み手が複数在る現状は 1 本に畳む（C2）。相対を断る形にしないのは、絶対にできない入力が空文字しか無く、断りの variant を 1 つ足すより直す 1 行が小さいためである（C17.4）。
+- **`Failed` の便の worktree の片付け**は本節では足さない: 畳む口（retire）は起動の権能の側に在り、席から撃てない。起こし直しは新しい worktree を切るので、残った worktree は次の便を塞がない。溜まった worktree の掃除は消す操作（憲法 A1）を含むので、別の設計で user の裁定を取る（§11）。
 
 <!-- contracts:begin -->
 schema = 1
@@ -166,4 +184,25 @@ verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_dispatch_drive_"]
 size = "M"
 done = "--drive を持つ pipe run が toy repo の契約 1 本を偽 runner と偽 lens で人の手なしに Landed まで通し（run_all の 1 process・record は drive=settled）、--drive を持つ pipe resume が段ごとに次の driver へ継いで Landed まで通り、--drive の無い run / resume は 1 段で止まり既存の歯は 1 本も変わらず、Blocked の便と段の動かなかった周は渡さず理由が record に載り、列の起こし直しが起こす resume は --drive を持ち殺した driver の便が Landed まで通り、usage の外形 snapshot が更新される"
 depends = ["d", "g"]
+
+[[contract]]
+id = "h"
+title = "列へ戻す印 — Settled の判定が、同じ契約 file を持つ直前の便の最後の記帳より後の release を見て 1 回だけ列外を外す（Landed と審査 FAIL は外さない・新しい event kind は足さない）"
+req = ["FR68", "FR49", "NFR4"]
+section = "12"
+write-set = ["crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2/tests/e2e/pipe/dispatch.rs"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_dispatch_release_requeues_"]
+size = "S"
+done = "偽の台帳と run dir の fixture で、Failed で終端した便の bead が Settled で列外に居り、その後の release で同じ sha のまま列に戻って dispatch ls の reason が - になり、起こし直した便が同じ sha でまた終端に着くと再び Settled になり、終端より前の release は効かず、Landed の便と審査 FAIL の便は release の後も Settled のままで（母集団 = 終端の段の種類）、gate の判定で終端になった便は戻る"
+depends = ["b"]
+
+[[contract]]
+id = "i"
+title = "起動の失敗の理由と repo の名指し — spawn が実装役の stderr を捕らえて run dir の log に残し呼び手の stderr にも流す・pipe の --repo の読み手を 1 本に畳んで値を std::path::absolute で絶対にする"
+req = ["FR30", "NFR4"]
+section = "12"
+write-set = ["crates/scribe2/src/pipe/spawn.rs", "crates/scribe2/src/pipe/mod.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/cli/args.rs", "crates/scribe2/src/pipe/cli/intake.rs", "crates/scribe2/tests/e2e/pipe/spawn.rs"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_spawn_runner_stderr_", "cargo nextest run -p scribe2 --no-tests=fail pipe_repo_relative_"]
+size = "S"
+done = "stderr に 1 行書いて rc 2 で落ちる偽 runner の便が Failed detail=runner-rc:2,commits:0 に着いた後、run dir の stderr の log にその 1 行が見出し行付きで残り、呼び手の stderr にも同じ行が出て、stderr が空の周は file が作られず、段の判定は stderr の中身で変わらず、--repo を相対 path で渡した pipe run が絶対 path で渡した周と同じ worktree の場所と同じ段に着き、--repo の読み手が 1 本になる"
 <!-- contracts:end -->
