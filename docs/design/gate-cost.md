@@ -114,7 +114,7 @@ manifest に行が載るまでは ADR-0021 の予定行（C14.2 の相互参照�
 
 ## 5. main 実測は木が同じなら検出線を撃ち直さない（ADR-0021 §2.4）
 
-- 宣言 file に **`detection-verify`**（検出線の行の列・`{base}` `{jobs}` の穴を置ける・**任意の key**＝無ければ③は空・toy repo の宣言は不変・ADR-0010 §2.1 の部分 supersede）を足す。scribe2 自身は `cargo xtask mutants-diff --base {base} --jobs {jobs}` をここへ移し、`common-verify` から外す（ADR-0009 §2.3 の置き場の 1 文を ADR-0021 §2.6 (v) で読み替える）。③の行は②と同じく写し（intake が凍結した宣言）から読む。検出線の rules 行（R-C12-1）が deny に昇格した周は、同じ便でその行を `common-verify` へ戻す（deny する行は撃ち直す側・ADR-0021 §2.4）。検出線 = 落ちても deny しない行（C12.4）。rc は 3 値で極性が違う: rc 0 = 測定（生存は行に載るだけ）／ rc 1 = R-C12-1 が deny に昇格した周だけ現れ、gate は赤に数える／ rc 2 = 「測れなかった」（道具の不在・baseline 落ち）で、gate は赤に数えず INCONCLUSIVE へ倒す（`Gated` に留まり測り直せる・[pipeline.md](./pipeline.md) §5.3 の判定順・`s2-07l.331`。以前は rc≠0 を一律に赤に数え、測れなかった周が FAIL → run N+1 で runner 1 周を払っていた〔.329 run 1・2026-09-15〕）＝測れなかったを通ったにも赤にも化けさせない。
+- 宣言 file に **`detection-verify`**（検出線の行の列・`{base}` `{jobs}` の穴を置ける・**任意の key**＝無ければ③は空・toy repo の宣言は不変・ADR-0010 §2.1 の部分 supersede）を足す。scribe2 自身は `cargo xtask mutants-diff --base {base} --jobs {jobs}` をここへ移し、`common-verify` から外す（ADR-0009 §2.3 の置き場の 1 文を ADR-0021 §2.6 (v) で読み替える）。③の行は②と同じく写し（intake が凍結した宣言）から読む。検出線の rules 行（R-C12-1）が deny に昇格した周は、同じ便でその行を `common-verify` へ戻す（deny する行は撃ち直す側・ADR-0021 §2.4）。検出線 = 落ちても deny しない行（C12.4）。rc は 3 値で極性が違う: rc 0 = 測定（生存は行に載るだけ）／ rc 1 = R-C12-1 が deny に昇格した周だけ現れ、gate は赤に数える／ rc 2 = 「測れなかった」（道具の不在・baseline 落ち）で、gate は赤に数えず INCONCLUSIVE へ倒す（他の行に赤が在る周は §28 が FAIL を先に読む・`Gated` に留まり測り直せる・[pipeline.md](./pipeline.md) §5.3 の判定順・`s2-07l.331`。以前は rc≠0 を一律に赤に数え、測れなかった周が FAIL → run N+1 で runner 1 周を払っていた〔.329 run 1・2026-09-15〕）＝測れなかったを通ったにも赤にも化けさせない。
 - gate は ① write-set 照合 → ② common-verify → ③ detection-verify → ④ 契約 verify の順で撃つ（ADR-0009 §2.4 の順序に③を挿す・ADR-0021 §2.6）。verify.jsonl の record は schema 1 のまま**任意 field を足す**（`kind` / `jobs` / `peak_mb` / `confined` / `reason` / `slot` / `skipped` / `tree`・古い読み手は無視・ADR-0017 §2.1 の event と同じ足し方）。
 - gate は verdict.json に **`tree`**（gate を撃った HEAD の `^{tree}` の sha）を残す（schema は 1 のまま field を足す・読み手は未知の field を無視する）。
 - land の main 実測は record を **`verify-main.jsonl`**（gate と同じ record 形・別 file・gate の周の `n` と重ねない・現物の main 実測は record を書いていない）に書く。`git rev-parse <new>^{tree}` が verdict の `tree` と一致する周は **detection-verify を撃たず** `skipped=detection tree=<sha>` を記し、①②④ は従来どおり撃つ。一致しない周（在りえないが在れば）は全部撃つ。`tree` が無い verdict（旧 gate）も全部撃つ。
@@ -329,6 +329,16 @@ e2e は binary を spawn し外部 command は PATH 先頭の stub で差し替�
 - 歯（`pipe_main_same_tree_` 接頭辞・`tests/e2e/pipe/gate.rs`・`pipe_detection_scope_` の歯と同じ fixture〔tmp git repo + 偽 verdict.json + 撃った段を `added` に残す verify 行〕／in-file は `main_skip_record_` 接頭辞・`pipe/gate/record.rs`）: (a) verdict の `tree` と着地の木が同じ周は `verify-main.jsonl` が 1 行（key 列 = `schema` / `n` / `kind` / `skipped` / `tree` / `reason`・`kind=main skipped=main tree=<sha> reason=same-tree`・`n` は 1）で verify の cmd は 1 本も走らず（`added` が空）・Landed の detail と main の先端は従来の形／(b) `tree` が違う周は record が従来の段数で並び主実測の skip record は無い／(c) verdict に `tree` が無い周は全段撃つ（record の形は (b) と同じ）／(d) in-file: 主実測の skip record の字面が固定で、木の無い構築は口が取らない。**変更する既存の歯 2 本**（同じ file・§5 の same-tree の期待を持つ）: `pipe_detection_land_skips_detection_when_tree_matches` と `pipe_detection_scope_same_tree_records_reason` は「②④ だけを撃つ・③ の位置に `skipped=detection`」の期待を (a) の形へ写す（test diff だけを base に当てると base は `kind=main` を書かないので RED）。`outside-scope` と読めない周の歯（同 file）は不変。base は `verify_main` が木の比較の前に worktree を切って全段撃つので (a) も RED。**write-set の外の歯の走査**（verified・main a3e29b9・grep `verify-once` / `verify-red` / `verify-probe` / `verify-kill` / `main-red` / `main-unmeasured` の歯の所有者）: `tests/e2e/pipe/land.rs` の 9 本（`pipe_land_reruns_verify_on_main_and_fails_loud` / `pipe_land_reruns_common_verify_from_vessel_copy_on_main` / `pipe_land_already_landed_red_main_is_not_landed` / `pipe_land_turns_unstartable_verify_step_into_unmeasured` / `pipe_land_keeps_signal_killed_verify_line_as_red` / `pipe_land_reports_unmeasured_main_apart_from_red` / `pipe_retire_rebase_empty_refuses_other_failed_reasons` / `pipe_land_anchor_syncs_even_when_main_verify_is_red` / `pipe_land_anchor_before_verify_records_clean_anchor_during_main_check`）は gate を実際に通した便（verdict に `tree` が在る）を**同じ木のまま** land して主実測の赤 / 測れない / verify の副作用を期待する＝本便の後は主実測が走らず壊れる。これらは**期待を変えず fixture だけ**を「木が違う周」にする: land の前に verdict.json の `tree` を base の木に差し替える（`pipe_detection_scope_main_skips_detection_when_tree_differs_outside_scope` と同じ型・helper 1 本を `land.rs` の歯の隣に置く）＝主実測の経路の極性（赤 / unmeasured / anchor の順）を測る意味は不変で、「同じ木で main が初めて赤くなる」形は ADR-0043 §03 が引き受けた分。gate.rs の `verify-red` の歯 4 本は gate 側で不変。`verify-main.jsonl` の実在だけを見る歯（`pipe_land_already_landed_finishes_without_moving_main` ほか）は record 1 本でも緑のまま。
 - 却下（ADR-0043 §03）: ① だけ残す（数秒だが経路が 2 本になり、木の一致で守れている diff を 2 度測る）／主実測を廃止し gate 後は常に着地（`outside-scope` の 9/36 = 木が違う周に main が未検査の木になる・C12.6）／主実測を Landed 後に非同期で撃つ（赤の周に main が赤のまま・C12.6）／②④ のうち clippy / deny だけ省く（手書きの選別・C2）。
 
+## 28. 赤い行が在る周は、検出線が測れなくても FAIL に着く（契約表の行 t・`s2-07l.495`）
+
+- 何が起きているか（実測 2026-09-20・verified）: 全体の歯が 1 本赤い便の gate が、FAIL（終端）でなく INCONCLUSIVE になった。検出線（変異の記録）は測る前に元の木の歯を全部走らせるので、**歯が赤い木では必ず rc 2（測れなかった）で終わる**。判定は「検出線の rc 2 は赤より先」（[pipeline.md](./pipeline.md) §5.3 の判定順・本 doc §5 の検出線の rc の読み・`s2-07l.331`）の順なので、歯が赤い便は全部 INCONCLUSIVE に倒れる。INCONCLUSIVE は終端でない＝便は live のまま残り、driver は抜け、同じ木を測り直しても赤いままで、自分の bead と write-set の重なる契約を塞ぎ続ける。
+- やさしく言うと: 「test が落ちている」と分かっているのに、変異検査が動かなかったことを理由に「判定できず」と言って便が居座る。落ちているなら、落ちたと言って終わらせる。
+- 形: 判定の順を 1 か所だけ入れ替える。**赤（今の数え方のまま＝rc≠0 の行・除くのは「検出線 ∧ rc 2」の 1 点だけで、検出線の rc 1 も赤）が 1 行でも在る周は、検出線が測れなかった周でも FAIL**（evidence は赤い行の数・今の FAIL と同じ字面）。検出線の rc 2 が INCONCLUSIVE に倒すのは、赤が 0 の周だけである（道具の都合で測れなかった便を終端させない、という `s2-07l.331` の理由はこの周にだけ当たる）。[pipeline.md](./pipeline.md) §5.3 の判定順と本 doc §5 の「rc 2 は赤に数えず INCONCLUSIVE へ倒す」は、この順で読み替える（同じ docs の便で、判定順の文・機械検証の③の文・本 doc §5 の 3 か所に pointer を足した）。
+- 変えない順: diff の path を読めない周と、行が scope の中で殺された周は今までどおり赤より先に INCONCLUSIVE（どちらも「赤」が内容の赤か測れなさかを区別できない）。検出線の撃ち直し（§21）も不変で、撃ち直した後の値で上の順を読む。
+- FAIL に着いた便は終端の列外（[dispatcher.md](./dispatcher.md) §2）に入り、契約の字を直すか `release` の印（同 §12）で列に戻る＝居座らない。
+- 歯（`tests/e2e/pipe/gate.rs`・接頭辞 `pipe_gate_red_wins_over_detection_`）: (a) 共通 verify が赤 ∧ 検出線が rc 2 の便は `Gated` verdict=FAIL で、evidence が赤い行の数を持ち、lens は呼ばれない／(b) 契約 verify が赤 ∧ 検出線が rc 2 の便も同じく FAIL／(c) 赤が 0 ∧ 検出線が rc 2 の便は今までどおり INCONCLUSIVE（既存の歯が測る側・変えない）。「変えない順」の 2 つと「検出線の rc 1 は赤」は既存の歯がそのまま測る（本行は足さない）。
+- 触らない: **赤の数え方**（検出線の rc 1 も赤・除くのは「検出線 ∧ rc 2」の 1 点）・検出線の record の形・撃ち直しの回数・`verdict.json` の field・land の前提。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -521,5 +531,15 @@ write-set = ["crates/scribe2/src/pipe/land/verify.rs", "crates/scribe2/src/pipe/
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_main_same_tree_", "cargo nextest run -p scribe2 --lib --no-tests=fail main_skip_record_", "cargo nextest run -p scribe2 --no-tests=fail pipe_detection_land_skips_detection_when_tree_matches", "cargo nextest run -p scribe2 --no-tests=fail pipe_detection_scope_same_tree_records_reason"]
 size = "S"
 done = "着地する木が verdict の tree と同じ周は verify-main.jsonl が skip record 1 本で verify の cmd が 1 本も走らず Landed の形は不変、違う周と tree の無い周は従来の段数で撃ち、skip record は木を必ず持つ"
+
+[[contract]]
+id = "t"
+title = "赤い行が在る周は検出線が測れなくても FAIL に着く — 判定の順を 1 か所入れ替える（検出線の rc 2 が INCONCLUSIVE に倒すのは赤が 0 の周だけ・赤の数え方は変えない）"
+req = ["FR9", "AC3", "FR14"]
+section = "28"
+write-set = ["crates/scribe2/src/pipe/gate.rs", "crates/scribe2/tests/e2e/pipe/gate.rs"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_gate_red_wins_over_detection_"]
+size = "S"
+done = "共通 verify が赤で検出線が rc 2 の便が Gated verdict=FAIL に着いて evidence が赤い行の数を持ち lens は呼ばれず、契約 verify が赤で検出線が rc 2 の便も同じく FAIL に着き、赤が 0 で検出線が rc 2 の便は今までどおり INCONCLUSIVE のままで、赤の数え方（検出線の rc 1 も赤）と diff の path を読めない周と行が scope の中で殺された周の順は変わらない"
 
 <!-- contracts:end -->
