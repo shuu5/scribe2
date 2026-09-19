@@ -111,7 +111,7 @@ fn queue_of<'a>(args: &'a [String], manifest: &'a Manifest) -> Option<Queue<'a>>
         state_dir,
         repo,
         manifest,
-        bd: flag(args, "--bd").ok()?.unwrap_or(DEFAULT_BD),
+        bd: flag(args, "--bd").ok()?,
         rules: flag(args, "--rules").ok()?,
         lens: flag(args, "--lens").ok()?,
         runner: flag(args, "--runner").ok()?,
@@ -126,8 +126,8 @@ struct Queue<'a> {
     repo: PathBuf,
     /// 規則の値。
     manifest: &'a Manifest,
-    /// 台帳 client。
-    bd: &'a str,
+    /// 台帳 client（引数で名指されていなければ `None`＝列は既定を読み、起こす便には渡さない）。
+    bd: Option<&'a str>,
     /// 規則の写しの path（起こす便へそのまま渡す）。
     rules: Option<&'a str>,
     /// 審査の lens の口（同上）。
@@ -143,7 +143,8 @@ impl Queue<'_> {
             state_dir: &self.state_dir,
             repo: &self.repo,
             manifest: self.manifest,
-            bd: self.bd,
+            bd: self.bd.unwrap_or(DEFAULT_BD),
+            bd_flag: self.bd,
             rules: self.rules,
             lens: self.lens,
             runner: self.runner,

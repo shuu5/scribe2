@@ -51,7 +51,8 @@
 - **起こす便へ渡す道具**: 列に渡された `--rules` / `--lens` / `--runner` は起こす便へそのまま渡す（列と便が同じ道具で動く）。**`--runner` が無い周は 1 本も起こさない**（`pipe run` は実装役の口を必須にし、器は既定を持たない〔宣言にも rules 行にも無い・`s2-07l.366` の実測〕。列が既定を作ると「何を起こすか」が契約の外で決まる・C5 / C1）。起こせないと分かっている周は**台帳も読まない**——読んでも起こせず、便の終端ごとに子 process の読みが 1 回乗る（実測: e2e 全体が 21 秒 → 111 秒）。1 本も起こさなかった事実は `unmeasured` の理由で名乗り、`0 件`とは言わない（C10）。列を見る口は `dispatch ls` の側である。
 - **`pipe run` / `pipe resume` の終端の 1 周は、その process 自身の道具を使う**（driver は自分の `--rules` / `--lens` / `--runner` を知っている）。`land` / `stop` / `retire` の終端と手動の 1 周は、渡された引数の道具だけを使う。
 - **管理 tick の契機は無い**（tick は `s2-07l.479.1` で消えた・ADR-0045 §2 (2)）。時計で撃つ契機を足さない（C17.2: 足すなら先に消すものを名指す）。
-- 全部同じ 1 関数（dispatch module の turn 関数）を撃つ（C2）。lock は着地の列と同じ store の lock（fleet の store が持つ acquire）を使い、二重起動を防ぐ。終端の中から撃つ 1 周は終端の記帳の後・lock の外で行い、失敗しても終端の rc を変えない（起こせなかった便は次の契機で拾う・観測は §6）。
+- 全部同じ 1 関数（dispatch module の turn 関数）を撃つ（C2）。終端の中から撃つ 1 周は終端の記帳の後・lock の外で行い、失敗しても終端の rc を変えない（起こせなかった便は次の契機で拾う・観測は §6）。
+- **二重起動を止めるのは受付である**（`s2-07l.366` で lock から改めた）: 1 周は lock を取らないので、同時に来た 2 つの終端が同じ bead を起こしうる。その 2 便は `pipe run` の受付で片方が必ず落ちる——同じ秒なら run id の衝突（`DuplicateRun`）、秒を跨げば先の便と write-set が交差（`WriteSetOverlap`）。**起こす前の判定（列）と受付の判定は同じ 1 本**で、列が記帳しない側・受付が記帳する側である（二重に守る・planner 裁定 2026-09-19）。1 周に lock を掛けると、子 process を起こす間じゅう着地の列と同じ lock を握ることになる（着地を待たせる）ので取らない。
 - **driver の死亡**（`s2-07l.352`・契約 (d)・C9 の便版の driver 側）: `pipe run` / `pipe resume` の process（driver）は入口で `<state_dir>/pipe/<run>/driver` に受付札と同じ本文（pid + 起動時刻・[gate-cost.md](./gate-cost.md) §3.2）を書き、終端で消す。turn 関数は live 便のうち札の所有者が死んでいる便（lock の所有者と同じ probe・`Owner::Dead`）を (a) と同じ引数の `pipe resume` で起こし直し、record token に `resumed:<m>` を足す（`dispatch=started:<n>,resumed:<m>,waiting:<k>`）。札が無い / 読めない便は触らない（測れないを「死んだ」に読み替えない・fail-closed）。schema を広げた便の Landed で古い binary の driver が typed に死ぬ周（NFR4・.160 の座礁 2026-09-15）も次の契機（他便の終端か手動の 1 周）に現在の binary で続く＝写し binary の refresh は要らない（走行中の process の code は変わらないので refresh は座礁を防がない）。`base_of_run` の読めなさは typed に呼び手へ返す（C10・「base が無い」と分ける）。
 
 ## 6. 観測
@@ -66,10 +67,10 @@ dispatcher は「起こす」側で行為を止める判定を持たない（起
 ## 8. 歯（`crates/<NAME>/tests/e2e/pipe/dispatch.rs`・`pipe_dispatch_` 接頭辞・名前の列は現物が SSOT）
 
 - 順序: first → priority → 起票順の 1 関数（pure・in-file）。
-- 起動条件: 偽の台帳（ready の出力 fixture）+ 偽の live 便（event log）で、交差する便は `Overlap` で待ち、交差しない便だけ `pipe run` の構築点が呼ばれる。
+- 起動条件: 偽の台帳（ready の出力 fixture）+ 偽の live 便（event log）で、交差する便は `Overlap` で待ち、交差しない便だけが起こせる側に立つ（`dispatch ls` は**見るだけで起こさない**ので、(a) の歯は `ready=` の数で測る）。
 - 台帳が読めない周: `[DISPATCH-UNMEASURED]` で起動 0（0 件と区別）。
 - 介入: `first` が priority より先に来る・`hold` は起こさない・`release` で戻る（event log の往復）。
-- 契機（行 (b)・`pipe_terminal_dispatch_` 接頭辞）: land / stop / retire の終端の直後に 1 周撃たれ、交差が解けた便が起動の構築点に届く（偽 remote の toy repo）・`pipe dispatch` の手動 1 周が同じ関数を撃つ・`first` の記録の直後に 1 周撃たれる・終端の中の 1 周が失敗しても終端の rc は変わらない・候補 N 件の 1 周で repo の材料の読みが 1 回（読みの回数を数える fixture・母集団 = 候補数）。
+- 契機（行 (b)・`pipe_terminal_dispatch_` 接頭辞）: land と stop の終端の直後に 1 周撃たれ、交差が解けた便が**起こされる**（`RunCreated` が増える・toy repo）・着地した bead は起こし直されず行を改訂して sha が動くと列に戻る・`pipe run` の終端の 1 周は自分の道具で起こす・列に渡した台帳 client が起こした子にも渡る（偽の台帳が列と子で 2 回呼ばれる）・`pipe dispatch` の手動 1 周と `first` / `release` の記録の直後が同じ関数を撃つ・実装役の口が無い周は `unmeasured`・終端の中の 1 周が失敗しても終端の rc は変わらない・候補 N 件の 1 周で repo の材料の読みが 1 回（読みの回数を数える fixture・母集団 = 候補数）。
 - 終端の便の列外: 直前の便が終端で終わった契約は同じ sha では `Settled` で列外、契約 file の sha が変わると列に戻る（偽 lens の verdict と run dir の fixture・着地した便を起こし直さない側も同じ 1 本で測る）。
 
 ## 9. 契約（3 便・(a) → (b) → (d)。(r) と (c) は超過）

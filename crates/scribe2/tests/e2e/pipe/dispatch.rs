@@ -585,3 +585,40 @@ fn pipe_terminal_dispatch_land_starts_the_queue_without_restarting_the_landed_be
     assert_eq!(reason_of(&revised, "s2-toy.1"), "-", "sha が動けば列に戻る: {}", stdout_of(&revised));
     clean(&[&repo, &state]);
 }
+
+/// (§5 起こす便へ渡す道具) 起こした子（`pipe run`）**自身も終端で 1 周撃つ**ので、列に渡した台帳 client も
+/// そのまま渡る。落とすと子の 1 周が既定の台帳（PATH の `bd`）を読み、1 hop で列と食い違う。
+///
+/// 測り方: 偽の台帳を「呼ばれたら印を置く」形にし、**列の 1 周（1 回）と子の 1 周（1 回）で 2 回**呼ばれる
+/// ことを見る。落ちていれば 1 回で止まる（子は PATH の `bd` を読む）。
+#[test]
+fn pipe_terminal_dispatch_hands_the_ledger_client_to_the_run_it_starts() {
+    let (repo, state) = repo_with_state();
+    two_rows(&repo);
+    let json = state.join("ledger-counted.json");
+    fs::write(&json, format!("[{}]\n", issue("s2-toy.2", 2, "b"))).expect("偽の台帳を書ける");
+    let calls = state.join("bd-calls.log");
+    let counted = script(
+        &state.join("bd-counted"),
+        &format!("printf 'x\\n' >> '{}'\ncat '{}'\n", calls.display(), json.display()),
+    );
+    let out = run_pipe(&[
+        "dispatch",
+        "--state-dir", &state.display().to_string(),
+        "--repo", &repo.display().to_string(),
+        "--rules", &dispatch_rules(&state),
+        "--bd", &counted,
+        "--lens", &review_lens_pass(&state),
+        "--runner", "true",
+    ]);
+    assert_eq!(stdout_of(&out).trim_end(), "dispatch=started:1,waiting:0", "1 本起こす: {}", stderr_of(&out));
+    assert_eq!(created(&state, &["s2-toy.2"], 1), 1, "起こした便の RunCreated");
+    // 子の終端の 1 周が**同じ台帳**を読む＝印が 2 つ（列の 1 周 + 子の 1 周）。
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let count = || fs::read_to_string(&calls).map(|text| text.lines().count()).unwrap_or_default();
+    while count() < 2 && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert_eq!(count(), 2, "列の 1 周と子の 1 周で偽の台帳が 2 回呼ばれる（母集団 = 1 周 × 2 段）");
+    clean(&[&repo, &state]);
+}

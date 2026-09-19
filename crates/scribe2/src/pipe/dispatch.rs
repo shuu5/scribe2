@@ -223,8 +223,10 @@ pub struct Input<'a> {
     pub repo: &'a Path,
     /// 規則の値。
     pub manifest: &'a Manifest,
-    /// 台帳 client（`--bd` か [`ledger::DEFAULT_BD`]）。
+    /// 台帳 client（`--bd` か [`ledger::DEFAULT_BD`]）。列自身が読むときの値。
     pub bd: &'a str,
+    /// `--bd` が**引数で名指されていた**か（起こす便へ渡すのはこちら・既定は渡さない＝便の側が持つ）。
+    pub bd_flag: Option<&'a str>,
     /// 規則の写しの path（`--rules`）。起こす便へ**そのまま渡す**（列と便が同じ規則で動く）。
     pub rules: Option<&'a str>,
     /// 審査の lens の口（`--lens`）。渡された周だけ起こす便へそのまま渡す（既定は便の側が持つ）。
@@ -463,9 +465,15 @@ fn launch_of(input: &Input<'_>, bead: &str, pointer: &Pointer) -> Launch {
         "--state-dir".to_owned(),
         input.state_dir.display().to_string(),
     ];
-    // 列に渡された道具（規則の写し・審査の lens）は起こす便へそのまま渡す＝**列と便が同じ道具で動く**。
-    // 渡されていない周は何も足さない（既定は便の側が持つ）。
-    for (name, value) in [("--rules", input.rules), ("--lens", input.lens), ("--runner", input.runner)] {
+    // 列に渡された道具は起こす便へ**そのまま全部**渡す＝列と便が同じ道具で動く。渡されていない周は
+    // 何も足さない（既定は便の側が持つ）。
+    //
+    // **台帳 client（`--bd`）も渡す**: 起こした子（`pipe run`）自身も終端で 1 周撃つので、落とすと
+    // 子の 1 周が既定の台帳を読み、**1 hop で列の名指した台帳と食い違う**（列は偽の台帳、子は PATH の
+    // 実 `bd`）。道具の受け渡しは全部か皆無かで、1 つだけ落とすと「同じ道具で動く」が静かに破れる。
+    for (name, value) in
+        [("--rules", input.rules), ("--lens", input.lens), ("--runner", input.runner), ("--bd", input.bd_flag)]
+    {
         argv.extend(value.map(|found| [name.to_owned(), found.to_owned()]).into_iter().flatten());
     }
     Launch { bead: bead.to_owned(), argv }
