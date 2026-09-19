@@ -11,14 +11,14 @@
 //! 台帳を読めない周は列を空と読まず [`Unmeasured`] で 1 本も起こさない（`0 件`と融合しない・C10・NFR4）。
 
 use super::admission::{self, Sizes};
-use super::cli::{crossings, generated, int_row, judge, live, Denial, Material, Materials};
+use super::cli::{crossings, generated, int_row, judge, live, stage_of, Denial, Material, Materials};
 use super::contract::Contract;
 use super::refuse::overlaps;
 use super::table::{self, Pointer};
 use super::{contract_path, current, git_bytes};
 use crate::cli_outcome::Outcome;
 use crate::fleet::store;
-use crate::fleet::{Event, EventKind, Mark, Stage};
+use crate::fleet::{Event, EventKind, Mark, Stage, STAGES};
 use crate::name::NAME;
 use crate::rules::manifest::Manifest;
 use crate::seat::host_slots_dir;
@@ -165,6 +165,122 @@ impl Unmeasured {
 /// `pipe` の subcommand の書き出し（子 process の argv の先頭）。
 const PIPE: &str = "pipe";
 
+/// **便の自走を選ぶ flag**（`pipe run` / `pipe resume`・設計 §5「便の自走は起こす側の引数で選ぶ」）。
+///
+/// 列が起こす便（起こす側・起こし直す側・継ぎの子）には**常に**付ける——道具の pass-through
+/// （[`tools`]・値を持つ flag の対の配列・全部か皆無か）とは**別の定数**である。列の判断で起きた便は
+/// 自走する、が意味であって、呼び手が道具を渡したかとは関係しない。
+pub const DRIVE: &str = "--drive";
+
+/// 段の動き（**閉じた 3 形**・pure・設計 §5「渡す周と渡さない周」）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Advance {
+    /// 段が進んだ。
+    Forward,
+    /// 入口と同じ段のまま。
+    Same,
+    /// 段が戻った。
+    Backward,
+}
+
+/// 自分の便を次の driver へ渡すか（**閉じた 5 値**・設計 §5「渡す周と渡さない周」）。
+///
+/// 渡さない周は理由を名乗る（C10・黙って止まらない）。設計が名指す 3 つの理由に
+/// [`Handoff::Unmeasured`] を足してある——段も生死も読めない周を「終端に着いた」に読み替えると、
+/// 測れなかった事実が記録から消える。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Handoff {
+    /// 渡す（前進 ∧ 待ちの段でない ∧ 終端でない）。
+    Pass,
+    /// 人の手を待つ段に着いた（[`WAITING`]）。
+    Waiting,
+    /// 終端に着いた。
+    Settled,
+    /// 段が動かなかった（同じ段・戻った段）。
+    NoProgress,
+    /// 段か生死を読めなかった（**終端に読み替えない**・C10）。
+    Unmeasured,
+}
+
+/// [`Handoff`] の全 variant の字面（`drive=` の値・宣言順）。
+pub const HANDOFFS: &[&str] = &["pass", "waiting", "settled", "no-progress", "unmeasured"];
+
+impl Handoff {
+    /// `drive=` に載る字面。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pass => "pass",
+            Self::Waiting => "waiting",
+            Self::Settled => "settled",
+            Self::NoProgress => "no-progress",
+            Self::Unmeasured => "unmeasured",
+        }
+    }
+}
+
+/// 呼び手が渡す自分の便（`--drive` を持つ `pipe run` / `pipe resume` の周だけ・設計 §5）。
+///
+/// この便は**札の所有者（＝呼び手）が生きていても**起こし直しの候補に入れる——1 段進めて抜ける
+/// driver の後を誰も継がないと、便は止まったまま次の契機を待つ（`s2-07l.482` の実測: 起こし直した
+/// 便が `Implemented` で止まった）。
+pub struct Driving<'a> {
+    /// 便 id。
+    pub run: &'a str,
+    /// **入口で読んだ段**（便を作る `pipe run` は入口に段が無いので `None`＝前進）。
+    pub entry: Option<Stage>,
+}
+
+/// 段の宣言順の位置（[`STAGES`] から導く＝順序の宣言は 1 か所・C2）。
+///
+/// 全 variant が [`STAGES`] に在ることは in-file の歯が母集団つきで測る（`unwrap_or` の値は
+/// 到達しない）。
+fn rank(stage: Stage) -> usize {
+    STAGES.iter().position(|found| *found == stage).unwrap_or(STAGES.len())
+}
+
+/// 入口の段と終端の段から段の動きを判じる（**pure**・設計 §5）。
+///
+/// 入口に段が無い周（`pipe run` は便を作る）は前進である——作った便は必ず段を 1 つ持つ。
+pub fn advance(entry: Option<Stage>, exit: Stage) -> Advance {
+    let Some(entry) = entry else {
+        return Advance::Forward;
+    };
+    match rank(exit).cmp(&rank(entry)) {
+        std::cmp::Ordering::Greater => Advance::Forward,
+        std::cmp::Ordering::Equal => Advance::Same,
+        std::cmp::Ordering::Less => Advance::Backward,
+    }
+}
+
+/// 渡す周か（**pure**・設計 §5「渡す周と渡さない周」）。
+///
+/// 渡すのは「前進 ∧ 待ちの段でない ∧ 終端でない」周だけである。**前進なしの周を渡すと、同じ段を
+/// 空撃ちする子が無限に連なる**。生死は呼び手が [`live`] で測った 3 値をそのまま受ける（測れない周を
+/// 終端と融合しない・C10）。
+pub fn handoff(advance: Advance, exit: Stage, live: Option<bool>) -> Handoff {
+    match live {
+        None => Handoff::Unmeasured,
+        Some(false) => Handoff::Settled,
+        Some(true) if WAITING.contains(&exit) => Handoff::Waiting,
+        Some(true) => match advance {
+            Advance::Forward => Handoff::Pass,
+            Advance::Same | Advance::Backward => Handoff::NoProgress,
+        },
+    }
+}
+
+/// 呼び手の便を渡すかを永続面から判じる（段は replay・生死は [`live`] の 1 本）。
+fn handoff_of(input: &Input<'_>) -> Option<Handoff> {
+    let driving = input.driving.as_ref()?;
+    let Ok(state) = current(input.state_dir) else {
+        return Some(Handoff::Unmeasured);
+    };
+    let Ok(exit) = stage_of(&state, driving.run) else {
+        return Some(Handoff::Unmeasured);
+    };
+    Some(handoff(advance(driving.entry, exit), exit, live(input.state_dir, driving.run, exit)))
+}
+
 /// 起こす（通る便だけ `pipe run` を**子 process で**起こす・設計 §3・§5・契約表の行 b）。
 ///
 /// **待たない**: 子の完了を待つと終端が次の便の全行程を待つことになる（`pipe run` は intake → 審査 →
@@ -229,6 +345,8 @@ pub struct Turn {
     pub revives: Vec<Revive>,
     /// 台帳を読めなかった周の理由（`Some` なら他の 2 つは空）。
     pub unmeasured: Option<Unmeasured>,
+    /// 呼び手の便を次の driver へ渡したか（`--drive` の周だけ `Some`・設計 §5）。
+    pub drive: Option<Handoff>,
 }
 
 /// 列の 1 周に要る材料（すべて永続面から解いたもの・process の記憶を持たない）。
@@ -253,6 +371,9 @@ pub struct Input<'a> {
     /// 器は既定を持たない（宣言にも rules 行にも無い・2026-09-19 の実測）。列が勝手な既定を作ると、
     /// 「何を起こすか」が契約の外で決まる（C5 / C1）。
     pub runner: Option<&'a str>,
+    /// 呼び手が渡す自分の便（`--drive` の周だけ `Some`・設計 §5「渡す周と渡さない周」）。
+    /// **観測の口（[`turn`]）は見ない**——見るだけで便が動くと `dispatch ls` が起こす口になる（§6）。
+    pub driving: Option<Driving<'a>>,
 }
 
 /// 列を 1 周する（**判定は器の既存の関数・記帳はしない**）。
@@ -316,6 +437,16 @@ pub fn fire(input: &Input<'_>) -> Turn {
         return turn;
     }
     turn.revives = revivals(input);
+    // **呼び手の便を継ぐ**（設計 §5「1 段進めた driver は終端の 1 周で自分の便を次の driver に渡す」）:
+    // 自分の札は生きている（いま握っているのは自分である）ので [`revivals`] は拾わない。渡す周だけ
+    // 足し、渡さなかった周は理由を [`Turn::drive`] に残す（C10）。
+    turn.drive = handoff_of(input);
+    if let (Some(Handoff::Pass), Some(driving)) = (turn.drive, input.driving.as_ref()) {
+        if !turn.revives.iter().any(|revive| revive.run == driving.run) {
+            turn.revives.push(revive_of(input, driving.run));
+            turn.revives.sort_by(|left, right| left.run.cmp(&right.run));
+        }
+    }
     turn.revives.retain(resume);
     let failed: Vec<String> =
         turn.launches.iter().filter(|launch| !start(launch)).map(|launch| launch.bead.clone()).collect();
@@ -367,6 +498,8 @@ fn revive_of(input: &Input<'_>, run: &str) -> Revive {
         input.state_dir.display().to_string(),
     ];
     argv.extend(tools(input));
+    // **列が起こす便は必ず自走する**（設計 §5）: 道具の pass-through と別の定数で、渡されたかに依らない。
+    argv.push(DRIVE.to_owned());
     Revive { run: run.to_owned(), argv }
 }
 
@@ -396,7 +529,7 @@ fn digits_of(bead: &str) -> Vec<u64> {
 
 /// 台帳を読めなかった周の 1 周（1 本も起こさない）。
 fn unmeasured(reason: Unmeasured) -> Turn {
-    Turn { candidates: Vec::new(), launches: Vec::new(), revives: Vec::new(), unmeasured: Some(reason) }
+    Turn { candidates: Vec::new(), launches: Vec::new(), revives: Vec::new(), unmeasured: Some(reason), drive: None }
 }
 
 /// 列の入力になる bead か（設計 §2・**ここで落ちた bead は `ls` にも出ない**＝契約が未確定か終わっている）。
@@ -460,7 +593,8 @@ fn settle(
         slots: host_slots_dir(input.state_dir),
     });
     let mut started: Vec<(String, Vec<String>)> = Vec::new();
-    let mut turn = Turn { candidates: Vec::new(), launches: Vec::new(), revives: Vec::new(), unmeasured: None };
+    let mut turn =
+        Turn { candidates: Vec::new(), launches: Vec::new(), revives: Vec::new(), unmeasured: None, drive: None };
     for mut candidate in candidates {
         if let (Some((pointer, contract)), Some(room)) = (ready.get(&candidate.bead), room.as_ref()) {
             match blocker(input, contract, room, &started) {
@@ -541,6 +675,8 @@ fn launch_of(input: &Input<'_>, bead: &str, pointer: &Pointer) -> Launch {
         input.state_dir.display().to_string(),
     ];
     argv.extend(tools(input));
+    // **列が起こす便は必ず自走する**（設計 §5・[`DRIVE`]）。
+    argv.push(DRIVE.to_owned());
     Launch { bead: bead.to_owned(), argv }
 }
 
@@ -655,12 +791,20 @@ pub fn usage() -> String {
 pub fn line(turn: &Turn) -> String {
     match turn.unmeasured {
         Some(reason) => format!("dispatch=unmeasured reason={}", reason.as_str()),
-        None => format!(
-            "dispatch=started:{},resumed:{},waiting:{}",
-            turn.launches.len(),
-            turn.revives.len(),
-            turn.candidates.len().saturating_sub(turn.launches.len())
-        ),
+        None => {
+            let counts = format!(
+                "dispatch=started:{},resumed:{},waiting:{}",
+                turn.launches.len(),
+                turn.revives.len(),
+                turn.candidates.len().saturating_sub(turn.launches.len())
+            );
+            // **`--drive` の周だけ token を足す**（観測の面を増やさない・§6）: flag の無い周の行は
+            // 1 byte も変わらない＝段を手で 1 つずつ進める既存の歯は 1 本も動かない。
+            match turn.drive {
+                None => counts,
+                Some(drive) => format!("{counts} drive={}", drive.as_str()),
+            }
+        }
     }
 }
 
@@ -698,8 +842,13 @@ pub fn mark(state_dir: &Path, bead: &str, mark: Mark, policy: store::LockPolicy)
 
 #[cfg(test)]
 mod tests {
-    use super::{digits_of, marks_of, order, Candidate, WaitReason, WAIT_REASONS};
-    use crate::fleet::{Event, EventKind, Mark, Stage, SCHEMA};
+    use super::{
+        advance, digits_of, handoff, launch_of, marks_of, order, rank, revive_of, tools, Advance, Candidate,
+        Handoff, Input, Pointer, WaitReason, DRIVE, HANDOFFS, WAIT_REASONS,
+    };
+    use crate::fleet::{Event, EventKind, Mark, Stage, SCHEMA, STAGES};
+    use crate::rules::manifest::Manifest;
+    use std::path::Path;
 
     /// 候補 1 件（印と priority だけを呼び手が選ぶ）。
     fn candidate(bead: &str, priority: Option<u64>, mark: Option<Mark>) -> Candidate {
@@ -725,6 +874,79 @@ mod tests {
             mark: Some(mark),
             account: None,
         }
+    }
+
+
+    /// 列が起こす便には**常に** `--drive` が付く（起こす側・起こし直す側の両方）。道具の
+    /// pass-through（[`tools`]）とは**別の定数**である——渡された道具に混ぜると、`--rules` 等を
+    /// 渡していない呼び手の周だけ自走しなくなる（「全部か皆無か」の列に載せない理由）。
+    #[test]
+    fn pipe_dispatch_drive_is_added_to_every_run_the_queue_starts() {
+        let manifest = Manifest::embedded().expect("埋め込みの manifest を読める");
+        let input = Input {
+            state_dir: Path::new("s"),
+            repo: Path::new("r"),
+            manifest: &manifest,
+            bd: "bd",
+            bd_flag: None,
+            rules: None,
+            lens: None,
+            curl: None,
+            runner: Some("true"),
+            driving: None,
+        };
+        let pointer = Pointer { path: "docs/design/toy.md".to_owned(), id: "a".to_owned() };
+        let started = launch_of(&input, "s2-toy.1", &pointer).argv;
+        let revived = revive_of(&input, "s2-toy.1-1").argv;
+        assert_eq!(started.last().map(String::as_str), Some(DRIVE), "起こす側: {started:?}");
+        assert_eq!(revived.last().map(String::as_str), Some(DRIVE), "起こし直す側: {revived:?}");
+        // **道具の列には入らない**（母集団 = 渡された道具 1 件 `--runner`）。
+        let passed = tools(&input);
+        assert_eq!(passed, vec!["--runner".to_owned(), "true".to_owned()], "道具は渡された分だけ");
+        assert!(!passed.contains(&DRIVE.to_owned()), "自走の flag は道具の pass-through ではない: {passed:?}");
+    }
+
+    /// 段の位置は [`STAGES`] の宣言から導く（順序の宣言は 1 か所・C2）。**全 variant が母集団に在る**
+    /// ことをここで測る——1 つでも欠けると [`rank`] の `unwrap_or` が同じ値を 2 つの段に配り、
+    /// [`advance`] が静かに「同じ段」を返す。
+    #[test]
+    fn pipe_dispatch_drive_ranks_every_stage_from_the_declared_order() {
+        let ranks: Vec<usize> = STAGES.iter().map(|stage| rank(*stage)).collect();
+        assert_eq!(ranks, (0..STAGES.len()).collect::<Vec<usize>>(), "母集団 {} 段が宣言順の位置を持つ", STAGES.len());
+        assert!(ranks.iter().all(|found| *found < STAGES.len()), "外れ値（母集団の外）の段は無い: {ranks:?}");
+    }
+
+    /// 段の動きは**閉じた 3 形**（pure・設計 §5）: 入口に段が無い周（`pipe run`）は前進・
+    /// 宣言順に進めば前進・同じ段は `Same`・戻れば `Backward`。
+    #[test]
+    fn pipe_dispatch_drive_advance_is_forward_same_or_backward() {
+        assert_eq!(advance(None, Stage::Intake), Advance::Forward, "便を作った周は入口に段が無い");
+        assert_eq!(advance(Some(Stage::Implemented), Stage::Gated), Advance::Forward, "Implemented → Gated");
+        assert_eq!(advance(Some(Stage::Gated), Stage::Gated), Advance::Same, "同じ段");
+        assert_eq!(advance(Some(Stage::Gated), Stage::Implemented), Advance::Backward, "追随で戻った段");
+    }
+
+    /// 渡すのは **前進 ∧ 待ちの段でない ∧ 終端でない** 周だけで、渡さない周は理由を名乗る
+    /// （**閉じた 5 値**・C10）。生死が読めない周を「終端」に読み替えない。
+    #[test]
+    fn pipe_dispatch_drive_hands_off_only_on_forward_and_names_the_reason() {
+        let live = Some(true);
+        assert_eq!(handoff(Advance::Forward, Stage::Gated, live), Handoff::Pass, "前進・生きている・待ちでない");
+        assert_eq!(handoff(Advance::Same, Stage::Gated, live), Handoff::NoProgress, "段が動かなかった");
+        assert_eq!(handoff(Advance::Backward, Stage::Implemented, live), Handoff::NoProgress, "戻った段");
+        assert_eq!(handoff(Advance::Forward, Stage::Blocked, live), Handoff::Waiting, "承認待ち");
+        assert_eq!(handoff(Advance::Forward, Stage::Questioned, live), Handoff::Waiting, "回答待ち");
+        assert_eq!(handoff(Advance::Forward, Stage::Landed, Some(false)), Handoff::Settled, "終端");
+        assert_eq!(handoff(Advance::Forward, Stage::Gated, None), Handoff::Unmeasured, "生死を読めない");
+    }
+
+    /// `drive=` の値は [`HANDOFFS`] と 1 対 1（宣言順・字面は 1 か所）。
+    #[test]
+    fn pipe_dispatch_drive_tokens_are_the_closed_five() {
+        let listed =
+            [Handoff::Pass, Handoff::Waiting, Handoff::Settled, Handoff::NoProgress, Handoff::Unmeasured];
+        let names: Vec<&str> = listed.iter().map(|found| found.as_str()).collect();
+        assert_eq!(names, HANDOFFS, "母集団 {} 値（宣言順）", HANDOFFS.len());
     }
 
     /// 順序は (1) `first` (2) priority (3) 起票順（設計 dispatcher.md §2）。**散文の順序を持たない**ので、

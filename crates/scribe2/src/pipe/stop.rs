@@ -115,7 +115,7 @@ fn stop_all_with(
     policy: LockPolicy,
     terminate: &dyn Fn(u64, u64) -> bool,
 ) -> Outcome {
-    if !args.iter().any(|arg| arg == "--all") {
+    if !super::cli::present(args, "--all") {
         return refused("--all が要る".to_owned());
     }
     let state_dir = match state_dir_of(args) {

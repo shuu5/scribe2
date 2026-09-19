@@ -72,7 +72,12 @@ pub(in crate::pipe) fn turn_of<'a>(id: &'a str, resolved: &'a Resolved, runner: 
 /// `pipe run`。intake → 審査 → spawn → gate → land を 1 process で連続させる。
 ///
 /// 各段は永続面を読み書きするので、途中で落ちても `resume` が続きを引ける。
-pub(super) fn run_all(args: &[String], manifest: &Manifest, policy: LockPolicy) -> Outcome {
+pub(super) fn run_all(
+    args: &[String],
+    manifest: &Manifest,
+    policy: LockPolicy,
+    driven: &mut Option<super::Driven>,
+) -> Outcome {
     let runner = match need(args, "--runner") {
         Ok(found) => found.to_owned(),
         Err(reason) => return refused(reason),
@@ -81,6 +86,9 @@ pub(super) fn run_all(args: &[String], manifest: &Manifest, policy: LockPolicy) 
         Ok(found) => found,
         Err(outcome) => return outcome,
     };
+    // **自分が駆動する便を名乗る**（設計 dispatcher.md §5）: 便はいま作ったので入口に段は無い
+    // ＝どの段に着いても前進である。`--drive` を読むのは呼び手（[`super::dispatch`]）の 1 か所。
+    *driven = Some(super::Driven { run: id.clone(), entry: None });
     // **driver の札をここで置く**（設計 dispatcher.md §5）: この process が死んだら、札が残って列の
     // 1 周が起こし直す。`Drop` で消えるので、どの段で終わっても残らない。
     // 握れない周は駆動しない（新しい run id なので、ここで落ちるのは置き場を書けない周だけ）。
