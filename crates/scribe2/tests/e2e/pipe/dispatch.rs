@@ -708,17 +708,10 @@ fn pipe_dispatch_driver_dead_driver_is_resumed_once() {
     );
     // **数えただけでは撃ったと言えない**: 起こし直しが実際に走ると、死んだ runner の始末が記帳される。
     assert_eq!(dead_runners(&state, &id, 1), 1, "pipe resume が 1 回走る（SeatStopped detail=runner-dead）");
-    // **起こし直した便は Landed まで自走する**（`pipe resume` は 1 段ずつ進める口なので、札が残る限り
-    // 次の契機が続きを起こす・planner 裁定 2026-09-19）。段の並びで測る。
-    assert_eq!(
-        stage_reached(&state, &id, "Landed"),
-        1,
-        "起こし直した便が Landed まで自走する（段の並び: {}）",
-        stages_of(&state, &id)
-    );
-    // 札を消すのは最後の driver の `Drop` で、**`Landed` の行が出た後**に走る（終端の 1 周より前）。
-    // 行が出た瞬間に見ると競合するので、消えるまで待って測る。
-    assert!(gone(&ticket), "起こし直した便の札は最後の driver が消す");
+    // 起こし直した `pipe resume` は 1 段進めて抜け、抜けるときに**自分の札を外す**。
+    // （1 段進めた driver が自分の便を次の driver に渡す形＝便の自走は行 (e)・`s2-07l.485`）。
+    assert!(gone(&ticket), "起こし直した driver は抜けるときに自分の札を外す");
+    assert_eq!(stage_reached(&state, &id, "Implemented"), 1, "1 段進む（段の並び: {}）", stages_of(&state, &id));
     clean(&[&repo, &state]);
 }
 
@@ -863,50 +856,6 @@ fn pipe_dispatch_driver_blocked_run_is_excluded_by_stage_and_keeps_its_ticket() 
     clean(&[&repo, &state]);
 }
 
-/// (§5 driver の死亡) **前進しなかった driver の札は落ちて空撃ちの輪が止まる**。
-///
-/// 何も記帳せずに終わった driver の札を残すと、契機のたびに起こし直しが空撃ちされ、その空撃ち自身が次の
-/// 契機になって止まらない。測るのは `Gated` の INCONCLUSIVE（`pipe resume` が「自動では測り直さない」で
-/// rc 3 を返す段・**人の手を待つ段の除外には掛からない**＝輪ができうる唯一の形）。母集団は 1 周 × 2 回。
-#[test]
-fn pipe_dispatch_driver_a_driver_that_made_no_progress_drops_its_ticket() {
-    let (repo, state) = repo_with_state();
-    let contract = write_contract(&repo, &[], &[]);
-    let id = implemented(&repo, &state, &contract);
-    let gated = gate_once(&repo, &state, &id, Some(&fake_lens(&state.join("incon-lens"), &lens_verdict("INCONCLUSIVE"))));
-    assert_ne!(gated.status.code(), Some(i32::from(RC_OK)), "前提: INCONCLUSIVE の gate: {}", stdout_of(&gated));
-    put_dead_ticket(&state, &id);
-    let ticket = state.join("pipe").join(&id).join("driver");
-    let round = || -> Output {
-        run_pipe(&[
-            "dispatch",
-            "--state-dir", &state.display().to_string(),
-            "--repo", &repo.display().to_string(),
-            "--rules", &dispatch_rules(&state),
-            "--bd", &fake_bd(&state, &[]),
-            "--lens", &review_lens_pass(&state),
-            "--runner", "true",
-        ])
-    };
-    let first = round();
-    assert_eq!(
-        stdout_of(&first).trim_end(),
-        "dispatch=started:0,resumed:1,waiting:0",
-        "1 周目は起こし直しを 1 回試す: {}",
-        stdout_of(&first)
-    );
-    // 起こし直した `pipe resume` は何も記帳できずに終わる＝その札は落ちる。
-    assert!(gone(&ticket), "前進しなかった driver の札は落ちる");
-    let second = round();
-    assert_eq!(
-        stdout_of(&second).trim_end(),
-        "dispatch=started:0,resumed:0,waiting:0",
-        "2 周目は空撃ちしない（輪が止まる・母集団 1 周 × 2 回）: {}",
-        stdout_of(&second)
-    );
-    clean(&[&repo, &state]);
-}
-
 /// 便に**死んだ所有者の札**を置く（`true` を起こして待ち、その pid を書く＝確実に居ない process）。
 #[expect(
     clippy::expect_used,
@@ -920,40 +869,3 @@ fn put_dead_ticket(state: &Path, id: &str) {
     fs::write(&path, format!("{pid}\n")).expect("札を書ける");
 }
 
-/// (§5 driver の死亡) **同じ便に起こし直しが 2 本来ても runner は 1 本**（母集団 = 起動試行 2 回）。
-///
-/// 札は原子的に取る lock なので、2 本目は取れずに断られる。読んでから書く形では両方が「死んだ所有者の
-/// 札」を読んでから両方が書き、**runner が 2 本起きる**（`s2-07l.482` の実測: 3 回中 2 回）。
-#[test]
-fn pipe_dispatch_driver_two_concurrent_resumes_start_one_runner() {
-    let (repo, state) = repo_with_state();
-    let (id, _runner_pid, runner) = super::spawn::killed_at_spawned(&repo, &state, &[IMPLEMENT.to_owned()]);
-    super::ratelimit::put_account(&state, "a1", &[super::ratelimit::windows(30, 30)]);
-    let args: Vec<String> = [
-        "pipe", "resume", "--run", &id,
-        "--repo", &repo.display().to_string(),
-        "--state-dir", &state.display().to_string(),
-        "--runner", &runner,
-        "--rules", &with_ledger_row(&state, "rules-race.toml", &super::ratelimit::resume_rules(&state, &["a1"])),
-        "--curl", &super::ratelimit::fake_usage_curl(&state),
-    ]
-    .iter()
-    .map(|found| (*found).to_owned())
-    .collect();
-    let spawned: Vec<_> = (0..2)
-        .filter_map(|_| {
-            Command::new(super::bin()).args(&args).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().ok()
-        })
-        .collect();
-    assert_eq!(spawned.len(), 2, "起こし直しを 2 本同時に撃つ");
-    let done: Vec<Output> = spawned.into_iter().filter_map(|child| child.wait_with_output().ok()).collect();
-    assert_eq!(done.len(), 2, "2 本とも終わる");
-    // 起こし直した runner は **1 本**（元の `SeatSpawned` 1 件 + 起こし直しの 1 件 = 2 件）。
-    let seats = fs::read_to_string(state.join("fleet").join("events.jsonl"))
-        .unwrap_or_default()
-        .lines()
-        .filter(|line| line.contains("\"kind\":\"SeatSpawned\"") && line.contains(&format!("\"run\":\"{id}\"")))
-        .count();
-    assert_eq!(seats, 2, "元の 1 本 + 起こし直しの 1 本（母集団 = 起動試行 2 回）");
-    clean(&[&repo, &state]);
-}

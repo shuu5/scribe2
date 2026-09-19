@@ -75,14 +75,8 @@ pub fn driver_path(state_dir: &Path, id: &str) -> PathBuf {
 /// typed な断りで終わった周も畳まれた周も札は残らない——**残るのは process が死んだ周だけ**で、それが
 /// 列の起こし直しの入力である。
 pub struct Driver {
-    /// 置き場。
-    state_dir: PathBuf,
-    /// 便 id。
-    run: String,
     /// 置いた札。
     path: PathBuf,
-    /// 札を置いた時点でその便が持っていた event の件数（**前進したか**の基準）。
-    events: usize,
 }
 
 impl Driver {
@@ -103,36 +97,19 @@ impl Driver {
         // 所有者は `retry_ms` まで待つ——札は数分〜数十分握られるので、古さで剥がすと生きている driver
         // の札を奪う。待てるので、**継ぎの子は親が抜けるまで待って取れる**。
         store::acquire_with(&path, policy, store::Reclaim::DeadOnly).ok()?;
-        let events = run_events(state_dir, id);
-        Some(Self { state_dir: state_dir.to_path_buf(), run: id.to_owned(), path, events })
+        Some(Self { path })
     }
 }
 
 impl Drop for Driver {
-    /// **札を消すのは便が live で無くなった周だけ**（設計 dispatcher.md §5・`s2-07l.482`）。
+    /// **自分の札を外す**（`Drop` が走るのは process が正常に抜ける周だけ）。
     ///
-    /// driver が **live な便を残したまま**終わった周は札を残す——所有者が死んだ便として次の契機が
-    /// 起こし直す。`pipe resume` は 1 段ずつ進める口なので、便はこの連鎖で終端まで自走する（札を
-    /// 正常終了のたびに消すと、便は「札の無い live 便」＝触らない側に落ちて二度と進まない・実測 2026-09-19:
-    /// 殺した driver の便が `Implemented` で止まった）。
+    /// 札が残るのは **driver が死んだ周だけ**である——それが列の起こし直しの入力になる。消すのは自分の
+    /// pid を持つ札だけで、同じ便に別の driver が後から入っていればその札は落とさない。
     ///
-    /// **前進しなかった周も消す**: 何も記帳せずに終わった driver（承認待ち・回答待ち・測り直しが要る
-    /// `Gated` の INCONCLUSIVE 等、`pipe resume` が rc 3 で何もしない段）の札を残すと、契機のたびに
-    /// 起こし直しが空撃ちされ、その空撃ち自身が次の契機になって**止まらない**（`s2-07l.482` の実装中に
-    /// 見つけた形）。前進した driver の札だけが「続きが要る便」を名乗る。
-    ///
-    /// 段を読めない周も消す（触らない側へ倒す・fail-closed）。消せない札は次の 1 周が所有者の生死で判じる。
+    /// 1 段進めた driver が自分の便を次の driver に渡す形（便の自走）は**本便の外**である（設計
+    /// dispatcher.md §5 の行 (e)）。
     fn drop(&mut self) {
-        let alive = current(&self.state_dir)
-            .ok()
-            .and_then(|state| state.runs.get(&self.run).map(|run| run.stage))
-            .and_then(|stage| cli::live(&self.state_dir, &self.run, stage));
-        let advanced = run_events(&self.state_dir, &self.run) > self.events;
-        if alive == Some(true) && advanced {
-            return;
-        }
-        // **消すのは自分の札だけである**: 同じ便に別の driver が後から入って札を置き換えていれば、
-        // ここで消すと**生きている driver の札**を落とす（その便は以後「札の無い便」＝誰も継がない）。
         let mine = std::fs::read_to_string(&self.path)
             .is_ok_and(|body| body.trim().parse::<u32>() == Ok(std::process::id()));
         if mine {
@@ -141,25 +118,16 @@ impl Drop for Driver {
     }
 }
 
-/// 便に紐づく event の件数（**前進したか**の基準・読めない周は 0）。
-fn run_events(state_dir: &Path, id: &str) -> usize {
-    store::read_all(state_dir).map_or(0, |events| events.iter().filter(|event| event.run == id).count())
-}
-
-/// 便の driver が**もう駆動していない**か（**札が無い・読めない周は `false`＝触らない**・測れないを
-/// 「死んだ」に読み替えない）。
+/// 便の driver が**死んでいる**か（**札が無い・読めない周は `false`＝触らない**・測れないを「死んだ」に
+/// 読み替えない）。
 ///
-/// 「所有者の process が無い」に加えて、**札の所有者が自分自身である周**も含む。終端の直後に撃つ 1 周は、
-/// その便を駆動していた process（＝自分）が仕事を終えて抜ける直前に走る（設計 §5「終端の記帳の後」）。
-/// 自分の札を「生きている」と読むと、1 段進めて抜ける driver の後を誰も継がない——`pipe resume` は 1 段ずつ
-/// 進める口なので、便はそこで止まる（`s2-07l.482` の実測: 起こし直した便が `Implemented` で止まった）。
-pub fn driver_is_stale(state_dir: &Path, id: &str) -> bool {
+/// 札が残るのは driver が死んだ周だけである（正常に抜けた process は `Drop` で自分の札を外す）ので、
+/// 残った札の所有者が居なければ、その便は駆動する者を失っている。`pid` の再利用で生きて見える札は
+/// 触らない側へ倒す（判定は lock の所有者と同じ 1 本・C6.3）。
+pub fn driver_is_dead(state_dir: &Path, id: &str) -> bool {
     let Ok(body) = std::fs::read_to_string(driver_path(state_dir, id)) else {
         return false;
     };
-    if body.trim().parse::<u32>() == Ok(std::process::id()) {
-        return true;
-    }
     store::lock_owner(&body, store::started_ms) == store::Owner::Dead
 }
 

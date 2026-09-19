@@ -340,7 +340,7 @@ const WAITING: [Stage; 2] = [Stage::Blocked, Stage::Questioned];
 ///
 /// **札が無い・読めない便は触らない**（測れないを「死んだ」に読み替えない・fail-closed）。別の process が
 /// 生きて持っている札の便も、`pid` の再利用で生きて見える便も触らない（判定は lock の所有者と同じ 1 本）。
-/// 人の手を待つ段（[`WAITING`]）も候補から外す。自分の札の便は**継ぐ**（[`super::driver_is_stale`]）。
+/// 人の手を待つ段（[`WAITING`]）も候補から外す。
 fn revivals(input: &Input<'_>) -> Vec<Revive> {
     let Ok(state) = current(input.state_dir) else {
         return Vec::new();
@@ -350,7 +350,7 @@ fn revivals(input: &Input<'_>) -> Vec<Revive> {
         .iter()
         .filter(|(id, run)| live(input.state_dir, id, run.stage) == Some(true))
         .filter(|(_, run)| !WAITING.contains(&run.stage))
-        .filter(|(id, _)| super::driver_is_stale(input.state_dir, id))
+        .filter(|(id, _)| super::driver_is_dead(input.state_dir, id))
         .map(|(id, _)| revive_of(input, id))
         .collect()
 }
