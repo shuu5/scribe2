@@ -123,6 +123,17 @@ fn ls(repo: &Path, state: &Path, bd: &str) -> Output {
     ])
 }
 
+/// 落ちた周に写す 1 行（**rc と stdout と stderr**）。stdout だけを写すと、断りで早返りした周の理由が
+/// 見えない（`s2-07l.486` の main の赤で、rc を見るために歯を patch する羽目になった）。
+fn told(out: &Output) -> String {
+    format!(
+        "rc={:?} out={} err={}",
+        out.status.code(),
+        stdout_of(out).replace('\n', " / ").trim_end(),
+        stderr_of(out).replace('\n', " / ").trim_end()
+    )
+}
+
 /// `dispatch ls` の 1 行のうち `bead=<id>` のものの `reason=` の値。
 fn reason_of(out: &Output, bead: &str) -> String {
     stdout_of(out)
@@ -396,17 +407,19 @@ fn pipe_terminal_dispatch_reads_the_repo_materials_once_for_every_candidate() {
     clean(&[&repo, &state]);
 }
 
-/// (§5 手動の 1 周・印の直後) subcommand の無い `pipe dispatch` は 1 周を撃ってその結果を 1 行で返し、
-/// `first` / `release` の記録の直後にも同じ 1 周が撃たれる。`hold` は起こす側を増やさないので撃たない。
+/// (§5 手動の 1 周) subcommand の無い `pipe dispatch` は 1 周を撃ってその結果を 1 行で返し、通る便を
+/// **起こす**（`RunCreated` が増える）。測れない周は件数でなく理由を名乗る（C10）。
+///
+/// 印の直後の 1 周は**便を起こさない歯**（`..._marks_fire_without_children`・行 g）が測る——ここで
+/// 続けて測ると、起こした子 process が走っている最中の状態に依存する（`s2-07l.487`）。
 #[test]
-fn pipe_terminal_dispatch_manual_turn_and_marks_fire_the_same_round() {
+fn pipe_terminal_dispatch_manual_turn_starts_the_runs_it_can() {
     let (repo, state) = repo_with_state();
     two_rows(&repo);
     let bd = fake_bd(&state, &[issue("s2-toy.1", 2, "a"), issue("s2-toy.2", 0, "b")]);
-    let turn = |extra: &[&str]| -> Output {
-        let mut args: Vec<String> = vec!["dispatch".to_owned()];
-        args.extend(extra.iter().map(|found| (*found).to_owned()));
-        args.extend([
+    let turn = || -> Output {
+        let args: Vec<String> = vec![
+            "dispatch".to_owned(),
             "--state-dir".to_owned(),
             state.display().to_string(),
             "--repo".to_owned(),
@@ -421,29 +434,20 @@ fn pipe_terminal_dispatch_manual_turn_and_marks_fire_the_same_round() {
             // 実装役は偽の 1 行（器は runner の既定を持たない）。
             "--runner".to_owned(),
             "true".to_owned(),
-        ]);
+        ];
         let borrowed: Vec<&str> = args.iter().map(String::as_str).collect();
         run_pipe(&borrowed)
     };
-    let manual = turn(&[]);
-    assert_eq!(manual.status.code(), Some(i32::from(RC_OK)), "手動の 1 周は rc 0: {}", stderr_of(&manual));
-    assert_eq!(stdout_of(&manual).trim_end(), "dispatch=started:2,resumed:0,waiting:0", "交差しない 2 本は両方起こせる");
+    let manual = turn();
+    assert_eq!(manual.status.code(), Some(i32::from(RC_OK)), "手動の 1 周は rc 0（{}）", told(&manual));
+    assert_eq!(
+        stdout_of(&manual).trim_end(),
+        "dispatch=started:2,resumed:0,waiting:0",
+        "交差しない 2 本は両方起こせる（{}）",
+        told(&manual)
+    );
     // **起こした効果**: 起こした 2 本ぶんの `RunCreated` が置き場に積まれる（構築点で止まらない・裁定 (A)）。
     assert_eq!(created(&state, &["s2-toy.1", "s2-toy.2"], 2), 2, "起こした便の RunCreated が 2 件");
-    // `hold` は 1 周を撃たない（印の行だけ）。
-    let held = turn(&["hold", "s2-toy.1"]);
-    assert_eq!(stdout_of(&held).lines().count(), 1, "hold は印の行だけ: {}", stdout_of(&held));
-    assert!(!stdout_of(&held).contains("dispatch=started"), "hold は 1 周を撃たない");
-    // `release` は印を外した直後に 1 周を撃つ＝2 行目に結果が出る。**起こす本数は 0 でよい**
-    // （最初の 1 周で起こした 2 便が live で、同じ契約は自分の便と交差する）＝測るのは「撃たれたか」である。
-    let released = turn(&["release", "s2-toy.1"]);
-    assert_eq!(
-        stdout_of(&released).lines().last(),
-        Some("dispatch=started:0,resumed:0,waiting:2"),
-        "release の直後に 1 周（起こした 2 便と交差して 0 本）: {}",
-        stdout_of(&released)
-    );
-    assert_eq!(created(&state, &["s2-toy.1", "s2-toy.2"], 2), 2, "2 周目は便を増やさない");
     // 台帳を読めない周は件数でなく理由を名乗る（0 件と融合しない・C10）。
     let broken = script(&state.join("bd-broken2"), "exit 1\n");
     let unmeasured = run_pipe(&[
@@ -454,7 +458,7 @@ fn pipe_terminal_dispatch_manual_turn_and_marks_fire_the_same_round() {
         "--bd", &broken,
         "--runner", "true",
     ]);
-    assert_eq!(stdout_of(&unmeasured).trim_end(), "dispatch=unmeasured reason=ledger", "読めない周は理由");
+    assert_eq!(stdout_of(&unmeasured).trim_end(), "dispatch=unmeasured reason=ledger", "読めない周は理由（{}）", told(&unmeasured));
     // **実装役の口が無い周は台帳も読まない**（起こせないと分かっている＝理由が別の値・C10）。
     let no_runner = run_pipe(&[
         "dispatch",
@@ -463,7 +467,12 @@ fn pipe_terminal_dispatch_manual_turn_and_marks_fire_the_same_round() {
         "--rules", &dispatch_rules(&state),
         "--bd", &bd,
     ]);
-    assert_eq!(stdout_of(&no_runner).trim_end(), "dispatch=unmeasured reason=no-runner", "runner が無い周");
+    assert_eq!(
+        stdout_of(&no_runner).trim_end(),
+        "dispatch=unmeasured reason=no-runner",
+        "runner が無い周（{}）",
+        told(&no_runner)
+    );
     clean(&[&repo, &state]);
 }
 
@@ -869,3 +878,56 @@ fn put_dead_ticket(state: &Path, id: &str) {
     fs::write(&path, format!("{pid}\n")).expect("札を書ける");
 }
 
+
+/// (§5 印の直後) `first` / `release` の記録の直後にも 1 周が撃たれ、`hold` は撃たない。
+///
+/// **便を 1 本も起こさずに測る**（`s2-07l.487`・行 g）: 台帳の候補が live な便と交差する形にすれば、
+/// 1 周は必ず `started:0` で、子 process が 1 つも生まれない。起こしてから印を打つ形（`.366` の元の歯）
+/// は、**走っている子の状態に依存**する——`s2-07l.486` の merge sha で CI が 1 度赤くなり、同じ sha の
+/// 再走では緑・ローカルの負荷では両側 0/20 で、原因を特定できなかった（台帳 notes）。
+#[test]
+fn pipe_terminal_dispatch_marks_fire_without_children() {
+    // flip-check: retroactive s2-07l.487
+    let (repo, state) = repo_with_state();
+    two_rows(&repo);
+    // 行 a を持つ live な便を 1 本置く＝台帳の候補（行 a）は必ず交差して起こせない。
+    let live = intake_bead(&repo, &state, &format!("{DESIGN_FILE}#a"), "s2-live");
+    let bd = fake_bd(&state, &[issue("s2-toy.1", 2, "a")]);
+    let turn = |extra: &[&str]| -> Output {
+        let mut args: Vec<String> = vec!["dispatch".to_owned()];
+        args.extend(extra.iter().map(|found| (*found).to_owned()));
+        args.extend([
+            "--state-dir".to_owned(),
+            state.display().to_string(),
+            "--repo".to_owned(),
+            repo.display().to_string(),
+            "--rules".to_owned(),
+            dispatch_rules(&state),
+            "--bd".to_owned(),
+            bd.clone(),
+            "--runner".to_owned(),
+            "true".to_owned(),
+        ]);
+        let borrowed: Vec<&str> = args.iter().map(String::as_str).collect();
+        run_pipe(&borrowed)
+    };
+    let waiting = "dispatch=started:0,resumed:0,waiting:1";
+    let manual = turn(&[]);
+    assert_eq!(stdout_of(&manual).trim_end(), waiting, "交差する候補は起こせない（{}）", told(&manual));
+    // `first` の記録の直後に 1 周（印の行 → 1 周の行の 2 行）。
+    let first = turn(&["first", "s2-toy.1"]);
+    assert_eq!(first.status.code(), Some(i32::from(RC_OK)), "first は rc 0（{}）", told(&first));
+    assert_eq!(stdout_of(&first).lines().last(), Some(waiting), "first の直後に 1 周（{}）", told(&first));
+    // `hold` は起こす側を増やさないので 1 周を撃たない（印の行だけ）。
+    let held = turn(&["hold", "s2-toy.1"]);
+    assert_eq!(stdout_of(&held).lines().count(), 1, "hold は印の行だけ（{}）", told(&held));
+    assert!(!stdout_of(&held).contains("dispatch="), "hold は 1 周を撃たない（{}）", told(&held));
+    // `release` の記録の直後にも 1 周。
+    let released = turn(&["release", "s2-toy.1"]);
+    assert_eq!(released.status.code(), Some(i32::from(RC_OK)), "release は rc 0（{}）", told(&released));
+    assert_eq!(stdout_of(&released).lines().last(), Some(waiting), "release の直後に 1 周（{}）", told(&released));
+    // **子 process は 1 つも生まれない**（母集団 = 撃った 1 周 4 回）。
+    assert_eq!(created(&state, &["s2-toy.1"], 0), 0, "便を 1 本も起こさない（1 周 4 回）");
+    assert_eq!(kind_count(&state, &live, vessel::fleet::EventKind::RunCreated), 1, "live な便は元の 1 件のまま");
+    clean(&[&repo, &state]);
+}
