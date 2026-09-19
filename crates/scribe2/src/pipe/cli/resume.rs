@@ -30,6 +30,8 @@ pub(super) fn resume(args: &[String], manifest: &Manifest, policy: LockPolicy) -
         Ok(found) => found,
         Err(reason) => return refused(reason),
     };
+    // **driver の札をここで置く**（設計 dispatcher.md §5・`pipe run` と同じ 1 つの型）。
+    let _driver = crate::pipe::Driver::hold(&state_dir, &id);
     let state = match current(&state_dir) {
         Ok(found) => found,
         Err(errors) => return Outcome::failed(RC_BROKEN, errors.iter().map(StoreError::to_string).collect()),

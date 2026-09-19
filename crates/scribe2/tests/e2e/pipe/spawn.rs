@@ -954,7 +954,7 @@ fn wait_gone(pid: u32) {
 /// runner の group** の順に SIGKILL する（host の再起動で両方が消えた形）。`pipe run` を先に殺すのは、runner が先に
 /// 消えると生きている `pipe run` がその終了を見届けて `SeatStopped` と `Failed` を記帳し、作りたい「`SeatStopped` の無い
 /// `Spawned`」にならないため。返すのは（便 id・runner の pid・turn 2 以降の本文を持つ runner cmd）。
-fn killed_at_spawned(repo: &Path, state: &Path, rest: &[String]) -> (String, u32, String) {
+pub(super) fn killed_at_spawned(repo: &Path, state: &Path, rest: &[String]) -> (String, u32, String) {
     let contract = write_set_contract(repo, "wip.toml", &["src/lib.rs", &format!("+{WIP_FILE}")]);
     let pid_file = state.join("wip-sleep.pid");
     let mut turns = vec![wip_then_wait_turn(&pid_file)];
@@ -1159,7 +1159,7 @@ fn record_approval(state: &Path, id: &str, extra: &[&str]) -> Output {
 
 /// 3 クラスを名乗る契約で intake → spawn まで撃ち、Blocked で止まった便の
 /// id と stdout を返す。stdout は「いまどの段に居るか」の主張なので測る対象である。
-fn blocked(repo: &Path, state: &Path, marker: &Path, classes: &str) -> (String, String) {
+pub(super) fn blocked(repo: &Path, state: &Path, marker: &Path, classes: &str) -> (String, String) {
     let path = write_contract(repo, &[], &[classes]);
     let id = intake(repo, state, &path);
     let out = run_pipe(&[

@@ -707,8 +707,12 @@ fn prepare_worktree(launch: &Launch<'_>) -> Result<(PathBuf, String), String> {
         add_worktree(launch.repo, &worktree, launch.run, &base)?;
         return Ok((worktree, base));
     }
-    let base = base_of_run(launch.state_dir, launch.run)
-        .ok_or_else(|| format!("run {} の base を読めない", launch.run))?;
+    let found = base_of_run(launch.state_dir, launch.run);
+    let unreadable = found.is_unreadable();
+    let base = found.known().ok_or_else(|| match unreadable {
+        true => format!("run {} の base を読めない（置き場）", launch.run),
+        false => format!("run {} に base が無い", launch.run),
+    })?;
     let branch = branch_name(launch.run);
     let on_branch = git_line(&worktree, &["rev-parse", "--abbrev-ref", "HEAD"]).is_some_and(|found| found == branch);
     if !on_branch {

@@ -175,9 +175,14 @@ const PIPE: &str = "pipe";
 /// 変えない・次の契機で拾う・§5）。判定は turn の 1 回だが、`pipe run` 側の受付は外さない（二重に守る・
 /// planner 裁定 2026-09-19 の条件 (2)）。
 fn start(launch: &Launch) -> bool {
+    spawn_self(&launch.argv)
+}
+
+/// 自分自身を `pipe <argv>` で起こす（**起こす側と起こし直す側の 1 実装**・C2）。
+fn spawn_self(argv: &[String]) -> bool {
     Command::new(myself())
         .arg(PIPE)
-        .args(&launch.argv)
+        .args(argv)
         .process_group(0)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -204,6 +209,15 @@ pub struct Launch {
     pub argv: Vec<String>,
 }
 
+/// 起こし直しの構築点（`pipe resume` の引数まで組んだ 1 件・設計 §5「driver の死亡」）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Revive {
+    /// 便 id。
+    pub run: String,
+    /// `pipe` に続く引数（`resume --run <id> --repo … --state-dir …` + 列に渡された道具）。
+    pub argv: Vec<String>,
+}
+
 /// 列の 1 周の結果。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Turn {
@@ -211,6 +225,8 @@ pub struct Turn {
     pub candidates: Vec<Candidate>,
     /// 起こす便の構築点（`candidates` の `reason` が `None` の件と同じ順・同じ本数）。
     pub launches: Vec<Launch>,
+    /// 起こし直す便（driver の札の所有者が死んでいる live 便・run id の順）。
+    pub revives: Vec<Revive>,
     /// 台帳を読めなかった周の理由（`Some` なら他の 2 つは空）。
     pub unmeasured: Option<Unmeasured>,
 }
@@ -231,6 +247,8 @@ pub struct Input<'a> {
     pub rules: Option<&'a str>,
     /// 審査の lens の口（`--lens`）。渡された周だけ起こす便へそのまま渡す（既定は便の側が持つ）。
     pub lens: Option<&'a str>,
+    /// 口座残量の計測の口（`--curl`）。起こす便と起こし直す便へそのまま渡す（既定は便の側が持つ）。
+    pub curl: Option<&'a str>,
     /// 実装役の口（`--runner`）。**無ければ 1 本も起こさない**——`pipe run` は `--runner` を要り、
     /// 器は既定を持たない（宣言にも rules 行にも無い・2026-09-19 の実測）。列が勝手な既定を作ると、
     /// 「何を起こすか」が契約の外で決まる（C5 / C1）。
@@ -282,6 +300,8 @@ struct Ledger<'a> {
 /// [`turn`] を撃つ＝**見るだけでは 1 本も起こらない**（§6）。起こせなかった便は起こした数に数えず、
 /// 理由つきで待ちに残す（終端の rc は呼び手が変えない・次の契機で拾う・C10）。
 pub fn fire(input: &Input<'_>) -> Turn {
+    // **driver の死んだ便を先に起こし直す**（設計 §5）: 起こし直した便は live のままなので列の交差は
+    // 動かない。起こす側より先に撃つのは、同じ 1 周の中で「止まっている便」を先に動かすためである。
     // **実装役の口が無い周は列を測らない**（`pipe run` は `--runner` を要り、器は既定を持たない）。
     // 起こせないと分かっている周に台帳の子 process を撃つと、便の終端ごとに読みが 1 回乗る（実測: e2e
     // 全体が 21 秒 → 111 秒）。測っていないので `0 件`とも言わない（C10）——列を見る口は `dispatch ls`。
@@ -289,6 +309,14 @@ pub fn fire(input: &Input<'_>) -> Turn {
         return unmeasured(Unmeasured::NoRunner);
     }
     let mut turn = turn(input);
+    // **測れなかった周は 1 つも動かさない**（起こすのも起こし直すのも同じ 1 周の中の手・fail-closed）。
+    // 起こし直しは台帳を読まないが、列を 1 周として成立させられない周に片方だけ動かすと、
+    // `dispatch=unmeasured` の行が「何もしなかった」を意味しなくなる（C10）。
+    if turn.unmeasured.is_some() {
+        return turn;
+    }
+    turn.revives = revivals(input);
+    turn.revives.retain(resume);
     let failed: Vec<String> =
         turn.launches.iter().filter(|launch| !start(launch)).map(|launch| launch.bead.clone()).collect();
     turn.launches.retain(|launch| !failed.contains(&launch.bead));
@@ -298,6 +326,53 @@ pub fn fire(input: &Input<'_>) -> Turn {
         }
     }
     turn
+}
+
+/// **人の手を待つ段**（承認待ち・回答待ち）。起こし直しの候補から**段で外す**（札は残す）。
+///
+/// `pipe resume` はこの 2 段で何もせず rc 3 を返す（待っている事実は段が既に持つ）ので、札が残ったまま
+/// 契機のたびに起こし直すと空撃ちになる。**札は消さない**——消すと、承認や回答が記帳された後に driver の
+/// 居ない live 便が「札の無い便＝触らない」に落ちて二度と自走せず、人が `pipe resume` を撃つ手順が戻る
+/// （planner 裁定 2026-09-19）。段で外せば、回答の後の次の契機で自走に戻る。
+const WAITING: [Stage; 2] = [Stage::Blocked, Stage::Questioned];
+
+/// 起こし直す便（live 便のうち **driver の札の所有者が死んでいる**もの・設計 §5「driver の死亡」）。
+///
+/// **札が無い・読めない便は触らない**（測れないを「死んだ」に読み替えない・fail-closed）。別の process が
+/// 生きて持っている札の便も、`pid` の再利用で生きて見える便も触らない（判定は lock の所有者と同じ 1 本）。
+/// 人の手を待つ段（[`WAITING`]）も候補から外す。自分の札の便は**継ぐ**（[`super::driver_is_stale`]）。
+fn revivals(input: &Input<'_>) -> Vec<Revive> {
+    let Ok(state) = current(input.state_dir) else {
+        return Vec::new();
+    };
+    state
+        .runs
+        .iter()
+        .filter(|(id, run)| live(input.state_dir, id, run.stage) == Some(true))
+        .filter(|(_, run)| !WAITING.contains(&run.stage))
+        .filter(|(id, _)| super::driver_is_stale(input.state_dir, id))
+        .map(|(id, _)| revive_of(input, id))
+        .collect()
+}
+
+/// 起こし直しの構築点（`pipe resume` の引数を組む・**撃たない**）。道具は起こす側と同じ 1 本から渡す。
+fn revive_of(input: &Input<'_>, run: &str) -> Revive {
+    let mut argv = vec![
+        "resume".to_owned(),
+        "--run".to_owned(),
+        run.to_owned(),
+        "--repo".to_owned(),
+        input.repo.display().to_string(),
+        "--state-dir".to_owned(),
+        input.state_dir.display().to_string(),
+    ];
+    argv.extend(tools(input));
+    Revive { run: run.to_owned(), argv }
+}
+
+/// 起こし直す（子 process・[`start`] と同じ形で待たない）。
+fn resume(revive: &Revive) -> bool {
+    spawn_self(&revive.argv)
 }
 
 /// 列の順序を決める 1 関数（**pure**・設計 §2「順序」）: (1) 介入 `first` (2) 台帳の `priority`（P0 → P4）
@@ -321,7 +396,7 @@ fn digits_of(bead: &str) -> Vec<u64> {
 
 /// 台帳を読めなかった周の 1 周（1 本も起こさない）。
 fn unmeasured(reason: Unmeasured) -> Turn {
-    Turn { candidates: Vec::new(), launches: Vec::new(), unmeasured: Some(reason) }
+    Turn { candidates: Vec::new(), launches: Vec::new(), revives: Vec::new(), unmeasured: Some(reason) }
 }
 
 /// 列の入力になる bead か（設計 §2・**ここで落ちた bead は `ls` にも出ない**＝契約が未確定か終わっている）。
@@ -385,7 +460,7 @@ fn settle(
         slots: host_slots_dir(input.state_dir),
     });
     let mut started: Vec<(String, Vec<String>)> = Vec::new();
-    let mut turn = Turn { candidates: Vec::new(), launches: Vec::new(), unmeasured: None };
+    let mut turn = Turn { candidates: Vec::new(), launches: Vec::new(), revives: Vec::new(), unmeasured: None };
     for mut candidate in candidates {
         if let (Some((pointer, contract)), Some(room)) = (ready.get(&candidate.bead), room.as_ref()) {
             match blocker(input, contract, room, &started) {
@@ -465,18 +540,28 @@ fn launch_of(input: &Input<'_>, bead: &str, pointer: &Pointer) -> Launch {
         "--state-dir".to_owned(),
         input.state_dir.display().to_string(),
     ];
-    // 列に渡された道具は起こす便へ**そのまま全部**渡す＝列と便が同じ道具で動く。渡されていない周は
-    // 何も足さない（既定は便の側が持つ）。
-    //
-    // **台帳 client（`--bd`）も渡す**: 起こした子（`pipe run`）自身も終端で 1 周撃つので、落とすと
-    // 子の 1 周が既定の台帳を読み、**1 hop で列の名指した台帳と食い違う**（列は偽の台帳、子は PATH の
-    // 実 `bd`）。道具の受け渡しは全部か皆無かで、1 つだけ落とすと「同じ道具で動く」が静かに破れる。
-    for (name, value) in
-        [("--rules", input.rules), ("--lens", input.lens), ("--runner", input.runner), ("--bd", input.bd_flag)]
-    {
-        argv.extend(value.map(|found| [name.to_owned(), found.to_owned()]).into_iter().flatten());
-    }
+    argv.extend(tools(input));
     Launch { bead: bead.to_owned(), argv }
+}
+
+/// 列に渡された道具（起こす便と起こし直す便へ**そのまま全部**渡す＝列と便が同じ道具で動く）。
+///
+/// 渡されていない道具は何も足さない（既定は便の側が持つ）。**台帳 client（`--bd`）も渡す**: 起こした子
+/// （`pipe run` / `pipe resume`）自身も終端で 1 周撃つので、落とすと子の 1 周が既定の台帳を読み、
+/// **1 hop で列の名指した台帳と食い違う**。道具の受け渡しは全部か皆無かで、1 つだけ落とすと「同じ道具で
+/// 動く」が静かに破れる（`s2-07l.366` の lens の実測）。
+fn tools(input: &Input<'_>) -> Vec<String> {
+    [
+        ("--rules", input.rules),
+        ("--lens", input.lens),
+        ("--runner", input.runner),
+        ("--bd", input.bd_flag),
+        ("--curl", input.curl),
+    ]
+        .into_iter()
+        .filter_map(|(name, value)| value.map(|found| [name.to_owned(), found.to_owned()]))
+        .flatten()
+        .collect()
 }
 
 /// 順序を止める依存か（`blocks` の未 closed だけ・所属〔`parent-child`〕は順序ではない・`.beads/PRIME.md` R2）。
@@ -571,8 +656,9 @@ pub fn line(turn: &Turn) -> String {
     match turn.unmeasured {
         Some(reason) => format!("dispatch=unmeasured reason={}", reason.as_str()),
         None => format!(
-            "dispatch=started:{},waiting:{}",
+            "dispatch=started:{},resumed:{},waiting:{}",
             turn.launches.len(),
+            turn.revives.len(),
             turn.candidates.len().saturating_sub(turn.launches.len())
         ),
     }

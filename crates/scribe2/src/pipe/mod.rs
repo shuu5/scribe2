@@ -60,6 +60,90 @@ pub fn run_dir(state_dir: &Path, id: &str) -> PathBuf {
     state_dir.join(DIR).join(id)
 }
 
+/// driver の札の名（run dir の直下・設計 dispatcher.md §5「driver の死亡」）。
+pub const DRIVER_FILE: &str = "driver";
+
+/// driver の札（`pipe run` / `pipe resume` の process が入口で置き、終端で消す）。
+pub fn driver_path(state_dir: &Path, id: &str) -> PathBuf {
+    run_dir(state_dir, id).join(DRIVER_FILE)
+}
+
+/// driver の札を握る（設計 dispatcher.md §5）。
+///
+/// 本文は所有者の pid（10 進 1 行）で、生死の判定は lock の所有者と**同じ 1 本**
+/// （[`store::lock_owner`] + [`store::started_ms`]・C6.3・第 2 の probe を作らない）。`Drop` で消すので、
+/// typed な断りで終わった周も畳まれた周も札は残らない——**残るのは process が死んだ周だけ**で、それが
+/// 列の起こし直しの入力である。
+pub struct Driver {
+    /// 置き場。
+    state_dir: PathBuf,
+    /// 便 id。
+    run: String,
+    /// 置いた札。
+    path: PathBuf,
+    /// 札を置いた時点でその便が持っていた event の件数（**前進したか**の基準）。
+    events: usize,
+}
+
+impl Driver {
+    /// 札を置く。書けない周は `None` で、その便は**札の無い便**として扱われる（列は触らない・§5）。
+    pub fn hold(state_dir: &Path, id: &str) -> Option<Self> {
+        let path = driver_path(state_dir, id);
+        std::fs::create_dir_all(path.parent()?).ok()?;
+        std::fs::write(&path, format!("{}\n", std::process::id())).ok()?;
+        let events = run_events(state_dir, id);
+        Some(Self { state_dir: state_dir.to_path_buf(), run: id.to_owned(), path, events })
+    }
+}
+
+impl Drop for Driver {
+    /// **札を消すのは便が live で無くなった周だけ**（設計 dispatcher.md §5・`s2-07l.482`）。
+    ///
+    /// driver が **live な便を残したまま**終わった周は札を残す——所有者が死んだ便として次の契機が
+    /// 起こし直す。`pipe resume` は 1 段ずつ進める口なので、便はこの連鎖で終端まで自走する（札を
+    /// 正常終了のたびに消すと、便は「札の無い live 便」＝触らない側に落ちて二度と進まない・実測 2026-09-19:
+    /// 殺した driver の便が `Implemented` で止まった）。
+    ///
+    /// **前進しなかった周も消す**: 何も記帳せずに終わった driver（承認待ち・回答待ち・測り直しが要る
+    /// `Gated` の INCONCLUSIVE 等、`pipe resume` が rc 3 で何もしない段）の札を残すと、契機のたびに
+    /// 起こし直しが空撃ちされ、その空撃ち自身が次の契機になって**止まらない**（`s2-07l.482` の実装中に
+    /// 見つけた形）。前進した driver の札だけが「続きが要る便」を名乗る。
+    ///
+    /// 段を読めない周も消す（触らない側へ倒す・fail-closed）。消せない札は次の 1 周が所有者の生死で判じる。
+    fn drop(&mut self) {
+        let alive = current(&self.state_dir)
+            .ok()
+            .and_then(|state| state.runs.get(&self.run).map(|run| run.stage))
+            .and_then(|stage| cli::live(&self.state_dir, &self.run, stage));
+        let advanced = run_events(&self.state_dir, &self.run) > self.events;
+        if alive != Some(true) || !advanced {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
+
+/// 便に紐づく event の件数（**前進したか**の基準・読めない周は 0）。
+fn run_events(state_dir: &Path, id: &str) -> usize {
+    store::read_all(state_dir).map_or(0, |events| events.iter().filter(|event| event.run == id).count())
+}
+
+/// 便の driver が**もう駆動していない**か（**札が無い・読めない周は `false`＝触らない**・測れないを
+/// 「死んだ」に読み替えない）。
+///
+/// 「所有者の process が無い」に加えて、**札の所有者が自分自身である周**も含む。終端の直後に撃つ 1 周は、
+/// その便を駆動していた process（＝自分）が仕事を終えて抜ける直前に走る（設計 §5「終端の記帳の後」）。
+/// 自分の札を「生きている」と読むと、1 段進めて抜ける driver の後を誰も継がない——`pipe resume` は 1 段ずつ
+/// 進める口なので、便はそこで止まる（`s2-07l.482` の実測: 起こし直した便が `Implemented` で止まった）。
+pub fn driver_is_stale(state_dir: &Path, id: &str) -> bool {
+    let Ok(body) = std::fs::read_to_string(driver_path(state_dir, id)) else {
+        return false;
+    };
+    if body.trim().parse::<u32>() == Ok(std::process::id()) {
+        return true;
+    }
+    store::lock_owner(&body, store::started_ms) == store::Owner::Dead
+}
+
 /// 便の契約 file の写し。
 pub fn contract_path(state_dir: &Path, id: &str) -> PathBuf {
     run_dir(state_dir, id).join(CONTRACT_FILE)
@@ -241,8 +325,10 @@ pub fn show_head(repo: &Path, path: &str) -> Option<String> {
 ///
 /// `Spawned` の行は `base:<sha>` か `base:<sha>,account:<label>`（器が口座を選んで起こした周・設計
 /// account-autonomy.md §4）で、sha は `base:` の直後から**最初の `,` まで**（無ければ末尾まで）。
-pub fn base_of_run(state_dir: &Path, id: &str) -> Option<String> {
-    let events = store::read_all(state_dir).ok()?;
+pub fn base_of_run(state_dir: &Path, id: &str) -> Base {
+    let Ok(events) = store::read_all(state_dir) else {
+        return Base::Unreadable;
+    };
     events
         .iter()
         .rev()
@@ -260,6 +346,40 @@ pub fn base_of_run(state_dir: &Path, id: &str) -> Option<String> {
                 _ => None,
             }
         })
+        .map_or(Base::Absent, Base::Known)
+}
+
+/// 便の base の読みの結果（**「便に base が無い」と「置き場を読めない」を分ける**・C10・設計
+/// dispatcher.md §5）。
+///
+/// `Option` に潰すと、置き場が読めない周が「spawn を通っていない便」と同じ断りに化ける——land と gate は
+/// 前者を rc 2（対象そのものが壊れている）・後者を rc 1（前提違反）で断る。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Base {
+    /// base の sha が分かった。
+    Known(String),
+    /// 便に base の記帳が無い（spawn を通っていない・追随の行も無い）。
+    Absent,
+    /// 置き場の event log を読めない。
+    Unreadable,
+}
+
+impl Base {
+    /// 分かった sha（`Absent` と `Unreadable` はどちらも `None`）。
+    ///
+    /// **2 つを同じに扱ってよい呼び手だけが使う**——読めない周も「base が無い」周も同じ既定へ倒す
+    /// ところ（追随の節を渡さない・verdict の size の材料を持たない）に限る。
+    pub fn known(self) -> Option<String> {
+        match self {
+            Self::Known(found) => Some(found),
+            Self::Absent | Self::Unreadable => None,
+        }
+    }
+
+    /// 読めなかったか（呼び手が rc 2 へ倒す周の判定）。
+    pub fn is_unreadable(&self) -> bool {
+        matches!(*self, Self::Unreadable)
+    }
 }
 
 /// 便の**最後の `RunStage`** が名乗った `detail`（物理順で最後の 1 件）。読めない周は `None`。
@@ -576,7 +696,7 @@ pub(crate) mod fixture {
 #[cfg(test)]
 mod tests {
     use super::fixture::{append_all, event, scratch};
-    use super::{base_of_run, last_stage_detail, question_of_run, questions_of_run, runner_is_idle, Question};
+    use super::{base_of_run, last_stage_detail, question_of_run, questions_of_run, runner_is_idle, Base, Question};
     use crate::fleet::{EventKind, Stage};
 
     /// `base_of_run` は `Spawned` の `base:<sha>` と `base:<sha>,account:<label>`（器が口座を選んで起こした周）の
@@ -597,11 +717,20 @@ mod tests {
                 event("moved", EventKind::RunStage, Some(Stage::Implemented), None, Some("rebase:ddd444..eee555")),
             ],
         );
-        assert_eq!(base_of_run(&root, "plain"), Some("aaa111".to_owned()), "従来の base:<sha>");
-        assert_eq!(base_of_run(&root, "chosen"), Some("bbb222".to_owned()), "`,account:` の手前まで");
-        assert_eq!(base_of_run(&root, "resumed"), Some("ccc333".to_owned()), "再開の行は飛ばす");
-        assert_eq!(base_of_run(&root, "moved"), Some("eee555".to_owned()), "追随の新しい側が勝つ");
-        assert_eq!(base_of_run(&root, "none"), None, "行の無い便");
+        let known = |sha: &str| Base::Known(sha.to_owned());
+        assert_eq!(base_of_run(&root, "plain"), known("aaa111"), "従来の base:<sha>");
+        assert_eq!(base_of_run(&root, "chosen"), known("bbb222"), "`,account:` の手前まで");
+        assert_eq!(base_of_run(&root, "resumed"), known("ccc333"), "再開の行は飛ばす");
+        assert_eq!(base_of_run(&root, "moved"), known("eee555"), "追随の新しい側が勝つ");
+        // **「行の無い便」と「置き場を読めない」は別の値**（C10・`s2-07l.482`）。
+        assert_eq!(base_of_run(&root, "none"), Base::Absent, "行の無い便");
+        // 読めない周は**行が 1 本でも壊れている**周である（dir が無い周は 0 件＝`Absent` で正しい）。
+        let broken = scratch("base-of-run-broken");
+        let log = broken.join("fleet").join("events.jsonl");
+        std::fs::create_dir_all(log.parent().unwrap_or(&broken)).ok();
+        std::fs::write(&log, "{\"schema\":1,\"kind\":\"Nonsense\"}\n").ok();
+        assert_eq!(base_of_run(&broken, "plain"), Base::Unreadable, "置き場を読めない");
+        let _ = std::fs::remove_dir_all(&broken);
         let _ = std::fs::remove_dir_all(&root);
     }
 

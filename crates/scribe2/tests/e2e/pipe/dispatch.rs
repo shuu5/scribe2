@@ -5,9 +5,9 @@
 //! `pipe/dispatch.rs` の in-file の歯が持つ（同じ接頭辞 `pipe_dispatch_`）。
 
 use super::{
-    ceiling_rules, clean, commit_rows, design_doc_rows, fake_lens, gate_once, git, intake_bead, lens_verdict,
-    repo_with_state, review_lens_pass, row_fields, run_pipe, shim_path, stderr_of, stdout_of, write_design,
-    DESIGN_FILE,
+    ceiling_rules, clean, commit_rows, design_doc_rows, fake_lens, gate_once, git, implemented, intake_bead,
+    kind_count, lens_verdict, repo_with_state, review_lens_pass, row_fields, run_pipe, shim_path, stderr_of,
+    stdout_of, write_contract, write_design, DESIGN_FILE, IMPLEMENT,
 };
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -70,6 +70,20 @@ fn fake_bd(state: &Path, issues: &[String]) -> String {
 fn script(path: &Path, body: &str) -> String {
     fs::write(path, format!("#!/bin/sh\n{body}")).expect("script を書ける");
     fs::set_permissions(path, fs::Permissions::from_mode(0o755)).expect("script に実行権を付ける");
+    path.display().to_string()
+}
+
+/// 渡された manifest の写しに**台帳の待ち上限の行**を足す（列はこれが無いと `no-rule` で止まる）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn with_ledger_row(state: &Path, name: &str, base: &str) -> String {
+    let body = fs::read_to_string(base).expect("元の写しを読める");
+    let row = "[[rule]]\nid = \"seat.ledger_timeout_s\"\nkind = \"LedgerTimeoutS\"\n\
+               value = 60\nenabled = true\nruling = \"t\"\nruled_at = \"d\"\n";
+    let path = state.join(name);
+    fs::write(&path, format!("{body}\n{row}")).expect("写しを書ける");
     path.display().to_string()
 }
 
@@ -413,7 +427,7 @@ fn pipe_terminal_dispatch_manual_turn_and_marks_fire_the_same_round() {
     };
     let manual = turn(&[]);
     assert_eq!(manual.status.code(), Some(i32::from(RC_OK)), "手動の 1 周は rc 0: {}", stderr_of(&manual));
-    assert_eq!(stdout_of(&manual).trim_end(), "dispatch=started:2,waiting:0", "交差しない 2 本は両方起こせる");
+    assert_eq!(stdout_of(&manual).trim_end(), "dispatch=started:2,resumed:0,waiting:0", "交差しない 2 本は両方起こせる");
     // **起こした効果**: 起こした 2 本ぶんの `RunCreated` が置き場に積まれる（構築点で止まらない・裁定 (A)）。
     assert_eq!(created(&state, &["s2-toy.1", "s2-toy.2"], 2), 2, "起こした便の RunCreated が 2 件");
     // `hold` は 1 周を撃たない（印の行だけ）。
@@ -425,7 +439,7 @@ fn pipe_terminal_dispatch_manual_turn_and_marks_fire_the_same_round() {
     let released = turn(&["release", "s2-toy.1"]);
     assert_eq!(
         stdout_of(&released).lines().last(),
-        Some("dispatch=started:0,waiting:2"),
+        Some("dispatch=started:0,resumed:0,waiting:2"),
         "release の直後に 1 周（起こした 2 便と交差して 0 本）: {}",
         stdout_of(&released)
     );
@@ -611,7 +625,7 @@ fn pipe_terminal_dispatch_hands_the_ledger_client_to_the_run_it_starts() {
         "--lens", &review_lens_pass(&state),
         "--runner", "true",
     ]);
-    assert_eq!(stdout_of(&out).trim_end(), "dispatch=started:1,waiting:0", "1 本起こす: {}", stderr_of(&out));
+    assert_eq!(stdout_of(&out).trim_end(), "dispatch=started:1,resumed:0,waiting:0", "1 本起こす: {}", stderr_of(&out));
     assert_eq!(created(&state, &["s2-toy.2"], 1), 1, "起こした便の RunCreated");
     // 子の終端の 1 周が**同じ台帳**を読む＝印が 2 つ（列の 1 周 + 子の 1 周）。
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
@@ -653,9 +667,223 @@ fn pipe_terminal_dispatch_two_overlapping_rounds_start_the_bead_once() {
     let started: usize = spawned
         .into_iter()
         .filter_map(|child| child.wait_with_output().ok())
-        .filter(|out| stdout_of(out).contains("dispatch=started:1"))
+        .filter(|out| stdout_of(out).contains("dispatch=started:1,resumed:0"))
         .count();
     assert!(started >= 1, "少なくとも一方の 1 周は起こす側に立つ（母集団 2 回）");
     assert_eq!(created(&state, &["s2-toy.2"], 1), 1, "起動試行 2 回でも便は 1 本（母集団 2 回）");
     clean(&[&repo, &state]);
+}
+
+/// (§5 driver の死亡) `pipe run` の process を殺すと **driver の札が残り**、列の 1 周が `pipe resume` で
+/// 起こし直す（record token の `resumed:1`）。起こし直しが**実際に走った**ことは、その便に
+/// `SeatStopped detail=runner-dead` が 1 件積まれることで測る（数えただけでは撃ったと言えない）。
+#[test]
+fn pipe_dispatch_driver_dead_driver_is_resumed_once() {
+    let (repo, state) = repo_with_state();
+    // `pipe run` を子として起こし、`SeatSpawned` の時点で group ごと殺す（host の再起動と同じ形）。
+    let (id, _runner_pid, runner) = super::spawn::killed_at_spawned(&repo, &state, &[IMPLEMENT.to_owned()]);
+    let ticket = state.join("pipe").join(&id).join("driver");
+    assert!(ticket.exists(), "殺した driver の札が残る");
+    // 台帳は空でよい（測るのは起こし直しであって列の入力ではない）。起こし直した便が Landed まで通る
+    // ように、**列に渡す道具は toy の一式**にする（列はそれをそのまま `pipe resume` へ渡す）。
+    let bd = fake_bd(&state, &[]);
+    let rules = with_ledger_row(&state, "rules-driver.toml", &super::ratelimit::resume_rules(&state, &["a1"]));
+    super::ratelimit::put_account(&state, "a1", &[super::ratelimit::windows(30, 30)]);
+    let out = run_pipe(&[
+        "dispatch",
+        "--state-dir", &state.display().to_string(),
+        "--repo", &repo.display().to_string(),
+        "--rules", &rules,
+        "--bd", &bd,
+        "--lens", &fake_lens(&state.join("driver-lens-ran"), &lens_verdict("PASS")),
+        "--curl", &super::ratelimit::fake_usage_curl(&state),
+        "--runner", &runner,
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "1 周は rc 0: {}", stderr_of(&out));
+    assert_eq!(
+        stdout_of(&out).trim_end(),
+        "dispatch=started:0,resumed:1,waiting:0",
+        "record token は起こし直しを 1 件数える: {}",
+        stdout_of(&out)
+    );
+    // **数えただけでは撃ったと言えない**: 起こし直しが実際に走ると、死んだ runner の始末が記帳される。
+    assert_eq!(dead_runners(&state, &id, 1), 1, "pipe resume が 1 回走る（SeatStopped detail=runner-dead）");
+    // **起こし直した便は Landed まで自走する**（`pipe resume` は 1 段ずつ進める口なので、札が残る限り
+    // 次の契機が続きを起こす・planner 裁定 2026-09-19）。段の並びで測る。
+    assert_eq!(
+        stage_reached(&state, &id, "Landed"),
+        1,
+        "起こし直した便が Landed まで自走する（段の並び: {}）",
+        stages_of(&state, &id)
+    );
+    assert!(!ticket.exists(), "起こし直した便の札は新しい driver が終端で消す");
+    clean(&[&repo, &state]);
+}
+
+/// (§5 driver の死亡) **札の無い live 便は触らない**（`pipe intake` + `pipe spawn` で起こした便は driver の
+/// 札を持たない＝`pipe run` / `pipe resume` の process が居ない）。測れないを「死んだ」に読み替えない。
+#[test]
+fn pipe_dispatch_driver_live_run_without_a_ticket_is_left_alone() {
+    let (repo, state) = repo_with_state();
+    let contract = write_contract(&repo, &[], &[]);
+    let id = implemented(&repo, &state, &contract);
+    assert!(!state.join("pipe").join(&id).join("driver").exists(), "前提: 札を持たない live 便");
+    let before = kind_count(&state, &id, vessel::fleet::EventKind::RunStage);
+    let bd = fake_bd(&state, &[]);
+    let out = run_pipe(&[
+        "dispatch",
+        "--state-dir", &state.display().to_string(),
+        "--repo", &repo.display().to_string(),
+        "--rules", &dispatch_rules(&state),
+        "--bd", &bd,
+        "--lens", &review_lens_pass(&state),
+        "--runner", "true",
+    ]);
+    assert_eq!(
+        stdout_of(&out).trim_end(),
+        "dispatch=started:0,resumed:0,waiting:0",
+        "札の無い便は起こし直さない: {}",
+        stdout_of(&out)
+    );
+    assert_eq!(kind_count(&state, &id, vessel::fleet::EventKind::RunStage), before, "段を 1 つも動かさない");
+    clean(&[&repo, &state]);
+}
+
+/// (§5 driver の死亡) `pipe run` は入口で札を置き、**終端で消す**（生きて終わった便の札は残らない＝
+/// 残っている札は死んだ driver のものだけである）。
+#[test]
+fn pipe_dispatch_driver_ticket_is_removed_when_the_run_ends() {
+    let (repo, state) = repo_with_state();
+    two_rows(&repo);
+    let ran = run_pipe(&[
+        "run", "--design", &format!("{DESIGN_FILE}#a"), "--bead", "s2-ticket",
+        "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(),
+        "--rules", &dispatch_rules(&state),
+        "--lens", &review_lens_pass(&state),
+        "--runner", "true",
+    ]);
+    let id = stdout_of(&ran)
+        .lines()
+        .find_map(|line| line.strip_prefix("run="))
+        .and_then(|rest| rest.split_whitespace().next())
+        .unwrap_or_default()
+        .to_owned();
+    assert!(!id.is_empty(), "run id を読める: {}", stdout_of(&ran));
+    assert!(state.join("pipe").join(&id).exists(), "前提: run dir は在る");
+    assert!(!state.join("pipe").join(&id).join("driver").exists(), "終端で札が消える");
+    clean(&[&repo, &state]);
+}
+
+/// 便の段の並び（診断の 1 行）。
+fn stages_of(state: &Path, id: &str) -> String {
+    let found: Vec<String> = fs::read_to_string(state.join("fleet").join("events.jsonl"))
+        .unwrap_or_default()
+        .lines()
+        .filter(|line| line.contains(&format!("\"run\":\"{id}\"")))
+        .filter_map(|line| line.split("\"stage\":\"").nth(1).and_then(|rest| rest.split('"').next()).map(str::to_owned))
+        .collect();
+    found.join(" → ")
+}
+
+/// 便が `stage` の段に達した件数（達するまで待つ・起こし直しは子 process ゆえ遅れて来る）。
+fn stage_reached(state: &Path, id: &str, stage: &str) -> usize {
+    let log = state.join("fleet").join("events.jsonl");
+    let count = || -> usize {
+        fs::read_to_string(&log).unwrap_or_default()
+            .lines()
+            .filter(|line| line.contains(&format!("\"stage\":\"{stage}\"")))
+            .filter(|line| line.contains(&format!("\"run\":\"{id}\"")))
+            .count()
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
+    while count() == 0 && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    count().min(1)
+}
+
+/// 便の `SeatStopped detail=runner-dead` の件数（`want` 件まで待つ・起こし直しは子 process ゆえ遅れて来る）。
+fn dead_runners(state: &Path, id: &str, want: usize) -> usize {
+    let log = state.join("fleet").join("events.jsonl");
+    let count = || -> usize {
+        fs::read_to_string(&log).unwrap_or_default()
+            .lines()
+            .filter(|line| line.contains("\"kind\":\"SeatStopped\"") && line.contains("\"detail\":\"runner-dead\""))
+            .filter(|line| line.contains(&format!("\"run\":\"{id}\"")))
+            .count()
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while count() < want && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    count()
+}
+
+/// (§5 driver の死亡) **人の手を待つ段は起こし直しの候補から段で外す**（`Blocked` は `pipe resume` が
+/// rc 3 で何もしない段なので、起こし直すと空撃ちになる）。札は**残す**——消すと、承認が記帳された後に
+/// driver の居ない live 便が「札の無い便＝触らない」に落ちて二度と自走しない（planner 裁定 2026-09-19）。
+#[test]
+fn pipe_dispatch_driver_blocked_run_is_excluded_by_stage_and_keeps_its_ticket() {
+    let (repo, state) = repo_with_state();
+    let marker = state.join("blocked-runner-ran");
+    let (id, _said) = super::spawn::blocked(&repo, &state, &marker, r#"classes = ["publish"]"#);
+    // 承認待ちの便に**死んだ所有者の札**を置く（`pipe run` が承認待ちまで進めて抜けた形）。
+    put_dead_ticket(&state, &id);
+    let ticket = state.join("pipe").join(&id).join("driver");
+    let bd = fake_bd(&state, &[]);
+    let out = run_pipe(&[
+        "dispatch",
+        "--state-dir", &state.display().to_string(),
+        "--repo", &repo.display().to_string(),
+        "--rules", &dispatch_rules(&state),
+        "--bd", &bd,
+        "--lens", &review_lens_pass(&state),
+        "--runner", "true",
+    ]);
+    assert_eq!(
+        stdout_of(&out).trim_end(),
+        "dispatch=started:0,resumed:0,waiting:0",
+        "承認待ちの便は起こし直さない: {}",
+        stdout_of(&out)
+    );
+    assert!(ticket.exists(), "札は残る（承認の後に自走へ戻るため）");
+    assert_eq!(stages_of(&state, &id), "Intake → Reviewed → Blocked", "段を 1 つも動かさない");
+    clean(&[&repo, &state]);
+}
+
+/// (§5 driver の死亡) **前進しなかった driver の札は落ちる**（空撃ちの輪を止める）。
+///
+/// 何も記帳せずに終わった driver の札を残すと、契機のたびに起こし直しが空撃ちされ、その空撃ち自身が次の
+/// 契機になって止まらない。母集団は「1 周 × 2 回」で、2 周目も `resumed:0` であることを見る。
+#[test]
+fn pipe_dispatch_driver_a_driver_that_made_no_progress_drops_its_ticket() {
+    let (repo, state) = repo_with_state();
+    let marker = state.join("blocked-runner-ran");
+    let (id, _said) = super::spawn::blocked(&repo, &state, &marker, r#"classes = ["publish"]"#);
+    put_dead_ticket(&state, &id);
+    let ticket = state.join("pipe").join(&id).join("driver");
+    // 承認待ちの便に `pipe resume` を直に撃つ（何も記帳せず rc 3 で返る＝前進なし）。
+    let resumed = run_pipe(&[
+        "resume", "--run", &id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(),
+        "--runner", "true",
+    ]);
+    assert_ne!(resumed.status.code(), Some(i32::from(RC_OK)), "承認待ちは進めない: {}", stdout_of(&resumed));
+    assert!(!ticket.exists(), "前進しなかった driver の札は落ちる（輪が止まる）");
+    assert_eq!(stages_of(&state, &id), "Intake → Reviewed → Blocked", "段を 1 つも動かさない");
+    clean(&[&repo, &state]);
+}
+
+/// 便に**死んだ所有者の札**を置く（`true` を起こして待ち、その pid を書く＝確実に居ない process）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn put_dead_ticket(state: &Path, id: &str) {
+    let mut child = Command::new("true").spawn().expect("true を起こせる");
+    let pid = child.id();
+    child.wait().expect("true を待てる");
+    let path = state.join("pipe").join(id).join("driver");
+    fs::write(&path, format!("{pid}\n")).expect("札を書ける");
 }

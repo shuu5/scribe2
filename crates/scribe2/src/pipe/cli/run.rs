@@ -81,6 +81,9 @@ pub(super) fn run_all(args: &[String], manifest: &Manifest, policy: LockPolicy) 
         Ok(found) => found,
         Err(outcome) => return outcome,
     };
+    // **driver の札をここで置く**（設計 dispatcher.md §5）: この process が死んだら、札が残って列の
+    // 1 周が起こし直す。`Drop` で消えるので、どの段で終わっても残らない。
+    let _driver = super::state_dir_of(args).ok().and_then(|state_dir| crate::pipe::Driver::hold(&state_dir, &id));
     // **run id は落ちた周も stdout に出す**。`resume` がこの id を要るためで、
     // ここで黙ると続きから引けない便が置き場に残る。
     let mut lines = vec![intake_line(args, &id)];

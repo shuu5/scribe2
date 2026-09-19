@@ -267,8 +267,11 @@ struct Decided {
 /// gate を 1 回通す。
 pub fn gate(entry: &Gate<'_>) -> Outcome {
     let worktree = worktree_path(entry.repo, entry.run);
-    let Some(base) = super::base_of_run(entry.state_dir, entry.run) else {
-        return refused(format!("run {} に base が無い（spawn を通っていない）", entry.run));
+    // **「無い」と「読めない」を分ける**（C10）: 置き場が壊れている周を前提違反に化けさせない。
+    let base = match super::base_of_run(entry.state_dir, entry.run) {
+        super::Base::Known(found) => found,
+        super::Base::Absent => return refused(format!("run {} に base が無い（spawn を通っていない）", entry.run)),
+        super::Base::Unreadable => return broken(format!("run {} の base を読めない（置き場）", entry.run)),
     };
     if let Some(reason) = precheck(&worktree, &base) {
         return precheck_failed(entry, &reason);
