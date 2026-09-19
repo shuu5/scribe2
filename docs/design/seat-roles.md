@@ -264,13 +264,14 @@ C1 / C5（権能の値は行・裁定 id）・C1.2（生成文に手書きの規
 - 約束（1 つずつ歯が測る・行 s の done と 1:1）:
   1. **権能の列に `stop` が 1 つ増える**: 権能の閉じた enum と全 variant の列に `stop` を足す（字面は `stop`・宣言順は `merge` の後ろ）。rules 行の loader は `stop` を知っている名として受け、知らない名は今までどおり拒む。
   2. **rules 行 `role.orchestrator` の値に `stop` が載る**（裁定 id と日付を今回の裁定に更新）。席の指示文（§5 の権能の行）にも `stop` が出る（外形 snapshot が更新される）。
-  3. **便 1 本を名指す停止は `stop` の権能で通る**: Bash の command 行の中の停止の呼び出しで、その呼び出しの token 列（次の区切りまで）に `--run` とその直後の値（`-` で始まらない token）が在り、`--all` が無いものは、`stop` の権能を要る＝orchestrator の席で通る。
-  4. **それ以外の停止は今までどおり起動の権能を要る**（＝どの席でも断られる）: `--all` を持つ呼び出し・`--run` の無い呼び出し・`--run` の直後に値の無い呼び出し・`--run` と `--all` の両方を持つ呼び出し。名指しを読めない形は起動の側へ倒す（fail-closed）。
-  5. **1 行に複数の呼び出しが在る周は呼び出しごとに判じる**: 名指しの停止と `--all` の停止が 1 行に並ぶ行は、起動の権能が欠けるので断られる（欠けた権能の名指しは今の deny の 1 行の形のまま）。
-  6. **他の口の権能は変わらない**: 受付・起動・再開・退役は起動の権能のまま、着地は merge のまま、回答と承認は今のまま（既存の歯が測る側）。
+  3. **便 1 本を名指す停止は `stop` の権能で通る**（許す形を列挙する・allowlist）: guard の表は停止の口を `stop` に結ぶ（表は「口 → 権能」のまま）。その上で、停止の呼び出しの**窓**＝停止の 2 語の直後から command 行の末尾までの token が、**値つきの flag `--run` / `--state-dir` / `--repo` / `--rules` とその値だけ**で出来ていて、`--run` がちょうど 1 回在り、どの値も `-` で始まらず shell が意味を変える字（区切り・pipe・括弧・`$`・backtick・引用符・redirect）を 1 つも含まない呼び出しだけが、`stop` の権能を要る＝orchestrator の席で通る。
+  4. **それ以外の停止は起動の権能へ降ろす**（＝どの席でも断られる・fail-closed）: 窓に上の 4 つ以外の token が 1 つでも在る形は全部こちらである——`--all` を持つ形・`--run` の無い形・`--run` の直後に値の無い形・`--run` と `--all` の両方を持つ形・**`--run=<id>` の 1 語の形**（止める口は flag を完全一致で読むので、この形は名指しにならず一括の停止へ落ちる）・列を撃つ道具の flag を持つ形・値や窓に区切りや pipe や `$(` を含む形（窓の後ろに別の command が続く行は、席は停止を単独の 1 行で撃つ）。
+  5. **1 行に権能付きの呼び出しが複数在る周は全部の権能を要る**（今の規則のまま）: 名指しの停止の窓は行の末尾までなので、後ろに別の呼び出しが続く行は約束 4 で起動の権能へ降りる。停止の前に別の口（例えば回答）が在る行は、両方の権能を持つ席でだけ通る。
+  6. **他の口の権能は変わらない**: 受付・起動・再開・退役は起動の権能のまま、着地は merge のまま、回答と承認は今のまま。測るのは既存の歯（`role_guard_capability_commands_match_the_three_word_sequence`〔停止の 1 件だけ期待値が変わる〕・`hook_role_bash_face_allows_answer_and_denies_launch`・権能の表の prop 2 本）で、行の verify がその接頭辞を撃つ。
   7. **`stop` を持たない行の席では名指しの停止も断られる**（権能は行から来る・行に無ければ通らない）。
 - 止める口そのものの挙動（終端 `Stopped` の記帳・worktree と branch を残す・止め切れない周の断り）は 1 つも変えない。止めた便は終端の列外に入り、契約の字を直すか `release` の印で列に戻る（[dispatcher.md](./dispatcher.md) §12）。
-- 歯: guard の照合は pure な fn の in-file の歯（接頭辞 `role_guard_stop_`・約束 3 / 4 / 5 の形を 1 つずつ・母集団 = 停止の呼び出しの形 6 つ）と、PreToolUse の口からの e2e（`tests/e2e/hook.rs`・接頭辞 `hook_role_stop_`・約束 3 / 4 / 7 を登録済みの席で測る）。rules 行と loader は `tests/e2e/rules.rs`（接頭辞 `rules_role_stop_`・約束 1 / 2）。指示文の外形 snapshot は既存の歯が測る（更新だけ）。
+- 歯: guard の照合は pure な fn の in-file の歯（接頭辞 `role_guard_stop_`・約束 3 / 4 / 5・**母集団 = 停止の呼び出しの形 9 つ**: 通る形 1〔`--run` と値、置き場と repo と rules の flag を足した形も通る〕／`--all`／`--run` 無し／`--run` の値無し／`--run` と `--all`／`--run=<id>`／列の道具の flag つき／値に pipe を含む形〔置き場の値の途中に pipe と別の `--run`〕／`$(` を含む形）と、PreToolUse の口からの e2e（`tests/e2e/hook.rs`・接頭辞 `hook_role_stop_`・約束 3 / 4 / 7 を登録済みの席で測る）。rules 行と loader は `tests/e2e/rules.rs`（接頭辞 `rules_role_stop_`・約束 1 / 2）。
+- 変更する既存の歯（名で数える・どれも write-set の中）: `role_guard_capability_commands_match_the_three_word_sequence`（停止の期待値が起動から `stop` へ）・埋め込みの rules 行の値と裁定 id を pin する `rules_embedded_manifest_` の歯 3 本・指示文の外形 snapshot（`hook_brief_` の歯・更新だけ）。約束 6 の「変わらない」は上に名指した歯がそのまま測る。
 - 触らない: 止める口の本体・他の権能付きの口の結び・編集面の guard・極性一覧（新しい guard は足さない＝既存の Bash 面の guard の表の 1 行が変わるだけ）。
 
 <!-- contracts:begin -->
@@ -437,7 +438,7 @@ title = "便を止める権能 stop — 権能の列に stop を足して停止�
 req = ["FR41", "FR45", "NFR4"]
 section = "25"
 write-set = ["crates/scribe2/src/seat/role.rs", "crates/scribe2/src/hook/role_guard.rs", "rules/manifest.toml", "crates/scribe2/tests/e2e/rules.rs", "crates/scribe2/tests/e2e/hook.rs", "crates/scribe2/tests/e2e/snapshots/e2e__hook__hook_brief_orchestrator.snap", "docs/design/seat-roles.md"]
-verify = ["cargo nextest run -p scribe2 --no-tests=fail role_guard_stop_", "cargo nextest run -p scribe2 --no-tests=fail hook_role_stop_", "cargo nextest run -p scribe2 --no-tests=fail rules_role_stop_", "cargo nextest run -p scribe2 --no-tests=fail hook_brief_"]
-size = "S"
-done = "(1) 権能の列と全 variant の列に stop が在り loader が stop を受けて知らない名は拒む (2) 埋め込みの rules 行 role.orchestrator の値が stop を持ち裁定 id が今回の裁定で、席の指示文の権能の行に stop が出て外形 snapshot が更新される (3) --run とその直後の値を持ち --all を持たない停止の呼び出しが orchestrator の席で通る (4) --all を持つ形・--run の無い形・--run の直後に値の無い形・--run と --all の両方を持つ形の停止は起動の権能が欠けて断られる (5) 名指しの停止と --all の停止が 1 行に並ぶ行は断られ deny の行が欠けた権能を名指す (6) 受付・起動・再開・退役は起動の権能のまま、着地は merge のまま、回答と承認は今のまま (7) stop を持たない行の席では名指しの停止も断られる、の 7 つを in-file の歯（停止の呼び出しの形 6 つの母集団）と PreToolUse の口の歯と rules の歯が測り、止める口の本体は 1 行も変わらない"
+verify = ["cargo nextest run -p scribe2 --no-tests=fail role_guard_stop_", "cargo nextest run -p scribe2 --no-tests=fail hook_role_stop_", "cargo nextest run -p scribe2 --no-tests=fail rules_role_stop_", "cargo nextest run -p scribe2 --no-tests=fail role_guard_", "cargo nextest run -p scribe2 --no-tests=fail hook_role_", "cargo nextest run -p scribe2 --no-tests=fail rules_embedded_manifest_", "cargo nextest run -p scribe2 --no-tests=fail hook_brief_"]
+size = "M"
+done = "(1) 権能の列と全 variant の列に stop が在り loader が stop を受けて知らない名は拒む (2) 埋め込みの rules 行 role.orchestrator の値が stop を持ち裁定 id が今回の裁定で、席の指示文の権能の行に stop が出て外形 snapshot が更新される (3) guard の表が停止の口を stop に結び、窓が --run / --state-dir / --repo / --rules の flag とその値だけで --run がちょうど 1 回の停止の呼び出しが orchestrator の席で通る (4) --all を持つ形・--run の無い形・--run の値の無い形・--run と --all の両方の形・--run=<id> の 1 語の形・列の道具の flag を持つ形・値や窓に pipe や区切りや $( を含む形の停止は起動の権能へ降りて断られる (5) 停止の後ろに別の呼び出しが続く行は断られ、停止の前に別の口が在る行は両方の権能を要り、deny の行が欠けた権能を名指す (6) 受付・起動・再開・退役は起動の権能のまま、着地は merge のまま、回答と承認は今のままで、既存の歯（3 語の並びの歯は停止の期待値だけが変わる・Bash 面の歯・権能の表の prop 2 本）が緑 (7) stop を持たない行の席では名指しの停止も断られる、の 7 つを in-file の歯（停止の呼び出しの形 9 つの母集団）と PreToolUse の口の歯と rules の歯が測り、止める口の本体は 1 行も変わらない"
 <!-- contracts:end -->
