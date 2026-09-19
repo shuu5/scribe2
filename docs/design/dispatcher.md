@@ -86,7 +86,7 @@ dispatcher は「起こす」側で行為を止める判定を持たない（起
 - 診断と結合（行 (g)・`s2-07l.487`・歯だけの便）: dispatch の歯の assert の文は落ちた周の rc・stdout・stderr を写す（`s2-07l.486` の merge 後の main の CI で「印の直後の 1 周」の行が無い落ち方をし、rc も stderr も写っておらず原因が測れなかった・同じ sha の再走は緑・A/B は `.486` の前後とも 0/20）。印の直後の 1 周は、手動の 1 周で起こした子 process の状態に依存しない台帳（起こせる候補が 0 の列・`RunCreated` 0・子 process 0）で測り、起こした効果は別の歯が測る（子が走っている最中に印を打つ形は、子の記帳との lock の競合で印の記帳が `fleet.lock_retry_ms` を超えうる＝歯が器の待ち時間に依存する）。
 - 終端の便の列外: 直前の便が終端で終わった契約は同じ sha では `Settled` で列外、契約 file の sha が変わると列に戻る（偽 lens の verdict と run dir の fixture・着地した便を起こし直さない側も同じ 1 本で測る）。
 - 列へ戻す印（行 (h)・`pipe_dispatch_release_requeues_` 接頭辞）: `Failed` で終端した便の bead は `Settled` で列外だが、その後の `release` で同じ sha のまま列に戻り（`dispatch ls` の reason が `-`）、起こし直した便が同じ sha でまた終端に着くと再び `Settled`（印は 1 回しか効かない）・終端より**前**の `release` は効かない・`Landed` の便と審査 FAIL の便は `release` の後も `Settled` のまま・`Stopped` の便と gate の判定で終端になった便は戻る（母集団 = 終端の段の種類）。
-- 関門が開いた待ちの便（行 (j)・`pipe_dispatch_waiting_gate_` 接頭辞）: 回答済みの `Questioned` の便（driver の札なし）が手動の 1 周で `--drive` 付きの resume で起こされて先の段へ進み（`resumed:1`）、未回答の `Questioned` の便は起こされず（`resumed:0`）、承認済みの `Blocked` の便も同じく起こされ、生きている所有者の札を持つ待ちの便は触られず、道具を渡した `pipe answer` の記帳の直後に同じ 1 周が撃たれて便が進み、道具を渡さない `pipe answer` は記帳だけで rc 0 のまま、1 周が失敗しても回答の rc は変わらない。
+- 関門が開いた待ちの便（行 (j)・`pipe_dispatch_waiting_gate_` 接頭辞）: 回答済みの `Questioned` の便（driver の札なし）が手動の 1 周で `--drive` 付きの resume で起こされて先の段へ進み（`resumed:1`）、未回答の `Questioned` の便と、古い質問に回答が在っても最新の質問が未回答の便は起こされず（`resumed:0`）、承認済みの `Blocked` の便も同じく起こされ、札の 4 値（無い・所有者が死んでいる → 起こす／所有者が生きている・在るのに読めない → 触らない）がそれぞれ測られ、道具を渡した `pipe answer` と `pipe approve` の記帳の直後に同じ 1 周が撃たれて便が進み、道具を渡さない `pipe answer` は記帳だけで rc 0 のまま、1 周が失敗しても回答の rc は変わらず、候補の選別（pure・in-file）は呼び手の便を関門の候補から外す。
 - 起動の失敗の理由と repo の名指し（行 (i)・`pipe_spawn_runner_stderr_` と `pipe_repo_relative_` 接頭辞・置き場は行 (i) の write-set の `+` の file）: stderr に 1 行書いて rc 2 で落ちる偽 runner の便が `Failed` に着いた後、run dir の stderr の log にその 1 行が見出し付きで残り、呼び手の stderr にも同じ行が出る・stderr が空の周は file を作らない・stderr に書いても rc 0 ∧ commit 1 の偽 runner は `Implemented` に着く（段は stderr の中身で変わらない）・`--repo` を相対 path で渡した `pipe run` が絶対 path で渡した周と同じ worktree の場所と同じ段に着く。
 
 ## 9. 契約（8 便・(a) → (b) → (d) → (g) → (e)、その後に (h) → (j) と (i)。(r) と (c) は超過）
@@ -136,10 +136,14 @@ dispatcher は「起こす」側で行為を止める判定を持たない（起
 
 実測（2026-09-20・verified）: 質問で止まった便（`Questioned`）に席が `pipe answer` で回答した後、手動の 1 周を撃っても `resumed:0` のまま便は動かなかった。根は 2 つ重なっている。(1) 起こし直しの候補は待ちの段（`Blocked` / `Questioned`）を**段で**外す（§5）が、回答も承認も段を動かさない（resume が進める）ので、関門が開いた後も段は待ちのままで候補に戻らない。(2) 質問で止まった driver は正常に抜けるので札を外す＝起こし直しの条件「札が残っていて所有者が死んでいる」にも当たらない。`pipe resume` は起動の権能で、ADR-0045 §2 (1) の後はどの席の行にも無い＝回答済みの便は user が手で撃つまで止まる。
 
-- **起こし直しの候補に「関門が開いた待ちの便」を足す**（行 (j)）: live ∧ 段が待ちの段 ∧ 関門が開いている ∧ **生きている driver が居ない**（札が無いか、札の所有者が死んでいる）便を、§5 の起こし直しと同じ構築点（`--drive` 付きの resume・道具は列と同じ 1 本）で起こす。関門の判定は resume の入口と同じ 1 本ずつを読む: `Questioned` は最新の質問に回答が在ること、`Blocked` は replay の承認の導出値（新しい判定を作らない・C2）。関門が閉じたままの待ちの便は今までどおり候補にしない（空撃ちを作らない）。
+- **起こし直しの候補に「関門が開いた待ちの便」を足す**（行 (j)）: live ∧ 段が待ちの段 ∧ 関門が開いている ∧ **driver が居ないと測れた**便を、§5 の起こし直しと同じ構築点（`--drive` 付きの resume・道具は列と同じ 1 本）で起こす。関門が閉じたままの待ちの便は今までどおり候補にしない（空撃ちを作らない・既存の歯 `pipe_dispatch_driver_blocked_run_is_excluded_by_stage_and_keeps_its_ticket` が測る側＝変えない）。
+- **§5 の「札が無い便は触らない」をこの候補にだけ緩める**（消すものの名指し・C17.2）: §5 の起こし直しは「札が残っていて所有者が死んでいる」便だけを候補にし、札の無い便は触らない。待ちの段で止まった driver は正常に抜けて札を外すので、関門が開いた待ちの便は**札が無い**（file が無いと読めた）周も候補にする。札の状態は 4 値で読む: 無い → 候補／所有者が死んでいる → 候補／所有者が生きている → 触らない／**在るのに読めない → 触らない**（測れないを「居ない」に読み替えない・fail-closed は保つ）。待ちの段でない便の §5 の規則は 1 字も変えない。
+- **関門の判定は resume の入口と同じ述語 1 本**（C2）: `Questioned` は**最新の**質問に回答が在ること（古い質問への回答が在っても、その後の新しい質問が未回答なら閉じている）、`Blocked` は replay の承認の導出値。いま resume の入口に式で書かれている 2 つの判定を pipe の module の述語 1 本に畳み、resume と列が同じ 1 本を呼ぶ（site を 2 つにしない）。
+- **自分の便を自分で起こし直さない**（空撃ちの連鎖を塞ぐ）: §5 の起こし直しが暴走しないのは、resume が抜けると札が消えて候補から落ちるからである。札の無い便を候補にするとこの止め金が効かない——段を 1 つも進められずに抜けた resume が、自分の終端の 1 周で同じ便をまた起こす連鎖になる。そこで、終端の 1 周は**呼び手の便（その周を撃った driver 自身の便）を関門の候補から外す**（呼び手の便は 1 周の入力が既に持つ・行 (e)）。進めなかった便は次の別の契機（他便の終端・手動の 1 周・回答や承認の記帳）でだけ再び候補になる＝自己再生産しない。
 - **二重の再開は既存の札の排他が断る**: resume は入口で driver の札を握り、握れない周は駆動しない（§5）。契機が重なって同じ便へ resume が 2 本撃たれても、駆動するのは 1 本である。
-- **契機に回答と承認の記帳の直後を足す**（行 (j)）: `pipe answer` / `pipe approve` の記帳の直後にも同じ 1 周を撃つ（印の直後の 1 周と同じ形・渡された引数の道具だけを使う）。道具（`--runner`）を渡さない回答は今までどおり記帳だけで終わり、その便は次の契機（他便の終端か手動の 1 周）で再開される。1 周が失敗しても回答・承認の rc は変えない（§5 の終端の 1 周と同じ）。
-- 触らない: 回答・承認の記帳の形・段の遷移・待ちの段の集合・札の形。`pipe stop` を席から撃てない件（居座る便を外す口）は権能の行の変更で、user の裁定が先（§11）。
+- **契機に回答と承認の記帳の直後を足す**（行 (j)）: `pipe answer` / `pipe approve` の**記帳が成った周だけ**、その直後に同じ 1 周を撃つ（印の直後の 1 周と同じ形＝同じ包み・渡された引数の道具だけを使う・便が live で無くなりうる subcommand の列には足さない）。道具（`--runner`）を渡さない回答・承認は今までどおり記帳だけで終わり、その便は次の契機で再開される。1 周が失敗しても回答・承認の rc は変えない（§5 の終端の 1 周と同じ）。
+- **write-set の外の歯の走査**（未実測・実装の周に測る）: 回答や承認を撃つ既存の歯は pipe の e2e の他の file にも在る。それらは道具を渡さずに回答・承認を撃ち、続けて手で resume を撃つ形なので新しい契機は発火しない見込みだが、「関門が開いた待ちの便が置き場に残ったまま、別の便の道具付きの終端が走る」歯が在れば段が動いて落ちる。行 (j) の write-set は pipe の e2e の歯の file を全部含める（落ちた歯だけを、測っている約束を変えずに直す）。
+- 触らない: 回答・承認の記帳の形・段の遷移・待ちの段の集合・札の形・待ちの段でない便の起こし直しの規則。`pipe stop` を席から撃てない件（居座る便を外す口）は権能の行の変更で、user の裁定が先（§11）。
 
 <!-- contracts:begin -->
 schema = 1
@@ -222,10 +226,10 @@ done = "stderr に 1 行書いて rc 2 で落ちる偽 runner の便が Failed d
 [[contract]]
 id = "j"
 title = "関門が開いた待ちの便の再開 — 起こし直しの候補に回答済みの Questioned と承認済みの Blocked（生きている driver の居ない便）を足し、pipe answer / pipe approve の記帳の直後にも同じ 1 周を撃つ（関門の判定は resume の入口と同じ 1 本・新しい段も event kind も足さない）"
-req = ["FR68", "FR32", "FR37"]
+req = ["FR68", "FR32", "FR16"]
 section = "13"
-write-set = ["crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2/src/pipe/mod.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/cli/step.rs", "crates/scribe2/tests/e2e/pipe/dispatch.rs"]
+write-set = ["crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2/src/pipe/mod.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/cli/resume.rs", "crates/scribe2/tests/e2e/pipe/dispatch.rs", "crates/scribe2/tests/e2e/pipe/spawn.rs", "crates/scribe2/tests/e2e/pipe/gate.rs", "crates/scribe2/tests/e2e/pipe/land.rs", "crates/scribe2/tests/e2e/pipe/ratelimit.rs", "crates/scribe2/tests/e2e/pipe/stop.rs", "crates/scribe2/tests/e2e/pipe/intake.rs", "crates/scribe2/tests/e2e/pipe.rs"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_dispatch_waiting_gate_"]
-size = "S"
-done = "偽の台帳と偽 runner の toy repo で、回答済みの Questioned の便（driver の札なし）が手動の 1 周で --drive 付きの resume で起こされて先の段へ進み（resumed:1）、未回答の Questioned の便は起こされず（resumed:0）、承認済みの Blocked の便も同じく起こされ、生きている所有者の札を持つ待ちの便は触られず、道具を渡した pipe answer の記帳の直後に同じ 1 周が撃たれて便が進み、道具を渡さない pipe answer は記帳だけで rc 0 のまま、1 周が失敗しても回答の rc は変わらない"
+size = "M"
+done = "偽の台帳と偽 runner の toy repo で、回答済みの Questioned の便（driver の札なし）が手動の 1 周で --drive 付きの resume で起こされて先の段へ進み（resumed:1）、未回答の Questioned の便と古い質問に回答が在っても最新の質問が未回答の便は起こされず（resumed:0）、承認済みの Blocked の便も同じく起こされ、札の 4 値（無い・所有者が死んでいる便は起こす／所有者が生きている・在るのに読めない便は触らない）がそれぞれ測られ、道具を渡した pipe answer と pipe approve の記帳の直後に同じ 1 周が撃たれて便が進み、道具を渡さない pipe answer は記帳だけで rc 0 のまま、1 周が失敗しても回答の rc は変わらず、候補の選別の pure な fn が呼び手の便を関門の候補から外し（in-file の歯）、関門の判定は resume の入口と列が同じ述語 1 本を呼び、待ちの段でない便の起こし直しの規則と未承認の Blocked を外す既存の歯は変わらない"
 <!-- contracts:end -->
