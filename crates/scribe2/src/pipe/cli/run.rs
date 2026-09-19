@@ -84,7 +84,7 @@ pub(super) fn run_all(args: &[String], manifest: &Manifest, policy: LockPolicy) 
     // **driver の札をここで置く**（設計 dispatcher.md §5）: この process が死んだら、札が残って列の
     // 1 周が起こし直す。`Drop` で消えるので、どの段で終わっても残らない。
     // 握れない周は駆動しない（新しい run id なので、ここで落ちるのは置き場を書けない周だけ）。
-    let held = super::state_dir_of(args).ok().map(|state_dir| crate::pipe::Driver::hold(&state_dir, &id));
+    let held = super::state_dir_of(args).ok().map(|state_dir| crate::pipe::Driver::hold(&state_dir, &id, policy));
     let _driver = match held {
         Some(None) => return super::broken(format!("run {id} の driver の札を握れない")),
         Some(found) => found,

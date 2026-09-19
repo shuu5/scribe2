@@ -309,15 +309,37 @@ fn write_line(path: &Path, line: &str) -> Result<(), StoreError> {
         .map_err(|err| StoreError::Io(format!("flush できない: {err}")))
 }
 
-/// lock を取る。所有者の死んだ lock と古い lock は外して警告に載せる（黙って消さない）。
+/// 古い lock を外してよいか（**閉じた 2 値**・`s2-07l.482`）。
+///
+/// 追記の lock は「書いて閉じる」までが短いので、古い lock は持ち主が生きていても外してよい
+/// （[`Self::Stale`]・従来の唯一の形）。**driver の札は数分〜数十分握られる**ので、同じ扱いにすると
+/// 生きている driver の札を別の driver が奪う（[`Self::DeadOnly`]）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reclaim {
+    /// 所有者が死んだ lock と、`stale_ms` を超えた lock を外す。
+    Stale,
+    /// **所有者が死んだ lock だけ**を外す（生きている所有者は `retry_ms` まで待つ）。
+    DeadOnly,
+}
+
+/// [`Reclaim`] の全 variant（宣言順・`enum-slices` が集合完全性を測る）。
+pub const RECLAIMS: &[Reclaim] = &[Reclaim::Stale, Reclaim::DeadOnly];
+
+/// lock を取る。所有者の死んだ lock と（[`Reclaim::Stale`] の周は）古い lock を外して警告に載せる
+/// （黙って消さない）。
 ///
 /// 取れた lock には**自分の pid を 10 進 1 行**で書く（`create_new` で開いた handle にそのまま
 /// 書く・第 2 の writer を作らない）。書けない周は lock を戻して error（fail-closed）。
 ///
-/// **crate の中へ開く**のは受付（[`crate::pipe::admission`]）が slot dir の lock に同じ実装を
-/// 使うためである（lock file は別・実装は 1 本・憲法 C6.3）。外すのは呼び手が lock file を
-/// 消すこと。
+/// **crate の中へ開く**のは受付（[`crate::pipe::admission`]）が slot dir の lock に、driver の札
+/// （[`crate::pipe::Driver`]）が run dir の札に同じ実装を使うためである（lock file は別・実装は 1 本・
+/// 憲法 C6.3）。外すのは呼び手が lock file を消すこと。
 pub(crate) fn acquire(lock: &Path, policy: LockPolicy) -> Result<Vec<Warning>, StoreError> {
+    acquire_with(lock, policy, Reclaim::Stale)
+}
+
+/// [`acquire`] に古い lock の扱いを渡す形（**判定の本文は 1 本**）。
+pub(crate) fn acquire_with(lock: &Path, policy: LockPolicy, reclaim: Reclaim) -> Result<Vec<Warning>, StoreError> {
     let started = Instant::now();
     let mut warnings = Vec::new();
     loop {
@@ -338,7 +360,7 @@ pub(crate) fn acquire(lock: &Path, policy: LockPolicy) -> Result<Vec<Warning>, S
             warnings.push(Warning::DeadOwnerLockRemoved);
             continue;
         }
-        if is_stale(lock, policy.stale_ms) && fs::remove_file(lock).is_ok() {
+        if reclaim == Reclaim::Stale && is_stale(lock, policy.stale_ms) && fs::remove_file(lock).is_ok() {
             warnings.push(Warning::StaleLockRemoved);
             continue;
         }

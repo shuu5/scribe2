@@ -94,13 +94,15 @@ impl Driver {
     /// 1 周の側で閉じても効かない（`s2-07l.366` と同じ理由で「記帳する側」に置く）。
     ///
     /// 書けない周も `None`（その便は札の無い便として扱われる＝列は触らない・fail-closed）。
-    pub fn hold(state_dir: &Path, id: &str) -> Option<Self> {
+    pub fn hold(state_dir: &Path, id: &str, policy: LockPolicy) -> Option<Self> {
         let path = driver_path(state_dir, id);
-        if driven_by_another(&path) {
-            return None;
-        }
         std::fs::create_dir_all(path.parent()?).ok()?;
-        std::fs::write(&path, format!("{}\n", std::process::id())).ok()?;
+        // **原子的に取る**（`create_new` の 1 実装・C6.3）。読んでから書く形は塞げない——同じ便に 2 本の
+        // 起こし直しが来ると両方が「死んだ所有者の札」を読んでから両方が書き、runner が 2 本起きる
+        // （`s2-07l.482` の実測: 起動試行 2 回で 3 回中 2 回）。回収は**死んだ所有者だけ**で、生きている
+        // 所有者は `retry_ms` まで待つ——札は数分〜数十分握られるので、古さで剥がすと生きている driver
+        // の札を奪う。待てるので、**継ぎの子は親が抜けるまで待って取れる**。
+        store::acquire_with(&path, policy, store::Reclaim::DeadOnly).ok()?;
         let events = run_events(state_dir, id);
         Some(Self { state_dir: state_dir.to_path_buf(), run: id.to_owned(), path, events })
     }
@@ -137,20 +139,6 @@ impl Drop for Driver {
             let _ = std::fs::remove_file(&self.path);
         }
     }
-}
-
-/// 札を**生きている別の process** が握っているか（[`Driver::hold`] の排他の判定）（札が無い・読めない周は `false`＝握ってよい）。
-///
-/// 自分の札は握り直してよい（同じ process が同じ便を続けて駆動する周）。`pid` の再利用で生きて見える
-/// 札は握らない側へ倒す（lock の所有者の判定と同じ極性）。
-fn driven_by_another(path: &Path) -> bool {
-    let Ok(body) = std::fs::read_to_string(path) else {
-        return false;
-    };
-    if body.trim().parse::<u32>() == Ok(std::process::id()) {
-        return false;
-    }
-    store::lock_owner(&body, store::started_ms) == store::Owner::Live
 }
 
 /// 便に紐づく event の件数（**前進したか**の基準・読めない周は 0）。
@@ -727,6 +715,8 @@ pub(crate) mod fixture {
 #[cfg(test)]
 mod tests {
     use super::fixture::{append_all, event, scratch};
+    use crate::fleet::store::LockPolicy;
+    use std::path::Path;
     use super::{
         base_of_run, driver_path, last_stage_detail, question_of_run, questions_of_run, runner_is_idle, Base, Driver,
         Question,
@@ -767,27 +757,39 @@ mod tests {
         let _ = std::fs::remove_dir_all(&broken);
     }
 
-    /// driver の札は**入口の排他**でもある（設計 dispatcher.md §5・`s2-07l.482`）: 生きている別の driver が
-    /// 握っている便は握れず、死んだ所有者の札は握り直せる。契機が重なって起こし直しが 2 本撃たれた周は、
-    /// ここで片方が落ちる（列の 1 周は lock を取らず、起こし直した子は別 process なので 1 周の側では閉じない）。
+    /// 札を置く（dir ごと作る・置けなければ panic＝前提が崩れたまま測らない）。
+    fn put_ticket(root: &Path, run: &str, pid: u32) {
+        let path = driver_path(root, run);
+        std::fs::create_dir_all(path.parent().expect("札の dir を解ける")).expect("札の dir を作れる");
+        std::fs::write(&path, format!("{pid}\n")).expect("札を書ける");
+    }
+
+    /// driver の札は**原子的に取る lock** である（設計 dispatcher.md §5・`s2-07l.482`）。
+    ///
+    /// 読んでから書く形では同じ便に 2 本の起こし直しが相乗りする（実測: 起動試行 2 回で 3 回中 2 回、
+    /// runner が 2 本起きた）。回収は**死んだ所有者だけ**で、生きている所有者は `stale_ms` を超えても
+    /// 奪わない——札は数分〜数十分握られるので、古さで剥がすと走っている driver の札を奪う。
     #[test]
-    fn pipe_dispatch_driver_hold_admits_one_driver_at_a_time() {
+    fn pipe_dispatch_driver_hold_is_an_atomic_lock_that_reclaims_only_dead_owners() {
         let root = scratch("driver-hold");
-        let first = Driver::hold(&root, "r1");
-        assert!(first.is_some(), "1 つ目は握れる");
-        // **自分の札は握り直せる**（同じ process が同じ便を続けて駆動する周）。
-        assert!(Driver::hold(&root, "r1").is_some(), "自分の札は握り直せる");
-        // 生きている**別の** process の札は握れない（自分でない pid = この test を起こした親）。
+        // **古さで剥がされない線を測る**ので `stale_ms` は 1 ms（`Stale` なら即座に奪える値）。
+        let policy = LockPolicy { retry_ms: 50, stale_ms: 1 };
+        let first = Driver::hold(&root, "r1", policy);
+        assert!(first.is_some(), "空いている札は取れる");
+        assert!(Driver::hold(&root, "r1", policy).is_none(), "握られている札は取れない（lock である）");
+        drop(first);
+        assert!(Driver::hold(&root, "r1", policy).is_some(), "外れた後は取れる");
+        // 生きている**別の**所有者の札は、古くても奪わない（`DeadOnly`）。
         let other = std::os::unix::process::parent_id();
-        std::fs::write(driver_path(&root, "r1"), format!("{other}\n")).ok();
-        assert!(Driver::hold(&root, "r1").is_none(), "生きている別の driver の札は握れない");
-        // 死んだ所有者の札は握り直せる（起こし直しの入口）。
+        put_ticket(&root, "r2", other);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        assert!(Driver::hold(&root, "r2", policy).is_none(), "生きている所有者の札は stale を超えても奪わない");
+        // 死んだ所有者の札は回収する（起こし直しの入口）。
         let mut dead = std::process::Command::new("true").spawn().expect("true を起こせる");
         let gone = dead.id();
         dead.wait().expect("true を待てる");
-        std::fs::write(driver_path(&root, "r1"), format!("{gone}\n")).ok();
-        assert!(Driver::hold(&root, "r1").is_some(), "死んだ所有者の札は握り直せる");
-        let _ = std::fs::remove_dir_all(&root);
+        put_ticket(&root, "r3", gone);
+        assert!(Driver::hold(&root, "r3", policy).is_some(), "死んだ所有者の札は回収して取れる");
         let _ = std::fs::remove_dir_all(&root);
     }
 

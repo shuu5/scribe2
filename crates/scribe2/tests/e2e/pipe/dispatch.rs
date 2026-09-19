@@ -919,3 +919,41 @@ fn put_dead_ticket(state: &Path, id: &str) {
     let path = state.join("pipe").join(id).join("driver");
     fs::write(&path, format!("{pid}\n")).expect("札を書ける");
 }
+
+/// (§5 driver の死亡) **同じ便に起こし直しが 2 本来ても runner は 1 本**（母集団 = 起動試行 2 回）。
+///
+/// 札は原子的に取る lock なので、2 本目は取れずに断られる。読んでから書く形では両方が「死んだ所有者の
+/// 札」を読んでから両方が書き、**runner が 2 本起きる**（`s2-07l.482` の実測: 3 回中 2 回）。
+#[test]
+fn pipe_dispatch_driver_two_concurrent_resumes_start_one_runner() {
+    let (repo, state) = repo_with_state();
+    let (id, _runner_pid, runner) = super::spawn::killed_at_spawned(&repo, &state, &[IMPLEMENT.to_owned()]);
+    super::ratelimit::put_account(&state, "a1", &[super::ratelimit::windows(30, 30)]);
+    let args: Vec<String> = [
+        "pipe", "resume", "--run", &id,
+        "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(),
+        "--runner", &runner,
+        "--rules", &with_ledger_row(&state, "rules-race.toml", &super::ratelimit::resume_rules(&state, &["a1"])),
+        "--curl", &super::ratelimit::fake_usage_curl(&state),
+    ]
+    .iter()
+    .map(|found| (*found).to_owned())
+    .collect();
+    let spawned: Vec<_> = (0..2)
+        .filter_map(|_| {
+            Command::new(super::bin()).args(&args).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().ok()
+        })
+        .collect();
+    assert_eq!(spawned.len(), 2, "起こし直しを 2 本同時に撃つ");
+    let done: Vec<Output> = spawned.into_iter().filter_map(|child| child.wait_with_output().ok()).collect();
+    assert_eq!(done.len(), 2, "2 本とも終わる");
+    // 起こし直した runner は **1 本**（元の `SeatSpawned` 1 件 + 起こし直しの 1 件 = 2 件）。
+    let seats = fs::read_to_string(state.join("fleet").join("events.jsonl"))
+        .unwrap_or_default()
+        .lines()
+        .filter(|line| line.contains("\"kind\":\"SeatSpawned\"") && line.contains(&format!("\"run\":\"{id}\"")))
+        .count();
+    assert_eq!(seats, 2, "元の 1 本 + 起こし直しの 1 本（母集団 = 起動試行 2 回）");
+    clean(&[&repo, &state]);
+}
