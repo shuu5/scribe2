@@ -228,22 +228,22 @@ terms:
     relationships: [口座, admin lane]
   - canonical: admin lane
     domain: consumer
-    definition: 管理席が担う実行経路。 dolt push・land など gate 通過後の操作を担う。
-    relationships: [lane, 管理席, dolt push, gate]
+    definition: 管理席が担っていた実行経路 (dolt push・land など gate 通過後の操作)。 管理席の廃止 (ADR-0045) とともに消えた歴史的な語で、 着地と merge は dispatcher が持つ (SRS FR50 / FR68)。
+    relationships: [lane, 管理席, dispatcher]
   - canonical: 管理席
     domain: consumer
-    definition: 役割 管理席 を持つ席 (Role の variant 名は core が持つ)。 anchor ごとに 1 席 (SRS FR30 / FR40・ADR-0022 §2.6)。 停止の検知と再起動の規範は C9。 配送構造での仕事 (runner の質問と gate の判定を planner へ中継する・go の後に land する) は SRS FR30 (ADR-0016 §2.1・便の起動は dispatcher = SRS FR68・ADR-0034) で、 権能の執行は ADR-0022 §2.3。
+    definition: 廃止した役割 (ADR-0045・歴史的な語)。 前の配送構造 (ADR-0016 §2.1) で runner の質問と gate の判定を planner へ中継し go の後に land した席。 席の役割は orchestrator の 1 つで、 便の起動・着地・merge は dispatcher が行う (SRS FR30 / FR68)。
     forbidden: [運転席]
-    relationships: [席, admin lane, planner, 質問 record]
+    relationships: [席, orchestrator, dispatcher, 質問 record]
   - canonical: planner
     domain: consumer
-    definition: 席の役割の 1 つ (設計協調)。 契約・契約の priority・介入・裁定・land の go を書き、 runner の質問に契約の修正か回答 event で応える (SRS FR30 / FR32 / FR68・ADR-0016 §2.1 / §2.3・ADR-0034)。 対話面の identity は rules 行 R-C7-1 が持ち (ADR-0003)、 その値は planner の席 (ADR-0022 §2.5)。 anchor ごとに 1 席 (SRS FR40)。
+    definition: orchestrator の前の名 (ADR-0045 で改名・歴史的な語)。 役割の行 role.planner は無く、 対話面の identity (rules 行 R-C7-1) の値は orchestrator の登録 row を持つ席 (ADR-0022 §2.5・ADR-0045)。
     forbidden: [プランナー]
-    relationships: [対話面, 席, 開発 session]
+    relationships: [orchestrator, 対話面, 席]
   - canonical: 対話面
     domain: consumer
-    definition: user と機械が承認や裁定をやり取りする面。 ちょうど 1 つ (C7)。 どの席かは rules 行 R-C7-1 の値で決まり、 値は役割 planner の登録 row を持つ席 (ADR-0022 §2.5)。 承認・回答・go の記帳はその席からだけ受理される。
-    relationships: [planner, 開発 session, 承認 event, rules 行]
+    definition: user と機械が承認や裁定をやり取りする面。 ちょうど 1 つ (C7)。 どの席かは rules 行 R-C7-1 の値で決まり、 値は役割 orchestrator の登録 row を持つ席 (ADR-0022 §2.5・ADR-0045)。 承認・回答・go の記帳はその席からだけ受理される。
+    relationships: [orchestrator, 開発 session, 承認 event, rules 行]
   - canonical: relay 印
     domain: consumer
     definition: 改訂前の憲法 (C7・A1) で planner が user の承認を機械へ伝えていた印。 ADR-0003 以後、 承認の記帳は承認 event が担う (歴史的な語)。
@@ -602,8 +602,8 @@ terms:
     relationships: [並列の枠, 変異検出線, vessel 宣言]
   - canonical: 役割
     domain: consumer
-    definition: 開発 session の席の種類。 閉じた enum の値で (列挙は core が持ち文書は写さない・ADR-0013 §2.1)、 席の登録 row が持つ。 窓名や env の慣習では決めない (SRS FR40・ADR-0022 §2.1)。
-    relationships: [席, planner, 管理席, 権能, 席の登録]
+    definition: 開発 session の席の種類。 閉じた enum の値で (列挙は core が持ち文書は写さない・ADR-0013 §2.1・値は orchestrator の 1 つ = ADR-0045)、 席の登録 row が持つ。 窓名や env の慣習では決めない (SRS FR40・ADR-0022 §2.1)。
+    relationships: [席, orchestrator, 権能, 席の登録]
   - canonical: 権能
     domain: consumer
     definition: 役割ごとに許された操作の閉じた一覧 (列挙は core が持ち文書は写さない・ADR-0013 §2.1)。 値は役割ごとの rules 行が持ち (ADR-0022 §2.2)、 hook が tool 呼出しの境界で執行する (SRS FR41・ADR-0022 §2.3)。
@@ -614,7 +614,7 @@ terms:
     relationships: [席, 役割, fleet]
   - canonical: 上限停止
     domain: consumer
-    definition: 便または開発 session が口座残量の上限に当たって止まること。 便では Failed でない再開できる段 (SRS FR35・ADR-0020 §2.1)、 session では退避と立て直しの契機 (SRS FR38・ADR-0020 §2.4)。
+    definition: 便が口座残量の上限に当たって止まること。 Failed でない再開できる段で (SRS FR35・ADR-0020 §2.1)、 別口座での再開は SRS FR37。 開発 session の側の退避と立て直し (ADR-0020 §2.4) は ADR-0045 で廃止 (SRS FR38)。
     relationships: [口座残量, 口座, 口座選定]
   - canonical: 口座選定
     domain: consumer
@@ -637,7 +637,7 @@ terms:
     flagged_ambiguities: [plugin dir（宣言値）と plugin の読み込み元（実測値）は別物]
   - canonical: anchor
     domain: consumer
-    definition: 対象 repo の main checkout。 席と便の鍵の一部で、 1 つの anchor に planner 1 席・管理席 1 席 (SRS FR40・ADR-0022 §2.1)。 便の worktree はここから切る。
+    definition: 対象 repo の main checkout。 席と便の鍵の一部で、 1 つの anchor に orchestrator 1 席 (SRS FR40・ADR-0022 §2.1・ADR-0045)。 便の worktree はここから切る。
     relationships: [席, 席の登録, worktree, 役割]
   - canonical: 席の指示文
     domain: consumer
@@ -715,33 +715,33 @@ terms:
     relationships: [作業記憶, 席, 対話面]
   - canonical: dispatcher
     domain: consumer
-    definition: 審査を通った契約の起動の列を持ち、 台帳の依存・live 便との write-set の交差・受付 (余地・host の memory) を満たす便を管理 tick と land の直後に自動で起こす器の口 (SRS FR68・ADR-0034・設計 docs/design/dispatcher.md)。 便の起動は dispatcher が持ち、 質問と判定の中継は管理席が持つ。 着地と merge も dispatcher が持ち契機を land の直後と契約の直後に限る最小の形は ADR-0045 (proposed)。
+    definition: 台帳から起動の列を導き、 live 便との write-set の交差・受付 (余地・host の memory・同時走行の最大値) を満たす便を、 便の終端の直後・手動の 1 周・介入の印の直後に自動で起こし、 gate を通った便を land して merge する器の口 (SRS FR68 / FR50・ADR-0034・ADR-0045・設計 docs/design/dispatcher.md)。 周期の timer は持たない。 席ではない。
     relationships: [起動の列, 介入, 便, 契約の審査, write-set, 受付]
   - canonical: 起動の列
     domain: consumer
     aliases: [dispatch queue]
-    definition: 契約が出来た直後の審査 (現在の契約の sha に対する verdict) が PASS の契約のうちまだ起こしていないものの並び。 並び・順序・待ちの理由は SRS FR68 が定める。 land の順序 (SRS FR50) とは別の実体。
+    definition: 台帳の open な契約のうち、 依存が閉じ・設計 pointer が解決し・memo でなく・同じ中身で審査 (SRS FR49) FAIL の便が無いものの並び。 並び・順序・待ちの理由は SRS FR68 が定める。 land の順序 (SRS FR50) とは別の実体。
     relationships: [dispatcher, 介入, 着地]
     flagged_ambiguities: ["列: 起動の列 (dispatcher・起動を待つ契約) と着地の列 (pipe/queue.rs・push の順序) は別義"]
   - canonical: 受付
     domain: consumer
     aliases: [contract intake]
-    definition: 契約 file を便にする前に器が撃つ検査の段。 必須 field・verify の形・allowlist・write-set の余地・host の memory の枠を通った契約だけが便になる (交差の排他は SRS FR39)。 変異検査の並列の枠 (SRS NFR6) とは別。
+    definition: 契約 file を便にする前に器が撃つ検査の段。 必須 field・verify の形・allowlist・write-set の余地・host の memory の枠・同時走行の最大値 (SRS FR68) を通った契約だけが便になる (交差の排他は SRS FR39)。 変異検査の並列の枠 (SRS NFR6) とは別。
     relationships: [dispatcher, 並列の枠, write-set, 便]
   - canonical: priority
     domain: consumer
     aliases: [契約の priority]
     definition: 台帳の bead が持つ契約の優先度 (P0〜P4)。 起動の列の順序の 2 番目の鍵 (SRS FR68)。 SRS の要件の priority 欄 (必須 / 推奨) とは別。
-    relationships: [起動の列, 介入, planner, 台帳]
+    relationships: [起動の列, 介入, orchestrator, 台帳]
   - canonical: Reviewed
     domain: consumer
-    definition: 便の段の 1 つ。 契約の審査 (SRS FR49) の verdict を持ち、 PASS でない契約は便にならない。
+    definition: 便の段の 1 つ。 契約の審査 (SRS FR49) の verdict を持ち、 PASS でない便は runner を起こさず FAIL で終端する (ADR-0045)。
     relationships: [契約の審査, 便, dispatcher]
   - canonical: 介入
     domain: consumer
-    aliases: [planner intervention]
-    definition: planner が起動の列の順番を動かす typed な印。 first (最優先へ)・hold (止める)・release (戻す) の 3 つで、 user の直命の対として記録され、 散文の順序を持たない (ADR-0034 §2)。
-    relationships: [dispatcher, 起動の列, 直命の表]
+    aliases: [orchestrator intervention, planner intervention]
+    definition: orchestrator が起動の列の順番を動かす typed な印。 first (最優先へ)・hold (止める)・release (戻す) の 3 つで、 台帳の priority は書き換えず、 起動の列の記録として残り、 記録の直後に dispatcher の 1 周を起こす (ADR-0034 §2・ADR-0045・SRS FR68)。
+    relationships: [dispatcher, 起動の列, orchestrator]
   - canonical: plugin の実体
     domain: consumer
     aliases: [plugin payload]
@@ -831,14 +831,14 @@ terms:
   - canonical: 実効の口座
     domain: consumer
     aliases: [effective role account]
-    definition: その周に役割の席が実際に使う口座。 実効の記録の口座 (使える間は居続ける)、 宣言の口座 (記録が無い周の種)、 役割単位で 1 回だけ session 用の順序 (余裕が最大) で選び直した口座の順に 1 関数で解く。 席の起動・立て直し・管理 tick の比較・便用の除外が同じ解き方を読み、 consult の席は planner のそれを読む (ADR-0041・設計 docs/design/seat-roles.md §17)。 役割の口座 (宣言値) とは別で、 登録 row の口座はこの値の写し。
-    relationships: [役割の口座, 実効の記録, 妥協の起動, 口座選定, 席の登録 row, 立て直し]
+    definition: その周に役割の席が実際に使う口座。 実効の記録の口座 (使える間は居続ける)、 宣言の口座 (記録が無い周の種)、 役割単位で 1 回だけ session 用の順序 (余裕が最大) で選び直した口座の順に 1 関数で解く。 席の起動 (SRS FR59) と便用の除外 (SRS FR36) が同じ解き方を読む (ADR-0041・設計 docs/design/seat-roles.md §17)。 役割の口座 (宣言値) とは別で、 登録 row の口座はこの値の写し。
+    relationships: [役割の口座, 実効の記録, 妥協の起動, 口座選定, 席の登録 row, 席の起動]
     flagged_ambiguities: ["実効: 実効の口座 (役割の席が使う口座) と実効 jobs (変異検査の並列度) は別義", "実測の口座と 1 字差: 実効 = 器が解いた口座 / 実測 = session の開始時に測った現物の口座"]
   - canonical: 実測の口座
     domain: consumer
     aliases: [measured account, 実口座]
-    definition: session の開始時に器が測って出所付きで記録した、 その session が実際に立っている口座。 席の登録 row の口座 (実効の口座の写し) とは別で、 食い違う周は管理 tick が口座を起点とする合図を止めて見せる (SRS FR71・設計 docs/design/account-lifecycle.md §16)。
-    relationships: [実効の口座, 席の登録 row, 管理 tick]
+    definition: session の開始時に器が測って出所付きで記録していた、 その session が実際に立っている口座 (歴史的な語)。 管理 tick とともに ADR-0045 で廃止し、 席の口座は登録 row の値 (実効の口座の写し) だけが持つ (SRS FR71)。
+    relationships: [実効の口座, 席の登録 row]
   - canonical: 実効の記録
     domain: consumer
     aliases: [effective role record]
