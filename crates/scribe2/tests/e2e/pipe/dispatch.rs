@@ -716,8 +716,19 @@ fn pipe_dispatch_driver_dead_driver_is_resumed_once() {
         "起こし直した便が Landed まで自走する（段の並び: {}）",
         stages_of(&state, &id)
     );
-    assert!(!ticket.exists(), "起こし直した便の札は新しい driver が終端で消す");
+    // 札を消すのは最後の driver の `Drop` で、**`Landed` の行が出た後**に走る（終端の 1 周より前）。
+    // 行が出た瞬間に見ると競合するので、消えるまで待って測る。
+    assert!(gone(&ticket), "起こし直した便の札は最後の driver が消す");
     clean(&[&repo, &state]);
+}
+
+/// path が消えるまで待つ（上限 20s・消えなければ `false`）。
+fn gone(path: &Path) -> bool {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while path.exists() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    !path.exists()
 }
 
 /// (§5 driver の死亡) **札の無い live 便は触らない**（`pipe intake` + `pipe spawn` で起こした便は driver の
@@ -852,26 +863,47 @@ fn pipe_dispatch_driver_blocked_run_is_excluded_by_stage_and_keeps_its_ticket() 
     clean(&[&repo, &state]);
 }
 
-/// (§5 driver の死亡) **前進しなかった driver の札は落ちる**（空撃ちの輪を止める）。
+/// (§5 driver の死亡) **前進しなかった driver の札は落ちて空撃ちの輪が止まる**。
 ///
 /// 何も記帳せずに終わった driver の札を残すと、契機のたびに起こし直しが空撃ちされ、その空撃ち自身が次の
-/// 契機になって止まらない。母集団は「1 周 × 2 回」で、2 周目も `resumed:0` であることを見る。
+/// 契機になって止まらない。測るのは `Gated` の INCONCLUSIVE（`pipe resume` が「自動では測り直さない」で
+/// rc 3 を返す段・**人の手を待つ段の除外には掛からない**＝輪ができうる唯一の形）。母集団は 1 周 × 2 回。
 #[test]
 fn pipe_dispatch_driver_a_driver_that_made_no_progress_drops_its_ticket() {
     let (repo, state) = repo_with_state();
-    let marker = state.join("blocked-runner-ran");
-    let (id, _said) = super::spawn::blocked(&repo, &state, &marker, r#"classes = ["publish"]"#);
+    let contract = write_contract(&repo, &[], &[]);
+    let id = implemented(&repo, &state, &contract);
+    let gated = gate_once(&repo, &state, &id, Some(&fake_lens(&state.join("incon-lens"), &lens_verdict("INCONCLUSIVE"))));
+    assert_ne!(gated.status.code(), Some(i32::from(RC_OK)), "前提: INCONCLUSIVE の gate: {}", stdout_of(&gated));
     put_dead_ticket(&state, &id);
     let ticket = state.join("pipe").join(&id).join("driver");
-    // 承認待ちの便に `pipe resume` を直に撃つ（何も記帳せず rc 3 で返る＝前進なし）。
-    let resumed = run_pipe(&[
-        "resume", "--run", &id, "--repo", &repo.display().to_string(),
-        "--state-dir", &state.display().to_string(),
-        "--runner", "true",
-    ]);
-    assert_ne!(resumed.status.code(), Some(i32::from(RC_OK)), "承認待ちは進めない: {}", stdout_of(&resumed));
-    assert!(!ticket.exists(), "前進しなかった driver の札は落ちる（輪が止まる）");
-    assert_eq!(stages_of(&state, &id), "Intake → Reviewed → Blocked", "段を 1 つも動かさない");
+    let round = || -> Output {
+        run_pipe(&[
+            "dispatch",
+            "--state-dir", &state.display().to_string(),
+            "--repo", &repo.display().to_string(),
+            "--rules", &dispatch_rules(&state),
+            "--bd", &fake_bd(&state, &[]),
+            "--lens", &review_lens_pass(&state),
+            "--runner", "true",
+        ])
+    };
+    let first = round();
+    assert_eq!(
+        stdout_of(&first).trim_end(),
+        "dispatch=started:0,resumed:1,waiting:0",
+        "1 周目は起こし直しを 1 回試す: {}",
+        stdout_of(&first)
+    );
+    // 起こし直した `pipe resume` は何も記帳できずに終わる＝その札は落ちる。
+    assert!(gone(&ticket), "前進しなかった driver の札は落ちる");
+    let second = round();
+    assert_eq!(
+        stdout_of(&second).trim_end(),
+        "dispatch=started:0,resumed:0,waiting:0",
+        "2 周目は空撃ちしない（輪が止まる・母集団 1 周 × 2 回）: {}",
+        stdout_of(&second)
+    );
     clean(&[&repo, &state]);
 }
 

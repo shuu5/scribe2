@@ -116,7 +116,14 @@ impl Drop for Driver {
             .and_then(|state| state.runs.get(&self.run).map(|run| run.stage))
             .and_then(|stage| cli::live(&self.state_dir, &self.run, stage));
         let advanced = run_events(&self.state_dir, &self.run) > self.events;
-        if alive != Some(true) || !advanced {
+        if alive == Some(true) && advanced {
+            return;
+        }
+        // **消すのは自分の札だけである**: 同じ便に別の driver が後から入って札を置き換えていれば、
+        // ここで消すと**生きている driver の札**を落とす（その便は以後「札の無い便」＝誰も継がない）。
+        let mine = std::fs::read_to_string(&self.path)
+            .is_ok_and(|body| body.trim().parse::<u32>() == Ok(std::process::id()));
+        if mine {
             let _ = std::fs::remove_file(&self.path);
         }
     }
