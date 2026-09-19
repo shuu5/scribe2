@@ -347,6 +347,166 @@ fn pipe_dispatch_settled_reads_the_run_just_before_the_current_sha() {
     clean(&[&repo, &state]);
 }
 
+/// `release` の印を 1 つ打つ（`--repo` を渡さないので直後の 1 周は `unmeasured reason=args`＝便は起きない）。
+fn release(state: &Path, bead: &str) {
+    let out = run_pipe(&["dispatch", "release", bead, "--state-dir", &state.display().to_string()]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "release は rc 0（{}）", told(&out));
+}
+
+/// 行 a の便を `Failed` に着ける（intake → rc 2・commit 0 の偽 runner）。
+fn failed_run(repo: &Path, state: &Path, bead: &str) -> String {
+    let id = intake_bead(repo, state, &format!("{DESIGN_FILE}#a"), bead);
+    fail_run(repo, state, &id);
+    id
+}
+
+/// 便を rc 2・commit 0 の偽 runner で `Failed` に着ける（spawn 自体の rc は 0＝段は stdout の行で測る）。
+fn fail_run(repo: &Path, state: &Path, id: &str) {
+    let out = super::spawn_with(repo, state, id, "exit 2");
+    assert!(stdout_of(&out).contains("stage=Failed"), "rc 2 の runner は Failed（{}）", told(&out));
+}
+
+/// 行 a の便を gate の判定（偽 lens の verdict）まで通す（intake → 1 commit の偽 runner → gate）。
+fn gated_run(repo: &Path, state: &Path, bead: &str, verdict: &str) -> String {
+    let id = intake_bead(repo, state, &format!("{DESIGN_FILE}#a"), bead);
+    let spawned = super::spawn_with(repo, state, &id, super::TOY_COMMIT);
+    assert_eq!(spawned.status.code(), Some(i32::from(RC_OK)), "spawn は rc 0（{}）", told(&spawned));
+    let lens = fake_lens(&state.join(format!("gate-lens-{verdict}")), &lens_verdict(verdict));
+    let out = gate_once(repo, state, &id, Some(&lens));
+    assert!(gated_pair_ok(verdict, &out), "gate {verdict}（{}）", told(&out));
+    id
+}
+
+/// gate の rc が verdict と噛み合うか（PASS は rc 0・FAIL は rc 非 0）。
+fn gated_pair_ok(verdict: &str, out: &Output) -> bool {
+    (out.status.code() == Some(i32::from(RC_OK))) == (verdict == "PASS")
+}
+
+/// 終端の便を 1 本置いた置き場で `release` の前後の `dispatch ls` の理由を測る（**同じ sha のまま**）。
+///
+/// 返すのは `(release の前, release の後)` の `reason=` の値。前は必ず `settled:<sha>/<段>` で、後が
+/// `-` に戻るか `settled:` のままかを呼び手が段ごとに判じる（母集団 = 終端の段の種類）。
+fn reasons_around_release(repo: &Path, state: &Path, bead: &str, stage: &str) -> (String, String) {
+    let bd = fake_bd(state, &[issue(bead, 2, "a")]);
+    let before = ls(repo, state, &bd);
+    let settled = reason_of(&before, bead);
+    assert!(settled.starts_with("settled:"), "release の前は列外（{}）", told(&before));
+    assert!(settled.ends_with(&format!("/{stage}")), "段は {stage}: {settled}");
+    assert_eq!(count_of(&before), format!("{COUNT} total=1 ready=0"), "列には載るが起こさない");
+    release(state, bead);
+    let after = ls(repo, state, &bd);
+    (settled, reason_of(&after, bead))
+}
+
+/// (§12 列へ戻す印) `Failed` で終端した便の bead は `settled` で列外だが、その後の `release` で**同じ sha の
+/// まま**列に戻り（`reason=-`・`ready=1`）、起こし直した便が同じ sha でまた終端に着くと再び `settled` になる
+/// （**印 1 回で起き直るのは 1 回**＝§2 の無限再起動を開け直さない）。
+///
+/// 起こし直した便は run dir の fixture で作る（同じ bead で秒を跨いで intake → rc 2 の runner）。起こす
+/// 効果そのものは印の直後の 1 周の歯（`..._marks_fire_without_children`）と手動の 1 周の歯が測る。
+#[test]
+fn pipe_dispatch_release_requeues_a_failed_run_once_at_the_same_sha() {
+    let (repo, state) = repo_with_state();
+    two_rows(&repo);
+    let bead = "s2-toy.1";
+    let first = failed_run(&repo, &state, bead);
+    let (settled, released) = reasons_around_release(&repo, &state, bead, "Failed");
+    assert_eq!(released, "-", "release で同じ sha のまま列に戻る");
+    let bd = fake_bd(&state, &[issue(bead, 2, "a")]);
+    let back = ls(&repo, &state, &bd);
+    assert_eq!(count_of(&back), format!("{COUNT} total=1 ready=1"), "戻った契約は起こせる（{}）", told(&back));
+    // **起こし直した便が同じ sha でまた終端に着く**（秒を跨いで同じ bead の 2 本目・同じ契約 file）。
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    let second = failed_run(&repo, &state, bead);
+    assert_ne!(second, first, "起こし直した便は新しい run id");
+    let again = ls(&repo, &state, &bd);
+    assert_eq!(reason_of(&again, bead), settled, "同じ sha でまた終端＝再び settled（印は 1 回しか効かない）（{}）", told(&again));
+    assert_eq!(count_of(&again), format!("{COUNT} total=1 ready=0"), "2 度目は起こさない");
+    // 2 度目の `release` はまた 1 回だけ戻す（印ごとに 1 回）。
+    release(&state, bead);
+    let twice = ls(&repo, &state, &bd);
+    assert_eq!(reason_of(&twice, bead), "-", "2 度目の release でまた戻る（{}）", told(&twice));
+    clean(&[&repo, &state]);
+}
+
+/// (§12 列へ戻す印) 終端より**前**の `release` は効かない——印は便の最後の記帳より後に在る 1 件だけを見る。
+#[test]
+fn pipe_dispatch_release_requeues_nothing_when_the_mark_precedes_the_terminal() {
+    let (repo, state) = repo_with_state();
+    two_rows(&repo);
+    let bead = "s2-toy.1";
+    let id = intake_bead(&repo, &state, &format!("{DESIGN_FILE}#a"), bead);
+    // live な便のうちに印を打つ（この時点では列外でなく、自分の便との交差で待つ）。
+    release(&state, bead);
+    let bd = fake_bd(&state, &[issue(bead, 2, "a")]);
+    let live = ls(&repo, &state, &bd);
+    assert_eq!(reason_of(&live, bead), format!("overlap:{id}/1"), "終端の前は交差で待つ（{}）", told(&live));
+    // その後に終端へ着く（rc 2 の runner）。
+    fail_run(&repo, &state, &id);
+    let after = ls(&repo, &state, &bd);
+    let reason = reason_of(&after, bead);
+    assert!(reason.starts_with("settled:"), "終端より前の release は効かない＝列外のまま（{}）", told(&after));
+    assert!(reason.ends_with("/Failed"), "段は Failed: {reason}");
+    assert_eq!(count_of(&after), format!("{COUNT} total=1 ready=0"), "起こさない");
+    clean(&[&repo, &state]);
+}
+
+/// (§12 戻さない段) `Landed` の便は `release` の後も `settled` のまま（済んでいる・起こし直すと同じ変更を
+/// もう一度作る）。
+#[test]
+fn pipe_dispatch_release_requeues_not_a_landed_run() {
+    let (repo, state) = repo_with_state();
+    two_rows(&repo);
+    let bead = "s2-toy.1";
+    let id = gated_run(&repo, &state, bead, "PASS");
+    let landed = super::land_once(&repo, &state, &id);
+    assert_eq!(landed.status.code(), Some(i32::from(RC_OK)), "land は rc 0（{}）", told(&landed));
+    let (settled, released) = reasons_around_release(&repo, &state, bead, "Landed");
+    assert_eq!(released, settled, "Landed は release の後も列外のまま（理由も変わらない）");
+    clean(&[&repo, &state]);
+}
+
+/// (§12 戻さない段) 審査 FAIL（`Reviewed` で終端）の便は `release` の後も `settled` のまま
+/// （FR49「中身が変わるまで列に入らない」）。
+#[test]
+fn pipe_dispatch_release_requeues_not_a_review_failed_run() {
+    let (repo, state) = repo_with_state();
+    two_rows(&repo);
+    let bead = "s2-toy.1";
+    let id = intake_bead(&repo, &state, &format!("{DESIGN_FILE}#a"), bead);
+    fs::write(state.join("pipe").join(&id).join(REVIEW_FILE), "{\"verdict\":\"FAIL\"}\n")
+        .expect("審査の判定を書ける");
+    let (settled, released) = reasons_around_release(&repo, &state, bead, "Reviewed");
+    assert_eq!(released, settled, "審査 FAIL は release の後も列外のまま（理由も変わらない）");
+    clean(&[&repo, &state]);
+}
+
+/// (§12 戻す段) `Stopped` の便（人が止めた）は `release` で列に戻る。
+#[test]
+fn pipe_dispatch_release_requeues_a_stopped_run() {
+    let (repo, state) = repo_with_state();
+    two_rows(&repo);
+    let bead = "s2-toy.1";
+    let id = intake_bead(&repo, &state, &format!("{DESIGN_FILE}#a"), bead);
+    super::stop_run_ok(&state, &id);
+    let (_, released) = reasons_around_release(&repo, &state, bead, "Stopped");
+    assert_eq!(released, "-", "Stopped は release で戻る");
+    clean(&[&repo, &state]);
+}
+
+/// (§12 戻す段) gate の判定で終端になった便（`Gated` の verdict FAIL）は `release` で列に戻る——gate の
+/// FAIL には flaky な歯で落ちた周が含まれ、契約の字を変えずに測り直す口が他に無い。
+#[test]
+fn pipe_dispatch_release_requeues_a_gate_failed_run() {
+    let (repo, state) = repo_with_state();
+    two_rows(&repo);
+    let bead = "s2-toy.1";
+    gated_run(&repo, &state, bead, "FAIL");
+    let (_, released) = reasons_around_release(&repo, &state, bead, "Gated");
+    assert_eq!(released, "-", "gate FAIL は release で戻る");
+    clean(&[&repo, &state]);
+}
+
 /// (§3 起動条件) 閉じていない `blocks` の依存は `dependency` で待ち、依存先が closed になると起こせる。
 /// 所属（`parent-child`）は順序ではないので待たせない（`.beads/PRIME.md` R2）。
 ///

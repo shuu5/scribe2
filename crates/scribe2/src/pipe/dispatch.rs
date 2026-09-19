@@ -90,6 +90,9 @@ pub enum WaitReason {
     /// `s2-07l.366` で「審査 FAIL の便」から広げた: 便が終端に着いても bead は台帳で `open` のまま
     /// （器は台帳に書かない・C15）で live な便も無いので、終端が来るたびに同じ契約が起こし直される
     /// （着地から close までの無限再起動）。
+    ///
+    /// 契約の字が正しいのに器の側の理由で終端に着いた便は、その便の最後の記帳より**後**の `release`
+    /// が 1 回だけ列外を外す（[`requeues`] の段だけ・設計 §12・`s2-07l.495`）。
     Settled {
         /// 終端に着いた便の契約 file の sha。
         sha: String,
@@ -387,8 +390,10 @@ pub fn turn(input: &Input<'_>) -> Turn {
         return unmeasured(Unmeasured::Ledger);
     };
     // 1 周ぶん固定な材料は**ここで 1 回だけ**解く（候補ごとに rules 行と台帳を読み直さない）。
+    let events = read_events(input.state_dir);
     let ledger = Ledger {
-        marks: marks_of(&read_events(input.state_dir)),
+        marks: marks_of(&events),
+        events,
         closed: issues.iter().filter(|issue| issue.status == CLOSED).map(|issue| issue.id.as_str()).collect(),
         materials: Materials::of(input.repo, input.manifest),
     };
@@ -409,6 +414,8 @@ pub fn turn(input: &Input<'_>) -> Turn {
 struct Ledger<'a> {
     /// bead ごとの最後の印。
     marks: BTreeMap<String, (Mark, String)>,
+    /// 置き場の event の並び（`release` が終端の便の最後の記帳より後かを位置で引く・設計 §12）。
+    events: Vec<Event>,
     /// 閉じた bead の id（依存が閉じたかを同じ一覧の中で引く）。
     closed: BTreeSet<&'a str>,
     /// 1 周ぶんの repo の材料（**読みは 1 周に 1 回**・設計 §5・読めない周は断りの名を全候補が受ける）。
@@ -568,7 +575,7 @@ fn entry_of(input: &Input<'_>, issue: &Issue, ledger: &Ledger<'_>) -> (Candidate
         Err(denial) => return wait(WaitReason::Admission { reason: denial.name }),
     };
     let contract = match generated(input.repo, &pointer, materials) {
-        Ok((found, body)) => match settled(input, &issue.id, &body) {
+        Ok((found, body)) => match settled(input, &issue.id, &body, &ledger.events) {
             Some((sha, stage)) => return wait(WaitReason::Settled { sha, stage }),
             None => found,
         },
@@ -720,7 +727,13 @@ fn pointer_of(acceptance: &str) -> Option<Pointer> {
 /// 測れない周（`None`）はここで外さない——その便は交差の検査が `WriteSetUnreadable` で断る側に倒す。
 /// `git hash-object` を撃てない周は sha を測れないので列外にしない（`generated` が base を読めている＝
 /// git は撃てているので、実際には到達しない）。
-fn settled(input: &Input<'_>, bead: &str, body: &str) -> Option<(String, Stage)> {
+///
+/// **列へ戻す印**（設計 §12・`s2-07l.495`）: 直前の便が終端でも、その便の最後の記帳より**後**に同じ bead
+/// への `release` が在る周は列外にしない（[`released_after`]・材料は event log の並びだけ・新しい event kind
+/// も field も足さない・C17.1）。起こし直した便は新しい run id を持ち、その記帳は `release` より後に並ぶ
+/// ので、同じ sha でまた終端に着けば再び列外になる＝**印 1 回で起き直るのは 1 回**（§2 の無限再起動を
+/// 開け直さない）。戻す段は [`requeues`] が段の型の網羅の match 1 本で決める。
+fn settled(input: &Input<'_>, bead: &str, body: &str, events: &[Event]) -> Option<(String, Stage)> {
     let state = current(input.state_dir).ok()?;
     // **直前の便から見る**（run id は `<bead>-<UTC の秒>` ＝ id の昇順が時系列なので、逆順が新しい側）。
     // 同じ契約 file を持つ最初の 1 本だけを見る——古い便の終端は、その後起こし直した同じ契約を塞がない。
@@ -731,8 +744,44 @@ fn settled(input: &Input<'_>, bead: &str, body: &str) -> Option<(String, Stage)>
     if live(input.state_dir, id, stage) != Some(false) {
         return None;
     }
+    if requeues(stage) && released_after(events, id, bead) {
+        return None;
+    }
     let sha = git_bytes(input.repo, &["hash-object", "--", &path.display().to_string()])?;
     String::from_utf8(sha).ok().map(|found| (found.trim().to_owned(), stage))
+}
+
+/// `release` で列へ戻す段か（**段の型の網羅の match 1 本**・設計 §12「戻さない段が 2 つ在る」）。
+///
+/// 戻すのは `Failed` / `Stopped` / gate の判定で終端になった `Gated`——gate の FAIL には flaky な歯で落ちた
+/// 周が含まれ、契約の字を変えずに測り直す口が他に無い。戻さないのは `Landed`（済んでいる・起こし直すと
+/// 同じ変更をもう一度作る）と審査 FAIL の `Reviewed`（FR49「中身が変わるまで列に入らない」）。終端に
+/// 着かない段（[`live`] が `Some(true)` の段）はここに届かないが、届いても戻さない側に倒す（fail-closed）。
+/// 段が増えた便は compile が止めて、その段を戻すかを決めさせる。
+fn requeues(stage: Stage) -> bool {
+    match stage {
+        Stage::Failed | Stage::Stopped | Stage::Gated => true,
+        Stage::Landed | Stage::Reviewed => false,
+        Stage::Intake
+        | Stage::Blocked
+        | Stage::Spawned
+        | Stage::Questioned
+        | Stage::RateLimited
+        | Stage::Implemented => false,
+    }
+}
+
+/// 便の最後の記帳より**後**に、同じ bead への `release` が在るか（**pure**・材料は event log の並びだけ）。
+///
+/// 位置で引く（ts の字面は比べない）: 終端より**前**の `release` は効かない。便の記帳が 1 件も無い周は
+/// 「後」を測れないので効かない側に倒す（replay に在る便は必ず記帳を持つので、実際には到達しない）。
+fn released_after(events: &[Event], run: &str, bead: &str) -> bool {
+    let Some(last) = events.iter().rposition(|event| event.run == run) else {
+        return false;
+    };
+    events.iter().skip(last + 1).any(|event| {
+        event.kind == EventKind::DispatchMark && event.mark == Some(Mark::Release) && event.bead == bead
+    })
 }
 
 /// 受付の枠の式の 2 線（読めない行は 0＝[`admission::has_room`] が `Free::Unmeasured` で待たせない側に倒す）。
@@ -843,8 +892,8 @@ pub fn mark(state_dir: &Path, bead: &str, mark: Mark, policy: store::LockPolicy)
 #[cfg(test)]
 mod tests {
     use super::{
-        advance, digits_of, handoff, launch_of, marks_of, order, rank, revive_of, tools, Advance, Candidate,
-        Handoff, Input, Pointer, WaitReason, DRIVE, HANDOFFS, WAIT_REASONS,
+        advance, digits_of, handoff, launch_of, marks_of, order, rank, released_after, requeues, revive_of, tools,
+        Advance, Candidate, Handoff, Input, Pointer, WaitReason, DRIVE, HANDOFFS, WAIT_REASONS,
     };
     use crate::fleet::{Event, EventKind, Mark, Stage, SCHEMA, STAGES};
     use crate::rules::manifest::Manifest;
@@ -874,6 +923,74 @@ mod tests {
             mark: Some(mark),
             account: None,
         }
+    }
+
+    /// 便の記帳 1 件（段の行・印を持たない）。
+    fn staged(ts: &str, run: &str, bead: &str, stage: Stage) -> Event {
+        Event {
+            schema: SCHEMA,
+            ts: ts.to_owned(),
+            kind: EventKind::RunStage,
+            run: run.to_owned(),
+            bead: bead.to_owned(),
+            host: "h".to_owned(),
+            actor: EventKind::RunStage.default_actor().to_owned(),
+            stage: Some(stage),
+            seat: None,
+            pid: None,
+            detail: None,
+            allowance: None,
+            registration: None,
+            mark: None,
+            account: None,
+        }
+    }
+
+    /// `release` で列へ戻す段は **`Failed` / `Stopped` / `Gated`** の 3 つで、`Landed` と審査 FAIL の
+    /// `Reviewed` は戻さない（設計 §12・母集団 = [`STAGES`] の全段・網羅の match 1 本）。
+    #[test]
+    fn pipe_dispatch_release_requeues_failed_stopped_and_gated_but_not_landed_or_reviewed() {
+        let back: Vec<Stage> = STAGES.iter().copied().filter(|stage| requeues(*stage)).collect();
+        assert_eq!(
+            back,
+            vec![Stage::Gated, Stage::Stopped, Stage::Failed],
+            "母集団 {} 段のうち戻すのは終端の 3 段（宣言順）",
+            STAGES.len()
+        );
+        assert!(!requeues(Stage::Landed), "Landed は済んでいる（起こし直すと同じ変更をもう一度作る）");
+        assert!(!requeues(Stage::Reviewed), "審査 FAIL は中身が変わるまで列に入らない（FR49）");
+    }
+
+    /// `release` が効くのは**便の最後の記帳より後**の 1 件だけで、位置で引く（終端より前の印・別の
+    /// bead への印・`release` でない印は効かない・pure・設計 §12）。
+    #[test]
+    fn pipe_dispatch_release_requeues_only_when_the_mark_follows_the_last_record_of_the_run() {
+        let run = "s2-a-1";
+        let after = vec![
+            staged("t1", run, "s2-a", Stage::Intake),
+            staged("t2", run, "s2-a", Stage::Failed),
+            marked("t3", "s2-a", Mark::Release),
+        ];
+        assert!(released_after(&after, run, "s2-a"), "終端の後の release は効く");
+        let before = vec![
+            staged("t1", run, "s2-a", Stage::Intake),
+            marked("t2", "s2-a", Mark::Release),
+            staged("t3", run, "s2-a", Stage::Failed),
+        ];
+        assert!(!released_after(&before, run, "s2-a"), "終端より前の release は効かない");
+        let other = vec![staged("t1", run, "s2-a", Stage::Failed), marked("t2", "s2-b", Mark::Release)];
+        assert!(!released_after(&other, run, "s2-a"), "別の bead への release は効かない");
+        let held = vec![staged("t1", run, "s2-a", Stage::Failed), marked("t2", "s2-a", Mark::Hold)];
+        assert!(!released_after(&held, run, "s2-a"), "release でない印は効かない");
+        // 起こし直した便の記帳が release の後に並べば、その便から見て release は**前**に戻る（印は 1 回）。
+        let again = "s2-a-2";
+        let relaunched = vec![
+            staged("t1", run, "s2-a", Stage::Failed),
+            marked("t2", "s2-a", Mark::Release),
+            staged("t3", again, "s2-a", Stage::Failed),
+        ];
+        assert!(!released_after(&relaunched, again, "s2-a"), "起こし直した便の終端の後には release が無い");
+        assert!(!released_after(&[], run, "s2-a"), "記帳の無い便は「後」を測れない（効かない側）");
     }
 
 
