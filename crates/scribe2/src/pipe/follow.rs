@@ -331,7 +331,8 @@ pub(crate) fn spawn_turn(entry: &Turn<'_>, account: Account<'_>) -> Outcome {
 /// stdin の「追随」節（[`super::spawn`]）**だけ**である——turn の後始末（[`settle`]）は
 /// この値を見ない（節を渡さなかった turn で runner が自ら rebase した周も同じ 1 本で測る）。
 pub(crate) fn section(state_dir: &Path, repo: &Path, run: &str) -> Option<String> {
-    let base = base_of_run(state_dir, run)?;
+    // base が無い周も読めない周も**節を渡さない**側へ倒す（追随は base が分かった周だけ書ける）。
+    let base = base_of_run(state_dir, run).known()?;
     let main = git_line(repo, &["rev-parse", MAIN_REF])?;
     if main == base {
         return None;
@@ -402,7 +403,9 @@ pub(crate) fn resumption(state_dir: &Path, repo: &Path, run: &str) -> Option<Res
         return None;
     };
     let worktree = worktree_path(repo, run);
+    // base が無い周も読めない周も**commit を数えない**側へ倒す（質問 record の材料は既定で空）。
     let commits = base_of_run(state_dir, run)
+        .known()
         .map(|base| git_lines(&worktree, &["log", "--oneline", "--reverse", &format!("{base}..HEAD")]))
         .unwrap_or_default();
     let uncommitted = git_lines(&worktree, &["status", "--porcelain"]);
@@ -481,7 +484,8 @@ fn mid_rebase(worktree: &Path) -> bool {
 
 /// 記録済みの base と、turn の後に実測した merge-base（**進んでいる周だけ** `Some`）。
 fn advanced(entry: &Turn<'_>) -> Option<(String, String)> {
-    let old = base_of_run(entry.state_dir, entry.run)?;
+    // base が無い周も読めない周も**進んでいないと読む**側へ倒す（追随の記帳を増やさない）。
+    let old = base_of_run(entry.state_dir, entry.run).known()?;
     let head = git_line(&worktree_path(entry.repo, entry.run), &["rev-parse", "HEAD"])?;
     let main = git_line(entry.repo, &["rev-parse", MAIN_REF])?;
     let merged = git_line(entry.repo, &["merge-base", &head, &main])?;

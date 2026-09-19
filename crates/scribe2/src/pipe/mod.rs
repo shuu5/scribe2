@@ -60,6 +60,77 @@ pub fn run_dir(state_dir: &Path, id: &str) -> PathBuf {
     state_dir.join(DIR).join(id)
 }
 
+/// driver の札の名（run dir の直下・設計 dispatcher.md §5「driver の死亡」）。
+pub const DRIVER_FILE: &str = "driver";
+
+/// driver の札（`pipe run` / `pipe resume` の process が入口で置き、終端で消す）。
+pub fn driver_path(state_dir: &Path, id: &str) -> PathBuf {
+    run_dir(state_dir, id).join(DRIVER_FILE)
+}
+
+/// driver の札を握る（設計 dispatcher.md §5）。
+///
+/// 本文は所有者の pid（10 進 1 行）で、生死の判定は lock の所有者と**同じ 1 本**
+/// （[`store::lock_owner`] + [`store::started_ms`]・C6.3・第 2 の probe を作らない）。`Drop` で消すので、
+/// typed な断りで終わった周も畳まれた周も札は残らない——**残るのは process が死んだ周だけ**で、それが
+/// 列の起こし直しの入力である。
+pub struct Driver {
+    /// 置いた札。
+    path: PathBuf,
+}
+
+impl Driver {
+    /// 札を握る（**入口の排他でもある**・設計 dispatcher.md §5）。
+    ///
+    /// 既に**生きている別の driver** が握っていれば `None` で、その process はその便を駆動しない
+    /// （同じ便に driver を 2 本立てない）。契機が重なると同じ便に起こし直しが 2 本撃たれうるので、
+    /// 排他は**札の側**に置く——列の 1 周は lock を取らず、起こし直した子は別 process なので、
+    /// 1 周の側で閉じても効かない（`s2-07l.366` と同じ理由で「記帳する側」に置く）。
+    ///
+    /// 書けない周も `None`（その便は札の無い便として扱われる＝列は触らない・fail-closed）。
+    pub fn hold(state_dir: &Path, id: &str, policy: LockPolicy) -> Option<Self> {
+        let path = driver_path(state_dir, id);
+        std::fs::create_dir_all(path.parent()?).ok()?;
+        // **原子的に取る**（`create_new` の 1 実装・C6.3）。読んでから書く形は塞げない——同じ便に 2 本の
+        // 起こし直しが来ると両方が「死んだ所有者の札」を読んでから両方が書き、runner が 2 本起きる
+        // （`s2-07l.482` の実測: 起動試行 2 回で 3 回中 2 回）。回収は**死んだ所有者だけ**で、生きている
+        // 所有者は `retry_ms` まで待つ——札は数分〜数十分握られるので、古さで剥がすと生きている driver
+        // の札を奪う。待てるので、**継ぎの子は親が抜けるまで待って取れる**。
+        store::acquire_with(&path, policy, store::Reclaim::DeadOnly).ok()?;
+        Some(Self { path })
+    }
+}
+
+impl Drop for Driver {
+    /// **自分の札を外す**（`Drop` が走るのは process が正常に抜ける周だけ）。
+    ///
+    /// 札が残るのは **driver が死んだ周だけ**である——それが列の起こし直しの入力になる。消すのは自分の
+    /// pid を持つ札だけで、同じ便に別の driver が後から入っていればその札は落とさない。
+    ///
+    /// 1 段進めた driver が自分の便を次の driver に渡す形（便の自走）は**本便の外**である（設計
+    /// dispatcher.md §5 の行 (e)）。
+    fn drop(&mut self) {
+        let mine = std::fs::read_to_string(&self.path)
+            .is_ok_and(|body| body.trim().parse::<u32>() == Ok(std::process::id()));
+        if mine {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
+
+/// 便の driver が**死んでいる**か（**札が無い・読めない周は `false`＝触らない**・測れないを「死んだ」に
+/// 読み替えない）。
+///
+/// 札が残るのは driver が死んだ周だけである（正常に抜けた process は `Drop` で自分の札を外す）ので、
+/// 残った札の所有者が居なければ、その便は駆動する者を失っている。`pid` の再利用で生きて見える札は
+/// 触らない側へ倒す（判定は lock の所有者と同じ 1 本・C6.3）。
+pub fn driver_is_dead(state_dir: &Path, id: &str) -> bool {
+    let Ok(body) = std::fs::read_to_string(driver_path(state_dir, id)) else {
+        return false;
+    };
+    store::lock_owner(&body, store::started_ms) == store::Owner::Dead
+}
+
 /// 便の契約 file の写し。
 pub fn contract_path(state_dir: &Path, id: &str) -> PathBuf {
     run_dir(state_dir, id).join(CONTRACT_FILE)
@@ -241,8 +312,10 @@ pub fn show_head(repo: &Path, path: &str) -> Option<String> {
 ///
 /// `Spawned` の行は `base:<sha>` か `base:<sha>,account:<label>`（器が口座を選んで起こした周・設計
 /// account-autonomy.md §4）で、sha は `base:` の直後から**最初の `,` まで**（無ければ末尾まで）。
-pub fn base_of_run(state_dir: &Path, id: &str) -> Option<String> {
-    let events = store::read_all(state_dir).ok()?;
+pub fn base_of_run(state_dir: &Path, id: &str) -> Base {
+    let Ok(events) = store::read_all(state_dir) else {
+        return Base::Unreadable;
+    };
     events
         .iter()
         .rev()
@@ -260,6 +333,40 @@ pub fn base_of_run(state_dir: &Path, id: &str) -> Option<String> {
                 _ => None,
             }
         })
+        .map_or(Base::Absent, Base::Known)
+}
+
+/// 便の base の読みの結果（**「便に base が無い」と「置き場を読めない」を分ける**・C10・設計
+/// dispatcher.md §5）。
+///
+/// `Option` に潰すと、置き場が読めない周が「spawn を通っていない便」と同じ断りに化ける——land と gate は
+/// 前者を rc 2（対象そのものが壊れている）・後者を rc 1（前提違反）で断る。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Base {
+    /// base の sha が分かった。
+    Known(String),
+    /// 便に base の記帳が無い（spawn を通っていない・追随の行も無い）。
+    Absent,
+    /// 置き場の event log を読めない。
+    Unreadable,
+}
+
+impl Base {
+    /// 分かった sha（`Absent` と `Unreadable` はどちらも `None`）。
+    ///
+    /// **2 つを同じに扱ってよい呼び手だけが使う**——読めない周も「base が無い」周も同じ既定へ倒す
+    /// ところ（追随の節を渡さない・verdict の size の材料を持たない）に限る。
+    pub fn known(self) -> Option<String> {
+        match self {
+            Self::Known(found) => Some(found),
+            Self::Absent | Self::Unreadable => None,
+        }
+    }
+
+    /// 読めなかったか（呼び手が rc 2 へ倒す周の判定）。
+    pub fn is_unreadable(&self) -> bool {
+        matches!(*self, Self::Unreadable)
+    }
 }
 
 /// 便の**最後の `RunStage`** が名乗った `detail`（物理順で最後の 1 件）。読めない周は `None`。
@@ -576,7 +683,12 @@ pub(crate) mod fixture {
 #[cfg(test)]
 mod tests {
     use super::fixture::{append_all, event, scratch};
-    use super::{base_of_run, last_stage_detail, question_of_run, questions_of_run, runner_is_idle, Question};
+    use crate::fleet::store::LockPolicy;
+    use std::path::Path;
+    use super::{
+        base_of_run, driver_path, last_stage_detail, question_of_run, questions_of_run, runner_is_idle, Base, Driver,
+        Question,
+    };
     use crate::fleet::{EventKind, Stage};
 
     /// `base_of_run` は `Spawned` の `base:<sha>` と `base:<sha>,account:<label>`（器が口座を選んで起こした周）の
@@ -597,11 +709,55 @@ mod tests {
                 event("moved", EventKind::RunStage, Some(Stage::Implemented), None, Some("rebase:ddd444..eee555")),
             ],
         );
-        assert_eq!(base_of_run(&root, "plain"), Some("aaa111".to_owned()), "従来の base:<sha>");
-        assert_eq!(base_of_run(&root, "chosen"), Some("bbb222".to_owned()), "`,account:` の手前まで");
-        assert_eq!(base_of_run(&root, "resumed"), Some("ccc333".to_owned()), "再開の行は飛ばす");
-        assert_eq!(base_of_run(&root, "moved"), Some("eee555".to_owned()), "追随の新しい側が勝つ");
-        assert_eq!(base_of_run(&root, "none"), None, "行の無い便");
+        let known = |sha: &str| Base::Known(sha.to_owned());
+        assert_eq!(base_of_run(&root, "plain"), known("aaa111"), "従来の base:<sha>");
+        assert_eq!(base_of_run(&root, "chosen"), known("bbb222"), "`,account:` の手前まで");
+        assert_eq!(base_of_run(&root, "resumed"), known("ccc333"), "再開の行は飛ばす");
+        assert_eq!(base_of_run(&root, "moved"), known("eee555"), "追随の新しい側が勝つ");
+        // **「行の無い便」と「置き場を読めない」は別の値**（C10・`s2-07l.482`）。
+        assert_eq!(base_of_run(&root, "none"), Base::Absent, "行の無い便");
+        // 読めない周は**行が 1 本でも壊れている**周である（dir が無い周は 0 件＝`Absent` で正しい）。
+        let broken = scratch("base-of-run-broken");
+        let log = broken.join("fleet").join("events.jsonl");
+        std::fs::create_dir_all(log.parent().unwrap_or(&broken)).ok();
+        std::fs::write(&log, "{\"schema\":1,\"kind\":\"Nonsense\"}\n").ok();
+        assert_eq!(base_of_run(&broken, "plain"), Base::Unreadable, "置き場を読めない");
+        let _ = std::fs::remove_dir_all(&broken);
+    }
+
+    /// 札を置く（dir ごと作る・置けなければ panic＝前提が崩れたまま測らない）。
+    fn put_ticket(root: &Path, run: &str, pid: u32) {
+        let path = driver_path(root, run);
+        std::fs::create_dir_all(path.parent().expect("札の dir を解ける")).expect("札の dir を作れる");
+        std::fs::write(&path, format!("{pid}\n")).expect("札を書ける");
+    }
+
+    /// driver の札は**原子的に取る lock** である（設計 dispatcher.md §5・`s2-07l.482`）。
+    ///
+    /// 読んでから書く形では同じ便に 2 本の起こし直しが相乗りする（実測: 起動試行 2 回で 3 回中 2 回、
+    /// runner が 2 本起きた）。回収は**死んだ所有者だけ**で、生きている所有者は `stale_ms` を超えても
+    /// 奪わない——札は数分〜数十分握られるので、古さで剥がすと走っている driver の札を奪う。
+    #[test]
+    fn pipe_dispatch_driver_hold_is_an_atomic_lock_that_reclaims_only_dead_owners() {
+        let root = scratch("driver-hold");
+        // **古さで剥がされない線を測る**ので `stale_ms` は 1 ms（`Stale` なら即座に奪える値）。
+        let policy = LockPolicy { retry_ms: 50, stale_ms: 1 };
+        let first = Driver::hold(&root, "r1", policy);
+        assert!(first.is_some(), "空いている札は取れる");
+        assert!(Driver::hold(&root, "r1", policy).is_none(), "握られている札は取れない（lock である）");
+        drop(first);
+        assert!(Driver::hold(&root, "r1", policy).is_some(), "外れた後は取れる");
+        // 生きている**別の**所有者の札は、古くても奪わない（`DeadOnly`）。
+        let other = std::os::unix::process::parent_id();
+        put_ticket(&root, "r2", other);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        assert!(Driver::hold(&root, "r2", policy).is_none(), "生きている所有者の札は stale を超えても奪わない");
+        // 死んだ所有者の札は回収する（起こし直しの入口）。
+        let mut dead = std::process::Command::new("true").spawn().expect("true を起こせる");
+        let gone = dead.id();
+        dead.wait().expect("true を待てる");
+        put_ticket(&root, "r3", gone);
+        assert!(Driver::hold(&root, "r3", policy).is_some(), "死んだ所有者の札は回収して取れる");
         let _ = std::fs::remove_dir_all(&root);
     }
 

@@ -108,8 +108,12 @@ pub(super) fn verify_main(entry: &Land<'_>, new: &str) -> MainCheck {
 ///
 /// **写しからしか読まない**（repo / worktree の `.vessel.toml` は読み直さない・ADR-0010 §2.4）。
 fn materials(entry: &Land<'_>) -> Result<(String, Effective), String> {
-    let base = super::base_of_run(entry.state_dir, entry.run)
-        .ok_or_else(|| format!("run {} に base が無い", entry.run))?;
+    let found = super::base_of_run(entry.state_dir, entry.run);
+    let unreadable = found.is_unreadable();
+    let base = found.known().ok_or_else(|| match unreadable {
+        true => format!("run {} の base を読めない（置き場）", entry.run),
+        false => format!("run {} に base が無い", entry.run),
+    })?;
     let path = super::vessel_path(entry.state_dir, entry.run);
     let frozen = Effective::load(&path).map_err(|errors| {
         let lines: Vec<String> = errors.iter().map(ToString::to_string).collect();

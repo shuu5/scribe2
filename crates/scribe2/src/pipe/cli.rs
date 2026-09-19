@@ -114,6 +114,7 @@ fn queue_of<'a>(args: &'a [String], manifest: &'a Manifest) -> Option<Queue<'a>>
         bd: flag(args, "--bd").ok()?,
         rules: flag(args, "--rules").ok()?,
         lens: flag(args, "--lens").ok()?,
+        curl: flag(args, "--curl").ok()?,
         runner: flag(args, "--runner").ok()?,
     })
 }
@@ -132,6 +133,8 @@ struct Queue<'a> {
     rules: Option<&'a str>,
     /// 審査の lens の口（同上）。
     lens: Option<&'a str>,
+    /// 口座残量の計測の口（同上）。
+    curl: Option<&'a str>,
     /// 実装役の口（同上・無ければ列は 1 本も起こさない）。
     runner: Option<&'a str>,
 }
@@ -147,6 +150,7 @@ impl Queue<'_> {
             bd_flag: self.bd,
             rules: self.rules,
             lens: self.lens,
+            curl: self.curl,
             runner: self.runner,
         }
     }

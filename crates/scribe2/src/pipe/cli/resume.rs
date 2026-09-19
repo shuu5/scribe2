@@ -30,6 +30,12 @@ pub(super) fn resume(args: &[String], manifest: &Manifest, policy: LockPolicy) -
         Ok(found) => found,
         Err(reason) => return refused(reason),
     };
+    // **driver の札をここで握る**（設計 dispatcher.md §5・`pipe run` と同じ 1 つの型）。握れない周＝
+    // 生きている別の driver が同じ便を駆動している周は、**駆動しない**（同じ便に driver を 2 本立てない・
+    // 契機が重なって起こし直しが 2 本撃たれた周はここで片方が落ちる）。
+    let Some(_driver) = crate::pipe::Driver::hold(&state_dir, &id, policy) else {
+        return refused(format!("run {id} は別の driver が駆動している"));
+    };
     let state = match current(&state_dir) {
         Ok(found) => found,
         Err(errors) => return Outcome::failed(RC_BROKEN, errors.iter().map(StoreError::to_string).collect()),
