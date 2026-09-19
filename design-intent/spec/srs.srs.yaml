@@ -596,7 +596,7 @@ requirements:
     ears:
       pattern: event
       condition: 開発 session の席で session が開始されるとき（/compact の後を含む）
-      response: 器は、 その席に役割の記録が在ればその役割の manifest 行と役割ごとの雛形から生成した短い指示文（席の同一性・憲法の効く部分の pointer・役割の特性・台帳の現在地の 4 群からなり、 行の構成と行数の上限は ADR-0045 が正本）を session の開始で文脈へ注入し（入力欄を経由しない）、 役割の記録が無ければ注入せず、 runner には憲法の散文を 1 行も注入しない。 生成した指示文は行が持つ権能をすべて名指し、 C 条文の規範文を持たず、 雛形の外に手書きの規範文を含まない（両向きの drift は CI が検査する・FR18）
+      response: 器は、 その席に役割の記録が在ればその役割の manifest 行と役割ごとの雛形から生成した短い指示文（席の同一性・憲法の効く部分の pointer・役割の特性・台帳の現在地の 4 群からなり、 行の構成と行数の上限は ADR-0045 が正本）を session の開始で文脈へ注入し（入力欄を経由しない）、 役割の記録が無ければ注入せず、 runner には憲法の散文を 1 行も注入しない。 生成した指示文は行が持つ権能をすべて名指し、 C 条文の規範文を持たず、 雛形の外に手書きの規範文を含まない（両向きの drift は CI が検査する・FR18）。 器は指示文の後ろに、 台帳と git から機械で導いた直近の流れの事実行（仕掛かり中の契約・直近に更新された契約・直近の commit・未 commit の変更。 規範文を持たず指示文の行数に数えない）を出し、 圧縮（/compact と自動圧縮）の直前に席の直前の発言を逐語で 1 枠だけ席の置き場に残して、 圧縮の後の session の開始で 1 回だけ出してから枠を消す（枠は repo に書かず、 圧縮を止めず、 次の周へ持ち越さない）
   - id: FR43
     type: FR
     label: 席の継続（廃止）
@@ -872,7 +872,7 @@ requirements:
     ears:
       pattern: ubiquitous
       condition: 常時
-      response: 器は復元・退避の skill の起動に反応する hook・退避物の状態を注入する hook・自動圧縮の直前に退避物を書く hook・session の終端の理由を打刻する hook と、 skill そのものを持たない（ADR-0045 §2 (2) で廃止）。 session の開始の注入（FR42）だけが残る。 不在は不在を測る歯が確かめる
+      response: 器は復元・退避の skill の起動に反応する hook・退避物の状態を注入する hook・自動圧縮の直前に退避物を書く hook・session の終端の理由を打刻する hook と、 skill そのものを持たない（ADR-0045 §2 (2) で廃止）。 残るのは session の開始の注入と、 圧縮の直前に器が機械で残す直前の発言の 1 枠だけである（どちらも FR42。 1 枠は AI が書く散文の退避物ではなく、 出した後に消える）。 不在は不在を測る歯が確かめる
 
   - id: FR67
     type: FR
@@ -894,8 +894,8 @@ requirements:
     trace: { backward: [N-1, N-3], acceptance: [AC22, AC38] }
     ears:
       pattern: event
-      condition: 便が終端の段（Landed / Failed / Stopped）に達したとき、 便を運ぶ器の process が退役したとき、 手動の 1 周が要求されたとき、 または介入の印が記録された直後
-      response: 器の dispatcher は起動の列（台帳の open な契約のうち、 依存が閉じ ∧ 設計 pointer が解決し ∧ memo でなく ∧ 同じ契約の中身で審査（FR49）FAIL の便が無い契約の並び）を orchestrator の介入 first → 契約の priority → 起票順で評価し、 終端でない段の便と write-set が交差せず（FR39 と同じ判定）∧ 受付（write-set の余地・host の memory の枠・同時走行の最大値〔rules 行 pipe.max_live・値は user 裁定 id 付き〕）を通る契約を、 席の操作なしに条件を満たす本数だけ起こし（本数の絞りは受付の host の memory の枠と同時走行の最大値が行い、 受付が最大値で断った契約は列に留めて理由を持つ）、 起動は通常の便の起動の段（受付 → 審査（FR49）→ runner の起動）をそのまま通り起動の前に待機の段を持たず、 契機が重なっても同じ契約を二重に起こさず、 同じ周で起こした便の write-set を次の候補の交差の相手に数え、 起こせない契約はまだ出ていない理由（依存 / 交差（Overlap）/ 受付 / 同時走行の最大値 / 審査 FAIL / hold）を閉じた型で持って列に留め、 hold の契約は起こさず release で戻し、 介入を起動の列の記録として残し、 便を運ぶ器の process が退役した便は同じ周で器が再開（FR37）を 1 回起こし（受付札の無い live 便は起こし直さない）、 周期の timer を持たず、 台帳が読めない周は 1 本も起こさず測れなかったことを記帳する
+      condition: 便が終端の段（Landed / Failed / Stopped）に達したとき、 便を運ぶ器の process が退役したとき、 手動の 1 周が要求されたとき、 介入の印が記録された直後、 または質問への回答か承認が記帳された直後
+      response: 器の dispatcher は起動の列（台帳の open な契約のうち、 依存が閉じ ∧ 設計 pointer が解決し ∧ memo でなく ∧ 同じ契約の中身で終端に着いた便（審査（FR49）FAIL の便を含む）が無い契約の並び）を orchestrator の介入 first → 契約の priority → 起票順で評価し、 終端でない段の便と write-set が交差せず（FR39 と同じ判定）∧ 受付（write-set の余地・host の memory の枠・同時走行の最大値〔rules 行 pipe.max_live・値は user 裁定 id 付き〕）を通る契約を、 席の操作なしに条件を満たす本数だけ起こし（本数の絞りは受付の host の memory の枠と同時走行の最大値が行い、 受付が最大値で断った契約は列に留めて理由を持つ）、 起動は通常の便の起動の段（受付 → 審査（FR49）→ runner の起動）をそのまま通り起動の前に待機の段を持たず、 契機が重なっても同じ契約を二重に起こさず、 同じ周で起こした便の write-set を次の候補の交差の相手に数え、 起こせない契約はまだ出ていない理由（依存 / 交差（Overlap）/ 受付 / 同時走行の最大値 / 終端に着いた便（審査 FAIL を含む）/ hold）を閉じた型で持って列に留め、 hold の契約は起こさず release で戻し、 終端に着いた便が列の外に置いた契約も release の印 1 つにつき 1 回だけ列へ戻し（着地済みの便と審査 FAIL の便の契約は戻さない）、 介入を起動の列の記録として残し、 便を運ぶ器の process が退役した便は同じ周で器が再開（FR37）を 1 回起こし（受付札の無い live 便は起こし直さない。 ただし関門が開いた待ちの便＝回答が記帳された Questioned の便と承認が記帳された Blocked の便は、 受付札が無くても同じ再開を起こす）、 便を運ぶ器の process が生きている便と生死を読めない便には触らず、 便を運ぶ器の process 自身の周は自分が便の段を前へ進めた周だけ待ちの便を起こし、 周期の timer を持たず、 台帳が読めない周は 1 本も起こさず測れなかったことを記帳する
   - id: FR69
     type: FR
     label: 妥協の起動
@@ -996,6 +996,7 @@ glossary:
   - { term: 口座選定,       en: account selection,      plain_short: どの口座を使うか決める,     def: manifest の口座（退役中を除く・FR58）と実測の残量だけから口座を決定的に選ぶこと（FR36）。 便用と session 用の 2 規則を持つ。 }
   - { term: 役割,           en: role,                   plain_short: 席の種類,                 def: 開発 session の席の種類（orchestrator の 1 つ・FR30 / FR40）。 役割の口座 = host の根の宣言 file が役割ごとに高々 1 つ持つ口座（宣言値・FR59 / FR36）。 }
   - { term: 権能,           en: capability,             plain_short: 役割に許された操作,        def: 役割ごとに許された操作の閉じた一覧。 rules 行が持ち（FR41）、 編集・実行の時点で執行される（FR45）。 }
+  - { term: path 種別,      en: path kind,              plain_short: 編集先の file の分類,      def: 編集先の file を分ける閉じた分類。 種別ごとに要る権能が 1 つ対応し、 編集の時点で照合される（FR41 / FR45）。 種別に属する path は対象 repo が器の宣言 file で名乗れ、 名乗らない repo は器の既定で分類する（ADR-0047）。 }
   - { term: 席の登録,       en: seat registration,      plain_short: 席と役割の記録,            def: 席の役割と anchor を鍵に、 target・口座 label・起動の雛形を項目として fleet の event log に記録すること（FR40）。 記録の無い席は権能を持たない。 }
   - { term: 並列の枠,       en: mutation parallel slot, plain_short: 変異検査の並列の枠,        def: host 単位で便の変異検査に配る並列の枠（NFR6）。 枠が無い host では縮退する（FR46）。 }
   - { term: 封じ込め,       en: confinement,            plain_short: memory 上限付きの箱,       def: 器が起こす子 process を memory の上限付きの箱の中で走らせること（NFR6）。 }
