@@ -5,10 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="folio-doc-type" content="research-report">
 <meta name="folio-layer" content="project">
-<meta name="folio-version" content="0.1.0">
+<meta name="folio-version" content="0.2.0">
 <meta name="folio-status" content="active">
 <meta name="folio-stakeholders" content="Developer, AI Agent">
-<meta name="folio-research-date" content="2026-09-18">
+<meta name="folio-research-date" content="2026-09-19">
 <title>RESEARCH-jev — Jev（typed decision の API）を pipeline の判定に使えるか: 3 問 87 件の実測（2026-09-18 の調査）</title>
 <link rel="stylesheet" href="../../common.css">
 <script type="application/ld+json">
@@ -24,7 +24,7 @@
     { "@id": "./README.html" }
   ],
   "dc:title": "RESEARCH-jev — Jev（typed decision の API）を pipeline の判定に使えるか: 3 問 87 件の実測（2026-09-18 の調査）",
-  "folio:version": "0.1.0",
+  "folio:version": "0.2.0",
   "folio:stakeholders": ["Developer", "AI Agent"]
 }
 </script>
@@ -41,7 +41,7 @@
 
 <header class="doc-header">
   <h1>RESEARCH-jev — Jev（typed decision の API）を pipeline の判定に使えるか: 3 問 87 件の実測（2026-09-18 の調査）</h1>
-  <div class="meta">v0.1.0 &middot; status: active &middot; 調査日 2026-09-18 &middot; research-report &middot; 決めない（記録時点の推奨は「保留」・採否は後続の ADR が記録する）</div>
+  <div class="meta">v0.2.0 &middot; status: active &middot; 調査日 2026-09-18（追補 2026-09-19: 公式 pattern の調査と flaky / 回帰の shadow 計測） &middot; research-report &middot; 決めない（記録時点の推奨は「保留」・採否は後続の ADR が記録する）</div>
 </header>
 <!-- folio:chrome-toc -->
 <nav class="toc" aria-label="ページ内目次">
@@ -49,6 +49,7 @@
   <li><a href="#s1-question">§1. 問い（何を調べたか）</a></li>
   <li><a href="#s2-object">§2. 調査対象の実体（Jev・記録時点）</a></li>
   <li><a href="#s3-measured">§3. 実測（正解との一致・確率の較正・揺れ・速さと単価）</a></li>
+  <li class="toc--sub"><a href="#s3-1-shadow-ci">§3.1 追補（2026-09-19）: 「CI が赤いとき flaky か回帰か」を shadow で測った</a></li>
   <li><a href="#s4-fit">§4. scribe2 との突合（どこに挿せるか・今は挿さない理由）</a></li>
   <li><a href="#s5-open">§5. 再検討の条件と未解決の問い</a></li>
   <li><a href="#s6-sources">§6. 出所</a></li>
@@ -112,6 +113,23 @@
   </tbody>
 </table>
 <p data-audience="machine">読み方: (a) q1 の一致は Jev の手柄ではない。docs (d) のとおり code で計算できる問いで、正規表現が同点。(b) q3 は lens の verdict の語を state から抜いても 26/30 だが、語を使う規則 1 行が 28/30 で上回る＝「lens の verdict → 3 値」に Jev を挟む理由は無い。(c) 確率は閾値として使える形をしている（0.9 以上は外れ 0・誤りは 0.5〜0.9 に集まる）。これは「確信のある判定だけ機械が進め、残りを人へ上げる」形に向く。(d) 揺れは確率 0.5 付近に限られ、閾値を 0.9 に置けば揺れの影響は消える。(e) 限界: 正解は 1 人（spike の AI）が付け 2 人目の照合は無い。件数は 27〜30（1 件 = 約 3〜4%）。q2 の「憲法」は現物に 2 件しか無い。問いの文は 1 版で samples を見て調整していない（docs の勧める criteria の書き足しで上がる余地は未測定）。</p>
+<h3 id="s3-1-shadow-ci">§3.1 追補（2026-09-19）: 「CI が赤いとき flaky か回帰か」を shadow で測った</h3>
+<p class="section-essence" data-audience="human">dispatcher の判断のうち「CI が赤いとき、flaky か回帰か」を、本番相当の材料（この repo の CI の失敗 52 件・失敗した job の log の末尾 255 行）で、Jev に判断を記録するだけの形で流しました。Jev は 52 件中 46 件を「回帰」と答え、flaky 9 件のうち拾えたのは 4 件、確率 0.9 以上の帯でも 11 件中 4 件を外しました（再走で緑になった flaky 3 件を 0.94〜0.99 で回帰と誤答）。前日の「0.9 以上は外れ 0」はこの問いでは成り立ちません。この判断は Jev に任せず、再走の A/B（code が決める）のままにします。</p>
+<table data-audience="machine">
+  <thead><tr><th>項目</th><th>実測（2026-09-19・版 jev-1.13.0 に pin・応答の model 欄で確認）</th></tr></thead>
+  <tbody>
+    <tr><td>母集団</td><td>この repo の CI の run 1,000 本（2026-09-11〜19）のうち失敗で終わった 44 本 + 再走で緑になった 9 本の失敗側の attempt = 53 件。log の取れた 52 件を撃った（1 件は job の log 無し）</td></tr>
+    <tr><td>正解の付け方（機械の規則・Jev には見せない）</td><td>flaky = 同じ sha が再走か別 run で緑（9 件）／新 commit で直った = 同じ branch の次の run が別の sha で緑（30 件）／未解決 = 次の run も赤か無し（13 件）。judged は前 2 者の 38 件</td></tr>
+    <tr><td>state（自由文なし）</td><td>branch の種類・event・落ちた job と step・job 数・attempt・log 末尾 255 行（行札付き・host 名 / 口座名 / path は伏字）。平均 12,800 入力 token</td></tr>
+    <tr><td>問い（英語）</td><td>cause = choice 5 択（flaky-test / regression / infra / env-drift / unknown）・cause_visible = noul・rerun_would_pass = noul。各 3 回</td></tr>
+    <tr><td>cause の多数決</td><td>regression 46 / flaky-test 5 / unknown 1。正解 flaky 9 件のうち flaky-test は 4 件（残り 5 件は regression）。正解「直した」30 件のうち regression か env-drift は 28 件</td></tr>
+    <tr><td>確率帯ごとの正答（judged 38 件）</td><td>最大確率 0.9 以上: 7/11・0.7〜0.9: 5/6・0.7 未満: 20/21（低い帯ほど正答が高いのは、答えがほぼ regression に寄っていて正解の多数も「直した」だから）</td></tr>
+    <tr><td>confidence 帯ごとの正答</td><td>0.8 以上: 8/12・0.5〜0.8: 15/17・0.5 未満: 9/9</td></tr>
+    <tr><td>rerun_would_pass を flaky の検出線にした場合</td><td>閾値 0.5 で flaky 1/9 を拾い「直した」1/29 を誤検出・閾値 0.3 で 6/9 と 17/29＝分離しない</td></tr>
+    <tr><td>揺れ・速さ・費用</td><td>3 回とも同じ答え 50/52・最大確率の幅の中央値 0.03。p50 708ms・p95 771ms。156 回・入力 約 200 万 token・約 $0.08</td></tr>
+  </tbody>
+</table>
+<p data-audience="machine">読み方: (a) log の末尾だけでは「変更に起因するか」が見えない。flaky と回帰を分ける材料は log の外（同じ sha の再走・変更の内容）にあり、それは docs (d) の「code で計算できること」の側である。(b) 正解は機械の規則で付けたので、「直した」の中に回帰でない例（main が赤い期間に切った docs 便が次の push で緑になった等）が混ざる。ただし 0.9 以上の誤答 4 件のうち 3 件は再走で緑になった flaky の側なので、正解の粗さでは説明できない。(c) 前日の較正（0.9 以上で外れ 0）は問いに依存する＝閾値は問いごとに自分のデータで測る（公式 docs「自分のデータで確信度と正答率をプロットせよ」と一致）。(d) 問いの文は 1 版で調整していない（criteria に境界例を書き足す余地は未測定）。</p>
 </section>
 
 <section id="s4-fit" class="informative">
@@ -123,6 +141,7 @@
     <tr><td>受付の分類（契約の形）</td><td>設計 contract-source.md の lint (iii)（正規表現）。台帳 517 件の acceptance は pointer + 本文 140 / 散文のみ 227 / 空 150 で pointer だけの契約は 0 件（spike の計数）</td><td>無し（同点）</td><td>docs (d)「code で計算できることを model に聞くな」と決定はしごの段 2（既に在る）で止まる</td></tr>
     <tr><td>lens の指摘の種別と重さ</td><td>lens の出力は verdict + evidence 1 行 + 観点の件数だけで、指摘 1 件ごとの文と重さの record は無い（q2 の重さは spike の定義）</td><td>指摘ごとの重さの確率（0.9 以上なら外れ 0）</td><td>仕分けの対象となる record が無い。lens が finding 単位の record を持つ設計（<a href="../spec/constitution.html#c17">C17.2</a>: 足す前に消すものを名指す）が先</td></tr>
     <tr><td>dispatcher の 3 値（着地 / 差し戻し / 人へ上げる）</td><td>lens の verdict の語からの規則 1 行（ADR-0045 の dispatcher は未着地）</td><td>「契約の側を直すべき便」を確率つきで人へ上げる（境界例 2 件のうち 1 件は 3/3・もう 1 件は揺れる）</td><td>規則 1 行が 28/30 で上回る。dispatcher の escalate の判断に確率が要ると分かってから（<a href="../spec/constitution.html#c10">C10</a>: まず測る）</td></tr>
+    <tr><td>CI が赤いときの flaky / 回帰の仕分け（dispatcher・ADR-0045）</td><td>再走で緑なら flaky（planner の手で A/B）。同じ sha の再走は code で撃てる</td><td>無し（§3.1: 0.9 以上で 7/11・flaky 4/9）</td><td>実測で不採用。分ける材料（再走・変更の内容）は log の外にあり、code で決まる（docs (d)）</td></tr>
     <tr><td>憲法の面</td><td>—</td><td>—</td><td>採るなら外部依存の追加（<a href="../spec/constitution.html#a3">A3</a>・<a href="../spec/constitution.html#c13">C13</a>）と課金（<a href="../spec/constitution.html#a1">A1</a>「使う」）の承認 event、版 ID の pin（rules 行・裁定 id）、外へ出す state の scrub（host 名・口座名・path・user の逐語）が要る。lens の evidence を state に入れるなら docs (c) の注入の弱さが効く</td></tr>
   </tbody>
 </table>
@@ -130,10 +149,11 @@
 
 <section id="s5-open" class="informative">
 <h2>§5. 再検討の条件と未解決の問い</h2>
-<p class="section-essence" data-audience="human">Jev を再検討するのは、lens が指摘 1 件ごとの記録を持つようになって重さの仕分けが必要になった時か、dispatcher の「人へ上げる」判断に確率が要ると分かった時です。その時は、版 ID の pin・閾値（0.9 が実測の境）・外へ出す素材の scrub・日本語の state のままでよいかを決めてから使います。</p>
+<p class="section-essence" data-audience="human">Jev を再検討するのは、lens が指摘 1 件ごとの記録を持つようになって重さの仕分けが必要になった時か、dispatcher の「人へ上げる」判断に確率が要ると分かった時です。その時は、版 ID の pin・閾値（問いごとに自分のデータで測る）・外へ出す素材の scrub・日本語の state のままでよいかを決めてから使います。当てない問いが 2 つ決まりました: CI の flaky / 回帰の仕分け（§3.1・code で決まる）と、runner の QUESTION の宛先（state が自由文そのもので、行動が不可逆側）。</p>
 <ul data-audience="machine">
-  <li>再検討の引き金: (1) lens の findings が閉じた型の record（1 件 1 行・種別つき）になり、重さの仕分けが人の手番を作るとき。(2) dispatcher（ADR-0045）の escalate の判断で、規則 1 行が取りこぼす「契約の側を直すべき便」が実測で積み上がるとき。</li>
-  <li>閾値: 実測の境は確率 0.9（0.9 以上は外れ 0・0.5〜0.7 は 53%）。deny の門に使うなら閾値は rules 行（裁定 id・<a href="../spec/constitution.html#c5">C5</a>）で、検出線として置くなら C12.4 の型。</li>
+  <li>再検討の引き金: (1) lens の findings が閉じた型の record（1 件 1 行・種別つき）になり、重さの仕分けが人の手番を作るとき。(2) dispatcher（ADR-0045）の escalate の判断で、規則 1 行が取りこぼす「契約の側を直すべき便」が実測で積み上がるとき。(3) 停滞した便を人へ上げるかの判断で、段数と経過は code が数えて数値で渡し、Jev には「人の介入を要するか」の noul 1 本だけを聞く形が要るとき。</li>
+  <li>挿す形の作法（公式 pattern Confidence-Gated Routing / Intent Routing / Speculative Fan-Out / Composite Scoring と第三者の実装〔CI の仕分け・段階式 review・tool 呼び出しの門〕の調査 2026-09-19・report は tracked ではない）: state には機械が持つ事実を名前付き field で入れ、LLM の自由文を裸で入れない（入れるなら 1 field に閉じ、「判定者への指示を含むか」の noul を併せて聞く）。choice の選択肢は境界の閉じた enum に一致させ、床を割ったときの既定は「人へ上げる」。Jev の答えは書き込みを起こさない。まず shadow（判断を記録するだけ）で確信度と実際の結果を対で貯め、床を測ってから切り替える。</li>
+  <li>閾値: 実測の境は問いごとに違う（q1〜q3 は 0.9 以上で外れ 0・flaky / 回帰の問いは 0.9 以上で 4/11 外れ）。deny の門に使うなら閾値は rules 行（裁定 id・<a href="../spec/constitution.html#c5">C5</a>）で、検出線として置くなら C12.4 の型。</li>
   <li>版: alias は予告なく動くので rules 行に版 ID を pin する（記録時点 jev-1.13.0）。版が動いたら samples 87 件で再測定（費用 約 $0.014 / 周）。</li>
   <li>未測定: 並列の負荷・長い state（数万 token）・429 の挙動・請求額の照合・state を英訳した場合との差・criteria に境界例を書き足した場合の上がり幅・2 人目の正解付け。</li>
   <li>散文の面: docs (c) のとおり state 内の文が判定を動かしうる。lens の evidence（LLM の出力）を state に入れる設計は、注入に無防備な口を pipeline に足すことになる＝挿すなら state は機械が作った field に限る。</li>
@@ -148,6 +168,8 @@
   <li>既知の弱点（CJK・多段の推論・state 内の文・「code で計算できることを聞くな」・2026-09-17 改訂）: docs.typesafe.ai の model-jaggedness の頁（jev-1.13）</li>
   <li>scribe2 側の現物（記録時点・読み取りだけ）: 台帳の acceptance 517 件・便の verify record と lens の evidence・便の結末（fleet の event log）・設計 contract-source.md §3 の lint (iii)・pipeline.md の段の規則。</li>
   <li>spike の成果物（tracked ではない・repo の外）: report（HTML 1 枚と metrics の JSON）・samples 87 件（正解と根拠つき・host 名は伏せ字）・段 1 の API の形の記録。本 doc の数値はその metrics から写した（2026-09-18・commit の sha は spike の local repo）。</li>
+  <li>公式の pattern と cookbook（閲覧 2026-09-19）: docs.typesafe.ai の patterns（confidence-routing・intent-routing）・concepts（how-to-build-with-system-one・state・confidence）・cookbooks（classification_using_confidence・llm_guardrails・classifying_rag_passages・consistency_noul_cookbook）。第三者の実装（CI 失敗の仕分け・段階式 code review・tool 呼び出しの門・PR の hunk ごとの判定）の一覧と要点は planner の調査 report（tracked ではない）。</li>
+  <li>shadow 計測（2026-09-19・tracked ではない・repo の外）: この repo の CI の失敗 run と再走で緑になった run の失敗側 attempt の log（GitHub の zip API）・正解は再走と次の run の結末から機械で導出・Jev 156 回（版 jev-1.13.0）。metrics の JSON と report は spike の local repo と planner の state dir。</li>
 </ol>
 </section>
 <!-- folio:chrome-bottom -->
