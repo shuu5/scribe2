@@ -62,7 +62,13 @@ Landed（gate-cost.md §6 の CAS の後）に続けて器が行う。各段は 
 ## 6. 台帳 adapter（FR50 / FR51）
 
 - **置き場**: 新 module `ledger/`（core）。読み = `bd --readonly show <id> --json` / `bd --readonly list --status open --limit 0 --json`（子 process・git / tmux と同型・crate 依存なし・出力は既存の `json_lite` で読む）。書き = `bd close <id> --reason <text>` の **1 種だけ**（起票・acceptance・裁定は席）。binary の名は const・path は PATH 解決（env を読まない・C2.2）。
-- **lint**（`<NAME> doctor --state-dir S --repo R` の項目 1 行・C3.2）: open の bead を全件読み、(i) 契約（acceptance が `design =` で始まる bead）で pointer が解けない（doc が無い・区間に id が無い）(ii) memo（label `intake:memo`）で本文に機械が読む設計の見出し（固定の 1 つ・`## memo`）が在り `design =` / `research =` の pointer 行が無い (iii) 契約で acceptance が pointer の 1 行を超える本文を持つ（§2「台帳の bead」・生成 (b) の Landed 後は本文を機械が読まず、lens と実装役が読む契約は行と節だけ＝本文は写しの矛盾の置き場になる・.209 が審査で 7 周止まった型）、を名指す。件数と母集団を同じ行に出す（`ledger: open=N contracts=K unresolved=U bodied=B memos=M unpointed=P`）。管理 tick の pointer 注入（FR43）は doctor のこの行を席へ渡す。
+- **lint**（`<NAME> doctor --state-dir S --repo R` の項目 1 行・C3.2・契約表の行 e）: open の bead を全件読み、(i) 契約（acceptance が `design =` で始まる bead）で pointer が解けない（doc が無い・区間に id が無い）(ii) memo（label `intake:memo`）で本文に機械が読む設計の見出し（固定の 1 つ・`## memo`）が在り `design =` / `research =` の pointer 行が無い (iii) 契約で acceptance が pointer の 1 行を超える本文を持つ（§2「台帳の bead」・生成 (b) の Landed 後は本文を機械が読まず、lens と実装役が読む契約は行と節だけ＝本文は写しの矛盾の置き場になる・.209 が審査で 7 周止まった型）、を名指す。件数と母集団を同じ行に出す（`ledger: open=N contracts=K unresolved=U bodied=B memos=M unpointed=P`）。
+- **lint の置き場と読み口（現物・verified 2026-09-20）**: 台帳 adapter の module（`crates/scribe2/src/ledger/mod.rs`）は着地済みで、**書きの `close` と `CloseError` と `POLARITY` だけ**を持つ（lint も読みも無い）。読みは席の側の `crates/scribe2/src/seat/ledger.rs`（`DEFAULT_BD` を adapter が `pub use` で借りている）に在るものを**そのまま使い 2 本目の reader を作らない**（C2）——現物の `read_ledger(` は全件（`--all --limit 0 --json`）を取り、1 件の型は id と status を持つ。lint は open の絞りをその戻り値に掛け、**acceptance と label を 1 件の型へ足す**（同じ 1 本の reader を広げる＝`issues_of(` の parse の側に欄が増える）。lint 自身は adapter の子 module（新規 file・`crates/scribe2/src/ledger/mod.rs` に宣言を 1 行）に置き、**極性は増やさない**（doctor は読むだけで判定しない・C10.2＝`crate::polarity` の列と外形は不変）。歯の file も新規で、e2e の親（`crates/scribe2/tests/e2e/main.rs`）に module の宣言を 1 行足す。
+- **lint の形（番号は done と歯の対）**:
+  1. **読む**: 読みの口で open の bead を全件取り、読めない周（client が起動できない・rc ≠ 0・出力が読めない）は件数 0 に**倒さず**、行を測れていない形（`ledger: unreadable reason=<語>`）で出す（C10・NFR4）。
+  2. **数える**: 3 つの欠陥 (i)(ii)(iii) を純関数で判定し、**件数と母集団を同じ行に**出す（母集団 = open の全件と契約の件数と memo の件数）。0 件の周も 0 を出す（行が消えない）。
+  3. **名指す**: 欠陥の在る bead の id を、3 つの欠陥ごとに宣言順で列にして行の後に出す（件数だけで終わらせない）。
+- **歯**（`ledger_lint_` 接頭辞・置き場は新規の歯の file・偽の台帳 client は PATH の先頭に置く shim で、引数と出力を歯の中で組む）: (a) 3 つの欠陥を 1 件ずつ持つ fixture で `unresolved=1 bodied=1 unpointed=1` と母集団が出て、id が 3 つとも名指される／(b) 欠陥 0 の fixture で 3 つの数が 0 になり母集団だけが在る（**0 と不在を弁別**する (2) の枝）／(c) client が起動できない周・rc ≠ 0 の周・出力が壊れた周は 3 とも 0 でなく測れていない形の行になる（(1) の否定の枝・現物が 0 を出す形なら落ちる）／(d) pointer が**解ける**契約と `## memo` の見出しを持たない memo は数に入らない（偽陽性の pin）。doctor の項目列の**外形**は既存の歯が受け、行の verify が完全名 `doctor_external_form`（`crates/scribe2/src/main.rs` の in-file の歯・snapshot `crates/scribe2/src/snapshots/scribe2__tests__doctor_external_form.snap`）で撃つ。
 - **CI は撃たない**（private な台帳に届かない）。
 
 ## 7. 質問と契約の改訂（.133 の解消）
@@ -137,9 +143,17 @@ scribe2 を載せる consumer が pipe を通すのに要る面は 3 つで、�
 
 ## 17. write-set の導出に creates の親 mod と subcommand の閉じた enum を足す（契約表の行 q・`s2-07l.337`）
 
-- 何が起きているか: planner 実測 2026-09-15 10:4xZ で、契約 (a) の直命の表を Derived で書けなかった。write-set の導出（`pipe/closure.rs`）は Rust の面を `touches` の型の閉包と `tests` からしか導かず、subcommand を足す便が触る 2 面（`seat/cli.rs` の文字列 match `Some("rebrief") =>`・`seat/mod.rs` の `pub mod <新 module>;`）が写らない。`also` は非 `.rs` 限定・`creates` は新規のみ・`surfaces` は歯の区間だけ＝「口を 1 つ足す」契約は Declared に戻る（`.303` が 4 回 QUESTION した型）。現物（verified）: `seat/cli.rs` の分岐は `Some("…") =>` が 10 本・`seat/mod.rs` の mod 宣言 14 本・`pipe/cli.rs` / `seat/cli.rs` に subcommand の enum は無い。
-- 形: (vi) `creates` の各 `.rs` について、その親 module の file（`<dir>/mod.rs` か `<dir>.rs`・base の tracked に在る方）を導出値に足す（置き場は §3 の導出の側＝closure の子 module derive・新規 file の検査 `created` の隣に 1 関数）。(vii) `seat/cli.rs` と `pipe/cli.rs` の文字列 match を閉じた enum（`SeatCommand` / `PipeCommand`・`as_str` / `parse`・宣言順・const slice `SEAT_COMMANDS` / `PIPE_COMMANDS` の件数 pin）にし、以後「口を足す」契約は `touches = ["crate::seat::cli::SeatCommand"]` で cli.rs が閉包（match の arm）に入る。const slice の名は 2 つで**別**にする（`ALL` のような同名にしない）: 2 つの cli module は最後の段が同じ `cli` なので、`sees` の (b)(c) は module `cli` の `ALL` を seat / pipe のどちらの型の件数 pin とも読み、両者の閉包が互いの歯の file を拾う（多段 module を最後の段で弁別する下界の限界・§3）＝名を分けて 2 つの閉包を素にする。件数 pin の歯は `tests/e2e/seat.rs` / `tests/e2e/pipe.rs` に置き、`vessel::seat::cli::SEAT_COMMANDS.len()` / `vessel::pipe::cli::PIPE_COMMANDS.len()` の修飾形で書く＝§3 (iii) の件数 pin（const slice の名を (c) 修飾で解く・module は型名の直前の 1 段 = `cli`）でその歯の file だけが自分の型の閉包に入る。親 module（`seat/mod.rs` / `pipe/mod.rs`）は `pub mod cli;` を既に持つ（現物）ので触らない。base には型も const slice も無いので、その歯を base に当てた周は e2e binary ごと compile error＝flip-check はこれを RED と数える（overlay 後の compile error は RED の規則・`crates/xtask/src/flipcheck.rs` の module doc）。
-- 触らない: 各 subcommand の実装関数・usage の字面（`ALL` から組んで同じ字面になることを外形 snapshot で pin）。
+- 何が起きているか: planner 実測 2026-09-15 10:4xZ で、契約 (a) の直命の表を Derived で書けなかった。write-set の導出（`pipe/closure.rs`）は Rust の面を `touches` の型の閉包と `tests` からしか導かず、subcommand を足す便が触る 2 面（cli の文字列 match の腕・`seat/mod.rs` の `pub mod <新 module>;`）が写らない。`also` は非 `.rs` 限定・`creates` は新規のみ・`surfaces` は歯の区間だけ＝「口を 1 つ足す」契約は Declared に戻る。
+- **現物の測り直し（verified 2026-09-20・main f678bd0・`s2-07l.479` の席の自律機能の削除と ADR-0045 の役割の統合の後）**: `crates/scribe2/src/seat/cli.rs` の `dispatch(` の match は **`Some("…") =>` が 2 本**（`register` / `launch`）＋ **guard 付きの腕 1 本**（第 1 token が `--` で始まらない非空の文字列を口座 label と読む短い形・[account-lifecycle.md](./account-lifecycle.md) §14）＋ `_` の腕。`crates/scribe2/src/seat/mod.rs` の `pub mod` 宣言は **8 本**。`crates/scribe2/src/pipe/cli.rs` の `Some("…")` は **17 本**。どちらの cli module にも subcommand の閉じた enum は無い。記録当時の 10 本 / 14 本は削除の前の数である。
+- 形: (vi) `creates` の各 `.rs` について、その親 module の file（`<dir>/mod.rs` か `<dir>.rs`・base の tracked に在る方）を導出値に足す（置き場は §3 の導出の側＝closure の子 module derive・新規 file の検査 `created` の隣に 1 関数）。(vii) `crates/scribe2/src/seat/cli.rs` と `crates/scribe2/src/pipe/cli.rs` の文字列 match を閉じた enum（`SeatCommand` / `PipeCommand`・`as_str` / `parse`・宣言順・const slice `SEAT_COMMANDS` / `PIPE_COMMANDS` の件数 pin）にし、以後「口を足す」契約は `touches = ["crate::seat::cli::SeatCommand"]` で cli.rs が閉包（match の arm）に入る。
+- **閉じた語でない腕の扱い（(vii) の境界・run の QUESTION を先に閉じる）**: seat の短い形の腕は **subcommand ではない**（値が口座 label で、閉じた集合を持たない）。enum は**既知の verb だけ**を語にし、`parse` が `None` を返した token は今までどおり guard 付きの腕へ落とす＝腕の順序（既知の verb → label → `_`）と各腕の rc は不変で、label の腕を enum の語にも `_` にも畳まない。`SEAT_COMMANDS` の件数は**既知の verb の本数**（記録時点 2）であって dispatch の腕の本数ではない。
+- (vii) の続き: const slice の名は 2 つで**別**にする（`ALL` のような同名にしない）: 2 つの cli module は最後の段が同じ `cli` なので、`sees` の (b)(c) は module `cli` の `ALL` を seat / pipe のどちらの型の件数 pin とも読み、両者の閉包が互いの歯の file を拾う（多段 module を最後の段で弁別する下界の限界・§3）＝名を分けて 2 つの閉包を素にする。件数 pin の歯は `crates/scribe2/tests/e2e/seat.rs` / `crates/scribe2/tests/e2e/pipe.rs` に置き、`vessel::seat::cli::SEAT_COMMANDS.len()` / `vessel::pipe::cli::PIPE_COMMANDS.len()` の修飾形で書く＝§3 (iii) の件数 pin（const slice の名を (c) 修飾で解く・module は型名の直前の 1 段 = `cli`）でその歯の file だけが自分の型の閉包に入る。親 module（`seat/mod.rs` / `pipe/mod.rs`）は `pub mod cli;` を既に持つ（現物）ので触らない。base には型も const slice も無いので、その歯を base に当てた周は e2e binary ごと compile error＝flip-check はこれを RED と数える（overlay 後の compile error は RED の規則・`crates/xtask/src/flipcheck.rs` の module doc）。
+- 歯（接頭辞と置き場・done と 1:1）:
+  1. `contract_derive_creates_parent_`（`crates/scribe2/tests/e2e/pipe/intake.rs`）= `creates` に子 file を宣言した行の導出値に**親の宣言 file が入る**／親が `<dir>/mod.rs` の周と `<dir>.rs` の周の両方／親が base に無い周は導出値に足さない（否定の枝）。
+  2. `contract_derive_subcommand_enum_`（同 file）= `touches` に cli の型を宣言した行の導出値に **cli.rs と件数 pin の歯の file が入り**、もう一方の cli の歯の file は**入らない**（名を分けた効き目の pin＝同名なら落ちる）。
+  3. `seat_command_all_` / `pipe_command_all_`（`crates/scribe2/tests/e2e/seat.rs` / `crates/scribe2/tests/e2e/pipe.rs`）= const slice の件数と宣言順が型と一致し、`as_str` と `parse` が往復し、**未知の token は `parse` が `None`** を返す（label の腕へ落ちる側の pin）。
+  4. **usage の字面が不変**であることは既存の歯が受け、行の verify が完全名 `seat_usage_external_form` / `pipe_external_form`（外形 snapshot `e2e__seat__seat_usage_external_form.snap` / `e2e__pipe__pipe_external_form.snap`）で撃つ。
+- 触らない: 各 subcommand の実装関数・口座 label の短い形の腕の意味と rc・usage の字面（`SEAT_COMMANDS` / `PIPE_COMMANDS` から組んで同じ字面になることを外形 snapshot で pin）。
 - 却下案: 導出に「usage 行を持つ .rs」の形を足す（字面の形が増える・閉じた enum で既存の第 2 形に乗せる方が C2）／Declared のまま（`.303` の型の QUESTION が再発する）。
 
 ## 18. write-set の導出に fn 形の touches を足す（契約表の行 r・`s2-07l.358`）
@@ -185,6 +199,13 @@ scribe2 を載せる consumer が pipe を通すのに要る面は 3 つで、�
 
 - 何が起きているか: user の相談 2026-09-16 06:0xZ「今までのミスの型を DB に登録していって潰していく」。本日の実例: 審査の終端 19/42 便（admin の手集計）・`.209` の 10 周のうち 7 周が同型「字面が現物と合わない」。現物（verified・main c3f2fdb）: 審査の段（§4・`pipe/review.rs`）は lens の最終行の JSON `{"verdict":…,"evidence":…}` を `parse_lens` が読み、`settle` が `review.json`（schema / run / verdict / evidence / scope / ts）と `RunStage stage=Reviewed detail=verdict:<V>` を書く。理由は `evidence` の自由文だけで**型を持たない**＝型別に数える口が無く、「どの型が残っているか」を機械が示せない。手戻りの型は本日 4 つ（(a) 検証行の歯が write-set の外 / (b) goal と done の矛盾 / (c) 空虚な assert / (d) 字面が現物と合わない）+ 材料の欠け（§ の本文が無い）。
 - 形: (1) lens の雛形 `headless/lens-contract.txt` の最終行の JSON に **`kind`**（閉じた語の 1 つ: `teeth-outside-write-set` / `goal-done-contradiction` / `vacuous-assert` / `literal-mismatch` / `section-material-missing` / `other`・FAIL と INCONCLUSIVE の周は必須・PASS の周は無し）と **`at`**（指した場所の列・path か識別子か §・自由文でなく `,` 区切りの語）を足す。(2) `review.rs` に閉じた enum `FindingKind`（上の 6 語・`as_str` / `parse`・宣言順の const slice・網羅 match）を置き、`parse_lens` が `kind` を読む（FAIL / INCONCLUSIVE で `kind` が無い・読めない周は **`unparsed`** の 7 語目に倒し verdict は lens の値のまま＝理由の欠けを INCONCLUSIVE や `other` に化けさせない・C10。lens の判定に届かず器が作る INCONCLUSIVE〔`--lens` 無し・写しを読めない・起動できない・出力を読めない・scope の中で死んだ〕も同じく `unparsed`＝lens の JSON が無い周はすべて 7 語目）。`settle` は `review.json` に `kind` と `at` を任意 field で足し（schema 1 のまま・古い読み手は無視・§5 の足し方）、event の detail を `verdict:<V> kind:<k>`（PASS は従来どおり `verdict:PASS`）にする。(3) `pipe report` の 1 行に **`review_fail=<本数> by_kind=<k1>:<n1>,…`**（母集団 = `pipe report` が読む event 列の `RunStage stage=Reviewed` のうち verdict が PASS でないもの全部＝既存の `runs=` と同じ範囲で日付では絞らない・`kind:` を持たない古い event は `unparsed` に数える・kind 別の内訳を宣言順に全部・0 も出す）を足す。「潰す」= kind ごとに §21 の preflight の門が 1 つ増え、report の内訳でその kind が 0 に落ちたことを機械で見る。同型の回数で run N+1 を止める線（rules 行 `review.same_kind_stop` = **2**・user 裁定 2026-09-16T05:53Z「２論点とも推奨で進めて」）と、焼き直しが前回の指摘（`at`）に対応する差分を持たない周を受付が断る門は、この kind と `at` を入力にする**別の行**（後続・§23 予定・rules 行を足すので変異と生成物の一覧が同じ PR）。
+- 現物の読み手と書き手の所在（verified 2026-09-20・(2) が触る 2 本）: どちらも `crates/scribe2/src/pipe/review.rs` の **private**（`fn parse_lens(` = lens の最終行の文字列を取り verdict と evidence の 2 値を返す／`fn settle(` = 審査の 1 件と verdict と evidence と scope を取り `review.json` と event を書いて結果を返す）。`pipe report` の 1 行の組み立ては `crates/scribe2/src/pipe/report.rs` の `pub fn report(` 1 本で、既存の token は同 file の 1 か所の書式に並ぶ。
+- 歯（`pipe_review_kind_` 接頭辞・偽 lens が最終行の JSON を書く既存の審査の fixture と同型・置き場は下の 3 file）:
+  1. **読みと書き**（`crates/scribe2/tests/e2e/pipe/intake.rs`）= FAIL の周に `kind` と `at` が `review.json` の任意 field と event の detail に残る／6 語をそれぞれ書いた lens の周でその語が逐語で残る／**PASS の周は `kind` を持たず** detail は `verdict:PASS` のまま（否定の枝）。
+  2. **7 語目へ倒す枝**（同 file）= FAIL / INCONCLUSIVE で `kind` が無い周・語でない周・JSON が読めない周は `unparsed` になり **verdict は lens の値のまま**（`other` にも INCONCLUSIVE にも化けない・C10）／lens の判定に届かず器が作る INCONCLUSIVE 5 形（`--lens` 無し・写しを読めない・起動できない・出力を読めない・箱の中で死んだ）も `unparsed`。この 5 形の歯は既存の置き場に倣い `crates/scribe2/tests/e2e/pipe/ratelimit.rs` / `crates/scribe2/tests/e2e/pipe/stop.rs` の審査の fixture を使う。
+  3. **数える面**（`crates/scribe2/tests/e2e/pipe/spawn.rs`・`pipe report` の歯の file）= `review_fail=<本数>` が母集団（`RunStage stage=Reviewed` のうち verdict が PASS でないもの全部）と一致し、`by_kind=` が**宣言順に 7 語とも出る（0 も出す）**／`kind:` を持たない古い event は `unparsed` に数える。
+  4. **雛形の外形**は既存の歯が受け、行の verify が完全名 `headless_lens_contract_prompt_external_form`（`crates/scribe2/tests/e2e/headless.rs`・snapshot `e2e__headless__lens_contract_prompt_external_form.snap`）で撃つ＝雛形に `kind` と `at` の穴を足した差分がそこに写る。
+  5. **`report` の既存 token が不変**であることは既存の歯 2 本が受け、行の verify が完全名 `pipe_report_counts_human_events` と `pipe_report_counts_landed_runs_not_landed_events`（同じく spawn.rs）で撃つ。
 - 触らない: verdict の 3 値と rc・`review.json` の既存 key・lens の起動の形（`{contract}` / `{design}` / `{requirements}`）・審査の観点 3 つ・gate の verdict.json（審査の段だけ）・`report` の既存 token（`runs=` / `landed=` / `human_events=`）。
 - 却下案: memory / notes の散文で型を数える（N2・母集団が測れない）／`evidence` の字面を grep して型を推定する（自由文の字面判定・C3.3）／型を rules 行に置く（型は理由の語彙であって閾値でも極性でもない・閉じた enum の領分）／`kind` を PASS にも必須にする（PASS に理由の型は無い・空の値を作らない）。
 
@@ -193,7 +214,7 @@ scribe2 を載せる consumer が pipe を通すのに要る面は 3 つで、�
 - 何が起きているか: §22 の後続（user 裁定 2026-09-16T05:53Z・同型の停止の回数 N = 2・逐語は台帳 `s2-07l.395` notes）。§22 が Landed すると `review.json` と event に kind と at が残るが、受付（`cli/intake.rs` の `intake_run`・§21 の judge の側）は同じ bead の前の便の判定を読まない＝同じ kind の FAIL が何周続いても run N+1 は無限に出せ、焼き直しが前回の指摘（at）に触れていなくても通る（本日の実測: `.209` の 10 周のうち 7 周が同型「字面が現物と合わない」）。現物（verified・main a620600）: 受付の断りは write-set の弁別（§3）・上限の余地・live な便との交差（`exclude_overlap`）だけで、便の履歴を読む口は無い。審査の材料は run dir の `review/` に残る（`keep`・契約の写し + `design.txt`〔行の section の本文〕+ `requirements.txt`）。lens の verdict は同じ材料でも揺れる（`.380` で PASS ↔ FAIL）ので、材料不変の再 intake を 1 回も許さない形は採らない＝回数の線は rules 行。
 - 形: (1) **rules 行** `review.same_kind_stop`（`RuleKind` の variant `ReviewSameKindStop`・Int・**値 = 2**・裁定 id `user 2026-09-16T05:53Z`・C5・宣言順の末尾・値は manifest だけが持ち本節は写さない）。行の無い manifest は受付を 1 byte も動かさない（rc 2・行を名指す・`pipe.land_wait_s` と同じ極性）。(2) **同型の停止（受付の門・run dir も event も作らない・write-set の弁別の後・余地と交差の前）**: 受付は置き場の replay から同じ bead の便を id の新しい順に並べ、段が Reviewed 以降の便の `review.json` を読み（読めない便は `WriteSetUnreadable` と同じ断り＝`live` と同じ読み手・段が Intake の便は数えない）、先頭の便の kind と同じ kind が verdict PASS で途切れるまで連続する本数を数える（kind が unparsed の便は数えず連鎖も切らない＝lens の欠けを契約の型に化けさせない・C10）。本数が値に達し、かつ先頭の便の材料（`review/` の契約の写しと `design.txt`）が今回の材料（受付が写す形の契約 file〔導出値を置いた後〕と base から読む節の本文〔§4 の `design_text`・同じ 1 本〕）と両方とも同じ字面の周は、`Refuse` の新 variant `SameKindRepeated { kind, runs }`（名 `same-kind-repeated`・rc 1・runs = 数えた便 id の列・新しい順・理由の 1 行に kind と本数と行の値）で断る。契約か節のどちらかが変わっていれば通す（「焼き直しは書き直し」を器の線にする・§7 の形）。(3) **焼き直しの門（受付の門・同じ場所・停止の後）**: 同じ bead の直前の便（新しい順の先頭）の verdict が PASS でない周、その `review.json` の kind と at の各項目に「対応する差分」が在るかを **kind ごとに 1 関数**（`review.rs`・閉じた型 FindingKind〔§22〕の網羅 match）で測る: teeth-outside-write-set → at の各 path が今回の write-set（弁別済み・dir 項目はその配下）に在る／literal-mismatch → at の各識別子が今回の契約 file と節の本文に無い、または base に解ける（`NameUnresolved` の名指しの読み手と同じ 1 本）／section-material-missing → 節の本文が直前の便の `design.txt` と異なる。対応の無い項目が 1 つでも在る周は `Refuse` の新 variant `FindingUnaddressed { kind, at }`（名 `finding-unaddressed`・rc 1・at = 対応の無かった項目だけ・辞書順）で断る。goal-done-contradiction / vacuous-assert / other / unparsed と at の空な周は測れない＝通す（判断を要する型は planner に残す・裁定の (2) の線）。(4) 断りは §21 の preflight にもそのまま出る（judge の側に置く＝run を作らずに撃てる・planner が edit time に測る）。
 - 触らない: 審査の段（§4）と lens の起動・§22 の kind / at の書き方と `review.json` の既存 key・verdict の 3 値と rc・回数の値（manifest だけが持つ）・交差と余地の判定・`.394`（§21）の judge / create の割り方（先に Landed なら judge の中に置き、後なら `exclude_overlap` の隣に置いて `.394` が寄せる）・台帳（受付は run を作らないので QUESTION event の宿主が無い＝断りの 1 行と preflight で planner に届く）。
-- 歯（`pipe_intake_repeat_` 接頭辞・`tests/e2e/pipe/intake.rs`・偽 lens が最終行の JSON に kind と at を書く §22 の fixture・toy repo の設計 doc と契約 file を歯が書き換えて commit する）: 同じ kind の FAIL 2 便の後、契約 file と節の本文がともに不変の 3 便目は `same-kind-repeated` と 2 便の id を名指す／節の本文か契約 file のどちらかを変えると通る／kind が違う 2 便は通る／unparsed 2 便は通る／PASS を挟むと数え直す／teeth-outside-write-set at=path の便の後、write-set に path の無い契約は `finding-unaddressed` と path・在れば通る／literal-mismatch at=識別子 の便の後、識別子を書いたままで base に無い契約は断られ・消すか base に足すと通る／section-material-missing の便の後、節の本文が不変の契約は断られ・変えると通る／行の無い manifest は rc 2 で行を名指す。rules 行は `rules_review_same_kind_` 接頭辞（`tests/e2e/rules.rs`・値と kind と裁定 id と宣言順の pin・行と variant を対で足させる）。
+- 歯（`pipe_intake_repeat_` 接頭辞・`tests/e2e/pipe/intake.rs`・偽 lens が最終行の JSON に kind と at を書く §22 の fixture・toy repo の設計 doc と契約 file を歯が書き換えて commit する）: 同じ kind の FAIL 2 便の後、契約 file と節の本文がともに不変の 3 便目は `same-kind-repeated` と 2 便の id を名指す／節の本文か契約 file のどちらかを変えると通る／kind が違う 2 便は通る／unparsed 2 便は通る／PASS を挟むと数え直す／teeth-outside-write-set at=path の便の後、write-set に path の無い契約は `finding-unaddressed` と path・在れば通る／literal-mismatch at=識別子 の便の後、識別子を書いたままで base に無い契約は断られ・消すか base に足すと通る／section-material-missing の便の後、節の本文が不変の契約は断られ・変えると通る／行の無い manifest は rc 2 で行を名指す。rules 行は `rules_review_same_kind_` 接頭辞（`crates/scribe2/tests/e2e/rules.rs`・値と kind と裁定 id と宣言順の pin・行と variant を対で足させる）で、**外形**は既存の歯が受け行の verify が完全名 `rules_external_form`（同 file・外形 snapshot `e2e__rules__rules_external_form.snap` の `rows=` / `kinds=` が 1 つ増える）で撃つ。
 - 却下案: 回数を散文の作法にする（N2）／at を `evidence` の自由文から grep する（C3.3）／回数に達したら台帳へ QUESTION event を書く（受付は run を作らない・宿主が無い）／全 kind に門を撃つ（測れない型を偽の「対応済み」に倒す・C10）／同型の停止を契約 file の sha の差だけで解く（節の本文を見ない＝acceptance の言い換えだけで通り §7 の線に反する）／材料不変の再 intake を 1 回目から断る（lens の揺れの再測を塞ぐ・回数の線は裁定の値）／停止を段（Stage）の variant にする（受付の断りは段の遷移でない・run が無い）。
 
 ## 24. 着地で消える file の宣言 — write-set の項目の `~` 接頭辞（契約表の行 x・`s2-07l.405`）
@@ -247,6 +268,23 @@ scribe2 を載せる consumer が pipe を通すのに要る面は 3 つで、�
   1. `depends` の相手が同じ doc の契約表の**自分でない別の行**である行は、受付がそれを理由に断らない（rc 0・run dir が出来る）。
   2. 相手の id が同じ doc の契約表に無い行は、従来どおり `depends-unresolved` で断る（run dir を作らない・字面は `contracts check` と 1 byte 同じ）。
   3. 事前の検査の口（preflight）は受付と同じ 1 判定を通る＝(1) の行で `refuse=` に `depends-unresolved` が出ず、(2) の行では出る。
+
+## 31. 受付の門の判定式の生存 9 本に歯を足す（契約表の行 l・`s2-07l.277`・歯だけ・門の判定は 1 字も動かさない）
+
+- 何が起きているか: `s2-07l.249` run 7 の検出線（gate 2026-09-14 14:55Z・母集団 166 = 撃墜 144 / 生存 9 / timeout 0 / unviable 13・C12.4 の検出線であって deny ではない）で、受付の門の判定式に生存 9 本が残った。生存 = **その分岐を pin する歯が無い**。本行は歯だけを足し、門の判定・断りの字面・rc は 1 字も変えない。
+- **所在の測り直し（verified 2026-09-20・main f678bd0）**: 記録当時の所在（`pipe/cli.rs` / `pipe/closure.rs` / `pipe/declaration.rs` / `pipe/table.rs`）はその後の純移動（`s2-07l.279` / `.349` / `.363` / `.373`）で移った。今の所在と判定式は 5 群:
+  1. **(a) 余地の段の除外の否定**（`crates/scribe2/src/pipe/cli/intake.rs` の private な `exclude_cap_shortfall(`）= 項目の解決に失敗した周に「解けない項目を**除いた**列」で数え直す否定の条件（`!` を落とすと解けない項目だけで数え直す）。
+  2. **(b) 外形の usage 行の名の判定**（`crates/scribe2/src/pipe/closure.rs` の private な `usages(`）= 名が空か、識別子の文字と `-` 以外を含む行を飛ばす条件（`||` を `&&` にすると空の名が通る／`==` を `!=` にすると `-` を含む名が落ちる）。2 本の生存はこの 1 行の 2 つの演算子。
+  3. **(c) 余地の境界**（`crates/scribe2/src/pipe/declaration/write_set.rs` の `pub fn headroom_shortfalls(`）= 見積が余地を**超える**ときだけ断る比較（`>` を `>=` にすると見積 = 余地ちょうどの便が断られる）。
+  4. **(d) core の名の切り出し**（同 file の private な `core_of(`）= crate 名が空でなく、かつ `/` を含まないときだけ core と読む連言（`&&` を `||` にすると `crates//src/` の形が core として通る）。
+  5. **(e) 節の切り出し**（`crates/scribe2/src/pipe/table/check.rs` の private な `section_lines(`）= 契約表の区間の開始と終了の 2 つの腕（腕を落とすと区間の中身が節の本文に混ざる）・fence の中を見出しと読まない guard（`false` にすると fence の中の `## ` が節を切り替える）・本文を拾う条件の否定（`!` を落とすと fence の中だけを拾う）の 4 本。
+- **歯**（接頭辞 `contract_closure_ext_survivor_`・生存 1 本に歯 1 本・**変異の A/B で撃墜されること**が done の条件）:
+  - (a)(c)(d)(e) は**同じ file の in-file の歯**（判定式が private な純関数で、受付を通すと別の断りが先に立って分岐に届かない＝負例が別の理由で通る型を避ける）。接頭辞の後は `a_` / `c_` / `d_` / `e_begin_` / `e_end_` / `e_inside_` / `e_fence_`。
+  - (b) は **e2e**（`crates/scribe2/tests/e2e/pipe/intake.rs`）。`usages(` は `pipe/closure.rs` の私有で、同 file は R-C4-2 の余地が薄い（§29 の実測）ため in-file の歯を増やさず、`surfaces` を宣言した契約を受付に通して外形 pin の閉包の結果で測る。接頭辞の後は `b_name_`（空の名と `-` を含む名を持つ usage 行を混ぜた fixture で、閉包に入る file の集合が**変わらない**こと＝`||` / `==` のどちらを変えても集合が動く）と `b_match_`。
+  - **空虚さの柵**: どの歯も「母集団と件数を同じ assert で出す」（0 件を「変化なし」と読まない）・境界の歯は**両側**（余地ちょうど＝断らない／余地 −1＝断る）を持つ・(e) の 4 本は開始の腕と終了の腕を**別々に**落として別の歯が落ちること（1 本で 4 本を兼ねない）。
+- **触らない**: 受付の判定・断りの型と字面・rc・rules 行・`crates/scribe2/src/pipe/closure.rs` の src（(b) の歯は e2e から測る）。
+- **極性**: 歯だけの便なので検出線の母集団は 0 になる（§16 の gate-cost 側の行 g が的を宣言する形を持つまでは、撃墜の proof は便の notes に手で残す）。
+- 却下案: 9 本を 1 本の歯にまとめる（どの分岐が撃墜されたか分からない・変異 1 本ずつの A/B ができない）／門の判定を「歯を書きやすい形」に直す（歯だけの便に仕様変更を混ぜる）／e2e だけで 9 本とも測る（(a)(c)(d)(e) は受付の手前の断りが先に立ち、負例が別の理由で通る）。
   4. 既存の受付・事前の検査・表の検査の歯は期待を変えない。
 - 形: 検査する行は 1 つのまま（§2 の「その 1 行に撃つ」は不変＝閉包・名指し・write-set の検査を全行へ広げない・受付の時間を増やさない）。`depends` の解決の母集団だけを、同じ base（HEAD）の doc の**全行の id** にする。全行の id は受付が既に読んでいる doc の本文から取る（新しい読みを足さない）。表の検査の口は 1 本のまま＝母集団は引数で渡す（検査の文脈の型に欄を足さない・新しい公開 fn を作らない）。引数が増える呼び手は既に在る 2 か所だけで、どちらも行 ad の write-set の中に在る: 受付の 1 行の呼び手（`pipe/cli/intake.rs`）と、全行で撃つ `contracts check` の呼び手と in-file の歯（`pipe/table/check.rs`）。事前の検査の口（preflight）は**既存の構造で**受付と同じ判定関数（`pipe/cli/intake.rs` の契約を組む関数）を直に呼んでいるので、preflight の source は触らない＝約束 3 は受付の直しがそのまま効く面で、歯 (3) はそれを外から測る。表の検査の公開の形（全行で撃つ `contracts check`）は結果を変えない。
 - 触らない: 輪（`depends-cycle`）の検出は 1 行の slice で測れる範囲（自分自身を指す `depends`）のまま変えず、多行に跨る輪は全行を見る `contracts check`（CI）の持ち分のまま。`depends` は表の検査の key であって、列の順序づけには使わない（順序は [dispatcher.md](./dispatcher.md) の列と台帳の blocks が持つ・本段で変えない）。断りの型と字面は増やさない。
@@ -305,13 +343,13 @@ depends = ["b"]
 
 [[contract]]
 id = "e"
-title = "台帳 lint（doctor の項目）"
+title = "台帳 lint（doctor の項目 1 行）— open の bead から pointer の解けない契約・pointer 無しの memo・本文を持つ契約を件数と母集団と id で名指す"
 req = ["FR51"]
 section = "6"
-write-set = ["+crates/scribe2/src/ledger/mod.rs", "+crates/scribe2/src/ledger/lint.rs", "crates/scribe2/src/lib.rs", "crates/scribe2/src/main.rs", "crates/scribe2/src/seat/ledger.rs", "+crates/scribe2/tests/e2e/ledger.rs", "crates/scribe2/src/snapshots/scribe2__tests__doctor_external_form.snap"]
-verify = ["cargo nextest run -p scribe2 --no-tests=fail ledger_lint_"]
+write-set = ["crates/scribe2/src/ledger/mod.rs", "+crates/scribe2/src/ledger/lint.rs", "crates/scribe2/src/main.rs", "crates/scribe2/src/seat/ledger.rs", "+crates/scribe2/tests/e2e/ledger.rs", "crates/scribe2/tests/e2e/main.rs", "crates/scribe2/src/snapshots/scribe2__tests__doctor_external_form.snap"]
+verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail ledger_lint_", "cargo nextest run -p scribe2 --bin scribe2 --no-tests=fail doctor_external_form"]
 size = "S"
-done = "偽 adapter の出力で doctor の行が件数と母集団を出す"
+done = "doctor の項目に台帳の 1 行が増え、偽の台帳 client の出力で 3 つの欠陥（pointer の解けない契約・pointer 無しの memo・本文を持つ契約）の件数と母集団が同じ行に出て欠陥の bead の id が名指され、欠陥 0 の周も 0 と母集団が出て行が消えず、client が起動できない・rc ≠ 0・出力が壊れた周は 0 でなく測れていない形の行になり、pointer の解ける契約と見出しの無い memo は数に入らず、極性の列は増えない"
 depends = ["d"]
 
 [[contract]]
@@ -382,13 +420,13 @@ done = "yaml / md の要件面を宣言した toy で contracts check の id 検
 
 [[contract]]
 id = "l"
-title = "受付の門の判定式に検出線の生存 9 本を潰す歯を足す — 余地の境界・閉包の usages・core の合計の条件を in-file と e2e で赤にする（歯だけ・門は動かさない）"
+title = "受付の門の判定式の検出線の生存 9 本に歯を足す — 余地の境界・外形の usage 行の名・core の名の切り出し・節の切り出しの 4 本を in-file と e2e で赤にする（歯だけ・門の判定は動かさない）"
 req = ["FR48", "FR47"]
-section = "3"
+section = "31"
 write-set = ["crates/scribe2/src/pipe/cli/intake.rs", "crates/scribe2/src/pipe/declaration/write_set.rs", "crates/scribe2/src/pipe/table/check.rs", "crates/scribe2/tests/e2e/pipe/intake.rs"]
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail contract_closure_ext_survivor_a_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail contract_closure_ext_survivor_b_name_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail contract_closure_ext_survivor_b_match_", "cargo nextest run -p scribe2 --lib --no-tests=fail contract_closure_ext_survivor_c_", "cargo nextest run -p scribe2 --lib --no-tests=fail contract_closure_ext_survivor_d_", "cargo nextest run -p scribe2 --lib --no-tests=fail contract_closure_ext_survivor_e_begin_", "cargo nextest run -p scribe2 --lib --no-tests=fail contract_closure_ext_survivor_e_end_", "cargo nextest run -p scribe2 --lib --no-tests=fail contract_closure_ext_survivor_e_inside_", "cargo nextest run -p scribe2 --lib --no-tests=fail contract_closure_ext_survivor_e_fence_"]
 size = "S"
-done = "生存 9 本の判定式それぞれに赤になる歯が在り、変異の A/B で撃墜される（門の判定は不変）"
+done = "§31 の (a)〜(e) の生存 9 本それぞれに歯が 1 本在り、その分岐を変異させた A/B で対応する歯だけが落ちる（撃墜の本数と母集団を notes に残す）。境界の歯は余地ちょうどと余地 −1 の両側を持ち、節の切り出しの 4 本は開始の腕と終了の腕を別々に落として別の歯が落ち、各 assert が件数と母集団を同じ行に出す。受付の判定・断りの型と字面・rc・rules 行は 1 字も変わらない"
 
 [[contract]]
 id = "m"
@@ -435,10 +473,10 @@ id = "q"
 title = "write-set の導出に (vi) creates の親 mod の宣言 file と (vii) subcommand の閉じた enum（SeatCommand / PipeCommand）を足す"
 req = ["FR48"]
 section = "17"
-write-set = ["crates/scribe2/src/pipe/closure.rs", "crates/scribe2/src/pipe/closure/derive.rs", "crates/scribe2/src/seat/cli.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/tests/e2e/pipe/intake.rs", "crates/scribe2/tests/e2e/seat.rs", "crates/scribe2/tests/e2e/pipe.rs", "docs/design/contract-source.md"]
-verify = ["cargo nextest run -p scribe2 --no-tests=fail contract_derive_creates_parent_", "cargo nextest run -p scribe2 --no-tests=fail contract_derive_subcommand_enum_", "cargo nextest run -p scribe2 --no-tests=fail seat_command_all_", "cargo nextest run -p scribe2 --no-tests=fail pipe_command_all_", "cargo nextest run -p scribe2 --no-tests=fail seat_usage_external_form", "cargo nextest run -p scribe2 --no-tests=fail pipe_external_form"]
+write-set = ["crates/scribe2/src/pipe/closure.rs", "crates/scribe2/src/pipe/closure/derive.rs", "crates/scribe2/src/seat/cli.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/tests/e2e/pipe/intake.rs", "crates/scribe2/tests/e2e/seat.rs", "crates/scribe2/tests/e2e/pipe.rs", "crates/scribe2/tests/e2e/snapshots/e2e__seat__seat_usage_external_form.snap", "crates/scribe2/tests/e2e/snapshots/e2e__pipe__pipe_external_form.snap", "docs/design/contract-source.md"]
+verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail contract_derive_creates_parent_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail contract_derive_subcommand_enum_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail seat_command_all_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_command_all_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail seat_usage_external_form", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_external_form"]
 size = "M"
-done = "口を足す契約が Derived で書け、導出値に cli.rs と親 mod.rs が入る"
+done = "creates を宣言した行の導出値に親の宣言 file が入り（親が base に無い周は入らない）、seat と pipe の cli の既知の verb が閉じた enum と別名の const slice になって件数と宣言順が型と一致し往復し未知の token は parse が None を返し、口座 label の短い形の腕と各腕の rc は不変で、cli の型を touches に宣言した行の導出値に cli.rs と自分の件数 pin の歯の file だけが入り（もう一方の cli の歯の file は入らない）、usage の字面と 2 つの外形 snapshot は 1 字も変わらない"
 
 [[contract]]
 id = "r"
@@ -486,9 +524,9 @@ title = "審査の理由を閉じた型 FindingKind で review.json と event �
 req = ["FR49"]
 section = "22"
 write-set = ["crates/scribe2/src/pipe/review.rs", "crates/scribe2/src/headless/lens-contract.txt", "crates/scribe2/src/pipe/report.rs", "crates/scribe2/tests/e2e/pipe/intake.rs", "crates/scribe2/tests/e2e/pipe/ratelimit.rs", "crates/scribe2/tests/e2e/pipe/stop.rs", "crates/scribe2/tests/e2e/pipe/spawn.rs", "crates/scribe2/tests/e2e/headless.rs", "crates/scribe2/tests/e2e/snapshots/e2e__headless__lens_contract_prompt_external_form.snap"]
-verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_review_kind_"]
+verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_review_kind_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail headless_lens_contract_prompt_external_form", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_report_counts_human_events", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_report_counts_landed_runs_not_landed_events"]
 size = "M"
-done = "FAIL / INCONCLUSIVE の review.json と event が kind を持ち、kind の無い lens 出力は unparsed に倒れ、report の 1 行に review_fail= と by_kind= が宣言順に出る"
+done = "FAIL / INCONCLUSIVE の review.json と event の detail が閉じた 6 語の kind と at を持ち PASS の周は持たず、kind の無い・語でない・JSON が読めない周と器が作る INCONCLUSIVE 5 形は 7 語目 unparsed に倒れて verdict は lens の値のまま、report の 1 行に review_fail= が母集団つきで出て by_kind= が宣言順に 7 語とも（0 も）出て古い event は unparsed に数えられ、lens の雛形の外形 snapshot に kind と at の穴が写り、report の既存 token と verdict の 3 値と rc は不変"
 
 [[contract]]
 id = "w"
@@ -496,10 +534,10 @@ title = "同型の審査 FAIL が rules 行 review.same_kind_stop の回数に�
 req = ["FR49"]
 section = "23"
 touches = ["crate::pipe::refuse::Refuse", "crate::rules::RuleKind"]
-write-set = ["crates/scribe2/src/pipe/cli/intake.rs", "crates/scribe2/src/pipe/refuse.rs", "crates/scribe2/src/pipe/review.rs", "rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "crates/scribe2/tests/e2e/rules.rs", "crates/scribe2/tests/e2e/pipe.rs", "crates/scribe2/tests/e2e/pipe/intake.rs", "crates/scribe2/src/pipe/closure/names.rs", "crates/scribe2/src/pipe/table.rs", "crates/scribe2/src/pipe/table/check.rs"]
-verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_intake_repeat_", "cargo nextest run -p scribe2 --no-tests=fail rules_review_same_kind_"]
+write-set = ["crates/scribe2/src/pipe/cli/intake.rs", "crates/scribe2/src/pipe/refuse.rs", "crates/scribe2/src/pipe/review.rs", "rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "crates/scribe2/tests/e2e/rules.rs", "crates/scribe2/tests/e2e/snapshots/e2e__rules__rules_external_form.snap", "docs/design/rules-manifest.md", "crates/scribe2/tests/e2e/pipe.rs", "crates/scribe2/tests/e2e/pipe/intake.rs", "crates/scribe2/src/pipe/closure/names.rs", "crates/scribe2/src/pipe/table.rs", "crates/scribe2/src/pipe/table/check.rs"]
+verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_intake_repeat_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail rules_review_same_kind_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail rules_external_form"]
 size = "M"
-done = "同じ kind の FAIL が行の値の本数続いた bead の材料不変の intake は same-kind-repeated で断られ、直前の at に対応する差分の無い契約は finding-unaddressed で断られ、材料か対応を変えた契約は通り、行の無い manifest は rc 2、rules 行が裁定 id 付きで 1 本増える"
+done = "同じ kind の FAIL が行の値の本数続いた bead の材料不変の intake は same-kind-repeated で断られて便 id の列を運び、契約 file か節の本文のどちらかが変われば通り、kind の違う 2 便と unparsed の 2 便は通り PASS を挟むと数え直し、直前の at に対応する差分の無い契約は finding-unaddressed で断られて対応の無い項目だけを辞書順で名指し、測れない 4 型（goal-done-contradiction / vacuous-assert / other / unparsed）と at の空な周は通り、どちらの断りも run dir と event を作らず preflight にも出て、行の無い manifest は rc 2 で行を名指し、rules 行 review.same_kind_stop が裁定 id 付きで 1 本増えて RuleKind の variant と対になり外形の rows= と kinds= が 1 つ増える"
 depends = ["v"]
 
 [[contract]]
