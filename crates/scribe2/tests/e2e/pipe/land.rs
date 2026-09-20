@@ -7,6 +7,7 @@
 
 use super::*;
 use vessel::pipe::land;
+use vessel::pipe::review::REVIEW_FILE;
 use vessel::pipe::run_dir;
 
 /// 審査が run dir に残す lens の cmd の写し（設計 pipeline.md §26・名は字面で持つ＝写しの名の変化も歯が測る）。
@@ -2397,6 +2398,157 @@ fn pipe_retire_stopped_refuses_a_dirty_worktree() {
     let cleaned = retire_once(&repo, &state, &id);
     assert_eq!(cleaned.status.code(), Some(i32::from(RC_OK)), "clean なら通る: {}", stderr_of(&cleaned));
     assert!(retired.exists(), "畳んだ先が出来る");
+    clean(&[&repo, &state]);
+}
+
+// ─── 審査の段の終端も畳める（契約表の行 i・設計 pipeline.md §12・接頭辞 `pipe_retire_reviewed_`） ───
+//
+// 出所: 審査（FR49）が足した終端 `Reviewed(FAIL / INCONCLUSIVE)` は live を持たないのに retire の入口の
+// 段の列に無く、前の周が残した worktree を畳めなかった＝再開（FR14）の続きの段が別の worktree に割れる。
+//
+// 審査の段そのものは worktree を作らない（`pipe_review_fail_stops_before_spawn` が「worktree を作らない」を
+// pin する）ので、この 4 本が畳む / 断る入れ物は **前の周が残した worktree**——spawn と同じ形（branch
+// `scribe2/<run>`）で [`reviewed_with_worktree`] が置く。
+
+/// 審査の判定 file（run dir の `review.json`）を `body` の字面へ差し替える。段の event は動かさない
+/// （`Reviewed` のまま）＝判定だけを振って入口の弁別を測れる。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn write_review_verdict(state: &Path, id: &str, body: &str) {
+    fs::write(run_dir(state, id).join(REVIEW_FILE), body).expect("審査の判定を書ける");
+}
+
+/// 審査の判定 file の本文（3 値の字面をそのまま持つ＝3 値の外も書ける）。
+fn review_body(verdict: &str) -> String {
+    format!("{{\"verdict\":\"{verdict}\"}}\n")
+}
+
+/// 段が `Reviewed` で、判定が `body`・**前の周の worktree が残っている**便の id。
+///
+/// intake は偽 PASS の lens で 1 回通り（審査を飛ばす口は無い・FR49）、判定 file だけを後から差し替える。
+/// worktree は spawn と同じ形（`scribe2/<run>` の branch を切って base の main から）で置く。
+fn reviewed_with_worktree(repo: &Path, state: &Path, body: &str) -> String {
+    let path = write_contract(repo, &[], &[]);
+    let id = intake(repo, state, &path);
+    assert!(show_line(repo, state, &id).contains("stage=Reviewed"), "受付の直後の段は Reviewed");
+    write_review_verdict(state, &id, body);
+    let live = worktree_of(repo, &id);
+    git(repo, &[
+        "worktree", "add", "-q", "-b", &format!("scribe2/{id}"),
+        &live.display().to_string(), "refs/heads/main",
+    ]);
+    assert!(live.join("src").join("lib.rs").exists(), "前の周の worktree は中身ごと残っている");
+    id
+}
+
+/// 審査が **FAIL** で終端した `Reviewed` の便を畳む（判定に届いた終端・段の列に `Reviewed` が在る）。
+/// 畳み方は他の終端と同じ 1 本（move・branch は残す・main 不変）で、残す event の段は `Reviewed` のまま。
+#[test]
+fn pipe_retire_reviewed_fail_folds_and_keeps_stage() {
+    let (repo, state) = repo_with_state();
+    let id = reviewed_with_worktree(&repo, &state, &review_body("FAIL"));
+    let main_before = git(&repo, &["rev-parse", "refs/heads/main"]);
+    folds_and_keeps_stage(&repo, &state, &id, Stage::Reviewed);
+    assert_eq!(git(&repo, &["rev-parse", "refs/heads/main"]), main_before, "main は 1 byte も動かない");
+    assert!(show_line(&repo, &state, &id).contains("stage=Reviewed"), "畳んだ後も段は Reviewed");
+    let after = event_count(&state);
+
+    // 2 度目は前提（worktree が在る）を満たさない＝rc 1 で何も書かない（入れ子の retired/<run>/<run> を作らない）。
+    let again = retire_once(&repo, &state, &id);
+    assert_eq!(again.status.code(), Some(i32::from(RC_REFUSED)), "2 度目は rc 1");
+    assert_eq!(event_count(&state), after, "前提違反は event を 1 件も書かない");
+    clean(&[&repo, &state]);
+}
+
+/// 審査が **INCONCLUSIVE** で終端した便も同じく畳める（FAIL との弁別は入口に無い＝どちらも「この材料では
+/// 通らなかった」終端）。残す event の段は `Reviewed` のまま・`detail=retired`。
+#[test]
+fn pipe_retire_reviewed_inconclusive_folds_and_keeps_stage() {
+    let (repo, state) = repo_with_state();
+    let id = reviewed_with_worktree(&repo, &state, &review_body("INCONCLUSIVE"));
+    let main_before = git(&repo, &["rev-parse", "refs/heads/main"]);
+    folds_and_keeps_stage(&repo, &state, &id, Stage::Reviewed);
+    assert_eq!(git(&repo, &["rev-parse", "refs/heads/main"]), main_before, "main は 1 byte も動かない");
+    assert!(show_line(&repo, &state, &id).contains("stage=Reviewed"), "畳んだ後も段は Reviewed");
+    clean(&[&repo, &state]);
+}
+
+/// 負例 (1): 審査が **PASS** の便は畳まない——これから起こす側（live）で、入れ物は次の段が使う。
+///
+/// 断りは**段だけでなく判定も名乗る**。字面は 1 行丸ごとで測る＝段違いの一般則の字面（`run <id> の段は
+/// Reviewed である`・verdict の括弧を持たない）では通らず、括弧の語は `ReviewCheck::as_str` が `Passed` に
+/// 返す `PASS` である。一般則そのものの形は末尾で `Implemented` の便から実測して対に置く。
+#[test]
+fn pipe_retire_reviewed_pass_refused_and_names_the_verdict() {
+    let (repo, state) = repo_with_state();
+    let id = reviewed_with_worktree(&repo, &state, &review_body("PASS"));
+    let live = worktree_of(&repo, &id);
+    let before = event_count(&state);
+
+    let out = retire_once(&repo, &state, &id);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "Reviewed(PASS) は rc 1: {}", stdout_of(&out));
+    assert_eq!(
+        stderr_of(&out).trim(),
+        format!("pipe: run {id} の段は Reviewed である（verdict=PASS）"),
+        "断りは判定の語まで名乗る"
+    );
+    assert!(live.exists(), "断った周は worktree を動かさない");
+    assert!(
+        !repo.join(".worktrees").join("scribe2").join("retired").join(&id).exists(),
+        "retired/<run> を作らない"
+    );
+    assert_eq!(event_count(&state), before, "前提違反は event を 1 件も書かない");
+    // 判定だけを終端の側へ解くと同じ便が通る＝上の rc 1 は **verdict** を理由にしている（段ではない）。
+    write_review_verdict(&state, &id, &review_body("FAIL"));
+    let folded = retire_once(&repo, &state, &id);
+    assert_eq!(folded.status.code(), Some(i32::from(RC_OK)), "FAIL なら通る: {}", stderr_of(&folded));
+    clean(&[&repo, &state]);
+
+    // 対の実測: 段の列に無い段（`Implemented`）の断りは **一般則のまま**で、verdict の括弧を持たない。
+    let (other, other_state) = repo_with_state();
+    let other_path = write_contract(&other, &[], &[]);
+    let waiting = implemented(&other, &other_state, &other_path);
+    let general = retire_once(&other, &other_state, &waiting);
+    assert_eq!(general.status.code(), Some(i32::from(RC_REFUSED)), "Implemented は rc 1: {}", stdout_of(&general));
+    assert_eq!(
+        stderr_of(&general).trim(),
+        format!("pipe: run {waiting} の段は Implemented である"),
+        "一般則は段だけを名乗る"
+    );
+    clean(&[&other, &other_state]);
+}
+
+/// 負例 (2): 判定を**読めない**便も畳まない（fail-closed・読めない判定を終端に読み替えない）。母集団は
+/// 「JSON でない本文」と「3 値の外」の 2 つで、どちらも同じ 1 行（括弧の語は `Unreadable` の `読めない`）。
+#[test]
+fn pipe_retire_reviewed_unreadable_refused_and_names_the_verdict() {
+    let (repo, state) = repo_with_state();
+    let id = reviewed_with_worktree(&repo, &state, "not json\n");
+    let live = worktree_of(&repo, &id);
+    let before = event_count(&state);
+    let reason = format!("pipe: run {id} の段は Reviewed である（verdict=読めない）");
+
+    let out = retire_once(&repo, &state, &id);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "読めない判定は rc 1: {}", stdout_of(&out));
+    assert_eq!(stderr_of(&out).trim(), reason, "断りは「読めない」を名乗る");
+    assert!(live.exists(), "断った周は worktree を動かさない");
+    assert!(
+        !repo.join(".worktrees").join("scribe2").join("retired").join(&id).exists(),
+        "retired/<run> を作らない"
+    );
+    assert_eq!(event_count(&state), before, "前提違反は event を 1 件も書かない");
+    // 3 値の外も同じ断り（PASS でない字面を「終端」に読み替えない）。
+    write_review_verdict(&state, &id, &review_body("MAYBE"));
+    let outside = retire_once(&repo, &state, &id);
+    assert_eq!(outside.status.code(), Some(i32::from(RC_REFUSED)), "3 値の外も rc 1: {}", stdout_of(&outside));
+    assert_eq!(stderr_of(&outside).trim(), reason, "3 値の外も「読めない」");
+    assert_eq!(event_count(&state), before, "event を 1 件も書かない");
+    // 判定を読める終端へ直すと同じ便が通る＝上の rc 1 は**判定の読めなさ**を理由にしている（段ではない）。
+    write_review_verdict(&state, &id, &review_body("INCONCLUSIVE"));
+    let folded = retire_once(&repo, &state, &id);
+    assert_eq!(folded.status.code(), Some(i32::from(RC_OK)), "読める終端なら通る: {}", stderr_of(&folded));
     clean(&[&repo, &state]);
 }
 

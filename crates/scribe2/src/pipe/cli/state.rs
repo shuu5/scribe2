@@ -99,6 +99,9 @@ pub(in crate::pipe) fn resolve(
 ///   PASS はまだ land が残っており、INCONCLUSIVE は測り直せる側ゆえ断る。
 /// - `Reviewed`: **起こせるのは verdict が PASS の周だけ**（FR49・設計 contract-source.md §4「効き方」）。
 ///   FAIL / INCONCLUSIVE は終端で、判定を読めない周も起こさない（fail-closed・[`ReviewCheck`]）。
+/// - `Reviewed`: **畳めるのは verdict が PASS でない周だけ**（判定に届いた終端・`s2-07l.353`・設計
+///   pipeline.md §12）。PASS はこれから起こす側で、判定を読めない周は終端に読み替えない
+///   （fail-closed）——起こす側と畳む側は同じ 3 値の**裏表**である。
 ///
 /// **理由も名乗る**: 段違いの一般則で断っている事実と、その便が通らない理由は別の情報で、
 /// 片方だけだと読み手に届かない。
@@ -108,10 +111,21 @@ fn discriminate(extra: &Extra, state_dir: &Path, id: &str, stage: Stage) -> Resu
         (&Extra::Retire, Stage::Gated) => gated_is(state_dir, id, Verdict::Fail),
         (&Extra::Spawn, Stage::Reviewed) => match ReviewCheck::judge(state_dir, id) {
             ReviewCheck::Passed => Ok(()),
-            found => Err(refused(format!("run {id} の段は Reviewed である（verdict={}）", found.as_str()))),
+            found => Err(reviewed_refusal(id, found)),
+        },
+        (&Extra::Retire, Stage::Reviewed) => match ReviewCheck::judge(state_dir, id) {
+            ReviewCheck::Stopped(_) => Ok(()),
+            found => Err(reviewed_refusal(id, found)),
         },
         (&Extra::Nothing | &Extra::Regate | &Extra::Retire | &Extra::Spawn, _) => Ok(()),
     }
+}
+
+/// `Reviewed` の便を通さない断り（**字面は起こす側と畳む側で 1 本**）。括弧の中の語は
+/// [`ReviewCheck::as_str`] の 4 語で閉じる＝段違いの一般則の字面（`run <id> の段は Reviewed である`・
+/// 括弧を持たない）と読み分けられる。
+fn reviewed_refusal(id: &str, found: ReviewCheck) -> Outcome {
+    refused(format!("run {id} の段は Reviewed である（verdict={}）", found.as_str()))
 }
 
 /// `Gated` の便の判定が求める 3 値か。**判定を読めない周は断る**（fail-closed・C11.2）。
