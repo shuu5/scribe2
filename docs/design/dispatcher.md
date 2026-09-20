@@ -115,6 +115,7 @@ dispatcher は「起こす」側で行為を止める判定を持たない（起
 - QUESTION と Gated FAIL の裁定（planner の手番）を速くする形は別設計（契約の改訂を器の口で持つ .133 の系）。
 - ADR-0045 §2 (6) の SRS 改稿（FR30 の担い手・FR68 の契機を tick から便の終端と手動の 1 周へ・FR49 の condition は「便が intake を通ったとき」のまま）は user の /folio-architect の周。
 - 居座る便を席から外す口: `pipe stop` は起動の権能で、ADR-0045 §2 (1) の後はどの席の行にも無い。「止める」だけを席の権能に足すかは rules 行の変更＝user の裁定が先（`s2-07l.495` の notes）。→ 裁定は出た: [ADR-0048](../../design-intent/decisions/ADR-0048-stopping-a-run-is-a-separate-capability-of-the-orchestrator.html)（proposed）が「止める」だけを権能 `stop` に分けて `role.orchestrator` の行に足し、席が撃てるのは便 1 本を名指す形だけ（全部を止める形は launch のまま）と決めた。発効は権能と行の値と guard の照合が land した版。
+- 着地の終端の bead の close が台帳の子 process の cwd を名指さない件（§14 の口 (2)）は本設計の行に入れられない: 呼び手の file（着地の口）の上限の余地が base で 84 行しか無く、いちばん小さい見積でも受付が `cap-headroom` で断る（§14 の実測 2026-09-20）。その file を割る便の後に別の行で直す。
 - 終端の便の worktree（退役先に寄せたものと `Failed` で残ったもの）の掃除は別設計（消す操作＝憲法 A1 の裁定が先）。[FR68](../../design-intent/spec/srs.html#FR68) の「release で戻し」の対象に終端の便を含める字の改訂は user の /folio-architect の周（§12 は hold と同じ印の同じ向きの拡張で、要件の向きは変えない）。
 
 ## 12. 器の側の理由で終端に着いた便（起動の失敗・`s2-07l.495`）
@@ -144,6 +145,48 @@ dispatcher は「起こす」側で行為を止める判定を持たない（起
 - **契機に回答と承認の記帳の直後を足す**（行 (j)）: `pipe answer` / `pipe approve` の**記帳が成った周だけ**、その直後に同じ 1 周を撃つ（渡された引数の道具だけを使う・便が live で無くなりうる subcommand の列には足さない）。**stdout には 1 行も足さない**（終端の 1 周と同じ黙る形＝回答・承認の stdout は今の記帳の 1 行だけ・置き場や repo を渡さない既存の呼び方の出力は 1 字も変わらない）。道具（`--runner`）を渡さない回答・承認は今までどおり記帳だけで終わり、その便は次の契機で再開される。1 周が失敗しても回答・承認の rc は変えない（§5 の終端の 1 周と同じ）。
 - **write-set の外の歯の走査**（未実測・実装の周に測る）: 回答や承認を撃つ既存の歯は e2e の他の file にも在る（字面の在る file = pipe の spawn / gate / ratelimit / land の歯と、fleet と極性の歯）。それらは道具を渡さずに回答・承認を撃ち、続けて手で resume を撃つ形なので新しい契機は発火しない見込みだが、「関門が開いた待ちの便が置き場に残ったまま、別の便の道具付きの終端が走る」歯が在れば段が動いて落ちる。行 (j) の write-set は回答・承認の字面の在る歯の file を含める（落ちた歯だけを、測っている約束を変えずに直す）。
 - 触らない: 回答・承認の記帳の形・段の遷移・待ちの段の集合・札の形・待ちの段でない便の起こし直しの規則。`pipe stop` を席から撃てない件（居座る便を外す口）は権能の行の変更で、user の裁定が先（§11）。
+
+## 14. 台帳の子 process を名指された repo の中で撃つ（契約表の行 k・`s2-07l.495`）
+
+やさしく言うと: 「どの repo の契約を起こすか」は `--repo` で名指すのに、台帳（bead の一覧）だけは器が居る場所から読んでいる。別の repo から撃つと、列に他所の bead が並ぶ。
+
+- 何が起きているか（現物 = 本行の base・verified）: `crates/scribe2/src/seat/ledger.rs` の `read_text` は `Command::new(bd)` に引数と 3 つの標準の口だけを付けて `spawn` し、**cwd を名指さない**＝子は親 process の cwd を継ぐ。台帳 client は cwd から台帳を解くので、読む台帳は cwd 側になる。列（`crates/scribe2/src/pipe/dispatch.rs` の `turn`）はこの 1 本を `ledger::read_ledger(input.bd, timeout)` で撃つが、`Input` は `repo` を持っている（契約の生成・sha の読み・起こす便の `--repo` には渡っている）のに台帳の読みには渡していない。よって `pipe dispatch --repo X` を別の repo の cwd から撃つと、**設計 doc と契約表は X・台帳は cwd 側**という食い違った 1 周になる（`dispatch ls` も同じ 1 本を撃つので同じ列が見える）。
+- 同じ根の口は器に 3 本在る（実測・母集団 = 台帳 client を子 process で撃つ site 2 本とその呼び手 3 本）: (1) 列の読み（上）。(2) `crates/scribe2/src/ledger/mod.rs` の `close` も `Command::new(bd)` に引数だけを付けて撃ち cwd を名指さない——呼び手は `crates/scribe2/src/pipe/land.rs` の着地の終端で、そこは着地した便の repo を持っている。(3) `crates/scribe2/src/hook/mod.rs` の SessionStart は `read_text` を撃つが、**その周の cwd は session の repo** なので出所は今も正しい。読み手が cwd を引数で取ると (3) も渡す側になる＝同じ便で直す（構造の連鎖）。
+- **本行が直すのは読み手の 2 本（(1) と (3)）だけである**: (2) を同じ便に入れると呼び手の file（着地の口）を write-set に要るが、その file の上限の余地は base で 84 行しか無く、いちばん小さい見積（`size = "S"`）にも足りない＝受付が `cap-headroom` で断る（本行の事前審査の実測 2026-09-20）。`close` の cwd は着地の口の file を割る便の後に別の行で直す（§11 の後続に足した）。読み手の 2 本を先に直しても `close` の向きは変わらない（列の 1 周と着地の終端は別 process の別の口で、片方だけ直しても食い違いは増えない）。
+- 形: 台帳の**読み**の子 process の cwd を**呼び手が名指す**。`read_text` / `read_ledger`（`seat/ledger.rs`）は cwd を引数で取り、標準 library の子 process の起動に作業 dir として渡す（新しい依存は増えない・C17.3）。器は cwd を推さない（process の cwd を判定の入力にしない・C2.2 の seam と同じ向き）。列は `Input` の `repo` を、SessionStart は payload の cwd（無ければ process の cwd・`hook/mod.rs` の既存の 1 本）を渡す。
+- 渡した値が cwd に出来ない周（dir でない・無い・読めない）は、子の `spawn` が落ちて**既存の断りがそのまま受ける**: 列は `LedgerError::Unreadable` → `dispatch=unmeasured reason=ledger` で 1 本も起こさない（C10・0 件と融合しない）。SessionStart は今までどおり件数を書けない周の字面になる。新しい断りの variant も rules 行も足さない（C17.1）。
+- 触らない: 台帳 client の引数（`BD_ARGS`）・待ち上限の rules 行 `seat.ledger_timeout_s`・`LedgerError` の 2 値・件数の 1 行（`counts_of`）の字面・SessionStart の指示文の本文・`--bd` の既定（`DEFAULT_BD`）・列の入力の条件（§2）・起こす便へ渡す道具（§5）・`close` と着地の終端（上）。
+- 却下案: 列が台帳を読む前に process の cwd を `--repo` へ移す（process 全体の cwd を動かすと同じ周の他の相対 path の読みが静かにずれ、並行する子とも噛み合わない）／台帳 client に台帳の場所を渡す flag を足す（client の引数は client の契約で、器が決める線ではない・C5）／`--repo` と cwd が違う周を断る（別 repo から撃てる性質を失う＝列は「この置き場の便」と「この repo の契約」を突き合わせる口である・§5）。
+- 歯（`pipe_dispatch_ledger_cwd_` 接頭辞・置き場は列の歯の file）: (a) cwd を書き出してから台帳の JSON を吐く偽の台帳 client を `--bd` で渡し、process の cwd を別の dir にしたまま `pipe dispatch ls --repo <toy>` を撃つと、子の見た cwd が toy repo である（process の cwd でない）／(b) 同じ偽の台帳 client で、`--repo` を相対 path で渡した周も子の見た cwd が同じ絶対 path になる（口が値を絶対にする §12 の形と噛み合う pin）／(c) 無い dir を `--repo` に渡した周は列が `[DISPATCH-UNMEASURED` の行で 0 本（`[DISPATCH-NONE]` と融合しない）／(d) SessionStart の `{ledger}` の行は 1 字も変わらない（既存の歯が測る側・行の verify がその歯を撃つ）。
+
+## 15. 席が測り直して PASS になった Gated の便を列が起こし直す（契約表の行 l・`s2-07l.495`）
+
+やさしく言うと: 関門で「判定できず」に終わった便を席が測り直して「通った」にしても、その便を着地まで運ぶ人が居ない。通っていると分かった便は、器が自分で次の段へ進める。
+
+- 何が起きているか（実測 2026-09-20・verified）: 審査役の出力の形式不備で INCONCLUSIVE になった便を席が `pipe gate` で測り直して verdict を PASS にした後、手動の 1 周（`pipe dispatch`）を撃っても `resumed:0` のまま便は動かなかった。
+- 現物（本行の base・verified）: 起こし直しの候補は `crates/scribe2/src/pipe/dispatch.rs` の `revivals` の 1 本が決める。live 便を待ちの段（`WAITING` = `Blocked` / `Questioned`）とそれ以外に分け、それ以外は `super::driver_is_dead`（札の所有者が死んでいる便だけ）で絞る。`Gated` は `WAITING` に無いので後者に落ちるが、INCONCLUSIVE で正常に抜けた driver は `Drop` で自分の札を外す＝札は `Ticket::Absent` で `driver_is_dead` は偽になり、候補にならない。段の生死（`crates/scribe2/src/pipe/cli/state.rs` の `live`）は `Stage::Gated` を「verdict が FAIL でない」で判じるので、**verdict が PASS の Gated 便は live** である（`revivals` の最初の絞りは通っている）。
+- 形: `revivals` の絞りに **1 枝だけ**足す。`Stage::Gated` の live 便は、今までの「札の所有者が死んでいる」に加えて**「verdict が PASS ∧ 札が `Absent` か `Dead`」**でも候補にする。**足す側だけで既存の枝は 1 字も変えない**＝gate の途中で driver が死んだ便は verdict に依らず今までどおり候補である。verdict の読みは着地の段が持つ既存の 1 本（`cli/state.rs` の `live` と `gated_is` が呼ぶ読み手）をそのまま呼ぶ（site を 2 つにしない・C2）。
+- **PASS 以外は候補にしない**: verdict が INCONCLUSIVE の Gated 便を候補にすると `pipe resume` が再 gate へ倒す（`crates/scribe2/src/pipe/cli/resume.rs` の既存の分岐）＝器が勝手に 1 周ぶんの費用（[gate-cost.md](./gate-cost.md) §2）を払い直す。verdict を読めない周も候補にしない（測れないを「通った」に読み替えない・fail-closed・NFR4）。札が `Live` / `Unreadable` の便は触らない（§13 の 4 値の読みをそのまま使う）。
+- **§13 の絞りをそのまま受ける**（空撃ちの連鎖を塞ぐ）: この候補の札は起こす前も後も `Absent` なので、§5 の止め金（resume が抜けると札が消えて候補から落ちる）が効かない。よって driver が撃つ終端の 1 周は、§13 の関門の候補と同じく**段を前へ進めた周だけ**この候補を起こす（段の前進の 3 値をそのまま読む・前進以外は 0 本）。driver でない契機（手動の 1 周・印の直後・回答や承認の記帳の直後）は今までどおり絞らない。
+- 触らない: 待ちの段の集合（`WAITING`）と §13 の候補の規則・§5 の「待ちの段でない便は札の所有者が死んだものだけ」の規則（`Gated` 以外の段）・札の形と 4 値・段の生死の match・起こし直しの構築点（`--drive` 付きの `pipe resume`・道具は列と同じ 1 本）・`dispatch ls` の行の字面・`dispatch=` の record token の形。
+- 却下案: 席に `resume` の権能を足す（権能の行の変更＝user の裁定が先・§11）／測り直しの口（`pipe gate`）が PASS を書いた周に自分で次の段を撃つ（関門の口が起動の口を兼ねる＝1 つの口が 2 つの権能を持つ・ADR-0045 §2 (1)）／`Gated` を `WAITING` に入れる（待ちの段は「人の手を待つ」意味で、承認と回答の関門の判定がそのまま当たらない）。
+- 歯（`pipe_dispatch_gated_pass_` 接頭辞・置き場は列の歯の file）: (a) verdict PASS ∧ 札の無い `Gated` の便が手動の 1 周で `--drive` 付きの resume で起こされ（`resumed:1`）先の段へ進む／(b) verdict INCONCLUSIVE ∧ 札の無い `Gated` の便は起こされない（`resumed:0`）／(c) verdict を読めない `Gated` の便も起こされない（`resumed:0`）／(d) 札の所有者が生きている便と札が在るのに読めない便は触らない（母集団 = 札の 4 値）／(e) 札の所有者が死んでいる `Gated` の便は verdict に依らず起こされる（既存の規則を PASS と INCONCLUSIVE の両方で測る）／(f) 段を前へ進めなかった driver の終端の 1 周はこの候補を 1 本も起こさない／(g) 待ちの段の候補の規則と、待ちの段でない `Gated` 以外の便の規則は変わらない（既存の歯が測る側・行の verify がその 2 接頭辞も撃つ）。
+
+## 16. 列外の鍵に審査役へ渡る材料を含める（契約表の行 m・`s2-07l.495`）
+
+やさしく言うと: 契約の審査で「判定できず」に終わった便は、設計の節を書き直しても列に戻らない。審査役が読むのは節の本文なのに、器は契約 file の字しか見ていないからである。
+
+- 何が起きているか（実測 2026-09-20・verified）: 審査が INCONCLUSIVE で終端した `Reviewed` の便は、設計 § を直しても列へ戻らなかった。回避は行の `done` の字を動かして契約 file の中身を変えることだった（`s2-07l.496`）。
+- 現物（本行の base・verified）: 列外の鍵は `crates/scribe2/src/pipe/dispatch.rs` の `settled` が組む。直前の便の run dir の契約の写しを読み、**いま行から生成した契約 file の本文と同じか**だけを突き合わせる。一方、審査役が受け取る材料は 3 つである（`crates/scribe2/src/pipe/review.rs` の `keep`）: 審査の材料の dir に置かれる契約の写しと、行の `section` が指す § の本文（base から読む）と、`req` の要件文。**§ の本文は既に便ごとに run dir へ写っている**が、鍵には入っていない。
+- `release` の印（§12）も効かない: 戻す段の match は `Stage::Reviewed` を戻さない側に置く（[FR49](../../design-intent/spec/srs.html#FR49)「中身が変わるまで列に入らない」）。**審査が読む中身が変わったのに鍵が動かない**、というのが穴の形である。
+- 形（裁定: orchestrator 2026-09-20・**同じ材料 → 同じ判定**が鍵の意味）: `settled` の突き合わせに § の本文を足す。直前の便の材料の dir に在る § の写しの本文と、いま base から読んだ § の本文が違う周は列外にしない。§ の読みは**審査と同じ 1 本**（`review` が持つ § の読み手を pipe の中に開いて列が呼ぶ・site を 2 つにしない・C2）で、材料を書く側と同じ形に揃えてから突き合わせる（本文を作る読み手は 1 本・末尾の整え方は材料を書く 1 本に合わせる）。
+- **§ を鍵に入れるのは `Reviewed` の段だけである**: § はその段で審査役が読んだ材料であって、`Landed`（済んでいる・起こし直すと同じ変更をもう一度作る）とも、`release` が戻す段（`Failed` / `Stopped` / `Gated`・§12）とも関係が無い。段の弁別は `release` の戻す段と同じ**段の型の網羅の match 1 本**で持つ（段が増えた便は compile が止めて、その段の鍵に § が要るかを決めさせる）。
+- **材料の写しが無い周は契約 file だけの鍵に倒す**（今の挙動のまま）: 審査へ届かずに終端した便は § の写しを持たない。無い周を「違う」と読むと、審査へ届かないまま終端する便が終端のたびに起こし直され、§2 が塞いだ無限再起動が開く。**「無い」と「違う」を畳まない**（C10・fail-closed）。写しが在るのに読めない周も「無い」と同じ扱いで、今までどおり列外に留まる。
+- 互換（置き場に既に在る記録）: § の写しは審査の段を通った便が必ず持つ（材料を書く 1 本が毎回書く）ので、**本行より前に終端した `Reviewed` の便も新しい鍵でそのまま読める**＝移行のための書き足しも、旧い記録の読み替えも要らない。新しい file も新しい field も足さないので、on-disk の形は 1 byte も変わらない（ADR は要らない）。
+- FAIL も同じ鍵でよい（裁定）: § を直した契約は再審査に値する。FAIL と INCONCLUSIVE の弁別は鍵には要らない——どちらも「この材料では通らなかった」であって、材料が変われば測り直す側である。
+- 触らない: `dispatch ls` の理由の字面（sha は契約 file の名札のまま・観測の面を増やさない）・event kind と field（足さない・C17.1）・`release` の印と戻す段の match・§2 の列の入力の条件・審査の材料の書き方と判定の記録の形・`req` の要件文（鍵に入れない——要件面の改訂は SRS の周であって、契約 1 本を起こし直す契機ではない）。
+- 却下案: `release` の印で `Reviewed` も戻す（印は器の側の理由で落ちた便を戻す口で、中身が変わっていない便を審査へ送り直す＝FR49 の「中身が変わるまで」を印で破る）／鍵に要件文も入れる（SRS の 1 字の改訂で、その要件を指す契約が一斉に列へ戻る）／審査の判定を § の sha に紐づけて記録する（新しい on-disk の面を足す＝超過した旧案（§2「審査の時点」）と同じ型・C17.2）／設計 doc を直す便で契約 file の字も必ず動かす運用にする（手書きの規範文を増やす・C1 / N2）。
+- 歯（`pipe_dispatch_section_key_` 接頭辞・置き場は列の歯の file）: (a) 審査 INCONCLUSIVE で終端した `Reviewed` の便の契約が、§ の本文を直した後の 1 周で列に戻る（`dispatch ls` の理由が値なしの欄になる）／(b) § も契約 file も変わっていない周は列外のまま（無限に起こし直さない）／(c) 審査 FAIL で終端した便も § を直せば戻る／(d) § の写しを持たない便と、写しが在るのに読めない便は契約 file だけの鍵で今までどおり列外（母集団 = 写しの 3 値: 在って読める / 在るが読めない / 無い）／(e) `Landed` の便は § を直しても戻らない（母集団 = 終端の段の種類）／(f) § の本文を 1 文字だけ変えた周も戻る（列が突き合わせる本文が審査の材料と同じ 1 本から出ている pin）／(g) `release` の印の既存の規則は変わらない（既存の歯が測る側・行の verify がその接頭辞も撃つ）。
 
 <!-- contracts:begin -->
 schema = 1
@@ -232,4 +275,34 @@ write-set = ["crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2/src/pipe/mod
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_dispatch_waiting_gate_", "cargo nextest run -p scribe2 --no-tests=fail pipe_dispatch_driver_", "cargo nextest run -p scribe2 --no-tests=fail pipe_question_", "cargo nextest run -p scribe2 --no-tests=fail pipe_approval_"]
 size = "M"
 done = "偽の台帳と偽 runner の toy repo で、回答済みの Questioned の便（driver の札なし）が手動の 1 周で --drive 付きの resume で起こされて先の段へ進み（resumed:1）、未回答の Questioned の便と古い質問に回答が在っても最新の質問が未回答の便は起こされず（resumed:0）、承認済みの Blocked の便も同じく起こされ、札の 4 値（無い・所有者が死んでいる便は起こす／所有者が生きている・在るのに読めない便は触らない）がそれぞれ測られ、道具を渡した pipe answer と pipe approve の記帳の直後に同じ 1 周が撃たれて便が進み、道具を渡さない pipe answer は記帳だけで rc 0 のまま、回答と承認の stdout は記帳の 1 行だけで、1 周が失敗しても回答の rc は変わらず、候補の選別の pure な fn が段の前進の 3 値のそれぞれで測られ（段を前へ進めた driver の周は関門の候補をそのまま起こし、同じ段のままと段が戻った driver の周は 0 本にし、driver でない周は絞らない・in-file の歯）、段を前へ進めた driver の終端の 1 周が別の回答済みの便を起こし（resumed:1）、関門の判定は resume の入口と列が同じ述語 1 本を呼び、待ちの段でない便の起こし直しの規則と未承認の Blocked を外す既存の歯（pipe_dispatch_driver_ の歯）と、質問と回答の歯（pipe_question_）と承認の歯（pipe_approval_）は測っている約束を変えずに緑のまま"
+
+[[contract]]
+id = "k"
+title = "台帳の読みの子 process を名指された repo の中で撃つ — 台帳の読みが cwd を引数で取り、列は --repo の値を・SessionStart は payload の cwd を渡す（器は cwd を推さない・close は上限の余地が足りず別の行・新しい断りも rules 行も足さない）"
+req = ["FR68", "FR30", "NFR4"]
+section = "14"
+write-set = ["crates/scribe2/src/seat/ledger.rs", "crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2/src/hook/mod.rs", "crates/scribe2/tests/e2e/pipe/dispatch.rs", "crates/scribe2/tests/e2e/hook.rs"]
+verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_dispatch_ledger_cwd_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail hook_brief_ledger_is_unknown_when_the_client_is_unreadable"]
+size = "S"
+done = "cwd を書き出してから台帳の JSON を吐く偽の台帳 client を --bd で渡し process の cwd を別の dir にしたまま pipe dispatch ls --repo <toy> を撃つと子の見た cwd が toy repo になり（process の cwd でない）、--repo を相対 path で渡した周も子の見た cwd が同じ絶対 path になり、無い dir を --repo に渡した周は列が DISPATCH-UNMEASURED の行で 0 本になり（DISPATCH-NONE と融合しない）、SessionStart の {ledger} の行は 1 字も変わらず、台帳 client の引数と待ち上限の rules 行と LedgerError の 2 値と件数の 1 行の字面は変わらない"
+
+[[contract]]
+id = "l"
+title = "席が測り直して PASS になった Gated の便を列が起こし直す — 起こし直しの候補に「Gated ∧ verdict が PASS ∧ 札が無いか所有者が死んでいる」を 1 枝足す（既存の枝は不変・PASS 以外と読めない verdict は候補にしない・段を前へ進めた driver の周だけ起こす）"
+req = ["FR68", "FR14", "NFR4"]
+section = "15"
+write-set = ["crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2/tests/e2e/pipe/dispatch.rs"]
+verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_dispatch_gated_pass_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_dispatch_driver_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_dispatch_waiting_gate_"]
+size = "S"
+done = "偽の台帳と偽 runner の toy repo で、verdict が PASS ∧ 札の無い Gated の便が手動の 1 周で --drive 付きの resume で起こされて先の段へ進み（resumed:1）、verdict が INCONCLUSIVE の便と verdict を読めない便は起こされず（resumed:0）、札の所有者が生きている便と札が在るのに読めない便は触らず（母集団 = 札の 4 値）、札の所有者が死んでいる Gated の便は verdict が PASS の周も INCONCLUSIVE の周も今までどおり起こされ、段を前へ進めなかった driver の終端の 1 周はこの候補を 1 本も起こさず、待ちの段の候補の規則と待ちの段でない Gated 以外の便の規則を測る既存の歯（pipe_dispatch_driver_ と pipe_dispatch_waiting_gate_）は測っている約束を変えずに緑のまま"
+
+[[contract]]
+id = "m"
+title = "列外の鍵に審査役へ渡る材料を含める — Reviewed で終端した便の鍵に、行の section が指す § の本文（審査の材料の dir の写し）を足す（§ の読みは審査と同じ 1 本・写しが無い周は契約 file だけの鍵に倒す・Reviewed 以外の段の鍵は不変・新しい file も field も足さない）"
+req = ["FR68", "FR49", "NFR4"]
+section = "16"
+write-set = ["crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2/src/pipe/review.rs", "crates/scribe2/tests/e2e/pipe/dispatch.rs"]
+verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_dispatch_section_key_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_dispatch_release_requeues_"]
+size = "M"
+done = "偽の台帳と run dir の fixture で、審査 INCONCLUSIVE で終端した Reviewed の便の契約が § の本文を直した後の 1 周で列に戻って dispatch ls の理由が値なしの欄になり、§ も契約 file も変わっていない周は列外のままで、審査 FAIL で終端した便も § を直せば戻り、§ の写しを持たない便と写しが在るのに読めない便は契約 file だけの鍵で今までどおり列外になり（母集団 = 写しの 3 値）、Landed の便は § を直しても戻らず（母集団 = 終端の段の種類）、§ の本文を 1 文字だけ変えた周も戻り、Reviewed 以外の段の鍵と dispatch ls の理由の字面と event kind は変わらず、release の印の既存の規則を測る歯（pipe_dispatch_release_requeues_）は測っている約束を変えずに緑のまま"
 <!-- contracts:end -->

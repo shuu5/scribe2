@@ -339,6 +339,21 @@ e2e は binary を spawn し外部 command は PATH 先頭の stub で差し替�
 - 歯（`tests/e2e/pipe/gate.rs`・接頭辞 `pipe_gate_red_wins_over_detection_`）: (a) 共通 verify が赤 ∧ 検出線が rc 2 の便は `Gated` verdict=FAIL で、evidence が赤い行の数を持ち、lens は呼ばれない／(b) 契約 verify が赤 ∧ 検出線が rc 2 の便も同じく FAIL／(c) 赤が 0 ∧ 検出線が rc 2 の便は今までどおり INCONCLUSIVE（既存の歯が測る側・変えない）。「変えない順」の 2 つと「検出線の rc 1 は赤」は既存の歯がそのまま測る（本行は足さない）。
 - 触らない: **赤の数え方**（検出線の rc 1 も赤・除くのは「検出線 ∧ rc 2」の 1 点）・検出線の record の形・撃ち直しの回数・`verdict.json` の field・land の前提。
 
+## 29. 審査役の出力が読めなかった周は同じ gate の中で lens を 1 回だけ撃ち直す（契約表の行 u・`s2-07l.495`）
+
+やさしく言うと: 検証の行が全部緑でも、審査役の答えの中の「何行読んだか」の欄が数でないだけで、gate 全体が「判定できず」になって便が居座る。答えの形が崩れた周だけ、もう一度だけ聞き直す。
+
+- 何が起きているか（実測 2026-09-20・verified）: 共通 verify も契約 verify も全部緑の便が、審査役の出力の母集団の欄（行数）が数でない字面（例 `~330`）だったために gate 全体 INCONCLUSIVE になった。INCONCLUSIVE は終端でないので便は live のまま居座り、driver は抜け、同じ木を測り直す口は gate 1 周（追随 → 再 gate ＝ workspace 全件 + 変異 + 審査役 1 回）を丸ごと払う——§28 と同じ居座りの型である。
+- 現物（本行の base・verified）: `crates/scribe2/src/pipe/gate/lens.rs` の `parse_lens` は、最後の JSON object を読めない周・`verdict` が 3 値でない周・`findings` か `population` の key が無い周・集計の読みが `Err` の周（category の欠け・重複・表に無い名・母集団の不備）を**全部 1 本の `unjudged` に倒す**＝`Inconclusive` で集計を持たない戻りになる。母集団の 1 つの数の読み（`crates/scribe2/src/pipe/gate/findings.rs`）は、欄が無い周と数でない周を別の理由 1 行に分けて `Err` にする（数でない周の理由はその値を写す）。`crates/scribe2/src/pipe/gate.rs` の `decide` は審査役を**1 回だけ**撃ってその戻りをそのまま判定にする＝撃ち直しの口が無い。
+- 撃ち直しの先例は §21（検出線が rc 2 で終えた周を同じ gate の中でその行だけ 1 回）で、`decide` は stderr へ写す行（`notes`）を既に引数で持ち、審査役の箱の unit 名は**試行の番号の欄を既に持つ**（いまは常に 1 番）。
+- 形: 審査役の**出力は在るが形が読めなかった**周だけ、**同じ行・同じ本文・同じ箱の形**でもう 1 回撃ち、2 回目の戻りを採る（3 回目は撃たない・2 回目の箱の unit は 2 番）。
+- 読めなさを**2 値に割る**（この行の唯一の新しい型）: 集計の読みが返す理由は、いま 1 本の文字列である。これを「形が読めない」（JSON でない・`verdict` が 3 値でない・key が無い・category が欠け / 重複 / 表に無い・件数や母集団の数が数でない）と「読めたが規則で断った」（母集団が 0＝審査役は読んでいない）に割り、**撃ち直すのは前者だけ**にする。後者は審査役が形どおりに答えた上での主張なので、同じ問いを 2 度出しても向きが変わらない。印は `parse_lens` の `Err` の分岐だけが立て（`Judged` の欄 1 つ・`unjudged` の既定は伏せた側）、`lens_outcome` が返す「箱の中で殺された」「rc が非 0」「起動できない」も**撃ち直さない**——どれも撃ち直しで向きが変わらず、箱の中の死は 2 回目も同じ費用を払って同じ死に方をする。
+- 1 回目の理由は `notes` に 1 行（撃ち直した事実と 1 回目の理由）で残す＝stderr へ写り**判定は変えない**（`decide` が既に持つ口・口座の計測の行と同じ扱い）。record の field も `verdict.json` の schema も足さない（C10 = 撃ち直した事実を 0 に潰さない・C17.1）。2 回目も読めなければ今までどおり INCONCLUSIVE で、理由は 2 回目のものになる（1 回目は notes に残る）。
+- **消すもの**（C17.2）: この class の回復に要っていた「人が 1 周ぶんの再 gate を撃つ」手（§28 と同じ居座りの型）。審査役の 2 回目 1 本は、再 gate 1 周（workspace 全件 + 変異 + 審査役）より小さい＝費用は減る側である（§2）。
+- 触らない: `Verdict` の 3 値と rc・母集団の「0 は見ていない」の読み（C10・型として 0 を作らない側）・集計の 8 category・判定順（§5 / §28 / [pipeline.md](./pipeline.md) §5.3）・検出線の撃ち直し（§21）・`verdict.json` の field・審査役の行の組み立て（口座の付け足しと穴の埋め）・**契約の審査の段の審査役**（[contract-source.md](./contract-source.md) §4 の別の口・材料も判定の記録も別）。
+- 却下案: 数でない母集団を判定と切り離して警告行に落とす（母集団の読みは「0 は見ていない」を**型で**持つ＝母集団を読めない PASS は findings 0 件の非空虚性を裏書きできず C10 を緩める側になり、0 は INCONCLUSIVE のままで数でない字面だけ通すと同じ不備の扱いが 2 本に割れる）／数の字面を緩めて近似の印を読み飛ばす（手書きの字面規則が増え、次の形で破れる・C1 / N2）／撃ち直しの回数を rules 行にする（§21 と同じ理由で 1 回で足りる＝2 回目も読めなければ負荷でなく審査役の側）／gate 全体を撃ち直す（1 周と同じ費用・§21 の却下案と同じ）／出力が読めない周を FAIL に倒す（測れなかったを赤に読み替える・C10 違反）。
+- 歯（`pipe_gate_lens_reread_` 接頭辞・置き場は gate の歯の file・fixture の script は歯の中で書き、撃たれた回数を数える）: (a) 1 回目が数でない母集団・2 回目が正しい出力の審査役の便は `PASS` で終わり、撃たれた回数が 2・stderr に撃ち直しの 1 行（1 回目の理由つき）が在る／(b) 2 回とも数でない周は INCONCLUSIVE で回数が 2（3 回目は無い）・理由は 2 回目のもの／(c) **母集団が 0 の出力は撃ち直さない**（回数 1・INCONCLUSIVE・理由の字面は今までどおり）＝「読めたが規則で断った」側の pin／(d) rc が非 0 で終わる審査役と起動できない審査役は撃ち直さない（回数 1・stderr に撃ち直しの行が無い）／(e) 審査役が `INCONCLUSIVE` を**自分で**答えた周（集計は正しい）は撃ち直さない（回数 1・母集団 = 撃ち直さない 4 形）／(f) 母集団の欄が無い周と母集団が 0 の周の判定と理由の字面は 1 字も変わらない（既存の歯が測る側・行の verify がその 2 本を完全名で撃つ）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -541,5 +556,15 @@ write-set = ["crates/scribe2/src/pipe/gate.rs", "crates/scribe2/tests/e2e/pipe/g
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_gate_red_wins_over_detection_"]
 size = "S"
 done = "共通 verify が赤で検出線が rc 2 の便が Gated verdict=FAIL に着いて evidence が赤い行の数を持ち lens は呼ばれず、契約 verify が赤で検出線が rc 2 の便も同じく FAIL に着き、赤が 0 で検出線が rc 2 の便は今までどおり INCONCLUSIVE のままで、赤の数え方（検出線の rc 1 も赤）と diff の path を読めない周と行が scope の中で殺された周の順は変わらない"
+
+[[contract]]
+id = "u"
+title = "審査役の出力の形が読めなかった周は同じ gate の中で lens を 1 回だけ撃ち直す — 集計の読みの理由を「形が読めない」と「読めたが規則で断った（母集団 0）」の 2 値に割り、前者だけ撃ち直す（箱の中の死・rc 非 0・起動の失敗は撃ち直さない・1 回目の理由は stderr の行・record の field も verdict.json の schema も足さない）"
+req = ["FR9", "FR14", "NFR4"]
+section = "29"
+write-set = ["crates/scribe2/src/pipe/gate/lens.rs", "crates/scribe2/src/pipe/gate/findings.rs", "crates/scribe2/src/pipe/gate.rs", "crates/scribe2/tests/e2e/pipe/gate.rs"]
+verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_gate_lens_reread_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_gate_findings_missing_population_is_inconclusive", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_gate_findings_zero_population_is_inconclusive"]
+size = "S"
+done = "撃たれた回数を数える偽の審査役で、1 回目が数でない母集団・2 回目が正しい出力の便が PASS で終わって回数が 2 になり stderr に 1 回目の理由を持つ撃ち直しの 1 行が出て、2 回とも数でない周は INCONCLUSIVE で回数が 2（3 回目は無い）で理由が 2 回目のものになり、母集団が 0 の出力と rc が非 0 で終わる審査役と起動できない審査役と審査役が自分で INCONCLUSIVE を答えた周は撃ち直されず（回数 1・母集団 = 撃ち直さない 4 形）、母集団の欄が無い周と母集団が 0 の周の判定と理由の字面は 1 字も変わらず、Verdict の 3 値と rc と集計の 8 category と判定順と検出線の撃ち直しと verdict.json の field は変わらない"
 
 <!-- contracts:end -->
