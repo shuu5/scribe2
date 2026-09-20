@@ -145,6 +145,37 @@ user-scope MCP 設定の同期・別口座への `--resume` の混線 fence・pr
 - 依存: 行 d は行 c（`s2-07l.420`・管理 tick の module〔削除済み〕 / 管理 tick の口座の軸〔削除済み〕 / `tests/e2e/seat/account.rs` で交差）と直列。行 e は行 d の Landed 後（記録の読み手を使う・`hook/mod.rs` で交差）。
 - 後続: 食い違いが続く周の呼び鈴（§15 (3) と同じ型・閾値は rules 行＝裁定 id 要）／字面で当たらない credential dir（link 越しの手起動）の照合。
 
+## 17. 席の口座を持つ単位は project の群 — host の面に群の宣言を 1 表足し、doctor が群ごとに 1 行を出し、便用の選定が群の候補の口座を host 全体で外す（契約表の行 f・[ADR-0049](../../design-intent/decisions/ADR-0049-seat-accounts-are-owned-by-project-groups.html)・`s2-07l.491`）
+
+- 何を解くか: 席（orchestrator）がどの口座で立つかは置き場ごとに閉じていて、複数の置き場の席を同じ口座にまとめる宣言が無い。決定は ADR-0049 で、本 § はその **第 1 段**（宣言と点検と便用の除外）の実装の形である。第 2 段（閾値越えの通知）と第 3 段（自動の移動）は本 § に含めない。
+- やさしく言うと: 「どの project をひとかたまりにして、どの口座を順に使うか」を machine に 1 つだけ在る宣言 file に書けるようにし、点検コマンドがそれを 1 行で見せ、便にはそのかたまりの候補口座を渡さないようにする。移る動きはまだ作らない。
+- 実測（main の現物・2026-09-20）:
+  - host の面の読み手は `crates/scribe2/src/rules/manifest.rs` の 1 本で、受ける表は `[[account]]` / `[[plugin]]` / `[[launch-arg]]` / `[[vessel]]` の 4 つ。表の名は閉じた列挙 `Section` が持ち、`Section::header` / `Section::known_keys` / `Section::required_keys` の 3 つの網羅 match と、面ごとの受理を決める `collect` の大きな match が同じ列挙に掛かる。tracked の面にだけ在る表（`[[rule]]`）を host の面で断る枝は在るが、**host の面にだけ在る表**の枝はまだ 1 つも無い。
+  - 面の合わせは `Manifest::joined`、host の面の読みの 3 値は `HostManifest::read`（不在 = 0 宣言 / 読めた / 読めない = typed に止まる）。
+  - 便用の候補を作る口は **2 つ**在る: `crates/scribe2/src/fleet/replay.rs` の `select_for_run`（除外は `registered_accounts(Some(repo))`）と、`crates/scribe2/src/fleet/cli.rs` の `select_account` の `Purpose::Run` の枝（同じ除外を**自分で**組む）。`select_for_run` を呼ぶのは `crates/scribe2/src/fleet/wait.rs` と `crates/scribe2/src/pipe/ratelimit.rs` の 2 file（どちらも自分の除外は組まない）。
+  - doctor の口座の行は `crates/scribe2/src/account/mod.rs` の `doctor_lines` が組み、その中で合わせた面を既に持っている。席の行は `crates/scribe2/src/seat/role.rs` が先に出し、並べる `render_doctor_with`（`crates/scribe2/src/main.rs`）は 3 つの出所を足すだけである。
+  - 群という概念は器に 1 つも無い（`group` の語は process の group にしか当たらない）。ADR-0036 / ADR-0041 が決めた宣言 file と実効の記録も code には 1 行も無い。
+- 約束（1 つずつ歯が測る・行 f の done と 1:1）:
+  1. **host の面に群の表が 1 つ増える**: key は名（host で一意）・置き場の列（anchor の列・1 つ以上）・候補の口座 label の列（順序が候補の順・1 つ以上）の 3 つ。読み手は既存の 1 本のままで、新しい reader も新しい file も足さない。file が無い host は 0 群として続き、在るのに読めない host は今までどおり typed に止まる。
+  2. **tracked の面には置けない**: tracked の manifest に群の表が在る周は未知の表として行番号付きで断る（`[[rule]]` を host の面で断るのと対称の、この読み手で初めての「host の面にだけ在る表」）。
+  3. **宣言の欠陥を行番号付きで全件断る**: 同じ名が 2 行・同じ置き場が 2 つの群に在る・候補の label が合わせた面の口座の表に無い・置き場の列が空・候補の列が空・未知の key の 6 種。段は host の面の既存の拒否形と同じ（面の中の欠陥で止まった周は合わせの検査へ進まず、先に落ちた段の全件を出す）。
+  4. **便用の選定が群の候補の口座を host 全体で外す**: 便用の候補から、宣言のどの群の候補の label も外す。除外は**次の選定から**効き、走行中の便は止めない。便の置き場の席の登録 row の除外（[account-autonomy.md](./account-autonomy.md) §14）はそのまま残り、群の除外がその上に重なる。
+  5. **除外は上の 2 つの口の**両方**に効く**: 実測のとおり便用の候補を作る口は 2 つ在るので、片方だけ直すと `fleet select` の口から群の口座が漏れる。両方が同じ除外を持つ。
+  6. **session 用の選定と並べ順は 1 行も変えない**: 席を起こす口座の選び方（session 用）・便用の並べ順・1 口座あたりの上限を置かないこと（[account-autonomy.md](./account-autonomy.md) §19）は不変。群の今の口座を器が**書く**のは第 3 段で、本便は 1 件も書かない（宣言値だけを読む）。
+  7. **doctor が群ごとに 1 行を出す**: 口座の行の後ろに、宣言された群 1 つにつき 1 行を宣言順で出す。項目は名・候補の label の列・置き場の数・その群の置き場の席の登録 row が持つ口座 label の列（重複は畳む・1 つも無ければ無しを表す語）の 4 つ。読むだけで判定しない。
+  8. **群を 1 つも宣言しない host は 1 語も変わらない**: 群の行を 1 本も出さず、便用の除外も今のままで、既存の doctor の外形 snapshot は動かない（＝既存の consumer と本 repo は無変更）。
+- 触らない: 口座の登録・退役・復帰・一覧の口（§3）・席の起動の口座の解き方（§4）・host の面の置き場と導き方・選定の純関数とその入力の型・rules 行（閾値の行を足すのは第 2 段の便）・event log の schema・host の根（第 3 段まで記録を置かない）。
+- 歯（接頭辞 `host_group_`・crate の統合 test の target に置く。`host_group_` は crate に 1 件も無い〔実測〕ので、verify の filter が当たる file は下の 3 つに閉じる）:
+  - `crates/scribe2/tests/e2e/rules.rs`: 約束 1 / 2 / 3（母集団 = 正常 1 + 不在 1 + tracked の面 1 + 欠陥 6 種 = 9 本。欠陥の周は行番号と欠陥の字面を全件見る）
+  - `crates/scribe2/tests/e2e/fleet.rs`: 約束 4 / 5 / 6（母集団 = 便用で全候補が外れる 1 + 群に属さない口座は残る 1 + 群 0 の host は今の候補のまま 1 + session 用では候補に残る 1 + `fleet select` の口でも同じ除外 1 = 5 本）
+  - `crates/scribe2/tests/e2e/seat/account.rs`: 約束 7 / 8（母集団 = 群 2 つの host が宣言順に 2 行 1 + 席の登録 row の在る群に label が出る 1 + 無い群は無しの語 1 + 群 0 の host は行 0 本 1 = 4 本）
+- verify の当たる file（事前検査の実測・どれも write-set の中）: `rules_host_` は 3 file（`crates/scribe2/tests/e2e/rules.rs`・`crates/scribe2/tests/e2e/fleet.rs`・`crates/scribe2/tests/e2e/seat/rules.rs`）に当たる。`seat/rules.rs` は**中身を変えない**が、歯の置き場の門のため write-set に載せる。`fleet_select_` は `crates/scribe2/tests/e2e/fleet.rs` の 1 file、`doctor_accounts_` は `crates/scribe2/tests/e2e/seat/account.rs` の 1 file だけに当たる。`host_group_` の当たる歯は 0 本（この行が起こす歯が最初の 1 群）。
+- 大きさの余地（事前検査の実測）: 歯を足す `crates/scribe2/tests/e2e/{rules.rs,fleet.rs}` は 1 file の行数の上限に対する余地が 0 で、本体側の 8 file はどれも 1 段の見積より余地が大きい。歯を足す側は上限の外（歯の file は 1 file の上限を数えない）なので受付は通るが、`fleet.rs` は既に 4000 行を超えているので、歯の群をこの file の末尾へ足すか、同じ target の子 module へ割るかは実装の便が決める（割る周は write-set に新しい file を `+` で足す）。
+- 変更する既存の歯（名で数える）: 表の数と受理する表の名を数える `rules_host_` の歯（受理する表が 1 つ増える）と、面の合わせを測る歯。doctor の外形 snapshot は約束 8 のとおり**動かない**。
+- 却下: 群の宣言を新しい file に置く（ADR-0036 の形・宣言の置き場が 2 つになる・読み手も 2 本になる）／群を置き場ごとの面（各 state dir）に置く（同じ群の定義が host に N 個できて食い違う）／便用の除外を「いま席が居る口座」だけにする（席が起きていない周に便へ取られる・ADR-0049 の OPT4）／除外を `select_for_run` の中だけに足す（`fleet select` の口から漏れる・約束 5）／doctor の行を群 0 の host でも 1 行出す（既存の外形 snapshot が動き、無変更の約束が崩れる）。
+- 依存: 無し（本 § は宣言と読みと除外と点検だけで、契機も記録も持たない）。
+- 後続: 第 2 段 = 閾値越えの通知（契機は別の設計 doc の拍・閾値の rules 行 3 本は裁定 id 付きで足す）／第 3 段 = 群の今の口座の記録と自動の移動（host の根・lock・承認 event・機械の復帰）／[seat-roles.md](./seat-roles.md) §15〜§18 の置き換えの後始末。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -197,4 +228,14 @@ write-set = ["crates/scribe2/src/hook/mod.rs", "crates/scribe2/src/seat/brief/mo
 verify = ["cargo nextest run -p scribe2 --no-tests=fail seat_account_mismatch_shown_", "cargo nextest run -p scribe2 --no-tests=fail hook_brief_", "cargo nextest run -p scribe2 --lib --no-tests=fail seat_brief_holes_", "cargo nextest run -p xtask --no-tests=fail seat_brief_"]
 size = "S"
 done = "登録 row の在る席の SessionStart の指示文に row の口座・実測の口座・照合（match / mismatch / unknown）の 1 行が直し方の pointer 付きで出て、雛形の穴は core と xtask で同じ数に揃う"
+
+[[contract]]
+id = "f"
+title = "席の口座を持つ単位は project の群（第 1 段）— host の面に群の宣言の表を 1 つ足して既存の読み手と拒否の形で読み、便用の選定の 2 つの口が群の候補の口座を host 全体で外し、doctor が群ごとに 1 行を出す（群を宣言しない host は無変更・移動と記録は作らない）"
+req = ["FR57", "FR36", "NFR4"]
+section = "17"
+write-set = ["crates/scribe2/src/rules/manifest.rs", "crates/scribe2/src/rules/mod.rs", "crates/scribe2/src/account/mod.rs", "crates/scribe2/src/fleet/mod.rs", "crates/scribe2/src/fleet/replay.rs", "crates/scribe2/src/fleet/cli.rs", "crates/scribe2/src/fleet/wait.rs", "crates/scribe2/src/pipe/ratelimit.rs", "crates/scribe2/tests/e2e/rules.rs", "crates/scribe2/tests/e2e/fleet.rs", "crates/scribe2/tests/e2e/seat/account.rs", "crates/scribe2/tests/e2e/seat/rules.rs", "docs/design/account-lifecycle.md"]
+verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail host_group_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail rules_host_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail fleet_select_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail doctor_accounts_"]
+size = "M"
+done = "(1) host の面に群の表が 1 つ増え、名・置き場の列・候補の口座 label の列の 3 key を既存の読み手 1 本が読み、file の無い host は 0 群で続き、読めない host は typed に止まる (2) tracked の面に群の表が在る周は未知の表として行番号付きで断る (3) 同じ名が 2 行・同じ置き場が 2 つの群・宣言に無い label・置き場の列が空・候補の列が空・未知の key の 6 種を行番号付きで全件断り、面の中で止まった周は合わせの検査へ進まない (4) 便用の選定の候補から宣言のどの群の候補 label も外れ、便の置き場の席の登録 row の除外はそのまま残り、除外は次の選定から効いて走行中の便は止まらない (5) 同じ除外が便用の候補を作る 2 つの口の両方で効く (6) session 用の選定の候補には群の口座が残り、便用の並べ順は変わらず、群の今の口座の記録は 1 件も書かれない (7) doctor が宣言された群 1 つにつき 1 行を宣言順で出し、名・候補の label の列・置き場の数・その群の置き場の席の登録 row の口座 label の列（無ければ無しの語）を載せて判定しない (8) 群を 1 つも宣言しない host は群の行が 0 本で便用の候補も今のままで、doctor の既存の外形 snapshot が 1 行も動かない"
 <!-- contracts:end -->
