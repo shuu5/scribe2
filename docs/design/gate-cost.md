@@ -376,6 +376,44 @@ e2e は binary を spawn し外部 command は PATH 先頭の stub で差し替�
 - 却下案: 数でない母集団を判定と切り離して警告行に落とす（母集団の読みは「0 は見ていない」を**型で**持つ＝母集団を読めない PASS は findings 0 件の非空虚性を裏書きできず C10 を緩める側になり、0 は INCONCLUSIVE のままで数でない字面だけ通すと同じ不備の扱いが 2 本に割れる）／数の字面を緩めて近似の印を読み飛ばす（手書きの字面規則が増え、次の形で破れる・C1 / N2）／撃ち直しの回数を rules 行にする（§21 と同じ理由で 1 回で足りる＝2 回目も読めなければ負荷でなく審査役の側）／gate 全体を撃ち直す（1 周と同じ費用・§21 の却下案と同じ）／出力が読めない周を FAIL に倒す（測れなかったを赤に読み替える・C10 違反）。
 - 歯（`pipe_gate_lens_reread_` 接頭辞・置き場は gate の歯の file・fixture の script は歯の中で書き、撃たれた回数を数える）: (a) 1 回目が数でない母集団・2 回目が正しい出力の審査役の便は `PASS` で終わり、撃たれた回数が 2・stderr に撃ち直しの 1 行（1 回目の理由つき）が在る／(b) 2 回とも数でない周は INCONCLUSIVE で回数が 2（3 回目は無い）・理由は 2 回目のもの／(c) **母集団が 0 の出力は撃ち直さない**（回数 1・INCONCLUSIVE・理由の字面は今までどおり）＝「読めたが規則で断った」側の pin／(d) rc が非 0 で終わる審査役と起動できない審査役は撃ち直さない（回数 1・stderr に撃ち直しの行が無い）／(e) 審査役が `INCONCLUSIVE` を**自分で**答えた周（集計は正しい）は撃ち直さない（回数 1・母集団 = 撃ち直さない 4 形）／(f) 母集団の欄が無い周と母集団が 0 の周の判定と理由の字面は 1 字も変わらない（既存の歯が測る側・行の verify がその 2 本を完全名で撃つ）。
 
+## 30. e2e の歯の道具箱に偽 systemd-run を標準で置く — 歯が toy repo で実 binary を撃つ PATH の組み立てを 1 本に寄せ、偽の本体を 1 本に統一する（契約表の行 v・`s2-07l.504` の直しの層 (1)・歯だけの便）
+
+やさしく言うと: 歯（test）が「子 process を箱に入れる道具」を本物のまま呼んでいたので、歯をたくさん並べて走らせると host の管理係が詰まり、machine ごと止まった。歯の道具箱に偽物を標準で入れ、本物を呼ばない形にする。
+
+- **出所**（`s2-07l.504`・実測 2026-09-20）: 変異検査を持つ gate が 6 本同時に走った 4 時間半、開発 host がほぼ凍った（load 平均が 4 桁・D 状態の process が 5 万本超・10 分刻みの採取が抜ける）。詰まった先は user の systemd で、journal の 6 時間の scope の event は 36.5 万件、うち 99% 超が歯の toy 便と probe だった（実便の verify 行に帰属できた scope は 0 件）。
+- **構造**（本行の根拠）: scope は slice 直下の**平面**にしか作れず、入れ子を持たない。ゆえに実 systemd-run を撃つ歯が起こす toy の process は、その歯を走らせている gate の箱（`MemoryMax`・§4）から**構造的に外れる**——いまの箱は歯の process を 1 本も数えていない。偽にすると toy の process は包まれず歯の process の子のまま走る＝gate の箱の中に留まる。scope の rate が歯から消えるだけでなく、箱の精度は**上がる**側である。
+- **現物**（本行の base・verified）:
+  - 器が包む口は src の 6 か所（`wrap_command(` が 1・`wrap_line(` が 5）で、いずれも PATH から systemd-run を解く（絶対 path を焼かない・C2.2）。包めた周は行の終端で `release_scope(` が systemctl を、argv の包みは走行中に `control_group_of(` が systemctl の show を撃つ＝**偽 systemd-run だけを置くと実 systemctl の呼出が残る**。
+  - 歯が実 binary を撃つ口は 3 つである。(i) `run_pipe(`（`crates/scribe2/tests/e2e/pipe.rs`・呼出 183 か所・10 file）(ii) `run_bin(`（`crates/scribe2/tests/e2e/headless.rs`・呼出 11 か所）(iii) `Command::new(bin())` の直起動 64 か所のうち、包む subcommand を PATH を差し替えずに撃つ 6 か所（`crates/scribe2/tests/e2e/pipe/land.rs` 2・`crates/scribe2/tests/e2e/pipe/spawn.rs` 1・`crates/scribe2/tests/e2e/pipe/ratelimit.rs` 1・`crates/scribe2/tests/e2e/pipe/launch_failure.rs` 1・`crates/scribe2/tests/e2e/headless.rs` 1）。
+  - (i) の 183 か所のうち 173 か所は argv に `--state-dir` を持つ。持たない 10 か所は usage の断りか「置き場が紐づいていない」の断りで、段に届かず run dir も event も作らない＝scope を 1 本も作れない。(ii) の 11 か所は argv に置き場を持たない（呼び手は fixture の dir を変数で持つ）。
+  - PATH を差し替える口は `run_pipe_with_path(` の 17 か所だけである（`crates/scribe2/tests/e2e/pipe/gate.rs` 10・`crates/scribe2/tests/e2e/pipe/stop.rs` 4・`crates/scribe2/tests/e2e/pipe/spawn.rs` 2・`crates/scribe2/tests/e2e/pipe/launch_failure.rs` 1）。
+  - 偽 systemd-run の script は **4 本**に重複している: `systemd_stub(`（記録は 1 起動 1 file・同名の 2 本目を実 systemd と同じ字面で断る）・`confined_path(`（1 file へ追記）・`terminal_confined_path(`（同形・別の file 名）・`peak_shims(`（記録を持たず偽 systemctl と対で置く）。`lean_path(` は逆向きで、systemd-run の**無い** host を作る。
+  - 実 systemd-run を要る歯は **0 本**である。§7 が「歯で測れるのは引数まで」と置き、scope の外が死なないことと `memory.peak` が読めることは実 host の 1 回を契約の done に入れている（歯にしていない）。ゆえに「実物を使う」opt-in の口は作らない。
+  - 歯の本数（`#[test]` の実測）: gate の歯 122・intake の歯 117・land の歯 111・spawn の歯 67・dispatch の歯 66・pipe の歯 23・ratelimit の歯 22・stop の歯 17・launch_failure の歯 5。
+- **既存の assert が動かない根拠**: 包めた / 包めないは host で既に割れている——CI の runner は user の session manager を持たないので `confined=false`、開発 host は実 systemd-run が在るので `confined=true` で、main はどちらでも緑である。本行はその 2 状態を「偽で包めた」1 つに固定するだけなので、`confined=` や `reason=` の値に依る assert は base に在り得ない（在れば main が片方の host で赤い）。開発 host の側は値が動かず、本行で挙動が動くのは CI の側だけである。
+- **約束**（番号は done と歯に 1:1 で対応する）:
+  1. **道具箱は 1 本**: 歯が toy repo で実 binary を撃つときの PATH の組み立ては `crates/scribe2/tests/e2e/main.rs` の 1 関数（`make_tmp_dir(` の隣・全 module から見える可視性）に寄り、偽 systemd-run と偽 systemctl を置いた dir を先頭に積んだ PATH の値を返す。host の PATH は後ろに残る（git / sh / cargo の解決は不変）。
+  2. **3 つの口が全部そこを通る**: (i) は撃つ argv から `--state-dir` の値を読んでその下に道具箱を置く（値を持たない 10 か所は段に届かないので host の PATH のまま撃つ）。(ii) は呼び手が既に持つ fixture の dir を引数で受けて置く。(iii) の 6 か所は (i) か (ii) を通る形に替える。**歯の総数は不変で、`#[test]` の中の assert は 1 字も動かない**（動くのは口の実装と (ii) の呼出の引数 1 つだけ）。
+  3. **偽の本体は 1 本**: 4 本に重複した script は 1 つの生成関数から出る。本体は `systemd_stub(` の形（`--unit=` を読み、同名の 2 本目を実 systemd と同じ字面で断り、argv を 1 起動 1 file で記録 dir へ写し、`--` の後ろを exec する）。`confined_path(` / `terminal_confined_path(` / `peak_shims(` はその生成関数を呼び、記録の読み手（`runner_was_confined(` と `spawn_confined(` の前提）は 1 file の追記から記録 dir の走査へ揃う——`scope_record(` と同じ形で、母集団の件数を出してから 1 件を取る。
+  4. **偽 systemctl も既定**: 道具箱の systemctl は kill に「もう無い」の字面（→ `Released::Gone`）・show に空（→ peak は読まない）を返す。偽が作らなかった unit に実 host が返す答えと同じなので、record の field は増えも減りもしない（`Released::Gone` は行に `scope=` を書かない・§4.4）。
+  5. **逃がしは残る**: `lean_path(` の「systemd-run の無い host」と `run_pipe_with_path(` の明示の口は不変で、`Reason::NoTool` の縮退（FR46）を測る歯は base のまま緑である。実物を使う opt-in は作らない（要る歯が 0 本ゆえ・作れば「本物を撃ってよい口」が 1 つ残る）。
+- **歯**（接頭辞 `e2e_toolbox_`・置き場は行 v の write-set の pipe の歯の file と headless の歯の file）:
+  (a) 約束 1 と 2(i): `run_pipe(` で toy repo の gate を 1 本撃つと、道具箱の記録 dir に共通 verify の scope の記録が在り、その引数に `--scope` と `MemoryMax=` が在る（母集団 = 記録 dir の全件を同じ assert に出す）。
+  (b) 約束 2(iii): 直起動の 6 か所と同じ形（子として背景で起こす便）で撃った周も同じ記録が残る。
+  (c) 約束 2(ii): `run_bin(` で lens を 1 回撃つと claude の scope の記録が残る。
+  (d) 約束 5 の否定の枝: `lean_path(` の PATH で同じ gate を撃つ周は記録が 1 件も増えず、record は `confined=false reason=no-systemd-run` のままである。
+  既存の歯が測る側（本行は足さない・行の verify が完全名か接頭辞で撃つ）: 同じ名の 2 本目を断る性質（約束 3）・`Released::Gone` の周が行に `scope=` を書かないこと（約束 4）・包めない host の縮退（約束 5）・claude の peak の読み・停止起因の終端の理由 5 本・`--state-dir` を持たない口が置き場を作らないこと。
+- **flip-check**（歯だけの便）: src を 1 行も触らないので「test 区間を base に当てて RED」の入口は成立しない。`// flip-check: retroactive s2-07l.504` の札を、**その便で test 区間が動いた file の行頭**に置く（効く 4 条件 = test 区間内 / 行頭 / bead id 必須 / base から持ち越した札は効かない）。札は HEAD から読まれるので、**commit してから** flip-check を撃つ（未 commit の作業木では効かない）。判定行の `retroactive=N` は planner review の対象で、notes に変異の proof を残す。接頭辞 `e2e_toolbox_` は base に 0 本なので、行の 1 本目の verify は base で「該当 0 本」＝RED、HEAD で緑になる。
+- **write-set の 0 行の file**: `crates/scribe2/tests/e2e/pipe/intake.rs` は 1 行も変えない（diff 0 行）。在る理由は、行の verify が「`--state-dir` を持たない口が置き場を作らない」歯を完全名で撃ち、その歯の置き場がこの file だからである。残る 10 file は全部に diff が在る。
+- **触らない**: 器の src（`wrap_command(` / `wrap_line(` / `probe(` / `release_scope(` / `control_group_of(` と `Reason` の 8 値・`Released` の 4 値・`Confinement` の 2 値・record の field）・箱の大きさの式と rules 行（§4.2）・極性一覧（§4.5・封じ込めは guard ではない）・`run_pipe_with_path(` の口と `lean_path(`・`systemd_stub(` の記録の dir 名と `scope_record(` の読み（gate の歯の母集団が動かない）・`peak_shims(` の偽 systemctl の答えが歯ごとに変わる形（本行が揃えるのは systemd-run の側だけ）・歯の総数・`#[test]` の中の assert。
+- **却下案**:
+  - **道具箱を process ごとの静的な置き場に持つ**（口が argv も引数も読まずに済む）: 片付ける手が無く、歯 1 本ごとに dir が 1 つ残る——`/tmp` の fixture が 5.8 万 dir に育った `s2-07l.343` と同じ型を作る。fixture の dir は呼び手が既に持っているので、そこへ置く。
+  - **183 か所の呼出を全部 PATH つきの口へ書き換える**: 呼出の字面が 183 か所動く割に、**後から書かれる呼出**を守らない（口の既定にすれば新しい呼出も自動で通る）。
+  - **偽 systemd-run だけ置いて systemctl は実物のまま**: 包めた周は行ごとに kill が、argv の包みは show が実 D-Bus を往復する＝詰まる先を scope の作成から unit の照会へ移すだけである。
+  - **実 systemd-run を使う opt-in の口を残す**: 要る歯が 0 本（§7・箱の実測は契約の done 側）なので、口だけが残って再び使われる。要る歯が出た周に、その歯と一緒に作る。
+  - **歯の同時本数を絞って実物のまま使う**（nextest の test-group）: host 全体の同時 gate 本数は器が知らない（行 b は tmux の歯を絞る別の面）。1 本の gate の中で絞っても 6 本同時の周は同じ積になる。scope の rate を歯から**消す**ほうが強い。
+  - **全部を包めない host にする**（PATH から systemd-run を外す＝`lean_path(` に揃える）: 包めた周の経路（箱の引数・包みの終端行・終端の片付け）が歯から丸ごと消え、CI でも開発 host でも包みの経路が測られなくなる。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -588,5 +626,15 @@ write-set = ["crates/scribe2/src/pipe/gate/lens.rs", "crates/scribe2/src/pipe/ga
 verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_gate_lens_reread_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_gate_findings_missing_population_is_inconclusive", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_gate_findings_zero_population_is_inconclusive"]
 size = "S"
 done = "撃たれた回数を数える偽の審査役で、1 回目が数でない母集団・2 回目が正しい出力の便が PASS で終わって回数が 2 になり stderr に 1 回目の理由を持つ撃ち直しの 1 行が出て、2 回とも数でない周は INCONCLUSIVE で回数が 2（3 回目は無い）で理由が 2 回目のものになり、母集団が 0 の出力と rc が非 0 で終わる審査役と起動できない審査役と審査役が自分で INCONCLUSIVE を答えた周は撃ち直されず（回数 1・母集団 = 撃ち直さない 4 形）、母集団の欄が無い周と母集団が 0 の周の判定と理由の字面は 1 字も変わらず、Verdict の 3 値と rc と集計の 8 category と判定順と検出線の撃ち直しと verdict.json の field は変わらない"
+
+[[contract]]
+id = "v"
+title = "e2e の歯の道具箱に偽 systemd-run を標準で置く — 歯が toy repo で実 binary を撃つ PATH の組み立てを統合 test の共有 module の 1 関数に寄せ、3 つの口を全部そこへ通し、4 本に重複した偽の script を 1 つの生成関数に統一する（src は 1 行も触らない歯だけの便・retroactive）"
+req = ["NFR6", "FR46"]
+section = "30"
+write-set = ["crates/scribe2/tests/e2e/main.rs", "crates/scribe2/tests/e2e/pipe.rs", "crates/scribe2/tests/e2e/pipe/gate.rs", "crates/scribe2/tests/e2e/pipe/spawn.rs", "crates/scribe2/tests/e2e/pipe/stop.rs", "crates/scribe2/tests/e2e/pipe/land.rs", "crates/scribe2/tests/e2e/pipe/ratelimit.rs", "crates/scribe2/tests/e2e/pipe/launch_failure.rs", "crates/scribe2/tests/e2e/pipe/intake.rs", "crates/scribe2/tests/e2e/headless.rs", "docs/design/gate-cost.md"]
+verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail e2e_toolbox_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_confine_release_regate_in_one_process_uses_distinct_unit_names", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_confine_release_gone_leaves_no_scope_field", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_confine_falls_back_to_the_plain_shell_without_the_tool", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_spawn_terminal_reason_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail headless_claude_peak_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_preflight_without_state_dir_marks_overlap_unmeasured"]
+size = "M"
+done = "歯が toy repo で実 binary を撃つときの PATH の組み立てが統合 test の共有 module の 1 関数に寄って偽 systemd-run と偽 systemctl を既定で先頭に積み、pipe の口 183 か所は撃つ argv の置き場から・headless の口 11 か所は呼び手の fixture の dir から・直起動の 6 か所はその 2 つのどちらかを通ってその PATH で撃たれ、4 本に重複していた偽 systemd-run の script が 1 つの生成関数から出て記録の読み手が記録 dir の走査に揃い、同じ名の 2 本目を断る性質と包めた周の片付けの記録は不変で、包めない host を作る口と PATH を明示する口も不変ゆえ縮退の歯が緑のまま、実物を使う opt-in の口は作られず、歯の総数と各歯の assert は 1 字も動かず、intake の歯の file は verify の置き場として write-set に在るだけで diff 0 行である"
 
 <!-- contracts:end -->
