@@ -38,8 +38,8 @@
 | `gate.cpu_weight` | `GateCpuWeight`（Int） | 便の scope に付ける CPU の重み（席は既定の重み）。 |
 | `gate.tmux_test_threads` | `GateTmuxTestThreads`（Int） | tmux を立てる歯（e2e の isolated seat）の同時本数。値の写しは nextest の test-group `tmux` の `max-threads`（`.config/nextest.toml`・新規）で、`cargo xtask check` が写しの一致と配線（tmux を立てる歯＝本文が席の fixture の道具を名指すか、それを名指す e2e の木の関数を呼ぶ `#[test]`・閉包は器が関数名の固定点で決め、filter はその歯を module 付きの名で全部列挙する固定形＝file 単位や接頭辞では決めない〔.360 run 2 の QUESTION・helper 越しの歯 21 本を接頭辞が拾えない〕）を測る（clippy.toml ↔ R-C4-4.* と同型・C10.3）。並列 gate 下の負荷で tmux の歯が落ちる flake（`s2-07l.360`・契約表の行 b）の解＝並列度そのものは下げない。 |
 | `pipe.max_live` | `PipeMaxLive`（Int） | host で同時に走る便（live な便）の本数の**最大値**（[ADR-0035](../../design-intent/decisions/ADR-0035-live-run-cap-is-one-rules-row.html)・値は user 裁定 id 付き）。受付が便を作る前に live な便を数え、値以上の周は typed に断る（§24）。変異検査の並列度（`gate.mutants_jobs`）や memory の枠（§3.2）とは別の軸で、走行中の便には効かない。 |
-| `host.runnable_per_core` | `HostRunnablePerCore`（Int） | 器の健康の遮断器（§31）が「混んでいる」と判じる走行可能な process 数の**倍率**。閾値 = この値 × 実測の core 数で、超えた周は verify の行を撃たずに空くまで待つ。値は裁定 id 付き。 |
-| `host.blocked_per_core` | `HostBlockedPerCore`（Int） | 同じ遮断器（§31）が読む**待ち**（D 状態）の process 数の倍率。閾値の組み立ては走行可能と同じで、どちらか一方が超えれば「混んでいる」。値は裁定 id 付き。 |
+| `host.runnable_per_core` | `HostRunnablePerCore`（Int） | 器の健康の遮断器（§32）が「混んでいる」と判じる走行可能な process 数の**倍率**。閾値 = この値 × 実測の core 数で、超えた周は verify の行を撃たずに空くまで待つ。値は裁定 id 付き。 |
+| `host.blocked_per_core` | `HostBlockedPerCore`（Int） | 同じ遮断器（§32）が読む**待ち**（D 状態）の process 数の倍率。閾値の組み立ては走行可能と同じで、どちらか一方が超えれば「混んでいる」。値は裁定 id 付き。 |
 
 manifest に行が載るまでは ADR-0021 の予定行（C14.2 の相互参照は行が在って成立・ADR-0018 §4 と同じ）。
 
@@ -378,7 +378,45 @@ e2e は binary を spawn し外部 command は PATH 先頭の stub で差し替�
 - 却下案: 数でない母集団を判定と切り離して警告行に落とす（母集団の読みは「0 は見ていない」を**型で**持つ＝母集団を読めない PASS は findings 0 件の非空虚性を裏書きできず C10 を緩める側になり、0 は INCONCLUSIVE のままで数でない字面だけ通すと同じ不備の扱いが 2 本に割れる）／数の字面を緩めて近似の印を読み飛ばす（手書きの字面規則が増え、次の形で破れる・C1 / N2）／撃ち直しの回数を rules 行にする（§21 と同じ理由で 1 回で足りる＝2 回目も読めなければ負荷でなく審査役の側）／gate 全体を撃ち直す（1 周と同じ費用・§21 の却下案と同じ）／出力が読めない周を FAIL に倒す（測れなかったを赤に読み替える・C10 違反）。
 - 歯（`pipe_gate_lens_reread_` 接頭辞・置き場は gate の歯の file・fixture の script は歯の中で書き、撃たれた回数を数える）: (a) 1 回目が数でない母集団・2 回目が正しい出力の審査役の便は `PASS` で終わり、撃たれた回数が 2・stderr に撃ち直しの 1 行（1 回目の理由つき）が在る／(b) 2 回とも数でない周は INCONCLUSIVE で回数が 2（3 回目は無い）・理由は 2 回目のもの／(c) **母集団が 0 の出力は撃ち直さない**（回数 1・INCONCLUSIVE・理由の字面は今までどおり）＝「読めたが規則で断った」側の pin／(d) rc が非 0 で終わる審査役と起動できない審査役は撃ち直さない（回数 1・stderr に撃ち直しの行が無い）／(e) 審査役が `INCONCLUSIVE` を**自分で**答えた周（集計は正しい）は撃ち直さない（回数 1・母集団 = 撃ち直さない 4 形）／(f) 母集団の欄が無い周と母集団が 0 の周の判定と理由の字面は 1 字も変わらない（既存の歯が測る側・行の verify がその 2 本を完全名で撃つ）。
 
-## 30. 受付に CPU の次元を足す — 枠を memory の 2 項と core の 1 項の min にし、job ごとの thread は器が決めて穴で行へ渡す（契約表の行 v・`s2-07l.504`）
+## 30. e2e の歯の道具箱に偽 systemd-run を標準で置く — 歯が toy repo で実 binary を撃つ PATH の組み立てを 1 本に寄せ、偽の本体を 1 本に統一する（契約表の行 v・`s2-07l.504` の直しの層 (1)・歯だけの便）
+
+やさしく言うと: 歯（test）が「子 process を箱に入れる道具」を本物のまま呼んでいたので、歯をたくさん並べて走らせると host の管理係が詰まり、machine ごと止まった。歯の道具箱に偽物を標準で入れ、本物を呼ばない形にする。
+
+- **出所**（`s2-07l.504`・実測 2026-09-20）: 変異検査を持つ gate が 6 本同時に走った 4 時間半、開発 host がほぼ凍った（load 平均が 4 桁・D 状態の process が 5 万本超・10 分刻みの採取が抜ける）。詰まった先は user の systemd で、journal の 6 時間の scope の event は 36.5 万件、うち 99% 超が歯の toy 便と probe だった（実便の verify 行に帰属できた scope は 0 件）。
+- **構造**（本行の根拠）: scope は slice 直下の**平面**にしか作れず、入れ子を持たない。ゆえに実 systemd-run を撃つ歯が起こす toy の process は、その歯を走らせている gate の箱（`MemoryMax`・§4）から**構造的に外れる**——いまの箱は歯の process を 1 本も数えていない。偽にすると toy の process は包まれず歯の process の子のまま走る＝gate の箱の中に留まる。scope の rate が歯から消えるだけでなく、箱の精度は**上がる**側である。
+- **現物**（本行の base・verified）:
+  - 器が包む口は src の 6 か所（`wrap_command(` が 1・`wrap_line(` が 5）で、いずれも PATH から systemd-run を解く（絶対 path を焼かない・C2.2）。包めた周は行の終端で `release_scope(` が systemctl を、argv の包みは走行中に `control_group_of(` が systemctl の show を撃つ＝**偽 systemd-run だけを置くと実 systemctl の呼出が残る**。
+  - 歯が実 binary を撃つ口は 3 つである。(i) `run_pipe(`（`crates/scribe2/tests/e2e/pipe.rs`・呼出 183 か所・10 file）(ii) `run_bin(`（`crates/scribe2/tests/e2e/headless.rs`・呼出 11 か所）(iii) `Command::new(bin())` の直起動 64 か所のうち、包む subcommand を PATH を差し替えずに撃つ 6 か所（`crates/scribe2/tests/e2e/pipe/land.rs` 2・`crates/scribe2/tests/e2e/pipe/spawn.rs` 1・`crates/scribe2/tests/e2e/pipe/ratelimit.rs` 1・`crates/scribe2/tests/e2e/pipe/launch_failure.rs` 1・`crates/scribe2/tests/e2e/headless.rs` 1）。
+  - (i) の 183 か所のうち 173 か所は argv に `--state-dir` を持つ。持たない 10 か所は usage の断りか「置き場が紐づいていない」の断りで、段に届かず run dir も event も作らない＝scope を 1 本も作れない。(ii) の 11 か所は argv に置き場を持たない（呼び手は fixture の dir を変数で持つ）。
+  - PATH を差し替える口は `run_pipe_with_path(` の 17 か所だけである（`crates/scribe2/tests/e2e/pipe/gate.rs` 10・`crates/scribe2/tests/e2e/pipe/stop.rs` 4・`crates/scribe2/tests/e2e/pipe/spawn.rs` 2・`crates/scribe2/tests/e2e/pipe/launch_failure.rs` 1）。
+  - 偽 systemd-run の script は **4 本**に重複している: `systemd_stub(`（記録は 1 起動 1 file・同名の 2 本目を実 systemd と同じ字面で断る）・`confined_path(`（1 file へ追記）・`terminal_confined_path(`（同形・別の file 名）・`peak_shims(`（記録を持たず偽 systemctl と対で置く）。`lean_path(` は逆向きで、systemd-run の**無い** host を作る。
+  - 実 systemd-run を要る歯は **0 本**である。§7 が「歯で測れるのは引数まで」と置き、scope の外が死なないことと `memory.peak` が読めることは実 host の 1 回を契約の done に入れている（歯にしていない）。ゆえに「実物を使う」opt-in の口は作らない。
+  - 歯の本数（`#[test]` の実測）: gate の歯 122・intake の歯 117・land の歯 111・spawn の歯 67・dispatch の歯 66・pipe の歯 23・ratelimit の歯 22・stop の歯 17・launch_failure の歯 5。
+- **既存の assert が動かない根拠**: 包めた / 包めないは host で既に割れている——CI の runner は user の session manager を持たないので `confined=false`、開発 host は実 systemd-run が在るので `confined=true` で、main はどちらでも緑である。本行はその 2 状態を「偽で包めた」1 つに固定するだけなので、`confined=` や `reason=` の値に依る assert は base に在り得ない（在れば main が片方の host で赤い）。開発 host の側は値が動かず、本行で挙動が動くのは CI の側だけである。
+- **約束**（番号は done と歯に 1:1 で対応する）:
+  1. **道具箱は 1 本**: 歯が toy repo で実 binary を撃つときの PATH の組み立ては `crates/scribe2/tests/e2e/main.rs` の 1 関数（`make_tmp_dir(` の隣・全 module から見える可視性）に寄り、偽 systemd-run と偽 systemctl を置いた dir を先頭に積んだ PATH の値を返す。host の PATH は後ろに残る（git / sh / cargo の解決は不変）。
+  2. **3 つの口が全部そこを通る**: (i) は撃つ argv から `--state-dir` の値を読んでその下に道具箱を置く（値を持たない 10 か所は段に届かないので host の PATH のまま撃つ）。(ii) は呼び手が既に持つ fixture の dir を引数で受けて置く。(iii) の 6 か所は (i) か (ii) を通る形に替える。**歯の総数は不変で、`#[test]` の中の assert は 1 字も動かない**（動くのは口の実装と (ii) の呼出の引数 1 つだけ）。
+  3. **偽の本体は 1 本**: 4 本に重複した script は 1 つの生成関数から出る。本体は `systemd_stub(` の形（`--unit=` を読み、同名の 2 本目を実 systemd と同じ字面で断り、argv を 1 起動 1 file で記録 dir へ写し、`--` の後ろを exec する）。`confined_path(` / `terminal_confined_path(` / `peak_shims(` はその生成関数を呼び、記録の読み手（`runner_was_confined(` と `spawn_confined(` の前提）は 1 file の追記から記録 dir の走査へ揃う——`scope_record(` と同じ形で、母集団の件数を出してから 1 件を取る。
+  4. **偽 systemctl も既定**: 道具箱の systemctl は kill に「もう無い」の字面（→ `Released::Gone`）・show に空（→ peak は読まない）を返す。偽が作らなかった unit に実 host が返す答えと同じなので、record の field は増えも減りもしない（`Released::Gone` は行に `scope=` を書かない・§4.4）。
+  5. **逃がしは残る**: `lean_path(` の「systemd-run の無い host」と `run_pipe_with_path(` の明示の口は不変で、`Reason::NoTool` の縮退（FR46）を測る歯は base のまま緑である。実物を使う opt-in は作らない（要る歯が 0 本ゆえ・作れば「本物を撃ってよい口」が 1 つ残る）。
+- **歯**（接頭辞 `e2e_toolbox_`・置き場は行 v の write-set の pipe の歯の file と headless の歯の file）:
+  (a) 約束 1 と 2(i): `run_pipe(` で toy repo の gate を 1 本撃つと、道具箱の記録 dir に共通 verify の scope の記録が在り、その引数に `--scope` と `MemoryMax=` が在る（母集団 = 記録 dir の全件を同じ assert に出す）。
+  (b) 約束 2(iii): 直起動の 6 か所と同じ形（子として背景で起こす便）で撃った周も同じ記録が残る。
+  (c) 約束 2(ii): `run_bin(` で lens を 1 回撃つと claude の scope の記録が残る。
+  (d) 約束 5 の否定の枝: `lean_path(` の PATH で同じ gate を撃つ周は記録が 1 件も増えず、record は `confined=false reason=no-systemd-run` のままである。
+  既存の歯が測る側（本行は足さない・行の verify が完全名か接頭辞で撃つ）: 同じ名の 2 本目を断る性質（約束 3）・`Released::Gone` の周が行に `scope=` を書かないこと（約束 4）・包めない host の縮退（約束 5）・claude の peak の読み・停止起因の終端の理由 5 本・`--state-dir` を持たない口が置き場を作らないこと。
+- **flip-check**（歯だけの便）: src を 1 行も触らないので「test 区間を base に当てて RED」の入口は成立しない。`// flip-check: retroactive s2-07l.504` の札を、**その便で test 区間が動いた file の行頭**に置く（効く 4 条件 = test 区間内 / 行頭 / bead id 必須 / base から持ち越した札は効かない）。札は HEAD から読まれるので、**commit してから** flip-check を撃つ（未 commit の作業木では効かない）。判定行の `retroactive=N` は planner review の対象で、notes に変異の proof を残す。接頭辞 `e2e_toolbox_` は base に 0 本なので、行の 1 本目の verify は base で「該当 0 本」＝RED、HEAD で緑になる。
+- **write-set の 0 行の file**: `crates/scribe2/tests/e2e/pipe/intake.rs` は 1 行も変えない（diff 0 行）。在る理由は、行の verify が「`--state-dir` を持たない口が置き場を作らない」歯を完全名で撃ち、その歯の置き場がこの file だからである。残る 10 file は全部に diff が在る。
+- **触らない**: 器の src（`wrap_command(` / `wrap_line(` / `probe(` / `release_scope(` / `control_group_of(` と `Reason` の 8 値・`Released` の 4 値・`Confinement` の 2 値・record の field）・箱の大きさの式と rules 行（§4.2）・極性一覧（§4.5・封じ込めは guard ではない）・`run_pipe_with_path(` の口と `lean_path(`・`systemd_stub(` の記録の dir 名と `scope_record(` の読み（gate の歯の母集団が動かない）・`peak_shims(` の偽 systemctl の答えが歯ごとに変わる形（本行が揃えるのは systemd-run の側だけ）・歯の総数・`#[test]` の中の assert。
+- **却下案**:
+  - **道具箱を process ごとの静的な置き場に持つ**（口が argv も引数も読まずに済む）: 片付ける手が無く、歯 1 本ごとに dir が 1 つ残る——`/tmp` の fixture が 5.8 万 dir に育った `s2-07l.343` と同じ型を作る。fixture の dir は呼び手が既に持っているので、そこへ置く。
+  - **183 か所の呼出を全部 PATH つきの口へ書き換える**: 呼出の字面が 183 か所動く割に、**後から書かれる呼出**を守らない（口の既定にすれば新しい呼出も自動で通る）。
+  - **偽 systemd-run だけ置いて systemctl は実物のまま**: 包めた周は行ごとに kill が、argv の包みは show が実 D-Bus を往復する＝詰まる先を scope の作成から unit の照会へ移すだけである。
+  - **実 systemd-run を使う opt-in の口を残す**: 要る歯が 0 本（§7・箱の実測は契約の done 側）なので、口だけが残って再び使われる。要る歯が出た周に、その歯と一緒に作る。
+  - **歯の同時本数を絞って実物のまま使う**（nextest の test-group）: host 全体の同時 gate 本数は器が知らない（行 b は tmux の歯を絞る別の面）。1 本の gate の中で絞っても 6 本同時の周は同じ積になる。scope の rate を歯から**消す**ほうが強い。
+  - **全部を包めない host にする**（PATH から systemd-run を外す＝`lean_path(` に揃える）: 包めた周の経路（箱の引数・包みの終端行・終端の片付け）が歯から丸ごと消え、CI でも開発 host でも包みの経路が測られなくなる。
+
+## 31. 受付に CPU の次元を足す — 枠を memory の 2 項と core の 1 項の min にし、job ごとの thread は器が決めて穴で行へ渡す（契約表の行 w・`s2-07l.504`）
 
 やさしく言うと: いままで「空いている memory」だけを見て変異検査を何本走らせるか決めていた。core の数も見て、host 全体で同時に走る test の thread が core を超えるところで止める。混んでいて 1 本に落としたときは、その 1 本が core を全部使わないよう thread も 1 にする。
 
@@ -386,7 +424,8 @@ e2e は binary を spawn し外部 command は PATH 先頭の stub で差し替�
 - **受付が CPU を見ていない**（verified・main b2cf656）: `crates/scribe2/src/pipe/admission.rs` の `capacity`（pub・pure）は `by_avail` と `by_token` の min で、どちらも memory の式である。事故の host は `by_token` が 39 job ぶんを許したので、6 gate × 4 job = 24 枠が全部通った。
 - **入れ子の上限は gate 1 本の中でしか閉じない**: 行 m（§22）が入れた thread の上限は `crates/xtask/src/mutantsdiff.rs` の `test_threads`（`pub use scope::test_threads` で公開・`max(1, cores / jobs)`）で、`jobs × t ≤ cores` を**その gate の中だけ**で閉じる。core 32 の host では gate 1 本（jobs 4・t 8）で 32 thread＝それだけで core が満杯になり、6 本同時はその 6 倍である。
 - **縮退した gate ほど core を広く使う**: 待ちの上限（rules 行 `gate.slot_wait_s`）を超えた周は `admission.rs` の `degraded` が jobs 1 で進むが、xtask 側の導出は `cores / 1` ＝ **core 数ぶんの thread** になる。枠を配れないほど混んだ host で、いちばん太い行を撃つ形である。
-- **前提（ADR が先）**: §2 は「memory だけが硬い資源・CPU は溢れても遅くなるだけなので上限を持たない」と書き、ADR-0021 §2.1 / §2.3 がその面の正本である。事故は「CPU は遅くなるだけ」が偽であることを示した（D 状態の山が session manager を飽和させ、host ごと 4.5 時間止まった）。本行と §31 はその面を置き換えるので、**実装の前に ADR を 1 本 land する**（CLAUDE.md の「ADR を書く条件」1 / 4・行 o が ADR-0035 を要したのと同型）。本節は形だけを決め、値と原則の改訂は ADR と裁定が持つ。
+- **層 1 との関係**: §30（行 v）は歯が実 systemd-run を撃つ rate を消す層で、scope の作成が詰まる面を閉じる。本節は**同じ事故の別の面**（core の勘定が受付に無い）で、歯の scope が 0 になっても 6 本の変異検査が core を 6 倍に使う形は残る＝2 つは重ならない。
+- **前提（ADR が先）**: §2 は「memory だけが硬い資源・CPU は溢れても遅くなるだけなので上限を持たない」と書き、ADR-0021 §2.1 / §2.3 がその面の正本である。事故は「CPU は遅くなるだけ」が偽であることを示した（D 状態の山が session manager を飽和させ、host ごと 4.5 時間止まった）。本行と §32 はその面を置き換えるので、**実装の前に ADR を 1 本 land する**（CLAUDE.md の「ADR を書く条件」1 / 4・行 o が ADR-0035 を要したのと同型）。本節は形だけを決め、値と原則の改訂は ADR と裁定が持つ。
 - **現物**（verified・main b2cf656）: `crates/scribe2/src/pipe/admission.rs` = `capacity(meminfo, sizes, live_jobs) -> Free`（pub・pure）/ `Sizes { job_mb, reserve_mb }`（pub）/ `Free::{Slots, Unmeasured}`（pub）/ `Rules { sizes, cap, wait_s, policy }`（pub）/ `Unreadable::{SlotsDir, Lock, Meminfo}`（pub・`as_str` が record の `slot_why=`）/ `Grant { jobs, detail, why, ticket }`（pub・`jobs` は 1 以上）/ `has_room(dir, want, sizes) -> bool`（pub）/ `admit`（pub）/ `degraded` / `unmeasured` / `take` / `Ask::{UpTo, Floor}`（private）。`crates/scribe2/src/pipe/gate/verify.rs` = `fire` / `fill_holes(line, base, jobs)` / `admitted`（どれも private）と `UNADMITTED_JOBS`。`crates/scribe2/src/pipe/declaration.rs` = `BASE_HOLE` / `JOBS_HOLE` / `BASE_HOLES`（pub・**閉じた 2 つ**・intake の `unfit` と gate の置換が同じ列を読む）。`crates/scribe2/src/fleet/wait.rs` = `Completion::SlotFree { slots_dir, want, job_mb, reserve_mb, cap }`（pub）で、待ちの観測が `has_room` を撃つ。`.vessel.toml` の `detection-verify` は 1 行で穴が 2 つ。`crates/xtask/src/mutantsdiff.rs` = `measure_args(diff, out, scope, jobs, cores)`（pub・pure）が末尾に `-- --no-fail-fast -- --test-threads <t>` を置き、`run` が `std::thread::available_parallelism()` を 1 回だけ読む。
 - **約束**:
   1. **job 1 つの thread の値段を器が決める**: 受付が pure 関数 1 本で `price = max(1, floor(cores / gate.mutants_jobs))` を出す。`cores` は `std::thread::available_parallelism()` の**実測**で、env を読まない（C2.2・器の `env::` の許し列は `cargo xtask check` の `env-reads` が母集団ごと数える面であって、増やす便ではない）。新しい rules 行は足さない（C1 / C5）。
@@ -403,24 +442,25 @@ e2e は binary を spawn し外部 command は PATH 先頭の stub で差し替�
   - in-file（`crates/xtask/src/main.rs`・接頭辞 `mutants_diff_threads_flag_`・行 m と同じ置き場）: 引数の末尾が `-- --no-fail-fast -- --test-threads <受けた値>` で、渡さない周と数でない周は 1、`--jobs` / `--in-diff` / `-p` / `-o` / `--no-shuffle` / `--copy-vcs` の対と順序は不変。
   - e2e（`crates/scribe2/tests/e2e/pipe/gate.rs`・接頭辞 `pipe_slots_threads_`・既存の受付の歯と同じ toy の形）: 3 つの穴を持つ行の置換後の `cmd` に実効 jobs と実効 thread が**両方**載り、**待ちの上限を超えた周の `cmd` は jobs も thread も 1** である（`slot=degraded` の record と対で 1 本）。
   - **不変の柵**（行の verify が完全名で撃つ・本便は書き換えない）: `admission_capacity_takes_the_min_of_the_two_formulas` / `admission_capacity_floors_at_zero` / `admission_capacity_is_unmeasured_on_unreadable_meminfo`（置き場は `crates/scribe2/src/pipe/admission.rs`）。memory の 2 項の式が 1 字も動かないことを測る側である。
-- **触らない**: `capacity` の引数と式・`Sizes` の 2 線・札 file の schema と回収の判定・`gate.mutants_jobs` と `gate.job_memory_mb` と `host.reserve_memory_mb` の値・`gate.slot_wait_s` の値・`pipe.max_live`（行 o）・封じ込めの箱の大きさと `Limit` の 2 種・検出線の rc の意味と撃ち直し（§21）・受付が極性一覧に載らないこと（§3.2 の末尾・縮退するだけの境界のまま）。
+- **触らない**: `capacity` の引数と式・`Sizes` の 2 線・札 file の schema と回収の判定・`gate.mutants_jobs` と `gate.job_memory_mb` と `host.reserve_memory_mb` の値・`gate.slot_wait_s` の値・`pipe.max_live`（行 o）・封じ込めの箱の大きさと `Limit` の 2 種・検出線の rc の意味と撃ち直し（§21）・歯の道具箱（§30・行 v の面）・受付が極性一覧に載らないこと（§3.2 の末尾・縮退するだけの境界のまま）。
 - **却下**:
   - **`capacity` に cores の引数を足して 3 項を 1 本の式にする**: 既存の 3 本の歯が全部書き換えになり、memory の式が不変であることを測る側を同じ便で失う。
   - **thread を `--jobs` から道具が導き続ける（穴を足さない）**: 受け付けた枠が上限より小さい周に `floor(cores / jobs)` が job あたりの値段を押し上げ、2 本の gate が合わせて core の 2 倍の thread を作る（core 32・各 jobs 2 なら 2 × 16 が 2 本で 64）。縮退の周は 1 本で core 数ぶんになる（本節の出所そのもの）。
   - **thread を rules 行にする**: cores は host ごとに違うので、tracked の manifest に焼くと host ごとに裁定が要る（値の線が増える・N3 の向き）。
   - **cores を env から読む**: C2.2。`available_parallelism` は env でなく host の面を読む口である。
   - **CPU を上限（宣言値の rules 行）にする**: 本便が足すのは**枠の分母**（core 数という測定値）であって新しい宣言値ではない。上限の是非は ADR と裁定の側に残す。
+  - **§30（行 v）で足りるとする**: 歯の scope が 0 になっても、変異検査そのものが core を 6 倍に使う形は残る（事故の load は歯の scope だけでは説明が付かない＝memory は余っていた）。
   - **混んだ周に便を断る**: §10 のとおり断らない（縮退する・FR46）。
 
-## 31. 器の健康の遮断器 — 行を撃つ前に走行可能と待ちの process を読み、混んだ周は空くまで待ち、待てなかった周は終端させない（契約表の行 w・`s2-07l.504`）
+## 32. 器の健康の遮断器 — 行を撃つ前に走行可能と待ちの process を読み、混んだ周は空くまで待ち、待てなかった周は終端させない（契約表の行 x・`s2-07l.504`）
 
 やさしく言うと: host が息をしていないときに検証を撃ち続けない。走れる process の数と、待たされている process の数を先に見て、多すぎたら空くまで待つ。待っても空かなければ「判定できなかった」で止める。「落ちた」ではないので、あとで測り直せる。
 
 - **何が起きているか**（同じ事故・台帳 `s2-07l.504`・verified）: 凍結の 4.5 時間、器は撃った行が返らないまま走り続け、便の event を 1 件も出していない。load の 1 分値 68,816・D 状態の process 最大 52,412 に対し、**器は host の健康を 1 度も読まない**。混んだ host でも同じ勢いで行を撃ち、負荷で落ちた歯をそのまま赤に数える（§23 が壁時計の歯で踏んだのと同じ面）。台帳の notes は直しの層 (3) にこの遮断器を挙げ、待ちの上限を超えた周は **FAIL でなく INCONCLUSIVE** にせよと記す（凍った host の下で便を終端させると、実装の成果ごと列から外れる）。
 - **現物**（verified・main b2cf656）: `crates/scribe2/src/pipe/gate/verify.rs` = `fire`（private・gate も land の主実測も通る**唯一の**起こし口）/ `run_line_captured`（pub）/ `Step`（pub・record の欄を運ぶ）/ `Checks<'a>`（pub・`worktree` / `base` / `contract` / `common` / `detection` の 5 欄）。`crates/scribe2/src/pipe/gate/record.rs` = `record_verify`（pub(super)）が `Checks` を組み `Counted { red, unreadable, killed, detection_unmeasured }`（pub(super)）を返す。`crates/scribe2/src/pipe/land/verify.rs` = 主実測が 2 つ目の `Checks` を組む。`crates/scribe2/src/pipe/gate.rs` = `Limits`（pub・6 欄）/ `decide`（private・判定順は diff が読めない → 箱の中で死んだ → 赤 → 検出線の rc 2 → 予算 → lens の本数）/ `inconclusive`（private）。`crates/scribe2/src/pipe/cli/step.rs` = `limits_of`（private・6 行を `--rules` の manifest から読む）で、`Limits` の literal 構築点は 2 つ（`crates/scribe2/src/pipe/cli/step.rs` と `crates/scribe2/src/pipe/queue.rs` の in-file の歯）。`crates/scribe2/src/fleet/wait.rs` = `Completion`（pub・7 variant）で、pid を見張らない 4 つは `pid()` が 0 を返す。`crates/scribe2/src/polarity.rs` = `Guard`（pub・24 variant）と `ALL` と 3 つの網羅 match。host の面: 走行可能な process 数は `/proc/loadavg` の 4 番目の欄の**分子**、待ちの process 数は `/proc/stat` の `procs_blocked` の行で、器がこの 2 面を読む口は無い（`/proc` を読むのは受付と封じ込めの memory の 2 か所だけ）。
-- **前提**: §30 と同じ ADR（§2 の「CPU は上限を持たない」の面）に乗る。閾値 2 つの**値は user 裁定で既に出ている**（約束 2）。
+- **前提**: §31 と同じ ADR（§2 の「CPU は上限を持たない」の面）に乗る。閾値 2 つの**値は user 裁定で既に出ている**（約束 2）。
 - **約束**:
-  1. **判定は pure な閉じた 3 値**: 行 w の write-set の `+` の file（受付と同じ `pipe/` の直下）が、2 つの面の**字面**（走行可能を運ぶ 1 行と、待ちを運ぶ本文）と 2 つの閾値から「空いている / 混んでいる / 測れない」の 3 値を出す pure 関数 1 本を持つ。host の面を読む口は同じ置き場の 1 本で、判定は fixture 文字列で測る（§7 の分担・外から差し替える口は作らない）。
+  1. **判定は pure な閉じた 3 値**: 行 x の write-set の `+` の file（受付と同じ `pipe/` の直下）が、2 つの面の**字面**（走行可能を運ぶ 1 行と、待ちを運ぶ本文）と 2 つの閾値から「空いている / 混んでいる / 測れない」の 3 値を出す pure 関数 1 本を持つ。host の面を読む口は同じ置き場の 1 本で、判定は fixture 文字列で測る（§7 の分担・外から差し替える口は作らない）。
   2. **閾値は core あたりの倍率で rules 行 2 本**（`host.runnable_per_core` / `host.blocked_per_core`・kind `HostRunnablePerCore` / `HostBlockedPerCore`・どちらも Int・§3.1 の表と manifest に足す）: host ごとに core 数が違うので tracked の manifest に絶対値を焼かず、**閾値 = 倍率 × 実測の core 数**にする。**値は user 裁定で既に出ている**: 裁定は「走行可能 > 4 × core 数」「待ち > core 数」で、**走行可能の倍率 = 4・待ちの倍率 = 1・裁定 id = `user 2026-09-20T15:23Z`・裁定日 = 2026-09-20**（C5）＝行の `ruling` と `ruled_at` にこの 2 つを入れる。裁定は比の形で出ており（事故の host の実値は 128 と 32）、`RuleKind` が持つのは Int だけなので、**倍率の側を Int 2 本で持つ**のが裁定の字面に素直で host を跨いで同じ意味になる（絶対値を写すと core 数の違う host で別の意味になる・却下の 3 つ目）。規範の値を持つのは manifest だけで、ここの 4 と 1 は裁定の出所の記録である（C1）。連鎖は行 o（§24）と同型（`RuleKind` の variant・Int の列・manifest の行・[rules-manifest.md](./rules-manifest.md) §4 の表・歯の kind 件数・外形）。
   3. **待つ口は 1 本**: 行を撃つ前に「空いている」を待つ。待ちは完了 enum の variant 1 つ（2 つの閾値を運ぶ・pid を見張らない側＝`pid()` は 0）で、唯一の待機実装を通る（第 2 の poll loop を書かない・C3.4）。
   4. **待ちの上限は `gate.slot_wait_s` を使い回す**: 受付の待ちと本待ちはどちらも「gate が行を撃つ前に待つ上限」で、同じ 1 本の便の中で順に効く。3 本目の値の線を足さない（C1 / C5）。
@@ -430,12 +470,12 @@ e2e は binary を spawn し外部 command は PATH 先頭の stub で差し替�
   8. **極性一覧に載せる**: 行を撃つという行為を止めうる判定を返す境界なので、受付・封じ込めと違い ADR-0014 §2.1 の guard に当たる。`Guard` に variant 1 つ・`ALL` に 1 つを足し、境界の側に `POLARITY`（**in-loop / fail-open**）を置く。宣言順は行為の流れに合わせて gate の機械検証の段の直前で、外形の集計行の 4 つの数が動く。
   9. **land の主実測も同じ 1 本を通る**: 行を撃つ実装が 1 本である以上、主実測も同じ遮断器を通る。閾値は `Limits` が運び、2 つの `Checks` の構築点が同じ欄を埋める。
 - **歯**:
-  - in-file（行 w の write-set の `+` の file・接頭辞 `health_judge_`）: (a) 走行可能を 4 番目の欄の**分子**から読み、分母（総 process 数）に釣られない（分母だけが閾値を超える fixture を対に置く）／(b) 待ちを `procs_blocked` の行から読み、似た見出しの行に釣られない／(c) 閾値 = 倍率 × core 数で、**ちょうど**の値は「混んでいる」でない（等号を境界に置かない）／(d) 片方だけが超えた 2 形はどちらも「混んでいる」／(e) 空・数でない・行が無いの 3 形はどれも「測れない」で、「空いている」に潰れない。
+  - in-file（行 x の write-set の `+` の file・接頭辞 `health_judge_`）: (a) 走行可能を 4 番目の欄の**分子**から読み、分母（総 process 数）に釣られない（分母だけが閾値を超える fixture を対に置く）／(b) 待ちを `procs_blocked` の行から読み、似た見出しの行に釣られない／(c) 閾値 = 倍率 × core 数で、**ちょうど**の値は「混んでいる」でない（等号を境界に置かない）／(d) 片方だけが超えた 2 形はどちらも「混んでいる」／(e) 空・数でない・行が無いの 3 形はどれも「測れない」で、「空いている」に潰れない。
   - in-file（`crates/scribe2/src/pipe/gate.rs`・接頭辞 `gate_busy_order_`）: 印が在る周は**赤が 1 行在っても** INCONCLUSIVE になり、印が無い周の順（赤 → 検出線の rc 2）は 1 字も変わらない（2 つの枝を 1 本の歯に対で並べる）。
   - e2e（`crates/scribe2/tests/e2e/pipe/gate.rs`・接頭辞 `pipe_gate_health_`・toy repo・`--rules` の fixture で倍率を振る）: (a) 倍率 0 の fixture（＝必ず「混んでいる」）と `gate.slot_wait_s = 1` の便は verify の行が 1 本も撃たれず（呼出回数の file が空）verdict が INCONCLUSIVE で、record に印が載る／(b) 倍率を十分大きく取った fixture の便は従来どおり全段撃って PASS で終わり、record に印が載らない／(c) (a) の便は `Gated` に留まって同じ便を撃ち直せる（FAIL で終端しない）。
   - rules 行（`crates/scribe2/tests/e2e/rules.rs`・接頭辞 `rules_embedded_manifest_declares_host_health_`）: 埋め込みの manifest が 2 行を**値（走行可能 4・待ち 1）と裁定 id `user 2026-09-20T15:23Z` と裁定日 2026-09-20** つきで持ち、kind の包含で**行と variant を対で足させる**（片方だけの manifest は parse できず、片方だけの enum は親の歯が落とす・行 o と同型）。**外形**は行の verify が完全名 `rules_external_form` で撃つ（`rows=` と `kinds=` が 2 つずつ増える）。
   - 極性（`crates/scribe2/tests/e2e/polarity.rs`・接頭辞 `polarity_gate_health_`）: 一覧に新しい guard が in-loop / fail-open で在り、宣言順が gate の機械検証の段の直前である。**外形**は完全名 `polarity_external_form` で撃つ。
-- **触らない**: 赤の数え方（§28・検出線の rc 1 も赤）・検出線の rc の意味と撃ち直し（§21）・審査役の撃ち直し（§29）・受付の枠と札（§3.2・行 v の面）・封じ込めの箱と `Released` の 4 値・`Verdict` の 3 値と rc・`verdict.json` の schema と field・record の schema 番号・`pipe show` の描画（判定行と秒だけを写す＝外形 snapshot は動かない）・`pipe.max_live`（行 o）・`gate.slot_wait_s` の**値**。
+- **触らない**: 赤の数え方（§28・検出線の rc 1 も赤）・検出線の rc の意味と撃ち直し（§21）・審査役の撃ち直し（§29）・受付の枠と札（§3.2・行 w の面）・歯の道具箱（§30・行 v の面）・封じ込めの箱と `Released` の 4 値・`Verdict` の 3 値と rc・`verdict.json` の schema と field・record の schema 番号・`pipe show` の描画（判定行と秒だけを写す＝外形 snapshot は動かない）・`pipe.max_live`（行 o）・`gate.slot_wait_s` の**値**。
 - **却下**:
   - **上限超を FAIL にする**: 凍った host は便の内容を測れていない。終端させると実装の成果ごと列から外れ、人が起こし直すことになる（台帳 `s2-07l.504` notes の直しの層 (3)）。
   - **待ちの上限に 3 本目の rules 行を足す**: 値の線と裁定が 1 つずつ増える。`gate.slot_wait_s` と意味が同じ（gate が行を撃つ前に待つ上限）。
@@ -660,23 +700,33 @@ done = "撃たれた回数を数える偽の審査役で、1 回目が数でな�
 
 [[contract]]
 id = "v"
-title = "受付に CPU の次元 — 枠を by_avail / by_token / by_cpu の 3 項の min にし、job 1 つの thread の値段（cores / gate.mutants_jobs）を器が決めて 3 つ目の穴で行へ渡す（縮退と測れない周は jobs 1 かつ thread 1・xtask は値を持たない）"
+title = "e2e の歯の道具箱に偽 systemd-run を標準で置く — 歯が toy repo で実 binary を撃つ PATH の組み立てを統合 test の共有 module の 1 関数に寄せ、3 つの口を全部そこへ通し、4 本に重複した偽の script を 1 つの生成関数に統一する（src は 1 行も触らない歯だけの便・retroactive）"
 req = ["NFR6", "FR46"]
 section = "30"
+write-set = ["crates/scribe2/tests/e2e/main.rs", "crates/scribe2/tests/e2e/pipe.rs", "crates/scribe2/tests/e2e/pipe/gate.rs", "crates/scribe2/tests/e2e/pipe/spawn.rs", "crates/scribe2/tests/e2e/pipe/stop.rs", "crates/scribe2/tests/e2e/pipe/land.rs", "crates/scribe2/tests/e2e/pipe/ratelimit.rs", "crates/scribe2/tests/e2e/pipe/launch_failure.rs", "crates/scribe2/tests/e2e/pipe/intake.rs", "crates/scribe2/tests/e2e/headless.rs", "docs/design/gate-cost.md"]
+verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail e2e_toolbox_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_confine_release_regate_in_one_process_uses_distinct_unit_names", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_confine_release_gone_leaves_no_scope_field", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_confine_falls_back_to_the_plain_shell_without_the_tool", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_spawn_terminal_reason_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail headless_claude_peak_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_preflight_without_state_dir_marks_overlap_unmeasured"]
+size = "M"
+done = "歯が toy repo で実 binary を撃つときの PATH の組み立てが統合 test の共有 module の 1 関数に寄って偽 systemd-run と偽 systemctl を既定で先頭に積み、pipe の口 183 か所は撃つ argv の置き場から・headless の口 11 か所は呼び手の fixture の dir から・直起動の 6 か所はその 2 つのどちらかを通ってその PATH で撃たれ、4 本に重複していた偽 systemd-run の script が 1 つの生成関数から出て記録の読み手が記録 dir の走査に揃い、同じ名の 2 本目を断る性質と包めた周の片付けの記録は不変で、包めない host を作る口と PATH を明示する口も不変ゆえ縮退の歯が緑のまま、実物を使う opt-in の口は作られず、歯の総数と各歯の assert は 1 字も動かず、intake の歯の file は verify の置き場として write-set に在るだけで diff 0 行である"
+
+[[contract]]
+id = "w"
+title = "受付に CPU の次元 — 枠を by_avail / by_token / by_cpu の 3 項の min にし、job 1 つの thread の値段（cores / gate.mutants_jobs）を器が決めて 3 つ目の穴で行へ渡す（縮退と測れない周は jobs 1 かつ thread 1・xtask は値を持たない）"
+req = ["NFR6", "FR46"]
+section = "31"
 write-set = ["crates/scribe2/src/pipe/admission.rs", "crates/scribe2/src/pipe/gate/verify.rs", "crates/scribe2/src/pipe/declaration.rs", "crates/scribe2/src/fleet/wait.rs", "crates/xtask/src/mutantsdiff.rs", "crates/xtask/src/main.rs", ".vessel.toml", "crates/scribe2/tests/e2e/pipe/gate.rs", "docs/design/gate-cost.md"]
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail admission_cpu_", "cargo nextest run -p scribe2 --lib --no-tests=fail declaration_threads_hole_", "cargo nextest run -p xtask --no-tests=fail mutants_diff_threads_flag_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_slots_threads_", "cargo nextest run -p scribe2 --lib --no-tests=fail admission_capacity_takes_the_min_of_the_two_formulas", "cargo nextest run -p scribe2 --lib --no-tests=fail admission_capacity_floors_at_zero", "cargo nextest run -p scribe2 --lib --no-tests=fail admission_capacity_is_unmeasured_on_unreadable_meminfo"]
 size = "M"
 done = "受付が配る枠が by_avail / by_token / by_cpu の 3 項の min になり、CPU 側で決まる fixture と memory 側で決まる fixture の両方が正しく、job 1 つの値段が max(1, floor(cores / gate.mutants_jobs)) の pure 関数 1 本で出て cores は実測（env を読まず rules 行も増えない）、受け付けた枠が jobs と thread を対で運んで縮退の周と cores を読めない周はどちらも jobs 1 かつ thread 1 になり、cores を読めない周の理由が受付の閉じた enum に 1 つ増えて record の slot_why= に固定の字面で残り、宣言の置ける穴が 3 つちょうどになって検出線の行が置換後に実効 jobs と実効 thread を両方持ち、xtask は受けた値を -- -- --test-threads へそのまま渡すだけで cores からの導出を持たず（渡されない周と数でない周は 1・既存の引数の対と -- が 2 つの形は不変）、枠が空くのを待つ完了 enum が CPU の材料も運んで待ちの観測が受付と同じ 3 項を測り、memory の 2 項を測る既存の歯 3 本（capacity の min / 0 の床 / 読めない meminfo）が 1 字も変わらずに緑である"
 
 [[contract]]
-id = "w"
+id = "x"
 title = "器の健康の遮断器 — 行を撃つ前に走行可能（/proc/loadavg の 4 番目の欄の分子）と待ち（procs_blocked）を読み、core あたりの倍率 2 本（rules 行 host.runnable_per_core = 4 / host.blocked_per_core = 1・裁定 id user 2026-09-20T15:23Z）を超えた周は空くまで待ち、gate.slot_wait_s を超えた周は行を撃たずに閉じた理由 1 つで INCONCLUSIVE（FAIL で終端させない・測れない周は待たずに進む）"
 req = ["NFR6", "FR46"]
-section = "31"
+section = "32"
 write-set = ["+crates/scribe2/src/pipe/health.rs", "crates/scribe2/src/pipe/mod.rs", "crates/scribe2/src/pipe/gate/verify.rs", "crates/scribe2/src/pipe/gate/record.rs", "crates/scribe2/src/pipe/gate.rs", "crates/scribe2/src/pipe/land/verify.rs", "crates/scribe2/src/pipe/queue.rs", "crates/scribe2/src/pipe/cli/step.rs", "crates/scribe2/src/fleet/wait.rs", "crates/scribe2/src/polarity.rs", "rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "crates/scribe2/tests/e2e/rules.rs", "crates/scribe2/tests/e2e/snapshots/e2e__rules__rules_external_form.snap", "crates/scribe2/tests/e2e/snapshots/e2e__polarity__polarity_external_form.snap", "crates/scribe2/tests/e2e/polarity.rs", "crates/scribe2/tests/e2e/pipe.rs", "crates/scribe2/tests/e2e/pipe/gate.rs", "docs/design/rules-manifest.md", "docs/design/gate-cost.md"]
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail health_judge_", "cargo nextest run -p scribe2 --lib --no-tests=fail gate_busy_order_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_gate_health_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail rules_embedded_manifest_declares_host_health_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail rules_external_form", "cargo nextest run -p scribe2 --test e2e --no-tests=fail polarity_gate_health_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail polarity_external_form"]
 size = "M"
-depends = ["v"]
+depends = ["w"]
 done = "host の健康を字面から判じる pure 関数 1 本が空いている / 混んでいる / 測れないの 3 値を返して走行可能を 4 番目の欄の分子から読み（分母に釣られず）待ちを procs_blocked の行から読み、閾値 = 倍率 × 実測の core 数でちょうどの値は混んでいるでなく、片方だけ超えた 2 形はどちらも混んでいるで、空・数でない・行が無いの 3 形はどれも測れないになり、行を撃つ前の待ちが完了 enum の variant 1 つ（pid() は 0）で唯一の待機実装を通り、gate.slot_wait_s を超えた周は verify の行が 1 本も撃たれず record に閉じた印が任意 field で載って判定が箱の中で死んだの直後にその印を読み赤が 1 行在っても INCONCLUSIVE になって便が Gated に留まり（FAIL で終端しない）、印が無い周の判定順は 1 字も変わらず、どちらかの面を読めない周は待たずに全段撃って record に測れないの字面を残し、倍率の rules 行 2 本（host.runnable_per_core = 4 / host.blocked_per_core = 1）が裁定 id user 2026-09-20T15:23Z と裁定日 2026-09-20 つきで増えて RuleKind の variant HostRunnablePerCore / HostBlockedPerCore と対になり外形の rows= と kinds= が 2 つずつ増え、極性一覧に in-loop / fail-open の guard が 1 つ gate の機械検証の段の直前に増えて外形の集計行の 4 数が動き、land の主実測も同じ 1 本を通る"
 
 <!-- contracts:end -->
