@@ -262,7 +262,8 @@ enum Found {
 
 /// `req` の各 id の要件本文を要件面から抜く。読み手は要件面の**形ごとに 1 関数**で、呼び分けは id の集合の読み手
 /// [`table::requirement_ids`] と同じ**拡張子の 1 match**（`.html` = [`requirement_row`]〔`id="<id>"` の行・tag を剥がした
-/// 字面〕・`.yaml` / `.yml` = [`requirement_yaml`]〔id と同じ mapping の `text:`〕・`.md` = [`requirement_md`]〔見出しの
+/// 字面〕・`.yaml` / `.yml` = [`requirement_yaml`]〔id と同じ mapping の `text:` → 無ければ `shall:`〕・`.md` =
+/// [`requirement_md`]〔見出しの
 /// 下の本文〕・設計 contract-source.md §4・C2）。要件面を読めない周・形を読めない周は理由の 1 行・id が無い周と本文の
 /// 無い id はその id の行に明示する（黙って落とさない・NFR4）。
 fn requirements_text(repo: &Path, path: &str, req: &[String]) -> String {
@@ -315,9 +316,11 @@ fn md_heading(line: &str) -> Option<&str> {
     rest.strip_prefix([' ', '\t']).map(str::trim)
 }
 
-/// yaml の要件面の本文: id の行（`- id: FR1` / `id: FR1`）と同じ mapping の **`text:` の値だけ**（`title:` へ倒さない・
-/// 設計 §4「yaml の `id` + `text`」）。値の続き（`text: |` の block・桁の深い行）は空白を畳んで繋ぐ。裸の `- FR1` と
-/// `text:` の無い mapping は [`Found::Empty`]。
+/// yaml の要件面の本文: id の行（`- id: FR1` / `id: FR1`）と同じ mapping の **`text:` の値**、無ければ **`shall:` の値**
+/// （EARS 形の要件面・設計 contract-source.md §32）。`shall:` を採る周に同じ mapping の `when:` が在れば、本文は
+/// 「`when:` の値 + [`BODY_JOIN`] + `shall:` の値」の 1 本にする（条件を落とすと約束の範囲が変わる）。`title:` と
+/// `plain:` は読まない。値の続き（`text: |` / `shall: |` の block・桁の深い行）は欄ごとに空白を畳んで繋ぐ。裸の
+/// `- FR1` と、`text:` も `shall:` も無い mapping（`when:` だけの mapping を含む）は [`Found::Empty`]。
 fn requirement_yaml(text: &str, id: &str) -> Found {
     let lines: Vec<&str> = text.lines().collect();
     let hit = lines.iter().enumerate().find_map(|(index, line)| {
@@ -336,29 +339,49 @@ fn requirement_yaml(text: &str, id: &str) -> Found {
     while member(start) != Member::Head && start > 0 && member(start.saturating_sub(1)) != Member::Outside {
         start = start.saturating_sub(1);
     }
-    let (mut body, mut reading) = (Vec::new(), false);
+    // 欄は [`BODY_KEYS`] の 3 つだけを集める（他の欄＝`title:` / `plain:` の周は `reading` が `None` で値も続きも捨てる）。
+    let (mut parts, mut reading) = ([Vec::new(), Vec::new(), Vec::new()], None);
     for (index, line) in lines.iter().enumerate().skip(start) {
         match yaml_member(line, column) {
             Member::Outside => break,
             Member::Head if index != start => break,
             Member::Head | Member::Key => {
                 let (_, key, value) = yaml_entry(line).unwrap_or_default();
-                reading = key == "text";
-                if reading && !matches!(value, "|" | ">" | "|-" | ">-" | "|+" | ">+") {
-                    body.push(value);
+                reading = BODY_KEYS.iter().position(|found| *found == key);
+                if let Some(part) = reading.and_then(|at| parts.get_mut(at)) {
+                    if !matches!(value, "|" | ">" | "|-" | ">-" | "|+" | ">+") {
+                        part.push(value);
+                    }
                 }
             }
-            Member::Inner if reading => body.push(unquote(line)),
-            Member::Inner => {}
+            Member::Inner => {
+                if let Some(part) = reading.and_then(|at| parts.get_mut(at)) {
+                    part.push(unquote(line));
+                }
+            }
         }
     }
-    let joined = body.join(" ").split_whitespace().collect::<Vec<&str>>().join(" ");
+    let [text, when, shall] = parts.map(|part| part.join(" ").split_whitespace().collect::<Vec<&str>>().join(" "));
+    // `text:` が在ればそれだけ（`shall:` も `when:` も混ぜない）・無ければ `shall:` に `when:` を前置して 1 本に。
+    let joined = match (text.as_str(), when.as_str(), shall.as_str()) {
+        ("", _, "") => String::new(),
+        ("", "", found) => found.to_owned(),
+        ("", condition, found) => format!("{condition}{BODY_JOIN}{found}"),
+        (found, _, _) => found.to_owned(),
+    };
     if joined.is_empty() {
         Found::Empty
     } else {
         Found::Body(joined)
     }
 }
+
+/// [`requirement_yaml`] が読む本文の欄（優先順ではなく**組み立ての並び**: `text:` / `when:` / `shall:`）。欄の名と順序は
+/// この 1 か所だけが持つ（`.vessel.toml` にも rules 行にも宣言を足さない・設計 contract-source.md §32・C17）。
+const BODY_KEYS: [&str; 3] = ["text", "when", "shall"];
+
+/// [`requirement_yaml`] が `when:` と `shall:` の値を繋ぐ区切り（本文は空白を畳む形なので、空白だけでは境が消える）。
+const BODY_JOIN: &str = " — ";
 
 /// yaml の 1 行の (key の桁, key, 値)。`- id: FR1` は key の桁を `-` と空白の後ろに取り、`- FR1` の裸の項目は key が空。
 /// 空行と `#` の comment は `None`。値は両端の引用符を剥がす。
@@ -647,6 +670,72 @@ mod tests {
             "FR1: 便を 起こす。\nFR2: （要件面 reqs.md の FR2 に本文が無い）"
         );
         assert!(requirements_text(&repo, "reqs.json", &ids).starts_with("（要件面 reqs.json の形を読めない: "));
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// (a) `text:` を持たず `shall:` を持つ mapping の本文は `shall:` の値（設計 §32 の約束 2）。
+    #[test]
+    fn pipe_review_yaml_shall_reads_shall_when_text_is_absent() {
+        let yaml = "requirements:\n  - id: FR1\n    title: 起動\n    shall: \"便を  起こす\"\n";
+        assert_eq!(requirement_yaml(yaml, "FR1"), Found::Body("便を 起こす".to_owned()), "text が無ければ shall の値");
+    }
+
+    /// (f) `shall: |` の block の続きも `text:` と同じ 1 本の形で畳む（設計 §32 の約束 2 の block の面）。
+    #[test]
+    fn pipe_review_yaml_shall_folds_the_block_continuation() {
+        let yaml = "requirements:\n  - shall: |\n      二行の\n      約束\n    id: FR2\n";
+        assert_eq!(requirement_yaml(yaml, "FR2"), Found::Body("二行の 約束".to_owned()), "block の続きを空白で畳む");
+    }
+
+    /// (b) 同じ mapping に `when:` が在れば本文は「`when:` の値 + 空白 + `—` + 空白 + `shall:` の値」の 1 本
+    /// （設計 §32 の約束 3・区切りの字面を逐語で pin し、`when:` の値が落ちれば落ちる）。欄の並びは問わない。
+    #[test]
+    fn pipe_review_yaml_shall_joins_when_with_an_em_dash() {
+        let yaml = "requirements:\n  - id: FR3\n    when: 席が  空いた とき\n    shall: 便を 起こす\n";
+        let body = "席が 空いた とき — 便を 起こす".to_owned();
+        assert_eq!(requirement_yaml(yaml, "FR3"), Found::Body(body.clone()), "条件と約束を区切りの 1 文字で繋ぐ");
+        assert!(body.contains(" — "), "区切りは前後に空白 1 つを伴う em dash 1 文字");
+        let swapped = "requirements:\n  - id: FR3\n    shall: 便を 起こす\n    when: 席が  空いた とき\n";
+        assert_eq!(requirement_yaml(swapped, "FR3"), Found::Body(body), "yaml の欄の並びに依らない");
+    }
+
+    /// (c) `text:` と `shall:`（と `when:`）を両方持つ mapping は `text:` の値だけ（設計 §32 の約束 1 の優先・否定の枝）。
+    #[test]
+    fn pipe_review_yaml_shall_never_mixes_into_an_existing_text() {
+        let yaml = "requirements:\n  - id: FR4\n    when: 条件の字面\n    text: 正本の  本文\n    shall: 約束の字面\n";
+        let Found::Body(body) = requirement_yaml(yaml, "FR4") else {
+            panic!("text を持つ mapping は本文を持つ");
+        };
+        assert_eq!(body, "正本の 本文", "text の値だけ");
+        assert!(!body.contains("約束の字面"), "shall の値が混ざらない");
+        assert!(!body.contains("条件の字面"), "when の値が混ざらない");
+        assert!(!body.contains('—'), "区切りも混ざらない");
+    }
+
+    /// (d) `when:` だけ・`plain:` だけ・`title:` だけの mapping と裸の列はどれも本文なし（設計 §32 の約束 4 と 5 の
+    /// 否定の枝＝`when:` だけで本文を作らず `plain:` を読まない）。
+    #[test]
+    fn pipe_review_yaml_shall_leaves_when_only_and_plain_without_a_body() {
+        let yaml = "requirements:\n  - id: FR5\n    when: 条件だけ\n  - id: FR6\n    plain: 平易な 言い換え\n  - id: FR7\n    title: 題だけ\n  - FR8\n";
+        assert_eq!(requirement_yaml(yaml, "FR5"), Found::Empty, "when だけでは本文を作らない");
+        assert_eq!(requirement_yaml(yaml, "FR6"), Found::Empty, "plain は読まない");
+        assert_eq!(requirement_yaml(yaml, "FR7"), Found::Empty, "title へ倒さない");
+        assert_eq!(requirement_yaml(yaml, "FR8"), Found::Empty, "裸の列は本文なし");
+    }
+
+    /// (e) id が要件面に無い周は不在の 1 値（設計 §32 の約束 5・「本文が無い」と別の理由）。
+    #[test]
+    fn pipe_review_yaml_shall_keeps_absent_apart_from_empty() {
+        let yaml = "requirements:\n  - id: FR5\n    when: 条件だけ\n  - id: FR1\n    shall: 便を 起こす\n";
+        assert_eq!(requirement_yaml(yaml, "FR9"), Found::Absent, "要件面に無い id");
+        let repo = scratch("shall");
+        let _ = std::fs::write(repo.join("reqs.yaml"), yaml);
+        let ids = ["FR1".to_owned(), "FR5".to_owned(), "FR9".to_owned()];
+        assert_eq!(
+            requirements_text(&repo, "reqs.yaml", &ids),
+            "FR1: 便を 起こす\nFR5: （要件面 reqs.yaml の FR5 に本文が無い）\nFR9: （要件面 reqs.yaml に無い）",
+            "呼び手の 2 つの理由の行の字面は不変"
+        );
         let _ = std::fs::remove_dir_all(&repo);
     }
 
