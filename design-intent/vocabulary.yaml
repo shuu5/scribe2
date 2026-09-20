@@ -827,18 +827,18 @@ terms:
   - canonical: 役割の口座
     domain: consumer
     aliases: [role account]
-    definition: host の根の宣言 file (roles.toml) が役割ごとに高々 1 つ持つ口座 label (宣言値)。 席の起動と立て直しが使う口座は実効の口座の解決が決め (実効の記録が無い周の種がこの宣言値・ADR-0041 が ADR-0036 の解決順を supersede)、 便用の選定は host 全体で候補から外す。 書き換えは器の口 account reassign (ADR-0036・設計 docs/design/seat-roles.md §15 / §16)。
-    relationships: [役割, host の根, host の manifest, 席の登録 row, 口座選定, 立て直し]
+    definition: host の根の宣言 file (roles.toml) が役割ごとに高々 1 つ持つ口座 label (宣言値)。 席の起動と立て直しが使う口座は実効の口座の解決が決め (実効の記録が無い周の種がこの宣言値・ADR-0041 が ADR-0036 の解決順を supersede)、 便用の選定は host 全体で候補から外す。 書き換えは器の口 account reassign (ADR-0036・設計 docs/design/seat-roles.md §15 / §16)。 ADR-0049 が宣言の単位を役割から project の群へ置き換え、 宣言の置き場も host の面の表 1 つへ移す (proposed・code には 1 行も入っていない)。
+    relationships: [役割, host の根, host の manifest, 席の登録 row, 口座選定, 立て直し, project の群]
   - canonical: host の根
     domain: consumer
     aliases: [host root]
-    definition: state dir の親の下の host 用 dir (<親>/<NAME>-host/)。 同じ host の全 project が共有する置き場で、 受付札 (並列の枠・ADR-0021 §2.3) と役割の口座の宣言 (ADR-0036) がここに在る。 env を読まず state dir から導く。 state の真実は置かない (憲法 C3)。
-    relationships: [役割の口座, 並列の枠, 受付札, host の manifest]
+    definition: state dir の親の下の host 用 dir (<親>/<NAME>-host/)。 同じ host の全 project が共有する置き場で、 受付札 (並列の枠・ADR-0021 §2.3) と役割の口座の宣言 (ADR-0036) がここに在る。 群の今の口座の記録も ADR-0049 でここに置く (proposed)。 env を読まず state dir から導く。 state の真実は置かない (憲法 C3)。
+    relationships: [役割の口座, 並列の枠, 受付札, host の manifest, 群の今の口座]
   - canonical: 実効の口座
     domain: consumer
     aliases: [effective role account]
-    definition: その周に役割の席が実際に使う口座。 実効の記録の口座 (使える間は居続ける)、 宣言の口座 (記録が無い周の種)、 役割単位で 1 回だけ session 用の順序 (余裕が最大) で選び直した口座の順に 1 関数で解く。 席の起動 (SRS FR59) と便用の除外 (SRS FR36) が同じ解き方を読む (ADR-0041・設計 docs/design/seat-roles.md §17)。 役割の口座 (宣言値) とは別で、 登録 row の口座はこの値の写し。
-    relationships: [役割の口座, 実効の記録, 妥協の起動, 口座選定, 席の登録 row, 席の起動]
+    definition: その周に役割の席が実際に使う口座。 実効の記録の口座 (使える間は居続ける)、 宣言の口座 (記録が無い周の種)、 役割単位で 1 回だけ session 用の順序 (余裕が最大) で選び直した口座の順に 1 関数で解く。 席の起動 (SRS FR59) と便用の除外 (SRS FR36) が同じ解き方を読む (ADR-0041・設計 docs/design/seat-roles.md §17)。 役割の口座 (宣言値) とは別で、 登録 row の口座はこの値の写し。 ADR-0049 が解く単位を役割から project の群へ置き換える (proposed・後継の語は群の今の口座)。
+    relationships: [役割の口座, 実効の記録, 妥協の起動, 口座選定, 席の登録 row, 席の起動, 群の今の口座]
     flagged_ambiguities: ["実効: 実効の口座 (役割の席が使う口座) と実効 jobs (変異検査の並列度) は別義", "実測の口座と 1 字差: 実効 = 器が解いた口座 / 実測 = session の開始時に測った現物の口座"]
   - canonical: 実測の口座
     domain: consumer
@@ -848,12 +848,12 @@ terms:
   - canonical: 実効の記録
     domain: consumer
     aliases: [effective role record]
-    definition: 役割の実効の口座を器が host の根に書く記録 (役割ごとに高々 1 件・role と口座 label と ts と妥協の理由)。 宣言 file (人が書く宣言値) とは file も型も別で、 席を起こす口だけが lock の下で一時 file → rename で書き、 先に書いた席が勝って同じ役割の後続の席は読むだけ。 書き換える周と宣言の書き換えの口 (account reassign) の周は、 前の記録を消さずに履歴の側へ move する (憲法 N1.2・ADR-0041)。
-    relationships: [実効の口座, 役割の口座, host の根, 退役, 口座選定]
+    definition: 役割の実効の口座を器が host の根に書く記録 (役割ごとに高々 1 件・role と口座 label と ts と妥協の理由)。 宣言 file (人が書く宣言値) とは file も型も別で、 席を起こす口だけが lock の下で一時 file → rename で書き、 先に書いた席が勝って同じ役割の後続の席は読むだけ。 書き換える周と宣言の書き換えの口 (account reassign) の周は、 前の記録を消さずに履歴の側へ move する (憲法 N1.2・ADR-0041)。 ADR-0049 が記録の単位を役割から project の群へ置き換える (proposed・後継の語は群の今の口座)。
+    relationships: [実効の口座, 役割の口座, host の根, 退役, 口座選定, 群の今の口座]
   - canonical: 妥協の起動
     domain: consumer
     aliases: [compromise launch]
-    definition: 役割の口座を選び直す周に閾値未満の候補が無いとき、 断らずに席を立てること。 段は 2 つ = 閾値以上でも当たっていない口座の中で逼迫度が最小 (over-threshold)、 それも無ければ他の役割の口座との同居も入れて逼迫度が最小 (shared-with-role)。 理由は実効の記録・launch / relaunch の記録の行・SessionStart の席の指示文に出て、 席は作業を止めて対話面で user の裁定を待つ。 既に立っている席が閾値以上で選び直しの候補が無い周は、 管理 tick が退避の合図の代わりに妥協の通知を同じ口座・同じ窓につき 1 回だけ注入する。 当たっていない測れた口座が 1 つも無い周だけは断る。 妥協でない周の同居は不可 (ADR-0041・設計 docs/design/seat-roles.md §18)。
+    definition: 役割の口座を選び直す周に閾値未満の候補が無いとき、 断らずに席を立てること。 段は 2 つ = 閾値以上でも当たっていない口座の中で逼迫度が最小 (over-threshold)、 それも無ければ他の役割の口座との同居も入れて逼迫度が最小 (shared-with-role)。 理由は実効の記録・launch / relaunch の記録の行・SessionStart の席の指示文に出て、 席は作業を止めて対話面で user の裁定を待つ。 既に立っている席が閾値以上で選び直しの候補が無い周は、 管理 tick が退避の合図の代わりに妥協の通知を同じ口座・同じ窓につき 1 回だけ注入する。 当たっていない測れた口座が 1 つも無い周だけは断る。 妥協でない周の同居は不可 (ADR-0041・設計 docs/design/seat-roles.md §18)。 ADR-0049 は席の起動のこの扱いを決め直さず、 群の移動に妥協を作らないことだけを決める (proposed)。
     relationships: [実効の口座, 実効の記録, 口座選定, 席の指示文, 対話面, 妥協の通知]
   - canonical: 妥協の通知
     domain: consumer
@@ -926,3 +926,28 @@ terms:
     aliases: [stop]
     definition: 走っている便 1 本を終端 Stopped へ倒す操作の権能 (ADR-0048・proposed)。 rules 行 role.orchestrator が持ち、 席が撃てるのは便を名指す形だけで、 生きている席を全部止める形と名指しを読めない呼び出しは起動の権能のまま (fail-closed) ＝どの席からも撃てない。
     relationships: [権能, 起動の権能, live な便, orchestrator, guard]
+  - canonical: project の群
+    domain: consumer
+    aliases: [project group, 群]
+    definition: 席の口座を持つ単位 (ADR-0049・proposed)。 名・置き場 (anchor) の列・候補の口座 label の順の列を host の面の表 1 つが宣言し、 群の中の席はどの置き場からでも同じ口座に居る。 置き場が project ごとに分かれていても同じ群に入れられる。 役割は 1 つになったので (ADR-0045)、 役割は単位として働かない。
+    relationships: [host の面, 群の今の口座, 便用の除外, 席, 口座選定, 役割の口座]
+  - canonical: 群の今の口座
+    domain: consumer
+    aliases: [group effective account]
+    definition: その群の席がいま実際に使っている口座 (ADR-0049・proposed)。 器が host の根に書く実効値で、 群ごとに高々 1 件。 宣言の候補の列 (人が書く宣言値) とは file も型も別で、 記録が無い周は候補の先頭が種になる (憲法 C10)。 記録が在るのに読めない周は typed に止まる。
+    relationships: [project の群, host の根, 便用の除外, 実効の口座, 実効の記録, 口座選定]
+  - canonical: 便用の除外
+    domain: consumer
+    aliases: [run-purpose exclusion]
+    definition: 便用の口座選定の候補から、 便の置き場 (anchor) の席の登録 row が持つ口座と、 宣言されたすべての群の候補の口座を外すこと (ADR-0049・proposed)。 次の選定から効き、 走行中の便は止めない。 便用の並べ順と 1 口座あたりの上限を置かないこと (ADR-0027 / ADR-0042) は変えない。
+    relationships: [口座選定, project の群, 席の登録 row, 便, 退役]
+  - canonical: 常設の承認
+    domain: consumer
+    aliases: [standing approval]
+    definition: 憲法 A1 の「使う」に当たる操作のうち、 宣言そのものを user の承認と見なし、 以後の 1 回ごとは承認の event を記すだけで足りるとする形 (ADR-0049・proposed)。 群の宣言 (候補の口座の列) がこの形をとる。
+    relationships: [承認 event, 対話面, project の群, 裁定 id]
+  - canonical: 機械の復帰
+    domain: consumer
+    aliases: [mechanical resumption]
+    definition: 席を起こし直した周に、 台帳の行と git の現在地と圧縮の直前の 1 枠だけから直前の流れを組んで session の開始で出す道 (ADR-0049・proposed)。 対話の記録は運ばない。 圧縮・群の移動・異常終了の 3 つが同じ 1 本を通る。
+    relationships: [席の指示文, 台帳, project の群, 席の起動]
