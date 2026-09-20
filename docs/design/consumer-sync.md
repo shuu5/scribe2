@@ -49,6 +49,14 @@
 - **口**: `<NAME> vessel update --state-dir S [--remote R] [--branch B]`。`[[vessel]] repo` が無ければ `vessel-repo-undeclared` で断る。
 - **順序固定**: (1) `git -C <repo> status --porcelain` が非空なら `dirty` で断る（作業ツリーを動かさない・N1）。(2) `git fetch <remote>` → `git merge --ff-only <remote>/<branch>`（既定 = `origin` / `main`・ff できない周は `not-fast-forward` で断る・rebase も reset もしない）。(3) `cargo install --path crates/<NAME> --locked`（PATH の binary を入れ替える・`--locked` は nextest と同じ前提）。(4) fleet の event log に **`InstallRecorded`**（`EventKind` の新 variant・宣言順の末尾・`KINDS` +1・schema 1 のまま）を 1 件: `{ sha: <install した HEAD の sha12>, host: <hostname>, path: <cargo が報告した binary の path> }`。(5) stdout に 1 行 `vessel: installed sha=<sha12> path=<path>`。
 - **何を書かないか**: consumer の帳簿（`installed_plugins.json`）も cache も書かない（他人の帳簿・ADR-0028 §5）。consumer の席への通知も送らない（§6 の tick が食い違いを測って動く＝通知の散文を無くす）。
+- **断りは閉じた型**（順序固定の各段の失敗を 1 つの enum で持ち、rc は既存の拒否と同じ・散文にしない）: 宣言が無い（`vessel-repo-undeclared`）／作業ツリーが汚れている（`dirty`）／ff できない（`not-fast-forward`）／build と install が落ちた。**どの断りでも (4) の event は 0 件**（成功した周だけ 1 件・C10＝「撃った」と「入った」を融合しない）。
+- **kind を足す連鎖（現物・verified 2026-09-20）**: `EventKind` の variant を 1 つ足す便は、宣言順の列（`crates/scribe2/src/fleet/mod.rs` の `KINDS`）・replay の網羅 match・`fleet record` が**手で書けない kind**として拒む側・`fleet` の外形を同じ PR で動かす。記録時点で `InstallRecorded` は src に 0 件＝本行が新設する。**`crates/scribe2/src/fleet/usage.rs` は面に入らない**（`EventKind` を 2 つ構築するだけで網羅 match を持たない・同 file は上限の余地が 192 行で size M の見積に足りず、write-set に残すと受付が `cap-headroom` で断る＝2026-09-20 の preflight で実測）。
+- **歯**（接頭辞 `vessel_update_`・置き場は `crates/scribe2/tests/e2e/hook.rs`〔口の側〕と `crates/scribe2/tests/e2e/fleet.rs`〔event の側〕・偽 `git` と偽 `cargo` は PATH の先頭に置く shim で argv を写す）:
+  1. **順序**: 成功の周に写った argv が `status --porcelain` → `fetch` → `merge --ff-only` → `cargo install --path … --locked` の**この順**で、`InstallRecorded` が 1 件（sha12 と host と path を持つ）記され、stdout が 1 行（sha12 と path）である。
+  2. **断り 4 形**（否定の枝・1 形 1 本）: 宣言が無い／`status --porcelain` が非空／`merge --ff-only` が rc ≠ 0／`cargo install` が rc ≠ 0 の各周で、**その段より後の argv が 1 本も写らず** event は 0 件で、断りの語が stdout か stderr に出る。
+  3. **kind の連鎖**: `fleet record` の口にこの kind を手で渡すと拒まれる（run の kind と同じ扱いにしない）。
+  4. **宣言順の pin**は既存の歯が受け、行の verify が完全名 `fleet_kinds_follow_declaration_order`（`crates/scribe2/tests/e2e/fleet.rs`・`KINDS` の並びと母集団の件数）で撃つ＝variant を足して列に足し忘れた周はここで赤になる。
+  5. **口の外形**は既存の歯が受け、行の verify が完全名 `vessel_external_form`（`crates/scribe2/tests/e2e/hook.rs`・snapshot `e2e__hook__vessel_external_form.snap`）で撃つ＝`update` の usage 行の追加がそこに写る。
 - **子 process**: `git` と `cargo` は器の子（`std::process::Command`・timeout は既存の唯一の wait・出力は `--color never` で読む〔auto-memory の CI 色の型〕）。失敗は typed（`fetch-failed` / `install-failed` に rc を添える）。(4) の追記に失敗した周（store が書けない）は `record-failed` で断る（install は済んでいる＝binary は新しく `InstallRecorded` は 0 件・§6 の tick が食い違いを測る側・rc は 2）。
 - **A1**: 消す / 出す / 使う のどれでもない（local の build と install・push しない・課金しない）。
 
@@ -172,10 +180,10 @@ id = "e"
 title = "vessel update — ff → build → install を 1 つの口で行い InstallRecorded を event log に 1 件記す（§12 (b) からの切り出し）"
 req = ["FR61"]
 section = "5"
-write-set = ["crates/scribe2/src/hook/vessel.rs", "crates/scribe2/src/fleet/mod.rs", "crates/scribe2/src/fleet/event.rs", "crates/scribe2/src/fleet/replay.rs", "crates/scribe2/src/fleet/cli.rs", "crates/scribe2/src/account/mod.rs", "crates/scribe2/src/fleet/usage.rs", "crates/scribe2/src/pipe/mod.rs", "crates/scribe2/src/pipe/queue.rs", "crates/scribe2/src/seat/role.rs", "crates/scribe2/tests/e2e/hook.rs", "crates/scribe2/tests/e2e/fleet.rs", "crates/scribe2/tests/e2e/prop.rs", "crates/scribe2/tests/e2e/pipe/ratelimit.rs", "crates/scribe2/tests/e2e/pipe/stop.rs", "crates/scribe2/tests/e2e/seat.rs", "crates/scribe2/tests/e2e/snapshots/e2e__hook__vessel_external_form.snap", ".config/nextest.toml"]
-verify = ["cargo nextest run -p scribe2 --no-tests=fail vessel_update_ fleet_kinds_pin fleet_record_refuses_"]
+write-set = ["crates/scribe2/src/hook/vessel.rs", "crates/scribe2/src/fleet/mod.rs", "crates/scribe2/src/fleet/event.rs", "crates/scribe2/src/fleet/replay.rs", "crates/scribe2/src/fleet/cli.rs", "crates/scribe2/src/account/mod.rs", "crates/scribe2/src/pipe/mod.rs", "crates/scribe2/src/pipe/queue.rs", "crates/scribe2/src/seat/role.rs", "crates/scribe2/tests/e2e/hook.rs", "crates/scribe2/tests/e2e/fleet.rs", "crates/scribe2/tests/e2e/prop.rs", "crates/scribe2/tests/e2e/pipe/ratelimit.rs", "crates/scribe2/tests/e2e/pipe/stop.rs", "crates/scribe2/tests/e2e/seat.rs", "crates/scribe2/tests/e2e/snapshots/e2e__hook__vessel_external_form.snap", ".config/nextest.toml"]
+verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail vessel_update_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail fleet_kinds_follow_declaration_order", "cargo nextest run -p scribe2 --test e2e --no-tests=fail vessel_external_form"]
 size = "M"
-done = "偽 git と偽 cargo で ff → build → install の順序の argv が写り InstallRecorded が 1 件記され、dirty / not-fast-forward / install の失敗は typed に断って event 0、fleet record はこの kind を拒む"
+done = "偽 git と偽 cargo で status → fetch → merge --ff-only → cargo install の順序の argv が写って InstallRecorded が 1 件（sha12 と host と path）記され stdout が 1 行出て、宣言なし / dirty / not-fast-forward / install の失敗の 4 形はその段より後の argv を 1 本も撃たず event 0 で典型の語を出し、fleet record はこの kind を手で渡されると拒み、KINDS の宣言順の pin と vessel の外形 snapshot が更新されて緑である"
 
 [[contract]]
 id = "f"
