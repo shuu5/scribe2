@@ -660,8 +660,13 @@ fn noted(hooked: &Hooked, what: &str, started: Instant) {
 ///
 /// 権能付きでない操作（[`role_guard::subject`] が `None`）は tmux も event log も撃たずに通す（NFR5）。
 /// 権能付きの操作は allow / deny の両方で記録 1 行（`what` = `role-<allow|deny> <種別>`）。pane が無い周は
-/// 席ではない＝通す・記録なし。
+/// 席ではない＝通す・記録なし（pane の無い周は分類もしない＝runner / lens の毎編集に git を撃たない・NFR5）。
+/// Edit 系の種別は anchor（`hooked.root`）の HEAD の vessel 宣言で分類する（§24・git の子 process 1 回・Bash の
+/// 面は path を分類しないので読まない）。
 fn role_outcome(hooked: &Hooked, op: &Operation, started: Instant) -> Outcome {
+    if hooked.pane.is_none_or(|found| found.trim().is_empty()) {
+        return Outcome::ok(Vec::new());
+    }
     let Some(subject) = role_guard::subject(op, Some(hooked.dir)) else {
         return Outcome::ok(Vec::new());
     };

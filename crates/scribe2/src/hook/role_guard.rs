@@ -8,6 +8,11 @@
 //! path の prefix だけで分類し、字面の語彙では判定しない）ごとの権能を照合し、持たなければ deny。契約が
 //! 印（`opens`）で開いた便の write-set の内側だけは、その種別の権能が無くても通す（AC16）。
 //!
+//! 種別に属する path の集合は**対象 repo の vessel 宣言が名乗る**（設計 §24・ADR-0047・[`PathKinds`]）: guard は
+//! 分類の直前に anchor の HEAD の tree の宣言を読み（Edit 系の周にだけ git の子 process 1 回）、書かれた key の
+//! 種別は宣言の prefix で、書かれていない種別は固定の判定（本 repo の配置）で分類する。宣言 file 自身は常に
+//! `Code`（席は自分の柵を広げられない）で、不正な宣言は repo 内の全 file を `Code` に倒し deny の行が理由を名乗る。
+//!
 //! **identity は `--pane` だけ**（C2.2・env を読まない）。pane が無い・空（tmux の外の runner / lens）は席では
 //! なく本 guard の対象外＝[`RoleDecision::Inactive`]（ADR-0009 の write-set guard がそのまま担う）。**解く順**は
 //! anchor（repo root・state dir・hook 側）→ pane → target → 登録 row（`seat register`・s2-07l.192）→ role →
@@ -21,6 +26,8 @@ use super::guard::GUARDED;
 use crate::fleet::{replay, store};
 use crate::name::NAME;
 use crate::pipe::contract::Contract;
+use crate::pipe::declaration::path_kinds::{self, Invalid, PathKinds};
+use crate::pipe::declaration::DECL_FILE;
 use crate::pipe::{contract_path, worktrees_dir};
 use crate::polarity::{OnFailure, Polarity, Timing};
 use crate::rules::manifest::Manifest;
@@ -101,16 +108,49 @@ impl PathKind {
         }
     }
 
-    /// repo 相対 path（`..` を畳んだ後の形）から種別を引く。root ちょうど（空）は repo 内＝`Code`。
+    /// repo 相対 path（`..` を畳んだ後の形）から**固定の判定**（本 repo の配置）で種別を引く。root ちょうど（空）は
+    /// repo 内＝`Code`。
     pub fn of_relative(rel: &Path) -> Self {
         let parts: Vec<&str> = rel.components().filter_map(|part| part.as_os_str().to_str()).collect();
-        match parts.as_slice() {
+        Self::fixed(&parts)
+    }
+
+    /// 固定の判定の本体（段の並びだけを見る）。
+    fn fixed(parts: &[&str]) -> Self {
+        match parts {
             [first, ..] if *first == ".." => Self::Outside,
             [first, ..] if *first == DESIGN_INTENT_DIR => Self::DesignIntent,
             [first, second, ..] if [*first, *second] == DESIGN_DOC_DIRS => Self::DesignDoc,
             [first, _, third, ..] if [*first, *third] == TESTS_DIRS => Self::Tests,
             _ => Self::Code,
         }
+    }
+
+    /// repo 相対 path から、anchor の宣言（[`PathKinds`]・設計 §24）で種別を引く。`..` で外れる形は宣言に依らず
+    /// `Outside`。宣言 file 自身（[`DECL_FILE`]）は宣言に何が書いてあっても `Code`。不正な宣言は repo 内の全 file が
+    /// `Code`。書かれた key の種別は宣言の prefix（[`path_kinds::matches`]）で、書かれていない種別は固定の判定
+    /// （[`Self::fixed`]）で、宣言順に最初に当たった種別を返す。
+    pub fn classify(rel: &Path, kinds: &PathKinds) -> Self {
+        let parts: Vec<&str> = rel.components().filter_map(|part| part.as_os_str().to_str()).collect();
+        if parts.first() == Some(&"..") {
+            return Self::Outside;
+        }
+        let text = parts.join("/");
+        if text == DECL_FILE {
+            return Self::Code;
+        }
+        let declared = match kinds {
+            PathKinds::Invalid(_) => return Self::Code,
+            PathKinds::Default => return Self::fixed(&parts),
+            PathKinds::Declared(declared) => declared,
+        };
+        let items = [&declared.design_intent, &declared.design_doc, &declared.tests];
+        let hit = |(kind, declared): (&Self, &Option<Vec<String>>)| match declared {
+            Some(items) => path_kinds::under_any(items, &text),
+            None => Self::fixed(&parts) == *kind,
+        };
+        let kinds = [Self::DesignIntent, Self::DesignDoc, Self::Tests];
+        kinds.iter().zip(items).find(|pair| hit(*pair)).map_or(Self::Code, |(kind, _)| *kind)
     }
 }
 
@@ -138,6 +178,8 @@ pub enum Subject {
         kind: PathKind,
         /// 印で開いた便の write-set の内側か。
         opened: bool,
+        /// anchor の宣言が不正な周の理由（§24・deny の行に載せる・repo の外の判定は宣言に依らないので `None`）。
+        invalid: Option<Invalid>,
     },
 }
 
@@ -149,8 +191,8 @@ impl Subject {
                 let names: Vec<&str> = found.iter().map(|cap| cap.as_str()).collect();
                 format!("capability={}", names.join("+"))
             }
-            Self::Path { kind, opened: true } => format!("path={} opened", kind.as_str()),
-            Self::Path { kind, opened: false } => format!("path={}", kind.as_str()),
+            Self::Path { kind, opened: true, .. } => format!("path={} opened", kind.as_str()),
+            Self::Path { kind, opened: false, .. } => format!("path={}", kind.as_str()),
         }
     }
 }
@@ -194,7 +236,9 @@ pub struct Seat<'a> {
 
 /// 操作が権能付きか。権能付きでない Bash / Edit は `None`（通す・記録なし・tmux も event log も撃たない）。
 ///
-/// Edit 系で編集先を読めない周は root の内側と確かめられないので `Outside` として扱う（fail-closed）。
+/// Edit 系で編集先を読めない周は root の内側と確かめられないので `Outside` として扱う（fail-closed）。分類の直前に
+/// anchor（`op.root`）の HEAD の宣言を読む（[`PathKinds::read_at_head`]・Edit 系で編集先と root が在る周にだけ git を
+/// 撃つ・§24）。repo の外の判定は宣言に依らないので、`Outside` の周は不正の理由を載せない。
 pub fn subject(op: &Operation, state_dir: Option<&Path>) -> Option<Subject> {
     if op.tool == BASH {
         let found = capabilities_of(op.command.unwrap_or_default());
@@ -204,14 +248,16 @@ pub fn subject(op: &Operation, state_dir: Option<&Path>) -> Option<Subject> {
         return None;
     }
     let Some(target) = op.path else {
-        return Some(Subject::Path { kind: PathKind::Outside, opened: false });
+        return Some(Subject::Path { kind: PathKind::Outside, opened: false, invalid: None });
     };
-    let located = locate(op.root, op.cwd, target);
+    let kinds = op.root.map_or(PathKinds::Default, PathKinds::read_at_head);
+    let located = locate(op.root, op.cwd, target, &kinds);
     let opened = match (&located.run, state_dir) {
         (Some((run, rel)), Some(dir)) => opened_by_contract(dir, run, rel, located.kind),
         _ => false,
     };
-    Some(Subject::Path { kind: located.kind, opened })
+    let invalid = kinds.invalid().filter(|_| located.kind != PathKind::Outside);
+    Some(Subject::Path { kind: located.kind, opened, invalid })
 }
 
 /// command 行が含む権能付き subcommand の権能（宣言順・重複なし）。
@@ -250,13 +296,14 @@ pub struct Located {
     pub run: Option<(String, PathBuf)>,
 }
 
-/// 編集先を repo root からの相対 path へ解いて分類する。
+/// 編集先を repo root からの相対 path へ解いて分類する（分類は anchor の宣言 `kinds`・[`PathKind::classify`]）。
 ///
 /// 相対 path の基準は payload の `cwd`。root の外（字句で `..` へ抜ける・実体が symlink で外を指す）と root を
-/// 解けない周は `Outside`。便の worktree の中は worktree 相対で分類する（便の木は repo の写しである）。
-/// `.worktrees/` 直下の便の器でない worktree（`<root>/.worktrees/<name>/<rel>`・席が docs PR 用に切る木）も
-/// repo の写しとして `<rel>` で分類する（便の印は開かない＝`run: None`）。`.worktrees/<name>` そのものは `Code`。
-pub fn locate(root: Option<&Path>, cwd: &Path, target: &str) -> Located {
+/// 解けない周は `Outside`。便の worktree の中は worktree 相対で分類する（便の木は repo の写しである＝anchor の
+/// 宣言で分類する・§24）。`.worktrees/` 直下の便の器でない worktree（`<root>/.worktrees/<name>/<rel>`・席が docs
+/// PR 用に切る木）も repo の写しとして `<rel>` で分類する（便の印は開かない＝`run: None`）。`.worktrees/<name>`
+/// そのものは `Code`。
+pub fn locate(root: Option<&Path>, cwd: &Path, target: &str, kinds: &PathKinds) -> Located {
     let outside = Located { kind: PathKind::Outside, run: None };
     let Some(root) = root else {
         return outside;
@@ -272,7 +319,7 @@ pub fn locate(root: Option<&Path>, cwd: &Path, target: &str) -> Located {
     };
     let bead_trees = worktrees_dir(root);
     let Ok(inside) = root.join(&rel).strip_prefix(&bead_trees).map(Path::to_path_buf) else {
-        return Located { kind: PathKind::of_relative(repo_copy_relative(root, &bead_trees, &rel)), run: None };
+        return Located { kind: PathKind::classify(repo_copy_relative(root, &bead_trees, &rel), kinds), run: None };
     };
     let mut parts = inside.components();
     let Some(Component::Normal(run)) = parts.next() else {
@@ -280,7 +327,7 @@ pub fn locate(root: Option<&Path>, cwd: &Path, target: &str) -> Located {
     };
     let within: PathBuf = parts.collect();
     Located {
-        kind: PathKind::of_relative(&within),
+        kind: PathKind::classify(&within, kinds),
         run: Some((run.to_string_lossy().into_owned(), within)),
     }
 }
@@ -457,18 +504,18 @@ pub fn judge(subject: &Subject, role: Role, manifest: &Manifest) -> RoleDecision
     let Some(held) = held_by(manifest, role) else {
         return RoleDecision::Deny(refused(subject, RefuseReason::NoRow(role)));
     };
-    let missing: Vec<Capability> = match subject {
-        Subject::Capabilities(needed) => needed.iter().copied().filter(|cap| !held.contains(cap)).collect(),
-        Subject::Path { opened: true, .. } => Vec::new(),
-        Subject::Path { kind, opened: false } => {
+    let (missing, invalid): (Vec<Capability>, Option<Invalid>) = match subject {
+        Subject::Capabilities(needed) => (needed.iter().copied().filter(|cap| !held.contains(cap)).collect(), None),
+        Subject::Path { opened: true, .. } => (Vec::new(), None),
+        Subject::Path { kind, opened: false, invalid } => {
             let cap = kind.capability();
-            if held.contains(&cap) { Vec::new() } else { vec![cap] }
+            (if held.contains(&cap) { Vec::new() } else { vec![cap] }, *invalid)
         }
     };
     if missing.is_empty() {
         RoleDecision::Allow
     } else {
-        RoleDecision::Deny(denied(role, &missing))
+        RoleDecision::Deny(denied(role, &missing, invalid))
     }
 }
 
@@ -486,14 +533,17 @@ fn held_by(manifest: &Manifest, role: Role) -> Option<Vec<Capability>> {
     Some(names.iter().filter_map(|name| Capability::parse(name)).collect())
 }
 
-/// deny 文: **欠けた権能と rules 行 id** を名指す（設計 §4・字面は現物が正本）。
+/// deny 文: **欠けた権能と rules 行 id** を名指す（設計 §4・字面は現物が正本）。anchor の宣言が不正な周は末尾に
+/// `paths=invalid:<理由>`（doctor の欄と同じ字面・§24）を持つ＝止められた席が「全 file が code に倒れている」
+/// ことと直す先（宣言）を読める。
 ///
 /// 役割は orchestrator 1 つなので「他の役割が持つ」形は持たない（ADR-0045 §2 (1)）——欠けた権能は
 /// 行に無いということで、行 id を 1 本名指せば直す先が決まる。
-fn denied(role: Role, missing: &[Capability]) -> String {
+fn denied(role: Role, missing: &[Capability], invalid: Option<Invalid>) -> String {
     let names: Vec<&str> = missing.iter().map(|cap| cap.as_str()).collect();
+    let paths = invalid.map(|reason| format!(" paths={}", PathKinds::Invalid(reason).render())).unwrap_or_default();
     format!(
-        "{NAME}: この操作（{}）は席の権能でない（rules 行 {}）＝{} 席では止める",
+        "{NAME}: この操作（{}）は席の権能でない（rules 行 {}）＝{} 席では止める{paths}",
         names.join("+"),
         row_id(role),
         role.as_str()
@@ -518,15 +568,26 @@ pub fn unanchored_line(subject: &Subject) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        capabilities_of, judge, locate, refused, unanchored_line, PathKind, RefuseReason, RoleDecision, Subject,
-        CAPABILITY_COMMANDS, PATH_KINDS,
+        capabilities_of, judge, refused, unanchored_line, Invalid, PathKind, PathKinds, RefuseReason, RoleDecision,
+        Subject, CAPABILITY_COMMANDS, DECL_FILE, PATH_KINDS,
     };
     use crate::name::NAME;
+    use crate::pipe::declaration::path_kinds::{DeclaredPaths, INVALID_REASONS};
     use crate::rules::manifest::Manifest;
     use crate::seat::role::{Capability, Role, CAPABILITIES};
     use proptest::prelude::*;
     use proptest::test_runner::Config;
     use std::path::{Path, PathBuf};
+
+    /// 固定の判定（宣言なし）で編集先を解く。
+    fn locate(root: Option<&Path>, cwd: &Path, target: &str) -> super::Located {
+        super::locate(root, cwd, target, &PathKinds::Default)
+    }
+
+    /// 宣言の無い周の編集先の種別（`invalid` 無し）。
+    fn path(kind: PathKind, opened: bool) -> Subject {
+        Subject::Path { kind, opened, invalid: None }
+    }
 
     /// 反例の永続化を切り、case 数を 256 に pin する（`tests/e2e/prop.rs` と同じ形）。
     fn config() -> Config {
@@ -668,15 +729,93 @@ mod tests {
             panic!("行の無い manifest は権能なし");
         };
         assert!(line.contains("reason=no-row role.orchestrator"), "{line}");
-        let doc = Subject::Path { kind: PathKind::DesignDoc, opened: false };
+        let doc = path(PathKind::DesignDoc, false);
         assert_eq!(judge(&doc, Role::Orchestrator, &manifest), RoleDecision::Allow);
-        let code = Subject::Path { kind: PathKind::Code, opened: false };
+        let code = path(PathKind::Code, false);
         let RoleDecision::Deny(line) = judge(&code, Role::Orchestrator, &manifest) else {
             panic!("種別の権能が無ければ deny");
         };
         assert!(line.contains("edit-code"), "{line}");
-        let opened = Subject::Path { kind: PathKind::Code, opened: true };
+        assert!(!line.contains("paths="), "宣言の不正でない周は paths= を持たない: {line}");
+        let opened = path(PathKind::Code, true);
         assert_eq!(judge(&opened, Role::Orchestrator, &manifest), RoleDecision::Allow, "印で開いた path は通る");
+    }
+
+    /// 不正な宣言の周の deny 文は末尾に `paths=invalid:<理由>`（doctor の欄と同じ字面・§24）を持ち、理由の 5 種の
+    /// それぞれが字面で出る。印で開いた path は不正の周も通る（便の印の扱いは §4 のまま）。
+    #[test]
+    fn hook_role_paths_deny_line_carries_the_invalid_reason() {
+        let manifest = manifest_with(&[Capability::EditDesignDoc]);
+        for reason in INVALID_REASONS {
+            let subject = Subject::Path { kind: PathKind::Code, opened: false, invalid: Some(reason) };
+            let RoleDecision::Deny(line) = judge(&subject, Role::Orchestrator, &manifest) else {
+                panic!("{reason:?}: code の編集は deny");
+            };
+            let tail = format!(" paths=invalid:{}", reason.as_str());
+            assert!(line.ends_with(&tail), "{reason:?}: 末尾に理由の字面: {line}");
+            assert_eq!(line.matches("paths=").count(), 1, "{line}");
+            assert!(line.contains("edit-code") && line.contains("role.orchestrator"), "前半は不変: {line}");
+            let opened = Subject::Path { kind: PathKind::Code, opened: true, invalid: Some(reason) };
+            assert_eq!(judge(&opened, Role::Orchestrator, &manifest), RoleDecision::Allow, "印で開いた path は通る");
+        }
+    }
+
+    /// 宣言で分類する（§24）: 書かれた key はその種別の固定値を置き換え（`design-intent/` は code に落ちる）、
+    /// 書かれていない key の種別は固定の判定のまま、`/` で終わらない項目は完全一致の 1 file だけ、宣言 file 自身は
+    /// 宣言が名指しても `Code`、不正な宣言は repo 内の全 file が `Code` で `..` の外は `Outside` のまま。便の
+    /// worktree と便の器でない worktree の中も同じ宣言で分類する。
+    #[test]
+    fn hook_role_paths_classify_reads_the_declared_prefixes() {
+        let root = PathBuf::from("/repo");
+        let declared = PathKinds::Declared(DeclaredPaths {
+            design_intent: Some(vec!["spec/".to_owned(), DECL_FILE.to_owned()]),
+            design_doc: Some(vec!["DESIGN.md".to_owned()]),
+            tests: None,
+        });
+        for (target, want) in [
+            ("spec/srs.yaml", PathKind::DesignIntent),
+            ("spec", PathKind::DesignIntent),
+            ("specs/x.yaml", PathKind::Code),
+            ("design-intent/spec/srs.html", PathKind::Code),
+            ("DESIGN.md", PathKind::DesignDoc),
+            ("DESIGN.md.bak", PathKind::Code),
+            ("docs/design/x.md", PathKind::Code),
+            ("crates/x/tests/y.rs", PathKind::Tests),
+            (DECL_FILE, PathKind::Code),
+            ("src/lib.rs", PathKind::Code),
+        ] {
+            assert_eq!(super::locate(Some(&root), &root, target, &declared).kind, want, "{target}");
+            let bead = format!(".worktrees/{NAME}/run-1/{target}");
+            assert_eq!(super::locate(Some(&root), &root, &bead, &declared).kind, want, "便の worktree: {bead}");
+            let copy = format!(".worktrees/planner-x/{target}");
+            assert_eq!(super::locate(Some(&root), &root, &copy, &declared).kind, want, "repo の写し: {copy}");
+        }
+        assert_eq!(super::locate(Some(&root), &root, "../outside.rs", &declared).kind, PathKind::Outside, "外は宣言に依らない");
+        assert_eq!(super::locate(Some(&root), &root, "spec/x.yaml", &declared).run, None, "repo 本体は便の外");
+    }
+
+    /// 1 本だけ書いた宣言はその種別だけが宣言で決まり残りは固定のまま、不正な宣言（5 つの理由のどれでも）は repo 内の
+    /// 全 file が `Code` で `..` の外は `Outside` のまま、宣言の無い周は固定の判定と 1 file も違わない。
+    #[test]
+    fn hook_role_paths_classify_one_key_invalid_and_default() {
+        let one = PathKinds::Declared(DeclaredPaths { design_intent: None, design_doc: None, tests: Some(vec!["t/".to_owned()]) });
+        assert_eq!(PathKind::classify(Path::new("t/x_test.py"), &one), PathKind::Tests, "書いた種別は宣言で");
+        assert_eq!(PathKind::classify(Path::new("crates/x/tests/y.rs"), &one), PathKind::Code, "固定値は置き換わる");
+        assert_eq!(PathKind::classify(Path::new("design-intent/x.html"), &one), PathKind::DesignIntent, "残りは固定のまま");
+        assert_eq!(PathKind::classify(Path::new("docs/design/x.md"), &one), PathKind::DesignDoc);
+        for reason in INVALID_REASONS {
+            let invalid = PathKinds::Invalid(reason);
+            for target in ["design-intent/x.html", "docs/design/x.md", "crates/x/tests/y.rs", "spec/x", "src/lib.rs"] {
+                assert_eq!(PathKind::classify(Path::new(target), &invalid), PathKind::Code, "{reason:?}: {target}");
+            }
+            assert_eq!(PathKind::classify(Path::new("../x"), &invalid), PathKind::Outside, "{reason:?}: 外は宣言に依らない");
+        }
+        assert_eq!(Invalid::Overlap.as_str(), "overlap");
+        // 宣言の無い周は固定の判定と同じ。
+        for target in ["design-intent/x.html", "docs/design/x.md", "crates/x/tests/y.rs", "src/lib.rs", DECL_FILE, "../x"] {
+            let rel = Path::new(target);
+            assert_eq!(PathKind::classify(rel, &PathKinds::Default), PathKind::of_relative(rel), "{target}");
+        }
     }
 
     /// 歯の段（`crates/<crate>/tests/`）と src の段は**別の権能**である（ADR-0045 §2 (1)）: orchestrator の行は
@@ -689,7 +828,7 @@ mod tests {
         let row = manifest_with(&[Capability::EditTests, Capability::EditDesignIntent, Capability::EditOutside]);
         let judged = |rel: &str| {
             let kind = PathKind::of_relative(Path::new(rel));
-            (kind, judge(&Subject::Path { kind, opened: false }, Role::Orchestrator, &row))
+            (kind, judge(&path(kind, false), Role::Orchestrator, &row))
         };
         assert_eq!(judged("crates/scribe2/tests/e2e/hook.rs"), (PathKind::Tests, RoleDecision::Allow), "歯は通る");
         assert_eq!(
@@ -787,8 +926,10 @@ mod tests {
     fn role_guard_subject_renders_capability_or_path_kind() {
         let caps = Subject::Capabilities(vec![Capability::Answer, Capability::Launch]);
         assert_eq!(caps.render(), "capability=answer+launch");
-        assert_eq!(Subject::Path { kind: PathKind::Code, opened: false }.render(), "path=code");
-        assert_eq!(Subject::Path { kind: PathKind::Code, opened: true }.render(), "path=code opened");
+        assert_eq!(path(PathKind::Code, false).render(), "path=code");
+        assert_eq!(path(PathKind::Code, true).render(), "path=code opened");
+        let invalid = Subject::Path { kind: PathKind::Code, opened: false, invalid: Some(Invalid::Unreadable) };
+        assert_eq!(invalid.render(), "path=code", "記録の種別は宣言の不正で変わらない（理由は deny の行）");
         assert_eq!(PATH_KINDS.len(), 5, "path 種別は 5 つ（歯の段を含む）");
     }
 

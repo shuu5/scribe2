@@ -3,6 +3,7 @@
 
 use crate::fleet::store::{self, LockPolicy};
 use crate::fleet::{cli, replay, Event, EventKind, Registration, State, ACTOR_MACHINE, SCHEMA};
+use crate::pipe::declaration::path_kinds::PathKinds;
 use crate::polarity::{OnFailure, Polarity, Timing};
 use std::path::Path;
 
@@ -204,13 +205,27 @@ pub fn role_of_target(state: &State, target: &str) -> Option<Role> {
     registration_of_target(state, target).map(|row| row.role)
 }
 
-/// 登録 row の一覧（pure・鍵の順・1 row 1 行）。`model` の無い row は `-`（契約 (e)・doctor の欄）。
-pub fn render_rows(state: &State) -> Vec<String> {
+/// 登録 row の一覧（pure・鍵の順・1 row 1 行）。`model` の無い row は `-`（契約 (e)・doctor の欄）。末尾の欄
+/// `paths=` は anchor の path の種別の宣言の state（`paths_of(anchor)`・`default` / `declared:<書かれた key の数>` /
+/// `invalid:<理由>`・設計 seat-roles.md §24）＝row は anchor ごとなので anchor ごとの state を 1 行で名乗る。
+pub fn render_rows(state: &State, paths_of: impl Fn(&str) -> PathKinds) -> Vec<String> {
     let row = |found: &Registration| {
         let model = found.model.as_deref().unwrap_or("-");
-        format!("seat: role={} anchor={} target={} account={} model={model}", found.role.as_str(), found.anchor, found.target, found.account)
+        format!(
+            "seat: role={} anchor={} target={} account={} model={model} paths={}",
+            found.role.as_str(),
+            found.anchor,
+            found.target,
+            found.account,
+            paths_of(&found.anchor).render()
+        )
     };
     state.registrations.values().map(|latest| row(&latest.registration)).collect()
+}
+
+/// doctor の登録 row の一覧（[`render_rows`] に anchor の HEAD の宣言の読み手を渡した形・row ごとに git を 1 回撃つ）。
+pub fn doctor_rows(state: &State) -> Vec<String> {
+    render_rows(state, |anchor| PathKinds::read_at_head(Path::new(anchor)))
 }
 
 /// 登録 row と実在の target の突合の 1 行（pure・`seats: registered=N live=K missing=M`）。
@@ -225,12 +240,12 @@ pub fn render_reconcile(state: Option<&State>, live: Option<&[String]>) -> Strin
 }
 
 /// doctor の項目（event log を読み、tmux の `list-panes` を 1 回撃つ・C3.2）: 登録 row の一覧（1 row 1 行・
-/// `model` の欄つき・log を読めない周は 0 行）の後に突合の 1 行。
+/// `model` と `paths` の欄つき・log を読めない周は 0 行）の後に突合の 1 行。
 pub fn doctor_lines(state_dir: &Path, socket: Option<&str>) -> Vec<String> {
     let state = store::read_all(state_dir).ok().map(|events| replay(&events));
     let panes = super::tmux_stdout(socket, &["list-panes", "-a", "-F", "#{session_name}:#{window_name}"]);
     let live: Option<Vec<String>> = panes.map(|out| out.lines().map(str::to_owned).collect());
-    let mut lines = state.as_ref().map(render_rows).unwrap_or_default();
+    let mut lines = state.as_ref().map(doctor_rows).unwrap_or_default();
     lines.push(render_reconcile(state.as_ref(), live.as_deref()));
     lines
 }

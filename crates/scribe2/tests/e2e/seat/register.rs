@@ -6,6 +6,8 @@
 // flip-check: moved s2-07l.361
 
 use super::*;
+use vessel::pipe::declaration::path_kinds::PathKinds;
+use vessel::pipe::declaration::DECL_FILE;
 
 // ─────────────────── 席の状態（hook の打刻・typed・`s2-07l.95`） ───────────────────
 
@@ -357,7 +359,8 @@ fn seat_register_model_reregistration_replaces_the_model_with_the_latest() {
     fs::remove_dir_all(&place.dir).ok();
 }
 
-/// doctor の登録 row の一覧に `model` の欄（None は `-`・鍵の順・突合の行の前）（歯 (e)(5)）。
+/// doctor の登録 row の一覧に `model` の欄（None は `-`・鍵の順・突合の行の前）（歯 (e)(5)）。末尾の `paths=` の欄は
+/// anchor の宣言の state（存在しない anchor は宣言 file が無い repo と同じ＝`default`・§24）。
 #[test]
 fn seat_register_model_shows_in_the_doctor_rows_with_dash_for_none() {
     let place = role_place();
@@ -372,8 +375,8 @@ fn seat_register_model_shows_in_the_doctor_rows_with_dash_for_none() {
     assert_eq!(
         lines.get(2..),
         Some(&[
-            "seat: role=orchestrator anchor=/repo/a target=rm:doc-a account=acct-1 model=Fable".to_owned(),
-            "seat: role=orchestrator anchor=/repo/b target=rm:doc-b account=acct-1 model=-".to_owned(),
+            "seat: role=orchestrator anchor=/repo/a target=rm:doc-a account=acct-1 model=Fable paths=default".to_owned(),
+            "seat: role=orchestrator anchor=/repo/b target=rm:doc-b account=acct-1 model=- paths=default".to_owned(),
             "seats: registered=2 live=unmeasurable missing=unmeasurable".to_owned(),
             HOST_ABSENT.to_owned(),
             consumer_line_of("/repo/a"),
@@ -381,8 +384,109 @@ fn seat_register_model_shows_in_the_doctor_rows_with_dash_for_none() {
         ][..]),
         "{lines:?}"
     );
-    let rows = vessel::seat::role::render_rows(&role_state(&place));
+    let rows = vessel::seat::role::render_rows(&role_state(&place), |_| PathKinds::Default);
     assert_eq!(rows, lines.get(2..4).unwrap_or_default(), "pure の一覧と同じ");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+// ─────────────────────────── doctor の paths の欄（契約行 r・s2-07l.491・seat-roles.md §24） ───────────────────────────
+
+/// 宣言の本文（必須 key + 追加の行）。
+fn paths_declaration(extra: &str) -> String {
+    format!("schema = 1\nallowed-commands = [\"git\"]\ncommon-verify = [\"git status\"]\n{extra}")
+}
+
+/// `dir` に commit 1 つの git repo を作り、`declaration` が在ればその本文の `.vessel.toml` を commit する。
+/// 返りは anchor に使う path（tmp の実体 path・`--anchor` は絶対化するだけ）。
+fn paths_repo(place: &RolePlace, name: &str, declaration: Option<&str>) -> String {
+    let dir = place.dir.join(name);
+    assert!(crate::git_repo_at(&dir).is_some(), "{name}: git repo を作れる");
+    if let Some(body) = declaration {
+        assert!(fs::write(dir.join(DECL_FILE), body).is_ok(), "{name}: 宣言を書ける");
+        assert!(crate::git_out(&dir, &["add", "-A"]).is_some(), "{name}: add");
+        assert!(crate::git_out(&dir, &["commit", "-q", "-m", "declare"]).is_some(), "{name}: commit");
+    }
+    dir.display().to_string()
+}
+
+/// doctor の登録 row の行のうち anchor `anchor` の 1 行（無ければ空＝呼び側の assert が落ちる）。
+fn seat_line_of(lines: &[String], anchor: &str) -> String {
+    let needle = format!(" anchor={anchor} ");
+    lines.iter().find(|line| line.starts_with("seat: ") && line.contains(&needle)).cloned().unwrap_or_default()
+}
+
+/// doctor の席の行の末尾の `paths=` の欄は 3 つの state を名乗る（§24・行は増えない）: 宣言 file を持たない anchor
+/// （存在しない dir も同じ）と key を 1 本も書かない宣言は `paths=default`、key を書いた宣言は `paths=declared:<数>`、
+/// 不正な宣言は `paths=invalid:<理由>`。総行数は欄の追加で変わらない（2 行 + row + 突合 + host + 導入先）。
+#[test]
+fn seat_role_doctor_paths_names_default_declared_and_invalid_per_anchor() {
+    let place = role_doctor_place();
+    let bare = paths_repo(&place, "bare", None);
+    let keyless = paths_repo(&place, "keyless", Some(&paths_declaration("")));
+    let two = paths_repo(&place, "two", Some(&paths_declaration("design-intent-paths = [\"spec/\"]\ntests-paths = [\"t/\"]\n")));
+    let three = paths_repo(
+        &place,
+        "three",
+        Some(&paths_declaration("design-intent-paths = [\"spec/\"]\ndesign-doc-paths = [\"DESIGN.md\"]\ntests-paths = [\"t/\"]\n")),
+    );
+    let overlap = paths_repo(&place, "overlap", Some(&paths_declaration("design-intent-paths = [\"spec/\"]\ndesign-doc-paths = [\"spec/design/\"]\n")));
+    for (target, anchor) in [("pd:bare", &bare), ("pd:keyless", &keyless), ("pd:two", &two), ("pd:three", &three), ("pd:overlap", &overlap)] {
+        crate::seat::role_register_extra(&place, target, anchor);
+    }
+    let out = role_doctor(&place);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    let lines: Vec<String> = stdout_of(&out).lines().map(str::to_owned).collect();
+    assert_eq!(lines.len(), 2 + 6 + 1 + 1 + 6, "欄の追加で行は増えない: {lines:?}");
+    assert_eq!(
+        seat_line_of(&lines, "/repo"),
+        "seat: role=orchestrator anchor=/repo target=rolesdoc:rolesdoc account=acct-1 model=- paths=default",
+        "存在しない anchor は宣言 file が無い repo と同じ"
+    );
+    for (anchor, want) in [
+        (&bare, "paths=default"),
+        (&keyless, "paths=default"),
+        (&two, "paths=declared:2"),
+        (&three, "paths=declared:3"),
+        (&overlap, "paths=invalid:overlap"),
+    ] {
+        let line = seat_line_of(&lines, anchor);
+        assert!(line.ends_with(want), "{anchor}: 末尾の欄 {want}: {line}");
+        assert_eq!(line.matches("paths=").count(), 1, "{line}");
+    }
+    assert!(!lines.iter().any(|line| line.starts_with("paths:")), "paths の行は足さない（席の行の欄で名乗る）: {lines:?}");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// `invalid` の理由の字面は 5 種のそれぞれが doctor の欄に出る（`..` の段 / 絶対 path / 空文字 / 重なり / 読めない）。
+/// commit していない作業ツリーの宣言は効かない（key を書いた file を置いただけの repo は `default` のまま・HEAD の宣言
+/// を作業ツリーで壊しても HEAD の state のまま）。
+#[test]
+fn seat_role_doctor_paths_invalid_reasons_and_worktree_declarations() {
+    let place = role_doctor_place();
+    let cases: [(&str, &str, &str); 5] = [
+        ("parent", "tests-paths = [\"t/../u/\"]\n", "parent-segment"),
+        ("absolute", "tests-paths = [\"/t/\"]\n", "absolute"),
+        ("empty", "tests-paths = [\" \"]\n", "empty"),
+        ("overlap", "design-doc-paths = [\"docs/\"]\ntests-paths = [\"docs/t/\"]\n", "overlap"),
+        ("unreadable", "tests-paths = \"t/\"\n", "unreadable"),
+    ];
+    let anchors: Vec<String> = cases.iter().map(|(name, extra, _)| paths_repo(&place, name, Some(&paths_declaration(extra)))).collect();
+    let uncommitted = paths_repo(&place, "uncommitted", None);
+    let written = fs::write(Path::new(&uncommitted).join(DECL_FILE), paths_declaration("tests-paths = [\"t/\"]\n"));
+    assert!(written.is_ok(), "作業ツリーの宣言を書ける");
+    let broken = paths_repo(&place, "broken", Some(&paths_declaration("tests-paths = [\"t/\"]\n")));
+    let written = fs::write(Path::new(&broken).join(DECL_FILE), paths_declaration("tests-paths = [\"/t/\"]\n"));
+    assert!(written.is_ok(), "作業ツリーの壊れた宣言を書ける");
+    for (at, anchor) in anchors.iter().chain([&uncommitted, &broken]).enumerate() {
+        crate::seat::role_register_extra(&place, &format!("pi:{at}"), anchor);
+    }
+    let lines = doctor_rows(&place, NO_ACCOUNT_RULES);
+    for ((_, _, reason), anchor) in cases.iter().zip(&anchors) {
+        let line = seat_line_of(&lines, anchor);
+        assert!(line.ends_with(&format!(" paths=invalid:{reason}")), "{anchor}: {line}");
+    }
+    assert!(seat_line_of(&lines, &uncommitted).ends_with(" paths=default"), "作業ツリーの宣言は効かない");
+    assert!(seat_line_of(&lines, &broken).ends_with(" paths=declared:1"), "HEAD の宣言で名乗る（作業ツリーの壊れは見ない）");
     fs::remove_dir_all(&place.dir).ok();
 }
 

@@ -16,6 +16,7 @@ use crate::polarity::{OnFailure, Polarity, Timing};
 use crate::rules::manifest::{list, scalar, Scalar};
 use std::path::Path;
 
+pub mod path_kinds;
 mod write_set;
 
 pub use write_set::{headroom_shortfalls, line_count, read_write_set, Caps, FileLines, Headroom, NewFilePolicy, WriteSetItem, CORE};
@@ -33,9 +34,20 @@ pub const DENIED_ROW: &str = crate::hook::command::ROW;
 /// 宣言 file の schema。
 const SCHEMA_VERSION: u64 = 1;
 
-/// 宣言が持つ key（この順で報告する）。
-const DECLARED_KEYS: &[&str] =
-    &["schema", "allowed-commands", "common-verify", DETECTION_KEY, REQUIREMENTS_KEY, REMOTE_KEY, CI_CMD_KEY];
+/// 宣言が持つ key（この順で報告する）。path の種別の任意 key 3 本（[`path_kinds::KEYS`]・ADR-0047）は
+/// 既存の任意 key と同じ読み口で読む（schema は 1 のまま・key の追加と不在＝既定は版を上げない）。
+const DECLARED_KEYS: &[&str] = &[
+    "schema",
+    "allowed-commands",
+    "common-verify",
+    DETECTION_KEY,
+    REQUIREMENTS_KEY,
+    REMOTE_KEY,
+    CI_CMD_KEY,
+    path_kinds::DESIGN_INTENT_KEY,
+    path_kinds::DESIGN_DOC_KEY,
+    path_kinds::TESTS_KEY,
+];
 
 /// **push 先の remote の名**の key（任意・設計 contract-source.md §5「land の終端」）。
 ///
@@ -79,7 +91,15 @@ const DETECTION_KEY: &str = "detection-verify";
 /// **書かなくてよい** key（無ければ空）。書いた周の空配列は従来どおり不備である（ADR-0010 §2.1）。
 ///
 /// 任意にするのは、検出線を持たない consumer（toy repo 等）の宣言を 1 行も変えさせないためである。
-const OPTIONAL_KEYS: &[&str] = &[DETECTION_KEY, REQUIREMENTS_KEY, REMOTE_KEY, CI_CMD_KEY];
+const OPTIONAL_KEYS: &[&str] = &[
+    DETECTION_KEY,
+    REQUIREMENTS_KEY,
+    REMOTE_KEY,
+    CI_CMD_KEY,
+    path_kinds::DESIGN_INTENT_KEY,
+    path_kinds::DESIGN_DOC_KEY,
+    path_kinds::TESTS_KEY,
+];
 
 /// shell が意味を変える文字。**1 行 1 command の粒度**はここで守る——gate と land は行を
 /// `sh -c` で撃つので、先頭語だけを見ても包みや連結を止められない（ADR-0010 §2.3）。
@@ -234,6 +254,8 @@ pub struct Declared {
     remote: Option<String>,
     /// CI の判定を読む 1 行（任意・無ければ `None`）。
     ci_cmd: Option<String>,
+    /// path の種別の prefix（任意 key 3 本・無い key は `None`・設計 seat-roles.md §24）。
+    path_kinds: path_kinds::DeclaredPaths,
 }
 
 /// 出所つきの宣言。**[`Effective`] はこれを消費してしか作れない**（C10）。
@@ -287,16 +309,23 @@ pub fn measure(
 }
 
 /// HEAD commit の tree の宣言を読む（**読み手は 1 本**・作業ツリーは読まない＝commit されていない宣言は
-/// 無いのと同じ）。上限と突き合わせる [`Sourced::read`] と、終端が読む [`terminal_facts`] が共有する。
-fn declared_at_head(repo: &Path) -> Result<Declared, Vec<DeclError>> {
+/// 無いのと同じ）。宣言 file が無い（HEAD に無い・git を撃てない）周は `None`、在って読めない周は `Some(Err)`
+/// （path の種別の読み手 [`path_kinds::PathKinds::read_at_head`] はこの 2 つを別の state にする・§24）。
+fn head_declaration(repo: &Path) -> Option<Result<Declared, Vec<DeclError>>> {
     let spec = format!("HEAD:{DECL_FILE}");
-    let bytes = super::git_bytes(repo, &["show", &spec]).ok_or_else(|| {
-        vec![DeclError::new(
+    let bytes = super::git_bytes(repo, &["show", &spec])?;
+    Some(Declared::parse(&String::from_utf8_lossy(&bytes)))
+}
+
+/// [`head_declaration`] の、宣言 file が無い周も不備として返す形。上限と突き合わせる [`Sourced::read`] と、終端が
+/// 読む [`terminal_facts`] が共有する。
+fn declared_at_head(repo: &Path) -> Result<Declared, Vec<DeclError>> {
+    head_declaration(repo).unwrap_or_else(|| {
+        Err(vec![DeclError::new(
             0,
             format!("HEAD の tree に {DECL_FILE} が無い（作業ツリーの宣言は読まない＝commit されていない宣言は無いのと同じ）"),
-        )]
-    })?;
-    Declared::parse(&String::from_utf8_lossy(&bytes))
+        )])
+    })
 }
 
 impl Sourced {
@@ -451,6 +480,7 @@ impl Declared {
         let requirements = requirements_of(&found, &mut errors);
         let remote = remote_of(&found, &mut errors);
         let ci_cmd = ci_cmd_of(&found, &mut errors);
+        let path_kinds = path_kinds::declared_of(&found, &mut errors);
         if schema != Some(SCHEMA_VERSION) {
             errors.push(DeclError::new(
                 0,
@@ -468,6 +498,7 @@ impl Declared {
                 requirements,
                 remote,
                 ci_cmd,
+                path_kinds,
             })
         } else {
             Err(errors)

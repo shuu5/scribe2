@@ -274,13 +274,14 @@ fn seat_usage_external_form() {
     insta::assert_snapshot!(form);
 }
 
-/// `doctor --state-dir` の突合の項目（tmux を撃てない周の形）・その直後の host の面の行・末尾の導入先の行
-/// （登録 row の anchor・記録なし・consumer-sync.md §4）を snapshot に固定する（C12.5）。
+/// `doctor --state-dir` の登録 row の行（`model` と `paths` の欄つき・seat-roles.md §24）・突合の項目（tmux を撃てない
+/// 周の形）・その直後の host の面の行・末尾の導入先の行（登録 row の anchor・記録なし・consumer-sync.md §4）を
+/// snapshot に固定する（C12.5）。
 #[test]
 fn seat_doctor_external_form() {
     let mut form = String::new();
     let place = role_doctor_place();
-    for line in stdout_of(&role_doctor(&place)).lines().skip_while(|line| !line.starts_with("seats: ")) {
+    for line in stdout_of(&role_doctor(&place)).lines().skip_while(|line| !line.starts_with("seat: ")) {
         form.push_str(line);
         form.push('\n');
     }

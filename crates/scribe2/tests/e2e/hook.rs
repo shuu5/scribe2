@@ -17,6 +17,7 @@ use vessel::hook::precompact::{self, Slot, TEXT_WIDTH};
 use vessel::hook::vessel::{Marker, GENERATION, MARKER};
 use vessel::hook::{guard, inject_path, SCHEMA};
 use vessel::name::NAME;
+use vessel::pipe::declaration::DECL_FILE;
 use vessel::seat::brief;
 use vessel::seat::recent::{self, Kind, Unmeasured, BEAD_LIMIT, COMMIT_LIMIT, DIRTY_SCAN_LIMIT, TITLE_WIDTH, WINDOW_SECS};
 use vessel::seat::role::{Capability, Role};
@@ -2181,6 +2182,240 @@ fn hook_role_reads_the_command_line_through_json_escapes() {
     let text = assert_role_deny(&out, "escape の後ろの起動");
     assert!(text.contains("role.orchestrator"), "{text}");
     drop(admin);
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
+// ─────────────── path の種別を対象 repo の vessel 宣言が名乗る（契約行 r・`s2-07l.491`・seat-roles.md §24・ADR-0047・接頭辞 `hook_role_paths_`） ───────────────
+//
+// toy repo に宣言（`.vessel.toml`・任意 key 3 本）を commit して PreToolUse の口から測る。席は orchestrator（行は
+// `edit-design-intent` / `edit-design-doc` / `edit-tests` / `edit-outside` を持ち `edit-code` を持たない）で、pane →
+// target は**偽 tmux**（設計 §7・[`stub_seat`]・PATH の先頭の script）で解く＝tmux を立てないので nextest の tmux
+// group の外で走る。
+
+/// 偽 tmux の席で role guard を撃つ（`--pane` は偽 tmux が読まない固定値・fixture の `--rules` 付き・`extra` は追加 flag）。
+fn run_paths_hook(place: &RolePlace, path: &str, extra: &[&str], payload: &str) -> Output {
+    let mut args = vec!["pre-tool-use", "--pane", STUB_PANE, "--rules", &place.rules];
+    args.extend_from_slice(extra);
+    run_stub_hook(path, &args, payload)
+}
+
+/// toy repo の宣言の本文（必須 key + 追加の行）。
+fn paths_declaration(extra: &str) -> String {
+    format!("schema = 1\nallowed-commands = [\"git\"]\ncommon-verify = [\"git status\"]\n{extra}")
+}
+
+/// toy repo（`place.repo`）の宣言を `body` にして commit する（HEAD の tree に載せる・作業ツリーだけの宣言は
+/// [`write_declaration`]）。
+fn commit_declaration(place: &RolePlace, body: &str) {
+    write_declaration(place, body);
+    git(&place.repo, &["add", DECL_FILE]);
+    git(&place.repo, &["commit", "-q", "--allow-empty", "-m", "declare"]);
+}
+
+/// toy repo の作業ツリーにだけ宣言を書く（commit しない）。
+fn write_declaration(place: &RolePlace, body: &str) {
+    assert!(fs::write(place.repo.join(DECL_FILE), body).is_ok(), "宣言を書ける");
+}
+
+/// repo 相対 `rel` への Edit の payload（cwd は repo）。
+fn paths_edit(place: &RolePlace, rel: &str) -> String {
+    tool_payload(&place.repo, "Edit", rel)
+}
+
+/// `rel` の Edit が通り、記録 1 行が `role-allow path=<kind>` を持つ。
+fn assert_paths_allow(place: &RolePlace, path: &str, seat: &str, rel: &str, kind: &str) {
+    let before = role_records(&place.state).len();
+    assert_silent(&run_paths_hook(place, path, &[], &paths_edit(place, rel)), &format!("{rel} は {kind} として通す"));
+    assert_role_record(&place.state, before, &format!("role-allow path={kind}"), seat);
+}
+
+/// `rel` の Edit が止まり、deny の 1 行が欠けた権能 `cap` を名指す（返りは deny の 1 行）。
+fn assert_paths_deny(place: &RolePlace, path: &str, rel: &str, cap: &str) -> String {
+    let text = assert_role_deny(&run_paths_hook(place, path, &[], &paths_edit(place, rel)), rel);
+    assert!(text.contains(cap), "{rel}: 欠けた権能 {cap} を名指す: {text}");
+    text
+}
+
+/// (a) 3 本の key を書いた repo: 宣言した仕様の dir・設計 doc の dir・test の dir の下の編集が orchestrator の席で通り、
+/// それ以外（固定の prefix の `design-intent/` / `docs/design/` / `crates/<crate>/tests/` を含む）は code として断られる
+/// ＝書かれた key は固定値を**置き換える**（足し合わせない）。負例: `edit-tests` を抜いた行では宣言した test の dir も
+/// 断られる（通したのは行の値であって判定の穴ではない）。
+#[test]
+fn hook_role_paths_three_keys_replace_the_fixed_prefixes() {
+    let place = role_place();
+    let path = stub_seat(&place, "rolepatha", Some("orchestrator"));
+    commit_declaration(&place, &paths_declaration("design-intent-paths = [\"spec/\"]\ndesign-doc-paths = [\"notes/design/\"]\ntests-paths = [\"t/\"]\n"));
+    let me = "rolepatha_rolepatha";
+    assert_paths_allow(&place, &path, me, "spec/srs.yaml", "design-intent");
+    assert_paths_allow(&place, &path, me, "spec/deep/x.md", "design-intent");
+    assert_paths_allow(&place, &path, me, "notes/design/a.md", "design-doc");
+    assert_paths_allow(&place, &path, me, "t/x_test.py", "tests");
+    for rel in ["design-intent/spec/srs.html", "docs/design/x.md", "crates/x/tests/y.rs", "src/lib.rs", "README.md", "notes/a.md", "specs/x.yaml"] {
+        let text = assert_paths_deny(&place, &path, rel, "edit-code");
+        assert!(!text.contains("paths="), "{rel}: 不正でない宣言は paths= を持たない: {text}");
+    }
+    // 負例: `edit-tests` を抜いた行では宣言した test の dir も deny。
+    let stripped = place.sock_dir.join("no-tests.toml");
+    assert!(fs::write(&stripped, role_rules_text(&caps_without("edit-tests"))).is_ok(), "rules を書ける");
+    let args = ["pre-tool-use", "--pane", STUB_PANE, "--rules", &stripped.display().to_string()];
+    let text = assert_role_deny(&run_stub_hook(&path, &args, &paths_edit(&place, "t/x_test.py")), "edit-tests の無い行");
+    assert!(text.contains("edit-tests"), "{text}");
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
+/// (b) `/` で終わらない項目は完全一致の 1 file だけが通り、同じ名で始まる別の file・別の段の同じ名・同じ名の dir の下は
+/// 断られる。
+#[test]
+fn hook_role_paths_exact_item_matches_one_file_only() {
+    let place = role_place();
+    let path = stub_seat(&place, "rolepathb", Some("orchestrator"));
+    commit_declaration(&place, &paths_declaration("design-doc-paths = [\"DESIGN.md\"]\n"));
+    assert_paths_allow(&place, &path, "rolepathb_rolepathb", "DESIGN.md", "design-doc");
+    let absolute = place.repo.join("DESIGN.md").display().to_string();
+    assert_silent(&run_paths_hook(&place, &path, &[], &tool_payload(&place.repo, "Write", &absolute)), "絶対 path でも同じ 1 file");
+    for rel in ["DESIGN.md.bak", "DESIGN.mdx", "docs/DESIGN.md", "DESIGN.md/x", "DESIGN", "docs/design/x.md"] {
+        assert_paths_deny(&place, &path, rel, "edit-code");
+    }
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
+/// (c) 1 本だけ書いた repo: その種別だけが宣言で決まり（固定の `crates/<crate>/tests/` は code に落ちる）、残りの
+/// 種別は固定の判定のまま（`design-intent/` と `docs/design/` は通る）。
+#[test]
+fn hook_role_paths_one_key_leaves_the_other_kinds_fixed() {
+    let place = role_place();
+    let path = stub_seat(&place, "rolepathc", Some("orchestrator"));
+    commit_declaration(&place, &paths_declaration("tests-paths = [\"t/\"]\n"));
+    let me = "rolepathc_rolepathc";
+    assert_paths_allow(&place, &path, me, "t/x_test.py", "tests");
+    assert_paths_deny(&place, &path, "crates/x/tests/y.rs", "edit-code");
+    assert_paths_allow(&place, &path, me, "design-intent/spec/srs.html", "design-intent");
+    assert_paths_allow(&place, &path, me, "docs/design/x.md", "design-doc");
+    assert_paths_deny(&place, &path, "src/lib.rs", "edit-code");
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
+/// (d) 宣言 file を持たない repo と key を 1 本も書かない宣言の repo は今の分類と同じ（固定の 3 prefix が通り src は
+/// 断られる・deny の行に paths= は無い）。
+#[test]
+fn hook_role_paths_absent_and_keyless_declarations_keep_the_fixed_classification() {
+    let place = role_place();
+    let path = stub_seat(&place, "rolepathd", Some("orchestrator"));
+    let me = "rolepathd_rolepathd";
+    let fixed = |why: &str| {
+        assert_paths_allow(&place, &path, me, "design-intent/spec/srs.html", "design-intent");
+        assert_paths_allow(&place, &path, me, "docs/design/x.md", "design-doc");
+        assert_paths_allow(&place, &path, me, "crates/x/tests/y.rs", "tests");
+        let text = assert_paths_deny(&place, &path, "src/lib.rs", "edit-code");
+        assert!(!text.contains("paths="), "{why}: paths= を持たない: {text}");
+        assert_paths_deny(&place, &path, "spec/x.yaml", "edit-code");
+    };
+    assert!(!place.repo.join(DECL_FILE).exists(), "toy repo は宣言 file を持たない");
+    fixed("宣言 file の無い repo");
+    commit_declaration(&place, &paths_declaration(""));
+    fixed("key を書かない宣言");
+    commit_declaration(&place, &paths_declaration("remote = \"origin\"\n"));
+    fixed("他の任意 key だけの宣言");
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
+/// (e) 宣言 file 自身の編集は、宣言がそれを名指していても断られる（席は自分の柵を広げられない・便の worktree と
+/// repo の写しの中の宣言 file も同じ）。同じ宣言の他の項目は効いている。
+#[test]
+fn hook_role_paths_declaration_file_itself_is_always_code() {
+    let place = role_place();
+    let path = stub_seat(&place, "rolepathe", Some("orchestrator"));
+    commit_declaration(&place, &paths_declaration(&format!("design-intent-paths = [\"{DECL_FILE}\", \"spec/\"]\n")));
+    assert_paths_allow(&place, &path, "rolepathe_rolepathe", "spec/x.yaml", "design-intent");
+    let text = assert_paths_deny(&place, &path, DECL_FILE, "edit-code");
+    assert!(!text.contains("paths="), "宣言は不正ではない: {text}");
+    let absolute = place.repo.join(DECL_FILE).display().to_string();
+    assert_role_deny(&run_paths_hook(&place, &path, &[], &tool_payload(&place.repo, "Write", &absolute)), "絶対 path の宣言 file");
+    let bead = place.repo.join(".worktrees").join(NAME).join("run-1").join(DECL_FILE).display().to_string();
+    assert_role_deny(&run_paths_hook(&place, &path, &[], &tool_payload(&place.repo, "Edit", &bead)), "便の worktree の宣言 file");
+    let copy = place.repo.join(".worktrees").join("planner-x").join(DECL_FILE).display().to_string();
+    assert_role_deny(&run_paths_hook(&place, &path, &[], &tool_payload(&place.repo, "Edit", &copy)), "repo の写しの宣言 file");
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
+/// (f) 不正な宣言（5 つの理由のそれぞれ）の repo は、固定値なら通る path（`design-intent/` 等）も宣言した path も含めて
+/// repo 内の全編集が断られ、deny の 1 行が `paths=invalid:<理由>` の字面を持つ。repo の外の編集は宣言に依らず通る。
+#[test]
+fn hook_role_paths_invalid_declaration_denies_every_edit_with_the_reason() {
+    let place = role_place();
+    let path = stub_seat(&place, "rolepathf", Some("orchestrator"));
+    let outside = tmp();
+    let cases: [(&str, &str); 5] = [
+        ("design-intent-paths = [\"spec/../x/\"]\n", "parent-segment"),
+        ("design-intent-paths = [\"/spec/\"]\n", "absolute"),
+        ("design-intent-paths = [\" \"]\n", "empty"),
+        ("design-intent-paths = [\"spec/\"]\ndesign-doc-paths = [\"spec/design/\"]\n", "overlap"),
+        ("design-intent-paths = \"spec/\"\n", "unreadable"),
+    ];
+    for (extra, reason) in cases {
+        commit_declaration(&place, &paths_declaration(extra));
+        for rel in ["design-intent/spec/srs.html", "docs/design/x.md", "crates/x/tests/y.rs", "spec/x.yaml", "src/lib.rs"] {
+            let text = assert_paths_deny(&place, &path, rel, "edit-code");
+            assert!(text.contains(&format!(" paths=invalid:{reason}")), "{reason}: {rel}: 理由の字面: {text}");
+            assert_eq!(text.matches("paths=").count(), 1, "{text}");
+        }
+        let file = outside.join("note.md").display().to_string();
+        let before = role_records(&place.state).len();
+        assert_silent(&run_paths_hook(&place, &path, &[], &tool_payload(&place.repo, "Edit", &file)), "repo の外は宣言に依らない");
+        assert_role_record(&place.state, before, "role-allow path=outside", "rolepathf_rolepathf");
+    }
+    // 直した宣言を commit すると戻る（固定値へ黙って戻していたのではなく、宣言を読んでいた）。
+    commit_declaration(&place, &paths_declaration("design-intent-paths = [\"spec/\"]\n"));
+    assert_paths_allow(&place, &path, "rolepathf_rolepathf", "spec/x.yaml", "design-intent");
+    clean(&[&place.repo, &place.state, &place.sock_dir, &outside]);
+}
+
+/// (g) commit していない作業ツリーの宣言は効かない: key を書いた file を置いただけの repo は固定の判定のまま、
+/// HEAD の宣言を作業ツリーで壊しても HEAD の宣言で分類する（不正にも倒れない）。
+#[test]
+fn hook_role_paths_uncommitted_declaration_does_not_apply() {
+    let place = role_place();
+    let path = stub_seat(&place, "rolepathg", Some("orchestrator"));
+    let me = "rolepathg_rolepathg";
+    write_declaration(&place, &paths_declaration("design-intent-paths = [\"spec/\"]\n"));
+    assert_paths_deny(&place, &path, "spec/x.yaml", "edit-code");
+    assert_paths_allow(&place, &path, me, "design-intent/spec/srs.html", "design-intent");
+    commit_declaration(&place, &paths_declaration("tests-paths = [\"t/\"]\n"));
+    assert_paths_allow(&place, &path, me, "t/x_test.py", "tests");
+    write_declaration(&place, &paths_declaration("tests-paths = [\"/t/\"]\n"));
+    assert_paths_allow(&place, &path, me, "t/x_test.py", "tests");
+    let text = assert_paths_deny(&place, &path, "src/lib.rs", "edit-code");
+    assert!(!text.contains("paths="), "作業ツリーの壊れた宣言は読まない: {text}");
+    assert!(fs::remove_file(place.repo.join(DECL_FILE)).is_ok(), "作業ツリーの宣言を消せる");
+    assert_paths_allow(&place, &path, me, "t/x_test.py", "tests");
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
+/// (h) 便の worktree と repo の写し（便の器でない worktree）の中の file も **anchor の宣言**で分類する: worktree 自身の
+/// HEAD が別の宣言（key 無し）を持っていても、anchor の宣言の prefix が通り、固定の prefix は断られる。
+#[test]
+fn hook_role_paths_worktree_files_are_classified_by_the_anchor_declaration() {
+    let place = role_place();
+    let path = stub_seat(&place, "rolepathh", Some("orchestrator"));
+    let me = "rolepathh_rolepathh";
+    // worktree の branch は key 無しの宣言を持ち、anchor（main）はその後に key を書く。
+    commit_declaration(&place, &paths_declaration(""));
+    let bead = place.repo.join(".worktrees").join(NAME).join("run-1");
+    git(&place.repo, &["worktree", "add", "-q", "-b", "run-1", &bead.display().to_string()]);
+    commit_declaration(&place, &paths_declaration("design-intent-paths = [\"spec/\"]\n"));
+    assert!(git(&bead, &["show", &format!("HEAD:{DECL_FILE}")]).lines().all(|line| !line.contains("design-intent-paths")), "worktree の HEAD は key を持たない");
+    let under = |parts: &[&str]| parts.iter().fold(place.repo.join(".worktrees"), |dir, part| dir.join(part)).display().to_string();
+    let before = role_records(&place.state).len();
+    assert_silent(&run_paths_hook(&place, &path, &[], &tool_payload(&place.repo, "Edit", &under(&[NAME, "run-1", "spec", "x.yaml"]))), "便の worktree");
+    assert_role_record(&place.state, before, "role-allow path=design-intent", me);
+    let text = assert_role_deny(&run_paths_hook(&place, &path, &[], &tool_payload(&place.repo, "Edit", &under(&[NAME, "run-1", "design-intent", "x.html"]))), "固定の prefix");
+    assert!(text.contains("edit-code"), "{text}");
+    assert_silent(&run_paths_hook(&place, &path, &[], &tool_payload(&place.repo, "Edit", &under(&["planner-x", "spec", "x.yaml"]))), "repo の写し");
+    assert_role_deny(&run_paths_hook(&place, &path, &[], &tool_payload(&place.repo, "Edit", &under(&["planner-x", "design-intent", "x.html"]))), "写しの固定の prefix");
+    // 席が便の worktree へ cd しても anchor（`--project`）の宣言で分類する。
+    let project = place.repo.display().to_string();
+    let out = run_paths_hook(&place, &path, &["--project", &project], &tool_payload(&bead, "Edit", "spec/y.yaml"));
+    assert_silent(&out, "cwd が便の worktree でも anchor の宣言");
     clean(&[&place.repo, &place.state, &place.sock_dir]);
 }
 
