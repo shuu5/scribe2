@@ -507,6 +507,183 @@ fn pipe_dispatch_release_requeues_a_gate_failed_run() {
     clean(&[&repo, &state]);
 }
 
+/// toy の設計 doc の § の本文（`design_doc_rows` の固定の 1 行・§ を直す歯はこれを置き換える）。
+const SECTION_BODY: &str = "toy repo の縦 1 本を通す節の本文。";
+
+/// 審査の材料の dir に置かれる § の写し（run dir の `review/design.txt`）。
+fn section_copy(state: &Path, id: &str) -> std::path::PathBuf {
+    state.join("pipe").join(id).join("review").join("design.txt")
+}
+
+/// 行 `row` の便を審査の判定 `verdict` で `Reviewed` の終端に着ける（intake は偽 PASS の lens で通し、判定 file を
+/// 書き換える＝§ の写しは審査の段が置いたまま）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn reviewed_run(repo: &Path, state: &Path, bead: &str, row: &str, verdict: &str) -> String {
+    let id = intake_bead(repo, state, &format!("{DESIGN_FILE}#{row}"), bead);
+    fs::write(state.join("pipe").join(&id).join(REVIEW_FILE), format!("{{\"verdict\":\"{verdict}\"}}\n"))
+        .expect("審査の判定を書ける");
+    assert!(section_copy(state, &id).is_file(), "前提: 審査の段は § の写しを置く");
+    id
+}
+
+/// 設計 doc の § の本文だけを `from` → `to` で直して commit する（**契約表の行は 1 字も変えない**＝生成される
+/// 契約 file は同じ）。`rows` は doc が持つ行の列（[`two_rows`] と同じ形で呼び手が選ぶ）。
+fn revise_section(repo: &Path, rows: &[Vec<String>], from: &str, to: &str) {
+    let body = design_doc_rows(rows);
+    assert!(body.contains(from), "前提: 直す前の § の本文が doc に在る: {body}");
+    let revised = body.replace(from, to);
+    assert_ne!(revised, body, "§ の本文が動く");
+    write_design(repo, &revised);
+    git(repo, &["add", "-A"]);
+    git(repo, &["commit", "-q", "-m", "section-revised"]);
+}
+
+/// [`two_rows`] が commit する行の列（§ を直す歯が同じ行のまま doc を書き直すのに使う）。
+fn two_row_fields() -> Vec<Vec<String>> {
+    vec![
+        row_fields("a", &["write-set"], &[r#"write-set = ["src/lib.rs"]"#]),
+        row_fields("b", &["write-set"], &[r#"write-set = ["src/b.rs"]"#]),
+    ]
+}
+
+/// (§16 (a)) 審査 INCONCLUSIVE で終端した `Reviewed` の便の契約は、§ の本文を直した後の 1 周で列に戻る
+/// （`dispatch ls` の理由が値なしの欄・`ready=1`）。base は契約 file の字しか鍵に持たない（RED）。
+#[test]
+fn pipe_dispatch_section_key_requeues_an_inconclusive_review_after_the_section_changes() {
+    let (repo, state) = repo_with_state();
+    two_rows(&repo);
+    let bead = "s2-toy.1";
+    reviewed_run(&repo, &state, bead, "a", "INCONCLUSIVE");
+    let bd = fake_bd(&state, &[issue(bead, 2, "a")]);
+    let before = ls(&repo, &state, &bd);
+    let settled = reason_of(&before, bead);
+    assert!(settled.starts_with("settled:"), "直す前は列外（{}）", told(&before));
+    assert!(settled.ends_with("/Reviewed"), "段は Reviewed: {settled}");
+    revise_section(&repo, &two_row_fields(), SECTION_BODY, "toy repo の縦 1 本を通す節の本文（審査役の指摘で直した）。");
+    let after = ls(&repo, &state, &bd);
+    assert_eq!(reason_of(&after, bead), "-", "§ を直せば列に戻る（{}）", told(&after));
+    assert_eq!(count_of(&after), format!("{COUNT} total=1 ready=1"), "戻った契約は起こせる（{}）", told(&after));
+    clean(&[&repo, &state]);
+}
+
+/// (§16 (b)) § も契約 file も変わっていない周は列外のまま（無限に起こし直さない・理由の字面も同じ）。§ の外の
+/// commit（別の file）が積まれても鍵は動かない。
+#[test]
+fn pipe_dispatch_section_key_keeps_the_run_out_while_nothing_changed() {
+    let (repo, state) = repo_with_state();
+    two_rows(&repo);
+    let bead = "s2-toy.1";
+    reviewed_run(&repo, &state, bead, "a", "INCONCLUSIVE");
+    let bd = fake_bd(&state, &[issue(bead, 2, "a")]);
+    let first = ls(&repo, &state, &bd);
+    let settled = reason_of(&first, bead);
+    assert!(settled.starts_with("settled:"), "列外（{}）", told(&first));
+    assert!(settled.ends_with("/Reviewed"), "段は Reviewed: {settled}");
+    fs::write(repo.join("src").join("b.rs"), "// unrelated\n").expect("§ の外の file を書ける");
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "unrelated"]);
+    let again = ls(&repo, &state, &bd);
+    assert_eq!(reason_of(&again, bead), settled, "§ も契約 file も同じなら列外のまま・字面も同じ（{}）", told(&again));
+    assert_eq!(count_of(&again), format!("{COUNT} total=1 ready=0"), "起こさない");
+    clean(&[&repo, &state]);
+}
+
+/// (§16 (c)) 審査 FAIL で終端した便も § を直せば戻る（FAIL と INCONCLUSIVE の弁別は鍵に要らない＝どちらも
+/// 「この材料では通らなかった」）。
+#[test]
+fn pipe_dispatch_section_key_requeues_a_failed_review_after_the_section_changes() {
+    let (repo, state) = repo_with_state();
+    two_rows(&repo);
+    let bead = "s2-toy.1";
+    reviewed_run(&repo, &state, bead, "a", "FAIL");
+    let bd = fake_bd(&state, &[issue(bead, 2, "a")]);
+    let before = ls(&repo, &state, &bd);
+    assert!(reason_of(&before, bead).ends_with("/Reviewed"), "直す前は審査の終端で列外（{}）", told(&before));
+    revise_section(&repo, &two_row_fields(), SECTION_BODY, "toy repo の縦 1 本を通す節の本文（FAIL の後に直した）。");
+    let after = ls(&repo, &state, &bd);
+    assert_eq!(reason_of(&after, bead), "-", "審査 FAIL も § を直せば戻る（{}）", told(&after));
+    assert_eq!(count_of(&after), format!("{COUNT} total=1 ready=1"), "戻った契約は起こせる");
+    clean(&[&repo, &state]);
+}
+
+/// (§16 (d)) § の写しを**持たない**便と、写しが**在るのに読めない**便は契約 file だけの鍵で今までどおり列外
+/// （「無い」と「違う」を畳まない）。同じ周に写しが在って読める便は戻る＝**母集団は写しの 3 値**で、鍵が
+/// 効いているのに 2 値だけが留まることを 1 周で測る。
+#[test]
+fn pipe_dispatch_section_key_falls_back_to_the_contract_when_the_copy_is_absent_or_unreadable() {
+    let (repo, state) = repo_with_state();
+    let rows = vec![
+        row_fields("a", &["write-set"], &[r#"write-set = ["src/lib.rs"]"#]),
+        row_fields("b", &["write-set"], &[r#"write-set = ["src/b.rs"]"#]),
+        row_fields("c", &["write-set"], &[r#"write-set = ["src/c.rs"]"#]),
+    ];
+    commit_rows(&repo, &rows);
+    let absent = reviewed_run(&repo, &state, "s2-toy.1", "a", "INCONCLUSIVE");
+    let unreadable = reviewed_run(&repo, &state, "s2-toy.2", "b", "INCONCLUSIVE");
+    reviewed_run(&repo, &state, "s2-toy.3", "c", "INCONCLUSIVE");
+    fs::remove_file(section_copy(&state, &absent)).expect("写しを消せる");
+    // 在るのに読めない写し: 同じ名で dir を置く（file として読めない・root でも読めない形）。
+    fs::remove_file(section_copy(&state, &unreadable)).expect("写しを消せる");
+    fs::create_dir(section_copy(&state, &unreadable)).expect("同じ名の dir を置ける");
+    revise_section(&repo, &rows, SECTION_BODY, "toy repo の縦 1 本を通す節の本文（3 便の後に直した）。");
+    let bd = fake_bd(&state, &[issue("s2-toy.1", 2, "a"), issue("s2-toy.2", 2, "b"), issue("s2-toy.3", 2, "c")]);
+    let out = ls(&repo, &state, &bd);
+    let kept_out = |bead: &str| {
+        let reason = reason_of(&out, bead);
+        reason.starts_with("settled:") && reason.ends_with("/Reviewed")
+    };
+    assert!(kept_out("s2-toy.1"), "写しが無い便は契約 file だけの鍵で列外のまま（{}）", told(&out));
+    assert!(kept_out("s2-toy.2"), "写しが在るのに読めない便も列外のまま（{}）", told(&out));
+    assert_eq!(reason_of(&out, "s2-toy.3"), "-", "写しが在って読める便だけ戻る（{}）", told(&out));
+    assert_eq!(count_of(&out), format!("{COUNT} total=3 ready=1"), "3 値のうち起こせるのは 1 本");
+    clean(&[&repo, &state]);
+}
+
+/// (§16 (e)) `Landed` の便は § を直しても戻らない（済んでいる・起こし直すと同じ変更をもう一度作る）。
+/// 母集団 = 終端の段の種類のうち、§ の写しを持つ側（`Reviewed` は上の歯・`Landed` はこの歯）。
+#[test]
+fn pipe_dispatch_section_key_does_not_requeue_a_landed_run() {
+    let (repo, state) = repo_with_state();
+    two_rows(&repo);
+    let bead = "s2-toy.1";
+    let id = gated_run(&repo, &state, bead, "PASS");
+    let landed = super::land_once(&repo, &state, &id);
+    assert_eq!(landed.status.code(), Some(i32::from(RC_OK)), "land は rc 0（{}）", told(&landed));
+    assert!(section_copy(&state, &id).is_file(), "前提: 着地した便も § の写しを持つ");
+    let bd = fake_bd(&state, &[issue(bead, 2, "a")]);
+    let before = ls(&repo, &state, &bd);
+    let settled = reason_of(&before, bead);
+    assert!(settled.ends_with("/Landed"), "着地した便は列外（{}）", told(&before));
+    revise_section(&repo, &two_row_fields(), SECTION_BODY, "toy repo の縦 1 本を通す節の本文（着地の後に直した）。");
+    let after = ls(&repo, &state, &bd);
+    assert_eq!(reason_of(&after, bead), settled, "Landed は § を直しても列外のまま・理由も同じ（{}）", told(&after));
+    assert_eq!(count_of(&after), format!("{COUNT} total=1 ready=0"), "起こさない");
+    clean(&[&repo, &state]);
+}
+
+/// (§16 (f)) § の本文を **1 文字**だけ変えた周も戻る（列が突き合わせる本文が審査の材料と同じ 1 本から出ている
+/// pin＝末尾の整えや空白の畳みで差が消えない）。
+#[test]
+fn pipe_dispatch_section_key_requeues_on_a_single_character_change() {
+    let (repo, state) = repo_with_state();
+    two_rows(&repo);
+    let bead = "s2-toy.1";
+    reviewed_run(&repo, &state, bead, "a", "INCONCLUSIVE");
+    let bd = fake_bd(&state, &[issue(bead, 2, "a")]);
+    let before = ls(&repo, &state, &bd);
+    assert!(reason_of(&before, bead).ends_with("/Reviewed"), "直す前は列外（{}）", told(&before));
+    let one = "toy repo の縦 2 本を通す節の本文。";
+    assert_eq!(SECTION_BODY.chars().count(), one.chars().count(), "前提: 字数は同じ");
+    assert_eq!(SECTION_BODY.chars().zip(one.chars()).filter(|(a, b)| a != b).count(), 1, "前提: 違いは 1 文字");
+    revise_section(&repo, &two_row_fields(), SECTION_BODY, one);
+    let after = ls(&repo, &state, &bd);
+    assert_eq!(reason_of(&after, bead), "-", "1 文字の差でも戻る（{}）", told(&after));
+    clean(&[&repo, &state]);
+}
+
 /// (§3 起動条件) 閉じていない `blocks` の依存は `dependency` で待ち、依存先が closed になると起こせる。
 /// 所属（`parent-child`）は順序ではないので待たせない（`.beads/PRIME.md` R2）。
 ///

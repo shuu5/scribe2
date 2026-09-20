@@ -175,6 +175,19 @@ fn materials(entry: &Review<'_>) -> Material {
     }
 }
 
+/// 材料 1 本の on-disk の形（本文 + 末尾の改行）。[`keep`] が書く側・[`design_material`] が突き合わせる側の
+/// **同じ 1 本**（末尾の整え方を 2 か所に持たない・C2）。
+fn material_file(body: &str) -> String {
+    format!("{body}\n")
+}
+
+/// 行の `section` が指す § の本文を、審査の材料の dir に置かれる [`DESIGN_FILE`] と**同じ形**で読む
+/// （設計 dispatcher.md §16「列外の鍵に審査役へ渡る材料を含める」）。列は直前の便の写しとこの値を突き合わせ、
+/// 違う周は列外にしない。読み手は審査が材料を作る [`design_text`] そのもの（site を 2 つにしない・C2）。
+pub(in crate::pipe) fn design_material(repo: &Path, design: &str) -> String {
+    material_file(&design_text(repo, design))
+}
+
 /// 契約の `design` が設計 pointer（`<doc>#<id>`）なら、base の設計 doc からその行の `section` の節の本文を読む
 /// （§4「順序」: 生成 (b) の前後で穴の出所は変わらない）。pointer でない周・解けない周は理由の 1 行。
 fn design_text(repo: &Path, design: &str) -> String {
@@ -431,7 +444,7 @@ fn keep(entry: &Review<'_>, material: &Material) -> Result<PathBuf, String> {
         .map_err(|err| format!("{} を写せない: {err}", contract.display()))?;
     for (name, body) in [(DESIGN_FILE, &material.design), (REQUIREMENTS_FILE, &material.requirements)] {
         let path = dir.join(name);
-        std::fs::write(&path, format!("{body}\n")).map_err(|err| format!("{} を書けない: {err}", path.display()))?;
+        std::fs::write(&path, material_file(body)).map_err(|err| format!("{} を書けない: {err}", path.display()))?;
     }
     Ok(contract)
 }

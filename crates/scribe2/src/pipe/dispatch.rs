@@ -14,6 +14,7 @@ use super::admission::{self, Sizes};
 use super::cli::{crossings, generated, int_row, judge, live, stage_of, Denial, Material, Materials};
 use super::contract::Contract;
 use super::refuse::overlaps;
+use super::review;
 use super::table::{self, Pointer};
 use super::{contract_path, current, git_bytes, Ticket};
 use crate::cli_outcome::Outcome;
@@ -616,7 +617,7 @@ fn entry_of(input: &Input<'_>, issue: &Issue, ledger: &Ledger<'_>) -> (Candidate
         Err(denial) => return wait(WaitReason::Admission { reason: denial.name }),
     };
     let contract = match generated(input.repo, &pointer, materials) {
-        Ok((found, body)) => match settled(input, &issue.id, &body, &ledger.events) {
+        Ok((found, body)) => match settled(input, &issue.id, &body, &found.design, &ledger.events) {
             Some((sha, stage)) => return wait(WaitReason::Settled { sha, stage }),
             None => found,
         },
@@ -774,7 +775,13 @@ fn pointer_of(acceptance: &str) -> Option<Pointer> {
 /// も field も足さない・C17.1）。起こし直した便は新しい run id を持ち、その記帳は `release` より後に並ぶ
 /// ので、同じ sha でまた終端に着けば再び列外になる＝**印 1 回で起き直るのは 1 回**（§2 の無限再起動を
 /// 開け直さない）。戻す段は [`requeues`] が段の型の網羅の match 1 本で決める。
-fn settled(input: &Input<'_>, bead: &str, body: &str, events: &[Event]) -> Option<(String, Stage)> {
+///
+/// **審査役へ渡る材料も鍵に入る**（設計 §16・`s2-07l.495`）: `Reviewed` で終端した便（審査 FAIL / INCONCLUSIVE）
+/// は、行の `section` が指す § の本文を審査役が読んだ。直前の便の材料の dir に在る § の写しと、いま base から
+/// 読んだ § の本文（読みは審査と同じ 1 本・[`review::design_material`]）が違う周は列外にしない＝**同じ材料 →
+/// 同じ判定**が鍵の意味である。写しが無い / 読めない周は契約 file だけの鍵に倒す（[`section_moved`]）。
+/// § を鍵に入れる段は [`section_keyed`] が段の型の網羅の match 1 本で決める。
+fn settled(input: &Input<'_>, bead: &str, body: &str, design: &str, events: &[Event]) -> Option<(String, Stage)> {
     let state = current(input.state_dir).ok()?;
     // **直前の便から見る**（run id は `<bead>-<UTC の秒>` ＝ id の昇順が時系列なので、逆順が新しい側）。
     // 同じ契約 file を持つ最初の 1 本だけを見る——古い便の終端は、その後起こし直した同じ契約を塞がない。
@@ -788,8 +795,41 @@ fn settled(input: &Input<'_>, bead: &str, body: &str, events: &[Event]) -> Optio
     if requeues(stage) && released_after(events, id, bead) {
         return None;
     }
+    if section_keyed(stage) && section_moved(input, id, design) {
+        return None;
+    }
     let sha = git_bytes(input.repo, &["hash-object", "--", &path.display().to_string()])?;
     String::from_utf8(sha).ok().map(|found| (found.trim().to_owned(), stage))
+}
+
+/// 列外の鍵に § の本文を含める段か（**段の型の網羅の match 1 本**・設計 §16「§ を鍵に入れるのは `Reviewed` の
+/// 段だけ」）。
+///
+/// § はその段で審査役が読んだ材料であって、`Landed`（済んでいる・起こし直すと同じ変更をもう一度作る）とも、
+/// `release` が戻す段（[`requeues`]・`Failed` / `Stopped` / `Gated`）とも関係が無い。終端に着かない段はここに
+/// 届かないが、届いても含めない側に倒す。段が増えた便は compile が止めて、その段の鍵に § が要るかを決めさせる。
+fn section_keyed(stage: Stage) -> bool {
+    match stage {
+        Stage::Reviewed => true,
+        Stage::Landed | Stage::Failed | Stage::Stopped | Stage::Gated => false,
+        Stage::Intake
+        | Stage::Blocked
+        | Stage::Spawned
+        | Stage::Questioned
+        | Stage::RateLimited
+        | Stage::Implemented => false,
+    }
+}
+
+/// 直前の便の材料の dir に在る § の写し（[`review::DESIGN_FILE`]）と、いま base から読んだ § の本文が**違う**か。
+///
+/// 写しが**無い**周（審査へ届かずに終端した便）と**在るのに読めない**周は偽＝契約 file だけの鍵に倒す（今までの
+/// 挙動のまま・設計 §16「材料の写しが無い周は契約 file だけの鍵に倒す」）。「無い」を「違う」と読むと、審査へ
+/// 届かないまま終端する便が終端のたびに起こし直され、§2 が塞いだ無限再起動が開く（**「無い」と「違う」を
+/// 畳まない**・C10・fail-closed）。突き合わせる本文は材料を書く側と同じ 1 本から出る（末尾の整え方も同じ）。
+fn section_moved(input: &Input<'_>, run: &str, design: &str) -> bool {
+    let copy = review::review_dir(input.state_dir, run).join(review::DESIGN_FILE);
+    std::fs::read_to_string(copy).is_ok_and(|kept| kept != review::design_material(input.repo, design))
 }
 
 /// `release` で列へ戻す段か（**段の型の網羅の match 1 本**・設計 §12「戻さない段が 2 つ在る」）。
@@ -934,7 +974,8 @@ pub fn mark(state_dir: &Path, bead: &str, mark: Mark, policy: store::LockPolicy)
 mod tests {
     use super::{
         admits_gated, advance, digits_of, handoff, launch_of, marks_of, order, rank, released_after, requeues,
-        revive_of, tools, Advance, Candidate, Handoff, Input, Pointer, WaitReason, DRIVE, HANDOFFS, WAIT_REASONS,
+        revive_of, section_keyed, tools, Advance, Candidate, Handoff, Input, Pointer, WaitReason, DRIVE, HANDOFFS,
+        WAIT_REASONS,
     };
     use crate::fleet::{Event, EventKind, Mark, Stage, SCHEMA, STAGES};
     use crate::rules::manifest::Manifest;
@@ -1000,6 +1041,19 @@ mod tests {
         );
         assert!(!requeues(Stage::Landed), "Landed は済んでいる（起こし直すと同じ変更をもう一度作る）");
         assert!(!requeues(Stage::Reviewed), "審査 FAIL は中身が変わるまで列に入らない（FR49）");
+    }
+
+    /// 列外の鍵に § の本文を含める段は **`Reviewed` だけ**で、`Landed` と `release` が戻す 3 段は含めない
+    /// （設計 §16・母集団 = [`STAGES`] の全段・網羅の match 1 本・[`requeues`] とは交わらない）。
+    #[test]
+    fn pipe_dispatch_section_key_applies_to_reviewed_only() {
+        let keyed: Vec<Stage> = STAGES.iter().copied().filter(|stage| section_keyed(*stage)).collect();
+        assert_eq!(keyed, vec![Stage::Reviewed], "母集団 {} 段のうち § を鍵に入れるのは審査の段だけ", STAGES.len());
+        assert!(!section_keyed(Stage::Landed), "Landed は済んでいる（§ を直しても起こし直さない）");
+        assert!(
+            STAGES.iter().all(|stage| !(section_keyed(*stage) && requeues(*stage))),
+            "§ の鍵と release の印は同じ段を持たない（審査の終端は印で戻さない・FR49）"
+        );
     }
 
     /// `release` が効くのは**便の最後の記帳より後**の 1 件だけで、位置で引く（終端より前の印・別の
