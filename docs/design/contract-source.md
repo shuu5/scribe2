@@ -295,6 +295,32 @@ scribe2 を載せる consumer が pipe を通すのに要る面は 3 つで、�
 - **極性**: 歯だけの便なので検出線の母集団は 0 になる（§16 の gate-cost 側の行 g が的を宣言する形を持つまでは、撃墜の proof は便の notes に手で残す）。
 - 却下案: 9 本を 1 本の歯にまとめる（どの分岐が撃墜されたか分からない・変異 1 本ずつの A/B ができない）／門の判定を「歯を書きやすい形」に直す（歯だけの便に仕様変更を混ぜる）／e2e だけで 9 本とも測る（(a)(c)(d)(e) は受付の手前の断りが先に立ち、負例が別の理由で通る）。
 
+## 32. 要件面 yaml の本文は `text:` → 無ければ `shall:` の順で読む（契約表の行 ae・`s2-07l.467`）
+
+- **出所**: 別 project の席の要望（2026-09-17・急ぎでない・逐語は台帳 `s2-07l.467` の notes）。EARS 形の要件書（`when:` / `shall:` / `plain:` を持ち `text:` を持たない yaml）を正本にしている project は、§4 の審査の材料のためだけに読み物の html とその生成器を残している。本 repo の裁定（本節）は要望の推奨（本文の欄を順に読む）を採り、代替（`.vessel.toml` に欄名を宣言する行）を却下し、`when:` の連結を足す。
+- **現物（verified 2026-09-20・main d875aaf）**:
+  - yaml の要件面の本文の読み手は `crates/scribe2/src/pipe/review.rs` の **private** な `requirement_yaml(`（引数は要件面の全文と id の 2 つ・戻り値は閉じた 3 値〔`Found::Body` / `Found::Empty` / `Found::Absent`〕）。
+  - 呼び手は同じ `crates/scribe2/src/pipe/review.rs` の private な `requirements_text(`（repo と要件面の path と id の列を取り、id 1 つにつき 1 行の文字列を返す）**1 か所だけ**で、要件面の形の呼び分けは §4 のとおり**拡張子の 1 match**（`.html` = `requirement_row(`・`.yaml` / `.yml` = `requirement_yaml(`・`.md` = `requirement_md(`）から関数 pointer を選ぶ形である。
+  - `requirement_yaml(` の本文の組み立ては**1 本の loop**で、id の mapping の行を走りながら「いま読んでいる欄が `text:` か」の印を立て、値と block の続きを集め、最後に**空白 1 つで繋いで空白を畳む**。`title:` は読まない。裸の列と `text:` の無い mapping は `Found::Empty`、id が無ければ `Found::Absent`。
+  - 既存の歯は `crates/scribe2/src/pipe/review.rs` の in-file の歯 `pipe_review_requirements_text_reads_yaml_text_and_md_headings_by_extension` 1 本で、yaml の fixture の 5 つの id（`text:` の値・block の続き・裸の列・`title:` だけ・不在）を測る。
+- **約束（番号は done と歯の対）**:
+  1. `text:` が在る mapping の本文は**今までどおり `text:` の値**（値の選び方も block の畳み方も 1 字も変えない）。
+  2. `text:` が無く `shall:` が在る mapping の本文は **`shall:` の値**にする（block の続きの畳み方は `text:` と同じ 1 本の形を通す）。
+  3. 2 の周に同じ mapping の `when:` が在れば、本文は **`when:` の値 + 区切り + `shall:` の値**の 1 本にする（EARS 形の要件は条件を落とすと審査役が約束の範囲を誤る）。**区切りの字面は前後に空白 1 つを伴う `—`（em dash）1 文字**に決める——本文の組み立ては値と block の続きを空白 1 つで繋いで畳む形なので、空白だけでは `when:` と `shall:` の境が消える（現物の組み方に合わせた 1 つの選択）。
+  4. `plain:` は読まない。`title:` も従来どおり読まない。`when:` だけを持ち `shall:` を持たない mapping からは本文を作らない。
+  5. `text:` も `shall:` も無い mapping と裸の列は**従来どおり `Found::Empty`**、id が要件面に無い周は `Found::Absent`＝呼び手が出す「本文が無い」と「要件面に無い」の行の字面は 1 字も変わらない。
+  6. 欄の名と順序は `requirement_yaml(` の中だけが持つ（`.vessel.toml` にも rules 行にも宣言を足さない・規則を増やさない・C17）。読み手は形ごとに 1 関数のままで、html と md の読み手・拡張子の 1 match・関数 pointer の型・3 値の型・呼び手の行の組み立ては不変。
+- **歯**（`pipe_review_yaml_shall_` 接頭辞・置き場は `crates/scribe2/src/pipe/review.rs` の in-file の歯・fixture は歯の中で組む yaml の字面）:
+  - (a) `shall:` だけを持つ mapping の本文が `shall:` の値になる（約束 2）。
+  - (b) `when:` と `shall:` を持つ mapping の本文が「`when:` の値 + 空白 + `—` + 空白 + `shall:` の値」の 1 本になる（約束 3・**区切りの字面を逐語で pin** し、`when:` の値が落ちていれば落ちる）。
+  - (c) `text:` と `shall:`（と `when:`）を両方持つ mapping の本文が `text:` の値だけになり、**`shall:` の値も `when:` の値も 1 字も混ざらない**（約束 1 の優先・**否定の枝**）。
+  - (d) `when:` だけの mapping・`plain:` だけの mapping・`title:` だけの mapping・裸の列はどれも `Found::Empty`（約束 4 と 5 の**否定の枝**＝`when:` だけで本文を作らず `plain:` を読まない）。
+  - (e) id が要件面に無い周は `Found::Absent`（約束 5）。
+  - (f) `shall: |` の block の続きを持つ mapping の本文が空白で畳まれた 1 本になる（約束 2 の block の面・`text:` の block と同じ扱い）。
+  - 約束 1 の「1 字も変えない」は**既存の歯**が受け、行の verify が完全名 `pipe_review_requirements_text_reads_yaml_text_and_md_headings_by_extension`（同じく `crates/scribe2/src/pipe/review.rs` の in-file の歯）で撃つ。
+- **触らない**: html の読み手 `requirement_row(` と md の読み手 `requirement_md(`・拡張子の 1 match と関数 pointer の型・3 値の型・呼び手 `requirements_text(` の行の組み立てと断りの字面・id の集合の読み手 `requirement_ids(`・`.vessel.toml` の欄・rules 行・§4 の審査の段の形（本節が広げるのは §4 の「yaml の `id` + `text`」の句の yaml の面だけで、html と md の句は不変）。
+- **却下案**: `.vessel.toml`（か rules 行）に本文の欄名を宣言させる案は、宣言の読み手と断りが増え要件面 1 つのために project ごとの設定面が育つため不採用（規則を増やさない・C17）。`plain:` も順に読む案は、平易化の欄であって約束の正本ではなく、審査役に渡る材料が緩むため不採用。`when:` を落として `shall:` だけを本文にする案は、条件を落とすと審査役が約束の範囲を誤るため不採用。欄の順序を呼び手（拡張子の match）の側に持つ案は、yaml の本文の規則が 2 か所に分かれるため不採用（C2）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -618,6 +644,16 @@ write-set = ["crates/scribe2/src/pipe/cli/intake.rs", "crates/scribe2/src/pipe/t
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_intake_depends_", "cargo nextest run -p scribe2 --no-tests=fail pipe_intake_design_", "cargo nextest run -p scribe2 --no-tests=fail pipe_preflight_", "cargo nextest run -p scribe2 --no-tests=fail table_check_"]
 size = "S"
 done = "depends の相手が同じ doc の自分でない別の行である行を受付が rc 0 で受けて run dir が 1 つ出来、相手が doc に無い行は contracts check と逐語で同じ depends-unresolved の 1 行だけで断られて run dir が 0、preflight は（受付と同じ判定関数を既に直に呼んでいるので source を変えずに）前者で refuse= に depends-unresolved を出さず後者で出し、既存の pipe_intake_design_ / pipe_preflight_ / table_check_ の歯が緑のまま"
+
+[[contract]]
+id = "ae"
+title = "要件面 yaml の本文を text: → 無ければ shall: の順で読み、shall: の周に when: が在れば条件と一緒に 1 本にする（欄の宣言は足さない）"
+req = ["FR49", "FR2"]
+section = "32"
+write-set = ["crates/scribe2/src/pipe/review.rs", "docs/design/contract-source.md"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail pipe_review_yaml_shall_", "cargo nextest run -p scribe2 --lib --no-tests=fail pipe_review_requirements_text_reads_yaml_text_and_md_headings_by_extension"]
+size = "S"
+done = "約束 1 = text: を持つ mapping の本文は今までどおり text: の値で、既存の yaml と md の歯が 1 字も変わらず緑。約束 2 = text: が無く shall: が在る mapping の本文が shall: の値になり、shall: の block の続きも空白で畳まれた 1 本になる。約束 3 = その周に同じ mapping の when: が在れば本文が when: の値 + 空白 + em dash + 空白 + shall: の値の 1 本になり、区切りの字面を逐語で測る歯が when: の値の脱落で落ちる。約束 4 と 5 = text: と shall: を両方持つ mapping は text: の値だけになり shall: と when: の値が 1 字も混ざらず、when: だけ / plain: だけ / title: だけの mapping と裸の列はどれも本文なしの 3 値の 1 つに倒れ、id が要件面に無い周は不在の 1 つに倒れ、呼び手が出す「本文が無い」と「要件面に無い」の行の字面は 1 字も変わらない。約束 6 = .vessel.toml にも rules 行にも欄の宣言は 1 つも増えず、html と md の読み手と拡張子の 1 match と関数 pointer の型と 3 値の型と呼び手の行の組み立ては不変"
 <!-- contracts:end -->
 
 
