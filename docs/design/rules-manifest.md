@@ -74,6 +74,7 @@ ruled_at = "2026-09-07"
 | `R-C4-4.args` | FnArgs | 5 | true | 同上 |
 | `R-C4.line-width` | LineWidth | 120 | true | user 裁定 2026-09-14（s2-07l notes・逐語「推奨で良い」）・**行の数え方の正規化**: 1 行の文字数が値を超える行は ceil(文字数 ÷ 値) 行に数える（値以下の行は 1 行）。R-C4-1 / R-C4-2 / R-C4-3 の行数（xtask check の core-lines / file-lines / test-src-ratio）と契約表の上限の余地（[contract-source.md](./contract-source.md) §3）が同じ式で数える＝1 行に詰め込んでも上限は逃げない。式は core と xtask の 2 か所（互いに依存しない）に在り、同じ fixture の歯が一致を守る。契約 = 台帳 `s2-07l.254` |
 | `pipe.size_s_lines` / `pipe.size_m_lines` / `pipe.size_l_lines` | PipeSizeSLines / PipeSizeMLines / PipeSizeLLines | 100 / 300 / 800 | true | user 裁定 2026-09-14（s2-07l notes・逐語「推奨でよいのだが…」）・契約表の行の `size`（S / M / L）↔ 1 file あたりの増分の見積（行）。契約表の上限の余地（contract-source.md §3）が読む。契約 = 台帳 `s2-07l.249` |
+| `review.same_kind_stop` | ReviewSameKindStop | 2 | true | user 2026-09-16T05:53Z / 2026-09-16（[contract-source.md §23](./contract-source.md)・契約 = 台帳 `s2-07l.396`）。同型の審査 FAIL で run N+1 を止める回数（本）: 受付（`pipe intake` / `pipe preflight`）は同じ bead の便を新しい順に読み、同じ理由の型（§22 の `FindingKind`・`unparsed` は数えず連鎖も切らない）の FAIL が PASS で途切れるまでこの本数続き、契約 file と節の本文がともに不変の周を `same-kind-repeated` で断る（焼き直しは書き直す）。読み手は受付の 1 か所（`pipe/cli/intake.rs`）で、行の無い manifest は受付を 1 byte も動かさない（rc 2・`pipe.land_wait_s` と同じ極性）。宣言順の末尾 |
 | `R-C7-1` | DialogueSurface | `"user-direct"` | true | ADR-0003 / 2026-09-09・憲法 §3 |
 | `R-C8-1` | MaturityCondition | Policy（§3 の文） | **false** | 論点 9・ADR-0003 / 2026-09-09（停止・履歴） |
 | `R-C9-1` | AccountSelection | Policy（§3 の文） | **false** | 論点 8・U5 / 2026-09-07（口座は v3） |

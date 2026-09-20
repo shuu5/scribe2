@@ -859,6 +859,49 @@ fn rules_embedded_manifest_declares_usage_fresh_s_with_its_ruling() {
     assert_ne!(timeout.ruling, fresh.ruling, "裁定は別（相乗りではない・rules-diff §4.3 (ii)）");
 }
 
+// ─── 同型の審査 FAIL の停止の回数（`review.same_kind_stop`・contract-source.md §23・`s2-07l.396`・接頭辞 `rules_review_same_kind_`） ───
+
+/// 埋め込みの manifest は同型の停止の回数の行 `review.same_kind_stop` を **値 2**・kind `ReviewSameKindStop`・Int の形・
+/// 発効・裁定 id `user 2026-09-16T05:53Z`・裁定日 2026-09-16 つきで持つ（**値は manifest が持ち、設計 doc は写さない**・
+/// C1 / C5）。裁定は他の行と相乗りしない（rules-diff §4.3 (ii)）。
+#[test]
+fn rules_review_same_kind_stop_row_carries_value_two_and_its_ruling() {
+    let manifest = match Manifest::embedded() {
+        Ok(found) => found,
+        Err(errors) => {
+            let lines: Vec<String> = errors.iter().map(ToString::to_string).collect();
+            panic!("埋め込み manifest が拒まれた:\n{}", lines.join("\n"))
+        }
+    };
+    let row = manifest.get("review.same_kind_stop").expect("同型の停止の回数の行が在る");
+    assert_eq!(row.value, RuleValue::Int(2), "user 裁定 2026-09-16T05:53Z の値（本）");
+    assert_eq!(row.kind, RuleKind::ReviewSameKindStop, "kind");
+    assert_eq!(row.kind.shape(), ValueShape::Int, "値の形は Int（本）");
+    assert!(row.enabled, "既定で効く");
+    assert_eq!(row.ruling, "user 2026-09-16T05:53Z", "裁定 id");
+    assert_eq!(row.ruled_at, "2026-09-16", "裁定日");
+    assert_eq!(int_row(&manifest, "review.same_kind_stop"), Ok(2), "整数の読み手で 2 が取れる");
+    let shared = manifest.rows().iter().filter(|other| other.ruling == row.ruling).count();
+    assert_eq!(shared, 1, "裁定 id は他の行と相乗りしない（母集団 {} 行）", manifest.rows().len());
+}
+
+/// kind `ReviewSameKindStop` は `ALL` の**宣言順の末尾**に在り、字面から引け、行と variant は対で足す＝variant を綴り違えた
+/// 行の manifest は未知の kind として読めない（片方だけの enum は親 test の `covers_all_kinds` が落ちる）。
+#[test]
+fn rules_review_same_kind_stop_kind_is_last_in_declaration_order_and_paired_with_the_row() {
+    assert_eq!(ALL.last(), Some(&RuleKind::ReviewSameKindStop), "宣言順の末尾（母集団 {} 種）", ALL.len());
+    assert_eq!(RuleKind::parse("ReviewSameKindStop"), Some(RuleKind::ReviewSameKindStop), "kind を字面から引ける");
+    assert_eq!(RuleKind::ReviewSameKindStop.as_str(), "ReviewSameKindStop", "字面は variant 名");
+    let at = ALL.iter().position(|kind| *kind == RuleKind::RoleEffort).unwrap_or_default();
+    assert_eq!(ALL.get(at.saturating_add(1)), Some(&RuleKind::ReviewSameKindStop), "`.433` の RoleEffort の直後");
+    let errors = rejected(&one_row_raw("ReviewSameKindStops", "2")).expect("未知の kind の fixture が受理された");
+    assert!(errors.join("\n").contains("未知である"), "行の kind を綴り違えた manifest は読めない: {errors:?}");
+    let probe = parsed(&one_row(RuleKind::ReviewSameKindStop, "3")).expect("Int の値は受理される");
+    assert_eq!(probe.get("probe").map(|found| found.value.clone()), Some(RuleValue::Int(3)));
+    let errors = rejected(&one_row(RuleKind::ReviewSameKindStop, "\"two\"")).expect("文字列の値の fixture が受理された");
+    assert!(errors.join("\n").contains("形と合わない"), "形は Int だけ: {errors:?}");
+}
+
 // ─── 席の口座を持つ単位は project の群（host の面の `[[account-group]]`・account-lifecycle.md §17・接頭辞 `host_group_`） ───
 
 /// 群 2 つを持つ host の面（口座 g1 / g2 / g3 は見出し行 3 / 6 / 9・群の見出し行は 12 と 17）。
@@ -1216,7 +1259,7 @@ fn rules_embedded_manifest_is_valid_and_covers_all_kinds() {
     // **tracked な `rules/manifest.toml` の全行が受理される**（`parse` は 1 件でも違反が
     // 在れば `Err` を返すので、ここに届いた時点で全行が必須 key を持つ）。母集団を額面に
     // 出すのは、行が黙って落ちた周を「全部読めた」と読み違えないためである。
-    assert_eq!(manifest.rows().len(), 48, "埋め込み manifest の行数（母集団・`.217` で +2・`.249` で +3・`.254` で +1・`.168` で +1・`.297` で +1・`.315` で +1・`.322` で +1・`.360` で +1・`.423` で +2・`.478` で -1〔役割の行 2 本が 1 本〕・`.479.1` で -7〔席の自律の行〕・`.479.2` で -3〔作業記憶の行 1 本と棚卸しの行 2 本〕・`.382` で +1〔終端の CI の上限〕・`.433` で +2〔役割の既定の model と effort〕・`.407` で +1〔選定の前計測の鮮度〕）");
+    assert_eq!(manifest.rows().len(), 49, "埋め込み manifest の行数（母集団・`.217` で +2・`.249` で +3・`.254` で +1・`.168` で +1・`.297` で +1・`.315` で +1・`.322` で +1・`.360` で +1・`.423` で +2・`.478` で -1〔役割の行 2 本が 1 本〕・`.479.1` で -7〔席の自律の行〕・`.479.2` で -3〔作業記憶の行 1 本と棚卸しの行 2 本〕・`.382` で +1〔終端の CI の上限〕・`.433` で +2〔役割の既定の model と effort〕・`.407` で +1〔選定の前計測の鮮度〕・`.396` で +1〔同型の審査 FAIL の停止の回数〕）");
     for kind in ALL {
         let covered = manifest.rows().iter().any(|row| row.kind == *kind);
         assert!(covered, "{} の行が manifest に無い", kind.as_str());
@@ -1386,10 +1429,10 @@ fn rules_embedded_manifest_declares_one_capability_row_per_role() {
             assert!(Capability::parse(name).is_some(), "{id} の値 {name} は Capability の名");
         }
     }
-    assert!(ALL.contains(&RuleKind::RoleCapabilities), "ALL に在る（末尾は `.433` の RoleEffort）");
+    assert!(ALL.contains(&RuleKind::RoleCapabilities), "ALL に在る（末尾は `.396` の ReviewSameKindStop）");
     assert_eq!(RuleKind::parse("RoleCapabilities"), Some(RuleKind::RoleCapabilities), "kind を字面から引ける");
     let kinds = ALL.len();
-    assert_eq!(kinds, 48, "kind の母集団（`.201` で +1・`.217` で +2・`.249` で +3・`.254` で +1・`.168` で +1・`.297` で +1・`.315` で +1・`.322` で +1・`.360` で +1・`.423` で +2・`.479.2` で -3・`.382` で +1〔終端の CI の上限〕・`.433` で +2〔役割の既定の 2 種〕・`.407` で +1〔選定の前計測の鮮度〕）");
+    assert_eq!(kinds, 49, "kind の母集団（`.201` で +1・`.217` で +2・`.249` で +3・`.254` で +1・`.168` で +1・`.297` で +1・`.315` で +1・`.322` で +1・`.360` で +1・`.423` で +2・`.479.2` で -3・`.382` で +1〔終端の CI の上限〕・`.433` で +2〔役割の既定の 2 種〕・`.407` で +1〔選定の前計測の鮮度〕・`.396` で +1〔同型の審査 FAIL の停止の回数〕）");
 }
 
 /// 禁じる語列の行（`runner.denied_commands`・`RuleKind::RunnerDeniedCommands`・裁定 id `user 2026-09-14`・ADR-0025 §2.1・
@@ -1690,8 +1733,8 @@ fn rules_role_defaults_reject_values_outside_the_closed_tables() {
 }
 
 /// 歯 (d・形 6): 埋め込み manifest が役割の既定の 2 行を**値ごと**運ぶ（裁定 `user 2026-09-17T04:23Z` の
-/// `fable` / `high`・値の正本は manifest で設計 doc は写さない・C1 / C5）。kind は宣言順の末尾 2 つ
-/// （`RunnerEffort` の直後が `RoleModel`・その直後が `RoleEffort`）で、字面から引ける。
+/// `fable` / `high`・値の正本は manifest で設計 doc は写さない・C1 / C5）。kind は宣言順で隣り合う 2 つ
+/// （`RunnerEffort` の直後が `RoleModel`・その直後が `RoleEffort`・末尾は `.396` の `ReviewSameKindStop`）で、字面から引ける。
 #[test]
 fn rules_manifest_carries_role_defaults() {
     let manifest = Manifest::embedded().unwrap_or_else(|errors| panic!("埋め込み manifest が拒まれた: {errors:?}"));
@@ -1704,7 +1747,7 @@ fn rules_manifest_carries_role_defaults() {
     let at = ALL.iter().position(|kind| *kind == RuleKind::RunnerEffort).unwrap_or_default();
     assert_eq!(ALL.get(at.saturating_add(1)), Some(&RuleKind::RoleModel), "宣言順は RunnerEffort の直後");
     assert_eq!(ALL.get(at.saturating_add(2)), Some(&RuleKind::RoleEffort), "対は宣言順で隣り合う");
-    assert_eq!(ALL.last(), Some(&RuleKind::RoleEffort), "`.433` の 2 種が宣言順の末尾");
+    assert_eq!(ALL.get(at.saturating_add(3)), Some(&RuleKind::ReviewSameKindStop), "`.433` の 2 種の直後が `.396` の末尾");
     assert_eq!(RuleKind::parse("RoleModel"), Some(RuleKind::RoleModel), "kind を字面から引ける");
     assert_eq!(RuleKind::parse("RoleEffort"), Some(RuleKind::RoleEffort), "kind を字面から引ける");
 }

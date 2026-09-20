@@ -224,6 +224,10 @@ pub enum RuleKind {
     /// 役割ごとの既定の effort（設計 seat-roles.md §19・`s2-07l.433`）。値は claude CLI の字面（閉じた表は
     /// [`crate::headless::Effort`]・表に無い字面は読み込みで拒む）。id は `seat.effort.<役割名>`。
     RoleEffort,
+    /// 同型の審査 FAIL で run N+1 を止める回数（本・設計 contract-source.md §23・`s2-07l.396`）。受付は同じ bead の
+    /// 便を新しい順に読み、同じ理由の型（`FindingKind`）の FAIL が PASS で途切れるまでこの本数続き、契約 file と
+    /// 節の本文がともに不変の周を `same-kind-repeated` で断る。
+    ReviewSameKindStop,
 }
 
 /// [`RuleKind`] の全 variant。parity test の母集団である。
@@ -276,6 +280,7 @@ pub const ALL: &[RuleKind] = &[
     RuleKind::RunnerEffort,
     RuleKind::RoleModel,
     RuleKind::RoleEffort,
+    RuleKind::ReviewSameKindStop,
 ];
 
 impl RuleKind {
@@ -330,6 +335,7 @@ impl RuleKind {
             Self::RunnerEffort => "RunnerEffort",
             Self::RoleModel => "RoleModel",
             Self::RoleEffort => "RoleEffort",
+            Self::ReviewSameKindStop => "ReviewSameKindStop",
         }
     }
 
@@ -370,6 +376,7 @@ impl RuleKind {
             | Self::PipeSizeSLines
             | Self::PipeSizeMLines
             | Self::PipeSizeLLines
+            | Self::ReviewSameKindStop
             | Self::AccountSelection => ValueShape::Int,
             Self::DialogueSurface
             | Self::RunnerModel

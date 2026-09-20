@@ -448,6 +448,19 @@ enabled = true
 ruling = "user 2026-09-14T06:4xZ"
 ruled_at = "2026-09-14"
 
+# 同型の審査 FAIL の停止の回数（本・設計 contract-source.md §23・`s2-07l.396`）。受付（pipe intake / preflight）は同じ
+# bead の便を新しい順に読み、同じ理由の型（crates 側の FindingKind）の FAIL が PASS で途切れるまでこの本数続き、
+# 契約 file と節の本文がともに不変の周を same-kind-repeated で断る（焼き直しは書き直す）。行の無い manifest は
+# 受付を 1 byte も動かさない（rc 2・pipe.land_wait_s と同じ極性）。
+
+[[rule]]
+id = "review.same_kind_stop"
+kind = "ReviewSameKindStop"
+value = 2
+enabled = true
+ruling = "user 2026-09-16T05:53Z"
+ruled_at = "2026-09-16"
+
 # 口座の宣言（設計 fleet-usage.md §2・account-lifecycle.md §2・ADR-0026 §2.1）は host の manifest（state dir
 # の host.toml）にだけ置く。この file に口座の表は置かない（文法は残る・足す変更は A1 の対話面で聞く・本 repo
 # は PUBLIC・SRS CON2）。器は credential の置き場を走査せず、宣言だけを真実として読む（C3）。

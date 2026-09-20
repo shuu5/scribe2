@@ -2692,6 +2692,320 @@ fn pipe_review_kind_missing_or_unknown_or_unreadable_falls_to_unparsed_without_m
     clean(&[&repo, &state]);
 }
 
+// ───── 同型の停止と焼き直しの門（`s2-07l.396`・設計 contract-source.md §23・SRS FR49・接頭辞 `pipe_intake_repeat_`） ─────
+
+/// 同じ bead の便は run id が `<bead>-<UTC の秒>` なので、次の便は**別の秒**に起こす（同じ秒は duplicate-run）。
+fn next_second() {
+    let now = || {
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|found| found.as_secs()).unwrap_or_default()
+    };
+    let start = now();
+    while now() == start {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// 同じ bead の便をもう 1 本起こす材料（repo・置き場・bead・設計 pointer）。
+struct Again<'a> {
+    /// 対象 repo。
+    repo: &'a Path,
+    /// 置き場。
+    state: &'a Path,
+    /// 契約の bead id。
+    bead: &'a str,
+    /// 設計 pointer（`--design`）。
+    design: &'a str,
+}
+
+/// 同じ bead の便を偽 lens の 1 行で起こす（`rules` の manifest・**設計 doc を書き換えない**＝節の本文を変えた周も
+/// そのまま撃てる・rc は測らない）。前の便と別の秒になるまで待ってから撃つ。
+fn repeat_intake_with(again: &Again<'_>, rules: &str, line: &str) -> Output {
+    next_second();
+    let marker = again.state.join(format!("lens-ran-{}", again.bead));
+    run_pipe(&[
+        "intake", "--design", again.design, "--bead", again.bead,
+        "--repo", &again.repo.display().to_string(), "--state-dir", &again.state.display().to_string(),
+        "--rules", rules, "--lens", &fake_lens(&marker, line),
+    ])
+}
+
+/// [`repeat_intake_with`] を既定の manifest（[`ceiling_rules`]）で撃つ。
+fn repeat_intake(repo: &Path, state: &Path, bead: &str, design: &str, line: &str) -> Output {
+    repeat_intake_with(&Again { repo, state, bead, design }, &ceiling_rules(state), line)
+}
+
+/// 便が**受理された**（run id を持ち run dir が 1 つ増えた・審査の判定行が出た）ことを測り、id を返す。受付の断りは
+/// run を作らないので、rc（FAIL の審査は rc 1・断りも rc 1）でなく run dir の数で読む。
+fn accepted(out: &Output, state: &Path, before: usize) -> String {
+    let id = run_id_of(out);
+    assert!(!id.is_empty(), "受理された便は run id を出す: {} {}", stdout_of(out), stderr_of(out));
+    assert_eq!(run_dirs(state).len(), before.saturating_add(1), "run dir が 1 つ増える: {}", stderr_of(out));
+    assert!(stdout_of(out).contains("stage=Reviewed"), "審査の段まで進む: {}", stdout_of(out));
+    id
+}
+
+/// 同じ bead で FAIL の便を `kinds`（理由の型と `at`）の順に起こし、受理された id の列（起こした順）を返す。
+fn failed_runs(repo: &Path, state: &Path, bead: &str, design: &str, kinds: &[(Option<&str>, Option<&str>)]) -> Vec<String> {
+    let mut ids = Vec::new();
+    for (kind, at) in kinds {
+        let before = run_dirs(state).len();
+        let out = repeat_intake(repo, state, bead, design, &lens_finding("FAIL", *kind, *at));
+        ids.push(accepted(&out, state, before));
+    }
+    ids
+}
+
+/// 受付の断りを測る: rc 1・stdout 0 byte・stderr が `wants` を全部名乗る・run dir と event は不変・同じ引数の preflight
+/// が `refuse=<name>:` を **1 行だけ**出して `preflight: refused n=1`（judge の同じ 1 本・§23 (4)）。stderr を返す。
+fn assert_refused(again: &Again<'_>, name: &str, wants: &[&str]) -> String {
+    let Again { repo, state, bead, design } = *again;
+    let (dirs, events) = (run_dirs(state), events_bytes(state));
+    let out = repeat_intake(repo, state, bead, design, &lens_finding("FAIL", Some("other"), None));
+    let err = stderr_of(&out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{name} は rc 1: {err}");
+    assert!(out.stdout.is_empty(), "断った周は stdout に 1 byte も書かない: {}", stdout_of(&out));
+    for want in wants {
+        assert!(err.contains(want), "{name}: {want} を名乗る: {err}");
+    }
+    assert_eq!(run_dirs(state), dirs, "{name}: run dir を作らない（母集団 {} 本）", dirs.len());
+    assert_eq!(events_bytes(state), events, "{name}: events.jsonl は byte 不変");
+    let flight = preflight_raw(repo, state, design, bead, true);
+    assert_eq!(flight.status.code(), Some(i32::from(RC_REFUSED)), "{name}: preflight も rc 1: {}", stdout_of(&flight));
+    let refuses = fact_lines(&flight, "refuse=");
+    assert_eq!(refuses.len(), 1, "{name}: 断りは 1 件: {}", stdout_of(&flight));
+    let line = refuses.first().map(String::as_str).unwrap_or_default();
+    assert!(line.starts_with(&format!("refuse={name}:")), "{name}: 名を名乗る: {line}");
+    assert_eq!(tail_line(&flight), "preflight: refused n=1", "{}", stdout_of(&flight));
+    assert_eq!(run_dirs(state), dirs, "{name}: preflight も run dir を作らない");
+    err
+}
+
+/// [`ceiling_rules`] の `review.same_kind_stop` の行だけを差し替えた tmp manifest（`None` = 行を落とす）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn rules_with_stop(state: &Path, name: &str, stop: Option<u64>) -> String {
+    let path = write_rules(state, name, 1, 1_000_000);
+    let text = fs::read_to_string(&path).expect("tmp manifest を読める");
+    let block = |value: u64| {
+        format!(
+            "[[rule]]\nid = \"{SAME_KIND_STOP_ROW}\"\nkind = \"ReviewSameKindStop\"\nvalue = {value}\nenabled = true\nruling = \"t\"\nruled_at = \"d\"\n"
+        )
+    };
+    let default = block(embedded_int(SAME_KIND_STOP_ROW));
+    assert!(text.contains(&default), "既定の行が在る（差し替えが空振りしない）: {text}");
+    fs::write(&path, text.replace(&default, &stop.map(block).unwrap_or_default())).expect("tmp manifest を書ける");
+    path.display().to_string()
+}
+
+/// 節の本文を書き換えて commit する（行は既定のまま＝契約 file は不変・節の本文だけが変わる）。
+fn commit_changed_section(repo: &Path) {
+    let doc = design_doc(&[]).replace("節の本文。", "節の本文を改めた。");
+    assert_ne!(doc, design_doc(&[]), "節の本文が変わる");
+    write_design(repo, &doc);
+    git(repo, &["add", "-A"]);
+    git(repo, &["commit", "-q", "-m", "section-changed"]);
+}
+
+/// (1) 同じ kind（literal-mismatch）の FAIL 2 便の後、契約 file と節の本文がともに不変の 3 便目は `same-kind-repeated`
+/// で断られ、理由の 1 行が kind と本数と行の値（`review.same_kind_stop`）と 2 便の id（新しい順）を名乗る。run dir も
+/// event も作らず、preflight にも同じ 1 件が出る。**回数は rules 行が持つ**: 値 3 の manifest なら同じ 3 便目が通る。
+#[test]
+fn pipe_intake_repeat_same_kind_twice_with_unchanged_materials_is_refused_naming_the_runs() {
+    let (repo, state) = repo_with_state();
+    let design = write_contract(&repo, &[], &[]);
+    let kinds = [(Some("literal-mismatch"), Some("Marker")), (Some("literal-mismatch"), Some("Marker"))];
+    let ids = failed_runs(&repo, &state, "s2-rep", &design, &kinds);
+    let (first, second) = (ids.first().cloned().unwrap_or_default(), ids.get(1).cloned().unwrap_or_default());
+    let newest_first = format!("{second}, {first}");
+    let wants = ["literal-mismatch", " 2 便", "review.same_kind_stop の 2", &newest_first];
+    let again = Again { repo: &repo, state: &state, bead: "s2-rep", design: &design };
+    let err = assert_refused(&again, "same-kind-repeated", &wants);
+    assert!(!err.contains("finding-unaddressed") && !err.contains("対応する差分"), "at=Marker は契約に無い＝対応済み: {err}");
+    // 回数の線は manifest の値: 3 なら 2 便では止まらない（値を写した定数ではないことを測る）。
+    let rules = rules_with_stop(&state, "rules-stop-3.toml", Some(3));
+    let before = run_dirs(&state).len();
+    let out = repeat_intake_with(&again, &rules, &lens_finding("FAIL", Some("literal-mismatch"), Some("Marker")));
+    accepted(&out, &state, before);
+    clean(&[&repo, &state]);
+}
+
+/// (2) 同じ kind の FAIL 2 便の後でも、契約 file（行の `done`）か節の本文のどちらかを変えると 3 便目は通る
+/// （「焼き直しは書き直し」・§7 の形）。
+#[test]
+fn pipe_intake_repeat_changed_contract_or_section_passes() {
+    for mode in ["contract", "section"] {
+        let (repo, state) = repo_with_state();
+        let design = write_contract(&repo, &[], &[]);
+        let kinds = [(Some("literal-mismatch"), Some("Marker")), (Some("literal-mismatch"), Some("Marker"))];
+        failed_runs(&repo, &state, "s2-rew", &design, &kinds);
+        match mode {
+            "contract" => {
+                write_contract(&repo, &["done"], &[r#"done = "書き直した done""#]);
+            }
+            _ => commit_changed_section(&repo),
+        }
+        let before = run_dirs(&state).len();
+        let out = repeat_intake(&repo, &state, "s2-rew", &design, &lens_finding("FAIL", Some("literal-mismatch"), Some("Marker")));
+        let id = accepted(&out, &state, before);
+        assert!(!stderr_of(&out).contains("同型") && !stderr_of(&out).contains("焼き直し"), "{mode}: {}", stderr_of(&out));
+        assert_eq!(value_of(&review_pairs(&state, &id), "kind"), "literal-mismatch", "{mode}: 3 便目も審査に届く");
+        clean(&[&repo, &state]);
+    }
+}
+
+/// (3) kind の違う 2 便（literal-mismatch → other）と `unparsed` の 2 便（`kind` を書かない偽 lens）はどちらも 3 便目が通る
+/// （同じ型の連鎖でない・lens の欠けを契約の型に化けさせない・C10）。
+#[test]
+fn pipe_intake_repeat_different_kinds_or_unparsed_pass() {
+    for (label, kinds) in [
+        ("different", [(Some("literal-mismatch"), Some("Marker")), (Some("other"), Some("Marker"))]),
+        ("unparsed", [(None, Some("Marker")), (None, Some("Marker"))]),
+    ] {
+        let (repo, state) = repo_with_state();
+        let design = write_contract(&repo, &[], &[]);
+        failed_runs(&repo, &state, "s2-mix", &design, &kinds);
+        let before = run_dirs(&state).len();
+        let out = repeat_intake(&repo, &state, "s2-mix", &design, &lens_finding("FAIL", Some("literal-mismatch"), Some("Marker")));
+        accepted(&out, &state, before);
+        assert!(!stderr_of(&out).contains("同型"), "{label}: {}", stderr_of(&out));
+        clean(&[&repo, &state]);
+    }
+}
+
+/// (4) PASS を挟むと数え直す: FAIL(K) → PASS（stop で外す）→ FAIL(K) の後の 4 便目は通り（K は 1 便）、その 4 便目が
+/// FAIL(K) なら 5 便目は 2 便続いたとして断られる＝PASS より前の便は数えない。
+#[test]
+fn pipe_intake_repeat_pass_in_between_restarts_the_count() {
+    let (repo, state) = repo_with_state();
+    let design = write_contract(&repo, &[], &[]);
+    let fail = lens_finding("FAIL", Some("literal-mismatch"), Some("Marker"));
+    failed_runs(&repo, &state, "s2-pas", &design, &[(Some("literal-mismatch"), Some("Marker"))]);
+    let before = run_dirs(&state).len();
+    let passed = repeat_intake(&repo, &state, "s2-pas", &design, &lens_verdict("PASS"));
+    assert_eq!(passed.status.code(), Some(i32::from(RC_OK)), "PASS: {}", stderr_of(&passed));
+    let passed_id = accepted(&passed, &state, before);
+    stop_run_ok(&state, &passed_id);
+    let third = failed_runs(&repo, &state, "s2-pas", &design, &[(Some("literal-mismatch"), Some("Marker"))]);
+    let before = run_dirs(&state).len();
+    let fourth = repeat_intake(&repo, &state, "s2-pas", &design, &fail);
+    let fourth_id = accepted(&fourth, &state, before);
+    let newest_first = format!("{fourth_id}, {}", third.first().cloned().unwrap_or_default());
+    let again = Again { repo: &repo, state: &state, bead: "s2-pas", design: &design };
+    let err = assert_refused(&again, "same-kind-repeated", &[" 2 便", &newest_first]);
+    assert!(!err.contains(&passed_id), "PASS より前の便は数えない: {err}");
+    clean(&[&repo, &state]);
+}
+
+/// (5) teeth-outside-write-set の指摘 `at=<path>` の後、write-set にその path の無い契約は `finding-unaddressed` で
+/// path を名指して断られ、write-set に path を足した契約は通る。
+#[test]
+fn pipe_intake_repeat_teeth_outside_write_set_at_path_needs_the_path_in_the_write_set() {
+    let (repo, state) = repo_with_state();
+    let design = write_set_contract(&repo, "first", &["src/lib.rs"]);
+    failed_runs(&repo, &state, "s2-tee", &design, &[(Some("teeth-outside-write-set"), Some("src/other.rs"))]);
+    let again = Again { repo: &repo, state: &state, bead: "s2-tee", design: &design };
+    assert_refused(&again, "finding-unaddressed", &["teeth-outside-write-set", "src/other.rs"]);
+    let widened = write_set_contract(&repo, "second", &["src/lib.rs", "src/other.rs"]);
+    let before = run_dirs(&state).len();
+    let out = repeat_intake(&repo, &state, "s2-tee", &widened, &lens_verdict("PASS"));
+    accepted(&out, &state, before);
+    clean(&[&repo, &state]);
+}
+
+/// (6) literal-mismatch の指摘 `at=<識別子>` の後、識別子（`Nope::Thing`）を `done` に書いたままで base に無い契約は
+/// 断られ、識別子を消した契約も、base に `Nope::Thing` を足した後の同じ契約も通る（解けるかは名指しの読み手と同じ 1 本）。
+#[test]
+fn pipe_intake_repeat_literal_mismatch_at_identifier_must_leave_the_contract_or_resolve_in_base() {
+    for mode in ["remove", "resolve"] {
+        let (repo, state) = repo_with_state();
+        let design = write_contract(&repo, &["done"], &[r#"done = "Nope::Thing を直す""#]);
+        failed_runs(&repo, &state, "s2-lit", &design, &[(Some("literal-mismatch"), Some("Nope::Thing"))]);
+        let again = Again { repo: &repo, state: &state, bead: "s2-lit", design: &design };
+        assert_refused(&again, "finding-unaddressed", &["literal-mismatch", "Nope::Thing"]);
+        let design = match mode {
+            "remove" => write_contract(&repo, &[], &[]),
+            _ => {
+                fs::write(repo.join("src").join("nope.rs"), "pub enum Nope {\n    Thing,\n}\n\npub const ALL: &[Nope] = &[Nope::Thing];\n")
+                    .unwrap_or_else(|err| panic!("base の file を書ける: {err}"));
+                git(&repo, &["add", "-A"]);
+                git(&repo, &["commit", "-q", "-m", "resolve"]);
+                design
+            }
+        };
+        let before = run_dirs(&state).len();
+        let out = repeat_intake(&repo, &state, "s2-lit", &design, &lens_verdict("PASS"));
+        accepted(&out, &state, before);
+        assert!(!stderr_of(&out).contains("Nope::Thing"), "{mode}: {}", stderr_of(&out));
+        clean(&[&repo, &state]);
+    }
+}
+
+/// (7) section-material-missing の指摘の後、節の本文が不変の契約は `at`（`§1`）を名指して断られ、節の本文を変えると通る。
+#[test]
+fn pipe_intake_repeat_section_material_missing_needs_a_changed_section() {
+    let (repo, state) = repo_with_state();
+    let design = write_contract(&repo, &[], &[]);
+    failed_runs(&repo, &state, "s2-sec", &design, &[(Some("section-material-missing"), Some("§1"))]);
+    let again = Again { repo: &repo, state: &state, bead: "s2-sec", design: &design };
+    assert_refused(&again, "finding-unaddressed", &["section-material-missing", "§1"]);
+    commit_changed_section(&repo);
+    let before = run_dirs(&state).len();
+    let out = repeat_intake(&repo, &state, "s2-sec", &design, &lens_verdict("PASS"));
+    accepted(&out, &state, before);
+    clean(&[&repo, &state]);
+}
+
+/// (8) 測れない 4 型（goal-done-contradiction / vacuous-assert / other / unparsed）と `at` の空な周は通す（判断を要する型は
+/// planner に残す・C10）: 型を替えながら 6 便を続けて起こし、どの便も受理される。
+#[test]
+fn pipe_intake_repeat_unmeasurable_kinds_and_empty_at_pass() {
+    let (repo, state) = repo_with_state();
+    let design = write_contract(&repo, &[], &[]);
+    let kinds = [
+        (Some("goal-done-contradiction"), Some("src/lib.rs")),
+        (Some("vacuous-assert"), Some("src/lib.rs")),
+        (Some("other"), Some("src/lib.rs")),
+        (None, Some("src/lib.rs")),
+        (Some("literal-mismatch"), None),
+        (Some("teeth-outside-write-set"), None),
+        (Some("section-material-missing"), Some("")),
+    ];
+    let ids = failed_runs(&repo, &state, "s2-unm", &design, &kinds);
+    assert_eq!(ids.len(), kinds.len(), "全便が受理される（母集団 {} 便）", kinds.len());
+    let mut unique = ids.clone();
+    unique.dedup();
+    assert_eq!(unique.len(), ids.len(), "便 id は一意: {ids:?}");
+    clean(&[&repo, &state]);
+}
+
+/// (9) 行 `review.same_kind_stop` の無い manifest は受付を 1 byte も動かさない: intake は rc 2 で行を名指し run dir も event も
+/// 作らず、preflight は `refuse=rules:` で行を名指して `preflight: broken`。
+#[test]
+fn pipe_intake_repeat_manifest_without_the_row_is_rc_2_naming_the_row() {
+    let (repo, state) = repo_with_state();
+    let design = write_contract(&repo, &[], &[]);
+    let rules = rules_with_stop(&state, "rules-no-stop.toml", None);
+    let (dirs, events) = (run_dirs(&state), events_bytes(&state));
+    let again = Again { repo: &repo, state: &state, bead: "s2-row", design: &design };
+    let out = repeat_intake_with(&again, &rules, &lens_verdict("PASS"));
+    assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "行の無い manifest は rc 2: {}", stderr_of(&out));
+    assert!(stderr_of(&out).contains(SAME_KIND_STOP_ROW), "行を名指す: {}", stderr_of(&out));
+    assert!(out.stdout.is_empty(), "stdout に 1 byte も書かない");
+    assert_eq!(run_dirs(&state), dirs, "run dir を作らない");
+    assert_eq!(events_bytes(&state), events, "events.jsonl は byte 不変");
+    let flight = run_pipe(&[
+        "preflight", "--design", &design, "--bead", "s2-row", "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(), "--rules", &rules,
+    ]);
+    assert_eq!(flight.status.code(), Some(i32::from(RC_BROKEN)), "preflight も rc 2: {}", stdout_of(&flight));
+    let refuses = fact_lines(&flight, "refuse=");
+    assert!(refuses.iter().any(|line| line.starts_with("refuse=rules:") && line.contains(SAME_KIND_STOP_ROW)), "{refuses:?}");
+    assert_eq!(tail_line(&flight), "preflight: broken", "{}", stdout_of(&flight));
+    clean(&[&repo, &state]);
+}
+
 /// (b') 設計 pointer の契約は base の設計 doc からその行の `section` の節の本文を、要件面（`.html` の `id=`）から `req` の
 /// 各 id の本文（tag 無し）を材料に写す。無い id はその旨を行に明示する（§4「順序」: 生成 (b) の前でも穴の出所は行の pointer）。
 #[test]

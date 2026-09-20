@@ -14,6 +14,7 @@
 //! （ADR-0009 §2.1 の既知の穴はそのまま）。
 
 use super::closure::ClosureError;
+use super::review::{FindingKind, ROW_SAME_KIND_STOP};
 use super::table::TableError;
 use crate::cli_outcome::{RC_BROKEN, RC_REFUSED};
 use crate::polarity::{OnFailure, Polarity, Timing};
@@ -57,6 +58,8 @@ pub(crate) const REFUSALS: &[&str] = &[
     "fn-undeclared",
     "teeth-outside-write-set",
     "hand-written-contract",
+    "same-kind-repeated",
+    "finding-unaddressed",
 ];
 
 /// 契約 file が読めた後の、契約単位の拒否理由。**新しい理由は variant を 1 つ足す**（憲法 C2）。
@@ -166,6 +169,26 @@ pub(crate) enum Refuse {
         /// 渡された path の字面。
         path: String,
     },
+    /// 同じ bead の直前の便から同じ理由の型（[`FindingKind`]）の審査 FAIL が rules 行 `review.same_kind_stop` の
+    /// 本数続き、契約 file と節の本文がともに不変のまま run N+1 を求めた（設計 contract-source.md §23 (2)・受付だけが
+    /// 撃つ）。**焼き直しは書き直す**＝契約か節のどちらかが変わっていれば通る。
+    SameKindRepeated {
+        /// 続いた理由の型。
+        kind: FindingKind,
+        /// 数えた便 id の列（新しい順）。
+        runs: Vec<String>,
+        /// rules 行の値（本）。
+        stop: u64,
+    },
+    /// 同じ bead の直前の便の指摘（`review.json` の `kind` と `at`）に対応する差分が今回の材料に無い（§23 (3)・受付だけが
+    /// 撃つ）。**対応の無かった項目だけ**（辞書順）を持つ。測れない型（goal-done-contradiction / vacuous-assert / other /
+    /// unparsed）と `at` の空な周はこの断りに届かない。
+    FindingUnaddressed {
+        /// 直前の便の理由の型。
+        kind: FindingKind,
+        /// 対応の無かった `at` の項目（辞書順）。
+        at: Vec<String>,
+    },
 }
 
 impl Refuse {
@@ -189,6 +212,8 @@ impl Refuse {
             Self::FnUndeclared { .. } => "fn-undeclared",
             Self::TeethOutsideWriteSet { .. } => "teeth-outside-write-set",
             Self::HandWrittenContract { .. } => "hand-written-contract",
+            Self::SameKindRepeated { .. } => "same-kind-repeated",
+            Self::FindingUnaddressed { .. } => "finding-unaddressed",
         }
     }
 
@@ -239,6 +264,15 @@ impl Refuse {
             Self::HandWrittenContract { ref path } => {
                 format!("手書きの契約 file は受け付けない（{path}）＝契約の正本は設計 doc の行で、--design <doc>#<id> を渡す")
             }
+            Self::SameKindRepeated { kind, ref runs, stop } => format!(
+                "審査 FAIL の型 {} が {} 便続き {ROW_SAME_KIND_STOP} の {stop} に達した（run {}）のに契約 file と節の本文がともに不変＝焼き直しは書き直す",
+                kind.as_str(),
+                runs.len(),
+                runs.join(", ")
+            ),
+            Self::FindingUnaddressed { kind, ref at } => {
+                format!("直前の便の審査の指摘（{}）に対応する差分が無い（{}）", kind.as_str(), at.join(", "))
+            }
         }
     }
 
@@ -260,7 +294,9 @@ impl Refuse {
             | Self::TestsNotATeethFile { .. }
             | Self::FnUndeclared { .. }
             | Self::TeethOutsideWriteSet { .. }
-            | Self::HandWrittenContract { .. } => RC_REFUSED,
+            | Self::HandWrittenContract { .. }
+            | Self::SameKindRepeated { .. }
+            | Self::FindingUnaddressed { .. } => RC_REFUSED,
             Self::WriteSetUnreadable { .. } => RC_BROKEN,
             Self::ContractTable(ref found) => found.rc(),
         }
@@ -372,7 +408,7 @@ fn covers(left: &str, right: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{covered, normalize, overlaps, Refuse, REFUSALS};
+    use super::{covered, normalize, overlaps, FindingKind, Refuse, REFUSALS};
     use crate::cli_outcome::{RC_BROKEN, RC_REFUSED};
     use crate::pipe::table::TableError;
     use proptest::prelude::*;
@@ -407,7 +443,29 @@ mod tests {
             Refuse::FnUndeclared { module: "pipe::cli".to_owned(), name: "missing".to_owned() },
             Refuse::TeethOutsideWriteSet { files: vec!["src/a.rs".to_owned(), "tests/b.rs".to_owned()] },
             Refuse::HandWrittenContract { path: "contract.toml".to_owned() },
+            Refuse::SameKindRepeated {
+                kind: FindingKind::LiteralMismatch,
+                runs: vec!["b-2".to_owned(), "b-1".to_owned()],
+                stop: 2,
+            },
+            Refuse::FindingUnaddressed { kind: FindingKind::TeethOutsideWriteSet, at: vec!["src/a.rs".to_owned()] },
         ]
+    }
+
+    /// 受付の 2 門（設計 contract-source.md §23・`s2-07l.396`）: 宣言順の末尾 2 つ・rc 1 で、同型の停止は型と本数と
+    /// 行の値と便 id の列（新しい順）を、焼き直しは型と対応の無かった項目を名乗る。
+    #[test]
+    fn refuse_repeat_reasons_are_last_and_name_kind_runs_and_value() {
+        let found = samples();
+        let tail: Vec<&str> = found.iter().rev().take(2).map(Refuse::as_str).collect();
+        assert_eq!(tail, ["finding-unaddressed", "same-kind-repeated"], "宣言順の末尾 2 つ");
+        let repeated = found.iter().rev().nth(1).map(Refuse::reason).unwrap_or_default();
+        for want in ["literal-mismatch", " 2 便", "review.same_kind_stop の 2", "b-2, b-1"] {
+            assert!(repeated.contains(want), "{want}: {repeated}");
+        }
+        let unaddressed = found.last().map(Refuse::reason).unwrap_or_default();
+        assert!(unaddressed.contains("teeth-outside-write-set") && unaddressed.contains("src/a.rs"), "{unaddressed}");
+        assert!(found.iter().rev().take(2).all(|refuse| refuse.rc() == RC_REFUSED && !refuse.reason().contains('\n')), "rc 1・1 行");
     }
 
     /// write-set の導出の 6 理由（契約 (h)・設計 contract-source.md §3「write-set の導出」・§18 の fn 形・§20 の Declared

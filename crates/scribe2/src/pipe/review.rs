@@ -22,10 +22,17 @@
 //! JSON が無い周（器が作る INCONCLUSIVE）と `kind` が無い・語でない周は 7 語目 [`FindingKind::Unparsed`] に倒し、
 //! **verdict は lens の値のまま**（理由の欠けを INCONCLUSIVE や `other` に化けさせない・C10）。`pipe report` は
 //! event の detail からこの型を数える（[`read_detail`]）。
+//!
+//! 受付の 2 門（設計 contract-source.md §23・`s2-07l.396`）はこの型と `at` を入力にする: 同型の停止は `review.json` の
+//! 判定を [`judgement_of`] で読み（`kind` の無い古い便は `unparsed`）、焼き直しの門は直前の便の指摘に「対応する差分」が
+//! 在るかを **kind ごとに 1 関数**（[`unaddressed`]・[`FindingKind`] の網羅 match）で測る。門そのものは受付
+//! （`cli/intake.rs`）に在り、ここは判定の読み手と kind ごとの物差しだけを持つ。
 
+use super::closure::{unresolved_names, ClosureError, Source};
 use super::contract::Contract;
 use super::gate::{last_json_object, Verdict};
 use super::lens_record::LensSource;
+use super::refuse::covered;
 use super::{confine, contract_path, emit, run_dir, table, Emit};
 use crate::cli_outcome::{Outcome, RC_BROKEN};
 use crate::fleet::json_lite::{self, Value};
@@ -198,15 +205,118 @@ pub fn review_dir(state_dir: &Path, id: &str) -> PathBuf {
     run_dir(state_dir, id).join(REVIEW_DIR)
 }
 
-/// `review.json` から 3 値を読む。読めない周は `None`（＝PASS ではない）。
+/// `review.json` から 3 値を読む。読めない周は `None`（＝PASS ではない）。読み手は [`judgement_of`] の 1 本。
 pub fn verdict_of(state_dir: &Path, id: &str) -> Option<Verdict> {
+    judgement_of(state_dir, id).map(|found| found.verdict)
+}
+
+/// 同型の停止の回数を持つ rules 行の id（設計 contract-source.md §23 (1)・値は manifest だけが持つ・C1）。読み手は
+/// 受付（`cli/intake.rs`）で、断りの理由の 1 行（`pipe::refuse`）が同じ字面で行を名指す。
+pub const ROW_SAME_KIND_STOP: &str = "review.same_kind_stop";
+
+/// 便の `review.json` の判定（受付の 2 門〔§23〕が読む形・verdict と理由の型と指した場所の列）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Judgement {
+    /// 3 値。
+    pub verdict: Verdict,
+    /// 理由の型。PASS は `None`・PASS でない周は必ず `Some`（`kind` を持たない §22 の前の便と語でない周は
+    /// [`FindingKind::Unparsed`]＝lens の欠けを契約の型に化けさせない・C10）。
+    pub kind: Option<FindingKind>,
+    /// `at` の項目（`,` 区切りの語を割り、空白を剥がし、空を除いた列・書かれていない周は空）。
+    pub at: Vec<String>,
+}
+
+/// `review.json` から判定を読む（**判定の読み手はこの 1 本**・[`verdict_of`] と [`ReviewCheck::judge`] も通る）。
+/// file が無い・壊れている・3 値の外は `None`（呼び手が断る側へ倒す・fail-closed）。
+pub fn judgement_of(state_dir: &Path, id: &str) -> Option<Judgement> {
     let text = std::fs::read_to_string(review_path(state_dir, id)).ok()?;
     let pairs = json_lite::parse_object(text.trim()).ok()?;
-    pairs
-        .iter()
-        .find(|(found, _)| found == "verdict")
-        .and_then(|(_, value)| value.as_str())
-        .and_then(Verdict::parse)
+    let get = |key: &str| pairs.iter().find(|(found, _)| found == key).and_then(|(_, value)| value.as_str());
+    let verdict = get("verdict").and_then(Verdict::parse)?;
+    let kind = match verdict {
+        Verdict::Pass => None,
+        Verdict::Fail | Verdict::Inconclusive => {
+            Some(get("kind").and_then(FindingKind::parse).unwrap_or(FindingKind::Unparsed))
+        }
+    };
+    Some(Judgement { verdict, kind, at: split_at(get("at").unwrap_or_default()) })
+}
+
+/// lens の `at`（`,` 区切りの語の列）を項目に割る（空白を剥がし、空の項目は落とす）。
+fn split_at(text: &str) -> Vec<String> {
+    text.split(',').map(str::trim).filter(|item| !item.is_empty()).map(str::to_owned).collect()
+}
+
+/// 焼き直しの門（§23 (3)）の今回の材料。受付が写す形の契約 file と base から読む節の本文（[`design_material`] の
+/// 形）に、直前の便の `design.txt` と、名指しの読み手が要る base の面を添える。
+pub struct Rework<'a> {
+    /// 今回の write-set（弁別済み・dir 項目はその配下を含む・[`covered`]）。
+    pub write_set: &'a [String],
+    /// 今回の契約 file の字面。
+    pub contract: &'a str,
+    /// 今回の節の本文（[`design_material`] の形）。
+    pub design: &'a str,
+    /// 直前の便の材料の `design.txt`。
+    pub previous_design: &'a str,
+    /// 行の `touches`（名指しの読み手が variant を散文に読む型・§3）。
+    pub touches: &'a [String],
+    /// base の tracked file。
+    pub tracked: &'a [String],
+    /// base の `.rs`。
+    pub sources: &'a [Source],
+}
+
+/// 直前の便の指摘（`kind` と `at`）のうち、今回の材料に「対応する差分」の**無い**項目（辞書順・重複なし）。
+///
+/// **kind ごとに 1 関数**（閉じた型の網羅 match・§23 (3)）: teeth-outside-write-set → `at` の各 path が今回の write-set
+/// に在る／literal-mismatch → `at` の各識別子が今回の契約 file と節の本文に無い、または base に解ける（`NameUnresolved`
+/// の名指しの読み手と同じ 1 本 [`unresolved_names`]）／section-material-missing → 節の本文が直前の便の `design.txt` と
+/// 異なる。goal-done-contradiction / vacuous-assert / other / unparsed は**測れない＝空**（判断を要する型は planner に
+/// 残す・C10）。読めない `.rs` が在る周は `Err`（黙って通さない）。
+pub fn unaddressed(kind: FindingKind, at: &[String], rework: &Rework<'_>) -> Result<Vec<String>, ClosureError> {
+    let mut found = match kind {
+        FindingKind::TeethOutsideWriteSet => teeth_unaddressed(at, rework.write_set),
+        FindingKind::LiteralMismatch => literal_unaddressed(at, rework)?,
+        FindingKind::SectionMaterialMissing => section_unaddressed(at, rework),
+        FindingKind::GoalDoneContradiction | FindingKind::VacuousAssert | FindingKind::Other | FindingKind::Unparsed => {
+            Vec::new()
+        }
+    };
+    found.sort();
+    found.dedup();
+    Ok(found)
+}
+
+/// teeth-outside-write-set: `at` の path のうち今回の write-set に無いもの（dir 項目は配下を含む）。
+fn teeth_unaddressed(at: &[String], write_set: &[String]) -> Vec<String> {
+    at.iter().filter(|path| !covered(write_set, path)).cloned().collect()
+}
+
+/// literal-mismatch: `at` の識別子のうち、今回の契約 file か節の本文に**まだ在り**、かつ base に解けないもの。
+/// 解けるかは名指しの読み手（backtick の 3 形・path / 型の path / fn）の 1 本で、3 形でない字面は名指しでない＝
+/// 測れないので対応済みに数えない側ではなく**通す側**（読み手が `Prose` と読む）。
+fn literal_unaddressed(at: &[String], rework: &Rework<'_>) -> Result<Vec<String>, ClosureError> {
+    let mut found = Vec::new();
+    for name in at {
+        if !rework.contract.contains(name.as_str()) && !rework.design.contains(name.as_str()) {
+            continue;
+        }
+        let texts = [("at".to_owned(), format!("`{name}`"))];
+        let unresolved = unresolved_names(&texts, rework.touches, rework.write_set, rework.tracked, rework.sources)?;
+        if !unresolved.is_empty() {
+            found.push(name.clone());
+        }
+    }
+    Ok(found)
+}
+
+/// section-material-missing: 節の本文が直前の便の `design.txt` と同じ字面なら `at` の全項目が未対応、違えば全部対応済み。
+fn section_unaddressed(at: &[String], rework: &Rework<'_>) -> Vec<String> {
+    if rework.design == rework.previous_design {
+        at.to_vec()
+    } else {
+        Vec::new()
+    }
 }
 
 /// 審査 1 回の材料。
@@ -731,10 +841,11 @@ fn broken(reason: String) -> Outcome {
 #[cfg(test)]
 mod tests {
     use super::{
-        detail_of, lens_cmd, parse_lens, read_detail, requirement_md, requirement_row, requirement_yaml,
-        requirements_text, section_text, strip_tags, verdict_of, write_review, Finding, FindingKind, Found, ReviewCheck,
-        FINDING_KINDS,
+        detail_of, judgement_of, lens_cmd, parse_lens, read_detail, requirement_md, requirement_row, requirement_yaml,
+        requirements_text, section_text, split_at, strip_tags, unaddressed, verdict_of, write_review, Finding,
+        FindingKind, Found, Judgement, ReviewCheck, Rework, FINDING_KINDS,
     };
+    use crate::pipe::closure::Source;
     use crate::pipe::gate::Verdict;
     use crate::pipe::lens_record::LensSource;
     use crate::pipe::run_dir;
@@ -991,6 +1102,84 @@ mod tests {
         assert_eq!(read_detail("verdict:FAIL kind:bogus"), (Some(Verdict::Fail), FindingKind::Unparsed));
         assert_eq!(read_detail("verdict:maybe kind:other"), (None, FindingKind::Other), "3 値の外は None");
         assert_eq!(read_detail(""), (None, FindingKind::Unparsed));
+    }
+
+    /// 受付の門が読む判定（§23）: PASS は型を持たず、FAIL / INCONCLUSIVE は `kind` の語を持ち、`kind` の無い古い便と
+    /// 語でない周は `unparsed`。`at` は `,` で割って空白を剥がし空を落とす。file が無い・3 値の外は `None`。
+    #[test]
+    fn pipe_review_judgement_reads_kind_and_splits_at() {
+        let state = scratch("judgement");
+        let dir = run_dir(&state, "r");
+        let _ = std::fs::create_dir_all(&dir);
+        assert_eq!(judgement_of(&state, "r"), None, "file が無い");
+        for (body, want) in [
+            ("{\"verdict\":\"PASS\",\"kind\":\"other\",\"at\":\"x\"}\n", Some(Judgement { verdict: Verdict::Pass, kind: None, at: vec!["x".to_owned()] })),
+            (
+                "{\"verdict\":\"FAIL\",\"kind\":\"literal-mismatch\",\"at\":\"a.rs, §2,,Marker \"}\n",
+                Some(Judgement {
+                    verdict: Verdict::Fail,
+                    kind: Some(FindingKind::LiteralMismatch),
+                    at: vec!["a.rs".to_owned(), "§2".to_owned(), "Marker".to_owned()],
+                }),
+            ),
+            ("{\"verdict\":\"FAIL\"}\n", Some(Judgement { verdict: Verdict::Fail, kind: Some(FindingKind::Unparsed), at: Vec::new() })),
+            (
+                "{\"verdict\":\"INCONCLUSIVE\",\"kind\":\"bogus\"}\n",
+                Some(Judgement { verdict: Verdict::Inconclusive, kind: Some(FindingKind::Unparsed), at: Vec::new() }),
+            ),
+            ("{\"verdict\":\"maybe\"}\n", None),
+        ] {
+            assert_eq!(write_review(&dir.join("review.json"), body), Ok(()));
+            assert_eq!(judgement_of(&state, "r"), want, "{body}");
+        }
+        assert_eq!(split_at(""), Vec::<String>::new());
+        assert_eq!(split_at(" , "), Vec::<String>::new());
+        let _ = std::fs::remove_dir_all(&state);
+    }
+
+    /// 焼き直しの門の物差し（§23 (3)・kind ごとに 1 関数）: teeth-outside-write-set は write-set に無い path だけ（dir 項目は
+    /// 配下を含む）、literal-mismatch は契約か節に残っていて base に解けない識別子だけ（消えた識別子・base に解ける識別子・
+    /// 3 形でない字面は対応済み）、section-material-missing は節が不変なら `at` の全部・変われば空、測れない 4 型は常に空。
+    /// 返す列は辞書順・重複なし。読めない `.rs` は `Err`。
+    #[test]
+    fn pipe_review_unaddressed_measures_each_kind_with_one_ruler() {
+        let sources = vec![Source {
+            path: "src/tint.rs".to_owned(),
+            body: Ok("pub enum Tint {\n    Warm,\n}\n\npub const TINTS: &[Tint] = &[Tint::Warm];\n".to_owned()),
+        }];
+        let write_set = ["src/lib.rs".to_owned(), "docs/".to_owned()];
+        let tracked = ["src/lib.rs".to_owned(), "src/tint.rs".to_owned(), "docs/a.md".to_owned()];
+        let rework = Rework {
+            write_set: &write_set,
+            contract: "done = \"Nope::Thing と Tint::Warm と gone を直す\"\n",
+            design: "doc#a §1\n節の本文 Marker。\n",
+            previous_design: "doc#a §1\n節の本文 Marker。\n",
+            touches: &[],
+            tracked: &tracked,
+            sources: &sources,
+        };
+        let at = |items: &[&str]| items.iter().map(|item| (*item).to_owned()).collect::<Vec<String>>();
+        assert_eq!(
+            unaddressed(FindingKind::TeethOutsideWriteSet, &at(&["tests/z.rs", "src/lib.rs", "docs/deep/b.md", "tests/a.rs", "tests/z.rs"]), &rework),
+            Ok(at(&["tests/a.rs", "tests/z.rs"])),
+            "write-set に無い path だけ・dir 項目は配下を含む・辞書順・重複なし"
+        );
+        assert_eq!(
+            unaddressed(FindingKind::LiteralMismatch, &at(&["Tint::Warm", "Nope::Thing", "Marker", "vanished(", "src/none.rs"]), &rework),
+            Ok(at(&["Nope::Thing"])),
+            "残っていて解けない識別子だけ（解ける Tint::Warm・散文 Marker・消えた vanished( / src/none.rs は対応済み）"
+        );
+        assert_eq!(unaddressed(FindingKind::SectionMaterialMissing, &at(&["§1"]), &rework), Ok(at(&["§1"])), "節が不変");
+        let changed = Rework { design: "doc#a §1\n節の本文を改めた。\n", ..rework };
+        assert_eq!(unaddressed(FindingKind::SectionMaterialMissing, &at(&["§1"]), &changed), Ok(Vec::new()), "節が変わった");
+        for kind in [FindingKind::GoalDoneContradiction, FindingKind::VacuousAssert, FindingKind::Other, FindingKind::Unparsed] {
+            assert_eq!(unaddressed(kind, &at(&["Nope::Thing"]), &rework), Ok(Vec::new()), "{} は測れない＝通す", kind.as_str());
+        }
+        assert_eq!(unaddressed(FindingKind::LiteralMismatch, &[], &rework), Ok(Vec::new()), "at が空なら通す");
+        let broken = vec![Source { path: "src/x.rs".to_owned(), body: Err("bad".to_owned()) }];
+        let unreadable = Rework { sources: &broken, ..rework };
+        assert!(unaddressed(FindingKind::LiteralMismatch, &at(&["Nope::Thing"]), &unreadable).is_err(), "読めない .rs は Err");
+        assert_eq!(unaddressed(FindingKind::TeethOutsideWriteSet, &at(&["tests/a.rs"]), &unreadable), Ok(at(&["tests/a.rs"])), "path の物差しは .rs を読まない");
     }
 
     /// 書けない周は本 file が生まれず書きかけも残さない（親 dir が無い）。

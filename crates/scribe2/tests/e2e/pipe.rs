@@ -717,9 +717,10 @@ pub(super) fn write_rules_capped(dir: &Path, name: &str, fixture: RulesFixture) 
     // 受付の 4 行: 並列度の上限は埋め込みの値を写し、残る 3 行は [`SlotFixture`] の値。
     // 着地の順番の上限は [`LAND_WAIT_S`]（前の便が列に残る歯で 90 分待たない）。
     // 上限の余地の 6 行（設計 contract-source.md §3）: 上限の 2 行は [`CapFixture`]・size の 3 行と行の数え方の幅は
-    // 埋め込みの値。
+    // 埋め込みの値。同型の審査 FAIL の停止の回数（`review.same_kind_stop`・contract-source.md §23）も埋め込みの値
+    // ＝行の無い manifest では受付が rc 2 で断る（`pipe_intake_repeat_` の歯だけが行を落として測る）。
     let body = format!(
-        "schema = 1\n\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{ceiling}",
+        "schema = 1\n\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{ceiling}",
         row("gate.lens_count", "GateLensCount", lens_count),
         row("gate.token_cap", "GateTokenCap", cap),
         row("fleet.lock_retry_ms", "LockRetryMs", 5000),
@@ -737,11 +738,15 @@ pub(super) fn write_rules_capped(dir: &Path, name: &str, fixture: RulesFixture) 
         row("pipe.size_m_lines", "PipeSizeMLines", embedded_int("pipe.size_m_lines")),
         row("pipe.size_l_lines", "PipeSizeLLines", embedded_int("pipe.size_l_lines")),
         row("R-C4.line-width", "LineWidth", embedded_int("R-C4.line-width")),
+        row(SAME_KIND_STOP_ROW, "ReviewSameKindStop", embedded_int(SAME_KIND_STOP_ROW)),
     );
     let path = dir.join(name);
     fs::write(&path, body).expect("tmp manifest を書ける");
     path
 }
+
+/// 同型の審査 FAIL の停止の回数を持つ rules 行の id（tmp manifest に埋め込みの値で載せる・行を落とす歯が名指す）。
+pub(super) const SAME_KIND_STOP_ROW: &str = "review.same_kind_stop";
 
 /// intake が読む上限の manifest（`sh` を足した写し）。置き場の中に 1 本だけ作る。
 pub(super) fn ceiling_rules(state: &Path) -> String {
