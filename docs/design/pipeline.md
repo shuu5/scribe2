@@ -344,6 +344,7 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
   6. 数える関数（`crates/scribe2/src/pipe/confine.rs`）と行を組む関数（`crates/scribe2/src/headless/runner.rs`）は pure に切り、それぞれの file の in-file の歯が fixture で測る（systemd の scope を歯で起こさない）。
 - 触らない: 片付けの極性（止める）・runner の権限・`Released` の語彙・`claude_peak_bytes` の読み。
 - 却下: 背景 task を待ってから片付ける（turn の終端の規律が曖昧になる）／雛形だけ直す（殺した事実が記録に残らない）。
+- errata（実装の現物・`s2-07l.275`）: 数える口は約束 4 の `release_scope` ではなく、runner / lens の終端の 1 行を組む `scope_line` が `release` を撃つ**直前**である。`release_scope` の中で数えると gate の verify 行ごとの片付けでも `systemctl` の呼出が `kill` の隣に 1 本増え、「行の終端で 1 回だけ、包んだ名の scope を SIGKILL で片付ける」を pin する既存の歯（`crates/scribe2/tests/e2e/pipe/gate.rs`）が落ちる——その file はこの行の write-set の外なので、数える口を終端の 1 行の側へ寄せた（約束 4 の「止める直前に読む」は不変で、読む場所だけが違う）。数える root は既定の cgroup root 固定で、runner / lens の `--cgroup-root` は走行中の peak の読みの差し替え口のまま（root を差し替えて測る歯は pure な読みを直に撃つ）。雛形は 34 行から 35 行になる。
 
 ## 21. gate の段の通知行を rc に依らず record と stderr に残す（契約表の行 o・`s2-07l.293`）
 

@@ -2039,6 +2039,43 @@ fn headless_runner_prompt_does_not_expand_allowed_placeholder_from_contract() {
     clean(&[&dir, &worktree]);
 }
 
+/// 雛形が運ぶ **turn の終端の規律**の逐語（正本は設計 pipeline.md §20 の約束 1・`s2-07l.275`）。
+const TURN_DISCIPLINE: &str =
+    "検証は前面で完走させてから turn を閉じる（背景実行を残して終えない・残した task は片付けで止められ done に数えない）";
+
+/// 雛形は turn の終端の規律を**逐語の 1 行**で運ぶ（設計 pipeline.md §20 の約束 1 / 2・`s2-07l.275`）。
+///
+/// `.270` run 1 の実測: runner が「flip-check を背景で回している・完了通知を待つ」と言って rc 0 で turn を
+/// 閉じ、背景の task は scope の片付けで殺された（自己申告の done が背景 task の完了を含まない）。
+///
+/// 外形の `.snap` は入口の flip の test 区間に入らない（snapshot は歯ではない）ので、雛形の RED は
+/// **この逐語**を名指すこの歯で測る。規律を薄める改変（「なるべく前面で」等）はここで落ちる。
+#[test]
+fn headless_runner_prompt_closes_turn_after_the_foreground_verify() {
+    let dir = tmp();
+    let worktree = tmp();
+    let write_set = dir.join("write-set.txt");
+    fs::write(&write_set, "src/lib.rs\n").expect("write-set を書ける");
+    let claude = fake_claude(&dir, "", false, 0);
+    let vessel = write_vessel_copy(&dir, r#"["cargo", "git"]"#);
+    let out = run_runner(
+        &RunnerCall { dir: &dir, worktree: &worktree, write_set: &write_set, vessel: &vessel, claude: &claude, mode: "acceptEdits", account: None },
+        b"goal = \"x\"\n",
+    );
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    let prompt = slurp(&dir.join("stdin"));
+    // **逐語で 1 本**（言い換えでも 2 行に割った形でも RED）。
+    assert_eq!(
+        prompt.matches(TURN_DISCIPLINE).count(),
+        1,
+        "終端の規律が逐語でちょうど 1 本在る: {prompt}"
+    );
+    // 規律の節（「守ること」）の中の**独立した 1 行**である（他の行の尾に足した形は落ちる）。
+    let line = prompt.lines().find(|line| line.contains(TURN_DISCIPLINE)).unwrap_or_default();
+    assert_eq!(line, format!("- {TURN_DISCIPLINE}。"), "節の 1 項目として在る: {prompt}");
+    clean(&[&dir, &worktree]);
+}
+
 /// runner の prompt の外形（契約 / write-set / 写しの fixture を固定・C12.5・`s2-07l.176`・設計 §6）。
 ///
 /// 上の 2 本は断片（allowlist の節・穴の不展開）を見る歯で、本文の他の節の改変は素通しする
@@ -3125,14 +3162,19 @@ fn headless_claude_peak_is_sampled_before_the_scope_vanishes() {
     let line = lines.first().copied().unwrap_or_default();
     assert!(line.starts_with("runner: scope=gone"), "gone の周も行を出す: {line}");
     assert!(line.contains(&format!(" claude_peak_bytes={PEAK_BYTES}")), "走行中に読んだ値が残る: {line}");
+    // 孤児の数は fixture に `cgroup.procs` を置かないので `-`（0 と融合しない・設計 pipeline.md §20）。
+    assert!(line.ends_with(" orphans=-"), "数えられない周は - で終わる: {line}");
     let stdout = stdout_of(&out);
     assert_eq!(stdout.lines().last(), Some("runner: rc=0 records=2"), "stdout の最終行は不変: {stdout}");
     let calls = slurp(&dir.join(PEAK_CALLS));
     let shown: Vec<&str> = calls.lines().filter(|call| call.starts_with("--user show ")).collect();
-    assert_eq!(shown.len(), 1, "show は 1 回: {calls}");
-    let show = shown.first().copied().unwrap_or_default();
-    assert!(show.starts_with("--user show scribe2-runner-claude-"), "claude の scope の unit を引く: {show}");
-    assert!(show.ends_with(".scope -p ControlGroup --value"), "ControlGroup の値だけを引く: {show}");
+    // **2 回**（走行中の sample が 1 回だけ解く + 終端で孤児を数える前に 1 回）。stream の record は 2 本
+    // なので、周ごとに解き直す実装は 3 回以上になる＝この数は「周期で撃たない」を保ったままである。
+    assert_eq!(shown.len(), 2, "show は sample の 1 回と終端の 1 回: {calls}");
+    for show in &shown {
+        assert!(show.starts_with("--user show scribe2-runner-claude-"), "claude の scope の unit を引く: {show}");
+        assert!(show.ends_with(".scope -p ControlGroup --value"), "ControlGroup の値だけを引く: {show}");
+    }
     clean(&[&dir, &worktree, &root]);
 }
 
@@ -3151,7 +3193,7 @@ fn headless_claude_peak_lens_samples_by_poll() {
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
     assert!(dir.join("called").exists(), "lens は claude を呼ぶ（母集団）");
     let err = stderr_of(&out);
-    let want = format!("lens: scope=gone claude_peak_bytes={PEAK_BYTES}");
+    let want = format!("lens: scope=gone claude_peak_bytes={PEAK_BYTES} orphans=-");
     assert_eq!(scope_lines(&err, "lens"), vec![want.as_str()], "{err}");
     let stdout = stdout_of(&out);
     assert_eq!(stdout.lines().last(), Some(PEAK_VERDICT), "stdout の最終行は verdict: {stdout}");
@@ -3177,7 +3219,7 @@ fn headless_claude_peak_unreadable_is_dash() {
         let err = stderr_of(&out);
         assert_eq!(
             scope_lines(&err, "runner"),
-            vec!["runner: scope=killed claude_peak_bytes=-"],
+            vec!["runner: scope=killed claude_peak_bytes=- orphans=-"],
             "fixture={with_fixture} show={show:?}: {err}"
         );
         clean(&[&dir, &worktree, &root]);

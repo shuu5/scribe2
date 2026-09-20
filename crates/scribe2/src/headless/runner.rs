@@ -234,19 +234,38 @@ fn launch(call: &Call<'_>, tools: &str, cgroup_root: &Path) -> Outcome {
     outcome
 }
 
-/// 包めた周の終端の stderr 1 行（`<who>: scope=<片付け> claude_peak_bytes=<n|->`・設計 gate-cost.md §13）。
+/// 包めた周の終端の stderr 1 行（`<who>: scope=<片付け> claude_peak_bytes=<n|-> orphans=<n|->`・設計
+/// gate-cost.md §13・pipeline.md §20）。
 ///
 /// **Confined の周は `gone` でも必ず出す**——[`confine::release_scope`] は `Gone` を `None` に落とすので
 /// [`confine::release`] を直に撃つ（他の呼び手の filter と型は変えない）。包めなかった周は scope が無い＝
-/// 行を出さない（`claude_peak_bytes` の語も出ない）。lens も同じ 1 本を使う。
+/// 行を出さない（`claude_peak_bytes` も `orphans` の語も出ない）。lens も同じ 1 本を使う。
+///
+/// **孤児は殺す前に数える**（[`confine::orphans_before_release`]・設計 pipeline.md §20 の約束 4）: 片付けの
+/// 後の scope は空か dir ごと消えているので、後から読むと「何を殺したか」が 0 と `-` に化ける。数えるのは
+/// この口だけで、gate の verify 行ごとの片付け（[`confine::release_scope`]）は従来どおり `kill` 1 本である。
 pub(super) fn scope_line(who: &str, confinement: &confine::Confinement, peak: confine::Peak) -> Option<String> {
     match confinement {
         confine::Confinement::Confined { unit } => {
+            let orphans = confine::orphans_before_release(unit);
             let released = confine::release(unit);
-            Some(format!("{who}: scope={} claude_peak_bytes={}", released.as_str(), peak.word()))
+            Some(scope_words(who, released, peak, orphans))
         }
         confine::Confinement::Unconfined(_) => None,
     }
+}
+
+/// 終端の 1 行の字面（pure・in-file の歯が fixture の値で測る・設計 pipeline.md §20 の約束 5 / 6）。
+///
+/// 3 つの値はどれも**測れなかった周を `-`** で書き、0 と融合しない（C10）——`orphans=0` は「片付けが
+/// 1 本も殺さなかった」を測れた周で、`orphans=-` は「数えられなかった」周である。
+fn scope_words(who: &str, released: confine::Released, peak: confine::Peak, orphans: confine::Orphans) -> String {
+    format!(
+        "{who}: scope={} claude_peak_bytes={} orphans={}",
+        released.as_str(),
+        peak.word(),
+        orphans.word()
+    )
 }
 
 /// stream を読みながら覚えたもの。
@@ -803,7 +822,8 @@ fn refused(reason: String) -> Outcome {
 
 #[cfg(test)]
 mod tests {
-    use super::{observed_suffix, stop_line, stop_status, Scan};
+    use super::{observed_suffix, scope_words, stop_line, stop_status, Scan};
+    use crate::pipe::confine::{Orphans, Peak, Released};
 
     /// 停止行の読み手は [`stop_line`] と往復し、観測行と空行は停止行として読まない。
     #[test]
@@ -813,6 +833,37 @@ mod tests {
         assert_eq!(stop_status(&observed), None, "観測の後置きは停止行ではない: {observed}");
         assert_eq!(stop_status(""), None, "空行は停止行ではない");
         assert_eq!(stop_status(&stop_line("")), None, "値が空の停止行は読めない側");
+    }
+
+    /// 片付けが殺した数は **0 も数として書く**（設計 pipeline.md §20 の約束 5）。
+    ///
+    /// 語の位置は `claude_peak_bytes` の後ろで、既存の 2 つの値は動かさない（fixture の 3 つの数は
+    /// 互いに違う＝値の取り違えが両方の assert を通らない）。
+    #[test]
+    fn runner_orphans_zero_is_written_as_the_counted_number() {
+        assert_eq!(
+            scope_words("runner", Released::Killed, Peak::Bytes(4096), Orphans::Count(0)),
+            "runner: scope=killed claude_peak_bytes=4096 orphans=0",
+            "1 本も殺さなかった周も 0 を書く"
+        );
+        assert_eq!(
+            scope_words("lens", Released::Gone, Peak::Bytes(4096), Orphans::Count(3)),
+            "lens: scope=gone claude_peak_bytes=4096 orphans=3",
+            "殺した本数をそのまま書く（lens も同じ 1 本）"
+        );
+    }
+
+    /// 数えられなかった周は `-`（設計 pipeline.md §20 の約束 5・C10）＝**0 と融合しない**。
+    ///
+    /// 同じ片付け・同じ peak の 2 本を並べて、`Unreadable` を 0 に倒す変異が**字面の差**で落ちることまで
+    /// 測る（片側だけを見る歯は、`-` を `0` と書く実装でも緑になる）。
+    #[test]
+    fn runner_orphans_unreadable_is_written_as_a_dash() {
+        let unreadable = scope_words("runner", Released::Killed, Peak::Unreadable, Orphans::Unreadable);
+        assert_eq!(unreadable, "runner: scope=killed claude_peak_bytes=- orphans=-", "読めない周は -");
+        let zero = scope_words("runner", Released::Killed, Peak::Unreadable, Orphans::Count(0));
+        assert_ne!(unreadable, zero, "「0 本」と「測れなかった」を同じ字面にしない: {zero}");
+        assert!(zero.ends_with(" orphans=0"), "0 の側は数で終わる: {zero}");
     }
 
     /// 文字列の外の構造文字だけを、位置ごと順に集める。

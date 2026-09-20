@@ -319,9 +319,70 @@ fn released_of(out: std::io::Result<Output>) -> Released {
     Released::Failed(rc)
 }
 
+/// scope に残った process の pid が並ぶ file（cgroup v2・1 行 1 pid）。
+const CGROUP_PROCS: &str = "cgroup.procs";
+
+/// scope を止める**直前**に数えた、scope に残っていた process の数（設計 pipeline.md §20）。
+///
+/// **0 と「測れなかった」を融合しない**（C10・[`Peak`] と同じ型）: cgroup の path を解けない周・
+/// dir が消えた後・`cgroup.procs` の無い host は [`Orphans::Unreadable`] で、行には `-` と書く。
+/// 「読めた上で 1 本も残っていなかった」は測れた事実なので [`Orphans::Count`] の 0 である。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Orphans {
+    /// 数えられた本数（0 を含む）。
+    Count(usize),
+    /// 数えられなかった。
+    Unreadable,
+}
+
+impl Orphans {
+    /// 行に書く字面（`Count` は 10 進・`Unreadable` は `-`・[`Peak::word`] と同じ極性）。
+    pub fn word(self) -> String {
+        match self {
+            Self::Count(found) => found.to_string(),
+            Self::Unreadable => "-".to_owned(),
+        }
+    }
+}
+
+/// `cgroup.procs` の中身を数える（pure・in-file の歯が fixture 文字列で測る）: 空でない行の数。
+///
+/// `Err`（file が無い・読めない）は [`Orphans::Unreadable`]。**空の file は `Count(0)`** である
+/// ——読めた上で 1 本も残っていなかった周であり、読めなかった周と同じ字面にしない。
+pub fn orphans_from(read: std::io::Result<String>) -> Orphans {
+    match read {
+        Err(_) => Orphans::Unreadable,
+        Ok(text) => Orphans::Count(text.lines().filter(|line| !line.trim().is_empty()).count()),
+    }
+}
+
+/// `<root>/<control_group>/cgroup.procs` を 1 回読んで数える（file の read 1 回・待ちは無い）。
+///
+/// つなぎ方は [`peak_of`] と同じ＝`ControlGroup` の先頭の `/` を剥がして root を捨てない。
+pub fn orphans_of(root: &Path, control_group: &str) -> Orphans {
+    let relative = control_group.trim_start_matches('/');
+    orphans_from(std::fs::read_to_string(root.join(relative).join(CGROUP_PROCS)))
+}
+
+/// 止める**直前**の孤児の数を数える（呼び手は [`release`] を撃つ**前に**これを撃つ・設計 pipeline.md §20）。
+///
+/// 止めた後に数える形は成立しない: `systemctl kill` の後の scope は空で、最後の process が消えた時点で
+/// cgroup dir ごと消える——どちらも 0 と `-` に化けて「何を殺したか」が残らない。
+///
+/// root は [`CGROUP_ROOT`] 固定である。runner / lens の `--cgroup-root` は走行中の peak の読みの
+/// 差し替え口で、終端の 1 行を組む口（headless/runner.rs）は unit 名しか持たない——root を差し替えて
+/// 測りたい歯は pure な [`orphans_of`] を直に撃つ。
+pub fn orphans_before_release(unit: &str) -> Orphans {
+    control_group_of(unit).map_or(Orphans::Unreadable, |group| orphans_of(Path::new(CGROUP_ROOT), &group))
+}
+
 /// 包めた起動の scope を片付け、**record に書く周だけ**結果を返す。
 ///
 /// 包めなかった周は撃たない（scope が無い）。`Gone` は正常なので `None`＝record は変わらない。
+///
+/// **孤児の数はここでは数えない**（[`orphans_before_release`] は runner / lens の終端の 1 行の口だけが
+/// 撃つ）——この口は gate の verify 行ごとの片付けも通り、行の終端の `systemctl` の呼出は 1 行 1 本で
+/// pin されている（`kill` の隣に `show` を足すと、その本数の歯が落ちる）。
 pub fn release_scope(confinement: &Confinement) -> Option<Released> {
     match confinement {
         Confinement::Confined { unit } => Some(release(unit)).filter(|found| *found != Released::Gone),
@@ -666,9 +727,9 @@ pub fn read_usage(stdout: &str) -> Usage {
 #[cfg(test)]
 mod tests {
     use super::{
-        control_group_from, limit_mb, limit_of, mem_total_mb, next_seq, peak_from, peak_of, probe_outcome, read_usage,
-        release_scope, released_of, script, tame, unit_name, wrap_command, wrap_line, Caps, Confinement, Limit, Peak,
-        Reason, Released, Sampler, Wrap, CGROUP_ROOT, PANE_ENV, REASONS,
+        control_group_from, limit_mb, limit_of, mem_total_mb, next_seq, orphans_from, orphans_of, peak_from, peak_of,
+        probe_outcome, read_usage, release_scope, released_of, script, tame, unit_name, wrap_command, wrap_line, Caps,
+        Confinement, Limit, Orphans, Peak, Reason, Released, Sampler, Wrap, CGROUP_ROOT, PANE_ENV, REASONS,
     };
     use crate::order::is_declaration_order;
     use crate::rules::manifest::Manifest;
@@ -748,6 +809,40 @@ mod tests {
         assert_eq!(released_of(out(9, "")), Released::Failed(u8::MAX), "signal 死");
         let missing = std::io::Error::new(std::io::ErrorKind::NotFound, "no systemctl");
         assert_eq!(released_of(Err(missing)), Released::NoTool);
+    }
+
+    /// 孤児は scope を**止める前**に数える（設計 pipeline.md §20 の約束 4）。
+    ///
+    /// fixture の cgroup dir で「止める前」（`cgroup.procs` に pid が 2 本）と「止めた後」（最後の
+    /// process の終了で dir ごと消えた）を続けて読み、**後から数える形では残った数が `-` に化ける**
+    /// ことまで測る（systemd の scope は起こさない・read だけ）。読みそのものの 3 通り（数えた本数・
+    /// 読めた 0・読めない）は pure な [`orphans_from`] で、字面は [`Orphans::word`] で pin する。
+    #[test]
+    fn confine_orphans_counts_before_release_reads_the_scope_procs() {
+        let root = std::env::temp_dir().join(format!("confine-orphans-root-{}", std::process::id()));
+        let dir = root.join("user.slice").join("x.scope");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("cgroup.procs"), "4242\n4243\n").unwrap();
+        // 止める前（`ControlGroup` の絶対形でも root を捨てない・[`peak_of`] と同じつなぎ方）。
+        assert_eq!(orphans_of(&root, "/user.slice/x.scope"), Orphans::Count(2), "残った 2 本を数える");
+        assert_eq!(orphans_of(&root, "user.slice/x.scope"), Orphans::Count(2), "相対形も同じ");
+        // 止めた後は dir ごと消える＝**後から数える形では 2 本が残らない**。
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(
+            orphans_of(&root, "/user.slice/x.scope"),
+            Orphans::Unreadable,
+            "片付けの後に数えると殺した数は読めない"
+        );
+        // 読みの 3 通り（pure）。**空の file は読めた 0** で、読めない周と融合しない（C10）。
+        assert_eq!(orphans_from(Ok("101\n102\n103\n".to_owned())), Orphans::Count(3), "空でない行を数える");
+        assert_eq!(orphans_from(Ok("\n\n".to_owned())), Orphans::Count(0), "空行は pid ではない");
+        assert_eq!(orphans_from(Ok(String::new())), Orphans::Count(0), "空の file は読めた 0");
+        let missing = std::io::Error::new(std::io::ErrorKind::NotFound, "no cgroup.procs");
+        assert_eq!(orphans_from(Err(missing)), Orphans::Unreadable, "読めない周");
+        assert_eq!(Orphans::Count(0).word(), "0", "読めた 0 は 0 と書く");
+        assert_eq!(Orphans::Unreadable.word(), "-", "読めない周は -");
+        assert_eq!(Orphans::Count(2).word(), "2");
     }
 
     /// 包めなかった周は片付けを撃たない（record も変わらない）。
