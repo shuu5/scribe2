@@ -237,7 +237,7 @@ scribe2 を載せる consumer が pipe を通すのに要る面は 3 つで、�
 
 - 何が起きているか（orchestrator の実測 2026-09-20・verified）: 設計 doc の契約行に `depends` を書くと、受付と事前の検査の口が**必ず** `depends-unresolved` で断る。受付は §2 のとおり表の検査をその 1 行の slice に撃ち、検査は渡された行の id だけを「同じ doc の id」と読むので、相手の id は常に見えない。CI の `contracts check` は全行で撃つので緑＝CI は通って受付だけが落ちる。既に Landed の行（dispatcher の行 e ほか）でも再現する。回避として新しい行に `depends` を書かない運用が続いている（順序は台帳の blocks で表している）。
 - 約束（done と 1:1）:
-  1. `depends` の相手が同じ doc の契約表に在る行は、受付がそれを理由に断らない（rc 0・run dir が出来る）。
+  1. `depends` の相手が同じ doc の契約表の**自分でない別の行**である行は、受付がそれを理由に断らない（rc 0・run dir が出来る）。
   2. 相手の id が同じ doc の契約表に無い行は、従来どおり `depends-unresolved` で断る（run dir を作らない・字面は `contracts check` と 1 byte 同じ）。
   3. 事前の検査の口（preflight）は受付と同じ 1 判定を通る＝(1) の行で `refuse=` に `depends-unresolved` が出ず、(2) の行では出る。
   4. 既存の受付・事前の検査・表の検査の歯は期待を変えない。
@@ -568,7 +568,7 @@ section = "30"
 write-set = ["crates/scribe2/src/pipe/cli/intake.rs", "crates/scribe2/src/pipe/table/check.rs", "crates/scribe2/src/pipe/table.rs", "crates/scribe2/tests/e2e/pipe/intake.rs"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_intake_depends_", "cargo nextest run -p scribe2 --no-tests=fail pipe_intake_design_", "cargo nextest run -p scribe2 --no-tests=fail pipe_preflight_", "cargo nextest run -p scribe2 --no-tests=fail table_check_"]
 size = "S"
-done = "depends の相手が同じ doc に在る行を受付が rc 0 で受けて run dir が 1 つ出来、相手が doc に無い行は contracts check と逐語で同じ depends-unresolved の 1 行だけで断られて run dir が 0、preflight は前者で refuse= に depends-unresolved を出さず後者で出し、既存の pipe_intake_design_ / pipe_preflight_ / table_check_ の歯が緑のまま"
+done = "depends の相手が同じ doc の自分でない別の行である行を受付が rc 0 で受けて run dir が 1 つ出来、相手が doc に無い行は contracts check と逐語で同じ depends-unresolved の 1 行だけで断られて run dir が 0、preflight は前者で refuse= に depends-unresolved を出さず後者で出し、既存の pipe_intake_design_ / pipe_preflight_ / table_check_ の歯が緑のまま"
 <!-- contracts:end -->
 
 
