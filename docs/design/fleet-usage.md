@@ -107,10 +107,19 @@
 ## 11. `fleet` の置き場の既定と人が読む表（契約表の行 a・`s2-07l.403`）
 
 - 何が起きているか: `fleet` の口は `--state-dir` を必須で受け（`fleet/cli.rs` の dispatch）、無い周は使い方だけを出す。`seat` の口は `seat/mod.rs` の state_dir_of（`--state-dir` > git 設定の 2 経路・出所付き・C10）で解く＝口ごとに解き方が違い、人が手で `fleet usage --show` を撃てない（user 直命 2026-09-16 08:1xZ・逐語は台帳 `s2-07l.403`）。1 行形（`usage: account=…`）は機械の読み手（tick・選定・歯）の面で、人が口座の状況を一目で見る形が無い。
-- 形: (1) `fleet` の dispatch は `--state-dir` を任意にし、無い周は `seat` と**同じ 1 関数**（state_dir_of）で解く（第 2 の解決を書かない・env は読まない・C2.2）。解けない周は `fleet: refused reason=state-dir` の 1 行 + 使い方で rc 1（store を作らない）。全 verb（record / show / export / usage / select）が同じ入口を通る。**1 行形の字面は不変**（出所は表の見出し行に載せ、1 行形には足さない＝機械の読み手を動かさない）。(2) `fleet usage --table`: **出力の形**の指定で、計測か表示か（`--show`）とは直交（`--show --table` = read-only の表・`--table` だけ = 計測してから表）。表は pure 関数 1 本が組む: 1 行目 = `state_dir=<path> source=<flag|git-config>`、2 行目 = 見出し（account / 5h / 7d / model / seat / resets）、以下は口座ごとに 1 行。値は 1 行形と同じ replay の `allowance` から取り、Unmeasured の窓は `unmeasured:<reason>`、model 窓は名と % を `Fable:75%` の形、seat 列は登録 row が持つ口座ならその役割の名・無ければ `-`、resets は 5 時間窓の reset 時刻。列幅は値の最大幅で揃える（数を code に書かない）。
-- 触らない: 1 行形の字面・event の形・`select` の判定・state_dir_of の中身・`--curl` / `--claude` の経路・極性一覧（Guard を足さない・§6）。
-- 歯（`fleet_usage_statedir_` / `fleet_usage_table_` 接頭辞・`crates/scribe2/tests/e2e/fleet.rs` と `fleet/usage.rs` の in-file）: tmp repo の git 設定から解いた周は flag 無しで計測し store がその dir に出来る／git の無い tmp cwd で flag 無しは typed に断り store を作らない（**cwd は tmp**＝repo の cwd で撃つと本物の置き場を解く）／`--show --table` が見出し 2 行 + 口座行を出し seat 列が登録 row の役割を映す／pure な表の歯（Unmeasured 混在・列幅・口座 0 件）。既存の flag 必須の歯（`--state-dir` 無し = rc 1）は前者 2 本に置き換える。
-- 却下: 1 行形に `source=` を足す（tick と選定の歯が字面を読む・機械面を動かす）／`--table` を既定にする（機械の読み手が表を parse する）／fleet に第 2 の解決関数を書く（seat と食い違う）／表の列幅を定数で持つ（数を code に焼く）。
+- **本便が seat 側に要る到達は全部「読むだけ」である**（verified・2026-09-20・main dce6aea。可視性を上げる編集が要らないので write-set は fleet 側の 4 面で閉じ、seat の src を触る実装になった周は gate の write-set 照合が outside-scope で止める＝その時は契約を書き直す）: (a) 置き場の解決 = `seat/mod.rs` の state_dir_of は `pub fn`（`lib.rs` は seat を `pub mod` で持つ）で、返す型も `pub`（解決した path と出所を持ち、出所は 2 値で字面は `Provenance::as_str`）。(b) 行の字面 = 既存の `StateDir::suffix`（出所を先・path を行末に置く既存の規約）をそのまま呼ぶ＝第 2 の書式を書かない。(c) 登録 row の読み手 = `fleet` 自身の replay が持つ `State` の `registrations`（鍵 = 役割 × anchor・値の `Registration` は `account` と `role` を `pub` で持つ）で、`fleet/usage.rs` は既に replay を呼んで `State` を読んでいる（`allowance`）＝読み手の module は増えない。役割の字面は `Role::as_str` で、ADR-0045 で役割は 1 値（Orchestrator）＝seat 列は実質「登録の有無」を映す。
+- 形: (1) `fleet` の dispatch は `--state-dir` を任意にし、無い周は `seat` と**同じ 1 関数**（state_dir_of）で解く（第 2 の解決を書かない・env は読まない・C2.2。`fleet/cli.rs` の module doc の「置き場は flag で必ず外から受け取る」も同じ便で直す）。**verb を先に読み、既知の verb の周だけ置き場を解く**（verb の無い周・未知の verb の周は従来どおり使い方の 1 行＝外形の他の行を動かさない）。解けない周は `fleet: refused reason=state-dir` の 1 行 + 使い方で rc 1（store を作らない）。全 verb（record / show / export / usage / select）が同じ入口を通る。**1 行形の字面は不変**（出所は表の見出し行に載せ、1 行形には足さない＝機械の読み手を動かさない）。(2) `fleet usage --table`: **出力の形**の指定で、計測か表示か（`--show`）とは直交（`--show --table` = read-only の表・`--table` だけ = 計測してから表）。表は pure 関数 1 本が組む: 1 行目 = `StateDir::suffix` の字面から先頭の空白を落としたもの（出所が先・path が行末）、2 行目 = 見出し（account / 5h / 7d / model / seat / resets）、以下は口座ごとに 1 行。値は 1 行形と同じ replay の `allowance` から取り、Unmeasured の窓は `unmeasured:<reason>`、model 窓は名と % を `Fable:75%` の形、seat 列は登録 row が持つ口座ならその役割の名・無ければ `-`、resets は 5 時間窓の reset 時刻。列幅は値の最大幅で揃える（数を code に書かない）。
+- 約束（行 a の done の (1)〜(6) と 1:1・番号は done の順）:
+  1. flag 無しで git 設定から解いた置き場に計測が載る（flag が在る周は従来どおり flag が勝つ）。
+  2. 全 verb（record / show / export / usage / select）が同じ入口を通る＝flag 無しで撃った 5 verb のどれも置き場の断りを出さない（各 verb 固有の断り〔引数の不足・無い便〕はそのまま）。
+  3. 置き場を解けない cwd では 5 verb とも同じ 1 行で typed に断り、store を作らない（rc 1・stdout に表を出さない）。
+  4. `--table` が見出し 2 行 + 口座ごとの行を出し、seat 列が登録 row の役割名（登録の無い口座は `-`）を映し、Unmeasured の窓と列幅が値から決まる。
+  5. **1 行形の字面と event の形は不変**（`--table` を付けない周の出力と、口座 × 窓ごとの event の並び）。
+  6. usage の外形は `--state-dir` が任意になった 1 行だけが変わり、他の行は不変。
+- 歯（`fleet_usage_statedir_` / `fleet_usage_table_` 接頭辞・`crates/scribe2/tests/e2e/fleet.rs` と `fleet/usage.rs` の in-file）: 約束 1〜3 = tmp repo の git 設定から解いた周は flag 無しで計測し store がその dir に出来る（flag が在る周は flag の dir に出来る）／同じ tmp repo で 5 verb を flag 無しで撃つと置き場の断りが 1 つも出ない／git の無い tmp cwd では 5 verb とも同じ 1 行で断り store を作らない（**cwd は tmp**＝repo の cwd で撃つと本物の置き場を解く）。約束 4 = `--show --table` が見出し 2 行 + 口座行を出し seat 列が登録 row の役割を映す（登録の無い口座は `-`）／pure な表の歯（Unmeasured 混在・列幅・口座 0 件）。既存の flag 必須の歯 `fleet_state_dir_flag_is_required`（`--state-dir` 無し = rc 1）は約束 1〜3 の歯に置き換える。
+- 検証行（4 本・歯の file はどれも行 a の write-set の中）: 約束 1〜3 = `fleet_usage_statedir_`／約束 4 = `fleet_usage_table_`（どちらも base で 0 本＝RED の理由は機能不在）／約束 5 = 既存の `fleet_usage_measures_two_accounts_into_lines_and_events`（1 行形と event の形を測る歯・緑のまま）／約束 6 = 既存の `fleet_external_form`（外形 snapshot・`--state-dir` の 1 語だけが変わる）。filter は歯の名の全体か十分に長い接頭辞で書く（裸の `fleet_usage_` は `fleet/usage.rs` の unit の歯と `tests/e2e/rules.rs` の歯にも当たり、受付の導出が write-set の外へ広がる・§12 の実測）。
+- 触らない: 1 行形の字面・event の形・`select` の判定・state_dir_of の中身と seat 側の src（読むだけ・上の (a)〜(c)）・`State` に新しい method を足すこと（登録 row は `fleet/usage.rs` の中で読む・既存の `State::registered_accounts` は label の集合で役割を持たないので表の読み手にはしない）・`--curl` / `--claude` の経路・極性一覧（Guard を足さない・§6）。
+- 却下: 1 行形に `source=` を足す（tick と選定の歯が字面を読む・機械面を動かす）／`--table` を既定にする（機械の読み手が表を parse する）／fleet に第 2 の解決関数を書く（seat と食い違う）／表の 1 行目に独自の書式を作る（`StateDir::suffix` と 2 本立てになり path を行末に置く規約が割れる）／表の列幅を定数で持つ（数を code に焼く）。
 
 ## 12. fleet の e2e fixture の reset を壁時計から組む — 固定日付の時限を撤去する（契約表の行 b・`s2-07l.468`）
 
@@ -129,9 +138,9 @@ title = "fleet の置き場を seat と同じ 1 関数で解き、fleet usage --
 req = ["FR33", "FR57"]
 section = "11"
 write-set = ["crates/scribe2/src/fleet/cli.rs", "crates/scribe2/src/fleet/usage.rs", "crates/scribe2/tests/e2e/fleet.rs", "crates/scribe2/tests/e2e/snapshots/e2e__fleet__fleet_external_form.snap"]
-verify = ["cargo nextest run -p scribe2 --no-tests=fail fleet_usage_statedir_", "cargo nextest run -p scribe2 --no-tests=fail fleet_usage_table_"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail fleet_usage_statedir_", "cargo nextest run -p scribe2 --no-tests=fail fleet_usage_table_", "cargo nextest run -p scribe2 --no-tests=fail fleet_usage_measures_two_accounts_into_lines_and_events", "cargo nextest run -p scribe2 --no-tests=fail fleet_external_form"]
 size = "S"
-done = "flag 無しの fleet usage --show --table が git 設定の置き場から見出し 2 行と口座行を出し、git の無い cwd では typed に断って store を作らず、1 行形の字面と event の形は不変"
+done = "(1) flag 無しの fleet が git 設定の置き場を seat と同じ 1 関数で解き、(2) record / show / export / usage / select の 5 verb が同じ入口を通って flag 無しでも置き場の断りを出さず、(3) git の無い cwd では 5 verb とも同じ 1 行で断って store を作らず、(4) fleet usage --show --table が見出し 2 行と口座行を出して seat 列が登録 row の役割名（無い口座は -）を映し、(5) 1 行形の字面と event の形は不変で、(6) usage の外形は --state-dir が任意になった 1 行だけが変わる"
 [[contract]]
 id = "b"
 title = "fleet の e2e fixture の reset を壁時計から組む — 固定日付 2026-09-18T00:00Z の時限を撤去し、選定の歯が常に未来の窓を見る（test だけの差分・札 retroactive）"
