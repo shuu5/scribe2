@@ -2,7 +2,7 @@
 //!
 //! 契約表の行が `touches` に宣言した閉じた型（`crate::module::Type`）について、その型を**構造として
 //! 持つ file** を字面走査で集める。**pure**（I/O は呼び手）で、入力は型名の列と読み込んだ `.rs` の
-//! (path, 本文) の列だけである。拾う形は 4 つ:
+//! (path, 本文) の列だけである。型の閉包が拾う形は 5 つ（番号は §3 / §16 / §19 の呼び名・第 5 形は外形 pin）:
 //!
 //! 1. **literal 構築** `Type {`（直前が `struct` / `enum` / `impl` / `for` 等の語か `->` の行は宣言・実装・
 //!    戻り型なので除く）
@@ -12,15 +12,20 @@
 //!    `<module>::NAME` の修飾か、`use` で `<module>::` から同名で取り込んだ file でだけ解く（別の module の同名
 //!    const を拾わない）
 //! 4. **const slice の宣言 file**（`const NAME: &[Type]`）
+//! 6. **variant 構築**（§19・行 s）: 行を最初の `=>` で割った**右側**（`=>` の無い行は全部）に `Type::Variant {` か
+//!    `Type::Variant(` を持つ行（`Variant` は大文字始まりの識別子・`{` / `(` の前の空白は任意）。`=>` の右辺で
+//!    同名の variant を組み直す file と `Err(…)` の中で組む file が当たる。`=>` の左のパターン側は 2 の面で数えない。
+//!    `Self::Variant {` は型名でないので当たらず、小文字始まりの項目（`Type::assoc_fn(`）は呼出しで構築でない。
 //!
-//! 4 形はどれも、先に**その file から `touches` の型が見えているか**（[`sees`]・§3「閉包の同名衝突」）を 1 関数で
+//! どの形も、先に**その file から `touches` の型が見えているか**（[`sees`]・§3「閉包の同名衝突」）を 1 関数で
 //! 判定してから数える: (a) file が型を宣言し path が `touches` の module に当たる (b) `use <module>::Name` で取り込む
 //! (c) 本文に `<module>::Name` の修飾が在る。裸の型名だけで照合すると、別 module の同名の型（`hook::vessel::Marker` と
 //! `seat::rebrief::Marker`）の file へ閉包が広がり、導出値の偽の交差が並列度を下げる。
 //!
 //! **下界である**（§3「限界」）: 型の名が別名で現れる形（`use … as`・generic の中）と `Self { … }` の構築、glob
 //! （`use m::*` / `use super::*`）越しの取り込みは見ない。上界は構文木が要り A3 の依存になる（却下・§11）。読めない
-//! file と型名の形の違いは `Err`（fail-closed・NFR4）。
+//! file と型名の形の違いは `Err`（fail-closed・NFR4）。第 6 形は文字列 literal の中や複数行に跨る pattern の 2 行目の
+//! 字面にも当たる（上界側へ広がる雑音・§19「着地済み行への波及」）。
 //!
 //! 閉包の拡張（契約 (g)・§3）も同じ pure な字面走査で持つ: (v) **外形 pin** [`surface_closure`]（`surfaces` の名が
 //! 指す外形 snapshot の file と、その名か subcommand の usage 文字列を歯の区間に literal で持つ `.rs`）と
@@ -119,6 +124,9 @@ const MOD_STEM: &str = "mod";
 
 /// 件数 pin の突き合わせの口（`assert_eq!(NAME.len(), 3` の `,`・`NAME.len() == 3` の `==`）。
 const COMPARES: &[&str] = &[",", "==", "!="];
+
+/// variant 構築の口（第 6 形・`Type::Variant {` の `{` と `Type::Variant(` の `(`）。
+const VARIANT_OPENS: &[char] = &['{', '('];
 
 /// 読み込んだ `.rs` 1 本。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -383,8 +391,9 @@ fn is_ident_char(found: char) -> bool {
     found.is_ascii_alphanumeric() || found == '_'
 }
 
-/// 1 つの型の閉包（型が見えている file〔[`sees`]〕のうち 4 形のどれかを持つもの）。const slice の宣言 file も
-/// 見えている file だけ＝別 module の同名 const slice（別の同名の型の slice）を拾わない。
+/// 1 つの型の閉包（型が見えている file〔[`sees`]〕のうち 4 形か第 6 形〔variant 構築・[`builds_variant`]〕のどれかを
+/// 持つもの）。const slice の宣言 file も見えている file だけ＝別 module の同名 const slice（別の同名の型の slice）を
+/// 拾わない。
 ///
 /// fn 形（§18）は module の段（[`in_module`]）で `fn <名>` を宣言する file だけ（呼び手と別 module の同名の fn は
 /// 数えない・下界）。
@@ -413,6 +422,7 @@ fn files_of(touched: &Touched<'_>, texts: &[(&str, &str)]) -> BTreeSet<String> {
                 && (declaring.contains(path)
                     || constructs(text, touched.name)
                     || matches_arm(text, touched.name)
+                    || builds_variant(text, touched.name)
                     || pins(text, &scopes(path, touched.module), &names))
         })
         .map(|&(path, _)| path.to_owned())
@@ -524,6 +534,24 @@ fn matches_arm(text: &str, ty: &str) -> bool {
     text.lines()
         .filter_map(|line| line.split_once("=>"))
         .any(|(left, _)| !heads(left, &needle).is_empty())
+}
+
+/// enum の variant 構築（第 6 形・§19）: 行を最初の `=>` で割った右側（`=>` の無い行は行の全部）に `ty::Variant {` か
+/// `ty::Variant(` を持つか。`=>` の左のパターン側は [`matches_arm`] の面で数えない。`Self::Variant` は型名でないので
+/// 当たらず、小文字始まりの項目（関連 fn の呼出し）は構築でない。
+fn builds_variant(text: &str, ty: &str) -> bool {
+    let needle = format!("{ty}::");
+    text.lines().map(|line| line.split_once("=>").map_or(line, |(_, right)| right)).any(|right| {
+        heads(right, &needle)
+            .into_iter()
+            .any(|at| variant_built(right.get(at.saturating_add(needle.len())..).unwrap_or_default()))
+    })
+}
+
+/// `ty::` の直後が「大文字始まりの識別子 + 任意の空白 + `{` / `(`」か。
+fn variant_built(rest: &str) -> bool {
+    rest.starts_with(|found: char| found.is_ascii_uppercase())
+        && rest.trim_start_matches(is_ident_char).trim_start().starts_with(VARIANT_OPENS)
 }
 
 /// const slice の件数 pin（`NAME.len()` を整数 literal と突き合わせる箇所）を持つか（`scopes` は [`scopes`]）。
@@ -782,6 +810,56 @@ mod tests {
         assert_eq!(of(&["crate::tone::Hue"], &sources), set(&["src/from_tone.rs", "src/tone.rs", "tests/tone_count.rs"]));
         assert_eq!(of(&["crate::paint::Swatch"], &sources), set(&["src/from_paint.rs"]), "構築点も module 側だけ");
         assert_eq!(of(&["crate::tone::Swatch"], &sources), set(&["src/from_tone.rs", "src/tone.rs"]));
+    }
+
+    /// 第 6 形の fixture（§19）: struct-like と tuple-like の variant を持つ enum `crate::shape::Shape`。宣言 file は
+    /// `impl` の中で `Self::Dot { … }` だけを組む（4 形のどれも持たない）。
+    const SHAPE: &str = "pub enum Shape {\n    Dot { x: u8 },\n    Line(u8),\n}\n\nimpl Shape {\n    pub fn dot() -> Shape {\n        Self::Dot { x: 0 }\n    }\n\n    pub fn none() -> Option<Shape> {\n        None\n    }\n}\n";
+
+    /// variant 構築（第 6 形・§19 の約束 1 と約束 2 の (a) (b) (d)）: `=>` の右辺で `{` 形を組むだけの file と
+    /// `Err(…)` の中で `(` 形を組むだけの file が導出値に入り、`Self::` の構築だけの宣言 file・小文字始まりの項目
+    /// （関連 fn の呼出し）だけの file・型が見えていない同名の file（別 module から取り込む）は入らない。
+    #[test]
+    fn closure_variant_construction_picks_files_that_only_build_a_variant() {
+        let sources = vec![
+            source("src/shape.rs", SHAPE),
+            // `=>` の右辺で struct-like の variant を組む（左のパターンは型を持たない）。
+            source("src/right.rs", "use crate::shape::Shape;\n\npub fn of(n: u8) -> Shape {\n    match n {\n        0 => Shape::Dot { x: n },\n        _ => Shape::dot(),\n    }\n}\n"),
+            // `Err(…)` の中で tuple-like の variant を組む。
+            source("src/err.rs", "use crate::shape::Shape;\n\npub fn of(n: u8) -> Result<u8, Shape> {\n    if n == 0 {\n        return Err(Shape::Line(n));\n    }\n    Ok(n)\n}\n"),
+            // 小文字始まりの項目（関連 fn の呼出し）だけ。
+            source("src/call.rs", "use crate::shape::Shape;\n\npub fn made() -> bool {\n    let _shape = Shape::dot();\n    Shape::none().is_none()\n}\n"),
+            // 別 module の同名の型を組む（`sees` が通さない）。
+            source("src/other.rs", "use crate::tone::Shape;\n\npub fn of() -> Shape {\n    Shape::Dot { x: 1 }\n}\n"),
+        ];
+        assert_eq!(
+            of(&["crate::shape::Shape"], &sources),
+            set(&["src/err.rs", "src/right.rs"]),
+            "variant 構築だけの 2 file が入り、Self:: だけの宣言 file・呼出しだけの file・見えていない同名は入らない"
+        );
+    }
+
+    /// 第 6 形の述語（§19 の約束 2 の (c)）: `Type::Variant {` / `Type::Variant(` が `=>` の左のパターン側にしか無い本文は
+    /// 偽で、同じ出現を `=>` の右側へ移すと真（導出値では `matches_arm` が同じ file を入れるので in-file でだけ測れる）。
+    /// `Self::` と小文字始まりの項目・`{` / `(` の続かない出現（`use` 文・doc comment の名指し・unit variant）は偽。
+    #[test]
+    fn closure_variant_construction_predicate_reads_only_the_right_of_the_arrow() {
+        for (body, want) in [
+            ("    Shape::Dot { x } => 1,\n", false),
+            ("    Shape::Line(n) => n,\n", false),
+            ("    1 => Shape::Dot { x },\n", true),
+            ("    n => Shape::Line(n),\n", true),
+            ("    Shape::Dot { .. } => Shape::Dot { x: 0 },\n", true),
+            ("    let made = Shape::Dot { x: 0 };\n", true),
+            ("    return Err(Shape::Line (0));\n", true),
+            ("    Self::Dot { x: 0 }\n", false),
+            ("    let made = Shape::dot();\n", false),
+            ("use crate::shape::Shape::Dot;\n", false),
+            ("/// [`Shape::Dot`] を組む。\n", false),
+            ("    let unit = Shape::Solo;\n", false),
+        ] {
+            assert_eq!(super::builds_variant(body, "Shape"), want, "{body}");
+        }
     }
 
     /// 読めない file は `Err`（fail-closed・その file が型を持つかを測れない）・型名の形が違えば `Err`。

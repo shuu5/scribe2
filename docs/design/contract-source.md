@@ -262,7 +262,7 @@ title = "契約表の parser と検査（contracts check）・台帳の pointer 
 req = ["FR47", "FR48", "FR54", "FR55"]
 section = "2"
 touches = ["crate::pipe::refuse::Refuse", "crate::polarity::Guard"]
-write-set = ["crates/scribe2/src/pipe/table.rs", "crates/scribe2/src/pipe/closure.rs", "crates/scribe2/src/pipe/mod.rs", "crates/scribe2/src/pipe/refuse.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/declaration.rs", "crates/scribe2/src/rules/manifest.rs", "crates/scribe2/src/main.rs", "crates/scribe2/src/polarity.rs", "contracts/schema.toml", "crates/xtask/src/check.rs", "crates/xtask/src/check_facts.rs", "crates/scribe2/tests/e2e/pipe.rs", "crates/scribe2/tests/e2e/rules.rs", "crates/scribe2/tests/e2e/polarity.rs", "crates/scribe2/tests/e2e/snapshots/", "crates/scribe2/src/snapshots/"]
+write-set = ["crates/scribe2/src/pipe/table.rs", "crates/scribe2/src/pipe/closure.rs", "crates/scribe2/src/pipe/mod.rs", "crates/scribe2/src/pipe/refuse.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/declaration.rs", "crates/scribe2/src/rules/manifest.rs", "crates/scribe2/src/main.rs", "crates/scribe2/src/polarity.rs", "contracts/schema.toml", "crates/xtask/src/check.rs", "crates/xtask/src/check_facts.rs", "crates/scribe2/tests/e2e/pipe.rs", "crates/scribe2/tests/e2e/rules.rs", "crates/scribe2/tests/e2e/polarity.rs", "crates/scribe2/tests/e2e/snapshots/", "crates/scribe2/src/snapshots/", "crates/scribe2/src/pipe/cli/intake.rs", "crates/scribe2/src/pipe/closure/names.rs", "crates/scribe2/src/pipe/table/check.rs"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail contract_"]
 size = "M"
 done = "contracts check が本 doc の区間を全件通し、閉包が足りない fixture を名指す"
@@ -273,7 +273,7 @@ title = "intake の生成（--design）と --contract の廃止"
 req = ["FR53", "FR54", "FR48", "FR39"]
 section = "2"
 touches = ["crate::pipe::refuse::Refuse"]
-write-set = ["crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/cli/intake.rs", "crates/scribe2/src/pipe/cli/preflight.rs", "crates/scribe2/src/pipe/mod.rs", "crates/scribe2/src/pipe/contract.rs", "crates/scribe2/src/pipe/refuse.rs", "crates/scribe2/src/pipe/review.rs", "crates/scribe2/tests/e2e/pipe.rs", "crates/scribe2/tests/e2e/pipe/intake.rs", "crates/scribe2/tests/e2e/pipe/spawn.rs", "crates/scribe2/tests/e2e/pipe/ratelimit.rs", "crates/scribe2/tests/e2e/pipe/stop.rs", "crates/scribe2/tests/e2e/pipe/land.rs", "crates/scribe2/tests/e2e/pipe/gate.rs", "crates/scribe2/tests/e2e/fleet.rs", "crates/scribe2/tests/e2e/polarity.rs", "crates/scribe2/tests/e2e/snapshots/e2e__pipe__pipe_external_form.snap"]
+write-set = ["crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/cli/intake.rs", "crates/scribe2/src/pipe/cli/preflight.rs", "crates/scribe2/src/pipe/mod.rs", "crates/scribe2/src/pipe/contract.rs", "crates/scribe2/src/pipe/refuse.rs", "crates/scribe2/src/pipe/review.rs", "crates/scribe2/tests/e2e/pipe.rs", "crates/scribe2/tests/e2e/pipe/intake.rs", "crates/scribe2/tests/e2e/pipe/spawn.rs", "crates/scribe2/tests/e2e/pipe/ratelimit.rs", "crates/scribe2/tests/e2e/pipe/stop.rs", "crates/scribe2/tests/e2e/pipe/land.rs", "crates/scribe2/tests/e2e/pipe/gate.rs", "crates/scribe2/tests/e2e/fleet.rs", "crates/scribe2/tests/e2e/polarity.rs", "crates/scribe2/tests/e2e/snapshots/e2e__pipe__pipe_external_form.snap", "crates/scribe2/src/pipe/closure/names.rs", "crates/scribe2/src/pipe/table.rs", "crates/scribe2/src/pipe/table/check.rs"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_intake_design_"]
 size = "L"
 done = "toy repo の設計 doc の行から契約 file が生成されて run dir に載り、--contract は typed な断り（hand-written-contract）で拒まれ、行の欠陥（閉包 / 節 / 解けない pointer）は run を作らずに断られる"
@@ -297,7 +297,7 @@ title = "land の終端（push・CI の照合・台帳の close）と rules 行 
 req = ["FR50", "FR12"]
 section = "5"
 touches = ["crate::fleet::Completion", "crate::rules::RuleKind", "crate::polarity::Guard"]
-write-set = ["rules/manifest.toml", ".vessel.toml", "crates/scribe2/src/rules/mod.rs", "crates/scribe2/src/fleet/mod.rs", "crates/scribe2/src/fleet/wait.rs", "crates/scribe2/src/pipe/land.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/cli/step.rs", "crates/scribe2/src/pipe/queue.rs", "crates/scribe2/src/pipe/declaration.rs", "+crates/scribe2/src/ledger/mod.rs", "crates/scribe2/src/lib.rs", "crates/scribe2/src/polarity.rs", "crates/scribe2/tests/e2e/pipe.rs", "crates/scribe2/tests/e2e/pipe/land.rs", "crates/scribe2/tests/e2e/rules.rs", "crates/scribe2/tests/e2e/fleet.rs", "crates/scribe2/tests/e2e/polarity.rs", "crates/scribe2/tests/e2e/snapshots/"]
+write-set = ["rules/manifest.toml", ".vessel.toml", "crates/scribe2/src/rules/mod.rs", "crates/scribe2/src/fleet/mod.rs", "crates/scribe2/src/fleet/wait.rs", "crates/scribe2/src/pipe/land.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/cli/step.rs", "crates/scribe2/src/pipe/queue.rs", "crates/scribe2/src/pipe/declaration.rs", "+crates/scribe2/src/ledger/mod.rs", "crates/scribe2/src/lib.rs", "crates/scribe2/src/polarity.rs", "crates/scribe2/tests/e2e/pipe.rs", "crates/scribe2/tests/e2e/pipe/land.rs", "crates/scribe2/tests/e2e/rules.rs", "crates/scribe2/tests/e2e/fleet.rs", "crates/scribe2/tests/e2e/polarity.rs", "crates/scribe2/tests/e2e/snapshots/", "crates/scribe2/src/fleet/usage.rs", "crates/scribe2/src/pipe/admission.rs", "crates/scribe2/src/pipe/cli/resume.rs", "crates/scribe2/src/pipe/ratelimit.rs", "crates/scribe2/src/pipe/stop.rs"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_terminal_land_"]
 size = "M"
 done = "偽 remote + 偽 CI + 偽 adapter で Landed → close の 3 event・failure は close しない・consumer の要件面の path を宣言で受ける（拡張子で読み手分岐・無ければ既定・既定も無ければ断る）"
@@ -330,7 +330,7 @@ title = "閉包の拡張 — 外形 pin（第 5 形・surfaces）・write-set �
 req = ["FR48", "FR39", "FR54", "NFR4"]
 section = "3"
 touches = ["crate::pipe::refuse::Refuse", "crate::rules::RuleKind"]
-write-set = ["crates/scribe2/src/pipe/closure.rs", "crates/scribe2/src/pipe/refuse.rs", "crates/scribe2/src/pipe/declaration.rs", "crates/scribe2/src/pipe/table.rs", "crates/scribe2/src/pipe/cli.rs", "contracts/schema.toml", "crates/scribe2/tests/e2e/pipe.rs", "crates/scribe2/tests/e2e/pipe/intake.rs", "rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "crates/scribe2/tests/e2e/rules.rs", "crates/scribe2/tests/e2e/snapshots/e2e__rules__rules_external_form.snap"]
+write-set = ["crates/scribe2/src/pipe/closure.rs", "crates/scribe2/src/pipe/refuse.rs", "crates/scribe2/src/pipe/declaration.rs", "crates/scribe2/src/pipe/table.rs", "crates/scribe2/src/pipe/cli.rs", "contracts/schema.toml", "crates/scribe2/tests/e2e/pipe.rs", "crates/scribe2/tests/e2e/pipe/intake.rs", "rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "crates/scribe2/tests/e2e/rules.rs", "crates/scribe2/tests/e2e/snapshots/e2e__rules__rules_external_form.snap", "crates/scribe2/src/pipe/cli/intake.rs", "crates/scribe2/src/pipe/closure/names.rs", "crates/scribe2/src/pipe/table/check.rs"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail contract_closure_ext_"]
 size = "M"
 done = "surfaces / dir 展開 / 余地 / 名指しの 4 fixture が typed に断られ、現物の契約表で違反 0"
@@ -342,7 +342,7 @@ title = "write-set の導出 — touches の閉包 + verify の歯の置き場�
 req = ["FR48", "FR39", "FR47"]
 section = "3"
 touches = ["crate::pipe::refuse::Refuse", "crate::pipe::closure::ClosureError", "crate::pipe::table::ContractRow"]
-write-set = ["crates/scribe2/src/pipe/closure.rs", "crates/scribe2/src/pipe/refuse.rs", "crates/scribe2/src/pipe/table.rs", "crates/scribe2/src/pipe/table/parse.rs", "crates/scribe2/src/pipe/table/check.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/cli/intake.rs", "crates/scribe2/src/pipe/contract.rs", "contracts/schema.toml", "crates/scribe2/tests/e2e/pipe/intake.rs", "crates/scribe2/tests/e2e/pipe.rs"]
+write-set = ["crates/scribe2/src/pipe/closure.rs", "crates/scribe2/src/pipe/refuse.rs", "crates/scribe2/src/pipe/table.rs", "crates/scribe2/src/pipe/table/parse.rs", "crates/scribe2/src/pipe/table/check.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/cli/intake.rs", "crates/scribe2/src/pipe/contract.rs", "contracts/schema.toml", "crates/scribe2/tests/e2e/pipe/intake.rs", "crates/scribe2/tests/e2e/pipe.rs", "crates/scribe2/src/pipe/closure/derive.rs", "crates/scribe2/src/pipe/closure/names.rs"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail contract_derive_"]
 size = "M"
 done = "write-set 無しの fixture 行が導出値で intake を通り契約 file に導出値が載る・手書きが導出値とずれた fixture 行は missing / extra を名指して断られる・also の .rs / tests の非歯 file / 解けない filter は typed に断られる・schema.toml に creates / tests / also が載り write-set が任意・現物の契約表の intake 済みの行は断られない（受付だけ・CI は従来の閉包）"
@@ -496,7 +496,7 @@ title = "同型の審査 FAIL が rules 行 review.same_kind_stop の回数に�
 req = ["FR49"]
 section = "23"
 touches = ["crate::pipe::refuse::Refuse", "crate::rules::RuleKind"]
-write-set = ["crates/scribe2/src/pipe/cli/intake.rs", "crates/scribe2/src/pipe/refuse.rs", "crates/scribe2/src/pipe/review.rs", "rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "crates/scribe2/tests/e2e/rules.rs", "crates/scribe2/tests/e2e/pipe.rs", "crates/scribe2/tests/e2e/pipe/intake.rs"]
+write-set = ["crates/scribe2/src/pipe/cli/intake.rs", "crates/scribe2/src/pipe/refuse.rs", "crates/scribe2/src/pipe/review.rs", "rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "crates/scribe2/tests/e2e/rules.rs", "crates/scribe2/tests/e2e/pipe.rs", "crates/scribe2/tests/e2e/pipe/intake.rs", "crates/scribe2/src/pipe/closure/names.rs", "crates/scribe2/src/pipe/table.rs", "crates/scribe2/src/pipe/table/check.rs"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_intake_repeat_", "cargo nextest run -p scribe2 --no-tests=fail rules_review_same_kind_"]
 size = "M"
 done = "同じ kind の FAIL が行の値の本数続いた bead の材料不変の intake は same-kind-repeated で断られ、直前の at に対応する差分の無い契約は finding-unaddressed で断られ、材料か対応を変えた契約は通り、行の無い manifest は rc 2、rules 行が裁定 id 付きで 1 本増える"
