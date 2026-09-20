@@ -540,7 +540,7 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
 <h1>席の口座を持つ単位は project の群で、群の宣言は host の面の 1 表・群の今の口座は host の根の記録 (役割 → 口座の ADR-0036 と役割の実効の記録の ADR-0041 を単位ごと置き換え・便用の選定は群の候補の口座を host 全体で外し・移動は新しい口座で新しい席を起こして機械の復帰に任せる・候補が無い周は移らず通知・初期化の口と鍵の欄は後続の ADR)</h1>
 <p class="cover-sub">席の口座は project ごとの置き場に閉じていて、 複数の project の席を同じ口座にまとめる宣言も、 上限に当たった周にまとめて別の口座へ移す口も無い (実測 2026-09-19 = 席の口座が上限に当たり人が手で移した)。 本 ADR は口座を持つ単位を project の群に決め、 群の宣言と群の今の口座を host の面に置き、 便用の選定は群の候補の口座を host 全体で外し、 移動は新しい席を起こして機械の復帰に任せる形にする。 契機 (拍) と初期化の口と鍵の欄は本 ADR では決めない。</p>
 <div class="summary-card"><span class="ic"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#ffe8a8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span><div><p class="lab">この判断が約束すること (1 文サマリ)</p><p class="txt" data-prose-slot="cover-summary" data-slot-id="cover-summary">席（人と話す開発 session）がどの口座で立つかを、project 1 つずつでなく「project のかたまり（群）」ごとに決めます。どの project を同じかたまりにし、どの口座を候補にするかは、この machine に 1 つだけ在る宣言 file に書きます。いまそのかたまりがどの口座に居るかは、器が別の記録に書きます（人が書く宣言と、器が書く現状を分けます）。便（自動で走る実装の仕事）には、かたまりの候補になっている口座を 1 つも渡しません。口座が上限に近づいたら、かたまりごと別の口座へ移りますが、生きている対話を運ぶのではなく、新しい口座で新しい席を立てて、続きは器が台帳と git から組み直して渡します。移り先の候補が 1 つも無い回は、無理に移らず user に知らせます。</p></div></div>
-<div class="cover-meta"><span class="m"><span class="k">状態</span><span class="v">proposed</span></span><span class="m"><span class="k">選択肢</span><span class="v">6件 (OPT1–OPT6)</span></span><span class="m"><span class="k">結果</span><span class="v">良い 4 / トレードオフ 4</span></span><span class="m"><span class="k">版</span><span class="v">v0.1.0 / 2026-09-20</span></span></div>
+<div class="cover-meta"><span class="m"><span class="k">状態</span><span class="v">proposed</span></span><span class="m"><span class="k">選択肢</span><span class="v">7件 (OPT1–OPT7)</span></span><span class="m"><span class="k">結果</span><span class="v">良い 4 / トレードオフ 4</span></span><span class="m"><span class="k">版</span><span class="v">v0.1.0 / 2026-09-20</span></span></div>
 <div class="reader-chip" data-component="cross-doc-ref-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 正当化する要件: <b>SRS-SCRIBE2-MVP</b> の <b>FR57・FR36・FR59・NFR4</b></div>
 <div data-component="approval-block">
 <div class="sign"><span class="role">裁定 (user)</span><span class="who">user</span><span class="when">2026-09-19 (対話面・要求 4 点と「実装の仕方は推奨の方法で」の裁定・要旨は本文 CTX4・逐語は台帳 s2-07l.491 の notes)</span><span class="stamp self">裁定済</span></div>
@@ -571,7 +571,7 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
 <tr data-component="adr-driver-row"><td class="drid">DR5</td><td>段で止められる (宣言と点検 → 通知 → 自動の移動) <span class="drg">CTX4 の裁定・DR4 (段ごとに読み手が揃う)</span></td></tr>
 </tbody></table>
 </div>
-<section data-component="chapter-deck-band" class="tint-violet"><span class="num">03</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M8.5 6H13a3 3 0 0 1 3 3v.5M8.5 18H13a3 3 0 0 0 3-3v-.5"/></svg> 検討した選択肢 / 3 つの確定方式</span><h2>それぞれの利点と欠点を並べる</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-03">候補を 6 つ並べます。かたまりを分け方にする案、前の「役割ごと」を残す案、生きた対話を運ぶのを基準にする案、宣言を持たず起動のたびに選ぶ案、候補が無くても無理に移る案、そして導入の口や鍵の欄まで 1 本にまとめる案です。最後の 1 つは、別の記録へ送ります。</p></section>
+<section data-component="chapter-deck-band" class="tint-violet"><span class="num">03</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M8.5 6H13a3 3 0 0 1 3 3v.5M8.5 18H13a3 3 0 0 0 3-3v-.5"/></svg> 検討した選択肢 / 3 つの確定方式</span><h2>それぞれの利点と欠点を並べる</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-03">候補を 7 つ並べます。かたまりを分け方にする案、前の「役割ごと」を残す案、生きた対話を運ぶのを基準にする案、宣言を持たず起動のたびに選ぶ案、候補が無くても無理に移る案、導入の口や鍵の欄まで 1 本にまとめる案、そして便に渡さない口座を「いま居る 1 つ」だけに絞る案です。6 つ目は別の記録へ送ります。</p></section>
 <div class="chapbody">
 <div class="opt-grid">
 <div data-component="adr-option-card" class="chosen">
@@ -587,7 +587,7 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
 <li>host の根に実効の記録という置き場が 1 つ増える</li>
 <li>移動のたびに、 対話の文脈は機械が戻せるぶんしか残らない</li>
-<li>便が使える口座が群の候補のぶんだけ減る</li>
+<li>便が使える口座が群の候補のぶんだけ減る (今の口座 1 つだけを外す案は OPT7・却下)</li>
 </ul></div></div>
 </div>
 <div data-component="adr-option-card" class="rejected">
@@ -652,6 +652,19 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
 <li>導入の口は本 ADR の群とは独立に決められる (依存が無い)</li>
 </ul></div></div>
 </div>
+<div data-component="adr-option-card" class="rejected">
+<div class="opt-head"><span class="opt-id">OPT7</span><span class="opt-name">便用の除外を群の今の口座だけにする (候補の列の残りは便に開ける)</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">便用の候補から外すのは「その群がいま居る口座」1 つだけとし、 記録が無い周は候補の先頭 1 つを外す。 候補の列の残りは便が使える。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT7">便に渡さない口座を、かたまりの候補ぜんぶではなく「いまそのかたまりが居る 1 つ」だけに絞る案です。user の言い方にいちばん近く、便が使える口座もほとんど減りません。ただし便は口座を上限いっぱいまで使う側なので、候補の残りを便が先に使い切ってしまい、いざ移りたい回には移り先がどれも上限に近い、ということが起こります。つまり候補の列が逃げ道として働かなくなります。便に回せる量と逃げ道の広さは、候補をいくつ書くか（user が書く宣言）で調整できるので、この案で取り戻す必要はありません。加えて、外す口座を「器が書いた現状の記録」から決めることになるので、その記録が読めない回に何を外すかが決まりません。</span>
+<div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
+<li>user の要求 (4)「席の居る口座は便に使わない」の字面にいちばん近い</li>
+<li>便が使える口座が群ごとに 1 つしか減らないので、 便の容量が落ちない</li>
+</ul></div><div class="cons"><h4>− 欠点</h4><ul>
+<li>移り先になる候補を便が先に使い切る (実測 = 便用の選定の上限は 100 % の定数で、 便は口座を上限まで使う側の規則である。 一方で移り先の条件は閾値未満〔5 時間窓 85 ・ 7 日窓 95 ・ モデル別窓 95〕なので、 群が移りたい周には候補が全部閾値を越えている見込みが高い) ＝候補の列が逃げ道として働かない</li>
+<li>便の容量と逃げ道の釣り合いは、 候補の列の長さ (user が書く宣言値) で選べる。 この案で取り戻す必要が無い</li>
+<li>除外の規則が実効の記録の読みに依存する。 本 ADR は読めない記録を typed に止めると決めたので、 記録が読めない周の便用の除外が「止まる」か「黙って広がる」かの二択になり、 typed に決まらない (宣言値だけを読む OPT1 にはこの周が無い)</li>
+</ul></div></div>
+</div>
 </div>
 </div>
 <section data-component="chapter-deck-band" class="tint-ok"><span class="num">04</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14 4l6 6-3 3-6-6z"/><path d="M11 7L4 14l3 3 7-7"/><path d="M3 21h10"/></svg> 採用した判断 / どの方式を選ぶか</span><h2>選んだ方式と、 それが守る要件 (cross-doc 照会)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-04">選んだ案と、それが要件書のどの要件を支えるかを示します。かたまりの宣言は machine ごとの宣言 file に 1 表として置き、いまの口座は別の記録が持ち、便の候補からはかたまりの候補口座を全部外し、移動は新しい席と器による続きの組み直しで行います。</p></section>
@@ -711,7 +724,7 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
 </div>
 <footer class="foot" data-component="fidelity-sync-meta"><div class="ft-grid">
 <div class="ft-plain">このページは、大もとの機械データ (正本) から自動で組み立てられています。構造は機械が自動で検査し、内容が元データに忠実かは独立のレビューで確かめます。</div>
-<div data-audience="machine">機械SSoT: <b>ADR-0049.adr.yaml</b> &middot; 生成: <b>2026-09-20 06:22</b> &middot; 検証状態: <b>structure ✓ fabrication-free / prose ✓ 充填済 (fidelity ceiling → S5 対象)</b></div>
+<div data-audience="machine">機械SSoT: <b>ADR-0049.adr.yaml</b> &middot; 生成: <b>2026-09-20 06:37</b> &middot; 検証状態: <b>structure ✓ fabrication-free / prose ✓ 充填済 (fidelity ceiling → S5 対象)</b></div>
 <div class="tags" data-audience="machine"><span>folio design system</span><span>ADR-pack</span><span>folio engine B1 (instance#2)</span><span>cross-doc 照会</span></div>
 </div></footer>
 <!-- folio:chrome-bottom -->
