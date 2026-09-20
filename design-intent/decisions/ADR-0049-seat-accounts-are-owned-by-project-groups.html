@@ -730,6 +730,7 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
 <!-- folio:chrome-bottom -->
 <nav class="prevnext" aria-label="前後の文書">
   <a class="prevnext__prev" href="ADR-0048-stopping-a-run-is-a-separate-capability-of-the-orchestrator.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">便を止める権能は起動の権能から分かれ、 orchestrator の席が持つ: pipe stop を launch から外して新しい権能 stop に結び、 rules 行 role.orchestrator に stop を足す (席が撃てるのは --run で便 1 本を名指す形だけ・--all は launch のままでどの席からも撃てない・起動 / 再開 / 受付 / 退役は launch のまま dispatcher の口・止めた便は Stopped で列外に入り契約の字か release の印で列に戻る・SRS FR30 / FR41 の字は変えない)</span></a>
+  <a class="prevnext__next" href="ADR-0050-cores-and-scope-creation-are-hard-resources.html"><span class="prevnext__dir">次 &rarr;</span><span class="prevnext__title">core と器が host に頼む scope の作成も硬い資源で、 受付の枠は memory の 2 項と core の 1 項の min・行を撃つ前に器の健康を読んで混んだ周は待ち、 待てなかった周は FAIL でなく INCONCLUSIVE で終える (ADR-0021 §2.1 / §2.2 / §2.3 / §2.7 を部分 supersede・scope の作成の面は歯の道具箱が持ち本 ADR は機構を足さない)</span></a>
 </nav>
 <script>
 (function () {

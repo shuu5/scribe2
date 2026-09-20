@@ -951,3 +951,33 @@ terms:
     aliases: [mechanical resumption]
     definition: 席を起こし直した周に、 台帳の行と git の現在地と圧縮の直前の 1 枠だけから直前の流れを組んで session の開始で出す道 (ADR-0049・proposed)。 対話の記録は運ばない。 圧縮・群の移動・異常終了の 3 つが同じ 1 本を通る。
     relationships: [席の指示文, 台帳, project の群, 席の起動]
+  - canonical: 硬い資源
+    domain: consumer
+    aliases: [hard resource]
+    definition: 枯渇したときに host そのものを止めうる資源 (ADR-0050・proposed)。 memory と CPU の core と、 器が host に頼む scope の作成の 3 つ。 足りなくなっても遅くなるだけの資源と違い、 受付が枠を取って守る。
+    relationships: [並列の枠, 受付札, 封じ込め, 器の健康の遮断器, job 1 つの値段]
+  - canonical: job 1 つの値段
+    domain: consumer
+    aliases: [per-job thread price]
+    definition: 変異検査の job 1 つが使う test の thread 本数 (ADR-0050・proposed)。 実測の core 数を rules 行 gate.mutants_jobs で割った値 (1 の床) を器の pure 関数 1 本が出す実効値で、 受付の枠の core の項の分母になり、 受け付けた枠が実効 jobs と対で行へ運ぶ。
+    relationships: [実効 jobs, 並列の枠, 硬い資源, 受付札]
+  - canonical: 器の健康の遮断器
+    domain: consumer
+    aliases: [host health circuit breaker]
+    definition: verify の行を撃つ前に走行可能な process と待ちの process を読み、 閾値と比べて空いている / 混んでいる / 測れないの 3 値を返す境界 (ADR-0050・proposed)。 混んだ周は待ち、 待ち切れなかった周は行を撃たず INCONCLUSIVE に倒す。 行為を止めうるので極性一覧に載る guard。
+    relationships: [極性一覧, guard, 硬い資源, 走行可能な process, 待ちの process, core あたりの倍率]
+  - canonical: 走行可能な process
+    domain: consumer
+    aliases: [runnable process]
+    definition: CPU を待っているか実際に走っている process (ADR-0050・proposed)。 器は host の面の走行可能を運ぶ欄の分子から読む (総 process 数を運ぶ分母と取り違えない)。 遮断器はこの数を閾値と比べる。
+    relationships: [器の健康の遮断器, core あたりの倍率, 待ちの process]
+  - canonical: 待ちの process
+    domain: consumer
+    aliases: [blocked process]
+    definition: 割り込めない待ち (D 状態) に入った process (ADR-0050・proposed)。 器は host の面の待ちを運ぶ行から読む。 走行可能の山と対で host を止める面で、 遮断器はどちらか一方が閾値を超えれば混んでいると判ずる。
+    relationships: [器の健康の遮断器, core あたりの倍率, 走行可能な process]
+  - canonical: core あたりの倍率
+    domain: consumer
+    aliases: [per-core multiplier]
+    definition: 遮断器の閾値を組み立てる Int の rules 行 2 本 (host.runnable_per_core / host.blocked_per_core・ADR-0050・proposed)。 閾値は倍率 × 実測の core 数で、 絶対値を tracked の manifest に焼かないので core 数の違う host でも同じ意味を持つ。
+    relationships: [rules 行, 裁定 id, 器の健康の遮断器, 走行可能な process, 待ちの process]
