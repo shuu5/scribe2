@@ -165,19 +165,21 @@ C1 / C5（権能の値は行・裁定 id）・C1.2（生成文に手書きの規
 - 歯（`seat_role_compromise_` 接頭辞・`tests/e2e/seat/launch.rs` と `tests/e2e/seat/account.rs` と 管理 tick の歯の file〔削除済み〕 と `tests/e2e/hook.rs`）: 閾値未満の候補が 0 の周の立て直しと起動が over-threshold で席を立て、理由が実効の記録と launch / relaunch の記録の行に載る／他の役割の口座しか当たっていない口座が無い周だけ shared-with-role で立ち、当たっていない自前の候補が在る周は同居しない／全口座が当たっている周は従来の断りで 1 key も送らず記録も変わらない／妥協の記録の席を起こし直す周に通常の段が候補を返せば compromise 無しの記録へ書き換わり前の記録は履歴の側に残る／SessionStart の指示文が妥協の周だけその行を理由付きで出す（外形 snapshot 1 枚）・妥協でない周の既存の外形 snapshot は不変／xtask の雛形検査が未定義の穴を断り `{compromise}` を通す（in-file の歯・`seat_brief_compromise_` 接頭辞・`-p xtask` で撃つ）／既存の「候補なしで立て直さない」歯（作り直しの歯の file〔削除済み〕 と `tests/e2e/seat.rs` の helper が閾値以上の予備の口座を置く形）は、当たっていない予備が在る周は妥協で立つ側へ、全口座が当たっている形は従来の断りの側へ書き分ける／tick が閾値以上の席に、候補が在る周は退避の合図を、無い周は妥協の通知を注入する／同じ口座・同じ窓の 2 周目は通知を注入せず足した理由の noop になり、口座の reset の後の周はもう 1 回注入する／`InjectKind` と `NoopReason` の全 variant の列が宣言順で字面が重複しない。
 - 却下: ADR-0041 §3 の OPT6（写しは持たない）。
 
-## 19. 役割ごとの既定 model と effort を rules 行が持つ（契約表の行 m・`s2-07l.433`・行 h の後）
+## 19. 役割ごとの既定 model と effort を rules 行が持つ（契約表の行 m・`s2-07l.433`）
 
 - 何が起きているか（実測 2026-09-17・planner 席）: 役割 → model を決める rules 行が無い。宣言は席の登録 row の `model` 1 か所だけで、`seat register` も `seat launch` も閉じた表（`Model::parse`）に在る字面なら何でも受ける。席（AI）が手で起こした session で「いま動いている model」を row に書き直すと、実測値が宣言値を上書きし（C10 の逆流）、以後の立て直しは `crates/scribe2/src/seat/cycle/relaunch.rs` がその row をそのまま運ぶ。当日の事故はこの経路で起き、当座は row を登録し直して戻した。effort には宣言が無い: 席の起動行（`crates/scribe2/src/seat/cycle/launch.rs` の `derive_launch`）は model だけを運び、深さは口座の設定 dir の設定 file 任せで、同じ役割の席が口座ごとに違う深さで走る（runner / lens が `runner.effort` の行で塞いだのと同じ穴が、席の面に残っている）。
-- 値の裁定（裁定 id `user 2026-09-17T04:23Z`・逐語は台帳 `s2-07l.433`）: 役割ごとの既定は model と effort の**対**で持つ。値は planner が `fable` / `high`・管理席が `opus` / `xhigh`・相談席が `fable` / `high`（相談席の役割は §14 の行 h が足す＝行 m は行 h の後）。
+- 役割の閉じた列の実測（2026-09-20・本 repo の main）: `crates/scribe2/src/seat/role.rs` の `Role` は variant が 1 つ（`Orchestrator`）で `ALL` の要素数は 1（[ADR-0045](../../design-intent/decisions/ADR-0045-seat-role-is-one-orchestrator-and-dispatcher-lands-runs.html) §2 (1)）。権能の行も `rules/manifest.toml` に `role.orchestrator` の 1 本だけ在る（id の完全一致で 1 件）。§14 の相談席と §16〜§18 が前提にした 3 役割は同じ ADR が超過した＝本節は行 h に依らない。
+- 値の裁定（裁定 id `user 2026-09-17T04:23Z`・逐語は台帳 `s2-07l.433`）: 役割ごとの既定は model と effort の**対**で持つ。裁定は当時の 3 役割それぞれに対を与えた（対話と設計の席が `fable` / `high`・着地と merge の席が `opus` / `xhigh`・相談の席が `fable` / `high`）。着地と merge は ADR-0045 §2 (1) で器の dispatcher の仕事になり席ではなくなり、相談の席は起票されないまま超過したので、残る 1 役割 `orchestrator`（人と話す唯一の席・契約と設計と落ちる歯を書く＝対話と設計の席の後継）は裁定の `fable` / `high` を引き継ぐ。値の正本は manifest の行で、本節が持つのは行 id の形と裁定 id の在り処だけである（下の 6）。
 - 形（行と読み手だけ・導出と運びは次の節）:
   1. **`RuleKind` の variant 2 つ** `RoleModel` と `RoleEffort`（宣言順の末尾・`as_str` と `shape` の網羅 match の消費側・`ALL` にも足す）。どちらも値の形は既存の `Str` で、`ValueShape` と `RuleValue` は増やさない（対を 1 行の list で持つ形・新しい値の形を作る形は却下側）。
-  2. **rules 行**（id は `role.<役割名>.model` と `role.<役割名>.effort`・役割ごとに 2 行・裁定 id は上の 1 つ・C5）。既存の権能の行 `role.<役割名>` と id が重ならない（行の引きは完全一致）。
+  2. **rules 行**（id は `role.<役割名>.model` と `role.<役割名>.effort`・役割ごとに 2 行・裁定 id は上の 1 つ・C5）。行の本数は役割の閉じた列から導く（`Role::ALL` の要素数 × 2）＝上の実測のとおり現物は 1 役割なので本便が足すのは `role.orchestrator.model` と `role.orchestrator.effort` の 2 本で、列が増えた周は同じ規則で 2 本ずつ増える。既存の権能の行 `role.<役割名>` と id が重ならない（行の引きは完全一致）。
   3. **閉じた表への照合**を manifest の読み込みに足す（`crates/scribe2/src/rules/mod.rs` の `RuleRow` の名の検査・権能の名と対話面の役割を検査している同じ 1 関数の arm を 2 つ足す）: model の値は `Model::parse` で、effort の値は `Effort::parse` で引けること。綴り違いを黙って「既定なし」に倒さない（NFR4）。
   4. **読み手 1 本**を `crates/scribe2/src/seat/role.rs` に置く（役割の隣）: 役割ごとの既定を型で運ぶ小さな struct（model と effort の 2 field・どちらも閉じた型）と、渡された manifest から引く pure 関数 `defaults_of`、埋め込み manifest から引く薄い口 `defaults`（`crates/scribe2/src/seat/mod.rs` の `int_rule` / `int_rule_of` と同じ 2 段）。
   5. **読めない周の理由**は既存の閉じた列 `RuleRead` に variant を 2 つ足して名指す（値が文字列でない周と、字面が閉じた表に無い周）。`as_str` / `no_rule` の網羅 match と宣言順の const slice の消費側が動き、`RuleRead` を網羅 match で record の語彙へ写す `crates/scribe2/src/pipe/confine.rs` の 1 関数も同じ周に arm を埋める（足した 2 つは既存の「行を読めない」側の 1 語に倒す・包みの挙動は不変）。読み手は判定しない側のままで、極性は **fail-closed**（行が無い・不発効・表に無い周は既定に倒さず呼び手が断る・C1「行の無さを既定に倒さない」）。
   6. **値の正本は manifest**（C1 / C14）: 本節が持つのは行 id の形と裁定 id の在り処で、上の値は裁定の要旨の写しに留まり、器が読むのは manifest の行だけ。
 - 触らない: 権能の行 `role.<役割名>` とその値・`Model` と `Effort` の表そのもの（`xhigh` は既に在る）・`ValueShape` と `RuleValue`・R-C7-1・起動行の導出と登録の口（次の節）・極性一覧（guard は増えない）。
 - 歯（`rules_role_defaults_` 接頭辞を `crates/scribe2/tests/e2e/rules.rs` に・読み手の in-file の歯は `seat_role_defaults_` 接頭辞で `crates/scribe2/src/seat/role.rs` に）: (a) 役割ごとに 2 行が在り、行の kind と値の形と発効と裁定 id が一致し、**行の数は役割の閉じた列の 2 倍**（母集団を同時に出す・権能の行の歯と同じ形）／(b) 値が閉じた表に無い manifest は読み込みで拒まれる（model 側・effort 側の 2 例）／(c) 読み手が行から対を型で返し、行が無い・不発効・値が文字列でない・表に無い の 4 周をそれぞれ別の理由で名指す（4 例・fail-closed）／(d) 母集団の数え（行の総数・kind の総数・理由の列の長さ）と `rules` の外形 snapshot を更新する。
+- 約束 ↔ done ↔ 歯 ↔ verify（1:1・行 m の `verify` の 6 行がこの対応の全部）: 形 1 / 2 → 歯 (a) → `rules_role_defaults_`（行の本数が `Role::ALL` の要素数の 2 倍・母集団を同時に出す）／形 3 → 歯 (b) → `rules_role_defaults_`（**否定の枝**: 表に無い値を持つ manifest は model 側・effort 側の 2 例とも読み込みで拒まれる）／形 4 → 歯 (c) → `seat_role_defaults_`（`--lib`・読み手が対を型で返す）／形 5 → 歯 (c) と `rule_read_`（`--lib`・**否定の枝 4 本**: 行なし・不発効・値が文字列でない・表に無いを別の理由で名指し、`pipe/confine.rs` の写しは既存の 1 語に倒れて包みの挙動が変わらない）／形 6 → 歯 (d) → `rules_embedded_manifest_` / `rules_manifest_carries_` / `rules_external_form`（埋め込み manifest が 2 行を運び、母集団の数えと外形 snapshot が更新される）。
 - 却下案: 役割ごとに 1 行で対を list で持つ（要素の順序が散文の規則になる・C2）／値の形に「対」を足す（形の網羅 match と表示と parser が全部動き、対を持つ行は 1 種類しか無い）／model と effort を 1 つの文字列に区切りで詰める（区切りの規則が散文になる）／既定を code に焼く（C1・N2）／effort の閉じた表を席の側へ写す（表は 1 つ・置き場は現状のまま）。
 
 ## 20. 席の起動と立て直しが既定の行から model と effort を導く（契約表の行 n・`s2-07l.433`・行 m の後）
@@ -373,9 +375,8 @@ done = "閾値未満の候補が無い周も妥協の 2 段で席が立って理
 [[contract]]
 id = "m"
 title = "役割ごとの既定 model と effort を rules 行が持つ — 規則の種類を 2 つ・役割ごとに 2 行・値は閉じた表に照合・読み手 1 本と読めない理由 2 つ（裁定 user 2026-09-17T04:23Z）"
-req = ["FR41", "FR40"]
+req = ["FR17", "FR40"]
 section = "19"
-depends = ["h"]
 write-set = ["rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "crates/scribe2/src/seat/mod.rs", "crates/scribe2/src/seat/role.rs", "crates/scribe2/src/pipe/confine.rs", "crates/scribe2/tests/e2e/rules.rs", "crates/scribe2/tests/e2e/snapshots/e2e__rules__rules_external_form.snap"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail rules_role_defaults_", "cargo nextest run -p scribe2 --no-tests=fail rules_embedded_manifest_", "cargo nextest run -p scribe2 --no-tests=fail rules_manifest_carries_", "cargo nextest run -p scribe2 --no-tests=fail rules_external_form", "cargo nextest run -p scribe2 --lib --no-tests=fail seat_role_defaults_", "cargo nextest run -p scribe2 --lib --no-tests=fail rule_read_"]
 size = "S"

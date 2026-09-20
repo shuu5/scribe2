@@ -138,6 +138,31 @@ C1（rules 行を足さない・閾値は無い）・C2 / C2.2（`EventKind` / `
 - **触らない**: consumer の帳簿（`installed_plugins.json`）と cache（§5 と同じく器は書かない）・§4 の `drift=` の語・§5 の口の順序と断り・器の repo の code（本段は運用であって実装の便ではない）。
 - 却下案: 器が consumer の写しの `rules.toml` を自動で書き換える（他人の置き場を書く・§5「何を書かないか」と同じ線）／旧 role の row を新しい binary が読み替える（消した役割を replay に残す＝`.478` の削除が空洞化する）／移行を dispatcher の着地前に行う（consumer の席が止まっている間に列の設計が動く＝2 つの変化を同時に測ることになる）。
 
+## 17. plugin の実体を生成 dir へ寄せ、marketplace の source をその dir にする（契約表の行 h・[ADR-0038](../../design-intent/decisions/ADR-0038-plugin-payload-lives-in-a-generated-dir.html)・`s2-07l.365`）
+
+- 何が起きているか（別 project の席の照会 2026-09-16・逐語は台帳 `s2-07l.365` の notes）: plugin の install は marketplace の `source` が指す dir を cache の一時 dir へ丸ごと copy する実装で、本 repo の `source` は repo 全体（`.claude-plugin/marketplace.json` の値 `"./"`・`cargo xtask gen-manifest` の生成値）である。そのため git-ignored の worktree 群（実測 174 GB）と build 生成物を含んで copy が 120 秒で終わらず、その host の cache が 91 GB に膨らんだ。plugin の実体は 32 MB である。裁定 = user 2026-09-15（形 (a)「plugin 用の生成 dir を marketplace の source にする」の承認）・決定は ADR-0038（accepted・OPT1 採用）。A1 は非該当（plugin の置き場の移動と写しの向き＝消す / 出す / 使うのどれでもない）。A3 も非該当（依存を足さない）。
+- 現物の実測（2026-09-20・本 repo の main・grep と `ls` で数えた）:
+  - plugin の実体は repo root 直下の 2 file `.claude-plugin/plugin.json` と `hooks/hooks.json` で、`.claude-plugin/marketplace.json` と合わせた 3 file が `cargo xtask gen-manifest` の生成物である（置き場は `crates/xtask/src/genmanifest.rs` の 3 定数 `MANIFEST_REL` / `HOOKS_REL` / `MARKETPLACE_REL`）。
+  - ADR-0038 の CTX2 が数えた 3 つ目の dir（復元と退避の skill 2 枚）は `s2-07l.479` の削除で機構ごと消え、現物に該当の dir は無い（`ls` が「そのような file や dir は無い」で返る）＝本節が動かすのは生成物の 2 file だけで、tracked の実体の純移動は 0 面である。
+  - plugin root = checkout root を前提にする現物は 5 つ: (1) 上の 3 定数と `genmanifest.rs` の `render_marketplace` が出す `source` の値 (2) `crates/scribe2/src/seat/cycle/launch.rs` の `derive_launch` が組む起動行の 1 つ目の `--plugin-dir` が anchor そのもの (3) `crates/scribe2/src/pipe/spawn.rs` の `EMBEDDED_PLUGIN_JSON` / `EMBEDDED_HOOKS_JSON` の `include_str!` の path と、consumer の plugin を写すときに読む dir の列 `PLUGIN_DIRS`（2 要素） (4) `crates/scribe2/src/main.rs` の in-file の歯 `name_is_single_source` が workspace root から plugin.json を読む (5) `crates/scribe2/src/account/consumers.rs` が §4 の母集団で席の登録 row の anchor 直下から hooks.json を読む。
+  - 追随するが字面を持たない読み手: `crates/xtask/src/check_facts.rs` と `crates/xtask/src/check_tests.rs` は `genmanifest::MANIFEST_REL` を使う（定数の値が変わればそのまま追随する）。hook の `--plugin-root`（`$CLAUDE_PLUGIN_ROOT`）と §3 の digest の path は root 相対なので不変、install 帳簿の比較（§4）は記録値どうしなので形は不変である。
+- 形（ADR-0038 §3 の OPT1 の写し・番号は下の「約束 ↔ done ↔ 歯」と 1:1）:
+  1. **置き場の定数は core に 1 つ**: `crates/scribe2/src/name.rs` の `NAME` の隣に、repo root 相対の dir 名を値に持つ定数を 1 つ置く（C2.2・NAME と同じ形）。xtask は core に依存しないので、`crates/xtask/src/workspace.rs` が `NAME` を tracked の `name.rs` から読んでいる既存の 1 本と同じ形でこの定数も読む。
+  2. **生成物の置き場**: `plugin.json` と `hooks.json` は生成 dir の配下へ移り（行 h の write-set の `+` の 2 項目）、root 直下の 2 file は同じ便で消える（write-set の `~` の 2 項目）。`marketplace.json` は root の `.claude-plugin/` に残り、`source` の値が生成 dir を指す。生成の対象は 3 file のままで、`cargo xtask check` の drift（render == tracked）は置き場が変わるだけで型は不変である。
+  3. **起動行**: (2) の `derive_launch` の 1 つ目の `--plugin-dir` は anchor の下の生成 dir になる（2 つ目以降の `[[plugin]]` の dir と `[[launch-arg]]` の順は不変）。
+  4. **便の worktree への写し**: (3) の `include_str!` の path は生成 dir の配下を指し、consumer の plugin として写す dir の列も生成 dir の配下から読む。写し先（`<state_dir>/pipe/<run>/plugin/` の下の 1 dir = 1 plugin）と、`name` が `NAME` と同じ周は写さない判定は不変である。
+  5. **読み手**: (4) の in-file の歯と (5) の導入先の読み込み元は同じ定数から解く。`--plugin-root` の記録（§3）と digest の path と install 帳簿の比較（§4）は変えない。
+  6. **設計 doc の追随**: root 直下の 2 file の path を散文か行の write-set に持つ設計 doc（本 doc の §12 (b)・[pipeline.md](./pipeline.md) §5 の手順 5・[vessel-hook.md](./vessel-hook.md)・[seat-state.md](./seat-state.md)・[seat-roles.md](./seat-roles.md) の §9 (b) と契約表の 1 行の write-set）を同じ便で生成 dir 配下へ付け替える＝消えた path を名指す行と散文を残さない。
+- 触らない: 器の作業物の置き場（便の worktree・退役の退避先・台帳・build 生成物）・`drift=` の語の列・§5 の口の順序と断り・hook の `--plugin-root` と digest の path・install 帳簿と cache（器は書かない）・runner / lens が `--plugin-dir` に渡す root 配下の並べ方。
+- 再 install は user 手番: 全 host の全口座 × project で入れ直しが要り、古い install は古い root を指し続ける。その食い違いは §4 の doctor の行（`plugin` / `ledger` の語）が名指す＝器は帳簿を書かない。
+- 歯（`plugin_payload_` 接頭辞・`tests/e2e/hook.rs` と `tests/e2e/pipe/spawn.rs` と `tests/e2e/seat/launch.rs` と `tests/e2e/main.rs`・xtask 側は `crates/xtask/src/genmanifest.rs` の in-file）と**約束 ↔ done ↔ 歯 ↔ verify の 1:1**:
+  - 形 1 → (a) xtask が tracked の `name.rs` から置き場の定数を読み、定数の無い fixture の core を typed に断る（**否定の枝**）／`-p xtask … plugin_payload_`
+  - 形 2 → (b) `gen-manifest` が 3 file を生成し、2 file は生成 dir 配下・`marketplace.json` は root の `.claude-plugin/` にあって `source` が生成 dir を指し、root 直下の旧 path には何も書かれない（**否定の枝**＝旧 path が生成物として再び現れない）／`-p xtask … plugin_payload_`
+  - 形 3 → (c) 偽 claude へ届く起動行の 1 つ目の `--plugin-dir` が anchor の下の生成 dir で、2 つ目以降の列と雛形は不変／`-p scribe2 … plugin_payload_`
+  - 形 4 → (d) toy repo の便で run dir の写しに器の 2 file が在り、別名の plugin を持つ worktree の周だけ consumer の写しが生成 dir 配下から取られ、旧 path にしか plugin を持たない worktree は consumer とは見ない（**否定の枝**）／`-p scribe2 … plugin_payload_`
+  - 形 5 → (e) `name_is_single_source` が生成 dir 配下の plugin.json から `name` を読んで 4 者一致を測り、doctor の consumer 行が生成 dir 配下の hooks.json を読み込み元として digest を出す（記録の無い consumer は従来どおり `unrecorded`＝**否定の枝**）／`-p scribe2 … plugin_payload_` と `-p scribe2 … name_is_single_source`
+  - 形 6 → 設計 doc の追随は `cargo xtask check` の path の検査が測る（歯を足さない）
+- 却下案: ADR-0038 §3 の OPT2〜OPT5（写しは持たない）。加えて設計固有: 生成 dir の名を xtask 側の定数で持つ（正本が 2 つになる・C2.2 の NAME と同じ形を崩す）／旧 path に symlink を残して両方から読めるようにする（cache の copy が link を辿るかが未確認で、写しの単位が閉じない）。
 
 <!-- contracts:begin -->
 schema = 1
@@ -172,4 +197,14 @@ verify = ["cargo nextest run -p scribe2 --no-tests=fail seat_tick_vessel_", "car
 size = "M"
 done = "behind の周に tick が vessel update を 1 回撃って updated: と InstallRecorded 1 件を残し、current / unmeasured / undeclared / refused の周は撃たず、fetch は FETCH_HEAD が tick_stale_s 未満なら撃たず、doctor の consumer 行に behind= が載る"
 depends = ["e"]
+
+[[contract]]
+id = "h"
+title = "plugin の実体を生成 dir へ寄せ marketplace の source をその dir にする — 置き場は core の定数 1 つ・install の写しの単位を plugin に閉じる（ADR-0038 OPT1）"
+req = ["FR61", "FR59"]
+section = "17"
+write-set = ["crates/scribe2/src/name.rs", "crates/xtask/src/workspace.rs", "crates/xtask/src/genmanifest.rs", "~.claude-plugin/plugin.json", "~hooks/hooks.json", "+plugin/.claude-plugin/plugin.json", "+plugin/hooks/hooks.json", ".claude-plugin/marketplace.json", "crates/scribe2/src/pipe/spawn.rs", "crates/scribe2/src/seat/cycle/launch.rs", "crates/scribe2/src/main.rs", "crates/scribe2/src/account/consumers.rs", "crates/scribe2/tests/e2e/hook.rs", "crates/scribe2/tests/e2e/pipe/spawn.rs", "crates/scribe2/tests/e2e/seat.rs", "crates/scribe2/tests/e2e/seat/launch.rs", "crates/scribe2/tests/e2e/main.rs", "docs/design/consumer-sync.md", "docs/design/pipeline.md", "docs/design/vessel-hook.md", "docs/design/seat-state.md", "docs/design/seat-roles.md"]
+verify = ["cargo nextest run -p xtask --no-tests=fail plugin_payload_", "cargo nextest run -p scribe2 --no-tests=fail plugin_payload_", "cargo nextest run -p scribe2 --no-tests=fail name_is_single_source"]
+size = "M"
+done = "gen-manifest の 3 file のうち plugin.json と hooks.json が生成 dir の配下に在って root 直下の旧 path は消え、marketplace の source が生成 dir を指し、置き場は core の定数 1 つが正本で xtask は tracked の core からそれを読み、席の起動行の 1 つ目の --plugin-dir と便の worktree への写しと binary の歯と導入先の読み込み元が同じ定数から解け、consumer の plugin の判定と写し先と hook の --plugin-root と digest の path と install 帳簿の比較は不変で、消えた path を名指す設計 doc の散文と行の write-set が残らない"
 <!-- contracts:end -->
