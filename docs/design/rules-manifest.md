@@ -196,6 +196,21 @@ xtask 側の drift 歯（最小形）: `crates/xtask/src/limits.rs` の `#[cfg(t
 - 触らない: `src` の全部（上限を読む側 `pipe/gate.rs` は行の値を読むだけで、値を code に持たない）・他の行・行 h の契約表の行（着地済みの履歴）。
 - flip-check の入口: 変える test file は `tests/e2e/rules.rs` の 1 本で、3 本の歯のどれも base（値 400000）で RED になる。
 
+## 15. xtask の check_tests.rs の 2 回目の分割（契約表の行 l・純移動・§10 と同型）
+
+- 出所: `crates/xtask/src/check_tests.rs` は幅 120 で正規化した行数が **1229**（上限 R-C4-2 = 1500）＝**余地 271** で、`pipe.size_m_lines` の見積 **300** に 29 行足りない＝`crates/xtask/src/check_tests.rs` を write-set に持つ size M の便は受付が `cap-headroom` で断る。§10（`s2-07l.370`）の分割で 600 行以上に戻った余地が、その後の便が歯を足して 271 まで縮んだ。**2026-09-20 の実測では止まっている便は 0 本**（`crates/xtask/src/check_tests.rs` を write-set に持つ行は 8 本＝[core-boundary.md](./core-boundary.md) 行 a と [gate-cost.md](./gate-cost.md) 行 b と本 doc の行 a〜f で、そのうち M は [gate-cost.md](./gate-cost.md) 行 b の 1 本だけ・その便 `s2-07l.360` は着地済み）。本行は**次の M が受付で止まる前に**余地を戻す先回りで、§10 と同型の純移動である。
+- 現物（planner が grep と正規化行数で実測・main 3926753）: `crates/xtask/src/check_tests.rs` は `crates/xtask/src/check.rs` が `#[path = "check_tests.rs"]` で取り込む子 module（module path は `check::tests`）で、`#[test]` の歯は **30 本**。接頭辞の内訳は `check_fails_` 6・`enum_slices_` 5・`nextest_tmux_group_` 4・`rules_parity_` 4・`paths_clean_` 2・単発 9（母集団は同 file の `#[test]` 全数 30）。§10 が既に 2 つの子（`crates/xtask/src/check_nonrust_tests.rs` と `crates/xtask/src/check_prose_tests.rs`）を末尾の `#[path]` 宣言 2 つで取り込んでいる。`enum_slices_` の 5 本は `crates/xtask/src/enum_slices.rs` の歯で、専用の fixture helper `write_enum_slice`（406 行）を呼ぶのは 5 本だけ＝共有 helper（`check_fixture` / `write_at` / `make_tmp_dir` / `summary_fixture` 等）と独立している。移す区間は 400–617 行の **222 行**（幅 120 で正規化した値）。
+- filter の当たりの実測（`-p xtask` の scope・fn 名の substring・母集団は `crates/xtask/src` の `#[test]` 全数）: `enum_slices_` は `crates/xtask/src/check_tests.rs` の 5 本だけに当たる（他 file 0）。`rules_parity_` 4 本と `nextest_tmux_group_` 4 本も同 file だけに当たるので、親に残る歯の検証行に使える。
+- 約束（この行が作るもの・番号は done と 1:1）:
+  1. `write_enum_slice` と `enum_slices_` の歯 5 本（合計 222 行）を、行 l の write-set の `+` の file へ名・本文・assert・順序を変えずに移す。
+  2. 宣言は §10 の 2 つと同じ `#[path]` の形で `crates/xtask/src/check_tests.rs` の末尾に 1 つ足す＝module path は 1 段深くなるが**歯の fn 名は 1 つも変わらない**（`enum_slices_` の filter が base と同じ 5 本に当たる）。
+  3. 共有 helper は親に残し、子は `use super::…` で読む（可視性を `pub(super)` に上げる以外は触らない・複製しない）。
+  4. 歯の総数は 30 のまま（親 25 本 + 子 5 本）で、親に残る `rules_parity_` 4 本と `nextest_tmux_group_` 4 本は緑のまま。
+  5. 札 `// flip-check: moved <行 l の bead>` を親の末尾（`s2-07l.370` の既存の札の隣）と `+` の file の module doc の直後に対で置く。`s2-07l.257` と `s2-07l.370` の既存の札は持ち越す（純移動の機械証明は [pipeline.md](./pipeline.md) §5.3）。
+  6. 割った後の正規化行数は親が **約 1007**（余地 **約 493**）・`+` の file が **約 235**＝余地 493 は size M（300）の便を受けられる。
+- 触らない: `crates/xtask/src/check.rs` の本体・`crates/xtask/src/enum_slices.rs`・§10 が作った 2 つの子・xtask の他 file・歯の中身。
+- 却下: `check_fails_` の 6 本を移す（filter が `crates/xtask/src/check_nonrust_tests.rs` と flipcheck の歯 2 file にも当たり、検証行が write-set を 3 file 広げる）／親の共有 helper を子へ複製する（純移動でなくなり機械証明が残差を出す）／余地 271 のまま据え置く（次の M が受付で止まる）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -313,4 +328,14 @@ write-set = ["rules/manifest.toml", "crates/scribe2/tests/e2e/rules.rs", "crates
 verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail rules_embedded_manifest_declares_account_selection_threshold", "cargo nextest run -p scribe2 --test e2e --no-tests=fail rules_external_form", "cargo nextest run -p scribe2 --test e2e --no-tests=fail seat_account_relaunch_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail seat_account_tick_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail seat_threshold_95_"]
 size = "M"
 done = "埋め込み manifest の R-C9-1 が値 95 と裁定 id user 2026-09-17T07:30Z を持ち、rules get R-C9-1 の外形が 95 を出し、読み手と選定の code は不変"
+
+[[contract]]
+id = "l"
+title = "xtask の check_tests.rs（1229 行・余地 271）から enum_slices の歯 5 本と専用 fixture を子 module へ割る — 純移動・#[path] で歯の fn 名は不変・札 moved"
+req = ["FR17"]
+section = "15"
+write-set = ["-crates/xtask/src/check_tests.rs", "+crates/xtask/src/check_enum_slices_tests.rs"]
+verify = ["cargo nextest run -p xtask --no-tests=fail enum_slices_", "cargo nextest run -p xtask --no-tests=fail rules_parity_ nextest_tmux_group_"]
+size = "S"
+done = "(1) write_enum_slice と enum_slices_ の歯 5 本が + の file に名・本文・assert・順序のまま在り (2) 宣言が §10 の 2 つと同じ #[path] の形で親の末尾に 1 つ増え enum_slices_ の filter が base と同じ 5 本に当たり (3) 共有 helper は親に残って子が use super:: で読み（可視性を pub(super) に上げる以外は触らず複製もしない） (4) 歯の総数が 30 のまま（親 25 + 子 5）で親に残る rules_parity_ 4 本と nextest_tmux_group_ 4 本が緑のまま (5) 札 flip-check: moved が親の末尾と + の file の module doc の直後に対で在り s2-07l.257 と s2-07l.370 の札が持ち越され (6) file-lines で check_tests.rs の余地が base の 271 から 300 以上へ増える"
 <!-- contracts:end -->

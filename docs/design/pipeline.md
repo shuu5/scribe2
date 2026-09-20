@@ -540,6 +540,53 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
 - 触らない: 歯の名・本文・本数・親の 40 本の helper・`prop.rs` / `polarity.rs` / `rules.rs`（filter が当たるだけで中身は触らない）・受付の口の src。
 - 却下: `contract_` 1 本の filter で verify を書く（9 file に当たり受付が断る）／歯の名を変えて接頭辞を揃える（純移動でなくなり機械証明が残差を出す）／割らずに据え置く（交差の母集団が減らない）。
 
+## 43. pipe/land.rs の「squash と finish」の群を割る（契約表の行 ak・`s2-07l.457` の 2 回目・純移動）
+
+- 出所: `crates/scribe2/src/pipe/land.rs` は幅 120 で正規化した行数が **1416**（上限 R-C4-2 = 1500）＝**余地 84** で、受付が `cap-headroom` で 3 便を断る——行 p（`s2-07l.305`・size S・見積 `pipe.size_s_lines` = 100）・行 ab（`s2-07l.400`・size M・見積 `pipe.size_m_lines` = 300）・行 ah（`s2-07l.428`・size M・300）。行 p の拒否は planner が `pipe preflight` で実測した（2026-09-20・「上限の余地が 84 行で size S の見積に足りない」）。行 aj（`s2-07l.457`・着地済み）が主実測の群を 1 回割った後の姿で、本行は同じ型の 2 回目である。
+- 現物（planner が grep と正規化行数で実測・main 3926753）: 責務は 6 群（入口と番待ち／追随／squash と finish／主実測／anchor の同期／worktree の検査）で、主実測の群は行 aj が子へ出した。残る 5 群のうち **squash と finish の群**は呼び手が閉じている（親の `land` と `attempt` の 2 か所から入り、群の外を呼ぶのは `verdicts_path` と `RUN_TRAILER` と `Terminal` だけ）。群の item は 19 個で、内訳は `open_pr` / `squash` / `squash_message` / `trailer_key` / `subject_of` / `gist_of` と const `CONTRACT_TRAILER` / `REQUIREMENTS_TRAILER`（768–897 行・**130**）、`landed_sha` / `terminal` / `note` / `finish` / `export_verdict` と const `GENERATION` / `CLOSE_REASON` / `SHA_PREFIX`（965–1154 行・**190**）、const `SUBJECT_CHARS` / `ELLIPSIS`（126–131 行・**6**）の合計 **326 行**（幅 120 で正規化した値）。
+- 決定的な制約（実測）: 極性一覧（`crates/scribe2/src/polarity.rs`・`crates/scribe2/tests/e2e/polarity.rs`・snapshot `polarity_external_form`）が境界の型名 `pipe::land::Terminal` を pin し `crate::pipe::land::TERMINAL_POLARITY` を名指しで読む＝**`Terminal` と `TERMINAL_TOKENS` と `TERMINAL_POLARITY` と `impl Terminal` は親に残す**（`MainCheck` / `AnchorPlan` / `WorktreeCheck` と同じ理由・§41 と同型）。`RUN_TRAILER` は追随の群の `landed_squash_of` も読むので親に残す。`VERDICTS_FILE` と `verdicts_path` は `land::verdicts_path` の形で 11 site が引くので親に残す。`land::landed_sha` と `land::terminal` は `crates/scribe2/src/pipe/cli/step.rs` が引くので、親が名指しの `pub use` で再輸出して呼び手の字面を変えない。
+- 約束（この行が作るもの・番号は done と 1:1）:
+  1. 上の 19 item（合計 326 行）を、行 ak の write-set の `+` の file へ名・本文・順序を変えずにそのまま移す。
+  2. `Terminal` / `TERMINAL_TOKENS` / `TERMINAL_POLARITY` / `impl Terminal` / `RUN_TRAILER` / `VERDICTS_FILE` / `verdicts_path` は親に残る＝`polarity_external_form` の snapshot が 1 字も動かない。
+  3. 親は `mod` 宣言 1 行と `use` と名指しの `pub use`（`landed_sha` と `terminal` の 2 つ）だけが増え、`land` / `attempt` の本体は不変。
+  4. 上げるのは**子側**の可視性だけ＝親の `land` と `attempt` が呼ぶ item は `pub(super)`、`pipe` の外から `land::` で引かれる 2 つは `pub(in crate::pipe)`。親側の可視性は変えない（Rust の可視性＝子孫は祖先の私有を見るので、子は親の `RUN_TRAILER` / `verdicts_path` / `Land` の欄を `super::` でそのまま呼べる）。
+  5. in-file の歯 8 本は**1 本も動かさない**（親の `mod tests` に残り、移した item は `use super::` の path 1 行の差し替えだけで引く）。
+  6. 札 `// flip-check: moved s2-07l.457` は既に親に在るので、本行は `// flip-check: moved <行 ak の bead>` を親の歯の区間の先頭と `+` の file の先頭に対で置く（純移動の機械証明は §5.3）。
+  7. 割った後の正規化行数は親が **約 1090**（余地 **約 410**）・`+` の file が **約 340**＝余地 410 は上の 3 便の見積（100 / 300 / 300）を全部満たす。
+- 触らない: `land` / `attempt` / `follow_main` / `rebase_onto` の本体・追随の群・anchor の群・worktree の群・検出線の群・歯の名と assert・e2e。
+- 却下: 追随の群を移す（行 ab が同じ群を触る＝その write-set が 2 file に割れて交差が増える）／`Terminal` ごと移す（極性一覧の型名の pin が動く）／in-file の歯も一緒に移す（純移動の残差が歯の区間の差に広がり、機械証明の読みが難しくなる）／割らずに据え置く（3 便が受付で止まったまま）。
+
+## 44. pipe/move_proof.rs の「diff を読んで item の列にする」群を割る（契約表の行 al・純移動）
+
+- 出所: `crates/scribe2/src/pipe/move_proof.rs` は幅 120 で正規化した行数が **1500**＝上限 R-C4-2 ちょうどで、**余地 0**。[gate-cost.md](./gate-cost.md) の契約表の行 e（`s2-07l.292`・size S・見積 100）が `crates/scribe2/src/pipe/move_proof.rs` を write-set に持つので、受付は `cap-headroom` で断る。`.363`（`pipe/closure.rs` → `pipe/closure/derive.rs`）・行 aj・§10（[rules-manifest.md](./rules-manifest.md)）と同型の純移動で余地を作る。
+- 現物（planner が grep と正規化行数で実測・main 3926753）: 責務は 3 段で、**(1) diff の字面を読む → (2) 宣言を同定する → (3) item の列に切る**の 3 段が前段、**(4) 突き合わせて要約を組む**が後段である。前段の item は 24 個で、内訳は `FileDiff` / `HEADERS` / `parse_diff` / `split_git_paths` / `hunk_start` / `hunk_line` / `header_line`（189–278 行・**91**）、`Kind` / `KINDS` / `impl Kind` / `Declaration` / `strip_visibility` / `is_scope` / `QUALIFIERS` / `declaration_of` / `named`（279–417 行・**139**）、`Item` / `Located` / `is_prefix` / `is_continuation` / `starts_item` / `items_of` / `item_end` / `build_item`（418–544 行・**127**）の合計 **357 行**（幅 120 で正規化した値）。後段（`comment_diff` / `use_spans` / `pair_items` / `matched_of` / `residual_lines` / `render` ほか・545–856 行）は前段の `Located` と `Item` を受け取るだけで、前段は後段の item を 1 つも呼ばない（呼び手の向きは片道・grep で確認）。
+- 決定的な制約（実測）: `move_proof` の外から修飾付きで引かれる名は 5 つだけで（`judge` / `keep` / `LensInput` / `POLARITY` / `RULINGS_FILE`・`crates/scribe2/src` と `crates/scribe2/tests` の全数を grep）、**どれも前段に無い**＝移しても外の字面は 1 つも変わらない。極性一覧が pin する型名 `pipe::move_proof::LensInput` も親に残る側である。
+- 約束（この行が作るもの・番号は done と 1:1）:
+  1. 上の 24 item（合計 357 行）を、行 al の write-set の `+` の file へ名・本文・順序を変えずにそのまま移す。
+  2. 後段の 6 群と公開の 5 名（`judge` / `keep` / `LensInput` / `POLARITY` / `RULINGS_FILE`）は親に残る＝`polarity_external_form` の snapshot が 1 字も動かない。
+  3. 親は `mod` 宣言 1 行と `use` だけが増え、後段の本体は不変。`pub use` は要らない（前段の名を `move_proof::` で引く呼び手が 0 件だから）。
+  4. 上げるのは**子側**の可視性だけ（後段が呼ぶ item を `pub(super)`）。親側の可視性は変えない。
+  5. in-file の歯 19 本は**1 本も動かさない**（親の `mod tests` に残り、移した item は `use super::` の path 1 行の差し替えだけで引く）。
+  6. 札 `// flip-check: moved <行 al の bead>` を親の歯の区間の先頭と `+` の file の先頭に対で置く（純移動の機械証明は §5.3）。
+  7. 割った後の正規化行数は親が **約 1143**（余地 **約 357**）・`+` の file が **約 370**＝余地 357 は待っている便の見積（100）を満たし、size M（300）の便も受けられる。
+- 触らない: 後段の突き合わせと要約・`LensInput` の 3 値・`NotPure` の語彙・`keep` の書き口・歯の名と assert・e2e。
+- 却下: 後段を移す（`LensInput` と `POLARITY` が極性一覧の pin を持ち、`judge` / `keep` の呼び手の字面が変わる）／in-file の歯だけを別 file へ出す（余地は空くが責務は割れず、次に足す便が同じ hub に戻る）／割らずに据え置く（余地 0 のまま 1 行も足せない）。
+
+## 45. xtask の flipcheck.rs の「nextest を撃って出力を読む」群を割る（契約表の行 am・純移動・行 j の 2 回目）
+
+- 出所: `crates/xtask/src/flipcheck.rs` は幅 120 で正規化した行数が **1284**（上限 R-C4-2 = 1500）＝**余地 216** で、行 c（`s2-07l.170`・size M・見積 300）が `crates/xtask/src/flipcheck.rs` を write-set に持つので受付が `cap-headroom` で断る。行 j（着地済み）が git / tar の群を 1 回割った後の姿で、本行は同じ型の 2 回目である。
+- 現物（planner が grep と正規化行数で実測・main 3926753）: 責務は 9 群で、git / tar の群は行 j が子へ出した。残る群のうち **nextest を撃って出力を読む群**は閉じている（外部 process を起こす面と、その stdout を読む面だけを持ち、判定・overlay・札の面を呼ばない）。群の item は 8 個で、`trimmed` / `relay` / `nextest` / `nextest_with` / `nextest_args` / `strip_csi` / `FailedTest` / `impl FailedTest` / `failed_tests`（507–657 行・**151**・幅 120 で正規化した値）。
+- 決定的な制約（実測）: 歯の 6 file のうち 5 file（`crates/xtask/src/flipcheck_declaration_tests.rs` / `crates/xtask/src/flipcheck_overlay_tests.rs` / `crates/xtask/src/flipcheck_moved_tests.rs` / `crates/xtask/src/flipcheck_entrance_tests.rs` / `crates/xtask/src/flipcheck_retroactive_tests.rs`）は `use super::*;` で引くので再輸出だけで無傷になる。残る `crates/xtask/src/flipcheck_tests.rs` は `use super::{…}` で 12 名を名指しし、そのうち `failed_tests` / `nextest_args` / `FailedTest` の 3 つが移る側に当たる＝**親が名指しの `pub(crate) use` で再輸出して歯の import を 1 字も変えない**（行 j が同じ形を取った）。行 c が触るのは札と面と宣言の群（`RETROACTIVE_MARK` / `MOVED_MARK` / `marker_beads` / `is_test_file` / `judge_into`）で、移す群と交差しない。
+- 約束（この行が作るもの・番号は done と 1:1）:
+  1. 上の 8 item（合計 151 行）を、行 am の write-set の `+` の file へ名・本文・順序を変えずにそのまま移す。
+  2. 親は `mod` 宣言 1 行と名指しの `pub(crate) use`（`failed_tests` / `nextest_args` / `FailedTest` の 3 つ）だけが増え、`judge_each` / `base_is_green` / `retry_named` / `run_on_base` の本体は不変。
+  3. 歯の 6 file は**1 行も触らない**（5 file は `use super::*;`・1 file は再輸出で解ける）。
+  4. 上げるのは**子側**の可視性だけ（親が呼ぶ item を `pub(super)`、再輸出する 3 つを `pub(crate)`）。親側の可視性は変えない。
+  5. 札 `// flip-check: moved <行 am の bead>` を親の歯の区間の先頭と `+` の file の先頭に対で置く（純移動の機械証明は §5.3）。
+  6. 割った後の正規化行数は親が **約 1133**（余地 **約 367**）・`+` の file が **約 165**＝余地 367 は行 c の見積（300）を満たす。
+- 触らない: 判定の群（`judge_run` / `judge_one` / `Counts` / `ok_line` / `BaseNotGreen` / `base_not_green`）・overlay の群・札と面の群（行 c の面）・`run` と `judge` の外形・歯の中身。
+- 却下: 判定の群を移す（84 行で M の余地に届かない）／札と面の群を移す（行 c が同じ群を触る）／歯の file を割る（歯の総数は変わらず親の余地が空かない）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -908,4 +955,34 @@ write-set = ["-crates/scribe2/src/pipe/land.rs", "crates/scribe2/src/pipe/land/v
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail pipe_land_subject_", "cargo nextest run -p scribe2 --no-tests=fail polarity_external_form"]
 size = "S"
 done = "主実測の群 9 item と const 3 つが子 module に在り、MainCheck は親に残って極性一覧の snapshot が不変、親は mod 宣言と use だけが増え（子側の pub(super) 4 語〔measure_main は finish が呼ぶ〕で land と finish の本体は不変）、file-lines で land.rs の余地が base より 180 行以上増え、in-file と e2e の歯が全部緑、純移動の機械証明の残差が use と path と可視性の語だけ"
+
+[[contract]]
+id = "ak"
+title = "pipe/land.rs の「squash と finish」の群（19 item・326 行）を子 module へ割る — 純移動・Terminal は親に残す（極性一覧の pin）・landed_sha と terminal は pub use で再輸出・札 moved"
+req = ["FR50"]
+section = "43"
+write-set = ["-crates/scribe2/src/pipe/land.rs", "+crates/scribe2/src/pipe/land/finish.rs", "crates/scribe2/tests/e2e/polarity.rs"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail pipe_land_subject_", "cargo nextest run -p scribe2 --lib --no-tests=fail pipe_terminal_land_landed_sha_reads_only_its_own_run_done pipe_terminal_land_squash_message_carries_the_contract_and_requirements_trailers pipe_terminal_land_outcomes_are_the_closed_seven", "cargo nextest run -p scribe2 --test e2e --no-tests=fail polarity_external_form"]
+size = "S"
+done = "(1) squash と finish の群 19 item が + の file に名・本文・順序のまま在り (2) Terminal / TERMINAL_TOKENS / TERMINAL_POLARITY / impl Terminal / RUN_TRAILER / VERDICTS_FILE / verdicts_path が親に残って polarity_external_form の snapshot が 1 字も動かず (3) 親は mod 宣言 1 行と use と landed_sha / terminal の 2 つの pub use だけが増えて land と attempt の本体が不変で (4) 可視性を上げるのは子側だけ（親が呼ぶ item は pub(super)・land:: で引かれる 2 つは pub(in crate::pipe)）で親側の可視性は 1 語も変わらず (5) in-file の歯 8 本が 1 本も動かず全部緑で (6) 札 flip-check: moved が親の歯の区間の先頭と + の file の先頭に対で在り (7) file-lines で land.rs の余地が base の 84 から 300 以上へ増える"
+
+[[contract]]
+id = "al"
+title = "pipe/move_proof.rs の「diff を読んで item の列にする」群（24 item・357 行）を子 module へ割る — 純移動・公開の 5 名は親に残す・呼び手の字面は不変・札 moved"
+req = ["FR9"]
+section = "44"
+write-set = ["-crates/scribe2/src/pipe/move_proof.rs", "+crates/scribe2/src/pipe/move_proof/read.rs", "crates/scribe2/tests/e2e/polarity.rs"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail move_proof_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail polarity_external_form"]
+size = "S"
+done = "(1) 前段の 24 item が + の file に名・本文・順序のまま在り (2) 後段の 6 群と外から引かれる 5 名（judge / keep / LensInput / POLARITY / RULINGS_FILE）が親に残って polarity_external_form の snapshot が 1 字も動かず (3) 親は mod 宣言 1 行と use だけが増えて pub use が 0 本で（前段の名を move_proof:: で引く呼び手が 0 件） (4) 可視性を上げるのは子側だけ（後段が呼ぶ item を pub(super)）で親側の可視性は 1 語も変わらず (5) in-file の歯 19 本が 1 本も動かず全部緑で (6) 札 flip-check: moved が親の歯の区間の先頭と + の file の先頭に対で在り (7) file-lines で move_proof.rs の余地が base の 0 から 300 以上へ増える"
+
+[[contract]]
+id = "am"
+title = "xtask の flipcheck.rs から nextest を撃って出力を読む群（8 item・151 行）を子 module へ割る — 純移動・歯の 6 file は 1 行も触らず pub(crate) use で再輸出・札 moved"
+req = ["FR7"]
+section = "45"
+write-set = ["-crates/xtask/src/flipcheck.rs", "+crates/xtask/src/flipcheck/nextest.rs", "crates/xtask/src/flipcheck_tests.rs"]
+verify = ["cargo nextest run -p xtask --no-tests=fail flip_check_parses_failed_tests_", "cargo nextest run -p xtask --no-tests=fail flip_check_child_nextest_disables_color no_fail_fast_is_in_flipcheck_nextest_args"]
+size = "S"
+done = "(1) nextest を撃って出力を読む群 8 item が + の file に名・本文・順序のまま在り (2) 親は mod 宣言 1 行と failed_tests / nextest_args / FailedTest の 3 つの pub(crate) use だけが増えて judge_each / base_is_green / retry_named / run_on_base の本体が不変で (3) 歯の 6 file が 1 行も変わらず（5 file は use super::* ・1 file は再輸出で解ける） (4) 可視性を上げるのは子側だけ（親が呼ぶ item は pub(super)・再輸出する 3 つは pub(crate)）で親側の可視性は 1 語も変わらず (5) 札 flip-check: moved が親の歯の区間の先頭と + の file の先頭に対で在り (6) file-lines で flipcheck.rs の余地が base の 216 から 300 以上へ増える"
 <!-- contracts:end -->
