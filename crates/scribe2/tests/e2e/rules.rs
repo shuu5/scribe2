@@ -832,6 +832,33 @@ fn rules_host_embedded_manifest_declares_no_account_and_keeps_usage_timeout() {
     assert_eq!(timeout.ruled_at, "2026-09-12", "裁定日");
 }
 
+/// 埋め込みの manifest は選定の前計測の鮮度の行 `fleet.usage_fresh_s`（設計 account-autonomy.md §13 (1)・`s2-07l.407`）を
+/// 値 300・裁定 id `user 2026-09-16T11:14Z`・裁定日 2026-09-16 つきで持ち、kind `UsageFreshS` は `ALL` に在って
+/// `fleet.usage_timeout_s` と同じ Int の形（行と variant は対で足す・`fleet.usage_timeout_s` の歯と同型）。
+#[test]
+fn rules_embedded_manifest_declares_usage_fresh_s_with_its_ruling() {
+    let manifest = match Manifest::embedded() {
+        Ok(found) => found,
+        Err(errors) => {
+            let lines: Vec<String> = errors.iter().map(ToString::to_string).collect();
+            panic!("埋め込み manifest が拒まれた:\n{}", lines.join("\n"))
+        }
+    };
+    let fresh = manifest.get("fleet.usage_fresh_s").expect("鮮度の行が在る");
+    assert_eq!(fresh.value, RuleValue::Int(300), "user 裁定 2026-09-16T11:14Z の値（秒）");
+    assert_eq!(fresh.kind, RuleKind::UsageFreshS, "kind");
+    assert!(ALL.contains(&RuleKind::UsageFreshS), "variant は ALL に在る");
+    let at = ALL.iter().position(|kind| *kind == RuleKind::UsageTimeoutS).unwrap_or_default();
+    assert_eq!(ALL.get(at.saturating_add(1)), Some(&RuleKind::UsageFreshS), "宣言順は UsageTimeoutS の直後");
+    assert_eq!(fresh.kind.shape(), ValueShape::Int, "値の形は Int（秒）");
+    assert!(fresh.enabled, "既定で効く");
+    assert_eq!(fresh.ruling, "user 2026-09-16T11:14Z", "裁定 id");
+    assert_eq!(fresh.ruled_at, "2026-09-16", "裁定日");
+    let timeout = manifest.get("fleet.usage_timeout_s").expect("待ち時間の行が在る");
+    assert_eq!(timeout.kind.shape(), fresh.kind.shape(), "待ち時間の行と同じ形");
+    assert_ne!(timeout.ruling, fresh.ruling, "裁定は別（相乗りではない・rules-diff §4.3 (ii)）");
+}
+
 // ─── 席の口座を持つ単位は project の群（host の面の `[[account-group]]`・account-lifecycle.md §17・接頭辞 `host_group_`） ───
 
 /// 群 2 つを持つ host の面（口座 g1 / g2 / g3 は見出し行 3 / 6 / 9・群の見出し行は 12 と 17）。
@@ -1189,7 +1216,7 @@ fn rules_embedded_manifest_is_valid_and_covers_all_kinds() {
     // **tracked な `rules/manifest.toml` の全行が受理される**（`parse` は 1 件でも違反が
     // 在れば `Err` を返すので、ここに届いた時点で全行が必須 key を持つ）。母集団を額面に
     // 出すのは、行が黙って落ちた周を「全部読めた」と読み違えないためである。
-    assert_eq!(manifest.rows().len(), 47, "埋め込み manifest の行数（母集団・`.217` で +2・`.249` で +3・`.254` で +1・`.168` で +1・`.297` で +1・`.315` で +1・`.322` で +1・`.360` で +1・`.423` で +2・`.478` で -1〔役割の行 2 本が 1 本〕・`.479.1` で -7〔席の自律の行〕・`.479.2` で -3〔作業記憶の行 1 本と棚卸しの行 2 本〕・`.382` で +1〔終端の CI の上限〕・`.433` で +2〔役割の既定の model と effort〕）");
+    assert_eq!(manifest.rows().len(), 48, "埋め込み manifest の行数（母集団・`.217` で +2・`.249` で +3・`.254` で +1・`.168` で +1・`.297` で +1・`.315` で +1・`.322` で +1・`.360` で +1・`.423` で +2・`.478` で -1〔役割の行 2 本が 1 本〕・`.479.1` で -7〔席の自律の行〕・`.479.2` で -3〔作業記憶の行 1 本と棚卸しの行 2 本〕・`.382` で +1〔終端の CI の上限〕・`.433` で +2〔役割の既定の model と effort〕・`.407` で +1〔選定の前計測の鮮度〕）");
     for kind in ALL {
         let covered = manifest.rows().iter().any(|row| row.kind == *kind);
         assert!(covered, "{} の行が manifest に無い", kind.as_str());
@@ -1362,7 +1389,7 @@ fn rules_embedded_manifest_declares_one_capability_row_per_role() {
     assert!(ALL.contains(&RuleKind::RoleCapabilities), "ALL に在る（末尾は `.433` の RoleEffort）");
     assert_eq!(RuleKind::parse("RoleCapabilities"), Some(RuleKind::RoleCapabilities), "kind を字面から引ける");
     let kinds = ALL.len();
-    assert_eq!(kinds, 47, "kind の母集団（`.201` で +1・`.217` で +2・`.249` で +3・`.254` で +1・`.168` で +1・`.297` で +1・`.315` で +1・`.322` で +1・`.360` で +1・`.423` で +2・`.479.2` で -3・`.382` で +1〔終端の CI の上限〕・`.433` で +2〔役割の既定の 2 種〕）");
+    assert_eq!(kinds, 48, "kind の母集団（`.201` で +1・`.217` で +2・`.249` で +3・`.254` で +1・`.168` で +1・`.297` で +1・`.315` で +1・`.322` で +1・`.360` で +1・`.423` で +2・`.479.2` で -3・`.382` で +1〔終端の CI の上限〕・`.433` で +2〔役割の既定の 2 種〕・`.407` で +1〔選定の前計測の鮮度〕）");
 }
 
 /// 禁じる語列の行（`runner.denied_commands`・`RuleKind::RunnerDeniedCommands`・裁定 id `user 2026-09-14`・ADR-0025 §2.1・

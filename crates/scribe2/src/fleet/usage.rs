@@ -12,7 +12,7 @@
 //! 出力は 2 形（設計 §11）: 1 行形（`usage: account=…`・機械の読み手の面・字面は不変）と `--table` の表
 //! （人の読む面・[`table`] の pure 関数 1 本が組む・置き場の出所は見出し行にだけ載る）。
 
-use super::cli::{host, now_utc, optional};
+use super::cli::{format_utc, host, now_utc, optional};
 use super::json_tree::{self, Tree};
 use super::store::{self, LockPolicy};
 use super::{
@@ -45,6 +45,9 @@ const DEFAULT_CLIENT: &str = "curl";
 
 /// 待ち時間の上限を持つ rules 行。
 const ROW_TIMEOUT: &str = "fleet.usage_timeout_s";
+
+/// 選定の前計測の鮮度（秒）を持つ rules 行（設計 account-autonomy.md §13 (1)・読み手は [`fresh_of`] の 1 つ）。
+const ROW_FRESH: &str = "fleet.usage_fresh_s";
 
 /// curl が `--max-time` を超えたときの rc。
 const RC_CLIENT_TIMEOUT: i32 = 28;
@@ -101,6 +104,17 @@ impl Refresh {
     }
 }
 
+/// 計測の方針（設計 account-autonomy.md §13 (4)・閉じた enum・計測の実装は [`measure`] の 1 本のまま）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Freshness {
+    /// 鮮度に関わらず全口座を測る（`fleet usage` の口・挙動不変）。
+    Always,
+    /// 鮮度つき（選定の前計測）: 最新の回が全部実測でその ts が `now − 秒` より新しい口座は測り直さず
+    /// （子 process を起こさず event も書かない）、測り直した口座が読みに届かなかった（`HttpStatus` / `Timeout`）
+    /// 周に最新の回が実測ならその Unmeasured を追記せず実測を最新のまま使う（§13 (2) / (3)）。
+    Within(u64),
+}
+
 /// 口座を読むのに要る、口座に依らない材料。
 struct Reader<'a> {
     /// 残量を聞く client（`--curl`）。
@@ -111,6 +125,28 @@ struct Reader<'a> {
     timeout_s: u64,
     /// refresh の子を止めるときの猶予（ms・`pipe.stop_grace_ms`）。
     grace_ms: u64,
+    /// 鮮度の境（`now − fleet.usage_fresh_s` の ts・[`Freshness::Within`] の周だけ `Some`）。ts がこれより新しい
+    /// 実測の口座は測り直さない。`None`（[`Freshness::Always`]）の周は鮮度も kept も見ない。
+    cutoff: Option<String>,
+    /// `--model`（数える窓の弁別・[`Freshness::Within`] の周だけ読む）。
+    model: Option<&'a str>,
+}
+
+/// 口座の最新の回が全部実測であるときの、その ts と行（[`measured_round`]）。
+struct MeasuredRound {
+    /// 最新の回の ts。
+    ts: String,
+    /// 最新の回の行。
+    rows: Vec<Allowance>,
+}
+
+/// 口座 1 つを方針に沿って読んだ結果（[`read_by_policy`]）。
+enum Read {
+    /// 測った（行を追記する）。refresh を試みた周はその結果。
+    Measured(Vec<Allowance>, Option<Refresh>),
+    /// 追記しない: 新しい実測を持つので測らなかった（理由なし）か、測ったが読みに届かず最新の実測を保った
+    /// （kept の理由）。行はどちらも最新の実測。
+    Kept(Vec<Allowance>, Option<UnmeasuredReason>),
 }
 
 /// `fleet usage` を止める誤り（設計 §6）。極性は fail-closed（[`Self::POLARITY`]）。
@@ -152,11 +188,18 @@ impl std::fmt::Display for UsageError {
 }
 
 /// `fleet usage` の入口。`--show` が在れば read-only の表示だけを行う。**1 行形**（機械の読み手の面・字面は不変）。
+/// 鮮度に関わらず全口座を測る（[`Freshness::Always`]）。
 pub fn run(args: &[String], dir: &Path) -> Outcome {
+    run_with(args, dir, Freshness::Always)
+}
+
+/// 計測の方針を選べる入口（選定の前計測は [`Freshness::Within`] で呼ぶ・設計 account-autonomy.md §13 (4)）。
+/// `--show` は方針に依らず read-only の表示。
+pub fn run_with(args: &[String], dir: &Path, freshness: Freshness) -> Outcome {
     let result = if args.iter().any(|arg| arg == "--show") {
         show(args, dir)
     } else {
-        measure(args, dir)
+        measure(args, dir, freshness)
     };
     result.unwrap_or_else(|error| Outcome::failed(error.rc(), vec![error.to_string()]))
 }
@@ -176,8 +219,8 @@ pub fn run_in(args: &[String], place: &StateDir) -> Outcome {
 /// `allowance` から組む（1 行形と同じ出所・stdout は表に置き換わる）。
 fn tabled(args: &[String], place: &StateDir, read_only: bool) -> Result<Outcome, UsageError> {
     let dir = place.path.as_path();
-    let mut outcome = if read_only { Outcome::ok(Vec::new()) } else { measure(args, dir)? };
-    let (_, labels) = accounts(args, dir)?;
+    let mut outcome = if read_only { Outcome::ok(Vec::new()) } else { measure(args, dir, Freshness::Always)? };
+    let (_, labels, _) = accounts(args, dir)?;
     let events = store::read_all(dir).map_err(|errors| UsageError::Store(joined(&errors)))?;
     let state = replay(&events);
     let rows: Vec<TableRow> = labels.iter().map(|label| table_row(label, &state)).collect();
@@ -328,8 +371,10 @@ pub fn endpoint() -> String {
     segments.join("-")
 }
 
-/// 口座を 1 つずつ読み、窓ごとに追記し、口座ごとに 1 行を返す。
-fn measure(args: &[String], dir: &Path) -> Result<Outcome, UsageError> {
+/// 口座を 1 つずつ読み、窓ごとに追記し、口座ごとに 1 行を返す。方針が [`Freshness::Within`] の周は口座ごとに
+/// [`read_by_policy`] が測るか保つかを決める（kept の周は stderr に `usage: account=<label> kept reason=<reason>`
+/// の 1 行・stdout の行は最新の実測の 1 行形のまま）。
+fn measure(args: &[String], dir: &Path, freshness: Freshness) -> Result<Outcome, UsageError> {
     let client = optional(args, "--curl")
         .map_err(UsageError::Args)?
         .unwrap_or(DEFAULT_CLIENT)
@@ -338,34 +383,112 @@ fn measure(args: &[String], dir: &Path) -> Result<Outcome, UsageError> {
         .map_err(UsageError::Args)?
         .unwrap_or(DEFAULT_CLAUDE)
         .to_owned();
-    let (manifest, labels) = accounts(args, dir)?;
+    let (manifest, labels, state) = accounts(args, dir)?;
     if labels.is_empty() {
         return Ok(undeclared());
     }
+    // `--model` は選定の flag（`fleet usage` の口は読まない＝外形不変）。
+    let model = match freshness {
+        Freshness::Always => None,
+        Freshness::Within(_) => optional(args, "--model").map_err(UsageError::Args)?,
+    };
     let reader = Reader {
         client: &client,
         claude: &claude,
         timeout_s: timeout_of(&manifest)?,
         grace_ms: grace_of(&manifest),
+        cutoff: cutoff_of(freshness),
+        model,
     };
     let policy = LockPolicy::embedded().map_err(|err| UsageError::Store(err.to_string()))?;
     let host = host();
     let mut outcome = Outcome::ok(Vec::new());
     for label in &labels {
-        let (rows, refreshed) = read_account(dir, label, &reader);
-        let ts = now_utc();
-        for row in &rows {
-            let warnings = store::append(dir, &event_of(&ts, &host, row), policy)
-                .map_err(|err| UsageError::Store(err.to_string()))?;
-            outcome.err.extend(warnings.iter().map(|w| w.as_str().to_owned()));
-        }
-        let mut line = render(label, &rows);
-        if let Some(refresh) = refreshed {
-            line.push_str(&format!(" refresh={}", refresh.as_str()));
-        }
+        let prior = measured_round(label, &state.allowance, reader.model);
+        let line = match read_by_policy(dir, label, &reader, prior) {
+            Read::Kept(rows, reason) => {
+                if let Some(reason) = reason {
+                    outcome.err.push(format!("usage: account={label} kept reason={}", reason.as_str()));
+                }
+                render(label, &rows)
+            }
+            Read::Measured(rows, refreshed) => {
+                let ts = now_utc();
+                for row in &rows {
+                    let warnings = store::append(dir, &event_of(&ts, &host, row), policy)
+                        .map_err(|err| UsageError::Store(err.to_string()))?;
+                    outcome.err.extend(warnings.iter().map(|w| w.as_str().to_owned()));
+                }
+                let mut line = render(label, &rows);
+                if let Some(refresh) = refreshed {
+                    line.push_str(&format!(" refresh={}", refresh.as_str()));
+                }
+                line
+            }
+        };
         outcome.out.push(line);
     }
     Ok(outcome)
+}
+
+/// 鮮度の境: [`Freshness::Within`] の周は `now − 秒` の ts（[`format_utc`] の字面・実測行の `ts` と同じ形で
+/// 字面比較できる）・[`Freshness::Always`] は `None`。
+fn cutoff_of(freshness: Freshness) -> Option<String> {
+    match freshness {
+        Freshness::Always => None,
+        Freshness::Within(secs) => Some(format_utc((now_ms() / 1000).saturating_sub(secs))),
+    }
+}
+
+/// 口座 1 つを方針に沿って読む（設計 account-autonomy.md §13 (2) / (3)）:
+/// (2) 最新の回が全部実測でその ts が境より**新しい**口座は測らない（子 process を起こさない）。
+/// (3) 測った結果が読みに届かなかった側（[`unreachable_reason`]）で、最新の回が実測（古さは問わない）なら
+/// その実測を保つ（追記しない）。最新の回が Unmeasured・行なしの周は従来どおり測った行を返す。
+/// [`Reader::cutoff`] が `None`（[`Freshness::Always`]）の周は (2) も (3) も掛けない。
+fn read_by_policy(dir: &Path, label: &str, reader: &Reader<'_>, prior: Option<MeasuredRound>) -> Read {
+    let Some(cutoff) = reader.cutoff.as_deref() else {
+        let (rows, refreshed) = read_account(dir, label, reader);
+        return Read::Measured(rows, refreshed);
+    };
+    if let Some(found) = prior.as_ref().filter(|found| found.ts.as_str() > cutoff) {
+        return Read::Kept(found.rows.clone(), None);
+    }
+    let (rows, refreshed) = read_account(dir, label, reader);
+    match (prior, unreachable_reason(&rows)) {
+        (Some(found), Some(reason)) => Read::Kept(found.rows, Some(reason)),
+        _ => Read::Measured(rows, refreshed),
+    }
+}
+
+/// 測った結果が「読みに届かなかった」側（口座単位の `HttpStatus` / `Timeout`・設計 §13 (3)）ならその理由。
+/// 本文の形の失敗（`BodyUnreadable` / `ShapeMismatch`）・credential の失敗・client の不在は含まない（値の側の
+/// 失敗は従来どおり追記する）。
+fn unreachable_reason(rows: &[Allowance]) -> Option<UnmeasuredReason> {
+    match rows {
+        [Allowance::Unmeasured(found)]
+            if found.window.is_none()
+                && matches!(found.reason, UnmeasuredReason::HttpStatus | UnmeasuredReason::Timeout) =>
+        {
+            Some(found.reason)
+        }
+        _ => None,
+    }
+}
+
+/// 口座の最新の回が**全部実測**（数える窓に Unmeasured が無い・弁別は選定の [`super::select::counts`] と同じ
+/// 1 関数）ならその ts と行。行が無い・数える窓に Unmeasured が在る周は `None`。古さは見ない（reset を過ぎた
+/// 実測を古いと読むのは選定の側・鮮度の規則を 2 か所に持たない）。
+fn measured_round(
+    label: &str,
+    allowance: &BTreeMap<AllowanceKey, AllowanceLatest>,
+    model: Option<&str>,
+) -> Option<MeasuredRound> {
+    let (ts, rows) = latest_round(label, allowance)?;
+    let unmeasured = rows.iter().any(|row| match row {
+        Allowance::Unmeasured(found) => super::select::counts(model, found.window, found.model.as_deref()),
+        Allowance::Measured(_) => false,
+    });
+    (!unmeasured).then_some(MeasuredRound { ts, rows })
 }
 
 /// rules 行 `pipe.stop_grace_ms` の ms。渡された manifest に発効した整数の行が無ければ埋め込みの行を読む
@@ -378,12 +501,10 @@ fn grace_of(manifest: &Manifest) -> u64 {
 
 /// replay の `allowance` から、口座ごとに最新の 1 回分を同じ 1 行形で出す（lock を取らない）。
 fn show(args: &[String], dir: &Path) -> Result<Outcome, UsageError> {
-    let (_, labels) = accounts(args, dir)?;
+    let (_, labels, state) = accounts(args, dir)?;
     if labels.is_empty() {
         return Ok(undeclared());
     }
-    let events = store::read_all(dir).map_err(|errors| UsageError::Store(joined(&errors)))?;
-    let state = replay(&events);
     let lines = labels
         .iter()
         .filter_map(|label| latest_line(label, &state.allowance))
@@ -398,18 +519,23 @@ fn latest_line(label: &str, allowance: &BTreeMap<AllowanceKey, AllowanceLatest>)
 
 /// 口座 1 つの最新の回（`ts` が最大の行の集まり）。行が無ければ `None`（1 行形と表の同じ出所）。
 fn latest_rows(label: &str, allowance: &BTreeMap<AllowanceKey, AllowanceLatest>) -> Option<Vec<Allowance>> {
+    latest_round(label, allowance).map(|(_, rows)| rows)
+}
+
+/// 口座 1 つの最新の回の ts と行（[`latest_rows`] の出所・鮮度の判定は ts を読む）。行が無ければ `None`。
+fn latest_round(label: &str, allowance: &BTreeMap<AllowanceKey, AllowanceLatest>) -> Option<(String, Vec<Allowance>)> {
     let mine: Vec<&AllowanceLatest> = allowance
         .iter()
         .filter(|(key, _)| key.account == label)
         .map(|(_, latest)| latest)
         .collect();
     let newest = mine.iter().map(|latest| latest.ts.as_str()).max()?;
-    Some(
-        mine.iter()
-            .filter(|latest| latest.ts == newest)
-            .map(|latest| latest.allowance.clone())
-            .collect(),
-    )
+    let rows = mine
+        .iter()
+        .filter(|latest| latest.ts == newest)
+        .map(|latest| latest.allowance.clone())
+        .collect();
+    Some((newest.to_owned(), rows))
 }
 
 /// 宣言を読む: tracked の面（`rules` = `--rules PATH` か埋め込み）に host の面（`<dir>/host.toml`）を合わせる
@@ -420,12 +546,14 @@ pub(super) fn declared(rules: Option<&str>, dir: &Path) -> Result<Manifest, Usag
 }
 
 /// manifest を読み、**有効な口座の集合**（宣言 − 退役中・[`super::effective_accounts`]）の label を宣言順で返す
-/// （退役中の口座は測らない・account-lifecycle.md §3）。event log を読めない周は [`UsageError::Store`]。
-fn accounts(args: &[String], dir: &Path) -> Result<(Manifest, Vec<String>), UsageError> {
+/// （退役中の口座は測らない・account-lifecycle.md §3）。読んだ置き場の replay も返す（鮮度の判定と `--show` が
+/// 同じ 1 回の読みを使う）。event log を読めない周は [`UsageError::Store`]。
+fn accounts(args: &[String], dir: &Path) -> Result<(Manifest, Vec<String>, super::State), UsageError> {
     let manifest = declared(optional(args, "--rules").map_err(UsageError::Args)?, dir)?;
     let events = store::read_all(dir).map_err(|errors| UsageError::Store(joined(&errors)))?;
-    let labels = super::effective_accounts(&manifest, &replay(&events));
-    Ok((manifest, labels))
+    let state = replay(&events);
+    let labels = super::effective_accounts(&manifest, &state);
+    Ok((manifest, labels, state))
 }
 
 /// 宣言が 0 件の周の結果（設計 account-lifecycle.md §2「宣言なしを出す・止めない」）: stdout 0 行・stderr に 1 行・rc 0・
@@ -438,15 +566,27 @@ fn undeclared() -> Outcome {
 
 /// rules 行 `fleet.usage_timeout_s` の秒。無い・不発効・型違いは断る。
 fn timeout_of(manifest: &Manifest) -> Result<u64, UsageError> {
+    int_row_of(manifest, ROW_TIMEOUT)
+}
+
+/// rules 行 `fleet.usage_fresh_s` の秒（設計 account-autonomy.md §13 (1)）。選定の前計測の呼び手が
+/// [`Freshness::Within`] に渡す。無い・不発効・型違いは `fleet.usage_timeout_s` と**同じ読み手**で断る
+/// （極性・字面・rc は同じ・読み手を増やさない）。
+pub fn fresh_of(manifest: &Manifest) -> Result<u64, UsageError> {
+    int_row_of(manifest, ROW_FRESH)
+}
+
+/// 整数の rules 行の値。無い・不発効・型違いは [`UsageError::Manifest`]（FailClosed）。
+fn int_row_of(manifest: &Manifest, row_id: &str) -> Result<u64, UsageError> {
     let row = manifest
-        .get(ROW_TIMEOUT)
-        .ok_or_else(|| UsageError::Manifest(format!("{ROW_TIMEOUT} が無い")))?;
+        .get(row_id)
+        .ok_or_else(|| UsageError::Manifest(format!("{row_id} が無い")))?;
     if !row.enabled {
-        return Err(UsageError::Manifest(format!("{ROW_TIMEOUT} は不発効である")));
+        return Err(UsageError::Manifest(format!("{row_id} は不発効である")));
     }
     match row.value {
         RuleValue::Int(found) => Ok(found),
-        _ => Err(UsageError::Manifest(format!("{ROW_TIMEOUT} が整数でない"))),
+        _ => Err(UsageError::Manifest(format!("{row_id} が整数でない"))),
     }
 }
 

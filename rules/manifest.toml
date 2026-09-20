@@ -223,6 +223,18 @@ enabled = true
 ruling = "user 2026-09-12T02:01Z"
 ruled_at = "2026-09-12"
 
+# 選定の前計測の鮮度（秒・設計 account-autonomy.md §13・`s2-07l.407`）。`fleet select` の前計測は、最新の回が全部実測で
+# その ts が now − 値 より新しい口座を測り直さない（子 process を起こさず event も書かない）。`fleet usage` の口は
+# この行を読まず全口座を測る。
+
+[[rule]]
+id = "fleet.usage_fresh_s"
+kind = "UsageFreshS"
+value = 300
+enabled = true
+ruling = "user 2026-09-16T11:14Z"
+ruled_at = "2026-09-16"
+
 [[rule]]
 id = "runner.allowed_commands"
 kind = "RunnerAllowedCommands"

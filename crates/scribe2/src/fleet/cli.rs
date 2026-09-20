@@ -7,6 +7,7 @@
 
 use super::select;
 use super::store::{self, LockPolicy, StoreError};
+use super::usage;
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_OK, RC_REFUSED};
 use crate::rules::manifest::Manifest;
 use crate::rules::{RuleError, RuleValue};
@@ -86,6 +87,9 @@ fn place(args: &[String]) -> Result<StateDir, Vec<String>> {
 /// 1 回撃ち（その行は stderr 側へ）、log を replay して純関数へ渡す。**候補なしも rc 0**（断りではない・
 /// FailOpen）。計測が撃てない周は `fleet usage` の rc のまま返し、選ばない。
 ///
+/// 前計測は**鮮度つき**（設計 §13・[`usage::Freshness::Within`]）: 新しい実測を持つ口座は測り直さず、測り直した口座が
+/// 読みに届かなかった周は最新の実測を保つ（stderr に `kept` の 1 行）。stdout の 1 行形は不変。
+///
 /// 除外集合（設計 §14 (3)・account-lifecycle.md §17 の約束 4 / 5）: `--purpose run` は `--exclude` の集合 ∪ 席の登録
 /// row の口座（`--anchor DIR` が在ればその anchor の row だけ・無い周は置き場の全 row＝保守側）∪ host の面が宣言した
 /// 群の候補の口座（host 全体・`--anchor` で絞らない）。`--purpose session` は `--exclude` だけ（row も群も読まない）。
@@ -98,7 +102,13 @@ fn select_account(args: &[String], dir: &Path) -> Outcome {
         Ok(found) => found,
         Err(lines) => return Outcome::failed(RC_REFUSED, lines),
     };
-    let measured = super::usage::run(args, dir);
+    // 前計測は鮮度つき（設計 §13・秒は rules 行 `fleet.usage_fresh_s`・計測の口は `fleet usage` と同じ 1 本で方針だけ
+    // が違う）。行の無い manifest は `fleet usage` の rules 行の読み手と同じ極性で断る（測らない・選ばない）。
+    let fresh_s = match usage::fresh_of(&manifest) {
+        Ok(found) => found,
+        Err(error) => return Outcome::failed(error.rc(), vec![error.to_string()]),
+    };
+    let measured = usage::run_with(args, dir, usage::Freshness::Within(fresh_s));
     if measured.rc != RC_OK {
         return measured;
     }

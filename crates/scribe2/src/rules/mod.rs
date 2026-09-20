@@ -174,6 +174,9 @@ pub enum RuleKind {
     SeatCyclePollMs,
     /// 口座残量を聞きに行く子 process の待ち時間の上限（秒）。
     UsageTimeoutS,
+    /// 選定の前計測の鮮度（秒・設計 account-autonomy.md §13）。最新の回が全部実測でその ts が
+    /// `now − 値` より新しい口座は測り直さない。`fleet usage` の口は読まない（鮮度に関わらず全口座を測る）。
+    UsageFreshS,
     /// land の追随が衝突した便を**起こし直す回数の上限**（回）。値 N = 最大 N 回起こし直す
     /// （N+1 回目の衝突で終端する）。
     FollowRetries,
@@ -254,6 +257,7 @@ pub const ALL: &[RuleKind] = &[
     RuleKind::SeatCycleSettleS,
     RuleKind::SeatCyclePollMs,
     RuleKind::UsageTimeoutS,
+    RuleKind::UsageFreshS,
     RuleKind::FollowRetries,
     RuleKind::GateMutantsJobs,
     RuleKind::GateJobMemoryMb,
@@ -307,6 +311,7 @@ impl RuleKind {
             Self::SeatCycleSettleS => "SeatCycleSettleS",
             Self::SeatCyclePollMs => "SeatCyclePollMs",
             Self::UsageTimeoutS => "UsageTimeoutS",
+            Self::UsageFreshS => "UsageFreshS",
             Self::FollowRetries => "FollowRetries",
             Self::GateMutantsJobs => "GateMutantsJobs",
             Self::GateJobMemoryMb => "GateJobMemoryMb",
@@ -351,6 +356,7 @@ impl RuleKind {
             | Self::SeatCycleSettleS
             | Self::SeatCyclePollMs
             | Self::UsageTimeoutS
+            | Self::UsageFreshS
             | Self::FollowRetries
             | Self::GateMutantsJobs
             | Self::GateJobMemoryMb

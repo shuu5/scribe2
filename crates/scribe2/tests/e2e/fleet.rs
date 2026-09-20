@@ -9,7 +9,7 @@ use std::mem::discriminant;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::LazyLock;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use vessel::order::is_declaration_order;
 use vessel::fleet::store::{self, LockPolicy, StoreError};
 use vessel::cli_outcome::{RC_BROKEN, RC_OK, RC_REFUSED};
@@ -3342,12 +3342,28 @@ const SELECT_WEEK_RESET: &str = "2099-01-07T00:00:00+00:00";
 /// 3 口座: a1 = 30（5h）・a2 = 70（7d）・a3 = 100（5h・当たっている）。
 const SELECT_THREE: &[(&str, u64, u64)] = &[("a1", 30, 10), ("a2", 20, 70), ("a3", 100, 5)];
 
-/// `fleet select` の rules fixture。待ち時間の行（`timeout`）と R-C9-1 の行（値の字面 `selection`）を持ち分ける。
+/// `fleet select` の歯の既定の鮮度（秒・`fleet.usage_fresh_s`）。**0** = 境が「いま」なので、いま以前の ts の実測は
+/// どれも「新しい」と読まれず、撃つたびに全口座を測り直す（鮮度を持つ前の歯の前提を保つ・鮮度の歯は
+/// [`fresh_select_fixture`] で値を持つ）。
+const SELECT_FRESH_S: u64 = 0;
+
+/// `fleet select` の rules fixture。待ち時間の行（`timeout`）と R-C9-1 の行（値の字面 `selection`）を持ち分け、
+/// 鮮度の行は [`SELECT_FRESH_S`] で持つ。
 fn select_rules(labels: &[&str], timeout: bool, selection: Option<&str>) -> String {
+    select_rules_fresh(labels, timeout, selection, Some(SELECT_FRESH_S))
+}
+
+/// [`select_rules`] の鮮度の行（`fresh`・`None` = 行なし）まで持ち分ける形。
+fn select_rules_fresh(labels: &[&str], timeout: bool, selection: Option<&str>, fresh: Option<u64>) -> String {
     let mut text = "schema = 1\n".to_owned();
     if timeout {
         text.push_str(&format!(
             "\n[[rule]]\nid = \"fleet.usage_timeout_s\"\nkind = \"UsageTimeoutS\"\nvalue = {USAGE_TIMEOUT_S}\nenabled = true\nruling = \"r\"\nruled_at = \"d\"\n"
+        ));
+    }
+    if let Some(secs) = fresh {
+        text.push_str(&format!(
+            "\n[[rule]]\nid = \"fleet.usage_fresh_s\"\nkind = \"UsageFreshS\"\nvalue = {secs}\nenabled = true\nruling = \"f\"\nruled_at = \"d\"\n"
         ));
     }
     if let Some(value) = selection {
@@ -3915,6 +3931,225 @@ fn fleet_select_refuses_rules_without_the_selection_row() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("rules:") && stderr.contains("形と合わない"), "形の不一致: {stderr}");
     assert_eq!(curl_calls(&fx), 0, "計測しない");
+    drop_fixture(&fx);
+}
+
+// ───── 選定の前計測の鮮度（設計 account-autonomy.md §13・FR36 / FR33・接頭辞 `fleet_select_fresh_`） ─────
+
+/// 鮮度の歯の `fleet.usage_fresh_s`（秒）。歯の壁時計より十分に長い＝「いま」置いた実測は境より新しい。
+const FRESH_S: u64 = 3600;
+
+/// 鮮度の歯の「古い」実測の ts（`FRESH_S` より古い・reset は 2099 なので選定は古いと読まない）。
+const STALE_TS: &str = "2026-09-12T02:00:00Z";
+
+/// 偽 curl の本文の使用率（置いた実測の値と違えて、測り直したかを値で読む）。
+const REMEASURED_PCT: u64 = 55;
+
+/// 置いた実測の使用率。
+const PLACED_PCT: u64 = 30;
+
+/// いまの UTC の ts（実測行と同じ字面）。
+fn now_ts() -> String {
+    let secs = SystemTime::now().duration_since(UNIX_EPOCH).map(|elapsed| elapsed.as_secs()).unwrap_or(0);
+    format_utc(secs)
+}
+
+/// [`select_fixture`] の鮮度の行に `fresh` 秒を持つ形（偽 curl の本文は全口座 [`REMEASURED_PCT`] / 10）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn fresh_select_fixture(labels: &[&str], fresh: u64) -> (UsageFixture, PathBuf) {
+    let accounts: Vec<(&str, u64, u64)> = labels.iter().map(|label| (*label, REMEASURED_PCT, 10)).collect();
+    let (fx, curl) = select_fixture(&accounts, true, Some("85"));
+    fs::write(&fx.rules, select_rules_fresh(labels, true, Some("85"), Some(fresh))).expect("rules fixture を書ける");
+    (fx, curl)
+}
+
+/// reset が遠い実測 1 件（選定が古いと読まない・`measured` の RESETS_AT は過去）。
+fn far_measured(account: &str, window: WindowKind, used_pct: u64) -> Allowance {
+    Allowance::Measured(Measured {
+        account: account.to_owned(),
+        window,
+        model: None,
+        endpoint: ENDPOINT.to_owned(),
+        used_pct,
+        resets_at: Some(SELECT_FIVE_RESET.to_owned()),
+    })
+}
+
+/// 口座 1 つの実測の回（5 時間窓 [`PLACED_PCT`]・7 日窓 10）を `ts` で置く。
+fn put_round(fx: &UsageFixture, ts: &str, label: &str) {
+    append_allowance(
+        &fx.state,
+        vec![
+            (ts, far_measured(label, WindowKind::FiveHour, PLACED_PCT)),
+            (ts, far_measured(label, WindowKind::SevenDay, 10)),
+        ],
+    );
+}
+
+/// 置き場の replay から口座の最新の 5 時間窓（`Measured` なら使用率・`Unmeasured` なら `None`）。
+fn latest_five_hour(fx: &UsageFixture, label: &str) -> Option<u64> {
+    let events = store::read_all(&fx.state).unwrap_or_default();
+    let state = replay(&events);
+    let key = allowance_key(label, Some(WindowKind::FiveHour), None);
+    match state.allowance.get(&key).map(|latest| &latest.allowance) {
+        Some(Allowance::Measured(found)) => Some(found.used_pct),
+        Some(Allowance::Unmeasured(_)) | None => None,
+    }
+}
+
+/// (1) 形 (2): 最新の回が全部実測で ts が `now − fresh_s` より新しい口座（a1）は選定の前計測で測り直されず（偽 curl の
+/// 呼出 0・event 不変・値は置いたまま）、古い実測の口座（a2）・行の無い口座（a3）・最新の回が Unmeasured の口座
+/// （a4）だけが測られる（呼出 1 ずつ・値は偽 curl の本文）。直後にもう 1 回撃つと全口座が新しいので呼出 0。
+/// base（条件なしで全口座を測る）は呼出 4 → RED。
+#[test]
+fn fleet_select_fresh_recent_measurement_is_not_remeasured_but_stale_unmeasured_and_absent_are() {
+    let (fx, curl) = fresh_select_fixture(&["a1", "a2", "a3", "a4"], FRESH_S);
+    let now = now_ts();
+    put_round(&fx, &now, "a1");
+    put_round(&fx, STALE_TS, "a2");
+    // a4 の Unmeasured は「いま」と同じ秒に置かない（最新の回は ts の等値で束ねる＝同じ秒の測り直しと同じ回に
+    // 束ねられて a4 が 2 回目にも測られる）。Unmeasured の口座は ts に関わらず測られるので古い ts で足りる。
+    append_allowance(&fx.state, vec![(STALE_TS, unmeasured("a4", None, UnmeasuredReason::HttpStatus))]);
+    let before = allowances(&fx).len();
+    assert_eq!(before, 5, "置いた行: a1 ×2・a2 ×2・a4 ×1");
+
+    let out = run_select(&fx, &curl, &["--purpose", "run"]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{out:?}");
+    assert_eq!(out_lines(&out), vec!["select purpose=run chosen=a1".to_owned()], "同じ reset → label: {out:?}");
+    assert_eq!(curl_calls(&fx), 3, "a2（古い）・a3（行なし）・a4（Unmeasured）だけを測る");
+    assert_eq!(allowances(&fx).len(), before + 6, "測った 3 口座 × 2 窓だけが増える（a1 は増えない）");
+    assert_eq!(latest_five_hour(&fx, "a1"), Some(PLACED_PCT), "a1 は置いた値のまま（測り直していない）");
+    for label in ["a2", "a3", "a4"] {
+        assert_eq!(latest_five_hour(&fx, label), Some(REMEASURED_PCT), "{label} は偽 curl の本文の値");
+    }
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains(&format!("usage: account=a1 five_hour={PLACED_PCT}% resets={SELECT_FIVE_RESET}")),
+        "測らなかった口座も最新の実測の 1 行形で stderr へ: {stderr}"
+    );
+    assert!(!stderr.contains(" kept "), "届いた周に kept は出ない: {stderr}");
+
+    let again = run_select(&fx, &curl, &["--purpose", "session"]);
+    assert_eq!(again.status.code(), Some(i32::from(RC_OK)), "{again:?}");
+    assert_eq!(curl_calls(&fx), 3, "直後の周は全口座が新しい＝呼出 0");
+    assert_eq!(allowances(&fx).len(), before + 6, "event も増えない");
+    drop_fixture(&fx);
+}
+
+/// (2) 形 (3): 測り直した口座が 429（`http_status`）/ timeout を返し、最新の回が実測（古い・reset 前）の周は Unmeasured
+/// を追記せず（event の本数不変）その実測を最新のまま使って候補に残す（`chosen=a1`・stdout は純関数の 1 行と 1 字も
+/// 違わない）。stderr に `usage: account=a1 kept reason=<reason>` の 1 行（timeout の周は reason の語だけが違う）。
+/// base（Unmeasured を追記して候補から外す）は `none=unmeasured` → RED。
+#[test]
+fn fleet_select_fresh_unreachable_keeps_the_stale_measurement_and_says_kept() {
+    for (name, status, rc, reason) in [("429", "429", 0_u8, "http_status"), ("timeout", "200", 28, "timeout")] {
+        let (fx, _) = fresh_select_fixture(&["a1"], FRESH_S);
+        let curl = fake_curl(&fx, &select_body(REMEASURED_PCT, 10), status, rc);
+        put_round(&fx, STALE_TS, "a1");
+        let before = allowances(&fx).len();
+        let out = run_select(&fx, &curl, &["--purpose", "run"]);
+        assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{name}: {out:?}");
+        let want = select::line(Purpose::Run, &Selection::Chosen("a1".to_owned()));
+        assert_eq!(out_lines(&out), vec![want], "{name}: 候補に残る・stdout は 1 行形のまま: {out:?}");
+        assert_eq!(curl_calls(&fx), 1, "{name}: 古い実測の口座は測り直す");
+        assert_eq!(allowances(&fx).len(), before, "{name}: Unmeasured を追記しない");
+        assert_eq!(latest_five_hour(&fx, "a1"), Some(PLACED_PCT), "{name}: 最新は置いた実測のまま");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.lines().any(|line| line == format!("usage: account=a1 kept reason={reason}")),
+            "{name}: kept の 1 行が label と理由を運ぶ: {stderr}"
+        );
+        assert!(
+            stderr.contains(&format!("usage: account=a1 five_hour={PLACED_PCT}% resets={SELECT_FIVE_RESET}")),
+            "{name}: 保った実測の 1 行形: {stderr}"
+        );
+        assert!(!stderr.contains("unmeasured"), "{name}: 届かなかった側の行は出さない: {stderr}");
+        drop_fixture(&fx);
+    }
+}
+
+/// (3) 否定の枝: 429 でも最新の回が Unmeasured の口座・行の無い口座は従来どおり Unmeasured が追記され（event +1）
+/// 候補から外れ（`none=unmeasured`）、kept の 1 行は出ない。
+#[test]
+fn fleet_select_fresh_unreachable_with_unmeasured_or_absent_latest_appends_without_kept() {
+    for prior in [Some(UnmeasuredReason::Timeout), None] {
+        let (fx, _) = fresh_select_fixture(&["a1"], FRESH_S);
+        let curl = fake_curl(&fx, &select_body(REMEASURED_PCT, 10), "429", 0);
+        if let Some(reason) = prior {
+            append_allowance(&fx.state, vec![(STALE_TS, unmeasured("a1", None, reason))]);
+        }
+        let before = allowances(&fx).len();
+        let out = run_select(&fx, &curl, &["--purpose", "run"]);
+        assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{prior:?}: {out:?}");
+        let lines = out_lines(&out);
+        assert_eq!(lines.len(), 1, "{prior:?}: 1 行: {lines:?}");
+        assert!(lines[0].starts_with("select purpose=run none=unmeasured"), "{prior:?}: 候補から外れる: {lines:?}");
+        assert_eq!(curl_calls(&fx), 1, "{prior:?}: 測る");
+        assert_eq!(allowances(&fx).len(), before + 1, "{prior:?}: 口座単位の Unmeasured を追記する");
+        assert_eq!(latest_five_hour(&fx, "a1"), None, "{prior:?}: 最新は Unmeasured");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(!stderr.contains(" kept "), "{prior:?}: kept は出ない: {stderr}");
+        assert!(stderr.contains("usage: account=a1 unmeasured reason=http_status"), "{prior:?}: 従来の行: {stderr}");
+        drop_fixture(&fx);
+    }
+}
+
+/// (4) 形 (4): `fleet usage` の口は鮮度に関わらず全口座を測り（`Always`・新しい実測の a1 も測り直す・呼出 = 口座数）、
+/// 429 の周も従来どおり Unmeasured を追記して kept を出さない（外形不変）。
+#[test]
+fn fleet_select_fresh_usage_mouth_measures_every_account_regardless_of_freshness() {
+    let (fx, curl) = fresh_select_fixture(&["a1", "a2"], FRESH_S);
+    put_round(&fx, &now_ts(), "a1");
+    let out = run_usage(&fx, &curl, &[]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{out:?}");
+    assert_eq!(curl_calls(&fx), 2, "新しい実測の a1 も測る");
+    assert_eq!(allowances(&fx).len(), 2 + 4, "2 口座 × 2 窓が増える");
+    assert_eq!(latest_five_hour(&fx, "a1"), Some(REMEASURED_PCT), "a1 は測り直した値");
+    assert_eq!(out_lines(&out).len(), 2, "口座ごと 1 行: {out:?}");
+
+    let failing = fake_curl(&fx, &select_body(REMEASURED_PCT, 10), "429", 0);
+    let out = run_usage(&fx, &failing, &[]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{out:?}");
+    assert_eq!(
+        out_lines(&out),
+        vec![
+            "usage: account=a1 unmeasured reason=http_status".to_owned(),
+            "usage: account=a2 unmeasured reason=http_status".to_owned()
+        ],
+        "429 は従来どおり Unmeasured の行"
+    );
+    assert_eq!(allowances(&fx).len(), 6 + 2, "口座単位の Unmeasured を追記する");
+    assert!(!String::from_utf8_lossy(&out.stderr).contains(" kept "), "fleet usage は kept を出さない: {out:?}");
+    drop_fixture(&fx);
+}
+
+/// (5) 鮮度の行の無い manifest は `fleet.usage_timeout_s` の読み手と**同じ極性**で断る（rc 1・stdout 0 byte・測らない・
+/// 書かない）。断りの字面は行 id だけが違う（読み手を増やしていない）。
+#[test]
+fn fleet_select_fresh_rules_without_the_row_refuse_like_the_timeout_row() {
+    let labels: Vec<&str> = SELECT_THREE.iter().map(|(label, _, _)| *label).collect();
+    let (fx, curl) = select_fixture(SELECT_THREE, true, Some("85"));
+    fs::write(&fx.rules, select_rules_fresh(&labels, true, Some("85"), None)).expect("rules fixture を書ける");
+    let out = run_select(&fx, &curl, &["--purpose", "run"]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{out:?}");
+    assert!(out.stdout.is_empty(), "選ばない");
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(stderr.contains("fleet usage: manifest を読めない（fleet.usage_fresh_s が無い）"), "断りの 1 行: {stderr}");
+    assert_eq!(curl_calls(&fx), 0, "client を起こさない");
+    assert!(!store::events_path(&fx.state).exists(), "event を書かない");
+
+    fs::write(&fx.rules, select_rules_fresh(&labels, false, Some("85"), Some(0))).expect("rules fixture を書ける");
+    let other = run_select(&fx, &curl, &["--purpose", "run"]);
+    assert_eq!(other.status.code(), out.status.code(), "rc は待ち時間の行の無い周と同じ: {other:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&other.stderr),
+        stderr.replace("fleet.usage_fresh_s", "fleet.usage_timeout_s"),
+        "字面は行 id だけが違う"
+    );
+    assert_eq!(curl_calls(&fx), 0, "どちらも測らない");
     drop_fixture(&fx);
 }
 
