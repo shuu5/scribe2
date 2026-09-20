@@ -185,6 +185,17 @@ xtask 側の drift 歯（最小形）: `crates/xtask/src/limits.rs` の `#[cfg(t
 - 歯（`rules_embedded_manifest_declares_account_selection_threshold` を直す＝値 95 と新しい裁定 id を assert・base は 85 で RED／`rules_external_form` の snapshot）。閾値の上側を 90 で置く歯は 管理 tick の歯の file〔削除済み〕 にも 1 本在る（合図の back-off が口座の軸にも掛かる歯）＝同じ便で直す。flip-check は変えた test file を 1 本ずつ単独で base に重ねて RED を求めるので、値替えだけでは base（85）でも挙動が変わらない file（作り直しの歯の file〔削除済み〕・管理 tick の歯の file〔削除済み〕）と `tests/e2e/seat/account.rs` には、85 と 95 を弁別する歯（実測値 90・歯の名は seat_threshold_95_ で始める）を 1 本ずつ足す: 予備の口座が 90 の周は候補になり立て直しが走る／登録 row の口座が 90 の席に口座を起点とする退避の合図が出ない（base 85 ではどちらも逆の結果で RED）。足す歯は tmux を立てるので、nextest の tmux の test-group の登録（`.config/nextest.toml`・xtask check の nextest-tmux-group が drift を落とす）も同じ便で足す。
 - 却下: repo の外の rules の写しを `--rules` で席の tick に読ませる（規則の値が manifest の外に住む・C1 / C5・宣言を別の置き場の値で上書きする型）／host の面（`host.toml`）に閾値の上書きを足す（host 固有の値ではない・N3）。
 
+## 14. `gate.token_cap` を 150000 に戻す（契約表の行 i・`s2-07l.376`）
+
+- 何が起きているか（実測 2026-09-20）: `rules/manifest.toml` の行 `gate.token_cap`（kind `GateTokenCap`・Int）の値が 400000 のままである。これは行 h（`s2-07l.375`）が 169 KB の diff 1 本（`s2-07l.209`）を審査に通すために入れた一時の上げで、行の `ruling` の字面が自分で戻しの便を名指している。`s2-07l.209` は着地して閉じている＝上げの理由は消えた。上げと戻しは同じ承認（user 2026-09-15T23:31Z・逐語は台帳 `s2-07l.375`）が対で持つ。戻す先の 150000 は SRS NFR1 の目標値で、上げ前の値と同じである。
+- 約束（この 3 つだけ）:
+  1. `rules/manifest.toml` の行 `gate.token_cap` の `value` を 150000 に・`ruling` を戻しの字面（同じ承認の時刻で始まり、戻しであることと `s2-07l.376` を名指す）に・`ruled_at` を戻した日付に書き換える。行の id・kind・`enabled` は不変で、行は増やさない（C5）。
+  2. 値を pin している既存の歯 2 本を 150000 に直す。実測: `crates/scribe2/tests/e2e/rules.rs` の `rules_cli_rules_flag_overrides_embedded`（`rules get gate.token_cap` の出力が埋め込みの値である）と `rules_row_readers_return_the_value_or_one_of_three_reasons`（整数の行の読み手が埋め込みの値を返す）の 2 か所だけが 400000 を持つ（repo 全体で値 400000 を持つ file は、この歯の file・manifest・本 doc の 3 つ＝write-set と同じ）。外形 snapshot はこの行の値を写していない。
+  3. 戻しの行を名指す歯を 1 本足す（名は `rules_token_cap_revert_` で始める）: 埋め込み manifest の `gate.token_cap` が値 150000・kind `GateTokenCap`・発効・`ruling` が承認の時刻で始まり `s2-07l.376` を含む、を assert する。base は値 400000 と上げの字面なので RED（**機能不在**でなく値の不一致の RED）。
+- §4.1 の表の `gate.token_cap` の行の値と裁定の字面を、約束 1 と同じ内容に写す（本 doc が write-set に在る理由はこれだけ）。
+- 触らない: `src` の全部（上限を読む側 `pipe/gate.rs` は行の値を読むだけで、値を code に持たない）・他の行・行 h の契約表の行（着地済みの履歴）。
+- flip-check の入口: 変える test file は `tests/e2e/rules.rs` の 1 本で、3 本の歯のどれも base（値 400000）で RED になる。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -277,11 +288,11 @@ done = "manifest の行の値と裁定 id が新しく、埋め込み値の pin 
 id = "i"
 title = "gate.token_cap を 400000 → 150000 に戻す — .209 Landed 後・行 h の対・裁定 id は行 h と同じ承認"
 req = ["FR9"]
-section = "4"
+section = "14"
 write-set = ["rules/manifest.toml", "crates/scribe2/tests/e2e/rules.rs", "docs/design/rules-manifest.md"]
-verify = ["cargo nextest run -p scribe2 --no-tests=fail rules_"]
+verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail rules_cli_rules_flag_overrides_embedded", "cargo nextest run -p scribe2 --test e2e --no-tests=fail rules_row_readers_return_the_value_or_one_of_three_reasons", "cargo nextest run -p scribe2 --test e2e --no-tests=fail rules_token_cap_revert_"]
 size = "S"
-done = "manifest の行の値が 150000 に戻り裁定 id が戻しの字面で、埋め込み値の pin が 150000 で緑、§4.1 の表が同じ値と裁定を写し、src は不変"
+done = "§14 の約束 1〜3 のとおり: 埋め込み manifest の gate.token_cap が値 150000 と戻しの裁定の字面（s2-07l.376 を名指す）を持ち、値を pin する既存の歯 2 本と戻しの行を名指す歯 1 本が緑で、§4.1 の表が同じ値と裁定を写し、src は不変"
 
 [[contract]]
 id = "j"
