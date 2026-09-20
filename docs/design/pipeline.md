@@ -224,15 +224,17 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
 ## 12. retire の終端の列挙（契約表の行 i・`s2-07l.353`）
 
 - 出所: 審査の段（契約の審査・FR49／[contract-source.md](./contract-source.md) §4）が足した終端 Reviewed の FAIL / INCONCLUSIVE は live を持たないが、retire の入口は Gated の FAIL と Failed の一部しか畳めない＝審査の段で終端した便が前の周の worktree を残すと畳めず、run N+1 が別 worktree で立つ（`.209` run 1 の実測 2026-09-15）。畳めない worktree は再開（FR14）の続きの段を別の worktree に割るので、終端の後始末の口が終端の列挙に追いつく必要がある。
-- 現物（planner が grep で実測・main f678bd0）: 受ける段の列挙は `crates/scribe2/src/pipe/cli/step.rs` の `retire_run`（`pub(super) fn`）が持つ `allowed` = `[Stage::Landed, Stage::Failed, Stage::Gated, Stage::Stopped]`＝`Reviewed` は列に無い。段の中の弁別は `crates/scribe2/src/pipe/cli/state.rs` の `discriminate`（同 file の私有 `fn`・`resolve` から呼ばれる）が持ち、`(&Extra::Retire, Stage::Gated)` と `(&Extra::Retire, Stage::Failed)` の 2 arm だけが在って `Reviewed` は末尾の catch-all で `Ok(())` に落ちる。判定の読み手は `crates/scribe2/src/pipe/review.rs` の `ReviewCheck::judge`（`pub fn`・返り値は `Passed` / `Stopped(Verdict)` / `Unreadable` の閉じた 3 つ）で、同 file の `(&Extra::Spawn, Stage::Reviewed)` の arm が既に呼んでいる。畳む本体は `crates/scribe2/src/pipe/retire.rs` の `retire`（`pub fn`・在るか / clean かだけを見て段を動かさず `retired/` へ可逆 move する）。
+- 現物（planner が grep で実測・main f678bd0）: 受ける段の列挙は `crates/scribe2/src/pipe/cli/step.rs` の `retire_run`（`pub(super) fn`）が持つ `allowed` = `[Stage::Landed, Stage::Failed, Stage::Gated, Stage::Stopped]`＝`Reviewed` は列に無い。段の中の弁別は `crates/scribe2/src/pipe/cli/state.rs` の `discriminate`（同 file の私有 `fn`・`resolve` から呼ばれる）が持ち、`(&Extra::Retire, Stage::Gated)` と `(&Extra::Retire, Stage::Failed)` の 2 arm だけが在って `Reviewed` は末尾の catch-all で `Ok(())` に落ちる。判定の読み手は `crates/scribe2/src/pipe/review.rs` の `ReviewCheck::judge`（`pub fn`・返り値は `Passed` / `Stopped(Verdict)` / `Unreadable` の閉じた 3 つ）で、`crates/scribe2/src/pipe/cli/state.rs` の `discriminate` が持つ `(&Extra::Spawn, Stage::Reviewed)` の arm が既に呼んでいる。断りの字面の括弧に入る語は `crates/scribe2/src/pipe/review.rs` の `ReviewCheck::as_str`（`pub fn`）が作り、`Passed` → `PASS`（`crates/scribe2/src/pipe/gate.rs` の `Verdict::as_str` が `Pass` に返す語）・`Stopped(Verdict::Fail)` → `FAIL`・`Stopped(Verdict::Inconclusive)` → `INCONCLUSIVE`・`Unreadable` → `読めない` の 4 語で閉じる＝`Verdict` を持たない `Passed` と `Unreadable` にも語が在る。畳む本体は `crates/scribe2/src/pipe/retire.rs` の `retire`（`pub fn`・在るか / clean かだけを見て段を動かさず `retired/` へ可逆 move する）。
+- 現物（歯の置き場と verify の接頭辞の当たり・planner が全 e2e の `#[test]` 付きの `fn` 名 923 本を走査して実測・main d875aaf）: 接頭辞 `pipe_retire_` は base で 6 本（`pipe_retire_moves_pr_landed_worktree_and_keeps_branch` / `pipe_retire_rebase_empty_folds_failed_run_and_keeps_stage` / `pipe_retire_rebase_empty_refuses_other_failed_reasons` / `pipe_retire_refuses_unless_landed_and_clean` / `pipe_retire_stopped_folds_a_clean_stopped_run_and_keeps_stage` / `pipe_retire_stopped_refuses_a_dirty_worktree`）に当たり、6 本とも base で緑＝この接頭辞を撃つ verify 行は base で rc 0 になり、新しい歯の RED→GREEN を測れない。接頭辞を `pipe_retire_reviewed_` まで伸ばすと base の当たりは 0 本（`--no-tests=fail` の rc 4＝RED の極性が立つ）。当たる 6 本と伸ばした先の 0 本はどちらも `crates/scribe2/tests/e2e/pipe/land.rs` の 1 file に閉じる（この行の write-set の中）。
 - 約束（この行が作るもの・番号は done と 1:1）:
   1. `retire_run` の `allowed` に `Stage::Reviewed` を 1 つ足す（既存の 4 つと順序は不変）。
   2. `discriminate` に `(&Extra::Retire, Stage::Reviewed)` の arm を足し、`ReviewCheck::judge` が `Stopped(_)`（FAIL / INCONCLUSIVE）を返す周は `Ok(())`＝畳める。
   3. 同じ arm で `Passed` は断る（live・起こす側）。
   4. 同じ arm で `Unreadable` も断る（読めない判定を終端に読み替えない・fail-closed）。
-  5. 断りの字面は `Spawn` × `Reviewed` の既存の arm と同じ形 `run <id> の段は Reviewed である（verdict=<V>）`＝段違いの一般則の字面（`run <id> の段は Reviewed である`・verdict の括弧を持たない）と区別が付く。歯はこの逐語で新 arm を pin する。
+  5. 断りの字面は `discriminate` の `(&Extra::Spawn, Stage::Reviewed)` の arm と同じ形 `run <id> の段は Reviewed である（verdict=<語>）` で、`<語>` は `ReviewCheck::as_str` が返す語＝`Passed` の周は `PASS`・`Unreadable` の周は `読めない`。段違いの一般則の字面（`run <id> の段は Reviewed である`・verdict の括弧を持たない）と区別が付く。歯はこの 2 語を逐語で pin して新 arm を測る。
   6. 畳んだ後の段は `Reviewed` のまま（`Failed` / `Gated` と同じ）＝`RunStage detail=retired` の記帳と `retired/` への可逆 move は不変（N1.2）。
-- 触らない: `retire.rs` の `retire` 本体（在るか・clean か）・`Extra::Retire` × `Gated` の arm・`Extra::Retire` × `Failed` の arm（そこは行 r が別便で触る）・worktree の無い Reviewed 終端の便（畳む物が無い＝既存の断りのまま）。
+  7. 新しい歯 4 本は `crates/scribe2/tests/e2e/pipe/land.rs` に置き、接頭辞 `pipe_retire_reviewed_` だけで選べる名にする（既存の `pipe_retire_*` 6 本と `pipe_follow_retire_*` 2 本は名も本数も不変＝この接頭辞は 1 本も選ばない）。
+- 触らない: `retire.rs` の `retire` 本体（在るか・clean か）・`Extra::Retire` × `Gated` の arm・`Extra::Retire` × `Failed` の arm（そこは行 r が別便で触る）・worktree の無い Reviewed 終端の便（畳む物が無い＝既存の断りのまま）・`crates/scribe2/tests/e2e/pipe/land.rs` に在る既存の `pipe_retire_*` 6 本と `pipe_follow_retire_*` 2 本（行 r が `pipe_retire_rebase_empty_refuses_other_failed_reasons` を別便で反転させる面には、この行の verify の接頭辞は届かない）。
 - 却下: 審査の段の中で自動で畳む（終端の後始末は go を挟む retire の 1 口に揃える）／live が false の段を全部畳める側にする（Failed の理由ごとの弁別が消える）。
 
 ## 13. xtask の flipcheck.rs の分割（契約表の行 j・純移動）
@@ -648,9 +650,9 @@ title = "pipe retire の終端の列挙に Reviewed の非 PASS（FAIL / INCONCL
 req = ["FR49", "FR14"]
 section = "12"
 write-set = ["crates/scribe2/src/pipe/cli/step.rs", "crates/scribe2/src/pipe/cli/state.rs", "crates/scribe2/tests/e2e/pipe/land.rs"]
-verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_retire_"]
+verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_retire_reviewed_"]
 size = "S"
-done = "(1) retire が受ける段の列に Reviewed が在り (2) Reviewed で verdict が FAIL の便と INCONCLUSIVE の便がそれぞれ pipe retire で retired/ へ畳め〔pipe_retire_reviewed_fail_ / pipe_retire_reviewed_inconclusive_〕 (3) PASS は断られ〔pipe_retire_reviewed_pass_refused_〕 (4) 判定を読めない便も断られ〔pipe_retire_reviewed_unreadable_refused_〕 (5) 断りの 2 本が字面 run <id> の段は Reviewed である（verdict=<V>）を逐語で測って段違いの一般則（verdict の括弧を持たない）と区別が付き (6) 畳んだ 2 本が畳んだ後の段を Reviewed のまま・RunStage detail=retired を対で測る"
+done = "(1) retire が受ける段の列に Reviewed が在り (2) Reviewed で verdict が FAIL の便と INCONCLUSIVE の便がそれぞれ pipe retire で retired/ へ畳め〔pipe_retire_reviewed_fail_ / pipe_retire_reviewed_inconclusive_〕 (3) PASS は断られ〔pipe_retire_reviewed_pass_refused_〕 (4) 判定を読めない便も断られ〔pipe_retire_reviewed_unreadable_refused_〕 (5) 断りの 2 本が ReviewCheck::as_str の語で字面 run <id> の段は Reviewed である（verdict=PASS）と run <id> の段は Reviewed である（verdict=読めない）をそれぞれ逐語で測り、段違いの一般則（verdict の括弧を持たない）と区別が付き (6) 畳んだ 2 本が畳んだ後の段を Reviewed のまま・RunStage detail=retired を対で測り (7) 新しい歯 4 本が全部 crates/scribe2/tests/e2e/pipe/land.rs に在って接頭辞 pipe_retire_reviewed_ が base で 0 本・実装の後に 4 本だけを選び、既存の pipe_retire_ の 6 本と pipe_follow_retire_ の 2 本は名も本数も不変"
 
 [[contract]]
 id = "j"
