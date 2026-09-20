@@ -11,8 +11,9 @@
 //!    `depends` の解決と輪・`touches` の閉包と `surfaces` の外形 pin ⊆ `write-set`（[`super::closure`]）・末尾 `/`
 //!    無しの dir・write-set の項目の実在（[`super::declaration::read_write_set`]）・名指しの実在
 //!    （[`super::closure::unresolved_names`]）。**全件・行番号付き**で返し 1 件目で止めない（FR18 と同じ「黙って
-//!    落とさない」）。intake（契約 (b)）は同じ関数を 1 行に撃つ＝1 実装（C2）。上限の余地（§3）は受付時点の事実
-//!    なので CI では撃たない（intake の側・[`super::cli`]）。
+//!    落とさない」）。intake（契約 (b)）は同じ関数を 1 行に撃つ＝1 実装（C2）。`depends` の解決の母集団（同じ doc の
+//!    全行の id）は引数で渡す＝1 行に撃つ intake でも相手が別の行に在る `depends` が解ける（§30・行 ad）。上限の余地
+//!    （§3）は受付時点の事実なので CI では撃たない（intake の側・[`super::cli`]）。
 //!
 //! 1 と 3 の群は子 module（`table/parse.rs` = 区間の抜き出しと TOML の型付け・`table/check.rs` = 表の検査と要件面と
 //! CLI の駆動）に置き、本 file は 2 と findings の語彙（[`TableError`] / [`Finding`] / [`Context`]）を持つ。呼び手の

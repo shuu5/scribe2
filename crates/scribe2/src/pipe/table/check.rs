@@ -17,12 +17,15 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 /// 表の全行を検査する（**全件・行番号の順**・同じ行の中は検査の順）。intake（契約 (b)）は同じ関数を 1 行に撃つ。
-pub fn check_table(doc: &str, rows: &[ContractRow], ctx: &Context<'_>) -> Vec<Finding> {
+///
+/// `ids` は `depends` の解決の母集団＝**同じ doc の全行の id**（§30・行 ad）。`contracts check` は `rows` と同じ
+/// 全行の id を渡し、intake は検査する行を 1 つ（`rows`）のまま母集団だけを doc の全行から渡す（1 行の slice の id
+/// だけを母集団に読むと、相手が別の行に在る `depends` が常に解けない）。id の一意は `rows` の中で測る。
+pub fn check_table(doc: &str, rows: &[ContractRow], ids: &[&str], ctx: &Context<'_>) -> Vec<Finding> {
     let numbered = sections(doc);
-    let ids: Vec<&str> = rows.iter().map(|row| row.id.as_str()).collect();
     let mut found = Vec::new();
     for (index, row) in rows.iter().enumerate() {
-        if ids.iter().take(index).any(|seen| *seen == row.id) {
+        if rows.iter().take(index).any(|seen| seen.id == row.id) {
             found.push(Finding::table(TableError::DuplicateId { line: row.line, id: row.id.clone() }));
         }
         if !numbered.iter().any(|(number, filled)| *filled && number.as_deref() == Some(row.section.as_str())) {
@@ -349,9 +352,14 @@ fn judge_doc(repo: &Path, doc: &str, ctx: &Context<'_>) -> (usize, Vec<Finding>)
         Err(reason) => return (0, vec![Finding::table(unreadable(0, &reason))]),
     };
     match read_rows(doc, &text) {
-        Ok(rows) => (rows.len(), check_table(&text, &rows, ctx)),
+        Ok(rows) => (rows.len(), check_table(&text, &rows, &ids_of(&rows), ctx)),
         Err(errors) => (0, errors.into_iter().map(Finding::table).collect()),
     }
+}
+
+/// 行の列の id（`depends` の解決の母集団を全行から組む・[`check_table`] の `ids`）。
+fn ids_of(rows: &[ContractRow]) -> Vec<&str> {
+    rows.iter().map(|row| row.id.as_str()).collect()
 }
 
 /// repo 相対の file を読む（読めない理由は path を名乗る 1 行）。intake が設計 pointer の doc を読む口でもある。
@@ -379,7 +387,7 @@ pub(crate) fn read_all(repo: &Path, tracked: &[String], ext: &str) -> Vec<Source
 mod tests {
     // flip-check: moved s2-07l.374
 
-    use super::{check_table, read_rows, requirement_ids, Context, ContractRow, BEGIN, END};
+    use super::{check_table, ids_of, read_rows, requirement_ids, Context, ContractRow, BEGIN, END};
     use crate::cli_outcome::RC_BROKEN;
     use crate::pipe::closure::Source;
     use crate::pipe::refuse::Refuse;
@@ -465,7 +473,7 @@ mod tests {
         rows[7].depends = vec!["g".to_owned()];
         rows[8].touches = vec!["crate::kind::Kind".to_owned()];
         rows[8].write_set = vec!["src/kind.rs".to_owned(), "src".to_owned()];
-        let found = check_table(DOC, &rows, &ctx);
+        let found = check_table(DOC, &rows, &ids_of(&rows), &ctx);
         let shown: Vec<(u64, String)> = found.iter().map(|finding| (finding.line, finding.refuse.label())).collect();
         let want: Vec<(u64, &str)> = vec![
             (20, "contract-table:duplicate-id"),
@@ -483,6 +491,32 @@ mod tests {
         assert_eq!(found.last().map(|finding| &finding.refuse), Some(&missing), "足りない file だけを名指す");
         let cycle = found.iter().find(|finding| finding.line == 70).map(|finding| finding.refuse.reason());
         assert_eq!(cycle.as_deref(), Some("depends が輪を成す（g → h → g）"), "輪は 1 件で 2 行を名乗る");
+    }
+
+    /// `depends` の解決の母集団は引数の `ids`（§30・行 ad）: 検査する行が 1 つの slice でも、母集団に相手の id が
+    /// 在れば解け、母集団に無ければ `depends-unresolved` の 1 件（母集団を slice の id だけにすると、別の行への
+    /// `depends` は常に解けない＝受付の従来の形）。
+    #[test]
+    fn table_check_resolves_depends_against_the_given_ids_not_the_checked_slice() {
+        let requirements = Ok(["FR1".to_owned()].into_iter().collect::<BTreeSet<String>>());
+        let (allowed, sources) = (["git".to_owned()], sources());
+        let tracked = ["src/kind.rs".to_owned(), "src/use.rs".to_owned()];
+        let ctx = Context {
+            allowed: &allowed,
+            denied: &[],
+            requirements: &requirements,
+            sources: &sources,
+            tracked: &tracked,
+            snapshots: &[],
+        };
+        let mut dependent = row(20, "b");
+        dependent.depends = vec!["a".to_owned()];
+        let labels = |ids: &[&str]| -> Vec<String> {
+            check_table(DOC, std::slice::from_ref(&dependent), ids, &ctx).iter().map(|finding| finding.refuse.label()).collect()
+        };
+        assert!(labels(&["a", "b"]).is_empty(), "母集団に相手が在れば解ける");
+        assert_eq!(labels(&["b"]), vec!["contract-table:depends-unresolved".to_owned()], "slice の id だけでは解けない");
+        assert_eq!(labels(&["b", "zz"]), vec!["contract-table:depends-unresolved".to_owned()], "相手の無い depends は断る");
     }
 
     /// 閉包は「その file から型が見えているか」を先に判定する（closure.rs の `sees`・§3「閉包の同名衝突」・`s2-07l.347`）:
@@ -506,7 +540,7 @@ mod tests {
             };
             let mut touched = row(10, "a");
             touched.touches = vec!["crate::kind::Kind".to_owned()];
-            check_table(DOC, &[touched], &ctx).iter().map(|finding| finding.refuse.label()).collect()
+            check_table(DOC, &[touched], &["a"], &ctx).iter().map(|finding| finding.refuse.label()).collect()
         };
         assert!(ctx(&blind).is_empty(), "型が見えていない file は閉包に入らない");
         assert_eq!(ctx(&sources()), vec!["write-set-incomplete".to_owned()], "取り込む file は従来どおり名指す");
@@ -533,14 +567,14 @@ mod tests {
         let row = rows.first().cloned().unwrap_or_else(|| panic!("1 行"));
         assert!(row.write_set.is_empty(), "write-set は無い");
         assert_eq!((row.creates.len(), row.tests.len(), row.also.len()), (1, 1, 1), "導出の 3 欄を欄として持つ");
-        assert!(check_table(DOC, &rows, &ctx).is_empty(), "閉包 ⊆ write-set と名指しは撃たない・creates の新規 file は解ける");
+        assert!(check_table(DOC, &rows, &["a"], &ctx).is_empty(), "閉包 ⊆ write-set と名指しは撃たない・creates の新規 file は解ける");
         let mut malformed = row.clone();
         malformed.touches = vec!["Kind".to_owned()];
-        let labels: Vec<String> = check_table(DOC, &[malformed], &ctx).iter().map(|finding| finding.refuse.label()).collect();
+        let labels: Vec<String> = check_table(DOC, &[malformed], &["a"], &ctx).iter().map(|finding| finding.refuse.label()).collect();
         assert_eq!(labels, vec!["contract-table:unreadable".to_owned()], "型の形は従来どおり名指す");
         let mut declared = row;
         declared.write_set = vec!["src/kind.rs".to_owned()];
-        let labels: Vec<String> = check_table(DOC, &[declared], &ctx).iter().map(|finding| finding.refuse.label()).collect();
+        let labels: Vec<String> = check_table(DOC, &[declared], &["a"], &ctx).iter().map(|finding| finding.refuse.label()).collect();
         assert_eq!(labels, vec!["write-set-incomplete".to_owned()], "write-set を持つ行は閉包 ⊆ write-set を撃つ");
     }
 
@@ -563,14 +597,14 @@ mod tests {
             tracked: &tracked,
             snapshots: &[],
         };
-        let found = check_table(DOC, &[forced.clone()], &closed);
+        let found = check_table(DOC, &[forced.clone()], &["a"], &closed);
         let labels: Vec<String> = found.iter().map(|finding| finding.refuse.label()).collect();
         assert_eq!(labels, vec!["contract-table:verify-form".to_owned()], "禁じる語列の行は verify-form の 1 件: {labels:?}");
         let rendered = found.first().map(|finding| finding.render("docs/design/t.md")).unwrap_or_default();
         assert!(rendered.starts_with("contracts: docs/design/t.md:10 "), "行番号付き: {rendered}");
         assert!(rendered.contains("runner.denied_commands") && rendered.contains("git push --force"), "行 id と語列: {rendered}");
         let open = Context { denied: &[], ..closed };
-        assert!(check_table(DOC, &[forced], &open).is_empty(), "語列の無い文脈では通る（判定の出所は行の値）");
+        assert!(check_table(DOC, &[forced], &["a"], &open).is_empty(), "語列の無い文脈では通る（判定の出所は行の値）");
     }
 
     /// 要件面を読めない周・閉包の入力を読めない周は、黙って通さず行ごとに `unreadable`（rc 2）で名指す。
@@ -591,7 +625,7 @@ mod tests {
         };
         let mut touched = row(10, "a");
         touched.touches = vec!["crate::kind::Kind".to_owned()];
-        let found = check_table(DOC, &[touched], &ctx);
+        let found = check_table(DOC, &[touched], &["a"], &ctx);
         let rendered: Vec<String> = found.iter().map(|finding| finding.render("docs/design/t.md")).collect();
         assert_eq!(found.len(), 2, "要件面と閉包の入力の 2 件: {rendered:?}");
         assert!(found.iter().all(|finding| finding.rc() == RC_BROKEN), "読めない周は rc 2: {rendered:?}");

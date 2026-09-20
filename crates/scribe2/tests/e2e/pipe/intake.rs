@@ -2849,3 +2849,95 @@ fn pipe_intake_design_reads_the_row_from_head_not_the_worktree() {
     stop_run_ok(&state, &id);
     clean(&[&repo, &state]);
 }
+
+// ───── 受付の depends の解決（設計 docs/design/contract-source.md §30・行 ad・`s2-07l.496`・接頭辞 `pipe_intake_depends_`） ─────
+
+/// depends の toy の verify 行（`derive_` の歯 2 file が導出値＝行は write-set を持たず、受付は導出で通る）。
+const DEPENDS_VERIFY: &str = "[\"cargo nextest run -p toy --no-tests=fail derive_\"]";
+
+/// 2 行の設計 doc: 行 `a`（`depends` なし）と、行 `b`（`depends = [<target>]`）。相手が `a` なら同じ doc の**自分でない
+/// 別の行**・相手が `zz` なら doc に無い id。
+fn depends_doc(target: &str) -> String {
+    let rows = [
+        derive_row("a", &[("verify", DEPENDS_VERIFY)]),
+        derive_row("b", &[("verify", DEPENDS_VERIFY), ("depends", &format!("[\"{target}\"]"))]),
+    ];
+    table_doc(&table_region(&rows))
+}
+
+/// `contracts check --repo R --rules <受付と同じ上限>` の findings（`contracts: ` の行）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn depends_check_findings(repo: &Path, state: &Path) -> Vec<String> {
+    let out = Command::new(bin())
+        .args(["contracts", "check", "--repo", &repo.display().to_string(), "--rules", &ceiling_rules(state)])
+        .output()
+        .expect("binary を起動できる");
+    findings_of(&out)
+}
+
+/// (1) `depends` の相手が同じ doc の自分でない別の行（`b` → `a`）である行の受付は rc 0 で通り、run dir が 1 つ出来る。
+/// base は検査する 1 行の slice の id だけを母集団に読むので `depends-unresolved` で断る（RED）。
+#[test]
+fn pipe_intake_depends_on_another_row_of_the_same_doc_is_accepted() {
+    let (repo, state) = derive_repo(&depends_doc("a"));
+    let out = intake_raw(&repo, &state, "docs/design/toy.md#b", "s2-dep");
+    let err = stderr_of(&out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "相手の在る depends は通る: {err}");
+    assert!(!err.contains("depends-unresolved"), "depends を理由に断らない: {err}");
+    let dirs = run_dirs(&state);
+    assert_eq!(dirs.len(), 1, "run dir が 1 つ出来る: {dirs:?}");
+    let id = run_id_of(&out);
+    assert_eq!(dirs, vec![id.clone()], "出来た run dir は受けた便のもの");
+    stop_run_ok(&state, &id);
+    clean(&[&repo, &state]);
+}
+
+/// (2) 相手の id が doc に無い行（`b` → `zz`）は従来どおり断られ run dir は 0。断りの stderr は **`contracts check` の
+/// 描画と逐語で同じ `depends-unresolved` の 1 行だけ**（doc と行番号・名・理由の文）で、他の理由の行を伴わない
+/// （別の検査で先に落ちた偽の緑を除く・`contracts check` もその 1 件だけを名指す）。
+#[test]
+fn pipe_intake_depends_on_a_missing_id_is_refused_with_the_contracts_check_line() {
+    let doc = depends_doc("zz");
+    let (repo, state) = derive_repo(&doc);
+    let out = intake_raw(&repo, &state, "docs/design/toy.md#b", "s2-dep");
+    let err = stderr_of(&out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "相手の無い depends は断る: {err}");
+    let want = format!(
+        "contracts: docs/design/toy.md:{} contract-table:depends-unresolved: depends zz が同じ doc の行 id に無い",
+        table_line(&doc, "b")
+    );
+    assert_eq!(err.lines().collect::<Vec<&str>>(), vec![want.as_str()], "断りは depends-unresolved の 1 行だけ: {err}");
+    assert_eq!(depends_check_findings(&repo, &state), vec![want], "contracts check と逐語で同じ 1 行");
+    assert_eq!(run_dirs(&state), Vec::<String>::new(), "run dir は 0");
+    assert_eq!(event_count(&state), 0, "event も書かない");
+    clean(&[&repo, &state]);
+}
+
+/// (3) 事前の検査の口は受付と同じ 1 判定を通る: (1) の行では `refuse=` に `depends-unresolved` が出ず末尾 `preflight: ok`、
+/// (2) の行では stderr に同じ `depends-unresolved` の行が出て末尾 `preflight: refused n=1`（行の欠陥は表の検査が先に
+/// 断るので `refuse=` の列は持たない・[`pipe_preflight_lists_one_refusal_per_judgement_without_creating_a_run`] と同じ形）。
+/// どちらも run dir を作らない。
+#[test]
+fn pipe_intake_depends_preflight_follows_the_same_judgement() {
+    let (resolved, state) = derive_repo(&depends_doc("a"));
+    let out = preflight_raw(&resolved, &state, "docs/design/toy.md#b", "s2-dep", true);
+    let (text, err) = (stdout_of(&out), stderr_of(&out));
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "相手の在る depends は preflight も通る: {text} {err}");
+    assert!(!text.contains("depends-unresolved") && !err.contains("depends-unresolved"), "{text} {err}");
+    assert!(fact_lines(&out, "refuse=").is_empty(), "断り 0: {text}");
+    assert_eq!(tail_line(&out), "preflight: ok", "{text}");
+    assert_eq!(run_dirs(&state), Vec::<String>::new(), "run dir を作らない");
+    clean(&[&resolved, &state]);
+
+    let (missing, state) = derive_repo(&depends_doc("zz"));
+    let out = preflight_raw(&missing, &state, "docs/design/toy.md#b", "s2-dep", true);
+    let (text, err) = (stdout_of(&out), stderr_of(&out));
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "相手の無い depends は preflight も断る: {text} {err}");
+    assert!(err.contains("contract-table:depends-unresolved: depends zz が同じ doc の行 id に無い"), "{err}");
+    assert_eq!(tail_line(&out), "preflight: refused n=1", "{text}");
+    assert_eq!(run_dirs(&state), Vec::<String>::new(), "run dir を作らない");
+    clean(&[&missing, &state]);
+}

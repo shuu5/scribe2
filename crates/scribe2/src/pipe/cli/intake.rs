@@ -309,7 +309,7 @@ pub(in crate::pipe) fn generated(
         let first = errors.into_iter().next().unwrap_or(TableError::RowMissing { line: 0, id: pointer.id.clone() });
         refuse(&Refuse::ContractTable(first), &rest)
     })?;
-    let findings = check_row(&text, &row, materials);
+    let findings = check_row(&pointer.path, &text, &row, materials);
     if !findings.is_empty() {
         // 名は `Refuse::ContractTable` の側から取る（字面を 2 か所に書かない・C1）。findings は表の検査の
         // 描画をそのまま並べる（`contracts check` と 1 byte 同じ行＝読み手が 2 つの形を覚えない）。
@@ -346,8 +346,15 @@ fn derived_write_set(row: &ContractRow, materials: &Materials) -> Result<Vec<Str
 ///
 /// 材料（tracked / sources / snapshots / facts）は [`Materials::read`] が 1 周に 1 回だけ読む。base の tree を
 /// 読めない周と宣言が上限に外れる周は、その読みの時点で断る（順序は従来のまま）。
-fn check_row(text: &str, row: &ContractRow, materials: &Materials) -> Vec<table::Finding> {
-    table::check_table(text, std::slice::from_ref(row), &materials.context())
+///
+/// 検査する行は 1 つのままだが、`depends` の解決の母集団は**同じ doc の全行の id**（§30・行 ad）: 既に読んだ
+/// base の本文から全行を引き直して id だけを渡す（新しい読みは足さない・閉包と名指しは当該行にだけ撃つ）。
+/// 行は [`table::find_row`] で既に読めているので、全行の読みが落ちる周は無い（落ちれば母集団は空＝相手の在る
+/// `depends` も断る側に倒れる・黙って通さない）。
+fn check_row(path: &str, text: &str, row: &ContractRow, materials: &Materials) -> Vec<table::Finding> {
+    let rows = table::read_rows(path, text).unwrap_or_default();
+    let ids: Vec<&str> = rows.iter().map(|other| other.id.as_str()).collect();
+    table::check_table(text, std::slice::from_ref(row), &ids, &materials.context())
 }
 
 /// 契約 file が読めない周の断り（rc 2・理由を全件出す）。
