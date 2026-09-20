@@ -1088,7 +1088,7 @@ fn rules_cli_rules_flag_overrides_embedded() {
     let embedded = vessel::rules::cli::dispatch(&["get".to_owned(), "gate.token_cap".to_owned()]);
     assert_eq!(
         embedded.out,
-        vec!["400000".to_owned()],
+        vec!["150000".to_owned()],
         "override は埋め込みを書き換えない"
     );
     std::fs::remove_dir_all(&dir).ok();
@@ -1468,7 +1468,7 @@ fn rules_manifest_carries_runner_model() {
 fn rules_row_readers_return_the_value_or_one_of_three_reasons() {
     let manifest = Manifest::embedded().expect("埋め込み manifest を読める");
     assert_eq!(str_row(&manifest, "runner.model"), Ok("opus"), "文字列の行の読み手");
-    assert_eq!(int_row(&manifest, "gate.token_cap"), Ok(400_000), "整数の行の読み手");
+    assert_eq!(int_row(&manifest, "gate.token_cap"), Ok(150_000), "整数の行の読み手");
     assert_eq!(str_row(&manifest, "gate.token_cap"), Err("gate.token_cap が文字列でない".to_owned()), "整数の行");
     assert_eq!(int_row(&manifest, "runner.model"), Err("runner.model が整数でない".to_owned()), "文字列の行");
     assert_eq!(str_row(&manifest, "nope"), Err("nope が無い".to_owned()), "無い行");
@@ -1479,6 +1479,20 @@ fn rules_row_readers_return_the_value_or_one_of_three_reasons() {
     .expect("不発効の行は読める");
     assert_eq!(str_row(&disabled, "runner.model"), Err("runner.model は不発効である".to_owned()), "不発効");
     assert_eq!(int_row(&disabled, "gate.token_cap"), Err("gate.token_cap は不発効である".to_owned()), "不発効");
+}
+
+/// 戻しの行（rules-manifest §14・`s2-07l.376`）: 行 h（`s2-07l.375`）の一時の上げ 400000 を `s2-07l.209` の着地後に
+/// 150000（SRS NFR1 の目標値・上げ前の値）へ戻す。裁定は行 h と同じ承認の時刻で始まり、戻しの便を名指す。
+#[test]
+fn rules_token_cap_revert_row_carries_target_value_and_ruling() {
+    let manifest = Manifest::embedded().expect("埋め込み manifest を読める");
+    let row = manifest.get("gate.token_cap").expect("gate.token_cap の行が在る");
+    assert_eq!(row.kind, RuleKind::GateTokenCap, "kind");
+    assert_eq!(row.value, RuleValue::Int(150_000), "値は SRS NFR1 の目標値（上げ前の値）");
+    assert!(row.enabled, "発効している");
+    assert!(row.ruling.starts_with("user 2026-09-15T23:31Z"), "裁定は行 h と同じ承認の時刻で始まる: {}", row.ruling);
+    assert!(row.ruling.contains("s2-07l.376"), "裁定は戻しの便を名指す: {}", row.ruling);
+    assert_eq!(int_row(&manifest, "gate.token_cap"), Ok(150_000), "上限の読み手が戻した値を返す");
 }
 
 /// 述語が**真を返すだけ**でないこと（非空虚性）。3 つの壊し方をすべて false で返す。

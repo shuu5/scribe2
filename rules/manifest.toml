@@ -154,10 +154,10 @@ ruled_at = "2026-09-07"
 [[rule]]
 id = "gate.token_cap"
 kind = "GateTokenCap"
-value = 400000
+value = 150000
 enabled = true
-ruling = "user 2026-09-15T23:31Z temporary raise for non-pure-move 169 KB diff (s2-07l.209; revert = s2-07l.376; precedent = s2-07l.265 / .267)"
-ruled_at = "2026-09-15"
+ruling = "user 2026-09-15T23:31Z revert of the temporary raise after s2-07l.209 landed (this revert = s2-07l.376; raise = s2-07l.375; precedent = s2-07l.265 / .267; target = SRS NFR1)"
+ruled_at = "2026-09-20"
 
 [[rule]]
 id = "hook.budget_ms"
