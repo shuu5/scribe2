@@ -568,7 +568,7 @@ section = "30"
 write-set = ["crates/scribe2/src/pipe/cli/intake.rs", "crates/scribe2/src/pipe/table/check.rs", "crates/scribe2/src/pipe/table.rs", "crates/scribe2/tests/e2e/pipe/intake.rs"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_intake_depends_", "cargo nextest run -p scribe2 --no-tests=fail pipe_intake_design_", "cargo nextest run -p scribe2 --no-tests=fail pipe_preflight_", "cargo nextest run -p scribe2 --no-tests=fail table_check_"]
 size = "S"
-done = "depends の相手が同じ doc の自分でない別の行である行を受付が rc 0 で受けて run dir が 1 つ出来、相手が doc に無い行は contracts check と逐語で同じ depends-unresolved の 1 行だけで断られて run dir が 0、preflight は前者で refuse= に depends-unresolved を出さず後者で出し、既存の pipe_intake_design_ / pipe_preflight_ / table_check_ の歯が緑のまま"
+done = "depends の相手が同じ doc の自分でない別の行である行を受付が rc 0 で受けて run dir が 1 つ出来、相手が doc に無い行は contracts check と逐語で同じ depends-unresolved の 1 行だけで断られて run dir が 0、preflight は（受付と同じ判定関数を既に直に呼んでいるので source を変えずに）前者で refuse= に depends-unresolved を出さず後者で出し、既存の pipe_intake_design_ / pipe_preflight_ / table_check_ の歯が緑のまま"
 <!-- contracts:end -->
 
 
