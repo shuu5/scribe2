@@ -109,7 +109,7 @@ C1 / C5（R-C9-1 は行・裁定 id）・C2（`Purpose` / `Selection` / `Stage` 
 - 触らない: 純関数 `select`（`fleet/select.rs`）と `Input`（構築点 6 か所・`prop.rs` を含む）・replay の `State`・event の形・`UnmeasuredReason` の variant・`fleet usage` / `--show` の外形・R-C9-1。
 - 現物の所在（verified 2026-09-20・main f678bd0・(2) が触る 1 本）: 選定の前計測を撃つのは `crates/scribe2/src/fleet/cli.rs` の private な `select_account(`（引数は起動行と置き場・`super::usage::run(` を**条件なしで 1 回撃ち**、rc が 0 でなければそこで返し、その後に replay して純関数 `select(` を呼ぶ）。鮮度の cache も 429 の後の back-off もこの経路に無い。
 - 歯（2 群・行の verify がそれぞれを撃つ）:
-  1. **選定**（`fleet_select_fresh_` 接頭辞・`crates/scribe2/tests/e2e/fleet.rs`）: 偽 client の呼出回数を写しで数え、新しい実測を持つ口座は選定で測り直されない（呼出 0）／古い実測の口座は測り直される（呼出 1）／429 を返す偽 client + 古い実測（reset 前・`fresh_s` より古い）の口座 → 測り直され、Unmeasured が追記されず（event の本数不変）選定がその口座を候補に残す／429 + 最新の回が Unmeasured の口座 → 追記され候補から外れる（従来）／`fleet usage` は鮮度に関わらず全口座を測る（`Always`）／行の無い manifest は既存の行の読み手の極性のまま断る。
+  1. **選定**（`fleet_select_fresh_` 接頭辞・`crates/scribe2/tests/e2e/fleet.rs`）: 偽 client の呼出回数を写しで数え、新しい実測を持つ口座は選定で測り直されない（呼出 0）／古い実測の口座は測り直される（呼出 1）／429 を返す偽 client + 古い実測（reset 前・`fresh_s` より古い）の口座 → 測り直され、Unmeasured が追記されず（event の本数不変）選定がその口座を候補に残し、**stderr に kept の 1 行**（`usage: account=<label> kept reason=<reason>` の形で label と理由の語を運ぶ・形 (3) の外形）が出て **stdout の 1 行形は 1 字も変わらない**（timeout の周も同じ形で reason の語だけが違う）／429 + 最新の回が Unmeasured の口座 → 追記され候補から外れ、**kept の 1 行は出ない**（否定の枝）／`fleet usage` は鮮度に関わらず全口座を測る（`Always`）／行の無い manifest は既存の行の読み手の極性のまま断る（読み手を増やさない＝断りの字面と rc は既存のまま・測り直しにも kept にも入らない）。stdout の 1 行形が不変であることは**既存の歯**が受け、行の verify が完全名 `fleet_external_form`（`crates/scribe2/tests/e2e/fleet.rs`・外形 snapshot `e2e__fleet__fleet_external_form.snap`）で撃つ。
   2. **rules 行**（`rules_embedded_manifest_declares_usage_fresh_` 接頭辞・`crates/scribe2/tests/e2e/rules.rs`）= 埋め込みの manifest が `fleet.usage_fresh_s` の行を値・裁定 id・裁定日つきで持ち、kind の包含で**行と variant を対で足させる**（`fleet.usage_timeout_s` と同型）。**外形**は既存の歯が受け、行の verify が完全名 `rules_external_form`（同 file・外形 snapshot `e2e__rules__rules_external_form.snap` の `rows=` / `kinds=` が 1 つ増える）で撃つ。
 - 却下: 選定ごとに 1 口座だけ測る（候補の比較が古い値と新しい値の混在になる）／壁時計の sleep で間引く（壁時計依存・費用が増える）／replay で「最新の Measured」を別に持ち `select` に渡す（`Input` の構築点 6 か所と `prop.rs` を動かす・鮮度の規則が純関数に入り値の線が 2 か所になる）／429 の口座を admin が `--account` で名指しする（器の選定 FR36 の迂回・N2）。
 
@@ -222,9 +222,9 @@ title = "選定の前計測の鮮度 — rules 行 fleet.usage_fresh_s の内側
 req = ["FR36", "FR33"]
 section = "13"
 write-set = ["rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "crates/scribe2/tests/e2e/rules.rs", "docs/design/rules-manifest.md", "crates/scribe2/src/fleet/select.rs", "crates/scribe2/src/fleet/usage.rs", "crates/scribe2/src/fleet/cli.rs", "crates/scribe2/tests/e2e/fleet.rs", "crates/scribe2/tests/e2e/snapshots/e2e__rules__rules_external_form.snap"]
-verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail fleet_select_fresh_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail rules_embedded_manifest_declares_usage_fresh_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail rules_external_form"]
+verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail fleet_select_fresh_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail fleet_external_form", "cargo nextest run -p scribe2 --test e2e --no-tests=fail rules_embedded_manifest_declares_usage_fresh_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail rules_external_form"]
 size = "S"
-done = "新しい実測を持つ口座は選定で測り直されず（偽 client の呼出 0）、古い実測の口座は測り直され（呼出 1）、測り直した口座が 429 / timeout を返す周は Unmeasured を追記せず最新の実測が上書きされず候補に残り、最新の回が Unmeasured の口座は従来どおり追記されて候補から外れ、fleet usage は鮮度に関わらず全口座を測り、rules 行 fleet.usage_fresh_s が §13 (1) の値 300 と裁定 id user 2026-09-16T11:14Z と裁定日 2026-09-16 つきで 1 本増えて RuleKind の variant と対になり外形の rows= と kinds= が 1 つ増え、純関数 select と Input の構築点と event の形は不変"
+done = "形 (1) = rules 行 fleet.usage_fresh_s が値 300 と裁定 id user 2026-09-16T11:14Z と裁定日 2026-09-16 つきで 1 本増えて RuleKind の variant と対になり rules の外形の rows= と kinds= が 1 つ増える。形 (2) = 最新の回が全部実測でその ts が now − fresh_s より新しい口座は選定の前計測で測り直されず（偽 client の呼出 0・子 process も event も増えない）、古い口座と最新の回が Unmeasured の口座と行の無い口座だけが測られる（呼出 1）。形 (3) = 測り直した口座が 429 / timeout を返し最新の回が実測である周は Unmeasured を追記せず（event の本数不変）その実測を最新のまま使って選定の候補に残し、stderr に kept の 1 行（usage: account=<label> kept reason=<reason> の形で label と理由の語を運ぶ）が出て stdout の 1 行形は 1 字も変わらず、最新の回が Unmeasured の口座は従来どおり追記されて候補から外れ kept の 1 行も出ない。形 (4) = fleet usage の口は鮮度に関わらず全口座を測り（Always）計測の実装は 1 本のまま。行の無い manifest は既存の行の読み手の極性のまま断る（断りの字面と rc は不変・測り直しにも kept にも入らない）。純関数 select と Input の構築点と replay の State と event の形と UnmeasuredReason の variant と fleet の外形 snapshot は不変"
 
 [[contract]]
 id = "k"
@@ -262,10 +262,10 @@ title = "API に届かず止まった runner を Failed に倒さない — 到�
 req = ["FR37", "FR14"]
 section = "17"
 touches = ["crate::pipe::follow::Halt"]
-write-set = ["crates/scribe2/src/headless/mod.rs", "crates/scribe2/src/headless/runner.rs", "crates/scribe2/src/headless/runner.txt", "crates/scribe2/src/pipe/spawn.rs", "crates/scribe2/src/pipe/follow.rs", "crates/scribe2/src/pipe/cli/resume.rs", "crates/scribe2/tests/e2e/pipe/spawn.rs", "crates/scribe2/tests/e2e/snapshots/e2e__headless__headless_runner_prompt_external_form.snap"]
-verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_unreachable_"]
+write-set = ["crates/scribe2/src/headless/mod.rs", "crates/scribe2/src/headless/runner.rs", "crates/scribe2/src/headless/runner.txt", "crates/scribe2/src/pipe/spawn.rs", "crates/scribe2/src/pipe/follow.rs", "crates/scribe2/src/pipe/cli/resume.rs", "crates/scribe2/tests/e2e/pipe/spawn.rs", "crates/scribe2/tests/e2e/headless.rs", "crates/scribe2/tests/e2e/snapshots/e2e__headless__headless_runner_prompt_external_form.snap"]
+verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_unreachable_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail headless_runner_prompt_external_form"]
 size = "M"
-done = "到達不能の本文で終わった runner の便が Spawned のまま SeatStopped detail=runner-unreachable を 1 件持ち Failed が 0 で commit が残り、pipe resume が生死の計測を飛ばして runner を 1 回起こし直して resume:unreachable を記帳し、集合に無い is_error は従来どおり Failed"
+done = "到達不能の本文で終わった runner の便が Spawned のまま SeatStopped detail=runner-unreachable を 1 件持ち Failed が 0 で commit が残り、pipe resume が生死の計測を飛ばして runner を 1 回起こし直して Spawned detail に resume:unreachable を記帳し、runner の雛形の「途中再開」節に理由の 1 行が増えてその差分が雛形の外形 snapshot に写り、集合に無い is_error の本文は従来どおり Failed detail=runner-rc で終わり、is_error=false の本文に語が在っても弁別せず（pure）、新しい rc は既存の rc と衝突しない"
 
 [[contract]]
 id = "o"
@@ -275,7 +275,7 @@ section = "18"
 write-set = ["crates/scribe2/src/pipe/ratelimit.rs", "crates/scribe2/src/fleet/usage.rs", "crates/scribe2/src/fleet/cli.rs", "crates/scribe2/tests/e2e/pipe/ratelimit.rs"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_ratelimit_fresh_"]
 size = "S"
-done = "pipe run / resume / 追随の起こし直しの初回の前計測が新しい実測の口座を測り直さず、待ちと Timeout の後の撃ち直しは全口座を測り、rules 行は増えない"
+done = "形 (1) = 便の起動の前計測（pipe run / pipe resume / 追随の起こし直しの初回）が fleet select の前計測と同じ 1 本の読み手（鮮度の規則は 1 か所・秒は §13 の rules 行）を通り、新しい実測の口座を測り直さず（同じ置き場で 2 便続けて起こすと 2 便目の偽 curl の呼出が増えない・母集団 = 1 便目の呼出 = 口座数）、§13 の行より古い ts の実測の口座は測り直される（呼出 +1）。形 (2) = 待ちが成立した後と Timeout の後の撃ち直しは全口座を測る（既存の待ちの歯の fixture で待ちの後の呼出が口座数だけ増える）。形 (3) = 新しい rules 行は 1 本も足さず（§13 の行を共有）、fleet usage の口と select_for_run と Input と replay と event の形と stderr の kept の行は §13 のまま不変で、純関数 select と Pool の欄と choose_or_wait と極性一覧も不変"
 depends = ["j"]
 
 [[contract]]
