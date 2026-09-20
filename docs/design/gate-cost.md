@@ -235,9 +235,9 @@ e2e は binary を spawn し外部 command は PATH 先頭の stub で差し替�
 - **形（何を作るか・番号は done と歯の対）**:
   1. **写す**: gate が検出線を撃った直後に、その周の判定行（record の `line=` と同じ字面）と出力（`outcomes.json` と missed.txt）を run dir 配下の**周ごとの置き場**へ写す（上書きせず周ごとに別の置き場・周の番号は Gated の verdict 件数）。
   2. **不在を弁別する**: 出力が無い周は不在を表す marker を同じ置き場に置き、判定行も無い周は不在と分かる 1 行（**0 件と弁別**・判定行の形と衝突しない字面）を残す。空の写しで「0 件だった」に倒さない（C10・NFR4）。
-  3. **読み口を向け替える**: `detection_lines` の読み口を写しの判定行へ向け、verify.jsonl を読む経路と worktree の out を直接読む形を**持たない**（2 実装にしない・C2）。
+  3. **読み口を向け替える**: `detection_lines` の読み口を **verify.jsonl から (1) の写しの判定行へ**向け、verify.jsonl を読む経路を残さない（2 実装にしない・C2）。**pipe show は現物でも worktree の out を読んでいない**（読み手は上の 1 本で、渡る path は run dir の verify.jsonl だけ・verified）＝本項が動かすのは「verify.jsonl から写しへ」の 1 手だけで、「out を読まなくなる」ことは約束の中身ではない（それを測る歯は HEAD でも base でも緑＝空虚になる）。
   4. **数え直さない**: total / caught / missed の数え手は `crates/xtask/src/mutantsdiff.rs` の 1 つのまま（C2）＝pipe show の判定行の**字面は 1 字も変わらない**。
-- **歯**（`pipe_gate_detection_copy_` 接頭辞・置き場は `crates/scribe2/tests/e2e/pipe/gate.rs`・偽の検出線は既存の gate の歯と同型）: (a) 2 周撃った gate で周ごとの置き場が 2 つ在り、1 周目の生存の一覧が 2 周目の後も読める（上書きされない）／(b) 出力を書かない偽の検出線の周は marker が在り、判定行の写しは在る／(c) 判定行も出力も無い周は不在の 1 行が在り、**0 件の周（出力が在って missed が 0）とは別の字面**である（(b)(c) が (2) の否定の枝）／(d) worktree の out を歯が消した後でも pipe show の判定行が同じ字面を出す（(3) の pin＝out を読む経路が残っていれば落ちる）。(4) の「字面が変わらない」は**既存の歯**が受け、行の verify が完全名 `pipe_record_show_external_form`（同 file・外形 snapshot `e2e__pipe__gate__pipe_record_show_external_form.snap`）で撃つ。
+- **歯**（`pipe_gate_detection_copy_` 接頭辞・置き場は `crates/scribe2/tests/e2e/pipe/gate.rs`・偽の検出線は既存の gate の歯と同型）: (a) 2 周撃った gate で周ごとの置き場が 2 つ在り、1 周目の生存の一覧が 2 周目の後も読める（上書きされない）／(b) 出力を書かない偽の検出線の周は marker が在り、判定行の写しは在る／(c) 判定行も出力も無い周は不在の 1 行が在り、**0 件の周（出力が在って missed が 0）とは別の字面**である（(b)(c) が (2) の否定の枝）／**(d) (3) の pin は「写しが出所である」ことを 2 例で測る**（base で必ず RED になる形）: (d1) gate の後に歯が**写しの判定行だけ**を別の字面へ書き換え（verify.jsonl の record は元のまま）、`pipe show` がその**書き換えた字面**を出す＝base は verify.jsonl から読むので元の字面が出て落ちる／(d2) gate の後に歯が**写しを消す**と `pipe show` が (2) の不在の 1 行を出す（verify.jsonl に detection record が在るまま）＝base は record から判定行を出すので落ちる。(4) の「字面が変わらない」は**既存の歯**が受け、行の verify が完全名 `pipe_record_show_external_form`（同 file・外形 snapshot `e2e__pipe__gate__pipe_record_show_external_form.snap`）で撃つ。
 - **触らない**: 検出線の実行そのもの・判定・verify.jsonl の record・`crates/xtask/src/mutantsdiff.rs` の数え手。
 - **却下案**: admin が Gated の時点で手で写す運用は散文の手順になり、追随の再 gate が同じ秒に起きると間に合わないため不採用。worktree の out を周ごとに別名で残す案は、worktree が retire で畳まれるため置き場として不適で不採用。
 
@@ -429,7 +429,7 @@ section = "15"
 write-set = ["crates/scribe2/src/pipe/gate/record.rs", "crates/scribe2/src/pipe/gate.rs", "crates/scribe2/src/pipe/cli/show.rs", "crates/scribe2/tests/e2e/pipe/gate.rs", "crates/scribe2/tests/e2e/snapshots/e2e__pipe__gate__pipe_record_show_external_form.snap", "docs/design/gate-cost.md"]
 verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_gate_detection_copy_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_record_show_external_form"]
 size = "S"
-done = "検出線の判定行と出力が周ごとに run dir の別の置き場へ残って 2 周目が 1 周目を上書きせず、出力の無い周は marker が・判定行も無い周は不在の 1 行が在って 0 件の周と字面で弁別され、pipe show が worktree の out でなくその写しから判定行を出し（out を消した後も同じ字面）、数え手は 1 つのままで判定行の字面と外形 snapshot は 1 字も変わらない"
+done = "検出線の判定行と出力が周ごとに run dir の別の置き場へ残って 2 周目が 1 周目を上書きせず、出力の無い周は marker が・判定行も無い周は不在の 1 行が在って 0 件の周と字面で弁別され、pipe show の判定行の出所が verify.jsonl からその写しへ移って、写しの判定行だけを書き換えた周は show がその字面を出し（verify.jsonl は元のまま）・写しを消した周は show が不在の 1 行を出し（record は在るまま）、数え手は 1 つのままで通常の周の判定行の字面と外形 snapshot は 1 字も変わらない"
 
 [[contract]]
 id = "g"

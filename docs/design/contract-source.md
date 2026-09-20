@@ -280,7 +280,11 @@ scribe2 を載せる consumer が pipe を通すのに要る面は 3 つで、�
   5. **(e) 節の切り出し**（`crates/scribe2/src/pipe/table/check.rs` の private な `section_lines(`）= 契約表の区間の開始と終了の 2 つの腕（腕を落とすと区間の中身が節の本文に混ざる）・fence の中を見出しと読まない guard（`false` にすると fence の中の `## ` が節を切り替える）・本文を拾う条件の否定（`!` を落とすと fence の中だけを拾う）の 4 本。
 - **歯**（接頭辞 `contract_closure_ext_survivor_`・生存 1 本に歯 1 本・**変異の A/B で撃墜されること**が done の条件）:
   - (a)(c)(d)(e) は**同じ file の in-file の歯**（判定式が private な純関数で、受付を通すと別の断りが先に立って分岐に届かない＝負例が別の理由で通る型を避ける）。接頭辞の後は `a_` / `c_` / `d_` / `e_begin_` / `e_end_` / `e_inside_` / `e_fence_`。
-  - (b) は **e2e**（`crates/scribe2/tests/e2e/pipe/intake.rs`）。`usages(` は `pipe/closure.rs` の私有で、同 file は R-C4-2 の余地が薄い（§29 の実測）ため in-file の歯を増やさず、`surfaces` を宣言した契約を受付に通して外形 pin の閉包の結果で測る。接頭辞の後は `b_name_`（空の名と `-` を含む名を持つ usage 行を混ぜた fixture で、閉包に入る file の集合が**変わらない**こと＝`||` / `==` のどちらを変えても集合が動く）と `b_match_`。
+  - (b) は **e2e**（`crates/scribe2/tests/e2e/pipe/intake.rs`）。`usages(` は `pipe/closure.rs` の私有で、同 file は R-C4-2 の余地が薄い（§29 の実測）ため in-file の歯を増やさず、`surfaces` を宣言した契約を受付に通して外形 pin の閉包の結果で測る。
+  - **(b) の分岐の実測（2026-09-20・main 9a218c5）**: 生存 2 本が乗る 1 行は、名を捨てる条件（名が空である**か**、名の文字が識別子の文字でも `-` でもないものを含む）で、演算子の site は **3 つ**ある——外側の論理和・内側の論理和・`-` との等値。観察できる面は `surface_closure(` の結果 1 つ（名が `usages(` の列に無ければ `ClosureError::SurfaceUnknown` で受付が断り、在れば usage 文字列を literal に持つ file が導出値に入る）なので、3 site を**極性で 2 本に割る**:
+    - `b_name_`（**肯定側**・2 例）= 素の英数字の名を持つ usage 行と、`-` を含む名を持つ usage 行。どちらも解けて、その usage 文字列を持つ歯の file が導出値に入る。**内側の論理和**を積に変える変異は素の名を落とし、**等値**を非等値に変える変異は `-` の名を落とす＝この歯が落ちる。
+    - `b_match_`（**否定側**・1 例）= 識別子の文字でも `-` でもない文字を含む名は `SurfaceUnknown` で断られる（導出値が出ない）。**外側の論理和**を積に変える変異は「名が空でない」側が偽になって行が捨てられなくなり、**等値**を非等値に変える変異はその文字を通す＝どちらもこの名を解いてしまい、この歯が落ちる。
+    - したがって 3 site のうち内側の論理和は**肯定側だけ**・外側の論理和は**否定側だけ**が受け、等値は**両方**が受ける（1 site 1 歯の対応にならないのはこの 1 行に 3 site が同居するため）。空の名の site は、名が空になる usage 行を fixture に置いても外側の論理和と同じ枝を通るだけなので、否定側の 1 例に畳む（空の名を `surfaces` に宣言する形は取らない＝行の欄の読み手が空の要素を落とすかどうかに歯を依存させない）。
   - **空虚さの柵**: どの歯も「母集団と件数を同じ assert で出す」（0 件を「変化なし」と読まない）・境界の歯は**両側**（余地ちょうど＝断らない／余地 −1＝断る）を持つ・(e) の 4 本は開始の腕と終了の腕を**別々に**落として別の歯が落ちること（1 本で 4 本を兼ねない）。
 - **触らない**: 受付の判定・断りの型と字面・rc・rules 行・`crates/scribe2/src/pipe/closure.rs` の src（(b) の歯は e2e から測る）。
 - **極性**: 歯だけの便なので検出線の母集団は 0 になる（§16 の gate-cost 側の行 g が的を宣言する形を持つまでは、撃墜の proof は便の notes に手で残す）。
@@ -426,7 +430,7 @@ section = "31"
 write-set = ["crates/scribe2/src/pipe/cli/intake.rs", "crates/scribe2/src/pipe/declaration/write_set.rs", "crates/scribe2/src/pipe/table/check.rs", "crates/scribe2/tests/e2e/pipe/intake.rs"]
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail contract_closure_ext_survivor_a_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail contract_closure_ext_survivor_b_name_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail contract_closure_ext_survivor_b_match_", "cargo nextest run -p scribe2 --lib --no-tests=fail contract_closure_ext_survivor_c_", "cargo nextest run -p scribe2 --lib --no-tests=fail contract_closure_ext_survivor_d_", "cargo nextest run -p scribe2 --lib --no-tests=fail contract_closure_ext_survivor_e_begin_", "cargo nextest run -p scribe2 --lib --no-tests=fail contract_closure_ext_survivor_e_end_", "cargo nextest run -p scribe2 --lib --no-tests=fail contract_closure_ext_survivor_e_inside_", "cargo nextest run -p scribe2 --lib --no-tests=fail contract_closure_ext_survivor_e_fence_"]
 size = "S"
-done = "§31 の (a)〜(e) の生存 9 本それぞれに歯が 1 本在り、その分岐を変異させた A/B で対応する歯だけが落ちる（撃墜の本数と母集団を notes に残す）。境界の歯は余地ちょうどと余地 −1 の両側を持ち、節の切り出しの 4 本は開始の腕と終了の腕を別々に落として別の歯が落ち、各 assert が件数と母集団を同じ行に出す。受付の判定・断りの型と字面・rc・rules 行は 1 字も変わらない"
+done = "§31 の (a)〜(e) の生存 9 本それぞれに歯が在り、その分岐を変異させた A/B で撃墜される（撃墜の本数と母集団を notes に残す）。(a)(c)(d)(e) は 1 site 1 歯で対応する歯だけが落ち、(b) は 1 行に同居する 3 site を極性で 2 本に割る＝b_name_ は肯定側（素の名と - を含む名が解ける）で内側の論理和と等値の変異に落ち、b_match_ は否定側（識別子でも - でもない文字を含む名が SurfaceUnknown で断られる）で外側の論理和と等値の変異に落ちる。境界の歯は余地ちょうどと余地 −1 の両側を持ち、節の切り出しの 4 本は開始の腕と終了の腕を別々に落として別の歯が落ち、各 assert が件数と母集団を同じ行に出す。受付の判定・断りの型と字面・rc・rules 行は 1 字も変わらない"
 
 [[contract]]
 id = "m"
