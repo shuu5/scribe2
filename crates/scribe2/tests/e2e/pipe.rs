@@ -40,6 +40,19 @@ pub(super) fn bin() -> &'static str {
     env!("CARGO_BIN_EXE_scribe2")
 }
 
+/// binary を起こす `Command`（**この module 群が binary を起こす唯一の口**・設計 pipeline.md §28・`s2-07l.381`）。
+///
+/// cwd を **git repo でない tmp dir**（[`std::env::temp_dir`]）に固定する。nextest の子 process の cwd（crate dir＝便の
+/// worktree の中）を継いだまま起こすと、`--state-dir` / `--repo` を読めない変異 binary の下で `pipe` の cwd の fallback
+/// が anchor の `<NAME>.stateDir`（本番の置き場）へ届く（2026-09-16 の実測）。repo でない cwd なら、どの変異の下でも
+/// fallback は「repo の root を解決できない」で断る（fail-closed）。cwd が主題の歯（相対 `--repo`・台帳の子の cwd）は
+/// 返った `Command` に自分の `current_dir` を**後置**する（後の指定が勝つ）。置き場の pin は [`pipe_hermetic_sites_stay_one`]。
+pub(super) fn bin_cmd() -> Command {
+    let mut cmd = Command::new(bin());
+    cmd.current_dir(std::env::temp_dir());
+    cmd
+}
+
 /// tmp dir を 1 つ作り、symlink を解いた path を返す。
 #[expect(
     clippy::expect_used,
@@ -205,7 +218,7 @@ pub(super) fn repo_with_state_configured(state: &Path, config: &[(&str, &str)]) 
     write_verify_scripts(&repo);
     git(&repo, &["add", "-A"]);
     git(&repo, &["commit", "-q", "-m", "seed"]);
-    let out = Command::new(bin())
+    let out = bin_cmd()
         .args(["vessel", "init", "--state-dir"])
         .arg(state)
         .arg(&repo)
@@ -221,7 +234,7 @@ pub(super) fn repo_with_state_configured(state: &Path, config: &[(&str, &str)]) 
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
 pub(super) fn run_pipe(args: &[&str]) -> Output {
-    Command::new(bin())
+    bin_cmd()
         .arg("pipe")
         .args(args)
         .output()
@@ -902,21 +915,26 @@ pub(super) fn land_once_with_unreadable_diff(repo: &Path, state: &Path, id: &str
 
 /// PATH の先頭に「引数列に `failing` を含む呼出しだけ rc 1 で落とし、他は実 git へ exec する git」を置いて
 /// land を 1 回撃つ（`--lens` は任意）。読めなかった周の極性を測る歯の共通部。
-#[expect(
-    clippy::expect_used,
-    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
-)]
+///
+/// binary を起こすのは [`run_pipe_with_git_shim`]（verb と `--repo` / `--state-dir` はここで固定する）。
 pub(super) fn land_once_with_git_shim(repo: &Path, state: &Path, id: &str, failing: &str, lens: Option<&str>) -> Output {
-    let path = shim_path(state, "shim-bin", &format!("case \"$*\" in *'{failing}'*) exit 1;; esac"));
     let mut args = vec![
-        "pipe".to_owned(), "land".to_owned(), "--run".to_owned(), id.to_owned(),
+        "land".to_owned(), "--run".to_owned(), id.to_owned(),
         "--repo".to_owned(), repo.display().to_string(),
         "--state-dir".to_owned(), state.display().to_string(),
     ];
     if let Some(cmd) = lens {
         args.extend(["--lens".to_owned(), cmd.to_owned()]);
     }
-    Command::new(bin()).args(args).env("PATH", path).output().expect("binary を起動できる")
+    let borrowed: Vec<&str> = args.iter().map(String::as_str).collect();
+    run_pipe_with_git_shim(state, failing, &borrowed)
+}
+
+/// PATH の先頭に「引数列に `failing` を含む呼出しだけ rc 1 で落とし、他は実 git へ exec する git」を置いて
+/// `pipe` を 1 回撃つ（[`land_once_with_git_shim`] の起こす口・verb は呼び手が選ぶ）。
+pub(super) fn run_pipe_with_git_shim(state: &Path, failing: &str, args: &[&str]) -> Output {
+    let path = shim_path(state, "shim-bin", &format!("case \"$*\" in *'{failing}'*) exit 1;; esac"));
+    run_pipe_with_path(&path, args)
 }
 
 /// PATH の先頭に置く偽 git（`script` を先に撃ってから実 git へ exec する）。返すのは PATH の値。
@@ -1143,10 +1161,70 @@ pub(super) fn embedded_int(id: &str) -> u64 {
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
 pub(super) fn run_pipe_with_path(path: &str, args: &[&str]) -> Output {
-    Command::new(bin())
+    bin_cmd()
         .arg("pipe")
         .args(args)
         .env("PATH", path)
         .output()
         .expect("binary を起動できる")
+}
+
+// ───── 歯の cwd を repo の外に固定する（`s2-07l.381`・設計 pipeline.md §28・接頭辞 `pipe_hermetic_`） ─────
+
+/// `--state-dir` も `--repo` も無い `pipe show` の断り: [`bin_cmd`] の cwd が git repo でない周だけ、cwd の fallback
+/// は「repo の root を解決できない」で rc 1 になる（cwd を継ぐ木では anchor の置き場を読んで別の断りになる）。
+fn assert_show_refused_without_repo(out: &Output, helper: &str) {
+    let err = stderr_of(out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{helper}: cwd の fallback は rc 1 で断る: {err}");
+    assert!(err.contains("repo の root を解決できない"), "{helper}: cwd は git repo でない: {err}");
+}
+
+/// (2) 親の helper `run_pipe` は cwd を repo の外に固定して起こす。
+#[test]
+fn pipe_hermetic_run_pipe_refuses_show_without_repo_or_state_dir() {
+    assert_show_refused_without_repo(&run_pipe(&["show", "--run", "x"]), "run_pipe");
+}
+
+/// (2) 親の helper `run_pipe_with_path` は PATH を差し替えても cwd を repo の外に固定して起こす。
+#[test]
+fn pipe_hermetic_run_pipe_with_path_refuses_show_without_repo_or_state_dir() {
+    let path = std::env::var("PATH").unwrap_or_default();
+    assert_show_refused_without_repo(&run_pipe_with_path(&path, &["show", "--run", "x"]), "run_pipe_with_path");
+}
+
+/// (2) 親の helper `land_once_with_git_shim` の起こす口（[`run_pipe_with_git_shim`]・偽 git を PATH の先頭に置く）も
+/// cwd を repo の外に固定して起こす。verb と `--repo` / `--state-dir` は `land_once_with_git_shim` が固定するので、
+/// `show` を flag 無しで撃つのはその 1 段下の同じ口で測る。`failing` は `rev-parse --show-toplevel` に当たらない
+/// 字面（当たる字面だと repo の中でも git が落ちて同じ断りになり、歯が空虚になる）。
+#[test]
+fn pipe_hermetic_land_once_with_git_shim_refuses_show_without_repo_or_state_dir() {
+    let state = tmp();
+    let out = run_pipe_with_git_shim(&state, " diff --name-only -z ", &["show", "--run", "x"]);
+    assert_show_refused_without_repo(&out, "land_once_with_git_shim");
+    clean(&[&state]);
+}
+
+/// (3) 置き場の pin: tracked の 9 file（この file と `pipe/` 配下）で binary を起こす字面 2 形の出現の合計は
+/// **1**（[`bin_cmd`] の中の 1 箇所）。母集団は読んだ file 数 9 と base の 41 site（設計 §28 の census）で、
+/// 同時に出す。字面は `concat!` で割って持つ（この歯の本文が自分の母集団に数えられないため）。
+#[test]
+fn pipe_hermetic_sites_stay_one() {
+    const BASE_SITES: usize = 41;
+    let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let tracked: Vec<String> = git(&crate_dir, &["ls-files", "--", "tests/e2e/pipe.rs", "tests/e2e/pipe"])
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    let needles = [concat!("Command::new(", "bin())"), concat!("Command::new(", "super::bin())")];
+    let sites: usize = tracked
+        .iter()
+        .map(|path| fs::read_to_string(crate_dir.join(path)).expect("tracked の file を読める"))
+        .map(|text| needles.iter().map(|needle| text.matches(needle).count()).sum::<usize>())
+        .sum();
+    assert_eq!(
+        (tracked.len(), sites),
+        (9, 1),
+        "母集団: file {} 本（base 9）・site {sites}（base {BASE_SITES}）・残るのは bin_cmd の 1 箇所: {tracked:?}",
+        tracked.len()
+    );
 }

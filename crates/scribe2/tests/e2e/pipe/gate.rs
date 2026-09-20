@@ -410,7 +410,7 @@ fn pipe_gate_refuses_run_without_commits() {
     ]);
     // 段だけを Implemented へ書き換える（＝台帳が壊れている / 手で進めた周）。
     // worktree は在って clean なので、**commits の検査だけ**が gate を止める。
-    let forced = Command::new(bin())
+    let forced = bin_cmd()
         .args(["fleet", "record", "--state-dir"])
         .arg(&state)
         .args(["--kind", "RunStage", "--stage", "Implemented", "--run", &id, "--bead", "s2-2e5"])
@@ -1979,7 +1979,7 @@ fn pipe_slots_wait_ends_early_when_the_blocking_ticket_goes() {
 
     let first_dead = plant_ticket(&state, DEAD_PID, 1);
     let live = plant_ticket(&state, u64::from(std::process::id()), 1_000_000_000_000);
-    let mut child = Command::new(bin())
+    let mut child = bin_cmd()
         .arg("pipe")
         .args(["gate", "--run", &id, "--repo", &repo.display().to_string(),
                "--state-dir", &state.display().to_string(), "--lens", &lens,

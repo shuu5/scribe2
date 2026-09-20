@@ -1049,7 +1049,7 @@ fn pipe_land_main_measured_is_absent_for_pr_cmd() {
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
 fn land_in_background(repo: &Path, state: &Path, id: &str, rules: &str, lens: &str) -> Child {
-    Command::new(bin())
+    bin_cmd()
         .args(["pipe", "land", "--run", id, "--repo", &repo.display().to_string()])
         .args(["--state-dir", &state.display().to_string(), "--rules", rules, "--lens", lens])
         .stdout(Stdio::piped())
@@ -2301,7 +2301,7 @@ fn pipe_retire_failed_any_detail_still_refuses_live_runs_and_gated_pass() {
 fn spawned_run(repo: &Path, state: &Path) -> String {
     let design = write_contract(repo, &[], &[]);
     let id = intake(repo, state, &design);
-    let mut spawner = Command::new(bin())
+    let mut spawner = bin_cmd()
         .args(["pipe", "spawn", "--run", &id, "--repo", &repo.display().to_string()])
         .args(["--state-dir", &state.display().to_string(), "--runner", "sleep 300"])
         .stdin(Stdio::null())
@@ -2904,7 +2904,7 @@ fn conflict_count(state: &Path, id: &str) -> usize {
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
 fn record_conflict(state: &Path, id: &str, range: &str) {
-    let out = Command::new(bin())
+    let out = bin_cmd()
         .args(["fleet", "record", "--kind", "RunStage", "--stage", "Implemented", "--run", id,
                "--bead", "s2-2e5", "--detail", &format!("rebase-conflict:{range}"), "--state-dir"])
         .arg(state)
@@ -3378,7 +3378,7 @@ fn pipe_follow_unreadable_retry_count_fails_closed_with_rc_two() {
         "poison-bin",
         &format!("case \"$*\" in *' rebase '*) printf 'not-json\\n' >> '{}' ;; esac", events.display()),
     );
-    let out = Command::new(bin())
+    let out = bin_cmd()
         .args(["pipe", "land", "--run", &id, "--repo", &repo.display().to_string(),
                "--state-dir", &state.display().to_string(), "--runner", &runner])
         .env("PATH", path)
@@ -3408,7 +3408,7 @@ fn pipe_follow_retry_measures_the_repo_before_launching() {
     let (id, _base, _moved) = conflicting_run(&repo, &state, &marker, &runner);
     let failing = format!("-C {} rev-parse HEAD", repo.display());
     let path = shim_path(&state, "measure-bin", &format!("case \"$*\" in *'{failing}'*) exit 1;; esac"));
-    let out = Command::new(bin())
+    let out = bin_cmd()
         .args(["pipe", "land", "--run", &id, "--repo", &repo.display().to_string(),
                "--state-dir", &state.display().to_string(), "--runner", &runner])
         .env("PATH", path)
@@ -3917,7 +3917,7 @@ fn pipe_terminal_land_generation_is_the_binary_build_commit_not_the_landed_sha()
     let landed = git(&repo, &["rev-parse", "refs/heads/main"]);
     assert_eq!(value_of(&pairs, "sha"), landed, "sha は着地した commit: {pairs:?}");
     // `--version` の括弧の中身を現物から採る（器の字面を借りずに外形から測る）。
-    let version = String::from_utf8_lossy(&Command::new(bin()).arg("--version").output().expect("--version").stdout)
+    let version = String::from_utf8_lossy(&bin_cmd().arg("--version").output().expect("--version").stdout)
         .trim()
         .to_owned();
     let generation = version

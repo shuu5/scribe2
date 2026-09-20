@@ -254,7 +254,8 @@ fn cwd_recording_bd(state: &Path, issues: &[String], seen: &Path) -> String {
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
 fn ls_from(cwd: &Path, repo: &str, state: &Path, bd: &str) -> Output {
-    Command::new(super::bin())
+    // cwd が主題なので [`super::bin_cmd`] の固定した cwd に自分の `current_dir` を後置する（後の指定が勝つ）。
+    super::bin_cmd()
         .args([
             "pipe", "dispatch", "ls",
             "--state-dir", &state.display().to_string(),
@@ -832,7 +833,7 @@ fn pipe_terminal_dispatch_reads_the_repo_materials_once_for_every_candidate() {
     let log = state.join("ls-files.log");
     let script = format!("case \"$*\" in *ls-files*) printf 'x\\n' >> '{}';; esac", log.display());
     let path = shim_path(&state, "git-count", &script);
-    let measured = Command::new(super::bin())
+    let measured = super::bin_cmd()
         .args(["pipe", "dispatch", "ls"])
         .args(["--state-dir", &state.display().to_string()])
         .args(["--repo", &repo.display().to_string()])
@@ -1111,7 +1112,7 @@ fn pipe_terminal_dispatch_two_overlapping_rounds_start_the_bead_once() {
     .collect();
     // **同時に撃つ**（片方を待ってから撃つと 2 本目は交差で落ちるだけで、重なりを測れない）。
     let spawned: Vec<_> = (0..2)
-        .filter_map(|_| Command::new(super::bin()).args(&args).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().ok())
+        .filter_map(|_| super::bin_cmd().args(&args).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().ok())
         .collect();
     assert_eq!(spawned.len(), 2, "2 つの契機を同時に撃つ");
     let started: usize = spawned

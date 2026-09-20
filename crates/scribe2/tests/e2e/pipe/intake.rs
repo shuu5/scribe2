@@ -77,7 +77,7 @@ fn pipe_state_survives_process_restart() {
     let (repo, state) = repo_with_state();
     let path = write_contract(&repo, &[], &[]);
     // 置き場を **--state-dir なしで** 解く＝repo に紐づいた git 設定から読む。
-    let out = Command::new(bin())
+    let out = bin_cmd()
         .args(["pipe", "intake", "--design"])
         .arg(&path)
         .args(["--bead", "s2-2e5", "--repo"])
@@ -88,7 +88,7 @@ fn pipe_state_survives_process_restart() {
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
     let id = run_id_of(&out);
     // **別 process** が同じ現在地を読む（process の記憶に何も置いていない）。
-    let shown = Command::new(bin())
+    let shown = bin_cmd()
         .args(["pipe", "show", "--run", &id, "--repo"])
         .arg(&repo)
         .output()
@@ -572,7 +572,7 @@ fn run_dirs(state: &Path) -> Vec<String> {
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
 fn record_stage(state: &Path, id: &str, stage: &str) {
-    let out = Command::new(bin())
+    let out = bin_cmd()
         .args(["fleet", "record", "--kind", "RunStage", "--stage", stage, "--run", id,
                "--bead", "s2-live", "--state-dir"])
         .arg(state)
@@ -799,7 +799,7 @@ fn pipe_refuse_stop_run_stops_the_live_seat_of_the_run() {
         .output()
         .expect("fake runner を起こせる");
     let pid: u32 = String::from_utf8_lossy(&spawned.stdout).trim().parse().expect("pid を読める");
-    let record = Command::new(bin())
+    let record = bin_cmd()
         .args(["fleet", "record", "--kind", "SeatSpawned", "--run", &id, "--bead", "s2-live",
                "--seat", "seat-1", "--pid", &pid.to_string(), "--state-dir"])
         .arg(&state)
@@ -907,7 +907,7 @@ fn table_repo(doc: &str, files: &[(&str, &str)]) -> PathBuf {
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
 fn contracts_check(repo: &Path) -> Output {
-    Command::new(bin()).args(["contracts", "check", "--repo"]).arg(repo).output().expect("binary を起動できる")
+    bin_cmd().args(["contracts", "check", "--repo"]).arg(repo).output().expect("binary を起動できる")
 }
 
 /// findings の行（`contracts: ` で始まる stdout の行）。
@@ -1009,7 +1009,7 @@ fn contract_check_names_each_row_defect_once_with_its_line() {
 /// const slice（`FIELDS`）と同じ順。余りの引数は断る。
 #[test]
 fn contract_schema_matches_the_tracked_file_and_the_field_slice() {
-    let out = Command::new(bin()).args(["contracts", "schema"]).output().expect("binary を起動できる");
+    let out = bin_cmd().args(["contracts", "schema"]).output().expect("binary を起動できる");
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
     assert!(out.stderr.is_empty(), "stderr は 0 byte: {}", stderr_of(&out));
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("..").join("contracts").join("schema.toml");
@@ -1019,7 +1019,7 @@ fn contract_schema_matches_the_tracked_file_and_the_field_slice() {
         tracked.lines().filter_map(|line| line.strip_prefix("name = \"")?.strip_suffix('"')).collect();
     let fields: Vec<&str> = vessel::pipe::table::FIELDS.iter().map(|field| field.name).collect();
     assert_eq!(names, fields, "欄の列は const slice と同じ順");
-    let extra = Command::new(bin()).args(["contracts", "schema", "x"]).output().expect("binary を起動できる");
+    let extra = bin_cmd().args(["contracts", "schema", "x"]).output().expect("binary を起動できる");
     assert_eq!(extra.status.code(), Some(i32::from(RC_REFUSED)), "余りの引数は断る");
 }
 
@@ -1070,10 +1070,10 @@ fn contract_check_reads_requirements_from_md_headings() {
 /// 使い方の誤りは rc 1（stderr に理由）・git repo でない `--repo` は判定できないので rc 2（判定行を出さない）。
 #[test]
 fn contract_check_refuses_usage_errors_and_non_repositories() {
-    let bare = Command::new(bin()).args(["contracts", "check"]).output().expect("binary を起動できる");
+    let bare = bin_cmd().args(["contracts", "check"]).output().expect("binary を起動できる");
     assert_eq!(bare.status.code(), Some(i32::from(RC_REFUSED)), "--repo 無しは rc 1");
     assert!(stderr_of(&bare).contains("--repo が要る"), "{}", stderr_of(&bare));
-    let none = Command::new(bin()).arg("contracts").output().expect("binary を起動できる");
+    let none = bin_cmd().arg("contracts").output().expect("binary を起動できる");
     assert_eq!(none.status.code(), Some(i32::from(RC_REFUSED)), "subcommand 無しは rc 1");
     assert!(stderr_of(&none).contains("contracts <check"), "使い方を出す: {}", stderr_of(&none));
     let dir = tmp();
@@ -1953,7 +1953,7 @@ fn contract_declared_teeth_new_filter_needs_a_teeth_file_in_write_set() {
 /// 必須の欠落で断る → RED）。
 #[test]
 fn contract_schema_lists_creates_tests_also_and_write_set_is_optional() {
-    let out = Command::new(bin()).args(["contracts", "schema"]).output().expect("binary を起動できる");
+    let out = bin_cmd().args(["contracts", "schema"]).output().expect("binary を起動できる");
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("..").join("contracts").join("schema.toml");
     let tracked = fs::read_to_string(&path).expect("tracked の生成物を読める");
@@ -2672,7 +2672,7 @@ fn pipe_review_stage_and_guard_are_pinned_in_declaration_order() {
     assert_eq!(Guard::Review.polarity().on_failure, OnFailure::FailClosed, "読めない判定は起こさない");
     assert_eq!(Guard::Review.boundary(), "pipe::review::ReviewCheck");
     assert_eq!(Guard::Review.line(), "guard=review-gate timing=in-loop on-failure=fail-closed boundary=pipe::review::ReviewCheck");
-    let listed = Command::new(bin()).arg("polarity").output().expect("binary を起動できる");
+    let listed = bin_cmd().arg("polarity").output().expect("binary を起動できる");
     assert!(stdout_of(&listed).lines().any(|line| line == Guard::Review.line()), "極性一覧に載る: {}", stdout_of(&listed));
 }
 
@@ -2691,7 +2691,7 @@ fn pipe_review_resume_from_intake_reviews_before_spawning() {
         for name in ["contract.toml", "vessel.toml", "repo"] {
             fs::copy(state.join("pipe").join(&seeded).join(name), dir.join(name)).expect("写しを置ける");
         }
-        let out = Command::new(bin())
+        let out = bin_cmd()
             .args(["fleet", "record", "--kind", "RunCreated", "--stage", "Intake", "--run", id, "--bead", "s2-live", "--state-dir"])
             .arg(&state)
             .output()
@@ -2871,7 +2871,7 @@ fn depends_doc(target: &str) -> String {
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
 fn depends_check_findings(repo: &Path, state: &Path) -> Vec<String> {
-    let out = Command::new(bin())
+    let out = bin_cmd()
         .args(["contracts", "check", "--repo", &repo.display().to_string(), "--rules", &ceiling_rules(state)])
         .output()
         .expect("binary を起動できる");

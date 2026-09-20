@@ -588,7 +588,7 @@ fn pipe_ratelimit_resume_stop_breaks_the_wait() {
     put_account(&state, "a1", &[windows(100, 10)]);
     put_account(&state, "a2", &[windows(100, 10)]);
     let curl = fake_usage_curl(&state);
-    let mut child = Command::new(bin())
+    let mut child = bin_cmd()
         .args([
             "pipe", "resume", "--run", &id, "--repo", &repo.display().to_string(),
             "--state-dir", &state.display().to_string(), "--runner", &runner,

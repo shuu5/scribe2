@@ -151,7 +151,7 @@ const ADMIN_PANE: &str = "%99";
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
 fn run_pipe_in_pane(args: &[&str]) -> Output {
-    Command::new(bin())
+    bin_cmd()
         .arg("pipe")
         .args(args)
         .env("TMUX_PANE", ADMIN_PANE)
@@ -736,7 +736,7 @@ fn blocking_lens(marker: &Path, pid_file: &Path) -> String {
 )]
 fn spawn_run_child(repo: &Path, state: &Path, design: &str, runner: &str, lens: &str) -> Child {
     use std::os::unix::process::CommandExt;
-    Command::new(bin())
+    bin_cmd()
         .args([
             "pipe", "run", "--design", design, "--bead", "s2-kill",
             "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
@@ -1154,7 +1154,7 @@ fn record_approval(state: &Path, id: &str, extra: &[&str]) -> Output {
             .map(|item| (*item).to_owned()),
     );
     args.extend(extra.iter().map(|item| (*item).to_owned()));
-    Command::new(bin()).args(&args).output().expect("binary を起動できる")
+    bin_cmd().args(&args).output().expect("binary を起動できる")
 }
 
 /// 3 クラスを名乗る契約で intake → spawn まで撃ち、Blocked で止まった便の
@@ -1396,7 +1396,7 @@ fn pipe_approval_blocks_in_one_shot_run() {
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
 fn record_human_stage(state: &Path, id: &str) -> Output {
-    Command::new(bin())
+    bin_cmd()
         .args(["fleet", "record", "--state-dir"])
         .arg(state)
         .args([
@@ -1474,7 +1474,7 @@ fn pipe_report_counts_landed_runs_not_landed_events() {
     assert_eq!(landed.status.code(), Some(i32::from(RC_OK)), "land: {}", stderr_of(&landed));
     // 同じ便へ `Landed` の event をもう 1 件積む（手で積んだ / 台帳が壊れた周）。
     // **replay は便を数える**ので landed は 1 のまま——生の行を数える実装だと 2 になる。
-    let doubled = Command::new(bin())
+    let doubled = bin_cmd()
         .args(["fleet", "record", "--state-dir"])
         .arg(&state)
         .args(["--kind", "RunDone", "--stage", "Landed", "--run", &id, "--bead", "s2-2e5"])

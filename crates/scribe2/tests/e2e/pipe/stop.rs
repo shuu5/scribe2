@@ -38,7 +38,7 @@ fn pipe_stop_all_terminates_live_runner() {
     );
     // 生きた席を event log に置く（spawn は runner の終了まで待つので、席が Live な
     // 周を作るには log 側から組む）。
-    let record = Command::new(bin())
+    let record = bin_cmd()
         .args([
             "fleet", "record", "--kind", "SeatSpawned", "--run", "r1", "--bead", "s2-2e5",
             "--seat", "r1", "--pid", &pid.to_string(), "--state-dir",
@@ -81,7 +81,7 @@ fn pipe_stop_returns_rc2_on_malformed_store() {
 fn pipe_stop_counts_seat_without_pid() {
     let (repo, state) = repo_with_state();
     // pid の無い Live 席（`fleet record` の --pid は任意）。
-    let record = Command::new(bin())
+    let record = bin_cmd()
         .args(["fleet", "record", "--kind", "SeatSpawned", "--run", "r9", "--bead", "b",
                "--seat", "s9", "--state-dir"])
         .arg(&state)
@@ -130,7 +130,7 @@ fn pipe_stop_keeps_unstoppable_seat_live() {
     // pid 1 は殺せない。止めていない席を終端にしない（偽の全クリアを作らない）。
     // **実の kill は撃たない**（偽 kill の下で、group 宛てに化けないことも測る）。
     let (path, calls) = kill_stub(&state);
-    let record = Command::new(bin())
+    let record = bin_cmd()
         .args(["fleet", "record", "--kind", "SeatSpawned", "--run", "r8", "--bead", "b",
                "--seat", "s8", "--pid", "1", "--state-dir"])
         .arg(&state)
@@ -204,7 +204,7 @@ fn spawn_live_seat(
     let script = state.join("group-runner.sh");
     fs::write(&script, body).expect("runner の script を書ける");
     let runner = format!("sh {}", script.display());
-    let mut child = Command::new(bin())
+    let mut child = bin_cmd()
         .args(["pipe", "spawn", "--run", &id, "--repo", &repo.display().to_string(),
                "--state-dir", &state.display().to_string(), "--runner", &runner])
         .env("PATH", path)
@@ -370,7 +370,7 @@ fn pipe_stop_group_legacy_seat_falls_back_to_the_single_pid() {
     let pid: u32 = String::from_utf8_lossy(&spawned.stdout).trim().parse().expect("pid を読める");
     assert!(proc_alive(pid), "fake runner が動いている");
     assert_ne!(proc_pgid(pid), Some(pid), "前提: group leader でない（旧 record の席）");
-    let record = Command::new(bin())
+    let record = bin_cmd()
         .args(["fleet", "record", "--kind", "SeatSpawned", "--run", "r7", "--bead", "b",
                "--seat", "s7", "--pid", &pid.to_string(), "--state-dir"])
         .arg(&state)
@@ -430,7 +430,7 @@ fn runner_was_confined(state: &Path) -> bool {
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
 fn record_event(state: &Path, args: &[&str]) {
-    let out = Command::new(bin())
+    let out = bin_cmd()
         .args(["fleet", "record"])
         .args(args)
         .arg("--state-dir")
