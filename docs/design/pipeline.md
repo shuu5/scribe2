@@ -223,8 +223,16 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
 
 ## 12. retire の終端の列挙（契約表の行 i・`s2-07l.353`）
 
-- 審査の段（[contract-source.md](./contract-source.md) §4）が足した終端 Reviewed の FAIL / INCONCLUSIVE は live を持たない（判定の読み手は `pipe/review.rs` の 1 本）が、retire の入口（`pipe/cli.rs` の段の列挙と弁別）は Gated の FAIL と Failed の一部しか畳めない＝審査の段で終端した便が前の周の worktree を残すと畳めず、run N+1 が別 worktree で立つ（.209 run 1 の実測 2026-09-15）。
-- 形: retire が許す段の列挙（`pipe/cli/step.rs` の `retire_run` の `allowed`）に Reviewed を足し、弁別は段の中の弁別 1 本（`pipe/cli/state.rs` の `discriminate`）に Retire × Reviewed の arm を足して判定の読み手（`ReviewCheck`）の 3 値で分ける（FAIL / INCONCLUSIVE = 畳む・PASS = 断る〔live・起こす側〕・読めない = 断る〔読めない判定を終端に読み替えない・fail-closed〕）。断りの字面は Spawn × Reviewed の既存の arm と同じ形 `run <id> の段は Reviewed である（verdict=<V>）`＝段違いの一般則の字面（`run <id> の段は Reviewed である`・verdict 無し）と区別が付き、歯はこの逐語で新 arm を pin する。畳んだ後の段は Reviewed のまま（Failed / Gated と同じ・可逆 move の 1 本は不変・N1.2）。worktree の無い Reviewed 終端の便は畳む物が無い＝既存の断りのまま。
+- 出所: 審査の段（契約の審査・FR49／[contract-source.md](./contract-source.md) §4）が足した終端 Reviewed の FAIL / INCONCLUSIVE は live を持たないが、retire の入口は Gated の FAIL と Failed の一部しか畳めない＝審査の段で終端した便が前の周の worktree を残すと畳めず、run N+1 が別 worktree で立つ（`.209` run 1 の実測 2026-09-15）。畳めない worktree は再開（FR14）の続きの段を別の worktree に割るので、終端の後始末の口が終端の列挙に追いつく必要がある。
+- 現物（planner が grep で実測・main f678bd0）: 受ける段の列挙は `crates/scribe2/src/pipe/cli/step.rs` の `retire_run`（`pub(super) fn`）が持つ `allowed` = `[Stage::Landed, Stage::Failed, Stage::Gated, Stage::Stopped]`＝`Reviewed` は列に無い。段の中の弁別は `crates/scribe2/src/pipe/cli/state.rs` の `discriminate`（同 file の私有 `fn`・`resolve` から呼ばれる）が持ち、`(&Extra::Retire, Stage::Gated)` と `(&Extra::Retire, Stage::Failed)` の 2 arm だけが在って `Reviewed` は末尾の catch-all で `Ok(())` に落ちる。判定の読み手は `crates/scribe2/src/pipe/review.rs` の `ReviewCheck::judge`（`pub fn`・返り値は `Passed` / `Stopped(Verdict)` / `Unreadable` の閉じた 3 つ）で、同 file の `(&Extra::Spawn, Stage::Reviewed)` の arm が既に呼んでいる。畳む本体は `crates/scribe2/src/pipe/retire.rs` の `retire`（`pub fn`・在るか / clean かだけを見て段を動かさず `retired/` へ可逆 move する）。
+- 約束（この行が作るもの・番号は done と 1:1）:
+  1. `retire_run` の `allowed` に `Stage::Reviewed` を 1 つ足す（既存の 4 つと順序は不変）。
+  2. `discriminate` に `(&Extra::Retire, Stage::Reviewed)` の arm を足し、`ReviewCheck::judge` が `Stopped(_)`（FAIL / INCONCLUSIVE）を返す周は `Ok(())`＝畳める。
+  3. 同じ arm で `Passed` は断る（live・起こす側）。
+  4. 同じ arm で `Unreadable` も断る（読めない判定を終端に読み替えない・fail-closed）。
+  5. 断りの字面は `Spawn` × `Reviewed` の既存の arm と同じ形 `run <id> の段は Reviewed である（verdict=<V>）`＝段違いの一般則の字面（`run <id> の段は Reviewed である`・verdict の括弧を持たない）と区別が付く。歯はこの逐語で新 arm を pin する。
+  6. 畳んだ後の段は `Reviewed` のまま（`Failed` / `Gated` と同じ）＝`RunStage detail=retired` の記帳と `retired/` への可逆 move は不変（N1.2）。
+- 触らない: `retire.rs` の `retire` 本体（在るか・clean か）・`Extra::Retire` × `Gated` の arm・`Extra::Retire` × `Failed` の arm（そこは行 r が別便で触る）・worktree の無い Reviewed 終端の便（畳む物が無い＝既存の断りのまま）。
 - 却下: 審査の段の中で自動で畳む（終端の後始末は go を挟む retire の 1 口に揃える）／live が false の段を全部畳める側にする（Failed の理由ごとの弁別が消える）。
 
 ## 13. xtask の flipcheck.rs の分割（契約表の行 j・純移動）
@@ -236,15 +244,37 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
 
 ## 14. 引数の reader を 1 本に（契約表の行 f・`s2-07l.306`）
 
-- 何が起きているか: flag の reader が 6 本（`pipe/cli.rs` の flag / need・`fleet/cli.rs`・`seat/cli.rs`・`headless/mod.rs`・`hook/vessel.rs` の flag_value）あり、どれも argv 全体が既知の集合に閉じているかを見ない（名指しの flag を拾うだけ）＝未知の flag と `--help` を黙って無視する fail-open。`pipe land --run <id> --help` が help を出さず land を完走した（uns planner の実測 2026-09-15）。`account/cli.rs` の flags だけが allowed の集合で断る形（[account-lifecycle.md](./account-lifecycle.md) §4）。
-- 形: 共通の reader 1 本（新 module cli_args・`lib.rs` に宣言）= `parse(args, allowed) -> Result<Parsed, ArgsError>`。Parsed は名指しの flag の値（value / need）と positional の列。ArgsError は閉じた enum（Help / Unknown / Missing / Duplicate・as_str）。`--help` / `-h` は allowed に無くても Help で返し呼び手は usage を出して rc 0。Unknown は rc 2（usage 1 行）で state / ref を 1 本も動かさない。6 本の reader を parse の呼出に置き換え、各 subcommand の allowed を const 配列（宣言順）で持つ。挙動の差は「未知の flag と --help を断る」だけ（既存の flag の意味・usage の文は不変＝外形 snapshot を動かさない）。
-- 触らない: subcommand の本体・rules・docs。依存を足さない。
+- 出所: `pipe land --run <id> --help` が help を出さず squash 形の land を実行し、anchor の main の ref を進めて `Landed` まで完走した（実測 2026-09-15）。不正入力を黙って落とさない（NFR4）に反し、`verdicts.jsonl` へ 1 行 append して `Landed` と記帳する land の終端（FR12）が呼び手の書き間違いだけで起きる。
+- 現物（planner が grep で実測・main f678bd0・`.349` の分割後）: argv の reader は 6 本で、どれも「名指しの flag を position で拾う」だけ＝argv 全体が既知の集合に閉じているかを見ないので、未知の flag と `--help` / `-h` を黙って無視する fail-open。
+  - `crates/scribe2/src/pipe/cli/args.rs` の `flag`（`pub(in crate::pipe) fn`）と `need`（`pub(super) fn`）
+  - `crates/scribe2/src/fleet/cli.rs` の `flag`（私有 `fn`・返り値は同 file の `Flag`）
+  - `crates/scribe2/src/seat/cli.rs` の `flag`（私有 `fn`・返り値は同 file の `Flag`）
+  - `crates/scribe2/src/headless/mod.rs` の `flag`（`pub fn`）と `need`（`pub fn`）
+  - `crates/scribe2/src/hook/vessel.rs` の `flag_value`（私有 `fn`）
+  7 本目の `crates/scribe2/src/account/cli.rs` の `flags`（私有 `fn`・`allowed: &[&str]` を取る）だけが allowed の集合で閉じるが、断りを全部 `None` に畳むので Help / Unknown / Missing / Duplicate を弁別しない（[account-lifecycle.md](./account-lifecycle.md) §4）。usage の字面は面ごとに 1 本ずつ在り（`pipe` は `crates/scribe2/src/pipe/cli.rs` の `usage`・`pub fn`）、外形は insta の名付き snapshot 5 本が pin している: `pipe_external_form`（`crates/scribe2/tests/e2e/pipe.rs`）・`fleet_external_form`（`crates/scribe2/tests/e2e/fleet.rs`）・`seat_usage_external_form`（`crates/scribe2/tests/e2e/seat.rs`）・`headless_external_form`（`crates/scribe2/tests/e2e/headless.rs`）・`vessel_external_form`（`crates/scribe2/tests/e2e/hook.rs`）。
+- 約束（この行が作るもの・番号は done と 1:1）:
+  1. 共通の reader 1 本を新 module（行 f の write-set の `+` の file・`crates/scribe2/src/lib.rs` に `mod` 宣言）に置く: `parse(args, allowed) -> Result<Parsed, ArgsError>`。`Parsed` は名指しの flag の値（`value` / `need` の 2 面）と positional の列を持つ。
+  2. `ArgsError` は閉じた enum（`Help` / `Unknown` / `Missing` / `Duplicate`・宣言順の `as_str`）。
+  3. `--help` / `-h` は `allowed` に無くても `Help` で返し、呼び手は usage を出して rc 0 で終わる（state も ref も 1 本も動かさない）。
+  4. `Unknown` は usage 1 行で rc 2。`Missing` / `Duplicate` も同じ rc 2 の口から出す。
+  5. 上の 6 本と `account/cli.rs` の `flags` を `parse` の呼出に置き換え、各 subcommand の `allowed` を宣言順の const 配列で持つ（`flags` の `allowed` の集合と `None` に畳む挙動は、typed な 4 値へ置き換わる以外は変えない）。
+  6. `pipe land` に未知の flag か `--help` を渡した周は、偽 remote の toy repo で main の ref・event log・worktree が 1 つも動かない（fail-open の恒久解）。
+  7. `fleet` / `seat` / `headless` / `vessel` / `account` の 1 口ずつが未知の flag を rc 2 で断る。
+  8. 既存の flag の意味と usage の文は不変＝上の外形 snapshot 5 本が 1 字も動かない（挙動の差は「未知の flag と `--help` を断る」だけ）。
+- 触らない: subcommand の本体・rules・docs。依存を足さない。`.config/nextest.toml` は、seat の口の新しい歯が tmux の直列化の一覧（`test-groups.tmux` の filter）に載る周だけ 1 行が増える面として write-set に持つ（載らない周は触らない）。
 
 ## 15. pipe の `--repo` / `--state-dir` の cwd fallback を落とす（契約表の行 g・`s2-07l.310`）
 
-- 何が起きているか: `pipe/cli.rs` の repo_of は `--repo` が無いと cwd の repo root へ落ちる（呼び手 = state_dir_of と `pipe/cli/intake.rs` の run_repo の最終枝）。cargo-mutants の一時コピーは worktree の `.git`（file・本物の gitdir を指す）を持つので、コピーの中で cwd から解いた repo に便を起こすと worktree と branch が本物の repo に登録される（prunable 47 件・fixture 名の branch 44 本・admin の実測 2026-09-15・prune は user 承認 event 02:5xZ）。
-- 形: repo_of から cwd の枝を落とし、`--repo` が無ければ flag 不在の断り（`--run が要る` と同じ作り・Refuse は契約単位の拒否ゆえ variant を足さない）。run_repo の最終枝（写し面が無い周）と state_dir_of（`--state-dir` も `--repo` も無い周）も同じ断り。usage に `--repo` の要件を 1 句（外形 snapshot が動く）。歯の helper（`tests/e2e/pipe.rs` と `pipe/*.rs`）で `--repo` / `--state-dir` を渡していない呼出には tmp の fixture repo を渡す。
-- 触らない: `hook/vessel.rs` の repo_root（cwd から解くのは hook の領分）・契約 file の schema・写し面の読み。
+- 出所: cargo-mutants の一時コピーは worktree の `.git`（file・本物の gitdir を指す）を持つので、コピーの中で cwd から解いた repo に便を起こすと worktree と branch が本物の repo に登録される（prunable 47 件・fixture 名の branch 44 本・実測 2026-09-15・prune は user 承認 event 02:5xZ）。base を記録して worktree を切る runner の起動（FR4）が、呼び手の指さない repo に効いてしまう＝intake の排他（FR39）が数える write-set の相手も別 repo に割れる。
+- 現物（planner が grep で実測・main f678bd0・`.349` の分割後）: cwd の枝を持つのは `crates/scribe2/src/pipe/cli/args.rs` の `repo_of`（`pub(super) fn`・`--repo` が無いと cwd の repo root へ落ちる）で、呼び手は同 file の `state_dir_of`（`pub(in crate::pipe) fn`・`--state-dir` が無い周に `repo_of` 経由で置き場を解く）と `crates/scribe2/src/pipe/cli/intake.rs` の `run_repo`（`pub(super) fn`・写し面が読めない周の最終枝）の 2 つ。usage の字面は `crates/scribe2/src/pipe/cli.rs` の `usage`（`pub fn`）で、外形は `pipe_external_form`（`crates/scribe2/tests/e2e/pipe.rs`）の名付き snapshot が pin する。
+- 順序: 本便は**行 v（`s2-07l.381`）の後に出す**。行 v が e2e の helper の cwd を git repo でない temp dir に固定するので、repo を要る呼出しは行 v の時点で既に `--repo` を渡しており、本便は歯の helper と既存の呼出し site を 1 つも触らない（触るのは下の新しい歯だけ）。
+- 約束（この行が作るもの・番号は done と 1:1）:
+  1. `repo_of` から cwd の枝を落とし、`--repo` が無ければ flag 不在の断り 1 行で rc 1（`--run が要る` と同じ作り＝`Refuse` は契約単位の拒否ゆえ variant を足さない）。
+  2. `run_repo` の最終枝（写し面が無い周）も同じ断り＝cwd を読まない。
+  3. `state_dir_of`（`--state-dir` も `--repo` も無い周）も同じ断り＝cwd を読まない。
+  4. 断った周は worktree を 1 つも作らず event を 1 件も書かない。
+  5. `usage` に `--repo` の要件を 1 句足す＝`pipe_external_form` の snapshot はこの 1 句だけ動く。
+- 触らない: `crates/scribe2/src/hook/vessel.rs` の `repo_root`（cwd から解くのは hook の領分）・契約 file の schema・写し面の読み（`run_repo` の最終枝より手前）・e2e の helper（行 v の面）。
 - 却下: 変異の一時コピーの `.git` を切る hook（cargo-mutants に口が無い）／歯が必ず `--repo` を渡すだけで器を変えない（規律が歯の散文に残る・N2 / C16）／写し面が無い spawn を cwd で救う（壊れた run は断る側・C10）。
 
 ## 16. runner / lens の effort を rules 行から毎回渡す（契約表の行 h・`s2-07l.322`）
@@ -275,39 +305,57 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
 
 ## 19. pipeline 外の merge のための着地列の待ち口（契約表の行 m・`s2-07l.212`）
 
-- 出所: planner の実測: docs PR の squash merge が `Gated`（PASS）の便の追随を 1 周誘発する。いまは「Gated PASS の便が 0 の窓か Landed の直後に merge」を席の運用（散文）で守っている＝規則ではない。
-- 現物: 着地の列は `pipe/queue.rs` の `turn_in` / `await_turn` が読む。唯一の wait は `fleet/wait.rs` の `Completion`（`LandTurn` / `SlotFree` / `AccountFree` は pid を見張らない variant）。
-- 形: `Completion` に pid を見張らない variant を 1 つ足す（窓の待ち）。判定条件は 3 つ全部: 着地の列に PASS の便が 0 本／`Landed` の記帳から追随中の便が無い／local の `refs/heads/main` が `refs/remotes/origin/main` の祖先である（**未 push の squash が無い**＝主実測中の便が local main に積んだ squash と push 待ちの `Landed` の両方を数える・`s2-07l.449` の 1 面目: 窓が `Landed` 前の squash を数えず docs の merge で origin と分岐した・admin 実測 2026-09-17）。origin の ref は読むだけで fetch しない（撃つ側が fetch する・器は網を撃たない）。3 つ目の読みの順は固定: **先に** local の `refs/heads/main` を読み、読めない周は origin の有無に依らず窓を**閉じる**（fail-closed・`unpushed=unreadable`）。**次に** `refs/remotes/origin/main` を読み、無い周は 3 つ目を数えず（列の条件だけ）行に `remote=none` を載せる。両方読めた周だけ祖先を判定する。`busy` の行は列の便の名指しの隣に `unpushed=<local main の sha|unreadable|->` を持つ（3 つ目で閉じた周は sha・読めない周は `unreadable`・列だけで閉じた周は `-`＝どの条件で閉じたかを 1 行で読める・C10）。git の読みは `pipe` の既存の 2 口（`git_ok` / `git_line`）。既存の deadline・唯一の wait の経路をそのまま通す。
-- 新しい subcommand の口（`pipe land-window`）を足す。窓が開いていれば rc 0 で `clear` を、待ちが切れれば rc 1 で列の便を名指した `busy` を返す。席の docs merge はこの口を前置して撃ち、散文の窓判断を消す。
-- 触らない: `gh pr merge` 自体（器は merge を撃たない）・列の順序・`LandTurn`。
-- 却下: docs-only PR も器が `gh` を撃って merge する（外部 binary を撃つ面が増える）／運用のまま据え置く（規則が散文のまま）。
+- 出所: 設計 doc や ADR の PR の squash merge が `Gated`（PASS）の便の追随を 1 周誘発する（実測）。便の着地と merge は器の dispatcher が持つ（FR30）が、**pipeline の外で行う merge はその口を通らない**＝いまは「`Gated` PASS の便が 0 の窓か `Landed` の直後に merge」を撃つ側の散文で守っていて規則ではない（N2）。器が窓を測って返す口が無い。
+- 現物（planner が grep で実測・main f678bd0）: 着地の列は `crates/scribe2/src/pipe/queue.rs` の `turn_in`（`pub fn`）/ `await_turn`（`pub(super) fn`）が読む。唯一の wait は `crates/scribe2/src/fleet/wait.rs` の `Completion`（`pub enum`・`RunnerExited` / `SeatGone` / `SlotFree` / `GroupGone` / `LandTurn` / `AccountFree` / `CiResult` の 7 つで、`SlotFree` / `LandTurn` / `AccountFree` / `CiResult` が pid を見張らない側）。git の読みは `crates/scribe2/src/pipe/mod.rs` の `git_ok`（`pub fn`）と `git_line`（`pub fn`）の 2 口だけ。subcommand の verb は `crates/scribe2/src/pipe/cli.rs` の `match verb` 1 か所に並び、usage の外形は `pipe_external_form`（`crates/scribe2/tests/e2e/pipe.rs`）の snapshot が pin する。
+- 約束（この行が作るもの・番号は done と 1:1）:
+  1. `Completion` に pid を見張らない variant を 1 つ足す（窓の待ち）。既存の 7 つの判定と deadline の経路、唯一の wait の loop は不変。
+  2. 窓の判定条件は 3 つ全部: (a) 着地の列に PASS の便が 0 本 (b) `Landed` の記帳から追随中の便が無い (c) local の `refs/heads/main` が `refs/remotes/origin/main` の祖先である（**未 push の squash が無い**＝主実測中の便が local main に積んだ squash と push 待ちの `Landed` の両方を数える・`s2-07l.449` の 1 面目: 窓が `Landed` 前の squash を数えず docs の merge で origin と分岐した・実測 2026-09-17）。
+  3. (c) の読みの順は固定: **先に** local の `refs/heads/main` を読み、読めない周は origin の有無に依らず窓を**閉じる**（fail-closed）。**次に** `refs/remotes/origin/main` を読み、無い周は (c) を数えず（(a)(b) だけで判定し）行に `remote=none` を載せる。両方読めた周だけ祖先を判定する。
+  4. origin の ref は読むだけで fetch しない（撃つ側が fetch する・器は網を撃たない）。git の読みは既存の `git_ok` / `git_line` の 2 口だけを使う。
+  5. 新しい subcommand の口 `pipe land-window` を足す。窓が開いていれば rc 0 で `clear` の 1 行、待ちが切れれば rc 1 で列の便を名指した `busy` の 1 行を返す。pipeline の外で merge を撃つ側はこの口を前置して撃てる＝散文の窓判断が器の rc に変わる。
+  6. `busy` の行は列の便の名指しの隣に `unpushed=<local main の sha|unreadable|->` を持つ（(c) で閉じた周は sha・読めない周は `unreadable`・(a)(b) だけで閉じた周は `-`）＝どの条件で閉じたかが 1 行で読める（C10）。
+  7. verb が 1 つ増えるので usage に 1 行増え、`pipe_external_form` の snapshot がその 1 行だけ動く。
+- 触らない: `gh pr merge` 自体（器は merge を撃たない）・列の順序と鍵・`LandTurn` の判定・`turn_in` の本体。
+- 却下: docs-only PR も器が `gh` を撃って merge する（外部 binary を撃つ面が増える）／運用のまま据え置く（規則が散文のまま・N2）。
 
 ## 20. runner の雛形に終端の規律を足し片付けで殺した子の数を記録する（契約表の行 n・`s2-07l.275`）
 
-- 出所: admin の観測（`.270` run 1）: runner が「flip-check を背景で回している・完了通知を待つ」と言って turn を閉じ（rc 0）、背景の task が scope の片付けで止められた。
-- 現物: `crates/scribe2/src/headless/runner.txt` に「背景実行で turn を閉じない」の規律は無い。`headless/mod.rs` の片付けは `pipe/confine.rs` の `release_scope` が行い、結果の 1 行 `runner: scope=<gone|killed|failed|no-tool>` は `headless/runner.rs` が組む。片付けで殺した子の数は record に残らない。
-- 形: 雛形 `runner.txt` に「検証は前面で完走させてから turn を閉じる（背景実行を残して終えない・残した task は片付けで止められ done に数えない）」の 1 行を足し、雛形の外形を snapshot で pin する。snapshot の `.snap` は入口の flip の test 区間に入らないので、この 1 行だけを名指す歯を別に持つ（雛形の RED はその歯で測る）。
-- `release_scope` が scope を止める直前に scope に残った process の数を読み、`runner: scope=<…>` と同じ行に `orphans=<n|->` として残す（0 も書く・読めなければ `-`）。数える関数（`pipe/confine.rs`）と行を組む関数（`headless/runner.rs`）は pure に切り、それぞれの file の in-file の歯が fixture で測る（systemd の scope を歯で起こさない）。
-- 触らない: 片付けの極性（止める）・runner の権限。
+- 出所: `.270` run 1 の観測: runner が「flip-check を背景で回している・完了通知を待つ」と言って turn を閉じ（rc 0・自己申告は done）、背景の task が scope の片付けで止められた。runner の口（FR5）の自己申告が背景 task の完了を含まず、人手 0 の計測（FR22）に載る終端の 1 行が「何を殺したか」を持たない。
+- 現物（planner が grep で実測・main f678bd0）: 雛形は `crates/scribe2/src/headless/runner.txt`（34 行・`crates/scribe2/src/headless/runner.rs` が `include_str!` で読む）で、「背景実行で turn を閉じない」に当たる行は 1 本も無い（`背景` / `前面` / `turn を閉じ` の 3 語とも 0 件）。片付けは `crates/scribe2/src/pipe/confine.rs` の `release_scope`（`pub fn`・引数は `&Confinement`・返り値は `Option<Released>`）が行い、`crates/scribe2/src/headless/mod.rs` がそれを呼ぶ。終端の 1 行は `crates/scribe2/src/headless/runner.rs`（`<who>: scope=<Released の語> claude_peak_bytes=<n|->`）が組んで stderr へ出す＝片付けで殺した子の数はどこにも残らない。雛形の外形は `headless_runner_prompt_external_form`（`crates/scribe2/tests/e2e/headless.rs`）の snapshot が pin する。
+- 約束（この行が作るもの・番号は done と 1:1）:
+  1. 雛形に「検証は前面で完走させてから turn を閉じる（背景実行を残して終えない・残した task は片付けで止められ done に数えない）」の 1 行を足す。
+  2. その 1 行だけを名指す歯を別に持つ（`.snap` は入口の flip の test 区間に入らないので、雛形の RED は逐語を名指すこの歯で測る）。
+  3. 雛形の外形は `headless_runner_prompt_external_form` の snapshot が引き続き全文を pin する（足した 1 行だけが snapshot に現れる）。
+  4. `release_scope` が scope を止める**直前**に scope に残った process の数を読む。
+  5. 終端の 1 行に `orphans=<n|->` を足す（0 も書く・読めなければ `-`＝「0 本」と「測れなかった」を融合しない・C10）。
+  6. 数える関数（`crates/scribe2/src/pipe/confine.rs`）と行を組む関数（`crates/scribe2/src/headless/runner.rs`）は pure に切り、それぞれの file の in-file の歯が fixture で測る（systemd の scope を歯で起こさない）。
+- 触らない: 片付けの極性（止める）・runner の権限・`Released` の語彙・`claude_peak_bytes` の読み。
 - 却下: 背景 task を待ってから片付ける（turn の終端の規律が曖昧になる）／雛形だけ直す（殺した事実が記録に残らない）。
 
 ## 21. gate の段の通知行を rc に依らず record と stderr に残す（契約表の行 o・`s2-07l.293`）
 
-- 出所: `.286` の gate が 2 周とも lens への入力が diff だったのに理由語が残らなかった（run.stderr 0 bytes）。同じ形は precheck の注意行・追随の rebase の行にも当たる。
-- 現物: gate は理由を `notice()`（`pipe/move_proof.rs`）で出すが、`pipe/cli/run.rs` の `chain` 関数は rc 0 の段の err を捨てて out だけを繋ぐ。run dir にも書かれない（`lens-input.txt` は要約の周だけ残る）。
-- 形: `chain` が rc 0 の段の err を保持し、`pipe run` の stderr に段の順で出す（stdout の判定行は不変）。
-- gate の record（`pipe/gate/record.rs`）の step 行と同じ log に `lens-input=<kind> reason=<語>` を追記する（要約の周も diff の周も・run dir に残る）。kind は判定行が既に出す `LensInput` の `kind`（diff / summary）・語は `notice()` の reason の値（要約の周は `-`）＝`pipe/move_proof.rs` は触らない。
-- 歯の置き場: record の歯は `tests/e2e/pipe/gate.rs`、`pipe run` の stderr の歯は `pipe run` の e2e が在る `tests/e2e/pipe/spawn.rs`（旧 lifecycle.rs は §5 の分割で `ratelimit.rs` / `stop.rs` になり、どちらも `pipe run` の歯を持たない）。
-- 触らない: 判定の極性・`notice()` の語彙・lens の入力の選び方。
-- 却下: stderr にだけ出す（run dir に残らず事後に読めない）／record にだけ書く（席が run の場で読めない）。
+- 出所: `.286` の gate が 2 周とも lens への入力が diff だったのに理由語が残らなかった（run.stderr 0 bytes・rc 0）。gate の機械検証（FR8）が「測れなかった / 要約にならなかった」理由を捨てるので、人手 0 の計測（FR22）で後から原因を引けない（黙って落とさない・NFR4 の面）。同じ形は precheck の注意行・追随の rebase の行にも当たる。
+- 現物（planner が grep で実測・main f678bd0）: 理由の 1 行は `crates/scribe2/src/pipe/move_proof.rs` の `LensInput::notice`（`pub fn`・返り値は `Option<String>`）が出し、`crates/scribe2/src/pipe/gate.rs` がそれを `Outcome.err` に載せる。`crates/scribe2/src/pipe/cli/run.rs:126` の `chain`（`pub(super) fn chain(lines: &mut Vec<String>, outcome: Outcome) -> Option<Outcome>`）は rc が `RC_OK` の周に `lines.extend(outcome.out)` して `None` を返す＝**`err` をそこで捨てる**。run dir にも書かれない（`lens-input.txt` は要約の周だけ残る）。gate の記録の行は `crates/scribe2/src/pipe/gate/record.rs` の `step_record`（`pub fn`）が組む。
+- 約束（この行が作るもの・番号は done と 1:1）:
+  1. `chain` が rc 0 の段の `err` を保持し、`pipe run` の stderr に段の順で出す。
+  2. stdout の判定行は 1 字も変わらない（`out` の繋ぎ方と rc の極性は不変）。
+  3. gate の記録の step 行と同じ log に `lens-input=<kind> reason=<語>` を追記する（**要約の周も diff の周も**・run dir に残る）。
+  4. `kind` は判定行が既に出す `LensInput` の kind（`diff` / `summary`）、`語` は `notice` の reason の値で、要約の周は `-`（0 と「測れなかった」を融合しない・C10）＝`move_proof.rs` は触らない。
+  5. 歯の置き場: 記録の歯は `crates/scribe2/tests/e2e/pipe/gate.rs`、`pipe run` の stderr の歯は `pipe run` の e2e が在る `crates/scribe2/tests/e2e/pipe/spawn.rs`（§5.9 の分割で出来た `crates/scribe2/tests/e2e/pipe/ratelimit.rs` と `crates/scribe2/tests/e2e/pipe/stop.rs` はどちらも `pipe run` の歯を持たない）。
+- 触らない: 判定の極性・`notice` の語彙・lens の入力の選び方・`move_proof.rs`。
+- 却下: stderr にだけ出す（run dir に残らず事後に読めない）／記録にだけ書く（撃った場で読めない）。
 
 ## 22. 撃ち直しの間も着地の番を先頭に保つ（契約表の行 p・`s2-07l.305`）
 
-- 出所: admin の現物確認: `.294` が `.279` を追い抜き、`.279` が撃ち直し 1 周分を余計に払った。
-- 現物: `pipe/queue.rs` の `turn_in` は「最初の `Gated` の ts が自分より小さい PASS の便」だけを前に数える。`pipe/land.rs` は `await_turn` を追随の前に 1 回だけ撃ち、撃ち直しの後は番を読み直さない。鍵の早い便が Inconclusive で一度列を離れて戻ると先頭が 2 つになる。`gate.rs` の `Gated` は `detail=verdict:<…>` を持つので、gate の周数を数える歯は `verdict:` の件だけを母集団にする。
-- 形: `await_turn` が「自分の番」と判定した周に `RunStage`（`stage=Gated detail=turn:taken`）を 1 行追記する（既存の段の event・detail で弁別・新しい kind は足さない）。記帳するのは `Order` が `First` / `Waited` の周だけ（`Degraded` / `Unmeasured` は番を取っていない）。
-- `turn_in` は、列の便のうち `turn:taken` を持つ便が在れば、最新の `turn:taken` の ts（同時刻は run id の辞書順）の 1 本だけを先頭とする（自分なら `First`・他なら `After`）。無ければ鍵の順。列を離れた便（終端・worktree 無し・verdict が PASS でない）の `turn:taken` は数えない。`Queued` の導出の field はその便の最新の `turn:taken` の ts。
-- 触らない: 鍵（最初の `Gated` の ts）の定義・stale base の判定・`await_turn` の待ち（唯一の wait）。
+- 出所: `.294` が `.279` を追い抜き、`.279` が撃ち直し 1 周分（約 20 分）を余計に払った（現物確認 2026-09-15 00:4xZ）。着地の終端（FR50）の列が、鍵の早い便が一度離れて戻る周に先頭を 2 本作る＝配送構造（FR30）の着地が費用だけ二重になる。
+- 現物（planner が grep で実測・main f678bd0）: 列の判定は `crates/scribe2/src/pipe/queue.rs` の `turn_in`（`pub fn turn_in(queue: Option<&[Queued]>, me: &str) -> Turn`・**pure**・`Turn` は `First` / `After(String)` / `Unmeasurable` の閉じた 3 値）1 本で、順序は `Queued.gated_at`（**最初の** `Gated` の ts・同時刻は run id の辞書順）だけから導く。待ちは同 file の `await_turn`（`pub(super) fn await_turn(entry: &Land<'_>) -> Order`）で、`crates/scribe2/src/pipe/land.rs` が追随の前に 1 回だけ撃ち、撃ち直しの後は番を読み直さない（読み直すのは main が動いたかだけ）。ゆえに鍵の早い便が INCONCLUSIVE で一度列を離れて戻ると、番を取った便と両方が自分を先頭と読む。`Gated` の記帳は `detail=verdict:<…>` を持つので、gate の周数を数える歯は `verdict:` の件だけを母集団にする。
+- 約束（この行が作るもの・番号は done と 1:1）:
+  1. `await_turn` が「自分の番」と判定した周に `RunStage`（`stage=Gated detail=turn:taken`）を 1 行追記する（既存の段の event を既存の記帳の口から書き、`detail` で弁別する＝新しい `EventKind` は足さない）。
+  2. 記帳するのは `Order` が番を取った 2 値（`First` / `Waited`）の周だけ（縮退と測れなかった周は番を取っていないので書かない）。
+  3. `turn_in` は、列の便のうち `turn:taken` を持つ便が在れば、**最新の** `turn:taken` の ts（同時刻は run id の辞書順）の 1 本だけを先頭とする（自分なら `First`・他なら `After`）。`turn:taken` を持つ便が 1 本も無ければ従来どおり鍵の順。
+  4. 列を離れた便（終端・worktree 無し・verdict が PASS でない）の `turn:taken` は数えない＝戻ってきた便は番を持たない側から数え直す。
+  5. `Queued` に導出の field を 1 つ足す＝その便の最新の `turn:taken` の ts（無ければ `None`）。`turn_in` が pure である性質と `Turn` の閉じた 3 値は不変。
+- 触らない: 鍵（`gated_at`＝最初の `Gated` の ts）の定義・stale base の判定・`await_turn` の待ち（唯一の wait）・`Turn` の variant の数。
 - 却下: 撃ち直しの後に番を読み直す（払う側が入れ替わるだけで 1 周の損失は消えない）／受容する（dispatcher で便が増えると追い抜きの頻度が上がる）。
 
 ## 23. stop 起因の終端を oom-kill に誤分類しない（契約表の行 q・`s2-07l.340`）
@@ -322,10 +370,15 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
 
 ## 24. pipe retire が受ける終端の段を広げる（契約表の行 r・`s2-07l.132`）
 
-- 出所: `s2-07l.127` phase 1 / 2 の実測: gate FAIL で終端した run の worktree が live のまま残り、`pipe retire` は限られた段しか受けないので操作役が畳めない。dispatcher で便が増えると FAIL 終端の worktree が積む。
-- 現物（main fffa8bb・`.349` の分割後）: `pipe/retire.rs` の `retire` 関数は「在るか・clean か」だけを検査し段を動かさず `retired/` へ move する（段の弁別は持たない）。受ける段の弁別は呼び手が持つ＝`pipe/cli/step.rs` の `retire_run` の `allowed`（`Landed` / `Failed` / `Gated` / `Stopped`）と `pipe/cli/state.rs` の `discriminate`（`Extra::Retire` × `Gated` = verdict が `Fail` だけ・× `Failed` = detail が `REBASE_EMPTY` か `follow::EXHAUSTED` だけ・他の段は catch-all で受ける）。＝`Landed` / `Stopped` / `Gated(FAIL)` / `Failed(rebase-empty / rebase-conflict)` は**既に畳める**（`tests/e2e/pipe/land.rs` の `pipe_retire_*` / `pipe_follow_retire_*` の歯が pin）。base で断るのは **`Failed` の他の detail**（`main-red` / `main-unmeasured` / `rebase-dirty` / `precheck:…`）だけで、`pipe_retire_rebase_empty_refuses_other_failed_reasons` がその拒否を pin している。
-- 形: `discriminate` の `Extra::Retire` × `Failed` の arm から detail の弁別を外し、`Failed` は detail を問わず畳める（受ける集合 = `Stage` の終端全部〔`Landed` / `Stopped` / `Failed`〕∧ `Gated(FAIL)`）。`allowed` の列と `retire.rs` は不変。clean の検査と `retired/` への move は不変。段は動かさない（`RunStage detail=retired` の記帳も不変）。「人が現物を読む前に入れ物が動く」懸念は `retired/` への可逆 move（N1.2）と event の `detail=retired` が持つ＝読む物は消えない。
-- 触らない: 非終端（`Spawned` / `Implemented` / `Gated`(PASS)）の便は断る（退行の pin）・`stop` の極性。
+- 出所: `s2-07l.127` phase 1 / 2 の実測: gate FAIL で終端した run の worktree が live のまま残り、`pipe retire` は限られた段しか受けないので操作役が畳めない。dispatcher で便が増えると FAIL 終端の worktree が積む。追随（FR34）が衝突の上限に達して `Failed` で終端した便も同じ穴に落ちる（下の `follow::EXHAUSTED`）。
+- 現物（planner が grep で実測・main f678bd0・`.349` の分割後）: 畳む本体は `crates/scribe2/src/pipe/retire.rs` の `retire`（`pub fn`）で「在るか・clean か」だけを検査し、段を動かさず `retired/` へ move する（段の弁別は持たない）。受ける段の弁別は呼び手が持つ＝`crates/scribe2/src/pipe/cli/step.rs` の `retire_run`（`pub(super) fn`）の `allowed`（`Landed` / `Failed` / `Gated` / `Stopped`）と `crates/scribe2/src/pipe/cli/state.rs` の `discriminate`（同 file の私有 `fn`）の 2 arm＝`Extra::Retire` × `Gated` は verdict が `Fail` の周だけ・× `Failed` は `last_stage_detail` が `REBASE_EMPTY` か `follow::EXHAUSTED` の周だけで、他の段は末尾の catch-all で受ける。＝`Landed` / `Stopped` / `Gated(FAIL)` / `Failed(rebase-empty / rebase-conflict)` は**既に畳める**（`crates/scribe2/tests/e2e/pipe/land.rs` の `pipe_retire_*` 6 本 / `pipe_follow_retire_*` 2 本の歯が pin・母集団は同 file の歯全部）。base で断るのは **`Failed` の他の detail**（`main-red` / `main-unmeasured` / `rebase-dirty` / `precheck:…`）だけで、`pipe_retire_rebase_empty_refuses_other_failed_reasons` がその拒否を pin している。
+- 約束（この行が作るもの・番号は done と 1:1）:
+  1. `discriminate` の `Extra::Retire` × `Failed` の arm から detail の弁別を外す＝`Failed` は detail を問わず `Ok(())`（`last_stage_detail` の読みも断りの字面もこの arm から消える）。
+  2. その結果、受ける集合は `Stage` の終端全部（`Landed` / `Stopped` / `Failed`）∧ `Gated(FAIL)` になる（`Reviewed` の非 PASS を足すのは行 i の面で、本行は触らない）。
+  3. `allowed` の列・`retire.rs` の本体・clean の検査・`retired/` への可逆 move・段を動かさないこと（`RunStage detail=retired` の記帳）は不変。「人が現物を読む前に入れ物が動く」懸念は可逆 move（N1.2）と `detail=retired` の event が持つ＝読む物は消えない。
+  4. 非終端（`Spawned` / `Implemented`）と `Gated(PASS)` は断る（退行の pin・`stop` の極性も不変）。
+  5. `land.rs` の既存の `pipe_retire_*` / `pipe_follow_retire_*` の歯は、極性が反転する 1 本（`pipe_retire_rebase_empty_refuses_other_failed_reasons`＝`Failed` の他の detail を断る pin）を「畳める」側へ書き換える以外は不変。
+- 触らない: `stop` の極性・`Extra::Retire` × `Gated` の arm・`Extra::Retire` × `Reviewed`（行 i の面）。
 - 却下: 手で `git worktree remove`（pipeline の外・不可逆）／段を新しい `Retired` の variant に動かす（`.128` の裁定に反する）。
 
 ## 25. 純移動の要約にコメント行の差の逐語を載せる（契約表の行 s・`s2-07l.377`）
@@ -465,6 +518,22 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
 - 歯: 既存の `pipe_land_` / `pipe_order_` / `pipe_follow_` / `pipe_retire_` の e2e と極性一覧の snapshot（`polarity_external_form`）が全部緑で期待を変えない。
 - 却下: anchor の群を移す（88 行で M の余地に届かない）／追随の群を移す（行 af / 行 ab が同じ群を触る＝それらの write-set が 2 file に割れて交差が増える）／行 ah / af / ab を S に落とす（見積が S の 100 を超える＝size の字面だけ変える嘘）。
 
+## 42. 受付の e2e の hub を接頭辞ごとに割る（契約表の行 b・`s2-07l.351`・純移動）
+
+- 出所: `crates/scribe2/tests/e2e/pipe/intake.rs` は open な便の write-set に何本も現れる hub で、intake の排他（FR39）の交差の母集団を大きくし便を直列にする。接頭辞で割って母集団を構造から減らす（`.327` / `.349` / `.264` と同じ型・要件は FR30 の配送構造の面）。受付が verify 行の scope（`-p` / `--test` / `--lib`）を読むようになった `s2-07l.451` が着地した後なので、歯の置き場の門は本便の形で通る。
+- 現物（planner が実測・main f678bd0）: `crates/scribe2/tests/e2e/pipe/intake.rs` は 2943 行・`#[test]` の歯 97 本で、接頭辞の内訳は `pipe_intake_` 31・`contract_` で始まる 39（`contract_closure_ext_` 17 / `contract_derive_` 8 / `contract_check_` 6 / `contract_declared_` 3 / `contract_table_landed_` 2 / `contract_schema_` 2 / `contract_names_` 1）・`pipe_review_` 12・`pipe_refuse_` 8・`pipe_preflight_` 4・`pipe_contract_` 1・`pipe_state_` 1・`pipe_show_` 1（母集団は同 file の `#[test]` 全数 97）。共有 helper は親の `crates/scribe2/tests/e2e/pipe.rs` に 40 本在り、子は `use super::*;` で引く（`.264` の分割と同じ形）。親の `mod` 宣言は 8 本。
+- filter の当たりの実測（`--test e2e` の scope・fn 名の substring・母集団は `crates/scribe2/tests/e2e` の `#[test]` 919 本）: 裸の `contract_` は 9 file の 68 本に当たる（`headless.rs` 7 / `hook.rs` 1 / `pipe/dispatch.rs` 5 / `pipe/gate.rs` 2 / `pipe/spawn.rs` 1 / `polarity.rs` 1 / `prop.rs` 1 / `rules.rs` 3 / `pipe/intake.rs` 47）＝**verify 行には使えない**（受付が teeth-outside-write-set で断る）。細かくした接頭辞のうち他 file に漏れるのは 2 つだけで、`contract_closure_ext_` が `crates/scribe2/tests/e2e/prop.rs` の 1 本に当たり（だから行 b の write-set はこの file を持つ＝**本便では 1 字も触らない**）、`contract_table_` は `polarity.rs` 1 本と `rules.rs` 3 本に当たるので `contract_table_landed_` まで伸ばす（当たりは `pipe/intake.rs` の 2 本だけ）。`pipe_intake_` は親の `pipe.rs` の 1 本にも当たる（親は write-set に在る）。
+- 形（純移動・番号は done と 1:1。行 b の write-set の `+` の 3 file は**宣言順に**〔審査の面・契約の面・断りの面〕を受ける）:
+  1. 審査の段の歯 `pipe_review_` 12 本を `+` の 1 本目（審査の面）へそのまま移す。
+  2. 契約表と閉包の歯 40 本（`contract_` で始まる 39 + `pipe_contract_` 1）を `+` の 2 本目（契約の面）へそのまま移す。
+  3. 断りの語彙の歯 `pipe_refuse_` 8 本を `+` の 3 本目（断りの面）へそのまま移す。
+  4. 単発の `pipe_state_` 1 本と `pipe_show_` 1 本は親（`crates/scribe2/tests/e2e/pipe.rs`）へ移す。
+  5. 元の file には受付の口の歯 35 本（`pipe_intake_` 31 + `pipe_preflight_` 4）だけが残り、2943 行は約 800 行へ縮む。
+  6. 親に `mod` 宣言を 3 本足す（宣言は既存の 8 本と合わせて名の昇順）。歯の本文・名・順序・`#[test]` の総数 97 は変えず、子は親の helper を `use super::*;` で引く。
+  7. 札 `// flip-check: moved s2-07l.351` を元の file の歯の区間の先頭と `+` の 3 file の先頭に対で置く（純移動の機械証明は §5.3）。
+- 触らない: 歯の名・本文・本数・親の 40 本の helper・`prop.rs` / `polarity.rs` / `rules.rs`（filter が当たるだけで中身は触らない）・受付の口の src。
+- 却下: `contract_` 1 本の filter で verify を書く（9 file に当たり受付が断る）／歯の名を変えて接頭辞を揃える（純移動でなくなり機械証明が残差を出す）／割らずに据え置く（交差の母集団が減らない）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -480,13 +549,13 @@ done = "pipe/cli.rs が入口と shim だけになり、lifecycle.rs が ratelim
 
 [[contract]]
 id = "b"
-title = "tests/e2e/pipe/intake.rs を接頭辞ごとに review.rs / contracts.rs / refuse.rs へ割る（純移動）"
+title = "受付の e2e の hub（2943 行・歯 97 本）を接頭辞ごとに 3 file へ割る（純移動）"
 req = ["FR30"]
-section = "8"
-write-set = ["crates/scribe2/tests/e2e/pipe/intake.rs", "+crates/scribe2/tests/e2e/pipe/review.rs", "+crates/scribe2/tests/e2e/pipe/contracts.rs", "+crates/scribe2/tests/e2e/pipe/refuse.rs", "crates/scribe2/tests/e2e/pipe.rs", "docs/design/pipeline.md"]
-verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_intake_", "cargo nextest run -p scribe2 --no-tests=fail pipe_review_", "cargo nextest run -p scribe2 --no-tests=fail pipe_refuse_", "cargo nextest run -p scribe2 --no-tests=fail contract_", "cargo nextest run -p scribe2 --no-tests=fail pipe_state_", "cargo nextest run -p scribe2 --no-tests=fail pipe_show_"]
+section = "42"
+write-set = ["-crates/scribe2/tests/e2e/pipe/intake.rs", "+crates/scribe2/tests/e2e/pipe/review.rs", "+crates/scribe2/tests/e2e/pipe/contracts.rs", "+crates/scribe2/tests/e2e/pipe/refuse.rs", "crates/scribe2/tests/e2e/pipe.rs", "crates/scribe2/tests/e2e/prop.rs", "docs/design/pipeline.md"]
+verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_review_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail contract_closure_ext_ contract_derive_ contract_check_ contract_declared_ contract_table_landed_ contract_schema_ contract_names_ pipe_contract_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_refuse_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_state_ pipe_show_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_intake_ pipe_preflight_"]
 size = "S"
-done = "intake.rs が pipe_intake_ だけになり、review / contracts / refuse の 3 file と pipe.rs（pipe_state_ / pipe_show_ の単発 2 本）に歯が移って filter ごとの本数が不変"
+done = "(1) 審査の段の歯 12 本が + の 1 本目に在り (2) 契約表と閉包の歯 40 本が + の 2 本目に在り (3) 断りの語彙の歯 8 本が + の 3 本目に在り (4) 単発の pipe_state_ / pipe_show_ の 2 本が親の tests/e2e/pipe.rs に在り (5) 元の file には受付の口の歯 35 本だけが残って行数が 2943 から約 800 へ縮み (6) 親の mod 宣言が 3 本増えて歯の名・本文・順序と #[test] の総数 97 は不変で子は use super::* で親の helper を引き (7) 札 flip-check: moved s2-07l.351 が元の file と + の 3 file に対で在って純移動の機械証明の残差が mod 宣言と札だけ"
 depends = ["a"]
 
 [[contract]]
@@ -526,9 +595,9 @@ title = "pipe retire の終端の列挙に Reviewed の非 PASS（FAIL / INCONCL
 req = ["FR49", "FR14"]
 section = "12"
 write-set = ["crates/scribe2/src/pipe/cli/step.rs", "crates/scribe2/src/pipe/cli/state.rs", "crates/scribe2/tests/e2e/pipe/land.rs"]
-verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_retire_"]
+verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_retire_"]
 size = "S"
-done = "Reviewed の FAIL / INCONCLUSIVE で終端した便が pipe retire で畳め（段は Reviewed のまま・可逆 move）、PASS は断られ、読めない判定は終端に読み替えない"
+done = "(1) retire が受ける段の列に Reviewed が在り (2) Reviewed で verdict が FAIL / INCONCLUSIVE の便は pipe retire で retired/ へ畳め (3) PASS は断られ (4) 判定を読めない便も断られ (5) 断りの字面が run <id> の段は Reviewed である（verdict=<V>）の逐語で段違いの一般則と区別が付き (6) 畳んだ後の段は Reviewed のまま（RunStage detail=retired は不変）"
 
 [[contract]]
 id = "j"
@@ -545,20 +614,20 @@ id = "f"
 title = "未知の flag と --help を全 subcommand が typed に断る — 引数の reader を 1 module に集め、land が unknown flag で何も動かさない"
 req = ["NFR4", "FR12"]
 section = "14"
-write-set = ["+crates/scribe2/src/cli_args.rs", "crates/scribe2/src/lib.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/fleet/cli.rs", "crates/scribe2/src/seat/cli.rs", "crates/scribe2/src/headless/mod.rs", "crates/scribe2/src/hook/vessel.rs", "crates/scribe2/src/account/cli.rs", "crates/scribe2/tests/e2e/pipe/land.rs", "crates/scribe2/tests/e2e/fleet.rs", "crates/scribe2/tests/e2e/seat.rs", "crates/scribe2/tests/e2e/headless.rs", "crates/scribe2/tests/e2e/hook.rs", "crates/scribe2/tests/e2e/seat/account.rs", ".config/nextest.toml"]
-verify = ["cargo nextest run -p scribe2 --no-tests=fail cli_args_", "cargo nextest run -p scribe2 --no-tests=fail pipe_terminal_land_refuses_unknown_flag"]
+write-set = ["+crates/scribe2/src/cli_args.rs", "crates/scribe2/src/lib.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/cli/args.rs", "crates/scribe2/src/fleet/cli.rs", "crates/scribe2/src/seat/cli.rs", "crates/scribe2/src/headless/mod.rs", "crates/scribe2/src/hook/vessel.rs", "crates/scribe2/src/account/cli.rs", "crates/scribe2/tests/e2e/pipe.rs", "crates/scribe2/tests/e2e/pipe/land.rs", "crates/scribe2/tests/e2e/fleet.rs", "crates/scribe2/tests/e2e/seat.rs", "crates/scribe2/tests/e2e/headless.rs", "crates/scribe2/tests/e2e/hook.rs", "crates/scribe2/tests/e2e/seat/account.rs", ".config/nextest.toml"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail cli_args_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_land_args_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail fleet_args_ seat_args_ headless_args_ vessel_args_ account_args_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_external_form fleet_external_form seat_usage_external_form headless_external_form vessel_external_form"]
 size = "M"
-done = "偽 remote の toy repo で pipe land に未知の flag か --help を渡すと main の ref・event log・worktree が 1 つも動かず、fleet / seat / headless / vessel の 1 口ずつが未知の flag を rc 2 で断り、usage の外形 snapshot は不変"
+done = "(1) 共通の reader が parse(args, allowed) -> Result<Parsed, ArgsError> の 1 本で在り (2) ArgsError が Help / Unknown / Missing / Duplicate の閉じた enum で宣言順の as_str を持ち (3) --help と -h は allowed に無くても Help で返り呼び手が usage を出して rc 0 で終わり (4) Unknown / Missing / Duplicate は usage 1 行で rc 2 になり (5) 既存の reader 7 本が全部この呼出に置き換わって各 subcommand が宣言順の const の allowed を持ち (6) 偽 remote の toy repo で pipe land に未知の flag か --help を渡すと main の ref・event log・worktree が 1 つも動かず (7) fleet / seat / headless / vessel / account の 1 口ずつが未知の flag を rc 2 で断り (8) usage の外形 snapshot 5 本が 1 字も動かない"
 
 [[contract]]
 id = "g"
 title = "pipe の --repo と --state-dir の cwd fallback を落とす — 写し面を消した run に --repo 無しで spawn しても cwd の repo に落ちない"
 req = ["FR4", "FR39"]
 section = "15"
-write-set = ["crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/cli/intake.rs", "crates/scribe2/tests/e2e/pipe.rs", "crates/scribe2/tests/e2e/pipe/intake.rs", "crates/scribe2/tests/e2e/pipe/spawn.rs", "crates/scribe2/tests/e2e/pipe/gate.rs", "crates/scribe2/tests/e2e/pipe/land.rs", "crates/scribe2/tests/e2e/pipe/ratelimit.rs", "crates/scribe2/tests/e2e/pipe/stop.rs", "crates/scribe2/tests/e2e/snapshots/e2e__pipe__pipe_external_form.snap"]
-verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_repo_required_"]
+write-set = ["crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/cli/args.rs", "crates/scribe2/src/pipe/cli/intake.rs", "crates/scribe2/tests/e2e/pipe.rs", "crates/scribe2/tests/e2e/pipe/intake.rs", "crates/scribe2/tests/e2e/snapshots/e2e__pipe__pipe_external_form.snap"]
+verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_repo_required_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_external_form"]
 size = "S"
-done = "--repo 無しの spawn と --state-dir 無しの置き場解決が断りの 1 行で止まり worktree を作らず、通常の nextest と変異の周で本物の repo の worktree と branch が増えない"
+done = "(1) --repo の無い spawn が cwd を読まず flag 不在の断り 1 行で rc 1 になり (2) 写し面の無い周の run の repo 解決も同じ断りで止まり (3) --state-dir も --repo も無い置き場の解決も同じ断りで止まり (4) 断った周は worktree を 1 つも作らず event を 1 件も書かず (5) usage に --repo の要件の 1 句が載って pipe_external_form の snapshot がその 1 句だけ動く"
 
 [[contract]]
 id = "h"
@@ -595,10 +664,10 @@ id = "m"
 title = "着地列の窓の待ちを Completion に足し、pipeline 外の docs merge が pipe land-window を前置して撃つ"
 req = ["FR30", "FR50"]
 section = "19"
-write-set = ["crates/scribe2/src/fleet/wait.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/queue.rs", "crates/scribe2/tests/e2e/pipe/land.rs", "crates/scribe2/tests/e2e/fleet.rs", "crates/scribe2/tests/e2e/snapshots/e2e__pipe__pipe_external_form.snap", "docs/design/pipeline.md"]
-verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_land_window_"]
+write-set = ["crates/scribe2/src/fleet/wait.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/queue.rs", "crates/scribe2/tests/e2e/pipe.rs", "crates/scribe2/tests/e2e/pipe/land.rs", "crates/scribe2/tests/e2e/snapshots/e2e__pipe__pipe_external_form.snap", "docs/design/pipeline.md"]
+verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_land_window_", "cargo nextest run -p scribe2 --lib --no-tests=fail fleet_wait_land_window_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_external_form"]
 size = "S"
-done = "偽の列で窓の開閉が rc と 1 行で判り、席の docs merge が散文の窓判断を持たない"
+done = "(1) 唯一の wait に pid を見張らない窓の variant が 1 つ増え既存の 7 つと deadline の経路は不変 (2) 窓は列の PASS 0 本・追随中 0 本・local main が origin/main の祖先の 3 つ全部で開き (3) local を先に読み読めない周は origin の有無に依らず閉じ origin の無い周は remote=none を載せて 3 つ目を数えず (4) origin の ref を fetch せず git の読みが既存の 2 口だけで (5) pipe land-window が開いた周は rc 0 の clear・閉じた周は rc 1 の busy を返し (6) busy の行が unpushed=<sha|unreadable|-> でどの条件で閉じたかを示し (7) usage の 1 行が増えて pipe_external_form の snapshot がその 1 行だけ動く"
 
 [[contract]]
 id = "n"
@@ -606,9 +675,9 @@ title = "runner の雛形に turn 終端の規律を足し、片付けで殺し�
 req = ["FR5", "FR22"]
 section = "20"
 write-set = ["crates/scribe2/src/headless/runner.txt", "crates/scribe2/src/headless/runner.rs", "crates/scribe2/src/pipe/confine.rs", "crates/scribe2/src/headless/mod.rs", "crates/scribe2/tests/e2e/headless.rs", "crates/scribe2/tests/e2e/snapshots/e2e__headless__headless_runner_prompt_external_form.snap", "docs/design/pipeline.md"]
-verify = ["cargo nextest run -p scribe2 --no-tests=fail headless_release_orphans_", "cargo nextest run -p scribe2 --no-tests=fail headless_runner_prompt_closes_turn_"]
+verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail headless_runner_prompt_closes_turn_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail headless_runner_prompt_external_form", "cargo nextest run -p scribe2 --lib --no-tests=fail confine_orphans_", "cargo nextest run -p scribe2 --lib --no-tests=fail runner_orphans_"]
 size = "S"
-done = "runner の雛形が終端の規律を持ち、片付けで殺した子の数が record に残る"
+done = "(1) 雛形に「検証は前面で完走させてから turn を閉じる」の 1 行が在り (2) その 1 行を逐語で名指す歯が別に在り (3) 雛形の外形 snapshot が足した 1 行だけ動いて全文を pin し続け (4) 片付けが scope を止める直前に残った process の数を読み (5) 終端の 1 行に orphans=<n|-> が載って 0 と「測れなかった」を融合せず (6) 数える関数と行を組む関数が pure に切られてそれぞれの file の in-file の歯が fixture で測る"
 
 [[contract]]
 id = "o"
@@ -616,9 +685,9 @@ title = "gate の段の通知行を rc に依らず record と run の stderr �
 req = ["FR8", "FR22"]
 section = "21"
 write-set = ["crates/scribe2/src/pipe/cli/run.rs", "crates/scribe2/src/pipe/gate.rs", "crates/scribe2/src/pipe/gate/record.rs", "crates/scribe2/tests/e2e/pipe/gate.rs", "crates/scribe2/tests/e2e/pipe/spawn.rs", "docs/design/pipeline.md"]
-verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_gate_notice_"]
+verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_gate_notice_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_spawn_notice_"]
 size = "S"
-done = "成功した便でも要約にならなかった理由が record と stderr に残る"
+done = "(1) rc 0 で終わった段の err が捨てられず pipe run の stderr に段の順で出て (2) stdout の判定行は 1 字も変わらず (3) gate の記録の step 行と同じ log に lens-input=<kind> reason=<語> が要約の周も diff の周も残り (4) kind が diff / summary で語は要約の周が - になり（0 と測れなかったを融合しない） (5) 記録の歯が tests/e2e/pipe/gate.rs に・pipe run の stderr の歯が tests/e2e/pipe/spawn.rs に在る"
 
 [[contract]]
 id = "p"
@@ -626,9 +695,9 @@ title = "着地の番を取った事実を記帳し、撃ち直しの間も番�
 req = ["FR50", "FR30"]
 section = "22"
 write-set = ["crates/scribe2/src/pipe/queue.rs", "crates/scribe2/src/pipe/land.rs", "crates/scribe2/tests/e2e/pipe/land.rs", "docs/design/pipeline.md"]
-verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_land_turn_", "cargo nextest run -p scribe2 --lib --no-tests=fail pipe_land_turn_"]
+verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_land_turn_", "cargo nextest run -p scribe2 --lib --no-tests=fail pipe_order_taken_"]
 size = "S"
-done = "偽の列で番を取った便が鍵の順と独立に先頭に残り、2 便が番の履歴を持っても列が循環せず、INCONCLUSIVE で離れて戻った便が撃ち直し中の便を追い抜かない"
+done = "(1) 番を取った周に RunStage stage=Gated detail=turn:taken が 1 行だけ増え EventKind は増えず (2) 縮退と測れなかった周は 1 行も書かず (3) 偽の列で turn:taken を持つ便が在れば最新の 1 本（同時刻は run id の辞書順）だけが先頭になり無ければ鍵の順に戻り (4) 終端・worktree 無し・verdict が PASS でない便の turn:taken は数えず INCONCLUSIVE で離れて戻った便が撃ち直し中の便を追い抜かず (5) Queued が最新の turn:taken の ts の field を持ち turn_in が pure で Turn は閉じた 3 値のまま"
 
 [[contract]]
 id = "q"
@@ -646,9 +715,9 @@ title = "pipe retire が受ける終端の段を Stage の終端全部（Failed 
 req = ["FR34"]
 section = "24"
 write-set = ["crates/scribe2/src/pipe/cli/state.rs", "crates/scribe2/tests/e2e/pipe/land.rs"]
-verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_retire_", "cargo nextest run -p scribe2 --no-tests=fail pipe_follow_retire_"]
+verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_retire_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_follow_retire_"]
 size = "S"
-done = "Failed の detail を問わず終端の便の worktree を器の口で可逆に畳め、非終端と Gated(PASS) は断られ、既存の pipe_retire_ の歯は反転した 1 本を除き不変"
+done = "(1) Failed の便は detail（main-red / main-unmeasured / rebase-dirty / precheck:…）を問わず pipe retire で畳め (2) 受ける集合が Stage の終端全部（Landed / Stopped / Failed）∧ Gated(FAIL) になり (3) allowed の列・retire.rs の本体・clean の検査・retired/ への可逆 move・RunStage detail=retired の記帳は不変 (4) 非終端（Spawned / Implemented）と Gated(PASS) は断られ (5) 既存の pipe_retire_ / pipe_follow_retire_ の歯は極性が反転する 1 本（pipe_retire_rebase_empty_refuses_other_failed_reasons）を除き不変"
 
 [[contract]]
 id = "s"
