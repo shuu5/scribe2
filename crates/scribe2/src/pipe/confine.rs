@@ -121,7 +121,13 @@ impl Reason {
     fn of_rule_read(read: RuleRead) -> Self {
         match read {
             RuleRead::ManifestUnreadable => Self::ManifestUnreadable,
-            RuleRead::Missing | RuleRead::Disabled | RuleRead::NotInt => Self::NoRules,
+            // `.433` の 2 理由（値が文字列でない・字面が閉じた表に無い）も既存の「行を読めない」側の
+            // 1 語に倒す＝封じ込めが読む 3 線は整数の行だけなので、包みの挙動は変わらない。
+            RuleRead::Missing
+            | RuleRead::Disabled
+            | RuleRead::NotInt
+            | RuleRead::NotStr
+            | RuleRead::NotInTable => Self::NoRules,
         }
     }
 }
@@ -1009,7 +1015,7 @@ mod tests {
         assert_eq!(absent, Err(RuleRead::Missing), "行が無い");
         let entry = Wrap { unit: "scribe2-probe-unit", limit: Limit::HostReserve, caps: absent };
         assert_eq!(wrap_line("true", &entry).1.reason(), Some(Reason::NoRules), "行が無い周は no-rules");
-        for read in [RuleRead::Disabled, RuleRead::NotInt] {
+        for read in [RuleRead::Disabled, RuleRead::NotInt, RuleRead::NotStr, RuleRead::NotInTable] {
             let entry = Wrap { unit: "scribe2-probe-unit", limit: Limit::HostReserve, caps: Err(read) };
             assert_eq!(wrap_line("true", &entry).1.reason(), Some(Reason::NoRules), "{read:?} は no-rules");
         }

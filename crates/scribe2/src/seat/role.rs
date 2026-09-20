@@ -1,11 +1,17 @@
 //! 席の役割と登録（設計 docs/design/seat-roles.md §2 / §6・ADR-0022 §2.1 / §2.5・SRS FR40）。役割の解決は
 //! [`role_of_target`] の 1 本で**登録 row だけ**を読む（env・window 名の慣習・pane の字面は読まない・C2.2 / N3）。
 
+use crate::fleet::select::Model;
 use crate::fleet::store::{self, LockPolicy};
 use crate::fleet::{cli, replay, Event, EventKind, Registration, State, ACTOR_MACHINE, SCHEMA};
+use crate::headless::Effort;
 use crate::pipe::declaration::path_kinds::PathKinds;
 use crate::polarity::{OnFailure, Polarity, Timing};
+use crate::rules::manifest::Manifest;
+use crate::rules::RuleValue;
 use std::path::Path;
+
+use super::RuleRead;
 
 /// 席の役割。**variant の列挙は core が持つ**（文書は写さない・ADR-0013 §2.1）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -29,6 +35,59 @@ impl Role {
     pub fn parse(text: &str) -> Option<Self> {
         ALL.iter().copied().find(|role| role.as_str() == text)
     }
+
+    /// 役割ごとの既定の model の行 id（`seat.model.<役割名>`・設計 seat-roles.md §19）。
+    ///
+    /// 前置きが `role.` でないのは、その前置きが**権能の行**（役割ごとに雛形を 1 枚ずつ要る行）の印
+    /// だからである（`role.<役割名>`・設計 §5）。既定の対は雛形を要らない。
+    pub fn model_row(self) -> String {
+        format!("seat.model.{}", self.as_str())
+    }
+
+    /// 役割ごとの既定の effort の行 id（`seat.effort.<役割名>`・設計 seat-roles.md §19）。
+    pub fn effort_row(self) -> String {
+        format!("seat.effort.{}", self.as_str())
+    }
+}
+
+/// 役割ごとの既定（設計 seat-roles.md §19・裁定 id `user 2026-09-17T04:23Z`）。**対で持つ**——
+/// model だけを運ぶと effort が口座の設定 dir 任せに戻り、同じ役割の席が口座ごとに違う深さで走る。
+/// 値の正本は rules 行（`seat.model.<役割名>` / `seat.effort.<役割名>`）で、ここは型だけを持つ（C1）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RoleDefaults {
+    /// 既定の model（閉じた表 [`Model`]）。
+    pub model: Model,
+    /// 既定の effort（閉じた表 [`Effort`]）。
+    pub effort: Effort,
+}
+
+/// **渡された manifest** から役割の既定の対を引く（pure・[`super::int_rule_of`] と同じ 2 段の下段）。
+///
+/// 極性は **fail-closed**: 行が無い・不発効・値が文字列でない・字面が閉じた表に無い のどれも既定へ
+/// 倒さず、理由（[`RuleRead`] の 4 variant）を名指して `Err`（C1「行の無さを既定に倒さない」）。
+/// model と effort のどちらが読めなくても対は返らない（片肺で起こさない）。
+pub fn defaults_of(manifest: &Manifest, role: Role) -> Result<RoleDefaults, RuleRead> {
+    let model = table_row(manifest, &role.model_row(), Model::parse)?;
+    let effort = table_row(manifest, &role.effort_row(), Effort::parse)?;
+    Ok(RoleDefaults { model, effort })
+}
+
+/// 埋め込み manifest から役割の既定の対を引く（[`super::int_rule`] と同じ 2 段の上段・読めない周は
+/// [`RuleRead::ManifestUnreadable`]）。
+pub fn defaults(role: Role) -> Result<RoleDefaults, RuleRead> {
+    defaults_of(&super::embedded_manifest()?, role)
+}
+
+/// 発効した行の文字列を閉じた表で引く（**4 つの読みを別の variant で返す**）。
+fn table_row<T>(manifest: &Manifest, id: &str, parse: impl Fn(&str) -> Option<T>) -> Result<T, RuleRead> {
+    let row = manifest.get(id).ok_or(RuleRead::Missing)?;
+    if !row.enabled {
+        return Err(RuleRead::Disabled);
+    }
+    let RuleValue::Str(text) = &row.value else {
+        return Err(RuleRead::NotStr);
+    };
+    parse(text).ok_or(RuleRead::NotInTable)
 }
 
 /// 権能＝操作の種別（設計 §3・ADR-0022 §2.2・SRS FR41）。**variant の列挙は core が持つ**（文書は写さない）。
@@ -254,4 +313,101 @@ pub fn doctor_lines(state_dir: &Path, socket: Option<&str>) -> Vec<String> {
     let mut lines = state.as_ref().map(doctor_rows).unwrap_or_default();
     lines.push(render_reconcile(state.as_ref(), live.as_deref()));
     lines
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{defaults, defaults_of, Role, RoleDefaults, ALL};
+    use crate::fleet::select::Model;
+    use crate::headless::Effort;
+    use crate::rules::manifest::Manifest;
+    use crate::seat::RuleRead;
+
+    /// `[[rule]]` 2 行（役割の既定の対）の fixture。kind / 値 / 発効は引数で崩せる。
+    fn manifest_with(role: Role, model: (&str, &str, bool), effort: (&str, &str, bool)) -> Manifest {
+        let row = |id: String, kind: &str, value: &str, enabled: bool| {
+            format!("[[rule]]\nid = \"{id}\"\nkind = \"{kind}\"\nvalue = {value}\nenabled = {enabled}\nruling = \"r\"\nruled_at = \"d\"\n\n")
+        };
+        let text = format!(
+            "schema = 1\n\n{}{}",
+            row(role.model_row(), model.0, model.1, model.2),
+            row(role.effort_row(), effort.0, effort.1, effort.2)
+        );
+        match Manifest::parse(&text) {
+            Ok(found) => found,
+            Err(errors) => panic!("fixture の manifest を読める: {errors:?}"),
+        }
+    }
+
+    /// 読める周の既定の対（`RoleModel` = fable・`RoleEffort` = high）。
+    fn good(role: Role) -> Manifest {
+        manifest_with(role, ("RoleModel", "\"fable\"", true), ("RoleEffort", "\"high\"", true))
+    }
+
+    /// 歯 (c): 読み手は行から**対を型で返す**（model と effort の 2 field・どちらも閉じた型）。
+    ///
+    /// 対の片方だけを読む変異（effort を見ない・model を捨てる）は値の assert で落ちる。
+    #[test]
+    fn seat_role_defaults_of_returns_the_pair_as_closed_types() {
+        for role in ALL.iter().copied() {
+            assert_eq!(
+                defaults_of(&good(role), role),
+                Ok(RoleDefaults { model: Model::Fable, effort: Effort::High }),
+                "{role:?}"
+            );
+        }
+        // 表示名（実測行の語彙）も別名と同じ表で引ける・effort は字面だけ。
+        let display = manifest_with(Role::Orchestrator, ("RoleModel", "\"Opus\"", true), ("RoleEffort", "\"xhigh\"", true));
+        assert_eq!(
+            defaults_of(&display, Role::Orchestrator),
+            Ok(RoleDefaults { model: Model::Opus, effort: Effort::Xhigh }),
+            "値は閉じた表の字面で引く"
+        );
+    }
+
+    /// 歯 (c): 行なし / 不発効 / 値が文字列でない / 字面が表に無い の 4 周を**それぞれ別の理由**で名指す
+    /// （fail-closed・既定へ倒さない）。4 つを 1 つに潰す変異（全部 `Missing`・`enabled` を見ない・形を
+    /// 見ない・`parse` の失敗を握り潰す）はどれかの assert で落ちる。model 側と effort 側の両方で測る。
+    #[test]
+    fn seat_role_defaults_of_names_each_failure_for_both_rows() {
+        let role = Role::Orchestrator;
+        let empty = match Manifest::parse("schema = 1\n") {
+            Ok(found) => found,
+            Err(errors) => panic!("空の manifest を読める: {errors:?}"),
+        };
+        assert_eq!(defaults_of(&empty, role), Err(RuleRead::Missing), "行が無い");
+        let cases = [
+            (("RoleModel", "\"fable\"", false), ("RoleEffort", "\"high\"", true), RuleRead::Disabled, "model が不発効"),
+            (("RoleModel", "\"fable\"", true), ("RoleEffort", "\"high\"", false), RuleRead::Disabled, "effort が不発効"),
+            (("CoreLines", "7", true), ("RoleEffort", "\"high\"", true), RuleRead::NotStr, "model が文字列でない"),
+            (("RoleModel", "\"fable\"", true), ("CoreLines", "7", true), RuleRead::NotStr, "effort が文字列でない"),
+            (("DialogueSurface", "\"orchestrator\"", true), ("RoleEffort", "\"high\"", true), RuleRead::NotInTable, "model が表に無い"),
+            (("RoleModel", "\"fable\"", true), ("DialogueSurface", "\"orchestrator\"", true), RuleRead::NotInTable, "effort が表に無い"),
+        ];
+        for (model, effort, want, what) in cases {
+            assert_eq!(defaults_of(&manifest_with(role, model, effort), role), Err(want), "{what}");
+        }
+        // 片方だけ在る周は残りの行の不在で止まる（片肺で対を返さない）。
+        let only_model = match Manifest::parse(&format!(
+            "schema = 1\n\n[[rule]]\nid = \"{}\"\nkind = \"RoleModel\"\nvalue = \"fable\"\nenabled = true\nruling = \"r\"\nruled_at = \"d\"\n",
+            role.model_row()
+        )) {
+            Ok(found) => found,
+            Err(errors) => panic!("fixture の manifest を読める: {errors:?}"),
+        };
+        assert_eq!(defaults_of(&only_model, role), Err(RuleRead::Missing), "effort の行が無い");
+    }
+
+    /// 歯 (c): 埋め込みの薄い口は tracked の行（`fable` / `high`・裁定 `user 2026-09-17T04:23Z`）を返し、
+    /// 閉じた列のどの役割でも読める（行が 1 本でも欠ければここが落ちる）。
+    #[test]
+    fn seat_role_defaults_reads_every_role_from_the_embedded_manifest() {
+        for role in ALL.iter().copied() {
+            assert_eq!(
+                defaults(role),
+                Ok(RoleDefaults { model: Model::Fable, effort: Effort::High }),
+                "{role:?} の既定は裁定 user 2026-09-17T04:23Z の対"
+            );
+        }
+    }
 }

@@ -385,6 +385,29 @@ enabled = true
 ruling = "user 2026-09-20"
 ruled_at = "2026-09-20"
 
+# 役割ごとの既定の model と effort（設計 seat-roles.md §19・`s2-07l.433`）。役割ごとに 2 行（id は
+# seat.model.<役割名> と seat.effort.<役割名>）で、値は claude CLI の字面（閉じた表は crates 側の
+# fleet::select::Model と headless::Effort・表に無い字面は loader が拒む）。id が role. で始まらないのは、
+# role.<役割名> の前置きが権能の行（雛形を 1 枚ずつ要る行）の印だからである。席の起動と立て直しはここから
+# 対を導く（登録 row の model は導出値であって宣言ではない）。裁定は当時の 3 役割に対を与え、対話と設計の
+# 席（= 後継の orchestrator）は fable / high である。
+
+[[rule]]
+id = "seat.model.orchestrator"
+kind = "RoleModel"
+value = "fable"
+enabled = true
+ruling = "user 2026-09-17T04:23Z"
+ruled_at = "2026-09-17"
+
+[[rule]]
+id = "seat.effort.orchestrator"
+kind = "RoleEffort"
+value = "high"
+enabled = true
+ruling = "user 2026-09-17T04:23Z"
+ruled_at = "2026-09-17"
+
 # 契約の size ↔ 1 file あたりの増分の見積（行・設計 contract-source.md §3「上限の余地」・rules-manifest.md §4）。
 # 受付（pipe intake）が write-set の各 .rs の余地（R-C4-2 との差）と core の余地（R-C4-1 との差）に当てる。
 # CI の contracts check は撃たない（表は履歴を持つ）。

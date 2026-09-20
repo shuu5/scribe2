@@ -10,6 +10,8 @@
 pub mod cli;
 pub mod manifest;
 
+use crate::fleet::select::{Model, MODELS};
+use crate::headless::{Effort, EFFORTS};
 use crate::seat::role::{Capability, Role, ALL as ROLES, CAPABILITIES};
 use manifest::{HostManifest, Manifest};
 use std::path::{Path, PathBuf};
@@ -203,6 +205,13 @@ pub enum RuleKind {
     /// runner / lens が claude に**毎回**渡す effort（設計 pipeline.md §6・`s2-07l.322`）。値は claude CLI の字面
     /// （閉じた表は [`crate::headless::Effort`]）。省くと口座の設定 dir の `settings.json` の値で決まる。
     RunnerEffort,
+    /// 役割ごとの既定の model（設計 seat-roles.md §19・`s2-07l.433`）。値は claude CLI の別名か表示名
+    /// （閉じた表は [`crate::fleet::select::Model`]・表に無い字面は読み込みで拒む）。**1 kind で行は役割ごとに
+    /// 1 つ**（id は `seat.model.<役割名>`）で、[`Self::RoleEffort`] と対で読む。
+    RoleModel,
+    /// 役割ごとの既定の effort（設計 seat-roles.md §19・`s2-07l.433`）。値は claude CLI の字面（閉じた表は
+    /// [`crate::headless::Effort`]・表に無い字面は読み込みで拒む）。id は `seat.effort.<役割名>`。
+    RoleEffort,
 }
 
 /// [`RuleKind`] の全 variant。parity test の母集団である。
@@ -252,6 +261,8 @@ pub const ALL: &[RuleKind] = &[
     RuleKind::PipeSizeLLines,
     RuleKind::RunnerModel,
     RuleKind::RunnerEffort,
+    RuleKind::RoleModel,
+    RuleKind::RoleEffort,
 ];
 
 impl RuleKind {
@@ -303,6 +314,8 @@ impl RuleKind {
             Self::PipeSizeLLines => "PipeSizeLLines",
             Self::RunnerModel => "RunnerModel",
             Self::RunnerEffort => "RunnerEffort",
+            Self::RoleModel => "RoleModel",
+            Self::RoleEffort => "RoleEffort",
         }
     }
 
@@ -343,7 +356,11 @@ impl RuleKind {
             | Self::PipeSizeMLines
             | Self::PipeSizeLLines
             | Self::AccountSelection => ValueShape::Int,
-            Self::DialogueSurface | Self::RunnerModel | Self::RunnerEffort => ValueShape::Str,
+            Self::DialogueSurface
+            | Self::RunnerModel
+            | Self::RunnerEffort
+            | Self::RoleModel
+            | Self::RoleEffort => ValueShape::Str,
             Self::MaturityCondition
             | Self::MutationSurvivalLine
             | Self::CompileShape
@@ -457,8 +474,9 @@ impl Rule for RuleRow {
 
 impl RuleRow {
     /// 値が**閉じた名の集合**を指す kind は、名を core の enum で引けることまで検査する（設計
-    /// seat-roles.md §3・ADR-0022 §2.2）: `RoleCapabilities` の列は [`Capability`] の名、`DialogueSurface`
-    /// の値は [`Role`] の名。綴り違いを黙って「権能なし」「対話面なし」に倒さない（NFR4）。
+    /// seat-roles.md §3 / §19・ADR-0022 §2.2）: `RoleCapabilities` の列は [`Capability`] の名、`DialogueSurface`
+    /// の値は [`Role`] の名、`RoleModel` の値は [`Model`] の字面、`RoleEffort` の値は [`Effort`] の字面。
+    /// 綴り違いを黙って「権能なし」「対話面なし」「既定なし」に倒さない（NFR4）。
     /// `RunnerDeniedCommands` の各要素は語を 1 つ以上持つ（空白だけの語列は何にも当たらず黙って効かない・ADR-0025 §2.1）。
     fn names_are_known(&self) -> Result<(), RuleError> {
         let unknown = |what: &str, name: &str, taken: &[&str]| {
@@ -478,6 +496,14 @@ impl RuleRow {
             (RuleKind::DialogueSurface, RuleValue::Str(name)) if Role::parse(name).is_none() => {
                 let taken: Vec<&str> = ROLES.iter().map(|found| found.as_str()).collect();
                 Err(unknown("役割", name, &taken))
+            }
+            (RuleKind::RoleModel, RuleValue::Str(name)) if Model::parse(name).is_none() => {
+                let taken: Vec<&str> = MODELS.iter().map(|found| found.alias()).collect();
+                Err(unknown("model", name, &taken))
+            }
+            (RuleKind::RoleEffort, RuleValue::Str(name)) if Effort::parse(name).is_none() => {
+                let taken: Vec<&str> = EFFORTS.iter().map(|found| found.alias()).collect();
+                Err(unknown("effort", name, &taken))
             }
             (RuleKind::RunnerDeniedCommands, RuleValue::List(sequences)) => {
                 match sequences.iter().find(|sequence| sequence.split_whitespace().next().is_none()) {

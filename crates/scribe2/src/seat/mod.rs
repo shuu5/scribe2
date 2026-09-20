@@ -389,6 +389,11 @@ pub enum RuleRead {
     Disabled,
     /// 行は発効しているが値が整数でない。
     NotInt,
+    /// 行は発効しているが値が文字列でない（設計 seat-roles.md §19・役割の既定の読み手）。
+    NotStr,
+    /// 行は発効し値は文字列だが、字面が閉じた表に無い（`Model` / `Effort` の `parse` の失敗）。
+    /// 綴り違いを「行が無い」に潰さない（NFR4）。
+    NotInTable,
 }
 
 impl RuleRead {
@@ -399,6 +404,8 @@ impl RuleRead {
             Self::Missing => "missing",
             Self::Disabled => "disabled",
             Self::NotInt => "not-int",
+            Self::NotStr => "not-str",
+            Self::NotInTable => "not-in-table",
         }
     }
 
@@ -412,6 +419,8 @@ impl RuleRead {
             Self::Missing => "no-rule:missing",
             Self::Disabled => "no-rule:disabled",
             Self::NotInt => "no-rule:not-int",
+            Self::NotStr => "no-rule:not-str",
+            Self::NotInTable => "no-rule:not-in-table",
         }
     }
 }
@@ -422,6 +431,8 @@ pub const RULE_READS: &[RuleRead] = &[
     RuleRead::Missing,
     RuleRead::Disabled,
     RuleRead::NotInt,
+    RuleRead::NotStr,
+    RuleRead::NotInTable,
 ];
 
 /// manifest の読み（parse の結果）を typed な理由へ写す（pure・in-file の歯の入口）。
@@ -529,13 +540,15 @@ mod tests {
     #[test]
     fn rule_read_as_str_covers_every_variant() {
         assert!(is_declaration_order(RULE_READS, |read| read as usize), "RULE_READS は宣言順");
-        assert_eq!(RULE_READS.len(), 4, "母集団");
+        assert_eq!(RULE_READS.len(), 6, "母集団（`.433` で +2＝役割の既定の読み手の 2 理由）");
         for read in RULE_READS.iter().copied() {
             let want = match read {
                 RuleRead::ManifestUnreadable => "manifest-unreadable",
                 RuleRead::Missing => "missing",
                 RuleRead::Disabled => "disabled",
                 RuleRead::NotInt => "not-int",
+                RuleRead::NotStr => "not-str",
+                RuleRead::NotInTable => "not-in-table",
             };
             assert_eq!(read.as_str(), want, "{read:?}");
             assert_eq!(read.no_rule(), format!("{}:{}", super::cycle::REASON_NO_RULE, read.as_str()), "{read:?}");

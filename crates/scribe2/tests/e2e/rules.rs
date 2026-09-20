@@ -5,7 +5,8 @@
 use crate::make_tmp_dir;
 use std::process::Command;
 use vessel::cli_outcome::{Outcome, RC_OK, RC_REFUSED};
-use vessel::fleet::select::Model;
+use vessel::fleet::select::{Model, MODELS};
+use vessel::headless::{Effort, EFFORTS};
 use vessel::order::is_declaration_order;
 use vessel::rules::manifest::{contract_rows, Manifest, TableValue};
 use vessel::rules::{int_row, str_row, Rule, RuleKind, RuleValue, ValueShape, ALL};
@@ -76,11 +77,13 @@ fn one_row(kind: RuleKind, value: &str) -> String {
 }
 
 /// 種類の形に合う値の字面。**閉じた名の集合を指す kind** は名を core の enum から取る（対話面は `Role` の名・
-/// 権能の行は `Capability` の名・`s2-07l.201`）。
+/// 権能の行は `Capability` の名・`s2-07l.201`／役割の既定は `Model` と `Effort` の字面・`s2-07l.433`）。
 fn sample_value(kind: RuleKind) -> String {
     match kind {
         RuleKind::DialogueSurface => format!("\"{}\"", Role::Orchestrator.as_str()),
         RuleKind::RoleCapabilities => format!("[\"{}\"]", Capability::Answer.as_str()),
+        RuleKind::RoleModel => format!("\"{}\"", Model::Fable.alias()),
+        RuleKind::RoleEffort => format!("\"{}\"", Effort::High.alias()),
         _ => match kind.shape() {
             ValueShape::Int => "1".to_owned(),
             ValueShape::Str | ValueShape::Policy => "\"sample\"".to_owned(),
@@ -1021,7 +1024,7 @@ fn rules_embedded_manifest_is_valid_and_covers_all_kinds() {
     // **tracked な `rules/manifest.toml` の全行が受理される**（`parse` は 1 件でも違反が
     // 在れば `Err` を返すので、ここに届いた時点で全行が必須 key を持つ）。母集団を額面に
     // 出すのは、行が黙って落ちた周を「全部読めた」と読み違えないためである。
-    assert_eq!(manifest.rows().len(), 45, "埋め込み manifest の行数（母集団・`.217` で +2・`.249` で +3・`.254` で +1・`.168` で +1・`.297` で +1・`.315` で +1・`.322` で +1・`.360` で +1・`.423` で +2・`.478` で -1〔役割の行 2 本が 1 本〕・`.479.1` で -7〔席の自律の行〕・`.479.2` で -3〔作業記憶の行 1 本と棚卸しの行 2 本〕・`.382` で +1〔終端の CI の上限〕）");
+    assert_eq!(manifest.rows().len(), 47, "埋め込み manifest の行数（母集団・`.217` で +2・`.249` で +3・`.254` で +1・`.168` で +1・`.297` で +1・`.315` で +1・`.322` で +1・`.360` で +1・`.423` で +2・`.478` で -1〔役割の行 2 本が 1 本〕・`.479.1` で -7〔席の自律の行〕・`.479.2` で -3〔作業記憶の行 1 本と棚卸しの行 2 本〕・`.382` で +1〔終端の CI の上限〕・`.433` で +2〔役割の既定の model と effort〕）");
     for kind in ALL {
         let covered = manifest.rows().iter().any(|row| row.kind == *kind);
         assert!(covered, "{} の行が manifest に無い", kind.as_str());
@@ -1191,10 +1194,10 @@ fn rules_embedded_manifest_declares_one_capability_row_per_role() {
             assert!(Capability::parse(name).is_some(), "{id} の値 {name} は Capability の名");
         }
     }
-    assert!(ALL.contains(&RuleKind::RoleCapabilities), "ALL に在る（末尾は `.423` の SeatPointerBackoffMaxS）");
+    assert!(ALL.contains(&RuleKind::RoleCapabilities), "ALL に在る（末尾は `.433` の RoleEffort）");
     assert_eq!(RuleKind::parse("RoleCapabilities"), Some(RuleKind::RoleCapabilities), "kind を字面から引ける");
     let kinds = ALL.len();
-    assert_eq!(kinds, 45, "kind の母集団（`.201` で +1・`.217` で +2・`.249` で +3・`.254` で +1・`.168` で +1・`.297` で +1・`.315` で +1・`.322` で +1・`.360` で +1・`.423` で +2・`.479.2` で -3・`.382` で +1〔終端の CI の上限〕）");
+    assert_eq!(kinds, 47, "kind の母集団（`.201` で +1・`.217` で +2・`.249` で +3・`.254` で +1・`.168` で +1・`.297` で +1・`.315` で +1・`.322` で +1・`.360` で +1・`.423` で +2・`.479.2` で -3・`.382` で +1〔終端の CI の上限〕・`.433` で +2〔役割の既定の 2 種〕）");
 }
 
 /// 禁じる語列の行（`runner.denied_commands`・`RuleKind::RunnerDeniedCommands`・裁定 id `user 2026-09-14`・ADR-0025 §2.1・
@@ -1401,6 +1404,119 @@ fn rules_role_capabilities_reject_unknown_capability_names() {
     assert!(errors.join("\n").contains("未知の権能 Answer"), "{errors:?}");
 }
 
+/// 役割ごとの既定の対の裁定 id（設計 seat-roles.md §19・逐語は台帳 `s2-07l.433`）。
+const DEFAULTS_RULING: &str = "user 2026-09-17T04:23Z";
+
+/// [`DEFAULTS_RULING`] の裁定日。
+const DEFAULTS_RULED_AT: &str = "2026-09-17";
+
+/// 歯 (a・設計 seat-roles.md §19 の形 1 / 2): 役割の閉じた列の**どの役割にも** model と effort の 2 行が在り、
+/// kind と値の形（`Str`）と発効と裁定 id が一致する。**行の本数は役割の閉じた列の 2 倍**（母集団を同時に出す）。
+/// id の前置きは `seat.model.` / `seat.effort.`（`role.` を避ける根は
+/// [`rules_role_defaults_ids_avoid_the_capability_prefix`]）。
+#[test]
+fn rules_role_defaults_two_rows_per_role() {
+    let manifest = Manifest::embedded().unwrap_or_else(|errors| panic!("埋め込み manifest が拒まれた: {errors:?}"));
+    let count = |kind: RuleKind| manifest.rows().iter().filter(|row| row.kind == kind).count();
+    assert_eq!(count(RuleKind::RoleModel), ROLES.len(), "RoleModel の行は役割ごとに 1 本（母集団 {}）", ROLES.len());
+    assert_eq!(count(RuleKind::RoleEffort), ROLES.len(), "RoleEffort の行は役割ごとに 1 本（母集団 {}）", ROLES.len());
+    let pair = count(RuleKind::RoleModel) + count(RuleKind::RoleEffort);
+    assert_eq!(pair, ROLES.len() * 2, "既定の行は役割の閉じた列の 2 倍（母集団 {}）", ROLES.len());
+    for role in ROLES {
+        for (id, kind) in [
+            (format!("seat.model.{}", role.as_str()), RuleKind::RoleModel),
+            (format!("seat.effort.{}", role.as_str()), RuleKind::RoleEffort),
+        ] {
+            let row = manifest.get(&id).unwrap_or_else(|| panic!("{id} の行が在る"));
+            assert_eq!(row.kind, kind, "{id} の kind");
+            assert_eq!(row.kind.shape(), ValueShape::Str, "{id} の値の形は Str（閉じた表の字面）");
+            assert!(row.enabled, "{id} は発効している");
+            assert_eq!(row.ruling, DEFAULTS_RULING, "{id} の裁定 id");
+            assert_eq!(row.ruled_at, DEFAULTS_RULED_AT, "{id} の裁定日");
+            assert!(row.validate().is_ok(), "{id} は validate を通る");
+        }
+        // 権能の行は別の行のまま（id の完全一致・値の形も違う）。
+        let caps = manifest.get(&format!("role.{}", role.as_str())).expect("権能の行が在る");
+        assert_eq!(caps.kind, RuleKind::RoleCapabilities, "権能の行の kind は動かない");
+    }
+}
+
+/// 歯 (a・続き): 既定の対の id は **`role.` で始まらない**。その前置きは権能の行（`role.<役割名>`・役割ごとに
+/// 雛形を 1 枚ずつ要る行・設計 §5）の印で、xtask の seat-brief は `role.` の行を全部「雛形が要る役割の行」と
+/// 数える＝既定の対に付けると雛形の無い役割として check が赤くなる。前置きを `role.` へ戻す変異はここで落ちる。
+#[test]
+fn rules_role_defaults_ids_avoid_the_capability_prefix() {
+    let manifest = Manifest::embedded().unwrap_or_else(|errors| panic!("埋め込み manifest が拒まれた: {errors:?}"));
+    let is_default = |kind: RuleKind| matches!(kind, RuleKind::RoleModel | RuleKind::RoleEffort);
+    let defaults: Vec<&str> = manifest.rows().iter().filter(|row| is_default(row.kind)).map(|row| row.id.as_str()).collect();
+    assert_eq!(defaults.len(), ROLES.len() * 2, "既定の行の母集団: {defaults:?}");
+    for id in &defaults {
+        assert!(!id.starts_with("role."), "{id} は role. で始まらない（雛形を要る行の前置き）");
+        assert!(id.starts_with("seat.model.") || id.starts_with("seat.effort."), "{id} の前置き");
+    }
+    // `role.` で始まる行は権能の行**だけ**のまま（母集団は役割の閉じた列と同じ本数）。
+    let prefixed: Vec<&str> = manifest.rows().iter().map(|row| row.id.as_str()).filter(|id| id.starts_with("role.")).collect();
+    assert_eq!(prefixed.len(), ROLES.len(), "role. で始まる行は権能の行だけ（母集団 {}）: {prefixed:?}", ROLES.len());
+    for id in prefixed {
+        let row = manifest.get(id).unwrap_or_else(|| panic!("{id} の行が在る"));
+        assert_eq!(row.kind, RuleKind::RoleCapabilities, "{id} の kind は RoleCapabilities");
+    }
+}
+
+/// 歯 (b・形 3・**否定の枝**): 値が閉じた表に無い manifest は**読み込みで拒まれる**（model 側・effort 側の
+/// 2 例）。綴り違いを黙って「既定なし」に倒さない（NFR4）＝理由は行番号付きで取る名を名指す。表に在る
+/// 字面（別名も表示名も）は今までどおり受理される。
+#[test]
+fn rules_role_defaults_reject_values_outside_the_closed_tables() {
+    for (kind, bad, what, taken) in [
+        (RuleKind::RoleModel, "\"opuss\"", "model", Model::Fable.alias()),
+        (RuleKind::RoleEffort, "\"higher\"", "effort", Effort::Xhigh.alias()),
+    ] {
+        let errors = rejected(&one_row(kind, bad)).expect("表に無い値が受理された");
+        assert_eq!(errors.len(), 1, "件数（{bad}）: {errors:?}");
+        let first = errors.first().map(String::as_str).unwrap_or_default();
+        assert!(first.contains(&format!("未知の{what}")), "{bad}: 理由: {first}");
+        assert!(first.contains(taken), "{bad}: 取る名を名指す: {first}");
+        assert!(first.contains("line=3"), "{bad}: 行番号: {first}");
+    }
+    // variant 名の字面と空文字も名ではない（`Model::parse` / `Effort::parse` は完全一致）。
+    for (kind, bad) in [(RuleKind::RoleModel, "\"\""), (RuleKind::RoleEffort, "\"High\"")] {
+        assert!(rejected(&one_row(kind, bad)).is_ok(), "{bad} は受理されない");
+    }
+    // 表に在る字面は全部通る（model は別名と表示名の両方・effort は字面）。
+    for model in MODELS {
+        for text in [model.alias(), model.display()] {
+            let healed = parsed(&one_row(RuleKind::RoleModel, &format!("\"{text}\""))).expect("表の字面は受理される");
+            assert_eq!(healed.get("probe").map(|row| row.value.clone()), Some(RuleValue::Str(text.to_owned())));
+        }
+    }
+    for effort in EFFORTS {
+        let text = effort.alias();
+        let healed = parsed(&one_row(RuleKind::RoleEffort, &format!("\"{text}\""))).expect("表の字面は受理される");
+        assert_eq!(healed.get("probe").map(|row| row.value.clone()), Some(RuleValue::Str(text.to_owned())));
+    }
+}
+
+/// 歯 (d・形 6): 埋め込み manifest が役割の既定の 2 行を**値ごと**運ぶ（裁定 `user 2026-09-17T04:23Z` の
+/// `fable` / `high`・値の正本は manifest で設計 doc は写さない・C1 / C5）。kind は宣言順の末尾 2 つ
+/// （`RunnerEffort` の直後が `RoleModel`・その直後が `RoleEffort`）で、字面から引ける。
+#[test]
+fn rules_manifest_carries_role_defaults() {
+    let manifest = Manifest::embedded().unwrap_or_else(|errors| panic!("埋め込み manifest が拒まれた: {errors:?}"));
+    let model = manifest.get("seat.model.orchestrator").expect("既定の model の行が在る");
+    assert_eq!(model.value, RuleValue::Str("fable".to_owned()), "裁定 user 2026-09-17T04:23Z の model");
+    assert_eq!(Model::parse("fable"), Some(Model::Fable), "値は閉じた表で引ける");
+    let effort = manifest.get("seat.effort.orchestrator").expect("既定の effort の行が在る");
+    assert_eq!(effort.value, RuleValue::Str("high".to_owned()), "裁定 user 2026-09-17T04:23Z の effort");
+    assert_eq!(Effort::parse("high"), Some(Effort::High), "値は閉じた表で引ける");
+    let at = ALL.iter().position(|kind| *kind == RuleKind::RunnerEffort).unwrap_or_default();
+    assert_eq!(ALL.get(at.saturating_add(1)), Some(&RuleKind::RoleModel), "宣言順は RunnerEffort の直後");
+    assert_eq!(ALL.get(at.saturating_add(2)), Some(&RuleKind::RoleEffort), "対は宣言順で隣り合う");
+    assert_eq!(ALL.last(), Some(&RuleKind::RoleEffort), "`.433` の 2 種が宣言順の末尾");
+    assert_eq!(RuleKind::parse("RoleModel"), Some(RuleKind::RoleModel), "kind を字面から引ける");
+    assert_eq!(RuleKind::parse("RoleEffort"), Some(RuleKind::RoleEffort), "kind を字面から引ける");
+}
+
 /// R-C7-1（対話面）の値は **`Role` の名**（`planner`・裁定 id `user 2026-09-13T03:14Z`・ADR-0022 §2.2）:
 /// 旧値 `user-direct` や `Role` の名でない fixture は `RuleError` で拒まれる。kind は既存の `DialogueSurface` のまま。
 #[test]
@@ -1434,7 +1550,7 @@ fn rules_dialogue_surface_value_must_be_a_role_name() {
 
 /// (f) `runner.model`（runner / lens が claude に毎回渡す model・裁定 id `user 2026-09-14T21:59Z`・設計 pipeline.md §6・
 /// `s2-07l.297`）: 埋め込み manifest の行は発効 ∧ `Str("opus")`（claude CLI の別名・閉じた表 `Model` で引ける）・kind は
-/// 宣言順の末尾から 5 つ目 `RunnerModel`（形は `Str`・末尾は `.423` の `SeatPointerBackoffMaxS`）・`str_row` が同じ値を返し、
+/// 宣言順で `RunnerEffort` の直前 `RunnerModel`（形は `Str`・末尾は `.433` の `RoleEffort`）・`str_row` が同じ値を返し、
 /// 不発効 / 整数の行は 3 理由で `Err`。base は行も kind も無いので RED。
 #[test]
 fn rules_manifest_carries_runner_model() {
