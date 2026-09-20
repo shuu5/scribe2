@@ -495,9 +495,11 @@ fn brief(hooked: &Hooked, outcome: &mut Outcome, payload: &str, started: Instant
     };
     let bd = hooked.bd.filter(|found| !found.trim().is_empty()).unwrap_or(crate::seat::ledger::DEFAULT_BD);
     // 台帳の子 process は **1 回**（件数の 1 行と復帰の DATA が同じ出力を読む・設計 seat-roles.md §21）。
+    // cwd は payload の `cwd`（[`cwd_of`] の 1 本・無ければ process の cwd）を渡す＝読み手が cwd を引数で取る
+    // ので渡す側になった（設計 dispatcher.md §14・出所は session の repo のまま）。
     let read = crate::seat::ledger::timeout_of(&manifest)
         .ok_or(LedgerError::Unreadable)
-        .and_then(|timeout| crate::seat::ledger::read_text(bd, timeout));
+        .and_then(|timeout| crate::seat::ledger::read_text(bd, hooked.cwd, timeout));
     let ledger = read
         .as_deref()
         .ok()

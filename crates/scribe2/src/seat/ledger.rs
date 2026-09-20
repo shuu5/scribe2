@@ -4,6 +4,8 @@
 //! 消えたが、SessionStart の指示文は台帳の現在値を 1 行で持つ（同 §2 (3)）ので、その読みだけを残す。
 //! 待ち上限は rules 行 [`ID_TIMEOUT`] から読み、**読めない周は `None`**（数え損ねを 0 に化けさせない・C10）。
 //! 子 process の出力（[`read_text`]）は復帰の DATA（`seat/recent.rs`・`s2-07l.489`）と**同じ 1 回**を共用する。
+//! 子 process の **cwd は呼び手が名指す**（`s2-07l.495.9`・設計 dispatcher.md §14）: 台帳 client は cwd から
+//! 台帳を解くので、器が process の cwd を継がせると `--repo` と別の repo の台帳を読む。
 // flip-check: moved s2-07l.479.2
 
 use crate::fleet::json_tree::{self, Tree};
@@ -11,6 +13,7 @@ use crate::polarity::{OnFailure, Polarity, Timing};
 use crate::rules::manifest::Manifest;
 use crate::rules::RuleValue;
 use std::io::Read;
+use std::path::Path;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
@@ -134,16 +137,21 @@ pub fn counts_of(text: &str) -> Option<String> {
 }
 
 /// 台帳を子 process で読み、[`Issue`] の列にする。**列の読み手も同じ 1 本**（設計 dispatcher.md §2・C2）。
-pub fn read_ledger(bd: &str, timeout: Duration) -> Result<Vec<Issue>, LedgerError> {
-    let text = read_text(bd, timeout)?;
+/// `cwd` は子 process の作業 dir（列は `--repo`・設計 §14）。
+pub fn read_ledger(bd: &str, cwd: &Path, timeout: Duration) -> Result<Vec<Issue>, LedgerError> {
+    let text = read_text(bd, cwd, timeout)?;
     issues_of(&text).ok_or(LedgerError::Unreadable)
 }
 
 /// 台帳を子 process で読み、stdout の本文（JSON の text）を返す（待ち上限を超えたら殺して `Timeout`・stderr は
 /// 捨てる）。件数の 1 行（[`counts_of`]）と復帰の DATA（`seat::recent`）が**この 1 回の出力**を分けて読む。
-pub fn read_text(bd: &str, timeout: Duration) -> Result<String, LedgerError> {
+///
+/// `cwd` は子 process の作業 dir で、**呼び手が名指す**（器は process の cwd を推さない・設計 dispatcher.md §14）。
+/// cwd に出来ない周（無い・dir でない・読めない）は `spawn` が落ちて `Unreadable`＝既存の断りがそのまま受ける。
+pub fn read_text(bd: &str, cwd: &Path, timeout: Duration) -> Result<String, LedgerError> {
     let mut child = Command::new(bd)
         .args(BD_ARGS)
+        .current_dir(cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())

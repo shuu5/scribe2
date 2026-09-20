@@ -232,6 +232,110 @@ fn pipe_dispatch_unmeasured_ledger_starts_nothing_and_is_not_zero() {
     clean(&[&repo, &state]);
 }
 
+/// **自分の見た cwd を `seen` へ書き出してから**台帳の JSON を吐く偽の `bd`（子の cwd を測る側・設計 §14）。
+/// `pwd -P` は物理 path＝`tmp()` の canonical な path と同じ字面になる。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn cwd_recording_bd(state: &Path, issues: &[String], seen: &Path) -> String {
+    let json = state.join("ledger-cwd.json");
+    fs::write(&json, format!("[{}]\n", issues.join(","))).expect("偽の台帳を書ける");
+    script(
+        &state.join("bd-cwd"),
+        &format!("pwd -P > '{}'\ncat '{}'\n", seen.display(), json.display()),
+    )
+}
+
+/// `pipe dispatch ls` を **process の cwd を `cwd` にして**撃つ（`--repo` は呼び手の字面のまま渡す＝相対 path も
+/// そのまま）。[`ls`] との違いは cwd と `--repo` の字面だけである。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn ls_from(cwd: &Path, repo: &str, state: &Path, bd: &str) -> Output {
+    Command::new(super::bin())
+        .args([
+            "pipe", "dispatch", "ls",
+            "--state-dir", &state.display().to_string(),
+            "--repo", repo,
+            "--rules", &dispatch_rules(state),
+            "--bd", bd,
+        ])
+        .current_dir(cwd)
+        .output()
+        .expect("binary を起動できる")
+}
+
+/// 子（偽の `bd`）が書き出した cwd の 1 行（無ければ空＝子は起きていない）。
+fn seen_cwd(seen: &Path) -> String {
+    fs::read_to_string(seen).unwrap_or_default().trim_end().to_owned()
+}
+
+/// (§14 (a)) process の cwd を別の dir にしたまま `--repo <toy>` で撃つと、台帳の子 process の見た cwd は
+/// **toy repo**である（process の cwd でない）。台帳は読めている（件数の行が出る）。
+///
+/// base は `read_text` が cwd を名指さない＝子は process の cwd を継ぐ（RED）。
+#[test]
+fn pipe_dispatch_ledger_cwd_is_the_named_repo_not_the_process_cwd() {
+    let (repo, state) = repo_with_state();
+    two_rows(&repo);
+    let elsewhere = state.join("elsewhere");
+    fs::create_dir_all(&elsewhere).unwrap_or_else(|err| panic!("別の dir を作れる: {err}"));
+    let seen = state.join("seen-cwd");
+    let bd = cwd_recording_bd(&state, &[issue("s2-toy.2", 2, "b")], &seen);
+    let out = ls_from(&elsewhere, &repo.display().to_string(), &state, &bd);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "ls は rc 0: {}", told(&out));
+    assert_eq!(count_of(&out), format!("{COUNT} total=1 ready=1"), "台帳は読めている: {}", told(&out));
+    assert_eq!(seen_cwd(&seen), repo.display().to_string(), "子の見た cwd は --repo の値");
+    assert_ne!(seen_cwd(&seen), elsewhere.display().to_string(), "process の cwd ではない");
+    clean(&[&repo, &state]);
+}
+
+/// (§14 (b)) `--repo` を**相対 path**で渡した周も、子の見た cwd は絶対 path で撃った周と**同じ絶対 path**である
+/// （口が値を絶対にする §12 の形と噛み合う pin）。
+#[test]
+fn pipe_dispatch_ledger_cwd_relative_repo_resolves_to_the_same_absolute_path() {
+    let (repo, state) = repo_with_state();
+    two_rows(&repo);
+    let seen = state.join("seen-cwd");
+    let bd = cwd_recording_bd(&state, &[issue("s2-toy.2", 2, "b")], &seen);
+    let absolute = ls_from(&state, &repo.display().to_string(), &state, &bd);
+    assert_eq!(absolute.status.code(), Some(i32::from(RC_OK)), "絶対 path の周: {}", told(&absolute));
+    let seen_absolute = seen_cwd(&seen);
+    assert_eq!(seen_absolute, repo.display().to_string(), "絶対 path の周の子の cwd");
+    // 相対 path: toy repo の親 dir を process の cwd にして、leaf 名だけを `--repo` に渡す。
+    let parent = repo.parent().unwrap_or_else(|| panic!("toy repo は親 dir を持つ: {}", repo.display()));
+    let leaf = repo.file_name().and_then(|name| name.to_str()).unwrap_or_default().to_owned();
+    fs::remove_file(&seen).unwrap_or_else(|err| panic!("前の周の書き出しを消せる: {err}"));
+    let relative = ls_from(parent, &leaf, &state, &bd);
+    assert_eq!(relative.status.code(), Some(i32::from(RC_OK)), "相対 path の周: {}", told(&relative));
+    assert_eq!(count_of(&relative), format!("{COUNT} total=1 ready=1"), "相対 path の周も台帳を読める: {}", told(&relative));
+    assert_eq!(seen_cwd(&seen), seen_absolute, "相対 path の周の子の cwd は同じ絶対 path（leaf={leaf}）");
+    clean(&[&repo, &state]);
+}
+
+/// (§14 (c)) 無い dir を `--repo` に渡した周は、子の `spawn` が落ちて列は `UNMEASURED` の行で 0 本である
+/// （`[DISPATCH-NONE]` とも件数の行とも融合しない・C10）。偽の台帳 client は起きていない（cwd の書き出しが無い）。
+#[test]
+fn pipe_dispatch_ledger_cwd_missing_repo_is_unmeasured_not_none() {
+    let (repo, state) = repo_with_state();
+    two_rows(&repo);
+    let seen = state.join("seen-cwd");
+    let bd = cwd_recording_bd(&state, &[issue("s2-toy.2", 2, "b")], &seen);
+    let missing = state.join("no-such-repo");
+    let out = ls(&missing, &state, &bd);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "ls は rc 0: {}", told(&out));
+    assert_eq!(stdout_of(&out).trim_end(), UNMEASURED, "読めない周の 1 行だけ: {}", told(&out));
+    assert!(!stdout_of(&out).contains(NONE_LINE), "0 件の行と融合しない: {}", told(&out));
+    assert!(!stdout_of(&out).contains(COUNT), "件数の行を出さない: {}", told(&out));
+    assert!(!seen.exists(), "台帳 client は起きていない（cwd の書き出しが無い）");
+    // 同じ台帳 client で在る repo を渡すと読める＝読めなさの根は `--repo` の dir である。
+    let readable = ls(&repo, &state, &bd);
+    assert_eq!(count_of(&readable), format!("{COUNT} total=1 ready=1"), "在る repo では読める: {}", told(&readable));
+    clean(&[&repo, &state]);
+}
+
 /// (§8 介入) `first` は priority より先に来て、`hold` は起こさず、`release` で戻る（event log の往復）。
 #[test]
 fn pipe_dispatch_first_outranks_priority_and_hold_stops_the_start() {

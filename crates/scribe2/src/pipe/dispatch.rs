@@ -405,7 +405,10 @@ pub fn turn(input: &Input<'_>) -> Turn {
     let Some(timeout) = ledger::timeout_of(input.manifest) else {
         return unmeasured(Unmeasured::NoRule);
     };
-    let Ok(issues) = ledger::read_ledger(input.bd, timeout) else {
+    // 台帳の子 process は **`--repo` の中で**撃つ（設計 §14）: 台帳 client は cwd から台帳を解くので、
+    // process の cwd を継がせると設計 doc と契約表は `--repo`・台帳は cwd 側という食い違った 1 周になる。
+    // `--repo` が dir でない周は spawn が落ちて `Unreadable`＝`unmeasured reason=ledger`（0 件と融合しない・C10）。
+    let Ok(issues) = ledger::read_ledger(input.bd, input.repo, timeout) else {
         return unmeasured(Unmeasured::Ledger);
     };
     // 1 周ぶん固定な材料は**ここで 1 回だけ**解く（候補ごとに rules 行と台帳を読み直さない）。
