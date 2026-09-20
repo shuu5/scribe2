@@ -3172,6 +3172,202 @@ fn mask_secs(form: &str) -> String {
         .join("\n")
 }
 
+// ---- 周ごとの検出線の写し（設計 gate-cost.md §15・`s2-07l.298`・接頭辞 `pipe_gate_detection_copy_`）----
+//
+// gate は検出線を撃った直後に、その周の判定行と出力（`outcomes.json` / `missed.txt`）を run dir の
+// **周ごとの置き場**へ写し、`pipe show` の判定行はその写しから読む。母集団 = 写しの dir とその中の file。
+
+/// 偽の検出線の名（宣言の `detection-verify` に置く stub・本文は歯が選ぶ）。
+const COPY_STUB: &str = "verify-copy.sh";
+
+/// 写しの置き場の名（run dir 直下）。**字面で組む**——同じ定数を器から引くと、置き場を変えた実装でも
+/// 歯が追随して通る（置き場そのものを pin する）。
+const COPY_DIR: &str = "detection";
+
+/// 写しの中の判定行の file 名。
+const COPY_LINE: &str = "line";
+
+/// 出力の無い周に置かれる marker の名。
+const COPY_ABSENT_OUTPUT: &str = "outputs-absent";
+
+/// 判定行の無い周に残る 1 行（**0 件の判定行と別の字面**）。
+const COPY_ABSENT_LINE: &str = "detection-line: absent";
+
+/// 周ごとに違う出力と判定行を出す偽の検出線（出力は cargo-mutants と同じ置き場へ書く）。
+///
+/// 周の番号は git の共通 dir に積む印の行数で、`missed.txt` の本文と判定行の `scope=` の両方に載る
+/// ＝1 周目の写しが 2 周目に上書きされたら、どちらの面でも字面が変わる。
+const COPY_STUB_ROUNDS: &str = r#"calls="$(git rev-parse --git-common-dir)/detection-calls"
+printf 'detection\n' >> "$calls"
+n="$(grep -c -x -F -- detection "$calls")"
+out=target/mutants-diff/out/mutants.out
+mkdir -p "$out"
+printf 'src/lib.rs:1: replace one with round %s\n' "$n" > "$out/missed.txt"
+printf '{"total_mutants":3}\n' > "$out/outcomes.json"
+printf 'mutants-diff: total=3 caught=2 missed=1 unviable=0 timeout=0 scope=round%s\n' "$n"
+exit 0
+"#;
+
+/// **0 件の周**の偽の検出線（出力は在り `missed.txt` が空・判定行は `missed=0`）。
+const COPY_STUB_ZERO: &str = r#"out=target/mutants-diff/out/mutants.out
+mkdir -p "$out"
+: > "$out/missed.txt"
+printf '{"total_mutants":0}\n' > "$out/outcomes.json"
+printf 'mutants-diff: total=0 caught=0 missed=0 unviable=0 timeout=0 scope=x\n'
+exit 0
+"#;
+
+/// 判定行だけを出す偽の検出線（出力を 1 つも書かない周）。
+fn copy_stub_line_only() -> String {
+    format!("printf '{DETECTION_LINE}\\n'\nexit 0\n")
+}
+
+/// `detection` を `detection-verify` に持つ便を Implemented まで進める（共通 verify と契約 verify は静かな stub）。
+///
+/// `target/` を ignore するのは、検出線の出力が untracked のまま残ると **2 周目の precheck** が
+/// 「clean でない」で止まり、2 周分の写しを測れないためである（実 repo でも `target/` は ignore される）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn copy_run(detection: &str) -> (PathBuf, PathBuf, String) {
+    let (repo, state) = repo_with_state();
+    fs::write(repo.join(".gitignore"), "target/\n").expect(".gitignore を書ける");
+    fs::write(repo.join(COPY_STUB), detection).expect("stub を書ける");
+    write_vessel(&repo, VESSEL_ALLOWED, r#"["sh verify-ok.sh"]"#);
+    let path = repo.join(".vessel.toml");
+    let body = fs::read_to_string(&path).expect("宣言を読める");
+    fs::write(&path, format!("{body}detection-verify = [\"sh {COPY_STUB}\"]\n")).expect("宣言を書ける");
+    git(&repo, &["add", "-f", ".gitignore", COPY_STUB, ".vessel.toml"]);
+    git(&repo, &["commit", "-q", "-m", "vessel-copy"]);
+    let design = write_contract(&repo, &["verify"], &[r#"verify = ["sh verify-ok.sh"]"#]);
+    let id = implemented(&repo, &state, &design);
+    (repo, state, id)
+}
+
+/// 周 `round` の写しの中の 1 file。
+fn copy_path(state: &Path, id: &str, round: u64, leaf: &str) -> PathBuf {
+    state.join("pipe").join(id).join(COPY_DIR).join(round.to_string()).join(leaf)
+}
+
+/// 周 `round` の写しの 1 file の本文（無ければ空）。
+fn read_copy(state: &Path, id: &str, round: u64, leaf: &str) -> String {
+    fs::read_to_string(copy_path(state, id, round, leaf)).unwrap_or_default()
+}
+
+/// 在る写しの周の番号（昇順・番号でない名は母集団に入らない）。
+fn copy_rounds(state: &Path, id: &str) -> Vec<u64> {
+    let mut rounds: Vec<u64> = fs::read_dir(state.join("pipe").join(id).join(COPY_DIR))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|found| found.file_name().to_str().and_then(|name| name.parse().ok()))
+        .collect();
+    rounds.sort_unstable();
+    rounds
+}
+
+/// PASS の gate を 1 回撃つ（偽 lens つき）。
+fn copy_gate(repo: &Path, state: &Path, id: &str) -> Output {
+    gate_once(repo, state, id, Some(&fake_lens(&state.join("lens-ran"), &lens_verdict("PASS"))))
+}
+
+/// (a) 2 周撃った gate は**周ごとに別の置き場**を持ち、1 周目の生存の一覧が 2 周目の後も読める
+/// （上書きされない）。`pipe show` も周の数だけ判定行を並べる。
+#[test]
+fn pipe_gate_detection_copy_keeps_one_place_per_round() {
+    let (repo, state, id) = copy_run(COPY_STUB_ROUNDS);
+    // 1 周目は道具の無い周（審査の写しも `--lens` も無い）＝INCONCLUSIVE で、同じ便を 2 周 gate できる。
+    fs::remove_file(run_dir(&state, &id).join("lens.toml")).expect("審査の写しを外せる");
+    let first = gate_once(&repo, &state, &id, None);
+    assert_eq!(first.status.code(), Some(i32::from(RC_INCONCLUSIVE)), "1 周目: {}", stderr_of(&first));
+    let second = copy_gate(&repo, &state, &id);
+    assert_eq!(second.status.code(), Some(i32::from(RC_OK)), "2 周目: {}", stderr_of(&second));
+    assert_eq!(copy_rounds(&state, &id), vec![1, 2], "周ごとに別の置き場が 2 つ");
+    for round in [1_u64, 2] {
+        assert_eq!(
+            read_copy(&state, &id, round, "missed.txt"),
+            format!("src/lib.rs:1: replace one with round {round}\n"),
+            "周 {round} の生存の一覧はその周の物（上書きされない）"
+        );
+        assert!(
+            read_copy(&state, &id, round, COPY_LINE).contains(&format!("scope=round{round}")),
+            "周 {round} の判定行はその周の物: {}",
+            read_copy(&state, &id, round, COPY_LINE)
+        );
+    }
+    let shown = show_line(&repo, &state, &id);
+    let rest: Vec<&str> = shown.lines().skip(1).collect();
+    assert_eq!(rest.len(), 2, "`pipe show` は周の数だけ並べる: {shown}");
+    assert!(rest.first().is_some_and(|line| line.contains("scope=round1")), "番号順: {shown}");
+    assert!(rest.get(1).is_some_and(|line| line.contains("scope=round2")), "番号順: {shown}");
+    clean(&[&repo, &state]);
+}
+
+/// (b) 出力を 1 つも書かない周は marker が在り、判定行の写しは在る（(2) の否定の枝）。
+#[test]
+fn pipe_gate_detection_copy_marks_a_round_without_outputs() {
+    let (repo, state, id) = copy_run(&copy_stub_line_only());
+    let out = copy_gate(&repo, &state, &id);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "PASS: {}", stderr_of(&out));
+    assert!(copy_path(&state, &id, 1, COPY_ABSENT_OUTPUT).exists(), "出力の無い周は marker を置く");
+    assert!(!copy_path(&state, &id, 1, "outcomes.json").exists(), "写す出力は 1 つも無い");
+    assert!(!copy_path(&state, &id, 1, "missed.txt").exists(), "写す出力は 1 つも無い");
+    assert_eq!(read_copy(&state, &id, 1, COPY_LINE), format!("{DETECTION_LINE}\n"), "判定行の写しは在る");
+    clean(&[&repo, &state]);
+}
+
+/// (c) 判定行も出力も無い周は**不在の 1 行**が在り、**0 件の周**（出力が在って missed が 0）とは
+/// 別の字面である（空の写しを「0 件だった」に倒さない・C10）。
+#[test]
+fn pipe_gate_detection_copy_absent_line_differs_from_zero_counts() {
+    let (repo, state, id) = copy_run("exit 0\n");
+    let out = copy_gate(&repo, &state, &id);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "PASS: {}", stderr_of(&out));
+    assert_eq!(read_copy(&state, &id, 1, COPY_LINE), format!("{COPY_ABSENT_LINE}\n"), "不在の 1 行");
+    assert!(copy_path(&state, &id, 1, COPY_ABSENT_OUTPUT).exists(), "出力も無い周は marker も在る");
+    clean(&[&repo, &state]);
+
+    let (repo, state, id) = copy_run(COPY_STUB_ZERO);
+    let out = copy_gate(&repo, &state, &id);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "PASS: {}", stderr_of(&out));
+    let zero = read_copy(&state, &id, 1, COPY_LINE);
+    assert!(zero.contains("missed=0"), "0 件の周の判定行: {zero}");
+    assert_ne!(zero, format!("{COPY_ABSENT_LINE}\n"), "0 件の周は不在の 1 行と別の字面");
+    assert!(!copy_path(&state, &id, 1, COPY_ABSENT_OUTPUT).exists(), "出力の在る周に marker は無い");
+    assert!(copy_path(&state, &id, 1, "missed.txt").exists(), "0 件の一覧は**空の写し**（不在ではない）");
+    assert_eq!(read_copy(&state, &id, 1, "missed.txt"), "", "0 件の一覧の本文は空");
+    clean(&[&repo, &state]);
+}
+
+/// (d) `pipe show` の判定行の出所は**写し**である（(3) の pin・2 例とも base では RED）。
+///
+/// (d1) 写しの判定行だけを別の字面へ書き換えると `pipe show` はその字面を出す（`verify.jsonl` の record は
+/// 元のまま）。(d2) 写しの判定行を消すと不在の 1 行を出す（record に detection の `line` が在るまま）。
+/// base は record から判定行を出すので、どちらも元の字面が出て落ちる。
+#[test]
+fn pipe_gate_detection_copy_is_the_source_of_the_shown_line() {
+    let (repo, state, id) = copy_run(&copy_stub_line_only());
+    let out = copy_gate(&repo, &state, &id);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "PASS: {}", stderr_of(&out));
+    assert_eq!(row_value(&verify_rows(&state, &id), 3, "line"), DETECTION_LINE, "record には道具の 1 行");
+
+    let rewritten = "mutants-diff: total=9 caught=9 missed=0 unviable=0 timeout=0 scope=rewritten";
+    fs::write(copy_path(&state, &id, 1, COPY_LINE), format!("{rewritten}\n")).expect("写しを書き換えられる");
+    let shown = show_line(&repo, &state, &id);
+    assert!(shown.contains(rewritten), "(d1) show は写しの字面を出す: {shown}");
+    assert!(!shown.contains(DETECTION_LINE), "(d1) record の字面は出ない: {shown}");
+    assert!(verify_log(&state, &id).contains(DETECTION_LINE), "(d1) record は元のまま");
+
+    fs::remove_file(copy_path(&state, &id, 1, COPY_LINE)).expect("写しを消せる");
+    let gone = show_line(&repo, &state, &id);
+    assert!(gone.contains(COPY_ABSENT_LINE), "(d2) 写しの無い周は不在の 1 行: {gone}");
+    assert!(!gone.contains(rewritten), "(d2) 消した写しの字面は出ない: {gone}");
+    assert!(!gone.contains(DETECTION_LINE), "(d2) record の字面へは戻らない: {gone}");
+    assert_eq!(row_value(&verify_rows(&state, &id), 3, "line"), DETECTION_LINE, "(d2) record は在るまま");
+    clean(&[&repo, &state]);
+}
+
 // ---- 段の秒（設計 gate-cost.md §26 形 (1)・`s2-07l.466`・接頭辞 `gate_secs_`）--------------------
 //
 // 撃った段の record だけが `secs=`（process の起動から終了までの壁時計・秒）を持つ。母集団 = 判定行の

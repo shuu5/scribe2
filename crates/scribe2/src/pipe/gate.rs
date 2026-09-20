@@ -27,7 +27,8 @@
 //!
 //! 本 file は判定の入口と終端（[`gate`] → `precheck` → `measure` → `decide` → `settle`）と型・定数を
 //! 持つ。verify 行の実行は [`verify`]、lens の呼び出しと parse は [`lens`]、記録と診断は [`record`]
-//! （`s2-07l.286` の純移動・外から呼ぶ path は本 file の再輸出で不変）。
+//! （`s2-07l.286` の純移動・外から呼ぶ path は本 file の再輸出で不変）。周ごとの検出線の写しも
+//! [`record`] が持つ（書き手 = 記録と同じ 1 本・読み手 = [`detection_copies`]・設計 gate-cost.md §15）。
 
 mod findings;
 mod lens;
@@ -35,7 +36,9 @@ mod record;
 mod verify;
 
 pub(crate) use lens::last_json_object;
-pub use record::{next_number, records_of, skip_record, step_record, Record, Skipped};
+pub use record::{
+    detection_copies, next_number, records_of, skip_record, step_record, DetectionCopy, Record, Skipped,
+};
 pub use verify::{is_unreadable, run_checks, Check, Checks, Step, CHECKS};
 
 use crate::polarity::{OnFailure, Polarity, Timing};

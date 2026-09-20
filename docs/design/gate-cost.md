@@ -252,6 +252,15 @@ e2e は binary を spawn し外部 command は PATH 先頭の stub で差し替�
 - **触らない**: 検出線の実行そのもの・判定・verify.jsonl の record・`crates/xtask/src/mutantsdiff.rs` の数え手。
 - **却下案**: admin が Gated の時点で手で写す運用は散文の手順になり、追随の再 gate が同じ秒に起きると間に合わないため不採用。worktree の out を周ごとに別名で残す案は、worktree が retire で畳まれるため置き場として不適で不採用。
 
+### 15.1 errata（現物との差・`s2-07l.298`・規範は上の §15 のまま）
+
+- **置き場は run dir 直下の `detection/<周>/`**（§15 は「周ごとの置き場」とだけ書いた）。中身は判定行の写し 1 file・段の秒 1 file・写せた出力（`outcomes.json` / missed.txt の**在る物だけ**）・出力が 1 つも無い周の marker 1 file の 4 種で、名は本便の code が 1 か所（gate の記録の module）に持つ。
+- **段の秒も同じ置き場へ写す**（§15 (1) は判定行と出力だけを挙げた）。`pipe show` の行は判定行の逐語 + `secs=<秒>` で、(3) の「verify.jsonl を読む経路を残さない」を満たすには秒の出所も写しでなければならない（record を読む第 2 の経路を残すと、判定行の出所が 2 つに戻る）。秒を持たない周は file を置かない＝`secs=0` と書かない（C10）。**値は record と同じ 1 つ**で、数え直さない（§15 (4)）。
+- **周の番号は `Gated` の件数の次**（§15 (1) の「Gated の verdict 件数」の現物）。`Gated` は周の終端で 1 件追記されるので、写しを書く時点の件数は済んだ周の数である。**既に在る写しの最大の番号も併せて見る**のは、event log を読めない周に 1 周目の写しを潰さないためで、上書きしないことが写しの目的そのものだからである。
+- **撃たなかった周は写さない**（設計 §30 の [`Detection::Skip`] の周）。撃っていない周の置き場を作ると、撃って 0 件だった周と読み分けられない（(2) の極性と同じ理由）。
+- **写しの出所は便の worktree の cargo-mutants の出力 dir**（`target/mutants-diff/out/mutants.out/`）で、中身は**読まない**（数え直さない・§15 (4)）。無い出力は写さず marker に倒し、在るのに読めない出力は記録の書けない周と同じ極性（gate は rc 2）で止める——「無い」と「読めない」を融合しない（C10）。
+- **歯の fixture は `target/` を ignore する**: 検出線の出力が untracked のまま残ると 2 周目の precheck が「clean でない」で止まり、2 周分の写しを測れない（実 repo でも `target/` は ignore される）。
+
 ## 16. 契約が名指した生存行に変異を当てて outcomes の 4 kind + 不在の 5 値で記す（契約表の行 g・`s2-07l.341`）
 
 - **出所・現物**: .338（歯だけの便）の gate で検出線が 2 周とも母集団 0 になった（admin 実測 2026-09-15）。diff が mod tests の中だけで、検出線が変異を生やす本体の行を持たなかったため。歯だけを足す便が base の生存行を撃ち落としたかどうかを、器がこれまで測っていなかった。現物: 契約 file（`crates/scribe2/src/pipe/contract.rs` の `Contract`・write_set field を含む）は変異の的を宣言する field を持たず、`crates/xtask/src/mutantsdiff.rs` の検出線を撃つ口も diff の追加行を母集団にする経路しか持たない。

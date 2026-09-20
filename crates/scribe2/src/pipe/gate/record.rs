@@ -5,13 +5,13 @@
 use super::verify::{is_unreadable, recorded_rc, run_checks_admitted, Admit, Check, Checks, Step};
 use super::{Detection, DetectionSkip, Gate};
 use crate::fleet::json_lite::{self, Value};
-use crate::fleet::store::{append_line, LockPolicy};
-use crate::fleet::SCHEMA;
+use crate::fleet::store::{append_line, read_all, LockPolicy};
+use crate::fleet::{Stage, SCHEMA};
 use crate::pipe::admission;
 use crate::pipe::confine::Reason;
 use crate::pipe::declaration::Effective;
 use crate::pipe::move_proof::LensInput;
-use crate::pipe::{verify_log_path, vessel_path};
+use crate::pipe::{run_dir, verify_log_path, vessel_path};
 use std::path::Path;
 
 /// 赤い verify 行の stderr を残す診断 file の名（`verify.jsonl` と同じ dir）。
@@ -56,6 +56,10 @@ pub(super) const USAGE_HEAD: &str = "confine-usage";
 /// 検出線を撃たない周（[`Detection::Skip`]・設計 pipeline.md §30）は写しの検出線の代わりに**空の列**を渡し
 /// （行を撃つ実装は 1 本のまま）、その段の位置に skip record を 1 本置く（[`records_of`]・main 実測と同じ形）。
 /// 撃っていないので `detection_unmeasured` は `None` のままである。
+///
+/// 撃った直後に検出線の判定行と出力を run dir の**周ごとの置き場**へ写す（[`keep_detection`]・設計
+/// gate-cost.md §15 (1)）——便の worktree の出力は追随の撃ち直しが作り直すので、写さないと 1 周目の
+/// 生存の一覧が消える（`.286` run 1 の実測）。
 pub(super) fn record_verify(entry: &Gate<'_>, worktree: &Path, base: &str) -> Result<Counted, String> {
     let frozen = frozen_copy(entry)?;
     let admit = Admit {
@@ -83,6 +87,7 @@ pub(super) fn record_verify(entry: &Gate<'_>, worktree: &Path, base: &str) -> Re
         detection,
     };
     let steps = run_checks_admitted(&checks, Some(&admit));
+    keep_detection(entry, worktree, &steps)?;
     let path = verify_log_path(entry.state_dir, entry.run);
     let tail_path = path.with_file_name(STDERR_LOG_FILE);
     let mut red = 0;
@@ -108,6 +113,141 @@ pub(super) fn record_verify(entry: &Gate<'_>, worktree: &Path, base: &str) -> Re
         append_line(&path, &record.body, entry.policy).map_err(|err| err.to_string())?;
     }
     Ok(Counted { red, unreadable, killed, detection_unmeasured: unmeasured })
+}
+
+/// 周ごとの検出線の写しの置き場（run dir 直下・この下に**周の番号の dir** が並ぶ・設計 gate-cost.md §15 (1)）。
+///
+/// 1 つの置き場へ上書きしないのは、追随の撃ち直しが便の worktree の出力を作り直すためである
+/// ——上書きすると 1 周目の生存の一覧が 2 周目で消える。
+const COPY_DIR: &str = "detection";
+
+/// 周の置き場の中の判定行の写し（1 行・record の `line=` と**同じ字面**）。
+const COPY_LINE_FILE: &str = "line";
+
+/// 周の置き場の中の段の秒（無い周は file を置かない＝読み手は `secs=` を出さない・C10）。
+const COPY_SECS_FILE: &str = "secs";
+
+/// 出力が 1 つも無かった周に置く marker（設計 gate-cost.md §15 (2)）。
+///
+/// **空の写しを「0 件だった」に倒さない**（C10 / NFR4）——出力の在る 0 件の周は `outcomes.json` が在り、
+/// 出力を書かなかった周はこの marker が在る。
+const COPY_ABSENT_OUTPUT: &str = "outputs-absent";
+
+/// 判定行の無い周に残す 1 行（設計 gate-cost.md §15 (2)）。
+///
+/// **0 件の判定行と別の字面**である——道具の 1 行は `mutants-diff: total=0 …` の形で、こちらは
+/// 判定行の形と衝突しない頭を持つ（空の file も 0 件の行も書かない・C10）。
+const COPY_ABSENT_LINE: &str = "detection-line: absent";
+
+/// 検出線の出力の置き場（便の worktree からの相対・cargo-mutants の出力 dir）。
+const DETECTION_OUT: [&str; 4] = ["target", "mutants-diff", "out", "mutants.out"];
+
+/// 写す出力の名（**在る物だけ**写す・数え直さないので中身は読まない）。
+const DETECTION_OUTPUTS: [&str; 2] = ["outcomes.json", "missed.txt"];
+
+/// 撃った検出線の判定行と出力を run dir の周ごとの置き場へ写す（設計 gate-cost.md §15 (1)(2)）。
+///
+/// 撃たなかった周（[`super::Detection::Skip`]）は段が列に無いので**何も写さない**（撃っていない周の
+/// 置き場を作ると、撃った 0 件の周と読み分けられない）。出力が 1 つも無い周は [`COPY_ABSENT_OUTPUT`] の
+/// marker を、判定行の無い周は [`COPY_ABSENT_LINE`] の 1 行を残す。
+///
+/// 数は**数え直さない**（設計 §15 (4)）——写すのは道具が出した 1 行と出力の byte だけである。
+fn keep_detection(entry: &Gate<'_>, worktree: &Path, steps: &[Step]) -> Result<(), String> {
+    let Some(step) = steps.iter().find(|step| step.stage == Check::Detection) else {
+        return Ok(());
+    };
+    let copies = run_dir(entry.state_dir, entry.run).join(COPY_DIR);
+    let dir = copies.join(round_of(entry, &copies).to_string());
+    std::fs::create_dir_all(&dir).map_err(|err| format!("{} を作れない: {err}", dir.display()))?;
+    let line = step.line.as_deref().unwrap_or(COPY_ABSENT_LINE);
+    write_copy(&dir.join(COPY_LINE_FILE), &format!("{line}\n"))?;
+    if let Some(secs) = step.secs {
+        write_copy(&dir.join(COPY_SECS_FILE), &secs.to_string())?;
+    }
+    let out = DETECTION_OUT.iter().fold(worktree.to_path_buf(), |path, leaf| path.join(leaf));
+    let mut copied = 0_usize;
+    for name in DETECTION_OUTPUTS {
+        copied = copied.saturating_add(copy_output(&out.join(name), &dir.join(name))?);
+    }
+    if copied == 0 {
+        write_copy(&dir.join(COPY_ABSENT_OUTPUT), "")?;
+    }
+    Ok(())
+}
+
+/// この gate の周の番号（**[`Stage::Gated`] の件数の次**・設計 gate-cost.md §15 (1)）。
+///
+/// `Gated` は周の終端で 1 件追記されるので、写しを書く時点の件数は**済んだ周の数**である。既に在る
+/// 写しの最大の番号も併せて見るのは、event log を読めない周に 1 周目の写しを潰さないためである
+/// （上書きしないことが写しの目的そのもの）。
+fn round_of(entry: &Gate<'_>, copies: &Path) -> u64 {
+    let gated = read_all(entry.state_dir).map_or(0, |events| {
+        let count = events
+            .iter()
+            .filter(|event| event.run == entry.run && event.stage == Some(Stage::Gated))
+            .count();
+        u64::try_from(count).unwrap_or(u64::MAX)
+    });
+    gated.max(kept_rounds(copies).into_iter().max().unwrap_or(0)).saturating_add(1)
+}
+
+/// 既に在る写しの周の番号（番号でない名の dir は母集団に入らない）。
+fn kept_rounds(copies: &Path) -> Vec<u64> {
+    std::fs::read_dir(copies)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|found| found.file_name().to_str().and_then(|name| name.parse().ok()))
+        .collect()
+}
+
+/// 写しの file を 1 つ書く。
+fn write_copy(path: &Path, body: &str) -> Result<(), String> {
+    std::fs::write(path, body).map_err(|err| format!("{} を書けない: {err}", path.display()))
+}
+
+/// 出力 1 つを写す（写せた本数を返す）。
+///
+/// **無い周は 0**（写す物が無いだけで失敗ではない）で、在るのに読めない周は `Err`——「無い」と
+/// 「読めない」を融合しない（C10）。
+fn copy_output(from: &Path, to: &Path) -> Result<usize, String> {
+    match std::fs::copy(from, to) {
+        Ok(_) => Ok(1),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(0),
+        Err(err) => Err(format!("{} を写せない: {err}", from.display())),
+    }
+}
+
+/// 周 1 つの写し（[`detection_copies`] の要素）。
+pub struct DetectionCopy {
+    /// 判定行の逐語（写しが無い・読めない・空の周は [`COPY_ABSENT_LINE`]）。
+    pub line: String,
+    /// 段の秒（写しの無い周は `None`＝読み手は `secs=` を出さない・C10）。
+    pub secs: Option<u64>,
+}
+
+/// run dir の**周ごとの写し**を周の番号順に読む（`pipe show` の判定行の出所・設計 gate-cost.md §15 (3)）。
+///
+/// 母集団は写しの dir だけで **`verify.jsonl` は読まない**（判定行の出所を 2 つ持たない・C2）。写しの
+/// 無い便（gate 前・検出線を撃たない便）は空の列である。
+pub fn detection_copies(dir: &Path) -> Vec<DetectionCopy> {
+    let copies = dir.join(COPY_DIR);
+    let mut rounds: Vec<u64> = kept_rounds(&copies);
+    rounds.sort_unstable();
+    rounds.iter().map(|round| copy_of(&copies.join(round.to_string()))).collect()
+}
+
+/// 周 1 つの写しを読む（判定行が無い・読めない・空の周は [`COPY_ABSENT_LINE`]）。
+fn copy_of(dir: &Path) -> DetectionCopy {
+    let line = std::fs::read_to_string(dir.join(COPY_LINE_FILE))
+        .ok()
+        .and_then(|text| text.lines().next().map(str::to_owned))
+        .filter(|found| !found.is_empty())
+        .unwrap_or_else(|| COPY_ABSENT_LINE.to_owned());
+    let secs = std::fs::read_to_string(dir.join(COPY_SECS_FILE))
+        .ok()
+        .and_then(|text| text.trim().parse().ok());
+    DetectionCopy { line, secs }
 }
 
 /// lens へ何を渡したかの 1 行を、段の記録と**同じ log**（[`STDERR_LOG_FILE`]）へ残す（設計 §21 (3)）。
