@@ -224,10 +224,18 @@ e2e は binary を spawn し外部 command は PATH 先頭の stub で差し替�
 
 ## 14. 純移動と証明された行を検出線の母集団から外す（契約表の行 e・`s2-07l.292`）
 
-- **出所・現物**: admin の観測（2026-09-14）で、純移動 40 項目の便の検出線が 2 周とも大きな母集団を回し、生存 1 本は移した行の既存の弱さで新しい情報を出さないまま時間と memory を払っていた。現物: gate の検出線は diff の追加行を母集団にして撃つ経路を持ち、`crates/scribe2/src/pipe/move_proof.rs` の `judge` は移動した item の名と本文の一致を純関数で証明して `LensInput` を組み、`keep` がその要約を run dir に残す。
-- **形（何を作るか）**: gate が検出線を撃つ前に、`LensInput::Summary` から一致と証明された item の head 側の行範囲を取り、その範囲の hunk を落とした母集団用の diff を組んで検出線へ渡す。残る追加行が 0 本になる純移動だけの便は、`Check::Detection`（`crates/scribe2/src/pipe/gate/verify.rs`）を赤にも測定未了にもせず、純移動として名指す記号を record に残す。`LensInput::Summary` にならない便は従来どおり全ての追加行を母集団にする。
-- **触らない**: 検出線を実行する xtask 側の実装、lens の入力の判定、`judge` / `keep` の証明そのもの。
-- **却下案**: 純移動便の検出線を全部 skip する案は、移動でない追加行（mod 宣言の追加や可視性の変更）まで母集団から落としてしまうため不採用。除外の判定を xtask 側に置く案は、証明が core の `crates/scribe2/src/pipe/move_proof.rs` に既にあり、同じ判定を 2 か所に持つことになるため不採用。
+- **出所**: admin の観測（2026-09-14）で、純移動 40 項目の便の検出線が 2 周とも大きな母集団を回し、生存 1 本は移した行の既存の弱さで新しい情報を出さないまま時間と memory を払っていた。
+- **現物**（planner が grep で実測・main 0b7e0a1）: gate の検出線は diff の追加行を母集団にして撃つ経路を持つ。証明は `crates/scribe2/src/pipe/move_proof.rs` の `judge`（`pub fn`）が移動した item の名と本文の一致を純関数で確かめて `LensInput` を組み、`keep`（`pub fn`）がその要約を run dir に残す。**`LensInput::Summary` が運ぶ `MoveSummary` は `text`（描画済みの要約）1 field だけで、行範囲を持たない。** 行範囲そのものは在る: 証明の内部で item は `lines`（1 始まり・両端含む head 側の区間）を持ち、`matched_of` が移動の行数を数える所と `residual_lines` が残差を弁別する所の 2 か所で既に読まれている。つまり本行が足すのは**区間の新しい計算ではなく、証明が既に持つ区間を呼び手へ渡す 1 本の道**である。`Check::Detection` は `crates/scribe2/src/pipe/gate/verify.rs`、検出線の record は `crates/scribe2/src/pipe/gate/record.rs` に在る。
+- **決定的な制約（実測）**: `crates/scribe2/src/pipe/move_proof.rs` は幅 120 で正規化した行数が上限 R-C4-2 ちょうどで余地 0 のため、本行は §44（[pipeline.md](./pipeline.md) の行 al・純移動）が割った後に始まる。ただし割った後も `judge` / `keep` / `LensInput` / `MoveSummary` と突き合わせの後段は親に残るので、本行の write-set は親 1 本のままで足り、受け皿の file は要らない（行 al が移すのは diff を読んで item の列にする前段だけ・親は移した item の区間を今と同じ字面で読む）。
+- **約束（この行が作るもの・番号は done と 1:1）**:
+  1. `MoveSummary` は一致と証明された item の head 側の行範囲（file と区間の対の列）を `text` と並んで運ぶ（証明の判定・`text` の字面・`keep` の書き口は不変）。
+  2. gate は検出線を撃つ前に、`LensInput::Summary` の行範囲に入る hunk を落とした母集団用の diff を組んで検出線へ渡す。
+  3. 残る追加行が 0 本になる純移動だけの便は `Check::Detection` を赤にも測定未了にもせず、純移動として名指す記号を検出線の record に残す（`Detection` の閉じた値に 1 つ足す）。
+  4. `LensInput::Summary` にならない便（`LensInput::Diff`）は従来どおり全ての追加行を母集団にする。
+  5. 純移動と証明された item の外の追加行（`mod` 宣言の追加・可視性の変更・残差）は母集団に残る。
+- **歯**（接頭辞 `pipe_gate_detection_pure_move_`・置き場は `crates/scribe2/tests/e2e/pipe/gate.rs`・base の当たりは 0 本）: (a) 純移動だけの便は検出線の母集団が 0 行になり `Check::Detection` が赤にも測定未了にもならず record に純移動の記号が残る／(b) 移動と実変更が混ざる便は実変更の追加行だけが母集団に入る（移した item の区間の行は入らない）／(c) 移動でない追加行だけを持つ便（`mod` 宣言の追加・可視性の変更）は母集団に残り従来どおり撃つ／(d) `LensInput::Diff` の便は全ての追加行が母集団に入る（従来の極性）。
+- **触らない**: 検出線を実行する xtask 側の実装、lens の入力の判定、`judge` / `keep` の証明そのものと `MoveSummary` の `text` の字面、`crates/scribe2/src/pipe/move_proof.rs` の in-file の歯の名と assert。
+- **却下案**: 純移動便の検出線を全部 skip する案は、移動でない追加行（mod 宣言の追加や可視性の変更）まで母集団から落としてしまうため不採用。除外の判定を xtask 側に置く案は、証明が core の `crates/scribe2/src/pipe/move_proof.rs` に既にあり、同じ判定を 2 か所に持つことになるため不採用。行範囲を `keep` の写し（run dir の file）から読み直す案は、gate が同じ周に持っている値を file 経由で往復させるだけで、写しの形を跨版契約にしてしまうため不採用。
 
 ## 15. gate の周ごとの検出線の出力を run dir へ写し、show はその写しから読む（契約表の行 f・`s2-07l.298`）
 
@@ -419,7 +427,7 @@ section = "14"
 write-set = ["crates/scribe2/src/pipe/gate.rs", "crates/scribe2/src/pipe/gate/verify.rs", "crates/scribe2/src/pipe/gate/record.rs", "crates/scribe2/src/pipe/move_proof.rs", "crates/scribe2/tests/e2e/pipe/gate.rs", "docs/design/gate-cost.md"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_gate_detection_pure_move_"]
 size = "S"
-done = "純移動の便は移した行を検出線の母集団から外し、実変更の行だけを撃つ。純移動だけの便は赤にも測定未了にもならない"
+done = "(1) 一致と証明された item の head 側の行範囲が要約に載り、要約の字面と証明の判定は不変 (2) 検出線の母集団はその行範囲の hunk を落とした diff から組まれる (3) 純移動だけの便は母集団が 0 行になり Check::Detection が赤にも測定未了にもならず、検出線の record に純移動の記号が残る〔pipe_gate_detection_pure_move_〕 (4) 純移動でない便は従来どおり全ての追加行を母集団にする (5) 移動でない追加行（mod 宣言の追加・可視性の変更・残差）は母集団に残る"
 
 [[contract]]
 id = "f"
