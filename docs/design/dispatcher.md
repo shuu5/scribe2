@@ -115,6 +115,7 @@ dispatcher は「起こす」側で行為を止める判定を持たない（起
 - QUESTION と Gated FAIL の裁定（planner の手番）を速くする形は別設計（契約の改訂を器の口で持つ .133 の系）。
 - ADR-0045 §2 (6) の SRS 改稿（FR30 の担い手・FR68 の契機を tick から便の終端と手動の 1 周へ・FR49 の condition は「便が intake を通ったとき」のまま）は user の /folio-architect の周。
 - 居座る便を席から外す口: `pipe stop` は起動の権能で、ADR-0045 §2 (1) の後はどの席の行にも無い。「止める」だけを席の権能に足すかは rules 行の変更＝user の裁定が先（`s2-07l.495` の notes）。→ 裁定は出た: [ADR-0048](../../design-intent/decisions/ADR-0048-stopping-a-run-is-a-separate-capability-of-the-orchestrator.html)（proposed）が「止める」だけを権能 `stop` に分けて `role.orchestrator` の行に足し、席が撃てるのは便 1 本を名指す形だけ（全部を止める形は launch のまま）と決めた。発効は権能と行の値と guard の照合が land した版。
+- 着地の終端の bead の close が台帳の子 process の cwd を名指さない件（§14 の口 (2)）は本設計の行に入れられない: 呼び手の file（着地の口）の上限の余地が base で 84 行しか無く、いちばん小さい見積でも受付が `cap-headroom` で断る（§14 の実測 2026-09-20）。その file を割る便の後に別の行で直す。
 - 終端の便の worktree（退役先に寄せたものと `Failed` で残ったもの）の掃除は別設計（消す操作＝憲法 A1 の裁定が先）。[FR68](../../design-intent/spec/srs.html#FR68) の「release で戻し」の対象に終端の便を含める字の改訂は user の /folio-architect の周（§12 は hold と同じ印の同じ向きの拡張で、要件の向きは変えない）。
 
 ## 12. 器の側の理由で終端に着いた便（起動の失敗・`s2-07l.495`）
@@ -151,11 +152,12 @@ dispatcher は「起こす」側で行為を止める判定を持たない（起
 
 - 何が起きているか（現物 = 本行の base・verified）: `crates/scribe2/src/seat/ledger.rs` の `read_text` は `Command::new(bd)` に引数と 3 つの標準の口だけを付けて `spawn` し、**cwd を名指さない**＝子は親 process の cwd を継ぐ。台帳 client は cwd から台帳を解くので、読む台帳は cwd 側になる。列（`crates/scribe2/src/pipe/dispatch.rs` の `turn`）はこの 1 本を `ledger::read_ledger(input.bd, timeout)` で撃つが、`Input` は `repo` を持っている（契約の生成・sha の読み・起こす便の `--repo` には渡っている）のに台帳の読みには渡していない。よって `pipe dispatch --repo X` を別の repo の cwd から撃つと、**設計 doc と契約表は X・台帳は cwd 側**という食い違った 1 周になる（`dispatch ls` も同じ 1 本を撃つので同じ列が見える）。
 - 同じ根の口は器に 3 本在る（実測・母集団 = 台帳 client を子 process で撃つ site 2 本とその呼び手 3 本）: (1) 列の読み（上）。(2) `crates/scribe2/src/ledger/mod.rs` の `close` も `Command::new(bd)` に引数だけを付けて撃ち cwd を名指さない——呼び手は `crates/scribe2/src/pipe/land.rs` の着地の終端で、そこは着地した便の repo を持っている。(3) `crates/scribe2/src/hook/mod.rs` の SessionStart は `read_text` を撃つが、**その周の cwd は session の repo** なので出所は今も正しい。読み手が cwd を引数で取ると (3) も渡す側になる＝同じ便で直す（構造の連鎖）。
-- 形: 台帳の子 process の cwd を**呼び手が名指す**。`read_text` / `read_ledger`（`seat/ledger.rs`）と `close`（`ledger/mod.rs`）は cwd を引数で取り、標準 library の子 process の起動に作業 dir として渡す（新しい依存は増えない・C17.3）。器は cwd を推さない（process の cwd を判定の入力にしない・C2.2 の seam と同じ向き）。列は `Input` の `repo` を、着地の終端は便の repo を、SessionStart は payload の cwd（無ければ process の cwd・`hook/mod.rs` の既存の 1 本）を渡す。
-- 渡した値が cwd に出来ない周（dir でない・無い・読めない）は、子の `spawn` が落ちて**既存の断りがそのまま受ける**: 列は `LedgerError::Unreadable` → `dispatch=unmeasured reason=ledger` で 1 本も起こさず（C10・0 件と融合しない）、close は `CloseError::Unlaunchable` で着地は取り消さない（既存の形）。新しい断りの variant も rules 行も足さない（C17.1）。
-- 触らない: 台帳 client の引数（`BD_ARGS`）・待ち上限の rules 行 `seat.ledger_timeout_s`・`LedgerError` の 2 値と `CloseError` の形・件数の 1 行（`counts_of`）の字面・SessionStart の指示文の本文・`--bd` の既定（`DEFAULT_BD`）・列の入力の条件（§2）・起こす便へ渡す道具（§5）。
+- **本行が直すのは読み手の 2 本（(1) と (3)）だけである**: (2) を同じ便に入れると呼び手の file（着地の口）を write-set に要るが、その file の上限の余地は base で 84 行しか無く、いちばん小さい見積（`size = "S"`）にも足りない＝受付が `cap-headroom` で断る（本行の事前審査の実測 2026-09-20）。`close` の cwd は着地の口の file を割る便の後に別の行で直す（§11 の後続に足した）。読み手の 2 本を先に直しても `close` の向きは変わらない（列の 1 周と着地の終端は別 process の別の口で、片方だけ直しても食い違いは増えない）。
+- 形: 台帳の**読み**の子 process の cwd を**呼び手が名指す**。`read_text` / `read_ledger`（`seat/ledger.rs`）は cwd を引数で取り、標準 library の子 process の起動に作業 dir として渡す（新しい依存は増えない・C17.3）。器は cwd を推さない（process の cwd を判定の入力にしない・C2.2 の seam と同じ向き）。列は `Input` の `repo` を、SessionStart は payload の cwd（無ければ process の cwd・`hook/mod.rs` の既存の 1 本）を渡す。
+- 渡した値が cwd に出来ない周（dir でない・無い・読めない）は、子の `spawn` が落ちて**既存の断りがそのまま受ける**: 列は `LedgerError::Unreadable` → `dispatch=unmeasured reason=ledger` で 1 本も起こさない（C10・0 件と融合しない）。SessionStart は今までどおり件数を書けない周の字面になる。新しい断りの variant も rules 行も足さない（C17.1）。
+- 触らない: 台帳 client の引数（`BD_ARGS`）・待ち上限の rules 行 `seat.ledger_timeout_s`・`LedgerError` の 2 値・件数の 1 行（`counts_of`）の字面・SessionStart の指示文の本文・`--bd` の既定（`DEFAULT_BD`）・列の入力の条件（§2）・起こす便へ渡す道具（§5）・`close` と着地の終端（上）。
 - 却下案: 列が台帳を読む前に process の cwd を `--repo` へ移す（process 全体の cwd を動かすと同じ周の他の相対 path の読みが静かにずれ、並行する子とも噛み合わない）／台帳 client に台帳の場所を渡す flag を足す（client の引数は client の契約で、器が決める線ではない・C5）／`--repo` と cwd が違う周を断る（別 repo から撃てる性質を失う＝列は「この置き場の便」と「この repo の契約」を突き合わせる口である・§5）。
-- 歯（`pipe_dispatch_ledger_cwd_` と `pipe_land_close_cwd_` の 2 接頭辞）: (a) cwd を書き出してから台帳の JSON を吐く偽の台帳 client を `--bd` で渡し、process の cwd を別の dir にしたまま `pipe dispatch ls --repo <toy>` を撃つと、子の見た cwd が toy repo である（process の cwd でない）／(b) 無い dir を `--repo` に渡した周は列が `[DISPATCH-UNMEASURED` の行で 0 本（`[DISPATCH-NONE]` と融合しない）／(c) 着地の終端の close の子が見た cwd が便の repo である／(d) SessionStart の `{ledger}` の行は 1 字も変わらない（既存の歯が測る側・行の verify がその歯を撃つ）。
+- 歯（`pipe_dispatch_ledger_cwd_` 接頭辞・置き場は列の歯の file）: (a) cwd を書き出してから台帳の JSON を吐く偽の台帳 client を `--bd` で渡し、process の cwd を別の dir にしたまま `pipe dispatch ls --repo <toy>` を撃つと、子の見た cwd が toy repo である（process の cwd でない）／(b) 同じ偽の台帳 client で、`--repo` を相対 path で渡した周も子の見た cwd が同じ絶対 path になる（口が値を絶対にする §12 の形と噛み合う pin）／(c) 無い dir を `--repo` に渡した周は列が `[DISPATCH-UNMEASURED` の行で 0 本（`[DISPATCH-NONE]` と融合しない）／(d) SessionStart の `{ledger}` の行は 1 字も変わらない（既存の歯が測る側・行の verify がその歯を撃つ）。
 
 ## 15. 席が測り直して PASS になった Gated の便を列が起こし直す（契約表の行 l・`s2-07l.495`）
 
@@ -276,14 +278,13 @@ done = "偽の台帳と偽 runner の toy repo で、回答済みの Questioned 
 
 [[contract]]
 id = "k"
-title = "台帳の子 process を名指された repo の中で撃つ — 台帳の読みと bead の close が cwd を引数で取り、列は --repo の値を・着地の終端は便の repo を・SessionStart は payload の cwd を渡す（器は cwd を推さない・新しい断りも rules 行も足さない）"
-req = ["FR68", "FR30", "FR50"]
+title = "台帳の読みの子 process を名指された repo の中で撃つ — 台帳の読みが cwd を引数で取り、列は --repo の値を・SessionStart は payload の cwd を渡す（器は cwd を推さない・close は上限の余地が足りず別の行・新しい断りも rules 行も足さない）"
+req = ["FR68", "FR30", "NFR4"]
 section = "14"
-write-set = ["crates/scribe2/src/seat/ledger.rs", "crates/scribe2/src/ledger/mod.rs", "crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2/src/pipe/land.rs", "crates/scribe2/src/hook/mod.rs", "crates/scribe2/tests/e2e/pipe/dispatch.rs", "crates/scribe2/tests/e2e/pipe/land.rs", "crates/scribe2/tests/e2e/hook.rs"]
-tests = ["crates/scribe2/tests/e2e/pipe/dispatch.rs", "crates/scribe2/tests/e2e/pipe/land.rs", "crates/scribe2/tests/e2e/hook.rs"]
-verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_dispatch_ledger_cwd_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_land_close_cwd_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail hook_brief_ledger_is_unknown_when_the_client_is_unreadable"]
-size = "M"
-done = "cwd を書き出してから台帳の JSON を吐く偽の台帳 client を --bd で渡し process の cwd を別の dir にしたまま pipe dispatch ls --repo <toy> を撃つと子の見た cwd が toy repo になり（process の cwd でない）、無い dir を --repo に渡した周は列が DISPATCH-UNMEASURED の行で 0 本になり（DISPATCH-NONE と融合しない）、着地の終端の close の子が見た cwd が便の repo になり、SessionStart の {ledger} の行は 1 字も変わらず、台帳 client の引数と待ち上限の rules 行と LedgerError の 2 値と CloseError の形は変わらない"
+write-set = ["crates/scribe2/src/seat/ledger.rs", "crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2/src/hook/mod.rs", "crates/scribe2/tests/e2e/pipe/dispatch.rs", "crates/scribe2/tests/e2e/hook.rs"]
+verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_dispatch_ledger_cwd_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail hook_brief_ledger_is_unknown_when_the_client_is_unreadable"]
+size = "S"
+done = "cwd を書き出してから台帳の JSON を吐く偽の台帳 client を --bd で渡し process の cwd を別の dir にしたまま pipe dispatch ls --repo <toy> を撃つと子の見た cwd が toy repo になり（process の cwd でない）、--repo を相対 path で渡した周も子の見た cwd が同じ絶対 path になり、無い dir を --repo に渡した周は列が DISPATCH-UNMEASURED の行で 0 本になり（DISPATCH-NONE と融合しない）、SessionStart の {ledger} の行は 1 字も変わらず、台帳 client の引数と待ち上限の rules 行と LedgerError の 2 値と件数の 1 行の字面は変わらない"
 
 [[contract]]
 id = "l"

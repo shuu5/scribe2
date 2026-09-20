@@ -563,7 +563,6 @@ title = "審査役の出力の形が読めなかった周は同じ gate の中�
 req = ["FR9", "FR14", "NFR4"]
 section = "29"
 write-set = ["crates/scribe2/src/pipe/gate/lens.rs", "crates/scribe2/src/pipe/gate/findings.rs", "crates/scribe2/src/pipe/gate.rs", "crates/scribe2/tests/e2e/pipe/gate.rs"]
-tests = ["crates/scribe2/tests/e2e/pipe/gate.rs"]
 verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_gate_lens_reread_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_gate_findings_missing_population_is_inconclusive", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_gate_findings_zero_population_is_inconclusive"]
 size = "S"
 done = "撃たれた回数を数える偽の審査役で、1 回目が数でない母集団・2 回目が正しい出力の便が PASS で終わって回数が 2 になり stderr に 1 回目の理由を持つ撃ち直しの 1 行が出て、2 回とも数でない周は INCONCLUSIVE で回数が 2（3 回目は無い）で理由が 2 回目のものになり、母集団が 0 の出力と rc が非 0 で終わる審査役と起動できない審査役と審査役が自分で INCONCLUSIVE を答えた周は撃ち直されず（回数 1・母集団 = 撃ち直さない 4 形）、母集団の欄が無い周と母集団が 0 の周の判定と理由の字面は 1 字も変わらず、Verdict の 3 値と rc と集計の 8 category と判定順と検出線の撃ち直しと verdict.json の field は変わらない"
