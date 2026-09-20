@@ -13,6 +13,8 @@
 use super::admission::{self, Sizes};
 use super::cli::{crossings, generated, int_row, judge, live, stage_of, Denial, Material, Materials};
 use super::contract::Contract;
+use super::gate::Verdict;
+use super::land::verdict_of;
 use super::refuse::overlaps;
 use super::review;
 use super::table::{self, Pointer};
@@ -396,6 +398,14 @@ pub struct Input<'a> {
     /// 呼び手が渡す自分の便（`--drive` の周だけ `Some`・設計 §5「渡す周と渡さない周」）。
     /// **観測の口（[`turn`]）は見ない**——見るだけで便が動くと `dispatch ls` が起こす口になる（§6）。
     pub driving: Option<Driving<'a>>,
+    /// 呼び手が自分で段を進めた便の id（`pipe run` / `pipe resume` の周・**flag の有無に依らず** `Some`・
+    /// 設計 §15「flag の無い driver は自分の便をこの候補にしない」）。
+    ///
+    /// [`revivals`] の **PASS の `Gated` の枝だけ**がこの便を候補から外す。flag の無い resume が
+    /// Implemented → Gated（PASS）で抜けた直後の自分の 1 周は、札の外れた自分の便を拾って着地まで運んで
+    /// しまう＝「1 段だけ」（§5）が破れる。flag の在る driver の自分の便は今までどおり [`Driving`] の
+    /// 経路（handoff）が運ぶ。他の枝と観測の口（[`turn`]）は見ない。
+    pub driven: Option<&'a str>,
 }
 
 /// 列を 1 周する（**判定は器の既存の関数・記帳はしない**）。
@@ -503,14 +513,19 @@ pub fn fire(input: &Input<'_>) -> Turn {
 /// 手順が戻る（planner 裁定 2026-09-19）。関門が開いた便（[`super::gate_is_open`]）は [`gated`] が候補に戻す。
 const WAITING: [Stage; 2] = [Stage::Blocked, Stage::Questioned];
 
-/// 起こし直す便（run id の順・設計 §5「driver の死亡」+ §13「関門が開いた待ちの便」）。
+/// 起こし直す便（run id の順・設計 §5「driver の死亡」+ §13「関門が開いた待ちの便」+ §15「PASS の `Gated`」）。
 ///
 /// 待ちの段でない live 便は **driver の札の所有者が死んでいる**ものだけ（§5 の規則・1 字も変えない）:
 /// 札が無い・読めない便は触らない（測れないを「死んだ」に読み替えない・fail-closed）。別の process が
 /// 生きて持っている札の便も、`pid` の再利用で生きて見える便も触らない（判定は lock の所有者と同じ 1 本）。
+/// **`Gated` の便だけ**は、これに加えて [`passed_gate`]（verdict が PASS ∧ 札が無いか所有者が死んでいる）
+/// でも候補にする（§15・FR68 の 3 種目）。足す側だけで既存の枝は変えない＝gate の途中で driver が死んだ
+/// 便は verdict に依らず今までどおり候補である。
 ///
 /// 待ちの段（[`WAITING`]）の live 便は `gated` の周だけ [`gated`] で判じる（関門が開いていて driver が
-/// 居ないと測れた便）。閉じたままの便は今までどおり候補にしない。
+/// 居ないと測れた便）。閉じたままの便は今までどおり候補にしない。PASS の `Gated` の枝も同じ `gated` の絞りを
+/// 受ける（§15「§13 の絞りをそのまま受ける」）——この候補の札は起こす前も後も無いので、§5 の止め金
+/// （resume が抜けると札が消えて候補から落ちる）が効かない。
 fn revivals(input: &Input<'_>, gated: bool) -> Vec<Revive> {
     let Ok(state) = current(input.state_dir) else {
         return Vec::new();
@@ -520,11 +535,29 @@ fn revivals(input: &Input<'_>, gated: bool) -> Vec<Revive> {
         .iter()
         .filter(|(id, run)| live(input.state_dir, id, run.stage) == Some(true))
         .filter(|(id, run)| match WAITING.contains(&run.stage) {
-            false => super::driver_is_dead(input.state_dir, id),
+            false => super::driver_is_dead(input.state_dir, id) || (gated && passed_gate(input, id, run.stage)),
             true => gated && self::gated(input.state_dir, &state, id),
         })
         .map(|(id, _)| revive_of(input, id))
         .collect()
+}
+
+/// 席が測り直して PASS になった `Gated` の便か（`Gated` ∧ verdict が PASS ∧ 札が無いか所有者が死んでいる・
+/// 設計 §15・FR68 の 3 種目）。
+///
+/// verdict の読みは着地の段が持つ既存の 1 本（[`verdict_of`]・site を 2 つにしない・C2）。**PASS 以外は候補に
+/// しない**: INCONCLUSIVE を候補にすると `pipe resume` が `next=gate` で止まる空撃ちになる（測り直しは席の
+/// `pipe gate`＝器が勝手に 1 周ぶんの費用を払い直さない）。読めない周（`None`）も候補にしない（測れないを
+/// 「通った」に読み替えない・fail-closed・NFR4）。札は §13 と同じ 4 値で読み、`Live` / `Unreadable` は触らない。
+///
+/// **呼び手が自分で段を進めた便（[`Input::driven`]）は外す**（§15「flag の無い driver は自分の便をこの候補に
+/// しない」）: flag の無い driver は「その process が進める段は 1 つ」の約束を持つ。別の契機（手動の 1 周・
+/// 他の便の driver の終端の 1 周）は、その driver が置いていった PASS の `Gated` の便を拾う。
+fn passed_gate(input: &Input<'_>, id: &str, stage: Stage) -> bool {
+    stage == Stage::Gated
+        && input.driven != Some(id)
+        && verdict_of(input.state_dir, id) == Some(Verdict::Pass)
+        && matches!(super::driver_ticket(input.state_dir, id), Ticket::Absent | Ticket::Dead)
 }
 
 /// 関門が開いた待ちの便か（live ∧ 待ちの段 ∧ 関門が開いている ∧ **driver が居ないと測れた**・設計 §13）。
@@ -1123,6 +1156,7 @@ mod tests {
             curl: None,
             runner: Some("true"),
             driving: None,
+            driven: None,
         };
         let pointer = Pointer { path: "docs/design/toy.md".to_owned(), id: "a".to_owned() };
         let started = launch_of(&input, "s2-toy.1", &pointer).argv;

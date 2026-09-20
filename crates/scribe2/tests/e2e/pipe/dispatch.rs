@@ -1812,3 +1812,181 @@ fn pipe_dispatch_waiting_gate_forward_driver_turn_resumes_another_answered_run()
     assert_eq!(stage_reached(&state, &asked, "Landed"), 1, "A も自走で着地まで（段の並び: {}）", stages_of(&state, &asked));
     clean(&[&repo, &state]);
 }
+
+// ───── 席が測り直して PASS になった Gated の便の再開（行 (l)・設計 §15・`pipe_dispatch_gated_pass_` 接頭辞） ─────
+//
+// INCONCLUSIVE で正常に抜けた driver は札を外し、席が `pipe gate` で測り直して PASS にしても札は無いままなので、
+// §5 の起こし直し（札の所有者が死んだ便だけ）では候補に戻らなかった（実測 2026-09-20: 手動の 1 周で `resumed:0`）。
+// 列は `Gated` の便に「verdict が PASS ∧ 札が無いか所有者が死んでいる」の 1 枝を足し、`--drive` 付きの resume で起こす。
+
+/// 便を `Gated` に着ける（intake → 1 commit の偽 runner → 偽 lens の `verdict` で `pipe gate`）。
+/// **札は無い**（`pipe gate` は driver の札を置かない＝席が測り直した形そのもの）。
+fn gated_without_ticket(repo: &Path, state: &Path, verdict: &str) -> String {
+    let contract = write_contract(repo, &[], &[]);
+    let id = implemented(repo, state, &contract);
+    let lens = fake_lens(&state.join(format!("gated-pass-lens-{verdict}")), &lens_verdict(verdict));
+    let out = gate_once(repo, state, &id, Some(&lens));
+    assert!(gated_pair_ok(verdict, &out), "gate {verdict}（{}）", told(&out));
+    assert_eq!(reached_now(state, &id, "Gated"), 1, "前提: Gated（段の並び: {}）", stages_of(state, &id));
+    assert!(!state.join("pipe").join(&id).join("driver").exists(), "前提: 札は無い");
+    id
+}
+
+/// 行 `row` の便を bead 名つきで `Gated` に着ける（同じ置き場に 2 便を置く歯が使う・偽 runner は [`two_rows`] の
+/// 行の write-set の file〔a = `src/lib.rs`・b = `src/b.rs`〕を触る）。
+fn gated_bead(repo: &Path, state: &Path, row: &str, bead: &str, verdict: &str) -> String {
+    let id = intake_bead(repo, state, &format!("{DESIGN_FILE}#{row}"), bead);
+    let file = match row {
+        "a" => "src/lib.rs",
+        _ => "src/b.rs",
+    };
+    let runner = format!("echo x >> {file} && git add -A && git commit -q -m runner");
+    let spawned = super::spawn_with(repo, state, &id, &runner);
+    assert_eq!(spawned.status.code(), Some(i32::from(RC_OK)), "{bead} の spawn は rc 0（{}）", told(&spawned));
+    let lens = fake_lens(&state.join(format!("gated-bead-lens-{bead}-{verdict}")), &lens_verdict(verdict));
+    let out = gate_once(repo, state, &id, Some(&lens));
+    assert!(gated_pair_ok(verdict, &out), "{bead} の gate {verdict}（{}）", told(&out));
+    id
+}
+
+/// (§15 (a)) verdict PASS ∧ 札の無い `Gated` の便は手動の 1 周で **`--drive` 付きの resume** で起こされ（`resumed:1`）、
+/// 先の段（`Landed`）へ進む。base は `Gated` の便を札の所有者が死んだものしか候補にしない（RED）。
+#[test]
+fn pipe_dispatch_gated_pass_without_ticket_is_resumed_with_drive() {
+    let (repo, state) = repo_with_state();
+    let id = gated_without_ticket(&repo, &state, "PASS");
+    let out = waiting_turn(&repo, &state);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "1 周は rc 0（{}）", told(&out));
+    assert_eq!(stdout_of(&out).trim_end(), resumed_line(1), "PASS の Gated の便を 1 本起こし直す（{}）", told(&out));
+    assert_eq!(stage_reached(&state, &id, "Landed"), 1, "先の段へ進む（段の並び: {}）", stages_of(&state, &id));
+    clean(&[&repo, &state]);
+}
+
+/// (§15 (b)) verdict INCONCLUSIVE ∧ 札の無い `Gated` の便は起こされない（`resumed:0`・再 gate も起きない＝器が
+/// 勝手に 1 周ぶんの費用を払い直さない）。
+#[test]
+fn pipe_dispatch_gated_pass_inconclusive_is_left_alone() {
+    let (repo, state) = repo_with_state();
+    let id = gated_without_ticket(&repo, &state, "INCONCLUSIVE");
+    let out = waiting_turn(&repo, &state);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "1 周は rc 0（{}）", told(&out));
+    assert_eq!(stdout_of(&out).trim_end(), resumed_line(0), "INCONCLUSIVE の便は起こさない（{}）", told(&out));
+    assert_eq!(not_reached(&state, &id, "Landed"), 0, "着地しない（段の並び: {}）", stages_of(&state, &id));
+    assert_eq!(reached_now(&state, &id, "Gated"), 1, "再 gate も起きない（段の並び: {}）", stages_of(&state, &id));
+    clean(&[&repo, &state]);
+}
+
+/// (§15 (c)) verdict を**読めない** `Gated` の便も起こされない（測れないを「通った」に読み替えない・fail-closed）。
+#[test]
+fn pipe_dispatch_gated_pass_unreadable_verdict_is_left_alone() {
+    let (repo, state) = repo_with_state();
+    let id = gated_without_ticket(&repo, &state, "PASS");
+    let verdict = state.join("pipe").join(&id).join("verdict.json");
+    assert!(verdict.exists(), "前提: 判定 file は在る");
+    fs::write(&verdict, "not json\n").unwrap_or_else(|err| panic!("判定 file を壊せる: {err}"));
+    let out = waiting_turn(&repo, &state);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "1 周は rc 0（{}）", told(&out));
+    assert_eq!(stdout_of(&out).trim_end(), resumed_line(0), "読めない verdict の便は起こさない（{}）", told(&out));
+    assert_eq!(not_reached(&state, &id, "Landed"), 0, "着地しない（段の並び: {}）", stages_of(&state, &id));
+    assert_eq!(reached_now(&state, &id, "Gated"), 1, "段は動かない（段の並び: {}）", stages_of(&state, &id));
+    clean(&[&repo, &state]);
+}
+
+/// (§15 (d) 札の 4 値) **所有者が生きている**札の PASS の `Gated` の便は触らない（別の driver が駆動している便に
+/// 2 本目を立てない・札も奪わない）。
+#[test]
+fn pipe_dispatch_gated_pass_live_ticket_is_left_alone() {
+    let (repo, state) = repo_with_state();
+    let id = gated_without_ticket(&repo, &state, "PASS");
+    // 歯の process 自身の pid＝確実に生きている所有者。
+    put_ticket_body(&state, &id, &format!("{}\n", std::process::id()));
+    let out = waiting_turn(&repo, &state);
+    assert_eq!(stdout_of(&out).trim_end(), resumed_line(0), "生きている所有者の札の便は触らない（{}）", told(&out));
+    assert_eq!(not_reached(&state, &id, "Landed"), 0, "着地しない（段の並び: {}）", stages_of(&state, &id));
+    assert!(state.join("pipe").join(&id).join("driver").exists(), "札は奪わない");
+    clean(&[&repo, &state]);
+}
+
+/// (§15 (d) 札の 4 値) **在るのに読めない**札の PASS の `Gated` の便は触らない（測れないを「居ない」に読み替えない）。
+#[test]
+fn pipe_dispatch_gated_pass_unreadable_ticket_is_left_alone() {
+    let (repo, state) = repo_with_state();
+    let id = gated_without_ticket(&repo, &state, "PASS");
+    put_ticket_body(&state, &id, "not-a-pid\n");
+    let out = waiting_turn(&repo, &state);
+    assert_eq!(stdout_of(&out).trim_end(), resumed_line(0), "読めない札の便は触らない（{}）", told(&out));
+    assert_eq!(not_reached(&state, &id, "Landed"), 0, "着地しない（段の並び: {}）", stages_of(&state, &id));
+    assert!(state.join("pipe").join(&id).join("driver").exists(), "札は触らない");
+    clean(&[&repo, &state]);
+}
+
+/// (§15 (e)) 札の**所有者が死んでいる** `Gated` の便は verdict に依らず今までどおり起こされる（既存の規則・
+/// **母集団 = PASS と INCONCLUSIVE の 2 値**）。起こし直しが**実際に走った**証拠は、死んだ所有者の札を継いだ
+/// resume が抜けるときに自分の札を外すこと（数えただけでは撃ったと言えない）。PASS の周は着地まで通り、
+/// INCONCLUSIVE の周は resume が `next=gate` で止まる（自動では測り直さない・段は `Gated` のまま）。
+#[test]
+fn pipe_dispatch_gated_pass_dead_ticket_is_resumed_regardless_of_verdict() {
+    for verdict in ["PASS", "INCONCLUSIVE"] {
+        let (repo, state) = repo_with_state();
+        let id = gated_without_ticket(&repo, &state, verdict);
+        put_dead_ticket(&state, &id);
+        let ticket = state.join("pipe").join(&id).join("driver");
+        let out = waiting_turn(&repo, &state);
+        assert_eq!(stdout_of(&out).trim_end(), resumed_line(1), "{verdict}: 死んだ所有者の札の便は起こす（{}）", told(&out));
+        assert!(gone(&ticket), "{verdict}: 継いだ resume が抜けるときに死んだ札を外す（段の並び: {}）", stages_of(&state, &id));
+        let landed = match verdict {
+            "PASS" => stage_reached(&state, &id, "Landed"),
+            _ => not_reached(&state, &id, "Landed"),
+        };
+        assert_eq!(landed, usize::from(verdict == "PASS"), "{verdict}: 着地は PASS の周だけ（段の並び: {}）", stages_of(&state, &id));
+        clean(&[&repo, &state]);
+    }
+}
+
+/// (§15 (f)) 段を前へ進めなかった driver の終端の 1 周は、この候補を 1 本も起こさない（空撃ちの連鎖を塞ぐ）。
+///
+/// 便 B（行 b）を INCONCLUSIVE の `Gated` に置き、INCONCLUSIVE の lens で `--drive` の resume を撃つ（再 gate で
+/// 同じ段＝`no-progress`）。その終端の 1 周は、同じ置き場で PASS の `Gated` に在った便 A（行 a・札なし）を起こさない。
+/// 正負の対: その後の手動の 1 周（driver でない契機）は A を起こす。
+#[test]
+fn pipe_dispatch_gated_pass_no_progress_driver_turn_resumes_nothing() {
+    let (repo, state) = repo_with_state();
+    two_rows(&repo);
+    let passed = gated_bead(&repo, &state, "a", "s2-toy.1", "PASS");
+    let other = gated_bead(&repo, &state, "b", "s2-toy.2", "INCONCLUSIVE");
+    let unsure = fake_lens(&state.join("gated-pass-unsure-lens"), &lens_verdict("INCONCLUSIVE"));
+    let out = resume_once(&repo, &state, &other, &unsure, true);
+    assert_eq!(
+        stdout_of(&out).lines().last(),
+        Some(format!("{} drive=no-progress", resumed_line(0)).as_str()),
+        "段が動かなかった driver の 1 周は A を起こさない（{}）",
+        told(&out)
+    );
+    assert_eq!(not_reached(&state, &passed, "Landed"), 0, "A は着地しない（段の並び: {}）", stages_of(&state, &passed));
+    let manual = waiting_turn(&repo, &state);
+    assert_eq!(stdout_of(&manual).trim_end(), resumed_line(1), "手動の 1 周は A を起こす（{}）", told(&manual));
+    assert_eq!(stage_reached(&state, &passed, "Landed"), 1, "A は自走で着地まで（段の並び: {}）", stages_of(&state, &passed));
+    clean(&[&repo, &state]);
+}
+
+/// (§15 (h)) **flag の無い** resume が Implemented → `Gated`（PASS）で抜けた直後の自分の終端の 1 周は自分の便を
+/// 起こさず（段は `Gated` のまま＝「1 段だけ」を保つ）、その後の手動の 1 周は同じ便を起こす（正負の対）。
+///
+/// flag の無い周も終端の 1 周は撃つ（`--repo` と `--state-dir` と `--runner` を渡す）。抜けた driver は札を外して
+/// いるので、自分の id を列に渡さなければ PASS の枝が自分の便を拾い、着地まで運んでしまう。
+#[test]
+fn pipe_dispatch_gated_pass_flagless_driver_leaves_its_own_run_for_the_next_turn() {
+    let (repo, state) = repo_with_state();
+    let contract = write_contract(&repo, &[], &[]);
+    let id = implemented(&repo, &state, &contract);
+    let lens = fake_lens(&state.join("gated-pass-flagless-lens"), &lens_verdict("PASS"));
+    let out = resume_once(&repo, &state, &id, &lens, false);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "flag 無しの resume は rc 0（{}）", told(&out));
+    assert_eq!(stage_reached(&state, &id, "Gated"), 1, "1 段だけ進む（段の並び: {}）", stages_of(&state, &id));
+    assert!(!state.join("pipe").join(&id).join("driver").exists(), "抜けた driver は札を外している");
+    assert_eq!(not_reached(&state, &id, "Landed"), 0, "自分の終端の 1 周は自分の便を起こさない（段の並び: {}）", stages_of(&state, &id));
+    let manual = waiting_turn(&repo, &state);
+    assert_eq!(stdout_of(&manual).trim_end(), resumed_line(1), "手動の 1 周は同じ便を起こす（{}）", told(&manual));
+    assert_eq!(stage_reached(&state, &id, "Landed"), 1, "自走で着地まで（段の並び: {}）", stages_of(&state, &id));
+    clean(&[&repo, &state]);
+}
