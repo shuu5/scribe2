@@ -6,11 +6,16 @@ use super::{UNADMITTED_JOBS, WRITE_SET_CMD};
 use crate::pipe::admission::{self, Grant};
 use crate::pipe::confine::{self, Confinement, Reason, Released, Usage};
 use crate::pipe::contract::Contract;
-use crate::pipe::declaration::{BASE_HOLE, JOBS_HOLE};
+use crate::pipe::declaration::{BASE_HOLE, JOBS_HOLE, THREADS_HOLE};
 use crate::pipe::git_bytes;
 use crate::pipe::refuse;
 use crate::seat::RuleRead;
 use std::path::Path;
+
+/// 受付を通らない行（land の main 実測・受付の無い呼び手）の `{threads}` の実値（設計 gate-cost.md §31 約束 6）。
+///
+/// jobs と同じく **1**（[`UNADMITTED_JOBS`]）——受付を通らない周に core 数ぶんの thread を許さない。
+const UNADMITTED_THREADS: u64 = UNADMITTED_JOBS;
 
 /// 機械検証の段。**適用順序は [`CHECKS`] の並びが唯一の権威**である（憲法 C2）。
 ///
@@ -195,13 +200,15 @@ fn refire(
     second
 }
 
-/// 共通 verify の行の穴を実値へ置く（**契約の行には置換しない**）。
+/// 共通 verify の行の穴を実値へ置く（**契約の行には置換しない**）。置換する穴の列は
+/// [`crate::pipe::declaration::BASE_HOLES`] と同じ 3 つである（intake の判定と同じ列・設計 §3.3 errata）。
 ///
 /// **1 走査で埋めない**のは、穴の値が sha と数字だけで、互いの字面を含まないためである
 /// （`{worktree}` のように外から来る path を埋める面とは条件が違う）。
-fn fill_holes(line: &str, base: &str, jobs: u64) -> String {
+fn fill_holes(line: &str, base: &str, jobs: u64, threads: u64) -> String {
     line.replace(BASE_HOLE, base)
         .replace(JOBS_HOLE, &jobs.to_string())
+        .replace(THREADS_HOLE, &threads.to_string())
 }
 
 /// 1 行を撃つ材料。
@@ -221,7 +228,8 @@ struct Fire<'a> {
 /// 1 行を scope に包んで撃ち、結果を組む。
 ///
 /// `{jobs}` を持つ共通 verify の行は、**撃つ前に受付で枠を取り、撃った後に返す**
-/// （設計 §3.2）。実効 jobs = `min(gate.mutants_jobs, 受け付けた枠)`。
+/// （設計 §3.2）。実効 jobs = `min(gate.mutants_jobs, 受け付けた枠)`。実効 thread は受付が jobs と
+/// 対で決めた値（[`Grant::threads`]・設計 §31 約束 4）で、受付を通らない行は jobs と同じく 1 を埋める。
 fn fire(entry: &Fire<'_>, caps: Result<confine::Caps, RuleRead>, admit: Option<&Admit<'_>>) -> Step {
     let place = entry
         .checks
@@ -231,9 +239,11 @@ fn fire(entry: &Fire<'_>, caps: Result<confine::Caps, RuleRead>, admit: Option<&
         .unwrap_or_default();
     let unit = confine::unit_name(&place, entry.stage.as_str(), entry.n);
     let grant = admitted(entry, caps, &unit, admit);
-    let jobs = grant.as_ref().map_or(UNADMITTED_JOBS, |held| held.jobs);
+    let (jobs, threads) = grant
+        .as_ref()
+        .map_or((UNADMITTED_JOBS, UNADMITTED_THREADS), |held| (held.jobs, held.threads));
     let cmd = if entry.holes {
-        fill_holes(entry.raw, entry.checks.base, jobs)
+        fill_holes(entry.raw, entry.checks.base, jobs, threads)
     } else {
         entry.raw.to_owned()
     };

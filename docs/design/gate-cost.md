@@ -63,7 +63,7 @@ manifest に行が載るまでは ADR-0021 の予定行（C14.2 の相互参照�
 - **module は `pipe/admission.rs`**（§7 の旧名は slots.rs・その file は無い）。code の識別子は admission / Ticket 系で、hook の注入計測の slot（FR21）と intake の「受付」との字面衝突を避ける。file 名の `.slot` と record の `slot=` は ADR-0021 §2.3 の字面のまま。置き場は seat/mod.rs `host_slots_dir`（`StateDir::slots_dir` はその委譲）。
 - **札の中身は 1 行 JSON**（`schema` / `pid` / `run` / `jobs` / `ts`・§3.2 は「state dir と同じ TOML subset」と書いた）。ADR-0004 §2.3 D-3 の TOML subset の列挙を広げないためである。`ts` は UNIX epoch の ms で、生きている判定の起動時刻は `/proc/stat` の `btime` + `/proc/<pid>/stat` の starttime ÷ `USER_HZ`（ABI の 100）で組む（`btime` の秒の切り捨ては持ち主を死んだと読まない側へ寄る）。札は `.partial` に書いて rename する＝読み手は半端な札を見ない。
 - **`Completion::SlotFree { slots_dir, want, job_mb, reserve_mb, cap }`**（§3.2 の分担の宿題の決着）。variant はデータだけを運び、meminfo と札の読み手は wait の内側（`admission::has_room`）が持つ。待ちの間の観測は lock を取らず札も消さない（回収と記録は lock の内側の受付だけ）。`pid()` は pid を見張らない本 variant で 0 を返す（`/proc/0` は無い）。
-- **`slot=` の値**: `granted` / `degraded` / `unmeasured`、回収が在った周は `reclaimed:<n>`（枠を配れた周）か `<degraded|unmeasured>,reclaimed:<n>`（縮退と重なった周）。測れなかった理由は閉じた enum で `slot_why=<slots-dir|lock|meminfo>` に残す。meminfo が読めない周は札を回収しない（回収の数を残す前に縮退するため）。縮退（`degraded`）の周も 1 枠の札を置く。
+- **`slot=` の値**: `granted` / `degraded` / `unmeasured`、回収が在った周は `reclaimed:<n>`（枠を配れた周）か `<degraded|unmeasured>,reclaimed:<n>`（縮退と重なった周）。測れなかった理由は閉じた enum で `slot_why=<slots-dir|lock|meminfo|cores>` に残す（`cores` は行 w・§31.1）。meminfo が読めない周は札を回収しない（回収の数を残す前に縮退するため）。縮退（`degraded`）の周も 1 枠の札を置く。
 - **包めない周（`Unconfined`）は 1 枠だけを取りにいく**（札は置く）。箱の無い行に並列度を上げると、溢れたときに殺されるのが席の側になる。
 - **受付を通るのは gate の共通 verify の `{jobs}` 行だけ**。land の main 実測（`run_checks`・land.rs）は受付を持たず `jobs = 1` のまま撃つ（gate.rs `UNADMITTED_JOBS`・§3.3 の errata の `EFFECTIVE_JOBS` の改名）。main 実測の検出線は (c) で撃たなくなる。
 - **受付の 4 行（`gate.mutants_jobs` / `gate.job_memory_mb` / `host.reserve_memory_mb` / `gate.slot_wait_s`）は `--rules` の manifest から読む**（pipe/cli.rs `limits_of`）。封じ込めの 3 線（§4.4・埋め込みだけ）と読み面が違うのは、待ちの上限を振る歯の fixture が gate へ届く口がここだけだからである。
@@ -74,7 +74,7 @@ manifest に行が載るまでは ADR-0021 の予定行（C14.2 の相互参照�
 - gate は受付で得た jobs を `{jobs}` に置換して撃つ。`{jobs}` を持たない行は受付を通らない（枠を取らない＝mutants を持たない consumer は費用を払わない）。
 - xtask `mutants-diff` は `--jobs N` を cargo-mutants の `--jobs` にそのまま渡す（値は持たない）。
 - env で渡さない（C2.2 の精神・折り返しの裏口を作らない）。
-- errata（s2-07l.157 の現物）: 置ける穴は declaration.rs の**閉じた集合**（`BASE_HOLES` = `{base}` `{jobs}`）1 本が持ち、`unfit` の判定と gate の置換が同じ列を読む（片側だけに足すと、intake を通った行が穴のまま撃たれる）。受付が入るまでの実効 jobs は gate.rs の `EFFECTIVE_JOBS = 1`（§9 (a)）で、xtask 側の既定も 1（`--jobs` 無し・読めない字面・0 は 1 へ落とす＝道具に「速い既定」を持たせない）。
+- errata（s2-07l.157 の現物）: 置ける穴は declaration.rs の**閉じた集合**（`BASE_HOLES` = `{base}` `{jobs}`・行 w で `{threads}` が 3 つ目に加わった・§31.1）1 本が持ち、`unfit` の判定と gate の置換が同じ列を読む（片側だけに足すと、intake を通った行が穴のまま撃たれる）。受付が入るまでの実効 jobs は gate.rs の `EFFECTIVE_JOBS = 1`（§9 (a)）で、xtask 側の既定も 1（`--jobs` 無し・読めない字面・0 は 1 へ落とす＝道具に「速い既定」を持たせない）。
 
 ## 4. 封じ込め（ADR-0021 §2.2）
 
@@ -461,6 +461,17 @@ e2e は binary を spawn し外部 command は PATH 先頭の stub で差し替�
   - **CPU を上限（宣言値の rules 行）にする**: 本便が足すのは**枠の分母**（core 数という測定値）であって新しい宣言値ではない。上限の是非は ADR と裁定の側に残す。
   - **§30（行 v）で足りるとする**: 歯の scope が 0 になっても、変異検査そのものが core を 6 倍に使う形は残る（事故の load は歯の scope だけでは説明が付かない＝memory は余っていた）。
   - **混んだ周に便を断る**: §10 のとおり断らない（縮退する・FR46）。
+
+### 31.1 errata（現物との差・`s2-07l.504.2`・規範は上の §31 のまま）
+
+- **3 つ目の穴の字面は `{threads}`**（declaration.rs の閉じた集合の末尾・intake の `unfit` と gate の置換 `fill_holes` が同じ 3 つを読む）。scribe2 自身の検出線は `cargo xtask mutants-diff --base {base} --jobs {jobs} --threads {threads}` の 1 行で、xtask の口は **`--threads <t>`**（`--jobs` と同じ読み方・渡されない / 数でない / 0 は 1）。道具の側の `cores / jobs` の導出（§22 の `test_threads`）は消えた。
+- **CPU の材料は受付の型 `Cpu { cores, price }`**（測定値と導出値を対で持つ・C10）。値段は `Cpu::priced(cores, cap)` の 1 本（`max(1, floor(cores / cap))`・cap 0 は 1 で割る）で、cores を読めない周は材料を組めない（`cpu_of` が `None`・0 や 1 に潰さない）。cores は **1 受付で 1 回だけ**読む（`admit` の入口・待ちの観測も同じ値を運ぶ・meminfo と違い受付の間に動かない）。
+- **3 項の min は `room(meminfo, sizes, cpu, live_jobs)`**（`capacity` の結果に `by_cpu(cpu, live_jobs)` を重ねる・`capacity` の引数と式は不変・既存の歯 3 本は 1 字も変えていない）。
+- **測れなかった理由の 4 つ目は `Unreadable::Cores`**（record の `slot_why=cores`・§3.2.1 の 3 値に足す）。理由の判定順は meminfo → cores → 札の回収で、どちらも回収の前に返る（回収の数を残す前に縮退する側）。
+- **`Grant` は `jobs` と `threads` を対で運ぶ**: 配れた周は `(min(cap, free), price)`、縮退（`degraded`）と測れない（`unmeasured`）は `(1, 1)`。受付を通らない行（land の主実測・`run_checks` の受付なしの形）は gate/verify.rs の `UNADMITTED_THREADS`（= `UNADMITTED_JOBS` = 1）を埋める。record に `threads=` の field は**足していない**（record の読み書きは本行の write-set の外・置換後の `cmd` が実効 thread を持つ）。
+- **`Completion::SlotFree` は `cores` を 1 つ足して運ぶ**（`{ slots_dir, want, job_mb, reserve_mb, cap, cores }`）。観測は `admission::has_room_on(dir, want, sizes, Cpu::priced(cores, cap))` で受付と同じ `room` を読む。
+- **列の起動前の余地の検査（pipe/dispatch.rs）は memory の 2 項のまま**である。その呼び手は本行の write-set の外で、CPU の材料（cap）も持たないため、`has_room(dir, want, sizes)` の口を memory だけの形で残し、待ちの観測（3 項）とは `has_room_on` で分けた（実装は `observe` の 1 本・CPU の材料の有無で 2 項 / 3 項が決まる）。列にも 3 項を読ませるかは後続。
+- **e2e の歯**は `sh verify-slot.sh {jobs} {threads}` の toy の行で、撃たれた側が `$1` / `$2` を別 file に写す（record の字面だけの置換でないことを測る）。枠を配れた周の thread はその歯が同じ host で測った `max(1, floor(cores / gate.mutants_jobs))` と一致し、縮退の周は cmd が `… 1 1`。
 
 ## 32. 器の健康の遮断器 — 行を撃つ前に走行可能と待ちの process を読み、混んだ周は空くまで待ち、待てなかった周は終端させない（契約表の行 x・`s2-07l.504`）
 

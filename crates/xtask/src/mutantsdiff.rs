@@ -50,9 +50,6 @@ impl Counts {
 }
 
 pub use scope::{measure_args, Scope};
-/// 本体では [`measure_args`] だけが呼ぶ（表の歯が `main.rs` から引くための再輸出）。
-#[cfg(test)]
-pub use scope::test_threads;
 
 /// [`Scope`] を作れる場所を **この module の内側だけ**にする。親（[`run`] を含む）からは field が
 /// 見えないので、`-p` へ渡した名前と別の値で行を組む形は compile できない（lens-82 再確認の残余:
@@ -79,8 +76,9 @@ mod scope {
     /// 歯が対のまま見る（`-o` を落とすと測った結果を読まずに `total=0` へ化ける・lens-82
     /// 再確認 MEDIUM-4）。
     ///
-    /// **並列度の値はこの道具が持たない**（設計 gate-cost.md §3.3）。器が受付で導いた実効値を
-    /// 宣言 file の `{jobs}` 経由で受け取り、cargo-mutants の `--jobs` へそのまま渡すだけである。
+    /// **並列度も thread 数もこの道具は値を持たない**（設計 gate-cost.md §3.3 / §31 約束 7）。器が
+    /// 受付で導いた実効値を宣言 file の `{jobs}` / `{threads}` 経由で受け取り、cargo-mutants の
+    /// `--jobs` と test binary の `--test-threads` へそのまま渡すだけである。
     ///
     /// 1 つ目の `--` の後ろ `--no-fail-fast` は cargo-mutants が baseline と各変異の `cargo test` へ
     /// そのまま渡す引数（設計 gate-cost.md §19・憲法 C10）。既定の fail-fast では baseline の
@@ -90,15 +88,10 @@ mod scope {
     /// （設計 gate-cost.md §22・行 m）。cargo-mutants は 1 つ目の `--` より後ろを 2 つ目の `--`
     /// ごと逐語で cargo test へ渡す。libtest の既定は core 数の thread なので、`--jobs` の各 job
     /// が全 core に広がり gate 1 本で jobs × cores 並列になる（2026-09-16 の load 57 / 16 core）。
-    /// `t` は [`test_threads`]（cores / jobs・導出値・rules 行ではない）で、`cores` は呼び手
-    /// （[`run`]）が 1 回読んで渡す＝歯が cores を注入できる。
-    pub fn measure_args(
-        diff: &Path,
-        out: &Path,
-        scope: &str,
-        jobs: u64,
-        cores: Option<usize>,
-    ) -> (Vec<String>, Scope) {
+    /// `t` の導出（cores と `gate.mutants_jobs` から）は器の受付が持つ（§31・行 w）——道具が
+    /// `cores / jobs` で導くと、受け付けた枠が上限より小さい周に job あたりの値段が上がり、gate 2 本で
+    /// core の 2 倍の thread を作る。
+    pub fn measure_args(diff: &Path, out: &Path, scope: &str, jobs: u64, threads: u64) -> (Vec<String>, Scope) {
         let mut args: Vec<String> = ["mutants", "--in-diff"].iter().map(|s| (*s).to_owned()).collect();
         args.push(diff.display().to_string());
         args.push("-p".to_owned());
@@ -108,19 +101,8 @@ mod scope {
         args.push("--jobs".to_owned());
         args.push(jobs.to_string());
         args.extend(["--", "--no-fail-fast", "--", "--test-threads"].iter().map(|s| (*s).to_owned()));
-        args.push(test_threads(cores, jobs).to_string());
+        args.push(threads.to_string());
         (args, Scope(scope.to_owned()))
-    }
-
-    /// 各 job の `cargo test` に許す test thread 数 = `max(1, cores / jobs)`（設計 gate-cost.md
-    /// §22）。jobs × t ≤ cores に閉じるので、変異検査の入れ子の並列が core 数を超えない。
-    ///
-    /// `cores` が読めない周（`None`）は **1**（速い側へ倒さない・`JOBS_FLOOR` と同じ向き）。
-    /// `jobs` は [`super::jobs_of`] の値で 1 以上だが、0 が来ても 1 で割る（0 除算で落とさない）。
-    /// pure 関数＝`available_parallelism` はここでは読まない。
-    pub fn test_threads(cores: Option<usize>, jobs: u64) -> u64 {
-        let cores = cores.and_then(|n| u64::try_from(n).ok()).unwrap_or(1);
-        cores.checked_div(jobs).unwrap_or(1).max(1)
     }
 }
 
@@ -324,9 +306,9 @@ fn flag<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
 }
 
 /// 使い方（rc 2 の 1 行）。
-const USAGE: &str = "usage: cargo xtask mutants-diff --base <ref> [--jobs <n>]";
+const USAGE: &str = "usage: cargo xtask mutants-diff --base <ref> [--jobs <n>] [--threads <t>]";
 
-/// `--jobs` を渡されなかった周の並列度（設計 gate-cost.md §2「止めない、縮退する」）。
+/// `--jobs` / `--threads` を渡されなかった周の並列度と thread 数（設計 gate-cost.md §2「止めない、縮退する」）。
 ///
 /// **1 は常に許される**（従来と同じ費用）。器を通さずに人が撃つ周と、受付が枠を取れなかった
 /// 周が同じ値になる形で、道具の側に「速い既定」を持たない。
@@ -334,9 +316,20 @@ const JOBS_FLOOR: u64 = 1;
 
 /// `--jobs` の値。読めない字面は [`JOBS_FLOOR`] へ落とす（**速い側へ倒さない**）。
 pub fn jobs_of(args: &[String]) -> u64 {
-    flag(args, "--jobs")
+    floored(args, "--jobs")
+}
+
+/// `--threads` の値（job 1 つの `cargo test` に許す test thread・器の受付が決めた値・設計 gate-cost.md §31
+/// 約束 7）。渡されない周と数でない周は **1**（`--jobs` と同じ向き・cores から導かない）。
+pub fn threads_of(args: &[String]) -> u64 {
+    floored(args, "--threads")
+}
+
+/// 数の flag の値。渡されない・数でない・0 は [`JOBS_FLOOR`]（1）へ落とす。
+fn floored(args: &[String], name: &str) -> u64 {
+    flag(args, name)
         .and_then(|value| value.parse().ok())
-        .filter(|jobs| *jobs >= JOBS_FLOOR)
+        .filter(|found| *found >= JOBS_FLOOR)
         .unwrap_or(JOBS_FLOOR)
 }
 
@@ -380,9 +373,8 @@ pub fn run(args: &[String]) -> ExitCode {
         Err(reason) => return unmeasured(&format!("mutants-diff: {reason}")),
     };
     // **測る範囲は 1 つの束縛**: `-p` へ渡した名前を [`Scope`] として受け取り、行はそれでしか組めない。
-    // core 数は **ここで 1 回だけ読む**（`measure_args` は pure・設計 gate-cost.md §22）。
-    let cores = std::thread::available_parallelism().ok().map(usize::from);
-    let (args, scope) = measure_args(&diff_path, &out, &layout.name, jobs_of(args), cores);
+    // 並列度も thread 数も**受けた値をそのまま**渡す（cores はここで読まない・設計 gate-cost.md §31 約束 7）。
+    let (args, scope) = measure_args(&diff_path, &out, &layout.name, jobs_of(args), threads_of(args));
     let status = Command::new("cargo")
         .args(args)
         .current_dir(&root)
@@ -471,7 +463,7 @@ mod tests {
     #[test]
     fn no_fail_fast_is_passed_to_cargo_test_by_mutants() {
         for (scope, jobs) in [("probe-pkg-3f", 3_u64), ("other-pkg-7a", 1)] {
-            let (args, bound) = measure_args(Path::new("probe.diff"), Path::new("probe-out"), scope, jobs, Some(16));
+            let (args, bound) = measure_args(Path::new("probe.diff"), Path::new("probe-out"), scope, jobs, 4);
             let dashes_at: Vec<usize> = args.iter().enumerate().filter(|(_, a)| *a == "--").map(|(i, _)| i).collect();
             assert_eq!(dashes_at.len(), 2, "-- は 2 つ: {args:?}");
             assert_eq!(

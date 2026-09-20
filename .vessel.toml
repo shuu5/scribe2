@@ -6,8 +6,9 @@ allowed-commands = ["cargo", "git"]
 common-verify = ["cargo xtask flip-check --base {base}", "cargo nextest run --workspace --no-tests=fail --no-fail-fast","cargo clippy --workspace --all-targets -- -D warnings", "cargo xtask check", "cargo deny check bans licenses sources"]
 # 検出線（C12.4・落ちても deny しない行）。gate は共通 verify の後・契約 verify の前に撃ち、
 # land の main 実測は木が gate と同じなら撃ち直さない（ADR-0021 §2.4）。deny に昇格した行は
-# 同じ便で common-verify へ戻す。
-detection-verify = ["cargo xtask mutants-diff --base {base} --jobs {jobs}"]
+# 同じ便で common-verify へ戻す。`{jobs}` / `{threads}` は器の受付が実測から決める実効値
+# （設計 gate-cost.md §3.3 / §31・道具は値を持たない）。
+detection-verify = ["cargo xtask mutants-diff --base {base} --jobs {jobs} --threads {threads}"]
 # land の終端（設計 contract-source.md §5・`s2-07l.382`）。**器に既定は無い**——push は repo の外へ
 # 出す行為（憲法 A1 の「出す」）なので、押す先はここで名指した repo の便だけが終端を持つ。
 # `ci-cmd` は書かない＝既定の 1 行（forge の CLI・`{sha}` は 40 桁）を撃つ。

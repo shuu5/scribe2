@@ -1,8 +1,13 @@
 //! host 単位の受付（設計 docs/design/gate-cost.md §3.2・ADR-0021 §2.3）。
 //!
-//! `{jobs}` を持つ verify 行を撃つ前に、host の空き memory と**生きている受付札**の合計から
-//! 配れる枠を測り、枠 1 組 = 札 file 1 つを置いてから撃つ。project をまたいで 1 つの置き場
+//! `{jobs}` を持つ verify 行を撃つ前に、host の空き memory と core 数と**生きている受付札**の
+//! 合計から配れる枠を測り、枠 1 組 = 札 file 1 つを置いてから撃つ。project をまたいで 1 つの置き場
 //! （[`crate::seat::host_slots_dir`]）を見るので、別 project の gate と同時に満額を取らない。
+//!
+//! 枠は **memory の 2 項と core の 1 項の min**（設計 §31・ADR-0050）。job 1 つの thread の
+//! 値段（[`Cpu::price`]）は器がここで決め、受け付けた枠は jobs と thread を**対で**運ぶ
+//! （[`Grant`]）。縮退の周と測れない周はどちらも jobs 1 かつ thread 1 である（`cores / 1` を
+//! 渡して 1 本の行に core 数ぶんの thread を許す形＝速い側へ倒さない）。
 //!
 //! **止めない、縮退する**（設計 §2）。枠が空かない周は [`Completion::SlotFree`] を唯一の待機
 //! 実装（[`fleet::wait`]）で待ち、上限（rules 行 `gate.slot_wait_s`）を超えたら並列度 1 で進む
@@ -94,6 +99,59 @@ fn field_mb(meminfo: &str, key: &str) -> Option<u64> {
     let line = meminfo.lines().find(|line| line.starts_with(key))?;
     let kb: u64 = line.split_whitespace().nth(1)?.parse().ok()?;
     Some(kb / 1024)
+}
+
+/// CPU の材料（測定値の cores と、そこから導いた job 1 つの値段・憲法 C10・設計 §31）。
+///
+/// 組めるのは cores を**測れた**周だけである（[`cpu_of`]）——測れない周を `cores = 0` や
+/// `price = 1` で表さない（0 と「測れない」を混ぜない）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Cpu {
+    /// host の core 数（`available_parallelism` の実測）。
+    pub cores: u64,
+    /// job 1 つの thread の値段 = `max(1, floor(cores / gate.mutants_jobs))`。
+    pub price: u64,
+}
+
+impl Cpu {
+    /// 実測の cores と並列度の上限から値段を決める（pure・**導出の正本はこの 1 本**・設計 §31 約束 1 / 7）。
+    ///
+    /// `cap` が 0 の周は 1 で割る（受付が `cap` を 1 に clamp するのと同じ向き・0 除算で落とさない）。
+    /// 値段の床は 1（cores < cap でも job は 1 thread を持つ）。
+    pub fn priced(cores: u64, cap: u64) -> Self {
+        Self { cores, price: (cores / cap.max(1)).max(1) }
+    }
+}
+
+/// cores の読みから CPU の材料を組む（pure）。**cores 不明は `None`**＝cap 0 の周（値段 = cores）と弁別する。
+pub fn cpu_of(cores: Option<u64>, cap: u64) -> Option<Cpu> {
+    cores.map(|cores| Cpu::priced(cores, cap))
+}
+
+/// host の core 数（測定値）。読めない周は `None`。env は読まない（C2.2・host の面を読む口）。
+fn host_cores() -> Option<u64> {
+    std::thread::available_parallelism()
+        .ok()
+        .and_then(|found| u64::try_from(found.get()).ok())
+}
+
+/// CPU で配れる枠 = `floor(cores / price) − Σ 生きている札の jobs`（引き算は 0 の床・pure・設計 §31 約束 2）。
+///
+/// 単位は job で、1 job の値段が `price` thread である＝札の jobs の和がそのまま CPU の勘定になる
+/// （札の形は変えない・約束 3）。
+pub fn by_cpu(cpu: Cpu, live_jobs: u64) -> u64 {
+    (cpu.cores / cpu.price.max(1)).saturating_sub(live_jobs)
+}
+
+/// 配れる枠 = **3 項の min**（`by_avail` / `by_token` / `by_cpu`・pure・設計 §31 約束 2）。
+///
+/// memory の 2 項は [`capacity`] のまま（引数も式も変えない）で、その結果に CPU の 1 項を重ねる。
+/// meminfo が読めない周は従来どおり `Unmeasured`（CPU の項で 0 に潰さない）。
+pub fn room(meminfo: &str, sizes: Sizes, cpu: Cpu, live_jobs: u64) -> Free {
+    match capacity(meminfo, sizes, live_jobs) {
+        Free::Slots(memory) => Free::Slots(memory.min(by_cpu(cpu, live_jobs))),
+        Free::Unmeasured => Free::Unmeasured,
+    }
 }
 
 /// 受付札 1 枚の中身（1 行 JSON・schema / pid / run / jobs / ts）。
@@ -230,12 +288,29 @@ pub fn live_tokens(dir: &Path) -> Option<Tokens> {
 ///
 /// **lock を取らず、札も消さない**（回収と記録は lock の内側の受付が持つ）。測れない周は
 /// 待たせない——待っても測れるようにはならず、受付の側が `slot=unmeasured` で縮退する。
+/// 測るのは受付と**同じ 3 項**（[`room`]・設計 §31 約束 8）——memory だけで解ける観測は、解けた
+/// 直後の受付が CPU の項で 0 を出して待ち直す空回りになる。
+pub fn has_room_on(dir: &Path, want: u64, sizes: Sizes, cpu: Cpu) -> bool {
+    observe(dir, want, sizes, Some(cpu))
+}
+
+/// memory の 2 項だけで枠が `want` のうち 1 つ以上空いているか（CPU の材料を持たない呼び手の口＝列が便を
+/// 起こす前の余地の検査・`pipe/dispatch.rs`）。待ちの観測は [`has_room_on`] を通る（3 項）。
 pub fn has_room(dir: &Path, want: u64, sizes: Sizes) -> bool {
+    observe(dir, want, sizes, None)
+}
+
+/// 観測の実装 1 本（[`has_room_on`] / [`has_room`]）。CPU の材料が在る周は 3 項、無い周は memory の 2 項。
+fn observe(dir: &Path, want: u64, sizes: Sizes, cpu: Option<Cpu>) -> bool {
     let Some(found) = scan(dir) else {
         return true;
     };
     let meminfo = fs::read_to_string(MEMINFO).unwrap_or_default();
-    match capacity(&meminfo, sizes, found.live_jobs) {
+    let free = match cpu {
+        Some(cpu) => room(&meminfo, sizes, cpu, found.live_jobs),
+        None => capacity(&meminfo, sizes, found.live_jobs),
+    };
+    match free {
         Free::Unmeasured => true,
         Free::Slots(free) => free.min(want) >= 1,
     }
@@ -250,6 +325,8 @@ pub enum Unreadable {
     Lock,
     /// `/proc/meminfo` を読めない（または線が 0）。
     Meminfo,
+    /// host の core 数を読めない（設計 §31 約束 5・jobs 1 / thread 1 で進む）。
+    Cores,
 }
 
 impl Unreadable {
@@ -259,6 +336,7 @@ impl Unreadable {
             Self::SlotsDir => "slots-dir",
             Self::Lock => "lock",
             Self::Meminfo => "meminfo",
+            Self::Cores => "cores",
         }
     }
 }
@@ -325,11 +403,19 @@ fn slot_detail(slot: Slot, reclaimed: u64) -> String {
     }
 }
 
+/// 縮退の周と測れない周の並列度と thread（**1 は常に許される**＝従来と同じ費用）。
+const FLOOR: u64 = 1;
+
 /// 受け付けた枠。**Drop で札を消す**（器が死んだ周は次の受付が pid で回収する）。
 #[derive(Debug)]
 pub struct Grant {
     /// 配れた枠（**1 以上**）。
     pub jobs: u64,
+    /// job 1 つに許す thread（**1 以上**・測れた周は [`Cpu::price`]・縮退と測れない周は 1・設計 §31 約束 4）。
+    ///
+    /// jobs と**対で**運ぶ——jobs だけを 1 に落として thread を道具に導かせると、枠を配れないほど
+    /// 混んだ host でいちばん太い行（`cores / 1`）を撃つ形になる（2026-09-20 の事故の出所）。
+    pub threads: u64,
     /// record の `slot=`（`granted` / `degraded` / `unmeasured` / `reclaimed:<n>`）。
     pub detail: String,
     /// 測れなかった理由（測れた周は `None`・record の `slot_why=`）。
@@ -359,16 +445,27 @@ pub fn release(grant: Grant) {
 pub fn admit(state_dir: &Path, run: &str, want: u64, rules: &Rules) -> Grant {
     let dir = host_slots_dir(state_dir);
     let want = want.clamp(1, rules.cap.max(1));
+    // core 数は **1 受付で 1 回だけ測る**（待ちの観測も同じ値を運ぶ・meminfo と違い受付の間に動かない）。
+    // 読めない周は札を置かず縮退する（設計 §31 約束 5・回収の数を残す前なので回収もしない）。
+    let Some(cpu) = cpu_of(host_cores(), rules.cap) else {
+        return unmeasured(Unreadable::Cores, 0);
+    };
     let started = Instant::now();
     let deadline = Duration::from_secs(rules.wait_s);
     let mut reclaimed: u64 = 0;
     loop {
-        match attempt(&dir, run, Ask::UpTo(want), rules) {
+        match attempt(&dir, run, Ask::UpTo(want), rules, cpu) {
             Admission::Unmeasured(why) => return unmeasured(why, reclaimed),
             Admission::Measured { jobs, reclaimed: more, ticket } => {
                 reclaimed = reclaimed.saturating_add(more);
                 if jobs >= 1 {
-                    return Grant { jobs, detail: slot_detail(Slot::Granted, reclaimed), why: None, ticket };
+                    return Grant {
+                        jobs,
+                        threads: cpu.price,
+                        detail: slot_detail(Slot::Granted, reclaimed),
+                        why: None,
+                        ticket,
+                    };
                 }
             }
         }
@@ -379,19 +476,21 @@ pub fn admit(state_dir: &Path, run: &str, want: u64, rules: &Rules) -> Grant {
             job_mb: rules.sizes.job_mb,
             reserve_mb: rules.sizes.reserve_mb,
             cap: rules.cap,
+            cores: cpu.cores,
         };
         if left.is_zero() || fleet::wait(completion, left).is_err() {
-            return degraded(&dir, run, rules, reclaimed);
+            return degraded(&dir, run, rules, reclaimed, cpu);
         }
     }
 }
 
-/// 待ちの上限を超えた周: 1 枠の札を書いて進む。
-fn degraded(dir: &Path, run: &str, rules: &Rules, reclaimed: u64) -> Grant {
-    match attempt(dir, run, Ask::Floor, rules) {
+/// 待ちの上限を超えた周: 1 枠の札を書いて進む。**thread も 1**（設計 §31 約束 4）。
+fn degraded(dir: &Path, run: &str, rules: &Rules, reclaimed: u64, cpu: Cpu) -> Grant {
+    match attempt(dir, run, Ask::Floor, rules, cpu) {
         Admission::Unmeasured(why) => unmeasured(why, reclaimed),
         Admission::Measured { reclaimed: more, ticket, .. } => Grant {
-            jobs: 1,
+            jobs: FLOOR,
+            threads: FLOOR,
             detail: slot_detail(Slot::Degraded, reclaimed.saturating_add(more)),
             why: None,
             ticket,
@@ -399,13 +498,19 @@ fn degraded(dir: &Path, run: &str, rules: &Rules, reclaimed: u64) -> Grant {
     }
 }
 
-/// 測れなかった周: 札を置かず 1 枠で進む。
+/// 測れなかった周: 札を置かず 1 枠・1 thread で進む。
 fn unmeasured(why: Unreadable, reclaimed: u64) -> Grant {
-    Grant { jobs: 1, detail: slot_detail(Slot::Unmeasured, reclaimed), why: Some(why), ticket: None }
+    Grant {
+        jobs: FLOOR,
+        threads: FLOOR,
+        detail: slot_detail(Slot::Unmeasured, reclaimed),
+        why: Some(why),
+        ticket: None,
+    }
 }
 
 /// lock を取り、測り、札を書き、lock を離す（1 周）。
-fn attempt(dir: &Path, run: &str, ask: Ask, rules: &Rules) -> Admission {
+fn attempt(dir: &Path, run: &str, ask: Ask, rules: &Rules, cpu: Cpu) -> Admission {
     if fs::create_dir_all(dir).is_err() {
         return Admission::Unmeasured(Unreadable::SlotsDir);
     }
@@ -413,16 +518,16 @@ fn attempt(dir: &Path, run: &str, ask: Ask, rules: &Rules) -> Admission {
     if acquire(&lock, rules.policy).is_err() {
         return Admission::Unmeasured(Unreadable::Lock);
     }
-    let taken = take(dir, run, ask, rules.sizes);
+    let taken = take(dir, run, ask, rules.sizes, cpu);
     // 外せない lock は stale の線（rules 行 `fleet.lock_stale_ms`）が次の受付で外す。
     let _ = fs::remove_file(&lock);
     taken
 }
 
-/// lock の内側: meminfo を読み、札を回収して数え、枠が在れば札を書く。
+/// lock の内側: meminfo を読み、札を回収して数え、枠が在れば札を書く（枠は 3 項の min・[`room`]）。
 ///
 /// **meminfo を先に読む**——読めない周に札を回収すると、回収の数を record に残す口が無い。
-fn take(dir: &Path, run: &str, ask: Ask, sizes: Sizes) -> Admission {
+fn take(dir: &Path, run: &str, ask: Ask, sizes: Sizes, cpu: Cpu) -> Admission {
     let meminfo = fs::read_to_string(MEMINFO).unwrap_or_default();
     if capacity(&meminfo, sizes, 0) == Free::Unmeasured {
         return Admission::Unmeasured(Unreadable::Meminfo);
@@ -430,12 +535,12 @@ fn take(dir: &Path, run: &str, ask: Ask, sizes: Sizes) -> Admission {
     let Some(tokens) = live_tokens(dir) else {
         return Admission::Unmeasured(Unreadable::SlotsDir);
     };
-    let Free::Slots(free) = capacity(&meminfo, sizes, tokens.live_jobs) else {
+    let Free::Slots(free) = room(&meminfo, sizes, cpu, tokens.live_jobs) else {
         return Admission::Unmeasured(Unreadable::Meminfo);
     };
     let jobs = match ask {
         Ask::UpTo(want) => want.min(free),
-        Ask::Floor => 1,
+        Ask::Floor => FLOOR,
     };
     if jobs == 0 {
         return Admission::Measured { jobs, reclaimed: tokens.reclaimed, ticket: None };
@@ -463,7 +568,10 @@ fn write_ticket(dir: &Path, run: &str, jobs: u64) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::{capacity, judge, now_ms, slot_detail, ticket_started_ms, Free, Judged, Sizes, Slot, Ticket, Unreadable};
+    use super::{
+        by_cpu, capacity, cpu_of, judge, now_ms, room, slot_detail, ticket_started_ms, Cpu, Free, Judged, Sizes,
+        Slot, Ticket, Unreadable,
+    };
 
     // flip-check: retroactive s2-07l.222
     /// `Unreadable::as_str` は record の `slot_why=` の字面で、variant ごとに固定である（空や同じ字面に潰すと
@@ -473,6 +581,66 @@ mod tests {
         assert_eq!(Unreadable::SlotsDir.as_str(), "slots-dir");
         assert_eq!(Unreadable::Lock.as_str(), "lock");
         assert_eq!(Unreadable::Meminfo.as_str(), "meminfo");
+        assert_eq!(Unreadable::Cores.as_str(), "cores");
+    }
+
+    /// job 1 つの値段は `max(1, floor(cores / cap))`（設計 §31 約束 1・歯 (a)）。**cap 0 と cores 不明は別の形**:
+    /// cap 0 は 1 で割って値段 = cores、cores 不明は材料を組めない（`None`・0 や 1 に潰さない）。
+    #[test]
+    fn admission_cpu_price_is_cores_over_cap_floored_at_one() {
+        assert_eq!(Cpu::priced(16, 4).price, 4, "16 core / cap 4");
+        assert_eq!(Cpu::priced(16, 3).price, 5, "端数は切り捨て");
+        assert_eq!(Cpu::priced(2, 4).price, 1, "cores < cap でも床は 1");
+        assert_eq!(Cpu::priced(16, 1).price, 16, "cap 1 は core 数ぶん");
+        assert_eq!(Cpu::priced(16, 0), Cpu { cores: 16, price: 16 }, "cap 0 は 1 で割る（0 除算で落とさない）");
+        assert_eq!(cpu_of(Some(16), 0), Some(Cpu { cores: 16, price: 16 }), "cap 0 でも cores が在れば組める");
+        assert_eq!(cpu_of(None, 4), None, "cores 不明は組めない（cap 0 と弁別）");
+        assert_eq!(cpu_of(Some(8), 4), Some(Cpu { cores: 8, price: 2 }), "cores は測定値のまま運ぶ");
+    }
+
+    /// `by_cpu = floor(cores / price) − Σ 生きている札の jobs`（歯 (b)）: floor・差引・0 の床。
+    #[test]
+    fn admission_cpu_by_cpu_subtracts_live_jobs_and_floors_at_zero() {
+        let cpu = Cpu::priced(16, 4);
+        assert_eq!(by_cpu(cpu, 0), 4, "16 / 4 = 4 job");
+        assert_eq!(by_cpu(cpu, 3), 1, "生きている札の jobs を引く");
+        assert_eq!(by_cpu(cpu, 4), 0, "満杯");
+        assert_eq!(by_cpu(cpu, 99), 0, "0 の床（負へ回り込まない）");
+        assert_eq!(by_cpu(Cpu::priced(16, 3), 0), 3, "16 / 5 = 3（floor）");
+        assert_eq!(by_cpu(Cpu { cores: 7, price: 0 }, 0), 7, "price 0 は 1 で割る");
+    }
+
+    /// 3 項の min（歯 (c)）: **CPU 側で決まる** fixture（memory は潤沢・core が細い）と **memory 側で決まる**
+    /// fixture の両方で正しい——どちらか一方だけの歯は、min の項を落としても緑になる。
+    #[test]
+    fn admission_cpu_room_is_the_min_of_memory_and_cpu_terms() {
+        // memory: by_avail = (70000 − 2000) / 1000 = 68・by_token = (100000 − 2000) / 1000 = 98 → 68。
+        let rich = meminfo(100_000, 70_000);
+        assert_eq!(capacity(&rich, SIZES, 0), Free::Slots(68), "memory の 2 項は不変");
+        // CPU: 4 core / cap 4 → price 1 → by_cpu = 4 − 0 = 4 が min。
+        assert_eq!(room(&rich, SIZES, Cpu::priced(4, 4), 0), Free::Slots(4), "CPU 側で決まる");
+        assert_eq!(room(&rich, SIZES, Cpu::priced(4, 4), 3), Free::Slots(1), "CPU 側から札の jobs を引く");
+        // memory: by_avail = (7000 − 2000) / 1000 = 5・CPU: 64 core / cap 4 → price 16 → by_cpu = 4。
+        let lean = meminfo(10_000, 7_000);
+        assert_eq!(room(&lean, SIZES, Cpu::priced(64, 4), 0), Free::Slots(4), "CPU 4 < memory 5");
+        // memory: 5・CPU: 64 core / cap 8 → price 8 → by_cpu = 8 > 5。
+        assert_eq!(room(&lean, SIZES, Cpu::priced(64, 8), 0), Free::Slots(5), "memory 側で決まる");
+        // 札の jobs は両側から引く: memory by_token = 8 − 4 = 4・by_avail 5・CPU 8 − 4 = 4 → 4。
+        assert_eq!(room(&lean, SIZES, Cpu::priced(64, 8), 4), Free::Slots(4), "by_token が min 側");
+        // 読めない meminfo は CPU が潤沢でも `Unmeasured`（0 にも CPU の値にも潰さない）。
+        assert_eq!(room("", SIZES, Cpu::priced(64, 8), 0), Free::Unmeasured, "meminfo が読めない");
+    }
+
+    /// cores を読めない周の閉じた理由（歯 (d)）: 材料を組めず（`cpu_of` が `None`）、record の `slot_why=` の
+    /// 字面は固定の `cores`（他の理由と同じ字面に潰さない）。
+    #[test]
+    fn admission_cpu_unreadable_cores_has_a_fixed_reason() {
+        assert_eq!(cpu_of(None, 4), None, "読めない cores は測れなかった側");
+        assert_eq!(Unreadable::Cores.as_str(), "cores");
+        for other in [Unreadable::SlotsDir, Unreadable::Lock, Unreadable::Meminfo] {
+            assert_ne!(other.as_str(), Unreadable::Cores.as_str(), "{other:?} と弁別できる");
+        }
+        assert_eq!(slot_detail(Slot::Unmeasured, 0), "unmeasured", "縮退の名は従来のまま");
     }
 
     // flip-check: retroactive s2-07l.222

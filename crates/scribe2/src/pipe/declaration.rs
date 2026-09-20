@@ -153,13 +153,18 @@ pub const BASE_HOLE: &str = "{base}";
 /// （C2.2 の精神・折り返しの裏口を作らない）ので、宣言の行に穴として書く。
 pub const JOBS_HOLE: &str = "{jobs}";
 
-/// **宣言の共通 verify に置ける穴の閉じた集合**。
+/// **job 1 つに許す thread を置く穴**（設計 gate-cost.md §31・ADR-0050）。値段は器の受付が cores の
+/// 実測と `gate.mutants_jobs` から決め（[`crate::pipe::admission::Cpu`]）、道具は受けた値をそのまま
+/// test 走行へ渡すだけである（cores からの導出を道具に持たせない＝導出の正本は器の 1 か所）。
+pub const THREADS_HOLE: &str = "{threads}";
+
+/// **宣言の共通 verify に置ける穴の閉じた集合**（3 つちょうど）。
 ///
 /// ADR-0010 §2.1 は穴を `{base}` 1 つと定めたが、ADR-0021 §2.1 がそれを部分 supersede して
 /// 集合にした。集合をここ 1 本に閉じるのは、[`unfit`] の判定と gate の置換が**同じ列**を
 /// 見るためである——片方だけに穴を足すと、intake を通った行が gate で置換されないまま
 /// 撃たれる（`{jobs}` という語をそのまま `--jobs` へ渡す）。
-pub const BASE_HOLES: &[&str] = &[BASE_HOLE, JOBS_HOLE];
+pub const BASE_HOLES: &[&str] = &[BASE_HOLE, JOBS_HOLE, THREADS_HOLE];
 
 /// 行が置ける穴。**穴の可否だけが宣言の共通 verify と契約の verify の違い**である。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -779,7 +784,7 @@ mod tests {
 
     use super::{
         unfit, Basis, Ceiling, Declared, Effective, Holes, Sourced, Unfit, BASE_HOLES, BASE_HOLE, CEILING_ROW, DECL_FILE,
-        DEFAULT_CI_CMD, DENIED_ROW, CI_SHA_HOLE, JOBS_HOLE,
+        DEFAULT_CI_CMD, DENIED_ROW, CI_SHA_HOLE, JOBS_HOLE, THREADS_HOLE,
     };
     use crate::order::is_declaration_order;
 
@@ -806,7 +811,7 @@ mod tests {
     fn declaration_accepts_only_the_closed_set_of_holes_in_common_verify() {
         let (allowed, denied) = (strings(&["cargo"]), denied());
         let basis = Basis { allowed: &allowed, denied: &denied };
-        assert_eq!(BASE_HOLES, [BASE_HOLE, JOBS_HOLE], "集合は 2 つちょうど");
+        assert_eq!(BASE_HOLES, [BASE_HOLE, JOBS_HOLE, THREADS_HOLE], "集合は 3 つちょうど");
         for hole in BASE_HOLES {
             let line = format!("cargo xtask mutants-diff --base {hole}");
             assert_eq!(unfit(&line, &basis, Holes::Base), None, "{hole} は共通 verify に置ける");
@@ -825,12 +830,48 @@ mod tests {
                 "{outside} は置けない穴である"
             );
         }
-        // 2 つを同じ行に置ける（scribe2 自身の宣言の形）。
+        // 2 つを同じ行に置ける（`{threads}` を持たない consumer の宣言の形）。
         assert_eq!(
             unfit("cargo xtask mutants-diff --base {base} --jobs {jobs}", &basis, Holes::Base),
             None,
             "2 つの穴を同じ行に置ける"
         );
+    }
+
+    /// 宣言の置ける穴の閉じた集合は **3 つちょうど**で、3 つ目（`{threads}`）を持つ検出線の行は intake を通り、
+    /// 集合の外の穴は従来どおり不適合に落ちる（設計 gate-cost.md §31 約束 6）。
+    ///
+    /// 3 つ目を足したことと集合を広げすぎていないことを同じ歯で pin する（集合を 2 つに戻す変異は 1 本目で、
+    /// 穴を全部通す変異は綴り違いの列で落ちる）。
+    #[test]
+    fn declaration_threads_hole_is_the_third_and_last_hole() {
+        let (allowed, denied) = (strings(&["cargo"]), denied());
+        let basis = Basis { allowed: &allowed, denied: &denied };
+        assert_eq!(BASE_HOLES.len(), 3, "穴は 3 つちょうど: {BASE_HOLES:?}");
+        assert_eq!(BASE_HOLES.last().copied(), Some(THREADS_HOLE), "3 つ目が {THREADS_HOLE}");
+        assert_eq!(THREADS_HOLE, "{threads}", "穴の字面は固定（宣言 file に書く語）");
+        // scribe2 自身の検出線の形（3 つの穴を同じ行に置ける）。
+        let line = "cargo xtask mutants-diff --base {base} --jobs {jobs} --threads {threads}";
+        assert_eq!(unfit(line, &basis, Holes::Base), None, "3 つの穴の行は intake を通る");
+        assert_eq!(
+            unfit(line, &basis, Holes::None),
+            Some(Unfit::Hole(BASE_HOLE.to_owned())),
+            "契約の verify には 1 つも置けない（最初の穴で断る）"
+        );
+        assert_eq!(
+            unfit("cargo xtask mutants-diff --threads {threads}", &basis, Holes::None),
+            Some(Unfit::Hole(THREADS_HOLE.to_owned())),
+            "{THREADS_HOLE} も契約の verify には置けない"
+        );
+        // 集合の外は綴り違いでも断る（3 つ目を足しても 4 つ目は無い）。
+        for outside in ["{thread}", "{threadz}", "{test-threads}", "{THREADS}", "{cores}", "{price}"] {
+            let line = format!("cargo xtask mutants-diff --threads {outside}");
+            assert_eq!(
+                unfit(&line, &basis, Holes::Base),
+                Some(Unfit::Hole(outside.to_owned())),
+                "{outside} は置けない穴である"
+            );
+        }
     }
 
     /// 禁じる語列（ADR-0025 §2.3）は unfit の 6 つ目の理由: 先頭語が allowlist に在っても、rules 行 `runner.denied_commands`

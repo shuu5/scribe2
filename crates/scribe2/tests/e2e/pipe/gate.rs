@@ -1837,28 +1837,46 @@ fn plant_ticket(state: &Path, pid: u64, jobs: u64) -> PathBuf {
 ///
 /// 札は行の終了で消えるので、外から gate の後に見ても「在った」ことは測れない。行の中から
 /// dir の中身と札の本文を git の dir へ写す（script の本文は宣言の検査の外）。
+fn commit_slot_vessel(repo: &Path, state: &Path) {
+    commit_slot_vessel_line(repo, state, SLOT_JOBS_LINE);
+}
+
+/// 受付の歯の `{jobs}` の行（穴は 2 つ・`{threads}` を持たない consumer の形）。
+const SLOT_JOBS_LINE: &str = "sh verify-slot.sh {jobs}";
+
+/// 受付の歯の `{jobs}` と `{threads}` の行（3 つ目の穴を持つ検出線と同じ形・設計 gate-cost.md §31 約束 6）。
+const SLOT_THREADS_LINE: &str = "sh verify-slot.sh {jobs} {threads}";
+
+/// [`commit_slot_vessel`] の `{jobs}` の行を差し替える形。撃たれた側は `$1`（jobs）と `$2`（threads・
+/// 行に無ければ空）を別の file へ写す。
 #[expect(
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
-fn commit_slot_vessel(repo: &Path, state: &Path) {
+fn commit_slot_vessel_line(repo: &Path, state: &Path, jobs_line: &str) {
     let slots = host_slots(state);
     let dir = slots.display();
     let seen = "\"$(git rev-parse --absolute-git-dir)\"";
     let plain = format!("ls -A '{dir}' > {seen}/slots-plain 2>/dev/null\nexit 0\n");
     let jobs = format!(
-        "printf '%s' \"$1\" > {seen}/jobs-seen\nls -A '{dir}' > {seen}/slots-during 2>/dev/null\n\
+        "printf '%s' \"$1\" > {seen}/jobs-seen\nprintf '%s' \"$2\" > {seen}/threads-seen\n\
+         ls -A '{dir}' > {seen}/slots-during 2>/dev/null\n\
          cat '{dir}'/*.slot > {seen}/slots-body 2>/dev/null\nexit 0\n"
     );
     fs::write(repo.join("verify-slot-plain.sh"), plain).expect("script を書ける");
     fs::write(repo.join("verify-slot.sh"), jobs).expect("script を書ける");
     git(repo, &["add", "verify-slot-plain.sh", "verify-slot.sh"]);
-    commit_vessel(repo, VESSEL_ALLOWED, r#"["sh verify-slot-plain.sh", "sh verify-slot.sh {jobs}"]"#);
+    commit_vessel(repo, VESSEL_ALLOWED, &format!(r#"["sh verify-slot-plain.sh", "{jobs_line}"]"#));
 }
 
 /// 受付の歯の 1 便（stub の `systemd-run` で包める host を作り、`--rules` の fixture で gate）。
 fn slot_gate(repo: &Path, state: &Path) -> (String, Output) {
-    commit_slot_vessel(repo, state);
+    slot_gate_line(repo, state, SLOT_JOBS_LINE)
+}
+
+/// [`slot_gate`] の `{jobs}` の行を差し替える形。
+fn slot_gate_line(repo: &Path, state: &Path, jobs_line: &str) -> (String, Output) {
+    commit_slot_vessel_line(repo, state, jobs_line);
     let path = systemd_stub(state);
     let marker = state.join("lens-ran");
     confined_run(repo, state, &path, &fake_lens(&marker, &lens_verdict("PASS")))
@@ -2047,6 +2065,70 @@ fn pipe_slots_ticket_lives_only_during_the_jobs_line() {
     assert_eq!(value_of(&body, "run"), id, "札の run は便 id");
     // (5) 終了で札は消える。
     assert!(slot_names(&state).is_empty(), "(5) 終了で札が消える: {:?}", slot_names(&state));
+    clean(&[&repo, &state]);
+}
+
+/// この歯の host の core 数（gate の binary が同じ host で測る値と同じ口・読めない周は `None`）。
+fn host_cores() -> Option<u64> {
+    std::thread::available_parallelism()
+        .ok()
+        .and_then(|found| u64::try_from(found.get()).ok())
+}
+
+/// **3 つの穴を持つ行の置換後の `cmd` に実効 jobs と実効 thread が両方載る**（設計 gate-cost.md §31 約束 4 / 6）。
+///
+/// thread の値は受付が決める: 枠を配れた周は `max(1, floor(cores / gate.mutants_jobs))`（cores はこの歯が同じ
+/// host で測る）、縮退の周は 1（枠の可否は host の memory に依るので、record の `slot=` で読み分ける）。
+/// 撃たれた側（`$2`）も同じ値を受け取る＝record の字面だけの置換ではない。
+#[test]
+fn pipe_slots_threads_cmd_carries_effective_jobs_and_threads() {
+    let (repo, state) = repo_with_state();
+    let (id, gated) = slot_gate_line(&repo, &state, SLOT_THREADS_LINE);
+    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "gate: {}", stderr_of(&gated));
+    let row = slot_row(&verify_rows(&state, &id));
+    let slot = value_of(&row, "slot");
+    assert_ne!(slot, "unmeasured", "meminfo と cores の在る host では測れる: {row:?}");
+    let jobs = value_of(&row, "jobs");
+    let cmd = value_of(&row, "cmd");
+    let (head, threads) = cmd.rsplit_once(' ').unwrap_or_default();
+    assert_eq!(head, format!("sh verify-slot.sh {jobs}"), "置換後の cmd は jobs の後ろに thread を持つ: {cmd}");
+    let count: u64 = threads.parse().unwrap_or(0);
+    let cap = embedded_int("gate.mutants_jobs");
+    let price = host_cores().map_or(1, |cores| (cores / cap.max(1)).max(1));
+    if slot.starts_with("degraded") {
+        assert_eq!(count, 1, "縮退の周は thread も 1: {cmd}");
+        assert_eq!(jobs, "1", "縮退の周は jobs 1: {row:?}");
+    } else {
+        assert_eq!(count, price, "枠を配れた周の thread は値段 max(1, cores / cap): {cmd}");
+    }
+    assert!(count >= 1, "thread は 1 以上（0 と書かない）: {cmd}");
+    let git_dir = PathBuf::from(git(&worktree_of(&repo, &id), &["rev-parse", "--absolute-git-dir"]));
+    let read = |name: &str| fs::read_to_string(git_dir.join(name)).unwrap_or_default();
+    assert_eq!(read("jobs-seen"), jobs, "撃たれた側も同じ実効 jobs");
+    assert_eq!(read("threads-seen"), threads, "撃たれた側も同じ実効 thread");
+    clean(&[&repo, &state]);
+}
+
+/// **待ちの上限を超えた周の `cmd` は jobs も thread も 1**（設計 gate-cost.md §31 約束 4・`slot=degraded` と対）。
+///
+/// 塞ぐ札は自 pid（gate の間ずっと生きている）で jobs を host の総量より大きく置く＝memory の `by_token` も
+/// CPU の `by_cpu` も 0 になる。待ちの上限は rules fixture の `slot_wait_s = 1`。thread を `cores / 1` で導く
+/// 実装は縮退の周に core 数ぶんの thread を許す（2026-09-20 の事故の出所）ので、ここで 1 を pin する。
+#[test]
+fn pipe_slots_threads_degraded_run_gets_one_job_and_one_thread() {
+    let (repo, state) = repo_with_state();
+    let live = plant_ticket(&state, u64::from(std::process::id()), 1_000_000_000_000);
+    let (id, gated) = slot_gate_line(&repo, &state, SLOT_THREADS_LINE);
+    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "縮退しても便は流れる: {}", stderr_of(&gated));
+    let row = slot_row(&verify_rows(&state, &id));
+    assert_eq!(value_of(&row, "slot"), "degraded", "上限を超えた: {row:?}");
+    assert_eq!(value_of(&row, "jobs"), "1", "並列度 1 で進む");
+    assert_eq!(value_of(&row, "cmd"), "sh verify-slot.sh 1 1", "置換後の cmd は jobs 1・thread 1");
+    let git_dir = PathBuf::from(git(&worktree_of(&repo, &id), &["rev-parse", "--absolute-git-dir"]));
+    let read = |name: &str| fs::read_to_string(git_dir.join(name)).unwrap_or_default();
+    assert_eq!(read("jobs-seen"), "1", "撃たれた側の jobs も 1");
+    assert_eq!(read("threads-seen"), "1", "撃たれた側の thread も 1（core 数ぶんではない）");
+    assert!(live.exists(), "生きている札は回収しない");
     clean(&[&repo, &state]);
 }
 

@@ -32,6 +32,10 @@ pub enum Completion {
         reserve_mb: u64,
         /// 並列度の上限（rules 行 `gate.mutants_jobs`）。
         cap: u64,
+        /// host の core 数（受付が測った値・設計 gate-cost.md §31 約束 8）。観測が受付と同じ 3 項
+        /// （memory の 2 項 + CPU の 1 項）を測るために運ぶ——memory だけで解ける観測は、解けた直後の
+        /// 受付が CPU の項で 0 を出して待ち直す空回りになる。
+        cores: u64,
     },
     /// process group の全員が消えること（group 宛ての TERM / KILL の後・値は group id）。
     GroupGone(u32),
@@ -100,11 +104,12 @@ impl Completion {
         match self {
             Self::RunnerExited(pid) | Self::SeatGone(pid) => !pid_is_live(*pid),
             Self::GroupGone(group) => !group_is_live(*group),
-            Self::SlotFree { slots_dir, want, job_mb, reserve_mb, cap } => {
-                crate::pipe::admission::has_room(
+            Self::SlotFree { slots_dir, want, job_mb, reserve_mb, cap, cores } => {
+                crate::pipe::admission::has_room_on(
                     slots_dir,
                     (*want).min(*cap),
                     crate::pipe::admission::Sizes { job_mb: *job_mb, reserve_mb: *reserve_mb },
+                    crate::pipe::admission::Cpu::priced(*cores, *cap),
                 )
             }
             Self::LandTurn { .. } => self.round(None).met,
@@ -610,6 +615,7 @@ mod tests {
                 job_mb: 1,
                 reserve_mb: 1,
                 cap: 1,
+                cores: 1,
             },
             Completion::GroupGone(9),
             Completion::LandTurn { state_dir: std::path::PathBuf::from("state"), run: "r".to_owned() },
