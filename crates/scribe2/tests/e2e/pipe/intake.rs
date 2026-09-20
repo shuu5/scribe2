@@ -2361,7 +2361,7 @@ fn marker_runner(marker: &Path) -> String {
 }
 
 /// 便の `review.json` を key/value の並びとして読む（無ければ空）。
-fn review_pairs(state: &Path, id: &str) -> Vec<(String, vessel::fleet::json_lite::Value)> {
+pub(super) fn review_pairs(state: &Path, id: &str) -> Vec<(String, vessel::fleet::json_lite::Value)> {
     let text = fs::read_to_string(state.join("pipe").join(id).join("review.json")).unwrap_or_default();
     vessel::fleet::json_lite::parse_object(text.trim()).unwrap_or_default()
 }
@@ -2398,8 +2398,8 @@ fn reviewed_fail(repo: &Path, state: &Path) -> (String, PathBuf) {
 
 /// (a) 偽 lens が FAIL を返す契約は `Reviewed(FAIL)` で止まり **runner は 1 度も起きない**（構築点の呼出 0・AC22）:
 /// `pipe run` は rc 1 で intake の判定行と `stage=Reviewed verdict=FAIL` を出し、trail は `RunCreated(Intake)` →
-/// `RunStage(Reviewed, verdict:FAIL)` で終わる（Spawned 無し・worktree 無し）。`review.json` に verdict と evidence が
-/// 残り、`show` は `Reviewed` を名乗る。
+/// `RunStage(Reviewed, verdict:FAIL kind:unparsed)` で終わる（Spawned 無し・worktree 無し・`kind` を書かない偽 lens は
+/// 7 語目・`s2-07l.395`）。`review.json` に verdict と evidence が残り、`show` は `Reviewed` を名乗る。
 #[test]
 fn pipe_review_fail_stops_before_spawn() {
     let (repo, state) = repo_with_state();
@@ -2408,7 +2408,7 @@ fn pipe_review_fail_stops_before_spawn() {
         trail(&state, &id),
         vec![
             (EventKind::RunCreated, Some(Stage::Intake), Some("classes:".to_owned())),
-            (EventKind::RunStage, Some(Stage::Reviewed), Some("verdict:FAIL".to_owned())),
+            (EventKind::RunStage, Some(Stage::Reviewed), Some("verdict:FAIL kind:unparsed".to_owned())),
         ],
         "Reviewed(FAIL) が終端（Spawned 無し）"
     );
@@ -2461,7 +2461,7 @@ fn pipe_review_inconclusive_without_lens_or_unreadable_output_is_terminal() {
     ]);
     assert_eq!(out.status.code(), Some(i32::from(RC_INCONCLUSIVE)), "lens 無しは rc 3: {}", stderr_of(&out));
     let id = run_id_of(&out);
-    assert_eq!(stages(&state, &id), vec![(Some(Stage::Reviewed), Some("verdict:INCONCLUSIVE".to_owned()))]);
+    assert_eq!(stages(&state, &id), vec![(Some(Stage::Reviewed), Some("verdict:INCONCLUSIVE kind:unparsed".to_owned()))]);
     assert!(value_of(&review_pairs(&state, &id), "evidence").contains("--lens"), "{:?}", review_pairs(&state, &id));
     let marker = state.join("runner-ran");
     let spawned = spawn_with(&repo, &state, &id, &marker_runner(&marker));
@@ -2537,6 +2537,158 @@ fn pipe_review_pass_spawns() {
     let listed: Vec<Option<Stage>> = stages(&state, &id).into_iter().map(|(stage, _)| stage).collect();
     assert_eq!(listed, vec![Some(Stage::Reviewed), Some(Stage::Spawned), Some(Stage::Implemented)], "Reviewed → Spawned → Implemented");
     assert!(show_line(&repo, &state, &id).contains("stage=Implemented"));
+    clean(&[&repo, &state]);
+}
+
+// ───── 審査の理由の閉じた型（`s2-07l.395`・設計 contract-source.md §22・SRS FR49・接頭辞 `pipe_review_kind_`） ─────
+
+/// lens が最終行に書く 6 語（設計 §22 の (1)・宣言順）。**字面で pin する**——器の const slice を写すと語が
+/// 入れ替わっても緑のままになる。
+const LENS_KINDS: [&str; 6] = [
+    "teeth-outside-write-set",
+    "goal-done-contradiction",
+    "vacuous-assert",
+    "literal-mismatch",
+    "section-material-missing",
+    "other",
+];
+
+/// lens の `at` の fixture（`,` 区切りの語の列・空白を含まない）。
+const LENS_AT: &str = "crates/toy/src/lib.rs,§2,Marker";
+
+/// `kind` と `at` を持つ偽 lens の最終行（`kind` / `at` は `None` なら書かない）。
+fn lens_finding(verdict: &str, kind: Option<&str>, at: Option<&str>) -> String {
+    let mut body = format!("{{\"verdict\":\"{verdict}\",\"evidence\":\"fake\"");
+    if let Some(found) = kind {
+        body.push_str(&format!(",\"kind\":\"{found}\""));
+    }
+    if let Some(found) = at {
+        body.push_str(&format!(",\"at\":\"{found}\""));
+    }
+    body.push('}');
+    body
+}
+
+/// 既定の契約を `bead` で intake し、偽 lens に `line` を撃たせる（rc は測らない）。
+fn intake_with_lens(repo: &Path, state: &Path, bead: &str, line: &str) -> Output {
+    let path = write_contract(repo, &[], &[]);
+    let marker = state.join(format!("lens-ran-{bead}"));
+    run_pipe(&[
+        "intake", "--design", &path, "--bead", bead,
+        "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
+        "--rules", &ceiling_rules(state), "--lens", &fake_lens(&marker, line),
+    ])
+}
+
+/// `review.json` が key を持つか（`value_of` は無い key を空で返すので、不在と空を分けて測る）。
+fn review_has(state: &Path, id: &str, key: &str) -> bool {
+    review_pairs(state, id).iter().any(|(found, _)| found == key)
+}
+
+/// 便の `Reviewed` の detail（1 件だけ在ることを assert）。
+pub(super) fn reviewed_detail(state: &Path, id: &str) -> String {
+    let listed: Vec<String> = stages(state, id)
+        .into_iter()
+        .filter(|(stage, _)| *stage == Some(Stage::Reviewed))
+        .filter_map(|(_, detail)| detail)
+        .collect();
+    assert_eq!(listed.len(), 1, "Reviewed は 1 件: {listed:?}");
+    listed.into_iter().next().unwrap_or_default()
+}
+
+/// 歯 (1) **読みと書き**: FAIL の周に lens の `kind` と `at` が `review.json` の任意 field に逐語で残り、同じ周の event の
+/// detail は `verdict:FAIL kind:<k>` の **2 語だけ**（`at` は event に載せない）。6 語をそれぞれ書いた周でその語が
+/// 両面に残り、INCONCLUSIVE の周も同じ形。verdict の 3 値と rc は不変（FAIL は rc 1・INCONCLUSIVE は rc 3）。
+#[test]
+fn pipe_review_kind_fail_keeps_kind_and_at_in_review_json_and_two_word_detail() {
+    let (repo, state) = repo_with_state();
+    for (index, word) in LENS_KINDS.iter().enumerate() {
+        let bead = format!("s2-k{index}");
+        let out = intake_with_lens(&repo, &state, &bead, &lens_finding("FAIL", Some(word), Some(LENS_AT)));
+        assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{word}: FAIL は rc 1 のまま: {}", stderr_of(&out));
+        let id = run_id_of(&out);
+        let pairs = review_pairs(&state, &id);
+        assert_eq!(value_of(&pairs, "verdict"), "FAIL", "{word}: verdict は lens の値");
+        assert_eq!(value_of(&pairs, "kind"), *word, "{word}: kind が逐語で残る: {pairs:?}");
+        assert_eq!(value_of(&pairs, "at"), LENS_AT, "{word}: at が逐語で残る: {pairs:?}");
+        assert_eq!(value_of(&pairs, "evidence"), "fake", "{word}: 既存 key は不変");
+        assert_eq!(value_of(&pairs, "schema"), "1", "{word}: schema は 1 のまま");
+        let detail = reviewed_detail(&state, &id);
+        assert_eq!(detail, format!("verdict:FAIL kind:{word}"), "{word}: detail は 2 語");
+        assert_eq!(detail.split_whitespace().count(), 2, "{word}: at は event に載せない: {detail}");
+        assert!(!detail.contains(LENS_AT) && !detail.contains("§2"), "{word}: {detail}");
+    }
+    let out = intake_with_lens(&repo, &state, "s2-kinc", &lens_finding("INCONCLUSIVE", Some("other"), Some("x")));
+    assert_eq!(out.status.code(), Some(i32::from(RC_INCONCLUSIVE)), "INCONCLUSIVE は rc 3 のまま: {}", stderr_of(&out));
+    let id = run_id_of(&out);
+    let pairs = review_pairs(&state, &id);
+    assert_eq!((value_of(&pairs, "verdict"), value_of(&pairs, "kind"), value_of(&pairs, "at")), ("INCONCLUSIVE".to_owned(), "other".to_owned(), "x".to_owned()));
+    assert_eq!(reviewed_detail(&state, &id), "verdict:INCONCLUSIVE kind:other");
+    clean(&[&repo, &state]);
+}
+
+/// 歯 (1) の否定の枝: PASS の周は `review.json` に `kind` も `at` も持たず detail は `verdict:PASS` のまま——lens が PASS に
+/// `kind` / `at` を書いても持たない（PASS に理由の型は無い・空の値を作らない）。
+#[test]
+fn pipe_review_kind_pass_carries_neither_kind_nor_at() {
+    let (repo, state) = repo_with_state();
+    let out = intake_with_lens(&repo, &state, "s2-kpass", &lens_finding("PASS", Some("other"), Some(LENS_AT)));
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "PASS は rc 0: {}", stderr_of(&out));
+    let id = run_id_of(&out);
+    assert_eq!(value_of(&review_pairs(&state, &id), "verdict"), "PASS");
+    assert!(!review_has(&state, &id, "kind"), "PASS は kind を持たない: {:?}", review_pairs(&state, &id));
+    assert!(!review_has(&state, &id, "at"), "PASS は at を持たない: {:?}", review_pairs(&state, &id));
+    assert_eq!(reviewed_detail(&state, &id), "verdict:PASS", "detail は従来どおり 1 語");
+    clean(&[&repo, &state]);
+}
+
+/// 歯 (2) **7 語目へ倒す枝**: FAIL / INCONCLUSIVE で `kind` が無い周・語でない周は `unparsed` になり **verdict は lens の値
+/// のまま**（`other` にも INCONCLUSIVE にも化けない・C10）。JSON が読めない周・3 値でない周・rc≠0 の周・`--lens` 無しの
+/// 周（器が作る INCONCLUSIVE）も `unparsed`。どの周も `at` を持たない。
+#[test]
+fn pipe_review_kind_missing_or_unknown_or_unreadable_falls_to_unparsed_without_moving_the_verdict() {
+    let (repo, state) = repo_with_state();
+    for (bead, line, verdict, rc) in [
+        ("s2-u1", lens_finding("FAIL", None, None), "FAIL", RC_REFUSED),
+        ("s2-u2", lens_finding("FAIL", Some("bogus-word"), None), "FAIL", RC_REFUSED),
+        ("s2-u3", lens_finding("INCONCLUSIVE", None, None), "INCONCLUSIVE", RC_INCONCLUSIVE),
+        ("s2-u4", lens_finding("INCONCLUSIVE", Some("Other"), None), "INCONCLUSIVE", RC_INCONCLUSIVE),
+        ("s2-u5", lens_finding("FAIL", Some("unparsed"), None), "FAIL", RC_REFUSED),
+        ("s2-u6", "not-json".to_owned(), "INCONCLUSIVE", RC_INCONCLUSIVE),
+        ("s2-u7", lens_finding("MAYBE", Some("other"), None), "INCONCLUSIVE", RC_INCONCLUSIVE),
+    ] {
+        let out = intake_with_lens(&repo, &state, bead, &line);
+        assert_eq!(out.status.code(), Some(i32::from(rc)), "{bead}: rc は不変: {}", stderr_of(&out));
+        let id = run_id_of(&out);
+        let pairs = review_pairs(&state, &id);
+        assert_eq!(value_of(&pairs, "verdict"), verdict, "{bead}: verdict は動かない: {pairs:?}");
+        assert_eq!(value_of(&pairs, "kind"), "unparsed", "{bead}: 7 語目: {pairs:?}");
+        assert!(!review_has(&state, &id, "at"), "{bead}: at は無い: {pairs:?}");
+        assert_eq!(reviewed_detail(&state, &id), format!("verdict:{verdict} kind:unparsed"), "{bead}");
+    }
+    // 出力を読めない（rc≠0）・`--lens` 無し（器が作る INCONCLUSIVE の 2 形・残る 3 形は stop.rs / ratelimit.rs と in-crate）。
+    let path = write_contract(&repo, &[], &[]);
+    let out = run_pipe(&[
+        "intake", "--design", &path, "--bead", "s2-u8",
+        "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
+        "--rules", &ceiling_rules(&state), "--lens", "cat >/dev/null; exit 7",
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_INCONCLUSIVE)), "{}", stderr_of(&out));
+    let id = run_id_of(&out);
+    assert_eq!(value_of(&review_pairs(&state, &id), "kind"), "unparsed", "rc 7 は 7 語目");
+    assert_eq!(reviewed_detail(&state, &id), "verdict:INCONCLUSIVE kind:unparsed");
+    let out = run_pipe(&[
+        "intake", "--design", &path, "--bead", "s2-u9",
+        "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
+        "--rules", &ceiling_rules(&state),
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_INCONCLUSIVE)), "{}", stderr_of(&out));
+    let id = run_id_of(&out);
+    let pairs = review_pairs(&state, &id);
+    assert!(value_of(&pairs, "evidence").contains("--lens"), "理由は lens 無しのまま: {pairs:?}");
+    assert_eq!(value_of(&pairs, "kind"), "unparsed", "--lens 無しは 7 語目: {pairs:?}");
+    assert!(!review_has(&state, &id, "at"), "{pairs:?}");
+    assert_eq!(reviewed_detail(&state, &id), "verdict:INCONCLUSIVE kind:unparsed");
     clean(&[&repo, &state]);
 }
 

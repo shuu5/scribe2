@@ -537,3 +537,38 @@ fn pipe_spawn_terminal_reason_mark_keeps_the_conflict_readable() {
     assert!(stderr_of(&resumed).contains("--runner が要る"), "(ii) 衝突の記帳を読む: {}", stderr_of(&resumed));
     clean(&[&repo, &state]);
 }
+
+// ───── 審査の理由の閉じた型・器が作る INCONCLUSIVE の「scope の中で死んだ」形（`s2-07l.395`・設計 contract-source.md §22） ─────
+
+/// 審査の lens の起動が偽 `systemd-run` を通った（包めた）か（[`runner_was_confined`] の審査の側）。
+fn lens_was_confined(state: &Path) -> bool {
+    fs::read_to_string(state.join(CONFINED_CALLS))
+        .unwrap_or_default()
+        .lines()
+        .any(|line| line.contains("--scope") && line.contains("-review-"))
+}
+
+/// 歯 (2) の 5 形のうち「scope の中で死んだ」: **包める周**（[`confined_path`]）で審査の lens が自分を signal で殺すと、
+/// 器は INCONCLUSIVE（`scope の中で死んだ`）を作り、理由の型は 7 語目 `unparsed`・`at` は無い・detail は
+/// `verdict:INCONCLUSIVE kind:unparsed`・rc 3。包めたことを argv の写しで測る（包めない host では別の理由に落ちて
+/// 空虚に充足する）。
+#[test]
+fn pipe_review_kind_lens_killed_in_scope_is_unparsed() {
+    let (repo, state) = repo_with_state();
+    let contract = write_contract(&repo, &[], &[]);
+    let out = run_pipe_with_path(&confined_path(&state), &[
+        "intake", "--design", &contract, "--bead", "s2-scope",
+        "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
+        "--rules", &ceiling_rules(&state), "--lens", "kill -9 $$",
+    ]);
+    assert!(lens_was_confined(&state), "前提: lens は包めた周で起きた（空虚な充足にしない）");
+    assert_eq!(out.status.code(), Some(i32::from(RC_INCONCLUSIVE)), "箱の中の死は INCONCLUSIVE: {}", stderr_of(&out));
+    let id = run_id_of(&out);
+    let pairs = intake::review_pairs(&state, &id);
+    assert_eq!(value_of(&pairs, "verdict"), "INCONCLUSIVE", "{pairs:?}");
+    assert!(value_of(&pairs, "evidence").contains("scope の中で死んだ"), "理由は箱の中の死: {pairs:?}");
+    assert_eq!(value_of(&pairs, "kind"), "unparsed", "lens の JSON が無い周は 7 語目: {pairs:?}");
+    assert!(!pairs.iter().any(|(key, _)| key == "at"), "at は無い: {pairs:?}");
+    assert_eq!(intake::reviewed_detail(&state, &id), "verdict:INCONCLUSIVE kind:unparsed");
+    clean(&[&repo, &state]);
+}

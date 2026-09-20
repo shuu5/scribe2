@@ -1228,7 +1228,8 @@ fn lens_contract_prompt_of_fixed_fixture() -> String {
 }
 
 /// 契約の隣に材料の 2 file が在る周は雛形が契約の審査（`lens-contract.txt`）に切り替わる: 契約の各面と設計の節と
-/// 要件本文がそれぞれの見出しの下に載り（順は 契約 → 設計の節 → 要件）、観点は 3 つで出力の形は diff の審査と同じ。
+/// 要件本文がそれぞれの見出しの下に載り（順は 契約 → 設計の節 → 要件）、観点は 3 つで出力の形は diff の審査の
+/// 2 key に理由の型 `kind` と場所 `at` の穴を足したもの（設計 contract-source.md §22・`s2-07l.395`）。
 #[test]
 fn headless_lens_contract_prompt_places_material_under_its_headings() {
     let prompt = lens_contract_prompt_of_fixed_fixture();
@@ -1247,7 +1248,14 @@ fn headless_lens_contract_prompt_places_material_under_its_headings() {
     for point in ["1. **契約と設計の節の適合**", "2. **設計が名指す状態遷移の一周**", "3. **write-set の連鎖**"] {
         assert_eq!(prompt.matches(point).count(), 1, "観点 {point} がちょうど 1 回: {prompt}");
     }
-    assert!(prompt.contains(r#"{"verdict":"PASS|FAIL|INCONCLUSIVE","evidence":"<根拠を 1 行で>"}"#), "出力の形は同じ: {prompt}");
+    assert!(
+        prompt.contains(r#"{"verdict":"PASS|FAIL|INCONCLUSIVE","evidence":"<根拠を 1 行で>","kind":"<理由の型>","at":"<指した場所>"}"#),
+        "出力の形は diff の審査の 2 key に kind と at の穴を足したもの: {prompt}"
+    );
+    for word in ["teeth-outside-write-set", "goal-done-contradiction", "vacuous-assert", "literal-mismatch", "section-material-missing", "other"] {
+        assert_eq!(prompt.matches(&format!("`{word}`")).count(), 1, "kind の語 {word} がちょうど 1 回: {prompt}");
+    }
+    assert!(!prompt.contains("`unparsed`"), "7 語目 unparsed は器が倒す側で lens の語彙ではない: {prompt}");
 }
 
 /// 契約の審査の prompt は diff の節と裁定の節を持たず **stdin は読まれない**（stdin の字面は prompt に載らない）。

@@ -15,6 +15,13 @@
 //! **偽の PASS を作らない**（AC3 / FR9）。lens が無い・起動できない・出力を読めない・3 値の外はすべて
 //! INCONCLUSIVE（終端）。材料の欠け（設計 pointer でない `design`・読めない要件面・要件面に無い id）は
 //! 材料の本文に**明示の 1 行**として載せ（C10・空を黙らせない）、判定は lens が持つ。
+//!
+//! PASS でない判定は**理由の型**（[`FindingKind`]・設計 contract-source.md §22）を持つ。lens が最終行の JSON の
+//! `kind` に書く閉じた 6 語を読み、`review.json` に `kind` と `at`（指した場所の列）を任意 field で足し、event の
+//! detail を `verdict:<V> kind:<k>` の 2 語にする（`at` は event に載せない・PASS は `verdict:PASS` のまま）。lens の
+//! JSON が無い周（器が作る INCONCLUSIVE）と `kind` が無い・語でない周は 7 語目 [`FindingKind::Unparsed`] に倒し、
+//! **verdict は lens の値のまま**（理由の欠けを INCONCLUSIVE や `other` に化けさせない・C10）。`pipe report` は
+//! event の detail からこの型を数える（[`read_detail`]）。
 
 use super::contract::Contract;
 use super::gate::{last_json_object, Verdict};
@@ -100,6 +107,87 @@ impl ReviewCheck {
     }
 }
 
+/// 審査が PASS にならなかった理由の閉じた型（設計 contract-source.md §22・`s2-07l.395`）。
+///
+/// 先頭の 6 語は lens が最終行の JSON の `kind` に書く語彙（`headless/lens-contract.txt`）。7 語目
+/// [`Self::Unparsed`] は**器が倒す側**——lens の JSON が無い周（`--lens` 無し・写しを読めない・起動できない・
+/// 出力を読めない・scope の中で死んだ）と、JSON は在るが `kind` が無い・語でない周。理由の欠けを `other` に
+/// 化けさせない（C10）ので lens の語彙には含めない。型は理由の語彙であって閾値でも極性でもない＝rules 行に
+/// 置かない（閉じた enum の領分）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FindingKind {
+    /// verify の歯が write-set の外の file に在る。
+    TeethOutsideWriteSet,
+    /// goal と done が矛盾する。
+    GoalDoneContradiction,
+    /// 歯が空虚で done を測れない。
+    VacuousAssert,
+    /// 契約の字面が設計の節・要件の現物と合わない。
+    LiteralMismatch,
+    /// 設計の節や要件の材料が欠けている。
+    SectionMaterialMissing,
+    /// 上のどれでもない（lens が判断した「その他」）。
+    Other,
+    /// lens の JSON が無い・`kind` が無い・語でない（器が倒す 7 語目）。
+    Unparsed,
+}
+
+/// [`FindingKind`] の全 variant（宣言順・`pipe report` の `by_kind=` はこの順で 7 語とも出す）。
+pub const FINDING_KINDS: &[FindingKind] = &[
+    FindingKind::TeethOutsideWriteSet,
+    FindingKind::GoalDoneContradiction,
+    FindingKind::VacuousAssert,
+    FindingKind::LiteralMismatch,
+    FindingKind::SectionMaterialMissing,
+    FindingKind::Other,
+    FindingKind::Unparsed,
+];
+
+impl FindingKind {
+    /// `review.json` の `kind`・event の `kind:<k>`・report の `by_kind=` に書く字面。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::TeethOutsideWriteSet => "teeth-outside-write-set",
+            Self::GoalDoneContradiction => "goal-done-contradiction",
+            Self::VacuousAssert => "vacuous-assert",
+            Self::LiteralMismatch => "literal-mismatch",
+            Self::SectionMaterialMissing => "section-material-missing",
+            Self::Other => "other",
+            Self::Unparsed => "unparsed",
+        }
+    }
+
+    /// 字面から引く。7 語の外は `None`（＝呼び手が [`Self::Unparsed`] へ倒す）。
+    pub fn parse(text: &str) -> Option<Self> {
+        FINDING_KINDS.iter().copied().find(|found| found.as_str() == text)
+    }
+}
+
+/// event の detail の `kind:` の頭（書き手 [`detail_of`] と読み手 [`read_detail`] の同じ 1 つ）。
+const KIND_HEAD: &str = "kind:";
+
+/// event の detail の `verdict:` の頭。
+const VERDICT_HEAD: &str = "verdict:";
+
+/// `RunStage stage=Reviewed` の detail の字面: `verdict:<V>`（PASS）か `verdict:<V> kind:<k>`（PASS でない）。
+/// **`at` は載せない**——`,` 区切りの語の列を空白区切りの detail に置くと [`read_detail`] の token の読みと衝突する。
+fn detail_of(verdict: Verdict, kind: Option<FindingKind>) -> String {
+    match kind {
+        Some(found) => format!("{VERDICT_HEAD}{} {KIND_HEAD}{}", verdict.as_str(), found.as_str()),
+        None => format!("{VERDICT_HEAD}{}", verdict.as_str()),
+    }
+}
+
+/// `Reviewed` の detail から (verdict, 理由の型) を読む（`pipe report` の母集団の読み手・[`detail_of`] の対）。
+/// verdict が 3 値の外・無い周は `None`（呼び手は「PASS でない」側に数える＝壊れた detail を PASS に化けさせない）。
+/// `kind:` を持たない古い event と語でない `kind:` は [`FindingKind::Unparsed`]。
+pub fn read_detail(detail: &str) -> (Option<Verdict>, FindingKind) {
+    let token = |head: &str| detail.split_whitespace().find_map(|word| word.strip_prefix(head));
+    let verdict = token(VERDICT_HEAD).and_then(Verdict::parse);
+    let kind = token(KIND_HEAD).and_then(FindingKind::parse).unwrap_or(FindingKind::Unparsed);
+    (verdict, kind)
+}
+
 /// 便の `review.json`。
 pub fn review_path(state_dir: &Path, id: &str) -> PathBuf {
     run_dir(state_dir, id).join(REVIEW_FILE)
@@ -149,6 +237,26 @@ struct Material {
     requirements: String,
 }
 
+/// 審査の判定 1 件（verdict と根拠と、PASS でない周の理由の型と場所）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Finding {
+    /// 3 値。
+    verdict: Verdict,
+    /// 根拠の 1 行（lens の `evidence`・器が作る INCONCLUSIVE はその理由）。
+    evidence: String,
+    /// 理由の型。**PASS の周は `None`**（PASS に理由の型は無い・空の値を作らない）・PASS でない周は必ず `Some`。
+    kind: Option<FindingKind>,
+    /// lens が `at` に書いた指した場所の列（`,` 区切りの語・書いた周だけ・PASS の周は `None`）。
+    at: Option<String>,
+}
+
+impl Finding {
+    /// 器が作る INCONCLUSIVE（lens の判定に届かなかった周・理由の型は [`FindingKind::Unparsed`]）。
+    fn inconclusive(evidence: String) -> Self {
+        Self { verdict: Verdict::Inconclusive, evidence, kind: Some(FindingKind::Unparsed), at: None }
+    }
+}
+
 /// 審査を 1 回通す。
 pub fn review(entry: &Review<'_>) -> Outcome {
     let material = materials(entry);
@@ -156,8 +264,9 @@ pub fn review(entry: &Review<'_>) -> Outcome {
         Ok(found) => found,
         Err(reason) => return broken(reason),
     };
-    let (verdict, evidence, scope) = decide(entry, &contract);
-    match settle(entry, verdict, &evidence, scope) {
+    let (finding, scope) = decide(entry, &contract);
+    let verdict = finding.verdict;
+    match settle(entry, &finding, scope) {
         Err(reason) => broken(reason),
         Ok(()) => Outcome {
             out: vec![format!("run={} stage={} verdict={}", entry.run, Stage::Reviewed.as_str(), verdict.as_str())],
@@ -472,17 +581,25 @@ fn keep(entry: &Review<'_>, material: &Material) -> Result<PathBuf, String> {
     Ok(contract)
 }
 
+/// lens の cmd（在る周）か、lens に届かない理由の INCONCLUSIVE。**無いと読めないは別の理由**（設計 pipeline.md
+/// §26・C10・gate の判定順と同じ 3 値の match）。どちらも lens の JSON が無い周なので理由の型は 7 語目。
+fn lens_cmd(source: &LensSource) -> Result<&str, Finding> {
+    match source {
+        LensSource::Cmd(cmd) => Ok(cmd.as_str()),
+        LensSource::Absent => Err(Finding::inconclusive("lens が要るのに --lens が無い".to_owned())),
+        LensSource::Unreadable { path, reason } => {
+            Err(Finding::inconclusive(format!("lens の写し {} を読めない（{reason}）", path.display())))
+        }
+    }
+}
+
 /// lens を 1 回撃って判定を得る（**wildcard 無し・判定に届かない周は INCONCLUSIVE**）。
 ///
-/// 3 つ目は lens の scope を片付けた結果（record に書く周だけ `Some`）。
-fn decide(entry: &Review<'_>, contract: &Path) -> (Verdict, String, Option<confine::Released>) {
-    // **無いと読めないは別の理由**（設計 pipeline.md §26・C10・gate の判定順と同じ 3 値の match）。
-    let cmd = match entry.lens {
-        LensSource::Cmd(cmd) => cmd.as_str(),
-        LensSource::Absent => return (Verdict::Inconclusive, "lens が要るのに --lens が無い".to_owned(), None),
-        LensSource::Unreadable { path, reason } => {
-            return (Verdict::Inconclusive, format!("lens の写し {} を読めない（{reason}）", path.display()), None);
-        }
+/// 2 つ目は lens の scope を片付けた結果（record に書く周だけ `Some`）。
+fn decide(entry: &Review<'_>, contract: &Path) -> (Finding, Option<confine::Released>) {
+    let cmd = match lens_cmd(entry.lens) {
+        Ok(found) => found,
+        Err(finding) => return (finding, None),
     };
     // **渡すのは path であって本文ではない**（cmd は `sh -c` の 1 行）。穴は gate と同じ 2 つで、`{worktree}` は
     // 便の worktree がまだ無いので base の repo（lens が憲法を読む cwd）を置く。**1 走査で埋める**。
@@ -502,58 +619,76 @@ fn decide(entry: &Review<'_>, contract: &Path) -> (Verdict, String, Option<confi
         .spawn();
     let mut child = match spawned {
         Ok(found) => found,
-        Err(err) => return (Verdict::Inconclusive, format!("lens を起動できない: {err}"), None),
+        Err(err) => return (Finding::inconclusive(format!("lens を起動できない: {err}")), None),
     };
     drop(child.stdin.take());
     let waited = child.wait_with_output();
     let scope = confine::release_scope(&confinement);
-    let (verdict, evidence) = lens_outcome(waited, &confinement);
-    (verdict, evidence, scope)
+    (lens_outcome(waited, &confinement), scope)
 }
 
 /// 終わった lens の出力から判定を読む（箱の中の死 → rc → 最後の JSON 行の順・gate の lens と同じ極性）。
-fn lens_outcome(waited: std::io::Result<std::process::Output>, confinement: &confine::Confinement) -> (Verdict, String) {
+fn lens_outcome(waited: std::io::Result<std::process::Output>, confinement: &confine::Confinement) -> Finding {
     let out = match waited {
         Ok(found) => found,
-        Err(err) => return (Verdict::Inconclusive, format!("lens の出力を読めない: {err}")),
+        Err(err) => return Finding::inconclusive(format!("lens の出力を読めない: {err}")),
     };
     let text = String::from_utf8_lossy(&out.stdout);
     if confinement.confined() {
         let killed = confine::read_usage(&text).oom_kill.is_some_and(|count| count >= 1).then_some(confine::Reason::OomKill);
         let killed = killed.or_else(|| out.status.code().is_none().then_some(confine::Reason::Signal));
         if let Some(reason) = killed {
-            return (Verdict::Inconclusive, format!("lens が scope の中で死んだ（reason={}）", reason.as_str()));
+            return Finding::inconclusive(format!("lens が scope の中で死んだ（reason={}）", reason.as_str()));
         }
     }
     if !out.status.success() {
         let rc = out.status.code().unwrap_or(-1);
-        return (Verdict::Inconclusive, format!("lens が rc {rc} で終わった"));
+        return Finding::inconclusive(format!("lens が rc {rc} で終わった"));
     }
     parse_lens(&text)
 }
 
-/// lens の stdout の最後の JSON 行から 3 値を読む。読めない周・3 値の外は INCONCLUSIVE（FR9）。
-fn parse_lens(text: &str) -> (Verdict, String) {
+/// lens の stdout の最後の JSON 行から 3 値と理由の型を読む。読めない周・3 値の外は INCONCLUSIVE（FR9）。
+///
+/// PASS でない周の `kind` は閉じた語彙で読み、無い・語でない周は [`FindingKind::Unparsed`] に倒して **verdict は
+/// lens の値のまま**（理由の欠けで判定を動かさない・C10）。`at` は文字列で在る周だけ写す。PASS の周は `kind` も
+/// `at` も読まない（lens が書いても持たない＝PASS に理由の型は無い）。
+fn parse_lens(text: &str) -> Finding {
     let pairs = match last_json_object(text) {
         Ok(parsed) => parsed,
-        Err(reason) => return (Verdict::Inconclusive, format!("lens の{reason}")),
+        Err(reason) => return Finding::inconclusive(format!("lens の{reason}")),
     };
     let get = |key: &str| pairs.iter().find(|(found, _)| found == key).and_then(|(_, value)| value.as_str());
     let evidence = get("evidence").unwrap_or_default().to_owned();
-    match get("verdict").and_then(Verdict::parse) {
-        Some(verdict) => (verdict, evidence),
-        None => (Verdict::Inconclusive, "lens の verdict が 3 値でない".to_owned()),
+    let Some(verdict) = get("verdict").and_then(Verdict::parse) else {
+        return Finding::inconclusive("lens の verdict が 3 値でない".to_owned());
+    };
+    match verdict {
+        Verdict::Pass => Finding { verdict, evidence, kind: None, at: None },
+        Verdict::Fail | Verdict::Inconclusive => Finding {
+            verdict,
+            evidence,
+            kind: Some(get("kind").and_then(FindingKind::parse).unwrap_or(FindingKind::Unparsed)),
+            at: get("at").map(str::to_owned),
+        },
     }
 }
 
-/// 判定を `review.json` へ atomic に書き、`Reviewed` を 1 件追記する。
-fn settle(entry: &Review<'_>, verdict: Verdict, evidence: &str, scope: Option<confine::Released>) -> Result<(), String> {
+/// 判定を `review.json` へ atomic に書き、`Reviewed` を 1 件追記する。`kind` と `at` は任意 field（schema 1 のまま・
+/// 古い読み手は無視・PASS の周は無い）。
+fn settle(entry: &Review<'_>, finding: &Finding, scope: Option<confine::Released>) -> Result<(), String> {
     let mut fields = vec![
         ("schema", Value::Num(SCHEMA)),
         ("run", Value::Str(entry.run.to_owned())),
-        ("verdict", Value::Str(verdict.as_str().to_owned())),
-        ("evidence", Value::Str(evidence.to_owned())),
+        ("verdict", Value::Str(finding.verdict.as_str().to_owned())),
+        ("evidence", Value::Str(finding.evidence.clone())),
     ];
+    if let Some(kind) = finding.kind {
+        fields.push(("kind", Value::Str(kind.as_str().to_owned())));
+    }
+    if let Some(at) = &finding.at {
+        fields.push(("at", Value::Str(at.clone())));
+    }
     if let Some(released) = scope {
         fields.push(("scope", Value::Str(released.as_str().to_owned())));
     }
@@ -569,7 +704,7 @@ fn settle(entry: &Review<'_>, verdict: Verdict, evidence: &str, scope: Option<co
             stage: Some(Stage::Reviewed),
             seat: None,
             pid: None,
-            detail: Some(format!("verdict:{}", verdict.as_str())),
+            detail: Some(detail_of(finding.verdict, finding.kind)),
         },
         entry.policy,
     )
@@ -596,10 +731,12 @@ fn broken(reason: String) -> Outcome {
 #[cfg(test)]
 mod tests {
     use super::{
-        requirement_md, requirement_row, requirement_yaml, requirements_text, section_text, strip_tags, verdict_of,
-        write_review, Found, ReviewCheck,
+        detail_of, lens_cmd, parse_lens, read_detail, requirement_md, requirement_row, requirement_yaml,
+        requirements_text, section_text, strip_tags, verdict_of, write_review, Finding, FindingKind, Found, ReviewCheck,
+        FINDING_KINDS,
     };
     use crate::pipe::gate::Verdict;
+    use crate::pipe::lens_record::LensSource;
     use crate::pipe::run_dir;
     use std::path::{Path, PathBuf};
 
@@ -766,6 +903,94 @@ mod tests {
         assert_eq!(ReviewCheck::Unreadable.as_str(), "読めない");
         assert_eq!(ReviewCheck::Stopped(Verdict::Fail).as_str(), "FAIL");
         let _ = std::fs::remove_dir_all(&state);
+    }
+
+    /// 理由の型は 7 語が宣言順に並び、字面と往復し、7 語の外は `None`（設計 §22）。lens の語彙は先頭 6 語で、
+    /// 7 語目 `unparsed` は末尾。
+    #[test]
+    fn pipe_review_kind_vocabulary_round_trips_in_declaration_order() {
+        let words: Vec<&str> = FINDING_KINDS.iter().map(|kind| kind.as_str()).collect();
+        assert_eq!(
+            words,
+            [
+                "teeth-outside-write-set",
+                "goal-done-contradiction",
+                "vacuous-assert",
+                "literal-mismatch",
+                "section-material-missing",
+                "other",
+                "unparsed",
+            ],
+            "7 語・宣言順"
+        );
+        for kind in FINDING_KINDS {
+            assert_eq!(FindingKind::parse(kind.as_str()), Some(*kind), "{} は往復する", kind.as_str());
+        }
+        assert_eq!(FindingKind::parse("Other"), None, "大小は区別する");
+        assert_eq!(FindingKind::parse(""), None);
+        assert_eq!(FINDING_KINDS.last(), Some(&FindingKind::Unparsed), "器が倒す 7 語目は末尾");
+    }
+
+    /// lens の JSON の `kind` は PASS でない周だけ読む: 6 語は逐語で残り `at` も写る／無い・語でない周は `unparsed` で
+    /// **verdict は lens の値のまま**（FAIL は FAIL・INCONCLUSIVE は INCONCLUSIVE）／PASS は lens が `kind` を書いても
+    /// 持たない／JSON が読めない・3 値でない周は器の INCONCLUSIVE（`unparsed`）。
+    #[test]
+    fn pipe_review_kind_parse_lens_falls_to_unparsed_without_moving_the_verdict() {
+        let found = parse_lens(r#"{"verdict":"FAIL","evidence":"e","kind":"literal-mismatch","at":"a.rs,§2"}"#);
+        assert_eq!(
+            found,
+            Finding {
+                verdict: Verdict::Fail,
+                evidence: "e".to_owned(),
+                kind: Some(FindingKind::LiteralMismatch),
+                at: Some("a.rs,§2".to_owned()),
+            }
+        );
+        let missing = parse_lens(r#"{"verdict":"FAIL","evidence":"e"}"#);
+        assert_eq!((missing.verdict, missing.kind, missing.at), (Verdict::Fail, Some(FindingKind::Unparsed), None));
+        let bogus = parse_lens(r#"{"verdict":"INCONCLUSIVE","evidence":"e","kind":"bogus","at":"x"}"#);
+        assert_eq!(bogus.verdict, Verdict::Inconclusive, "語でない kind で verdict は動かない");
+        assert_eq!(bogus.kind, Some(FindingKind::Unparsed));
+        assert_eq!(bogus.at.as_deref(), Some("x"), "at は書かれていれば写す");
+        let not_str = parse_lens(r#"{"verdict":"FAIL","evidence":"e","kind":1,"at":2}"#);
+        assert_eq!((not_str.kind, not_str.at), (Some(FindingKind::Unparsed), None), "文字列でない kind / at は無いと同じ");
+        let passed = parse_lens(r#"{"verdict":"PASS","evidence":"e","kind":"other","at":"x"}"#);
+        assert_eq!((passed.verdict, passed.kind, passed.at), (Verdict::Pass, None, None), "PASS に理由の型は無い");
+        let unreadable = parse_lens("not json\n");
+        assert_eq!((unreadable.verdict, unreadable.kind), (Verdict::Inconclusive, Some(FindingKind::Unparsed)));
+        let outside = parse_lens(r#"{"verdict":"MAYBE","kind":"other"}"#);
+        assert_eq!((outside.verdict, outside.kind), (Verdict::Inconclusive, Some(FindingKind::Unparsed)));
+    }
+
+    /// lens に届かない 2 形（`--lens` 無し・写しを読めない）は理由を分けたまま、理由の型はどちらも `unparsed`。
+    #[test]
+    fn pipe_review_kind_lens_absent_or_unreadable_is_unparsed() {
+        let absent = lens_cmd(&LensSource::Absent).expect_err("無い");
+        assert_eq!((absent.verdict, absent.kind, absent.at), (Verdict::Inconclusive, Some(FindingKind::Unparsed), None));
+        assert!(absent.evidence.contains("--lens"), "{}", absent.evidence);
+        let source = LensSource::Unreadable { path: PathBuf::from("/x/lens.toml"), reason: "壊れ".to_owned() };
+        let unreadable = lens_cmd(&source).expect_err("読めない");
+        assert_eq!((unreadable.verdict, unreadable.kind), (Verdict::Inconclusive, Some(FindingKind::Unparsed)));
+        assert!(unreadable.evidence.contains("/x/lens.toml") && unreadable.evidence.contains("壊れ"), "{}", unreadable.evidence);
+        assert_eq!(lens_cmd(&LensSource::Cmd("true".to_owned())), Ok("true"));
+    }
+
+    /// event の detail は書き手と読み手で往復する: PASS は 1 語・PASS でない周は `kind:` を足した 2 語。読み手は
+    /// `kind:` の無い古い detail と語でない `kind:` を `unparsed` に、3 値の外の verdict を `None` にする。
+    #[test]
+    fn pipe_review_kind_detail_round_trips_and_reads_legacy_as_unparsed() {
+        assert_eq!(detail_of(Verdict::Pass, None), "verdict:PASS");
+        assert_eq!(detail_of(Verdict::Fail, Some(FindingKind::Other)), "verdict:FAIL kind:other");
+        for kind in FINDING_KINDS {
+            let detail = detail_of(Verdict::Inconclusive, Some(*kind));
+            assert_eq!(detail.split_whitespace().count(), 2, "{detail}");
+            assert_eq!(read_detail(&detail), (Some(Verdict::Inconclusive), *kind), "{detail}");
+        }
+        assert_eq!(read_detail("verdict:PASS"), (Some(Verdict::Pass), FindingKind::Unparsed));
+        assert_eq!(read_detail("verdict:FAIL"), (Some(Verdict::Fail), FindingKind::Unparsed), "古い event");
+        assert_eq!(read_detail("verdict:FAIL kind:bogus"), (Some(Verdict::Fail), FindingKind::Unparsed));
+        assert_eq!(read_detail("verdict:maybe kind:other"), (None, FindingKind::Other), "3 値の外は None");
+        assert_eq!(read_detail(""), (None, FindingKind::Unparsed));
     }
 
     /// 書けない周は本 file が生まれず書きかけも残さない（親 dir が無い）。

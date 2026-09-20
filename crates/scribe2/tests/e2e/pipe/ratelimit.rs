@@ -421,7 +421,7 @@ pub(super) fn assert_lands_without_human(repo: &Path, state: &Path, id: &str) {
     let report = report_once(state);
     assert_eq!(
         stdout_of(&report).trim(),
-        "runs=1 landed=1 human_events=0 human_events_other_than_approval=0",
+        format!("runs=1 landed=1 human_events=0 human_events_other_than_approval=0 {}", spawn::NO_REVIEW_FAIL),
         "人由来の event は 0（FR22）"
     );
 }
@@ -859,5 +859,47 @@ fn pipe_ratelimit_host_resume_without_host_manifest_has_no_candidate() {
     assert_eq!(curl_calls(&state), 0, "宣言の無い口座は測らない");
     assert_eq!(stub_calls(&state), 1, "起こし直さない");
     assert!(show_line(&repo, &state, &id).contains("stage=RateLimited"), "便は RateLimited のまま");
+    clean(&[&repo, &state]);
+}
+
+// ───── 審査の理由の閉じた型・器が作る INCONCLUSIVE の「起動できない」形（`s2-07l.395`・設計 contract-source.md §22） ─────
+
+/// `git` **だけ**を引ける PATH（`sh` も `systemd-run` も無い host＝lens の `sh -c` を起動できない周を作る）。
+/// 受付と審査の材料は git だけで読めるので、判定に届かない理由が起動の失敗 1 つに絞れる。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn git_only_path(state: &Path) -> String {
+    let bin_dir = state.join("git-only-bin");
+    fs::create_dir_all(&bin_dir).expect("dir を作れる");
+    let found = Command::new("sh").args(["-c", "command -v git"]).output().expect("command -v を撃てる");
+    let real = String::from_utf8_lossy(&found.stdout).trim().to_owned();
+    assert!(!real.is_empty(), "git を引ける");
+    std::os::unix::fs::symlink(&real, bin_dir.join("git")).ok();
+    bin_dir.display().to_string()
+}
+
+/// 歯 (2) の 5 形のうち「起動できない」: `sh` の無い PATH で審査の lens を撃つと、器は INCONCLUSIVE（`起動できない`）を
+/// 作り、理由の型は 7 語目 `unparsed`・`at` は無い・detail は `verdict:INCONCLUSIVE kind:unparsed`・rc 3。
+#[test]
+fn pipe_review_kind_lens_that_cannot_start_is_unparsed() {
+    let (repo, state) = repo_with_state();
+    let contract = write_contract(&repo, &[], &[]);
+    let marker = state.join("lens-ran");
+    let out = run_pipe_with_path(&git_only_path(&state), &[
+        "intake", "--design", &contract, "--bead", "s2-nosh",
+        "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
+        "--rules", &ceiling_rules(&state), "--lens", &fake_lens(&marker, &lens_verdict("PASS")),
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_INCONCLUSIVE)), "起動できない lens は INCONCLUSIVE: {}", stderr_of(&out));
+    assert!(!marker.exists(), "lens は 1 度も起きていない（起動の失敗であって出力の欠けではない）");
+    let id = run_id_of(&out);
+    let pairs = intake::review_pairs(&state, &id);
+    assert_eq!(value_of(&pairs, "verdict"), "INCONCLUSIVE", "{pairs:?}");
+    assert!(value_of(&pairs, "evidence").contains("起動できない"), "理由は起動の失敗: {pairs:?}");
+    assert_eq!(value_of(&pairs, "kind"), "unparsed", "lens の JSON が無い周は 7 語目: {pairs:?}");
+    assert!(!pairs.iter().any(|(key, _)| key == "at"), "at は無い: {pairs:?}");
+    assert_eq!(intake::reviewed_detail(&state, &id), "verdict:INCONCLUSIVE kind:unparsed");
     clean(&[&repo, &state]);
 }

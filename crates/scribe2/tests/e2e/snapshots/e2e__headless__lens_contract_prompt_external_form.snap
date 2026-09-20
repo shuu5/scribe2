@@ -9,7 +9,13 @@ expression: prompt
 最後の 1 行に、次の形の JSON を**ちょうど 1 つ**書く。前置きや説明は JSON の前に書いてよいが、
 最終行は JSON だけにする。
 
-{"verdict":"PASS|FAIL|INCONCLUSIVE","evidence":"<根拠を 1 行で>"}
+{"verdict":"PASS|FAIL|INCONCLUSIVE","evidence":"<根拠を 1 行で>","kind":"<理由の型>","at":"<指した場所>"}
+
+- `kind` は FAIL と INCONCLUSIVE の周に**必須**で、次の 6 語のちょうど 1 つ（PASS の周は書かない）:
+  `teeth-outside-write-set`（verify の歯が write-set の外の file に在る）/ `goal-done-contradiction`（goal と done が
+  矛盾する）/ `vacuous-assert`（歯が空虚で done を測れない）/ `literal-mismatch`（契約の字面が設計の節・要件の
+  現物と合わない）/ `section-material-missing`（設計の節や要件の材料が欠けている）/ `other`（上のどれでもない）。
+- `at` は指した場所の列——path か識別子か §（`,` 区切りの語・自由文にしない・PASS の周は書かない）。
 
 ## 判定の決め方
 - **PASS**: 契約がそのまま実装役に渡せる。設計の節と食い違わず、歯で測れ、write-set が足りている。

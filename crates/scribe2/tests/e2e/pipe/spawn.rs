@@ -1407,6 +1407,11 @@ fn record_human_stage(state: &Path, id: &str) -> Output {
         .expect("binary を起動できる")
 }
 
+/// 審査 FAIL が 0 件の周の `pipe report` の末尾 2 token（`s2-07l.395`・設計 contract-source.md §22）: 母集団 0 でも
+/// `by_kind=` は宣言順に 7 語とも 0 で出る。**字面で pin する**（器の const slice を写すと語の入れ替わりを見逃す）。
+pub(super) const NO_REVIEW_FAIL: &str = "review_fail=0 by_kind=teeth-outside-write-set:0,goal-done-contradiction:0,\
+                                          vacuous-assert:0,literal-mismatch:0,section-material-missing:0,other:0,unparsed:0";
+
 #[test]
 fn pipe_report_counts_human_events() {
     let (repo, state) = repo_with_state();
@@ -1428,8 +1433,8 @@ fn pipe_report_counts_human_events() {
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "report は rc 0: {}", stderr_of(&out));
     assert_eq!(
         stdout_of(&out).trim(),
-        "runs=2 landed=1 human_events=1 human_events_other_than_approval=0",
-        "到達点の 1 行（設計 §5.8）"
+        format!("runs=2 landed=1 human_events=1 human_events_other_than_approval=0 {NO_REVIEW_FAIL}"),
+        "到達点の 1 行（設計 §5.8・既存 token は不変で §22 の 2 token が末尾に足される）"
     );
 
     // **approval 以外の人由来 event は別に数える**——ここが 0 であることが到達点の主張
@@ -1439,9 +1444,78 @@ fn pipe_report_counts_human_events() {
     let after = report_once(&state);
     assert_eq!(
         stdout_of(&after).trim(),
-        "runs=2 landed=1 human_events=2 human_events_other_than_approval=1",
+        format!("runs=2 landed=1 human_events=2 human_events_other_than_approval=1 {NO_REVIEW_FAIL}"),
         "approval 以外の人由来 event を数える"
     );
+    clean(&[&repo, &state]);
+}
+
+/// 便の `Reviewed` を機械の event として 1 件積む（**`kind:` を持たない古い形**の detail・`fleet record` 経由）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn record_legacy_reviewed(state: &Path, id: &str, detail: &str) {
+    let out = bin_cmd()
+        .args(["fleet", "record", "--state-dir"])
+        .arg(state)
+        .args(["--kind", "RunStage", "--run", id, "--bead", "s2-legacy", "--stage", "Reviewed", "--detail", detail])
+        .output()
+        .expect("binary を起動できる");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "record: {}", stderr_of(&out));
+}
+
+/// 歯 (3) **数える面**（設計 §22）: `review_fail=` は `RunStage stage=Reviewed` のうち verdict が PASS でないもの全部
+/// （PASS は入らない・日付で絞らない）で、`by_kind=` は宣言順に 7 語とも出る（0 も出す）。`kind:` を持たない古い
+/// event（FAIL / INCONCLUSIVE）は `unparsed` に数え、既存の 4 token は不変・rc 0。
+#[test]
+fn pipe_review_kind_report_counts_review_fail_by_kind_in_declaration_order() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let repo_arg = repo.display().to_string();
+    let state_arg = state.display().to_string();
+    let rules = ceiling_rules(&state);
+    // FAIL の 3 便（literal-mismatch × 2・other × 1）と INCONCLUSIVE の 1 便（`--lens` 無し＝unparsed）。
+    for (bead, kind) in [("s2-f1", "literal-mismatch"), ("s2-f2", "literal-mismatch"), ("s2-f3", "other")] {
+        let line = format!("{{\"verdict\":\"FAIL\",\"evidence\":\"fake\",\"kind\":\"{kind}\",\"at\":\"src/lib.rs\"}}");
+        let marker = state.join(format!("lens-ran-{bead}"));
+        let out = run_pipe(&[
+            "intake", "--design", &path, "--bead", bead, "--repo", &repo_arg, "--state-dir", &state_arg,
+            "--rules", &rules, "--lens", &fake_lens(&marker, &line),
+        ]);
+        assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{bead}: {}", stderr_of(&out));
+    }
+    let out = run_pipe(&["intake", "--design", &path, "--bead", "s2-i1", "--repo", &repo_arg, "--state-dir", &state_arg, "--rules", &rules]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_INCONCLUSIVE)), "{}", stderr_of(&out));
+    // PASS の便は intake の最後に置く（live で write-set を持つので、同じ契約の後続の intake が交差で断られる）。
+    let marker = state.join("lens-ran-pass");
+    let out = run_pipe(&[
+        "intake", "--design", &path, "--bead", "s2-p1", "--repo", &repo_arg, "--state-dir", &state_arg,
+        "--rules", &rules, "--lens", &fake_lens(&marker, &lens_verdict("PASS")),
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    // 古い形の event 2 件（FAIL / INCONCLUSIVE・`kind:` 無し）と PASS の古い形 1 件（母集団の外）。intake の後に
+    // 積む（`review.json` の無い `Reviewed` の便は受付が live の write-set を読めず断るので、先に積むと intake が通らない）。
+    record_legacy_reviewed(&state, "old-fail", "verdict:FAIL");
+    record_legacy_reviewed(&state, "old-inc", "verdict:INCONCLUSIVE");
+    record_legacy_reviewed(&state, "old-pass", "verdict:PASS");
+
+    let report = report_once(&state);
+    assert_eq!(report.status.code(), Some(i32::from(RC_OK)), "report は rc 0 のまま: {}", stderr_of(&report));
+    let line = stdout_of(&report).trim().to_owned();
+    // 母集団 = intake の 4 便（FAIL 3 + INCONCLUSIVE 1）+ 古い形の 2 件（PASS の 2 件は外）= 6。
+    assert_eq!(
+        line,
+        "runs=8 landed=0 human_events=0 human_events_other_than_approval=0 review_fail=6 \
+         by_kind=teeth-outside-write-set:0,goal-done-contradiction:0,vacuous-assert:0,literal-mismatch:2,\
+         section-material-missing:0,other:1,unparsed:3",
+        "既存の 4 token は不変・review_fail は母集団・by_kind は宣言順に 7 語とも（0 も）"
+    );
+    let by_kind = line.split_once("by_kind=").map(|(_, rest)| rest).unwrap_or_default();
+    let words: Vec<&str> = by_kind.split(',').filter_map(|item| item.split_once(':')).map(|(word, _)| word).collect();
+    let declared: Vec<&str> = vessel::pipe::review::FINDING_KINDS.iter().map(|kind| kind.as_str()).collect();
+    assert_eq!(words, declared, "内訳の並びは器の宣言順そのもの");
+    assert_eq!(words.len(), 7, "7 語とも出る");
     clean(&[&repo, &state]);
 }
 
@@ -1484,7 +1558,7 @@ fn pipe_report_counts_landed_runs_not_landed_events() {
     let out = report_once(&state);
     assert_eq!(
         stdout_of(&out).trim(),
-        "runs=1 landed=1 human_events=0 human_events_other_than_approval=0",
+        format!("runs=1 landed=1 human_events=0 human_events_other_than_approval=0 {NO_REVIEW_FAIL}"),
         "landed は便の数であって event の数ではない"
     );
     clean(&[&repo, &state]);
@@ -1682,7 +1756,7 @@ fn pipe_five_contracts_land_with_fake_runner_in_toy_repo() {
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "report: {}", stderr_of(&out));
     assert_eq!(
         stdout_of(&out).trim(),
-        "runs=5 landed=3 human_events=1 human_events_other_than_approval=0",
+        format!("runs=5 landed=3 human_events=1 human_events_other_than_approval=0 {NO_REVIEW_FAIL}"),
         "5 便の到達点（AC1 の形・人手は承認 1 件だけ）"
     );
     let exported = fs::read_to_string(land::verdicts_path(&state)).expect("面 5 を読める");
