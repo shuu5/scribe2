@@ -10,11 +10,10 @@ use crate::cli_outcome::{Outcome, RC_BROKEN};
 use crate::fleet::store::StoreError;
 use crate::fleet::{Stage, State};
 use crate::pipe::contract::Contract;
-use crate::pipe::follow;
 use crate::pipe::gate::Verdict;
-use crate::pipe::land::{verdict_of, REBASE_EMPTY};
+use crate::pipe::land::verdict_of;
 use crate::pipe::review::ReviewCheck;
-use crate::pipe::{contract_path, current, last_stage_detail};
+use crate::pipe::{contract_path, current};
 use std::path::Path;
 
 /// 便が live（終端でない）か。**段の網羅 match で書く**（段が増えたら compile で気付く）。
@@ -92,12 +91,10 @@ pub(in crate::pipe) fn resolve(
 ///
 /// - `Gated`: **測り直せるのは「測れなかった」周だけ**。PASS / FAIL は判定に届いた終端で、
 ///   判定が読めない周（file 不在 / 壊れ / 3 値の外）も測り直さない（fail-closed・C11.2）。
-/// - `Failed`: **畳めるのは `rebase-empty` と `rebase-conflict` の周だけ**（前者は変更が既に
-///   main に在る＝close してよい合図・後者は起こし直しの上限に達した便で、planner が契約を
-///   切り直して流し直す・設計 pipeline-conflict.md §5）。他の理由（`main-red` /
-///   `main-unmeasured` / `rebase-dirty` / `precheck:…`）は人が読む前に入れ物が動くと
-///   「何が起きたか」を現物から追えなくなるので断る。理由を読めない周も断る（読めなかったを
-///   畳める理由に読み替えない・fail-closed）。
+/// - `Failed`: **detail を問わず畳める**（`Failed` は `Stage` の終端で、入れ物だけが残る形は
+///   どの理由でも同じ・設計 pipeline.md §24）。「人が現物を読む前に入れ物が動く」懸念は
+///   可逆 move（N1.2）と `detail=retired` の event が持つ＝読む物は消えない。理由を読む必要が
+///   無いので、読めない周の弁別も持たない。
 /// - `Gated`: **畳めるのは verdict が FAIL の周だけ**（判定に届いた終端・`.132` の memo）。
 ///   PASS はまだ land が残っており、INCONCLUSIVE は測り直せる側ゆえ断る。
 /// - `Reviewed`: **起こせるのは verdict が PASS の周だけ**（FR49・設計 contract-source.md §4「効き方」）。
@@ -113,19 +110,6 @@ fn discriminate(extra: &Extra, state_dir: &Path, id: &str, stage: Stage) -> Resu
             ReviewCheck::Passed => Ok(()),
             found => Err(refused(format!("run {id} の段は Reviewed である（verdict={}）", found.as_str()))),
         },
-        (&Extra::Retire, Stage::Failed) => {
-            let detail = last_stage_detail(state_dir, id);
-            let foldable = detail.as_deref().is_some_and(|found| {
-                found == REBASE_EMPTY || found == follow::EXHAUSTED
-            });
-            match foldable {
-                true => Ok(()),
-                false => Err(refused(format!(
-                    "run {id} の段は Failed である（detail={}）",
-                    detail.as_deref().unwrap_or("読めない")
-                ))),
-            }
-        }
         (&Extra::Nothing | &Extra::Regate | &Extra::Retire | &Extra::Spawn, _) => Ok(()),
     }
 }

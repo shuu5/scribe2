@@ -2079,12 +2079,47 @@ fn pipe_retire_rebase_empty_folds_failed_run_and_keeps_stage() {
     clean(&[&repo, &state]);
 }
 
-/// 負例: `Failed` でも畳める理由（`rebase-empty` / `rebase-conflict`）でない便——ここでは
-/// **main の実測が赤かった便**（`main-red`）——は畳まない（rc 1・worktree 不動・event 0 増）。
-/// 木は clean のままなので、この rc 1 は **clean 検査ではなく終端の理由**を見ている
-/// （「断ってから解いて通す」形は上の歯が担保する）。
+// ─── `Failed` は detail を問わず畳める（設計 pipeline.md §24・契約表の行 r・接頭辞 `pipe_retire_failed_any_detail_`） ───
+//
+// 母集団の割れ方: base が畳めたのは 2 つの detail——`REBASE_EMPTY`（`rebase-empty`・変更が既に main に
+// 在る）と `follow::EXHAUSTED`（`rebase-conflict`・起こし直しの上限に達した）——だけで、この 2 つは
+// `pipe_retire_rebase_empty_folds_failed_run_and_keeps_stage` と
+// `pipe_follow_retire_folds_an_exhausted_run_and_keeps_the_stage` が引き続き pin する（歯が字面で持つ
+// 終端の理由の出所はこの 2 つの定数である）。下の 4 本は **base が断っていた側**の detail を 1 つずつ名指す。
+
+/// 終端した便を 1 本畳み、畳んだ後の面を全部測る（`pipe_retire_failed_any_detail_` の 4 本が共有する）:
+/// rc 0・畳んだ先を名乗る・`retired/` へ**中身ごと**運ぶ（可逆 move・N1.2）・元の場所が空く・
+/// branch は消さない・残す `RunStage` は**段そのまま**で `detail=retired`（終端を動かさない）。
+fn folds_and_keeps_stage(repo: &Path, state: &Path, id: &str, stage: Stage) {
+    let live = worktree_of(repo, id);
+    assert!(live.exists(), "畳む前の便の worktree は在る（retire の入口の前提）");
+    let out = retire_once(repo, state, id);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "終端した便は畳める: {}", stderr_of(&out));
+    let retired = repo.join(".worktrees").join("scribe2").join("retired").join(id);
+    assert!(
+        stdout_of(&out).contains(&format!("retired={}", retired.display())),
+        "畳んだ先を名乗る: {}",
+        stdout_of(&out)
+    );
+    assert!(retired.join("src").join("lib.rs").exists(), "中身ごと運ぶ（消さない＝可逆）");
+    assert!(!live.exists(), "元の場所が空く");
+    let branches = git(repo, &["branch", "--list", &format!("scribe2/{id}")]);
+    assert!(!branches.trim().is_empty(), "branch は消さない: {branches}");
+    assert_eq!(
+        stages(state, id).last().cloned(),
+        Some((Some(stage), Some("retired".to_owned()))),
+        "残す event は段そのままで detail=retired: {:?}",
+        stages(state, id)
+    );
+}
+
+/// `Failed` の便は **detail を問わず**畳める（設計 §24 の約束 1 / 2）。base が断っていた 4 つの
+/// detail を 1 つずつ名指す 4 本の 1 本目——**main の実測が赤かった便**（`main-red`）。
+///
+/// 段の弁別から detail を外しても **clean の検査は残る**ので、汚れた木で断ってから拭って通す
+/// 対で測る（上の rc 1 は clean を理由にしており、detail ではない）。
 #[test]
-fn pipe_retire_rebase_empty_refuses_other_failed_reasons() {
+fn pipe_retire_failed_any_detail_main_red_folds_and_keeps_stage() {
     let (repo, state) = repo_with_state();
     // 1 回目（worktree）は緑・2 回目（main の実測）は赤になる verify 行＝`main-red` で終端する。
     let path = write_contract(&repo, &["verify"], &[r#"verify = ["sh verify-once.sh"]"#]);
@@ -2093,36 +2128,176 @@ fn pipe_retire_rebase_empty_refuses_other_failed_reasons() {
     make_tree_differ(&repo, &state, &id, "refs/heads/main");
     let red = land_once(&repo, &state, &id);
     assert_eq!(red.status.code(), Some(i32::from(RC_REFUSED)), "main が赤い land は rc 1: {}", stderr_of(&red));
-    assert!(show_line(&repo, &state, &id).contains("stage=Failed"), "終端の段は Failed");
-    let live = worktree_of(&repo, &id);
-    assert!(git(&live, &["status", "--porcelain"]).is_empty(), "木は clean のまま");
-
-    let before = event_count(&state);
-    let out = retire_once(&repo, &state, &id);
     assert_eq!(
-        out.status.code(),
-        Some(i32::from(RC_REFUSED)),
-        "rebase-conflict の便は畳まない: {}",
-        stdout_of(&out)
+        stages(&state, &id).last().cloned(),
+        Some((Some(Stage::Failed), Some("main-red".to_owned()))),
+        "終端の理由は main-red: {:?}",
+        stages(&state, &id)
     );
+
+    // 対の負例: 汚れた木は畳まない（rc 1・worktree 不動・event 0 増）。
+    let live = worktree_of(&repo, &id);
+    let stray = live.join("dirty.txt");
+    fs::write(&stray, "x\n").expect("worktree を汚せる");
+    let before = event_count(&state);
+    let dirty = retire_once(&repo, &state, &id);
+    assert_eq!(dirty.status.code(), Some(i32::from(RC_REFUSED)), "dirty な worktree は rc 1: {}", stdout_of(&dirty));
     assert!(live.exists(), "断った周は worktree を動かさない");
-    let retired = repo.join(".worktrees").join("scribe2").join("retired").join(&id);
-    assert!(!retired.exists(), "retired/<run> を作らない");
-    assert_eq!(event_count(&state), before, "event を 1 件も書かない");
+    assert!(
+        !repo.join(".worktrees").join("scribe2").join("retired").join(&id).exists(),
+        "retired/<run> を作らない"
+    );
+    assert_eq!(event_count(&state), before, "前提違反は event を 1 件も書かない");
+    fs::remove_file(&stray).expect("汚れを拭える");
+
+    folds_and_keeps_stage(&repo, &state, &id, Stage::Failed);
+    assert!(show_line(&repo, &state, &id).contains("stage=Failed"), "畳んだ後も段は Failed");
     clean(&[&repo, &state]);
 }
 
-/// `pipe stop --run` で終端した便（段 `Stopped`・commit 0・clean の worktree が残る形）の id。
+/// 2 本目: main を**実測できなかった**便（`main-unmeasured`・rc 2 で終端する側）。
+#[test]
+fn pipe_retire_failed_any_detail_main_unmeasured_folds_and_keeps_stage() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let marker = state.join("lens-ran");
+    let id = gated_pass(&repo, &state, &path, &marker);
+    make_tree_differ(&repo, &state, &id, "refs/heads/main");
+    // main 実測用の tmp の置き場を塞ぐ＝**verify を 1 行も撃てない**
+    // （`pipe_land_reports_unmeasured_main_apart_from_red` と同じ fixture）。
+    let blocked = repo.join(".worktrees").join("scribe2").join("verify").join(&id);
+    fs::create_dir_all(&blocked).expect("tmp の置き場を塞げる");
+    fs::write(blocked.join("occupied"), "x\n").expect("塞げる");
+    let out = land_once(&repo, &state, &id);
+    assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "測れない周は rc 2: {}", stderr_of(&out));
+    assert_eq!(
+        stages(&state, &id).last().cloned(),
+        Some((Some(Stage::Failed), Some("main-unmeasured".to_owned()))),
+        "終端の理由は main-unmeasured: {:?}",
+        stages(&state, &id)
+    );
+    folds_and_keeps_stage(&repo, &state, &id, Stage::Failed);
+    assert!(show_line(&repo, &state, &id).contains("stage=Failed"), "畳んだ後も段は Failed");
+    clean(&[&repo, &state]);
+}
+
+/// 3 本目: 追随の rebase の**途中で** turn が終わった便（`rebase-dirty`）。木が rebase の途中＝
+/// dirty なので retire は clean の検査で断り、木を戻すと同じ便が通る——この対で「断りは clean・
+/// 段の弁別は `Failed` を detail ごと通す」の両方が測れる。
+#[test]
+fn pipe_retire_failed_any_detail_rebase_dirty_folds_and_keeps_stage() {
+    let (repo, state) = repo_with_state();
+    let marker = state.join("lens-ran");
+    let runner = stub_runner(&state, LEAVE_MID_REBASE);
+    let (id, _base, moved) = conflicting_run(&repo, &state, &marker, &runner);
+    let out = land_extra(&repo, &state, &id, &["--runner", &runner]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "rebase の途中は rc 1: {}", stderr_of(&out));
+    assert_eq!(
+        stages(&state, &id).last().cloned(),
+        Some((Some(Stage::Failed), Some("rebase-dirty".to_owned()))),
+        "終端の理由は rebase-dirty: {:?}",
+        stages(&state, &id)
+    );
+    assert!(mid_rebase(&repo, &id), "木は rebase の途中のまま（器は触らない）");
+
+    let live = worktree_of(&repo, &id);
+    let before = event_count(&state);
+    let dirty = retire_once(&repo, &state, &id);
+    assert_eq!(dirty.status.code(), Some(i32::from(RC_REFUSED)), "rebase の途中の木は rc 1: {}", stdout_of(&dirty));
+    assert!(live.exists(), "断った周は worktree を動かさない");
+    assert_eq!(event_count(&state), before, "前提違反は event を 1 件も書かない");
+    // 木を戻すと同じ便が通る＝上の rc 1 は clean を理由にしている（終端の理由ではない）。
+    git(&live, &["rebase", "--abort"]);
+    folds_and_keeps_stage(&repo, &state, &id, Stage::Failed);
+    assert_eq!(git(&repo, &["rev-parse", "refs/heads/main"]), moved, "main は 1 byte も動かない");
+    clean(&[&repo, &state]);
+}
+
+/// 4 本目: gate の前提違反で終端した便（`precheck:…`）。commit を 1 本も持たない木は gate が
+/// `Failed detail=precheck:…` で残す（木は clean のまま）＝ここでの rc 0 は **detail の弁別が
+/// 無い**ことだけを測る。
+#[test]
+fn pipe_retire_failed_any_detail_precheck_folds_and_keeps_stage() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let id = implemented(&repo, &state, &path);
+    // 便の commit を捨てる＝precheck が「commit が 1 本も無い」で落ちる（木は clean のまま）。
+    let live = worktree_of(&repo, &id);
+    git(&live, &["reset", "--hard", "refs/heads/main"]);
+    assert!(git(&live, &["status", "--porcelain"]).is_empty(), "木は clean のまま");
+    let marker = state.join("lens-ran");
+    let lens = fake_lens(&marker, &lens_verdict("PASS"));
+    let out = gate_once(&repo, &state, &id, Some(&lens));
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "前提違反は rc 1: {}", stderr_of(&out));
+    assert!(!marker.exists(), "**lens を起動しない**（precheck で止まる周）");
+    let terminal = stages(&state, &id).last().cloned();
+    assert!(
+        matches!(&terminal, Some((Some(Stage::Failed), Some(detail))) if detail.starts_with("precheck:")),
+        "終端の理由は precheck:…: {terminal:?}"
+    );
+    folds_and_keeps_stage(&repo, &state, &id, Stage::Failed);
+    assert!(show_line(&repo, &state, &id).contains("stage=Failed"), "畳んだ後も段は Failed");
+    clean(&[&repo, &state]);
+}
+
+/// 退行の pin（設計 §24 の約束 4）: **非終端**（`Spawned` / `Implemented`）と `Gated(PASS)` は
+/// 畳まない。`Failed` から detail の弁別を外しても `allowed` の列は不変で、段の一般則は効き
+/// 続ける——`Spawned` は終端させると同じ便が通る＝その rc 1 は**段**を理由にしている。
+#[test]
+fn pipe_retire_failed_any_detail_still_refuses_live_runs_and_gated_pass() {
+    // (a) `Spawned`（runner が生きている便）。
+    let (repo, state) = repo_with_state();
+    let id = spawned_run(&repo, &state);
+    let live = worktree_of(&repo, &id);
+    let before = event_count(&state);
+    let spawned = retire_once(&repo, &state, &id);
+    assert_eq!(spawned.status.code(), Some(i32::from(RC_REFUSED)), "Spawned は rc 1: {}", stdout_of(&spawned));
+    assert!(live.exists(), "断った周は worktree を動かさない");
+    assert_eq!(event_count(&state), before, "event を 1 件も書かない");
+    // 段を終端（`Stopped`）へ解くと同じ便が通る＝`allowed` の列は不変である。
+    stop_run_ok(&state, &id);
+    let stopped = retire_once(&repo, &state, &id);
+    assert_eq!(stopped.status.code(), Some(i32::from(RC_OK)), "Stopped なら通る: {}", stderr_of(&stopped));
+    clean(&[&repo, &state]);
+
+    // (b) `Implemented`（gate を待つ便）→ (c) `Gated(PASS)`（land が残っている便）。
+    let (other, other_state) = repo_with_state();
+    let path = write_contract(&other, &[], &[]);
+    let waiting_id = implemented(&other, &other_state, &path);
+    let waiting_tree = worktree_of(&other, &waiting_id);
+    let waiting_before = event_count(&other_state);
+    let waiting = retire_once(&other, &other_state, &waiting_id);
+    assert_eq!(waiting.status.code(), Some(i32::from(RC_REFUSED)), "Implemented は rc 1: {}", stdout_of(&waiting));
+    assert!(waiting_tree.exists(), "断った周は worktree を動かさない");
+    assert_eq!(event_count(&other_state), waiting_before, "event を 1 件も書かない");
+
+    let marker = other_state.join("lens-ran");
+    let lens = fake_lens(&marker, &lens_verdict("PASS"));
+    let gated = gate_once(&other, &other_state, &waiting_id, Some(&lens));
+    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "PASS の gate は rc 0: {}", stderr_of(&gated));
+    let pass_before = event_count(&other_state);
+    let pass = retire_once(&other, &other_state, &waiting_id);
+    assert_eq!(pass.status.code(), Some(i32::from(RC_REFUSED)), "Gated(PASS) は rc 1: {}", stdout_of(&pass));
+    assert!(waiting_tree.exists(), "断った周は worktree を動かさない");
+    assert!(
+        !other.join(".worktrees").join("scribe2").join("retired").join(&waiting_id).exists(),
+        "retired/<run> を作らない"
+    );
+    assert_eq!(event_count(&other_state), pass_before, "event を 1 件も書かない");
+    clean(&[&other, &other_state]);
+}
+
+/// runner が**生きている**便（段 `Spawned`・commit 0・clean の worktree）の id。
 ///
 /// 偽 runner は commit を 1 本も作らず前景で眠るだけなので、spawn を**背景で**起こして席が Live に
 /// なるまで待つ（`lifecycle.rs` の `pipe_stop_all_terminates_live_runner` と同じ「生きた席を止める」形）。
-/// spawn の process は stop の前に外す——外さないと runner の終了を見届けた spawn が自分の記帳を
-/// 足し、stop の event と数が混ざる。runner は席の group ごと stop が止める。
+/// spawn の process はここで外す——外さないと runner の終了を見届けた spawn が自分の記帳を足し、
+/// 次の段（stop など）の event と数が混ざる。runner は席の group ごと stop が止める。
 #[expect(
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
-fn stopped_run(repo: &Path, state: &Path) -> String {
+fn spawned_run(repo: &Path, state: &Path) -> String {
     let design = write_contract(repo, &[], &[]);
     let id = intake(repo, state, &design);
     let mut spawner = Command::new(bin())
@@ -2141,6 +2316,14 @@ fn stopped_run(repo: &Path, state: &Path) -> String {
     }
     spawner.kill().ok();
     spawner.wait().ok();
+    assert!(show_line(repo, state, &id).contains("stage=Spawned"), "席が立った便の段は Spawned");
+    id
+}
+
+/// `pipe stop --run` で終端した便（段 `Stopped`・commit 0・clean の worktree が残る形）の id。
+/// 生きた席（[`spawned_run`]）を 1 本止めるだけで、止め方も畳み方も器の口に委ねる。
+fn stopped_run(repo: &Path, state: &Path) -> String {
+    let id = spawned_run(repo, state);
     stop_run_ok(state, &id);
     assert!(show_line(repo, state, &id).contains("stage=Stopped"), "終端の段は Stopped");
     let live = worktree_of(repo, &id);
