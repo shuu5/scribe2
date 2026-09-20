@@ -3339,3 +3339,325 @@ fn hook_precompact_reads_only_the_tail_of_the_transcript() {
     assert_eq!(precompact::last_text(None), Err(precompact::Skip::NoTranscript));
     clean(&[&dir]);
 }
+
+// ---- 復帰の 2 便の歯の補強（設計 seat-roles.md §23・FR42 / FR19 / NFR4・`s2-07l.489.3`・接頭辞 `hook_recovery_edge_`）----
+// §21 / §22 の gate の変異検査で生存した面（台帳の子 process の終わり方・worktree を測る順・上限とちょうど同じ件数・
+// 時差の字・枠が無い以外の理由で読めない周・socket を渡した席の解決）に歯を足す。どれも着地済みの挙動を測る＝base でも
+// 緑（fn の先頭の札）。席は §21 と同じ偽 tmux で解く（tmux を立てない）。src は触らない。
+
+/// 偽の台帳 client を `sock_dir` の子 dir に 1 本置く（[`fake_bd`] と違い script の本文を呼び手が書く＝終わり方を作る）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn fake_bd_script(place: &RolePlace, name: &str, body: &str) -> String {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = place.sock_dir.join(name);
+    fs::create_dir_all(&dir).expect("台帳の dir を作れる");
+    let path = dir.join("bd");
+    fs::write(&path, format!("#!/bin/sh\n{body}")).expect("偽の bd を書ける");
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("偽の bd を実行可能にできる");
+    path.display().to_string()
+}
+
+/// 台帳の待ち上限を `secs` 秒にした rules manifest を書き、その path を返す（役割の行と禁じる語列の行は fixture と同じ）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn rules_with_ledger_timeout(place: &RolePlace, secs: u64) -> String {
+    let row = format!(
+        "\n[[rule]]\nid = \"seat.ledger_timeout_s\"\nkind = \"LedgerTimeoutS\"\nvalue = {secs}\nenabled = true\nruling = \"r\"\nruled_at = \"2026-09-12\"\n"
+    );
+    let path = place.sock_dir.join(format!("rules-timeout-{secs}.toml"));
+    fs::write(&path, format!("schema = 1\n{}{}{row}", denied_row_text(), role_rows_text(ORCHESTRATOR_CAPS))).expect("rules を書ける");
+    path.display().to_string()
+}
+
+/// 偽 tmux の席で `rules` を差し替えて session-start を撃ち、名乗りの後ろを指示文（11 行を表明）と復帰の DATA に割って返す。
+fn brief_and_recent_with_rules(place: &RolePlace, path: &str, rules: &str, bd: &str) -> (Vec<String>, Vec<String>) {
+    let args = ["session-start", "--pane", STUB_PANE, "--rules", rules, "--bd", bd];
+    let lines = after_header(&run_stub_hook(path, &args, &stamp_payload(&place.repo, "sid-recent")));
+    let (brief, recent) = split_recent(lines);
+    assert_eq!(brief.len(), 11, "§5 の指示文は 11 行のまま: {brief:?}");
+    assert!(recent.iter().all(|line| line.starts_with("[RECENT-")), "DATA の行は行頭の marker で始まる: {recent:?}");
+    (brief, recent)
+}
+
+/// `dir` に file を 1 つ足して commit する（committer / author の時刻を `date` に固定＝HEAD の commit の新しさを作る）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn commit_dated(dir: &Path, message: &str, date: &str) {
+    fs::write(dir.join(format!("{message}.txt")), format!("{date}\n")).expect("file を書ける");
+    git(dir, &["add", "-A"]);
+    let out = Command::new("git")
+        .args(["-C", &dir.display().to_string(), "commit", "-q", "-m", message])
+        .env("GIT_COMMITTER_DATE", date)
+        .env("GIT_AUTHOR_DATE", date)
+        .output()
+        .expect("git を起動できる");
+    assert!(out.status.success(), "commit {message}: {}", String::from_utf8_lossy(&out.stderr));
+}
+
+/// `git worktree list --porcelain` の列挙の順（worktree の path・先頭は anchor）。
+fn listed_worktrees(repo: &Path) -> Vec<String> {
+    git(repo, &["worktree", "list", "--porcelain"])
+        .lines()
+        .filter_map(|line| line.strip_prefix("worktree "))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// §23 (1) 台帳の子 process の終わり方: (a) JSON を出した後 rc 非 0 で終わる偽の `bd` は `ledger-unreadable`（出力が読めても
+/// rc を見る・件数の 1 行も `unknown`）／(b) stdout を閉じた後も待ち上限を越えて生き続ける偽の `bd` は `ledger-timeout`
+/// （`ledger-unreadable` と分ける）／(c) stdout を閉じた後、上限の内側で少し遅れて rc 0 で終わる偽の `bd` は測れた側
+/// （`[RECENT-WIP]` と件数の 1 行）に出る。待ち上限は fixture の rules 行で 2 秒に置く。
+#[test]
+fn hook_recovery_edge_ledger_child_exit_code_and_lingering_are_told_apart() {
+    // flip-check: retroactive s2-07l.489.3
+    let place = role_place();
+    let path = stub_seat(&place, "edgeledger", Some("orchestrator"));
+    let rules = rules_with_ledger_timeout(&place, 2);
+    let json = "[{\"id\":\"w-1\",\"status\":\"in_progress\",\"title\":\"wip\"}]";
+    let nonzero = fake_bd_script(&place, "bd-rc", &format!("echo '{json}'\nexit 3\n"));
+    let lingering = fake_bd_script(&place, "bd-linger", &format!("echo '{json}'\nexec 1>&-\nsleep 8\nexit 0\n"));
+    let late = fake_bd_script(&place, "bd-late", &format!("echo '{json}'\nexec 1>&-\nsleep 0.2\nexit 0\n"));
+    let cases = [("JSON の後に rc 3", nonzero.as_str(), "ledger-unreadable"), ("stdout を閉じて上限を越えて生きる", lingering.as_str(), "ledger-timeout")];
+    for (why, bd, reason) in cases {
+        let (brief, recent) = brief_and_recent_with_rules(&place, &path, &rules, bd);
+        assert!(brief.iter().any(|line| line.contains("unknown（台帳を読めない）")), "{why}: 件数も unknown: {brief:?}");
+        for kind in [Kind::Wip, Kind::Bead] {
+            let expected = format!("[RECENT-UNMEASURED] kind={} reason={reason}", kind.as_str());
+            assert_eq!(marked(&recent, recent::MARKER_UNMEASURED, kind), vec![&expected], "{why}: {recent:?}");
+            assert!(marked(&recent, recent::MARKER_NONE, kind).is_empty(), "{why}: 測れない周に NONE は出ない: {recent:?}");
+        }
+        assert!(recent.iter().all(|line| !line.contains("w-1")), "{why}: 出力が読めても採らない: {recent:?}");
+        assert_eq!(lines_of(&recent, Kind::Git).len(), 1, "{why}: git の行は出る: {recent:?}");
+    }
+    let (brief, recent) = brief_and_recent_with_rules(&place, &path, &rules, &late);
+    assert!(brief.iter().any(|line| line.contains("open=0 in_progress=1 blocked=0")), "上限の内側で終わった周は数える: {brief:?}");
+    let wip: Vec<&str> = lines_of(&recent, Kind::Wip).iter().map(|line| line.as_str()).collect();
+    assert_eq!(wip, vec!["[RECENT-WIP] w-1 - wip"], "上限の内側で遅れて rc 0 は測れた側: {recent:?}");
+    assert!(marked(&recent, recent::MARKER_UNMEASURED, Kind::Wip).is_empty(), "{recent:?}");
+    assert!(marked(&recent, recent::MARKER_UNMEASURED, Kind::Bead).is_empty(), "{recent:?}");
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
+/// §23 (2) worktree を測る順: 列挙の順（`git worktree list`）と HEAD の commit の新しい順が**食い違う** dirty な worktree 2 本
+/// を作り、`[RECENT-DIRTY]` の行が anchor の後ろに commit の新しい順で並ぶ。commit を 1 つも持たない（未生の HEAD の）
+/// dirty な worktree を混ぜても 2 本の順は変わらず、その worktree は末尾に来る（時刻を引けない側＝列挙の順に落ちない）。
+#[test]
+fn hook_recovery_edge_dirty_worktrees_follow_commit_recency_not_enumeration() {
+    // flip-check: retroactive s2-07l.489.3
+    let place = role_place();
+    let path = stub_seat(&place, "edgeorder", Some("orchestrator"));
+    let repo = &place.repo;
+    let first = add_worktree(repo, "wt-a");
+    let second = add_worktree(repo, "wt-b");
+    // 列挙の順を実測し、先に列挙される方に古い commit・後に列挙される方に新しい commit を置く＝順が食い違う。
+    let listed = listed_worktrees(repo);
+    assert_eq!(listed.len(), 3, "anchor + 2 本: {listed:?}");
+    let first_listed = listed[1].ends_with("/wt-a");
+    let (older, newer) = if first_listed { (&first, &second) } else { (&second, &first) };
+    commit_dated(older, "older", "2020-01-02T00:00:00Z");
+    commit_dated(newer, "newer", "2030-01-02T00:00:00Z");
+    fs::write(older.join("stray.txt"), "x\n").unwrap_or_else(|err| panic!("write: {err}"));
+    fs::write(newer.join("stray.txt"), "x\n").unwrap_or_else(|err| panic!("write: {err}"));
+    let unborn = repo.join(".wt").join("unborn");
+    git(repo, &["worktree", "add", "-q", "--orphan", "-b", "unborn", &unborn.display().to_string()]);
+    fs::write(unborn.join("stray.txt"), "x\n").unwrap_or_else(|err| panic!("write: {err}"));
+    let listed = listed_worktrees(repo);
+    assert_eq!(listed.len(), 4, "anchor + 3 本: {listed:?}");
+    let porcelain = git(repo, &["worktree", "list", "--porcelain"]);
+    assert!(porcelain.contains("HEAD 0000000000000000000000000000000000000000"), "未生の HEAD は全部 0: {porcelain}");
+    let rel = |path: &Path| format!("[RECENT-DIRTY] {}", path.strip_prefix(repo).unwrap_or(path).display());
+    let expected = vec!["[RECENT-DIRTY] .".to_owned(), rel(newer), rel(older), rel(&unborn)];
+    let enumerated: Vec<String> = listed.iter().skip(1).map(|path| rel(Path::new(path))).collect();
+    assert_ne!(enumerated, expected[1..].to_vec(), "前提: 列挙の順は期待の順と食い違う: {listed:?}");
+    let (_, recent) = brief_and_recent(&place, &path, &place.bd);
+    let dirty: Vec<String> = lines_of(&recent, Kind::Dirty).iter().map(|line| (*line).clone()).collect();
+    assert_eq!(dirty, expected, "anchor → 新しい HEAD → 古い HEAD → 未生の HEAD: {recent:?}");
+    assert!(marked(&recent, recent::MARKER_CUT, Kind::Dirty).is_empty(), "上限の内側: {recent:?}");
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
+/// §23 (3) 上限とちょうど同じ件数: commit の本数が `COMMIT_LIMIT` とちょうど同じ repo は `[RECENT-CUT] kind=commit` を出さず
+/// 全 commit が出る。worktree の本数が `DIRTY_SCAN_LIMIT` とちょうど同じ repo は `[RECENT-CUT] kind=dirty` を出さない。
+/// 対として 1 本ずつ足すとどちらの CUT も `shown=<上限> total=<上限 + 1>` で出る（境界は「超えた」側だけ）。
+#[test]
+fn hook_recovery_edge_counts_exactly_at_the_limit_are_not_cut() {
+    // flip-check: retroactive s2-07l.489.3
+    let place = role_place();
+    let path = stub_seat(&place, "edgelimit", Some("orchestrator"));
+    let repo = &place.repo;
+    for index in 1..COMMIT_LIMIT {
+        fs::write(repo.join("src").join(format!("c{index}.rs")), "// c\n").unwrap_or_else(|err| panic!("write: {err}"));
+        git(repo, &["add", "-A"]);
+        git(repo, &["commit", "-q", "-m", &format!("commit {index}")]);
+    }
+    assert_eq!(git(repo, &["rev-list", "--count", "HEAD"]), COMMIT_LIMIT.to_string(), "seed + 追加 = 上限ちょうど");
+    for index in 1..DIRTY_SCAN_LIMIT {
+        add_worktree(repo, &format!("w{index}"));
+    }
+    assert_eq!(listed_worktrees(repo).len(), DIRTY_SCAN_LIMIT, "anchor + 追加 = 上限ちょうど");
+    let (_, recent) = brief_and_recent(&place, &path, &place.bd);
+    assert_eq!(lines_of(&recent, Kind::Commit).len(), COMMIT_LIMIT, "全 commit が出る: {recent:?}");
+    assert!(marked(&recent, recent::MARKER_CUT, Kind::Commit).is_empty(), "上限ちょうどは切らない: {recent:?}");
+    let dirty: Vec<&str> = lines_of(&recent, Kind::Dirty).iter().map(|line| line.as_str()).collect();
+    assert_eq!(dirty, vec!["[RECENT-DIRTY] ."], "anchor だけが dirty（worktree は clean）: {recent:?}");
+    assert!(marked(&recent, recent::MARKER_CUT, Kind::Dirty).is_empty(), "上限ちょうどは切らない: {recent:?}");
+    // 対: 1 本ずつ超えるとどちらも切る。
+    fs::write(repo.join("src").join("over.rs"), "// over\n").unwrap_or_else(|err| panic!("write: {err}"));
+    git(repo, &["add", "-A"]);
+    git(repo, &["commit", "-q", "-m", "over"]);
+    add_worktree(repo, "over");
+    let (_, recent) = brief_and_recent(&place, &path, &place.bd);
+    let commit_cut = format!("[RECENT-CUT] kind=commit shown={COMMIT_LIMIT} total={}", COMMIT_LIMIT + 1);
+    assert_eq!(marked(&recent, recent::MARKER_CUT, Kind::Commit), vec![&commit_cut], "{recent:?}");
+    let dirty_cut = format!("[RECENT-CUT] kind=dirty shown={DIRTY_SCAN_LIMIT} total={}", DIRTY_SCAN_LIMIT + 1);
+    assert_eq!(marked(&recent, recent::MARKER_CUT, Kind::Dirty), vec![&dirty_cut], "{recent:?}");
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
+/// §23 (4) 時刻の字: 時差の字が 2 桁でない `updated_at`（`+9:00`・`+09:0`）を持つ in_progress の bead は `[RECENT-WIP]` に
+/// 更新時刻の値 `-` で出て（時刻を読めない側・9 時間ずれた時刻に化けない）、同じ字の open の bead は 24 時間の窓に
+/// 入らない。対として同じ時刻を `+09:00` で持つ open の bead は窓に入る（字の桁だけが違う）。
+#[test]
+fn hook_recovery_edge_offset_without_two_digits_is_an_unreadable_time() {
+    // flip-check: retroactive s2-07l.489.3
+    let place = role_place();
+    let path = stub_seat(&place, "edgeoffset", Some("orchestrator"));
+    let now = vessel::seat::state::now_secs();
+    let stamp = vessel::fleet::cli::format_utc(now - 60);
+    assert!(stamp.ends_with('Z'), "{stamp}");
+    let odd_hour = stamp.replace('Z', "+9:00");
+    let odd_minute = stamp.replace('Z', "+09:0");
+    let two_digits = stamp.replace('Z', "+09:00");
+    let bead = |id: &str, status: &str, title: &str, at: &str| {
+        format!("{{\"id\":\"{id}\",\"status\":\"{status}\",\"title\":\"{title}\",\"updated_at\":\"{at}\"}}")
+    };
+    let items = [
+        bead("w-odd", "in_progress", "時差が 1 桁", &odd_hour),
+        bead("o-odd", "open", "同じ字の open", &odd_hour),
+        bead("o-min", "open", "分が 1 桁", &odd_minute),
+        bead("o-ok", "open", "2 桁の対", &two_digits),
+    ];
+    let bd = fake_bd_in(&place, "ledger-offset", &format!("[{}]", items.join(",")));
+    let (brief, recent) = brief_and_recent(&place, &path, &bd);
+    assert!(brief.iter().any(|line| line.contains("open=3 in_progress=1 blocked=0")), "件数は字に依らない: {brief:?}");
+    let wip: Vec<&str> = lines_of(&recent, Kind::Wip).iter().map(|line| line.as_str()).collect();
+    assert_eq!(wip, vec!["[RECENT-WIP] w-odd - 時差が 1 桁"], "読めない時刻は -: {recent:?}");
+    let shifted = vessel::fleet::cli::format_utc(now - 60 - 9 * 3_600);
+    let beads: Vec<&str> = lines_of(&recent, Kind::Bead).iter().map(|line| line.as_str()).collect();
+    assert_eq!(beads, vec![format!("[RECENT-BEAD] o-ok open {shifted} 2 桁の対")], "2 桁の字だけが窓に入る: {recent:?}");
+    assert!(recent.iter().all(|line| !line.contains("o-odd") && !line.contains("o-min")), "2 桁でない字は窓に入らない: {recent:?}");
+    assert!(marked(&recent, recent::MARKER_UNMEASURED, Kind::Bead).is_empty(), "読めた周: {recent:?}");
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
+/// §23 (5) 枠が「無い」以外の理由で読めない・消せない周: 席の置き場の枠の名前が dir になっている周の `source = compact` の
+/// SessionStart は `[PRECOMPACT]` を出さず、stderr に読めない理由（`slot-unreadable`）の 1 行と消せない理由の 1 行を出し、
+/// §5 の指示文 11 行と §21 の DATA は出す（rc 0・記録は増えない・dir は残る）。枠が無い普通の周は stderr にどちらの行も
+/// 出さない（読めないと無いを分ける・C10.2）。
+#[test]
+fn hook_recovery_edge_compact_with_a_directory_slot_tells_both_failures_and_keeps_the_rest() {
+    // flip-check: retroactive s2-07l.489.3
+    let place = role_place();
+    let path = stub_seat(&place, "edgeslotdir", Some("orchestrator"));
+    let slot = slot_file(&place, "edgeslotdir");
+    fs::create_dir_all(&slot).unwrap_or_else(|err| panic!("mkdir: {err}"));
+    let before = precompact_records(&place.state).len();
+    let args = ["session-start", "--pane", STUB_PANE, "--rules", &place.rules, "--bd", &place.bd];
+    let out = run_stub_hook(&path, &args, &session_payload(&place.repo, "sid-pc", "compact"));
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "席は止めない: {}", stderr_text(&out));
+    let stderr = stderr_text(&out);
+    let errs: Vec<&str> = stderr.lines().collect();
+    assert_eq!(errs.len(), 2, "読めない理由と消せない理由の 2 行: {stderr}");
+    assert!(errs[0].contains("reason=slot-unreadable"), "読めない理由: {}", errs[0]);
+    assert!(errs[1].contains("を消せない") && errs[1].contains(&slot.display().to_string()), "消せない理由: {}", errs[1]);
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let mut lines = stdout.lines();
+    assert!(lines.next().unwrap_or_default().starts_with(&format!("[{NAME}/SessionStart] served version=")), "{stdout}");
+    let rest: Vec<String> = lines.map(str::to_owned).collect();
+    assert!(precompact_section(&rest).is_empty(), "枠は出ない: {rest:?}");
+    let (brief, recent) = split_recent(rest);
+    assert_eq!(brief.len(), 11, "指示文は出る: {brief:?}");
+    assert!(!recent.is_empty() && recent.iter().all(|line| line.starts_with("[RECENT-")), "DATA は出る: {recent:?}");
+    assert!(slot.is_dir(), "消せない枠は残る");
+    assert_eq!(precompact_records(&place.state).len(), before, "出さない周は記録も増えない");
+    // 枠が無い普通の周: dir を退けて同じ compact を撃つと stderr は 0 byte（どちらの行も出ない）。
+    fs::remove_dir_all(&slot).unwrap_or_else(|err| panic!("rmdir: {err}"));
+    let out = run_stub_hook(&path, &args, &session_payload(&place.repo, "sid-pc", "compact"));
+    let rest = after_header(&out);
+    assert!(precompact_section(&rest).is_empty(), "枠が無い compact は出さない: {rest:?}");
+    assert_eq!(split_recent(rest).0.len(), 11, "指示文は出る");
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
+/// 偽 tmux（socket を要る形）: `-S <socket>` を先頭に受けた周だけ `<name>:<name>` を出し、それ以外は rc 1 で黙る script を
+/// 置き、その dir を先頭に足した PATH の値を返す（socket が席の解決に渡ったかを偽 tmux の側で測る）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn socket_stub_tmux_path(place: &RolePlace, name: &str, socket: &str) -> String {
+    use std::os::unix::fs::PermissionsExt;
+    let bin_dir = place.sock_dir.join(format!("tmux-sock-{name}"));
+    fs::create_dir_all(&bin_dir).expect("偽 tmux の dir を作れる");
+    let stub = bin_dir.join("tmux");
+    let body = format!("#!/bin/sh\nif [ \"$1\" = \"-S\" ] && [ \"$2\" = \"{socket}\" ]; then\n  echo '{name}:{name}'\n  exit 0\nfi\nexit 1\n");
+    fs::write(&stub, body).expect("偽 tmux を書ける");
+    fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).expect("偽 tmux に実行権を付ける");
+    format!("{}:{}", bin_dir.display(), std::env::var("PATH").unwrap_or_default())
+}
+
+/// §23 (6) socket を渡した周の席の解決: PreCompact の口に `--tmux-socket` を渡した周も登録済みの席として枠を書き（記録
+/// `precompact-slot` が席を名乗る）、続く socket 付きの `source = compact` の SessionStart がその枠を出す。対として
+/// socket を渡さない周は（socket を要る偽 tmux では）席が解けず枠を書かない＝socket が解決に渡った証拠。
+#[test]
+fn hook_recovery_edge_precompact_with_a_socket_resolves_the_registered_seat() {
+    // flip-check: retroactive s2-07l.489.3
+    let place = role_place();
+    let name = "edgesock";
+    let path = socket_stub_tmux_path(&place, name, &place.socket);
+    let stamp = run_stub_hook(&path, &["session-start", "--pane", STUB_PANE, "--tmux-socket", &place.socket], &stamp_payload(&place.repo, "sid-recent"));
+    assert_eq!(stamp.status.code(), Some(i32::from(RC_OK)), "打刻の session-start は rc 0: {}", stderr_text(&stamp));
+    let target = format!("{name}:{name}");
+    let registered = Command::new(bin())
+        .args(["seat", "register", "--state-dir", &place.state.display().to_string(), "--target", &target])
+        .args(["--role", "orchestrator", "--account", "a1", "--launch", &place.launch, "--anchor", &place.repo.display().to_string()])
+        .output()
+        .unwrap_or_else(|err| panic!("binary: {err}"));
+    assert_eq!(registered.status.code(), Some(i32::from(RC_OK)), "seat register は rc 0: {}", stderr_text(&registered));
+    let text = "socket 付きの席の発言";
+    let transcript = write_transcript(&place, "t-sock", &[assistant_line(&[text], false)]);
+    let payload = precompact_payload(&place.repo, "auto", Some(&transcript));
+    let slot = slot_file(&place, name);
+    let with_socket = ["pre-compact", "--pane", STUB_PANE, "--tmux-socket", &place.socket, "--rules", &place.rules];
+    let before = precompact_records(&place.state).len();
+    let out = run_stub_hook(&path, &with_socket, &payload);
+    assert_silent(&out, "socket 付きの pre-compact");
+    let parsed = Slot::parse(&fs::read_to_string(&slot).unwrap_or_default()).unwrap_or_else(|| panic!("枠の形"));
+    assert_eq!(parsed.text, text, "socket を渡した周も登録済みの席として枠を書く");
+    let records = precompact_records(&place.state);
+    assert_eq!(records.len(), before + 1, "記録 1 行: {records:?}");
+    assert_eq!(what_of(&records[before]), "precompact-slot", "{records:?}");
+    assert_attributed(&records[before], Some(&format!("{name}_{name}")), "枠の記録");
+    // 対: socket を渡さない周はこの偽 tmux では席が解けない＝枠を書かず記録も増えない。
+    fs::remove_file(&slot).unwrap_or_else(|err| panic!("rm: {err}"));
+    let out = run_stub_hook(&path, &["pre-compact", "--pane", STUB_PANE, "--rules", &place.rules], &payload);
+    assert_silent(&out, "socket 無しの pre-compact");
+    assert!(!slot.exists(), "socket 無しでは席が解けず枠を書かない");
+    assert_eq!(precompact_records(&place.state).len(), before + 1, "記録も増えない");
+    // 読む側も socket 付きで同じ席を解く。
+    assert_silent(&run_stub_hook(&path, &with_socket, &payload), "socket 付きの pre-compact（2 回目）");
+    let args = ["session-start", "--pane", STUB_PANE, "--tmux-socket", &place.socket, "--rules", &place.rules, "--bd", &place.bd];
+    let lines = after_header(&run_stub_hook(&path, &args, &session_payload(&place.repo, "sid-pc", "compact")));
+    let section = precompact_section(&lines);
+    assert_eq!(section.len(), 2, "header + 逐語の 1 行: {lines:?}");
+    assert_eq!(section[1], text);
+    assert!(!slot.exists(), "出した後に枠は消える");
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
