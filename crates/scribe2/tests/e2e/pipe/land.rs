@@ -327,45 +327,173 @@ fn pipe_land_rebase_refuses_dirty_worktree_without_rebase() {
     clean(&[&repo, &state]);
 }
 
-/// 撃ち直しの間に main がさらに動いた周は **rc 1 `stale base` で squash しない**（1 回の land が
-/// rebase するのは 1 度だけ）。次の land が同じ経路で追随する。
+// ───── 撃ち直しの間に main が動いた便の追随し直し（設計 §5.4 (vi) / §18・`s2-07l.335`・接頭辞 `pipe_land_stale_`） ─────
+
+/// 撃ち直しの lens が走っている間に **別便が main を面の内へ進める** fake lens（PASS を返す）。
+///
+/// `every` が偽なら**最初の 1 回だけ**進め（2 周目の撃ち直しは main を動かさない＝land できる）、真なら
+/// 呼ばれるたびに進める（何周追随し直しても stale＝上限で終端する形）。呼出回数は `calls` に 1 行ずつ写す。
+fn racing_lens(repo: &Path, state: &Path, every: bool) -> String {
+    let calls = state.join("racing-calls");
+    let once = state.join("racing-once");
+    let advance = format!(
+        "printf 'x\\n' >> '{repo}/crates/racing.txt'; git -C '{repo}' add -A; git -C '{repo}' commit -q -m racing",
+        repo = repo.display()
+    );
+    let guarded = if every {
+        advance
+    } else {
+        format!("if [ ! -e '{once}' ]; then touch '{once}'; {advance}; fi", once = once.display())
+    };
+    format!(
+        "cat >/dev/null; printf 'call\\n' >> '{}'; {guarded}; echo '{}'; :",
+        calls.display(),
+        lens_verdict("PASS")
+    )
+}
+
+/// [`racing_lens`] が呼ばれた回数。
+fn racing_calls(state: &Path) -> usize {
+    fs::read_to_string(state.join("racing-calls")).map(|text| text.lines().count()).unwrap_or(0)
+}
+
+/// stale の記帳（`Gated detail=stale:<range>`）の件数。
+fn stale_count(state: &Path, id: &str) -> usize {
+    stages(state, id)
+        .into_iter()
+        .filter(|(stage, detail)| {
+            *stage == Some(Stage::Gated) && detail.as_deref().is_some_and(|found| found.starts_with("stale:"))
+        })
+        .count()
+}
+
+/// 追随の記帳（`Implemented detail=rebase:<range>`）の件数。
+fn rebase_count(state: &Path, id: &str) -> usize {
+    stages(state, id)
+        .into_iter()
+        .filter(|(stage, detail)| {
+            *stage == Some(Stage::Implemented) && detail.as_deref().is_some_and(|found| found.starts_with("rebase:"))
+        })
+        .count()
+}
+
+/// 撃ち直しの間に main がさらに動いた周は **同じ land の中で追随し直して Landed** する（設計 §18・`--runner` は
+/// 要らない）。`RunStage stage=Gated detail=stale:<old>..<now>` を 1 件記帳し、(iii) の rebase から再 gate を
+/// 通し直して新しい main の上に squash が載る。stdout は 1 周目の追随と撃ち直しの判定行も捨てない。
+/// base（rc 1 `stale base`・段は Gated・event 0 増）では stale の記帳も 2 度目の追随も無い＝RED。
 #[test]
-fn pipe_land_rebase_refuses_when_main_moves_during_regate() {
+fn pipe_land_stale_follows_again_in_the_same_land_and_lands() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let marker = state.join("lens-ran");
+    let base = git(&repo, &["rev-parse", "refs/heads/main"]);
+    let id = gated_pass(&repo, &state, &path, &marker);
+    let moved = commit_other_in_scope(&repo);
+    let lens = racing_lens(&repo, &state, false);
+    let out = run_pipe(&[
+        "land", "--run", &id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(), "--lens", &lens,
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "追随し直した land は rc 0: {}", stderr_of(&out));
+    let new = git(&repo, &["rev-parse", "refs/heads/main"]);
+    let raced = git(&repo, &["rev-parse", &format!("{new}^")]);
+    assert_eq!(git(&repo, &["log", "-1", "--format=%s", &raced]), "racing", "squash は lens の中で進んだ main の上に載る");
+    assert_eq!(git(&repo, &["rev-parse", &format!("{raced}^")]), moved, "racing は 1 周目の追随先の上に 1 commit");
+    assert_eq!(git(&repo, &["rev-list", "--count", &format!("{raced}..{new}")]), "1", "squash は 1 commit");
+    assert_eq!(racing_calls(&state), 2, "撃ち直しは 2 周（1 周目で main が動き・2 周目で載る）");
+    let stdout = stdout_of(&out);
+    assert!(stdout.contains(&format!("run={id} rebase={base}..{moved}")), "1 周目の追随の行: {stdout}");
+    assert!(stdout.contains(&format!("run={id} stale={moved}..{raced}")), "stale の判定行: {stdout}");
+    assert!(stdout.contains(&format!("run={id} rebase={moved}..{raced}")), "2 周目の追随の行: {stdout}");
+    assert_eq!(stdout.matches("verdict=PASS").count(), 2, "撃ち直しの判定行は 2 周分: {stdout}");
+    assert!(stdout.contains(&format!("landed={new}")), "landed=: {stdout}");
+    assert!(!stderr_of(&out).contains("stale base"), "断らない: {}", stderr_of(&out));
+    assert_stale_trail(&state, &id, &moved, &raced);
+    assert!(show_line(&repo, &state, &id).contains("stage=Landed"), "段は Landed");
+    clean(&[&repo, &state]);
+}
+
+/// 追随し直して載った便の event 列: stale の記帳 1 件（段は `Gated`・old と now を名乗る）→ 2 周目の追随の
+/// 記帳の順で、追随は 2 件・`Failed` は 0 件。
+fn assert_stale_trail(state: &Path, id: &str, moved: &str, raced: &str) {
+    let trail = stages(state, id);
+    assert_eq!(stale_count(state, id), 1, "stale の記帳は 1 件: {trail:?}");
+    assert!(
+        trail.contains(&(Some(Stage::Gated), Some(format!("stale:{moved}..{raced}")))),
+        "stale の記帳は old と now を名乗り段は Gated のまま: {trail:?}"
+    );
+    assert_eq!(rebase_count(state, id), 2, "追随の記帳は 2 件（周ごとに 1 件）: {trail:?}");
+    let stale_at = trail.iter().position(|(_, detail)| detail.as_deref().is_some_and(|found| found.starts_with("stale:")));
+    let second_at = trail.iter().position(|(_, detail)| detail.as_deref() == Some(format!("rebase:{moved}..{raced}").as_str()));
+    assert!(matches!((stale_at, second_at), (Some(s), Some(r)) if s < r), "順序は stale → 2 周目の追随: {trail:?}");
+    assert!(!trail.iter().any(|(stage, _)| *stage == Some(Stage::Failed)), "終端しない: {trail:?}");
+}
+
+/// 何周追随し直しても main が動く周は **上限（`pipe.follow_retries`＝fixture で 1）で typed に終端する**
+/// （`Failed detail=rebase-conflict` + rc 1・新しい終端の理由を増やさない・main は squash を載せない）。
+/// 値 1 ＝最大 1 回追随し直す: stale 2 件目で終端し、lens は 2 周分だけ走る。`--runner` は要らない。
+#[test]
+fn pipe_land_stale_stops_at_the_limit_with_typed_failed() {
     let (repo, state) = repo_with_state();
     let path = write_contract(&repo, &[], &[]);
     let marker = state.join("lens-ran");
     let id = gated_pass(&repo, &state, &path, &marker);
     let moved = commit_other_in_scope(&repo);
-    // 撃ち直しの lens が走っている間に **さらに別便が main を進める**（lens の中で commit する）。
-    let racing = format!(
-        "cat >/dev/null; git -C '{}' commit -q --allow-empty -m racing; echo '{}'",
-        repo.display(),
-        lens_verdict("PASS")
+    let rules = write_rules_with_retries(&state, "rules-stale-1.toml", 1, 1_000_000, 1);
+    let lens = racing_lens(&repo, &state, true);
+    let out = land_extra(&repo, &state, &id, &["--lens", &lens, "--rules", &rules.display().to_string()]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "上限に達した周は rc 1: {}", stderr_of(&out));
+    assert!(stderr_of(&out).contains("上限"), "理由は上限を名乗る: {}", stderr_of(&out));
+    assert!(!stdout_of(&out).contains("landed="), "land していない: {}", stdout_of(&out));
+    let trail = stages(&state, &id);
+    assert_eq!(
+        trail.last().cloned(),
+        Some((Some(Stage::Failed), Some("rebase-conflict".to_owned()))),
+        "終端の理由は既存の型: {trail:?}"
     );
-    let out = run_pipe(&[
-        "land", "--run", &id, "--repo", &repo.display().to_string(),
-        "--state-dir", &state.display().to_string(), "--lens", &racing,
-    ]);
-    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "撃ち直し中に動いた main は rc 1: {}", stderr_of(&out));
-    assert!(stderr_of(&out).contains("stale base"), "理由: {}", stderr_of(&out));
-    // **追随と撃ち直しは実際に起きた**（event に残り lens を 1 回消費した）ので、判定行も残す。
-    let stdout = stdout_of(&out);
-    assert!(stdout.contains("rebase=") && stdout.contains(&format!("..{moved}")), "追随の行が残る: {stdout}");
-    assert!(stdout.contains("verdict=PASS"), "撃ち直しの判定行が残る: {stdout}");
-    let raced = git(&repo, &["rev-parse", "refs/heads/main"]);
-    assert_ne!(raced, moved, "lens の中で main が進んでいる");
-    assert_eq!(git(&repo, &["rev-parse", &format!("{raced}^")]), moved, "main に載ったのは racing の 1 commit だけ（squash していない）");
-    assert!(show_line(&repo, &state, &id).contains("stage=Gated"), "段は Gated（撃ち直しは PASS）");
-    // 次の land が同じ経路で追随して載る。
-    let lens = fake_lens(&marker, &lens_verdict("PASS"));
-    let again = run_pipe(&[
-        "land", "--run", &id, "--repo", &repo.display().to_string(),
-        "--state-dir", &state.display().to_string(), "--lens", &lens,
-    ]);
-    assert_eq!(again.status.code(), Some(i32::from(RC_OK)), "次の land は追随して載る: {}", stderr_of(&again));
-    assert!(stdout_of(&again).contains(&format!("rebase={moved}..{raced}")), "2 度目の追随: {}", stdout_of(&again));
-    let new = git(&repo, &["rev-parse", "refs/heads/main"]);
-    assert_eq!(git(&repo, &["rev-parse", &format!("{new}^")]), raced, "racing の上に載る");
+    assert_eq!(stale_count(&state, &id), 2, "stale の記帳は 2 件（1 回追随し直し・2 件目で終端）: {trail:?}");
+    assert_eq!(rebase_count(&state, &id), 2, "追随は 2 周: {trail:?}");
+    assert_eq!(racing_calls(&state), 2, "3 周目は撃たない");
+    let main = git(&repo, &["rev-parse", "refs/heads/main"]);
+    assert_eq!(git(&repo, &["log", "-1", "--format=%s", &main]), "racing", "main の先頭は lens が進めた commit（squash は無い）");
+    assert_eq!(git(&repo, &["rev-list", "--count", &format!("{moved}..{main}")]), "2", "lens が 2 回進めただけ");
+    assert!(show_line(&repo, &state, &id).contains("stage=Failed"), "段は Failed");
+    clean(&[&repo, &state]);
+}
+
+/// 回数は衝突の起こし直しと **1 つの上限に合算**する（設計 §18）: 衝突の記帳を 1 件持つ便は、上限 1 の下で
+/// 最初の stale で終端する（別々に数えると stale 0 回＝追随し直して Landed に化ける）。
+#[test]
+fn pipe_land_stale_shares_the_limit_with_conflict_retries() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let marker = state.join("lens-ran");
+    let base = git(&repo, &["rev-parse", "refs/heads/main"]);
+    let id = gated_pass(&repo, &state, &path, &marker);
+    let moved = commit_other_in_scope(&repo);
+    // 衝突の記帳を手で 1 件積む（段は Implemented に戻るので gate を撃ち直して Gated PASS へ）。
+    record_conflict(&state, &id, &format!("{base}..{moved}"));
+    let rules = write_rules_with_retries(&state, "rules-stale-shared.toml", 1, 1_000_000, 1);
+    fs::remove_file(&marker).ok();
+    let regate = fake_lens(&marker, &lens_verdict("PASS"));
+    let gated = gate_with_rules(&repo, &state, &id, &rules, &regate);
+    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "撃ち直しの gate: {}", stderr_of(&gated));
+    // main は 1 度だけ動く（合算しなければ 2 周目で載る形）。
+    let lens = racing_lens(&repo, &state, false);
+    let out = land_extra(&repo, &state, &id, &["--lens", &lens, "--rules", &rules.display().to_string()]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "合算で上限に達した周は rc 1: {}", stderr_of(&out));
+    let trail = stages(&state, &id);
+    assert_eq!(
+        trail.last().cloned(),
+        Some((Some(Stage::Failed), Some("rebase-conflict".to_owned()))),
+        "終端の理由: {trail:?}"
+    );
+    assert_eq!(stale_count(&state, &id), 1, "stale は 1 件で尽きる: {trail:?}");
+    assert_eq!(conflict_count(&state, &id), 1, "衝突の記帳は手で積んだ 1 件のまま: {trail:?}");
+    assert_eq!(racing_calls(&state), 1, "2 周目は撃たない");
+    assert!(!stdout_of(&out).contains("landed="), "land していない: {}", stdout_of(&out));
+    let main = git(&repo, &["rev-parse", "refs/heads/main"]);
+    assert_eq!(git(&repo, &["log", "-1", "--format=%s", &main]), "racing", "squash は載らない");
     clean(&[&repo, &state]);
 }
 

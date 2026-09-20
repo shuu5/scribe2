@@ -8,6 +8,11 @@
 //! rules 行 `pipe.follow_retries` が持ち、**回数は replay から導く**（別の状態 file を
 //! 持たない・C3）。
 //!
+//! **撃ち直しの間に main がさらに動いた周も同じ上限を分け合う**（設計 pipeline.md §5.4 (vi) / §18・
+//! `s2-07l.335`）。land は `RunStage stage=Gated detail=stale:<base>..<main>` を同じ記帳の口
+//! （[`on_stale`]）で 1 件記し、同じ land の中で追随し直す（runner は要らない）。回数は
+//! `rebase-conflict:` と `stale:` の行を合算し（[`retried`]）、上限で `Failed detail=rebase-conflict`。
+//!
 //! **runner を起こす経路はこの module の [`spawn_turn`] ただ 1 本**である（起動そのものは
 //! [`super::spawn::spawn`]＝C6 の 1 口）。起こし直しと通常の起動で turn の後始末（[`settle`]）が
 //! 分かれると、追随の base 記帳が片方の経路から静かに抜ける——`resume` で起こし直した turn が
@@ -39,6 +44,14 @@ pub const POLARITY: Polarity = Polarity {
 /// [`is_conflict`] ただ 1 本が持つ（字面を 2 度書かない——片方だけを直すと、起こし直せる
 /// 便の集合が静かにずれる）。
 pub(crate) const EXHAUSTED: &str = "rebase-conflict";
+
+/// 撃ち直しの間に main がさらに動いた周の記帳の語（`RunStage stage=Gated detail=stale:<base>..<main>`・
+/// 設計 pipeline.md §5.4 (vi) / §18・`s2-07l.335`）。
+///
+/// 便は終端にせず、同じ land の中で追随し直す（rebase → 再 gate → land）。回数は衝突の記帳と
+/// **同じ 1 つの上限**（`pipe.follow_retries`）に合算し（[`retried`]）、上限で `Failed detail=rebase-conflict`
+/// （新しい終端の理由を増やさない）。判定は [`is_stale`] ただ 1 本が持つ。
+pub(crate) const STALE: &str = "stale";
 
 /// 回数を読めなかった周の終端の理由（**上限到達とは分ける**・rc 2）。
 const UNMEASURED: &str = "follow-unmeasured";
@@ -90,6 +103,19 @@ pub(crate) fn is_conflict(detail: &str) -> bool {
         .is_some_and(|rest| rest.starts_with(':'))
 }
 
+/// 撃ち直しの間に main が動いたことを記帳した `detail` か（接頭辞 `stale:`・設計 §18）。
+///
+/// [`is_conflict`] とは**別の判定**である——`resume` の弁別（`pipe::cli`）は衝突だけを起こし直しの続きと
+/// 読む（stale の便は `Gated` のまま land へ流れる）。回数の合算は [`is_retry`] が 2 本を束ねる。
+pub(crate) fn is_stale(detail: &str) -> bool {
+    detail.strip_prefix(STALE).is_some_and(|rest| rest.starts_with(':'))
+}
+
+/// 起こし直しの回数に数える `detail` か（衝突 ∪ stale・**合算の読み手はこの 1 本**・設計 §18）。
+fn is_retry(detail: &str) -> bool {
+    is_conflict(detail) || is_stale(detail)
+}
+
 /// runner を 1 turn 起こす材料（**通常の起動も起こし直しも同じ形**）。
 pub(crate) struct Turn<'a> {
     /// 便 id。
@@ -123,13 +149,13 @@ pub struct Runner<'a> {
     pub pool: Option<&'a Pool>,
 }
 
-/// 衝突 1 回分の材料（land の追随が渡す）。
+/// 追随が止まった 1 回分の材料（land の追随が渡す・衝突 [`on_conflict`] と stale [`on_stale`] で同じ形）。
 pub(crate) struct Conflict<'a> {
     /// 起こし直しの材料。
     pub turn: Turn<'a>,
-    /// 便の記録済み base。
+    /// 便の記録済み base（stale の周は追随した先＝CAS の old）。
     pub base: &'a str,
-    /// 追随の相手（land が読んだ main）。
+    /// 追随の相手（land が読んだ main・stale の周は撃ち直しの後に読み直した main）。
     pub main: &'a str,
     /// 起こし直しの上限（rules 行 `pipe.follow_retries`）。
     pub limit: u64,
@@ -178,8 +204,46 @@ pub(crate) fn on_conflict(entry: &Conflict<'_>) -> Outcome {
     }
 }
 
-/// 起こし直した回数 = 同じ run の `rebase-conflict:` の `RunStage` の行数 − 1
-/// （**いま記帳した分を除く**）。
+/// 撃ち直しの間に main がさらに動いた周（設計 pipeline.md §5.4 (vi) / §18）。**runner は起こさない**
+/// ——同じ land の中で追随し直すのは呼び手（`land`）で、ここは記帳と回数の判定だけを持つ。
+///
+/// 1. `RunStage stage=Gated detail=stale:<base>..<main>` を 1 件記帳する（衝突と同じ記帳の口
+///    [`record`]・段は `Gated` のまま＝列の鍵〔最初の `Gated` の ts〕は動かない・verdict は前の周の PASS）。
+/// 2. 回数を衝突と**同じ 1 つの上限**で判定する（[`FollowCheck`]・`rebase-conflict:` と `stale:` の合算）。
+///    上限の内は `Ok(())`（呼び手が (iii) から追随し直す）。上限に達した周は `Failed detail=rebase-conflict`
+///    + rc 1（既存の終端の型・新しい理由の variant を増やさない）、読めない周は `Failed detail=follow-unmeasured`
+///    + rc 2（[`terminate`]・衝突と同じ終端形）。
+pub(crate) fn on_stale(entry: &Conflict<'_>) -> Result<(), Outcome> {
+    let recorded = record(
+        &entry.turn,
+        Stage::Gated,
+        format!("{STALE}:{}..{}", entry.base, entry.main),
+    );
+    if let Err(reason) = recorded {
+        return Err(broken(reason));
+    }
+    match FollowCheck::judge(retried(entry.turn.state_dir, entry.turn.run), entry.limit) {
+        FollowCheck::Unreadable => Err(terminate(
+            entry,
+            UNMEASURED,
+            RC_BROKEN,
+            format!("run {} の追随し直しの回数を読めない", entry.turn.run),
+        )),
+        FollowCheck::Exhausted => Err(terminate(
+            entry,
+            EXHAUSTED,
+            RC_REFUSED,
+            format!(
+                "run {} の撃ち直しの間に main が動いた（base={} main={}・追随し直しの上限 {} に達した）",
+                entry.turn.run, entry.base, entry.main, entry.limit
+            ),
+        )),
+        FollowCheck::Retry => Ok(()),
+    }
+}
+
+/// 起こし直した回数 = 同じ run の `rebase-conflict:` と `stale:` の `RunStage` の行数の**合算** − 1
+/// （**いま記帳した分を除く**・設計 §18＝衝突の起こし直しと stale の追随し直しは 1 つの上限を分け合う）。
 ///
 /// **replay の導出値**で、別の状態 file を持たない（C3・設計 §9 の却下案）。store を
 /// 読めない周は `None`＝「0 回起こした」に読み替えない（fail-closed）。
@@ -190,7 +254,7 @@ fn retried(state_dir: &Path, run: &str) -> Option<u64> {
         .filter(|event| {
             event.run == run
                 && event.kind == EventKind::RunStage
-                && event.detail.as_deref().is_some_and(is_conflict)
+                && event.detail.as_deref().is_some_and(is_retry)
         })
         .count();
     Some(u64::try_from(seen).unwrap_or(u64::MAX).saturating_sub(1))
@@ -533,12 +597,12 @@ fn broken(reason: String) -> Outcome {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_conflict, spawn_turn, FollowCheck, Runner, Turn, DIRTY, EXHAUSTED};
+    use super::{is_conflict, is_stale, retried, spawn_turn, FollowCheck, Runner, Turn, DIRTY, EXHAUSTED, STALE};
     use crate::cli_outcome::{RC_OK, RC_REFUSED};
     use crate::fleet::store::{self, LockPolicy};
-    use crate::fleet::Stage;
+    use crate::fleet::{EventKind, Stage};
     use crate::pipe::approve::RC_BLOCKED;
-    use crate::pipe::fixture::{contract, scratch};
+    use crate::pipe::fixture::{append_all, contract, event, scratch};
     use crate::pipe::spawn::Account;
     use std::path::{Path, PathBuf};
     use std::process::Command;
@@ -665,5 +729,44 @@ mod tests {
         assert!(!is_conflict("rebase-empty"), "同一変更の終端は別の理由");
         assert!(!is_conflict("rebase:abc..def"), "追随の記帳は別の理由");
         assert!(!is_conflict("rebase-conflicted:x"), "接頭辞は `:` まで見る");
+    }
+
+    /// stale の記帳（`stale:<base>..<main>`）は衝突の記帳と**別の判定**である（設計 §18）: `resume` は衝突だけを
+    /// 起こし直しの続きと読み、stale の便は `Gated` のまま land へ流れる。接頭辞は `:` まで見る（`stale-x:` は違う）。
+    #[test]
+    fn follow_stale_detail_is_distinguished_from_the_conflict_detail() {
+        assert!(is_stale("stale:abc..def"), "stale の記帳");
+        assert!(is_stale(&format!("{STALE}:a..b")), "接頭辞は 1 本から組む");
+        assert!(!is_stale(STALE), "語だけでは記帳ではない");
+        assert!(!is_stale("stale-rows:a..b"), "接頭辞は `:` まで見る");
+        assert!(!is_stale("rebase-conflict:abc..def"), "衝突の記帳は stale ではない");
+        assert!(!is_conflict("stale:abc..def"), "stale の記帳は衝突ではない（resume の弁別を動かさない）");
+        assert!(!is_stale("rebase:abc..def"), "追随の記帳は別の理由");
+    }
+
+    /// 回数は `rebase-conflict:` と `stale:` の行を**1 つに合算**する（設計 §18・いま記帳した分を除く −1）。
+    /// 衝突 1 件 + stale 1 件 = 起こし直し 1 回＝上限 1 で `Exhausted`（別々に数えると両方 0 回で `Retry` に化ける）。
+    /// 他の便の行・`RunStage` 以外の行・終端の理由（`rebase-conflict` の語だけ）は数えない。
+    #[test]
+    fn follow_stale_rows_add_to_the_conflict_count_under_one_limit() {
+        let state = scratch("follow-stale-count");
+        append_all(
+            &state,
+            &[
+                event("me", EventKind::RunStage, Some(Stage::Implemented), None, Some("rebase-conflict:a..b")),
+                event("me", EventKind::RunStage, Some(Stage::Gated), None, Some("verdict:PASS")),
+                event("me", EventKind::RunStage, Some(Stage::Gated), None, Some("stale:b..c")),
+                // 数えない側: 別の便・段でない kind・終端の理由の語だけ。
+                event("other", EventKind::RunStage, Some(Stage::Gated), None, Some("stale:b..c")),
+                event("me", EventKind::RunDone, Some(Stage::Failed), None, Some("stale:x..y")),
+                event("me", EventKind::RunStage, Some(Stage::Failed), None, Some(EXHAUSTED)),
+            ],
+        );
+        assert_eq!(retried(&state, "me"), Some(1), "衝突 1 + stale 1 − 1 = 1 回");
+        assert_eq!(FollowCheck::judge(retried(&state, "me"), 1), FollowCheck::Exhausted, "上限 1 は合算で尽きる");
+        assert_eq!(FollowCheck::judge(retried(&state, "me"), 2), FollowCheck::Retry, "上限 2 なら残り 1 回");
+        assert_eq!(retried(&state, "other"), Some(0), "別の便は自分の 1 件だけ（−1 で 0）");
+        assert_eq!(retried(&state, "absent"), Some(0), "行の無い便は 0（読めないではない）");
+        let _ = std::fs::remove_dir_all(&state);
     }
 }

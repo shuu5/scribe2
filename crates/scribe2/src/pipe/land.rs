@@ -25,6 +25,11 @@
 //! **同じ関数で**撃ち直し、PASS なら新しい base で CAS する。衝突は木を戻して**実装役を
 //! 起こし直す**（[`super::follow`]・便は終端にしない・終端するのは上限に達した周だけ）。
 //!
+//! **撃ち直しの間に main がさらに動いた周は同じ land の中で追随し直す**（`s2-07l.335`・設計 §5.4 (vi) /
+//! §18・FR30）。`RunStage stage=Gated detail=stale:<old>..<now>` を衝突と同じ記帳の口で記し、回数は衝突と
+//! **1 つの上限**（`pipe.follow_retries`）で合算して、上限に達した周だけ `Failed detail=rebase-conflict` で
+//! 終端する。runner は要らず、撃つ主体が席に残らない（[`Attempt`]・周回は [`land`] の中に閉じる）。
+//!
 //! **着地は gate 済みの便を先に通す**（`s2-07l.147`・設計 gate-cost.md §6）。前提検査の直後・追随の
 //! 前に、同じ置き場の着地待ちの列（event log の replay から導く・別の状態 file を持たない）を見て、
 //! 自分より前の便が居る間は待つ。待ちは完了 enum の variant 1 つ（[`Completion::LandTurn`]）で唯一の
@@ -279,14 +284,28 @@ pub fn verdicts_path(state_dir: &Path) -> PathBuf {
     store::events_path(state_dir).with_file_name(VERDICTS_FILE)
 }
 
+/// 試行 1 回の戻り（**閉じた enum**・設計 §18・`s2-07l.335`）。自由文（stderr の `stale base`）で判定しない。
+enum Attempt {
+    /// 決着した（Landed・断り・終端のどれか）。呼び手はそのまま返す。
+    Settled(Outcome),
+    /// 撃ち直しの間に main がさらに動いた。`old` は追随した先（CAS に使うはずだった main）、`now` は
+    /// 読み直した main。呼び手は記帳して (iii) から追随し直す。
+    Stale { old: String, now: String },
+}
+
 /// land を 1 回通す。
+///
+/// **撃ち直しの間に main がさらに動いた周は同じ land の中で追随し直す**（設計 §5.4 (vi) / §18）。試行
+/// （[`attempt`]）が [`Attempt::Stale`] を返した周は `RunStage stage=Gated detail=stale:<old>..<now>` を
+/// 衝突と同じ記帳の口（[`follow::on_stale`]）で記し、回数が衝突と合算で上限の内なら次の試行へ戻る。上限に
+/// 達した周は `Failed detail=rebase-conflict` + rc 1 で終端する（`--runner` は要らない・main は動かさない）。
+/// 周回は `land` の中に閉じるので `pipe run` / `pipe resume` / `pipe land` のどの口から撃っても同じ経路を通る。
+/// event 列（`rebase:` / `stale:`）が追随の回数をそのまま語る。
 pub fn land(entry: &Land<'_>) -> Outcome {
     let worktree = worktree_path(entry.repo, entry.run);
-    // **「無い」と「読めない」を分ける**（C10）: 置き場が壊れている周を前提違反に化けさせない。
-    let base = match super::base_of_run(entry.state_dir, entry.run) {
-        super::Base::Known(found) => found,
-        super::Base::Absent => return refused(format!("run {} に base が無い", entry.run)),
-        super::Base::Unreadable => return broken(format!("run {} の base を読めない（置き場）", entry.run)),
+    let base = match recorded_base(entry) {
+        Ok(found) => found,
+        Err(stopped) => return stopped,
     };
     if verdict_of(entry.state_dir, entry.run) != Some(Verdict::Pass) {
         return refused(format!("run {} の verdict が PASS でない", entry.run));
@@ -297,33 +316,66 @@ pub fn land(entry: &Land<'_>) -> Outcome {
     // **着地の順番**（設計 gate-cost.md §6）: 前提検査の直後・追随の前に列を見て待つ。`--pr-cmd` の形は
     // 上で返っている＝main を動かさないので列を見ない（stale base を見ないのと同じ理由）。
     let order = await_turn(entry);
-    let Some(old) = git_line(entry.repo, &["rev-parse", MAIN_REF]) else {
-        return refused(format!("{MAIN_REF} を読めない"));
-    };
+    // 追随・撃ち直し・stale の判定行は周を跨いで**捨てない**（起きたことは event に残り lens も消費している＝
+    // stdout だけが空だと読み手が「何もしなかった」と誤読する）。
     let mut lines = Vec::new();
+    loop {
+        let (old, now) = match attempt(entry, &worktree, order, &mut lines) {
+            Attempt::Settled(outcome) => return with_lines(lines, outcome),
+            Attempt::Stale { old, now } => (old, now),
+        };
+        let stale = follow::on_stale(&Conflict {
+            turn: turn_of(entry),
+            base: &old,
+            main: &now,
+            limit: entry.retries,
+        });
+        if let Err(stopped) = stale {
+            return with_lines(lines, stopped);
+        }
+        lines.push(format!("run={} stale={old}..{now}", entry.run));
+    }
+}
+
+/// 便の記録済み base（`base_of_run` の 1 本を読む・追随の `rebase:` の行が在ればその新しい側）。
+///
+/// **「無い」と「読めない」を分ける**（C10）: 置き場が壊れている周を前提違反に化けさせない。周回の
+/// 試行ごとに読み直す（追随した周は記帳が base を進めている＝process の記憶で持たない）。
+fn recorded_base(entry: &Land<'_>) -> Result<String, Outcome> {
+    match super::base_of_run(entry.state_dir, entry.run) {
+        super::Base::Known(found) => Ok(found),
+        super::Base::Absent => Err(refused(format!("run {} に base が無い", entry.run))),
+        super::Base::Unreadable => Err(broken(format!("run {} の base を読めない（置き場）", entry.run))),
+    }
+}
+
+/// 着地の試行 1 回（追随 → 撃ち直し → CAS → 主実測 → 終端）。stale の周だけ [`Attempt::Stale`] で戻り、
+/// 呼び手（[`land`]）が記帳して追随し直す。
+fn attempt(entry: &Land<'_>, worktree: &Path, order: Order, lines: &mut Vec<String>) -> Attempt {
+    let base = match recorded_base(entry) {
+        Ok(found) => found,
+        Err(stopped) => return Attempt::Settled(stopped),
+    };
+    let Some(old) = git_line(entry.repo, &["rev-parse", MAIN_REF]) else {
+        return Attempt::Settled(refused(format!("{MAIN_REF} を読めない")));
+    };
     // 前の周が既に main に載せた squash（設計 §29）。`Some` の周は squash と CAS を撃たない。
     let mut already = None;
     if old != base {
         // **CAS の old が動いている**。base が main の祖先なら追随する（rebase → gate の
         // 撃ち直し・設計 §5.4）。追随の形が無い周はここで断る（何も書かない）。
-        match follow_main(entry, &worktree, &base, &old) {
-            Follow::Stopped(outcome) => return outcome,
-            Follow::Ready(followed) => lines = followed,
+        match follow_main(entry, worktree, &base, &old) {
+            Follow::Stopped(outcome) => return Attempt::Settled(outcome),
+            Follow::Ready(followed) => lines.extend(followed),
             Follow::AlreadyLanded(found) => already = Some(found),
         }
     }
-    // 撃ち直しの間に main がさらに動いた周は断る。次の land が同じ経路で追随する＝
-    // 1 回の land が rebase するのは 1 度だけで、event 列が追随の回数をそのまま語る。
-    // どちらの断りも **追随と撃ち直しの判定行は捨てない**（起きたことは event に残り lens も
-    // 消費している＝stdout だけが空だと読み手が「何もしなかった」と誤読する）。
+    // 撃ち直しの間に main がさらに動いた周は CAS を撃たず呼び手へ戻す（同じ land の中で追随し直す・§18）。
     let Some(now) = git_line(entry.repo, &["rev-parse", MAIN_REF]) else {
-        return with_lines(lines, refused(format!("{MAIN_REF} を読めない")));
+        return Attempt::Settled(refused(format!("{MAIN_REF} を読めない")));
     };
     if now != old {
-        return with_lines(
-            lines,
-            refused(format!("stale base（base={old} main={now}・撃ち直しの間に main が動いた）")),
-        );
+        return Attempt::Stale { old, now };
     }
     // anchor の見立ては **ref を進める前**に読む: 進めた後の `git status` は index の遅れを
     // 「変更」として出すので、人の未 commit と区別できない。
@@ -334,9 +386,9 @@ pub fn land(entry: &Land<'_>) -> Outcome {
     // 無いものを緑と読まない（C10）。木が gate と同じ周は検出線を省く（[`main_detection`]・§30）。
     let landing = match already {
         Some(found) => Landing::AlreadyLanded(found),
-        None => match squash(entry, &worktree, &old) {
+        None => match squash(entry, worktree, &old) {
             Ok(found) => Landing::Fresh(found),
-            Err(reason) => return broken(reason),
+            Err(reason) => return Attempt::Settled(broken(reason)),
         },
     };
     let new = landing.sha();
@@ -354,12 +406,11 @@ pub fn land(entry: &Land<'_>) -> Outcome {
     };
     let anchor = sync_anchor(entry.repo, &plan, &old, synced_to);
     let check = verify_main(entry, new);
-    let outcome = match check {
-        MainCheck::Green => finish(entry, &worktree, &landing, &anchor, order),
+    Attempt::Settled(match check {
+        MainCheck::Green => finish(entry, worktree, &landing, &anchor, order),
         MainCheck::Red(reason) => main_red(entry, &reason, &anchor),
         MainCheck::Unmeasurable(reason) => main_unmeasured(entry, &reason, &anchor),
-    };
-    with_lines(lines, outcome)
+    })
 }
 
 /// anchor（`--repo` の checkout）を land の後に新 main へ揃えるかの見立て（`s2-07l.120`）。
