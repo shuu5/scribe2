@@ -3065,10 +3065,11 @@ fn pipe_record_common_line_is_recorded_even_when_green() {
     assert_eq!(row_value(&rows, 2, "kind"), "common", "② の record");
     assert_eq!(row_value(&rows, 2, "rc"), "0", "緑の行である（赤い行だけに載るのではない）");
     assert_eq!(row_value(&rows, 2, "line"), COMMON_LINE, "rc 0 の行にも逐語で載る: {rows:?}");
-    assert!(
-        !state.join("pipe").join(&id).join("verify.stderr.log").exists(),
-        "全行が緑なので診断 file は無い＝緑の判定行の置き場は record の `line` だけである"
-    );
+    // 全行が緑なので**段の見出しは 1 つも無い**＝緑の判定行の置き場は record の `line` だけである。
+    // 診断 file に在るのは lens への入力の通知 1 行だけ（段ではないので見出しを持たない・設計 §21 (3)）。
+    let tail = stderr_log_body(&state, &id);
+    assert!(!tail.contains("## "), "緑の行は段の見出しを残さない: {tail}");
+    assert_eq!(tail.lines().count(), 1, "在るのは通知の 1 行だけ: {tail}");
     clean(&[&repo, &state]);
 }
 
@@ -3859,5 +3860,109 @@ fn pipe_gate_lens_reread_does_not_rerun_a_well_formed_inconclusive() {
     assert_eq!(value_of(&pairs, "evidence"), "fake", "理由は lens の evidence: {pairs:?}");
     assert_eq!(value_of(&pairs, "population"), FAKE_POPULATION, "集計は読めている（判定に届いた周）: {pairs:?}");
     assert_eq!(reread_line(&out), None, "撃ち直しの行は出ない: {}", stderr_of(&out));
+    clean(&[&repo, &state]);
+}
+
+// ───── lens への入力の通知を rc に依らず記録に残す（`s2-07l.293`・設計 pipeline.md §21・接頭辞 `pipe_gate_notice_`） ─────
+//
+// 理由の 1 行は従来 stderr にしか出ず、rc 0 で終わった gate の周は呼び手が捨てると事後に読めなかった
+// （`.286` の実測）。**要約の周も diff の周も**、段の記録と同じ log（`verify.stderr.log`）に 1 行残す。
+// 置き場が `verify.jsonl` でないのは、record の通し番号 `n` を行数から導く読み手（land の引き継ぎ）が
+// 在るためである——ここでも「record は 1 行 1 record」が保たれていることを対で測る。
+
+/// 診断 file（`verify.stderr.log`）の全文（無ければ空）。
+fn stderr_log_body(state: &Path, id: &str) -> String {
+    fs::read_to_string(state.join("pipe").join(id).join("verify.stderr.log")).unwrap_or_default()
+}
+
+/// 通知の 1 行（`# lens-input=<kind> reason=<語>`）だけを拾う。
+fn notice_lines(state: &Path, id: &str) -> Vec<String> {
+    stderr_log_body(state, id)
+        .lines()
+        .filter(|line| line.starts_with("# lens-input="))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// `verify.jsonl` の行が**全部 record である**こと（通知を混ぜていない）を測る。
+///
+/// 混ぜると land の引き継ぎ（`carry_gated_pass`）が行数から導く `n` が飛ぶ＝record の通し番号が壊れる。
+fn assert_verify_log_is_all_records(state: &Path, id: &str) {
+    let log = verify_log(state, id);
+    assert_eq!(
+        verify_rows(state, id).len(),
+        log.lines().count(),
+        "`verify.jsonl` の行は全部 record（通知は混ざらない）: {log}"
+    );
+    assert!(!log.contains("lens-input="), "通知は record の log に書かない: {log}");
+}
+
+/// (a) 純移動の便（lens の入力が**要約**）も通知が残る: `verify.stderr.log` に
+/// `# lens-input=summary reason=-` の 1 行だけ（段の見出しは無い＝全行が緑）・**stderr は従来どおり空**
+/// （`move_proof` の語彙は触らない）・`verify.jsonl` は record だけのまま。
+///
+/// 理由の語が `-` なのは「純移動でない理由が無い」であって 0 でも空でもない（C10）。
+/// base は診断 file を 1 度も作らない＝RED。
+#[test]
+fn pipe_gate_notice_summary_round_keeps_a_dash_reason() {
+    let (repo, state, id) = move_run(&[("lib.rs", MOVE_BASE_LIB)], &move_head());
+    let out = gate_once(&repo, &state, &id, Some(&fake_lens(&state.join("lens-ran"), &lens_verdict("PASS"))));
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "PASS: {}", stderr_of(&out));
+    assert_eq!(token_of(&stdout_of(&out), "lens-input="), "summary", "前提: 要約の周: {}", stdout_of(&out));
+    assert_eq!(
+        notice_lines(&state, &id),
+        vec!["# lens-input=summary reason=-".to_owned()],
+        "要約の周も rc 0 でも 1 行残る: {}",
+        stderr_log_body(&state, &id)
+    );
+    assert!(!stderr_log_body(&state, &id).contains("## "), "通知は段の見出しではない: {}", stderr_log_body(&state, &id));
+    assert_eq!(stderr_of(&out), "", "要約の周の stderr は従来どおり 1 行も出さない");
+    assert_verify_log_is_all_records(&state, &id);
+    clean(&[&repo, &state]);
+}
+
+/// (b) 純移動でない便（lens の入力が **diff**）は理由の語が載る: 緑の周（rc 0）も
+/// `# lens-input=diff reason=items-differ` が残り、**stderr の 1 行は従来どおり**（両面に同じ理由）。
+///
+/// 対（`rc に依らず`）: verify の行が赤い便（rc 1）でも同じ通知が残り、赤い行の見出しと同居する
+/// ——通知を rc 0 の周だけ書く実装・赤い周だけ書く実装のどちらも落ちる。base はどちらも残さない＝RED。
+#[test]
+fn pipe_gate_notice_diff_round_names_the_reason() {
+    let changed = MOVE_HEAD_BETA.replace("    3\n", "    4\n");
+    let (repo, state, id) = move_run(
+        &[("lib.rs", MOVE_BASE_LIB)],
+        &[("lib.rs", MOVE_HEAD_LIB), ("alpha.rs", MOVE_HEAD_ALPHA), ("beta.rs", &changed)],
+    );
+    let out = gate_once(&repo, &state, &id, Some(&fake_lens(&state.join("lens-ran"), &lens_verdict("PASS"))));
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "PASS: {}", stderr_of(&out));
+    assert_eq!(token_of(&stdout_of(&out), "lens-input="), "diff", "前提: diff の周: {}", stdout_of(&out));
+    assert_eq!(
+        notice_lines(&state, &id),
+        vec!["# lens-input=diff reason=items-differ".to_owned()],
+        "理由の語が記録に残る: {}",
+        stderr_log_body(&state, &id)
+    );
+    assert_eq!(
+        stderr_of(&out).trim_end(),
+        "pipe: lens-input=diff reason=items-differ",
+        "呼び手の stderr の 1 行は従来どおり"
+    );
+    assert_verify_log_is_all_records(&state, &id);
+    clean(&[&repo, &state]);
+
+    // 対: 赤い verify 行を持つ便（rc 1）でも通知は残り、赤い行の見出しと同居する。
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &["verify"], &[r#"verify = ["sh verify-red.sh"]"#]);
+    let red = implemented(&repo, &state, &path);
+    let out = gate_once(&repo, &state, &red, Some(&fake_lens(&state.join("lens-red"), &lens_verdict("PASS"))));
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "FAIL の rc は 1: {}", stderr_of(&out));
+    let notices = notice_lines(&state, &red);
+    assert_eq!(notices.len(), 1, "赤い周も通知は 1 行: {}", stderr_log_body(&state, &red));
+    assert!(
+        notices.first().is_some_and(|line| line.starts_with("# lens-input=diff reason=")),
+        "赤い周の入力も diff（理由つき）: {notices:?}"
+    );
+    assert!(stderr_log_body(&state, &red).contains("## "), "赤い行の見出しと同居する: {}", stderr_log_body(&state, &red));
+    assert_verify_log_is_all_records(&state, &red);
     clean(&[&repo, &state]);
 }

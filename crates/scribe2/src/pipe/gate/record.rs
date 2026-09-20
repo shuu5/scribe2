@@ -1,5 +1,6 @@
 //! gate の記録と診断（`verify.jsonl` の record [`step_record`]・赤い行の stderr の診断 file・
-//! 便の写しの読み・[`super`] から純移動・`s2-07l.286`）。判定の順と終端は親（[`super::gate`]）が持つ。
+//! lens への入力の通知 [`record_notice`]・便の写しの読み・[`super`] から純移動・`s2-07l.286`）。
+//! 判定の順と終端は親（[`super::gate`]）が持つ。
 
 use super::verify::{is_unreadable, recorded_rc, run_checks_admitted, Admit, Check, Checks, Step};
 use super::{Detection, DetectionSkip, Gate};
@@ -9,6 +10,7 @@ use crate::fleet::SCHEMA;
 use crate::pipe::admission;
 use crate::pipe::confine::Reason;
 use crate::pipe::declaration::Effective;
+use crate::pipe::move_proof::LensInput;
 use crate::pipe::{verify_log_path, vessel_path};
 use std::path::Path;
 
@@ -24,6 +26,17 @@ const STDERR_LOG_FILE: &str = "verify.stderr.log";
 /// ——rules manifest は判定を動かす閾値の置き場である（憲法 C1 / C5）。**末尾**を
 /// 採るのは、落ちた command が理由を最後に出すためである。
 pub(super) const STDERR_TAIL_LINES: usize = 20;
+
+/// lens への入力の通知の頭（**段の見出し `## ` とは別の字面**・[`record_notice`]）。
+///
+/// 段の見出し（[`append_diagnosis`]）を数える読み手が通知を段と混同しないための 1 文字である
+/// ——通知は段ではないので `n` も `rc` も持たない。
+const NOTICE_HEAD: &str = "# ";
+
+/// 通知の `reason=` が「理由を持たない」（＝要約が組めた周）ことを表す字面。
+///
+/// **0 とも空とも書かない**（C10: 「理由が無い」と「理由を測れなかった」を融合しない）。
+const NO_REASON: &str = "-";
 
 /// 包みが stdout の終端に出す行の見出し（[`crate::pipe::confine`] の `script` が printf する固定形）。
 ///
@@ -95,6 +108,34 @@ pub(super) fn record_verify(entry: &Gate<'_>, worktree: &Path, base: &str) -> Re
         append_line(&path, &record.body, entry.policy).map_err(|err| err.to_string())?;
     }
     Ok(Counted { red, unreadable, killed, detection_unmeasured: unmeasured })
+}
+
+/// lens へ何を渡したかの 1 行を、段の記録と**同じ log**（[`STDERR_LOG_FILE`]）へ残す（設計 §21 (3)）。
+///
+/// **rc に依らず・要約の周も diff の周も残す**。理由の 1 行は従来 [`LensInput::notice`] が
+/// `Outcome.err` に載せるだけで、rc 0 で終わった gate の周は呼び手が捨てると便の外から二度と
+/// 読めなかった（`.286` の実測: `run.stderr` 0 byte・rc 0 で「なぜ diff を渡したか」が引けない）。
+///
+/// 置き場が `verify.jsonl` ではなく診断 file なのは、record の**通し番号 `n`** を行数から導く読み手が
+/// 在るためである（[`crate::pipe::land`] の追随が引き継ぎの skip record を書く周）——record でない行を
+/// 混ぜると `n` が飛ぶ。診断 file の読み手は人だけで、通知は段の見出しを持たない 1 行に閉じる。
+pub(super) fn record_notice(entry: &Gate<'_>, input: &LensInput) -> Result<(), String> {
+    let path = verify_log_path(entry.state_dir, entry.run).with_file_name(STDERR_LOG_FILE);
+    append_line(&path, &notice_line(input), entry.policy).map_err(|err| err.to_string())?;
+    Ok(())
+}
+
+/// 通知の字面（`# lens-input=<kind> reason=<語>`・**pure**）。
+///
+/// `kind` は判定行が出すのと同じ語（[`LensInput::kind`]）、`語` は純移動でない理由（`NotPure`）で、
+/// 要約が組めた周は [`NO_REASON`]。**[`crate::pipe::move_proof`] は触らない**——あちらの
+/// [`LensInput::notice`] は呼び手の端末へ出す `pipe:` の 1 行で、ここは run dir に残る記録である。
+fn notice_line(input: &LensInput) -> String {
+    let reason = match input {
+        LensInput::Diff(why) => why.as_str(),
+        LensInput::Summary(_) => NO_REASON,
+    };
+    format!("{NOTICE_HEAD}lens-input={} reason={reason}", input.kind())
 }
 
 /// 赤い行と撃ち直した行の見出し + stderr の末尾を診断 file へ残す（緑で撃ち直しも無い行は残さない）。
@@ -378,7 +419,25 @@ fn append_stderr(path: &Path, policy: LockPolicy, head: &str, stderr: &str) -> R
 
 #[cfg(test)]
 mod tests {
-    use super::{skip_record, Skipped};
+    use super::{notice_line, skip_record, Skipped};
+    use crate::pipe::move_proof::{LensInput, NOT_PURE};
+
+    /// 通知の字面は `# lens-input=diff reason=<語>` で、語は `NotPure` の全 variant（母集団 5）が
+    /// **それぞれ別の字面**で載る（設計 §21 (4)・要約の周の `-` は e2e の `pipe_gate_notice_summary_` が測る）。
+    #[test]
+    fn notice_line_carries_the_kind_and_the_reason() {
+        let lines: Vec<String> = NOT_PURE
+            .iter()
+            .map(|why| notice_line(&LensInput::Diff(*why)))
+            .collect();
+        assert_eq!(
+            lines.first().map(String::as_str),
+            Some("# lens-input=diff reason=unreadable"),
+            "頭 + kind + 理由の語: {lines:?}"
+        );
+        let unique: std::collections::BTreeSet<&String> = lines.iter().collect();
+        assert_eq!(unique.len(), NOT_PURE.len(), "理由の語は variant ごとに違う: {lines:?}");
+    }
 
     /// (d) 主実測の口で作った record の字面は `kind=main skipped=main tree=<sha> reason=same-tree` の順で固定
     /// （設計 gate-cost.md §27・ADR-0043 §2.2・`s2-07l.464`）。木は口が `&str` で必ず取る＝木の無い構築は型が拒む。

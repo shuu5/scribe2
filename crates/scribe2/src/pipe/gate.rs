@@ -53,7 +53,7 @@ use crate::fleet::store::LockPolicy;
 use crate::fleet::{cli::now_utc, EventKind, Stage, SCHEMA};
 use findings::Tally;
 use lens::{ask_lens, lens_input, substitute, unjudged, write_verdict, Judged, LENS_STAGE};
-use record::record_verify;
+use record::{record_notice, record_verify};
 use std::path::Path;
 use verify::byte_count;
 
@@ -338,21 +338,26 @@ fn precheck(worktree: &Path, base: &str) -> Option<String> {
     (commits < 1).then(|| "commit が 1 本も無い".to_owned())
 }
 
-/// verify を逐条で撃ち、diff を測る。
+/// verify を逐条で撃ち、diff を測り、**lens へ何を渡すかを記録へ残す**。
+///
+/// 通知（[`record_notice`]・設計 §21 (3)）は rc に依らず・入力の型に依らず 1 行で、判定は動かさない
+/// ——`Outcome.err` の 1 行は呼び手が捨てうる面なので、事後に読める面（run dir）にも同じ事実を置く。
 fn measure(entry: &Gate<'_>, worktree: &Path, base: &str) -> Result<Measured, String> {
     let counted = record_verify(entry, worktree, base)?;
     let (red, unreadable, killed) = (counted.red, counted.unreadable, counted.killed);
     let detection_unmeasured = counted.detection_unmeasured;
-    if unreadable {
-        // 段①が diff を読めない周は同じ range の生 diff も読めない。ここで broken（rc 2・
-        // verdict を書かない）にすると便は Implemented のまま「測り直せる便」に見えない。
-        let input = LensInput::Diff(NotPure::Unreadable);
-        return Ok(Measured { red, diff: Vec::new(), unreadable, killed, detection_unmeasured, input });
-    }
-    let range = format!("{base}..HEAD");
-    let diff = git_bytes(worktree, &["diff", &range])
-        .ok_or_else(|| format!("{} の diff を測れない", worktree.display()))?;
-    let input = lens_input(worktree, base, &diff);
+    // 段①が diff を読めない周は同じ range の生 diff も読めない。ここで broken（rc 2・
+    // verdict を書かない）にすると便は Implemented のまま「測り直せる便」に見えない。
+    let (diff, input) = if unreadable {
+        (Vec::new(), LensInput::Diff(NotPure::Unreadable))
+    } else {
+        let range = format!("{base}..HEAD");
+        let diff = git_bytes(worktree, &["diff", &range])
+            .ok_or_else(|| format!("{} の diff を測れない", worktree.display()))?;
+        let input = lens_input(worktree, base, &diff);
+        (diff, input)
+    };
+    record_notice(entry, &input)?;
     Ok(Measured { red, diff, unreadable, killed, detection_unmeasured, input })
 }
 

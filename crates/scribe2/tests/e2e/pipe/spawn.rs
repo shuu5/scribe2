@@ -2177,6 +2177,63 @@ fn pipe_spawn_terminal_reason_oom_evidence_stays_oom_kill() {
     clean(&[&repo, &state]);
 }
 
+// ───── 連鎖の段の通知を捨てない（`s2-07l.293`・設計 pipeline.md §21・接頭辞 `pipe_spawn_notice_`） ─────
+//
+// `pipe run` は 4 段を 1 process で畳む。畳む口が rc 0 の段の stderr を落としていたので、連鎖で撃った便は
+// gate の `lens-input=<kind> reason=<語>` も口座の継承の行も端末に出ず、run dir の log にも残らなかった
+// （`.286` の実測: run.stderr 0 byte・rc 0）。**stdout の判定行は 1 字も動かさない**のが対の面である。
+
+/// stderr の行の番号（無ければ `None`）。
+fn stderr_index(out: &Output, needle: &str) -> Option<usize> {
+    stderr_of(out).lines().position(|line| line.starts_with(needle))
+}
+
+/// 段の通知を rc 0 の段も含めて**段の順**で呼び手の stderr に出し、stdout の判定行は変えない。
+///
+/// 通知を出す段を 2 つ持つ fixture である: gate は純移動でない理由の 1 行（rc 0）、land は汚れた anchor を
+/// 揃えなかった warning の 1 行（rc 0・後始末の失敗は land を取り消さない）。base は畳む口が rc 0 の段の
+/// stderr を捨てるので、**どちらの行も 1 本も出ない**＝RED。
+#[test]
+fn pipe_spawn_notice_run_relays_each_stage_stderr_in_order() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    // land の段に通知を作る（未 commit の変更が在る anchor は揃えない・rc 0 のまま stderr 1 行）。
+    fs::write(repo.join("src").join("lib.rs"), "// local uncommitted\n").expect("局所の変更を置ける");
+    let lens = fake_lens(&state.join("lens-ran"), &lens_verdict("PASS"));
+    let out = run_pipe(&[
+        "run", "--design", &path, "--bead", "s2-2e5",
+        "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
+        "--rules", &ceiling_rules(&state), "--runner", TOY_COMMIT, "--lens", &lens,
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{} / {}", stdout_of(&out), stderr_of(&out));
+    let id = run_id_of(&out);
+    assert!(show_line(&repo, &state, &id).contains("stage=Landed"), "1 process で Landed まで: {}", stdout_of(&out));
+
+    // (1) rc 0 で終わった段の通知が段の順で出る（gate の段 → land の段）。
+    let notice = stderr_index(&out, "pipe: lens-input=diff reason=");
+    let anchor = stderr_index(&out, "pipe: anchor を新 main に揃えていない");
+    assert!(notice.is_some(), "gate の段の通知が出る（rc 0 でも捨てない）: {}", stderr_of(&out));
+    assert!(anchor.is_some(), "land の段の通知も出る: {}", stderr_of(&out));
+    assert!(notice < anchor, "段の順で並ぶ: {}", stderr_of(&out));
+
+    // (2) 対: stdout の判定行は base と 1 字も変わらない（理由の語は stdout に漏れない）。
+    let stdout = stdout_of(&out);
+    let verdict_line = stdout
+        .lines()
+        .find(|line| line.starts_with(&format!("run={id} verdict=")))
+        .unwrap_or_default();
+    let tokens: Vec<&str> = verdict_line.split_whitespace().collect();
+    assert_eq!(tokens.len(), 4, "判定行の token は 4 つのまま: {verdict_line}");
+    assert_eq!(tokens.get(1).copied(), Some("verdict=PASS"), "{verdict_line}");
+    assert_eq!(tokens.get(2).copied(), Some("lens-input=diff"), "{verdict_line}");
+    assert!(
+        tokens.get(3).and_then(|token| token.strip_prefix("bytes=")).is_some_and(|bytes| bytes.parse::<u64>().is_ok()),
+        "末尾は byte 数: {verdict_line}"
+    );
+    assert!(!stdout.contains("reason="), "理由の語は stdout に出さない: {stdout}");
+    clean(&[&repo, &state]);
+}
+
 /// (d) 器が公開する封じ込めの理由の列（`confine::REASONS` の `as_str`）が**逐語の列で完全一致**する: 母集団 8・
 /// 字面の重複 0・宣言順の末尾が `unknown`。variant の名を書かず字面だけで測る（base の木でも compile する）。
 #[test]

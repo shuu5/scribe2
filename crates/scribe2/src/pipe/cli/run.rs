@@ -101,29 +101,42 @@ pub(super) fn run_all(
     // **run id は落ちた周も stdout に出す**。`resume` がこの id を要るためで、
     // ここで黙ると続きから引けない便が置き場に残る。
     let mut lines = vec![intake_line(args, &id)];
+    // **段の通知は rc に依らず段の順で持つ**（設計 §21 (1)）: gate の `lens-input=…` のような行は
+    // rc 0 の段が出すので、畳むときに捨てると連鎖で撃った周だけ理由が消える（`.286` の実測）。
+    let mut notes: Vec<String> = Vec::new();
     // 審査が PASS でない周は spawn の前で止まる（構築点の呼出 0・AC22）。
     let spawned = review_then_launch(args, &id, &runner, manifest, policy);
-    if let Some(stopped) = chain(&mut lines, spawned) {
+    if let Some(stopped) = chain_noting(&mut lines, &mut notes, spawned) {
         return stopped;
     }
     // runner が口座の上限で止まった周は別口座で起こし直してから gate へ（設計 account-autonomy.md §4）。
     let ridden = ride_out_rate_limit(args, &id, &runner, manifest, policy);
-    if let Some(stopped) = chain(&mut lines, ridden) {
+    if let Some(stopped) = chain_noting(&mut lines, &mut notes, ridden) {
         return stopped;
     }
     let gated = gate_run(args, &id, manifest, policy);
-    if let Some(stopped) = chain(&mut lines, gated) {
+    if let Some(stopped) = chain_noting(&mut lines, &mut notes, gated) {
         return stopped;
     }
     let landed = land_run(args, &id, manifest, policy);
-    if let Some(stopped) = chain(&mut lines, landed) {
+    if let Some(stopped) = chain_noting(&mut lines, &mut notes, landed) {
         return stopped;
     }
-    Outcome::ok(lines)
+    Outcome { out: lines, err: notes, rc: RC_OK }
 }
 
 /// 段の結果を畳む。rc≠0 ならそこまでの行を載せて**止める形**を返す。
-pub(super) fn chain(lines: &mut Vec<String>, outcome: Outcome) -> Option<Outcome> {
+///
+/// 段の `err` は `notes` へ**段の順で**積む（設計 §21 (1)）。rc 0 の段の `err` をここで捨てると、
+/// gate が `lens-input=<kind> reason=<語>` を出した周でも `pipe run` の stderr が 0 byte になる
+/// ——連鎖で撃った便ほど理由が読めない（`.286`）。**stdout（`out`）の畳み方と rc の極性は不変**。
+pub(super) fn chain_noting(
+    lines: &mut Vec<String>,
+    notes: &mut Vec<String>,
+    outcome: Outcome,
+) -> Option<Outcome> {
+    let mut outcome = outcome;
+    notes.append(&mut outcome.err);
     if outcome.rc == RC_OK {
         lines.extend(outcome.out);
         return None;
@@ -132,5 +145,16 @@ pub(super) fn chain(lines: &mut Vec<String>, outcome: Outcome) -> Option<Outcome
     let mut out = std::mem::take(lines);
     out.extend(stopped.out);
     stopped.out = out;
+    stopped.err = std::mem::take(notes);
     Some(stopped)
+}
+
+/// 段の通知を継がない口（`resume` の 2 段・`cli.rs`）。
+///
+/// `resume` は段ごとに撃ち直す形で、返るのは**その周の段の stderr** だけである（従来の形・
+/// `pipe run` の 4 段の連鎖とは別）。中身は [`chain_noting`] の 1 本で、`notes` を持たない呼び手が
+/// 同じ畳み方を通るための薄い口である。
+pub(super) fn chain(lines: &mut Vec<String>, outcome: Outcome) -> Option<Outcome> {
+    let mut notes = Vec::new();
+    chain_noting(lines, &mut notes, outcome)
 }
