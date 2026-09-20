@@ -56,6 +56,32 @@ fn run_seat(args: &[&str]) -> Output {
         .expect("binary を起動できる")
 }
 
+/// 消えた口の名を第 1 token に置いて撃ち、**自分の口として動かない**ことを測る（消えた口の歯 3 本の共有の 1 本）。
+///
+/// 役割の flag が任意になった後（seat-roles.md §26 の約束 1・`s2-07l.488`）、口を持たない第 1 token は**短い形の
+/// 口座 label** として読まれる＝使い方へ落ちる形はもう無い。ゆえに「消えた」を測る側は**断りの出所**で見る:
+/// rc 1・stdout 0 byte・stderr は起動の口の typed な 1 行（`seat launch: refused reason=…`）で、消えた口の
+/// 名を持つ行は 1 つも出ない。置き場は明示して経路を決め打ちにする（log も row も無い空の dir）。
+fn assert_gone_mouth(state: &str, gone: &str, extra: &[&str]) {
+    let mut args = vec![gone, "--target", "s:w", "--state-dir", state];
+    args.extend_from_slice(extra);
+    let out = run_seat(&args);
+    let line = stderr_of(&out);
+    assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "{gone}: 断る: {line}");
+    assert!(stdout_of(&out).is_empty(), "{gone}: stdout 0 byte");
+    assert!(line.starts_with("seat launch: refused reason="), "{gone}: 自分の口として動かない: {line}");
+    assert!(!line.contains(gone), "{gone}: 消えた口の名を行に持たない: {line}");
+}
+
+/// 消えた口の歯が使う空の置き場（log も row も無い dir・後始末は呼び側）。
+fn gone_mouth_place() -> (PathBuf, String) {
+    let dir = tmp();
+    let state = dir.join("state");
+    fs::create_dir_all(&state).ok();
+    let path = state.display().to_string();
+    (dir, path)
+}
+
 /// rc を数で見る（`None` は signal 死＝この歯では起きない）。
 fn rc_of(out: &Output) -> i32 {
     out.status.code().unwrap_or(-1)
@@ -205,38 +231,36 @@ const PROMPT_WAIT: Duration = Duration::from_secs(60);
 // 出せるのが 2 便）。面を触る契約だけがその面の file に当たる形にする（pipe の外形と同じ割り方）。
 
 /// 席の自律機能の口は**もう無い**（ADR-0045 §2 (2)・`s2-07l.479.1`）: 管理 tick・作り直しの cycle・
-/// 打刻の heartbeat・context の計測 meter は未知の第 1 token として使い方で断られ（rc 1・stdout 0 byte）、
+/// 打刻の heartbeat・context の計測 meter は口を持たない第 1 token として断られ（[`assert_gone_mouth`]）、
 /// 使い方の 1 行にもその名が出ない。残る口（register / launch / inject）は従来どおり使い方に在る。
 ///
 /// **消えたことを測る歯**である（base では 4 つとも自分の口として動くので RED）。
 #[test]
 fn seat_autonomy_subcommands_are_gone_from_the_usage() {
+    let (dir, state) = gone_mouth_place();
     let usage = stderr_of(&run_seat(&[]));
     for gone in ["meter", "heartbeat", "tick", "cycle"] {
-        let out = run_seat(&[gone, "--target", "s:w"]);
-        assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "{gone}: 使い方で断る: {}", stderr_of(&out));
-        assert!(stdout_of(&out).is_empty(), "{gone}: stdout 0 byte");
-        assert!(stderr_of(&out).starts_with("usage: seat "), "{gone}: 使い方 1 行: {}", stderr_of(&out));
+        assert_gone_mouth(&state, gone, &[]);
         assert!(!usage.contains(&format!("|{gone} ")), "{gone} は使い方に出ない: {usage}");
     }
     for kept in ["register", "launch"] {
         assert!(usage.contains(&format!("{kept} --")), "{kept} は使い方に残る: {usage}");
     }
+    fs::remove_dir_all(&dir).ok();
 }
 
-/// 注入の口は**もう無い**（ADR-0045 §2 (2)・`s2-07l.479.3`）: `seat inject` は未知の第 1 token として
-/// 使い方で断られ（rc 1・stdout 0 byte）、使い方の 1 行に口の名も `--text` / `--file` の flag も出ない。
+/// 注入の口は**もう無い**（ADR-0045 §2 (2)・`s2-07l.479.3`）: `seat inject` は口を持たない第 1 token として
+/// 断られ（[`assert_gone_mouth`]）、使い方の 1 行に口の名も `--text` / `--file` の flag も出ない。
 /// 送達の機構そのものは残る（`seat launch` の復元が使う・ADR-0045 §2 (4) の不変の面）ので、
 /// **消えたのは口だけ**である＝残る口 2 つは従来どおり使い方に在る。
 ///
 /// **消えたことを測る歯**である（base では `seat inject --target s:w --text x` が自分の口として動くので RED）。
 #[test]
 fn seat_inject_subcommand_is_gone_from_the_usage() {
+    let (dir, state) = gone_mouth_place();
     let usage = stderr_of(&run_seat(&[]));
-    let out = run_seat(&["inject", "--target", "s:w", "--text", "x"]);
-    assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "使い方で断る: {}", stderr_of(&out));
-    assert!(stdout_of(&out).is_empty(), "stdout 0 byte");
-    assert!(stderr_of(&out).starts_with("usage: seat "), "使い方 1 行: {}", stderr_of(&out));
+    assert_gone_mouth(&state, "inject", &["--text", "x"]);
+    fs::remove_dir_all(&dir).ok();
     for gone in ["inject --target", "--text", "--file"] {
         assert!(!usage.contains(gone), "{gone} は使い方に出ない: {usage}");
     }
@@ -246,20 +270,19 @@ fn seat_inject_subcommand_is_gone_from_the_usage() {
 }
 
 /// 作業記憶の口は**もう無い**（ADR-0045 §2 (2)・`s2-07l.479.2`）: 退避（externalize）・復元（rebrief）・
-/// 消費（consume）は未知の第 1 token として使い方で断られ（rc 1・stdout 0 byte）、使い方の 1 行にも
+/// 消費（consume）は口を持たない第 1 token として断られ（[`assert_gone_mouth`]）、使い方の 1 行にも
 /// その名が出ない。`--rules` を受ける席の口も 0 になる（この 3 口が最後だった）。
 ///
 /// **消えたことを測る歯**である（base では 3 つとも自分の口として動くので RED）。
 #[test]
 fn seat_working_memory_subcommands_are_gone_from_the_usage() {
+    let (dir, state) = gone_mouth_place();
     let usage = stderr_of(&run_seat(&[]));
     for gone in ["externalize", "rebrief", "consume"] {
-        let out = run_seat(&[gone, "--target", "s:w"]);
-        assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "{gone}: 使い方で断る: {}", stderr_of(&out));
-        assert!(stdout_of(&out).is_empty(), "{gone}: stdout 0 byte");
-        assert!(stderr_of(&out).starts_with("usage: seat "), "{gone}: 使い方 1 行: {}", stderr_of(&out));
+        assert_gone_mouth(&state, gone, &[]);
         assert!(!usage.contains(&format!("|{gone} ")), "{gone} は使い方に出ない: {usage}");
     }
+    fs::remove_dir_all(&dir).ok();
     assert!(!usage.contains("--wm-dir"), "退避物の置き場の flag も残らない: {usage}");
     assert!(!usage.contains("--rules"), "席の口は `--rules` を 1 つも受けない: {usage}");
     for kept in ["register", "launch"] {
@@ -730,6 +753,27 @@ const LAUNCH_LOG: &str = "seat.log";
 const LAUNCH_EVENTS_SEEN: &str = "events-at-launch";
 /// 包みの tmux が写す argv の置き場。
 const LAUNCH_TMUX_ARGS: &str = "tmux-args";
+/// 包みの tmux が `-t` の無い `display-message` に返す**呼び手の target**（`session:window`・無ければ問いは rc 1）。
+const LAUNCH_CALLER_TARGET: &str = "caller-target";
+/// 同じく**呼び手の session の名**（空の file を置けば「名が空」の周になる）。
+const LAUNCH_CALLER_SESSION: &str = "caller-session";
+/// 包みの tmux が rc 1 で返す verb（1 語・撃てない tmux の周を作る）。
+const LAUNCH_TMUX_REFUSE: &str = "tmux-refuse";
+
+/// 偽 tmux が `-t` の無い `display-message` に返す呼び手の target を据える（呼び手の pane が target の pane そのものの周）。
+fn launch_caller_target(place: &AcctPlace, target: &str) {
+    fs::write(place.dir.join(LAUNCH_CALLER_TARGET), target).ok();
+}
+
+/// 同じく呼び手の session の名を据える（空文字なら「名が空」の周）。
+fn launch_caller_session(place: &AcctPlace, session: &str) {
+    fs::write(place.dir.join(LAUNCH_CALLER_SESSION), session).ok();
+}
+
+/// 偽 tmux が `verb` の呼出しを rc 1 で返すようにする（`capture-pane` = pane を読めない・`new-window` = 窓を作れない）。
+fn launch_tmux_refuse(place: &AcctPlace, verb: &str) {
+    fs::write(place.dir.join(LAUNCH_TMUX_REFUSE), verb).ok();
+}
 
 /// 起動の歯の置き場: [`acct_place`] に host の面（口座 2 つ・plugin 2 つ・引数 2 つ）と anchor の dir を足す。
 fn launch_place() -> AcctPlace {
@@ -765,6 +809,11 @@ fn real_tmux() -> Option<PathBuf> {
 /// shim の dir を作る（偽 `claude`・argv を写して実体へ exec する `tmux` の包み）: 偽 claude は argv と env を `launched` へ
 /// 写し、その時点の event log を [`LAUNCH_EVENTS_SEEN`] へ複製し、prompt を描いて `SessionStart` を打ち、以後は受けた行を
 /// [`LAUNCH_LOG`] に積んで `UserPromptSubmit` → `Stop` を打つ（立て直しの偽 session と同じ形）。PATH の字面を返す。
+///
+/// 偽 tmux は 3 つの口を持つ（seat-roles.md §26・どれも fixture file が在る周だけ働き、無い周は実体へ素通しする）:
+/// [`LAUNCH_TMUX_REFUSE`] の verb を rc 1 で返す口・**`-t` の無い** `display-message` に
+/// [`LAUNCH_CALLER_TARGET`] / [`LAUNCH_CALLER_SESSION`] を返す口（呼び手の pane を器が測る 1 問い・file が無ければ rc 1）。
+/// `-t` を持つ呼出しは 1 つも横取りしない（pane の実物は本物の tmux が答える）。
 fn launch_shims(place: &AcctPlace, target: &str) -> String {
     let bin = place.dir.join("bin");
     fs::create_dir_all(&bin).ok();
@@ -784,10 +833,21 @@ fn launch_shims(place: &AcctPlace, target: &str) -> String {
         busy = stamp_cmd(&file, "busy", "UserPromptSubmit"),
         stop = stamp_cmd(&file, "idle", "Stop"),
     );
+    let real = real_tmux().unwrap_or_default().display().to_string();
     let tmux = format!(
-        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\nexec '{}' \"$@\"\n",
-        place.dir.join(LAUNCH_TMUX_ARGS).display(),
-        real_tmux().unwrap_or_default().display()
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{args}'\n\
+         refuse=''\n[ -f '{refuse}' ] && refuse=$(cat '{refuse}')\n\
+         if [ -n \"$refuse\" ]; then case \" $* \" in *\" $refuse \"*) exit 1;; esac; fi\n\
+         case \" $* \" in *\" -t \"*) exec '{real}' \"$@\";; esac\n\
+         case \"$*\" in\n\
+         *'#{{session_name}}:#{{window_name}}') [ -f '{ctarget}' ] || exit 1; cat '{ctarget}'; exit 0;;\n\
+         *'#{{session_name}}') [ -f '{csession}' ] || exit 1; cat '{csession}'; exit 0;;\n\
+         esac\n\
+         exec '{real}' \"$@\"\n",
+        args = place.dir.join(LAUNCH_TMUX_ARGS).display(),
+        refuse = place.dir.join(LAUNCH_TMUX_REFUSE).display(),
+        ctarget = place.dir.join(LAUNCH_CALLER_TARGET).display(),
+        csession = place.dir.join(LAUNCH_CALLER_SESSION).display(),
     );
     for (name, body) in [("claude", claude), ("tmux", tmux)] {
         let path = bin.join(name);

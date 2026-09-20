@@ -70,32 +70,44 @@ pub(super) struct Boot<'a> {
     pub(super) step: Duration,
 }
 
-/// 起動の 1 本の結果（**「送っていない」と「送ったが確かめられない」を分ける**・[`Relaunched`] と同じ極性）。
+/// 起動の 1 本の結果（**「届いた」と「送ったが確かめられない」を分ける**・[`Relaunched`] と同じ極性）。
+///
+/// 「**1 key も送っていない**」側は持たない: 門を [`boot`] から [`input_gate`] へ切り出した後は、送る前の断りは
+/// 全部 [`super::launch::prepare`] が登録 row の前で返す（設計 seat-roles.md §26 の約束 5）。
 pub(super) enum Booted {
     /// 起動が届いて立ち上がりを確かめた（復元を送った周はその消費・送らない周は `None`）。
     Done(Option<inject::Settled>),
-    /// **1 key も送っていない**。
-    Refused(&'static str),
     /// 送ったが確かめられない。
     Failed(&'static str),
 }
 
-/// 起動の注入の **1 本**（順序固定・立て直しと `seat launch` の共通の経路・account-lifecycle.md §4）: shell の入力欄の門 →
+/// shell の入力欄の門（**[`boot`] の本体の先頭から切り出した 1 本**・設計 seat-roles.md §26 の約束 5・
+/// 中身と 3 つの理由の字面と判定の順序は 1 語も変えない純粋な切り出し）: pane を capture できなければ
+/// [`REASON_PANE_MISSING`]・[`crate::seat::shell_input_empty`] が断れば [`REASON_INPUT_BUSY`] /
+/// [`REASON_INPUT_UNKNOWN`]。**1 key も送らない側**（C11.2・緩めない）。
+///
+/// 起動は**前面が shell の pane** へ撃つので、門は席の `❯` の行（[`inject::guard_input`]）でなく shell の prompt 末尾
+/// （account-autonomy.md §5「shell への注入の門」・`s2-07l.218`）で見る。呼び手は
+/// [`super::launch::prepare`] の 1 か所だけで、登録 row を書く**前**に撃つ（[`boot`] はもう持たない＝
+/// 同じ判定を 2 か所で撃たない・C2）。
+pub(super) fn input_gate(socket: Option<&str>, target: &str) -> Result<(), &'static str> {
+    let Some(pane) = crate::seat::tmux_stdout(socket, &["capture-pane", "-p", "-J", "-t", target]) else {
+        return Err(REASON_PANE_MISSING);
+    };
+    match crate::seat::shell_input_empty(&pane) {
+        Ok(()) => Ok(()),
+        Err(InputGate::Busy) => Err(REASON_INPUT_BUSY),
+        Err(InputGate::UnknownInput) => Err(REASON_INPUT_UNKNOWN),
+    }
+}
+
+/// 起動の注入の **1 本**（順序固定・立て直しと `seat launch` の共通の経路・account-lifecycle.md §4）:
 /// 起動行（`(line, when)`）を送って記録 → 立ち上がりの確認 → `between`（立て直しは登録 row の更新・起動は何もしない）→
 /// 復元。
 ///
-/// 起動は**前面が shell の pane** へ撃つので、門は席の `❯` の行（[`inject::guard_input`]）でなく shell の prompt 末尾
-/// （[`crate::seat::shell_input_empty`]・account-autonomy.md §5「shell への注入の門」・`s2-07l.218`）で見る。断りの字面は
-/// cycle の門と同じ `input-busy` / `input-unknown`。立ち上がった後の復元は席の pane なので従来どおり注入の門を通る。
+/// 入力欄の門は本体の先頭に**持たない**（[`input_gate`] へ切り出し、呼び手が登録 row の前に撃つ）。立ち上がった
+/// 後の復元は席の pane なので従来どおり注入の門を通る。
 pub(super) fn boot(common: &Boot, dir: &Path, (line, when): (&str, &str), between: impl FnOnce() -> Result<(), &'static str>) -> Booted {
-    let Some(pane) = crate::seat::tmux_stdout(common.socket, &["capture-pane", "-p", "-J", "-t", common.target]) else {
-        return Booted::Refused(REASON_PANE_MISSING);
-    };
-    match crate::seat::shell_input_empty(&pane) {
-        Ok(()) => {}
-        Err(InputGate::Busy) => return Booted::Refused(REASON_INPUT_BUSY),
-        Err(InputGate::UnknownInput) => return Booted::Refused(REASON_INPUT_UNKNOWN),
-    }
     let baseline = state::baseline(dir);
     let since = state::now_secs();
     let started_at = Instant::now();

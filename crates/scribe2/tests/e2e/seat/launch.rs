@@ -136,15 +136,16 @@ fn seat_launch_without_account_selects_excluding_other_seats_accounts() {
 }
 
 /// (d) typed な断り（rc 1・stderr 1 行・`reason=` を値で名指す）で row も key も書かない: 候補なし（実測行なし＝`no-account`
-/// `detail=unmeasured`）／session 無し（`session-missing`・作らない）／`--account` が宣言に無い（`account-unknown`）。
-/// 入力欄に打ちかけ（`input-busy`）だけは門で止まる周＝row は書き終えているが 1 key も送らない。
+/// `detail=unmeasured`）／session 無し（`session-missing`・作らない）／`--account` が宣言に無い（`account-unknown`）／
+/// 入力欄に打ちかけ（`input-busy`）。**入力欄の門も登録 row の前**に移ったので（seat-roles.md §26 の約束 5）、4 つとも
+/// row は 0 件である（base は `input-busy` だけ row を 1 件書いてから断る＝RED）。
 #[test]
 fn seat_launch_refuses_typed_without_sending_or_registering() {
     for (case, extra, rows) in [
         ("no-account", &[][..], 0),
         ("session-missing", &["--account", "l2"][..], 0),
         ("account-unknown", &["--account", "ghost"][..], 0),
-        ("input-busy", &["--account", "l2"][..], 1),
+        ("input-busy", &["--account", "l2"][..], 0),
     ] {
         let place = launch_place();
         let name = "launchrefuse";
@@ -423,28 +424,311 @@ fn seat_launch_short_form_refuses_typed_without_a_row() {
     fs::remove_dir_all(&place.dir).ok();
 }
 
-/// (c) 役割の flag は**ちょうど 1 つ**: 0 個（`l2` だけ）と 2 個（`--orchestrator` の重複）はどちらも使い方で断る（rc 1・
-/// stderr は usage・stdout 0 byte）・0 key・row 0。
+/// (c) 役割の flag は**多くとも 1 つ**（0 個の極性は seat-roles.md §26 の約束 1 で変わった）: 2 個（`--orchestrator` の
+/// 重複）は従来どおり使い方で断り（rc 1・stderr は usage・stdout 0 byte・0 key・row 0）、**0 個は既定の orchestrator と
+/// して成立する**（rc 0・導出した行が偽 claude に届き row は 1 件・`role` は既定の役割）。使い方の 1 枚では役割の flag が
+/// 任意の形（`[--orchestrator]`）で載る。base は 0 個も使い方で断る（RED）。
 #[test]
 fn seat_launch_short_form_requires_exactly_one_role_flag() {
-    for (case, extra) in [("zero", &[][..]), ("two", &["--orchestrator", "--orchestrator"][..])] {
+    let place = launch_place();
+    let name = "launchshortrole";
+    let target = format!("{name}:{name}");
+    let path = launch_shims(&place, &target);
+    let guard = launch_session(&place, name, &path);
+    assert!(guard.ready(), "独立 socket に shell の session を立てられる");
+
+    let two = launch_run_short(&place, &path, "l2", &["--orchestrator", "--orchestrator", "--target", &target, "--model", "Fable"]);
+
+    assert_eq!(rc_of(&two), i32::from(RC_REFUSED), "two: stdout={} stderr={}", stdout_of(&two), stderr_of(&two));
+    assert!(stdout_of(&two).is_empty(), "two: stdout は空");
+    assert!(stderr_of(&two).starts_with("usage: seat "), "two: 使い方で断る: {}", stderr_of(&two));
+    assert!(stderr_of(&two).contains("[--orchestrator]"), "two: 使い方の短い形で役割の flag は任意: {}", stderr_of(&two));
+    launch_assert_not_sent(&place, 0, "two");
+
+    let zero = launch_run_short(&place, &path, "l2", &["--target", &target, "--model", "Fable"]);
+
+    assert_eq!(rc_of(&zero), i32::from(RC_OK), "zero: stdout={} stderr={}", stdout_of(&zero), stderr_of(&zero));
+    assert!(stdout_of(&zero).starts_with(&format!("seat launch: launched target={name}_{name} account=l2 ")), "zero: {}", stdout_of(&zero));
+    assert_eq!(
+        fs::read_to_string(place.dir.join("launched")).unwrap_or_default(),
+        format!("--model\nfable\n{}", launch_expected_argv(&place, "l2")),
+        "zero: 既定の役割で導出した行が届く"
+    );
+    let rows = acct_rows(&place.state);
+    assert_eq!(rows.len(), 1, "zero: 登録 row は 1 件: {rows:?}");
+    assert_eq!(rows.first().map(|row| row.role), Some(vessel::seat::role::Role::Orchestrator), "zero: 既定の役割: {rows:?}");
+    drop(guard);
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+// ─────────────────── 席の入口の 1 語（seat-roles.md §26・`s2-07l.488`・接頭辞 `seat_entry_`） ───────────────────
+
+/// target の pane の前面 process が `want` になるのを待つ（上限 [`PROMPT_WAIT`]・`#{pane_current_command}` は typed な
+/// metadata で端末描画の字面ではない）。読むのは**本物の** tmux（shim の PATH を通さない test 自身の口）。
+fn launch_wait_front(place: &AcctPlace, target: &str, want: &str) -> bool {
+    let deadline = Instant::now().checked_add(PROMPT_WAIT);
+    while deadline.is_some_and(|at| Instant::now() < at) {
+        let out = tmux(&place.socket, &["display-message", "-p", "-t", target, "#{pane_current_command}"]);
+        if String::from_utf8_lossy(&out.stdout).trim() == want {
+            return true;
+        }
+        sleep(Duration::from_millis(100));
+    }
+    false
+}
+
+/// 約束 1（§26）: **役割の flag が 0 個**の短い形が、長い形と同じ登録 row と同じ注入行を作る。長い形
+/// （`--account l2 --model Fable`）で row を作って席を終えた place で `seat l2` の 1 語（役割の flag も `--target` も
+/// `--model` も無い）を撃つ → rc 0・`inject.jsonl` の `kind=launch` の `what` は 2 行とも同一・row は 2 件とも等しい・
+/// 偽 claude の argv も 2 回とも同じ・`new-window` は長い形の 1 回だけ（1 語は在る窓へ起こす）。
+/// base は 0 個を使い方で断る（RED）。
+#[test]
+fn seat_entry_short_form_defaults_the_role_to_orchestrator() {
+    let place = launch_place();
+    let name = "entryrole";
+    let target = format!("{name}:seat");
+    let path = launch_shims(&place, &target);
+    let guard = launch_session(&place, name, &path);
+    assert!(guard.ready(), "独立 socket に shell の session を立てられる");
+    let long = launch_run(&place, &path, &target, &["--account", "l2", "--model", "Fable"]);
+    assert_eq!(rc_of(&long), i32::from(RC_OK), "長い形: stdout={} stderr={}", stdout_of(&long), stderr_of(&long));
+    assert_eq!(launch_tmux_calls(&place, "new-window"), 1, "長い形が window を 1 回作る");
+    assert!(launch_quit_seat(&place, &target), "席を終えて前面を shell に戻せる: {}", capture(&place.socket, &target));
+
+    let out = launch_run_short(&place, &path, "l2", &[]);
+
+    let line = stdout_of(&out);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "1 語: stdout={line} stderr={} pane={}", stderr_of(&out), capture(&place.socket, &target));
+    assert_eq!(line, format!("seat launch: launched target={name}_seat account=l2{}\n", provenance(&place.state, "flag")));
+    assert_eq!(launch_tmux_calls(&place, "new-window"), 1, "1 語は window を作らない（row の target の窓へ起こす）");
+    let injected = launch_inject_rows(&place);
+    assert_eq!(injected.len(), 2, "長い形と 1 語の kind=launch が 1 行ずつ: {injected:?}");
+    assert_eq!(injected.first().map(|(_, what)| what), injected.get(1).map(|(_, what)| what), "注入の記録の what は同一: {injected:?}");
+    let rows = acct_rows(&place.state);
+    assert_eq!(rows.len(), 2, "同じ鍵の row が 2 件: {rows:?}");
+    assert_eq!(rows.first(), rows.get(1), "1 語の row は長い形の row と同じ（役割 / target / model / 口座）: {rows:?}");
+    let argv = format!("--model\nfable\n{}", launch_expected_argv(&place, "l2"));
+    assert_eq!(fs::read_to_string(place.dir.join("launched")).unwrap_or_default(), format!("{argv}{argv}"), "偽 claude の argv は 2 回とも同じ");
+    drop(guard);
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// 約束 3 / 4（§26）: 登録 row も `--target` も無い周は、**`-t` を付けない** `display-message` の 1 問いで測った session の
+/// 名と役割の字面を `:` で繋いだ target で席が立つ。4 周を同じ place で測る: (1) 問いが撃てない（偽 tmux が rc 1）→
+/// `missing=--target` (2) session の名が空（空の答え）→ 同じ断り（空を target に化けさせない） (3) 名は返るが row も
+/// `--model` も無い → `missing=--model`（本便は model の要求を外さない） (4) `--model` を添えると
+/// `<session>:orchestrator` の窓が 1 つ作られて席が立ち、row の target もその字面。**環境変数は 1 つも読まない**
+/// （器の `env::` の許し列は 3 つのままで、この経路は tmux への問いだけ）。base は 4 周とも `missing=--target,--model`
+/// で断る（RED）。
+#[test]
+fn seat_entry_target_defaults_to_the_caller_session_and_role() {
+    let place = launch_place();
+    let name = "entrytarget";
+    let target = format!("{name}:orchestrator");
+    let path = launch_shims(&place, &target);
+    let guard = launch_session(&place, name, &path);
+    assert!(guard.ready(), "独立 socket に shell の session を立てられる");
+
+    let away = launch_run_short(&place, &path, "l2", &["--model", "Fable"]);
+    launch_assert_refused_line(&away, "seat launch: refused reason=defaults-unresolved missing=--target", "no-tmux");
+    launch_assert_not_sent(&place, 0, "no-tmux");
+
+    launch_caller_session(&place, "");
+    let empty = launch_run_short(&place, &path, "l2", &["--model", "Fable"]);
+    launch_assert_refused_line(&empty, "seat launch: refused reason=defaults-unresolved missing=--target", "empty-session");
+    launch_assert_not_sent(&place, 0, "empty-session");
+
+    launch_caller_session(&place, name);
+    let no_model = launch_run_short(&place, &path, "l2", &[]);
+    launch_assert_refused_line(&no_model, "seat launch: refused reason=defaults-unresolved missing=--model", "no-model");
+    launch_assert_not_sent(&place, 0, "no-model");
+
+    let out = launch_run_short(&place, &path, "l2", &["--model", "Fable"]);
+
+    let line = stdout_of(&out);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stdout={line} stderr={} pane={}", stderr_of(&out), capture(&place.socket, &target));
+    assert_eq!(line, format!("seat launch: launched target={name}_orchestrator account=l2{}\n", provenance(&place.state, "flag")));
+    assert_eq!(launch_tmux_calls(&place, "new-window"), 1, "役割の名の窓を 1 回作る");
+    let rows = acct_rows(&place.state);
+    assert_eq!(rows.len(), 1, "登録 row は 1 件: {rows:?}");
+    assert_eq!(rows.first().map(|row| row.target.as_str()), Some(target.as_str()), "row の target は <測った session>:<役割>: {rows:?}");
+    assert_eq!(
+        fs::read_to_string(place.dir.join("launched")).unwrap_or_default(),
+        format!("--model\nfable\n{}", launch_expected_argv(&place, "l2")),
+        "導出した行が 1 回だけ届く"
+    );
+    drop(guard);
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// 断りの周ごとの前提を作る（[`seat_entry_refuses_before_writing_the_registration_row`] の各 `case`）: 窓に生きた席が在る
+/// 形（前面 process が shell でない）・撃てない tmux（`capture-pane` / `new-window` を rc 1 にする）・打ちかけの入力・
+/// prompt の末尾が閉じた列のどれでもない形。`session-missing` は target を別の名にするだけなので何もしない。
+fn launch_arrange_refusal(place: &AcctPlace, target: &str, case: &str) {
+    match case {
+        "not-a-shell" => {
+            assert!(tmux(&place.socket, &["send-keys", "-t", target, "-l", "cat"]).status.success());
+            assert!(tmux(&place.socket, &["send-keys", "-t", target, "Enter"]).status.success());
+            assert!(launch_wait_front(place, target, "cat"), "{case}: 前面が shell でなくなる: {}", capture(&place.socket, target));
+        }
+        "pane-missing" => launch_tmux_refuse(place, "capture-pane"),
+        "input-busy" => {
+            assert!(tmux(&place.socket, &["send-keys", "-t", target, "-l", "git st"]).status.success());
+            assert!(acct_wait_pane(place, target, |pane| pane.trim_end().ends_with("$ git st")), "{case}: 打ちかけが描かれる");
+        }
+        "input-unknown" => {
+            assert!(tmux(&place.socket, &["send-keys", "-t", target, "-l", "PS1=Password:"]).status.success());
+            assert!(tmux(&place.socket, &["send-keys", "-t", target, "Enter"]).status.success());
+            assert!(
+                acct_wait_pane(place, target, |pane| pane.trim_end().ends_with("Password:")),
+                "{case}: 入力欄を特定できない prompt になる: {}",
+                capture(&place.socket, target)
+            );
+        }
+        "window-unwritable" => launch_tmux_refuse(place, "new-window"),
+        _ => {}
+    }
+}
+
+/// 約束 5 / 6 / 9（§26）: 前提の断り 5 つは**登録 row を書く前**に出て row は 0 件のまま残り、row の後に残る
+/// `window-unwritable` だけが row を 1 件残す（`s2-07l.488` の実測＝断った周に点検の口が `registered=1 live=1` と出る形を
+/// 塞ぐ）。どの周も 1 key も送らず偽 claude も走らない（置き換えも起きない）。`not-a-shell` の 1 行は**次の 1 手**の
+/// 字面を持つ（約束 9）。base は `not-a-shell` / `pane-missing` / `input-busy` / `input-unknown` の 4 つが row を書いた
+/// 後に断り、断りの行も次の 1 手を持たない（RED）。
+#[test]
+fn seat_entry_refuses_before_writing_the_registration_row() {
+    for (case, rows) in [
+        ("session-missing", 0),
+        ("not-a-shell", 0),
+        ("pane-missing", 0),
+        ("input-busy", 0),
+        ("input-unknown", 0),
+        ("window-unwritable", 1),
+    ] {
         let place = launch_place();
-        let name = "launchshortrole";
+        let name = "entryrefuse";
         let target = format!("{name}:{name}");
         let path = launch_shims(&place, &target);
         let guard = launch_session(&place, name, &path);
         assert!(guard.ready(), "{case}: 独立 socket に shell の session を立てられる");
+        let aimed = match case {
+            "session-missing" => "nosuch:seat".to_owned(),
+            "window-unwritable" => format!("{name}:ghost"),
+            _ => target.clone(),
+        };
+        launch_arrange_refusal(&place, &target, case);
 
-        let out = launch_run_short(&place, &path, "l2", extra);
+        let out = launch_run_short(&place, &path, "l2", &["--target", &aimed, "--model", "Fable"]);
 
-        assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "{case}: stdout={} stderr={}", stdout_of(&out), stderr_of(&out));
+        let line = stderr_of(&out);
+        assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "{case}: stdout={}", stdout_of(&out));
         assert!(stdout_of(&out).is_empty(), "{case}: stdout は空");
-        assert!(stderr_of(&out).starts_with("usage: seat "), "{case}: 使い方で断る: {}", stderr_of(&out));
-        assert!(stderr_of(&out).contains("--orchestrator"), "{case}: 使い方に短い形が載る: {}", stderr_of(&out));
-        launch_assert_not_sent(&place, 0, case);
+        assert!(line.starts_with("seat launch: refused reason="), "{case}: {line}");
+        assert_eq!(tick_token(&line, "reason").as_deref(), Some(case), "{case}: {line}");
+        assert!(!place.dir.join("launched").exists(), "{case}: 起動行は届かない（送信も置き換えも無い）");
+        assert_eq!(launch_tmux_calls(&place, "send-keys"), 0, "{case}: 1 key も送らない");
+        assert_eq!(acct_rows(&place.state).len(), rows, "{case}: 登録 row の件数");
+        assert!(launch_inject_rows(&place).is_empty(), "{case}: inject.jsonl に launch の行は無い");
+        if case == "not-a-shell" {
+            assert_eq!(
+                tick_token(&line, "next").as_deref(),
+                Some("その窓の席を終わらせてから同じ窓で打つ／別の名の窓を--targetで名指す"),
+                "{case}: 断りの行が次の 1 手を持つ: {line}"
+            );
+        }
         drop(guard);
         fs::remove_dir_all(&place.dir).ok();
     }
+}
+
+/// 約束 7 / 8（§26）: 呼び手の target と解いた target の**字面が一致する**周は、前面の判定も入力欄の門も掛けず
+/// （その pane で `cat` が走り〔shell でない〕打ちかけも在る＝掛ければ 1 回も通らない形でも断られない）、**key を 1 つも
+/// 送らず**に登録 row と起動の記帳を済ませ、`sh -c <起動行>` の 1 枚で自分の process を置き換える——偽 claude が argv と
+/// env を長い形の起動と同じ形で記録し、器の行は 1 つも出ない。その周の `--restore` は置き換えの後に合図を送る process が
+/// 残らないので**登録 row を書く前に**閉じた理由 1 つで断る（row 0）。base は前面が起動の口自身なので `not-a-shell`
+/// （しかも row を書いた後）で断る（RED）。
+#[test]
+fn seat_entry_same_window_replaces_the_process_with_the_launch_line() {
+    let place = launch_place();
+    let name = "entrysame";
+    let target = format!("{name}:{name}");
+    let path = launch_shims(&place, &target);
+    let guard = launch_session(&place, name, &path);
+    assert!(guard.ready(), "独立 socket に shell の session を立てられる");
+    // 呼び手の pane は target の pane そのもの（偽 tmux の `-t` 無しの 1 問いが同じ字面を返す）。
+    launch_caller_target(&place, &target);
+    assert!(tmux(&place.socket, &["send-keys", "-t", &target, "-l", "cat"]).status.success());
+    assert!(tmux(&place.socket, &["send-keys", "-t", &target, "Enter"]).status.success());
+    assert!(launch_wait_front(&place, &target, "cat"), "前面が shell でなくなる: {}", capture(&place.socket, &target));
+    assert!(tmux(&place.socket, &["send-keys", "-t", &target, "-l", "half typed"]).status.success());
+
+    let restore = launch_run_short(&place, &path, "l2", &["--target", &target, "--model", "Fable", "--restore", "/rebrief"]);
+
+    launch_assert_refused_line(
+        &restore,
+        &format!("seat launch: refused reason=restore-in-the-same-window target={name}_{name}{}", provenance(&place.state, "flag")),
+        "same-restore",
+    );
+    launch_assert_not_sent(&place, 0, "same-restore");
+
+    let out = launch_run_short(&place, &path, "l2", &["--target", &target, "--model", "Fable"]);
+
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stdout={} stderr={}", stdout_of(&out), stderr_of(&out));
+    assert!(!stdout_of(&out).contains("seat launch:"), "置き換えの後に器の行は 1 つも出ない: {}", stdout_of(&out));
+    assert_eq!(launch_tmux_calls(&place, "send-keys"), 0, "1 key も送らない");
+    assert_eq!(
+        fs::read_to_string(place.dir.join("launched")).unwrap_or_default(),
+        format!("--model\nfable\n{}", launch_expected_argv(&place, "l2")),
+        "偽 claude の argv と env は長い形の起動と同じ"
+    );
+    let rows = acct_rows(&place.state);
+    assert_eq!(rows.len(), 1, "登録 row は 1 件: {rows:?}");
+    assert_eq!(rows.first().map(|row| (row.target.as_str(), row.account.as_str())), Some((target.as_str(), "l2")));
+    assert_eq!(launch_inject_rows(&place).len(), 1, "起動の記帳も置き換えの前に済ませる");
+    drop(guard);
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// 約束 10（§26・今の挙動の確認・新しい名詞の口を足さない）: `seat <別の label>` は同じ鍵（役割 × anchor）の登録 row を
+/// 新しい label で書き直し、起動行の口座の dir も新しい label を指す。長い形で `l2` の row を作って席を終えた place で
+/// `seat l1` の 1 語を撃つ → 2 件目の row は鍵が同じまま `account=l1`（target と model は row から継ぐ）・偽 claude の
+/// 2 回目の argv の `CLAUDE_CONFIG_DIR` は `l1` の credential dir。
+#[test]
+fn seat_entry_relabels_the_registered_row_for_another_account() {
+    let place = launch_place();
+    let name = "entryrelabel";
+    let target = format!("{name}:seat");
+    let path = launch_shims(&place, &target);
+    let guard = launch_session(&place, name, &path);
+    assert!(guard.ready(), "独立 socket に shell の session を立てられる");
+    let long = launch_run(&place, &path, &target, &["--account", "l2", "--model", "Fable"]);
+    assert_eq!(rc_of(&long), i32::from(RC_OK), "長い形: stdout={} stderr={}", stdout_of(&long), stderr_of(&long));
+    assert!(launch_quit_seat(&place, &target), "席を終えて前面を shell に戻せる: {}", capture(&place.socket, &target));
+
+    let out = launch_run_short(&place, &path, "l1", &[]);
+
+    let line = stdout_of(&out);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stdout={line} stderr={} pane={}", stderr_of(&out), capture(&place.socket, &target));
+    assert_eq!(line, format!("seat launch: launched target={name}_seat account=l1{}\n", provenance(&place.state, "flag")));
+    let rows = acct_rows(&place.state);
+    assert_eq!(rows.len(), 2, "{rows:?}");
+    assert_eq!(
+        rows.get(1).map(|row| (row.role, row.anchor.clone())),
+        rows.first().map(|row| (row.role, row.anchor.clone())),
+        "鍵（役割 × anchor）は同じ: {rows:?}"
+    );
+    assert_eq!(
+        rows.get(1).map(|row| (row.account.as_str(), row.target.as_str(), row.model.as_deref())),
+        Some(("l1", target.as_str(), Some("Fable"))),
+        "同じ鍵の row を新しい label で書き直す: {rows:?}"
+    );
+    assert_eq!(
+        fs::read_to_string(place.dir.join("launched")).unwrap_or_default(),
+        format!("--model\nfable\n{}--model\nfable\n{}", launch_expected_argv(&place, "l2"), launch_expected_argv(&place, "l1")),
+        "起動行の口座の dir が新しい label を指す"
+    );
+    drop(guard);
+    fs::remove_dir_all(&place.dir).ok();
 }
 
 /// (d) 既知の verb は従来どおり通る: `launch` の長い形は短い形の口が在っても同じ結果（window 1 回・導出した行が 1 回届く・row は

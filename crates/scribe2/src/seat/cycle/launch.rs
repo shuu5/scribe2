@@ -2,11 +2,11 @@
 //! （[`derive_launch`] / [`fill_launch`] / [`with_agent_view_off`] / [`with_anchor_cd`] / [`with_model`]・雛形 file を持たない）。
 //! [`super`] から純移動（`s2-07l.319`）。起動の注入は立て直しと**同じ 1 本**（[`super::relaunch::boot`]）を通る。
 
-use super::relaunch::{boot, choose, launch_line, Boot, Booted};
+use super::relaunch::{boot, choose, input_gate, launch_line, Boot, Booted};
 use super::{
-    HOLE, MODEL_FLAG, REASON_ACCOUNT_UNKNOWN, REASON_LOG_UNREADABLE, REASON_MODEL_DUPLICATED, REASON_MODEL_UNKNOWN,
-    REASON_NOT_SHELL, REASON_NO_ACCOUNT, REASON_REGISTER, REASON_RESTORE, REASON_SESSION_MISSING, REASON_WINDOW, WHEN_LAUNCH,
-    WHO_LAUNCH,
+    HOLE, MODEL_FLAG, NEXT_AFTER_NOT_SHELL, REASON_ACCOUNT_UNKNOWN, REASON_LOG_UNREADABLE, REASON_MODEL_DUPLICATED,
+    REASON_MODEL_UNKNOWN, REASON_NOT_SHELL, REASON_NO_ACCOUNT, REASON_REGISTER, REASON_REPLACE, REASON_RESTORE,
+    REASON_RESTORE_SAME_WINDOW, REASON_SESSION_MISSING, REASON_WINDOW, WHEN_LAUNCH, WHO_LAUNCH,
 };
 use crate::fleet::select::{Model, NoCandidate, Selection};
 use crate::fleet::store;
@@ -16,6 +16,7 @@ use crate::hook::{seat_name, InjectionRecord, SCHEMA};
 use crate::rules::manifest::{LaunchArg, Manifest, PluginDir};
 use crate::seat::role::Role;
 use crate::seat::{inject, role, sanitize_target, state, tmux_ok, StateDir};
+use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
@@ -154,17 +155,19 @@ pub enum Launched {
     Done(String, Option<inject::Settled>),
     /// 選べる口座が無い（**1 key も送らず row も書かない**）。
     None(NoCandidate),
-    /// **1 key も送っていない**（row は理由による: `session-missing` 以前〔model の断りを含む〕は書かない・門で止まる周は書き終えている）。
+    /// **1 key も送っていない**（前提の断りは全部ここで、**row を 1 件も書いていない**＝設計 seat-roles.md §26 の約束 5）。
     Refused(&'static str),
-    /// 送ったが確かめられない。
+    /// 送った／置き換えたが確かめられない（row は書き終えている・約束 6）。
     Failed(&'static str),
 }
 
-/// 席を起こす（設計 account-lifecycle.md §4・ADR-0026 §2.3・SRS FR59 / FR40 / FR36）: `--model` を型にし（表に無い値は `launch-model-unknown`）
-/// → 口座を決め（`--account` か session 用の選定 [`choose`]）→ 起動行（導出した行に model を運ばせ穴を埋め row の anchor への `cd` を前置・
-/// 二重は `launch-model-duplicated`・row の雛形は model 無し＝宣言は row の `model` の 1 か所）→ session の実在（無ければ `session-missing`・作らない）→ 登録 row を**先に**
-/// 書く（[`role::register`]・`sid` 無し・打刻の条件は掛けない）→ window（無ければ `new-window`）→ 立て直しと同じ 1 本（[`boot`]）で起動行を
-/// shell へ注入し、`--restore` が在れば復元を送る → `inject.jsonl` に `kind=launch` を 1 行。lock も cycle-stamp も取らない（起動は user の手番）。
+/// 席を起こす（設計 account-lifecycle.md §4 / seat-roles.md §26・ADR-0026 §2.3・SRS FR59 / FR40 / FR36）: `--model` を型にし（表に無い値は
+/// `launch-model-unknown`）→ 口座を決め（`--account` か session 用の選定 [`choose`]）→ 起動行（導出した行に model を運ばせ穴を埋め row の
+/// anchor への `cd` を前置・二重は `launch-model-duplicated`・row の雛形は model 無し＝宣言は row の `model` の 1 か所）→ **呼び手の pane が
+/// target の pane そのものか**を `-t` の無い 1 問いで測り（[`crate::seat::target_of_caller`]）→ 前提の断りを**全部**済ませて登録 row を書く
+/// （[`prepare`]）→ 一致する周は key を 1 つも送らず自分の process を起動行へ置き換え（[`replace_with`]）、一致しない周は立て直しと同じ
+/// 1 本（[`boot`]）で shell へ注入して `--restore` が在れば復元を送る → `inject.jsonl` に `kind=launch` を 1 行。lock も cycle-stamp も
+/// 取らない（起動は user の手番）。
 pub fn launch(request: &Launch) -> Launched {
     let started_at = Instant::now();
     let Ok(model) = model_of(request.model) else { return Launched::Refused(REASON_MODEL_UNKNOWN) };
@@ -174,10 +177,17 @@ pub fn launch(request: &Launch) -> Launched {
     };
     let derived = derive_launch(request.anchor, request.manifest.plugins(), request.manifest.launch_args(), None);
     let anchor = request.anchor.display().to_string();
-    let line = match launch_line(request.state_dir, &with_model(&derived, model), &label, &anchor).and_then(|line| prepare(request, &label, derived).map(|()| line)) {
+    // 呼び手の窓そのものへ起こす周（約束 7）: 前面の判定も入力欄の門も掛けず、送らずに置き換える。
+    let same = crate::seat::target_of_caller(request.socket).as_deref() == Some(request.target);
+    let line = match launch_line(request.state_dir, &with_model(&derived, model), &label, &anchor).and_then(|line| prepare(request, &label, derived, same).map(|()| line)) {
         Ok(found) => found,
         Err(reason) => return Launched::Refused(reason),
     };
+    if same {
+        // 記帳まで済ませてから置き換える（成功する周は返らない＝以後、器の行は 1 つも出ない）。
+        record_launch(request, &label, started_at);
+        return Launched::Failed(replace_with(&line));
+    }
     let common = Boot {
         target: request.target,
         socket: request.socket,
@@ -188,16 +198,23 @@ pub fn launch(request: &Launch) -> Launched {
     };
     let dir = crate::seat::seat_dir(&request.state_dir.path, request.target);
     let booted = boot(&common, &dir, (&line, WHEN_LAUNCH), || Ok(()));
-    if !matches!(booted, Booted::Refused(_)) {
-        record_launch(request, &label, started_at);
-    }
+    record_launch(request, &label, started_at);
     match booted {
         Booted::Done(Some(inject::Settled::Consumed)) => Launched::Done(label, Some(inject::Settled::Consumed)),
         Booted::Done(None) => Launched::Done(label, None),
         Booted::Done(Some(_)) => Launched::Failed(REASON_RESTORE),
-        Booted::Refused(reason) => Launched::Refused(reason),
         Booted::Failed(reason) => Launched::Failed(reason),
     }
+}
+
+/// 自分の process を `sh -c <起動行>` の **1 枚**で置き換える（約束 7・shell は 1 枚だけ＝どの層が起動行を解くかを曖昧に
+/// しない）。key は 1 つも送らない（送る口はここを通らない）。
+///
+/// 成功する周は**返らない**ので、戻り値は失敗の理由 [`REASON_REPLACE`] だけである（`exec` が返る＝置き換えられなかった）。
+fn replace_with(line: &str) -> &'static str {
+    let failed = std::process::Command::new("sh").arg("-c").arg(line).exec();
+    let _ = failed;
+    REASON_REPLACE
 }
 
 /// 口座を決める: `--account` は宣言（開いた manifest の `[[account]]`）に在る label だけ（無ければ `account-unknown`）・
@@ -217,14 +234,32 @@ fn pick_account(request: &Launch) -> Result<String, Launched> {
     }
 }
 
-/// 起動行を送る前の 3 手（順序固定）: session の実在（無ければ `session-missing`・**row を書かない**）→ 登録 row を
-/// 先に書く（`sid` 無し・`launch` = 導出した行 `derived`〔穴を埋める前・model 無し〕）→ window（[`open_window`]）。
-fn prepare(request: &Launch, label: &str, derived: String) -> Result<(), &'static str> {
+/// 起動行を送る前の手（順序固定・設計 seat-roles.md §26 の約束 5 / 6 / 8）: session の実在（無ければ `session-missing`）→
+/// **前提の断りを全部**（同じ窓の周は `--restore` を `restore-in-the-same-window`・違う窓で窓が既に在る周だけ前面が shell か
+/// 〔`not-a-shell`〕と入力欄の門〔[`input_gate`]・`pane-missing` / `input-busy` / `input-unknown`〕）→ 登録 row を書く
+/// （`sid` 無し・`launch` = 導出した行 `derived`〔穴を埋める前・model 無し〕）→ 窓がまだ無い周だけ作る（[`create_window`]）。
+///
+/// **断りの 5 つは全部 row の前**で、row の後に残るのは `window-unwritable` だけである（`s2-07l.488` の実測＝断った周に
+/// 点検の口が `registered=1 live=1` と出る形を塞ぐ）。判定の並びは従来のまま（session の有無 → 窓の前面 → 入力欄）で、
+/// **窓がまだ無い周と同じ窓の周は前面と入力欄の判定を 2 つとも飛ばす**——前者は作る前の窓に pane が無く、後者は前面が
+/// 起動の口自身で門が必ず閉じて見える（key を 1 つも送らないので門が守る「打ちかけの入力」も無い）。
+fn prepare(request: &Launch, label: &str, derived: String, same: bool) -> Result<(), &'static str> {
     let Some((session, window)) = request.target.split_once(':') else {
         return Err(REASON_SESSION_MISSING);
     };
     if crate::seat::tmux_stdout(request.socket, &["has-session", "-t", &format!("={session}")]).is_none() {
         return Err(REASON_SESSION_MISSING);
+    }
+    let exists = window_exists(request, session, window);
+    if same {
+        if request.restore.is_some() {
+            return Err(REASON_RESTORE_SAME_WINDOW);
+        }
+    } else if exists {
+        if !crate::seat::pane_is_shell(request.socket, request.target) {
+            return Err(REASON_NOT_SHELL);
+        }
+        input_gate(request.socket, request.target)?;
     }
     let row = Registration {
         role: request.role,
@@ -236,23 +271,30 @@ fn prepare(request: &Launch, label: &str, derived: String) -> Result<(), &'stati
         model: request.model.map(str::to_owned),
     };
     role::register(&request.state_dir.path, row).map_err(|_| REASON_REGISTER)?;
-    open_window(request, session, window)
+    if exists {
+        return Ok(());
+    }
+    create_window(request, session, window)
 }
 
-/// window を用意する: 無ければ `new-window -t <session> -n <window>` で作り、shell の prompt が描かれるまで窓（`settle`）の内で
-/// 待つ（作った直後の空の pane は門が `input-unknown` で断るので、門の前に描画を待つ・門の判定そのものは [`boot`]）。
-/// 在れば前面 process が shell であることだけを確かめる（走っている席へ起動行を送らない・`not-a-shell`）。
+/// target の window が既に在るか（`list-windows -F '#{window_name}'` を exact の session 名で引く）。**撃てない周は「無い」側**
+/// （`new-window` へ進み、それも撃てなければ `window-unwritable`）。[`prepare`] が 1 回だけ測り、前面の判定と窓を作るかの
+/// 両方がこの 1 つの値を読む（同じ事実を 2 度撃たない）。
+fn window_exists(request: &Launch, session: &str, window: &str) -> bool {
+    crate::seat::tmux_stdout(request.socket, &["list-windows", "-t", &format!("={session}"), "-F", "#{window_name}"])
+        .unwrap_or_default()
+        .lines()
+        .any(|found| found == window)
+}
+
+/// window を作る（まだ無い周だけ・登録 row の後）: `new-window` が失敗すれば `window-unwritable`・作れたら shell の prompt が
+/// 描かれるまで窓（`settle`）の内で待つ（作った直後の空の pane へ起動行を送らない）。
 ///
 /// session は `=<session>:` で名指す: `=` は前方一致でない exact の名・末尾の `:` は「その session の次の空き index」
 /// （`-t <session>` の裸の名は、session と同じ名の window が在る周に **window** として解決され `index in use` で落ちる・
 /// 実測 2026-09-14 tmux 3.6b）。
-fn open_window(request: &Launch, session: &str, window: &str) -> Result<(), &'static str> {
-    let exact = format!("={session}");
-    let windows = crate::seat::tmux_stdout(request.socket, &["list-windows", "-t", &exact, "-F", "#{window_name}"]).unwrap_or_default();
-    if windows.lines().any(|found| found == window) {
-        return crate::seat::pane_is_shell(request.socket, request.target).then_some(()).ok_or(REASON_NOT_SHELL);
-    }
-    if !tmux_ok(request.socket, &["new-window", "-t", &format!("{exact}:"), "-n", window]) {
+fn create_window(request: &Launch, session: &str, window: &str) -> Result<(), &'static str> {
+    if !tmux_ok(request.socket, &["new-window", "-t", &format!("={session}:"), "-n", window]) {
         return Err(REASON_WINDOW);
     }
     let deadline = Instant::now().checked_add(request.settle);
@@ -294,6 +336,9 @@ fn record_launch(request: &Launch, label: &str, started: Instant) {
 }
 
 /// `seat launch` の 1 行（成立・断り・失敗）。置き場の 2 語を末尾に載せる（cycle と同じ規律）。
+///
+/// `not-a-shell` の断りだけ**次の 1 手**（[`NEXT_AFTER_NOT_SHELL`]・約束 9）を置き場の 2 語の**前**に足す
+/// （path は行末のまま＝出所を偽れない）。その窓には生きた席が在り器は殺さないので、手は人が選ぶ。
 pub fn render_launched(target: &str, result: &Launched, state: &StateDir) -> String {
     let suffix = state.suffix();
     let target = sanitize_target(target);
@@ -305,7 +350,10 @@ pub fn render_launched(target: &str, result: &Launched, state: &StateDir) -> Str
         Launched::None(found) => {
             format!("seat launch: refused reason={REASON_NO_ACCOUNT} detail={} target={target}{suffix}", found.reason.as_str())
         }
-        Launched::Refused(reason) => format!("seat launch: refused reason={reason} target={target}{suffix}"),
+        Launched::Refused(reason) => {
+            let next = if *reason == REASON_NOT_SHELL { format!(" next={NEXT_AFTER_NOT_SHELL}") } else { String::new() };
+            format!("seat launch: refused reason={reason} target={target}{next}{suffix}")
+        }
         Launched::Failed(reason) => format!("seat launch: failed reason={reason} target={target}{suffix}"),
     }
 }

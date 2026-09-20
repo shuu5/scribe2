@@ -104,8 +104,18 @@ pub const REASON_NO_ACCOUNT: &str = "no-account";
 pub const REASON_SESSION_MISSING: &str = "session-missing";
 /// `seat launch` の window を作れない（`new-window` が失敗・row は書き終えている）。
 pub const REASON_WINDOW: &str = "window-unwritable";
-/// `seat launch` の既存 window の前面 process が shell でない（走っている席へ起動行を送らない・row は書き終えている）。
+/// `seat launch` の既存 window の前面 process が shell でない（走っている席へ起動行を送らない・**row を書かない**）。
 pub const REASON_NOT_SHELL: &str = "not-a-shell";
+/// [`REASON_NOT_SHELL`] の断りに足す**次の 1 手**（設計 seat-roles.md §26 の約束 9）: その窓には生きた席が在るので、
+/// 器は殺さない——人が選ぶ 2 つの手を断りの行そのものに載せる（断りが直し方を言わない形は `s2-07l.488` の実測）。
+/// **値に空白を持たない**（判定行の `key=value` の読みを壊さない）。載せるのは `seat launch` の行だけで、
+/// 同じ理由を返す口座の delivery の面は従来の字面のまま。
+pub const NEXT_AFTER_NOT_SHELL: &str = "その窓の席を終わらせてから同じ窓で打つ／別の名の窓を--targetで名指す";
+/// 呼び手の pane が target の pane そのものの周の `--restore`（設計 seat-roles.md §26 の約束 8）: 起動行で自分を
+/// 置き換えるので、立ち上がった後に合図を送る process が残らない＝送れない約束をせず**登録 row を書く前に**断る。
+pub const REASON_RESTORE_SAME_WINDOW: &str = "restore-in-the-same-window";
+/// 同じ窓の周に自分の process を起動行へ置き換えられない（`sh -c <起動行>` の exec が返ってきた・row は書き終えている）。
+pub const REASON_REPLACE: &str = "launch-replace-failed";
 /// `seat launch` が event log を読めない（選定の除外＝他の席の登録 row を取れない・row も key も書かない）。
 pub const REASON_LOG_UNREADABLE: &str = "log-unreadable";
 /// `seat launch` の `--anchor` 無しで cwd の repo root を解けない（`seat register` の `input-unreadable` と同じ形）。

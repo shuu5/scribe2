@@ -107,6 +107,30 @@ pub fn target_of_pane(socket: Option<&str>, pane: &str) -> Option<String> {
     (!session.is_empty() && !window.is_empty()).then(|| target.to_owned())
 }
 
+/// **呼び手自身の** pane の session の名（設計 seat-roles.md §26 の約束 3）: `-t` を**付けない**
+/// `display-message -p '#{session_name}'` の 1 問いで、tmux 自身が呼び手の pane を解く。
+///
+/// **環境変数は 1 つも読まない**（憲法 C2.2・器の `env::` の許し列は `args` / `args_os` / `current_dir` の 3 つ
+/// だけで、`TMUX_PANE` を読む形は構造検査が落とす）。tmux の外で撃った周・撃てない周・名が空の周は `None`
+/// （呼び側は既定を解かず断る）。
+pub fn session_of_caller(socket: Option<&str>) -> Option<String> {
+    let out = tmux_stdout(socket, &["display-message", "-p", "#{session_name}"])?;
+    let name = out.trim();
+    (!name.is_empty()).then(|| name.to_owned())
+}
+
+/// **呼び手自身の** pane の target（`session:window`・設計 seat-roles.md §26 の約束 7）: `-t` を**付けない**
+/// 同じ 1 問いで、起動の口を打った窓そのものを名で測る。
+///
+/// 読み方は [`target_of_pane`] と同じ（**両方の名が非空のときだけ** target・`:` だけを rc 0 で返す版に
+/// 空を通さない）で、pane id を引数で受け取らない点だけが違う。
+pub fn target_of_caller(socket: Option<&str>) -> Option<String> {
+    let out = tmux_stdout(socket, &["display-message", "-p", "#{session_name}:#{window_name}"])?;
+    let target = out.trim();
+    let (session, window) = target.split_once(':')?;
+    (!session.is_empty() && !window.is_empty()).then(|| target.to_owned())
+}
+
 /// 最後の prompt 行の右（入力欄）の字面。prompt 行が無ければ `None`。
 ///
 /// `None` は「入力欄が空」ではなく **特定できない**である（呼び側は fail-closed に

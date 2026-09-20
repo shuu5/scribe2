@@ -12,7 +12,7 @@ use std::path::Path;
 
 /// `seat` の使い方。
 pub fn usage() -> String {
-    "usage: seat <register --state-dir S --target T --role R --account L --launch FILE [--anchor DIR]|launch --state-dir S --role R --target S:W [--account L] [--anchor DIR] [--model M] [--restore CMD]|<label> --orchestrator [--target S:W] [--model M] [--anchor DIR] [--restore CMD] [--state-dir S]> [--tmux-socket PATH] [--capture-file PATH] [--state-dir PATH]".to_owned()
+    "usage: seat <register --state-dir S --target T --role R --account L --launch FILE [--anchor DIR]|launch --state-dir S --role R --target S:W [--account L] [--anchor DIR] [--model M] [--restore CMD]|<label> [--orchestrator] [--target S:W] [--model M] [--anchor DIR] [--restore CMD] [--state-dir S]> [--tmux-socket PATH] [--capture-file PATH] [--state-dir PATH]".to_owned()
 }
 
 /// `seat` に続く引数を捌く。
@@ -200,9 +200,10 @@ fn launch_of(args: &[String]) -> Outcome {
 /// [`cycle::Launched`] の variant ではない）。
 const REASON_DEFAULTS_UNRESOLVED: &str = "defaults-unresolved";
 
-/// 短い形 `seat <label> --orchestrator [--target S:W] [--model M] [--anchor DIR] [--restore CMD] [--state-dir S]`
-/// （設計 account-lifecycle.md §14・SRS FR59 / FR40）: 役割の flag は**ちょうど 1 つ**（0 か 2 は使い方の誤り）・置き場と anchor は
-/// 長い形と同じ解き方・target と model は明示の flag が無ければ同じ鍵（役割 × anchor）の登録 row の値（[`short_defaults`]）。
+/// 短い形 `seat <label> [--orchestrator] [--target S:W] [--model M] [--anchor DIR] [--restore CMD] [--state-dir S]`
+/// （設計 account-lifecycle.md §14・seat-roles.md §26・SRS FR59 / FR40）: 役割の flag は**多くとも 1 つ**（0 個は既定の
+/// orchestrator・2 つは使い方の誤り・[`short_role_of`]）・置き場と anchor は長い形と同じ解き方・target と model は明示の
+/// flag が無ければ同じ鍵（役割 × anchor）の登録 row の値、target は更に呼び手の pane の session（[`short_defaults`]）。
 /// 解けた周は長い形と同じ [`LaunchFlags`]（口座 = label）を組んで同じ [`launch_with`] を通る。
 fn short_of(label: &str, args: &[String]) -> Outcome {
     let Some(role) = short_role_of(args) else {
@@ -221,7 +222,7 @@ fn short_of(label: &str, args: &[String]) -> Outcome {
         Ok(found) => found,
         Err(refused) => return refused,
     };
-    let (target, model) = match short_defaults(&place, role, target, model) {
+    let (target, model) = match short_defaults(&place, role, target, model, socket) {
         Ok(found) => found,
         Err(refused) => return refused,
     };
@@ -229,19 +230,25 @@ fn short_of(label: &str, args: &[String]) -> Outcome {
     launch_with(&flags, &place)
 }
 
-/// 短い形の役割の flag（`--orchestrator`＝[`role::Role`] の字面に `--` を前置した形）。**ちょうど 1 つ**の周だけ `Some`
-/// （0 個・同じ flag の重複は `None`＝使い方の誤り）。
+/// 短い形の役割の flag（`--orchestrator`＝[`role::Role`] の字面に `--` を前置した形）。**多くとも 1 つ**の周だけ `Some`:
+/// 0 個は既定の [`role::Role::Orchestrator`]（席の入口の 1 語・設計 seat-roles.md §26 の約束 1）・1 つはその役割・
+/// 2 つ以上（同じ flag の重複を含む）は `None`＝使い方の誤り（どれを採るか決まらない形は黙って選ばない）。
 fn short_role_of(args: &[String]) -> Option<role::Role> {
     let mut roles = args.iter().filter_map(|arg| arg.strip_prefix("--").and_then(role::Role::parse));
-    let role = roles.next()?;
+    let role = roles.next().unwrap_or(role::Role::Orchestrator);
     roles.next().is_none().then_some(role)
 }
 
-/// 短い形の既定を **1 関数で導く**（§14）: 明示の flag は row の値に勝ち、無ければ同じ鍵（役割 × anchor）の登録 row の
-/// `target` / `model`（[`role::registration_of_key`]）。両方が明示の周は log を読まない。row の `model` が無い周は `--model` が
-/// 要る。足りない flag は宣言順（`--target` → `--model`）で `missing=` に載せて `defaults-unresolved` で断る（1 key も送らず
-/// row も書かない）。log を読めない周は `log-unreadable`（「row が無い」と混ぜない・fail-closed）。
-fn short_defaults(place: &LaunchPlace, role: role::Role, target: Option<&str>, model: Option<&str>) -> Result<(String, String), Outcome> {
+/// 短い形の既定を **1 関数で導く**（§14・seat-roles.md §26 の約束 3 / 4）: 明示の flag は row の値に勝ち、無ければ同じ鍵
+/// （役割 × anchor）の登録 row の `target` / `model`（[`role::registration_of_key`]）。両方が明示の周は log を読まない。
+///
+/// `target` は row でも解けなければ**呼び手の pane の session**（[`super::session_of_caller`]・`-t` を付けない 1 問い）と
+/// **役割の字面**を `:` で繋いだ形にする（`seat <label>` の 1 語で打った窓の session に、役割の名の窓を開ける）。
+/// 問いが撃てない周・session の名が空の周は解けないまま——`--model` の要求も本便では外さない（役割ごとの既定の model を
+/// rules 行から導くのは §20 の別便）。足りない名は宣言順（`--target` → `--model`）で `missing=` に載せて
+/// `defaults-unresolved` で断る（1 key も送らず row も書かない）。log を読めない周は `log-unreadable`（「row が無い」と
+/// 混ぜない・fail-closed）。
+fn short_defaults(place: &LaunchPlace, role: role::Role, target: Option<&str>, model: Option<&str>, socket: Option<&str>) -> Result<(String, String), Outcome> {
     let row = match (target, model) {
         (Some(_), Some(_)) => None,
         _ => {
@@ -251,7 +258,10 @@ fn short_defaults(place: &LaunchPlace, role: role::Role, target: Option<&str>, m
             role::registration_of_key(&state, role, &place.anchor.display().to_string()).cloned()
         }
     };
-    let target = target.map(str::to_owned).or_else(|| row.as_ref().map(|found| found.target.clone()));
+    let target = target
+        .map(str::to_owned)
+        .or_else(|| row.as_ref().map(|found| found.target.clone()))
+        .or_else(|| super::session_of_caller(socket).map(|session| format!("{session}:{}", role.as_str())));
     let model = model.map(str::to_owned).or_else(|| row.as_ref().and_then(|found| found.model.clone()));
     match (target, model) {
         (Some(target), Some(model)) => Ok((target, model)),
