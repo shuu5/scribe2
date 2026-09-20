@@ -376,6 +376,73 @@ e2e は binary を spawn し外部 command は PATH 先頭の stub で差し替�
 - 却下案: 数でない母集団を判定と切り離して警告行に落とす（母集団の読みは「0 は見ていない」を**型で**持つ＝母集団を読めない PASS は findings 0 件の非空虚性を裏書きできず C10 を緩める側になり、0 は INCONCLUSIVE のままで数でない字面だけ通すと同じ不備の扱いが 2 本に割れる）／数の字面を緩めて近似の印を読み飛ばす（手書きの字面規則が増え、次の形で破れる・C1 / N2）／撃ち直しの回数を rules 行にする（§21 と同じ理由で 1 回で足りる＝2 回目も読めなければ負荷でなく審査役の側）／gate 全体を撃ち直す（1 周と同じ費用・§21 の却下案と同じ）／出力が読めない周を FAIL に倒す（測れなかったを赤に読み替える・C10 違反）。
 - 歯（`pipe_gate_lens_reread_` 接頭辞・置き場は gate の歯の file・fixture の script は歯の中で書き、撃たれた回数を数える）: (a) 1 回目が数でない母集団・2 回目が正しい出力の審査役の便は `PASS` で終わり、撃たれた回数が 2・stderr に撃ち直しの 1 行（1 回目の理由つき）が在る／(b) 2 回とも数でない周は INCONCLUSIVE で回数が 2（3 回目は無い）・理由は 2 回目のもの／(c) **母集団が 0 の出力は撃ち直さない**（回数 1・INCONCLUSIVE・理由の字面は今までどおり）＝「読めたが規則で断った」側の pin／(d) rc が非 0 で終わる審査役と起動できない審査役は撃ち直さない（回数 1・stderr に撃ち直しの行が無い）／(e) 審査役が `INCONCLUSIVE` を**自分で**答えた周（集計は正しい）は撃ち直さない（回数 1・母集団 = 撃ち直さない 4 形）／(f) 母集団の欄が無い周と母集団が 0 の周の判定と理由の字面は 1 字も変わらない（既存の歯が測る側・行の verify がその 2 本を完全名で撃つ）。
 
+## 30. 受付に CPU の次元を足す — 枠を memory の 2 項と core の 1 項の min にし、job ごとの thread は器が決めて穴で行へ渡す（契約表の行 v・`s2-07l.504`）
+
+やさしく言うと: いままで「空いている memory」だけを見て変異検査を何本走らせるか決めていた。core の数も見て、host 全体で同時に走る test の thread が core を超えるところで止める。混んでいて 1 本に落としたときは、その 1 本が core を全部使わないよう thread も 1 にする。
+
+- **何が起きているか**（事故の実測 2026-09-20・台帳 `s2-07l.504`・verified）: host が 4.5 時間ほぼ凍った。load の 1 分値は 8 → 19,459 → 68,816、D 状態（待ち）の process は最大 52,412、便の event は 4 時間 1 件も出ていない。**memory は余裕**（使用 30%・OOM 0 件）で、溢れたのは core の側である。同時刻に変異検査を持つ gate が 6 本同時に走っていた。
+- **受付が CPU を見ていない**（verified・main b2cf656）: `crates/scribe2/src/pipe/admission.rs` の `capacity`（pub・pure）は `by_avail` と `by_token` の min で、どちらも memory の式である。事故の host は `by_token` が 39 job ぶんを許したので、6 gate × 4 job = 24 枠が全部通った。
+- **入れ子の上限は gate 1 本の中でしか閉じない**: 行 m（§22）が入れた thread の上限は `crates/xtask/src/mutantsdiff.rs` の `test_threads`（`pub use scope::test_threads` で公開・`max(1, cores / jobs)`）で、`jobs × t ≤ cores` を**その gate の中だけ**で閉じる。core 32 の host では gate 1 本（jobs 4・t 8）で 32 thread＝それだけで core が満杯になり、6 本同時はその 6 倍である。
+- **縮退した gate ほど core を広く使う**: 待ちの上限（rules 行 `gate.slot_wait_s`）を超えた周は `admission.rs` の `degraded` が jobs 1 で進むが、xtask 側の導出は `cores / 1` ＝ **core 数ぶんの thread** になる。枠を配れないほど混んだ host で、いちばん太い行を撃つ形である。
+- **前提（ADR が先）**: §2 は「memory だけが硬い資源・CPU は溢れても遅くなるだけなので上限を持たない」と書き、ADR-0021 §2.1 / §2.3 がその面の正本である。事故は「CPU は遅くなるだけ」が偽であることを示した（D 状態の山が session manager を飽和させ、host ごと 4.5 時間止まった）。本行と §31 はその面を置き換えるので、**実装の前に ADR を 1 本 land する**（CLAUDE.md の「ADR を書く条件」1 / 4・行 o が ADR-0035 を要したのと同型）。本節は形だけを決め、値と原則の改訂は ADR と裁定が持つ。
+- **現物**（verified・main b2cf656）: `crates/scribe2/src/pipe/admission.rs` = `capacity(meminfo, sizes, live_jobs) -> Free`（pub・pure）/ `Sizes { job_mb, reserve_mb }`（pub）/ `Free::{Slots, Unmeasured}`（pub）/ `Rules { sizes, cap, wait_s, policy }`（pub）/ `Unreadable::{SlotsDir, Lock, Meminfo}`（pub・`as_str` が record の `slot_why=`）/ `Grant { jobs, detail, why, ticket }`（pub・`jobs` は 1 以上）/ `has_room(dir, want, sizes) -> bool`（pub）/ `admit`（pub）/ `degraded` / `unmeasured` / `take` / `Ask::{UpTo, Floor}`（private）。`crates/scribe2/src/pipe/gate/verify.rs` = `fire` / `fill_holes(line, base, jobs)` / `admitted`（どれも private）と `UNADMITTED_JOBS`。`crates/scribe2/src/pipe/declaration.rs` = `BASE_HOLE` / `JOBS_HOLE` / `BASE_HOLES`（pub・**閉じた 2 つ**・intake の `unfit` と gate の置換が同じ列を読む）。`crates/scribe2/src/fleet/wait.rs` = `Completion::SlotFree { slots_dir, want, job_mb, reserve_mb, cap }`（pub）で、待ちの観測が `has_room` を撃つ。`.vessel.toml` の `detection-verify` は 1 行で穴が 2 つ。`crates/xtask/src/mutantsdiff.rs` = `measure_args(diff, out, scope, jobs, cores)`（pub・pure）が末尾に `-- --no-fail-fast -- --test-threads <t>` を置き、`run` が `std::thread::available_parallelism()` を 1 回だけ読む。
+- **約束**:
+  1. **job 1 つの thread の値段を器が決める**: 受付が pure 関数 1 本で `price = max(1, floor(cores / gate.mutants_jobs))` を出す。`cores` は `std::thread::available_parallelism()` の**実測**で、env を読まない（C2.2・器の `env::` の許し列は `cargo xtask check` の `env-reads` が母集団ごと数える面であって、増やす便ではない）。新しい rules 行は足さない（C1 / C5）。
+  2. **枠は 3 項の min**: `by_cpu = floor(cores / price) − Σ 生きている札の jobs`（引き算は 0 の床）を pure 関数 1 本で出し、配る枠を `min(by_avail, by_token, by_cpu)` にする。**`capacity` の引数と式は変えない**（memory の 2 項はそのまま・既存の歯が 1 字も変わらずに通る）。
+  3. **札の形は変えない**: `by_cpu` の単位は job で、1 job の値段が `price` thread である。生きている札の jobs の和がそのまま CPU の勘定になるので、札 file の schema も回収の判定（pid と起動時刻）も不変である。
+  4. **縮退と測れない周は thread も 1**: 受け付けた枠（`Grant`）が jobs と並べて thread を運び、測れた周は `price`、待ちの上限を超えた周と測れなかった周は **1** にする（`cores / 1` をやめる＝速い側へ倒さない）。
+  5. **cores を読めない周は測れなかった側へ倒す**: 受付の閉じた理由（record の `slot_why=`）に variant 1 つを足し、jobs 1 / thread 1 で進む（断らない・止めない・FR46）。0 と書かない（C10）。
+  6. **thread は穴で行へ渡す**: 宣言の置ける穴の閉じた集合に 3 つ目を足し、`.vessel.toml` の検出線をその穴を持つ 1 行にする。置換は `{jobs}` と同じ関数 1 本が行い、受付を通らない行（land の主実測）は jobs と同じく 1 を埋める。**穴の列と宣言の行は同じ便で land する**（片側だけに足すと、intake を通った行が穴のまま撃たれる・§3.3 errata と同じ理由）。
+  7. **導出の正本は器の 1 か所**: xtask は受けた値を `-- -- --test-threads <値>` へそのまま渡すだけにし、cores から thread を導く計算を持たない（`--jobs` と同じ扱い・§3.3「値は持たない」）。渡されない周と数でない周の既定は **1**（`JOBS_FLOOR` と同じ向き）。引数の対と `--` が 2 つの形（§22）は不変。
+  8. **待ちも 3 項で測る**: 枠が空くのを待つ完了 enum が CPU の材料も運び、待ちの中の観測が受付と同じ 3 項を測る。memory だけで待ちが解ける形を残さない（解けた直後に受付が 0 を出して待ち直す空回りになる）。
+- **歯**:
+  - in-file（`crates/scribe2/src/pipe/admission.rs`・接頭辞 `admission_cpu_`）: (a) 値段が `max(1, floor(cores / cap))` で、cap 0 と cores 不明の 2 形を弁別する／(b) `by_cpu` の式（floor・生きている札の差引・0 の床）／(c) 3 項の min が **CPU 側で決まる** fixture（memory は潤沢・core が細い）と **memory 側で決まる** fixture の両方で正しい（どちらか一方だけの歯は、min の項を落としても緑になる）／(d) cores を読めない周は閉じた理由で「測れなかった」に倒れ、その字面が固定である。
+  - in-file（`crates/scribe2/src/pipe/declaration.rs`・接頭辞 `declaration_threads_hole_`）: 穴の閉じた集合が 3 つちょうどで、3 つ目を持つ検出線の行は intake を通り、集合の外の穴は従来どおり不適合に落ちる。
+  - in-file（`crates/xtask/src/main.rs`・接頭辞 `mutants_diff_threads_flag_`・行 m と同じ置き場）: 引数の末尾が `-- --no-fail-fast -- --test-threads <受けた値>` で、渡さない周と数でない周は 1、`--jobs` / `--in-diff` / `-p` / `-o` / `--no-shuffle` / `--copy-vcs` の対と順序は不変。
+  - e2e（`crates/scribe2/tests/e2e/pipe/gate.rs`・接頭辞 `pipe_slots_threads_`・既存の受付の歯と同じ toy の形）: 3 つの穴を持つ行の置換後の `cmd` に実効 jobs と実効 thread が**両方**載り、**待ちの上限を超えた周の `cmd` は jobs も thread も 1** である（`slot=degraded` の record と対で 1 本）。
+  - **不変の柵**（行の verify が完全名で撃つ・本便は書き換えない）: `admission_capacity_takes_the_min_of_the_two_formulas` / `admission_capacity_floors_at_zero` / `admission_capacity_is_unmeasured_on_unreadable_meminfo`（置き場は `crates/scribe2/src/pipe/admission.rs`）。memory の 2 項の式が 1 字も動かないことを測る側である。
+- **触らない**: `capacity` の引数と式・`Sizes` の 2 線・札 file の schema と回収の判定・`gate.mutants_jobs` と `gate.job_memory_mb` と `host.reserve_memory_mb` の値・`gate.slot_wait_s` の値・`pipe.max_live`（行 o）・封じ込めの箱の大きさと `Limit` の 2 種・検出線の rc の意味と撃ち直し（§21）・受付が極性一覧に載らないこと（§3.2 の末尾・縮退するだけの境界のまま）。
+- **却下**:
+  - **`capacity` に cores の引数を足して 3 項を 1 本の式にする**: 既存の 3 本の歯が全部書き換えになり、memory の式が不変であることを測る側を同じ便で失う。
+  - **thread を `--jobs` から道具が導き続ける（穴を足さない）**: 受け付けた枠が上限より小さい周に `floor(cores / jobs)` が job あたりの値段を押し上げ、2 本の gate が合わせて core の 2 倍の thread を作る（core 32・各 jobs 2 なら 2 × 16 が 2 本で 64）。縮退の周は 1 本で core 数ぶんになる（本節の出所そのもの）。
+  - **thread を rules 行にする**: cores は host ごとに違うので、tracked の manifest に焼くと host ごとに裁定が要る（値の線が増える・N3 の向き）。
+  - **cores を env から読む**: C2.2。`available_parallelism` は env でなく host の面を読む口である。
+  - **CPU を上限（宣言値の rules 行）にする**: 本便が足すのは**枠の分母**（core 数という測定値）であって新しい宣言値ではない。上限の是非は ADR と裁定の側に残す。
+  - **混んだ周に便を断る**: §10 のとおり断らない（縮退する・FR46）。
+
+## 31. 器の健康の遮断器 — 行を撃つ前に走行可能と待ちの process を読み、混んだ周は空くまで待ち、待てなかった周は終端させない（契約表の行 w・`s2-07l.504`）
+
+やさしく言うと: host が息をしていないときに検証を撃ち続けない。走れる process の数と、待たされている process の数を先に見て、多すぎたら空くまで待つ。待っても空かなければ「判定できなかった」で止める。「落ちた」ではないので、あとで測り直せる。
+
+- **何が起きているか**（同じ事故・台帳 `s2-07l.504`・verified）: 凍結の 4.5 時間、器は撃った行が返らないまま走り続け、便の event を 1 件も出していない。load の 1 分値 68,816・D 状態の process 最大 52,412 に対し、**器は host の健康を 1 度も読まない**。混んだ host でも同じ勢いで行を撃ち、負荷で落ちた歯をそのまま赤に数える（§23 が壁時計の歯で踏んだのと同じ面）。台帳の notes は直しの層 (3) にこの遮断器を挙げ、待ちの上限を超えた周は **FAIL でなく INCONCLUSIVE** にせよと記す（凍った host の下で便を終端させると、実装の成果ごと列から外れる）。
+- **現物**（verified・main b2cf656）: `crates/scribe2/src/pipe/gate/verify.rs` = `fire`（private・gate も land の主実測も通る**唯一の**起こし口）/ `run_line_captured`（pub）/ `Step`（pub・record の欄を運ぶ）/ `Checks<'a>`（pub・`worktree` / `base` / `contract` / `common` / `detection` の 5 欄）。`crates/scribe2/src/pipe/gate/record.rs` = `record_verify`（pub(super)）が `Checks` を組み `Counted { red, unreadable, killed, detection_unmeasured }`（pub(super)）を返す。`crates/scribe2/src/pipe/land/verify.rs` = 主実測が 2 つ目の `Checks` を組む。`crates/scribe2/src/pipe/gate.rs` = `Limits`（pub・6 欄）/ `decide`（private・判定順は diff が読めない → 箱の中で死んだ → 赤 → 検出線の rc 2 → 予算 → lens の本数）/ `inconclusive`（private）。`crates/scribe2/src/pipe/cli/step.rs` = `limits_of`（private・6 行を `--rules` の manifest から読む）で、`Limits` の literal 構築点は 2 つ（`crates/scribe2/src/pipe/cli/step.rs` と `crates/scribe2/src/pipe/queue.rs` の in-file の歯）。`crates/scribe2/src/fleet/wait.rs` = `Completion`（pub・7 variant）で、pid を見張らない 4 つは `pid()` が 0 を返す。`crates/scribe2/src/polarity.rs` = `Guard`（pub・24 variant）と `ALL` と 3 つの網羅 match。host の面: 走行可能な process 数は `/proc/loadavg` の 4 番目の欄の**分子**、待ちの process 数は `/proc/stat` の `procs_blocked` の行で、器がこの 2 面を読む口は無い（`/proc` を読むのは受付と封じ込めの memory の 2 か所だけ）。
+- **前提**: §30 と同じ ADR（§2 の「CPU は上限を持たない」の面）に乗る。閾値 2 つの**値は user 裁定待ち**で、裁定 id が付くまで行は land しない。
+- **約束**:
+  1. **判定は pure な閉じた 3 値**: 行 w の write-set の `+` の file（受付と同じ `pipe/` の直下）が、2 つの面の**字面**（走行可能を運ぶ 1 行と、待ちを運ぶ本文）と 2 つの閾値から「空いている / 混んでいる / 測れない」の 3 値を出す pure 関数 1 本を持つ。host の面を読む口は同じ置き場の 1 本で、判定は fixture 文字列で測る（§7 の分担・外から差し替える口は作らない）。
+  2. **閾値は core あたりの倍率で rules 行 2 本**（走行可能と待ちで 1 本ずつ）: host ごとに core 数が違うので tracked の manifest に絶対値を焼かず、**閾値 = 倍率 × 実測の core 数**にする。倍率という形と値の両方が **user 裁定**で、行の `ruling` / `ruled_at` に裁定 id と裁定日が入るまで land しない（C1 / C5）。§ の候補は「走行可能 > 4 × core 数」「待ち > core 数」で、**規範の値を持つのは manifest だけ**である。
+  3. **待つ口は 1 本**: 行を撃つ前に「空いている」を待つ。待ちは完了 enum の variant 1 つ（2 つの閾値を運ぶ・pid を見張らない側＝`pid()` は 0）で、唯一の待機実装を通る（第 2 の poll loop を書かない・C3.4）。
+  4. **待ちの上限は `gate.slot_wait_s` を使い回す**: 受付の待ちと本待ちはどちらも「gate が行を撃つ前に待つ上限」で、同じ 1 本の便の中で順に効く。3 本目の値の線を足さない（C1 / C5）。
+  5. **上限を超えた周は撃たない**: その行は process を起こさず、`Step` が**閉じた印**を運び、record に任意 field 1 つで残す（schema 1 のまま・§5 の足し方）。行ごとの集計は最初にそうなった行の record 番号を持つ（検出線の rc 2 と同じ形）。
+  6. **判定順は赤より先**: 判定は「箱の中で死んだ」の直後にこの印を読み、**閉じた理由 1 つ**で INCONCLUSIVE に倒す。§28 が「赤は検出線の rc 2 より先」と決めたのは**赤が信用できる周**の話で、host を測れていない周はその前段である（混んだ host で落ちた歯を赤に数えると、負荷が便を終端させる）。INCONCLUSIVE は終端でないので、負荷が引いた後に同じ木を測り直せる。
+  7. **測れない周は待たずに進む**（縮退・止めない・FR46）: どちらかの面を読めない周と数でない周は行を撃ち、record に「測れない」の字面を残す（0 に潰さない・C10）。これが本境界の fail-open の面である。
+  8. **極性一覧に載せる**: 行を撃つという行為を止めうる判定を返す境界なので、受付・封じ込めと違い ADR-0014 §2.1 の guard に当たる。`Guard` に variant 1 つ・`ALL` に 1 つを足し、境界の側に `POLARITY`（**in-loop / fail-open**）を置く。宣言順は行為の流れに合わせて gate の機械検証の段の直前で、外形の集計行の 4 つの数が動く。
+  9. **land の主実測も同じ 1 本を通る**: 行を撃つ実装が 1 本である以上、主実測も同じ遮断器を通る。閾値は `Limits` が運び、2 つの `Checks` の構築点が同じ欄を埋める。
+- **歯**:
+  - in-file（行 w の write-set の `+` の file・接頭辞 `health_judge_`）: (a) 走行可能を 4 番目の欄の**分子**から読み、分母（総 process 数）に釣られない（分母だけが閾値を超える fixture を対に置く）／(b) 待ちを `procs_blocked` の行から読み、似た見出しの行に釣られない／(c) 閾値 = 倍率 × core 数で、**ちょうど**の値は「混んでいる」でない（等号を境界に置かない）／(d) 片方だけが超えた 2 形はどちらも「混んでいる」／(e) 空・数でない・行が無いの 3 形はどれも「測れない」で、「空いている」に潰れない。
+  - in-file（`crates/scribe2/src/pipe/gate.rs`・接頭辞 `gate_busy_order_`）: 印が在る周は**赤が 1 行在っても** INCONCLUSIVE になり、印が無い周の順（赤 → 検出線の rc 2）は 1 字も変わらない（2 つの枝を 1 本の歯に対で並べる）。
+  - e2e（`crates/scribe2/tests/e2e/pipe/gate.rs`・接頭辞 `pipe_gate_health_`・toy repo・`--rules` の fixture で倍率を振る）: (a) 倍率 0 の fixture（＝必ず「混んでいる」）と `gate.slot_wait_s = 1` の便は verify の行が 1 本も撃たれず（呼出回数の file が空）verdict が INCONCLUSIVE で、record に印が載る／(b) 倍率を十分大きく取った fixture の便は従来どおり全段撃って PASS で終わり、record に印が載らない／(c) (a) の便は `Gated` に留まって同じ便を撃ち直せる（FAIL で終端しない）。
+  - rules 行（`crates/scribe2/tests/e2e/rules.rs`・接頭辞 `rules_embedded_manifest_declares_host_health_`）: 埋め込みの manifest が 2 行を値・裁定 id・裁定日つきで持ち、kind の包含で**行と variant を対で足させる**（片方だけの manifest は parse できず、片方だけの enum は親の歯が落とす・行 o と同型）。**外形**は行の verify が完全名 `rules_external_form` で撃つ（`rows=` と `kinds=` が 2 つずつ増える）。
+  - 極性（`crates/scribe2/tests/e2e/polarity.rs`・接頭辞 `polarity_gate_health_`）: 一覧に新しい guard が in-loop / fail-open で在り、宣言順が gate の機械検証の段の直前である。**外形**は完全名 `polarity_external_form` で撃つ。
+- **触らない**: 赤の数え方（§28・検出線の rc 1 も赤）・検出線の rc の意味と撃ち直し（§21）・審査役の撃ち直し（§29）・受付の枠と札（§3.2・行 v の面）・封じ込めの箱と `Released` の 4 値・`Verdict` の 3 値と rc・`verdict.json` の schema と field・record の schema 番号・`pipe show` の描画（判定行と秒だけを写す＝外形 snapshot は動かない）・`pipe.max_live`（行 o）・`gate.slot_wait_s` の**値**。
+- **却下**:
+  - **上限超を FAIL にする**: 凍った host は便の内容を測れていない。終端させると実装の成果ごと列から外れ、人が起こし直すことになる（台帳 `s2-07l.504` notes の直しの層 (3)）。
+  - **待ちの上限に 3 本目の rules 行を足す**: 値の線と裁定が 1 つずつ増える。`gate.slot_wait_s` と意味が同じ（gate が行を撃つ前に待つ上限）。
+  - **閾値を絶対値の rules 行にする**: core 数の違う host で同じ manifest が別の意味になる（tracked の値に host の形を焼く）。
+  - **load average の 1 分値（小数）を読む**: 平均は遅れて動くので、凍り始めと回復の両側で実際の混み具合とずれる。走行可能と待ちの**瞬間値**はどちらも整数で、pure な判定が字面から出せる。
+  - **host の面を歯から差し替える口を作る**: C2.2（裏口を作らない）。§7 の分担どおり、判定を pure 関数にして fixture 文字列で測る。
+  - **遮断器を受付（§3.2）の中に置く**: 受付を通るのは `{jobs}` を持つ行だけで、共通 verify の全件 nextest も clippy も通らない。凍結を作ったのは歯の走行そのものなので、行を撃つ 1 点に置く。
+  - **極性一覧に載せない（受付と同じ扱いにする）**: 受付は縮退して必ず進むが、本境界は行を撃たずに判定を止めうる＝guard の定義に当たる（ADR-0014 §2.1）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -588,5 +655,26 @@ write-set = ["crates/scribe2/src/pipe/gate/lens.rs", "crates/scribe2/src/pipe/ga
 verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_gate_lens_reread_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_gate_findings_missing_population_is_inconclusive", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_gate_findings_zero_population_is_inconclusive"]
 size = "S"
 done = "撃たれた回数を数える偽の審査役で、1 回目が数でない母集団・2 回目が正しい出力の便が PASS で終わって回数が 2 になり stderr に 1 回目の理由を持つ撃ち直しの 1 行が出て、2 回とも数でない周は INCONCLUSIVE で回数が 2（3 回目は無い）で理由が 2 回目のものになり、母集団が 0 の出力と rc が非 0 で終わる審査役と起動できない審査役と審査役が自分で INCONCLUSIVE を答えた周は撃ち直されず（回数 1・母集団 = 撃ち直さない 4 形）、母集団の欄が無い周と母集団が 0 の周の判定と理由の字面は 1 字も変わらず、Verdict の 3 値と rc と集計の 8 category と判定順と検出線の撃ち直しと verdict.json の field は変わらない"
+
+[[contract]]
+id = "v"
+title = "受付に CPU の次元 — 枠を by_avail / by_token / by_cpu の 3 項の min にし、job 1 つの thread の値段（cores / gate.mutants_jobs）を器が決めて 3 つ目の穴で行へ渡す（縮退と測れない周は jobs 1 かつ thread 1・xtask は値を持たない）"
+req = ["NFR6", "FR46"]
+section = "30"
+write-set = ["crates/scribe2/src/pipe/admission.rs", "crates/scribe2/src/pipe/gate/verify.rs", "crates/scribe2/src/pipe/declaration.rs", "crates/scribe2/src/fleet/wait.rs", "crates/xtask/src/mutantsdiff.rs", "crates/xtask/src/main.rs", ".vessel.toml", "crates/scribe2/tests/e2e/pipe/gate.rs", "docs/design/gate-cost.md"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail admission_cpu_", "cargo nextest run -p scribe2 --lib --no-tests=fail declaration_threads_hole_", "cargo nextest run -p xtask --no-tests=fail mutants_diff_threads_flag_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_slots_threads_", "cargo nextest run -p scribe2 --lib --no-tests=fail admission_capacity_takes_the_min_of_the_two_formulas", "cargo nextest run -p scribe2 --lib --no-tests=fail admission_capacity_floors_at_zero", "cargo nextest run -p scribe2 --lib --no-tests=fail admission_capacity_is_unmeasured_on_unreadable_meminfo"]
+size = "M"
+done = "受付が配る枠が by_avail / by_token / by_cpu の 3 項の min になり、CPU 側で決まる fixture と memory 側で決まる fixture の両方が正しく、job 1 つの値段が max(1, floor(cores / gate.mutants_jobs)) の pure 関数 1 本で出て cores は実測（env を読まず rules 行も増えない）、受け付けた枠が jobs と thread を対で運んで縮退の周と cores を読めない周はどちらも jobs 1 かつ thread 1 になり、cores を読めない周の理由が受付の閉じた enum に 1 つ増えて record の slot_why= に固定の字面で残り、宣言の置ける穴が 3 つちょうどになって検出線の行が置換後に実効 jobs と実効 thread を両方持ち、xtask は受けた値を -- -- --test-threads へそのまま渡すだけで cores からの導出を持たず（渡されない周と数でない周は 1・既存の引数の対と -- が 2 つの形は不変）、枠が空くのを待つ完了 enum が CPU の材料も運んで待ちの観測が受付と同じ 3 項を測り、memory の 2 項を測る既存の歯 3 本（capacity の min / 0 の床 / 読めない meminfo）が 1 字も変わらずに緑である"
+
+[[contract]]
+id = "w"
+title = "器の健康の遮断器 — 行を撃つ前に走行可能（/proc/loadavg の 4 番目の欄の分子）と待ち（procs_blocked）を読み、core あたりの倍率 2 本（rules 行・user 裁定 id 要）を超えた周は空くまで待ち、gate.slot_wait_s を超えた周は行を撃たずに閉じた理由 1 つで INCONCLUSIVE（FAIL で終端させない・測れない周は待たずに進む）"
+req = ["NFR6", "FR46"]
+section = "31"
+write-set = ["+crates/scribe2/src/pipe/health.rs", "crates/scribe2/src/pipe/mod.rs", "crates/scribe2/src/pipe/gate/verify.rs", "crates/scribe2/src/pipe/gate/record.rs", "crates/scribe2/src/pipe/gate.rs", "crates/scribe2/src/pipe/land/verify.rs", "crates/scribe2/src/pipe/queue.rs", "crates/scribe2/src/pipe/cli/step.rs", "crates/scribe2/src/fleet/wait.rs", "crates/scribe2/src/polarity.rs", "rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "crates/scribe2/tests/e2e/rules.rs", "crates/scribe2/tests/e2e/snapshots/e2e__rules__rules_external_form.snap", "crates/scribe2/tests/e2e/snapshots/e2e__polarity__polarity_external_form.snap", "crates/scribe2/tests/e2e/polarity.rs", "crates/scribe2/tests/e2e/pipe.rs", "crates/scribe2/tests/e2e/pipe/gate.rs", "docs/design/rules-manifest.md", "docs/design/gate-cost.md"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail health_judge_", "cargo nextest run -p scribe2 --lib --no-tests=fail gate_busy_order_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_gate_health_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail rules_embedded_manifest_declares_host_health_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail rules_external_form", "cargo nextest run -p scribe2 --test e2e --no-tests=fail polarity_gate_health_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail polarity_external_form"]
+size = "M"
+depends = ["v"]
+done = "host の健康を字面から判じる pure 関数 1 本が空いている / 混んでいる / 測れないの 3 値を返して走行可能を 4 番目の欄の分子から読み（分母に釣られず）待ちを procs_blocked の行から読み、閾値 = 倍率 × 実測の core 数でちょうどの値は混んでいるでなく、片方だけ超えた 2 形はどちらも混んでいるで、空・数でない・行が無いの 3 形はどれも測れないになり、行を撃つ前の待ちが完了 enum の variant 1 つ（pid() は 0）で唯一の待機実装を通り、gate.slot_wait_s を超えた周は verify の行が 1 本も撃たれず record に閉じた印が任意 field で載って判定が箱の中で死んだの直後にその印を読み赤が 1 行在っても INCONCLUSIVE になって便が Gated に留まり（FAIL で終端しない）、印が無い周の判定順は 1 字も変わらず、どちらかの面を読めない周は待たずに全段撃って record に測れないの字面を残し、倍率の rules 行 2 本が裁定 id と裁定日つきで増えて RuleKind の variant と対になり外形の rows= と kinds= が 2 つずつ増え、極性一覧に in-loop / fail-open の guard が 1 つ gate の機械検証の段の直前に増えて外形の集計行の 4 数が動き、land の主実測も同じ 1 本を通る"
 
 <!-- contracts:end -->
