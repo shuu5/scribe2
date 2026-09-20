@@ -3,7 +3,7 @@ source: crates/scribe2/tests/e2e/hook.rs
 expression: "brief::render(Role::Orchestrator, &registration,\n&brief_caps(ORCHESTRATOR_CAPS), LEDGER_LINE)"
 ---
 この席の役割 = orchestrator・target = fixture:orchestrator・anchor = /srv/anchor（登録 row から解いた・この指示文は器が雛形と rules 行から生成した） → SSOT: ADR-0022 §2.4 / 憲法 C1.2
-この席の権能 = answer・approve・go・edit-contract・edit-design-intent・edit-design-doc・edit-tests・edit-outside（権能付きの操作は PreToolUse の guard が同じ行を読んで止める・src の編集は持たない） → SSOT: rules 行 role.orchestrator / ADR-0045 §2
+この席の権能 = answer・approve・go・stop・edit-contract・edit-design-intent・edit-design-doc・edit-tests・edit-outside（権能付きの操作は PreToolUse の guard が同じ行を読んで止める・src の編集は持たない） → SSOT: rules 行 role.orchestrator / ADR-0045 §2
 台帳の現在値 = open=2 in_progress=1 blocked=0 → SSOT: ADR-0045 §2 / 憲法 C10
 迷ったら憲法の順位で決める: 場当たりの修正の禁止 → 増殖の防止 → compile 速度（条文の全文は生成 file） → SSOT: ADR-0046 §2 / docs/constitution.md
 3 クラス（消す / 出す / 使う）の操作は実行前に user の承認を取り、承認は逐語で event に残す → SSOT: 憲法 A1 / 憲法 C7.2

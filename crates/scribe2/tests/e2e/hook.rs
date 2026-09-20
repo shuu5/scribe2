@@ -1639,10 +1639,19 @@ struct RolePlace {
     bd: String,
 }
 
-/// orchestrator の権能（裁定 `user 2026-09-18T08:3xZ`・ADR-0045 §2 (1) の値）。**起動と着地（launch / merge）と
-/// src の編集（edit-code）は持たない**。
-const ORCHESTRATOR_CAPS: &[&str] =
-    &["answer", "approve", "go", "edit-contract", "edit-design-intent", "edit-design-doc", "edit-tests", "edit-outside"];
+/// orchestrator の権能（裁定 `user 2026-09-18T08:3xZ`・ADR-0045 §2 (1) の値に裁定 `user 2026-09-20`・ADR-0048 §2 が
+/// 便 1 本を名指す停止 `stop` を足した列）。**起動と着地（launch / merge）と src の編集（edit-code）は持たない**。
+const ORCHESTRATOR_CAPS: &[&str] = &[
+    "answer",
+    "approve",
+    "go",
+    "stop",
+    "edit-contract",
+    "edit-design-intent",
+    "edit-design-doc",
+    "edit-tests",
+    "edit-outside",
+];
 
 /// 台帳の fixture（`bd --readonly list --json` の配列・open 2 / in_progress 1 / blocked 0）。
 const LEDGER_JSON: &str = "[{\"id\":\"x-1\",\"status\":\"open\"},{\"id\":\"x-2\",\"status\":\"open\"},{\"id\":\"x-3\",\"status\":\"in_progress\"}]";
@@ -2416,6 +2425,98 @@ fn hook_role_paths_worktree_files_are_classified_by_the_anchor_declaration() {
     let project = place.repo.display().to_string();
     let out = run_paths_hook(&place, &path, &["--project", &project], &tool_payload(&bead, "Edit", "spec/y.yaml"));
     assert_silent(&out, "cwd が便の worktree でも anchor の宣言");
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
+// ─────────────── 便を止める権能 stop（契約行 s・`s2-07l.495`・seat-roles.md §25・ADR-0048・接頭辞 `hook_role_stop_`） ───────────────
+//
+// 登録済みの orchestrator の席（行は `stop` を持ち `launch` を持たない）で PreToolUse の Bash 面を撃つ。席は偽 tmux
+// （[`stub_seat`]）で解く＝tmux を立てないので nextest の tmux group の外で走る。約束 3（名指しの停止は通る）・
+// 約束 4（`--all` と名指しの無い形は起動の権能へ降りて断られる）・約束 7（`stop` を持たない行では名指しも断られる）。
+
+/// 偽 tmux の席で Bash の command 行を role guard に撃つ（`rules` は fixture の manifest の path・`None` なら埋め込み）。
+fn run_stop_hook(place: &RolePlace, path: &str, rules: Option<&str>, line: &str) -> Output {
+    let mut args = vec!["pre-tool-use", "--pane", STUB_PANE];
+    if let Some(rules) = rules {
+        args.extend_from_slice(&["--rules", rules]);
+    }
+    run_stub_hook(path, &args, &bash_payload(&place.repo, line))
+}
+
+/// 名指しでない停止の窓 8 つ（in-file の母集団 9 形のうち降りる側・`--all`／`--run` 無し／値無し／`--run` と `--all`／
+/// `--run=<id>` の 1 語／列の道具の flag つき／置き場の値の途中に pipe と別の `--run`／`$(` を含む形）。
+const UNNAMED_STOP_WINDOWS: [&str; 8] =
+    ["--all", "", "--run", "--run r-1 --all", "--run=r-1", "--run r-1 --runner x", "--run r-1 --state-dir /s|--run x", "--run $(cat id)"];
+
+/// 約束 3: 便 1 本を名指す停止（`--run` と値だけ・置き場と repo と rules の flag を足した形も）は orchestrator の席で通り
+/// （rc 0・stdout 0 byte・記録 1 行 `role-allow capability=stop`）、埋め込み manifest（`--rules` 無し）でも同じ判定
+/// ＝裁定の値が binary に在る。
+#[test]
+fn hook_role_stop_named_run_passes_in_the_orchestrator_seat() {
+    let place = role_place();
+    let path = stub_seat(&place, "rolestopa", Some("orchestrator"));
+    let me = "rolestopa_rolestopa";
+    let named = format!("{NAME} pipe stop --run r-1");
+    let before = role_records(&place.state).len();
+    assert_silent(&run_stop_hook(&place, &path, Some(&place.rules), &named), "名指しの停止は通る");
+    assert_role_record(&place.state, before, "role-allow capability=stop", me);
+    let full = format!("{NAME} pipe stop --state-dir /s --run r-1 --repo . --rules /r.toml");
+    let before = role_records(&place.state).len();
+    assert_silent(&run_stop_hook(&place, &path, Some(&place.rules), &full), "置き場・repo・rules の flag を足した形も通る");
+    assert_role_record(&place.state, before, "role-allow capability=stop", me);
+    let by_path = format!("target/debug/{NAME} pipe stop --run r-1");
+    assert_silent(&run_stop_hook(&place, &path, Some(&place.rules), &by_path), "binary の名は path の末尾でもよい");
+    // 埋め込み manifest（tracked の `role.orchestrator` の行）でも同じ判定。
+    let before = role_records(&place.state).len();
+    assert_silent(&run_stop_hook(&place, &path, None, &named), "埋め込み manifest でも名指しの停止は通る");
+    assert_role_record(&place.state, before, "role-allow capability=stop", me);
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
+/// 約束 4 / 5: `--all`・`--run` 無し・値無し・`--run` と `--all`・`--run=<id>` の 1 語・列の道具の flag・値に pipe・`$(` を
+/// 含む停止と、後ろに別の command が続く行は起動の権能へ降り、行が `stop` を持っていても deny（deny 文は `launch` と
+/// 行 id を名指し `stop` を名指さない・記録は `role-deny capability=launch`）。埋め込み manifest でも同じ。
+#[test]
+fn hook_role_stop_unnamed_forms_fall_to_launch_and_are_denied() {
+    let place = role_place();
+    let path = stub_seat(&place, "rolestopb", Some("orchestrator"));
+    let me = "rolestopb_rolestopb";
+    let trailing = format!("{NAME} pipe stop --run r-1 && ls");
+    let lines: Vec<String> = UNNAMED_STOP_WINDOWS.iter().map(|window| format!("{NAME} pipe stop {window}")).chain([trailing]).collect();
+    for line in &lines {
+        let before = role_records(&place.state).len();
+        let text = assert_role_deny(&run_stop_hook(&place, &path, Some(&place.rules), line), line);
+        assert!(text.contains("（launch）") && text.contains("role.orchestrator"), "{line}: launch と行 id を名指す: {text}");
+        assert!(!text.contains("stop"), "{line}: stop は名指さない: {text}");
+        assert_role_record(&place.state, before, "role-deny capability=launch", me);
+    }
+    let all = format!("{NAME} pipe stop --all");
+    let text = assert_role_deny(&run_stop_hook(&place, &path, None, &all), "埋め込み manifest でも --all は deny");
+    assert!(text.contains("（launch）"), "{text}");
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
+/// 約束 7: `stop` を持たない行の席では名指しの停止も断られる（deny 文は `stop` と行 id を名指す・記録は
+/// `role-deny capability=stop`）＝通したのは行の値であって判定の穴ではない。同じ行で `--all` は `launch` を名指す。
+#[test]
+fn hook_role_stop_is_denied_when_the_row_lacks_stop() {
+    let place = role_place();
+    let path = stub_seat(&place, "rolestopc", Some("orchestrator"));
+    let me = "rolestopc_rolestopc";
+    let stripped = place.sock_dir.join("no-stop.toml");
+    assert!(fs::write(&stripped, role_rules_text(&caps_without("stop"))).is_ok(), "rules を書ける");
+    let rules = stripped.display().to_string();
+    let named = format!("{NAME} pipe stop --run r-1");
+    let before = role_records(&place.state).len();
+    let text = assert_role_deny(&run_stop_hook(&place, &path, Some(&rules), &named), "stop の無い行");
+    assert!(text.contains("（stop）") && text.contains("role.orchestrator"), "stop と行 id を名指す: {text}");
+    assert!(!text.contains("launch"), "名指しの停止は launch を要らない: {text}");
+    assert_role_record(&place.state, before, "role-deny capability=stop", me);
+    let all = format!("{NAME} pipe stop --all");
+    let text = assert_role_deny(&run_stop_hook(&place, &path, Some(&rules), &all), "stop の無い行の --all");
+    assert!(text.contains("（launch）"), "{text}");
+    // 対: `stop` を持つ行では同じ名指しが通る。
+    assert_silent(&run_stop_hook(&place, &path, Some(&place.rules), &named), "stop を持つ行では通る");
     clean(&[&place.repo, &place.state, &place.sock_dir]);
 }
 

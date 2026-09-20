@@ -374,15 +374,16 @@ ruled_at = "2026-09-12"
 # （名の集合は crates 側の Capability が閉じる・列に無い名は loader が拒む）。PreToolUse の guard が Bash（権能付き
 # subcommand）と Edit 系（path 種別）の 2 面でこの行を読んで止める。席は orchestrator の 1 つで、src の編集
 # （edit-code）は行に無く、歯（crates/<crate>/tests/）だけが edit-tests で開く。便の起動と着地と merge（launch /
-# merge）は器の dispatcher の口ゆえ行に並ばない。
+# merge）は器の dispatcher の口ゆえ行に並ばない。便 1 本を名指す停止（stop・pipe stop --run <id>）は席が撃てる
+# （ADR-0048 §2・--all と名指しの無い停止は launch のまま）。
 
 [[rule]]
 id = "role.orchestrator"
 kind = "RoleCapabilities"
-value = ["answer", "approve", "go", "edit-contract", "edit-design-intent", "edit-design-doc", "edit-tests", "edit-outside"]
+value = ["answer", "approve", "go", "stop", "edit-contract", "edit-design-intent", "edit-design-doc", "edit-tests", "edit-outside"]
 enabled = true
-ruling = "user 2026-09-18T08:3xZ"
-ruled_at = "2026-09-18"
+ruling = "user 2026-09-20"
+ruled_at = "2026-09-20"
 
 # 契約の size ↔ 1 file あたりの増分の見積（行・設計 contract-source.md §3「上限の余地」・rules-manifest.md §4）。
 # 受付（pipe intake）が write-set の各 .rs の余地（R-C4-2 との差）と core の余地（R-C4-1 との差）に当てる。

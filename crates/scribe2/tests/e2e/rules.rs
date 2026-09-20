@@ -9,6 +9,7 @@ use vessel::fleet::select::Model;
 use vessel::order::is_declaration_order;
 use vessel::rules::manifest::{contract_rows, Manifest, TableValue};
 use vessel::rules::{int_row, str_row, Rule, RuleKind, RuleValue, ValueShape, ALL};
+use vessel::seat::brief;
 use vessel::seat::role::{Capability, Role, ALL as ROLES, CAPABILITIES};
 
 /// 受理される最小の manifest（2 行）。`enabled` は**全行に書く**（必須 key）。
@@ -1150,12 +1151,19 @@ fn rules_all_follows_declaration_order() {
 /// 役割ごとの権能の行（`role.<役割名>`・`RuleKind::RoleCapabilities`・設計 seat-roles.md §3・ADR-0022 §2.2・
 /// ADR-0045 §2 (1)・`s2-07l.201`）: **行は `Role::ALL` と同数**（役割ごとに 1 行＝席は orchestrator の 1 つなので
 /// 1 行）、値は `Capability` の名の列、宣言順の末尾の kind。**値は manifest が持ち、設計 doc は写さない**（C1 / C5）。
-/// 行が持つ裁定 id と裁定日: 役割を 1 つにした裁定 `user 2026-09-18T08:3xZ`。
+/// 行が持つ裁定 id と裁定日: 便を止める権能 `stop` を席に与えた裁定 `user 2026-09-20`（ADR-0048・役割を 1 つにした
+/// 裁定 `user 2026-09-18T08:3xZ` の値に `stop` を 1 語足した）。
 fn role_row_ruling(role: Role) -> (&'static str, &'static str) {
     match role {
-        Role::Orchestrator => ("user 2026-09-18T08:3xZ", "2026-09-18"),
+        Role::Orchestrator => (STOP_RULING, STOP_RULED_AT),
     }
 }
+
+/// 便を止める権能を席に与えた裁定 id（ADR-0048 §2・`s2-07l.495`）。
+const STOP_RULING: &str = "user 2026-09-20";
+
+/// [`STOP_RULING`] の裁定日。
+const STOP_RULED_AT: &str = "2026-09-20";
 
 #[test]
 fn rules_embedded_manifest_declares_one_capability_row_per_role() {
@@ -1254,8 +1262,9 @@ fn role_row_names(manifest: &Manifest, role: Role) -> Vec<String> {
     }
 }
 
-/// 裁定 `user 2026-09-18T08:3xZ`（ADR-0045 §2 (1)）の値: 席は orchestrator 1 つで、記帳（回答・承認・go）と
-/// 契約・`design-intent/`・設計 doc・repo の外の編集と歯（`crates/<crate>/tests/`）の編集を持つ。
+/// 裁定 `user 2026-09-18T08:3xZ`（ADR-0045 §2 (1)）の値に裁定 `user 2026-09-20`（ADR-0048 §2）が `stop` を足した:
+/// 席は orchestrator 1 つで、記帳（回答・承認・go）と便 1 本を名指す停止と契約・`design-intent/`・設計 doc・repo の
+/// 外の編集と歯（`crates/<crate>/tests/`）の編集を持つ。
 /// **便の起動と着地（launch / merge）は器の dispatcher の口ゆえ持たず、src の編集（edit-code）も持たない**
 /// （印で開いた便の write-set だけ・AC16）。
 #[test]
@@ -1266,6 +1275,7 @@ fn rules_embedded_manifest_role_rows_carry_the_ruled_capabilities() {
         Capability::Answer,
         Capability::Approve,
         Capability::Go,
+        Capability::Stop,
         Capability::EditContract,
         Capability::EditDesignIntent,
         Capability::EditDesignDoc,
@@ -1284,12 +1294,12 @@ fn rules_embedded_manifest_role_rows_carry_the_ruled_capabilities() {
 }
 
 /// 役割の権能の行は **1 本**（`role.orchestrator`）で、値は裁定 user 2026-09-18T08:3xZ / 09:0xZ
-/// （ADR-0045 §2 (1)）の権能の列である。**id と名は字面で pin する**（`Role` / `Capability` の読み手を
-/// 通さない独立の pin）。
+/// （ADR-0045 §2 (1)）の権能の列に裁定 user 2026-09-20（ADR-0048 §2）が `stop` を足したものである。
+/// **id と名は字面で pin する**（`Role` / `Capability` の読み手を通さない独立の pin）。
 ///
-/// 人と話す席として記帳（回答・承認・go）と契約・`design-intent/`・設計 doc・repo の外を持ち、歯
-/// （`crates/*/tests/`）を書ける。**便の起動・着地・merge（launch / merge）は器の dispatcher の口ゆえ
-/// 行に無く、src の編集（edit-code）も中継（relay）も無い**。
+/// 人と話す席として記帳（回答・承認・go）と便 1 本を名指す停止（stop）と契約・`design-intent/`・設計 doc・
+/// repo の外を持ち、歯（`crates/*/tests/`）を書ける。**便の起動・着地・merge（launch / merge）は器の
+/// dispatcher の口ゆえ行に無く、src の編集（edit-code）も中継（relay）も無い**。
 #[test]
 fn rules_embedded_manifest_role_row_is_one_orchestrator_row() {
     const ORCHESTRATOR_ROW: &str = "role.orchestrator";
@@ -1297,6 +1307,7 @@ fn rules_embedded_manifest_role_row_is_one_orchestrator_row() {
         "answer",
         "approve",
         "go",
+        "stop",
         "edit-contract",
         "edit-design-intent",
         "edit-design-doc",
@@ -1317,7 +1328,53 @@ fn rules_embedded_manifest_role_row_is_one_orchestrator_row() {
         other => panic!("{ORCHESTRATOR_ROW} の値は名の列: {other:?}"),
     };
     assert_eq!(names, EXPECTED, "{ORCHESTRATOR_ROW} の値（宣言順）");
-    assert_eq!(row.ruling, "user 2026-09-18T08:3xZ", "{ORCHESTRATOR_ROW} の裁定 id");
+    assert_eq!(row.ruling, STOP_RULING, "{ORCHESTRATOR_ROW} の裁定 id");
+}
+
+/// 約束 1（設計 seat-roles.md §25・ADR-0048 §2・`s2-07l.495`）: 権能の閉じた列と全 variant の列に `stop` が 1 つ在り
+/// （字面は `stop`・宣言順は `merge` の直後）、rules 行の loader は `stop` を知っている名として受け、知らない名
+/// （`stopp`・variant 名の字面 `Stop`）は今までどおり `RuleError` で拒む（取る名の列に `stop` を名指す）。
+#[test]
+fn rules_role_stop_is_a_capability_name_the_loader_accepts() {
+    assert_eq!(Capability::Stop.as_str(), "stop", "行と記録の字面");
+    assert_eq!(Capability::parse("stop"), Some(Capability::Stop), "字面から引ける");
+    assert_eq!(CAPABILITIES.iter().filter(|cap| **cap == Capability::Stop).count(), 1, "全 variant の列に 1 つ");
+    let at = CAPABILITIES.iter().position(|cap| *cap == Capability::Stop);
+    let merge = CAPABILITIES.iter().position(|cap| *cap == Capability::Merge);
+    assert_eq!(at, merge.map(|found| found + 1), "宣言順は merge の直後");
+    assert!(Capability::Merge < Capability::Stop && Capability::Stop < Capability::EditContract, "判別子順");
+    let accepted = parsed(&one_row(RuleKind::RoleCapabilities, r#"["answer", "stop"]"#)).expect("stop を持つ列は受理される");
+    assert_eq!(
+        accepted.get("probe").map(|row| row.value.clone()),
+        Some(RuleValue::List(vec!["answer".to_owned(), "stop".to_owned()])),
+        "書いた順のまま"
+    );
+    for (bad, word) in [(r#"["stopp"]"#, "stopp"), (r#"["Stop"]"#, "Stop"), (r#"["stop", "halt"]"#, "halt")] {
+        let errors = rejected(&one_row(RuleKind::RoleCapabilities, bad)).expect("知らない名は受理されない");
+        assert_eq!(errors.len(), 1, "{bad}: 件数: {errors:?}");
+        let first = errors.first().map(String::as_str).unwrap_or_default();
+        assert!(first.contains(&format!("未知の権能 {word}")), "{bad}: 理由: {first}");
+        assert!(first.contains("stop"), "{bad}: 取る名の列に stop を名指す: {first}");
+    }
+}
+
+/// 約束 2（§25・ADR-0048 §2）: 埋め込みの rules 行 `role.orchestrator` の値が `stop` を 1 つ持ち、裁定 id と裁定日が
+/// 今回の裁定（`user 2026-09-20`）で、`launch` / `merge` は今までどおり無い（`--all` と名指しの無い停止と起動・着地は
+/// 席から撃てないまま）。席の指示文（§5 の権能の行）に `stop` が出ることは `hook_brief_` の歯と外形 snapshot が測る。
+#[test]
+fn rules_role_stop_is_in_the_orchestrator_row_with_the_ruling() {
+    let manifest = Manifest::embedded().unwrap_or_else(|errors| panic!("埋め込み manifest が拒まれた: {errors:?}"));
+    let row = manifest.get("role.orchestrator").expect("役割の行が在る");
+    let names = role_row_names(&manifest, Role::Orchestrator);
+    assert_eq!(names.iter().filter(|name| *name == "stop").count(), 1, "値に stop が 1 つ: {names:?}");
+    assert!(!names.iter().any(|name| name == "launch" || name == "merge"), "起動と着地は無いまま: {names:?}");
+    assert!(row.enabled, "発効している");
+    assert_eq!(row.ruling, STOP_RULING, "裁定 id は今回の裁定");
+    assert_eq!(row.ruled_at, STOP_RULED_AT, "裁定日");
+    assert_ne!(row.ruling, "user 2026-09-18T08:3xZ", "前の裁定 id のままではない");
+    let held = brief::capabilities_of(&manifest, Role::Orchestrator).expect("指示文の読み手も同じ行を読む");
+    assert!(held.contains(&Capability::Stop), "指示文の権能の列に stop: {held:?}");
+    assert!(!held.contains(&Capability::Launch), "{held:?}");
 }
 
 /// 権能の行の**列に無い名は `RuleError`**（`Capability::parse` の失敗・既存の型）: 綴り違いを黙って

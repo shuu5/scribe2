@@ -155,17 +155,28 @@ impl PathKind {
 }
 
 /// 権能付き subcommand の名（`<NAME>` の直後の 2 語）→ 権能。**器の口だけ**を見る（`gh pr merge` 等の他 tool は
-/// 見ない）。`Go` / `EditContract` は対応する subcommand が無い（宣言だけ・module doc）。
+/// 見ない）。`Go` / `EditContract` は対応する subcommand が無い（宣言だけ・module doc）。`pipe stop` は便 1 本を
+/// 名指す形（[`named_stop`]）だけが `Stop` で、それ以外の停止は [`capabilities_of`] が `Launch` へ降ろす
+/// （ADR-0048 §2・設計 seat-roles.md §25 約束 3 / 4）。
 pub const CAPABILITY_COMMANDS: &[(&str, Capability)] = &[
     ("pipe answer", Capability::Answer),
     ("pipe approve", Capability::Approve),
     ("pipe intake", Capability::Launch),
     ("pipe run", Capability::Launch),
     ("pipe resume", Capability::Launch),
-    ("pipe stop", Capability::Launch),
+    ("pipe stop", Capability::Stop),
     ("pipe retire", Capability::Launch),
     ("pipe land", Capability::Merge),
 ];
+
+/// 停止の 2 語（[`CAPABILITY_COMMANDS`] の `Stop` の行の名）。
+const STOP_COMMAND: &str = "pipe stop";
+
+/// 名指しの停止の窓に許す flag（値つき・完全一致＝`--run=<id>` の 1 語は当たらない・§25 約束 3）。
+const STOP_FLAGS: [&str; 4] = ["--run", "--state-dir", "--repo", "--rules"];
+
+/// 名指しの停止の窓の値に許さない字（shell が意味を変える字: 区切り・pipe・括弧・`$`・backtick・引用符・redirect）。
+const SHELL_CHARS: &[char] = &[';', '&', '|', '(', ')', '$', '`', '\'', '"', '<', '>'];
 
 /// 権能付きの操作の種別（記録の `what` と deny 文に書く）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -264,6 +275,9 @@ pub fn subject(op: &Operation, state_dir: Option<&Path>) -> Option<Subject> {
 ///
 /// 照合は空白区切りの token の並び `<NAME> <sub> <sub2>` で、binary の名は `NAME` そのものか path の末尾
 /// （`target/debug/<NAME>`）。`${..._BIN}` の展開後の字面は見ない（shell の展開を器は解かない）。
+///
+/// 停止（[`STOP_COMMAND`]）だけは 2 語の後ろの**窓**も読む: 便 1 本を名指す形（[`named_stop`]）は `Stop`・それ以外は
+/// `Launch` へ降ろす（席の行に `launch` は無いのでどの席でも止まる・fail-closed・§25 約束 4）。
 pub fn capabilities_of(command: &str) -> Vec<Capability> {
     let tokens: Vec<&str> = command.split_whitespace().collect();
     let mut found: Vec<Capability> = Vec::new();
@@ -277,9 +291,39 @@ pub fn capabilities_of(command: &str) -> Vec<Capability> {
             continue;
         };
         let named = format!("{sub} {sub2}");
-        found.extend(CAPABILITY_COMMANDS.iter().filter(|(name, _)| *name == named).map(|(_, cap)| *cap));
+        let demoted = named == STOP_COMMAND && !named_stop(&tokens, at);
+        let listed = CAPABILITY_COMMANDS.iter().filter(|(name, _)| *name == named).map(|(_, cap)| *cap);
+        found.extend(listed.map(|cap| if demoted { Capability::Launch } else { cap }));
     }
     crate::seat::role::CAPABILITIES.iter().copied().filter(|cap| found.contains(cap)).collect()
+}
+
+/// `tokens[at]` が器の名で続く 2 語が停止の周に、その呼び出しが便 1 本を名指す停止か（§25 約束 3・allowlist）。
+///
+/// 停止の 2 語目に区切りが直付けの形（`stop;`）は窓が別の command なので名指しでない。窓（2 語の直後から行の
+/// 末尾まで）は [`stop_window_is_named`] が読む＝後ろに別の呼び出しが続く行は名指しでない（約束 5）。
+fn named_stop(tokens: &[&str], at: usize) -> bool {
+    let plain = tokens.get(at.saturating_add(2)).is_some_and(|raw| !raw.ends_with(SEPARATORS));
+    plain && stop_window_is_named(tokens.get(at.saturating_add(3)..).unwrap_or_default())
+}
+
+/// 停止の窓が名指しの形か: token が [`STOP_FLAGS`] とその値の対だけで出来ていて、`--run` がちょうど 1 回在り、
+/// どの値も `-` で始まらず [`SHELL_CHARS`] を 1 つも含まない。`--all`・`--run` 無し・値無し・`--run=<id>` の 1 語・
+/// 他の flag・区切りや pipe や `$(` を含む形はすべて `false`（起動の権能へ降りる側・§25 約束 4）。
+fn stop_window_is_named(window: &[&str]) -> bool {
+    let mut runs = 0usize;
+    for pair in window.chunks(2) {
+        let [flag, value] = pair else {
+            return false;
+        };
+        if !STOP_FLAGS.contains(flag) || value.starts_with('-') || value.contains(SHELL_CHARS) {
+            return false;
+        }
+        if *flag == "--run" {
+            runs = runs.saturating_add(1);
+        }
+    }
+    runs == 1
 }
 
 /// token が器の binary を名指すか（`NAME` か `…/NAME`）。
@@ -682,7 +726,8 @@ mod tests {
     }
 
     /// 照合は `<NAME> <sub> <sub2>` の並び: binary の名は末尾でもよく、1 行に複数在れば全部・重複は畳む・
-    /// 器の口でない command（`gh pr merge`・`pipe show`）と `${..._BIN}` の形は見ない。
+    /// 器の口でない command（`gh pr merge`・`pipe show`）と `${..._BIN}` の形は見ない。行末の名指しの停止は
+    /// `Stop`（ADR-0048・§25 約束 6 の「停止の 1 件だけ期待値が変わる」）。
     #[test]
     fn role_guard_capability_commands_match_the_three_word_sequence() {
         let answer = format!("{NAME} pipe answer --run r --words x");
@@ -690,7 +735,7 @@ mod tests {
         let by_path = format!("target/debug/{NAME} pipe land --run r");
         assert_eq!(capabilities_of(&by_path), vec![Capability::Merge]);
         let two = format!("{NAME} pipe answer --run r; {NAME} pipe run --run r && {NAME} pipe stop --run r");
-        assert_eq!(capabilities_of(&two), vec![Capability::Answer, Capability::Launch], "宣言順・重複なし");
+        assert_eq!(capabilities_of(&two), vec![Capability::Answer, Capability::Launch, Capability::Stop], "宣言順・重複なし");
         let tight = format!("{NAME} pipe approve; ls");
         assert_eq!(capabilities_of(&tight), vec![Capability::Approve], "`;` の直付けでも 2 語目が読める");
         for silent in [
@@ -709,6 +754,86 @@ mod tests {
             assert_eq!(name.split(' ').count(), 2, "{name}");
             assert!(name.starts_with("pipe "), "{name}");
         }
+    }
+
+    /// 停止の呼び出しの窓（2 語の後ろ）の **9 つの形**（§25 の歯の母集団）: 通る形 1 つ（`--run` と値）と起動の権能へ
+    /// 降りる形 8 つ（`--all`／`--run` 無し／`--run` の値無し／`--run` と `--all`／`--run=<id>` の 1 語／列の道具の
+    /// flag つき／置き場の値の途中に pipe と別の `--run`／`$(` を含む形）。
+    const STOP_WINDOWS: [(&str, Capability); 9] = [
+        ("--run r", Capability::Stop),
+        ("--all", Capability::Launch),
+        ("", Capability::Launch),
+        ("--run", Capability::Launch),
+        ("--run r --all", Capability::Launch),
+        ("--run=r", Capability::Launch),
+        ("--run r --runner x", Capability::Launch),
+        ("--run r --state-dir /s|--run x", Capability::Launch),
+        ("--run $(cat id)", Capability::Launch),
+    ];
+
+    /// 約束 3 / 4（ADR-0048 §2）: guard の表は停止の口を `stop` に結び、便 1 本を名指す形（`--run` と値・置き場と
+    /// repo と rules の flag を足した形も・binary の名は path の末尾でも）だけが `Stop`、母集団の残り 8 形は `Launch`
+    /// へ降りる。`--run` が 2 回・値が `-` で始まる形も降りる側。
+    #[test]
+    fn role_guard_stop_named_run_is_stop_and_the_other_forms_fall_to_launch() {
+        for (window, want) in STOP_WINDOWS {
+            let line = format!("{NAME} pipe stop {window}");
+            assert_eq!(capabilities_of(&line), vec![want], "{line}");
+        }
+        assert_eq!(STOP_WINDOWS.iter().filter(|(_, cap)| *cap == Capability::Stop).count(), 1, "通る形は 1 つ");
+        assert!(CAPABILITY_COMMANDS.contains(&("pipe stop", Capability::Stop)), "表は停止の口を stop に結ぶ");
+        assert!(CAPABILITY_COMMANDS.iter().all(|(name, cap)| (*name == "pipe stop") == (*cap == Capability::Stop)), "stop は停止の口だけ");
+        let full = format!("target/debug/{NAME} pipe stop --state-dir /s --run r --repo . --rules /r.toml");
+        assert_eq!(capabilities_of(&full), vec![Capability::Stop], "置き場・repo・rules の flag を足した形も通る");
+        for window in ["--run r --run r2", "--run --state-dir /s", "--run r --state-dir", "--run 'r'", "--run r --repo \"$HOME\""] {
+            let line = format!("{NAME} pipe stop {window}");
+            assert_eq!(capabilities_of(&line), vec![Capability::Launch], "{line}");
+        }
+    }
+
+    /// 約束 3 / 7: 名指しの停止は行が `stop` を持てば Allow・持たなければ deny（deny 文は `stop` と行 id を名指す）。
+    /// 降りた形の停止は行が `stop` を持っていても `launch` を要る（deny 文は `launch` を名指し `stop` を名指さない）。
+    #[test]
+    fn role_guard_stop_judge_requires_the_stop_capability_from_the_row() {
+        let named = Subject::Capabilities(capabilities_of(&format!("{NAME} pipe stop --run r")));
+        assert_eq!(named, Subject::Capabilities(vec![Capability::Stop]));
+        let with_stop = manifest_with(&[Capability::Answer, Capability::Stop]);
+        assert_eq!(judge(&named, Role::Orchestrator, &with_stop), RoleDecision::Allow, "行が stop を持てば通る");
+        let without_stop = manifest_with(&[Capability::Answer, Capability::EditTests]);
+        let RoleDecision::Deny(line) = judge(&named, Role::Orchestrator, &without_stop) else {
+            panic!("stop を持たない行では名指しの停止も deny");
+        };
+        assert!(line.contains("（stop）") && line.contains("role.orchestrator"), "欠けた権能と行 id: {line}");
+        let all = Subject::Capabilities(capabilities_of(&format!("{NAME} pipe stop --all")));
+        assert_eq!(all, Subject::Capabilities(vec![Capability::Launch]));
+        let RoleDecision::Deny(line) = judge(&all, Role::Orchestrator, &with_stop) else {
+            panic!("--all は stop を持つ行でも deny（launch を要る）");
+        };
+        assert!(line.contains("（launch）") && !line.contains("stop"), "launch を名指し stop を名指さない: {line}");
+    }
+
+    /// 約束 5: 名指しの停止の窓は行の末尾までなので、後ろに別の呼び出しが続く行は `Launch` へ降りる（`&&`・`;` の直付け・
+    /// `stop;` の形）。停止の前に別の口（回答）が在る行は両方の権能を要り、deny 文は欠けた側だけを名指す。
+    #[test]
+    fn role_guard_stop_window_runs_to_the_end_of_the_line() {
+        let trailing = format!("{NAME} pipe stop --run r && ls");
+        assert_eq!(capabilities_of(&trailing), vec![Capability::Launch], "後ろに別の command");
+        let chained = format!("{NAME} pipe stop --run r; {NAME} pipe answer --run r --words x");
+        assert_eq!(capabilities_of(&chained), vec![Capability::Answer, Capability::Launch], "後ろに別の口");
+        let split = format!("{NAME} pipe stop; --run r");
+        assert_eq!(capabilities_of(&split), vec![Capability::Launch], "2 語目に区切りが直付け");
+        let both = format!("{NAME} pipe answer --run r --words x && {NAME} pipe stop --run r");
+        let subject = Subject::Capabilities(capabilities_of(&both));
+        assert_eq!(subject, Subject::Capabilities(vec![Capability::Answer, Capability::Stop]), "前の口と名指しの停止");
+        assert_eq!(judge(&subject, Role::Orchestrator, &manifest_with(&[Capability::Answer, Capability::Stop])), RoleDecision::Allow);
+        let RoleDecision::Deny(line) = judge(&subject, Role::Orchestrator, &manifest_with(&[Capability::Stop])) else {
+            panic!("answer を持たない行は deny");
+        };
+        assert!(line.contains("（answer）"), "欠けた answer だけを名指す: {line}");
+        let RoleDecision::Deny(line) = judge(&subject, Role::Orchestrator, &manifest_with(&[Capability::Answer])) else {
+            panic!("stop を持たない行は deny");
+        };
+        assert!(line.contains("（stop）"), "欠けた stop だけを名指す: {line}");
     }
 
     /// 判定は行の値だけを読む: 持てば Allow・欠けば Deny（deny 文は欠けた権能と行 id）・行の無い周は
